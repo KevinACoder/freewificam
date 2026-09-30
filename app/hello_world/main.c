@@ -85,6 +85,26 @@ static void cachetest(void)
 	}
 }
 
+#ifdef THREADX_BUILD
+/*
+ * ThreadX UP config (SPEC S3/threadx-up-boot §3.8): the bare-metal anchor
+ * sequence below belongs to the baremetal builds. This path reprograms the
+ * console, brings the GIC up, and hands the machine to the kernel - the
+ * "board_main minus CMSIS" shape of S1 §3.10 item 5. tx_kernel_enter never
+ * returns; the adapter owns everything after this (os/threadx/tx_glue.c).
+ */
+void tx_kernel_enter_spsel0(void);
+
+int main(void)
+{
+	uart_early_init();
+	gicv3_init();
+	tx_kernel_enter_spsel0();
+	return 0;	/* unreachable */
+}
+
+#else /* !THREADX_BUILD */
+
 int main(void)
 {
 	/* 1. The polled console speaks only after a full re-program. */
@@ -200,3 +220,5 @@ int main(void)
 	}
 	return 0;	/* unreachable: start.S parks if main returns */
 }
+
+#endif /* THREADX_BUILD */

@@ -38,6 +38,14 @@ BUILD     := build/baremetal-$(CONFIG)
 TARGET    := $(BUILD)/baremetal
 TFTP_FILE := /mnt/d/tftpboot/rtos.bin
 
+# OS layer selection (SPEC S3/threadx-up-boot §3.1.3): baremetal keeps the
+# timebase-only cmsis2 shim; threadx swaps in the ThreadX UP kernel and the
+# cmsis2 baremetal shim leaves the image (cmsis2_threadx.c joins in T3).
+CONFIG_OS ?= baremetal
+ifeq ($(filter $(CONFIG_OS),baremetal threadx),)
+$(error CONFIG_OS must be baremetal or threadx, got '$(CONFIG_OS)')
+endif
+
 SRCS := \
 	arch/aarch64/start.S \
 	arch/aarch64/mmu.c \
@@ -47,10 +55,13 @@ SRCS := \
 	os/baremetal/minilibc.c \
 	os/baremetal/log.c \
 	os/baremetal/tick.c \
-	os/cmsis2/cmsis2_shim.c \
 	board/$(BOARD)/drivers/uart.c \
 	board/$(BOARD)/param.c \
 	app/hello_world/main.c
+
+ifneq ($(CONFIG_OS),threadx)
+SRCS += os/cmsis2/cmsis2_shim.c
+endif
 
 # -mgeneral-regs-only: the image saves no FP state, so any FP instruction is
 #   a bug we want the compiler to prevent rather than discover as corruption.
@@ -97,6 +108,40 @@ SRCS += \
 CFLAGS += -DCONFIG_GDB_STUB=1
 endif
 
+# ThreadX UP kernel (SPEC S3/threadx-up-boot §3.1, FR-1/FR-2): upstream
+# common + the cortex_a55 GNU port .S files (the port's fp_enable/fp_disable
+# .c files are NOT built - no FP state exists under -mgeneral-regs-only) +
+# the adapter layer. tx include paths and port defines ride EXTRAFLAGS on
+# the tx objects only - the tx headers never leak into base-layer compile
+# units (FR-3 layering invariant). Sits after the global CFLAGS :=
+# definition on purpose (the -DTHREADX_BUILD append must not be wiped).
+ifeq ($(CONFIG_OS),threadx)
+TX_DIR := third-party/threadx
+TX_PORT_DIR := $(TX_DIR)/ports/cortex_a55/gnu
+TX_KERNEL_SRCS := $(wildcard $(TX_DIR)/common/src/*.c)
+TX_PORT_SRCS := $(wildcard $(TX_PORT_DIR)/src/*.S)
+TX_ADAPT_SRCS := os/threadx/tx_glue.c os/threadx/tx_vectors.S \
+	os/threadx/tx_up_shim.c
+SRCS += $(TX_KERNEL_SRCS) $(TX_PORT_SRCS) $(TX_ADAPT_SRCS)
+CFLAGS += -DTHREADX_BUILD=1
+
+CONFIG_TX_TICKS_PER_SECOND ?= 1000
+CONFIG_TX_TIMER_STACK ?= 4096
+TX_CFLAGS := -I$(TX_DIR)/common/inc -I$(TX_PORT_DIR)/inc -Ios/threadx \
+	-DTHREADX_UP_BUILD=1 -DTX_INCLUDE_USER_DEFINE_FILE -DEL1=1 \
+	-DCONFIG_TX_TICKS_PER_SECOND=$(CONFIG_TX_TICKS_PER_SECOND) \
+	-DCONFIG_TX_TIMER_STACK=$(CONFIG_TX_TIMER_STACK)
+# -DEL1: the port picks its exception-return register bank (SPSR/ELR_EL1 vs
+# _EL2 vs _EL3) from this compile-time macro - undefined, it silently emits
+# the EL3 variant and the first context switch dies on an undefined MSR at
+# EL1 (EC=0 sync fault; board-proven 2026-09-30). Same key as the prior
+# project's port build (its Makefile:229-240).
+# Pattern-scoped: kernel, port and adapter objects compile with the tx flag
+# set on top of the global CFLAGS; everything else never sees it.
+$(BUILD)/third-party/%.o: EXTRAFLAGS := $(TX_CFLAGS)
+$(BUILD)/os/threadx/%.o: EXTRAFLAGS := $(TX_CFLAGS)
+endif
+
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
 	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
@@ -111,11 +156,11 @@ all: $(TARGET).bin
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTRAFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/%.o: %.S
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTRAFLAGS) -MMD -MP -c $< -o $@
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) -o $@
