@@ -37,4 +37,18 @@ void board_log_stamp_use_tick(void);
  * "not muted"), strong in the gdb glue. */
 int board_console_muted(void);
 
+/* Break-in seam for an interrupt-driven console (S4 §3.6.2): a 0x03 seen
+ * by the shell's RX path asks the gdb stub first. Returns 1 = the byte was
+ * consumed by the stub (break-in raised); 0 = no stub / not interested,
+ * the byte is the shell's (readline's cancel-line). Weak here (no stub),
+ * strong in the threadx gdb glue. */
+int board_console_break_hook(void);
+
+/* Boot-relative wall clock, the stamp's own source: seconds and leftover
+ * milliseconds since the stamp epoch (first stamped line). One caller:
+ * the shell's uptime command, which pins this against the kernel tick -
+ * divergence between the two numbers is direct evidence of a dead or
+ * racing tick. */
+void board_uptime_parts(uint32_t *sec, uint32_t *ms);
+
 #endif /* FREEWEBCAM_LOG_H */

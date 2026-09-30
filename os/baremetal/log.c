@@ -287,3 +287,39 @@ __attribute__((weak)) int board_console_muted(void)
 {
 	return 0;
 }
+
+/* Weak default: no stub compiled in, every 0x03 belongs to the shell
+ * (readline's cancel-line). The threadx gdb glue overrides with
+ * gdb_break(). */
+__attribute__((weak)) int board_console_break_hook(void)
+{
+	return 0;
+}
+
+/* The stamp's wall clock, exposed: cntvct elapsed since the stamp epoch
+ * (log_t0), same numbers the "[   s.mmm] " stamps carry. */
+void board_uptime_parts(uint32_t *sec, uint32_t *ms)
+{
+	uint64_t delta, freq, s;
+	uint32_t m;
+
+	if (log_t0 == 0u) {
+		log_t0 = read_cntvct();
+		if (log_t0 == 0u) {
+			log_t0 = 1u;
+		}
+	}
+	delta = read_cntvct() - log_t0;
+	freq = read_cntfrq();
+	if (freq == 0u) {
+		freq = 1u;
+	}
+	s = udiv64(delta, (uint32_t)freq);
+	m = (uint32_t)udiv64((delta - s * freq) * 1000u, (uint32_t)freq);
+	if (sec != 0) {
+		*sec = (uint32_t)s;
+	}
+	if (ms != 0) {
+		*ms = m;
+	}
+}

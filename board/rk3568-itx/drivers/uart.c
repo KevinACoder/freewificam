@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "board_conf.h"
+#include "log.h"
 #include "regs.h"
 #include "uart.h"
 
