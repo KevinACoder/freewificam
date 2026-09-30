@@ -24,6 +24,7 @@
 #include "minilibc.h"
 #include "tick.h"
 #include "uart.h"
+#include "cmsis_os2.h"
 
 #ifdef CONFIG_GDB_STUB
 #include "gdb_glue.h"
@@ -32,6 +33,10 @@
 /* What U-Boot's `go` passed in x0 (start.S observed it after BSS clear).
  * Semantics unproven - logged as evidence only, never used. */
 extern unsigned long long boot_arg_x0;
+
+#ifndef CONFIG_CMSIS2_VERSION
+#define CONFIG_CMSIS2_VERSION "baremetal"
+#endif
 
 static uint64_t read_cntfrq(void)
 {
@@ -144,25 +149,52 @@ int main(void)
 		board_log("tick: SETUP FAILED\n");
 	}
 
-	/* 4. Steady state: tick-paced reporting; the gdb build watches the
-	 * console for a host attach or Ctrl-C between lines. Print cadence:
-	 * one line per 5 s (500 ticks at the default rate) - the 1 s ladder
-	 * was the R2 acceptance shape (passed and archived); the lower rate
-	 * keeps the console ring readable. */
+	/* 4. R4: CMSIS2 time-subset anchors (SPEC v3 §4/R4). osDelay's unit is
+	 * the tick (CMSIS semantics): at the default 100 Hz, osDelay(100) is
+	 * one second and the anchor literals below are tick-faithful. */
 	{
-		const uint64_t pace = 5ULL * board_tick_config.freq_hz;
-		uint64_t next = os_tick_get_count64() + pace;
+		char kid[32];
+		osVersion_t ver;
+
+		(void)osKernelGetInfo(&ver, kid, sizeof(kid));
+		board_log("cmsis2: kernel state=%s tick=%uHz version=%s\n",
+			  osKernelGetState() == osKernelRunning ? "running" : "?",
+			  (unsigned)osKernelGetTickFreq(),
+			  CONFIG_CMSIS2_VERSION);
+
+		/* First second boundary reported through the CMSIS counter. */
+		while (osKernelGetTickCount() < board_tick_config.freq_hz) {
+			__asm__ __volatile__("wfi" ::: "memory");
+		}
+		board_log("cmsis2: tickcount=%u\n",
+			  (unsigned)osKernelGetTickCount());
+
+		(void)osDelay(board_tick_config.freq_hz);
+		board_log("cmsis2: osDelay(%u) returned, tickcount=%u\n",
+			  (unsigned)board_tick_config.freq_hz,
+			  (unsigned)osKernelGetTickCount());
+	}
+
+	/* 5. Steady state: osDelay-driven one-line-per-second reporting (the
+	 * wait itself is the WFI in the shim, woken by the tick interrupt;
+	 * even spacing is the R4 side-evidence). The wait runs in 1-tick
+	 * granules so the gdb build polls the console between them - the
+	 * gdb stub has no RX interrupt to wake a longer WFI. */
+	{
+		const uint32_t granule_ticks = 1U;
+		uint32_t until_print = board_tick_config.freq_hz;
 
 		for (;;) {
-			uint64_t now;
-
 #ifdef CONFIG_GDB_STUB
 			gdb_poll();
 #endif
-			now = os_tick_get_count64();
-			if (now >= next) {
-				board_log("tick: %u\n", (unsigned int)now);
-				next += pace;
+			(void)osDelay(granule_ticks);
+			until_print -= granule_ticks;
+			if (until_print == 0U) {
+				until_print = board_tick_config.freq_hz;
+				board_log("cmsis2: tickcount=%u systimer=%u\n",
+					  (unsigned)osKernelGetTickCount(),
+					  (unsigned)osKernelGetSysTimerCount());
 			}
 		}
 	}
