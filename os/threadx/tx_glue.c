@@ -29,6 +29,12 @@
 #include "log.h"
 #include "tick.h"
 
+#ifdef CONFIG_GDB_STUB
+#include "gdb_glue.h"
+#include "gdb.h"
+#include "uart.h"
+#endif
+
 /* The port's tick dispatch entry (port-owned, not in the common headers). */
 extern void _tx_timer_interrupt(void);
 
@@ -69,6 +75,21 @@ static void vbar_install(void)
  * owns time (tx_time_get). Deviation recorded for the spec 回填. */
 static void tx_tick_kernel_work(void)
 {
+#ifdef CONFIG_GDB_STUB
+	/* T4 tick poll (the ThreadX world's gdb_poll site, spec §3.6): the
+	 * base watcher gives the full running-target semantics - Ctrl-C
+	 * break-in, '$' attach with a synthetic poll-site stop, chatter
+	 * bytes dropped. Gated: dbgport in, and no session owning the
+	 * UART (the stub's own RSP traffic must not be eaten as bytes).
+	 * From this IRQ both break-ins freeze the world inside the tick
+	 * interrupt; continue ERETs back into the tick handler. The spec's
+	 * "ISR 内不合成 poll-site" reservation is adjudicated here: the
+	 * attach criterion has no other entry, and the synthetic stop is
+	 * the baremetal board-proven shape. */
+	if (gdb_dbgport_ready() != 0 && gdb_session_active == 0) {
+		gdb_poll();
+	}
+#endif
 	_tx_timer_interrupt();
 }
 

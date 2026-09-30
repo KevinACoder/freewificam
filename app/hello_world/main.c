@@ -101,6 +101,10 @@ static void cachetest(void)
 #include "log.h"
 #include "uart.h"
 
+#ifdef CONFIG_GDB_STUB
+#include "gdb_glue.h"
+#endif
+
 static osThreadId_t thr_low_id;
 
 static void thr_hi(void *arg)
@@ -159,6 +163,12 @@ int main(void)
 
 	uart_early_init();
 	gicv3_init();
+
+#ifdef CONFIG_GDB_STUB
+	/* The stub owns the dbgport before anything can trap (same slot as
+	 * the baremetal main's init - banner + arch setup). */
+	gdb_glue_init();
+#endif
 
 	(void)osKernelInitialize();
 
