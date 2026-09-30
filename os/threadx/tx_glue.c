@@ -25,12 +25,33 @@
 #include "tx_api.h"
 #include "tx_thread.h"
 
+#include "board_conf.h"
 #include "log.h"
+#include "tick.h"
+
+/* The port's tick dispatch entry (port-owned, not in the common headers). */
+extern void _tx_timer_interrupt(void);
 
 /* The port version this image was built against (tx_port.h's _tx_version_id
  * carries the same string; the pin is locked so the literal is stable).
  * Anchor line, spec §4/T1 判据 3. */
 #define TX_GLUE_KERNEL_VERSION	"6.5.1.202602a"
+
+/* --- runtime vector table --------------------------------------------------- */
+
+/* Swap VBAR_EL1 from start.S's boot_vectors to the ThreadX table. Called
+ * from tx_application_define with interrupts masked (kernel init context),
+ * so the switch window has no interrupt traffic. From this point
+ * boot_vectors is unreachable - every exception goes through the port's
+ * save/dispatch/restore machinery (spec §3.3.1 two-table lifecycle). */
+static void vbar_install(void)
+{
+	__asm__ __volatile__(
+		"ldr	x0, =_threadx_vector_table\n"
+		"msr	vbar_el1, x0\n"
+		"isb\n"
+		::: "x0");
+}
 
 /* Smoke thread: proves the scheduler actually dispatches (T1 判据 3, second
  * anchor). 4 KiB is the round's thread-stack default (spec §3.4.2: it must
@@ -57,6 +78,53 @@ static void tx_smoke_entry(ULONG input)
 	}
 }
 
+/* --- tick (T2) --------------------------------------------------------------- */
+
+/* Kernel tick work, run from tick.c's internal ISR via the user-handler
+ * slot: expirations, time slice and the system time bump happen inside
+ * _tx_timer_interrupt; tick.c reloads TVAL right after this returns, which
+ * deasserts the level line BEFORE gic_irq_dispatch's tail EOI - the rearm
+ * before EOI order is the anti-tick-storm discipline (spec §3.3.4).
+ *
+ * Slot choice vs the spec's irq_register-replacement shape: the stamped
+ * log sink (log.c) reads os_tick_get_count32() once the stamp switches, so
+ * tick.c's count must keep advancing or every post-switch stamp freezes.
+ * Driving the kernel through the user-handler slot keeps the count and the
+ * kernel clock in lockstep with zero base-layer change; the kernel still
+ * owns time (tx_time_get). Deviation recorded for the spec 回填. */
+static void tx_tick_kernel_work(void)
+{
+	_tx_timer_interrupt();
+}
+
+/* Periodic observer: the tick's evidence window (T2 判据 2/3). Sleeps to
+ * the next second boundary first so the t ladder reads 1000, 2000... then
+ * one second per loop; every line is stamped from the tick it reports. */
+#define TX_OBSERVER_STACK_BYTES	4096U
+#define TX_OBSERVER_PRIORITY	16U
+
+static TX_THREAD tx_observer_thread;
+static unsigned char tx_observer_stack[TX_OBSERVER_STACK_BYTES]
+	__attribute__((aligned(16)));
+
+static void tx_observer_entry(ULONG input)
+{
+	ULONG ticks = (ULONG)CONFIG_TX_TICKS_PER_SECOND;
+	ULONG phase;
+
+	(void)input;
+
+	phase = tx_time_get() % ticks;
+	if (phase != 0U) {
+		(void)tx_thread_sleep(ticks - phase);
+	}
+
+	for (;;) {
+		board_log("tick: t=%u\n", (unsigned)tx_time_get());
+		(void)tx_thread_sleep(ticks);
+	}
+}
+
 /* Stack-checking notify (tx_user.h turns TX_ENABLE_STACK_CHECKING on): name
  * the culprit and park - the serial line is the evidence. */
 static void tx_stack_error_handler(TX_THREAD *thread_ptr)
@@ -74,6 +142,8 @@ static void tx_stack_error_handler(TX_THREAD *thread_ptr)
 
 void tx_application_define(void *first_unused_memory)
 {
+	vbar_install();
+
 	board_log("tx: kernel entered version=%s\n", TX_GLUE_KERNEL_VERSION);
 
 	/* Open question 4 evidence: the port dereferenced __top_of_ram into
@@ -84,15 +154,38 @@ void tx_application_define(void *first_unused_memory)
 
 	tx_thread_stack_error_notify(tx_stack_error_handler);
 
+	/* Arm the tick through the OS_Tick_* seam (board layer carries no
+	 * kernel dependency), announce the stamp-source switch, then create
+	 * the smoke + observer threads. Interrupts stay masked until
+	 * _tx_thread_schedule unmasks them; the timer pends meanwhile. */
+	if (OS_Tick_Setup((uint32_t)CONFIG_TX_TICKS_PER_SECOND,
+			  tx_tick_kernel_work) == 0) {
+		board_log("tick: source=%s irq=%d freq=%uHz\n",
+			  board_tick_config.source == OS_TICK_SOURCE_VIRT ?
+				  "virt" : "phys_ns",
+			  OS_Tick_GetIRQn(),
+			  (unsigned)(OS_Tick_GetClock() /
+				     OS_Tick_GetInterval()));
+		board_log_stamp_use_tick();
+		board_log("stamp: switched to tick\n");
+	} else {
+		board_log("tick: SETUP FAILED\n");
+	}
+
 	if (tx_thread_create(&tx_smoke_thread, "tx_smoke", tx_smoke_entry, 0,
 			     tx_smoke_stack, TX_SMOKE_STACK_BYTES,
 			     TX_SMOKE_PRIORITY, TX_SMOKE_PRIORITY,
 			     TX_NO_TIME_SLICE, TX_AUTO_START) != TX_SUCCESS) {
 		board_log("tx: smoke thread create FAIL\n");
 	}
-	/* T2 adds: vbar_install() + tick arm (OS_Tick_Setup 1000 Hz +
-	 * irq_register swap + enable) + stamp switch. T3 adds: CMSIS deferred
-	 * creations. */
+	if (tx_thread_create(&tx_observer_thread, "tx_observer",
+			     tx_observer_entry, 0,
+			     tx_observer_stack, TX_OBSERVER_STACK_BYTES,
+			     TX_OBSERVER_PRIORITY, TX_OBSERVER_PRIORITY,
+			     TX_NO_TIME_SLICE, TX_AUTO_START) != TX_SUCCESS) {
+		board_log("tx: observer thread create FAIL\n");
+	}
+	/* T3 adds: CMSIS deferred creations. */
 }
 
 /* Fatal landing from tx_vectors.S (kind: 1 = sync, 3 = serror). Record the
