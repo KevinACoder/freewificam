@@ -87,19 +87,105 @@ static void cachetest(void)
 
 #ifdef THREADX_BUILD
 /*
- * ThreadX UP config (SPEC S3/threadx-up-boot §3.8): the bare-metal anchor
- * sequence below belongs to the baremetal builds. This path reprograms the
- * console, brings the GIC up, and hands the machine to the kernel - the
- * "board_main minus CMSIS" shape of S1 §3.10 item 5. tx_kernel_enter never
- * returns; the adapter owns everything after this (os/threadx/tx_glue.c).
+ * ThreadX UP config, CMSIS form (SPEC S3/threadx-up-boot §3.8, T3): the
+ * "board_main" template of S1 §3.10 item 5 - osKernelInitialize, three
+ * threads, osKernelStart. The smoke covers the four elements S4 cherrysh
+ * stands on (spec FR-8): scheduling (3x 1 Hz counters), osDelay semantics,
+ * ISR-ready flag wakeup, lock depth. Threads carry their evidence in the
+ * log: thr_hi sets thr_low's flag after 1 s; thr_low reports the wakeup,
+ * then pins osDelay(1000) against the tick count before joining the 1 Hz
+ * loop. osKernelStart never returns.
  */
-void tx_kernel_enter_spsel0(void);
+#include "cmsis_os2.h"
+#include "gicv3.h"
+#include "log.h"
+#include "uart.h"
+
+static osThreadId_t thr_low_id;
+
+static void thr_hi(void *arg)
+{
+	uint32_t n = 0U;
+
+	(void)arg;
+	(void)osDelay(1000U);
+	(void)osThreadFlagsSet(thr_low_id, 0x1U);
+	for (;;) {
+		(void)osDelay(1000U);
+		board_log("thr_hi: %u\n", (unsigned)(++n));
+	}
+}
+
+static void thr_mid(void *arg)
+{
+	uint32_t n = 0U;
+
+	(void)arg;
+	for (;;) {
+		(void)osDelay(1000U);
+		board_log("thr_mid: %u\n", (unsigned)(++n));
+	}
+}
+
+static void thr_low(void *arg)
+{
+	uint32_t n = 0U;
+	uint32_t t0, t1, before, after, got;
+
+	(void)arg;
+
+	t0 = osKernelGetTickCount();
+	got = osThreadFlagsWait(0x1U, osFlagsWaitAny, osWaitForever);
+	t1 = osKernelGetTickCount();
+	board_log("flags: woke with 0x%x after %u ms\n", (unsigned)got,
+		  (unsigned)(t1 - t0));
+
+	before = osKernelGetTickCount();
+	(void)osDelay(1000U);
+	after = osKernelGetTickCount();
+	board_log("cmsis2: tickcount=%u\n", (unsigned)after);
+	board_log("cmsis2: osDelay(1000) delta=%u\n",
+		  (unsigned)(after - before));
+
+	for (;;) {
+		(void)osDelay(1000U);
+		board_log("thr_low: %u\n", (unsigned)(++n));
+	}
+}
 
 int main(void)
 {
+	osStatus_t l1, l2, u1;
+
 	uart_early_init();
 	gicv3_init();
-	tx_kernel_enter_spsel0();
+
+	(void)osKernelInitialize();
+
+	/* Lock smoke (T3 判据 5): depth 1 -> 2 -> 1 through the nesting
+	 * stack; the return values name the transitions. */
+	l1 = osKernelLock();
+	l2 = osKernelLock();
+	board_log("lock: depth=2 prev=%d,%d\n", (int)l1, (int)l2);
+	u1 = osKernelUnlock();
+	board_log("lock: depth=1 ret=%d\n", (int)u1);
+	(void)osKernelUnlock();
+
+	thr_low_id = osThreadNew(thr_low, NULL,
+				 &(osThreadAttr_t){ .name = "thr_low",
+						    .priority = osPriorityLow });
+	(void)osThreadNew(thr_mid, NULL,
+			  &(osThreadAttr_t){ .name = "thr_mid",
+					     .priority = osPriorityNormal });
+	(void)osThreadNew(thr_hi, NULL,
+			  &(osThreadAttr_t){ .name = "thr_hi",
+					     .priority = osPriorityHigh });
+
+	if (thr_low_id == NULL) {
+		board_log("cmsis2: thread create FAIL\n");
+	}
+	board_log("cmsis2: threads created, starting kernel\n");
+	(void)osKernelStart();
 	return 0;	/* unreachable */
 }
 

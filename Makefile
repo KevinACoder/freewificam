@@ -74,7 +74,7 @@ CFLAGS := $(CONFIG_OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-Iarch/aarch64 -Iboard/$(BOARD) -Iboard/$(BOARD)/drivers -Ios/baremetal \
-	-Ios/cmsis2 -Icomponents/cmsis5
+	-Ios/cmsis2 -Icomponents/cmsis5 -Icomponents/tlsf
 
 # CMSIS2 shim identity (SPEC v3 §3.7.2): the string osKernelGetInfo reports;
 # bumped per round so the anchor line carries the build's provenance.
@@ -121,25 +121,34 @@ TX_PORT_DIR := $(TX_DIR)/ports/cortex_a55/gnu
 TX_KERNEL_SRCS := $(wildcard $(TX_DIR)/common/src/*.c)
 TX_PORT_SRCS := $(wildcard $(TX_PORT_DIR)/src/*.S)
 TX_ADAPT_SRCS := os/threadx/tx_glue.c os/threadx/tx_vectors.S \
-	os/threadx/tx_up_shim.c
-SRCS += $(TX_KERNEL_SRCS) $(TX_PORT_SRCS) $(TX_ADAPT_SRCS)
+	os/threadx/tx_up_shim.c os/threadx/heap.c
+TX_CMSIS_SRCS := os/cmsis2/cmsis2_threadx.c
+SRCS += $(TX_KERNEL_SRCS) $(TX_PORT_SRCS) $(TX_ADAPT_SRCS) $(TX_CMSIS_SRCS)
+# tlsf needs no tx header: plain freestanding compile, global flags.
+SRCS += components/tlsf/tlsf.c
 CFLAGS += -DTHREADX_BUILD=1
 
 CONFIG_TX_TICKS_PER_SECOND ?= 1000
 CONFIG_TX_TIMER_STACK ?= 4096
+CONFIG_TX_MAX_THREADS ?= 16
+CONFIG_HEAP_BYTES ?= 0x400000
 TX_CFLAGS := -I$(TX_DIR)/common/inc -I$(TX_PORT_DIR)/inc -Ios/threadx \
 	-DTHREADX_UP_BUILD=1 -DTX_INCLUDE_USER_DEFINE_FILE -DEL1=1 \
 	-DCONFIG_TX_TICKS_PER_SECOND=$(CONFIG_TX_TICKS_PER_SECOND) \
-	-DCONFIG_TX_TIMER_STACK=$(CONFIG_TX_TIMER_STACK)
+	-DCONFIG_TX_TIMER_STACK=$(CONFIG_TX_TIMER_STACK) \
+	-DCONFIG_TX_MAX_THREADS=$(CONFIG_TX_MAX_THREADS) \
+	-DCONFIG_HEAP_BYTES=$(CONFIG_HEAP_BYTES)
 # -DEL1: the port picks its exception-return register bank (SPSR/ELR_EL1 vs
 # _EL2 vs _EL3) from this compile-time macro - undefined, it silently emits
 # the EL3 variant and the first context switch dies on an undefined MSR at
 # EL1 (EC=0 sync fault; board-proven 2026-09-30). Same key as the prior
 # project's port build (its Makefile:229-240).
-# Pattern-scoped: kernel, port and adapter objects compile with the tx flag
-# set on top of the global CFLAGS; everything else never sees it.
+# Pattern-scoped: kernel, port, adapter AND the threadx cmsis2 shim compile
+# with the tx flag set on top of the global CFLAGS; everything else (incl.
+# tlsf) never sees it - tx headers stay inside the adapter units (FR-3).
 $(BUILD)/third-party/%.o: EXTRAFLAGS := $(TX_CFLAGS)
 $(BUILD)/os/threadx/%.o: EXTRAFLAGS := $(TX_CFLAGS)
+$(BUILD)/os/cmsis2/%.o: EXTRAFLAGS := $(TX_CFLAGS)
 endif
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
@@ -195,6 +204,22 @@ gates:
 #  - no libgcc helper may leak into the link (A64 has hardware integer
 #    division; a missing __udivdi3 is a link error, a leaked one is a
 #    dependency nobody vendored).
+# CMSIS scheduler-class symbol gate, split by CONFIG_OS (SPEC S3 v2.1
+# §3.8): baremetal must export NONE; threadx legitimately defines some via
+# the shim, so the check is provenance - only cmsis2_threadx.o may define
+# them.
+ifeq ($(CONFIG_OS),threadx)
+CHECK_CMSIS_CMD := @if $(NM) -o $(filter-out %cmsis2_threadx.o,$(OBJS)) | \
+	grep -E ' [TDBR] (osThread|osSemaphore|osMutex|osEventFlags|osTimer|osMessage|osMemoryPool)'; then \
+	echo 'check: CMSIS scheduler symbol outside cmsis2_threadx.o - FAIL'; exit 1; \
+	else echo 'check: CMSIS scheduler symbols confined to cmsis2_threadx.o PASS'; fi
+else
+CHECK_CMSIS_CMD := @if $(NM) $(TARGET).elf | \
+	grep -E ' (osThread|osSemaphore|osMutex|osEventFlags|osTimer|osMessage|osMemoryPool)'; then \
+	echo 'check: scheduler-class CMSIS symbol exported - FAIL'; exit 1; \
+	else echo 'check: no scheduler-class CMSIS symbols PASS'; fi
+endif
+
 check: $(TARGET).elf
 	@if [ "$$($(NM) $(TARGET).elf | \
 		awk '$$3 == "_start" {print substr($$1, length($$1)-7)}')" \
@@ -210,9 +235,7 @@ check: $(TARGET).elf
 	@if $(NM) $(TARGET).elf | grep -E '__udivdi3|__aeabi_|__muldi3'; then \
 		echo 'check: libgcc helper leaked - FAIL'; exit 1; \
 	else echo 'check: no libgcc helpers PASS'; fi
-	@if $(NM) $(TARGET).elf | grep -E ' (osThread|osSemaphore|osMutex|osEventFlags|osTimer|osMessage|osMemoryPool)'; then \
-		echo 'check: scheduler-class CMSIS symbol exported - FAIL'; exit 1; \
-	else echo 'check: no scheduler-class CMSIS symbols PASS'; fi
+	$(CHECK_CMSIS_CMD)
 
 # Deploy to the TFTP root under the name the board's boot profile expects.
 # The deploy report (size + crc32 + the sha256 chain) is what the
