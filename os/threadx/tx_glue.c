@@ -79,19 +79,42 @@ static void tx_tick_kernel_work(void)
 	/* T4 tick poll (the ThreadX world's gdb_poll site, spec §3.6): the
 	 * base watcher gives the full running-target semantics - Ctrl-C
 	 * break-in, '$' attach with a synthetic poll-site stop, chatter
-	 * bytes dropped. Gated: dbgport in, and no session owning the
-	 * UART (the stub's own RSP traffic must not be eaten as bytes).
+	 * bytes dropped. Gated: dbgport in, no session owning the UART
+	 * (the stub's own RSP traffic must not be eaten as bytes), and -
+	 * since S4 - the shell's RX interrupt not armed (once it is, the
+	 * ISR owns the console FIFO; a polled scan here would race it for
+	 * the same bytes. The ISR routes 0x03/'$' to the stub itself via
+	 * board_console_break_hook / gdb_isr_attach).
 	 * From this IRQ both break-ins freeze the world inside the tick
 	 * interrupt; continue ERETs back into the tick handler. The spec's
 	 * "ISR 内不合成 poll-site" reservation is adjudicated here: the
 	 * attach criterion has no other entry, and the synthetic stop is
 	 * the baremetal board-proven shape. */
-	if (gdb_dbgport_ready() != 0 && gdb_session_active == 0) {
+	if (gdb_dbgport_ready() != 0 && gdb_session_active == 0
+#ifdef CONFIG_UART_RX_IRQ
+	    && uart_console_rx_armed() == 0
+#endif
+	) {
 		gdb_poll();
 	}
 #endif
 	_tx_timer_interrupt();
 }
+
+#ifdef CONFIG_GDB_STUB
+/* Strong answer to log.c's weak break seam (S4 spec §3.6.2): the shell's
+ * RX path hands every 0x03 to the stub first. gdb_break() raises the real
+ * BRK - the sync vector carves the trapframe and the stub owns the CPU
+ * until continue; from the RX interrupt that freezes the machine exactly
+ * like the tick-path break-in (board-proven T4 shape). Return 1 = the
+ * byte was consumed (the adapter must not ring it); 0 never happens with
+ * the stub compiled in. */
+int board_console_break_hook(void)
+{
+	gdb_break();
+	return 1;
+}
+#endif
 
 /* Stack-checking notify (tx_user.h turns TX_ENABLE_STACK_CHECKING on): name
  * the culprit and park - the serial line is the evidence. */

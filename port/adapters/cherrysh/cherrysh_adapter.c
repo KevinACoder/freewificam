@@ -72,6 +72,14 @@
 #include "log.h"
 #include "uart.h"
 
+#ifdef CONFIG_GDB_STUB
+/* The stub seam: board_console_break_hook (weak in log.c, strong in the
+ * threadx glue) for 0x03; gdb_isr_attach + session state for the '$'
+ * attach. S4 spec §3.6.2. */
+#include "gdb_glue.h"
+#include "gdb/gdb.h"
+#endif
+
 /* The shell task's stack is a build key (Makefile CONFIG_SHELL_STACK). */
 #ifndef CONFIG_SHELL_STACK
 #define CONFIG_SHELL_STACK	4096U
@@ -140,6 +148,29 @@ static void shell_uart_rx_event(uint32_t events, uint32_t rx_count)
 	/* Pull whatever arrived into the ring. Reading the count the driver
 	 * actually stored is more robust than assuming, and costs nothing. */
 	for (uint32_t i = 0U; i < rx_count; i++) {
+#ifdef CONFIG_GDB_STUB
+		/* 0x03 is the gdb stub's break-in byte (board_console_break_hook,
+		 * weak here meaning "no stub"; strong in tx_glue). Consumed
+		 * there, delivered to readline here - where it just cancels
+		 * the current line, its ordinary meaning. */
+		if (rx_chunk[i] == 0x03U && board_console_break_hook()) {
+			continue;
+		}
+		/* '$': a host attaching to a RUNNING target. The stub owns
+		 * the wire from here: hand it the byte plus everything
+		 * already batched behind it (the session's first packet;
+		 * the ISR-stopped world means nothing further can race),
+		 * and stop consuming this batch. The session runs to
+		 * completion inside this call; on return the console
+		 * ownership is back (rx_gate flushed the FIFO at session
+		 * exit), so a plain re-arm below resumes the shell. */
+		if (rx_chunk[i] == (uint8_t)'$' && gdb_dbgport_ready() != 0 &&
+		    gdb_session_active == 0) {
+			gdb_isr_attach('$', &rx_chunk[i + 1U],
+				       rx_count - i - 1U);
+			goto rearm;
+		}
+#endif
 		/* Overwrite rather than drop: if a person pastes faster than
 		 * the shell drains, losing the OLDEST bytes keeps the most
 		 * recent input, which is what someone typing wants. The
@@ -148,6 +179,9 @@ static void shell_uart_rx_event(uint32_t events, uint32_t rx_count)
 		(void)chry_ringbuffer_overwrite_byte(&rx_ring, rx_chunk[i]);
 	}
 
+#ifdef CONFIG_GDB_STUB
+rearm:
+#endif
 	/* Order the ring writes before the wake-up. CherryRB has no barriers
 	 * of its own (see the file header), so without this the consumer can
 	 * be woken and read stale ring state - the classic single-producer
