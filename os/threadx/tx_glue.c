@@ -53,31 +53,6 @@ static void vbar_install(void)
 		::: "x0");
 }
 
-/* Smoke thread: proves the scheduler actually dispatches (T1 判据 3, second
- * anchor). 4 KiB is the round's thread-stack default (spec §3.4.2: it must
- * also hold an ISR frame; TX_MINIMUM_STACK=200 is the port floor, not a
- * design value). Heap-backed stacks arrive with the T3 heap. */
-#define TX_SMOKE_STACK_BYTES	4096U
-#define TX_SMOKE_PRIORITY	16U
-
-static TX_THREAD tx_smoke_thread;
-static unsigned char tx_smoke_stack[TX_SMOKE_STACK_BYTES]
-	__attribute__((aligned(16)));
-
-static void tx_smoke_entry(ULONG input)
-{
-	(void)input;
-
-	board_log("tx: first thread ran\n");
-
-	/* One shot, then off the run list - the image idles silently after
-	 * this (T1 判据 4). */
-	(void)tx_thread_terminate(&tx_smoke_thread);
-	for (;;) {
-		__asm__ __volatile__("wfe");
-	}
-}
-
 /* --- tick (T2) --------------------------------------------------------------- */
 
 /* Kernel tick work, run from tick.c's internal ISR via the user-handler
@@ -97,34 +72,6 @@ static void tx_tick_kernel_work(void)
 	_tx_timer_interrupt();
 }
 
-/* Periodic observer: the tick's evidence window (T2 判据 2/3). Sleeps to
- * the next second boundary first so the t ladder reads 1000, 2000... then
- * one second per loop; every line is stamped from the tick it reports. */
-#define TX_OBSERVER_STACK_BYTES	4096U
-#define TX_OBSERVER_PRIORITY	16U
-
-static TX_THREAD tx_observer_thread;
-static unsigned char tx_observer_stack[TX_OBSERVER_STACK_BYTES]
-	__attribute__((aligned(16)));
-
-static void tx_observer_entry(ULONG input)
-{
-	ULONG ticks = (ULONG)CONFIG_TX_TICKS_PER_SECOND;
-	ULONG phase;
-
-	(void)input;
-
-	phase = tx_time_get() % ticks;
-	if (phase != 0U) {
-		(void)tx_thread_sleep(ticks - phase);
-	}
-
-	for (;;) {
-		board_log("tick: t=%u\n", (unsigned)tx_time_get());
-		(void)tx_thread_sleep(ticks);
-	}
-}
-
 /* Stack-checking notify (tx_user.h turns TX_ENABLE_STACK_CHECKING on): name
  * the culprit and park - the serial line is the evidence. */
 static void tx_stack_error_handler(TX_THREAD *thread_ptr)
@@ -139,6 +86,11 @@ static void tx_stack_error_handler(TX_THREAD *thread_ptr)
 		__asm__ __volatile__("wfe");
 	}
 }
+
+/* CMSIS adapter's deferred-creation replay (os/cmsis2/cmsis2_threadx.c):
+ * threads claimed during the Initialize..Start window are created here,
+ * the only window ThreadX allows pre-start object creation. */
+extern void cmsis2_tx_application_define(void);
 
 void tx_application_define(void *first_unused_memory)
 {
@@ -155,9 +107,9 @@ void tx_application_define(void *first_unused_memory)
 	tx_thread_stack_error_notify(tx_stack_error_handler);
 
 	/* Arm the tick through the OS_Tick_* seam (board layer carries no
-	 * kernel dependency), announce the stamp-source switch, then create
-	 * the smoke + observer threads. Interrupts stay masked until
-	 * _tx_thread_schedule unmasks them; the timer pends meanwhile. */
+	 * kernel dependency), announce the stamp-source switch. Interrupts
+	 * stay masked until _tx_thread_schedule unmasks them; the timer
+	 * pends meanwhile. */
 	if (OS_Tick_Setup((uint32_t)CONFIG_TX_TICKS_PER_SECOND,
 			  tx_tick_kernel_work) == 0) {
 		board_log("tick: source=%s irq=%d freq=%uHz\n",
@@ -172,20 +124,7 @@ void tx_application_define(void *first_unused_memory)
 		board_log("tick: SETUP FAILED\n");
 	}
 
-	if (tx_thread_create(&tx_smoke_thread, "tx_smoke", tx_smoke_entry, 0,
-			     tx_smoke_stack, TX_SMOKE_STACK_BYTES,
-			     TX_SMOKE_PRIORITY, TX_SMOKE_PRIORITY,
-			     TX_NO_TIME_SLICE, TX_AUTO_START) != TX_SUCCESS) {
-		board_log("tx: smoke thread create FAIL\n");
-	}
-	if (tx_thread_create(&tx_observer_thread, "tx_observer",
-			     tx_observer_entry, 0,
-			     tx_observer_stack, TX_OBSERVER_STACK_BYTES,
-			     TX_OBSERVER_PRIORITY, TX_OBSERVER_PRIORITY,
-			     TX_NO_TIME_SLICE, TX_AUTO_START) != TX_SUCCESS) {
-		board_log("tx: observer thread create FAIL\n");
-	}
-	/* T3 adds: CMSIS deferred creations. */
+	cmsis2_tx_application_define();
 }
 
 /* Fatal landing from tx_vectors.S (kind: 1 = sync, 3 = serror). Record the
