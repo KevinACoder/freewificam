@@ -1,0 +1,315 @@
+/*
+ * @file   minilibc.c
+ * @brief  printf integer subset, hand-written (no third-party dependency,
+ *         fully auditable; SPEC v3 §3.2.3).
+ *
+ * Supported: %c %s %d %i %u %x %X %p %%; flags '-' (left align) and '0'
+ * (zero fill); field width as decimal digits or '*'; precision '.' digits or
+ * '*'; length 'l', 'll', 'z' (all 64-bit on this LP64 target). Anything else
+ * - floating-point included - prints the raw spec characters (C99 degraded
+ * behaviour). Output is truncated to the buffer but always NUL-terminated;
+ * the return value is the length of the COMPLETE output, snprintf-style.
+ *
+ * Output only fills the buffer; what happens to it (which sink, which lock)
+ * is the caller's business. Integer division uses the A64 hardware UDIV
+ * (A55 has SDIV/UDIV; no libgcc helper is involved - the build self-check
+ * asserts none appears).
+ */
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "minilibc.h"
+
+struct obuf {
+	char *buf;
+	size_t cap;
+	size_t len;	/* length of the complete output, truncation aside */
+};
+
+static void ob_ch(struct obuf *o, char c)
+{
+	if (o->cap > 0u && o->len < o->cap - 1u) {
+		o->buf[o->len] = c;
+	}
+	o->len++;
+}
+
+static void ob_str(struct obuf *o, const char *s, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		ob_ch(o, s[i]);
+	}
+}
+
+static void ob_pad(struct obuf *o, size_t n, char c)
+{
+	while (n-- > 0u) {
+		ob_ch(o, c);
+	}
+}
+
+/* Unsigned to ASCII (reversed fill), returns length. */
+static size_t u64_to_str(char *tmp, uint64_t v, unsigned base, bool upper)
+{
+	const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+	size_t n = 0;
+	size_t i;
+
+	do {
+		tmp[n++] = digits[v % base];
+		v /= base;
+	} while (v != 0u);
+
+	for (i = 0; i < n / 2u; i++) {
+		char t = tmp[i];
+
+		tmp[i] = tmp[n - 1u - i];
+		tmp[n - 1u - i] = t;
+	}
+	return n;
+}
+
+/* Prepend precision zeros to a digit string in place. Clamps at cap-1
+ * digits (a precision larger than that is truncated - a documented
+ * deviation; this image's own callers use small precisions). */
+static size_t apply_prec(char *tmp, size_t n, int prec, size_t cap)
+{
+	size_t extra;
+
+	if (prec <= 0 || (size_t)prec <= n) {
+		return n;
+	}
+	extra = (size_t)prec - n;
+	if (extra > cap - 1u - n) {
+		extra = cap - 1u - n;
+	}
+	memmove(tmp + extra, tmp, n);
+	memset(tmp, '0', extra);
+	return n + extra;
+}
+
+/* Field emit for numbers: prefix (sign / 0x), digits, width padding. The
+ * '0' flag zero-fills after the prefix; '-' (left align) wins over it. */
+static void ob_num(struct obuf *o, const char *digits, size_t dlen,
+		   const char *prefix, int width, bool minus, bool zero)
+{
+	size_t plen = strlen(prefix);
+	size_t total = dlen + plen;
+	size_t pad = (width > 0 && (size_t)width > total)
+			? (size_t)width - total : 0u;
+
+	if (minus) {
+		ob_str(o, prefix, plen);
+		ob_str(o, digits, dlen);
+		ob_pad(o, pad, ' ');
+	} else if (zero) {
+		ob_str(o, prefix, plen);
+		ob_pad(o, pad, '0');
+		ob_str(o, digits, dlen);
+	} else {
+		ob_pad(o, pad, ' ');
+		ob_str(o, prefix, plen);
+		ob_str(o, digits, dlen);
+	}
+}
+
+int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
+{
+	struct obuf o = { buf, cap, 0u };
+	const char *p = fmt;
+
+	while (*p != '\0') {
+		const char *spec;
+		bool minus = false;
+		bool zero = false;
+		int width = 0;
+		int prec = -1;
+		int lcount = 0;
+		bool z_len = false;
+		char conv;
+
+		if (*p != '%') {
+			ob_ch(&o, *p++);
+			continue;
+		}
+		spec = p++;
+
+		/* flags */
+		for (;; p++) {
+			if (*p == '-') {
+				minus = true;
+			} else if (*p == '0') {
+				zero = true;
+			} else {
+				break;
+			}
+		}
+		/* width */
+		if (*p == '*') {
+			width = va_arg(ap, int);
+			if (width < 0) {
+				minus = true;
+				width = -width;
+			}
+			p++;
+		} else {
+			while (*p >= '0' && *p <= '9') {
+				width = width * 10 + (*p - '0');
+				p++;
+			}
+		}
+		/* precision */
+		if (*p == '.') {
+			p++;
+			prec = 0;
+			if (*p == '*') {
+				prec = va_arg(ap, int);
+				p++;
+			} else {
+				while (*p >= '0' && *p <= '9') {
+					prec = prec * 10 + (*p - '0');
+					p++;
+				}
+			}
+		}
+		/* length */
+		while (*p == 'l') {
+			lcount++;
+			p++;
+		}
+		if (*p == 'z') {
+			z_len = true;
+			p++;
+		}
+		conv = *p;
+
+		switch (conv) {
+		case '%':
+			ob_ch(&o, '%');
+			p++;
+			break;
+		case 'c': {
+			char c = (char)va_arg(ap, int);
+			size_t pad = (width > 1) ? (size_t)width - 1u : 0u;
+
+			if (!minus) {
+				ob_pad(&o, pad, ' ');
+			}
+			ob_ch(&o, c);
+			if (minus) {
+				ob_pad(&o, pad, ' ');
+			}
+			p++;
+			break;
+		}
+		case 's': {
+			const char *s = va_arg(ap, const char *);
+			size_t n;
+			size_t pad;
+
+			if (s == 0) {
+				s = "(null)";
+			}
+			n = strlen(s);
+			if (prec >= 0 && (size_t)prec < n) {
+				n = (size_t)prec;
+			}
+			pad = (width > 0 && (size_t)width > n)
+				? (size_t)width - n : 0u;
+			if (!minus) {
+				ob_pad(&o, pad, ' ');
+			}
+			ob_str(&o, s, n);
+			if (minus) {
+				ob_pad(&o, pad, ' ');
+			}
+			p++;
+			break;
+		}
+		case 'd':
+		case 'i': {
+			long long v = (lcount > 0) ? va_arg(ap, long long)
+						   : va_arg(ap, int);
+			bool neg = v < 0;
+			uint64_t m = neg ? (uint64_t)0u - (uint64_t)v
+					 : (uint64_t)v;
+			char tmp[24];
+			size_t n = u64_to_str(tmp, m, 10u, false);
+
+			if (prec == 0 && m == 0u) {
+				n = 0;	/* "%.0d" of 0 prints nothing */
+			}
+			n = apply_prec(tmp, n, prec, sizeof(tmp));
+			ob_num(&o, tmp, n, neg ? "-" : "", width, minus, zero);
+			p++;
+			break;
+		}
+		case 'u':
+		case 'x':
+		case 'X': {
+			unsigned long long v;
+			unsigned base = (conv == 'u') ? 10u : 16u;
+			char tmp[24];
+			size_t n;
+
+			if (z_len) {
+				v = va_arg(ap, size_t);
+			} else if (lcount > 0) {
+				v = va_arg(ap, unsigned long long);
+			} else {
+				v = va_arg(ap, unsigned int);
+			}
+			n = u64_to_str(tmp, v, base, conv == 'X');
+			if (prec == 0 && v == 0u) {
+				n = 0;
+			}
+			n = apply_prec(tmp, n, prec, sizeof(tmp));
+			ob_num(&o, tmp, n, "", width, minus, zero);
+			p++;
+			break;
+		}
+		case 'p': {
+			void *pv = va_arg(ap, void *);
+			char tmp[24];
+			size_t n = u64_to_str(tmp, (uint64_t)pv, 16u, false);
+
+			ob_num(&o, tmp, n, "0x", width, minus, zero);
+			p++;
+			break;
+		}
+		case '\0':
+			/* format ended mid-spec: emit what was consumed */
+			break;
+		default: {
+			/* unsupported conversion: raw spec characters */
+			const char *q = spec;
+
+			while (q <= p) {
+				ob_ch(&o, *q++);
+			}
+			p++;
+			break;
+		}
+		}
+	}
+
+	if (cap > 0u) {
+		buf[o.len < cap ? o.len : cap - 1u] = '\0';
+	}
+	return (o.len > (size_t)0x7fffffff) ? 0x7fffffff : (int)o.len;
+}
+
+int snprintf(char *buf, size_t cap, const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, cap, fmt, ap);
+	va_end(ap);
+	return n;
+}
