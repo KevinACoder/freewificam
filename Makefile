@@ -51,17 +51,13 @@ SRCS := \
 	board/$(BOARD)/param.c \
 	app/hello_world/main.c
 
-OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
-	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
-DEPS := $(OBJS:.o=.d)
-
 # -mgeneral-regs-only: the image saves no FP state, so any FP instruction is
 #   a bug we want the compiler to prevent rather than discover as corruption.
 # -mno-outline-atomics: a -nostdlib image has no library for __aarch64_*
 #   helpers; inlined LDXR/STXR loops need none.
 # -mstrict-align: the compiler must not generate unaligned accesses on its
 #   own (Device mappings fault on them, and Normal ones are a debug hazard).
-CONFIG_OPT ?= -O2
+CONFIG_OPT ?= -Og
 CFLAGS := $(CONFIG_OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
@@ -77,6 +73,26 @@ endif
 ifeq ($(CONFIG_TICK_SOURCE),phys_ns)
 CFLAGS += -DTICK_SOURCE_PHYS_NS=1
 endif
+
+# gdb stub (SPEC v3 §3.6): CONFIG_GDB_STUB=y builds the RSP-over-UART2 stub,
+# the boot_sync_entry vector path and the glue; the base image's sync slots
+# stay on the fatal-park path.
+CONFIG_GDB_STUB ?= n
+ifeq ($(filter $(CONFIG_GDB_STUB),y n),)
+$(error CONFIG_GDB_STUB must be y or n, got '$(CONFIG_GDB_STUB)')
+endif
+ifeq ($(CONFIG_GDB_STUB),y)
+SRCS += \
+	arch/aarch64/gdb/gdb_main.c \
+	arch/aarch64/gdb/gdb_packet.c \
+	arch/aarch64/gdb/gdb_arch.c \
+	os/baremetal/gdb_glue.c
+CFLAGS += -DCONFIG_GDB_STUB=1
+endif
+
+OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
+	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
+DEPS := $(OBJS:.o=.d)
 
 LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 	-Wl,--build-id=none -Wl,--no-warn-rwx-segments -Wl,-Map=$(TARGET).map

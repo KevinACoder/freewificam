@@ -174,7 +174,11 @@ boot_arg_x0:
 boot_vectors:
 	/* Current EL with SP_EL0 */
 	.p2align 7
+#ifdef CONFIG_GDB_STUB
+	b	boot_sync_entry
+#else
 	b	boot_sync_fault
+#endif
 	.p2align 7
 	b	boot_irq_entry
 	.p2align 7
@@ -183,7 +187,11 @@ boot_vectors:
 	b	boot_serr_fault
 	/* Current EL with SP_ELx */
 	.p2align 7
+#ifdef CONFIG_GDB_STUB
+	b	boot_sync_entry
+#else
 	b	boot_sync_fault
+#endif
 	.p2align 7
 	b	boot_irq_entry
 	.p2align 7
@@ -261,6 +269,80 @@ boot_fault_common:
 	bl	uart_early_puts
 1:	wfe
 	b	1b
+
+#ifdef CONFIG_GDB_STUB
+/* Synchronous-exception entry on the gdb build: build struct gdb_trapframe
+ * (see gdb_arch.h) on the interrupted stack and hand it to the stub's C
+ * sink, which either stops in the host session or - when no dbgport is
+ * registered yet - parks exactly like boot_fault_common.
+ *
+ * Register discipline: x16/x17 are the only scratch, and their ORIGINAL
+ * values go into the frame FIRST (stp x16,x17 before either is clobbered);
+ * the interrupted SP is captured after the frame is reserved. The stub may
+ * rewrite elr/spsr in the frame (PC fixup, register writes), so the
+ * epilogue takes them back from the frame. */
+	.type	boot_sync_entry, %function
+boot_sync_entry:
+	sub	sp, sp, #288
+	stp	x16, x17, [sp, #0xb0]	/* originals first */
+	mov	x16, sp
+	add	x16, x16, #288		/* interrupted SP (pre-reserve) */
+	str	x16, [sp, #0]		/* tf->sp */
+	str	x30, [sp, #8]		/* tf->lr */
+	mrs	x17, elr_el1
+	str	x17, [sp, #0x10]	/* tf->elr */
+	mrs	x17, spsr_el1
+	str	x17, [sp, #0x18]	/* tf->spsr */
+	mrs	x17, esr_el1
+	str	x17, [sp, #0x20]	/* tf->esr */
+	mrs	x17, far_el1
+	str	x17, [sp, #0x28]	/* tf->far */
+	stp	x0, x1, [sp, #0x30]
+	stp	x2, x3, [sp, #0x40]
+	stp	x4, x5, [sp, #0x50]
+	stp	x6, x7, [sp, #0x60]
+	stp	x8, x9, [sp, #0x70]
+	stp	x10, x11, [sp, #0x80]
+	stp	x12, x13, [sp, #0x90]
+	stp	x14, x15, [sp, #0xa0]
+	/* x16/x17 slots already hold their originals */
+	stp	x18, x19, [sp, #0xc0]
+	stp	x20, x21, [sp, #0xd0]
+	stp	x22, x23, [sp, #0xe0]
+	stp	x24, x25, [sp, #0xf0]
+	stp	x26, x27, [sp, #0x100]
+	stp	x28, x29, [sp, #0x110]
+
+	mov	x0, sp
+	bl	gdb_sync_entry
+
+	/* Restore: system registers first (x17 scratch), then GPRs, then
+	 * SP from the frame, then ERET (ELR/SPSR may have been rewritten).
+	 * The frame's sp slot is loaded last, via x16. */
+	ldr	x17, [sp, #0x10]
+	msr	elr_el1, x17
+	ldr	x17, [sp, #0x18]
+	msr	spsr_el1, x17
+	ldp	x0, x1, [sp, #0x30]
+	ldp	x2, x3, [sp, #0x40]
+	ldp	x4, x5, [sp, #0x50]
+	ldp	x6, x7, [sp, #0x60]
+	ldp	x8, x9, [sp, #0x70]
+	ldp	x10, x11, [sp, #0x80]
+	ldp	x12, x13, [sp, #0x90]
+	ldp	x14, x15, [sp, #0xa0]
+	ldp	x16, x17, [sp, #0xb0]
+	ldp	x18, x19, [sp, #0xc0]
+	ldp	x20, x21, [sp, #0xd0]
+	ldp	x22, x23, [sp, #0xe0]
+	ldp	x24, x25, [sp, #0xf0]
+	ldp	x26, x27, [sp, #0x100]
+	ldp	x28, x29, [sp, #0x110]
+	ldr	x30, [sp, #8]
+	ldr	x16, [sp, #0]
+	mov	sp, x16
+	eret
+#endif /* CONFIG_GDB_STUB */
 
 /* Interrupt entry from the current EL: acknowledge, dispatch, end - in C.
  *

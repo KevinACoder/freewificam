@@ -1,0 +1,48 @@
+# gdbinit - freewebcam baremetal (CONFIG=mmu-gdb), WSL xpack aarch64 gdb 13.2
+#
+#   aarch64-none-elf-gdb -x tools/gdb/gdbinit
+#
+# Adjust ELF if the build moved. Windows-side xpack gdb works the same way
+# with the \\wsl.localhost path and target remote 127.0.0.1-forwarded port.
+
+set confirm off
+set pagination off
+set architecture aarch64
+set breakpoint pending on
+
+# The image path carries the configuration name (configs/): every config
+# builds into its own directory, so point this at the one you booted.
+file build/baremetal-mmu-gdb/baremetal.elf
+
+# Breakpoint classes on this board: the boot chain (BL31 + OP-TEE + U-Boot)
+# never delivers self-hosted debug events other than BRK - Z0 (BRK patch)
+# works, Z1 (DBGBCR) and watchpoints hold their register values but their
+# events stay silent. Keep the hw limits at 0 so `break` uses Z0.
+set remote hardware-breakpoint-limit 0
+set remote hardware-watchpoint-limit 0
+set breakpoint auto-hw on
+
+# oslab SerialHub raw bridge (RW port). Session discipline: the WebUI serial
+# terminal and MCP serial_read are evidence channels - they still work, but
+# their ring view interleaves RSP with board logs.
+#
+# BEFORE connecting: run `python3 tools/gdb/rsp_warm.py` once (after the
+# stub-ready banner). The hub's board->TCP uplink swallows the first
+# exchange of the first client after a fresh boot (measured 2026-09-30);
+# the warm-up round trip clears it, and the timeout below keeps the very
+# first gdb packets from desynchronizing the reply stream.
+set remotetimeout 20
+target remote 192.168.0.18:18000
+
+# Platform notes:
+# - The image builds -Og -g3, so `break *func` lands on a reachable address;
+#   `break *addr` remains the exact-placement discipline.
+# - `break` is a patched BRK #0x401 (stop reason "swbreak"); the
+#   compiled-in gdb_break()/Ctrl-C path uses the same immediate.
+# - Single-step (`stepi`/`nexti`) does not deliver on this boot chain:
+#   the stub answers unsupported. Use breakpoints instead.
+# - Any synchronous fault stops in the stub (SIGSEGV/SIGBUS/SIGILL by ESR
+#   class) - there is no fatal park on this image; continue re-executes
+#   the faulting instruction.
+# - Console log lines are muted while the session owns the CPU; the stub's
+#   own "gdb: trap ..." lines (raw outlet) keep coming.

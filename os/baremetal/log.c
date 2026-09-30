@@ -203,6 +203,14 @@ static void console_line_flush(void)
 		return;
 	}
 	console_line[console_len] = '\0';
+	if (board_console_muted()) {
+		/* A gdb stub session owns the wire: drop the line so board_log
+		 * output cannot land in the middle of the RSP stream. The raw
+		 * outlet (board_console_write_raw) does not ask - it is the
+		 * stub's and the fault paths' own channel. */
+		console_len = 0u;
+		return;
+	}
 	render_stamp(ts);
 	uart_early_puts(ts);
 	uart_early_puts(console_line);
@@ -271,4 +279,11 @@ void board_console_write_raw(const char *data, unsigned int len)
 		uart_early_putc(data[i]);
 	}
 	print_lock_give(saved_daif);
+}
+
+/* Weak default: nothing mutes the console. The gdb glue overrides this
+ * with gdb_session_active. */
+__attribute__((weak)) int board_console_muted(void)
+{
+	return 0;
 }
