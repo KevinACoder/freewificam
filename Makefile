@@ -47,6 +47,7 @@ SRCS := \
 	os/baremetal/minilibc.c \
 	os/baremetal/log.c \
 	os/baremetal/tick.c \
+	os/cmsis2/cmsis2_shim.c \
 	board/$(BOARD)/drivers/uart.c \
 	board/$(BOARD)/param.c \
 	app/hello_world/main.c
@@ -61,7 +62,13 @@ CONFIG_OPT ?= -Og
 CFLAGS := $(CONFIG_OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
-	-Iarch/aarch64 -Iboard/$(BOARD) -Iboard/$(BOARD)/drivers -Ios/baremetal
+	-Iarch/aarch64 -Iboard/$(BOARD) -Iboard/$(BOARD)/drivers -Ios/baremetal \
+	-Ios/cmsis2 -Icomponents/cmsis5
+
+# CMSIS2 shim identity (SPEC v3 §3.7.2): the string osKernelGetInfo reports;
+# bumped per round so the anchor line carries the build's provenance.
+CONFIG_CMSIS2_VERSION ?= baremetal-r4
+CFLAGS += -DCONFIG_CMSIS2_VERSION='"$(CONFIG_CMSIS2_VERSION)"'
 
 # Tick source (SPEC v3 §3.5.3 / §4/R2 判据 5): default CNTV (PPI 27);
 # CONFIG_TICK_SOURCE=phys_ns selects the EL1 ns physical timer (CNTP, PPI 30)
@@ -158,6 +165,9 @@ check: $(TARGET).elf
 	@if $(NM) $(TARGET).elf | grep -E '__udivdi3|__aeabi_|__muldi3'; then \
 		echo 'check: libgcc helper leaked - FAIL'; exit 1; \
 	else echo 'check: no libgcc helpers PASS'; fi
+	@if $(NM) $(TARGET).elf | grep -E ' (osThread|osSemaphore|osMutex|osEventFlags|osTimer|osMessage|osMemoryPool)'; then \
+		echo 'check: scheduler-class CMSIS symbol exported - FAIL'; exit 1; \
+	else echo 'check: no scheduler-class CMSIS symbols PASS'; fi
 
 # Deploy to the TFTP root under the name the board's boot profile expects.
 # The deploy report (size + crc32 + the sha256 chain) is what the
