@@ -94,7 +94,8 @@ void gdb_reply_err(unsigned char err)
 }
 
 /* Receive one packet into buf. Returns payload length, or -1 on a malformed
- * frame (caller just loops; the ACK already told the host to resend).
+ * frame (caller just loops; the ACK already told the host to resend), or
+ * GDB_PKT_INTR when the host break-in byte 0x03 shows up between packets.
  * Leading '+', '-' and XOFF/XOUT chatter before the '$' is skipped. */
 int gdb_get_packet(char *buf, unsigned int bufsz)
 {
@@ -105,6 +106,9 @@ int gdb_get_packet(char *buf, unsigned int bufsz)
 
 	do {
 		c = gdb_getc();
+		if (c == 0x03) {
+			return GDB_PKT_INTR;
+		}
 	} while (c != '$');
 
 	while ((c = gdb_getc()) != '#') {

@@ -9,10 +9,11 @@
  * qSupported + qXfer:features:read:target.xml, plus the single-thread
  * bookkeeping queries (qC/qfThreadInfo/qsThreadInfo/H/qOffsets) that keep
  * gdb's thread list alive - board-proven on gdb 13, their absence reads as
- * "thread has terminated". Everything else - single step included (the
- * SoftwareStep event is swallowed by the boot chain's EL3, so implementing
- * 's' would hang the host) - answers an empty packet, which GDB treats as
- * unsupported rather than fatal.
+ * "thread has terminated". Single step is handled specially (see 's'):
+ * the SoftwareStep event is swallowed by EL3, so 's' is answered with an
+ * immediate stop reply (step = no-op, PC unmoved) - a bare "unsupported"
+ * empty reply leaves gdb 13 waiting forever (board-measured 2026-09-30).
+ * Everything else answers an empty packet.
  *
  * Only qXfer:features:read:target.xml is implemented of the qXfer family -
  * it declares exactly the 34 core registers the g packet reports, without
@@ -140,6 +141,14 @@ static void build_stop_reply(int signal, const char *reason)
 	(void)gdb_strcpy(&stop_reply[o], "thread:1;");
 }
 
+/* Bare "T05thread:1;": a stop with no reason annotation. Used for host
+ * break-ins and the no-op single step, where there is no trapframe news -
+ * the target simply is (still) stopped where it was. */
+static void send_bare_stop(void)
+{
+	gdb_send_packet("T05thread:1;", 12U);
+}
+
 /* Stop-reply announcement state. After the host issued 'c' it sits in
  * wait-mode and expects the NEXT stop to be announced - a silent break-in
  * would hang it. So the stop reply is pushed on trap entry iff the last
@@ -174,6 +183,15 @@ void gdb_trap_loop(struct gdb_trapframe *tf, int signal, const char *reason)
 		int len;
 
 		len = gdb_get_packet(buf, sizeof(buf));
+		if (len == GDB_PKT_INTR) {
+			/* Host break-in while we sit in the trap loop: the
+			 * host is in wait-stop mode (e.g. it just sent an
+			 * unsupported 's', or interrupted mid-resume-race).
+			 * Without a stop reply here it waits forever and the
+			 * board looks dead (board-measured 2026-09-30). */
+			send_bare_stop();
+			continue;
+		}
 		if (len <= 0) {
 			continue;
 		}
@@ -291,6 +309,18 @@ void gdb_trap_loop(struct gdb_trapframe *tf, int signal, const char *reason)
 		case 'c':
 			awaiting_stop = 1;
 			return;
+
+		case 's':
+			/* Single step: the SoftwareStep event is swallowed by
+			 * the boot chain's EL3, so stepping cannot deliver. A
+			 * bare "unsupported" empty reply leaves gdb 13 in
+			 * wait-stop forever (board-measured 2026-09-30 - it
+			 * ACKs the empty packet and then just waits). A stop
+			 * reply IS the protocol answer to 's' (as it is to
+			 * 'c'): report the step as instantly trapped with the
+			 * PC unmoved - stepi reads as a no-op, not a hang. */
+			send_bare_stop();
+			break;
 
 		case 'D':
 		case 'k':

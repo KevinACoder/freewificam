@@ -15,6 +15,11 @@ void gdb_reply_str(const char *s);
 void gdb_reply_ok(void);
 void gdb_reply_err(unsigned char err);
 int gdb_get_packet(char *buf, unsigned int bufsz);
+/* gdb_get_packet() < 0 means no payload: -1 malformed frame (host resends).
+ * GDB_PKT_INTR: the host break-in byte 0x03 arrived between packets - the
+ * host is in wait-stop mode (post 'c'/'s'), the command layer MUST answer
+ * with a stop reply or the host waits forever (board-measured 2026-09-30). */
+#define GDB_PKT_INTR	(-2)
 int hexval(char c);
 unsigned int hex2mem(const char *hex, unsigned char *mem, unsigned int nbytes);
 char *mem2hex(const unsigned char *mem, char *hex, unsigned int nbytes);
