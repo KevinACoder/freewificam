@@ -25,6 +25,10 @@
 #include "tick.h"
 #include "uart.h"
 
+#ifdef CONFIG_GDB_STUB
+#include "gdb_glue.h"
+#endif
+
 /* What U-Boot's `go` passed in x0 (start.S observed it after BSS clear).
  * Semantics unproven - logged as evidence only, never used. */
 extern unsigned long long boot_arg_x0;
@@ -81,6 +85,12 @@ int main(void)
 	/* 1. The polled console speaks only after a full re-program. */
 	uart_early_init();
 
+#ifdef CONFIG_GDB_STUB
+	/* The stub owns the dbgport before anything can trap; its setup
+	 * prints and the ready banner follow. */
+	gdb_glue_init();
+#endif
+
 	/* 2. Anchors. */
 	board_log("main: hello from C (freewebcam baremetal)\n");
 
@@ -134,17 +144,25 @@ int main(void)
 		board_log("tick: SETUP FAILED\n");
 	}
 
-	/* 4. Tick pace: one line per second of ticks, count monotonic
-	 * (the R2 acceptance ladder). */
+	/* 4. Steady state: tick-paced reporting; the gdb build watches the
+	 * console for a host attach or Ctrl-C between lines. Print cadence:
+	 * one line per 5 s (500 ticks at the default rate) - the 1 s ladder
+	 * was the R2 acceptance shape (passed and archived); the lower rate
+	 * keeps the console ring readable. */
 	{
-		uint64_t next = os_tick_get_count64() + board_tick_config.freq_hz;
+		const uint64_t pace = 5ULL * board_tick_config.freq_hz;
+		uint64_t next = os_tick_get_count64() + pace;
 
 		for (;;) {
-			uint64_t now = os_tick_get_count64();
+			uint64_t now;
 
+#ifdef CONFIG_GDB_STUB
+			gdb_poll();
+#endif
+			now = os_tick_get_count64();
 			if (now >= next) {
 				board_log("tick: %u\n", (unsigned int)now);
-				next += board_tick_config.freq_hz;
+				next += pace;
 			}
 		}
 	}

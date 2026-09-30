@@ -6,6 +6,9 @@
 #ifndef FREEWEBCAM_UART_H
 #define FREEWEBCAM_UART_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /* Fully re-program the UART for polled 115200 8N1. MUST run before the first
  * polled write: a UART inherited from the loader has unreliable THRE
  * semantics (short bursts inside the FIFO get out, then bytes drop or the
@@ -19,6 +22,10 @@ void uart_early_puts(const char *s);
 
 /* 8 lowercase hex digits, no prefix. */
 void uart_early_put_hex32(uint32_t value);
+
+/* Non-blocking RX: 1 with *out filled when a byte is waiting, 0 otherwise
+ * (the gdb stub's transport; the console itself has no reader this round). */
+bool uart_early_try_getc(int *out);
 
 /* Fault-path speaker: re-programs the UART UNCONDITIONALLY, then prints the
  * message. A fault handler that cannot speak is indistinguishable from a

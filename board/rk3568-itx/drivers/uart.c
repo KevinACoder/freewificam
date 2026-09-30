@@ -50,6 +50,7 @@
 #define REG_MCR		0x10	/* modem control */
 #define REG_LSR		0x14	/* line status */
 
+#define LSR_DATA_READY	(1u << 0)
 #define LSR_THR_EMPTY	(1u << 5)
 
 #define LCR_8N1		0x03	/* WLS = 8 data bits, no parity, 1 stop bit */
@@ -182,6 +183,18 @@ void uart_early_put_hex32(uint32_t value)
 	}
 	buf[8] = '\0';
 	uart_early_puts(buf);
+}
+
+bool uart_early_try_getc(int *out)
+{
+	if (!early_ready || out == 0) {
+		return false;
+	}
+	if ((reg_read(REG_LSR) & LSR_DATA_READY) == 0u) {
+		return false;
+	}
+	*out = (int)(reg_read(REG_RBR) & 0xffu);
+	return true;
 }
 
 void uart_early_panic(const char *message)

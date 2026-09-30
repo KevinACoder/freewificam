@@ -1,0 +1,50 @@
+# gdbinit - freewebcam baremetal (CONFIG=mmu-gdb), WSL xpack aarch64 gdb 13.2
+#
+#   aarch64-none-elf-gdb -x tools/gdb/gdbinit
+#
+# Adjust ELF if the build moved. Windows-side xpack gdb works the same way
+# with the \\wsl.localhost path and target remote 127.0.0.1-forwarded port.
+
+set confirm off
+set pagination off
+set architecture aarch64
+set breakpoint pending on
+
+# The image path carries the configuration name (configs/): every config
+# builds into its own directory, so point this at the one you booted.
+file build/baremetal-mmu-gdb/baremetal.elf
+
+# Breakpoint classes on this board: the boot chain (BL31 + OP-TEE + U-Boot)
+# never delivers self-hosted debug events other than BRK - Z0 (BRK patch)
+# works, Z1 (DBGBCR) and watchpoints hold their register values but their
+# events stay silent. Keep the hw limits at 0 so `break` uses Z0.
+set remote hardware-breakpoint-limit 0
+set remote hardware-watchpoint-limit 0
+set breakpoint auto-hw on
+
+# oslab SerialHub gdb carrier (dedicated RSP port, hub-side exclusive TX).
+# Session discipline: while a gdb session owns the serial, the WebUI terminal
+# and MCP serial_send are read-only (409); serial_read/ring buffer keeps
+# working and interleaves RSP with board logs - that view is the evidence
+# channel. Per-packet forensics live in hub logs/gdb-rsp.log (Windows side).
+#
+# If the first exchange after connect desyncs, check the carrier log before
+# touching anything else (the old raw-TCP bridge swallowed the first exchange
+# of the first client after a fresh boot; measured 2026-09-30).
+set remotetimeout 20
+target remote 192.168.0.18:18010
+
+# Platform notes:
+# - The image builds -Og -g3, so `break *func` lands on a reachable address;
+#   `break *addr` remains the exact-placement discipline.
+# - `break` is a patched BRK #0x401 (stop reason "swbreak"); the
+#   compiled-in gdb_break()/Ctrl-C path uses the same immediate.
+# - Single-step (`stepi`/`nexti`) cannot deliver on this boot chain (the
+#   SoftwareStep event is swallowed by EL3). The stub answers unsupported
+#   plus an immediate stop: stepi reads as a no-op (PC unmoved), not a hang.
+#   Host Ctrl-C (0x03) in-session is answered with a stop reply.
+# - Any synchronous fault stops in the stub (SIGSEGV/SIGBUS/SIGILL by ESR
+#   class) - there is no fatal park on this image; continue re-executes
+#   the faulting instruction.
+# - Console log lines are muted while the session owns the CPU; the stub's
+#   own "gdb: trap ..." lines (raw outlet) keep coming.

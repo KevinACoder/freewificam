@@ -32,4 +32,9 @@ void board_console_write_raw(const char *data, unsigned int len);
  * came up; the switch itself is announced by a caller log line. */
 void board_log_stamp_use_tick(void);
 
+/* Session gate: 1 while a gdb stub session owns the console - the stamped
+ * sink drops its output, the raw outlet does not ask. Weak here (default
+ * "not muted"), strong in the gdb glue. */
+int board_console_muted(void);
+
 #endif /* FREEWEBCAM_LOG_H */
