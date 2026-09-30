@@ -89,6 +89,10 @@ def _decode(entry, value):
             for (name, lo, hi) in entry["fields"]}
 
 
+def _fmt_plain(value):
+    return "0x%08x" % value
+
+
 class DumpPeriCommand(gdb.Command):
     """Dump a peripheral's registers (read-only) from the register map.
 
@@ -229,10 +233,6 @@ class DumpPeriCommand(gdb.Command):
                 "note": entry["note"],
             })
         return out
-
-    @staticmethod
-    def _fmt_plain(value):
-        return "0x%08x" % value
 
     @staticmethod
     def _print_table(doc):
