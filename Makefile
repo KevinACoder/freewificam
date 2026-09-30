@@ -144,7 +144,8 @@ SHELL_SRCS := \
 	components/cherrysh/builtin/shsize.c \
 	components/cherrysh/cherryrl/chry_readline.c \
 	components/cherryrb/chry_ringbuffer.c \
-	port/adapters/cherrysh/cherrysh_adapter.c
+	port/adapters/cherrysh/cherrysh_adapter.c \
+	board/$(BOARD)/reset.c
 SRCS += $(SHELL_SRCS)
 # Shadow-config include order is load-bearing (§3.8.2): port/adapters/cherrysh
 # must come before components/cherrysh so csh_config.h (the real config) beats

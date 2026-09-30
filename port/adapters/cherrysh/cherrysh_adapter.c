@@ -93,6 +93,9 @@
  * path. */
 extern size_t xPortGetFreeHeapSize(void);
 
+/* PSCI SYSTEM_RESET (board/rk3568-itx/reset.c). */
+extern int board_system_reset(void);
+
 /* --- console wiring ------------------------------------------------------- */
 
 /* RX ring: 512 bytes, which is well past the UART's own 64-byte FIFO and
@@ -110,6 +113,12 @@ static osThreadId_t shell_task_id;
 /* Flag bit meaning "there is input waiting". One bit is enough: the ring
  * is the real buffer, this only says "come and look". */
 #define SHELL_INPUT_FLAG	0x1U
+
+/* How often the shell task wakes anyway: the storm-defence poll, in
+ * milliseconds, converted to ticks through the kernel's own tick rate
+ * (never hardcoded - the semantic dependency on 1 kHz stays a preference,
+ * spec §3.3.5). Cost when RX is healthy is one timed wait per interval. */
+#define SHELL_RX_POLL_MS	500U
 
 /* Bytes the driver hands us per reception: the FIFO's full depth (64). A
  * burst that arrives as one FIFO fill is handed over in one completion -
@@ -204,17 +213,25 @@ static char shell_line_buf[CONFIG_CSH_LNBUFF_SIZE];
 
 static void shell_task(void *argument)
 {
+	uint32_t poll_ticks;
+
 	(void)argument;
+
+	/* osThreadFlagsWait's timeout is in ticks, not milliseconds. */
+	poll_ticks = osKernelGetTickFreq() / (1000U / SHELL_RX_POLL_MS);
+	if (poll_ticks == 0U) {
+		poll_ticks = 1U;
+	}
 
 	for (;;) {
 		/* Block until the RX interrupt says there is something to
 		 * read. This is the whole reason the shell does not starve
 		 * the system: while idle it is genuinely asleep, not
-		 * spinning. The 500 ms timed wait doubles as the
-		 * storm-defence poll and is what draws the first prompt
-		 * before any input arrives. */
+		 * spinning. The timed wait doubles as the storm-defence
+		 * poll and is what draws the first prompt before any input
+		 * arrives. */
 		(void)osThreadFlagsWait(SHELL_INPUT_FLAG, osFlagsWaitAny,
-					500U);
+					poll_ticks);
 
 		/* With noblock enabled this returns 1 immediately when no
 		 * complete line has been assembled yet, so a single byte of
@@ -258,6 +275,97 @@ static int cmd_version(int argc, char **argv)
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_version, version, "version",
 			  "print build and target info");
+
+/* Uptime from TWO clocks, deliberately: CNTVCT (board_uptime_parts - the
+ * same clock the "[   s.mmm]" log stamps use) and the kernel tick. The
+ * boot log and the shell therefore always agree on "when", and a
+ * divergence between the two numbers is direct evidence of a dead or
+ * racing tick. */
+static int cmd_uptime(int argc, char **argv)
+{
+	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
+	uint32_t ticks = osKernelGetTickCount();
+	uint32_t hz = osKernelGetTickFreq();
+	uint32_t usec = 0U;
+	uint32_t ums = 0U;
+
+	board_uptime_parts(&usec, &ums);
+	csh_printf(csh,
+		   "uptime: %u.%03u s (cntvct); tick %u at %u Hz = %u.%03u s\n",
+		   (unsigned)usec, (unsigned)ums,
+		   (unsigned)ticks, (unsigned)hz,
+		   (unsigned)((hz != 0U) ? (ticks / hz) : 0U),
+		   (unsigned)((hz != 0U) ? ((ticks % hz) * 1000U / hz) : 0U));
+	return 0;
+}
+
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_uptime, uptime, "uptime",
+			  "show time since boot (cntvct vs kernel tick)");
+
+static int cmd_tick(int argc, char **argv)
+{
+	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
+	uint32_t t0 = osKernelGetTickCount();
+	uint32_t t1;
+
+	/* Sleep a known interval and measure the tick delta. If the tick
+	 * were not running, this would hang - which is itself the answer.
+	 * osDelay's unit is the tick: 100 ticks is 100 ms at the adjudicated
+	 * 1 kHz (spec §3.3.5 - the printed reading is in that context). */
+	osDelay(100U);
+	t1 = osKernelGetTickCount();
+	csh_printf(csh, "tick advanced %u in 100 ms of osDelay\n",
+		   (unsigned)(t1 - t0));
+	if ((t1 - t0) == 0U) {
+		csh_printf(csh, "TICK NOT RUNNING\n");
+		return -1;
+	}
+	return 0;
+}
+
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_tick, tick, "tick",
+			  "check the RTOS tick is advancing");
+
+static int cmd_heap(int argc, char **argv)
+{
+	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
+
+	(void)argc;
+	(void)argv;
+	csh_printf(csh, "heap free=%lu B\n",
+		   (unsigned long)xPortGetFreeHeapSize());
+	return 0;
+}
+
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_heap, heap, "heap",
+			  "system heap: free bytes");
+
+/* Warm reset back to the firmware prompt, the board discipline's preferred
+ * way to the U-Boot prompt (the UStone cold cycle stays the crash path).
+ * The 20-tick pause (20 ms at 1 kHz) is for the console, not the SoC: the
+ * line above is queued in the DW-UART's FIFO, and at 115200 baud a few
+ * characters need a millisecond or two to leave the wire - without the
+ * wait they would die with the SoC. Then the SMC: on this board it
+ * resets, and this task never runs again. */
+static int cmd_reboot(int argc, char **argv)
+{
+	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
+	int ret;
+
+	(void)argc;
+	(void)argv;
+	csh_printf(csh, "reboot: PSCI SYSTEM_RESET\n");
+	osDelay(20U);
+
+	ret = board_system_reset();
+	/* only reachable when the firmware refused (PSCI NOT_SUPPORTED /
+	 * an invalid call): the board is still running */
+	csh_printf(csh, "reboot: firmware refused the reset (%d)\n", ret);
+	return ret;
+}
+
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_reboot, reboot, "reboot",
+			  "warm reset to U-Boot through PSCI SYSTEM_RESET");
 
 /* cherrysh resolves every command name against a PATH variable from the
  * variable table; with an empty variable table PATH is NULL and every
