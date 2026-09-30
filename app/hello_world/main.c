@@ -18,22 +18,16 @@
 #include <stdint.h>
 
 #include "cache.h"
+#include "gicv3.h"
 #include "log.h"
 #include "mmu.h"
 #include "minilibc.h"
+#include "tick.h"
 #include "uart.h"
 
 /* What U-Boot's `go` passed in x0 (start.S observed it after BSS clear).
  * Semantics unproven - logged as evidence only, never used. */
 extern unsigned long long boot_arg_x0;
-
-static uint64_t read_cntvct(void)
-{
-	uint64_t v;
-
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
-	return v;
-}
 
 static uint64_t read_cntfrq(void)
 {
@@ -84,8 +78,6 @@ static void cachetest(void)
 
 int main(void)
 {
-	uint64_t freq;
-
 	/* 1. The polled console speaks only after a full re-program. */
 	uart_early_init();
 
@@ -121,19 +113,39 @@ int main(void)
 	board_log(" frag2");
 	board_log(" done\n");
 
-	/* 3. Alive: one line per second, paced by the generic counter. */
-	freq = read_cntfrq();
-	if (freq == 0u) {
-		freq = 1u;
+	/* 3. Interrupts: GIC bring-up + generic-timer tick (R2). */
+	gicv3_init();
+	if (OS_Tick_Setup(board_tick_config.freq_hz, 0) == 0) {
+		board_log("tick: source=%s irq=%u freq=%uHz\n",
+			  board_tick_config.source == OS_TICK_SOURCE_VIRT ?
+				  "virt" : "phys_ns",
+			  (unsigned)OS_Tick_GetIRQn(),
+			  (unsigned)board_tick_config.freq_hz);
+
+		/* Stamp switches to the tick count from the next line on. */
+		board_log_stamp_use_tick();
+		board_log("stamp: switched to tick\n");
+
+		/* Everything is up: unmask IRQs (start.S masked DAIF via the
+		 * eret-inherited SPSR; the tick starts counting now). */
+		__asm__ __volatile__("msr daifclr, #2" ::: "memory");
+		__asm__ __volatile__("isb" ::: "memory");
+	} else {
+		board_log("tick: SETUP FAILED\n");
 	}
+
+	/* 4. Tick pace: one line per second of ticks, count monotonic
+	 * (the R2 acceptance ladder). */
 	{
-		uint64_t next = read_cntvct() + freq;
+		uint64_t next = os_tick_get_count64() + board_tick_config.freq_hz;
 
 		for (;;) {
-			while (read_cntvct() < next) {
+			uint64_t now = os_tick_get_count64();
+
+			if (now >= next) {
+				board_log("tick: %u\n", (unsigned int)now);
+				next += board_tick_config.freq_hz;
 			}
-			board_log("main: alive\n");
-			next += freq;
 		}
 	}
 	return 0;	/* unreachable: start.S parks if main returns */

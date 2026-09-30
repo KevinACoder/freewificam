@@ -176,7 +176,7 @@ boot_vectors:
 	.p2align 7
 	b	boot_sync_fault
 	.p2align 7
-	b	boot_irq_fault
+	b	boot_irq_entry
 	.p2align 7
 	b	boot_fiq_fault
 	.p2align 7
@@ -185,12 +185,12 @@ boot_vectors:
 	.p2align 7
 	b	boot_sync_fault
 	.p2align 7
-	b	boot_irq_fault
+	b	boot_irq_entry
 	.p2align 7
 	b	boot_fiq_fault
 	.p2align 7
 	b	boot_serr_fault
-	/* Lower EL, AArch64 */
+	/* Lower EL, AArch64 - nothing below us should interrupt; fatal. */
 	.p2align 7
 	b	boot_sync_fault
 	.p2align 7
@@ -237,6 +237,9 @@ boot_sync_fault:
 	b	boot_fault_common
 	.type	boot_irq_fault, %function
 boot_irq_fault:
+	/* An IRQ on a LOWER-EL vector slot: nothing below us exists that
+	 * could interrupt us - report and park like any other fault. The
+	 * normal IRQ path at the current EL is boot_irq_entry above. */
 	ldr	x0, =msg_irq
 	b	boot_fault_common
 	.type	boot_fiq_fault, %function
@@ -258,6 +261,44 @@ boot_fault_common:
 	bl	uart_early_puts
 1:	wfe
 	b	1b
+
+/* Interrupt entry from the current EL: acknowledge, dispatch, end - in C.
+ *
+ * The exception entry hardware has already masked IRQs (PSTATE.I set) and
+ * stashed the return state in ELR_EL1/SPSR_EL1, so the only context to
+ * preserve is the interrupted C code's caller-clobbered registers: the C
+ * ABI makes a callee preserve x19-x28 and nothing else, so x0-x18 and lr
+ * must be saved here. sp is SP_EL1 already (el1_entry set SPSEL=1); the
+ * 160-byte frame sits inside the boot stack, well above what the C
+ * dispatcher uses. */
+	.type	boot_irq_entry, %function
+boot_irq_entry:
+	sub	sp, sp, #160
+	stp	x0, x1, [sp, #0]
+	stp	x2, x3, [sp, #16]
+	stp	x4, x5, [sp, #32]
+	stp	x6, x7, [sp, #48]
+	stp	x8, x9, [sp, #64]
+	stp	x10, x11, [sp, #80]
+	stp	x12, x13, [sp, #96]
+	stp	x14, x15, [sp, #112]
+	stp	x16, x17, [sp, #128]
+	stp	x18, x30, [sp, #144]
+
+	bl	gic_irq_dispatch
+
+	ldp	x0, x1, [sp, #0]
+	ldp	x2, x3, [sp, #16]
+	ldp	x4, x5, [sp, #32]
+	ldp	x6, x7, [sp, #48]
+	ldp	x8, x9, [sp, #64]
+	ldp	x10, x11, [sp, #80]
+	ldp	x12, x13, [sp, #96]
+	ldp	x14, x15, [sp, #112]
+	ldp	x16, x17, [sp, #128]
+	ldp	x18, x30, [sp, #144]
+	add	sp, sp, #160
+	eret
 
 	.section .rodata, "a"
 	.globl	msg_sync
