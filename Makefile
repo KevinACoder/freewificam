@@ -153,6 +153,7 @@ SRCS += $(SHELL_SRCS)
 # not depend on that accident.
 CSH_CFLAGS := -Iport/adapters/cherrysh -Icomponents/cherrysh \
 	-Icomponents/cherrysh/cherryrl -Icomponents/cherryrb \
+	-include os/baremetal/minilibc.h \
 	-DCONFIG_SHELL=1 -DCONFIG_SHELL_STACK=$(CONFIG_SHELL_STACK)
 $(BUILD)/components/%.o: EXTRAFLAGS := $(CSH_CFLAGS)
 $(BUILD)/port/%.o: EXTRAFLAGS := $(CSH_CFLAGS)

@@ -16,6 +16,15 @@ void gdb_glue_init(void);
  * synthetic poll-site stop). Call every loop iteration. */
 void gdb_poll(void);
 
+/* gdb_poll's '$' branch, callable from any context that sees the first
+ * byte of a host frame - with an interrupt-driven console that is the
+ * shell's RX interrupt, which has already pulled `rest_len` bytes of the
+ * host's first frame out of the FIFO and hands them back here (they ride
+ * a stub-internal pushback so the session's first packet stays intact).
+ * Runs the session to completion; returns after detach/continue. */
+void gdb_isr_attach(int first_byte, const unsigned char *rest,
+		    unsigned int rest_len);
+
 /* Synchronous-exception entry, called from start.S's boot_sync_entry with
  * a full trapframe. No dbgport yet -> polled fatal park (the non-gdb
  * semantics); otherwise the stub owns the CPU until continue/detach. */
