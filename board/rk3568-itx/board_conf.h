@@ -19,6 +19,8 @@
 /* --- register bases ------------------------------------------------------- */
 
 #define BOARD_UART2_BASE	0xfe660000UL	/* console UART2 */
+#define BOARD_GICD_BASE		0xfd400000UL
+#define BOARD_GICR_BASE		0xfd460000UL	/* core 0 redistributor */
 
 /* Console UART calibration (DW-APB 16550-compatible: 32-bit access, register
  * byte-offset stride 4 - byte accesses read and write garbage). */
@@ -42,6 +44,16 @@
 /* GIC-600 redistributor frame stride: a redistributor is a pair of 64KiB
  * frames, so consecutive cores' RD_base frames are 2 * 64KiB apart. */
 #define BOARD_GICR_STRIDE	0x20000UL
+
+/* Tick interrupt priority, RAW 8-bit GIC form: logical level 14 of the 16
+ * unique-priority scheme shifted into the top nibble (14 << 4) - the lowest
+ * USABLE level (level 15 / 0xf0 is unsignable on this GIC's four-bit PMR
+ * comparison; the prior image measured this and stayed at 0xe0). Lower raw
+ * value = more urgent. */
+#define BOARD_TICK_PRIORITY_RAW	0xe0u
+
+/* Distributor default SPI priority (mid). Callers override per interrupt. */
+#define BOARD_SPI_DEFAULT_PRIORITY_RAW	0xa0u
 
 /* --- core identity ---------------------------------------------------------- */
 

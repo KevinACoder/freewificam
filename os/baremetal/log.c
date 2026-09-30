@@ -36,16 +36,27 @@
 
 #include "log.h"
 #include "minilibc.h"
+#include "tick.h"
 #include "uart.h"
 
 /* --- boot-relative timestamp ---------------------------------------------- */
 
 #define BOARD_TS_STAMP_LEN 16u
 
+/* --- the stamp source -------------------------------------------------------
+ *
+ * Early (before the tick): boot-relative seconds from cntvct_el0, lazily
+ * zeroed at the first stamped line. Once the tick is up, main switches the
+ * source to the tick count (board_log_stamp_use_tick) - the switch point is
+ * announced by an anchor line, and every stamp after it derives from ticks
+ * (sec = count/freq, ms = remainder), which is what makes the "[ N.000]"
+ * tick anchors self-consistent with the counter they report. */
+
 /* Counter value at the first stamped print; 0 means "not captured yet".
  * Two calls racing the capture store near-identical values; the u64 store
  * is a single aligned STR, so the worst case is a one-tick offset in t0. */
 static uint64_t log_t0;
+static bool stamp_tick_mode;
 
 static uint64_t read_cntvct(void)
 {
@@ -84,26 +95,47 @@ static uint64_t udiv64(uint64_t n, uint32_t d)
 /* Render the stamp for "now" into buf (BOARD_TS_STAMP_LEN capacity). */
 static void render_stamp(char buf[BOARD_TS_STAMP_LEN])
 {
-	uint64_t delta, freq, sec;
-	uint32_t frac;
+	if (stamp_tick_mode) {
+		uint32_t freq = os_tick_freq_hz();
+		uint32_t t = os_tick_get_count32();
+		uint32_t sec, ms;
 
-	if (log_t0 == 0u) {
-		log_t0 = read_cntvct();
-		if (log_t0 == 0u) {
-			log_t0 = 1u;	/* counter really was 0: don't re-capture */
+		if (freq == 0u) {
+			freq = 1u;	/* tick not set up: degenerate to t/1 */
 		}
+		sec = t / freq;
+		ms = (t % freq) * 1000u / freq;
+		(void)snprintf(buf, BOARD_TS_STAMP_LEN, "[%4u.%03u] ", sec, ms);
+		return;
 	}
 
-	delta = read_cntvct() - log_t0;
-	freq = read_cntfrq();
-	if (freq == 0u) {
-		freq = 1u;
-	}
-	sec = udiv64(delta, (uint32_t)freq);
-	frac = (uint32_t)udiv64((delta - sec * freq) * 1000u, (uint32_t)freq);
+	{
+		uint64_t delta, freq, sec;
+		uint32_t frac;
 
-	(void)snprintf(buf, BOARD_TS_STAMP_LEN, "[%4u.%03u] ",
-		       (unsigned int)sec, frac);
+		if (log_t0 == 0u) {
+			log_t0 = read_cntvct();
+			if (log_t0 == 0u) {
+				log_t0 = 1u;	/* counter really was 0: don't re-capture */
+			}
+		}
+
+		delta = read_cntvct() - log_t0;
+		freq = read_cntfrq();
+		if (freq == 0u) {
+			freq = 1u;
+		}
+		sec = udiv64(delta, (uint32_t)freq);
+		frac = (uint32_t)udiv64((delta - sec * freq) * 1000u, (uint32_t)freq);
+
+		(void)snprintf(buf, BOARD_TS_STAMP_LEN, "[%4u.%03u] ",
+			       (unsigned int)sec, frac);
+	}
+}
+
+void board_log_stamp_use_tick(void)
+{
+	stamp_tick_mode = true;
 }
 
 /* --- one-line print lock --------------------------------------------------- */

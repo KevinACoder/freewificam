@@ -42,10 +42,13 @@ SRCS := \
 	arch/aarch64/start.S \
 	arch/aarch64/mmu.c \
 	arch/aarch64/cache.c \
+	arch/aarch64/gicv3.c \
 	os/baremetal/memops.c \
 	os/baremetal/minilibc.c \
 	os/baremetal/log.c \
+	os/baremetal/tick.c \
 	board/$(BOARD)/drivers/uart.c \
+	board/$(BOARD)/param.c \
 	app/hello_world/main.c
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
@@ -63,6 +66,17 @@ CFLAGS := $(CONFIG_OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-Iarch/aarch64 -Iboard/$(BOARD) -Iboard/$(BOARD)/drivers -Ios/baremetal
+
+# Tick source (SPEC v3 §3.5.3 / §4/R2 判据 5): default CNTV (PPI 27);
+# CONFIG_TICK_SOURCE=phys_ns selects the EL1 ns physical timer (CNTP, PPI 30)
+# as the R2 adjudication fallback. Sits after the CFLAGS := above on purpose.
+CONFIG_TICK_SOURCE ?= virt
+ifeq ($(filter $(CONFIG_TICK_SOURCE),virt phys_ns),)
+$(error CONFIG_TICK_SOURCE must be virt or phys_ns, got '$(CONFIG_TICK_SOURCE)')
+endif
+ifeq ($(CONFIG_TICK_SOURCE),phys_ns)
+CFLAGS += -DTICK_SOURCE_PHYS_NS=1
+endif
 
 LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 	-Wl,--build-id=none -Wl,--no-warn-rwx-segments -Wl,-Map=$(TARGET).map

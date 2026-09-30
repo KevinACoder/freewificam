@@ -27,4 +27,9 @@ void board_log(const char *fmt, ...);
 /* Raw bytes, unstamped, byte-exact (ANSI escapes survive). */
 void board_console_write_raw(const char *data, unsigned int len);
 
+/* Switch the stamp source from the generic counter (cntvct) to the OS tick
+ * count (SPEC v3 §3.4.3). One-way: called once, from main, after the tick
+ * came up; the switch itself is announced by a caller log line. */
+void board_log_stamp_use_tick(void);
+
 #endif /* FREEWEBCAM_LOG_H */
