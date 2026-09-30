@@ -105,6 +105,10 @@ static void cachetest(void)
 #include "gdb_glue.h"
 #endif
 
+#ifdef CONFIG_SHELL
+#include "cherrysh_adapter.h"
+#endif
+
 static osThreadId_t thr_low_id;
 
 static void thr_hi(void *arg)
@@ -157,6 +161,42 @@ static void thr_low(void *arg)
 	}
 }
 
+#ifdef CONFIG_SHELL
+/*
+ * The shell boot task: cherrysh_init() MUST run from task context after
+ * the scheduler is up (cherrysh_adapter.h) - the RX interrupt it arms as
+ * its last act ends in osThreadFlagsSetFromISR. It prints the board
+ * anchor (shell: READY / shell: FAIL) and then sleeps for good; the
+ * shell task it created carries the console from here on (S4/cherrysh
+ * spec §3.3.2 启动时机).
+ */
+static void thr_shellboot(void *arg)
+{
+	(void)arg;
+
+	if (cherrysh_init() == 0) {
+		board_log("shell: READY\n");
+	} else {
+		board_log("shell: FAIL\n");
+	}
+	/* Bring-up evidence: one RX-path health line 2 s in (the shell is
+	 * expected to have drawn its prompt by then). */
+	(void)osDelay(2000U);
+#ifdef CONFIG_UART_RX_IRQ
+	uart_console_rx_diag();
+#endif
+	for (;;) {
+#ifdef SHELL_RX_DIAG
+		/* Debug build only: periodic RX-path health line. */
+		(void)osDelay(5000U);
+		uart_console_rx_diag();
+#else
+		(void)osDelay(0x7fffffffU);
+#endif
+	}
+}
+#endif
+
 int main(void)
 {
 	osStatus_t l1, l2, u1;
@@ -190,6 +230,12 @@ int main(void)
 	(void)osThreadNew(thr_hi, NULL,
 			  &(osThreadAttr_t){ .name = "thr_hi",
 					     .priority = osPriorityHigh });
+
+#ifdef CONFIG_SHELL
+	(void)osThreadNew(thr_shellboot, NULL,
+			  &(osThreadAttr_t){ .name = "shellboot",
+					     .priority = osPriorityNormal });
+#endif
 
 	if (thr_low_id == NULL) {
 		board_log("cmsis2: thread create FAIL\n");

@@ -60,6 +60,7 @@
 #define FCR_CLEAR_RX	(1u << 1)
 #define FCR_CLEAR_TX	(1u << 2)
 #define FCR_TRIGGER_14	(3u << 6)
+#define FCR_TRIGGER_1	(0u << 6)
 
 /* --- register access ------------------------------------------------------ */
 
@@ -205,3 +206,158 @@ void uart_early_panic(const char *message)
 	program_uart();
 	uart_early_puts(message);
 }
+
+/* --- interrupt reception (S4-a, SPEC cherrysh-adapt §3.4) ------------------- */
+
+#ifdef CONFIG_UART_RX_IRQ
+
+#include "gicv3.h"
+
+/* The armed reception: buffer, its length, how far the current drain got,
+ * and the consumer's completion callback. Touched by the ISR and by the
+ * arming consumer - the arming call happens once, from task context,
+ * before the interrupt is enabled, so there is no race window. */
+static uint8_t *rx_buf;
+static uint32_t rx_len;
+static uart_rx_event_cb_t rx_cb;
+static bool rx_armed;
+static bool rx_gic_ready;
+
+/* IER bit 0 (ERBFI) enables both received-data-available and the receive
+ * timeout - the two shapes a FIFO fill arrives in (a single keystroke
+ * comes in via the 4-character timeout, a burst via the trigger level).
+ * Line-status and modem interrupts stay OFF: they are the storm-class
+ * causes and the shell has no use for them. */
+#define IER_RX_ENABLE	0x01u
+
+/* RX-side forensics (bring-up evidence; read by uart_console_rx_diag). */
+volatile unsigned uart_console_rx_isr_calls;
+volatile unsigned uart_console_rx_isr_bytes;
+
+#define REG_IIR		0x08	/* interrupt identification (read) */
+
+static void uart_console_rx_isr(void *arg)
+{
+	uint32_t n = 0U;
+
+	(void)arg;
+	uart_console_rx_isr_calls++;
+
+	/* Drain until the FIFO is empty or the armed buffer is full - one
+	 * completion per FIFO fill, not one per byte. The buffer is the
+	 * FIFO's depth (64), so "full with bytes still queued" cannot
+	 * happen. */
+	while ((reg_read(REG_LSR) & LSR_DATA_READY) != 0u) {
+		if (rx_buf == 0 || n >= rx_len) {
+			break;
+		}
+		rx_buf[n++] = (uint8_t)(reg_read(REG_RBR) & 0xffu);
+	}
+	uart_console_rx_isr_bytes += n;
+
+	if (rx_cb != 0) {
+		/* The count is what actually arrived - a consumer that trusts
+		 * a fixed size instead reads garbage; a consumer that gets a
+		 * constant 0 is silently losing every byte (both are
+		 * board-proven failure shapes from the prior project's UART
+		 * line). */
+		rx_cb(UART_RX_EVENT_COMPLETE, n);
+	}
+	/* Re-arming is the callback's business (it swaps in a fresh buffer
+	 * first) - arming here would let a byte arriving during the copy
+	 * land in a buffer the consumer is still reading. */
+}
+
+int uart_console_rx_arm(uint8_t *buf, uint32_t len, uart_rx_event_cb_t cb)
+{
+	if (buf == 0 || len == 0u || cb == 0) {
+		return -1;
+	}
+
+	/* GIC side first - registering and enabling must not open the door
+	 * before the reception is armed. The IER write below is the actual
+	 * "interrupt on" switch; everything before it is setup. */
+	if (!rx_gic_ready) {
+		gicv3_init();
+		if (irq_register(BOARD_CONSOLE_INTID, uart_console_rx_isr,
+				 0) != 0 ||
+		    irq_set_mode_level(BOARD_CONSOLE_INTID) != 0 ||
+		    irq_set_priority(BOARD_CONSOLE_INTID,
+				     BOARD_SPI_DEFAULT_PRIORITY_RAW) != 0) {
+			return -1;
+		}
+		rx_gic_ready = true;
+	}
+	(void)irq_disable(BOARD_CONSOLE_INTID);
+	(void)irq_clear_pending(BOARD_CONSOLE_INTID);
+
+	/* Buffer in BEFORE the interrupt is enabled - the load-bearing
+	 * order (uart.h). Boot-time keystrokes land in the client buffer,
+	 * not in scratch nobody reads. */
+	rx_buf = buf;
+	rx_len = len;
+	rx_cb = cb;
+	rx_armed = true;
+
+	(void)irq_enable(BOARD_CONSOLE_INTID);
+	reg_write(REG_IER, IER_RX_ENABLE);
+	/* Trigger level 1: every byte in the FIFO asserts RXRDY. The boot
+	 * program_uart() leaves trigger 14 - fine for polled TX, fatal for
+	 * interactive RX: a short line never reaches it, and this part's
+	 * receive-timeout interrupt does not deliver (board-measured
+	 * 2026-10-01: a 24-byte paste interrupted, an 8-byte "version" sat
+	 * in the FIFO forever with IER=1 and nothing pending). Batching is
+	 * the drain loop's job (it empties the FIFO per completion), not
+	 * the trigger's. Trigger bits are FCR[7:6]; 00 = 1 character. */
+	reg_write(REG_FCR, FCR_ENABLE | FCR_TRIGGER_1);
+	return 0;
+}
+
+int uart_console_rx_armed(void)
+{
+	return rx_armed ? 1 : 0;
+}
+
+void uart_console_rx_gate(int stub_owns)
+{
+	if (stub_owns) {
+		/* The stub owns the CPU and reads the FIFO by polling; the
+		 * shell's RX interrupt must not fire under it. The byte in
+		 * flight stays in the FIFO - the stub's polled reader sees
+		 * it. */
+		(void)irq_disable(BOARD_CONSOLE_INTID);
+	} else {
+		/* Hand the line back: everything the session left in the
+		 * FIFO is session traffic (gdb's acks, half-typed input) -
+		 * none of it may resurface as shell input, so flush rather
+		 * than let it drain into the ring. */
+		reg_write(REG_FCR, FCR_ENABLE | FCR_CLEAR_RX | FCR_CLEAR_TX |
+					   FCR_TRIGGER_14);
+		(void)irq_clear_pending(BOARD_CONSOLE_INTID);
+		if (rx_armed) {
+			(void)irq_enable(BOARD_CONSOLE_INTID);
+		}
+	}
+}
+
+/* One-line RX-path health check for bring-up: the UART's own interrupt
+ * state (IER/IIR/LSR) and the GIC's enable/pending bits for the console
+ * INTID, plus the ISR counters. Everything readback-silent on this
+ * silicon is absent on purpose (see gicv3.c file header); ISENABLER/
+ * ISPENDR are the registers this board DOES read back. */
+void uart_console_rx_diag(void)
+{
+	uint32_t word = (BOARD_CONSOLE_INTID / 32u) * 4u;
+	uint32_t bit = 1u << (BOARD_CONSOLE_INTID % 32u);
+	uint32_t isen = reg_rd32(BOARD_GICD_BASE + 0x0100u + word);
+	uint32_t ispend = reg_rd32(BOARD_GICD_BASE + 0x0200u + word);
+
+	board_log("uart: rx diag intid=%u ier=%x iir=%x lsr=%x"
+		  " isen=%x ispend=%x isr=%u bytes=%u\n",
+		  (unsigned)BOARD_CONSOLE_INTID,
+		  reg_read(REG_IER), reg_read(REG_IIR), reg_read(REG_LSR),
+		  (unsigned)(isen & bit), (unsigned)(ispend & bit),
+		  uart_console_rx_isr_calls, uart_console_rx_isr_bytes);
+}
+
+#endif /* CONFIG_UART_RX_IRQ */

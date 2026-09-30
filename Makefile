@@ -108,6 +108,59 @@ SRCS += \
 CFLAGS += -DCONFIG_GDB_STUB=1 -Iarch/aarch64/gdb
 endif
 
+# UART RX interrupt reception (SPEC S4/cherrysh-adapt §3.4): CONFIG_UART_RX_IRQ=y
+# adds the armed-reception extension to the console driver; the polled path
+# above is untouched. The shell requires it; baremetal configs keep it off.
+CONFIG_UART_RX_IRQ ?= n
+ifeq ($(filter $(CONFIG_UART_RX_IRQ),y n),)
+$(error CONFIG_UART_RX_IRQ must be y or n, got '$(CONFIG_UART_RX_IRQ)')
+endif
+ifeq ($(CONFIG_UART_RX_IRQ),y)
+CFLAGS += -DCONFIG_UART_RX_IRQ=1
+endif
+
+# CherrySH console shell (SPEC S4/cherrysh-adapt): exists ONLY under
+# CONFIG_OS=threadx (N11 - the adapter is hard-dependent on osThread/osThreadFlags*).
+# CONFIG_SHELL=0 (or =n) drops the shell and every command TU with it:
+# commands register through the FSymTab section, so a command is compiled in
+# iff its translation unit is.
+CONFIG_SHELL ?= n
+ifeq ($(filter $(CONFIG_SHELL),y n),)
+$(error CONFIG_SHELL must be y or n, got '$(CONFIG_SHELL)')
+endif
+CONFIG_SHELL_STACK ?= 4096
+
+# Debug knob for the shell RX bring-up: periodic uart_console_rx_diag lines.
+ifeq ($(CONFIG_SHELL_RX_DIAG),y)
+CFLAGS += -DSHELL_RX_DIAG=1
+endif
+
+ifeq ($(CONFIG_OS),threadx)
+ifeq ($(CONFIG_SHELL),y)
+SHELL_SRCS := \
+	components/cherrysh/chry_shell.c \
+	components/cherrysh/builtin/help.c \
+	components/cherrysh/builtin/clear.c \
+	components/cherrysh/builtin/shsize.c \
+	components/cherrysh/cherryrl/chry_readline.c \
+	components/cherryrb/chry_ringbuffer.c \
+	port/adapters/cherrysh/cherrysh_adapter.c
+SRCS += $(SHELL_SRCS)
+# Shadow-config include order is load-bearing (§3.8.2): port/adapters/cherrysh
+# must come before components/cherrysh so csh_config.h (the real config) beats
+# nothing - upstream ships only the template, but the order discipline does
+# not depend on that accident.
+CSH_CFLAGS := -Iport/adapters/cherrysh -Icomponents/cherrysh \
+	-Icomponents/cherrysh/cherryrl -Icomponents/cherryrb \
+	-DCONFIG_SHELL=1 -DCONFIG_SHELL_STACK=$(CONFIG_SHELL_STACK)
+$(BUILD)/components/%.o: EXTRAFLAGS := $(CSH_CFLAGS)
+$(BUILD)/port/%.o: EXTRAFLAGS := $(CSH_CFLAGS)
+# main.o needs cherrysh_adapter.h (the shellboot task).
+$(BUILD)/app/%.o: EXTRAFLAGS := $(CSH_CFLAGS)
+endif
+endif
+
+
 # ThreadX UP kernel (SPEC S3/threadx-up-boot §3.1, FR-1/FR-2): upstream
 # common + the cortex_a55 GNU port .S files (the port's fp_enable/fp_disable
 # .c files are NOT built - no FP state exists under -mgeneral-regs-only) +
@@ -188,11 +241,11 @@ $(TARGET).bin: $(TARGET).elf
 #     format (the log.c sink is CRLF-literate; sources are not).
 gates:
 	@if grep -rnE 'phytium|fparameters|fgic|ft_|fboot|fcrt0' \
-		arch board os app configs 2>/dev/null; then \
+		arch board os app port configs 2>/dev/null; then \
 		echo 'gates: cleanroom-scan FAIL'; exit 1; \
 	else echo 'gates: cleanroom-scan PASS'; fi
 	@if grep -rlP '\r' --include='*.c' --include='*.h' --include='*.S' \
-		arch board os app 2>/dev/null; then \
+		arch board os app port 2>/dev/null; then \
 		echo 'gates: crlf-scan FAIL'; exit 1; \
 	else echo 'gates: crlf-scan PASS'; fi
 
