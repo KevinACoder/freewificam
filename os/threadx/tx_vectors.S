@@ -108,14 +108,86 @@ tx_irq_first_level:
 	b	_tx_thread_context_restore
 	.size	tx_irq_first_level, . - tx_irq_first_level
 
-/* Fault landing: kind names the exception class for the C park (1 = sync,
+/* Fault landing: without the stub a sync is a fatal park (kind 1 = sync,
  * 3 = serror; the ESR carries the rest). Lower-EL sync entries share kind 1
  * - no lower-EL context exists to produce one, and a hit there is itself
  * the diagnosis. x0-x17 are free to clobber here - the faulting context is
  * not coming back. */
+	.globl	tx_fault_park		/* C lander lives in tx_glue.c */
 tx_sync_fault:
+#ifdef CONFIG_GDB_STUB
+	/* gdb build (T4): a synchronous exception in the ThreadX world is a
+	 * host stop, not a park - the tick poll's BRK lands here too, and
+	 * gdb_sync_entry decides stop vs polled-fatal (no dbgport yet).
+	 * Frame recipe = start.S boot_sync_entry (R3 board-proven, 288-byte
+	 * struct gdb_trapframe), with one port-specific prologue step: the
+	 * exception entry flipped SPSel to 1, and the port's world lives on
+	 * SP_EL0 - switch back FIRST so the frame is carved on the
+	 * interrupted context's own stack. gdb_sync_entry returns when the
+	 * host continued; elr/spsr come back from the frame (they may have
+	 * been rewritten), so a fault continued unchanged re-executes under
+	 * host control. */
+	msr	spsel, 0
+	sub	sp, sp, #288
+	stp	x16, x17, [sp, #0xb0]	/* originals first */
+	mov	x16, sp
+	add	x16, x16, #288		/* interrupted SP (pre-reserve) */
+	str	x16, [sp, #0]
+	str	x30, [sp, #8]
+	mrs	x17, elr_el1
+	str	x17, [sp, #0x10]
+	mrs	x17, spsr_el1
+	str	x17, [sp, #0x18]
+	mrs	x17, esr_el1
+	str	x17, [sp, #0x20]
+	mrs	x17, far_el1
+	str	x17, [sp, #0x28]
+	stp	x0, x1, [sp, #0x30]
+	stp	x2, x3, [sp, #0x40]
+	stp	x4, x5, [sp, #0x50]
+	stp	x6, x7, [sp, #0x60]
+	stp	x8, x9, [sp, #0x70]
+	stp	x10, x11, [sp, #0x80]
+	stp	x12, x13, [sp, #0x90]
+	stp	x14, x15, [sp, #0xa0]
+	/* x16/x17 slots already hold their originals */
+	stp	x18, x19, [sp, #0xc0]
+	stp	x20, x21, [sp, #0xd0]
+	stp	x22, x23, [sp, #0xe0]
+	stp	x24, x25, [sp, #0xf0]
+	stp	x26, x27, [sp, #0x100]
+	stp	x28, x29, [sp, #0x110]
+
+	mov	x0, sp
+	bl	gdb_sync_entry
+
+	ldr	x17, [sp, #0x10]
+	msr	elr_el1, x17
+	ldr	x17, [sp, #0x18]
+	msr	spsr_el1, x17
+	ldp	x0, x1, [sp, #0x30]
+	ldp	x2, x3, [sp, #0x40]
+	ldp	x4, x5, [sp, #0x50]
+	ldp	x6, x7, [sp, #0x60]
+	ldp	x8, x9, [sp, #0x70]
+	ldp	x10, x11, [sp, #0x80]
+	ldp	x12, x13, [sp, #0x90]
+	ldp	x14, x15, [sp, #0xa0]
+	ldp	x16, x17, [sp, #0xb0]
+	ldp	x18, x19, [sp, #0xc0]
+	ldp	x20, x21, [sp, #0xd0]
+	ldp	x22, x23, [sp, #0xe0]
+	ldp	x24, x25, [sp, #0xf0]
+	ldp	x26, x27, [sp, #0x100]
+	ldp	x28, x29, [sp, #0x110]
+	ldr	x30, [sp, #8]
+	ldr	x16, [sp, #0]
+	mov	sp, x16
+	eret
+#else
 	mov	x0, #1
 	b	tx_fault_park
+#endif
 
 tx_serror_fault:
 	mov	x0, #3

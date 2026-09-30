@@ -105,7 +105,7 @@ SRCS += \
 	arch/aarch64/gdb/gdb_packet.c \
 	arch/aarch64/gdb/gdb_arch.c \
 	os/baremetal/gdb_glue.c
-CFLAGS += -DCONFIG_GDB_STUB=1
+CFLAGS += -DCONFIG_GDB_STUB=1 -Iarch/aarch64/gdb
 endif
 
 # ThreadX UP kernel (SPEC S3/threadx-up-boot §3.1, FR-1/FR-2): upstream
