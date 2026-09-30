@@ -46,6 +46,20 @@ SECTIONS
 		__data_end = .;
 	}
 
+	/* CherrySH command and variable tables (S4/cherrysh-adapt §3.2.2).
+	 * Exported command entries are never referenced by a direct call -
+	 * the shell finds them by walking the section - so without KEEP the
+	 * linker garbage-collects every one of them and the REPL reports
+	 * "command not found" for the whole table. */
+	. = ALIGN(8);
+	__fsymtab_start = .;
+	.fsymtab : { KEEP(*(FSymTab)) }
+	__fsymtab_end = .;
+	. = ALIGN(8);
+	__vsymtab_start = .;
+	.vsymtab : { KEEP(*(VSymTab)) }
+	__vsymtab_end = .;
+
 	.bss (NOLOAD) : ALIGN(16) {
 		__bss_start = .;
 		*(.bss .bss.*)

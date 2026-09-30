@@ -313,3 +313,24 @@ int snprintf(char *buf, size_t cap, const char *fmt, ...)
 	va_end(ap);
 	return n;
 }
+
+int atoi(const char *s)
+{
+	int v = 0;
+	int sign = 1;
+
+	while (*s == ' ' || (*s >= '\t' && *s <= '\r')) {
+		s++;
+	}
+	if (*s == '-') {
+		sign = -1;
+		s++;
+	} else if (*s == '+') {
+		s++;
+	}
+	while (*s >= '0' && *s <= '9') {
+		v = v * 10 + (*s - '0');
+		s++;
+	}
+	return sign * v;
+}
