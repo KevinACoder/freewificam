@@ -23,6 +23,8 @@ int memcmp(const void *lhs, const void *rhs, size_t n);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
 char *strchr(const char *s, int c);
+char *strrchr(const char *s, int c);
+char *strstr(const char *haystack, const char *needle);
 char *strncpy(char *dest, const char *src, size_t n);
 size_t strlen(const char *s);
 size_t strnlen(const char *s, size_t maxlen);

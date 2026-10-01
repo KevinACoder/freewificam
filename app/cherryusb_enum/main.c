@@ -34,6 +34,15 @@
 
 #include "usbh_platform.h"
 
+#ifdef CONFIG_LINUXKPI
+/* the linuxkpi start seam + the acceptance driver's registration (P6-a):
+ * both must run BEFORE usbh_platform_start() - the hub thread claims
+ * through the class hook the moment a device shows up, and every urb
+ * submit needs the drain thread alive */
+extern void lkpi_usb_start(void);
+extern int lkpi_udisk_rtos_register(void);
+#endif
+
 #ifdef CONFIG_SHELL
 /*
  * The shell boot task: verbatim from app/hello_world/main.c (S4 §3.3.2
@@ -68,6 +77,12 @@ static void thr_usbboot(void *arg)
 
 	(void)osDelay(500U);
 	board_log("usb: platform start\n");
+#ifdef CONFIG_LINUXKPI
+	lkpi_usb_start();
+	if (lkpi_udisk_rtos_register() != 0) {
+		board_log("lkpi: driver register FAIL\n");
+	}
+#endif
 	if (usbh_platform_start() == 0) {
 		board_log("usb: platform READY\n");
 	} else {
