@@ -69,18 +69,58 @@
  * tlsf double-free assert).  The heap had never been a DMA target before
  * (thread stacks only) - the static-pool graduation the [EXPL] stage
  * comment reserved for exactly this class of datapath trouble. */
-#define	LKPI_STAGE_SLOTS	4
+/* P6-c form round (2026-10-01): the first slot a BOT sequence takes is
+ * sized up-front (see LKPI_STAGE_MIN) so the CBW/data/CSW legs never
+ * churn slots mid-sequence.  The pool is two-class: small 32 KiB slots
+ * for control-adjacent traffic, and 128 KiB bulk slots - the chunk the
+ * vendored msc adapter proved at 37.3/24.2 MB/s and the lkpi_udisk
+ * bw/soak shape rides.  (The resize dance this replaced was exonerated
+ * by the TRB-pool evidence: the real P6-b root cause was the cached
+ * hep, see the submit path comment.) */
+#define	LKPI_SMALL_SLOTS	2
 #define	LKPI_STAGE_SIZE		32768
+#define	LKPI_BIG_SLOTS		2
+#define	LKPI_STAGE_BIG_SIZE	131072u
+#define	LKPI_STAGE_MIN		4096u
+
+/* 64 KiB alignment on the big slots: a 128 KiB data leg splits into two
+ * chained TRBs that each stay inside one 64 KiB boundary (the port
+ * contract, the shape of the vendored msc's g_msc_data buffer) */
+static u8 lkpi_stage_small_mem[LKPI_SMALL_SLOTS][LKPI_STAGE_SIZE]
+	__attribute__((aligned(LKPI_USB_STAGE_ALIGN)));
+static u8 lkpi_stage_big_mem[LKPI_BIG_SLOTS][LKPI_STAGE_BIG_SIZE]
+	__attribute__((aligned(65536)));
 
 struct lkpi_stage_slot {
-	u8	mem[LKPI_STAGE_SIZE] __attribute__((aligned(LKPI_USB_STAGE_ALIGN)));
-	u32	len;
+	u8	*mem;
+	u32	cap;
 	bool	used;
 };
 
-static struct lkpi_stage_slot lkpi_stage_pool[LKPI_STAGE_SLOTS];
+static struct lkpi_stage_slot lkpi_stage_pool[LKPI_SMALL_SLOTS +
+    LKPI_BIG_SLOTS] = {
+	{ lkpi_stage_small_mem[0], LKPI_STAGE_SIZE, false },
+	{ lkpi_stage_small_mem[1], LKPI_STAGE_SIZE, false },
+	{ lkpi_stage_big_mem[0], LKPI_STAGE_BIG_SIZE, false },
+	{ lkpi_stage_big_mem[1], LKPI_STAGE_BIG_SIZE, false },
+};
+
+#define	LKPI_STAGE_SLOTS	(LKPI_SMALL_SLOTS + LKPI_BIG_SLOTS)
 
 static void lkpi_usb_stage_put(struct urb *urb);
+
+/* the rawbulk diagnostic's stage-slot variant: the P6-b bisect that
+ * separates "the stage pool's memory is the poison" from "the kpi submit
+ * path is" (raw urb shape, pool address).  Read-only exposure - the
+ * caller never owns the slot. */
+const void *
+lkpi_usb_stage_slot_mem(unsigned int i)
+{
+
+	if (i >= LKPI_STAGE_SLOTS)
+		return NULL;
+	return lkpi_stage_pool[i].mem;
+}
 
 static void *
 lkpi_usb_stage_get(struct urb *urb, u32 len)
@@ -89,19 +129,23 @@ lkpi_usb_stage_get(struct urb *urb, u32 len)
 
 	if (len == 0)
 		return NULL;
+	if (len < LKPI_STAGE_MIN)
+		len = LKPI_STAGE_MIN;
 	if (urb->_stage != NULL && urb->_stage_len >= len)
 		return urb->_stage;
-	if (urb->_stage != NULL)
-		lkpi_usb_stage_put(urb);
-	if (len > LKPI_STAGE_SIZE) {
+	if (len > LKPI_STAGE_BIG_SIZE) {
 		lkpi_printf("usbkpi: stage %u exceeds pool\n",
 		    (unsigned int)len);
 		return NULL;
 	}
+	if (urb->_stage != NULL)
+		lkpi_usb_stage_put(urb);
+	/* scan order prefers the small slots for small asks (they come
+	 * first); a big ask skips them on the cap test */
 	for (i = 0; i < LKPI_STAGE_SLOTS; i++) {
-		if (!lkpi_stage_pool[i].used) {
+		if (!lkpi_stage_pool[i].used &&
+		    lkpi_stage_pool[i].cap >= len) {
 			lkpi_stage_pool[i].used = true;
-			lkpi_stage_pool[i].len = len;
 			urb->_stage = lkpi_stage_pool[i].mem;
 			urb->_stage_raw = &lkpi_stage_pool[i];
 			urb->_stage_len = len;
@@ -746,8 +790,19 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		hurb->ep = &hport->ep0;
 		hurb->setup = setup_stage;
 	} else {
-		if (urb->hep == NULL)
-			urb->hep = lkpi_usb_find_hep(urb->dev, urb->pipe);
+		/* resolve the endpoint EVERY submit: the cached hep below
+		 * was the P6-b root cause - one urb is refilled with a
+		 * different pipe per BOT leg (CBW out, data in, CSW in),
+		 * and a hep cached on the first (OUT) submit made every
+		 * later IN leg queue onto the OUT ring as an OUT transfer
+		 * (board 2026-10-01: the TRB pool showed all three legs as
+		 * OUT NORMAL TRBs on dci4; the device got 49 bytes of
+		 * unplanned bulk-OUT, desynced BOT and NAKed forever -
+		 * the entire "bulk IN data never lands" / "zero schedule"
+		 * symptom family, issues/2026-10-01-xhci-bulk-td-not-
+		 * fetched).  find_hep is a two-iteration loop; the rtw88
+		 * resubmit-same-pipe pattern loses nothing. */
+		urb->hep = lkpi_usb_find_hep(urb->dev, urb->pipe);
 		if (urb->hep == NULL || urb->hep->hcpriv == NULL)
 			return -EINVAL;
 		hurb->ep = urb->hep->hcpriv;
@@ -788,12 +843,18 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		 * usbh_msc shape).  The completion callback stays NULL so
 		 * the done-list is out of the picture entirely - the
 		 * async completion chain is where the double-delivery
-		 * race lives (tlsf double-free, board 2026-10-01). */
+		 * race lives (tlsf double-free, board 2026-10-01).
+		 * (2026-10-01 form fix: the NULL used to be overwritten by
+		 * the common fill below, so every sync transfer ALSO ran
+		 * the IRQ-side callback - a leaked done-list node per
+		 * transfer and a doubled usbkpi C record, and the one
+		 * field the msc reference shape does not set.) */
 		hurb->complete = NULL;
 		hurb->arg = NULL;
+	} else {
+		hurb->complete = lkpi_usb_complete_cb;
+		hurb->arg = urb;
 	}
-	hurb->complete = lkpi_usb_complete_cb;
-	hurb->arg = urb;
 	if ((urb->transfer_flags & URB_ZERO_PACKET) != 0)
 		hurb->transfer_flags |= USBH_URB_ZERO_PACKET;
 

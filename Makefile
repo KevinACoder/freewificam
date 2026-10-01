@@ -332,6 +332,16 @@ LKPI_SRCS := \
 	app/lkpi_udisk/lkpi_udisk_rtos.c
 SRCS += $(LKPI_SRCS)
 CFLAGS += -DCONFIG_LINUXKPI=1
+# P6-b root-cause experiment key (temporary, issues/2026-10-01-xhci-
+# bulk-td-not-fetched-under-lkpi-shape): ud_post_probe fires one bulk
+# pattern round from the hub-thread probe context (the msc reference
+# context) instead of waiting for the shell. Removing the key from the
+# config needs make clean-config (the key-delete direction is not
+# stamp-guarded - run ledger lesson 2026-10-01).
+CONFIG_LINUXKPI_PROBE_BULK ?= n
+ifeq ($(CONFIG_LINUXKPI_PROBE_BULK),y)
+CFLAGS += -DCONFIG_LINUXKPI_PROBE_BULK=1
+endif
 # TX include set rides along: the impl layer embeds ThreadX primitives
 # (semaphores/timers) exactly like the cherryusb osal does (FR-3: tx
 # headers stay inside adapter/implementation units).

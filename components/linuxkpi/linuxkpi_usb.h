@@ -49,8 +49,21 @@ void *		lkpi_usb_drain_thread_id(void);
 /* claim-time plumbing (usbh_rtw88_class.c) */
 struct usb_interface;
 void	lkpi_usb_device_bind(struct usb_device *dev,
-	    struct usb_interface *intf, void *hport);
+		    struct usb_interface *intf, void *hport);
 int	lkpi_usb_probe_drivers(struct usb_interface *intf);
 void	lkpi_usb_disconnect_drivers(struct usb_interface *intf);
+
+/* the last claim the class hook landed (port/adapters/linuxkpi/
+ * lkpi_usbh_class.c): the raw-submit diagnostic submits against the
+ * same hubport/interface the linux driver rides (P6-b root-cause
+ * experiments, issues/2026-10-01-xhci-bulk-td-not-fetched) */
+struct usbh_hubport;
+struct usbh_hubport *lkpi_usbh_claimed_hport(void);
+uint8_t	lkpi_usbh_claimed_intf(void);
+
+/* the stage pool bisect (usbkpi rawbulk stage): a raw-shape urb whose
+ * buffers ARE the stage pool's memory - separates a poisoned pool
+ * address from a guilty submit path (P6-b root cause, 2026-10-01) */
+const void *lkpi_usb_stage_slot_mem(unsigned int i);
 
 #endif /* LINUXKPI_USB_H */

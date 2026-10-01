@@ -74,7 +74,11 @@ struct usb_driver lkpi_udisk_driver;
 
 #define UD_SECTOR_DEF	512u
 #define UD_TEST_SECTORS	8u
-#define UD_BW_SECTORS	64u
+/* 128 KiB per command - the vendored msc adapter's chunk (its 37.3/24.2
+ * MB/s P5-e baseline amortizes the BOT turnaround at exactly this size;
+ * the kpi target's chunk was 32 KiB until the P6-c form round and paid
+ * 4x the CBW/CSW round trips for it) */
+#define UD_BW_SECTORS	256u
 #define UD_BUF_SECTORS	UD_BW_SECTORS
 
 struct ud_cbw {
@@ -559,6 +563,99 @@ lkpi_udisk_bw(struct usb_interface *intf, u32 mib, bool write)
 		    ms != 0 ? ((mb * 100000ULL) / ms) % 100ULL : 0);
 	}
 	return 0;
+}
+
+/* Bulk-Only Mass Storage Reset (class OUT on ep0, spec BOT 5.1): the
+ * control-side companion to the data plane - P6-b 判据 4's second leg */
+int
+lkpi_udisk_reset(struct usb_interface *intf)
+{
+	struct ud_ctx *ctx = usb_get_intfdata(intf);
+	int ret;
+
+	if (ctx == NULL || !ctx->alive)
+		return -ENODEV;
+	ret = ud_ctrl_msg(ctx, USB_DIR_OUT | USB_TYPE_CLASS |
+	    USB_RECIP_INTERFACE, UD_CTRL_RESET, 0,
+	    (u16)ctx->intf->cur_altsetting->desc.bInterfaceNumber,
+	    NULL, 0, UD_CTRL_TIMEOUT_MS);
+	if (ret == 0)
+		pr_info("lkpi_udisk: BOM reset OK\n");
+	else
+		pr_err("lkpi_udisk: BOM reset failed %d\n", ret);
+	return ret;
+}
+
+/* the soak: alternating 128 KiB write/read/verify rounds over a rolling
+ * LBA window until the deadline - the 600s stability gate (spec P6-c
+ * 判据 3).  Errors are counted, not retried: any nonzero error count
+ * fails the gate. */
+int
+lkpi_udisk_soak(struct usb_interface *intf, u32 seconds)
+{
+	static const u8 patterns[4] = { 0xA5, 0x5A, 0x00, 0xFF };
+	struct ud_ctx *ctx = usb_get_intfdata(intf);
+	u32 sectors = UD_BW_SECTORS;
+	u64 deadline, next_report;
+	u32 lba, round = 0, errs = 0;
+	u64 bytes = 0;
+	u8 pat = 0;
+
+	if (ctx == NULL || !ctx->alive)
+		return -ENODEV;
+	if (ctx->block_size == 0)
+		ctx->block_size = UD_SECTOR_DEF;
+	if (ctx->blocks > sectors * 64)
+		lba = ctx->blocks - sectors * 64;
+	else
+		lba = 1024;
+	deadline = jiffies + msecs_to_jiffies(seconds * 1000u);
+	next_report = jiffies + msecs_to_jiffies(60000u);
+	while ((long)(deadline - jiffies) > 0) {
+		u32 len = sectors * ctx->block_size;
+		u32 i;
+		int ret;
+
+		memset(ctx->data, (int)patterns[pat], len);
+		pat = (pat + 1u) % 4u;
+		ret = ud_rw10(ctx, true, lba, (u16)sectors, ctx->data);
+		if (ret != 0) {
+			pr_err("lkpi_udisk: soak WRITE failed %d (round %u "
+			    "lba %u)\n", ret, round, lba);
+			errs++;
+			continue;
+		}
+		memset(ctx->data, 0, len);
+		ret = ud_rw10(ctx, false, lba, (u16)sectors, ctx->data);
+		if (ret != 0) {
+			pr_err("lkpi_udisk: soak READ failed %d (round %u "
+			    "lba %u)\n", ret, round, lba);
+			errs++;
+			continue;
+		}
+		for (i = 0; i < len; i++) {
+			if (ctx->data[i] != patterns[(pat + 3u) % 4u]) {
+				pr_err("lkpi_udisk: soak MISMATCH at round %u "
+				    "lba %u off %u\n", round, lba, i);
+				errs++;
+				break;
+			}
+		}
+		round++;
+		bytes += len;
+		lba += sectors;
+		if (lba + sectors > ctx->blocks)
+			lba = 1024;
+		if ((long)(next_report - jiffies) <= 0) {
+			pr_info("lkpi_udisk: soak %u rounds, %llu MiB, "
+			    "%u error(s)\n", round, bytes >> 20, errs);
+			next_report = jiffies + msecs_to_jiffies(60000u);
+		}
+	}
+	pr_info("lkpi_udisk: soak done: %u rounds, %llu MiB in %us, "
+	    "%u error(s) -> %s\n", round, bytes >> 20, seconds, errs,
+	    errs == 0 ? "PASS" : "FAIL");
+	return errs == 0 ? 0 : -EIO;
 }
 
 /* the full self-test: TUR + INQUIRY + READ CAPACITY + the four-pattern

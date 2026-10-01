@@ -19,5 +19,7 @@ int lkpi_udisk_pattern(struct usb_interface *intf, u32 lba, u8 pattern);
 int lkpi_udisk_bw(struct usb_interface *intf, u32 mib, bool write);
 int lkpi_udisk_inq(struct usb_interface *intf);
 int lkpi_udisk_cap(struct usb_interface *intf);
+int lkpi_udisk_reset(struct usb_interface *intf);
+int lkpi_udisk_soak(struct usb_interface *intf, u32 seconds);
 
 #endif /* LKPI_UDISK_H */

@@ -35,11 +35,22 @@ static u32 s_default_lba = 1024;
 static struct usb_interface *s_claimed_intf;
 
 /* the core's weak post-probe hook: the RTOS shell just remembers the
- * interface (triggers run from the shell commands) */
+ * interface (triggers run from the shell commands); with the P6-b
+ * root-cause key it also fires one bulk pattern round right here in the
+ * hub-thread probe context - the context the vendored usbh_msc chain
+ * runs its first bulk in (2.6 s after boot) versus the shell thread at
+ * 20 s, which is the axis the zero-schedule issue isolates on */
 void
 ud_post_probe(struct usb_interface *intf)
 {
+#ifdef CONFIG_LINUXKPI_PROBE_BULK
+	u32 lba = 1024;
+	int ret;
 
+	ret = lkpi_udisk_pattern(intf, lba, 0xA5);
+	pr_info("lkpi_ud: probe-bulk (hub thread) %s\n",
+	    ret == 0 ? "PASS" : "FAIL");
+#endif
 	s_claimed_intf = intf;
 }
 
@@ -104,6 +115,18 @@ static int lkpi_ud_cmd(int argc, char *argv[])
 
 		return lkpi_udisk_bw(s_claimed_intf, mib, write) != 0;
 	}
+	if (strcmp(sub, "reset") == 0) {
+		return lkpi_udisk_reset(s_claimed_intf) != 0;
+	}
+	if (strcmp(sub, "soak") == 0) {
+		u32 sec = lkpi_ud_arg(argc >= 3 ? argv[2] : NULL, 600);
+
+		if (sec < 1 || sec > 7200) {
+			csh_printf(csh, "lkpi_ud: soak 1..7200 s\n");
+			return 1;
+		}
+		return lkpi_udisk_soak(s_claimed_intf, sec) != 0;
+	}
 	if (strcmp(sub, "lba") == 0) {
 		s_default_lba = lkpi_ud_arg(argc >= 3 ? argv[2] : NULL,
 		    s_default_lba);
@@ -113,8 +136,8 @@ static int lkpi_ud_cmd(int argc, char *argv[])
 	}
 
 	csh_printf(csh, "usage: lkpi_ud [test [lba]|inq|cap|pattern <lba> "
-	    "<byte>|bw [MiB] [w]|lba <n>]\n");
+	    "<byte>|bw [MiB] [w]|reset|soak <sec>|lba <n>]\n");
 	return 1;
 }
-CSH_CMD_EXPORT_ALIAS_FULL(lkpi_ud_cmd, lkpi_ud, "lkpi_ud [test|inq|cap|pattern|bw|lba]",
+CSH_CMD_EXPORT_ALIAS_FULL(lkpi_ud_cmd, lkpi_ud, "lkpi_ud [test|inq|cap|pattern|bw|reset|soak|lba]",
     "the lkpi_udisk acceptance driver commands (dual-target truth)");
