@@ -269,6 +269,20 @@ ifeq ($(CONFIG_USBHOST_EHCI),y)
 USB_CFLAGS += -DCONFIG_USBHOST_EHCI=1
 endif
 
+# MSC (P5-d, SPEC S5 §3.7): the minimal BOT class + its shell command set.
+# The commands are the acceptance toolbox, so the TU joins with the shell
+# flag set like usbh_cmds.o.
+CONFIG_USBHOST_MSC ?= n
+ifeq ($(CONFIG_USBHOST_MSC),y)
+ifeq ($(filter y,$(CONFIG_USBHOST_XHCI)),)
+$(error CONFIG_USBHOST_MSC=y currently requires the xHCI build (P5-d slice))
+endif
+USB_CFLAGS += -DCONFIG_USBHOST_MSC=1
+SRCS += port/adapters/cherryusb/usbh_msc.c
+$(BUILD)/port/adapters/cherryusb/usbh_msc.o: \
+	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
+endif
+
 # Exact-file rules win over the shell block's port/% pattern; the osal
 # additionally gets the tx include set (tx_api.h). The cmds file is the
 # shell-facing toolbox - it joins only with the shell (csh.h headers) and
