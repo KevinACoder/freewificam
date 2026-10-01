@@ -44,3 +44,6 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t cap, const char *fmt, ...);
 
 #endif /* FREEWEBCAM_MINILIBC_H */
+char *strcpy(char *dest, const char *src);
+char *strcat(char *dest, const char *src);
+unsigned long strtoul(const char *s, char **endptr, int base);

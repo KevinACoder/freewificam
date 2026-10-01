@@ -435,6 +435,55 @@ $(BUILD)/os/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
 $(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
 endif
 
+# netutils (SPEC S7b/netutils-adapt §3.4/§3.6): the vendored tool subset
+# (ping/tftp) + iperf3_embedded, over the lwip socket world (P7-2a). The
+# shim shadow headers come FIRST on the netutils include path (they must
+# beat the toolchain's declaration-only headers - the lwipopts shadow
+# discipline); vendored sources compile -w (frozen import). The cherrysh
+# adapter headers ride along for the command export face (CSH_*). Each tool
+# is its own config sub-key so one factor is verified at a time.
+CONFIG_NETUTILS ?= n
+ifeq ($(filter $(CONFIG_NETUTILS),y n),)
+$(error CONFIG_NETUTILS must be y or n, got '$(CONFIG_NETUTILS)')
+endif
+ifeq ($(CONFIG_NETUTILS),y)
+ifeq ($(filter y,$(CONFIG_LWIP)),)
+$(error CONFIG_NETUTILS=y requires CONFIG_LWIP=y (socket citizens))
+endif
+CONFIG_NETUTILS_PING ?= y
+CONFIG_NETUTILS_TFTP ?= y
+CONFIG_NETUTILS_IPERF3 ?= y
+
+NU_DIR := components/netutils
+IPE_DIR := components/iperf3_embedded
+NU_VENDORED_SRCS :=
+NU_PORT_SRCS := os/netutils/netutils_shim.c os/netutils/tftp_port.c \
+	os/netutils/iperf3_port.c os/netutils/iperf3_cmd.c
+ifeq ($(CONFIG_NETUTILS_PING),y)
+NU_VENDORED_SRCS += $(NU_DIR)/ping/ping.c
+endif
+ifeq ($(CONFIG_NETUTILS_TFTP),y)
+NU_VENDORED_SRCS += $(NU_DIR)/tftp/tftp_client.c $(NU_DIR)/tftp/tftp_server.c \
+	$(NU_DIR)/tftp/tftp_xfer.c
+endif
+ifeq ($(CONFIG_NETUTILS_IPERF3),y)
+NU_VENDORED_SRCS += $(IPE_DIR)/iperf3_embedded.c
+endif
+SRCS += $(NU_VENDORED_SRCS) $(NU_PORT_SRCS)
+
+NU_CFLAGS := -Ios/netutils/shim -Ios/netutils \
+	-I$(NU_DIR) -I$(NU_DIR)/tftp -I$(IPE_DIR) \
+	-Iport/adapters/cherrysh -Icomponents/cherrysh \
+	-include os/baremetal/minilibc.h \
+	-DCONFIG_NETUTILS_PING=$(if $(filter y,$(CONFIG_NETUTILS_PING)),1,0) \
+	-DCONFIG_NETUTILS_TFTP=$(if $(filter y,$(CONFIG_NETUTILS_TFTP)),1,0) \
+	-DCONFIG_NETUTILS_IPERF3=$(if $(filter y,$(CONFIG_NETUTILS_IPERF3)),1,0) \
+	$(LWIP_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/components/netutils/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
+$(BUILD)/components/iperf3_embedded/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
+$(BUILD)/os/netutils/%.o: EXTRAFLAGS := $(NU_CFLAGS)
+endif
+
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
 	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
 DEPS := $(OBJS:.o=.d)

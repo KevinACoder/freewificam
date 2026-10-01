@@ -46,6 +46,15 @@
 #define LWIP_NETCONN                    1
 #define LWIP_SOCKET                     1
 #define LWIP_NETIF_API                  1
+/* S7b/netutils 修订义务 (specs/netutils-adapt §3.5 表, N1 判据 4): the raw
+ * API carries the tools' SOCK_RAW/ICMP ping (netconn RAW path is gated on
+ * LWIP_RAW, opt.h default 0); SO_RCVTIMEO covers ping/tftp timeouts. raw.c
+ * and netdb.c/netbuf.c are already in the compile set. */
+#define LWIP_RAW                        1
+#define LWIP_SO_RCVTIMEO                1
+/* One netconn per socket user: ping + tftp client/server + iperf3 并发余量
+ * (the prior workspace's converged value). */
+#define MEMP_NUM_NETCONN                10
 /* err.c's err-to-errno table (api/ world) needs constants, and the errno
  * variable itself is defined once in the adapter (lwip_diag.c). */
 #define LWIP_PROVIDE_ERRNO              1
