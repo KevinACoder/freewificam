@@ -172,8 +172,13 @@ void vPortFree(void *ptr)
 	size = tlsf_block_size(ptr);
 	free_log[free_log_n % 8U] = ptr;
 	free_log_n++;
+#ifdef CONFIG_HEAP_FREE_LOG
+	/* P6-b forensics default-off since S7b: the netutils world frees per
+	 * request, and one line per free floods the console. The ring above
+	 * stays live (re-enable with CONFIG_HEAP_FREE_LOG=y). */
 	board_log("heap: free #%u %p size %u\n",
 		  (unsigned)free_log_n, ptr, (unsigned)size);
+#endif
 	tlsf_free(heap_tlsf, ptr);
 	if (heap_allocated >= size) {
 		heap_allocated -= size;
@@ -192,4 +197,60 @@ size_t xPortGetFreeHeapSize(void)
 		return arena;
 	}
 	return (arena > heap_allocated) ? (arena - heap_allocated) : 0U;
+}
+
+/* --- image-level libc bindings (S7b/netutils FR-10) -------------------------- */
+
+/* The standard-name malloc family over the SAME tlsf pool - one allocator
+ * image-wide (the prior workspace's netutils_shim rule: no second
+ * allocator, cross-world free must stay safe). realloc follows the C
+ * library contract: realloc(NULL, n) == malloc, realloc(p, 0) == free. */
+void *malloc(size_t size)
+{
+	return pvPortMalloc(size);
+}
+
+void free(void *ptr)
+{
+	vPortFree(ptr);
+}
+
+void *calloc(size_t count, size_t size)
+{
+	size_t bytes = count * size;
+	void *p = pvPortMalloc(bytes);
+
+	if (p != NULL) {
+		memset(p, 0, bytes);
+	}
+	return p;
+}
+
+void *realloc(void *ptr, size_t size)
+{
+	unsigned int posture;
+	void *p;
+
+	if (ptr == NULL) {
+		return malloc(size);
+	}
+	if (size == 0U) {
+		free(ptr);
+		return NULL;
+	}
+	if (!heap_init()) {
+		return NULL;
+	}
+
+	posture = _tx_thread_smp_protect();
+	p = tlsf_realloc(heap_tlsf, ptr, size);
+	if (p != NULL) {
+		heap_allocated += size;
+	}
+	_tx_thread_smp_unprotect(posture);
+
+	if (p == NULL) {
+		board_log("heap: OOM realloc %u bytes\n", (unsigned)size);
+	}
+	return p;
 }
