@@ -98,11 +98,18 @@ struct usb_driver lkpi_hub_driver;
  * the same ten; identical on both targets keeps the behaviour aligned) */
 #define UH_IRQ_ERR_LIMIT	10u
 
-/* the capture arm retry: 10 ms beat, ten seconds ceiling (spec §3.3-2;
- * the window opens when the hub class consumes the sacrifice event and
- * its one-shot timer's submit loses the race) */
-#define UH_CAPTURE_TRIES	1000u
-#define UH_CAPTURE_BEAT_MS	10u
+/* the capture arm retry: 1 ms beat, eight seconds ceiling.  The free
+ * window sits ONE EP service interval after the sacrifice (the hub
+ * class's parked urb completes at the xHCI's next scheduled IN, <=256ms
+ * here) and is only milliseconds wide - the hub thread re-arms as soon
+ * as its events handling ends, so a 10ms beat misses it (board
+ * 2026-10-01: 2x1000 retries at 10ms, zero hits while the sacrifice
+ * demonstrably latched).  Re-fire the sacrifice every 128 misses so
+ * every 128ms lays a fresh window under the 1ms beat - spec 开放问题 4's
+ * narrowed-beat provision, protocol unchanged. */
+#define UH_CAPTURE_TRIES	8000u
+#define UH_CAPTURE_BEAT_MS	1u
+#define UH_CAPTURE_RESTIM	128u
 
 /* ------------------------------------------------------------------ */
 /* driver context                                                      */
@@ -422,7 +429,11 @@ lkpi_hub_capture(struct usb_interface *intf, u32 port, u32 rounds)
 			ret = lkpi_hub_arm(intf);
 			if (ret == 0)
 				break;
-			if ((tries % 100u) == 0)
+			if ((tries % UH_CAPTURE_RESTIM) ==
+			    UH_CAPTURE_RESTIM - 1u)
+				(void)uh_port_feature(ctx, port,
+				    UH_SET_FEATURE, (u16)UH_PORT_RESET);
+			if ((tries % 1000u) == 0)
 				pr_info("lkpi_hub: window retry %u ret %d\n",
 				    tries, ret);
 			msleep(UH_CAPTURE_BEAT_MS);
@@ -505,6 +516,14 @@ uh_probe(struct usb_interface *intf, const struct usb_device_id *id)
 		return -ENOMEM;
 	ctx->udev = dev;
 	ctx->intf = intf;
+	/* the kpi system workqueue is LAZY-STARTED: only alloc_workqueue/
+	 * timer_setup/call_async boot the worker thread, and INIT_WORK
+	 * does not - without this probe the irq's schedule_work queues
+	 * into a NULL wq and every event dies silently (board 2026-10-01:
+	 * the urb completed, the HC reference was released, zero events
+	 * - the second-target round's real root cause).  The queue is a
+	 * singleton; the token only boots the worker. */
+	(void)alloc_workqueue("lkpi_hub", 0, 1);
 	INIT_WORK(&ctx->dwork, uh_event_work);
 	usb_set_intfdata(intf, ctx);
 

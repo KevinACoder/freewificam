@@ -927,12 +927,16 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	if (ret != 0) {
 		urb->submitted = false;
 		urb->status = lkpi_usb_errno(ret);
-		lkpi_printf("usbkpi: urb submit raw %d urb %p hurb %p w "
-		    "[%p %p %p %p %p %p]\n",
-		    ret, (void *)urb, (void *)hurb,
-		    ((void **)hurb)[0], ((void **)hurb)[1],
-		    ((void **)hurb)[2], ((void **)hurb)[3],
-		    ((void **)hurb)[4], ((void **)hurb)[5]);
+		/* trace-gated: the capture protocol's arm retry hammers
+		 * this path thousands of times by design (hub H2), the
+		 * per-miss dump would flood the console */
+		if (lkpi_usb_trace)
+			lkpi_printf("usbkpi: urb submit raw %d urb %p hurb "
+			    "%p w [%p %p %p %p %p %p]\n",
+			    ret, (void *)urb, (void *)hurb,
+			    ((void **)hurb)[0], ((void **)hurb)[1],
+			    ((void **)hurb)[2], ((void **)hurb)[3],
+			    ((void **)hurb)[4], ((void **)hurb)[5]);
 		return urb->status;
 	}
 	/* the HC reference: keeps the urb (and its stage) alive across the

@@ -117,9 +117,11 @@ static int usbkpi_cmd(int argc, char *argv[])
 				mask = 1u << USB_ENDPOINT_XFER_CONTROL;
 			else if (strcmp(argv[2], "bulk") == 0)
 				mask = 1u << USB_ENDPOINT_XFER_BULK;
+			else if (strcmp(argv[2], "int") == 0)
+				mask = 1u << USB_ENDPOINT_XFER_INT;
 			else {
 				csh_printf(csh,
-				    "usbkpi: filter all|ctrl|bulk\n");
+				    "usbkpi: filter all|ctrl|bulk|int\n");
 				return 0;
 			}
 			usbkpi_set_type_mask(mask);
