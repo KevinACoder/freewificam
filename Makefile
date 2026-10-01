@@ -46,6 +46,9 @@ APP_MAIN := app/hello_world/main.c
 ifeq ($(CONFIG_USBHOST),y)
 APP_MAIN := app/cherryusb_enum/main.c
 endif
+ifeq ($(CONFIG_LWIP),y)
+APP_MAIN := app/lwip_lan/main.c
+endif
 
 # OS layer selection (SPEC S3/threadx-up-boot §3.1.3): baremetal keeps the
 # timebase-only cmsis2 shim; threadx swaps in the ThreadX UP kernel and the
@@ -356,6 +359,64 @@ $(BUILD)/app/lkpi_udisk/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/app/lkpi_hub/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 endif
 
+# lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
+# zero-patch expectation) + the first-party os/lwip adapter. Phase 1 is the
+# NO_SYS=1 polled model on the bare-metal base; the api/ files and dns.c
+# join at P7-2a (lwipopts rows and the compile set move together). The
+# compile set is LOCKED to this list - the P7-1a acceptance nm-checks the
+# product for api/ absences. Include order is load-bearing: os/lwip/include
+# FIRST so the first-party lwipopts.h / arch/cc.h shadow the tree (opt.h
+# pulls lwipopts.h by bare name in every TU). Upstream sources compile -w
+# (frozen import, zero-patch pin).
+CONFIG_LWIP ?= n
+ifeq ($(filter $(CONFIG_LWIP),y n),)
+$(error CONFIG_LWIP must be y or n, got '$(CONFIG_LWIP)')
+endif
+ifeq ($(CONFIG_LWIP),y)
+# GMAC port single choice (FR-9/KI-027): build-time, the other port never
+# gets a clock or a register write. Values: 0 = gmac0, 1 = gmac1.
+CONFIG_GMAC_PORT ?= 1
+ifeq ($(filter $(CONFIG_GMAC_PORT),0 1),)
+$(error CONFIG_GMAC_PORT must be 0 or 1, got '$(CONFIG_GMAC_PORT)')
+endif
+
+LWIP_DIR := third-party/lwip
+LWIP_SRCS := \
+	$(LWIP_DIR)/src/core/def.c \
+	$(LWIP_DIR)/src/core/inet_chksum.c \
+	$(LWIP_DIR)/src/core/init.c \
+	$(LWIP_DIR)/src/core/ip.c \
+	$(LWIP_DIR)/src/core/mem.c \
+	$(LWIP_DIR)/src/core/memp.c \
+	$(LWIP_DIR)/src/core/netif.c \
+	$(LWIP_DIR)/src/core/pbuf.c \
+	$(LWIP_DIR)/src/core/raw.c \
+	$(LWIP_DIR)/src/core/stats.c \
+	$(LWIP_DIR)/src/core/sys.c \
+	$(LWIP_DIR)/src/core/tcp.c \
+	$(LWIP_DIR)/src/core/tcp_in.c \
+	$(LWIP_DIR)/src/core/tcp_out.c \
+	$(LWIP_DIR)/src/core/timeouts.c \
+	$(LWIP_DIR)/src/core/udp.c \
+	$(LWIP_DIR)/src/core/ipv4/acd.c \
+	$(LWIP_DIR)/src/core/ipv4/dhcp.c \
+	$(LWIP_DIR)/src/core/ipv4/etharp.c \
+	$(LWIP_DIR)/src/core/ipv4/icmp.c \
+	$(LWIP_DIR)/src/core/ipv4/ip4.c \
+	$(LWIP_DIR)/src/core/ipv4/ip4_addr.c \
+	$(LWIP_DIR)/src/core/ipv4/ip4_frag.c \
+	$(LWIP_DIR)/src/netif/ethernet.c \
+	$(LWIP_DIR)/src/apps/lwiperf/lwiperf.c \
+	os/lwip/lwip_diag.c
+SRCS += $(LWIP_SRCS)
+
+LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include \
+	-DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
+$(BUILD)/third-party/lwip/%.o: EXTRAFLAGS := -w $(LWIP_CFLAGS)
+$(BUILD)/os/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
+$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
+endif
+
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
 	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
@@ -374,7 +435,8 @@ LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 # fetch the cherryusb pin (upstream dev force-pushed it away) seeds per
 # patches/cherryusb/README.md first.
 modules:
-	@git submodule update --init third-party/threadx third-party/cherryusb || \
+	@git submodule update --init third-party/threadx third-party/cherryusb \
+		third-party/lwip || \
 		echo 'note: submodule update failed; see patches/cherryusb/README.md (pin seeding)'
 	@if [ -d third-party/cherryusb ]; then \
 		git -C third-party/cherryusb sparse-checkout set --no-cone \
