@@ -237,3 +237,80 @@ lkpi_usbh_claimed_intf(void)
 
 	return lkpi_claimed_intf;
 }
+
+/* ------------------------------------------------------------------ */
+/* linuxkpi-hub H2: the claim-less hub attachment (spec §3.3-1)         */
+/*                                                                      */
+/* Registering a class-0x09 lkpi hook is a dead end either way (the     */
+/* section walk takes the first match, usbh_core.c:97-131, and a        */
+/* negative connect does not fall through to the next candidate,        */
+/* :599-605), so the hub driver probes through this explicit command    */
+/* path instead: build the same Linux view the class hook would, run    */
+/* the real lkpi_usb_probe_drivers match chain, but never touch         */
+/* intf[].priv - the hub class keeps both the claim and the interface.  */
+/* The window protocol ends with a reboot, so there is no detach-side   */
+/* teardown; the view lives in these statics.                           */
+/* ------------------------------------------------------------------ */
+
+static struct usbh_hubport *lkpi_hub_hport;
+static struct usb_device *lkpi_hub_dev;
+
+/* one external hub on this board: the first connected roothub-child
+ * port whose device registered as a hub (hubport.self, usbh_core.h:153
+ * - the hub class connect sets it) */
+static struct usbh_hubport *
+lkpi_hub_find_hport(void)
+{
+	struct usbh_hub *root;
+	uint8_t busid;
+	unsigned int i;
+
+	for (busid = 0; busid < CONFIG_USBHOST_MAX_BUS; busid++) {
+		root = &g_usbhost_bus[busid].hcd.roothub;
+		if (!root->connected)
+			continue;
+		for (i = 0; i < root->nports; i++) {
+			struct usbh_hubport *hport = &root->child[i];
+
+			if (hport->connected && hport->self != NULL)
+				return hport;
+		}
+	}
+	return NULL;
+}
+
+int
+lkpi_usbh_hub_attach(void)
+{
+	struct usbh_hubport *hport;
+	struct usb_interface *intfp = NULL;
+	struct usb_device *dev;
+	int ret;
+
+	if (lkpi_hub_dev != NULL) {
+		lkpi_printf("usbh: lkpi_hub already attached\n");
+		return -1;
+	}
+	hport = lkpi_hub_find_hport();
+	if (hport == NULL) {
+		lkpi_printf("usbh: lkpi_hub attach: no hub device in the "
+		    "tree\n");
+		return -1;
+	}
+	lkpi_printf("usbh: lkpi_hub attach %04x:%04x addr %u roothub port "
+	    "%u\n", hport->device_desc.idVendor,
+	    hport->device_desc.idProduct, hport->dev_addr, hport->port);
+
+	dev = lkpi_usbh_build_device(hport, 0, &intfp);
+	if (dev == NULL)
+		return -1;
+	ret = lkpi_usb_probe_drivers(intfp);
+	if (ret != 0) {
+		lkpi_printf("usbh: lkpi_hub probe failed (ret %d)\n", ret);
+		lkpi_usbh_free_device(dev);
+		return ret;
+	}
+	lkpi_hub_hport = hport;
+	lkpi_hub_dev = dev;
+	return 0;
+}

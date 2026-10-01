@@ -737,6 +737,16 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	struct usbh_urb *hurb = urb->_usbh_urb;
 	struct usbh_hubport *hport = lkpi_usb_hport(urb->dev);
 	unsigned int type = usb_pipetype(urb->pipe);
+	/* linuxkpi-hub spec §3.5-2: interrupt pipes ALWAYS take the async
+	 * chain, independent of the P6-b global sync flag.  An int
+	 * completion's moment is the device's (a parked int TD can sit on
+	 * the ring for minutes); a sync submit would burn a 5s HC timeout
+	 * round per poll and cannot carry "event whenever".  The v2.3
+	 * async vetoes (19s delivery / refs double-free / one-urb-per-ep)
+	 * were all BOT multi-urb mixing on one endpoint; the int channel
+	 * is a single self-rearming urb on an exclusively-owned endpoint,
+	 * so the one-urb-in-flight contract holds by construction. */
+	bool async = (type == USB_ENDPOINT_XFER_INT) || !lkpi_usb_force_sync;
 	int ret;
 
 	(void)mem_flags;
@@ -744,9 +754,11 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		return -ENODEV;
 	if (urb->submitted)
 		return -EBUSY;
-	/* sync mode needs no drain thread; the async chain (and with it the
-	 * lazy lkpi_usb_start) only arms via `usbkpi sync off` forensics */
-	if (!lkpi_usb_force_sync && !lkpi_usb_done_ready)
+	/* the drain thread only exists for async submissions: the sync-
+	 * default P6-b build never ran lkpi_usb_start, `usbkpi sync off`
+	 * forensics arms it, and since linuxkpi-hub H1 so does every
+	 * interrupt pipe */
+	if (async && !lkpi_usb_done_ready)
 		lkpi_usb_start();
 
 	/* rxhold gate (see usbkpi_rxhold_set): hold the urb back from the
@@ -836,8 +848,8 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		hurb->transfer_buffer = NULL;
 	}
 	hurb->transfer_buffer_length = urb->transfer_buffer_length;
-	hurb->timeout = lkpi_usb_force_sync ? 5000U : 0U;
-	if (lkpi_usb_force_sync) {
+	hurb->timeout = async ? 0U : 5000U;
+	if (!async) {
 		/* sync mode: the submit IS the transfer (the submitter
 		 * sleeps on the ring's waitsem, the board-proven P5-d/e
 		 * usbh_msc shape).  The completion callback stays NULL so
@@ -855,6 +867,22 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		hurb->complete = lkpi_usb_complete_cb;
 		hurb->arg = urb;
 	}
+	/* linuxkpi-hub spec §3.5-3: carry the interval in cherryusb's
+	 * microsecond invariant ([CHY] usbh_core.h:82) - urb->interval
+	 * holds microframes (HS/SS) or frames (LS/FS) after the fill-time
+	 * normalization.  Recorded fact (hub spec §3.6-3): the xHCI port
+	 * writes but never reads hurb->interval today (the wire period is
+	 * the EP context's bInterval exponent fixed at Configure-Endpoint
+	 * time); the mapping keeps the semantics complete for a future
+	 * cherryusb consumer. */
+	if (type == USB_ENDPOINT_XFER_INT) {
+		if (urb->dev->speed == USB_SPEED_HIGH ||
+		    urb->dev->speed == USB_SPEED_SUPER ||
+		    urb->dev->speed == USB_SPEED_SUPER_PLUS)
+			hurb->interval = (u32)urb->interval * 125U;
+		else
+			hurb->interval = (u32)urb->interval * 1000U;
+	}
 	if ((urb->transfer_flags & URB_ZERO_PACKET) != 0)
 		hurb->transfer_flags |= USBH_URB_ZERO_PACKET;
 
@@ -865,7 +893,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	    urb->transfer_buffer_length, 0);
 	ret = usbh_submit_urb(hurb);
 	lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
-	if (lkpi_usb_force_sync && ret == 0) {
+	if (!async && ret == 0) {
 		/* the submit returned because the transfer COMPLETED:
 		 * collect it right here (the submitter's thread is a
 		 * passive context, the same level the drain thread would
@@ -889,7 +917,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		lkpi_usb_deliver(urb);
 		return urb->status;
 	}
-	if (lkpi_usb_force_sync && ret != 0) {
+	if (!async && ret != 0) {
 		/* timed out inside the HC: no completion callback exists
 		 * (complete is NULL); same no-reference-accounting rule */
 		urb->submitted = false;
@@ -912,7 +940,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	 * drain thread delivers the completion.  Sync mode skips it: the
 	 * transfer is over when the call returns, and the collect paths
 	 * above do their own accounting-free retire. */
-	if (!lkpi_usb_force_sync)
+	if (async)
 		urb->_refs++;
 	return 0;
 }

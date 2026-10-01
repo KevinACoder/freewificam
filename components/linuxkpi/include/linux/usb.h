@@ -394,7 +394,23 @@ usb_fill_int_urb(struct urb *urb, struct usb_device *dev, unsigned int pipe,
 {
 	usb_fill_bulk_urb(urb, dev, pipe, transfer_buffer, buffer_length,
 	    complete_fn, context);
-	urb->interval = interval;
+	/* [LNX] usb.h:1785-1792 truth (linuxkpi-hub spec §3.5-1): the
+	 * caller passes the endpoint descriptor's bInterval encoding.
+	 * HS/SS re-express it in microframes (2^(n-1) of 1/8 ms, clamped
+	 * to 1..16); LS/FS keep the raw frame count.  Without this the
+	 * two targets of the dual-target validation would carry
+	 * human-divergent urb->interval values (microframes vs raw). */
+	if (dev != NULL && (dev->speed == USB_SPEED_HIGH ||
+	    dev->speed == USB_SPEED_SUPER ||
+	    dev->speed == USB_SPEED_SUPER_PLUS)) {
+		if (interval < 1)
+			interval = 1;
+		if (interval > 16)
+			interval = 16;
+		urb->interval = 1 << (interval - 1);
+	} else {
+		urb->interval = interval;
+	}
 }
 
 /* the packet-size ceiling a bulk segmentation loop needs (§3.6-2):
