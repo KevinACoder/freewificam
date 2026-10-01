@@ -31,6 +31,8 @@
 #include "gicv3.h"
 #include "log.h"
 #include "lwip/init.h"
+#include "lwip/ip4_addr.h"
+#include "lwip/netif.h"
 #include "lwip/sys.h"
 #include "lwip/timeouts.h"
 #include "lwip/apps/lwiperf.h"
@@ -38,6 +40,7 @@
 #include "uart.h"
 
 #include "dwc_eqos.h"
+#include "ethnetif.h"
 #include "eqos_rk3568.h"
 #include "rtl8211f.h"
 
@@ -53,16 +56,49 @@ P7-2a moves it to the threadx base"
 /* The watchdog cadence the prior workspace's osTimer ran at. */
 #define GMAC_WATCHDOG_MS	100u
 
-/* P7-1b placeholder for the P7-1c lwIP feed: with no netif yet, the staging
- * ring must still be drained or every background broadcast overflows it into
- * the dropped counter (the ring is burst absorption, not a queue). The feed
- * point becomes pbuf_alloc+netif->input in P7-1c. */
-static uint8_t drain_buf[DWC_EQOS_RX_BUF_SIZE];
+/* Static addresses, the M1-A convention carried over (spec §3.7): gmac1 =
+ * 192.168.0.200 (the judged port), gmac0 = 192.168.0.201, /24 test LAN. */
+static struct netif g_netif;
 
-static void gmac_drain(unsigned int port)
+static void lwiperf_report(void *arg, enum lwiperf_report_type type,
+			   const ip_addr_t *local_addr, u16_t local_port,
+			   const ip_addr_t *remote_addr, u16_t remote_port,
+			   u32_t bytes, u32_t ms, u32_t kbitpsec)
 {
-	while (dwc_eqos_get_rx_frame_size(port) > 0U) {
-		(void)dwc_eqos_read_frame(port, drain_buf, sizeof(drain_buf));
+	(void)arg;
+	(void)local_addr;
+	(void)local_port;
+	(void)remote_addr;
+	(void)remote_port;
+	board_log("lwiperf: report type=%d bytes=%u ms=%u %ukbit/s\n",
+		  (int)type, (unsigned)bytes, (unsigned)ms,
+		  (unsigned)kbitpsec);
+}
+
+static void net_bring_up(unsigned int port)
+{
+	ip4_addr_t ip, mask, gw;
+	uint8_t mac[6];
+
+	IP4_ADDR(&mask, 255, 255, 255, 0);
+	IP4_ADDR(&gw, 192, 168, 0, 1);
+	if (port == 1U) {
+		IP4_ADDR(&ip, 192, 168, 0, 200);
+	} else {
+		IP4_ADDR(&ip, 192, 168, 0, 201);
+	}
+
+	ethnetif_add(&g_netif, port, &ip, &mask, &gw);
+	(void)dwc_eqos_get_mac_address(port, mac);
+	board_log("net: up gmac%u ip=%u.%u.%u.%u/24 mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+		  port, ip4_addr1_16(&ip), ip4_addr2_16(&ip),
+		  ip4_addr3_16(&ip), ip4_addr4_16(&ip),
+		  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+	if (lwiperf_start_tcp_server_default(lwiperf_report, NULL) != NULL) {
+		board_log("lwiperf: tcp server start\n");
+	} else {
+		board_log("lwiperf: server START FAILED\n");
 	}
 }
 
@@ -129,6 +165,7 @@ static int gmac_bring_up(unsigned int port)
 int main(void)
 {
 	unsigned int port = (unsigned int)CONFIG_GMAC_PORT;
+	unsigned int fed = 0;
 	struct dwc_eqos_stats stats;
 	uint32_t now, target;
 	uint32_t wd_due;
@@ -178,19 +215,13 @@ int main(void)
 	board_log("lwip: sys_now alive (100ms in %ums)\n",
 		  (unsigned)(sys_now() - now));
 
-	/* Smoke server (iperf2 protocol; host iperf2.exe is the paired
-	 * instrument, spec FR-10). */
-	if (lwiperf_start_tcp_server_default(NULL, NULL) != NULL) {
-		board_log("lwiperf: tcp server start\n");
-	} else {
-		board_log("lwiperf: server START FAILED\n");
-	}
+	/* lwiperf smoke server moved into net_bring_up (needs the netif for
+	 * meaningful reports); keep the anchor order stable. */
+	net_bring_up(port);
 
-	/* Steady state: RX drain (lwIP feed joins in P7-1c), lwIP timeouts,
-	 * the 100 ms driver watchdog, and the 1 s heartbeat. The heartbeat
-	 * counters are the P7-1b evidence line: rx_frames must advance on
-	 * LAN background traffic, dropped/errors make a full ring or a bad
-	 * cable distinguishable from silence. */
+	/* Steady state: RX feed into lwIP, lwIP timeouts, the 100 ms driver
+	 * watchdog, and the 1 s heartbeat with driver counters + the feed
+	 * counter (P7-1c evidence line). */
 	dwc_eqos_get_stats(port, &stats);
 	board_log("gmac%u: rx=%u dropped=%u errors=%u tx=%u\n", port,
 		  (unsigned)stats.rx_frames, (unsigned)stats.rx_dropped,
@@ -201,7 +232,7 @@ int main(void)
 	for (;;) {
 		sys_check_timeouts();
 
-		gmac_drain(port);
+		fed += ethnetif_poll(&g_netif);
 
 		if ((int32_t)(sys_now() - wd_due) >= 0) {
 			wd_due = sys_now() + GMAC_WATCHDOG_MS;
@@ -211,12 +242,13 @@ int main(void)
 		if ((uint32_t)(sys_now() - now) >= 1000U) {
 			now += 1000U;
 			dwc_eqos_get_stats(port, &stats);
-			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u\n",
+			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u fed=%u\n",
 				  port,
 				  (unsigned)stats.rx_frames,
 				  (unsigned)stats.rx_dropped,
 				  (unsigned)stats.rx_errors,
-				  (unsigned)stats.tx_frames);
+				  (unsigned)stats.tx_frames,
+				  (unsigned)fed);
 		}
 		__asm__ __volatile__("wfi" ::: "memory");
 	}
