@@ -344,6 +344,10 @@ __fls(unsigned long word)
 #define	ECANCELED		125
 #define	EOPNOTSUPP		95
 #define	EPIPE			32
+/* the urb-cancellation code usb_kill_urb delivers on Linux (hub.c's
+ * stop set consumes it); the kpi kill surfaces -ENOENT/-ENODEV, the
+ * driver's stop set lists both spellings */
+#define	ECONNRESET		104
 
 /* ------------------------------------------------------------------ */
 /* bitmap API over unsigned long[]                                     */

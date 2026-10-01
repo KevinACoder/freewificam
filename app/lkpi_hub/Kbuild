@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Out-tree kbuild of the acceptance driver's first target (SPEC
+# specs/linuxkpi-hub §3.2): the shared core + the Linux shell.
+#
+#   make -C <linux-tree> O=<build-dir> M=<this dir> modules
+#
+# then transfer lkpi_hub.ko to the board and insmod it after unbinding
+# the kernel hub driver from the GL hub interface.
+
+obj-m += lkpi_hub.o
+lkpi_hub-y += lkpi_hub_core.o lkpi_hub_linux.o

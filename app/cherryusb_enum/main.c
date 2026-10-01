@@ -35,13 +35,17 @@
 #include "usbh_platform.h"
 
 #ifdef CONFIG_LINUXKPI
-/* the acceptance driver's registration (P6-a/b): the usb_register table
- * walk must run BEFORE usbh_platform_start() - the hub thread claims
- * through the class hook the moment a device shows up.  The drain thread
- * deliberately does NOT start here: it rides the cherryusb OSAL byte
- * pool, which only exists after usbh_platform_start()'s usb_osal_init,
- * so the kpi layer creates it lazily on the first submit. */
+/* the acceptance drivers' registration (P6-a/b + linuxkpi-hub H1): the
+ * usb_register table walk must run BEFORE usbh_platform_start() - the
+ * hub thread claims through the class hook the moment a device shows
+ * up.  The drain thread deliberately does NOT start here: it rides the
+ * cherryusb OSAL byte pool, which only exists after
+ * usbh_platform_start()'s usb_osal_init, so the kpi layer creates it
+ * lazily on the first submit.  The hub driver sits inert after
+ * registration: the hub interface is claimed by the cherryusb hub
+ * class, and its probe runs from the `lkpi_hub attach` command. */
 extern int lkpi_udisk_rtos_register(void);
+extern int lkpi_hub_rtos_register(void);
 #endif
 
 #ifdef CONFIG_SHELL
@@ -81,6 +85,9 @@ static void thr_usbboot(void *arg)
 #ifdef CONFIG_LINUXKPI
 	if (lkpi_udisk_rtos_register() != 0) {
 		board_log("lkpi: driver register FAIL\n");
+	}
+	if (lkpi_hub_rtos_register() != 0) {
+		board_log("lkpi: hub driver register FAIL\n");
 	}
 #endif
 	if (usbh_platform_start() == 0) {

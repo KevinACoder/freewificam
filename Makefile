@@ -329,7 +329,9 @@ LKPI_SRCS := \
 	port/adapters/linuxkpi/lkpi_usbh_class.c \
 	port/adapters/linuxkpi/usbkpi_cmds.c \
 	app/lkpi_udisk/lkpi_udisk_core.c \
-	app/lkpi_udisk/lkpi_udisk_rtos.c
+	app/lkpi_udisk/lkpi_udisk_rtos.c \
+	app/lkpi_hub/lkpi_hub_core.c \
+	app/lkpi_hub/lkpi_hub_rtos.c
 SRCS += $(LKPI_SRCS)
 CFLAGS += -DCONFIG_LINUXKPI=1
 # P6-b root-cause experiment key (temporary, issues/2026-10-01-xhci-
@@ -351,6 +353,7 @@ $(BUILD)/components/linuxkpi/%.o: EXTRAFLAGS := $(LKPI_CFLAGS)
 $(BUILD)/port/adapters/linuxkpi/%.o: \
 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/app/lkpi_udisk/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/app/lkpi_hub/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 endif
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
