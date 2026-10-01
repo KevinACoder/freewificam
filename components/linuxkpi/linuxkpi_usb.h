@@ -41,6 +41,7 @@ u32		lkpi_crc32(const void *buf, size_t len);
  * kernel's module_usb_driver) */
 void		lkpi_usb_start(void);
 void		lkpi_usb_trace_set(bool on);
+void		lkpi_usb_force_sync_set(bool on);
 /* the drain thread's OS handle (the wedge report reads the state/stack
  * watermark off it); opaque here - the OSAL world casts it back */
 void *		lkpi_usb_drain_thread_id(void);

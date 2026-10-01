@@ -63,30 +63,53 @@
  */
 #define	LKPI_USB_STAGE_ALIGN	64
 
+/* P6-b board finding: a stage that lives in the tlsf heap loses bulk-IN
+ * DMA (the controller reports a complete IN while the stage still holds
+ * the previous OUT's bytes) and corrupts heap metadata around it (the
+ * tlsf double-free assert).  The heap had never been a DMA target before
+ * (thread stacks only) - the static-pool graduation the [EXPL] stage
+ * comment reserved for exactly this class of datapath trouble. */
+#define	LKPI_STAGE_SLOTS	4
+#define	LKPI_STAGE_SIZE		32768
+
+struct lkpi_stage_slot {
+	u8	mem[LKPI_STAGE_SIZE] __attribute__((aligned(LKPI_USB_STAGE_ALIGN)));
+	u32	len;
+	bool	used;
+};
+
+static struct lkpi_stage_slot lkpi_stage_pool[LKPI_STAGE_SLOTS];
+
+static void lkpi_usb_stage_put(struct urb *urb);
+
 static void *
 lkpi_usb_stage_get(struct urb *urb, u32 len)
 {
-	void *raw, *aligned;
+	unsigned int i;
 
 	if (len == 0)
 		return NULL;
 	if (urb->_stage != NULL && urb->_stage_len >= len)
 		return urb->_stage;
-	if (urb->_stage != NULL) {
-		lkpi_kmem_free(urb->_stage_raw);
-		urb->_stage = NULL;
-		urb->_stage_raw = NULL;
-		urb->_stage_len = 0;
-	}
-	raw = lkpi_kmem_alloc(len + LKPI_USB_STAGE_ALIGN, GFP_KERNEL, false);
-	if (raw == NULL)
+	if (urb->_stage != NULL)
+		lkpi_usb_stage_put(urb);
+	if (len > LKPI_STAGE_SIZE) {
+		lkpi_printf("usbkpi: stage %u exceeds pool\n",
+		    (unsigned int)len);
 		return NULL;
-	aligned = (void *)(((uintptr_t)raw + LKPI_USB_STAGE_ALIGN) &
-	    ~(uintptr_t)(LKPI_USB_STAGE_ALIGN - 1));
-	urb->_stage = aligned;
-	urb->_stage_raw = raw;
-	urb->_stage_len = len;
-	return aligned;
+	}
+	for (i = 0; i < LKPI_STAGE_SLOTS; i++) {
+		if (!lkpi_stage_pool[i].used) {
+			lkpi_stage_pool[i].used = true;
+			lkpi_stage_pool[i].len = len;
+			urb->_stage = lkpi_stage_pool[i].mem;
+			urb->_stage_raw = &lkpi_stage_pool[i];
+			urb->_stage_len = len;
+			return urb->_stage;
+		}
+	}
+	lkpi_printf("usbkpi: stage pool exhausted\n");
+	return NULL;
 }
 
 /* the 8-byte control-setup stage: allocated once per urb, never resized */
@@ -112,12 +135,14 @@ lkpi_usb_stage_put(struct urb *urb)
 {
 
 	if (urb->_stage_raw != NULL) {
-		lkpi_kmem_free(urb->_stage_raw);
+		((struct lkpi_stage_slot *)urb->_stage_raw)->used = false;
 		urb->_stage = NULL;
 		urb->_stage_raw = NULL;
 		urb->_stage_len = 0;
 	}
 	if (urb->_setup_raw != NULL) {
+		lkpi_printf("usbkpi: free setup stage %p\n",
+		    urb->_setup_raw);
 		lkpi_kmem_free(urb->_setup_raw);
 		urb->_setup_stage = NULL;
 		urb->_setup_raw = NULL;
@@ -433,6 +458,27 @@ static struct mutex lkpi_usb_submit_mtx;
 /* bring-up trace: every transfer crossed, shell-gated */
 static bool lkpi_usb_trace;
 static unsigned int lkpi_usb_trace_n;
+/* P6-b forensics (spec 开放问题 3 实验): force the cherryusb SYNCHRONOUS
+ * submit shape (hurb->timeout>0, the submitter sleeps on the ring's
+ * waitsem - the board-proven P5-d/e usbh_msc shape) instead of the pure
+ * async arm; the completion path is shared, so only the wait moves. */
+/* P6-b board verdict (2026-10-01): sync-submit is THE shape.  The async
+ * done-list + drain-thread chain lost completions for seconds (the probe
+ * urb's completion was delivered 19 s late, straight into a re-used
+ * urb), and its HC-reference accounting double-freed the urb under the
+ * sync hybrid.  The xHCI bus is polled through cherryusb's own sync
+ * waitsem path (the P5-d/e usbh_msc shape), so the kpi layer submits
+ * synchronously and delivers the completion on the submitter's (passive)
+ * context; `usbkpi sync off` re-arms the legacy async chain for
+ * forensics only. */
+static bool lkpi_usb_force_sync = true;
+
+void lkpi_usb_force_sync_set(bool on)
+{
+
+	lkpi_usb_force_sync = on;
+	lkpi_printf("usb: sync-submit %s\n", on ? "on" : "off");
+}
 
 void *
 lkpi_usb_drain_thread_id(void)
@@ -590,6 +636,8 @@ usb_free_urb(struct urb *urb)
 
 	if (urb == NULL)
 		return;
+	lkpi_printf("usbkpi: free_urb %p refs %d\n", (void *)urb,
+	    urb->_refs);
 	if (--urb->_refs > 0)
 		return;
 	lkpi_usb_stage_put(urb);
@@ -652,6 +700,10 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		return -ENODEV;
 	if (urb->submitted)
 		return -EBUSY;
+	/* sync mode needs no drain thread; the async chain (and with it the
+	 * lazy lkpi_usb_start) only arms via `usbkpi sync off` forensics */
+	if (!lkpi_usb_force_sync && !lkpi_usb_done_ready)
+		lkpi_usb_start();
 
 	/* rxhold gate (see usbkpi_rxhold_set): hold the urb back from the
 	 * HC; the submitter sees success, the urb just never completes */
@@ -729,7 +781,17 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		hurb->transfer_buffer = NULL;
 	}
 	hurb->transfer_buffer_length = urb->transfer_buffer_length;
-	hurb->timeout = 0;
+	hurb->timeout = lkpi_usb_force_sync ? 5000U : 0U;
+	if (lkpi_usb_force_sync) {
+		/* sync mode: the submit IS the transfer (the submitter
+		 * sleeps on the ring's waitsem, the board-proven P5-d/e
+		 * usbh_msc shape).  The completion callback stays NULL so
+		 * the done-list is out of the picture entirely - the
+		 * async completion chain is where the double-delivery
+		 * race lives (tlsf double-free, board 2026-10-01). */
+		hurb->complete = NULL;
+		hurb->arg = NULL;
+	}
 	hurb->complete = lkpi_usb_complete_cb;
 	hurb->arg = urb;
 	if ((urb->transfer_flags & URB_ZERO_PACKET) != 0)
@@ -742,6 +804,37 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	    urb->transfer_buffer_length, 0);
 	ret = usbh_submit_urb(hurb);
 	lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
+	if (lkpi_usb_force_sync && ret == 0) {
+		/* the submit returned because the transfer COMPLETED:
+		 * collect it right here (the submitter's thread is a
+		 * passive context, the same level the drain thread would
+		 * deliver at) and hand the completion to the driver.  No
+		 * reference accounting: the HC reference only exists for
+		 * an async arm, and a sync submit's transfer is over by
+		 * the time the call returns either way (the refs double-
+		 * decrement made the urb kfree itself under a live
+		 * driver, board 2026-10-01). */
+		urb->submitted = false;
+		urb->status = lkpi_usb_errno(hurb->errorcode);
+		urb->actual_length = hurb->actual_length;
+		usbkpi_push(urb, usb_pipein(urb->pipe), false,
+		    urb->status == 0 ? urb->actual_length : 0,
+		    hurb->errorcode);
+		if (urb->_stage != NULL && urb->status == 0 &&
+		    usb_pipein(urb->pipe) && urb->actual_length != 0 &&
+		    urb->transfer_buffer != NULL)
+			memcpy(urb->transfer_buffer, urb->_stage,
+			    urb->actual_length);
+		lkpi_usb_deliver(urb);
+		return urb->status;
+	}
+	if (lkpi_usb_force_sync && ret != 0) {
+		/* timed out inside the HC: no completion callback exists
+		 * (complete is NULL); same no-reference-accounting rule */
+		urb->submitted = false;
+		urb->status = lkpi_usb_errno(hurb->errorcode);
+		return urb->status;
+	}
 	if (ret != 0) {
 		urb->submitted = false;
 		urb->status = lkpi_usb_errno(ret);
@@ -755,8 +848,11 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	}
 	/* the HC reference: keeps the urb (and its stage) alive across the
 	 * driver's usb_free_urb-until-completion usage pattern until the
-	 * drain thread delivers the completion */
-	urb->_refs++;
+	 * drain thread delivers the completion.  Sync mode skips it: the
+	 * transfer is over when the call returns, and the collect paths
+	 * above do their own accounting-free retire. */
+	if (!lkpi_usb_force_sync)
+		urb->_refs++;
 	return 0;
 }
 

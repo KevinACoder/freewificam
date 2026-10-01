@@ -120,6 +120,11 @@ static int usbkpi_cmd(int argc, char *argv[])
 		lkpi_usb_trace_set(argc >= 3 && strcmp(argv[2], "on") == 0);
 		return 0;
 	}
+	if (strcmp(argv[1], "sync") == 0) {
+		lkpi_usb_force_sync_set(argc >= 3 &&
+		    strcmp(argv[2], "on") == 0);
+		return 0;
+	}
 	if (strcmp(argv[1], "status") == 0) {
 		unsigned int mask = usbkpi_type_mask();
 

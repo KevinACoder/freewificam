@@ -153,6 +153,12 @@ void *pvPortMalloc(size_t size)
 	return p;
 }
 
+/* P6-b forensics: the tlsf double-free assert needs its caller's
+ * address trail - keep the last frees (and the next alloc) in a small
+ * ring so the assert line can be paired with what released before it. */
+static void *free_log[8];
+static unsigned int free_log_n;
+
 void vPortFree(void *ptr)
 {
 	unsigned int posture;
@@ -164,6 +170,10 @@ void vPortFree(void *ptr)
 
 	posture = _tx_thread_smp_protect();
 	size = tlsf_block_size(ptr);
+	free_log[free_log_n % 8U] = ptr;
+	free_log_n++;
+	board_log("heap: free #%u %p size %u\n",
+		  (unsigned)free_log_n, ptr, (unsigned)size);
 	tlsf_free(heap_tlsf, ptr);
 	if (heap_allocated >= size) {
 		heap_allocated -= size;
