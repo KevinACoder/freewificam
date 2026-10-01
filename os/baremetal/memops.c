@@ -6,12 +6,14 @@
  * memmove/strlen. The compiler itself emits calls to these for struct copies
  * and pattern loops, so the link fails without them.
  *
- * These are deliberately simple byte loops rather than word-at-a-time
- * versions. Two reasons: the compiler recognises these patterns and emits
- * efficient inline code anyway, and a hand-optimised version that mishandles
- * unaligned access would be far more expensive to debug than it saves. Note
- * that memset/memcpy here must tolerate unaligned pointers - the MMU maps
- * the image region as Normal cacheable memory precisely so they can.
+ * memcpy/memset are word-at-a-time (head/tail bytes + aligned u64 middle):
+ * the original byte loops were fine for struct copies, but the linuxkpi
+ * stage path pushes 128 KiB per BOT command through them and the byte
+ * loop alone cost the U-disk write path ~4 MB/s against the vendored msc
+ * baseline (P6-c board measurement, 2026-10-01).  The MMU maps the image
+ * region as Normal cacheable, and the A55 tolerates unaligned u64 access,
+ * so the alignment juggling below is about speed, not correctness.
+ * memmove/memcmp/strlen stay byte loops - nothing hot uses them.
  */
 
 #include <stddef.h>
@@ -21,22 +23,54 @@ void *memcpy(void *dest, const void *src, size_t n)
 {
 	unsigned char *d = (unsigned char *)dest;
 	const unsigned char *s = (const unsigned char *)src;
+	size_t head = (size_t)(-(uintptr_t)d) & (sizeof(uint64_t) - 1);
+	size_t tail;
 	size_t i;
 
-	for (i = 0; i < n; i++) {
+	if (head > n)
+		head = n;
+	for (i = 0; i < head; i++)
 		d[i] = s[i];
+	tail = (n - head) & (sizeof(uint64_t) - 1);
+	{
+		uint64_t *dw = (uint64_t *)(d + head);
+		const uint64_t *sw = (const uint64_t *)(s + head);
+		size_t words = (n - head) / sizeof(uint64_t);
+
+		for (i = 0; i < words; i++)
+			dw[i] = sw[i];
 	}
+	for (i = n - tail; i < n; i++)
+		d[i] = s[i];
 	return dest;
 }
 
 void *memset(void *dest, int value, size_t n)
 {
 	unsigned char *d = (unsigned char *)dest;
+	unsigned char v = (unsigned char)value;
+	uint64_t pattern = v;
+	size_t head = (size_t)(-(uintptr_t)d) & (sizeof(uint64_t) - 1);
+	size_t tail;
 	size_t i;
 
-	for (i = 0; i < n; i++) {
-		d[i] = (unsigned char)value;
+	pattern |= pattern << 8;
+	pattern |= pattern << 16;
+	pattern |= pattern << 32;
+	if (head > n)
+		head = n;
+	for (i = 0; i < head; i++)
+		d[i] = v;
+	tail = (n - head) & (sizeof(uint64_t) - 1);
+	{
+		uint64_t *dw = (uint64_t *)(d + head);
+		size_t words = (n - head) / sizeof(uint64_t);
+
+		for (i = 0; i < words; i++)
+			dw[i] = pattern;
 	}
+	for (i = n - tail; i < n; i++)
+		d[i] = v;
 	return dest;
 }
 

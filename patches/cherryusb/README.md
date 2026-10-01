@@ -39,7 +39,8 @@ git -C third-party/cherryusb apply --check "$PWD/patches/cherryusb/<p>.patch" \
 ```
 
 物化态（应用后的工作树）**不入 submodule 提交**；物化后对拍锚点：`usb_hc_xhci.c`
-2650 行、`.h` 386 行。
+2681 行、`.h` 386 行（2026-10-01 P6 形态轮起：超时 dump 按出事 URB 的真实 dci 读
+ep ctx + slot ctx 行——此前写死 dci=1 把 ep0 的 ctx 当 bulk 的打了，issue 台账被带偏）。
 
 ## sparse-checkout（`make modules` 自动设置，非 cone）
 

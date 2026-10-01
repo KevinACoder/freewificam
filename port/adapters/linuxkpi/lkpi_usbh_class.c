@@ -40,6 +40,13 @@
  * the VID-based backstop is cheap and spec-mandated - the MSC hook must
  * never grab a device the eject assistant is mid-flip on).
  */
+
+/* the landed claim (set in connect, cleared in disconnect): the rawbulk
+ * diagnostic (usbkpi_cmds.c) submits against the same hubport/interface
+ * the linux driver did (P6-b root-cause experiments) */
+static struct usbh_hubport *lkpi_claimed_hport;
+static uint8_t lkpi_claimed_intf;
+
 static int
 lkpi_msc_id_refused(uint16_t vendor, uint16_t product)
 {
@@ -172,6 +179,10 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 		lkpi_usbh_free_device(dev);
 		return -USB_ERR_INVAL;
 	}
+	/* the landed claim: the rawbulk diagnostic submits against this
+	 * same hubport/interface (P6-b root-cause experiments) */
+	lkpi_claimed_hport = hport;
+	lkpi_claimed_intf = intf;
 	return 0;
 }
 
@@ -180,6 +191,10 @@ lkpi_msc_disconnect(struct usbh_hubport *hport, uint8_t intf)
 {
 	struct usb_device *dev = hport->config.intf[intf].priv;
 
+	if (lkpi_claimed_hport == hport) {
+		lkpi_claimed_hport = NULL;
+		lkpi_claimed_intf = 0;
+	}
 	if (dev == NULL)
 		return;
 	hport->config.intf[intf].priv = NULL;
@@ -208,3 +223,17 @@ CLASS_INFO_DEFINE const struct usbh_class_info lkpi_msc_class_info = {
 	.bInterfaceProtocol = 0x50,
 	.class_driver = &lkpi_msc_class_driver,
 };
+
+struct usbh_hubport *
+lkpi_usbh_claimed_hport(void)
+{
+
+	return lkpi_claimed_hport;
+}
+
+uint8_t
+lkpi_usbh_claimed_intf(void)
+{
+
+	return lkpi_claimed_intf;
+}

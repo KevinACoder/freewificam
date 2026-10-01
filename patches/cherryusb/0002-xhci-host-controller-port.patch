@@ -1,9 +1,9 @@
 diff --git a/port/xhci/usb_hc_xhci.c b/port/xhci/usb_hc_xhci.c
 new file mode 100644
-index 0000000..890bbfa
+index 00000000..cc574943
 --- /dev/null
 +++ b/port/xhci/usb_hc_xhci.c
-@@ -0,0 +1,2670 @@
+@@ -0,0 +1,2681 @@
 +/*
 + * @file   usb_hc_xhci.c
 + * @brief  DWC3 xHCI host controller driver for the RK3568 USB3 socket
@@ -1692,7 +1692,14 @@ index 0000000..890bbfa
 +			      struct xhci_ring *ring, struct usbh_urb *urb,
 +			      uint32_t irq0, uint32_t tevt0, const char *why)
 +{
-+	uint32_t *octx = xhci_out_ctx(dev, 1U);
++	/* P6-b forensics 2026-10-01: read the URB's OWN endpoint context -
++	 * the fixed dci=1 below printed ep0's ctx for a bulk timeout, which
++	 * is exactly the wrong cell (the issue ledger was led astray by it) */
++	uint32_t dci = ((urb->ep != NULL) && (urb->hport != NULL) &&
++			(urb->ep != &urb->hport->ep0)) ?
++		       xhci_dci_of(urb->ep) : 1U;
++	uint32_t *octx = xhci_out_ctx(dev, dci);
++	uint32_t *sctx = xhci_out_ctx(dev, 0U);
 +
 +	usbh_console_printf(
 +		"xhci: ep0 %s: slot=%u urb=%p setup=%02x/%02x val=%04x len=%u buf=%p\n",
@@ -1714,9 +1721,13 @@ index 0000000..890bbfa
 +	xhci_dcache_invalidate(dev->dev_ctx,
 +			       dev->ctxsz * (1U + XHCI_MAX_DCI));
 +	usbh_console_printf(
-+		"xhci: ep0 ctx: st=%u mps=%u dqlo=%08x dqhi=%08x dcs=%u\n",
-+		octx[0] & 0x7U, (octx[1] >> 16) & 0xFFFFU,
-+		octx[2] & ~0xFU, octx[3], octx[2] & 0x1U);
++		"xhci: ep ctx dci=%u: st=%u type=%u mps=%u dqlo=%08x dqhi=%08x dcs=%u\n",
++		dci, octx[0] & 0x7U, (octx[1] >> 3) & 0x7U,
++		(octx[1] >> 16) & 0xFFFFU, octx[2] & ~0xFU, octx[3],
++		octx[2] & 0x1U);
++	usbh_console_printf(
++		"xhci: slot ctx: w0=%08x w1=%08x w2=%08x w3=%08x\n",
++		sctx[0], sctx[1], sctx[2], sctx[3]);
 +	usbh_console_printf(
 +		"xhci: ep0 evwin: ep=%u cs=%u next4=%08x %08x %08x %08x\n",
 +		hcd->event_ep, hcd->event_cs,
@@ -2676,7 +2687,7 @@ index 0000000..890bbfa
 +#endif
 diff --git a/port/xhci/usb_hc_xhci.h b/port/xhci/usb_hc_xhci.h
 new file mode 100644
-index 0000000..3e06641
+index 00000000..3e06641b
 --- /dev/null
 +++ b/port/xhci/usb_hc_xhci.h
 @@ -0,0 +1,386 @@
