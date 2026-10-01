@@ -1,0 +1,54 @@
+--- a/port/xhci/usb_hc_xhci.c
++++ b/port/xhci/usb_hc_xhci.c
+@@ -251,14 +251,30 @@
+ 
+ static inline uint32_t xhci_ep_type_of(const struct usb_endpoint_descriptor *ep)
+ {
++	/* bmAttributes bit1:0: 0=control 1=isoch 2=bulk 3=interrupt.  The
++	 * pre-P5-e code treated 0 as bulk and everything else as interrupt,
++	 * so real bulk endpoints reached the controller as interrupt
++	 * endpoints (type 3/7); with Interval=0 the xHC then schedules one
++	 * MPS packet per microframe = 512B/125us = 4.096 MB/s, the P5-e
++	 * ceiling.  Type values are xHCI table 6-9 (ep ctx dw1 bits 5:3),
++	 * as already encoded in usb_hc_xhci.h. */
+ 	uint32_t attr = ep->bmAttributes & 0x3U;
+ 	uint32_t dir_in = (ep->bEndpointAddress & USB2_DIR_IN) != 0U;
+ 	uint32_t type;
+ 
+-	if (attr == 0U) {
++	switch (attr) {
++	case 2U:
+ 		type = dir_in ? EP_TYPE_BULK_IN : EP_TYPE_BULK_OUT;
+-	} else {
++		break;
++	case 3U:
+ 		type = dir_in ? EP_TYPE_INTR_IN : EP_TYPE_INTR_OUT;
++		break;
++	case 1U:
++		type = dir_in ? EP_TYPE_ISOCH_IN : EP_TYPE_ISOCH_OUT;
++		break;
++	default:
++		type = EP_TYPE_CONTROL;
++		break;
+ 	}
+ 	return type;
+ }
+@@ -724,12 +740,12 @@
+ 		 EP_CTX_1_MAX_BURST_SET(burst);
+ 	epc[2] = ((uint32_t)(uintptr_t)ring->trbs & ~0xFU) | EP_CTX_2_CYCLE;
+ 	epc[3] = 0U;
+-	/* avg TRB length: bulk = 0, otherwise 8.  A nonzero value here is a
+-	 * per-microframe budget on DWC3 hosts - MPS (512) capped bulk at
+-	 * exactly 512B/125us = 4.096 MB/s (board-measured 4.0, P5-e).  Linux
+-	 * xhci-mem.c:1388 xhci_get_max_esit_payload() returns 0 for control
+-	 * and bulk, so avg_trb_len lands 0 for bulk EPs there (control gets
+-	 * the xHCI 1.0 hint 8 via the separate override). */
++	/* avg TRB length: bulk = 0, otherwise 8.  Linux xhci-mem.c:1388
++	 * xhci_get_max_esit_payload() returns 0 for control and bulk, so
++	 * avg_trb_len lands 0 for bulk EPs there (control gets the xHCI 1.0
++	 * hint 8 via the separate override).  P5-e board data: 512 and 0 both
++	 * measured 4.0 MB/s - throughput-neutral; the 4.096 MB/s ceiling was
++	 * the bulk endpoint type decode bug (see xhci_ep_type_of). */
+ 	epc[4] = EP_CTX_4_AVG_TRB_LEN(
+ 		((ep->bmAttributes & 0x3U) == 0U) ? 0U : 8U);
+ 
