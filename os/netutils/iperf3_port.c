@@ -22,13 +22,18 @@
 
 #include "cmsis_os2.h"
 
-/* The CMSIS adapter bands lwIP priority numbers 1:1 onto osPriority* /8;
- * prio 4 (the vendored IPERF3_TASK_PRIORITY) is osPriorityAboveNormal,
- * the same band as the tcpip thread's peers - above rx threads, below
- * the shell. Anything lower drops to Normal. */
+/* The CMSIS adapter bands lwIP priority numbers 1:1 onto osPriority* /8.
+ * D54's ThreadX clause (this port, N4 first run): this kernel has NO time
+ * slice (TX_NO_TIME_SLICE), so a worker at the tcpip band (4) that spins
+ * in its send loop starves the stack thread - the first forward test froze
+ * the TX ring exactly that way (handshake done, tx frozen at 352). The
+ * worker therefore caps at BelowNormal (band 3): it can never preempt
+ * tcpip, and its blocking waits (send on a full window) yield the CPU to
+ * the stack that unblocks it. */
 static osPriority_t iperf3_port_band(uint32_t prio)
 {
-	return (prio >= 4U) ? osPriorityAboveNormal : osPriorityNormal;
+	(void)prio;
+	return osPriorityBelowNormal;
 }
 
 BaseType_t xTaskCreate(void (*task_fn)(void *), const char *name,
