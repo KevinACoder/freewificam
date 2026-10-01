@@ -381,6 +381,13 @@ $(error CONFIG_GMAC_PORT must be 0 or 1, got '$(CONFIG_GMAC_PORT)')
 endif
 
 LWIP_DIR := third-party/lwip
+# GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +
+# RTL8211F PHY + RK3568 glue/board table, re-arranged onto gicv3/cache/log.
+# The unselected port (CONFIG_GMAC_PORT) is data-only - never initialized.
+SRCS += \
+	board/$(BOARD)/drivers/dwc_eqos.c \
+	board/$(BOARD)/drivers/rtl8211f.c \
+	board/$(BOARD)/drivers/eqos_rk3568.c
 LWIP_SRCS := \
 	$(LWIP_DIR)/src/core/def.c \
 	$(LWIP_DIR)/src/core/inet_chksum.c \
