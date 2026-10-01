@@ -432,7 +432,7 @@ LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include \
 	-DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
 $(BUILD)/third-party/lwip/%.o: EXTRAFLAGS := -w $(LWIP_CFLAGS)
 $(BUILD)/os/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
-$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
+$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS := $(LWIP_CFLAGS) $(CSH_CFLAGS)
 endif
 
 # netutils (SPEC S7b/netutils-adapt §3.4/§3.6): the vendored tool subset

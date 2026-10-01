@@ -33,6 +33,13 @@
 /* MAIR attribute indices, referenced from the table descriptors below. */
 #define ATTR_IDX_NORMAL		0	/* MAIR byte 0: Normal write-back */
 #define ATTR_IDX_DEVICE		1	/* MAIR byte 1: Device-nGnRE */
+#define ATTR_IDX_NORMAL_NC	2	/* MAIR byte 2: Normal non-cacheable */
+
+/* The DMA-descriptor window: one dedicated 2MiB block mapped Normal
+ * non-cacheable, so DMA writebacks are visible to the CPU and CPU stores to
+ * the DMA with no cache maintenance. The link script pins the .dma_noc
+ * section to this address (baremetal.ld); the two must move together. */
+#define DMA_NOC_BASE		0x0c000000ULL
 
 #define DESC_TABLE		(3ULL << 0)	/* points at a next-level table */
 #define DESC_BLOCK		(1ULL << 0)	/* 1GiB (L1) or 2MiB (L2) block */
@@ -42,6 +49,7 @@
 #define DESC_SH_NONE		(0ULL << 8)	/* non-shareable: Device only */
 #define DESC_ATTR_NORMAL	((uint64_t)ATTR_IDX_NORMAL << 2)
 #define DESC_ATTR_DEVICE	((uint64_t)ATTR_IDX_DEVICE << 2)
+#define DESC_ATTR_NORMAL_NC	((uint64_t)ATTR_IDX_NORMAL_NC << 2)
 #define DESC_XN			(1ULL << 54)	/* execute-never */
 
 #define PAGE_GRANULE		4096U
@@ -122,6 +130,13 @@ void mmu_enable(void)
 			l2_low[i] = device_block_desc(base);
 		}
 	}
+	/* Override the one block that hosts the DMA descriptor window
+	 * (baremetal.ld pins .dma_noc inside it): non-cacheable, so descriptor
+	 * writebacks cross the CPU/DMA boundary without cache maintenance -
+	 * the coherent-memory equivalent the upstream Linux driver gets from
+	 * dma_alloc_coherent. */
+	l2_low[DMA_NOC_BASE / L2_BLOCK_SIZE] =
+		block_desc(DMA_NOC_BASE, DESC_ATTR_NORMAL_NC);
 
 	/* L2 covering the top 1GiB: the peripheral/Device window (GICD,
 	 * GICR, UART2 all live in this 1GiB). */
@@ -150,8 +165,9 @@ void mmu_enable(void)
 	l0_table[0] = DESC_TABLE | (uint64_t)(uintptr_t)l1_table;
 
 	/* MAIR: byte 0 Normal write-back read/write-allocate, byte 1
-	 * Device-nGnRE. Values match the 4-bit encodings in the ARM ARM. */
-	value = 0xffULL | (0x04ULL << 8);
+	 * Device-nGnRE, byte 2 Normal non-cacheable. Values match the 4-bit
+	 * encodings in the ARM ARM. */
+	value = 0xffULL | (0x04ULL << 8) | (0x44ULL << 16);
 	__asm__ __volatile__("msr mair_el1, %0" : : "r"(value) : "memory");
 
 	value = TCR_T0SZ | TCR_IRGN0_WBWA | TCR_ORGN0_WBWA |

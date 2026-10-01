@@ -21,6 +21,7 @@ peripheral = adding a map file, this tool is map-agnostic.
 
 import importlib.util
 import json
+import time
 import os
 import datetime
 
@@ -119,11 +120,21 @@ class DumpPeriCommand(gdb.Command):
             print(_USAGE)
             return
         name, json_path, anchor, probe = None, None, "break *board_log", None
+        side = "rtos"
+        base_override = None
         i = 0
         while i < len(argv):
             a = argv[i]
             if a == "--json" and i + 1 < len(argv):
                 json_path = argv[i + 1]
+                i += 2
+            elif a == "--side" and i + 1 < len(argv):
+                side = argv[i + 1]
+                i += 2
+            elif a == "--base" and i + 1 < len(argv):
+                # kernel-side dumps read through the ioremap window, so the
+                # physical base in the map needs a virtual override
+                base_override = int(argv[i + 1], 0)
                 i += 2
             elif a == "--anchor" and i + 1 < len(argv):
                 anchor = argv[i + 1]
@@ -145,51 +156,50 @@ class DumpPeriCommand(gdb.Command):
         regmod = _load_regmap(name)
         base = regmod.PERI["base"]
         notes = []
+        if base_override is not None:
+            notes.append("base override 0x%x (map physical 0x%x)"
+                         % (base_override, base))
+            base = base_override
 
         inf = gdb.selected_inferior()
-        cap = _read_bytes(inf, base, 0x40)
-        caplength = _word(cap, 0) & 0xFF
-        if probe is None:
-            probe = "direct-read-ok"
 
-        regs, raw = [], [{"addr": _fmt_plain(base), "len": 0x40,
-                          "hex": cap.hex()}]
-        regs.extend(self._entries(regmod.CAP_REGS, 0, cap))
-
-        op_base = caplength
-        if regmod.CAPLENGTH_MIN <= caplength <= regmod.CAPLENGTH_MAX:
-            op = _read_bytes(inf, base + op_base, 0x40)
-            raw.append({"addr": _fmt_plain(base + op_base), "len": 0x40,
-                        "hex": op.hex()})
-            regs.extend(self._entries(regmod.OP_REGS, op_base, op))
-            max_ports = (_word(cap, 4) >> 24) & 0xFF
-            if max_ports == 0:
-                notes.append("HCS_MAX_PORTS=0 - port group skipped (implausible "
-                             "with a valid CAPLENGTH)")
-            n_ports = min(max_ports, regmod.MAX_PORTS_DUMP)
-            if max_ports > regmod.MAX_PORTS_DUMP:
-                notes.append("HCS_MAX_PORTS=%d > dump cap %d - dumping first %d"
-                             % (max_ports, regmod.MAX_PORTS_DUMP, n_ports))
-            if n_ports:
-                off = op_base + 0x400
-                end = off + n_ports * 0x10
-                if end > regmod.MAX_DERIVED_OFFSET:
-                    raise ValueError("derived port window 0x%x out of range" % end)
-                ports = _read_bytes(inf, base + off, n_ports * 0x10)
-                raw.append({"addr": _fmt_plain(base + off),
-                            "len": n_ports * 0x10, "hex": ports.hex()})
-                for n in range(1, n_ports + 1):
-                    regs.extend(self._entries(regmod.PORT_REGS, off + (n - 1) * 0x10,
-                                              ports[(n - 1) * 0x10:n * 0x10],
-                                              name_suffix=str(n)))
+        if hasattr(regmod, "REGS"):
+            # Flat per-register map (MAC/MTL/DMA style): read exactly the
+            # named offsets, one at a time.  The map's read-safety review is
+            # what keeps W1C/read-to-clear registers out of the list - the
+            # tool never touches an unnamed address.
+            if probe is None:
+                probe = "direct-read-ok"
+            regs, raw = [], []
+            for entry in regmod.REGS:
+                # The hub's raw-TCP bridge has been seen dropping/misframing
+                # back-to-back single-register 'm' reads at full gdb speed
+                # (reads came back as zeros); pace them, a dump takes <1 s.
+                time.sleep(0.02)
+                buf = _read_bytes(inf, base + entry["offset"], entry["size"])
+                raw.append({"addr": _fmt_plain(base + entry["offset"]),
+                            "len": entry["size"], "hex": buf.hex()})
+                # The flat map's offsets are absolute within the peripheral
+                # window and buf holds exactly this register, so decode from
+                # position 0 - _entries would slice at entry["offset"].
+                value = _value(buf, 0, entry["size"])
+                regs.append({
+                    "name": entry["name"],
+                    "offset": "0x%04x" % entry["offset"],
+                    "size": entry["size"],
+                    "access": entry["access"],
+                    "cls": entry["cls"],
+                    "value": _fmt(value, entry["size"]),
+                    "fields": _decode(entry, value),
+                    "note": entry["note"],
+                })
         else:
-            probe = "degraded-cap-only"
-            notes.append("CAPLENGTH=0x%02x outside [%#x, %#x] - cap block only, "
-                         "no op/port decode (spec 3.2 item 3)"
-                         % (caplength, regmod.CAPLENGTH_MIN, regmod.CAPLENGTH_MAX))
+            regs, raw = self._dump_xhci(regmod, inf, base, notes)
+            if probe is None:
+                probe = "direct-read-ok"
 
         sample = {
-            "side": "rtos",
+            "side": side,
             "state": "gdb-stall",
             "anchor": anchor,
             "probe": probe,
@@ -216,6 +226,49 @@ class DumpPeriCommand(gdb.Command):
                 json.dump(doc, fh, indent=1)
                 fh.write("\n")
             print("# json written: %s" % json_path)
+
+    @staticmethod
+    def _dump_xhci(regmod, inf, base, notes):
+        """The xHCI-shaped map path: cap block -> op block -> port group."""
+        cap = _read_bytes(inf, base, 0x40)
+        caplength = _word(cap, 0) & 0xFF
+
+        regs, raw = [], [{"addr": _fmt_plain(base), "len": 0x40,
+                          "hex": cap.hex()}]
+        regs.extend(_DumpPeri._entries(regmod.CAP_REGS, 0, cap))
+
+        op_base = caplength
+        if regmod.CAPLENGTH_MIN <= caplength <= regmod.CAPLENGTH_MAX:
+            op = _read_bytes(inf, base + op_base, 0x40)
+            raw.append({"addr": _fmt_plain(base + op_base), "len": 0x40,
+                        "hex": op.hex()})
+            regs.extend(_DumpPeri._entries(regmod.OP_REGS, op_base, op))
+            max_ports = (_word(cap, 4) >> 24) & 0xFF
+            if max_ports == 0:
+                notes.append("HCS_MAX_PORTS=0 - port group skipped (implausible "
+                             "with a valid CAPLENGTH)")
+            n_ports = min(max_ports, regmod.MAX_PORTS_DUMP)
+            if max_ports > regmod.MAX_PORTS_DUMP:
+                notes.append("HCS_MAX_PORTS=%d > dump cap %d - dumping first %d"
+                             % (max_ports, regmod.MAX_PORTS_DUMP, n_ports))
+            if n_ports:
+                off = op_base + 0x400
+                end = off + n_ports * 0x10
+                if end > regmod.MAX_DERIVED_OFFSET:
+                    raise ValueError("derived port window 0x%x out of range" % end)
+                ports = _read_bytes(inf, base + off, n_ports * 0x10)
+                raw.append({"addr": _fmt_plain(base + off),
+                            "len": n_ports * 0x10, "hex": ports.hex()})
+                for n in range(1, n_ports + 1):
+                    regs.extend(_DumpPeri._entries(regmod.PORT_REGS,
+                                                   off + (n - 1) * 0x10,
+                                                   ports[(n - 1) * 0x10:n * 0x10],
+                                                   name_suffix=str(n)))
+        else:
+            notes.append("CAPLENGTH=0x%02x outside [%#x, %#x] - cap block only, "
+                         "no op/port decode (spec 3.2 item 3)"
+                         % (caplength, regmod.CAPLENGTH_MIN, regmod.CAPLENGTH_MAX))
+        return regs, raw
 
     @staticmethod
     def _entries(entries, region_base, buf, name_suffix=""):

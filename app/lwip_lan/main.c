@@ -32,10 +32,18 @@
 #include "lwip/apps/lwiperf.h"
 #include "uart.h"
 
+#ifdef CONFIG_GDB_STUB
+#include "gdb_glue.h"
+#endif
+
 #include "dwc_eqos.h"
 #include "ethnetif.h"
 #include "eqos_rk3568.h"
 #include "rtl8211f.h"
+
+#ifdef CONFIG_SHELL
+#include "cherrysh_adapter.h"
+#endif
 
 #ifndef THREADX_BUILD
 #error "lwip_lan phase 2 runs on the threadx base (spec S7 §4/P7-2a)"
@@ -205,9 +213,11 @@ static void thr_boot(void *arg)
 	tcpip_init(tcpip_ready, NULL);
 
 	dwc_eqos_get_stats(port, &stats);
-	board_log("gmac%u: rx=%u dropped=%u errors=%u tx=%u\n", port,
+	board_log("gmac%u: rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u\n",
+		  port,
 		  (unsigned)stats.rx_frames, (unsigned)stats.rx_dropped,
-		  (unsigned)stats.rx_errors, (unsigned)stats.tx_frames);
+		  (unsigned)stats.rx_errors, (unsigned)stats.tx_frames,
+		  (unsigned)stats.tx_dropped, (unsigned)stats.tx_errors);
 
 	now = osKernelGetTickCount();
 	wd_due = now + GMAC_WATCHDOG_MS;
@@ -219,16 +229,36 @@ static void thr_boot(void *arg)
 		if ((uint32_t)(osKernelGetTickCount() - now) >= 1000U) {
 			now += 1000U;
 			dwc_eqos_get_stats(port, &stats);
-			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u\n",
+			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u\n",
 				  port,
 				  (unsigned)stats.rx_frames,
 				  (unsigned)stats.rx_dropped,
 				  (unsigned)stats.rx_errors,
-				  (unsigned)stats.tx_frames);
+				  (unsigned)stats.tx_frames,
+				  (unsigned)stats.tx_dropped,
+				  (unsigned)stats.tx_errors);
 		}
 		(void)osDelay(1);
 	}
 }
+
+#ifdef CONFIG_SHELL
+/* cherrysh_init() MUST run from task context after the scheduler is up
+ * (S4 spec §3.3.2 - the RX interrupt it arms ends in a FromISR wake). */
+static void thr_shellboot(void *arg)
+{
+	(void)arg;
+
+	if (cherrysh_init() == 0) {
+		board_log("shell: READY\n");
+	} else {
+		board_log("shell: FAIL\n");
+	}
+	for (;;) {
+		(void)osDelay(0x7fffffffU);
+	}
+}
+#endif
 
 int main(void)
 {
@@ -237,7 +267,19 @@ int main(void)
 	uart_early_init();
 	gicv3_init();
 
+#ifdef CONFIG_GDB_STUB
+	/* Same slot as every other app: the stub owns the dbgport before
+	 * anything can trap (RSP rides the shared console UART via the oslab
+	 * raw-TCP bridge - the gdb-registers comparison rounds attach here). */
+	gdb_glue_init();
+#endif
+
 	(void)osKernelInitialize();
+#ifdef CONFIG_SHELL
+	(void)osThreadNew(thr_shellboot, NULL,
+			  &(osThreadAttr_t){ .name = "shellboot",
+					     .priority = osPriorityNormal });
+#endif
 	(void)osThreadNew(thr_boot, NULL,
 			  &(osThreadAttr_t){ .name = "boot",
 					     .priority = osPriorityNormal });

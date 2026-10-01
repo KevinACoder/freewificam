@@ -226,7 +226,9 @@
  * "legacy" format and not the 32-byte alternate/context descriptor.
  *
  * TX: des2 = frame length [13:0] | IOC [31], des3 = OWN [31] | FD [29] |
- *     LD [28] | frame length [14:0].
+ *     LD [28] | frame length [14:0]; after the writeback the frame length
+ *     keeps that position and [15] reports the error summary (the bit
+ *     positions are the upstream dwmac4_descs.h set).
  * RX: des2 = 0, des3 = OWN [31] | IOC [30] | BUF1V [24], and after the DMA
  *     writes the frame back the length appears in des3 [14:0] including FCS. */
 struct dwc_eqos_desc {
@@ -242,6 +244,8 @@ struct dwc_eqos_desc {
 #define DWC_EQOS_DESC_TX_FD			(1u << 29)
 #define DWC_EQOS_DESC_TX_LD			(1u << 28)
 #define DWC_EQOS_DESC_RX_BUF1V			(1u << 24)
+#define DWC_EQOS_DESC_TX_ERR			(1u << 15)	/* writeback:
+						 error summary */
 #define DWC_EQOS_DESC_RX_LEN_MASK		0x7fffu
 
 /* --- per-instance configuration ------------------------------------------- */
@@ -306,6 +310,7 @@ struct dwc_eqos_stats {
 	uint32_t rx_errors;	/* runt frames, bogus lengths */
 	uint32_t tx_frames;	/* descriptors armed */
 	uint32_t tx_dropped;	/* no descriptor became free in time */
+	uint32_t tx_errors;	/* writebacks with the error-summary bit set */
 	uint32_t dma_errors;	/* fatal bus errors seen in the status word */
 };
 

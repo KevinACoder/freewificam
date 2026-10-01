@@ -111,16 +111,29 @@ struct dwc_eqos_dev {
 };
 
 /* Per-instance state and DMA memory. Static, not allocated: the DMA needs
- * naturally-aligned, physically contiguous buffers, and on this board the
- * verified arrangement is plain .bss arrays with explicit cache maintenance
- * (the link script puts them in Normal cacheable memory, which is what the
- * flush/invalidate discipline assumes). */
+ * naturally-aligned, physically contiguous buffers.
+ *
+ * The descriptor rings live in the .dma_noc section - the 2MiB block the
+ * link script pins at 0x0c000000 and the MMU maps Normal non-cacheable
+ * (baremetal.ld / mmu.c). The upstream drivers reach the same property with
+ * dma_alloc_coherent; a 16-byte descriptor inside a 64-byte cache line
+ * cannot be maintained by hand, because arming one descriptor flushes the
+ * stale ARMED copy of its already-completed neighbours right over the DMA's
+ * writeback, and the completion sweep then waits forever on an OWN bit
+ * nothing will clear (the prior-work port ran only light lwiperf traffic and
+ * never hit the window - the iperf3 round did, ~700 frames in).
+ * Frame buffers stay in cacheable .bss: each is a whole multiple of cache
+ * lines and has a single software writer, so its flush/invalidate discipline
+ * is sound as-is. */
 static struct dwc_eqos_dev devs[DWC_EQOS_PORT_COUNT];
 
+#define DMA_NOC_SECTION \
+	__attribute__((section(".dma_noc"), aligned(DWC_EQOS_BUF_ALIGN)))
+
 static struct dwc_eqos_desc rx_rings[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_DESC_COUNT]
-	__attribute__((aligned(DWC_EQOS_BUF_ALIGN)));
+	DMA_NOC_SECTION;
 static struct dwc_eqos_desc tx_rings[DWC_EQOS_PORT_COUNT][DWC_EQOS_TX_DESC_COUNT]
-	__attribute__((aligned(DWC_EQOS_BUF_ALIGN)));
+	DMA_NOC_SECTION;
 static uint8_t rx_buffers[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_DESC_COUNT][DWC_EQOS_BUF_STRIDE]
 	__attribute__((aligned(DWC_EQOS_BUF_ALIGN)));
 static uint8_t tx_buffers[DWC_EQOS_PORT_COUNT][DWC_EQOS_TX_DESC_COUNT][DWC_EQOS_BUF_STRIDE]
@@ -133,6 +146,16 @@ static struct dwc_eqos_stage rx_stages[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_STAGE_CO
 static inline uint32_t eqos_rd(const struct dwc_eqos_dev *dev, unsigned int reg)
 {
 	return mmio_rd32(dev->base_addr + reg);
+}
+
+/* Descriptor OWN-grant barrier: every store to the (non-cacheable) ring must
+ * reach memory before the DMA is allowed to see the grant - before the end
+ * pointer register write on TX, and before the DMA's ring scan runs past the
+ * slot on RX. The per-descriptor cache flush this discipline used to rely on
+ * carried a dsb; the non-cacheable ring states it explicitly. */
+static inline void eqos_dsb_st(void)
+{
+	__asm__ __volatile__("dsb st" ::: "memory");
 }
 
 static inline void eqos_wr(const struct dwc_eqos_dev *dev, unsigned int reg,
@@ -360,7 +383,9 @@ static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx)
 	desc->des1 = 0;
 	desc->des2 = 0;
 	desc->des3 = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_RX_IOC | DWC_EQOS_DESC_RX_BUF1V;
-	cache_dcache_flush((uintptr_t)desc, sizeof(*desc));
+	/* No flush: the ring is in non-cacheable memory. The barrier keeps the
+	 * grant visible to the DMA only after the buffer address and length. */
+	eqos_dsb_st();
 }
 
 /* Start the channel. TX and RX are one DMA channel and one interrupt on this
@@ -474,14 +499,10 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 
 	eqos_set_macaddr_regs(dev, dev->macaddr);
 
-	/* Descriptor rings: static arrays made visible to the DMA with explicit
-	 * cache maintenance. */
+	/* Descriptor rings: static arrays in the non-cacheable DMA window, so
+	 * the memset alone is what the DMA sees. */
 	memset(dev->rx_ring, 0, DWC_EQOS_RX_DESC_COUNT * sizeof(struct dwc_eqos_desc));
 	memset(dev->tx_ring, 0, DWC_EQOS_TX_DESC_COUNT * sizeof(struct dwc_eqos_desc));
-	cache_dcache_flush((uintptr_t)dev->rx_ring,
-			   DWC_EQOS_RX_DESC_COUNT * sizeof(struct dwc_eqos_desc));
-	cache_dcache_flush((uintptr_t)dev->tx_ring,
-			   DWC_EQOS_TX_DESC_COUNT * sizeof(struct dwc_eqos_desc));
 
 	memset(dev->rx_in_flight, 1, DWC_EQOS_RX_DESC_COUNT);
 	dev->tx_head = 0;
@@ -548,7 +569,7 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 			continue;
 		}
 		desc = &dev->rx_ring[i];
-		cache_dcache_invalidate((uintptr_t)desc, sizeof(*desc));
+		/* No invalidate: non-cacheable ring, the read hits memory. */
 		if (desc->des3 & DWC_EQOS_DESC_OWN) {
 			continue;
 		}
@@ -591,9 +612,12 @@ static int eqos_tx_complete(struct dwc_eqos_dev *dev)
 			break;
 		}
 		desc = &dev->tx_ring[dev->tx_tail];
-		cache_dcache_invalidate((uintptr_t)desc, sizeof(*desc));
+		/* No invalidate: non-cacheable ring, the read hits memory. */
 		if (desc->des3 & DWC_EQOS_DESC_OWN) {
 			break;
+		}
+		if (desc->des3 & DWC_EQOS_DESC_TX_ERR) {
+			dev->stats.tx_errors++;
 		}
 		dev->tx_tail = (dev->tx_tail + 1) % DWC_EQOS_TX_DESC_COUNT;
 		freed++;
@@ -886,11 +910,14 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			desc->des1 = 0;
 			/* On this core the transmit descriptor carries the frame
 			 * length in des3 (as the rx writeback does) and the
-			 * completion-interrupt enable in des2 bit 31. */
+			 * completion-interrupt enable in des2 bit 31. No flush:
+			 * non-cacheable ring, the OWN grant is visible to the
+			 * DMA before the end pointer below moves. */
 			desc->des2 = DWC_EQOS_DESC_TX_IOC | (tx_len & 0x3fffu);
 			desc->des3 = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_TX_FD
 				   | DWC_EQOS_DESC_TX_LD | tx_len;
-			cache_dcache_flush((uintptr_t)desc, sizeof(*desc));
+			/* Grant reaches memory before the end pointer moves. */
+			eqos_dsb_st();
 
 			dev->tx_head = next;
 

@@ -100,6 +100,23 @@ SECTIONS
 	 * for. */
 	PROVIDE(__top_of_ram = __heap_end);
 
+	/* DMA descriptor window: the fixed 2MiB block at 0x0c000000, which
+	 * mmu.c maps Normal non-cacheable (the coherent-memory equivalent of
+	 * the upstream drivers' dma_alloc_coherent for descriptor rings).
+	 * NOLOAD and cleared by its owner at init; nothing is loaded here by
+	 * U-Boot. The image sections above must never reach this block and
+	 * this section must never leave it - both are asserted. */
+	. = 0x0c000000;
+	ASSERT(__heap_end <= 0x0c000000,
+	       "image (bss+stack+heap) reaches the dma_noc block")
+	__dma_noc_start = .;
+	.dma_noc (NOLOAD) : ALIGN(64) {
+		*(.dma_noc)
+	}
+	__dma_noc_end = .;
+	ASSERT(__dma_noc_end <= 0x0e000000,
+	       "dma_noc section overflows its 2MiB non-cacheable block")
+
 	/DISCARD/ : {
 		*(.comment)
 		*(.note*)
