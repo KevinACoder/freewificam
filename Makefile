@@ -414,6 +414,7 @@ LWIP_SRCS := \
 	$(LWIP_DIR)/src/core/ipv4/ip4_frag.c \
 	$(LWIP_DIR)/src/netif/ethernet.c \
 	$(LWIP_DIR)/src/apps/lwiperf/lwiperf.c \
+	os/lwip/ethnetif.c \
 	os/lwip/lwip_diag.c
 SRCS += $(LWIP_SRCS)
 
