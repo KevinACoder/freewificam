@@ -53,6 +53,19 @@ P7-2a moves it to the threadx base"
 /* The watchdog cadence the prior workspace's osTimer ran at. */
 #define GMAC_WATCHDOG_MS	100u
 
+/* P7-1b placeholder for the P7-1c lwIP feed: with no netif yet, the staging
+ * ring must still be drained or every background broadcast overflows it into
+ * the dropped counter (the ring is burst absorption, not a queue). The feed
+ * point becomes pbuf_alloc+netif->input in P7-1c. */
+static uint8_t drain_buf[DWC_EQOS_RX_BUF_SIZE];
+
+static void gmac_drain(unsigned int port)
+{
+	while (dwc_eqos_get_rx_frame_size(port) > 0U) {
+		(void)dwc_eqos_read_frame(port, drain_buf, sizeof(drain_buf));
+	}
+}
+
 /* Bring one GMAC port up to "link up, channel running". Returns 0 on
  * success; every failure prints its own anchor line first. */
 static int gmac_bring_up(unsigned int port)
@@ -105,6 +118,10 @@ static int gmac_bring_up(unsigned int port)
 	(void)dwc_eqos_control(port, DWC_EQOS_CONTROL_TX, 1);
 	(void)dwc_eqos_control(port, DWC_EQOS_CONTROL_RX, 1);
 	board_log("gmac%u: channel start\n", (unsigned)port);
+
+	/* Golden dump (P7-1b 判据 1): post-init CRU/GRF readback against the
+	 * lab's U-Boot-leftover golden. */
+	eqos_board_golden_dump(port);
 
 	return 0;
 }
@@ -183,6 +200,8 @@ int main(void)
 	wd_due = now + GMAC_WATCHDOG_MS;
 	for (;;) {
 		sys_check_timeouts();
+
+		gmac_drain(port);
 
 		if ((int32_t)(sys_now() - wd_due) >= 0) {
 			wd_due = sys_now() + GMAC_WATCHDOG_MS;

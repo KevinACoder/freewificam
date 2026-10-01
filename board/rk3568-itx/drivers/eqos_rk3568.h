@@ -73,6 +73,12 @@ void rk3568_gmac_soc_swr_quirk(const struct dwc_eqos_plat *plat, int enter);
  * port's plat is never handed to the driver, so nothing touches it. */
 const struct dwc_eqos_plat *eqos_board_plat(unsigned int index);
 
+/* Post-init readback of the port's CRU/GRF configuration, one log line:
+ * the P7-1b golden dump (spec FR-4/判据 1) - the values must equal the
+ * U-Boot-leftover golden measured in the lab ([LAB] 事实 2), proving the
+ * explicit re-initialization is idempotent with the verified state. */
+void eqos_board_golden_dump(unsigned int index);
+
 /* The MDIO pair the PHY driver borrows (ctx = the port index as a value). */
 int32_t eqos_board_mdio_read(void *ctx, uint8_t phy_addr, uint8_t reg_addr,
 			     uint16_t *data);

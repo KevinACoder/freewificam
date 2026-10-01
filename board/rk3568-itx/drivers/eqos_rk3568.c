@@ -40,6 +40,7 @@
 #include <stdint.h>
 
 #include "cmsis_os2.h"
+#include "log.h"
 
 #include "mmio.h"
 
@@ -251,6 +252,34 @@ const struct dwc_eqos_plat *eqos_board_plat(unsigned int index)
 		return NULL;
 	}
 	return gmac_plats[index];
+}
+
+void eqos_board_golden_dump(unsigned int index)
+{
+	const struct rk3568_gmac_soc *soc;
+	unsigned int clksel_off, clkgate_off;
+
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	soc = gmac_plats[index]->soc_data;
+
+	/* The CRU registers are the port's own halves of shared CON registers:
+	 * read the whole word and print it - the golden comparison looks at
+	 * this port's bits (con31/con33 must read all-zero, the gate bits of
+	 * clkgate_con15/17 must read 0 = unguarded). */
+	clksel_off = soc->clksel_con_off;
+	clkgate_off = soc->clkgate_con_off;
+	board_log("golden: gmac%u clksel[0x%x]=0x%08x clkgate[0x%x]=0x%08x"
+		  " grf[0x%x]=0x%08x grf[0x%x]=0x%08x\n",
+		  index, clksel_off,
+		  (unsigned)mmio_rd32(RK3568_CRU_BASE + clksel_off),
+		  clkgate_off,
+		  (unsigned)mmio_rd32(RK3568_CRU_BASE + clkgate_off),
+		  soc->grf_maccon0_off,
+		  (unsigned)mmio_rd32(RK3568_GRF_BASE + soc->grf_maccon0_off),
+		  soc->grf_maccon1_off,
+		  (unsigned)mmio_rd32(RK3568_GRF_BASE + soc->grf_maccon1_off));
 }
 
 /* --- MDIO borrow ------------------------------------------------------------ */
