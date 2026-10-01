@@ -261,6 +261,7 @@ SRCS += $(USB_CORE_SRCS) $(USB_HCD_SRCS) $(USB_ADAPTER_SRCS)
 
 USB_CFLAGS := -Iport/adapters/cherryusb -Iport/adapters/usb \
 	-I$(CHY_DIR)/core -I$(CHY_DIR)/common -I$(CHY_DIR)/class/hub \
+	-I$(CHY_DIR)/class/msc \
 	-I$(CHY_DIR)/port/xhci -I$(CHY_DIR)/port/ehci \
 	-include os/baremetal/minilibc.h \
 	-DCONFIG_USBHOST_XHCI=$(if $(filter y,$(CONFIG_USBHOST_XHCI)),1,0) \
@@ -269,15 +270,16 @@ ifeq ($(CONFIG_USBHOST_EHCI),y)
 USB_CFLAGS += -DCONFIG_USBHOST_EHCI=1
 endif
 
-# MSC (P5-d, SPEC S5 §3.7): the minimal BOT class + its shell command set.
-# The commands are the acceptance toolbox, so the TU joins with the shell
-# flag set like usbh_cmds.o.
+# MSC (P5-e, user ruling 2026-10-01: adapt the upstream class, no local BOT
+# implementation): cherryusb class/msc + our adapter (shell commands are the
+# acceptance toolbox, so the adapter TU joins with the shell flag set).
 CONFIG_USBHOST_MSC ?= n
 ifeq ($(CONFIG_USBHOST_MSC),y)
 ifeq ($(filter y,$(CONFIG_USBHOST_XHCI)),)
 $(error CONFIG_USBHOST_MSC=y currently requires the xHCI build (P5-d slice))
 endif
 USB_CFLAGS += -DCONFIG_USBHOST_MSC=1
+SRCS += $(CHY_DIR)/class/msc/usbh_msc.c
 SRCS += port/adapters/cherryusb/usbh_msc.c
 $(BUILD)/port/adapters/cherryusb/usbh_msc.o: \
 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
@@ -324,7 +326,7 @@ modules:
 	@if [ -d third-party/cherryusb ]; then \
 		git -C third-party/cherryusb sparse-checkout set --no-cone \
 			'/*' '!/*/' '/core/' '/common/' \
-			'/class/' '!/class/*/' '/class/hub/' \
+			'/class/' '!/class/*/' '/class/hub/' '/class/msc/' \
 			'/port/' '!/port/*/' '/port/ehci/' \
 			'/port/xhci/' '!/port/xhci/*/' \
 			'/osal/' || \
