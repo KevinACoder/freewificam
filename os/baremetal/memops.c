@@ -156,3 +156,31 @@ char *strncpy(char *dest, const char *src, size_t n)
 	}
 	return dest;
 }
+
+char *strstr(const char *haystack, const char *needle)
+{
+	size_t nlen = strlen(needle);
+
+	if (nlen == 0) {
+		return (char *)(uintptr_t)haystack;
+	}
+	for (; *haystack != '\0'; haystack++) {
+		if (strncmp(haystack, needle, nlen) == 0) {
+			return (char *)(uintptr_t)haystack;
+		}
+	}
+	return 0;
+}
+
+char *strrchr(const char *s, int c)
+{
+	const char *last = 0;
+	char b = (char)c;
+
+	for (; *s != '\0'; s++) {
+		if (*s == b) {
+			last = s;
+		}
+	}
+	return (b == '\0') ? (char *)(uintptr_t)s : (char *)(uintptr_t)last;
+}

@@ -28,6 +28,7 @@
 #include "tx_api.h"
 #include "tx_thread.h"
 #include "tx_event_flags.h"
+#include "tx_mutex.h"
 
 #include "cmsis_os2.h"
 
@@ -467,4 +468,76 @@ osStatus_t osDelay(uint32_t ticks)
 	}
 	return tx_thread_sleep((ULONG)ticks) == TX_SUCCESS ? osOK :
 							     osError;
+}
+
+/* --- mutex (S6/linuxkpi 扩面, 2026-10-01: 首个消费方 linuxkpi 扩入; ------------------
+ * [S7a] §3.3.3 同族先例 - "IPC 类本轮不提供"按消费者逐件扩入). The control
+ * block comes off the tlsf heap (the thread-slot pool's allocator); priority
+ * inheritance is ThreadX TX_INHERIT, matching what a passive-level Linux
+ * mutex wants. */
+
+osMutexId_t osMutexNew(const osMutexAttr_t *attr)
+{
+	TX_MUTEX *mutex = pvPortMalloc(sizeof(TX_MUTEX));
+
+	if (mutex == NULL) {
+		return NULL;
+	}
+	/* Priority inheritance always on (TX_INHERIT) - what a passive-level
+	 * Linux mutex wants; recursive acquisition is ThreadX-native (the
+	 * osMutexRecursive attr bit needs no switch here). */
+	if (tx_mutex_create(mutex, (CHAR *)(uintptr_t)((attr != NULL &&
+				    attr->name != NULL) ?
+					   attr->name :
+					   "cmsis_mutex"),
+			    TX_INHERIT) != TX_SUCCESS) {
+		vPortFree(mutex);
+		return NULL;
+	}
+	return (osMutexId_t)mutex;
+}
+
+osStatus_t osMutexAcquire(osMutexId_t mutex_id, uint32_t timeout)
+{
+	TX_MUTEX *mutex = (TX_MUTEX *)mutex_id;
+
+	if ((mutex == NULL) || (mutex->tx_mutex_id != TX_MUTEX_ID)) {
+		return osErrorParameter;
+	}
+	if (tx_thread_identify() == NULL) {
+		/* no thread context: a non-blocking acquire is the only
+		 * legal shape */
+		if (timeout != 0U) {
+			return osErrorParameter;
+		}
+		return tx_mutex_get(mutex, TX_NO_WAIT) == TX_SUCCESS ?
+				       osOK :
+				       osErrorResource;
+	}
+	return tx_mutex_get(mutex, (ULONG)timeout) == TX_SUCCESS ? osOK :
+								   osErrorResource;
+}
+
+osStatus_t osMutexRelease(osMutexId_t mutex_id)
+{
+	TX_MUTEX *mutex = (TX_MUTEX *)mutex_id;
+
+	if ((mutex == NULL) || (mutex->tx_mutex_id != TX_MUTEX_ID)) {
+		return osErrorParameter;
+	}
+	return tx_mutex_put(mutex) == TX_SUCCESS ? osOK : osErrorResource;
+}
+
+osStatus_t osMutexDelete(osMutexId_t mutex_id)
+{
+	TX_MUTEX *mutex = (TX_MUTEX *)mutex_id;
+
+	if ((mutex == NULL) || (mutex->tx_mutex_id != TX_MUTEX_ID)) {
+		return osErrorParameter;
+	}
+	if (tx_mutex_delete(mutex) != TX_SUCCESS) {
+		return osErrorResource;
+	}
+	vPortFree(mutex);
+	return osOK;
 }

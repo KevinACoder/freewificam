@@ -303,6 +303,46 @@ $(BUILD)/port/adapters/cherryusb/usbh_cmds.o: \
 endif
 endif
 
+# linuxkpi (SPEC S6/linuxkpi §4/P6-a): the Linux kernel API compat layer
+# over the cherryusb engine (components/linuxkpi) + the claim hook and the
+# usbkpi shell exit (port/adapters/linuxkpi) + the acceptance driver's
+# RTOS shell (app/lkpi_udisk). Needs the USB host stack (it submits into
+# usbh) and the shell (the acceptance toolbox). Include order: cherryusb
+# dirs first (usb_def.h sets USB_DEF_H so the descriptor structs are
+# shared), then the linuxkpi headers for <linux/*.h>.
+CONFIG_LINUXKPI ?= n
+ifeq ($(filter $(CONFIG_LINUXKPI),y n),)
+$(error CONFIG_LINUXKPI must be y or n, got '$(CONFIG_LINUXKPI)')
+endif
+ifeq ($(CONFIG_LINUXKPI),y)
+ifeq ($(filter y,$(CONFIG_USBHOST)),)
+$(error CONFIG_LINUXKPI=y requires CONFIG_USBHOST=y)
+endif
+ifeq ($(filter y,$(CONFIG_SHELL)),)
+$(error CONFIG_LINUXKPI=y requires CONFIG_SHELL=y (the acceptance toolbox))
+endif
+LKPI_DIR := components/linuxkpi
+LKPI_SRCS := \
+	$(LKPI_DIR)/linuxkpi_core.c \
+	$(LKPI_DIR)/linuxkpi_usb.c \
+	$(LKPI_DIR)/fw_registry.c \
+	port/adapters/linuxkpi/lkpi_usbh_class.c \
+	port/adapters/linuxkpi/usbkpi_cmds.c \
+	app/lkpi_udisk/lkpi_udisk_core.c \
+	app/lkpi_udisk/lkpi_udisk_rtos.c
+SRCS += $(LKPI_SRCS)
+CFLAGS += -DCONFIG_LINUXKPI=1
+# TX include set rides along: the impl layer embeds ThreadX primitives
+# (semaphores/timers) exactly like the cherryusb osal does (FR-3: tx
+# headers stay inside adapter/implementation units).
+LKPI_CFLAGS := $(USB_CFLAGS) $(TX_CFLAGS) -I$(LKPI_DIR)/include \
+	-I$(LKPI_DIR) -include os/baremetal/minilibc.h
+$(BUILD)/components/linuxkpi/%.o: EXTRAFLAGS := $(LKPI_CFLAGS)
+$(BUILD)/port/adapters/linuxkpi/%.o: \
+	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/app/lkpi_udisk/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+endif
+
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
 	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
