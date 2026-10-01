@@ -109,9 +109,13 @@ struct usbh_msc_dev {
 	uint8_t w_pattern;
 
 	uint8_t inuse;
-	uint8_t cbw[MSC_CBW_SIZE];
-	uint8_t csw[MSC_CSW_SIZE];
-	uint8_t sense[SCSI_SENSE_DATA_SIZE];
+	/* every byte handed to the xHCI port must be 64B aligned
+	 * (xhci_submit_internal asserts it - the bare struct offset is not,
+	 * board-proven 2026-10-01); data below carries the 64 KiB alignment
+	 * that keeps a 32 KiB chunk inside one 64 K window. */
+	uint8_t cbw[MSC_CBW_SIZE] __attribute__((aligned(64)));
+	uint8_t csw[MSC_CSW_SIZE] __attribute__((aligned(64)));
+	uint8_t sense[SCSI_SENSE_DATA_SIZE] __attribute__((aligned(64)));
 	uint8_t data[MSC_CHUNK_BYTES] __attribute__((aligned(MSC_CHUNK_ALIGN)));
 };
 
@@ -306,10 +310,10 @@ static int msc_read_capacity(struct usbh_msc_dev *msc)
 {
 	static const uint8_t cb[10] = { SCSI_READ_CAPACITY10, 0, 0, 0, 0, 0,
 					0, 0, 0, 0 };
-	uint8_t cap[SCSI_CAPACITY_DATA_SIZE];
+	uint8_t *cap = msc->data; /* urb buffers must be the 64B-aligned ones */
 	int ret;
 
-	memset(cap, 0, sizeof(cap));
+	memset(cap, 0, SCSI_CAPACITY_DATA_SIZE);
 	ret = msc_command(msc, msc_test_unit_ready);
 	if (ret != 0) {
 		return ret;
@@ -333,11 +337,11 @@ static int msc_inquiry(struct usbh_msc_dev *msc)
 {
 	static const uint8_t cb[6] = { SCSI_INQUIRY, 0, 0, 0,
 				       SCSI_INQUIRY_DATA_SIZE, 0 };
-	uint8_t inq[SCSI_INQUIRY_DATA_SIZE];
+	uint8_t *inq = msc->data; /* urb buffers must be the 64B-aligned ones */
 	uint32_t i;
 	int ret;
 
-	memset(inq, 0, sizeof(inq));
+	memset(inq, 0, SCSI_INQUIRY_DATA_SIZE);
 	ret = msc_bot_xfer(msc, cb, 6U, 1U, inq, SCSI_INQUIRY_DATA_SIZE);
 	if (ret != 0) {
 		return ret;
