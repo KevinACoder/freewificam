@@ -25,8 +25,13 @@ CherryUSB 上游差异的**唯一真值源**（submodule 工作树禁改；差�
 | `0001-ehci-clear-iaa-worklist-flag-with-the-qh-urb.patch` | EHCI IAA worklist 修复（ehci_qh_free 清 remove_in_iaad/killed + IRQ 扫描条件加 qh->urb）。注意：前作 NOTICE.md:282 记载该思路被社区定性不对（600s 丢完成病根另寻），本仓仅随栈携带供 P5c 对照；在 master 基座上验证可干净应用（2026-10-01）。 |
 | `0002-xhci-host-controller-port.patch` | **仅新增两文件** `port/xhci/usb_hc_xhci.c`（2650 行）+ `usb_hc_xhci.h`（386 行）：NetBSD xhci.c rev 1.188.2.4 寄存器序列 × vendored usb_hc_ehci.c 异步 URB 契约，HS/FS only。 |
 | `0003-xhci-bulk-avg-trb-len-zero.patch` | bulk 端点 avg TRB length MPS(512)→0，对齐 Linux xhci-mem.c:1388（bulk 的 max_esit_payload=0）。P5-e 板测：512 与 0 吞吐分毫不差（4.0MB/s），该字段非瓶颈但语义对齐保留。 |
-| `0004-xhci-td-latency-probe.patch` | **temporary（吞吐收口后撤销）**：per-TD doorbell→event 时延探针（cntvct 24MHz），`usbh stall` 输出 td-lat 行。P5-e 判别工具：CBW 全链 123µs（软件清白）；修复后靶盘 DATA TD 读 1555µs/写 976µs。 |
 | `0005-xhci-bulk-ep-type-decode-fix.patch` | **P5-e 吞吐根因修复**：`xhci_ep_type_of()` 的 bmAttributes 解码反了（0002 原文把 attr==0 当 bulk、其余全当 intr，USB 实为 0=control/2=bulk）——bulk 端点被编程为 Interrupt 类型（3/7），Interval=0 下每微帧一事务 = 4.096MB/s 天花板。改 switch(attr)：2→BulkOut(2)/BulkIn(6)、3→Intr、1→Isoch、0→Control。**不改** `usb_hc_xhci.h` 类型表——spec Table 6-9（xhci-spec.txt:22696）+ Linux xhci.h 双源证实原表正确。板测：读 37.3/写 24.2 MB/s（run.md 修复轮）。 |
+
+> 已撤销：`0004-xhci-td-latency-probe.patch`（P5-e temporary TD 时延探针，
+> 判别完成后 2026-10-01 撤销；证据存 runs/20261001-xhci-throughput/。注意撤销时
+> 补丁文件与树内实况已分叉——探针的总线维度修复 `[8][16]→[4U*8U]` 当时直接改树
+> 未回填补丁，最终以"从 0002+0003+0005 链重建无探针文件"收口，此教训入
+> issues/2026-10-01-xhci-port-bulk-ep-type-decode-bug.md）。
 
 ## 重放（构建期，Makefile `modules` target 同款）
 
