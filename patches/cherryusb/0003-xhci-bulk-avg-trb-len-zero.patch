@@ -1,0 +1,20 @@
+--- a/port/xhci/usb_hc_xhci.c
++++ b/port/xhci/usb_hc_xhci.c
+@@ -708,10 +708,14 @@
+ 		 EP_CTX_1_MAX_BURST_SET(burst);
+ 	epc[2] = ((uint32_t)(uintptr_t)ring->trbs & ~0xFU) | EP_CTX_2_CYCLE;
+ 	epc[3] = 0U;
+-	/* avg TRB length: bulk = MPS, otherwise 8 (spec 6.2.3 hint, word 4
+-	 * - the first port had it in the wrong word entirely) */
++	/* avg TRB length: bulk = 0, otherwise 8.  A nonzero value here is a
++	 * per-microframe budget on DWC3 hosts - MPS (512) capped bulk at
++	 * exactly 512B/125us = 4.096 MB/s (board-measured 4.0, P5-e).  Linux
++	 * xhci-mem.c:1388 xhci_get_max_esit_payload() returns 0 for control
++	 * and bulk, so avg_trb_len lands 0 for bulk EPs there (control gets
++	 * the xHCI 1.0 hint 8 via the separate override). */
+ 	epc[4] = EP_CTX_4_AVG_TRB_LEN(
+-		((ep->bmAttributes & 0x3U) == 0U) ? ep_mps : 8U);
++		((ep->bmAttributes & 0x3U) == 0U) ? 0U : 8U);
+ 
+ 	xhci_dcache_clean(dev->input_ctx, words * (2U + XHCI_MAX_DCI) * 4U);
+ 

@@ -94,6 +94,16 @@ void usbh_console_printf(const char *fmt, ...);
 #define CONFIG_USBHOST_CONTROL_TRANSFER_TIMEOUT	500
 #endif
 
+/* MSC (upstream class/msc consumer): per-command sync-URB timeout and the
+ * instance pool.  Two covers the panel reality (GL-hub U-disk + the bus2
+ * Realtek fake CD). */
+#ifndef CONFIG_USBHOST_MSC_TIMEOUT
+#define CONFIG_USBHOST_MSC_TIMEOUT		5000
+#endif
+#ifndef CONFIG_USBHOST_MAX_MSC_CLASS
+#define CONFIG_USBHOST_MAX_MSC_CLASS	2
+#endif
+
 /* Two EHCI buses link today; the arrays are sized for the full four-port
  * layout (xHCI instances join on their own feat line). */
 #ifndef CONFIG_USBHOST_MAX_BUS
