@@ -334,3 +334,51 @@ int atoi(const char *s)
 	}
 	return sign * v;
 }
+
+/* CherryUSB's lsusb (usbh_core.c) parses "bus:dev" and "vid:pid" arguments
+ * with strtol in bases 10 and 16 (S5/P5-a link surface). Base 0 honours the
+ * 0x/0X prefix; 2..36 are the C semantics; anything else fails without
+ * consuming digits. Whitespace/sign skipping matches atoi above. */
+long strtol(const char *s, char **endptr, int base)
+{
+	long v = 0;
+	int sign = 1;
+	int d;
+
+	while (*s == ' ' || (*s >= '\t' && *s <= '\r')) {
+		s++;
+	}
+	if (*s == '-') {
+		sign = -1;
+		s++;
+	} else if (*s == '+') {
+		s++;
+	}
+	if ((base == 0 || base == 16) && s[0] == '0' &&
+	    (s[1] == 'x' || s[1] == 'X')) {
+		s += 2;
+		base = (base == 0) ? 16 : base;
+	} else if (base == 0) {
+		base = (*s == '0') ? 8 : 10;
+	}
+	for (;;) {
+		if (*s >= '0' && *s <= '9') {
+			d = *s - '0';
+		} else if (*s >= 'a' && *s <= 'z') {
+			d = *s - 'a' + 10;
+		} else if (*s >= 'A' && *s <= 'Z') {
+			d = *s - 'A' + 10;
+		} else {
+			break;
+		}
+		if (d >= base) {
+			break;
+		}
+		v = v * base + d;
+		s++;
+	}
+	if (endptr != 0) {
+		*(char **)endptr = (char *)s;
+	}
+	return sign * v;
+}

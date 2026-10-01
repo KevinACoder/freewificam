@@ -27,6 +27,7 @@ char *strncpy(char *dest, const char *src, size_t n);
 size_t strlen(const char *s);
 size_t strnlen(const char *s, size_t maxlen);
 int atoi(const char *s);
+long strtol(const char *s, char **endptr, int base);
 
 /* --- minilibc.c: printf integer subset -------------------------------------- */
 

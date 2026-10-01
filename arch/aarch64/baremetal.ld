@@ -60,6 +60,17 @@ SECTIONS
 	.vsymtab : { KEEP(*(VSymTab)) }
 	__vsymtab_end = .;
 
+	/* CherryUSB host class registry (S5/cherryusb-xhci-port §3.3): the
+	 * hub class (and later MSC) publishes struct usbh_class_info here
+	 * (CLASS_INFO_DEFINE, usbh_core.h:76); usbh_initialize() walks the
+	 * boundaries to match enumerated interfaces against class drivers.
+	 * Same KEEP discipline as FSymTab - nothing references the entries
+	 * by address. */
+	. = ALIGN(8);
+	__usbh_class_info_start__ = .;
+	.usbh_class_info : { KEEP(*(.usbh_class_info)) }
+	__usbh_class_info_end__ = .;
+
 	.bss (NOLOAD) : ALIGN(16) {
 		__bss_start = .;
 		*(.bss .bss.*)

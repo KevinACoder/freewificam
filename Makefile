@@ -38,6 +38,15 @@ BUILD     := build/baremetal-$(CONFIG)
 TARGET    := $(BUILD)/baremetal
 TFTP_FILE := /mnt/d/tftpboot/rtos.bin
 
+# App entry by feature line (S5/cherryusb-xhci-port §4/P5-a): the USB
+# config swaps the smoke main for the enumeration bring-up. Resolved
+# before SRCS (immediate expansion); the USB source wiring lives in the
+# USB block below.
+APP_MAIN := app/hello_world/main.c
+ifeq ($(CONFIG_USBHOST),y)
+APP_MAIN := app/cherryusb_enum/main.c
+endif
+
 # OS layer selection (SPEC S3/threadx-up-boot §3.1.3): baremetal keeps the
 # timebase-only cmsis2 shim; threadx swaps in the ThreadX UP kernel and the
 # cmsis2 baremetal shim leaves the image (cmsis2_threadx.c joins in T3).
@@ -57,7 +66,7 @@ SRCS := \
 	os/baremetal/tick.c \
 	board/$(BOARD)/drivers/uart.c \
 	board/$(BOARD)/param.c \
-	app/hello_world/main.c
+	$(APP_MAIN)
 
 ifneq ($(CONFIG_OS),threadx)
 SRCS += os/cmsis2/cmsis2_shim.c
@@ -201,9 +210,81 @@ TX_CFLAGS := -I$(TX_DIR)/common/inc -I$(TX_PORT_DIR)/inc -Ios/threadx \
 # Pattern-scoped: kernel, port, adapter AND the threadx cmsis2 shim compile
 # with the tx flag set on top of the global CFLAGS; everything else (incl.
 # tlsf) never sees it - tx headers stay inside the adapter units (FR-3).
-$(BUILD)/third-party/%.o: EXTRAFLAGS := $(TX_CFLAGS)
+# ThreadX-scoped on purpose: a bare third-party/%.o pattern would swallow
+# the cherryusb objects the USB block below adds (and its longer stem would
+# win the specificity race over their own rule).
+$(BUILD)/third-party/threadx/%.o: EXTRAFLAGS := $(TX_CFLAGS)
 $(BUILD)/os/threadx/%.o: EXTRAFLAGS := $(TX_CFLAGS)
 $(BUILD)/os/cmsis2/%.o: EXTRAFLAGS := $(TX_CFLAGS)
+endif
+
+# CherryUSB host stack (SPEC S5/cherryusb-xhci-port §3.3/§3.4): the vendored
+# core + hub class + the xHCI port (patches/cherryusb/0002, replayed by
+# `make modules`) + the adapter layer (port/adapters/cherryusb) + the
+# shared domain sequence (port/adapters/usb). ThreadX-only (the osal is
+# ThreadX-native). Include order is load-bearing: port/adapters/cherryusb
+# FIRST so the shadow usb_config.h beats upstream's config template; the
+# tx include paths ride EXTRAFLAGS on usb_osal_threadx.o only (FR-3).
+CONFIG_USBHOST ?= n
+ifeq ($(filter $(CONFIG_USBHOST),y n),)
+$(error CONFIG_USBHOST must be y or n, got '$(CONFIG_USBHOST)')
+endif
+ifeq ($(CONFIG_USBHOST),y)
+ifneq ($(CONFIG_OS),threadx)
+$(error CONFIG_USBHOST=y requires CONFIG_OS=threadx (the cherryusb osal is ThreadX-native))
+endif
+CONFIG_USBHOST_XHCI ?= n
+ifeq ($(filter $(CONFIG_USBHOST_XHCI),y n),)
+$(error CONFIG_USBHOST_XHCI must be y or n, got '$(CONFIG_USBHOST_XHCI)')
+endif
+CONFIG_USBHOST_XHCI_START_NUM ?= 1
+
+CHY_DIR := third-party/cherryusb
+USB_CORE_SRCS := $(CHY_DIR)/core/usbh_core.c $(CHY_DIR)/class/hub/usbh_hub.c
+USB_HCD_SRCS :=
+ifeq ($(CONFIG_USBHOST_XHCI),y)
+USB_HCD_SRCS += $(CHY_DIR)/port/xhci/usb_hc_xhci.c
+endif
+# EHCI joins at P5c (flip CONFIG_USBHOST_EHCI in the config; the adapter
+# halves are already keyed on it).
+CONFIG_USBHOST_EHCI ?= n
+USB_ADAPTER_SRCS := \
+	port/adapters/cherryusb/usb_osal_threadx.c \
+	port/adapters/cherryusb/usbh_glue.c \
+	port/adapters/cherryusb/usbh_platform.c \
+	port/adapters/usb/usb_domain.c \
+	port/adapters/usb/usb_host_cherryusb.c
+ifeq ($(CONFIG_USBHOST_EHCI),y)
+USB_HCD_SRCS += $(CHY_DIR)/port/ehci/usb_hc_ehci.c
+endif
+SRCS += $(USB_CORE_SRCS) $(USB_HCD_SRCS) $(USB_ADAPTER_SRCS)
+
+USB_CFLAGS := -Iport/adapters/cherryusb -Iport/adapters/usb \
+	-I$(CHY_DIR)/core -I$(CHY_DIR)/common -I$(CHY_DIR)/class/hub \
+	-I$(CHY_DIR)/port/xhci -I$(CHY_DIR)/port/ehci \
+	-include os/baremetal/minilibc.h \
+	-DCONFIG_USBHOST_XHCI=$(if $(filter y,$(CONFIG_USBHOST_XHCI)),1,0) \
+	-DCONFIG_USBHOST_XHCI_START_NUM=$(CONFIG_USBHOST_XHCI_START_NUM)
+ifeq ($(CONFIG_USBHOST_EHCI),y)
+USB_CFLAGS += -DCONFIG_USBHOST_EHCI=1
+endif
+
+# Exact-file rules win over the shell block's port/% pattern; the osal
+# additionally gets the tx include set (tx_api.h). The cmds file is the
+# shell-facing toolbox - it joins only with the shell (csh.h headers) and
+# rides the shell flag set on top.
+$(BUILD)/port/adapters/cherryusb/usb_osal_threadx.o: \
+	EXTRAFLAGS := $(USB_CFLAGS) $(TX_CFLAGS)
+$(BUILD)/port/adapters/cherryusb/usbh_glue.o: EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/port/adapters/cherryusb/usbh_platform.o: EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/port/adapters/usb/%.o: EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/third-party/cherryusb/%.o: EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/app/cherryusb_enum/main.o: EXTRAFLAGS := $(CSH_CFLAGS) $(USB_CFLAGS)
+ifeq ($(CONFIG_SHELL),y)
+SRCS += port/adapters/cherryusb/usbh_cmds.c
+$(BUILD)/port/adapters/cherryusb/usbh_cmds.o: \
+	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
+endif
 endif
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
@@ -214,7 +295,36 @@ LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 	-Wl,--build-id=none -Wl,--no-warn-rwx-segments -Wl,-Map=$(TARGET).map
 
 .DEFAULT_GOAL := all
-.PHONY: all gates check deploy clean FORCE
+.PHONY: all gates check deploy clean modules FORCE
+
+# Submodule materialization (patches/cherryusb/README.md): update, set the
+# cherryusb sparse-checkout (non-cone; the phytium blob subdir and the
+# demo/tests/docs bulk stay out), then replay every patches/<comp>/*.patch
+# into its submodule work tree. Idempotent: an already-applied patch fails
+# apply --check and is reported "kept". A fresh environment that cannot
+# fetch the cherryusb pin (upstream dev force-pushed it away) seeds per
+# patches/cherryusb/README.md first.
+modules:
+	@git submodule update --init third-party/threadx third-party/cherryusb || \
+		echo 'note: submodule update failed; see patches/cherryusb/README.md (pin seeding)'
+	@if [ -d third-party/cherryusb ]; then \
+		git -C third-party/cherryusb sparse-checkout set --no-cone \
+			'/*' '!/*/' '/core/' '/common/' \
+			'/class/' '!/class/*/' '/class/hub/' \
+			'/port/' '!/port/*/' '/port/ehci/' \
+			'/port/xhci/' '!/port/xhci/*/' \
+			'/osal/' || \
+			echo 'note: cherryusb sparse-checkout not set (kept full checkout)'; \
+	fi
+	@for p in patches/*/*.patch; do \
+		[ -e "$$p" ] || continue; \
+		comp=$$(printf '%s' "$$p" | cut -d/ -f2); \
+		if git -C third-party/$$comp apply --check "$$PWD/$$p" 2>/dev/null; then \
+			git -C third-party/$$comp apply "$$PWD/$$p" && echo "applied $$p"; \
+		else \
+			echo "kept    $$p (already applied or inapplicable)"; \
+		fi; \
+	done
 
 all: $(TARGET).bin
 

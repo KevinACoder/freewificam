@@ -1,0 +1,28 @@
+diff --git a/port/ehci/usb_hc_ehci.c b/port/ehci/usb_hc_ehci.c
+index 58612e53..75c45899 100644
+--- a/port/ehci/usb_hc_ehci.c
++++ b/port/ehci/usb_hc_ehci.c
+@@ -115,6 +115,14 @@ static void ehci_qh_free(struct usbh_bus *bus, struct ehci_qh_hw *qh)
+         qh->urb->hcpriv = NULL;
+         qh->urb = NULL;
+     }
++    /* The QH returns to the pool here.  remove_in_iaad is the IAA-pass
++     * worklist flag: left set, the IAA loop would call
++     * ehci_urb_waitup(qh->urb) with a NULL urb (observed on the board as
++     * a data abort inside _txe_semaphore_put via a garbage qh->waitsem),
++     * and a recycled QH would carry the flag into its next transfer and
++     * wake that one early.  killed is reset for the same reason. */
++    qh->remove_in_iaad = 0;
++    qh->killed = 0;
+     qtd = EHCI_ADDR2QTD(qh->first_qtd);
+ 
+     while (qtd) {
+@@ -1512,7 +1520,7 @@ void USBH_IRQHandler(uint8_t busid)
+     if (usbsts & EHCI_USBSTS_IAA) {
+         for (uint8_t index = 0; index < CONFIG_USB_EHCI_QH_NUM; index++) {
+             struct ehci_qh_hw *qh = &ehci_qh_pool[bus->hcd.hcd_id][index];
+-            if (qh->remove_in_iaad) {
++            if (qh->remove_in_iaad && qh->urb) {
+                 ehci_urb_waitup(bus, qh->urb);
+             }
+         }
