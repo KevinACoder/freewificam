@@ -29,6 +29,8 @@
 #include "tx_thread.h"
 #include "tx_event_flags.h"
 #include "tx_mutex.h"
+#include "tx_semaphore.h"
+#include "tx_queue.h"
 
 #include "cmsis_os2.h"
 
@@ -539,5 +541,188 @@ osStatus_t osMutexDelete(osMutexId_t mutex_id)
 		return osErrorResource;
 	}
 	vPortFree(mutex);
+	return osOK;
+}
+
+/* --- semaphores (S7/P7-2a 扩面：首个消费方 = lwip sys_arch，S3 §3.5.2 义务) ---- */
+/* TX semaphore has no max-count: CMSIS max_count is accepted and ignored -
+ * lwip's sys_sem_new deliberately asks for an unbounded ceiling, which is
+ * exactly what TX gives. tx_semaphore_put is ISR-callable (sys_sem_signal
+ * posts from driver ISRs). */
+
+osSemaphoreId_t osSemaphoreNew(uint32_t max_count, uint32_t initial_count,
+			       const osSemaphoreAttr_t *attr)
+{
+	TX_SEMAPHORE *sem = pvPortMalloc(sizeof(TX_SEMAPHORE));
+
+	(void)max_count;
+	(void)attr;
+	if (sem == NULL) {
+		return NULL;
+	}
+	if (tx_semaphore_create(sem, (CHAR *)"cmsis-sem",
+				(ULONG)initial_count) != TX_SUCCESS) {
+		vPortFree(sem);
+		return NULL;
+	}
+	return (osSemaphoreId_t)sem;
+}
+
+osStatus_t osSemaphoreAcquire(osSemaphoreId_t semaphore_id, uint32_t timeout)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)semaphore_id;
+	UINT wait;
+	UINT ret;
+
+	if ((sem == NULL) || (sem->tx_semaphore_id != TX_SEMAPHORE_ID)) {
+		return osErrorParameter;
+	}
+	/* CMSIS osWaitForever == TX_WAIT_FOREVER == 0xffffffff. */
+	wait = (timeout == 0U) ? TX_NO_WAIT : (UINT)timeout;
+	ret = tx_semaphore_get(sem, wait);
+
+	return (ret == TX_SUCCESS) ? osOK :
+	       (wait == TX_NO_WAIT) ? osErrorResource : osErrorTimeout;
+}
+
+osStatus_t osSemaphoreRelease(osSemaphoreId_t semaphore_id)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)semaphore_id;
+
+	if ((sem == NULL) || (sem->tx_semaphore_id != TX_SEMAPHORE_ID)) {
+		return osErrorParameter;
+	}
+	return (tx_semaphore_put(sem) == TX_SUCCESS) ? osOK : osErrorResource;
+}
+
+osStatus_t osSemaphoreDelete(osSemaphoreId_t semaphore_id)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)semaphore_id;
+
+	if ((sem == NULL) || (sem->tx_semaphore_id != TX_SEMAPHORE_ID)) {
+		return osErrorParameter;
+	}
+	if (tx_semaphore_delete(sem) != TX_SUCCESS) {
+		return osErrorResource;
+	}
+	vPortFree(sem);
+	return osOK;
+}
+
+uint32_t osSemaphoreGetCount(osSemaphoreId_t semaphore_id)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)semaphore_id;
+
+	if ((sem == NULL) || (sem->tx_semaphore_id != TX_SEMAPHORE_ID)) {
+		return 0U;
+	}
+	return (uint32_t)sem->tx_semaphore_count;
+}
+
+/* --- message queues (S7/P7-2a 扩面：lwip sys_mbox = 指针邮箱) ------------------ */
+/* TX queue message size is fixed at creation and counted in 32-bit words
+ * (1..16): bytes are rounded up to words and anything beyond 64 is refused
+ * rather than silently truncated. prio is ignored (TX queues are FIFO);
+ * tx_queue_send with TX_NO_WAIT is ISR-callable (sys_mbox_trypost_fromisr). */
+
+osMessageQueueId_t osMessageQueueNew(uint32_t msg_count, uint32_t msg_size,
+				     const osMessageQueueAttr_t *attr)
+{
+	TX_QUEUE *queue;
+	void *storage;
+	ULONG words;
+	UINT q_bytes;
+
+	(void)attr;
+	if ((msg_count == 0U) || (msg_size == 0U)) {
+		return NULL;
+	}
+	words = (msg_size + 3U) / 4U;
+	if (words > 16U) {
+		return NULL;
+	}
+	q_bytes = sizeof(TX_QUEUE) + msg_count * words * sizeof(ULONG);
+	queue = pvPortMalloc(q_bytes);
+	if (queue == NULL) {
+		return NULL;
+	}
+	storage = (void *)((uintptr_t)queue + sizeof(TX_QUEUE));
+	if (tx_queue_create(queue, (CHAR *)"cmsis-q", (UINT)words, storage,
+			    msg_count * words * sizeof(ULONG)) != TX_SUCCESS) {
+		vPortFree(queue);
+		return NULL;
+	}
+	return (osMessageQueueId_t)queue;
+}
+
+osStatus_t osMessageQueuePut(osMessageQueueId_t mq_id, const void *msg_ptr,
+			     uint8_t msg_prio, uint32_t timeout)
+{
+	TX_QUEUE *queue = (TX_QUEUE *)mq_id;
+	UINT wait;
+	UINT ret;
+
+	(void)msg_prio;
+	if ((queue == NULL) || (queue->tx_queue_id != TX_QUEUE_ID) ||
+	    (msg_ptr == NULL)) {
+		return osErrorParameter;
+	}
+	wait = (timeout == 0U) ? TX_NO_WAIT : (UINT)timeout;
+	ret = tx_queue_send(queue, (void *)msg_ptr, wait);
+
+	return (ret == TX_SUCCESS) ? osOK :
+	       (wait == TX_NO_WAIT) ? osErrorResource : osErrorTimeout;
+}
+
+osStatus_t osMessageQueueGet(osMessageQueueId_t mq_id, void *msg_ptr,
+			     uint8_t *msg_prio, uint32_t timeout)
+{
+	TX_QUEUE *queue = (TX_QUEUE *)mq_id;
+	UINT wait;
+	UINT ret;
+
+	(void)msg_prio;
+	if ((queue == NULL) || (queue->tx_queue_id != TX_QUEUE_ID) ||
+	    (msg_ptr == NULL)) {
+		return osErrorParameter;
+	}
+	wait = (timeout == 0U) ? TX_NO_WAIT : (UINT)timeout;
+	ret = tx_queue_receive(queue, msg_ptr, wait);
+
+	return (ret == TX_SUCCESS) ? osOK :
+	       (wait == TX_NO_WAIT) ? osErrorResource : osErrorTimeout;
+}
+
+uint32_t osMessageQueueGetCount(osMessageQueueId_t mq_id)
+{
+	TX_QUEUE *queue = (TX_QUEUE *)mq_id;
+
+	if ((queue == NULL) || (queue->tx_queue_id != TX_QUEUE_ID)) {
+		return 0U;
+	}
+	return (uint32_t)queue->tx_queue_enqueued;
+}
+
+uint32_t osMessageQueueGetSpace(osMessageQueueId_t mq_id)
+{
+	TX_QUEUE *queue = (TX_QUEUE *)mq_id;
+
+	if ((queue == NULL) || (queue->tx_queue_id != TX_QUEUE_ID)) {
+		return 0U;
+	}
+	return (uint32_t)queue->tx_queue_available_storage;
+}
+
+osStatus_t osMessageQueueDelete(osMessageQueueId_t mq_id)
+{
+	TX_QUEUE *queue = (TX_QUEUE *)mq_id;
+
+	if ((queue == NULL) || (queue->tx_queue_id != TX_QUEUE_ID)) {
+		return osErrorParameter;
+	}
+	if (tx_queue_delete(queue) != TX_SUCCESS) {
+		return osErrorResource;
+	}
+	vPortFree(queue);
 	return osOK;
 }

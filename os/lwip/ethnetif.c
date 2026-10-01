@@ -25,9 +25,11 @@
 
 #include <string.h>
 
+#include "lwip/opt.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 #include "lwip/etharp.h"
+#include "lwip/tcpip.h"
 #include "netif/ethernet.h"
 
 #include "dwc_eqos.h"
@@ -91,11 +93,17 @@ void ethnetif_add(struct netif *netif, unsigned int port,
 		  const ip4_addr_t *ip, const ip4_addr_t *mask,
 		  const ip4_addr_t *gw)
 {
+#if NO_SYS
 	/* NO_SYS=1: input is ethernet_input, called from the main loop's
-	 * ethnetif_poll. P7-2a swaps the pointer to tcpip_input; this call
-	 * shape and the rest of the file stay. */
+	 * ethnetif_poll. */
 	(void)netif_add(netif, ip, mask, gw, (void *)(uintptr_t)port,
 			eth_init, ethernet_input);
+#else
+	/* NO_SYS=0: the RX thread's ethnetif_poll hands frames to the tcpip
+	 * thread's mailbox - same bridge, one input pointer (spec FR-8). */
+	(void)netif_add(netif, ip, mask, gw, (void *)(uintptr_t)port,
+			eth_init, tcpip_input);
+#endif
 	netif_set_default(netif);
 	netif_set_up(netif);
 }

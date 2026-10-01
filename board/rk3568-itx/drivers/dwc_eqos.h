@@ -292,6 +292,12 @@ void dwc_eqos_watchdog(unsigned int index);
  * instance index as the handler argument. */
 void dwc_eqos_irq(void *arg);
 
+/* Optional RX-notify hook (P7-2a): set before the channel starts; called
+ * from the combined ISR after rx_complete delivered at least one frame -
+ * the adapter releases its RX semaphore there (the prior workspace's
+ * event_rx_frame, reduced to the one event the bridge consumes). */
+void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index));
+
 /* Statistics for the bring-up heartbeat: everything the driver had to drop or
  * could not complete, so a bad cable and a full ring are distinguishable. */
 struct dwc_eqos_stats {

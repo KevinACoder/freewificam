@@ -1,6 +1,6 @@
 /*
  * @file   lwipopts.h
- * @brief  lwIP configuration for the freewebcam carrier (phase 1, NO_SYS=1).
+ * @brief  lwIP configuration for the freewebcam carrier (phase 2, NO_SYS=0).
  *
  * This file is the whole of the stack's configuration: lwIP reaches it from
  * lwip/opt.h in every translation unit (it must sit ahead of the vendored
@@ -8,11 +8,11 @@
  * specs/lwip-adapt/SPEC.md §3.2.2 (阶段一 column), carried over from the
  * prior workspace's converged numbers:
  *
- *  - NO_SYS=1: phase 1 runs the polled model on the bare-metal base (S1):
- *    the app main loop feeds the stack (RX drain + sys_check_timeouts) and
- *    no lwIP thread exists. The NO_SYS=0 + sys_arch switch is P7-2a, a
- *    single-variable change (lwipopts rows + api/ compile set + input
- *    function pointer), spec §3.1.
+ *  - NO_SYS=0 (P7-2a, spec §3.2.2 阶段二列): lwIP runs its own tcpip thread
+ *    on the cmsis2_threadx shim (sys_arch over osSemaphore/osMessageQueue -
+ *    the shim's S3 §3.5.2 扩面义务, lwip is the first consumer). The netif
+ *    bridge shape is unchanged; input is tcpip_input and the driver feeds
+ *    it from a dedicated RX thread (ISR -> semaphore -> ethnetif_poll).
  *
  *  - MEM_LIBC_MALLOC=0: lwIP keeps its own static heap (MEM_SIZE) and its
  *    own static pools. This image is freestanding (-nostdlib, no libc
@@ -39,12 +39,20 @@
 
 /* --- OS integration (spec §3.2.2, phase-1 column) -------------------------- */
 
-#define NO_SYS                          1
-#define SYS_LIGHTWEIGHT_PROT            0
-/* The sequential API lands with P7-2a: lwipopts rows and the api/ compile
- * set move together (spec N1/FR-2 - one without the other does not link). */
-#define LWIP_NETCONN                    0
-#define LWIP_SOCKET                     0
+#define NO_SYS                          0
+#define SYS_LIGHTWEIGHT_PROT            1
+/* The sequential API: netconn is the layer sockets sits on - the lwipopts
+ * rows and the api/ compile set move together (P7-2a). */
+#define LWIP_NETCONN                    1
+#define LWIP_SOCKET                     1
+#define LWIP_NETIF_API                  1
+/* err.c's err-to-errno table (api/ world) needs constants, and the errno
+ * variable itself is defined once in the adapter (lwip_diag.c). */
+#define LWIP_PROVIDE_ERRNO              1
+/* struct timeval comes from the toolchain's <sys/time.h> (arch/cc.h pulls
+ * it for every lwIP TU); lwIP must not define its own private copy or the
+ * two clash. The socket tools (netutils line) include the header directly. */
+#define LWIP_TIMEVAL_PRIVATE            0
 
 /* --- memory ---------------------------------------------------------------- */
 
@@ -74,7 +82,10 @@
  * weight); acd.c IS compiled - LWIP_ACD follows LWIP_DHCP by default and
  * etharp.c then calls into it. */
 #define LWIP_IGMP                       0
-#define LWIP_DNS                        0
+/* dns.c rides in with the api/ set (netdb.c is compiled inside
+ * LWIP_DNS && LWIP_SOCKET); no DNS server is configured - the static-IP
+ * smoke never resolves a name. */
+#define LWIP_DNS                        1
 #define LWIP_DHCP                       1
 #define LWIP_AUTOIP                     0
 #define LWIP_UDP                        1
@@ -89,6 +100,10 @@
 #define MEMP_NUM_UDP_PCB                8
 #define MEMP_NUM_SYS_TIMEOUT            16
 #define MEMP_NUM_FRAG_PBUF              16
+/* D54: 16 dropped 1799 messages over a 600s downlink once a driver worker
+ * outranked tcpip; 64 is the number the prior workspace converged on. */
+#define MEMP_NUM_TCPIP_MSG_API          16
+#define MEMP_NUM_TCPIP_MSG_INPKT        64
 
 /* --- TCP (prior-work lesson values, D52) ------------------------------------- */
 
@@ -101,6 +116,20 @@
 #define TCP_SND_QUEUELEN                128
 #define TCP_QUEUE_OOSEQ                 0
 #define LWIP_WND_SCALE                  0
+
+/* --- threads and mailboxes (D54 ladder; sys_arch band_to_cmsis: band*8) ------- */
+
+#define TCPIP_THREAD_NAME               "tcpip"
+#define TCPIP_THREAD_STACKSIZE          8192
+/* Band 4 (osPriorityAboveNormal): above its feeders, below the shell. */
+#define TCPIP_THREAD_PRIO               4
+#define TCPIP_MBOX_SIZE                 64
+#define DEFAULT_THREAD_STACKSIZE        2048
+#define DEFAULT_THREAD_PRIO             3
+#define DEFAULT_RAW_RECVMBOX_SIZE       8
+#define DEFAULT_UDP_RECVMBOX_SIZE       8
+#define DEFAULT_TCP_RECVMBOX_SIZE       8
+#define DEFAULT_ACCEPTMBOX_SIZE         4
 
 /* --- netif -------------------------------------------------------------------- */
 
