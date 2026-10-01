@@ -49,8 +49,18 @@ void lwip_arch_assert(const char *message, const char *file, int line)
 	}
 }
 
+#if NO_SYS
+/* NO_SYS=1 timebase (timeouts.c polls it from the main loop). Under
+ * NO_SYS=0 sys_now comes from cmsis/sys_arch.c (osKernelGetTickCount) and
+ * this definition must not exist next to it. */
 u32_t sys_now(void)
 {
 	return (u32_t)((uint64_t)os_tick_get_count32() * 1000U /
 		       os_tick_freq_hz());
 }
+#else
+/* lwip/errno.h with LWIP_PROVIDE_ERRNO=1 declares `extern int errno` after
+ * defining the constants: this is the one definition (the prior workspace's
+ * adapter shape). The api/ world (sockets) is the only reader. */
+int errno;
+#endif /* NO_SYS */

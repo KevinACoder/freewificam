@@ -614,6 +614,16 @@ static int eqos_tx_complete(struct dwc_eqos_dev *dev)
  * interrupt, but a lost interrupt with no further traffic would leave frames
  * staged-but-unpolled, and a transmit ring waiting on a completion that never
  * came would stay full. */
+/* Optional RX-notify hook: one global (the single-port image has at most
+ * one live port; the notify target is the adapter's RX wake, not per-port
+ * state). */
+static void (*s_rx_notify)(unsigned int index);
+
+void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index))
+{
+	s_rx_notify = fn;
+}
+
 void dwc_eqos_watchdog(unsigned int index)
 {
 	struct dwc_eqos_dev *dev;
@@ -668,7 +678,11 @@ void dwc_eqos_irq(void *arg)
 		}
 
 		if (status & DWC_EQOS_CH0_STATUS_RI) {
-			(void)eqos_rx_complete(dev);
+			if (eqos_rx_complete(dev) > 0) {
+				if (s_rx_notify != NULL) {
+					s_rx_notify((unsigned int)(uintptr_t)arg);
+				}
+			}
 		}
 		if (status & DWC_EQOS_CH0_STATUS_TI) {
 			(void)eqos_tx_complete(dev);
