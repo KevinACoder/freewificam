@@ -140,6 +140,22 @@ struct dwc_eqos_dev {
 
 	struct dwc_eqos_stats stats;
 
+	/* --- N7-stab IRQ forensics (2026-10-02 sustained-TX freeze round) ----
+	 * The 15-30 s freeze left no evidence anywhere: counters were all
+	 * healthy up to the last heartbeat, then silence. These words are the
+	 * interrupt-level black box: irq_n counts handler entries, irq_odd
+	 * counts passes whose status word carried ONLY bits this driver does
+	 * not service (the interrupt-storm signature - the embox-era incident
+	 * on this same IP), last_status caches the most recent non-zero
+	 * status word. Written in the ISR (single-word stores; the diag
+	 * getter reads them racily - fine for forensics). */
+	uint32_t irq_n;
+	uint32_t irq_odd;
+	uint32_t last_status;
+	uint32_t irq_breaker;	/* set once AIE is dropped (storm guard) */
+	uint32_t irq_odd_t0;	/* odd-pass burst window bookkeeping */
+	uint32_t irq_odd_win;
+
 	/* Signalled by the completion sweep (freed > 0): a sender parked on a
 	 * full TX ring waits on this instead of polling a 1 ms tick. */
 	osSemaphoreId_t tx_sem;
@@ -541,6 +557,30 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	eqos_wr(dev, DWC_EQOS_MAC_INTERRUPT_STATUS,
 		eqos_rd(dev, DWC_EQOS_MAC_INTERRUPT_STATUS));
 	eqos_wr(dev, DWC_EQOS_MAC_INTERRUPT_ENABLE, 0);
+
+	/* MMC counter interrupts: mask ALL of them. The 2026-10-02 freeze
+	 * root cause (N7-stab, board-measured): the MMC block raises its own
+	 * interrupt when a 32-bit counter crosses its half-way point (bit 31);
+	 * the TX octet counter does so after exactly 2 GiB of transmitted
+	 * traffic - ~26 s at the 650 Mbit/s stream, which is the measured
+	 * freeze onset. The event latches into GMAC_INT_STATUS bit 10
+	 * (mmc_tx_irq, read-clear at 0x0B0) AND holds through the MMC status
+	 * word; the silicon reset value of the three masks is 0 (unmasked),
+	 * and this driver never touched them, so the very first 2 GiB TX run
+	 * deadlocked the machine: the DMA-status handler saw an empty status
+	 * word, never cleared the MAC latch, and the level line re-entered it
+	 * forever below the tick's priority. Linux takes the same measure -
+	 * stmmac_mmc_setup() ("this masks the MMC irq, in fact, the counters
+	 * are managed in SW"; mmc_core.c dwmac_mmc_intr_all_mask writes
+	 * 0xffffffff to all three). The counters stay readable in software
+	 * (dwc_eqos_get_mmc_stats); only their interrupt signal is cut. */
+	eqos_wr(dev, DWC_EQOS_MMC_RX_INTR_MASK, 0xffffffffu);
+	eqos_wr(dev, DWC_EQOS_MMC_TX_INTR_MASK, 0xffffffffu);
+	eqos_wr(dev, DWC_EQOS_MMC_RX_IPC_INTR_MASK, 0xffffffffu);
+	/* Clear whatever the firmware/counters latched before the mask went
+	 * up; the MMC RX/TX interrupt status registers are read-clear. */
+	(void)eqos_rd(dev, DWC_EQOS_MMC_RX_INTR);
+	(void)eqos_rd(dev, DWC_EQOS_MMC_TX_INTR);
 
 	/* AXI bus: outstanding request limits and 4/8/16-beat bursts. */
 	eqos_wr(dev, DWC_EQOS_DMA_SYSBUS_MODE,
@@ -969,19 +1009,86 @@ void dwc_eqos_irq(void *arg)
 	struct dwc_eqos_dev *dev = &devs[(unsigned int)(uintptr_t)arg];
 	int pass;
 
+	dev->irq_n++;
 	for (pass = 0; pass < 8; pass++) {
 		uint32_t status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
 
 		if (status == 0) {
+			/* Line-source defense (N7-stab): a latch in the MAC/MMC
+			 * blocks holds this shared level line with a clean DMA
+			 * status word - the 2026-10-02 freeze, where the handler
+			 * re-entered on an all-zero status forever. Reading
+			 * GMAC_INT_STATUS clears its latch (read-clear); doing it
+			 * on the empty-pass exit bounds any future unserviced
+			 * source to one spurious entry per real interrupt instead
+			 * of a deadlock. The known MMC source is masked at init;
+			 * this is the belt for the next one. */
+			if (eqos_rd(dev, DWC_EQOS_MAC_INTERRUPT_STATUS) != 0u) {
+				dev->irq_odd++;
+			}
 			break;
 		}
 		/* Write-one-to-clear everything latched: leaving e.g. the
 		 * abnormal summary set keeps the line asserted forever. */
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_STATUS, status);
+		dev->last_status = status;
 
 		if (!(status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_RWT
 				| DWC_EQOS_CH0_STATUS_TI
 				| DWC_EQOS_CH0_STATUS_FB))) {
+			/* N7-stab: an "odd pass" - the status word carried only
+			 * bits this driver does not service (e.g. TBU/RBU under
+			 * the abnormal summary). The embox era on this same IP
+			 * died exactly this way: a re-latching unserviced bit is
+			 * a level-line interrupt storm, and while it storms,
+			 * nothing at or below GMAC priority (tick included) ever
+			 * runs again. Count it, print the first occurrence (the
+			 * lock-free emergency outlet - a storm must not die
+			 * silently), and bound the damage with a burst gate. */
+			uint32_t now;
+
+			dev->irq_odd++;
+			if ((dev->irq_odd == 1u) ||
+			    ((dev->irq_odd & (dev->irq_odd - 1u)) == 0u)) {
+				board_log_emergency(
+					"gmac: irq odd pass n=%u status=%08x ien=%08x pend=%d",
+					(unsigned int)dev->irq_odd,
+					(unsigned int)status,
+					(unsigned int)eqos_rd(dev,
+						DWC_EQOS_DMA_CH0_INTR_ENABLE),
+					(int)gic_irq_is_pending(dev->plat->irq_num));
+			}
+#if defined(CONFIG_GMAC_IRQ_BREAKER) && CONFIG_GMAC_IRQ_BREAKER
+			/* Burst gate: >= 32 odd passes inside a 100 ms window is
+			 * a storm, not noise. Drop the abnormal-summary enable
+			 * (AIE) so the unserviceable class stops delivering;
+			 * RI/RWT/TI/FBE stay armed (the RX watchdog sweep in the
+			 * boot loop still drains RX if RWT turns out to ride
+			 * AIE on this core). One-way, announced. */
+			now = osKernelGetTickCount();
+			if ((uint32_t)(now - dev->irq_odd_t0) > 100u) {
+				dev->irq_odd_t0 = now;
+				dev->irq_odd_win = 0u;
+			}
+			if (dev->irq_odd_win < 0xffffu) {
+				dev->irq_odd_win++;
+			}
+			if ((dev->irq_odd_win >= 32u) && (dev->irq_breaker == 0u)) {
+				uint32_t ien = eqos_rd(dev,
+					DWC_EQOS_DMA_CH0_INTR_ENABLE);
+
+				eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE,
+					ien & ~DWC_EQOS_CH0_INTR_AIE);
+				dev->irq_breaker = 1u;
+				board_log_emergency(
+					"gmac: irq storm breaker: %u odd in window, status=%08x ien=%08x->%08x",
+					(unsigned int)dev->irq_odd_win,
+					(unsigned int)status,
+					(unsigned int)ien,
+					(unsigned int)(ien &
+						~DWC_EQOS_CH0_INTR_AIE));
+			}
+#endif
 			break;
 		}
 
@@ -1384,4 +1491,75 @@ void dwc_eqos_get_mmc_stats(unsigned int index, struct dwc_eqos_mmc_stats *stats
 	stats->rx_octets_gb = mmio_rd32(mmc + 0x84u);
 	stats->rx_crc_error = mmio_rd32(mmc + 0x94u);
 	stats->rx_fifo_overflow = mmio_rd32(mmc + 0xd4u);
+}
+
+void dwc_eqos_irq_dump(unsigned int index)
+{
+	struct dwc_eqos_dev *dev;
+
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	dev = &devs[index];
+	if (dev->plat == NULL) {
+		return;
+	}
+
+	/* One line, all blocks sharing the line. The MAC status read is
+	 * READ-CLEAR: its value is the latch evidence, and the clear itself
+	 * is the unstick attempt (if the system resumes right after this
+	 * dump, the latch WAS a line source). */
+	board_log_emergency(
+		"irqdump mac_st=%08x mtl_int=%08x mtl_c0=%08x mmc_rx=%08x mmc_tx=%08x mmc_masks=%08x/%08x ipc_mask=%08x",
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MAC_INTERRUPT_STATUS),
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MTL_INT_STATUS),
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MTL_CHAN0_INT_CTRL),
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_RX_INTR),
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_TX_INTR),
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_RX_INTR_MASK),
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_TX_INTR_MASK),
+		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_RX_IPC_INTR_MASK));
+}
+
+void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)
+{
+	struct dwc_eqos_dev *dev;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (diag == NULL)) {
+		return;
+	}
+	dev = &devs[index];
+	if (dev->plat == NULL) {
+		/* Pre-initialize probe call (the fast probe runs from boot):
+		 * nothing to report yet, and eqos_lock would deref NULL. */
+		memset(diag, 0, sizeof(*diag));
+		return;
+	}
+
+	/* Ring indices under the port-line lock; register/black-box reads are
+	 * single-word and taken as-is (forensic snapshots race by design). */
+	eqos_lock(dev);
+	diag->tx_head = (uint32_t)dev->tx_head;
+	diag->tx_tail = (uint32_t)dev->tx_tail;
+	eqos_unlock(dev);
+
+	diag->tx_ioc_seq = dev->tx_ioc_seq;
+	diag->irq_n = dev->irq_n;
+	diag->irq_odd = dev->irq_odd;
+	diag->last_status = dev->last_status;
+	diag->irq_breaker = dev->irq_breaker;
+	diag->ch0_status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
+	diag->intr_enable = eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE);
+	diag->gic_pending = gic_irq_is_pending(dev->plat->irq_num);
+
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	diag->rx_ready_count = (uint32_t)dev->rx_ready_count;
+	diag->rx_free_count = (uint32_t)dev->rx_free_count;
+#else
+	diag->rx_ready_count = 0u;
+	diag->rx_free_count = 0u;
+#endif
+
+	diag->tx_sem_count = (dev->tx_sem != NULL)
+				     ? osSemaphoreGetCount(dev->tx_sem) : 0u;
 }

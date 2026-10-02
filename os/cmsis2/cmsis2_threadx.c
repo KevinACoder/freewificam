@@ -34,6 +34,7 @@
 
 #include "cmsis_os2.h"
 
+#include "cmsis2_diag.h"
 #include "heap.h"
 #include "log.h"
 
@@ -342,6 +343,53 @@ osThreadId_t osThreadGetId(void)
 		return NULL;
 	}
 	return (osThreadId_t)current->tx_thread_cmsis_slot;
+}
+
+/* --- read-only snapshot for the N7-stab fast probe (cmsis2_diag.h) -------- */
+
+unsigned int cmsis2_thread_snapshot(cmsis2_thread_snap_t *out, unsigned int max)
+{
+	unsigned int i;
+	unsigned int n = 0U;
+
+	if (out == NULL) {
+		return 0U;
+	}
+	for (i = 0U; i < (unsigned)CONFIG_TX_MAX_THREADS && n < max; i++) {
+		thread_slot_t *slot = &slots[i];
+
+		if (slot->state == SLOT_FREE) {
+			continue;
+		}
+		out[n].name = slot->name;
+		out[n].tx_prio = (unsigned int)slot->tx_prio;
+		out[n].state = (unsigned int)slot->state;
+		out[n].runs = (unsigned long)slot->thread.tx_thread_run_count;
+		if (slot->state == SLOT_LIVE && slot->stack != NULL &&
+		    slot->thread.tx_thread_stack_highest_ptr != NULL) {
+			/* Stack area: start = LOW address, end = HIGH address;
+			 * the stack grows down from end, so the high-water mark
+			 * (lowest address touched) is measured from end. */
+			out[n].stack_used = (unsigned long)
+				((uintptr_t)slot->thread.tx_thread_stack_end -
+				 (uintptr_t)slot->thread.tx_thread_stack_highest_ptr);
+		} else {
+			out[n].stack_used = 0UL;
+		}
+		out[n].stack_size = (unsigned long)slot->stack_size;
+		n++;
+	}
+	return n;
+}
+
+const char *cmsis2_current_thread_name(void)
+{
+	TX_THREAD *t = tx_thread_identify();
+
+	if (t == NULL) {
+		return "none";
+	}
+	return (t->tx_thread_name != NULL) ? t->tx_thread_name : "?";
 }
 
 osStatus_t osThreadYield(void)

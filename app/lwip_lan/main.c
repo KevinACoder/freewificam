@@ -23,9 +23,11 @@
 
 #include <stdint.h>
 
+#include "board_conf.h"
 #include "cmsis_os2.h"
 #include "gicv3.h"
 #include "log.h"
+#include "minilibc.h"
 #include "lwip/init.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/netif.h"
@@ -43,6 +45,10 @@
 #include "eqos_rk3568.h"
 #include "rtl8211f.h"
 #include "cpu_boost.h"
+
+#if defined(CONFIG_GMAC_TICK_MON) || defined(CONFIG_GMAC_FAST_PROBE)
+#include "cmsis2_diag.h"
+#endif
 
 #ifdef CONFIG_SCMI_PROBE
 #include "scmi_clk.h"
@@ -81,6 +87,194 @@ extern volatile unsigned cherrysh_rx_wakes;
 static struct netif g_netif;
 static unsigned int g_port;
 static osSemaphoreId_t g_rx_sem;
+
+#if defined(CONFIG_GMAC_TICK_MON) || defined(CONFIG_GMAC_FAST_PROBE)
+/* Declared locally, not via os/threadx/heap.h: this file compiles without
+ * the threadx include path on purpose (FR-3 - tx headers stay inside the
+ * adapter units). The one symbol consumed is plain size_t. */
+extern size_t xPortGetFreeHeapSize(void);
+
+/* --- N7-stab forensics (2026-10-02 sustained-TX freeze round) ---------------
+ *
+ * The freeze signature: everything (heartbeat, tick command, ping, serial)
+ * dies 15-30 s into a ~650 Mbit/s TCP TX flow, with zero precursor in the 1 Hz
+ * counters. Two independent observers, so the death is never silent again:
+ *
+ *  - TICK MONITOR: a CNTP (EL1 physical timer) interrupt at GIC priority 0x60
+ *    - ABOVE the GMAC line (0xa0), which is above the kernel tick (0xe0).
+ *    If the kernel tick stops advancing for one monitor period (250 ms), an
+ *    interrupt at an urgency between the monitor and the tick is starving
+ *    everything below it (the interrupt-storm class this board's IP has
+ *    produced before), OR interrupts are masked in some context. Either way
+ *    the monitor - which can only have fired between their handlers - prints
+ *    the GMAC register crime scene via the lock-free emergency outlet.
+ *  - FAST PROBE: a Realtime-band thread (tx prio 7, above tcpip's 11) that
+ *    prints a compact state line at 10 Hz for the first 60 s, then 1 Hz.
+ *    Every thread's run counter rides the line, so a thread that stops being
+ *    scheduled - or one that hogs the CPU - is visible by diffing adjacent
+ *    samples. The last line before a freeze is the crime scene at thread
+ *    level.
+ */
+static volatile unsigned int g_mon_fires;
+static volatile unsigned int g_mon_stalls;
+
+#ifdef CONFIG_GMAC_TICK_MON
+static uint32_t mon_last_tick;
+static int mon_primed;
+
+static void tick_mon_isr(void *arg)
+{
+	static unsigned int stall_reports;
+	uint32_t now;
+	uint32_t period;
+
+	(void)arg;
+
+	/* Re-arm first: CNTP is a down-counter; the level line clears when TVAL
+	 * is rewritten (same discipline as the tick itself). */
+	{
+		uint64_t freq;
+
+		__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(freq));
+		period = (uint32_t)(freq / 4u);	/* 250 ms */
+		__asm__ __volatile__("msr cntp_tval_el0, %0" ::"r"(period));
+		__asm__ __volatile__("isb" ::: "memory");
+	}
+
+	g_mon_fires++;
+	now = osKernelGetTickCount();
+	if (!mon_primed) {
+		mon_primed = 1;
+		mon_last_tick = now;
+		return;
+	}
+	if (now == mon_last_tick) {
+		g_mon_stalls++;
+		if (stall_reports < 4u) {
+			struct dwc_eqos_diag d;
+
+			stall_reports++;
+			dwc_eqos_get_diag(g_port, &d);
+			board_log_emergency(
+				"MON tick stalled #%u: fires=%u tick=%u | ch0=%08x ien=%08x pend=%d irqn=%u odd=%u st=%08x brk=%u cur=%s",
+				stall_reports, g_mon_fires, (unsigned)now,
+				(unsigned)d.ch0_status, (unsigned)d.intr_enable,
+				(int)d.gic_pending, (unsigned)d.irq_n,
+				(unsigned)d.irq_odd, (unsigned)d.last_status,
+				(unsigned)d.irq_breaker,
+				cmsis2_current_thread_name());
+			/* Second line: every other block that shares the line. The
+			 * MAC status read is read-clear - it doubles as an unstick
+			 * attempt, so a resumed tick after this dump pins the latch
+			 * as the line source. */
+			dwc_eqos_irq_dump(g_port);
+		}
+	}
+	mon_last_tick = now;
+}
+
+static void tick_mon_start(unsigned int port)
+{
+	uint64_t freq;
+	uint32_t period;
+
+	(void)port;
+	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(freq));
+	period = (uint32_t)(freq / 4u);
+
+	(void)irq_register(BOARD_TICK_MON_INTID, tick_mon_isr, NULL);
+	(void)irq_set_priority(BOARD_TICK_MON_INTID, BOARD_TICK_MON_PRIORITY_RAW);
+	/* Program before enabling: ENABLE + IMASK=0, level line clears on TVAL
+	 * rewrite (the R2-proven CNTP programming model in tick.c). */
+	__asm__ __volatile__("msr cntp_tval_el0, %0" ::"r"(period));
+	__asm__ __volatile__("msr cntp_ctl_el0, %0" ::"r"(1u));
+	__asm__ __volatile__("isb" ::: "memory");
+	(void)irq_enable(BOARD_TICK_MON_INTID);
+	board_log("MON: armed intid=%u prio=0x%02x period=%ums\n",
+		  (unsigned)BOARD_TICK_MON_INTID,
+		  (unsigned)BOARD_TICK_MON_PRIORITY_RAW,
+		  (unsigned)(period / (uint32_t)(freq / 1000u)));
+}
+#endif /* CONFIG_GMAC_TICK_MON */
+
+#ifdef CONFIG_GMAC_FAST_PROBE
+/* Sampling cadence 100 ms; print every 5th sample (2 Hz) for the first 120 s,
+ * then every 50th. The print bypasses board_log on purpose: that sink masks
+ * ALL interrupts for the whole line (~15 ms at 115200), and a 10 Hz probe
+ * doing that would steal the interrupts whose absence it is meant to
+ * observe. uart_early_puts writes the same UART without touching the lock -
+ * thread-vs-thread interleaving is still prevented because every board_log
+ * caller holds IRQs masked for its own line (so it can never start mid
+ * probe-line and vice versa). */
+static void thr_probe(void *arg)
+{
+	unsigned long samples = 0;
+
+	(void)arg;
+	for (;;) {
+		struct dwc_eqos_diag d;
+		cmsis2_thread_snap_t snap[12];
+		unsigned int n, i;
+		unsigned int overrun = 0;
+		unsigned int every = (samples < 1200UL) ? 5U : 50U;
+		char tline[220];
+		unsigned int off = 0;
+
+		(void)osDelay(100U);
+		samples++;
+
+		dwc_eqos_get_diag(g_port, &d);
+		n = cmsis2_thread_snapshot(snap, 12);
+
+		if ((samples % every) != 0UL) {
+			continue;
+		}
+
+		off += (unsigned int)snprintf(
+			&tline[off], sizeof(tline) - off,
+			"probe t=%lum tx=%u/%u/%u irq=%u/%u st=%08x pend=%d rx=%u/%u hp=%luk pl=%d mon=%u/%u cur=%s |",
+			samples * 100UL,
+			(unsigned)d.tx_head, (unsigned)d.tx_tail,
+			(unsigned)d.tx_sem_count,
+			(unsigned)d.irq_n, (unsigned)d.irq_odd,
+			(unsigned)d.last_status, (int)d.gic_pending,
+			(unsigned)d.rx_ready_count, (unsigned)d.rx_free_count,
+			(unsigned long)(xPortGetFreeHeapSize() / 1024UL),
+			board_console_lock_held(),
+			g_mon_fires, g_mon_stalls,
+			cmsis2_current_thread_name());
+
+		for (i = 0U; i < n; i++) {
+			if (off > sizeof(tline) - 24U) {
+				overrun = 1;
+				break;
+			}
+			off += (unsigned int)snprintf(&tline[off],
+						      sizeof(tline) - off,
+						      " %.7s%u=%lu",
+						      (snap[i].name != NULL) ?
+							      snap[i].name : "?",
+						      snap[i].tx_prio,
+						      snap[i].runs);
+		}
+		if (overrun) {
+			(void)snprintf(&tline[off], sizeof(tline) - off, " ...");
+		}
+
+		if (board_console_lock_held()) {
+			/* A dead context owns the print lock: entering board_log
+			 * would spin on it forever. The probe's own outlet below
+			 * is lock-free anyway; keep the emergency prefix so the
+			 * condition is visible in the log. */
+			board_log_emergency("%s", tline);
+		} else {
+			uart_early_puts(tline);
+			uart_early_puts("\n");
+		}
+	}
+}
+#endif /* CONFIG_GMAC_FAST_PROBE */
+#endif /* CONFIG_GMAC_TICK_MON || CONFIG_GMAC_FAST_PROBE */
 
 /* GMAC ISR context: frames landed in the staging ring - wake the RX
  * thread (osSemaphoreRelease is ISR-safe: tx_semaphore_put). */
@@ -272,6 +466,10 @@ static void thr_boot(void *arg)
 		return;
 	}
 
+#ifdef CONFIG_GMAC_TICK_MON
+	tick_mon_start(port);
+#endif
+
 	g_rx_sem = osSemaphoreNew(0xFFFFU, 0U, NULL);
 	if (g_rx_sem == NULL) {
 		board_log("lwip_lan: rx semaphore FAIL\n");
@@ -380,6 +578,16 @@ int main(void)
 	(void)osThreadNew(thr_boot, NULL,
 			  &(osThreadAttr_t){ .name = "boot",
 					     .priority = osPriorityNormal });
+#ifdef CONFIG_GMAC_FAST_PROBE
+	/* AboveNormal (tx 15): outranks the tx19 app threads (heartbeat, shell,
+	 * gmacrx) so sampling stays on cadence, but stays BELOW the tcpip feed
+	 * (tx 11) and the timer thread: the probe must observe the stack, not
+	 * displace it - a probe at the top of the ladder would starve the very
+	 * data path whose stall it is meant to record. */
+	(void)osThreadNew(thr_probe, NULL,
+			  &(osThreadAttr_t){ .name = "probe",
+					     .priority = osPriorityAboveNormal });
+#endif
 	board_log("cmsis2: threads created, starting kernel\n");
 	(void)osKernelStart();
 	return 0;	/* unreachable */

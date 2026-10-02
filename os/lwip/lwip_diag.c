@@ -41,8 +41,11 @@ void lwip_arch_diag(const char *fmt, ...)
 void lwip_arch_assert(const char *message, const char *file, int line)
 {
 	/* Bring-up stance: a failed assertion prints and parks. Compiled-out
-	 * assertions are unfindable; a parked core is a gdb target. */
-	board_log("lwip: ASSERT '%s' at %s:%d\n", message, file, line);
+	 * assertions are unfindable; a parked core is a gdb target. Emergency
+	 * outlet (N7-stab): lwIP asserts can fire inside an ISR or with the
+	 * print lock held (an assert inside an interrupted board_log's own
+	 * critical section) - board_log there means a silent freeze. */
+	board_log_emergency("lwip: ASSERT '%s' at %s:%d", message, file, line);
 	__asm__ __volatile__("msr daifset, #0xf" ::: "memory");
 	for (;;) {
 		__asm__ __volatile__("wfi" ::: "memory");

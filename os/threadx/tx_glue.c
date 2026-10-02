@@ -117,15 +117,18 @@ int board_console_break_hook(void)
 #endif
 
 /* Stack-checking notify (tx_user.h turns TX_ENABLE_STACK_CHECKING on): name
- * the culprit and park - the serial line is the evidence. */
+ * the culprit and park - the serial line is the evidence. The emergency
+ * outlet: this fires with a blown stack and possibly during someone else's
+ * print; board_log would risk deadlocking on the print lock and turning the
+ * one diagnostic we get into silence (N7-stab round). */
 static void tx_stack_error_handler(TX_THREAD *thread_ptr)
 {
-	board_log("tx: stack error '%s' sp=%p stack=%p..%p (%lu bytes)\n",
-		  thread_ptr->tx_thread_name,
-		  thread_ptr->tx_thread_stack_ptr,
-		  thread_ptr->tx_thread_stack_start,
-		  thread_ptr->tx_thread_stack_end,
-		  (unsigned long)thread_ptr->tx_thread_stack_size);
+	board_log_emergency("tx: stack error '%s' sp=%p stack=%p..%p (%lu bytes)",
+			    thread_ptr->tx_thread_name,
+			    thread_ptr->tx_thread_stack_ptr,
+			    thread_ptr->tx_thread_stack_start,
+			    thread_ptr->tx_thread_stack_end,
+			    (unsigned long)thread_ptr->tx_thread_stack_size);
 	for (;;) {
 		__asm__ __volatile__("wfe");
 	}
@@ -189,11 +192,15 @@ void tx_fault_park(unsigned int kind)
 	__asm__ __volatile__("mov %0, x30" : "=r"(rec_lr));
 	__asm__ __volatile__("mov %0, sp" : "=r"(rec_sp));
 
-	board_log("tx_fault_park kind=%u esr=%lx far=%lx elr=%lx lr=%lx sp=%lx\n",
-		  kind,
-		  rec_esr & 0xffffffffUL,
-		  rec_far & 0xffffffffUL,
-		  rec_elr, rec_lr, rec_sp);
+	/* Emergency outlet (N7-stab): a fault can land while the print lock is
+	 * held by an interrupted context - board_log here would spin in
+	 * print_lock_take with IRQs masked and the system would freeze
+	 * SILENTLY. The whole point of the park is to leave one line. */
+	board_log_emergency("tx_fault_park kind=%u esr=%lx far=%lx elr=%lx lr=%lx sp=%lx",
+			    kind,
+			    rec_esr & 0xffffffffUL,
+			    rec_far & 0xffffffffUL,
+			    rec_elr, rec_lr, rec_sp);
 
 	for (;;) {
 		__asm__ __volatile__("wfe");

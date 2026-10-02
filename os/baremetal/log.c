@@ -281,6 +281,47 @@ void board_console_write_raw(const char *data, unsigned int len)
 	print_lock_give(saved_daif);
 }
 
+void board_log_emergency(const char *fmt, ...)
+{
+	/* Static, not stack: the likeliest caller is a stack-overflow victim.
+	 * No lock, no stamp, no line assembler: straight to the polled UART.
+	 * A torn line in a live log is noise; a missing death line is an open
+	 * issue (this round's whole motivation). IRQs are masked around the
+	 * output so a second emergency caller (a storming ISR) cannot shred
+	 * the line this one is transmitting - the caller's DAIF is restored
+	 * afterwards, so an ISR caller stays masked. */
+	static char buf[CONSOLE_LINE_MAX];
+	va_list ap;
+	uint64_t saved_daif;
+	unsigned int n;
+
+	va_start(ap, fmt);
+	(void)vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	for (n = 0U; (n < sizeof(buf)) && (buf[n] != '\0'); n++) {
+		continue;
+	}
+	/* Ensure the line ends as a line even when the format forgot. */
+	if ((n == 0u) || (buf[n - 1u] != '\n')) {
+		if (n < sizeof(buf) - 1u) {
+			buf[n++] = '\n';
+			buf[n] = '\0';
+		}
+	}
+
+	__asm__ __volatile__("mrs %0, daif" : "=r"(saved_daif));
+	__asm__ __volatile__("msr daifset, #2" ::: "memory");
+	uart_early_puts("!!! ");
+	uart_early_puts(buf);
+	__asm__ __volatile__("msr daif, %0" ::"r"(saved_daif) : "memory");
+}
+
+int board_console_lock_held(void)
+{
+	return (print_lock_held != 0u);
+}
+
 /* Weak default: nothing mutes the console. The gdb glue overrides this
  * with gdb_session_active. */
 __attribute__((weak)) int board_console_muted(void)
