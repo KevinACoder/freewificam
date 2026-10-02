@@ -418,6 +418,18 @@ CFLAGS += -DCONFIG_GMAC_RX_HWCSUM=$(if $(filter y,$(CONFIG_GMAC_RX_HWCSUM)),1,0)
 	-DCONFIG_GMAC_RX_ZC=$(if $(filter y,$(CONFIG_GMAC_RX_ZC)),1,0) \
 	-DCONFIG_CPU_BOOST_MHZ=$(CONFIG_CPU_BOOST_MHZ)
 
+# N7 R5b: SCMI clock probe over SMC (BL31 carrier) + local CRU readback.
+# Diagnostic shell surface only - nothing runs at boot; the productization
+# decision (boot-time rate set vs U-Boot-side boost) is R5c's, gated on the
+# board answers this probe produces.
+CONFIG_SCMI_PROBE ?= n
+ifeq ($(CONFIG_SCMI_PROBE),y)
+ifneq ($(filter y,$(CONFIG_SHELL)),)
+SRCS += board/$(BOARD)/drivers/scmi_clk.c
+$(BUILD)/board/$(BOARD)/drivers/scmi_clk.o: EXTRAFLAGS := $(CSH_CFLAGS)
+endif
+endif
+
 LWIP_DIR := third-party/lwip
 # GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +
 # RTL8211F PHY + RK3568 glue/board table, re-arranged onto gicv3/cache/log.
