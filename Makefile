@@ -68,6 +68,7 @@ SRCS := \
 	os/baremetal/log.c \
 	os/baremetal/tick.c \
 	board/$(BOARD)/drivers/uart.c \
+	board/$(BOARD)/drivers/cpu_boost.c \
 	board/$(BOARD)/param.c \
 	$(APP_MAIN)
 
@@ -395,6 +396,10 @@ CONFIG_GMAC_RX_HWCSUM ?= n
 CONFIG_GMAC_RX_COALESCE ?= n
 CONFIG_GMAC_RX_RIWT ?= 0xa0
 CONFIG_GMAC_RX_ZC ?= n
+# One-shot CPU cluster raise (N7 R5a): pairs a Linux rk3568 opp row (freq +
+# vdd_cpu over i2c0->RK809) and relocks APLL before the scheduler starts.
+# 0 = probe/log the inherited voltage only (no writes).
+CONFIG_CPU_BOOST_MHZ ?= 0
 ifeq ($(filter $(CONFIG_GMAC_RX_HWCSUM),y n),)
 $(error CONFIG_GMAC_RX_HWCSUM must be y or n, got '$(CONFIG_GMAC_RX_HWCSUM)')
 endif
@@ -404,10 +409,14 @@ endif
 ifeq ($(filter $(CONFIG_GMAC_RX_ZC),y n),)
 $(error CONFIG_GMAC_RX_ZC must be y or n, got '$(CONFIG_GMAC_RX_ZC)')
 endif
+ifeq ($(filter $(CONFIG_CPU_BOOST_MHZ),0 1104 1416 1608 1800),)
+$(error CONFIG_CPU_BOOST_MHZ must be one of 0/1104/1416/1608/1800, got '$(CONFIG_CPU_BOOST_MHZ)')
+endif
 CFLAGS += -DCONFIG_GMAC_RX_HWCSUM=$(if $(filter y,$(CONFIG_GMAC_RX_HWCSUM)),1,0) \
 	-DCONFIG_GMAC_RX_COALESCE=$(if $(filter y,$(CONFIG_GMAC_RX_COALESCE)),1,0) \
 	-DCONFIG_GMAC_RX_RIWT=$(CONFIG_GMAC_RX_RIWT) \
-	-DCONFIG_GMAC_RX_ZC=$(if $(filter y,$(CONFIG_GMAC_RX_ZC)),1,0)
+	-DCONFIG_GMAC_RX_ZC=$(if $(filter y,$(CONFIG_GMAC_RX_ZC)),1,0) \
+	-DCONFIG_CPU_BOOST_MHZ=$(CONFIG_CPU_BOOST_MHZ)
 
 LWIP_DIR := third-party/lwip
 # GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +

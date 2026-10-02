@@ -42,6 +42,7 @@
 #include "ethnetif.h"
 #include "eqos_rk3568.h"
 #include "rtl8211f.h"
+#include "cpu_boost.h"
 
 #ifdef CONFIG_SHELL
 #include "cherrysh_adapter.h"
@@ -278,6 +279,11 @@ int main(void)
 	 * takes the tick over in tx_application_define (1000 Hz). */
 	uart_early_init();
 	gicv3_init();
+
+	/* N7 R5a: the bootloader leaves the cluster at 816 MHz; pair the
+	 * Linux opp (voltage over i2c0 first, then APLL relock) before any
+	 * thread exists. Probe-only when CONFIG_CPU_BOOST_MHZ == 0. */
+	(void)rk3568_cpu_boost(CONFIG_CPU_BOOST_MHZ);
 
 #ifdef CONFIG_GDB_STUB
 	/* Same slot as every other app: the stub owns the dbgport before
