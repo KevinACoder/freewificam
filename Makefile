@@ -482,7 +482,11 @@ LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include \
 	-DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
 $(BUILD)/third-party/lwip/%.o: EXTRAFLAGS := -w $(LWIP_CFLAGS)
 $(BUILD)/os/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
-$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS := $(LWIP_CFLAGS) $(CSH_CFLAGS)
+# Recursive assignment on purpose: APP_AUTORUN_CFLAGS is defined later in
+# the netutils block (CONFIG_SCMI_PROBE / CONFIG_IPERF2_AUTO_HOST), and a
+# target-specific := would snapshot it empty here.
+$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS = $(LWIP_CFLAGS) $(CSH_CFLAGS) \
+	$(APP_AUTORUN_CFLAGS)
 endif
 
 # netutils (SPEC S7b/netutils-adapt §3.4/§3.6): the vendored tool subset
@@ -504,6 +508,23 @@ CONFIG_NETUTILS_PING ?= y
 CONFIG_NETUTILS_TFTP ?= y
 CONFIG_NETUTILS_IPERF3 ?= y
 CONFIG_NETUTILS_IPERF2 ?= y
+
+# N7 R5b boot autorun (unattended measurement, console-RX outage workaround):
+# non-empty host = one 10 s lwiperf client burst after net READY; SCMI set
+# 0 = boot probe is read-only, an OPP row = rate set through BL31.
+CONFIG_IPERF2_AUTO_HOST ?=
+CONFIG_SCMI_BOOT_SET_MHZ ?= 0
+APP_AUTORUN_CFLAGS :=
+ifneq ($(strip $(CONFIG_IPERF2_AUTO_HOST)),)
+APP_AUTORUN_CFLAGS += -DCONFIG_IPERF2_AUTO_HOST='"$(CONFIG_IPERF2_AUTO_HOST)"' \
+	-Ios/netutils
+endif
+ifneq ($(strip $(CONFIG_SCMI_BOOT_SET_MHZ)),0)
+APP_AUTORUN_CFLAGS += -DCONFIG_SCMI_BOOT_SET_MHZ=$(CONFIG_SCMI_BOOT_SET_MHZ)
+endif
+ifeq ($(CONFIG_SCMI_PROBE),y)
+APP_AUTORUN_CFLAGS += -DCONFIG_SCMI_PROBE=1
+endif
 
 NU_DIR := components/netutils
 IPE_DIR := components/iperf3_embedded

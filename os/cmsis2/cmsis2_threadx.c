@@ -180,10 +180,19 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument,
 	}
 	slot->stack_size = stack_size;
 
-	if (tx_event_flags_create(&slot->flags, slot->name) != TX_SUCCESS) {
-		vPortFree(slot->stack);
-		slot->stack = NULL;
-		return NULL;
+	{
+		UINT rc = tx_event_flags_create(&slot->flags, slot->name);
+
+		if (rc != TX_SUCCESS) {
+			vPortFree(slot->stack);
+			slot->stack = NULL;
+			board_log("cmsis2: event_flags_create '%s' FAIL 0x%x "
+				  "(sz=%u ptr=%p)\n",
+				  slot->name, rc,
+				  (unsigned)sizeof(TX_EVENT_FLAGS_GROUP),
+				  (void *)&slot->flags);
+			return NULL;
+		}
 	}
 
 	if (kernel_state == K_READY) {
@@ -192,11 +201,15 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument,
 		 * tx_application_define or later). */
 		slot->state = SLOT_PENDING;
 	} else {
-		if (slot_tx_create(slot) != TX_SUCCESS) {
+		UINT rc = slot_tx_create(slot);
+
+		if (rc != TX_SUCCESS) {
 			tx_event_flags_delete(&slot->flags);
 			vPortFree(slot->stack);
 			slot->stack = NULL;
 			slot->state = SLOT_FREE;
+			board_log("cmsis2: thread_create '%s' prio %u FAIL 0x%x\n",
+				  slot->name, slot->tx_prio, rc);
 			return NULL;
 		}
 		slot->thread.tx_thread_cmsis_slot = slot;

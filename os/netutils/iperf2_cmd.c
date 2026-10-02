@@ -52,10 +52,31 @@ static void iperf2_report(void *arg, enum lwiperf_report_type type,
 		  (int)type, (unsigned)bytes, (unsigned)ms, (unsigned)kbitpsec);
 }
 
+/* Shared by the shell command and the boot autorun (unattended ladder
+ * rounds): 0 started, -1 bad address or lwiperf refused. */
+int iperf2_client_start(const char *ipstr)
+{
+	ip_addr_t remote;
+
+	if ((ipstr == NULL) || !ip4addr_aton(ipstr, ip_2_ip4(&remote))) {
+		return -1;
+	}
+
+	LOCK_TCPIP_CORE();
+	s_session = lwiperf_start_tcp_client(&remote, LWIPERF_TCP_PORT_DEFAULT,
+					     LWIPERF_CLIENT, iperf2_report, NULL);
+	UNLOCK_TCPIP_CORE();
+	if (s_session == NULL) {
+		return -1;
+	}
+	board_log("iperf2: lwiperf client vs %s started (10s, report on console)\n",
+		  ipstr);
+	return 0;
+}
+
 static int cmd_iperf2(int argc, char **argv)
 {
 	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
-	ip_addr_t remote;
 
 	if ((argc >= 2) && (strcmp(argv[1], "stop") == 0)) {
 		LOCK_TCPIP_CORE();
@@ -68,22 +89,14 @@ static int cmd_iperf2(int argc, char **argv)
 		return 0;
 	}
 
-	if ((argc < 2) || !ip4addr_aton(argv[1], ip_2_ip4(&remote))) {
+	if (argc < 2) {
 		csh_printf(csh, "usage: iperf2 <ip> | stop"
 				"   (10s lwiperf client vs PC iperf2 -s; report on console)\n");
 		return 0;
 	}
-
-	LOCK_TCPIP_CORE();
-	s_session = lwiperf_start_tcp_client(&remote, LWIPERF_TCP_PORT_DEFAULT,
-					     LWIPERF_CLIENT, iperf2_report, NULL);
-	UNLOCK_TCPIP_CORE();
-	if (s_session == NULL) {
-		csh_printf(csh, "iperf2: start FAILED\n");
-		return 0;
+	if (iperf2_client_start(argv[1]) != 0) {
+		csh_printf(csh, "iperf2: start FAILED (bad ip or lwiperf refused)\n");
 	}
-	csh_printf(csh, "iperf2: lwiperf client vs %s started (10s, report on console)\n",
-		   argv[1]);
 	return 0;
 }
 

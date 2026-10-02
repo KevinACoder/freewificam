@@ -44,6 +44,13 @@
 #include "rtl8211f.h"
 #include "cpu_boost.h"
 
+#ifdef CONFIG_SCMI_PROBE
+#include "scmi_clk.h"
+#endif
+#ifdef CONFIG_IPERF2_AUTO_HOST
+#include "iperf2_cmd.h"
+#endif
+
 #ifdef CONFIG_SHELL
 #include "cherrysh_adapter.h"
 #endif
@@ -98,6 +105,36 @@ static void lwiperf_report(void *arg, enum lwiperf_report_type type,
 		  (unsigned)kbitpsec);
 }
 
+#if defined(CONFIG_SCMI_PROBE) || defined(CONFIG_IPERF2_AUTO_HOST)
+/* Unattended diagnostic chain (the R5b console-RX outage workaround): the
+ * SCMI clock probe first, then - when built with CONFIG_IPERF2_AUTO_HOST -
+ * one 10 s lwiperf client burst so the forward direction gets measured
+ * without anyone typing at a shell. Delays keep the report order stable in
+ * the boot log and give the PC-side server a moment to accept. */
+static void thr_autorun(void *arg)
+{
+	uint32_t until;
+
+	(void)arg;
+	board_log("autorun: enter\n");
+	/* Tick-busy-wait, same shape as the heartbeat loop: osDelay on this
+	 * image is under suspicion (the R5b thread printed nothing past a
+	 * plain sleep), and three seconds of spin at boot is free. */
+	until = osKernelGetTickCount() + 3000U;
+	while ((int32_t)(osKernelGetTickCount() - until) < 0) {
+	}
+#ifdef CONFIG_SCMI_PROBE
+	scmi_boot_probe();
+#endif
+#ifdef CONFIG_IPERF2_AUTO_HOST
+	until = osKernelGetTickCount() + 2000U;
+	while ((int32_t)(osKernelGetTickCount() - until) < 0) {
+	}
+	(void)iperf2_client_start(CONFIG_IPERF2_AUTO_HOST);
+#endif
+}
+#endif
+
 /* Runs in the tcpip thread once the stack is up: netif management belongs
  * to this context (LWIP_TCPIP_CORE_LOCKING=1 - lwipopts N7 - so netifapi
  * calls execute directly against the core under LOCK_TCPIP_CORE()). */
@@ -131,6 +168,20 @@ static void tcpip_ready(void *arg)
 
 	board_log("net: READY (NO_SYS=0 tcpip thread prio band %d)\n",
 		  TCPIP_THREAD_PRIO);
+
+#if defined(CONFIG_SCMI_PROBE) || defined(CONFIG_IPERF2_AUTO_HOST)
+	/* AboveNormal on purpose (tx band 15, beats thr_boot's busy loop at
+	 * 19 - board-proven R5b: a Normal-priority autorun never got CPU).
+	 * The thread exits when done. */
+	{
+		osThreadId_t t = osThreadNew(thr_autorun, NULL,
+					     &(osThreadAttr_t){
+						     .name = "autorun",
+						     .priority = osPriorityAboveNormal });
+
+		board_log("autorun: create -> %p\n", (void *)t);
+	}
+#endif
 }
 
 /* Bring one GMAC port up to "link up, channel running" (phase-1 sequence,

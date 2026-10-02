@@ -66,6 +66,12 @@ static const unsigned int scmi_opp_mhz[] = {
 	408u, 600u, 816u, 1104u, 1416u, 1608u, 1800u,
 };
 
+/* Boot-time rate set is opt-in per build (ladder rounds pass the OPP row
+ * they are measuring); the default image never writes through SCMI. */
+#ifndef CONFIG_SCMI_BOOT_SET_MHZ
+#define CONFIG_SCMI_BOOT_SET_MHZ 0
+#endif
+
 static volatile uint32_t *const s_shm = (volatile uint32_t *)SCMI_SHMEM_BASE;
 
 static long scmi_smc(void)
@@ -131,7 +137,10 @@ static uint32_t mmio_rd32(uint32_t addr)
 	return *(volatile uint32_t *)(uintptr_t)addr;
 }
 
-static void cmd_freq_report(chry_shell_t *csh)
+/* Both the shell command and the boot probe report through board_log: the
+ * console is the same UART either way, and this keeps the boot twin free
+ * of any shell context. */
+static void freq_report(void)
 {
 	uint32_t sel0 = mmio_rd32(CRU_CLKSEL_CON(0));
 	uint32_t con0 = mmio_rd32(CRU_APLL_CON0);
@@ -149,27 +158,27 @@ static void cmd_freq_report(chry_shell_t *csh)
 		refdiv = 1u;
 	}
 	if ((refdiv == 0u) || (pd1 == 0u) || (pd2 == 0u)) {
-		csh_printf(csh, "cpufreq: CRU decode hit a zero divider "
-				 "(con0=0x%08x con1=0x%08x)\n", con0, con1);
+		board_log("cpufreq: CRU decode hit a zero divider "
+			  "(con0=0x%08x con1=0x%08x)\n", con0, con1);
 		return;
 	}
 
 	if ((sel0 & (1u << 6)) != 0u) {
 		/* armclk mux on GPLL; APLL factors are latched but idle. */
-		csh_printf(csh, "cpufreq: parent=GPLL 1188 MHz "
-				 "(apll fbdiv=%u pd1=%u refdiv=%u pd2=%u "
-				 "dsmpd=%u lock=%u)\n",
-			   fbdiv, pd1, refdiv, pd2, dsmpd, lock);
+		board_log("cpufreq: parent=GPLL 1188 MHz "
+			  "(apll fbdiv=%u pd1=%u refdiv=%u pd2=%u "
+			  "dsmpd=%u lock=%u)\n",
+			  fbdiv, pd1, refdiv, pd2, dsmpd, lock);
 	} else {
-		csh_printf(csh, "cpufreq: parent=APLL %u MHz (fbdiv=%u "
-				 "pd1=%u refdiv=%u pd2=%u dsmpd=%u lock=%u)\n",
-			   (unsigned)(24u * fbdiv / refdiv / pd1 / pd2),
-			   fbdiv, pd1, refdiv, pd2, dsmpd, lock);
+		board_log("cpufreq: parent=APLL %u MHz (fbdiv=%u "
+			  "pd1=%u refdiv=%u pd2=%u dsmpd=%u lock=%u)\n",
+			  (unsigned)(24u * fbdiv / refdiv / pd1 / pd2),
+			  fbdiv, pd1, refdiv, pd2, dsmpd, lock);
 	}
-	csh_printf(csh, "cpufreq: CLKSEL3=0x%08x (atclk/32=%u gic/32=%u) "
-			 "CLKSEL4=0x%08x (pclk/32=%u periph/32=%u)\n",
-		   sel3, sel3 & 0x1fu, (sel3 >> 8) & 0x1fu,
-		   sel4, sel4 & 0x1fu, (sel4 >> 8) & 0x1fu);
+	board_log("cpufreq: CLKSEL3=0x%08x (atclk/32=%u gic/32=%u) "
+		  "CLKSEL4=0x%08x (pclk/32=%u periph/32=%u)\n",
+		  sel3, sel3 & 0x1fu, (sel3 >> 8) & 0x1fu,
+		  sel4, sel4 & 0x1fu, (sel4 >> 8) & 0x1fu);
 }
 
 static void scmi_print_err(chry_shell_t *csh, const char *what, int err)
@@ -198,7 +207,7 @@ static int cmd_scmi(int argc, char **argv)
 	}
 
 	if (strcmp(argv[1], "freq") == 0) {
-		cmd_freq_report(csh);
+		freq_report();
 		return 0;
 	}
 
@@ -301,3 +310,82 @@ static int cmd_scmi(int argc, char **argv)
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_scmi, scmi, "scmi ver|attr|get|set <mhz>|freq",
 			  "SCMI clock probe (BL31 carrier) + CRU readback");
+
+/* Boot-time twin of the shell probe, for images whose console RX is not
+ * reachable (the R5b session's shell-outage workaround): everything lands
+ * in the boot log through board_log. Read-only trio + freq first, then an
+ * optional rate set (CONFIG_SCMI_BOOT_SET_MHZ, 0 = never write). */
+void scmi_boot_probe(void)
+{
+	uint32_t rx[5];
+	int err;
+
+	board_log("scmi: boot probe enter (shmem 0x%08lx)\n",
+		  (unsigned long)SCMI_SHMEM_BASE);
+	err = scmi_xfer(SCMI_MSG_VERSION, NULL, 0u, rx, 1u);
+	board_log("scmi: PROTOCOL_VERSION xfer -> %d\n", err);
+	if (err != 0) {
+		board_log("scmi: boot PROTOCOL_VERSION FAILED (%d) - "
+			  "BL31 channel unusable\n", err);
+		return;
+	}
+	board_log("scmi: clock protocol version 0x%08x\n", rx[0]);
+
+	{
+		uint32_t tx = SCMI_CLK_CPU_ID;
+
+		err = scmi_xfer(SCMI_MSG_CLK_ATTRS, &tx, 1u, rx, 5u);
+		if (err == 0) {
+			board_log("scmi: clk %u attrs=0x%08x name=%.16s\n",
+				  SCMI_CLK_CPU_ID, rx[0], (const char *)&rx[1]);
+		} else {
+			board_log("scmi: boot CLOCK_ATTRIBUTES FAILED (%d)\n",
+				  err);
+		}
+
+		err = scmi_xfer(SCMI_MSG_RATE_GET, &tx, 1u, rx, 2u);
+		if (err == 0) {
+			uint64_t rate = ((uint64_t)rx[1] << 32) | (uint64_t)rx[0];
+
+			board_log("scmi: clk %u rate = %u Hz (%u.%03u MHz)\n",
+				  SCMI_CLK_CPU_ID,
+				  (unsigned)(rate & 0xffffffffu),
+				  (unsigned)(rate / 1000000u),
+				  (unsigned)((rate / 1000u) % 1000u));
+		} else {
+			board_log("scmi: boot CLOCK_RATE_GET FAILED (%d)\n",
+				  err);
+		}
+	}
+
+	freq_report();
+
+#if CONFIG_SCMI_BOOT_SET_MHZ
+	{
+		uint32_t tx[4];
+		uint64_t rate = (uint64_t)CONFIG_SCMI_BOOT_SET_MHZ * 1000000u;
+
+		tx[0] = 0u;	/* synchronous */
+		tx[1] = SCMI_CLK_CPU_ID;
+		tx[2] = (uint32_t)(rate & 0xffffffffu);
+		tx[3] = (uint32_t)(rate >> 32);
+		err = scmi_xfer(SCMI_MSG_RATE_SET, tx, 4u, NULL, 0u);
+		if (err == 0) {
+			board_log("scmi: boot rate-set %u MHz ACCEPTED\n",
+				  (unsigned)CONFIG_SCMI_BOOT_SET_MHZ);
+			err = scmi_xfer(SCMI_MSG_RATE_GET, tx, 1u, rx, 2u);
+			if (err == 0) {
+				uint64_t now = ((uint64_t)rx[1] << 32) |
+					       (uint64_t)rx[0];
+
+				board_log("scmi: rate now %u.%03u MHz\n",
+					  (unsigned)(now / 1000000u),
+					  (unsigned)((now / 1000u) % 1000u));
+			}
+		} else {
+			board_log("scmi: boot rate-set %u MHz FAILED (%d)\n",
+				  (unsigned)CONFIG_SCMI_BOOT_SET_MHZ, err);
+		}
+	}
+#endif
+}
