@@ -147,6 +147,39 @@
  * DMA status is cleared. */
 #define DWC_EQOS_MAC_INTERRUPT_STATUS        0x0B0
 #define DWC_EQOS_MAC_INTERRUPT_ENABLE        0x0B4
+/* MAC-level status bits (Linux dwmac4.h enum dwmac4_irq_status): the MMC
+ * counter events present here too. These are NOT gated by 0x0B4 - the MMC
+ * block has its own masks (see below) - which is exactly why the 2026-10-02
+ * freeze walked past a disabled 0x0B4: an unmasked MMC latch holds the
+ * level line with nothing the DMA-status handler can see. */
+#define  DWC_EQOS_MAC_INTR_ST_MMC_TX         (1u << 10)
+#define  DWC_EQOS_MAC_INTR_ST_MMC_RX         (1u << 9)
+#define  DWC_EQOS_MAC_INTR_ST_MMC_RX_CSUM    (1u << 11)
+#define  DWC_EQOS_MAC_INTR_ST_TS             (1u << 12)
+
+/* --- MMC counter interrupt block (base + 0x700; Linux mmc_core.c offsets) --
+ * MMC counters raise an interrupt when the counter crosses its half-way
+ * point (bit 31 of a 32-bit counter); under a 650 Mbit/s TX flow the TX
+ * octet counter reaches 0x8000_0000 after ~2 GiB, i.e. ~26 s - matching the
+ * measured freeze onset. The events latch into the two status words and
+ * assert the same line as the DMA channel; the ONLY thing that stops them
+ * is the mask pair (Linux setup: stmmac_mmc_intr_all_mask, mmc_core.c
+ * "To mask all interrupts"). */
+#define DWC_EQOS_MMC_RX_INTR                 0x704
+#define DWC_EQOS_MMC_TX_INTR                 0x708
+#define DWC_EQOS_MMC_RX_INTR_MASK            0x70C
+#define DWC_EQOS_MMC_TX_INTR_MASK            0x710
+#define DWC_EQOS_MMC_RX_IPC_INTR_MASK        0x800
+
+/* --- MTL queue interrupt (Linux dwmac4.h: MTL_INT_STATUS 0xC20,
+ * MTL_CHAN_INT_CTRL queue0 0xD2C; RX overflow status bit16, enable bit24).
+ * Linux services this in the same host-IRQ path (dwmac4_core.c
+ * dwmac4_irq_status): check the summary, W1C the overflow status. An
+ * unserviced latch here is the other way the line is held with a clean DMA
+ * status. */
+#define DWC_EQOS_MTL_INT_STATUS              0x0C20
+#define DWC_EQOS_MTL_CHAN0_INT_CTRL          0x0D2C
+#define  DWC_EQOS_MTL_RX_OVERFLOW_INT        (1u << 16)
 
 #define DWC_EQOS_MAC_HW_FEATURE1             0x120
 #define  DWC_EQOS_HW_TXFIFOSZ_SHIFT          6
@@ -379,6 +412,37 @@ struct dwc_eqos_stats {
 };
 
 void dwc_eqos_get_stats(unsigned int index, struct dwc_eqos_stats *stats);
+
+/* Fast-probe snapshot (N7-stab): ring occupancy, completion-semaphore
+ * count, zero-copy pressure, and the IRQ black box above, plus live
+ * register reads (CH0_STATUS, INTR_ENABLE) and the GIC pending bit for
+ * this port's line. Callable from any thread; takes the port line lock
+ * only for the ring indices. */
+struct dwc_eqos_diag {
+	uint32_t tx_head;
+	uint32_t tx_tail;
+	uint32_t tx_ioc_seq;
+	uint32_t tx_sem_count;	/* release-on-completion signals pending */
+	uint32_t rx_ready_count;	/* ZC frames waiting for the consumer */
+	uint32_t rx_free_count;	/* spare slots left in the ZC pool */
+	uint32_t irq_n;
+	uint32_t irq_odd;
+	uint32_t last_status;
+	uint32_t ch0_status;	/* live read at call time */
+	uint32_t intr_enable;	/* live read at call time */
+	int32_t  gic_pending;	/* pending bit of this port's GIC line */
+	uint32_t irq_breaker;	/* 1 once the breaker fired (see dwc_eqos.c) */
+};
+
+void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag);
+
+/* Interrupt-source forensics (N7-stab freeze round): emergency-print every
+ * block that shares this port's interrupt line (MAC status - read-clear,
+ * MTL queue interrupt, MMC counter interrupts + masks). Call from a
+ * context that still runs when the DMA-status handler is spinning (the
+ * tick monitor): the read of MAC_INTERRUPT_STATUS clears its latch and
+ * doubles as an unstick attempt. */
+void dwc_eqos_irq_dump(unsigned int index);
 
 /* MAC MMC hardware counters (read-clear-nothing; base 0x700 region). The
  * RX FIFO overflow counter counts frames dropped INSIDE the MAC/MTL before

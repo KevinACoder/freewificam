@@ -52,6 +52,15 @@
  * value = more urgent. */
 #define BOARD_TICK_PRIORITY_RAW	0xe0u
 
+/* N7-stab tick monitor (2026-10-02): the EL1 non-secure PHYSICAL timer as an
+ * independent watchdog above every other line in this image. PPI 30 - the
+ * virtual timer (PPI 27) is the kernel tick, and PPI 29 is OP-TEE's secure
+ * timer. 0x60 is strictly more urgent than the GMAC line (0xa0) and the tick
+ * (0xe0), so the monitor always gets a window even while a GMAC interrupt
+ * storm runs (each ERET lets the GIC pick the highest-priority pending). */
+#define BOARD_TICK_MON_INTID		30U
+#define BOARD_TICK_MON_PRIORITY_RAW	0x60u
+
 /* Distributor default SPI priority (mid). Callers override per interrupt. */
 #define BOARD_SPI_DEFAULT_PRIORITY_RAW	0xa0u
 

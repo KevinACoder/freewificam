@@ -194,11 +194,13 @@ tx_serror_fault:
 	b	tx_fault_park
 
 tx_fiq_park:
-	/* No print: a FIQ here preempted the console lock holder and the
-	 * print would spin on it forever. Silent hang = secure world routed
-	 * a FIQ at us. */
-1:	wfe
-	b	1b
+	/* A FIQ arrived with no owner in this image (secure-world misroute).
+	 * Historically silent because a console-lock print here could spin
+	 * forever on the interrupted holder's lock; the N7-stab round added
+	 * board_log_emergency (lock-free, polled UART), so the death now
+	 * leaves one line instead of silence. */
+	mov	x0, #2
+	b	tx_fault_park		/* kind 2 = fiq */
 
 /* Entry stub: called by main() (THREADX_BUILD) instead of returning.
  * Keeps the current sp (the 64 KiB boot region top, __stack_top) and hands

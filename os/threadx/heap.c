@@ -75,8 +75,11 @@ static size_t heap_allocated;	/* live byte count (v3.1 has no query API) */
 void __assert_func(const char *file, int line, const char *func,
 		   const char *expr)
 {
-	board_log("heap: assert %s at %s:%d (%s)\n", expr, file, line,
-		  func != NULL ? func : "?");
+	/* Emergency outlet (N7-stab): a heap assert can land inside the tlsf
+	 * critical section or a live print - board_log would deadlock on the
+	 * print lock and erase the evidence. */
+	board_log_emergency("heap: assert %s at %s:%d (%s)", expr, file, line,
+			    func != NULL ? func : "?");
 	for (;;) {
 		__asm__ __volatile__("wfe");
 	}

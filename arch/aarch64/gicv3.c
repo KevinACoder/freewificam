@@ -45,6 +45,7 @@
 #define GICD_IGROUPR(n)		(0x0080 + 4 * (n))
 #define GICD_ISENABLER(n)	(0x0100 + 4 * (n))
 #define GICD_ICENABLER(n)	(0x0180 + 4 * (n))
+#define GICD_ISPENDR(n)		(0x0200 + 4 * (n))
 #define GICD_ICPENDR(n)		(0x0280 + 4 * (n))
 /* Per-interrupt priority is ONE BYTE per INTID at 0x400 + id - no 4-byte
  * stride here. A 4x stride makes the default-priority loop walk into the
@@ -73,6 +74,7 @@
 #define GICR_IGROUPR0		(GICR_SGI_OFFSET + 0x0080)
 #define GICR_ISENABLER0		(GICR_SGI_OFFSET + 0x0100)
 #define GICR_ICENABLER0		(GICR_SGI_OFFSET + 0x0180)
+#define GICR_ISPENDR0		(GICR_SGI_OFFSET + 0x0200)
 #define GICR_ICPENDR0		(GICR_SGI_OFFSET + 0x0280)
 #define GICR_IPRIORITYR0	(GICR_SGI_OFFSET + 0x0400)
 #define GICR_IGRPMODR0		(GICR_SGI_OFFSET + 0x0d00)
@@ -394,6 +396,38 @@ int32_t irq_set_mode_level(uint32_t intid)
 	}
 	irq_mode_level[intid] = 1u;
 	return 0;
+}
+
+/* --- read-only state queries (N7-stab diagnostics) ------------------------- */
+
+/* Pending (ISPENDR reads the live pending state; ICPENDR is the W1C write
+ * side and would read back useless). Safe from any context. */
+int32_t gic_irq_is_pending(uint32_t intid)
+{
+	uint32_t word = intid / 32u;
+	uint32_t bit = intid % 32u;
+
+	if (intid > IRQ_INTID_SPI_MAX) {
+		return -1;
+	}
+	if (intid <= IRQ_INTID_SGI_PPI_MAX) {
+		return (gicr_read(GICR_ISPENDR0) & (1u << bit)) ? 1 : 0;
+	}
+	return (gicd_read(GICD_ISPENDR(word)) & (1u << bit)) ? 1 : 0;
+}
+
+int32_t gic_irq_is_enabled(uint32_t intid)
+{
+	uint32_t word = intid / 32u;
+	uint32_t bit = intid % 32u;
+
+	if (intid > IRQ_INTID_SPI_MAX) {
+		return -1;
+	}
+	if (intid <= IRQ_INTID_SGI_PPI_MAX) {
+		return (gicr_read(GICR_ISENABLER0) & (1u << bit)) ? 1 : 0;
+	}
+	return (gicd_read(GICD_ISENABLER(word)) & (1u << bit)) ? 1 : 0;
 }
 
 /* --- interrupt entry -------------------------------------------------------- */

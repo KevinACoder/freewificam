@@ -37,6 +37,13 @@ int32_t irq_set_priority(uint32_t intid, uint8_t raw_priority);
  * init already clears every SPI's ICFGR pair to level. */
 int32_t irq_set_mode_level(uint32_t intid);
 
+/* Read-only state queries (N7-stab diagnostics, 2026-10-02): the pending
+ * bit (ISPENDR, read-only) tells "the device still holds the line down"
+ * (interrupt storm in progress) apart from "the handler loops without the
+ * line" (software livelock). Enabled bit for completeness. Any context. */
+int32_t gic_irq_is_pending(uint32_t intid);
+int32_t gic_irq_is_enabled(uint32_t intid);
+
 /* Interrupt entry (called from the vector table's IRQ slot):
  * acknowledge (ICC_IAR1_EL1) -> dispatch through the registry ->
  * end-of-interrupt. Spurious (1023) returns without an EOI. Runs with IRQs

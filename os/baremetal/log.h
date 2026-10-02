@@ -27,6 +27,15 @@ void board_log(const char *fmt, ...);
 /* Raw bytes, unstamped, byte-exact (ANSI escapes survive). */
 void board_console_write_raw(const char *data, unsigned int len);
 
+/* Fault-path printer (N7-stab, 2026-10-02 sustained-TX freeze round): the
+ * park/assert landers print through THIS, not board_log - no print lock
+ * (a fault that interrupts a print would deadlock on the lock its own
+ * interrupted context holds, and the freeze would be silent), no stamp,
+ * a static buffer (a stack-overflow victim must not push another frame).
+ * Interleaving with a live print is acceptable on a death line; silence
+ * is not. Thread and ISR safe by construction (polled UART only). */
+void board_log_emergency(const char *fmt, ...);
+
 /* Switch the stamp source from the generic counter (cntvct) to the OS tick
  * count (SPEC v3 §3.4.3). One-way: called once, from main, after the tick
  * came up; the switch itself is announced by a caller log line. */
@@ -36,6 +45,12 @@ void board_log_stamp_use_tick(void);
  * sink drops its output, the raw outlet does not ask. Weak here (default
  * "not muted"), strong in the gdb glue. */
 int board_console_muted(void);
+
+/* 1 while some context holds the one-line print lock (N7-stab forensics:
+ * a freeze with the lock held turns every later board_log into a spin, so
+ * the fast probe checks this first and switches to the emergency outlet
+ * instead of wedging itself on a dead holder). */
+int board_console_lock_held(void);
 
 /* Break-in seam for an interrupt-driven console (S4 §3.6.2): a 0x03 seen
  * by the shell's RX path asks the gdb stub first. Returns 1 = the byte was

@@ -148,6 +148,25 @@ ifeq ($(CONFIG_SHELL_RX_DIAG),y)
 CFLAGS += -DSHELL_RX_DIAG=1
 endif
 
+# N7-stab forensics (2026-10-02 sustained-TX freeze round), three independent
+# single-factor knobs:
+#   GMAC_IRQ_BREAKER - drop AIE when unserviced status bits storm (>=32 odd
+#                      handler passes per 100 ms); converts a livelock into a
+#                      degraded-but-alive system plus one emergency log line.
+#   GMAC_TICK_MON    - CNTP watchdog above every other line; prints the GMAC
+#                      register crime scene when the kernel tick stalls.
+#   GMAC_FAST_PROBE  - 10 Hz thread-state probe (first 60 s), run counters of
+#                      every thread on one line.
+ifeq ($(CONFIG_GMAC_IRQ_BREAKER),y)
+CFLAGS += -DCONFIG_GMAC_IRQ_BREAKER=1
+endif
+ifeq ($(CONFIG_GMAC_TICK_MON),y)
+CFLAGS += -DCONFIG_GMAC_TICK_MON=1
+endif
+ifeq ($(CONFIG_GMAC_FAST_PROBE),y)
+CFLAGS += -DCONFIG_GMAC_FAST_PROBE=1
+endif
+
 ifeq ($(CONFIG_OS),threadx)
 ifeq ($(CONFIG_SHELL),y)
 SHELL_SRCS := \
