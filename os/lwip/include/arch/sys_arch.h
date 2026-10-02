@@ -63,4 +63,8 @@ struct _sys_thread {
 };
 typedef struct _sys_thread sys_thread_t;
 
+/* N7 diagnostics: live depth of the tcpip input mailbox (the first one
+ * sys_mbox_new created). See sys_arch.c. */
+unsigned int sys_arch_tcpip_mbox_count(void);
+
 #endif /* LWIP_ARCH_SYS_ARCH_H */

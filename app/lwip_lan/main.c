@@ -4,7 +4,8 @@
  *
  * P7-2a shape (specs/lwip-adapt §3.1/§4/P7-2a): the lwIP stack runs its own
  * tcpip thread (sys_arch over the cmsis2_threadx shim, D54 band ladder:
- * shell(5) > tcpip(4) > this app's workers(3)) on the ThreadX UP kernel.
+ * tcpip(5) > this app's workers(3) - N7 raised the tcpip band) on the
+ * ThreadX UP kernel.
  * The GMAC driver and the ethnetif bridge are unchanged from phase 1 -
  * only the input pointer (tcpip_input) and the delivery context moved:
  *
@@ -30,6 +31,7 @@
 #include "lwip/netif.h"
 #include "lwip/tcpip.h"
 #include "lwip/apps/lwiperf.h"
+#include "arch/sys_arch.h"
 #include "uart.h"
 
 #ifdef CONFIG_GDB_STUB
@@ -40,9 +42,29 @@
 #include "ethnetif.h"
 #include "eqos_rk3568.h"
 #include "rtl8211f.h"
+#include "cpu_boost.h"
+
+#ifdef CONFIG_SCMI_PROBE
+#include "scmi_clk.h"
+#endif
+#ifdef CONFIG_IPERF2_AUTO_HOST
+#include "iperf2_cmd.h"
+#endif
 
 #ifdef CONFIG_SHELL
 #include "cherrysh_adapter.h"
+#endif
+
+/* RX-path forensics (2026-10-02 console-outage round; SHELL_RX_DIAG build
+ * knob): the driver counters live in uart.c, the adapter's in
+ * cherrysh_adapter.c - both non-static so the heartbeat can split the
+ * path ISR -> ring -> readline in one line. */
+#if defined(SHELL_RX_DIAG) && defined(CONFIG_UART_RX_IRQ) && defined(CONFIG_SHELL)
+extern volatile unsigned uart_console_rx_isr_calls;
+extern volatile unsigned uart_console_rx_isr_bytes;
+extern volatile unsigned cherrysh_rx_ringed;
+extern volatile unsigned cherrysh_rx_consumed;
+extern volatile unsigned cherrysh_rx_wakes;
 #endif
 
 #ifndef THREADX_BUILD
@@ -95,8 +117,42 @@ static void lwiperf_report(void *arg, enum lwiperf_report_type type,
 		  (unsigned)kbitpsec);
 }
 
+#if defined(CONFIG_SCMI_PROBE) || defined(CONFIG_IPERF2_AUTO_HOST)
+/* Unattended diagnostic chain (the R5b console-RX outage workaround): the
+ * SCMI clock probe first, then - when built with CONFIG_IPERF2_AUTO_HOST -
+ * one 10 s lwiperf client burst so the forward direction gets measured
+ * without anyone typing at a shell. Delays keep the report order stable in
+ * the boot log and give the PC-side server a moment to accept. */
+static void thr_autorun(void *arg)
+{
+	(void)arg;
+	board_log("autorun: enter\n");
+	/* Settle delay: give the bring-up log a moment before the optional
+	 * probe/measurement (osDelay is the kernel's own proven path - the
+	 * R5b "plain sleep never returned" observation was the slot-entry
+	 * parking bug, not the delay call). A busy-wait here would starve
+	 * the tx19 shell/heartbeat threads for its whole duration. */
+	(void)osDelay(3000U);
+#ifdef CONFIG_SCMI_PROBE
+	/* The boot-time probe is part of the unattended rate-set chain
+	 * (boot set != 0) only. The probe has never executed on this
+	 * silicon - with the shell demonstrably alive (2026-10-02) the
+	 * first run belongs behind a decisive wall, i.e. the typed `scmi`
+	 * command, not the boot path. */
+#if defined(CONFIG_SCMI_BOOT_SET_MHZ) && (CONFIG_SCMI_BOOT_SET_MHZ != 0)
+	scmi_boot_probe();
+#endif
+#endif
+#ifdef CONFIG_IPERF2_AUTO_HOST
+	(void)osDelay(2000U);
+	(void)iperf2_client_start(CONFIG_IPERF2_AUTO_HOST);
+#endif
+}
+#endif
+
 /* Runs in the tcpip thread once the stack is up: netif management belongs
- * to this context (core locking is off; the netifapi path inlined here). */
+ * to this context (LWIP_TCPIP_CORE_LOCKING=1 - lwipopts N7 - so netifapi
+ * calls execute directly against the core under LOCK_TCPIP_CORE()). */
 static void tcpip_ready(void *arg)
 {
 	ip4_addr_t ip, mask, gw;
@@ -127,6 +183,20 @@ static void tcpip_ready(void *arg)
 
 	board_log("net: READY (NO_SYS=0 tcpip thread prio band %d)\n",
 		  TCPIP_THREAD_PRIO);
+
+#if defined(CONFIG_SCMI_PROBE) || defined(CONFIG_IPERF2_AUTO_HOST)
+	/* AboveNormal on purpose (tx band 15, beats thr_boot's busy loop at
+	 * 19 - board-proven R5b: a Normal-priority autorun never got CPU).
+	 * The thread exits when done. */
+	{
+		osThreadId_t t = osThreadNew(thr_autorun, NULL,
+					     &(osThreadAttr_t){
+						     .name = "autorun",
+						     .priority = osPriorityAboveNormal });
+
+		board_log("autorun: create -> %p\n", (void *)t);
+	}
+#endif
 }
 
 /* Bring one GMAC port up to "link up, channel running" (phase-1 sequence,
@@ -187,6 +257,8 @@ static void thr_boot(void *arg)
 {
 	unsigned int port = (unsigned int)CONFIG_GMAC_PORT;
 	struct dwc_eqos_stats stats;
+	struct dwc_eqos_mmc_stats mmc;
+	unsigned long d_poll, d_pool, d_input, d_fed;
 	uint32_t wd_due, now;
 
 	(void)arg;
@@ -229,14 +301,34 @@ static void thr_boot(void *arg)
 		if ((uint32_t)(osKernelGetTickCount() - now) >= 1000U) {
 			now += 1000U;
 			dwc_eqos_get_stats(port, &stats);
-			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u\n",
+			dwc_eqos_get_mmc_stats(port, &mmc);
+			ethnetif_get_diag(&d_poll, &d_pool, &d_input, &d_fed);
+			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u | irq=%u csdrop=%u fed=%lu poolfail=%lu inputfail=%lu mbox=%u mmc_ovf=%u\n",
 				  port,
 				  (unsigned)stats.rx_frames,
 				  (unsigned)stats.rx_dropped,
 				  (unsigned)stats.rx_errors,
 				  (unsigned)stats.tx_frames,
 				  (unsigned)stats.tx_dropped,
-				  (unsigned)stats.tx_errors);
+				  (unsigned)stats.tx_errors,
+				  (unsigned)stats.rx_irqs,
+				  (unsigned)stats.rx_csum_drops,
+				  d_fed, d_pool, d_input,
+				  sys_arch_tcpip_mbox_count(),
+				  (unsigned)mmc.rx_fifo_overflow);
+#if defined(SHELL_RX_DIAG) && defined(CONFIG_UART_RX_IRQ) && defined(CONFIG_SHELL)
+			/* One line per second: driver registers + ISR counters,
+			 * then the adapter's ring/wake/consume counters. Where a
+			 * keystroke stops moving localizes the fault. */
+			uart_console_rx_diag();
+			board_log("shell: rx armed=%d isr=%u bytes=%u ringed=%u consumed=%u wakes=%u\n",
+				  uart_console_rx_armed(),
+				  uart_console_rx_isr_calls,
+				  uart_console_rx_isr_bytes,
+				  cherrysh_rx_ringed,
+				  cherrysh_rx_consumed,
+				  cherrysh_rx_wakes);
+#endif
 		}
 		(void)osDelay(1);
 	}
@@ -266,6 +358,11 @@ int main(void)
 	 * takes the tick over in tx_application_define (1000 Hz). */
 	uart_early_init();
 	gicv3_init();
+
+	/* N7 R5a: the bootloader leaves the cluster at 816 MHz; pair the
+	 * Linux opp (voltage over i2c0 first, then APLL relock) before any
+	 * thread exists. Probe-only when CONFIG_CPU_BOOST_MHZ == 0. */
+	(void)rk3568_cpu_boost(CONFIG_CPU_BOOST_MHZ);
 
 #ifdef CONFIG_GDB_STUB
 	/* Same slot as every other app: the stub owns the dbgport before

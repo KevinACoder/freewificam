@@ -223,6 +223,7 @@ static uint32_t rx_len;
 static uart_rx_event_cb_t rx_cb;
 static bool rx_armed;
 static bool rx_gic_ready;
+static bool rx_arm_logged;
 
 /* IER bit 0 (ERBFI) enables both received-data-available and the receive
  * timeout - the two shapes a FIFO fill arrives in (a single keystroke
@@ -277,17 +278,33 @@ int uart_console_rx_arm(uint8_t *buf, uint32_t len, uart_rx_event_cb_t cb)
 
 	/* GIC side first - registering and enabling must not open the door
 	 * before the reception is armed. The IER write below is the actual
-	 * "interrupt on" switch; everything before it is setup. */
+	 * "interrupt on" switch; everything before it is setup. Failures are
+	 * logged per step: a silent -1 here is indistinguishable from "RX
+	 * never arrives" at the console (2026-10-02 outage round). */
 	if (!rx_gic_ready) {
+		int rc;
+
 		gicv3_init();
-		if (irq_register(BOARD_CONSOLE_INTID, uart_console_rx_isr,
-				 0) != 0 ||
-		    irq_set_mode_level(BOARD_CONSOLE_INTID) != 0 ||
-		    irq_set_priority(BOARD_CONSOLE_INTID,
-				     BOARD_SPI_DEFAULT_PRIORITY_RAW) != 0) {
+		rc = irq_register(BOARD_CONSOLE_INTID, uart_console_rx_isr, 0);
+		if (rc != 0) {
+			board_log("uart: rx arm irq_register FAIL %d\n", rc);
+			return -1;
+		}
+		rc = irq_set_mode_level(BOARD_CONSOLE_INTID);
+		if (rc != 0) {
+			board_log("uart: rx arm set_mode FAIL %d\n", rc);
+			return -1;
+		}
+		rc = irq_set_priority(BOARD_CONSOLE_INTID,
+				      BOARD_SPI_DEFAULT_PRIORITY_RAW);
+		if (rc != 0) {
+			board_log("uart: rx arm set_prio FAIL %d\n", rc);
 			return -1;
 		}
 		rx_gic_ready = true;
+		board_log("uart: rx gic ready intid=%u prio=%x\n",
+			  (unsigned)BOARD_CONSOLE_INTID,
+			  (unsigned)BOARD_SPI_DEFAULT_PRIORITY_RAW);
 	}
 	(void)irq_disable(BOARD_CONSOLE_INTID);
 	(void)irq_clear_pending(BOARD_CONSOLE_INTID);
@@ -300,7 +317,14 @@ int uart_console_rx_arm(uint8_t *buf, uint32_t len, uart_rx_event_cb_t cb)
 	rx_cb = cb;
 	rx_armed = true;
 
-	(void)irq_enable(BOARD_CONSOLE_INTID);
+	{
+		int rc = irq_enable(BOARD_CONSOLE_INTID);
+
+		if (rc != 0) {
+			board_log("uart: rx arm irq_enable FAIL %d\n", rc);
+			return -1;
+		}
+	}
 	reg_write(REG_IER, IER_RX_ENABLE);
 	/* Trigger level 1: every byte in the FIFO asserts RXRDY. The boot
 	 * program_uart() leaves trigger 14 - fine for polled TX, fatal for
@@ -311,6 +335,16 @@ int uart_console_rx_arm(uint8_t *buf, uint32_t len, uart_rx_event_cb_t cb)
 	 * the drain loop's job (it empties the FIFO per completion), not
 	 * the trigger's. Trigger bits are FCR[7:6]; 00 = 1 character. */
 	reg_write(REG_FCR, FCR_ENABLE | FCR_TRIGGER_1);
+	if (!rx_arm_logged) {
+		/* Once, on the first arm: ISRs re-arm per completion and must
+		 * not log (an ISR-context board_log on every keystroke would
+		 * itself disturb the path being measured). */
+		rx_arm_logged = true;
+		board_log("uart: rx armed intid=%u ier=%x lsr=%x\n",
+			  (unsigned)BOARD_CONSOLE_INTID,
+			  (unsigned)reg_read(REG_IER),
+			  (unsigned)reg_read(REG_LSR));
+	}
 	return 0;
 }
 

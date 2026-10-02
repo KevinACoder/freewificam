@@ -47,12 +47,26 @@
 /* Two GMACs on this SoC. */
 #define DWC_EQOS_PORT_COUNT	2
 
-/* Descriptor ring sizes and frame geometry. 64 slots each way is what the
- * emBox driver (and the netbsd/linux ports before it) ran with; the ring is
- * indexed with a wrap at the end, so both counts must match the hardware's
- * ring-length register (count - 1). */
-#define DWC_EQOS_RX_DESC_COUNT	64
+/* Descriptor ring sizes and frame geometry. RX went 64 -> 128 (N7 R2): the
+ * ring IS the receive burst buffer now (completed frames are left in place
+ * until software reads them, no intermediate stage copy), so its depth sets
+ * how long a burst survives a slow reader. The ring is indexed with a wrap
+ * at the end, so both counts must match the hardware's ring-length register
+ * (count - 1). */
+#define DWC_EQOS_RX_DESC_COUNT	128
 #define DWC_EQOS_TX_DESC_COUNT	64
+
+/* DMA buffer slots. The copy path needs exactly the ring depth (each frame's
+ * buffer is its only home until the ISR copies it out). The zero-copy path
+ * (CONFIG_GMAC_RX_ZC, N7 R4) hands buffers UP with the frame, so re-arm
+ * needs spare slots while frames are in flight with the consumer: ring
+ * depth + ring depth, and a frame is dropped (not parked) when the spares
+ * run out - the DMA never waits on a descriptor. */
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+#define DWC_EQOS_RX_SLOT_COUNT	(DWC_EQOS_RX_DESC_COUNT * 2)
+#else
+#define DWC_EQOS_RX_SLOT_COUNT	DWC_EQOS_RX_DESC_COUNT
+#endif
 
 /* Per-frame DMA buffer size. 1600, not 1518: the emBox port sized the DMA
  * buffers for jumbo-ish frames and the value is also the ceiling the tx path
@@ -65,12 +79,17 @@
 #define DWC_EQOS_BUF_ALIGN	0x800
 #define DWC_EQOS_BUF_STRIDE	0x800
 
-/* Frames handed up to the driver's caller are staged here, because the
- * descriptor slot is re-armed immediately in the receive path (a slot left in
- * software hands is how the RX ring wedges - see the comment on rx_complete).
- * Deep enough to absorb a burst, shallow enough to be dropped rather than
- * delay: overflow increments a counter instead of stalling the ring. */
-#define DWC_EQOS_RX_STAGE_COUNT	8
+/* Frames handed up to the driver's caller are staged in the ISR: the RX
+ * DMA stops the moment it laps a descriptor that is not owned, so the
+ * completion sweep re-arms every completed slot immediately (in interrupt
+ * context) and pays one linear copy into this ring as the price. Depth
+ * sets the burst budget: 8 overflowed under the iperf downlink (N7 R0
+ * dropped 13.5%); 128 = the descriptor ring depth it serves. */
+#define DWC_EQOS_RX_STAGE_COUNT	128
+
+/* One TX completion interrupt per this many frames (the last frame of a
+ * burst always interrupts, so a quiet line never waits on the counter). */
+#define DWC_EQOS_TX_IOC_DIV	8
 
 /* MDIO clock divider. pclk_gmac runs at 100 MHz here, and CR=4 selects the
  * 150-250 MHz range in the dwmac4 encoding, which keeps MDC at ~8.3 MHz -
@@ -96,6 +115,15 @@
 #define  DWC_EQOS_MAC_CONF_JE                (1u << 16)
 #define  DWC_EQOS_MAC_CONF_JD                (1u << 17)
 #define  DWC_EQOS_MAC_CONF_BE                (1u << 18)
+#define  DWC_EQOS_MAC_CONF_IPC               (1u << 27)	/* RX checksum
+							 * offload: the IPC
+							 * block validates
+							 * L3/L4 of every IP
+							 * frame (Linux
+							 * dwmac4.h
+							 * GMAC_CONFIG_IPC;
+							 * board dump diff
+							 * Reg0 bit27) */
 
 #define DWC_EQOS_MAC_PACKET_FILTER           0x008
 #define  DWC_EQOS_PKT_FLT_PR                 (1u << 0)
@@ -197,6 +225,10 @@
 #define DWC_EQOS_DMA_CH0_RX_END_ADDR         0x1128
 #define DWC_EQOS_DMA_CH0_TX_RING_LEN         0x112C
 #define DWC_EQOS_DMA_CH0_RX_RING_LEN         0x1130
+/* Channel + 0x38 (Linux dwmac4_dma.h DMA_CHAN_RX_WATCHDOG; the running
+ * Linux on this board shows 0xa0 here = its DEF_DMA_RIWT). Unit is 256 DMA
+ * clock ticks; expiry asserts RI even with every descriptor IOC off. */
+#define DWC_EQOS_DMA_CH0_RX_WATCHDOG         0x1138
 
 #define DWC_EQOS_DMA_CH0_INTR_ENABLE         0x1134
 /* On this silicon NIE/AIE sit at 15/14 (the dwmac4.10a layout); bit 16 is not
@@ -217,6 +249,10 @@
 #define  DWC_EQOS_CH0_STATUS_NIS             (1u << 15)
 #define  DWC_EQOS_CH0_STATUS_AIS             (1u << 14)
 #define  DWC_EQOS_CH0_STATUS_FB              (1u << 12)
+#define  DWC_EQOS_CH0_STATUS_RWT             (1u << 9)	/* RX watchdog
+							 * expiry (the
+							 * coalesced RI
+							 * source) */
 #define  DWC_EQOS_CH0_STATUS_RI              (1u << 6)
 #define  DWC_EQOS_CH0_STATUS_TI              (1u << 0)
 
@@ -245,8 +281,15 @@ struct dwc_eqos_desc {
 #define DWC_EQOS_DESC_TX_LD			(1u << 28)
 #define DWC_EQOS_DESC_RX_BUF1V			(1u << 24)
 #define DWC_EQOS_DESC_TX_ERR			(1u << 15)	/* writeback:
-						 error summary */
+							 error summary */
 #define DWC_EQOS_DESC_RX_LEN_MASK		0x7fffu
+/* RX writeback checksum status (the IPC block's report, Linux dwmac4_descs.h
+ * RDES1_*): valid only when the des3 RDES1_VALID flag is set, which the MAC
+ * does for IPv4/IPv6 frames only - ARP and friends sail through unchecked,
+ * exactly as before. */
+#define DWC_EQOS_DESC_RX_RDES1_VALID		(1u << 26)	/* in des3 */
+#define DWC_EQOS_RDES1_IP_HDR_ERR		(1u << 3)	/* in des1 */
+#define DWC_EQOS_RDES1_IP_PAYLOAD_ERR		(1u << 7)	/* in des1 */
 
 /* --- per-instance configuration ------------------------------------------- */
 
@@ -302,18 +345,51 @@ void dwc_eqos_irq(void *arg);
  * event_rx_frame, reduced to the one event the bridge consumes). */
 void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index));
 
+/* Zero-copy RX (CONFIG_GMAC_RX_ZC, N7 R4): the driver lends completed
+ * frames out instead of copying them into the staging ring.
+ *
+ * The wrap hook runs in INTERRUPT context with the completed frame and
+ * returns an opaque consumer handle the driver parks in its ready ring
+ * (NULL = consumer refused; the driver drops the frame). The consumer
+ * drains handles with dwc_eqos_rx_dequeue (thread context) and returns
+ * each borrowed buffer with dwc_eqos_rx_release once it is done with it.
+ * Buffers never leave the driver's slot pool, so a late release can never
+ * make the DMA read from memory someone else owns. */
+typedef void *(*dwc_eqos_rx_wrap_fn)(unsigned int index, unsigned int slot,
+				     uint8_t *buf, unsigned int len);
+void dwc_eqos_set_rx_zc(dwc_eqos_rx_wrap_fn fn);
+int dwc_eqos_rx_dequeue(unsigned int index, void **handle);
+void dwc_eqos_rx_release(unsigned int index, unsigned int slot);
+
 /* Statistics for the bring-up heartbeat: everything the driver had to drop or
  * could not complete, so a bad cable and a full ring are distinguishable. */
 struct dwc_eqos_stats {
-	uint32_t rx_frames;	/* delivered to the frame staging ring */
-	uint32_t rx_dropped;	/* staging ring full */
+	uint32_t rx_frames;	/* frames completed by the DMA */
+	uint32_t rx_dropped;	/* (reserved; the desc-ring model has no
+				 * intermediate stage to overflow) */
 	uint32_t rx_errors;	/* runt frames, bogus lengths */
 	uint32_t tx_frames;	/* descriptors armed */
 	uint32_t tx_dropped;	/* no descriptor became free in time */
 	uint32_t tx_errors;	/* writebacks with the error-summary bit set */
 	uint32_t dma_errors;	/* fatal bus errors seen in the status word */
+	uint32_t rx_irqs;	/* interrupt passes that ran the RX sweep
+				 * (the coalescing gauge: compare against
+				 * rx_frames per heartbeat) */
+	uint32_t rx_csum_drops;	/* RDES1-flagged bad-checksum frames (IPC) */
 };
 
 void dwc_eqos_get_stats(unsigned int index, struct dwc_eqos_stats *stats);
+
+/* MAC MMC hardware counters (read-clear-nothing; base 0x700 region). The
+ * RX FIFO overflow counter counts frames dropped INSIDE the MAC/MTL before
+ * any descriptor is involved - invisible to rx_dropped/rx_errors above. */
+struct dwc_eqos_mmc_stats {
+	uint32_t rx_pkts_gb;	/* 0x780 */
+	uint32_t rx_octets_gb;	/* 0x784 */
+	uint32_t rx_fifo_overflow;	/* 0x7d4 */
+	uint32_t rx_crc_error;	/* 0x794 */
+};
+
+void dwc_eqos_get_mmc_stats(unsigned int index, struct dwc_eqos_mmc_stats *stats);
 
 #endif /* FREEWEBCAM_DWC_EQOS_H */

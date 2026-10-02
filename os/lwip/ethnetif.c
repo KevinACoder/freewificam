@@ -43,6 +43,86 @@
 static uint8_t tx_linear[ETHNETIF_LINEAR_BUF] __attribute__((aligned(8)));
 static uint8_t rx_linear[ETHNETIF_LINEAR_BUF] __attribute__((aligned(8)));
 
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+/* Zero-copy RX (N7 R4): every driver slot is pre-wrapped in one of these
+ * custom pbufs. The wrap hook (ISR context) just refreshes the reusable
+ * header - ref was left at 0 by the last pbuf_free, len/payload describe
+ * this frame - and returns the handle the driver parks in its ready ring;
+ * when the stack is done with the frame, pbuf_free routes to the custom
+ * callback and the slot goes back to the driver. The driver stays lwip-
+ * blind (it only ever sees void* handles), the buffers never leave its
+ * pool, and the frame data is never copied. */
+struct ethnetif_zc {
+	struct pbuf_custom p;	/* must be first: pbuf_free hands back &p->pbuf */
+	unsigned int port;
+	unsigned int slot;
+};
+
+static struct ethnetif_zc zc_slots[DWC_EQOS_RX_SLOT_COUNT];
+
+static void eth_zc_free(struct pbuf *p)
+{
+	struct ethnetif_zc *z = (struct ethnetif_zc *)p;
+
+	dwc_eqos_rx_release(z->port, z->slot);
+}
+
+/* ISR context (the driver's wrap hook). NULL refuses the frame. */
+static void *eth_zc_wrap(unsigned int port, unsigned int slot,
+			 uint8_t *buf, unsigned int len)
+{
+	struct pbuf_custom *pc;
+
+	if ((len == 0u) || (len > DWC_EQOS_RX_BUF_SIZE) ||
+	    (slot >= DWC_EQOS_RX_SLOT_COUNT)) {
+		return NULL;
+	}
+	pc = &zc_slots[slot].p;
+	pc->pbuf.next = NULL;
+	pc->pbuf.ref = 1;
+	pc->pbuf.len = (u16_t)len;
+	pc->pbuf.tot_len = (u16_t)len;
+	pc->pbuf.payload = buf;
+	return pc;
+}
+
+static void eth_zc_init(unsigned int port)
+{
+	int i;
+
+	for (i = 0; i < DWC_EQOS_RX_SLOT_COUNT; i++) {
+		struct pbuf_custom *pc = &zc_slots[i].p;
+
+		memset(pc, 0, sizeof(*pc));
+		zc_slots[i].port = port;
+		zc_slots[i].slot = (unsigned int)i;
+		/* Constant wrapper facts: the payload is the driver's DMA
+		 * buffer and the free goes through our callback (the
+		 * IS_CUSTOM flag routes pbuf_free there; the internal type is
+		 * irrelevant on that path). */
+		pc->pbuf.flags = PBUF_FLAG_IS_CUSTOM;
+		pc->custom_free_function = eth_zc_free;
+	}
+	dwc_eqos_set_rx_zc(eth_zc_wrap);
+}
+#endif
+
+/* N7 diagnostics: the R2 board round showed the driver completing frames the
+ * stack never saw; these counters localize the loss without a debugger. */
+static unsigned long g_poll_calls;
+static unsigned long g_pool_fail;
+static unsigned long g_input_fail;
+static unsigned long g_fed_total;
+
+void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
+		       unsigned long *input_fail, unsigned long *fed_total)
+{
+	*poll_calls = g_poll_calls;
+	*pool_fail = g_pool_fail;
+	*input_fail = g_input_fail;
+	*fed_total = g_fed_total;
+}
+
 /* netif->state carries the driver port index (the only per-netif fact the
  * bridge needs - the MAC address comes from the driver). */
 static unsigned int port_of(struct netif *netif)
@@ -106,15 +186,36 @@ void ethnetif_add(struct netif *netif, unsigned int port,
 #endif
 	netif_set_default(netif);
 	netif_set_up(netif);
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	eth_zc_init(port);
+#endif
 }
 
-/* The driver-side seam: drain the staging ring into the stack. Returns the
+/* The driver-side seam: drain the staged frames into the stack. Returns the
  * number of frames handed to netif->input (the heartbeat's "fed" counter). */
 unsigned int ethnetif_poll(struct netif *netif)
 {
 	unsigned int port = port_of(netif);
 	unsigned int fed = 0;
 
+	g_poll_calls++;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	{
+		void *handle;
+
+		while (dwc_eqos_rx_dequeue(port, &handle)) {
+			struct pbuf *p = handle;
+
+			if (netif->input(p, netif) != ERR_OK) {
+				pbuf_free(p);
+				g_input_fail++;
+			} else {
+				fed++;
+				g_fed_total++;
+			}
+		}
+	}
+#else
 	while (dwc_eqos_get_rx_frame_size(port) > 0U) {
 		int len = dwc_eqos_read_frame(port, rx_linear, sizeof(rx_linear));
 		struct pbuf *p;
@@ -126,18 +227,23 @@ unsigned int ethnetif_poll(struct netif *netif)
 		if (p == NULL) {
 			/* Pool exhaustion: drop the frame (the staging slot is
 			 * already consumed), the TCP peer retransmits. */
+			g_pool_fail++;
 			continue;
 		}
 		if (pbuf_take(p, rx_linear, (u16_t)len) != ERR_OK) {
 			pbuf_free(p);
+			g_pool_fail++;
 			continue;
 		}
 		if (netif->input(p, netif) != ERR_OK) {
 			pbuf_free(p);
+			g_input_fail++;
 			continue;
 		}
 		fed++;
+		g_fed_total++;
 	}
+#endif
 
 	return fed;
 }

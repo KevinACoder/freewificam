@@ -100,7 +100,11 @@
 #define IPERF3_TCP_PORT          5201
 #define IPERF3_DEFAULT_TIME      10
 #define IPERF3_DEFAULT_INTERVAL  1
-#define IPERF3_TCP_BUF_SIZE      4096
+/* N7 gigabit tier (deviation from the vendored 4096, PROVENANCE table):
+ * one 32 KB send amortizes the socket/netconn round trip over ~22 segments
+ * instead of ~3 - at the R0 baseline the per-call overhead dominated the
+ * whole uplink. tcp_write chunks it into MSS-sized segments internally. */
+#define IPERF3_TCP_BUF_SIZE      (32 * 1024)
 #define IPERF3_UDP_BUF_SIZE      1460
 #define IPERF3_JSON_MAX          512
 #define IPERF3_RECV_BUF_SIZE     2048

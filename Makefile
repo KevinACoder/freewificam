@@ -68,6 +68,7 @@ SRCS := \
 	os/baremetal/log.c \
 	os/baremetal/tick.c \
 	board/$(BOARD)/drivers/uart.c \
+	board/$(BOARD)/drivers/cpu_boost.c \
 	board/$(BOARD)/param.c \
 	$(APP_MAIN)
 
@@ -380,6 +381,55 @@ ifeq ($(filter $(CONFIG_GMAC_PORT),0 1),)
 $(error CONFIG_GMAC_PORT must be 0 or 1, got '$(CONFIG_GMAC_PORT)')
 endif
 
+# GMAC RX data-path factors (N7 R3, one A/B key each - override on the make
+# command line, clean-config between variants):
+#   RX_HWCSUM   MAC IPC checksum offload: the driver drops RDES1-flagged bad
+#               frames and lwipopts disables CHECKSUM_CHECK_IP/TCP/UDP in
+#               lockstep (both sides must flip together).
+#   RX_COALESCE RX descriptor IOC off + RX watchdog interrupt coalescing
+#               (RI asserted on watchdog expiry instead of per frame).
+#   RX_ZC       RX zero-copy: completed frames are lent up as custom pbufs
+#               (no ISR copy, no staging ring); re-arm draws from a spare-
+#               slot pool, exhaustion drops instead of parking.
+#   RX_RIWT     watchdog reload, unit 256 DMA clock ticks (Linux default 0xa0).
+CONFIG_GMAC_RX_HWCSUM ?= n
+CONFIG_GMAC_RX_COALESCE ?= n
+CONFIG_GMAC_RX_RIWT ?= 0xa0
+CONFIG_GMAC_RX_ZC ?= n
+# One-shot CPU cluster raise (N7 R5a): pairs a Linux rk3568 opp row (freq +
+# vdd_cpu over i2c0->RK809) and relocks APLL before the scheduler starts.
+# 0 = probe/log the inherited voltage only (no writes).
+CONFIG_CPU_BOOST_MHZ ?= 0
+ifeq ($(filter $(CONFIG_GMAC_RX_HWCSUM),y n),)
+$(error CONFIG_GMAC_RX_HWCSUM must be y or n, got '$(CONFIG_GMAC_RX_HWCSUM)')
+endif
+ifeq ($(filter $(CONFIG_GMAC_RX_COALESCE),y n),)
+$(error CONFIG_GMAC_RX_COALESCE must be y or n, got '$(CONFIG_GMAC_RX_COALESCE)')
+endif
+ifeq ($(filter $(CONFIG_GMAC_RX_ZC),y n),)
+$(error CONFIG_GMAC_RX_ZC must be y or n, got '$(CONFIG_GMAC_RX_ZC)')
+endif
+ifeq ($(filter $(CONFIG_CPU_BOOST_MHZ),0 1104 1416 1608 1800),)
+$(error CONFIG_CPU_BOOST_MHZ must be one of 0/1104/1416/1608/1800, got '$(CONFIG_CPU_BOOST_MHZ)')
+endif
+CFLAGS += -DCONFIG_GMAC_RX_HWCSUM=$(if $(filter y,$(CONFIG_GMAC_RX_HWCSUM)),1,0) \
+	-DCONFIG_GMAC_RX_COALESCE=$(if $(filter y,$(CONFIG_GMAC_RX_COALESCE)),1,0) \
+	-DCONFIG_GMAC_RX_RIWT=$(CONFIG_GMAC_RX_RIWT) \
+	-DCONFIG_GMAC_RX_ZC=$(if $(filter y,$(CONFIG_GMAC_RX_ZC)),1,0) \
+	-DCONFIG_CPU_BOOST_MHZ=$(CONFIG_CPU_BOOST_MHZ)
+
+# N7 R5b: SCMI clock probe over SMC (BL31 carrier) + local CRU readback.
+# Diagnostic shell surface only - nothing runs at boot; the productization
+# decision (boot-time rate set vs U-Boot-side boost) is R5c's, gated on the
+# board answers this probe produces.
+CONFIG_SCMI_PROBE ?= n
+ifeq ($(CONFIG_SCMI_PROBE),y)
+ifneq ($(filter y,$(CONFIG_SHELL)),)
+SRCS += board/$(BOARD)/drivers/scmi_clk.c
+$(BUILD)/board/$(BOARD)/drivers/scmi_clk.o: EXTRAFLAGS := $(CSH_CFLAGS)
+endif
+endif
+
 LWIP_DIR := third-party/lwip
 # GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +
 # RTL8211F PHY + RK3568 glue/board table, re-arranged onto gicv3/cache/log.
@@ -432,7 +482,11 @@ LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include \
 	-DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
 $(BUILD)/third-party/lwip/%.o: EXTRAFLAGS := -w $(LWIP_CFLAGS)
 $(BUILD)/os/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
-$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS := $(LWIP_CFLAGS) $(CSH_CFLAGS)
+# Recursive assignment on purpose: APP_AUTORUN_CFLAGS is defined later in
+# the netutils block (CONFIG_SCMI_PROBE / CONFIG_IPERF2_AUTO_HOST), and a
+# target-specific := would snapshot it empty here.
+$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS = $(LWIP_CFLAGS) $(CSH_CFLAGS) \
+	$(APP_AUTORUN_CFLAGS)
 endif
 
 # netutils (SPEC S7b/netutils-adapt §3.4/§3.6): the vendored tool subset
@@ -453,12 +507,34 @@ endif
 CONFIG_NETUTILS_PING ?= y
 CONFIG_NETUTILS_TFTP ?= y
 CONFIG_NETUTILS_IPERF3 ?= y
+CONFIG_NETUTILS_IPERF2 ?= y
+
+# N7 R5b boot autorun (unattended measurement, console-RX outage workaround):
+# non-empty host = one 10 s lwiperf client burst after net READY; SCMI set
+# 0 = boot probe is read-only, an OPP row = rate set through BL31.
+CONFIG_IPERF2_AUTO_HOST ?=
+CONFIG_SCMI_BOOT_SET_MHZ ?= 0
+APP_AUTORUN_CFLAGS :=
+ifneq ($(strip $(CONFIG_IPERF2_AUTO_HOST)),)
+APP_AUTORUN_CFLAGS += -DCONFIG_IPERF2_AUTO_HOST='"$(CONFIG_IPERF2_AUTO_HOST)"' \
+	-Ios/netutils
+endif
+ifneq ($(strip $(CONFIG_SCMI_BOOT_SET_MHZ)),0)
+APP_AUTORUN_CFLAGS += -DCONFIG_SCMI_BOOT_SET_MHZ=$(CONFIG_SCMI_BOOT_SET_MHZ)
+endif
+ifeq ($(CONFIG_SCMI_PROBE),y)
+APP_AUTORUN_CFLAGS += -DCONFIG_SCMI_PROBE=1
+endif
 
 NU_DIR := components/netutils
 IPE_DIR := components/iperf3_embedded
 NU_VENDORED_SRCS :=
 NU_PORT_SRCS := os/netutils/netutils_shim.c os/netutils/tftp_port.c \
 	os/netutils/iperf3_port.c os/netutils/iperf3_cmd.c
+# lwiperf client front end (N7 R3): the no-copy TX measurement shape.
+ifeq ($(CONFIG_NETUTILS_IPERF2),y)
+NU_PORT_SRCS += os/netutils/iperf2_cmd.c
+endif
 ifeq ($(CONFIG_NETUTILS_PING),y)
 NU_VENDORED_SRCS += $(NU_DIR)/ping/ping.c
 endif
@@ -478,6 +554,7 @@ NU_CFLAGS := -Ios/netutils/shim -Ios/netutils \
 	-DCONFIG_NETUTILS_PING=$(if $(filter y,$(CONFIG_NETUTILS_PING)),1,0) \
 	-DCONFIG_NETUTILS_TFTP=$(if $(filter y,$(CONFIG_NETUTILS_TFTP)),1,0) \
 	-DCONFIG_NETUTILS_IPERF3=$(if $(filter y,$(CONFIG_NETUTILS_IPERF3)),1,0) \
+	-DCONFIG_NETUTILS_IPERF2=$(if $(filter y,$(CONFIG_NETUTILS_IPERF2)),1,0) \
 	$(LWIP_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/components/netutils/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
 $(BUILD)/components/iperf3_embedded/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
