@@ -110,8 +110,8 @@
 
 #define MEMP_NUM_TCP_PCB                16
 #define MEMP_NUM_TCP_PCB_LISTEN         4
-/* >= TCP_SND_QUEUELEN, per lwIP's own sizing rule. */
-#define MEMP_NUM_TCP_SEG                256
+/* >= TCP_SND_QUEUELEN, per lwIP's own sizing rule (768 now). */
+#define MEMP_NUM_TCP_SEG                768
 #define MEMP_NUM_UDP_PCB                8
 #define MEMP_NUM_SYS_TIMEOUT            16
 #define MEMP_NUM_FRAG_PBUF              16
@@ -125,19 +125,29 @@
 /* --- TCP (N7 gigabit tier; reference = Phytium SDK 60000/60000, 921 Mbit/s) --- */
 
 #define TCP_MSS                         1460
-/* R0 baseline (2026-10-02): 8*MSS pinned the downlink at ~1 Mbit/s
- * (window/RTT bound: 11680B per ~1ms round trip) and held the uplink to
- * 17.25 Mbit/s. 60000 (4.1 segments short of 64K) is the number the
- * single-core gigabit reference runs without window scaling. */
-#define TCP_WND                         60000
-#define TCP_SND_BUF                     60000
-/* Must be >= 4 * TCP_SND_BUF / TCP_MSS: 4 * 60000 / 1460 = 165 -> 256. */
-#define TCP_SND_QUEUELEN                256
-/* OoSeq reassembly back on: a 60 KB advertised window admits out-of-order
- * segments on any burst; with the pool at 256 deep the reassembly comes out
- * of the TCP_SEG pool (no extra pool row). */
+/* N7 R6 (2026-10-02): window scaling on. Every historical number is
+ * buffer/RTT arithmetic with the old 60000-byte buffers - R4 413M
+ * reverse (60000B/1.16ms), 496M forward (60000B/0.97ms), R5b 330-341M
+ * (60000B/~1.4ms) - so the buffers were the ceiling, not the path: a
+ * UDP flood of 630 Mbit/s was served at ~42k fps/508 Mbit/s (with MTL
+ * drops and 41k ICMP replies/s on top). Real window 256 KB (announced
+ * value = TCP_WND >> TCP_RCV_SCALE = 32768, fits the 16-bit header):
+ * >1.4 Gbit/s of window headroom at the measured RTT, so the remaining
+ * limit becomes the per-frame path itself. */
+#define TCP_WND                         262144
+#define TCP_SND_BUF                     262144
+/* opt.h floor is 4 * TCP_SND_BUF / TCP_MSS: 4 * 262144 / 1460 = 719. */
+#define TCP_SND_QUEUELEN                768
+/* The opt.h default (TCP_SND_BUF/2 = 128K) trips lwIP's u16-guard sanity
+ * check (must stay >= 4*MSS below 0xFFFF); 32K keeps the writer awake
+ * without sitting anywhere near the guard. */
+#define TCP_SNDLOWAT                    32768
+/* OoSeq reassembly: the raised window admits more out-of-order segments;
+ * the TCP_SEG pool above (256 rows) covers them. */
 #define TCP_QUEUE_OOSEQ                 1
-#define LWIP_WND_SCALE                  0
+#define LWIP_WND_SCALE                  1
+/* Announce shift for TCP_WND: 262144 >> 3 = 32768. */
+#define TCP_RCV_SCALE                   3
 /* Explicit (opt.h default is already 1, but the api-call-into-core-direct
  * shape is a load-bearing assumption of the N7 throughput design: socket
  * sends must not pay a mailbox round trip each). */
