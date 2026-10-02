@@ -59,6 +59,11 @@ void	lkpi_usb_disconnect_drivers(struct usb_interface *intf);
  * experiments, issues/2026-10-01-xhci-bulk-td-not-fetched) */
 struct usbh_hubport;
 struct usbh_hubport *lkpi_usbh_claimed_hport(void);
+/* the Linux-view builders (shared by the per-line class hooks; wlan joins
+ * in S5a-W2) */
+struct usb_device *lkpi_usbh_build_device(struct usbh_hubport *hport,
+    uint8_t intf_idx, struct usb_interface **intf_out);
+void lkpi_usbh_free_device(struct usb_device *dev);
 uint8_t	lkpi_usbh_claimed_intf(void);
 
 /* the stage pool bisect (usbkpi rawbulk stage): a raw-shape urb whose

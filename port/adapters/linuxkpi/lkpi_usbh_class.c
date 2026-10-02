@@ -60,7 +60,7 @@ lkpi_msc_id_refused(uint16_t vendor, uint16_t product)
  * hubport's descriptors.  Everything the driver later resolves through
  * pipes (bulk IN/OUT, control ep0) hangs off this.
  */
-static struct usb_device *
+struct usb_device *
 lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
     struct usb_interface **intf_out)
 {
@@ -124,7 +124,7 @@ fail:
 	return NULL;
 }
 
-static void
+void
 lkpi_usbh_free_device(struct usb_device *dev)
 {
 	struct usb_interface *intf;

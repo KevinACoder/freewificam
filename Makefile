@@ -548,7 +548,8 @@ RTL8821CU_ADAPTER_SRCS := \
 	port/adapters/rtl8821cu/drv_entry.c \
 	port/adapters/rtl8821cu/wlan8821_cmds.c \
 	port/adapters/rtl8821cu/wlan8821_seam.c \
-	port/adapters/rtl8821cu/usbh_modeswitch.c
+	port/adapters/rtl8821cu/usbh_modeswitch.c \
+	port/adapters/rtl8821cu/usbh_wlan_class.c
 
 SRCS += $(RTL8821CU_VENDOR_SRCS) $(RTL8821CU_ADAPTER_SRCS)
 CFLAGS += -DCONFIG_NIC_RTL8821CU=1
