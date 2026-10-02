@@ -1,0 +1,71 @@
+diff --git a/core/rtw_mem.c b/core/rtw_mem.c
+index b68a456..61a0678 100644
+--- a/core/rtw_mem.c
++++ b/core/rtw_mem.c
+@@ -112,3 +112,16 @@ static void __exit rtw_mem_exit(void)
+ 
+ module_init(rtw_mem_init);
+ module_exit(rtw_mem_exit);
++
++/* [W1-0002] Mem seeding shell ([FWC] 0002 lineage): with module_init a no-op,
++ * the adapter attach path calls rtl8821cu_mem_init_rtos() to run the same
++ * prealloc-skb seeding the Linux module loader would have run. */
++int rtl8821cu_mem_init_rtos(void)
++{
++	return rtw_mem_init();
++}
++
++void rtl8821cu_mem_deinit_rtos(void)
++{
++	rtw_mem_exit();
++}
+diff --git a/os_dep/linux/os_intfs.c b/os_dep/linux/os_intfs.c
+index ba5ed8e..2b081f1 100644
+--- a/os_dep/linux/os_intfs.c
++++ b/os_dep/linux/os_intfs.c
+@@ -34,6 +34,19 @@ MODULE_DESCRIPTION("Realtek Wireless Lan Driver");
+ MODULE_AUTHOR("Realtek Semiconductor Corp.");
+ MODULE_VERSION(DRIVERVERSION);
+ 
++/* [W1-0002] rtw_ioctl link stub ([FWC] 0002 lineage): ioctl_linux.c is not in
++ * the RTOS compile set (spec §3.2.3 - wext/ioctl face not built), but the
++ * net_device_ops tables in this file reference rtw_ioctl under the
++ * CONFIG_AP_MODE-family gates.  With AP_MODE off they vanish; the stub keeps
++ * the link closed if any reference survives, matching the [FWC] shape. */
++int rtw_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
++{
++	(void)netdev;
++	(void)ifr;
++	(void)cmd;
++	return -EOPNOTSUPP;
++}
++
+ /* module param defaults */
+ int rtw_chip_version = 0x00;
+ int rtw_rfintfs = HWPI;
+diff --git a/os_dep/linux/usb_intf.c b/os_dep/linux/usb_intf.c
+index b62c6ad..ec231d4 100644
+--- a/os_dep/linux/usb_intf.c
++++ b/os_dep/linux/usb_intf.c
+@@ -1633,6 +1633,21 @@ static void __exit rtw_drv_halt(void)
+ module_init(rtw_drv_entry);
+ module_exit(rtw_drv_halt);
+ 
++/* [W1-0002] Export shells for the RTOS consumer build ([FWC] 0002 lineage,
++ * v2 spec §3.2.3): module_init/module_exit are no-op'd by linuxkpi, so the
++ * adapter attach path calls rtl8821cu_rtos_init() explicitly - drv_registered
++ * handling, usb_register and the init sequence stay byte-identical to the
++ * Linux module-load path. */
++int rtl8821cu_rtos_init(void)
++{
++	return rtw_drv_entry();
++}
++
++void rtl8821cu_rtos_deinit(void)
++{
++	rtw_drv_halt();
++}
++
+ #ifdef CONFIG_INTEL_PROXIM
+ _adapter  *rtw_usb_get_sw_pointer(void)
+ {
