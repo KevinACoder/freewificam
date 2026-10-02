@@ -19,7 +19,7 @@ Realtek RTL8821CU vendor 驱动上游差异的**唯一真值源**（submodule �
 
 | patch | 内容 |
 |---|---|
-| `0001-rtos-trim-macros.patch` | **裁剪宏**（include/autoconf.h，[FWC] 0001 非平台项 + v2 增项）：`CONFIG_AP_MODE` off（同时消掉 net_device_ops 表里对 ioctl_linux.c `rtw_ioctl` 的未守卫引用族）、`CONFIG_P2P` off、`CONFIG_USB_TX/RX_AGGREGATION` off（RX=固定 recv-buf 重排队、TX=bulk-OUT 语义，聚合是数据面稳住后的二段开关）、`DBG 1→0`、`CONFIG_PROC_DEBUG` off（RTOS 无 procfs 垫= [S6] C 档；与 W0-L REV 相反——W0-L 编 rtw_proc.c 故保 ON，RTOS 不编 rtw_proc.c；rtw_sta_linking_test_* 定义在 core/rtw_debug.c 无链接缺口）、`DBG_MEM_ALLOC` off。**保持 `PLATFORM_LINUX` 定义**（[S5a] FR-2：osdep LINUX 分支照常编译；[FWC] 换 PLATFORM_THREADX 的 hunk 作废不继承）。 |
+| `0001-rtos-trim-macros.patch` | **裁剪宏**（include/autoconf.h，[FWC] 0001 非平台项 + v2 增项）：`CONFIG_USB_TX/RX_AGGREGATION` off（RX=固定 recv-buf 重排队、TX=bulk-OUT 语义，聚合是数据面稳住后的二段开关）、`DBG 1→0`、`CONFIG_PROC_DEBUG` off（RTOS 无 procfs 垫= [S6] C 档；与 W0-L REV 相反——W0-L 编 rtw_proc.c 故保 ON，RTOS 不编 rtw_proc.c；rtw_sta_linking_test_*/rtw_get_wait_hiq_empty_ms 等 PROC 门内定义、门外引用的 debug 助手由 wlan8821_seam.c 第一方桩保链接，行为=默认态）、`DBG_MEM_ALLOC` off。**保持 `PLATFORM_LINUX` 定义**（[S5a] FR-2：osdep LINUX 分支照常编译；[FWC] 换 PLATFORM_THREADX 的 hunk 作废不继承）。**AP_MODE/P2P 不裁（W1 对账修正）**：spec §3.2.3 曾列裁剪，但 vendor 头面把 mlme_priv 的 olbc/olbc_ht 等 AP 字段门控在 CONFIG_AP_MODE 内而 rtw_cmd.c 无守卫引用——上游从未分开编过（[FWC]/W0-L 均未关）；形态=编译在场、运行时休眠（MLME_IS_AP 恒假）。 |
 | `0002-rtos-export-shells-and-stubs.patch` | **导出壳 + 链接桩**（[FWC] 0002 血统）：①usb_intf.c 末尾导出 `rtl8821cu_rtos_init/_deinit` 包 `rtw_drv_entry/_halt`——module_init/module_exit 被 linuxkpi no-op 化，adapter attach 路径显式调用，drv_registered 处理与 Linux 模块加载路径逐字节同路；②os_intfs.c 顶部 `rtw_ioctl` 3 行 `-EOPNOTSUPP` 桩——ioctl_linux.c 不编，net_device_ops 表的门内引用（CONFIG_AP_MODE 族）万一存活时保链接（[FWC] 形态该缺口从未走通过链接，W1 是第一次真链接）；③core/rtw_mem.c 末尾 `rtl8821cu_mem_init_rtos/_deinit_rtos` 包 `rtw_mem_init/_exit`——prealloc-skb 池播种（module_init no-op 后由 attach 路径代播）。 |
 | `0003-rtos-consumer-compat.patch` | **W0-L 派生消费适配**：①usb_intf.c drvwrap 版本梯子摊平为 `.usbdrv.driver.shutdown`（W0L-S8 板证形态；linuxkpi `struct usb_driver` 带 `struct device_driver driver` 成员承接）；②include/ieee80211.h 三个 mac 判断函数 `extern __inline`→`static __inline`（W0L-S10：gnu11 下 extern __inline 每 TU 强定义，多 TU 单链接必炸——W0-L 在 7.3 宿主同款修法）。 |
 
@@ -39,9 +39,10 @@ git -C third-party/rtl8821cu apply --check "$PWD/patches/rtl8821cu/<p>.patch" \
 ```
 
 物化态（应用后的工作树）**不入 submodule 提交**；物化后对拍锚点：
-`git -C third-party/rtl8821cu diff --stat` = **5 files changed, +74/-12**
-（rtw_mem.c +13 / autoconf.h +25-8 / ieee80211.h 3×3 / os_intfs.c +13 /
-usb_intf.c +20-1，2026-10-02 W1 形态）。
+`git -C third-party/rtl8821cu diff --stat` = **5 files changed, +76/-10**
+（rtw_mem.c +13 / autoconf.h +29-6 / ieee80211.h 3×3 / os_intfs.c +13 /
+usb_intf.c +21-1，2026-10-02 W1 终态；AP/P2P 对账回退后）。重放幂等两连验
+（apply → stat 逐字节同 → checkout 复原）。
 
 ## 编译配置归属（本 README 即记账）
 
