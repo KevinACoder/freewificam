@@ -387,19 +387,27 @@ endif
 #               lockstep (both sides must flip together).
 #   RX_COALESCE RX descriptor IOC off + RX watchdog interrupt coalescing
 #               (RI asserted on watchdog expiry instead of per frame).
+#   RX_ZC       RX zero-copy: completed frames are lent up as custom pbufs
+#               (no ISR copy, no staging ring); re-arm draws from a spare-
+#               slot pool, exhaustion drops instead of parking.
 #   RX_RIWT     watchdog reload, unit 256 DMA clock ticks (Linux default 0xa0).
 CONFIG_GMAC_RX_HWCSUM ?= n
 CONFIG_GMAC_RX_COALESCE ?= n
 CONFIG_GMAC_RX_RIWT ?= 0xa0
+CONFIG_GMAC_RX_ZC ?= n
 ifeq ($(filter $(CONFIG_GMAC_RX_HWCSUM),y n),)
 $(error CONFIG_GMAC_RX_HWCSUM must be y or n, got '$(CONFIG_GMAC_RX_HWCSUM)')
 endif
 ifeq ($(filter $(CONFIG_GMAC_RX_COALESCE),y n),)
 $(error CONFIG_GMAC_RX_COALESCE must be y or n, got '$(CONFIG_GMAC_RX_COALESCE)')
 endif
+ifeq ($(filter $(CONFIG_GMAC_RX_ZC),y n),)
+$(error CONFIG_GMAC_RX_ZC must be y or n, got '$(CONFIG_GMAC_RX_ZC)')
+endif
 CFLAGS += -DCONFIG_GMAC_RX_HWCSUM=$(if $(filter y,$(CONFIG_GMAC_RX_HWCSUM)),1,0) \
 	-DCONFIG_GMAC_RX_COALESCE=$(if $(filter y,$(CONFIG_GMAC_RX_COALESCE)),1,0) \
-	-DCONFIG_GMAC_RX_RIWT=$(CONFIG_GMAC_RX_RIWT)
+	-DCONFIG_GMAC_RX_RIWT=$(CONFIG_GMAC_RX_RIWT) \
+	-DCONFIG_GMAC_RX_ZC=$(if $(filter y,$(CONFIG_GMAC_RX_ZC)),1,0)
 
 LWIP_DIR := third-party/lwip
 # GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +

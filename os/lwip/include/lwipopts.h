@@ -142,6 +142,16 @@
  * shape is a load-bearing assumption of the N7 throughput design: socket
  * sends must not pay a mailbox round trip each). */
 #define LWIP_TCPIP_CORE_LOCKING         1
+/* LWIP_TCPIP_CORE_LOCKING_INPUT stays 0 (board-measured N7 R4 A/B: 351M vs
+ * 406M reverse with it on - running the input processing inline in the
+ * band-3 gmacrx thread loses to posting to the band-5 tcpip thread, which
+ * then drains the mbox while gmacrx keeps dequeuing; Phytium runs it off
+ * too). */
+
+/* struct pbuf_custom must exist for the zero-copy RX wrappers (its opt.h
+ * default only turns on when fragmentation needs it; IP_FRAG is on but
+ * TX_SINGLE_PBUF=1 masks that path). */
+#define LWIP_SUPPORT_CUSTOM_PBUF        1
 
 /* --- RX checksum offload (N7 R3; must flip with the driver, never alone) -------
  *

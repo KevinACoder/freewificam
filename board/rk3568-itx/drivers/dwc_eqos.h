@@ -56,6 +56,18 @@
 #define DWC_EQOS_RX_DESC_COUNT	128
 #define DWC_EQOS_TX_DESC_COUNT	64
 
+/* DMA buffer slots. The copy path needs exactly the ring depth (each frame's
+ * buffer is its only home until the ISR copies it out). The zero-copy path
+ * (CONFIG_GMAC_RX_ZC, N7 R4) hands buffers UP with the frame, so re-arm
+ * needs spare slots while frames are in flight with the consumer: ring
+ * depth + ring depth, and a frame is dropped (not parked) when the spares
+ * run out - the DMA never waits on a descriptor. */
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+#define DWC_EQOS_RX_SLOT_COUNT	(DWC_EQOS_RX_DESC_COUNT * 2)
+#else
+#define DWC_EQOS_RX_SLOT_COUNT	DWC_EQOS_RX_DESC_COUNT
+#endif
+
 /* Per-frame DMA buffer size. 1600, not 1518: the emBox port sized the DMA
  * buffers for jumbo-ish frames and the value is also the ceiling the tx path
  * checks a frame against. */
@@ -332,6 +344,22 @@ void dwc_eqos_irq(void *arg);
  * the adapter releases its RX semaphore there (the prior workspace's
  * event_rx_frame, reduced to the one event the bridge consumes). */
 void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index));
+
+/* Zero-copy RX (CONFIG_GMAC_RX_ZC, N7 R4): the driver lends completed
+ * frames out instead of copying them into the staging ring.
+ *
+ * The wrap hook runs in INTERRUPT context with the completed frame and
+ * returns an opaque consumer handle the driver parks in its ready ring
+ * (NULL = consumer refused; the driver drops the frame). The consumer
+ * drains handles with dwc_eqos_rx_dequeue (thread context) and returns
+ * each borrowed buffer with dwc_eqos_rx_release once it is done with it.
+ * Buffers never leave the driver's slot pool, so a late release can never
+ * make the DMA read from memory someone else owns. */
+typedef void *(*dwc_eqos_rx_wrap_fn)(unsigned int index, unsigned int slot,
+				     uint8_t *buf, unsigned int len);
+void dwc_eqos_set_rx_zc(dwc_eqos_rx_wrap_fn fn);
+int dwc_eqos_rx_dequeue(unsigned int index, void **handle);
+void dwc_eqos_rx_release(unsigned int index, unsigned int slot);
 
 /* Statistics for the bring-up heartbeat: everything the driver had to drop or
  * could not complete, so a bad cable and a full ring are distinguishable. */

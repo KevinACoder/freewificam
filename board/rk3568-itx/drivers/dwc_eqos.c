@@ -120,6 +120,20 @@ struct dwc_eqos_dev {
 	unsigned int rx_stage_count;
 	unsigned int rx_stage_head;
 	unsigned int rx_stage_tail;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	/* Zero-copy bookkeeping: which slot's buffer each descriptor points
+	 * at (re-arm pulls any spare, so the binding drifts), the spare-slot
+	 * free list (pushed by dwc_eqos_rx_release in thread context under
+	 * eqos_lock, popped only by the ISR sweep), and the ready ring of
+	 * consumer handles the wrap hook returned. */
+	uint8_t   rx_desc_slot[DWC_EQOS_RX_DESC_COUNT];
+	uint8_t   rx_free_slots[DWC_EQOS_RX_SLOT_COUNT];
+	uint16_t  rx_free_head;
+	uint16_t  rx_free_count;
+	void     *rx_ready[DWC_EQOS_RX_SLOT_COUNT];
+	uint16_t  rx_ready_head;
+	uint16_t  rx_ready_count;
+#endif
 	/* Arms the IOC bit on every DWC_EQOS_TX_IOC_DIV-th descriptor, so a
 	 * burst costs one completion interrupt instead of one per frame. */
 	unsigned int tx_ioc_seq;
@@ -155,7 +169,7 @@ static struct dwc_eqos_desc rx_rings[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_DESC_COUNT
 	DMA_NOC_SECTION;
 static struct dwc_eqos_desc tx_rings[DWC_EQOS_PORT_COUNT][DWC_EQOS_TX_DESC_COUNT]
 	DMA_NOC_SECTION;
-static uint8_t rx_buffers[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_DESC_COUNT][DWC_EQOS_BUF_STRIDE]
+static uint8_t rx_buffers[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_SLOT_COUNT][DWC_EQOS_BUF_STRIDE]
 	__attribute__((aligned(DWC_EQOS_BUF_ALIGN)));
 static uint8_t tx_buffers[DWC_EQOS_PORT_COUNT][DWC_EQOS_TX_DESC_COUNT][DWC_EQOS_BUF_STRIDE]
 	__attribute__((aligned(DWC_EQOS_BUF_ALIGN)));
@@ -389,10 +403,11 @@ static int eqos_hw_reset(struct dwc_eqos_dev *dev)
 	return EQOS_OK;
 }
 
-static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx)
+static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx,
+			       unsigned int slot)
 {
 	struct dwc_eqos_desc *desc = &dev->rx_ring[idx];
-	uint8_t *buf = rx_buffers[dev->plat->index][idx];
+	uint8_t *buf = rx_buffers[dev->plat->index][slot];
 	uint32_t ctrl = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_RX_BUF1V;
 
 	/* The buffer was written by software (.bss init) or by the previous
@@ -412,10 +427,40 @@ static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx)
 	desc->des1 = 0;
 	desc->des2 = 0;
 	desc->des3 = ctrl;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	dev->rx_desc_slot[idx] = (uint8_t)slot;
+#endif
 	/* No flush: the ring is in non-cacheable memory. The barrier keeps the
 	 * grant visible to the DMA only after the buffer address and length. */
 	eqos_dsb_st();
 }
+
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+/* Spare-slot free list. Popped only by the ISR sweep (atomic by nature);
+ * pushed from dwc_eqos_rx_release under eqos_lock and, for refused frames,
+ * from the sweep itself. */
+static int eqos_slot_pop(struct dwc_eqos_dev *dev, unsigned int *slot)
+{
+	if (dev->rx_free_count == 0u) {
+		return 0;
+	}
+	*slot = dev->rx_free_slots[dev->rx_free_head];
+	dev->rx_free_head = (uint16_t)((dev->rx_free_head + 1u)
+				       % DWC_EQOS_RX_SLOT_COUNT);
+	dev->rx_free_count--;
+	return 1;
+}
+
+static void eqos_slot_push(struct dwc_eqos_dev *dev, unsigned int slot)
+{
+	if (dev->rx_free_count >= DWC_EQOS_RX_SLOT_COUNT) {
+		return;	/* double release: better leaked than wrapped */
+	}
+	dev->rx_free_slots[(dev->rx_free_head + dev->rx_free_count)
+			   % DWC_EQOS_RX_SLOT_COUNT] = (uint8_t)slot;
+	dev->rx_free_count++;
+}
+#endif
 
 /* Start the channel. TX and RX are one DMA channel and one interrupt on this
  * core, so they are started and stopped as a unit (see dwc_eqos_control). */
@@ -566,9 +611,28 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	dev->rx_stage_count = DWC_EQOS_RX_STAGE_COUNT;
 	dev->rx_stage_head = 0;
 	dev->rx_stage_tail = 0;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	/* Spare-slot list armed with every slot first; arming the descriptors
+	 * then consumes the first ring-depth entries, leaving exactly the
+	 * spare population the zero-copy handoff draws from. */
+	dev->rx_free_head = 0;
+	dev->rx_free_count = 0;
+	dev->rx_ready_head = 0;
+	dev->rx_ready_count = 0;
+	for (i = 0; i < DWC_EQOS_RX_SLOT_COUNT; i++) {
+		eqos_slot_push(dev, (unsigned int)i);
+	}
+#endif
 
 	for (i = 0; i < DWC_EQOS_RX_DESC_COUNT; i++) {
-		eqos_setup_rx_desc(dev, i);
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+		unsigned int slot;
+
+		(void)eqos_slot_pop(dev, &slot);
+		eqos_setup_rx_desc(dev, i, slot);
+#else
+		eqos_setup_rx_desc(dev, i, (unsigned int)i);
+#endif
 	}
 
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_TX_BASE_ADDR_HI, 0);
@@ -615,12 +679,52 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
  * 1280 frames/s ceiling with a 95% MAC-level FIFO-overflow loss (MMC
  * 0x7d4) under a 300 Mbit/s UDP flood, while the MAC itself received every
  * frame (N7 R2b evidence). One linear copy per frame in the interrupt is
- * the price of keeping the DMA continuous.
+ * the price of keeping the DMA continuous - unless the zero-copy mode
+ * lends the buffer out and re-arms from the spare-slot list instead
+ * (CONFIG_GMAC_RX_ZC, same invariant, zero copies).
  *
  * The sweep walks the whole ring: once the DMA's fetch pointer reaches END
  * it wraps to the ring base, so writebacks land wherever the next frame
  * went, not at a moving head. Callable from the interrupt and the
  * watchdog sweep. */
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+static dwc_eqos_rx_wrap_fn s_rx_zc;
+
+/* Hand the completed frame up through the wrap hook and pick the re-arm
+ * slot: a spare on success, the frame's own buffer on any refusal (the
+ * frame is then dropped, never parked - the DMA never waits). */
+static unsigned int eqos_zc_handoff(struct dwc_eqos_dev *dev, unsigned int own,
+				    uint8_t *buf, unsigned int len, int *handed)
+{
+	unsigned int spare;
+	void *h;
+
+	*handed = 0;
+	if ((s_rx_zc == NULL) || !eqos_slot_pop(dev, &spare)) {
+		dev->stats.rx_dropped++;
+		return own;
+	}
+	h = s_rx_zc(dev->plat->index, own, buf, len);
+	if (h == NULL) {
+		eqos_slot_push(dev, spare);
+		dev->stats.rx_dropped++;
+		return own;
+	}
+	if (dev->rx_ready_count >= DWC_EQOS_RX_SLOT_COUNT) {
+		/* Consumer wedged (drain stopped): refuse, recycle. */
+		eqos_slot_push(dev, spare);
+		dev->stats.rx_dropped++;
+		return own;
+	}
+	dev->rx_ready[(dev->rx_ready_head + dev->rx_ready_count)
+		      % DWC_EQOS_RX_SLOT_COUNT] = h;
+	dev->rx_ready_count++;
+	dev->stats.rx_frames++;
+	*handed = 1;
+	return spare;
+}
+#endif
+
 static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 {
 	int delivered = 0;
@@ -631,6 +735,11 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		struct dwc_eqos_desc *desc;
 		uint8_t *buf;
 		unsigned int len;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+		unsigned int slot_now = dev->rx_desc_slot[i];
+#else
+		const unsigned int slot_now = (unsigned int)i;
+#endif
 
 		if (dev->rx_in_flight[i] != 1) {
 			continue;
@@ -642,37 +751,56 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		}
 
 		dev->rx_in_flight[i] = 2;
-		buf = rx_buffers[dev->plat->index][i];
+		buf = rx_buffers[dev->plat->index][slot_now];
 		len = desc->des3 & DWC_EQOS_DESC_RX_LEN_MASK;
 
-		if (len < 4) {
-			dev->stats.rx_errors++;
-		} else if (
-#if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
-			   /* IPC verdict first (descriptor reads only - a dropped
-			    * frame costs no cache maintenance). RDES1_VALID is
-			    * set for IP frames only, so ARP & friends pass this
-			    * gate untouched. */
-			   ((desc->des3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
-			   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
-					   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
-#else
-			   1
+		/* The slot the descriptor re-arms with: a spare when the frame
+		 * was lent out (zero-copy), its own buffer in every other
+		 * case - the frame is dropped, never parked, so the DMA never
+		 * waits on a descriptor. */
+		{
+			unsigned int rearm = slot_now;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+			int handed = 0;
 #endif
-		) {
-			cache_dcache_invalidate((uintptr_t)buf, len);
-			/* Strip the frame check sequence: the MAC was
-			 * configured not to, and one strip is the right
-			 * number. */
-			len -= 4;
-			if (eqos_stage_put(dev, buf, len) == 0) {
-				delivered++;
-			}
-		} else {
-			dev->stats.rx_csum_drops++;
-		}
 
-		eqos_setup_rx_desc(dev, i);
+			if (len < 4) {
+				dev->stats.rx_errors++;
+			} else if (
+#if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
+				   /* IPC verdict first (descriptor reads only - a
+				    * dropped frame costs no cache maintenance).
+				    * RDES1_VALID is set for IP frames only, so
+				    * ARP & friends pass this gate untouched. */
+				   ((desc->des3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
+				   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
+						   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
+#else
+				   1
+#endif
+			) {
+				cache_dcache_invalidate((uintptr_t)buf, len);
+				/* Strip the frame check sequence: the MAC was
+				 * configured not to, and one strip is the
+				 * right number. */
+				len -= 4;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+				rearm = eqos_zc_handoff(dev, slot_now, buf, len,
+							&handed);
+				if (handed) {
+					delivered++;
+				}
+#else
+				if (eqos_stage_put(dev, buf, len) == 0) {
+					delivered++;
+				}
+#endif
+			} else {
+				dev->stats.rx_csum_drops++;
+			}
+
+			eqos_setup_rx_desc(dev, i, rearm);
+		}
 		dev->rx_in_flight[i] = 1;
 		last_armed = i;
 	}
@@ -749,6 +877,60 @@ void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index))
 {
 	s_rx_notify = fn;
 }
+
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+void dwc_eqos_set_rx_zc(dwc_eqos_rx_wrap_fn fn)
+{
+	s_rx_zc = fn;
+}
+
+int dwc_eqos_rx_dequeue(unsigned int index, void **handle)
+{
+	struct dwc_eqos_dev *dev;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (handle == NULL)) {
+		return 0;
+	}
+	dev = &devs[index];
+	if (!dev->started) {
+		return 0;
+	}
+
+	/* The ready ring's producer is the ISR; the port-line mask is the
+	 * whole mutual exclusion on this single-core image (same contract as
+	 * every other ring in this driver). */
+	eqos_lock(dev);
+	if (dev->rx_ready_count == 0u) {
+		eqos_unlock(dev);
+		return 0;
+	}
+	*handle = dev->rx_ready[dev->rx_ready_head];
+	dev->rx_ready_head = (uint16_t)((dev->rx_ready_head + 1u)
+					% DWC_EQOS_RX_SLOT_COUNT);
+	dev->rx_ready_count--;
+	eqos_unlock(dev);
+	return 1;
+}
+
+void dwc_eqos_rx_release(unsigned int index, unsigned int slot)
+{
+	struct dwc_eqos_dev *dev;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (slot >= DWC_EQOS_RX_SLOT_COUNT)) {
+		return;
+	}
+	dev = &devs[index];
+	if (!dev->started) {
+		return;
+	}
+
+	/* Thread context (the consumer's pbuf-free callback); the lock keeps
+	 * the push atomic against the ISR sweep's pops. */
+	eqos_lock(dev);
+	eqos_slot_push(dev, slot);
+	eqos_unlock(dev);
+}
+#endif
 
 void dwc_eqos_watchdog(unsigned int index)
 {
