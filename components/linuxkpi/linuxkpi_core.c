@@ -1289,3 +1289,536 @@ lkpi_request_firmware_nowait(const char *name, struct device *dev,
 	cont(error == 0 ? fw : NULL, context);
 	return error;
 }
+
+/* ------------------------------------------------------------------ */
+/* semaphores ([S6] §3.4 B1): TX counting semaphore; down_interruptible */
+/* never reports a signal because nothing in this image signals.        */
+/* ------------------------------------------------------------------ */
+
+void
+lkpi_sema_init(struct semaphore *s, int val)
+{
+
+	memset(s, 0, sizeof(*s));
+	if (tx_semaphore_create(lk_sem(s), "lkpi_sem", (UINT)(val < 0 ? 0 : val))
+	    != TX_SUCCESS)
+		lkpi_fatal("semaphore init failed");
+}
+
+void
+lkpi_sema_destroy(struct semaphore *s)
+{
+
+	(void)tx_semaphore_delete(lk_sem(s));
+}
+
+void
+lkpi_sema_down(struct semaphore *s)
+{
+
+	(void)tx_semaphore_get(lk_sem(s), TX_WAIT_FOREVER);
+}
+
+int
+lkpi_sema_down_interruptible(struct semaphore *s)
+{
+
+	(void)tx_semaphore_get(lk_sem(s), TX_WAIT_FOREVER);
+	return 0;
+}
+
+int
+lkpi_sema_down_trylock(struct semaphore *s)
+{
+
+	return tx_semaphore_get(lk_sem(s), 0) == TX_SUCCESS ? 0 : -EAGAIN;
+}
+
+void
+lkpi_sema_up(struct semaphore *s)
+{
+
+	(void)tx_semaphore_put(lk_sem(s));
+}
+
+/* ------------------------------------------------------------------ */
+/* kthreads ([S6] §3.4 B2): TX thread + stop flag; the thread's entry   */
+/* runs the vendor function once and completes when it returns          */
+/* ([FWC]-style thread_exit callers go through complete_and_exit, which */
+/* fires the completion and terminates in place instead).               */
+/* ------------------------------------------------------------------ */
+
+#define	LKPI_KTHREAD_STACK	8192
+#define	LKPI_KTHREAD_PRIORITY	20	/* below the timer, above idle */
+
+static void
+lkpi_kthread_trampoline(ULONG arg)
+{
+	struct task_struct *t = (struct task_struct *)(uintptr_t)arg;
+
+	t->fn(t->arg);
+	/* ThreadX completes the thread when the entry function returns;
+	 * kthread_stop polls the exited flag. */
+	t->exited = 1;
+}
+
+/* the kthread registry: lkpi_current() resolves tx_thread_identify() by
+ * walking it - the worker/timer contexts are not kthreads and their control
+ * blocks never appear here */
+static struct task_struct *lkpi_kthread_head;
+
+struct task_struct *
+lkpi_kthread_run(int (*threadfn)(void *), void *data, const char *name)
+{
+	struct task_struct *t;
+	void *stack;
+
+	t = lkpi_kmem_alloc(sizeof(*t), GFP_KERNEL, true);
+	if (t == NULL)
+		return ERR_PTR(-ENOMEM);
+	stack = pvPortMalloc(LKPI_KTHREAD_STACK);
+	if (stack == NULL) {
+		lkpi_kmem_free(t);
+		return ERR_PTR(-ENOMEM);
+	}
+	t->fn = (void (*)(void *))threadfn;
+	t->arg = data;
+	t->name = name;
+	if (tx_thread_create(lk_thread(t), (CHAR *)name,
+	    lkpi_kthread_trampoline, (ULONG)(uintptr_t)stack,
+	    stack, LKPI_KTHREAD_STACK, LKPI_KTHREAD_PRIORITY,
+	    LKPI_KTHREAD_PRIORITY, TX_NO_TIME_SLICE, TX_AUTO_ACTIVATE)
+	    != TX_SUCCESS) {
+		vPortFree(stack);
+		lkpi_kmem_free(t);
+		return ERR_PTR(-ENOMEM);
+	}
+	do {
+		t->lk_next = lkpi_kthread_head;
+	} while (__atomic_compare_exchange_n(&lkpi_kthread_head, &t->lk_next,
+	    t, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED) == false);
+	lkpi_printf("lkpi: kthread %s started\n", name);
+	return t;
+}
+
+int
+lkpi_kthread_stop(struct task_struct *t)
+{
+	struct task_struct **pp;
+	void *stack;
+
+	if (t == NULL || IS_ERR(t))
+		return -EINVAL;
+	t->should_stop = 1;
+	/* the vendor threads poll kthread_should_stop at loop granularity;
+	 * wait out at one tick so a mid-sleep thread notices */
+	while (!t->exited)
+		tx_thread_sleep(1);
+	/* unlink from the registry */
+	for (pp = &lkpi_kthread_head; *pp != NULL; pp = &(*pp)->lk_next) {
+		if (*pp == t) {
+			*pp = t->lk_next;
+			break;
+		}
+	}
+	stack = lk_thread(t)->tx_thread_stack_start;
+	(void)tx_thread_delete(lk_thread(t));
+	vPortFree(stack);
+	lkpi_printf("lkpi: kthread %s stopped\n", t->name != NULL ? t->name : "?");
+	lkpi_kmem_free(t);
+	return 0;
+}
+
+bool
+lkpi_kthread_should_stop(void)
+{
+	struct task_struct *t = lkpi_current();
+
+	return t != NULL && t->should_stop != 0;
+}
+
+struct task_struct *
+lkpi_current(void)
+{
+	TX_THREAD *tx = tx_thread_identify();
+	struct task_struct *t;
+
+	if (tx == NULL)
+		return NULL;
+	for (t = lkpi_kthread_head; t != NULL; t = t->lk_next) {
+		if (lk_thread(t) == tx)
+			return t;
+	}
+	return NULL;
+}
+
+void
+complete_and_exit(struct completion *comp, long code)
+{
+
+	(void)code;
+	if (comp != NULL)
+		complete_all(comp);
+	(void)tx_thread_terminate(tx_thread_identify());
+	for (;;)
+		__asm__ __volatile__("wfe");
+}
+
+/* ------------------------------------------------------------------ */
+/* tasklets ([S6] §3.4 B3): softirq semantics ride the system workqueue  */
+/* (single passive worker - the drain model shape), hi_schedule ==      */
+/* schedule at this priority.                                           */
+/* ------------------------------------------------------------------ */
+
+static void
+lkpi_tasklet_trampoline(struct work_struct *w)
+{
+	struct tasklet_struct *t = container_of(w, struct tasklet_struct, work);
+
+	t->func(t->data);
+	t->armed = false;
+}
+
+void
+lkpi_tasklet_init(struct tasklet_struct *t, void (*fn)(unsigned long),
+    unsigned long data)
+{
+
+	memset(t, 0, sizeof(*t));
+	lkpi_work_init(&t->work, lkpi_tasklet_trampoline);
+	t->func = fn;
+	t->data = data;
+}
+
+void
+lkpi_tasklet_schedule(struct tasklet_struct *t)
+{
+
+	lkpi_workqueue_ready();
+	if (t->func == NULL)
+		return;
+	t->armed = true;
+	(void)lkpi_queue_work(lkpi_system_wq, &t->work);
+}
+
+void
+lkpi_tasklet_kill(struct tasklet_struct *t)
+{
+
+	lkpi_work_flush(&t->work);
+	t->armed = false;
+}
+
+/* ------------------------------------------------------------------ */
+/* net_device ([S6] §3.4 B4/B5)                                        */
+/* ------------------------------------------------------------------ */
+
+struct skb_shared_info lkpi_shinfo_zero;
+
+static struct lkpi_tx_queue lkpi_tx_queue_singleton;
+
+struct lkpi_tx_queue *
+netdev_get_tx_queue(struct net_device *dev, unsigned int index)
+{
+
+	(void)dev;
+	(void)index;
+	return &lkpi_tx_queue_singleton;
+}
+
+void *
+lkpi_netdev_priv(const struct net_device *dev)
+{
+
+	/* net_device is 32-byte aligned, so sizeof is the priv offset */
+	return (void *)(uintptr_t)((const char *)dev + sizeof(*dev));
+}
+
+struct net_device *
+alloc_etherdev_mq(int sizeof_priv, unsigned int txqs)
+{
+	struct net_device *dev;
+	size_t size = sizeof(*dev) + (size_t)(sizeof_priv > 0 ? sizeof_priv : 0);
+
+	(void)txqs;
+	dev = lkpi_kmem_alloc(size, GFP_KERNEL, true);
+	if (dev == NULL)
+		return NULL;
+	dev->addr_len = ETH_ALEN;
+	dev->type = ARPHRD_ETHER;
+	dev->mtu = 1500;
+	dev->flags = IFF_BROADCAST | IFF_MULTICAST;
+	(void)dev_alloc_name(dev, "eth%d");
+	return dev;
+}
+
+void
+free_netdev(struct net_device *dev)
+{
+
+	lkpi_kmem_free(dev);
+}
+
+int
+register_netdev(struct net_device *dev)
+{
+
+	lkpi_printf("lkpi: netdev %s registered (no-op)\n", dev->name);
+	return 0;
+}
+
+void
+unregister_netdev(struct net_device *dev)
+{
+
+	lkpi_printf("lkpi: netdev %s unregistered (no-op)\n", dev->name);
+}
+
+int
+dev_alloc_name(struct net_device *dev, const char *fmt)
+{
+
+	/* single interface per driver in this image; %d resolves to 0 */
+	snprintf(dev->name, sizeof(dev->name), fmt, 0);
+	return 0;
+}
+
+void
+netif_carrier_on(struct net_device *dev)
+{
+
+	lkpi_printf("lkpi: %s carrier on\n", dev->name);
+}
+
+void
+netif_carrier_off(struct net_device *dev)
+{
+
+	lkpi_printf("lkpi: %s carrier off\n", dev->name);
+}
+
+void
+netif_device_attach(struct net_device *dev)
+{
+	(void)dev;
+}
+
+void
+netif_device_detach(struct net_device *dev)
+{
+	(void)dev;
+}
+
+/* ------------------------------------------------------------------ */
+/* netif_rx sink ([S6] §3.4 B5): counted-and-drop until W5 mounts the   */
+/* lwip bridge                                                          */
+/* ------------------------------------------------------------------ */
+
+#define	NET_RX_SUCCESS	0
+#define	NET_RX_DROP	1
+
+static lkpi_netif_rx_sink_t lkpi_netif_sink;
+static unsigned long lkpi_netif_drop_cnt;
+
+void
+lkpi_netif_rx_sink_register(lkpi_netif_rx_sink_t sink)
+{
+
+	lkpi_netif_sink = sink;
+}
+
+unsigned long
+lkpi_netif_rx_dropped(void)
+{
+
+	return lkpi_netif_drop_cnt;
+}
+
+int
+netif_rx(struct sk_buff *skb)
+{
+	int r;
+
+	if (skb == NULL)
+		return NET_RX_DROP;
+	if (lkpi_netif_sink != NULL) {
+		r = lkpi_netif_sink(skb);
+		if (r == NET_RX_DROP)
+			lkpi_netif_drop_cnt++;
+		return r;
+	}
+	lkpi_netif_drop_cnt++;
+	kfree_skb(skb);
+	return NET_RX_DROP;
+}
+
+/* ------------------------------------------------------------------ */
+/* rtnetlink / notifier / dev-lookup stamps                             */
+/* ------------------------------------------------------------------ */
+
+static unsigned int lkpi_rtnl_locked;
+
+void
+rtnl_lock(void)
+{
+
+	lkpi_rtnl_locked++;
+}
+
+void
+rtnl_unlock(void)
+{
+
+	if (lkpi_rtnl_locked > 0)
+		lkpi_rtnl_locked--;
+}
+
+int
+rtnl_is_locked(void)
+{
+
+	return lkpi_rtnl_locked > 0;
+}
+
+struct net_device *
+dev_get_by_name(void *net, const char *name)
+{
+
+	(void)net;
+	(void)name;
+	return NULL;
+}
+
+struct net_device *
+dev_get_by_index(void *net, int ifindex)
+{
+
+	(void)net;
+	(void)ifindex;
+	return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* skb clone family ([S6] §3.4 B6): full-copy clone preserving geometry */
+/* ------------------------------------------------------------------ */
+
+static struct sk_buff *
+lkpi_skb_dup_like(const struct sk_buff *skb, gfp_t gfp, bool whole)
+{
+	struct sk_buff *n;
+	unsigned int copy;
+
+	if (skb == NULL)
+		return NULL;
+	n = lkpi_skb_alloc(skb->end, gfp);
+	if (n == NULL)
+		return NULL;
+	copy = whole ? skb->end
+	    : (unsigned int)(skb->data - skb->head) + skb->len;
+	memcpy(n->head, skb->head, copy);
+	n->data = n->head + (skb->data - skb->head);
+	n->tail = skb->tail;
+	n->len = skb->len;
+	n->data_len = skb->data_len;
+	n->truesize = skb->truesize;
+	n->protocol = skb->protocol;
+	n->queue_mapping = skb->queue_mapping;
+	n->priority = skb->priority;
+	n->pkt_type = skb->pkt_type;
+	n->ip_summed = skb->ip_summed;
+	n->dev = skb->dev;
+	n->sk = skb->sk;
+	memcpy(n->cb, skb->cb, sizeof(n->cb));
+	return n;
+}
+
+struct sk_buff *
+lkpi_skb_clone(const struct sk_buff *skb, gfp_t gfp)
+{
+
+	/* the clone face is full-copy: nothing is shared, skb_cloned()==0 */
+	return lkpi_skb_dup_like(skb, gfp, true);
+}
+
+struct sk_buff *
+lkpi_skb_copy_header(const struct sk_buff *skb, gfp_t gfp)
+{
+
+	return lkpi_skb_dup_like(skb, gfp, false);
+}
+
+/* ------------------------------------------------------------------ */
+/* file-I/O face ([S6] B8 / W0L-S1): dead-path stubs - every open fails */
+/* and the callers keep their built-in fallbacks.                       */
+/* ------------------------------------------------------------------ */
+
+struct file *
+filp_open(const char *path, int flags, int mode)
+{
+
+	(void)flags;
+	(void)mode;
+	lkpi_printf("lkpi: filp_open(%s): no filesystem\n", path != NULL ? path : "?");
+	return ERR_PTR(-ENOSYS);
+}
+
+int
+filp_close(struct file *fp, void *files)
+{
+
+	(void)fp;
+	(void)files;
+	return -ENOSYS;
+}
+
+ssize_t
+kernel_read(struct file *fp, void *buf, size_t len, loff_t *pos)
+{
+
+	(void)fp;
+	(void)buf;
+	(void)len;
+	(void)pos;
+	return -ENOSYS;
+}
+
+ssize_t
+kernel_write(struct file *fp, const void *buf, size_t len, loff_t *pos)
+{
+
+	(void)fp;
+	(void)buf;
+	(void)len;
+	(void)pos;
+	return -ENOSYS;
+}
+
+ssize_t
+__vfs_read(struct file *fp, char *buf, size_t len, loff_t *pos)
+{
+
+	return kernel_read(fp, buf, len, pos);
+}
+
+ssize_t
+__vfs_write(struct file *fp, const char *buf, size_t len, loff_t *pos)
+{
+
+	return kernel_write(fp, buf, len, pos);
+}
+
+int
+vfs_fsync(struct file *fp, int datasync)
+{
+
+	(void)fp;
+	(void)datasync;
+	return -ENOSYS;
+}
+
+void
+get_random_bytes(void *buf, int len)
+{
+
+	lkpi_prandom_bytes(buf, (size_t)(len > 0 ? len : 0));
+}

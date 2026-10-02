@@ -16,4 +16,7 @@ void lkpi_get_random_mask_addr(u8 *, const u8 *, const u8 *);
 #define	prandom_bytes(buf, n)	lkpi_prandom_bytes((buf), (n))
 void lkpi_prandom_bytes(void *buf, size_t n);
 
+/* [S6] B7: the osdep get_random_bytes consumer */
+void get_random_bytes(void *buf, int len);
+
 #endif

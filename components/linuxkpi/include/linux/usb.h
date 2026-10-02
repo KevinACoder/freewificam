@@ -173,6 +173,7 @@ struct usb_interface {
 	void		*privdata;
 	struct usb_device *udev;
 	bool		claimed;
+	int		pm_usage_cnt;	/* [S6] B7: PM stub, always 0 */
 };
 
 static __always_inline __unused struct usb_device *
@@ -275,6 +276,20 @@ static __always_inline __unused int
 usb_endpoint_maxp(const struct usb_endpoint_descriptor *d)
 {
 	return d->wMaxPacketSize;
+}
+
+/* [S6] B7: the SS multipler (usb_intf.c:328 compile face); HS/SS only, and
+ * this port runs high-speed, so the burst side is always 1 */
+static __always_inline __unused int
+usb_endpoint_maxp_mult(const struct usb_endpoint_descriptor *d)
+{
+	return 1 + ((le16_to_cpu(d->wMaxPacketSize) >> 11) & 0x3);
+}
+
+static __always_inline __unused int
+usb_endpoint_maxp_packet_sz(const struct usb_endpoint_descriptor *d)
+{
+	return usb_endpoint_maxp(d) * usb_endpoint_maxp_mult(d);
 }
 
 /* ------------------------------------------------------------------ */
@@ -528,6 +543,12 @@ struct usb_device_id {
 	.bInterfaceSubClass = (sc),				\
 	.bInterfaceProtocol = (pr)
 
+/* [S6] B7 PM stub family: CONFIG_AUTOSUSPEND is off, so most vendor call
+ * sites vanish; these keep any survivor linking and semantics-neutral. */
+typedef struct pm_message {
+	int	event;
+} pm_message_t;
+
 struct usb_driver {
 	const char		*name;
 	int			(*probe)(struct usb_interface *,
@@ -536,7 +557,35 @@ struct usb_driver {
 	const struct usb_device_id *id_table;
 	bool			soft_unbind;
 	bool			disable_hub_initiated_lpm;
+	/* [S6] B7: registered by the vendor (rtl8821cu) but never called -
+	 * this image has no PM and no shutdown path; `driver` carries the
+	 * `.driver.shutdown` initializer site (the W0L-S8 flattened form). */
+	void			(*suspend)(struct usb_interface *,
+				    pm_message_t message);
+	void			(*resume)(struct usb_interface *);
+	void			(*reset_resume)(struct usb_interface *);
+	struct device_driver	driver;
 };
+
+#define	usb_autopm_get_interface(intf)		((void)(intf), 0)
+#define	usb_autopm_put_interface(intf)		do { (void)(intf); } while (0)
+#define	usb_autopm_get_interface_async(intf)	((void)(intf), 0)
+#define	usb_autopm_put_interface_async(intf)	do { (void)(intf); } while (0)
+#define	usb_autopm_enable(intf)			do { (void)(intf); } while (0)
+#define	usb_autopm_disable(intf)		do { (void)(intf); } while (0)
+#define	usb_enable_autosuspend(udev)		do { (void)(udev); } while (0)
+#define	usb_disable_autosuspend(udev)		do { (void)(udev); } while (0)
+#define	usb_autoresume_device(udev)		((void)(udev), 0)
+#define	usb_autosuspend_device(udev)		do { (void)(udev); } while (0)
+#define	usb_mark_last_busy(udev)		do { (void)(udev); } while (0)
+
+/* [S6] B7: coherent-allocation family mapping (same slot as the §3.5 row 9
+ * face; the urb layer stages through its own 64B-aligned pools, so the
+ * driver-side allocation is plain heap) */
+#define	usb_buffer_alloc(udev, size, flags, dma)				\
+	usb_alloc_coherent((udev), (size), (flags), (dma))
+#define	usb_buffer_free(udev, size, addr, dma)					\
+	usb_free_coherent((udev), (size), (addr), (dma))
 
 int usb_register(struct usb_driver *driver);
 void usb_deregister(struct usb_driver *driver);

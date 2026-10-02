@@ -90,6 +90,25 @@ lk_callout_tl(struct timer_list *t)
 	return (struct lkpi_callout_shell *)&t->_callout[0];
 }
 
+/* [S6] B1/B2 shells: semaphore = one TX_SEMAPHORE, kthread = one
+ * TX_THREAD plus the stop/exit flags that ride the task_struct */
+static inline TX_SEMAPHORE *
+lk_sem(struct semaphore *s)
+{
+	return (TX_SEMAPHORE *)&s->_sem[0];
+}
+
+static inline TX_THREAD *
+lk_thread(struct task_struct *t)
+{
+	return (TX_THREAD *)&t->_tx[0];
+}
+
+_Static_assert(sizeof(struct semaphore) >= sizeof(TX_SEMAPHORE),
+    "struct semaphore storage must hold the TX_SEMAPHORE shell");
+_Static_assert(sizeof(struct task_struct) >= sizeof(TX_THREAD),
+    "struct task_struct storage must hold the TX_THREAD shell");
+
 _Static_assert(sizeof(struct mutex) >= sizeof(osMutexId_t),
     "struct mutex storage must hold the osMutex id");
 _Static_assert(sizeof(struct completion) >=

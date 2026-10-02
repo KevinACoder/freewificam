@@ -184,6 +184,12 @@ struct device {
 	struct device	*parent;
 };
 
+/* [S6] B7: only the shutdown initializer site the vendor usb_driver needs;
+ * this image never calls it */
+struct device_driver {
+	void	(*shutdown)(struct device *dev);
+};
+
 #define	dev_set_drvdata(dev, data)	do { (dev)->driver_data = (data); } while (0)
 #define	dev_get_drvdata(dev)		((dev)->driver_data)
 
@@ -348,6 +354,31 @@ __fls(unsigned long word)
  * stop set consumes it); the kpi kill surfaces -ENOENT/-ENODEV, the
  * driver's stop set lists both spellings */
 #define	ECONNRESET		104
+
+/* the ERR_PTR convention (osdep file paths test IS_ERR on filp_open) */
+static __always_inline __unused void *
+ERR_PTR(long error)
+{
+	return (void *)(long)error;
+}
+
+static __always_inline __unused long
+PTR_ERR(const void *ptr)
+{
+	return (long)(uintptr_t)ptr;
+}
+
+static __always_inline __unused bool
+IS_ERR(const void *ptr)
+{
+	return (uintptr_t)ptr >= (uintptr_t)-4095L;
+}
+
+static __always_inline __unused bool
+IS_ERR_OR_NULL(const void *ptr)
+{
+	return ptr == NULL || IS_ERR(ptr);
+}
 
 /* ------------------------------------------------------------------ */
 /* bitmap API over unsigned long[]                                     */
@@ -1101,6 +1132,8 @@ dev_name(const struct device *dev)
 #define	MODULE_PARM_DESC(x, y)
 #define	module_param_named(a, b, c, d)
 #define	module_param(a, b, c)
+#define	module_param_array(a, b, c, d)
+#define	module_param_array_named(a, b, c, d, e)
 #define	MODULE_DEVICE_TABLE(t, n)
 #define	module_exit(fn)
 #define	module_init(fn)
@@ -1208,7 +1241,8 @@ typedef unsigned long irqflags_t;
 #define	in_softirq()			0
 #define	IRQ_NONE			0
 #define	IRQ_HANDLED			1
-#define	tasklet_schedule(t)		do { (void)(t); } while (0)
+/* tasklet_schedule is REAL since [S6] §3.4 B3 (the rtl8821cu RX/TX rearm
+ * chain schedules it); the real face lives in the tasklet section below. */
 
 /* ------------------------------------------------------------------ */
 /* sk_buff (linux/skbuff.h) - data shape, operations in the impl        */
@@ -1410,6 +1444,78 @@ skb_set_queue_mapping(struct sk_buff *skb, u16 q)
 }
 
 /* ------------------------------------------------------------------ */
+/* skb widening ([S6] §3.4 B6 - the rtl8821cu RX hot path clones)      */
+/* ------------------------------------------------------------------ */
+
+struct net_device;		/* the net_device section below */
+
+struct skb_shared_info {
+	unsigned char	nr_frags;
+	/* the shared-info face is a constant-zero stub: nr_frags==0 makes the
+	 * drivers' frag loops fall through; nothing may ever write here */
+	unsigned char	__reserved[63];
+};
+
+extern struct skb_shared_info lkpi_shinfo_zero;
+
+#define	skb_shinfo(skb)			(&lkpi_shinfo_zero)
+
+struct sk_buff *lkpi_skb_clone(const struct sk_buff *skb, gfp_t gfp);
+struct sk_buff *lkpi_skb_copy_header(const struct sk_buff *skb, gfp_t gfp);
+
+static __always_inline __unused struct sk_buff *
+skb_clone(const struct sk_buff *skb, gfp_t gfp)
+{
+	return lkpi_skb_clone(skb, gfp);
+}
+
+static __always_inline __unused struct sk_buff *
+pskb_copy(const struct sk_buff *skb, gfp_t gfp)
+{
+	return lkpi_skb_copy_header(skb, gfp);
+}
+
+static __always_inline __unused struct sk_buff *
+netdev_alloc_skb(struct net_device *dev, unsigned int len)
+{
+	struct sk_buff *skb = lkpi_skb_alloc(len, GFP_ATOMIC);
+
+	if (skb != NULL)
+		skb->dev = dev;
+	return skb;
+}
+
+static __always_inline __unused void
+skb_trim(struct sk_buff *skb, unsigned int len)
+{
+
+	if (skb->len > len) {
+		skb->len = len;
+		skb->tail = (unsigned int)(skb->data - skb->head) + len;
+	}
+}
+
+static __always_inline __unused void
+__skb_trim(struct sk_buff *skb, unsigned int len)
+{
+	skb_trim(skb, len);
+}
+
+static __always_inline __unused void
+skb_orphan(struct sk_buff *skb)
+{
+	skb->sk = NULL;
+}
+
+static __always_inline __unused int
+skb_cloned(const struct sk_buff *skb)
+{
+	/* the clone face is full-copy; nothing is ever shared */
+	(void)skb;
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* completion                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1445,6 +1551,87 @@ void complete_all(struct completion *c);
 	lkpi_wait_for_completion_timeout((c), (j))
 #define	try_wait_for_completion(c)		lkpi_try_wait_for_completion(c)
 #define	completion_done(c)			lkpi_completion_done(c)
+
+/* ------------------------------------------------------------------ */
+/* semaphores ([S6] §3.4 B1 - the vendor osdep _sema base,             */
+/* osdep_service.c down/up/sema_init; TX counting semaphore shell)     */
+/* ------------------------------------------------------------------ */
+
+struct semaphore {
+	void	_sem[10];	/* the TX_SEMAPHORE shell (impl assert) */
+};
+
+void lkpi_sema_init(struct semaphore *s, int val);
+void lkpi_sema_destroy(struct semaphore *s);
+void lkpi_sema_down(struct semaphore *s);
+int lkpi_sema_down_interruptible(struct semaphore *s);
+int lkpi_sema_down_trylock(struct semaphore *s);
+void lkpi_sema_up(struct semaphore *s);
+
+#define	sema_init(s, v)			lkpi_sema_init((s), (v))
+#define	sema_destroy(s)			lkpi_sema_destroy(s)
+#define	down(s)				lkpi_sema_down(s)
+#define	down_interruptible(s)		lkpi_sema_down_interruptible(s)
+#define	down_trylock(s)			lkpi_sema_down_trylock(s)
+#define	up(s)				lkpi_sema_up(s)
+
+/* the signal family the down_interruptible callers expect: nothing in this
+ * image ever signals a thread, so pending is always false */
+struct task_struct;
+
+#define	signal_pending(t)		((void)(t), 0)
+#define	allow_signal(sig)		do { (void)(sig); } while (0)
+#define	disallow_signal(sig)		do { (void)(sig); } while (0)
+#define	daemonize(fmt, ...)		do { } while (0)
+
+/* ------------------------------------------------------------------ */
+/* kthreads ([S6] §3.4 B2 - os_intfs.c four threads + osdep            */
+/* thread_exit/rtw_thread_stop; TX thread + stop flag)                 */
+/* ------------------------------------------------------------------ */
+
+struct task_struct {
+	void	_tx[48];	/* the TX_THREAD shell (impl assert) */
+	struct task_struct *lk_next;	/* the kthread registry chain */
+	void	(*fn)(void *);
+	void	*arg;
+	volatile int	should_stop;
+	volatile int	exited;
+	const char	*name;
+};
+
+struct task_struct *lkpi_kthread_run(int (*threadfn)(void *), void *data,
+    const char *name);
+int lkpi_kthread_stop(struct task_struct *t);
+bool lkpi_kthread_should_stop(void);
+struct task_struct *lkpi_current(void);
+
+#define	kthread_run(fn, data, fmt, ...)					\
+	lkpi_kthread_run((fn), (data), (fmt))
+#define	kthread_stop(t)			lkpi_kthread_stop(t)
+#define	kthread_should_stop()		lkpi_kthread_should_stop()
+#define	kthread_create(fn, data, fmt, ...)				\
+	lkpi_kthread_run((fn), (data), (fmt))
+#define	current				lkpi_current()
+
+/* complete_and_exit never returns: it fires the thread's completion and
+ * terminates the TX thread in place (the vendor thread_exit wrapper lands
+ * here; the W0-L kthread_complete_and_exit rename is a 5.17+ kernel-only
+ * rename that does not apply to this face). */
+void complete_and_exit(struct completion *comp, long code)
+	__attribute__((__noreturn__));
+
+/* scheduler stubs: the drivers only set state and sleep out timeouts */
+#define	set_current_state(state)	do { (void)(state); } while (0)
+#define	__set_current_state(state)	do { (void)(state); } while (0)
+#define	schedule()			tx_thread_sleep(1)
+#define	schedule_timeout(j)		tx_thread_sleep(jiffies_to_msecs(j))
+#define	schedule_timeout_interruptible(j) schedule_timeout(j)
+#define	freezable_schedule()		schedule()
+#define	msleep(ms)			tx_thread_sleep((UINT)(ms))
+#define	ssleep(s)			tx_thread_sleep((UINT)(s) * 1000)
+#define	usleep_range(min, max)		tx_thread_sleep((UINT)(max) / 1000)
+#define	io_schedule()			schedule()
+#define	cond_resched()			do { } while (0)
 
 /* ------------------------------------------------------------------ */
 /* workqueues (linux/workqueue.h)                                      */
@@ -1523,6 +1710,30 @@ alloc_workqueue(const char *fmt, unsigned int flags, int max_active, ...)
 #define	system_wq				lkpi_system_wq
 
 /* ------------------------------------------------------------------ */
+/* tasklets ([S6] §3.4 B3 - REAL since the rtl8821cu RX/TX rearm       */
+/* chain depends on them; softirq semantics map to a pass through the  */
+/* system workqueue, the same passive-context shape as the drain)      */
+/* ------------------------------------------------------------------ */
+
+struct tasklet_struct {
+	struct work_struct	work;
+	void			(*func)(unsigned long);
+	unsigned long		data;
+	bool			armed;
+};
+
+void lkpi_tasklet_init(struct tasklet_struct *t, void (*fn)(unsigned long),
+    unsigned long data);
+void lkpi_tasklet_schedule(struct tasklet_struct *t);
+void lkpi_tasklet_kill(struct tasklet_struct *t);
+
+#define	tasklet_init(t, fn, data)					\
+	lkpi_tasklet_init((t), (fn), (unsigned long)(data))
+#define	tasklet_schedule(t)		lkpi_tasklet_schedule(t)
+#define	tasklet_hi_schedule(t)		lkpi_tasklet_schedule(t)
+#define	tasklet_kill(t)			lkpi_tasklet_kill(t)
+
+/* ------------------------------------------------------------------ */
 /* timers (linux/timer.h)                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1594,6 +1805,184 @@ int lkpi_waitq_timedwait(struct wait_queue_head *, int ms);
 	} while (0)
 
 /* ------------------------------------------------------------------ */
+/* net_device ([S6] §3.4 B4/B5 - the vendor os_intfs.c minimal face:   */
+/* flat struct + trailing priv region, no-op registration, netif_rx    */
+/* as a registerable sink (W5 mounts the lwip bridge there))           */
+/* ------------------------------------------------------------------ */
+
+#define	IFNAMSIZ		16
+#define	ETH_ALEN		6
+#define	LKPI_NETDEV_ALIGN	32u
+
+struct net_device_stats {
+	unsigned long	rx_packets;
+	unsigned long	tx_packets;
+	unsigned long	rx_bytes;
+	unsigned long	tx_bytes;
+	unsigned long	rx_errors;
+	unsigned long	tx_errors;
+	unsigned long	rx_dropped;
+	unsigned long	tx_dropped;
+	unsigned long	multicast;
+	unsigned long	collisions;
+	unsigned long	rx_length_errors;
+	unsigned long	rx_over_errors;
+	unsigned long	rx_crc_errors;
+	unsigned long	rx_frame_errors;
+	unsigned long	rx_fifo_errors;
+	unsigned long	rx_missed_errors;
+	unsigned long	tx_aborted_errors;
+	unsigned long	tx_carrier_errors;
+	unsigned long	tx_fifo_errors;
+	unsigned long	tx_heartbeat_errors;
+	unsigned long	tx_window_errors;
+	unsigned long	rx_compressed;
+	unsigned long	tx_compressed;
+};
+
+/* we only carry the net_device_ops members the vendor tables initialize
+ * (select_queue keeps the vendor 4.20-era three-net_device* signature) */
+typedef int netdev_tx_t;
+#define	NETDEV_TX_OK		0
+#define	NETDEV_TX_BUSY		1
+#define	NETDEV_TX_LOCKED	0x100
+
+/* ifreq/IFF faces: if.h carries the shapes; the core needs the flags and
+ * an incomplete ifreq for the ndo_do_ioctl prototype */
+struct ifreq;		/* linux/if.h */
+#define	IFF_UP		0x1
+#define	IFF_BROADCAST	0x2
+#define	IFF_DEBUG	0x4
+#define	IFF_LOOPBACK	0x8
+#define	IFF_POINTOPOINT	0x10
+#define	IFF_RUNNING	0x40
+#define	IFF_NOARP	0x80
+#define	IFF_PROMISC	0x100
+#define	IFF_ALLMULTI	0x200
+#define	IFF_MULTICAST	0x1000
+
+struct net_device_ops {
+	void		(*ndo_init)(struct net_device *dev);
+	void		(*ndo_uninit)(struct net_device *dev);
+	int		(*ndo_open)(struct net_device *dev);
+	int		(*ndo_stop)(struct net_device *dev);
+	netdev_tx_t	(*ndo_start_xmit)(struct sk_buff *skb,
+			    struct net_device *dev);
+	u16		(*ndo_select_queue)(struct net_device *dev,
+			    struct sk_buff *skb, struct net_device *sb_dev);
+	int		(*ndo_do_ioctl)(struct net_device *dev,
+			    struct ifreq *ifr, int cmd);
+	int		(*ndo_set_mac_address)(struct net_device *dev,
+			    void *addr);
+	struct net_device_stats *(*ndo_get_stats)(struct net_device *dev);
+	void		(*ndo_set_rx_mode)(struct net_device *dev);
+	void		(*ndo_tx_timeout)(struct net_device *dev);
+};
+
+struct net_device {
+	char			name[IFNAMSIZ];
+	unsigned char		dev_addr[ETH_ALEN];
+	unsigned char		perm_addr[ETH_ALEN];
+	unsigned char		addr_len;
+	unsigned short		type;
+	unsigned short		flags;
+	unsigned int		mtu;
+	unsigned int		needed_headroom;
+	unsigned long		watchdog_timeo;
+	const struct net_device_ops *netdev_ops;
+	struct device		dev;		/* embedded; SET_NETDEV_DEV */
+	unsigned long		tx_queued;	/* queue stop/start state */
+	/* trailing priv region: netdev_priv() = (char *)ndev + priv offset;
+	 * alloc_etherdev_mq stores sizeof_priv in the private head */
+	unsigned int		_priv_len;
+} __aligned(LKPI_NETDEV_ALIGN);
+
+struct lkpi_tx_queue {
+	unsigned char	stopped;
+};
+
+struct lkpi_tx_queue *netdev_get_tx_queue(struct net_device *dev,
+    unsigned int index);
+#define	netif_tx_queue_stopped(q)	((q)->stopped != 0)
+#define	netif_queue_stopped(dev)	netif_tx_queue_stopped(		\
+					netdev_get_tx_queue((dev), 0))
+
+void *lkpi_netdev_priv(const struct net_device *dev);
+#define	netdev_priv(dev)		lkpi_netdev_priv(dev)
+
+struct net_device *alloc_etherdev_mq(int sizeof_priv, unsigned int txqs);
+#define	alloc_etherdev(sizeof_priv)	alloc_etherdev_mq((sizeof_priv), 1)
+void free_netdev(struct net_device *dev);
+int register_netdev(struct net_device *dev);
+void unregister_netdev(struct net_device *dev);
+int dev_alloc_name(struct net_device *dev, const char *fmt);
+
+#define	SET_NETDEV_DEV(ndev, pdev)	do {				\
+	(ndev)->dev.parent = (pdev);					\
+} while (0)
+
+/* the register face is a no-op with a stamp: there is no net core in this
+ * image, the adapter layer drives ndo_open/ndo_stop directly ([S6] B4). */
+
+/* netif sink: netif_rx hands the frame to the registered sink (counted);
+ * the default sink drops.  W5 mounts the lwip bridge via
+ * lkpi_netif_rx_sink_register(). */
+struct sk_buff;
+typedef int (*lkpi_netif_rx_sink_t)(struct sk_buff *skb);
+int netif_rx(struct sk_buff *skb);
+void lkpi_netif_rx_sink_register(lkpi_netif_rx_sink_t sink);
+unsigned long lkpi_netif_rx_dropped(void);
+
+void netif_carrier_on(struct net_device *dev);
+void netif_carrier_off(struct net_device *dev);
+void netif_device_attach(struct net_device *dev);
+void netif_device_detach(struct net_device *dev);
+#define	netif_tx_stop_all_queues(dev)	do {				\
+	netdev_get_tx_queue((dev), 0)->stopped = 1;			\
+} while (0)
+#define	netif_tx_wake_all_queues(dev)	do {				\
+	netdev_get_tx_queue((dev), 0)->stopped = 0;			\
+} while (0)
+#define	netif_tx_start_all_queues(dev)	netif_tx_wake_all_queues(dev)
+#define	netif_stop_queue(dev)		netif_tx_stop_all_queues(dev)
+#define	netif_start_queue(dev)		netif_tx_start_all_queues(dev)
+#define	netif_wake_queue(dev)		netif_tx_wake_all_queues(dev)
+#define	netif_trans_update(dev)		do { (void)(dev); } while (0)
+#define	netif_running(dev)		(((dev)->flags & IFF_UP) != 0)
+
+/* rtnetlink: no net core, the lock is a stamp (the vendor interface-rename
+ * path wraps rename in rtnl_lock/unlock) */
+void rtnl_lock(void);
+void rtnl_unlock(void);
+int rtnl_is_locked(void);
+#define	rtnl_trylock()			rtnl_is_locked()
+#define	BR_NETPROTO_LOCK()		do { } while (0)
+
+/* netdevice notifiers: nothing in this image ever notifies */
+struct notifier_block {
+	int	(*notifier_call)(struct notifier_block *nb,
+	    unsigned long action, void *data);
+};
+#define	register_netdevice_notifier(nb)		((void)(nb), 0)
+#define	unregister_netdevice_notifier(nb)	((void)(nb), 0)
+#define	NETDEV_UP		1
+#define	NETDEV_GOING_DOWN	2
+#define	NETDEV_DOWN		3
+#define	NETDEV_REBOOT		4
+#define	NETDEV_CHANGEADDR	5
+#define	NETDEV_CHANGENAME	6
+#define	NOTIFY_DONE		0
+
+/* dev lookups: there is no device database - always miss */
+struct net_device *dev_get_by_name(void *net, const char *name);
+struct net_device *dev_get_by_index(void *net, int ifindex);
+#define	init_net		(NULL)
+#define	dev_net(dev)		(NULL)
+#define	dev_hold(dev)		do { (void)(dev); } while (0)
+#define	dev_put(dev)		do { (void)(dev); } while (0)
+#define	NET_NAME_UNKNOWN	0
+
+/* ------------------------------------------------------------------ */
 /* usb_anchor (urb.c:812 family; rtl8xxxu embeds three in its softc;    */
 /* implementation in linuxkpi_usb.c - spec §3.6-4)                      */
 /* ------------------------------------------------------------------ */
@@ -1643,6 +2032,36 @@ strscpy(char *dst, const char *src, size_t len)
 	return dst;
 }
 
+/* [S6] B8/W0L-S9: the vendor still calls strncpy in live units (hal_com,
+ * os_intfs ifname surgery); C strncpy semantics, own implementation */
+static __always_inline __unused char *
+strncpy(char *dst, const char *src, size_t len)
+{
+	size_t i = 0;
+
+	if (len != 0) {
+		for (; i < len && src[i] != '\0'; i++)
+			dst[i] = src[i];
+		for (; i < len; i++)
+			dst[i] = '\0';
+	}
+	return dst;
+}
+
+static __always_inline __unused size_t
+strlcpy(char *dst, const char *src, size_t len)
+{
+	size_t srclen = strlen(src);
+
+	if (len != 0) {
+		size_t n = srclen < len - 1 ? srclen : len - 1;
+
+		memcpy(dst, src, n);
+		dst[n] = '\0';
+	}
+	return srclen;
+}
+
 static __always_inline __unused void *
 memset_io(void *addr, int val, size_t len)
 {
@@ -1660,6 +2079,51 @@ memcpy_toio(volatile void *dst, const void *src, size_t len)
 {
 	memcpy((void *)(uintptr_t)dst, src, len);
 }
+
+/* ------------------------------------------------------------------ */
+/* file-I/O face ([S6] B8 / W0L-S1): the image has NO filesystem - the  */
+/* vendor debug-dump and efuse-config paths only need to compile (every */
+/* open fails, callers fall back to their built-in defaults).  Shapes   */
+/* match the vendor's 4.x call sites: f_op->write direct call,          */
+/* kernel_read(fp, buf, len, &f_pos), set_fs around the callers.        */
+/* ------------------------------------------------------------------ */
+
+typedef long long loff_t;
+
+struct file_operations {
+	ssize_t	(*read)(struct file *, char *, size_t, loff_t *);
+	ssize_t	(*write)(struct file *, const char *, size_t, loff_t *);
+};
+
+struct file {
+	unsigned int		f_mode;
+	loff_t			f_pos;
+	const struct file_operations *f_op;
+	void			*private_data;
+};
+
+#define	FMODE_READ		0x00000001
+#define	FMODE_WRITE		0x00000002
+#define	FMODE_CAN_READ		0x00040000
+#define	FMODE_CAN_WRITE		0x00080000
+
+/* the fs-segment dance: a no-op here (no address-space switch possible) */
+typedef int	mm_segment_t;
+#define	KERNEL_DS		((mm_segment_t)0)
+#define	USER_DS			((mm_segment_t)1)
+#define	get_ds()		KERNEL_DS
+#define	get_fs()		KERNEL_DS
+#define	set_fs(seg)		do { (void)(seg); } while (0)
+
+struct file *filp_open(const char *path, int flags, int mode);
+int filp_close(struct file *fp, void *files);
+ssize_t kernel_read(struct file *fp, void *buf, size_t len, loff_t *pos);
+ssize_t kernel_write(struct file *fp, const void *buf, size_t len,
+    loff_t *pos);
+ssize_t __vfs_read(struct file *fp, char *buf, size_t len, loff_t *pos);
+ssize_t __vfs_write(struct file *fp, const char *buf, size_t len,
+    loff_t *pos);
+int vfs_fsync(struct file *fp, int datasync);
 
 int lkpi_strcasecmp(const char *, const char *);
 char *lkpi_strnstr(const char *, const char *, size_t);
