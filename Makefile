@@ -380,6 +380,27 @@ ifeq ($(filter $(CONFIG_GMAC_PORT),0 1),)
 $(error CONFIG_GMAC_PORT must be 0 or 1, got '$(CONFIG_GMAC_PORT)')
 endif
 
+# GMAC RX data-path factors (N7 R3, one A/B key each - override on the make
+# command line, clean-config between variants):
+#   RX_HWCSUM   MAC IPC checksum offload: the driver drops RDES1-flagged bad
+#               frames and lwipopts disables CHECKSUM_CHECK_IP/TCP/UDP in
+#               lockstep (both sides must flip together).
+#   RX_COALESCE RX descriptor IOC off + RX watchdog interrupt coalescing
+#               (RI asserted on watchdog expiry instead of per frame).
+#   RX_RIWT     watchdog reload, unit 256 DMA clock ticks (Linux default 0xa0).
+CONFIG_GMAC_RX_HWCSUM ?= n
+CONFIG_GMAC_RX_COALESCE ?= n
+CONFIG_GMAC_RX_RIWT ?= 0xa0
+ifeq ($(filter $(CONFIG_GMAC_RX_HWCSUM),y n),)
+$(error CONFIG_GMAC_RX_HWCSUM must be y or n, got '$(CONFIG_GMAC_RX_HWCSUM)')
+endif
+ifeq ($(filter $(CONFIG_GMAC_RX_COALESCE),y n),)
+$(error CONFIG_GMAC_RX_COALESCE must be y or n, got '$(CONFIG_GMAC_RX_COALESCE)')
+endif
+CFLAGS += -DCONFIG_GMAC_RX_HWCSUM=$(if $(filter y,$(CONFIG_GMAC_RX_HWCSUM)),1,0) \
+	-DCONFIG_GMAC_RX_COALESCE=$(if $(filter y,$(CONFIG_GMAC_RX_COALESCE)),1,0) \
+	-DCONFIG_GMAC_RX_RIWT=$(CONFIG_GMAC_RX_RIWT)
+
 LWIP_DIR := third-party/lwip
 # GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +
 # RTL8211F PHY + RK3568 glue/board table, re-arranged onto gicv3/cache/log.
@@ -453,12 +474,17 @@ endif
 CONFIG_NETUTILS_PING ?= y
 CONFIG_NETUTILS_TFTP ?= y
 CONFIG_NETUTILS_IPERF3 ?= y
+CONFIG_NETUTILS_IPERF2 ?= y
 
 NU_DIR := components/netutils
 IPE_DIR := components/iperf3_embedded
 NU_VENDORED_SRCS :=
 NU_PORT_SRCS := os/netutils/netutils_shim.c os/netutils/tftp_port.c \
 	os/netutils/iperf3_port.c os/netutils/iperf3_cmd.c
+# lwiperf client front end (N7 R3): the no-copy TX measurement shape.
+ifeq ($(CONFIG_NETUTILS_IPERF2),y)
+NU_PORT_SRCS += os/netutils/iperf2_cmd.c
+endif
 ifeq ($(CONFIG_NETUTILS_PING),y)
 NU_VENDORED_SRCS += $(NU_DIR)/ping/ping.c
 endif
@@ -478,6 +504,7 @@ NU_CFLAGS := -Ios/netutils/shim -Ios/netutils \
 	-DCONFIG_NETUTILS_PING=$(if $(filter y,$(CONFIG_NETUTILS_PING)),1,0) \
 	-DCONFIG_NETUTILS_TFTP=$(if $(filter y,$(CONFIG_NETUTILS_TFTP)),1,0) \
 	-DCONFIG_NETUTILS_IPERF3=$(if $(filter y,$(CONFIG_NETUTILS_IPERF3)),1,0) \
+	-DCONFIG_NETUTILS_IPERF2=$(if $(filter y,$(CONFIG_NETUTILS_IPERF2)),1,0) \
 	$(LWIP_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/components/netutils/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
 $(BUILD)/components/iperf3_embedded/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)

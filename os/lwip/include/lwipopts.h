@@ -143,6 +143,21 @@
  * sends must not pay a mailbox round trip each). */
 #define LWIP_TCPIP_CORE_LOCKING         1
 
+/* --- RX checksum offload (N7 R3; must flip with the driver, never alone) -------
+ *
+ * With CONFIG_GMAC_RX_HWCSUM the GMAC IPC block validates the L3/L4
+ * checksum of every IP frame and dwc_eqos drops RDES1-flagged bad frames
+ * before they reach the stack - the software verification below is then a
+ * redundant full-payload pass per packet (the dominant per-frame CPU cost
+ * the A55 pays that the Phytium reference core simply brute-forced). ICMP
+ * keeps its software check: rare traffic, and its checksum has no pseudo
+ * header (the IPC payload check still flags bad ICMP frames). */
+#if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
+#define CHECKSUM_CHECK_IP               0
+#define CHECKSUM_CHECK_TCP              0
+#define CHECKSUM_CHECK_UDP              0
+#endif
+
 /* --- threads and mailboxes (D54 ladder; sys_arch band_to_cmsis: band*8) ------- */
 
 #define TCPIP_THREAD_NAME               "tcpip"

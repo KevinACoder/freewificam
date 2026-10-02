@@ -393,6 +393,7 @@ static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx)
 {
 	struct dwc_eqos_desc *desc = &dev->rx_ring[idx];
 	uint8_t *buf = rx_buffers[dev->plat->index][idx];
+	uint32_t ctrl = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_RX_BUF1V;
 
 	/* The buffer was written by software (.bss init) or by the previous
 	 * DMA transfer: no stale dirty line may survive before the DMA starts
@@ -400,10 +401,17 @@ static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx)
 	cache_dcache_flush((uintptr_t)buf, DWC_EQOS_RX_BUF_SIZE);
 	cache_dcache_invalidate((uintptr_t)buf, DWC_EQOS_RX_BUF_SIZE);
 
+#if defined(CONFIG_GMAC_RX_COALESCE) && CONFIG_GMAC_RX_COALESCE
+	/* IOC off: RI is asserted on RX watchdog expiry instead of per frame
+	 * (N7 R3 coalescing; the watchdog is programmed in eqos_hw_start). */
+#else
+	ctrl |= DWC_EQOS_DESC_RX_IOC;
+#endif
+
 	desc->des0 = (uint32_t)(uintptr_t)buf;
 	desc->des1 = 0;
 	desc->des2 = 0;
-	desc->des3 = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_RX_IOC | DWC_EQOS_DESC_RX_BUF1V;
+	desc->des3 = ctrl;
 	/* No flush: the ring is in non-cacheable memory. The barrier keeps the
 	 * grant visible to the DMA only after the buffer address and length. */
 	eqos_dsb_st();
@@ -434,6 +442,15 @@ static int eqos_hw_start(struct dwc_eqos_dev *dev)
 		(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
 
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE, DWC_EQOS_CH0_INTR_DEFAULT);
+
+#if defined(CONFIG_GMAC_RX_COALESCE) && CONFIG_GMAC_RX_COALESCE
+	/* RX interrupt coalescing (N7 R3): with every RX descriptor's IOC off,
+	 * the channel asserts RI when the RX watchdog expires instead of once
+	 * per frame - at an 800 Mbit/s reverse flow that is 66k IRQ/s down to
+	 * ~3k. Unit 256 DMA clock ticks; 0xa0 is the Linux default on this
+	 * board (DEF_DMA_RIWT). */
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_WATCHDOG, CONFIG_GMAC_RX_RIWT);
+#endif
 
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_TX_CONTROL,
 		eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_CONTROL) | DWC_EQOS_TX_CTRL_ST);
@@ -517,6 +534,21 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	eqos_wr(dev, DWC_EQOS_MAC_RX_FLOW_CTRL, 0);
 	eqos_wr(dev, DWC_EQOS_MAC_PACKET_FILTER, DWC_EQOS_PKT_FLT_PR);
 	eqos_wr(dev, DWC_EQOS_MAC_1US_TIC_COUNTER, (DWC_EQOS_PCLK_HZ / 1000000u) - 1u);
+
+#if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
+	/* RX checksum offload (N7 R3): the IPC block validates the L3/L4
+	 * checksums of every IP frame and reports through RDES1 (valid only
+	 * under the des3 RDES1_VALID flag); the completion sweep drops flagged
+	 * frames and lwipopts disables the stack-side software verification in
+	 * lockstep. Bit 27 = Linux dwmac4.h GMAC_CONFIG_IPC; the running Linux
+	 * on this board dumps Reg0 with exactly this bit as the only MAC_CONFIG
+	 * difference. */
+	reg = eqos_rd(dev, DWC_EQOS_MAC_CONFIGURATION);
+	reg |= DWC_EQOS_MAC_CONF_IPC;
+	eqos_wr(dev, DWC_EQOS_MAC_CONFIGURATION, reg);
+	board_log("%s: rx hw checksum (IPC) on\n", eqos_dev_name(dev));
+#endif
+
 
 	eqos_set_macaddr_regs(dev, dev->macaddr);
 
@@ -615,7 +647,19 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 
 		if (len < 4) {
 			dev->stats.rx_errors++;
-		} else {
+		} else if (
+#if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
+			   /* IPC verdict first (descriptor reads only - a dropped
+			    * frame costs no cache maintenance). RDES1_VALID is
+			    * set for IP frames only, so ARP & friends pass this
+			    * gate untouched. */
+			   ((desc->des3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
+			   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
+					   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
+#else
+			   1
+#endif
+		) {
 			cache_dcache_invalidate((uintptr_t)buf, len);
 			/* Strip the frame check sequence: the MAC was
 			 * configured not to, and one strip is the right
@@ -624,6 +668,8 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 			if (eqos_stage_put(dev, buf, len) == 0) {
 				delivered++;
 			}
+		} else {
+			dev->stats.rx_csum_drops++;
 		}
 
 		eqos_setup_rx_desc(dev, i);
@@ -751,7 +797,8 @@ void dwc_eqos_irq(void *arg)
 		 * abnormal summary set keeps the line asserted forever. */
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_STATUS, status);
 
-		if (!(status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_TI
+		if (!(status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_RWT
+				| DWC_EQOS_CH0_STATUS_TI
 				| DWC_EQOS_CH0_STATUS_FB))) {
 			break;
 		}
@@ -766,7 +813,12 @@ void dwc_eqos_irq(void *arg)
 			return;
 		}
 
-		if (status & DWC_EQOS_CH0_STATUS_RI) {
+		if (status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_RWT)) {
+			/* RWT (watchdog expiry) is the coalesced RI: with the
+			 * RX descriptor IOC off it is the only RX interrupt
+			 * source. Counted here, not at entry, so TX-only
+			 * passes do not dilute the coalescing gauge. */
+			dev->stats.rx_irqs++;
 			if (eqos_rx_complete(dev) > 0) {
 				if (s_rx_notify != NULL) {
 					s_rx_notify((unsigned int)(uintptr_t)arg);

@@ -4,7 +4,8 @@
  *
  * P7-2a shape (specs/lwip-adapt §3.1/§4/P7-2a): the lwIP stack runs its own
  * tcpip thread (sys_arch over the cmsis2_threadx shim, D54 band ladder:
- * shell(5) > tcpip(4) > this app's workers(3)) on the ThreadX UP kernel.
+ * tcpip(5) > this app's workers(3) - N7 raised the tcpip band) on the
+ * ThreadX UP kernel.
  * The GMAC driver and the ethnetif bridge are unchanged from phase 1 -
  * only the input pointer (tcpip_input) and the delivery context moved:
  *
@@ -235,7 +236,7 @@ static void thr_boot(void *arg)
 			dwc_eqos_get_stats(port, &stats);
 			dwc_eqos_get_mmc_stats(port, &mmc);
 			ethnetif_get_diag(&d_poll, &d_pool, &d_input, &d_fed);
-			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u | fed=%lu poolfail=%lu inputfail=%lu mbox=%u mmc_ovf=%u\n",
+			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u | irq=%u csdrop=%u fed=%lu poolfail=%lu inputfail=%lu mbox=%u mmc_ovf=%u\n",
 				  port,
 				  (unsigned)stats.rx_frames,
 				  (unsigned)stats.rx_dropped,
@@ -243,6 +244,8 @@ static void thr_boot(void *arg)
 				  (unsigned)stats.tx_frames,
 				  (unsigned)stats.tx_dropped,
 				  (unsigned)stats.tx_errors,
+				  (unsigned)stats.rx_irqs,
+				  (unsigned)stats.rx_csum_drops,
 				  d_fed, d_pool, d_input,
 				  sys_arch_tcpip_mbox_count(),
 				  (unsigned)mmc.rx_fifo_overflow);
