@@ -111,8 +111,16 @@ static void slot_entry(ULONG input)
 
 	slot->func(slot->arg);
 	/* CMSIS thread functions returning is equivalent to osThreadTerminate
-	 * on self (os_threadlib semantics); the wrapper parks instead - the
-	 * slot stays LIVE and its stack stays owned. */
+	 * on self (os_threadlib semantics); the wrapper parks instead so the
+	 * slot stays LIVE and its stack stays owned. The parking MUST go
+	 * through the kernel: the original plain `wfe` spin never yielded,
+	 * so a returned thread stayed the running thread at its priority and
+	 * starved every lower-priority thread (board-proven 2026-10-02: the
+	 * first-ever returning thread, autorun@tx15, froze gmacrx/shell/
+	 * heartbeat@tx19 while the tick kept ticking - network pings died
+	 * too). Self-suspend parks it out of the scheduler; the wfe loop
+	 * below only matters if something later resumes the thread. */
+	(void)tx_thread_suspend(&slot->thread);
 	for (;;) {
 		__asm__ __volatile__("wfe");
 	}
@@ -125,6 +133,53 @@ static UINT slot_tx_create(thread_slot_t *slot)
 				slot->stack_size, slot->tx_prio,
 				slot->tx_prio, TX_NO_TIME_SLICE,
 				TX_AUTO_START);
+}
+
+/* Event-flags created-list forensics (2026-10-02 console-outage round):
+ * txe_event_flags_create reports TX_GROUP_ERROR when its walk over
+ * _tx_event_flags_created_ptr/created_count ends on the caller's own
+ * pointer - i.e. when the kernel's list state itself is wrong. One
+ * summary line per create records the head/count growth, and on failure
+ * a bounded walk dumps the first nodes, so the boot log shows both when
+ * the list goes bad and what it contains. */
+static void ef_trace(thread_slot_t *slot, int detail)
+{
+	TX_EVENT_FLAGS_GROUP *g = _tx_event_flags_created_ptr;
+	unsigned int i;
+
+	board_log("cmsis2: ef '%s' idx=%u ptr=%p count=%lu head=%p\n",
+		  slot->name, (unsigned)(slot - slots), (void *)&slot->flags,
+		  (unsigned long)_tx_event_flags_created_count, (void *)g);
+
+	if (!detail) {
+		return;
+	}
+	for (i = 0U; i < 8U; i++) {
+		TX_EVENT_FLAGS_GROUP *next;
+
+		if (g == NULL) {
+			break;
+		}
+		/* Deref only inside the image+heap window; a wild pointer must
+		 * not fault the system that is being diagnosed. */
+		if ((uintptr_t)g < 0x0a000000UL ||
+		    (uintptr_t)g >= 0x0a800000UL) {
+			board_log("cmsis2: ef list[%u] ptr=%p OUT-OF-RANGE\n",
+				  i, (void *)g);
+			break;
+		}
+		next = g->tx_event_flags_group_created_next;
+		board_log("cmsis2: ef list[%u] ptr=%p name=%s id=%lx next=%p\n",
+			  i, (void *)g,
+			  (g->tx_event_flags_group_name != NULL) ?
+				  g->tx_event_flags_group_name : "?",
+			  (unsigned long)g->tx_event_flags_group_id,
+			  (void *)next);
+		if (next == g || next == _tx_event_flags_created_ptr) {
+			break;
+		}
+		g = next;
+	}
 }
 
 osThreadId_t osThreadNew(osThreadFunc_t func, void *argument,
@@ -154,6 +209,15 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument,
 		return NULL;
 	}
 
+	/* Claim the slot before anything else. tx_thread_create(TX_AUTO_START)
+	 * can switch into the new thread before returning, and that thread may
+	 * itself call osThreadNew - an unclaimed slot gets re-selected and the
+	 * event-flags duplicate check fires (TX_GROUP_ERROR 0x6, board-proven
+	 * 2026-10-02: tcpip@tx11 preempted mid-create of itself; tcpip_ready's
+	 * osThreadNew('autorun') re-claimed slots[4] and found its own group
+	 * already in the created list). */
+	slot->state = SLOT_PENDING;
+
 	stack_size = (attr != NULL && attr->stack_size != 0U)
 			     ? attr->stack_size
 			     : CMSIS_DEFAULT_STACK;
@@ -181,16 +245,21 @@ osThreadId_t osThreadNew(osThreadFunc_t func, void *argument,
 	slot->stack_size = stack_size;
 
 	{
-		UINT rc = tx_event_flags_create(&slot->flags, slot->name);
+		UINT rc;
+
+		ef_trace(slot, 0);
+		rc = tx_event_flags_create(&slot->flags, slot->name);
 
 		if (rc != TX_SUCCESS) {
 			vPortFree(slot->stack);
 			slot->stack = NULL;
+			slot->state = SLOT_FREE;
 			board_log("cmsis2: event_flags_create '%s' FAIL 0x%x "
 				  "(sz=%u ptr=%p)\n",
 				  slot->name, rc,
 				  (unsigned)sizeof(TX_EVENT_FLAGS_GROUP),
 				  (void *)&slot->flags);
+			ef_trace(slot, 1);
 			return NULL;
 		}
 	}

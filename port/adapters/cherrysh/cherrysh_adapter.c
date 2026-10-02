@@ -137,6 +137,16 @@ static osThreadId_t shell_task_id;
 
 static uint8_t rx_chunk[SHELL_RX_CHUNK];
 
+/* RX-path forensics (2026-10-02 console-outage round): increment-only
+ * counters on the ISR side, read from the app heartbeat. They split the
+ * path at its two boundaries - "ISR ran" (uart_console_rx_isr_calls in
+ * the driver) vs "bytes ringed" vs "bytes consumed by readline" - so a
+ * heartbeat line localizes where a keystroke is lost. Never logged from
+ * here: printing inside the RX ISR would perturb the path under test. */
+volatile unsigned cherrysh_rx_ringed;
+volatile unsigned cherrysh_rx_consumed;
+volatile unsigned cherrysh_rx_wakes;
+
 /* The RX interrupt's completion callback: the FIFO contents are already in
  * rx_chunk, the count is what actually arrived. */
 static void shell_uart_rx_event(uint32_t events, uint32_t rx_count)
@@ -177,6 +187,7 @@ static void shell_uart_rx_event(uint32_t events, uint32_t rx_count)
 		 * non-overwriting variant would silently discard what they
 		 * just typed. */
 		(void)chry_ringbuffer_overwrite_byte(&rx_ring, rx_chunk[i]);
+		cherrysh_rx_ringed++;
 	}
 
 #ifdef CONFIG_GDB_STUB
@@ -190,6 +201,7 @@ rearm:
 
 	if (shell_task_id != NULL) {
 		(void)osThreadFlagsSetFromISR(shell_task_id, SHELL_INPUT_FLAG);
+		cherrysh_rx_wakes++;
 	}
 
 	/* Re-arm for the next burst. Must happen after the ring write, or a
@@ -231,6 +243,7 @@ static uint16_t shell_sget(chry_readline_t *rl, void *data, uint16_t size)
 	}
 
 	got = chry_ringbuffer_read(&rx_ring, data, size);
+	cherrysh_rx_consumed += got;
 	return (uint16_t)got;
 }
 

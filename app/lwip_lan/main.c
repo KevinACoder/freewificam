@@ -55,6 +55,18 @@
 #include "cherrysh_adapter.h"
 #endif
 
+/* RX-path forensics (2026-10-02 console-outage round; SHELL_RX_DIAG build
+ * knob): the driver counters live in uart.c, the adapter's in
+ * cherrysh_adapter.c - both non-static so the heartbeat can split the
+ * path ISR -> ring -> readline in one line. */
+#if defined(SHELL_RX_DIAG) && defined(CONFIG_UART_RX_IRQ) && defined(CONFIG_SHELL)
+extern volatile unsigned uart_console_rx_isr_calls;
+extern volatile unsigned uart_console_rx_isr_bytes;
+extern volatile unsigned cherrysh_rx_ringed;
+extern volatile unsigned cherrysh_rx_consumed;
+extern volatile unsigned cherrysh_rx_wakes;
+#endif
+
 #ifndef THREADX_BUILD
 #error "lwip_lan phase 2 runs on the threadx base (spec S7 §4/P7-2a)"
 #endif
@@ -113,23 +125,26 @@ static void lwiperf_report(void *arg, enum lwiperf_report_type type,
  * the boot log and give the PC-side server a moment to accept. */
 static void thr_autorun(void *arg)
 {
-	uint32_t until;
-
 	(void)arg;
 	board_log("autorun: enter\n");
-	/* Tick-busy-wait, same shape as the heartbeat loop: osDelay on this
-	 * image is under suspicion (the R5b thread printed nothing past a
-	 * plain sleep), and three seconds of spin at boot is free. */
-	until = osKernelGetTickCount() + 3000U;
-	while ((int32_t)(osKernelGetTickCount() - until) < 0) {
-	}
+	/* Settle delay: give the bring-up log a moment before the optional
+	 * probe/measurement (osDelay is the kernel's own proven path - the
+	 * R5b "plain sleep never returned" observation was the slot-entry
+	 * parking bug, not the delay call). A busy-wait here would starve
+	 * the tx19 shell/heartbeat threads for its whole duration. */
+	(void)osDelay(3000U);
 #ifdef CONFIG_SCMI_PROBE
+	/* The boot-time probe is part of the unattended rate-set chain
+	 * (boot set != 0) only. The probe has never executed on this
+	 * silicon - with the shell demonstrably alive (2026-10-02) the
+	 * first run belongs behind a decisive wall, i.e. the typed `scmi`
+	 * command, not the boot path. */
+#if defined(CONFIG_SCMI_BOOT_SET_MHZ) && (CONFIG_SCMI_BOOT_SET_MHZ != 0)
 	scmi_boot_probe();
 #endif
+#endif
 #ifdef CONFIG_IPERF2_AUTO_HOST
-	until = osKernelGetTickCount() + 2000U;
-	while ((int32_t)(osKernelGetTickCount() - until) < 0) {
-	}
+	(void)osDelay(2000U);
 	(void)iperf2_client_start(CONFIG_IPERF2_AUTO_HOST);
 #endif
 }
@@ -301,6 +316,19 @@ static void thr_boot(void *arg)
 				  d_fed, d_pool, d_input,
 				  sys_arch_tcpip_mbox_count(),
 				  (unsigned)mmc.rx_fifo_overflow);
+#if defined(SHELL_RX_DIAG) && defined(CONFIG_UART_RX_IRQ) && defined(CONFIG_SHELL)
+			/* One line per second: driver registers + ISR counters,
+			 * then the adapter's ring/wake/consume counters. Where a
+			 * keystroke stops moving localizes the fault. */
+			uart_console_rx_diag();
+			board_log("shell: rx armed=%d isr=%u bytes=%u ringed=%u consumed=%u wakes=%u\n",
+				  uart_console_rx_armed(),
+				  uart_console_rx_isr_calls,
+				  uart_console_rx_isr_bytes,
+				  cherrysh_rx_ringed,
+				  cherrysh_rx_consumed,
+				  cherrysh_rx_wakes);
+#endif
 		}
 		(void)osDelay(1);
 	}
