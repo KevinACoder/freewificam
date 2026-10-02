@@ -71,6 +71,46 @@ typedef uint8_t			u8;
 typedef uint16_t		u16;
 typedef uint32_t		u32;
 typedef uint64_t		u64;
+/* the __kernel_* spellings (vendor basic_types.h SIZE_T/SSIZE_T); the
+ * __u8..__u64 family already lives below (lines 74-97) */
+typedef unsigned long		__kernel_size_t;
+typedef long			__kernel_ssize_t;
+typedef long			__kernel_ptrdiff_t;
+typedef int			__kernel_pid_t;
+typedef unsigned int		__kernel_uid_t;
+typedef unsigned int		__kernel_gid_t;
+typedef long			__kernel_off_t;
+typedef long long		__kernel_loff_t;
+typedef int			__kernel_time_t;
+
+/* host-endian conversions: identity macros on this little-endian target -
+ * MACROS, not functions: `case htons(ETH_P_IP):` needs a constant */
+#define	__cpu_to_be16(x)	((__u16)__builtin_bswap16(x))
+#define	__cpu_to_be32(x)	((__u32)__builtin_bswap32(x))
+#define	__be16_to_cpu(x)	((__u16)__builtin_bswap16(x))
+#define	__be32_to_cpu(x)	((__u32)__builtin_bswap32(x))
+#define	htons(x)		((__u16)(x))
+#define	htonl(x)		((__u32)(x))
+#define	ntohs(x)		((__u16)(x))
+#define	ntohl(x)		((__u32)(x))
+#define	cpu_to_be16(x)		__cpu_to_be16(x)
+#define	cpu_to_be32(x)		__cpu_to_be32(x)
+#define	be16_to_cpu(x)		__be16_to_cpu(x)
+#define	be32_to_cpu(x)		__be32_to_cpu(x)
+typedef long			ssize_t;
+
+/* the limits the drivers reference */
+#define	U8_MAX		((u8)~0U)
+#define	S8_MAX		((s8)127)
+#define	U16_MAX		((u16)~0U)
+#define	S16_MAX		((s16)32767)
+#define	U32_MAX		((u32)~0U)
+#define	S32_MAX		((s32)2147483647)
+#define	INT_MAX		((int)2147483647)
+#define	UINT_MAX	((unsigned int)~0U)
+#define	LONG_MAX	((long)2147483647)
+#define	ULONG_MAX	((unsigned long)~0UL)
+
 typedef int8_t			s8;
 typedef int16_t			s16;
 typedef int32_t			s32;
@@ -79,11 +119,11 @@ typedef int64_t			s64;
 typedef uint8_t			__u8;
 typedef uint16_t		__u16;
 typedef uint32_t		__u32;
-typedef uint64_t		__u64;
+typedef unsigned long long	__u64;
 typedef int8_t			__s8;
 typedef int16_t			__s16;
 typedef int32_t			__s32;
-typedef int64_t			__s64;
+typedef long long		__s64;
 
 typedef uint16_t		__le16;
 typedef uint32_t		__le32;
@@ -996,6 +1036,14 @@ typedef struct {
 #define	atomic_read(v)		((v)->counter)
 #define	atomic_set(v, i)	do { (v)->counter = (i); } while (0)
 void lkpi_atomic_inc(atomic_t *v);
+int lkpi_atomic_sub_return(int i, atomic_t *v);
+int lkpi_atomic_add_return(int i, atomic_t *v);
+#define	atomic_sub_return(i, v)	lkpi_atomic_sub_return((i), (v))
+#define	atomic_add_return(i, v)	lkpi_atomic_add_return((i), (v))
+#define	atomic_dec_and_test(v)	(lkpi_atomic_sub_return(1, (v)) == 0)
+#define	atomic_inc_and_test(v)	(lkpi_atomic_add_return(1, (v)) == 0)
+#define	atomic_read(v)		__atomic_load_n(&(v)->counter, __ATOMIC_RELAXED)
+#define	atomic_set(v, i)	__atomic_store_n(&(v)->counter, (i), __ATOMIC_RELAXED)
 void lkpi_atomic_dec(atomic_t *v);
 int lkpi_atomic_inc_return(atomic_t *v);
 int lkpi_atomic_dec_return(atomic_t *v);
@@ -1128,6 +1176,7 @@ dev_name(const struct device *dev)
 #define	MODULE_AUTHOR(x)
 #define	MODULE_DESCRIPTION(x)
 #define	MODULE_LICENSE(x)
+#define	MODULE_VERSION(x)
 #define	MODULE_FIRMWARE(x)
 #define	MODULE_PARM_DESC(x, y)
 #define	module_param_named(a, b, c, d)
@@ -1202,6 +1251,8 @@ int lkpi_mutex_is_locked(struct mutex *m);
 #define	mutex_destroy(m)		lkpi_mutex_destroy(m)
 #define	mutex_lock(m)			lkpi_mutex_lock(m)
 #define	mutex_unlock(m)			lkpi_mutex_unlock(m)
+#define	mutex_lock_interruptible(m)	(lkpi_mutex_lock(m), 0)
+#define	mutex_lock_killable(m)		(lkpi_mutex_lock(m), 0)
 #define	mutex_trylock(m)		lkpi_mutex_trylock(m)
 #define	mutex_is_locked(m)		lkpi_mutex_is_locked(m)
 
@@ -1501,6 +1552,27 @@ __skb_trim(struct sk_buff *skb, unsigned int len)
 	skb_trim(skb, len);
 }
 
+/* the pointer-arithmetic face (vendor osdep only carries some spellings;
+ * W0L-S9 leftovers land here) */
+static __always_inline __unused unsigned char *
+skb_tail_pointer(const struct sk_buff *skb)
+{
+	return skb->head + skb->tail;
+}
+
+static __always_inline __unused unsigned char *
+skb_end_pointer(const struct sk_buff *skb)
+{
+	return skb->head + skb->end;
+}
+
+static __always_inline __unused void
+skb_set_tail_pointer(struct sk_buff *skb, unsigned int offset)
+{
+	skb->tail = offset;
+	skb->data = skb->head + offset;
+}
+
 static __always_inline __unused void
 skb_orphan(struct sk_buff *skb)
 {
@@ -1558,7 +1630,7 @@ void complete_all(struct completion *c);
 /* ------------------------------------------------------------------ */
 
 struct semaphore {
-	void	_sem[10];	/* the TX_SEMAPHORE shell (impl assert) */
+	void	*_sem[10];	/* the TX_SEMAPHORE shell (impl assert) */
 };
 
 void lkpi_sema_init(struct semaphore *s, int val);
@@ -1584,19 +1656,36 @@ struct task_struct;
 #define	disallow_signal(sig)		do { (void)(sig); } while (0)
 #define	daemonize(fmt, ...)		do { } while (0)
 
+/* the userspace-notify family (osdep rtw_signal_process -> kill_pid):
+ * every pid in this image stays 0, so the calls are guarded no-ops */
+#define	SIGALRM		14
+#define	SIGUSR1		10
+#define	SIGUSR2		12
+#define	SIGTERM		15
+#define	SIGINT		2
+#define	SIGHUP		1
+#define	SIGKILL		9
+#define	find_vpid(pid)		((void *)(uintptr_t)(unsigned long)(pid))
+#define	kill_pid(pid, sig, priv)					\
+	((void)(pid), (void)(sig), (void)(priv), 0)
+#define	kill_proc(pid, sig, priv)					\
+	((void)(pid), (void)(sig), (void)(priv), 0)
+
 /* ------------------------------------------------------------------ */
 /* kthreads ([S6] §3.4 B2 - os_intfs.c four threads + osdep            */
 /* thread_exit/rtw_thread_stop; TX thread + stop flag)                 */
 /* ------------------------------------------------------------------ */
 
 struct task_struct {
-	void	_tx[48];	/* the TX_THREAD shell (impl assert) */
+	void	*_tx[48];	/* the TX_THREAD shell (impl assert) */
 	struct task_struct *lk_next;	/* the kthread registry chain */
 	void	(*fn)(void *);
 	void	*arg;
 	volatile int	should_stop;
 	volatile int	exited;
 	const char	*name;
+	int		pid;		/* stamp for current->pid debug prints */
+	char		comm[16];	/* current->comm (the kthread name) */
 };
 
 struct task_struct *lkpi_kthread_run(int (*threadfn)(void *), void *data,
@@ -1620,18 +1709,28 @@ struct task_struct *lkpi_current(void);
 void complete_and_exit(struct completion *comp, long code)
 	__attribute__((__noreturn__));
 
-/* scheduler stubs: the drivers only set state and sleep out timeouts */
+/* task states (stamps; nothing schedules off them) */
+#define	TASK_RUNNING		0
+#define	TASK_INTERRUPTIBLE	1
+#define	TASK_UNINTERRUPTIBLE	2
+
+/* scheduler stubs: the drivers only set state and sleep out timeouts.
+ * These resolve through real functions (core.c) - the driver TUs have no
+ * TX header, so the macros must not name a ThreadX symbol directly; the
+ * usleep_range face already exists above (lkpi_usleep_range). */
 #define	set_current_state(state)	do { (void)(state); } while (0)
 #define	__set_current_state(state)	do { (void)(state); } while (0)
-#define	schedule()			tx_thread_sleep(1)
-#define	schedule_timeout(j)		tx_thread_sleep(jiffies_to_msecs(j))
+#define	schedule()			lkpi_msleep(1)
+long lkpi_sched_timeout(unsigned int ms);	/* returns 0: timeout elapsed */
+#define	schedule_timeout(j)		lkpi_sched_timeout(jiffies_to_msecs(j))
 #define	schedule_timeout_interruptible(j) schedule_timeout(j)
 #define	freezable_schedule()		schedule()
-#define	msleep(ms)			tx_thread_sleep((UINT)(ms))
-#define	ssleep(s)			tx_thread_sleep((UINT)(s) * 1000)
-#define	usleep_range(min, max)		tx_thread_sleep((UINT)(max) / 1000)
+/* msleep/usleep_range ride the pre-existing lkpi faces above */
+#define	ssleep(s)			lkpi_msleep((unsigned int)(s) * 1000U)
 #define	io_schedule()			schedule()
 #define	cond_resched()			do { } while (0)
+#define	yield()				lkpi_msleep(1)
+unsigned int prandom_u32(void);
 
 /* ------------------------------------------------------------------ */
 /* workqueues (linux/workqueue.h)                                      */
@@ -1842,6 +1941,11 @@ struct net_device_stats {
 
 /* we only carry the net_device_ops members the vendor tables initialize
  * (select_queue keeps the vendor 4.20-era three-net_device* signature) */
+/* [LNX] netdevice.h 4.19-5.1 spelling: the vendor's live select-queue
+ * branch carries the fallback function pointer as the fourth parameter */
+typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
+    struct sk_buff *skb);
+
 typedef int netdev_tx_t;
 #define	NETDEV_TX_OK		0
 #define	NETDEV_TX_BUSY		1
@@ -1850,6 +1954,9 @@ typedef int netdev_tx_t;
 /* ifreq/IFF faces: if.h carries the shapes; the core needs the flags and
  * an incomplete ifreq for the ndo_do_ioctl prototype */
 struct ifreq;		/* linux/if.h */
+#define	ARPHRD_ETHER		1
+#define	ARPHRD_IEEE80211	801
+#define	ARPHRD_IEEE80211_RADIOTAP 803
 #define	IFF_UP		0x1
 #define	IFF_BROADCAST	0x2
 #define	IFF_DEBUG	0x4
@@ -1869,7 +1976,8 @@ struct net_device_ops {
 	netdev_tx_t	(*ndo_start_xmit)(struct sk_buff *skb,
 			    struct net_device *dev);
 	u16		(*ndo_select_queue)(struct net_device *dev,
-			    struct sk_buff *skb, struct net_device *sb_dev);
+			    struct sk_buff *skb, struct net_device *sb_dev,
+			    select_queue_fallback_t fallback);
 	int		(*ndo_do_ioctl)(struct net_device *dev,
 			    struct ifreq *ifr, int cmd);
 	int		(*ndo_set_mac_address)(struct net_device *dev,
@@ -1914,12 +2022,43 @@ struct net_device *alloc_etherdev_mq(int sizeof_priv, unsigned int txqs);
 #define	alloc_etherdev(sizeof_priv)	alloc_etherdev_mq((sizeof_priv), 1)
 void free_netdev(struct net_device *dev);
 int register_netdev(struct net_device *dev);
+#define	register_netdevice(dev)		(register_netdev(dev))
+#define	unregister_netdevice(dev)	(unregister_netdev(dev))
+#define	dev_close(dev)			((void)(dev), 0)
+#define	dev_open(dev)			((void)(dev), 0)
 void unregister_netdev(struct net_device *dev);
 int dev_alloc_name(struct net_device *dev, const char *fmt);
 
 #define	SET_NETDEV_DEV(ndev, pdev)	do {				\
 	(ndev)->dev.parent = (pdev);					\
 } while (0)
+
+/* netif_rx return codes + skb classification faces */
+#define	NET_RX_SUCCESS		0
+#define	NET_RX_CN_LOW		1
+#define	NET_RX_DROP		2
+
+#define	PACKET_HOST		0
+#define	PACKET_BROADCAST	1
+#define	PACKET_MULTICAST	2
+#define	PACKET_OTHERHOST	3
+#define	PACKET_OUTGOING		4
+
+#define	CHECKSUM_NONE		0
+#define	CHECKSUM_UNNECESSARY	1
+#define	CHECKSUM_COMPLETE	2
+#define	CHECKSUM_PARTIAL	3
+
+/* the network-header accessor the TX classify path reads; at the
+ * select-queue point the vendor expects the IP header at skb->data */
+#define	ip_hdr(skb)	((struct iphdr *)((skb)->data))
+
+/* the radiotap + skb-buffer copy helpers (monitor RX + TxBF paths) */
+int skb_copy_bits(const struct sk_buff *skb, unsigned int offset,
+    void *to, unsigned int len);
+unsigned int ieee80211_get_radiotap_len(const struct sk_buff *skb);
+#define	__netif_subqueue_stopped(dev, i)	0
+#define	__netif_subqueue_queued(dev, i)	1
 
 /* the register face is a no-op with a stamp: there is no net core in this
  * image, the adapter layer drives ndo_open/ndo_stop directly ([S6] B4). */
@@ -1948,6 +2087,8 @@ void netif_device_detach(struct net_device *dev);
 #define	netif_start_queue(dev)		netif_tx_start_all_queues(dev)
 #define	netif_wake_queue(dev)		netif_tx_wake_all_queues(dev)
 #define	netif_trans_update(dev)		do { (void)(dev); } while (0)
+#define	netif_wake_subqueue(dev, i)	netif_tx_wake_all_queues(dev)
+#define	netif_stop_subqueue(dev, i)	netif_tx_stop_all_queues(dev)
 #define	netif_running(dev)		(((dev)->flags & IFF_UP) != 0)
 
 /* rtnetlink: no net core, the lock is a stamp (the vendor interface-rename
@@ -1972,6 +2113,15 @@ struct notifier_block {
 #define	NETDEV_CHANGEADDR	5
 #define	NETDEV_CHANGENAME	6
 #define	NOTIFY_DONE		0
+
+/* the wext event exit (recv path michael-mic indication; the ioctl face
+ * is eliminated, so this is a counted stamp) */
+union iwreq_data;
+struct iw_event;
+unsigned short eth_type_trans(struct sk_buff *skb,
+    struct net_device *dev);
+int wireless_send_event(struct net_device *dev, unsigned int cmd,
+    union iwreq_data *wrqu, const char *extra);
 
 /* dev lookups: there is no device database - always miss */
 struct net_device *dev_get_by_name(void *net, const char *name);
@@ -2032,35 +2182,8 @@ strscpy(char *dst, const char *src, size_t len)
 	return dst;
 }
 
-/* [S6] B8/W0L-S9: the vendor still calls strncpy in live units (hal_com,
- * os_intfs ifname surgery); C strncpy semantics, own implementation */
-static __always_inline __unused char *
-strncpy(char *dst, const char *src, size_t len)
-{
-	size_t i = 0;
-
-	if (len != 0) {
-		for (; i < len && src[i] != '\0'; i++)
-			dst[i] = src[i];
-		for (; i < len; i++)
-			dst[i] = '\0';
-	}
-	return dst;
-}
-
-static __always_inline __unused size_t
-strlcpy(char *dst, const char *src, size_t len)
-{
-	size_t srclen = strlen(src);
-
-	if (len != 0) {
-		size_t n = srclen < len - 1 ? srclen : len - 1;
-
-		memcpy(dst, src, n);
-		dst[n] = '\0';
-	}
-	return srclen;
-}
+/* [S6] B8/W0L-S9: the vendor still calls strncpy in live units - minilibc
+ * owns the definition (minilibc.h:28); nothing to add here. */
 
 static __always_inline __unused void *
 memset_io(void *addr, int val, size_t len)
@@ -2086,13 +2209,17 @@ memcpy_toio(volatile void *dst, const void *src, size_t len)
 /* open fails, callers fall back to their built-in defaults).  Shapes   */
 /* match the vendor's 4.x call sites: f_op->write direct call,          */
 /* kernel_read(fp, buf, len, &f_pos), set_fs around the callers.        */
+/* loff_t comes from the core types (minilibc.h:97); the byte-count     */
+/* face is `long` (no ssize_t in this freestanding world).              */
 /* ------------------------------------------------------------------ */
 
-typedef long long loff_t;
-
 struct file_operations {
-	ssize_t	(*read)(struct file *, char *, size_t, loff_t *);
-	ssize_t	(*write)(struct file *, const char *, size_t, loff_t *);
+	long	(*read)(struct file *, char *, size_t, loff_t *);
+	long	(*write)(struct file *, const char *, size_t, loff_t *);
+};
+
+struct lkpi_dentry {
+	const void		*d_inode;
 };
 
 struct file {
@@ -2100,7 +2227,14 @@ struct file {
 	loff_t			f_pos;
 	const struct file_operations *f_op;
 	void			*private_data;
+	struct {
+		struct lkpi_dentry *dentry;
+		void		*mnt;
+	}			f_path;
 };
+
+/* the inode size read is dead-path (every open fails) */
+#define	i_size_read(inode)	((loff_t)0)
 
 #define	FMODE_READ		0x00000001
 #define	FMODE_WRITE		0x00000002
@@ -2117,13 +2251,21 @@ typedef int	mm_segment_t;
 
 struct file *filp_open(const char *path, int flags, int mode);
 int filp_close(struct file *fp, void *files);
-ssize_t kernel_read(struct file *fp, void *buf, size_t len, loff_t *pos);
-ssize_t kernel_write(struct file *fp, const void *buf, size_t len,
-    loff_t *pos);
-ssize_t __vfs_read(struct file *fp, char *buf, size_t len, loff_t *pos);
-ssize_t __vfs_write(struct file *fp, const char *buf, size_t len,
-    loff_t *pos);
+long kernel_read(struct file *fp, void *buf, size_t len, loff_t *pos);
+long kernel_write(struct file *fp, const void *buf, size_t len, loff_t *pos);
+long __vfs_read(struct file *fp, char *buf, size_t len, loff_t *pos);
+long __vfs_write(struct file *fp, const char *buf, size_t len, loff_t *pos);
 int vfs_fsync(struct file *fp, int datasync);
+
+/* the kernel-libc face the vendor osdep calls into (print discipline
+ * rides board_log through the impl) */
+int printk(const char *fmt, ...) __attribute__((__format__(printf, 1, 2)));
+int sprintf(char *buf, const char *fmt, ...)
+	__attribute__((__format__(printf, 2, 3)));
+int sscanf(const char *buf, const char *fmt, ...)
+	__attribute__((__format__(scanf, 2, 3)));
+char *strsep(char **s, const char *delim);
+char *strpbrk(const char *s, const char *accept);
 
 int lkpi_strcasecmp(const char *, const char *);
 char *lkpi_strnstr(const char *, const char *, size_t);

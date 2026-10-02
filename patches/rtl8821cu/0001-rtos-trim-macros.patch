@@ -1,30 +1,29 @@
 diff --git a/include/autoconf.h b/include/autoconf.h
-index bf8b3c8..51cf4cc 100644
+index bf8b3c8..6f621bf 100644
 --- a/include/autoconf.h
 +++ b/include/autoconf.h
-@@ -145,7 +145,10 @@
+@@ -145,6 +145,11 @@
  #endif
  
  
--#define CONFIG_AP_MODE
-+/* [W1-0001] CONFIG_AP_MODE off (RTOS consumer build: no AP mode in the
-+ * W1-W5 slice; also removes the unguarded ndo_do_ioctl=rtw_ioctl references
-+ * to ioctl_linux.c, which is not in the compile set) */
-+/* #define CONFIG_AP_MODE */
++/* [W1-0001 accounting] CONFIG_AP_MODE STAYS ON: spec section 3.2.3 listed
++ * it for trimming, but the vendor headers gate the mlme_priv AP fields
++ * (olbc/olbc_ht) while rtw_cmd.c references them unguarded - the pair was
++ * never compiled apart upstream ([FWC] 0001 and W0-L both kept it).  The
++ * AP face compiles dormant: MLME_IS_AP is runtime-false on this line. */
+ #define CONFIG_AP_MODE
  #ifdef CONFIG_AP_MODE
  	/* #define CONFIG_INTERRUPT_BASED_TXBCN */ /* Tx Beacon when driver BCN_OK ,BCN_ERR interrupt occurs */
- 	#if defined(CONFIG_CONCURRENT_MODE) && defined(CONFIG_INTERRUPT_BASED_TXBCN)
-@@ -163,7 +166,8 @@
+@@ -163,6 +168,8 @@
  	#define CONFIG_FIND_BEST_CHANNEL
  #endif
  
--#define CONFIG_P2P
-+/* [W1-0001] CONFIG_P2P off (RTOS consumer build, spec v2 §3.2.3 trim list) */
-+/* #define CONFIG_P2P */
++/* [W1-0001 accounting] CONFIG_P2P STAYS ON (same evidence as AP_MODE:
++ * [FWC]/W0-L never compiled without it; dormant at runtime). */
+ #define CONFIG_P2P
  #ifdef CONFIG_P2P
  	/* The CONFIG_WFD is for supporting the Wi-Fi display */
- 	#define CONFIG_WFD
-@@ -227,8 +231,11 @@
+@@ -227,8 +234,11 @@
   */
  
  #ifndef CONFIG_MINIMAL_MEMORY_USAGE
@@ -38,7 +37,7 @@ index bf8b3c8..51cf4cc 100644
  #endif
  
  /* #define CONFIG_REDUCE_USB_TX_INT*/ /* Trade-off: Improve performance, but may cause TX URBs blocked by USB Host/Bus driver on few platforms. */
-@@ -349,9 +356,17 @@
+@@ -349,9 +359,18 @@
  /*
   * Debug Related Config
   */
@@ -49,17 +48,18 @@ index bf8b3c8..51cf4cc 100644
 + * debug branches; RTW_PRINT_SEL logs stay via CONFIG_RTW_DEBUG. */
 +#define DBG	0
 +
-+/* [W1-0001] CONFIG_PROC_DEBUG off (spec v2 §3.2.3): rtw_proc.c is NOT in the
-+ * RTOS compile set (linuxkpi has no procfs face - [S6] C-tier eliminated);
-+ * unlike W0-L (which kept it ON because the Linux build compiled rtw_proc.c),
-+ * the RTOS build must go without it.  rtw_sta_linking_test_* live in
-+ * core/rtw_debug.c (not rtw_proc.c), so no link gap; the residual
-+ * rtw_adapter_proc_*/rtw_drv_proc_* references are stubbed by [W1-0003]. */
++/* [W1-0001] CONFIG_PROC_DEBUG off (spec v2 section 3.2.3): rtw_proc.c is
++ * NOT in the RTOS compile set (linuxkpi has no procfs face - [S6] C-tier
++ * eliminated); unlike W0-L (which kept it ON because the Linux build
++ * compiled rtw_proc.c), the RTOS build must go without it.  The
++ * rtw_sta_linking_test helpers live in core/rtw_debug.c (not rtw_proc.c),
++ * so there is no link gap; the residual adapter-proc and drv-proc
++ * references are stubbed by [W1-0004]. */
 +/* #define CONFIG_PROC_DEBUG */
  #define DBG_CONFIG_ERROR_DETECT
  
  /*#define DBG_CONFIG_ERROR_DETECT_INT*/
-@@ -361,8 +376,10 @@
+@@ -361,8 +380,10 @@
  
  /*#define DBG_IO*/
  /*#define DBG_DELAY_OS*/

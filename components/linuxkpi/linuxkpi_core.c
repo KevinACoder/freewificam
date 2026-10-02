@@ -25,6 +25,7 @@
 #include "linuxkpi_impl.h"
 
 #include <linux/firmware.h>
+#include <net/ieee80211_radiotap.h>
 
 /* ------------------------------------------------------------------ */
 /* allocation (tlsf - the one-allocator discipline, [S7b] FR-10 family) */
@@ -125,6 +126,46 @@ lkpi_fatal(const char *what)
 /* ------------------------------------------------------------------ */
 /* atomics                                                             */
 /* ------------------------------------------------------------------ */
+
+int
+lkpi_atomic_sub_return(int i, atomic_t *v)
+{
+
+	return (int)__atomic_sub_fetch(&v->counter, i, __ATOMIC_RELAXED);
+}
+
+int
+lkpi_atomic_add_return(int i, atomic_t *v)
+{
+
+	return (int)__atomic_add_fetch(&v->counter, i, __ATOMIC_RELAXED);
+}
+
+unsigned short
+eth_type_trans(struct sk_buff *skb, struct net_device *dev)
+{
+	struct ethhdr {
+		unsigned char	h_dest[ETH_ALEN];
+		unsigned char	h_source[ETH_ALEN];
+		unsigned short	h_proto;
+	} __packed;
+	const struct ethhdr *eth;
+	unsigned short proto;
+
+	(void)dev;
+	if (skb == NULL || skb->len < sizeof(*eth))
+		return 0;
+	eth = (const struct ethhdr *)skb->data;
+	proto = eth->h_proto;
+	skb->data += sizeof(*eth);
+	skb->len -= sizeof(*eth);
+	skb->tail += sizeof(*eth);
+	skb->protocol = proto;
+	if (eth->h_dest[0] & 0x01)
+		skb->pkt_type = (eth->h_dest[0] & 0x80) != 0 ?
+		    PACKET_MULTICAST : PACKET_BROADCAST;
+	return proto;
+}
 
 void
 lkpi_atomic_inc(atomic_t *v)
@@ -1384,6 +1425,9 @@ lkpi_kthread_run(int (*threadfn)(void *), void *data, const char *name)
 	t->fn = (void (*)(void *))threadfn;
 	t->arg = data;
 	t->name = name;
+	(void)strscpy(t->comm, name != NULL ? name : "lkpithread",
+	    sizeof(t->comm));
+	t->pid = 0;
 	if (tx_thread_create(lk_thread(t), (CHAR *)name,
 	    lkpi_kthread_trampoline, (ULONG)(uintptr_t)stack,
 	    stack, LKPI_KTHREAD_STACK, LKPI_KTHREAD_PRIORITY,
@@ -1680,6 +1724,21 @@ rtnl_is_locked(void)
 	return lkpi_rtnl_locked > 0;
 }
 
+static unsigned long lkpi_wext_event_cnt;
+
+int
+wireless_send_event(struct net_device *dev, unsigned int cmd,
+    union iwreq_data *wrqu, const char *extra)
+{
+
+	(void)wrqu;
+	(void)extra;
+	lkpi_wext_event_cnt++;
+	lkpi_printf("lkpi: %s wext event %u\n",
+	    dev != NULL ? dev->name : "?", cmd);
+	return 0;
+}
+
 struct net_device *
 dev_get_by_name(void *net, const char *name)
 {
@@ -1771,7 +1830,7 @@ filp_close(struct file *fp, void *files)
 	return -ENOSYS;
 }
 
-ssize_t
+long
 kernel_read(struct file *fp, void *buf, size_t len, loff_t *pos)
 {
 
@@ -1782,7 +1841,7 @@ kernel_read(struct file *fp, void *buf, size_t len, loff_t *pos)
 	return -ENOSYS;
 }
 
-ssize_t
+long
 kernel_write(struct file *fp, const void *buf, size_t len, loff_t *pos)
 {
 
@@ -1793,14 +1852,14 @@ kernel_write(struct file *fp, const void *buf, size_t len, loff_t *pos)
 	return -ENOSYS;
 }
 
-ssize_t
+long
 __vfs_read(struct file *fp, char *buf, size_t len, loff_t *pos)
 {
 
 	return kernel_read(fp, buf, len, pos);
 }
 
-ssize_t
+long
 __vfs_write(struct file *fp, const char *buf, size_t len, loff_t *pos)
 {
 
@@ -1814,6 +1873,310 @@ vfs_fsync(struct file *fp, int datasync)
 	(void)fp;
 	(void)datasync;
 	return -ENOSYS;
+}
+
+int
+seq_printf(struct seq_file *m, const char *fmt, ...)
+{
+	static char buf[256];
+	va_list ap;
+	int n;
+
+	(void)m;
+	va_start(ap, fmt);
+	n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	board_log("%s", buf);
+	return n;
+}
+
+int
+seq_puts(struct seq_file *m, const char *str)
+{
+
+	(void)m;
+	board_log("%s", str != NULL ? str : "");
+	return 0;
+}
+
+int
+seq_putc(struct seq_file *m, char c)
+{
+
+	(void)m;
+	board_log("%c", c);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* kernel-libc face ([S6] B8 calibration): the vendor osdep calls       */
+/* printk/sprintf/sscanf/strsep/strpbrk; minilibc does not carry them.  */
+/* ------------------------------------------------------------------ */
+
+int
+printk(const char *fmt, ...)
+{
+	static char buf[384];
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	/* printk appends a newline in kernel semantics; the board_log sink
+	 * stamps per line, strip ours to keep one line one stamp */
+	board_log("%s", buf);
+	return n;
+}
+
+int
+sprintf(char *buf, const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, (size_t)-1 / 2, fmt, ap);
+	va_end(ap);
+	return n;
+}
+
+char *
+strsep(char **s, const char *delim)
+{
+	char *start, *end;
+
+	if (s == NULL || *s == NULL)
+		return NULL;
+	start = *s;
+	for (end = start; *end != '\0'; end++) {
+		if (strchr(delim, *end) != NULL)
+			break;
+	}
+	if (*end == '\0') {
+		*s = NULL;
+	} else {
+		*end = '\0';
+		*s = end + 1;
+	}
+	return start;
+}
+
+char *
+strpbrk(const char *s, const char *accept)
+{
+	const char *sc;
+
+	for (; *s != '\0'; s++) {
+		for (sc = accept; *sc != '\0'; sc++) {
+			if (*sc == *s)
+				return (char *)(uintptr_t)s;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * A compact sscanf over the subset the vendor debug/param paths use:
+ * %i %d %u %x %X %s %c %n with h/hh/l modifiers and '*' suppression.
+ * Returns the number of successful conversions (Linux semantics).
+ */
+int
+sscanf(const char *buf, const char *fmt, ...)
+{
+	va_list ap;
+	const char *bp = buf;
+	int nconv = 0;
+	int suppress;
+
+	if (buf == NULL || fmt == NULL)
+		return 0;
+	va_start(ap, fmt);
+
+	for (; *fmt != '\0'; fmt++) {
+		if (*fmt != '%') {
+			if (*fmt == ' ' || *fmt == '\t') {
+				while (*bp == ' ' || *bp == '\t')
+					bp++;
+				continue;
+			}
+			if (*bp != *fmt)
+				break;
+			bp++;
+			continue;
+		}
+		fmt++;
+		suppress = (*fmt == '*');
+		if (suppress)
+			fmt++;
+
+		int length = 0;	/* 0=int, 1=long, -1=short, -2=char */
+		while (*fmt == 'h' || *fmt == 'l') {
+			length += (*fmt == 'l') ? 1 : -1;
+			fmt++;
+		}
+
+		char conv = *fmt;
+		if (conv == '\0')
+			break;
+
+		while (*bp == ' ' || *bp == '\t')
+			bp++;
+
+		if (conv == '%') {
+			if (*bp != '%')
+				break;
+			bp++;
+			continue;
+		}
+		if (conv == 'n') {
+			if (!suppress) {
+				int *p = va_arg(ap, int *);
+				*p = (int)(bp - buf);
+			}
+			continue;
+		}
+
+		unsigned long long uv = 0;
+		long long sv = 0;
+		int neg = 0;
+		int got = 0;
+
+		if (conv == 's') {
+			char *dst = suppress ? NULL : va_arg(ap, char *);
+			while (*bp != '\0' && *bp != ' ' && *bp != '\t' &&
+			    *bp != '\n') {
+				if (dst != NULL)
+					*dst++ = *bp;
+				bp++;
+				got = 1;
+			}
+			if (dst != NULL)
+				*dst = '\0';
+		} else if (conv == 'c') {
+			if (*bp == '\0')
+				break;
+			if (!suppress) {
+				char *dst = va_arg(ap, char *);
+				*dst = *bp;
+			}
+			bp++;
+			got = 1;
+		} else {
+			if (*bp == '-' && (conv == 'd' || conv == 'i')) {
+				neg = 1;
+				bp++;
+			}
+			if (conv == 'x' || conv == 'X' ||
+			    (conv == 'i' && bp[0] == '0' &&
+			    (bp[1] == 'x' || bp[1] == 'X'))) {
+				if (bp[0] == '0' &&
+				    (bp[1] == 'x' || bp[1] == 'X'))
+					bp += 2;
+				for (; *bp != '\0'; bp++) {
+					int d;
+					if (*bp >= '0' && *bp <= '9')
+						d = *bp - '0';
+					else if (*bp >= 'a' && *bp <= 'f')
+						d = *bp - 'a' + 10;
+					else if (*bp >= 'A' && *bp <= 'F')
+						d = *bp - 'A' + 10;
+					else
+						break;
+					uv = uv * 16 + (unsigned)d;
+					got = 1;
+				}
+				sv = (long long)uv;
+			} else if (conv == 'd' || conv == 'u' || conv == 'i') {
+				for (; *bp >= '0' && *bp <= '9'; bp++) {
+					uv = uv * 10 +
+					    (unsigned)(*bp - '0');
+					got = 1;
+				}
+				sv = (long long)uv;
+			} else {
+				break;	/* unsupported conversion */
+			}
+			if (neg)
+				sv = -sv;
+		}
+
+		if (!got)
+			break;
+		if (!suppress) {
+			switch (length) {
+			case -2: {
+				char *p = va_arg(ap, char *);
+				*p = (char)sv;
+				break;
+			}
+			case -1: {
+				short *p = va_arg(ap, short *);
+				*p = (short)sv;
+				break;
+			}
+			case 1: {
+				long *p = va_arg(ap, long *);
+				*p = (long)sv;
+				break;
+			}
+			default: {
+				int *p = va_arg(ap, int *);
+				*p = (int)sv;
+				break;
+			}
+			}
+			nconv++;
+		}
+	}
+
+	va_end(ap);
+	return nconv;
+}
+
+long
+lkpi_sched_timeout(unsigned int ms)
+{
+
+	tx_thread_sleep((UINT)(ms != 0 ? ms : 1));
+	return 0;	/* the whole timeout elapsed (Linux semantics) */
+}
+
+unsigned int
+prandom_u32(void)
+{
+
+	return get_random_int();
+}
+
+int
+skb_copy_bits(const struct sk_buff *skb, unsigned int offset, void *to,
+    unsigned int len)
+{
+	const unsigned char *from;
+	unsigned int avail;
+
+	if (skb == NULL || to == NULL)
+		return -EINVAL;
+	if (offset >= skb->len)
+		return -EFAULT;
+	avail = skb->len - offset;
+	if (len > avail)
+		len = avail;
+	from = skb->data + offset;
+	memcpy(to, from, len);
+	return (int)len;
+}
+
+unsigned int
+ieee80211_get_radiotap_len(const struct sk_buff *skb)
+{
+	const struct ieee80211_radiotap_header *rth;
+
+	if (skb == NULL || skb->len < sizeof(*rth))
+		return 0;
+	rth = (const struct ieee80211_radiotap_header *)skb->data;
+	return (unsigned int)(rth->it_len != 0 ? rth->it_len : sizeof(*rth));
 }
 
 void

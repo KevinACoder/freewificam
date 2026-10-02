@@ -1,17 +1,6 @@
 #ifndef _LINUXKPI_LINUX_IP_H_
 #define _LINUXKPI_LINUX_IP_H_
-/* [S6] B8: the IP header shape the RX path reads (iph->protocol etc.) */
-struct iphdr {
-	unsigned char	ihl:4,
-			version:4;
-	unsigned char	tos;
-	unsigned short	tot_len;
-	unsigned short	id;
-	unsigned short	frag_off;
-	unsigned char	ttl;
-	unsigned char	protocol;
-	unsigned short	check;
-	unsigned int	saddr;
-	unsigned int	daddr;
-} __packed;
+/* [S6] B8: the vendor ships its own <ip.h> (drv_types.h:149) with the
+ * full iphdr; this funnel shell stays empty so the vendor header wins
+ * (one definition per image). */
 #endif

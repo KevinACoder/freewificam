@@ -1,7 +1,10 @@
 #ifndef _LINUXKPI_NET_IEEE80211_RADIOTAP_H_
 #define _LINUXKPI_NET_IEEE80211_RADIOTAP_H_
-/* [S6] B8: include-only stub (osdep funnel; monitor mode is not in the
- * W1-W5 slice) - the minimal header shape so the include resolves. */
+/* [S6] B8: the monitor-mode RX reporting face - 8821cu compiles the
+ * radiotap path unconditionally (recv_linux/rtw_recv), so this carries the
+ * full constant set ([LNX] net/ieee80211_radiotap.h). */
+#include "../linuxkpi_core.h"
+
 struct ieee80211_radiotap_header {
 	unsigned char	it_version;
 	unsigned char	it_pad;
@@ -9,10 +12,44 @@ struct ieee80211_radiotap_header {
 	unsigned int	it_present;
 } __packed;
 
+#define	PKTHDR_RADIOTAP_VERSION		0
+
+/* it_present bitmap fields */
 #define	IEEE80211_RADIOTAP_TSFT		0
 #define	IEEE80211_RADIOTAP_FLAGS	1
 #define	IEEE80211_RADIOTAP_RATE		2
 #define	IEEE80211_RADIOTAP_CHANNEL	3
-#define	IEEE80211_RADIOTAP_LOCK_QUALITY	5
+#define	IEEE80211_RADIOTAP_FHSS		4
+#define	IEEE80211_RADIOTAP_DBM_ANTSIGNAL	5
+#define	IEEE80211_RADIOTAP_DBM_ANTNOISE	6
+#define	IEEE80211_RADIOTAP_LOCK_QUALITY	7
+#define	IEEE80211_RADIOTAP_TX_ATTENUATION	8
+#define	IEEE80211_RADIOTAP_DB_TX_ATTENUATION	9
+#define	IEEE80211_RADIOTAP_DBM_TX_POWER	10
+#define	IEEE80211_RADIOTAP_ANTENNA	11
+#define	IEEE80211_RADIOTAP_DB_ANTSIGNAL	12
+#define	IEEE80211_RADIOTAP_DB_ANTNOISE	13
 #define	IEEE80211_RADIOTAP_RX_FLAGS	14
+#define	IEEE80211_RADIOTAP_TX_FLAGS	15
+#define	IEEE80211_RADIOTAP_RTS_RETRIES	16
+#define	IEEE80211_RADIOTAP_DATA_RETRIES	17
+
+/* flags word (IEEE80211_RADIOTAP_FLAGS) */
+#define	IEEE80211_RADIOTAP_F_CFP	0x01
+#define	IEEE80211_RADIOTAP_F_SHORTPRE	0x02
+#define	IEEE80211_RADIOTAP_F_WEP	0x04
+#define	IEEE80211_RADIOTAP_F_FRAG	0x08
+#define	IEEE80211_RADIOTAP_F_FCS	0x10
+#define	IEEE80211_RADIOTAP_F_DATAPAD	0x20
+#define	IEEE80211_RADIOTAP_F_BADFCS	0x40
+
+/* channel flags (IEEE80211_RADIOTAP_CHANNEL) */
+#define	IEEE80211_CHAN_TURBO	0x0010
+#define	IEEE80211_CHAN_CCK	0x0020
+#define	IEEE80211_CHAN_OFDM	0x0040
+#define	IEEE80211_CHAN_2GHZ	0x0080
+#define	IEEE80211_CHAN_5GHZ	0x0100
+#define	IEEE80211_CHAN_PASSIVE	0x0200
+#define	IEEE80211_CHAN_DYN	0x0400
+#define	IEEE80211_CHAN_GFSK	0x0800
 #endif

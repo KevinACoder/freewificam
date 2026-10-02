@@ -49,6 +49,13 @@ endif
 ifeq ($(CONFIG_LWIP),y)
 APP_MAIN := app/lwip_lan/main.c
 endif
+# S5a W1 (specs/rtl8821cu-vendor-driver/SPEC.md v2): the wlan image swaps in
+# the wlan8821 bring-up main - the same usb-domain start sequence as
+# cherryusb_enum with the rtl8821cu driver registered instead of the udisk
+# acceptance driver. Takes precedence (the wlan config is USBHOST-based).
+ifeq ($(CONFIG_NIC_RTL8821CU),y)
+APP_MAIN := app/wlan8821/main.c
+endif
 
 # OS layer selection (SPEC S3/threadx-up-boot §3.1.3): baremetal keeps the
 # timebase-only cmsis2 shim; threadx swaps in the ThreadX UP kernel and the
@@ -350,11 +357,20 @@ LKPI_SRCS := \
 	$(LKPI_DIR)/linuxkpi_usb.c \
 	$(LKPI_DIR)/fw_registry.c \
 	port/adapters/linuxkpi/lkpi_usbh_class.c \
-	port/adapters/linuxkpi/usbkpi_cmds.c \
+	port/adapters/linuxkpi/usbkpi_cmds.c
+# The udisk/hub acceptance drivers ride their own key (single-factor
+# discipline, S5a W1): the wlan image takes the linuxkpi base without them.
+CONFIG_LINUXKPI_UDISK ?= n
+ifeq ($(filter $(CONFIG_LINUXKPI_UDISK),y n),)
+$(error CONFIG_LINUXKPI_UDISK must be y or n, got '$(CONFIG_LINUXKPI_UDISK)')
+endif
+ifeq ($(CONFIG_LINUXKPI_UDISK),y)
+LKPI_SRCS += \
 	app/lkpi_udisk/lkpi_udisk_core.c \
 	app/lkpi_udisk/lkpi_udisk_rtos.c \
 	app/lkpi_hub/lkpi_hub_core.c \
 	app/lkpi_hub/lkpi_hub_rtos.c
+endif
 SRCS += $(LKPI_SRCS)
 CFLAGS += -DCONFIG_LINUXKPI=1
 # P6-b root-cause experiment key (temporary, issues/2026-10-01-xhci-
@@ -375,8 +391,199 @@ LKPI_CFLAGS := $(USB_CFLAGS) $(TX_CFLAGS) -I$(LKPI_DIR)/include \
 $(BUILD)/components/linuxkpi/%.o: EXTRAFLAGS := $(LKPI_CFLAGS)
 $(BUILD)/port/adapters/linuxkpi/%.o: \
 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+ifeq ($(CONFIG_LINUXKPI_UDISK),y)
 $(BUILD)/app/lkpi_udisk/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/app/lkpi_hub/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+endif
+endif
+
+# --- the rtl8821cu vendor driver (S5a W1, feat-only - never merges) ----------
+# The Realtek out-of-tree rtl8821cu driver (submodule third-party/rtl8821cu,
+# GPL-2.0, pin 8df92c5) consumed through the linuxkpi vendor tier ([S6]
+# §3.4 B1-B8): os_dep 7 units + core/hal/phydm compile VERBATIM against the
+# linuxkpi headers (zero-modification rule, [S5a] §3.2.3); the ioctl/proc/
+# cfg80211 half is config'd out. Compile set locked to the [FWC] Makefile
+# :898-1011 lists + osdep_service.c (spec v2 addition, LINUX branch).
+CONFIG_NIC_RTL8821CU ?= n
+ifeq ($(filter $(CONFIG_NIC_RTL8821CU),y n),)
+$(error CONFIG_NIC_RTL8821CU must be y or n, got '$(CONFIG_NIC_RTL8821CU)')
+endif
+ifeq ($(CONFIG_NIC_RTL8821CU),y)
+ifeq ($(filter y,$(CONFIG_LINUXKPI)),)
+$(error CONFIG_NIC_RTL8821CU=y requires CONFIG_LINUXKPI=y)
+endif
+RTL8821CU_ROOT := third-party/rtl8821cu
+
+RTL8821CU_CORE_SRCS := \
+	$(RTL8821CU_ROOT)/core/rtw_cmd.c \
+	$(RTL8821CU_ROOT)/core/rtw_security.c \
+	$(RTL8821CU_ROOT)/core/rtw_debug.c \
+	$(RTL8821CU_ROOT)/core/rtw_io.c \
+	$(RTL8821CU_ROOT)/core/rtw_ioctl_query.c \
+	$(RTL8821CU_ROOT)/core/rtw_ioctl_set.c \
+	$(RTL8821CU_ROOT)/core/rtw_mp.c \
+	$(RTL8821CU_ROOT)/core/rtw_mp_ioctl.c \
+	$(RTL8821CU_ROOT)/core/rtw_ieee80211.c \
+	$(RTL8821CU_ROOT)/core/rtw_mlme.c \
+	$(RTL8821CU_ROOT)/core/rtw_mlme_ext.c \
+	$(RTL8821CU_ROOT)/core/rtw_mi.c \
+	$(RTL8821CU_ROOT)/core/rtw_wlan_util.c \
+	$(RTL8821CU_ROOT)/core/rtw_vht.c \
+	$(RTL8821CU_ROOT)/core/rtw_pwrctrl.c \
+	$(RTL8821CU_ROOT)/core/rtw_rf.c \
+	$(RTL8821CU_ROOT)/core/rtw_recv.c \
+	$(RTL8821CU_ROOT)/core/rtw_sta_mgt.c \
+	$(RTL8821CU_ROOT)/core/rtw_ap.c \
+	$(RTL8821CU_ROOT)/core/rtw_xmit.c \
+	$(RTL8821CU_ROOT)/core/rtw_p2p.c \
+	$(RTL8821CU_ROOT)/core/rtw_tdls.c \
+	$(RTL8821CU_ROOT)/core/rtw_iol.c \
+	$(RTL8821CU_ROOT)/core/rtw_sreset.c \
+	$(RTL8821CU_ROOT)/core/rtw_btcoex_wifionly.c \
+	$(RTL8821CU_ROOT)/core/rtw_btcoex.c \
+	$(RTL8821CU_ROOT)/core/rtw_beamforming.c \
+	$(RTL8821CU_ROOT)/core/rtw_odm.c \
+	$(RTL8821CU_ROOT)/core/rtw_mem.c \
+	$(RTL8821CU_ROOT)/core/efuse/rtw_efuse.c
+
+RTL8821CU_HAL_SRCS := \
+	$(RTL8821CU_ROOT)/hal/hal_intf.c \
+	$(RTL8821CU_ROOT)/hal/hal_com.c \
+	$(RTL8821CU_ROOT)/hal/hal_com_phycfg.c \
+	$(RTL8821CU_ROOT)/hal/hal_phy.c \
+	$(RTL8821CU_ROOT)/hal/hal_dm.c \
+	$(RTL8821CU_ROOT)/hal/hal_btcoex_wifionly.c \
+	$(RTL8821CU_ROOT)/hal/hal_btcoex.c \
+	$(RTL8821CU_ROOT)/hal/hal_mp.c \
+	$(RTL8821CU_ROOT)/hal/hal_mcc.c \
+	$(RTL8821CU_ROOT)/hal/hal_hci/hal_usb.c \
+	$(RTL8821CU_ROOT)/hal/led/hal_usb_led.c \
+	$(RTL8821CU_ROOT)/hal/hal_halmac.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_api.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_api_88xx.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_func_88xx.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_api_88xx_usb.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_api_88xx_sdio.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_api_88xx_pcie.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_8821c/halmac_8821c_pwr_seq.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_8821c/halmac_api_8821c.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_8821c/halmac_func_8821c.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_8821c/halmac_api_8821c_usb.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_8821c/halmac_api_8821c_sdio.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_8821c/halmac_api_8821c_pcie.c \
+	$(RTL8821CU_ROOT)/hal/halmac/halmac_88xx/halmac_8821c/halmac_8821c_phy.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/rtl8821c_halinit.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/rtl8821c_mac.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/rtl8821c_cmd.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/rtl8821c_phy.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/rtl8821c_dm.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/rtl8821c_ops.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/hal8821c_fw.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/usb/rtl8821cu_halinit.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/usb/rtl8821cu_halmac.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/usb/rtl8821cu_io.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/usb/rtl8821cu_xmit.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/usb/rtl8821cu_recv.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/usb/rtl8821cu_led.c \
+	$(RTL8821CU_ROOT)/hal/rtl8821c/usb/rtl8821cu_ops.c
+
+RTL8821CU_PHYDM_SRCS := \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_debug.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_antdiv.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_antdect.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_interface.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_hwconfig.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm.c \
+	$(RTL8821CU_ROOT)/hal/phydm/halphyrf_ce.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_dig.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_pathdiv.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_rainfo.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_dynamicbbpowersaving.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_powertracking_ce.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_dynamictxpower.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_adaptivity.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_cfotracking.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_noisemonitor.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_acs.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_beamforming.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_dfs.c \
+	$(RTL8821CU_ROOT)/hal/phydm/txbf/halcomtxbf.c \
+	$(RTL8821CU_ROOT)/hal/phydm/txbf/haltxbfinterface.c \
+	$(RTL8821CU_ROOT)/hal/phydm/txbf/phydm_hal_txbf_api.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_adc_sampling.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_kfree.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_ccx.c \
+	$(RTL8821CU_ROOT)/hal/phydm/phydm_psd.c \
+	$(RTL8821CU_ROOT)/hal/phydm/rtl8821c/halhwimg8821c_bb.c \
+	$(RTL8821CU_ROOT)/hal/phydm/rtl8821c/halhwimg8821c_mac.c \
+	$(RTL8821CU_ROOT)/hal/phydm/rtl8821c/halhwimg8821c_rf.c \
+	$(RTL8821CU_ROOT)/hal/phydm/rtl8821c/phydm_hal_api8821c.c \
+	$(RTL8821CU_ROOT)/hal/phydm/rtl8821c/phydm_regconfig8821c.c \
+	$(RTL8821CU_ROOT)/hal/phydm/rtl8821c/halphyrf_8821c.c \
+	$(RTL8821CU_ROOT)/hal/phydm/rtl8821c/phydm_iqk_8821c.c \
+	$(RTL8821CU_ROOT)/hal/btc/halbtc8821cwifionly.c \
+	$(RTL8821CU_ROOT)/hal/btc/halbtc8723bwifionly.c \
+	$(RTL8821CU_ROOT)/hal/btc/halbtc8822bwifionly.c \
+	$(RTL8821CU_ROOT)/hal/btc/halbtc8821c2ant.c \
+	$(RTL8821CU_ROOT)/hal/btc/halbtc8821c1ant.c \
+	$(RTL8821CU_ROOT)/hal/efuse/rtl8821c/HalEfuseMask8821C_USB.c
+
+RTL8821CU_OSDEP_SRCS := \
+	$(RTL8821CU_ROOT)/os_dep/osdep_service.c \
+	$(RTL8821CU_ROOT)/os_dep/linux/os_intfs.c \
+	$(RTL8821CU_ROOT)/os_dep/linux/usb_intf.c \
+	$(RTL8821CU_ROOT)/os_dep/linux/usb_ops_linux.c \
+	$(RTL8821CU_ROOT)/os_dep/linux/xmit_linux.c \
+	$(RTL8821CU_ROOT)/os_dep/linux/recv_linux.c \
+	$(RTL8821CU_ROOT)/os_dep/linux/mlme_linux.c \
+	$(RTL8821CU_ROOT)/platform/platform_ops.c
+
+# NOT compiled (spec §3.2.3 reverse check): os_dep/linux/{ioctl_linux,
+# ioctl_mp,ioctl_cfg80211,rtw_proc,rtw_cfgvendor,rtw_android}.c,
+# os_dep/linux/wifi_regd.c - the W1 judgement nm-checks their absence.
+RTL8821CU_VENDOR_SRCS := $(RTL8821CU_CORE_SRCS) $(RTL8821CU_HAL_SRCS) \
+	$(RTL8821CU_PHYDM_SRCS) $(RTL8821CU_OSDEP_SRCS)
+
+RTL8821CU_ADAPTER_SRCS := \
+	port/adapters/rtl8821cu/drv_entry.c \
+	port/adapters/rtl8821cu/wlan8821_cmds.c \
+	port/adapters/rtl8821cu/wlan8821_seam.c \
+	port/adapters/rtl8821cu/usbh_modeswitch.c
+
+SRCS += $(RTL8821CU_VENDOR_SRCS) $(RTL8821CU_ADAPTER_SRCS)
+CFLAGS += -DCONFIG_NIC_RTL8821CU=1
+
+# Vendor build config: the W0-L board-proven macro set minus kbuild-internal
+# defines (patches/rtl8821cu/README.md records the full accounting). The
+# explicit NOT-defined set does the trimming: WOWLAN (kills the netlink
+# route_dump face - W0L-S3 proven dead code), RTW_NAPI/GRO, BR_EXT,
+# IOCTL_CFG80211, WIRELESS_EXT, USB_SUSPEND, MP_VHT_HW_TX_MODE.
+RTL8821CU_VENDOR_CFG := -DDM_ODM_SUPPORT_TYPE=0x04 \
+	-DCONFIG_RTL8821C -DCONFIG_MP_INCLUDED -DCONFIG_POWER_SAVING \
+	-DCONFIG_BT_COEXIST -DCONFIG_EFUSE_CONFIG_FILE -DCONFIG_TRAFFIC_PROTECT \
+	-DCONFIG_LOAD_PHY_PARA_FROM_FILE -DCONFIG_TXPWR_BY_RATE_EN=1 \
+	-DCONFIG_TXPWR_LIMIT_EN=0 -DCONFIG_RTW_ADAPTIVITY_EN=0 \
+	-DCONFIG_RTW_ADAPTIVITY_MODE=0 -DCONFIG_RTW_DEBUG \
+	-DCONFIG_LITTLE_ENDIAN -DRTW_LOG_LEVEL=4 \
+	-DREALTEK_CONFIG_PATH=\"\" -DEFUSE_MAP_PATH=\"\" -DWIFIMAC_PATH=\"\"
+# Include order is load-bearing: the linuxkpi headers shadow <linux/*.h>
+# before the vendor tree comes in; -w is the frozen-import face ([FWC]
+# Makefile:1192 precedent).
+RTL8821CU_CFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) \
+	-I$(RTL8821CU_ROOT)/include -I$(RTL8821CU_ROOT)/hal/btc \
+	-I$(RTL8821CU_ROOT)/platform -Iport/adapters/rtl8821cu \
+	-I$(RTL8821CU_ROOT)/hal/phydm -I$(RTL8821CU_ROOT)/hal/phydm/txbf \
+	-I$(RTL8821CU_ROOT)/hal/phydm/rtl8821c \
+	$(RTL8821CU_VENDOR_CFG) -fgnu89-inline -w
+$(BUILD)/$(RTL8821CU_ROOT)/%.o: EXTRAFLAGS := $(RTL8821CU_CFLAGS)
+$(BUILD)/port/adapters/rtl8821cu/%.o: \
+	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
+		-I$(RTL8821CU_ROOT)/include -I$(RTL8821CU_ROOT)/hal/btc \
+		-I$(RTL8821CU_ROOT)/platform \
+		$(RTL8821CU_VENDOR_CFG) -fgnu89-inline -DCONFIG_NIC_RTL8821CU=1
+$(BUILD)/app/wlan8821/%.o: \
+	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) -Iport/adapters/rtl8821cu \
+		-DCONFIG_NIC_RTL8821CU=1
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
@@ -599,7 +806,7 @@ LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 # patches/cherryusb/README.md first.
 modules:
 	@git submodule update --init third-party/threadx third-party/cherryusb \
-		third-party/lwip || \
+		third-party/lwip third-party/rtl8821cu || \
 		echo 'note: submodule update failed; see patches/cherryusb/README.md (pin seeding)'
 	@if [ -d third-party/cherryusb ]; then \
 		git -C third-party/cherryusb sparse-checkout set --no-cone \

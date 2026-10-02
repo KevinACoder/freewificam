@@ -35,6 +35,7 @@
 #define	USB_ENDPOINT_XFER_INT		0x03
 #define	USB_ENDPOINT_XFER_INT_MASK	0x03
 
+#define	USB_ENDPOINT_XFERTYPE_MASK	0x03
 #define	USB_ENDPOINT_NUMBER_MASK	0x0f
 #define	USB_ENDPOINT_DIR_MASK		0x80
 
@@ -121,7 +122,25 @@ struct usb_interface_descriptor {
 	u8	bInterfaceProtocol;
 	u8	iInterface;
 } __packed;
+
+struct usb_config_descriptor {
+	u8	bLength;
+	u8	bDescriptorType;
+	u16	wTotalLength;
+	u8	bNumInterfaces;
+	u8	bConfigurationValue;
+	u8	iConfiguration;
+	u8	bmAttributes;
+	u8	bMaxPower;
+} __packed;
+/* the active-config face usb_intf.c walks (parsed at claim time; this
+ * port exposes only the descriptor header - endpoint walk goes through
+ * the interface array) */
+struct usb_host_config {
+	struct usb_config_descriptor	desc;
+};
 #endif /* USB_DEF_H */
+
 
 /* ------------------------------------------------------------------ */
 /* host-side shapes                                                    */
@@ -158,6 +177,7 @@ struct usb_device {
 	char		*product;
 	char		*manufacturer;
 	char		*serial;
+	struct usb_host_config *actconfig;
 	/* linuxkpi plumbing (set at claim time by the class hook) */
 	void		*_hport;	/* the usbh_hubport behind it */
 	void		*_intf;		/* the claiming usb_interface */
@@ -291,6 +311,16 @@ usb_endpoint_maxp_packet_sz(const struct usb_endpoint_descriptor *d)
 {
 	return usb_endpoint_maxp(d) * usb_endpoint_maxp_mult(d);
 }
+
+/* the ch9 control-request line (usb_ops_linux.c embeds one per vendor
+ * command; cherryusb spells it usb_setup_packet - no clash) */
+struct usb_ctrlrequest {
+	u8	bRequestType;
+	u8	bRequest;
+	u16	wValue;
+	u16	wIndex;
+	u16	wLength;
+} __packed;
 
 /* ------------------------------------------------------------------ */
 /* urb                                                                 */
