@@ -10,6 +10,7 @@
  *   wlan8821 down       ndo_stop
  *   wlan8821 scan       site survey through the vendor MLME
  *   wlan8821 bss        dump the scan table
+ *   wlan8821 register   re-run the registration (D-1 guard drill)
  *
  * Command output goes through csh_printf (interactive, no timestamps);
  * the driver's own asynchronous prints (attach, scan done) land on the
@@ -30,6 +31,7 @@
 
 /* drv_entry.c */
 extern void *rtl8821cu_get_adapter(void);
+extern int wlan8821_register(void);
 extern int rtl8821cu_up(void);
 extern int rtl8821cu_down(void);
 extern int rtl8821cu_scan(void);
@@ -89,14 +91,23 @@ static int cmd_wlan8821(int argc, char *argv[])
 			   (r == 0) ? "issued" : "REFUSED", r);
 		return 0;
 	}
+	if (strcmp(argv[1], "register") == 0) {
+		/* the D-1 guard drill (W2 criterion 3): a second call must
+		 * print the refusal and come back -1 */
+		int r = wlan8821_register();
+
+		csh_printf(csh, "rtl8821cu: register %s (%d)\n",
+			   (r == 0) ? "ok" : "REFUSED", r);
+		return 0;
+	}
 	if (strcmp(argv[1], "bss") == 0) {
 		(void)rtl8821cu_scan_dump();
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss]\n");
+	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss|register]\n");
 	return -1;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8821, wlan8821,
-			  "wlan8821 [up|down|scan|bss]",
+			  "wlan8821 [up|down|scan|bss|register]",
 			  "drive the rtl8821cu vendor driver (attach/up/scan)");

@@ -1613,6 +1613,12 @@ int lkpi_completion_done(const struct completion *);
 
 #define	init_completion(c)			lkpi_completion_init(c)
 #define	reinit_completion(c)			lkpi_completion_reinit(c)
+/* [W3] the RTOS completion registers a TX object at init; the vendor's
+ * submit_ctx lifetime kfree()s the embedding memory (legal on Linux,
+ * where a completion is just a struct) - the release must pair with a
+ * deinit or the created chain keeps a zombie.  Patches call this before
+ * rtw_mfree of any completion-bearing allocation. */
+#define	_rtw_deinit_completion(c)		lkpi_completion_deinit(c)
 /* complete()/complete_all() are real functions, NOT macros: the urb's
  * ->complete callback member is called through the same identifier, and a
  * function-like macro would rewrite every urb->complete(urb) site. */

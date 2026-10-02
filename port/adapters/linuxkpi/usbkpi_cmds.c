@@ -34,6 +34,7 @@
 
 #include "linuxkpi_usb.h"
 #include <linux/usb.h>	/* USB_ENDPOINT_XFER_* for the filter words */
+#include "log.h"	/* board_log: the semchain dump rides the console */
 
 /* single-command dump ceiling: matches the ring size so one command
  * retrieves the whole window */
@@ -299,6 +300,18 @@ static int usbkpi_cmd(int argc, char *argv[])
 	if (strcmp(argv[1], "sync") == 0) {
 		lkpi_usb_force_sync_set(argc >= 3 &&
 		    strcmp(argv[2], "on") == 0);
+		return 0;
+	}
+	if (strcmp(argv[1], "semchain") == 0) {
+		/* [W3 forensics] the ThreadX created-semaphore chain walk
+		 * (the same guarded dump the fault park runs) - snapshot
+		 * the chain BEFORE `wlan8821 up` so the poison node's
+		 * identity comes from a before/after pair, not inference.
+		 * Lines go through the stamped console, not csh. */
+		extern void tx_sema_chain_dump(void (*)(const char *, ...));
+
+		tx_sema_chain_dump(board_log);
+		csh_printf(csh, "usbkpi: sema chain dumped to console\n");
 		return 0;
 	}
 	if (strcmp(argv[1], "status") == 0) {

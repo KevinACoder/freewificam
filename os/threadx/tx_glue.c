@@ -75,6 +75,31 @@ static void vbar_install(void)
  * owns time (tx_time_get). Deviation recorded for the spec 回填. */
 static void tx_tick_kernel_work(void)
 {
+	/* [W3 forensics] the created-chain poison sampler: once a second,
+	 * validate the chain and emergency-log the FIRST sight of a poison
+	 * with the tick-second count - the boot log's phases carry the
+	 * same tick-based stamps, so this pins the overwrite's time
+	 * window without touching the vendor or the RTOS internals. */
+	{
+		static unsigned int sampler_s;
+		static unsigned int sampler_hit;
+
+		if (sampler_hit == 0U) {
+			sampler_s++;
+				if (sampler_s >= 1000U) {
+					sampler_s = 0;
+					if (tx_sema_chain_validate(NULL, NULL,
+					    NULL) != 0) {
+						sampler_hit = 1U;
+						board_log_emergency(
+		    "!!! sema chain POISON first seen at ~%u s",
+						    (unsigned)(tx_time_get() /
+						       1000U));
+					}
+				}
+		}
+	}
+
 #ifdef CONFIG_GDB_STUB
 	/* T4 tick poll (the ThreadX world's gdb_poll site, spec §3.6): the
 	 * base watcher gives the full running-target semantics - Ctrl-C
@@ -174,6 +199,78 @@ void tx_application_define(void *first_unused_memory)
 	cmsis2_tx_application_define();
 }
 
+/* [W3 forensics] Walk the ThreadX created-semaphore chain under a window
+ * guard (image + heap = 0xa000000..0xb000000).  The wlan-lane data aborts
+ * land inside _txe_semaphore_create's dedup walk on a node whose
+ * created_next holds deterministic garbage; this dump names the poison by
+ * position (its neighbours on the chain) the moment the machine is parked.
+ * Pointers only: a name STRING could itself be garbage, and faulting
+ * inside the terminal path is exactly what must never happen.  Shared
+ * with the `usbkpi semchain` command for before/after chain evidence. */
+void
+tx_sema_chain_dump(void (*emit)(const char *fmt, ...))
+{
+	extern TX_SEMAPHORE *_tx_semaphore_created_ptr;
+	extern UINT _tx_semaphore_created_count;
+	TX_SEMAPHORE *n = _tx_semaphore_created_ptr;
+	unsigned int i;
+
+	emit("sema chain: head=%lx count=%u",
+	     (unsigned long)n, (unsigned)_tx_semaphore_created_count);
+	for (i = 0; n != NULL && i < 64; i++) {
+		unsigned long nx =
+		    (unsigned long)n->tx_semaphore_created_next;
+		unsigned long pv =
+		    (unsigned long)n->tx_semaphore_created_previous;
+
+		emit("sema[%u] node=%lx name=%lx count=%lx susp=%lx scnt=%lx "
+		     "next=%lx prev=%lx",
+		     i, (unsigned long)n,
+		     (unsigned long)n->tx_semaphore_name,
+		     (unsigned long)n->tx_semaphore_count,
+		     (unsigned long)n->tx_semaphore_suspension_list,
+		     (unsigned long)n->tx_semaphore_suspended_count,
+		     nx, pv);
+		if (nx < 0xa000000UL || nx > 0xb000000UL) {
+			emit("sema[%u] next out of window - POISON", i);
+			break;
+		}
+		n = (TX_SEMAPHORE *)nx;
+	}
+}
+
+/* [W3 forensics] Guarded validation pass over the created-semaphore chain:
+ * returns -1 the first time a node's created_next leaves the image+heap
+ * window (0xa000000..0xb000000), reporting the position; 0 when the whole
+ * chain looks sane.  The completion-create path runs this before every
+ * tx_semaphore_create so the boot log bisects WHICH create first saw the
+ * poison - i.e. the exact window the overwrite happened in. */
+int
+tx_sema_chain_validate(unsigned int *idx_out, unsigned long *node_out,
+    unsigned long *next_out)
+{
+	extern TX_SEMAPHORE *_tx_semaphore_created_ptr;
+	TX_SEMAPHORE *n = _tx_semaphore_created_ptr;
+	unsigned int i;
+
+	for (i = 0; n != NULL && i < 256; i++) {
+		unsigned long nx =
+		    (unsigned long)n->tx_semaphore_created_next;
+
+		if (nx != 0 && (nx < 0xa000000UL || nx > 0xb000000UL)) {
+			if (idx_out != NULL)
+				*idx_out = i;
+			if (node_out != NULL)
+				*node_out = (unsigned long)n;
+			if (next_out != NULL)
+				*next_out = nx;
+			return -1;
+		}
+		n = (TX_SEMAPHORE *)nx;
+	}
+	return 0;
+}
+
 /* Fatal landing from tx_vectors.S (kind: 1 = sync, 3 = serror). Record the
  * machine state BEFORE printing - a fault inside the print path must not
  * erase the first fault's evidence - then emit one line and park. There is
@@ -185,22 +282,31 @@ void tx_fault_park(unsigned int kind)
 	static volatile unsigned long rec_elr;
 	static volatile unsigned long rec_lr;
 	static volatile unsigned long rec_sp;
+	static volatile unsigned long rec_sp0;
 
 	__asm__ __volatile__("mrs %0, esr_el1" : "=r"(rec_esr));
 	__asm__ __volatile__("mrs %0, far_el1" : "=r"(rec_far));
 	__asm__ __volatile__("mrs %0, elr_el1" : "=r"(rec_elr));
 	__asm__ __volatile__("mov %0, x30" : "=r"(rec_lr));
 	__asm__ __volatile__("mov %0, sp" : "=r"(rec_sp));
+	/* Threads run on SP_EL0 (tx_irq_first_level's spsel switch); the
+	 * same-EL exception entry forces SPSel=1, so `sp` below is the
+	 * handler's EL1 frame, not the faulting thread's stack.  sp_el0
+	 * is the crash-site SP for any fault taken from thread context -
+	 * the W2 up-path round burned attribution time on the EL1
+	 * artifact (= __stack_top - 0xb0, deterministic). */
+	__asm__ __volatile__("mrs %0, sp_el0" : "=r"(rec_sp0));
 
 	/* Emergency outlet (N7-stab): a fault can land while the print lock is
 	 * held by an interrupted context - board_log here would spin in
 	 * print_lock_take with IRQs masked and the system would freeze
 	 * SILENTLY. The whole point of the park is to leave one line. */
-	board_log_emergency("tx_fault_park kind=%u esr=%lx far=%lx elr=%lx lr=%lx sp=%lx",
+	board_log_emergency("tx_fault_park kind=%u esr=%lx far=%lx elr=%lx lr=%lx sp=%lx sp0=%lx",
 			    kind,
 			    rec_esr & 0xffffffffUL,
-			    rec_far & 0xffffffffUL,
-			    rec_elr, rec_lr, rec_sp);
+			    rec_far,
+			    rec_elr, rec_lr, rec_sp, rec_sp0);
+	tx_sema_chain_dump(board_log_emergency);
 
 	for (;;) {
 		__asm__ __volatile__("wfe");

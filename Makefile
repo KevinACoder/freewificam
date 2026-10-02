@@ -383,11 +383,24 @@ CONFIG_LINUXKPI_PROBE_BULK ?= n
 ifeq ($(CONFIG_LINUXKPI_PROBE_BULK),y)
 CFLAGS += -DCONFIG_LINUXKPI_PROBE_BULK=1
 endif
+# [S5a] W3: bulk IN rides the async done-list chain (the wlan inirp's 8
+# RX urbs cannot burn a 5s sync round each); stage small slots must cover
+# the RX urbs' permanent stage holdings (CONFIG_LINUXKPI_STAGE_SMALL_N=18
+# on the wlan lane = 16 RX + transient, see linuxkpi_usb.c).
+CONFIG_LINUXKPI_USB_RX_ASYNC ?= n
+ifeq ($(filter $(CONFIG_LINUXKPI_USB_RX_ASYNC),y n),)
+$(error CONFIG_LINUXKPI_USB_RX_ASYNC must be y or n, got '$(CONFIG_LINUXKPI_USB_RX_ASYNC)')
+endif
+CONFIG_LINUXKPI_STAGE_SMALL_N ?= 2
+ifeq ($(CONFIG_LINUXKPI_USB_RX_ASYNC),y)
+CFLAGS += -DCONFIG_LINUXKPI_USB_RX_ASYNC=1
+endif
 # TX include set rides along: the impl layer embeds ThreadX primitives
 # (semaphores/timers) exactly like the cherryusb osal does (FR-3: tx
 # headers stay inside adapter/implementation units).
 LKPI_CFLAGS := $(USB_CFLAGS) $(TX_CFLAGS) -I$(LKPI_DIR)/include \
-	-I$(LKPI_DIR) -include os/baremetal/minilibc.h
+	-I$(LKPI_DIR) -include os/baremetal/minilibc.h \
+	-DLKPI_SMALL_SLOTS=$(CONFIG_LINUXKPI_STAGE_SMALL_N)
 $(BUILD)/components/linuxkpi/%.o: EXTRAFLAGS := $(LKPI_CFLAGS)
 $(BUILD)/port/adapters/linuxkpi/%.o: \
 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)

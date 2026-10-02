@@ -77,7 +77,14 @@
  * bw/soak shape rides.  (The resize dance this replaced was exonerated
  * by the TRB-pool evidence: the real P6-b root cause was the cached
  * hep, see the submit path comment.) */
+/* [S5a] W3: the small-slot count is config-given (-DLKPI_SMALL_SLOTS).
+ * The wlan inirp arms NR_RECVBUFF bulk-IN urbs that each hold a stage
+ * for their whole lifetime (MAX_RECVBUF_SZ=32KiB = LKPI_STAGE_SIZE, so
+ * a small slot is exactly an RX holding), plus transient TX/mgmt asks;
+ * the udisk lane keeps the P6-c two-plus-two form by default. */
+#ifndef	LKPI_SMALL_SLOTS
 #define	LKPI_SMALL_SLOTS	2
+#endif
 #define	LKPI_STAGE_SIZE		32768
 #define	LKPI_BIG_SLOTS		2
 #define	LKPI_STAGE_BIG_SIZE	131072u
@@ -516,6 +523,22 @@ static unsigned int lkpi_usb_trace_n;
  * context; `usbkpi sync off` re-arms the legacy async chain for
  * forensics only. */
 static bool lkpi_usb_force_sync = true;
+/* [S5a] W3: bulk IN rides the async done-list chain (the int shape,
+ * board-proven H1/H2).  Sync-only is the udisk BOT contract, not a
+ * universal law: the wlan inirp arms NR_RECVBUFF bulk-IN urbs that
+ * wait for the device's own moment (beacons) - a 5s sync round per
+ * arm would stall ndo_open ~40s and never deliver a beacon, so the
+ * scan table would stay empty.  Bulk OUT stays sync in this lane
+ * (fw download + probe requests are fire-and-collect); async TX is a
+ * W5 data-plane question.  No deadlock against the sync lane: a sync
+ * submitter sleeps inside usbh_submit_urb on cherryusb's own waitsem
+ * (completion straight from the IRQ, complete is NULL), so a drain-
+ * context RX re-submit only ever queues behind one in-flight OUT. */
+#ifdef CONFIG_LINUXKPI_USB_RX_ASYNC
+static bool lkpi_usb_rx_async = true;
+#else
+static bool lkpi_usb_rx_async;
+#endif
 
 void lkpi_usb_force_sync_set(bool on)
 {
@@ -753,7 +776,9 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	 * were all BOT multi-urb mixing on one endpoint; the int channel
 	 * is a single self-rearming urb on an exclusively-owned endpoint,
 	 * so the one-urb-in-flight contract holds by construction. */
-	bool async = (type == USB_ENDPOINT_XFER_INT) || !lkpi_usb_force_sync;
+	bool async = (type == USB_ENDPOINT_XFER_INT) ||
+	    (lkpi_usb_rx_async && type == USB_ENDPOINT_XFER_BULK &&
+	    usb_pipein(urb->pipe)) || !lkpi_usb_force_sync;
 	int ret;
 
 	(void)mem_flags;

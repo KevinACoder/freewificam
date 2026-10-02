@@ -39,10 +39,22 @@ git -C third-party/rtl8821cu apply --check "$PWD/patches/rtl8821cu/<p>.patch" \
 ```
 
 物化态（应用后的工作树）**不入 submodule 提交**；物化后对拍锚点：
-`git -C third-party/rtl8821cu diff --stat` = **5 files changed, +76/-10**
+`git -C third-party/rtl8821cu diff --stat` = **6 files changed, +85/-10**
 （rtw_mem.c +13 / autoconf.h +29-6 / ieee80211.h 3×3 / os_intfs.c +13 /
-usb_intf.c +21-1，2026-10-02 W1 终态；AP/P2P 对账回退后）。重放幂等两连验
-（apply → stat 逐字节同 → checkout 复原）。
+usb_intf.c +21-1 / hal_halmac.c +9，2026-10-03 W3 增 0004 后终态）。
+重放幂等两连验（apply → stat 逐字节同 → checkout 复原）。
+
+## 0004-rtos-sctx-completion-deinit（2026-10-03，W3 板验轮）
+
+hal_halmac.c `free_halmac_event` 在 `rtw_mfree(sctx)` 前补
+`_rtw_deinit_completion(&sctx->done)`。原因：`rtw_sctx_init` 经
+`init_completion` 在 RTOS 侧注册全局 TX 信号量（created-object 链），
+Linux 里 completion 只是普通结构体、kfree 无需配对；RTOS 里 free 不
+deinit 等于「释放不摘链」，僵尸节点内存被复用后，下一次
+`tx_semaphore_create` 的去重遍历即 data abort（W3 板测：
+`cv new node=a563280` 于 DUMP_LOGICAL_EFUSE feature 后无配对 delete，
+tx_fault_park far=0x200020205207，链快照 poison 于该节点）。映射宏
+`_rtw_deinit_completion` 在 components/linuxkpi/linuxkpi_core.h。
 
 ## 编译配置归属（本 README 即记账）
 

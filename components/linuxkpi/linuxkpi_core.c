@@ -674,52 +674,51 @@ lkpi_skb_push(struct sk_buff *skb, unsigned int len)
 /* completion                                                          */
 /* ------------------------------------------------------------------ */
 
+/* [W3] completion rework: the wait primitive is NO LONGER a TX object
+ * embedded in the caller's struct.  The previous shape (per-completion
+ * osMutex + TX_SEMAPHORE, created at init, deleted at deinit) turned
+ * every completion into a globally-registered kernel object, and the
+ * vendor's Linux-legal lifetimes (kfree of a submit_ctx, raw recycle of
+ * a pool urb) then left zombie nodes on the ThreadX created-object
+ * chain - the up-path data aborts.  The rework: `done` stays plain
+ * memory; sleep/wake rides ONE global broadcast semaphore; waiters
+ * recheck their own flag on every wake on a bounded 10-tick slice, so
+ * a zeroed, freed or recycled completion cannot strand anything.
+ * complete()/complete_all() both wake all current waiters (Linux's
+ * wake-one is an optimization, not semantics); the sticky complete_all
+ * rule (fix 5f43157, [FWCI] 13) is kept on the done field. */
+static TX_SEMAPHORE lkpi_completion_bcast;
+static unsigned int lkpi_completion_bcast_ok;
+
+static void lkpi_completion_kick(void)
+{
+	TX_INTERRUPT_SAVE_AREA
+
+	if (lkpi_completion_bcast_ok != 0U)
+		return;
+	TX_DISABLE;
+	if (lkpi_completion_bcast_ok == 0U)
+		lkpi_completion_bcast_ok =
+		    (tx_semaphore_create(&lkpi_completion_bcast,
+		     "lkpi_cvb", 0) == TX_SUCCESS) ? 1U : 0U;
+	TX_RESTORE;
+}
+
+#define	LKPI_COMPLETION_SLICE	10U
+
 void
 lkpi_completion_init(struct completion *c)
 {
-	struct lkpi_cv_shell *cv = lk_ccv(c);
 
-	*lk_cmtx(c) = osMutexNew(NULL);
-	if (*lk_cmtx(c) == NULL)
-		lkpi_fatal("completion mutex init failed");
-	memset(cv, 0, sizeof(*cv));
-	{
-		UINT st = tx_semaphore_create(&cv->sem, "lkpi_cv", 0);
-
-		if (st != TX_SUCCESS) {
-			/* W2 board round: print the TX status so the fatal
-			 * names its cause (TX_CALLER_ERROR vs PTR_ERROR) */
-			char stbuf[48];
-
-			(void)snprintf(stbuf, sizeof(stbuf),
-			    "completion sem st=0x%x th=%.10s ra=%p ra1=%p",
-			    (unsigned)st,
-			    tx_thread_identify() != NULL ?
-				tx_thread_identify()->tx_thread_name : "?",
-			    __builtin_return_address(0),
-			    __builtin_return_address(1));
-			board_log("%s", stbuf);
-			lkpi_fatal("completion semaphore init failed");
-		}
-	}
 	c->done = 0;
 }
 
 void
 lkpi_completion_deinit(struct completion *c)
 {
-	struct lkpi_cv_shell *cv = lk_ccv(c);
-	osMutexId_t *mtx = lk_cmtx(c);
 
-	/* idempotent for never-initialized (lazy) completions: the shells
-	 * were kzalloc-zeroed with the urb */
-	if (*mtx != NULL) {
-		(void)osMutexDelete(*mtx);
-		*mtx = NULL;
-	}
-	if (cv->sem.tx_semaphore_name != NULL)
-		(void)tx_semaphore_delete(&cv->sem);
-	memset(cv, 0, sizeof(*cv));
+	/* nothing to release: the completion owns no kernel object */
+	(void)c;
 }
 
 void
@@ -733,27 +732,24 @@ void
 lkpi_complete(struct completion *c)
 {
 	struct lkpi_cv_shell *cv = lk_ccv(c);
+	int n, i;
 
-	(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
 	/* complete() after complete_all() must not disturb the sticky mark
-	 * (FreeBSD linux_compat.c:2299): a plain ++ here would let the next
-	 * waiter consume the sticky value itself. */
+	 * (FreeBSD linux_compat.c:2299) */
 	if (c->done != LKPI_COMPLETION_STICKY)
 		c->done++;
-	/* wake ONE waiter: Linux complete() semantics (the semaphore token
-	 * is the wake; a spurious wake just rechecks done) */
-	if (cv->waiters > 0)
-		(void)tx_semaphore_put(&cv->sem);
-	(void)osMutexRelease(*lk_cmtx(c));
+	lkpi_completion_kick();
+	/* best-effort wake-all; a waiter that raced the count rechecks on
+	 * its bounded slice anyway (no lost-wakeup hazard) */
+	n = cv->waiters;
+	for (i = 0; i < n; i++)
+		(void)tx_semaphore_put(&lkpi_completion_bcast);
 }
 
 /*
  * complete_all is STICKY in Linux: every current and future waiter passes
- * immediately.  A plain done++ here let the probe-time firmware wait
- * consume the only token, so ops->start's second wait_for_completion
- * (rtw_wait_firmware_completion) parked forever - the R-LK3 ops->start
- * wedge, five boots, always between the power-on register tail and the
- * first DLFW op ([FWCI] §13, fix 5f43157).
+ * immediately (the probe-time firmware wait consumed the only token once;
+ * the R-LK3 ops->start wedge, five boots, fix 5f43157).
  */
 void
 lkpi_complete_all(struct completion *c)
@@ -761,13 +757,11 @@ lkpi_complete_all(struct completion *c)
 	struct lkpi_cv_shell *cv = lk_ccv(c);
 	int n, i;
 
-	(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
 	c->done = LKPI_COMPLETION_STICKY;
-	/* wake EVERY waiter: one token each, none consumes the sticky */
+	lkpi_completion_kick();
 	n = cv->waiters;
 	for (i = 0; i < n; i++)
-		(void)tx_semaphore_put(&cv->sem);
-	(void)osMutexRelease(*lk_cmtx(c));
+		(void)tx_semaphore_put(&lkpi_completion_bcast);
 }
 
 void
@@ -775,18 +769,15 @@ lkpi_wait_for_completion(struct completion *c)
 {
 	struct lkpi_cv_shell *cv = lk_ccv(c);
 
-	(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
-	while (c->done == 0) {
-		cv->waiters++;
-		(void)osMutexRelease(*lk_cmtx(c));
-		(void)tx_semaphore_get(&cv->sem, TX_WAIT_FOREVER);
-		(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
-		cv->waiters--;
-	}
+	lkpi_completion_kick();
+	cv->waiters++;
+	while (c->done == 0)
+		(void)tx_semaphore_get(&lkpi_completion_bcast,
+		    LKPI_COMPLETION_SLICE);
+	cv->waiters--;
 	/* a sticky complete_all pass does not consume (it is not a count) */
 	if (c->done != LKPI_COMPLETION_STICKY)
 		c->done--;
-	(void)osMutexRelease(*lk_cmtx(c));
 }
 
 unsigned long
@@ -794,29 +785,22 @@ lkpi_wait_for_completion_timeout(struct completion *c, unsigned long jiff)
 {
 	struct lkpi_cv_shell *cv = lk_ccv(c);
 
-	(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
+	lkpi_completion_kick();
+	cv->waiters++;
 	while (c->done == 0) {
-		cv->waiters++;
-		(void)osMutexRelease(*lk_cmtx(c));
-		if (tx_semaphore_get(&cv->sem, MAX(1, (UINT)jiff)) !=
-		    TX_SUCCESS) {
-			(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
+		if (tx_semaphore_get(&lkpi_completion_bcast,
+		    MAX(1, (UINT)jiff)) != TX_SUCCESS) {
 			cv->waiters--;
-			(void)osMutexRelease(*lk_cmtx(c));
 			/* timed out: the count is untouched (Linux returns
 			 * 0 and the caller owns the race window) */
 			return 0;
 		}
-		(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
-		cv->waiters--;
 	}
-	/* same sticky rule as lkpi_wait_for_completion (5f43157): the
-	 * timeout variant was missed in that fix and rtw88 runs
-	 * wait_for_completion_timeout on completions that complete_all
-	 * armed (fw->completion, lps_leave_check) */
+	cv->waiters--;
+	/* same sticky rule as lkpi_wait_for_completion (5f43157): rtw88
+	 * runs the timeout variant on complete_all-armed completions */
 	if (c->done != LKPI_COMPLETION_STICKY)
 		c->done--;
-	(void)osMutexRelease(*lk_cmtx(c));
 	return 1;
 }
 
@@ -825,7 +809,6 @@ lkpi_try_wait_for_completion(struct completion *c)
 {
 	int done;
 
-	(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
 	if (c->done > 0) {
 		/* sticky complete_all passes without consuming */
 		if (c->done != LKPI_COMPLETION_STICKY)
@@ -834,7 +817,6 @@ lkpi_try_wait_for_completion(struct completion *c)
 	} else {
 		done = 0;
 	}
-	(void)osMutexRelease(*lk_cmtx(c));
 	return done;
 }
 
