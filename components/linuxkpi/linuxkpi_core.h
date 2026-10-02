@@ -1601,6 +1601,7 @@ struct completion {
 #define	LKPI_COMPLETION_STICKY	0x40000000
 
 void lkpi_completion_init(struct completion *);
+void lkpi_completion_deinit(struct completion *);
 void lkpi_completion_reinit(struct completion *);
 void lkpi_complete(struct completion *);
 void lkpi_complete_all(struct completion *);

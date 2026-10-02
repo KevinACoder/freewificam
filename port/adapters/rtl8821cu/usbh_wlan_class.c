@@ -33,6 +33,10 @@
 #include "linuxkpi_usb.h"
 #include <linux/usb.h>
 
+/* drv_entry.c (the adapter seam) */
+extern void rtl8821cu_adapter_bind(struct usb_interface *intf);
+extern void rtl8821cu_adapter_unbind(void);
+
 /* 0bda:c820/c821/c82a/c82b - the RTL8821CU WiFi personalities (the rows
  * the vendor probe table carries for this chip) */
 static const uint16_t usbh_wlan_ids[][2] = {
@@ -123,6 +127,8 @@ static int usbh_wlan_connect(struct usbh_hubport *hport, uint8_t intf)
 		lkpi_usbh_free_device(dev);
 		return -USB_ERR_INVAL;
 	}
+	/* bind the landed adapter for the shell/status seam */
+	rtl8821cu_adapter_bind(intfp);
 	return 0;
 }
 
@@ -134,6 +140,7 @@ static void usbh_wlan_disconnect(struct usbh_hubport *hport, uint8_t intf)
 		return;
 	hport->config.intf[intf].priv = NULL;
 	lkpi_usb_disconnect_drivers((struct usb_interface *)dev->_intf);
+	rtl8821cu_adapter_unbind();
 	lkpi_usbh_free_device(dev);
 	lkpi_printf("usbh: wlan released %04x:%04x\n",
 	    hport->device_desc.idVendor, hport->device_desc.idProduct);

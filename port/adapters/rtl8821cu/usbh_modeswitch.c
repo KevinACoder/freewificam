@@ -138,6 +138,11 @@ static int usbh_modeswitch_connect(struct usbh_hubport *hport, uint8_t intf) {
 	if (id->bInterfaceClass != USB_DEVICE_CLASS_MASS_STORAGE) {
 		return -USB_ERR_INVAL;
 	}
+	/* [W2] cherryusb master propagates the connect return value into the
+	 * enumeration result, so the never-claim design ("return -INVAL") reads
+	 * as an enumerate failure and poisons the port.  The eject path now
+	 * returns 0 ("handled"): the persona flip drops the device off the bus
+	 * the moment the CSW lands, and the hubport release runs from there. */
 	for (i = 0; i < id->bNumEndpoints; i++) {
 		struct usb_endpoint_descriptor *ep =
 		    &intf_desc->altsetting[0].ep[i].ep_desc;
@@ -169,8 +174,9 @@ static int usbh_modeswitch_connect(struct usbh_hubport *hport, uint8_t intf) {
 	usb_osal_sem_delete(modeswitch.xfer.done);
 	modeswitch.xfer.done = NULL;
 
-	/* never claimed: the device comes back with the WiFi personality */
-	return -USB_ERR_INVAL;
+	/* handled, never claimed: the device comes back with the WiFi
+	 * personality and the wlan class hook takes it from there */
+	return 0;
 }
 
 static const struct usbh_class_driver modeswitch_class_driver = {

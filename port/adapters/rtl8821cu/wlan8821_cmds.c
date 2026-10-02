@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "csh.h"
+#include "cherrysh_adapter.h"
 
 #include "drv_types.h"
 #include "hal_data.h"
@@ -35,11 +36,13 @@ extern int rtl8821cu_scan(void);
 extern int rtl8821cu_scan_dump(void);
 extern unsigned long rtl8821cu_rx_stats(unsigned long *bytes);
 
-static void wlan8821_status(void *csh)
+static void wlan8821_status(int argc, char *argv[])
 {
 	_adapter *a = rtl8821cu_get_adapter();
 	unsigned long rx_bytes = 0;
 	unsigned long rx_frames;
+
+	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
 
 	if (a == NULL) {
 		csh_printf(csh, "rtl8821cu: not attached (dongle 0bda:1a2b "
@@ -56,10 +59,12 @@ static void wlan8821_status(void *csh)
 		   rx_frames, rx_bytes);
 }
 
-static int cmd_wlan8821(void *csh, int argc, char **argv)
+static int cmd_wlan8821(int argc, char *argv[])
 {
+	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
+
 	if (argc < 2) {
-		wlan8821_status(csh);
+		wlan8821_status(argc, argv);
 		return 0;
 	}
 

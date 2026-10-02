@@ -36,6 +36,27 @@ extern int rtl8821cu_mem_init_rtos(void);
 static _adapter *rtl8821cu_adapter;
 static int rtl8821cu_registered;
 
+void
+rtl8821cu_adapter_bind(struct usb_interface *intf)
+{
+	struct dvobj_priv *dvobj;
+
+	/* [FWC] drv_entry.c:82-83 shape: usb_dvobj_init left the dvobj on
+	 * the interface (usb_set_intfdata); the primary adapter hangs off
+	 * it.  Called by the wlan class hook after probe success. */
+	dvobj = (struct dvobj_priv *)usb_get_intfdata(intf);
+	rtl8821cu_adapter = (dvobj != NULL) ? dvobj_get_primary_adapter(dvobj) : NULL;
+	printf("rtl8821cu: attached (adapter %p)\n",
+	       (void *)rtl8821cu_adapter);
+}
+
+void
+rtl8821cu_adapter_unbind(void)
+{
+
+	rtl8821cu_adapter = NULL;
+}
+
 void *
 rtl8821cu_get_adapter(void)
 {

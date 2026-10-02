@@ -683,9 +683,43 @@ lkpi_completion_init(struct completion *c)
 	if (*lk_cmtx(c) == NULL)
 		lkpi_fatal("completion mutex init failed");
 	memset(cv, 0, sizeof(*cv));
-	if (tx_semaphore_create(&cv->sem, "lkpi_cv", 0) != TX_SUCCESS)
-		lkpi_fatal("completion semaphore init failed");
+	{
+		UINT st = tx_semaphore_create(&cv->sem, "lkpi_cv", 0);
+
+		if (st != TX_SUCCESS) {
+			/* W2 board round: print the TX status so the fatal
+			 * names its cause (TX_CALLER_ERROR vs PTR_ERROR) */
+			char stbuf[48];
+
+			(void)snprintf(stbuf, sizeof(stbuf),
+			    "completion sem st=0x%x th=%.10s ra=%p ra1=%p",
+			    (unsigned)st,
+			    tx_thread_identify() != NULL ?
+				tx_thread_identify()->tx_thread_name : "?",
+			    __builtin_return_address(0),
+			    __builtin_return_address(1));
+			board_log("%s", stbuf);
+			lkpi_fatal("completion semaphore init failed");
+		}
+	}
 	c->done = 0;
+}
+
+void
+lkpi_completion_deinit(struct completion *c)
+{
+	struct lkpi_cv_shell *cv = lk_ccv(c);
+	osMutexId_t *mtx = lk_cmtx(c);
+
+	/* idempotent for never-initialized (lazy) completions: the shells
+	 * were kzalloc-zeroed with the urb */
+	if (*mtx != NULL) {
+		(void)osMutexDelete(*mtx);
+		*mtx = NULL;
+	}
+	if (cv->sem.tx_semaphore_name != NULL)
+		(void)tx_semaphore_delete(&cv->sem);
+	memset(cv, 0, sizeof(*cv));
 }
 
 void

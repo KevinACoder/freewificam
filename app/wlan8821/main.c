@@ -49,6 +49,7 @@ static void thr_shellboot(void *arg)
 {
 	(void)arg;
 
+	board_log("shell: init enter");
 	if (cherrysh_init() == 0) {
 		board_log("shell: READY\n");
 	} else {
@@ -93,17 +94,20 @@ int main(void)
 
 	(void)osKernelInitialize();
 
-	(void)osThreadNew(thr_usbboot, NULL,
-			  &(osThreadAttr_t){ .name = "usbboot",
-					     .priority = osPriorityNormal });
+	{
+		osThreadId_t tu = osThreadNew(thr_usbboot, NULL,
+		    &(osThreadAttr_t){ .name = "usbboot",
+				       .priority = osPriorityNormal });
+		osThreadId_t ts = NULL;
 
 #ifdef CONFIG_SHELL
-	(void)osThreadNew(thr_shellboot, NULL,
-			  &(osThreadAttr_t){ .name = "shellboot",
-					     .priority = osPriorityNormal });
+		ts = osThreadNew(thr_shellboot, NULL,
+		    &(osThreadAttr_t){ .name = "shellboot",
+				       .priority = osPriorityNormal });
 #endif
-
-	board_log("usb: threads created, starting kernel\n");
+		board_log("usb: threads created usbboot=%p shellboot=%p\n",
+		    (void *)tu, (void *)ts);
+	}
 	(void)osKernelStart();
 	return 0;	/* unreachable */
 }

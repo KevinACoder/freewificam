@@ -670,7 +670,10 @@ usb_alloc_urb(int iso_packets, gfp_t mem_flags)
 		return NULL;
 	urb->_usbh_urb = (char *)urb + sizeof(*urb);
 	urb->_refs = 1;
-	lkpi_completion_init(&urb->_done);
+	/* [W2] the embedded _done completion is initialized LAZILY at the
+	 * first sync submit (thread context by construction), NOT here: an
+	 * urb allocated from a non-thread context (timer/ISR callers exist
+	 * in the vendor's paths) made the TX semaphore create fail hard. */
 	return urb;
 }
 
@@ -684,6 +687,10 @@ usb_free_urb(struct urb *urb)
 	    urb->_refs);
 	if (--urb->_refs > 0)
 		return;
+	/* [W2] release the lazily-created completion shells: without this
+	 * every sync urb leaked an osMutex and a TX semaphore on the
+	 * created-object lists */
+	lkpi_completion_deinit(&urb->_done);
 	lkpi_usb_stage_put(urb);
 	kfree(urb);
 }
@@ -885,6 +892,11 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	}
 	if ((urb->transfer_flags & URB_ZERO_PACKET) != 0)
 		hurb->transfer_flags |= USBH_URB_ZERO_PACKET;
+
+	/* [W2] lazy completion init: the sync path is the only consumer of
+	 * _done and the submitter is a thread by construction */
+	if (!async)
+		lkpi_completion_init(&urb->_done);
 
 	urb->status = 0;
 	urb->actual_length = 0;

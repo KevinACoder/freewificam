@@ -551,7 +551,13 @@ RTL8821CU_ADAPTER_SRCS := \
 	port/adapters/rtl8821cu/usbh_modeswitch.c \
 	port/adapters/rtl8821cu/usbh_wlan_class.c
 
-SRCS += $(RTL8821CU_VENDOR_SRCS) $(RTL8821CU_ADAPTER_SRCS)
+# The adapter objects go FIRST on the link line: .usbh_class_info is
+# concatenated in link order and cherryusb takes the first match - the
+# modeswitch hook (VID/PID 0bda:1a2b) must precede lkpi_msc's class-only
+# 08/06/50 match, or the CD-ROM persona dies in lkpi_msc's negative
+# connect before the eject assistant ever runs (W2 board round lesson).
+SRCS := $(RTL8821CU_ADAPTER_SRCS) $(SRCS)
+SRCS += $(RTL8821CU_VENDOR_SRCS)
 CFLAGS += -DCONFIG_NIC_RTL8821CU=1
 
 # Vendor build config: the W0-L board-proven macro set minus kbuild-internal
@@ -582,9 +588,13 @@ $(BUILD)/port/adapters/rtl8821cu/%.o: \
 		-I$(RTL8821CU_ROOT)/include -I$(RTL8821CU_ROOT)/hal/btc \
 		-I$(RTL8821CU_ROOT)/platform \
 		$(RTL8821CU_VENDOR_CFG) -fgnu89-inline -DCONFIG_NIC_RTL8821CU=1
+# NOTE: this pattern rule OVERRIDES the shell block's $(BUILD)/app/%.o rule
+# (last pattern match wins in GNU make) - CSH_CFLAGS (which carries
+# -DCONFIG_SHELL=1) MUST ride along or app/wlan8821/main.c's shellboot
+# #ifdef compiles out and the shell silently never starts (W2 board round).
 $(BUILD)/app/wlan8821/%.o: \
-	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) -Iport/adapters/rtl8821cu \
-		-DCONFIG_NIC_RTL8821CU=1
+	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
+		-Iport/adapters/rtl8821cu -DCONFIG_NIC_RTL8821CU=1
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,

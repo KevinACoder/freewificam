@@ -27,6 +27,12 @@ int wlan8821_register(void);
 /* the single landed adapter (NULL until the vendor probe ran) */
 void *rtl8821cu_get_adapter(void);
 
+/* probe-success binding: the wlan class hook hands the claimed interface
+ * over; the primary adapter is read from the interface's intfdata */
+struct usb_interface;
+void rtl8821cu_adapter_bind(struct usb_interface *intf);
+void rtl8821cu_adapter_unbind(void);
+
 /* up/down/scan hooks the shell commands drive (ndo_open/ndo_stop/the
  * vendor MLME site survey) */
 int rtl8821cu_up(void);
