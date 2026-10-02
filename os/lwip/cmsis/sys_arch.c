@@ -138,12 +138,28 @@ void sys_sem_free(sys_sem_t *sem)
 
 /* --- mailboxes (queues of one pointer) ---------------------------------------- */
 
+/* N7 diagnostics: the first mailbox the stack creates is the tcpip input
+ * mbox; its live depth in the heartbeat splits "tcpip thread too slow"
+ * (pinned at max) from "consumers downstream slow" (near empty). */
+static osMessageQueueId_t s_first_mbox;
+
+unsigned int sys_arch_tcpip_mbox_count(void)
+{
+	if (s_first_mbox == NULL) {
+		return 0U;
+	}
+	return (unsigned int)osMessageQueueGetCount(s_first_mbox);
+}
+
 err_t sys_mbox_new(sys_mbox_t *mbox, int size)
 {
 	if (size <= 0) {
 		size = 1;
 	}
 	mbox->mbx = osMessageQueueNew((uint32_t)size, sizeof(void *), NULL);
+	if ((mbox->mbx != NULL) && (s_first_mbox == NULL)) {
+		s_first_mbox = mbox->mbx;
+	}
 
 	return (mbox->mbx != NULL) ? ERR_OK : ERR_MEM;
 }

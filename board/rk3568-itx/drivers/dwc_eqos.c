@@ -11,18 +11,24 @@
  *
  * THREE THINGS ABOUT THIS CORE THAT COST DAYS TO LEARN
  *
- * 1. The RX fetch window is [ring base, END) - the DMA wraps to the ring base
- *    when its fetch pointer reaches END and never fetches the END descriptor
- *    itself. So RX end-pointer is written ONCE, pointing at the last slot, and
- *    left alone; feeding the ring by advancing the end/tail pointer with every
- *    refill is what freezes reception when the DMA catches up with software.
+ * 1. The RX fetch window is [ring base, tail) - the DMA STOPS when its
+ *    fetch pointer runs into the tail. (This port once carried the belief
+ *    that the DMA wraps to base on reaching END and the tail is written
+ *    once: board-measured wrong on 2026-10-02 - a fixed tail gave a hard
+ *    127-frames-per-watchdog-poke reception ceiling, see eqos_rx_complete.
+ *    The prior-work port ran light lwiperf traffic through a ring that was
+ *    never lapped, so the stall never showed.) The tail must advance past
+ *    every slot as it is re-armed - the completion sweep does that; the
+ *    watchdog re-poke is only a heal.
  *
- * 2. The receive path never leaves a descriptor un-owned: every slot whose
- *    frame has arrived is re-armed in the same sweep, with the frame copied
- *    into a small staging ring first. A slot left in software hands stops the
- *    RX DMA the next time it reaches it, which is the failure in (1) arriving
- *    by a different route. The staging ring absorbs bursts; on overflow frames
- *    are dropped and counted, because stalling the ring is worse.
+ * 2. The RX DMA stops the instant it laps a slot that is not owned: the
+ *    completion sweep must re-arm every completed slot right away (in
+ *    interrupt context) or reception throttles to the reader's cadence -
+ *    measured on this board as a hard 1280 frames/s ceiling with 95%
+ *    MAC-level FIFO-overflow loss when re-arming was moved into the RX
+ *    thread (N7 R2b; the fix restored the ISR re-arm and deepened the
+ *    staging ring 8 -> 128). A slot that was never granted stops the DMA
+ *    the same way - the failure in (1) by another route.
  *
  * 3. Cache maintenance is explicit, per access: descriptors and buffers are
  *    reached by the DMA over a non-coherent port. A `dsb` orders a write, it
@@ -74,7 +80,11 @@
  * milliseconds is generous; longer than that means the link is not moving. */
 #define DWC_EQOS_TX_WAIT_MS	4u
 
-/* Staged received frame. */
+/* Staged received frame (the ISR copies and re-arms immediately - the RX
+ * DMA stops on any un-owned slot it laps, so the copy is what keeps the
+ * DMA running at line rate; N7 R2b restored this after the no-copy R2
+ * variant measured a 1280 frames/s DMA-stall ceiling and a 95% MAC-level
+ * FIFO overflow loss under UDP flood). */
 struct dwc_eqos_stage {
 	uint16_t len;
 	uint8_t  data[DWC_EQOS_RX_BUF_SIZE];
@@ -95,19 +105,30 @@ struct dwc_eqos_dev {
 	struct dwc_eqos_desc *tx_ring;
 	int       tx_head;
 	int       tx_tail;
-	/* Software ownership per RX slot. A slot is handed to the DMA (1) and
-	 * taken back when its writeback shows up (0); the sweep below walks
-	 * the whole ring because the DMA laps past software rather than
-	 * stopping at a moving head. */
+	/* Software ownership per RX slot: 1 = handed to the DMA, 2 = the DMA
+	 * wrote the frame back and the sweep has staged (copied) it but the
+	 * reader has not consumed the copy yet, 0 = slot free. The sweep
+	 * walks the whole ring because the DMA laps past software rather
+	 * than stopping at a moving head. */
 	uint8_t   rx_in_flight[DWC_EQOS_RX_DESC_COUNT];
-
-	/* Frames already taken off the ring, waiting to be read. */
+	/* Next slot the reader consumes from; the DMA writes back in ring
+	 * order, so staged slots always run consecutively from here. */
+	unsigned int rx_read_tail;
+	/* Frames already copied out of the ring by the sweep, waiting to be
+	 * read (the burst buffer; see DWC_EQOS_RX_STAGE_COUNT). */
 	struct dwc_eqos_stage *rx_stage;
 	unsigned int rx_stage_count;
 	unsigned int rx_stage_head;
 	unsigned int rx_stage_tail;
+	/* Arms the IOC bit on every DWC_EQOS_TX_IOC_DIV-th descriptor, so a
+	 * burst costs one completion interrupt instead of one per frame. */
+	unsigned int tx_ioc_seq;
 
 	struct dwc_eqos_stats stats;
+
+	/* Signalled by the completion sweep (freed > 0): a sender parked on a
+	 * full TX ring waits on this instead of polling a 1 ms tick. */
+	osSemaphoreId_t tx_sem;
 };
 
 /* Per-instance state and DMA memory. Static, not allocated: the DMA needs
@@ -139,7 +160,7 @@ static uint8_t rx_buffers[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_DESC_COUNT][DWC_EQOS_
 static uint8_t tx_buffers[DWC_EQOS_PORT_COUNT][DWC_EQOS_TX_DESC_COUNT][DWC_EQOS_BUF_STRIDE]
 	__attribute__((aligned(DWC_EQOS_BUF_ALIGN)));
 static struct dwc_eqos_stage rx_stages[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_STAGE_COUNT]
-	__attribute__((aligned(16)));
+	__attribute__((aligned(8)));
 
 /* --- register and log plumbing -------------------------------------------- */
 
@@ -507,6 +528,10 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	memset(dev->rx_in_flight, 1, DWC_EQOS_RX_DESC_COUNT);
 	dev->tx_head = 0;
 	dev->tx_tail = 0;
+	dev->rx_read_tail = 0;
+	dev->tx_ioc_seq = 0;
+	dev->rx_stage = rx_stages[dev->plat->index];
+	dev->rx_stage_count = DWC_EQOS_RX_STAGE_COUNT;
 	dev->rx_stage_head = 0;
 	dev->rx_stage_tail = 0;
 
@@ -548,16 +573,26 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 	return 0;
 }
 
-/* Deliver every frame the DMA has written back. Returns the number of frames
- * handed to the staging ring.
+/* Copy out and re-arm every frame the DMA has written back. Returns the
+ * number of frames newly staged.
  *
- * The sweep walks the whole ring: once the DMA's fetch pointer reaches END it
- * wraps to the ring base, so writebacks land wherever the next frame went, not
- * at a moving head. Nowhere in here is a slot left un-owned (see the file
- * header). Callable from the interrupt and from the watchdog sweep. */
+ * The re-arm must happen HERE, in the caller's (interrupt/watchdog)
+ * context, not in the reader: the RX DMA stops the instant it laps a slot
+ * that is not owned, and a reader-paced re-arm therefore throttles the DMA
+ * to the reader's scheduling cadence - measured on this board as a hard
+ * 1280 frames/s ceiling with a 95% MAC-level FIFO-overflow loss (MMC
+ * 0x7d4) under a 300 Mbit/s UDP flood, while the MAC itself received every
+ * frame (N7 R2b evidence). One linear copy per frame in the interrupt is
+ * the price of keeping the DMA continuous.
+ *
+ * The sweep walks the whole ring: once the DMA's fetch pointer reaches END
+ * it wraps to the ring base, so writebacks land wherever the next frame
+ * went, not at a moving head. Callable from the interrupt and the
+ * watchdog sweep. */
 static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 {
 	int delivered = 0;
+	int last_armed = -1;
 	int i;
 
 	for (i = 0; i < DWC_EQOS_RX_DESC_COUNT; i++) {
@@ -565,7 +600,7 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		uint8_t *buf;
 		unsigned int len;
 
-		if (!dev->rx_in_flight[i]) {
+		if (dev->rx_in_flight[i] != 1) {
 			continue;
 		}
 		desc = &dev->rx_ring[i];
@@ -574,7 +609,7 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 			continue;
 		}
 
-		dev->rx_in_flight[i] = 0;
+		dev->rx_in_flight[i] = 2;
 		buf = rx_buffers[dev->plat->index][i];
 		len = desc->des3 & DWC_EQOS_DESC_RX_LEN_MASK;
 
@@ -583,8 +618,8 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		} else {
 			cache_dcache_invalidate((uintptr_t)buf, len);
 			/* Strip the frame check sequence: the MAC was
-			 * configured not to, and one strip is the right number.
-			 */
+			 * configured not to, and one strip is the right
+			 * number. */
 			len -= 4;
 			if (eqos_stage_put(dev, buf, len) == 0) {
 				delivered++;
@@ -593,6 +628,19 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 
 		eqos_setup_rx_desc(dev, i);
 		dev->rx_in_flight[i] = 1;
+		last_armed = i;
+	}
+
+	/* Advance the RX tail: the DMA's fetch window is [base, tail) and it
+	 * STOPS when it runs into the tail - a tail fixed at ring[LAST] gave
+	 * a hard 127-frames-per-watchdog-poke ceiling (1270 frames/s at the
+	 * 100 ms watchdog cadence, 95% of a UDP flood dropped to FIFO
+	 * overflow, N7 R2b board-measured). The Linux driver's RX_END is
+	 * moving for the same reason. Writing the last slot we re-armed
+	 * extends the window over it; the next sweep extends it further. */
+	if (last_armed >= 0) {
+		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
+			(uint32_t)(uintptr_t)&dev->rx_ring[last_armed]);
 	}
 
 	return delivered;
@@ -630,6 +678,14 @@ static int eqos_tx_complete(struct dwc_eqos_dev *dev)
 			(uint32_t)(uintptr_t)&dev->tx_ring[dev->tx_head]);
 	}
 
+	/* N7 R1: wake a ring-full sender immediately instead of letting it
+	 * poll a 1 ms tick. One release per freed slot (the semaphore is
+	 * counting); osSemaphoreRelease is ISR-safe, and this runs in the
+	 * interrupt on the hot path. */
+	if ((freed > 0) && (dev->tx_sem != NULL)) {
+		(void)osSemaphoreRelease(dev->tx_sem);
+	}
+
 	return freed;
 }
 
@@ -651,6 +707,7 @@ void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index))
 void dwc_eqos_watchdog(unsigned int index)
 {
 	struct dwc_eqos_dev *dev;
+	int rx_frames;
 
 	if (index >= DWC_EQOS_PORT_COUNT) {
 		return;
@@ -661,11 +718,19 @@ void dwc_eqos_watchdog(unsigned int index)
 	}
 
 	eqos_lock(dev);
-	(void)eqos_rx_complete(dev);
+	rx_frames = eqos_rx_complete(dev);
 	(void)eqos_tx_complete(dev);
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
 		(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
 	eqos_unlock(dev);
+
+	/* N7 R1 fix: the ISR only notifies when IT moved frames; frames the
+	 * watchdog itself staged went unannounced, so the RX thread slept on
+	 * holding staged traffic until some future interrupt (the millisecond
+	 * sawtooth the first iperf rounds showed). Same contract as dwc_eqos_irq. */
+	if ((rx_frames > 0) && (s_rx_notify != NULL)) {
+		s_rx_notify(index);
+	}
 }
 
 /* Combined MAC/DMA interrupt. Registered through gicv3 with the instance
@@ -738,8 +803,11 @@ int32_t dwc_eqos_initialize(unsigned int index, const struct dwc_eqos_plat *plat
 	memcpy(dev->macaddr, plat->mac_addr, DWC_EQOS_MAC_ADDR_LEN);
 	dev->rx_ring = rx_rings[index];
 	dev->tx_ring = tx_rings[index];
-	dev->rx_stage = rx_stages[index];
-	dev->rx_stage_count = DWC_EQOS_RX_STAGE_COUNT;
+
+	/* TX ring-full wait (N7 R1): created here because initialize runs in
+	 * task context (the app bring-up thread); a NULL semaphore downgrades
+	 * the ring-full wait to a yield, so bring-up order is forgiving. */
+	dev->tx_sem = osSemaphoreNew(0xFFFFU, 0U, NULL);
 
 	dev->initialized = 1;
 
@@ -884,6 +952,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 	for (tries = 0; tries <= DWC_EQOS_TX_WAIT_MS; tries++) {
 		struct dwc_eqos_desc *desc;
 		unsigned int tx_len;
+		unsigned int ioc;
 		uint8_t *buf;
 		int cur;
 		int next;
@@ -905,6 +974,16 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			}
 			cache_dcache_flush((uintptr_t)buf, tx_len);
 
+			/* One completion interrupt per IOC_DIV frames, plus
+			 * the frame that empties the ring (cur == tx_tail
+			 * means this is the only in-flight frame): a quiet
+			 * line must never wait on the counter for its
+			 * completion, a burst must not pay one IRQ per
+			 * frame (N7 R2). */
+			ioc = ((dev->tx_ioc_seq++ % DWC_EQOS_TX_IOC_DIV)
+			       == (DWC_EQOS_TX_IOC_DIV - 1u)) ||
+			      (cur == dev->tx_tail);
+
 			desc = &dev->tx_ring[cur];
 			desc->des0 = (uint32_t)(uintptr_t)buf;
 			desc->des1 = 0;
@@ -913,7 +992,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			 * completion-interrupt enable in des2 bit 31. No flush:
 			 * non-cacheable ring, the OWN grant is visible to the
 			 * DMA before the end pointer below moves. */
-			desc->des2 = DWC_EQOS_DESC_TX_IOC | (tx_len & 0x3fffu);
+			desc->des2 = (ioc ? DWC_EQOS_DESC_TX_IOC : 0u)
+				   | (tx_len & 0x3fffu);
 			desc->des3 = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_TX_FD
 				   | DWC_EQOS_DESC_TX_LD | tx_len;
 			/* Grant reaches memory before the end pointer moves. */
@@ -932,10 +1012,15 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		}
 		eqos_unlock(dev);
 
-		/* Ring full. The DMA frees descriptors at line rate, so a
-		 * short wait resolves it; giving the CPU back (rather than
-		 * spinning) keeps the rest of the system alive. */
-		osDelay(1);
+		/* Ring full. The completion sweep signals the semaphore as it
+		 * frees slots, so the wait ends the moment space exists; the
+		 * timeout is only the belt-and-braces against a lost signal
+		 * (and bounds the tcpip thread's stall while the ring drains
+		 * at line rate). */
+		if ((dev->tx_sem == NULL) ||
+			(osSemaphoreAcquire(dev->tx_sem, DWC_EQOS_TX_WAIT_MS) != osOK)) {
+			(void)osThreadYield();
+		}
 	}
 
 	dev->stats.tx_dropped++;
@@ -1049,4 +1134,20 @@ void dwc_eqos_get_stats(unsigned int index, struct dwc_eqos_stats *stats)
 	eqos_lock(dev);
 	*stats = dev->stats;
 	eqos_unlock(dev);
+}
+
+void dwc_eqos_get_mmc_stats(unsigned int index, struct dwc_eqos_mmc_stats *stats)
+{
+	struct dwc_eqos_dev *dev;
+	uintptr_t mmc;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (stats == NULL)) {
+		return;
+	}
+	dev = &devs[index];
+	mmc = dev->base_addr + 0x700u;
+	stats->rx_pkts_gb = mmio_rd32(mmc + 0x80u);
+	stats->rx_octets_gb = mmio_rd32(mmc + 0x84u);
+	stats->rx_crc_error = mmio_rd32(mmc + 0x94u);
+	stats->rx_fifo_overflow = mmio_rd32(mmc + 0xd4u);
 }

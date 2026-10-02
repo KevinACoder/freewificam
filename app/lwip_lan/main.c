@@ -30,6 +30,7 @@
 #include "lwip/netif.h"
 #include "lwip/tcpip.h"
 #include "lwip/apps/lwiperf.h"
+#include "arch/sys_arch.h"
 #include "uart.h"
 
 #ifdef CONFIG_GDB_STUB
@@ -96,7 +97,8 @@ static void lwiperf_report(void *arg, enum lwiperf_report_type type,
 }
 
 /* Runs in the tcpip thread once the stack is up: netif management belongs
- * to this context (core locking is off; the netifapi path inlined here). */
+ * to this context (LWIP_TCPIP_CORE_LOCKING=1 - lwipopts N7 - so netifapi
+ * calls execute directly against the core under LOCK_TCPIP_CORE()). */
 static void tcpip_ready(void *arg)
 {
 	ip4_addr_t ip, mask, gw;
@@ -187,6 +189,8 @@ static void thr_boot(void *arg)
 {
 	unsigned int port = (unsigned int)CONFIG_GMAC_PORT;
 	struct dwc_eqos_stats stats;
+	struct dwc_eqos_mmc_stats mmc;
+	unsigned long d_poll, d_pool, d_input, d_fed;
 	uint32_t wd_due, now;
 
 	(void)arg;
@@ -229,14 +233,19 @@ static void thr_boot(void *arg)
 		if ((uint32_t)(osKernelGetTickCount() - now) >= 1000U) {
 			now += 1000U;
 			dwc_eqos_get_stats(port, &stats);
-			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u\n",
+			dwc_eqos_get_mmc_stats(port, &mmc);
+			ethnetif_get_diag(&d_poll, &d_pool, &d_input, &d_fed);
+			board_log("gmac%u: hb rx=%u dropped=%u errors=%u tx=%u txdrop=%u txerr=%u | fed=%lu poolfail=%lu inputfail=%lu mbox=%u mmc_ovf=%u\n",
 				  port,
 				  (unsigned)stats.rx_frames,
 				  (unsigned)stats.rx_dropped,
 				  (unsigned)stats.rx_errors,
 				  (unsigned)stats.tx_frames,
 				  (unsigned)stats.tx_dropped,
-				  (unsigned)stats.tx_errors);
+				  (unsigned)stats.tx_errors,
+				  d_fed, d_pool, d_input,
+				  sys_arch_tcpip_mbox_count(),
+				  (unsigned)mmc.rx_fifo_overflow);
 		}
 		(void)osDelay(1);
 	}

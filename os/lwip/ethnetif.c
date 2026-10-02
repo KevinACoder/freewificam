@@ -43,6 +43,22 @@
 static uint8_t tx_linear[ETHNETIF_LINEAR_BUF] __attribute__((aligned(8)));
 static uint8_t rx_linear[ETHNETIF_LINEAR_BUF] __attribute__((aligned(8)));
 
+/* N7 diagnostics: the R2 board round showed the driver completing frames the
+ * stack never saw; these counters localize the loss without a debugger. */
+static unsigned long g_poll_calls;
+static unsigned long g_pool_fail;
+static unsigned long g_input_fail;
+static unsigned long g_fed_total;
+
+void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
+		       unsigned long *input_fail, unsigned long *fed_total)
+{
+	*poll_calls = g_poll_calls;
+	*pool_fail = g_pool_fail;
+	*input_fail = g_input_fail;
+	*fed_total = g_fed_total;
+}
+
 /* netif->state carries the driver port index (the only per-netif fact the
  * bridge needs - the MAC address comes from the driver). */
 static unsigned int port_of(struct netif *netif)
@@ -115,6 +131,7 @@ unsigned int ethnetif_poll(struct netif *netif)
 	unsigned int port = port_of(netif);
 	unsigned int fed = 0;
 
+	g_poll_calls++;
 	while (dwc_eqos_get_rx_frame_size(port) > 0U) {
 		int len = dwc_eqos_read_frame(port, rx_linear, sizeof(rx_linear));
 		struct pbuf *p;
@@ -126,17 +143,21 @@ unsigned int ethnetif_poll(struct netif *netif)
 		if (p == NULL) {
 			/* Pool exhaustion: drop the frame (the staging slot is
 			 * already consumed), the TCP peer retransmits. */
+			g_pool_fail++;
 			continue;
 		}
 		if (pbuf_take(p, rx_linear, (u16_t)len) != ERR_OK) {
 			pbuf_free(p);
+			g_pool_fail++;
 			continue;
 		}
 		if (netif->input(p, netif) != ERR_OK) {
 			pbuf_free(p);
+			g_input_fail++;
 			continue;
 		}
 		fed++;
+		g_fed_total++;
 	}
 
 	return fed;

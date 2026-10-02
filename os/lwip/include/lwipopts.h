@@ -67,7 +67,11 @@
 
 #define MEM_LIBC_MALLOC                 0
 #define MEMP_MEM_MALLOC                 0
-#define MEM_SIZE                        131072
+/* N7 gigabit tier (specs/lwip-adapt + runs/20261002-lwip-gigabit): the
+ * reference config that measures 921/841 Mbit/s single-core (Phytium
+ * FreeRTOS SDK lwip_iperf) carries a 1 MB stack heap; 128 KB exhausted the
+ * ram_heap under a 128-deep pbuf burst. */
+#define MEM_SIZE                        (1024 * 1024)
 /* 8, not lwIP's 4-byte default: aarch64 pointers are 8 bytes and mem_malloc
  * must hand back 8-aligned blocks or every pbuf's pointer fields are asked to
  * be read unaligned. */
@@ -75,8 +79,10 @@
 #define MEMP_OVERFLOW_CHECK             0
 #define MEMP_SANITY_CHECK               0
 /* One 1518-byte frame per pool buffer with headroom: a max-frame single-pbuf
- * receive must never need a chain. */
-#define PBUF_POOL_SIZE                  40
+ * receive must never need a chain. 256 buffers ≈ 400 KB: the RX ring depth
+ * (128, N7) plus an in-flight TCP burst must fit without pool exhaustion -
+ * the R0 baseline dropped 13.5% of ACKs on a 40-deep pool. */
+#define PBUF_POOL_SIZE                  256
 #define PBUF_POOL_BUFSIZE               1600
 #define LWIP_NETIF_TX_SINGLE_PBUF       1
 
@@ -105,34 +111,49 @@
 #define MEMP_NUM_TCP_PCB                16
 #define MEMP_NUM_TCP_PCB_LISTEN         4
 /* >= TCP_SND_QUEUELEN, per lwIP's own sizing rule. */
-#define MEMP_NUM_TCP_SEG                128
+#define MEMP_NUM_TCP_SEG                256
 #define MEMP_NUM_UDP_PCB                8
 #define MEMP_NUM_SYS_TIMEOUT            16
 #define MEMP_NUM_FRAG_PBUF              16
 /* D54: 16 dropped 1799 messages over a 600s downlink once a driver worker
  * outranked tcpip; 64 is the number the prior workspace converged on. */
 #define MEMP_NUM_TCPIP_MSG_API          16
-#define MEMP_NUM_TCPIP_MSG_INPKT        64
+/* Matches TCPIP_MBOX_SIZE: an mbox slot without its msg-pool element drops
+ * the frame anyway, so sizing only the mbox is dead weight. */
+#define MEMP_NUM_TCPIP_MSG_INPKT        128
 
-/* --- TCP (prior-work lesson values, D52) ------------------------------------- */
+/* --- TCP (N7 gigabit tier; reference = Phytium SDK 60000/60000, 921 Mbit/s) --- */
 
 #define TCP_MSS                         1460
-/* 8*MSS, not the full 32*MSS window: the wlan line burst-past-FIFO lesson;
- * the sustained-throughput line revisits one variable at a time. */
-#define TCP_WND                         (8 * TCP_MSS)
-#define TCP_SND_BUF                     (32 * TCP_MSS)
-/* Must be >= 4 * TCP_SND_BUF / TCP_MSS: 4 * 46720 / 1460 = 128. */
-#define TCP_SND_QUEUELEN                128
-#define TCP_QUEUE_OOSEQ                 0
+/* R0 baseline (2026-10-02): 8*MSS pinned the downlink at ~1 Mbit/s
+ * (window/RTT bound: 11680B per ~1ms round trip) and held the uplink to
+ * 17.25 Mbit/s. 60000 (4.1 segments short of 64K) is the number the
+ * single-core gigabit reference runs without window scaling. */
+#define TCP_WND                         60000
+#define TCP_SND_BUF                     60000
+/* Must be >= 4 * TCP_SND_BUF / TCP_MSS: 4 * 60000 / 1460 = 165 -> 256. */
+#define TCP_SND_QUEUELEN                256
+/* OoSeq reassembly back on: a 60 KB advertised window admits out-of-order
+ * segments on any burst; with the pool at 256 deep the reassembly comes out
+ * of the TCP_SEG pool (no extra pool row). */
+#define TCP_QUEUE_OOSEQ                 1
 #define LWIP_WND_SCALE                  0
+/* Explicit (opt.h default is already 1, but the api-call-into-core-direct
+ * shape is a load-bearing assumption of the N7 throughput design: socket
+ * sends must not pay a mailbox round trip each). */
+#define LWIP_TCPIP_CORE_LOCKING         1
 
 /* --- threads and mailboxes (D54 ladder; sys_arch band_to_cmsis: band*8) ------- */
 
 #define TCPIP_THREAD_NAME               "tcpip"
 #define TCPIP_THREAD_STACKSIZE          8192
-/* Band 4 (osPriorityAboveNormal): above its feeders, below the shell. */
-#define TCPIP_THREAD_PRIO               4
-#define TCPIP_MBOX_SIZE                 64
+/* Band 5 (osPriorityHigh): N7 experiment - with band 4 the whole RX path
+ * capped at ~1250 frames/s (0.8 ms/frame) regardless of protocol (TCP
+ * up/down, UDP down, lwiperf all pinned at the same rate), which smells like
+ * the tcpip thread being starved rather than doing real work. Shell stays
+ * above at the same ladder step in theory but it parks forever. */
+#define TCPIP_THREAD_PRIO               5
+#define TCPIP_MBOX_SIZE                 128
 #define DEFAULT_THREAD_STACKSIZE        2048
 #define DEFAULT_THREAD_PRIO             3
 #define DEFAULT_RAW_RECVMBOX_SIZE       8

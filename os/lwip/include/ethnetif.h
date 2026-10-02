@@ -22,4 +22,9 @@ void ethnetif_add(struct netif *netif, unsigned int port,
  * (NO_SYS) or the tcpip context (P7-2a). Returns frames fed. */
 unsigned int ethnetif_poll(struct netif *netif);
 
+/* N7 diagnostics: where the RX loss happens (pool exhaustion vs mailbox
+ * rejects) and how much actually reached the stack. */
+void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
+		       unsigned long *input_fail, unsigned long *fed_total);
+
 #endif /* FREEWEBCAM_ETHNETIF_H */
