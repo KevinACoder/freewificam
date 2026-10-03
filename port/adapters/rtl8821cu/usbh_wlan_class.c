@@ -38,12 +38,16 @@ extern void rtl8821cu_adapter_bind(struct usb_interface *intf);
 extern void rtl8821cu_adapter_unbind(void);
 
 /* 0bda:c820/c821/c82a/c82b - the RTL8821CU WiFi personalities (the rows
- * the vendor probe table carries for this chip) */
+ * the vendor probe table carries for this chip); 0bda:b851 - the stick's
+ * own WiFi persona after a Linux usb_modeswitch StandardEject: the
+ * switch persists across board power cycles (W0-L2, 2026-10-03), so the
+ * claim table must carry it alongside the c82x family */
 static const uint16_t usbh_wlan_ids[][2] = {
 	{ 0x0bda, 0xc820 },
 	{ 0x0bda, 0xc821 },
 	{ 0x0bda, 0xc82a },
 	{ 0x0bda, 0xc82b },
+	{ 0x0bda, 0xb851 },
 	{ 0, 0 },
 };
 

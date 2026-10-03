@@ -103,7 +103,7 @@ wlan8821_register(void)
 		printf("rtl8821cu: usb_register failed (%d)\n", ret);
 		return ret;
 	}
-	printf("rtl8821cu: registered (0bda:1a2b ejects into 0bda:c820; "
+	printf("rtl8821cu: registered (0bda:1a2b ejects into 0bda:c820|b851; "
 	       "claim hook attaches)\n");
 	return 0;
 }

@@ -53,7 +53,7 @@ static void wlan8821_status(int argc, char *argv[])
 
 	if (a == NULL) {
 		csh_printf(csh, "rtl8821cu: not attached (dongle 0bda:1a2b "
-			   "ejects into 0bda:c820; see usbh list)\n");
+			   "ejects into 0bda:c820|b851; see usbh list)\n");
 		return;
 	}
 
