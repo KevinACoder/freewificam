@@ -39,10 +39,10 @@ git -C third-party/rtl8821cu apply --check "$PWD/patches/rtl8821cu/<p>.patch" \
 ```
 
 物化态（应用后的工作树）**不入 submodule 提交**；物化后对拍锚点：
-`git -C third-party/rtl8821cu diff --stat` = **6 files changed, +85/-10**
+`git -C third-party/rtl8821cu diff --stat` = **7 files changed, +100/-11**
 （rtw_mem.c +13 / autoconf.h +29-6 / ieee80211.h 3×3 / os_intfs.c +13 /
-usb_intf.c +21-1 / hal_halmac.c +9，2026-10-03 W3 增 0004 后终态）。
-重放幂等两连验（apply → stat 逐字节同 → checkout 复原）。
+usb_intf.c +21-1 / hal_halmac.c +9 / rtw_xmit.c +15-1，2026-10-03 W4 增 0005
+后终态）。重放幂等两连验（apply → stat 逐字节同 → checkout 复原）。
 
 ## 0004-rtos-sctx-completion-deinit（2026-10-03，W3 板验轮）
 
@@ -55,6 +55,23 @@ deinit 等于「释放不摘链」，僵尸节点内存被复用后，下一次
 `cv new node=a563280` 于 DUMP_LOGICAL_EFUSE feature 后无配对 delete，
 tx_fault_park far=0x200020205207，链快照 poison 于该节点）。映射宏
 `_rtw_deinit_completion` 在 components/linuxkpi/linuxkpi_core.h。
+
+## 0005-rtos-cmdxmitframe-memset-clamp（2026-10-03，W4 板验轮）
+
+`core/rtw_xmit.c __rtw_alloc_cmdxmitframe` 的 `_rtw_memset(buf_addr, 0,
+alloc_sz)` 越界清零修复：`buf_addr = pbuf` 是分配块内部的 512B 对齐点，
+`alloc_sz`(=MAX_CMDBUF_SZ+XMITBUF_ALIGN_SZ=5632) 字节从 pbuf 起会写出
+块尾 `(pbuf - pallocated_buf)` 字节（0..511 视堆对齐）。Linux 上 >4KiB 的
+kmalloc 来自页分配器（页对齐，slack 恒 0）故上游从不暴露；RTOS tlsf 堆块
+16B 对齐，越界写淹到紧邻分配——本板堆把 cmd xmitbuf 自己的 `pxmit_urb[0]`
+（440B urb，KPI `usb_alloc_urb` 分配）放在 payload 之后，up 期首个 cmd 帧
+（rsvd-page 固件包）把 urb 头 176B 清零：`_usbh_urb` 链接变 NULL →
+usbh_submit_urb 分发器 -USB_ERR_INVAL(-2) → 线上零活动 + Bcn_Valid 超时
+（W3 open 阻塞根因；早期 KPI 错误码映射经 NULL 链接读出 0 时伪装成
+"假成功"）。板证：up 前后 `usbkpi peek` 对拍（up 前 `_usbh_urb=0xa5caea0`
+完好 → up FAIL 后为 0）+ 分配账本（n=326 该地址确为 KPI urb）+ 越界侧
+`pbuf+8=0xa5c9808`（find 命中 txdesc）。修法 = 把清零长度夹到分配块尾
+`alloc_sz - (pbuf - pallocated_buf)`（≥5121，覆盖 5120 可用窗口）。
 
 ## 编译配置归属（本 README 即记账）
 

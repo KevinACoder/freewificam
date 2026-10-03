@@ -1445,7 +1445,7 @@ lkpi_kthread_run(int (*threadfn)(void *), void *data, const char *name)
 	    sizeof(t->comm));
 	t->pid = 0;
 	if (tx_thread_create(lk_thread(t), (CHAR *)name,
-	    lkpi_kthread_trampoline, (ULONG)(uintptr_t)stack,
+	    lkpi_kthread_trampoline, (ULONG)(uintptr_t)t,
 	    stack, LKPI_KTHREAD_STACK, LKPI_KTHREAD_PRIORITY,
 	    LKPI_KTHREAD_PRIORITY, TX_NO_TIME_SLICE, TX_AUTO_ACTIVATE)
 	    != TX_SUCCESS) {

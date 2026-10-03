@@ -1,0 +1,27 @@
+diff --git a/core/rtw_xmit.c b/core/rtw_xmit.c
+index 9a72c7b..1960d8e 100644
+--- a/core/rtw_xmit.c
++++ b/core/rtw_xmit.c
+@@ -3035,7 +3035,21 @@ struct xmit_frame *__rtw_alloc_cmdxmitframe(struct xmit_priv *pxmitpriv,
+ 	pcmdframe->buf_addr = pxmitbuf->pbuf;
+ 
+ 	/* initial memory to zero */
+-	_rtw_memset(pcmdframe->buf_addr, 0, pxmitbuf->alloc_sz);
++	/* [RTOS] clamp the zero span to what the allocation owns: buf_addr is
++	 * the 512-byte-aligned interior of the buffer, so alloc_sz bytes from
++	 * it run (pbuf - pallocated_buf) past the block's end.  Linux never
++	 * sees that - the >PAGE_SIZE kmalloc comes back page-aligned, the
++	 * slack is zero - but the RTOS tlsf heap hands back 16-byte-aligned
++	 * blocks, and the overrun zeroed the head of whatever allocation
++	 * followed.  The heap put this cmd xmitbuf's own pxmit_urb[0] right
++	 * behind its payload: the first cmd frame (the rsvd-page firmware
++	 * packet at ndo_open) wiped the urb's _usbh_urb link, and every
++	 * submit on it came back -EINVAL with nothing on the wire (W3's open
++	 * blocker, misread as a false success while the kpi mapping was
++	 * reading through the NULL link). */
++	_rtw_memset(pcmdframe->buf_addr, 0,
++		    pxmitbuf->alloc_sz -
++		    (u32)(pxmitbuf->pbuf - pxmitbuf->pallocated_buf));
+ 
+ 	pxmitbuf->priv_data = pcmdframe;
+ 

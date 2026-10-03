@@ -135,14 +135,31 @@ int
 rtl8821cu_scan(void)
 {
 	_adapter *a = rtl8821cu_adapter;
+	u8 status;
+	int ret;
 
 	if (a == NULL) {
 		printf("rtl8821cu: not attached\n");
 		return -1;
 	}
-	/* the wext SIOCSIWSCAN path minus the ioctl: site survey through
-	 * the vendor's own MLME; completion lands in the indication seam */
-	return (rtw_set_802_11_bssid_list_scan(a, NULL, 0, NULL, 0) == _TRUE) ? 0 : -1;
+	/* the wext SIOCSIWSCAN path minus the ioctl (ioctl_linux.c:2428-2589):
+	 * site survey through the vendor's own MLME, but FIRST the power-save
+	 * dance the ioctl wrapper does around it - an unassociated up'd port
+	 * enters no-linked IPS ~2s after open (ips_enter -> hal_deinit), and
+	 * rtw_set_802_11_bssid_list_scan refuses on hw_init_completed alone.
+	 * rtw_pwr_wakeup leaves IPS (chip re-init + fw re-download) and the
+	 * deny gate keeps the processor from re-entering while the survey is
+	 * issued; completion lands in the indication seam. */
+	rtw_ps_deny(a, PS_DENY_SCAN);
+	if (_FAIL == rtw_pwr_wakeup(a)) {
+		rtw_ps_deny_cancel(a, PS_DENY_SCAN);
+		printf("rtl8821cu: scan wakeup failed\n");
+		return -1;
+	}
+	status = rtw_set_802_11_bssid_list_scan(a, NULL, 0, NULL, 0);
+	ret = (status == _TRUE) ? 0 : -1;
+	rtw_ps_deny_cancel(a, PS_DENY_SCAN);
+	return ret;
 }
 
 int
