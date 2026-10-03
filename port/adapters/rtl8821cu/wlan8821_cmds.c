@@ -145,7 +145,30 @@ static int cmd_wlan8821(int argc, char *argv[])
 		wlan8821_status(argc, argv);
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss|status|register]\n");
+	if (strcmp(argv[1], "dbg") == 0) {
+		/* [W7 print-clean] the vendor log level is WARNING by default;
+		 * this is the runtime escape hatch for a debug round
+		 * (1=always .. 6=warn 8=info 10=debug, vendor rtw_debug.h) */
+		extern uint rtw_drv_log_level;
+
+		if (argc >= 3) {
+			int lvl = 0;
+
+			if (sscanf(argv[2], "%d", &lvl) == 1 && lvl >= 1 &&
+			    lvl <= 10) {
+				rtw_drv_log_level = (uint)lvl;
+				csh_printf(csh, "rtl8821cu: drv log level = %u\n",
+					   rtw_drv_log_level);
+				return 0;
+			}
+			csh_printf(csh, "rtl8821cu: level must be 1..10\n");
+			return 1;
+		}
+		csh_printf(csh, "rtl8821cu: drv log level = %u\n",
+			   rtw_drv_log_level);
+		return 0;
+	}
+	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss|status|register|dbg <1-10>]\n");
 	return -1;
 }
 

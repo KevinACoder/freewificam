@@ -611,8 +611,15 @@ RTL8821CU_VENDOR_CFG := -DDM_ODM_SUPPORT_TYPE=0x04 \
 	-DCONFIG_LOAD_PHY_PARA_FROM_FILE -DCONFIG_TXPWR_BY_RATE_EN=1 \
 	-DCONFIG_TXPWR_LIMIT_EN=0 -DCONFIG_RTW_ADAPTIVITY_EN=0 \
 	-DCONFIG_RTW_ADAPTIVITY_MODE=0 -DCONFIG_RTW_DEBUG \
-	-DCONFIG_LITTLE_ENDIAN -DRTW_LOG_LEVEL=4 \
+	-DCONFIG_LITTLE_ENDIAN -DRTW_LOG_LEVEL=$(CONFIG_RTW_LOG_LEVEL) \
 	-DREALTEK_CONFIG_PATH=\"\" -DEFUSE_MAP_PATH=\"\" -DWIFIMAC_PATH=\"\"
+# [W7 print-clean 2026-10-03] configs/ owns the knob (Makefile is a pure
+# consumer - no default here): 3 = _DRV_WARNING_ (ERR/WARN survive, the
+# RTW_INFO ramask/EEPROM/ack_tx_done chatter is gone; runtime escape
+# hatch `wlan8821 dbg <1-5>`, vendor rtw_debug.h enum)
+ifeq ($(CONFIG_RTW_LOG_LEVEL),)
+$(error CONFIG_RTW_LOG_LEVEL must be set in the config (configs/ owns it))
+endif
 # Include order is load-bearing: the linuxkpi headers shadow <linux/*.h>
 # before the vendor tree comes in; -w is the frozen-import face ([FWC]
 # Makefile:1192 precedent).
@@ -896,7 +903,12 @@ ifeq ($(filter $(CONFIG_WPA_L2),direct none),)
 $(error CONFIG_WPA_L2 must be direct or none, got '$(CONFIG_WPA_L2)')
 endif
 CONFIG_WPA_THREAD_STACK ?= 65536
-CONFIG_WPA_SUPP_DEBUG_LEVEL ?= 2
+# [W7 print-clean 2026-10-03] configs/ owns the knob (Makefile is a pure
+# consumer - no defaults here); 2 = MSG_DEBUG chatter, 3 = MSG_INFO keeps
+# the anchors (CTRL-EVENT-CONNECTED, disassociation, errors)
+ifeq ($(CONFIG_WPA_SUPP_DEBUG_LEVEL),)
+$(error CONFIG_WPA_SUPP_DEBUG_LEVEL must be set in the config (configs/ owns it))
+endif
 
 WPA_CORE_SRCS := \
 	$(WPA_DIR)/src/common/wpa_common.c \
