@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH 0008] rtos: re-arm bulk-IN urb on unknown completion status
+
+The completion default branch (and nothing else in the error switch)
+neither recycled nor re-armed the recvbuf - on this stack the codes
+reaching it are -ETIMEDOUT / -ENOMEM / -EIO (lkpi_usb_errno over the
+cherryusb xHCI errorcodes), all transient.  Each occurrence permanently
+removed one bulk-IN urb from the RX pipeline; 8 urbs drained = the
+"entire RX incl. completions frozen" stall form (issues/
+2026-10-03-rtl8821cu-rx-queue-stall.md form 2).  Re-arm like the
+-EPROTO family; the pre-existing continual_io_error check above the
+switch bounds the loop via surprise-removed.  [W11-C2]
+---
+--- a/os_dep/linux/usb_ops_linux.c
++++ b/os_dep/linux/usb_ops_linux.c
+@@ -947,10 +947,15 @@
+ 			rtw_rxdbg_comp(RTW_RXDBG_C_OTHER, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 			break;
+ 		default:
+-			/* [W6 probe]: the silent lifecycle hole (counted only;
+-			 * the W4 print here was withdrawn with the print
+-			 * probes - read the counter via wlan8821 status) */
++			/* [W11-C2] close the silent lifecycle hole: on this
++			 * stack the codes landing here are -ETIMEDOUT /
++			 * -ENOMEM / -EIO (lkpi_usb_errno), all transient -
++			 * re-arm like the -EPROTO family instead of leaking
++			 * the recvbuf (the RX pipeline shrinks permanently
++			 * otherwise).  Bounded: the continual_io_error check
++			 * above trips surprise-removed if this repeats. */
+ 			rtw_rxdbg_comp(RTW_RXDBG_C_OTHER, precvbuf->pskb, precvbuf);
++			rtw_read_port(padapter, precvpriv->ff_hwaddr, 0, (unsigned char *)precvbuf);
+ 			break;
+ 		}
+ 	}

@@ -26,6 +26,7 @@ Realtek RTL8821CU vendor 驱动上游差异的**唯一真值源**（submodule �
 | `0005-rtos-cmdxmitframe-memset-clamp.patch` | 限制对齐后 cmd xmitbuf 的清零长度，避免覆写相邻 URB（W4 板证）。 |
 | `0006-rtos-rx-lifecycle-and-w7-logs.patch` | 物化 W4/W5 的 RX 生命周期修复与计数探针、W7 的 RF FAIL 日志等级和默认降噪；从当前板证工作树相对 0001-0005 的差异生成。 |
 | `0007-rtos-rx-last-timestamps.patch` | 手动状态读出最近 vendor 完成、成功完成、解析帧、指示帧的 tick；修复 WARNING 档吞掉手动 RXDBG 状态行，并将超长状态拆为两行以免串口截断。无后台轮询或自动恢复。 |
+| `0008-rtos-rx-rearm-unknown-status.patch` | **[W11-C2] completion default 分支补重装**：未知 urb status（本栈实为 `-ETIMEDOUT/-ENOMEM/-EIO`，`lkpi_usb_errno` 对 cherryusb errorcode 的兜底映射）原样只计数不回收不重装 → 每次发生永久少一支 bulk-IN recvbuf，8 支耗尽 = "整条 RX 含完成一起冻结"停摆形态（issues/2026-10-03-rtl8821cu-rx-queue-stall.md 形态②）。修复 = 与 `-EPROTO` 族同款 `rtw_read_port` 重装；既有 continual_io_error 看护（switch 之前对一切错误 status 生效）兜底持续重装失败 → surprise removed。`-EINPROGRESS` 在本栈无写入点（死分支），不动。 |
 
 > W0-L 兼容 patch（751 行）的其余条目**不搬运**：断层按「linuxkpi 头面补优先」
 > 落进 components/linuxkpi 增量档（B1-B8，见 [S6] §3.4 附表与
@@ -42,7 +43,7 @@ git -C third-party/rtl8821cu apply --check "$PWD/patches/rtl8821cu/<p>.patch" \
   && git -C third-party/rtl8821cu apply "$PWD/patches/rtl8821cu/<p>.patch"
 ```
 
-物化态（应用后的工作树）**不入 submodule 提交**；当前 0001-0007
+物化态（应用后的工作树）**不入 submodule 提交**；当前 0001-0008
 应重放出与 `third-party/rtl8821cu/` 工作树逐字节相同的差异。
 重放幂等两连验（apply → stat 逐字节同 → checkout 复原）。
 
