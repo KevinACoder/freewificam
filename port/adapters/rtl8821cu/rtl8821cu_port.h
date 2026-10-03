@@ -52,4 +52,14 @@ void rtl8821cu_wpa_event(int event, const unsigned char *addr,
 unsigned long rtl8821cu_wpa_rx_counters(unsigned long *eapol,
 					unsigned long *data_drop);
 
+/* W5 (S5a data plane, CONFIG_WLAN_NETIF builds): the lwIP netif bridge
+ * (wlan8821_netif.c).  ASSOC/DISASSOC drive netif up/down + DHCP via
+ * tcpip_callback; the RX sink hands non-EAPOL frames to _input. */
+void rtl8821cu_wlan_netif_on_assoc(void);
+void rtl8821cu_wlan_netif_on_disassoc(void);
+struct sk_buff;
+int rtl8821cu_wlan_netif_input(struct sk_buff *skb);
+void rtl8821cu_wlan_netif_stats(unsigned long *rx_fed, unsigned long *rx_drop,
+				unsigned long *tx_frames, unsigned long *tx_err);
+
 #endif /* RTL8821CU_PORT_H */

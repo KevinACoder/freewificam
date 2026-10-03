@@ -569,6 +569,20 @@ RTL8821CU_WPA_BACKEND_SRCS := \
 RTL8821CU_WPA_ADAPTER_CFLAGS := -DCONFIG_NIC_WPA_BACKEND=1 -Ios/wpa_supplicant
 endif
 
+# W5 (S5a data plane): the lwip netif bridge over the vendor driver. The
+# key requires the lwip stack in the image; the bridge compiles against the
+# lwip includes directly (the LWIP block owns them, this block only needs
+# the headers).
+CONFIG_WLAN_NETIF ?= n
+ifeq ($(CONFIG_WLAN_NETIF),y)
+ifeq ($(filter y,$(CONFIG_LWIP)),)
+$(error CONFIG_WLAN_NETIF=y requires CONFIG_LWIP=y)
+endif
+RTL8821CU_WPA_BACKEND_SRCS += port/adapters/rtl8821cu/wlan8821_netif.c
+RTL8821CU_WPA_ADAPTER_CFLAGS += -DCONFIG_WLAN_NETIF=1 \
+	-Ios/lwip/include -Ithird-party/lwip/src/include
+endif
+
 RTL8821CU_ADAPTER_SRCS := \
 	port/adapters/rtl8821cu/drv_entry.c \
 	port/adapters/rtl8821cu/wlan8821_cmds.c \
@@ -619,9 +633,12 @@ $(BUILD)/port/adapters/rtl8821cu/%.o: \
 # (last pattern match wins in GNU make) - CSH_CFLAGS (which carries
 # -DCONFIG_SHELL=1) MUST ride along or app/wlan8821/main.c's shellboot
 # #ifdef compiles out and the shell silently never starts (W2 board round).
+# Recursive assignment on purpose: LWIP_WLAN_APP_CFLAGS is defined in the
+# lwip block below and a target-specific := would snapshot it empty here.
 $(BUILD)/app/wlan8821/%.o: \
-	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
-		-Iport/adapters/rtl8821cu -DCONFIG_NIC_RTL8821CU=1
+	EXTRAFLAGS = $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
+		-Iport/adapters/rtl8821cu -DCONFIG_NIC_RTL8821CU=1 \
+		$(LWIP_WLAN_APP_CFLAGS)
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
@@ -640,9 +657,16 @@ endif
 ifeq ($(CONFIG_LWIP),y)
 # GMAC port single choice (FR-9/KI-027): build-time, the other port never
 # gets a clock or a register write. Values: 0 = gmac0, 1 = gmac1.
-CONFIG_GMAC_PORT ?= 1
+# W5: EMPTY means no GMAC at all - the wlan-only image (lwip-wlan.config,
+# the KI-027 single-NIC form: wireless is the only netif in the product).
+CONFIG_GMAC_PORT ?=
+ifeq ($(CONFIG_GMAC_PORT),)
+CONFIG_LWIP_GMAC := n
+else
+CONFIG_LWIP_GMAC := y
 ifeq ($(filter $(CONFIG_GMAC_PORT),0 1),)
-$(error CONFIG_GMAC_PORT must be 0 or 1, got '$(CONFIG_GMAC_PORT)')
+$(error CONFIG_GMAC_PORT must be 0, 1 or empty, got '$(CONFIG_GMAC_PORT)')
+endif
 endif
 
 # GMAC RX data-path factors (N7 R3, one A/B key each - override on the make
@@ -698,10 +722,14 @@ LWIP_DIR := third-party/lwip
 # GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +
 # RTL8211F PHY + RK3568 glue/board table, re-arranged onto gicv3/cache/log.
 # The unselected port (CONFIG_GMAC_PORT) is data-only - never initialized.
+# W5: the whole trio + its ethnetif bridge exist only in a GMAC build; the
+# wlan-only image (empty CONFIG_GMAC_PORT) carries none of them.
+ifeq ($(CONFIG_LWIP_GMAC),y)
 SRCS += \
 	board/$(BOARD)/drivers/dwc_eqos.c \
 	board/$(BOARD)/drivers/rtl8211f.c \
 	board/$(BOARD)/drivers/eqos_rk3568.c
+endif
 LWIP_SRCS := \
 	$(LWIP_DIR)/src/core/def.c \
 	$(LWIP_DIR)/src/core/inet_chksum.c \
@@ -737,13 +765,21 @@ LWIP_SRCS := \
 	$(LWIP_DIR)/src/api/tcpip.c \
 	$(LWIP_DIR)/src/netif/ethernet.c \
 	$(LWIP_DIR)/src/apps/lwiperf/lwiperf.c \
-	os/lwip/ethnetif.c \
 	os/lwip/cmsis/sys_arch.c \
 	os/lwip/lwip_diag.c
+ifeq ($(CONFIG_LWIP_GMAC),y)
+LWIP_SRCS += os/lwip/ethnetif.c
+endif
 SRCS += $(LWIP_SRCS)
 
-LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include \
-	-DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
+LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include
+ifeq ($(CONFIG_LWIP_GMAC),y)
+LWIP_CFLAGS += -DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
+endif
+# the wlan app main arms tcpip_init when the stack is in the image (see
+# $(BUILD)/app/wlan8821/%.o in the rtl8821cu block - recursive there)
+LWIP_WLAN_APP_CFLAGS = -DCONFIG_LWIP=1 -Ios/lwip/include \
+	-I$(LWIP_DIR)/src/include
 $(BUILD)/third-party/lwip/%.o: EXTRAFLAGS := -w $(LWIP_CFLAGS)
 $(BUILD)/os/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
 # Recursive assignment on purpose: APP_AUTORUN_CFLAGS is defined later in

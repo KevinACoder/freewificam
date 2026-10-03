@@ -39,6 +39,20 @@
 extern int wlan8821_register(void);
 #endif
 
+#ifdef CONFIG_LWIP
+#include "lwip/init.h"
+#include "lwip/tcpip.h"
+#endif
+
+#ifndef CONFIG_CPU_BOOST_MHZ
+#define CONFIG_CPU_BOOST_MHZ 0
+#endif
+/* N7 R5a board-proven chain: raises the cluster off the bootloader's
+ * 816 MHz (voltage over i2c0 first, then APLL relock); probe-only at 0.
+ * W6: the iperf data plane needs the headroom - at 816 MHz the vendor's
+ * DYNAMIC_CHK command alone costs 1.5-3.1 s per pass under load. */
+extern int rk3568_cpu_boost(unsigned int mhz);
+
 #ifdef CONFIG_SHELL
 /*
  * The shell boot task: verbatim from app/cherryusb_enum/main.c (S4 §3.3.2
@@ -71,6 +85,15 @@ static void thr_usbboot(void *arg)
 	(void)arg;
 
 	(void)osDelay(500U);
+#ifdef CONFIG_LWIP
+	/* W5: the wlan netif bridge lives in the tcpip thread (netif_add /
+	 * dhcp via tcpip_callback from the ASSOC indication, much later).
+	 * Init before the driver so the first indication can never land on
+	 * an uninitialized stack. */
+	tcpip_init(NULL, NULL);
+	board_log("lwip: v%s init NO_SYS=%d (wlan netif bridge armed)\n",
+		  LWIP_VERSION_STRING, (int)NO_SYS);
+#endif
 	board_log("usb: platform start\n");
 #ifdef CONFIG_NIC_RTL8821CU
 	if (wlan8821_register() != 0) {
@@ -91,6 +114,9 @@ int main(void)
 {
 	uart_early_init();
 	gicv3_init();
+
+	/* W6: CPU boost before any thread exists (the lwip_lan-proven slot) */
+	(void)rk3568_cpu_boost(CONFIG_CPU_BOOST_MHZ);
 
 	(void)osKernelInitialize();
 

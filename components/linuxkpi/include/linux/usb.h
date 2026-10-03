@@ -379,6 +379,11 @@ struct urb {
 	/* synchronous control paths wait here */
 	struct completion	_done;
 	bool			_sync;
+	/* [W6] RX stall recovery: set by the KPI watchdog just before it
+	 * kills a wedged bulk-IN TD, so the kill's completion reports
+	 * -ETIME (a status the vendor re-arms on) instead of the fatal
+	 * -ENODEV the generic kill mapping would produce */
+	bool			_stall_recover;
 };
 
 struct urb *usb_alloc_urb(int iso_packets, gfp_t mem_flags);

@@ -314,8 +314,16 @@ vp_set_key(const struct wpa_vendor_key *k)
 	ndis_key.KeyIndex = (ULONG)k->key_idx;
 	if (k->set_tx)
 		ndis_key.KeyIndex |= 0x80000000UL;
-	if (k->addr != NULL && (k->addr[0] & 0x01) == 0)
+	if (k->addr != NULL && (k->addr[0] & 0x01) == 0) {
+		/* unicast addr = pairwise key.  The NDIS convention
+		 * rtw_set_802_11_add_key keys on is bit 30 (the function
+		 * only reaches its pairwise/UNICAST_KEY branch with it
+		 * set; without it a key_idx 0 install hits the group
+		 * path's "(KeyIndex & 0x3) == 0 -> _FAIL" - the board's
+		 * "Failed to set PTK to the driver" after M4). */
 		memcpy(&ndis_key.BSSID, k->addr, 6);
+		ndis_key.KeyIndex |= 0x40000000UL;
+	}
 	if (k->key != NULL && k->key_len <= sizeof(ndis_key.KeyMaterial)) {
 		ndis_key.KeyLength = (ULONG)k->key_len;
 		memcpy(ndis_key.KeyMaterial, k->key, k->key_len);
@@ -325,7 +333,29 @@ vp_set_key(const struct wpa_vendor_key *k)
 		pn = (pn << 8) | k->seq[i];
 	memcpy(&ndis_key.KeyRSC, &pn, sizeof(pn));
 
-	return (rtw_set_802_11_add_key(a, &ndis_key) == _SUCCESS) ? 0 : -1;
+	if (rtw_set_802_11_add_key(a, &ndis_key) != _SUCCESS)
+		return -1;
+
+	/* 802.1X port control: the station-mode join marked the peer (and the
+	 * bcmc entry) ieee8021x_blocked, and portctrl() drops every non-EAPOL
+	 * RX frame while that holds - the Linux STA set_encryption clears both
+	 * at each key install (ioctl_cfg80211.c:1219/1296, "don't disable
+	 * ... while clearing key").  Without this the 4-way completes but
+	 * DHCP/ARP never reach the stack (board 2026-10-03: rx_fed=0 while
+	 * tx=5 DISCOVERs went out). */
+	if (k->alg != WPA_VENDOR_ALG_NONE) {
+		struct sta_info *psta = NULL, *pbcmc;
+		u8 *bssid = get_bssid(&a->mlmepriv);
+
+		if (bssid != NULL)
+			psta = rtw_get_stainfo(&a->stapriv, bssid);
+		if (psta != NULL)
+			psta->ieee8021x_blocked = _FALSE;
+		pbcmc = rtw_get_bcmc_stainfo(a);
+		if (pbcmc != NULL)
+			pbcmc->ieee8021x_blocked = _FALSE;
+	}
+	return 0;
 }
 
 static int
@@ -420,18 +450,27 @@ rtl8821cu_wpa_rx_sink(struct sk_buff *skb)
 		    skb->data[12] == (uint8_t)(RTL_WPA_ETHERTYPE_EAPOL >> 8) &&
 		    skb->data[13] ==
 			(uint8_t)(RTL_WPA_ETHERTYPE_EAPOL & 0xff)) {
-		/* the 4-way EAPOL comes from the associated AP; the src
-		 * the event queue deep-copies ([S7a] FR-7) is read off
-		 * the restored header.  Driver/USB worker context: the
-		 * pump only queues. */
-		rtl8821cu_wpa_event(WPA_VENDOR_EVENT_EAPOL_RX,
-				    skb->data + 6, skb->data + 14,
-				    skb->len - 14);
+			/* the 4-way EAPOL comes from the associated AP; the src
+			 * the event queue deep-copies ([S7a] FR-7) is read off
+			 * the restored header.  Driver/USB worker context: the
+			 * pump only queues. */
+			rtl8821cu_wpa_event(WPA_VENDOR_EVENT_EAPOL_RX,
+					    skb->data + 6, skb->data + 14,
+					    skb->len - 14);
 			rtl8821cu_wpa_eapol_rx++;
 			kfree_skb(skb);
 			return 0; /* NET_RX_SUCCESS (consumed) */
 		}
 	}
+#ifdef CONFIG_WLAN_NETIF
+	/* non-EAPOL: the lwip bridge takes it (its own copy into a pbuf) or
+	 * declines (its counter accounts the drop).  The vendor's own
+	 * validate_recv_data_frame already filtered addressing before this
+	 * sink (STA mode: to-us or multicast only), so no second filter. */
+	if (rtl8821cu_wlan_netif_input(skb) == 0) {
+		return 0; /* consumed by the lwip bridge */
+	}
+#endif
 	rtl8821cu_wpa_data_drop++;
 	kfree_skb(skb);
 	return 1; /* NET_RX_DROP (counted) */

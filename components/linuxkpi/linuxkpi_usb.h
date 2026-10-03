@@ -31,6 +31,10 @@ void		usbkpi_rxhold_set(bool on);
 bool		usbkpi_rxhold(void);
 /* R-LK3 wedge forensics: call from a live shell after the 60s timeout */
 void		usbkpi_wedge_report(void);
+/* [W6] RX stall watchdog: counters + per-ep busy age; and the manual
+ * trigger of the same kill/re-arm recovery the watchdog runs */
+void		usbkpi_rx_report(void);
+void		lkpi_usb_rx_kick(void);
 unsigned int	usbkpi_get_records(struct usbkpi_record *out, unsigned int n,
 				    unsigned int skip);
 unsigned long long usbkpi_sequence(void);

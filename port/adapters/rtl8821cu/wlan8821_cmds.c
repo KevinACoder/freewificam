@@ -72,6 +72,30 @@ static void wlan8821_status(int argc, char *argv[])
 			   eapol, drop);
 	}
 #endif
+#ifdef CONFIG_WLAN_NETIF
+	{
+		unsigned long fed = 0, drop = 0, txf = 0, txe = 0;
+
+		rtl8821cu_wlan_netif_stats(&fed, &drop, &txf, &txe);
+		csh_printf(csh, "rtl8821cu: lwip rx_fed=%lu rx_drop=%lu "
+			   "tx=%lu tx_err=%lu\n", fed, drop, txf, txe);
+	}
+#endif
+	/* [W6 probe, command-face readout] vendor RX-path counter line */
+	{
+		extern void rtw_rxdbg_dump(void);
+
+		rtw_rxdbg_dump();
+		/* the lifecycle watermarks: vendor-side in-flight urbs, the
+		 * completed-skbs queue (tasklet lag) and the free pool sizes */
+		csh_printf(csh, "rtl8821cu: rxlife pend=%d rxq=%u freeq=%u "
+			   "freebuf=%u\n",
+			   ATOMIC_READ(&a->recvpriv.rx_pending_cnt),
+			   (unsigned)skb_queue_len(&a->recvpriv.rx_skb_queue),
+			   (unsigned)skb_queue_len(
+				   &a->recvpriv.free_recv_skb_queue),
+			   (unsigned)a->recvpriv.free_recv_buf_queue_cnt);
+	}
 }
 
 static int cmd_wlan8821(int argc, char *argv[])
@@ -117,10 +141,14 @@ static int cmd_wlan8821(int argc, char *argv[])
 		(void)rtl8821cu_scan_dump();
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss|register]\n");
+	if (strcmp(argv[1], "status") == 0) {
+		wlan8821_status(argc, argv);
+		return 0;
+	}
+	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss|status|register]\n");
 	return -1;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8821, wlan8821,
-			  "wlan8821 [up|down|scan|bss|register]",
+			  "wlan8821 [up|down|scan|bss|status|register]",
 			  "drive the rtl8821cu vendor driver (attach/up/scan)");

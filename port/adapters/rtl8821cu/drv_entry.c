@@ -26,6 +26,15 @@
 
 #include "rtl8821cu_port.h"
 
+/* the vendor's power-save knobs (include/rtw_pwrctrl.h: PS_MODE_ACTIVE /
+ * IPS_NONE).  KI-027: the board's Linux baseline only reaches usable TCP
+ * throughput with rtw_power_mgnt=0 / rtw_lps_level=0 / rtw_ips_mode=0 -
+ * default LPS/IPS leaves the stream in sub-Mbit bursts; the RTOS build
+ * carries CONFIG_POWER_SAVING (PS_MODE_MAX + IPS_NORMAL defaults), so the
+ * same two requests are issued right after ndo_open. */
+extern int rtw_pm_set_lps(_adapter *padapter, u8 mode);
+extern int rtw_pm_set_ips(_adapter *padapter, u8 mode);
+
 /* the [W1-0002] export shells (os_dep/linux/usb_intf.c) and the mem
  * seeding (core/rtw_mem.c; module_init territory on Linux) */
 extern int rtl8821cu_rtos_init(void);
@@ -107,6 +116,7 @@ rtl8821cu_up(void)
 {
 	_adapter *a = rtl8821cu_adapter;
 	struct net_device *ndev;
+	int r;
 
 	if (a == NULL) {
 		printf("rtl8821cu: not attached\n");
@@ -117,7 +127,17 @@ rtl8821cu_up(void)
 	    ndev->netdev_ops->ndo_open == NULL) {
 		return -1;
 	}
-	return ndev->netdev_ops->ndo_open(ndev);
+	r = ndev->netdev_ops->ndo_open(ndev);
+	if (r == 0) {
+		/* KI-027 power-save off (see the externs above): LPS idle
+		 * 2s + IPS re-arms cost ~0.6s per wake and collapse TCP
+		 * into sub-Mbit bursts (board 2026-10-03 iperf: 32M/0.5M
+		 * alternating seconds). */
+		(void)rtw_pm_set_lps(a, 0 /* PS_MODE_ACTIVE */);
+		(void)rtw_pm_set_ips(a, 0 /* IPS_NONE */);
+		printf("rtl8821cu: lps off, ips off (KI-027)\n");
+	}
+	return r;
 }
 
 int

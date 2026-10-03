@@ -32,6 +32,9 @@ rtw_indicate_wx_assoc_event(_adapter *padapter)
 			    padapter->mlmepriv.cur_network.network.MacAddress,
 			    NULL, 0);
 #endif
+#ifdef CONFIG_WLAN_NETIF
+	rtl8821cu_wlan_netif_on_assoc();
+#endif
 }
 
 void
@@ -42,6 +45,9 @@ rtw_indicate_wx_disassoc_event(_adapter *padapter)
 	printf("rtl8821cu: disassociated\n");
 #ifdef CONFIG_NIC_WPA_BACKEND
 	rtl8821cu_wpa_event(3 /* WPA_VENDOR_EVENT_DISASSOC */, NULL, NULL, 0);
+#endif
+#ifdef CONFIG_WLAN_NETIF
+	rtl8821cu_wlan_netif_on_disassoc();
 #endif
 }
 

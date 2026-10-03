@@ -1569,8 +1569,16 @@ skb_end_pointer(const struct sk_buff *skb)
 static __always_inline __unused void
 skb_set_tail_pointer(struct sk_buff *skb, unsigned int offset)
 {
-	skb->tail = offset;
-	skb->data = skb->head + offset;
+	/* Linux contract: set the tail RELATIVE TO data, leave data alone
+	 * (skb->tail = skb->data + offset in kernel pointer terms; the KPI
+	 * stores tail as a head-relative offset).  The earlier shape here
+	 * also moved skb->data to head + offset and cost the rtl8821cu RX
+	 * line its payload: the vendor's delivery path calls this with
+	 * precv_frame->u.hdr.len right after setting skb->data = rx_data,
+	 * so data teleported len bytes past the frame (board 2026-10-03:
+	 * EAPOL msg1 arrived, sink read head+127 = zero region, 4-way
+	 * never started). */
+	skb->tail = (unsigned int)(skb->data - skb->head) + offset;
 }
 
 static __always_inline __unused void
