@@ -1,0 +1,85 @@
+diff --git a/include/rtw_rxdbg.h b/include/rtw_rxdbg.h
+index b37efac..e8bee90 100644
+--- a/include/rtw_rxdbg.h
++++ b/include/rtw_rxdbg.h
+@@ -24,6 +24,10 @@ void rtw_rxdbg_dump(void);
+ extern unsigned int rtw_rxdbg_fq_direct_free;
+ extern unsigned int rtw_rxdbg_frames;
+ extern unsigned int rtw_rxdbg_eapol;
++extern unsigned int rtw_rxdbg_last_comp_ms;
++extern unsigned int rtw_rxdbg_last_ok_ms;
++extern unsigned int rtw_rxdbg_last_frame_ms;
++extern unsigned int rtw_rxdbg_last_ind_ms;
+ 
+ #define RTW_RXDBG_RP_REUSE	1
+ #define RTW_RXDBG_RP_ALLOC	2
+diff --git a/os_dep/linux/recv_linux.c b/os_dep/linux/recv_linux.c
+index 73d9c4d..eb11d36 100644
+--- a/os_dep/linux/recv_linux.c
++++ b/os_dep/linux/recv_linux.c
+@@ -896,6 +896,8 @@ unsigned int	rtw_rxdbg_t_runs, rtw_rxdbg_t_skbs, rtw_rxdbg_t_rxqmax,
+ 		rtw_rxdbg_t_pendmax;
+ unsigned int	rtw_rxdbg_t_freeqmin = 0xffffffffu;
+ unsigned int	rtw_rxdbg_fqin_cnt, rtw_rxdbg_fq_direct_free;
++unsigned int	rtw_rxdbg_last_comp_ms, rtw_rxdbg_last_ok_ms;
++unsigned int	rtw_rxdbg_last_frame_ms, rtw_rxdbg_last_ind_ms;
+ 
+ void
+ rtw_rxdbg_frame(struct rx_pkt_attrib *a, u8 *pbuf, s32 tl, int it)
+@@ -904,7 +906,10 @@ rtw_rxdbg_frame(struct rx_pkt_attrib *a, u8 *pbuf, s32 tl, int it)
+ 
+ 	(void)tl;
+ 	if (it == 0)
++	{
+ 		rtw_rxdbg_frames++;
++		rtw_rxdbg_last_frame_ms = (u32)jiffies;
++	}
+ 	else
+ 		rtw_rxdbg_loop_extra++;
+ 
+@@ -960,6 +965,7 @@ rtw_rxdbg_ind(union recv_frame *prf, void *skb)
+ {
+ 	(void)prf;
+ 	(void)skb;
++	rtw_rxdbg_last_ind_ms = (u32)jiffies;
+ }
+ 
+ void
+@@ -986,9 +992,11 @@ rtw_rxdbg_comp(int kind, void *pskb, void *precvbuf)
+ {
+ 	(void)pskb;
+ 	(void)precvbuf;
++	rtw_rxdbg_last_comp_ms = (u32)jiffies;
+ 	switch (kind) {
+ 	case RTW_RXDBG_C_OK:
+ 		rtw_rxdbg_c_ok++;
++		rtw_rxdbg_last_ok_ms = rtw_rxdbg_last_comp_ms;
+ 		break;
+ 	case RTW_RXDBG_C_CANNOT:
+ 		rtw_rxdbg_c_cannot++;
+@@ -1035,18 +1043,21 @@ rtw_rxdbg_tasklet(int nskb, int rxq_len, int freeq_len, int pendq_len)
+ 	rtw_rxdbg_t_runs++;
+ }
+ 
+-/* single-line readout - command face only, never periodic */
++/* command-face readout only, never periodic */
+ void
+ rtw_rxdbg_dump(void)
+ {
+-	RTW_INFO("RXDBG DUMP fr=%u data=%u eapol=%u loop_extra=%u | rp reuse=%u alloc=%u fail=%u | comp ok=%u can=%u stop=%u rearm=%u other=%u subfail=%u badlen=%u | task runs=%u skbs=%u rxqmax=%u pendmax=%u freeqmin=%u fqin=%u fqfree=%u\n",
++	RTW_PRINT("RXDBG DUMP fr=%u data=%u eapol=%u loop_extra=%u | rp reuse=%u alloc=%u fail=%u | comp ok=%u can=%u stop=%u rearm=%u other=%u subfail=%u badlen=%u\n",
+ 		 rtw_rxdbg_frames, rtw_rxdbg_data, rtw_rxdbg_eapol,
+ 		 rtw_rxdbg_loop_extra,
+ 		 rtw_rxdbg_reuse, rtw_rxdbg_alloc_cnt, rtw_rxdbg_alloc_fail,
+ 		 rtw_rxdbg_c_ok, rtw_rxdbg_c_cannot, rtw_rxdbg_c_stop,
+ 		 rtw_rxdbg_c_rearm, rtw_rxdbg_c_other, rtw_rxdbg_c_subfail,
+-		 rtw_rxdbg_c_badlen,
++		 rtw_rxdbg_c_badlen);
++	RTW_PRINT("RXDBG TASK runs=%u skbs=%u rxqmax=%u pendmax=%u freeqmin=%u fqin=%u fqfree=%u | last comp=%u ok=%u frame=%u ind=%u ms\n",
+ 		 rtw_rxdbg_t_runs, rtw_rxdbg_t_skbs, rtw_rxdbg_t_rxqmax,
+ 		 rtw_rxdbg_t_pendmax, rtw_rxdbg_t_freeqmin,
+-		 rtw_rxdbg_fqin_cnt, rtw_rxdbg_fq_direct_free);
++		 rtw_rxdbg_fqin_cnt, rtw_rxdbg_fq_direct_free,
++		 rtw_rxdbg_last_comp_ms, rtw_rxdbg_last_ok_ms,
++		 rtw_rxdbg_last_frame_ms, rtw_rxdbg_last_ind_ms);
+ }

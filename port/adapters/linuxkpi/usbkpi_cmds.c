@@ -6,6 +6,7 @@
  *   usbkpi on|off        arm/disarm the urb capture ring
  *   usbkpi on ctrl|bulk  arm with a capture filter (the types the diff wants)
  *   usbkpi status        sequence counter + capture state
+ *   usbkpi rxq           bulk-IN single-flight queue state
  *   usbkpi trace on|off  per-transfer console narrative (bring-up only:
  *                        saturates the UART, distorts timing)
  *   usbkpi dump [n]      the last n records (ep/dir/type/phase/status/
@@ -103,7 +104,7 @@ static int usbkpi_cmd(int argc, char *argv[])
 	static struct usbkpi_record recs[32];
 
 	if (argc < 2) {
-		csh_printf(csh, "usage: usbkpi on|off|status|trace on|dump "
+		csh_printf(csh, "usage: usbkpi on|off|status|rxq|trace on|dump "
 		    "[n] [skip]|rxhold on|off|wedge|rawbulk|sync on|off\n");
 		return 0;
 	}
@@ -140,6 +141,10 @@ static int usbkpi_cmd(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "wedge") == 0) {
 		usbkpi_wedge_report();
+		return 0;
+	}
+	if (strcmp(argv[1], "rxq") == 0) {
+		usbkpi_rxq_report();
 		return 0;
 	}
 	if (strcmp(argv[1], "peek") == 0) {
@@ -354,7 +359,7 @@ static int usbkpi_cmd(int argc, char *argv[])
 		return 0;
 	}
 
-	csh_printf(csh, "usage: usbkpi on|off|status|trace on|dump [n] [skip]"
+	csh_printf(csh, "usage: usbkpi on|off|status|rxq|trace on|dump [n] [skip]"
 	    "|rxhold on|off|wedge|rawbulk|sync on|off\n");
 	return 0;
 }

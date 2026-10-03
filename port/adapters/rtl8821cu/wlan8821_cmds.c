@@ -28,6 +28,7 @@
 #include "drv_types.h"
 #include "hal_data.h"
 #include "rtl8821cu_port.h"
+#include "usb_ops_linux.h"
 
 /* drv_entry.c */
 extern void *rtl8821cu_get_adapter(void);
@@ -57,8 +58,9 @@ static void wlan8821_status(int argc, char *argv[])
 	}
 
 	rx_frames = rtl8821cu_rx_stats(&rx_bytes);
-	csh_printf(csh, "rtl8821cu: attached, drv_stopped=%s "
+	csh_printf(csh, "rtl8821cu: tick=%lu attached, drv_stopped=%s "
 		   "surprise_removed=%s hw_init=%d rx=%lu/%luB\n",
+		   (unsigned long)jiffies,
 		   rtw_is_drv_stopped(a) ? "yes" : "no",
 		   rtw_is_surprise_removed(a) ? "yes" : "no",
 		   (int)rtw_get_hw_init_completed(a),
@@ -78,7 +80,8 @@ static void wlan8821_status(int argc, char *argv[])
 
 		rtl8821cu_wlan_netif_stats(&fed, &drop, &txf, &txe);
 		csh_printf(csh, "rtl8821cu: lwip rx_fed=%lu rx_drop=%lu "
-			   "tx=%lu tx_err=%lu\n", fed, drop, txf, txe);
+			   "last_rx_ms=%lu tx=%lu tx_err=%lu\n", fed, drop,
+			   rtl8821cu_wlan_netif_last_rx_ms(), txf, txe);
 	}
 #endif
 	/* [W6 probe, command-face readout] vendor RX-path counter line */
@@ -86,6 +89,7 @@ static void wlan8821_status(int argc, char *argv[])
 		extern void rtw_rxdbg_dump(void);
 
 		rtw_rxdbg_dump();
+		lkpi_tasklet_report(&a->recvpriv.recv_tasklet);
 		/* the lifecycle watermarks: vendor-side in-flight urbs, the
 		 * completed-skbs queue (tasklet lag) and the free pool sizes */
 		csh_printf(csh, "rtl8821cu: rxlife pend=%d rxq=%u freeq=%u "
@@ -96,6 +100,51 @@ static void wlan8821_status(int argc, char *argv[])
 				   &a->recvpriv.free_recv_skb_queue),
 			   (unsigned)a->recvpriv.free_recv_buf_queue_cnt);
 	}
+}
+
+static int wlan8821_regcheck(chry_shell_t *csh)
+{
+	_adapter *a = rtl8821cu_get_adapter();
+	u32 mac = 0;
+	u32 fw = 0;
+	u32 rf_power = 0;
+	u32 hmetfr = 0;
+	u32 rf18, rf42;
+	int mac_ret, fw_ret, rf_power_ret, hmetfr_ret;
+
+	if (a == NULL) {
+		csh_printf(csh, "rtl8821cu: regcheck requires attach\n");
+		return 1;
+	}
+
+	/* Keep the raw EP0 result: usb_read8() discards its transfer status. */
+	mac_ret = usbctrl_vendorreq(&a->iopriv.intf, 0x05, REG_SYS_FUNC_EN,
+				 0, &mac, 1, 0x01);
+	fw_ret = usbctrl_vendorreq(&a->iopriv.intf, 0x05, REG_MCUFW_CTRL_8821C,
+				0, &fw, 1, 0x01);
+	/* PHYDM refuses every RF access unless MAC 0x1c[31:24] is 0x07. */
+	rf_power_ret = usbctrl_vendorreq(&a->iopriv.intf, 0x05, 0x1c,
+					  0, &rf_power, 4, 0x01);
+	hmetfr_ret = usbctrl_vendorreq(&a->iopriv.intf, 0x05, REG_HMETFR,
+					0, &hmetfr, 1, 0x01);
+	csh_printf(csh, "rtl8821cu: regcheck ep0 sys=0x%02x ret=%d "
+		   "fw=0x%02x ret=%d rf_power=0x%08x ret=%d gate=%s "
+		   "hmetfr=0x%02x ret=%d\n",
+		   mac & 0xffu, mac_ret, fw & 0xffu, fw_ret,
+		   rf_power, rf_power_ret,
+		   rf_power_ret == 4 && (rf_power >> 24) == 0x07u ?
+		   "on" : "off/unknown", hmetfr & 0xffu, hmetfr_ret);
+	if (mac_ret != 1 || fw_ret != 1 || rf_power_ret != 4 ||
+	    hmetfr_ret != 1)
+		return 1;
+
+	rf18 = rtw_hal_read_rfreg(a, 0, 0x18, 0xfffff);
+	rf42 = rtw_hal_read_rfreg(a, 0, 0x42, 0xfffff);
+	csh_printf(csh, "rtl8821cu: regcheck rf18=0x%08x %s "
+		   "rf42=0x%08x %s\n", rf18,
+		   rf18 != 0xffffffffu ? "valid" : "FAIL", rf42,
+		   rf42 != 0xffffffffu ? "valid" : "FAIL");
+	return rf18 == 0xffffffffu || rf42 == 0xffffffffu;
 }
 
 static int cmd_wlan8821(int argc, char *argv[])
@@ -145,6 +194,8 @@ static int cmd_wlan8821(int argc, char *argv[])
 		wlan8821_status(argc, argv);
 		return 0;
 	}
+	if (strcmp(argv[1], "regcheck") == 0)
+		return wlan8821_regcheck(csh);
 	if (strcmp(argv[1], "dbg") == 0) {
 		/* [W7 print-clean] the vendor log level is WARNING by default;
 		 * this is the runtime escape hatch for a debug round
@@ -168,10 +219,10 @@ static int cmd_wlan8821(int argc, char *argv[])
 			   rtw_drv_log_level);
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss|status|register|dbg <1-10>]\n");
+	csh_printf(csh, "usage: wlan8821 [up|down|scan|bss|status|regcheck|register|dbg <1-10>]\n");
 	return -1;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8821, wlan8821,
-			  "wlan8821 [up|down|scan|bss|status|register]",
+			  "wlan8821 [up|down|scan|bss|status|regcheck|register]",
 			  "drive the rtl8821cu vendor driver (attach/up/scan)");

@@ -697,6 +697,7 @@ lkpi_usb_drain_one(struct urb *urb)
 
 struct lkpi_rx_ep {
 	struct usb_endpoint_descriptor *ep;	/* key: the cherryusb endpoint */
+	u8		ep_addr;
 	bool		busy;		/* one urb of this ep is on the HC */
 	unsigned int	n;
 	struct urb	*q[LKPI_RX_EP_QLEN];
@@ -718,9 +719,50 @@ lkpi_rx_ep_find(struct usb_endpoint_descriptor *ep, bool alloc)
 		    !lkpi_rx_eps[i].busy && lkpi_rx_eps[i].n == 0)
 			slot = &lkpi_rx_eps[i];
 	}
-	if (alloc && slot != NULL)
+	if (alloc && slot != NULL) {
 		slot->ep = ep;
+		slot->ep_addr = ep->bEndpointAddress;
+	}
 	return slot;
+}
+
+void
+usbkpi_rxq_report(void)
+{
+	struct {
+		struct usb_endpoint_descriptor *ep;
+		struct urb *head;
+		unsigned int n;
+		u8 ep_addr;
+		bool busy;
+	} snapshot[LKPI_RX_EP_N];
+	unsigned int parked, i;
+
+	{
+		TX_INTERRUPT_SAVE_AREA
+
+		TX_DISABLE;
+		for (i = 0; i < LKPI_RX_EP_N; i++) {
+			snapshot[i].ep = lkpi_rx_eps[i].ep;
+			snapshot[i].head = lkpi_rx_eps[i].n != 0 ?
+			    lkpi_rx_eps[i].q[0] : NULL;
+			snapshot[i].n = lkpi_rx_eps[i].n;
+			snapshot[i].ep_addr = lkpi_rx_eps[i].ep_addr;
+			snapshot[i].busy = lkpi_rx_eps[i].busy;
+		}
+		parked = lkpi_rx_park_n;
+		TX_RESTORE;
+	}
+
+	lkpi_printf("usbkpi: rxq parked_total=%u\n", parked);
+	for (i = 0; i < LKPI_RX_EP_N; i++) {
+		if (snapshot[i].ep == NULL)
+			continue;
+		lkpi_printf("usbkpi: rxq ep%02x desc=%p busy=%u queued=%u head=%p\n",
+		    snapshot[i].ep_addr, (void *)snapshot[i].ep,
+		    snapshot[i].busy ? 1U : 0U, snapshot[i].n,
+		    (void *)snapshot[i].head);
+	}
 }
 
 /* completion of the in-flight urb (or a kill): re-issue the next parked */

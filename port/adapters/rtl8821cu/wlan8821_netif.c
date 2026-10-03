@@ -44,6 +44,7 @@ static int		g_wlan_added;
 static int		g_wlan_up;
 static unsigned long	g_wlan_rx_fed;
 static unsigned long	g_wlan_rx_drop;
+static unsigned long	g_wlan_last_rx_ms;
 static unsigned long	g_wlan_tx_frames;
 static unsigned long	g_wlan_tx_err;
 
@@ -199,6 +200,7 @@ rtl8821cu_wlan_netif_input(struct sk_buff *skb)
 		return -1;
 	}
 	g_wlan_rx_fed++;
+	g_wlan_last_rx_ms = jiffies;
 	kfree_skb(skb);
 	return 0;
 }
@@ -215,6 +217,12 @@ rtl8821cu_wlan_netif_stats(unsigned long *rx_fed, unsigned long *rx_drop,
 		*tx_frames = g_wlan_tx_frames;
 	if (tx_err != NULL)
 		*tx_err = g_wlan_tx_err;
+}
+
+unsigned long
+rtl8821cu_wlan_netif_last_rx_ms(void)
+{
+	return g_wlan_last_rx_ms;
 }
 
 #endif /* CONFIG_WLAN_NETIF */

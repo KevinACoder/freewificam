@@ -61,5 +61,6 @@ struct sk_buff;
 int rtl8821cu_wlan_netif_input(struct sk_buff *skb);
 void rtl8821cu_wlan_netif_stats(unsigned long *rx_fed, unsigned long *rx_drop,
 				unsigned long *tx_frames, unsigned long *tx_err);
+unsigned long rtl8821cu_wlan_netif_last_rx_ms(void);
 
 #endif /* RTL8821CU_PORT_H */

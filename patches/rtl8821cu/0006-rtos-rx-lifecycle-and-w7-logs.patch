@@ -1,0 +1,486 @@
+diff --git a/core/rtw_recv.c b/core/rtw_recv.c
+index ae7b9c4..7dc1cda 100755
+--- a/core/rtw_recv.c
++++ b/core/rtw_recv.c
+@@ -21,6 +21,7 @@
+ 
+ #include <drv_types.h>
+ #include <hal_data.h>
++#include <rtw_rxdbg.h>		/* [W4-fix probe] */
+ 
+ #if defined(PLATFORM_LINUX) && defined (PLATFORM_WINDOWS)
+ 
+@@ -2329,6 +2330,8 @@ sint wlanhdr_to_ethhdr(union recv_frame *precvframe)
+ 	u8	*ptr = get_recvframe_data(precvframe) ; /* point to frame_ctrl field */
+ 	struct rx_pkt_attrib *pattrib = &precvframe->u.hdr.attrib;
+ 
++	rtw_rxdbg_conv_in(precvframe);	/* [W4-fix probe] */
++
+ 
+ 	if (pattrib->encrypt)
+ 		recvframe_pull_tail(precvframe, pattrib->icv_len);
+@@ -2421,6 +2424,9 @@ sint wlanhdr_to_ethhdr(union recv_frame *precvframe)
+ 		}
+ 	}
+ 
++	rtw_rxdbg_conv_out(precvframe, rmv_len, bsnaphdr,
++			   rmv_len - (sint)sizeof(struct ethhdr) + (bsnaphdr ? 2 : 0));	/* [W4-fix probe] */
++
+ exiting:
+ 	return ret;
+ 
+diff --git a/hal/rtl8821c/rtl8821c_phy.c b/hal/rtl8821c/rtl8821c_phy.c
+index c94afb1..b4c488b 100644
+--- a/hal/rtl8821c/rtl8821c_phy.c
++++ b/hal/rtl8821c/rtl8821c_phy.c
+@@ -383,7 +383,10 @@ u32 rtl8821c_read_rf_reg(PADAPTER adapter, u8 path, u32 addr, u32 mask)
+ 
+ 	val = config_phydm_read_rf_reg_8821c(phydm, path, addr, mask);
+ 	if (!config_phydm_read_rf_check_8821c(val))
+-		RTW_INFO(FUNC_ADPT_FMT ": read RF reg path=%d addr=0x%x mask=0x%x FAIL!\n",
++		/* [W7 print-clean] ERR not INFO: this is the chip-wedge evidence
++		 * line (RF read-back mismatch after the RX-death incident) and
++		 * must survive the WARNING default log level */
++		RTW_ERR(FUNC_ADPT_FMT ": read RF reg path=%d addr=0x%x mask=0x%x FAIL!\n",
+ 			 FUNC_ADPT_ARG(adapter), path, addr, mask);
+ 	return val;
+ }
+@@ -400,7 +403,7 @@ void rtl8821c_write_rf_reg(PADAPTER adapter, u8 path, u32 addr, u32 mask, u32 va
+ 
+ 	ret = config_phydm_write_rf_reg_8821c(phydm, path, addr, mask, val);
+ 	if (_FALSE == ret)
+-		RTW_INFO(FUNC_ADPT_FMT ": write RF reg path=%d addr=0x%x mask=0x%x val=0x%x FAIL!\n",
++		RTW_ERR(FUNC_ADPT_FMT ": write RF reg path=%d addr=0x%x mask=0x%x val=0x%x FAIL!\n",
+ 			 FUNC_ADPT_ARG(adapter), path, addr, mask, val);
+ 
+ }
+diff --git a/hal/rtl8821c/usb/rtl8821cu_recv.c b/hal/rtl8821c/usb/rtl8821cu_recv.c
+index 02dba69..bd32d6e 100644
+--- a/hal/rtl8821c/usb/rtl8821cu_recv.c
++++ b/hal/rtl8821c/usb/rtl8821cu_recv.c
+@@ -23,6 +23,7 @@
+ #include <hal_data.h>			/* HAL_DATA_TYPE */
+ #include "../../hal_halmac.h"		/* RX desc */
+ #include "../rtl8821c.h"		/* rtl8821c_query_rx_desc, rtl8821c_c2h_handler_no_io() */
++#include <rtw_rxdbg.h>			/* [W4-fix probe] */
+ 
+ int rtl8821cu_init_recv_priv(PADAPTER padapter)
+ {
+@@ -55,6 +56,8 @@ static u8 recvbuf2recvframe_proccess_normal_rx
+ 	}
+ 
+ 	recvframe_put(precvframe, pattrib->pkt_len);
++	rtw_rxdbg_alloc(precvframe,
++		(pbuf + pattrib->shift_sz + pattrib->drvinfo_sz + RXDESC_SIZE), 1);	/* [W4-fix probe] */
+ 
+ 	if (pattrib->physt)
+ 		pphy_status = (pbuf + RXDESC_OFFSET);
+@@ -85,6 +88,7 @@ int recvbuf2recvframe(PADAPTER padapter, void *ptr)
+ 	struct recv_priv *precvpriv = &padapter->recvpriv;
+ 	_queue *pfree_recv_queue = &precvpriv->free_recv_queue;
+ 	_pkt *pskb;
++	int rxdbg_it = 0;		/* [W4-fix probe] */
+ 
+ #ifdef CONFIG_USE_USB_BUFFER_ALLOC_RX
+ 	pskb = NULL;
+@@ -117,6 +121,8 @@ int recvbuf2recvframe(PADAPTER padapter, void *ptr)
+ 
+ 		pattrib = &precvframe->u.hdr.attrib;
+ 
++		rtw_rxdbg_frame(pattrib, pbuf, transfer_len, rxdbg_it++);	/* [W4-fix probe] */
++
+ 		if ((padapter->registrypriv.mp_mode == 0) && ((pattrib->crc_err) || (pattrib->icv_err))) {
+ 			/* RTW_INFO("%s: RX Warning! crc_err=%d icv_err=%d, skip!\n", __func__, pattrib->crc_err, pattrib->icv_err); */
+ 			RTW_INFO("%s: RX Warning! crc_err=%d icv_err=%d, skip!\n", __func__, pattrib->crc_err, pattrib->icv_err);
+@@ -132,6 +138,7 @@ int recvbuf2recvframe(PADAPTER padapter, void *ptr)
+ 			/*	, __func__, __LINE__, pattrib->pkt_len, pkt_offset, transfer_len); */
+ 			RTW_INFO("%s()-%d: RX Warning!,pkt_len<=0(%d) or pkt_offset(%d)> transfer_len(%d)\n"
+ 				, __func__, __LINE__, pattrib->pkt_len, pkt_offset, transfer_len);
++			rtw_rxdbg_badoff(pattrib, pbuf, transfer_len);	/* [W4-fix probe] */
+ 			if (pkt_offset > transfer_len)
+ 				/* RTW_INFO("%s()-%d: RX Warning!,RXDESC_SIZE(%d), drvinfo_sz(%d), shift_sz(%d),pkt_len(%d)\n" */
+ 				/*	, __func__, __LINE__, RXDESC_SIZE, pattrib->drvinfo_sz, pattrib->shift_sz, pattrib->pkt_len); */
+diff --git a/include/rtw_rxdbg.h b/include/rtw_rxdbg.h
+new file mode 100644
+index 0000000..b37efac
+--- /dev/null
++++ b/include/rtw_rxdbg.h
+@@ -0,0 +1,39 @@
++/******************************************************************************
++ * [W4-fix probe] temporary RX-path instrumentation (remove before ship)
++ * SPDX-License-Identifier: GPL-2.0
++ ******************************************************************************/
++#ifndef _RTW_RXDBG_H_
++#define _RTW_RXDBG_H_
++
++#include <drv_types.h>
++
++void rtw_rxdbg_frame(struct rx_pkt_attrib *pattrib, u8 *pbuf, s32 transfer_len,
++		     int it);
++void rtw_rxdbg_badoff(struct rx_pkt_attrib *pattrib, u8 *pbuf, s32 transfer_len);
++void rtw_rxdbg_alloc(union recv_frame *prf, u8 *pdata, int ok);
++void rtw_rxdbg_conv_in(union recv_frame *prf);
++void rtw_rxdbg_conv_out(union recv_frame *prf, int rmv_len, int bsnaphdr,
++			int pull_sz);
++void rtw_rxdbg_ind(union recv_frame *prf, void *skb);
++void rtw_rxdbg_readport(int kind, void *skb);
++void rtw_rxdbg_comp(int kind, void *pskb, void *precvbuf);
++void rtw_rxdbg_fq_in(void);
++void rtw_rxdbg_tasklet(int nskb, int rxq_len, int freeq_len, int pendq_len);
++void rtw_rxdbg_dump(void);
++
++extern unsigned int rtw_rxdbg_fq_direct_free;
++extern unsigned int rtw_rxdbg_frames;
++extern unsigned int rtw_rxdbg_eapol;
++
++#define RTW_RXDBG_RP_REUSE	1
++#define RTW_RXDBG_RP_ALLOC	2
++#define RTW_RXDBG_RP_ALLOC_FAIL	3
++#define RTW_RXDBG_C_OK		1
++#define RTW_RXDBG_C_CANNOT	2
++#define RTW_RXDBG_C_STOPPED	3
++#define RTW_RXDBG_C_REARM	4
++#define RTW_RXDBG_C_OTHER	5
++#define RTW_RXDBG_C_SUBFAIL	6
++#define RTW_RXDBG_C_BADLEN	7
++
++#endif /* _RTW_RXDBG_H_ */
+diff --git a/os_dep/linux/os_intfs.c b/os_dep/linux/os_intfs.c
+index 2b081f1..b3b068c 100644
+--- a/os_dep/linux/os_intfs.c
++++ b/os_dep/linux/os_intfs.c
+@@ -108,11 +108,13 @@ module_param(rtw_dynamic_agg_enable, int, 0644);
+ 
+ /* set log level when inserting driver module, default log level is _DRV_INFO_ = 4,
+ * please refer to "How_to_set_driver_debug_log_level.doc" to set the available level.
+-*/
++* [W7 print-clean 2026-10-03] RTOS default _DRV_WARNING_: the RTW_INFO chatter
++ * (ramask/FW/EEPROM/ack_tx_done, ~10 lines/10 s at idle) drowned the console;
++ * runtime-tunable via `wlan8821 dbg <1-10>` (level 8 = old behavior). */
+ #ifdef RTW_LOG_LEVEL
+ 	uint rtw_drv_log_level = (uint)RTW_LOG_LEVEL; /* from Makefile */
+ #else
+-	uint rtw_drv_log_level = _DRV_INFO_;
++	uint rtw_drv_log_level = _DRV_WARNING_;
+ #endif
+ module_param(rtw_drv_log_level, uint, 0644);
+ MODULE_PARM_DESC(rtw_drv_log_level, "set log level when insert driver module, default log level is _DRV_INFO_ = 4");
+diff --git a/os_dep/linux/recv_linux.c b/os_dep/linux/recv_linux.c
+index 48fdb42..73d9c4d 100644
+--- a/os_dep/linux/recv_linux.c
++++ b/os_dep/linux/recv_linux.c
+@@ -20,6 +20,7 @@
+ #define _RECV_OSDEP_C_
+ 
+ #include <drv_types.h>
++#include <rtw_rxdbg.h>		/* [W4-fix probe] */
+ 
+ int rtw_os_recvframe_duplicate_skb(_adapter *padapter, union recv_frame *pcloneframe, _pkt *pskb)
+ {
+@@ -756,6 +757,7 @@ int rtw_recv_indicatepkt(_adapter *padapter, union recv_frame *precv_frame)
+ 
+ 	skb->len = precv_frame->u.hdr.len;
+ 
++	rtw_rxdbg_ind(precv_frame, skb);	/* [W4-fix probe] */
+ 
+ 	if (pattrib->eth_type == 0x888e)
+ 		RTW_PRINT("recv eapol packet\n");
+@@ -872,3 +874,179 @@ void rtw_os_read_port(_adapter *padapter, struct recv_buf *precvbuf)
+ 
+ }
+ 
++
++/* ==================================================================== */
++/* [W6] temporary RX-path counters (the W4 print probes were slimmed to  */
++/* print-free counters after the board showed their cost: the periodic   */
++/* dump disabled interrupts ~27 ms at 115200 baud).  Read via the        */
++/* rtw_rxdbg_dump() line from `wlan8821 status`; remove before ship.     */
++/* ==================================================================== */
++
++#include <rtw_rxdbg.h>
++
++unsigned int	rtw_rxdbg_frames;
++unsigned int	rtw_rxdbg_data;
++unsigned int	rtw_rxdbg_loop_extra;
++unsigned int	rtw_rxdbg_eapol;
++unsigned int	rtw_rxdbg_reuse, rtw_rxdbg_alloc_cnt, rtw_rxdbg_alloc_fail;
++unsigned int	rtw_rxdbg_c_ok, rtw_rxdbg_c_cannot, rtw_rxdbg_c_stop,
++		rtw_rxdbg_c_rearm, rtw_rxdbg_c_other, rtw_rxdbg_c_subfail,
++		rtw_rxdbg_c_badlen;
++unsigned int	rtw_rxdbg_t_runs, rtw_rxdbg_t_skbs, rtw_rxdbg_t_rxqmax,
++		rtw_rxdbg_t_pendmax;
++unsigned int	rtw_rxdbg_t_freeqmin = 0xffffffffu;
++unsigned int	rtw_rxdbg_fqin_cnt, rtw_rxdbg_fq_direct_free;
++
++void
++rtw_rxdbg_frame(struct rx_pkt_attrib *a, u8 *pbuf, s32 tl, int it)
++{
++	u8 *fc = pbuf + a->shift_sz + a->drvinfo_sz + RXDESC_SIZE;
++
++	(void)tl;
++	if (it == 0)
++		rtw_rxdbg_frames++;
++	else
++		rtw_rxdbg_loop_extra++;
++
++	if (fc[0] == 0 && fc[1] == 0)
++		return;	/* not data/management framing we count */
++	if ((fc[0] & 0x0c) != 0x08)
++		return;
++
++	rtw_rxdbg_data++;
++
++	{
++		u8 *llc = fc + 24 + (a->qos ? 2 : 0);
++
++		if (llc[0] == 0xaa && llc[1] == 0xaa && llc[2] == 0x03 &&
++		    llc[6] == 0x88 && llc[7] == 0x8e)
++			rtw_rxdbg_eapol++;
++	}
++}
++
++void
++rtw_rxdbg_badoff(struct rx_pkt_attrib *a, u8 *pbuf, s32 tl)
++{
++	(void)a;
++	(void)pbuf;
++	(void)tl;
++}
++
++void
++rtw_rxdbg_alloc(union recv_frame *prf, u8 *pdata, int ok)
++{
++	(void)prf;
++	(void)pdata;
++	(void)ok;
++}
++
++void
++rtw_rxdbg_conv_in(union recv_frame *prf)
++{
++	(void)prf;
++}
++
++void
++rtw_rxdbg_conv_out(union recv_frame *prf, int rmv_len, int bsnaphdr, int pull)
++{
++	(void)prf;
++	(void)rmv_len;
++	(void)bsnaphdr;
++	(void)pull;
++}
++
++void
++rtw_rxdbg_ind(union recv_frame *prf, void *skb)
++{
++	(void)prf;
++	(void)skb;
++}
++
++void
++rtw_rxdbg_readport(int kind, void *skb)
++{
++	(void)skb;
++	switch (kind) {
++	case RTW_RXDBG_RP_REUSE:
++		rtw_rxdbg_reuse++;
++		break;
++	case RTW_RXDBG_RP_ALLOC:
++		rtw_rxdbg_alloc_cnt++;
++		break;
++	case RTW_RXDBG_RP_ALLOC_FAIL:
++		rtw_rxdbg_alloc_fail++;
++		break;
++	default:
++		break;
++	}
++}
++
++void
++rtw_rxdbg_comp(int kind, void *pskb, void *precvbuf)
++{
++	(void)pskb;
++	(void)precvbuf;
++	switch (kind) {
++	case RTW_RXDBG_C_OK:
++		rtw_rxdbg_c_ok++;
++		break;
++	case RTW_RXDBG_C_CANNOT:
++		rtw_rxdbg_c_cannot++;
++		break;
++	case RTW_RXDBG_C_STOPPED:
++		rtw_rxdbg_c_stop++;
++		break;
++	case RTW_RXDBG_C_REARM:
++		rtw_rxdbg_c_rearm++;
++		break;
++	case RTW_RXDBG_C_OTHER:
++		rtw_rxdbg_c_other++;
++		break;
++	case RTW_RXDBG_C_SUBFAIL:
++		rtw_rxdbg_c_subfail++;
++		break;
++	case RTW_RXDBG_C_BADLEN:
++		rtw_rxdbg_c_badlen++;
++		break;
++	default:
++		break;
++	}
++}
++
++void
++rtw_rxdbg_fq_in(void)
++{
++	rtw_rxdbg_fqin_cnt++;
++}
++
++void
++rtw_rxdbg_tasklet(int nskb, int rxq_len, int freeq_len, int pendq_len)
++{
++	if (nskb >= 0) {
++		rtw_rxdbg_t_skbs += nskb;
++		if ((u32)rxq_len > rtw_rxdbg_t_rxqmax)
++			rtw_rxdbg_t_rxqmax = (u32)rxq_len;
++		if ((u32)freeq_len < rtw_rxdbg_t_freeqmin)
++			rtw_rxdbg_t_freeqmin = (u32)freeq_len;
++		if ((u32)pendq_len > rtw_rxdbg_t_pendmax)
++			rtw_rxdbg_t_pendmax = (u32)pendq_len;
++		return;
++	}
++	rtw_rxdbg_t_runs++;
++}
++
++/* single-line readout - command face only, never periodic */
++void
++rtw_rxdbg_dump(void)
++{
++	RTW_INFO("RXDBG DUMP fr=%u data=%u eapol=%u loop_extra=%u | rp reuse=%u alloc=%u fail=%u | comp ok=%u can=%u stop=%u rearm=%u other=%u subfail=%u badlen=%u | task runs=%u skbs=%u rxqmax=%u pendmax=%u freeqmin=%u fqin=%u fqfree=%u\n",
++		 rtw_rxdbg_frames, rtw_rxdbg_data, rtw_rxdbg_eapol,
++		 rtw_rxdbg_loop_extra,
++		 rtw_rxdbg_reuse, rtw_rxdbg_alloc_cnt, rtw_rxdbg_alloc_fail,
++		 rtw_rxdbg_c_ok, rtw_rxdbg_c_cannot, rtw_rxdbg_c_stop,
++		 rtw_rxdbg_c_rearm, rtw_rxdbg_c_other, rtw_rxdbg_c_subfail,
++		 rtw_rxdbg_c_badlen,
++		 rtw_rxdbg_t_runs, rtw_rxdbg_t_skbs, rtw_rxdbg_t_rxqmax,
++		 rtw_rxdbg_t_pendmax, rtw_rxdbg_t_freeqmin,
++		 rtw_rxdbg_fqin_cnt, rtw_rxdbg_fq_direct_free);
++}
+diff --git a/os_dep/linux/usb_ops_linux.c b/os_dep/linux/usb_ops_linux.c
+index 84d06bb..76a4b78 100644
+--- a/os_dep/linux/usb_ops_linux.c
++++ b/os_dep/linux/usb_ops_linux.c
+@@ -21,6 +21,7 @@
+ #include <drv_types.h>
+ #include <hal_data.h>
+ #include <rtw_sreset.h>
++#include <rtw_rxdbg.h>		/* [W4-fix probe] */
+ 
+ struct rtw_async_write_data {
+ 	u8 data[VENDOR_CMD_MAX_DATA_LEN];
+@@ -836,6 +837,8 @@ void usb_recv_tasklet(void *priv)
+ 	struct recv_priv	*precvpriv = &padapter->recvpriv;
+ 	struct recv_buf	*precvbuf = NULL;
+ 
++	rtw_rxdbg_tasklet(-1, 0, 0, 0);		/* [W4-fix probe] runs++ */
++
+ 	while (NULL != (pskb = skb_dequeue(&precvpriv->rx_skb_queue))) {
+ 
+ 		if (RTW_CANNOT_RUN(padapter)) {
+@@ -846,6 +849,7 @@ void usb_recv_tasklet(void *priv)
+ 			if (rtw_free_skb_premem(pskb) != 0)
+ 			#endif /* CONFIG_PREALLOC_RX_SKB_BUFFER */
+ 				rtw_skb_free(pskb);
++			rtw_rxdbg_fq_direct_free++;	/* [W4-fix probe] */
+ 			break;
+ 		}
+ 
+@@ -855,6 +859,10 @@ void usb_recv_tasklet(void *priv)
+ 		pskb->len = 0;
+ 
+ 		skb_queue_tail(&precvpriv->free_recv_skb_queue, pskb);
++		rtw_rxdbg_fq_in();			/* [W4-fix probe] */
++		rtw_rxdbg_tasklet(1,
++			skb_queue_len(&precvpriv->rx_skb_queue),
++			skb_queue_len(&precvpriv->free_recv_skb_queue), 0);
+ 
+ 		precvbuf = rtw_dequeue_recvbuf(&precvpriv->recv_buf_pending_queue);
+ 		if (NULL != precvbuf) {
+@@ -877,6 +885,7 @@ void usb_read_port_complete(struct urb *purb, struct pt_regs *regs)
+ 			, __func__
+ 			, rtw_is_drv_stopped(padapter) ? "True" : "False"
+ 			, rtw_is_surprise_removed(padapter) ? "True" : "False");
++		rtw_rxdbg_comp(RTW_RXDBG_C_CANNOT, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 		goto exit;
+ 	}
+ 
+@@ -885,6 +894,7 @@ void usb_read_port_complete(struct urb *purb, struct pt_regs *regs)
+ 		if ((purb->actual_length > MAX_RECVBUF_SZ) || (purb->actual_length < RXDESC_SIZE)) {
+ 			RTW_INFO("%s()-%d: urb->actual_length:%u, MAX_RECVBUF_SZ:%u, RXDESC_SIZE:%u\n"
+ 				, __FUNCTION__, __LINE__, purb->actual_length, MAX_RECVBUF_SZ, RXDESC_SIZE);
++			rtw_rxdbg_comp(RTW_RXDBG_C_BADLEN, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 			rtw_read_port(padapter, precvpriv->ff_hwaddr, 0, (unsigned char *)precvbuf);
+ 		} else {
+ 			rtw_reset_continual_io_error(adapter_to_dvobj(padapter));
+@@ -892,6 +902,7 @@ void usb_read_port_complete(struct urb *purb, struct pt_regs *regs)
+ 			precvbuf->transfer_len = purb->actual_length;
+ 			skb_put(precvbuf->pskb, purb->actual_length);
+ 			skb_queue_tail(&precvpriv->rx_skb_queue, precvbuf->pskb);
++			rtw_rxdbg_comp(RTW_RXDBG_C_OK, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 
+ 			#ifndef CONFIG_FIX_NR_BULKIN_BUFFER
+ 			if (skb_queue_len(&precvpriv->rx_skb_queue) <= 1)
+@@ -914,6 +925,7 @@ void usb_read_port_complete(struct urb *purb, struct pt_regs *regs)
+ 		case -ENODEV:
+ 		case -ESHUTDOWN:
+ 		case -ENOENT:
++			rtw_rxdbg_comp(RTW_RXDBG_C_STOPPED, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 			rtw_set_drv_stopped(padapter);
+ 			break;
+ 		case -EPROTO:
+@@ -927,12 +939,18 @@ void usb_read_port_complete(struct urb *purb, struct pt_regs *regs)
+ 				pHalData->srestpriv.Wifi_Error_Status = USB_READ_PORT_FAIL;
+ 			}
+ 			#endif
++			rtw_rxdbg_comp(RTW_RXDBG_C_REARM, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 			rtw_read_port(padapter, precvpriv->ff_hwaddr, 0, (unsigned char *)precvbuf);
+ 			break;
+ 		case -EINPROGRESS:
+ 			RTW_INFO("ERROR: URB IS IN PROGRESS!/n");
++			rtw_rxdbg_comp(RTW_RXDBG_C_OTHER, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 			break;
+ 		default:
++			/* [W6 probe]: the silent lifecycle hole (counted only;
++			 * the W4 print here was withdrawn with the print
++			 * probes - read the counter via wlan8821 status) */
++			rtw_rxdbg_comp(RTW_RXDBG_C_OTHER, precvbuf->pskb, precvbuf);
+ 			break;
+ 		}
+ 	}
+@@ -966,14 +984,18 @@ u32 usb_read_port(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *rmem)
+ 		SIZE_PTR alignment = 0;
+ 
+ 		precvbuf->pskb = skb_dequeue(&precvpriv->free_recv_skb_queue);
+-		if (NULL != precvbuf->pskb)
++		if (NULL != precvbuf->pskb) {
++			rtw_rxdbg_readport(RTW_RXDBG_RP_REUSE, precvbuf->pskb);	/* [W4-fix probe] */
+ 			goto recv_buf_hook;
++		}
+ 
+ 		#ifndef CONFIG_FIX_NR_BULKIN_BUFFER
+ 		precvbuf->pskb = rtw_skb_alloc(MAX_RECVBUF_SZ + RECVBUFF_ALIGN_SZ);
++		rtw_rxdbg_readport(RTW_RXDBG_RP_ALLOC, precvbuf->pskb);	/* [W4-fix probe] */
+ 		#endif
+ 
+ 		if (precvbuf->pskb == NULL) {
++			rtw_rxdbg_readport(RTW_RXDBG_RP_ALLOC_FAIL, NULL);	/* [W4-fix probe] */
+ 			if (0)
+ 				RTW_INFO("usb_read_port() enqueue precvbuf=%p\n", precvbuf);
+ 			/* enqueue precvbuf and wait for free skb */
+@@ -1008,6 +1030,7 @@ recv_buf_hook:
+ 	if (err && err != (-EPERM)) {
+ 		RTW_INFO("cannot submit rx in-token(err = 0x%08x),urb_status = %d\n"
+ 			, err, purb->status);
++		rtw_rxdbg_comp(RTW_RXDBG_C_SUBFAIL, precvbuf->pskb, precvbuf);	/* [W4-fix probe] */
+ 		goto exit;
+ 	}
+ 
