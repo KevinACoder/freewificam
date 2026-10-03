@@ -536,6 +536,12 @@ lkpi_mutex_is_locked(struct mutex *m)
 	return osMutexAcquire(*lk_mutex(m), 0) == osErrorResource;
 }
 
+/* [W11-C1] irqsave lock (aarch64 DAIF): mask IRQs around the skb queue
+ * list surgery.  The vendor USB completion feeds these queues from the
+ * xHCI ISR where a CMSIS mutex is a silent no-op (TX_CALLER_ERROR), so
+ * the critical section must run with IRQs masked, exactly what Linux's
+ * skb_queue_tail/dequeue get from spin_lock_irqsave(&list->lock). */
+
 /* ------------------------------------------------------------------ */
 /* sk_buff                                                             */
 /* ------------------------------------------------------------------ */
@@ -576,8 +582,9 @@ lkpi_skb_queue_init(struct sk_buff_head *q)
 	q->next = (struct sk_buff *)q;
 	q->prev = (struct sk_buff *)q;
 	q->qlen = 0;
-	/* Public skb_queue_* operations serialize their own list surgery. */
-	lkpi_mutex_init(&q->lock);
+	/* Public skb_queue_* operations serialize their own list surgery
+	 * with the [W11-C1] irqsave lock. */
+	q->lock.daif = 0;
 }
 
 void
@@ -591,8 +598,8 @@ lkpi_skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	struct sk_buff *head = (struct sk_buff *)q;
 	struct sk_buff *tail;
+	unsigned long daif = lkpi_irqlock_lock_raw();
 
-	lkpi_mutex_lock(&q->lock);
 	tail = head->prev;
 	skb->next = head;
 	skb->prev = tail;
@@ -600,7 +607,7 @@ lkpi_skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 	tail->next = skb;
 	head->prev = skb;
 	q->qlen++;
-	lkpi_mutex_unlock(&q->lock);
+	lkpi_irqlock_unlock_raw(daif);
 }
 
 void
@@ -608,8 +615,8 @@ lkpi_skb_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	struct sk_buff *head = (struct sk_buff *)q;
 	struct sk_buff *first;
+	unsigned long daif = lkpi_irqlock_lock_raw();
 
-	lkpi_mutex_lock(&q->lock);
 	first = head->next;
 	skb->next = first;
 	skb->prev = head;
@@ -617,7 +624,7 @@ lkpi_skb_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 	first->prev = skb;
 	head->next = skb;
 	q->qlen++;
-	lkpi_mutex_unlock(&q->lock);
+	lkpi_irqlock_unlock_raw(daif);
 }
 
 static void
@@ -638,36 +645,37 @@ lkpi_skb_dequeue(struct sk_buff_head *q)
 {
 	struct sk_buff *head = (struct sk_buff *)q;
 	struct sk_buff *skb;
+	unsigned long daif = lkpi_irqlock_lock_raw();
 
-	lkpi_mutex_lock(&q->lock);
 	skb = head->next;
 	if (skb != head)
 		lkpi_skb_unlink_locked(skb, q);
 	else
 		skb = NULL;
-	lkpi_mutex_unlock(&q->lock);
+	lkpi_irqlock_unlock_raw(daif);
 	return skb;
 }
 
 void
 lkpi_skb_unlink(struct sk_buff *skb, struct sk_buff_head *q)
 {
+	unsigned long daif;
 
 	if (q == NULL)
 		return;
-	lkpi_mutex_lock(&q->lock);
+	daif = lkpi_irqlock_lock_raw();
 	lkpi_skb_unlink_locked(skb, q);
-	lkpi_mutex_unlock(&q->lock);
+	lkpi_irqlock_unlock_raw(daif);
 }
 
 u32
 lkpi_skb_queue_len(const struct sk_buff_head *q)
 {
 	u32 n;
+	unsigned long daif = lkpi_irqlock_lock_raw();
 
-	lkpi_mutex_lock((struct mutex *)&q->lock);
 	n = q->qlen;
-	lkpi_mutex_unlock((struct mutex *)&q->lock);
+	lkpi_irqlock_unlock_raw(daif);
 	return n;
 }
 

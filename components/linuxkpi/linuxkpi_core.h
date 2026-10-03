@@ -1282,6 +1282,38 @@ int lkpi_mutex_is_locked(struct mutex *m);
 #define	spin_unlock_wait(l)		do { } while (0)
 #define	assert_spin_locked(l)		do { } while (0)
 
+/*
+ * [W11-C1] true irqsave lock, sk_buff_head only.  The layering comment
+ * above held for the hand-written drivers but not for the vendor USB
+ * stack: usb_read_port_complete runs in the xHCI ISR context (the HC
+ * interrupt handler runs urb->complete inline), and ThreadX returns
+ * TX_CALLER_ERROR from a mutex acquire in ISR - silently.  The skb
+ * queues sit exactly on that boundary (completion tail vs tasklet
+ * dequeue), so their lock must mask IRQs like Linux's
+ * spin_lock_irqsave(&list->lock).  List surgery only - nothing inside
+ * these critical sections may sleep or call back into the kernel.
+ */
+typedef struct {
+	unsigned long	daif;		/* opaque; impl in linuxkpi_core.c */
+} lkpi_irqlock_t;
+
+static inline unsigned long
+lkpi_irqlock_lock_raw(void)
+{
+	unsigned long daif;
+
+	__asm__ volatile ("mrs %0, daif" : "=r" (daif));
+	__asm__ volatile ("msr daifset, #2" : : : "memory");	/* mask IRQ */
+	return daif;
+}
+
+static inline void
+lkpi_irqlock_unlock_raw(unsigned long daif)
+{
+
+	__asm__ volatile ("msr daif, %0" : : "r" (daif) : "memory");
+}
+
 typedef unsigned long irqflags_t;
 #define	local_irq_save(flags)		do { (flags) = 0; } while (0)
 #define	local_irq_restore(flags)	do { (void)(flags); } while (0)
@@ -1302,7 +1334,7 @@ typedef unsigned long irqflags_t;
 struct sk_buff_head {
 	struct sk_buff	*next;
 	struct sk_buff	*prev;
-	spinlock_t	lock;
+	lkpi_irqlock_t	lock;		/* [W11-C1] irqsave, see above */
 	u32		qlen;
 };
 
