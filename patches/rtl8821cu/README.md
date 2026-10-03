@@ -14,6 +14,13 @@ Realtek RTL8821CU vendor 驱动上游差异的**唯一真值源**（submodule �
 - 消费轮：S5a W1（feat/wlan-8821cu-r1，2026-10-02）；先行验证轮 W0-L 在
   ~/workspace/rk3568_lab/os/rtl8821cu 工作副本上以 Linux 7.3-rc2 板证
   （runs/20261002-w0l-rtl8821cu-linux/，751 行兼容 patch 台账）。
+- **交付（2026-10-03）**：物化树发布为 fork 分支
+  **`git@github.com:KevinACoder/rtl8821cu.git rtos-adapt @ 8f4f2fa`**
+  （= pin + 0001-0008 重放，临时 worktree 干净重放对拍 0 字节差）；
+  freewebcam submodule gitlink **保持 8df92c5 pin 不动**，重放由
+  `make modules` 承担。参考线分支 `feat/wlan-8821cu-r1` 已推
+  github.com:KevinACoder/freewebcam（**永不合并 trunk**，rtw88 才是
+  trunk 线）。
 
 ## patches
 
