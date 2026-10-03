@@ -7,3 +7,6 @@
 [submodule "third-party/lwip"]
 	path = third-party/lwip
 	url = https://github.com/lwip-tcpip/lwip.git
+[submodule "third-party/wpa_supplicant"]
+	path = third-party/wpa_supplicant
+	url = https://github.com/KevinACoder/wpa_supplicant-rtos
