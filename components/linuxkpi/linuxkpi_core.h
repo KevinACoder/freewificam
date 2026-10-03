@@ -1342,6 +1342,7 @@ void lkpi_skb_queue_head(struct sk_buff_head *, struct sk_buff *);
 struct sk_buff *lkpi_skb_dequeue(struct sk_buff_head *);
 void lkpi_skb_unlink(struct sk_buff *, struct sk_buff_head *);
 void lkpi_skb_queue_purge(struct sk_buff_head *);
+u32 lkpi_skb_queue_len(const struct sk_buff_head *);
 
 #define	alloc_skb(size, gfp)		lkpi_skb_alloc((size), (gfp))
 #define	__dev_alloc_skb(size, gfp)	lkpi_skb_alloc((size), (gfp))
@@ -1367,7 +1368,7 @@ void lkpi_skb_queue_purge(struct sk_buff_head *);
 #define	skb_peek(q)			((q)->next)
 #define	skb_peek_tail(q)		((q)->prev)
 #define	skb_queue_empty(q)		((q)->qlen == 0)
-#define	skb_queue_len(q)		((q)->qlen)
+#define	skb_queue_len(q)		lkpi_skb_queue_len(q)
 #define	skb_headroom(skb)		((unsigned int)((skb)->data - (skb)->head))
 #define	skb_tailroom(skb)		((int)((skb)->end - (skb)->tail))
 #define	skb_priv(skb)			((void *)(skb)->cb)
@@ -1840,6 +1841,7 @@ void lkpi_tasklet_init(struct tasklet_struct *t, void (*fn)(unsigned long),
     unsigned long data);
 void lkpi_tasklet_schedule(struct tasklet_struct *t);
 void lkpi_tasklet_kill(struct tasklet_struct *t);
+void lkpi_tasklet_report(const struct tasklet_struct *t);
 
 #define	tasklet_init(t, fn, data)					\
 	lkpi_tasklet_init((t), (fn), (unsigned long)(data))

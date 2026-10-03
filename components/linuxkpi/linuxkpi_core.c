@@ -576,7 +576,7 @@ lkpi_skb_queue_init(struct sk_buff_head *q)
 	q->next = (struct sk_buff *)q;
 	q->prev = (struct sk_buff *)q;
 	q->qlen = 0;
-	/* the drivers take the queue lock around list surgery */
+	/* Public skb_queue_* operations serialize their own list surgery. */
 	lkpi_mutex_init(&q->lock);
 }
 
@@ -590,44 +590,38 @@ void
 lkpi_skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	struct sk_buff *head = (struct sk_buff *)q;
-	struct sk_buff *tail = head->prev;
+	struct sk_buff *tail;
 
+	lkpi_mutex_lock(&q->lock);
+	tail = head->prev;
 	skb->next = head;
 	skb->prev = tail;
 	skb->list = q;
 	tail->next = skb;
 	head->prev = skb;
 	q->qlen++;
+	lkpi_mutex_unlock(&q->lock);
 }
 
 void
 lkpi_skb_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	struct sk_buff *head = (struct sk_buff *)q;
-	struct sk_buff *first = head->next;
+	struct sk_buff *first;
 
+	lkpi_mutex_lock(&q->lock);
+	first = head->next;
 	skb->next = first;
 	skb->prev = head;
 	skb->list = q;
 	first->prev = skb;
 	head->next = skb;
 	q->qlen++;
+	lkpi_mutex_unlock(&q->lock);
 }
 
-struct sk_buff *
-lkpi_skb_dequeue(struct sk_buff_head *q)
-{
-	struct sk_buff *head = (struct sk_buff *)q;
-	struct sk_buff *skb = head->next;
-
-	if (skb == head)
-		return NULL;
-	lkpi_skb_unlink(skb, q);
-	return skb;
-}
-
-void
-lkpi_skb_unlink(struct sk_buff *skb, struct sk_buff_head *q)
+static void
+lkpi_skb_unlink_locked(struct sk_buff *skb, struct sk_buff_head *q)
 {
 
 	skb->prev->next = skb->next;
@@ -637,6 +631,44 @@ lkpi_skb_unlink(struct sk_buff *skb, struct sk_buff_head *q)
 	skb->list = NULL;
 	if (q != NULL && q->qlen > 0)
 		q->qlen--;
+}
+
+struct sk_buff *
+lkpi_skb_dequeue(struct sk_buff_head *q)
+{
+	struct sk_buff *head = (struct sk_buff *)q;
+	struct sk_buff *skb;
+
+	lkpi_mutex_lock(&q->lock);
+	skb = head->next;
+	if (skb != head)
+		lkpi_skb_unlink_locked(skb, q);
+	else
+		skb = NULL;
+	lkpi_mutex_unlock(&q->lock);
+	return skb;
+}
+
+void
+lkpi_skb_unlink(struct sk_buff *skb, struct sk_buff_head *q)
+{
+
+	if (q == NULL)
+		return;
+	lkpi_mutex_lock(&q->lock);
+	lkpi_skb_unlink_locked(skb, q);
+	lkpi_mutex_unlock(&q->lock);
+}
+
+u32
+lkpi_skb_queue_len(const struct sk_buff_head *q)
+{
+	u32 n;
+
+	lkpi_mutex_lock((struct mutex *)&q->lock);
+	n = q->qlen;
+	lkpi_mutex_unlock((struct mutex *)&q->lock);
+	return n;
 }
 
 void
@@ -855,6 +887,8 @@ static osMutexId_t lkpi_pending_mtx;
 static TX_SEMAPHORE lkpi_wake_sem;
 static bool lkpi_worker_started;
 static bool lkpi_worker_ready;
+static TX_THREAD *lkpi_worker_thread;
+static struct work_struct *volatile lkpi_active_work;
 
 struct workqueue_struct *lkpi_system_wq;
 
@@ -904,7 +938,9 @@ lkpi_workqueue_worker(void *arg)
 			continue;
 		}
 		w->wk_running = 1;
+		lkpi_active_work = w;
 		w->func(w);
+		lkpi_active_work = NULL;
 		w->wk_running = 0;
 	}
 }
@@ -926,8 +962,8 @@ lkpi_workqueue_ready(void)
 	if (tx_semaphore_create(&lkpi_wake_sem, "lkpi_wq", 0) != TX_SUCCESS)
 		lkpi_fatal("wq semaphore init failed");
 
-	lkpi_worker_started =
-	    osThreadNew(lkpi_workqueue_worker, NULL, &attr) != NULL;
+	lkpi_worker_thread = osThreadNew(lkpi_workqueue_worker, NULL, &attr);
+	lkpi_worker_started = lkpi_worker_thread != NULL;
 	if (!lkpi_worker_started) {
 		lkpi_printf("lkpi: cannot start the work thread\n");
 		return;
@@ -1567,6 +1603,21 @@ lkpi_tasklet_kill(struct tasklet_struct *t)
 
 	lkpi_work_flush(&t->work);
 	t->armed = false;
+}
+
+void
+lkpi_tasklet_report(const struct tasklet_struct *t)
+{
+	const struct work_struct *active = lkpi_active_work;
+
+	lkpi_printf("lkpi: rx tasklet queued=%d running=%d armed=%d "
+	    "wq_active=%p fn=%p\n", t->work.wk_queued,
+	    t->work.wk_running, t->armed, (const void *)active,
+	    active != NULL ? (const void *)active->func : NULL);
+	if (lkpi_worker_thread != NULL)
+		lkpi_printf("lkpi: wq thread state=%lu runs=%lu\n",
+		    (unsigned long)lkpi_worker_thread->tx_thread_state,
+		    (unsigned long)lkpi_worker_thread->tx_thread_run_count);
 }
 
 /* ------------------------------------------------------------------ */
