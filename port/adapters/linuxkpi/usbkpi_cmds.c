@@ -104,7 +104,7 @@ static int usbkpi_cmd(int argc, char *argv[])
 
 	if (argc < 2) {
 		csh_printf(csh, "usage: usbkpi on|off|status|trace on|dump "
-		    "[n] [skip]|rxhold on|off|wedge|rx|rxkick|rawbulk|sync on|off\n");
+		    "[n] [skip]|rxhold on|off|wedge|rawbulk|sync on|off\n");
 		return 0;
 	}
 
@@ -140,18 +140,6 @@ static int usbkpi_cmd(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "wedge") == 0) {
 		usbkpi_wedge_report();
-		return 0;
-	}
-	if (strcmp(argv[1], "rx") == 0) {
-		/* [W6] bulk-IN single-flight state: stall-recovery counters and
-		 * each endpoint's busy age (the wedge's "who is on the HC") */
-		usbkpi_rx_report();
-		return 0;
-	}
-	if (strcmp(argv[1], "rxkick") == 0) {
-		/* manual run of the watchdog's kill/re-arm recovery */
-		lkpi_usb_rx_kick();
-		csh_printf(csh, "usbkpi: rxkick issued\n");
 		return 0;
 	}
 	if (strcmp(argv[1], "peek") == 0) {

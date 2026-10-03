@@ -149,10 +149,10 @@ lkpi_usb_stage_get(struct urb *urb, u32 len)
 	if (urb->_stage != NULL)
 		lkpi_usb_stage_put(urb);
 	/* scan order prefers the small slots for small asks (they come
-	 * first); a big ask skips them on the cap test.
-	 * [W6] the pool is claimed from two threads now (sync submitters
-	 * and the RX drain/kick chain run under different mutexes), so the
-	 * scan-and-take is its own short critical section. */
+	 * first); a big ask skips them on the cap test.  The scan-and-take
+	 * is its own short critical section: the claim runs on submit
+	 * threads while the drain thread releases slots, and the bool
+	 * flags must not tear against that. */
 	{
 		TX_INTERRUPT_SAVE_AREA
 
@@ -626,16 +626,6 @@ lkpi_usb_complete_cb(void *arg, int nbytes)
 		urb->status = lkpi_usb_errno(hurb->errorcode);
 	else
 		urb->status = 0;
-	if (urb->_stall_recover) {
-		/* [W6] the watchdog's own kill: hand the vendor a status its
-		 * state machine absorbs.  The RX completion re-arms on
-		 * -ETIME; the TX completion only rides -ENOENT/-ECONNRESET
-		 * through its graceful path (anything else on a TX urb sets
-		 * bSurpriseRemoved and kills the adapter), so the mapping is
-		 * per direction.  The flag stays set until the re-arm so the
-		 * watchdog's budget sees the delivery as recovery-induced. */
-		urb->status = usb_pipein(urb->pipe) ? -ETIME : -ECONNRESET;
-	}
 	urb->actual_length = nbytes > 0 ? (u32)nbytes : hurb->actual_length;
 	usbkpi_push(urb, usb_pipein(urb->pipe), false,
 	    urb->status == 0 ? urb->actual_length : 0, hurb->errorcode);
@@ -654,7 +644,7 @@ lkpi_usb_deliver(struct urb *urb)
 	}
 }
 
-static void lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep, bool genuine);
+static void lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep);
 
 static void
 lkpi_usb_drain_one(struct urb *urb)
@@ -666,28 +656,21 @@ lkpi_usb_drain_one(struct urb *urb)
 	if (urb->_stage != NULL && urb->status == 0 && usb_pipein(urb->pipe) &&
 	    urb->actual_length != 0 && urb->transfer_buffer != NULL)
 		memcpy(urb->transfer_buffer, urb->_stage, urb->actual_length);
-	/* [W4] async transfers: the stage slot returns the moment its bytes
-	 * are home (IN) or on the wire (OUT).  The vendor's completion
-	 * callback (through deliver below) rearms the urb for the next
-	 * frame/buffer and asks for a stage again in the submit path -
-	 * releasing first keeps only the actually in-flight urbs holding
-	 * slots instead of every urb that ever ran (without this the 8 RX
-	 * urbs pinned 8 slots from their first completion on, and the next
-	 * chip re-init ran out).
-	 * [W6] both directions release here: the TX urbs went async too,
-	 * and holding their stage until the urb dies leaked the whole pool
-	 * (stage pool exhausted after ~18 TX frames, board W6 A4 round). */
-	if (urb->_stage != NULL)
+	/* [W4] async RX: the stage slot returns the moment its bytes are
+	 * home.  The vendor's completion callback (through deliver below)
+	 * rearms the urb for the next frame and asks for a stage again in
+	 * the submit path - releasing first keeps only the actually
+	 * in-flight urbs holding slots instead of every urb that ever ran
+	 * (without this the 8 RX urbs pinned 8 slots from their first
+	 * completion on, and the next chip re-init ran out). */
+	if (urb->_stage != NULL && usb_pipein(urb->pipe))
 		lkpi_usb_stage_put(urb);
 
 	lkpi_usb_deliver(urb);
 	/* [W4] the endpoint's TD slot is free again: hand it to the next
 	 * parked bulk-IN urb (the vendor's completion above resubmitted its
-	 * own urb into the same queue, so this also serves the rearm).
-	 * [W6] a genuine completion (not the watchdog's own kill) restores
-	 * the endpoint's stall-recovery budget. */
-	lkpi_rx_ep_kick(((struct usbh_urb *)urb->_usbh_urb)->ep,
-	    !urb->_stall_recover);
+	 * own urb into the same queue, so this also serves the rearm). */
+	lkpi_rx_ep_kick(((struct usbh_urb *)urb->_usbh_urb)->ep);
 	/* the HC reference: the urb may go away here if the caller already
 	 * dropped its own reference (rtw88's submit-then-free pattern) */
 	usb_free_urb(urb);
@@ -710,37 +693,17 @@ lkpi_usb_drain_one(struct urb *urb)
 /* ------------------------------------------------------------------ */
 
 #define	LKPI_RX_EP_N	6
-#define	LKPI_RX_EP_QLEN	16
-/* [W6] a bulk-IN TD silent this long while the link expects RX is
- * presumed wedged; the sync path's own 5 s timeout/kill does the same
- * for OUT and control.  The window must clear the longest legitimate
- * silence (an idle air barely sends, and a scan's channel hops quiet
- * the RX for long stretches) by a wide margin - the board's first cut
- * at 1.5 s fired DURING association and its kill dropped the beacon
- * the join was waiting for ("no beacon while connecting", W6 A-round).
- * The vendor's own death verdict is 5 retries x 2 s, so 5 s still
- * recovers before the false disconnect. */
-#define	LKPI_RX_STALL_MS	5000U
-/* consecutive recoveries allowed without an intervening real delivery:
- * the vendor counts 4 consecutive error completions into
- * rtw_set_surprise_removed, so a blind self-healer must stay below it */
-#define	LKPI_RX_STALL_BUDGET	2U
+#define	LKPI_RX_EP_QLEN	8
 
 struct lkpi_rx_ep {
 	struct usb_endpoint_descriptor *ep;	/* key: the cherryusb endpoint */
 	bool		busy;		/* one urb of this ep is on the HC */
 	unsigned int	n;
 	struct urb	*q[LKPI_RX_EP_QLEN];
-	struct urb	*cur;		/* the urb on the HC */
-	u32		last_ms;	/* last arm/completion of this ep */
-	unsigned int	recover_budget;	/* stall kills left before stand-down */
 };
 
 static struct lkpi_rx_ep lkpi_rx_eps[LKPI_RX_EP_N];
 static unsigned int lkpi_rx_park_n;
-/* [W6] rx watchdog accounting (read by `usbkpi rx`) */
-static unsigned int lkpi_rx_stall_n, lkpi_rx_stall_fail_n;
-static unsigned int lkpi_rx_orphan_n, lkpi_rx_kickfail_n;
 
 static struct lkpi_rx_ep *
 lkpi_rx_ep_find(struct usb_endpoint_descriptor *ep, bool alloc)
@@ -755,31 +718,25 @@ lkpi_rx_ep_find(struct usb_endpoint_descriptor *ep, bool alloc)
 		    !lkpi_rx_eps[i].busy && lkpi_rx_eps[i].n == 0)
 			slot = &lkpi_rx_eps[i];
 	}
-	if (alloc && slot != NULL) {
+	if (alloc && slot != NULL)
 		slot->ep = ep;
-		slot->recover_budget = LKPI_RX_STALL_BUDGET;
-	}
 	return slot;
 }
 
 /* completion of the in-flight urb (or a kill): re-issue the next parked */
 static void
-lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep, bool genuine)
+lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep)
 {
 	struct lkpi_rx_ep *rq = lkpi_rx_ep_find(ep, false);
 
 	if (rq == NULL || rq->busy == false)
 		return;
-	if (genuine)
-		rq->recover_budget = LKPI_RX_STALL_BUDGET;
 	rq->busy = false;
-	rq->cur = NULL;
 	while (rq->n > 0) {
 		struct urb *next = rq->q[0];
 		struct usbh_urb *hurb = next->_usbh_urb;
 		void *stage;
-		int ret = 0;
-		int tries;
+		int ret;
 
 		memmove(&rq->q[0], &rq->q[1],
 		    (rq->n - 1U) * sizeof(rq->q[0]));
@@ -797,40 +754,22 @@ lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep, bool genuine)
 			usb_free_urb(next);
 			continue;
 		}
-		/* [W6] an OUT arm's payload must ride into the stage here:
-		 * the park sits before the stage grant, and the submit path's
-		 * OUT copy only runs on the direct route */
-		if (!usb_pipein(next->pipe))
-			memcpy(stage, next->transfer_buffer,
-			    next->transfer_buffer_length);
 		hurb->transfer_buffer = stage;
 		hurb->transfer_buffer_length = next->transfer_buffer_length;
 		hurb->timeout = 0U;	/* async arm */
 		hurb->complete = lkpi_usb_complete_cb;
 		hurb->arg = next;
 		next->submitted = true;
-		next->_stall_recover = false;	/* fresh arm, fresh stall budget */
 		rq->busy = true;
-		rq->cur = next;
-		rq->last_ms = (u32)tx_time_get();
-		/* [W6] a transient HC rejection (BUSY residue behind a kill in
-		 * progress) used to drop this arm silently and shrink the RX
-		 * pool toward zero; retry briefly before declaring it lost */
-		for (tries = 0; tries < 3; tries++) {
-			usbkpi_push(next, usb_pipein(next->pipe), true,
-			    next->transfer_buffer_length, 0);
-			lkpi_mutex_lock(&lkpi_usb_submit_mtx);
-			ret = usbh_submit_urb(hurb);
-			lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
-			if (ret == 0)
-				return;	/* in flight again */
-			if (tries < 2)
-				lkpi_msleep(5);
-		}
+		usbkpi_push(next, usb_pipein(next->pipe), true,
+		    next->transfer_buffer_length, 0);
+		lkpi_mutex_lock(&lkpi_usb_submit_mtx);
+		ret = usbh_submit_urb(hurb);
+		lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
+		if (ret == 0)
+			return;	/* in flight again */
 		/* re-issue failed (kill/device gone): deliver the error */
-		lkpi_rx_kickfail_n++;
 		rq->busy = false;
-		rq->cur = NULL;
 		next->submitted = false;
 		next->status = -EIO;
 		usbkpi_push(next, usb_pipein(next->pipe), false, 0,
@@ -863,95 +802,6 @@ lkpi_rx_unpark(struct usb_endpoint_descriptor *ep, struct urb *urb)
 
 static void *lkpi_usb_drain_thread_entry(void *arg);
 
-/* ------------------------------------------------------------------ */
-/* [W6] RX stall watchdog                                              */
-/*                                                                     */
-/* The bulk-IN async chain has no timeout in the HC layer (the sync     */
-/* path's 5 s timeout/kill covers OUT and control), so one bulk-IN TD   */
-/* whose completion event never comes wedges the endpoint: the vendor   */
-/* never hears from that urb, the parked arms starve, and ~10 s later   */
-/* the driver reads the silence as "disconnect or roaming".  The drain  */
-/* thread wakes every 100 ms; an ep still busy well past the stall      */
-/* window is killed through the xHCI stop/set-dequeue recovery, with    */
-/* the completion remapped to -ETIME so the vendor re-arms on it.  Two  */
-/* consecutive recoveries per genuine delivery are tried, then the      */
-/* watch stands down (the vendor counts 4 consecutive error completions */
-/* into rtw_set_surprise_removed - a blind healer must stay under it).  */
-/* ------------------------------------------------------------------ */
-
-static void
-lkpi_rx_ep_watch(u32 now)
-{
-	unsigned int i;
-
-	if (usbkpi_rxhold_gate)
-		return;	/* the control experiment parks RX on purpose */
-	for (i = 0; i < LKPI_RX_EP_N; i++) {
-		struct lkpi_rx_ep *rq = &lkpi_rx_eps[i];
-		struct urb *b;
-
-		if (rq->ep == NULL || !rq->busy || rq->cur == NULL)
-			continue;
-		if ((u32)(now - rq->last_ms) < LKPI_RX_STALL_MS)
-			continue;
-		if (rq->recover_budget == 0) {
-			lkpi_rx_stall_fail_n++;	/* stood down */
-			continue;
-		}
-		rq->recover_budget--;
-		b = rq->cur;
-		b->_stall_recover = true;
-		lkpi_rx_stall_n++;
-		/* the kill's -ETIME completion lands on the drain list; the
-		 * kick and free ride the normal drain path */
-		usb_kill_urb(b);
-	}
-}
-
-/* manual trigger for the same recovery (forensics / `usbkpi rxkick`):
- * refresh every ep's budget, then kill whatever is wedged now */
-void
-lkpi_usb_rx_kick(void)
-{
-	unsigned int i;
-
-	for (i = 0; i < LKPI_RX_EP_N; i++)
-		if (lkpi_rx_eps[i].ep != NULL)
-			lkpi_rx_eps[i].recover_budget = LKPI_RX_STALL_BUDGET;
-	for (i = 0; i < LKPI_RX_EP_N; i++) {
-		struct lkpi_rx_ep *rq = &lkpi_rx_eps[i];
-		struct urb *b = rq->cur;
-
-		if (rq->ep == NULL || !rq->busy || b == NULL)
-			continue;
-		b->_stall_recover = true;
-		lkpi_rx_stall_n++;
-		usb_kill_urb(b);
-	}
-}
-
-void
-usbkpi_rx_report(void)
-{
-	unsigned int i;
-	u32 now = (u32)tx_time_get();
-
-	lkpi_printf("usbkpi rx: stall=%u stallfail=%u kickfail=%u orphan=%u park=%u\n",
-	    lkpi_rx_stall_n, lkpi_rx_stall_fail_n, lkpi_rx_kickfail_n,
-	    lkpi_rx_orphan_n, lkpi_rx_park_n);
-	for (i = 0; i < LKPI_RX_EP_N; i++) {
-		struct lkpi_rx_ep *rq = &lkpi_rx_eps[i];
-
-		if (rq->ep == NULL)
-			continue;
-		lkpi_printf("usbkpi rx: ep%02x busy=%u cur=%p n=%u age=%ums budget=%u\n",
-		    rq->ep->bEndpointAddress, rq->busy ? 1U : 0U,
-		    (void *)rq->cur, rq->n,
-		    rq->busy ? (unsigned)(now - rq->last_ms) : 0U,
-		    rq->recover_budget);
-	}
-}
-
 static void *
 lkpi_usb_drain_thread_entry(void *arg)
 {
@@ -959,7 +809,7 @@ lkpi_usb_drain_thread_entry(void *arg)
 
 	(void)arg;
 	for (;;) {
-		int wr = usb_osal_sem_take(lkpi_usb_done_sem, 100);
+		usb_osal_sem_take(lkpi_usb_done_sem, TX_WAIT_FOREVER);
 
 		for (;;) {
 			TX_INTERRUPT_SAVE_AREA
@@ -978,8 +828,6 @@ lkpi_usb_drain_thread_entry(void *arg)
 				break;
 			lkpi_usb_drain_one(urb);
 		}
-		if (wr != 0)
-			lkpi_rx_ep_watch((u32)tx_time_get());
 	}
 	return NULL;
 }
@@ -987,15 +835,6 @@ lkpi_usb_drain_thread_entry(void *arg)
 /* the ep0 staging mutex: usb_control_transfer serializes on the hubport
  * mutex, but our stage is filled before that lock */
 static struct mutex lkpi_usb_ctrl_mtx;
-
-/* [W6] sync (blocking) transfers serialize among themselves on their own
- * mutex.  They must NOT share the RX-park mutex below: a sync submit
- * blocks for the whole round trip (up to the 5 s timeout) and holding the
- * shared lock across it starved the RX rearm chain under load - the
- * vendor's RX tasklet stalled on that mutex, its completed-skbs queue
- * grew to 212 x 32 KiB, the heap went OOM and the chip was declared
- * disconnected (board W6 A-round: rxq=212 freeq=1 alloc=212). */
-static struct mutex lkpi_usb_sync_mtx;
 
 /* ------------------------------------------------------------------ */
 /* urb lifecycle                                                       */
@@ -1098,22 +937,14 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	 * were all BOT multi-urb mixing on one endpoint; the int channel
 	 * is a single self-rearming urb on an exclusively-owned endpoint,
 	 * so the one-urb-in-flight contract holds by construction.
-	 *
-	 * [W6] BOTH bulk directions ride the async chain under the same
-	 * flag.  The vendor's TX path is written for Linux's async model -
-	 * usb_write_port submits and returns, the completion callback frees
-	 * the xmitbuf and schedules the xmit tasklet - and a sync submit
-	 * turns every single data segment into a full round-trip block on
-	 * the tcpip thread (board W6 A-round: TCP paced at ~47 segments/s,
-	 * 0.13-0.55 Mbit/s, while the same stack moved 8 Mbit/s in the
-	 * first second of a burst).  The bulk single-flight park machinery
-	 * below was built for the RX direction and now serves both. */
+	 * [S5a] W3: bulk IN rides the same async chain (the wlan RX urbs
+	 * wait for the chip's own moment - beacons); bulk OUT stays sync
+	 * in this lane (fw download + probe requests are fire-and-collect,
+	 * see the flag comment above). */
 	bool async = (type == USB_ENDPOINT_XFER_INT) ||
-	    (lkpi_usb_rx_async && type == USB_ENDPOINT_XFER_BULK) ||
-	    !lkpi_usb_force_sync;
+	    (lkpi_usb_rx_async && type == USB_ENDPOINT_XFER_BULK &&
+	    usb_pipein(urb->pipe)) || !lkpi_usb_force_sync;
 	struct lkpi_rx_ep *rxq = NULL;
-	bool took_busy = false;
-	struct mutex *lk;
 	int ret;
 
 	(void)mem_flags;
@@ -1187,11 +1018,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		hurb->ep = urb->hep->hcpriv;
 	}
 
-	/* [W6] the lock is picked by transfer kind: async arms ride the RX
-	 * park chain's mutex, sync transfers block for the whole round trip
-	 * (up to 5 s) on their own - see the lkpi_usb_sync_mtx comment. */
-	lk = async ? &lkpi_usb_submit_mtx : &lkpi_usb_sync_mtx;
-	lkpi_mutex_lock(lk);
+	lkpi_mutex_lock(&lkpi_usb_submit_mtx);
 	if (lkpi_usb_trace)
 		lkpi_printf("usb: %s#%u ep%02x len%u\n",
 		    type == USB_ENDPOINT_XFER_CONTROL ? "ctrl" :
@@ -1204,8 +1031,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	 * xHCI port arbites one TD per endpoint and the vendor arms eight
 	 * urbs per endpoint, so every arm after the first parks here - and
 	 * a parked urb must not pin a stage slot (it rides no DMA).  The
-	 * completion kick re-enters this function for the next one.
-	 * [W6] both bulk directions park here (see the async comment). */
+	 * completion kick re-enters this function for the next one. */
 	if (async && type == USB_ENDPOINT_XFER_BULK) {
 		rxq = lkpi_rx_ep_find(hurb->ep, true);
 		if (rxq != NULL && rxq->busy) {
@@ -1224,13 +1050,12 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 					    "n=%u (parked %u)\n",
 					    usb_pipeendpoint(urb->pipe) | 0x80,
 					    rxq->n, lkpi_rx_park_n);
-				lkpi_mutex_unlock(lk);
+				lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
 				return 0;
 			}
 			rxq = NULL;	/* FIFO full: fall through, let the HC talk */
 		} else if (rxq != NULL) {
-			rxq->busy = true;	/* optimistic; rolled back on failure */
-			took_busy = true;
+			rxq->busy = true;
 		}
 	}
 	if (urb->transfer_buffer_length != 0) {
@@ -1238,15 +1063,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		    urb->transfer_buffer_length);
 
 		if (stage == NULL) {
-			/* [W6] orphan guard: busy was set optimistically above;
-			 * a first arm failing here must hand the endpoint back
-			 * to its parked urbs or they starve forever (no TD, no
-			 * completion, no kick ever fires) */
-			lkpi_mutex_unlock(lk);
-			if (took_busy) {
-				lkpi_rx_orphan_n++;
-				lkpi_rx_ep_kick(hurb->ep, false);
-			}
+			lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
 			urb->status = -ENOMEM;
 			return -ENOMEM;
 		}
@@ -1306,15 +1123,10 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	urb->status = 0;
 	urb->actual_length = 0;
 	urb->submitted = true;
-	if (took_busy) {
-		/* the RX watchdog's arm record (drain thread reads these) */
-		rxq->cur = urb;
-		rxq->last_ms = (u32)tx_time_get();
-	}
 	usbkpi_push(urb, usb_pipein(urb->pipe), true,
 	    urb->transfer_buffer_length, 0);
 	ret = usbh_submit_urb(hurb);
-	lkpi_mutex_unlock(lk);
+	lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
 	if (!async && ret == 0) {
 		/* the submit returned because the transfer COMPLETED:
 		 * collect it right here (the submitter's thread is a
@@ -1402,12 +1214,6 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	if (ret != 0) {
 		urb->submitted = false;
 		urb->status = lkpi_usb_errno(ret);
-		if (took_busy)
-			/* [W6] the single-flight slot must go back to the
-			 * parked urbs, not just be cleared: clearing alone
-			 * left every parked arm waiting for a completion
-			 * that this failed arm never produced */
-			lkpi_rx_ep_kick(hurb->ep, false);
 		/* trace-gated: the capture protocol's arm retry hammers
 		 * this path thousands of times by design (hub H2), the
 		 * per-miss dump would flood the console */
@@ -1453,27 +1259,11 @@ usb_kill_urb(struct urb *urb)
 	TX_DISABLE;
 	if (urb->submitted) {
 		urb->submitted = false;
-		/* [W6] a stall-recovery kill reports the direction's graceful
-		 * status (RX re-arms on -ETIME; TX only survives -ENOENT /
-		 * -ECONNRESET).  The generic -ENOENT would set drv_stopped on
-		 * the RX side. */
-		if (urb->_stall_recover)
-			urb->status = usb_pipein(urb->pipe) ? -ETIME :
-			    -ECONNRESET;
-		else
-			urb->status = -ENOENT;
+		urb->status = -ENOENT;
 		TX_RESTORE;
 		usbkpi_push(urb, usb_pipein(urb->pipe), false, 0,
 		    urb->status);
 		lkpi_usb_deliver(urb);
-		/* [W6] the forced delivery is the completion of this bulk
-		 * arm: hand the endpoint's single-flight slot to the next
-		 * parked urb (the vendor's rearm above went back into the
-		 * park).  A non-bulk kill has no ep slot and this is a
-		 * no-op. */
-		if (usb_pipetype(urb->pipe) == USB_ENDPOINT_XFER_BULK)
-			lkpi_rx_ep_kick(((struct usbh_urb *)urb->_usbh_urb)->ep,
-			    !urb->_stall_recover);
 		usb_free_urb(urb);	/* the HC reference */
 		return;
 	}
@@ -1779,7 +1569,6 @@ lkpi_usb_start(void)
 		return;
 	lkpi_mutex_init(&lkpi_usb_ctrl_mtx);
 	lkpi_mutex_init(&lkpi_usb_submit_mtx);
-	lkpi_mutex_init(&lkpi_usb_sync_mtx);
 	lkpi_usb_done_sem = usb_osal_sem_create(0);
 	/* usb_osal_thread_create returns the TX_THREAD (usb_osal_threadx.c
 	 * shape) - the wedge report reads its state/stack watermark */
