@@ -580,6 +580,130 @@ $(BUILD)/components/iperf3_embedded/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
 $(BUILD)/os/netutils/%.o: EXTRAFLAGS := $(NU_CFLAGS)
 endif
 
+# wpa_supplicant (SPEC S7a/wpa-supplicant-rtos-adapt §3.5): the PSK-only
+# compile set (no EAP/WPS/P2P/ctrl-iface/SME), the list the prior project
+# board-proved on this fork's pin. Vendored sources compile with warnings
+# silenced (WPA_CFG's -w): frozen imports, edited only through patches/
+# (make modules replays them). The whole wpa world gets wpa_port_config.h
+# force-included, which steers the fork's includes.h/build_config.h onto
+# the plain-libc path (CONFIG_OS_EMBOX) and selects the driver slot in
+# src/drivers/drivers.c (CONFIG_DRIVER_EMBOX; the ops live in the trunk
+# skeleton os/wpa_supplicant/driver_vendor.c). The shim/ directory comes
+# first for the wpa-world units: the toolchain libc has no net/if.h or
+# netinet/in.h, and a real one would drag a BSD socket world in with it.
+CONFIG_WPA_SUPPLICANT ?= n
+ifeq ($(filter $(CONFIG_WPA_SUPPLICANT),y n),)
+$(error CONFIG_WPA_SUPPLICANT must be y or n, got '$(CONFIG_WPA_SUPPLICANT)')
+endif
+ifeq ($(CONFIG_WPA_SUPPLICANT),y)
+ifeq ($(filter y,$(CONFIG_SHELL)),)
+$(error CONFIG_WPA_SUPPLICANT=y requires CONFIG_SHELL=y (wpa_cmd is the control face))
+endif
+WPA_DIR := third-party/wpa_supplicant
+
+# Driver backend (FR-3 single-slot): "vendor" compiles the trunk
+# skeleton against the registered wpa_vendor_port table (wlan configs);
+# "none" compiles the vendored stub driver (smoke image, P7a-1).
+CONFIG_WPA_BACKEND ?= none
+ifeq ($(filter $(CONFIG_WPA_BACKEND),vendor none),)
+$(error CONFIG_WPA_BACKEND must be vendor or none, got '$(CONFIG_WPA_BACKEND)')
+endif
+# l2_packet carrier: "direct" is the first-party EAPOL carrier (P7a-2);
+# "none" is the vendored stub (P7a-1 smoke).
+CONFIG_WPA_L2 ?= direct
+ifeq ($(filter $(CONFIG_WPA_L2),direct none),)
+$(error CONFIG_WPA_L2 must be direct or none, got '$(CONFIG_WPA_L2)')
+endif
+CONFIG_WPA_THREAD_STACK ?= 65536
+CONFIG_WPA_SUPP_DEBUG_LEVEL ?= 2
+
+WPA_CORE_SRCS := \
+	$(WPA_DIR)/src/common/wpa_common.c \
+	$(WPA_DIR)/src/common/ieee802_11_common.c \
+	$(WPA_DIR)/src/common/hw_features_common.c \
+	$(WPA_DIR)/src/drivers/driver_common.c \
+	$(WPA_DIR)/src/drivers/drivers.c \
+	$(WPA_DIR)/src/rsn_supp/wpa.c \
+	$(WPA_DIR)/src/rsn_supp/wpa_ie.c \
+	$(WPA_DIR)/src/rsn_supp/pmksa_cache.c \
+	$(WPA_DIR)/src/rsn_supp/preauth.c \
+	$(WPA_DIR)/src/utils/common.c \
+	$(WPA_DIR)/src/utils/wpabuf.c \
+	$(WPA_DIR)/src/utils/base64.c \
+	$(WPA_DIR)/src/utils/bitfield.c \
+	$(WPA_DIR)/src/utils/wpa_debug.c \
+	$(WPA_DIR)/src/crypto/crypto_internal.c \
+	$(WPA_DIR)/src/crypto/aes-internal.c \
+	$(WPA_DIR)/src/crypto/aes-internal-dec.c \
+	$(WPA_DIR)/src/crypto/aes-internal-enc.c \
+	$(WPA_DIR)/src/crypto/aes-wrap.c \
+	$(WPA_DIR)/src/crypto/aes-unwrap.c \
+	$(WPA_DIR)/src/crypto/aes-omac1.c \
+	$(WPA_DIR)/src/crypto/sha1.c \
+	$(WPA_DIR)/src/crypto/sha1-internal.c \
+	$(WPA_DIR)/src/crypto/sha1-prf.c \
+	$(WPA_DIR)/src/crypto/sha1-pbkdf2.c \
+	$(WPA_DIR)/src/crypto/md5.c \
+	$(WPA_DIR)/src/crypto/md5-internal.c \
+	$(WPA_DIR)/src/crypto/rc4.c \
+	$(WPA_DIR)/src/crypto/sha256.c \
+	$(WPA_DIR)/src/crypto/sha256-internal.c \
+	$(WPA_DIR)/src/crypto/sha256-prf.c \
+	$(WPA_DIR)/src/crypto/tls_none.c \
+	$(WPA_DIR)/wpa_supplicant/wpa_supplicant.c \
+	$(WPA_DIR)/wpa_supplicant/events.c \
+	$(WPA_DIR)/wpa_supplicant/scan.c \
+	$(WPA_DIR)/wpa_supplicant/bss.c \
+	$(WPA_DIR)/wpa_supplicant/config.c \
+	$(WPA_DIR)/wpa_supplicant/config_none.c \
+	$(WPA_DIR)/wpa_supplicant/notify.c \
+	$(WPA_DIR)/wpa_supplicant/wpas_glue.c \
+	$(WPA_DIR)/wpa_supplicant/bssid_ignore.c \
+	$(WPA_DIR)/wpa_supplicant/eap_register.c \
+	$(WPA_DIR)/wpa_supplicant/op_classes.c \
+	$(WPA_DIR)/wpa_supplicant/rrm.c \
+	$(WPA_DIR)/wpa_supplicant/robust_av.c
+
+WPA_DRIVER_SRCS := os/wpa_supplicant/driver_vendor.c
+WPA_L2_SRCS := os/wpa_supplicant/l2_packet_direct.c
+WPA_BACKEND_KEY := -DCONFIG_WPA_BACKEND_VENDOR=1 \
+	-DWPA_PORT_DRIVER_NAME='"embox"'
+ifeq ($(CONFIG_WPA_BACKEND),none)
+WPA_DRIVER_SRCS := $(WPA_DIR)/src/drivers/driver_none.c
+WPA_BACKEND_KEY := -DCONFIG_WPA_BACKEND_NONE=1 \
+	-DWPA_PORT_DRIVER_NAME='"none"'
+endif
+ifeq ($(CONFIG_WPA_L2),none)
+WPA_L2_SRCS := $(WPA_DIR)/src/l2_packet/l2_packet_none.c
+endif
+
+WPA_PORT_SRCS := \
+	os/wpa_supplicant/wpa_vendor_port.c \
+	os/wpa_supplicant/os_port.c \
+	os/wpa_supplicant/eloop_port.c \
+	os/wpa_supplicant/supp_main.c \
+	os/wpa_supplicant/wpa_cmd.c
+
+SRCS += $(WPA_CORE_SRCS) $(WPA_DRIVER_SRCS) $(WPA_L2_SRCS) $(WPA_PORT_SRCS)
+
+WPA_INC := -Ios/wpa_supplicant/shim \
+	-I$(WPA_DIR) -I$(WPA_DIR)/src -I$(WPA_DIR)/src/utils \
+	-I$(WPA_DIR)/src/drivers -I$(WPA_DIR)/src/l2_packet \
+	-I$(WPA_DIR)/wpa_supplicant -Ios/wpa_supplicant
+WPA_CFG := -include stdarg.h \
+	-include os/wpa_supplicant/wpa_port_config.h \
+	$(WPA_BACKEND_KEY) \
+	-DCONFIG_WPA_THREAD_STACK=$(CONFIG_WPA_THREAD_STACK) \
+	-DCONFIG_WPA_SUPP_DEBUG_LEVEL=$(CONFIG_WPA_SUPP_DEBUG_LEVEL)
+# vendored units silence warnings (-w, frozen import); the first-party
+# port layer compiles warning-honest under the global -Wall -Wextra
+$(BUILD)/third-party/wpa_supplicant/%.o: \
+	EXTRAFLAGS := -w $(WPA_CFG) $(WPA_INC)
+# the port layer adds the shell include set (wpa_cmd exports the command)
+$(BUILD)/os/wpa_supplicant/%.o: \
+	EXTRAFLAGS := $(WPA_CFG) $(WPA_INC) $(CSH_CFLAGS)
+endif
+
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
 	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
@@ -599,7 +723,7 @@ LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 # patches/cherryusb/README.md first.
 modules:
 	@git submodule update --init third-party/threadx third-party/cherryusb \
-		third-party/lwip || \
+		third-party/lwip third-party/wpa_supplicant || \
 		echo 'note: submodule update failed; see patches/cherryusb/README.md (pin seeding)'
 	@if [ -d third-party/cherryusb ]; then \
 		git -C third-party/cherryusb sparse-checkout set --no-cone \
