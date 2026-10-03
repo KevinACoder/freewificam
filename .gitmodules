@@ -10,3 +10,6 @@
 [submodule "third-party/rtl8821cu"]
 	path = third-party/rtl8821cu
 	url = https://github.com/Yuan-W/rtl8821cu
+[submodule "third-party/wpa_supplicant"]
+	path = third-party/wpa_supplicant
+	url = https://github.com/KevinACoder/wpa_supplicant-rtos

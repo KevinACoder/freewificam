@@ -43,7 +43,18 @@ long strtol(const char *s, char **endptr, int base);
 int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t cap, const char *fmt, ...);
 
-#endif /* FREEWEBCAM_MINILIBC_H */
+/* --- minilibc.c: string completions + libc completion (S7a/P7a-1) ----------- */
+
 char *strcpy(char *dest, const char *src);
 char *strcat(char *dest, const char *src);
 unsigned long strtoul(const char *s, char **endptr, int base);
+
+/* the wpa_supplicant compile set's references; heap-free, so they live
+ * in the base surface (the heap-backed strdup is wpa-port scoped) */
+int abs(int n);
+void qsort(void *base, size_t nmemb, size_t width,
+	   int (*cmp)(const void *, const void *));
+int sscanf(const char *str, const char *fmt, ...);
+int strcasecmp(const char *a, const char *b);
+
+#endif /* FREEWEBCAM_MINILIBC_H */
