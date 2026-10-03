@@ -37,6 +37,10 @@ extern int rtl8821cu_down(void);
 extern int rtl8821cu_scan(void);
 extern int rtl8821cu_scan_dump(void);
 extern unsigned long rtl8821cu_rx_stats(unsigned long *bytes);
+#ifdef CONFIG_NIC_WPA_BACKEND
+extern unsigned long rtl8821cu_wpa_rx_counters(unsigned long *eapol,
+					       unsigned long *data_drop);
+#endif
 
 static void wlan8821_status(int argc, char *argv[])
 {
@@ -59,6 +63,15 @@ static void wlan8821_status(int argc, char *argv[])
 		   rtw_is_surprise_removed(a) ? "yes" : "no",
 		   (int)rtw_get_hw_init_completed(a),
 		   rx_frames, rx_bytes);
+#ifdef CONFIG_NIC_WPA_BACKEND
+	{
+		unsigned long eapol = 0, drop = 0;
+
+		rtl8821cu_wpa_rx_counters(&eapol, &drop);
+		csh_printf(csh, "rtl8821cu: wpa eapol_rx=%lu data_drop=%lu\n",
+			   eapol, drop);
+	}
+#endif
 }
 
 static int cmd_wlan8821(int argc, char *argv[])

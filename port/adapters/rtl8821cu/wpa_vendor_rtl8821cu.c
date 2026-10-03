@@ -171,31 +171,67 @@ vp_scan_fetch(int idx, struct wpa_scan_res_ret *out)
 	return ret;
 }
 
+/* the IE the supplicant's blob carries decides PSK vs open: the blob
+ * may ALSO hold non-security elements (the fork appends an extended
+ * capabilities IE even for open networks - board evidence 2026-10-03,
+ * a 13-byte wpa_ie on midea_ca_0040).  PSK is the presence of an RSN
+ * (48) or WPA (221, OUI 00:50:f2, type 1) element - same parse the
+ * cfg80211 reference does in rtw_cfg80211_set_wpa_ie. */
+static const u8 *
+vp_find_rsn_wpa_ie(const u8 *ies, size_t len)
+{
+	const u8 *p = ies;
+	size_t left = len;
+
+	while (left >= 2u) {
+		u8 id = p[0];
+		u8 l = p[1];
+
+		if (2u + (size_t)l > left)
+			break;
+		if (id == WLAN_EID_RSN) /* 48 */
+			return p;
+		if (id == WLAN_EID_VENDOR_SPECIFIC && l >= 6u &&
+		    p[2] == 0x00 && p[3] == 0x50 && p[4] == 0xf2 &&
+		    p[5] == 0x01)
+			return p; /* WPA (221, 00:50:f2:1) */
+		p += 2u + (size_t)l;
+		left -= 2u + (size_t)l;
+	}
+	return NULL;
+}
+
 /*
- * The supplicant's RSN IE goes into securitypriv.supplicant_ie verbatim
- * - the stash the assoc-request builder consumes.  The cfg80211 reference
- * arrives at the same security state through its parse loop; the PSK-only
- * build negotiates CCMP only (wpa_do_connect pins pairwise/group CCMP),
- * so the cipher mapping below is the fixed PSK-CCMP row of that switch.
+ * The supplicant's RSN/WPA IE goes into securitypriv.supplicant_ie
+ * verbatim - the stash the assoc-request builder consumes (the cfg80211
+ * reference stashes exactly the parsed element, not the whole blob).
+ * The PSK-only build negotiates CCMP only (wpa_do_connect pins
+ * pairwise/group CCMP), so the cipher mapping below is the fixed
+ * PSK-CCMP row of the cfg80211 switch.
  */
 static void
 vp_security_setup(_adapter *a, const struct wpa_vendor_conn *p)
 {
 	struct security_priv *sec = &a->securitypriv;
+	const u8 *rsn = NULL;
 
 	memset(sec->supplicant_ie, 0, sizeof(sec->supplicant_ie));
-	if (p->wpa_ie != NULL && p->wpa_ie_len > 0) {
-		size_t n = (p->wpa_ie_len <= sizeof(sec->supplicant_ie)) ?
-		    p->wpa_ie_len : sizeof(sec->supplicant_ie);
+	if (p->wpa_ie != NULL && p->wpa_ie_len > 0)
+		rsn = vp_find_rsn_wpa_ie(p->wpa_ie, p->wpa_ie_len);
 
-		memcpy(sec->supplicant_ie, p->wpa_ie, n);
+	if (rsn != NULL) {
+		size_t n = (size_t)rsn[1] + 2u;
+
+		if (n > sizeof(sec->supplicant_ie))
+			n = sizeof(sec->supplicant_ie);
+		memcpy(sec->supplicant_ie, rsn, n);
 		sec->dot11AuthAlgrthm = dot11AuthAlgrthm_8021X;
 		sec->ndisauthtype = Ndis802_11AuthModeWPA2PSK;
 		sec->dot11PrivacyAlgrthm = _AES_;
 		sec->dot118021XGrpPrivacy = _AES_;
 		sec->ndisencryptstatus = Ndis802_11Encryption3Enabled;
 		printf("rtl8821cu: wpa connect psk ie_len=%u\n",
-		       (unsigned)p->wpa_ie_len);
+		       (unsigned)n);
 	} else {
 		sec->ndisencryptstatus = Ndis802_11EncryptionDisabled;
 		sec->dot11PrivacyAlgrthm = _NO_PRIVACY_;
@@ -351,25 +387,50 @@ static const struct wpa_vendor_port rtl8821cu_wpa_port = {
 static unsigned long rtl8821cu_wpa_eapol_rx;
 static unsigned long rtl8821cu_wpa_data_drop;
 
+/*
+ * The vendor indicates through eth_type_trans (recv_linux.c:510), which
+ * by Linux semantics PULLS the 14-byte Ethernet header - netif_rx hands
+ * the sink an skb whose data sits at the payload and whose protocol
+ * carries the wire ethertype (the LE read of the big-endian field).
+ * The frame itself is still intact at data-14; un-pull it to read the
+ * header (the same restore the W5 lwip bridge will need for full
+ * Ethernet frames).
+ */
+static void
+rtl8821cu_wpa_skb_unpull(struct sk_buff *skb)
+{
+
+	skb->data -= 14;
+	skb->len += 14;
+	skb->tail -= 14;
+}
+
 static int
 rtl8821cu_wpa_rx_sink(struct sk_buff *skb)
 {
-	unsigned int len;
-
 	if (skb == NULL)
 		return 1; /* NET_RX_DROP */
-	len = skb->len;
-	if (len >= 14 && skb->data != NULL &&
-	    skb->data[12] == (uint8_t)(RTL_WPA_ETHERTYPE_EAPOL >> 8) &&
-	    skb->data[13] == (uint8_t)(RTL_WPA_ETHERTYPE_EAPOL & 0xff)) {
-		/* the payload copy is the producer's only obligation - the
-		 * event queue deep-copies ([S7a] FR-7); driver/USB context */
+	/* restore the header first, then match the wire bytes: the
+	 * linuxkpi htons is an identity macro (constant-expression
+	 * service) so skb->protocol holds the LE read of the big-endian
+	 * field - byte comparison sidesteps the whole endianness mess */
+	if (skb->len >= 16 && skb->data != NULL) {
+		rtl8821cu_wpa_skb_unpull(skb);
+		if (skb->len >= 14 &&
+		    skb->data[12] == (uint8_t)(RTL_WPA_ETHERTYPE_EAPOL >> 8) &&
+		    skb->data[13] ==
+			(uint8_t)(RTL_WPA_ETHERTYPE_EAPOL & 0xff)) {
+		/* the 4-way EAPOL comes from the associated AP; the src
+		 * the event queue deep-copies ([S7a] FR-7) is read off
+		 * the restored header.  Driver/USB worker context: the
+		 * pump only queues. */
 		rtl8821cu_wpa_event(WPA_VENDOR_EVENT_EAPOL_RX,
 				    skb->data + 6, skb->data + 14,
-				    len - 14);
-		rtl8821cu_wpa_eapol_rx++;
-		kfree_skb(skb);
-		return 0; /* NET_RX_SUCCESS (consumed) */
+				    skb->len - 14);
+			rtl8821cu_wpa_eapol_rx++;
+			kfree_skb(skb);
+			return 0; /* NET_RX_SUCCESS (consumed) */
+		}
 	}
 	rtl8821cu_wpa_data_drop++;
 	kfree_skb(skb);
