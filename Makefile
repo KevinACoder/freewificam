@@ -557,12 +557,25 @@ RTL8821CU_OSDEP_SRCS := \
 RTL8821CU_VENDOR_SRCS := $(RTL8821CU_CORE_SRCS) $(RTL8821CU_HAL_SRCS) \
 	$(RTL8821CU_PHYDM_SRCS) $(RTL8821CU_OSDEP_SRCS)
 
+# W4 (S5a A-case): the wpa_supplicant vendor backend rides the adapter
+# tier when the component line is in the image (trunk merge brought
+# os/wpa_supplicant). The guard define is what keeps the seam/drv_entry
+# hooks compiling cleanly without it.
+RTL8821CU_WPA_BACKEND_SRCS :=
+RTL8821CU_WPA_ADAPTER_CFLAGS :=
+ifeq ($(CONFIG_WPA_SUPPLICANT),y)
+RTL8821CU_WPA_BACKEND_SRCS := \
+	port/adapters/rtl8821cu/wpa_vendor_rtl8821cu.c
+RTL8821CU_WPA_ADAPTER_CFLAGS := -DCONFIG_NIC_WPA_BACKEND=1 -Ios/wpa_supplicant
+endif
+
 RTL8821CU_ADAPTER_SRCS := \
 	port/adapters/rtl8821cu/drv_entry.c \
 	port/adapters/rtl8821cu/wlan8821_cmds.c \
 	port/adapters/rtl8821cu/wlan8821_seam.c \
 	port/adapters/rtl8821cu/usbh_modeswitch.c \
-	port/adapters/rtl8821cu/usbh_wlan_class.c
+	port/adapters/rtl8821cu/usbh_wlan_class.c \
+	$(RTL8821CU_WPA_BACKEND_SRCS)
 
 # The adapter objects go FIRST on the link line: .usbh_class_info is
 # concatenated in link order and cherryusb takes the first match - the
@@ -600,7 +613,8 @@ $(BUILD)/port/adapters/rtl8821cu/%.o: \
 	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
 		-I$(RTL8821CU_ROOT)/include -I$(RTL8821CU_ROOT)/hal/btc \
 		-I$(RTL8821CU_ROOT)/platform \
-		$(RTL8821CU_VENDOR_CFG) -fgnu89-inline -DCONFIG_NIC_RTL8821CU=1
+		$(RTL8821CU_VENDOR_CFG) -fgnu89-inline -DCONFIG_NIC_RTL8821CU=1 \
+		$(RTL8821CU_WPA_ADAPTER_CFLAGS)
 # NOTE: this pattern rule OVERRIDES the shell block's $(BUILD)/app/%.o rule
 # (last pattern match wins in GNU make) - CSH_CFLAGS (which carries
 # -DCONFIG_SHELL=1) MUST ride along or app/wlan8821/main.c's shellboot
@@ -925,9 +939,17 @@ WPA_INC := -Ios/wpa_supplicant/shim \
 	-I$(WPA_DIR) -I$(WPA_DIR)/src -I$(WPA_DIR)/src/utils \
 	-I$(WPA_DIR)/src/drivers -I$(WPA_DIR)/src/l2_packet \
 	-I$(WPA_DIR)/wpa_supplicant -Ios/wpa_supplicant
+# The vendor driver (rtw_security.c) bundles its own hostap-derived
+# omac1_aes_128; the supplicant's copy is renamed at the compile flag so
+# the two worlds coexist in one image without touching either tree.
 WPA_CFG := -include stdarg.h \
 	-include os/wpa_supplicant/wpa_port_config.h \
 	$(WPA_BACKEND_KEY) \
+	-Domac1_aes_128=wpa_rtos_omac1_aes_128 \
+	-Domac1_aes_256=wpa_rtos_omac1_aes_256 \
+	-DTe0=wpa_rtos_Te0 -DTd0=wpa_rtos_Td0 \
+	-DTd4s=wpa_rtos_Td4s -Drcons=wpa_rtos_rcons \
+	-Dsscanf=wpa_port_sscanf \
 	-DCONFIG_WPA_THREAD_STACK=$(CONFIG_WPA_THREAD_STACK) \
 	-DCONFIG_WPA_SUPP_DEBUG_LEVEL=$(CONFIG_WPA_SUPP_DEBUG_LEVEL)
 # vendored units silence warnings (-w, frozen import); the first-party

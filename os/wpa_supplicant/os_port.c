@@ -24,6 +24,148 @@
 
 #include "wpa_port_api.h"
 
+/* A scanf subset for the wpa world: the compiled files only reach it
+ * through a config path this image does not run (sched_scan_plans), but
+ * the symbol must resolve. Handles %d/%i/%u/%x/%s plus literals, spaces
+ * and %%; anything else stops the parse (the prior project's proven
+ * shape). WPA_CFG renames the token (sscanf=wpa_port_sscanf) so the
+ * linuxkpi/libc sscanf stays the only plain one in combined images. */
+static int wpa_port_hexval(int c)
+{
+	if (c >= '0' && c <= '9') {
+		return c - '0';
+	}
+	if (c >= 'a' && c <= 'f') {
+		return c - 'a' + 10;
+	}
+	if (c >= 'A' && c <= 'F') {
+		return c - 'A' + 10;
+	}
+	return -1;
+}
+
+int sscanf(const char *str, const char *fmt, ...)
+{
+	va_list ap;
+	int assigned = 0;
+	const char *s = str;
+
+	va_start(ap, fmt);
+	for (; *fmt != '\0'; fmt++) {
+		if (*fmt != '%') {
+			if (*fmt == ' ' || *fmt == '\t') {
+				while (*s == ' ' || *s == '\t') {
+					s++;
+				}
+				continue;
+			}
+			if (*s == *fmt) {
+				s++;
+			} else {
+				break;
+			}
+			continue;
+		}
+		fmt++;
+		if (*fmt == '%') {
+			if (*s == '%') {
+				s++;
+			} else {
+				break;
+			}
+			continue;
+		}
+		{
+			int suppress = (*fmt == '*');
+
+			if (suppress) {
+				fmt++;
+			}
+			while (*fmt >= '0' && *fmt <= '9') {
+				fmt++;
+			}
+			if (*fmt == 'l' || *fmt == 'h') {
+				fmt++;
+			}
+			if (*fmt == 'd' || *fmt == 'i' || *fmt == 'u' ||
+			    *fmt == 'x' || *fmt == 's') {
+				int neg = 0;
+				unsigned long v = 0;
+				int any = 0;
+				char *out;
+
+				if (*fmt == 's') {
+					out = suppress ? NULL :
+					      va_arg(ap, char *);
+					while (*s == ' ' || *s == '\t') {
+						s++;
+					}
+					while (*s != '\0' && *s != ' ' &&
+					       *s != '\t') {
+						if (out != NULL) {
+							*out++ = *s;
+						}
+						s++;
+						any = 1;
+					}
+					if (out != NULL) {
+						*out = '\0';
+					}
+				} else {
+					int hex = (*fmt == 'x');
+
+					while (*s == ' ' || *s == '\t') {
+						s++;
+					}
+					if (*s == '-') {
+						neg = 1;
+						s++;
+					}
+					for (;;) {
+						int d;
+
+						if (hex) {
+							d = wpa_port_hexval(*s);
+						} else if (*s >= '0' &&
+							   *s <= '9') {
+							d = *s - '0';
+						} else {
+							break;
+						}
+						if (d < 0) {
+							break;
+						}
+						v = v * (hex ? 16U : 10U) +
+						    (unsigned long)d;
+						s++;
+						any = 1;
+					}
+					if (!suppress) {
+						out = va_arg(ap, char *);
+						if (neg) {
+							*(long *)out =
+								-(long)v;
+						} else {
+							*(unsigned long *)
+								out = v;
+						}
+					}
+				}
+				if (!any) {
+					break;
+				}
+				if (!suppress) {
+					assigned++;
+				}
+				continue;
+			}
+			break;
+		}
+	}
+	va_end(ap);
+	return assigned;
+}
+
 /* strdup is heap-backed, so it lives in the wpa port layer rather than
  * the base minilibc (which must stay linkable in the heap-less
  * baremetal configs); the prior project satisfied it from its console

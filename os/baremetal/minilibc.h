@@ -54,7 +54,6 @@ unsigned long strtoul(const char *s, char **endptr, int base);
 int abs(int n);
 void qsort(void *base, size_t nmemb, size_t width,
 	   int (*cmp)(const void *, const void *));
-int sscanf(const char *str, const char *fmt, ...);
 int strcasecmp(const char *a, const char *b);
 
 #endif /* FREEWEBCAM_MINILIBC_H */

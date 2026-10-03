@@ -15,25 +15,45 @@
 
 #include <drv_types.h>
 
+#include "rtl8821cu_port.h"
+
+/* W4: the indications are the supplicant's event sources now - the pump
+ * (rtl8821cu_wpa_event) deep-copies into the port's queue, so printing
+ * stays as the console trace of the same transitions.  Driver/worker
+ * contexts: queue only, never supplicant calls ([S7a] FR-7). */
+
 void
 rtw_indicate_wx_assoc_event(_adapter *padapter)
 {
-	(void)padapter;
+
 	printf("rtl8821cu: associated\n");
+#ifdef CONFIG_NIC_WPA_BACKEND
+	rtl8821cu_wpa_event(2 /* WPA_VENDOR_EVENT_ASSOC */,
+			    padapter->mlmepriv.cur_network.network.MacAddress,
+			    NULL, 0);
+#endif
 }
 
 void
 rtw_indicate_wx_disassoc_event(_adapter *padapter)
 {
 	(void)padapter;
+
 	printf("rtl8821cu: disassociated\n");
+#ifdef CONFIG_NIC_WPA_BACKEND
+	rtl8821cu_wpa_event(3 /* WPA_VENDOR_EVENT_DISASSOC */, NULL, NULL, 0);
+#endif
 }
 
 void
 indicate_wx_scan_complete_event(_adapter *padapter)
 {
 	(void)padapter;
+
 	printf("rtl8821cu: scan complete\n");
+#ifdef CONFIG_NIC_WPA_BACKEND
+	rtl8821cu_wpa_event(1 /* WPA_VENDOR_EVENT_SCAN_DONE */, NULL, NULL, 0);
+#endif
 }
 
 /* ------------------------------------------------------------------ */

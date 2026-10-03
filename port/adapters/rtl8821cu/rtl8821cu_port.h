@@ -43,4 +43,13 @@ int rtl8821cu_scan_dump(void);
 /* data-plane counters (netif_rx sink accounting) */
 unsigned long rtl8821cu_rx_stats(unsigned long *bytes);
 
+/* W4 (S5a A-case, CONFIG_NIC_WPA_BACKEND builds): the wpa vendor
+ * backend. The seam's indication hooks and the netif_rx EAPOL filter
+ * pump events into the supplicant through here. */
+void rtl8821cu_wpa_backend_init(void);
+void rtl8821cu_wpa_event(int event, const unsigned char *addr,
+			 const unsigned char *buf, unsigned long len);
+unsigned long rtl8821cu_wpa_rx_counters(unsigned long *eapol,
+					unsigned long *data_drop);
+
 #endif /* RTL8821CU_PORT_H */

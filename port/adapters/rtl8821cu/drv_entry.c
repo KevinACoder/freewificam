@@ -48,6 +48,12 @@ rtl8821cu_adapter_bind(struct usb_interface *intf)
 	rtl8821cu_adapter = (dvobj != NULL) ? dvobj_get_primary_adapter(dvobj) : NULL;
 	printf("rtl8821cu: attached (adapter %p)\n",
 	       (void *)rtl8821cu_adapter);
+#ifdef CONFIG_NIC_WPA_BACKEND
+	/* the supplicant's backend rides the attach: ops table registered
+	 * before any `wpa start` can run, and the netif_rx EAPOL sink
+	 * mounted ahead of the first RX frame */
+	rtl8821cu_wpa_backend_init();
+#endif
 }
 
 void
