@@ -685,6 +685,10 @@ WPA_PORT_SRCS := \
 	os/wpa_supplicant/wpa_cmd.c
 
 SRCS += $(WPA_CORE_SRCS) $(WPA_DRIVER_SRCS) $(WPA_L2_SRCS) $(WPA_PORT_SRCS)
+# the freestanding libc completion in os/baremetal/minilibc.c is gated on
+# this key so configs without wpa keep their exact image size (P7a-2
+# zero-intrusion criterion)
+CFLAGS += -DCONFIG_LIBC_COMPLETION=1
 
 WPA_INC := -Ios/wpa_supplicant/shim \
 	-I$(WPA_DIR) -I$(WPA_DIR)/src -I$(WPA_DIR)/src/utils \

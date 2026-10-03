@@ -445,6 +445,8 @@ unsigned long strtoul(const char *s, char **endptr, int base)
 	return acc;
 }
 
+#if defined(CONFIG_LIBC_COMPLETION)
+
 /* --- libc completion (S7a/P7a-1) -------------------------------------------
  *
  * The wpa_supplicant compile set references four symbols the surface above
@@ -726,3 +728,4 @@ void abort(void)
 	for (;;) {
 	}
 }
+#endif /* CONFIG_LIBC_COMPLETION */
