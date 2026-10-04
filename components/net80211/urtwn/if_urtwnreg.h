@@ -1,0 +1,71 @@
+/*	$NetBSD: if_urtwnreg.h,v 1.12 2018/06/29 04:02:10 thorpej Exp $	*/
+/*	$OpenBSD: if_urtwnreg.h,v 1.3 2010/11/16 18:02:59 damien Exp $	*/
+
+/*-
+ * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+#ifndef _DEV_USB_URTWNREG_H_
+#define	_DEV_USB_URTWNREG_H_
+
+#define	URTWN_NOISE_FLOOR	-95
+
+/* Maximum number of output pipes is 3. */
+#define R92C_MAX_EPOUT	3
+#define R92C_MAX_EPIN	3
+
+#define R92C_PUBQ_NPAGES	231
+#define R92C_TXPKTBUF_COUNT	256
+#define R92C_TX_PAGE_COUNT	248
+#define R92C_TX_PAGE_BOUNDARY	(R92C_TX_PAGE_COUNT + 1)
+#define R88E_TXPKTBUF_COUNT	177
+#define R88E_TX_PAGE_COUNT	169
+#define R88E_TX_PAGE_BOUNDARY	(R88E_TX_PAGE_COUNT + 1)
+#define R92E_TXPKTBUF_COUNT	256
+#define R92E_TX_PAGE_COUNT	243
+#define R92E_TX_PAGE_BOUNDARY	(R92E_TX_PAGE_COUNT + 1)
+#define R92C_TXDESC_SUMSIZE	32
+
+/* USB Requests. */
+#define R92C_REQ_REGS	0x05
+
+#define R92E_RF_T_METER		0x042
+#define R92E_STBC_SETTING	0x04c4
+#define R92E_SYS_CFG1_8192E	0x00f0
+#define R92E_LDO_SWR_CTRL	0x007C
+#define R92E_AUTO_LLT		0x224
+#define R92E_AUTO_LLT_EN	__BIT(16)
+#define R92E_RSV_MIO_EN		0x0100
+#define R92E_LEDSON		0x60
+
+/* Bits for SYS_CFG1_8192E. */
+#define R92E_SPSLDO_SEL		__BIT(24)
+
+/* Values for R92C_CMD_USB_SUSPEND. */
+#define USB_RESUME		0
+#define USB_SLEEP		1
+
+/* Values for IQ calibration. */
+#define R92C_IQK_TRXPATHENA	0x5600
+#define R92C_IQK_TRMUXPAR	0x00e4
+#define R92C_IQK_RFIFACESW1	0x8200
+#define R92C_IQK_LSSI_PARAM	0x00010000
+#define R92C_IQK_LSSI_RESTORE	0x00032ed3
+#define R92C_IQK_CONFIG_ANT	0x00080000
+#define R92C_TX_IQK_SETTING	0x01007c00
+#define R92C_RX_IQK_SETTING	0x01004800
+#define R92C_FPGA0_IQK_SETTING	0x80800000
+
+#endif /* _DEV_USB_URTWNREG_H_ */
