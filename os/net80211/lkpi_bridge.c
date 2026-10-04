@@ -42,6 +42,8 @@
 /* the mac80211-side OSAL shapes + the driver vtable ABI */
 #include "linuxkpi_core.h"
 #include "linuxkpi_net80211.h"
+/* the wedge report the up-timeout path calls (declared in the usb face) */
+#include "linuxkpi_usb.h"
 
 /* the bridge's shell-facing API (consumed by port/adapters/rtw88) */
 #include "net80211_bridge.h"
@@ -72,7 +74,13 @@ struct lkpi_n80211_softc {
 	bool			started;
 	bool			scanning;
 
-	unsigned int		rx_dropped;
+	/* RX intake counters (W3 forensics: "table empty" must be
+	 * distinguishable from "callbacks never arrived") */
+	unsigned int		rx_frames;	/* crossed with a sane length */
+	unsigned int		rx_notstarted;
+	unsigned int		rx_short;
+	unsigned int		rx_dropped;	/* mbuf alloc failures */
+	unsigned int		rx_input;	/* handed to ieee80211_input */
 };
 
 static struct lkpi_n80211_softc lkpi_n80211_softc;
@@ -319,8 +327,15 @@ lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
 	struct mbuf *m;
 	int rssi;
 
-	if (!sc->started || len < sizeof(struct ieee80211_frame_min))
+	if (!sc->started) {
+		sc->rx_notstarted++;
 		return;
+	}
+	if (len < sizeof(struct ieee80211_frame_min)) {
+		sc->rx_short++;
+		return;
+	}
+	sc->rx_frames++;
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == NULL || len > MCLBYTES) {
 		if (m != NULL)
@@ -343,6 +358,7 @@ lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
 	(void)ieee80211_input(ic, m, ni, rssi, 0);	/* consumes m */
 	ieee80211_free_node(ni);
 	net80211_serializer_unlock();
+	sc->rx_input++;
 }
 
 /* ------------------------------------------------------------------ */
@@ -470,6 +486,8 @@ net80211_bridge_status(void)
 	    ieee80211_state_name[ic->ic_state],
 	    ieee80211_chan2ieee(ic, ic->ic_curchan),
 	    (int)ic->ic_opmode, sc->rx_dropped);
+	printf("rtw88u: rx frames %u input %u short %u notstarted %u\n",
+	    sc->rx_frames, sc->rx_input, sc->rx_short, sc->rx_notstarted);
 }
 
 static void
