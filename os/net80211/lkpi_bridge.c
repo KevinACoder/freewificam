@@ -184,8 +184,26 @@ lkpi_n80211_newstate_cb(struct lkpi_n80211_softc *sc,
 		(void)sc->sc_newstate(ic, nstate, arg);
 		break;
 
+	case IEEE80211_S_AUTH:
+		/* W4: the join picked a scan-table node; retune to its
+		 * channel BEFORE the auth frame goes out (the driver's
+		 * config op is what actually programs the RF) */
+		lkpi_n80211_set_channel(sc);
+		(void)sc->sc_newstate(ic, nstate, arg);
+		lkpi_n80211_drain_mgtq(sc);
+		break;
+
+	case IEEE80211_S_ASSOC:
+		/* assoc req rides the same mgtq/drain; channel stays on
+		 * the joined BSS */
+		(void)sc->sc_newstate(ic, nstate, arg);
+		lkpi_n80211_drain_mgtq(sc);
+		break;
+
 	default:
-		/* AUTH/ASSOC/RUN join the association round (W4) */
+		/* S_RUN (join done) and anything else the state machine
+		 * drives: forwards to net80211; the W4 wpa round adds the
+		 * RUN-side hooks */
 		(void)sc->sc_newstate(ic, nstate, arg);
 		break;
 	}
@@ -476,6 +494,55 @@ net80211_bridge_get_hwaddr(uint8_t addr[6])
 	return 0;
 }
 
+/*
+ * W4 open connect: pick the named BSS out of the scan table and drive
+ * net80211's own join (sta_join -> newstate(S_AUTH) -> auth/assoc frames
+ * ride ic_mgtq; the responses re-enter through the RX seam).  Open
+ * network only so far: privacy/WPA flags are cleared and the join's
+ * authmode is OPEN (the WPA2 leg arrives with the supplicant round).
+ */
+int
+net80211_bridge_connect(const uint8_t *ssid, size_t len)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+	struct ieee80211_node *ni, *sel = NULL;
+	int ret;
+
+	if (!sc->started) {
+		ret = lkpi_n80211_up();
+		if (ret != 0)
+			return ret;
+	}
+	if (len == 0 || len > IEEE80211_NWID_LEN)
+		return -EINVAL;
+
+	/* find the BSS in the scan table, holding a reference across the
+	 * unlock (sta_join takes ownership of that reference) */
+	net80211_serializer_lock();
+	TAILQ_FOREACH(ni, &ic->ic_scan.nt_node, ni_list) {
+		if (ni->ni_esslen == len &&
+		    memcmp(ni->ni_essid, ssid, len) == 0) {
+			sel = ieee80211_ref_node(ni);
+			break;
+		}
+	}
+	if (sel != NULL) {
+		/* open-network policy: no privacy/WPA gates (match_bss and
+		 * the auth builder both key on these flags) */
+		ic->ic_flags &= ~(IEEE80211_F_PRIVACY | IEEE80211_F_WPA1 |
+		    IEEE80211_F_WPA2 | IEEE80211_F_DROPUNENC);
+		/* sta_join's copy_bss propagates authmode from the OLD
+		 * ic_bss; program it before the join */
+		if (ic->ic_bss != NULL)
+			ic->ic_bss->ni_authmode = IEEE80211_AUTH_OPEN;
+		(void)ieee80211_sta_join(ic, sel);	/* consumes ref */
+	}
+	net80211_serializer_unlock();
+
+	return sel != NULL ? 0 : -ENOENT;
+}
+
 void
 net80211_bridge_status(void)
 {
@@ -488,6 +555,12 @@ net80211_bridge_status(void)
 	    (int)ic->ic_opmode, sc->rx_dropped);
 	printf("rtw88u: rx frames %u input %u short %u notstarted %u\n",
 	    sc->rx_frames, sc->rx_input, sc->rx_short, sc->rx_notstarted);
+	if (ic->ic_bss != NULL && ic->ic_bss->ni_esslen != 0)
+		printf("rtw88u: bss %.*s bssid %s ch %d rssi %u\n",
+		    ic->ic_bss->ni_esslen, (const char *)ic->ic_bss->ni_essid,
+		    ether_sprintf(ic->ic_bss->ni_bssid),
+		    ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan),
+		    ic->ic_bss->ni_rssi);
 }
 
 static void

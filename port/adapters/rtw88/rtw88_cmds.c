@@ -31,7 +31,8 @@ rtw88_cmd(int argc, char *argv[])
 	int ret;
 
 	if (argc < 2) {
-		csh_printf(csh, "usage: wlanrtw up|scan|bss|status|hwaddr\n");
+		csh_printf(csh, "usage: wlanrtw up|scan|bss|connect <ssid>|"
+		    "status|hwaddr\n");
 		return 0;
 	}
 	if (strcmp(argv[1], "up") == 0) {
@@ -44,6 +45,15 @@ rtw88_cmd(int argc, char *argv[])
 	} else if (strcmp(argv[1], "bss") == 0) {
 		net80211_bridge_scan_dump();
 		csh_printf(csh, "wlanrtw: scan table above\n");
+	} else if (strcmp(argv[1], "connect") == 0) {
+		if (argc < 3) {
+			csh_printf(csh, "wlanrtw: connect <ssid>\n");
+			return 0;
+		}
+		ret = net80211_bridge_connect(
+		    (const uint8_t *)argv[2], strlen(argv[2]));
+		csh_printf(csh, "wlanrtw: connect '%s' -> %d "
+		    "(auth/assoc ~1 s; then status)\n", argv[2], ret);
 	} else if (strcmp(argv[1], "status") == 0) {
 		net80211_bridge_status();
 	} else if (strcmp(argv[1], "hwaddr") == 0) {
@@ -57,5 +67,6 @@ rtw88_cmd(int argc, char *argv[])
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(rtw88_cmd, wlanrtw, "wlanrtw up|scan|bss|status|hwaddr",
-    "rtw88 bring-up and scan (S9 W3)");
+CSH_CMD_EXPORT_ALIAS_FULL(rtw88_cmd, wlanrtw,
+    "wlanrtw up|scan|bss|connect|status|hwaddr",
+    "rtw88 bring-up, scan and connect (S9 W3/W4)");
