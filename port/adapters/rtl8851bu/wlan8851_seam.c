@@ -24,12 +24,33 @@
 
 #include "rtl8851bu_port.h"
 
+#ifdef CONFIG_WLAN_NETIF
+/* port/adapters/rtl8851bu/wlan8851_netif.c: lwip bridge lifecycle */
+extern void wlan8851_wlan_netif_on_assoc(void);
+extern void wlan8851_wlan_netif_on_disassoc(void);
+#endif
+#ifdef CONFIG_NIC_WPA_BACKEND
+/* rtl8851bu_wpa_event: declared in rtl8851bu_port.h (event pump queues
+ * only - the seam runs in driver/USB worker contexts, [S7a] FR-7) */
+#endif
+
 void
 rtw_indicate_wx_assoc_event(_adapter *padapter)
 {
 	(void)padapter;
 
 	printf("rtl8851bu: associated\n");
+#ifdef CONFIG_NIC_WPA_BACKEND
+	rtl8851bu_wpa_event(2 /* WPA_VENDOR_EVENT_ASSOC */,
+			    padapter->mlmepriv.dev_cur_network.network.MacAddress,
+			    NULL, 0);
+#endif
+#ifdef CONFIG_WLAN_NETIF
+	/* [S5b W4] mount the lwip bridge: netif up + dhcp_start in the tcpip
+	 * thread (the sibling line's W5 discipline).  The MAC is efuse-read
+	 * by this point. */
+	wlan8851_wlan_netif_on_assoc();
+#endif
 }
 
 void
@@ -38,6 +59,12 @@ rtw_indicate_wx_disassoc_event(_adapter *padapter)
 	(void)padapter;
 
 	printf("rtl8851bu: disassociated\n");
+#ifdef CONFIG_NIC_WPA_BACKEND
+	rtl8851bu_wpa_event(3 /* WPA_VENDOR_EVENT_DISASSOC */, NULL, NULL, 0);
+#endif
+#ifdef CONFIG_WLAN_NETIF
+	wlan8851_wlan_netif_on_disassoc();
+#endif
 }
 
 void
@@ -46,6 +73,9 @@ indicate_wx_scan_complete_event(_adapter *padapter)
 	(void)padapter;
 
 	printf("rtl8851bu: scan complete\n");
+#ifdef CONFIG_NIC_WPA_BACKEND
+	rtl8851bu_wpa_event(1 /* WPA_VENDOR_EVENT_SCAN_DONE */, NULL, NULL, 0);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
