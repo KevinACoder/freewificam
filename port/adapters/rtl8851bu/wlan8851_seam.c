@@ -66,10 +66,10 @@ indicate_wx_scan_complete_event(_adapter *padapter)
 
 /* ioctl_cfg80211.h:457 maps rtw_cfg80211_ft_event(adapter, parm) here */
 void cfg80211_ft_event(struct net_device *netdev,
-		       struct cfg80211_ft_event_params *ft_event)
+		       struct cfg80211_ft_event_params *params)
 {
 	(void)netdev;
-	(void)ft_event;
+	(void)params;
 	printf("rtl8851bu: cfg80211_ft_event (seam no-op)\n");
 }
 

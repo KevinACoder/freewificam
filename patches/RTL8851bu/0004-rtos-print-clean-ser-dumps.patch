@@ -1,0 +1,107 @@
+diff --git a/os_dep/linux/rtw_cfg.c b/os_dep/linux/rtw_cfg.c
+index 1dd1055..a2ab3dd 100755
+--- a/os_dep/linux/rtw_cfg.c
++++ b/os_dep/linux/rtw_cfg.c
+@@ -140,7 +140,10 @@ module_param(rtw_dynamic_agg_enable, int, 0644);
+ #ifdef RTW_LOG_LEVEL
+ 	uint rtw_drv_log_level = (uint)RTW_LOG_LEVEL; /* from Makefile */
+ #else
+-	uint rtw_drv_log_level = _DRV_INFO_;
++		/* [S5b-W3 print-clean] RTOS default WARNING: INFO chatter drowns
++		 * the console; inert while the Makefile passes -DRTW_LOG_LEVEL
++		 * (configs/wlan8851.config owns the knob, =3). */
++		uint rtw_drv_log_level = _DRV_WARNING_;
+ #endif
+ module_param(rtw_drv_log_level, uint, 0644);
+ MODULE_PARM_DESC(rtw_drv_log_level, "set log level when insert driver module, default log level is _DRV_INFO_ = 4");
+diff --git a/phl/hal_g6/mac/mac_ax/init.c b/phl/hal_g6/mac/mac_ax/init.c
+index 886f2c4..160d302 100755
+--- a/phl/hal_g6/mac/mac_ax/init.c
++++ b/phl/hal_g6/mac/mac_ax/init.c
+@@ -566,12 +566,9 @@ end:
+ 		adapter->sm.mac_rdy = MAC_AX_MAC_INIT_ERR;
+ 		PLTFM_MSG_ERR("[ERR]hal_init fail %d\n", ret);
+ #if MAC_AX_FEATURE_DBGPKG
+-		dbg_en.ss_dbg = 1;
+-		dbg_en.dle_dbg = 1;
+-		dbg_en.dmac_dbg = 1;
+-		dbg_en.cmac_dbg = 1;
+-		dbg_en.mac_dbg_port = 1;
+-		dbg_en.plersvd_dbg = 1;
++		/* [S5b-W3 print-clean] all-force-on dump floods the serial
++		 * ~35s on failure; dbg_en stays zeroed (declaration) so only
++		 * the unconditional crit + fw-status registers print. */
+ 		mac_ops->dbg_status_dump(adapter, &dbg_val, &dbg_en);
+ #endif
+ 	} else {
+@@ -667,12 +664,9 @@ end:
+ 		adapter->sm.mac_rdy = MAC_AX_MAC_DEINIT_ERR;
+ 		PLTFM_MSG_ERR("[ERR]hal_deinit fail %d\n", ret);
+ #if MAC_AX_FEATURE_DBGPKG
+-		dbg_en.ss_dbg = 1;
+-		dbg_en.dle_dbg = 1;
+-		dbg_en.dmac_dbg = 1;
+-		dbg_en.cmac_dbg = 1;
+-		dbg_en.mac_dbg_port = 1;
+-		dbg_en.plersvd_dbg = 1;
++		/* [S5b-W3 print-clean] all-force-on dump floods the serial
++		 * ~35s on failure; dbg_en stays zeroed (declaration) so only
++		 * the unconditional crit + fw-status registers print. */
+ 		ops->dbg_status_dump(adapter, &dbg_val, &dbg_en);
+ #endif
+ 	}
+@@ -817,12 +811,9 @@ end:
+ 		adapter->sm.mac_rdy = MAC_AX_MAC_FINIT_ERR;
+ 		PLTFM_MSG_ERR("[ERR]hal_fast_init fail %d\n", ret);
+ #if MAC_AX_FEATURE_DBGPKG
+-		dbg_en.ss_dbg = 1;
+-		dbg_en.dle_dbg = 1;
+-		dbg_en.dmac_dbg = 1;
+-		dbg_en.cmac_dbg = 1;
+-		dbg_en.mac_dbg_port = 1;
+-		dbg_en.plersvd_dbg = 1;
++		/* [S5b-W3 print-clean] all-force-on dump floods the serial
++		 * ~35s on failure; dbg_en stays zeroed (declaration) so only
++		 * the unconditional crit + fw-status registers print. */
+ 		mac_ops->dbg_status_dump(adapter, &dbg_val, &dbg_en);
+ #endif
+ 	} else {
+@@ -862,12 +853,9 @@ end:
+ 		adapter->sm.mac_rdy = MAC_AX_MAC_FDEINIT_ERR;
+ 		PLTFM_MSG_ERR("[ERR]hal_fast_deinit fail %d\n", ret);
+ #if MAC_AX_FEATURE_DBGPKG
+-		dbg_en.ss_dbg = 1;
+-		dbg_en.dle_dbg = 1;
+-		dbg_en.dmac_dbg = 1;
+-		dbg_en.cmac_dbg = 1;
+-		dbg_en.mac_dbg_port = 1;
+-		dbg_en.plersvd_dbg = 1;
++		/* [S5b-W3 print-clean] all-force-on dump floods the serial
++		 * ~35s on failure; dbg_en stays zeroed (declaration) so only
++		 * the unconditional crit + fw-status registers print. */
+ 		ops->dbg_status_dump(adapter, &dbg_val, &dbg_en);
+ #endif
+ 	}
+diff --git a/phl/hal_g6/mac/mac_ax/ser.c b/phl/hal_g6/mac/mac_ax/ser.c
+index cef425b..8a7c65e 100644
+--- a/phl/hal_g6/mac/mac_ax/ser.c
++++ b/phl/hal_g6/mac/mac_ax/ser.c
+@@ -395,10 +395,16 @@ u32 mac_dump_err_status(struct mac_ax_adapter *adapter,
+ 		    err == MAC_AX_ERR_L0_PROMOTE_TO_L1_DBG)
+ 			mac_dump_l0_to_l1(adapter, err);
+ 	}
+-	if (err == MAC_AX_ERR_L0_ERR_CMAC0 ||
++	/* [S5b-W3 print-clean] The walkers below (per-4B DMAC/CMAC CR walks,
++	 * ss/dle dbgpkg, full dbg-port loop, whole share-mem dump) flood the
++	 * RTOS serial ~35s and evict the incident window from the ring buffer.
++	 * Gated behind ser dbg_lvl bit5 (dbgprt_dump), default 0; re-enable at
++	 * runtime via `set_ser_log_lvl` / MAC_AX_HW_SET_SER_DBG_LVL. */
++	if (adapter->ser_info.dbg_lvl.dbgprt_dump &&
++	    (err == MAC_AX_ERR_L0_ERR_CMAC0 ||
+ 	    err == MAC_AX_ERR_L0_ERR_CMAC1 ||
+ 	    err == HALT_C2H_L1_DBG_MODE ||
+-	    err == MAC_AX_ERR_L0_PROMOTE_TO_L1_DBG) {
++	    err == MAC_AX_ERR_L0_PROMOTE_TO_L1_DBG)) {
+ 		cmac_err = MAC_REG_R32(R_AX_CMAC_ERR_ISR);
+ 		dmac_err = MAC_REG_R32(R_AX_DMAC_ERR_ISR);
+ 		dump_dmac_cr(adapter);

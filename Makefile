@@ -1526,12 +1526,15 @@ $(TARGET).bin: $(TARGET).elf
 # Merge gates (SPEC v3 §3.8.3):
 #  1. cleanroom scan - vendor-trace identifiers must not appear anywhere in
 #     the source tree (adapted sources are rewritten, references cite the
-#     mechanism, never the vendor naming);
+#     mechanism, never the vendor naming). The ft_ token is word-bounded:
+#     standalone cleanroom-prefixed identifiers still fail, while Linux API
+#     names that merely contain the substring (cfg80211_ft_event - linkage
+#     fixed by the vendor header macro, S5b-W3) pass;
 #  2. print-discipline scan - a literal carriage return in a source file
 #     means someone wrote "\r\n" instead of letting the sink own the wire
 #     format (the log.c sink is CRLF-literate; sources are not).
 gates:
-	@if grep -rnE 'phytium|fparameters|fgic|ft_|fboot|fcrt0' \
+	@if grep -rnE 'phytium|fparameters|fgic|\bft_|fboot|fcrt0' \
 		arch board os app port configs 2>/dev/null; then \
 		echo 'gates: cleanroom-scan FAIL'; exit 1; \
 	else echo 'gates: cleanroom-scan PASS'; fi
