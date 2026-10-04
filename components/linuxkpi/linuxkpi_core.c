@@ -642,8 +642,26 @@ lkpi_completion_init(struct completion *c)
 	if (*lk_cmtx(c) == NULL)
 		lkpi_fatal("completion mutex init failed");
 	memset(cv, 0, sizeof(*cv));
-	if (tx_semaphore_create(&cv->sem, "lkpi_cv", 0) != TX_SUCCESS)
-		lkpi_fatal("completion semaphore init failed");
+	{
+		UINT txret = tx_semaphore_create(&cv->sem, "lkpi_cv", 0);
+
+		if (txret != TX_SUCCESS) {
+			extern void *_tx_thread_current_ptr;
+			extern unsigned long _tx_thread_system_state;
+
+			TX_THREAD *cur = _tx_thread_current_ptr;
+
+			lkpi_printf("lkpi: completion sem create ret=%u "
+			    "cv=%p mtx=%p done=%u sysst=%lu cur=%p(%s)\n",
+			    (unsigned)txret, (void *)cv, (void *)*lk_cmtx(c),
+			    (unsigned)c->done,
+			    (unsigned long)_tx_thread_system_state,
+			    (void *)cur,
+			    cur != NULL && cur->tx_thread_name != NULL ?
+			      cur->tx_thread_name : "-");
+			lkpi_fatal("completion semaphore init failed");
+		}
+	}
 	c->done = 0;
 }
 
@@ -652,6 +670,24 @@ lkpi_completion_reinit(struct completion *c)
 {
 
 	c->done = 0;
+}
+
+/* The init created a raw ThreadX semaphore and a cmsis2 mutex; a freed
+ * carrier (urb recycling) MUST take both down, or the semaphore stays
+ * on the created list as a dangling entry and the next create on the
+ * recycled address returns TX_SEMAPHORE_ERROR (the "ret=12" park on
+ * rtw88's second reserve-page write, 2026-10-04 W2 round; the mutex is
+ * a pool slot leaking per urb on top). */
+void
+lkpi_completion_destroy(struct completion *c)
+{
+	struct lkpi_cv_shell *cv = lk_ccv(c);
+
+	(void)tx_semaphore_delete(&cv->sem);
+	if (*lk_cmtx(c) != NULL) {
+		(void)osMutexDelete(*lk_cmtx(c));
+		*lk_cmtx(c) = NULL;
+	}
 }
 
 void

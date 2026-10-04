@@ -684,6 +684,7 @@ usb_free_urb(struct urb *urb)
 	    urb->_refs);
 	if (--urb->_refs > 0)
 		return;
+	lkpi_completion_destroy(&urb->_done);
 	lkpi_usb_stage_put(urb);
 	kfree(urb);
 }

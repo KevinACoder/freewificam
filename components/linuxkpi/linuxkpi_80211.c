@@ -27,8 +27,13 @@ lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
     const struct lkpi_n80211_drv *drv)
 {
 	(void)hw; (void)perm_addr; (void)drv;
-	lkpi_printf("lkpi80211: net80211 bridge not present (W3)\n");
-	return -1;
+	/* W2 落桩桥 (spec W2 范围注记): registration succeeds without a
+	 * net80211 world so the probe completes and the chip-ready anchors
+	 * land; W3's real bridge (os/net80211/) overrides this weak
+	 * definition and takes the vtable. */
+	lkpi_printf("lkpi80211: net80211 bridge not present (W3) - "
+	    "registered without protocol world\n");
+	return 0;
 }
 
 __attribute__((weak)) void
