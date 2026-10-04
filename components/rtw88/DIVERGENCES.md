@@ -44,3 +44,18 @@ S9 spec FR-2（v1.3 偏差台账制）：rtw88 允许源改动，但每处必须
 mac80211.h 补 7.3 MLO 面（ieee80211_link_sta / link_sta_rc_update /
 AMPDU_TX_START_IMMEDIATE）、iopoll.h 补 read_poll_timeout(_atomic) 7.x 签名、
 asm/byteorder.h 新建、mac80211.h 内核词表 abs。rtw88 20 TU 逐字。）
+
+### D-3 取证打印组 — c2h/txrpt/ops_tx/bss_info 回读（W4 板测临时，收口后撤）
+
+- **文件**：`fw.c`（rtw_fw_c2h_cmd_handle 入口）、`tx.c`（rtw_tx_report_handle
+  sn/st 解析后）、`mac80211.c`（rtw_ops_tx mgmt 分支、rtw_ops_bss_info_changed
+  入口回读、rtw_ops_sw_scan_complete 进出、rtw_ops_mgd_prepare_tx 进出、
+  rtw_ops_add_interface 尾部回读）。
+- **改写**：各加 1-2 行 `printf("rtw88u: ...")`，无任何行为改动（prepare_tx/
+  scan_complete 仅打印；bss_info 的回读读寄存器只读不写）。
+- **理由**：W4 定位"auth 响应不达桥"的板上取证面：C2H class 流水、TX report
+  的 ACK 结果（st==0=ACKed）、mgmt TX 时的芯片信道视图、RX 过滤链读回
+  （MACID/RCR/RXFLTMAP/BSSID regs）。mac80211.h 侧同期修正
+  `mgd_prepare_tx` 原型为 7.3 `ieee80211_prep_tx_info*` 形（见 linuxkpi 侧
+  注释；shim 是 first-party 不入本表）。
+- **撤除条件**：单播 RX 断链结案后整组撤除，本表条目同步销。

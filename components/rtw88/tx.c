@@ -250,6 +250,10 @@ void rtw_tx_report_handle(struct rtw_dev *rtwdev, struct sk_buff *skb, int src)
 		st = GET_CCX_REPORT_STATUS_V1(c2h->payload);
 	}
 
+	/* [S9 D-3] st==0 means the fw ACKed the frame; anything else is
+	 * retries-exhausted / lifetime-out for the matched sn. */
+	printf("rtw88u: txrpt sn=%u st=%u\n", sn, st);
+
 	spin_lock_irqsave(&tx_report->q_lock, flags);
 	skb_queue_walk_safe(&tx_report->queue, cur, tmp) {
 		n = (u8 *)IEEE80211_SKB_CB(cur)->status.status_driver_data;

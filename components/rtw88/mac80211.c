@@ -26,6 +26,15 @@ static void rtw_ops_tx(struct ieee80211_hw *hw,
 		return;
 	}
 
+	/* [S9 D-3] board forensics: mgmt TX fires against the chip's live
+	 * channel view - an auth sent on a stale channel never gets ACKed
+	 * (sn=60 st=64 retries-exhausted, board 2026-10-04). */
+	if (ieee80211_is_mgmt(((struct ieee80211_hdr *)skb->data)->frame_control))
+		printf("rtw88u: ops_tx mgmt len %u chan %u prio %u scan %u\n",
+		    (unsigned)skb->len, rtwdev->hal.current_channel,
+		    skb->priority,
+		    (unsigned)test_bit(RTW_FLAG_SCANNING, rtwdev->flags));
+
 	rtw_tx(rtwdev, control, skb);
 }
 
@@ -218,6 +227,20 @@ static int rtw_ops_add_interface(struct ieee80211_hw *hw,
 	rtw_core_port_switch(rtwdev, vif);
 	rtw_recalc_lps(rtwdev, vif);
 
+	/* [S9 D-3] unicast RX dies at the chip filter unless the port
+	 * MACID (RCR BIT_APM comparator) actually landed: read the port
+	 * address back plus the live RCR / mgmt filter maps. */
+	printf("rtw88u: port %u macid rb %02x:%02x:%02x:%02x:%02x:%02x "
+	    "rcr %08x flt0 %04x flt1 %04x flt2 %04x\n",
+	    rtwvif->port,
+	    rtw_read8(rtwdev, 0x0610), rtw_read8(rtwdev, 0x0611),
+	    rtw_read8(rtwdev, 0x0612), rtw_read8(rtwdev, 0x0613),
+	    rtw_read8(rtwdev, 0x0614), rtw_read8(rtwdev, 0x0615),
+	    rtw_read32(rtwdev, REG_RCR),
+	    rtw_read16(rtwdev, REG_RXFLTMAP0),
+	    rtw_read16(rtwdev, REG_RXFLTMAP1),
+	    rtw_read16(rtwdev, REG_RXFLTMAP2));
+
 	mutex_unlock(&rtwdev->mutex);
 
 	rtw_dbg(rtwdev, RTW_DBG_STATE, "start vif %pM mac_id %d on port %d\n",
@@ -386,6 +409,22 @@ static void rtw_ops_bss_info_changed(struct ieee80211_hw *hw,
 	struct rtw_coex_stat *coex_stat = &coex->stat;
 	u32 config = 0;
 
+	/* [S9 D-3] the unicast-RX filter chain read back live: port MACID
+	 * (APM comparator), RCR, mgmt filter maps, and the BSSID regs the
+	 * BSS_CHANGED_BSSID write below targets. */
+	printf("rtw88u: bss_info enter changed=%llx macid %02x:%02x:%02x:%02x:%02x:%02x "
+	    "bssid %02x:%02x:%02x:%02x:%02x:%02x rcr %08x flt %04x/%04x/%04x\n",
+	    changed,
+	    rtw_read8(rtwdev, 0x0610), rtw_read8(rtwdev, 0x0611),
+	    rtw_read8(rtwdev, 0x0612), rtw_read8(rtwdev, 0x0613),
+	    rtw_read8(rtwdev, 0x0614), rtw_read8(rtwdev, 0x0615),
+	    rtw_read8(rtwdev, 0x0618), rtw_read8(rtwdev, 0x0619),
+	    rtw_read8(rtwdev, 0x061a), rtw_read8(rtwdev, 0x061b),
+	    rtw_read8(rtwdev, 0x061c), rtw_read8(rtwdev, 0x061d),
+	    rtw_read32(rtwdev, REG_RCR),
+	    rtw_read16(rtwdev, REG_RXFLTMAP0),
+	    rtw_read16(rtwdev, REG_RXFLTMAP1),
+	    rtw_read16(rtwdev, REG_RXFLTMAP2));
 	mutex_lock(&rtwdev->mutex);
 
 	rtw_leave_lps_deep(rtwdev);
@@ -456,6 +495,8 @@ static void rtw_ops_bss_info_changed(struct ieee80211_hw *hw,
 
 	if (changed & BSS_CHANGED_ERP_SLOT)
 		rtw_conf_tx(rtwdev, rtwvif);
+
+	printf("rtw88u: bss_info exit\n");
 
 	if (changed & BSS_CHANGED_PS)
 		rtw_recalc_lps(rtwdev, NULL);
@@ -696,9 +737,11 @@ static void rtw_ops_sw_scan_complete(struct ieee80211_hw *hw,
 {
 	struct rtw_dev *rtwdev = hw->priv;
 
+	printf("rtw88u: scan_complete enter\n");
 	mutex_lock(&rtwdev->mutex);
 	rtw_core_scan_complete(rtwdev, vif, false);
 	mutex_unlock(&rtwdev->mutex);
+	printf("rtw88u: scan_complete exit\n");
 }
 
 static void rtw_ops_mgd_prepare_tx(struct ieee80211_hw *hw,
@@ -707,11 +750,13 @@ static void rtw_ops_mgd_prepare_tx(struct ieee80211_hw *hw,
 {
 	struct rtw_dev *rtwdev = hw->priv;
 
+	printf("rtw88u: prepare_tx enter\n");
 	mutex_lock(&rtwdev->mutex);
 	rtw_leave_lps_deep(rtwdev);
 	rtw_coex_connect_notify(rtwdev, COEX_ASSOCIATE_START);
 	rtw_chip_prepare_tx(rtwdev);
 	mutex_unlock(&rtwdev->mutex);
+	printf("rtw88u: prepare_tx exit\n");
 }
 
 static int rtw_ops_set_rts_threshold(struct ieee80211_hw *hw, int radio_idx,

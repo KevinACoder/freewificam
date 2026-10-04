@@ -73,6 +73,7 @@ struct lkpi_n80211_softc {
 
 	bool			started;
 	bool			scanning;
+	bool			attached;	/* attach() completed */
 
 	/* RX intake counters (W3 forensics: "table empty" must be
 	 * distinguishable from "callbacks never arrived") */
@@ -81,6 +82,16 @@ struct lkpi_n80211_softc {
 	unsigned int		rx_short;
 	unsigned int		rx_dropped;	/* mbuf alloc failures */
 	unsigned int		rx_input;	/* handed to ieee80211_input */
+	/* mgmt subtype counters (W4 forensics: the vendored discard
+	 * paths are all silent - IEEE80211_DEBUG is compiled out - so
+	 * "auth resp reached the bridge or not" is the only visible
+	 * split between a state-machine bug and an air-side miss) */
+	unsigned int		rx_beacon;
+	unsigned int		rx_probe_resp;
+	unsigned int		rx_auth;
+	unsigned int		rx_assoc_resp;
+	unsigned int		rx_deauth;
+	unsigned int		rx_disassoc;
 };
 
 static struct lkpi_n80211_softc lkpi_n80211_softc;
@@ -130,6 +141,19 @@ lkpi_n80211_tx_mgmt(struct lkpi_n80211_softc *sc, struct mbuf *m)
 	}
 	m_freem(m);
 
+	/* W4 forensics: auth/assoc frames only (scan floods this path
+	 * with probe requests).  fc + addresses expose a malformed
+	 * builder before the frame is blamed on the air side. */
+	if (sc->ic.ic_state != IEEE80211_S_SCAN) {
+		const uint8_t *f = buf;
+
+		printf("rtw88u: tx mgmt fc=%02x%02x len %zu "
+		    "a1 %s a2 %s a3 %s\n",
+		    f[1], f[0], len,
+		    ether_sprintf(f + 4), ether_sprintf(f + 10),
+		    ether_sprintf(f + 16));
+	}
+
 	(void)sc->drv.tx_mgmt(buf, len);
 	if_statinc(&sc->ifp, if_opackets);
 }
@@ -166,6 +190,12 @@ lkpi_n80211_newstate_cb(struct lkpi_n80211_softc *sc,
 		/* one channel per pass; the dwell timer hops */
 		lkpi_n80211_set_channel(sc);
 		if (ostate != IEEE80211_S_SCAN && !sc->scanning) {
+			static const uint8_t
+			    zero_bss[IEEE80211_ADDR_LEN] = { 0 };
+
+			/* auth/assoc timed out back to scan: drop the
+			 * BSS context the firmware still holds */
+			(void)sc->drv.bss_info_changed(zero_bss, 0, 0, 0);
 			sc->scanning = true;
 			sc->drv.sw_scan_start(ic->ic_myaddr);
 		}
@@ -185,11 +215,35 @@ lkpi_n80211_newstate_cb(struct lkpi_n80211_softc *sc,
 		break;
 
 	case IEEE80211_S_AUTH:
-		/* W4: the join picked a scan-table node; retune to its
-		 * channel BEFORE the auth frame goes out (the driver's
-		 * config op is what actually programs the RF) */
+		/* leave the scan world FIRST: rtw88 keeps RF calibration
+		 * and the periodic dynamic mechanism parked behind
+		 * RTW_FLAG_SCANNING, and only sw_scan_complete clears it
+		 * (start/complete stay a pair) */
+		if (sc->scanning) {
+			sc->scanning = false;
+			sc->drv.sw_scan_complete();
+		}
+		printf("rtw88u: auth seq 1 (scan closed)\n");
+		/* retune to the joined BSS's channel BEFORE the auth frame
+		 * goes out (the driver's config op is what actually
+		 * programs the RF; sta_join already moved ic_curchan) */
 		lkpi_n80211_set_channel(sc);
+		printf("rtw88u: auth seq 2 (channel set)\n");
+		/* hand the AP's bssid to the firmware (PORT_SET_BSSID +
+		 * op-chan bookkeeping) before anything goes on air */
+		if (ic->ic_bss != NULL)
+			(void)sc->drv.bss_info_changed(ic->ic_bss->ni_bssid,
+			    0, 0, ic->ic_bss->ni_intval != 0 ?
+			    ic->ic_bss->ni_intval : 100);
+		printf("rtw88u: auth seq 3 (bss info)\n");
 		(void)sc->sc_newstate(ic, nstate, arg);
+		printf("rtw88u: auth seq 4 (auth frame out)\n");
+		/* upstream mac80211 calls drv.mgd_prepare_tx before every
+		 * auth/assoc burst - rtw88 puts the phy calibration there
+		 * (rtw_chip_prepare_tx); without it the RF leaves the
+		 * scan world uncalibrated and the AP never answers */
+		sc->drv.mgd_prepare_tx();
+		printf("rtw88u: auth seq 5 (prepare tx)\n");
 		lkpi_n80211_drain_mgtq(sc);
 		break;
 
@@ -197,13 +251,26 @@ lkpi_n80211_newstate_cb(struct lkpi_n80211_softc *sc,
 		/* assoc req rides the same mgtq/drain; channel stays on
 		 * the joined BSS */
 		(void)sc->sc_newstate(ic, nstate, arg);
+		sc->drv.mgd_prepare_tx();
 		lkpi_n80211_drain_mgtq(sc);
 		break;
 
+	case IEEE80211_S_RUN:
+		/* association complete: flip the port to MGD_LINKED and
+		 * write the AID (net80211 set ni_associd off the assoc
+		 * resp); rtw88 hangs its rsvd-page/default-port setup on
+		 * BSS_CHANGED_ASSOC */
+		if (ic->ic_bss != NULL)
+			(void)sc->drv.bss_info_changed(ic->ic_bss->ni_bssid,
+			    1, IEEE80211_AID(ic->ic_bss->ni_associd),
+			    ic->ic_bss->ni_intval != 0 ?
+			    ic->ic_bss->ni_intval : 100);
+		(void)sc->sc_newstate(ic, nstate, arg);
+		break;
+
 	default:
-		/* S_RUN (join done) and anything else the state machine
-		 * drives: forwards to net80211; the W4 wpa round adds the
-		 * RUN-side hooks */
+		/* anything else the state machine drives: forwards to
+		 * net80211 untouched */
 		(void)sc->sc_newstate(ic, nstate, arg);
 		break;
 	}
@@ -354,6 +421,22 @@ lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
 		return;
 	}
 	sc->rx_frames++;
+	/* 802.11 fc: bits 2-3 type (0 = mgmt), bits 4-7 subtype */
+	{
+		const uint8_t *p = data;
+		uint16_t fc = (uint16_t)(p[0] | (p[1] << 8));
+
+		if ((fc & 0x0c) == 0) {
+			switch ((fc >> 4) & 0xf) {
+			case 0x8:	sc->rx_beacon++;	break;
+			case 0x5:	sc->rx_probe_resp++;	break;
+			case 0xb:	sc->rx_auth++;		break;
+			case 0x1:	sc->rx_assoc_resp++;	break;
+			case 0xc:	sc->rx_deauth++;	break;
+			case 0xa:	sc->rx_disassoc++;	break;
+			}
+		}
+	}
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == NULL || len > MCLBYTES) {
 		if (m != NULL)
@@ -400,6 +483,17 @@ lkpi_n80211_up_work(struct work_struct *w)
 static int
 lkpi_n80211_up(void)
 {
+	int i;
+
+	/* the shell can beat the USB probe: attach (and with it the
+	 * INIT_WORK of up_work) lands at ieee80211_register_hw, deep in
+	 * the 50s enumeration window - queueing the work before that
+	 * made it run with a NULL func and the one-shot busy flag wedged
+	 * every later call (board 2026-10-04, "up -> -110" + scan -16) */
+	for (i = 0; i < 200 && !lkpi_n80211_softc.attached; i++)
+		msleep(100);
+	if (!lkpi_n80211_softc.attached)
+		return -EAGAIN;
 	if (lkpi_n80211_up_busy)
 		return -EBUSY;
 	lkpi_n80211_up_busy = true;
@@ -495,18 +589,23 @@ net80211_bridge_get_hwaddr(uint8_t addr[6])
 }
 
 /*
- * W4 open connect: pick the named BSS out of the scan table and drive
- * net80211's own join (sta_join -> newstate(S_AUTH) -> auth/assoc frames
- * ride ic_mgtq; the responses re-enter through the RX seam).  Open
- * network only so far: privacy/WPA flags are cleared and the join's
- * authmode is OPEN (the WPA2 leg arrives with the supplicant round).
+ * W4 connect = policy entry only.  The vendored net80211 state machine
+ * owns the whole flow (ROAMING_AUTO): the targeted active scan runs with
+ * ic_des_essid set, and ieee80211_end_scan -> match_bss -> sta_join
+ * exits the scan and enters AUTH on its own the moment the target shows
+ * up in the table.  This entry never joins by hand and never races the
+ * worker - it only sets the policy inputs the core documents:
+ *   - ic_des_essid: the scan target
+ *   - IEEE80211_F_PRIVACY: matched to the target's beacon CAPINFO so
+ *     match_bss accepts it (open AP vs WPA-capable AP); the WPA2 4-way
+ *     round owns the F_WPA* flags
  */
 int
 net80211_bridge_connect(const uint8_t *ssid, size_t len)
 {
 	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
 	struct ieee80211com *ic = &sc->ic;
-	struct ieee80211_node *ni, *sel = NULL;
+	struct ieee80211_node *ni;
 	int ret;
 
 	if (!sc->started) {
@@ -517,30 +616,30 @@ net80211_bridge_connect(const uint8_t *ssid, size_t len)
 	if (len == 0 || len > IEEE80211_NWID_LEN)
 		return -EINVAL;
 
-	/* find the BSS in the scan table, holding a reference across the
-	 * unlock (sta_join takes ownership of that reference) */
 	net80211_serializer_lock();
+	/* policy: privacy bit from the scan table's beacon (0 when the
+	 * target has not been heard yet - a fresh sweep will pick it up) */
+	ni = NULL;
 	TAILQ_FOREACH(ni, &ic->ic_scan.nt_node, ni_list) {
-		if (ni->ni_esslen == len &&
-		    memcmp(ni->ni_essid, ssid, len) == 0) {
-			sel = ieee80211_ref_node(ni);
+		if (ni->ni_esslen == (int)len &&
+		    memcmp(ni->ni_essid, ssid, len) == 0)
 			break;
-		}
 	}
-	if (sel != NULL) {
-		/* open-network policy: no privacy/WPA gates (match_bss and
-		 * the auth builder both key on these flags) */
-		ic->ic_flags &= ~(IEEE80211_F_PRIVACY | IEEE80211_F_WPA1 |
-		    IEEE80211_F_WPA2 | IEEE80211_F_DROPUNENC);
-		/* sta_join's copy_bss propagates authmode from the OLD
-		 * ic_bss; program it before the join */
-		if (ic->ic_bss != NULL)
-			ic->ic_bss->ni_authmode = IEEE80211_AUTH_OPEN;
-		(void)ieee80211_sta_join(ic, sel);	/* consumes ref */
-	}
+	if (ni != NULL && (ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0)
+		ic->ic_flags |= IEEE80211_F_PRIVACY;
+	else
+		ic->ic_flags &= ~IEEE80211_F_PRIVACY;
+	ic->ic_flags &= ~(IEEE80211_F_WPA1 | IEEE80211_F_WPA2 |
+	    IEEE80211_F_DROPUNENC);
+	ic->ic_des_esslen = (int)len;
+	memset(ic->ic_des_essid, 0, sizeof(ic->ic_des_essid));
+	memcpy(ic->ic_des_essid, ssid, len);
+	memcpy(ic->ic_chan_scan, ic->ic_chan_active,
+	    sizeof(ic->ic_chan_scan));
 	net80211_serializer_unlock();
 
-	return sel != NULL ? 0 : -ENOENT;
+	(void)ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+	return 0;
 }
 
 void
@@ -555,6 +654,10 @@ net80211_bridge_status(void)
 	    (int)ic->ic_opmode, sc->rx_dropped);
 	printf("rtw88u: rx frames %u input %u short %u notstarted %u\n",
 	    sc->rx_frames, sc->rx_input, sc->rx_short, sc->rx_notstarted);
+	printf("rtw88u: rx mgmt bcn %u prsp %u auth %u asrsp %u "
+	    "deauth %u disassoc %u\n",
+	    sc->rx_beacon, sc->rx_probe_resp, sc->rx_auth,
+	    sc->rx_assoc_resp, sc->rx_deauth, sc->rx_disassoc);
 	if (ic->ic_bss != NULL && ic->ic_bss->ni_esslen != 0)
 		printf("rtw88u: bss %.*s bssid %s ch %d rssi %u\n",
 		    ic->ic_bss->ni_esslen, (const char *)ic->ic_bss->ni_essid,
@@ -614,7 +717,10 @@ lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
 	    IEEE80211_C_SHPREAMBLE |
 	    IEEE80211_C_SHSLOT |
 	    IEEE80211_C_WPA;		/* 802.11i, software crypto */
-	ic->ic_roaming = IEEE80211_ROAMING_MANUAL;	/* W3 this round */
+	/* keep the core's own auto sequencing: end_scan matches
+	 * ic_des_essid and joins (sta_join -> S_AUTH) on its own - the
+	 * bridge only sets policy, the state machine is the judge */
+	ic->ic_roaming = IEEE80211_ROAMING_AUTO;
 
 	ic->ic_sup_rates[IEEE80211_MODE_11B] = ieee80211_std_rateset_11b;
 	ic->ic_sup_rates[IEEE80211_MODE_11G] = ieee80211_std_rateset_11g;
@@ -659,6 +765,7 @@ lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
 	INIT_WORK(&sc->up_work, lkpi_n80211_up_work);
 	lkpi_timer_setup(&sc->dwell_to, lkpi_n80211_dwell);
 	lkpi_timer_setup(&sc->wd_to, lkpi_n80211_wd_tick);
+	sc->attached = true;
 
 	printf("lkpi80211: net80211 bridge attached (scan world)\n");
 	return 0;

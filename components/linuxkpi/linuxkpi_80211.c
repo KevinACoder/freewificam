@@ -251,10 +251,73 @@ lkpi_n80211_drv_tx_mgmt(const uint8_t *frame, size_t len)
 	info = IEEE80211_SKB_CB(skb);
 	memset(info, 0, sizeof(*info));
 	info->control.vif = lkpi_n80211_vif;
+	/* mac80211 always asks the driver for TX status (the fw answers
+	 * with a C2H CCX report) and sends mgmt with TID 7 - rtw88 derives
+	 * the txdesc qsel from skb->priority and only arms the report
+	 * machinery under REQ_TX_STATUS */
+	info->flags |= IEEE80211_TX_CTL_REQ_TX_STATUS;
+	skb->priority = 7;
 	memset(&control, 0, sizeof(control));
 	/* rtw88's tx frees the skb itself on failure and hands the
 	 * completion back through tx_status_irqsafe/free_txskb */
 	hw->ops->tx(hw, &control, skb);
+	return 0;
+}
+
+/* Upstream mac80211 runs drv->mgd_prepare_tx before every auth/assoc
+ * mgmt burst; rtw88 puts its phy calibration (rtw_chip_prepare_tx) and
+ * the coex associate gate there.  The 7.3 ops shape carries a
+ * prep_tx_info pointer (rtw88 ignores its contents). */
+static void
+lkpi_n80211_drv_mgd_prepare_tx(void)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi80211_primary_ctx();
+	struct ieee80211_prep_tx_info info;
+
+	if (ctx->vif == NULL || (&ctx->hw)->ops->mgd_prepare_tx == NULL)
+		return;
+	memset(&info, 0, sizeof(info));
+	(&ctx->hw)->ops->mgd_prepare_tx(&ctx->hw, ctx->vif, &info);
+}
+
+/* The BSS context rtw_ops_bss_info_changed programs the firmware with:
+ * bssid write (PORT_SET_BSSID + op-chan bookkeeping) and the assoc/port
+ * state (RTW_NET_MGD_LINKED, rsvd pages, default port).  Only the flags
+ * whose value actually moved are raised. */
+static int
+lkpi_n80211_drv_bss_info_changed(const uint8_t bssid[6], int assoc,
+    unsigned int aid, int beacon_int)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi80211_primary_ctx();
+	struct ieee80211_vif *vif = ctx->vif;
+	struct ieee80211_bss_conf *conf;
+	u64 changed = 0;
+
+	if (vif == NULL || (&ctx->hw)->ops->bss_info_changed == NULL)
+		return -EOPNOTSUPP;
+	conf = &vif->bss_conf;
+	if (bssid != NULL &&
+	    memcmp(conf->bssid, bssid, ETH_ALEN) != 0) {
+		memcpy(conf->bssid, bssid, ETH_ALEN);
+		changed |= BSS_CHANGED_BSSID;
+	}
+	if (vif->cfg.assoc != (assoc != 0)) {
+		vif->cfg.assoc = assoc != 0;
+		conf->assoc = vif->cfg.assoc;
+		changed |= BSS_CHANGED_ASSOC;
+	}
+	if (aid > 0 && vif->cfg.aid != (u16)aid) {
+		vif->cfg.aid = (u16)aid;
+		conf->aid = (u16)aid;
+		changed |= BSS_CHANGED_ASSOC;	/* aid rides the port write */
+	}
+	if (beacon_int > 0 && conf->beacon_int != (u16)beacon_int) {
+		conf->beacon_int = (u16)beacon_int;
+		changed |= BSS_CHANGED_BEACON_INT;
+	}
+	if (changed == 0)
+		return 0;
+	(&ctx->hw)->ops->bss_info_changed(&ctx->hw, vif, conf, changed);
 	return 0;
 }
 
@@ -275,6 +338,8 @@ lkpi_n80211_drv_init(void)
 	lkpi_n80211_drv.sw_scan_start = lkpi_n80211_drv_sw_scan_start;
 	lkpi_n80211_drv.sw_scan_complete = lkpi_n80211_drv_sw_scan_complete;
 	lkpi_n80211_drv.tx_mgmt = lkpi_n80211_drv_tx_mgmt;
+	lkpi_n80211_drv.mgd_prepare_tx = lkpi_n80211_drv_mgd_prepare_tx;
+	lkpi_n80211_drv.bss_info_changed = lkpi_n80211_drv_bss_info_changed;
 }
 
 int

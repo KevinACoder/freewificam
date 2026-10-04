@@ -313,6 +313,11 @@ void rtw_fw_c2h_cmd_handle(struct rtw_dev *rtwdev, struct sk_buff *skb)
 	if (!test_bit(RTW_FLAG_RUNNING, rtwdev->flags))
 		goto unlock;
 
+	/* [S9 D-3] board forensics: one line per C2H class - the TX report
+	 * (CCX) is the only chip-side answer to "did the auth frame go out
+	 * and get ACKed"; volume is low (RA/beacon-filter classes only). */
+	printf("rtw88u: c2h id=%u len=%u\n", c2h->id, len);
+
 	switch (c2h->id) {
 	case C2H_CCX_TX_RPT:
 		rtw_tx_report_handle(rtwdev, skb, C2H_CCX_TX_RPT);

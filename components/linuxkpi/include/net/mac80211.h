@@ -1087,6 +1087,18 @@ struct ieee80211_rx_status {
 	u8			zero_length_psdu_type;
 };
 
+/* [LNX] 7.3 shape (linux-upstream mac80211.h:4068): rtw_ops_mgd_prepare_tx
+ * takes this by pointer; the old u16-duration prototype made the shim's
+ * third argument land in the wrong register class - the same drift class
+ * that hid ops->config's radio_idx (board 2026-10-04).  rtw88 reads only
+ * hw out of it, which is why the mismatch stayed silent. */
+struct ieee80211_prep_tx_info {
+	u16 duration;
+	u16 subtype;
+	u8 success:1, was_assoc:1;
+	int link_id;
+};
+
 /*
  * The real ops table: the signatures are Linux 6.12's, verbatim - the
  * bridge dispatches through them, so they must not drift from the
@@ -1148,7 +1160,8 @@ struct ieee80211_ops {
 	void	(*sw_scan_complete)(struct ieee80211_hw *hw,
 		    struct ieee80211_vif *vif);
 	void	(*mgd_prepare_tx)(struct ieee80211_hw *hw,
-		    struct ieee80211_vif *vif, u16 duration);
+		    struct ieee80211_vif *vif,
+		    struct ieee80211_prep_tx_info *info);
 	int	(*set_rts_threshold)(struct ieee80211_hw *hw, u32 value);
 	int	(*sta_statistics)(struct ieee80211_hw *hw,
 		    struct ieee80211_vif *vif, struct ieee80211_sta *sta,

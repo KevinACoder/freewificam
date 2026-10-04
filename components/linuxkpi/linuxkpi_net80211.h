@@ -28,6 +28,13 @@ struct lkpi_n80211_drv {
 	void	(*sw_scan_start)(const uint8_t mac[6]);
 	void	(*sw_scan_complete)(void);
 	int	(*tx_mgmt)(const uint8_t *frame, size_t len);	/* fire-and-forget */
+	/* phy calibration + coex gate mac80211 runs before every
+	 * auth/assoc mgmt burst (rtw_chip_prepare_tx) */
+	void	(*mgd_prepare_tx)(void);
+	/* BSS context for the firmware: bssid write + assoc/port state
+	 * (BSS_CHANGED_BSSID / BSS_CHANGED_ASSOC); aid = 0 pre-assoc */
+	int	(*bss_info_changed)(const uint8_t bssid[6], int assoc,
+	    unsigned int aid, int beacon_int);
 };
 
 int	lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
