@@ -44,23 +44,3 @@ index 3752512..8a0c8f7 100755
 +{
 +	rtw_drv_halt();
 +}
-diff --git a/os_dep/osdep_service.c b/os_dep/osdep_service.c
-index 046b63c..6ee5004 100644
---- a/os_dep/osdep_service.c
-+++ b/os_dep/osdep_service.c
-@@ -24,6 +24,15 @@ inline int _rtw_netif_rx(_nic_hdl ndev, struct sk_buff *skb)
- 	rtw_hwsim_medium_pre_netif_rx(skb);
- 	return netif_rx(skb);
- }
-+#else /* [W1-0002] RTOS data seam: with CONFIG_HWSIM off (the default) the
-+ * vendor defines _rtw_netif_rx nowhere and the default-config link breaks
-+ * (this block is the only definition site). Direct netif_rx pass-through
-+ * keeps the data seam landing first-party (spec §3.2.2 V5 diff item 2). */
-+inline int _rtw_netif_rx(_nic_hdl ndev, struct sk_buff *skb)
-+{
-+	skb->dev = ndev;
-+	return netif_rx(skb);
-+}
- #endif /* CONFIG_HWSIM */
- 
- u32 rtw_atoi(u8 *s)
