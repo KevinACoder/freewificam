@@ -377,6 +377,67 @@ $(BUILD)/port/adapters/linuxkpi/%.o: \
 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/app/lkpi_udisk/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/app/lkpi_hub/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+
+# linuxkpi-80211 shim face (SPEC S9/rtw88-adapt FR-3/FR-9): the mac80211
+# entry-point TU + <net/mac80211.h> shim header. Default off keeps every
+# non-wireless linuxkpi image byte-identical (FR-9 zero-intrusion); the
+# net80211-side bridge stays a pure C ABI (linuxkpi_net80211.h) with weak
+# defaults until W3 links the real os/net80211 implementation.
+CONFIG_LINUXKPI_80211 ?= n
+ifeq ($(filter $(CONFIG_LINUXKPI_80211),y n),)
+$(error CONFIG_LINUXKPI_80211 must be y or n, got '$(CONFIG_LINUXKPI_80211)')
+endif
+ifeq ($(CONFIG_LINUXKPI_80211),y)
+SRCS += $(LKPI_DIR)/linuxkpi_80211.c
+endif
+endif
+
+# rtw88 (SPEC S9/rtw88-adapt §4/W1): the mainline in-tree 7.3-rc2 USB
+# selection - 20 TU frozen copy (components/rtw88, source [LNX]
+# e71d9a28760f, USB build set of rtw88_core-y + usb.c + the 8821c family)
+# compiled verbatim against the linuxkpi face. FR-2 (v1.3): modifications
+# are allowed but every hunk must be recorded in components/rtw88/
+# DIVERGENCES.md - the per-round verbatim audit diffs the copy against the
+# baseline and accepts only ledgered hunks. The firmware rides as the
+# gen_firmware_array.py blob TU registered into the linuxkpi fw registry
+# (rtw88 is its first real consumer). W1 is compile-face only: no USB
+# claim hook, no net80211 bridge (weak defaults stand in).
+CONFIG_NIC_RTW88 ?= n
+ifeq ($(filter $(CONFIG_NIC_RTW88),y n),)
+$(error CONFIG_NIC_RTW88 must be y or n, got '$(CONFIG_NIC_RTW88)')
+endif
+ifeq ($(CONFIG_NIC_RTW88),y)
+ifeq ($(filter y,$(CONFIG_LINUXKPI_80211)),)
+$(error CONFIG_NIC_RTW88=y requires CONFIG_LINUXKPI_80211=y (the shim face))
+endif
+RTW88_DIR := components/rtw88
+RTW88_SRCS := \
+	$(RTW88_DIR)/main.c \
+	$(RTW88_DIR)/mac80211.c \
+	$(RTW88_DIR)/util.c \
+	$(RTW88_DIR)/debug.c \
+	$(RTW88_DIR)/tx.c \
+	$(RTW88_DIR)/rx.c \
+	$(RTW88_DIR)/mac.c \
+	$(RTW88_DIR)/phy.c \
+	$(RTW88_DIR)/coex.c \
+	$(RTW88_DIR)/efuse.c \
+	$(RTW88_DIR)/fw.c \
+	$(RTW88_DIR)/ps.c \
+	$(RTW88_DIR)/sec.c \
+	$(RTW88_DIR)/bf.c \
+	$(RTW88_DIR)/sar.c \
+	$(RTW88_DIR)/regd.c \
+	$(RTW88_DIR)/usb.c \
+	$(RTW88_DIR)/rtw8821c.c \
+	$(RTW88_DIR)/rtw8821c_table.c \
+	$(RTW88_DIR)/rtw8821cu.c \
+	$(RTW88_DIR)/fw_rtw8821c.c
+SRCS += $(RTW88_SRCS)
+# frozen import: -w; the linuxkpi include world owns <linux/*.h> and
+# <net/*.h>. CONFIG_RTW88_DEBUGFS/DEBUG/LEDS and CONFIG_PM stay off
+# (S9-Q7 / N5; wow.o and led.o are not part of the copy at all).
+$(BUILD)/components/rtw88/%.o: EXTRAFLAGS := -w $(LKPI_CFLAGS)
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
