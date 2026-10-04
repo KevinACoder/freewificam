@@ -198,7 +198,12 @@ lkpi_n80211_drv_config(int center_freq, int chan)
 	(&ctx->hw)->conf.chandef.width = NL80211_CHAN_WIDTH_20_NOHT;
 	(&ctx->hw)->conf.chandef.center_freq1 = (u32)center_freq;
 	(&ctx->hw)->conf.chandef.center_freq2 = 0;
-	return (&ctx->hw)->ops->config(&ctx->hw,
+	/* the 7.3 ops signature grew radio_idx (0 = the only radio);
+	 * the old 2-arg prototype let the shim's `changed` land in the
+	 * wrong register, so rtw_set_channel never ran and the chip sat
+	 * untuned (zero RX - board 2026-10-04).  Keep in lockstep with
+	 * the [LNX] header: mac80211.h:4760. */
+	return (&ctx->hw)->ops->config(&ctx->hw, 0,
 	    IEEE80211_CONF_CHANGE_CHANNEL);
 }
 

@@ -838,6 +838,23 @@ static int rtw_usb_setup(struct rtw_dev *rtwdev)
 
 static int rtw_usb_start(struct rtw_dev *rtwdev)
 {
+	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
+	int i;
+
+	/* [S9 D-2] the rx urbs armed at probe end ride their first TD
+	 * across the chip's power-off/on cycle (the efuse read leaves
+	 * the chip off; rtw_power_on re-inits it here).  On the RTOS
+	 * xHCI that old TD never completes afterwards (the ring shows
+	 * it armed, the endpoint running, zero transfers - board
+	 * 2026-10-04), while the vendor line arms its rx urbs after
+	 * chip init and receives fine.  Re-arm the queue here so every
+	 * resident TD belongs to the running chip generation. */
+	rtw_usb_cancel_rx_bufs(rtwusb);
+	for (i = 0; i < RTW_USB_RXCB_NUM; i++) {
+		struct rx_usb_ctrl_block *rxcb = &rtwusb->rx_cb[i];
+
+		rtw_usb_rx_resubmit(rtwusb, rxcb, GFP_KERNEL);
+	}
 	return 0;
 }
 

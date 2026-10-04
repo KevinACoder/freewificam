@@ -1106,7 +1106,7 @@ struct ieee80211_ops {
 		    struct sk_buff *skb);
 	int	(*start)(struct ieee80211_hw *hw);
 	void	(*stop)(struct ieee80211_hw *hw, bool suspend);
-	int	(*config)(struct ieee80211_hw *hw, u32 changed);
+	int	(*config)(struct ieee80211_hw *hw, int radio_idx, u32 changed);
 	int	(*add_interface)(struct ieee80211_hw *hw,
 		    struct ieee80211_vif *vif);
 	void	(*remove_interface)(struct ieee80211_hw *hw,
