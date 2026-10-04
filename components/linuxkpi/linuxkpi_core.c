@@ -1155,17 +1155,69 @@ lkpi_timer_expiry(ULONG arg)
 	tl->tl_func(tl);
 }
 
+/* [S5b-W3] is this TX_TIMER already on the kernel's created-timer list?
+ * (the created-list head/count live in tx_timer_initialize.c; tx_timer.h
+ * declares them extern for client TUs) */
+extern TX_TIMER *_tx_timer_created_ptr;
+extern ULONG _tx_timer_created_count;
+
+static bool
+lkpi_timer_is_created(const TX_TIMER *tm)
+{
+	const TX_TIMER *p = _tx_timer_created_ptr;
+	ULONG i;
+
+	for (i = 0; (i < _tx_timer_created_count) && (p != TX_NULL); i++) {
+		if (p == tm)
+			return true;
+		p = p->tx_timer_created_next;
+	}
+	return false;
+}
+
 void
 lkpi_timer_setup(struct timer_list *t, void (*fn)(struct timer_list *))
 {
 	struct lkpi_callout_shell *co = lk_callout_tl(t);
 
 	lkpi_workqueue_ready();
+	/* [S5b-W3] Linux timer_setup() is an idempotent re-init of the
+	 * timer_list - the vendor calls it PER SCAN on the same
+	 * sctrl->scan_timer (phl_cmd_scan.c:998 _os_init_timer) and
+	 * _os_release_timer is a no-op in the platform shims.  ThreadX
+	 * refuses a second tx_timer_create on a timer still on the
+	 * created list (TX_TIMER_ERROR -> the earlier park on the second
+	 * scan), and tx_timer_delete is not a usable undo here: its
+	 * error-checking wrapper refuses with TX_CALLER_ERROR outside the
+	 * exact thread context it expects and the timer then STAYS on the
+	 * list (board: the delete-then-create attempt parked identically).
+	 * So: membership-test the list ourselves and only create when
+	 * absent - the already-created kernel timer is a valid object we
+	 * simply re-point (expiry routes through co->arg and t->tl_func,
+	 * both reset here). */
+	if (lkpi_timer_is_created(&co->timer)) {
+		static unsigned int reuse_n;
+
+		(void)tx_timer_deactivate(&co->timer);
+		if (reuse_n < 4U) {
+			reuse_n++;
+			lkpi_printf("lkpi: timer_setup reuse #%u %p\n",
+			    reuse_n, (void *)&co->timer);
+		}
+		co->arg = t;
+		t->tl_func = fn;
+		t->tl_pending = false;
+		return;
+	}
 	memset(co, 0, sizeof(*co));
 	co->arg = t;
 	if (tx_timer_create(&co->timer, "lkpi_timer", lkpi_timer_expiry,
-	    (ULONG)(uintptr_t)t, 1, 0, TX_NO_ACTIVATE) != TX_SUCCESS)
+	    (ULONG)(uintptr_t)t, 1, 0, TX_NO_ACTIVATE) != TX_SUCCESS) {
+		lkpi_printf("lkpi: timer create failed %p id=%08x cnt=%u\n",
+		    (void *)&co->timer, (unsigned)co->timer.tx_timer_id,
+		    (unsigned)_tx_timer_created_count);
 		lkpi_fatal("timer init failed");
+	}
 	t->tl_func = fn;
 	t->tl_pending = false;
 }

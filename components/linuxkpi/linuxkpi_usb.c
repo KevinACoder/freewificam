@@ -355,6 +355,47 @@ usbkpi_wedge_report(void)
 	}
 }
 
+/* [S5b-W3] stall probe (read by the wlanmon thread in os/threadx/mon.c):
+ * the in-flight control transfer and sync submit windows.  The up-stall
+ * left the console silent after the cts2self handler print - this trail
+ * names the exact call in flight (or none) at the moment of the dump.
+ * Single volatile snapshot per window (ctrl on ep0 is serialized by the
+ * hubport mutex; a colliding sync bulk submit can only blur the bulk
+ * pair, the n counter still shows progress).  A zero tick = idle. */
+static volatile u32 lkpi_usb_ctrl_ctx_tick;	/* 0 = no ctrl in flight */
+static volatile u8 lkpi_usb_ctrl_ctx_req;
+static volatile u8 lkpi_usb_ctrl_ctx_type;
+static volatile u16 lkpi_usb_ctrl_ctx_val;
+static volatile u16 lkpi_usb_ctrl_ctx_idx;
+static volatile u16 lkpi_usb_ctrl_ctx_len;
+static volatile u32 lkpi_usb_ctrl_ctx_n;	/* completed ctrl calls */
+static volatile u32 lkpi_usb_sync_ctx_tick;	/* 0 = no sync submit */
+static volatile u8 lkpi_usb_sync_ctx_ep;
+static volatile u32 lkpi_usb_sync_ctx_len;
+static volatile u32 lkpi_usb_sync_ctx_n;	/* completed sync submits */
+
+void
+wlan_mon_extra_probe(void)
+{
+
+	lkpi_printf("MON kpi ctrlstage=%u ctrln=%u syncn=%u\n",
+	    lkpi_usb_ctrl_stage, lkpi_usb_ctrl_ctx_n, lkpi_usb_sync_ctx_n);
+	if (lkpi_usb_ctrl_ctx_tick != 0)
+		lkpi_printf("MON ctrl t=%u in-flight req=%02x type=%02x "
+		    "val=%04x idx=%04x len=%u\n",
+		    (unsigned)lkpi_usb_ctrl_ctx_tick,
+		    (unsigned)lkpi_usb_ctrl_ctx_req,
+		    (unsigned)lkpi_usb_ctrl_ctx_type,
+		    (unsigned)lkpi_usb_ctrl_ctx_val,
+		    (unsigned)lkpi_usb_ctrl_ctx_idx,
+		    (unsigned)lkpi_usb_ctrl_ctx_len);
+	if (lkpi_usb_sync_ctx_tick != 0)
+		lkpi_printf("MON sync t=%u in-flight ep%02x len=%u\n",
+		    (unsigned)lkpi_usb_sync_ctx_tick,
+		    (unsigned)lkpi_usb_sync_ctx_ep,
+		    (unsigned)lkpi_usb_sync_ctx_len);
+}
+
 static void
 usbkpi_push_ctrl(struct usb_device *dev, u8 requesttype, u8 request,
     u16 value, u16 index, u16 size, const void *data, int raw_err,
@@ -525,6 +566,33 @@ static struct mutex lkpi_usb_submit_mtx;
 /* bring-up trace: every transfer crossed, shell-gated */
 static bool lkpi_usb_trace;
 static unsigned int lkpi_usb_trace_n;
+/* [S5b-W3] sync cost sampler: per-sync-submit elapsed (queue+wire+wait,
+ * everything under usbh_submit_urb) accumulated per ep0/non-ep0 bucket,
+ * printed every 64 completions - the fwdl chunk pacing hunt. 1 ms ticks. */
+static struct {
+	unsigned long n, sum_ms, max_ms;
+	unsigned char max_ep;
+} lkpi_sync_cost[2];
+static void
+lkpi_sync_cost_sample(unsigned char ep, unsigned long ms)
+{
+	struct lkpi_sync_cost_one { unsigned long n, sum_ms, max_ms; };
+	int b = (ep & 0x0fU) == 0U ? 0 : 1;
+
+	lkpi_sync_cost[b].n++;
+	lkpi_sync_cost[b].sum_ms += ms;
+	if (ms > lkpi_sync_cost[b].max_ms) {
+		lkpi_sync_cost[b].max_ms = ms;
+		lkpi_sync_cost[b].max_ep = ep;
+	}
+	if ((lkpi_sync_cost[b].n & 0x3FU) == 0U)
+		lkpi_printf("usbkpi: sync cost %s n=%lu avg=%lums max=%lums ep%02x\n",
+		    b == 0 ? "ctrl" : "bulk",
+		    lkpi_sync_cost[b].n,
+		    lkpi_sync_cost[b].sum_ms / lkpi_sync_cost[b].n,
+		    lkpi_sync_cost[b].max_ms, lkpi_sync_cost[b].max_ep);
+}
+
 /* [W4] sync rejection sampler: the sync failure path prints its first 8
  * hits and every 64th after that (the arm-retry shapes can legitimately
  * hammer it; the per-miss cost stays bounded) */
@@ -805,9 +873,11 @@ lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep)
 		rq->busy = true;
 		usbkpi_push(next, usb_pipein(next->pipe), true,
 		    next->transfer_buffer_length, 0);
-		lkpi_mutex_lock(&lkpi_usb_submit_mtx);
+		/* [S5b-W3] the submit runs OUTSIDE the mutex (see the main
+		 * submit path): usbh_submit_urb sleeps inside for sync
+		 * transfers, and a kick holding this lock while sleeping
+		 * wedges the drain thread behind any sync submitter */
 		ret = usbh_submit_urb(hurb);
-		lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
 		if (ret == 0)
 			return;	/* in flight again */
 		/* re-issue failed (kill/device gone): deliver the error */
@@ -1167,8 +1237,41 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	urb->submitted = true;
 	usbkpi_push(urb, usb_pipein(urb->pipe), true,
 	    urb->transfer_buffer_length, 0);
-	ret = usbh_submit_urb(hurb);
+	/* [S5b-W3] release the mutex BEFORE the submit: usbh_submit_urb
+	 * sleeps inside for the sync shape (port sem up to hurb->timeout,
+	 * 5 s), and holding lkpi_usb_submit_mtx across that sleep made
+	 * every other submitter - the ep0 vendor-control register pollers
+	 * (SER/C2HREG) and the drain thread's rx re-arm kick - queue behind
+	 * the sleeper.  Board fwdl paced at ~15 ms per 2 KiB bulk chunk
+	 * behind the control polls (5 s for a download Linux does in
+	 * <1 s) and the drain thread wedged 5 s per contended kick.  The
+	 * mutex protects the park FIFO + stage pool + hurb fill only; each
+	 * struct urb owns its embedded usbh_urb (usb_alloc_urb), so the
+	 * submit itself races nothing the port does not already serialize
+	 * internally (per-ring TD arbitration under its critical
+	 * sections). */
 	lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
+	{
+		unsigned long t0 = tx_time_get();
+
+		if (!async) {
+			/* [S5b-W3] sync-submit trail (see wlan_mon_extra_probe) */
+			lkpi_usb_sync_ctx_ep = usb_pipeendpoint(urb->pipe) |
+			    (usb_pipein(urb->pipe) ? 0x80U : 0U);
+			lkpi_usb_sync_ctx_len = urb->transfer_buffer_length;
+			lkpi_usb_sync_ctx_tick = (u32)t0;
+		}
+		ret = usbh_submit_urb(hurb);
+		if (!async)
+			lkpi_sync_cost_sample(
+			    usb_pipeendpoint(urb->pipe) |
+			    (usb_pipein(urb->pipe) ? 0x80U : 0U),
+			    tx_time_get() - t0);
+		if (!async) {
+			lkpi_usb_sync_ctx_tick = 0;
+			lkpi_usb_sync_ctx_n++;
+		}
+	}
 	if (!async && ret == 0) {
 		/* the submit returned because the transfer COMPLETED:
 		 * collect it right here (the submitter's thread is a
@@ -1225,6 +1328,12 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		 * error transfer. */
 		int raw = (hurb->errorcode != 0) ? hurb->errorcode : ret;
 
+		/* [S5b-W3] the rejected/failed sync transfer must return its
+		 * stage slot here (the completed path at the top does): a
+		 * leaked slot per failed chunk drained the pool across the
+		 * vendor's fwdl retry bursts */
+		if (urb->_stage != NULL)
+			lkpi_usb_stage_put(urb);
 		urb->submitted = false;
 		urb->status = lkpi_usb_errno(raw);
 		/* pair the S record so the dump shows the failure leg */
@@ -1430,8 +1539,17 @@ usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
 	usbkpi_push_ctrl(dev, requesttype, request, value, index, size,
 	    is_in ? NULL : data, 0, true);
 	lkpi_usb_ctrl_stage = 3;
+	/* [S5b-W3] the ctrl trail (see wlan_mon_extra_probe) */
+	lkpi_usb_ctrl_ctx_req = request;
+	lkpi_usb_ctrl_ctx_type = requesttype;
+	lkpi_usb_ctrl_ctx_val = value;
+	lkpi_usb_ctrl_ctx_idx = index;
+	lkpi_usb_ctrl_ctx_len = size;
+	lkpi_usb_ctrl_ctx_tick = (u32)tx_time_get();
 	ret = usbh_control_transfer(hport, &setup,
 	    size != 0 ? stage : NULL);
+	lkpi_usb_ctrl_ctx_tick = 0;
+	lkpi_usb_ctrl_ctx_n++;
 	lkpi_usb_ctrl_stage = 4;
 	if (is_in) {
 		/* record what came back (the stage holds the received

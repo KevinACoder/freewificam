@@ -1,0 +1,40 @@
+diff --git a/phl/phl_cmd_ser.c b/phl/phl_cmd_ser.c
+index ad0c040..4e1f152 100644
+--- a/phl/phl_cmd_ser.c
++++ b/phl/phl_cmd_ser.c
+@@ -114,9 +114,11 @@ _ser_event_notify(void *phl, u8 *p_ntfy)
+ 	if (notify == RTW_PHL_SER_DUMP_FW_LOG) {
+ 		PHL_TRACE(COMP_PHL_DBG, _PHL_WARNING_, "_ser_event_notify, RTW_PHL_SER_DUMP_FW_LOG\n");
+ 
+-		SET_MSG_MDL_ID_FIELD(msg.msg_id, PHL_MDL_PHY_MGNT);
+-		SET_MSG_EVT_ID_FIELD(msg.msg_id, MSG_EVT_DUMP_PLE_BUFFER);
+-		phl_msg_hub_send(phl_info, NULL, &msg);
++		/* [S5b-W3 print-clean] MSG_EVT_DUMP_PLE_BUFFER (whole rsvd PLE +
++		 * fw backtrace + fwerror walks) floods the serial for tens of
++		 * seconds; dump-only with no recovery semantics, so not sent -
++		 * the trace line above keeps the event visible. */
++		(void)msg;
+ 
+ 		return RTW_PHL_STATUS_SUCCESS;
+ 	}
+@@ -205,7 +207,8 @@ static void _ser_l2_notify(struct cmd_ser *cser)
+ 		stsl2->ser_log = _ser_state(cser);
+ 		pq_push(drv, &cser->stslist, &stsl2->list, _tail, _bh);
+ 	}
+-	_ser_dump_stsl2(cser);
++	/* [S5b-W3 print-clean] sts-L2 register log dump disabled: dump-only. */
++	/* _ser_dump_stsl2(cser); */
+ 
+ 	/* L2 can't be rescued, bserl2 wouldn't reset. */
+ 	/* comment out: wait for new ser flow to handle L2 */
+@@ -636,7 +639,9 @@ static void _ser_msg_hdl_m9(struct cmd_ser *cser)
+ 	void *drv = phl_to_drvpriv(phl_info);
+ 
+ 	/* dump FW status for debug*/
+-	rtw_hal_fw_dbg_dump(phl_info->hal);
++	/* [S5b-W3 print-clean] the full fw dbg dump (dmac/cmac/ss/trg walks)
++	 * floods the serial for tens of seconds; dump-only, disabled. */
++	/* rtw_hal_fw_dbg_dump(phl_info->hal); */
+ 
+ 	_os_cancel_timer(drv, &cser->poll_timer);
+ 	_ser_set_status(cser, CMD_SER_M9);

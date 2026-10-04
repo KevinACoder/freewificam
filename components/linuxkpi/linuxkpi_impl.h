@@ -27,6 +27,10 @@
 #include <stdbool.h>
 
 #include <tx_api.h>
+/* [S5b-W3] TX_TIMER_ID for the idempotent lkpi_timer_setup re-init check:
+ * tx_api.h carries the TYPE definitions only; the component id macros live
+ * in the per-component headers. */
+#include <tx_timer.h>
 
 #include "cmsis_os2.h"
 #include "heap.h"

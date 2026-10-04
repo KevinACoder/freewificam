@@ -86,12 +86,23 @@ SECTIONS
 	. = . + 64K;
 	__stack_top = .;
 
-	/* Heap reservation: unused this milestone (no allocator), kept so the
-	 * cache-hygiene range and the ThreadX-round "unused memory" pointer
-	 * have one owner. NOLOAD, costs nothing in the binary. */
+	/* Heap reservation: the runtime tlsf pool (CONFIG_HEAP_BYTES) is
+	 * carved from __heap_start at init with no runtime bound check - the
+	 * reservation is what the ASSERT below guards against. [S5b-W2]
+	 * 4M -> 16M: the wlan8851 pool grew to 16M (PHL rx pool 128x20KiB)
+	 * and an 8M pool overran a 4M reservation into the dma_noc window at
+	 * 0x0c000000 (tlsf handed out descriptor-window memory -> wild
+	 * pointer data abort, first cold boot). The assert now pins the
+	 * actual pool ceiling for every config. */
 	. = ALIGN(16);
 	__heap_start = .;
-	. = . + 4M;
+	/* [S5b-W3] 44M: board-measured full demand = pre-txring phases
+	 * 9.35MB + the core txring pool MAX_TX_RING_NUM(4096) x 5620B =
+	 * 23.0MB (vendor Linux default, vmalloc-absorbed there; live-size
+	 * census: 3359 rings x 5620B outstanding at the OOM) + mlme/scan
+	 * and datapath runtime headroom; 0xa862e30+44M = 0xd462e30 keeps
+	 * ~11.6MB below the dma_noc block at 0x0e000000. */
+	. = . + 44M;
 	__heap_end = .;
 
 	/* First byte past everything the image statically reserves. Kernel-
@@ -106,8 +117,10 @@ SECTIONS
 	 * NOLOAD and cleared by its owner at init; nothing is loaded here by
 	 * U-Boot. The image sections above must never reach this block and
 	 * this section must never leave it - both are asserted. */
-	. = 0x0c000000;
-	ASSERT(__heap_end <= 0x0c000000,
+	/* [S5b-W3] 0x0c000000 -> 0x0e000000 (heap headroom, see the
+	 * reservation comment above and mmu.c DMA_NOC_BASE). */
+	. = 0x0e000000;
+	ASSERT(__heap_end <= 0x0e000000,
 	       "image (bss+stack+heap) reaches the dma_noc block")
 	__dma_noc_start = .;
 	.dma_noc (NOLOAD) : ALIGN(64) {

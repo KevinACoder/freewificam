@@ -1,0 +1,30 @@
+diff --git a/phl/test/trx_test.c b/phl/test/trx_test.c
+index db651df..fff2ed3 100755
+--- a/phl/test/trx_test.c
++++ b/phl/test/trx_test.c
+@@ -639,14 +639,17 @@ enum rtw_phl_status phl_test_sw_alloc(void *phl)
+ 	enum rtw_phl_status sts = RTW_PHL_STATUS_FAILURE;
+ 	FUNCIN_WSTS(sts);
+ 	do {
+-		sts = _phl_alloc_tx_req_pool(phl, MAX_TEST_TXREQ_NUM);
+-		if (RTW_PHL_STATUS_SUCCESS != sts)
+-			break;
+-		sts = _phl_alloc_rx_req_pool(phl, MAX_TEST_RXREQ_NUM);
+-		if (RTW_PHL_STATUS_SUCCESS != sts)
+-			break;
+-		sts = _phl_alloc_tx_pkt_pool(phl, MAX_TEST_PAYLOAD_NUM,
+-					     			 MAX_TEST_PAYLOAD_SIZE);
++		/* [S5b-W3] RTOS: the PHL test pools are skipped. They are
++		 * test-command-only (no datapath consumer: phl_tx.c /
++		 * phl_trx_usb.c / rtw_xmit.c never touch trx_test pools -
++		 * the real TX engine uses the core-side txring), and their
++		 * combined footprint (tx_req 2048x sizeof(rtw_xmit_req) +
++		 * rx 256 x ~24KB + payload 2048 x 2308, board-measured
++		 * ~13MB via the heap big-alloc tracker) exhausted the whole
++		 * 20-23MB RTOS heap and starved alloc_txring (the 5620B
++		 * OOM). Linux absorbs them in GFP_KERNEL; the RTOS lane
++		 * runs the test suite out of pools. */
++		sts = RTW_PHL_STATUS_SUCCESS;
+ 
+ 	} while (false);
+ 	FUNCOUT_WSTS(sts);

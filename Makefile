@@ -1041,17 +1041,70 @@ RTL8851BU_VENDOR_SRCS := \
 	third-party/RTL8851bu/phl/test/verify/phl_test_verify.c \
 	third-party/RTL8851bu/platform/platform_ops.c
 
-# W1 adapter tier: no modeswitch (0bda:b851 enumerates directly, W0-B) and
-# no wpa/netif units yet (W4/W5 rounds add theirs with their config keys).
+# W1 adapter tier: no modeswitch (0bda:b851 enumerates directly, W0-B).
+# [S5b W4] the lwip netif bridge joins the adapter tier under
+# CONFIG_WLAN_NETIF (the sibling line's key): the wpa backend is still a
+# later round, so the netif owns the only RX sink consumer.
+RTL8851BU_NETIF_SRCS :=
+ifeq ($(CONFIG_WLAN_NETIF),y)
+ifeq ($(filter y,$(CONFIG_LWIP)),)
+$(error CONFIG_WLAN_NETIF=y requires CONFIG_LWIP=y)
+endif
+RTL8851BU_NETIF_SRCS := port/adapters/rtl8851bu/wlan8851_netif.c
+RTL8851BU_ADAPTER_EXTRA_CFLAGS := -DCONFIG_WLAN_NETIF=1 \
+	-Ios/lwip/include -Ithird-party/lwip/src/include
+else
+RTL8851BU_ADAPTER_EXTRA_CFLAGS :=
+endif
+
+# [S5b-W4] the wpa_supplicant vendor backend (the S5a 8821 block
+# mirrored): compiles when the component line is in the image.  The guard
+# define flips the seam/drv_entry hooks and - with the netif bridge
+# present - makes the wpa sink the single RX owner (EAPOL to the
+# supplicant pump, the rest into wlan8851_wlan_netif_input).
+RTL8851BU_WPA_BACKEND_SRCS :=
+ifeq ($(CONFIG_WPA_SUPPLICANT),y)
+RTL8851BU_WPA_BACKEND_SRCS := port/adapters/rtl8851bu/wpa_vendor_rtl8851bu.c
+RTL8851BU_ADAPTER_EXTRA_CFLAGS += -DCONFIG_NIC_WPA_BACKEND=1 \
+	-Ios/wpa_supplicant
+endif
+
 RTL8851BU_ADAPTER_SRCS := \
 	port/adapters/rtl8851bu/drv_entry.c \
 	port/adapters/rtl8851bu/wlan8851_cmds.c \
 	port/adapters/rtl8851bu/wlan8851_seam.c \
-	port/adapters/rtl8851bu/usbh_wlan_class.c
+	port/adapters/rtl8851bu/usbh_wlan_class.c \
+	$(RTL8851BU_NETIF_SRCS) \
+	$(RTL8851BU_WPA_BACKEND_SRCS)
 
 SRCS := $(RTL8851BU_ADAPTER_SRCS) $(SRCS)
 SRCS += $(RTL8851BU_VENDOR_SRCS)
 CFLAGS += -DCONFIG_NIC_RTL8851BU=1
+
+# [S5b-W3] stall forensics (os/threadx/mon.c): the thread/mutex/semaphore
+# table dump every 10 s at osPriorityRealtime, printed through
+# board_log_emergency so a wedged console cannot silence it.  Board-round
+# diagnostic only - default off so the product image never carries it.
+CONFIG_WLAN_MON ?= n
+ifeq ($(filter $(CONFIG_WLAN_MON),y n),)
+$(error CONFIG_WLAN_MON must be y or n, got '$(CONFIG_WLAN_MON)')
+endif
+ifeq ($(CONFIG_WLAN_MON),y)
+SRCS += os/threadx/mon.c
+CFLAGS += -DCONFIG_WLAN_MON=1
+endif
+
+# [S5b-W3] unassisted board-round driver (app/wlan8851/main.c): after a
+# settle delay automatically runs up -> scan -> bss on a dedicated thread,
+# so the acceptance chain reproduces without console typing and a stall
+# cannot wedge the shell.  Board-round diagnostic only, default off.
+CONFIG_WLAN_AUTORUN ?= n
+ifeq ($(filter $(CONFIG_WLAN_AUTORUN),y n),)
+$(error CONFIG_WLAN_AUTORUN must be y or n, got '$(CONFIG_WLAN_AUTORUN)')
+endif
+ifeq ($(CONFIG_WLAN_AUTORUN),y)
+CFLAGS += -DCONFIG_WLAN_AUTORUN=1
+endif
 
 # Vendor build config: the W0-B board-proven macro set (kbuild .cmd of the
 # linux-7.3 build, core/.rtw_cmd.o.cmd) minus kbuild internals and minus the
@@ -1095,12 +1148,18 @@ $(BUILD)/port/adapters/rtl8851bu/%.o: \
 	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
 		-I$(RTL8851BU_ROOT)/include -I$(RTL8851BU_ROOT)/core/crypto \
 		-I$(RTL8851BU_ROOT)/phl/hal_g6 -I$(RTL8851BU_ROOT)/platform \
-		$(RTL8851BU_VENDOR_CFG) -fgnu89-inline -DCONFIG_NIC_RTL8851BU=1
+		$(RTL8851BU_VENDOR_CFG) -fgnu89-inline -DCONFIG_NIC_RTL8851BU=1 \
+		$(RTL8851BU_ADAPTER_EXTRA_CFLAGS)
 # app/wlan8851 rides the shell flags like app/wlan8821 does (CSH_CFLAGS
 # carries -DCONFIG_SHELL=1 - without it the shellboot #ifdef compiles out).
+# [S5b W4] LWIP_WLAN_APP_CFLAGS is recursive on purpose (defined in the
+# lwip block below): the W4 data-plane image arms tcpip_init here - without
+# -DCONFIG_LWIP=1 the branch compiles out and the first assoc callback
+# asserts 'Invalid mbox' (board 2026-10-04).
 $(BUILD)/app/wlan8851/%.o: \
 	EXTRAFLAGS = $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
-		-Iport/adapters/rtl8851bu -DCONFIG_NIC_RTL8851BU=1
+		-Iport/adapters/rtl8851bu -DCONFIG_NIC_RTL8851BU=1 \
+		$(LWIP_WLAN_APP_CFLAGS)
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
@@ -1445,6 +1504,11 @@ WPA_INC := -Ios/wpa_supplicant/shim \
 # The vendor driver (rtw_security.c) bundles its own hostap-derived
 # omac1_aes_128; the supplicant's copy is renamed at the compile flag so
 # the two worlds coexist in one image without touching either tree.
+# [S5b-W4] the 8851 (V5) tree goes further: core/crypto/ is a full
+# hostap-derived crypto library (rtw_crypto_wrap.c + aes-internal* +
+# sha256* + aes-omac1) that collides on 19 symbols - the same rename
+# treatment extends to the whole intersection (link evidence
+# runs/20261004-rtl8851bu-w4, all names WPA-world-only by grep).
 WPA_CFG := -include stdarg.h \
 	-include os/wpa_supplicant/wpa_port_config.h \
 	$(WPA_BACKEND_KEY) \
@@ -1452,6 +1516,29 @@ WPA_CFG := -include stdarg.h \
 	-Domac1_aes_256=wpa_rtos_omac1_aes_256 \
 	-DTe0=wpa_rtos_Te0 -DTd0=wpa_rtos_Td0 \
 	-DTd4s=wpa_rtos_Td4s -Drcons=wpa_rtos_rcons \
+	-Domac1_aes_vector=wpa_rtos_omac1_aes_vector \
+	-Domac1_aes_128_vector=wpa_rtos_omac1_aes_128_vector \
+	-DrijndaelKeySetupEnc=wpa_rtos_rijndaelKeySetupEnc \
+	-Daes_encrypt=wpa_rtos_aes_encrypt \
+	-Daes_encrypt_init=wpa_rtos_aes_encrypt_init \
+	-Daes_encrypt_deinit=wpa_rtos_aes_encrypt_deinit \
+	-Dsha256_vector=wpa_rtos_sha256_vector \
+	-Dsha256_process=wpa_rtos_sha256_process \
+	-Dsha256_done=wpa_rtos_sha256_done \
+	-Dsha256_prf=wpa_rtos_sha256_prf \
+	-Dsha256_prf_bits=wpa_rtos_sha256_prf_bits \
+	-Dhmac_sha256=wpa_rtos_hmac_sha256 \
+	-Dhmac_sha256_vector=wpa_rtos_hmac_sha256_vector \
+	-Dforced_memzero=wpa_rtos_forced_memzero \
+	-Dwpa_printf=wpa_rtos_wpa_printf \
+	-Dwpa_hexdump=wpa_rtos_wpa_hexdump \
+	-Dwpa_hexdump_key=wpa_rtos_wpa_hexdump_key \
+	-Dos_memdup=wpa_rtos_os_memdup \
+	-Dos_memcmp_const=wpa_rtos_os_memcmp_const \
+	-Dglobal_op_class=wpa_rtos_global_op_class \
+	-Dhex2byte=wpa_rtos_hex2byte \
+	-Dhexstr2bin=wpa_rtos_hexstr2bin \
+	-Dbin_clear_free=wpa_rtos_bin_clear_free \
 	-Dsscanf=wpa_port_sscanf \
 	-DCONFIG_WPA_THREAD_STACK=$(CONFIG_WPA_THREAD_STACK) \
 	-DCONFIG_WPA_SUPP_DEBUG_LEVEL=$(CONFIG_WPA_SUPP_DEBUG_LEVEL)
@@ -1526,12 +1613,15 @@ $(TARGET).bin: $(TARGET).elf
 # Merge gates (SPEC v3 §3.8.3):
 #  1. cleanroom scan - vendor-trace identifiers must not appear anywhere in
 #     the source tree (adapted sources are rewritten, references cite the
-#     mechanism, never the vendor naming);
+#     mechanism, never the vendor naming). The ft_ token is word-bounded:
+#     standalone cleanroom-prefixed identifiers still fail, while Linux API
+#     names that merely contain the substring (cfg80211_ft_event - linkage
+#     fixed by the vendor header macro, S5b-W3) pass;
 #  2. print-discipline scan - a literal carriage return in a source file
 #     means someone wrote "\r\n" instead of letting the sink own the wire
 #     format (the log.c sink is CRLF-literate; sources are not).
 gates:
-	@if grep -rnE 'phytium|fparameters|fgic|ft_|fboot|fcrt0' \
+	@if grep -rnE 'phytium|fparameters|fgic|\bft_|fboot|fcrt0' \
 		arch board os app port configs 2>/dev/null; then \
 		echo 'gates: cleanroom-scan FAIL'; exit 1; \
 	else echo 'gates: cleanroom-scan PASS'; fi
