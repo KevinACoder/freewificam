@@ -1113,10 +1113,12 @@ endif
 # NAPI/GRO/NETIF_SG (SG defaults y in the vendor Makefile, spec diff item 6),
 # CONFIG_RADIO_WORK.  DM_ODM_SUPPORT_TYPE does not apply (PHL replaced
 # PHYDM).  RTW_LOG_LEVEL is config-owned like the sibling; RTW_PHL_LOG_LEVEL
-# rides at the W0-B value.
+# config-owned since W6 (quiet measurement configs drop it; default keeps the
+# W0-B board-proven value 4).
 ifeq ($(CONFIG_RTW_LOG_LEVEL),)
 $(error CONFIG_RTW_LOG_LEVEL must be set in the config (configs/ owns it))
 endif
+CONFIG_RTW_PHL_LOG_LEVEL ?= 4
 RTL8851BU_VENDOR_CFG := -DCONFIG_RTL8851B -DCONFIG_USB_HCI -DCONFIG_PHL_ARCH \
 	-DCONFIG_WIFI_6 -DCONFIG_MP_INCLUDED -DCONFIG_BTC \
 	-DCONFIG_EFUSE_CONFIG_FILE -DCONFIG_LITTLE_ENDIAN \
@@ -1134,7 +1136,7 @@ RTL8851BU_VENDOR_CFG := -DCONFIG_RTL8851B -DCONFIG_USB_HCI -DCONFIG_PHL_ARCH \
 	-DHIGH_ACTIVE_HST2DEV=0 -DCONFIG_RTW_UP_MAPPING_RULE=0 \
 	-DRTW_COUNTRY_IE_SLAVE_EN_MODE=0 -DRTW_COUNTRY_IE_SLAVE_FLAGS=0x01 \
 	-DRTW_EDCCA_MODE_SEL=0 -DRTW_FT_DBG=0 -DRTW_MBO_DBG=0 -DRTW_WNM_DBG=0 \
-	-DRTW_LOG_LEVEL=$(CONFIG_RTW_LOG_LEVEL) -DRTW_PHL_LOG_LEVEL=4 \
+	-DRTW_LOG_LEVEL=$(CONFIG_RTW_LOG_LEVEL) -DRTW_PHL_LOG_LEVEL=$(CONFIG_RTW_PHL_LOG_LEVEL) \
 	-DREALTEK_CONFIG_PATH=\"\" -DEFUSE_MAP_PATH=\"\" -DWIFIMAC_PATH=\"\"
 # Include order is load-bearing (sibling note): the linuxkpi headers shadow
 # <linux/*.h> before the vendor tree comes in; -w is the frozen-import face.
