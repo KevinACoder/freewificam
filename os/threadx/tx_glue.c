@@ -79,7 +79,13 @@ static void tx_tick_kernel_work(void)
 	 * validate the chain and emergency-log the FIRST sight of a poison
 	 * with the tick-second count - the boot log's phases carry the
 	 * same tick-based stamps, so this pins the overwrite's time
-	 * window without touching the vendor or the RTOS internals. */
+	 * window without touching the vendor or the RTOS internals.
+	 * [W6] the one-read judgment (issues/2026-10-04-...-sema-chain-
+	 * poison-wpa-image): report the idx/node/next triple so the hit
+	 * classifies itself - next inside the real heap span
+	 * (__heap_start..__heap_end, the CMSIS control blocks come from
+	 * pvPortMalloc deep past 0xb000000) means the hardcoded window is
+	 * stale, not the chain. */
 	{
 		static unsigned int sampler_s;
 		static unsigned int sampler_hit;
@@ -87,14 +93,19 @@ static void tx_tick_kernel_work(void)
 		if (sampler_hit == 0U) {
 			sampler_s++;
 				if (sampler_s >= 1000U) {
+					unsigned int p_idx = 0;
+					unsigned long p_node = 0;
+					unsigned long p_next = 0;
+
 					sampler_s = 0;
-					if (tx_sema_chain_validate(NULL, NULL,
-					    NULL) != 0) {
+					if (tx_sema_chain_validate(&p_idx,
+					    &p_node, &p_next) != 0) {
 						sampler_hit = 1U;
 						board_log_emergency(
-		    "!!! sema chain POISON first seen at ~%u s",
+		    "!!! sema chain POISON first seen at ~%u s idx=%u node=%lx next=%lx",
 						    (unsigned)(tx_time_get() /
-						       1000U));
+						       1000U),
+						    p_idx, p_node, p_next);
 					}
 				}
 		}
