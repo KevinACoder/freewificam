@@ -70,6 +70,10 @@ static size_t heap_allocated;	/* live byte count (v3.1 has no query API) */
 
 /* --- assert landing (freestanding) ----------------------------------------- */
 
+/* the P6-b forensics ring lives below; the assert landing dumps it */
+static void *free_log[8];
+static unsigned int free_log_n;
+
 /* tlsf's tlsf_assert is <assert.h>'s assert; -DNDEBUG is not set this
  * round, so the checks are live and need a place to land. */
 void __assert_func(const char *file, int line, const char *func,
@@ -80,6 +84,13 @@ void __assert_func(const char *file, int line, const char *func,
 	 * print lock and erase the evidence. */
 	board_log_emergency("heap: assert %s at %s:%d (%s)", expr, file, line,
 			    func != NULL ? func : "?");
+	/* the P6-b forensics trail: the last 8 frees before the assert */
+	for (unsigned int i = 0; i < 8U; i++) {
+		unsigned int idx = (free_log_n + i) % 8U;
+
+		board_log_emergency("heap: trail[%u]=%p\n", i,
+				    free_log[idx]);
+	}
 	for (;;) {
 		__asm__ __volatile__("wfe");
 	}
@@ -144,6 +155,18 @@ void *pvPortMalloc(size_t size)
 	}
 
 	posture = _tx_thread_smp_protect();
+#ifdef CONFIG_HEAP_FREE_LOG
+	{
+		static unsigned int malloc_n;
+		int chk = tlsf_check(heap_tlsf);
+
+		if (chk != 0) {
+			board_log_emergency("heap: CORRUPT before malloc "
+			    "#%u size %u chk=%d\n", ++malloc_n,
+			    (unsigned)size, chk);
+		}
+	}
+#endif
 	p = tlsf_malloc(heap_tlsf, size);
 	if (p != NULL) {
 		heap_allocated += size;
@@ -159,9 +182,6 @@ void *pvPortMalloc(size_t size)
 /* P6-b forensics: the tlsf double-free assert needs its caller's
  * address trail - keep the last frees (and the next alloc) in a small
  * ring so the assert line can be paired with what released before it. */
-static void *free_log[8];
-static unsigned int free_log_n;
-
 void vPortFree(void *ptr)
 {
 	unsigned int posture;

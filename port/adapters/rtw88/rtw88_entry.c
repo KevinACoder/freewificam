@@ -17,6 +17,14 @@
 #include "linuxkpi_usb.h"
 #include <linux/usb.h>
 
+/* rtw88's RX pump parks one self-rearming bulk IN urb per rx endpoint
+ * until data arrives - the same single-urb contract the int exemption
+ * carries (P6-b async vetoes were BOT multi-urb patterns, not this
+ * shape). The wlan line therefore drops the global sync-only discipline
+ * BEFORE the first submit; the done-list + drain delivery is the
+ * [EXPL] prior line's board-proven shape. */
+extern void lkpi_usb_force_sync_set(bool on);
+
 /* components/rtw88/rtw8821cu.c (DIVERGENCES D-1: static removed) */
 extern struct usb_driver rtw_8821cu_driver;
 /* components/rtw88/fw_rtw8821c.c */
@@ -27,5 +35,6 @@ rtw88_rtos_register(void)
 {
 
 	fw_rtw8821c_register();
+	lkpi_usb_force_sync_set(false);
 	return usb_register(&rtw_8821cu_driver);
 }

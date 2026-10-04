@@ -14,6 +14,8 @@
  *   usbkpi rxhold on|off control experiment: hold bulk-IN submits back
  *                        from the HC (no concurrent rx churn)
  *   usbkpi wedge         the ctrl-path stage + drain thread state
+ *   usbkpi rxq           bulk single-flight queue state (per-endpoint
+ *                        busy + parked FIFO depth; the W3 arbiter)
  *
  * The ring records every urb crossing at the linuxkpi boundary (submit and
  * completion, control messages included), which is exactly the stream a
@@ -103,7 +105,7 @@ static int usbkpi_cmd(int argc, char *argv[])
 
 	if (argc < 2) {
 		csh_printf(csh, "usage: usbkpi on|off|status|trace on|dump "
-		    "[n] [skip]|rxhold on|off|wedge|rawbulk|sync on|off\n");
+		    "[n] [skip]|rxhold on|off|wedge|rxq|rawbulk|sync on|off\n");
 		return 0;
 	}
 
@@ -139,6 +141,10 @@ static int usbkpi_cmd(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "wedge") == 0) {
 		usbkpi_wedge_report();
+		return 0;
+	}
+	if (strcmp(argv[1], "rxq") == 0) {
+		usbkpi_rxq_report();
 		return 0;
 	}
 	if (strcmp(argv[1], "peek") == 0) {
@@ -342,7 +348,7 @@ static int usbkpi_cmd(int argc, char *argv[])
 	}
 
 	csh_printf(csh, "usage: usbkpi on|off|status|trace on|dump [n] [skip]"
-	    "|rxhold on|off|wedge|rawbulk|sync on|off\n");
+	    "|rxhold on|off|wedge|rxq|rawbulk|sync on|off\n");
 	return 0;
 }
 CSH_CMD_EXPORT_ALIAS_FULL(usbkpi_cmd, usbkpi, "usbkpi on|off|status|dump ...",

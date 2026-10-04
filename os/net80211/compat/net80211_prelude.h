@@ -26,6 +26,18 @@
 #include <stdbool.h>
 #include <stdarg.h>
 
+/* NetBSD's link_set mechanism has no equivalent on this tree (there is
+ * no linker-set section machinery); the empty-add/decl forms compile
+ * the registration out, and the foreach must INITIALIZE its iterator
+ * and never iterate - a bare empty macro left the loop body live over
+ * uninitialized memory (the wild-call park at ieee80211_init0, board
+ * 2026-10-04 W3 first light; prior project's port_config.h :163-169
+ * precedent). */
+#define __link_set_add_text(set, sym)
+#define __link_set_add_rodata(set, sym)
+#define __link_set_decl(set, ptype)
+#define __link_set_foreach(pvar, set) for ((pvar) = NULL; (pvar) != NULL; )
+
 /* The imported sources select NetBSD kernel semantics with __NetBSD__;
  * defined after the base-type headers for the ansi.h reason above. */
 #ifndef __NetBSD__

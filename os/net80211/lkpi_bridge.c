@@ -1,0 +1,592 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/*
+ * lkpi_bridge.c - the net80211 side of the mac80211 mapping (S9/rtw88-
+ * adapt W3; the prior project's M4a shape ported onto this tree's S8-1
+ * compat world).
+ *
+ * The bridge makes the ic-based vendored net80211 (pre-vap NetBSD stack)
+ * drive the verbatim Linux rtw88 through the plain-C vtable from
+ * linuxkpi_net80211.h: the net80211 state machine re-enters S_SCAN
+ * through the wrapped ic_newstate, the per-channel driver work runs on
+ * the single lkpi workqueue thread, the scan dwell is a timer that only
+ * flags the worker, and RX frames cross back into net80211 as pool
+ * mbufs.
+ *
+ * W3 scope: scan + beacon/probe-response RX.  Data-plane TX, set_key and
+ * anything association-shaped stay unwired (W4/W5).
+ *
+ * Dual-world note (FR-4): this TU owns the net80211 types and reaches
+ * the mac80211 side ONLY through linuxkpi_net80211.h's C ABI and the
+ * lkpi OSAL primitives (workqueue/timer/mutex) - no mac80211.h types
+ * are visible here, so the two struct universes never share one.
+ */
+
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+/* the net80211 world's prelude and headers come first */
+#include <sys/queue.h>
+#include <sys/systm.h>
+#include <sys/mutex.h>
+#include <sys/mbuf.h>
+#include <net/if.h>
+#include <net/if_arp.h>
+#include <net/if_dl.h>
+#include <net/if_ether.h>
+#include <net/if_media.h>
+#include <net/if_types.h>
+#include <net80211/ieee80211_netbsd.h>
+#include <net80211/ieee80211_var.h>
+
+/* the mac80211-side OSAL shapes + the driver vtable ABI */
+#include "linuxkpi_core.h"
+#include "linuxkpi_net80211.h"
+/* the wedge report the up-timeout path calls (declared in the usb face) */
+#include "linuxkpi_usb.h"
+
+/* the bridge's shell-facing API (consumed by port/adapters/rtw88) */
+#include "net80211_bridge.h"
+
+/* deferred-work bits, guarded by sc->mtx */
+#define	LKPI_NF_NEWSTATE	0x1u
+#define	LKPI_NF_SCANNEXT	0x2u
+#define	LKPI_NF_WATCHDOG	0x4u
+
+struct lkpi_n80211_softc {
+	struct ieee80211com	ic;
+	struct ifnet		ifp;
+	void			*hw;		/* opaque mac80211 cookie */
+	struct lkpi_n80211_drv	drv;
+
+	struct mutex		mtx;		/* flags/nstate/narg guard */
+	unsigned int		flags;
+	enum ieee80211_state	nstate;
+	int			narg;
+
+	int	(*sc_newstate)(struct ieee80211com *, enum ieee80211_state, int);
+
+	struct work_struct	work;
+	struct work_struct	up_work;
+	struct timer_list	dwell_to;
+	struct timer_list	wd_to;
+
+	bool			started;
+	bool			scanning;
+
+	/* RX intake counters (W3 forensics: "table empty" must be
+	 * distinguishable from "callbacks never arrived") */
+	unsigned int		rx_frames;	/* crossed with a sane length */
+	unsigned int		rx_notstarted;
+	unsigned int		rx_short;
+	unsigned int		rx_dropped;	/* mbuf alloc failures */
+	unsigned int		rx_input;	/* handed to ieee80211_input */
+};
+
+static struct lkpi_n80211_softc lkpi_n80211_softc;
+
+static int	lkpi_n80211_up(void);
+static int	lkpi_n80211_up_seq(void);
+
+/* ------------------------------------------------------------------ */
+/* driver-op trampolines                                               */
+/* ------------------------------------------------------------------ */
+
+/* Tune to the channel net80211 picked (ic_curchan).  rtw88 config reads
+ * the chandef the mac80211 side builds from the same numbers. */
+static void
+lkpi_n80211_set_channel(struct lkpi_n80211_softc *sc)
+{
+	struct ieee80211com *ic = &sc->ic;
+	int chan = ieee80211_chan2ieee(ic, ic->ic_curchan);
+
+	if (chan < 1 || chan > 14)
+		return;
+	(void)sc->drv.config(2407 + 5 * chan, chan);
+}
+
+/* Move one ic_mgtq frame across to the driver.  Runs on the workqueue
+ * thread; the IF_* dequeue already held the serializer (the compat if.h
+ * macros lock it around every op). */
+static void
+lkpi_n80211_tx_mgmt(struct lkpi_n80211_softc *sc, struct mbuf *m)
+{
+	struct mbuf *n;
+	size_t len, nlen;
+	uint8_t buf[512];
+	uint8_t *out = buf;
+
+	for (n = m, len = 0; n != NULL; n = n->m_next)
+		len += n->m_len;
+	if (len > sizeof(buf)) {
+		m_freem(m);
+		if_statinc(&sc->ifp, if_oerrors);
+		return;
+	}
+	for (n = m; n != NULL; n = n->m_next) {
+		nlen = n->m_len;
+		memcpy(out, mtod(n, void *), nlen);
+		out += nlen;
+	}
+	m_freem(m);
+
+	(void)sc->drv.tx_mgmt(buf, len);
+	if_statinc(&sc->ifp, if_opackets);
+}
+
+static void
+lkpi_n80211_drain_mgtq(struct lkpi_n80211_softc *sc)
+{
+	struct mbuf *m;
+
+	for (;;) {
+		IF_DEQUEUE(&sc->ic.ic_mgtq, m);
+		if (m == NULL)
+			return;
+		lkpi_n80211_tx_mgmt(sc, m);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* newstate wrapper (the prior project's board-proven shape)           */
+/* ------------------------------------------------------------------ */
+
+/* Runs on the workqueue thread; ic_state still holds the previous state.
+ * The vtable ops sleep (USB control traffic) - exactly why the transition
+ * was deferred here. */
+static void
+lkpi_n80211_newstate_cb(struct lkpi_n80211_softc *sc,
+    enum ieee80211_state nstate, int arg)
+{
+	struct ieee80211com *ic = &sc->ic;
+	enum ieee80211_state ostate = ic->ic_state;
+
+	switch (nstate) {
+	case IEEE80211_S_SCAN:
+		/* one channel per pass; the dwell timer hops */
+		lkpi_n80211_set_channel(sc);
+		if (ostate != IEEE80211_S_SCAN && !sc->scanning) {
+			sc->scanning = true;
+			sc->drv.sw_scan_start(ic->ic_myaddr);
+		}
+		/* net80211 bookkeeping: active scans emit probe requests
+		 * into ic_mgtq right here */
+		(void)sc->sc_newstate(ic, nstate, arg);
+		lkpi_n80211_drain_mgtq(sc);
+		lkpi_mod_timer(&sc->dwell_to, jiffies + HZ / 5);
+		break;
+
+	case IEEE80211_S_INIT:
+		if (sc->scanning) {
+			sc->scanning = false;
+			sc->drv.sw_scan_complete();
+		}
+		(void)sc->sc_newstate(ic, nstate, arg);
+		break;
+
+	default:
+		/* AUTH/ASSOC/RUN join the association round (W4) */
+		(void)sc->sc_newstate(ic, nstate, arg);
+		break;
+	}
+}
+
+static int
+lkpi_n80211_newstate(struct ieee80211com *ic, enum ieee80211_state nstate,
+    int arg)
+{
+	struct lkpi_n80211_softc *sc = ic->ic_ifp->if_softc;
+
+	/* Stop the dwell timer when leaving scan.  The first INIT->SCAN
+	 * transition re-enters here synchronously (begin_scan ->
+	 * next_scan -> newstate(S_SCAN)) before the first dwell has even
+	 * started; stopping unconditionally used to cancel that dwell
+	 * (prior-line trap). */
+	if (nstate != IEEE80211_S_SCAN)
+		lkpi_del_timer(&sc->dwell_to);
+
+	lkpi_mutex_lock(&sc->mtx);
+	sc->nstate = nstate;
+	sc->narg = arg;
+	sc->flags |= LKPI_NF_NEWSTATE;
+	lkpi_mutex_unlock(&sc->mtx);
+
+	ieee80211_queue_work(sc->hw, &sc->work);
+	return 0;
+}
+
+/* timer callbacks run in timer context: flag + queue, never sleep */
+static void
+lkpi_n80211_dwell(struct timer_list *t)
+{
+	struct lkpi_n80211_softc *sc =
+	    container_of(t, struct lkpi_n80211_softc, dwell_to);
+
+	lkpi_mutex_lock(&sc->mtx);
+	sc->flags |= LKPI_NF_SCANNEXT;
+	lkpi_mutex_unlock(&sc->mtx);
+	ieee80211_queue_work(sc->hw, &sc->work);
+}
+
+static void
+lkpi_n80211_wd_tick(struct timer_list *t)
+{
+	struct lkpi_n80211_softc *sc =
+	    container_of(t, struct lkpi_n80211_softc, wd_to);
+
+	lkpi_mutex_lock(&sc->mtx);
+	sc->flags |= LKPI_NF_WATCHDOG;
+	lkpi_mutex_unlock(&sc->mtx);
+	ieee80211_queue_work(sc->hw, &sc->work);
+}
+
+static void
+lkpi_n80211_worker(struct work_struct *w)
+{
+	struct lkpi_n80211_softc *sc =
+	    container_of(w, struct lkpi_n80211_softc, work);
+	struct ieee80211com *ic = &sc->ic;
+	enum ieee80211_state nstate;
+	unsigned int flags;
+	int narg;
+
+	for (;;) {
+		lkpi_mutex_lock(&sc->mtx);
+		flags = sc->flags;
+		nstate = sc->nstate;
+		narg = sc->narg;
+		sc->flags = 0;
+		lkpi_mutex_unlock(&sc->mtx);
+		if ((flags & (LKPI_NF_NEWSTATE | LKPI_NF_SCANNEXT |
+		    LKPI_NF_WATCHDOG)) == 0)
+			return;
+
+		if ((flags & LKPI_NF_SCANNEXT) != 0 &&
+		    (flags & LKPI_NF_NEWSTATE) == 0) {
+			/* short hold, no bus inside: next_scan picks the
+			 * channel and re-enters newstate (which defers
+			 * the driver work back onto this thread) */
+			net80211_serializer_lock();
+			if (ic->ic_state == IEEE80211_S_SCAN)
+				(void)ieee80211_next_scan(ic);
+			net80211_serializer_unlock();
+		}
+
+		if ((flags & LKPI_NF_NEWSTATE) != 0)
+			lkpi_n80211_newstate_cb(sc, nstate, narg);
+
+		if ((flags & LKPI_NF_WATCHDOG) != 0) {
+			net80211_serializer_lock();
+			ieee80211_watchdog(ic);
+			net80211_serializer_unlock();
+			lkpi_mod_timer(&sc->wd_to, jiffies + HZ);
+		}
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* ifnet entry points (the wd timer drives ieee80211_watchdog; the     */
+/* if_timer face is never serviced here)                               */
+/* ------------------------------------------------------------------ */
+
+static void
+lkpi_n80211_if_start(struct ifnet *ifp)
+{
+	struct lkpi_n80211_softc *sc = ifp->if_softc;
+
+	lkpi_n80211_drain_mgtq(sc);
+}
+
+static int
+lkpi_n80211_if_ioctl(struct ifnet *ifp, u_long cmd, void *data)
+{
+	/* no ifconfig on this image; the wlanrtw shell is the entry */
+	(void)ifp;
+	(void)cmd;
+	(void)data;
+	return ENOTTY;
+}
+
+static int
+lkpi_n80211_if_init(struct ifnet *ifp)
+{
+	(void)ifp;
+	return lkpi_n80211_up();
+}
+
+/* ------------------------------------------------------------------ */
+/* RX: one air frame in -> pool mbuf -> find_rxnode + input            */
+/* ------------------------------------------------------------------ */
+
+void
+lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+	struct ieee80211_node *ni;
+	struct mbuf *m;
+	int rssi;
+
+	if (!sc->started) {
+		sc->rx_notstarted++;
+		return;
+	}
+	if (len < sizeof(struct ieee80211_frame_min)) {
+		sc->rx_short++;
+		return;
+	}
+	sc->rx_frames++;
+	MGETHDR(m, M_DONTWAIT, MT_DATA);
+	if (m == NULL || len > MCLBYTES) {
+		if (m != NULL)
+			m_freem(m);
+		sc->rx_dropped++;
+		return;
+	}
+	/* no MCLGET needed: the pool mbuf owns one 4 KiB cluster outright */
+	memcpy(mtod(m, void *), data, len);
+	m->m_len = (int)len;
+	m->m_pkthdr.len = (int)len;
+	m->m_pkthdr.rcvif = &sc->ifp;
+	/* rtw88 delivers the FCS; net80211 input strips it on M_HASFCS */
+	m->m_flags |= M_HASFCS;
+
+	rssi = signal_dbm + 110;	/* dBm -> net80211 monotonic units */
+	net80211_serializer_lock();
+	ni = ieee80211_find_rxnode(ic,
+	    mtod(m, struct ieee80211_frame_min *));
+	(void)ieee80211_input(ic, m, ni, rssi, 0);	/* consumes m */
+	ieee80211_free_node(ni);
+	net80211_serializer_unlock();
+	sc->rx_input++;
+}
+
+/* ------------------------------------------------------------------ */
+/* bring-up chain (deferred to the wq thread: ops->start's power-on    */
+/* chain is too deep for a shell-task stack - prior-line M4 lesson)    */
+/* ------------------------------------------------------------------ */
+
+static struct completion lkpi_n80211_up_comp;
+static int lkpi_n80211_up_ret;
+static bool lkpi_n80211_up_busy;
+
+static void
+lkpi_n80211_up_work(struct work_struct *w)
+{
+	(void)w;
+	lkpi_n80211_up_ret = lkpi_n80211_up_seq();
+	lkpi_n80211_up_busy = false;
+	lkpi_complete(&lkpi_n80211_up_comp);
+}
+
+static int
+lkpi_n80211_up(void)
+{
+	if (lkpi_n80211_up_busy)
+		return -EBUSY;
+	lkpi_n80211_up_busy = true;
+	lkpi_completion_init(&lkpi_n80211_up_comp);
+	ieee80211_queue_work(lkpi_n80211_softc.hw,
+	    &lkpi_n80211_softc.up_work);
+	/* bounded wait: a wedge inside ops->start must not take the shell
+	 * with it; busy stays set on timeout so a second enter cannot
+	 * stack on the wedged one */
+	if (lkpi_wait_for_completion_timeout(&lkpi_n80211_up_comp,
+	    60 * HZ) == 0) {
+		printf("lkpi: start timeout (60s), worker inside ops->start; "
+		    "dump with usbkpi dump\n");
+		usbkpi_wedge_report();
+		return -ETIMEDOUT;
+	}
+	return lkpi_n80211_up_ret;
+}
+
+static int
+lkpi_n80211_up_seq(void)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	int ret;
+
+	if (sc->started)
+		return 0;
+
+	/* power on + MAC/BB/RF init; sleeps in USB control ops while
+	 * holding nothing above the driver */
+	ret = sc->drv.start();
+	if (ret != 0)
+		return ret;
+	ret = sc->drv.add_interface(sc->ic.ic_myaddr);
+	if (ret != 0) {
+		sc->drv.stop();
+		return ret;
+	}
+	sc->started = true;
+
+	sc->ifp.if_flags |= IFF_RUNNING;
+	lkpi_mod_timer(&sc->wd_to, jiffies + HZ);
+	printf("rtw88u: interface up (STA)\n");
+
+	/* enter scan the net80211 way: the wrapper defers the driver work */
+	(void)ieee80211_new_state(&sc->ic, IEEE80211_S_SCAN, -1);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* shell-facing API (net80211_bridge.h)                                */
+/* ------------------------------------------------------------------ */
+
+int
+net80211_bridge_up(void)
+{
+	return lkpi_n80211_up();
+}
+
+int
+net80211_bridge_scan(const uint8_t *ssid, size_t len)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+	int ret;
+
+	if (!sc->started) {
+		ret = lkpi_n80211_up();
+		if (ret != 0)
+			return ret;
+	}
+	if (len > IEEE80211_NWID_LEN)
+		return -EINVAL;
+
+	net80211_serializer_lock();
+	ic->ic_des_esslen = (int)len;
+	memset(ic->ic_des_essid, 0, sizeof(ic->ic_des_essid));
+	if (len != 0)
+		memcpy(ic->ic_des_essid, ssid, len);
+	memcpy(ic->ic_chan_scan, ic->ic_chan_active,
+	    sizeof(ic->ic_chan_scan));
+	net80211_serializer_unlock();
+
+	(void)ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+	return 0;
+}
+
+int
+net80211_bridge_get_hwaddr(uint8_t addr[6])
+{
+	memcpy(addr, lkpi_n80211_softc.ic.ic_myaddr, 6);
+	return 0;
+}
+
+void
+net80211_bridge_status(void)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+
+	printf("rtw88u: state %s ch %u opmode %d rxdrop %u\n",
+	    ieee80211_state_name[ic->ic_state],
+	    ieee80211_chan2ieee(ic, ic->ic_curchan),
+	    (int)ic->ic_opmode, sc->rx_dropped);
+	printf("rtw88u: rx frames %u input %u short %u notstarted %u\n",
+	    sc->rx_frames, sc->rx_input, sc->rx_short, sc->rx_notstarted);
+}
+
+static void
+lkpi_n80211_scan_dump_node(void *arg, struct ieee80211_node *ni)
+{
+	int ch = ieee80211_chan2ieee(&lkpi_n80211_softc.ic, ni->ni_chan);
+
+	if (ni->ni_esslen != 0)
+		printf("rtw88u: scan %.*s ch %d rssi %u bssid %s\n",
+		    ni->ni_esslen, (const char *)ni->ni_essid, ch,
+		    ni->ni_rssi, ether_sprintf(ni->ni_bssid));
+	else
+		printf("rtw88u: scan (hidden) ch %d rssi %u bssid %s\n",
+		    ch, ni->ni_rssi, ether_sprintf(ni->ni_bssid));
+	(void)arg;
+}
+
+void
+net80211_bridge_scan_dump(void)
+{
+	net80211_serializer_lock();
+	ieee80211_iterate_nodes(&lkpi_n80211_softc.ic.ic_scan,
+	    lkpi_n80211_scan_dump_node, NULL);
+	net80211_serializer_unlock();
+}
+
+/* ------------------------------------------------------------------ */
+/* attach (the mac80211 side calls this at ieee80211_register_hw)      */
+/* ------------------------------------------------------------------ */
+
+int
+lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
+    const struct lkpi_n80211_drv *drv)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+	struct ifnet *ifp = &sc->ifp;
+	int i;
+
+	sc->hw = hw;
+	sc->drv = *drv;
+	memset(ic, 0, sizeof(*ic));
+	memset(ifp, 0, sizeof(*ifp));
+
+	ic->ic_ifp = ifp;
+	ic->ic_phytype = IEEE80211_T_OFDM;
+	ic->ic_opmode = IEEE80211_M_STA;
+	ic->ic_state = IEEE80211_S_INIT;
+	ic->ic_caps =
+	    IEEE80211_C_MONITOR |
+	    IEEE80211_C_SHPREAMBLE |
+	    IEEE80211_C_SHSLOT |
+	    IEEE80211_C_WPA;		/* 802.11i, software crypto */
+	ic->ic_roaming = IEEE80211_ROAMING_MANUAL;	/* W3 this round */
+
+	ic->ic_sup_rates[IEEE80211_MODE_11B] = ieee80211_std_rateset_11b;
+	ic->ic_sup_rates[IEEE80211_MODE_11G] = ieee80211_std_rateset_11g;
+
+	for (i = 1; i <= 14; i++) {
+		ic->ic_channels[i].ic_freq =
+		    ieee80211_ieee2mhz(i, IEEE80211_CHAN_2GHZ);
+		ic->ic_channels[i].ic_flags =
+		    IEEE80211_CHAN_CCK | IEEE80211_CHAN_OFDM |
+		    IEEE80211_CHAN_DYN | IEEE80211_CHAN_2GHZ;
+		setbit(ic->ic_chan_avail, i);
+		setbit(ic->ic_chan_active, i);
+		setbit(ic->ic_chan_scan, i);
+	}
+
+	/* rtw88 exported the efuse address through SET_IEEE80211_PERM_ADDR */
+	memcpy(ic->ic_myaddr, perm_addr, IEEE80211_ADDR_LEN);
+
+	ifp->if_softc = sc;
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
+	memcpy(ifp->if_xname, "rtw88u", IFNAMSIZ);
+	ifp->if_start = lkpi_n80211_if_start;
+	ifp->if_ioctl = lkpi_n80211_if_ioctl;
+	ifp->if_init = lkpi_n80211_if_init;
+	IFQ_SET_READY(&ifp->if_snd);
+
+	if_initialize(ifp);
+	ieee80211_ifattach(ic);
+
+	sc->sc_newstate = ic->ic_newstate;
+	ic->ic_newstate = lkpi_n80211_newstate;
+
+	ieee80211_media_init(ic, ieee80211_media_change,
+	    ieee80211_media_status);
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
+	if_set_sadl(ifp, ic->ic_myaddr, IEEE80211_ADDR_LEN, false);
+	ieee80211_announce(ic);
+
+	lkpi_mutex_init(&sc->mtx);
+	INIT_WORK(&sc->work, lkpi_n80211_worker);
+	INIT_WORK(&sc->up_work, lkpi_n80211_up_work);
+	lkpi_timer_setup(&sc->dwell_to, lkpi_n80211_dwell);
+	lkpi_timer_setup(&sc->wd_to, lkpi_n80211_wd_tick);
+
+	printf("lkpi80211: net80211 bridge attached (scan world)\n");
+	return 0;
+}

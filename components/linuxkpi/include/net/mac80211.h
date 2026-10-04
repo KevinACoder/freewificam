@@ -1009,7 +1009,11 @@ struct ieee80211_vif {
 		u16		aid;
 	} cfg;
 	struct ieee80211_txq	*txq;
-	u8			drv_priv[128] __aligned(sizeof(void *));
+	/* 256: rtw88's struct rtw_vif measures 184 B on this build and the
+	 * driver writes it through drv_priv - a 128 B slot overflowed into
+	 * the heap neighbor (the tlsf "block should be free" corruption,
+	 * board 2026-10-04 W3; size-probed via a sizeof translation unit) */
+	u8			drv_priv[256] __aligned(sizeof(void *));
 };
 
 struct ieee80211_sta {
@@ -1102,7 +1106,7 @@ struct ieee80211_ops {
 		    struct sk_buff *skb);
 	int	(*start)(struct ieee80211_hw *hw);
 	void	(*stop)(struct ieee80211_hw *hw, bool suspend);
-	int	(*config)(struct ieee80211_hw *hw, u32 changed);
+	int	(*config)(struct ieee80211_hw *hw, int radio_idx, u32 changed);
 	int	(*add_interface)(struct ieee80211_hw *hw,
 		    struct ieee80211_vif *vif);
 	void	(*remove_interface)(struct ieee80211_hw *hw,
