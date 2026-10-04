@@ -39,7 +39,13 @@
  * non-cacheable, so DMA writebacks are visible to the CPU and CPU stores to
  * the DMA with no cache maintenance. The link script pins the .dma_noc
  * section to this address (baremetal.ld); the two must move together. */
-#define DMA_NOC_BASE		0x0c000000ULL
+/* [S5b-W3] moved 0x0c000000 -> 0x0e000000: the rtl8851bu vendor init
+ * needs a ~24.5MB heap (board-measured live=24055616 at the txring
+ * OOM on a 23MB pool); keeping the 2MiB NC window at 0x0c000000
+ * capped the heap at 23.47MB. The window lands at 0x0e000000 now -
+ * same Normal-NC attributes, only its address moves; the .dma_noc
+ * section and this mapping derive from the same base. */
+#define DMA_NOC_BASE		0x0e000000ULL
 
 #define DESC_TABLE		(3ULL << 0)	/* points at a next-level table */
 #define DESC_BLOCK		(1ULL << 0)	/* 1GiB (L1) or 2MiB (L2) block */

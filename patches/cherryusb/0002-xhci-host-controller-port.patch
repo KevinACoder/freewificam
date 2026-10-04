@@ -1,9 +1,9 @@
 diff --git a/port/xhci/usb_hc_xhci.c b/port/xhci/usb_hc_xhci.c
 new file mode 100644
-index 00000000..cc574943
+index 00000000..080b7dd5
 --- /dev/null
 +++ b/port/xhci/usb_hc_xhci.c
-@@ -0,0 +1,2681 @@
+@@ -0,0 +1,2691 @@
 +/*
 + * @file   usb_hc_xhci.c
 + * @brief  DWC3 xHCI host controller driver for the RK3568 USB3 socket
@@ -1355,9 +1355,19 @@ index 00000000..cc574943
 +	 * exact multiple of the max packet needs an explicit zero-length
 +	 * delimiter - the device bulk FIFO otherwise holds the last full
 +	 * packet waiting for a short packet.  usbdi_compat.c sets the
-+	 * flag; this is the HCD half of that contract. */
++	 * flag; this is the HCD half of that contract.
++	 *
++	 * [S5b-W3] Linux-parity guard: the ZLP is emitted only when the
++	 * transfer is maxp-aligned. A transfer already terminated by a
++	 * short final packet (2044 % 512 != 0) needs NO delimiter - the
++	 * trailing ZLP the unconditional form sent was an extra empty
++	 * bulk write the RTL8851BU fw loader NAKed forever (board
++	 * 2026-10-04: fwdl section chunk 1's TD = [2044B][ZLP] sat 5 s
++	 * with the controller parked on the first TRB, event ring empty;
++	 * the 88B fwhdr write with its own redundant ZLP survived). */
 +	zlp = ((dir_in == 0U) && (len > 0U) &&
-+	       ((urb->transfer_flags & USBH_URB_ZERO_PACKET) != 0U)) ? 1U : 0U;
++	       ((urb->transfer_flags & USBH_URB_ZERO_PACKET) != 0U) &&
++	       ((len % (urb->ep->wMaxPacketSize & 0x7FFU)) == 0U)) ? 1U : 0U;
 +
 +	if (len == 0U) {
 +		ntrbs = 1U; /* ZLP: an empty NORMAL */
@@ -1637,13 +1647,13 @@ index 00000000..cc574943
 +
 +	if (urb->ep == &hport->ep0) {
 +		hcd->dbg_ctrl_n++;
-+		/* the 2026-09-28 forensics sampled every 256 and drowned the
-+		 * console once the supplicant's register polling settled in
-+		 * (~200 ctrl/s); the ep0 path has since been board-proven
-+		 * through a LINK-straddling wrap, so the steady-state
-+		 * sample dropped to every 4096 - timeouts still dump */
-+		if ((hcd->dbg_ctrl_n <= 4U) ||
-+		    ((hcd->dbg_ctrl_n & 0xFFFU) == 0U)) {
++		/* [W7 print-clean 2026-10-03] the steady-state every-4096
++		 * sample is OFF: the ep0 path is board-proven through a
++		 * LINK-straddling wrap and the periodic 6-line dumps were
++		 * pure console noise under the vendor's register polling
++		 * (~200 ctrl/s).  First 4 after boot + every timeout still
++		 * dump - those are the two forensics moments that matter. */
++		if (hcd->dbg_ctrl_n <= 4U) {
 +			xhci_ep0_dbg_dump(hcd, dev, ring, urb, hcd->dbg_irq_n,
 +					  hcd->dbg_tevt_n, "submit");
 +		}

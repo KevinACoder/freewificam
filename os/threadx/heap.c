@@ -67,6 +67,44 @@ static tlsf_t heap_tlsf;
 static pool_t heap_pool;
 static bool heap_ready;
 static size_t heap_allocated;	/* live byte count (v3.1 has no query API) */
+static unsigned int heap_big_n;	/* [S5b-W3] >=16KB alloc sampler */
+
+/* [S5b-W3] per-caller histogram: 24-slot open-addressed table keyed by
+ * pvPortMalloc's immediate caller; printed at OOM so the sub-16KB flood
+ * (the pool always fills to ~100% regardless of size) gets attributed. */
+#define HEAP_CALLER_SLOTS 48
+static struct {
+	void *caller;
+	size_t bytes;
+	unsigned long n;
+} heap_callers[HEAP_CALLER_SLOTS];
+
+/* [S5b-W3] LIVE allocation-size census: the OOM dump walks the pool
+ * and aggregates OUTSTANDING used blocks by exact size - no alloc-side
+ * funnel distortion, no fold. */
+static struct {
+	size_t size;
+	size_t bytes;
+	unsigned long n;
+} heap_live_sz[HEAP_CALLER_SLOTS];
+
+static void
+heap_caller_account(void *caller, size_t bytes)
+{
+	size_t key = bytes;
+	int i;
+
+	(void)caller;
+	for (i = 0; i < HEAP_CALLER_SLOTS; i++) {
+		if (heap_callers[i].caller == (void *)key ||
+		    heap_callers[i].caller == NULL) {
+			heap_callers[i].caller = (void *)key;
+			heap_callers[i].bytes += bytes;
+			heap_callers[i].n++;
+			return;
+		}
+	}
+}
 
 /* --- assert landing (freestanding) ----------------------------------------- */
 
@@ -149,9 +187,97 @@ void *pvPortMalloc(size_t size)
 		heap_allocated += size;
 	}
 	_tx_thread_smp_unprotect(posture);
+	if (p != NULL)
+		heap_caller_account(__builtin_return_address(0), size);
+
+	/* [S5b-W3] big-allocation tracker: every 32nd allocation >= 16KB
+	 * prints the running live count - identifies which init-stage pool
+	 * scales with the heap size (the 5620B txring OOM fired only after
+	 * live reached 100% of BOTH the 20M and 23M pools). */
+	if (p != NULL && size >= 16384U && ((++heap_big_n & 0x1FU) == 0U)) {
+		board_log("heap: big #%u %u live=%u from %p\n",
+			  (unsigned)heap_big_n, (unsigned)size,
+			  (unsigned)heap_allocated,
+			  __builtin_return_address(0));
+	}
 
 	if (p == NULL) {
-		board_log("heap: OOM %u bytes\n", (unsigned)size);
+		/* [S5b-W3] OOM forensics: allocated total + a pool walk for
+		 * the largest free block - distinguishes "the pool really
+		 * is full" from "tlsf metadata is corrupt" (the wlan8851
+		 * txring 5620B OOM fired identically on 16M and 20M pools,
+		 * both with many MB free on paper). */
+		struct heap_oom_walk {
+			size_t max_free;
+			size_t total_free;
+			unsigned int n_free;
+		} w = {0, 0, 0};
+		void oom_walker(void *ptr, size_t sz, int used, void *user)
+		{
+			struct heap_oom_walk *wp = user;
+
+			(void)ptr;
+			if (used == 0) {
+				wp->n_free++;
+				wp->total_free += sz;
+				if (sz > wp->max_free)
+					wp->max_free = sz;
+			}
+		}
+
+		{
+			void sz_walker(void *ptr, size_t sz, int used, void *user)
+			{
+				int j;
+
+				(void)ptr;
+				(void)user;
+				if (used == 0)
+					return;
+				for (j = 0; j < HEAP_CALLER_SLOTS; j++) {
+					if (heap_live_sz[j].n == 0 ||
+					    heap_live_sz[j].size == sz) {
+						heap_live_sz[j].size = sz;
+						heap_live_sz[j].bytes += sz;
+						heap_live_sz[j].n++;
+						return;
+					}
+				}
+			}
+
+			posture = _tx_thread_smp_protect();
+			tlsf_walk_pool(heap_pool, oom_walker, &w);
+			tlsf_walk_pool(heap_pool, sz_walker, NULL);
+			_tx_thread_smp_unprotect(posture);
+		}
+		board_log("heap: OOM %u bytes (live=%u free=%u max=%u blocks=%u)\n",
+			  (unsigned)size, (unsigned)heap_allocated,
+			  (unsigned)w.total_free, (unsigned)w.max_free,
+			  w.n_free);
+		{
+			int i, j;
+
+			/* selection-sort the live-size census by bytes,
+			 * print the top 20 */
+			for (i = 0; i < HEAP_CALLER_SLOTS && i < 20; i++) {
+				int best = -1;
+
+				for (j = 0; j < HEAP_CALLER_SLOTS; j++) {
+					if (heap_live_sz[j].n == 0)
+						continue;
+					if (best < 0 ||
+					    heap_live_sz[j].bytes > heap_live_sz[best].bytes)
+						best = j;
+				}
+				if (best < 0)
+					break;
+				board_log("heap: live size %u n=%lu bytes=%u\n",
+					  (unsigned)heap_live_sz[best].size,
+					  heap_live_sz[best].n,
+					  (unsigned)heap_live_sz[best].bytes);
+				heap_live_sz[best].n = 0;
+			}
+		}
 	}
 	return p;
 }

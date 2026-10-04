@@ -525,6 +525,33 @@ static struct mutex lkpi_usb_submit_mtx;
 /* bring-up trace: every transfer crossed, shell-gated */
 static bool lkpi_usb_trace;
 static unsigned int lkpi_usb_trace_n;
+/* [S5b-W3] sync cost sampler: per-sync-submit elapsed (queue+wire+wait,
+ * everything under usbh_submit_urb) accumulated per ep0/non-ep0 bucket,
+ * printed every 64 completions - the fwdl chunk pacing hunt. 1 ms ticks. */
+static struct {
+	unsigned long n, sum_ms, max_ms;
+	unsigned char max_ep;
+} lkpi_sync_cost[2];
+static void
+lkpi_sync_cost_sample(unsigned char ep, unsigned long ms)
+{
+	struct lkpi_sync_cost_one { unsigned long n, sum_ms, max_ms; };
+	int b = (ep & 0x0fU) == 0U ? 0 : 1;
+
+	lkpi_sync_cost[b].n++;
+	lkpi_sync_cost[b].sum_ms += ms;
+	if (ms > lkpi_sync_cost[b].max_ms) {
+		lkpi_sync_cost[b].max_ms = ms;
+		lkpi_sync_cost[b].max_ep = ep;
+	}
+	if ((lkpi_sync_cost[b].n & 0x3FU) == 0U)
+		lkpi_printf("usbkpi: sync cost %s n=%lu avg=%lums max=%lums ep%02x\n",
+		    b == 0 ? "ctrl" : "bulk",
+		    lkpi_sync_cost[b].n,
+		    lkpi_sync_cost[b].sum_ms / lkpi_sync_cost[b].n,
+		    lkpi_sync_cost[b].max_ms, lkpi_sync_cost[b].max_ep);
+}
+
 /* [W4] sync rejection sampler: the sync failure path prints its first 8
  * hits and every 64th after that (the arm-retry shapes can legitimately
  * hammer it; the per-miss cost stays bounded) */
@@ -805,9 +832,11 @@ lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep)
 		rq->busy = true;
 		usbkpi_push(next, usb_pipein(next->pipe), true,
 		    next->transfer_buffer_length, 0);
-		lkpi_mutex_lock(&lkpi_usb_submit_mtx);
+		/* [S5b-W3] the submit runs OUTSIDE the mutex (see the main
+		 * submit path): usbh_submit_urb sleeps inside for sync
+		 * transfers, and a kick holding this lock while sleeping
+		 * wedges the drain thread behind any sync submitter */
 		ret = usbh_submit_urb(hurb);
-		lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
 		if (ret == 0)
 			return;	/* in flight again */
 		/* re-issue failed (kill/device gone): deliver the error */
@@ -1167,8 +1196,30 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	urb->submitted = true;
 	usbkpi_push(urb, usb_pipein(urb->pipe), true,
 	    urb->transfer_buffer_length, 0);
-	ret = usbh_submit_urb(hurb);
+	/* [S5b-W3] release the mutex BEFORE the submit: usbh_submit_urb
+	 * sleeps inside for the sync shape (port sem up to hurb->timeout,
+	 * 5 s), and holding lkpi_usb_submit_mtx across that sleep made
+	 * every other submitter - the ep0 vendor-control register pollers
+	 * (SER/C2HREG) and the drain thread's rx re-arm kick - queue behind
+	 * the sleeper.  Board fwdl paced at ~15 ms per 2 KiB bulk chunk
+	 * behind the control polls (5 s for a download Linux does in
+	 * <1 s) and the drain thread wedged 5 s per contended kick.  The
+	 * mutex protects the park FIFO + stage pool + hurb fill only; each
+	 * struct urb owns its embedded usbh_urb (usb_alloc_urb), so the
+	 * submit itself races nothing the port does not already serialize
+	 * internally (per-ring TD arbitration under its critical
+	 * sections). */
 	lkpi_mutex_unlock(&lkpi_usb_submit_mtx);
+	{
+		unsigned long t0 = tx_time_get();
+
+		ret = usbh_submit_urb(hurb);
+		if (!async)
+			lkpi_sync_cost_sample(
+			    usb_pipeendpoint(urb->pipe) |
+			    (usb_pipein(urb->pipe) ? 0x80U : 0U),
+			    tx_time_get() - t0);
+	}
 	if (!async && ret == 0) {
 		/* the submit returned because the transfer COMPLETED:
 		 * collect it right here (the submitter's thread is a
@@ -1225,6 +1276,12 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		 * error transfer. */
 		int raw = (hurb->errorcode != 0) ? hurb->errorcode : ret;
 
+		/* [S5b-W3] the rejected/failed sync transfer must return its
+		 * stage slot here (the completed path at the top does): a
+		 * leaked slot per failed chunk drained the pool across the
+		 * vendor's fwdl retry bursts */
+		if (urb->_stage != NULL)
+			lkpi_usb_stage_put(urb);
 		urb->submitted = false;
 		urb->status = lkpi_usb_errno(raw);
 		/* pair the S record so the dump shows the failure leg */
