@@ -77,7 +77,12 @@
  * bw/soak shape rides.  (The resize dance this replaced was exonerated
  * by the TRB-pool evidence: the real P6-b root cause was the cached
  * hep, see the submit path comment.) */
-#define	LKPI_SMALL_SLOTS	2
+/* The wlan line parks RTW_USB_RXCB_NUM(8) self-rearming rx urbs, each
+ * holding a stage until its data lands - the MSC-era 2+2 pool exhausted
+ * on the first bring-up with them armed (stage pool exhausted -> rsvd
+ * write -ENOMEM, board 2026-10-04 W3). 12 small + 2 big keeps the MSC
+ * shape and leaves headroom for 8 rx + control + tx. */
+#define	LKPI_SMALL_SLOTS	12
 #define	LKPI_STAGE_SIZE		32768
 #define	LKPI_BIG_SLOTS		2
 #define	LKPI_STAGE_BIG_SIZE	131072u
@@ -926,6 +931,10 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		return urb->status;
 	}
 	if (ret != 0) {
+		/* async submit rejected by the HC: the stage would stay
+		 * held forever (3 rx arms failed at the BT re-enum window
+		 * and drained the pool - board 2026-10-04 W3) */
+		lkpi_usb_stage_put(urb);
 		urb->submitted = false;
 		urb->status = lkpi_usb_errno(ret);
 		/* trace-gated: the capture protocol's arm retry hammers

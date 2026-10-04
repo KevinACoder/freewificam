@@ -896,7 +896,11 @@ lkpi_workqueue_ready(void)
 				.cb_mem = NULL,
 				.cb_size = 0,
 				.stack_mem = NULL,
-				.stack_size = 8192,
+				/* 16 KiB: rtw88's ops->start chain (power-on + reinit) runs on this
+			     * worker; the prior project's shell-task stack
+			     * overflowed on the same chain (M4) and 8 KiB is
+			     * one deep call away from it */
+				.stack_size = 16384,
 				.priority = osPriorityNormal };
 
 	if (lkpi_worker_ready)

@@ -161,6 +161,17 @@ lkpi_n80211_drv_add_interface(const uint8_t addr[6])
 		return -ENOMEM;
 	vif->type = NL80211_IFTYPE_STATION;
 	memcpy(vif->addr, addr, ETH_ALEN);
+	/* mac80211 owns vif->txq (one per AC for an STA vif, allocated at
+	 * add_interface); the driver initializes it (rtw_txq_init walks
+	 * vif->txq->drv_priv) so the shim backs it with a real object -
+	 * an uninitialized pointer field made the first list_init write
+	 * land on garbage (tlsf assert, board 2026-10-04 W3 round) */
+	{
+		static struct ieee80211_txq lkpi_vif_txq;
+
+		lkpi_vif_txq.vif = vif;
+		vif->txq = &lkpi_vif_txq;
+	}
 	lkpi_printf("lkpi80211: drv add_interface enter\n");
 	ret = (&ctx->hw)->ops->add_interface(&ctx->hw, vif);
 	lkpi_printf("lkpi80211: drv add_interface ret %d\n", ret);
@@ -219,10 +230,19 @@ lkpi_n80211_drv_tx_mgmt(const uint8_t *frame, size_t len)
 
 	if (ctx->vif == NULL || hw->ops->tx == NULL)
 		return -EOPNOTSUPP;
-	skb = lkpi_skb_alloc((unsigned int)(len + 32), GFP_KERNEL);
-	if (skb == NULL)
-		return -ENOMEM;
-	memcpy(skb_put(skb, (unsigned int)len), frame, len);
+	/* mac80211 guarantees extra_tx_headroom headroom on tx skbs; the
+	 * driver's usb tx does skb_push(chip->tx_pkt_desc_sz) on it - a
+	 * zero-headroom skb underran the push (board 2026-10-04 W3) */
+	{
+		unsigned int head = hw->extra_tx_headroom + 64;
+
+		skb = lkpi_skb_alloc((unsigned int)(len + head), GFP_KERNEL);
+		if (skb == NULL)
+			return -ENOMEM;
+		skb->data = skb->head + head;
+		skb->tail = head;
+		memcpy(skb_put(skb, (unsigned int)len), frame, len);
+	}
 	info = IEEE80211_SKB_CB(skb);
 	memset(info, 0, sizeof(*info));
 	info->control.vif = lkpi_n80211_vif;

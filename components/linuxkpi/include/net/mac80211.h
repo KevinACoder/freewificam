@@ -1009,7 +1009,11 @@ struct ieee80211_vif {
 		u16		aid;
 	} cfg;
 	struct ieee80211_txq	*txq;
-	u8			drv_priv[128] __aligned(sizeof(void *));
+	/* 256: rtw88's struct rtw_vif measures 184 B on this build and the
+	 * driver writes it through drv_priv - a 128 B slot overflowed into
+	 * the heap neighbor (the tlsf "block should be free" corruption,
+	 * board 2026-10-04 W3; size-probed via a sizeof translation unit) */
+	u8			drv_priv[256] __aligned(sizeof(void *));
 };
 
 struct ieee80211_sta {

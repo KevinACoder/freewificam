@@ -205,6 +205,10 @@ endif
 # the tx objects only - the tx headers never leak into base-layer compile
 # units (FR-3 layering invariant). Sits after the global CFLAGS :=
 # definition on purpose (the -DTHREADX_BUILD append must not be wiped).
+ifeq ($(CONFIG_HEAP_FREE_LOG),y)
+CFLAGS += -DCONFIG_HEAP_FREE_LOG=1
+endif
+
 ifeq ($(CONFIG_OS),threadx)
 TX_DIR := third-party/threadx
 TX_PORT_DIR := $(TX_DIR)/ports/cortex_a55/gnu
@@ -447,11 +451,12 @@ $(BUILD)/components/rtw88/%.o: EXTRAFLAGS := -w $(LKPI_CFLAGS)
 # PREPENDED to SRCS so the .usbh_class_info section order puts the
 # modeswitch hook ahead of the MSC class-only match (the MSC hook's R3
 # VID guard is the second line of defense).
-RTW88_PORT_SRCS := 	port/adapters/rtw88/usbh_modeswitch.c 	port/adapters/rtw88/usbh_rtw88_class.c 	port/adapters/rtw88/rtw88_entry.c
+RTW88_PORT_SRCS := 	port/adapters/rtw88/usbh_modeswitch.c 	port/adapters/rtw88/usbh_rtw88_class.c 	port/adapters/rtw88/rtw88_entry.c 	port/adapters/rtw88/rtw88_cmds.c
 SRCS := $(RTW88_PORT_SRCS) $(SRCS)
 $(BUILD)/port/adapters/rtw88/usbh_modeswitch.o: 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/port/adapters/rtw88/usbh_rtw88_class.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/port/adapters/rtw88/rtw88_entry.o: 	EXTRAFLAGS := $(LKPI_CFLAGS)
+$(BUILD)/port/adapters/rtw88/rtw88_cmds.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS) -Ios/net80211
 $(BUILD)/app/wlanrtw/main.o: EXTRAFLAGS := $(CSH_CFLAGS) $(USB_CFLAGS)
 endif
 
@@ -834,7 +839,8 @@ endif
 NET80211_PORT_SRCS := \
 	$(NET80211_PORT_DIR)/compat/net80211_compat.c \
 	$(NET80211_PORT_DIR)/compat/net80211_mbuf.c \
-	$(NET80211_PORT_DIR)/compat/net80211_ifnet.c
+	$(NET80211_PORT_DIR)/compat/net80211_ifnet.c \
+	$(NET80211_PORT_DIR)/lkpi_bridge.c
 
 SRCS += $(NET80211_VENDOR_SRCS) $(NET80211_PORT_SRCS)
 
@@ -852,6 +858,12 @@ $(BUILD)/components/net80211/%.o: \
 	EXTRAFLAGS := -w $(NET80211_CFG) $(NET80211_INC)
 $(BUILD)/os/net80211/%.o: \
 	EXTRAFLAGS := $(NET80211_CFG) $(NET80211_INC) $(NET80211_PORT_KEY)
+# the W3 bridge TU is the one net80211-world unit that reaches the
+# mac80211 side's OSAL (workqueue/timer/mutex) and the C-ABI vtable -
+# the lkpi include rides along, mac80211.h stays out (FR-4)
+$(BUILD)/os/net80211/lkpi_bridge.o: \
+	EXTRAFLAGS := $(NET80211_CFG) $(NET80211_INC) $(NET80211_PORT_KEY) \
+	-Icomponents/linuxkpi
 endif
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
