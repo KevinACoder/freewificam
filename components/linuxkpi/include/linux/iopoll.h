@@ -31,4 +31,16 @@
 #define	readx_poll_timeout_atomic(op, addr, val, cond, sleep_us, timeout_us, args...) \
 	readx_poll_timeout(op, addr, val, cond, sleep_us, timeout_us, ##args)
 
+/* 7.x spellings: read_poll_timeout(op, val, cond, sleep_us, timeout_us,
+ * sleep_before_read, args...) - the op is invoked as op(args) exactly
+ * like readx, the addr slot is unused, and sleep_before_read only
+ * matters for sleeping variants (ignored here: the atomic form paces
+ * with udelay anyway). */
+#define	read_poll_timeout(op, val, cond, sleep_us, timeout_us, \
+    sleep_before_read, args...) \
+	readx_poll_timeout(op, 0, val, cond, sleep_us, timeout_us, ##args)
+#define	read_poll_timeout_atomic(op, val, cond, sleep_us, timeout_us, \
+    sleep_before_read, args...) \
+	readx_poll_timeout(op, 0, val, cond, 0, timeout_us, ##args)
+
 #endif
