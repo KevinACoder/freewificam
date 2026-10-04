@@ -39,6 +39,41 @@
 extern int wlan8851_register(void);
 #endif
 
+#ifdef CONFIG_WLAN_MON
+/* os/threadx/mon.c: the stall monitor (board-round forensics) */
+extern void wlan_mon_start(void);
+#endif
+
+#ifdef CONFIG_WLAN_AUTORUN
+/* the W3/W4 board-round driver: up -> scan -> bss without a human at the
+ * console, on its own thread so a stall in `up` cannot also wedge the
+ * shell that is supposed to report it */
+extern int rtl8851bu_up(void);
+extern int rtl8851bu_scan(void);
+extern int rtl8851bu_scan_dump(void);
+
+static void thr_wlanrun(void *arg)
+{
+	(void)arg;
+
+	board_log("AUTORUN: waiting for attach");
+	(void)osDelay(8000U);	/* attach lands ~2.8 s; leave settle margin */
+	board_log("AUTORUN: up enter");
+	board_log("AUTORUN: up ret=%d",
+		  rtl8851bu_up());
+	(void)osDelay(1000U);
+	board_log("AUTORUN: scan enter");
+	board_log("AUTORUN: scan ret=%d",
+		  rtl8851bu_scan());
+	(void)osDelay(500U);
+	board_log("AUTORUN: bss count=%d", rtl8851bu_scan_dump());
+	board_log("AUTORUN: done");
+	for (;;) {
+		(void)osDelay(0x7fffffffU);
+	}
+}
+#endif
+
 #ifdef CONFIG_LWIP
 #include "lwip/init.h"
 #include "lwip/tcpip.h"
@@ -134,6 +169,14 @@ int main(void)
 		board_log("usb: threads created usbboot=%p shellboot=%p\n",
 		    (void *)tu, (void *)ts);
 	}
+#ifdef CONFIG_WLAN_MON
+	wlan_mon_start();
+#endif
+#ifdef CONFIG_WLAN_AUTORUN
+	(void)osThreadNew(thr_wlanrun, NULL,
+	    &(osThreadAttr_t){ .name = "wlanrun",
+			       .priority = osPriorityNormal });
+#endif
 	(void)osKernelStart();
 	return 0;	/* unreachable */
 }

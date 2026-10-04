@@ -37,6 +37,12 @@ extern int rtl8851bu_down(void);
 extern int rtl8851bu_scan(void);
 extern int rtl8851bu_scan_dump(void);
 
+#ifdef CONFIG_WLAN_MON
+/* os/threadx/mon.c: on-demand stall dump (the 10 s periodic dump also
+ * runs; this one is for "now, because I am about to issue something") */
+extern void wlan_mon_dump_now(void);
+#endif
+
 static void wlan8851_status(int argc, char *argv[])
 {
 	_adapter *a = rtl8851bu_get_adapter();
@@ -101,6 +107,12 @@ static int cmd_wlan8851(int argc, char *argv[])
 		(void)rtl8851bu_scan_dump();
 		return 0;
 	}
+#ifdef CONFIG_WLAN_MON
+	if (strcmp(argv[1], "mon") == 0) {
+		wlan_mon_dump_now();
+		return 0;
+	}
+#endif
 	if (strcmp(argv[1], "status") == 0) {
 		wlan8851_status(argc, argv);
 		return 0;
@@ -129,10 +141,10 @@ static int cmd_wlan8851(int argc, char *argv[])
 			   rtw_drv_log_level);
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan8851 [up|down|scan|bss|status|register|dbg <1-10>]\n");
+	csh_printf(csh, "usage: wlan8851 [up|down|scan|bss|status|register|dbg <1-10>|mon]\n");
 	return -1;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8851, wlan8851,
-			  "wlan8851 [up|down|scan|bss|status|register|dbg]",
+			  "wlan8851 [up|down|scan|bss|status|register|dbg|mon]",
 			  "drive the rtl8851bu vendor driver (attach/up/scan)");

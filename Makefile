@@ -1053,6 +1053,31 @@ SRCS := $(RTL8851BU_ADAPTER_SRCS) $(SRCS)
 SRCS += $(RTL8851BU_VENDOR_SRCS)
 CFLAGS += -DCONFIG_NIC_RTL8851BU=1
 
+# [S5b-W3] stall forensics (os/threadx/mon.c): the thread/mutex/semaphore
+# table dump every 10 s at osPriorityRealtime, printed through
+# board_log_emergency so a wedged console cannot silence it.  Board-round
+# diagnostic only - default off so the product image never carries it.
+CONFIG_WLAN_MON ?= n
+ifeq ($(filter $(CONFIG_WLAN_MON),y n),)
+$(error CONFIG_WLAN_MON must be y or n, got '$(CONFIG_WLAN_MON)')
+endif
+ifeq ($(CONFIG_WLAN_MON),y)
+SRCS += os/threadx/mon.c
+CFLAGS += -DCONFIG_WLAN_MON=1
+endif
+
+# [S5b-W3] unassisted board-round driver (app/wlan8851/main.c): after a
+# settle delay automatically runs up -> scan -> bss on a dedicated thread,
+# so the acceptance chain reproduces without console typing and a stall
+# cannot wedge the shell.  Board-round diagnostic only, default off.
+CONFIG_WLAN_AUTORUN ?= n
+ifeq ($(filter $(CONFIG_WLAN_AUTORUN),y n),)
+$(error CONFIG_WLAN_AUTORUN must be y or n, got '$(CONFIG_WLAN_AUTORUN)')
+endif
+ifeq ($(CONFIG_WLAN_AUTORUN),y)
+CFLAGS += -DCONFIG_WLAN_AUTORUN=1
+endif
+
 # Vendor build config: the W0-B board-proven macro set (kbuild .cmd of the
 # linux-7.3 build, core/.rtw_cmd.o.cmd) minus kbuild internals and minus the
 # cut macros - CONFIG_IOCTL_CFG80211/RTW_USE_CFG80211_STA_EVENT (the

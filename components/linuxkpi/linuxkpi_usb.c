@@ -355,6 +355,47 @@ usbkpi_wedge_report(void)
 	}
 }
 
+/* [S5b-W3] stall probe (read by the wlanmon thread in os/threadx/mon.c):
+ * the in-flight control transfer and sync submit windows.  The up-stall
+ * left the console silent after the cts2self handler print - this trail
+ * names the exact call in flight (or none) at the moment of the dump.
+ * Single volatile snapshot per window (ctrl on ep0 is serialized by the
+ * hubport mutex; a colliding sync bulk submit can only blur the bulk
+ * pair, the n counter still shows progress).  A zero tick = idle. */
+static volatile u32 lkpi_usb_ctrl_ctx_tick;	/* 0 = no ctrl in flight */
+static volatile u8 lkpi_usb_ctrl_ctx_req;
+static volatile u8 lkpi_usb_ctrl_ctx_type;
+static volatile u16 lkpi_usb_ctrl_ctx_val;
+static volatile u16 lkpi_usb_ctrl_ctx_idx;
+static volatile u16 lkpi_usb_ctrl_ctx_len;
+static volatile u32 lkpi_usb_ctrl_ctx_n;	/* completed ctrl calls */
+static volatile u32 lkpi_usb_sync_ctx_tick;	/* 0 = no sync submit */
+static volatile u8 lkpi_usb_sync_ctx_ep;
+static volatile u32 lkpi_usb_sync_ctx_len;
+static volatile u32 lkpi_usb_sync_ctx_n;	/* completed sync submits */
+
+void
+wlan_mon_extra_probe(void)
+{
+
+	lkpi_printf("MON kpi ctrlstage=%u ctrln=%u syncn=%u\n",
+	    lkpi_usb_ctrl_stage, lkpi_usb_ctrl_ctx_n, lkpi_usb_sync_ctx_n);
+	if (lkpi_usb_ctrl_ctx_tick != 0)
+		lkpi_printf("MON ctrl t=%u in-flight req=%02x type=%02x "
+		    "val=%04x idx=%04x len=%u\n",
+		    (unsigned)lkpi_usb_ctrl_ctx_tick,
+		    (unsigned)lkpi_usb_ctrl_ctx_req,
+		    (unsigned)lkpi_usb_ctrl_ctx_type,
+		    (unsigned)lkpi_usb_ctrl_ctx_val,
+		    (unsigned)lkpi_usb_ctrl_ctx_idx,
+		    (unsigned)lkpi_usb_ctrl_ctx_len);
+	if (lkpi_usb_sync_ctx_tick != 0)
+		lkpi_printf("MON sync t=%u in-flight ep%02x len=%u\n",
+		    (unsigned)lkpi_usb_sync_ctx_tick,
+		    (unsigned)lkpi_usb_sync_ctx_ep,
+		    (unsigned)lkpi_usb_sync_ctx_len);
+}
+
 static void
 usbkpi_push_ctrl(struct usb_device *dev, u8 requesttype, u8 request,
     u16 value, u16 index, u16 size, const void *data, int raw_err,
@@ -1213,12 +1254,23 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	{
 		unsigned long t0 = tx_time_get();
 
+		if (!async) {
+			/* [S5b-W3] sync-submit trail (see wlan_mon_extra_probe) */
+			lkpi_usb_sync_ctx_ep = usb_pipeendpoint(urb->pipe) |
+			    (usb_pipein(urb->pipe) ? 0x80U : 0U);
+			lkpi_usb_sync_ctx_len = urb->transfer_buffer_length;
+			lkpi_usb_sync_ctx_tick = (u32)t0;
+		}
 		ret = usbh_submit_urb(hurb);
 		if (!async)
 			lkpi_sync_cost_sample(
 			    usb_pipeendpoint(urb->pipe) |
 			    (usb_pipein(urb->pipe) ? 0x80U : 0U),
 			    tx_time_get() - t0);
+		if (!async) {
+			lkpi_usb_sync_ctx_tick = 0;
+			lkpi_usb_sync_ctx_n++;
+		}
 	}
 	if (!async && ret == 0) {
 		/* the submit returned because the transfer COMPLETED:
@@ -1487,8 +1539,17 @@ usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
 	usbkpi_push_ctrl(dev, requesttype, request, value, index, size,
 	    is_in ? NULL : data, 0, true);
 	lkpi_usb_ctrl_stage = 3;
+	/* [S5b-W3] the ctrl trail (see wlan_mon_extra_probe) */
+	lkpi_usb_ctrl_ctx_req = request;
+	lkpi_usb_ctrl_ctx_type = requesttype;
+	lkpi_usb_ctrl_ctx_val = value;
+	lkpi_usb_ctrl_ctx_idx = index;
+	lkpi_usb_ctrl_ctx_len = size;
+	lkpi_usb_ctrl_ctx_tick = (u32)tx_time_get();
 	ret = usbh_control_transfer(hport, &setup,
 	    size != 0 ? stage : NULL);
+	lkpi_usb_ctrl_ctx_tick = 0;
+	lkpi_usb_ctrl_ctx_n++;
 	lkpi_usb_ctrl_stage = 4;
 	if (is_in) {
 		/* record what came back (the stage holds the received
