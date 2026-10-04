@@ -210,14 +210,32 @@ void tx_application_define(void *first_unused_memory)
 	cmsis2_tx_application_define();
 }
 
+/* [W3 forensics -> W6 fix] The created-chain walker's legal-address window.
+ * Originally hardcoded 0xa000000..0xb000000 (image + the first ~5.6MB of the
+ * heap as sized back then); the CMSIS control blocks come from pvPortMalloc
+ * anywhere in the 44MB pool, so allocations past 0xb000000 (deep-heap wpa/lwip
+ * objects, thread stacks at 0xd3..) tripped the guard without any real
+ * corruption - the W4 "POISON" hits, 2/2 repro.  W6 closed it: two clean
+ * boots with the sampler running and zero hits, and the one REAL fault this
+ * round (timer-chain abort) parked with the sema chain fully coherent - the
+ * stale window was the only "detector" that ever fired.  The bound is now
+ * the linker's own heap end, covering every allocation the pool can hand
+ * out. [S5b-W6] */
+static unsigned long sema_chain_window_end(void)
+{
+	extern char __heap_end[];
+
+	return (unsigned long)__heap_end;
+}
+
 /* [W3 forensics] Walk the ThreadX created-semaphore chain under a window
- * guard (image + heap = 0xa000000..0xb000000).  The wlan-lane data aborts
- * land inside _txe_semaphore_create's dedup walk on a node whose
- * created_next holds deterministic garbage; this dump names the poison by
- * position (its neighbours on the chain) the moment the machine is parked.
- * Pointers only: a name STRING could itself be garbage, and faulting
- * inside the terminal path is exactly what must never happen.  Shared
- * with the `usbkpi semchain` command for before/after chain evidence. */
+ * guard (image .. __heap_end).  The wlan-lane data aborts land inside
+ * _txe_semaphore_create's dedup walk on a node whose created_next holds
+ * deterministic garbage; this dump names the poison by position (its
+ * neighbours on the chain) the moment the machine is parked.  Pointers
+ * only: a name STRING could itself be garbage, and faulting inside the
+ * terminal path is exactly what must never happen.  Shared with the
+ * `usbkpi semchain` command for before/after chain evidence. */
 void
 tx_sema_chain_dump(void (*emit)(const char *fmt, ...))
 {
@@ -226,8 +244,9 @@ tx_sema_chain_dump(void (*emit)(const char *fmt, ...))
 	TX_SEMAPHORE *n = _tx_semaphore_created_ptr;
 	unsigned int i;
 
-	emit("sema chain: head=%lx count=%u",
-	     (unsigned long)n, (unsigned)_tx_semaphore_created_count);
+	emit("sema chain: head=%lx count=%u win_end=%lx",
+	     (unsigned long)n, (unsigned)_tx_semaphore_created_count,
+	     sema_chain_window_end());
 	for (i = 0; n != NULL && i < 64; i++) {
 		unsigned long nx =
 		    (unsigned long)n->tx_semaphore_created_next;
@@ -242,7 +261,7 @@ tx_sema_chain_dump(void (*emit)(const char *fmt, ...))
 		     (unsigned long)n->tx_semaphore_suspension_list,
 		     (unsigned long)n->tx_semaphore_suspended_count,
 		     nx, pv);
-		if (nx < 0xa000000UL || nx > 0xb000000UL) {
+		if (nx < 0xa000000UL || nx > sema_chain_window_end()) {
 			emit("sema[%u] next out of window - POISON", i);
 			break;
 		}
@@ -252,7 +271,7 @@ tx_sema_chain_dump(void (*emit)(const char *fmt, ...))
 
 /* [W3 forensics] Guarded validation pass over the created-semaphore chain:
  * returns -1 the first time a node's created_next leaves the image+heap
- * window (0xa000000..0xb000000), reporting the position; 0 when the whole
+ * window (0xa000000..__heap_end), reporting the position; 0 when the whole
  * chain looks sane.  The completion-create path runs this before every
  * tx_semaphore_create so the boot log bisects WHICH create first saw the
  * poison - i.e. the exact window the overwrite happened in. */
@@ -268,7 +287,8 @@ tx_sema_chain_validate(unsigned int *idx_out, unsigned long *node_out,
 		unsigned long nx =
 		    (unsigned long)n->tx_semaphore_created_next;
 
-		if (nx != 0 && (nx < 0xa000000UL || nx > 0xb000000UL)) {
+		if (nx != 0 && (nx < 0xa000000UL ||
+		    nx > sema_chain_window_end())) {
 			if (idx_out != NULL)
 				*idx_out = i;
 			if (node_out != NULL)
