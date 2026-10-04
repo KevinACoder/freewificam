@@ -46,6 +46,9 @@ APP_MAIN := app/hello_world/main.c
 ifeq ($(CONFIG_USBHOST),y)
 APP_MAIN := app/cherryusb_enum/main.c
 endif
+ifeq ($(CONFIG_NIC_RTW88),y)
+APP_MAIN := app/wlanrtw/main.c
+endif
 ifeq ($(CONFIG_LWIP),y)
 APP_MAIN := app/lwip_lan/main.c
 endif
@@ -438,6 +441,18 @@ SRCS += $(RTW88_SRCS)
 # <net/*.h>. CONFIG_RTW88_DEBUGFS/DEBUG/LEDS and CONFIG_PM stay off
 # (S9-Q7 / N5; wow.o and led.o are not part of the copy at all).
 $(BUILD)/components/rtw88/%.o: EXTRAFLAGS := -w $(LKPI_CFLAGS)
+
+# W2 board face: the modeswitch + wlan claim hooks (cherryusb section
+# world) and the registration shell (mixed world). The adapter TUs are
+# PREPENDED to SRCS so the .usbh_class_info section order puts the
+# modeswitch hook ahead of the MSC class-only match (the MSC hook's R3
+# VID guard is the second line of defense).
+RTW88_PORT_SRCS := 	port/adapters/rtw88/usbh_modeswitch.c 	port/adapters/rtw88/usbh_rtw88_class.c 	port/adapters/rtw88/rtw88_entry.c
+SRCS := $(RTW88_PORT_SRCS) $(SRCS)
+$(BUILD)/port/adapters/rtw88/usbh_modeswitch.o: 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/port/adapters/rtw88/usbh_rtw88_class.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/port/adapters/rtw88/rtw88_entry.o: 	EXTRAFLAGS := $(LKPI_CFLAGS)
+$(BUILD)/app/wlanrtw/main.o: EXTRAFLAGS := $(CSH_CFLAGS) $(USB_CFLAGS)
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
