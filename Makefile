@@ -708,6 +708,76 @@ $(BUILD)/os/wpa_supplicant/%.o: \
 	EXTRAFLAGS := $(WPA_CFG) $(WPA_INC) $(CSH_CFLAGS)
 endif
 
+# net80211 protocol layer (SPEC S8/net80211-adapt §3.8): the vendored
+# NetBSD core compiles in its own world - the compat shadow headers in
+# os/net80211/compat resolve <sys/...>, <net/...> and <netinet/...>, the
+# vendored root components/net80211 resolves <net80211/...> and
+# <crypto/aes/...>, and the net80211_prelude.h force-include claims the
+# NetBSD identity plus the compiled-out sysctl vocabulary. Warnings are
+# silenced for the frozen import (-w); the first-party compat units
+# compile warning-honest. S8-1 compiles the protocol subset only
+# (9 core .c + AES; tkip/wep ride along uncompiled, urtwn is vendored
+# for S8-2 but not built here) - CONFIG_NET80211_TKIP/WEP and
+# CONFIG_URTWN/CONFIG_BSDKPI are reserved keys for the later slices.
+CONFIG_NET80211 ?= n
+ifeq ($(filter $(CONFIG_NET80211),y n),)
+$(error CONFIG_NET80211 must be y or n, got '$(CONFIG_NET80211)')
+endif
+CONFIG_URTWN ?= n
+CONFIG_BSDKPI ?= n
+CONFIG_NET80211_TKIP ?= n
+CONFIG_NET80211_WEP ?= n
+ifeq ($(CONFIG_NET80211),y)
+NET80211_DIR := components/net80211
+NET80211_PORT_DIR := os/net80211
+
+NET80211_VENDOR_SRCS := \
+	$(NET80211_DIR)/net80211/ieee80211.c \
+	$(NET80211_DIR)/net80211/ieee80211_crypto.c \
+	$(NET80211_DIR)/net80211/ieee80211_crypto_ccmp.c \
+	$(NET80211_DIR)/net80211/ieee80211_crypto_none.c \
+	$(NET80211_DIR)/net80211/ieee80211_input.c \
+	$(NET80211_DIR)/net80211/ieee80211_netbsd.c \
+	$(NET80211_DIR)/net80211/ieee80211_node.c \
+	$(NET80211_DIR)/net80211/ieee80211_output.c \
+	$(NET80211_DIR)/net80211/ieee80211_proto.c \
+	$(NET80211_DIR)/crypto/aes/aes_bear.c \
+	$(NET80211_DIR)/crypto/aes/aes_ccm.c \
+	$(NET80211_DIR)/crypto/aes/aes_ccm_mbuf.c \
+	$(NET80211_DIR)/crypto/aes/aes_ct.c \
+	$(NET80211_DIR)/crypto/aes/aes_ct_dec.c \
+	$(NET80211_DIR)/crypto/aes/aes_ct_enc.c \
+	$(NET80211_DIR)/crypto/aes/aes_impl.c
+ifeq ($(CONFIG_NET80211_TKIP),y)
+NET80211_VENDOR_SRCS += $(NET80211_DIR)/net80211/ieee80211_crypto_tkip.c
+endif
+ifeq ($(CONFIG_NET80211_WEP),y)
+NET80211_VENDOR_SRCS += $(NET80211_DIR)/net80211/ieee80211_crypto_wep.c
+endif
+
+NET80211_PORT_SRCS := \
+	$(NET80211_PORT_DIR)/compat/net80211_compat.c \
+	$(NET80211_PORT_DIR)/compat/net80211_mbuf.c \
+	$(NET80211_PORT_DIR)/compat/net80211_ifnet.c
+
+SRCS += $(NET80211_VENDOR_SRCS) $(NET80211_PORT_SRCS)
+
+NET80211_INC := -I$(NET80211_PORT_DIR)/compat \
+	-I$(NET80211_DIR)
+NET80211_CFG := -D_KERNEL -D_KERNEL_OPT \
+	-include $(NET80211_PORT_DIR)/compat/net80211_prelude.h
+ifeq ($(CONFIG_OS),threadx)
+# kmem/malloc bind to the tlsf-backed heap (os/threadx/heap.c
+# pvPortMalloc/vPortFree); baremetal builds fall back to a static arena
+# inside net80211_compat.c
+NET80211_PORT_KEY := -DNET80211_COMPAT_THREADX_HEAP=1
+endif
+$(BUILD)/components/net80211/%.o: \
+	EXTRAFLAGS := -w $(NET80211_CFG) $(NET80211_INC)
+$(BUILD)/os/net80211/%.o: \
+	EXTRAFLAGS := $(NET80211_CFG) $(NET80211_INC) $(NET80211_PORT_KEY)
+endif
+
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
 	$(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS)))
 DEPS := $(OBJS:.o=.d)
