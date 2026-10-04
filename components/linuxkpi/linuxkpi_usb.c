@@ -919,8 +919,11 @@ usb_free_urb(struct urb *urb)
 
 	if (urb == NULL)
 		return;
-	lkpi_printf("usbkpi: free_urb %p refs %d\n", (void *)urb,
-	    urb->_refs);
+	/* trace-gated: once RX flows this fires per completed frame and
+	 * swamps the console (board 2026-10-04, W3 RX alive) */
+	if (lkpi_usb_trace)
+		lkpi_printf("usbkpi: free_urb %p refs %d\n", (void *)urb,
+		    urb->_refs);
 	if (--urb->_refs > 0)
 		return;
 	lkpi_completion_destroy(&urb->_done);
