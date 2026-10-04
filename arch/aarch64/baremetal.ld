@@ -86,12 +86,17 @@ SECTIONS
 	. = . + 64K;
 	__stack_top = .;
 
-	/* Heap reservation: unused this milestone (no allocator), kept so the
-	 * cache-hygiene range and the ThreadX-round "unused memory" pointer
-	 * have one owner. NOLOAD, costs nothing in the binary. */
+	/* Heap reservation: the runtime tlsf pool (CONFIG_HEAP_BYTES) is
+	 * carved from __heap_start at init with no runtime bound check - the
+	 * reservation is what the ASSERT below guards against. [S5b-W2]
+	 * 4M -> 16M: the wlan8851 pool grew to 16M (PHL rx pool 128x20KiB)
+	 * and an 8M pool overran a 4M reservation into the dma_noc window at
+	 * 0x0c000000 (tlsf handed out descriptor-window memory -> wild
+	 * pointer data abort, first cold boot). The assert now pins the
+	 * actual pool ceiling for every config. */
 	. = ALIGN(16);
 	__heap_start = .;
-	. = . + 4M;
+	. = . + 16M;
 	__heap_end = .;
 
 	/* First byte past everything the image statically reserves. Kernel-
