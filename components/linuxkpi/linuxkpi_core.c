@@ -1184,20 +1184,22 @@ lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 	return 1;
 }
 
-void
+int
 lkpi_del_timer(struct timer_list *t)
 {
 	struct lkpi_callout_shell *co = lk_callout_tl(t);
+	int was_pending = (t->tl_pending != false);
 
 	t->tl_pending = false;
 	(void)tx_timer_deactivate(&co->timer);
+	return was_pending;
 }
 
-void
+int
 lkpi_del_timer_sync(struct timer_list *t)
 {
 
-	lkpi_del_timer(t);
+	return lkpi_del_timer(t);
 }
 
 int
@@ -1902,6 +1904,36 @@ filp_close(struct file *fp, void *files)
 
 	(void)fp;
 	(void)files;
+	return -ENOSYS;
+}
+
+/* [S5b-W1] path-lookup face (linux/namei.h): the vendor's isDirReadable()
+ * probes paths before opening them; with no filesystem the lookup fails
+ * like every filp_open and the callers keep their built-in defaults. */
+int
+skb_linearize(struct sk_buff *skb)
+{
+
+	(void)skb;
+	return 0;	/* nr_frags==0: already linear */
+}
+
+/* [S5b-W1] function spelling of the random face (osdep_service_linux.c
+ * calls it where linux/random.h's macro is not in scope) */
+u32
+get_random_u32(void)
+{
+	return (u32)get_random_int();
+}
+
+int
+kern_path(const char *pathname, unsigned flags, struct path *path)
+{
+
+	(void)flags;
+	(void)path;
+	lkpi_printf("lkpi: kern_path(%s): no filesystem\n",
+		    pathname != NULL ? pathname : "?");
 	return -ENOSYS;
 }
 

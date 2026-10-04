@@ -849,6 +849,45 @@ list_add_tail(struct list_head *n, struct list_head *head)
 	__list_add(n, head->prev, head);
 }
 
+/* [S5b-W1] the splice family (phl/rtw_mesh callers): batch-move a whole
+ * list onto another head; the empty-source case is a no-op */
+static __always_inline __unused void
+__list_splice(const struct list_head *list, struct list_head *prev,
+	      struct list_head *next)
+{
+	struct list_head *first = list->next;
+	struct list_head *last = list->prev;
+
+	prev->next = first;
+	first->prev = prev;
+	next->prev = last;
+	last->next = next;
+}
+
+static __always_inline __unused void
+list_splice(const struct list_head *list, struct list_head *head)
+{
+	if (list->next != list)
+		__list_splice(list, head, head->next);
+}
+
+static __always_inline __unused void
+list_splice_init(struct list_head *list, struct list_head *head)
+{
+	if (list->next != list) {
+		__list_splice(list, head, head->next);
+		list->prev = list;
+		list->next = list;
+	}
+}
+
+static __always_inline __unused void
+list_splice_tail(const struct list_head *list, struct list_head *head)
+{
+	if (list->next != list)
+		__list_splice(list, head->prev, head);
+}
+
 static __always_inline __unused void
 __list_del(struct list_head *prev, struct list_head *next)
 {
@@ -978,6 +1017,11 @@ hlist_del(struct hlist_node *n)
 			next->pprev = pprev;
 	}
 }
+
+/* [S5b-W1] the RCU spellings (mesh/pathtbl callers; the single-core world
+ * has no read-side to protect) */
+#define	hlist_add_head_rcu(n, h)	hlist_add_head((n), (h))
+#define	hlist_del_rcu(n)		hlist_del((n))
 
 #define	hlist_entry_safe(ptr, type, member)				\
 	((ptr) != NULL ? container_of(ptr, type, member) : NULL)
@@ -1120,6 +1164,16 @@ struct file;
 #define	KERN_WARNING	""
 #define	KERN_INFO	""
 #define	KERN_DEBUG	""
+/* [S5b-W1] the continuation/notice spellings (rtw_debug.c _dbgdump_c) */
+#define	KERN_CONT	""
+#define	KERN_NOTICE	""
+#define	KERN_ALERT	""
+#define	KERN_CRIT	""
+#define	KERN_EMERG	""
+/* [S5b-W1] the vendor debug-dump face (rtw_debug.h _dbgdump_c_lmt):
+ * ratelimit is a pass-through in this world; seq_printf already has its
+ * first-party function in linuxkpi_core.c (the seq_file face) */
+#define	printk_ratelimited(fmt, ...)	printk(fmt, ##__VA_ARGS__)
 
 struct va_format {
 	const char	*fmt;
@@ -1533,14 +1587,54 @@ skb_set_queue_mapping(struct sk_buff *skb, u16 q)
 
 struct net_device;		/* the net_device section below */
 
+/* [S5b-W1] the frag face: V5's core/rtw_xmit.c _fill_txreq_list_skb
+ * compiles the SG loop unconditionally (nr_frags==0 keeps it fall-through,
+ * same discipline as before - nothing may ever write here) */
+struct page;	/* opaque - no page allocator in this world */
+#define	page_address(p)		((u8 *)(p))
+
+typedef struct lkpi_skb_frag {
+	struct page	*p;
+	unsigned int	offset;
+	unsigned int	size;
+} skb_frag_t;
+
+#define	MAX_SKB_FRAGS		17
+
+static inline struct page *skb_frag_page(const skb_frag_t *f)
+{
+	return f->p;
+}
+
+static inline unsigned int skb_frag_off(const skb_frag_t *f)
+{
+	return f->offset;
+}
+
+static inline unsigned int skb_frag_size(const skb_frag_t *f)
+{
+	return f->size;
+}
+
+/* [S5b-W1] the frag-walk macro (core/rtw_xmit.c skb_total_frag_nr); with
+ * nr_frags==0 the walk is zero iterations, same dormant discipline */
+#define	skb_walk_frags(skb, iter)				\
+	for ((iter) = skb_shinfo(skb)->frags;			\
+	     (iter) < skb_shinfo(skb)->frags + skb_shinfo(skb)->nr_frags; \
+	     (iter)++)
+
 struct skb_shared_info {
 	unsigned char	nr_frags;
 	/* the shared-info face is a constant-zero stub: nr_frags==0 makes the
 	 * drivers' frag loops fall through; nothing may ever write here */
-	unsigned char	__reserved[63];
+	skb_frag_t	frags[MAX_SKB_FRAGS];
 };
 
 extern struct skb_shared_info lkpi_shinfo_zero;
+
+/* [S5b-W1] linearize face (core/rtw_xmit.c TX path): with the zero-stub
+ * shinfo (nr_frags==0) the buffer is already linear - success, no copy */
+int skb_linearize(struct sk_buff *skb);
 
 #define	skb_shinfo(skb)			(&lkpi_shinfo_zero)
 
@@ -1757,6 +1851,10 @@ struct task_struct *lkpi_current(void);
 void complete_and_exit(struct completion *comp, long code)
 	__attribute__((__noreturn__));
 
+/* [S5b-W1] the 5.17 rename the vendor's rtw_thread_exit calls under
+ * LINUX_VERSION_CODE >= 5.17 (this face runs a 6.12 version code) */
+#define	kthread_complete_and_exit(comp, code)	complete_and_exit((comp), (code))
+
 /* task states (stamps; nothing schedules off them) */
 #define	TASK_RUNNING		0
 #define	TASK_INTERRUPTIBLE	1
@@ -1894,8 +1992,8 @@ struct timer_list {
 
 void lkpi_timer_setup(struct timer_list *, void (*)(struct timer_list *));
 int lkpi_mod_timer(struct timer_list *, unsigned long expires);
-void lkpi_del_timer(struct timer_list *);
-void lkpi_del_timer_sync(struct timer_list *);
+int lkpi_del_timer(struct timer_list *);	/* Linux semantics: was pending */
+int lkpi_del_timer_sync(struct timer_list *);
 int lkpi_timer_pending(const struct timer_list *);
 
 #define	timer_setup(t, fn, flags)	lkpi_timer_setup((t), (fn))
@@ -2029,6 +2127,10 @@ struct net_device_ops {
 			    select_queue_fallback_t fallback);
 	int		(*ndo_do_ioctl)(struct net_device *dev,
 			    struct ifreq *ifr, int cmd);
+	/* [S5b-W1] the >=5.15 dev-private ioctl face (os_intfs.c
+	 * rtw_siocdevprivate assigns it); routes into the rtw_ioctl stub */
+	int		(*ndo_siocdevprivate)(struct net_device *dev,
+			    struct ifreq *ifr, void *data, int cmd);
 	int		(*ndo_set_mac_address)(struct net_device *dev,
 			    void *addr);
 	struct net_device_stats *(*ndo_get_stats)(struct net_device *dev);
@@ -2045,6 +2147,12 @@ struct net_device {
 	unsigned short		flags;
 	unsigned int		mtu;
 	unsigned int		needed_headroom;
+	/* [S5b-W1] the feature bits face: os_intfs.c rtw_init_netdev reads
+	 * features/hw_features unguarded; with CONFIG_RTW_NETIF_SG and
+	 * CONFIG_TCP_CSUM_OFFLOAD_TX off the bits stay 0 and TSO/GSO never
+	 * arms (the compile-set face, not a runtime one) */
+	unsigned int		features;
+	unsigned int		hw_features;
 	unsigned long		watchdog_timeo;
 	const struct net_device_ops *netdev_ops;
 	struct device		dev;		/* embedded; SET_NETDEV_DEV */
@@ -2053,6 +2161,27 @@ struct net_device {
 	 * alloc_etherdev_mq stores sizeof_priv in the private head */
 	unsigned int		_priv_len;
 } __aligned(LKPI_NETDEV_ALIGN);
+
+/* [S5b-W1] the dev_addr mutation face (os_intfs.c:659 dev_addr_mod; the
+ * V5 tree is fully on the modern dev_addr helpers) */
+static inline void dev_addr_mod(struct net_device *dev, unsigned int offset,
+				const void *addr, size_t len)
+{
+	_rtw_memcpy(&dev->dev_addr[offset], addr, len);
+}
+
+static inline void dev_addr_set(struct net_device *dev, const void *addr)
+{
+	_rtw_memcpy(dev->dev_addr, addr, ETH_ALEN);
+}
+
+/* [S5b-W1] NETIF_F bit face (kernel netdev_features.h values; only what
+ * os_intfs.c touches) */
+#define	NETIF_F_SG		((unsigned int)1 << 0)
+#define	NETIF_F_IP_CSUM		((unsigned int)1 << 1)
+#define	NETIF_F_IPV6_CSUM	((unsigned int)1 << 2)
+#define	NETIF_F_TSO		((unsigned int)1 << 3)
+#define	NETIF_F_GSO		((unsigned int)1 << 4)
 
 struct lkpi_tx_queue {
 	unsigned char	stopped;
@@ -2156,11 +2285,15 @@ struct notifier_block {
 #define	register_netdevice_notifier(nb)		((void)(nb), 0)
 #define	unregister_netdevice_notifier(nb)	((void)(nb), 0)
 #define	NETDEV_UP		1
-#define	NETDEV_GOING_DOWN	2
+#define	NETDEV_STOP		2
 #define	NETDEV_DOWN		3
-#define	NETDEV_REBOOT		4
-#define	NETDEV_CHANGEADDR	5
-#define	NETDEV_CHANGENAME	6
+#define	NETDEV_CHANGE		4
+#define	NETDEV_GOING_DOWN	5
+#define	NETDEV_REBOOT		6
+#define	NETDEV_CHANGEADDR	7
+#define	NETDEV_CHANGENAME	8
+#define	NETDEV_PRE_UP		9
+#define	NETDEV_JOIN		10
 #define	NOTIFY_DONE		0
 
 /* the wext event exit (recv path michael-mic indication; the ioctl face
