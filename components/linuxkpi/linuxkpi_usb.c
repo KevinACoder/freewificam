@@ -585,12 +585,20 @@ lkpi_sync_cost_sample(unsigned char ep, unsigned long ms)
 		lkpi_sync_cost[b].max_ms = ms;
 		lkpi_sync_cost[b].max_ep = ep;
 	}
-	if ((lkpi_sync_cost[b].n & 0x3FU) == 0U)
+	if ((lkpi_sync_cost[b].n & 0x3FU) == 0U) {
+#ifdef CONFIG_WLAN_MON
+		/* [W6] the every-64 print is forensic chatter: on the quiet
+		 * measurement configs (WLAN_MON=n) it would land ~3x/s during
+		 * iperf and perturb the very number it measures - keep the
+		 * sampler counting, silence the print (user ruling 2026-10-04:
+		 * iperf 前打印必须清理，否则数据无意义). */
 		lkpi_printf("usbkpi: sync cost %s n=%lu avg=%lums max=%lums ep%02x\n",
 		    b == 0 ? "ctrl" : "bulk",
 		    lkpi_sync_cost[b].n,
 		    lkpi_sync_cost[b].sum_ms / lkpi_sync_cost[b].n,
 		    lkpi_sync_cost[b].max_ms, lkpi_sync_cost[b].max_ep);
+#endif
+	}
 }
 
 /* [W4] sync rejection sampler: the sync failure path prints its first 8
