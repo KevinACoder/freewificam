@@ -13,3 +13,6 @@
 [submodule "third-party/wpa_supplicant"]
 	path = third-party/wpa_supplicant
 	url = https://github.com/KevinACoder/wpa_supplicant-rtos
+[submodule "third-party/RTL8851bu"]
+	path = third-party/RTL8851bu
+	url = https://gitcode.com/windyoung2020/RTL8851bu

@@ -56,6 +56,11 @@ endif
 ifeq ($(CONFIG_NIC_RTL8821CU),y)
 APP_MAIN := app/wlan8821/main.c
 endif
+# S5b W1 (specs/rtl8851bu-vendor-driver/SPEC.md v3.2): the wlan8851
+# bring-up main - same shape, no modeswitch tier (0bda:b851 direct).
+ifeq ($(CONFIG_NIC_RTL8851BU),y)
+APP_MAIN := app/wlan8851/main.c
+endif
 
 # OS layer selection (SPEC S3/threadx-up-boot §3.1.3): baremetal keeps the
 # timebase-only cmsis2 shim; threadx swaps in the ThreadX UP kernel and the
@@ -646,6 +651,456 @@ $(BUILD)/app/wlan8821/%.o: \
 	EXTRAFLAGS = $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
 		-Iport/adapters/rtl8821cu -DCONFIG_NIC_RTL8821CU=1 \
 		$(LWIP_WLAN_APP_CFLAGS)
+endif
+
+# --- the rtl8851bu vendor driver (S5b W1, feat-only - never merges) ----------
+# The Realtek out-of-tree RTL8851BU driver (submodule third-party/RTL8851bu,
+# PHL architecture, pin 5b6408d) consumed through the linuxkpi vendor tier.
+# Compile set = the W0-B board-proven 374-unit USB face (Linux 7.3-rc2,
+# runs/20261004-rtl8851bu-w0b-linux/, POWER_SAVE=n / BR_EXT=n) MINUS the
+# RTOS cuts - the ioctl/proc/cfg80211/regd/android half (ioctl_linux
+# ioctl_cfg80211 rtw_cfgvendor wifi_regd rtw_proc rtw_android ioctl_mp
+# ioctl_efuse) plus the naturally-empty units (nlrtw rtw_rhashtable rtw_wds:
+# their config gates live under CONFIG_RTW_MULTI_AP which defaults off, so
+# they compile to zero symbols - W0-B nm evidence; patches/RTL8851bu/README.md
+# holds the full accounting).  V5 diffs vs the rtl8821cu sibling: NO
+# core/rtw_mem.c (no prealloc pool) and os_dep/osdep_service_linux.c joins
+# the set (the PHL tree split the LINUX primitives out of osdep_service.c).
+CONFIG_NIC_RTL8851BU ?= n
+ifeq ($(filter $(CONFIG_NIC_RTL8851BU),y n),)
+$(error CONFIG_NIC_RTL8851BU must be y or n, got '$(CONFIG_NIC_RTL8851BU)')
+endif
+ifeq ($(CONFIG_NIC_RTL8851BU),y)
+ifeq ($(filter y,$(CONFIG_LINUXKPI)),)
+$(error CONFIG_NIC_RTL8851BU=y requires CONFIG_LINUXKPI=y)
+endif
+RTL8851BU_ROOT := third-party/RTL8851bu
+
+RTL8851BU_VENDOR_SRCS := \
+	third-party/RTL8851bu/core/crypto/aes-ccm.c \
+	third-party/RTL8851bu/core/crypto/aes-ctr.c \
+	third-party/RTL8851bu/core/crypto/aes-gcm.c \
+	third-party/RTL8851bu/core/crypto/aes-internal.c \
+	third-party/RTL8851bu/core/crypto/aes-internal-enc.c \
+	third-party/RTL8851bu/core/crypto/aes-omac1.c \
+	third-party/RTL8851bu/core/crypto/aes-siv.c \
+	third-party/RTL8851bu/core/crypto/ccmp.c \
+	third-party/RTL8851bu/core/crypto/gcmp.c \
+	third-party/RTL8851bu/core/crypto/rtw_crypto_wrap.c \
+	third-party/RTL8851bu/core/crypto/sha256.c \
+	third-party/RTL8851bu/core/crypto/sha256-internal.c \
+	third-party/RTL8851bu/core/crypto/sha256-prf.c \
+	third-party/RTL8851bu/core/mesh/rtw_mesh.c \
+	third-party/RTL8851bu/core/mesh/rtw_mesh_hwmp.c \
+	third-party/RTL8851bu/core/mesh/rtw_mesh_pathtbl.c \
+	third-party/RTL8851bu/core/monitor/rtw_radiotap.c \
+	third-party/RTL8851bu/core/regdb/rtw_regdb_rtk_64-40.c \
+	third-party/RTL8851bu/core/rtw_ap.c \
+	third-party/RTL8851bu/core/rtw_beamforming.c \
+	third-party/RTL8851bu/core/rtw_btc.c \
+	third-party/RTL8851bu/core/rtw_chplan.c \
+	third-party/RTL8851bu/core/rtw_chset.c \
+	third-party/RTL8851bu/core/rtw_cmd.c \
+	third-party/RTL8851bu/core/rtw_csa.c \
+	third-party/RTL8851bu/core/rtw_csi.c \
+	third-party/RTL8851bu/core/rtw_debug.c \
+	third-party/RTL8851bu/core/rtw_dfs.c \
+	third-party/RTL8851bu/core/rtw_eht.c \
+	third-party/RTL8851bu/core/rtw_ft.c \
+	third-party/RTL8851bu/core/rtw_he.c \
+	third-party/RTL8851bu/core/rtw_ieee80211.c \
+	third-party/RTL8851bu/core/rtw_io.c \
+	third-party/RTL8851bu/core/rtw_ioctl_query.c \
+	third-party/RTL8851bu/core/rtw_ioctl_set.c \
+	third-party/RTL8851bu/core/rtw_mbo.c \
+	third-party/RTL8851bu/core/rtw_mi.c \
+	third-party/RTL8851bu/core/rtw_mlme.c \
+	third-party/RTL8851bu/core/rtw_mlme_ext.c \
+	third-party/RTL8851bu/core/rtw_mp.c \
+	third-party/RTL8851bu/core/rtw_p2p.c \
+	third-party/RTL8851bu/core/rtw_phl.c \
+	third-party/RTL8851bu/core/rtw_phl_cmd.c \
+	third-party/RTL8851bu/core/rtw_pwrctrl.c \
+	third-party/RTL8851bu/core/rtw_recv.c \
+	third-party/RTL8851bu/core/rtw_recv_shortcut.c \
+	third-party/RTL8851bu/core/rtw_rf.c \
+	third-party/RTL8851bu/core/rtw_rm.c \
+	third-party/RTL8851bu/core/rtw_rm_fsm.c \
+	third-party/RTL8851bu/core/rtw_rm_util.c \
+	third-party/RTL8851bu/core/rtw_scan.c \
+	third-party/RTL8851bu/core/rtw_sec_cam.c \
+	third-party/RTL8851bu/core/rtw_security.c \
+	third-party/RTL8851bu/core/rtw_sreset.c \
+	third-party/RTL8851bu/core/rtw_sta_mgt.c \
+	third-party/RTL8851bu/core/rtw_swcrypto.c \
+	third-party/RTL8851bu/core/rtw_tdls.c \
+	third-party/RTL8851bu/core/rtw_trx.c \
+	third-party/RTL8851bu/core/rtw_trx_usb.c \
+	third-party/RTL8851bu/core/rtw_twt.c \
+	third-party/RTL8851bu/core/rtw_txpwr.c \
+	third-party/RTL8851bu/core/rtw_vht.c \
+	third-party/RTL8851bu/core/rtw_wlan_util.c \
+	third-party/RTL8851bu/core/rtw_wnm.c \
+	third-party/RTL8851bu/core/rtw_xmit.c \
+	third-party/RTL8851bu/core/rtw_xmit_shortcut.c \
+	third-party/RTL8851bu/os_dep/linux/mlme_linux.c \
+	third-party/RTL8851bu/os_dep/linux/os_ch_utils.c \
+	third-party/RTL8851bu/os_dep/linux/os_intfs.c \
+	third-party/RTL8851bu/os_dep/linux/recv_linux.c \
+	third-party/RTL8851bu/os_dep/linux/rtw_cfg.c \
+	third-party/RTL8851bu/os_dep/linux/usb_intf.c \
+	third-party/RTL8851bu/os_dep/linux/usb_ops_linux.c \
+	third-party/RTL8851bu/os_dep/linux/xmit_linux.c \
+	third-party/RTL8851bu/os_dep/osdep_service.c \
+	third-party/RTL8851bu/os_dep/osdep_service_linux.c \
+	third-party/RTL8851bu/phl/hal_g6/btc/btc_8852b/btc_8852b.c \
+	third-party/RTL8851bu/phl/hal_g6/btc/hal_btc.c \
+	third-party/RTL8851bu/phl/hal_g6/btc/halbtc_action.c \
+	third-party/RTL8851bu/phl/hal_g6/btc/halbtc_dbg_cmd.c \
+	third-party/RTL8851bu/phl/hal_g6/btc/halbtc_def.c \
+	third-party/RTL8851bu/phl/hal_g6/btc/halbtc_fw.c \
+	third-party/RTL8851bu/phl/hal_g6/efuse/hal_efuse.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_acs.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_api.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_api_bb.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_api_btc.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_api_efuse.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_api_mac.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_api_rf.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_beamform.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_c2h.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_cam.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_cap.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_chan.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_chan_info.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_com_i.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_csi_buffer.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_dbcc.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_dfs.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_ext_tx_pwr_lmt.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_fw.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_init.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_io.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_ld_file.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_led.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_mcc.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_notify.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_p2pps.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_ps.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_regulation.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_rx.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_scanofld.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_ser.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_sound.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_sta.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_str_proc.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_thermal.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_trx_mit.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_twt.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_tx.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_txpwr.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_usb.c \
+	third-party/RTL8851bu/phl/hal_g6/hal_wow.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/fw_ax/rtl8851b/hal8851b_fw.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/fw_ax/rtl8851b/hal8851b_fw_log.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/_usb.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/addr_cam.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/beacon.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/cmac_tx.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/coex.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/common.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/cpuio.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/dbcc.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/dbg_cmd.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/dbgpkg.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/dbgport_hw.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/dle.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/eco_patch_check.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/efuse.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/flash.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/fwcmd.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/fwdl.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/fwofld.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/gpio.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/h2c_agg.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/hci_fc.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/hdr_conv.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/hw.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/hw_seq.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/hwamsdu.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/init.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/la_mode.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/_usb_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/cmac_tx_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/coex_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/dbgpkg_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/dle_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/efuse_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/fwcmd_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/gpio_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/hci_fc_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/hdr_conv_rx_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/hwamsdu_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/init_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/mac_priv_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/phy_rpt_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/pwr_seq_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/pwr_seq_func_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/rrsr_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/tblupd_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/trx_desc_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_8851b/wowlan_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mac_priv.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mcc.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/mport.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/nan.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/otpkeysinfo.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/p2p.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/phy_misc.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/phy_rpt.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/power_saving.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/pwr.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/pwr_seq_func.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/role.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/rx_filter.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/rx_forwarding.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/secure_boot.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/security_cam.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/ser.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/sounding.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/spatial_reuse.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/sta_sch.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/status.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/tblupd.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/tcpip_checksum_offload.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/trx_desc.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/trxcfg.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/twt.c \
+	third-party/RTL8851bu/phl/hal_g6/mac/mac_ax/wowlan.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_8851b/halbb_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_8851b/halbb_8851b_api.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_8851b/halbb_8851b_fwofld_api.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_8851b/halbb_hwimg_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_8851b/halbb_reg_cfg_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_ant_div.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_api.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_api_be.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_api_be_hw.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_api_be_intg.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_api_be_sw.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_auto_dbg.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_bb_wrapper.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_cfo_trk.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_ch_info.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_cmn_rpt.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dbcc.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dbg.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dbg_cmd.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dbg_cnsl_out.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dfs.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dig.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dyn_1r_cca.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dyn_csi_rsp.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_dyn_dtr.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_edcca.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_env_mntr.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_fwofld.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_hw_cfg.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_init.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_interface.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_la_mode.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_math_lib.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_mp.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_path_div.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_physts.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_physts_7.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_plcp_gen.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_plcp_tx.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_plcp_tx_7.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_pmac_setting.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_psd.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_pwr_ctrl.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_ra.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_rua_tbl.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_snif.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_spatial_reuse.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_spur_suppress.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_statistics.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/bb/halbb_ul_tb_ctrl.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_8851b_api.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_dack_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_dpk_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_efuse_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_hwimg_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_iqk_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_kfree_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_ops_rtl8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_psd_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_reg_cfg_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_set_pwr_table_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_tssi_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_8851b/halrf_txgapk_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_api.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_dbg.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_dbg_cmd.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_ex.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_hw_cfg.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_init.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_interface.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_iqk.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_pmac.c \
+	third-party/RTL8851bu/phl/hal_g6/phy/rf/halrf_pwr_table.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/hal_trx_8851b.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/rtl8851b_cmd.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/rtl8851b_halinit.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/rtl8851b_mac.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/rtl8851b_ops.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/rtl8851b_phy.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/usb/hal_trx_8851bu.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/usb/rtl8851bu_halinit.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/usb/rtl8851bu_halmac.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/usb/rtl8851bu_io.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/usb/rtl8851bu_led.c \
+	third-party/RTL8851bu/phl/hal_g6/rtl8851b/usb/rtl8851bu_ops.c \
+	third-party/RTL8851bu/phl/hal_g6/test/hal_test_module.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp_cal.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp_config.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp_efuse.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp_reg.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp_rx.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp_tx.c \
+	third-party/RTL8851bu/phl/hal_g6/test/mp/hal_test_mp_txpwr.c \
+	third-party/RTL8851bu/phl/hci/phl_trx_usb.c \
+	third-party/RTL8851bu/phl/phl_acs.c \
+	third-party/RTL8851bu/phl/phl_api_drv.c \
+	third-party/RTL8851bu/phl/phl_chan.c \
+	third-party/RTL8851bu/phl/phl_chan_info.c \
+	third-party/RTL8851bu/phl/phl_cmd_btc.c \
+	third-party/RTL8851bu/phl/phl_cmd_dispatch_engine.c \
+	third-party/RTL8851bu/phl/phl_cmd_dispatcher.c \
+	third-party/RTL8851bu/phl/phl_cmd_dispr_controller.c \
+	third-party/RTL8851bu/phl/phl_cmd_general.c \
+	third-party/RTL8851bu/phl/phl_cmd_scan.c \
+	third-party/RTL8851bu/phl/phl_cmd_ser.c \
+	third-party/RTL8851bu/phl/phl_connect.c \
+	third-party/RTL8851bu/phl/phl_debug.c \
+	third-party/RTL8851bu/phl/phl_dfs.c \
+	third-party/RTL8851bu/phl/phl_diagnose.c \
+	third-party/RTL8851bu/phl/phl_dm.c \
+	third-party/RTL8851bu/phl/phl_ecsa.c \
+	third-party/RTL8851bu/phl/phl_ext_tx_pwr_lmt.c \
+	third-party/RTL8851bu/phl/phl_ie.c \
+	third-party/RTL8851bu/phl/phl_init.c \
+	third-party/RTL8851bu/phl/phl_led.c \
+	third-party/RTL8851bu/phl/phl_mcc.c \
+	third-party/RTL8851bu/phl/phl_mr.c \
+	third-party/RTL8851bu/phl/phl_mr_coex.c \
+	third-party/RTL8851bu/phl/phl_msg_hub.c \
+	third-party/RTL8851bu/phl/phl_notify.c \
+	third-party/RTL8851bu/phl/phl_p2pps.c \
+	third-party/RTL8851bu/phl/phl_pkt_ofld.c \
+	third-party/RTL8851bu/phl/phl_regulation.c \
+	third-party/RTL8851bu/phl/phl_role.c \
+	third-party/RTL8851bu/phl/phl_rx.c \
+	third-party/RTL8851bu/phl/phl_rx_agg.c \
+	third-party/RTL8851bu/phl/phl_scanofld.c \
+	third-party/RTL8851bu/phl/phl_sec.c \
+	third-party/RTL8851bu/phl/phl_sound.c \
+	third-party/RTL8851bu/phl/phl_sound_cmd.c \
+	third-party/RTL8851bu/phl/phl_sta.c \
+	third-party/RTL8851bu/phl/phl_sw_cap.c \
+	third-party/RTL8851bu/phl/phl_tdls.c \
+	third-party/RTL8851bu/phl/phl_thermal.c \
+	third-party/RTL8851bu/phl/phl_trx_mit.c \
+	third-party/RTL8851bu/phl/phl_twt.c \
+	third-party/RTL8851bu/phl/phl_tx.c \
+	third-party/RTL8851bu/phl/phl_txpwr.c \
+	third-party/RTL8851bu/phl/phl_util.c \
+	third-party/RTL8851bu/phl/phl_watchdog.c \
+	third-party/RTL8851bu/phl/phl_wow.c \
+	third-party/RTL8851bu/phl/test/cmd_disp_test.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_cal.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_config.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_efuse.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_reg.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_rx.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_tx.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_txpwr.c \
+	third-party/RTL8851bu/phl/test/mp/phl_test_mp_watchdog.c \
+	third-party/RTL8851bu/phl/test/phl_dbg_cmd.c \
+	third-party/RTL8851bu/phl/test/phl_ser_dbg_cmd.c \
+	third-party/RTL8851bu/phl/test/test_module.c \
+	third-party/RTL8851bu/phl/test/trx_test.c \
+	third-party/RTL8851bu/phl/test/verify/dbcc/phl_test_dbcc.c \
+	third-party/RTL8851bu/phl/test/verify/phl_test_verify.c \
+	third-party/RTL8851bu/platform/platform_ops.c
+
+# W1 adapter tier: no modeswitch (0bda:b851 enumerates directly, W0-B) and
+# no wpa/netif units yet (W4/W5 rounds add theirs with their config keys).
+RTL8851BU_ADAPTER_SRCS := \
+	port/adapters/rtl8851bu/drv_entry.c \
+	port/adapters/rtl8851bu/wlan8851_cmds.c \
+	port/adapters/rtl8851bu/wlan8851_seam.c \
+	port/adapters/rtl8851bu/usbh_wlan_class.c
+
+SRCS := $(RTL8851BU_ADAPTER_SRCS) $(SRCS)
+SRCS += $(RTL8851BU_VENDOR_SRCS)
+CFLAGS += -DCONFIG_NIC_RTL8851BU=1
+
+# Vendor build config: the W0-B board-proven macro set (kbuild .cmd of the
+# linux-7.3 build, core/.rtw_cmd.o.cmd) minus kbuild internals and minus the
+# cut macros - CONFIG_IOCTL_CFG80211/RTW_USE_CFG80211_STA_EVENT (the
+# cfg80211 face is stubbed), CONFIG_PROC_DEBUG (no rtw_proc.c), CONFIG_RTW_
+# NAPI/GRO/NETIF_SG (SG defaults y in the vendor Makefile, spec diff item 6),
+# CONFIG_RADIO_WORK.  DM_ODM_SUPPORT_TYPE does not apply (PHL replaced
+# PHYDM).  RTW_LOG_LEVEL is config-owned like the sibling; RTW_PHL_LOG_LEVEL
+# rides at the W0-B value.
+ifeq ($(CONFIG_RTW_LOG_LEVEL),)
+$(error CONFIG_RTW_LOG_LEVEL must be set in the config (configs/ owns it))
+endif
+RTL8851BU_VENDOR_CFG := -DCONFIG_RTL8851B -DCONFIG_USB_HCI -DCONFIG_PHL_ARCH \
+	-DCONFIG_WIFI_6 -DCONFIG_MP_INCLUDED -DCONFIG_BTC \
+	-DCONFIG_EFUSE_CONFIG_FILE -DCONFIG_LITTLE_ENDIAN \
+	-DCONFIG_LOAD_PHY_PARA_FROM_FILE \
+	-DCONFIG_TXPWR_BY_RATE=1 -DCONFIG_TXPWR_BY_RATE_EN=1 \
+	-DCONFIG_TXPWR_LIMIT=1 -DCONFIG_TXPWR_LIMIT_EN=0 \
+	-DCONFIG_IEEE80211W -DCONFIG_80211D -DCONFIG_LAYER2_ROAMING \
+	-DCONFIG_RTW_DEBUG \
+	-DCONFIG_ROAMING_FLAG=0x3 -DCONFIG_RTW_80211K -DCONFIG_RTW_80211R \
+	-DCONFIG_RTW_MBO -DCONFIG_RTW_WNM -DCONFIG_RTW_BTM_ROAM \
+	-DCONFIG_CMD_DISP -DCONFIG_DBG_AX_CAM -DCONFIG_PHL_TEST_SUITE \
+	-DPLATFORM_LINUX -DPHL_PLATFORM_LINUX -DUSE_TRUE_PHY \
+	-DRTW_PHL_TX -DRTW_PHL_RX -DRTW_PHL_BCN \
+	-DRTW_NETWORK_LINK_MAX=3 -DDTYPE=DEV_TYPE_LEGACY \
+	-DHIGH_ACTIVE_HST2DEV=0 -DCONFIG_RTW_UP_MAPPING_RULE=0 \
+	-DRTW_COUNTRY_IE_SLAVE_EN_MODE=0 -DRTW_COUNTRY_IE_SLAVE_FLAGS=0x01 \
+	-DRTW_EDCCA_MODE_SEL=0 -DRTW_FT_DBG=0 -DRTW_MBO_DBG=0 -DRTW_WNM_DBG=0 \
+	-DRTW_LOG_LEVEL=$(CONFIG_RTW_LOG_LEVEL) -DRTW_PHL_LOG_LEVEL=4 \
+	-DREALTEK_CONFIG_PATH=\"\" -DEFUSE_MAP_PATH=\"\" -DWIFIMAC_PATH=\"\"
+# Include order is load-bearing (sibling note): the linuxkpi headers shadow
+# <linux/*.h> before the vendor tree comes in; -w is the frozen-import face.
+RTL8851BU_CFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) \
+	-I$(RTL8851BU_ROOT)/include -I$(RTL8851BU_ROOT)/core/crypto \
+	-I$(RTL8851BU_ROOT)/phl/hal_g6 -I$(RTL8851BU_ROOT)/platform \
+	-Iport/adapters/rtl8851bu \
+	$(RTL8851BU_VENDOR_CFG) -fgnu89-inline -w
+$(BUILD)/$(RTL8851BU_ROOT)/%.o: EXTRAFLAGS := $(RTL8851BU_CFLAGS)
+$(BUILD)/port/adapters/rtl8851bu/%.o: \
+	EXTRAFLAGS := $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
+		-I$(RTL8851BU_ROOT)/include -I$(RTL8851BU_ROOT)/core/crypto \
+		-I$(RTL8851BU_ROOT)/phl/hal_g6 -I$(RTL8851BU_ROOT)/platform \
+		$(RTL8851BU_VENDOR_CFG) -fgnu89-inline -DCONFIG_NIC_RTL8851BU=1
+# app/wlan8851 rides the shell flags like app/wlan8821 does (CSH_CFLAGS
+# carries -DCONFIG_SHELL=1 - without it the shellboot #ifdef compiles out).
+$(BUILD)/app/wlan8851/%.o: \
+	EXTRAFLAGS = $(LKPI_CFLAGS) $(USB_CFLAGS) $(CSH_CFLAGS) \
+		-Iport/adapters/rtl8851bu -DCONFIG_NIC_RTL8851BU=1
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,

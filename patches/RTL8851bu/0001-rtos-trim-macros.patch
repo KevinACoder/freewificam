@@ -1,0 +1,43 @@
+diff --git a/include/autoconf.h b/include/autoconf.h
+index 5208bfc..9b775b3 100755
+--- a/include/autoconf.h
++++ b/include/autoconf.h
+@@ -28,11 +28,12 @@
+ 
+ 
+ #ifndef DBG_MEM_ALLOC
+-#define DBG_MEM_ALLOC
++/* [W1-0001] mem-alloc debug counters off (RTOS baseline; [S5a] 0001 lineage) */
++/*#define DBG_MEM_ALLOC*/
+ 
+-#define DBG_PHL_MEM_ALLOC
+-#define DBG_HAL_MAC_MEM_MOINTOR
+-#define DBG_HAL_MEM_MOINTOR
++/*#define DBG_PHL_MEM_ALLOC*/
++/*#define DBG_HAL_MAC_MEM_MOINTOR*/
++/*#define DBG_HAL_MEM_MOINTOR*/
+ #endif
+ /*#define CONFIG_PHL_USE_KMEM_ALLOC*/
+ 
+@@ -248,8 +249,10 @@
+  */
+ 
+ #ifndef CONFIG_MINIMAL_MEMORY_USAGE
+-	#define CONFIG_USB_TX_AGGREGATION
+-	#define CONFIG_USB_RX_AGGREGATION
++	/*#define CONFIG_USB_TX_AGGREGATION*/ /* [W1-0001] [S5a] 0001 lineage:
++	RTOS RX = per-recvbuf requeue / TX = bulk-OUT sync semantics; aggregation
++	is the W11b-quantified data-plane follow-up, cross-line item */
++	/*#define CONFIG_USB_RX_AGGREGATION*/
+ #endif
+ 
+ #ifndef CONFIG_DYNAMIC_RX_BUF
+@@ -338,7 +341,7 @@
+  * Debug Related Config
+  */
+ #define RTW_DETECT_HANG
+-#define DBG	1
++#define DBG	0
+ 
+ /*#define DBG_CONFIG_ERROR_DETECT*/
+ 

@@ -146,8 +146,16 @@ struct usb_host_config {
 /* host-side shapes                                                    */
 /* ------------------------------------------------------------------ */
 
+/* [S5b-W1] SuperSpeedPlus ep-comp companion descriptor (V5 diff item 3:
+ * usb_intf.c rtw_endpoint_max_bpi reads ss_ep_comp.wBytesPerInterval on the
+ * SS/SSP speeds; the bench dongle enumerates HS so this face only parses) */
+struct usb_ssp_ep_comp {
+	unsigned short	wBytesPerInterval;
+};
+
 struct usb_host_endpoint {
 	struct usb_endpoint_descriptor desc;
+	struct usb_ssp_ep_comp ss_ep_comp;
 	void		*hcpriv;	/* the CherryUSB descriptor behind it */
 	bool		enabled;
 	/* bulk-OUT data-toggle chain (patches/cherryusb/0003 keeps the

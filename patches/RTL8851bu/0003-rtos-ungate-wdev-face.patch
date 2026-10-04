@@ -1,0 +1,148 @@
+diff --git a/core/rtw_p2p.c b/core/rtw_p2p.c
+index 23b315a..ef9f9be 100755
+--- a/core/rtw_p2p.c
++++ b/core/rtw_p2p.c
+@@ -21,9 +21,12 @@
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 37))
+ 	#error "Linux kernel version is too old to enable CONFIG_P2P"
+ #endif
+-#ifndef CONFIG_IOCTL_CFG80211
+-	#error "Enable CONFIG_P2P without CONFIG_IOCTL_CFG80211"
+-#endif
++/* [W1-0003] the cfg80211-required assertion is relaxed for the RTOS build:
++ * the structural cfg80211 face (wdev/wdev_priv types) comes from the
++ * linuxkpi stub (net/cfg80211.h) and the event-integration face from the
++ * first-party seam stubs - the [S5a] AP_MODE/P2P compiled-in/dormant
++ * discipline keeps P2P in the image (rtw_cmd.c has unguarded references)
++ * while it never runs (MLME_IS_P2P constant-false paths). */
+ 
+ int is_any_client_associated(_adapter *padapter)
+ {
+diff --git a/include/drv_types.h b/include/drv_types.h
+index 7a854cd..8818da3 100755
+--- a/include/drv_types.h
++++ b/include/drv_types.h
+@@ -1244,9 +1244,9 @@ struct dvobj_priv {
+ 	#ifdef PLATFORM_LINUX
+ 	_thread_hdl_ rtnl_lock_holder;
+ 
+-	#if defined(CONFIG_IOCTL_CFG80211)
++	/* [W1-0003] un-gated (the wdev-face accounting): core/rtw_phl.c
++	 * reaches dvobj_to_wiphy with no gate */
+ 	struct wiphy *wiphy;
+-	#endif
+ 	#endif /* PLATFORM_LINUX */
+ 
+ 	#if 0 /*#ifdef CONFIG_CORE_DM_CHK_TIMER*/
+@@ -1357,9 +1357,8 @@ struct dvobj_priv {
+ #define dvobj_to_macidctl(dvobj) (&(dvobj->macid_ctl))
+ #define dvobj_to_sec_camctl(dvobj) (&(dvobj->cam_ctl))
+ #define dvobj_to_regsty(dvobj) (&(dvobj->padapters[IFACE_ID0]->registrypriv))
+-#if defined(CONFIG_IOCTL_CFG80211)
++/* [W1-0003] un-gated (see the wiphy member note) */
+ #define dvobj_to_wiphy(dvobj) ((dvobj)->wiphy)
+-#endif
+ #define dvobj_to_rfctl(dvobj) (&(dvobj->rf_ctl))
+ #define rfctl_to_dvobj(rfctl) container_of((rfctl), struct dvobj_priv, rf_ctl)
+ #define dvobj_to_chset(dvobj) (&dvobj_to_rfctl(dvobj)->chset)
+@@ -1739,9 +1738,8 @@ struct _ADAPTER {
+ 	#endif
+ 
+ 	#ifdef PLATFORM_LINUX
+-	#ifdef CONFIG_IOCTL_CFG80211
++	/* [W1-0003] un-gated (see the wdev_data note below) */
+ 	struct cfg80211_roch_info cfg80211_rochinfo;
+-	#endif /* CONFIG_IOCTL_CFG80211 */
+ 
+ 	_nic_hdl pnetdev;
+ 	char old_ifname[IFNAMSIZ];
+@@ -1751,12 +1749,14 @@ struct _ADAPTER {
+ 	struct proc_dir_entry *dir_dev;/* for proc directory */
+ 	struct proc_dir_entry *dir_odm;
+ 
+-	#ifdef CONFIG_IOCTL_CFG80211
++	/* [W1-0003] un-gated ([S5b] W0-B fact, RTOS compile-set verified): the
++	 * adapter_wdev_data() accessor and the core consumers (rtw_scan/rtw_p2p/
++	 * rtw_mlme_ext/rtw_mi) reference wdev_data with no CONFIG_IOCTL_CFG80211
++	 * gate - the face is structural, not optional (ioctl_cfg80211.c itself
++	 * stays out of the RTOS compile set). */
+ 	struct wireless_dev *rtw_wdev;
+ 	struct rtw_wdev_priv wdev_data;
+ 
+-	#endif /* CONFIG_IOCTL_CFG80211 */
+-
+ 	#endif /* PLATFORM_LINUX */
+ 
+ 	#ifdef CONFIG_TX_AMSDU
+diff --git a/include/osdep_intf.h b/include/osdep_intf.h
+index 7456186..8902a4e 100755
+--- a/include/osdep_intf.h
++++ b/include/osdep_intf.h
+@@ -66,9 +66,9 @@ void rtw_inetaddr_notifier_unregister(void);
+ #include "../os_dep/linux/rtw_proc.h"
+ #include "../os_dep/linux/nlrtw.h"
+ 
+-#ifdef CONFIG_IOCTL_CFG80211
++	/* [W1-0003] un-gated: struct rtw_wdev_priv (the adapter's wdev_data
++	 * member type) is defined here and the member is un-gated above */
+ 	#include "../os_dep/linux/ioctl_cfg80211.h"
+-#endif /* CONFIG_IOCTL_CFG80211 */
+ 
+ u8 rtw_rtnl_lock_needed(struct dvobj_priv *dvobj);
+ void rtw_set_rtnl_lock_holder(struct dvobj_priv *dvobj, _thread_hdl_ thd_hdl);
+diff --git a/include/osdep_service_linux.h b/include/osdep_service_linux.h
+index b15cbc9..a87a4e2 100755
+--- a/include/osdep_service_linux.h
++++ b/include/osdep_service_linux.h
+@@ -47,6 +47,10 @@
+ #include <linux/wireless.h>
+ #include <net/iw_handler.h>
+ #include <net/addrconf.h>
++/* [W1-0003] the cfg80211 structural face (linuxkpi stub): rtw_wdev_priv /
++ * wdev_data members and the FT/CSA types parse through here, ahead of every
++ * drv_types.h consumer (see include/osdep_intf.h counterpart) */
++#include <net/cfg80211.h>
+ #include <linux/if_arp.h>
+ #include <linux/rtnetlink.h>
+ #include <linux/delay.h>
+diff --git a/include/rtw_mlme.h b/include/rtw_mlme.h
+index df9a8aa..d124d73 100755
+--- a/include/rtw_mlme.h
++++ b/include/rtw_mlme.h
+@@ -282,7 +282,8 @@ struct wifi_display_info {
+ };
+ #endif /* CONFIG_WFD */
+ 
+-#ifdef CONFIG_IOCTL_CFG80211
++/* [W1-0003] un-gated (drv_types.h wdev-face accounting): the member on
++ * _adapter and the consumers in core/rtw_scan.c carry no gate */
+ struct cfg80211_roch_info {
+ 	u8						restore_channel;
+ 	struct ieee80211_channel	remain_on_ch_channel;
+@@ -294,7 +295,6 @@ struct cfg80211_roch_info {
+ 	struct wireless_dev *ro_ch_wdev;
+ 	systime last_ro_ch_time; /* this will be updated at the beginning and end of ro_ch */
+ };
+-#endif /* CONFIG_IOCTL_CFG80211 */
+ 
+ #ifdef CONFIG_P2P_WOWLAN
+ 
+diff --git a/include/sta_info.h b/include/sta_info.h
+index c5b9511..26d9f5b 100755
+--- a/include/sta_info.h
++++ b/include/sta_info.h
+@@ -533,12 +533,12 @@ struct sta_info {
+ 	BOOLEAN alive;
+ #endif
+ 
+-#ifdef CONFIG_IOCTL_CFG80211
++	/* [W1-0003] un-gated (same accounting as the drv_types.h wdev face):
++	 * core/rtw_ap.c consumes these with no CONFIG_IOCTL_CFG80211 gate */
+ 	u8 *pauth_frame;
+ 	u32 auth_len;
+ 	u8 *passoc_req;
+ 	u32 assoc_req_len;
+-#endif
+ 
+ 	u8		IOTPeer;			/* Enum value.	HT_IOT_PEER_E */
+ 
