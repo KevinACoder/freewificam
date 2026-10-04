@@ -16,6 +16,11 @@ int	net80211_bridge_scan(const uint8_t *ssid, size_t len);
  * table, privacy flags cleared, ni_authmode OPEN) */
 int	net80211_bridge_connect(const uint8_t *ssid, size_t len);
 int	net80211_bridge_get_hwaddr(uint8_t addr[6]);
+/* D-3 diagnostic: override the local MAC before up() - the mesh-AP
+ * stale-session fork (fresh identity vs same-MAC silence).  Must run
+ * before net80211_bridge_up(); add_interface/sw_scan_start/frame
+ * builder all read ic_myaddr live. */
+void	net80211_bridge_set_mac(const uint8_t addr[6]);
 void	net80211_bridge_status(void);
 void	net80211_bridge_scan_dump(void);
 

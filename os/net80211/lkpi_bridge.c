@@ -92,6 +92,9 @@ struct lkpi_n80211_softc {
 	unsigned int		rx_assoc_resp;
 	unsigned int		rx_deauth;
 	unsigned int		rx_disassoc;
+	/* TX forensics cap: hex the first 8 non-scan mgmt frames (auth
+	 * body truth without an air sniffer) */
+	unsigned int		tx_hex_n;
 };
 
 static struct lkpi_n80211_softc lkpi_n80211_softc;
@@ -143,15 +146,22 @@ lkpi_n80211_tx_mgmt(struct lkpi_n80211_softc *sc, struct mbuf *m)
 
 	/* W4 forensics: auth/assoc frames only (scan floods this path
 	 * with probe requests).  fc + addresses expose a malformed
-	 * builder before the frame is blamed on the air side. */
+	 * builder before the frame is blamed on the air side.
+	 * ether_sprintf returns ONE shared static buffer, so the three
+	 * addresses in a single printf all show the last value - the
+	 * byte-wise hex below is the trustworthy content record. */
 	if (sc->ic.ic_state != IEEE80211_S_SCAN) {
 		const uint8_t *f = buf;
+		size_t i, hl = len < 32 ? len : 32;
 
-		printf("rtw88u: tx mgmt fc=%02x%02x len %zu "
-		    "a1 %s a2 %s a3 %s\n",
-		    f[1], f[0], len,
-		    ether_sprintf(f + 4), ether_sprintf(f + 10),
-		    ether_sprintf(f + 16));
+		printf("rtw88u: tx mgmt fc=%02x%02x len %zu\n", f[1], f[0],
+		    len);
+		if (sc->tx_hex_n++ < 8) {
+			printf("rtw88u: tx hex:");
+			for (i = 0; i < hl; i++)
+				printf(" %02x", f[i]);
+			printf("\n");
+		}
 	}
 
 	(void)sc->drv.tx_mgmt(buf, len);
@@ -586,6 +596,20 @@ net80211_bridge_get_hwaddr(uint8_t addr[6])
 {
 	memcpy(addr, lkpi_n80211_softc.ic.ic_myaddr, 6);
 	return 0;
+}
+
+/* D-3 diagnostic (removal = 单播 RX 断链结案): fresh MAC identity for
+ * the mesh-stale-session fork.  add_interface / sw_scan_start / the
+ * frame builder all read ic_myaddr live, so writing it here (before
+ * up) re-identifies the whole stack without touching vendored core. */
+void
+net80211_bridge_set_mac(const uint8_t addr[6])
+{
+	net80211_serializer_lock();
+	memcpy(lkpi_n80211_softc.ic.ic_myaddr, addr, 6);
+	net80211_serializer_unlock();
+	printf("lkpi80211: local MAC overridden %02x:%02x:%02x:%02x:%02x:%02x\n",
+	    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 }
 
 /*

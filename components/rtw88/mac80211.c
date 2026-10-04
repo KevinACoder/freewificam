@@ -59,10 +59,63 @@ static void rtw_ops_wake_tx_queue(struct ieee80211_hw *hw,
 		queue_work(rtwdev->tx_wq, &rtwdev->tx_work);
 }
 
+/* D-3 diagnostics (DIVERGENCES.md D-3, removal = 单播 RX 断链结案):
+ * the quiet/RCR helper has no hw handle from the shell face; stash the
+ * one instance this stack runs. */
+static struct rtw_dev *d3_quiet_rtwdev;
+
+void rtw_d3_rcr_quiet(int on)
+{
+	struct rtw_dev *rtwdev = d3_quiet_rtwdev;
+	u32 before;
+
+	if (rtwdev == NULL) {
+		printf("rtw88u: d3 quiet: driver not started\n");
+		return;
+	}
+
+	mutex_lock(&rtwdev->mutex);
+	before = rtwdev->hal.rcr;
+	if (on)
+		rtwdev->hal.rcr &= ~(BIT_AM | BIT_AB);
+	else
+		rtwdev->hal.rcr |= (BIT_AM | BIT_AB);
+	rtw_write32(rtwdev, REG_RCR, rtwdev->hal.rcr);
+	printf("rtw88u: d3 quiet %s rcr %08x -> %08x (rb %08x)\n",
+	    on ? "ON" : "OFF", before, rtwdev->hal.rcr,
+	    rtw_read32(rtwdev, REG_RCR));
+	mutex_unlock(&rtwdev->mutex);
+}
+
+void rtw_d3_rcr_promisc(int on)
+{
+	struct rtw_dev *rtwdev = d3_quiet_rtwdev;
+	u32 before;
+
+	if (rtwdev == NULL) {
+		printf("rtw88u: d3 promisc: driver not started\n");
+		return;
+	}
+
+	mutex_lock(&rtwdev->mutex);
+	before = rtwdev->hal.rcr;
+	if (on)
+		rtwdev->hal.rcr |= BIT_AAP;
+	else
+		rtwdev->hal.rcr &= ~BIT_AAP;
+	rtw_write32(rtwdev, REG_RCR, rtwdev->hal.rcr);
+	printf("rtw88u: d3 promisc %s rcr %08x -> %08x (rb %08x)\n",
+	    on ? "ON" : "OFF", before, rtwdev->hal.rcr,
+	    rtw_read32(rtwdev, REG_RCR));
+	mutex_unlock(&rtwdev->mutex);
+}
+
 static int rtw_ops_start(struct ieee80211_hw *hw)
 {
 	struct rtw_dev *rtwdev = hw->priv;
 	int ret;
+
+	d3_quiet_rtwdev = rtwdev;
 
 	mutex_lock(&rtwdev->mutex);
 	ret = rtw_core_start(rtwdev);

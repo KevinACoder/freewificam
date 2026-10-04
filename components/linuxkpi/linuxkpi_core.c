@@ -499,6 +499,27 @@ lkpi_mutex_is_locked(struct mutex *m)
 /* sk_buff                                                             */
 /* ------------------------------------------------------------------ */
 
+/* TLSF-assert forensics (issues/2026-10-04-rtw88-tlsf-heap-assert):
+ * a write past skb->end smashes the NEXT tlsf block header - exactly
+ * the `!block_is_last` trail.  A 4-byte canary after the data area
+ * turns that into a named report at free time; the counters also
+ * settle whether the "OOM 32904 bytes" flood is the rtw88 USB RX
+ * alloc_skb(32K) resubmit churn. */
+#define LKPI_SKB_CANARY	0xd3bada7aU
+
+static u32 lkpi_skb_n_alloc, lkpi_skb_n_free, lkpi_skb_inflight;
+static u32 lkpi_skb_big_alloc, lkpi_skb_alloc_fail, lkpi_skb_canary_bad;
+
+void
+lkpi_skb_diag_dump(void)
+{
+
+	printf("lkpi: skb alloc=%u free=%u inflight=%u big16k=%u "
+	    "alloc_fail=%u canary_bad=%u\n",
+	    lkpi_skb_n_alloc, lkpi_skb_n_free, lkpi_skb_inflight,
+	    lkpi_skb_big_alloc, lkpi_skb_alloc_fail, lkpi_skb_canary_bad);
+}
+
 void *
 lkpi_skb_alloc(unsigned int size, gfp_t gfp)
 {
@@ -506,9 +527,11 @@ lkpi_skb_alloc(unsigned int size, gfp_t gfp)
 
 	/* one allocation for the header and the data area */
 	(void)gfp;
-	skb = pvPortMalloc(sizeof(*skb) + size);
-	if (skb == NULL)
+	skb = pvPortMalloc(sizeof(*skb) + size + sizeof(u32));
+	if (skb == NULL) {
+		lkpi_skb_alloc_fail++;
 		return NULL;
+	}
 	memset(skb, 0, sizeof(*skb));
 	skb->head = (unsigned char *)(skb + 1);
 	skb->data = skb->head;
@@ -516,6 +539,12 @@ lkpi_skb_alloc(unsigned int size, gfp_t gfp)
 	skb->end = size;
 	skb->len = 0;
 	skb->truesize = sizeof(*skb) + size;
+	*(u32 *)(skb->head + size) = LKPI_SKB_CANARY;
+
+	lkpi_skb_n_alloc++;
+	lkpi_skb_inflight++;
+	if (size >= 16384)
+		lkpi_skb_big_alloc++;
 	return skb;
 }
 
@@ -525,7 +554,16 @@ lkpi_skb_free(struct sk_buff *skb)
 
 	if (skb == NULL)
 		return;
+	if (skb->head != NULL && skb->end != 0 &&
+	    *(u32 *)(skb->head + skb->end) != LKPI_SKB_CANARY) {
+		lkpi_skb_canary_bad++;
+		printf("lkpi: skb canary TRASHED size=%u val=%08x\n",
+		    skb->end, *(u32 *)(skb->head + skb->end));
+	}
 	vPortFree(skb);
+	lkpi_skb_n_free++;
+	if (lkpi_skb_inflight != 0)
+		lkpi_skb_inflight--;
 }
 
 void

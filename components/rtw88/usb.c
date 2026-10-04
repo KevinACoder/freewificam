@@ -22,6 +22,28 @@ MODULE_PARM_DESC(switch_usb_mode,
 
 #define RTW_USB_MAX_RXQ_LEN	512
 
+/* D-3 diagnostics (DIVERGENCES.md D-3, removal = 单播 RX 断链结案):
+ * chip->host DMA truth.  The bridge sees beacons but never a unicast
+ * mgmt frame; these counters decide whether the chip ever put one on
+ * the wire to us (parsed straight off the RX descriptor payload,
+ * before any queue/alloc drop can hide it). */
+static u32 d3u_urb, d3u_pkt, d3u_c2h, d3u_mgmt, d3u_mgmt_uni,
+	   d3u_rxq_ovf, d3u_query_fail, d3u_too_big, d3u_alloc_fail;
+
+static void d3u_uni_print(const struct rtw_rx_pkt_stat *ps)
+{
+	const struct ieee80211_hdr *h = ps->hdr;
+	u16 fc = le16_to_cpu(h->frame_control);
+
+	if (d3u_mgmt_uni <= 8U)
+		printf("rtw88u: d3 chip-rx uni-mgmt fc=%04x st=%u "
+		    "da=%02x:%02x:%02x:%02x:%02x:%02x rate=%u len=%u\n",
+		    fc, (fc >> 4) & 0xf,
+		    h->addr1[0], h->addr1[1], h->addr1[2],
+		    h->addr1[3], h->addr1[4], h->addr1[5],
+		    ps->rate, ps->pkt_len);
+}
+
 struct rtw_usb_txcb {
 	struct rtw_dev *rtwdev;
 	struct sk_buff_head tx_ack_queue;
@@ -626,10 +648,12 @@ static void rtw_usb_rx_handler(struct work_struct *work)
 		rx_skb = skb_dequeue(&rtwusb->rx_queue);
 		if (!rx_skb)
 			break;
+		d3u_urb++;
 
 		if (skb_queue_len(&rtwusb->rx_queue) >= RTW_USB_MAX_RXQ_LEN) {
 			dev_dbg_ratelimited(rtwdev->dev, "failed to get rx_queue, overflow\n");
 			dev_kfree_skb_any(rx_skb);
+			d3u_rxq_ovf++;
 			continue;
 		}
 
@@ -638,8 +662,10 @@ static void rtw_usb_rx_handler(struct work_struct *work)
 		do {
 			ret = rtw_rx_query_rx_desc(rtwdev, rx_desc,
 						   &pkt_stat, &rx_status);
-			if (ret)
+			if (ret) {
+				d3u_query_fail++;
 				break;
+			}
 
 			pkt_offset = pkt_desc_sz + pkt_stat.drv_info_sz +
 				     pkt_stat.shift;
@@ -649,6 +675,7 @@ static void rtw_usb_rx_handler(struct work_struct *work)
 				rtw_dbg(rtwdev, RTW_DBG_USB,
 					"skipping too big packet: %u\n",
 					skb_len);
+				d3u_too_big++;
 				goto skip_packet;
 			}
 
@@ -657,14 +684,31 @@ static void rtw_usb_rx_handler(struct work_struct *work)
 				rtw_dbg(rtwdev, RTW_DBG_USB,
 					"failed to allocate RX skb of size %u\n",
 					skb_len);
+				d3u_alloc_fail++;
 				goto skip_packet;
 			}
 
 			skb_put_data(skb, rx_desc, skb_len);
 
 			if (pkt_stat.is_c2h) {
+				d3u_c2h++;
 				rtw_fw_c2h_cmd_rx_irqsafe(rtwdev, pkt_offset, skb);
 			} else {
+				/* D-3 chip-DMA truth: classify off the
+				 * descriptor payload before anything
+				 * downstream can drop it */
+				d3u_pkt++;
+				if (pkt_stat.hdr != NULL) {
+					u16 fc = le16_to_cpu(pkt_stat.hdr->frame_control);
+
+					if ((fc & 0x0c) == 0) {	/* mgmt */
+						d3u_mgmt++;
+						if ((pkt_stat.hdr->addr1[0] & 0x01) == 0) {
+							d3u_mgmt_uni++;
+							d3u_uni_print(&pkt_stat);
+						}
+					}
+				}
 				skb_pull(skb, pkt_offset);
 				rtw_update_rx_freq_for_invalid(rtwdev, skb,
 							       &rx_status,
@@ -1407,3 +1451,18 @@ EXPORT_SYMBOL(rtw_usb_disconnect);
 MODULE_AUTHOR("Realtek Corporation");
 MODULE_DESCRIPTION("Realtek USB 802.11ac wireless driver");
 MODULE_LICENSE("Dual BSD/GPL");
+
+/* D-3 diagnostics (DIVERGENCES.md D-3, removal = 单播 RX 断链结案) */
+void rtw_d3_usb_rx_diag_dump(void)
+{
+	printf("rtw88u: d3 usb-rx urb=%u pkt=%u c2h=%u mgmt=%u uni_mgmt=%u "
+	    "DROP rxq_ovf=%u query_fail=%u too_big=%u alloc_fail=%u\n",
+	    d3u_urb, d3u_pkt, d3u_c2h, d3u_mgmt, d3u_mgmt_uni,
+	    d3u_rxq_ovf, d3u_query_fail, d3u_too_big, d3u_alloc_fail);
+}
+
+void rtw_d3_usb_rx_diag_reset(void)
+{
+	d3u_urb = d3u_pkt = d3u_c2h = d3u_mgmt = d3u_mgmt_uni = 0;
+	d3u_rxq_ovf = d3u_query_fail = d3u_too_big = d3u_alloc_fail = 0;
+}

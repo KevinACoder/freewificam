@@ -9,6 +9,13 @@
 #include "debug.h"
 #include "fw.h"
 
+/* D-3 diagnostics (DIVERGENCES.md D-3, removal = 单播 RX 断链结案):
+ * per-exit counters on the silent query failures - the unicast-mgmt
+ * blackout must split "chip never handed it over" from "host parse
+ * dropped it", and these five exits drop with zero log and zero count. */
+static u32 d3q_ok, d3q_c2h, d3q_rate_err, d3q_drvinfo_err,
+	   d3q_phystat_err, d3q_biglen_err, d3q_fcs_err;
+
 void rtw_rx_stats(struct rtw_dev *rtwdev, struct ieee80211_vif *vif,
 		  struct sk_buff *skb)
 {
@@ -296,28 +303,40 @@ int rtw_rx_query_rx_desc(struct rtw_dev *rtwdev, void *rx_desc8,
 
 	pkt_stat->tsf_low = le32_get_bits(rx_desc->w5, RTW_RX_DESC_W5_TSFL);
 
-	if (unlikely(pkt_stat->rate >= DESC_RATE_MAX))
+	if (unlikely(pkt_stat->rate >= DESC_RATE_MAX)) {
+		d3q_rate_err++;
 		return -EINVAL;
+	}
 
 	if (unlikely(pkt_stat->drv_info_sz &&
-		     pkt_stat->drv_info_sz != PHY_STATUS_SIZE))
+		     pkt_stat->drv_info_sz != PHY_STATUS_SIZE)) {
+		d3q_drvinfo_err++;
 		return -EINVAL;
+	}
 
-	if (unlikely(pkt_stat->phy_status && !pkt_stat->drv_info_sz))
+	if (unlikely(pkt_stat->phy_status && !pkt_stat->drv_info_sz)) {
+		d3q_phystat_err++;
 		return -EINVAL;
+	}
 
-	if (unlikely(pkt_stat->pkt_len > IEEE80211_MAX_MPDU_LEN_VHT_11454))
+	if (unlikely(pkt_stat->pkt_len > IEEE80211_MAX_MPDU_LEN_VHT_11454)) {
+		d3q_biglen_err++;
 		return -EINVAL;
+	}
 
 	/* drv_info_sz is in unit of 8-bytes */
 	pkt_stat->drv_info_sz *= 8;
 
 	/* c2h cmd pkt's rx/phy status is not interested */
-	if (pkt_stat->is_c2h)
+	if (pkt_stat->is_c2h) {
+		d3q_c2h++;
 		return 0;
+	}
 
-	if (unlikely(pkt_stat->pkt_len <= FCS_LEN))
+	if (unlikely(pkt_stat->pkt_len <= FCS_LEN)) {
+		d3q_fcs_err++;
 		return -EINVAL;
+	}
 
 	phy_status = rx_desc8 + desc_sz + pkt_stat->shift;
 	hdr = phy_status + pkt_stat->drv_info_sz;
@@ -328,6 +347,22 @@ int rtw_rx_query_rx_desc(struct rtw_dev *rtwdev, void *rx_desc8,
 
 	rtw_rx_fill_rx_status(rtwdev, pkt_stat, hdr, rx_status);
 
+	d3q_ok++;
+
 	return 0;
 }
 EXPORT_SYMBOL(rtw_rx_query_rx_desc);
+
+void rtw_d3_query_diag_dump(void)
+{
+	printf("rtw88u: d3 query ok=%u c2h=%u ERR rate=%u drvinfo=%u "
+	    "phystat=%u biglen=%u fcs=%u\n",
+	    d3q_ok, d3q_c2h, d3q_rate_err, d3q_drvinfo_err,
+	    d3q_phystat_err, d3q_biglen_err, d3q_fcs_err);
+}
+
+void rtw_d3_query_diag_reset(void)
+{
+	d3q_ok = d3q_c2h = d3q_rate_err = d3q_drvinfo_err = 0;
+	d3q_phystat_err = d3q_biglen_err = d3q_fcs_err = 0;
+}

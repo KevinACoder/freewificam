@@ -59,3 +59,29 @@ asm/byteorder.h 新建、mac80211.h 内核词表 abs。rtw88 20 TU 逐字。）
   `mgd_prepare_tx` 原型为 7.3 `ieee80211_prep_tx_info*` 形（见 linuxkpi 侧
   注释；shim 是 first-party 不入本表）。
 - **撤除条件**：单播 RX 断链结案后整组撤除，本表条目同步销。
+
+### D-3 扩展（W4W5 解阻塞轮）：芯片 DMA 真值计数 + 静默丢弃出口计数 + RCR quiet
+
+- **文件**：`usb.c`（rtw_usb_rx_handler：逐包 fc/addr1 分类计数 + 前 8 帧
+  单播 mgmt 打印 + rxq 溢出/query-fail/too-big/alloc-fail 计数；
+  `rtw_d3_usb_rx_diag_dump/reset`）、`rx.c`（rtw_rx_query_rx_desc 五个
+  -EINVAL 静默出口计数 + ok/c2h；`rtw_d3_query_diag_dump/reset`）、
+  `mac80211.c`（`rtw_d3_rcr_quiet(on)`：hal.rcr 与 REG_RCR 同步清/复
+  BIT_AM|BIT_AB，d3_quiet_rtwdev 于 rtw_ops_start 存）。
+- **改写**：纯计数/打印/诊断写（quiet 仅 shell 显式触发），无行为改动。
+- **理由**：W4W5 断链 fork 的判分仪器——"芯片没交"（d3 chip-rx uni-mgmt
+  零命中）vs"host 静默丢"（五出口计数指认）；quiet 切"泵量/FIFO 溢出 vs
+  WMAC 比较器"。配套 first-party 面：port/adapters/rtw88/rtw88_d3_diag.h
+  + rtw88_cmds `diag/quiet`、linuxkpi urb `_done_tick` + bulk-IN kick
+  gap 直方图（usbkpi rxq 打印）+ lkpi_skb canary/32K-churn 计数、桥
+  tx_mgmt TX hex（前 8 帧逐字节）。
+- **撤除条件**：单播 RX 断链结案后整组撤除（含 first-party 诊断面），
+  本表条目同步销。
+
+### D-3 扩展补记（2026-10-05 同轮第二批）：promisc / MAC 身份覆盖
+
+- `mac80211.c` 增 `rtw_d3_rcr_promisc(on)`（RCR BIT_AAP，与 quiet 同一
+  诊断族，d3_quiet_rtwdev 复用）；`rtw88_cmds` 增 `promisc on|off` 与
+  `mac aa:bb:cc:dd:ee:ff`（后者经 `net80211_bridge_set_mac` 改
+  ic_myaddr，os/net80211 桥 first-party，不动 vendored core）。
+- 撤除条件与整组一致：单播 RX 断链结案后一并撤。

@@ -568,6 +568,53 @@ lkpi_usb_drain_thread_id(void)
 	return lkpi_usb_drain_tcb;
 }
 
+/* D-3 forensics: bulk-IN pump gap (HC completion -> drain-thread
+ * re-arm kick), counted off the free-running CNTP so the buckets stay
+ * real microseconds.  The window is when the endpoint has no posted
+ * buffer and the chip must hold received frames in its own FIFO. */
+static inline u64 lkpi_usb_cntvct(void)
+{
+	u64 v;
+
+	__asm__ volatile("mrs %0, cntvct_el0" : "=r"(v));
+	return v;
+}
+
+static u32 lkpi_gap_n, lkpi_gap_lt50, lkpi_gap_lt200, lkpi_gap_lt1k,
+	   lkpi_gap_lt5k, lkpi_gap_max_us, lkpi_gap_over5k;
+static u32 lkpi_park_peak;
+
+static void
+lkpi_usb_gap_record(u64 delta_ticks)
+{
+	static u32 freq_khz;
+	u32 us;
+
+	if (freq_khz == 0) {
+		u64 frq;
+
+		__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+		freq_khz = (u32)(frq / 1000);
+		if (freq_khz == 0)
+			freq_khz = 1;
+	}
+	us = (u32)((delta_ticks * 1000ULL) / freq_khz);
+
+	lkpi_gap_n++;
+	if (us < 50)
+		lkpi_gap_lt50++;
+	else if (us < 200)
+		lkpi_gap_lt200++;
+	else if (us < 1000)
+		lkpi_gap_lt1k++;
+	else if (us < 5000)
+		lkpi_gap_lt5k++;
+	else
+		lkpi_gap_over5k++;
+	if (us > lkpi_gap_max_us)
+		lkpi_gap_max_us = us;
+}
+
 static int
 lkpi_usb_errno(int usbh_err)
 {
@@ -621,6 +668,7 @@ lkpi_usb_complete_cb(void *arg, int nbytes)
 	else
 		urb->status = 0;
 	urb->actual_length = nbytes > 0 ? (u32)nbytes : hurb->actual_length;
+	urb->_done_tick = lkpi_usb_cntvct();
 	usbkpi_push(urb, usb_pipein(urb->pipe), false,
 	    urb->status == 0 ? urb->actual_length : 0, hurb->errorcode);
 	lkpi_usb_enqueue_done(urb);
@@ -643,6 +691,9 @@ static void lkpi_rx_ep_kick(struct usb_endpoint_descriptor *ep);
 static void
 lkpi_usb_drain_one(struct urb *urb)
 {
+	bool in_bulk = urb->hep != NULL && usb_pipein(urb->pipe) &&
+	    usb_endpoint_xfer_bulk(&urb->hep->desc);
+	u64 t_done = urb->_done_tick;
 
 	/* move the stage's received bytes home before anything can observe
 	 * the completion (the usbkpi record in the IRQ callback already
@@ -667,6 +718,12 @@ lkpi_usb_drain_one(struct urb *urb)
 	 * into the same queue, so this also serves the rearm; for OUT the
 	 * next parked TX frame goes out here) */
 	lkpi_rx_ep_kick(((struct usbh_urb *)urb->_usbh_urb)->ep);
+	/* D-3 forensics: the pump gap = HC completion (TD slot free, the
+	 * chip starts buffering in its own RX FIFO) to the next arm here.
+	 * During this window a one-shot unicast frame can only sit in the
+	 * chip FIFO behind the beacon flood. */
+	if (in_bulk && t_done != 0)
+		lkpi_usb_gap_record(lkpi_usb_cntvct() - t_done);
 	/* the HC reference: the urb may go away here if the caller already
 	 * dropped its own reference (rtw88's submit-then-free pattern) */
 	usb_free_urb(urb);
@@ -759,7 +816,12 @@ usbkpi_rxq_report(void)
 		TX_RESTORE;
 	}
 
-	lkpi_printf("usbkpi: rxq parked_total=%u\n", parked);
+	lkpi_printf("usbkpi: rxq parked_total=%u peak=%u\n", parked,
+	    lkpi_park_peak);
+	lkpi_printf("usbkpi: gap n=%u <50us=%u <200us=%u <1ms=%u <5ms=%u "
+	    ">=5ms=%u max=%uus\n",
+	    lkpi_gap_n, lkpi_gap_lt50, lkpi_gap_lt200, lkpi_gap_lt1k,
+	    lkpi_gap_lt5k, lkpi_gap_over5k, lkpi_gap_max_us);
 	for (i = 0; i < LKPI_RX_EP_N; i++) {
 		if (snapshot[i].ep == NULL)
 			continue;
@@ -1089,6 +1151,8 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 			if (rxq->n < LKPI_RX_EP_QLEN) {
 				rxq->q[rxq->n++] = urb;
 				lkpi_rx_park_n++;
+				if (lkpi_rx_park_n > lkpi_park_peak)
+					lkpi_park_peak = lkpi_rx_park_n;
 				/* the queued arm owns the same lifecycle a
 				 * submitted one does: mark it in flight (the
 				 * kill guard and the driver's own resubmit

@@ -334,6 +334,10 @@ struct urb {
 	/* synchronous control paths wait here */
 	struct completion	_done;
 	bool			_sync;
+	/* D-3 forensics: CNTP tick at HC completion (the moment the
+	 * endpoint's TD slot went free) - the pump gap is this value to
+	 * the drain thread's next-arm kick */
+	u64			_done_tick;
 };
 
 struct urb *usb_alloc_urb(int iso_packets, gfp_t mem_flags);
