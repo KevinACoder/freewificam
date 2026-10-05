@@ -1,11 +1,11 @@
 # third-party/rtw88 — DIVERGENCES（偏差台账）
 
 （原 components/rtw88/DIVERGENCES.md，2026-10-05 随 submodule 化迁入
-patches/rtw88/；条目正文未改，落点文件均在 third-party/rtw88/ 内。）
+third-party/ports/patches/rtw88/；条目正文未改，落点文件均在 third-party/rtw88/ 内。）
 
 S9 spec FR-2（v1.3 偏差台账制）：rtw88 允许源改动，但每处必须先记本表
 （文件:行 + 原文 + 改写 + 理由）；每轮纪检 = 对 [LNX] `e71d9a28760f`
-基线 diff，输出与本表条目一一对应、无未记账改动。改动以 patches/rtw88/
+基线 diff，输出与本表条目一一对应、无未记账改动。改动以 third-party/ports/patches/rtw88/
 重放（README 有补丁↔台账映射），禁改 submodule 工作树。
 
 ## 当前条目

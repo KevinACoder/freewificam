@@ -1,4 +1,4 @@
-# patches/cherryusb
+# third-party/ports/patches/cherryusb
 
 CherryUSB 上游差异的**唯一真值源**（submodule 工作树禁改；差异只以 patch 形式存 here，
 `make modules` 构建期重放进 `third-party/cherryusb/`）。

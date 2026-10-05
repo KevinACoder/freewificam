@@ -1,4 +1,4 @@
-# patches/rtw88 — submodule 本地差异（重放补丁）
+# third-party/ports/patches/rtw88 — submodule 本地差异（重放补丁）
 
 ## submodule pin
 

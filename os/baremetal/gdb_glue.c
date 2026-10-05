@@ -31,6 +31,7 @@
 #include "gdb/gdb.h"
 #include "gdb/gdb_arch.h"
 #include "log.h"
+#include "arch_asm.h"
 #include "generic_timer.h"
 #include "minilibc.h"
 #include "uart.h"
@@ -155,7 +156,7 @@ void gdb_isr_attach(int first_byte, const uint8_t *rest, unsigned int rest_len)
 
 	__asm__ __volatile__("mov %0, sp" : "=r"(sp_snap));
 	__asm__ __volatile__("mov %0, x30" : "=r"(lr_snap));
-	__asm__ __volatile__("mrs %0, daif" : "=r"(daif_snap));
+	ARCH_MRS(daif, daif_snap);
 
 	tf.sp = sp_snap;
 	tf.lr = lr_snap;

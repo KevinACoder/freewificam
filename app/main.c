@@ -126,7 +126,7 @@ static uint64_t read_sctlr(void)
 {
 	uint64_t v;
 
-	__asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(v));
+	ARCH_MRS(sctlr_el1, v);
 	return v;
 }
 
@@ -134,7 +134,7 @@ static uint64_t read_currentel(void)
 {
 	uint64_t v;
 
-	__asm__ __volatile__("mrs %0, CurrentEL" : "=r"(v));
+	ARCH_MRS(CurrentEL, v);
 	return v;
 }
 

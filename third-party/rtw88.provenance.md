@@ -5,9 +5,9 @@
 | 上游 URL | `git@github.com:KevinACoder/rtw88.git`（分支 `linux-7.3-rc2`） |
 | pin | `b057bfd807f3341a3289e22f345503089ebd554f`（快照提交；= lab linux-upstream `e71d9a28760f` mainline 7.3-rc2 的 `drivers/net/wireless/realtek/rtw88/` 全目录 verbatim，2026-10-05 推送） |
 | 许可 | 每文件 `GPL-2.0 OR BSD-3-Clause` 双许可，本仓**取 BSD-3-Clause 选项**（FreeBSD contrib/dev/rtw88 同例；前作先例 [FWCI] D-LK3）——trunk 合入底线 |
-| 引入方式 | git submodule + pin 锁定（分支仅作人读标注，gitlink 是 SHA）；本地差异走 `patches/rtw88/` 重放（`make modules`），禁改 submodule 工作树 |
+| 引入方式 | git submodule + pin 锁定（分支仅作人读标注，gitlink 是 SHA）；本地差异走 `third-party/ports/patches/rtw88/` 重放（`make modules`），禁改 submodule 工作树 |
 | 获取日期 | 2026-10-04（vendored 初引入，S9-W1）；2026-10-05 转 submodule（重构轮 feat/refactor-layout-r1） |
-| 本地差异 | 见 `patches/rtw88/`（D-1 去 static 永久；D-2 rx 重臂；D-3 取证组结案后撤）；台账 `patches/rtw88/DIVERGENCES.md` |
+| 本地差异 | 见 `third-party/ports/patches/rtw88/`（D-1 去 static 永久；D-2 rx 重臂；D-3 取证组结案后撤）；台账 `third-party/ports/patches/rtw88/DIVERGENCES.md` |
 | 实际编译集 | 顶层 Makefile `RTW88_SRCS` 锁定 21 TU（rtw88_core-y 16 件 + usb.c + 8821c 三件 + fw blob TU）；快照分支其余 77 文件不编译 |
 | 消费方 | `third-party/ports/rtw88/`（modeswitch/class 钩子/entry/cmds/wpa 后端/netif 桥）+ `third-party/ports/rtw88/fw_rtw8821c.c`（生成物） |
 

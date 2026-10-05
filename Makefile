@@ -242,7 +242,7 @@ $(BUILD)/os/cmsis2/%.o: EXTRAFLAGS := $(TX_CFLAGS)
 endif
 
 # CherryUSB host stack (SPEC S5/cherryusb-xhci-port §3.3/§3.4): the vendored
-# core + hub class + the xHCI port (patches/cherryusb/0002, replayed by
+# core + hub class + the xHCI port (third-party/ports/patches/cherryusb/0002, replayed by
 # `make modules`) + the adapter layer (third-party/ports/cherryusb) + the
 # shared domain sequence (third-party/ports/cherryusb/usb_domain, the board
 # power-domain glue riding with its only consumer). ThreadX-only (the osal is
@@ -407,7 +407,7 @@ endif
 # verbatim; USB build set of rtw88_core-y + usb.c + the 8821c family,
 # 21 TU) compiled verbatim against the linuxkpi face. FR-2 (v1.3):
 # modifications are allowed but every hunk must be recorded in
-# patches/rtw88/DIVERGENCES.md and carried as a replayable patch - the
+# third-party/ports/patches/rtw88/DIVERGENCES.md and carried as a replayable patch - the
 # per-round verbatim audit diffs the submodule against the baseline and
 # accepts only ledgered hunks. The firmware rides as the
 # gen_firmware_array.py blob TU registered into the linuxkpi fw registry
@@ -721,7 +721,7 @@ endif
 # wpa_supplicant (SPEC S7a/wpa-supplicant-rtos-adapt §3.5): the PSK-only
 # compile set (no EAP/WPS/P2P/ctrl-iface/SME), the list the prior project
 # board-proved on this fork's pin. Vendored sources compile with warnings
-# silenced (WPA_CFG's -w): frozen imports, edited only through patches/
+# silenced (WPA_CFG's -w): frozen imports, edited only through third-party/ports/patches/
 # (make modules replays them). The whole wpa world gets wpa_port_config.h
 # force-included, which steers the fork's includes.h/build_config.h onto
 # the plain-libc path (CONFIG_OS_EMBOX) and selects the driver slot in
@@ -942,18 +942,18 @@ LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 .DEFAULT_GOAL := all
 .PHONY: all gates check deploy clean modules FORCE
 
-# Submodule materialization (patches/cherryusb/README.md): update, set the
+# Submodule materialization (third-party/ports/patches/cherryusb/README.md): update, set the
 # cherryusb sparse-checkout (non-cone; the phytium blob subdir and the
-# demo/tests/docs bulk stay out), then replay every patches/<comp>/*.patch
+# demo/tests/docs bulk stay out), then replay every third-party/ports/patches/<comp>/*.patch
 # into its submodule work tree. Idempotent: an already-applied patch fails
 # apply --check and is reported "kept". A fresh environment that cannot
 # fetch the cherryusb pin (upstream dev force-pushed it away) seeds per
-# patches/cherryusb/README.md first.
+# third-party/ports/patches/cherryusb/README.md first.
 modules:
 	@git submodule update --init third-party/threadx third-party/cherryusb \
 		third-party/lwip third-party/wpa_supplicant third-party/rtw88 \
 		third-party/CMSIS_6 third-party/CMSIS-Driver || \
-		echo 'note: submodule update failed; see patches/cherryusb/README.md (pin seeding)'
+		echo 'note: submodule update failed; see third-party/ports/patches/cherryusb/README.md (pin seeding)'
 	@if [ -d third-party/cherryusb ]; then \
 		git -C third-party/cherryusb sparse-checkout set --no-cone \
 			'/*' '!/*/' '/core/' '/common/' \
@@ -968,7 +968,7 @@ modules:
 			CMSIS/RTOS2/Include CMSIS/Driver/Include || \
 			echo 'note: CMSIS_6 sparse-checkout not set (kept full checkout)'; \
 	fi
-	@for p in patches/*/*.patch; do \
+	@for p in third-party/ports/patches/*/*.patch; do \
 		[ -e "$$p" ] || continue; \
 		comp=$$(printf '%s' "$$p" | cut -d/ -f2); \
 		if git -C third-party/$$comp apply --check "$$PWD/$$p" 2>/dev/null; then \

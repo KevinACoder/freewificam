@@ -47,7 +47,7 @@ static inline uint64_t tick_timer_read_tval(void)
 {
 	uint64_t value;
 
-	__asm__ __volatile__("mrs %0, cntp_tval_el0" : "=r"(value));
+	ARCH_MRS(cntp_tval_el0, value);
 	return value;
 }
 
@@ -61,7 +61,7 @@ static inline uint64_t tick_timer_read_ctl(void)
 {
 	uint64_t value;
 
-	__asm__ __volatile__("mrs %0, cntp_ctl_el0" : "=r"(value));
+	ARCH_MRS(cntp_ctl_el0, value);
 	return value;
 }
 
@@ -77,7 +77,7 @@ static inline uint64_t tick_timer_read_tval(void)
 {
 	uint64_t value;
 
-	__asm__ __volatile__("mrs %0, cntv_tval_el0" : "=r"(value));
+	ARCH_MRS(cntv_tval_el0, value);
 	return value;
 }
 
@@ -91,7 +91,7 @@ static inline uint64_t tick_timer_read_ctl(void)
 {
 	uint64_t value;
 
-	__asm__ __volatile__("mrs %0, cntv_ctl_el0" : "=r"(value));
+	ARCH_MRS(cntv_ctl_el0, value);
 	return value;
 }
 
@@ -101,7 +101,7 @@ static inline uint64_t read_cntfrq(void)
 {
 	uint64_t value;
 
-	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(value));
+	ARCH_MRS(cntfrq_el0, value);
 	ARCH_ISB();
 	return value;
 }

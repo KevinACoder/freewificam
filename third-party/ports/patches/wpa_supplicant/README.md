@@ -11,12 +11,12 @@
   reason this component line merges to **trunk** (spec §3.7), unlike
   the GPL vendor driver lines which stay feat-only.
 - **materialization**: build-time patch replay by `make modules`
-  (`patches/wpa_supplicant/*.patch` onto the pinned work tree);
+  (`third-party/ports/patches/wpa_supplicant/*.patch` onto the pinned work tree);
   idempotent (an applied patch fails `apply --check` and is kept).
   The submodule work tree is never committed.
 - **patches**:
   - `0001-events-roam-compare-in-integers.patch` — inherited verbatim
-    from the prior project (`patches/wpa_supplicant/` there, 44 lines):
+    from the prior project (`third-party/ports/patches/wpa_supplicant/` there, 44 lines):
     events.c roam-estimation float compares become integer math
     (`*1.2/*1.5/*1.1` → `*6/5, *3/2, *11/10`), because the image builds
     `-mgeneral-regs-only` and saves no FP state.

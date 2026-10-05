@@ -187,9 +187,9 @@ void tx_fault_park(unsigned int kind)
 	static volatile unsigned long rec_lr;
 	static volatile unsigned long rec_sp;
 
-	__asm__ __volatile__("mrs %0, esr_el1" : "=r"(rec_esr));
-	__asm__ __volatile__("mrs %0, far_el1" : "=r"(rec_far));
-	__asm__ __volatile__("mrs %0, elr_el1" : "=r"(rec_elr));
+	ARCH_MRS(esr_el1, rec_esr);
+	ARCH_MRS(far_el1, rec_far);
+	ARCH_MRS(elr_el1, rec_elr);
 	__asm__ __volatile__("mov %0, x30" : "=r"(rec_lr));
 	__asm__ __volatile__("mov %0, sp" : "=r"(rec_sp));
 

@@ -22,6 +22,7 @@
 #include <stddef.h>
 
 #include "cache.h"
+#include "arch_asm.h"
 #include "log.h"
 #include "minilibc.h"
 #include "uart.h"
@@ -51,7 +52,7 @@ static unsigned long mdscr_read(void)
 {
 	unsigned long v;
 
-	__asm__ __volatile__("mrs %0, mdscr_el1" : "=r"(v));
+	ARCH_MRS(mdscr_el1, v);
 	return v;
 }
 
@@ -67,9 +68,9 @@ void gdb_arch_setup(void)
 	unsigned long oslock;
 	unsigned long probe = 0xdeadbeefUL;
 
-	__asm__ __volatile__("mrs %0, daif" : "=r"(daif));
-	__asm__ __volatile__("mrs %0, dbgauthstatus_el1" : "=r"(auth));
-	__asm__ __volatile__("mrs %0, oslsr_el1" : "=r"(oslock));
+	ARCH_MRS(daif, daif);
+	ARCH_MRS(dbgauthstatus_el1, auth);
+	ARCH_MRS(oslsr_el1, oslock);
 	board_log("gdb: DAIF=%lx MDSCR=%lx\n", daif, mdscr_read());
 	board_log("gdb: DBGAUTHSTATUS=%lx OSLSR=%lx\n", auth, oslock);
 
@@ -77,14 +78,14 @@ void gdb_arch_setup(void)
 	 * makes every debug register access trap). */
 	__asm__ __volatile__("msr oslar_el1, %0" :: "r"(0UL));
 	__asm__ __volatile__("isb" ::: "memory");
-	__asm__ __volatile__("mrs %0, oslsr_el1" : "=r"(oslock));
+	ARCH_MRS(oslsr_el1, oslock);
 	board_log("gdb: OSLSR after unlock=%lx\n", oslock);
 
 	/* Boot evidence that EL1 HOLDS debug-register state: DBGBCR/BVR
 	 * bits[1:0] are RAZ, so 0xdeadbeef reads back as deadbeec when the
 	 * slot retains the write. */
 	__asm__ __volatile__("msr dbgbvr0_el1, %0" :: "r"(probe));
-	__asm__ __volatile__("mrs %0, dbgbvr0_el1" : "=r"(probe));
+	ARCH_MRS(dbgbvr0_el1, probe);
 	board_log("gdb: dbgbvr0 readback=%lx (expect deadbeec)\n", probe);
 
 	/* Reset the monitor debug bits, so boot state cannot leak a live

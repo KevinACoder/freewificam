@@ -37,4 +37,13 @@
 #define ARCH_IRQ_MASK()		ARCH_DAIF_SET(2)
 #define ARCH_IRQ_UNMASK()	ARCH_DAIF_CLR(2)
 
+/* --- system register access --- */
+/* one-line MRS/MSR for any named sysreg: the asm spelling lives here,
+ * call sites stay portable C ("mrs %0, sctlr_el1" etc. must not be
+ * scattered - app anchors, fault dumps, gdb hooks all go through these) */
+#define ARCH_MRS(_reg, _out)	\
+	__asm__ __volatile__("mrs %0, " #_reg : "=r"(_out))
+#define ARCH_MSR(_reg, _val)	\
+	__asm__ __volatile__("msr " #_reg ", %0" :: "r"(_val) : "memory")
+
 #endif /* ARCH_AARCH64_ARCH_ASM_H */

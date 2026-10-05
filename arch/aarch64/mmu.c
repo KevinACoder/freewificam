@@ -28,6 +28,7 @@
 
 #include "board_conf.h"
 #include "cache.h"
+#include "arch_asm.h"
 #include "mmu.h"
 
 /* MAIR attribute indices, referenced from the table descriptors below. */
@@ -195,7 +196,7 @@ void mmu_enable(void)
 	__asm__ __volatile__("isb" ::: "memory");
 
 	/* Turn on MMU (M), data cache (C) and instruction cache (I). */
-	__asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(value));
+	ARCH_MRS(sctlr_el1, value);
 	value |= (1ULL << 0) | (1ULL << 2) | (1ULL << 12);
 	__asm__ __volatile__("msr sctlr_el1, %0" : : "r"(value) : "memory");
 	__asm__ __volatile__("isb" ::: "memory");
