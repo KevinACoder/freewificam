@@ -24,6 +24,13 @@
 #include "net80211_bridge.h"
 #include "rtw88_d3_diag.h"
 
+#ifdef CONFIG_LWIP
+/* wlanrtw boot: the tcpip thread must be up before the first assoc can
+ * trigger the wlan netif's add/up/dhcp callbacks */
+#include "lwip/init.h"
+#include "lwip/tcpip.h"
+#endif
+
 #ifdef CONFIG_WLAN_NETIF
 extern int wlanrtw_netif_ip(void);
 extern void wlanrtw_netif_stats(unsigned long *rx_fed,
@@ -38,9 +45,36 @@ rtw88_cmd(int argc, char *argv[])
 	int ret;
 
 	if (argc < 2) {
-		csh_printf(csh, "usage: wlanrtw up|scan|bss|connect <ssid>|"
+		csh_printf(csh, "usage: wlanrtw boot|up|scan|bss|connect <ssid>|"
 		    "status|hwaddr|diag [reset]|quiet on|off\n");
 		return 0;
+	}
+	if (strcmp(argv[1], "boot") == 0) {
+		/* the single-app boot entry (S7; the old app/wlanrtw
+		 * thr_usbboot): lwip core first (its tcpip thread serves the
+		 * wlan netif's add/up/dhcp callbacks), then the driver
+		 * registration, then the USB platform - enumeration claims
+		 * the moment the dongle re-appears after eject. */
+		extern int rtw88_rtos_register(void);
+		extern int usbh_platform_start(void);
+		int failures = 0;
+
+#ifdef CONFIG_LWIP
+		tcpip_init(NULL, NULL);
+		csh_printf(csh, "lwip: %s init (wlan netif bridge armed)\n",
+		    LWIP_VERSION_STRING);
+#endif
+		if (rtw88_rtos_register() != 0) {
+			csh_printf(csh, "rtw88: driver register FAIL\n");
+			failures++;
+		}
+		if (usbh_platform_start() == 0) {
+			csh_printf(csh, "usb: platform READY\n");
+		} else {
+			csh_printf(csh, "usb: platform FAIL\n");
+			failures++;
+		}
+		return failures;
 	}
 	if (strcmp(argv[1], "up") == 0) {
 		ret = net80211_bridge_up();
@@ -210,5 +244,5 @@ rtw88_cmd(int argc, char *argv[])
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(rtw88_cmd, wlanrtw,
-    "wlanrtw up|scan|bss|connect|status|hwaddr",
-    "rtw88 bring-up, scan and connect (S9 W3/W4)");
+    "wlanrtw boot|up|scan|bss|connect|status|hwaddr",
+    "rtw88 boot (lwip+register+platform), bridge up, scan and connect");

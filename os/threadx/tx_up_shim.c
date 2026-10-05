@@ -15,17 +15,18 @@
  */
 
 #include <stdint.h>
+#include "arch_asm.h"
 
 unsigned int _tx_thread_smp_protect(void)
 {
 	unsigned int daif;
 
-	__asm__ __volatile__("mrs %0, daif" : "=r"(daif));
-	__asm__ __volatile__("msr daifset, 0x3" ::: "memory");
+	ARCH_DAIF_GET(daif);
+	ARCH_DAIF_SET(3);
 	return daif;
 }
 
 void _tx_thread_smp_unprotect(unsigned int posture)
 {
-	__asm__ __volatile__("msr daif, %0" :: "r"(posture) : "memory");
+	ARCH_DAIF_PUT(posture);
 }

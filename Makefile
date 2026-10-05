@@ -38,21 +38,12 @@ BUILD     := build/baremetal-$(CONFIG)
 TARGET    := $(BUILD)/baremetal
 TFTP_FILE := /mnt/d/tftpboot/rtos.bin
 
-# App entry by feature line (S5/cherryusb-xhci-port §4/P5-a): the USB
-# config swaps the smoke main for the enumeration bring-up. Resolved
-# before SRCS (immediate expansion); the USB source wiring lives in the
-# USB block below.
-APP_MAIN := app/hello_world/main.c
-ifeq ($(CONFIG_USBHOST),y)
-APP_MAIN := app/cherryusb_enum/main.c
-endif
-# the rtw88 image keeps its own main even when lwip rides along (W5:
-# wlanrtw boot + tcpip_init inside); lwip_lan's main is the GMAC shape
-ifeq ($(CONFIG_NIC_RTW88),y)
-APP_MAIN := app/wlanrtw/main.c
-else ifeq ($(CONFIG_LWIP),y)
-APP_MAIN := app/lwip_lan/main.c
-endif
+# The single application entry (feat/refactor-layout-r1 S7): one main
+# for every config - baremetal anchor form / ThreadX kernel + shell
+# boot. Every feature line brings up through a cherrysh command now
+# (`usbh boot`, `wlanrtw boot`, `lan up`, `wpa`, ...); a command is
+# compiled in iff its TU is.
+APP_MAIN := app/main.c
 
 # OS layer selection (SPEC S3/threadx-up-boot §3.1.3): baremetal keeps the
 # timebase-only cmsis2 shim; threadx swaps in the ThreadX UP kernel and the
@@ -67,6 +58,7 @@ SRCS := \
 	arch/aarch64/mmu.c \
 	arch/aarch64/cache.c \
 	arch/aarch64/gicv3.c \
+	arch/aarch64/generic_timer.c \
 	os/baremetal/memops.c \
 	os/baremetal/minilibc.c \
 	os/baremetal/log.c \
@@ -330,7 +322,6 @@ $(BUILD)/third-party/ports/cherryusb/usb_domain.o: \
 	EXTRAFLAGS := $(USB_CFLAGS)
 $(BUILD)/components/ports/cmsis/usb/%.o: EXTRAFLAGS := $(USB_CFLAGS)
 $(BUILD)/third-party/cherryusb/%.o: EXTRAFLAGS := $(USB_CFLAGS)
-$(BUILD)/app/cherryusb_enum/main.o: EXTRAFLAGS := $(CSH_CFLAGS) $(USB_CFLAGS)
 ifeq ($(CONFIG_SHELL),y)
 SRCS += third-party/ports/cherryusb/usbh_cmds.c
 $(BUILD)/third-party/ports/cherryusb/usbh_cmds.o: \
@@ -521,10 +512,9 @@ SRCS := $(RTW88_PORT_SRCS) $(SRCS)
 $(BUILD)/third-party/ports/rtw88/usbh_modeswitch.o: 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/third-party/ports/rtw88/usbh_rtw88_class.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/third-party/ports/rtw88/rtw88_entry.o: 	EXTRAFLAGS := $(LKPI_CFLAGS)
-$(BUILD)/third-party/ports/rtw88/rtw88_cmds.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS) -Icomponents/ports/net80211
-# recursive (=): LWIP_CFLAGS is defined later; the app main only gains it
-# when the lwip block is on (CONFIG_LWIP=1 -> tcpip_init in thr_usbboot)
-$(BUILD)/app/wlanrtw/main.o: EXTRAFLAGS = $(CSH_CFLAGS) $(USB_CFLAGS) $(LWIP_CFLAGS)
+# recursive (=): LWIP_CFLAGS is defined later in the lwip block; the boot
+# subcommand only gains it when CONFIG_LWIP rides along (tcpip_init)
+$(BUILD)/third-party/ports/rtw88/rtw88_cmds.o: 	EXTRAFLAGS = $(LKPI_CFLAGS) $(CSH_CFLAGS) -Icomponents/ports/net80211 $(LWIP_CFLAGS)
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
@@ -662,11 +652,15 @@ LWIP_CFLAGS := -Ithird-party/ports/lwip/include -I$(LWIP_DIR)/src/include \
 	-DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
 $(BUILD)/third-party/lwip/%.o: EXTRAFLAGS := -w $(LWIP_CFLAGS)
 $(BUILD)/third-party/ports/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
-# Recursive assignment on purpose: APP_AUTORUN_CFLAGS is defined later in
-# the netutils block (CONFIG_SCMI_PROBE / CONFIG_IPERF2_AUTO_HOST), and a
-# target-specific := would snapshot it empty here.
-$(BUILD)/app/lwip_lan/%.o: EXTRAFLAGS = $(LWIP_CFLAGS) $(CSH_CFLAGS) \
-	$(APP_AUTORUN_CFLAGS)
+# `lan up` - the wired-line bring-up command (single-app S7): only when
+# the GMAC line is built in (LWIP_GMAC) and the shell carries the command
+ifeq ($(CONFIG_LWIP_GMAC),y)
+ifeq ($(CONFIG_SHELL),y)
+SRCS += third-party/ports/lwip/lan_bringup.c
+$(BUILD)/third-party/ports/lwip/lan_bringup.o: \
+	EXTRAFLAGS := $(LWIP_CFLAGS) $(CSH_CFLAGS)
+endif
+endif
 endif
 
 # netutils (SPEC S7b/netutils-adapt §3.4/§3.6): the vendored tool subset
@@ -688,23 +682,6 @@ CONFIG_NETUTILS_PING ?= y
 CONFIG_NETUTILS_TFTP ?= y
 CONFIG_NETUTILS_IPERF3 ?= y
 CONFIG_NETUTILS_IPERF2 ?= y
-
-# N7 R5b boot autorun (unattended measurement, console-RX outage workaround):
-# non-empty host = one 10 s lwiperf client burst after net READY; SCMI set
-# 0 = boot probe is read-only, an OPP row = rate set through BL31.
-CONFIG_IPERF2_AUTO_HOST ?=
-CONFIG_SCMI_BOOT_SET_MHZ ?= 0
-APP_AUTORUN_CFLAGS :=
-ifneq ($(strip $(CONFIG_IPERF2_AUTO_HOST)),)
-APP_AUTORUN_CFLAGS += -DCONFIG_IPERF2_AUTO_HOST='"$(CONFIG_IPERF2_AUTO_HOST)"' \
-	-Icomponents/ports/netutils
-endif
-ifneq ($(strip $(CONFIG_SCMI_BOOT_SET_MHZ)),0)
-APP_AUTORUN_CFLAGS += -DCONFIG_SCMI_BOOT_SET_MHZ=$(CONFIG_SCMI_BOOT_SET_MHZ)
-endif
-ifeq ($(CONFIG_SCMI_PROBE),y)
-APP_AUTORUN_CFLAGS += -DCONFIG_SCMI_PROBE=1
-endif
 
 NU_DIR := components/netutils
 IPE_DIR := components/iperf3_embedded

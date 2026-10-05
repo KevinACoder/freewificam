@@ -33,6 +33,8 @@
 #include "tx_queue.h"
 
 #include "cmsis_os2.h"
+#include "generic_timer.h"
+#include "arch_asm.h"
 
 #include "cmsis2_diag.h"
 #include "heap.h"
@@ -123,7 +125,7 @@ static void slot_entry(ULONG input)
 	 * below only matters if something later resumes the thread. */
 	(void)tx_thread_suspend(&slot->thread);
 	for (;;) {
-		__asm__ __volatile__("wfe");
+		ARCH_WFE();
 	}
 }
 
@@ -530,16 +532,13 @@ uint32_t osKernelGetSysTimerCount(void)
 {
 	uint32_t v;
 
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+	v = gtimer_count_get();
 	return v;
 }
 
 uint32_t osKernelGetSysTimerFreq(void)
 {
-	uint32_t v;
-
-	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
-	return v;
+	return gtimer_freq_get();
 }
 
 /* --- locking (UP 语义 = 关中断临界区, spec §3.5.2) ---------------------------------- */

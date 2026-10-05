@@ -8,6 +8,8 @@
  *   usbh list [-t]     same, -t adds the hub/port hierarchy
  *   usbh start         bring the buses up - idempotent, also runs from
  *                      `wlan start`'s platform hook
+ *   usbh boot          register the compiled-in linuxkpi usb_drivers,
+ *                      then start - the single-app boot entry (S7)
  *   usbh xdump [busid] the xHCI derived state + event-ring head (the
  *                      wlan xhci equivalent, feat/cherryusb_xhci)
  *   usbh xreg [busid]  raw capability/operational/runtime register rows
@@ -196,6 +198,40 @@ static int usbh_xhci_stop_diag(chry_shell_t *csh, int argc, char **argv)
 }
 #endif
 
+#ifdef CONFIG_LINUXKPI
+/* the acceptance drivers' registration (P6-a/b + linuxkpi-hub H1): the
+ * usb_register table walk must run BEFORE usbh_platform_start() - the
+ * hub thread claims through the class hook the moment a device shows
+ * up. The hub driver sits inert after registration: its probe runs from
+ * the `lkpi_hub attach` command. */
+extern int lkpi_udisk_rtos_register(void);
+extern int lkpi_hub_rtos_register(void);
+#endif
+
+/* boot = the old app/cherryusb_enum thr_usbboot: register the
+ * compiled-in Linux-side usb_drivers (the linuxkpi acceptance drivers,
+ * when built), then bring the platform up. Plain `usbh start` remains
+ * for images without CONFIG_LINUXKPI. */
+static int
+usbh_boot(chry_shell_t *csh)
+{
+#ifdef CONFIG_LINUXKPI
+	if (lkpi_udisk_rtos_register() != 0) {
+		csh_printf(csh, "lkpi: driver register FAIL\n");
+	}
+	if (lkpi_hub_rtos_register() != 0) {
+		csh_printf(csh, "lkpi: hub driver register FAIL\n");
+	}
+#endif
+	csh_printf(csh, "usb: platform start\n");
+	if (usbh_platform_start() == 0) {
+		csh_printf(csh, "usb: platform READY\n");
+		return 0;
+	}
+	csh_printf(csh, "usb: platform FAIL\n");
+	return 1;
+}
+
 static int cmd_usbh(int argc, char **argv)
 {
 	chry_shell_t *csh = CSH_FROM_ARGV(argc, argv);
@@ -229,14 +265,18 @@ static int cmd_usbh(int argc, char **argv)
 	}
 #endif
 
+	if (argc >= 2 && strcmp(argv[1], "boot") == 0) {
+		return usbh_boot(csh);
+	}
+
 	if (argc == 1) {
 		usbh_list_print(csh, false);
 		return 0;
 	}
 
-	csh_printf(csh, "usage: usbh [list [-t]|start|xdump [busid]|xreg [busid]|stall|stop]\n");
+	csh_printf(csh, "usage: usbh [list [-t]|start|boot|xdump [busid]|xreg [busid]|stall|stop]\n");
 	return 1;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_usbh, usbh, "usbh [list [-t]|start|xdump|xreg|stall|stop]",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_usbh, usbh, "usbh [list [-t]|start|boot|xdump|xreg|stall|stop]",
 			  "show the usb host device tree, dump xhci state, or start the buses");

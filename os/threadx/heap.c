@@ -24,6 +24,7 @@
 #include "tlsf.h"
 
 #include "log.h"
+#include "arch_asm.h"
 #include "minilibc.h"
 
 /* The UP critical-section pair (tx_up_shim.c): UP kernel has no SMP port
@@ -134,7 +135,7 @@ void __assert_func(const char *file, int line, const char *func,
 		tlsf_walk_pool(pool, heap_walk_emit, &n);
 	}
 	for (;;) {
-		__asm__ __volatile__("wfe");
+		ARCH_WFE();
 	}
 }
 

@@ -26,6 +26,7 @@
 #include "log.h"
 #include "minilibc.h"
 #include "tick.h"
+#include "arch_asm.h"
 
 void lwip_arch_diag(const char *fmt, ...)
 {
@@ -46,9 +47,9 @@ void lwip_arch_assert(const char *message, const char *file, int line)
 	 * print lock held (an assert inside an interrupted board_log's own
 	 * critical section) - board_log there means a silent freeze. */
 	board_log_emergency("lwip: ASSERT '%s' at %s:%d", message, file, line);
-	__asm__ __volatile__("msr daifset, #0xf" ::: "memory");
+	ARCH_DAIF_SET(15);
 	for (;;) {
-		__asm__ __volatile__("wfi" ::: "memory");
+		ARCH_WFI();
 	}
 }
 

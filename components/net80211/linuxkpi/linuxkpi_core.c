@@ -24,6 +24,7 @@
  */
 
 #include "linuxkpi_impl.h"
+#include "generic_timer.h"
 
 #include <linux/firmware.h>
 
@@ -401,16 +402,13 @@ lkpi_delay_us(unsigned int us)
 	uint64_t start, ticks;
 	uint64_t freq;
 
-	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(freq));
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(start));
+	freq = gtimer_freq_get();
+	start = gtimer_count_get();
 	ticks = (us * freq) / 1000000ULL;
 	if (ticks == 0)
 		ticks = 1;
 	for (;;) {
-		uint64_t now;
-
-		__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(now));
-		if (now - start >= ticks)
+		if (gtimer_count_get() - start >= ticks)
 			break;
 	}
 }

@@ -17,6 +17,7 @@
 
 #include "log.h"
 #include "minilibc.h"
+#include "generic_timer.h"
 
 #include "sys/systm.h"
 #include "sys/mutex.h"
@@ -332,18 +333,12 @@ kern_free(void *p)
 
 static inline uint64_t cntvct_read(void)
 {
-	uint64_t v;
-
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
-	return v;
+	return gtimer_count_get();
 }
 
 static inline uint32_t cntfrq_read(void)
 {
-	uint32_t v;
-
-	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
-	return v;
+	return gtimer_freq_get();
 }
 
 void

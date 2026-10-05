@@ -31,6 +31,7 @@
 #include "gdb/gdb.h"
 #include "gdb/gdb_arch.h"
 #include "log.h"
+#include "generic_timer.h"
 #include "minilibc.h"
 #include "uart.h"
 
@@ -40,7 +41,7 @@ static unsigned long cntvct(void)
 {
 	unsigned long v;
 
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+	v = gtimer_count_get();
 	return v;
 }
 

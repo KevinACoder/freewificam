@@ -36,6 +36,8 @@
 
 #include "log.h"
 #include "minilibc.h"
+#include "arch_asm.h"
+#include "generic_timer.h"
 #include "tick.h"
 #include "uart.h"
 
@@ -62,16 +64,13 @@ static uint64_t read_cntvct(void)
 {
 	uint64_t v;
 
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+	v = gtimer_count_get();
 	return v;
 }
 
 static uint64_t read_cntfrq(void)
 {
-	uint64_t v;
-
-	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
-	return v;
+	return gtimer_freq_get();
 }
 
 /* 64/32 restoring division. 64 iterations is far below the per-line cost of
@@ -166,8 +165,8 @@ static void print_lock_take(uint64_t *saved_daif)
 	/* Mask IRQs for the whole hold, restore the caller's DAIF after
 	 * release: same-core re-entrancy would otherwise deadlock (an ISR
 	 * spinning on the lock its own interrupted context holds). */
-	__asm__ __volatile__("mrs %0, daif" : "=r"(*saved_daif));
-	__asm__ __volatile__("msr daifset, #2" ::: "memory");
+	ARCH_DAIF_GET(*saved_daif);
+	ARCH_IRQ_MASK();
 
 	while (print_try_lock() != 0u) {
 		__asm__ __volatile__("yield" ::: "memory");
@@ -185,7 +184,7 @@ static void print_lock_give(uint64_t saved_daif)
 	/* Restore the caller's interrupt state exactly (whole DAIF, not just
 	 * the I bit: callers in ISR context arrive with IRQs masked and must
 	 * stay that way). */
-	__asm__ __volatile__("msr daif, %0" ::"r"(saved_daif) : "memory");
+	ARCH_DAIF_PUT(saved_daif);
 }
 
 /* --- the stamped line sink -------------------------------------------------- */
@@ -310,11 +309,11 @@ void board_log_emergency(const char *fmt, ...)
 		}
 	}
 
-	__asm__ __volatile__("mrs %0, daif" : "=r"(saved_daif));
-	__asm__ __volatile__("msr daifset, #2" ::: "memory");
+	ARCH_DAIF_GET(saved_daif);
+	ARCH_IRQ_MASK();
 	uart_early_puts("!!! ");
 	uart_early_puts(buf);
-	__asm__ __volatile__("msr daif, %0" ::"r"(saved_daif) : "memory");
+	ARCH_DAIF_PUT(saved_daif);
 }
 
 int board_console_lock_held(void)

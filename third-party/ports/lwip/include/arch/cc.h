@@ -36,6 +36,8 @@
 #define FREEWEBCAM_LWIP_ARCH_CC_H
 
 #include <stdint.h>
+#include "arch_asm.h"
+#include "generic_timer.h"
 
 /* --- ssize_t -------------------------------------------------------------- */
 
@@ -79,7 +81,7 @@ static inline uint32_t lwip_platform_rand(void)
 {
 	uint64_t v;
 
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+	v = gtimer_count_get();
 	/* Mix the low bits: the counter's bottom bits advance fast enough for
 	 * a fragment id, the top bits make successive calls differ. */
 	return (uint32_t)(v ^ (v >> 32));

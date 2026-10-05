@@ -21,6 +21,7 @@
 #ifdef THREADX_BUILD
 
 #include "cmsis_os2.h"
+#include "generic_timer.h"
 
 /* The CMSIS adapter bands lwIP priority numbers 1:1 onto osPriority* /8.
  * D54's ThreadX clause (this port, N4 first run): this kernel has NO time
@@ -96,7 +97,7 @@ static uint64_t iperf3_cntfrq(void)
 	uint64_t f;
 
 	if (freq == 0U) {
-		__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(f));
+		f = gtimer_freq_get();
 		freq = (f != 0U) ? f : 1000000U;
 	}
 	return freq;
@@ -104,10 +105,7 @@ static uint64_t iperf3_cntfrq(void)
 
 static inline uint64_t iperf3_cntvct(void)
 {
-	uint64_t v;
-
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
-	return v;
+	return gtimer_count_get();
 }
 
 uint64_t iperf3_platform_get_time_us(void)

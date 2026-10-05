@@ -8,6 +8,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/types.h>
+#include "arch_asm.h"
 
 static inline void atomic_inc_uint(volatile unsigned int *p) {
 	__atomic_add_fetch(p, 1, __ATOMIC_RELAXED);
@@ -79,17 +80,17 @@ static inline void atomic_store_release(volatile unsigned int *p,
 
 static inline void membar_acquire(void) {
 	__atomic_thread_fence(__ATOMIC_ACQUIRE);
-	__asm__ volatile("dmb ish" ::: "memory");
+	ARCH_DMB();
 }
 
 static inline void membar_release(void) {
 	__atomic_thread_fence(__ATOMIC_RELEASE);
-	__asm__ volatile("dmb ish" ::: "memory");
+	ARCH_DMB();
 }
 
 static inline void membar_sync(void) {
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
-	__asm__ volatile("dmb ish" ::: "memory");
+	ARCH_DMB();
 }
 
 #endif /* _COMPAT_SYS_ATOMIC_H_ */

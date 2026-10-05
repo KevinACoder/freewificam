@@ -25,6 +25,7 @@
 #include "board_conf.h"
 #include "gicv3.h"
 #include "tick.h"
+#include "arch_asm.h"
 
 static uint32_t tick_freq_hz;
 static uint32_t tick_load;
@@ -39,7 +40,7 @@ static os_tick_user_handler_t tick_user_handler;
 static inline void tick_timer_write_tval(uint64_t value)
 {
 	__asm__ __volatile__("msr cntp_tval_el0, %0" ::"r"(value));
-	__asm__ __volatile__("isb" ::: "memory");
+	ARCH_ISB();
 }
 
 static inline uint64_t tick_timer_read_tval(void)
@@ -53,7 +54,7 @@ static inline uint64_t tick_timer_read_tval(void)
 static inline void tick_timer_write_ctl(uint64_t value)
 {
 	__asm__ __volatile__("msr cntp_ctl_el0, %0" ::"r"(value));
-	__asm__ __volatile__("isb" ::: "memory");
+	ARCH_ISB();
 }
 
 static inline uint64_t tick_timer_read_ctl(void)
@@ -69,7 +70,7 @@ static inline uint64_t tick_timer_read_ctl(void)
 static inline void tick_timer_write_tval(uint64_t value)
 {
 	__asm__ __volatile__("msr cntv_tval_el0, %0" ::"r"(value));
-	__asm__ __volatile__("isb" ::: "memory");
+	ARCH_ISB();
 }
 
 static inline uint64_t tick_timer_read_tval(void)
@@ -83,7 +84,7 @@ static inline uint64_t tick_timer_read_tval(void)
 static inline void tick_timer_write_ctl(uint64_t value)
 {
 	__asm__ __volatile__("msr cntv_ctl_el0, %0" ::"r"(value));
-	__asm__ __volatile__("isb" ::: "memory");
+	ARCH_ISB();
 }
 
 static inline uint64_t tick_timer_read_ctl(void)
@@ -101,7 +102,7 @@ static inline uint64_t read_cntfrq(void)
 	uint64_t value;
 
 	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(value));
-	__asm__ __volatile__("isb" ::: "memory");
+	ARCH_ISB();
 	return value;
 }
 

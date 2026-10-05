@@ -28,6 +28,7 @@
 #include "board_conf.h"
 #include "log.h"
 #include "tick.h"
+#include "arch_asm.h"
 
 #ifdef CONFIG_GDB_STUB
 #include "gdb_glue.h"
@@ -130,7 +131,7 @@ static void tx_stack_error_handler(TX_THREAD *thread_ptr)
 			    thread_ptr->tx_thread_stack_end,
 			    (unsigned long)thread_ptr->tx_thread_stack_size);
 	for (;;) {
-		__asm__ __volatile__("wfe");
+		ARCH_WFE();
 	}
 }
 
@@ -203,6 +204,6 @@ void tx_fault_park(unsigned int kind)
 			    rec_elr, rec_lr, rec_sp);
 
 	for (;;) {
-		__asm__ __volatile__("wfe");
+		ARCH_WFE();
 	}
 }

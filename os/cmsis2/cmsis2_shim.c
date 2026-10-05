@@ -23,6 +23,8 @@
 
 #include "cmsis_os2.h"
 #include "tick.h"
+#include "generic_timer.h"
+#include "arch_asm.h"
 
 #ifndef CONFIG_CMSIS2_VERSION
 #define CONFIG_CMSIS2_VERSION "baremetal"
@@ -34,16 +36,13 @@ static inline uint64_t read_cntvct(void)
 {
 	uint64_t v;
 
-	__asm volatile ("mrs %0, cntvct_el0" : "=r"(v));
+	v = gtimer_count_get();
 	return v;
 }
 
 static inline uint32_t read_cntfrq(void)
 {
-	uint32_t v;
-
-	__asm volatile ("mrs %0, cntfrq_el0" : "=r"(v));
-	return v;
+	return gtimer_freq_get();
 }
 
 static osStatus_t os_delay(uint32_t ticks)
@@ -62,7 +61,7 @@ static osStatus_t os_delay(uint32_t ticks)
 		 * us; the tick ISR advances the count and returns, so the
 		 * loop re-evaluates with interrupts enabled - no masked
 		 * window beyond the register read and compare. */
-		__asm volatile ("wfi");
+		ARCH_WFI();
 	}
 	return osOK;
 }

@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "cmsis_os2.h"
+#include "generic_timer.h"
 
 #include "wpa_port_api.h"
 
@@ -208,8 +209,8 @@ void os_sleep(os_time_t sec, os_time_t usec) {
 static void counter_now(struct os_time *t) {
 	uint64_t freq, ticks, us;
 
-	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (freq));
-	__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (ticks));
+	freq = gtimer_freq_get();
+	ticks = gtimer_count_get();
 	us = ticks * 1000000ULL / freq;
 	t->sec = (os_time_t) (us / 1000000ULL);
 	t->usec = (os_time_t) (us % 1000000ULL);
@@ -270,7 +271,7 @@ int os_get_random(unsigned char *buf, size_t len) {
 	size_t i;
 
 	if (state == 0) {
-		__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (state));
+		state = gtimer_count_get();
 		state |= 1;
 	}
 	for (i = 0; i < len; i++) {

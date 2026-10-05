@@ -40,6 +40,7 @@
  * next round. */
 
 #include "cmsis_os2_ext.h" /* the critical-section ext */
+#include "generic_timer.h"
 #include "linuxkpi_core.h"
 
 #include <linux/usb.h>
@@ -580,7 +581,7 @@ static inline u64 lkpi_usb_cntvct(void)
 {
 	u64 v;
 
-	__asm__ volatile("mrs %0, cntvct_el0" : "=r"(v));
+	v = gtimer_count_get();
 	return v;
 }
 
@@ -597,7 +598,7 @@ lkpi_usb_gap_record(u64 delta_ticks)
 	if (freq_khz == 0) {
 		u64 frq;
 
-		__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+		frq = gtimer_freq_get();
 		freq_khz = (u32)(frq / 1000);
 		if (freq_khz == 0)
 			freq_khz = 1;

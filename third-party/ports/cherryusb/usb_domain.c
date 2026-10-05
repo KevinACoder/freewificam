@@ -14,6 +14,7 @@
 #include <stdbool.h>
 
 #include "usb_board.h"
+#include "generic_timer.h"
 #include "usb_domain.h"
 #include "usb_dwc3.h"
 
@@ -26,14 +27,14 @@ void usb_udelay(uint32_t usec)
 {
 	uint64_t start, now, ticks, freq;
 
-	__asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(freq));
+	freq = gtimer_freq_get();
 	ticks = (freq * (uint64_t)usec) / 1000000U;
 	if (ticks == 0U) {
 		ticks = 1U;
 	}
-	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(start));
+	start = gtimer_count_get();
 	for (;;) {
-		__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(now));
+		now = gtimer_count_get();
 		if (now - start >= ticks) {
 			break;
 		}
