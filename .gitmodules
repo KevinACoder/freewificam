@@ -14,3 +14,9 @@
 	path = third-party/rtw88
 	url = git@github.com:KevinACoder/rtw88.git
 	branch = linux-7.3-rc2
+[submodule "third-party/CMSIS_6"]
+	path = third-party/CMSIS_6
+	url = git@github.com:ARM-software/CMSIS_6.git
+[submodule "third-party/CMSIS-Driver"]
+	path = third-party/CMSIS-Driver
+	url = git@github.com:ARM-software/CMSIS-Driver.git

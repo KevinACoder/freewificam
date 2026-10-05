@@ -91,7 +91,7 @@ CFLAGS := $(CONFIG_OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-Iarch/aarch64 -Iboard/$(BOARD) -Iboard/$(BOARD)/drivers -Ios/baremetal \
-	-Ios/cmsis2 -Icomponents/cmsis5 -Icomponents/tlsf
+	-Ios/cmsis2 -Ithird-party/CMSIS_6/CMSIS/RTOS2/Include -Icomponents/tlsf
 
 # CMSIS2 shim identity (SPEC v3 §3.7.2): the string osKernelGetInfo reports;
 # bumped per round so the anchor line carries the build's provenance.
@@ -292,6 +292,7 @@ endif
 SRCS += $(USB_CORE_SRCS) $(USB_HCD_SRCS) $(USB_ADAPTER_SRCS)
 
 USB_CFLAGS := -Ithird-party/ports/cherryusb -Icomponents/ports/cmsis/usb \
+	-Ithird-party/CMSIS_6/CMSIS/Driver/Include \
 	-I$(CHY_DIR)/core -I$(CHY_DIR)/common -I$(CHY_DIR)/class/hub \
 	-I$(CHY_DIR)/class/msc \
 	-I$(CHY_DIR)/port/xhci -I$(CHY_DIR)/port/ehci \
@@ -967,7 +968,8 @@ LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 # patches/cherryusb/README.md first.
 modules:
 	@git submodule update --init third-party/threadx third-party/cherryusb \
-		third-party/lwip third-party/wpa_supplicant third-party/rtw88 || \
+		third-party/lwip third-party/wpa_supplicant third-party/rtw88 \
+		third-party/CMSIS_6 third-party/CMSIS-Driver || \
 		echo 'note: submodule update failed; see patches/cherryusb/README.md (pin seeding)'
 	@if [ -d third-party/cherryusb ]; then \
 		git -C third-party/cherryusb sparse-checkout set --no-cone \
@@ -977,6 +979,11 @@ modules:
 			'/port/xhci/' '!/port/xhci/*/' \
 			'/osal/' || \
 			echo 'note: cherryusb sparse-checkout not set (kept full checkout)'; \
+	fi
+	@if [ -d third-party/CMSIS_6 ]; then \
+		git -C third-party/CMSIS_6 sparse-checkout set --cone \
+			CMSIS/RTOS2/Include CMSIS/Driver/Include || \
+			echo 'note: CMSIS_6 sparse-checkout not set (kept full checkout)'; \
 	fi
 	@for p in patches/*/*.patch; do \
 		[ -e "$$p" ] || continue; \
