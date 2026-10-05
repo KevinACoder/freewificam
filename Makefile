@@ -1076,6 +1076,12 @@ check: $(TARGET).elf
 		echo 'check: libgcc helper leaked - FAIL'; exit 1; \
 	else echo 'check: no libgcc helpers PASS'; fi
 	$(CHECK_CMSIS_CMD)
+	@if grep -rnE --include='*.c' --include='*.h' '#include[[:space:]]*<tx_api\.h>|TX_DISABLE|TX_RESTORE|TX_INTERRUPT|tx_semaphore_|tx_thread_|tx_timer_|tx_event_flags_|tx_mutex_|tx_byte_pool' \
+		components/ third-party/ports/ 2>/dev/null \
+		| grep -vE 'third-party/ports/cherryusb/usb_osal_threadx\.c|net80211/linuxkpi/usb/linuxkpi_usb\.c'; then \
+		echo 'check: ThreadX symbol outside the OS port whitelist - FAIL'; \
+		echo '       (whitelist: os/threadx, os/cmsis2, cherryusb osal, linuxkpi_usb TODO)'; exit 1; \
+	else echo 'check: ThreadX symbols confined to the OS-port whitelist PASS'; fi
 
 # Deploy to the TFTP root under the name the board's boot profile expects.
 # The deploy report (size + crc32 + the sha256 chain) is what the

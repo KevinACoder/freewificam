@@ -856,3 +856,121 @@ osStatus_t osMessageQueueDelete(osMessageQueueId_t mq_id)
 	vPortFree(queue);
 	return osOK;
 }
+
+/* --- caller-storage primitives (S6 de-ThreadX: linuxkpi completion/callout
+ *     shells embed their wake channel / timer by value) ------------------- */
+
+#include "cmsis_os2_ext.h"
+
+/* the ext shells are OS-neutral word arrays; the sizes must hold this
+ * port's objects - drift is a compile error here, not a boot corruption */
+_Static_assert(sizeof(((os_sem_static_t *)0)->priv) >= sizeof(TX_SEMAPHORE),
+    "os_sem_static_t must hold TX_SEMAPHORE");
+_Static_assert(sizeof(((os_timer_static_t *)0)->priv) >= sizeof(TX_TIMER),
+    "os_timer_static_t priv must hold TX_TIMER");
+
+osStatus_t osSemStaticInit(os_sem_static_t *s, const char *name,
+			   uint32_t initial_count)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)(void *)s->priv;
+
+	return tx_semaphore_create(sem, (CHAR *)name,
+				   (ULONG)initial_count) == TX_SUCCESS ?
+		       osOK :
+		       osError;
+}
+
+osStatus_t osSemStaticDestroy(os_sem_static_t *s)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)(void *)s->priv;
+
+	if ((s == NULL) || (sem->tx_semaphore_id != TX_SEMAPHORE_ID)) {
+		return osErrorParameter;
+	}
+	return tx_semaphore_delete(sem) == TX_SUCCESS ? osOK : osErrorResource;
+}
+
+osStatus_t osSemStaticAcquire(os_sem_static_t *s, uint32_t timeout)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)(void *)s->priv;
+	UINT wait;
+	UINT ret;
+
+	if ((s == NULL) || (sem->tx_semaphore_id != TX_SEMAPHORE_ID)) {
+		return osErrorParameter;
+	}
+	/* CMSIS osWaitForever == TX_WAIT_FOREVER == 0xffffffff. */
+	wait = (timeout == 0U) ? TX_NO_WAIT : (UINT)timeout;
+	ret = tx_semaphore_get(sem, wait);
+
+	return (ret == TX_SUCCESS) ? osOK :
+	       (wait == TX_NO_WAIT) ? osErrorResource :
+				      osErrorTimeout;
+}
+
+osStatus_t osSemStaticRelease(os_sem_static_t *s)
+{
+	TX_SEMAPHORE *sem = (TX_SEMAPHORE *)(void *)s->priv;
+
+	if ((s == NULL) || (sem->tx_semaphore_id != TX_SEMAPHORE_ID)) {
+		return osErrorParameter;
+	}
+	return tx_semaphore_put(sem) == TX_SUCCESS ? osOK : osErrorResource;
+}
+
+static void os_timer_static_trampoline(ULONG input)
+{
+	os_timer_static_t *t = (os_timer_static_t *)(uintptr_t)input;
+
+	t->fn(t->arg);
+}
+
+osStatus_t osTimerStaticCreate(os_timer_static_t *t, const char *name,
+			       os_timer_static_fn_t fn, void *arg)
+{
+	TX_TIMER *timer = (TX_TIMER *)(void *)t->priv;
+
+	t->fn = fn;
+	t->arg = arg;
+	if (tx_timer_create(timer, (CHAR *)name, os_timer_static_trampoline,
+			    (ULONG)(uintptr_t)t, 1, 0,
+			    TX_NO_ACTIVATE) != TX_SUCCESS) {
+		return osError;
+	}
+	return osOK;
+}
+
+osStatus_t osTimerStaticStart(os_timer_static_t *t, uint32_t ticks)
+{
+	TX_TIMER *timer = (TX_TIMER *)(void *)t->priv;
+
+	(void)tx_timer_deactivate(timer);
+	if (tx_timer_change(timer,
+			    ticks > 0 ? (ULONG)ticks : 1UL,
+			    0) != TX_SUCCESS) {
+		return osError;
+	}
+	return tx_timer_activate(timer) == TX_SUCCESS ? osOK : osError;
+}
+
+osStatus_t osTimerStaticStop(os_timer_static_t *t)
+{
+	TX_TIMER *timer = (TX_TIMER *)(void *)t->priv;
+
+	return tx_timer_deactivate(timer) == TX_SUCCESS ? osOK : osError;
+}
+
+/* --- interrupt critical section (S6 de-ThreadX: USB completion paths) -- */
+/* the aarch64 UP port's interrupt-disable pair; TX_DISABLE/RESTORE expand
+ * to exactly these, the ext type just carries the saved DAIF across the
+ * section boundary. */
+
+os_critical_state_t osCriticalEnter(void)
+{
+	return (os_critical_state_t)_tx_thread_interrupt_disable();
+}
+
+void osCriticalExit(os_critical_state_t state)
+{
+	_tx_thread_interrupt_restore((UINT)state);
+}

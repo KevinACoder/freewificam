@@ -6,8 +6,9 @@
  * Ported from the prior experiment line ([EXPL], NetBSD compat OSAL) onto
  * the freewebcam base (SPEC S6/linuxkpi §3.9): kmem = tlsf heap, mutex =
  * CMSIS-RTOS2 osMutex (cmsis2_threadx.c, the [S7a]-precedent face),
- * completion/wait-queue wake channel = embedded ThreadX counting
- * semaphores, callouts = ThreadX timers, worker = osThreadNew.
+ * completion/wait-queue wake channel = embedded caller-storage counting
+ * semaphores (cmsis_os2_ext.h osSemStatic*), callouts = caller-storage
+ * timers (osTimerStatic*), worker = osThreadNew.
  *
  * Concurrency model (unchanged, board-proven on the prior line):
  *   - driver code only ever runs at passive level (the lkpi worker
@@ -186,7 +187,7 @@ lkpi_rand(void)
 {
 
 	if (lkpi_rand_state == 0)
-		lkpi_rand_state = (uint32_t)tx_time_get() | 1;
+		lkpi_rand_state = (uint32_t)osKernelGetTickCount() | 1;
 	lkpi_rand_state ^= lkpi_rand_state << 13;
 	lkpi_rand_state ^= lkpi_rand_state >> 17;
 	lkpi_rand_state ^= lkpi_rand_state << 5;
@@ -383,13 +384,13 @@ lkpi_jiffies(void)
 {
 	/* the board tick is 1 kHz (CONFIG_TX_TICKS_PER_SECOND) and core.h's
 	 * HZ rides that value: jiffies ARE milliseconds here */
-	return (unsigned long)tx_time_get();
+	return (unsigned long)osKernelGetTickCount();
 }
 
 ktime_t
 lkpi_ktime_get(void)
 {
-	return (ktime_t)tx_time_get() * (1000000000LL / (ktime_t)HZ);
+	return (ktime_t)osKernelGetTickCount() * (1000000000LL / (ktime_t)HZ);
 }
 
 /* busy-wait off the generic timer; used for the sub-tick register
@@ -436,7 +437,7 @@ void
 lkpi_msleep(unsigned int ms)
 {
 
-	(void)tx_thread_sleep(MAX(1, (ULONG)ms));
+	(void)osDelay(ms > 0 ? ms : 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -742,22 +743,15 @@ lkpi_completion_init(struct completion *c)
 		lkpi_fatal("completion mutex init failed");
 	memset(cv, 0, sizeof(*cv));
 	{
-		UINT txret = tx_semaphore_create(&cv->sem, "lkpi_cv", 0);
+		osStatus_t semret =
+		    osSemStaticInit(&cv->sem, "lkpi_cv", 0);
 
-		if (txret != TX_SUCCESS) {
-			extern void *_tx_thread_current_ptr;
-			extern unsigned long _tx_thread_system_state;
-
-			TX_THREAD *cur = _tx_thread_current_ptr;
-
-			lkpi_printf("lkpi: completion sem create ret=%u "
-			    "cv=%p mtx=%p done=%u sysst=%lu cur=%p(%s)\n",
-			    (unsigned)txret, (void *)cv, (void *)*lk_cmtx(c),
-			    (unsigned)c->done,
-			    (unsigned long)_tx_thread_system_state,
-			    (void *)cur,
-			    cur != NULL && cur->tx_thread_name != NULL ?
-			      cur->tx_thread_name : "-");
+		if (semret != osOK) {
+			lkpi_printf("lkpi: completion sem create ret=%d "
+			    "cv=%p mtx=%p done=%u kst=%d thr=%s\n",
+			    (int)semret, (void *)cv, (void *)*lk_cmtx(c),
+			    (unsigned)c->done, (int)osKernelGetState(),
+			    cmsis2_current_thread_name());
 			lkpi_fatal("completion semaphore init failed");
 		}
 	}
@@ -782,7 +776,7 @@ lkpi_completion_destroy(struct completion *c)
 {
 	struct lkpi_cv_shell *cv = lk_ccv(c);
 
-	(void)tx_semaphore_delete(&cv->sem);
+	(void)osSemStaticDestroy(&cv->sem);
 	if (*lk_cmtx(c) != NULL) {
 		(void)osMutexDelete(*lk_cmtx(c));
 		*lk_cmtx(c) = NULL;
@@ -803,7 +797,7 @@ lkpi_complete(struct completion *c)
 	/* wake ONE waiter: Linux complete() semantics (the semaphore token
 	 * is the wake; a spurious wake just rechecks done) */
 	if (cv->waiters > 0)
-		(void)tx_semaphore_put(&cv->sem);
+		(void)osSemStaticRelease(&cv->sem);
 	(void)osMutexRelease(*lk_cmtx(c));
 }
 
@@ -826,7 +820,7 @@ lkpi_complete_all(struct completion *c)
 	/* wake EVERY waiter: one token each, none consumes the sticky */
 	n = cv->waiters;
 	for (i = 0; i < n; i++)
-		(void)tx_semaphore_put(&cv->sem);
+		(void)osSemStaticRelease(&cv->sem);
 	(void)osMutexRelease(*lk_cmtx(c));
 }
 
@@ -839,7 +833,7 @@ lkpi_wait_for_completion(struct completion *c)
 	while (c->done == 0) {
 		cv->waiters++;
 		(void)osMutexRelease(*lk_cmtx(c));
-		(void)tx_semaphore_get(&cv->sem, TX_WAIT_FOREVER);
+		(void)osSemStaticAcquire(&cv->sem, osWaitForever);
 		(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
 		cv->waiters--;
 	}
@@ -858,8 +852,8 @@ lkpi_wait_for_completion_timeout(struct completion *c, unsigned long jiff)
 	while (c->done == 0) {
 		cv->waiters++;
 		(void)osMutexRelease(*lk_cmtx(c));
-		if (tx_semaphore_get(&cv->sem, MAX(1, (UINT)jiff)) !=
-		    TX_SUCCESS) {
+		if (osSemStaticAcquire(&cv->sem,
+			(uint32_t)MAX(1U, (uint32_t)jiff)) != osOK) {
 			(void)osMutexAcquire(*lk_cmtx(c), osWaitForever);
 			cv->waiters--;
 			(void)osMutexRelease(*lk_cmtx(c));
@@ -930,7 +924,7 @@ struct lkpi_work_item {
 static struct lkpi_work_item *lkpi_pending_head;
 static struct lkpi_work_item *lkpi_pending_tail;
 static osMutexId_t lkpi_pending_mtx;
-static TX_SEMAPHORE lkpi_wake_sem;
+static os_sem_static_t lkpi_wake_sem;
 static bool lkpi_worker_started;
 static bool lkpi_worker_ready;
 
@@ -958,7 +952,7 @@ lkpi_workqueue_worker(void *arg)
 
 		if (item == NULL) {
 			/* the producer's semaphore put cuts this short */
-			(void)tx_semaphore_get(&lkpi_wake_sem, 1);
+			(void)osSemStaticAcquire(&lkpi_wake_sem, 1);
 			continue;
 		}
 
@@ -1005,7 +999,7 @@ lkpi_workqueue_ready(void)
 	if (lkpi_worker_ready)
 		return;
 	lkpi_worker_ready = true;
-	if (tx_semaphore_create(&lkpi_wake_sem, "lkpi_wq", 0) != TX_SUCCESS)
+	if (osSemStaticInit(&lkpi_wake_sem, "lkpi_wq", 0) != osOK)
 		lkpi_fatal("wq semaphore init failed");
 
 	lkpi_worker_started =
@@ -1054,7 +1048,7 @@ lkpi_work_enqueue(struct work_struct *w)
 		lkpi_pending_head = item;
 	lkpi_pending_tail = item;
 	(void)osMutexRelease(lkpi_pending_mtx);
-	(void)tx_semaphore_put(&lkpi_wake_sem);
+	(void)osSemStaticRelease(&lkpi_wake_sem);
 }
 
 bool
@@ -1067,9 +1061,9 @@ lkpi_queue_work(struct workqueue_struct *wq, struct work_struct *w)
 }
 
 static void
-lkpi_delayed_work_timer(ULONG arg)
+lkpi_delayed_work_timer(void *arg)
 {
-	struct delayed_work *dw = (struct delayed_work *)(uintptr_t)arg;
+	struct delayed_work *dw = arg;
 
 	dw->dw_scheduled = false;
 	if (dw->dw_cancel)
@@ -1086,11 +1080,8 @@ lkpi_delayed_work_init(struct delayed_work *dw,
 	lkpi_workqueue_ready();
 	lkpi_work_init(&dw->work, fn);
 	memset(co, 0, sizeof(*co));
-	co->fn = NULL;
-	co->arg = dw;
-	if (tx_timer_create(&co->timer, "lkpi_dwork",
-	    lkpi_delayed_work_timer, (ULONG)(uintptr_t)dw, 1, 0,
-	    TX_NO_ACTIVATE) != TX_SUCCESS)
+	if (osTimerStaticCreate(&co->timer, "lkpi_dwork",
+	    lkpi_delayed_work_timer, dw) != osOK)
 		lkpi_fatal("delayed_work timer init failed");
 	dw->dw_scheduled = false;
 	dw->dw_cancel = false;
@@ -1110,11 +1101,9 @@ lkpi_queue_delayed_work(struct workqueue_struct *wq,
 	unsigned long ticks = delay > 0 ? delay : 1;
 
 	(void)wq;
-	(void)tx_timer_deactivate(&co->timer);
 	dw->dw_scheduled = true;
 	dw->dw_cancel = false;
-	(void)tx_timer_change(&co->timer, (ULONG)ticks, 0);
-	(void)tx_timer_activate(&co->timer);
+	(void)osTimerStaticStart(&co->timer, (uint32_t)ticks);
 	return true;
 }
 
@@ -1124,7 +1113,7 @@ lkpi_cancel_delayed_work(struct delayed_work *dw)
 	struct lkpi_callout_shell *co = lk_callout_dw(dw);
 	bool was;
 
-	was = tx_timer_deactivate(&co->timer) == TX_SUCCESS &&
+	was = osTimerStaticStop(&co->timer) == osOK &&
 	    dw->dw_scheduled;
 	dw->dw_scheduled = false;
 	dw->dw_cancel = true;
@@ -1146,7 +1135,7 @@ lkpi_flush_delayed_work(struct delayed_work *dw)
 {
 	struct lkpi_callout_shell *co = lk_callout_dw(dw);
 
-	if (tx_timer_deactivate(&co->timer) == TX_SUCCESS)
+	if (osTimerStaticStop(&co->timer) == osOK)
 		lkpi_work_enqueue(&dw->work);
 }
 
@@ -1155,7 +1144,7 @@ lkpi_work_flush(struct work_struct *w)
 {
 
 	while (w->wk_queued != 0 || w->wk_running)
-		(void)tx_thread_sleep(1);
+		(void)osDelay(1);
 }
 
 struct workqueue_struct *
@@ -1185,9 +1174,9 @@ lkpi_destroy_workqueue(struct workqueue_struct *wq)
 /* ------------------------------------------------------------------ */
 
 static void
-lkpi_timer_expiry(ULONG arg)
+lkpi_timer_expiry(void *arg)
 {
-	struct timer_list *tl = (struct timer_list *)(uintptr_t)arg;
+	struct timer_list *tl = arg;
 
 	tl->tl_pending = false;
 	tl->tl_func(tl);
@@ -1200,9 +1189,8 @@ lkpi_timer_setup(struct timer_list *t, void (*fn)(struct timer_list *))
 
 	lkpi_workqueue_ready();
 	memset(co, 0, sizeof(*co));
-	co->arg = t;
-	if (tx_timer_create(&co->timer, "lkpi_timer", lkpi_timer_expiry,
-	    (ULONG)(uintptr_t)t, 1, 0, TX_NO_ACTIVATE) != TX_SUCCESS)
+	if (osTimerStaticCreate(&co->timer, "lkpi_timer", lkpi_timer_expiry,
+	    t) != osOK)
 		lkpi_fatal("timer init failed");
 	t->tl_func = fn;
 	t->tl_pending = false;
@@ -1212,13 +1200,11 @@ int
 lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 {
 	struct lkpi_callout_shell *co = lk_callout_tl(t);
-	unsigned long now = (unsigned long)tx_time_get();
+	unsigned long now = (unsigned long)osKernelGetTickCount();
 	unsigned long ticks = expires > now ? expires - now : 1;
 
-	(void)tx_timer_deactivate(&co->timer);
 	t->tl_pending = true;
-	(void)tx_timer_change(&co->timer, (ULONG)ticks, 0);
-	(void)tx_timer_activate(&co->timer);
+	(void)osTimerStaticStart(&co->timer, (uint32_t)ticks);
 	return 1;
 }
 
@@ -1228,7 +1214,7 @@ lkpi_del_timer(struct timer_list *t)
 	struct lkpi_callout_shell *co = lk_callout_tl(t);
 
 	t->tl_pending = false;
-	(void)tx_timer_deactivate(&co->timer);
+	(void)osTimerStaticStop(&co->timer);
 }
 
 void
@@ -1257,7 +1243,7 @@ lkpi_waitqueue_init(struct wait_queue_head *wq)
 	if (*lk_wqmutex(wq) == NULL)
 		lkpi_fatal("waitqueue mutex init failed");
 	memset(cv, 0, sizeof(*cv));
-	if (tx_semaphore_create(&cv->sem, "lkpi_wq_cv", 0) != TX_SUCCESS)
+	if (osSemStaticInit(&cv->sem, "lkpi_wq_cv", 0) != osOK)
 		lkpi_fatal("waitqueue semaphore init failed");
 }
 
@@ -1268,7 +1254,7 @@ lkpi_waitqueue_wake(struct wait_queue_head *wq)
 
 	(void)osMutexAcquire(*lk_wqmutex(wq), osWaitForever);
 	if (cv->waiters > 0)
-		(void)tx_semaphore_put(&cv->sem);
+		(void)osSemStaticRelease(&cv->sem);
 	(void)osMutexRelease(*lk_wqmutex(wq));
 }
 
@@ -1292,7 +1278,7 @@ lkpi_waitq_timedwait(struct wait_queue_head *wq, int ms)
 
 	cv->waiters++;
 	(void)osMutexRelease(*lk_wqmutex(wq));
-	woke = tx_semaphore_get(&cv->sem, MAX(1, (UINT)ms)) == TX_SUCCESS;
+	woke = osSemStaticAcquire(&cv->sem, (uint32_t)MAX(1U, (uint32_t)ms)) == osOK;
 	(void)osMutexAcquire(*lk_wqmutex(wq), osWaitForever);
 	cv->waiters--;
 	return woke ? 1 : 0;

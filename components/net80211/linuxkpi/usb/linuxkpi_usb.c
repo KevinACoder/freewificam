@@ -34,8 +34,12 @@
 #include "usb_osal.h"
 #include "usb_errno.h"
 
-#include <tx_api.h>
+#include <tx_api.h> /* TODO(de-threadx): sole remaining tx touchpoint is
+ * the drain-thread stack-watermark introspection below; it dies with the
+ * cherryusb OSAL migration (usb_osal_thread_create returns TX_THREAD*),
+ * next round. */
 
+#include "cmsis_os2_ext.h" /* the critical-section ext */
 #include "linuxkpi_core.h"
 
 #include <linux/usb.h>
@@ -168,9 +172,9 @@ lkpi_usb_stage_get(struct urb *urb, u32 len)
 	 * threads while the drain thread releases slots (the bulk-IN
 	 * arbiter's stage flow), and the bool flags must not tear. */
 	{
-		TX_INTERRUPT_SAVE_AREA
+		os_critical_state_t csr;
 
-		TX_DISABLE;
+		csr = osCriticalEnter();
 		for (i = 0; i < LKPI_STAGE_SLOTS; i++) {
 			if (!lkpi_stage_pool[i].used &&
 			    lkpi_stage_pool[i].cap >= len) {
@@ -182,7 +186,7 @@ lkpi_usb_stage_get(struct urb *urb, u32 len)
 				break;
 			}
 		}
-		TX_RESTORE;
+		osCriticalExit(csr);
 	}
 	if (hit == NULL)
 		lkpi_printf("usbkpi: stage pool exhausted\n");
@@ -212,11 +216,11 @@ lkpi_usb_stage_put(struct urb *urb)
 {
 
 	if (urb->_stage_raw != NULL) {
-		TX_INTERRUPT_SAVE_AREA
+		os_critical_state_t csr;
 
-		TX_DISABLE;
+		csr = osCriticalEnter();
 		((struct lkpi_stage_slot *)urb->_stage_raw)->used = false;
-		TX_RESTORE;
+		osCriticalExit(csr);
 		urb->_stage = NULL;
 		urb->_stage_raw = NULL;
 		urb->_stage_len = 0;
@@ -315,16 +319,16 @@ usbkpi_rxhold_set(bool on)
 	struct urb *held[8];
 	unsigned int n = 0, i;
 
-	TX_INTERRUPT_SAVE_AREA
+	os_critical_state_t csr;
 
-	TX_DISABLE;
+	csr = osCriticalEnter();
 	usbkpi_rxhold_gate = on;
 	if (!on) {
 		n = usbkpi_rxhold_n;
 		usbkpi_rxhold_n = 0;
 		memcpy(held, usbkpi_rxhold_q, n * sizeof(*held));
 	}
-	TX_RESTORE;
+	osCriticalExit(csr);
 
 	/* release outside the critical section: arming sleeps */
 	for (i = 0; i < n; i++) {
@@ -641,9 +645,9 @@ lkpi_usb_errno(int usbh_err)
 static void
 lkpi_usb_enqueue_done(struct urb *urb)
 {
-	TX_INTERRUPT_SAVE_AREA
+	os_critical_state_t csr;
 
-	TX_DISABLE;
+	csr = osCriticalEnter();
 	if (urb->submitted) {
 		urb->submitted = false;
 		urb->_defer_next = NULL;
@@ -654,7 +658,7 @@ lkpi_usb_enqueue_done(struct urb *urb)
 		lkpi_usb_done_tail = urb;
 		usb_osal_sem_give(lkpi_usb_done_sem);
 	}
-	TX_RESTORE;
+	osCriticalExit(csr);
 }
 
 static void
@@ -801,9 +805,9 @@ usbkpi_rxq_report(void)
 	unsigned int parked, i;
 
 	{
-		TX_INTERRUPT_SAVE_AREA
+		os_critical_state_t csr;
 
-		TX_DISABLE;
+		csr = osCriticalEnter();
 		for (i = 0; i < LKPI_RX_EP_N; i++) {
 			snapshot[i].ep = lkpi_rx_eps[i].ep;
 			snapshot[i].head = lkpi_rx_eps[i].n != 0 ?
@@ -813,7 +817,7 @@ usbkpi_rxq_report(void)
 			snapshot[i].busy = lkpi_rx_eps[i].busy;
 		}
 		parked = lkpi_rx_park_n;
-		TX_RESTORE;
+		osCriticalExit(csr);
 	}
 
 	lkpi_printf("usbkpi: rxq parked_total=%u peak=%u\n", parked,
@@ -930,9 +934,9 @@ lkpi_usb_drain_thread_entry(void *arg)
 	for (;;) {
 		(void)usb_osal_sem_take(lkpi_usb_done_sem, 0xffffffffU);
 		for (;;) {
-			TX_INTERRUPT_SAVE_AREA
+			os_critical_state_t csr;
 
-			TX_DISABLE;
+			csr = osCriticalEnter();
 			urb = lkpi_usb_done_head;
 			if (urb != NULL) {
 				lkpi_usb_done_head =
@@ -941,7 +945,7 @@ lkpi_usb_drain_thread_entry(void *arg)
 					lkpi_usb_done_tail = NULL;
 				urb->_defer_next = NULL;
 			}
-			TX_RESTORE;
+			osCriticalExit(csr);
 			if (urb == NULL)
 				break;
 			lkpi_usb_drain_one(urb);
@@ -1077,15 +1081,15 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	    type == USB_ENDPOINT_XFER_BULK) {
 		bool stashed = false;
 
-		TX_INTERRUPT_SAVE_AREA
+		os_critical_state_t csr;
 
-		TX_DISABLE;
+		csr = osCriticalEnter();
 		if (usbkpi_rxhold_n <
 		    sizeof(usbkpi_rxhold_q) / sizeof(*usbkpi_rxhold_q)) {
 			usbkpi_rxhold_q[usbkpi_rxhold_n++] = urb;
 			stashed = true;
 		}
-		TX_RESTORE;
+		osCriticalExit(csr);
 		if (stashed)
 			return 0;
 		/* ring full: fall through and arm normally */
@@ -1323,7 +1327,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 void
 usb_kill_urb(struct urb *urb)
 {
-	TX_INTERRUPT_SAVE_AREA
+	os_critical_state_t csr;
 
 	if (!urb->submitted)
 		return;
@@ -1340,18 +1344,18 @@ usb_kill_urb(struct urb *urb)
 	 * firing.
 	 */
 	lkpi_msleep(2);
-	TX_DISABLE;
+	csr = osCriticalEnter();
 	if (urb->submitted) {
 		urb->submitted = false;
 		urb->status = -ENOENT;
-		TX_RESTORE;
+		osCriticalExit(csr);
 		usbkpi_push(urb, usb_pipein(urb->pipe), false, 0,
 		    -ENOENT);
 		lkpi_usb_deliver(urb);
 		usb_free_urb(urb);	/* the HC reference */
 		return;
 	}
-	TX_RESTORE;
+	osCriticalExit(csr);
 }
 
 void

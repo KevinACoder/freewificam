@@ -10,12 +10,13 @@
  * §3.9): kmem = the tlsf-backed heap (heap.h, one allocator discipline),
  * mutex = CMSIS-RTOS2 osMutex over ThreadX (cmsis2_threadx.c - the first
  * consumer brings the osMutex face, the [S7a] §3.3.3 precedent), completion
- * and wait queues = osMutex + an embedded ThreadX counting semaphore as the
- * wake channel, callouts = ThreadX timers.
+ * and wait queues = osMutex + an embedded caller-storage counting semaphore
+ * as the wake channel (cmsis_os2_ext.h osSemStatic*), callouts = the
+ * caller-storage timer shell (osTimerStatic*).
  *
  * The opaque storage sizes in linuxkpi_core.h are pinned to the shells below
  * (mutex = one osMutexId_t, completion/waitqueue = mutex + the semaphore
- * shell, callout = one TX_TIMER + its state); the static asserts make drift
+ * shell, callout = one os_timer_static_t); the static asserts make drift
  * a compile error, not a boot corruption.
  */
 
@@ -26,9 +27,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include <tx_api.h>
-
 #include "cmsis_os2.h"
+#include "cmsis_os2_ext.h"
 #include "heap.h"
 #include "log.h"
 
@@ -36,7 +36,7 @@
 
 /* the driver face's shells are sized for these; see the asserts below */
 struct lkpi_cv_shell {
-	TX_SEMAPHORE	sem;	/* the wake channel */
+	os_sem_static_t	sem;	/* the wake channel */
 	int		waiters;
 };
 
@@ -70,12 +70,10 @@ lk_ccv(struct completion *c)
 	return (struct lkpi_cv_shell *)&c->_cv[0];
 }
 
-/* callout shell: one TX_TIMER plus the state the expiry callback needs
- * (the timer expiry function receives only the timer pointer) */
+/* callout shell: the ext static timer (OS timer storage + the expiry
+ * state it runs - the OS timer callback receives only the timer) */
 struct lkpi_callout_shell {
-	TX_TIMER	timer;
-	void		(*fn)(void *);
-	void		*arg;
+	os_timer_static_t	timer;
 };
 
 static inline struct lkpi_callout_shell *
@@ -100,9 +98,9 @@ _Static_assert(sizeof(struct wait_queue_head) >=
     "struct wait_queue_head storage must hold mutex + semaphore shells");
 _Static_assert(sizeof(((struct delayed_work *)0)->_callout) >=
     sizeof(struct lkpi_callout_shell),
-    "delayed_work callout storage must hold the TX_TIMER shell");
+    "delayed_work callout storage must hold the os_timer_static_t shell");
 _Static_assert(sizeof(((struct timer_list *)0)->_callout) >=
     sizeof(struct lkpi_callout_shell),
-    "timer_list callout storage must hold the TX_TIMER shell");
+    "timer_list callout storage must hold the os_timer_static_t shell");
 
 #endif /* LINUXKPI_IMPL_H */
