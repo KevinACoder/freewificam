@@ -959,7 +959,7 @@ modules:
 			'/*' '!/*/' '/core/' '/common/' \
 			'/class/' '!/class/*/' '/class/hub/' '/class/msc/' \
 			'/port/' '!/port/*/' '/port/ehci/' \
-			'/port/xhci/' '!/port/xhci/phytium/' \
+			'/port/xhci/' '!/port/xhci/*/' \
 			'/osal/' || \
 			echo 'note: cherryusb sparse-checkout not set (kept full checkout)'; \
 	fi
@@ -970,7 +970,7 @@ modules:
 	fi
 	@for p in third-party/ports/patches/*/*.patch; do \
 		[ -e "$$p" ] || continue; \
-		comp=$$(printf '%s' "$$p" | cut -d/ -f2); \
+		comp=$${p#third-party/ports/patches/}; comp=$${comp%%/*}; \
 		if git -C third-party/$$comp apply --check "$$PWD/$$p" 2>/dev/null; then \
 			git -C third-party/$$comp apply "$$PWD/$$p" && echo "applied $$p"; \
 		else \
