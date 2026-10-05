@@ -1,0 +1,14 @@
+--- a/rtw8821cu.c
++++ b/rtw8821cu.c
+@@ -49,7 +49,10 @@
+ 	return rtw_usb_probe(intf, id);
+ }
+ 
+-static struct usb_driver rtw_8821cu_driver = {
++/* DIVERGENCES D-1 (S9 FR-2): static removed - this tree registers
++ * usb_driver objects explicitly from the adapter (rtw88_entry.c),
++ * the .lkpi_module section module_usb_driver fills is not walked. */
++struct usb_driver rtw_8821cu_driver = {
+ 	.name = KBUILD_MODNAME,
+ 	.id_table = rtw_8821cu_id_table,
+ 	.probe = rtw_8821cu_probe,

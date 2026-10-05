@@ -401,12 +401,14 @@ endif
 endif
 
 # rtw88 (SPEC S9/rtw88-adapt §4/W1): the mainline in-tree 7.3-rc2 USB
-# selection - 20 TU frozen copy (components/rtw88, source [LNX]
-# e71d9a28760f, USB build set of rtw88_core-y + usb.c + the 8821c family)
-# compiled verbatim against the linuxkpi face. FR-2 (v1.3): modifications
-# are allowed but every hunk must be recorded in components/rtw88/
-# DIVERGENCES.md - the per-round verbatim audit diffs the copy against the
-# baseline and accepts only ledgered hunks. The firmware rides as the
+# selection - submodule third-party/rtw88 (branch linux-7.3-rc2, pin
+# b057bfd8 = [LNX] e71d9a28760f drivers/net/wireless/realtek/rtw88
+# verbatim; USB build set of rtw88_core-y + usb.c + the 8821c family,
+# 21 TU) compiled verbatim against the linuxkpi face. FR-2 (v1.3):
+# modifications are allowed but every hunk must be recorded in
+# patches/rtw88/DIVERGENCES.md and carried as a replayable patch - the
+# per-round verbatim audit diffs the submodule against the baseline and
+# accepts only ledgered hunks. The firmware rides as the
 # gen_firmware_array.py blob TU registered into the linuxkpi fw registry
 # (rtw88 is its first real consumer). W1 is compile-face only: no USB
 # claim hook, no net80211 bridge (weak defaults stand in).
@@ -418,7 +420,7 @@ ifeq ($(CONFIG_NIC_RTW88),y)
 ifeq ($(filter y,$(CONFIG_LINUXKPI_80211)),)
 $(error CONFIG_NIC_RTW88=y requires CONFIG_LINUXKPI_80211=y (the shim face))
 endif
-RTW88_DIR := components/rtw88
+RTW88_DIR := third-party/rtw88
 RTW88_SRCS := \
 	$(RTW88_DIR)/main.c \
 	$(RTW88_DIR)/mac80211.c \
@@ -440,12 +442,12 @@ RTW88_SRCS := \
 	$(RTW88_DIR)/rtw8821c.c \
 	$(RTW88_DIR)/rtw8821c_table.c \
 	$(RTW88_DIR)/rtw8821cu.c \
-	$(RTW88_DIR)/fw_rtw8821c.c
+	third-party/ports/rtw88/fw_rtw8821c.c
 SRCS += $(RTW88_SRCS)
 # frozen import: -w; the linuxkpi include world owns <linux/*.h> and
 # <net/*.h>. CONFIG_RTW88_DEBUGFS/DEBUG/LEDS and CONFIG_PM stay off
 # (S9-Q7 / N5; wow.o and led.o are not part of the copy at all).
-$(BUILD)/components/rtw88/%.o: EXTRAFLAGS := -w $(LKPI_CFLAGS)
+$(BUILD)/third-party/rtw88/%.o: EXTRAFLAGS := -w $(LKPI_CFLAGS)
 
 # W2 board face: the modeswitch + wlan claim hooks (cherryusb section
 # world) and the registration shell (mixed world). The adapter TUs are
@@ -962,7 +964,7 @@ LDFLAGS := -nostdlib -static -T arch/aarch64/baremetal.ld \
 # patches/cherryusb/README.md first.
 modules:
 	@git submodule update --init third-party/threadx third-party/cherryusb \
-		third-party/lwip third-party/wpa_supplicant || \
+		third-party/lwip third-party/wpa_supplicant third-party/rtw88 || \
 		echo 'note: submodule update failed; see patches/cherryusb/README.md (pin seeding)'
 	@if [ -d third-party/cherryusb ]; then \
 		git -C third-party/cherryusb sparse-checkout set --no-cone \
