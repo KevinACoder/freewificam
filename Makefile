@@ -959,7 +959,7 @@ modules:
 			'/*' '!/*/' '/core/' '/common/' \
 			'/class/' '!/class/*/' '/class/hub/' '/class/msc/' \
 			'/port/' '!/port/*/' '/port/ehci/' \
-			'/port/xhci/' '!/port/xhci/*/' \
+			'/port/xhci/' '!/port/xhci/phytium/' \
 			'/osal/' || \
 			echo 'note: cherryusb sparse-checkout not set (kept full checkout)'; \
 	fi

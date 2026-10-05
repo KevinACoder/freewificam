@@ -45,7 +45,7 @@ ep ctx + slot ctx 行——此前写死 dci=1 把 ep0 的 ctx 当 bulk 的打了
 ## sparse-checkout（`make modules` 自动设置，非 cone）
 
 `/core/ /common/ /class/hub/ /port/ehci/ /port/xhci/ /osal/`，
-`!/port/xhci/*/` 排除一级子目录（phytium 闭源 blob，clean-room 纪律）；
+`/port/xhci/` 连同补丁物化的 usb_hc_xhci.c/h 一起入锥；`!/port/xhci/phytium/` 仍排除上游 phytium 闭源 blob（clean-room 纪律）——2026-10-05 修正：原先 `!/port/xhci/*/` 把整个一级子目录划出锥外，会让 `git apply` 对 sparse 排除区静默跳过 0002 的新文件物化（干净克隆首建即复现，"applied" 但文件不落盘），xhci 端口文件因此缺失；
 demo/tests/docs（~81MB）与 bundled third_party/ 不检出。
 
 ## 历史注记：旧 pin 6f096b14 的播种配方（2026-10-01 re-pin 前适用，留档）
