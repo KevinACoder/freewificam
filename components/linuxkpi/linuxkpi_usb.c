@@ -1191,9 +1191,18 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		}
 		/* the stage is reused across resubmits: OUT data is copied
 		 * in per submit, IN data is copied back at drain time */
-		if (!usb_pipein(urb->pipe))
+		if (!usb_pipein(urb->pipe)) {
 			memcpy(stage, urb->transfer_buffer,
 			    urb->transfer_buffer_length);
+			/* [S9 D-3] stage-copy verification (codex E3
+			 * follow-up): a staging corruption would still
+			 * carry a freshly generated valid FCS on air and
+			 * collect an AP ACK, so verify the copy verbatim. */
+			if (memcmp(stage, urb->transfer_buffer,
+			    urb->transfer_buffer_length) != 0)
+				printf("lkpi: STAGE MISMATCH pipe=%x len=%u\n",
+				    urb->pipe, urb->transfer_buffer_length);
+		}
 		hurb->transfer_buffer = stage;
 	} else {
 		hurb->transfer_buffer = NULL;

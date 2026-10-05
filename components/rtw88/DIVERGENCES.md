@@ -85,3 +85,41 @@ asm/byteorder.h 新建、mac80211.h 内核词表 abs。rtw88 20 TU 逐字。）
   `mac aa:bb:cc:dd:ee:ff`（后者经 `net80211_bridge_set_mac` 改
   ic_myaddr，os/net80211 桥 first-party，不动 vendored core）。
 - 撤除条件与整组一致：单播 RX 断链结案后一并撤。
+
+### D-3 扩展补记（2026-10-05 第三批）：WMAC 寄存器快照 + mgmt TX 存档
+
+- `mac80211.c` 增 `rtw_d3_regs_dump()`（REG_CR/0x420 FWHW_TXQ_CTRL/TCR/
+  RCR/RRSR/0x610-0x61F port0 mac+bssid/RXFLTMAP0-2/0x680 SECCFG——
+  SECCFG 地址按 vendor hal_com_reg.h:477 双源核验，rtw88 reg.h 未定义
+  故用字面量）；`rtw_ops_bss_info_changed` 尾部 BSS_CHANGED_BSSID 分支
+  增 port BSSID 寄存器（0x618/0x61C）写后回读。
+- `usb.c` 增 mgmt TX 存档：`rtw_usb_write_data` 在 fill_txdesc+checksum
+  后（即 URB 最终字节）捕获 qsel==TID7 的整帧到静态缓冲，重置后前两帧
+  内联 hex；`rtw_d3_tx_diag_dump/reset` 供 shell 重放（`wlanrtw d3
+  txhex`/`diag regs` 在 rtw88_cmds 接线）。
+- **改写**：纯读取/打印/存档，无行为改动（memcpy 除外）。
+- **理由**：E4 寄存器对拍（RTOS vs GT 同点快照离线 diff）+ E3 TXDESC
+  48B 实物逐字段解码的采集面；bssid 回读关闭"AP BSSID 是否真落寄存器"
+  的推断缺口。
+- 撤除条件与整组一致：单播 RX 断链结案后一并撤。
+- 第三批追加：`tx.c` 增 `rtw_d3_mgmt_swseq` 开关（`wlanrtw swseq on` 时
+  mgmt 改走帧头序列号，关 dis_qselseq/en_hwseq；默认 0 = Linux 奇偶）——
+  "FW seq 卡死 → AP 重复帧静默丢弃"家族的分叉实验，属带行为开关的取证，
+  结案随组撤。
+
+### D-3 扩展补记（2026-10-05 第四批，codex 外询后）：精确 DA 计数 + 比较器失谐 + TXDESC 实物捕获 + stage 校验
+
+codex（gpt-6.1-sol xhigh，/tmp/deep-consort/answer-2.md）审计出取证面三洞，
+本批全部补上（全在 D-3 组，结案随组撤）：
+- `usb.c`：`d3u_mgmt_da` 精确 da==us 计数器（原 d3u_mgmt_uni 统计全部
+  单播不分目标，"da=本机为零"曾属超范围宣称）；`rtw_d3_set_da()` 由
+  add_interface 喂入本机 MAC。TX 捕获门由 TID7 改 **TX_DESC_QSEL_MGMT(18)**
+  （rtw_usb_tx_queue_mapping_to_qsel 在描述符构造前覆盖 qsel，auth 实走 18）。
+- `mac80211.c`：`rtw_d3_cmp_detune/restore`（port0 0x610 比较器失谐 A/B，
+  codex rank-1 判别实验；注意 scan start/complete 会重写比较器）；regs
+  快照扩容 0x601/602（FWPKT/FW_STS_FILTER）、0x644/646 RPFM、0x648/64C
+  CAM、0x7D0/7D4/7D8、0x7DA、0x7EC WSEC_OPTION；bss_info BSSID 出口回读。
+- `linuxkpi_usb.c`：OUT stage 拷贝后 memcmp 回读校验（staging 损坏会带
+  新算合法 FCS 上空并收获 ACK，必须逐字节验证）。
+- `tx.c`：`rtw_d3_mgmt_swseq`（swseq 分叉，见第三批）。
+- `rtw88_cmds`：`diag regs/txhex`、`swseq`、`cmpdetune/cmprestore`。

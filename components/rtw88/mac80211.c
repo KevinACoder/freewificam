@@ -110,6 +110,105 @@ void rtw_d3_rcr_promisc(int on)
 	mutex_unlock(&rtwdev->mutex);
 }
 
+/* [S9 D-3] WMAC state snapshot at the auth moment: filters, port
+ * address/BSSID registers, TX gates, security config.  The dongle's
+ * registers are only reachable through the driver; the GT lane dumps
+ * the same list from a patched out-of-tree module for the offline
+ * diff.  All reads are MAC config regs the vendor driver reads too
+ * (REG_SECCFG = 0x0680 on 8821c, not the 0x150 of older chips). */
+void rtw_d3_regs_dump(void)
+{
+	struct rtw_dev *rtwdev = d3_quiet_rtwdev;
+
+	if (rtwdev == NULL) {
+		printf("rtw88u: d3 regs: driver not started\n");
+		return;
+	}
+	printf("rtw88u: d3 regs CR=%08x fwtcq=%08x tcr=%08x rcr=%08x\n",
+	    rtw_read32(rtwdev, REG_CR),
+	    rtw_read32(rtwdev, REG_FWHW_TXQ_CTRL),
+	    rtw_read32(rtwdev, REG_TCR),
+	    rtw_read32(rtwdev, REG_RCR));
+	printf("rtw88u: d3 regs rrsr=%08x port0mac=%08x_%08x "
+	    "port0bssid=%08x_%08x\n",
+	    rtw_read32(rtwdev, REG_RRSR),
+	    rtw_read32(rtwdev, 0x0610), rtw_read32(rtwdev, 0x0614),
+	    rtw_read32(rtwdev, 0x0618), rtw_read32(rtwdev, 0x061C));
+	printf("rtw88u: d3 regs flt0=%04x flt1=%04x flt2=%04x "
+	    "seccfg=%08x\n",
+	    rtw_read16(rtwdev, REG_RXFLTMAP0),
+	    rtw_read16(rtwdev, REG_RXFLTMAP1),
+	    rtw_read16(rtwdev, REG_RXFLTMAP2),
+	    rtw_read32(rtwdev, 0x0680)); /* REG_SECCFG (vendor hal_com_reg.h:477; not in rtw88 reg.h) */
+	/* [S9 D-3] second shell of WMAC state (codex E4 expansion): FW
+	 * packet parsing / status filter, RPFM payload maps, CAM ports,
+	 * WMAC validation options, WSEC option.  Widths follow the
+	 * vendor register map (0x601/0x602/0x7da are sub-32-bit). */
+	printf("rtw88u: d3 regs fwpkt=%02x fwstsfilt=%02x rpfm=%04x_%04x "
+	    "camcmd=%08x camdata=%08x\n",
+	    rtw_read8(rtwdev, 0x0601), rtw_read8(rtwdev, 0x0602),
+	    rtw_read16(rtwdev, 0x0644), rtw_read16(rtwdev, 0x0646),
+	    rtw_read32(rtwdev, 0x0648), rtw_read32(rtwdev, 0x064C));
+	printf("rtw88u: d3 regs wmac7d0=%08x 7d4=%08x 7d8=%08x "
+	    "rxfn=%04x wsec=%08x\n",
+	    rtw_read32(rtwdev, 0x07D0), rtw_read32(rtwdev, 0x07D4),
+	    rtw_read32(rtwdev, 0x07D8), rtw_read16(rtwdev, 0x07DA),
+	    rtw_read32(rtwdev, 0x07EC));
+}
+
+/* [S9 D-3] comparator detuning A/B (codex rank-1 discriminator): point
+ * the port address comparator at M' while the bridge keeps transmitting
+ * SA=M.  Responses addressed to M then reach USB only via AAP - if the
+ * exact da_us counter ticks with the detuned comparator and not with
+ * the matched one, receive is local-match-dependent (H6).  NOTE:
+ * scan_start/complete rewrite the comparator (PORT_SET_MAC_ADDR), so
+ * apply DURING a scan window and expect restore on scan end. */
+static u8 d3_cmp_save[6];
+
+void rtw_d3_cmp_detune(const u8 *m2)
+{
+	struct rtw_dev *rtwdev = d3_quiet_rtwdev;
+	int i;
+
+	if (rtwdev == NULL) {
+		printf("rtw88u: d3 cmp: driver not started\n");
+		return;
+	}
+	mutex_lock(&rtwdev->mutex);
+	for (i = 0; i < 6; i++) {
+		d3_cmp_save[i] = rtw_read8(rtwdev, 0x0610 + i);
+		rtw_write8(rtwdev, 0x0610 + i, m2[i]);
+	}
+	printf("rtw88u: d3 cmp detune M=%02x:%02x:%02x:%02x:%02x:%02x -> "
+	    "M'=%02x:%02x:%02x:%02x:%02x:%02x rb %02x:%02x:%02x:%02x:%02x:%02x\n",
+	    d3_cmp_save[0], d3_cmp_save[1], d3_cmp_save[2],
+	    d3_cmp_save[3], d3_cmp_save[4], d3_cmp_save[5],
+	    m2[0], m2[1], m2[2], m2[3], m2[4], m2[5],
+	    rtw_read8(rtwdev, 0x0610), rtw_read8(rtwdev, 0x0611),
+	    rtw_read8(rtwdev, 0x0612), rtw_read8(rtwdev, 0x0613),
+	    rtw_read8(rtwdev, 0x0614), rtw_read8(rtwdev, 0x0615));
+	mutex_unlock(&rtwdev->mutex);
+}
+
+void rtw_d3_cmp_restore(void)
+{
+	struct rtw_dev *rtwdev = d3_quiet_rtwdev;
+	int i;
+
+	if (rtwdev == NULL) {
+		printf("rtw88u: d3 cmp: driver not started\n");
+		return;
+	}
+	mutex_lock(&rtwdev->mutex);
+	for (i = 0; i < 6; i++)
+		rtw_write8(rtwdev, 0x0610 + i, d3_cmp_save[i]);
+	printf("rtw88u: d3 cmp restore rb %02x:%02x:%02x:%02x:%02x:%02x\n",
+	    rtw_read8(rtwdev, 0x0610), rtw_read8(rtwdev, 0x0611),
+	    rtw_read8(rtwdev, 0x0612), rtw_read8(rtwdev, 0x0613),
+	    rtw_read8(rtwdev, 0x0614), rtw_read8(rtwdev, 0x0615));
+	mutex_unlock(&rtwdev->mutex);
+}
+
 static int rtw_ops_start(struct ieee80211_hw *hw)
 {
 	struct rtw_dev *rtwdev = hw->priv;
@@ -293,6 +392,7 @@ static int rtw_ops_add_interface(struct ieee80211_hw *hw,
 	    rtw_read16(rtwdev, REG_RXFLTMAP0),
 	    rtw_read16(rtwdev, REG_RXFLTMAP1),
 	    rtw_read16(rtwdev, REG_RXFLTMAP2));
+	rtw_d3_set_da(rtwvif->mac_addr);
 
 	mutex_unlock(&rtwdev->mutex);
 
@@ -549,12 +649,19 @@ static void rtw_ops_bss_info_changed(struct ieee80211_hw *hw,
 	if (changed & BSS_CHANGED_ERP_SLOT)
 		rtw_conf_tx(rtwdev, rtwvif);
 
-	printf("rtw88u: bss_info exit\n");
-
 	if (changed & BSS_CHANGED_PS)
 		rtw_recalc_lps(rtwdev, NULL);
 
 	rtw_vif_port_config(rtwdev, rtwvif, config);
+
+	/* [S9 D-3] the BSSID branch ran PORT_SET_BSSID through the port
+	 * config above: read the port BSSID registers back so "did the AP
+	 * BSSID actually land" is answered live, not inferred. */
+	if (changed & BSS_CHANGED_BSSID)
+		printf("rtw88u: bss_info exit changed=%llx bssid rb "
+		    "%08x_%08x (port %u)\n", changed,
+		    rtw_read32(rtwdev, 0x0618), rtw_read32(rtwdev, 0x061C),
+		    rtwvif->port);
 
 	mutex_unlock(&rtwdev->mutex);
 }

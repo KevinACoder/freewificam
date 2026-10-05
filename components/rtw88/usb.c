@@ -28,7 +28,7 @@ MODULE_PARM_DESC(switch_usb_mode,
  * the wire to us (parsed straight off the RX descriptor payload,
  * before any queue/alloc drop can hide it). */
 static u32 d3u_urb, d3u_pkt, d3u_c2h, d3u_mgmt, d3u_mgmt_uni,
-	   d3u_rxq_ovf, d3u_query_fail, d3u_too_big, d3u_alloc_fail;
+	   d3u_mgmt_da, d3u_rxq_ovf, d3u_query_fail, d3u_too_big, d3u_alloc_fail;
 
 static void d3u_uni_print(const struct rtw_rx_pkt_stat *ps)
 {
@@ -42,6 +42,23 @@ static void d3u_uni_print(const struct rtw_rx_pkt_stat *ps)
 		    h->addr1[0], h->addr1[1], h->addr1[2],
 		    h->addr1[3], h->addr1[4], h->addr1[5],
 		    ps->rate, ps->pkt_len);
+}
+
+/* [S9 D-3] mgmt TX archive: the final TXDESC+frame bytes of the last
+ * mgmt urb (post fill_txdesc+checksum, exactly what the URB carries),
+ * kept so the shell can re-dump them after a console scroll.  The
+ * first two frames after a reset also print inline. */
+static u8 d3_tx_last[512];
+static u32 d3_tx_last_len, d3_tx_cap_cnt, d3_tx_hex_cnt;
+
+/* [S9 D-3] exact destination counter state (set from add_interface) */
+static u8 d3_da[6];
+static int d3_da_set;
+
+void rtw_d3_set_da(const u8 *mac)
+{
+	memcpy(d3_da, mac, 6);
+	d3_da_set = 1;
 }
 
 struct rtw_usb_txcb {
@@ -545,6 +562,31 @@ static int rtw_usb_write_data(struct rtw_dev *rtwdev,
 	rtw_tx_fill_tx_desc(rtwdev, pkt_info, skb);
 	rtw_tx_fill_txdesc_checksum(rtwdev, pkt_info, skb->data);
 
+	/* [S9 D-3] archive the final mgmt bytes; first two post-reset
+	 * print inline so a live log still shows the frame.  Gate on
+	 * TX_DESC_QSEL_MGMT (18): rtw_usb_tx_queue_mapping_to_qsel
+	 * overrides the shim's TID7 before descriptor construction, so
+	 * the real auth txdesc rides QSEL 18 (codex audit). */
+	if (qsel == TX_DESC_QSEL_MGMT) {
+		u32 n = (u32)chip->tx_pkt_desc_sz + size;
+		u32 i;
+
+		if (n > sizeof(d3_tx_last))
+			n = sizeof(d3_tx_last);
+		memcpy(d3_tx_last, skb->data, n);
+		d3_tx_last_len = n;
+		d3_tx_cap_cnt++;
+		if (d3_tx_hex_cnt < 2U) {
+			d3_tx_hex_cnt++;
+			printf("rtw88u: d3 tx #%u %ub desc+%u", d3_tx_cap_cnt, n, size);
+			for (i = 0; i < n; i++)
+				printf("%s%02x",
+				    (i % 16) == 0 ? "\nrtw88u:  " : " ",
+				    d3_tx_last[i]);
+			printf("\n");
+		}
+	}
+
 	ret = rtw_usb_write_port(rtwdev, qsel, skb,
 				 rtw_usb_write_port_complete, skb);
 	if (unlikely(ret)) {
@@ -706,6 +748,23 @@ static void rtw_usb_rx_handler(struct work_struct *work)
 						if ((pkt_stat.hdr->addr1[0] & 0x01) == 0) {
 							d3u_mgmt_uni++;
 							d3u_uni_print(&pkt_stat);
+						}
+						/* [S9 D-3] EXACT da==us counter: the
+						 * uni counter above counts every
+						 * unicast mgmt regardless of the
+						 * destination (codex audit); this one
+						 * answers "did anything arrive
+						 * addressed to our MAC" precisely. */
+						if (d3_da_set &&
+						    memcmp(pkt_stat.hdr->addr1, d3_da, 6) == 0) {
+							d3u_mgmt_da++;
+							if (d3u_mgmt_da <= 8U)
+								printf("rtw88u: d3 chip-rx DA-US! "
+								    "fc=%04x rate=%u len=%u ta=%02x:%02x:%02x:%02x:%02x:%02x\n",
+								    fc, pkt_stat.rate, pkt_stat.pkt_len,
+								    pkt_stat.hdr->addr2[0], pkt_stat.hdr->addr2[1],
+								    pkt_stat.hdr->addr2[2], pkt_stat.hdr->addr2[3],
+								    pkt_stat.hdr->addr2[4], pkt_stat.hdr->addr2[5]);
 						}
 					}
 				}
@@ -1456,13 +1515,34 @@ MODULE_LICENSE("Dual BSD/GPL");
 void rtw_d3_usb_rx_diag_dump(void)
 {
 	printf("rtw88u: d3 usb-rx urb=%u pkt=%u c2h=%u mgmt=%u uni_mgmt=%u "
-	    "DROP rxq_ovf=%u query_fail=%u too_big=%u alloc_fail=%u\n",
-	    d3u_urb, d3u_pkt, d3u_c2h, d3u_mgmt, d3u_mgmt_uni,
+	    "da_us=%u rxq_ovf=%u query_fail=%u too_big=%u alloc_fail=%u\n",
+	    d3u_urb, d3u_pkt, d3u_c2h, d3u_mgmt, d3u_mgmt_uni, d3u_mgmt_da,
 	    d3u_rxq_ovf, d3u_query_fail, d3u_too_big, d3u_alloc_fail);
 }
 
 void rtw_d3_usb_rx_diag_reset(void)
 {
 	d3u_urb = d3u_pkt = d3u_c2h = d3u_mgmt = d3u_mgmt_uni = 0;
+	d3u_mgmt_da = 0;
 	d3u_rxq_ovf = d3u_query_fail = d3u_too_big = d3u_alloc_fail = 0;
+}
+
+void rtw_d3_tx_diag_dump(void)
+{
+	u32 i;
+
+	printf("rtw88u: d3 tx-cap cnt=%u len=%u\n",
+	    d3_tx_cap_cnt, d3_tx_last_len);
+	for (i = 0; i < d3_tx_last_len; i++)
+		printf("%s%02x", (i % 16) == 0 ? "\nrtw88u:  " : " ",
+		    d3_tx_last[i]);
+	if (d3_tx_last_len)
+		printf("\n");
+}
+
+void rtw_d3_tx_diag_reset(void)
+{
+	d3_tx_cap_cnt = 0;
+	d3_tx_hex_cnt = 0;
+	d3_tx_last_len = 0;
 }

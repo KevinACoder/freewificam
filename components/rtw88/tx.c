@@ -8,6 +8,9 @@
 #include "ps.h"
 #include "debug.h"
 
+/* [S9 D-3] mgmt SW-seq fork switch (see rtw_tx_mgmt_pkt_info_update) */
+int rtw_d3_mgmt_swseq;
+
 static
 void rtw_tx_stats(struct rtw_dev *rtwdev, struct ieee80211_vif *vif,
 		  struct sk_buff *skb)
@@ -335,6 +338,19 @@ static void rtw_tx_mgmt_pkt_info_update(struct rtw_dev *rtwdev,
 	pkt_info->en_hwseq = true;
 	pkt_info->hw_ssn_sel = 0;
 	/* TODO: need to change hw port and hw ssn sel for multiple vifs */
+
+	/* [S9 D-3] SW-seq fork (wlanrtw swseq on): radiate the header's own
+	 * sequence number instead of the FW seq counter - splits "FW seq
+	 * stuck at a constant -> AP FW dup-drops everything after the
+	 * first frame" from the rest.  Behavior change only when the shell
+	 * toggle is on; Linux-parity default. */
+	if (rtw_d3_mgmt_swseq) {
+		struct ieee80211_hdr *h = (struct ieee80211_hdr *)skb->data;
+
+		pkt_info->dis_qselseq = false;
+		pkt_info->en_hwseq = false;
+		pkt_info->seq = (le16_to_cpu(h->seq_ctrl) & 0xfff0) >> 4;
+	}
 }
 
 static void rtw_tx_data_pkt_info_update(struct rtw_dev *rtwdev,

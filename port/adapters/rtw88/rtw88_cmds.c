@@ -66,13 +66,18 @@ rtw88_cmd(int argc, char *argv[])
 		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
 			rtw_d3_usb_rx_diag_reset();
 			rtw_d3_query_diag_reset();
+			rtw_d3_tx_diag_reset();
 			csh_printf(csh, "wlanrtw: d3 counters reset\n");
+		} else if (argc >= 3 && strcmp(argv[2], "regs") == 0) {
+			rtw_d3_regs_dump();
+		} else if (argc >= 3 && strcmp(argv[2], "txhex") == 0) {
+			rtw_d3_tx_diag_dump();
 		} else {
 			rtw_d3_usb_rx_diag_dump();
 			rtw_d3_query_diag_dump();
 			lkpi_skb_diag_dump();
 			csh_printf(csh, "wlanrtw: d3 dumps above "
-			    "(usbkpi rxq for the pump gap)\n");
+			    "(regs/txhex subcommands; usbkpi rxq for the pump gap)\n");
 		}
 	} else if (strcmp(argv[1], "quiet") == 0) {
 		if (argc < 3) {
@@ -88,6 +93,16 @@ rtw88_cmd(int argc, char *argv[])
 			return 0;
 		}
 		rtw_d3_rcr_promisc(strcmp(argv[2], "on") == 0 ? 1 : 0);
+	} else if (strcmp(argv[1], "swseq") == 0) {
+		if (argc < 3) {
+			csh_printf(csh, "wlanrtw: swseq on|off "
+			    "(mgmt radiates the header seq instead of the FW "
+			    "seq counter, D-3 fork)\n");
+			return 0;
+		}
+		rtw_d3_mgmt_swseq = strcmp(argv[2], "on") == 0 ? 1 : 0;
+		csh_printf(csh, "wlanrtw: swseq %s\n",
+		    rtw_d3_mgmt_swseq ? "ON" : "OFF");
 	} else if (strcmp(argv[1], "mac") == 0) {
 		uint8_t na[6];
 		const char *s = argc >= 3 ? argv[2] : "";
@@ -121,6 +136,42 @@ rtw88_cmd(int argc, char *argv[])
 			return 0;
 		}
 		net80211_bridge_set_mac(na);
+	} else if (strcmp(argv[1], "cmpdetune") == 0) {
+		uint8_t na[6];
+		const char *s = argc >= 3 ? argv[2] : "";
+		int k, ok = 1;
+
+		for (k = 0; k < 6 && ok; k++) {
+			int b[2], j;
+
+			if (k != 0 && *s == ':')
+				s++;
+			for (j = 0; j < 2; j++) {
+				char c = *s++;
+
+				if (c >= '0' && c <= '9')
+					b[j] = c - '0';
+				else if (c >= 'a' && c <= 'f')
+					b[j] = c - 'a' + 10;
+				else if (c >= 'A' && c <= 'F')
+					b[j] = c - 'A' + 10;
+				else {
+					ok = 0;
+					break;
+				}
+			}
+			if (ok)
+				na[k] = (uint8_t)((b[0] << 4) | b[1]);
+		}
+		if (!ok) {
+			csh_printf(csh, "wlanrtw: cmpdetune 02:00:00:00:00:01 "
+			    "(point the port comparator at M'; apply DURING a "
+			    "scan - scan start/complete rewrite it)\n");
+			return 0;
+		}
+		rtw_d3_cmp_detune(na);
+	} else if (strcmp(argv[1], "cmprestore") == 0) {
+		rtw_d3_cmp_restore();
 	} else {
 		csh_printf(csh, "wlanrtw: unknown '%s'\n", argv[1]);
 	}
