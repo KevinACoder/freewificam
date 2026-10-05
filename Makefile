@@ -339,12 +339,15 @@ endif
 endif
 
 # linuxkpi (SPEC S6/linuxkpi §4/P6-a): the Linux kernel API compat layer
-# over the cherryusb engine (components/linuxkpi) + the claim hook and the
-# usbkpi shell exit (port/adapters/linuxkpi) + the acceptance driver's
-# RTOS shell (app/lkpi_udisk). Needs the USB host stack (it submits into
-# usbh) and the shell (the acceptance toolbox). Include order: cherryusb
-# dirs first (usb_def.h sets USB_DEF_H so the descriptor structs are
-# shared), then the linuxkpi headers for <linux/*.h>.
+# over the cherryusb engine, now part of the net80211 component
+# (components/net80211/linuxkpi): core primitives at the root, the usb
+# bus backend (linuxkpi_usb + the generic claim hook + the usbkpi shell
+# exit) under usb/, and the acceptance drivers (udisk/hub) under
+# usb/tests/ - future bus backends (sdio/pcie) land as usb/ siblings.
+# Needs the USB host stack (it submits into usbh) and the shell (the
+# acceptance toolbox). Include order: cherryusb dirs first (usb_def.h
+# sets USB_DEF_H so the descriptor structs are shared), then the
+# linuxkpi headers for <linux/*.h>.
 CONFIG_LINUXKPI ?= n
 ifeq ($(filter $(CONFIG_LINUXKPI),y n),)
 $(error CONFIG_LINUXKPI must be y or n, got '$(CONFIG_LINUXKPI)')
@@ -356,17 +359,17 @@ endif
 ifeq ($(filter y,$(CONFIG_SHELL)),)
 $(error CONFIG_LINUXKPI=y requires CONFIG_SHELL=y (the acceptance toolbox))
 endif
-LKPI_DIR := components/linuxkpi
+LKPI_DIR := components/net80211/linuxkpi
 LKPI_SRCS := \
 	$(LKPI_DIR)/linuxkpi_core.c \
-	$(LKPI_DIR)/linuxkpi_usb.c \
+	$(LKPI_DIR)/usb/linuxkpi_usb.c \
 	$(LKPI_DIR)/fw_registry.c \
-	port/adapters/linuxkpi/lkpi_usbh_class.c \
-	port/adapters/linuxkpi/usbkpi_cmds.c \
-	app/lkpi_udisk/lkpi_udisk_core.c \
-	app/lkpi_udisk/lkpi_udisk_rtos.c \
-	app/lkpi_hub/lkpi_hub_core.c \
-	app/lkpi_hub/lkpi_hub_rtos.c
+	$(LKPI_DIR)/usb/lkpi_usbh_class.c \
+	$(LKPI_DIR)/usb/usbkpi_cmds.c \
+	$(LKPI_DIR)/usb/tests/udisk/lkpi_udisk_core.c \
+	$(LKPI_DIR)/usb/tests/udisk/lkpi_udisk_rtos.c \
+	$(LKPI_DIR)/usb/tests/hub/lkpi_hub_core.c \
+	$(LKPI_DIR)/usb/tests/hub/lkpi_hub_rtos.c
 SRCS += $(LKPI_SRCS)
 CFLAGS += -DCONFIG_LINUXKPI=1
 # P6-b root-cause experiment key (temporary, issues/2026-10-01-xhci-
@@ -383,12 +386,15 @@ endif
 # (semaphores/timers) exactly like the cherryusb osal does (FR-3: tx
 # headers stay inside adapter/implementation units).
 LKPI_CFLAGS := $(USB_CFLAGS) $(TX_CFLAGS) -I$(LKPI_DIR)/include \
-	-I$(LKPI_DIR) -include os/baremetal/minilibc.h
-$(BUILD)/components/linuxkpi/%.o: EXTRAFLAGS := $(LKPI_CFLAGS)
-$(BUILD)/port/adapters/linuxkpi/%.o: \
+	-I$(LKPI_DIR) -I$(LKPI_DIR)/usb -include os/baremetal/minilibc.h
+$(BUILD)/components/net80211/linuxkpi/%.o: EXTRAFLAGS := $(LKPI_CFLAGS)
+# the usbkpi shell exit and the acceptance drivers speak the shell face
+$(BUILD)/components/net80211/linuxkpi/usb/usbkpi_cmds.o: \
 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
-$(BUILD)/app/lkpi_udisk/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
-$(BUILD)/app/lkpi_hub/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/components/net80211/linuxkpi/usb/tests/udisk/%.o: \
+	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/components/net80211/linuxkpi/usb/tests/hub/%.o: \
+	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 
 # linuxkpi-80211 shim face (SPEC S9/rtw88-adapt FR-3/FR-9): the mac80211
 # entry-point TU + <net/mac80211.h> shim header. Default off keeps every
@@ -946,7 +952,7 @@ $(BUILD)/components/ports/net80211/%.o: \
 # the lkpi include rides along, mac80211.h stays out (FR-4)
 $(BUILD)/components/ports/net80211/lkpi_bridge.o: \
 	EXTRAFLAGS := $(NET80211_CFG) $(NET80211_INC) $(NET80211_PORT_KEY) \
-	-Icomponents/linuxkpi
+	-Icomponents/net80211/linuxkpi -Icomponents/net80211/linuxkpi/usb
 endif
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(filter %.c,$(SRCS))) \
