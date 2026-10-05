@@ -39,10 +39,16 @@ void rtw_d3_tx_diag_reset(void);
 void rtw_d3_set_da(const uint8_t *mac);
 
 /* mac80211.c: comparator detuning A/B - point the port address
- * comparator at M' while the bridge keeps transmitting SA=M; scan
- * start/complete rewrite the comparator, so apply during a scan */
+ * comparator at M' while the bridge keeps transmitting SA=M; sticky
+ * mode re-applies M' after every scan_start/complete port rewrite
+ * (rtw_d3_cmp_reapply, hooked in core_scan_start/complete) */
 void rtw_d3_cmp_detune(const uint8_t *m2);
 void rtw_d3_cmp_restore(void);
+void rtw_d3_cmp_reapply(void);
+
+/* mac80211.c: console flood gate for the per-probe forensic prints
+ * (default off; turn on only when watching one specific frame) */
+void rtw_d3_verbose_set(int on);
 
 /* tx.c: mgmt SW-seq fork - radiate the header's own sequence instead of
  * the FW seq counter (dup-drop family test; default 0 = Linux parity) */

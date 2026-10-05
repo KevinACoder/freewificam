@@ -1477,6 +1477,13 @@ void rtw_core_scan_start(struct rtw_dev *rtwdev, struct rtw_vif *rtwvif,
 	ether_addr_copy(rtwvif->mac_addr, mac_addr);
 	config |= PORT_SET_MAC_ADDR;
 	rtw_vif_port_config(rtwdev, rtwvif, config);
+	/* [S9 D-3] comparator-detune A/B: scan rewrites the port address
+	 * comparator; a sticky detune must win again after every rewrite */
+	{
+		extern void rtw_d3_cmp_reapply(void);
+
+		rtw_d3_cmp_reapply();
+	}
 
 	rtw_coex_scan_notify(rtwdev, COEX_SCAN_START);
 	rtw_core_fw_scan_notify(rtwdev, true);
@@ -1505,6 +1512,12 @@ void rtw_core_scan_complete(struct rtw_dev *rtwdev, struct ieee80211_vif *vif,
 	ether_addr_copy(rtwvif->mac_addr, vif->addr);
 	config |= PORT_SET_MAC_ADDR;
 	rtw_vif_port_config(rtwdev, rtwvif, config);
+	/* [S9 D-3] sticky comparator detune (see scan_start) */
+	{
+		extern void rtw_d3_cmp_reapply(void);
+
+		rtw_d3_cmp_reapply();
+	}
 
 	rtw_coex_scan_notify(rtwdev, COEX_SCAN_FINISH);
 

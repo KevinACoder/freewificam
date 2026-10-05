@@ -123,3 +123,8 @@ codex（gpt-6.1-sol xhigh，/tmp/deep-consort/answer-2.md）审计出取证面�
   新算合法 FCS 上空并收获 ACK，必须逐字节验证）。
 - `tx.c`：`rtw_d3_mgmt_swseq`（swseq 分叉，见第三批）。
 - `rtw88_cmds`：`diag regs/txhex`、`swseq`、`cmpdetune/cmprestore`。
+- 第四批追加（板上首战回授）：洪水打印（ops_tx/c2h/txrpt/scan_complete）
+  加 `rtw_d3_verbose` 门（默认关，`wlanrtw verbose on`）；比较器失谐改
+  sticky 模式——core_scan_start/complete 的 PORT_SET_MAC_ADDR 重写之后
+  自动重放 M′（main.c 两处 `rtw_d3_cmp_reapply` 钩子，A/B 实验不被扫描
+  竞态撕碎）。

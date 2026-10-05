@@ -12,6 +12,15 @@
 #include "reg.h"
 #include "bf.h"
 #include "debug.h"
+
+/* [S9 D-3] console flood gate for the per-probe forensic prints
+ * (default off; the A/B detune round drowned the console without it) */
+int rtw_d3_verbose;
+
+void rtw_d3_verbose_set(int on)
+{
+	rtw_d3_verbose = on;
+}
 #include "wow.h"
 #include "sar.h"
 
@@ -28,8 +37,11 @@ static void rtw_ops_tx(struct ieee80211_hw *hw,
 
 	/* [S9 D-3] board forensics: mgmt TX fires against the chip's live
 	 * channel view - an auth sent on a stale channel never gets ACKed
-	 * (sn=60 st=64 retries-exhausted, board 2026-10-04). */
-	if (ieee80211_is_mgmt(((struct ieee80211_hdr *)skb->data)->frame_control))
+	 * (sn=60 st=64 retries-exhausted, board 2026-10-04).  Gated behind
+	 * rtw_d3_verbose: the per-probe flood drowned the console during
+	 * the detune A/B (board 2026-10-05). */
+	if (rtw_d3_verbose &&
+	    ieee80211_is_mgmt(((struct ieee80211_hdr *)skb->data)->frame_control))
 		printf("rtw88u: ops_tx mgmt len %u chan %u prio %u scan %u\n",
 		    (unsigned)skb->len, rtwdev->hal.current_channel,
 		    skb->priority,
@@ -160,10 +172,21 @@ void rtw_d3_regs_dump(void)
  * the port address comparator at M' while the bridge keeps transmitting
  * SA=M.  Responses addressed to M then reach USB only via AAP - if the
  * exact da_us counter ticks with the detuned comparator and not with
- * the matched one, receive is local-match-dependent (H6).  NOTE:
- * scan_start/complete rewrite the comparator (PORT_SET_MAC_ADDR), so
- * apply DURING a scan window and expect restore on scan end. */
+ * the matched one, receive is local-match-dependent (H6).
+ * STICKY mode: scan_start/complete rewrite the comparator
+ * (PORT_SET_MAC_ADDR), so the detune re-applies itself after every one
+ * of them (rtw_d3_cmp_reapply, called from core_scan_start/complete). */
 static u8 d3_cmp_save[6];
+static u8 d3_cmp_m2[6];
+static int rtw_d3_cmp_sticky;
+
+static void rtw_d3_cmp_write_locked(const u8 *m)
+{
+	int i;
+
+	for (i = 0; i < 6; i++)
+		rtw_write8(d3_quiet_rtwdev, 0x0610 + i, m[i]);
+}
 
 void rtw_d3_cmp_detune(const u8 *m2)
 {
@@ -177,9 +200,11 @@ void rtw_d3_cmp_detune(const u8 *m2)
 	mutex_lock(&rtwdev->mutex);
 	for (i = 0; i < 6; i++) {
 		d3_cmp_save[i] = rtw_read8(rtwdev, 0x0610 + i);
-		rtw_write8(rtwdev, 0x0610 + i, m2[i]);
+		d3_cmp_m2[i] = m2[i];
 	}
-	printf("rtw88u: d3 cmp detune M=%02x:%02x:%02x:%02x:%02x:%02x -> "
+	rtw_d3_cmp_write_locked(m2);
+	rtw_d3_cmp_sticky = 1;
+	printf("rtw88u: d3 cmp detune(sticky) M=%02x:%02x:%02x:%02x:%02x:%02x -> "
 	    "M'=%02x:%02x:%02x:%02x:%02x:%02x rb %02x:%02x:%02x:%02x:%02x:%02x\n",
 	    d3_cmp_save[0], d3_cmp_save[1], d3_cmp_save[2],
 	    d3_cmp_save[3], d3_cmp_save[4], d3_cmp_save[5],
@@ -200,6 +225,7 @@ void rtw_d3_cmp_restore(void)
 		return;
 	}
 	mutex_lock(&rtwdev->mutex);
+	rtw_d3_cmp_sticky = 0;
 	for (i = 0; i < 6; i++)
 		rtw_write8(rtwdev, 0x0610 + i, d3_cmp_save[i]);
 	printf("rtw88u: d3 cmp restore rb %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -207,6 +233,17 @@ void rtw_d3_cmp_restore(void)
 	    rtw_read8(rtwdev, 0x0612), rtw_read8(rtwdev, 0x0613),
 	    rtw_read8(rtwdev, 0x0614), rtw_read8(rtwdev, 0x0615));
 	mutex_unlock(&rtwdev->mutex);
+}
+
+void rtw_d3_cmp_reapply(void)
+{
+	struct rtw_dev *rtwdev = d3_quiet_rtwdev;
+
+	if (rtw_d3_cmp_sticky && rtwdev != NULL) {
+		mutex_lock(&rtwdev->mutex);
+		rtw_d3_cmp_write_locked(d3_cmp_m2);
+		mutex_unlock(&rtwdev->mutex);
+	}
 }
 
 static int rtw_ops_start(struct ieee80211_hw *hw)
@@ -897,11 +934,11 @@ static void rtw_ops_sw_scan_complete(struct ieee80211_hw *hw,
 {
 	struct rtw_dev *rtwdev = hw->priv;
 
-	printf("rtw88u: scan_complete enter\n");
 	mutex_lock(&rtwdev->mutex);
 	rtw_core_scan_complete(rtwdev, vif, false);
 	mutex_unlock(&rtwdev->mutex);
-	printf("rtw88u: scan_complete exit\n");
+	if (rtw_d3_verbose)
+		printf("rtw88u: scan_complete exit\n");
 }
 
 static void rtw_ops_mgd_prepare_tx(struct ieee80211_hw *hw,

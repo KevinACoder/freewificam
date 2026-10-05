@@ -172,6 +172,15 @@ rtw88_cmd(int argc, char *argv[])
 		rtw_d3_cmp_detune(na);
 	} else if (strcmp(argv[1], "cmprestore") == 0) {
 		rtw_d3_cmp_restore();
+	} else if (strcmp(argv[1], "verbose") == 0) {
+		if (argc < 3) {
+			csh_printf(csh, "wlanrtw: verbose on|off "
+			    "(per-probe forensic prints, default off)\n");
+			return 0;
+		}
+		rtw_d3_verbose_set(strcmp(argv[2], "on") == 0 ? 1 : 0);
+		csh_printf(csh, "wlanrtw: verbose %s\n",
+		    strcmp(argv[2], "on") == 0 ? "ON" : "OFF");
 	} else {
 		csh_printf(csh, "wlanrtw: unknown '%s'\n", argv[1]);
 	}

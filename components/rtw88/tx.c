@@ -254,8 +254,12 @@ void rtw_tx_report_handle(struct rtw_dev *rtwdev, struct sk_buff *skb, int src)
 	}
 
 	/* [S9 D-3] st==0 means the fw ACKed the frame; anything else is
-	 * retries-exhausted / lifetime-out for the matched sn. */
-	printf("rtw88u: txrpt sn=%u st=%u\n", sn, st);
+	 * retries-exhausted / lifetime-out for the matched sn.
+	 * Flood-gated (rtw_d3_verbose) - per-mgmt prints drowned the
+	 * console during the detune A/B. */
+	extern int rtw_d3_verbose;
+	if (rtw_d3_verbose)
+		printf("rtw88u: txrpt sn=%u st=%u\n", sn, st);
 
 	spin_lock_irqsave(&tx_report->q_lock, flags);
 	skb_queue_walk_safe(&tx_report->queue, cur, tmp) {
