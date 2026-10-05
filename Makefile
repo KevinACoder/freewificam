@@ -46,10 +46,11 @@ APP_MAIN := app/hello_world/main.c
 ifeq ($(CONFIG_USBHOST),y)
 APP_MAIN := app/cherryusb_enum/main.c
 endif
+# the rtw88 image keeps its own main even when lwip rides along (W5:
+# wlanrtw boot + tcpip_init inside); lwip_lan's main is the GMAC shape
 ifeq ($(CONFIG_NIC_RTW88),y)
 APP_MAIN := app/wlanrtw/main.c
-endif
-ifeq ($(CONFIG_LWIP),y)
+else ifeq ($(CONFIG_LWIP),y)
 APP_MAIN := app/lwip_lan/main.c
 endif
 
@@ -452,12 +453,66 @@ $(BUILD)/components/rtw88/%.o: EXTRAFLAGS := -w $(LKPI_CFLAGS)
 # modeswitch hook ahead of the MSC class-only match (the MSC hook's R3
 # VID guard is the second line of defense).
 RTW88_PORT_SRCS := 	port/adapters/rtw88/usbh_modeswitch.c 	port/adapters/rtw88/usbh_rtw88_class.c 	port/adapters/rtw88/rtw88_entry.c 	port/adapters/rtw88/rtw88_cmds.c
+
+# W4/W5 data-plane face (S9): the wpa_supplicant vendor backend
+# (wpa_vendor_rtw88.c - needs the WPA include world + net80211 bridge
+# headers) and the lwip netif bridge (wlanrtw_netif.c - needs the lwip
+# include world). Each is key-gated so the W3 scan image stays
+# byte-identical.
+CONFIG_RTW88_WPA_BACKEND ?= n
+ifeq ($(filter $(CONFIG_RTW88_WPA_BACKEND),y n),)
+$(error CONFIG_RTW88_WPA_BACKEND must be y or n, got '$(CONFIG_RTW88_WPA_BACKEND)')
+endif
+CONFIG_WLAN_NETIF ?= n
+ifeq ($(filter $(CONFIG_WLAN_NETIF),y n),)
+$(error CONFIG_WLAN_NETIF must be y or n, got '$(CONFIG_WLAN_NETIF)')
+endif
+ifeq ($(CONFIG_RTW88_WPA_BACKEND),y)
+ifeq ($(filter y,$(CONFIG_WPA_SUPPLICANT)),)
+$(error CONFIG_RTW88_WPA_BACKEND=y requires CONFIG_WPA_SUPPLICANT=y)
+endif
+ifeq ($(filter y,$(CONFIG_NET80211)),)
+$(error CONFIG_RTW88_WPA_BACKEND=y requires CONFIG_NET80211=y)
+endif
+RTW88_PORT_SRCS += port/adapters/rtw88/wpa_vendor_rtw88.c
+$(BUILD)/port/adapters/rtw88/wpa_vendor_rtw88.o: \
+	EXTRAFLAGS = $(CSH_CFLAGS) -Ios/net80211 -Ios/net80211/compat \
+	-Ios/wpa_supplicant
+CFLAGS += -DCONFIG_RTW88_WPA_BACKEND=1
+endif
+ifeq ($(CONFIG_WLAN_NETIF),y)
+ifeq ($(filter y,$(CONFIG_LWIP)),)
+$(error CONFIG_WLAN_NETIF=y requires CONFIG_LWIP=y)
+endif
+ifeq ($(filter y,$(CONFIG_NET80211)),)
+$(error CONFIG_WLAN_NETIF=y requires CONFIG_NET80211=y)
+endif
+RTW88_PORT_SRCS += port/adapters/rtw88/wlanrtw_netif.c
+# recursive (=) on purpose: LWIP_CFLAGS is defined later in the file
+$(BUILD)/port/adapters/rtw88/wlanrtw_netif.o: \
+	EXTRAFLAGS = $(LWIP_CFLAGS) $(CSH_CFLAGS) -Ios/net80211 \
+	-Ios/net80211/compat
+CFLAGS += -DCONFIG_WLAN_NETIF=1
+endif
+# HW-CCMP is the default key route; the SW build flips to net80211's
+# software AES-CCM (the prior project's board-proven shape) - one build
+# key, same image otherwise
+CONFIG_RTW88_SW_CCMP ?= n
+ifeq ($(filter $(CONFIG_RTW88_SW_CCMP),y n),)
+$(error CONFIG_RTW88_SW_CCMP must be y or n, got '$(CONFIG_RTW88_SW_CCMP)')
+endif
+ifeq ($(CONFIG_RTW88_SW_CCMP),y)
+CFLAGS += -DCONFIG_RTW88_SW_CCMP=1
+endif
+
 SRCS := $(RTW88_PORT_SRCS) $(SRCS)
 $(BUILD)/port/adapters/rtw88/usbh_modeswitch.o: 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/port/adapters/rtw88/usbh_rtw88_class.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/port/adapters/rtw88/rtw88_entry.o: 	EXTRAFLAGS := $(LKPI_CFLAGS)
 $(BUILD)/port/adapters/rtw88/rtw88_cmds.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS) -Ios/net80211
-$(BUILD)/app/wlanrtw/main.o: EXTRAFLAGS := $(CSH_CFLAGS) $(USB_CFLAGS)
+# recursive (=): LWIP_CFLAGS is defined later; the app main only gains it
+# when the lwip block is on (CONFIG_LWIP=1 -> tcpip_init in thr_usbboot)
+$(BUILD)/app/wlanrtw/main.o: EXTRAFLAGS = $(CSH_CFLAGS) $(USB_CFLAGS) $(LWIP_CFLAGS)
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
@@ -474,6 +529,15 @@ ifeq ($(filter $(CONFIG_LWIP),y n),)
 $(error CONFIG_LWIP must be y or n, got '$(CONFIG_LWIP)')
 endif
 ifeq ($(CONFIG_LWIP),y)
+# GMAC carrier single choice (S9-W5): y = the lwip_lan shape (GMAC trio +
+# ethnetif compiled, ethnetif is THE RX seam); n = lwip as a pure stack
+# for another carrier (the rtw88 wlan netif bridge owns the seams) - the
+# GMAC trio is not compiled and the driver symbols never appear.
+CONFIG_LWIP_GMAC ?= y
+ifeq ($(filter $(CONFIG_LWIP_GMAC),y n),)
+$(error CONFIG_LWIP_GMAC must be y or n, got '$(CONFIG_LWIP_GMAC)')
+endif
+CFLAGS += -DCONFIG_LWIP=1
 # GMAC port single choice (FR-9/KI-027): build-time, the other port never
 # gets a clock or a register write. Values: 0 = gmac0, 1 = gmac1.
 CONFIG_GMAC_PORT ?= 1
@@ -531,6 +595,7 @@ endif
 endif
 
 LWIP_DIR := third-party/lwip
+ifeq ($(CONFIG_LWIP_GMAC),y)
 # GMAC driver trio (P7-1b, spec §3.4): the board-verified EQOS MAC core +
 # RTL8211F PHY + RK3568 glue/board table, re-arranged onto gicv3/cache/log.
 # The unselected port (CONFIG_GMAC_PORT) is data-only - never initialized.
@@ -538,6 +603,7 @@ SRCS += \
 	board/$(BOARD)/drivers/dwc_eqos.c \
 	board/$(BOARD)/drivers/rtl8211f.c \
 	board/$(BOARD)/drivers/eqos_rk3568.c
+endif
 LWIP_SRCS := \
 	$(LWIP_DIR)/src/core/def.c \
 	$(LWIP_DIR)/src/core/inet_chksum.c \
@@ -573,9 +639,11 @@ LWIP_SRCS := \
 	$(LWIP_DIR)/src/api/tcpip.c \
 	$(LWIP_DIR)/src/netif/ethernet.c \
 	$(LWIP_DIR)/src/apps/lwiperf/lwiperf.c \
-	os/lwip/ethnetif.c \
 	os/lwip/cmsis/sys_arch.c \
 	os/lwip/lwip_diag.c
+ifeq ($(CONFIG_LWIP_GMAC),y)
+LWIP_SRCS += os/lwip/ethnetif.c
+endif
 SRCS += $(LWIP_SRCS)
 
 LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include \
@@ -779,7 +847,8 @@ WPA_CFG := -include stdarg.h \
 	-include os/wpa_supplicant/wpa_port_config.h \
 	$(WPA_BACKEND_KEY) \
 	-DCONFIG_WPA_THREAD_STACK=$(CONFIG_WPA_THREAD_STACK) \
-	-DCONFIG_WPA_SUPP_DEBUG_LEVEL=$(CONFIG_WPA_SUPP_DEBUG_LEVEL)
+	-DCONFIG_WPA_SUPP_DEBUG_LEVEL=$(CONFIG_WPA_SUPP_DEBUG_LEVEL) \
+	-Dsscanf=wpa_port_sscanf
 # vendored units silence warnings (-w, frozen import); the first-party
 # port layer compiles warning-honest under the global -Wall -Wextra
 $(BUILD)/third-party/wpa_supplicant/%.o: \
@@ -839,10 +908,18 @@ endif
 NET80211_PORT_SRCS := \
 	$(NET80211_PORT_DIR)/compat/net80211_compat.c \
 	$(NET80211_PORT_DIR)/compat/net80211_mbuf.c \
-	$(NET80211_PORT_DIR)/compat/net80211_ifnet.c \
-	$(NET80211_PORT_DIR)/lkpi_bridge.c
+	$(NET80211_PORT_DIR)/compat/net80211_ifnet.c
+
+# the W3 bridge serves the mac80211-side shim (workqueue/timer glue) -
+# without CONFIG_LINUXKPI_80211 its lkpi references are unresolved (the
+# S8-1 compile-face config never links it; guard added in R4 when the
+# stale net80211-smoke link broke on trunk)
+ifeq ($(CONFIG_LINUXKPI_80211),y)
+NET80211_PORT_SRCS += $(NET80211_PORT_DIR)/lkpi_bridge.c
+endif
 
 SRCS += $(NET80211_VENDOR_SRCS) $(NET80211_PORT_SRCS)
+CFLAGS += -DCONFIG_NET80211=1
 
 NET80211_INC := -I$(NET80211_PORT_DIR)/compat \
 	-I$(NET80211_DIR)

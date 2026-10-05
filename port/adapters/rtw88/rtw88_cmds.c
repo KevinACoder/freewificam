@@ -24,6 +24,12 @@
 #include "net80211_bridge.h"
 #include "rtw88_d3_diag.h"
 
+#ifdef CONFIG_WLAN_NETIF
+extern int wlanrtw_netif_ip(void);
+extern void wlanrtw_netif_stats(unsigned long *rx_fed,
+    unsigned long *rx_drop, unsigned long *tx_frames, unsigned long *tx_err);
+#endif
+
 static int
 rtw88_cmd(int argc, char *argv[])
 {
@@ -57,6 +63,22 @@ rtw88_cmd(int argc, char *argv[])
 		    "(auth/assoc ~1 s; then status)\n", argv[2], ret);
 	} else if (strcmp(argv[1], "status") == 0) {
 		net80211_bridge_status();
+	} else if (strcmp(argv[1], "ip") == 0) {
+#ifdef CONFIG_WLAN_NETIF
+		unsigned long rf, rd, tf, te;
+		unsigned int q, s, d, np;
+
+		ret = wlanrtw_netif_ip();
+		wlanrtw_netif_stats(&rf, &rd, &tf, &te);
+		net80211_bridge_tx_stats(&q, &s, &d, &np);
+		net80211_bridge_rx_stats(NULL, NULL, NULL, NULL);
+		csh_printf(csh, "wlanrtw: netif %s rx_fed %lu drop %lu "
+		    "tx %lu err %lu | txq %u sent %u drop %u nopeer %u\n",
+		    ret == 0 ? "BOUND" : "not-bound", rf, rd, tf, te,
+		    q, s, d, np);
+#else
+		csh_printf(csh, "wlanrtw: ip needs CONFIG_WLAN_NETIF\n");
+#endif
 	} else if (strcmp(argv[1], "hwaddr") == 0) {
 		if (net80211_bridge_get_hwaddr(mac) == 0)
 			csh_printf(csh, "wlanrtw: hwaddr "

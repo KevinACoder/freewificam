@@ -208,7 +208,9 @@ static int skel_scan2(void *priv, struct wpa_driver_scan_params *params) {
 		return -1;
 	}
 	eloop_cancel_timeout(skel_scan_poll, NULL, NULL);
-	if (eloop_register_timeout(30, 0, skel_scan_poll, NULL, NULL) < 0 ||
+	/* 60 s: the rtw88 line's 14-channel sweep measured 31 s end to end
+	 * (R3 board rounds) - a 30 s abort would race the completion */
+	if (eloop_register_timeout(60, 0, skel_scan_poll, NULL, NULL) < 0 ||
 	    drv->vp->scan_start(ssid, len) != 0) {
 		__atomic_store_n(&drv->scan_pending, 0, __ATOMIC_RELEASE);
 		eloop_cancel_timeout(skel_scan_poll, NULL, NULL);

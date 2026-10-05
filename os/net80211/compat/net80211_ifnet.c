@@ -70,6 +70,7 @@ static void *net80211_port_eapol_arg;
 static net80211_port_event_fn net80211_port_event;
 static void *net80211_port_event_arg;
 unsigned int net80211_port_rx_drops;
+unsigned int pq_multi_seg;
 
 void
 net80211_port_set_data_rx(net80211_port_rx_fn fn, void *arg)
@@ -100,12 +101,23 @@ if_percpuq_enqueue(void *pq, struct mbuf *m)
 	if (m == NULL) {
 		return;
 	}
+	/* the deliver path builds single-segment frames from the pool
+	 * mbufs; a chain here would mean an encap/decap bug upstream -
+	 * count it and drop instead of handing a truncated frame on */
+	if (m->m_next != NULL || (m->m_flags & M_PKTHDR) == 0 ||
+	    m->m_pkthdr.len != m->m_len) {
+		pq_multi_seg++;
+		m_freem(m);
+		return;
+	}
 	eh = mtod(m, const struct ether_header *);
 
 	if (ntohs(eh->ether_type) == ETHERTYPE_PAE &&
 	    net80211_port_eapol_rx != NULL) {
-		net80211_port_eapol_rx(mtod(m, const uint8_t *) +
-		    sizeof(*eh), m->m_len - sizeof(*eh),
+		/* whole ethernet frame: the consumer derives src + 802.1X
+		 * payload (the wpa l2 face needs the source MAC; the old
+		 * payload-only contract carried no address) */
+		net80211_port_eapol_rx(mtod(m, const uint8_t *), m->m_len,
 		    net80211_port_eapol_arg);
 		m_freem(m);
 		return;

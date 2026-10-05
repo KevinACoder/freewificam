@@ -46,9 +46,10 @@ lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
 }
 
 __attribute__((weak)) void
-lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
+lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm,
+    int decrypted)
 {
-	(void)data; (void)len; (void)signal_dbm;
+	(void)data; (void)len; (void)signal_dbm; (void)decrypted;
 }
 
 /* the net80211-side driver vtable lives below */
@@ -81,6 +82,210 @@ lkpi80211_primary_ctx(void)
 
 	return lkpi80211_primary;
 }
+
+/* ------------------------------------------------------------------ */
+/* the one peer + the key registry (W4W5 data plane)                   */
+/* ------------------------------------------------------------------ */
+
+/* mac80211 allocates one sta per association and passes drv_priv to the
+ * driver; rtw_sta_add writes a struct rtw_sta_info through it.  Measured
+ * on this build: sizeof = 120 B - the struct rides in ieee80211_sta's
+ * 128 B drv_priv slot with 8 B to spare; the static_assert below turns
+ * any later drift loud instead of silently corrupting the neighbor (the
+ * vif drv_priv 128-vs-184 lesson, board 2026-10-04 W3). */
+_Static_assert(120 <= sizeof(((struct ieee80211_sta *)0)->drv_priv),
+    "rtw_sta_info must fit ieee80211_sta.drv_priv");
+
+/* the peer object: mac80211's sta, backed by static storage (single-peer
+ * world).  txq[] must point at real objects - rtw_sta_add runs
+ * rtw_txq_init over all 16 TIDs. */
+static struct ieee80211_sta lkpi_n80211_sta;
+static struct ieee80211_txq lkpi_n80211_sta_txq[IEEE80211_NUM_TIDS];
+static bool lkpi_n80211_peer_up;
+
+/* key bookkeeping for the TX relay: rtw88 derives its txdesc sec_type
+ * from info->control.hw_key, so each outbound protected frame needs a
+ * stable key_conf for the PTK (slot 0) and the current GTK (slot 1).
+ * The bytes are only a carrier for cipher/keyidx - the actual crypto
+ * lives in the CAM (HW route) or net80211 (SW route). */
+struct lkpi_n80211_key_slot {
+	bool	used;
+	int	keyidx;
+	u8	cipher;
+	struct ieee80211_key_conf conf;
+};
+
+static struct lkpi_n80211_key_slot lkpi_n80211_keys[2];
+#define	LKPI_KEY_PTK	0
+#define	LKPI_KEY_GTK	1
+
+/* called by the bridge's S_RUN path, before bss_info_changed */
+static int
+lkpi_n80211_drv_peer_add(const uint8_t bssid[6], unsigned int aid)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi80211_primary_ctx();
+	int i, ret;
+
+	if (ctx == NULL || ctx->vif == NULL)
+		return -EINVAL;
+	if (lkpi_n80211_peer_up)
+		return 0;
+	memset(&lkpi_n80211_sta, 0, sizeof(lkpi_n80211_sta));
+	memcpy(lkpi_n80211_sta.addr, bssid, ETH_ALEN);
+	lkpi_n80211_sta.aid = (u16)aid;
+	lkpi_n80211_sta.bandwidth = NL80211_BAND_2GHZ;
+	lkpi_n80211_sta.max_rc_amsdu_len = 1;
+	for (i = 0; i < IEEE80211_NUM_TIDS; i++) {
+		memset(&lkpi_n80211_sta_txq[i], 0, sizeof(lkpi_n80211_sta_txq[i]));
+		lkpi_n80211_sta_txq[i].sta = &lkpi_n80211_sta;
+		lkpi_n80211_sta_txq[i].vif = ctx->vif;
+		lkpi_n80211_sta_txq[i].tid = (u8)i;
+		lkpi_n80211_sta_txq[i].ac = (u8)(i >> 1);
+		lkpi_n80211_sta.txq[i] = &lkpi_n80211_sta_txq[i];
+	}
+	/* the driver resolves the next-hop rates off supp_rates (7.3 shape
+	 * reads sta->deflink.supp_rates): give it the 11b basic set the
+	 * net80211 join negotiated - lowest sentinel <= 0xf picks 11M */
+	lkpi_n80211_sta.supp_rates[NL80211_BAND_2GHZ] = 0x0f;
+	lkpi_n80211_sta.deflink.supp_rates[NL80211_BAND_2GHZ] = 0x0f;
+	/* no HT/VHT: the zeroed caps say so; rtw88's rate logic then runs
+	 * the legacy path (get_highest_*_tx_rate skipped) */
+	ret = (&ctx->hw)->ops->sta_add(&ctx->hw, ctx->vif,
+	    &lkpi_n80211_sta);
+	if (ret != 0) {
+		lkpi_printf("lkpi80211: sta_add ret %d\n", ret);
+		return ret;
+	}
+	lkpi_n80211_peer_up = true;
+	ctx->sta = &lkpi_n80211_sta;
+	lkpi_printf("lkpi: sta_add %02x:%02x:%02x:%02x:%02x:%02x aid %u\n",
+	    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+	    aid);
+	return 0;
+}
+
+static void
+lkpi_n80211_drv_peer_remove(void)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi80211_primary_ctx();
+
+	if (ctx == NULL || !lkpi_n80211_peer_up)
+		return;
+	(&ctx->hw)->ops->sta_remove(&ctx->hw, ctx->vif, &lkpi_n80211_sta);
+	lkpi_n80211_peer_up = false;
+	ctx->sta = NULL;
+	memset(lkpi_n80211_keys, 0, sizeof(lkpi_n80211_keys));
+	lkpi_printf("lkpi: sta_remove done\n");
+}
+
+/* the bridge calls this from the S_ASSOC drain (before M4 can arrive);
+ * M3 triggers the GTK install while the PTK comes after M4 */
+static int
+lkpi_n80211_drv_set_key(int pairwise, int key_idx, const uint8_t *key,
+    size_t len)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi80211_primary_ctx();
+	struct ieee80211_key_conf *kc;
+	int slot = pairwise ? LKPI_KEY_PTK : LKPI_KEY_GTK;
+	int ret;
+
+	if (ctx == NULL || ctx->sta == NULL)
+		return -EINVAL;
+	if (len > sizeof(kc->key))
+		return -EINVAL;
+	kc = &lkpi_n80211_keys[slot].conf;
+	memset(kc, 0, sizeof(*kc));
+	kc->cipher = WLAN_CIPHER_SUITE_CCMP;
+	kc->keyidx = (u8)key_idx;
+	kc->keylen = (u8)len;
+	if (key != NULL)
+		memcpy(kc->key, key, len);
+	if (pairwise)
+		kc->flags |= IEEE80211_KEY_FLAG_PAIRWISE;
+	/* rtw_ops_set_key raises GENERATE_IV itself; set it here too so a
+	 * future caller flip cannot silently change the encap contract */
+	kc->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
+	/* mac80211 passes sta for the pairwise key and NULL for the group
+	 * key; rtw_sec_write_cam branches the CAM address on exactly that
+	 * (sta ? sta->addr : broadcast).  Passing the peer for the GTK
+	 * would put the AP's address on a group CAM entry - for unicast TX
+	 * both entries match the RA and the group key could shadow the PTK
+	 * (codex 2026-10-05 answer-4 A(b)). */
+	ret = (&ctx->hw)->ops->set_key(&ctx->hw, SET_KEY, ctx->vif,
+	    pairwise ? &lkpi_n80211_sta : NULL, kc);
+	if (ret != 0) {
+		lkpi_printf("lkpi: set_key %s idx %d ret %d\n",
+		    pairwise ? "pair" : "group", key_idx, ret);
+		return ret;
+	}
+	lkpi_n80211_keys[slot].used = true;
+	lkpi_n80211_keys[slot].keyidx = key_idx;
+	lkpi_n80211_keys[slot].cipher = WLAN_CIPHER_SUITE_CCMP;
+	lkpi_printf("lkpi: set_key %s idx %d hwidx %u\n",
+	    pairwise ? "pair" : "group", key_idx, kc->hw_key_idx);
+	return 0;
+}
+
+static void
+lkpi_n80211_drv_clear_key(int pairwise, int key_idx)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi80211_primary_ctx();
+	struct ieee80211_key_conf *kc;
+	int slot = pairwise ? LKPI_KEY_PTK : LKPI_KEY_GTK;
+
+	if (ctx == NULL || ctx->sta == NULL || !lkpi_n80211_keys[slot].used)
+		return;
+	kc = &lkpi_n80211_keys[slot].conf;
+	(void)(&ctx->hw)->ops->set_key(&ctx->hw, DISABLE_KEY, ctx->vif,
+	    pairwise ? &lkpi_n80211_sta : NULL, kc);
+	memset(&lkpi_n80211_keys[slot], 0,
+	    sizeof(lkpi_n80211_keys[slot]));
+	lkpi_printf("lkpi: clear_key %s idx %d\n",
+	    pairwise ? "pair" : "group", key_idx);
+}
+
+/* data-plane TX relay: the bridge hands one linear 802.11 frame (post
+ * encap + crypto header); this side wraps it in a skb with the peer and
+ * key context rtw88's tx path reads.  No REQ_TX_STATUS: the USB
+ * completion acks it directly (usb.c tx_complete -> tx_status_irqsafe). */
+static int
+lkpi_n80211_drv_tx_data(const uint8_t *frame, size_t len, int tid,
+    int key_type, int key_idx)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi80211_primary_ctx();
+	struct ieee80211_tx_control control;
+	struct ieee80211_tx_info *info;
+	struct sk_buff *skb;
+	unsigned int head = (&ctx->hw)->extra_tx_headroom + 64;
+
+	int slot = key_type == 1 ? LKPI_KEY_PTK : LKPI_KEY_GTK;
+
+	if (ctx == NULL || ctx->vif == NULL || (&ctx->hw)->ops->tx == NULL)
+		return -EOPNOTSUPP;
+	/* EAPOL pre-port goes out with key_type 0 (net80211 sends it in
+	 * clear); protected data carries the PTK/GTK context so rtw88
+	 * fills sec_type and the CAM lookup finds the entry */
+	if (key_type != 0 && !lkpi_n80211_keys[slot].used)
+		return -EINVAL;
+	skb = lkpi_skb_alloc((unsigned int)(len + head), GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+	skb->data = skb->head + head;
+	skb->tail = head;
+	memcpy(skb_put(skb, (unsigned int)len), frame, len);
+
+	memset(&control, 0, sizeof(control));
+	info = IEEE80211_SKB_CB(skb);
+	memset(info, 0, sizeof(*info));
+	info->control.vif = ctx->vif;
+	control.sta = ctx->sta;
+	if (key_type != 0)
+		info->control.hw_key = &lkpi_n80211_keys[slot].conf;
+	skb->priority = (u32)tid;
+	(&ctx->hw)->ops->tx(&ctx->hw, &control, skb);
+	return 0;
+}
+
 
 /* ------------------------------------------------------------------ */
 /* hw lifecycle                                                        */
@@ -349,6 +554,11 @@ lkpi_n80211_drv_init(void)
 	lkpi_n80211_drv.tx_mgmt = lkpi_n80211_drv_tx_mgmt;
 	lkpi_n80211_drv.mgd_prepare_tx = lkpi_n80211_drv_mgd_prepare_tx;
 	lkpi_n80211_drv.bss_info_changed = lkpi_n80211_drv_bss_info_changed;
+	lkpi_n80211_drv.tx_data = lkpi_n80211_drv_tx_data;
+	lkpi_n80211_drv.peer_add = lkpi_n80211_drv_peer_add;
+	lkpi_n80211_drv.peer_remove = lkpi_n80211_drv_peer_remove;
+	lkpi_n80211_drv.set_key = lkpi_n80211_drv_set_key;
+	lkpi_n80211_drv.clear_key = lkpi_n80211_drv_clear_key;
 }
 
 int
@@ -504,12 +714,17 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 
 	/* the net80211 side of the bridge: skb -> pool mbuf -> input;
-	 * the bridge copies into the pool mbuf, this side owns the skb */
+	 * the bridge copies into the pool mbuf, this side owns the skb.
+	 * The DECRYPTED flag rides along: rtw88 sets it when the MAC unit
+	 * already decrypted (header+MIC left in place), which is exactly
+	 * the shape net80211's non-SWCRYPT decap consumes - the bridge
+	 * counts mismatches for the first WPA2 board round. */
 	{
 		struct ieee80211_rx_status *rx =
 		    (struct ieee80211_rx_status *)skb->cb;
 
-		lkpi_n80211_rx_frame(skb->data, skb->len, rx->signal);
+		lkpi_n80211_rx_frame(skb->data, skb->len, rx->signal,
+		    (rx->flag & RX_FLAG_DECRYPTED) != 0);
 	}
 	lkpi_skb_free(skb);
 }
@@ -532,14 +747,15 @@ struct ieee80211_sta *
 ieee80211_find_sta(struct ieee80211_vif *vif, const u8 *addr)
 {
 
-	/*
-	 * Single-peer world: M4 resolves the peer through the ic's node
-	 * table; until then the driver's sta_add() bookkeeping is the only
-	 * source of peers and this lookup has nothing to walk.
-	 */
-	(void)vif;
-	(void)addr;
-	return NULL;
+	/* Single-peer world: the peer registers through ops->sta_add at
+	 * S_RUN (bridge peer_add) and this resolves the only entry.
+	 * Without it rtw_bf_assoc warned "failed to find station entry for
+	 * bss" on every association (board 2026-10-05 R3). */
+	if (!lkpi_n80211_peer_up || addr == NULL)
+		return NULL;
+	if (vif != NULL && memcmp(vif->bss_conf.bssid, addr, ETH_ALEN) != 0)
+		return NULL;
+	return &lkpi_n80211_sta;
 }
 
 struct ieee80211_sta *
@@ -547,10 +763,13 @@ ieee80211_find_sta_by_ifaddr(struct ieee80211_hw *hw, const u8 *addr,
     const u8 *localaddr)
 {
 
-	(void)hw;
-	(void)addr;
 	(void)localaddr;
-	return NULL;
+	if (!lkpi_n80211_peer_up || addr == NULL)
+		return NULL;
+	(void)hw;
+	if (memcmp(lkpi_n80211_sta.addr, addr, ETH_ALEN) != 0)
+		return NULL;
+	return &lkpi_n80211_sta;
 }
 
 void

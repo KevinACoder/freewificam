@@ -35,6 +35,14 @@
 
 #include "usbh_platform.h"
 
+#ifdef CONFIG_LWIP
+/* W5: the wlan netif bridge (port/adapters/rtw88/wlanrtw_netif.c) does
+ * netif_add / dhcp_start in the tcpip thread - the core must be up
+ * before the first assoc can trigger those callbacks */
+#include "lwip/init.h"
+#include "lwip/tcpip.h"
+#endif
+
 extern int rtw88_rtos_register(void);
 
 #ifdef CONFIG_SHELL
@@ -69,6 +77,12 @@ static void thr_usbboot(void *arg)
 	(void)arg;
 
 	(void)osDelay(500U);
+#ifdef CONFIG_LWIP
+	/* W5: lwIP core first (its tcpip thread serves the wlan netif's
+	 * add/up/dhcp callbacks); the platform start is the slower leg */
+	tcpip_init(NULL, NULL);
+	board_log("lwip: %s init (wlan netif bridge armed)\n", LWIP_VERSION_STRING);
+#endif
 	board_log("usb: platform start\n");
 	if (rtw88_rtos_register() != 0) {
 		board_log("rtw88: driver register FAIL\n");
@@ -92,7 +106,11 @@ int main(void)
 
 	(void)osThreadNew(thr_usbboot, NULL,
 	    &(osThreadAttr_t){ .name = "usbboot",
+#ifdef CONFIG_LWIP
+			       .stack_size = 0x8000,
+#else
 			       .stack_size = 0x4000,
+#endif
 			       .priority = osPriorityNormal });
 #ifdef CONFIG_SHELL
 	(void)osThreadNew(thr_shellboot, NULL,

@@ -17,6 +17,9 @@
 
 /* one frame handed up the RX seam; linear bytes, freed by the callee's
  * caller (the mbuf is released right after the sink returns) */
+/* both RX sinks receive the WHOLE ethernet frame (14-byte header
+ * included) - the EAPOL consumer derives the source MAC and the 802.1X
+ * payload from it (payload-only would carry no address) */
 typedef void (*net80211_port_rx_fn)(const void *buf, size_t len,
     void *arg);
 
@@ -35,6 +38,7 @@ void net80211_port_set_event_handler(net80211_port_event_fn fn, void *arg);
 
 /* health counters for the board rounds */
 extern unsigned int net80211_port_rx_drops;
+extern unsigned int pq_multi_seg;	/* chained/truncated deliver frames */
 extern unsigned int wlan_mbuf_pool_low;
 extern unsigned int wlan_mbuf_pool_short;
 extern unsigned int wlan_mbuf_pool_dups;

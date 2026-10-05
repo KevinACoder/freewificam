@@ -35,11 +35,29 @@ struct lkpi_n80211_drv {
 	 * (BSS_CHANGED_BSSID / BSS_CHANGED_ASSOC); aid = 0 pre-assoc */
 	int	(*bss_info_changed)(const uint8_t bssid[6], int assoc,
 	    unsigned int aid, int beacon_int);
+	/* data-plane TX relay: one linear 802.11 frame (post-encap); tid is
+	 * the txdesc qsel (0..7, EAPOL rides 7); key_type: 0 = no hw key,
+	 * 1 = pairwise (PTK), 2 = group (GTK at key_idx) - the mac side maps
+	 * it to info->control.hw_key for rtw88's sec_type fill */
+	int	(*tx_data)(const uint8_t *frame, size_t len, int tid,
+	    int key_type, int key_idx);
+	/* peer lifecycle: rtw88's sta_add bookkeeping must exist before the
+	 * S_RUN bss_info_changed call (bf/ampdu resolve the peer through
+	 * ieee80211_find_sta, which warned "failed to find station entry"
+	 * while this junction was unwired - board 2026-10-05 R3) */
+	int	(*peer_add)(const uint8_t bssid[6], unsigned int aid);
+	void	(*peer_remove)(void);
+	/* CAM key programming (HW-CCMP route): writes/clears the rtw88 sec
+	 * CAM; pairwise = PTK, else GTK at key_idx (0..3) */
+	int	(*set_key)(int pairwise, int key_idx, const uint8_t *key,
+	    size_t len);
+	void	(*clear_key)(int pairwise, int key_idx);
 };
 
 int	lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
 	    const struct lkpi_n80211_drv *drv);
-void	lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm);
+void	lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm,
+	    int decrypted);
 
 /* the bridge queues its state-machine work here (the mac80211 side
  * dispatches it onto the single lkpi workqueue thread) */

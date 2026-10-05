@@ -30,6 +30,7 @@
 #include <sys/systm.h>
 #include <sys/mutex.h>
 #include <sys/mbuf.h>
+#include <sys/endian.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
@@ -38,6 +39,9 @@
 #include <net/if_types.h>
 #include <net80211/ieee80211_netbsd.h>
 #include <net80211/ieee80211_var.h>
+#include <net80211/ieee80211_node.h>
+#include <net80211/ieee80211_proto.h>
+#include <net80211/ieee80211_crypto.h>
 
 /* the mac80211-side OSAL shapes + the driver vtable ABI */
 #include "linuxkpi_core.h"
@@ -95,12 +99,23 @@ struct lkpi_n80211_softc {
 	/* TX forensics cap: hex the first 8 non-scan mgmt frames (auth
 	 * body truth without an air sniffer) */
 	unsigned int		tx_hex_n;
+
+	/* W4W5 data-plane counters */
+	unsigned int		rx_prot;	/* protected-bit frames seen */
+	unsigned int		rx_decrypted;	/* rtw88 said MAC decrypted */
+	unsigned int		rx_undecrypted;	/* protected + no-decrypt, gated */
+	unsigned int		auth_events;	/* ASSOC events raised */
+	unsigned int		tx_queued;	/* frames taken by tx_raw */
+	unsigned int		tx_sent;	/* frames relayed to the driver */
+	unsigned int		tx_dropped;	/* encap/linearize/no-key fails */
+	unsigned int		tx_no_peer;	/* find_txnode failures */
 };
 
 static struct lkpi_n80211_softc lkpi_n80211_softc;
 
 static int	lkpi_n80211_up(void);
 static int	lkpi_n80211_up_seq(void);
+static bool	lkpi_n80211_refresh_privacy(struct lkpi_n80211_softc *sc);
 
 /* ------------------------------------------------------------------ */
 /* driver-op trampolines                                               */
@@ -181,9 +196,127 @@ lkpi_n80211_drain_mgtq(struct lkpi_n80211_softc *sc)
 	}
 }
 
+/*
+ * Data/EAPOL drain (S8 FR-12 single channel): if_snd holds ethernet
+ * frames; net80211 encap adds LLC/SNAP + the 802.11 header (+WEP bit),
+ * crypto_encap fills the CCMP header (HW route: header only, the CAM
+ * encrypts), then the linear frame crosses to the driver relay.  Runs on
+ * whatever thread kicked if_start, under the serializer (if_start_lock /
+ * the caller's own lock) - the vtable call itself only queues a work
+ * item, it never sleeps here.
+ */
+static void
+lkpi_n80211_drain_data(struct lkpi_n80211_softc *sc)
+{
+	struct ieee80211com *ic = &sc->ic;
+	struct ifnet *ifp = &sc->ifp;
+	struct mbuf *m, *n;
+	struct ieee80211_node *ni;
+	struct ether_header *eh;
+	uint8_t buf[2048];
+	int tid, key_type, key_idx;
+	bool is_eapol, has_wep;
+	size_t len, off;
+
+	if (ic->ic_state != IEEE80211_S_RUN)
+		return;
+	for (;;) {
+		IFQ_DEQUEUE(&ifp->if_snd, m);
+		if (m == NULL)
+			return;
+		if (m->m_len < (int)sizeof(*eh) &&
+		    (m = m_pullup(m, sizeof(*eh))) == NULL) {
+			sc->tx_dropped++;
+			continue;
+		}
+		eh = mtod(m, struct ether_header *);
+		is_eapol = (eh->ether_type == htons(ETHERTYPE_PAE));
+		ni = ieee80211_find_txnode(ic, eh->ether_dhost);
+		if (ni == NULL) {
+			sc->tx_no_peer++;
+			m_freem(m);
+			continue;
+		}
+		m = ieee80211_encap(ic, m, ni);
+		if (m == NULL) {
+			ieee80211_free_node(ni);
+			sc->tx_dropped++;
+			continue;
+		}
+		{
+			struct ieee80211_frame *wh =
+			    mtod(m, struct ieee80211_frame *);
+
+			has_wep = (wh->i_fc[1] & IEEE80211_FC1_WEP) != 0;
+			if (has_wep &&
+			    ieee80211_crypto_encap(ic, ni, m) == NULL) {
+				ieee80211_free_node(ni);
+				m_freem(m);
+				sc->tx_dropped++;
+				continue;
+			}
+			/* crypto_encap prepends the 8-byte CCMP header and
+			 * memmoves the 802.11 header back - re-derive wh,
+			 * a stale pointer reads shifted addresses */
+			wh = mtod(m, struct ieee80211_frame *);
+			/* relay key context: the unicast key is the PTK; the
+			 * multicast key is the current default tx key (GTK).
+			 * SW-CCMP route: net80211 already encrypted the frame
+			 * (header+MIC in place) - the chip must transmit it
+			 * transparently, so no hw_key rides along (sec_type
+			 * stays 0; setting it would double-encrypt). */
+#ifdef CONFIG_RTW88_SW_CCMP
+			key_type = 0;
+			key_idx = 0;
+#else
+			key_type = has_wep ?
+			    (IEEE80211_IS_MULTICAST(wh->i_addr1) ? 2 : 1) : 0;
+			key_idx = has_wep && key_type == 2 ?
+			    (int)ic->ic_def_txkey : 0;
+#endif
+			if (ieee80211_has_qos(wh))
+				tid = ((struct ieee80211_qosframe *)wh)->
+				    i_qos[0] & 0x000f;
+			else
+				tid = 0;
+		}
+		if (is_eapol)
+			tid = 7;	/* AC_VO, mac80211's EAPOL class */
+		/* linearize for the driver relay */
+		len = 0;
+		for (n = m; n != NULL; n = n->m_next)
+			len += n->m_len;
+		/* key-boundary evidence (W4-4 判据 + codex answer-4: the
+		 * first M2/M4 must ride CLEAR with key_type 0; protected
+		 * EAPOL only exists after the PTK install) */
+		if (is_eapol)
+			printf("rtw88u: eapol tx len %zu prot %d key %d "
+			    "idx %d tid %d\n", len, has_wep, key_type,
+			    key_idx, tid);
+		if (len > sizeof(buf)) {
+			ieee80211_free_node(ni);
+			m_freem(m);
+			sc->tx_dropped++;
+			continue;
+		}
+		off = 0;
+		for (n = m; n != NULL; n = n->m_next) {
+			memcpy(buf + off, mtod(n, void *), n->m_len);
+			off += n->m_len;
+		}
+		(void)sc->drv.tx_data(buf, len, tid, key_type, key_idx);
+		sc->tx_sent++;
+		if_statinc(ifp, if_opackets);
+		m_freem(m);
+		ieee80211_free_node(ni);
+	}
+}
+
 /* ------------------------------------------------------------------ */
 /* newstate wrapper (the prior project's board-proven shape)           */
 /* ------------------------------------------------------------------ */
+
+static const uint8_t lkpi_n80211_zero_bss[IEEE80211_ADDR_LEN] = { 0 };
 
 /* Runs on the workqueue thread; ic_state still holds the previous state.
  * The vtable ops sleep (USB control traffic) - exactly why the transition
@@ -194,6 +327,14 @@ lkpi_n80211_newstate_cb(struct lkpi_n80211_softc *sc,
 {
 	struct ieee80211com *ic = &sc->ic;
 	enum ieee80211_state ostate = ic->ic_state;
+
+	/* leaving RUN: tear the peer + firmware port down before anything
+	 * else (the next assoc re-registers them; the wpa backend gets the
+	 * DISASSOC event from net80211's node-leave path) */
+	if (ostate == IEEE80211_S_RUN && nstate != IEEE80211_S_RUN) {
+		(void)sc->drv.bss_info_changed(lkpi_n80211_zero_bss, 0, 0, 0);
+		sc->drv.peer_remove();
+	}
 
 	switch (nstate) {
 	case IEEE80211_S_SCAN:
@@ -266,15 +407,22 @@ lkpi_n80211_newstate_cb(struct lkpi_n80211_softc *sc,
 		break;
 
 	case IEEE80211_S_RUN:
-		/* association complete: flip the port to MGD_LINKED and
-		 * write the AID (net80211 set ni_associd off the assoc
-		 * resp); rtw88 hangs its rsvd-page/default-port setup on
-		 * BSS_CHANGED_ASSOC */
-		if (ic->ic_bss != NULL)
+		/* association complete: register the peer FIRST (rtw88's
+		 * bss_info_changed -> bf/ampdu paths resolve it through
+		 * ieee80211_find_sta), then flip the port to MGD_LINKED and
+		 * write the AID; rtw88 hangs its rsvd-page/default-port
+		 * setup on BSS_CHANGED_ASSOC.  net80211's own notify (the
+		 * ASSOC event the wpa backend queues on) fires inside
+		 * sc_newstate below. */
+		if (ic->ic_bss != NULL) {
+			(void)sc->drv.peer_add(ic->ic_bss->ni_bssid,
+			    IEEE80211_AID(ic->ic_bss->ni_associd));
+			sc->auth_events++;
 			(void)sc->drv.bss_info_changed(ic->ic_bss->ni_bssid,
 			    1, IEEE80211_AID(ic->ic_bss->ni_associd),
 			    ic->ic_bss->ni_intval != 0 ?
 			    ic->ic_bss->ni_intval : 100);
+		}
 		(void)sc->sc_newstate(ic, nstate, arg);
 		break;
 
@@ -362,8 +510,13 @@ lkpi_n80211_worker(struct work_struct *w)
 			 * channel and re-enters newstate (which defers
 			 * the driver work back onto this thread) */
 			net80211_serializer_lock();
-			if (ic->ic_state == IEEE80211_S_SCAN)
+			if (ic->ic_state == IEEE80211_S_SCAN) {
+				/* two-stage connect: learn the target's
+				 * privacy on the fly so end_scan's matcher
+				 * sees the right flag (R3 空表误判) */
+				(void)lkpi_n80211_refresh_privacy(sc);
 				(void)ieee80211_next_scan(ic);
+			}
 			net80211_serializer_unlock();
 		}
 
@@ -390,6 +543,7 @@ lkpi_n80211_if_start(struct ifnet *ifp)
 	struct lkpi_n80211_softc *sc = ifp->if_softc;
 
 	lkpi_n80211_drain_mgtq(sc);
+	lkpi_n80211_drain_data(sc);
 }
 
 static int
@@ -414,7 +568,8 @@ lkpi_n80211_if_init(struct ifnet *ifp)
 /* ------------------------------------------------------------------ */
 
 void
-lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
+lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm,
+    int decrypted)
 {
 	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
 	struct ieee80211com *ic = &sc->ic;
@@ -436,6 +591,23 @@ lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
 		const uint8_t *p = data;
 		uint16_t fc = (uint16_t)(p[0] | (p[1] << 8));
 
+		if ((p[1] & 0x40) != 0)		/* WEP/protected bit */
+			sc->rx_prot++;
+		if (decrypted)
+			sc->rx_decrypted++;
+#ifndef CONFIG_RTW88_SW_CCMP
+		/* HW route: net80211's non-SWCRYPT decap TRUSTS that the MAC
+		 * decrypted (header+MIC strip only) - a CAM miss would push
+		 * ciphertext into it and advance the RSC on garbage.  The
+		 * driver already drops icv_err frames; this gate covers any
+		 * protected frame that slipped through undecrypted (codex
+		 * 2026-10-05 answer-4 A(c)).  SW route: decrypted==0 is the
+		 * normal state, the software decap does the work. */
+		if ((p[1] & 0x40) != 0 && !decrypted) {
+			sc->rx_undecrypted++;
+			return;
+		}
+#endif
 		if ((fc & 0x0c) == 0) {
 			switch ((fc >> 4) & 0xf) {
 			case 0x8:	sc->rx_beacon++;	break;
@@ -478,6 +650,7 @@ lkpi_n80211_rx_frame(const void *data, size_t len, int signal_dbm)
 /* ------------------------------------------------------------------ */
 
 static struct completion lkpi_n80211_up_comp;
+static bool lkpi_n80211_up_comp_inited;
 static int lkpi_n80211_up_ret;
 static bool lkpi_n80211_up_busy;
 
@@ -504,10 +677,26 @@ lkpi_n80211_up(void)
 		msleep(100);
 	if (!lkpi_n80211_softc.attached)
 		return -EAGAIN;
+	/* already up: idempotent success.  The wpa flow calls ensure_up
+	 * twice by design (wpa_cmd then wpa_port_start); without this the
+	 * second call re-inits the static completion while the first
+	 * ThreadX semaphore still sits on the created list -> create fails
+	 * TX_SEMAPHORE_ERROR=12 and the shell parks (board 2026-10-05 R4;
+	 * the lkpi_completion_destroy discipline, W2 memory) */
+	if (lkpi_n80211_softc.started)
+		return 0;
 	if (lkpi_n80211_up_busy)
 		return -EBUSY;
 	lkpi_n80211_up_busy = true;
+	/* static completion reused across attempts: a ThreadX semaphore
+	 * that was created and never deleted stays on the created list, so
+	 * a blind re-init fails TX_SEMAPHORE_ERROR (the R4 shell park).
+	 * Destroy only what this file actually inited (ThreadX's delete
+	 * does not validate a zeroed id); a failure retry lands here too. */
+	if (lkpi_n80211_up_comp_inited)
+		lkpi_completion_destroy(&lkpi_n80211_up_comp);
 	lkpi_completion_init(&lkpi_n80211_up_comp);
+	lkpi_n80211_up_comp_inited = true;
 	ieee80211_queue_work(lkpi_n80211_softc.hw,
 	    &lkpi_n80211_softc.up_work);
 	/* bounded wait: a wedge inside ops->start must not take the shell
@@ -624,12 +813,39 @@ net80211_bridge_set_mac(const uint8_t addr[6])
  *     match_bss accepts it (open AP vs WPA-capable AP); the WPA2 4-way
  *     round owns the F_WPA* flags
  */
+/* Privacy policy from the scan table, re-evaluated on every scan hold:
+ * the R3 空表误判 fixed by learning the bit as soon as the target is
+ * heard (caller holds the serializer).  Returns true when the target is
+ * in the table. */
+static bool
+lkpi_n80211_refresh_privacy(struct lkpi_n80211_softc *sc)
+{
+	struct ieee80211com *ic = &sc->ic;
+	struct ieee80211_node *ni;
+	bool found = false;
+
+	if (ic->ic_des_esslen == 0)
+		return false;
+	TAILQ_FOREACH(ni, &ic->ic_scan.nt_node, ni_list) {
+		if (ni->ni_esslen == ic->ic_des_esslen &&
+		    memcmp(ni->ni_essid, ic->ic_des_essid,
+		    ic->ic_des_esslen) == 0) {
+			found = true;
+			if ((ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0)
+				ic->ic_flags |= IEEE80211_F_PRIVACY;
+			else
+				ic->ic_flags &= ~IEEE80211_F_PRIVACY;
+			break;
+		}
+	}
+	return found;
+}
+
 int
 net80211_bridge_connect(const uint8_t *ssid, size_t len)
 {
 	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
 	struct ieee80211com *ic = &sc->ic;
-	struct ieee80211_node *ni;
 	int ret;
 
 	if (!sc->started) {
@@ -641,23 +857,15 @@ net80211_bridge_connect(const uint8_t *ssid, size_t len)
 		return -EINVAL;
 
 	net80211_serializer_lock();
-	/* policy: privacy bit from the scan table's beacon (0 when the
-	 * target has not been heard yet - a fresh sweep will pick it up) */
-	ni = NULL;
-	TAILQ_FOREACH(ni, &ic->ic_scan.nt_node, ni_list) {
-		if (ni->ni_esslen == (int)len &&
-		    memcmp(ni->ni_essid, ssid, len) == 0)
-			break;
-	}
-	if (ni != NULL && (ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0)
-		ic->ic_flags |= IEEE80211_F_PRIVACY;
-	else
-		ic->ic_flags &= ~IEEE80211_F_PRIVACY;
-	ic->ic_flags &= ~(IEEE80211_F_WPA1 | IEEE80211_F_WPA2 |
-	    IEEE80211_F_DROPUNENC);
+	/* policy: privacy bit learned from the table; when the target has
+	 * not been heard yet the worker re-evaluates it on every scan hold
+	 * (two-stage shape, no manual up/scan/connect sequencing) */
 	ic->ic_des_esslen = (int)len;
 	memset(ic->ic_des_essid, 0, sizeof(ic->ic_des_essid));
 	memcpy(ic->ic_des_essid, ssid, len);
+	(void)lkpi_n80211_refresh_privacy(sc);
+	ic->ic_flags &= ~(IEEE80211_F_WPA1 | IEEE80211_F_WPA2 |
+	    IEEE80211_F_DROPUNENC);
 	memcpy(ic->ic_chan_scan, ic->ic_chan_active,
 	    sizeof(ic->ic_chan_scan));
 	net80211_serializer_unlock();
@@ -715,6 +923,401 @@ net80211_bridge_scan_dump(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* W4/W5 data-plane API                                                */
+/* ------------------------------------------------------------------ */
+
+void
+net80211_bridge_set_manual(int on)
+{
+	struct ieee80211com *ic = &lkpi_n80211_softc.ic;
+
+	net80211_serializer_lock();
+	ic->ic_roaming = on ? IEEE80211_ROAMING_MANUAL :
+	    IEEE80211_ROAMING_AUTO;
+	net80211_serializer_unlock();
+}
+
+void
+net80211_bridge_set_wpa(int on)
+{
+	struct ieee80211com *ic = &lkpi_n80211_softc.ic;
+
+	net80211_serializer_lock();
+	if (on)
+		ic->ic_flags |= IEEE80211_F_WPA1 | IEEE80211_F_WPA2;
+	else
+		ic->ic_flags &= ~(IEEE80211_F_WPA1 | IEEE80211_F_WPA2);
+	net80211_serializer_unlock();
+	printf("rtw88u: wpa mode %s flags %08x\n", on ? "ON" : "OFF",
+	    ic->ic_flags);
+}
+
+/* scan-table sensor: total rows + rows carrying a WPA/RSN IE (the
+ * "supplicant saw no PSK network" fork) */
+static void
+lkpi_n80211_sensor_node(void *arg, struct ieee80211_node *ni)
+{
+	unsigned int *c = arg;
+
+	if (ni->ni_esslen == 0)
+		return;
+	c[0]++;
+	if (ni->ni_wpa_ie != NULL)
+		c[1]++;
+}
+
+void
+net80211_bridge_scan_sensor(unsigned int *rows, unsigned int *wpa_rows)
+{
+	unsigned int c[2] = { 0, 0 };
+
+	net80211_serializer_lock();
+	ieee80211_iterate_nodes(&lkpi_n80211_softc.ic.ic_scan,
+	    lkpi_n80211_sensor_node, c);
+	net80211_serializer_unlock();
+	if (rows != NULL)
+		*rows = c[0];
+	if (wpa_rows != NULL)
+		*wpa_rows = c[1];
+}
+
+int
+net80211_bridge_wpa_join(const uint8_t *ssid, size_t len,
+    const uint8_t *bssid, const uint8_t *wpa_ie, size_t ie_len)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+	struct ieee80211_node *ni = NULL;
+	uint8_t *ie_copy = NULL;
+	int ret = 0;
+
+	if (!sc->started) {
+		ret = lkpi_n80211_up();
+		if (ret != 0)
+			return ret;
+	}
+	if (len == 0 || len > IEEE80211_NWID_LEN)
+		return -EINVAL;
+
+	if (ie_len != 0) {
+		ie_copy = malloc(ie_len, M_DEVBUF, M_NOWAIT);
+		if (ie_copy == NULL)
+			return -ENOMEM;
+		memcpy(ie_copy, wpa_ie, ie_len);
+	}
+
+	net80211_serializer_lock();
+	if (bssid != NULL)
+		ni = ieee80211_find_node(&ic->ic_scan, bssid);
+	if (ni == NULL) {
+		struct ieee80211_node *n;
+
+		TAILQ_FOREACH(n, &ic->ic_scan.nt_node, ni_list) {
+			if (n->ni_esslen == (int)len &&
+			    memcmp(n->ni_essid, ssid, len) == 0) {
+				ni = ieee80211_ref_node(n);
+				break;
+			}
+		}
+	}
+	if (ni == NULL) {
+		net80211_serializer_unlock();
+		if (ie_copy != NULL)
+			free(ie_copy, M_DEVBUF);
+		return -ENOENT;
+	}
+	/* policy (the prior project's board-proven associate() shape) */
+	ic->ic_des_esslen = (int)len;
+	memset(ic->ic_des_essid, 0, sizeof(ic->ic_des_essid));
+	memcpy(ic->ic_des_essid, ssid, len);
+	ic->ic_flags &= ~(IEEE80211_F_WPA1 | IEEE80211_F_WPA2 |
+	    IEEE80211_F_DROPUNENC);
+	if (ie_len != 0) {
+		ic->ic_flags |= (wpa_ie[0] == 48 /* WLAN_EID_RSN */ ?
+		    IEEE80211_F_WPA2 : IEEE80211_F_WPA1);
+		ic->ic_flags |= IEEE80211_F_PRIVACY;
+	} else if ((ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0) {
+		ic->ic_flags |= IEEE80211_F_PRIVACY;
+	} else {
+		ic->ic_flags &= ~IEEE80211_F_PRIVACY;
+	}
+	if (ic->ic_opt_ie != NULL) {
+		free(ic->ic_opt_ie, M_DEVBUF);
+	}
+	ic->ic_opt_ie = ie_copy;
+	ic->ic_opt_ie_len = (u_int16_t)ie_len;
+	if (ni->ni_chan != NULL)
+		ic->ic_curchan = ni->ni_chan;
+	/* 802.1X gates the port: RUN does not auto-authorize, the PTK
+	 * install opens it (net80211 marks the node authorized at RUN only
+	 * for non-802.1X authmodes).  copy_bss propagates this into the
+	 * new ic_bss inside sta_join. */
+	ic->ic_bss->ni_authmode = ie_len != 0 ?
+	    IEEE80211_AUTH_8021X : IEEE80211_AUTH_OPEN;
+	net80211_serializer_unlock();
+
+	if (!ieee80211_sta_join(ic, ni)) {
+		ret = -EIO;
+	} else {
+		printf("rtw88u: wpa join %.*s bssid %s %s\n", (int)len,
+		    (const char *)ssid, ether_sprintf(ni->ni_bssid),
+		    ie_len != 0 ? "rsn" : "open");
+	}
+	return ret;
+}
+
+/* returns the key slot's keyrsc/PN for the net80211 bookkeeping inside
+ * the serializer; CAM programming happens after the unlock (USB control
+ * traffic must not run inside the DAIF-masked section) */
+int
+net80211_bridge_key_install(int pairwise, int key_idx, int set_tx,
+    const uint8_t *key, size_t len)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+	struct ieee80211_key *wk;
+	uint8_t zero_mac[IEEE80211_ADDR_LEN] = { 0 };
+	int ret = -1;
+
+	if (ic->ic_bss == NULL)
+		return -1;
+	if (len > 32)
+		return -1;
+	net80211_serializer_lock();
+	ieee80211_key_update_begin(ic);
+	if (pairwise) {
+		wk = &ic->ic_bss->ni_ucastkey;
+	} else {
+		if (key_idx < 0 || key_idx >= IEEE80211_WEP_NKID) {
+			ieee80211_key_update_end(ic);
+			net80211_serializer_unlock();
+			return -1;
+		}
+		wk = &ic->ic_nw_keys[key_idx];
+	}
+	if (ieee80211_crypto_newkey(ic, IEEE80211_CIPHER_AES_CCM,
+	    IEEE80211_KEY_XMIT | IEEE80211_KEY_RECV |
+	    (pairwise ? 0 : IEEE80211_KEY_GROUP), wk)) {
+		wk->wk_keylen = (u_int)len;
+		wk->wk_keyrsc = 0;
+		wk->wk_keytsc = 0;
+		memset(wk->wk_key, 0, sizeof(wk->wk_key));
+		memcpy(wk->wk_key, key, len);
+		if (ieee80211_crypto_setkey(ic, wk, pairwise ?
+		    ic->ic_bss->ni_macaddr : zero_mac)) {
+			ret = 0;
+			if (!pairwise && set_tx)
+				ic->ic_def_txkey = (ieee80211_keyix)key_idx;
+			if (pairwise)
+				ieee80211_node_authorize(ic->ic_bss);
+		}
+	}
+	ieee80211_key_update_end(ic);
+	net80211_serializer_unlock();
+	if (ret != 0) {
+		printf("rtw88u: key %s idx %d net80211 failed\n",
+		    pairwise ? "pair" : "group", key_idx);
+		return ret;
+	}
+	/* CAM programming (HW-CCMP route); SW route leaves the CAM idle */
+#ifndef CONFIG_RTW88_SW_CCMP
+	ret = sc->drv.set_key(pairwise, key_idx, key, len);
+#else
+	ret = 0;
+#endif
+	printf("rtw88u: key %s idx %d len %u set_tx %d -> %d\n",
+	    pairwise ? "pair" : "group", key_idx, (unsigned)len, set_tx, ret);
+	return ret;
+}
+
+void
+net80211_bridge_key_clear(int pairwise, int key_idx)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct ieee80211com *ic = &sc->ic;
+
+	if (ic->ic_bss == NULL)
+		return;
+	net80211_serializer_lock();
+	if (pairwise) {
+		if (!IEEE80211_KEY_UNDEFINED(ic->ic_bss->ni_ucastkey))
+			(void)ieee80211_crypto_delkey(ic,
+			    &ic->ic_bss->ni_ucastkey);
+	} else if (key_idx >= 0 && key_idx < IEEE80211_WEP_NKID) {
+		if (!IEEE80211_KEY_UNDEFINED(ic->ic_nw_keys[key_idx]))
+			(void)ieee80211_crypto_delkey(ic,
+			    &ic->ic_nw_keys[key_idx]);
+	}
+	net80211_serializer_unlock();
+#ifndef CONFIG_RTW88_SW_CCMP
+	sc->drv.clear_key(pairwise, key_idx);
+#endif
+}
+
+void
+net80211_bridge_authorize(void)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+
+	net80211_serializer_lock();
+	if (sc->ic.ic_bss != NULL)
+		ieee80211_node_authorize(sc->ic.ic_bss);
+	net80211_serializer_unlock();
+}
+
+void
+net80211_bridge_disconnect(int reason)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+
+	(void)ieee80211_new_state(&sc->ic, IEEE80211_S_INIT, reason);
+}
+
+/* --- scan table (pull model) -------------------------------------------- */
+
+struct lkpi_n80211_fetch_ctx {
+	int			idx;		/* nodes still to skip */
+	bool			found;
+	struct net80211_bridge_scan *out;
+	uint8_t			iebuf[320];
+};
+
+static void
+lkpi_n80211_fetch_node(void *arg, struct ieee80211_node *ni)
+{
+	struct lkpi_n80211_fetch_ctx *fc = arg;
+	struct net80211_bridge_scan *o = fc->out;
+	uint8_t *ie = fc->iebuf;
+	size_t n;
+
+	/* the iterator walks the whole table - once the wanted row is
+	 * copied, later nodes must NOT overwrite it (missing this stop
+	 * made every fetch return the last table row: the supplicant saw
+	 * one BSSID repeated 32x with an empty SSID and skipped every
+	 * network as "SSID not known", looping scan->fetch->scan; R4
+	 * board round 5) */
+	if (fc->found)
+		return;
+	if (fc->idx != 0) {
+		fc->idx--;
+		return;
+	}
+	fc->found = true;
+	memset(o, 0, sizeof(*o));
+	memcpy(o->bssid, ni->ni_bssid, 6);
+	o->ssid_len = (size_t)ni->ni_esslen;
+	if (o->ssid_len > 32)
+		o->ssid_len = 32;
+	memcpy(o->ssid, ni->ni_essid, o->ssid_len);
+	o->freq = ni->ni_chan != NULL ? ni->ni_chan->ic_freq : 0;
+	o->beacon_int = (uint16_t)ni->ni_intval;
+	o->caps = (uint16_t)ni->ni_capinfo;
+	o->level = ni->ni_rssi;
+	if (ni->ni_rates.rs_nrates != 0) {
+		size_t rn = ni->ni_rates.rs_nrates > 16 ?
+		    16 : (size_t)ni->ni_rates.rs_nrates;
+
+		ie[0] = 1;	/* rates element id */
+		ie[1] = (uint8_t)rn;
+		memcpy(ie + 2, ni->ni_rates.rs_rates, rn);
+		ie += 2 + rn;
+	}
+	if (ni->ni_wpa_ie != NULL) {
+		n = 2 + ni->ni_wpa_ie[1];
+		if ((size_t)(ie - fc->iebuf) + n > sizeof(fc->iebuf))
+			n = sizeof(fc->iebuf) - (size_t)(ie - fc->iebuf);
+		memcpy(ie, ni->ni_wpa_ie, n);
+		ie += n;
+	}
+	o->ies = fc->iebuf;
+	o->ies_len = (size_t)(ie - fc->iebuf);
+}
+
+/* the IE buffer the caller's out->ies points at: file-scope, NOT the
+ * fetch function's stack frame - the consumer copies the IEs after the
+ * call returns, and a stack-frame pointer read garbage (supplicant saw
+ * no valid RSN IE, looped scan->fetch->scan; R4 board round 2) */
+static struct lkpi_n80211_fetch_ctx lkpi_n80211_fetch_store;
+
+int
+net80211_bridge_scan_fetch(int idx, struct net80211_bridge_scan *out)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct lkpi_n80211_fetch_ctx *fc = &lkpi_n80211_fetch_store;
+
+	if (idx < 0)
+		return -1;
+	fc->idx = idx;
+	fc->found = false;
+	fc->out = out;
+	net80211_serializer_lock();
+	ieee80211_iterate_nodes(&sc->ic.ic_scan, lkpi_n80211_fetch_node,
+	    fc);
+	net80211_serializer_unlock();
+	return fc->found ? 0 : -1;
+}
+
+/* --- single data/EAPOL TX entry ----------------------------------------- */
+
+int
+net80211_bridge_tx_raw(const uint8_t *frame, size_t len)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+	struct mbuf *m;
+	int error;
+
+	if (len < 14 || len > 1600)
+		return -EINVAL;
+	m = m_gethdr(M_NOWAIT, MT_DATA);
+	if (m == NULL)
+		return -ENOMEM;
+	memcpy(mtod(m, void *), frame, len);
+	m->m_len = (int)len;
+	m->m_pkthdr.len = (int)len;
+	IFQ_ENQUEUE(&sc->ifp.if_snd, m, error);
+	sc->tx_queued++;
+	if (error != 0) {
+		m_freem(m);
+		return -ENOBUFS;
+	}
+	/* kick the data drain (serializer nesting is the compat norm) */
+	if_start_lock(&sc->ifp);
+	return 0;
+}
+
+void
+net80211_bridge_tx_stats(unsigned int *queued, unsigned int *sent,
+    unsigned int *dropped, unsigned int *no_peer)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+
+	if (queued != NULL)
+		*queued = sc->tx_queued;
+	if (sent != NULL)
+		*sent = sc->tx_sent;
+	if (dropped != NULL)
+		*dropped = sc->tx_dropped;
+	if (no_peer != NULL)
+		*no_peer = sc->tx_no_peer;
+}
+
+void
+net80211_bridge_rx_stats(unsigned int *frames, unsigned int *prot,
+    unsigned int *decrypted, unsigned int *auth_events)
+{
+	struct lkpi_n80211_softc *sc = &lkpi_n80211_softc;
+
+	if (frames != NULL)
+		*frames = sc->rx_frames;
+	if (prot != NULL)
+		*prot = sc->rx_prot;
+	if (decrypted != NULL)
+		*decrypted = sc->rx_decrypted;
+	if (auth_events != NULL)
+		*auth_events = sc->auth_events;
+}
+
+/* ------------------------------------------------------------------ */
 /* attach (the mac80211 side calls this at ieee80211_register_hw)      */
 /* ------------------------------------------------------------------ */
 
@@ -740,7 +1343,32 @@ lkpi_n80211_attach(struct ieee80211_hw *hw, const uint8_t perm_addr[6],
 	    IEEE80211_C_MONITOR |
 	    IEEE80211_C_SHPREAMBLE |
 	    IEEE80211_C_SHSLOT |
-	    IEEE80211_C_WPA;		/* 802.11i, software crypto */
+	    IEEE80211_C_WPA;		/* 802.11i */
+#ifdef CONFIG_RTW88_SW_CCMP
+	/* SW-CCMP position (the prior project's board-proven shape): no
+	 * per-cipher cap bit -> crypto_newkey marks every CCMP key SWCRYPT
+	 * and the net80211 AES-CCM code encrypts/decrypts in mbufs; the
+	 * driver CAM stays untouched */
+#else
+	/* HW-CCMP position (default): the per-cipher cap keeps SWCRYPT off;
+	 * net80211 fills only the CCMP header (PN) on TX and strips
+	 * header+MIC on RX - exactly the mac80211 contract rtw88's
+	 * GENERATE_IV + RX_FLAG_DECRYPTED implement; the CAM entry (below,
+	 * through drv.set_key) does the actual crypto */
+	ic->ic_caps |= IEEE80211_C_AES_CCM;
+#endif
+
+	/* CCMP must be registered before any key can be created: the
+	 * NetBSD link-set constructor that normally runs ccmp_register is
+	 * stubbed out in this port (compat/net80211_prelude.h), so the
+	 * ciphers[] slot stayed empty and crypto_newkey fell through to
+	 * "unable to load cipher 3" (is_crypto_nocipher).  Register is
+	 * idempotent. */
+	{
+		extern const struct ieee80211_cipher ieee80211_cipher_ccmp;
+
+		ieee80211_crypto_register(&ieee80211_cipher_ccmp);
+	}
 	/* keep the core's own auto sequencing: end_scan matches
 	 * ic_des_essid and joins (sta_join -> S_AUTH) on its own - the
 	 * bridge only sets policy, the state machine is the judge */
