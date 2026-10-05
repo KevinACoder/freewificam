@@ -180,14 +180,14 @@ SHELL_SRCS := \
 	components/cherrysh/builtin/shsize.c \
 	components/cherrysh/cherryrl/chry_readline.c \
 	components/cherryrb/chry_ringbuffer.c \
-	port/adapters/cherrysh/cherrysh_adapter.c \
+	components/ports/cherrysh/cherrysh_adapter.c \
 	board/$(BOARD)/reset.c
 SRCS += $(SHELL_SRCS)
-# Shadow-config include order is load-bearing (§3.8.2): port/adapters/cherrysh
+# Shadow-config include order is load-bearing (§3.8.2): components/ports/cherrysh
 # must come before components/cherrysh so csh_config.h (the real config) beats
 # nothing - upstream ships only the template, but the order discipline does
 # not depend on that accident.
-CSH_CFLAGS := -Iport/adapters/cherrysh -Icomponents/cherrysh \
+CSH_CFLAGS := -Icomponents/ports/cherrysh -Icomponents/cherrysh \
 	-Icomponents/cherrysh/cherryrl -Icomponents/cherryrb \
 	-include os/baremetal/minilibc.h \
 	-DCONFIG_SHELL=1 -DCONFIG_SHELL_STACK=$(CONFIG_SHELL_STACK)
@@ -251,9 +251,10 @@ endif
 
 # CherryUSB host stack (SPEC S5/cherryusb-xhci-port §3.3/§3.4): the vendored
 # core + hub class + the xHCI port (patches/cherryusb/0002, replayed by
-# `make modules`) + the adapter layer (port/adapters/cherryusb) + the
-# shared domain sequence (port/adapters/usb). ThreadX-only (the osal is
-# ThreadX-native). Include order is load-bearing: port/adapters/cherryusb
+# `make modules`) + the adapter layer (third-party/ports/cherryusb) + the
+# shared domain sequence (third-party/ports/cherryusb/usb_domain, the board
+# power-domain glue riding with its only consumer). ThreadX-only (the osal is
+# ThreadX-native). Include order is load-bearing: third-party/ports/cherryusb
 # FIRST so the shadow usb_config.h beats upstream's config template; the
 # tx include paths ride EXTRAFLAGS on usb_osal_threadx.o only (FR-3).
 CONFIG_USBHOST ?= n
@@ -280,17 +281,17 @@ endif
 # halves are already keyed on it).
 CONFIG_USBHOST_EHCI ?= n
 USB_ADAPTER_SRCS := \
-	port/adapters/cherryusb/usb_osal_threadx.c \
-	port/adapters/cherryusb/usbh_glue.c \
-	port/adapters/cherryusb/usbh_platform.c \
-	port/adapters/usb/usb_domain.c \
-	port/adapters/usb/usb_host_cherryusb.c
+	third-party/ports/cherryusb/usb_osal_threadx.c \
+	third-party/ports/cherryusb/usbh_glue.c \
+	third-party/ports/cherryusb/usbh_platform.c \
+	third-party/ports/cherryusb/usb_domain.c \
+	components/ports/cmsis/usb/usb_host_cherryusb.c
 ifeq ($(CONFIG_USBHOST_EHCI),y)
 USB_HCD_SRCS += $(CHY_DIR)/port/ehci/usb_hc_ehci.c
 endif
 SRCS += $(USB_CORE_SRCS) $(USB_HCD_SRCS) $(USB_ADAPTER_SRCS)
 
-USB_CFLAGS := -Iport/adapters/cherryusb -Iport/adapters/usb \
+USB_CFLAGS := -Ithird-party/ports/cherryusb -Icomponents/ports/cmsis/usb \
 	-I$(CHY_DIR)/core -I$(CHY_DIR)/common -I$(CHY_DIR)/class/hub \
 	-I$(CHY_DIR)/class/msc \
 	-I$(CHY_DIR)/port/xhci -I$(CHY_DIR)/port/ehci \
@@ -311,8 +312,8 @@ $(error CONFIG_USBHOST_MSC=y currently requires the xHCI build (P5-d slice))
 endif
 USB_CFLAGS += -DCONFIG_USBHOST_MSC=1
 SRCS += $(CHY_DIR)/class/msc/usbh_msc.c
-SRCS += port/adapters/cherryusb/usbh_msc.c
-$(BUILD)/port/adapters/cherryusb/usbh_msc.o: \
+SRCS += third-party/ports/cherryusb/usbh_msc.c
+$(BUILD)/third-party/ports/cherryusb/usbh_msc.o: \
 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
 endif
 
@@ -320,16 +321,18 @@ endif
 # additionally gets the tx include set (tx_api.h). The cmds file is the
 # shell-facing toolbox - it joins only with the shell (csh.h headers) and
 # rides the shell flag set on top.
-$(BUILD)/port/adapters/cherryusb/usb_osal_threadx.o: \
+$(BUILD)/third-party/ports/cherryusb/usb_osal_threadx.o: \
 	EXTRAFLAGS := $(USB_CFLAGS) $(TX_CFLAGS)
-$(BUILD)/port/adapters/cherryusb/usbh_glue.o: EXTRAFLAGS := $(USB_CFLAGS)
-$(BUILD)/port/adapters/cherryusb/usbh_platform.o: EXTRAFLAGS := $(USB_CFLAGS)
-$(BUILD)/port/adapters/usb/%.o: EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/third-party/ports/cherryusb/usbh_glue.o: EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/third-party/ports/cherryusb/usbh_platform.o: EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/third-party/ports/cherryusb/usb_domain.o: \
+	EXTRAFLAGS := $(USB_CFLAGS)
+$(BUILD)/components/ports/cmsis/usb/%.o: EXTRAFLAGS := $(USB_CFLAGS)
 $(BUILD)/third-party/cherryusb/%.o: EXTRAFLAGS := $(USB_CFLAGS)
 $(BUILD)/app/cherryusb_enum/main.o: EXTRAFLAGS := $(CSH_CFLAGS) $(USB_CFLAGS)
 ifeq ($(CONFIG_SHELL),y)
-SRCS += port/adapters/cherryusb/usbh_cmds.c
-$(BUILD)/port/adapters/cherryusb/usbh_cmds.o: \
+SRCS += third-party/ports/cherryusb/usbh_cmds.c
+$(BUILD)/third-party/ports/cherryusb/usbh_cmds.o: \
 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
 endif
 endif
@@ -390,7 +393,7 @@ $(BUILD)/app/lkpi_hub/%.o: EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
 # entry-point TU + <net/mac80211.h> shim header. Default off keeps every
 # non-wireless linuxkpi image byte-identical (FR-9 zero-intrusion); the
 # net80211-side bridge stays a pure C ABI (linuxkpi_net80211.h) with weak
-# defaults until W3 links the real os/net80211 implementation.
+# defaults until W3 links the real components/ports/net80211 implementation.
 CONFIG_LINUXKPI_80211 ?= n
 ifeq ($(filter $(CONFIG_LINUXKPI_80211),y n),)
 $(error CONFIG_LINUXKPI_80211 must be y or n, got '$(CONFIG_LINUXKPI_80211)')
@@ -454,7 +457,7 @@ $(BUILD)/third-party/rtw88/%.o: EXTRAFLAGS := -w $(LKPI_CFLAGS)
 # PREPENDED to SRCS so the .usbh_class_info section order puts the
 # modeswitch hook ahead of the MSC class-only match (the MSC hook's R3
 # VID guard is the second line of defense).
-RTW88_PORT_SRCS := 	port/adapters/rtw88/usbh_modeswitch.c 	port/adapters/rtw88/usbh_rtw88_class.c 	port/adapters/rtw88/rtw88_entry.c 	port/adapters/rtw88/rtw88_cmds.c
+RTW88_PORT_SRCS := 	third-party/ports/rtw88/usbh_modeswitch.c 	third-party/ports/rtw88/usbh_rtw88_class.c 	third-party/ports/rtw88/rtw88_entry.c 	third-party/ports/rtw88/rtw88_cmds.c
 
 # W4/W5 data-plane face (S9): the wpa_supplicant vendor backend
 # (wpa_vendor_rtw88.c - needs the WPA include world + net80211 bridge
@@ -476,10 +479,10 @@ endif
 ifeq ($(filter y,$(CONFIG_NET80211)),)
 $(error CONFIG_RTW88_WPA_BACKEND=y requires CONFIG_NET80211=y)
 endif
-RTW88_PORT_SRCS += port/adapters/rtw88/wpa_vendor_rtw88.c
-$(BUILD)/port/adapters/rtw88/wpa_vendor_rtw88.o: \
-	EXTRAFLAGS = $(CSH_CFLAGS) -Ios/net80211 -Ios/net80211/compat \
-	-Ios/wpa_supplicant
+RTW88_PORT_SRCS += third-party/ports/rtw88/wpa_vendor_rtw88.c
+$(BUILD)/third-party/ports/rtw88/wpa_vendor_rtw88.o: \
+	EXTRAFLAGS = $(CSH_CFLAGS) -Icomponents/ports/net80211 -Icomponents/ports/net80211/compat \
+	-Ithird-party/ports/wpa_supplicant
 CFLAGS += -DCONFIG_RTW88_WPA_BACKEND=1
 endif
 ifeq ($(CONFIG_WLAN_NETIF),y)
@@ -489,11 +492,11 @@ endif
 ifeq ($(filter y,$(CONFIG_NET80211)),)
 $(error CONFIG_WLAN_NETIF=y requires CONFIG_NET80211=y)
 endif
-RTW88_PORT_SRCS += port/adapters/rtw88/wlanrtw_netif.c
+RTW88_PORT_SRCS += third-party/ports/rtw88/wlanrtw_netif.c
 # recursive (=) on purpose: LWIP_CFLAGS is defined later in the file
-$(BUILD)/port/adapters/rtw88/wlanrtw_netif.o: \
-	EXTRAFLAGS = $(LWIP_CFLAGS) $(CSH_CFLAGS) -Ios/net80211 \
-	-Ios/net80211/compat
+$(BUILD)/third-party/ports/rtw88/wlanrtw_netif.o: \
+	EXTRAFLAGS = $(LWIP_CFLAGS) $(CSH_CFLAGS) -Icomponents/ports/net80211 \
+	-Icomponents/ports/net80211/compat
 CFLAGS += -DCONFIG_WLAN_NETIF=1
 endif
 # HW-CCMP is the default key route; the SW build flips to net80211's
@@ -508,21 +511,21 @@ CFLAGS += -DCONFIG_RTW88_SW_CCMP=1
 endif
 
 SRCS := $(RTW88_PORT_SRCS) $(SRCS)
-$(BUILD)/port/adapters/rtw88/usbh_modeswitch.o: 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
-$(BUILD)/port/adapters/rtw88/usbh_rtw88_class.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
-$(BUILD)/port/adapters/rtw88/rtw88_entry.o: 	EXTRAFLAGS := $(LKPI_CFLAGS)
-$(BUILD)/port/adapters/rtw88/rtw88_cmds.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS) -Ios/net80211
+$(BUILD)/third-party/ports/rtw88/usbh_modeswitch.o: 	EXTRAFLAGS := $(USB_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/third-party/ports/rtw88/usbh_rtw88_class.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS)
+$(BUILD)/third-party/ports/rtw88/rtw88_entry.o: 	EXTRAFLAGS := $(LKPI_CFLAGS)
+$(BUILD)/third-party/ports/rtw88/rtw88_cmds.o: 	EXTRAFLAGS := $(LKPI_CFLAGS) $(CSH_CFLAGS) -Icomponents/ports/net80211
 # recursive (=): LWIP_CFLAGS is defined later; the app main only gains it
 # when the lwip block is on (CONFIG_LWIP=1 -> tcpip_init in thr_usbboot)
 $(BUILD)/app/wlanrtw/main.o: EXTRAFLAGS = $(CSH_CFLAGS) $(USB_CFLAGS) $(LWIP_CFLAGS)
 endif
 
 # lwip (SPEC S7/lwip-adapt §3.2/§4/P7-1a): the pinned upstream stack (2.2.1,
-# zero-patch expectation) + the first-party os/lwip adapter. Phase 1 is the
+# zero-patch expectation) + the first-party third-party/ports/lwip adapter. Phase 1 is the
 # NO_SYS=1 polled model on the bare-metal base; the api/ files and dns.c
 # join at P7-2a (lwipopts rows and the compile set move together). The
 # compile set is LOCKED to this list - the P7-1a acceptance nm-checks the
-# product for api/ absences. Include order is load-bearing: os/lwip/include
+# product for api/ absences. Include order is load-bearing: third-party/ports/lwip/include
 # FIRST so the first-party lwipopts.h / arch/cc.h shadow the tree (opt.h
 # pulls lwipopts.h by bare name in every TU). Upstream sources compile -w
 # (frozen import, zero-patch pin).
@@ -641,17 +644,17 @@ LWIP_SRCS := \
 	$(LWIP_DIR)/src/api/tcpip.c \
 	$(LWIP_DIR)/src/netif/ethernet.c \
 	$(LWIP_DIR)/src/apps/lwiperf/lwiperf.c \
-	os/lwip/cmsis/sys_arch.c \
-	os/lwip/lwip_diag.c
+	third-party/ports/lwip/cmsis/sys_arch.c \
+	third-party/ports/lwip/lwip_diag.c
 ifeq ($(CONFIG_LWIP_GMAC),y)
-LWIP_SRCS += os/lwip/ethnetif.c
+LWIP_SRCS += third-party/ports/lwip/ethnetif.c
 endif
 SRCS += $(LWIP_SRCS)
 
-LWIP_CFLAGS := -Ios/lwip/include -I$(LWIP_DIR)/src/include \
+LWIP_CFLAGS := -Ithird-party/ports/lwip/include -I$(LWIP_DIR)/src/include \
 	-DCONFIG_GMAC_PORT=$(CONFIG_GMAC_PORT)
 $(BUILD)/third-party/lwip/%.o: EXTRAFLAGS := -w $(LWIP_CFLAGS)
-$(BUILD)/os/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
+$(BUILD)/third-party/ports/lwip/%.o: EXTRAFLAGS := $(LWIP_CFLAGS)
 # Recursive assignment on purpose: APP_AUTORUN_CFLAGS is defined later in
 # the netutils block (CONFIG_SCMI_PROBE / CONFIG_IPERF2_AUTO_HOST), and a
 # target-specific := would snapshot it empty here.
@@ -687,7 +690,7 @@ CONFIG_SCMI_BOOT_SET_MHZ ?= 0
 APP_AUTORUN_CFLAGS :=
 ifneq ($(strip $(CONFIG_IPERF2_AUTO_HOST)),)
 APP_AUTORUN_CFLAGS += -DCONFIG_IPERF2_AUTO_HOST='"$(CONFIG_IPERF2_AUTO_HOST)"' \
-	-Ios/netutils
+	-Icomponents/ports/netutils
 endif
 ifneq ($(strip $(CONFIG_SCMI_BOOT_SET_MHZ)),0)
 APP_AUTORUN_CFLAGS += -DCONFIG_SCMI_BOOT_SET_MHZ=$(CONFIG_SCMI_BOOT_SET_MHZ)
@@ -699,11 +702,11 @@ endif
 NU_DIR := components/netutils
 IPE_DIR := components/iperf3_embedded
 NU_VENDORED_SRCS :=
-NU_PORT_SRCS := os/netutils/netutils_shim.c os/netutils/tftp_port.c \
-	os/netutils/iperf3_port.c os/netutils/iperf3_cmd.c
+NU_PORT_SRCS := components/ports/netutils/netutils_shim.c components/ports/netutils/tftp_port.c \
+	components/ports/netutils/iperf3_port.c components/ports/netutils/iperf3_cmd.c
 # lwiperf client front end (N7 R3): the no-copy TX measurement shape.
 ifeq ($(CONFIG_NETUTILS_IPERF2),y)
-NU_PORT_SRCS += os/netutils/iperf2_cmd.c
+NU_PORT_SRCS += components/ports/netutils/iperf2_cmd.c
 endif
 ifeq ($(CONFIG_NETUTILS_PING),y)
 NU_VENDORED_SRCS += $(NU_DIR)/ping/ping.c
@@ -717,9 +720,9 @@ NU_VENDORED_SRCS += $(IPE_DIR)/iperf3_embedded.c
 endif
 SRCS += $(NU_VENDORED_SRCS) $(NU_PORT_SRCS)
 
-NU_CFLAGS := -Ios/netutils/shim -Ios/netutils \
+NU_CFLAGS := -Icomponents/ports/netutils/shim -Icomponents/ports/netutils \
 	-I$(NU_DIR) -I$(NU_DIR)/tftp -I$(IPE_DIR) \
-	-Iport/adapters/cherrysh -Icomponents/cherrysh \
+	-Icomponents/ports/cherrysh -Icomponents/cherrysh \
 	-include os/baremetal/minilibc.h \
 	-DCONFIG_NETUTILS_PING=$(if $(filter y,$(CONFIG_NETUTILS_PING)),1,0) \
 	-DCONFIG_NETUTILS_TFTP=$(if $(filter y,$(CONFIG_NETUTILS_TFTP)),1,0) \
@@ -728,7 +731,7 @@ NU_CFLAGS := -Ios/netutils/shim -Ios/netutils \
 	$(LWIP_CFLAGS) $(CSH_CFLAGS)
 $(BUILD)/components/netutils/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
 $(BUILD)/components/iperf3_embedded/%.o: EXTRAFLAGS := -w $(NU_CFLAGS)
-$(BUILD)/os/netutils/%.o: EXTRAFLAGS := $(NU_CFLAGS)
+$(BUILD)/components/ports/netutils/%.o: EXTRAFLAGS := $(NU_CFLAGS)
 endif
 
 # wpa_supplicant (SPEC S7a/wpa-supplicant-rtos-adapt §3.5): the PSK-only
@@ -739,7 +742,7 @@ endif
 # force-included, which steers the fork's includes.h/build_config.h onto
 # the plain-libc path (CONFIG_OS_EMBOX) and selects the driver slot in
 # src/drivers/drivers.c (CONFIG_DRIVER_EMBOX; the ops live in the trunk
-# skeleton os/wpa_supplicant/driver_vendor.c). The shim/ directory comes
+# skeleton third-party/ports/wpa_supplicant/driver_vendor.c). The shim/ directory comes
 # first for the wpa-world units: the toolchain libc has no net/if.h or
 # netinet/in.h, and a real one would drag a BSD socket world in with it.
 CONFIG_WPA_SUPPLICANT ?= n
@@ -815,8 +818,8 @@ WPA_CORE_SRCS := \
 	$(WPA_DIR)/wpa_supplicant/rrm.c \
 	$(WPA_DIR)/wpa_supplicant/robust_av.c
 
-WPA_DRIVER_SRCS := os/wpa_supplicant/driver_vendor.c
-WPA_L2_SRCS := os/wpa_supplicant/l2_packet_direct.c
+WPA_DRIVER_SRCS := third-party/ports/wpa_supplicant/driver_vendor.c
+WPA_L2_SRCS := third-party/ports/wpa_supplicant/l2_packet_direct.c
 WPA_BACKEND_KEY := -DCONFIG_WPA_BACKEND_VENDOR=1 \
 	-DWPA_PORT_DRIVER_NAME='"embox"'
 ifeq ($(CONFIG_WPA_BACKEND),none)
@@ -829,11 +832,11 @@ WPA_L2_SRCS := $(WPA_DIR)/src/l2_packet/l2_packet_none.c
 endif
 
 WPA_PORT_SRCS := \
-	os/wpa_supplicant/wpa_vendor_port.c \
-	os/wpa_supplicant/os_port.c \
-	os/wpa_supplicant/eloop_port.c \
-	os/wpa_supplicant/supp_main.c \
-	os/wpa_supplicant/wpa_cmd.c
+	third-party/ports/wpa_supplicant/wpa_vendor_port.c \
+	third-party/ports/wpa_supplicant/os_port.c \
+	third-party/ports/wpa_supplicant/eloop_port.c \
+	third-party/ports/wpa_supplicant/supp_main.c \
+	third-party/ports/wpa_supplicant/wpa_cmd.c
 
 SRCS += $(WPA_CORE_SRCS) $(WPA_DRIVER_SRCS) $(WPA_L2_SRCS) $(WPA_PORT_SRCS)
 # the freestanding libc completion in os/baremetal/minilibc.c is gated on
@@ -841,12 +844,12 @@ SRCS += $(WPA_CORE_SRCS) $(WPA_DRIVER_SRCS) $(WPA_L2_SRCS) $(WPA_PORT_SRCS)
 # zero-intrusion criterion)
 CFLAGS += -DCONFIG_LIBC_COMPLETION=1
 
-WPA_INC := -Ios/wpa_supplicant/shim \
+WPA_INC := -Ithird-party/ports/wpa_supplicant/shim \
 	-I$(WPA_DIR) -I$(WPA_DIR)/src -I$(WPA_DIR)/src/utils \
 	-I$(WPA_DIR)/src/drivers -I$(WPA_DIR)/src/l2_packet \
-	-I$(WPA_DIR)/wpa_supplicant -Ios/wpa_supplicant
+	-I$(WPA_DIR)/wpa_supplicant -Ithird-party/ports/wpa_supplicant
 WPA_CFG := -include stdarg.h \
-	-include os/wpa_supplicant/wpa_port_config.h \
+	-include third-party/ports/wpa_supplicant/wpa_port_config.h \
 	$(WPA_BACKEND_KEY) \
 	-DCONFIG_WPA_THREAD_STACK=$(CONFIG_WPA_THREAD_STACK) \
 	-DCONFIG_WPA_SUPP_DEBUG_LEVEL=$(CONFIG_WPA_SUPP_DEBUG_LEVEL) \
@@ -856,13 +859,13 @@ WPA_CFG := -include stdarg.h \
 $(BUILD)/third-party/wpa_supplicant/%.o: \
 	EXTRAFLAGS := -w $(WPA_CFG) $(WPA_INC)
 # the port layer adds the shell include set (wpa_cmd exports the command)
-$(BUILD)/os/wpa_supplicant/%.o: \
+$(BUILD)/third-party/ports/wpa_supplicant/%.o: \
 	EXTRAFLAGS := $(WPA_CFG) $(WPA_INC) $(CSH_CFLAGS)
 endif
 
 # net80211 protocol layer (SPEC S8/net80211-adapt §3.8): the vendored
 # NetBSD core compiles in its own world - the compat shadow headers in
-# os/net80211/compat resolve <sys/...>, <net/...> and <netinet/...>, the
+# components/ports/net80211/compat resolve <sys/...>, <net/...> and <netinet/...>, the
 # vendored root components/net80211 resolves <net80211/...> and
 # <crypto/aes/...>, and the net80211_prelude.h force-include claims the
 # NetBSD identity plus the compiled-out sysctl vocabulary. Warnings are
@@ -881,7 +884,7 @@ CONFIG_NET80211_TKIP ?= n
 CONFIG_NET80211_WEP ?= n
 ifeq ($(CONFIG_NET80211),y)
 NET80211_DIR := components/net80211
-NET80211_PORT_DIR := os/net80211
+NET80211_PORT_DIR := components/ports/net80211
 
 NET80211_VENDOR_SRCS := \
 	$(NET80211_DIR)/net80211/ieee80211.c \
@@ -935,12 +938,12 @@ NET80211_PORT_KEY := -DNET80211_COMPAT_THREADX_HEAP=1
 endif
 $(BUILD)/components/net80211/%.o: \
 	EXTRAFLAGS := -w $(NET80211_CFG) $(NET80211_INC)
-$(BUILD)/os/net80211/%.o: \
+$(BUILD)/components/ports/net80211/%.o: \
 	EXTRAFLAGS := $(NET80211_CFG) $(NET80211_INC) $(NET80211_PORT_KEY)
 # the W3 bridge TU is the one net80211-world unit that reaches the
 # mac80211 side's OSAL (workqueue/timer/mutex) and the C-ABI vtable -
 # the lkpi include rides along, mac80211.h stays out (FR-4)
-$(BUILD)/os/net80211/lkpi_bridge.o: \
+$(BUILD)/components/ports/net80211/lkpi_bridge.o: \
 	EXTRAFLAGS := $(NET80211_CFG) $(NET80211_INC) $(NET80211_PORT_KEY) \
 	-Icomponents/linuxkpi
 endif
