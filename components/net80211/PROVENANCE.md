@@ -19,10 +19,17 @@ S8 net80211-adapt spec FR-1：vendored verbatim + 偏差台账（不用 submodul
 |---|---|---|
 | `net80211/` | 11 .c + 12 .h | `sys/net80211/`（编入 9 .c + 随树不编 tkip/wep + 全部 12 .h） |
 | `crypto/aes/` | aes_bear/ccm/ccm_mbuf/ct/ct_dec/ct_enc/impl .c + 头 | `sys/crypto/aes/`（AES 最小子集，S8-Q6 定案 = bear 路线：aes_impl.c 默认后端零偏差；br_aes_ct_* 原语在 aes_ct*.c，bear 是其封装——两者都必需） |
-| `urtwn/` | if_urtwn.c / if_urtwnreg.h / if_urtwnvar.h | `sys/dev/usb/`（S8-2 编入，本轮只 vendored） |
-| `urtwn/` | rtwnreg.h / rtwn_data.h | `sys/dev/ic/`（共享 rtwn 定义） |
 
 RCS 版本头（`$NetBSD: ...`）随文件携带，逐文件可溯。
+
+### 变更记录（feat/refactor-layout-r1 S4，2026-10-05）
+
+- 删 `urtwn/` 五件（if_urtwn.c / if_urtwnreg.h / if_urtwnvar.h /
+  rtwnreg.h / rtwn_data.h，~8.4k 行）——S8-2 只 vendored 未编入的验证
+  驱动，全仓零符号引用，用户裁决移除。
+- `net80211/ieee80211_netbsd.c` → `net80211/ieee80211_cmsis2.c`（CMSIS2
+  本地化改名；头 `ieee80211_netbsd.h` 保留上游原名，避免扩大对
+  netbsd-src 基线的 divergence）。
 
 ## 许可
 

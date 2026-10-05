@@ -893,7 +893,7 @@ NET80211_VENDOR_SRCS := \
 	$(NET80211_DIR)/net80211/ieee80211_crypto_ccmp.c \
 	$(NET80211_DIR)/net80211/ieee80211_crypto_none.c \
 	$(NET80211_DIR)/net80211/ieee80211_input.c \
-	$(NET80211_DIR)/net80211/ieee80211_netbsd.c \
+	$(NET80211_DIR)/net80211/ieee80211_cmsis2.c \
 	$(NET80211_DIR)/net80211/ieee80211_node.c \
 	$(NET80211_DIR)/net80211/ieee80211_output.c \
 	$(NET80211_DIR)/net80211/ieee80211_proto.c \

@@ -14,9 +14,6 @@
 struct host_mutex {
 	void *hm_priv[8];
 };
-struct host_cond {
-	void *hc_priv[8];
-};
 
 typedef struct host_mutex kmutex_t;
 
@@ -48,27 +45,10 @@ void wlan_mutex_destroy(kmutex_t *m);
 #define mutex_exit(m) wlan_mutex_exit(m)
 #define mutex_owned(m) wlan_mutex_owned(m)
 #define mutex_destroy(m) wlan_mutex_destroy(m)
-/* Real locking: urtwn_wait_async() builds its sleep/wakeup handshake
- * with mutex_spin_enter + cv_wait; a no-op here loses wakeups and
- * hangs if_init forever. */
-#define mutex_spin_enter(x) wlan_mutex_enter(x)
-#define mutex_spin_exit(x) wlan_mutex_exit(x)
 
-/* cv: the imported code keeps one condition variable in the urtwn
- * task; net80211 core does not use cv. */
-typedef struct host_cond kcondvar_t;
-#define CV_DEFAULT 0
-
-int wlan_cv_init(kcondvar_t *cv, int flags);
-int wlan_cv_wait(kcondvar_t *cv, kmutex_t *m);
-int wlan_cv_timedwait(kcondvar_t *cv, kmutex_t *m, int ticks);
-int wlan_cv_broadcast(kcondvar_t *cv);
-void wlan_cv_destroy(kcondvar_t *cv);
-
-#define cv_init(cv, ...) wlan_cv_init((cv), 0)
-#define cv_wait(cv, m) wlan_cv_wait((cv), (m))
-#define cv_timedwait(cv, m, t) wlan_cv_timedwait((cv), (m), (t))
-#define cv_broadcast(cv) wlan_cv_broadcast(cv)
-#define cv_destroy(cv) wlan_cv_destroy(cv)
+/* Condition-variable API removed with the urtwn vendored driver
+ * (feat/refactor-layout-r1 S4): it was the only cv user (urtwn
+ * wait_async sleep/wakeup handshake); net80211 core never used cv and
+ * the wlan_cv_* functions had no implementation in the tree. */
 
 #endif /* _COMPAT_SYS_MUTEX_H_ */

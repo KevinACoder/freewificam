@@ -1,4 +1,12 @@
 /* $NetBSD: ieee80211_netbsd.c,v 1.34 2018/12/22 14:28:56 maxv Exp $ */
+/*
+ * CMSIS2 localization (feat/refactor-layout-r1 S4): renamed from
+ * ieee80211_netbsd.c - this is the tree's CMSIS2-facing OS glue for the
+ * net80211 core. The companion header keeps its upstream name
+ * ieee80211_netbsd.h (included verbatim by the core files); its OS
+ * dependencies (sys/cprng, sys/once, sys/proc, sys/sysctl) are absorbed
+ * by the compat shadow headers in components/ports/net80211/compat.
+ */
 
 /*
  * Copyright (c) 2003-2005 Sam Leffler, Errno Consulting
