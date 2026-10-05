@@ -1245,8 +1245,17 @@ struct sk_buff {
 	void		*dev;		/* struct device * */
 	void		*sk;
 
-	/* mac80211 control/status block (IEEE80211_SKB_CB lives here) */
-	unsigned long	cb[48 / sizeof(unsigned long)];
+	/* mac80211 control/status block (IEEE80211_SKB_CB lives here).
+	 * [S9 D-3 R3] 192, not Linux's 48: this shim's flat
+	 * ieee80211_tx_info is 184 bytes (control 56 + status 52 +
+	 * driver_data[8] 64), and lkpi_n80211_drv_tx_mgmt does
+	 * memset(info, 0, sizeof(*info)) through the cb cast.  With a
+	 * 48-byte cb that memset wiped 136 bytes past cb - the first 24
+	 * payload bytes of every mgmt frame (radiated auth header read
+	 * back all-zero on board 2026-10-05: AP ACKed a corrupt frame and
+	 * never answered) plus the data-area tail of small skbs.  Keep in
+	 * lockstep with sizeof (static-asserted in linuxkpi_80211.c). */
+	unsigned long	cb[192 / sizeof(unsigned long)];
 } __aligned(4);
 
 void *lkpi_skb_alloc(unsigned int size, gfp_t gfp);
@@ -1279,8 +1288,29 @@ void lkpi_skb_queue_purge(struct sk_buff_head *);
 #define	skb_unlink(skb, q)		lkpi_skb_unlink((skb), (q))
 #define	__skb_unlink(skb, q)		lkpi_skb_unlink((skb), (q))
 #define	skb_queue_purge(q)		lkpi_skb_queue_purge(q)
-#define	skb_peek(q)			((q)->next)
-#define	skb_peek_tail(q)		((q)->prev)
+
+/* [S9 D-3 R3] Linux parity: NULL on an empty queue.  The old
+ * `#define skb_peek(q) ((q)->next)` returned the sentinel on an empty
+ * queue, and rtw88's aggregation loop
+ * (skb_iter = skb_peek(list); if (skb_iter && ...)) then treated the
+ * queue head as an skb - list surgery on the queue object itself
+ * (codex audit, rank-1 heap corruptor candidate). */
+static __always_inline __unused struct sk_buff *
+skb_peek(const struct sk_buff_head *q)
+{
+	struct sk_buff *s = q->next;
+
+	return (s == (const struct sk_buff *)q) ? NULL : s;
+}
+
+static __always_inline __unused struct sk_buff *
+skb_peek_tail(const struct sk_buff_head *q)
+{
+	struct sk_buff *s = q->prev;
+
+	return (s == (const struct sk_buff *)q) ? NULL : s;
+}
+
 #define	skb_queue_empty(q)		((q)->qlen == 0)
 #define	skb_queue_len(q)		((q)->qlen)
 #define	skb_headroom(skb)		((unsigned int)((skb)->data - (skb)->head))

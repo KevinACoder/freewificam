@@ -9,9 +9,10 @@
 #include "debug.h"
 
 /* [S9 D-3] mgmt SW-seq fork switch (see rtw_tx_mgmt_pkt_info_update);
- * fork-test build 2026-10-05: default ON to test the FW-seq family
- * without the console (revert: wlanrtw swseq off) */
-int rtw_d3_mgmt_swseq = 1;
+ * R2 ran the fork test with default ON (FW-seq family falsified on
+ * board 2026-10-05); R3 restores default 0 = Linux parity, fork still
+ * reachable via `wlanrtw swseq on`). */
+int rtw_d3_mgmt_swseq;
 
 static
 void rtw_tx_stats(struct rtw_dev *rtwdev, struct ieee80211_vif *vif,
@@ -583,6 +584,16 @@ void rtw_tx(struct rtw_dev *rtwdev,
 {
 	struct rtw_tx_pkt_info pkt_info = {0};
 	int ret;
+
+	/* [S9 D-3 R3] HCI junction counter (defined in usb.c): mgmt frames
+	 * that make it past ops_tx - separates "silent drop in ops_tx"
+	 * from "never reached the USB write" (R2 dump-never-printed fork) */
+	if (ieee80211_is_mgmt(
+	    ((struct ieee80211_hdr *)skb->data)->frame_control)) {
+		extern u32 rtw_d3_tx_hci_mgmt;
+
+		rtw_d3_tx_hci_mgmt++;
+	}
 
 	rtw_tx_pkt_info_update(rtwdev, &pkt_info, control->sta, skb);
 	ret = rtw_hci_tx_write(rtwdev, &pkt_info, skb);

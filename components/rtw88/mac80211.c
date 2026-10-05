@@ -29,8 +29,20 @@ static void rtw_ops_tx(struct ieee80211_hw *hw,
 		       struct sk_buff *skb)
 {
 	struct rtw_dev *rtwdev = hw->priv;
+	/* [S9 D-3 R3] pipeline junction counters (defined in usb.c) */
+	extern u32 rtw_d3_tx_ops, rtw_d3_tx_ops_mgmt, rtw_d3_tx_dropped;
+	bool d3_mgmt;
+
+	d3_mgmt = ieee80211_is_mgmt(
+	    ((struct ieee80211_hdr *)skb->data)->frame_control);
+	rtw_d3_tx_ops++;
+	if (d3_mgmt)
+		rtw_d3_tx_ops_mgmt++;
 
 	if (!test_bit(RTW_FLAG_RUNNING, rtwdev->flags)) {
+		/* [S9 D-3 R3] this silent free was invisible on the console;
+		 * count it so the R2 "dump never printed" fork splits here */
+		rtw_d3_tx_dropped++;
 		ieee80211_free_txskb(hw, skb);
 		return;
 	}

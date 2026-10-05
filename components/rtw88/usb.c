@@ -51,6 +51,15 @@ static void d3u_uni_print(const struct rtw_rx_pkt_stat *ps)
 static u8 d3_tx_last[512];
 static u32 d3_tx_last_len, d3_tx_cap_cnt, d3_tx_hex_cnt, d3_auth_dump_cnt;
 
+/* [S9 D-3 R3] TX pipeline junction ledger (console-independent truth):
+ * ops_tx calls / ops_tx mgmt / RUNNING-gate drops / rtw_tx mgmt / usb
+ * mgmt (=d3_tx_cap_cnt above).  Expected chain for N auth attempts:
+ * ops_mgmt >= hci_mgmt >= cap; a break names the silent-drop stage
+ * (R2: the auth TXDESC dumps never printed and neither did the ops_tx
+ * regs snapshot - either a pre-USB silent drop or serial loss; these
+ * counters settle it without trusting the console). */
+u32 rtw_d3_tx_ops, rtw_d3_tx_ops_mgmt, rtw_d3_tx_dropped, rtw_d3_tx_hci_mgmt;
+
 /* [S9 D-3] exact destination counter state (set from add_interface) */
 static u8 d3_da[6];
 static int d3_da_set;
@@ -64,7 +73,14 @@ void rtw_d3_set_da(const u8 *mac)
 struct rtw_usb_txcb {
 	struct rtw_dev *rtwdev;
 	struct sk_buff_head tx_ack_queue;
+	/* [S9 D-3 R3] double-completion trap (C1): the HC can deliver the
+	 * same urb twice (shim has a history of it); a second completion
+	 * on a freed txcb would dequeue garbage.  Magic + per-txcb done
+	 * counter make that audible before the heap dies. */
+	u32 magic;
+	u32 done_cnt;
 };
+#define RTW_USB_TXCB_MAGIC	0x7acb0000U
 
 static void rtw_usb_fill_tx_checksum(struct rtw_usb *rtwusb,
 				     struct sk_buff *skb, int agg_num)
@@ -358,8 +374,24 @@ static int rtw_usb_parse(struct rtw_dev *rtwdev,
 static void rtw_usb_write_port_tx_complete(struct urb *urb)
 {
 	struct rtw_usb_txcb *txcb = urb->context;
-	struct rtw_dev *rtwdev = txcb->rtwdev;
-	struct ieee80211_hw *hw = rtwdev->hw;
+	struct rtw_dev *rtwdev;
+	struct ieee80211_hw *hw;
+
+	/* [S9 D-3 R3] double-completion trap (C1): a second delivery on a
+	 * freed txcb dereferences a recycled block.  The magic check turns
+	 * that into one loud line BEFORE the queue pointers are touched. */
+	if (txcb == NULL || txcb->magic != RTW_USB_TXCB_MAGIC) {
+		printf("rtw88u: d3 txcb BAD completion txcb=%p magic=%08x "
+		    "done=%u\n", txcb, txcb ? txcb->magic : 0U,
+		    txcb ? txcb->done_cnt : 0U);
+		return;
+	}
+	txcb->done_cnt++;
+	if (txcb->done_cnt > 1U)
+		printf("rtw88u: d3 txcb REDELIVERED txcb=%p done=%u\n",
+		    txcb, txcb->done_cnt);
+	rtwdev = txcb->rtwdev;
+	hw = rtwdev->hw;
 
 	while (true) {
 		struct sk_buff *skb = skb_dequeue(&txcb->tx_ack_queue);
@@ -390,6 +422,9 @@ static void rtw_usb_write_port_tx_complete(struct urb *urb)
 		ieee80211_tx_status_irqsafe(hw, skb);
 	}
 
+	/* [S9 D-3 R3] poison before release: a second completion finds the
+	 * stale magic instead of a recycled block */
+	txcb->magic = 0xdeadbeefU;
 	kfree(txcb);
 }
 
@@ -448,6 +483,8 @@ static bool rtw_usb_tx_agg_skb(struct rtw_usb *rtwusb, struct sk_buff_head *list
 		return false;
 
 	txcb->rtwdev = rtwdev;
+	txcb->magic = RTW_USB_TXCB_MAGIC;
+	txcb->done_cnt = 0;
 	skb_queue_head_init(&txcb->tx_ack_queue);
 
 	skb_iter = skb_dequeue(list);
@@ -499,6 +536,10 @@ queue:
 	ret = rtw_usb_write_port(rtwdev, qsel, skb_head,
 				 rtw_usb_write_port_tx_complete, txcb);
 	if (ret) {
+		/* [S9 D-3 R3] C1 tripwire: if the shim still delivers this
+		 * urb after a failed submit, the late completion hits the
+		 * poisoned magic and reports instead of dequeuing garbage */
+		txcb->magic = 0xdeadbeefU;
 		ieee80211_purge_tx_queue(rtwdev->hw, &txcb->tx_ack_queue);
 		kfree(txcb);
 		return false;
@@ -634,8 +675,8 @@ static int rtw_usb_tx_write(struct rtw_dev *rtwdev,
 
 	/* [S9 D-3] archive the FINAL mgmt TXDESC+frame bytes (post
 	 * checksum - exactly what the URB stages); the first AUTH after
-	 * boot dumps its dwords inline (shell-independent - the console
-	 * RX dies under the retry flood).  Lives here, not in
+	 * boot dumps its descriptor inline (shell-independent - the
+	 * console RX dies under the retry flood).  Lives here, not in
 	 * rtw_usb_write_data: the ordinary auth path never goes through
 	 * write_data (rsvd-page/H2C only - codex audit). */
 	if (pkt_info->qsel == TX_DESC_QSEL_MGMT) {
@@ -646,21 +687,24 @@ static int rtw_usb_tx_write(struct rtw_dev *rtwdev,
 		memcpy(d3_tx_last, skb->data, n);
 		d3_tx_last_len = n;
 		d3_tx_cap_cnt++;
+		/* [S9 D-3 R3] single-line 48B (12 dwords) descriptor dump:
+		 * the R2 five-line burst never reached the serial ring -
+		 * keep the line <=150 chars so line assembly cannot drop
+		 * it, and never read past the copied bytes (R2 tail
+		 * over-read: nw=n/4 stepping 4 printed d[16..19] for n=78). */
 		if ((skb->data[chip->tx_pkt_desc_sz] & 0xfc) == 0xb0 &&
 		    d3_auth_dump_cnt < 2U) {
 			const __le32 *d = (const __le32 *)skb->data;
-			u32 i, nw = n / 4;
 
 			d3_auth_dump_cnt++;
-			printf("rtw88u: d3 AUTH txdesc+%u dwords:\n",
-			    pkt_info->tx_pkt_size);
-			for (i = 0; i < nw; i += 4) {
-				printf("rtw88u:  w%u %08x w%u %08x w%u %08x w%u %08x\n",
-				    i, le32_to_cpu(d[i]),
-				    i + 1, le32_to_cpu(d[i + 1]),
-				    i + 2, le32_to_cpu(d[i + 2]),
-				    i + 3, le32_to_cpu(d[i + 3]));
-			}
+			printf("rtw88u: d3 AUTH desc %08x %08x %08x %08x "
+			    "%08x %08x %08x %08x %08x %08x %08x %08x\n",
+			    le32_to_cpu(d[0]), le32_to_cpu(d[1]),
+			    le32_to_cpu(d[2]), le32_to_cpu(d[3]),
+			    le32_to_cpu(d[4]), le32_to_cpu(d[5]),
+			    le32_to_cpu(d[6]), le32_to_cpu(d[7]),
+			    le32_to_cpu(d[8]), le32_to_cpu(d[9]),
+			    le32_to_cpu(d[10]), le32_to_cpu(d[11]));
 		}
 	}
 	tx_data = rtw_usb_get_tx_data(skb);
@@ -1538,13 +1582,27 @@ void rtw_d3_tx_diag_dump(void)
 {
 	u32 i;
 
+	/* [S9 D-3 R3] the pipeline junction line first: ops->tx calls,
+	 * mgmt among them, RUNNING-gate drops, HCI mgmt writes - a break
+	 * in ops_mgmt >= hci_mgmt >= cap names the silent-drop stage. */
+	printf("rtw88u: d3 tx pipe ops=%u ops_mgmt=%u dropped=%u "
+	    "hci_mgmt=%u cap=%u\n",
+	    rtw_d3_tx_ops, rtw_d3_tx_ops_mgmt, rtw_d3_tx_dropped,
+	    rtw_d3_tx_hci_mgmt, d3_tx_cap_cnt);
 	printf("rtw88u: d3 tx-cap cnt=%u len=%u\n",
 	    d3_tx_cap_cnt, d3_tx_last_len);
-	for (i = 0; i < d3_tx_last_len; i++)
-		printf("%s%02x", (i % 16) == 0 ? "\nrtw88u:  " : " ",
-		    d3_tx_last[i]);
-	if (d3_tx_last_len)
+	/* compact 3-line format (the old one-byte-per-line burst lost
+	 * ~80% of its lines to serial line assembly, board 2026-10-05) */
+	for (i = 0; i < d3_tx_last_len; i += 26U) {
+		u32 j, n = d3_tx_last_len - i;
+
+		if (n > 26U)
+			n = 26U;
+		printf("rtw88u: d3 txhex[%u]:", i);
+		for (j = 0; j < n; j++)
+			printf(" %02x", d3_tx_last[i + j]);
 		printf("\n");
+	}
 }
 
 void rtw_d3_tx_diag_reset(void)
@@ -1553,4 +1611,6 @@ void rtw_d3_tx_diag_reset(void)
 	d3_tx_hex_cnt = 0;
 	d3_tx_last_len = 0;
 	d3_auth_dump_cnt = 0;
+	rtw_d3_tx_ops = rtw_d3_tx_ops_mgmt = rtw_d3_tx_dropped = 0;
+	rtw_d3_tx_hci_mgmt = 0;
 }

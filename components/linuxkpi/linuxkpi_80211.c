@@ -15,6 +15,15 @@
 #include <net/mac80211.h>
 #include "linuxkpi_net80211.h"
 
+/* [S9 D-3 R3] the shim's flat ieee80211_tx_info must stay inside
+ * skb->cb: ieee80211_tx_status-style code memsets it via the cb cast,
+ * and any excess (184 vs a 48-byte cb) wipes the skb data area behind
+ * it - the radiated-auth-all-zero bug (board 2026-10-05).  If this
+ * fires, grow cb in linuxkpi_core.h alongside. */
+_Static_assert(sizeof(struct ieee80211_tx_info) <=
+    sizeof(((struct sk_buff *)0)->cb),
+    "ieee80211_tx_info must fit skb->cb");
+
 /*
  * W1 form: the net80211-side bridge (os/net80211/, W3) provides
  * lkpi_n80211_attach / lkpi_n80211_rx_frame. Until it lands these weak
@@ -701,13 +710,19 @@ ieee80211_probereq_get(struct ieee80211_hw *hw, const u8 *src_addr,
 	struct sk_buff *skb;
 	struct ieee80211_mgmt *mgmt;
 	size_t len = IEEE80211_HDRLEN + 2 + ssid_len + tail_len;
+	unsigned int head = hw->extra_tx_headroom + 64;
 
-	(void)hw;
+	/* mac80211 contract: these getters return skbs with
+	 * hw->extra_tx_headroom of headroom - rtw_fill_rsvd_page_desc
+	 * skb_push(chip->tx_pkt_desc_sz) on them (assoc-time rsvd page
+	 * build; zero headroom underran on board 2026-10-05 R3). */
 	if (ssid_len > IEEE80211_MAX_SSID_LEN)
 		return NULL;
-	skb = lkpi_skb_alloc((unsigned int)(len + 32), GFP_KERNEL);
+	skb = lkpi_skb_alloc((unsigned int)(len + head), GFP_KERNEL);
 	if (skb == NULL)
 		return NULL;
+	skb->data = skb->head + head;
+	skb->tail = head;
 	mgmt = (struct ieee80211_mgmt *)skb_put(skb,
 	    (unsigned int)(IEEE80211_HDRLEN + 2 + ssid_len));
 	memset(mgmt, 0, IEEE80211_HDRLEN + 2 + ssid_len);
@@ -730,11 +745,14 @@ ieee80211_nullfunc_get(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 {
 	struct sk_buff *skb;
 	struct ieee80211_hdr *hdr;
+	unsigned int head = hw->extra_tx_headroom + 64;
 
-	(void)hw;
-	skb = lkpi_skb_alloc(32, GFP_KERNEL);
+	/* headroom contract as probereq_get above (assoc rsvd page) */
+	skb = lkpi_skb_alloc(IEEE80211_HDRLEN + head, GFP_KERNEL);
 	if (skb == NULL)
 		return NULL;
+	skb->data = skb->head + head;
+	skb->tail = head;
 	hdr = (struct ieee80211_hdr *)skb_put(skb, IEEE80211_HDRLEN);
 	memset(hdr, 0, IEEE80211_HDRLEN);
 	hdr->frame_control = htole16(IEEE80211_FTYPE_DATA |
@@ -757,11 +775,14 @@ ieee80211_pspoll_get(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 		u8	bssid[6];
 		u8	ta[6];
 	} __packed *pspoll;
+	unsigned int head = hw->extra_tx_headroom + 64;
 
-	(void)hw;
-	skb = lkpi_skb_alloc(16, GFP_KERNEL);
+	/* headroom contract as probereq_get above (assoc rsvd page) */
+	skb = lkpi_skb_alloc(16 + head, GFP_KERNEL);
 	if (skb == NULL)
 		return NULL;
+	skb->data = skb->head + head;
+	skb->tail = head;
 	pspoll = (void *)skb_put(skb, 16);
 	memset(pspoll, 0, 16);
 	pspoll->frame_control = htole16(IEEE80211_FTYPE_CTL |

@@ -509,21 +509,41 @@ lkpi_mutex_is_locked(struct mutex *m)
 
 static u32 lkpi_skb_n_alloc, lkpi_skb_n_free, lkpi_skb_inflight;
 static u32 lkpi_skb_big_alloc, lkpi_skb_alloc_fail, lkpi_skb_canary_bad;
+static u32 lkpi_skb_double_free;
+
+/* [S9 D-3 R3] freed-pointer registry: a double free is caught here and
+ * named (object size + both call sites) BEFORE tlsf sees it - the TLSF
+ * assert alone says only "block already free".  Slots are added at
+ * free and removed at alloc, so an entry present at free time means
+ * "freed and never reallocated" => a second free of this pointer is
+ * definitionally a double free, with no false positives from reuse. */
+struct lkpi_freed_rec {
+	void *p;
+	u32 size;
+	u32 pad;
+	void *site;
+};
+#define LKPI_FREED_N	64U
+static struct lkpi_freed_rec lkpi_freed[LKPI_FREED_N];
+static u32 lkpi_freed_n;
+static u32 lkpi_freed_wrap;	/* set once the ring wrapped (oldest gone) */
 
 void
 lkpi_skb_diag_dump(void)
 {
 
 	printf("lkpi: skb alloc=%u free=%u inflight=%u big16k=%u "
-	    "alloc_fail=%u canary_bad=%u\n",
+	    "alloc_fail=%u canary_bad=%u double_free=%u wrap=%u\n",
 	    lkpi_skb_n_alloc, lkpi_skb_n_free, lkpi_skb_inflight,
-	    lkpi_skb_big_alloc, lkpi_skb_alloc_fail, lkpi_skb_canary_bad);
+	    lkpi_skb_big_alloc, lkpi_skb_alloc_fail, lkpi_skb_canary_bad,
+	    lkpi_skb_double_free, lkpi_freed_wrap);
 }
 
 void *
 lkpi_skb_alloc(unsigned int size, gfp_t gfp)
 {
 	struct sk_buff *skb;
+	u32 i;
 
 	/* one allocation for the header and the data area */
 	(void)gfp;
@@ -531,6 +551,13 @@ lkpi_skb_alloc(unsigned int size, gfp_t gfp)
 	if (skb == NULL) {
 		lkpi_skb_alloc_fail++;
 		return NULL;
+	}
+	/* the address may be a recycled former skb: drop any stale
+	 * freed-registry entry so the next free is not a false positive */
+	for (i = 0; i < LKPI_FREED_N; i++) {
+		if (lkpi_freed[i].p == skb) {
+			lkpi_freed[i].p = NULL;
+		}
 	}
 	memset(skb, 0, sizeof(*skb));
 	skb->head = (unsigned char *)(skb + 1);
@@ -551,15 +578,37 @@ lkpi_skb_alloc(unsigned int size, gfp_t gfp)
 void
 lkpi_skb_free(struct sk_buff *skb)
 {
+	u32 i;
 
 	if (skb == NULL)
 		return;
+	/* double-free trap (see registry note above) */
+	for (i = 0; i < LKPI_FREED_N; i++) {
+		if (lkpi_freed[i].p == skb) {
+			lkpi_skb_double_free++;
+			printf("lkpi: skb DOUBLE FREE ptr=%p size=%u "
+			    "first=%p second=%p\n", skb,
+			    (unsigned)lkpi_freed[i].size,
+			    lkpi_freed[i].site,
+			    __builtin_return_address(0));
+			return;	/* keep the world alive to observe more */
+		}
+	}
 	if (skb->head != NULL && skb->end != 0 &&
 	    *(u32 *)(skb->head + skb->end) != LKPI_SKB_CANARY) {
 		lkpi_skb_canary_bad++;
 		printf("lkpi: skb canary TRASHED size=%u val=%08x\n",
 		    skb->end, *(u32 *)(skb->head + skb->end));
 	}
+	/* record in the registry before the block is released */
+	lkpi_freed[lkpi_freed_n % LKPI_FREED_N].p = skb;
+	lkpi_freed[lkpi_freed_n % LKPI_FREED_N].size = skb->end;
+	lkpi_freed[lkpi_freed_n % LKPI_FREED_N].site =
+	    __builtin_return_address(0);
+	lkpi_freed_n++;
+	if (lkpi_freed_n >= LKPI_FREED_N)
+		lkpi_freed_wrap++;
+
 	vPortFree(skb);
 	lkpi_skb_n_free++;
 	if (lkpi_skb_inflight != 0)
@@ -589,6 +638,12 @@ lkpi_skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 	struct sk_buff *head = (struct sk_buff *)q;
 	struct sk_buff *tail = head->prev;
 
+	/* [S9 D-3 R3] a second enqueue of an already-linked skb corrupts
+	 * BOTH lists - catch the moment it happens and name the queues */
+	if (skb->list != NULL && skb->list != q) {
+		printf("lkpi: skb DOUBLE ENQUEUE skb=%p in=%p again=%p\n",
+		    skb, skb->list, q);
+	}
 	skb->next = head;
 	skb->prev = tail;
 	skb->list = q;
@@ -627,6 +682,12 @@ void
 lkpi_skb_unlink(struct sk_buff *skb, struct sk_buff_head *q)
 {
 
+	/* [S9 D-3 R3] unlinking from the wrong queue (or a freed skb)
+	 * silently corrupts both lists - name it here */
+	if (q != NULL && skb->list != q) {
+		printf("lkpi: skb BAD UNLINK skb=%p owner=%p asked=%p\n",
+		    skb, skb->list, q);
+	}
 	skb->prev->next = skb->next;
 	skb->next->prev = skb->prev;
 	skb->next = NULL;

@@ -70,9 +70,34 @@ static size_t heap_allocated;	/* live byte count (v3.1 has no query API) */
 
 /* --- assert landing (freestanding) ----------------------------------------- */
 
-/* the P6-b forensics ring lives below; the assert landing dumps it */
-static void *free_log[8];
+/* R3 forensics: the ring keeps pointer+size+caller of the last frees so
+ * the double-free assert names the *site*, not just the address. */
+#define HEAP_FREE_LOG_N	16U
+struct heap_free_rec {
+	void *ptr;
+	size_t size;
+	void *site;
+};
+static struct heap_free_rec free_log[HEAP_FREE_LOG_N];
 static unsigned int free_log_n;
+
+/* R3: pool geometry for the assert-time block walk (filled at bring-up) */
+static unsigned char *heap_walk_base;
+static size_t heap_walk_bytes;
+
+/* tlsf_walk_pool callback: one line per block, bounded */
+static void heap_walk_emit(void *ptr, size_t size, int used, void *user)
+{
+	unsigned int *n = user;
+
+	if (*n >= 48U) {
+		return;
+	}
+	(*n)++;
+	board_log_emergency("heap: walk[%u] user=%p size=%u %s\n",
+			    *n - 1U, ptr, (unsigned)size,
+			    used ? "used" : "free");
+}
 
 /* tlsf's tlsf_assert is <assert.h>'s assert; -DNDEBUG is not set this
  * round, so the checks are live and need a place to land. */
@@ -84,12 +109,29 @@ void __assert_func(const char *file, int line, const char *func,
 	 * print lock and erase the evidence. */
 	board_log_emergency("heap: assert %s at %s:%d (%s)", expr, file, line,
 			    func != NULL ? func : "?");
-	/* the P6-b forensics trail: the last 8 frees before the assert */
-	for (unsigned int i = 0; i < 8U; i++) {
-		unsigned int idx = (free_log_n + i) % 8U;
+	/* the P6-b forensics trail: the last frees before the assert
+	 * (R3: pointer + size + caller site) */
+	for (unsigned int i = 0; i < HEAP_FREE_LOG_N; i++) {
+		unsigned int idx = (free_log_n + i) % HEAP_FREE_LOG_N;
 
-		board_log_emergency("heap: trail[%u]=%p\n", i,
-				    free_log[idx]);
+		if (free_log[idx].ptr == NULL)
+			continue;
+		board_log_emergency("heap: trail[%u]=%p size=%u site=%p\n",
+				    i, free_log[idx].ptr,
+				    (unsigned)free_log[idx].size,
+				    free_log[idx].site);
+	}
+	/* R3: walk the pool (tlsf's own iterator) so the broken block and
+	 * its neighbours are named.  The walker and tlsf_walk_pool cannot
+	 * recurse into the assert (they do not allocate). */
+	if (heap_walk_base != NULL) {
+		unsigned int n = 0;
+		pool_t pool = tlsf_get_pool(heap_tlsf);
+
+		board_log_emergency("heap: pool base=%p bytes=%u\n",
+				    heap_walk_base,
+				    (unsigned)heap_walk_bytes);
+		tlsf_walk_pool(pool, heap_walk_emit, &n);
 	}
 	for (;;) {
 		__asm__ __volatile__("wfe");
@@ -137,6 +179,8 @@ static bool heap_init(void)
 		return false;
 	}
 	heap_pool = tlsf_get_pool(heap_tlsf);
+	heap_walk_base = __heap_start;
+	heap_walk_bytes = (size_t)CONFIG_HEAP_BYTES;
 	heap_ready = true;
 	board_log("heap: tlsf ready %u bytes at %p\n",
 		  (unsigned)CONFIG_HEAP_BYTES, __heap_start);
@@ -181,7 +225,11 @@ void *pvPortMalloc(size_t size)
 
 /* P6-b forensics: the tlsf double-free assert needs its caller's
  * address trail - keep the last frees (and the next alloc) in a small
- * ring so the assert line can be paired with what released before it. */
+ * ring so the assert line can be paired with what released before it.
+ * R3: each slot also carries the block size and the freeing call site
+ * (`__builtin_return_address(0)`) so the double-freed object's size
+ * class (skb? txcb? skb_head?) and the culprit path are directly
+ * readable on the assert line. */
 void vPortFree(void *ptr)
 {
 	unsigned int posture;
@@ -193,14 +241,18 @@ void vPortFree(void *ptr)
 
 	posture = _tx_thread_smp_protect();
 	size = tlsf_block_size(ptr);
-	free_log[free_log_n % 8U] = ptr;
+	free_log[free_log_n % HEAP_FREE_LOG_N].ptr = ptr;
+	free_log[free_log_n % HEAP_FREE_LOG_N].size = size;
+	free_log[free_log_n % HEAP_FREE_LOG_N].site =
+	    __builtin_return_address(0);
 	free_log_n++;
 #ifdef CONFIG_HEAP_FREE_LOG
 	/* P6-b forensics default-off since S7b: the netutils world frees per
 	 * request, and one line per free floods the console. The ring above
 	 * stays live (re-enable with CONFIG_HEAP_FREE_LOG=y). */
-	board_log("heap: free #%u %p size %u\n",
-		  (unsigned)free_log_n, ptr, (unsigned)size);
+	board_log("heap: free #%u %p size %u site %p\n",
+		  (unsigned)free_log_n, ptr, (unsigned)size,
+		  __builtin_return_address(0));
 #endif
 	tlsf_free(heap_tlsf, ptr);
 	if (heap_allocated >= size) {
