@@ -47,6 +47,19 @@ static void rtw_ops_tx(struct ieee80211_hw *hw,
 		    skb->priority,
 		    (unsigned)test_bit(RTW_FLAG_SCANNING, rtwdev->flags));
 
+	/* [S9 D-3] the first auth TX after boot snapshots the WMAC state
+	 * inline (shell-independent) - the E4 auth-point register set. */
+	{
+		static int d3_regs_auth_done;
+
+		if (!d3_regs_auth_done &&
+		    ieee80211_is_mgmt(((struct ieee80211_hdr *)skb->data)->frame_control) &&
+		    ((((struct ieee80211_hdr *)skb->data)->frame_control) & 0xf0) == 0xb0) {
+			d3_regs_auth_done = 1;
+			rtw_d3_regs_dump();
+		}
+	}
+
 	rtw_tx(rtwdev, control, skb);
 }
 

@@ -8,8 +8,10 @@
 #include "ps.h"
 #include "debug.h"
 
-/* [S9 D-3] mgmt SW-seq fork switch (see rtw_tx_mgmt_pkt_info_update) */
-int rtw_d3_mgmt_swseq;
+/* [S9 D-3] mgmt SW-seq fork switch (see rtw_tx_mgmt_pkt_info_update);
+ * fork-test build 2026-10-05: default ON to test the FW-seq family
+ * without the console (revert: wlanrtw swseq off) */
+int rtw_d3_mgmt_swseq = 1;
 
 static
 void rtw_tx_stats(struct rtw_dev *rtwdev, struct ieee80211_vif *vif,

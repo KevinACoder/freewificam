@@ -49,7 +49,7 @@ static void d3u_uni_print(const struct rtw_rx_pkt_stat *ps)
  * kept so the shell can re-dump them after a console scroll.  The
  * first two frames after a reset also print inline. */
 static u8 d3_tx_last[512];
-static u32 d3_tx_last_len, d3_tx_cap_cnt, d3_tx_hex_cnt;
+static u32 d3_tx_last_len, d3_tx_cap_cnt, d3_tx_hex_cnt, d3_auth_dump_cnt;
 
 /* [S9 D-3] exact destination counter state (set from add_interface) */
 static u8 d3_da[6];
@@ -562,31 +562,6 @@ static int rtw_usb_write_data(struct rtw_dev *rtwdev,
 	rtw_tx_fill_tx_desc(rtwdev, pkt_info, skb);
 	rtw_tx_fill_txdesc_checksum(rtwdev, pkt_info, skb->data);
 
-	/* [S9 D-3] archive the final mgmt bytes; first two post-reset
-	 * print inline so a live log still shows the frame.  Gate on
-	 * TX_DESC_QSEL_MGMT (18): rtw_usb_tx_queue_mapping_to_qsel
-	 * overrides the shim's TID7 before descriptor construction, so
-	 * the real auth txdesc rides QSEL 18 (codex audit). */
-	if (qsel == TX_DESC_QSEL_MGMT) {
-		u32 n = (u32)chip->tx_pkt_desc_sz + size;
-		u32 i;
-
-		if (n > sizeof(d3_tx_last))
-			n = sizeof(d3_tx_last);
-		memcpy(d3_tx_last, skb->data, n);
-		d3_tx_last_len = n;
-		d3_tx_cap_cnt++;
-		if (d3_tx_hex_cnt < 2U) {
-			d3_tx_hex_cnt++;
-			printf("rtw88u: d3 tx #%u %ub desc+%u", d3_tx_cap_cnt, n, size);
-			for (i = 0; i < n; i++)
-				printf("%s%02x",
-				    (i % 16) == 0 ? "\nrtw88u:  " : " ",
-				    d3_tx_last[i]);
-			printf("\n");
-		}
-	}
-
 	ret = rtw_usb_write_port(rtwdev, qsel, skb,
 				 rtw_usb_write_port_complete, skb);
 	if (unlikely(ret)) {
@@ -656,6 +631,38 @@ static int rtw_usb_tx_write(struct rtw_dev *rtwdev,
 	ep = qsel_to_ep(rtwusb, pkt_info->qsel);
 	rtw_tx_fill_tx_desc(rtwdev, pkt_info, skb);
 	rtw_tx_fill_txdesc_checksum(rtwdev, pkt_info, skb->data);
+
+	/* [S9 D-3] archive the FINAL mgmt TXDESC+frame bytes (post
+	 * checksum - exactly what the URB stages); the first AUTH after
+	 * boot dumps its dwords inline (shell-independent - the console
+	 * RX dies under the retry flood).  Lives here, not in
+	 * rtw_usb_write_data: the ordinary auth path never goes through
+	 * write_data (rsvd-page/H2C only - codex audit). */
+	if (pkt_info->qsel == TX_DESC_QSEL_MGMT) {
+		u32 n = (u32)chip->tx_pkt_desc_sz + pkt_info->tx_pkt_size;
+
+		if (n > sizeof(d3_tx_last))
+			n = sizeof(d3_tx_last);
+		memcpy(d3_tx_last, skb->data, n);
+		d3_tx_last_len = n;
+		d3_tx_cap_cnt++;
+		if ((skb->data[chip->tx_pkt_desc_sz] & 0xfc) == 0xb0 &&
+		    d3_auth_dump_cnt < 2U) {
+			const __le32 *d = (const __le32 *)skb->data;
+			u32 i, nw = n / 4;
+
+			d3_auth_dump_cnt++;
+			printf("rtw88u: d3 AUTH txdesc+%u dwords:\n",
+			    pkt_info->tx_pkt_size);
+			for (i = 0; i < nw; i += 4) {
+				printf("rtw88u:  w%u %08x w%u %08x w%u %08x w%u %08x\n",
+				    i, le32_to_cpu(d[i]),
+				    i + 1, le32_to_cpu(d[i + 1]),
+				    i + 2, le32_to_cpu(d[i + 2]),
+				    i + 3, le32_to_cpu(d[i + 3]));
+			}
+		}
+	}
 	tx_data = rtw_usb_get_tx_data(skb);
 	tx_data->sn = pkt_info->sn;
 
@@ -1545,4 +1552,5 @@ void rtw_d3_tx_diag_reset(void)
 	d3_tx_cap_cnt = 0;
 	d3_tx_hex_cnt = 0;
 	d3_tx_last_len = 0;
+	d3_auth_dump_cnt = 0;
 }
