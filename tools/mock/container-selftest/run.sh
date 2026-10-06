@@ -133,5 +133,70 @@ set -e
 assert_break negative_control_missing_truth "$tmp/out-nodecl.log" 'MOCK-CONFIG selftest-nodecl: SUITE_TRUTH_SOURCE missing'
 result negative_control_missing_truth_status "$([ "$rc" = 2 ] && echo 1 || echo 0)"
 
+
+# --- half three: the segment schema must refuse a broken table ------------------------
+# The registry is the contract both sides print against, so a table that is incomplete or
+# self-contradictory has to stop the run. Each fixture breaks exactly one rule.
+mapfixtures=$tmp/maps
+mkdir -p "$mapfixtures"
+head -1 "$mock/segment-map.tsv" > "$mapfixtures/header.tsv"
+
+check_map_red() {
+    name=$1
+    file=$2
+    if sh "$mock/check-segment-map.sh" "$file" > "$mapfixtures/$name.out" 2>&1; then
+        result "$name" 0
+        echo "  $name: the schema check accepted a table it must refuse" >&2
+    else
+        result "$name" 1
+    fi
+}
+
+first_row=$(sed -n '2p' "$mock/segment-map.tsv")
+s5_row=$(grep -P '\tS5\t' "$mock/segment-map.tsv" | head -1)
+
+# a row with a field missing
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row" | cut -f1-11; } > "$mapfixtures/missing_field.tsv"
+check_map_red segment_map_missing_field "$mapfixtures/missing_field.tsv"
+
+# the two sides printing different field names
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row" | awk -F'\t' 'BEGIN{OFS="\t"}{$10="<prefix>S1.EP0_SETUP ok=%u"; print}'; } > "$mapfixtures/template_drift.tsv"
+check_map_red segment_map_template_drift "$mapfixtures/template_drift.tsv"
+
+# the same anchor id twice
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row"; printf '%s\n' "$first_row"; } > "$mapfixtures/duplicate_id.tsv"
+check_map_red segment_map_duplicate_id "$mapfixtures/duplicate_id.tsv"
+
+# a segment without a consumer claiming to be active (S5 is not built on purpose)
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$s5_row" | awk -F'\t' 'BEGIN{OFS="\t"}{$12="active"; print}'; } > "$mapfixtures/mislaid.tsv"
+check_map_red segment_map_mislaid_row "$mapfixtures/mislaid.tsv"
+
+# --- half four: a wireless suite may not run without its reference route --------------
+mkdir -p "$tmp/selftest-wireless"
+{
+    echo "SUITE_NAME := selftest-wireless"
+    echo "SUITE_TIMEOUT := 5"
+    echo "SUITE_EXPECT := exit:0"
+    echo "SUITE_RUN := $fixtures/pass"
+    echo "SUITE_SEGMENTS := -"
+    echo "SUITE_WIRELESS := 1"
+    echo "SUITE_TRUTH_SOURCE := negative control"
+} > "$tmp/selftest-wireless/suite.mk"
+{
+    echo "SUITES := selftest-wireless"
+} > "$tmp/suites-wireless.mk"
+
+set +e
+MOCK_SUITES_MK=$tmp/suites-wireless.mk MOCK_SUITE_ROOT=$tmp sh "$mock/run.sh" > "$tmp/out-wireless.log" 2>&1
+rc=$?
+set -e
+
+assert_break negative_control_missing_route "$tmp/out-wireless.log" 'MOCK-CONFIG selftest-wireless: wireless suite without an ieee80211-route annotation'
+result negative_control_missing_route_status "$([ "$rc" = 2 ] && echo 1 || echo 0)"
+
+# and the container must say out loud that no wireless suite is registered, rather than
+# leaving the empty set unstated
+assert_break empty_wireless_set_declared "$tmp/out.log" '^MOCK-NOTE no wireless suites registered yet'
+
 echo "$suite: failures=$failures"
 [ "$failures" = 0 ]

@@ -207,9 +207,21 @@ else
     wanted=$(sed -n 's/^[[:space:]]*SUITES[[:space:]]*:=[[:space:]]*//p' "$suites_file" | tr ' ' '\n' | grep -v '^$')
 fi
 
+wireless_declared=0
+
 for s in $wanted; do
     run_suite "$s"
+    decl=$suite_root/$s/suite.mk
+    if [ -f "$decl" ] && [ "$(mk_get "$decl" SUITE_WIRELESS)" = "1" ]; then
+        wireless_declared=1
+    fi
 done
+
+# An empty set is stated, never assumed: with no wireless suite registered yet, the
+# container says so instead of leaving the question open.
+if [ "$wireless_declared" = 0 ]; then
+    printf 'MOCK-NOTE no wireless suites registered yet\n'
+fi
 
 printf '\nMOCK-SUMMARY suites=%s cases=%s ok=%s failed=%s\n' \
        "$suite_count" "$case_total" "$case_ok" "$case_bad"

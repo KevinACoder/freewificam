@@ -19,7 +19,9 @@
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
-map=$here/segment-map.tsv
+# The table can be overridden so the container's self test can run the same check over
+# deliberately broken tables and prove it goes red.
+map=${1:-$here/segment-map.tsv}
 
 if [ ! -f "$map" ]; then
     echo "check-segment-map: $map is missing"
