@@ -10,6 +10,16 @@ test tier for pre-hardware verification.
 component pins and the mock tier are landed milestone by milestone; design notes appear
 under `docs/` as the corresponding lines complete.
 
+## Why this project
+
+Wireless is the core milestone, and the end goal is streaming camera data over Wi-Fi for
+long, unattended runs. Open-source 802.11 support on RTOS kernels has, in practice, been
+tied to vendor SDKs and binary blobs, without the reusable, vendored-and-ported stack that
+BSD and Linux enjoy. Contributing that missing piece — a portable 802.11 stack with
+per-OS ports that other RTOS projects can adopt — is the point of this project. The
+wireless stack is therefore structured as a library with three port layers (OS adaptation,
+bus backend, network-stack presentation) rather than as a firmware-private tree.
+
 ## Planned layout
 
 | Path | Purpose |
@@ -24,6 +34,20 @@ under `docs/` as the corresponding lines complete.
 | `configs/`, `build/` | Build configuration and artifacts |
 | `tools/`, `tools/insight/` | Host tools and diagnostic commands |
 | `docs/` | Design documentation |
+
+## Related projects
+
+Upstream projects this stack is built on or contributes to (original links; per-component
+licenses are recorded as components are vendored):
+
+- net80211 portable library for RTOS environments — https://github.com/KevinACoder/net_80211
+- wpa_supplicant port for RTOS environments — https://github.com/KevinACoder/wpa_supplicant-rtos
+- Embox (RTOS; a consumer of the net80211 port) — https://github.com/embox/embox
+- ThreadX — https://github.com/eclipse-threadx/threadx
+- FreeRTOS — https://github.com/FreeRTOS/FreeRTOS-Kernel
+- CherryUSB — https://github.com/cherry-embedded/CherryUSB
+- lwIP — https://savannah.nongnu.org/projects/lwip/
+- NetBSD (source of the imported 802.11 stack and chip drivers) — https://github.com/NetBSD/src
 
 ## Contributing
 
@@ -47,3 +71,9 @@ RK3568 ITX 平台上的 RTOS 摄像头固件栈（引导 + OS + 驱动 + 组件 
 **状态**：仓库自举期。主线分支 `master`；构建骨架、上游组件 pin 与 mock 层按里程碑
 逐步落地，设计文档随对应分线进入 `docs/`。贡献流程与提交规范见 `CONTRIBUTING.md`
 （随自举里程碑加入）；许可待定。
+
+**项目意义**：无线是核心里程碑，终点是让摄像头数据经无线长时间稳定打流。RTOS 内核上的
+开源 802.11 支持长期依赖厂商 SDK 与二进制固件，缺少 BSD/Linux 那样的可复用栈——本项目
+的目标就是把这块补上：无线栈按"可移植库 + 每 OS 一个 port（OS 适配 / 总线后端 / 网络栈
+表示层）"的结构交付，供其他 RTOS 项目复用。关联项目（原链接）：net_80211 可移植库、
+wpa_supplicant-rtos、Embox、ThreadX、FreeRTOS、CherryUSB、lwIP、NetBSD。
