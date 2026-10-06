@@ -10,3 +10,6 @@
 [submodule "third-party/threadx"]
 	path = third-party/threadx
 	url = https://github.com/eclipse-threadx/threadx.git
+[submodule "third-party/FreeRTOS-Kernel-tests/CMock"]
+	path = third-party/FreeRTOS-Kernel-tests/CMock
+	url = https://github.com/ThrowTheSwitch/CMock.git
