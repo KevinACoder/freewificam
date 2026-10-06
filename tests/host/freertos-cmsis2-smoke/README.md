@@ -26,8 +26,8 @@ under ten seconds:
 | `third-party/FreeRTOS-Kernel` | kernel sources, heap_4, POSIX port and its event utility |
 | `third-party/CMSIS-FreeRTOS` | `CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c` only; the vendored kernel copy under its `Source/` is not used |
 | `third-party/CMSIS_6` | `CMSIS-RTOS2` API header `cmsis_os2.h` (single source) |
-| `os/freertos/` | kernel configuration, fail-visible hooks, static-allocation donors, kernel-stop bridge |
-| `os/cmsis2/` | backend facade and the host stand-ins for the CMSIS Core headers |
+| `os/freertos/` | kernel configuration, fail-visible hooks, static-allocation donors, and the FreeRTOS side of the host exit seam |
+| `os/cmsis2/` | backend facade (single application include) and the host stand-ins for the CMSIS Core headers |
 
 ## Host notes
 
@@ -37,5 +37,6 @@ under ten seconds:
 * The adapter's system-timer path needs device-side `OS_Tick_*` functions, which do not
   exist on a host. `--gc-sections` keeps it out of the image: the API is absent rather
   than backed by a stub that would return wrong values.
-* `freertos_kernel_stop()` (os/freertos/freertos_kernel.h) ends the scheduler, because
-  CMSIS-RTOS2 has no kernel-stop call. `main()` then returns and the process exits 0.
+* `cmsis2_host_end_scheduler()` (declared in os/cmsis2/cmsis2.h, implemented by the
+  FreeRTOS backend in os/freertos/cmsis2_host.c) ends the scheduler, because CMSIS-RTOS2
+  has no kernel-stop call. `main()` then returns and the process exits 0.

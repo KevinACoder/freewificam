@@ -42,7 +42,7 @@ LDFLAGS := -pthread -Wl,--gc-sections
 SRCS := \
     $(MAKEFILE_DIR)/main.c \
     $(ROOT)/os/freertos/freertos_hooks.c \
-    $(ROOT)/os/freertos/freertos_kernel.c \
+    $(ROOT)/os/freertos/cmsis2_host.c \
     $(KERNEL)/croutine.c \
     $(KERNEL)/event_groups.c \
     $(KERNEL)/list.c \

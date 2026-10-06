@@ -9,8 +9,8 @@
  * consumer blocks on the queue and drains it. The anchor lines on stdout carry the
  * prefix "os2-smoke: " and are the machine-checked evidence of the run.
  *
- * This file sees the CMSIS-RTOS2 API only. Stopping the scheduler is a port-layer call
- * (os/freertos/freertos_kernel.h): CMSIS-RTOS2 has no kernel-stop API.
+ * This file sees the CMSIS-RTOS2 API only: os/cmsis2/cmsis2.h is the single entry point,
+ * and the host exit seam it declares keeps kernel headers out of application code.
  */
 
 #include <inttypes.h>
@@ -19,7 +19,6 @@
 #include <stdlib.h>
 
 #include "os/cmsis2/cmsis2.h"
-#include "os/freertos/freertos_kernel.h"
 
 #define TAG               "os2-smoke: "
 #define QUEUE_DEPTH       4U
@@ -92,7 +91,7 @@ static void producer( void * argument )
     printf( TAG "PASS\n" );
     fflush( stdout );
 
-    freertos_kernel_stop();
+    cmsis2_host_end_scheduler();
 }
 
 int main( void )

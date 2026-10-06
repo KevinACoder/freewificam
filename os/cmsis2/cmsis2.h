@@ -27,4 +27,14 @@
 #error "no CMSIS2 backend selected: define CMSIS2_BACKEND_FREERTOS or CMSIS2_BACKEND_THREADX"
 #endif
 
+/**
+ * @brief   End the scheduler from a task so that the scheduler-start call returns.
+ *
+ * The CMSIS-RTOS2 API has no kernel-stop call, but a host application needs one to
+ * let main() return. The backend implements this seam in its own port layer (the
+ * FreeRTOS backend in os/freertos/), so the caller never sees a kernel header.
+ * Must be called from a task.
+ */
+void cmsis2_host_end_scheduler( void );
+
 #endif /* CMSIS2_H */
