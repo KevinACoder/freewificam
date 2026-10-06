@@ -9,7 +9,11 @@
 #   - any non-ASCII text outside README.md (README.md is bilingual on purpose).
 #
 # This script excludes itself from the scans: it necessarily spells out the
-# very patterns it looks for.
+# very patterns it looks for. It also excludes the vendored upstream test tree
+# (third-party/FreeRTOS-Kernel-tests): those bytes are copied verbatim under the
+# zero-patch discipline, so their content cannot be rewritten to satisfy the
+# authoring rules here - a provenance file next to the tree is their record
+# instead. Everything this project authors stays fully scanned.
 #
 # Usage:
 #   tools/gates/check-local-knowledge.sh                 # scan tracked files
@@ -20,7 +24,9 @@
 set -eu
 
 self=tools/gates/check-local-knowledge.sh
-paths=':!'"$self"
+vendored=third-party/FreeRTOS-Kernel-tests
+paths_self=':!'"$self"
+paths_vendored=':!'"$vendored"
 
 patterns='/(home|mnt|tmp)/|~/|KI-[0-9]|itx-wiki|oslab|backups/|web_cmera_|project_rtos_webcam|project_web_camera|\.agents/skills'
 
@@ -37,7 +43,7 @@ report() {
 	fi
 }
 
-files=$(git ls-files -- "$paths")
+files=$(git ls-files -- "$paths_self" "$paths_vendored")
 
 findings=$(printf '%s\n' "$files" | xargs -r grep -nHIE "$patterns" -- 2>/dev/null || true)
 report "$findings" "local-path/identifier scan"
