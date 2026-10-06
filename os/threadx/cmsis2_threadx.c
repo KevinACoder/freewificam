@@ -114,19 +114,23 @@ static unsigned int map_priority( osPriority_t prio )
  * userspace port's critical section is a recursive mutex that only becomes recursive
  * when the port initializes itself inside the kernel start call, so a creation reached
  * from main() before that does not fail - it deadlocks on the nested lock that the
- * kernel's own interrupt disable/restore pair takes around the creation. Everything
- * asked for in that window is therefore recorded here and created by the replay, which
- * runs at the first moment the kernel allows creation.
+ * kernel's own interrupt disable/restore pair takes around the creation.
+ *
+ * One mechanism covers every object: the request is recorded here at the time it is
+ * made, and the replay walks the records once at kernel entry, which is the first
+ * moment the kernel allows creation. The same registration-then-replay shape as a
+ * kernel's own staged initialization, scaled down to the single phase this kernel
+ * offers.
  *
  * The control block is allocated up front, because the id handed back to the caller has
  * to stay valid across the kernel start call. Until the replay has run the control block
  * carries no kernel id, so calls that use it are refused by the id checks below. */
 
 typedef enum {
+    DEFER_THREAD,           /* creates the thread and its event-flags group */
     DEFER_QUEUE,
     DEFER_SEMAPHORE,
     DEFER_MUTEX,
-    DEFER_EVENT_FLAGS,
 } deferred_kind_t;
 
 typedef struct deferred_item {
@@ -179,6 +183,8 @@ static deferred_item_t * defer_new( deferred_kind_t kind, void * object, const c
     return item;
 }
 
+static UINT create_thread_object( thread_slot_t * slot );
+
 /* The kernel's create calls take a plain name pointer and only read it, so the record is
  * passed as it is rather than casting the constness away four times over. */
 static UINT create_deferred_item( deferred_item_t * item )
@@ -187,6 +193,21 @@ static UINT create_deferred_item( deferred_item_t * item )
 
     switch( item->kind )
     {
+    case DEFER_THREAD:
+    {
+        thread_slot_t * slot = item->object;
+
+        rc = create_thread_object( slot );
+        if( rc != TX_SUCCESS )
+        {
+            /* The kernel never took this slot, so it goes back to free. */
+            vPortFree( slot->stack );
+            slot->stack = NULL;
+            slot->state = SLOT_FREE;
+        }
+        break;
+    }
+
     case DEFER_QUEUE:
         /* The message storage sits directly behind the control block, the same layout
          * the non-deferred path uses. */
@@ -201,10 +222,6 @@ static UINT create_deferred_item( deferred_item_t * item )
 
     case DEFER_MUTEX:
         rc = tx_mutex_create( ( TX_MUTEX * ) item->object, item->name, TX_INHERIT );
-        break;
-
-    case DEFER_EVENT_FLAGS:
-        rc = tx_event_flags_create( ( TX_EVENT_FLAGS_GROUP * ) item->object, item->name );
         break;
     }
 
@@ -255,6 +272,30 @@ static UINT slot_tx_create( thread_slot_t * slot )
                              slot->stack_size, slot->tx_prio,
                              slot->tx_prio, TX_NO_TIME_SLICE,
                              TX_AUTO_START );
+}
+
+/* The kernel objects of a thread slot: its event-flags group first (the thread can set
+ * its own flags from the moment it runs), then the thread itself. The running path and
+ * the replay both come through here, so a slot is built one way only. */
+static UINT create_thread_object( thread_slot_t * slot )
+{
+    UINT rc = tx_event_flags_create( &slot->flags, slot->name );
+
+    if( rc != TX_SUCCESS )
+    {
+        return rc;
+    }
+
+    rc = slot_tx_create( slot );
+    if( rc != TX_SUCCESS )
+    {
+        tx_event_flags_delete( &slot->flags );
+        return rc;
+    }
+
+    slot->thread.tx_thread_cmsis_slot = slot;
+    slot->state = SLOT_LIVE;
+    return TX_SUCCESS;
 }
 
 osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAttr_t * attr )
@@ -312,9 +353,9 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
 
     if( kernel_state != K_RUNNING )
     {
-        /* The kernel is not running yet: record the event-flags group and leave the
-         * slot pending, so that the replay creates both at kernel entry. */
-        if( defer_new( DEFER_EVENT_FLAGS, &slot->flags, slot->name ) == NULL )
+        /* The kernel is not running yet: record the slot and leave it claimed until the
+         * replay builds it. */
+        if( defer_new( DEFER_THREAD, slot, slot->name ) == NULL )
         {
             fprintf( stderr, "cmsis2: no memory to defer '%s'\n", slot->name );
             vPortFree( slot->stack );
@@ -324,28 +365,13 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
         }
         slot->state = SLOT_PENDING;
     }
-    else
+    else if( create_thread_object( slot ) != TX_SUCCESS )
     {
-        if( tx_event_flags_create( &slot->flags, slot->name ) != TX_SUCCESS )
-        {
-            fprintf( stderr, "cmsis2: event flags create failed for '%s'\n", slot->name );
-            vPortFree( slot->stack );
-            slot->stack = NULL;
-            slot->state = SLOT_FREE;
-            return NULL;
-        }
-
-        if( slot_tx_create( slot ) != TX_SUCCESS )
-        {
-            fprintf( stderr, "cmsis2: thread create failed for '%s'\n", slot->name );
-            tx_event_flags_delete( &slot->flags );
-            vPortFree( slot->stack );
-            slot->stack = NULL;
-            slot->state = SLOT_FREE;
-            return NULL;
-        }
-        slot->thread.tx_thread_cmsis_slot = slot;
-        slot->state = SLOT_LIVE;
+        fprintf( stderr, "cmsis2: thread create failed for '%s'\n", slot->name );
+        vPortFree( slot->stack );
+        slot->stack = NULL;
+        slot->state = SLOT_FREE;
+        return NULL;
     }
 
     return ( osThreadId_t ) slot;
@@ -355,31 +381,7 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
  * tx_application_define(), the first moment the kernel allows creation. */
 void cmsis2_tx_application_define( void )
 {
-    unsigned int i;
-
-    /* Objects first: a pending thread's event-flags group has to exist before the
-     * thread that owns it is created. */
     replay_deferred_objects();
-
-    for( i = 0U; i < ( unsigned ) CMSIS2_MAX_THREADS; i++ )
-    {
-        if( slots[ i ].state == SLOT_PENDING )
-        {
-            if( slot_tx_create( &slots[ i ] ) == TX_SUCCESS )
-            {
-                slots[ i ].thread.tx_thread_cmsis_slot = &slots[ i ];
-                slots[ i ].state = SLOT_LIVE;
-            }
-            else
-            {
-                fprintf( stderr, "cmsis2: deferred create failed for '%s'\n", slots[ i ].name );
-                tx_event_flags_delete( &slots[ i ].flags );
-                vPortFree( slots[ i ].stack );
-                slots[ i ].stack = NULL;
-                slots[ i ].state = SLOT_FREE;
-            }
-        }
-    }
 }
 
 osStatus_t osThreadTerminate( osThreadId_t thread_id )
