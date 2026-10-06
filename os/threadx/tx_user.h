@@ -3,6 +3,8 @@
  * @brief   ThreadX kernel configuration for the host build.
  * @author  zhugengyu
  * @date    06.10.2026
+
+ * @design adapter - ref threadx:ports/linux/gnu/inc/tx_port.h:86
  *
  * The kernel force-includes this file into every translation unit: the build passes
  * -DTX_INCLUDE_USER_DEFINE_FILE, and the port's tx_port.h reaches this header by that

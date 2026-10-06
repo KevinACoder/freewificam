@@ -3,6 +3,9 @@
  * @brief   CMSIS-RTOS2 backend over the ThreadX kernel.
  * @author  zhugengyu
  * @date    06.10.2026
+
+ * @design adapter - ref threadx:utility/rtos_compatibility_layers/FreeRTOS/tx_freertos.c:137
+ * @design initcall/builder - ref linux:init/main.c:1422
  *
  * The application sees cmsis_os2.h only; this file is the ThreadX side of that
  * abstraction and the only place in the repository that reads ThreadX control blocks,

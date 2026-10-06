@@ -3,6 +3,8 @@
  * @brief   Allocation face of the ThreadX host layer behind the pvPortMalloc seam.
  * @author  zhugengyu
  * @date    06.10.2026
+
+ * @design proxy - ref linux:include/linux/dma-map-ops.h:16
  *
  * Thread stacks and kernel object control blocks that the CMSIS-RTOS2 layer owns come
  * from here. The seam is deliberately narrow and named after its counterpart in the

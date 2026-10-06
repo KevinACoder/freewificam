@@ -3,6 +3,8 @@
  * @brief   Host implementation of the pvPortMalloc/vPortFree seam.
  * @author  zhugengyu
  * @date    06.10.2026
+
+ * @design proxy - ref linux:include/linux/dma-map-ops.h:16
  *
  * A thin pass-through to the C library allocator: on the host the C library already
  * provides a general heap, and a second allocator in front of it would only hide the

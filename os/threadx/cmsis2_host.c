@@ -3,6 +3,8 @@
  * @brief   Host lifecycle end for the ThreadX backend of the CMSIS-RTOS2 facade.
  * @author  zhugengyu
  * @date    06.10.2026
+
+ * @design proxy - ref linux:include/linux/dma-map-ops.h:16
  *
  * CMSIS-RTOS2 has no kernel-stop call, and this kernel has no way back out of its
  * scheduler: the Linux port's scheduler is the process main thread in an endless loop,

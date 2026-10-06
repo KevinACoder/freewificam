@@ -3,6 +3,8 @@
  * @brief   Application-side entry point the ThreadX kernel asks for.
  * @author  zhugengyu
  * @date    06.10.2026
+
+ * @design callback registration - ref threadx:ports/linux/gnu/example_build/sample_threadx.c:79
  *
  * The kernel calls tx_application_define() exactly once, from its own initialization
  * path, after the kernel objects' bookkeeping is up and before the scheduler starts.
