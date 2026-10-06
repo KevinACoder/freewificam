@@ -7,3 +7,6 @@
 [submodule "third-party/CMSIS-FreeRTOS"]
 	path = third-party/CMSIS-FreeRTOS
 	url = https://github.com/ARM-software/CMSIS-FreeRTOS.git
+[submodule "third-party/threadx"]
+	path = third-party/threadx
+	url = https://github.com/eclipse-threadx/threadx.git
