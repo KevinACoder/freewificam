@@ -56,7 +56,7 @@ consumer-round work and is recorded in `DIVERGENCES.md`.
 
 What is checked here: `skbuff.h` and `freertos/freertos_skbuff.h` are
 self-contained (incomplete-`struct list_head` pointers and macros only) and are
-syntax-checked by `tests/host/net80211-linuxkpi-import/` (`skbuff-headers` target);
+syntax-checked by the `contract-check` target of `tests/host/linuxkpi-usb-test/`;
 `freertos/wrapper.h` is not compiled standalone because it includes `wireless.h`
 and `osdep_service.h`, which are outside this unit.
 

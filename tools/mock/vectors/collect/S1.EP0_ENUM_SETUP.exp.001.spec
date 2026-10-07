@@ -10,6 +10,6 @@ captured=2026-10-07
 redact=none
 route=n/a
 norm=-
-note=consumed by the usb-device-model suite (setup byte comparison)
+note=consumed by the linuxkpi-usb-test suite (setup byte comparison)
 truth_note=USB 2.0 chapter 9.4 Table 9-2 (standard request fields: bmRequestType 0x80 device to host standard device request, bRequest 0x06 GET_DESCRIPTOR, wValue high byte 0x01 device descriptor, wLength 8)
 hex=8006000100000800

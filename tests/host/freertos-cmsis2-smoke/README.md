@@ -6,7 +6,7 @@ the same objects:
 * `freertos-cmsis2-smoke` - the runtime smoke: the FreeRTOS POSIX port runs one message
   queue and two threads, and the CMSIS-FreeRTOS adapter provides the API surface.
 * `c9-handle-trunc` - the 64-bit handle cases (one case per invocation, `mutex|timer|
-  mempool`), run by the `freertos-host-smoke` container suite.
+  mempool`), run by the `freertos-cmsis2-smoke` container suite.
 
 ## Build and run
 

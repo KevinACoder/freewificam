@@ -10,6 +10,6 @@ captured=2026-10-07
 redact=none
 route=n/a
 norm=-
-note=consumed by the usb-device-model suite (command block byte comparison)
+note=consumed by the linuxkpi-usb-test suite (command block byte comparison)
 truth_note=USB MSC bulk-only transport rev 1.0 chapter 5.1 (command block wrapper: 31 bytes, signature USBC, tag, data transfer length, flags, LUN, CB length, command block)
 hex=55534243010000000000000000000600000000000000000000000000000000

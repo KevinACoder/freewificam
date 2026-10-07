@@ -10,6 +10,6 @@ captured=2026-10-07
 redact=none
 route=n/a
 norm=-
-note=consumed by the usb-device-model suite (setup byte comparison)
+note=consumed by the linuxkpi-usb-test suite (setup byte comparison)
 truth_note=USB MSC bulk-only transport rev 1.0 chapter 3.1 (class-specific request 0xFF Mass Storage Reset, interface recipient, host to device, wLength 0)
 hex=21ff000000000000

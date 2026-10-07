@@ -11,7 +11,7 @@
 # os/cmsis2/ (backend facade plus the host stand-ins for the CMSIS Core headers).  The
 # kernel is compiled as vendored; the CMSIS-FreeRTOS adapter is compiled through the patch
 # channel (tools/patches/replay.sh), and PATCHES=off forces the pinned bytes, which is how
-# the suite's red control runs (tools/mock/freertos-host-smoke/README.md).
+# the suite's red control runs (tools/mock/freertos-cmsis2-smoke/README.md).
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 ROOT         := $(abspath $(MAKEFILE_DIR)/../../..)

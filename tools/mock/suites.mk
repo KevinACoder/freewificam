@@ -2,5 +2,13 @@
 #
 # Written in make assignment syntax so the same file can be included by a Makefile
 # aggregator as well as read by tools/mock/run.sh.
+#
+# Default set = the suites that cover this repository's own code.  Fast enough to
+# run on every change; `make mock SUITES_FILE=...` or a named suite runs a subset.
+SUITES := container-selftest threadx-cmsis2-smoke freertos-cmsis2-smoke net80211-port-test net80211-frame-test linuxkpi-usb-test skbuff-allocation-free-stress linuxkpi-usb-urb-stress
 
-SUITES := container-selftest threadx-host-smoke threadx-regression freertos-kernel-unit net80211-frame-mock freertos-host-smoke usb-device-model skbuff-stress net80211-port-contract
+# The upstream kernels are vendored and do not change with this repository's work,
+# so their regression suites are a separate, deliberate run: `make mock-kernels`.
+# They are the slow ones (tens of seconds each); a change under third-party/ is
+# what warrants running them.
+SUITES_KERNELS := threadx-regression freertos-kernel-unit

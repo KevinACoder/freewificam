@@ -10,7 +10,7 @@ about the machinery the port took over.
 | T-2 | 39 `compat/` fat headers | retired | outside the closure under both include disciplines (driver, USB, PCI and toolchain vocabulary) | M0-8b |
 | T-3 | 10 `compat/` machinery headers | retired; `sys/{mutex,intr,atomic,once,systm,kernel,cpu,proc}.h` replaced by the port's thin headers, `sys/cdefs.h` and `sys/errno.h` by the port's forwarding shims | the port owns the OS service face so one CMSIS-RTOS2 implementation serves every backend; the two shims must forward to the host/target header (the component's copies shadowed it) | M0-8b |
 | T-4 | `port/osal/**`, `port/net/**`, `port_config*.h` | retired | the FreeRTOS OSAL and the embox shells are replaced by `ports/net80211/{osal,net}`; the harness config is replaced by the port prelude | M0-8b |
-| T-5 | `tests/**` | retired | bound to the retired embox mbuf shell; `tests/host/net80211-port/` supersedes it | M0-8b |
+| T-5 | `tests/**` | retired | bound to the retired embox mbuf shell; `tests/host/net80211-port-test/` supersedes it | M0-8b |
 | T-6 | `sys/malloc.h`, `sys/kmem.h` | kept (reclassified from machinery to kept vocabulary) | they only declare the port's allocation API (`wlan_kmalloc`, `kmem_*`) and map the BSD flags; the implementation is the port's - so they stay byte-identical here | M0-8b |
 
 Import state (2026-10-07): all 61 kept files are byte-identical to
