@@ -28,6 +28,10 @@
 #error "no CMSIS2 backend selected: define CMSIS2_BACKEND_FREERTOS or CMSIS2_BACKEND_THREADX"
 #endif
 
+/* The critical-section extension lives beside the facade so that application and
+ * component code still reaches everything through this one header. */
+#include "cmsis_os2_ext.h"
+
 /**
  * @brief   End the scheduler from a task so that the scheduler-start call returns.
  *
