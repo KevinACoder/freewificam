@@ -1027,11 +1027,9 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		    live_id, live_state);
 		return -EBUSY;
 	}
-	/* the transport reference (rule 1): taken while the urb is still
-	 * invisible to every other context - the publish-before-reference
-	 * window of the old `_refs++ after usbh_submit_urb` (codex
-	 * answer-10 root cause #1, the 456B UAF) stays closed by
-	 * construction */
+	/* the transport reference: taken while the urb is still invisible to
+	 * every other context, so the publish-before-reference window that
+	 * once produced a use-after-free stays closed by construction */
 	urb->_refs++;
 	urb->_ep = ep;
 	urb->_qnext = NULL;
