@@ -32,7 +32,7 @@ bus backend, network-stack presentation) rather than as a firmware-private tree.
 | `arch/` | CPU / architecture layer (aarch64, Cortex-M) |
 | `os/` | RTOS ports and the CMSIS-RTOS2 abstraction |
 | `board/` | Board support, one directory per target |
-| `components/` | Drivers and protocol stacks |
+| `components/` | Drivers and protocol stacks, plus the imported units (`net80211/`, `linuxkpi/`, `skbuff/`) with their provenance ledgers |
 | `app/` | Application entry points (one per OS / flavor) |
 | `third-party/` | Vendored upstream sources (pinned) |
 | `patches/` | Local patches replayed onto upstream pins |
@@ -53,12 +53,15 @@ licenses are recorded as components are vendored):
 - CherryUSB — https://github.com/cherry-embedded/CherryUSB
 - lwIP — https://savannah.nongnu.org/projects/lwip/
 - NetBSD (source of the imported 802.11 stack and chip drivers) — https://github.com/NetBSD/src
+- TizenRT (source of the imported skbuff unit) — https://github.com/Samsung/TizenRT
 
 ## Contributing
 
 Contribution flow and commit conventions: see `CONTRIBUTING.md` (added with the
-bootstrap milestone). Upstream projects are vendored as pinned submodules; local changes
-are replayed from `patches/`.
+bootstrap milestone). Upstream projects are vendored as pinned submodules or, for the
+imported units under `components/`, as verbatim snapshots with a provenance ledger
+(`PROVENANCE.md`) and a divergence ledger next to them; local changes are replayed from
+`patches/`.
 
 ## License
 
@@ -85,4 +88,5 @@ TBD (added with the bootstrap milestone).
 开源 802.11 支持长期依赖厂商 SDK 与二进制固件，缺少 BSD/Linux 那样的可复用栈——本项目
 的目标就是把这块补上：无线栈按"可移植库 + 每 OS 一个 port（OS 适配 / 总线后端 / 网络栈
 表示层）"的结构交付，供其他 RTOS 项目复用。关联项目（原链接）：net_80211 可移植库、
-wpa_supplicant-rtos、Embox、ThreadX、FreeRTOS、CherryUSB、lwIP、NetBSD。
+wpa_supplicant-rtos、Embox、ThreadX、FreeRTOS、CherryUSB、lwIP、NetBSD、TizenRT
+（`components/skbuff/` 导入单元的来源）。
