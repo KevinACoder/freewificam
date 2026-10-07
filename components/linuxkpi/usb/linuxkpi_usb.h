@@ -1,8 +1,12 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * linuxkpi_usb.h - the in-tree face of the linuxkpi USB layer: the
- * usbkpi capture ring (the byte-comparison exit) and the claim-time
- * plumbing the CherryUSB class hook drives.
+ * linuxkpi_usb.h - the in-tree face of the linuxkpi USB layer.
+ *
+ * The engine's public entry points: bring-up, the synchronous-submit policy
+ * switch, the driver registry helpers used at claim time, and the allocation
+ * seam's counters.  The board line's diagnostics surface (capture ring,
+ * endpoint ledger, wedge report) is not part of this build; a test observes
+ * the seam counters and the controller model instead.
  */
 
 #ifndef LINUXKPI_USB_H
@@ -10,74 +14,48 @@
 
 #include "linuxkpi_core.h"
 
-struct usbkpi_record {
-	u64		seq;
-	u32		tick;
-	u8		dir;		/* 1 = IN, 0 = OUT */
-	u8		type;		/* USB_ENDPOINT_XFER_* | 0x80 = submit */
-	u8		ep;		/* endpoint | 0x80 for IN */
-	u8		status;		/* 0 ok, else -errno */
-	u32		len;		/* payload length */
-	u32		crc;		/* payload crc32 */
-	u8		head[8];	/* first payload bytes */
-};
-
-void		usbkpi_set_enabled(bool on);
-/* capture filter over USB_ENDPOINT_XFER_* bits; 0 resets to all-types */
-void		usbkpi_set_type_mask(unsigned int mask);
-unsigned int	usbkpi_type_mask(void);
-/* R-LK3 control experiment: hold bulk-IN submits back from the HC */
-void		usbkpi_rxhold_set(bool on);
-bool		usbkpi_rxhold(void);
-/* R-LK3 wedge forensics: call from a live shell after the 60s timeout */
-void		usbkpi_wedge_report(void);
-/* bulk single-flight queue state (the W3 arbiter): per-endpoint busy
- * flag + parked FIFO depth, printed to the log sink */
-void		usbkpi_stream_report(void);
-/* per-endpoint submit/completion/fail counters (W2/rtw89 fwdl ledger) */
-void		usbkpi_ep_report(void);
-
-/* EP0 call ledger (W2/rtw89): read from the MON ISR (rtw89_mon.c) so a
- * console silence can be classified in place - EP0 grinding vs pure CPU */
-extern volatile unsigned int usbkpi_ctrl_total;
-extern volatile unsigned int usbkpi_ctrl_last_val;
-extern volatile unsigned int usbkpi_ctrl_last_idx;
-extern volatile unsigned int usbkpi_ctrl_last_len;
-extern volatile unsigned int usbkpi_ctrl_last_ret;
-extern volatile unsigned int usbkpi_ctrl_last_us;
-unsigned int	usbkpi_get_records(struct usbkpi_record *out, unsigned int n,
-				    unsigned int skip);
-unsigned long long usbkpi_sequence(void);
-u32		lkpi_crc32(const void *buf, size_t len);
-
-/* drivers register through usb_register() (the RTOS shells register
- * explicitly before the enumeration starts; the Linux shell rides the
- * kernel's module_usb_driver) */
+/* drivers register through usb_register() (the target shells register
+ * explicitly before the enumeration starts) */
 void		lkpi_usb_start(void);
 void		lkpi_usb_trace_set(bool on);
 void		lkpi_usb_force_sync_set(bool on);
-/* the drain thread's OS handle (the wedge report reads the state/stack
- * watermark off it); opaque here - the OSAL world casts it back */
-void *		lkpi_usb_drain_thread_id(void);
 
-/* claim-time plumbing (usbh_rtw88_class.c) */
+/* claim-time plumbing (called by the bring-up that claims an interface) */
+struct usb_device;
 struct usb_interface;
 void	lkpi_usb_device_bind(struct usb_device *dev,
 		    struct usb_interface *intf, void *hport);
 int	lkpi_usb_probe_drivers(struct usb_interface *intf);
 void	lkpi_usb_disconnect_drivers(struct usb_interface *intf);
 
-/* the last claim the class hook landed (port/adapters/linuxkpi/
- * lkpi_usbh_class.c): the raw-submit diagnostic submits against the
- * same hubport/interface the linux driver rides (P6-b root-cause
- * experiments, issues/2026-10-01-xhci-bulk-td-not-fetched) */
-struct usbh_hubport;
-struct usbh_hubport *lkpi_usbh_claimed_hport(void);
-uint8_t	lkpi_usbh_claimed_intf(void);
+/* ------------------------------------------------------------------ */
+/* the allocation seam's evidence                                      */
+/* ------------------------------------------------------------------ */
 
-/* the stage pool bisect (usbkpi rawbulk stage): a raw-shape urb whose
- * buffers ARE the stage pool's memory - separates a poisoned pool
- * address from a guilty submit path (P6-b root cause, 2026-10-01) */
-const void *lkpi_usb_stage_slot_mem(unsigned int i);
+struct lkpi_usb_mem_stats {
+	u32	n_urb_alloc;
+	u32	n_urb_free;
+	u32	n_coherent_alloc;
+	u32	n_coherent_free;
+	u32	alloc_fail;
+	u32	double_free;	/* named and skipped */
+	u32	stray_free;	/* pointer outside the pool */
+	u32	uaf_write;	/* write through a released pointer */
+};
+
+/* the coherent buffer pair the Linux face declares (include/linux/usb.h
+ * routes its inline helpers here so the seam counts them like urbs) */
+void	*lkpi_usb_alloc_coherent(size_t size, unsigned int mem_flags);
+void	lkpi_usb_free_coherent(void *p, size_t size);
+
+void	lkpi_usb_mem_stats_get(struct lkpi_usb_mem_stats *out);
+/* the first pointer a named counter flagged (NULL when none did) */
+const void *lkpi_usb_mem_first_witness(void);
+/* 1 when the pointer is in the released ring (or carries the id poison) */
+int	lkpi_usb_urb_is_freed(const struct urb *urb);
+/* record a use-after-free write attempt on a released object */
+void	lkpi_usb_uaf_hit(const void *p);
+/* DMA staging hook counter (passthrough in this build) */
+unsigned int	lkpi_usb_stage_grant_count(void);
 
 #endif /* LINUXKPI_USB_H */
