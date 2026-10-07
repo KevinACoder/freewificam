@@ -1,0 +1,14 @@
+mockvec1
+ver=1
+seg=S1
+dir=in
+seq=1
+anchor=S1.EP0_DESC_DEV
+payload_bytes=18
+crc32=23fd9cd0
+sha256=52ce3e937592e05a9c5d2ecff241198df6bba83183da9e44a3959f327ec239ac
+truth=usb2-ch9.6.1
+source=derived:spec
+captured=2026-10-07
+redact=none
+120100020000004034127856000100000001

@@ -1,0 +1,14 @@
+mockvec1
+ver=1
+seg=S1
+dir=exp
+seq=1
+anchor=S1.BOT_CBW
+payload_bytes=31
+crc32=873cdd15
+sha256=605253321f3c3d6906ad286c962cb626af117d4953585aaffeb33501208644a1
+truth=usbmsc-bot-1.0-ch5.1
+source=derived:spec
+captured=2026-10-07
+redact=none
+55534243010000000000000000000600000000000000000000000000000000

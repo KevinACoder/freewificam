@@ -56,17 +56,38 @@ check_segment_map() {
     fi
 
     # Regenerating must reproduce the header byte for byte: a generator that drifts
-    # between runs would make the two-sided anchor contract unreliable.
-    before=$build_root/segment_map.h
-    if [ -f "$before" ]; then
-        cp "$before" "$build_root/segment_map.prev"
-        "$here/gen-segment-map.sh" > /dev/null
-        if ! diff -q "$build_root/segment_map.prev" "$before" > /dev/null; then
-            config_error "segment_map.h is not reproducible (generator drift)"
+    # between runs would make the two-sided anchor contract unreliable. The check
+    # generates twice from the registry that is in place now, so a build artifact left
+    # over from an earlier registry state is not mistaken for generator drift.
+    prev=$build_root/segment_map.prev
+    "$here/gen-segment-map.sh" > /dev/null
+    cp "$build_root/segment_map.h" "$prev"
+    "$here/gen-segment-map.sh" > /dev/null
+    if ! diff -q "$prev" "$build_root/segment_map.h" > /dev/null; then
+        config_error "segment_map.h is not reproducible (generator drift)"
+    fi
+    rm -f "$prev"
+}
+
+# --- vector factory (C13): the shared vector/trace files the suites load --------------
+# The registry's vector columns, the .dat files and the manifest are one contract with
+# three sides; check-vectors.sh is the single implementation that guards it, and it runs
+# before any suite so a broken factory stops the run as a configuration error.
+check_vectors() {
+    if [ ! -f "$here/check-vectors.sh" ]; then
+        config_error "check-vectors.sh missing"
+        return
+    fi
+    if ! sh "$here/check-vectors.sh" > "$build_root/vector-check.log" 2>&1; then
+        # The findings name the rule, the file and the field; the container states the
+        # first one and leaves the log for the detail.
+        finding=$(grep -v '^VECTORS-RESULT ' "$build_root/vector-check.log" | head -1 || true)
+        if [ -z "$finding" ]; then
+            finding="check-vectors.sh exited non-zero without a finding"
         fi
-        rm -f "$build_root/segment_map.prev"
-    else
-        "$here/gen-segment-map.sh" > /dev/null
+        printf 'MOCK-CONFIG vectors: %s\n' "$finding"
+        sed 's/^/  /' "$build_root/vector-check.log"
+        status=2
     fi
 }
 
@@ -200,6 +221,7 @@ if [ ! -f "$suites_file" ]; then
 fi
 
 check_segment_map
+check_vectors
 
 if [ $# -gt 0 ]; then
     wanted=$*

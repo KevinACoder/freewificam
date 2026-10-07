@@ -1,0 +1,14 @@
+mockvec1
+ver=1
+seg=S1
+dir=exp
+seq=1
+anchor=S1.EP0_ENUM_SETUP
+payload_bytes=8
+crc32=a070cc31
+sha256=ec1af4db36d6e6afe77641a26f2be202532d16779942252edd485b4420413863
+truth=usb2-ch9.4
+source=derived:spec
+captured=2026-10-07
+redact=none
+8006000100000800

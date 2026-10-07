@@ -156,11 +156,11 @@ first_row=$(sed -n '2p' "$mock/segment-map.tsv")
 s5_row=$(grep -P '\tS5\t' "$mock/segment-map.tsv" | head -1)
 
 # a row with a field missing
-{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row" | cut -f1-11; } > "$mapfixtures/missing_field.tsv"
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row" | cut -f1-13; } > "$mapfixtures/missing_field.tsv"
 check_map_red segment_map_missing_field "$mapfixtures/missing_field.tsv"
 
 # the two sides printing different field names
-{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row" | awk -F'\t' 'BEGIN{OFS="\t"}{$10="<prefix>S1.EP0_SETUP ok=%u"; print}'; } > "$mapfixtures/template_drift.tsv"
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row" | awk -F'\t' 'BEGIN{OFS="\t"}{$11="<prefix>S1.EP0_SETUP ok=%u"; print}'; } > "$mapfixtures/template_drift.tsv"
 check_map_red segment_map_template_drift "$mapfixtures/template_drift.tsv"
 
 # the same anchor id twice
@@ -168,8 +168,12 @@ check_map_red segment_map_template_drift "$mapfixtures/template_drift.tsv"
 check_map_red segment_map_duplicate_id "$mapfixtures/duplicate_id.tsv"
 
 # a segment without a consumer claiming to be active (S5 is not built on purpose)
-{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$s5_row" | awk -F'\t' 'BEGIN{OFS="\t"}{$12="active"; print}'; } > "$mapfixtures/mislaid.tsv"
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$s5_row" | awk -F'\t' 'BEGIN{OFS="\t"}{$14="active"; print}'; } > "$mapfixtures/mislaid.tsv"
 check_map_red segment_map_mislaid_row "$mapfixtures/mislaid.tsv"
+
+# a vector column pointing at a file that does not exist
+{ cat "$mapfixtures/header.tsv"; printf '%s\n' "$first_row" | awk -F'\t' 'BEGIN{OFS="\t"}{$8="tools/mock/vectors/S1/no-such-vector.dat"; print}'; } > "$mapfixtures/missing_vector.tsv"
+check_map_red segment_map_missing_vector "$mapfixtures/missing_vector.tsv"
 
 # --- half four: a wireless suite may not run without its reference route --------------
 mkdir -p "$tmp/selftest-wireless"
@@ -197,6 +201,152 @@ result negative_control_missing_route_status "$([ "$rc" = 2 ] && echo 1 || echo 
 # and the container must say out loud that no wireless suite is registered, rather than
 # leaving the empty set unstated
 assert_break empty_wireless_set_declared "$tmp/out.log" '^MOCK-NOTE no wireless suites registered yet'
+
+# --- half five: the vector factory's validator must refuse broken vectors ------------
+# Each fixture is a mini factory tree under a temporary directory: a clean one that must
+# pass, then one break per vector rule. The fixtures never touch the real vectors/ tree,
+# so a deliberately bad vector can never enter the data set.
+vecfixtures=$tmp/vecfactory
+mkdir -p "$vecfixtures"
+write_mini_factory() {
+    dir=$1
+    mkdir -p "$dir/vectors/S1"
+    cat > "$dir/vectors/S1/S1.DOORBELL.in.001.dat" <<'DAT'
+mockvec1
+ver=1
+seg=S1
+dir=in
+seq=1
+anchor=S1.DOORBELL
+payload_bytes=3
+crc32=1b6214f6
+sha256=47ffa3ea45a70b8a41c2c0825df323c00a8b7a01c1ea06083cc41dddcc001123
+truth=usb2-ch9.4
+source=derived:spec
+captured=
+redact=none
+00ff01
+DAT
+    cat > "$dir/vectors/S1/S1.DOORBELL.exp.001.dat" <<'DAT'
+mockvec1
+ver=1
+seg=S1
+dir=exp
+seq=1
+anchor=S1.DOORBELL
+payload_bytes=3
+crc32=1b6214f6
+sha256=47ffa3ea45a70b8a41c2c0825df323c00a8b7a01c1ea06083cc41dddcc001123
+truth=usb2-ch9.4
+source=derived:spec
+captured=
+redact=none
+00ff01
+DAT
+    printf 'file\tvec\tseg\tdir\tanchor\ttruth\troute\tredact\tnorm\tnote\n' > "$dir/vectors/manifest.tsv"
+    # Rows in file-name order, as the schema requires (exp sorts before in).
+    for d in exp in; do
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "tools/mock/vectors/S1/S1.DOORBELL.$d.001.dat" \
+            "S1.DOORBELL.$d.001" S1 "$d" S1.DOORBELL \
+            "the schema fixture of the self test" n/a none - "self test fixture" \
+            >> "$dir/vectors/manifest.tsv"
+    done
+    {
+        printf 'seg\tanchor_id\tboundary\tin_shape\tout_expected\ttruth_source\troute\tinput_vec\texpected_vec\thost_assert\thost_fmt\tboard_fmt\tconsumer\tstatus\n'
+        printf 'S1\tS1.DOORBELL\tfixture\tfixture\tfixture\tfixture\tn/a\ttools/mock/vectors/S1/S1.DOORBELL.in.001.dat\ttools/mock/vectors/S1/S1.DOORBELL.exp.001.dat\tfixture\t<prefix>S1.DOORBELL ok=%%u\t<prefix>S1.DOORBELL ok=%%u\tfixture\tregistered\n'
+    } > "$dir/segment-map.tsv"
+}
+
+# The mini factory must be green first: a negative that is red anyway would prove
+# nothing about the break it claims to catch.
+vecwant() {
+    name=$1
+    want=$2
+    tree=$3
+    if sh "$mock/check-vectors.sh" --vectors-root "$tree/vectors" \
+            --segment-map "$tree/segment-map.tsv" > "$vecfixtures/$name.out" 2>&1; then
+        rc=0
+    else
+        rc=1
+    fi
+    if [ "$want" = "pass" ]; then
+        if [ "$rc" = "0" ]; then
+            vecok=$((vecok + 1))
+        else
+            vecbad=$((vecbad + 1))
+            echo "  vector fixture $name: expected a clean pass, the validator reported:" >&2
+            sed 's/^/    /' "$vecfixtures/$name.out" >&2
+        fi
+        return
+    fi
+    # A must-go-red fixture: the exit code and the rule id must both be there.
+    if [ "$rc" = "0" ]; then
+        vecbad=$((vecbad + 1))
+        echo "  vector fixture $name: the validator accepted a tree it must refuse" >&2
+        return
+    fi
+    if grep -q "^$want " "$vecfixtures/$name.out"; then
+        vecok=$((vecok + 1))
+    else
+        vecbad=$((vecbad + 1))
+        echo "  vector fixture $name: no $want finding in the validator output" >&2
+        sed 's/^/    /' "$vecfixtures/$name.out" >&2
+    fi
+}
+
+vecok=0
+vecbad=0
+
+write_mini_factory "$vecfixtures/green"
+vecwant green pass "$vecfixtures/green"
+
+# a tampered checksum: one payload byte changed, the header left alone
+rm -rf "$vecfixtures/tamper"; cp -r "$vecfixtures/green" "$vecfixtures/tamper"
+sed 's/^00ff01$/00ff02/' "$vecfixtures/green/vectors/S1/S1.DOORBELL.in.001.dat" \
+    > "$vecfixtures/tamper/vectors/S1/S1.DOORBELL.in.001.dat"
+vecwant tamper crc32 "$vecfixtures/tamper"
+
+# a fake segment id, in a header and in a manifest row
+rm -rf "$vecfixtures/fake-seg"; cp -r "$vecfixtures/green" "$vecfixtures/fake-seg"
+sed 's/^seg=S1$/seg=S5/' "$vecfixtures/fake-seg/vectors/S1/S1.DOORBELL.in.001.dat" \
+    > "$vecfixtures/fake-seg/vectors/S1/S1.DOORBELL.in.001.dat.tmp"
+mv "$vecfixtures/fake-seg/vectors/S1/S1.DOORBELL.in.001.dat.tmp" \
+   "$vecfixtures/fake-seg/vectors/S1/S1.DOORBELL.in.001.dat"
+vecwant fake_seg seg "$vecfixtures/fake-seg"
+
+# an empty truth tag
+rm -rf "$vecfixtures/empty-truth"; cp -r "$vecfixtures/green" "$vecfixtures/empty-truth"
+sed 's/^truth=.*$/truth=/' "$vecfixtures/empty-truth/vectors/S1/S1.DOORBELL.in.001.dat" \
+    > "$vecfixtures/empty-truth/vectors/S1/S1.DOORBELL.in.001.dat.tmp"
+mv "$vecfixtures/empty-truth/vectors/S1/S1.DOORBELL.in.001.dat.tmp" \
+   "$vecfixtures/empty-truth/vectors/S1/S1.DOORBELL.in.001.dat"
+vecwant empty_truth truth "$vecfixtures/empty-truth"
+
+# a manifest row whose file does not exist
+rm -rf "$vecfixtures/manifest"; cp -r "$vecfixtures/green" "$vecfixtures/manifest"
+printf 'tools/mock/vectors/S1/no-such-vector.dat\tS1.NOPE.in.001\tS1\tin\tS1.NOPE\tx\tn/a\tnone\t-\tself test fixture\n' \
+    >> "$vecfixtures/manifest/vectors/manifest.tsv"
+vecwant manifest_mismatch manifest "$vecfixtures/manifest"
+
+# a committed vector without a manifest row
+rm -rf "$vecfixtures/unlisted"; cp -r "$vecfixtures/green" "$vecfixtures/unlisted"
+head -2 "$vecfixtures/green/vectors/manifest.tsv" > "$vecfixtures/unlisted/vectors/manifest.tsv"
+vecwant unlisted manifest "$vecfixtures/unlisted"
+
+# a segment-map expected_vec pointing at a file that does not exist
+rm -rf "$vecfixtures/mapcell"; cp -r "$vecfixtures/green" "$vecfixtures/mapcell"
+sed 's#S1.DOORBELL.exp.001.dat#S1.DOORBELL.exp.404.dat#' "$vecfixtures/mapcell/segment-map.tsv" \
+    > "$vecfixtures/mapcell/segment-map.tsv.tmp"
+mv "$vecfixtures/mapcell/segment-map.tsv.tmp" "$vecfixtures/mapcell/segment-map.tsv"
+vecwant segment_map_missing segment-map "$vecfixtures/mapcell"
+
+if [ "$vecbad" = 0 ]; then
+    result vector-negatives 1
+else
+    result vector-negatives 0
+    echo "  vector-negatives: $vecok fixture(s) behaved, $vecbad did not" >&2
+fi
 
 echo "$suite: failures=$failures"
 [ "$failures" = 0 ]

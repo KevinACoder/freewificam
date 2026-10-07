@@ -1,0 +1,14 @@
+mockvec1
+ver=1
+seg=S1
+dir=exp
+seq=1
+anchor=S1.CTRL_MS_RESET
+payload_bytes=8
+crc32=c2c8f791
+sha256=42ac040fa74700106f34c19f25abd7672baa1febeed101d797118f69ac57fc86
+truth=usbmsc-bot-1.0-ch3.1
+source=derived:spec
+captured=2026-10-07
+redact=none
+21ff000000000000

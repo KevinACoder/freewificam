@@ -1,0 +1,14 @@
+mockvec1
+ver=1
+seg=S1
+dir=exp
+seq=1
+anchor=S1.CTRL_GET_MAX_LUN
+payload_bytes=8
+crc32=2e9f48be
+sha256=33163f9527db49033c816d8f636c7110615d6638ba0cd7ff768aef5ba4ba5569
+truth=usbmsc-bot-1.0-ch3.2
+source=derived:spec
+captured=2026-10-07
+redact=none
+a1fe000000000100

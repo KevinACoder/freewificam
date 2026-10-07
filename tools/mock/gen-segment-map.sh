@@ -30,7 +30,7 @@ mkdir -p "$here/build"
             macros[anchor] = 1
         }
         if (!(seg in seg_status)) {
-            seg_status[seg] = $12
+            seg_status[seg] = $14
             seg_order[++segs] = seg
         }
     }
@@ -52,9 +52,9 @@ mkdir -p "$here/build"
     $2 != "-" {
         name = sanitize($2)
         printf "#define ANCHOR_%s_ID \"%s\"\n", name, $2
-        printf "#define ANCHOR_%s_HOST_FMT \"%s\"\n", name, $9
-        printf "#define ANCHOR_%s_BOARD_FMT \"%s\"\n", name, $10
-        printf "#define ANCHOR_%s_CONSUMER \"%s\"\n", name, $11
+        printf "#define ANCHOR_%s_HOST_FMT \"%s\"\n", name, $11
+        printf "#define ANCHOR_%s_BOARD_FMT \"%s\"\n", name, $12
+        printf "#define ANCHOR_%s_CONSUMER \"%s\"\n", name, $13
         print ""
     }
     ' "$here/segment-map.tsv"
