@@ -48,11 +48,22 @@ int32_t gic_irq_is_enabled(uint32_t intid);
  * active. Safe from any context. */
 uint32_t gic_running_priority(void);
 
+/* Acknowledge/end pair for an exception entry's IRQ slot. The raw system
+ * registers (ICC_IAR1_EL1 / ICC_EOIR1_EL1) stay inside this module: the
+ * entry reads the INTID with gic_iar_read(), dispatches with the returned
+ * value, and ends the interrupt by writing the SAME value back through
+ * gic_irq_eoi(). Which code owns that pair is per-port (the FreeRTOS port
+ * does it inside its own asm; the ThreadX entry does it in tx_vectors.S) -
+ * the dispatcher below touches neither register. */
+uint32_t gic_iar_read(void);
+void gic_irq_eoi(uint32_t iar);
+
 /* Dispatch one already-acknowledged interrupt, from the exception entry's
- * IRQ slot: iar = the value read from ICC_IAR1_EL1. Runs the registered
+ * IRQ slot: iar = the value gic_iar_read() returned. Runs the registered
  * handler (if any); spurious (1023) returns without one. Ending the
- * interrupt (ICC_EOIR1_EL1) belongs to the exception return path, not here.
- * Runs with IRQs masked (PSTATE.I set by the exception entry); no nesting. */
-void gic_irq_dispatch(uint32_t iar);
+ * interrupt belongs to the entry (gic_irq_eoi). Returns iar unchanged so
+ * the caller can hand it straight to gic_irq_eoi(). Runs with IRQs masked
+ * (PSTATE.I set by the exception entry); no nesting. */
+uint32_t gic_irq_dispatch(uint32_t iar);
 
 #endif /* FREEWEBCAM_GICV3_H */
