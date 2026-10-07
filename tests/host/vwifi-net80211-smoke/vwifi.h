@@ -78,6 +78,9 @@ struct vwifi {
 	uint8_t eapol_src[6];
 
 	struct vwifi_stats stats;
+
+	/* the fault group's pollution selector; NULL = the green run */
+	const char *fault;
 };
 
 void vwifi_init(struct vwifi *sc, struct ieee80211com *ic, struct ifnet *ifp);

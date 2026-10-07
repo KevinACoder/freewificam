@@ -39,6 +39,7 @@
 #include <port/port.h>
 
 #include "osal/wlan_osal.h"
+#include "skbuff_seam.h"
 #include "vwifi.h"
 
 static const uint8_t vwifi_ap_mac[6] = VWIFI_AP_MAC_BYTES;
@@ -229,6 +230,18 @@ static void vwifi_start(struct ifnet *ifp)
 		if (m == NULL)
 			break;
 		vwifi_record(sc, m);
+		{
+			/* the driver-side transmit buffer: one seam allocation
+			 * per captured frame, released after it is recorded */
+			struct sk_buff *skb = wlan_seam_skb_alloc(
+			    (unsigned int) m->m_len);
+
+			if (skb != NULL) {
+				m_copydata(m, 0, (int) m->m_len,
+				    wlan_seam_data(skb));
+				wlan_seam_skb_free(skb);
+			}
+		}
 
 		ni = M_GETCTX(m, struct ieee80211_node *);
 		M_SETCTX(m, NULL);
@@ -261,10 +274,21 @@ void vwifi_inject(struct vwifi *sc, const uint8_t *frame, size_t len)
 {
 	struct ieee80211com *ic = sc->ic;
 	struct ieee80211_node *ni;
+	struct sk_buff *skb;
 	struct mbuf *m;
 
-	m = vwifi_frame_mbuf(frame, len);
+	/* The driver-side buffer path: the received frame is held in one seam
+	 * allocation while the stack consumes the copy, so the seam's pairing
+	 * counters see every frame of the flow. */
+	skb = wlan_seam_skb_alloc((unsigned int) len);
+	if (skb == NULL) {
+		sc->stats.inject_fail++;
+		return;
+	}
+	memcpy(wlan_seam_data(skb), frame, len);
+	m = vwifi_frame_mbuf(wlan_seam_data(skb), len);
 	if (m == NULL) {
+		wlan_seam_skb_free(skb);
 		sc->stats.inject_fail++;
 		return;
 	}
@@ -274,6 +298,8 @@ void vwifi_inject(struct vwifi *sc, const uint8_t *frame, size_t len)
 	ieee80211_input(ic, m, ni, VWIFI_RSSI, 0);
 	ieee80211_free_node(ni);
 	wlan_port_serializer_unlock();
+
+	wlan_seam_skb_free(skb);
 }
 
 int vwifi_dispatch_one(struct vwifi *sc)
@@ -296,6 +322,11 @@ int vwifi_dispatch_one(struct vwifi *sc)
 		return 1;
 	case IEEE80211_FC0_SUBTYPE_AUTH:
 		rlen = vwifi_build_auth_resp(resp);
+		if (sc->fault != NULL && strcmp(sc->fault, "trunc-auth") == 0) {
+			/* the fault group's polluted input: the authentication
+			 * response loses its last body byte */
+			rlen -= 1;
+		}
 		sc->stats.rx_auth_resp++;
 		frame_store(&sc->last_auth_resp, resp, rlen);
 		vwifi_inject(sc, resp, rlen);

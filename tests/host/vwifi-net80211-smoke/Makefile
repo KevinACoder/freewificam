@@ -72,7 +72,8 @@ PORT_SRCS := \
 
 SUITE_SRCS := \
     $(MAKEFILE_DIR)/main.c \
-    $(MAKEFILE_DIR)/vwifi.c
+    $(MAKEFILE_DIR)/vwifi.c \
+    $(MAKEFILE_DIR)/skbuff_seam.c
 
 # The library's own two host tests, re-anchored onto this port (upstream/).
 UPSTREAM_COMMON_SRCS := $(MAKEFILE_DIR)/upstream/host_stubs.c \
@@ -164,12 +165,12 @@ endef
 
 define SUITE_TX_RULE
 $(call OBJ,tx,$(1)): $(1) | $(BUILD_DIR)/tx
-	$$(CC) $$(TX_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(MAKEFILE_DIR) -c $$< -o $$@
+	$$(CC) $$(TX_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(ROOT)/components -I$$(MAKEFILE_DIR) -c $$< -o $$@
 endef
 
 define SUITE_FR_RULE
 $(call OBJ,fr,$(1)): $(1) | $(BUILD_DIR)/fr
-	$$(CC) $$(FR_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(MAKEFILE_DIR) -c $$< -o $$@
+	$$(CC) $$(FR_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(ROOT)/components -I$$(MAKEFILE_DIR) -c $$< -o $$@
 endef
 
 define TX_RUNTIME_RULE

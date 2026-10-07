@@ -45,7 +45,10 @@
 #include <net80211/ieee80211_proto.h>
 #include <net80211/ieee80211_crypto.h>
 
+#include <linuxkpi/skbuff/skbuff_pool.h>
+
 #include "osal/wlan_osal.h"
+#include "skbuff_seam.h"
 #include "vectors.h"
 #include "vwifi.h"
 
@@ -139,6 +142,7 @@ static void device_attach(void)
 
 	vwifi_init(&vwifi, ic, &ifp);
 	vwifi_install(&vwifi);
+	vwifi.fault = fault_mode;
 
 	/* NONE is installed by the crypto attach path; CCMP is registered here
 	 * because the import's link-set registration is compiled out on this
@@ -733,6 +737,69 @@ static void check_watchdog(void)
 	    before, after, ic->ic_bss->ni_inact, ic->ic_ifp->if_timer);
 }
 
+/* M: the memory seams - the sk_buff seam's pairing and named counters, the
+ * port allocation seam returning to its baseline after the stack is torn
+ * down, and the seam's misuse probe. */
+static void check_memory(unsigned blocks0, unsigned bytes0)
+{
+	struct lkpi_skb_pool_stats stats;
+	unsigned blocks1, bytes1;
+
+	wlan_seam_stats(&stats);
+	anchor("M.PAIR_SKB",
+	    stats.n_alloc > 0 && stats.n_alloc == stats.n_free &&
+	    stats.skb_used == 0,
+	    "a=%u f=%u used=%u high=%u", stats.n_alloc, stats.n_free,
+	    stats.skb_used, stats.skb_high);
+	anchor("M.NAMED_ZERO",
+	    stats.double_free == 0 && stats.stray_free == 0 &&
+	    stats.uaf_write == 0 && stats.fence_bad == 0 &&
+	    stats.alloc_fail == 0,
+	    "df=%u sf=%u uaf=%u fence=%u fail=%u", stats.double_free,
+	    stats.stray_free, stats.uaf_write, stats.fence_bad,
+	    stats.alloc_fail);
+
+	/* tear the stack down: the port allocation seam must come back to the
+	 * baseline the run started from */
+	ieee80211_ifdetach(ic);
+	wlan_osal_free(ic);
+	ic = NULL;
+	blocks1 = wlan_osal_live_blocks();
+	bytes1 = wlan_osal_live_bytes();
+	anchor("M.PAIR_MBUF", blocks1 == blocks0 && bytes1 == bytes0,
+	    "blocks=%u->%u bytes=%u->%u", blocks0, blocks1, bytes0, bytes1);
+}
+
+static void check_seam_misuse(void)
+{
+	struct lkpi_skb_pool_stats stats;
+	int ok;
+
+	wlan_seam_reset_stats();
+	ok = wlan_seam_misuse_probe();
+	wlan_seam_stats(&stats);
+	anchor("M.NAMED_MISUSE", ok,
+	    "df=%u sf=%u uaf=%u fence=%u", stats.double_free,
+	    stats.stray_free, stats.uaf_write, stats.fence_bad);
+}
+
+/* The fault group: the same management flow with one polluted input, run as a
+ * separate invocation so the green path stays untouched. The failing anchor
+ * set must localise to the segment where the pollution entered. */
+static void fault_flow_trunc_auth(void)
+{
+	unsigned small0 = ic->ic_stats.is_rx_elem_toosmall;
+
+	run_scan_to_run();
+
+	/* the polluted response was rejected by name and the exchange stopped */
+	anchor("S3.NEG_TRUNC", ic->ic_stats.is_rx_elem_toosmall == small0 + 1,
+	    "small=%u", ic->ic_stats.is_rx_elem_toosmall);
+	check_captured_frames();
+	check_responder_vectors();
+	check_node_table();
+}
+
 /* ------------------------------------------------------------------ */
 /* the run                                                             */
 /* ------------------------------------------------------------------ */
@@ -748,6 +815,16 @@ static void suite_run(void *argument)
 	bytes0 = wlan_osal_live_bytes();
 
 	device_attach();
+	if (fault_mode != NULL) {
+		if (strcmp(fault_mode, "trunc-auth") == 0) {
+			fault_flow_trunc_auth();
+		} else {
+			fail("unknown fault mode");
+		}
+		printf(TAG "FAILURES %u\n", failures);
+		fflush(stdout);
+		exit(1);
+	}
 	run_scan_to_run();
 	check_captured_frames();
 	check_responder_vectors();
@@ -758,6 +835,8 @@ static void suite_run(void *argument)
 	check_mgmt_negatives();
 	check_ccmp();
 	check_watchdog();
+	check_memory(blocks0, bytes0);
+	check_seam_misuse();
 
 	blocks1 = wlan_osal_live_blocks();
 	bytes1 = wlan_osal_live_bytes();
