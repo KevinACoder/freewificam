@@ -297,9 +297,12 @@ control_transfer(struct mock_hcd *h, const u8 *setup, u8 *buffer,
 	if (h->cap->setup_n > 0)
 		h->cap->setup_ret[h->cap->setup_n - 1] = ret;
 
-	/* capture the first DEVICE descriptor read that moved bytes */
-	if (setup[1] == 0x06 && setup[3] == 0x01 && *moved > 0 &&
-	    h->cap->desc_dev_len == 0) {
+	/* capture the full DEVICE descriptor read (the walker first reads the
+	 * eight-byte prefix; the vector compares the eighteen bytes a full
+	 * read returns) */
+	if (setup[1] == 0x06 && setup[3] == 0x01 &&
+	    *moved >= sizeof(g_desc_dev) &&
+	    h->cap->desc_dev_len < sizeof(h->cap->desc_dev)) {
 		unsigned int n = *moved;
 
 		if (n > sizeof(h->cap->desc_dev))
