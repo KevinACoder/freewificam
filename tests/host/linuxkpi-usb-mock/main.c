@@ -531,7 +531,8 @@ run_scenario(void)
 
 	/* the scripted negative battery: seven control-face cases whose
 	 * answers the device model is told to give */
-	if (g_fault != NULL && strcmp(g_fault, "negatives") == 0) {
+	if (g_fault != NULL && (strcmp(g_fault, "negatives") == 0 ||
+	    strcmp(g_fault, "battery-tamper") == 0)) {
 		static const char *names[7] = {
 			"get-interface-stall", "iface-desc-stall",
 			"ep-desc-stall", "device-short-read",
@@ -539,6 +540,12 @@ run_scenario(void)
 		};
 		int pass = 0;
 		int i;
+
+		/* the reverse control: with the scripted stalls disarmed the
+		 * battery's must-red cases no longer hold, and the run must
+		 * report that instead of quietly passing */
+		if (g_fault != NULL && strcmp(g_fault, "battery-tamper") == 0)
+			mock_hcd_script(b, MOCK_SCRIPT_ANSWER_ALL, 1);
 
 		for (i = 0; i < 7; i++) {
 			int expect_lo = 0, expect_hi = 0;

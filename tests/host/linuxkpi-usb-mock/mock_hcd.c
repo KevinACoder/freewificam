@@ -128,6 +128,7 @@ struct mock_hcd {
 	int		short_device;
 	int		no_string;
 	int		max_lun_stall;
+	int		answer_all;
 	int		ep_halt;
 
 	/* bulk-only-transport device state */
@@ -169,6 +170,25 @@ control_in(struct mock_hcd *h, const u8 *setup, u8 *buffer,
 	unsigned int avail = 0;
 
 	*moved = 0;
+	/* the tamper: answer the request in full from whatever the device
+	 * has, zero-padding the rest, so a caller expecting a refusal sees
+	 * success instead */
+	if (h->answer_all) {
+		u8 dt = setup[3];
+
+		if (dt == 0x01 && sizeof(g_desc_dev) >= 8)
+			memcpy(buffer, g_desc_dev, 8);
+		if (wlength != 0)
+			memset(buffer, 0, wlength);
+		if (dt == 0x01)
+			memcpy(buffer, g_desc_dev, sizeof(g_desc_dev) <=
+			    wlength ? sizeof(g_desc_dev) : wlength);
+		else if (dt == 0x02)
+			memcpy(buffer, g_desc_cfg, sizeof(g_desc_cfg) <=
+			    wlength ? sizeof(g_desc_cfg) : wlength);
+		*moved = wlength;
+		return 0;
+	}
 	switch (setup[1]) {
 	case 0x06:	/* GET_DESCRIPTOR */
 		switch (desc_type) {
@@ -276,6 +296,8 @@ control_transfer(struct mock_hcd *h, const u8 *setup, u8 *buffer,
 
 	if (h->link == MOCK_LINK_DETACHED) {
 		ret = -LKPI_USB_BE_ERR_SHUTDOWN;
+	} else if (h->answer_all && is_in) {
+		ret = control_in(h, setup, buffer, moved);
 	} else if (h->fault == MOCK_FAULT_STALL) {
 		h->fault = MOCK_FAULT_NONE;
 		ret = -LKPI_USB_BE_ERR_STALL;
@@ -711,6 +733,9 @@ mock_hcd_script(struct mock_backend *b, int key, int value)
 		break;
 	case MOCK_SCRIPT_MAX_LUN_STALL:
 		h->max_lun_stall = value;
+		break;
+	case MOCK_SCRIPT_ANSWER_ALL:
+		h->answer_all = value;
 		break;
 	default:
 		break;

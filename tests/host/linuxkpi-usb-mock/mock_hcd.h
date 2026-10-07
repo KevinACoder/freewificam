@@ -98,6 +98,11 @@ void mock_hcd_script(struct mock_backend *b, int key, int value);
 #define MOCK_SCRIPT_SHORT_DEVICE	4	/* DEVICE read answers short */
 #define MOCK_SCRIPT_NO_STRING		5	/* string index 0 has no data */
 #define MOCK_SCRIPT_MAX_LUN_STALL	6	/* Get Max LUN stalls */
+#define MOCK_SCRIPT_ANSWER_ALL		7	/* answer every request, however
+						 * short the device's own data
+						 * (the lying-device tamper that
+						 * must turn the negative
+						 * battery red) */
 
 /* the captured transfer counters (the device's own tally) */
 void mock_hcd_counters(const struct mock_backend *b,
