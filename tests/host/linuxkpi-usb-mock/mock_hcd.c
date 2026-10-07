@@ -139,7 +139,7 @@ struct mock_hcd {
 	u8		bot_data[512];
 	unsigned int	bot_data_len;
 
-	struct mock_capture cap;
+	struct mock_capture *cap;
 	unsigned int	n_control;
 	unsigned int	n_bulk_in;
 	unsigned int	n_bulk_out;
@@ -270,9 +270,9 @@ control_transfer(struct mock_hcd *h, const u8 *setup, u8 *buffer,
 
 	*moved = 0;
 	h->n_control++;
-	h->cap.n_control = h->n_control;
-	if (h->cap.setup_n < MOCK_SETUP_LOG)
-		memcpy(h->cap.setup[h->cap.setup_n++], setup, 8);
+	h->cap->n_control = h->n_control;
+	if (h->cap->setup_n < MOCK_SETUP_LOG)
+		memcpy(h->cap->setup[h->cap->setup_n++], setup, 8);
 
 	if (h->link == MOCK_LINK_DETACHED) {
 		ret = -LKPI_USB_BE_ERR_SHUTDOWN;
@@ -294,18 +294,18 @@ control_transfer(struct mock_hcd *h, const u8 *setup, u8 *buffer,
 		ret = control_out(h, setup, moved);
 	}
 
-	if (h->cap.setup_n > 0)
-		h->cap.setup_ret[h->cap.setup_n - 1] = ret;
+	if (h->cap->setup_n > 0)
+		h->cap->setup_ret[h->cap->setup_n - 1] = ret;
 
 	/* capture the first DEVICE descriptor read that moved bytes */
 	if (setup[1] == 0x06 && setup[3] == 0x01 && *moved > 0 &&
-	    h->cap.desc_dev_len == 0) {
+	    h->cap->desc_dev_len == 0) {
 		unsigned int n = *moved;
 
-		if (n > sizeof(h->cap.desc_dev))
-			n = sizeof(h->cap.desc_dev);
-		memcpy(h->cap.desc_dev, buffer, n);
-		h->cap.desc_dev_len = n;
+		if (n > sizeof(h->cap->desc_dev))
+			n = sizeof(h->cap->desc_dev);
+		memcpy(h->cap->desc_dev, buffer, n);
+		h->cap->desc_dev_len = n;
 	}
 	return ret;
 }
@@ -326,8 +326,8 @@ bot_parse_cbw(struct mock_hcd *h, const u8 *cbw)
 	h->bot_residue = 0;
 	h->bot_status = 0;
 	h->bot_data_len = 0;
-	if (h->cap.cbw_n < MOCK_CBW_LOG)
-		memcpy(h->cap.cbw[h->cap.cbw_n++], cbw, 31);
+	if (h->cap->cbw_n < MOCK_CBW_LOG)
+		memcpy(h->cap->cbw[h->cap->cbw_n++], cbw, 31);
 
 	switch (cbw[15]) {	/* the operation code of the command block */
 	case 0x00:	/* TEST UNIT READY */
@@ -373,8 +373,8 @@ bot_csw(struct mock_hcd *h, u8 *out)
 	out[10] = (u8)(h->bot_residue >> 16);
 	out[11] = (u8)(h->bot_residue >> 24);
 	out[12] = h->bot_status;
-	memcpy(h->cap.csw, out, 13);
-	h->cap.csw_valid = 1;
+	memcpy(h->cap->csw, out, 13);
+	h->cap->csw_valid = 1;
 	h->bot_phase = BOT_IDLE;
 	return 13;
 }
@@ -392,7 +392,7 @@ bulk_transfer(struct mock_hcd *h, struct lkpi_usb_be_urb *urb)
 
 	if (urb->ep->hcpriv == (void *)&h->n_bulk_in) {		/* IN */
 		h->n_bulk_in++;
-		h->cap.n_bulk_in = h->n_bulk_in;
+		h->cap->n_bulk_in = h->n_bulk_in;
 		if (h->fault == MOCK_FAULT_STALL) {
 			h->fault = MOCK_FAULT_NONE;
 			return -LKPI_USB_BE_ERR_STALL;
@@ -420,7 +420,7 @@ bulk_transfer(struct mock_hcd *h, struct lkpi_usb_be_urb *urb)
 	}
 
 	h->n_bulk_out++;
-	h->cap.n_bulk_out = h->n_bulk_out;
+	h->cap->n_bulk_out = h->n_bulk_out;
 	if (h->fault == MOCK_FAULT_STALL) {
 		h->fault = MOCK_FAULT_NONE;
 		return -LKPI_USB_BE_ERR_STALL;
@@ -619,6 +619,7 @@ mock_backend_create(void)
 	memset(b, 0, sizeof(*b));
 	memset(h, 0, sizeof(*h));
 	b->hcd = h;
+	h->cap = &b->cap;
 	h->link = MOCK_LINK_DETACHED;
 	h->speed = USB_SPEED_HIGH;
 	h->port = 1;

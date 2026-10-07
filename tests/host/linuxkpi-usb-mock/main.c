@@ -271,7 +271,10 @@ vec_check(const char *seg, const char *file, const unsigned char *got,
 		fflush(stdout);
 		return 0;
 	}
-	printf("usb-smoke: vec=%s ok=0 offset=%d\n", v.id, off);
+	printf("usb-smoke: vec=%s ok=0 offset=%d got_len=%u exp_len=%u "
+	    "got0=%02x exp0=%02x\n", v.id, off, (unsigned)got_len,
+	    (unsigned)v.len, got_len > 0 ? got[0] : 0,
+	    v.len > 0 ? v.payload[0] : 0);
 	printf("usb-smoke: vec-mismatch vec=%s offset=%d\n", v.id, off);
 	fflush(stdout);
 	failures++;
@@ -456,11 +459,11 @@ run_scenario(void)
 		struct lkpi_usb_mem_stats st;
 
 		lkpi_usb_mem_stats_get(&st);
-		if (st.n_urb_alloc == st.n_urb_free)
+		if (st.n_urb_alloc == st.n_urb_free && st.n_urb_alloc != 0)
+			anchor("paired urb", 1);
+		else
 			info("paired urb a=%u f=%u", st.n_urb_alloc,
 			    st.n_urb_free);
-		else
-			anchor("paired urb", 0);
 	}
 
 	{
@@ -474,9 +477,10 @@ run_scenario(void)
 			lkpi_usb_free_coherent(p[i], 256);
 		lkpi_usb_mem_stats_get(&st);
 		if (st.n_coherent_alloc == 4 && st.n_coherent_free == 4)
-			info("paired coherent a=4 f=4");
+			anchor("paired coherent", 1);
 		else
-			anchor("paired coherent", 0);
+			info("paired coherent a=%u f=%u", st.n_coherent_alloc,
+			    st.n_coherent_free);
 	}
 
 	{
@@ -485,9 +489,11 @@ run_scenario(void)
 		lkpi_usb_mem_stats_get(&st);
 		if (st.double_free == 0 && st.stray_free == 0 &&
 		    st.uaf_write == 0 && st.alloc_fail == 0)
-			info("named-fail all-zero");
+			anchor("named-fail all-zero", 1);
 		else
-			anchor("named-fail all-zero", 0);
+			info("named-fail nonzero df=%u sf=%u uaf=%u af=%u",
+			    st.double_free, st.stray_free, st.uaf_write,
+			    st.alloc_fail);
 	}
 
 	/* S1 vectors: the expected bytes come from the factory files */
@@ -495,32 +501,32 @@ run_scenario(void)
 		const u8 *setup;
 		unsigned int slen = 0;
 
-		vec_check("S1", "S1.IN.EP0_DESC_DEV.001.dat",
+		vec_check("S1", "S1.EP0_DESC_DEV.in.001.dat",
 		    b->cap.desc_dev, b->cap.desc_dev_len, -1);
 		setup = find_setup(b, 0x06, &slen);
 		if (setup != NULL)
-			vec_check("S1", "S1.OUT.EP0_ENUM_SETUP.001.dat", setup,
+			vec_check("S1", "S1.EP0_ENUM_SETUP.exp.001.dat", setup,
 			    8, -1);
 		else
-			anchor("vec=S1.OUT.EP0_ENUM_SETUP.001", 0);
+			anchor("vec=S1.EP0_ENUM_SETUP.exp.001", 0);
 		setup = find_setup(b, 0xff, &slen);
 		if (setup != NULL)
-			vec_check("S1", "S1.OUT.CTRL.MS_RESET.001.dat", setup,
+			vec_check("S1", "S1.CTRL_MS_RESET.exp.001.dat", setup,
 			    8, g_fault != NULL &&
 			    strcmp(g_fault, "vec-tamper") == 0 ? 1 : -1);
 		else
-			anchor("vec=S1.OUT.CTRL.MS_RESET.001", 0);
+			anchor("vec=S1.CTRL_MS_RESET.exp.001", 0);
 		setup = find_setup(b, 0xfe, &slen);
 		if (setup != NULL)
-			vec_check("S1", "S1.OUT.CTRL.GET_MAX_LUN.001.dat",
+			vec_check("S1", "S1.CTRL_GET_MAX_LUN.exp.001.dat",
 			    setup, 8, -1);
 		else
-			anchor("vec=S1.OUT.CTRL.GET_MAX_LUN.001", 0);
+			anchor("vec=S1.CTRL_GET_MAX_LUN.exp.001", 0);
 		if (b->cap.cbw_n > 0)
-			vec_check("S1", "S1.OUT.BOT.CBW_MULTI.001.dat",
+			vec_check("S1", "S1.BOT_CBW.exp.001.dat",
 			    b->cap.cbw[0], 31, -1);
 		else
-			anchor("vec=S1.OUT.BOT.CBW_MULTI.001", 0);
+			anchor("vec=S1.BOT_CBW.exp.001", 0);
 	}
 
 	/* the scripted negative battery: seven control-face cases whose
@@ -643,7 +649,7 @@ run_scenario(void)
 			if (wait_done(&a1_done, 2000) == 0 &&
 			    wait_done(&a2_done, 2000) == 0 &&
 			    order_n == 2 && order[0] == 1 && order[1] == 2)
-				anchor("queue drain in-order n=2 ok=1", 1);
+				anchor("queue drain in-order n=2", 1);
 			else
 				anchor("queue drain in-order n=2", 0);
 		} else {

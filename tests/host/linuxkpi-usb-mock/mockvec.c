@@ -9,6 +9,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "mockvec.h"
@@ -49,9 +50,9 @@ mockvec_load(const char *root, const char *seg, const char *file,
 	char path[MOCKVEC_ID_MAX + 256];
 	FILE *f;
 	char line[512];
-	long declared = -1;
+	int declared = -1;
 	size_t got = 0;
-	int in_payload = 0;
+	int seen_magic = 0;
 
 	if (root == NULL || seg == NULL || file == NULL || out == NULL)
 		return -1;
@@ -78,42 +79,22 @@ mockvec_load(const char *root, const char *seg, const char *file,
 	while (fgets(line, sizeof(line), f) != NULL) {
 		char *nl = strchr(line, '\n');
 		char *eq;
+		const char *p;
+		int is_hex = 1;
 
 		if (nl != NULL)
 			*nl = '\0';
 		if (line[0] == '\0' || line[0] == '#')
 			continue;
-		if (!in_payload) {
-			eq = strchr(line, '=');
-			if (eq == NULL) {
-				snprintf(err, errlen, "%s: malformed header",
-				    path);
-				fclose(f);
-				return -1;
+		/* a payload line carries hex digit pairs only and nothing else */
+		for (p = line; *p != '\0'; p++) {
+			if (hex_val(*p) < 0) {
+				is_hex = 0;
+				break;
 			}
-			*eq = '\0';
-			if (strcmp(line, "payload_bytes") == 0) {
-				declared = strtol(eq + 1, NULL, 10);
-				in_payload = 1;
-			} else if (strcmp(line, "dir") == 0) {
-				snprintf(out->dir, sizeof(out->dir), "%s",
-				    eq + 1);
-			} else if (strcmp(line, "anchor") == 0) {
-				snprintf(out->anchor, sizeof(out->anchor), "%s",
-				    eq + 1);
-			}
-			continue;
 		}
-		/* payload: lower-case hex, two characters per byte */
-		{
-			const char *p = line;
-
-			while (p[0] != '\0' && p[1] != '\0') {
-				int hi = hex_val(p[0]);
-				int lo = hex_val(p[1]);
-
-				if (hi < 0 || lo < 0)
-					break;
+		if (is_hex && line[0] != '\0' && strlen(line) % 2 == 0) {
+			for (p = line; p[0] != '\0' && p[1] != '\0'; p += 2) {
 				if (got >= MOCKVEC_MAX_PAYLOAD) {
 					snprintf(err, errlen,
 					    "%s: payload exceeds the loader "
@@ -122,20 +103,41 @@ mockvec_load(const char *root, const char *seg, const char *file,
 					return -1;
 				}
 				out->payload[got++] = (unsigned char)
-				    ((hi << 4) | lo);
-				p += 2;
+				    ((hex_val(p[0]) << 4) | hex_val(p[1]));
 			}
+			continue;
 		}
+		if (strcmp(line, "mockvec1") == 0) {
+			seen_magic = 1;
+			continue;
+		}
+		eq = strchr(line, '=');
+		if (eq == NULL) {
+			snprintf(err, errlen, "%s: malformed header", path);
+			fclose(f);
+			return -1;
+		}
+		*eq = '\0';
+		if (strcmp(line, "payload_bytes") == 0)
+			declared = (int)strtol(eq + 1, NULL, 10);
+		else if (strcmp(line, "dir") == 0)
+			snprintf(out->dir, sizeof(out->dir), "%s", eq + 1);
+		else if (strcmp(line, "anchor") == 0)
+			snprintf(out->anchor, sizeof(out->anchor), "%s", eq + 1);
 	}
 	fclose(f);
 
+	if (!seen_magic) {
+		snprintf(err, errlen, "%s: no vector magic", path);
+		return -1;
+	}
 	if (declared < 0) {
 		snprintf(err, errlen, "%s: no payload_bytes header", path);
 		return -1;
 	}
-	if ((long)got != declared) {
+	if ((int)got != declared) {
 		snprintf(err, errlen,
-		    "%s: payload_bytes=%ld but %u bytes decoded", path,
+		    "%s: payload_bytes=%d but %u bytes decoded", path,
 		    declared, (unsigned int)got);
 		return -1;
 	}
