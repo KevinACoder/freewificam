@@ -10,9 +10,8 @@
 # The net80211 targets this directory used to carry (a 17-TU compile set on the
 # component's own compat tree, a manifest check and the component's host test script)
 # are retired: the component is trimmed and its build contract moved to
-# tests/host/net80211-port/, which compiles the same units on the port layer (see
-# runs/20261007-net80211-port/RUN.md). The two targets kept here belong to the other
-# two imported units and were not in that round's scope.
+# tests/host/net80211-port/, which compiles the same units on the port layer. The two
+# targets kept here belong to the other two imported units and were not in that scope.
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 ROOT         := $(abspath $(MAKEFILE_DIR)/../../..)

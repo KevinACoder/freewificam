@@ -1,16 +1,20 @@
 # freertos-cmsis2-smoke
 
-Host smoke test for the FreeRTOS kernel behind the CMSIS-RTOS2 API: the FreeRTOS POSIX
-port runs one message queue and two threads, and the CMSIS-FreeRTOS adapter (upstream,
-unpatched) provides the API surface.
+Host tests for the FreeRTOS kernel behind the CMSIS-RTOS2 API. Two binaries are built from
+the same objects:
+
+* `freertos-cmsis2-smoke` - the runtime smoke: the FreeRTOS POSIX port runs one message
+  queue and two threads, and the CMSIS-FreeRTOS adapter provides the API surface.
+* `c9-handle-trunc` - the 64-bit handle cases (one case per invocation, `mutex|timer|
+  mempool`), run by the `freertos-host-smoke` container suite.
 
 ## Build and run
 
     make -C tests/host/freertos-cmsis2-smoke
     ./tests/host/freertos-cmsis2-smoke/build/freertos-cmsis2-smoke
 
-The run must exit with code 0, print these anchors in order on stdout and finish in well
-under ten seconds:
+The smoke run must exit with code 0, print these anchors in order on stdout and finish in
+well under ten seconds:
 
     os2-smoke: kernel running
     os2-smoke: got 1
@@ -19,12 +23,15 @@ under ten seconds:
     os2-smoke: tick advanced n=<ticks>    (ticks >= 5)
     os2-smoke: PASS
 
+`PATCHES=off` builds the pinned adapter bytes instead of the replayed ones (into
+`build/pinned/`); that mode is how the handle cases show their red signature.
+
 ## What is compiled
 
 | Source | Role |
 |---|---|
 | `third-party/FreeRTOS-Kernel` | kernel sources, heap_4, POSIX port and its event utility |
-| `third-party/CMSIS-FreeRTOS` | `CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c` only; the vendored kernel copy under its `Source/` is not used |
+| `third-party/CMSIS-FreeRTOS` | `CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c` only, through the patch channel (`tools/patches/replay.sh`); the vendored kernel copy under its `Source/` is not used |
 | `third-party/CMSIS_6` | `CMSIS-RTOS2` API header `cmsis_os2.h` (single source) |
 | `os/freertos/` | kernel configuration, fail-visible hooks, static-allocation donors, and the FreeRTOS side of the host exit seam |
 | `os/cmsis2/` | backend facade (single application include) and the host stand-ins for the CMSIS Core headers |

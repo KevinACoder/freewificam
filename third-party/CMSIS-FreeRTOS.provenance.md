@@ -7,7 +7,7 @@
 | License | Apache-2.0 (`LICENSE` at the tree root); the vendored kernel copy under `Source/` is MIT (`Source/LICENSE.md`) |
 | Vendoring | git submodule; the gitlink is locked to the tag commit above |
 | Fetched | 2026-10-06 |
-| Local differences | none (zero patch) |
+| Local differences | one patch, replayed by the build (see `patches/CMSIS-FreeRTOS/README.md`): `0001-cmsis_os2-do-not-launder-handles-through-32-bit-integers.patch` - the adapter round-tripped mutex and timer handles through `uint32_t`, which truncates them above 4 GiB, so on any 64-bit target `osMutexAcquire` faulted and the timer callback dispatch dereferenced a truncated pointer |
 | Compiled set | `CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c` only |
 | Consumers | `os/cmsis2/` (backend facade); `tests/host/freertos-cmsis2-smoke/` (host build) |
 | Reason | Official CMSIS adoption of FreeRTOS, i.e. the CMSIS-RTOS2 layer itself. Taking it upstream keeps the layer a thin adaptation instead of a re-implementation, and the API header stays the single one from CMSIS_6 |

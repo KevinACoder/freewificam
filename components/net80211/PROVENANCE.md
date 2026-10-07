@@ -40,12 +40,10 @@ order (port machinery first, then this component's vocabulary headers, then the
 component root, then the toolchain), taken as the union of two measurements: the
 closure under the previous host include discipline and the closure under the port's
 target-shape discipline. A file that either measurement reaches is kept; the union is
-what protects the target build from a host-only closure. The measurement and the
-per-file list are recorded in the run log
-(`runs/20261007-net80211-port/RUN.md`). Two headers changed group during the
+what protects the target build from a host-only closure. Two headers changed group during the
 implementation (`sys/cdefs.h`, `sys/errno.h`: they are shims and must forward to the
-host/target header, so the port owns them) - recorded in `DIVERGENCES.md` and in the
-run log.
+host/target header, so the port owns them) - recorded in `DIVERGENCES.md`. The
+per-file list is checked by `MANIFEST.sha256`.
 
 ## Rules for changes
 

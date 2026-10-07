@@ -1,21 +1,41 @@
-# Host smoke test: FreeRTOS (POSIX port) behind the CMSIS-RTOS2 API.
+# Host tests: FreeRTOS (POSIX port) behind the CMSIS-RTOS2 API.
 #
-# Self contained; run it from anywhere with:
+# Self contained; run them from anywhere with:
 #   make -C <repo>/tests/host/freertos-cmsis2-smoke
 #
-# Everything under third-party/ is compiled as-is, without local patches. The local glue
-# lives in os/freertos/ (kernel configuration, hooks, lifecycle bridge) and os/cmsis2/
-# (backend facade plus the host stand-ins for the CMSIS Core headers).
+# Two binaries share the same kernel and adapter objects:
+#   freertos-cmsis2-smoke   queue + two threads, the runtime smoke scenario
+#   c9-handle-trunc         objects whose handle must live above 4 GiB (one case per run)
+#
+# The local glue lives in os/freertos/ (kernel configuration, hooks, lifecycle bridge) and
+# os/cmsis2/ (backend facade plus the host stand-ins for the CMSIS Core headers).  The
+# kernel is compiled as vendored; the CMSIS-FreeRTOS adapter is compiled through the patch
+# channel (tools/patches/replay.sh), and PATCHES=off forces the pinned bytes, which is how
+# the suite's red control runs (tools/mock/freertos-host-smoke/README.md).
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 ROOT         := $(abspath $(MAKEFILE_DIR)/../../..)
 
 KERNEL  := $(ROOT)/third-party/FreeRTOS-Kernel
 CMSIS   := $(ROOT)/third-party/CMSIS_6
-ADAPTER := $(ROOT)/third-party/CMSIS-FreeRTOS
 
-BUILD_DIR := $(MAKEFILE_DIR)/build
-TARGET    := $(BUILD_DIR)/freertos-cmsis2-smoke
+# With patches declared for CMSIS-FreeRTOS the replay tool materialises a patched copy and
+# prints it; with none it prints the vendored pin, so a repository without patches builds
+# exactly as before.
+ifeq ($(PATCHES),off)
+ADAPTER := $(ROOT)/third-party/CMSIS-FreeRTOS
+else
+ADAPTER := $(shell sh $(ROOT)/tools/patches/replay.sh CMSIS-FreeRTOS)
+endif
+ifeq ($(ADAPTER),)
+$(error tools/patches/replay.sh returned no source root for CMSIS-FreeRTOS)
+endif
+
+# The pinned mode gets its own object directory: sharing one would let a stale object from
+# the other mode satisfy the build and quietly test the wrong adapter bytes.
+BUILD_DIR := $(MAKEFILE_DIR)/build$(if $(filter off,$(PATCHES)),/pinned,)
+SMOKE     := $(BUILD_DIR)/freertos-cmsis2-smoke
+C9        := $(BUILD_DIR)/c9-handle-trunc
 
 # os/cmsis2/host-compat carries the host stand-ins for the CMSIS Core headers; the CMSIS
 # Core include directory itself is deliberately absent so no ARM-only header is reached.
@@ -39,8 +59,7 @@ CFLAGS := -ggdb3 -O0 -Wall -ffunction-sections -fdata-sections \
 # device-side OS_Tick_* functions) stays out of the image instead of being stubbed.
 LDFLAGS := -pthread -Wl,--gc-sections
 
-SRCS := \
-    $(MAKEFILE_DIR)/main.c \
+COMMON_SRCS := \
     $(ROOT)/os/freertos/freertos_hooks.c \
     $(ROOT)/os/freertos/cmsis2_host.c \
     $(KERNEL)/croutine.c \
@@ -55,24 +74,28 @@ SRCS := \
     $(KERNEL)/portable/ThirdParty/GCC/Posix/utils/wait_for_event.c \
     $(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c
 
-OBJS := $(addprefix $(BUILD_DIR)/,$(notdir $(SRCS:.c=.o)))
+COMMON_OBJS := $(addprefix $(BUILD_DIR)/,$(notdir $(COMMON_SRCS:.c=.o)))
 
 .PHONY: all clean
 
-all: $(TARGET)
+all: $(SMOKE) $(C9)
 
 define COMPILE_RULE
 $(BUILD_DIR)/$(notdir $(1:.c=.o)): $(1) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $$< -o $$@
 endef
 
-$(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
+$(foreach src,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(src))))
+$(foreach src,$(MAKEFILE_DIR)/main.c $(MAKEFILE_DIR)/c9-handle-trunc.c,$(eval $(call COMPILE_RULE,$(src))))
 
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(TARGET): $(OBJS)
-	$(CC) $(OBJS) $(LDFLAGS) -o $@
+$(SMOKE): $(COMMON_OBJS) $(BUILD_DIR)/main.o
+	$(CC) $^ $(LDFLAGS) -o $@
+
+$(C9): $(COMMON_OBJS) $(BUILD_DIR)/c9-handle-trunc.o
+	$(CC) $^ $(LDFLAGS) -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)
