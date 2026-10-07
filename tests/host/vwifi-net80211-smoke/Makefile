@@ -74,6 +74,18 @@ SUITE_SRCS := \
     $(MAKEFILE_DIR)/main.c \
     $(MAKEFILE_DIR)/vwifi.c
 
+# The library's own two host tests, re-anchored onto this port (upstream/).
+UPSTREAM_COMMON_SRCS := $(MAKEFILE_DIR)/upstream/host_stubs.c \
+    $(PORT)/net/mbuf.c $(PORT)/osal/cmsis2/osal_memory.c
+UPSTREAM_MBUF_SRCS := $(MAKEFILE_DIR)/upstream/mbuf_trim.c \
+    $(UPSTREAM_COMMON_SRCS)
+UPSTREAM_CCM_SRCS := $(MAKEFILE_DIR)/upstream/ccm.c \
+    $(UPSTREAM_COMMON_SRCS) \
+    $(NET)/crypto/aes/aes_bear.c $(NET)/crypto/aes/aes_ct.c \
+    $(NET)/crypto/aes/aes_ct_enc.c $(NET)/crypto/aes/aes_ct_dec.c \
+    $(NET)/crypto/aes/aes_ccm.c $(NET)/crypto/aes/aes_ccm_mbuf.c \
+    $(NET)/port/aes_impl_compat.c
+
 TX_RUNTIME_SRCS := \
     $(ROOT)/os/threadx/tx_glue.c \
     $(ROOT)/os/threadx/heap.c \
@@ -120,6 +132,10 @@ endef
 
 STACK_OBJS := $(foreach s,$(STACK_SRCS),$(call OBJ,stack,$(s)))
 PORT_OBJS  := $(foreach s,$(PORT_SRCS),$(call OBJ,port,$(s)))
+UPSTREAM_ALL_SRCS := $(sort $(UPSTREAM_MBUF_SRCS) $(UPSTREAM_CCM_SRCS))
+UP_MBUF_OBJS := $(foreach s,$(UPSTREAM_MBUF_SRCS),$(call OBJ,up,$(s)))
+UP_CCM_OBJS  := $(foreach s,$(UPSTREAM_CCM_SRCS),$(call OBJ,up,$(s)))
+
 TX_OBJS    := $(foreach s,$(SUITE_SRCS),$(call OBJ,tx,$(s))) \
               $(foreach s,$(TX_RUNTIME_SRCS),$(call OBJ,tx,$(s)))
 FR_OBJS    := $(foreach s,$(SUITE_SRCS),$(call OBJ,fr,$(s))) \
@@ -127,10 +143,12 @@ FR_OBJS    := $(foreach s,$(SUITE_SRCS),$(call OBJ,fr,$(s))) \
 
 TX_BIN := $(BUILD_DIR)/vwifi-net80211-smoke
 FR_BIN := $(BUILD_DIR)/vwifi-net80211-smoke-freertos
+UP_MBUF_BIN := $(BUILD_DIR)/upstream-mbuf-trim
+UP_CCM_BIN  := $(BUILD_DIR)/upstream-ccm
 
-.PHONY: all stack-compile smoke run link-freertos clean
+.PHONY: all stack-compile smoke run link-freertos upstream clean
 
-all: stack-compile smoke run link-freertos
+all: stack-compile smoke run link-freertos upstream
 
 # ---- rules ------------------------------------------------------------------
 
@@ -188,7 +206,27 @@ $(FR_BIN): $(STACK_OBJS) $(PORT_OBJS) $(FR_OBJS)
 	$(CC) $^ $(FR_LDFLAGS) -o $@
 	@echo "link-freertos: linked (run blocked upstream; the link criterion stands)"
 
-$(BUILD_DIR)/stack $(BUILD_DIR)/port $(BUILD_DIR)/tx $(BUILD_DIR)/fr:
+# The library's test sources are byte-identical to the pin and take their libc
+# declarations from the shims they used to force-include; here that is just
+# <string.h>, force-included so the sources stay untouched.
+define UP_RULE
+$(call OBJ,up,$(1)): $(1) | $(BUILD_DIR)/up
+	$$(CC) $$(BSD_CFLAGS) -include string.h -c $$< -o $$@
+endef
+
+$(foreach s,$(UPSTREAM_ALL_SRCS),$(eval $(call UP_RULE,$(s))))
+
+upstream: $(UP_MBUF_BIN) $(UP_CCM_BIN)
+	$(UP_MBUF_BIN)
+	$(UP_CCM_BIN)
+
+$(UP_MBUF_BIN): $(UP_MBUF_OBJS)
+	$(CC) $^ -o $@
+
+$(UP_CCM_BIN): $(UP_CCM_OBJS)
+	$(CC) $^ -o $@
+
+$(BUILD_DIR)/stack $(BUILD_DIR)/port $(BUILD_DIR)/tx $(BUILD_DIR)/fr $(BUILD_DIR)/up:
 	mkdir -p $@
 
 clean:
