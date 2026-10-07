@@ -1,0 +1,4 @@
+help
+cl	
+nosuchcmd
+exit

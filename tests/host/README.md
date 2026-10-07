@@ -28,6 +28,7 @@ case line such as `CASE net80211-frame-test/...` leads straight to the project.
 | `net80211-port-test` | `net80211-port-test` | The net80211 port layer: stack compile, include discipline, ThreadX run, isolation gates |
 | `net80211-frame-test` | `net80211-frame-test` | 802.11 frame formats and the wlan protocol path |
 | `linuxkpi-usb-test` | `linuxkpi-usb-test` | The linuxkpi USB API face over the backend seam (synthetic controller + scripted device) |
+| `cherrysh-port-smoke` | `cherrysh-port-smoke` | The CherrySH console shell over the port layer (both CMSIS-RTOS2 host runtimes) |
 | `skbuff-allocation-free-stress` | `skbuff-allocation-free-stress` | The skbuff seam under allocation/free combination stress |
 | `linuxkpi-usb-urb-stress` | `linuxkpi-usb-urb-stress` | The urb engine under injection stress |
 
