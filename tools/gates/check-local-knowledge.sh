@@ -14,7 +14,7 @@
 # This script excludes itself from the scans: it necessarily spells out the
 # very patterns it looks for. It also excludes the vendored upstream test tree
 # (third-party/FreeRTOS-Kernel-tests) and the imported unit trees under
-# components/ (net80211, skbuff, linuxkpi): those bytes are copied verbatim under
+# components/ (net80211, skbuff, linuxkpi, cherrysh): those bytes are copied verbatim under
 # the zero-patch discipline, so their content cannot be rewritten to satisfy the
 # authoring rules here - an in-tree provenance file is their record instead. The
 # project-authored records inside those trees (PROVENANCE.md, DIVERGENCES.md,
@@ -36,7 +36,7 @@ paths_vendored=':!'"$vendored"
 
 # Imported unit trees: their bytes are excluded from both scans, their in-tree
 # project-authored records are kept.
-imported_units='components/net80211 components/skbuff components/linuxkpi'
+imported_units='components/net80211 components/skbuff components/linuxkpi components/cherrysh'
 paths_imported=''
 for unit in $imported_units; do
 	paths_imported="$paths_imported :!$unit"
@@ -47,7 +47,10 @@ components/net80211/MANIFEST.sha256
 components/skbuff/PROVENANCE.md
 components/skbuff/DIVERGENCES.md
 components/linuxkpi/PROVENANCE.md
-components/linuxkpi/DIVERGENCES.md'
+components/linuxkpi/DIVERGENCES.md
+components/cherrysh/PROVENANCE.md
+components/cherrysh/DIVERGENCES.md
+components/cherrysh/MANIFEST.sha256'
 
 patterns='/(home|mnt|tmp)/|~/|KI-[0-9]|itx-wiki|oslab|backups/|web_cmera_|project_rtos_webcam|project_web_camera|\.agents/skills|(^|[^A-Za-z0-9_./-])(issues|specs|runs)/[A-Za-z0-9]'
 
