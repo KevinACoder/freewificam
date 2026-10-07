@@ -44,6 +44,10 @@ int32_t irq_set_mode_level(uint32_t intid);
 int32_t gic_irq_is_pending(uint32_t intid);
 int32_t gic_irq_is_enabled(uint32_t intid);
 
+/* The running interrupt priority (ICC_RPR_EL1); 0xff when no interrupt is
+ * active. Safe from any context. */
+uint32_t gic_running_priority(void);
+
 /* Dispatch one already-acknowledged interrupt, from the exception entry's
  * IRQ slot: iar = the value read from ICC_IAR1_EL1. Runs the registered
  * handler (if any); spurious (1023) returns without one. Ending the

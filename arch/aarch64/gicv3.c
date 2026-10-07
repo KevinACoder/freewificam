@@ -408,7 +408,19 @@ int32_t irq_set_mode_level(uint32_t intid)
 	return 0;
 }
 
-/* --- read-only state queries (N7-stab diagnostics) ------------------------- */
+/* --- read-only state queries (bring-up diagnostics) ------------------------ */
+
+/* The running interrupt priority (ICC_RPR_EL1): 0xff while no interrupt is
+ * being serviced. This is the A-profile answer to "am I inside an
+ * interrupt?" - the CMSIS-RTOS2 adapter's IS_IRQ_MODE() probe asks exactly
+ * that, and AArch64 has no IPSR to read. */
+uint32_t gic_running_priority(void)
+{
+	uint32_t value;
+
+	__asm__ __volatile__("mrs %0, s3_0_c12_c11_3" : "=r"(value));
+	return value;
+}
 
 /* Pending (ISPENDR reads the live pending state; ICPENDR is the W1C write
  * side and would read back useless). Safe from any context. */
