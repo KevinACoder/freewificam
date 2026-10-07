@@ -136,6 +136,15 @@ void if_percpuq_enqueue(void *pq, struct mbuf *m)
 	if (m == NULL) {
 		return;
 	}
+	/* The receive seam hands out one contiguous buffer, so a frame that
+	 * arrived as a chain (a reassembled one, for instance) is linearised
+	 * here; m_pullup frees the chain if it cannot build the head. */
+	if (m->m_next != NULL) {
+		m = m_pullup(m, m->m_pkthdr.len);
+		if (m == NULL) {
+			return;
+		}
+	}
 	eh = mtod(m, const struct ether_header *);
 	if (ntohs(eh->ether_type) == ETHERTYPE_PAE && eapol_rx != NULL) {
 		/* the payload follows the 14-byte ethernet header */
