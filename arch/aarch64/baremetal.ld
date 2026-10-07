@@ -51,6 +51,27 @@ SECTIONS
 		*(.data.rel.ro .data.rel.ro.*)
 	} :text
 
+	/* CherrySH command and variable tables: the shell walks these sections to
+	 * find its commands, and nothing references the entries by address - so
+	 * without KEEP the linker garbage-collects every one of them and the
+	 * REPL reports "command not found" for the whole table. SUBALIGN(8)
+	 * forces the entries dense: the core iterates the section as a flat array
+	 * with a fixed stride, and padding between entries would hide every entry
+	 * after the first (measured on the host build of the same tables). */
+	.fsymtab : ALIGN(8) SUBALIGN(8) {
+		. = ALIGN(4);
+		__fsymtab_start = .;
+		KEEP(*(FSymTab))
+		__fsymtab_end = .;
+	} :text
+
+	.vsymtab : ALIGN(8) SUBALIGN(8) {
+		. = ALIGN(4);
+		__vsymtab_start = .;
+		KEEP(*(VSymTab))
+		__vsymtab_end = .;
+	} :text
+
 	.data : ALIGN(8) {
 		__data_start = .;
 		*(.data .data.*)

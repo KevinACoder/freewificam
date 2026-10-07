@@ -33,6 +33,10 @@ static char csh_prompt_buffer[SHELL_PROMPT_BUFFER_SIZE];
 static char csh_history_buffer[SHELL_HISTORY_BUFFER_SIZE];
 static char csh_line_buffer[SHELL_LINE_BUFFER_SIZE];
 
+/* Raised by a console backend whose exit means "reset the session" rather
+ * than "end the run" (the board); consumed by the repl loop below. */
+static volatile int session_reset_requested;
+
 /* Command and variable tables: the linker symbols of the FSymTab / VSymTab
  * sections (the boundary snippet lives in the build: symtab.ld on the host,
  * the board linker script on the board). */
@@ -69,12 +73,26 @@ int shell_port_init( void )
     return chry_shell_init( &csh, &init );
 }
 
+void shell_port_session_reset( void )
+{
+    session_reset_requested = 1;
+}
+
 void shell_port_repl_task( void * argument )
 {
     ( void ) argument;
 
     for( ;; )
     {
+        /* The reset runs here, outside the core's call: the exit command
+         * executes inside chry_shell_task_repl's stack, and re-initialising
+         * the instance from there would pull the ground out from under it. */
+        if( session_reset_requested )
+        {
+            session_reset_requested = 0;
+            ( void ) shell_port_init();
+        }
+
         chry_shell_task_exec( &csh );
 
         /* One call reads one line and runs it: 0 after a line, 1 for
