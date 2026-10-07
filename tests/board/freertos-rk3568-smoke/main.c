@@ -126,14 +126,18 @@ static void task_lo_b( void *arg )
 static void task_report( void *arg )
 {
 	(void)arg;
-	TickType_t next = xTaskGetTickCount() + pdMS_TO_TICKS( 1000 );
+	/* vTaskDelayUntil's anchor is the CURRENT tick: the first delay then
+	 * lasts exactly one period. (Anchoring at now+period makes the first
+	 * call a no-op - the wake time falls outside the accepted window - and
+	 * the reporter then spins, starving every lower-priority task.) */
+	TickType_t next = xTaskGetTickCount();
 	uint32_t beat = 0U;
 
 	for( ;; ) {
 		vTaskDelayUntil( &next, pdMS_TO_TICKS( 1000 ) );
 		beat++;
 		uart_early_puts( "freertos: tick=" );
-		put_dec( beat * 1000U );
+		put_dec( (uint32_t)xTaskGetTickCount() );
 		uart_early_puts( " switches=" );
 		put_dec( act_hi + act_lo_a + act_lo_b );
 		uart_early_puts( "\n" );
