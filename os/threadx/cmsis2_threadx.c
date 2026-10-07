@@ -22,14 +22,19 @@
  *   - a priority map from the CMSIS bands (larger value = more urgent) onto the
  *     ThreadX ready-list order (smaller value = more urgent).
  *
- * Host build notes: diagnostics go to stderr and the process is ended through
- * cmsis2_host_end_scheduler(), so nothing here prints to the stdout channel that a
- * test uses for its own results.
+ * Platform notes: this file compiles on both sides. Diagnostics go through
+ * cmsis2_log() and the kernel entry through cmsis2_tx_kernel_enter() - both declared
+ * in cmsis2_support.h and implemented per side (host: stderr and tx_kernel_enter(),
+ * so nothing here prints to the stdout channel a test uses for its own results;
+ * board: the stamped console sink and the SPSel hand-over stub). Critical sections
+ * use the kernel's PUBLIC interrupt-control API (tx_interrupt_control), which both
+ * ports implement - never the port-internal symbols.
  */
 
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
+
+#include "cmsis2_support.h"
 
 #include "tx_api.h"
 #include "tx_thread.h"
@@ -107,7 +112,7 @@ static unsigned int map_priority( osPriority_t prio )
         }
     }
     mapped = ( TX_MAX_PRIORITIES - 1U ) - band * 4U;
-    fprintf( stderr, "cmsis2: prio %d -> tx %u\n", ( int ) prio, mapped );
+    cmsis2_log( "cmsis2: prio %d -> tx %u\n", ( int ) prio, mapped );
     return mapped;
 }
 
@@ -241,7 +246,7 @@ static void replay_deferred_objects( void )
 
         if( create_deferred_item( item ) != TX_SUCCESS )
         {
-            fprintf( stderr, "cmsis2: deferred create failed for '%s'\n", item->name );
+            cmsis2_log( "cmsis2: deferred create failed for '%s'\n", item->name );
         }
         vPortFree( item );
     }
@@ -326,7 +331,7 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
 
     if( slot == NULL )
     {
-        fprintf( stderr, "cmsis2: slot pool exhausted (%u)\n", ( unsigned ) CMSIS2_MAX_THREADS );
+        cmsis2_log( "cmsis2: slot pool exhausted (%u)\n", ( unsigned ) CMSIS2_MAX_THREADS );
         return NULL;
     }
 
@@ -343,7 +348,7 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
     slot->stack = pvPortMalloc( stack_size );
     if( slot->stack == NULL )
     {
-        fprintf( stderr, "cmsis2: stack alloc failed (%lu bytes)\n", ( unsigned long ) stack_size );
+        cmsis2_log( "cmsis2: stack alloc failed (%lu bytes)\n", ( unsigned long ) stack_size );
         slot->state = SLOT_FREE;
         return NULL;
     }
@@ -360,7 +365,7 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
          * replay builds it. */
         if( defer_new( DEFER_THREAD, slot, slot->name ) == NULL )
         {
-            fprintf( stderr, "cmsis2: no memory to defer '%s'\n", slot->name );
+            cmsis2_log( "cmsis2: no memory to defer '%s'\n", slot->name );
             vPortFree( slot->stack );
             slot->stack = NULL;
             slot->state = SLOT_FREE;
@@ -370,7 +375,7 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
     }
     else if( create_thread_object( slot ) != TX_SUCCESS )
     {
-        fprintf( stderr, "cmsis2: thread create failed for '%s'\n", slot->name );
+        cmsis2_log( "cmsis2: thread create failed for '%s'\n", slot->name );
         vPortFree( slot->stack );
         slot->stack = NULL;
         slot->state = SLOT_FREE;
@@ -522,7 +527,7 @@ osStatus_t osKernelStart( void )
     /* Never returns on this port: the kernel takes over the calling thread as its
      * scheduler and only leaves it when the process ends. */
     kernel_state = K_RUNNING;
-    tx_kernel_enter();
+    cmsis2_tx_kernel_enter();
     return osOK;
 }
 
@@ -606,7 +611,7 @@ int32_t osKernelLock( void )
         return ( int32_t ) osErrorResource;
     }
     prev = ( lock_depth == 0U ) ? 0 : 1;
-    lock_posture[ lock_depth ] = _tx_thread_interrupt_disable();
+    lock_posture[ lock_depth ] = tx_interrupt_control( TX_INT_DISABLE );
     lock_depth++;
     return prev;
 }
@@ -621,7 +626,7 @@ int32_t osKernelUnlock( void )
     }
     prev = ( lock_depth == 1U ) ? 0 : 1;
     lock_depth--;
-    _tx_thread_interrupt_restore( lock_posture[ lock_depth ] );
+    ( void ) tx_interrupt_control( ( UINT ) lock_posture[ lock_depth ] );
     return prev;
 }
 
@@ -630,11 +635,11 @@ int32_t osKernelRestoreLock( int32_t lock )
     while( lock_depth != 0U )
     {
         lock_depth--;
-        _tx_thread_interrupt_restore( lock_posture[ lock_depth ] );
+        ( void ) tx_interrupt_control( ( UINT ) lock_posture[ lock_depth ] );
     }
     if( lock == 1 )
     {
-        lock_posture[ lock_depth ] = _tx_thread_interrupt_disable();
+        lock_posture[ lock_depth ] = tx_interrupt_control( TX_INT_DISABLE );
         lock_depth = 1U;
     }
     return ( lock_depth != 0U ) ? 1 : 0;
