@@ -5,7 +5,10 @@
 # commit messages must read correctly to anyone who has never seen the
 # development machine. Not allowed in the tree:
 #   - absolute local paths (home/mnt/tmp), home-relative paths;
-#   - lab or tooling identifiers, local archive/spec/issue references;
+#   - lab or tooling identifiers, local archive/spec/issue references, and
+#     development-ledger paths (a spec, issue or run directory reference is
+#     meaningless outside the development workspace; a URL that merely contains
+#     one of these words is not matched);
 #   - any non-ASCII text outside README.md (README.md is bilingual on purpose).
 #
 # This script excludes itself from the scans: it necessarily spells out the
@@ -46,7 +49,7 @@ components/skbuff/DIVERGENCES.md
 components/linuxkpi/PROVENANCE.md
 components/linuxkpi/DIVERGENCES.md'
 
-patterns='/(home|mnt|tmp)/|~/|KI-[0-9]|itx-wiki|oslab|backups/|web_cmera_|project_rtos_webcam|project_web_camera|\.agents/skills'
+patterns='/(home|mnt|tmp)/|~/|KI-[0-9]|itx-wiki|oslab|backups/|web_cmera_|project_rtos_webcam|project_web_camera|\.agents/skills|(^|[^A-Za-z0-9_./-])(issues|specs|runs)/[A-Za-z0-9]'
 
 status=0
 
