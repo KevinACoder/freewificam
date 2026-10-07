@@ -1,4 +1,4 @@
-# Upstream cross reference (the ③ segment's anchors)
+# Upstream cross reference (the third segment's anchors)
 
 This file is the deliverable of two disciplines: the upstream test corpus of the
 Linux tree is read as an *intent and semantics* reference only (never copied,
@@ -13,7 +13,7 @@ the bottom of this file.
 
 ## The comparison table (our case -> upstream case -> clause route)
 
-| our case (segment ③) | upstream counterpart (7.3.0-rc2) | how we use it | clause route |
+| our case (third segment) | upstream counterpart (7.3.0-rc2) | how we use it | clause route |
 |---|---|---|---|
 | probe request / probe response element encoding (SSID 0, rates 1, DS 3) | `net/wireless/tests/scan.c:227` `test_gen_new_ie` | grouping and naming of the element cases; the bytes come from the format, not from this file | 802.11-2020 frame formats and element ids |
 | truncated body and over-long element (`S3.NEG_TRUNC`, `S3.NEG_IE`) | `scan.c:287` `test_gen_new_ie_malformed` | the "malformed input -> named rejection" pattern | frame body length consistency |
