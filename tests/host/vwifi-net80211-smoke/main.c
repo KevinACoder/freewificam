@@ -36,6 +36,7 @@
 
 #include <net/if.h>
 #include <net/if_ether.h>
+#include <net/if_llc.h>
 #include <net/if_media.h>
 #include <net/route.h>
 
@@ -296,6 +297,442 @@ static void check_node_table(void)
 	    (int) ic->ic_state);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* P6/P7: the data plane (encapsulation and decapsulation)             */
+/* ------------------------------------------------------------------ */
+
+static struct mbuf *eth_mbuf(const uint8_t *dst, const uint8_t *src,
+    uint16_t type, const uint8_t *payload, size_t len)
+{
+	struct mbuf *m;
+	uint8_t *p;
+
+	MGETHDR(m, M_NOWAIT, MT_DATA);
+	if (m == NULL)
+		return NULL;
+	p = mtod(m, uint8_t *);
+	memcpy(p, dst, 6);
+	memcpy(p + 6, src, 6);
+	p[12] = (uint8_t) (type >> 8);
+	p[13] = (uint8_t) (type & 0xff);
+	memcpy(p + 14, payload, len);
+	m->m_len = (int) (14 + len);
+	m->m_pkthdr.len = m->m_len;
+	return m;
+}
+
+/* The ethernet frame the far end would see. */
+static size_t eth_build(uint8_t *buf, const uint8_t *dst, const uint8_t *src,
+    uint16_t type, const uint8_t *payload, size_t len)
+{
+	memcpy(buf, dst, 6);
+	memcpy(buf + 6, src, 6);
+	buf[12] = (uint8_t) (type >> 8);
+	buf[13] = (uint8_t) (type & 0xff);
+	memcpy(buf + 14, payload, len);
+	return 14 + len;
+}
+
+static void check_data_plane(void)
+{
+	static const uint8_t far_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x7a };
+	static const uint8_t payload[24] = {
+		'v', 'w', 'i', 'f', 'i', '-', 'd', 'a', 't', 'a', 0, 1, 2, 3
+	};
+	uint8_t tx1[VWIFI_FRAME_MAX], tx2[VWIFI_FRAME_MAX];
+	uint8_t mirror[VWIFI_FRAME_MAX], expect[VWIFI_FRAME_MAX];
+	struct mbuf *m, *w;
+	size_t len1, len2, elen;
+	unsigned before;
+	uint16_t seq1, seq2;
+	int ok;
+
+	/* A frame addressed to the station itself: the AP's delivery of it is
+	 * the only one the station can receive (the receive filter drops other
+	 * unicast destinations). */
+	m = eth_mbuf(sta_mac, far_mac, ETHERTYPE_IP, payload, sizeof(payload));
+	w = (m != NULL) ? ieee80211_encap(ic, m, ic->ic_bss) : NULL;
+	if (w == NULL) {
+		anchor("S3.ENCAP", 0, "encap failed");
+		return;
+	}
+	len1 = (size_t) w->m_len;
+	m_copydata(w, 0, (int) len1, tx1);
+	m_freem(w);
+
+	m = eth_mbuf(sta_mac, far_mac, ETHERTYPE_IP, payload, sizeof(payload));
+	w = (m != NULL) ? ieee80211_encap(ic, m, ic->ic_bss) : NULL;
+	if (w == NULL) {
+		anchor("S3.ENCAP", 0, "second encap failed");
+		return;
+	}
+	len2 = (size_t) w->m_len;
+	m_copydata(w, 0, (int) len2, tx2);
+	m_freem(w);
+
+	seq1 = (uint16_t) (((tx1[22] | (tx1[23] << 8)) >>
+	    IEEE80211_SEQ_SEQ_SHIFT) & 0x0fff);
+	seq2 = (uint16_t) (((tx2[22] | (tx2[23] << 8)) >>
+	    IEEE80211_SEQ_SEQ_SHIFT) & 0x0fff);
+
+	ok = len1 == 24 + 8 + sizeof(payload) &&
+	    tx1[0] == IEEE80211_FC0_TYPE_DATA &&
+	    (tx1[1] & IEEE80211_FC1_DIR_MASK) == IEEE80211_FC1_DIR_TODS &&
+	    mac_eq(tx1 + 4, ap_mac) && mac_eq(tx1 + 10, far_mac) &&
+	    mac_eq(tx1 + 16, sta_mac) &&
+	    tx1[24] == LLC_SNAP_LSAP && tx1[25] == LLC_SNAP_LSAP &&
+	    tx1[26] == LLC_UI &&
+	    tx1[27] == 0 && tx1[28] == 0 && tx1[29] == 0 &&
+	    tx1[30] == (uint8_t) (ETHERTYPE_IP >> 8) &&
+	    tx1[31] == (uint8_t) (ETHERTYPE_IP & 0xff) &&
+	    memcmp(tx1 + 32, payload, sizeof(payload)) == 0 &&
+	    seq2 == (uint16_t) ((seq1 + 1) & 0x0fff);
+	anchor("S3.ENCAP", ok, "fc=%02x%02x len=%u seq=%u->%u", tx1[0], tx1[1],
+	    (unsigned) len1, seq1, seq2);
+
+	/* The air self loop: flip the direction like the AP would, inject, and
+	 * expect the port's data sink to see the original ethernet frame. */
+	before = vwifi.stats.data_rx_frames;
+	if (vwifi_mirror_data(tx1, len1, mirror) != 0) {
+		anchor("S3.DECAP", 0, "mirror failed");
+		return;
+	}
+	elen = eth_build(expect, sta_mac, far_mac, ETHERTYPE_IP, payload,
+	    sizeof(payload));
+	vwifi_inject(&vwifi, mirror, len1);
+	ok = vwifi.stats.data_rx_frames == before + 1 &&
+	    vwifi.last_data_rx.len == elen &&
+	    memcmp(vwifi.last_data_rx.data, expect, elen) == 0;
+	anchor("S3.DECAP", ok, "len=%u", (unsigned) vwifi.last_data_rx.len);
+	anchor("S1.BYTES_RX", len1 >= 24, "len=%u", (unsigned) len1);
+}
+
+/* P12: the EAPOL classification of the port, reached through the stack. */
+static void check_eapol(void)
+{
+	/* EAPOL test material (an EAPOL-Key frame header), not a network key. */
+	static const uint8_t eapol[4] = { 0x02, 0x03, 0x00, 0x05 };
+	uint8_t buf[VWIFI_FRAME_MAX];
+	size_t len;
+	unsigned before_data, before_eapol;
+	int ok;
+
+	len = vwifi_build_data_from_ap(buf, sta_mac, ap_mac, ETHERTYPE_PAE,
+	    eapol, sizeof(eapol), 3, 0, 0);
+	before_data = vwifi.stats.data_rx_frames;
+	before_eapol = vwifi.stats.eapol_rx_frames;
+	vwifi_inject(&vwifi, buf, len);
+	ok = vwifi.stats.eapol_rx_frames == before_eapol + 1 &&
+	    vwifi.stats.data_rx_frames == before_data &&
+	    mac_eq(vwifi.eapol_src, ap_mac) &&
+	    vwifi.last_eapol_rx.len == sizeof(eapol) &&
+	    memcmp(vwifi.last_eapol_rx.data, eapol, sizeof(eapol)) == 0;
+	anchor("S4.EAPOL_CLASSIFY", ok, "len=%u",
+	    (unsigned) vwifi.last_eapol_rx.len);
+}
+
+/* P8: reassembly, plus the two named drop paths. */
+static void check_defrag(void)
+{
+	static const uint8_t part1[10] = { 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5,
+		0xa6, 0xa7, 0xa8, 0xa9 };
+	static const uint8_t part2[8] = { 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5,
+		0xb6, 0xb7 };
+	uint8_t buf[VWIFI_FRAME_MAX], expect[VWIFI_FRAME_MAX];
+	uint8_t all[sizeof(part1) + sizeof(part2)];
+	uint8_t first[VWIFI_FRAME_MAX];
+	size_t len, elen;
+	unsigned before, before_dup;
+	int ok;
+
+	memcpy(all, part1, sizeof(part1));
+	memcpy(all + sizeof(part1), part2, sizeof(part2));
+	elen = eth_build(expect, sta_mac, ap_mac, ETHERTYPE_IP, all, sizeof(all));
+
+	before = vwifi.stats.data_rx_frames;
+
+	/* first fragment: saved, nothing delivered yet */
+	len = vwifi_build_data_from_ap(buf, sta_mac, ap_mac, ETHERTYPE_IP,
+	    part1, sizeof(part1), 7, 1, 0);
+	memcpy(first, buf, len);
+	vwifi_inject(&vwifi, buf, len);
+	ok = vwifi.stats.data_rx_frames == before;
+
+	/* continuation: raw body bytes, no SNAP header */
+	len = vwifi_build_data_from_ap(buf, sta_mac, ap_mac, ETHERTYPE_IP,
+	    part2, sizeof(part2), 7, 0, 1);
+	memmove(buf + 24, buf + 32, sizeof(part2));
+	len -= 8;
+	vwifi_inject(&vwifi, buf, len);
+	ok = ok && vwifi.stats.data_rx_frames == before + 1 &&
+	    vwifi.last_data_rx.len == elen &&
+	    memcmp(vwifi.last_data_rx.data, expect, elen) == 0;
+	anchor("S3.DEFRAG", ok, "frags=2 rx=%u len=%u",
+	    vwifi.stats.data_rx_frames, (unsigned) vwifi.last_data_rx.len);
+
+	/* a continuation without a predecessor is dropped */
+	before = vwifi.stats.data_rx_frames;
+	len = vwifi_build_data_from_ap(buf, sta_mac, ap_mac, ETHERTYPE_IP,
+	    part2, sizeof(part2), 40, 0, 1);
+	memmove(buf + 24, buf + 32, sizeof(part2));
+	len -= 8;
+	vwifi_inject(&vwifi, buf, len);
+	ok = vwifi.stats.data_rx_frames == before;
+
+	/* a retransmission of an old sequence is dropped by name */
+	before = vwifi.stats.data_rx_frames;
+	before_dup = ic->ic_stats.is_rx_dup;
+	first[1] |= IEEE80211_FC1_RETRY;
+	vwifi_inject(&vwifi, first, len + 8 + sizeof(part1) - 0);
+	ok = ok && vwifi.stats.data_rx_frames == before &&
+	    ic->ic_stats.is_rx_dup > before_dup;
+	anchor("S3.DEFRAG_NEG", ok, "dup=%u", ic->ic_stats.is_rx_dup - before_dup);
+}
+
+/* P9: management frame negatives. */
+static void check_mgmt_negatives(void)
+{
+	uint8_t buf[VWIFI_FRAME_MAX];
+	uint8_t chan = VWIFI_CHAN_IEEE;
+	size_t len, body;
+	unsigned before_small, before_big;
+	int ok;
+
+	/* a truncated authentication body is rejected by length */
+	before_small = ic->ic_stats.is_rx_elem_toosmall;
+	len = vwifi_build_auth_resp(buf);
+	vwifi_inject(&vwifi, buf, len - 1);
+	ok = ic->ic_stats.is_rx_elem_toosmall == before_small + 1 &&
+	    ic->ic_state == IEEE80211_S_RUN;
+	anchor("S3.NEG_TRUNC", ok, "small=%u", ic->ic_stats.is_rx_elem_toosmall);
+
+	/* an over-long SSID element is rejected by element length */
+	before_big = ic->ic_stats.is_rx_elem_toobig;
+	{
+		uint8_t *p = buf;
+		memset(p, 0, 24);			/* header, filled below */
+		p[0] = IEEE80211_FC0_SUBTYPE_PROBE_RESP;
+		memcpy(p + 4, sta_mac, 6);		/* A1 */
+		memcpy(p + 10, ap_mac, 6);		/* A2 */
+		memcpy(p + 16, ap_mac, 6);		/* A3 */
+		body = 24 + 8;				/* timestamp */
+		p[body++] = 0x64; p[body++] = 0x00;	/* beacon interval */
+		p[body++] = 0x21; p[body++] = 0x00;	/* capability */
+		p[body++] = IEEE80211_ELEMID_RATES;	/* rates element */
+		p[body++] = 8;
+		memcpy(p + body, "\x82\x84\x8b\x96\x0c\x12\x18\x24", 8);
+		body += 8;
+		p[body++] = IEEE80211_ELEMID_SSID;	/* ssid element, 33 bytes */
+		p[body++] = 33;
+		memset(p + body, 'x', 33);
+		body += 33;
+		p[body++] = IEEE80211_ELEMID_DSPARMS;
+		p[body++] = 1;
+		p[body++] = chan;
+		len = body;
+	}
+	vwifi_inject(&vwifi, buf, len);
+	ok = ic->ic_stats.is_rx_elem_toobig == before_big + 1 &&
+	    ic->ic_state == IEEE80211_S_RUN;
+	anchor("S3.NEG_IE", ok, "big=%u", ic->ic_stats.is_rx_elem_toobig);
+}
+
+/* One AP-side frame of the AES-CCM exchange: built in the AP-to-station
+ * direction and sealed with the key's own cipher (what the peer would do). */
+static size_t peer_ccmp_frame(struct ieee80211_key *k, uint8_t *buf,
+    const uint8_t *payload, size_t len, uint16_t seq)
+{
+	struct mbuf *m;
+	size_t flen;
+
+	flen = vwifi_build_data_from_ap(buf, sta_mac, ap_mac, ETHERTYPE_IP,
+	    payload, len, seq, 0, 0);
+	buf[1] |= IEEE80211_FC1_WEP;	/* the receive path runs the crypto */
+	m = vwifi_frame_mbuf(buf, flen);
+	if (m == NULL)
+		return 0;
+	/* the crypto header goes after the 802.11 header: prepend the space and
+	 * move the header back to the front (the stack's own sequence) */
+	M_PREPEND(m, k->wk_cipher->ic_header, M_NOWAIT);
+	if (m == NULL || m->m_len < 24 + (int) k->wk_cipher->ic_header) {
+		if (m != NULL)
+			m_freem(m);
+		return 0;
+	}
+	memmove(mtod(m, uint8_t *), mtod(m, uint8_t *) + k->wk_cipher->ic_header,
+	    24);
+	if (!k->wk_cipher->ic_encap(k, m, 0)) {
+		m_freem(m);
+		return 0;
+	}
+	flen = (size_t) m->m_len;
+	m_copydata(m, 0, (int) flen, buf);
+	m_freem(m);
+	return flen;
+}
+
+/* P10: the AES-CCM round trip and the MIC negative.
+ *
+ * The transmit leg is the station's own encapsulation plus the crypto hook the
+ * driver runs for a protected frame. The receive leg cannot be that frame
+ * mirrored: the CCMP MIC covers the address fields, so a direction flip would
+ * be rejected by design. The AP side of the exchange is therefore built in the
+ * AP-to-station direction and encrypted with the same key material through the
+ * cipher the key is bound to - exactly what the peer's crypto would do.
+ */
+static void check_ccmp(void)
+{
+	/* Test material, not a network key (the library's own tests annotate
+	 * their constant the same way). */
+	static const uint8_t test_key[16] = {
+		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+		0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+	};
+	static const uint8_t far_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x7a };
+	static const uint8_t payload[16] = {
+		'c', 'c', 'm', 'p', '-', 'p', 'l', 'a',
+		'y', 'l', 'o', 'a', 'd', 0, 0, 0
+	};
+	uint8_t buf[VWIFI_FRAME_MAX], tx[VWIFI_FRAME_MAX];
+	uint8_t expect[VWIFI_FRAME_MAX];
+	struct ieee80211_key *k = &ic->ic_bss->ni_ucastkey;
+	struct mbuf *m, *w;
+	size_t len, elen, tx_len;
+	unsigned before, before_mic;
+	int ok, tx_enc = 0, rx_ok = 0, mic_ok = 0;
+
+	/* install the pairwise key on the BSS node (what a supplicant does) */
+	ieee80211_key_update_begin(ic);
+	if (!ieee80211_crypto_newkey(ic, IEEE80211_CIPHER_AES_CCM,
+	    IEEE80211_KEY_XMIT | IEEE80211_KEY_RECV, k)) {
+		ieee80211_key_update_end(ic);
+		anchor("S3.CCMP", 0, "newkey failed");
+		return;
+	}
+	k->wk_keylen = sizeof(test_key);
+	memcpy(k->wk_key, test_key, sizeof(test_key));
+	if (!ieee80211_crypto_setkey(ic, k, ic->ic_bss->ni_macaddr)) {
+		ieee80211_key_update_end(ic);
+		anchor("S3.CCMP", 0, "setkey failed");
+		return;
+	}
+	ieee80211_key_update_end(ic);
+
+	ic->ic_flags |= IEEE80211_F_PRIVACY;
+
+	/* transmit leg: encapsulation, then the driver's crypto call */
+	m = eth_mbuf(sta_mac, far_mac, ETHERTYPE_IP, payload, sizeof(payload));
+	w = (m != NULL) ? ieee80211_encap(ic, m, ic->ic_bss) : NULL;
+	if (w == NULL) {
+		anchor("S3.CCMP", 0, "encap failed");
+		return;
+	}
+	m_copydata(w, 0, (int) w->m_len, tx);
+	if ((tx[1] & IEEE80211_FC1_WEP) == 0) {
+		m_freem(w);
+		anchor("S3.CCMP", 0, "frame not marked protected");
+		return;
+	}
+	if (ieee80211_crypto_encap(ic, ic->ic_bss, w) == NULL) {
+		m_freem(w);
+		anchor("S3.CCMP", 0, "crypto encap failed");
+		return;
+	}
+	/* the sealed frame is a chain (the MIC rides in its own buffer), so its
+	 * packet length is the length that matters */
+	len = (size_t) w->m_pkthdr.len;
+	m_copydata(w, 0, (int) len, tx);
+	m_freem(w);
+	tx_len = len;
+	tx_enc = memcmp(tx + 32, payload, sizeof(payload)) != 0;
+	/* header + ccmp header + llc + payload + mic */
+	ok = len == 24 + 8 + 8 + sizeof(payload) + 8 && tx_enc;
+
+	/* receive leg: the peer seals the reverse-direction frame */
+	len = peer_ccmp_frame(k, buf, payload, sizeof(payload), 4);
+	if (len == 0) {
+		anchor("S3.CCMP", 0, "peer encap failed");
+		return;
+	}
+
+	elen = eth_build(expect, sta_mac, ap_mac, ETHERTYPE_IP, payload,
+	    sizeof(payload));
+	before = vwifi.stats.data_rx_frames;
+	vwifi_inject(&vwifi, buf, len);
+	rx_ok = vwifi.stats.data_rx_frames == before + 1 &&
+	    vwifi.last_data_rx.len == elen &&
+	    memcmp(vwifi.last_data_rx.data, expect, elen) == 0;
+	ok = ok && rx_ok;
+
+	/* a second freshly sealed frame (a valid packet number) with a broken
+	 * last byte inside the MIC: rejected by name, nothing delivered */
+	len = peer_ccmp_frame(k, buf, payload, sizeof(payload), 5);
+	if (len == 0) {
+		anchor("S3.CCMP", 0, "second peer encap failed");
+		return;
+	}
+	before = vwifi.stats.data_rx_frames;
+	before_mic = ic->ic_stats.is_rx_ccmpmic;
+	buf[len - 1] ^= 0x01;
+	vwifi_inject(&vwifi, buf, len);
+	mic_ok = vwifi.stats.data_rx_frames == before &&
+	    ic->ic_stats.is_rx_ccmpmic == before_mic + 1;
+	ok = ok && mic_ok;
+
+	ic->ic_flags &= ~IEEE80211_F_PRIVACY;
+	anchor("S3.CCMP", ok, "tx=%u enc=%d rx_ok=%d rx=%u mic=%d deliv=%u",
+	    (unsigned) tx_len, tx_enc, rx_ok, vwifi.stats.data_rx_frames,
+	    mic_ok, (unsigned) vwifi.last_data_rx.len);
+}
+
+/* P11: the inactivity timeout and the watchdog entry.
+ *
+ * In station mode the node table that carries the access point is the scan
+ * table, so the timeout entry exercised here is its candidate purge; the
+ * hostap/ibss "station leaves" path of ieee80211_node_leave is out of this
+ * mock's operating mode (the library asserts the mode there). The port has no
+ * timer service yet, so the mock drives both entries explicitly (spec 3.3.5).
+ */
+static void check_watchdog(void)
+{
+	static const uint8_t candidate_mac[6] = {
+		0x02, 0x00, 0x00, 0x00, 0x00, 0x55
+	};
+	struct ieee80211_node *ni;
+	unsigned before, after;
+	int ok;
+
+	before = 0;
+	ieee80211_iterate_nodes(&ic->ic_scan, count_node, &before);
+
+	ni = ieee80211_alloc_node(&ic->ic_scan, candidate_mac);
+	if (ni == NULL) {
+		anchor("S3.WATCHDOG", 0, "alloc failed");
+		return;
+	}
+	ni->ni_inact = 1;		/* expires with the next tick */
+	ic->ic_bss->ni_inact = 60;	/* the joined node stays */
+
+	ic->ic_scan.nt_timeout(&ic->ic_scan);
+
+	after = 0;
+	ieee80211_iterate_nodes(&ic->ic_scan, count_node, &after);
+
+	ok = after == before &&
+	    ic->ic_scan.nt_inact_timer == IEEE80211_INACT_WAIT &&
+	    ic->ic_bss->ni_inact == 59;
+
+	/* the driver tick: reachable, it services the inactivity timers and asks
+	 * for another one, and it leaves a running state alone */
+	ieee80211_watchdog(ic);
+	ok = ok && ic->ic_state == IEEE80211_S_RUN &&
+	    ic->ic_ifp->if_timer == 1;
+
+	anchor("S3.WATCHDOG", ok, "cand=%u->%u bss_inact=%u if_timer=%d",
+	    before, after, ic->ic_bss->ni_inact, ic->ic_ifp->if_timer);
+}
+
 /* ------------------------------------------------------------------ */
 /* the run                                                             */
 /* ------------------------------------------------------------------ */
@@ -315,6 +752,12 @@ static void suite_run(void *argument)
 	check_captured_frames();
 	check_responder_vectors();
 	check_node_table();
+	check_data_plane();
+	check_eapol();
+	check_defrag();
+	check_mgmt_negatives();
+	check_ccmp();
+	check_watchdog();
 
 	blocks1 = wlan_osal_live_blocks();
 	bytes1 = wlan_osal_live_bytes();

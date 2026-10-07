@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct mbuf;
+
 struct ieee80211com;
 struct ifnet;
 
@@ -84,6 +86,9 @@ void vwifi_install(struct vwifi *sc);
 /* Drain one frame captured by the driver; 0 = nothing pending. */
 int vwifi_dispatch_one(struct vwifi *sc);
 
+/* An mbuf holding one contiguous frame copy (no CRC flag). */
+struct mbuf *vwifi_frame_mbuf(const uint8_t *frame, size_t len);
+
 /* Inject one raw 802.11 frame into the stack (takes the port serializer). */
 void vwifi_inject(struct vwifi *sc, const uint8_t *frame, size_t len);
 
@@ -91,6 +96,12 @@ void vwifi_inject(struct vwifi *sc, const uint8_t *frame, size_t len);
 size_t vwifi_build_probe_resp(uint8_t *buf);
 size_t vwifi_build_auth_resp(uint8_t *buf);
 size_t vwifi_build_assoc_resp(uint8_t *buf);
+
+/* An AP -> station data frame (LLC/SNAP plus the payload); seq is the 12-bit
+ * sequence number, more_frag sets the fragment bit. */
+size_t vwifi_build_data_from_ap(uint8_t *buf, const uint8_t *dst,
+    const uint8_t *src, uint16_t ether_type, const uint8_t *payload,
+    size_t len, uint16_t seq, int more_frag, uint8_t fragno);
 
 /* Mirror a STA->AP data frame into the AP->STA direction (the self loop). */
 int vwifi_mirror_data(const uint8_t *in, size_t len, uint8_t *out);

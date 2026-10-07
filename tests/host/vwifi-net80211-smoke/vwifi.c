@@ -29,6 +29,7 @@
 
 #include <net/if.h>
 #include <net/if_ether.h>
+#include <net/if_llc.h>
 #include <net/if_media.h>
 
 #include <net80211/ieee80211_var.h>
@@ -131,6 +132,33 @@ size_t vwifi_build_assoc_resp(uint8_t *buf)
 	return (size_t) (p - buf);
 }
 
+size_t vwifi_build_data_from_ap(uint8_t *buf, const uint8_t *dst,
+    const uint8_t *src, uint16_t ether_type, const uint8_t *payload,
+    size_t len, uint16_t seq, int more_frag, uint8_t fragno)
+{
+	uint8_t *p = buf;
+
+	*p++ = IEEE80211_FC0_TYPE_DATA;		/* version 0 */
+	*p++ = (uint8_t) (IEEE80211_FC1_DIR_FROMDS |
+	    (more_frag ? IEEE80211_FC1_MORE_FRAG : 0));
+	p = put16(p, 0);			/* duration */
+	p = put_mac(p, dst);			/* addr1 = destination */
+	p = put_mac(p, vwifi_ap_mac);		/* addr2 = BSSID */
+	p = put_mac(p, src);			/* addr3 = source */
+	p = put16(p, (uint16_t) ((seq << IEEE80211_SEQ_SEQ_SHIFT) |
+	    (fragno & IEEE80211_SEQ_FRAG_MASK)));
+	*p++ = LLC_SNAP_LSAP;			/* dsap */
+	*p++ = LLC_SNAP_LSAP;			/* ssap */
+	*p++ = LLC_UI;				/* control */
+	*p++ = 0;				/* OUI */
+	*p++ = 0;
+	*p++ = 0;
+	*p++ = (uint8_t) (ether_type >> 8);
+	*p++ = (uint8_t) (ether_type & 0xff);
+	memcpy(p, payload, len);
+	return (size_t) (p + len - buf);
+}
+
 /* ------------------------------------------------------------------ */
 /* capture                                                             */
 /* ------------------------------------------------------------------ */
@@ -214,24 +242,32 @@ static void vwifi_start(struct ifnet *ifp)
 /* RX injection and the scripted responder                             */
 /* ------------------------------------------------------------------ */
 
+struct mbuf *vwifi_frame_mbuf(const uint8_t *frame, size_t len)
+{
+	struct mbuf *m;
+
+	if (len > VWIFI_FRAME_MAX)
+		return NULL;
+	MGETHDR(m, M_NOWAIT, MT_DATA);
+	if (m == NULL)
+		return NULL;
+	memcpy(mtod(m, void *), frame, len);
+	m->m_len = (int) len;
+	m->m_pkthdr.len = (int) len;
+	return m;
+}
+
 void vwifi_inject(struct vwifi *sc, const uint8_t *frame, size_t len)
 {
 	struct ieee80211com *ic = sc->ic;
 	struct ieee80211_node *ni;
 	struct mbuf *m;
 
-	if (len > VWIFI_FRAME_MAX) {
-		sc->stats.inject_fail++;
-		return;
-	}
-	MGETHDR(m, M_NOWAIT, MT_DATA);
+	m = vwifi_frame_mbuf(frame, len);
 	if (m == NULL) {
 		sc->stats.inject_fail++;
 		return;
 	}
-	memcpy(mtod(m, void *), frame, len);
-	m->m_len = (int) len;
-	m->m_pkthdr.len = (int) len;
 
 	wlan_port_serializer_lock();
 	ni = ieee80211_find_rxnode(ic, (const struct ieee80211_frame_min *) frame);
