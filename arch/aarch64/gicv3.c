@@ -6,10 +6,12 @@
  *
  *  - diagnostics print through the polled console (uart_early_*);
  *  - the dispatch entry takes the acknowledged INTID as a parameter and
- *    does not write ICC_EOIR1_EL1: the exception-return path that owns the
- *    interrupt frame ends the interrupt (the FreeRTOS port writes EOIR1
- *    after vApplicationIRQHandler returns). Ending it here as well would
- *    EOI twice.
+ *    never touches ICC_IAR1_EL1 / ICC_EOIR1_EL1: the acknowledge/end pair
+ *    is exposed as gic_iar_read()/gic_irq_eoi() and owned by the exception
+ *    entry that holds the interrupt frame (the FreeRTOS port writes EOIR1
+ *    after vApplicationIRQHandler returns; the ThreadX entry runs the same
+ *    read/dispatch/eoi trio in tx_vectors.S). Ending the interrupt here as
+ *    well would EOI twice.
  *
  * Board-proven discipline (every one of these was established by experiment
  * on this board and getting it wrong produces silence, not an error):
@@ -454,19 +456,41 @@ int32_t gic_irq_is_enabled(uint32_t intid)
 
 /* --- interrupt entry -------------------------------------------------------- */
 
+/* ICC_IAR1_EL1 (S3_0_C12_C12_0): acknowledge one Group 1 interrupt. Called
+ * by the exception entry, which passes the returned value to the dispatcher
+ * and later back into gic_irq_eoi(). Reading it outside an IRQ entry (e.g.
+ * with nothing pending) returns the spurious INTID 1023 - the dispatcher
+ * drops that. */
+uint32_t gic_iar_read(void)
+{
+	uint32_t value;
+
+	__asm__ __volatile__("mrs %0, s3_0_c12_c12_0" : "=r"(value));
+	return value;
+}
+
+/* ICC_EOIR1_EL1 (S3_0_C12_C12_1): priority drop and deactivation in one
+ * write. The value must be the one gic_iar_read() returned - writing
+ * anything else deactivates the wrong state and wedges the CPU interface. */
+void gic_irq_eoi(uint32_t iar)
+{
+	__asm__ __volatile__("msr s3_0_c12_c12_1, %0" :: "r"(iar) : "memory");
+}
+
 /* Dispatch one already-acknowledged interrupt. The INTID arrives as the
  * value read from ICC_IAR1_EL1 by the exception entry (the FreeRTOS port
- * reads it and passes it to vApplicationIRQHandler), so this function never
- * touches the acknowledge register itself. It does NOT end the interrupt
- * either: the exception return path owns EOIR1 (see the file header). */
-void gic_irq_dispatch(uint32_t iar)
+ * reads it and passes it to vApplicationIRQHandler; the ThreadX entry calls
+ * gic_iar_read() first), so this function never touches the acknowledge
+ * register. It does NOT end the interrupt either: the entry owns EOIR1
+ * (see the file header) and gets the value back through the return. */
+uint32_t gic_irq_dispatch(uint32_t iar)
 {
 	uint32_t intid = iar & 0x3ffu;
 	irq_handler_t fn;
 	void *arg;
 
 	if (intid == IRQ_INTID_SPURIOUS) {
-		return;
+		return iar;
 	}
 
 	fn = (intid < IRQ_TABLE_SIZE) ? irq_table[intid].fn : 0;
@@ -474,4 +498,6 @@ void gic_irq_dispatch(uint32_t iar)
 	if (fn != 0) {
 		fn(arg);
 	}
+
+	return iar;
 }
