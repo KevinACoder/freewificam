@@ -8,7 +8,7 @@
 SUITE_NAME := cherrysh-port-smoke
 SUITE_TIMEOUT := 60
 SUITE_EXPECT := self
-SUITE_BUILD := make -C tests/host/cherrysh-port-smoke
+SUITE_BUILD := make -j4 -C tests/host/cherrysh-port-smoke
 SUITE_RUN := sh tools/mock/cherrysh-port-smoke/check.sh
 SUITE_TRUTH_SOURCE := Upstream CherrySH sources: the not-found text and the prompt construction are upstream literals and the help listing is computed by the vendored help command from the command and variable tables themselves
 SUITE_SEGMENTS := -
