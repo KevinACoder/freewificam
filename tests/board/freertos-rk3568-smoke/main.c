@@ -32,6 +32,7 @@
 #include "task.h"
 
 #include "arch_asm.h"
+#include "generic_timer.h"
 #include "uart.h"
 
 #ifndef FW_BUILD_TAG
@@ -140,6 +141,12 @@ static void task_report( void *arg )
 		put_dec( (uint32_t)xTaskGetTickCount() );
 		uart_early_puts( " switches=" );
 		put_dec( act_hi + act_lo_a + act_lo_b );
+		/* The system counter in milliseconds: an independent, free-running
+		 * time base, so the ladder's real-time spacing is verifiable from
+		 * the log alone (the tick count is software-derived). */
+		uart_early_puts( " cntv_ms=" );
+		put_dec( (uint32_t)( gtimer_count_get() /
+				     ( gtimer_freq_get() / 1000U ) ) );
 		uart_early_puts( "\n" );
 		if( beat >= 3U ) {
 			break;
