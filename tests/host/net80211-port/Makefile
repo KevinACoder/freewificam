@@ -132,9 +132,9 @@ FR_OBJS    := $(foreach s,$(SMOKE_SRCS),$(call OBJ,fr,$(s))) \
 TX_BIN := $(BUILD_DIR)/net80211-port-threadx
 FR_BIN := $(BUILD_DIR)/net80211-port-freertos
 
-.PHONY: all stack-compile link-threadx link-freertos gates clean
+.PHONY: all stack-compile headers link-threadx link-freertos gates clean
 
-all: stack-compile link-threadx link-freertos gates
+all: stack-compile headers link-threadx link-freertos gates
 
 # ---- rules ------------------------------------------------------------------
 
@@ -181,6 +181,33 @@ $(call OBJ,fr,$(MAKEFILE_DIR)/seam_stub.c): $(MAKEFILE_DIR)/seam_stub.c | $(BUIL
 
 stack-compile: $(STACK_OBJS)
 	@echo "stack-compile: $(words $(STACK_OBJS)) translation units compiled (-c only)"
+
+# The include discipline, mechanically: across the whole stack set, every name the
+# contract cares about must resolve where the port's search order says it should -
+# the NetBSD shape names to the component's vocabulary headers and the machinery
+# names to the port's own. The cdefs shim is checked with a probe instead of the
+# -H table: the compiler does not list a header reached by include_next from a
+# force-included file (a -H quirk), so a translation unit that asserts the shim's
+# guard (and the host cdefs behind it) is the honest check.
+headers: | $(BUILD_DIR)
+	@: > $(BUILD_DIR)/headers.raw
+	@for s in $(STACK_SRCS); do \
+	    $(CC) $(BSD_CFLAGS) -H -fsyntax-only $$s 2>> $(BUILD_DIR)/headers.raw || exit 1; \
+	done
+	@grep -E '^\.+ ' $(BUILD_DIR)/headers.raw | sed -e 's/^\.* //' | sort -u > $(BUILD_DIR)/headers.txt
+	@for n in net/if.h net/route.h sys/param.h; do \
+	    grep -q "components/net80211/compat/netbsd/$$n$$" $(BUILD_DIR)/headers.txt || \
+	    { echo "headers: FAIL $$n must come from the component vocabulary"; exit 1; }; \
+	done
+	@for n in sys/mutex.h sys/intr.h sys/atomic.h sys/once.h sys/systm.h \
+	    sys/kernel.h sys/cpu.h sys/proc.h sys/errno.h; do \
+	    grep -q "ports/net80211/compat/$$n$$" $(BUILD_DIR)/headers.txt || \
+	    { echo "headers: FAIL $$n must come from the port"; exit 1; }; \
+	done
+	@printf '#include <sys/cdefs.h>\n#ifndef _WLAN_SYS_CDEFS_H_\n#error the port'"'"'s cdefs shim is not the one in reach\n#endif\n#ifndef __THROW\n#error the host cdefs did not load through include_next\n#endif\n' > $(BUILD_DIR)/cdefs-probe.c
+	@$(CC) $(BSD_CFLAGS) -fsyntax-only $(BUILD_DIR)/cdefs-probe.c || \
+	    { echo "headers: FAIL the cdefs shim probe"; exit 1; }
+	@echo "headers: shape names <- component vocabulary, machinery <- port, cdefs shim + host cdefs <- probe ($$(wc -l < $(BUILD_DIR)/headers.txt) headers resolved)"
 
 link-threadx: $(STACK_OBJS) $(PORT_OBJS) $(TX_OBJS)
 	$(CC) $^ $(TX_LDFLAGS) -o $(TX_BIN)
