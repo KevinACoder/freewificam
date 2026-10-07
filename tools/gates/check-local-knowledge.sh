@@ -10,10 +10,13 @@
 #
 # This script excludes itself from the scans: it necessarily spells out the
 # very patterns it looks for. It also excludes the vendored upstream test tree
-# (third-party/FreeRTOS-Kernel-tests): those bytes are copied verbatim under the
-# zero-patch discipline, so their content cannot be rewritten to satisfy the
-# authoring rules here - a provenance file next to the tree is their record
-# instead. Everything this project authors stays fully scanned.
+# (third-party/FreeRTOS-Kernel-tests) and the imported unit trees under
+# components/ (net80211, skbuff, linuxkpi): those bytes are copied verbatim under
+# the zero-patch discipline, so their content cannot be rewritten to satisfy the
+# authoring rules here - an in-tree provenance file is their record instead. The
+# project-authored records inside those trees (PROVENANCE.md, DIVERGENCES.md,
+# MANIFEST.sha256) stay scanned, and everything else this project authors stays
+# fully scanned.
 #
 # Usage:
 #   tools/gates/check-local-knowledge.sh                 # scan tracked files
@@ -27,6 +30,21 @@ self=tools/gates/check-local-knowledge.sh
 vendored=third-party/FreeRTOS-Kernel-tests
 paths_self=':!'"$self"
 paths_vendored=':!'"$vendored"
+
+# Imported unit trees: their bytes are excluded from both scans, their in-tree
+# project-authored records are kept.
+imported_units='components/net80211 components/skbuff components/linuxkpi'
+paths_imported=''
+for unit in $imported_units; do
+	paths_imported="$paths_imported :!$unit"
+done
+imported_records='components/net80211/PROVENANCE.md
+components/net80211/DIVERGENCES.md
+components/net80211/MANIFEST.sha256
+components/skbuff/PROVENANCE.md
+components/skbuff/DIVERGENCES.md
+components/linuxkpi/PROVENANCE.md
+components/linuxkpi/DIVERGENCES.md'
 
 patterns='/(home|mnt|tmp)/|~/|KI-[0-9]|itx-wiki|oslab|backups/|web_cmera_|project_rtos_webcam|project_web_camera|\.agents/skills'
 
@@ -43,7 +61,9 @@ report() {
 	fi
 }
 
-files=$(git ls-files -- "$paths_self" "$paths_vendored")
+files=$(git ls-files -- "$paths_self" "$paths_vendored" $paths_imported)
+records=$(git ls-files -- $imported_records)
+files=$(printf '%s\n%s\n' "$files" "$records" | grep -v '^$' | sort -u)
 
 findings=$(printf '%s\n' "$files" | xargs -r grep -nHIE "$patterns" -- 2>/dev/null || true)
 report "$findings" "local-path/identifier scan"
