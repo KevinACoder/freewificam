@@ -1,0 +1,7 @@
+seed	iters	profile	digest	note
+1	20000	host	bdadac1bf91b3b1f	container-scale stream (the change-cycle size)
+2	20000	host	aeb7a4e8ef67ae01	container-scale stream
+3	20000	host	3fa001361c65c666	container-scale stream
+1	200000	host	fd4d8a1ca7f152c3	milestone-scale stream (make it explicit in the round record)
+2	200000	host	9cd391f014f08c01	milestone-scale stream
+3	200000	host	3c1771483214a8f7	milestone-scale stream
