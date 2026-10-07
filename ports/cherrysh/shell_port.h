@@ -47,8 +47,18 @@ uint16_t console_sget( chry_readline_t * rl, void * data, uint16_t size );
  * @brief Console backend: the exit command's platform behaviour.
  *
  * The host backend ends the run through the CMSIS-RTOS2 host seam; the board
- * backend resets the session instead (see the board port round).
+ * backend resets the session instead (the shell comes back with a fresh
+ * prompt, the image keeps running).
  */
 void shell_port_backend_exit( void );
+
+/**
+ * @brief Ask the repl loop to reset the shell session.
+ *
+ * For backends whose exit means "start over" rather than "end the run": the
+ * flag is consumed by the repl loop, which re-initialises the instance and
+ * prints the prompt again.
+ */
+void shell_port_session_reset( void );
 
 #endif /* SHELL_PORT_H */
