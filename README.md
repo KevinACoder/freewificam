@@ -33,6 +33,7 @@ bus backend, network-stack presentation) rather than as a firmware-private tree.
 | `os/` | RTOS ports and the CMSIS-RTOS2 abstraction |
 | `board/` | Board support, one directory per target |
 | `components/` | Drivers and protocol stacks, plus the imported units (`net80211/`, `linuxkpi/`, `skbuff/`) with their provenance ledgers |
+| `ports/` | The project's port layers for the imported units (OS adaptation, bus backend, network presentation) |
 | `app/` | Application entry points (one per OS / flavor) |
 | `third-party/` | Vendored upstream sources (pinned) |
 | `patches/` | Local patches replayed onto upstream pins |
