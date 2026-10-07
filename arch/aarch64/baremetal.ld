@@ -103,6 +103,13 @@ SECTIONS
 	. = . + 1M;
 	__heap_end = .;
 
+	/* The ThreadX cortex_a55 port dereferences this symbol during kernel
+	 * init (tx_initialize_low_level.S stores *__top_of_ram into
+	 * _tx_initialize_unused_memory). The dereferenced value is never
+	 * consumed by this image's allocators - the symbol only has to resolve
+	 * to a mapped address; a missing definition is a link error. */
+	PROVIDE(__top_of_ram = __heap_end);
+
 	/DISCARD/ : {
 		*(.comment)
 		*(.note*)
