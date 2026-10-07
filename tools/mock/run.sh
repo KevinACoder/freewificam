@@ -163,14 +163,17 @@ run_suite() {
     if [ "$expect" = "self" ]; then
         # The suite reports its own cases; the container checks the report and that the
         # exit code agrees with it - a suite that prints FAIL but exits 0 is broken.
-        cases=$(grep '^CASE ' "$log_dir/run.log" || true)
+        # -a: an upstream test binary may emit bytes that are not valid text; the
+        # case lines are still ASCII and must be read (a binary-looking log once
+        # produced a phantom "no CASE line produced" failure on a cold run).
+        cases=$(grep -a '^CASE ' "$log_dir/run.log" || true)
         if [ -z "$cases" ]; then
             printf 'CASE %s/suite FAIL (no CASE line produced)\n' "$name"
             case_bad=$((case_bad + 1))
             if [ "$status" = 0 ]; then status=1; fi
             return
         fi
-        printf '%s\n' "$cases" | grep -Ev "^CASE $name/" > "$log_dir/foreign-cases.txt" || true
+        printf '%s\n' "$cases" | grep -aEv "^CASE $name/" > "$log_dir/foreign-cases.txt" || true
         if [ -s "$log_dir/foreign-cases.txt" ]; then
             printf 'CASE %s/suite FAIL (CASE lines from another suite)\n' "$name"
             case_bad=$((case_bad + 1))
@@ -178,8 +181,8 @@ run_suite() {
         fi
         printf '%s\n' "$cases"
         n=$(printf '%s\n' "$cases" | wc -l)
-        ok=$(printf '%s\n' "$cases" | grep -cE ' (PASS|XFAIL)$' || true)
-        bad=$(printf '%s\n' "$cases" | grep -cvE ' (PASS|XFAIL)$' || true)
+        ok=$(printf '%s\n' "$cases" | grep -acE ' (PASS|XFAIL)$' || true)
+        bad=$(printf '%s\n' "$cases" | grep -acvE ' (PASS|XFAIL)$' || true)
         case_total=$((case_total + n))
         case_ok=$((case_ok + ok))
         case_bad=$((case_bad + bad))
