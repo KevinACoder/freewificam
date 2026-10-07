@@ -1,0 +1,13 @@
+# Seed ledger: the deterministic operation streams this suite runs.
+#
+# One row per stream the container's run exercises.  The digest column records
+# what a passing run produced when the row was written; a change of digest means
+# the stream's deterministic replay changed and must be explained in the round's
+# run record, never silently accepted.  Operations are the ordered stream's
+# length; the profile names the pool geometry the stream ran under.
+
+seed	iters	profile	digest	note
+1	200000	host	3e57f6719110eb72	first seeded stream, mixed legal and misuse operators
+2	200000	host	b0bad33b1cb05e4c	second stream, longer queue bursts
+3	200000	host	2422bc7a0a807160	third stream, oversize allocation pressure
+1	200000	mcu	a839a4a9e4410488	constrained geometry (8 header / 8 data / 256 byte), no heap fallback
