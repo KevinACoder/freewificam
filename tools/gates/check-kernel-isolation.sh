@@ -27,7 +27,13 @@
 #
 # Usage:
 #   check-kernel-isolation.sh --stack-objs DIR --port-objs DIR --sources "DIR DIR" [--canary]
-#                               [--lwip-port]
+#                               [--lwip-port] [--root DIR] [--canary-src DIR]
+#
+# --root names the repository root explicitly for the cross32 gates; without it the
+# root is inferred from the first --sources entry (which must sit two levels below it).
+# --canary-src names the directory the source-gate canary is injected into; without it
+# the canary picks the first ports/* entry of --sources. Both keep existing callers
+# unchanged and exist for trees whose sources do not live under ports/.
 #
 # Exit status: 0 clean, 1 findings or a failed canary proof.
 
@@ -38,6 +44,8 @@ port_objs=
 sources=
 canary=0
 lwip_port=0
+root_override=
+canary_src=
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -46,6 +54,8 @@ while [ $# -gt 0 ]; do
 	--sources) sources=$2; shift 2 ;;
 	--canary) canary=1; shift ;;
 	--lwip-port) lwip_port=1; shift ;;
+	--root) root_override=$2; shift 2 ;;
+	--canary-src) canary_src=$2; shift 2 ;;
 	*) echo "check-kernel-isolation: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -58,7 +68,14 @@ fi
 self=$(pwd)/$(basename "$0")
 # Kernel API names of the kernels this project does not use in components. The
 # pattern is deliberately word-anchored so identifiers like "txt" do not match.
-forbidden='(^|[^A-Za-z0-9_])(_tx_[a-z]|tx_[a-z]|TX_[A-Z]|xTask|xQueue|xSemaphore|xEventGroup|xTimer|vTask|vQueue|vSemaphore|vEventGroup|pthread_)'
+#
+# The ThreadX service family (tx_*/TX_*) is matched in call form rather than as a bare
+# word: the Linux API face this project declares legitimately carries struct members
+# whose names start with tx_ (transmit-side fields such as tx_pn or tx_params), and
+# what the rule forbids is calling another kernel's service. A reference that is not a
+# call (taking a service's address, say) is still caught by the symbol gate over the
+# objects, so the pair covers both forms.
+forbidden='(^|[^A-Za-z0-9_])(xTask|xQueue|xSemaphore|xEventGroup|xTimer|vTask|vQueue|vSemaphore|vEventGroup|pthread_|TX_[A-Z]|_?tx_[a-z][a-z0-9_]*[[:space:]]*\()'
 
 status=0
 
@@ -168,14 +185,17 @@ report "$(symbol_scan)" "symbol gate (nm: no foreign kernel API)"
 report "$(source_scan)" "source gate (word scan of the author-side sources)"
 
 if command -v "$CROSS" >/dev/null 2>&1; then
-	root=$(cd "$(dirname "$sources")" 2>/dev/null && pwd || true)
-	# The sources argument carries the port directory first; the repo root is three
-	# levels up from tests/host/<dir>.
-	first=$(printf '%s' "$sources" | cut -d' ' -f1)
-	if [ -n "$first" ]; then
-		root=$(cd "$first/../.." 2>/dev/null && pwd)
+	if [ -n "$root_override" ]; then
+		root=$root_override
 	else
-		root=""
+		# The sources argument carries the port directory first; the repo root is
+		# three levels up from tests/host/<dir>.
+		first=$(printf '%s' "$sources" | cut -d' ' -f1)
+		if [ -n "$first" ]; then
+			root=$(cd "$first/../.." 2>/dev/null && pwd)
+		else
+			root=""
+		fi
 	fi
 	if [ -n "$root" ] && [ -d "$root/components/net80211" ]; then
 		report "$(cross32_scan "$root")" "cross32 gate (arm-none-eabi, cortex-m4)"
@@ -200,11 +220,15 @@ if [ "$canary" = 1 ]; then
 
 	# 1. symbol gate canary: a real object that calls another kernel's API.
 	port_src_canary=
-	for d in $sources; do
-		if [ -d "$d" ] && [ "$d" != "$stack_objs" ]; then
-			case "$d" in ports/*|*/ports/*) port_src_canary="$d/.canary-isolation.c" ;; esac
-		fi
-	done
+	if [ -n "$canary_src" ]; then
+		port_src_canary="$canary_src/.canary-isolation.c"
+	else
+		for d in $sources; do
+			if [ -d "$d" ] && [ "$d" != "$stack_objs" ]; then
+				case "$d" in ports/*|*/ports/*) port_src_canary="$d/.canary-isolation.c" ;; esac
+			fi
+		done
+	fi
 	printf 'void *canary(void) { return (void *) pthread_self(); }\n' > "$tmp/canary.c"
 	cc -c "$tmp/canary.c" -o "$stack_objs/.canary-isolation.o" 2>/dev/null || true
 	if [ -f "$stack_objs/.canary-isolation.o" ]; then
