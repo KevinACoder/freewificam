@@ -9,11 +9,13 @@
 
 #include "board_suite.h"
 
-void usb_msc_case(unsigned busid, const char *hcd);
+int usb_msc_case(unsigned busid, const char *hcd);
 
 static void usb_xhci(void)
 {
-	usb_msc_case(3U, "xhci");
+	if (usb_msc_case(3U, "xhci") != 0) {
+		board_case_fail("no mass-storage device on the xHCI bus");
+	}
 }
 
 BOARD_TEST("usb-xhci", usb_xhci);

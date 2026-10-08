@@ -9,11 +9,16 @@
 
 #include "board_suite.h"
 
-void usb_msc_case(unsigned busid, const char *hcd);
+int usb_msc_case(unsigned busid, const char *hcd);
 
 static void usb_ehci(void)
 {
-	usb_msc_case(1U, "ehci");
+	/* Two EHCI roots carry the panel ports; the U-disk was recorded behind
+	 * one of them and the other carries a non-storage device, so the row
+	 * takes whichever root answers. */
+	if (usb_msc_case(1U, "ehci") != 0 && usb_msc_case(0U, "ehci") != 0) {
+		board_case_fail("no mass-storage device on either EHCI root");
+	}
 }
 
 BOARD_TEST("usb-ehci", usb_ehci);

@@ -32,6 +32,13 @@
  * board. */
 int usb_board_init(unsigned busid);
 
+/* The stack's enumeration event sink: every milestone (init, configured,
+ * interface start/unsupported, disconnect) becomes one anchor line. Pass it to
+ * usbh_initialize(); without a handler the core installs a silent dummy and a
+ * run cannot say where enumeration stopped. */
+void usb_board_event_handler(uint8_t busid, uint8_t hub_index, uint8_t hub_port,
+			     uint8_t intf, uint8_t event);
+
 /* Post-start board work, to be called right after usbh_initialize() for this
  * bus. On an EHCI bus it manufactures the connect-change edge a device that
  * was already attached at boot never produces: the root port's power is

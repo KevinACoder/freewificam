@@ -220,6 +220,39 @@ void usb_hc_low_level2_init(struct usbh_bus *bus)
  * (the USB3 port decodes its own port register): a low-speed device holds
  * the port in the K state while it is being reset, and an enabled port with
  * neither indication is a high-speed device. */
+/* The stack reports every enumeration milestone through this handler; without
+ * it the core installs a silent dummy and a run leaves no trace of where the
+ * hub thread stopped. The lines are the run's anchors, and every one of them is
+ * cheap: a handful per device. */
+static const char *usbh_event_name(uint8_t event)
+{
+	switch (event) {
+	case USBH_EVENT_INIT:
+		return "init";
+	case USBH_EVENT_DEINIT:
+		return "deinit";
+	case USBH_EVENT_DEVICE_CONFIGURED:
+		return "device-configured";
+	case USBH_EVENT_DEVICE_DISCONNECTED:
+		return "device-disconnected";
+	case USBH_EVENT_INTERFACE_START:
+		return "interface-start";
+	case USBH_EVENT_INTERFACE_STOP:
+		return "interface-stop";
+	case USBH_EVENT_INTERFACE_UNSUPPORTED:
+		return "interface-unsupported";
+	default:
+		return "other";
+	}
+}
+
+void usb_board_event_handler(uint8_t busid, uint8_t hub_index, uint8_t hub_port,
+			     uint8_t intf, uint8_t event)
+{
+	board_log("usbh: bus%u event %s hub=%u port=%u intf=%u\n", busid,
+		  usbh_event_name(event), hub_index, hub_port, intf);
+}
+
 void usb_board_after_start(unsigned busid)
 {
 	struct usbh_bus *bus;

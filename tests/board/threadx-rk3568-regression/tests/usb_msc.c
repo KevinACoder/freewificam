@@ -70,13 +70,13 @@ void usb_msc_case(unsigned busid, const char *hcd)
 	uint32_t elapsed_ms;
 
 	if (usb_board_init(busid) != 0) {
-		board_case_fail("board layer bring-up failed");
-		return;
+		board_log("usbh: fail board layer bring-up at bus%u\n", busid);
+		return -1;
 	}
 	board_log("usbh: core init bus=%u hcd=%s base=0x%lx\n", busid, hcd,
 		  (unsigned long)usb_board_reg_base(busid));
 
-	if (usbh_initialize(busid, usb_board_reg_base(busid), 0) != 0) {
+	if (usbh_initialize(busid, usb_board_reg_base(busid), usb_board_event_handler) != 0) {
 		board_case_fail("usbh_initialize failed");
 		return;
 	}
@@ -138,5 +138,6 @@ void usb_msc_case(unsigned busid, const char *hcd)
 	elapsed_ms = osKernelGetTickCount() - start_ms;
 	board_log("usbh: msc write %u MiB in %u ms\n", (unsigned)(MSC_WRITE_SECTORS * MSC_BLOCK_BYTES >> 20),
 		  (unsigned)elapsed_ms);
+	return 0;
 }
 
