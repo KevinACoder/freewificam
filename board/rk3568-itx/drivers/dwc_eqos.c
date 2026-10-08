@@ -42,13 +42,12 @@
  * survives), and short transmit frames must be zero-padded to 60 bytes or ARP
  * replies are silently discarded by the peer.
  *
- * Threading in the NO_SYS=1 image (specs/lwip-adapt §3.1 条 5): the only
- * contexts are the main loop and this port's interrupt. The old mutex +
- * IRQ-mask pair collapses to the IRQ mask alone - masking the port's own line
- * covers main-loop-vs-interrupt, and nothing else in the system touches these
- * rings. The osTimer watchdog became dwc_eqos_watchdog(), invoked from the
- * main loop; osDelay stays (the cmsis2 time subset implements it on both the
- * baremetal and threadx bases).
+ * Threading in this image: the contexts are the service thread (watchdog
+ * sweep) and this port's interrupt. The port-line mask is the whole mutual
+ * exclusion - masking the port's own line covers thread-vs-interrupt, and
+ * nothing else in the system touches these rings. The completion sweep also
+ * runs from dwc_eqos_watchdog(), invoked by the service thread; osDelay is
+ * the CMSIS-RTOS2 delay the port layer provides.
  *
  * @author zhugengyu
  * @date   16.09.2026 (board-verified core) / 02.10.2026 (port re-arrangement)

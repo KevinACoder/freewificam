@@ -23,15 +23,15 @@
  * manual. Prior-work evidence: docs/evidence/20260916-m1a-dual-gmac-lwip.md
  * (M1-A), lab runs 20260905-embox-gmac-bringup.
  *
- * Port notes vs the prior workspace's CMSIS-Driver shape (specs/lwip-adapt
- * §3.4, the搬运≠照搬 list): the CMSIS instance macro and the Driver_ETH_MAC
- * vtable are gone; interrupts arm through gicv3 irq_register (the handler
- * takes the instance index as its argument); the ring lock is the port's own
- * interrupt line only (the NO_SYS=1 image has one thread - the main loop -
- * and the mutex covered thread-vs-thread); the osTimer watchdog became
- * dwc_eqos_watchdog(), called from the main loop; the RxFrame/TxFrame event
- * callback is gone (the main loop polls the staging ring). Every register
- * sequence, ring discipline and cache-maintenance point is unchanged.
+ * Port notes: there is no CMSIS-Driver instance macro or Driver_ETH_MAC
+ * vtable here; interrupts arm through gicv3 irq_register (the handler takes
+ * the instance index as its argument); the ring lock is the port's own
+ * interrupt line only, because the contexts that touch these rings are the
+ * service thread and this port's interrupt alone; the completion sweep is
+ * driven by dwc_eqos_watchdog() from the service thread rather than a timer
+ * callback; received frames wait in the staging ring for the bridge's poll.
+ * Every register sequence, ring discipline and cache-maintenance point is
+ * the board-verified one.
  *
  * @author zhugengyu
  * @date   16.09.2026 (board-verified core) / 02.10.2026 (port re-arrangement)

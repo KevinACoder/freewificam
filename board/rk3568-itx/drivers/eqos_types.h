@@ -2,9 +2,9 @@
  * @file   eqos_types.h
  * @brief  Shared types of the GMAC driver family (MAC core, PHY, SoC glue).
  *
- * The prior workspace's drivers spoke CMSIS-Driver (ARM_DRIVER_ETH_MAC /
- * ARM_ETH_PHY); this port carries the board-verified register behaviour over
- * but not that API shell (specs/lwip-adapt §3.4: CMSIS 壳删除). The encodings
+ * The register behaviour is carried over from the board-verified core, but
+ * not the CMSIS-Driver API shell (ARM_DRIVER_ETH_MAC / ARM_ETH_PHY) it once
+ * lived behind. The encodings
  * below keep the CMSIS bit positions the verified code reasoned in - speed in
  * bits[1:0] with 10M=0, DUPLEX_HALF = bit 2 - so the carried-over switch
  * statements stay line-identical.

@@ -74,9 +74,9 @@ void rk3568_gmac_soc_swr_quirk(const struct dwc_eqos_plat *plat, int enter);
 const struct dwc_eqos_plat *eqos_board_plat(unsigned int index);
 
 /* Post-init readback of the port's CRU/GRF configuration, one log line:
- * the P7-1b golden dump (spec FR-4/判据 1) - the values must equal the
- * U-Boot-leftover golden measured in the lab ([LAB] 事实 2), proving the
- * explicit re-initialization is idempotent with the verified state. */
+ * the values must equal the golden state U-Boot leaves behind (measured on
+ * this board), which proves the explicit re-initialization is idempotent
+ * with the verified configuration. */
 void eqos_board_golden_dump(unsigned int index);
 
 /* The MDIO pair the PHY driver borrows (ctx = the port index as a value). */

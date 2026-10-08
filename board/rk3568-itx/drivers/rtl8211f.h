@@ -22,7 +22,7 @@
  *    separate page register.
  *
  * Port note: the CMSIS ARM_DRIVER_ETH_PHY vtable and its instance macro are
- * gone (specs/lwip-adapt §3.4); the entry points take the port index and the
+ * not part of this port; the entry points take the port index and the
  * shared eqos_types.h shapes. The clause-22 flow and the strap discipline are
  * the board-verified ones, unchanged.
  *

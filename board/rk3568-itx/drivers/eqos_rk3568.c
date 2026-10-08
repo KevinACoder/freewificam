@@ -10,9 +10,9 @@
  * tables, PHY reset lines and MAC addresses, taken from the runs that
  * verified them (prior-work docs/evidence/20260916-m1a-dual-gmac-lwip.md).
  * The driver itself knows none of it. Both ports are described; the
- * single-port build rule (CONFIG_GMAC_PORT, spec FR-9/KI-027) means only the
- * selected plat is ever handed to the driver, so the unselected port sees no
- * clock, no register write and no anchor line.
+ * single-port build rule means only the selected plat is ever handed to the
+ * driver, so the unselected port sees no clock, no register write and no
+ * anchor line.
  *
  *              gmac0                    gmac1
  *   base       0xFE2A0000               0xFE010000
@@ -30,8 +30,8 @@
  * is one of the failures recorded in the lab notes. gmac1's GRF values here
  * are the golden-dump measured ones (CON0 = 0x3c tx-only, rgmii-rxid: the rx
  * delay belongs to the PHY) - the dts text's tx_delay=0x4f contradicts the
- * measured golden and is NOT what this table carries (specs/lwip-adapt
- * §3.3.2, 以 golden 为准).
+ * measured golden and is NOT what this table carries; the golden dump is
+ * authoritative.
  *
  * @author zhugengyu
  * @date   16.09.2026 (board-verified) / 02.10.2026 (port re-arrangement)
