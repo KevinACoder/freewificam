@@ -26,8 +26,8 @@
  * up all rights to it (the bridge or the stack frees it). Everything else
  * stays owned by its caller.
  *
- * Reference for the shape: components/linuxkpi/usb/lkpi_usb_backend.h:31-36 and
- * the attach contract stated in specs/wlan-bridge/DESIGN.md section 3.6.
+ * Reference for the shape: components/linuxkpi/usb/lkpi_usb_backend.h:31-36
+ * (the seam-registration pattern this face mirrors).
  * @date    08.10.2026
  */
 

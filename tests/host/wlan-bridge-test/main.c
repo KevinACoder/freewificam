@@ -56,6 +56,11 @@
 #include <stddef.h>
 #include <string.h>
 
+/* exit() is declared here rather than by <stdlib.h>: the linuxkpi face
+ * carries its own static abs() and the two cannot be included together in
+ * this order (the same trap the face's first-include rule documents) */
+extern void exit(int status);
+
 #include "os/cmsis2/cmsis2.h"
 #include <net/mac80211.h>
 #include <net/cfg80211.h>
@@ -993,6 +998,10 @@ app_task(void *arg)
 
 	(void)arg;
 	run_suite();
+	/* success ends through the kernel's host seam (process exit 0); a failed
+	 * run leaves through exit(1) so the wrapper can see it in the status */
+	if (failures != 0)
+		exit(1);
 	cmsis2_host_end_scheduler();
 }
 

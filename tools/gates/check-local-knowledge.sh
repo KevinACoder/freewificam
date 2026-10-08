@@ -98,6 +98,9 @@ components/linuxkpi/fw_registry.c
 components/linuxkpi/fw/rtl8188eufw_blob.c
 components/linuxkpi/linuxkpi_impl.h
 components/linuxkpi/linuxkpi_core.c
+components/linuxkpi/linuxkpi_core.h
+components/linuxkpi/linuxkpi_80211.c
+components/linuxkpi/linuxkpi_80211.h
 components/linuxkpi/skbuff/skbuff_pool.c
 components/linuxkpi/skbuff/PROVENANCE.md
 components/linuxkpi/skbuff/DIVERGENCES.md
