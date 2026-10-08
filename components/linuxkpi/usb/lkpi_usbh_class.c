@@ -72,6 +72,7 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	struct usb_host_interface *hostif;
 	struct usb_host_endpoint *eps;
 	struct lkpi_usb_be_hubport *be;
+	struct lkpi_usb_be_ep *be_eps;
 	unsigned int n_ep = 0;
 	unsigned int i;
 
@@ -95,10 +96,24 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	 * aborted). hcpriv here is the CherryUSB hubport, which is what this
 	 * backend expects to find.
 	 */
-	be = kzalloc(sizeof(*be), GFP_KERNEL);
+	/*
+	 * The engine-level port and endpoint objects in one allocation: the
+	 * engine stores usb_host_endpoint.hcpriv as a struct lkpi_usb_be_ep *
+	 * and hands it to the backend, which reads ITS hcpriv as the backend's
+	 * own handle (lkpi_usb_backend.h:86-91, 93-98). Binding the raw
+	 * descriptors (the previous shape) made the backend interpret
+	 * descriptor bytes as pointers - measured on the board as a data abort
+	 * in the first bulk RX submission, after the control-only probe path
+	 * had succeeded. The double indirection is the host mock's own shape
+	 * (mock_hcd.c:653-657): ep array hangs off the port so one free
+	 * releases both.
+	 */
+	be = kzalloc(sizeof(*be) +
+	    sizeof(*be_eps) * (n_ep != 0 ? n_ep : 1), GFP_KERNEL);
 	if (dev == NULL || intf == NULL || hostif == NULL || eps == NULL ||
 	    be == NULL)
 		goto fail;
+	be_eps = (struct lkpi_usb_be_ep *)(be + 1);
 	be->hcpriv = hport;
 	be->port = hport->port;
 
@@ -112,7 +127,8 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 			continue;
 		memcpy(&eps[n_ep].desc, &alt->ep[i].ep_desc,
 		    sizeof(eps[n_ep].desc));
-		eps[n_ep].hcpriv = &alt->ep[i].ep_desc;
+		be_eps[n_ep].hcpriv = &alt->ep[i].ep_desc;
+		eps[n_ep].hcpriv = &be_eps[n_ep];
 		eps[n_ep].enabled = true;
 		n_ep++;
 	}
