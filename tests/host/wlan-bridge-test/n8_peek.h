@@ -31,6 +31,21 @@ int	n8_peek_scan_state(void);
 int	n8_peek_auth_state(void);
 int	n8_peek_hwaddr(uint8_t addr[6]);
 
+/* the supplicant-visible policy state the connect path sets */
+int	n8_peek_roaming(void);
+int	n8_peek_privacy(void);
+int	n8_peek_authmode(void);
+int	n8_peek_authmode_8021x(void);
+
+/* the stack-side half of a key install: is the slot live, which index is the
+ * default transmit key, and did the pairwise install authorize the node */
+int	n8_peek_key_defined(int pairwise, int key_idx);
+int	n8_peek_def_txkey(void);
+int	n8_peek_node_authorized(void);
+
+/* the number of candidates in the scan table */
+int	n8_peek_scan_rows(void);
+
 /* the CCMP round trip, stack-side: install the pairwise key on the joined node
  * (what the supplicant does after the handshake), clear the privacy flag again,
  * seal one AP-to-station frame with it (the peer's crypto), and read the named

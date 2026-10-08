@@ -150,6 +150,93 @@ n8_peek_hwaddr(uint8_t addr[6])
 	return 0;
 }
 
+/* the supplicant-visible policy state the connect path sets */
+int
+n8_peek_roaming(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	return ic != NULL ? (int)ic->ic_roaming : -1;
+}
+
+int
+n8_peek_privacy(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	return ic != NULL && (ic->ic_flags & IEEE80211_F_PRIVACY) != 0;
+}
+
+int
+n8_peek_authmode(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	return ic != NULL && ic->ic_bss != NULL ?
+	    (int)ic->ic_bss->ni_authmode : -1;
+}
+
+int
+n8_peek_authmode_8021x(void)
+{
+
+	return IEEE80211_AUTH_8021X;
+}
+
+/* is the slot occupied by a live cipher? (the stack-side half of one key
+ * install; the driver-side half is the seam's CAM write) */
+int
+n8_peek_key_defined(int pairwise, int key_idx)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+	const struct ieee80211_key *wk;
+
+	if (ic == NULL || ic->ic_bss == NULL)
+		return -1;
+	if (pairwise) {
+		wk = &ic->ic_bss->ni_ucastkey;
+	} else {
+		if (key_idx < 0 || key_idx >= IEEE80211_WEP_NKID)
+			return -1;
+		wk = &ic->ic_nw_keys[key_idx];
+	}
+	return !IEEE80211_KEY_UNDEFINED(*wk);
+}
+
+/* the default transmit key index (a group install with set_tx moves it) */
+int
+n8_peek_def_txkey(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	return ic != NULL ? (int)ic->ic_def_txkey : -1;
+}
+
+/* the node's authorized flag (the 802.1X port gate the pairwise key opens) */
+int
+n8_peek_node_authorized(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	return ic != NULL && ic->ic_bss != NULL ?
+	    ieee80211_node_is_authorized(ic->ic_bss) : -1;
+}
+
+/* the number of candidates in the scan table */
+int
+n8_peek_scan_rows(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+	struct ieee80211_node *ni;
+	int n = 0;
+
+	if (ic == NULL)
+		return -1;
+	TAILQ_FOREACH(ni, &ic->ic_scan.nt_node, ni_list)
+		n++;
+	return n;
+}
+
 /* ------------------------------------------------------------------ */
 /* the CCMP round trip, net80211-world half                            */
 /* ------------------------------------------------------------------ */

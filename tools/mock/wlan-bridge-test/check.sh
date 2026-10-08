@@ -35,8 +35,8 @@ case_line() {
 
 if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^WLANBRIDGE: B[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 10 ] &&
-        grep -q '^WLANBRIDGE: SUITE PASS cases=10$' "$log_dir/stream.log" &&
+    if [ "$pass" = 11 ] &&
+        grep -q '^WLANBRIDGE: SUITE PASS cases=11$' "$log_dir/stream.log" &&
         ! grep -q '^WLANBRIDGE: B[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line attach-chain PASS
         case_line scan-order-and-walk PASS
@@ -48,9 +48,10 @@ if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line driver-link-closure PASS
         case_line balance-and-order PASS
         case_line presentation-layer PASS
+        case_line supplicant-backend PASS
     else
         case_line attach-chain FAIL
-        echo "wlan-bridge-test: the run did not report ten passing cases ($pass)" >&2
+        echo "wlan-bridge-test: the run did not report eleven passing cases ($pass)" >&2
         grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -12 >&2 || true
     fi
 else
@@ -62,7 +63,7 @@ fi
 # ---- the red controls (each must fail, naming its case) -----------------------
 
 # fault -> the case the fault must invalidate
-for pair in no-filter:B2 tamper-auth:B4 double-free-skb:B9; do
+for pair in no-filter:B2 tamper-auth:B4 double-free-skb:B9 no-manual:B11; do
     fault=${pair%%:*}
     want=${pair##*:}
     if timeout 120 "$bin" --fault "$fault" > "$log_dir/fault-$fault.log" 2>&1; then
