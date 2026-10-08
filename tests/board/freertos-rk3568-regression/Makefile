@@ -195,6 +195,14 @@ ALL_SRCS := $(BASE_SRCS) $(KERNEL_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRC
 
 # Object names mirror the path below ROOT (the kernel and the port share flat
 # basenames, so $(notdir) would collide).
+# The vendored formatter engine (components/printf, mpaland): the freestanding
+# image formats only through this engine, bound in os/threadx... os/baremetal/
+# minilibc.c. Float and exponential rendering are compiled out - the build is
+# -mgeneral-regs-only and has no FP state.
+PRINTF_SRCS := $(ROOT)/components/printf/printf.c
+PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL
+ALL_SRCS += $(PRINTF_SRCS)
+
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 .PHONY: all check guards clean FORCE
@@ -206,6 +214,8 @@ $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@echo "  CC $$<"
 	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
 endef
+
+$(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
 $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(KERNEL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))

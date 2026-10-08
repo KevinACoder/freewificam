@@ -69,8 +69,10 @@ static int heap_init(void)
 		return -1;
 	}
 
-	board_log("heap: tlsf ready %u bytes at %p\n", (unsigned)size,
-		  (void *)base);
+	/* Explicit hex rather than %p: the anchor line reads the same under any
+	 * formatter the image links. */
+	board_log("heap: tlsf ready %u bytes at 0x%08x\n", (unsigned)size,
+		  (unsigned)(uintptr_t)base);
 	return 1;
 }
 

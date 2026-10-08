@@ -36,7 +36,7 @@ paths_vendored=':!'"$vendored"
 
 # Imported unit trees: their bytes are excluded from both scans, their in-tree
 # project-authored records are kept.
-imported_units='components/net80211 components/skbuff components/linuxkpi components/cherrysh components/tlsf'
+imported_units='components/net80211 components/skbuff components/linuxkpi components/cherrysh components/tlsf components/printf'
 paths_imported=''
 for unit in $imported_units; do
 	paths_imported="$paths_imported :!$unit"
@@ -53,7 +53,10 @@ components/cherrysh/DIVERGENCES.md
 components/cherrysh/MANIFEST.sha256
 components/tlsf/PROVENANCE.md
 components/tlsf/DIVERGENCES.md
-components/tlsf/MANIFEST.sha256'
+components/tlsf/MANIFEST.sha256
+components/printf/PROVENANCE.md
+components/printf/DIVERGENCES.md
+components/printf/MANIFEST.sha256'
 
 patterns='/(home|mnt|tmp)/|~/|KI-[0-9]|itx-wiki|oslab|backups/|web_cmera_|project_rtos_webcam|project_web_camera|\.agents/skills|(^|[^A-Za-z0-9_./-])(issues|specs|runs)/[A-Za-z0-9]'
 

@@ -112,8 +112,10 @@ void tx_application_define(void *first_unused_memory)
 
 	/* The port dereferenced __top_of_ram into _tx_initialize_unused_memory;
 	 * this image never consumes the value, so printing the pointer is the
-	 * whole proof that the read landed in mapped RAM. */
-	board_log("tx: unused_mem=%p\n", first_unused_memory);
+	 * whole proof that the read landed in mapped RAM. Spelled as explicit
+	 * hex rather than %p so the line reads the same under any formatter the
+	 * image links. */
+	board_log("tx: unused_mem=0x%08x\n", (unsigned)(uintptr_t)first_unused_memory);
 
 	tx_thread_stack_error_notify(tx_stack_error_handler);
 

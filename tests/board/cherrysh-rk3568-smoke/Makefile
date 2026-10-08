@@ -128,6 +128,14 @@ KERNEL_SRCS := \
 	$(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c
 
 ALL_SRCS := $(APP_SRCS) $(KERNEL_SRCS)
+# The vendored formatter engine (components/printf, mpaland): the freestanding
+# image formats only through this engine, bound in os/threadx... os/baremetal/
+# minilibc.c. Float and exponential rendering are compiled out - the build is
+# -mgeneral-regs-only and has no FP state.
+PRINTF_SRCS := $(ROOT)/components/printf/printf.c
+PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL
+ALL_SRCS += $(PRINTF_SRCS)
+
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(basename $(notdir $(ALL_SRCS)))))
 
 .PHONY: all check guards clean
@@ -138,6 +146,8 @@ $(BUILD)/obj/$(basename $(notdir $(1))).o: $(1)
 	@mkdir -p $(BUILD)/obj
 	$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(INCLUDES) -c $$< -o $$@
 endef
+
+$(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
 $(foreach s,$(ALL_SRCS),$(eval $(call COMPILE_RULE,$(s))))
 
 $(TARGET).elf: $(OBJS)

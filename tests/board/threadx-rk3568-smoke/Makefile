@@ -92,6 +92,14 @@ ALL_SRCS := $(TX_SRCS) $(BASE_SRCS)
 
 # Object names mirror the path below ROOT: the kernel and the port share flat
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide (198-TU precedent).
+# The vendored formatter engine (components/printf, mpaland): the freestanding
+# image formats only through this engine, bound in os/threadx... os/baremetal/
+# minilibc.c. Float and exponential rendering are compiled out - the build is
+# -mgeneral-regs-only and has no FP state.
+PRINTF_SRCS := $(ROOT)/components/printf/printf.c
+PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL
+ALL_SRCS += $(PRINTF_SRCS)
+
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 .PHONY: all check guards clean
@@ -102,6 +110,8 @@ $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1)
 	@mkdir -p $$(dir $$@)
 	$(CC) $(CFLAGS) $(2) -c $$< -o $$@
 endef
+
+$(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
 $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 
