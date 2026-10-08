@@ -41,6 +41,7 @@ CASES = [
     "os-timer",
     "usb-xhci",
     "usb-ehci",
+    "lwip-loopback",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -49,6 +50,8 @@ CASES = [
 #:   thread-sched tests/board/threadx-rk3568-regression/tests/thread_sched.c
 #:   cmsis2-prio  os/threadx/cmsis2_threadx.c (priority map print)
 #:   tlsf-heap    os/threadx/board/rk3568-itx/heap.c (heap ready line)
+#:   lwip-loopback tests/board/threadx-rk3568-regression/tests/lwip_smoke.c
+#:                 (stack init callback line, loopback echo result line)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "kernel-up": [
@@ -73,6 +76,10 @@ ANCHORS = {
         r"usbh: class msc claimed lun=0",
         r"usbh: msc read blk0=0x",
         r"usbh: msc write/read roundtrip ok",
+    ],
+    "lwip-loopback": [
+        r"net: READY tcpip=up lwip=\d+\.\d+\.\d+",
+        r"net: loopback echo ok port=7777 sent=32 got=32",
     ],
 }
 
@@ -101,7 +108,7 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  12.260] BOARD-SUITE threadx-rk3568-regression "
-    "result=pass cases=9 ok=9 exit=0\r\n"
+    "result=pass cases=10 ok=10 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
@@ -113,9 +120,9 @@ BASE_TRANSCRIPT = (
     "[   0.000] stamp: switched to tick\r\n"
     "[   0.001] heap: tlsf ready 1048576 bytes at 0xa026730\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-regression select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-regression start cases=9 sel=all "
+    "[  10.000] BOARD-SUITE threadx-rk3568-regression start cases=10 sel=all "
     "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
-    "os-timer,usb-xhci,usb-ehci\r\n"
+    "os-timer,usb-xhci,usb-ehci,lwip-loopback\r\n"
     + PROMPT
     + "[  10.010] cmsis2: prio 24 -> tx 19\r\n"
     "[  10.020] CASE threadx-rk3568-regression/shell-up PASS\r\n"
@@ -141,6 +148,9 @@ BASE_TRANSCRIPT = (
     "[  12.230] usbh: msc read blk0=0x00000000 ok\r\n"
     "[  12.240] usbh: msc write/read roundtrip ok at lba=1\r\n"
     "[  12.250] CASE threadx-rk3568-regression/usb-ehci PASS\r\n"
+    "[  12.255] net: READY tcpip=up lwip=2.2.1\r\n"
+    "[  12.258] net: loopback echo ok port=7777 sent=32 got=32\r\n"
+    "[  12.260] CASE threadx-rk3568-regression/lwip-loopback PASS\r\n"
     + SENTINEL_LINE
     + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -170,7 +180,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-regression/tlsf-heap PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=9 ok=9 exit=0", "cases=9 ok=8 exit=0"), 1),
+        "cases=10 ok=10 exit=0", "cases=10 ok=9 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-regression/tlsf-heap PASS",
@@ -178,13 +188,15 @@ MUTATIONS = [
         "CASE threadx-rk3568-regression/tlsf-heap PASS"), 1),
     ("anchor dropped (heap ready)", BASE_TRANSCRIPT.replace(
         "heap: tlsf ready 1048576 bytes at 0xa026730\r\n", ""), 1),
+    ("anchor dropped (net ready)", BASE_TRANSCRIPT.replace(
+        "net: READY tcpip=up lwip=2.2.1\r\n", ""), 1),
     ("ladder beat dropped", BASE_TRANSCRIPT.replace("tick: t=12000\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
-        "os-timer,usb-xhci,usb-ehci",
+        "os-timer,usb-xhci,usb-ehci,lwip-loopback",
         "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
-        "os-timer,usb-xhci"), 1),
+        "os-timer,usb-xhci,usb-ehci"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 

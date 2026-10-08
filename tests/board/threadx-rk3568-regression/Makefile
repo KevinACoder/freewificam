@@ -38,6 +38,17 @@ CHERRYUSB := $(shell sh $(ROOT)/tools/patches/replay.sh cherryusb)
 USB_PORT := $(ROOT)/ports/cherryusb
 USB_BOARD := $(ROOT)/board/rk3568-itx/usb
 
+# TCP/IP stack domain: the vendored import and the project's port layer. The
+# port's include directory comes first on the include path: lwipopts.h and
+# arch/cc.h are supplied by shadowing the stack's own include root (the
+# standard mechanism lwIP reaches them through).
+LWIP := $(ROOT)/third-party/lwip
+LWIP_PORT := $(ROOT)/ports/lwip
+LWIP_INCLUDES := \
+	-I$(LWIP_PORT)/include \
+	-I$(LWIP)/src/include \
+	-I$(LWIP)/contrib/apps/ping
+
 SUITE_NAME := threadx-rk3568-regression
 
 AARCH64_CROSS_PATH ?= $(HOME)/workspace/env/src/xpack-aarch64-none-elf-gcc-13.2.1-1.1
@@ -104,10 +115,10 @@ ASM_CFLAGS := $(BASE_CFLAGS)
 # The vendored shell core is byte-identical upstream and cannot be edited; it
 # does trip -Wextra's sign-compare in one builtin. Its translation units are
 # compiled at the -Wall level the upstream project itself uses. The imported
-# USB stack's sources get the same treatment for the same reason - they are
-# bytes this project does not own. (Recursive assignment: the imported list
-# is defined below this point.)
-VENDORED_WARNED_SRCS = $(VENDORED_SRCS) $(USB_STACK_SRCS)
+# USB and TCP/IP stacks' sources get the same treatment for the same reason -
+# they are bytes this project does not own. (Recursive assignment: the
+# imported lists are defined below this point.)
+VENDORED_WARNED_SRCS = $(VENDORED_SRCS) $(USB_STACK_SRCS) $(LWIP_STACK_SRCS)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 
 # --gc-sections drops everything nothing references, which would take the
@@ -176,7 +187,8 @@ TESTS_SRCS := \
 	$(COMMON)/cases/os_timer.c \
 	$(COMMON)/cases/usb_msc.c \
 	$(COMMON)/cases/usb_xhci.c \
-	$(COMMON)/cases/usb_ehci.c
+	$(COMMON)/cases/usb_ehci.c \
+	$(CURDIR)/tests/lwip_smoke.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -219,7 +231,60 @@ USB_INCLUDES := \
 	-I$(CHERRYUSB)/port/ehci \
 	-I$(CHERRYUSB)/port/xhci
 
-ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS) $(USB_BOARD_SRCS) $(USB_STACK_SRCS)
+# --- TCP/IP stack domain (imported stack + the project's port layer) --------
+#
+# The compile set mirrors src/Filelists.mk's groups, trimmed to what this
+# project enables (IPv4, the sequential/socket APIs, lwiperf); the contrib
+# ping is added when the data-plane round needs it. The port layer compiles
+# under the project's own full warning set, the imported bytes under the
+# upstream level.
+LWIP_PORT_SRCS := \
+	$(LWIP_PORT)/sys_arch.c \
+	$(LWIP_PORT)/platform_hooks.c
+
+LWIP_STACK_SRCS := \
+	$(LWIP)/src/core/init.c \
+	$(LWIP)/src/core/def.c \
+	$(LWIP)/src/core/dns.c \
+	$(LWIP)/src/core/inet_chksum.c \
+	$(LWIP)/src/core/ip.c \
+	$(LWIP)/src/core/mem.c \
+	$(LWIP)/src/core/memp.c \
+	$(LWIP)/src/core/netif.c \
+	$(LWIP)/src/core/pbuf.c \
+	$(LWIP)/src/core/raw.c \
+	$(LWIP)/src/core/stats.c \
+	$(LWIP)/src/core/sys.c \
+	$(LWIP)/src/core/altcp.c \
+	$(LWIP)/src/core/altcp_alloc.c \
+	$(LWIP)/src/core/altcp_tcp.c \
+	$(LWIP)/src/core/tcp.c \
+	$(LWIP)/src/core/tcp_in.c \
+	$(LWIP)/src/core/tcp_out.c \
+	$(LWIP)/src/core/timeouts.c \
+	$(LWIP)/src/core/udp.c \
+	$(LWIP)/src/core/ipv4/acd.c \
+	$(LWIP)/src/core/ipv4/autoip.c \
+	$(LWIP)/src/core/ipv4/dhcp.c \
+	$(LWIP)/src/core/ipv4/etharp.c \
+	$(LWIP)/src/core/ipv4/icmp.c \
+	$(LWIP)/src/core/ipv4/igmp.c \
+	$(LWIP)/src/core/ipv4/ip4_frag.c \
+	$(LWIP)/src/core/ipv4/ip4.c \
+	$(LWIP)/src/core/ipv4/ip4_addr.c \
+	$(LWIP)/src/api/api_lib.c \
+	$(LWIP)/src/api/api_msg.c \
+	$(LWIP)/src/api/err.c \
+	$(LWIP)/src/api/if_api.c \
+	$(LWIP)/src/api/netbuf.c \
+	$(LWIP)/src/api/netdb.c \
+	$(LWIP)/src/api/netifapi.c \
+	$(LWIP)/src/api/sockets.c \
+	$(LWIP)/src/api/tcpip.c \
+	$(LWIP)/src/netif/ethernet.c \
+	$(LWIP)/src/apps/lwiperf/lwiperf.c
+
+ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS) $(USB_BOARD_SRCS) $(USB_STACK_SRCS) $(LWIP_PORT_SRCS) $(LWIP_STACK_SRCS)
 
 # Object names mirror the path below ROOT: the kernel and the port share flat
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide.
@@ -238,11 +303,14 @@ $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(foreach s,$(filter-out $(CURDIR)/tests/lwip_smoke.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/lwip_smoke.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(USB_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(foreach s,$(LWIP_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
+$(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
 
 $(TAG_STAMP): FORCE
 	@mkdir -p $(BUILD)
@@ -277,6 +345,16 @@ guards:
 		*) echo "FAIL: imported USB source outside the replayed tree: $$s"; exit 1 ;; \
 		esac; \
 	done
+	@for s in $(LWIP_STACK_SRCS) $(LWIP_PORT_SRCS); do \
+		case "$$s" in $(LWIP)/*|$(LWIP_PORT)/*) ;; \
+		*) echo "FAIL: TCP/IP source outside the vendored tree or the port layer: $$s"; exit 1 ;; \
+		esac; \
+	done
+	@first=$$(echo "$(LWIP_INCLUDES)" | tr ' ' '\n' | sed '/^$$/d' | head -1); \
+	[ "$$first" = "-I$(LWIP_PORT)/include" ] \
+		|| { echo "FAIL: the port include directory is not the first lwIP -I (first=$$first)"; exit 1; }
+	@test -f $(LWIP_PORT)/include/lwipopts.h || { echo "FAIL: lwipopts.h missing"; exit 1; }
+	@test -f $(LWIP_PORT)/include/arch/cc.h || { echo "FAIL: arch/cc.h missing"; exit 1; }
 	@echo "$(TX_CFLAGS)" | grep -q -- "-I$(BOARD_CMSIS2) " \
 		|| { echo "FAIL: the CMSIS2 flavour directory is not the first -I"; exit 1; }
 	@[ "$$(basename $(CURDIR))" = "$(SUITE_NAME)" ] \
@@ -316,11 +394,12 @@ check: guards $(TARGET).elf
 		|| { echo "FAIL: vector table at 0x$$vec is not 0x800 aligned"; exit 1; }; \
 	for s in _tx_initialize_kernel_enter _tx_thread_schedule _tx_timer_interrupt \
 	         _tx_thread_context_save _tx_thread_context_restore __top_of_ram \
-	         osKernelStart osThreadNew osDelay osCriticalEnter osCriticalExit \
-	         cmsis2_tx_application_define tx_board_app_define tx_kernel_enter_spsel0 \
-	         pvPortMalloc vPortFree tlsf_malloc tlsf_free \
-	         shell_port_init chry_shell_init console_sput console_sget \
-	         board_suite_run board_case_fail board_glob_match board_select_parse; do \
+		osKernelStart osThreadNew osDelay osCriticalEnter osCriticalExit \
+		         cmsis2_tx_application_define tx_board_app_define tx_kernel_enter_spsel0 \
+		         pvPortMalloc vPortFree tlsf_malloc tlsf_free \
+		         shell_port_init chry_shell_init console_sput console_sget \
+		         board_suite_run board_case_fail board_glob_match board_select_parse \
+		         tcpip_init lwip_socket lwip_accept netif_init lwip_platform_assert; do \
 		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" \
 			|| { echo "FAIL: $$s not in the image"; exit 1; }; \
 	done; \
