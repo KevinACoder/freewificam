@@ -27,7 +27,7 @@ static void cmsis2_prio( void )
 	static const osThreadAttr_t probe_attr = {
 		.name = "probe",
 		.priority = osPriorityNormal,
-		.stack_size = 1024U,
+		.stack_size = 4096U,
 	};
 
 	if( osThreadNew( probe_body, 0, &probe_attr ) == 0 ) {

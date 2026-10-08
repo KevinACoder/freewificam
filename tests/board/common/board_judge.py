@@ -37,6 +37,7 @@ FAULT_PATTERNS = (
     r"fatal:",
     r"tx_fault_park",
     r"tick: SETUP FAILED",
+    r"tx: stack error",
 )
 
 _GLOB_RE = re.compile(r"^[a-z0-9\-*?]{1,32}$")

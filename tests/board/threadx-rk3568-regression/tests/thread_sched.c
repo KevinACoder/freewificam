@@ -53,12 +53,12 @@ static void thread_sched( void )
 	static const osThreadAttr_t hi_attr = {
 		.name = "hi",
 		.priority = osPriorityAboveNormal,
-		.stack_size = 1024U,
+		.stack_size = 4096U,
 	};
 	static const osThreadAttr_t lo_attr = {
 		.name = "lo",
 		.priority = osPriorityBelowNormal,
-		.stack_size = 1024U,
+		.stack_size = 4096U,
 	};
 	unsigned spins;
 

@@ -79,6 +79,10 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 # transmitted marker injected inline, the six CASE lines, the sentinel.
 # --------------------------------------------------------------------------
 
+# The console paints its prompt, so every prompt occurrence carries escape
+# sequences (a plain "user@rk3568:/$" never appears on the wire).
+PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
+
 SENTINEL_LINE = (
     "[  12.140] BOARD-SUITE threadx-rk3568-regression "
     "result=pass cases=6 ok=6 exit=0\r\n"
@@ -95,8 +99,8 @@ BASE_TRANSCRIPT = (
     "[   5.000] BOARD-SUITE threadx-rk3568-regression select window_ms=5000\r\n"
     "[  10.000] BOARD-SUITE threadx-rk3568-regression start cases=6 sel=all "
     "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap\r\n"
-    "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ "
-    "[  10.010] cmsis2: prio 24 -> tx 19\r\n"
+    + PROMPT
+    + "[  10.010] cmsis2: prio 24 -> tx 19\r\n"
     "[  10.020] CASE threadx-rk3568-regression/shell-up PASS\r\n"
     "[  10.030] CASE threadx-rk3568-regression/kernel-up PASS\r\n"
     "[  10.040] tick: t=11000\r\n"
@@ -110,19 +114,19 @@ BASE_TRANSCRIPT = (
     "[  12.130] CASE threadx-rk3568-regression/tlsf-heap PASS\r\n"
     + SENTINEL_LINE
     + "==> help\r\n"
-    "user@rk3568:/$ help\r\n"
+    + PROMPT + "help\x1b[0J\r\n"
     "total function 4\r\n"
     "  exit   -> /sbin - leave the shell\r\n"
     "\r\n"
     "total variable 2\r\n"
     "  $ZERO r-   1\r\n"
-    "user@rk3568:/$ ==> cl\r\n"
-    "user@rk3568:/$ cuser@rk3568:/$ cl==> \t\r\n"
-    "user@rk3568:/$ clear\r\n"
-    "\x1b[2J\x1b[Huser@rk3568:/$ ==> \r\n"
-    "user@rk3568:/$ ==> exit\r\n"
-    "user@rk3568:/$ exit\r\n"
-    "user@rk3568:/$ \r\n"
+    + PROMPT + "==> cl\r\n"
+    + PROMPT + "c" + PROMPT + "cl==> \t\r\n"
+    + PROMPT + "clear\x1b[0J\r\n"
+    "\x1b[2J\x1b[H" + PROMPT + "==> \r\n"
+    + PROMPT + "==> exit\r\n"
+    + PROMPT + "exit\x1b[0J\r\n"
+    + PROMPT + "\x1b[0J\r\n"
 )
 
 EMPTY_SELECTION_TRANSCRIPT = (
@@ -252,7 +256,10 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         if name not in CASES:
             continue
         for pattern in ANCHORS.get(name, ()):
-            if not transcript.anchor_lines(pattern):
+            # Verbatim anchors live in the log lines; prompt-shaped anchors live
+            # in the received stream, where the console colours them, so the
+            # stripped view counts too.
+            if not transcript.anchor_lines(pattern) and not transcript.rx_has(pattern):
                 errors.append("case %s: anchor missing: %s" % (name, pattern))
     if verdicts.get("tick-ladder") == "PASS":
         errors.extend(check_ladder(transcript))
