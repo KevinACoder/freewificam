@@ -1,0 +1,32 @@
+# Glob matcher vectors: "name pattern expected(1|0)".
+# One vector file, three consumers: the image's host self-test (C matcher),
+# every suite judge's --selftest (Python matcher) and the build-time review of
+# the selection semantics.
+tick-ladder	tick-ladder	1
+tick-ladder	tick-*	1
+tick-ladder	tick	0
+tick-ladder	tick-ladde	0
+tick-ladder	tick-ladder*	1
+tick-ladder	*ladder	1
+tick-ladder	*adder*	1
+tick-ladder	tick-?adder	1
+tick-ladder	tick-ladger	0
+tick-ladder	?ick-ladder	1
+tick-ladder	*	1
+tick-ladder	*-*	1
+tick-ladder	usb-*	0
+tick-ladder	*usb*	0
+shell-up	shell-up	1
+shell-up	shell-*	1
+shell-up	shell	0
+shell-up	*-up	1
+cmsis2-prio	cmsis2-*	1
+cmsis2-prio	*prio	1
+cmsis2-prio	cmsis2-prio-*	0
+tlsf-heap	tlsf-heap	1
+tlsf-heap	tlsf	0
+tlsf-heap	tlsf-*	1
+usb-msc-read	usb-*	1
+usb-msc-read	*-read	1
+usb-msc-read	usb-msc-read	1
+usb-msc-read	usb-msc-write	0
