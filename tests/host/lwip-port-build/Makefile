@@ -162,13 +162,26 @@ SYS_ARCH_ENTRIES := \
     sys_init sys_jiffies sys_now sys_arch_msleep \
     sys_arch_protect sys_arch_unprotect
 
+# The contract's macro layer: the six valid/set_invalid probe pairs live in
+# the header by lwIP's own design ("This may also be a define, in which case
+# the function is not prototyped" - sys.h), so they are checked there, and
+# the stack's compilation above exercises every one.
+SYS_ARCH_MACROS := \
+    sys_mutex_valid sys_mutex_set_invalid \
+    sys_sem_valid sys_sem_set_invalid \
+    sys_mbox_valid sys_mbox_set_invalid
+
 symbols: $(PORT_THX)
 	@set -e; \
 	for s in $(SYS_ARCH_ENTRIES); do \
 	    $(NM) $(PORT_THX) | awk '{print $$2 " " $$3}' | grep -qx "T $$s" \
 	        || { echo "FAIL: $$s is not a defined text symbol in the port objects"; exit 1; }; \
 	done; \
-	echo "symbols: all $(words $(SYS_ARCH_ENTRIES)) contract entries defined (T) in the port objects"; \
+	for m in $(SYS_ARCH_MACROS); do \
+	    grep -qE "^#define[[:space:]]+$$m\(" $(PORT)/include/arch/sys_arch.h \
+	        || { echo "FAIL: the contract macro $$m is not defined in arch/sys_arch.h"; exit 1; }; \
+	done; \
+	echo "symbols: all $(words $(SYS_ARCH_ENTRIES)) function entries defined (T) and all $(words $(SYS_ARCH_MACROS)) macro probes defined"; \
 	undef=$$($(NM) -u $(PORT_THX) | sed -n 's/^ \{1,\}U //p' | sort -u); \
 	foreign=$$(printf '%s\n' "$$undef" | grep -Ev '^(os[A-Z][A-Za-z0-9_]*|sys_[a-z_]+|board_log[A-Za-z_]*|lwip_[a-z_]+|vsnprintf|memcpy|memset|memmove|memchr|memcmp|strcmp|strncmp|strlen|strnlen|strncpy|strchr|strrchr|strstr|atoi|strtol|strtoul)$$' || true); \
 	if [ -n "$$foreign" ]; then \
