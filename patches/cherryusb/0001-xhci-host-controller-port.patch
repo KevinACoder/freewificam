@@ -1,0 +1,3177 @@
+From 9429d9aa300d13e3409211168ec491832c3b3a39 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Thu, 8 Oct 2026 09:59:22 +0800
+Subject: [PATCH] feat(port): add an xHCI host controller port
+
+Add usb_hc_xhci.c and usb_hc_xhci.h under port/xhci/: a host controller
+driver for Synopsys DWC3 xHCI instances, implementing the
+struct usbh_hc_driver contract with the async URB model of the sibling
+port/ehci/usb_hc_ehci.c - IRQ-driven event ring processing, one URB in
+flight per endpoint with a per-ring waitsem for a timeout'd submitter,
+completion callbacks from the interrupt path, and the EHCI port's
+killed dance for the kill/complete race.  HS/FS only: no streams, no
+SuperSpeed; isochronous transfers are rejected.
+
+Lineage.  The register sequence is NetBSD netbsd-11
+sys/dev/usb/xhci.c rev 1.188.2.4 (BSD-2-Clause; the notice is kept in
+the file).  The port grew out of a board bring-up of that sequence on
+a DWC3 SoC from a cold USB domain; its CherryUSB translation was
+enumeration-, hub- and mass-storage-proven on that board, including a
+600 s soak with no errors and bulk read 37.3 MB/s / write 24.2 MB/s
+against a Linux baseline of 30.8 / 24.5 MB/s on the same board.  The
+two board-forced fixes of that bring-up are carried in full:
+
+  - xhci_ep_type_of() decodes the USB bmAttributes code (0 control,
+    1 isochronous, 2 bulk, 3 interrupt) into the Endpoint Context
+    EP Type values; decoding it wrongly made bulk endpoints
+    schedule-visible as interrupt endpoints and capped bulk
+    throughput at one max-size packet per microframe (4.096 MB/s);
+  - the average TRB length of a bulk endpoint is 0, matching Linux
+    xhci-mem.c xhci_get_max_esit_payload() (512 and 0 both measured
+    throughput-neutral on the board).
+
+EP type cross-check: the EP_TYPE_* constants are verified value for
+value against the xHCI specification Table 6-9 (Endpoint Context,
+offset 04h, bits 5:3): 1 Isoch Out, 2 Bulk Out, 3 Interrupt Out,
+4 Control, 5 Isoch In, 6 Bulk In, 7 Interrupt In.
+
+Interface alignment.  This port was first written against an earlier
+revision of the tree; every interface item below was re-verified
+against this revision when the port was re-homed:
+
+  interface alignment: vtable initialiser field set/names -> unchanged
+  (verified).  common/usb_hc.h defines struct usbh_hc_driver with
+  driver_name, driver_desc, init, deinit, get_frame_number,
+  roothub_control, submit_urb, kill_urb and irq_handler at both
+  revisions, and the initialiser fills exactly those slots.
+
+  interface alignment: registration call site and name -> unchanged
+  (verified).  The integrator calls usbh_register_hc_driver(busid,
+  &xhci_hc_driver) before usbh_initialize(busid, reg_base,
+  event_handler), which asserts the table is present
+  (core/usbh_core.c); the port only exports the table.
+
+  interface alignment: driver_name/driver_desc -> unchanged (verified):
+  "xhci_hcd" / "xHCI Host Controller", the sibling EHCI table's shape.
+
+  interface alignment: deinit slot semantics -> changed, and this is
+  the only behaviour change against the previous revision.  At the
+  earlier revision the vendored port/ehci/usb_hc_ehci.c supplied weak
+  no-op usb_hc_low_level_init/usb_hc_low_level_deinit hooks, so a port
+  that never called the deinit hook still linked.  At this revision
+  both hooks are extern (integrators must implement them) and the EHCI
+  sibling calls usb_hc_low_level_deinit() at the end of its
+  usb_hc_deinit().  This port now declares the hook and calls it at
+  the same point in its own deinit.
+
+Integration surface: usb_hc_low_level_init()/usb_hc_low_level_deinit()
+(the platform USB domain bring-up and teardown), usbh_console_printf()
+(the console sink for the bring-up anchors; usb_config.h may point
+CONFIG_USB_PRINTF at it), and the optional platform hooks declared in
+the header (the post-start port power pass, the disconnected-event
+slot release, the register/TD diagnostics dumps).  usb_config.h
+sizes the port's pools through CONFIG_USBHOST_XHCI_EVENT_RING_SIZE,
+_COMMAND_RING_SIZE, _TRANSFER_RING_SIZE, _MAX_SLOTS, _MAX_SPBUF and
+_RINGS; CONFIG_USBHOST_MULT_HC selects the multi-controller renaming
+that lets this port link next to the EHCI one.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ port/xhci/usb_hc_xhci.c | 2687 +++++++++++++++++++++++++++++++++++++++
+ port/xhci/usb_hc_xhci.h |  390 ++++++
+ 2 files changed, 3077 insertions(+)
+ create mode 100644 port/xhci/usb_hc_xhci.c
+ create mode 100644 port/xhci/usb_hc_xhci.h
+
+diff --git a/port/xhci/usb_hc_xhci.c b/port/xhci/usb_hc_xhci.c
+new file mode 100644
+index 0000000..9223146
+--- /dev/null
++++ b/port/xhci/usb_hc_xhci.c
+@@ -0,0 +1,2687 @@
++/*
++ * @file   usb_hc_xhci.c
++ * @brief  DWC3 xHCI host controller driver for the RK3568 USB3 socket
++ *         group (CherryUSB usb_hc.h contract).
++ *
++ * The register sequence is NetBSD netbsd-11 sys/dev/usb/xhci.c (rev
++ * 1.188.2.4, BSD-2-Clause, notice below) - the implementation this
++ * driver descends from, board-proven on this SoC from a cold USB domain
++ * - crossed with the async URB model of the vendored
++ * port/ehci/usb_hc_ehci.c: IRQ-driven event ring processing, one URB in
++ * flight per endpoint with a per-ring waitsem for timeout'd submitters,
++ * completion callbacks from the interrupt path, the EHCI port's killed
++ * dance for the kill/complete race.  The lineage and every change
++ * against the previous revision of this port are recorded in the patch's
++ * commit message.
++ *
++ * Controller facts this file relies on (all board-measured):
++ *   - the DWC3 core needs the platform's CRU SRST pulse and the soft
++ *     reset closed with the GCTL.CORESOFTRESET clear, or the xHCI
++ *     aperture reads zero (usb_hc_low_level_init's sequence);
++ *   - this part reports CSZ=1 -> 64-byte contexts, spbuf=1 scratchpad;
++ *   - BSR=0 Address Device on this DWC3 makes the controller assign the
++ *     USB address itself - write slot address 0 and read the assigned
++ *     value from the output context, never the stack's dev_addr;
++ *   - PORTSC is W1C/RW mixed: ClearFeature writes only PP | the target
++ *     W1C bit (a stale PED snapshot written back disables the port).
++ *
++ * Cache discipline (non-coherent port, CONFIG_USB_DCACHE_ENABLE): rings,
++ * contexts and the ERST are cleaned after the CPU builds them; the event
++ * ring and output contexts are invalidated before every CPU read.
++ *
++ * HS/FS only - the SS lanes' combphys serve SATA on this SoC.
++ */
++/*	$NetBSD: xhci.c,v 1.188.2.4 $	*/
++/*-
++ * Copyright (c) 2013 The NetBSD Foundation, Inc.
++ * All rights reserved.
++ *
++ * This code is derived from software contributed to The NetBSD Foundation
++ * by Christos Zoulas and Nick Hudson.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
++ * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.  IN NO
++ * EVENT SHALL THE FOUNDATION OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
++ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++#include <string.h>
++
++#include "usbh_core.h"
++#include "usbh_hub.h"
++#include "usb_hub.h"
++#include "usb_hc_xhci.h"
++
++/* The integrator's console sink.  The bring-up anchors below go through
++ * it directly so the lines keep the port's print discipline (\n endings,
++ * the sink owns any timestamp); usb_config.h usually points
++ * CONFIG_USB_PRINTF at the same function. */
++extern void usbh_console_printf(const char *fmt, ...);
++
++/* The platform layer's hooks, extern in the vendored
++ * port/ehci/usb_hc_ehci.c since the low-level API stopped being weak
++ * (integrators must implement both): the shared USB domain sequence, the
++ * DWC3 core reconfiguration and the IRQ line, plus the teardown twin
++ * called at the end of usb_hc_deinit(). */
++extern void usb_hc_low_level_init(struct usbh_bus *bus);
++extern void usb_hc_low_level_deinit(struct usbh_bus *bus);
++
++#if defined(CONFIG_USBHOST_MULT_HC)
++/* Multi-HC build: rename this port's entry points so it links alongside
++ * the EHCI port in one image; usbh_core.c dispatches per bus through
++ * bus->hc_driver.  The renames sit after the includes on purpose - the
++ * header's "#ifdef USBH_IRQHandler #error" guard has already been
++ * evaluated, and the prototypes below double as declarations for the new
++ * names. */
++#define usb_hc_init		usbh_xhci_hc_init
++#define usb_hc_deinit		usbh_xhci_hc_deinit
++#define usbh_get_frame_number	usbh_xhci_get_frame_number
++#define usbh_roothub_control	usbh_xhci_roothub_control
++#define usbh_submit_urb		usbh_xhci_submit_urb
++#define usbh_kill_urb		usbh_xhci_kill_urb
++#define USBH_IRQHandler		usbh_xhci_irq_handler
++
++int usbh_xhci_hc_init(struct usbh_bus *bus);
++int usbh_xhci_hc_deinit(struct usbh_bus *bus);
++uint16_t usbh_xhci_get_frame_number(struct usbh_bus *bus);
++int usbh_xhci_roothub_control(struct usbh_bus *bus, struct usb_setup_packet *setup, uint8_t *buf);
++int usbh_xhci_submit_urb(struct usbh_urb *urb);
++int usbh_xhci_kill_urb(struct usbh_urb *urb);
++void usbh_xhci_irq_handler(uint8_t busid);
++#endif
++
++/* ===================== constants ===================== */
++/* ep0 = dci 1, OUT n = 2n, IN n = 2n+1 (xHCI spec 4.5.2) */
++#define XHCI_MAX_DCI		31U
++#define XHCI_MAX_ROOT_PORTS	8U
++
++#define TRB_MAX_BUFF_SIZE	0x10000U /* one TRB must not cross 64KB */
++
++#define USB2_DIR_IN		0x80U
++#define USB2_EP_NUM_MASK	0x0FU
++
++#define CMD_TIMEOUT_MS		5000U  /* NetBSD USBD_DEFAULT_TIMEOUT */
++#define KILL_TIMEOUT_MS		500U
++
++/* ===================== static pools ===================== */
++/* Everything the DMA engine can reach, bounds fixed at compile time (the
++ * ehci_qh_pool shape).  This image has no non-cacheable window: the pools
++ * sit in cacheable .bss and every access is explicitly maintained. */
++
++#define XHCI_POOL_ALIGN		CONFIG_USB_ALIGN_SIZE
++
++USB_NOCACHE_RAM_SECTION static struct xhci_trb s_event_trbs[CONFIG_USBHOST_MAX_BUS][CONFIG_USBHOST_XHCI_EVENT_RING_SIZE]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++USB_NOCACHE_RAM_SECTION static struct xhci_erst_seg s_erst[CONFIG_USBHOST_MAX_BUS]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++USB_NOCACHE_RAM_SECTION static struct xhci_trb s_cmd_trbs[CONFIG_USBHOST_MAX_BUS][CONFIG_USBHOST_XHCI_COMMAND_RING_SIZE]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++/* The controller 64B-aligns the DMA base addresses it latches: a DCBAA
++ * row at ...118 was latched as ...100 and Address Device silently wrote
++ * its output context through the shifted (zero) entries - board-measured
++ * 2026-09-28.  Pad the per-bus rows of the pointer tables so a row
++ * pointer keeps the array's alignment (the transfer/context tables have
++ * power-of-two rows and never needed this). */
++#define XHCI_DCBAA_ROWSLOT \
++	(((CONFIG_USBHOST_XHCI_MAX_SLOTS + 1U) + 7U) & ~7U)
++#define XHCI_SPBUF_ROWSLOT \
++	(((CONFIG_USBHOST_XHCI_MAX_SPBUF) + 7U) & ~7U)
++
++USB_NOCACHE_RAM_SECTION static uint64_t s_dcbaa[CONFIG_USBHOST_MAX_BUS][XHCI_DCBAA_ROWSLOT]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++/* this DWC3 reports one scratchpad buffer (hcs2 spbuf=1, 2026-09-20); the
++ * pool covers the config bound and init fails loudly past it */
++USB_NOCACHE_RAM_SECTION static uint64_t s_sp_array[CONFIG_USBHOST_MAX_BUS][XHCI_SPBUF_ROWSLOT]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++USB_NOCACHE_RAM_SECTION static uint8_t s_sp_buf[CONFIG_USBHOST_MAX_BUS][CONFIG_USBHOST_XHCI_MAX_SPBUF][4096]
++	__attribute__((aligned(4096)));
++/* device context tables, one pair per potential slot */
++USB_NOCACHE_RAM_SECTION static uint8_t s_in_ctx[CONFIG_USBHOST_MAX_BUS][CONFIG_USBHOST_XHCI_MAX_SLOTS][64U * (2U + XHCI_MAX_DCI)]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++USB_NOCACHE_RAM_SECTION static uint8_t s_dev_ctx[CONFIG_USBHOST_MAX_BUS][CONFIG_USBHOST_XHCI_MAX_SLOTS][64U * (1U + XHCI_MAX_DCI)]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++/* transfer rings: the trb arrays live here, the struct xhci_ring
++ * bookkeeping hangs off g_xhci[busid].rings[] */
++USB_NOCACHE_RAM_SECTION static struct xhci_trb s_ring_trbs[CONFIG_USBHOST_MAX_BUS][CONFIG_USBHOST_XHCI_RINGS][CONFIG_USBHOST_XHCI_TRANSFER_RING_SIZE]
++	__attribute__((aligned(XHCI_POOL_ALIGN)));
++
++static struct xhci_hcd g_xhci[CONFIG_USBHOST_MAX_BUS];
++
++/* ===================== register access ===================== */
++
++static inline uint32_t xhci_r32(struct xhci_hcd *hcd, uintptr_t off)
++{
++	return *(volatile uint32_t *)(hcd->opregs + off);
++}
++
++static inline void xhci_w32(struct xhci_hcd *hcd, uintptr_t off, uint32_t val)
++{
++	*(volatile uint32_t *)(hcd->opregs + off) = val;
++}
++
++static inline uint32_t xhci_r32_cap(struct xhci_hcd *hcd, uintptr_t off)
++{
++	return *(volatile uint32_t *)(hcd->capbase + off);
++}
++
++static inline uint32_t xhci_r32_rts(struct xhci_hcd *hcd, uintptr_t off)
++{
++	return *(volatile uint32_t *)(hcd->rts + off);
++}
++
++static inline void xhci_w32_rts(struct xhci_hcd *hcd, uintptr_t off, uint32_t val)
++{
++	*(volatile uint32_t *)(hcd->rts + off) = val;
++}
++
++/* port is the ONE-BASED port number (XHCI_PORTSC's n is 1-based: port 1
++ * sits at op+0x400, not op+0x3F0) */
++static inline uint32_t xhci_portsc(struct xhci_hcd *hcd, uint32_t port)
++{
++	return xhci_r32(hcd, XHCI_PORTSC(port));
++}
++
++static inline void xhci_portsc_w(struct xhci_hcd *hcd, uint32_t port, uint32_t val)
++{
++	xhci_w32(hcd, XHCI_PORTSC(port), val);
++}
++
++/* ===================== cache maintenance ===================== */
++
++static inline void xhci_dcache_clean(void *addr, uint32_t size)
++{
++#ifdef CONFIG_USB_DCACHE_ENABLE
++	extern void usb_dcache_clean(uintptr_t addr, size_t size);
++
++	usb_dcache_clean((uintptr_t)addr, size);
++#else
++	(void)addr;
++	(void)size;
++#endif
++}
++
++static inline void xhci_dcache_invalidate(void *addr, uint32_t size)
++{
++#ifdef CONFIG_USB_DCACHE_ENABLE
++	extern void usb_dcache_invalidate(uintptr_t addr, size_t size);
++
++	usb_dcache_invalidate((uintptr_t)addr, size);
++#else
++	(void)addr;
++	(void)size;
++#endif
++}
++
++/* ===================== DCI / context addressing ===================== */
++
++static inline uint32_t xhci_dci_of(const struct usb_endpoint_descriptor *ep)
++{
++	uint32_t num = ep->bEndpointAddress & USB2_EP_NUM_MASK;
++
++	return ((ep->bEndpointAddress & USB2_DIR_IN) != 0U) ? num * 2U + 1U
++							    : num * 2U;
++}
++
++static inline uint32_t xhci_ep_type_of(const struct usb_endpoint_descriptor *ep)
++{
++	/* bmAttributes bit1:0: 0=control 1=isoch 2=bulk 3=interrupt.  An
++	 * earlier revision of this port treated 0 as bulk and everything
++	 * else as interrupt, so real bulk endpoints reached the controller as
++	 * interrupt endpoints (type 3/7); with Interval=0 the xHC then
++	 * schedules one max-size packet per microframe = 512B/125us =
++	 * 4.096 MB/s.  The type values are xHCI Table 6-9 (Endpoint
++	 * Context, offset 04h, bits 5:3), as encoded in usb_hc_xhci.h. */
++	uint32_t attr = ep->bmAttributes & 0x3U;
++	uint32_t dir_in = (ep->bEndpointAddress & USB2_DIR_IN) != 0U;
++	uint32_t type;
++
++	switch (attr) {
++	case 2U:
++		type = dir_in ? EP_TYPE_BULK_IN : EP_TYPE_BULK_OUT;
++		break;
++	case 3U:
++		type = dir_in ? EP_TYPE_INTR_IN : EP_TYPE_INTR_OUT;
++		break;
++	case 1U:
++		type = dir_in ? EP_TYPE_ISOCH_IN : EP_TYPE_ISOCH_OUT;
++		break;
++	default:
++		type = EP_TYPE_CONTROL;
++		break;
++	}
++	return type;
++}
++
++static inline uint32_t *xhci_in_ctx(struct xhci_dev *dev, uint32_t dci)
++{
++	return (uint32_t *)(dev->input_ctx + dev->ctxsz * (dci + 1U));
++}
++
++static inline uint32_t *xhci_out_ctx(struct xhci_dev *dev, uint32_t dci)
++{
++	return (uint32_t *)(dev->dev_ctx + dev->ctxsz * dci);
++}
++
++/* The root port a hubport hangs off: walk the parent chain (the ehci
++ * submit path walks the same chain).  Devices behind the panel's external
++ * hub report their hub-local port number - the slot context needs the
++ * root port, and the TT fields would need the hub side. */
++static uint8_t xhci_root_port_of(struct usbh_hubport *hport)
++{
++	struct usbh_hub *hub = hport->parent;
++	struct usbh_hubport *walk = hport;
++
++	while ((hub != NULL) && !hub->is_roothub) {
++		walk = hub->parent;
++		hub = (walk != NULL) ? walk->parent : NULL;
++	}
++	return (walk != NULL) ? walk->port : 0U;
++}
++
++/* ===================== ring management ===================== */
++
++/* Take one pool ring.  Long-lived per endpoint (unlike the ehci QH pool,
++ * a ring's cycle state survives across URBs, so it is not freed at
++ * completion - it returns to the pool only when the bus dies). */
++static struct xhci_ring *xhci_ring_alloc(struct xhci_hcd *hcd)
++{
++	struct xhci_ring *ring = NULL;
++	uint32_t i;
++	size_t flags;
++
++	flags = usb_osal_enter_critical_section();
++	for (i = 0U; i < CONFIG_USBHOST_XHCI_RINGS; i++) {
++		if (hcd->rings[i].inuse == 0U) {
++			/* the waitsem is created once at usb_hc_init and lives
++			 * with the pool slot: blanket-clearing the struct hands
++			 * submit a NULL semaphore - tx_semaphore_get(NULL)
++			 * returns TX_PTR_ERROR (2), which the osal maps to
++			 * -USB_ERR_INVAL, and every control transfer "fails"
++			 * in 3 ms (measured 2026-09-27).  Save it across the
++			 * reset. */
++			usb_osal_sem_t waitsem = hcd->rings[i].waitsem;
++
++			ring = &hcd->rings[i];
++			memset(ring, 0, sizeof(*ring));
++			ring->waitsem = waitsem;
++			ring->inuse = 1U;
++			ring->trbs = s_ring_trbs[hcd->bus->busid][i];
++			ring->num_trbs = CONFIG_USBHOST_XHCI_TRANSFER_RING_SIZE;
++			break;
++		}
++	}
++	usb_osal_leave_critical_section(flags);
++
++	if (ring != NULL) {
++		memset(ring->trbs, 0, ring->num_trbs * TRB_SIZE);
++		ring->ep = 0U;
++		ring->cs = 1U;
++		ring->dequeue = 0U;
++	}
++	return ring;
++}
++
++static uint32_t xhci_ring_space(struct xhci_ring *ring)
++{
++	uint32_t used = (ring->ep - ring->dequeue + ring->num_trbs) %
++			ring->num_trbs;
++
++	return ring->num_trbs - 2U - used;
++}
++
++/* NetBSD xhci_ring_put semantics: write the batch with the first TRB
++ * inverted so the controller cannot prefetch a half chain, LINK TRB at
++ * the wrap with the TC bit, flip the cycle there; record first/last as
++ * absolute ring indices (batch-relative ones are a debug trap here).
++ * One TD per ring, so the TD record lands in ring->td. */
++static int xhci_ring_put(struct xhci_ring *ring, const struct xhci_trb *trbs,
++			 uint32_t ntrbs)
++{
++	uint32_t ri = ring->ep;
++	uint8_t cs = ring->cs;
++	uint32_t first_slot = 0xFFFFFFFFU;
++	uint8_t first_cs = 0U;
++	uint32_t last_slot = 0U;
++	uint32_t i;
++
++	/* exact need: the cells this batch occupies plus the LINK cell
++	 * when the batch runs into the wrap (the old ntrbs+1 refused
++	 * batches that fit without crossing, and under-counted the ones
++	 * that do cross) */
++	if (xhci_ring_space(ring) <
++	    ntrbs + (((ring->ep + ntrbs) >= ring->num_trbs) ? 1U : 0U)) {
++		return -1;
++	}
++
++	for (i = 0U; i < ntrbs; i++) {
++		struct xhci_trb t = trbs[i];
++
++		if (ri == ring->num_trbs - 1U) {
++			/* LINK TRB: back to the ring base, TC flips the
++			 * consumer cycle.  This iteration's own TRB still
++			 * gets written past the link - the first cut skipped
++			 * it with a continue, and a control TD crossing the
++			 * link lost its STATUS TRB: the controller ran
++			 * SETUP+DATA, parked on the link target waiting for
++			 * the flipped cycle that the discarded STATUS was
++			 * supposed to carry, and every later transfer timed
++			 * out after the kill/reset re-armed cells with the
++			 * other cycle state (board evidence 2026-09-28,
++			 * efuse reads died at ep0 TRB 255).
++			 *
++			 * CH follows Linux inc_enq: a TD straddling the link
++			 * must mark the link as mid-TD (spec 6.4.4.1.1), or
++			 * the controller treats the link as the TD boundary;
++			 * a link consumed ahead of the batch's first TRB is
++			 * nobody's, and must stay unchained. */
++			ring->trbs[ri].dw0 = (uint32_t)(uintptr_t)ring->trbs;
++			ring->trbs[ri].dw1 = 0U;
++			ring->trbs[ri].dw2 = 0U;
++			ring->trbs[ri].dw3 =
++				TRB3_TYPE_SET(TRB_TYPE_LINK) | TRB3_ENT |
++				((i != 0U) ? TRB3_CHAIN : 0U) | cs;
++			ri = 0U;
++			cs ^= 1U;
++		}
++		if (first_slot == 0xFFFFFFFFU) {
++			first_slot = ri;
++			first_cs = cs;
++			t.dw3 = (t.dw3 & ~TRB3_CYCLE) | ((~cs) & 1U);
++		} else {
++			t.dw3 = (t.dw3 & ~TRB3_CYCLE) | cs;
++		}
++		ring->trbs[ri] = t;
++		last_slot = ri;
++		ri++;
++	}
++
++	if (first_slot != 0xFFFFFFFFU) {
++		/* the whole chain becomes visible atomically */
++		ring->trbs[first_slot].dw3 =
++			(ring->trbs[first_slot].dw3 & ~TRB3_CYCLE) | first_cs;
++	}
++	ring->td.first_idx = first_slot;
++	ring->td.last_idx = last_slot;
++	ring->ep = ri;
++	ring->cs = cs;
++	return (int)first_slot;
++}
++
++/* NetBSD xhci_host_dequeue: zero the ring before an EP context is
++ * reprogrammed to it - consumed TRBs still carrying cycle=1 would
++ * "resurrect" on the rearmed dequeue and replay old TDs (the SET_ADDRESS
++ * Transaction Error of 2026-09-20). */
++static void xhci_ring_reset(struct xhci_ring *ring)
++{
++	memset(ring->trbs, 0, ring->num_trbs * TRB_SIZE);
++	memset(&ring->td, 0, sizeof(ring->td));
++	ring->ep = 0U;
++	ring->cs = 1U;
++	ring->dequeue = 0U;
++}
++
++/* ===================== command path ===================== */
++
++/* NetBSD xhci_do_command_locked, async shape: one command in flight, the
++ * completion event arrives through the interrupt path and gives
++ * cmd_waitsem; timeout runs the NetBSD abort (CRCR.CA, wait CRR clear,
++ * re-arm the ring). */
++static struct xhci_dev *xhci_find_dev(struct xhci_hcd *hcd, uint8_t slot_id);
++static void xhci_event_process(struct xhci_hcd *hcd);
++static void xhci_ep0_dbg_dump(struct xhci_hcd *hcd, struct xhci_dev *dev,
++			      struct xhci_ring *ring, struct usbh_urb *urb,
++			      uint32_t irq0, uint32_t tevt0, const char *why);
++
++static int xhci_do_command(struct xhci_hcd *hcd, const struct xhci_trb *trb,
++			   uint32_t timeout_ms)
++{
++	struct xhci_trb cmd = *trb;
++	uint32_t spin = 0U;
++	int idx;
++	int ret;
++	size_t flags;
++
++	while (hcd->cmd_busy != 0U) {
++		usb_osal_msleep(1U);
++		if (++spin > timeout_ms) {
++			return -USB_ERR_BUSY;
++		}
++	}
++
++	flags = usb_osal_enter_critical_section();
++	hcd->cmd_busy = 1U;
++	hcd->cmd_code = 0U;
++	hcd->cmd_slot_id = 0U;
++	hcd->cmd_trb_addr = 0U;
++	usb_osal_sem_reset(hcd->cmd_waitsem);
++
++	idx = xhci_ring_put(&hcd->cmd_ring, &cmd, 1U);
++	if (idx < 0) {
++		hcd->cmd_busy = 0U;
++		usb_osal_leave_critical_section(flags);
++		return -USB_ERR_NOMEM;
++	}
++	hcd->cmd_trb_addr = (uint32_t)(uintptr_t)&hcd->cmd_ring.trbs[idx];
++	xhci_dcache_clean(hcd->cmd_ring.trbs,
++			  hcd->cmd_ring.num_trbs * TRB_SIZE);
++	*(volatile uint32_t *)hcd->db = 0U; /* doorbell 0: command ring */
++	usb_osal_leave_critical_section(flags);
++
++	ret = usb_osal_sem_take(hcd->cmd_waitsem, timeout_ms);
++	if (ret < 0) {
++		/* a completion whose interrupt was lost to the EINT/IP race
++		 * is still sitting in the ring: one synchronous drain before
++		 * concluding the controller is stuck (the thread/ISR
++		 * reentry guard keeps this safe) */
++		xhci_event_process(hcd);
++		ret = usb_osal_sem_take(hcd->cmd_waitsem, 10U);
++	}
++	if (ret < 0) {
++		/* NetBSD xhci_abort_command: CRCR.CA, wait CRR self-clear,
++		 * reset the ring (the CRCR read is the liveness probe: a
++		 * read of 0 means the ring is wedged, not that the write
++		 * failed - this DWC3 reads back internal ring state) */
++		uint32_t crcr = xhci_r32(hcd, XHCI_CRCR_LO);
++		uint32_t i;
++
++		xhci_w32(hcd, XHCI_CRCR_LO, crcr | XHCI_CRCR_LO_CA);
++		for (i = 0U; i < 500U; i++) {
++			if ((xhci_r32(hcd, XHCI_CRCR_LO) & XHCI_CRCR_LO_CRR) == 0U) {
++				break;
++			}
++			usb_osal_msleep(1U);
++		}
++		flags = usb_osal_enter_critical_section();
++		xhci_ring_reset(&hcd->cmd_ring);
++		/* re-arm CRCR after the abort: with the ring reset to entry 0
++		 * the controller must be told the new base or every later
++		 * command races the stopped ring */
++		xhci_w32(hcd, XHCI_CRCR_HI, 0U);
++		xhci_w32(hcd, XHCI_CRCR_LO,
++			 (uint32_t)(uintptr_t)hcd->cmd_ring.trbs |
++				 XHCI_CRCR_LO_RCS);
++		hcd->cmd_busy = 0U;
++		usb_osal_leave_critical_section(flags);
++		usbh_console_printf(
++			"xhci: command timeout (type=%u) crcr=%08x\n",
++			TRB3_TYPE_GET(cmd.dw3), crcr);
++		return -USB_ERR_TIMEOUT;
++	}
++	hcd->cmd_busy = 0U;
++	if (hcd->cmd_code != TRB_CODE_SUCCESS) {
++		return -USB_ERR_IO;
++	}
++	return 0;
++}
++
++static int xhci_cmd_enable_slot(struct xhci_hcd *hcd, uint8_t *slot_id)
++{
++	struct xhci_trb trb;
++	int ret;
++
++	memset(&trb, 0, sizeof(trb));
++	trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_ENABLE_SLOT);
++	ret = xhci_do_command(hcd, &trb, CMD_TIMEOUT_MS);
++	if (ret != 0) {
++		return ret;
++	}
++	*slot_id = hcd->cmd_slot_id;
++	return 0;
++}
++
++/* input context for ep0 (NetBSD xhci_setup_ctx): control ctx drop=0 /
++ * add=slot|ep0; slot ctx carries route(0)/speed/ctx_entries + root port;
++ * ep0 ctx: type=control, CERR=3, MPS, dequeue=ring|DCS, avg TRB 8. */
++static void xhci_setup_ep0_input_ctx(struct xhci_dev *dev, uint16_t mps)
++{
++	uint32_t words = dev->ctxsz / 4U;
++	uint32_t *icc = (uint32_t *)dev->input_ctx;
++	uint32_t *slot = xhci_in_ctx(dev, 0U);
++	uint32_t *ep0 = xhci_in_ctx(dev, 1U);
++	uint32_t speed = SLOT_CTX_SPEED_HS;
++	uint8_t root = xhci_root_port_of(dev->hport);
++
++	memset(dev->input_ctx, 0, dev->ctxsz * (2U + XHCI_MAX_DCI));
++	icc[1] = ICC_ADD_SLOT | ICC_ADD_EP0;
++
++	if (dev->hport->speed == USB_SPEED_LOW) {
++		speed = SLOT_CTX_SPEED_LS;
++	} else if (dev->hport->speed == USB_SPEED_FULL) {
++		speed = SLOT_CTX_SPEED_FS;
++	}
++	slot[0] = SLOT_CTX_DEV_INFO_LAST_CTX(1U) |
++		  SLOT_CTX_DEV_INFO_SPEED(speed) |
++		  SLOT_CTX_DEV_INFO_ROUTE(0U);
++	slot[1] = SLOT_CTX_DEV_INFO2_PORT(root) |
++		  SLOT_CTX_DEV_INFO2_MAX_EXIT(0U);
++	/* LS/FS behind this board's HS hub would need the TT fields here;
++	 * every device this port carries is HS (panel hub and dongle both),
++	 * so dw2 stays 0. */
++
++	xhci_ring_reset(dev->ep_rings[1U]);
++
++	ep0[0] = EP_CTX_0_INTERVAL_SET(0U);
++	ep0[1] = EP_CTX_1_EP_TYPE_SET(EP_TYPE_CONTROL) |
++		 EP_CTX_1_CERR_SET(3U) |
++		 EP_CTX_1_MAX_PACKET_SET(mps);
++	ep0[2] = ((uint32_t)(uintptr_t)dev->ep_rings[1U]->trbs & ~0xFU) |
++		 EP_CTX_2_CYCLE;
++	ep0[3] = 0U; /* TR dequeue hi: DDR < 4GB on this board */
++	ep0[4] = EP_CTX_4_AVG_TRB_LEN(8U);
++
++	xhci_dcache_clean(dev->input_ctx, words * (2U + XHCI_MAX_DCI) * 4U);
++}
++
++static int xhci_cmd_address_device(struct xhci_hcd *hcd, struct xhci_dev *dev,
++				   uint8_t bsr, uint16_t mps)
++{
++	struct xhci_trb trb;
++	int ret;
++
++	xhci_setup_ep0_input_ctx(dev, mps);
++	if (bsr == 0U) {
++		/* BSR=0, dw3=0: this DWC3 refuses explicit wire
++		 * SET_ADDRESS values (Transaction Error whenever the value
++		 * differs from its own choice - hub explicit 2 refused,
++		 * dongle explicit 3 refused, 2026-09-28).
++		 * The controller numbers devices by its own sequence, so
++		 * the assigned address is ADOPTED into the stack's view
++		 * below - CherryUSB's devgen number is never wire-visible
++		 * for the device's own filtering. */
++		xhci_in_ctx(dev, 0U)[3] = 0U;
++		xhci_dcache_clean(dev->input_ctx,
++				  dev->ctxsz * (2U + XHCI_MAX_DCI));
++	}
++
++	memset(&trb, 0, sizeof(trb));
++	trb.dw0 = (uint32_t)(uintptr_t)dev->input_ctx;
++	trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_ADDRESS_DEV) |
++		  TRB3_SLOT_ID(dev->slot_id) | (bsr != 0U ? TRB3_BSR : 0U);
++
++	ret = xhci_do_command(hcd, &trb, CMD_TIMEOUT_MS);
++	if (bsr == 0U) {
++		/* verify the output context and adopt the assigned address:
++		 * the controller must have moved the slot to ADDRESSED and
++		 * programmed its own sequential number - the stack's view
++		 * (usb_addr/hport->dev_addr) follows, or every later token
++		 * would be for a device that does not exist on the wire */
++		uint32_t dw3, st, hw_addr;
++
++		xhci_dcache_invalidate(dev->dev_ctx,
++				       dev->ctxsz * (1U + XHCI_MAX_DCI));
++		dw3 = xhci_out_ctx(dev, 0U)[3];
++		st = (dw3 >> 27) & 0x1FU;
++		hw_addr = dw3 & 0xFFU;
++		if ((st == SLOT_CTX_STATE_ADDRESSED) && (hw_addr != 0U)) {
++			if (hw_addr != dev->usb_addr) {
++				usbh_console_printf(
++					"xhci: slot %u auto-assigned %u "
++					"(stack wanted %u)\n",
++					dev->slot_id, hw_addr,
++					dev->usb_addr);
++				dev->usb_addr = (uint8_t)hw_addr;
++				dev->hport->dev_addr = dev->usb_addr;
++			}
++			ret = 0;
++		} else if (ret == 0) {
++			ret = -USB_ERR_IO;
++		}
++	}
++	if (ret != 0) {
++		usbh_console_printf(
++			"xhci: Address Device (bsr=%u) failed, code=%u "
++			"portsc=%08x speed=%u slot=%08x %08x %08x %08x "
++			"ep0=%08x %08x %08x %08x %08x\n",
++			bsr, hcd->cmd_code,
++			xhci_portsc(hcd, xhci_root_port_of(dev->hport)),
++			dev->hport->speed,
++			xhci_in_ctx(dev, 0U)[0], xhci_in_ctx(dev, 0U)[1],
++			xhci_in_ctx(dev, 0U)[2], xhci_in_ctx(dev, 0U)[3],
++			xhci_in_ctx(dev, 1U)[0], xhci_in_ctx(dev, 1U)[1],
++			xhci_in_ctx(dev, 1U)[2], xhci_in_ctx(dev, 1U)[3],
++			xhci_in_ctx(dev, 1U)[4]);
++		return ret;
++	}
++	dev->ep0_mps_hw = mps;
++	return 0;
++}
++
++static int xhci_cmd_evaluate_context(struct xhci_hcd *hcd,
++				     struct xhci_dev *dev, uint16_t mps)
++{
++	struct xhci_trb trb;
++	int ret;
++
++	xhci_setup_ep0_input_ctx(dev, mps);
++
++	memset(&trb, 0, sizeof(trb));
++	trb.dw0 = (uint32_t)(uintptr_t)dev->input_ctx;
++	trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_EVALUATE_CTX) |
++		  TRB3_SLOT_ID(dev->slot_id);
++
++	ret = xhci_do_command(hcd, &trb, CMD_TIMEOUT_MS);
++	if (ret != 0) {
++		usbh_console_printf("xhci: Evaluate Context failed, code=%u\n",
++				    hcd->cmd_code);
++		return ret;
++	}
++	dev->ep0_mps_hw = mps;
++	return 0;
++}
++
++/* first use of a non-ep0 endpoint */
++static int xhci_cmd_configure_ep(struct xhci_hcd *hcd, struct xhci_dev *dev,
++				 uint32_t dci, const struct usb_endpoint_descriptor *ep,
++				 struct xhci_ring *ring)
++{
++	uint32_t words = dev->ctxsz / 4U;
++	uint32_t *icc = (uint32_t *)dev->input_ctx;
++	uint32_t *slot = xhci_in_ctx(dev, 0U);
++	uint32_t *epc = xhci_in_ctx(dev, dci);
++	uint32_t speed = SLOT_CTX_SPEED_HS;
++	uint16_t ep_mps = (uint16_t)(ep->wMaxPacketSize & 0x7FFU);
++	uint8_t is_intr = ((ep->bmAttributes & 0x3U) == 0x3U) ? 1U : 0U;
++	uint8_t interval = ((is_intr != 0U) && (ep->bInterval > 0U)) ?
++			   (uint8_t)(ep->bInterval - 1U) : 0U;
++	uint8_t burst = (uint8_t)((ep->wMaxPacketSize >> 11) & 0x3U);
++	uint8_t root = xhci_root_port_of(dev->hport);
++	struct xhci_trb trb;
++	int ret;
++
++	memset(dev->input_ctx, 0, dev->ctxsz * (2U + XHCI_MAX_DCI));
++	icc[1] = ICC_ADD_SLOT | (1U << dci);
++
++	if (dev->hport->speed == USB_SPEED_LOW) {
++		speed = SLOT_CTX_SPEED_LS;
++	} else if (dev->hport->speed == USB_SPEED_FULL) {
++		speed = SLOT_CTX_SPEED_FS;
++	}
++	slot[0] = SLOT_CTX_DEV_INFO_LAST_CTX(dci) |
++		  SLOT_CTX_DEV_INFO_SPEED(speed) |
++		  SLOT_CTX_DEV_INFO_ROUTE(0U);
++	slot[1] = SLOT_CTX_DEV_INFO2_PORT(root) |
++		  SLOT_CTX_DEV_INFO2_MAX_EXIT(0U);
++	slot[3] = SLOT_CTX_DEV_STATE_ADDR(dev->hport->dev_addr) |
++		  SLOT_CTX_DEV_STATE_SLOT_STATE(SLOT_CTX_STATE_CONFIGURED);
++
++	epc[0] = EP_CTX_0_INTERVAL_SET(interval);
++	epc[1] = EP_CTX_1_EP_TYPE_SET(xhci_ep_type_of(ep)) |
++		 EP_CTX_1_CERR_SET(3U) |
++		 EP_CTX_1_MAX_PACKET_SET(ep_mps) |
++		 EP_CTX_1_MAX_BURST_SET(burst);
++	epc[2] = ((uint32_t)(uintptr_t)ring->trbs & ~0xFU) | EP_CTX_2_CYCLE;
++	epc[3] = 0U;
++	/* avg TRB length: bulk = 0, otherwise 8.  Linux xhci-mem.c:1388
++	 * xhci_get_max_esit_payload() returns 0 for control and bulk, so
++	 * avg_trb_len lands 0 for bulk EPs there (control gets the xHCI 1.0
++	 * hint 8 via the separate override).  Board data: 512 and 0 both
++	 * measured 4.0 MB/s - throughput-neutral; the earlier 4.096 MB/s
++	 * ceiling was the bulk endpoint type decode bug (see
++	 * xhci_ep_type_of). */
++	epc[4] = EP_CTX_4_AVG_TRB_LEN(
++		((ep->bmAttributes & 0x3U) == 0U) ? 0U : 8U);
++
++	xhci_dcache_clean(dev->input_ctx, words * (2U + XHCI_MAX_DCI) * 4U);
++
++	memset(&trb, 0, sizeof(trb));
++	trb.dw0 = (uint32_t)(uintptr_t)dev->input_ctx;
++	trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_CONFIGURE_EP) |
++		  TRB3_SLOT_ID(dev->slot_id);
++
++	ret = xhci_do_command(hcd, &trb, CMD_TIMEOUT_MS);
++	if (ret != 0) {
++		usbh_console_printf("xhci: Configure EP (dci=%u) failed, code=%u\n",
++				    dci, hcd->cmd_code);
++		return ret;
++	}
++	dev->ep_configured |= (1U << dci);
++	return 0;
++}
++
++/* ===================== slot lifecycle ===================== */
++
++static struct xhci_dev *xhci_find_dev(struct xhci_hcd *hcd, uint8_t slot_id)
++{
++	if ((slot_id == 0U) || (slot_id >= hcd->max_slots)) {
++		return NULL;
++	}
++	if (hcd->devs[slot_id].in_use == 0U) {
++		return NULL;
++	}
++	return &hcd->devs[slot_id];
++}
++
++static struct xhci_dev *xhci_get_dev(struct xhci_hcd *hcd,
++				     struct usbh_hubport *hport)
++{
++	uint8_t i;
++
++	/* keyed on the hubport pointer, not the port number: devices behind
++	 * the panel hub report hub-local port numbers */
++	for (i = 1U; i < hcd->max_slots; i++) {
++		if ((hcd->devs[i].in_use != 0U) &&
++		    (hcd->devs[i].hport == hport)) {
++			return &hcd->devs[i];
++		}
++	}
++	return NULL;
++}
++
++/* The hub layer re-initializes the hubport child in place (usbh_hubport_release
++ * followed by a fresh usbh_enumerate on the SAME struct), so a re-enumeration
++ * on a port whose device left and came back - the RTL8821CU modeswitch eject
++ * is the board case - arrives with the same hport pointer.  The stale slot is
++ * still enabled and its ep0 may be HALTED (the controller stopped it when the
++ * device vanished mid-transaction); reusing it means the doorbell rings but
++ * nothing retires, and the enumerate dies on -USB_ERR_TIMEOUT (measured
++ * 2026-09-29 on fd000000: first pass 0bda:1a2b fine, second pass dead).  Stop
++ * such a slot so the setup below rebuilds from a fresh Enable Slot. */
++static void xhci_slot_stop(struct xhci_hcd *hcd, struct xhci_dev *dev)
++{
++	struct xhci_trb trb;
++
++	memset(&trb, 0, sizeof(trb));
++	trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_DISABLE_SLOT) |
++		  TRB3_SLOT_ID(dev->slot_id);
++	if (xhci_do_command(hcd, &trb, CMD_TIMEOUT_MS) != 0) {
++		usbh_console_printf("xhci: Disable Slot %u failed\n",
++				    dev->slot_id);
++	}
++	hcd->dcbaa[dev->slot_id] = 0U;
++	xhci_dcache_clean(hcd->dcbaa,
++			  sizeof(uint64_t) * (hcd->max_slots + 1U));
++	/* every ring of the slot goes back to the pool, not just ep0 - the
++	 * old ep0-only recycle leaked one ring per bulk/int endpoint on
++	 * every modeswitch re-enumeration, and the 12-ring pool ran dry
++	 * into submit failures */
++	{
++		uint32_t dci;
++
++		for (dci = 1U; dci < XHCI_MAX_DCI; dci++) {
++			if (dev->ep_rings[dci] != NULL) {
++				dev->ep_rings[dci]->inuse = 0U;
++			}
++		}
++	}
++	memset(dev, 0, sizeof(*dev));
++}
++
++/* Belt and braces for the setup path: normally the hub layer reports the
++ * disconnect first (usbh_xhci_forget_hport below) and there is nothing
++ * stale left to match. */
++static void xhci_teardown_stale_slots(struct xhci_hcd *hcd,
++				      struct usbh_hubport *hport)
++{
++	uint32_t i;
++
++	for (i = 1U; i < hcd->max_slots; i++) {
++		struct xhci_dev *dev = &hcd->devs[i];
++
++		if ((dev->in_use != 0U) && (dev->hport == hport)) {
++			usbh_console_printf("xhci: slot %u stale, disabling\n",
++					    i);
++			xhci_slot_stop(hcd, dev);
++		}
++	}
++}
++
++/* Called by the platform layer on USBH_EVENT_DEVICE_DISCONNECTED: the child
++ * is about to be re-initialized in place, so any slot still attached to it
++ * must go away NOW - waiting for the next setup would reuse the dead slot
++ * (the in-place child matches dev->hport by address).  The triple matches
++ * the event handler's (busid, hub, port); devices behind a hub keep their
++ * hub's index. */
++void usbh_xhci_forget_hport(uint8_t busid, uint8_t hub_index, uint8_t hub_port)
++{
++	struct xhci_hcd *hcd = &g_xhci[busid];
++	uint32_t i;
++
++	if (!usbh_xhci_bus_ready(busid)) {
++		return;
++	}
++	for (i = 1U; i < hcd->max_slots; i++) {
++		struct xhci_dev *dev = &hcd->devs[i];
++
++		if ((dev->in_use != 0U) &&
++		    (dev->hport->bus->busid == busid) &&
++		    (dev->hport->parent->index == hub_index) &&
++		    (dev->hport->port == hub_port)) {
++			usbh_console_printf("xhci: slot %u disabled for "
++					    "re-enum\n", i);
++			xhci_slot_stop(hcd, dev);
++		}
++	}
++}
++
++/* First slot for a hubport: Enable Slot -> context tables -> DCBAA[slot]
++ * -> ep0 ring -> Address Device BSR=1 (the device is reachable at
++ * address 0: CherryUSB reads the first 8 descriptor bytes before
++ * SET_ADDRESS, so the NetBSD one-step BSR=0 is not available here).  The
++ * ep0 MPS is the speed-based default CherryUSB preset (HS/FS = 64). */
++static int xhci_setup_slot(struct xhci_hcd *hcd, struct usbh_hubport *hport)
++{
++	struct xhci_dev *dev;
++	uint8_t slot_id = 0U;
++	uint16_t mps = (uint16_t)(hport->ep0.wMaxPacketSize & 0x7FFU);
++	int ret;
++
++	if (mps == 0U) {
++		mps = 64U;
++	}
++	xhci_teardown_stale_slots(hcd, hport);
++	ret = xhci_cmd_enable_slot(hcd, &slot_id);
++	if (ret != 0) {
++		usbh_console_printf("xhci: Enable Slot failed, ret=%d\n", ret);
++		return ret;
++	}
++	if ((slot_id == 0U) || (slot_id >= hcd->max_slots)) {
++		return -USB_ERR_IO;
++	}
++	usbh_console_printf("xhci: slot %u enabled\n", slot_id);
++
++	dev = &hcd->devs[slot_id];
++	memset(dev, 0, sizeof(*dev));
++	dev->in_use = 1U;
++	dev->slot_id = slot_id;
++	dev->hport = hport;
++	dev->ctxsz = hcd->ctxsz_cache;
++	dev->input_ctx = s_in_ctx[hcd->bus->busid][slot_id];
++	dev->dev_ctx = s_dev_ctx[hcd->bus->busid][slot_id];
++
++	/* DCBAA[slot] = the output device context (the scratchpad array at
++	 * DCBAA[0] was armed with the DCBAA at init - the scratchpad is a
++	 * hard Address Device prerequisite and the array itself needed its
++	 * own flush, 2026-09-20) */
++	hcd->dcbaa[slot_id] = (uint64_t)(uintptr_t)dev->dev_ctx;
++	xhci_dcache_clean(hcd->dcbaa,
++			  sizeof(uint64_t) * (hcd->max_slots + 1U));
++	xhci_dcache_clean(dev->dev_ctx, dev->ctxsz * (1U + XHCI_MAX_DCI));
++
++	dev->ep_rings[1U] = xhci_ring_alloc(hcd);
++	if (dev->ep_rings[1U] == NULL) {
++		dev->in_use = 0U;
++		return -USB_ERR_NOMEM;
++	}
++
++	ret = xhci_cmd_address_device(hcd, dev, 1U, mps);
++	if (ret != 0) {
++		dev->in_use = 0U;
++		return ret;
++	}
++	return 0;
++}
++
++/* ===================== controller init ===================== */
++
++/* hc_reset (NetBSD xhci_hc_reset, line for line): CNR clear -> halt ->
++ * HCRST self-clear -> CNR clear again */
++static int xhci_hc_reset(struct xhci_hcd *hcd)
++{
++	uint32_t usbcmd, usbsts;
++	uint32_t i;
++
++	for (i = 0U; i < 100U; i++) {
++		usbsts = xhci_r32(hcd, XHCI_USBSTS);
++		if ((usbsts & XHCI_STS_CNR) == 0U) {
++			break;
++		}
++		usb_osal_msleep(1U);
++	}
++	if (i >= 100U) {
++		usbh_console_printf("xhci: controller not ready (CNR) timeout\n");
++		return -USB_ERR_TIMEOUT;
++	}
++
++	xhci_w32(hcd, XHCI_USBCMD, 0U);
++	usb_osal_msleep(1U);
++
++	xhci_w32(hcd, XHCI_USBCMD, XHCI_CMD_HCRST);
++	for (i = 0U; i < 100U; i++) {
++		/* 1ms before the first poll (the Intel errata beat NetBSD
++		 * keeps) */
++		usb_osal_msleep(1U);
++		usbcmd = xhci_r32(hcd, XHCI_USBCMD);
++		if ((usbcmd & XHCI_CMD_HCRST) == 0U) {
++			break;
++		}
++	}
++	if (i >= 100U) {
++		usbh_console_printf("xhci: HCRST timeout\n");
++		return -USB_ERR_TIMEOUT;
++	}
++
++	for (i = 0U; i < 100U; i++) {
++		usbsts = xhci_r32(hcd, XHCI_USBSTS);
++		if ((usbsts & XHCI_STS_CNR) == 0U) {
++			break;
++		}
++		usb_osal_msleep(1U);
++	}
++	if (i >= 100U) {
++		usbh_console_printf("xhci: CNR timeout after reset\n");
++		return -USB_ERR_TIMEOUT;
++	}
++	return 0;
++}
++
++static int xhci_controller_init(struct xhci_hcd *hcd)
++{
++	uint32_t cap, hcs1, hcs2, hcc1;
++	uint32_t caplen, hciver;
++	uint32_t rts_off, db_off;
++	uint32_t i;
++	uint32_t num_sp;
++	int ret;
++
++	/* capability decode: this register window takes 32-bit accesses
++	 * only, and CAPLENGTH/HCIVERSION share one word at offset 0 - one
++	 * aligned read for both (the first port faulted on a sub-word
++	 * HCIVERSION read, ESR 96000021) */
++	cap = xhci_r32_cap(hcd, XHCI_CAPLENGTH);
++	caplen = cap & 0xFFU;
++	hcd->opregs = hcd->capbase + caplen;
++	hciver = (cap >> 16) & 0xFFFFU;
++	if ((hciver < 0x0096U) || (hciver >= 0x0200U)) {
++		usbh_console_printf("xhci: warning: HCIVERSION 0x%04x\n", hciver);
++	}
++	hcs1 = xhci_r32_cap(hcd, XHCI_HCSPARAMS1);
++	hcs2 = xhci_r32_cap(hcd, XHCI_HCSPARAMS2);
++	hcc1 = xhci_r32_cap(hcd, XHCI_HCCPARAMS1);
++
++	hcd->ctxsz_cache = (XHCI_HCCPARAMS1_CSZ(hcc1) != 0U) ? 64U : 32U;
++
++	hcd->max_slots = (uint8_t)XHCI_HCS1_DEVSLOT_MAX(hcs1);
++	hcd->num_ports = (uint8_t)XHCI_HCS1_N_PORTS(hcs1);
++	db_off = xhci_r32_cap(hcd, XHCI_DBOFF) & ~0xFU;
++	rts_off = xhci_r32_cap(hcd, XHCI_RTSOFF) & ~0xFU;
++	hcd->db = hcd->capbase + db_off;
++	hcd->rts = hcd->capbase + rts_off;
++
++	if (hcd->num_ports > XHCI_MAX_ROOT_PORTS) {
++		hcd->num_ports = XHCI_MAX_ROOT_PORTS;
++	}
++	if (hcd->max_slots > CONFIG_USBHOST_XHCI_MAX_SLOTS) {
++		hcd->max_slots = CONFIG_USBHOST_XHCI_MAX_SLOTS;
++	}
++	/* publish the root port count before the controller runs: an
++	 * interrupt between RS and a late publish would send the hub thread
++	 * scanning the CONFIG_USBHOST_MAX_RHPORTS default instead */
++	hcd->bus->hcd.roothub.nports = hcd->num_ports;
++
++	/* PAGESIZE: smallest supported page */
++	cap = xhci_r32(hcd, XHCI_PAGESIZE);
++	if (cap == 0U) {
++		usbh_console_printf("xhci: PAGESIZE reads 0\n");
++		return -USB_ERR_INVAL;
++	}
++	for (i = 0U; i < 16U; i++) {
++		if ((cap & (1U << i)) != 0U) {
++			break;
++		}
++	}
++	hcd->pgsz = 1U << (12U + i);
++
++	usbh_console_printf(
++		"xhci: %u ports, %u slots, ctxsz=%u pgsz=%u caplen=%u hcs1=%08x\n",
++		hcd->num_ports, hcd->max_slots, hcd->ctxsz_cache, hcd->pgsz,
++		caplen, hcs1);
++
++	/* hc_reset before any ring/DCBAA programming (NetBSD order) */
++	ret = xhci_hc_reset(hcd);
++	if (ret != 0) {
++		return ret;
++	}
++
++	/* event ring + segment table */
++	hcd->event_trbs = s_event_trbs[hcd->bus->busid];
++	hcd->erst = &s_erst[hcd->bus->busid];
++	memset(hcd->event_trbs, 0,
++	       CONFIG_USBHOST_XHCI_EVENT_RING_SIZE * TRB_SIZE);
++	memset(hcd->erst, 0, sizeof(struct xhci_erst_seg));
++	hcd->erst->seg_base_lo = (uint32_t)(uintptr_t)hcd->event_trbs;
++	hcd->erst->seg_base_hi = 0U;
++	hcd->erst->seg_size = CONFIG_USBHOST_XHCI_EVENT_RING_SIZE;
++	hcd->event_ep = 0U;
++	hcd->event_cs = 1U;
++	xhci_dcache_clean(hcd->event_trbs,
++			  CONFIG_USBHOST_XHCI_EVENT_RING_SIZE * TRB_SIZE);
++	xhci_dcache_clean(hcd->erst, sizeof(struct xhci_erst_seg));
++
++	/* command ring */
++	memset(&hcd->cmd_ring, 0, sizeof(hcd->cmd_ring));
++	hcd->cmd_ring.trbs = s_cmd_trbs[hcd->bus->busid];
++	hcd->cmd_ring.num_trbs = CONFIG_USBHOST_XHCI_COMMAND_RING_SIZE;
++	hcd->cmd_ring.ep = 0U;
++	hcd->cmd_ring.cs = 1U;
++
++	/* DCBAA + scratchpad */
++	hcd->dcbaa = s_dcbaa[hcd->bus->busid];
++	memset(hcd->dcbaa, 0, sizeof(uint64_t) * (hcd->max_slots + 1U));
++
++	num_sp = XHCI_HCS2_SPB_MAX(hcs2);
++	if (num_sp > 0U) {
++		if (num_sp > CONFIG_USBHOST_XHCI_MAX_SPBUF) {
++			usbh_console_printf(
++				"xhci: %u scratchpad buffers > pool %u\n",
++				num_sp, CONFIG_USBHOST_XHCI_MAX_SPBUF);
++			return -USB_ERR_NOMEM;
++		}
++		memset(s_sp_array[hcd->bus->busid], 0,
++		       sizeof(uint64_t) * num_sp);
++		memset(s_sp_buf[hcd->bus->busid], 0, (size_t)num_sp * 4096U);
++		for (i = 0U; i < num_sp; i++) {
++			s_sp_array[hcd->bus->busid][i] =
++				(uint64_t)(uintptr_t)s_sp_buf[hcd->bus->busid][i];
++		}
++		hcd->dcbaa[0] = (uint64_t)(uintptr_t)s_sp_array[hcd->bus->busid];
++		xhci_dcache_clean(s_sp_array[hcd->bus->busid],
++				  sizeof(uint64_t) * num_sp);
++		xhci_dcache_clean(s_sp_buf[hcd->bus->busid],
++				  (uint32_t)num_sp * 4096U);
++	}
++	xhci_dcache_clean(hcd->dcbaa, sizeof(uint64_t) * (hcd->max_slots + 1U));
++
++	/* register programming (NetBSD xhci_init order) */
++	xhci_w32_rts(hcd, XHCI_ERSTSZ(0), XHCI_ERSTS_SET(1));
++	xhci_w32_rts(hcd, XHCI_ERSTBA_LO(0), (uint32_t)(uintptr_t)hcd->erst);
++	xhci_w32_rts(hcd, XHCI_ERSTBA_HI(0), 0U);
++	xhci_w32_rts(hcd, XHCI_ERDP_LO(0),
++		     ((uint32_t)(uintptr_t)hcd->event_trbs & ~0xFU) |
++			     XHCI_ERDP_BUSY);
++	xhci_w32_rts(hcd, XHCI_ERDP_HI(0), 0U);
++
++	xhci_w32(hcd, XHCI_DCBAAP_LO, (uint32_t)(uintptr_t)hcd->dcbaa);
++	xhci_w32(hcd, XHCI_DCBAAP_HI, 0U);
++	xhci_w32(hcd, XHCI_CRCR_HI, 0U);
++	xhci_w32(hcd, XHCI_CRCR_LO,
++		 (uint32_t)(uintptr_t)hcd->cmd_ring.trbs | XHCI_CRCR_LO_RCS);
++
++	/* CONFIG: MaxSlotsEn read-modify-write (keep U3E/CIE) */
++	cap = xhci_r32(hcd, XHCI_CONFIG);
++	cap = (cap & ~XHCI_CONFIG_SLOTS_MASK) |
++	      (hcd->max_slots & XHCI_CONFIG_SLOTS_MASK);
++	xhci_w32(hcd, XHCI_CONFIG, cap);
++
++	/* DNCTRL resets to 0 (NetBSD does not write it); write once for
++	 * determinism */
++	xhci_w32(hcd, XHCI_DNCTRL, 0U);
++
++	/* interrupts: IMAN ENA only, IMOD=0 (no moderation on this part,
++	 * NetBSD xhci_start) */
++	xhci_w32_rts(hcd, XHCI_IMOD(0), 0U);
++	xhci_w32_rts(hcd, XHCI_IMAN(0), XHCI_IMAN_INTR_ENA);
++
++	/* RUN: RS|INTE (NetBSD does not set HSEE) */
++	xhci_w32(hcd, XHCI_USBCMD, XHCI_CMD_RS | XHCI_CMD_INTE);
++	for (i = 0U; i < 1000U; i++) {
++		if ((xhci_r32(hcd, XHCI_USBSTS) & XHCI_STS_HCH) == 0U) {
++			break;
++		}
++		usb_osal_msleep(1U);
++	}
++	if (i >= 1000U) {
++		usbh_console_printf("xhci: run timeout (HCH stuck)\n");
++		return -USB_ERR_TIMEOUT;
++	}
++
++	hcd->running = 1U;
++	return 0;
++}
++
++/* ===================== usb_hc.h interface ===================== */
++
++int usb_hc_init(struct usbh_bus *bus)
++{
++	struct xhci_hcd *hcd;
++	uint32_t i;
++	int ret;
++
++	if (bus->busid >= CONFIG_USBHOST_MAX_BUS) {
++		return -USB_ERR_INVAL;
++	}
++	hcd = &g_xhci[bus->busid];
++	memset(hcd, 0, sizeof(*hcd));
++	hcd->bus = bus;
++	hcd->capbase = bus->hcd.reg_base;
++	bus->hcd.roothub.speed = USB_SPEED_HIGH;
++
++	for (i = 0U; i < CONFIG_USBHOST_XHCI_RINGS; i++) {
++		hcd->rings[i].waitsem = usb_osal_sem_create(0);
++		USB_ASSERT(hcd->rings[i].waitsem != NULL);
++	}
++	hcd->cmd_waitsem = usb_osal_sem_create(0);
++	USB_ASSERT(hcd->cmd_waitsem != NULL);
++
++	/* entry read BEFORE the platform sequence: the diagnostic baseline
++	 * (a dead aperture here is the expected picture until
++	 * usb_hc_low_level_init's domain + DWC3 sequence has run) */
++	usbh_console_printf("xhci: entry bus%u cap0=%08x GSNPSID=%08x\n",
++			    bus->busid, *(volatile uint32_t *)hcd->capbase,
++			    *(volatile uint32_t *)(hcd->capbase + 0xC120U));
++
++	/* the shared platform sequence (domain once-guards make repeats
++	 * free) + the DWC3 core reconfiguration + the IRQ line */
++	usb_hc_low_level_init(bus);
++
++	/* post-platform core state check */
++	{
++		volatile uint32_t *dwc3 = (volatile uint32_t *)hcd->capbase;
++		uint32_t revision = dwc3[0xC120U / 4U];
++		uint32_t gctl = dwc3[0xC110U / 4U];
++
++		if ((revision & 0xFFFF0000U) != 0x55330000U) {
++			usbh_console_printf(
++				"xhci: DWC3 not found, GSNPSID=%08x\n", revision);
++			return -USB_ERR_INVAL;
++		}
++		usbh_console_printf("xhci: DWC3 rev %u.%03x GCTL=%08x\n",
++				    (revision >> 12) & 0xFU, revision & 0xFFFU,
++				    gctl);
++		if (((gctl & (3U << 12)) >> 12) != 1U) {
++			usbh_console_printf("xhci: DWC3 not host (GCTL=%08x)\n",
++					    gctl);
++			return -USB_ERR_INVAL;
++		}
++		if ((dwc3[0] & 0xFFU) == 0U) {
++			usbh_console_printf("xhci: xHCI aperture dead (cap=0)\n");
++			return -USB_ERR_INVAL;
++		}
++	}
++
++	ret = xhci_controller_init(hcd);
++	if (ret != 0) {
++		return ret;
++	}
++
++	usbh_console_printf("xhci: bus%u ready\n", bus->busid);
++	return 0;
++}
++
++int usb_hc_deinit(struct usbh_bus *bus)
++{
++	struct xhci_hcd *hcd;
++	uint8_t busid = bus->busid;
++	uint32_t i;
++
++	if (busid >= CONFIG_USBHOST_MAX_BUS) {
++		return -USB_ERR_INVAL;
++	}
++	hcd = &g_xhci[busid];
++	if (hcd->running == 0U) {
++		return 0;
++	}
++
++	xhci_w32(hcd, XHCI_USBCMD, 0U);
++	hcd->running = 0U;
++
++	for (i = 0U; i < CONFIG_USBHOST_XHCI_RINGS; i++) {
++		usb_osal_sem_delete(hcd->rings[i].waitsem);
++		hcd->rings[i].inuse = 0U;
++	}
++	usb_osal_sem_delete(hcd->cmd_waitsem);
++
++	/* the platform teardown, mirroring port/ehci/usb_hc_ehci.c: the
++	 * low-level API is extern since it stopped being weak, so the hook
++	 * an integrator must implement is called on this path too */
++	usb_hc_low_level_deinit(bus);
++	return 0;
++}
++
++uint16_t usbh_get_frame_number(struct usbh_bus *bus)
++{
++	struct xhci_hcd *hcd = &g_xhci[bus->busid];
++
++	if (hcd->running == 0U) {
++		return 0U;
++	}
++	return (uint16_t)(xhci_r32_rts(hcd, XHCI_MFINDEX) & 0x3FFFU);
++}
++
++/* ===================== URB submission ===================== */
++
++/* ep0 control transfer: SETUP + (DATA) + STATUS TRBs, NetBSD
++ * xhci_device_ctrl_start bit shapes: SETUP carries IDT + TRT (when there
++ * is a data stage), DATA carries DIR_IN + ISP for IN, STATUS reverses the
++ * direction; IOC on the status TRB only. */
++static int xhci_queue_control(struct xhci_hcd *hcd, struct xhci_dev *dev,
++			      struct xhci_ring *ring, struct usbh_urb *urb)
++{
++	struct usb_setup_packet *setup = urb->setup;
++	struct xhci_trb trbs[3];
++	uint8_t *buf = urb->transfer_buffer;
++	uint32_t len = urb->transfer_buffer_length;
++	uint32_t dir_in = ((setup->bmRequestType & 0x80U) != 0U) ? 1U : 0U;
++	uint32_t ntrbs = 0U;
++	int first_idx;
++
++	if (setup == NULL) {
++		return -USB_ERR_INVAL;
++	}
++	if (len > TRB_MAX_BUFF_SIZE) {
++		return -USB_ERR_INVAL; /* CherryUSB ep0 buffers are <= 2KB */
++	}
++	{
++		uintptr_t chk = (uintptr_t)buf;
++
++		if ((chk & (TRB_MAX_BUFF_SIZE - 1U)) + len > TRB_MAX_BUFF_SIZE) {
++			return -USB_ERR_INVAL; /* a crossing block does not
++						* fit one DATA TRB */
++		}
++	}
++
++	/* SETUP TRB */
++	memset(&trbs[ntrbs], 0, sizeof(struct xhci_trb));
++	trbs[ntrbs].dw0 = (uint32_t)setup->bmRequestType |
++			  ((uint32_t)setup->bRequest << 8) |
++			  ((uint32_t)setup->wValue << 16);
++	trbs[ntrbs].dw1 = (uint32_t)setup->wIndex |
++			  ((uint32_t)setup->wLength << 16);
++	trbs[ntrbs].dw2 = TRB2_LEN(8U) | TRB2_IRQ(0U);
++	trbs[ntrbs].dw3 = TRB3_TYPE_SET(TRB_TYPE_SETUP) | TRB3_IDT;
++	if (len > 0U) {
++		trbs[ntrbs].dw3 |= dir_in ? TRB3_TRT_IN : TRB3_TRT_OUT;
++	}
++	ntrbs++;
++
++	/* DATA TRB (single block within 64KB) */
++	if (len > 0U) {
++		uintptr_t buf_addr = (uintptr_t)buf;
++
++		if (dir_in == 0U) {
++			xhci_dcache_clean(buf, len);
++		}
++		memset(&trbs[ntrbs], 0, sizeof(struct xhci_trb));
++		trbs[ntrbs].dw0 = (uint32_t)buf_addr;
++		trbs[ntrbs].dw1 = (uint32_t)(buf_addr >> 32);
++		trbs[ntrbs].dw2 = TRB2_LEN(len) | TRB2_IRQ(0U);
++		trbs[ntrbs].dw3 = TRB3_TYPE_SET(TRB_TYPE_DATA);
++		if (dir_in != 0U) {
++			trbs[ntrbs].dw3 |= TRB3_DIR_IN | TRB3_ISP;
++		}
++		ntrbs++;
++	}
++
++	/* STATUS TRB (direction opposite to the data stage) */
++	memset(&trbs[ntrbs], 0, sizeof(struct xhci_trb));
++	trbs[ntrbs].dw2 = TRB2_LEN(0U) | TRB2_IRQ(0U);
++	trbs[ntrbs].dw3 = TRB3_TYPE_SET(TRB_TYPE_STATUS);
++	if ((dir_in == 0U) || (len == 0U)) {
++		trbs[ntrbs].dw3 |= TRB3_DIR_IN;
++	}
++	trbs[ntrbs].dw3 |= TRB3_IOC;
++	ntrbs++;
++
++	if (xhci_ring_space(ring) < ntrbs + 1U) {
++		return -USB_ERR_NOMEM;
++	}
++	first_idx = xhci_ring_put(ring, trbs, ntrbs);
++	if (first_idx < 0) {
++		return -USB_ERR_NOMEM;
++	}
++	xhci_dcache_clean(ring->trbs, ring->num_trbs * TRB_SIZE);
++	ring->dbw++;
++	*(volatile uint32_t *)(hcd->db + ((uint32_t)dev->slot_id << 2)) =
++		XHCI_DB_TARGET(1U); /* ep0 */
++	return 0;
++}
++
++/* bulk / interrupt: one NORMAL TD, 64KB-boundary chunks chained (events
++ * only fire on the IOC TRB, or early on an IN short packet via ISP). */
++static int xhci_queue_normal(struct xhci_hcd *hcd, struct xhci_dev *dev,
++			     uint32_t dci, struct xhci_ring *ring,
++			     struct usbh_urb *urb)
++{
++	uint8_t *buf = urb->transfer_buffer;
++	uint32_t len = urb->transfer_buffer_length;
++	uint32_t dir_in = ((urb->ep->bEndpointAddress & USB2_DIR_IN) != 0U) ? 1U : 0U;
++	uint32_t ntrbs = 0U;
++	uint32_t zlp;
++	int first_idx;
++
++	/* USBH_URB_ZERO_PACKET: an OUT whose length is an exact multiple
++	 * of the max packet needs an explicit zero-length delimiter - the
++	 * device bulk FIFO otherwise holds the last full packet waiting for a
++	 * short packet.  The flag is set by the integrator's stack
++	 * translation; this is the HCD half of that contract. */
++	zlp = ((dir_in == 0U) && (len > 0U) &&
++	       ((urb->transfer_flags & USBH_URB_ZERO_PACKET) != 0U)) ? 1U : 0U;
++
++	if (len == 0U) {
++		ntrbs = 1U; /* ZLP: an empty NORMAL */
++	} else {
++		uintptr_t a = (uintptr_t)buf;
++		uint32_t r = len;
++
++		while (r > 0U) {
++			uint32_t chunk = (r > TRB_MAX_BUFF_SIZE) ?
++					 TRB_MAX_BUFF_SIZE : r;
++
++			if ((a & (TRB_MAX_BUFF_SIZE - 1U)) + chunk >
++			    TRB_MAX_BUFF_SIZE) {
++				chunk = TRB_MAX_BUFF_SIZE -
++					(uint32_t)(a & (TRB_MAX_BUFF_SIZE - 1U));
++			}
++			ntrbs++;
++			a += chunk;
++			r -= chunk;
++		}
++		ntrbs += zlp;
++	}
++	if (ntrbs > 8U) {
++		return -USB_ERR_INVAL; /* TD bound */
++	}
++	/* space is xhci_ring_put's verdict (exact need, link crossing
++	 * included); its failure maps to NOMEM below */
++
++	if ((dir_in == 0U) && (len > 0U)) {
++		xhci_dcache_clean(buf, len);
++	}
++
++	{
++		struct xhci_trb trbs[8];
++		uintptr_t a = (uintptr_t)buf;
++		uint32_t r = len;
++		uint32_t i = 0U;
++
++		memset(trbs, 0, sizeof(trbs));
++		if (len == 0U) {
++			trbs[0].dw2 = TRB2_LEN(0U) | TRB2_IRQ(0U);
++			trbs[0].dw3 = TRB3_TYPE_SET(TRB_TYPE_NORMAL) | TRB3_IOC;
++			if (dir_in != 0U) {
++				trbs[0].dw3 |= TRB3_ISP;
++			}
++		} else {
++			while (r > 0U) {
++				uint32_t chunk = (r > TRB_MAX_BUFF_SIZE) ?
++						 TRB_MAX_BUFF_SIZE : r;
++				uint8_t last;
++
++				if ((a & (TRB_MAX_BUFF_SIZE - 1U)) + chunk >
++				    TRB_MAX_BUFF_SIZE) {
++					chunk = TRB_MAX_BUFF_SIZE -
++						(uint32_t)(a & (TRB_MAX_BUFF_SIZE - 1U));
++				}
++			r -= chunk;
++			last = (r == 0U) ? 1U : 0U;
++			trbs[i].dw0 = (uint32_t)a;
++			trbs[i].dw1 = (uint32_t)(a >> 32);
++			trbs[i].dw2 = TRB2_LEN(chunk) | TRB2_IRQ(0U);
++			trbs[i].dw3 = TRB3_TYPE_SET(TRB_TYPE_NORMAL);
++			if ((last == 0U) || (zlp != 0U)) {
++				/* chained: with the ZLP delimiter appended
++				 * the IOC moves to that TRB */
++				trbs[i].dw3 |= TRB3_CHAIN;
++			} else {
++				trbs[i].dw3 |= TRB3_IOC;
++			}
++			if (dir_in != 0U) {
++				trbs[i].dw3 |= TRB3_ISP;
++			}
++			a += chunk;
++			i++;
++		}
++		if (zlp != 0U) {
++			trbs[i].dw2 = TRB2_LEN(0U) | TRB2_IRQ(0U);
++			trbs[i].dw3 =
++				TRB3_TYPE_SET(TRB_TYPE_NORMAL) | TRB3_IOC;
++		}
++	}
++
++		first_idx = xhci_ring_put(ring, trbs, ntrbs);
++		if (first_idx < 0) {
++			return -USB_ERR_NOMEM;
++		}
++	}
++
++	xhci_dcache_clean(ring->trbs, ring->num_trbs * TRB_SIZE);
++	ring->dbw++;
++	*(volatile uint32_t *)(hcd->db + ((uint32_t)dev->slot_id << 2)) =
++		XHCI_DB_TARGET(dci);
++	return 0;
++}
++
++static int xhci_submit_internal(struct usbh_urb *urb)
++{
++	struct usbh_hubport *hport;
++	struct xhci_hcd *hcd;
++	struct xhci_dev *dev;
++	struct xhci_ring *ring;
++	uint32_t dci = 0U;
++	uint16_t mps;
++	uint8_t root;
++	int ret;
++	size_t flags;
++
++	if ((urb == NULL) || (urb->hport == NULL) || (urb->ep == NULL) ||
++	    (urb->hport->bus == NULL)) {
++		return -USB_ERR_INVAL;
++	}
++	hport = urb->hport;
++	hcd = &g_xhci[hport->bus->busid];
++	if (hcd->running == 0U) {
++		return -USB_ERR_SHUTDOWN;
++	}
++
++#ifdef CONFIG_USB_DCACHE_ENABLE
++	USB_ASSERT_MSG(!((uintptr_t)urb->setup % CONFIG_USB_ALIGN_SIZE) &&
++			   !((uintptr_t)urb->transfer_buffer % CONFIG_USB_ALIGN_SIZE),
++		       "urb->setup or urb->transfer_buffer is not aligned %d",
++		       CONFIG_USB_ALIGN_SIZE);
++#endif
++
++	dev = xhci_get_dev(hcd, hport);
++	if (dev == NULL) {
++		ret = xhci_setup_slot(hcd, hport);
++		if (ret != 0) {
++			return ret;
++		}
++		dev = xhci_get_dev(hcd, hport);
++		if (dev == NULL) {
++			return -USB_ERR_IO;
++		}
++	}
++
++	/* unplug check on the root port (the ehci PORTSC CCS check) */
++	root = xhci_root_port_of(hport);
++	if ((root == 0U) || (root > hcd->num_ports) ||
++	    ((xhci_portsc(hcd, root) & XHCI_PS_CCS) == 0U) ||
++	    (hport->connected == false)) {
++		return -USB_ERR_NOTCONN;
++	}
++
++	if (urb->errorcode == -USB_ERR_BUSY) {
++		return -USB_ERR_BUSY;
++	}
++
++	if (urb->ep == &hport->ep0) {
++		struct usb_setup_packet *setup = urb->setup;
++
++		if (setup == NULL) {
++			return -USB_ERR_INVAL;
++		}
++
++		/* SET_ADDRESS never becomes TRBs: the xHCI does it with
++		 * Address Device (BSR=0).  The type check is load-bearing:
++		 * urtwn's vendor efuse read is (c0, 05, offset) - the same
++		 * bRequest as SET_ADDRESS - and without it every efuse read
++		 * was hijacked into an Address Device on an already-addressed
++		 * slot (Context State Error storm, MAC ff:ff:ff:ff:ff:ff,
++		 * 2026-09-28). */
++		if ((setup->bmRequestType == 0x00U) &&
++		    (setup->bRequest == USB_REQUEST_SET_ADDRESS)) {
++			mps = (uint16_t)(hport->ep0.wMaxPacketSize & 0x7FFU);
++			if (mps == 0U) {
++				mps = 64U;
++			}
++			if (mps != dev->ep0_mps_hw) {
++				ret = xhci_cmd_evaluate_context(hcd, dev, mps);
++				if (ret != 0) {
++					return ret;
++				}
++			}
++			dev->usb_addr = (uint8_t)(setup->wValue & 0xFFU);
++			ret = xhci_cmd_address_device(hcd, dev, 0U, mps);
++			if (ret != 0) {
++				return ret;
++			}
++			/* usb_addr may have been adopted from the controller
++			 * (explicit-address fallback) */
++			hport->dev_addr = dev->usb_addr;
++			urb->actual_length = 8U; /* CherryUSB counts the setup
++						  * stage in */
++			return 0;
++		}
++
++		/* ep0 MPS change -> Evaluate Context */
++		mps = (uint16_t)(hport->ep0.wMaxPacketSize & 0x7FFU);
++		if (mps == 0U) {
++			mps = 64U;
++		}
++		if (mps != dev->ep0_mps_hw) {
++			ret = xhci_cmd_evaluate_context(hcd, dev, mps);
++			if (ret != 0) {
++				return ret;
++			}
++		}
++
++		ring = dev->ep_rings[1U];
++		if (ring == NULL) {
++			return -USB_ERR_IO;
++		}
++	} else {
++		/* bulk / interrupt only (isochronous transfers are rejected:
++		 * the open stack has no isochronous support yet) */
++		if ((urb->ep->bmAttributes & 0x3U) == 0x1U) {
++			return -USB_ERR_NOTSUPP;
++		}
++		dci = xhci_dci_of(urb->ep);
++		if ((dci < 2U) || (dci >= XHCI_MAX_DCI)) {
++			return -USB_ERR_INVAL;
++		}
++		ring = dev->ep_rings[dci];
++		if (ring == NULL) {
++			if ((dev->ep_configured & (1U << dci)) != 0U) {
++				return -USB_ERR_IO;
++			}
++			ring = xhci_ring_alloc(hcd);
++			if (ring == NULL) {
++				return -USB_ERR_NOMEM;
++			}
++			ret = xhci_cmd_configure_ep(hcd, dev, dci, urb->ep,
++						    ring);
++			if (ret != 0) {
++				return ret;
++			}
++			dev->ep_rings[dci] = ring;
++		}
++	}
++
++	flags = usb_osal_enter_critical_section();
++	if (ring->td.urb != NULL) {
++		/* one URB in flight per endpoint (the CherryUSB contract the
++		 * compat layer queues against) */
++		usb_osal_leave_critical_section(flags);
++		return -USB_ERR_BUSY;
++	}
++	urb->hcpriv = ring;
++	urb->errorcode = -USB_ERR_BUSY;
++	urb->actual_length = 0U;
++	memset(&ring->td, 0, sizeof(ring->td));
++	ring->td.urb = urb;
++	ring->td.kind = (urb->ep == &hport->ep0) ? 1U : 0U;
++	usb_osal_leave_critical_section(flags);
++
++	if (urb->setup != NULL) {
++		xhci_dcache_clean(urb->setup, USB_ALIGN_UP(sizeof(struct usb_setup_packet), CONFIG_USB_ALIGN_SIZE));
++	}
++	/* the ehci submit-side shape: ep0's endpoint address is 0x00, so the
++	 * IN test for a control transfer keys on the setup stage direction -
++	 * without this the first read into a cached (stale) buffer survives
++	 * on a miss and every later read serves the old lines (the config
++	 * descriptor came back as the cached device descriptor,
++	 * board-measured 2026-09-28) */
++	if (urb->transfer_buffer != NULL) {
++		if (((urb->setup != NULL) && ((urb->setup->bmRequestType & 0x80U) != 0U)) ||
++		    ((urb->ep != NULL) && ((urb->ep->bEndpointAddress & 0x80U) != 0U))) {
++			xhci_dcache_invalidate(urb->transfer_buffer,
++					       USB_ALIGN_UP(urb->transfer_buffer_length, CONFIG_USB_ALIGN_SIZE));
++		} else {
++			xhci_dcache_clean(urb->transfer_buffer,
++					  USB_ALIGN_UP(urb->transfer_buffer_length, CONFIG_USB_ALIGN_SIZE));
++		}
++	}
++
++	if (urb->ep == &hport->ep0) {
++		ret = xhci_queue_control(hcd, dev, ring, urb);
++	} else {
++		ret = xhci_queue_normal(hcd, dev, dci, ring, urb);
++	}
++	if (ret != 0) {
++		ring->td.urb = NULL;
++		urb->hcpriv = NULL;
++		return ret;
++	}
++
++	if (urb->ep == &hport->ep0) {
++		hcd->dbg_ctrl_n++;
++		/* the 2026-09-28 forensics sampled every 256 and drowned the
++		 * console once the supplicant's register polling settled in
++		 * (~200 ctrl/s); the ep0 path has since been board-proven
++		 * through a LINK-straddling wrap, so the steady-state
++		 * sample dropped to every 4096 - timeouts still dump */
++		if ((hcd->dbg_ctrl_n <= 4U) ||
++		    ((hcd->dbg_ctrl_n & 0xFFFU) == 0U)) {
++			xhci_ep0_dbg_dump(hcd, dev, ring, urb, hcd->dbg_irq_n,
++					  hcd->dbg_tevt_n, "submit");
++		}
++	}
++
++	if (urb->timeout > 0U) {
++		/* the completion path gives the ring's waitsem (the ehci
++		 * qh->waitsem shape) */
++		uint32_t irq0 = hcd->dbg_irq_n;
++		uint32_t tevt0 = hcd->dbg_tevt_n;
++
++		ret = usb_osal_sem_take(ring->waitsem, urb->timeout);
++		if (ret < 0) {
++			/* the event may already sit in the ring with the
++			 * level interrupt lost (board 2026-09-28: EINT set,
++			 * no IRQ for the whole 500 ms window): one
++			 * synchronous drain before concluding - the same
++			 * shape as the command timeout path below */
++			xhci_event_process(hcd);
++			ret = usb_osal_sem_take(ring->waitsem, 10U);
++		}
++		if (ret < 0) {
++			urb->timeout = 0U;
++			hcd->dbg_tmo_n++;
++			if ((hcd->dbg_tmo_n <= 4U) ||
++			    ((hcd->dbg_tmo_n & 0x1FU) == 0U)) {
++				xhci_ep0_dbg_dump(hcd, dev, ring, urb, irq0,
++						  tevt0, "timeout");
++			}
++			usbh_kill_urb(urb);
++			return ret;
++		}
++		urb->timeout = 0U;
++		ret = urb->errorcode;
++	}
++	return ret;
++}
++
++/* forensics 2026-09-28: ep0 state at the two moments that discriminate the
++ * timeout hypotheses - right after a control TD was queued (the working
++ * enumeration baseline) and at the wait failure (the driver-path scene).
++ * The controller-owned device context is invalidated before the read; the
++ * event window shows the control words of the cells the next drain pass
++ * would evaluate; the irq/tevt snapshots bound what moved during the wait. */
++static void xhci_ep0_dbg_dump(struct xhci_hcd *hcd, struct xhci_dev *dev,
++			      struct xhci_ring *ring, struct usbh_urb *urb,
++			      uint32_t irq0, uint32_t tevt0, const char *why)
++{
++	/* Dump forensics 2026-10-01: read the URB's OWN endpoint context -
++	 * a fixed dci=1 printed ep0's context for a bulk timeout, which is
++	 * exactly the wrong cell */
++	uint32_t dci = ((urb->ep != NULL) && (urb->hport != NULL) &&
++			(urb->ep != &urb->hport->ep0)) ?
++		       xhci_dci_of(urb->ep) : 1U;
++	uint32_t *octx = xhci_out_ctx(dev, dci);
++	uint32_t *sctx = xhci_out_ctx(dev, 0U);
++
++	usbh_console_printf(
++		"xhci: ep0 %s: slot=%u urb=%p setup=%02x/%02x val=%04x len=%u buf=%p\n",
++		why, dev->slot_id, (void *)urb,
++		(urb->setup != NULL) ? urb->setup->bmRequestType : 0U,
++		(urb->setup != NULL) ? urb->setup->bRequest : 0U,
++		(urb->setup != NULL) ? urb->setup->wValue : 0U,
++		urb->transfer_buffer_length, (void *)urb->transfer_buffer);
++	usbh_console_printf(
++		"xhci: ep0 ring: enq=%u cs=%u dq=%u td.urb=%p td.st=%u killed=%u first=%u last=%u\n",
++		ring->ep, ring->cs, ring->dequeue, (void *)ring->td.urb,
++		ring->td.state, ring->td.killed, ring->td.first_idx,
++		ring->td.last_idx);
++	usbh_console_printf(
++		"xhci: ep0 regs: crcr=%08x cmd=%08x sts=%08x iman=%08x dnctrl=%08x\n",
++		xhci_r32(hcd, XHCI_CRCR_LO), xhci_r32(hcd, XHCI_USBCMD),
++		xhci_r32(hcd, XHCI_USBSTS), xhci_r32_rts(hcd, XHCI_IMAN(0)),
++		xhci_r32(hcd, XHCI_DNCTRL));
++	xhci_dcache_invalidate(dev->dev_ctx,
++			       dev->ctxsz * (1U + XHCI_MAX_DCI));
++	usbh_console_printf(
++		"xhci: ep ctx dci=%u: st=%u type=%u mps=%u dqlo=%08x dqhi=%08x dcs=%u\n",
++		dci, octx[0] & 0x7U, (octx[1] >> 3) & 0x7U,
++		(octx[1] >> 16) & 0xFFFFU, octx[2] & ~0xFU, octx[3],
++		octx[2] & 0x1U);
++	usbh_console_printf(
++		"xhci: slot ctx: w0=%08x w1=%08x w2=%08x w3=%08x\n",
++		sctx[0], sctx[1], sctx[2], sctx[3]);
++	usbh_console_printf(
++		"xhci: ep0 evwin: ep=%u cs=%u next4=%08x %08x %08x %08x\n",
++		hcd->event_ep, hcd->event_cs,
++		hcd->event_trbs[hcd->event_ep].dw3,
++		hcd->event_trbs[(hcd->event_ep + 1U) %
++				CONFIG_USBHOST_XHCI_EVENT_RING_SIZE].dw3,
++		hcd->event_trbs[(hcd->event_ep + 2U) %
++				CONFIG_USBHOST_XHCI_EVENT_RING_SIZE].dw3,
++		hcd->event_trbs[(hcd->event_ep + 3U) %
++				CONFIG_USBHOST_XHCI_EVENT_RING_SIZE].dw3);
++	if ((ring->td.urb != NULL) && (ring->td.last_idx < ring->num_trbs) &&
++	    (ring->td.first_idx < ring->num_trbs)) {
++		usbh_console_printf(
++			"xhci: ep0 tdtrb: first=%08x last=%08x\n",
++			ring->trbs[ring->td.first_idx].dw3,
++			ring->trbs[ring->td.last_idx].dw3);
++	}
++	usbh_console_printf(
++		"xhci: ep0 ctr: irq=%u->%u todo=%u tevt=%u->%u drop_urb=%u drop_dev=%u ctrl=%u tmo=%u\n",
++		irq0, hcd->dbg_irq_n, hcd->dbg_irq_todo_n, tevt0,
++		hcd->dbg_tevt_n, hcd->dbg_drop_urb, hcd->dbg_drop_dev,
++		hcd->dbg_ctrl_n, hcd->dbg_tmo_n);
++}
++
++int usbh_submit_urb(struct usbh_urb *urb)
++{
++	int ret = xhci_submit_internal(urb);
++
++	if (ret < 0) {
++		usbh_console_printf(
++			"xhci: submit ret=%d ep=%02x setup=%p buf=%p len=%u tmo=%u\n",
++			ret, urb->ep ? urb->ep->bEndpointAddress : 0U,
++			urb->setup, urb->transfer_buffer,
++			urb->transfer_buffer_length, urb->timeout);
++	}
++	return ret;
++}
++
++int usbh_kill_urb(struct usbh_urb *urb)
++{
++	struct xhci_hcd *hcd;
++	struct xhci_ring *ring;
++	struct xhci_dev *dev;
++	uint32_t dci = 1U;
++	uint8_t slot_id;
++	size_t flags;
++
++	if ((urb == NULL) || (urb->hport == NULL) || (urb->hcpriv == NULL)) {
++		return -USB_ERR_INVAL;
++	}
++	hcd = &g_xhci[urb->hport->bus->busid];
++	ring = (struct xhci_ring *)urb->hcpriv;
++
++	flags = usb_osal_enter_critical_section();
++	if ((ring->td.urb != urb) || (ring->td.state != 0U)) {
++		usb_osal_leave_critical_section(flags);
++		return -USB_ERR_INVAL;
++	}
++	/* ehci's killed dance: swallow the completion the Stop Endpoint will
++	 * produce, this function completes the URB itself */
++	ring->td.killed = 1U;
++	usb_osal_leave_critical_section(flags);
++
++	dev = xhci_get_dev(hcd, urb->hport);
++	slot_id = (dev != NULL) ? dev->slot_id : 0U;
++	if ((urb->ep != NULL) && (urb->ep != &urb->hport->ep0)) {
++		dci = xhci_dci_of(urb->ep);
++	}
++
++	if ((slot_id != 0U) && (hcd->running != 0U)) {
++		/* Stop Endpoint, then drag the hardware dequeue back to the
++		 * ring base (NetBSD's stop + set_tr_dequeue recovery) */
++		struct xhci_trb trb;
++
++		memset(&trb, 0, sizeof(trb));
++		trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_STOP_EP) |
++			  TRB3_EP_ID(dci) | TRB3_SLOT_ID(slot_id);
++		(void)xhci_do_command(hcd, &trb, KILL_TIMEOUT_MS);
++
++		memset(&trb, 0, sizeof(trb));
++		/* DCS lives in dw0 bit0 (Set TR Dequeue Pointer, spec table
++		 * 131), not in the dw3 cycle bit - the base is 64B aligned so
++		 * a bare pointer re-arms the endpoint with DCS=0 while the
++		 * ring reset arms the producer with cs=1, and every later
++		 * transfer on this ring times out for good (board
++		 * 2026-09-28: the ctx read back dcs=0, td cycle=1, tmo storm)
++		 */
++		trb.dw0 = (uint32_t)(uintptr_t)ring->trbs | XHCI_CRCR_LO_RCS;
++		trb.dw1 = (uint32_t)((uintptr_t)ring->trbs >> 32);
++		trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_SET_TR_DEQUEUE) |
++			  TRB3_EP_ID(dci) | TRB3_SLOT_ID(slot_id);
++		(void)xhci_do_command(hcd, &trb, KILL_TIMEOUT_MS);
++
++		/* Set TR Dequeue leaves the endpoint in the Stopped state;
++		 * ring its doorbell so the controller resumes fetching at
++		 * the re-armed dequeue - without this the next submission
++		 * sits behind a stopped ep and times out forever (board
++		 * 2026-09-28: ctx st=2, dcs=1, dq already at the TD) */
++		 *(volatile uint32_t *)(hcd->db +
++					((uint32_t)dev->slot_id << 2)) =
++			XHCI_DB_TARGET(dci);
++		ring->dbw++;
++	}
++
++	flags = usb_osal_enter_critical_section();
++	xhci_ring_reset(ring);
++	urb->errorcode = -USB_ERR_SHUTDOWN;
++	if (urb->timeout != 0U) {
++		usb_osal_sem_give(ring->waitsem);
++	}
++	usb_osal_leave_critical_section(flags);
++
++	if (urb->complete != NULL) {
++		urb->complete(urb->arg, -USB_ERR_SHUTDOWN);
++	}
++	return 0;
++}
++
++/* ===================== completion ===================== */
++
++/* the ehci_urb_waitup shape: finalize the URB, maintain the IN-side cache,
++ * hand the ring's waitsem to a blocked submitter or run the async
++ * callback.  Runs from the interrupt path (inside the glue's critical
++ * section). */
++static void xhci_urb_waitup(struct xhci_ring *ring)
++{
++	struct usbh_urb *urb = ring->td.urb;
++
++	if (urb == NULL) {
++		return;
++	}
++	if (ring->td.killed == 1U) {
++		/* kill_urb owns this completion */
++		ring->td.killed = 2U;
++		ring->td.urb = NULL;
++		return;
++	}
++
++	ring->dequeue = (ring->td.last_idx + 1U) % ring->num_trbs;
++	ring->td.urb = NULL;
++
++#ifdef CONFIG_USB_DCACHE_ENABLE
++	if ((urb->transfer_buffer != NULL) &&
++	    ((urb->ep->bEndpointAddress & 0x80U) != 0U) &&
++	    (urb->errorcode == 0)) {
++		uint32_t bytes = urb->actual_length;
++
++		if (ring->td.kind == 1U) {
++			/* control: actual_length counted the setup stage in */
++			bytes = (bytes > 8U) ? (bytes - 8U) : 0U;
++		}
++		usb_dcache_invalidate((uintptr_t)urb->transfer_buffer,
++				      USB_ALIGN_UP(bytes, CONFIG_USB_ALIGN_SIZE));
++	}
++#endif
++
++	if (urb->timeout != 0U) {
++		usb_osal_sem_give(ring->waitsem);
++	}
++
++	if (urb->complete != NULL) {
++		if (urb->errorcode < 0) {
++			urb->complete(urb->arg, urb->errorcode);
++		} else {
++			urb->complete(urb->arg, (int)urb->actual_length);
++		}
++	}
++}
++
++static void xhci_complete_td(struct xhci_ring *ring, uint32_t idx,
++			     uint32_t residual, uint32_t code)
++{
++	struct usbh_urb *urb = ring->td.urb;
++	uint32_t got;
++
++	if (code == TRB_CODE_SUCCESS || code == TRB_CODE_SHORT_PACKET) {
++		uint32_t want = urb->transfer_buffer_length;
++
++		got = want - residual;
++		/* control short packet: the data-stage event books the
++		 * residual, the status event is the end state */
++		if ((ring->td.kind == 1U) && (idx != ring->td.last_idx)) {
++			ring->td.actual = got;
++			ring->td.short_seen = 1U;
++			return;
++		}
++		if (ring->td.short_seen != 0U) {
++			got = ring->td.actual;
++		}
++		/* CherryUSB contract (same as the vendored EHCI port): the
++		 * control transfer's actual_length counts the 8 setup bytes,
++		 * usbh_control_transfer subtracts them back */
++		if (ring->td.kind == 1U) {
++			got += 8U;
++		}
++		ring->td.actual = got;
++		ring->td.error = 0;
++	} else if ((code == TRB_CODE_STOPPED) ||
++		   (code == TRB_CODE_STOPPED_INVAL) ||
++		   (code == TRB_CODE_STOPPED_SHORT) ||
++		   (code == TRB_CODE_CMD_RING_STOPPED) ||
++		   (code == TRB_CODE_CMD_ABORTED)) {
++		ring->td.actual = 0U;
++		ring->td.error = -USB_ERR_SHUTDOWN;
++	} else if (code == TRB_CODE_STALL) {
++		ring->td.actual = 0U;
++		ring->td.error = -USB_ERR_STALL;
++	} else if (code == TRB_CODE_TRANSACTION_ERR) {
++		ring->td.actual = 0U;
++		ring->td.error = -USB_ERR_IO;
++	} else {
++		ring->td.actual = 0U;
++		ring->td.error = -USB_ERR_IO;
++		/* the table-out code IS the first-cause datum: a Data Buffer
++		 * Error, Context State Error etc. all collapse into -IO here
++		 * and the submitter only sees -12 (board 2026-09-28: ep0
++		 * died with ep state Stopped and no name for the code) */
++		usbh_console_printf("xhci: xfer evt (code=%u) idx=%u\n",
++				    code, idx);
++	}
++
++	ring->td.state = (ring->td.error == 0) ? 1U : 2U;
++	urb->actual_length = ring->td.actual;
++	urb->errorcode = ring->td.error;
++	xhci_urb_waitup(ring);
++}
++
++static void xhci_handle_transfer_event(struct xhci_hcd *hcd, struct xhci_trb *ev)
++{
++	uint32_t dw2 = ev->dw2;
++	uint32_t dw3 = ev->dw3;
++	uint8_t slot_id = (uint8_t)TRB3_SLOT_ID_GET(dw3);
++	uint8_t dci = (uint8_t)TRB3_EP_ID_GET(dw3);
++	uint32_t code = TRB2_CODE_GET(dw2);
++	uint32_t residual = TRB2_REM_GET(dw2);
++	uint32_t trb_ptr = ev->dw0;
++	struct xhci_dev *dev;
++	struct xhci_ring *ring;
++	uint32_t idx;
++
++	hcd->dbg_tevt_n++;
++
++	/* NetBSD: the underrun/overrun events carry no usable pointer */
++	if ((code == TRB_CODE_RING_UNDERRUN) || (code == TRB_CODE_RING_OVERRUN)) {
++		hcd->dbg_ring_ev++;
++		return;
++	}
++	dev = xhci_find_dev(hcd, slot_id);
++	if ((dev == NULL) || (dci == 0U) || (dci >= XHCI_MAX_DCI) ||
++	    (dev->ep_rings[dci] == NULL)) {
++		hcd->dbg_drop_dev++;
++		usbh_console_printf(
++			"xhci: xfer evt (no dev/ring) slot=%u dci=%u code=%u\n",
++			slot_id, dci, code);
++		return;
++	}
++	ring = dev->ep_rings[dci];
++	if (ring->td.urb == NULL) {
++		/* a late event for an already-reaped TD (post-kill) - silent
++		 * by design, the counter keeps the forensics honest */
++		hcd->dbg_drop_urb++;
++		if ((hcd->dbg_drop_urb <= 4U) ||
++		    ((hcd->dbg_drop_urb & 0x3FU) == 0U)) {
++			usbh_console_printf(
++				"xhci: xfer evt (no td) slot=%u dci=%u code=%u n=%u\n",
++				slot_id, dci, code, hcd->dbg_drop_urb);
++		}
++		return;
++	}
++	if (trb_ptr < (uint32_t)(uintptr_t)ring->trbs ||
++	    trb_ptr >= (uint32_t)((uintptr_t)ring->trbs +
++				  ring->num_trbs * TRB_SIZE)) {
++		usbh_console_printf("xhci: xfer evt (bad ptr) slot=%u dci=%u ptr=%08x\n",
++				    slot_id, dci, trb_ptr);
++		return;
++	}
++	idx = (trb_ptr - (uint32_t)(uintptr_t)ring->trbs) / TRB_SIZE;
++	{
++		/* wrap-aware TD membership: an ISP short packet legitimately
++		 * reports mid-TD (the event lands on the TRB that saw the
++		 * short), so anything inside [first..last] (possibly crossing
++		 * the LINK) is ours */
++		int in_td;
++
++		if (ring->td.first_idx <= ring->td.last_idx) {
++			in_td = (idx >= ring->td.first_idx) &&
++				(idx <= ring->td.last_idx);
++		} else {
++			in_td = (idx >= ring->td.first_idx) ||
++				(idx <= ring->td.last_idx);
++		}
++		if ((ring->td.kind != 1U) && (in_td == 0)) {
++			/* a late event for a TD the ring has already reaped
++			 * and replaced: ring->td belongs to a DIFFERENT
++			 * transfer now, and completing it with this event's
++			 * code/residual corrupts the RX length bookkeeping
++			 * AND walks ring->dequeue off the controller's real
++			 * position - the misattributions compound until RX
++			 * starves completely (board 2026-09-30 r9: the first
++			 * scan decoded 13 APs, then the out-td/no-td pairing
++			 * walked RX dead within two minutes and every later
++			 * scan returned zero results, so the supplicant
++			 * never saw a BSS to join).  Drop it; the in-flight
++			 * TD keeps waiting for its own event, and a TD whose
++			 * event truly never comes recovers through the
++			 * stop/kill path (usbh stop / abort_pipe). */
++			hcd->dbg_bad_idx++;
++			if ((hcd->dbg_bad_idx <= 4U) ||
++			    ((hcd->dbg_bad_idx & 0x3FU) == 0U)) {
++				usbh_console_printf(
++					"xhci: xfer evt (stale) slot=%u dci=%u "
++					"idx=%u td=%u..%u code=%u n=%u\n",
++					slot_id, dci, idx, ring->td.first_idx,
++					ring->td.last_idx, code,
++					hcd->dbg_bad_idx);
++			}
++			return;
++		}
++	}
++	xhci_complete_td(ring, idx, residual, code);
++}
++
++/* Runs from the interrupt path (the glue's trampoline holds the osal
++ * critical section) and drains the ring to exhaustion, then advances ERDP
++ * with EHB - one write, no separate busy clear (the NetBSD softint
++ * shape). */
++static void xhci_event_process(struct xhci_hcd *hcd)
++{
++	if (hcd->evt_busy != 0U) {
++		/* the timeout path's thread-context drain preempted by the
++		 * ISR (or vice versa): the running pass sees the whole ring,
++		 * the loser must not double-process */
++		return;
++	}
++	hcd->evt_busy = 1U;
++
++	xhci_dcache_invalidate(hcd->event_trbs,
++			       CONFIG_USBHOST_XHCI_EVENT_RING_SIZE * TRB_SIZE);
++
++	for (;;) {
++		struct xhci_trb *ev = &hcd->event_trbs[hcd->event_ep];
++		uint32_t type;
++
++		if ((ev->dw3 & TRB3_CYCLE) != (uint32_t)hcd->event_cs) {
++			break; /* no fresh event */
++		}
++		type = TRB3_TYPE_GET(ev->dw3);
++
++		switch (type) {
++		case TRB_TYPE_TRANSFER:
++			xhci_handle_transfer_event(hcd, ev);
++			break;
++		case TRB_TYPE_CMD_COMPLETE:
++			/* paired by the command TRB's address (NetBSD
++			 * sc_command_addr semantics) */
++			if ((uint32_t)ev->dw0 == hcd->cmd_trb_addr) {
++				hcd->cmd_code = TRB2_CODE_GET(ev->dw2);
++				hcd->cmd_slot_id =
++					(uint8_t)TRB3_SLOT_ID_GET(ev->dw3);
++				usb_osal_sem_give(hcd->cmd_waitsem);
++			}
++			break;
++		case TRB_TYPE_PORT_STATUS: {
++			uint8_t port = (uint8_t)((ev->dw0 >> 24) & 0xFFU);
++
++			if ((port >= 1U) && (port <= hcd->num_ports) &&
++			    (hcd->bus != NULL)) {
++				hcd->bus->hcd.roothub_intbuf[0] |=
++					(uint8_t)(1U << port);
++				usbh_hub_thread_wakeup(&hcd->bus->hcd.roothub);
++			}
++			break;
++		}
++		default:
++			break;
++		}
++
++		hcd->event_ep = (hcd->event_ep + 1U) %
++				CONFIG_USBHOST_XHCI_EVENT_RING_SIZE;
++		if (hcd->event_ep == 0U) {
++			hcd->event_cs ^= 1U;
++		}
++	}
++
++	{
++		uintptr_t erdp = (uintptr_t)&hcd->event_trbs[hcd->event_ep];
++
++		xhci_w32_rts(hcd, XHCI_ERDP_LO(0),
++			     ((uint32_t)erdp & ~0xFU) | XHCI_ERDP_BUSY);
++		xhci_w32_rts(hcd, XHCI_ERDP_HI(0), 0U);
++	}
++	hcd->evt_busy = 0U;
++}
++
++/* ===================== root hub ===================== */
++
++static void xhci_port_status(struct xhci_hcd *hcd, uint32_t port,
++			     uint16_t *status, uint16_t *change)
++{
++	uint32_t ps = xhci_portsc(hcd, port);
++	uint16_t st = 0U;
++	uint16_t ch = 0U;
++	uint32_t speed;
++
++	if ((ps & XHCI_PS_CCS) != 0U) {
++		st |= 0x0001U; /* CONNECTION */
++	}
++	if ((ps & XHCI_PS_PED) != 0U) {
++		st |= 0x0002U; /* ENABLE */
++	}
++	if (XHCI_PS_PLS_GET(ps) == 0x3U) {
++		st |= 0x0004U; /* SUSPEND */
++	}
++	if ((ps & XHCI_PS_OCA) != 0U) {
++		st |= 0x0008U; /* OVERCURRENT */
++	}
++	if ((ps & XHCI_PS_PR) != 0U) {
++		st |= 0x0010U; /* RESET */
++	}
++	if ((ps & XHCI_PS_PP) != 0U) {
++		st |= 0x0100U; /* POWER - the hub class refuses a port
++				* without it ("does not enable power") */
++	}
++	speed = XHCI_PS_SPEED_GET(ps);
++	if (speed == XHCI_PS_SPEED_HIGH) {
++		st |= 0x0400U; /* HIGH_SPEED */
++	} else if (speed == XHCI_PS_SPEED_LOW) {
++		st |= 0x0200U; /* LOW_SPEED */
++	}
++
++	if ((ps & XHCI_PS_CSC) != 0U) {
++		ch |= 0x0001U;
++	}
++	if ((ps & XHCI_PS_PEC) != 0U) {
++		ch |= 0x0002U;
++	}
++	if ((ps & XHCI_PS_PLC) != 0U) {
++		ch |= 0x0004U;
++	}
++	if ((ps & XHCI_PS_OCC) != 0U) {
++		ch |= 0x0008U;
++	}
++	if ((ps & XHCI_PS_PRC) != 0U) {
++		ch |= 0x0010U;
++	}
++	if ((ps & XHCI_PS_WRC) != 0U) {
++		ch |= 0x8000U; /* C_BH_RESET */
++	}
++
++	*status = st;
++	*change = ch;
++}
++
++int usbh_roothub_control(struct usbh_bus *bus, struct usb_setup_packet *setup,
++			 uint8_t *buf)
++{
++	struct xhci_hcd *hcd = &g_xhci[bus->busid];
++	uint32_t port = setup->wIndex;
++	int ret = 0;
++
++	if (hcd->running == 0U) {
++		return -USB_ERR_SHUTDOWN;
++	}
++	if ((port < 1U) || (port > hcd->num_ports)) {
++		return -USB_ERR_INVAL;
++	}
++
++	switch (setup->bRequest) {
++	case HUB_REQUEST_GET_STATUS: {
++		uint16_t st, ch;
++
++		xhci_port_status(hcd, port, &st, &ch);
++		if (buf != NULL) {
++			buf[0] = (uint8_t)st;
++			buf[1] = (uint8_t)(st >> 8);
++			buf[2] = (uint8_t)ch;
++			buf[3] = (uint8_t)(ch >> 8);
++		}
++		break;
++	}
++	case HUB_REQUEST_SET_FEATURE:
++		switch (setup->wValue) {
++		case HUB_PORT_FEATURE_POWER:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP);
++			break;
++		case HUB_PORT_FEATURE_RESET:
++			/* write PR keeping PP: PORTSC's PP is RW, a 0 written
++			 * to it cuts the port power and the reset then never
++			 * completes (measured 2026-09-27 as a 1s PRC timeout) */
++			xhci_portsc_w(hcd, port, XHCI_PS_PP | XHCI_PS_PR);
++			{
++				uint32_t tmo;
++
++				for (tmo = 0U; tmo < 1000U; tmo++) {
++					if ((xhci_portsc(hcd, port) & XHCI_PS_PRC) != 0U) {
++						break;
++					}
++					usb_osal_msleep(1U);
++				}
++				if (tmo >= 1000U) {
++					usbh_console_printf(
++						"xhci: port %u reset timeout\n",
++						port);
++				}
++			}
++			break;
++		case HUB_PORT_FEATURE_SUSPEND:
++			xhci_portsc_w(hcd, port,
++				      XHCI_PS_PP | XHCI_PS_PLS_SET(0x3U) |
++					      XHCI_PS_LWS);
++			break;
++		default:
++			ret = -USB_ERR_NOTSUPP;
++			break;
++		}
++		break;
++	case HUB_REQUEST_CLEAR_FEATURE:
++		/* PORTSC is W1C + RW mixed - a read-modify-write of a stale
++		 * snapshot wrecks the port: PED is RW1CS (writing the stale
++		 * 1 disables the port, measured 2026-09-20), PP is RW
++		 * (writing 0 cuts port power), PLS only writable under LWS.
++		 * So: write only PP | the target W1C bit (the NetBSD
++		 * ClearFeature shape). */
++		switch (setup->wValue) {
++		case HUB_PORT_FEATURE_ENABLE:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP & ~XHCI_PS_PED);
++			break;
++		case HUB_PORT_FEATURE_SUSPEND:
++			xhci_portsc_w(hcd, port,
++				      (XHCI_PS_PP & ~(0xFU << 5)) |
++					      XHCI_PS_PLS_SET(0x0U) |
++					      XHCI_PS_LWS);
++			break;
++		case HUB_PORT_FEATURE_C_CONNECTION:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP | XHCI_PS_CSC);
++			break;
++		case HUB_PORT_FEATURE_C_ENABLE:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP | XHCI_PS_PEC);
++			break;
++		case HUB_PORT_FEATURE_C_SUSPEND:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP | XHCI_PS_PLC);
++			break;
++		case HUB_PORT_FEATURE_C_OVER_CURREN:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP | XHCI_PS_OCC);
++			break;
++		case HUB_PORT_FEATURE_C_RESET:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP | XHCI_PS_PRC);
++			break;
++		case HUB_PORT_FEATURE_C_BH_RESET:
++			xhci_portsc_w(hcd, port, XHCI_PS_PP | XHCI_PS_WRC);
++			break;
++		default:
++			ret = -USB_ERR_NOTSUPP;
++			break;
++		}
++		break;
++	case HUB_REQUEST_SET_HUB_DEPTH:
++		break;
++	default:
++		ret = -USB_ERR_NOTSUPP;
++		break;
++	}
++	return ret;
++}
++
++/* ===================== interrupt entry ===================== */
++
++void USBH_IRQHandler(uint8_t busid)
++{
++	struct xhci_hcd *hcd;
++	uint32_t usbsts, iman;
++	uint32_t spin;
++
++	if (busid >= CONFIG_USBHOST_MAX_BUS) {
++		return;
++	}
++	hcd = &g_xhci[busid];
++	if (hcd->running == 0U) {
++		return;
++	}
++	hcd->dbg_irq_n++;
++
++	/* NetBSD xhci_intr1: bail on nothing-to-do.  The event's DMA write
++	 * may still be in flight when the level interrupt lands (the
++	 * non-coherent port has no ordering against dsb), so EINT/IP are
++	 * cleared only AFTER a drain pass and then re-checked: an event
++	 * that became visible late re-arms EINT and gets its own pass
++	 * instead of sitting in the ring forever (the lost Configure EP
++	 * completion of 2026-09-28 was only surfaced by the later Command
++	 * Abort event) */
++	usbsts = xhci_r32(hcd, XHCI_USBSTS);
++	if ((usbsts & (XHCI_STS_HSE | XHCI_STS_EINT | XHCI_STS_PCD)) == 0U) {
++		return;
++	}
++	hcd->dbg_irq_todo_n++;
++	for (spin = 0U; spin < 10U; spin++) {
++		xhci_event_process(hcd);
++
++		usbsts = xhci_r32(hcd, XHCI_USBSTS);
++		xhci_w32(hcd, XHCI_USBSTS, usbsts & ~XHCI_STS_RSVDP0);
++		iman = xhci_r32_rts(hcd, XHCI_IMAN(0));
++		xhci_w32_rts(hcd, XHCI_IMAN(0), iman | XHCI_IMAN_INTR_PEND);
++		if ((usbsts & (XHCI_STS_EINT | XHCI_STS_PCD)) == 0U) {
++			break;
++		}
++	}
++}
++
++/* ===================== platform hooks ===================== */
++
++/* Port power pass once the controller runs: the hub class never issues
++ * SetFeature(PORT_POWER) to a roothub, and a device that was plugged in
++ * before the boot reads CCS=1 with its connect-change edge already lost -
++ * the PP off/on kick manufactures a fresh one now that the event ring is
++ * live.  Called by the integrator after usb_hc_init finished on the hub
++ * thread. */
++void usbh_xhci_post_init(struct usbh_bus *bus)
++{
++	struct xhci_hcd *hcd = &g_xhci[bus->busid];
++	uint8_t port;
++
++	if (hcd->running == 0U) {
++		return;
++	}
++
++	for (port = 1U; port <= hcd->num_ports; port++) {
++		uint32_t ps = xhci_portsc(hcd, port);
++
++		usbh_console_printf("usbh: bus%u port%u portsc=%08x\n",
++				    bus->busid, port, ps);
++
++		if ((ps & XHCI_PS_CCS) != 0U) {
++			/* occupied: power-cycle the port for the fresh
++			 * connect-change edge; write ONLY the PP bit (a
++			 * stale PED written back would disable the port) */
++			xhci_portsc_w(hcd, port, 0U);
++			usb_osal_msleep(30U);
++			xhci_portsc_w(hcd, port, XHCI_PS_PP);
++			usb_osal_msleep(30U);
++			usbh_console_printf("usbh: bus%u port%u kicked, now %08x\n",
++					    bus->busid, port,
++					    xhci_portsc(hcd, port));
++		} else if ((ps & XHCI_PS_PP) == 0U) {
++			xhci_portsc_w(hcd, port, XHCI_PS_PP);
++			usb_osal_msleep(10U);
++		}
++
++		bus->hcd.roothub.int_buffer[0] |= (uint8_t)(1U << port);
++	}
++
++	usbh_console_printf("usbh: bus%u wake hub thread (intbuf=%02x%02x)\n",
++			    bus->busid, bus->hcd.roothub.int_buffer[1],
++			    bus->hcd.roothub.int_buffer[0]);
++	usbh_hub_thread_wakeup(&bus->hcd.roothub);
++}
++
++bool usbh_xhci_bus_ready(uint8_t busid)
++{
++	if (busid >= CONFIG_USBHOST_MAX_BUS) {
++		return false;
++	}
++	return g_xhci[busid].running != 0U;
++}
++
++/* Shell diagnostics: derived state first,
++ * raw register rows second; anything the DMA engine wrote is invalidated
++ * before the CPU reads it.  The CRCR read is a liveness probe (a zero
++ * means the command ring is wedged - this DWC3 reads back internal ring
++ * state), and an unconsumed event sitting in the ring while completions
++ * are missing points at our side, an empty ring at the controller. */
++void usbh_xhci_dump(struct usbh_bus *bus, bool raw)
++{
++	struct xhci_hcd *hcd = &g_xhci[bus->busid];
++	uint32_t hcs1, hcs2, hcc1, dboff;
++	uint8_t port;
++
++	if (hcd->running == 0U) {
++		usbh_console_printf("usbh: bus%u xhci not started\n", bus->busid);
++		return;
++	}
++
++	hcs1 = xhci_r32_cap(hcd, XHCI_HCSPARAMS1);
++	hcs2 = xhci_r32_cap(hcd, XHCI_HCSPARAMS2);
++	hcc1 = xhci_r32_cap(hcd, XHCI_HCCPARAMS1);
++	dboff = xhci_r32_cap(hcd, XHCI_DBOFF);
++	usbh_console_printf(
++		"usbh: xhci hcs1=%08x ports=%u slots=%u intrs=%u hcs2=%08x "
++		"spbuf=%u hcc=%08x\n",
++		hcs1, XHCI_HCS1_N_PORTS(hcs1), XHCI_HCS1_DEVSLOT_MAX(hcs1),
++		XHCI_HCS1_MAX_INTRS(hcs1), hcs2, XHCI_HCS2_SPB_MAX(hcs2), hcc1);
++	usbh_console_printf(
++		"usbh: xhci cmd=%08x sts=%08x pagesize=%08x dboff=%08x "
++		"crcr=%08x dcbaap=%08x config=%08x\n",
++		xhci_r32(hcd, XHCI_USBCMD), xhci_r32(hcd, XHCI_USBSTS),
++		xhci_r32(hcd, XHCI_PAGESIZE), dboff,
++		xhci_r32(hcd, XHCI_CRCR_LO), xhci_r32(hcd, XHCI_DCBAAP_LO),
++		xhci_r32(hcd, XHCI_CONFIG));
++	usbh_console_printf(
++		"usbh: xhci iman=%08x imod=%08x erstsz=%u erdp=%08x "
++		"evt_ep=%u evt_cs=%u\n",
++		xhci_r32_rts(hcd, XHCI_IMAN(0)), xhci_r32_rts(hcd, XHCI_IMOD(0)),
++		xhci_r32_rts(hcd, XHCI_ERSTSZ(0)) & 0xFFFFU,
++		xhci_r32_rts(hcd, XHCI_ERDP_LO(0)), hcd->event_ep,
++		hcd->event_cs);
++
++	/* the event ring head: a completion sitting here that nothing
++	 * consumed says our side; an empty ring says the controller never
++	 * ran the command */
++	{
++		struct xhci_trb *er = hcd->event_trbs;
++		uint32_t i;
++
++		xhci_dcache_invalidate(er, 4U * TRB_SIZE);
++		for (i = 0U; i < 4U; i++) {
++			usbh_console_printf(
++				"usbh: xhci er[%u] %08x %08x %08x %08x\n", i,
++				er[i].dw0, er[i].dw1, er[i].dw2, er[i].dw3);
++		}
++	}
++
++	for (port = 1U; port <= hcd->num_ports; port++) {
++		uint32_t v = xhci_portsc(hcd, port);
++
++		usbh_console_printf(
++			"usbh: xhci portsc%u=%08x ccs=%u csc=%u ped=%u pls=%u speed=%u pp=%u\n",
++			port, v, v & 1U, (v & XHCI_PS_CSC) ? 1U : 0U,
++			(v & XHCI_PS_PED) ? 1U : 0U, XHCI_PS_PLS_GET(v),
++			XHCI_PS_SPEED_GET(v), (v & XHCI_PS_PP) ? 1U : 0U);
++	}
++
++	if (raw) {
++		uintptr_t cap = hcd->capbase;
++		uint32_t i;
++
++		usbh_console_printf("usbh: xhci cap[00]=%08x[04]=%08x[08]=%08x[0c]=%08x\n",
++				    *(volatile uint32_t *)(cap + 0x00),
++				    *(volatile uint32_t *)(cap + 0x04),
++				    *(volatile uint32_t *)(cap + 0x08),
++				    *(volatile uint32_t *)(cap + 0x0c));
++		for (i = 0U; i < 0x40U; i += 0x10U) {
++			usbh_console_printf(
++				"usbh: xhci op[%02x]=%08x[%02x]=%08x[%02x]=%08x[%02x]=%08x\n",
++				i, xhci_r32(hcd, i), i + 4U,
++				xhci_r32(hcd, i + 4U), i + 8U,
++				xhci_r32(hcd, i + 8U), i + 0xcU,
++				xhci_r32(hcd, i + 0xcU));
++		}
++		usbh_console_printf("usbh: xhci rt iman=%08x imod=%08x erstsz=%08x\n",
++				    *(volatile uint32_t *)(hcd->rts + XHCI_IMAN(0)),
++				    *(volatile uint32_t *)(hcd->rts + XHCI_IMOD(0)),
++				    *(volatile uint32_t *)(hcd->rts + XHCI_ERSTSZ(0)));
++	}
++}
++
++/* Stall forensics (a missing bulk-OUT completion, 2026-09-29):
++ * for every ring with an in-flight TD print the TD window, the
++ * controller's view of that endpoint (output context, invalidated before
++ * the read) and the raw event words around the drain head.  Read
++ * together, the three discriminate the stall classes: the endpoint state
++ * tells "event not generated" (Halted/Stopped vs Running), fresh-cycle
++ * entries in the event window tell "event not drained", and the
++ * drop/bad_idx counters tell "event dropped on the software path". */
++static const char *xhci_ep_state_str(uint32_t st)
++{
++	switch (st) {
++	case 0U:
++		return "disabled";
++	case 1U:
++		return "running";
++	case 2U:
++		return "halted";
++	case 3U:
++		return "stopped";
++	case 4U:
++		return "error";
++	default:
++		return "?";
++	}
++}
++
++void usbh_xhci_stall_dump(struct usbh_bus *bus)
++{
++	struct xhci_hcd *hcd = &g_xhci[bus->busid];
++	uint32_t i;
++
++	if (hcd->running == 0U) {
++		usbh_console_printf("usbh: bus%u xhci not started\n",
++				    bus->busid);
++		return;
++	}
++
++	usbh_console_printf(
++		"usbh: stall bus%u: irq=%u todo=%u tevt=%u drop_urb=%u "
++		"drop_dev=%u ring_ev=%u bad_idx=%u ctrl=%u tmo=%u\n",
++		bus->busid, hcd->dbg_irq_n, hcd->dbg_irq_todo_n,
++		hcd->dbg_tevt_n, hcd->dbg_drop_urb, hcd->dbg_drop_dev,
++		hcd->dbg_ring_ev, hcd->dbg_bad_idx, hcd->dbg_ctrl_n,
++		hcd->dbg_tmo_n);
++	usbh_console_printf(
++		"usbh: stall bus%u: cmd=%08x sts=%08x iman=%08x erdp=%08x "
++		"evt_ep=%u evt_cs=%u\n",
++		bus->busid, xhci_r32(hcd, XHCI_USBCMD),
++		xhci_r32(hcd, XHCI_USBSTS), xhci_r32_rts(hcd, XHCI_IMAN(0)),
++		xhci_r32_rts(hcd, XHCI_ERDP_LO(0)), hcd->event_ep,
++		hcd->event_cs);
++
++	for (i = 1U; i < hcd->max_slots; i++) {
++		struct xhci_dev *dev = &hcd->devs[i];
++		uint32_t dci;
++
++		if ((dev->in_use == 0U) || (dev->dev_ctx == NULL)) {
++			continue;
++		}
++		xhci_dcache_invalidate(dev->dev_ctx,
++				       dev->ctxsz * (1U + XHCI_MAX_DCI));
++		for (dci = 1U; dci < XHCI_MAX_DCI; dci++) {
++			struct xhci_ring *ring = dev->ep_rings[dci];
++			uint32_t *octx;
++
++			if ((ring == NULL) || (ring->td.urb == NULL)) {
++				continue;
++			}
++			octx = xhci_out_ctx(dev, dci);
++			usbh_console_printf(
++				"usbh: stall s%u dci=%u ep=%02x len=%u tmo=%u: "
++				"enq=%u cs=%u dq=%u td=%u..%u st=%u killed=%u "
++				"dbw=%u\n",
++				i, dci,
++				(ring->td.urb->ep != NULL) ?
++					ring->td.urb->ep->bEndpointAddress : 0U,
++				ring->td.urb->transfer_buffer_length,
++				ring->td.urb->timeout,
++				ring->ep, ring->cs, ring->dequeue,
++				ring->td.first_idx, ring->td.last_idx,
++				ring->td.state, ring->td.killed, ring->dbw);
++			usbh_console_printf(
++				"usbh: stall s%u dci=%u ring=%08x tdtrb: "
++				"%08x %08x %08x %08x\n",
++				i, dci, (uint32_t)(uintptr_t)ring->trbs,
++				ring->trbs[ring->td.first_idx].dw0,
++				ring->trbs[ring->td.first_idx].dw1,
++				ring->trbs[ring->td.first_idx].dw2,
++				ring->trbs[ring->td.first_idx].dw3);
++			usbh_console_printf(
++				"usbh: stall s%u dci=%u ctx: st=%u(%s) "
++				"dqlo=%08x dcs=%u mps=%u cerr=%u\n",
++				i, dci, octx[0] & 0x7U,
++				xhci_ep_state_str(octx[0] & 0x7U),
++				octx[2] & ~0xFU, octx[2] & 0x1U,
++				(octx[1] >> 16) & 0xFFFFU,
++				(octx[1] >> 1) & 0x3U);
++		}
++	}
++
++	/* the raw event window: an entry still carrying the producer cycle
++	 * is an event the drain pass never consumed ("*" marks it) */
++	{
++		struct xhci_trb *er = hcd->event_trbs;
++		uint32_t k;
++
++		xhci_dcache_invalidate(
++			er, CONFIG_USBHOST_XHCI_EVENT_RING_SIZE * TRB_SIZE);
++		for (k = 0U; k < 8U; k++) {
++			uint32_t ei = (hcd->event_ep + k) %
++				      CONFIG_USBHOST_XHCI_EVENT_RING_SIZE;
++
++			usbh_console_printf(
++				"usbh: stall er[%u]%s type=%u code=%u "
++				"%08x %08x %08x %08x\n",
++				ei,
++				((er[ei].dw3 & TRB3_CYCLE) ==
++				 (uint32_t)hcd->event_cs) ? "*" : " ",
++				TRB3_TYPE_GET(er[ei].dw3),
++				TRB2_CODE_GET(er[ei].dw2),
++				er[ei].dw0, er[ei].dw1, er[ei].dw2,
++				er[ei].dw3);
++		}
++	}
++}
++
++/* The stalled-TD discriminator: Stop Endpoint makes the controller speak
++ * about the TD it is holding.  A transfer event (dbg_tevt_n moves) means
++ * the TD WAS fetched and is live on the wire - the device is not draining
++ * it (NAK-forever territory).  A silent stop means the TD was never
++ * fetched - the doorbell/ring side never reached the controller.  Either
++ * way the controller writes the endpoint context back, so the post-stop
++ * ctx row carries its true dequeue view.  The stop also completes a live
++ * TD with Stopped (-SHUTDOWN up the stack), which is the recovery the
++ * wedged rsvd-page submit needs anyway. */
++void usbh_xhci_stop_probe(struct usbh_bus *bus)
++{
++	struct xhci_hcd *hcd = &g_xhci[bus->busid];
++	uint32_t i;
++
++	if (hcd->running == 0U) {
++		usbh_console_printf("usbh: bus%u xhci not started\n",
++				    bus->busid);
++		return;
++	}
++
++	for (i = 1U; i < hcd->max_slots; i++) {
++		struct xhci_dev *dev = &hcd->devs[i];
++		uint32_t dci;
++
++		if (dev->in_use == 0U) {
++			continue;
++		}
++		for (dci = 1U; dci < XHCI_MAX_DCI; dci++) {
++			struct xhci_ring *ring = dev->ep_rings[dci];
++			struct xhci_trb trb;
++			uint32_t tevt0 = hcd->dbg_tevt_n;
++			uint32_t *octx;
++
++			if ((ring == NULL) || (ring->td.urb == NULL)) {
++				continue;
++			}
++			memset(&trb, 0, sizeof(trb));
++			trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_STOP_EP) |
++				  TRB3_EP_ID(dci) | TRB3_SLOT_ID(dev->slot_id);
++			if (xhci_do_command(hcd, &trb, 500U) != 0) {
++				usbh_console_printf(
++					"usbh: stop s%u dci=%u: command failed\n",
++					i, dci);
++				continue;
++			}
++			usbh_console_printf(
++				"usbh: stop s%u dci=%u: cmd ok, tevt %u->%u "
++				"(%s fetched)\n",
++				i, dci, tevt0, hcd->dbg_tevt_n,
++				(hcd->dbg_tevt_n != tevt0) ? "" : "NEVER");
++			octx = xhci_out_ctx(dev, dci);
++			xhci_dcache_invalidate(dev->dev_ctx,
++					       dev->ctxsz * (1U + XHCI_MAX_DCI));
++			usbh_console_printf(
++				"usbh: stop s%u dci=%u ctx: st=%u(%s) "
++				"dqlo=%08x dcs=%u\n",
++				i, dci, octx[0] & 0x7U,
++				xhci_ep_state_str(octx[0] & 0x7U),
++				octx[2] & ~0xFU, octx[2] & 0x1U);
++		}
++	}
++}
++
++#if defined(CONFIG_USBHOST_MULT_HC)
++const struct usbh_hc_driver xhci_hc_driver = {
++	.driver_name = "xhci_hcd",
++	.driver_desc = "xHCI Host Controller",
++	.init = usb_hc_init,
++	.deinit = usb_hc_deinit,
++	.get_frame_number = usbh_get_frame_number,
++	.roothub_control = usbh_roothub_control,
++	.submit_urb = usbh_submit_urb,
++	.kill_urb = usbh_kill_urb,
++	.irq_handler = USBH_IRQHandler,
++};
++#endif
+diff --git a/port/xhci/usb_hc_xhci.h b/port/xhci/usb_hc_xhci.h
+new file mode 100644
+index 0000000..9e84ef4
+--- /dev/null
++++ b/port/xhci/usb_hc_xhci.h
+@@ -0,0 +1,390 @@
++/*
++ * @file   usb_hc_xhci.h
++ * @brief  xHCI register/TRB/context definitions for the DWC3 xHCI port,
++ *         plus the per-bus driver state the platform layer and the
++ *         diagnostics hooks reach.
++ *
++ * MMIO layout matches the xHCI spec / NetBSD xhcireg.h (BSD-2); the DWC3
++ * globals follow the Synopsys DWC3 reference.  The context field layout
++ * is the u-boot/Linux/NetBSD one - this DWC3 rejects the xHCI 1.1
++ * alternative (board-measured 2026-08-12).  The TRB type and
++ * completion-code values are the corrected set: the first attempt at
++ * this port carried transfer-segment TRB types off by one and lost
++ * completion codes by the same slip (board evidence 2026-09-20).
++ *
++ * Provenance: the register sequence is NetBSD netbsd-11 xhci.c (rev
++ * 1.188.2.4, BSD-2) as board-proven on this SoC, crossed with the
++ * vendored port/ehci/usb_hc_ehci.c async URB model: IRQ-driven event
++ * processing, one in-flight URB per endpoint with a per-ring waitsem
++ * for timeout'd submitters, completion callbacks from the interrupt
++ * path.  The driver's lineage and every change against its previous
++ * revision are recorded in the patch's commit message.
++ *
++ * @author zhugengyu
++ * @date   27.09.2026
++ */
++#ifndef USB_HC_XHCI_H
++#define USB_HC_XHCI_H
++
++#include <stdint.h>
++#include <stdbool.h>
++#include "usbh_core.h"
++
++/* ====================== capability registers ====================== */
++#define XHCI_CAPLENGTH		0x00U
++#define XHCI_HCIVERSION		0x02U
++#define XHCI_HCSPARAMS1		0x04U
++#define XHCI_HCSPARAMS2		0x08U
++#define XHCI_HCSPARAMS3		0x0CU
++#define XHCI_HCCPARAMS1		0x10U
++#define XHCI_DBOFF		0x14U
++#define XHCI_RTSOFF		0x18U
++
++#define XHCI_HCS1_DEVSLOT_MAX(x)	((x) & 0xFFU)
++#define XHCI_HCS1_MAX_INTRS(x)		(((x) >> 8) & 0x7FFU)
++#define XHCI_HCS1_N_PORTS(x)		(((x) >> 24) & 0xFFU)
++#define XHCI_HCS2_ERST_MAX(x)		(((x) >> 4) & 0xFU)
++#define XHCI_HCS2_SPB_MAX(x)		(((((x) >> 16) & 0x3E0U)) | \
++					 (((x) >> 27) & 0x1FU))
++#define XHCI_HCCPARAMS1_CSZ(x)		(((x) >> 2) & 0x1U)
++
++/* ====================== operational registers ====================== */
++#define XHCI_USBCMD		0x00U
++#define XHCI_CMD_RS		0x00000001U
++#define XHCI_CMD_HCRST		0x00000002U
++#define XHCI_CMD_INTE		0x00000004U
++#define XHCI_CMD_HSEE		0x00000008U
++
++#define XHCI_USBSTS		0x04U
++#define XHCI_PAGESIZE		0x08U
++#define XHCI_DNCTRL		0x14U
++#define XHCI_STS_HCH		0x00000001U
++#define XHCI_STS_HSE		0x00000004U
++#define XHCI_STS_EINT		0x00000008U
++#define XHCI_STS_PCD		0x00000010U
++#define XHCI_STS_CNR		0x00000800U
++#define XHCI_STS_HCE		0x00001000U
++#define XHCI_STS_RSVDP0		0xFFFFE000U /* strip on the RW1C writeback */
++
++#define XHCI_CRCR_LO		0x18U
++#define XHCI_CRCR_HI		0x1CU
++#define XHCI_CRCR_LO_RCS	0x00000001U
++#define XHCI_CRCR_LO_CS		0x00000002U
++#define XHCI_CRCR_LO_CA		0x00000004U
++#define XHCI_CRCR_LO_CRR	0x00000008U
++
++#define XHCI_DCBAAP_LO		0x30U
++#define XHCI_DCBAAP_HI		0x34U
++
++#define XHCI_CONFIG		0x38U
++#define XHCI_CONFIG_SLOTS_MASK	0x000000FFU
++
++/* Port register array: the macro takes the ONE-BASED port number (the
++ * NetBSD/FreeBSD xhcireg.h shape - slot 0 at op+0x3F0 is unused, port 1
++ * lands at op+0x400).  The first board round passed (n-1) here and every
++ * port access landed in the reserved word at op+0x3F0: reads returned 0,
++ * the PP write never stuck, and the port never saw the live device
++ * (measured 2026-09-27: fcc00410=0 while fcc00420=00000e03
++ * CCS=1/PED=1/speed=HS under U-Boot's working enumeration). */
++#define XHCI_PORTSC(n)		(0x3F0U + (0x10U * (n)))
++#define XHCI_PS_CCS		0x00000001U
++#define XHCI_PS_PED		0x00000002U
++#define XHCI_PS_OCA		0x00000008U
++#define XHCI_PS_PR		0x00000010U
++#define XHCI_PS_PLS_GET(x)	(((x) >> 5) & 0xFU)
++#define XHCI_PS_PLS_SET(x)	(((x) & 0xFU) << 5)
++#define XHCI_PS_PP		0x00000200U
++#define XHCI_PS_SPEED_GET(x)	(((x) >> 10) & 0xFU)
++#define XHCI_PS_SPEED_FULL	0x1U
++#define XHCI_PS_SPEED_LOW	0x2U
++#define XHCI_PS_SPEED_HIGH	0x3U
++#define XHCI_PS_SPEED_SS	0x4U
++#define XHCI_PS_LWS		0x00010000U
++#define XHCI_PS_CSC		0x00020000U
++#define XHCI_PS_PEC		0x00040000U
++#define XHCI_PS_WRC		0x00080000U
++#define XHCI_PS_OCC		0x00100000U
++#define XHCI_PS_PRC		0x00200000U
++#define XHCI_PS_PLC		0x00400000U
++#define XHCI_PS_CEC		0x00800000U
++#define XHCI_PS_DR		0x40000000U
++
++/* ====================== runtime registers ====================== */
++#define XHCI_MFINDEX		0x0000U
++#define XHCI_IMAN(n)		(0x0020U + (0x20U * (n)))
++#define XHCI_IMAN_INTR_PEND	0x00000001U
++#define XHCI_IMAN_INTR_ENA	0x00000002U
++#define XHCI_IMOD(n)		(0x0024U + (0x20U * (n)))
++#define XHCI_ERSTSZ(n)		(0x0028U + (0x20U * (n)))
++#define XHCI_ERSTS_SET(x)	((x) & 0xFFFFU)
++#define XHCI_ERSTBA_LO(n)	(0x0030U + (0x20U * (n)))
++#define XHCI_ERSTBA_HI(n)	(0x0034U + (0x20U * (n)))
++#define XHCI_ERDP_LO(n)		(0x0038U + (0x20U * (n)))
++#define XHCI_ERDP_HI(n)		(0x003CU + (0x20U * (n)))
++#define XHCI_ERDP_BUSY		0x00000008U /* EHB, NetBSD's usage */
++
++/* ====================== doorbell ====================== */
++#define XHCI_DB_TARGET(x)	((x) & 0xFFU)
++
++/* ====================== TRB ====================== */
++/* Naming per xHCI spec 6.4 / NetBSD xhcireg.h: dw0/dw1 = parameter,
++ * dw2 = status, dw3 = control. */
++#define TRB_SIZE		16U
++
++#define TRB3_CYCLE		(1U << 0)
++#define TRB3_ENT		(1U << 1) /* on a LINK TRB this is TC */
++#define TRB3_ISP		(1U << 2) /* interrupt on short packet */
++#define TRB3_CHAIN		(1U << 4)
++#define TRB3_IOC		(1U << 5)
++#define TRB3_IDT		(1U << 6) /* immediate data */
++#define TRB3_BSR		(1U << 9) /* Address Device: Block Set Address */
++#define TRB3_TYPE_SET(x)	(((x) & 0x3FU) << 10)
++#define TRB3_TYPE_GET(x)	(((x) >> 10) & 0x3FU)
++#define TRB3_TRT_NONE		(0U << 16)
++#define TRB3_TRT_OUT		(2U << 16)
++#define TRB3_TRT_IN		(3U << 16)
++#define TRB3_DIR_IN		(1U << 16)
++#define TRB3_SLOT_ID(x)		(((x) & 0xFFU) << 24)
++#define TRB3_SLOT_ID_GET(x)	(((x) >> 24) & 0xFFU)
++#define TRB3_EP_ID(x)		(((x) & 0x1FU) << 16)
++#define TRB3_EP_ID_GET(x)	(((x) >> 16) & 0x1FU)
++
++#define TRB2_IRQ(x)		(((x) & 0x3FFU) << 22)
++#define TRB2_LEN(x)		((x) & 0x1FFFFU)
++#define TRB2_REM_GET(x)		((x) & 0xFFFFFFU)
++#define TRB2_CODE_GET(x)	(((x) >> 24) & 0xFFU)
++
++/* urb->transfer_flags: OUT at an exact max-packet multiple asks the HCD
++ * for an explicit zero-length delimiter.  common/usb_hc.h does not
++ * define the flag at this revision; an integrator that translates a
++ * host stack's zero-packet request into this bit gets the delimiter
++ * below, and no other transfer_flags bit is interpreted. */
++#ifndef USBH_URB_ZERO_PACKET
++#define USBH_URB_ZERO_PACKET	(1u << 0)
++#endif
++
++/* TRB types (spec 6.4.1 Table 131; the transfer-segment values were the
++ * first port's off-by-one, board-measured 2026-09-20: a SETUP written as 1
++ * executes as NORMAL and the control transfer never completes) */
++#define TRB_TYPE_NORMAL		1U
++#define TRB_TYPE_SETUP		2U
++#define TRB_TYPE_DATA		3U
++#define TRB_TYPE_STATUS		4U
++#define TRB_TYPE_ISOCH		5U
++#define TRB_TYPE_LINK		6U
++#define TRB_TYPE_EVENT_DATA	7U
++#define TRB_TYPE_NOOP		8U
++#define TRB_TYPE_ENABLE_SLOT	9U
++#define TRB_TYPE_DISABLE_SLOT	10U
++#define TRB_TYPE_ADDRESS_DEV	11U
++#define TRB_TYPE_CONFIGURE_EP	12U
++#define TRB_TYPE_EVALUATE_CTX	13U
++#define TRB_TYPE_RESET_EP	14U
++#define TRB_TYPE_STOP_EP	15U
++#define TRB_TYPE_SET_TR_DEQUEUE	16U
++#define TRB_TYPE_RESET_DEVICE	17U
++#define TRB_TYPE_TRANSFER	32U
++#define TRB_TYPE_CMD_COMPLETE	33U
++#define TRB_TYPE_PORT_STATUS	34U
++#define TRB_TYPE_HC_EVENT	37U
++
++/* Completion codes (spec 6.4.5).  The first port carried a +2 slide -
++ * 19 was labelled Parameter and 21 Context State; the 2026-09-28 board
++ * evidence (a retry code=19 on an already-addressed slot) pinned the
++ * spec values: 17=Parameter, 19=Context State, 21=Event Lost. */
++#define TRB_CODE_SUCCESS	1U
++#define TRB_CODE_DATA_BUFFER_ERR 2U
++#define TRB_CODE_BABBLE		3U
++#define TRB_CODE_TRANSACTION_ERR 4U
++#define TRB_CODE_TRB_ERR	5U
++#define TRB_CODE_STALL		6U
++#define TRB_CODE_SHORT_PACKET	13U
++#define TRB_CODE_RING_UNDERRUN	14U
++#define TRB_CODE_RING_OVERRUN	15U
++#define TRB_CODE_PARAMETER_ERR	17U
++#define TRB_CODE_CONTEXT_STATE	19U
++#define TRB_CODE_EVENT_LOST	21U
++#define TRB_CODE_CMD_RING_STOPPED 24U
++#define TRB_CODE_CMD_ABORTED	25U
++#define TRB_CODE_STOPPED	26U
++#define TRB_CODE_STOPPED_INVAL	27U
++#define TRB_CODE_STOPPED_SHORT	28U
++
++/* ====================== contexts ====================== */
++/* Layout per xHCI spec 6.2 (u-boot/Linux/NetBSD agree).  CSZ=1
++ * (HCCPARAMS1 bit2, measured) -> 64 bytes per context (16 u32); input
++ * contexts u-boot style: the control context owns slot 0, ctx(dci) lives
++ * at 64*(dci+1). */
++#define SLOT_CTX_DEV_INFO_ROUTE(x)	((x) & 0xFFFFFU)
++#define SLOT_CTX_DEV_INFO_SPEED(x)	(((x) & 0xFU) << 20)
++#define SLOT_CTX_DEV_INFO_MTT		(1U << 25)
++#define SLOT_CTX_DEV_INFO_HUB		(1U << 26)
++#define SLOT_CTX_DEV_INFO_LAST_CTX(x)	(((x) & 0x1FU) << 27)
++#define SLOT_CTX_SPEED_FS		1U
++#define SLOT_CTX_SPEED_LS		2U
++#define SLOT_CTX_SPEED_HS		3U
++#define SLOT_CTX_DEV_INFO2_MAX_EXIT(x)	((x) & 0xFFFFU)
++#define SLOT_CTX_DEV_INFO2_PORT(x)	(((x) & 0xFFU) << 16)
++#define SLOT_CTX_DEV_INFO2_NPORTS(x)	(((x) & 0xFFU) << 24)
++#define SLOT_CTX_TT_HUB_SLOT(x)		((x) & 0xFU)
++#define SLOT_CTX_TT_PORT(x)		(((x) & 0xFU) << 16)
++#define SLOT_CTX_TT_THINK(x)		(((x) & 0x3U) << 20)
++#define SLOT_CTX_DEV_STATE_ADDR(x)	((x) & 0xFFU)
++#define SLOT_CTX_DEV_STATE_SLOT_STATE(x) (((x) & 0x1FU) << 27)
++#define SLOT_CTX_STATE_DEFAULT		1U
++#define SLOT_CTX_STATE_ADDRESSED	2U
++#define SLOT_CTX_STATE_CONFIGURED	3U
++
++/* Endpoint Context (spec 6.2.3; the first port had avg_trb_len in the
++ * wrong word - the controller fetched its ring at 0x8_xxxxxxxx and
++ * silently did nothing, board-read of the output context 2026-09-20) */
++#define EP_CTX_0_INTERVAL_SET(x)	(((x) & 0xFFU) << 16)
++#define EP_CTX_1_CERR_SET(x)		(((x) & 0x3U) << 1)
++#define EP_CTX_1_EP_TYPE_SET(x)		(((x) & 0x7U) << 3)
++#define EP_CTX_1_MAX_BURST_SET(x)	(((x) & 0xFFU) << 8)
++#define EP_CTX_1_MAX_PACKET_SET(x)	(((x) & 0xFFFFU) << 16)
++#define EP_CTX_2_TR_DEQUEUE_LO(x)	((x) & 0xFFFFFFF0U)
++#define EP_CTX_2_CYCLE			(1U << 0)
++#define EP_CTX_4_AVG_TRB_LEN(x)		((x) & 0xFFFFU)
++
++/* EP Type field values (Endpoint Context, offset 04h, bits 5:3), per
++ * xHCI spec Table 6-9 and cross-checked value for value against it.
++ * This is not the USB bmAttributes code; the decode is in
++ * xhci_ep_type_of(). */
++#define EP_TYPE_CONTROL		4U
++#define EP_TYPE_ISOCH_OUT	1U
++#define EP_TYPE_BULK_OUT	2U
++#define EP_TYPE_INTR_OUT	3U
++#define EP_TYPE_ISOCH_IN	5U
++#define EP_TYPE_BULK_IN		6U
++#define EP_TYPE_INTR_IN		7U
++
++/* input control context (u-boot struct xhci_input_control_ctx):
++ * drop in dw0, add in dw1 */
++#define ICC_ADD_SLOT		(1U << 0)
++#define ICC_ADD_EP0		(1U << 1)
++
++/* ====================== internal structures ====================== */
++
++struct xhci_trb {
++	uint32_t dw0;
++	uint32_t dw1;
++	uint32_t dw2;
++	uint32_t dw3;
++};
++
++struct xhci_erst_seg {
++	uint32_t seg_base_lo;
++	uint32_t seg_base_hi;
++	uint32_t seg_size;
++	uint32_t rsvd;
++};
++
++/* TD bookkeeping: with the CherryUSB contract of one URB in flight per
++ * endpoint, a ring owns exactly one active TD; transfer events locate it
++ * through the ring, never through a per-TRB table. */
++struct xhci_td {
++	struct usbh_urb *urb;
++	uint8_t kind;		/* 0 = normal (bulk/intr), 1 = control */
++	uint8_t state;		/* 0 = pending, 1 = done ok, 2 = done err */
++	uint8_t short_seen;
++	uint8_t killed;		/* ehci's killed dance: 1 = killed, 2 = reaped */
++	uint32_t first_idx;
++	uint32_t last_idx;
++	uint32_t actual;
++	int error;
++};
++
++struct xhci_ring {
++	struct xhci_trb *trbs;
++	uint32_t num_trbs;
++	uint32_t ep;		/* enqueue index */
++	uint8_t cs;		/* producer cycle state */
++	uint32_t dequeue;	/* consumer estimate, ring-space accounting */
++	usb_osal_sem_t waitsem;
++	struct xhci_td td;	/* the single in-flight TD */
++	uint8_t inuse;
++	uint32_t dbw;		/* doorbells rung on this ring (forensics) */
++};
++
++struct xhci_dev {
++	uint8_t in_use;
++	uint8_t slot_id;
++	uint8_t usb_addr;	/* address the pending Address Device sets */
++	struct usbh_hubport *hport;
++	uint16_t ep0_mps_hw;
++	uint32_t ep_configured;	/* dci bitmap with a programmed EP context */
++	struct xhci_ring *ep_rings[32];
++	uint8_t *input_ctx;	/* 64B aligned, (2+31) context slots */
++	uint8_t *dev_ctx;	/* 64B aligned, (1+31) context slots */
++	uint32_t ctxsz;
++};
++
++struct xhci_hcd {
++	struct usbh_bus *bus;
++	uintptr_t capbase;
++	uintptr_t opregs;
++	uintptr_t rts;
++	uintptr_t db;
++	uint8_t num_ports;
++	uint8_t max_slots;
++	uint8_t running;
++	uint32_t pgsz;
++	uint32_t ctxsz_cache;
++	/* event ring */
++	struct xhci_trb *event_trbs;
++	struct xhci_erst_seg *erst;
++	uint32_t event_ep;
++	uint8_t event_cs;
++	/* the command timeout path drains the ring from thread context; the
++	 * ISR may preempt that drain and must not double-process */
++	volatile uint8_t evt_busy;
++	/* command ring: one command in flight, waitsem completion */
++	struct xhci_ring cmd_ring;
++	usb_osal_sem_t cmd_waitsem;
++	volatile uint8_t cmd_busy;
++	uint32_t cmd_code;
++	uint8_t cmd_slot_id;
++	uint32_t cmd_trb_addr;
++	/* DCBAA + slots */
++	uint64_t *dcbaa;
++	struct xhci_dev devs[CONFIG_USBHOST_XHCI_MAX_SLOTS];
++	/* transfer rings */
++	struct xhci_ring rings[CONFIG_USBHOST_XHCI_RINGS];
++	/* forensics 2026-09-28: driver-path ep0 control transfers time out
++	 * (-14) while the same-ring enumeration transfers pass; the counters
++	 * name the stage that swallows the completion, the timeout dump
++	 * prints the controller's view at the moment of the wait failure */
++	volatile uint32_t dbg_irq_n;	/* IRQ entries */
++	volatile uint32_t dbg_irq_todo_n; /* entries past the nothing-to-do bail */
++	volatile uint32_t dbg_tevt_n;	/* transfer events seen */
++	volatile uint32_t dbg_drop_urb;	/* events with td.urb == NULL */
++	volatile uint32_t dbg_drop_dev;	/* events with no dev/ring */
++	volatile uint32_t dbg_ring_ev;	/* ring underrun/overrun events */
++	volatile uint32_t dbg_bad_idx;	/* transfer events off the TD's IOC TRB */
++	uint32_t dbg_ctrl_n;		/* ep0 control submissions */
++	uint32_t dbg_tmo_n;		/* ep0 wait timeouts */
++};
++
++/* the multi-HC dispatcher reads this through usbh_register_hc_driver() */
++extern const struct usbh_hc_driver xhci_hc_driver;
++
++/* platform hooks: the port power pass (the hub class never issues
++ * SetFeature(PORT_POWER) to a roothub, and a device already plugged in at
++ * boot reads CCS=1 with its connect-change edge lost) and the diagnostics
++ * dumps.  Callers live on the integrator's side. */
++void usbh_xhci_post_init(struct usbh_bus *bus);
++bool usbh_xhci_bus_ready(uint8_t busid);
++void usbh_xhci_dump(struct usbh_bus *bus, bool raw);
++void usbh_xhci_stall_dump(struct usbh_bus *bus);
++void usbh_xhci_stop_probe(struct usbh_bus *bus);
++
++/* stop and forget the slot still attached to (busid, hub, port): the
++ * platform layer calls this from its DEVICE_DISCONNECTED handler, before
++ * the hub layer re-initializes the child in place - otherwise the next
++ * enumerate reuses a possibly-HALTED slot and every transfer times out
++ * (the RTL8821CU modeswitch re-enum, 2026-09-29). */
++void usbh_xhci_forget_hport(uint8_t busid, uint8_t hub_index,
++			    uint8_t hub_port);
++
++#endif /* USB_HC_XHCI_H */
+-- 
+2.43.0
+
