@@ -14,7 +14,8 @@
 #          missing card reds only this suite.
 #
 # Product: build/threadx-rk3568-wlan.bin - the flat raw binary staged as
-# wlan.bin and loaded with `tftp 0xa000000 wlan.bin`, entered with `go 0xa000000`.
+# rtos.bin (the lab profile's deploy name) and loaded with
+# `tftp 0xa000000 rtos.bin`, entered with `go 0xa000000`.
 #
 # Test execution order = link order = the TESTS_SRCS list below.
 

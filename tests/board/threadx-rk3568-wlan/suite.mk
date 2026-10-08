@@ -10,7 +10,7 @@ SUITE_TRUTH_SOURCE    := the suite's own BOARD-SUITE/CASE channel plus the fixed
 SUITE_IMAGE           := tests/board/threadx-rk3568-wlan/build/threadx-rk3568-wlan.bin
 SUITE_BUILD           := make -C tests/board/threadx-rk3568-wlan
 SUITE_PROFILE         := rtos
-SUITE_DEPLOY          := wlan.bin
+SUITE_DEPLOY          := rtos.bin
 SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-wlan start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-wlan select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-wlan result=
