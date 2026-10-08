@@ -72,6 +72,19 @@ SECTIONS
 		__vsymtab_end = .;
 	} :text
 
+	/* Board regression test table: the suite's runner walks this section as a
+	 * flat array with a fixed stride (entries are {name, fn} - two pointers),
+	 * so the shell tables' KEEP + SUBALIGN(8) discipline applies unchanged:
+	 * without KEEP the linker garbage-collects every entry, and padding would
+	 * hide every entry after the first. The image's `make check` asserts the
+	 * byte count equals entries x 16. */
+	.board_tests : ALIGN(8) SUBALIGN(8) {
+		. = ALIGN(8);
+		__board_tests_start = .;
+		KEEP(*(BOARD_TESTS))
+		__board_tests_end = .;
+	} :text
+
 	.data : ALIGN(8) {
 		__data_start = .;
 		*(.data .data.*)

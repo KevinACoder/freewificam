@@ -1,20 +1,24 @@
 # @file    Makefile
-# @brief   Build the CherrySH ThreadX board image (cherrysh-threadx.bin) for RK3568.
+# @brief   Build the ThreadX board regression image for RK3568.
 # @author  zhugengyu
 # @date    08.10.2026
-# @design  self-contained project makefile - same shape as the ThreadX bring-up
-#          smoke (tests/board/threadx-rk3568-smoke/Makefile) plus the CMSIS-RTOS2
-#          backend and the shell; the include path picks the CMSIS-RTOS2 flavour
-#          of the board configuration (os/threadx/board/rk3568-itx/cmsis2).
+# @design  self-contained project makefile - evolved from the shell image
+#          (tests/board/cherrysh-threadx-rk3568-smoke/Makefile:1-17): same four
+#          compile domains plus the shared regression runner (tests/board/common)
+#          and the suite's own test sources. The include path picks the
+#          CMSIS-RTOS2 flavour of the board configuration.
 #
-# Product: build/cherrysh-threadx.bin - the flat raw binary staged as rtos.bin
-# and loaded with `tftp 0xa000000 rtos.bin`, entered with `go 0xa000000`.
+# Product: build/threadx-rk3568-regression.bin - the flat raw binary staged as
+# rtos.bin and loaded with `tftp 0xa000000 rtos.bin`, entered with `go 0xa000000`.
 #
-# Beyond the smoke's gates this build checks that the CMSIS flavour is the one
-# in effect (the backend needs its slot backlink key), that the host-side files
-# are not in the compile set, and the command tables' density: the shell core
-# iterates FSymTab/VSymTab as flat arrays with a fixed stride, so any padding
-# between entries would hide every entry after the first.
+# Test execution order = link order = the TESTS_SRCS list below; late-running
+# cases (USB bring-up) are appended at the end of that list.
+#
+# Build gates beyond the shell image's: the test table's density (the runner
+# walks BOARD_TESTS as a flat array with a fixed stride - padding would hide
+# every entry after the first), the three-source case-name reconciliation
+# (image section / suite.mk / judge.py) and the host replay of the selection
+# vectors.
 
 ROOT := $(abspath $(CURDIR)/../../..)
 TX := $(ROOT)/third-party/threadx
@@ -23,18 +27,25 @@ BOARD_CMSIS2 := $(ROOT)/os/threadx/board/rk3568-itx/cmsis2
 CMSIS := $(ROOT)/third-party/CMSIS_6
 CHERRYSH := $(ROOT)/components/cherrysh
 PORT := $(ROOT)/ports/cherrysh
+COMMON := $(ROOT)/tests/board/common
+
+SUITE_NAME := threadx-rk3568-regression
 
 AARCH64_CROSS_PATH ?= $(HOME)/workspace/env/src/xpack-aarch64-none-elf-gcc-13.2.1-1.1
 CROSS_COMPILE ?= $(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-
 CC := $(CROSS_COMPILE)gcc
 OBJCOPY := $(CROSS_COMPILE)objcopy
 NM := $(CROSS_COMPILE)nm
+READELF := $(CROSS_COMPILE)readelf
 SIZE := $(CROSS_COMPILE)size
+# The selection matcher is replayed on the build host as well (same source, the
+# same vector file the judges consume), so this one target needs the host cc.
+HOSTCC ?= cc
 
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
 
 BUILD := build
-TARGET := $(BUILD)/cherrysh-threadx
+TARGET := $(BUILD)/$(SUITE_NAME)
 
 INCLUDES := \
 	-I$(ROOT) \
@@ -46,6 +57,7 @@ INCLUDES := \
 	-I$(CHERRYSH) \
 	-I$(PORT) \
 	-I$(ROOT)/components/tlsf \
+	-I$(COMMON) \
 	-I$(CMSIS)/CMSIS/RTOS2/Include
 
 # -DEL1=1 is load-bearing (the port's exception-return register bank is a
@@ -65,12 +77,13 @@ BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
+	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
 	-DCMSIS2_BACKEND_THREADX \
 	-DSHELL_PORT_HOST='"rk3568"'
 
 # The freestanding libc surface is declared everywhere it is used: the vendored
-# shell core calls strnlen without a prototype of its own. Assembly files do not
-# take the C header.
+# shell core calls strnlen without a prototype of its own, and the runner builds
+# its start line with snprintf. Assembly files do not take the C header.
 CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
 ASM_CFLAGS := $(BASE_CFLAGS)
 
@@ -80,9 +93,8 @@ ASM_CFLAGS := $(BASE_CFLAGS)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 
 # --gc-sections drops everything nothing references, which would take the
-# CMSIS-RTOS2 extension's entry points (osCriticalEnter/Exit) with it - this
-# image has no caller yet, but the backend is brought in whole and its public
-# surface is part of the symbol contract. -u pins the two.
+# CMSIS-RTOS2 extension's entry points (osCriticalEnter/Exit) with it - the
+# backend's public surface is part of the symbol contract. -u pins the two.
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
 	-Wl,--gc-sections \
@@ -91,7 +103,7 @@ LDFLAGS := -nostdlib -static \
 	-Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map
 
-# --- compile set (four domains) --------------------------------------------
+# --- compile set (six domains) ---------------------------------------------
 
 BASE_SRCS := \
 	$(ROOT)/arch/aarch64/start.S \
@@ -118,10 +130,23 @@ TX_SRCS := \
 	$(ROOT)/os/threadx/cmsis2_threadx.c \
 	$(ROOT)/os/threadx/cmsis2_ext.c
 
+COMMON_SRCS := \
+	$(COMMON)/board_suite.c \
+	$(COMMON)/board_select.c
+
 SHELL_SRCS := \
 	$(CURDIR)/main.c \
 	$(PORT)/shell_port.c \
 	$(PORT)/console_board.c
+
+# Execution order = this list's order (link order for the BOARD_TESTS section).
+TESTS_SRCS := \
+	$(CURDIR)/tests/shell_up.c \
+	$(CURDIR)/tests/kernel_up.c \
+	$(CURDIR)/tests/tick_ladder.c \
+	$(CURDIR)/tests/thread_sched.c \
+	$(CURDIR)/tests/cmsis2_prio.c \
+	$(CURDIR)/tests/tlsf_heap.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -132,7 +157,7 @@ VENDORED_SRCS := \
 
 ALLOC_SRCS := $(ROOT)/components/tlsf/tlsf.c
 
-ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(SHELL_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS)
+ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS)
 
 # Object names mirror the path below ROOT: the kernel and the port share flat
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide.
@@ -144,11 +169,14 @@ all: $(TARGET).bin check
 define COMPILE_RULE
 $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1)
 	@mkdir -p $$(dir $$@)
-	$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
+	@echo "  CC $$<"
+	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
 endef
 $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
+$(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 
@@ -168,6 +196,12 @@ guards:
 		|| { echo "FAIL: -DTX_INCLUDE_USER_DEFINE_FILE missing from TX_CFLAGS"; exit 1; }
 	@echo "$(TX_CFLAGS)" | grep -q -- "-I$(BOARD_CMSIS2) " \
 		|| { echo "FAIL: the CMSIS2 flavour directory is not the first -I"; exit 1; }
+	@[ "$$(basename $(CURDIR))" = "$(SUITE_NAME)" ] \
+		|| { echo "FAIL: SUITE_NAME ($(SUITE_NAME)) is not the directory name"; exit 1; }
+	@echo "$(CFLAGS)" | grep -q -- "-DBOARD_SUITE_NAME=" \
+		|| { echo "FAIL: BOARD_SUITE_NAME missing from CFLAGS"; exit 1; }
+	@echo "$(CFLAGS)" | grep -q -- "$(SUITE_NAME)" \
+		|| { echo "FAIL: BOARD_SUITE_NAME does not carry the suite name"; exit 1; }
 	@grep -E '^[[:space:]]*#[[:space:]]*define[[:space:]]+TX_THREAD_USER_EXTENSION' \
 		$(BOARD_CMSIS2)/tx_user.h >/dev/null 2>&1 \
 		|| { echo "FAIL: the CMSIS2 flavour does not define the slot backlink"; exit 1; }
@@ -178,10 +212,13 @@ guards:
 		$(ROOT)/arch/aarch64 $(ROOT)/board/rk3568-itx $(ROOT)/os/baremetal >/dev/null 2>&1; then \
 		echo "FAIL: a tx header leaked into arch/, board/ or os/baremetal/"; exit 1; \
 	fi
+	@if grep -rnE '\btx_[a-z][a-z0-9_]*[[:space:]]*\(' $(COMMON) $(CURDIR)/tests $(CURDIR)/main.c >/dev/null 2>&1; then \
+		echo "FAIL: a kernel API leaked into the suite sources (CMSIS-RTOS2 only)"; exit 1; \
+	fi
 	@if echo "$(ALL_SRCS)" | tr ' ' '\n' | grep -q 'tx_thread_fp_'; then \
 		echo "FAIL: a port fp TU entered the compile set"; exit 1; \
 	fi
-	@echo "PASS: port keys present, CMSIS2 flavour in effect, host files out, base layer free of tx headers, no fp port TU"
+	@echo "PASS: port keys present, CMSIS2 flavour in effect, suite name matches, host files out, base layer and suite sources free of kernel APIs"
 
 check: guards $(TARGET).elf
 	@echo "== symbol contract =="
@@ -199,24 +236,36 @@ check: guards $(TARGET).elf
 	         osKernelStart osThreadNew osDelay osCriticalEnter osCriticalExit \
 	         cmsis2_tx_application_define tx_board_app_define tx_kernel_enter_spsel0 \
 	         pvPortMalloc vPortFree tlsf_malloc tlsf_free \
-	         shell_port_init chry_shell_init console_sput console_sget; do \
+	         shell_port_init chry_shell_init console_sput console_sget \
+	         board_suite_run board_case_fail board_glob_match board_select_parse; do \
 		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" \
 			|| { echo "FAIL: $$s not in the image"; exit 1; }; \
 	done; \
 	undef=$$($(NM) -u $(TARGET).elf); \
 	[ -z "$$undef" ] || { echo "FAIL: undefined symbols:"; echo "$$undef"; exit 1; }; \
-	echo "PASS: _start=0x$$start, vectors=0x$$vec (0x800 aligned), kernel/CMSIS2/board symbols present, 0 undefined"
-	@echo "== command table density =="
+	echo "PASS: _start=0x$$start, vectors=0x$$vec (0x800 aligned), kernel/CMSIS2/board/runner symbols present, 0 undefined"
+	@echo "== command and test table density =="
 	@set -e; \
 	fs=$$($(NM) $(TARGET).elf | awk '$$3=="__fsymtab_end"{print $$1}'); \
 	fs0=$$($(NM) $(TARGET).elf | awk '$$3=="__fsymtab_start"{print $$1}'); \
 	vs=$$($(NM) $(TARGET).elf | awk '$$3=="__vsymtab_end"{print $$1}'); \
 	vs0=$$($(NM) $(TARGET).elf | awk '$$3=="__vsymtab_start"{print $$1}'); \
-	fsz=$$(( 0x$$fs - 0x$$fs0 )); vsz=$$(( 0x$$vs - 0x$$vs0 )); \
-	echo "fsymtab bytes=$$fsz (expect 4*40=160), vsymtab bytes=$$vsz (expect 2*24=48)"; \
+	bt=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_end"{print $$1}'); \
+	bt0=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_start"{print $$1}'); \
+	fsz=$$(( 0x$$fs - 0x$$fs0 )); vsz=$$(( 0x$$vs - 0x$$vs0 )); btz=$$(( 0x$$bt - 0x$$bt0 )); \
+	echo "fsymtab bytes=$$fsz (expect 4*40=160), vsymtab bytes=$$vsz (expect 2*24=48), board_tests bytes=$$btz"; \
 	[ $$fsz -eq 160 ] || { echo "FAIL: FSymTab is not dense"; exit 1; }; \
 	[ $$vsz -eq 48 ] || { echo "FAIL: VSymTab is not dense"; exit 1; }; \
-	echo "PASS: command and variable tables dense (no inter-entry padding)"
+	[ $$(( btz % 16 )) -eq 0 ] || { echo "FAIL: BOARD_TESTS is not a whole number of entries"; exit 1; }; \
+	n=$$(( btz / 16 )); echo "board_tests entries=$$n"; \
+	[ $$n -ge 6 ] || { echo "FAIL: fewer than the six historical cases registered"; exit 1; }; \
+	echo "PASS: command and test tables dense (no inter-entry padding)"
+	@echo "== case-name reconciliation (image / suite.mk / judge) =="
+	@sh $(COMMON)/check-case-list.sh $(TARGET).elf $(CURDIR)/suite.mk $(CURDIR)/judge.py $(OBJCOPY) $(READELF) $(BUILD)
+	@echo "== selection vectors (host replay) =="
+	@$(HOSTCC) -DBOARD_SELECT_HOSTTEST -O1 -std=c11 -Wall -Wextra -c $(COMMON)/board_select.c -o $(BUILD)/board_select_hosttest.o
+	@$(HOSTCC) $(BUILD)/board_select_hosttest.o -o $(BUILD)/select-hosttest
+	@$(BUILD)/select-hosttest $(COMMON)/select-vectors.tsv
 	@$(SIZE) $(TARGET).elf
 	@echo "build-tag: $(BUILD_TAG)"
 

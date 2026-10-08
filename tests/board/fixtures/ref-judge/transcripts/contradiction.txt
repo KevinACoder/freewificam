@@ -1,0 +1,16 @@
+# Static fixture transcript: the sentinel's counts contradict the CASE lines
+# and the summary anchor - four PASS lines exist, the summary agrees with them,
+# and the sentinel still reports ok=3 exit=1. Two independent witnesses, one
+# liar: fail. Expected exit 1.
+#
+# @design static transcript fixture - ref tests/board/threadx-rk3568-regression/judge.py
+fixture-accept bring-up fixture-tag
+[   0.000] board: console up
+[   0.100] BOARD-SUITE fixture-accept select window_ms=5000
+[   5.000] BOARD-SUITE fixture-accept start cases=4 sel=all list=alpha,beta,gamma,delta
+[   5.010] CASE fixture-accept/alpha PASS
+[   5.020] CASE fixture-accept/beta PASS
+[   5.030] CASE fixture-accept/gamma PASS
+[   5.040] CASE fixture-accept/delta PASS
+[   5.050] BOARD-SUMMARY fixture-accept cases=4 ok=4 exit=0
+[   5.060] BOARD-SUITE fixture-accept result=fail cases=4 ok=3 exit=1

@@ -1,0 +1,16 @@
+# The fixture set's expectations, one row per transcript:
+#   column 1  the transcript file (ref-judge/transcripts/)
+#   column 2  the exit code the judge must return
+#   column 3  a literal the judgment block must carry (empty when the exit
+#             code alone is the contract)
+# One source of truth for two consumers: judge.py --selftest (exit code and
+# block text) and check-fixtures.sh (exit code).
+#
+# @design expectation manifest - ref tests/board/common/select-vectors.tsv
+legal.txt	0	
+no-sentinel.txt	1	end sentinel absent
+truncated.txt	1	tail
+count-mismatch.txt	1	missing case(s): delta
+contradiction.txt	1	contradicts
+noise.txt	0	
+dump-gap.txt	0	dump-incomplete

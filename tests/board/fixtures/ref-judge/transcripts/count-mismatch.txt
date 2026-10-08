@@ -1,0 +1,15 @@
+# Static fixture transcript: the declared case list names four cases, three
+# ran - the line for delta was lost, and the sentinel and the summary anchor
+# agree with each other about the three that printed. Only the declared-list
+# reconciliation catches it, and it must name the missing case. Expected exit 1.
+#
+# @design static transcript fixture - ref tests/board/threadx-rk3568-regression/judge.py
+fixture-accept bring-up fixture-tag
+[   0.000] board: console up
+[   0.100] BOARD-SUITE fixture-accept select window_ms=5000
+[   5.000] BOARD-SUITE fixture-accept start cases=4 sel=all list=alpha,beta,gamma,delta
+[   5.010] CASE fixture-accept/alpha PASS
+[   5.020] CASE fixture-accept/beta PASS
+[   5.030] CASE fixture-accept/gamma PASS
+[   5.040] BOARD-SUMMARY fixture-accept cases=3 ok=3 exit=0
+[   5.050] BOARD-SUITE fixture-accept result=pass cases=3 ok=3 exit=0

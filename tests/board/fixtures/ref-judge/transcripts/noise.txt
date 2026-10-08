@@ -1,0 +1,35 @@
+# Static fixture transcript: the judgment channel survives heavy noise. Every
+# noise line below is inert by construction - a truncated anchor, a stale
+# anchor without counts, a longer suite name, a lower-case or suffixed CASE
+# line, flood lines, another suite's sentinel. None of them may change the
+# verdict; only the exact grammar counts. Expected exit 0.
+#
+# @design static transcript fixture - ref tests/board/threadx-rk3568-regression/judge.py
+fixture-accept bring-up fixture-tag
+[   0.000] board: console up
+[   0.100] BOARD-SUITE fixture-accept select window_ms=5000
+[   0.120] garbage: 41 42 43 0d 0a ff ff ff ff
+[   5.000] BOARD-SUITE fixture-accept start cases=4 sel=all list=alpha,beta,gamma,delta
+[   5.002] BOARD-SUITE fixture-accept start cases=4 sel=all list= (capture truncated here)
+[   5.004] note: BOARD-SUITE fixture-accept start cases=99 sel=all list=ghost
+[   5.006] CASE fixture-accept/alpha PASS (echoed late)
+[   5.008] case fixture-accept/beta PASS
+[   5.009] CASE-fixture-accept/gamma PASS
+[   5.010] flood 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f
+[   5.012] flood 505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f
+==> help
+[   5.014] help: total function 4
+[   5.016] help: total variable 2
+[   5.018] flood aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+[   5.020] CASE fixture-accept/alpha PASS
+[   5.022] flood deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+[   5.030] CASE fixture-accept/beta PASS
+[   5.035] BOARD-SUITE fixture-accept result=fail (a stale line, counts missing)
+[   5.036] BOARD-SUITE other-suite result=pass cases=1 ok=1 exit=0
+[   5.040] heartbeat: ticks=12000 heap_free=913688
+[   5.050] CASE fixture-accept/gamma PASS
+[   5.052] BOARD-SUMMARY fixture-accept cases=9 ok=9 exit=0 (stale, counts not at line end)
+[   5.060] CASE fixture-accept/delta PASS
+[   5.065] BOARD-SUMMARY fixture-accept cases=4 ok=4 exit=0
+[   5.070] BOARD-SUITE fixture-accept result=pass cases=4 ok=4 exit=0
+[   5.080] park: runner idle
