@@ -29,7 +29,14 @@ import re
 import sys
 
 STAMP_RE = re.compile(r"\[\s*(\d+)\.(\d{3})\]\s*")
-SGR_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# A CSI sequence: ESC '[' parameters/intermediates, then a final byte from
+# 0x40-0x7e. The final byte is NOT always a letter - an interleaved writer can
+# leave '\x1b[' immediately followed by another '[' (the console redraws while
+# a case prints, and the two writers share one byte stream), which is itself a
+# legal final byte. Matching only letters leaves that fragment in the text.
+CSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# Leftover fragments: a truncated escape at the end of a split.
+SGR_RE = CSI_RE
 TX_MARK = "==> "
 
 #: Conditions that are never a pass, whatever else the transcript says.
@@ -67,7 +74,11 @@ class Transcript:
         # sequences can land at the start of a protocol line - measured on the
         # board, where an SGR prefix hid a CASE line from the judge. Escape
         # sequences carry no protocol meaning, so removing them here is safe.
-        self.lines = [SGR_RE.sub("", STAMP_RE.sub("", line)) for line in self.raw_lines]
+        self.lines = []
+        for line in self.raw_lines:
+            clean = CSI_RE.sub("", STAMP_RE.sub("", line))
+            clean = clean.replace("\x1b", "")   # truncated escape fragments
+            self.lines.append(clean)
         rx_lines = []
         for line in self.lines:
             cut = line.find(TX_MARK)
@@ -86,10 +97,11 @@ class Transcript:
 
     def start_line(self, name: str) -> dict | None:
         pattern = re.compile(
-            r"^BOARD-SUITE " + re.escape(name) + r" start cases=(\d+) sel=(\S+) list=(\S*)$"
+            r"(?:^|\s)BOARD-SUITE " + re.escape(name)
+            + r" start cases=(\d+) sel=(\S+) list=(\S*)$"
         )
         for line in self.lines:
-            match = pattern.match(line.strip())
+            match = pattern.search(line.strip())
             if match:
                 names = match.group(3)
                 return {
@@ -101,11 +113,11 @@ class Transcript:
 
     def sentinel(self, name: str) -> dict | None:
         pattern = re.compile(
-            r"^BOARD-SUITE " + re.escape(name)
+            r"(?:^|\s)BOARD-SUITE " + re.escape(name)
             + r" result=(pass|fail) cases=(\d+) ok=(\d+) exit=(\d+)$"
         )
         for line in self.lines:
-            match = pattern.match(line.strip())
+            match = pattern.search(line.strip())
             if match:
                 return {
                     "result": match.group(1),
@@ -119,9 +131,9 @@ class Transcript:
         """(case, verdict) pairs for this suite, plus any foreign CASE line."""
         cases = []
         foreign = []
-        pattern = re.compile(r"^CASE (\S+)/(\S+) (PASS|FAIL)$")
+        pattern = re.compile(r"(?:^|\s)CASE (\S+)/(\S+) (PASS|FAIL)$")
         for line in self.lines:
-            match = pattern.match(line.strip())
+            match = pattern.search(line.strip())
             if not match:
                 continue
             if match.group(1) == suite:
@@ -138,7 +150,7 @@ class Transcript:
                     found.append(line.strip())
                     break
             else:
-                if re.search(r"^CASE \S+/\S+ FAIL$", line.strip()):
+                if re.search(r"(?:^|\s)CASE \S+/\S+ FAIL$", line.strip()):
                     found.append(line.strip())
         return found
 
