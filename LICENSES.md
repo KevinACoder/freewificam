@@ -28,7 +28,7 @@ carry the same terms in their file header).
 |---|---|---|
 | `net80211` | BSD-3-Clause (`net80211/`, NetBSD per-file blocks) and BSD-2-Clause (`port/`, `compat/`, `crypto/` per-file blocks) | per-directory summary kept in `components/net80211/LICENSES/README.md`; the retired driver directory of the upstream library was ISC (not present in this tree) |
 | `skbuff` | Apache-2.0 | TizenRT/Realtek lineage, `LICENSE.Apache-2.0` kept next to the unit |
-| `linuxkpi` | BSD-2-Clause (code files); `skbuff/skbuff_pool.h` self-describes an Apache-2.0 lineage | declarations of the Linux kernel API surface, written first-party |
+| `linuxkpi` | BSD-2-Clause (code files); `skbuff/skbuff_pool.h` self-describes an Apache-2.0 lineage | declarations of the Linux kernel API surface, written first-party; the pool body `skbuff/skbuff_pool.c` is first-party BSD-2-Clause written against the Apache-2.0 TizenRT/Realtek fact source (lineage and the change ledger are in `components/linuxkpi/skbuff/`) |
 | `cherrysh` | Apache-2.0 | `LICENSE` at the unit root |
 | `printf` | MIT | `LICENSE` at the unit root (mpaland/printf) |
 | `tlsf` | BSD-3-Clause | terms are in the `tlsf.h` copyright header (including the endorsement clause); no separate license file |

@@ -101,6 +101,18 @@ struct lkpi_skb_pool_stats {
  * critical section (first alloc wins, callers may also call it early) */
 void lkpi_skb_pool_init(void);
 
+/*
+ * Select the pool's geometry and reset it: the compiled CONFIG_ macros are upper
+ * bounds, a request above them (or empty) is refused with a non-zero return and
+ * the geometry stays unchanged.  A build that never calls this runs at the
+ * compiled geometry - the board configuration; the host contract harness selects
+ * a scenario geometry per run, the same way the fact source's weak geometry
+ * variables let a board choose its pool sizes.  Resetting invalidates every live
+ * object by contract.  Returns 0 on success.
+ */
+int lkpi_skb_pool_configure(unsigned int n_header, unsigned int n_data,
+			    unsigned int data_sz, int heap_fallback);
+
 /* the three symbols the linuxkpi_core.h macros have always mapped to;
  * only the implementation moved here */
 struct sk_buff *lkpi_skb_alloc(unsigned int size, unsigned int gfp);
@@ -111,8 +123,8 @@ void lkpi_skb_pool_stats(struct lkpi_skb_pool_stats *out);
 /* emergency outlet: called from the heap assert path, where the normal
  * print lock can be held (board_log_emergency semantics) */
 void lkpi_skb_gen_report(void);
-/* put/push on a freed slot: geometry ops in linuxkpi_core.c call this
- * when they see the release magic on a live-looking skb */
+/* put/push on a freed slot: the geometry entry points in the pool body call
+ * this when they see the release magic on a live-looking skb */
 void lkpi_skb_uaf_hit(struct sk_buff *skb);
 /* full counters, normal console */
 void lkpi_skb_diag_dump(void);

@@ -28,8 +28,9 @@ not rediscovered later):
 * `skbuff/skbuff_pool.h` declares the Linux-shaped skbuff contract face that
   `linuxkpi_core.h` includes, while the pool's source of truth is the verbatim
   TizenRT unit in `components/skbuff/`. The two faces converge in the memory
-  subsystem / consumer rounds; every step of that convergence is a ledger entry
-  here.
+  subsystem / consumer rounds; **the pool body landed in the pool-body R1 round:
+  its eight convergence entries and the one face addition
+  (`lkpi_skb_pool_configure`) are recorded in `skbuff/DIVERGENCES.md`**.
 * `usb/lkpi_usbh_class.c` and `usb/usbkpi_cmds.c` stay vendored but outside the
   host build (class hooks and diagnostics of the board line). Adopting them
   later - if a consumer appears - produces one entry per change.
