@@ -164,6 +164,9 @@ unsigned int wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6],
 /* The stack's current state value (the imported numbering), -1 when detached. */
 int	wlan_bridge_state(void);
 
+/* Is a sweep in flight? (the radio's dwell pump watches this) */
+int	wlan_bridge_scan_active(void);
+
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);

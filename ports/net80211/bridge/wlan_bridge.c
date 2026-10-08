@@ -478,6 +478,12 @@ wlan_bridge_scan_start(void)
 
 	if (!bridge.attached)
 		return -ENODEV;
+	/* one sweep at a time: the radio has one channel walk, and a second
+	 * arm over a live one would corrupt the filter/walk bookkeeping. The
+	 * two sweep drivers in a WPA image (a case and the supplicant) coexist
+	 * by the caller retrying this refusal, not by nesting. */
+	if (bridge.scanning)
+		return -EBUSY;
 	if (bridge.ops->filter == NULL ||
 	    bridge.ops->filter(bridge.drv, WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC,
 	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC) != 0) {
@@ -578,6 +584,18 @@ wlan_bridge_scan_stats(unsigned int *starts, unsigned int *completes,
 		*filter_clears = bridge.filter_clears;
 }
 
+
+/*
+ * Is a sweep in flight? The radio's dwell pump asks this: while the stack is
+ * sweeping, someone must hand it ieee80211_next_scan() at the dwell period,
+ * and the bridge already knows whether one is armed.
+ */
+int
+wlan_bridge_scan_active(void)
+{
+
+	return bridge.attached && bridge.scanning;
+}
 /*
  * Set the interface's desired SSID: what a joiner configures before a sweep,
  * and what the stack's own match then requires a candidate to carry. The
@@ -713,7 +731,13 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	}
 	wlan_port_serializer_unlock();
 
-	if (!ieee80211_sta_join(ic, ni)) {
+	if (ieee80211_sta_join(ic, ni)) {
+		wlan_osal_log("wlan: join %.*s bssid=%02x:%02x:%02x:%02x:%02x:%02x "
+		    "%s\n", (int)len, (const char *)ssid, ni->ni_bssid[0],
+		    ni->ni_bssid[1], ni->ni_bssid[2], ni->ni_bssid[3],
+		    ni->ni_bssid[4], ni->ni_bssid[5],
+		    ie_len != 0 ? "rsn" : "open");
+	} else {
 		ret = -EIO;
 	}
 	/* sta_join consumed the reference on success (ic_bss holds it); a

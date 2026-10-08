@@ -34,6 +34,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "os/cmsis2/cmsis2.h"
+
+#include "../osal/wlan_osal.h"
+
 #include "wlan_bridge.h"
 
 #include "wpa_vendor_port.h"
@@ -138,6 +142,25 @@ wlan_wpa_eapol_sink(const uint8_t src[6], const uint8_t *buf, size_t len,
 static int
 vp_ensure_up(void)
 {
+	struct wlan_bridge_counters c;
+	unsigned int i;
+
+	/* The console may ask for the interface before the bring-up case has
+	 * attached it (both run concurrently). Waiting here is the honest
+	 * semantics of "bring the interface up": the caller - the console
+	 * thread by contract - can afford it, and the alternative is that the
+	 * first connect on a fresh boot loses a race it cannot see. Bounded so
+	 * a genuinely absent card reports instead of hanging the shell. */
+	for (i = 0; i < 1200; i++) {
+		wlan_bridge_stats(&c);
+		if (c.attached)
+			break;
+		osDelay(50);
+	}
+	if (!c.attached) {
+		wlan_osal_log("wlan: no interface after 60 s; is the card in?\n");
+		return -1;
+	}
 
 	if (wlan_bridge_up() != 0)
 		return -1;
@@ -148,8 +171,22 @@ vp_ensure_up(void)
 	 * candidates and the supplicant sees no PSK network at all */
 	wlan_bridge_set_wpa(1);
 	wlan_port_set_eapol_rx(wlan_wpa_eapol_sink, NULL);
-	wlan_port_set_event_handler(wlan_wpa_event_sink, NULL);
+	wlan_wpa_vendor_events_arm();
 	return 0;
+}
+
+/*
+ * (Re-)take the port's single event slot for the backend's sink. ensure_up
+ * calls this, and so does a presentation layer that registered its own
+ * handler afterwards (wlannetif_add does): the composition rule is that the
+ * backend owns the slot and forwards the association to the bound netif, so
+ * whoever registered last, one call puts the chain back in that shape.
+ */
+void
+wlan_wpa_vendor_events_arm(void)
+{
+
+	wlan_port_set_event_handler(wlan_wpa_event_sink, NULL);
 }
 
 static int

@@ -22,6 +22,10 @@ int	wlan_wpa_vendor_init(void);
 void	wlan_wpa_netif_bind(void *netif, void (*on_assoc)(void *),
 	    void (*on_disassoc)(void *));
 
+/* (re-)take the port's single event slot for the backend's sink; call after
+ * any later registration (the netif's own add registers one) */
+void	wlan_wpa_vendor_events_arm(void);
+
 /* EAPOL frames the port's receive seam routed to the supplicant, and frames
  * the seam rejected as malformed before the supplicant saw them. */
 void	wlan_wpa_vendor_stats(unsigned int *eapol_rx, unsigned int *badframe);
