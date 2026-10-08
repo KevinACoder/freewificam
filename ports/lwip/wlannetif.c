@@ -128,10 +128,29 @@ wlan_data_rx(const uint8_t *frame, size_t len, void *arg)
 	}
 }
 
+/* The association steps, callable by whoever owns the port's single event
+ * slot: this layer's own handler below, or the supplicant backend forwarding
+ * through wlan_wpa_netif_bind in a WPA image. The callback runs in the
+ * bridge's context, so this only sets state the TCP/IP thread will act on. */
+void
+wlannetif_note_assoc(struct netif *netif)
+{
+
+	if (netif != NULL)
+		netif_set_link_up(netif);
+}
+
+void
+wlannetif_note_disassoc(struct netif *netif)
+{
+
+	if (netif != NULL)
+		netif_set_link_down(netif);
+}
+
 /* The port's event seam: the bridge reports scan/assoc/disassoc through it. On
  * association the link is up and the DHCP client starts; on disassociation it
- * stops. The callback runs in the bridge's context, so it only sets state the
- * TCP/IP thread will act on. */
+ * stops. */
 static void
 wlan_event(enum wlan_port_event event, const uint8_t *addr, void *arg)
 {
@@ -142,10 +161,10 @@ wlan_event(enum wlan_port_event event, const uint8_t *addr, void *arg)
 		return;
 	switch (event) {
 	case WLAN_PORT_ASSOC:
-		netif_set_link_up(netif);
+		wlannetif_note_assoc(netif);
 		break;
 	case WLAN_PORT_DISASSOC:
-		netif_set_link_down(netif);
+		wlannetif_note_disassoc(netif);
 		break;
 	case WLAN_PORT_SCAN_DONE:
 		break;
