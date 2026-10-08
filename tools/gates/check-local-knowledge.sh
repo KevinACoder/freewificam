@@ -100,7 +100,10 @@ components/linuxkpi/linuxkpi_impl.h
 components/linuxkpi/linuxkpi_core.c
 components/linuxkpi/skbuff/skbuff_pool.c
 components/linuxkpi/skbuff/PROVENANCE.md
-components/linuxkpi/skbuff/DIVERGENCES.md'
+components/linuxkpi/skbuff/DIVERGENCES.md
+components/linuxkpi/usb/linuxkpi_usb.c
+components/linuxkpi/usb/linuxkpi_usb.h
+components/linuxkpi/usb/lkpi_usbh_class.c'
 
 files=$(git ls-files -- "$paths_self" "$paths_vendored" $paths_imported)
 records=$(git ls-files -- $imported_records)

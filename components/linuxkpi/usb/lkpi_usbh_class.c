@@ -3,11 +3,11 @@
  * lkpi_usbh_class.c - the CherryUSB class hook that hands a claimed
  * interface to the Linux usb_driver registered through usb_register().
  *
- * Generalized from the prior line's usbh_rtw88_class.c ([EXPL], board-proven
- * in the rtw88 L1 round) per SPEC S6/linuxkpi R3: "每类设备一个认领钩子" -
+ * Generalized from the prior line's usbh_rtw88_class.c (board-proven in the
+ * rtw88 L1 round) per the class-hook rule "one claim hook per class" -
  * the build_device/claim plumbing below is class-agnostic, each consumer
- * instantiates its own usbh_class_info (the MSC hook is this round's
- * consumer; the wlan hook joins with its own line).
+ * instantiates its own usbh_class_info (the MSC hook and the wireless hook
+ * are this tree's two consumers).
  *
  * This is the CherryUSB-side replacement for the Linux USB core's
  * enumerate-and-match loop: CherryUSB enumerates (its own hub thread),
@@ -212,8 +212,8 @@ static const struct usbh_class_driver lkpi_msc_class_driver = {
 
 /*
  * Class match 08/06/50 = Mass Storage / SCSI transparent command set /
- * Bulk-Only transport (spec 开放问题 9: 类匹配最稳; the driver's own
- * id_table re-checks the same triple).  No VID/PID table - the negative
+ * Bulk-Only transport (the most reliable of the class triples; the driver's
+ * own id_table re-checks the same triple).  No VID/PID table - the negative
  * guard above handles the 1a2b CD-ROM persona.
  */
 CLASS_INFO_DEFINE const struct usbh_class_info lkpi_msc_class_info = {
@@ -282,7 +282,7 @@ lkpi_usbh_claimed_intf(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* linuxkpi-hub H2: the claim-less hub attachment (spec §3.3-1)         */
+/* linuxkpi-hub H2: the claim-less hub attachment */
 /*                                                                      */
 /* Registering a class-0x09 lkpi hook is a dead end either way (the     */
 /* section walk takes the first match, usbh_core.c:97-131, and a        */
