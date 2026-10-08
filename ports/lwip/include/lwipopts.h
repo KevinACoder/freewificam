@@ -56,11 +56,17 @@
 /* The pbuf pools stay static: a bounded, deterministic data path is the
  * point of the static plan on a small target. */
 #define MEMP_MEM_MALLOC                 0
-#define MEM_SIZE                        (256 * 1024)
+/* 1 MB: the converged measurement-tier heap. 128 KB exhausted the static
+ * heap under a 128-deep pbuf burst in the earlier gigabit work, and the
+ * reference single-core gigabit SDK this tier follows carries 1 MB too. */
+#define MEM_SIZE                        (1024 * 1024)
 /* AArch64 pointers are 8 bytes: aligned blocks keep every pointer field of
  * every pbuf naturally aligned. */
 #define MEM_ALIGNMENT                   8
-#define PBUF_POOL_SIZE                  128
+/* 256 buffers: the RX ring depth (128) plus an in-flight TCP burst must fit
+ * without pool exhaustion - a 40-deep pool dropped 13.5% of ACKs in the
+ * earlier gigabit baseline. */
+#define PBUF_POOL_SIZE                  256
 /* One full 1518-byte frame plus headroom in a single pool buffer, so a
  * maximum-frame receive never needs a chain. */
 #define PBUF_POOL_BUFSIZE               1600
@@ -108,12 +114,60 @@
 /* 0 = no queue limit; the queue itself is what the loopback path needs. */
 #define LWIP_LOOPBACK_MAX_PBUFS         0
 
+/* --- measurement tier: TCP windows and pools (converged values) --------------
+ *
+ * These are the numbers the earlier gigabit work measured at: the upstream
+ * defaults (4 * MSS) put a ~6 KB ceiling on in-flight data, which caps a
+ * single TCP stream at ~45 Mbit/s on this path regardless of the CPU. The
+ * tier is a bundle on purpose - it is the configuration the 643/496 Mbit/s
+ * board evidence was taken with, so it moves as one. Setting the block to 0
+ * restores the upstream defaults (the bring-up tier). */
+#define LWIP_PERF_TIER                  1
+
+#if LWIP_PERF_TIER
+#define TCP_MSS                         1460
+/* Window scaling: announced window = TCP_WND >> TCP_RCV_SCALE = 32768,
+ * which fits the 16-bit header field; the receive window itself is 256 KB,
+ * i.e. >1 Gbit/s of headroom at the measured RTT. */
+#define LWIP_WND_SCALE                  1
+#define TCP_RCV_SCALE                   3
+#define TCP_WND                         262144
+#define TCP_SND_BUF                     262144
+/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 719. */
+#define TCP_SND_QUEUELEN                768
+/* The opt.h default (TCP_SND_BUF / 2) trips the u16 guard sanity check;
+ * 32 KB keeps the writer awake far from it. */
+#define TCP_SNDLOWAT                    32768
+#define TCP_QUEUE_OOSEQ                 1
+#define MEMP_NUM_TCP_SEG                768
+/* Matches TCPIP_MBOX_SIZE: an mbox slot without its msg-pool element drops
+ * the frame anyway, so sizing only the mbox is dead weight. */
+#define MEMP_NUM_TCPIP_MSG_INPKT        128
+#endif /* LWIP_PERF_TIER */
+
+/* --- RX checksum offload (flips with the driver, never alone) ----------------
+ *
+ * With CONFIG_GMAC_RX_HWCSUM the GMAC's IPC block validates the L3/L4
+ * checksum of every IP frame and the driver drops RDES1-flagged bad frames
+ * before they reach the stack, so the software verification below is a
+ * redundant full-payload pass per packet. ICMP keeps its software check (its
+ * checksum has no pseudo header; the IPC payload check still flags bad ICMP
+ * frames). The two switches must move together. */
+#if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
+#define CHECKSUM_CHECK_IP               0
+#define CHECKSUM_CHECK_TCP              0
+#define CHECKSUM_CHECK_UDP              0
+#endif
+
 /* --- debugging -------------------------------------------------------------- */
 
 /* Stays off: every diagnostic line would go out the 115200 console, which
  * drags the network path to a halt. Enable per file while debugging. */
 #define LWIP_DEBUG                      0
-#define LWIP_STATS                      0
+/* Protocol counters on: they are the "did the frame leave / did a reply come
+ * back" evidence the wired-line bring-up reads out (gmac net), and cost one
+ * increment per event. */
+#define LWIP_STATS                      1
 #define LWIP_STATS_DISPLAY              0
 
 #endif /* FREEWEB_LWIPOPTS_H */
