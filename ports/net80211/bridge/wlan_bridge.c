@@ -501,10 +501,22 @@ wlan_bridge_scan_start(void)
 	}
 	bridge.scanning = 1;
 	bridge.scan_starts++;
+	wlan_port_serializer_lock();
+	/*
+	 * Re-arm the channel list: in MANUAL roaming the stack stays in its
+	 * SCAN state after a sweep ends (end_scan returns without joining), so
+	 * the next scan_start is a SCAN -> SCAN transition - which only probes
+	 * the current channel unless someone has refilled ic_chan_scan. The
+	 * mask is consumed channel by channel during the walk, so every sweep
+	 * needs its own copy (the predecessor's bridge did the same).
+	 */
+	memcpy(bridge.ic->ic_chan_scan, bridge.ic->ic_chan_active,
+	    sizeof(bridge.ic->ic_chan_scan));
 	/* drive the stack's own scan machine: it builds and queues the probe
 	 * requests (moved by the management drain above) and arms the channel
 	 * walk the dwell advances */
 	ieee80211_new_state(bridge.ic, IEEE80211_S_SCAN, -1);
+	wlan_port_serializer_unlock();
 	return 0;
 }
 
