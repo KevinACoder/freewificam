@@ -1,5 +1,10 @@
 #!/bin/sh
-# Gate: kernel-interface isolation for the net80211 port layer.
+# Gate: kernel-interface isolation for the first-party port layers.
+#
+# Covered port trees: ports/net80211 (the wireless stack's port) and
+# ports/cherryusb (the USB host stack's board layer, osal and class
+# application half). Each is compiled here under --port-objs/--sources; the
+# cross32 gate carries a per-tree translation-unit list.
 #
 # The charter rule: components reach the kernel only through CMSIS-RTOS2, so no
 # object or source of this project may name another kernel's API. Three gates:
@@ -82,6 +87,26 @@ source_scan() {
 		| xargs -r grep -nHE "$forbidden" || true
 }
 
+cross32_cherryusb() {
+	# The first-party USB port files: the osal (one CMSIS-RTOS2 backend for both
+	# kernels) and the class application half. Compile-only, same rule as the
+	# wireless tree; the board-specific glue and the hardware sequence are
+	# excluded - they legitimately touch this board's registers and timers.
+	root=$1
+	cfg=$root/ports/cherryusb/board/rk3568-itx
+	cu=$root/third-party/cherryusb
+	flags="-std=c11 -Wall -DCMSIS2_BACKEND_THREADX
+	    -I$root -I$root/os/cmsis2 -I$root/os/baremetal -I$cfg
+	    -I$cu/common -I$cu/core -I$cu/class/hub -I$cu/class/msc
+	    -I$root/third-party/CMSIS_6/CMSIS/RTOS2/Include"
+	# shellcheck disable=SC2086
+	for f in $root/ports/cherryusb/osal/cmsis2/osal_cmsis2.c \
+	    $root/ports/cherryusb/class/msc_app.c; do
+		$CROSS -mcpu=cortex-m4 -mthumb $flags -fsyntax-only "$f" 2>&1 \
+			| grep -E 'error:' || true
+	done
+}
+
 CROSS=${CROSS:-arm-none-eabi-gcc}
 cross32_scan() {
 	# The port layer and the stack, syntax only, 32-bit target. The flags mirror
@@ -130,6 +155,9 @@ if command -v "$CROSS" >/dev/null 2>&1; then
 	else
 		report "cannot locate the repository root for the cross32 gate" "cross32 gate"
 	fi
+	if [ -n "$root" ] && [ -d "$root/ports/cherryusb" ]; then
+		report "$(cross32_cherryusb "$root")" "cross32 gate, cherryusb port (arm-none-eabi, cortex-m4)"
+	fi
 else
 	echo "check-kernel-isolation: BLOCKED (cross32 gate: $CROSS not on PATH)"
 fi
@@ -144,7 +172,7 @@ if [ "$canary" = 1 ]; then
 	port_src_canary=
 	for d in $sources; do
 		if [ -d "$d" ] && [ "$d" != "$stack_objs" ]; then
-			case "$d" in */ports/net80211) port_src_canary="$d/.canary-isolation.c" ;; esac
+			case "$d" in ports/*|*/ports/*) port_src_canary="$d/.canary-isolation.c" ;; esac
 		fi
 	done
 	printf 'void *canary(void) { return (void *) pthread_self(); }\n' > "$tmp/canary.c"

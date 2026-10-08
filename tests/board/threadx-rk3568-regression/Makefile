@@ -51,10 +51,15 @@ SIZE := $(CROSS_COMPILE)size
 # same vector file the judges consume), so this one target needs the host cc.
 HOSTCC ?= cc
 
+# The build tag is stamped into the banner, so it is a real build input: it is
+# written to a stamp file and every object depends on it, or a tag that changes
+# without a source change would leave the old tag inside a "fresh" image (the
+# dirty-tree builds of this round did exactly that).
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
 
 BUILD := build
 TARGET := $(BUILD)/$(SUITE_NAME)
+TAG_STAMP := $(BUILD)/build-tag.stamp
 
 INCLUDES := \
 	-I$(ROOT) \
@@ -220,11 +225,11 @@ ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide.
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
-.PHONY: all check guards clean
+.PHONY: all check guards clean FORCE
 all: $(TARGET).bin check
 
 define COMPILE_RULE
-$(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1)
+$(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@mkdir -p $$(dir $$@)
 	@echo "  CC $$<"
 	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_WARNED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
@@ -238,6 +243,10 @@ $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(USB_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+
+$(TAG_STAMP): FORCE
+	@mkdir -p $(BUILD)
+	@printf '%s' '$(BUILD_TAG)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG)' > $@
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
