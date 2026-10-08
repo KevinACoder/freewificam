@@ -43,6 +43,7 @@
 #include "tx_mutex.h"
 #include "tx_semaphore.h"
 #include "tx_queue.h"
+#include "tx_timer.h"
 
 #include "cmsis_os2.h"
 
@@ -817,6 +818,8 @@ osSemaphoreId_t osSemaphoreNew( uint32_t max_count, uint32_t initial_count,
     }
     return ( osSemaphoreId_t ) sem;
 }
+
+
 
 osStatus_t osSemaphoreAcquire( osSemaphoreId_t semaphore_id, uint32_t timeout )
 {

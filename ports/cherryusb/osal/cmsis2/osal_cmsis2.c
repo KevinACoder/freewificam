@@ -275,16 +275,78 @@ int usb_osal_mq_recv(usb_osal_mq_t mq, uintptr_t *addr, uint32_t timeout)
 /* Software timers                                                     */
 /* ------------------------------------------------------------------ */
 
-/* The wrapper struct of the interface carries the handler, its argument and the
- * period in milliseconds; the CMSIS timer is handed the wrapper as its argument, so
- * the expiry trampoline reads the same fields the reference's trampoline reads. */
+/* Timer callbacks are deferred onto a service thread, never run on the kernel's
+ * timer context: the consumer here is the hub class, whose expiry callback submits
+ * a control transfer and therefore suspends, and a callback running on the timer
+ * context cannot suspend (the kernel rejects the whole submit). The service thread
+ * is an ordinary thread, so it can. A full queue drops one expiry - the timer
+ * re-arms and the next expiry retries - so the trampoline never blocks.
+ *
+ * Shape and rationale from the carrier's port of the same stack
+ * (its usb_osal_threadx.c deferral, which records the measured symptom: a
+ * Configure Endpoint command that "timed out" in milliseconds with the
+ * kernel's wait-error status). */
+#define USB_OSAL_TIMER_QSLOTS 16U
+
+struct usb_osal_timer_defer {
+	struct usb_osal_timer *timer;
+};
+
+static osMessageQueueId_t usb_osal_timer_q;
+static struct usb_osal_timer_defer usb_osal_timer_slots[USB_OSAL_TIMER_QSLOTS];
+static uint32_t usb_osal_timer_slot_next;
+static osThreadId_t usb_osal_timer_thread;
+osThreadId_t usb_osal_timer_service_id(void);
+static void usb_osal_timer_expired(void *argument);
+
+static void usb_osal_timer_service(void *argument)
+{
+	struct usb_osal_timer_defer *slot;
+	(void) argument;
+
+	for (;;) {
+		if (osMessageQueueGet(usb_osal_timer_q, &slot, NULL, osWaitForever) == osOK) {
+			struct usb_osal_timer *timer = slot->timer;
+
+			if (timer->handler != NULL) {
+				timer->handler(timer->argument);
+			}
+		}
+	}
+}
+
 static void usb_osal_timer_expired(void *argument)
 {
 	struct usb_osal_timer *timer = (struct usb_osal_timer *) argument;
+	struct usb_osal_timer_defer *slot;
+	uint32_t idx;
 
-	if (timer->handler != NULL) {
-		timer->handler(timer->argument);
+	if (usb_osal_timer_q == NULL) {
+		return;
 	}
+	idx = usb_osal_timer_slot_next++ % USB_OSAL_TIMER_QSLOTS;
+	slot = &usb_osal_timer_slots[idx];
+	slot->timer = timer;
+	(void) osMessageQueuePut(usb_osal_timer_q, &slot, 0, 0);
+}
+
+/* Called once by the board glue before the stack starts; idempotent. */
+void usb_osal_timer_service_start(void)
+{
+	if (usb_osal_timer_q != NULL) {
+		return;
+	}
+	usb_osal_timer_q = osMessageQueueNew(USB_OSAL_TIMER_QSLOTS, sizeof(void *), NULL);
+	if (usb_osal_timer_q == NULL) {
+		return;
+	}
+	usb_osal_timer_thread = osThreadNew(usb_osal_timer_service, NULL,
+					    &(osThreadAttr_t){
+						    .name = "usb_tmr",
+						    .priority = osPriorityNormal,
+						    .stack_size = 4096U,
+					    });
+	(void) usb_osal_timer_thread;
 }
 
 struct usb_osal_timer *usb_osal_timer_create(const char *name, uint32_t timeout_ms,

@@ -32,20 +32,29 @@
 #include "usbh_core.h"
 #include "usbh_msc.h"
 
+#include "msc_app.h"
+
 #define MSC_BLOCK_BYTES   512U
 #define MSC_CHUNK_SECTORS 128U          /* 64 KiB per transfer */
 #define MSC_READ_SECTORS  (32U * 1024U * 1024U / MSC_BLOCK_BYTES)
 #define MSC_WRITE_SECTORS (16U * 1024U * 1024U / MSC_BLOCK_BYTES)
-#define MSC_TAIL_SECTORS  2048U         /* scratch area: the disk's last MiB */
+/* The scratch area sits inside the disk's tail: the bulk write of
+ * MSC_WRITE_SECTORS plus the roundtrip chunk must not run past the end, and
+ * nothing below it may be touched (the device STALLs an out-of-range write -
+ * measured). */
+#define MSC_TAIL_SECTORS  2048U
+#define MSC_SCRATCH_SECTORS (MSC_WRITE_SECTORS + MSC_CHUNK_SECTORS + MSC_TAIL_SECTORS)
 #define MSC_WAIT_SPINS    600U          /* 100 ms per spin -> 60 s */
 
-static uint8_t msc_buf[MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES];
-static uint8_t msc_ref[MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES];
+/* The stack asserts DMA buffers are 64-byte aligned (CONFIG_USB_ALIGN_SIZE),
+ * so the transfer buffers carry the alignment explicitly. */
+static uint8_t msc_buf[MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES] __attribute__((aligned(64)));
+static uint8_t msc_ref[MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES] __attribute__((aligned(64)));
 
 static struct usbh_msc *msc_wait(void)
 {
 	for (unsigned spin = 0; spin < MSC_WAIT_SPINS; spin++) {
-		struct usbh_msc *msc = (struct usbh_msc *)usbh_find_class_instance("usbh_msc");
+		struct usbh_msc *msc = usb_msc_instance();
 
 		if (msc != 0) {
 			return msc;
@@ -96,9 +105,8 @@ void usb_msc_case(unsigned busid, const char *hcd)
 	board_log("usbh: msc read blk0=0x%02x%02x%02x%02x ok\n",
 		  msc_buf[0], msc_buf[1], msc_buf[2], msc_buf[3]);
 
-	/* The scratch area is the disk's last mebibyte: inside the device,
-	 * outside any partition table or filesystem. */
-	scratch = msc->blocknum - MSC_TAIL_SECTORS;
+	/* Inside the device, outside any partition table or filesystem. */
+	scratch = msc->blocknum - MSC_SCRATCH_SECTORS;
 
 	msc_pattern(msc_ref, 0x5AU);
 	if (usbh_msc_scsi_write10(msc, scratch, msc_ref, MSC_CHUNK_SECTORS) != 0) {
@@ -119,7 +127,7 @@ void usb_msc_case(unsigned busid, const char *hcd)
 
 	start_ms = osKernelGetTickCount();
 	for (uint32_t done = 0; done < MSC_READ_SECTORS; done += MSC_CHUNK_SECTORS) {
-		if (usbh_msc_scsi_read10(msc, done, msc_buf, MSC_CHUNK_SECTORS) != 0) {
+		if (usbh_msc_scsi_read10(msc, 2048U + done, msc_buf, MSC_CHUNK_SECTORS) != 0) {
 			board_case_fail("bulk read failed");
 			return;
 		}

@@ -154,6 +154,10 @@ int usb_board_init(unsigned busid)
 	 * entry point is idempotent, so a per-bus bring-up order is safe. */
 	usb_domain_up();
 
+	/* The stack's timers need their service thread before the first hub
+	 * timer arms. */
+	usb_osal_timer_service_start();
+
 	if (usb_board_bus_is_xhci(busid)) {
 		usbh_register_hc_driver(busid, &xhci_hc_driver);
 	} else {

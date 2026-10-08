@@ -32,6 +32,12 @@
  * board. */
 int usb_board_init(unsigned busid);
 
+/* Start the deferred-timer service thread the osal needs before any timer can
+ * fire. The stack's timers must not run their callbacks on the kernel's timer
+ * context (the hub's expiry callback suspends inside a command submit, which
+ * that context may not do), so expiries are queued to this thread. Idempotent. */
+void usb_osal_timer_service_start(void);
+
 /* The stack's enumeration event sink: every milestone (init, configured,
  * interface start/unsupported, disconnect) becomes one anchor line. Pass it to
  * usbh_initialize(); without a handler the core installs a silent dummy and a

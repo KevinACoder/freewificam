@@ -193,7 +193,8 @@ ALLOC_SRCS := $(ROOT)/components/tlsf/tlsf.c
 USB_BOARD_SRCS := \
 	$(USB_BOARD)/usb_domain.c \
 	$(USB_PORT)/board/rk3568-itx/usb_glue.c \
-	$(USB_PORT)/osal/cmsis2/osal_cmsis2.c
+	$(USB_PORT)/osal/cmsis2/osal_cmsis2.c \
+	$(USB_PORT)/class/msc_app.c
 
 USB_STACK_SRCS := \
 	$(CHERRYUSB)/core/usbh_core.c \
@@ -204,6 +205,7 @@ USB_STACK_SRCS := \
 
 USB_INCLUDES := \
 	-I$(USB_PORT)/board/rk3568-itx \
+	-I$(USB_PORT)/class \
 	-I$(USB_BOARD) \
 	-I$(CHERRYUSB)/common \
 	-I$(CHERRYUSB)/core \

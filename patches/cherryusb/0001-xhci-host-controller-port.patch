@@ -1,16 +1,14 @@
-From 9429d9aa300d13e3409211168ec491832c3b3a39 Mon Sep 17 00:00:00 2001
+From 37719b69330d08bed6b49ec74e6b1adad655a504 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu2023@gmail.com>
-Date: Thu, 8 Oct 2026 09:59:22 +0800
-Subject: [PATCH] feat(port): add an xHCI host controller port
-
-Add usb_hc_xhci.c and usb_hc_xhci.h under port/xhci/: a host controller
-driver for Synopsys DWC3 xHCI instances, implementing the
-struct usbh_hc_driver contract with the async URB model of the sibling
-port/ehci/usb_hc_ehci.c - IRQ-driven event ring processing, one URB in
-flight per endpoint with a per-ring waitsem for a timeout'd submitter,
-completion callbacks from the interrupt path, and the EHCI port's
-killed dance for the kill/complete race.  HS/FS only: no streams, no
-SuperSpeed; isochronous transfers are rejected.
+Date: Thu, 8 Oct 2026 12:15:48 +0800
+Subject: [PATCH] Add usb_hc_xhci.c and usb_hc_xhci.h under port/xhci/: a host
+ controller driver for Synopsys DWC3 xHCI instances, implementing the struct
+ usbh_hc_driver contract with the async URB model of the sibling
+ port/ehci/usb_hc_ehci.c - IRQ-driven event ring processing, one URB in flight
+ per endpoint with a per-ring waitsem for a timeout'd submitter, completion
+ callbacks from the interrupt path, and the EHCI port's killed dance for the
+ kill/complete race.  HS/FS only: no streams, no SuperSpeed; isochronous
+ transfers are rejected.
 
 Lineage.  The register sequence is NetBSD netbsd-11
 sys/dev/usb/xhci.c rev 1.188.2.4 (BSD-2-Clause; the notice is kept in
@@ -77,18 +75,18 @@ that lets this port link next to the EHCI one.
 
 Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
 ---
- port/xhci/usb_hc_xhci.c | 2687 +++++++++++++++++++++++++++++++++++++++
+ port/xhci/usb_hc_xhci.c | 2699 +++++++++++++++++++++++++++++++++++++++
  port/xhci/usb_hc_xhci.h |  390 ++++++
- 2 files changed, 3077 insertions(+)
+ 2 files changed, 3089 insertions(+)
  create mode 100644 port/xhci/usb_hc_xhci.c
  create mode 100644 port/xhci/usb_hc_xhci.h
 
 diff --git a/port/xhci/usb_hc_xhci.c b/port/xhci/usb_hc_xhci.c
 new file mode 100644
-index 0000000..9223146
+index 0000000..bac3b09
 --- /dev/null
 +++ b/port/xhci/usb_hc_xhci.c
-@@ -0,0 +1,2687 @@
+@@ -0,0 +1,2699 @@
 +/*
 + * @file   usb_hc_xhci.c
 + * @brief  DWC3 xHCI host controller driver for the RK3568 USB3 socket
@@ -574,12 +572,17 @@ index 0000000..9223146
 +
 +	ret = usb_osal_sem_take(hcd->cmd_waitsem, timeout_ms);
 +	if (ret < 0) {
++		usbh_console_printf(
++			"xhci: cmd wait1 ret=%d code=%u irqn=%u\n",
++			ret, hcd->cmd_code, hcd->dbg_irq_n);
 +		/* a completion whose interrupt was lost to the EINT/IP race
 +		 * is still sitting in the ring: one synchronous drain before
 +		 * concluding the controller is stuck (the thread/ISR
 +		 * reentry guard keeps this safe) */
 +		xhci_event_process(hcd);
 +		ret = usb_osal_sem_take(hcd->cmd_waitsem, 10U);
++		usbh_console_printf(
++			"xhci: cmd wait2 ret=%d code=%u\n", ret, hcd->cmd_code);
 +	}
 +	if (ret < 0) {
 +		/* NetBSD xhci_abort_command: CRCR.CA, wait CRR self-clear,
@@ -2180,6 +2183,13 @@ index 0000000..9223146
 +				hcd->cmd_slot_id =
 +					(uint8_t)TRB3_SLOT_ID_GET(ev->dw3);
 +				usb_osal_sem_give(hcd->cmd_waitsem);
++			} else {
++				usbh_console_printf(
++					"xhci: cmd ev unmatched want=%08x "
++					"got=%08x code=%u\n",
++					hcd->cmd_trb_addr,
++					(uint32_t)ev->dw0,
++					TRB2_CODE_GET(ev->dw2));
 +			}
 +			break;
 +		case TRB_TYPE_PORT_STATUS: {
