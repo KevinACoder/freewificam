@@ -73,9 +73,46 @@ report() {
 	fi
 }
 
+# First-party files that live inside an imported unit's tree.  A unit's vendored
+# bytes are excluded above (they are a verbatim copy of someone else's tree), but a
+# file this project wrote underneath it is ours to keep clean, so the paths are named
+# here and unioned into the scan set.  Add a path when a new first-party file is
+# written under such a unit.
+authored_in_units='components/linuxkpi/include/net/mac80211.h
+components/linuxkpi/include/net/cfg80211.h
+components/linuxkpi/include/linux/ieee80211.h
+components/linuxkpi/include/linux/if_ether.h
+components/linuxkpi/include/linux/etherdevice.h
+components/linuxkpi/include/linux/average.h
+components/linuxkpi/include/linux/iopoll.h
+components/linuxkpi/include/linux/firmware.h
+components/linuxkpi/include/linux/fs.h
+components/linuxkpi/include/linux/debugfs.h
+components/linuxkpi/include/linux/skbuff.h
+components/linuxkpi/include/linux/kernel.h
+components/linuxkpi/include/linux/printk.h
+components/linuxkpi/include/linux/list.h
+components/linuxkpi/include/linux/netdevice.h
+components/linuxkpi/fw_registry.h
+components/linuxkpi/fw_registry.c
+components/linuxkpi/fw/rtl8188eufw_blob.c
+components/linuxkpi/linuxkpi_impl.h
+components/linuxkpi/linuxkpi_core.c
+components/linuxkpi/linuxkpi_core.h
+components/linuxkpi/linuxkpi_80211.c
+components/linuxkpi/linuxkpi_80211.h
+components/linuxkpi/skbuff/skbuff_pool.c
+components/linuxkpi/skbuff/PROVENANCE.md
+components/linuxkpi/skbuff/DIVERGENCES.md
+components/linuxkpi/usb/linuxkpi_usb.c
+components/linuxkpi/usb/linuxkpi_usb.h
+components/linuxkpi/usb/lkpi_usbh_class.c
+components/linuxkpi/linuxkpi_platform_target.c'
+
 files=$(git ls-files -- "$paths_self" "$paths_vendored" $paths_imported)
 records=$(git ls-files -- $imported_records)
-files=$(printf '%s\n%s\n' "$files" "$records" | grep -v '^$' | sort -u)
+authored=$(git ls-files -- $authored_in_units)
+files=$(printf '%s\n%s\n%s\n' "$files" "$records" "$authored" | grep -v '^$' | sort -u)
 
 findings=$(printf '%s\n' "$files" | xargs -r grep -nHIE "$patterns" -- 2>/dev/null || true)
 report "$findings" "local-path/identifier scan"

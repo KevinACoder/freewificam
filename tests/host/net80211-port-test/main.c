@@ -211,11 +211,22 @@ static void port_smoke(void *argument)
 	if (wlan_seam_stub_calls() < 6) {
 		fail("the seam vtable callbacks did not all run");
 	}
+	if (!wlan_seam_stub_filter_at_scan_start()) {
+		fail("the receive filter's promiscuous bit was not programmed "
+		    "before the sweep began (the scan-group ordering contract)");
+	}
+	if (!wlan_seam_stub_filter_cleared_after_scan()) {
+		fail("the receive filter's promiscuous bit was not cleared after "
+		    "the sweep (the scan-group ordering contract)");
+	}
 
 	printf(TAG "osal=ok serializer=ok mbuf=ok ifnet=ok seam=ok\n");
 	printf(TAG "counters rx_data=%u rx_eapol=%u events=%u seam_calls=%u\n",
 	    rx_data_frames, rx_eapol_frames, port_events,
 	    wlan_seam_stub_calls());
+	printf(TAG "filter promiscuous_before_scan=%d cleared_after=%d\n",
+	    wlan_seam_stub_filter_at_scan_start(),
+	    wlan_seam_stub_filter_cleared_after_scan());
 	printf(TAG "alloc blocks %lu->%lu bytes %lu->%lu\n", blocks0, blocks1,
 	    bytes0, bytes1);
 	printf(TAG "PASS\n");

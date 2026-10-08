@@ -1,0 +1,80 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/*
+ * @file    linux/etherdevice.h
+ * @brief   The Ethernet address helpers Linux drivers expect (copy, compare, classify).
+ * @design declaration-only compatibility face, the same shape as this component's
+ *         linux/usb.h (components/linuxkpi/include/linux/usb.h:1-20). The helpers are
+ *         written as plain byte operations with the same observable semantics as the
+ *         interface (include/linux/etherdevice.h); the upstream word-at-a-time forms are
+ *         an optimisation this project does not need, and reuse this project's
+ *         allocation/string primitives rather than introducing a second set.
+ * @date    08.10.2026
+ */
+
+#ifndef _LINUXKPI_LINUX_ETHERDEVICE_H_
+#define _LINUXKPI_LINUX_ETHERDEVICE_H_
+
+#include "../../linuxkpi_core.h"
+#include <linux/if_ether.h>
+
+static inline bool is_zero_ether_addr(const u8 *addr)
+{
+	return !(addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]);
+}
+
+static inline bool is_multicast_ether_addr(const u8 *addr)
+{
+	return 0x01 & addr[0];
+}
+
+static inline bool is_unicast_ether_addr(const u8 *addr)
+{
+	return !is_multicast_ether_addr(addr);
+}
+
+static inline bool is_broadcast_ether_addr(const u8 *addr)
+{
+	return (addr[0] & addr[1] & addr[2] & addr[3] & addr[4] & addr[5]) == 0xff;
+}
+
+static inline bool is_valid_ether_addr(const u8 *addr)
+{
+	return !is_multicast_ether_addr(addr) && !is_zero_ether_addr(addr);
+}
+
+static inline bool ether_addr_equal(const u8 *addr1, const u8 *addr2)
+{
+	int i;
+
+	for (i = 0; i < ETH_ALEN; i++) {
+		if (addr1[i] != addr2[i])
+			return false;
+	}
+	return true;
+}
+
+static inline void ether_addr_copy(u8 *dst, const u8 *src)
+{
+	int i;
+
+	for (i = 0; i < ETH_ALEN; i++)
+		dst[i] = src[i];
+}
+
+static inline void eth_zero_addr(u8 *addr)
+{
+	int i;
+
+	for (i = 0; i < ETH_ALEN; i++)
+		addr[i] = 0x00;
+}
+
+static inline void eth_broadcast_addr(u8 *addr)
+{
+	int i;
+
+	for (i = 0; i < ETH_ALEN; i++)
+		addr[i] = 0xff;
+}
+
+#endif /* _LINUXKPI_LINUX_ETHERDEVICE_H_ */

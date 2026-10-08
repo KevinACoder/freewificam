@@ -3,7 +3,10 @@
 `skbuff-allocation-free-stress` exercises the seam behind `components/linuxkpi/skbuff/skbuff_pool.h`
 off board: a harness double of the pool body plus a scenario matrix, an invariant
 judge and a seeded random layer. It needs nothing but libc and the production
-headers in this repository.
+headers in this repository. The same suite also builds and runs the **production
+pool body** (`components/linuxkpi/skbuff/skbuff_pool.c`) against the identical
+matrix, judge and streams - see "Modes" below - so the contract is checked
+against the code that ships, not only against its model.
 
 The point of the harness is the contract, not the double. Every expectation is
 read off the two production headers (`skbuff_pool.h` and `linuxkpi_core.h`): the
@@ -46,6 +49,16 @@ the result lines and must be treated as a red run).
 | `skbuff-allocation-free-stress --list-cells` | the nineteen cell ids |
 | `skbuff-allocation-free-stress --selftest-must-red` | the harness self-proof: a misuse stream whose expectation is wrong by construction must go red, and its own replay of the same prefix must land on the same operation index. The process exits non-zero by design - a green run of this mode is a suite failure (exit 3 if the deliberate failure never showed, 4 if the replay did not reproduce it) |
 | `skbuff-allocation-free-stress --verbose` | also prints the pool's own refusal diagnostics; off by default because a stress run produces one line per refused operation |
+
+The same modes exist behind two more binaries, and the suite runs them all:
+
+| binary | backend |
+|---|---|
+| `...-real` | the production pool body, `components/linuxkpi/skbuff/skbuff_pool.c`, reached through `skb_real.c` at the build's compiled geometry |
+| `...-real-mcu` | the same body with the constrained geometry compiled in (eight slots, 256-byte payloads) and the pool's storage-budget assertion turned on, so the bounded claim is a compile-time fact |
+
+The identical matrix, judge and seeded streams drive all three, so the code that
+ships is held to the same contract as the double that anchors its shape.
 
 All results go to stdout with the `SKBST: ` prefix. The process exits 0 only when
 everything it ran held. A first violation prints
@@ -93,6 +106,7 @@ minimal repro.
 | file | role |
 |---|---|
 | `skb_contract.h/.c` | the harness double of the pool body and the include boundary for the production headers |
+| `skb_real.c` | the same observation face over the production pool body (it includes the production translation unit, because a compiled pool keeps its storage static) |
 | `cases.c` | the nineteen-cell scenario matrix |
 | `judge.h/.c` | the four invariant families and the first-witness report |
 | `fuzz.c` | the seeded random layer, the model, the ring and the replay driver |

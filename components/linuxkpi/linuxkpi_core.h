@@ -1638,8 +1638,7 @@ int lkpi_mutex_is_locked(struct mutex *m);
  * cycle).  On this single-core port masking IRQs IS the whole mutual
  * exclusion: no interrupt can fire, so no other thread can be scheduled
  * into the section - which also makes it safe from completion contexts
- * where a blocking mutex was always wrong (the 8821cu C1 lesson,
- * runs/20261003-wlan-final; codex answer-9 recommendation).  The
+ * where a blocking mutex was always wrong.  The
  * no-flags pair parks the saved DAIF in the lock itself (the owner
  * cannot be preempted while holding it, so the slot has a single
  * writer); the irqsave pair carries it in the caller's flags, which
@@ -2292,7 +2291,7 @@ int lkpi_waitq_timedwait(struct wait_queue_head *, int ms);
 
 /* ------------------------------------------------------------------ */
 /* usb_anchor (urb.c:812 family; rtl8xxxu embeds three in its softc;    */
-/* implementation in linuxkpi_usb.c - spec §3.6-4)                      */
+/* implementation in linuxkpi_usb.c (the USB face's own entry)           */
 /* ------------------------------------------------------------------ */
 
 struct urb;

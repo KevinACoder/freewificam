@@ -57,5 +57,8 @@ int	lkpi_usb_urb_is_freed(const struct urb *urb);
 void	lkpi_usb_uaf_hit(const void *p);
 /* DMA staging hook counter (passthrough in this build) */
 unsigned int	lkpi_usb_stage_grant_count(void);
+/* how many drivers the registry holds (the module-section walker's observable
+ * result, and the bring-up's self-check before enumeration starts) */
+unsigned int	lkpi_usb_driver_count_get(void);
 
 #endif /* LINUXKPI_USB_H */

@@ -19,10 +19,21 @@
  *
  * @design plain-C scalar vtable / opaque-handle ABI, re-derived from the
  * previous line's seam shape (components/net80211/linuxkpi/linuxkpi_net80211.h
- * on its stabilize branch, which states the "the ABI carries only C scalar and
+ * on its stabilize branch, which states "the ABI carries only C scalar and
  * byte-array types" rule). Re-derived, not copied: this repository writes its
  * own bytes and the callback set below is the minimum the state machine needs,
  * not the previous line's full surface.
+ *
+ * Revisions (the ABI was frozen at its first consumer; each change is recorded
+ * here with its reason):
+ *   - v2 (bridge round): the `filter` callback joins. A software scan cannot be
+ *     correct without it - the chip's receive filter drops other BSS's beacons
+ *     until the promiscuous bit is programmed - and the ordering (before the
+ *     sweep, cleared after) is a property of the scan flow this seam serves, so
+ *     the callback belongs on the seam rather than behind a driver-private
+ *     path. The vtable is extended at the same point as the scan pair where the
+ *     ordering applies (see WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC). Consumers
+ *     implement the new slot before the scan flow runs.
  */
 
 #ifndef _WLAN_NET80211_SEAM_H_
@@ -50,6 +61,15 @@ enum wlan_seam_iftype {
  * state machine needs today; the bitmask leaves room without changing the ABI. */
 #define WLAN_SEAM_CONFIG_CHANNEL 0x00000001u
 
+/* Receive-filter bits passed to filter(): the chip's receive filter is a
+ * hardware fact the stack cannot see, and the beacon/probe-response
+ * promiscuous bit is the one a software scan depends on - without it a chip
+ * drops beacons from every BSS it does not already know, and the scan table
+ * comes back empty (board evidence; the Linux core programs this same bit
+ * around its own software scan). The value is the chip-side selector, not a
+ * net80211 flag. */
+#define WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC	0x00000010u
+
 struct wlan_seam_drv_ops {
 	/* Bring the chip up/down. Called from the port worker with the
 	 * serializer held; must not sleep on driver-internal waits that need
@@ -65,6 +85,14 @@ struct wlan_seam_drv_ops {
 	 * `freq` the target centre frequency in MHz (0 = no channel change). */
 	int (*config)(struct wlan_seam_drv *drv, uint32_t changed,
 	    uint32_t freq);
+
+	/* Receive-filter programming: `changed` names the bits that moved
+	 * (WLAN_SEAM_FIF_*), `total` carries every bit currently set. The
+	 * ordering contract lives with the caller: a software scan sets the
+	 * beacon-promiscuous bit before sw_scan_start and clears it after the
+	 * sweep completes. */
+	int (*filter)(struct wlan_seam_drv *drv, uint32_t changed,
+	    uint32_t total);
 
 	/* Software scan: start asks the device to sweep, complete is the
 	 * "results are in" notification. Both must return promptly. */

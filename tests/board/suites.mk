@@ -5,4 +5,4 @@
 #
 # Each name is a directory under tests/board/ holding a suite.mk declaration
 # (see tests/board/README.md for the field table and the line protocol).
-SUITES_BOARD := freertos-rk3568-smoke threadx-rk3568-smoke cherrysh-rk3568-smoke threadx-rk3568-regression freertos-rk3568-regression
+SUITES_BOARD := freertos-rk3568-smoke threadx-rk3568-smoke cherrysh-rk3568-smoke threadx-rk3568-regression freertos-rk3568-regression threadx-rk3568-wlan

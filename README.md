@@ -67,7 +67,11 @@ imported units under `components/`, as verbatim snapshots with a provenance ledg
 
 ## License
 
-TBD (added with the bootstrap milestone).
+First-party code is BSD-2-Clause. Every vendored tree, imported unit and binary blob keeps
+its upstream license, recorded component by component in [`LICENSES.md`](LICENSES.md) —
+including the distribution obligations that come with the one copyleft unit in the tree
+(the GPL-2.0-only mainline WiFi driver under `third-party/rtl8xxxu`). The top-level
+`LICENSE` file is added with the bootstrap milestone.
 
 ---
 

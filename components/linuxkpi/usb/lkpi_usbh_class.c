@@ -3,11 +3,11 @@
  * lkpi_usbh_class.c - the CherryUSB class hook that hands a claimed
  * interface to the Linux usb_driver registered through usb_register().
  *
- * Generalized from the prior line's usbh_rtw88_class.c ([EXPL], board-proven
- * in the rtw88 L1 round) per SPEC S6/linuxkpi R3: "每类设备一个认领钩子" -
+ * Generalized from the prior line's usbh_rtw88_class.c (board-proven in the
+ * rtw88 L1 round) per the class-hook rule "one claim hook per class" -
  * the build_device/claim plumbing below is class-agnostic, each consumer
- * instantiates its own usbh_class_info (the MSC hook is this round's
- * consumer; the wlan hook joins with its own line).
+ * instantiates its own usbh_class_info (the MSC hook and the wireless hook
+ * are this tree's two consumers).
  *
  * This is the CherryUSB-side replacement for the Linux USB core's
  * enumerate-and-match loop: CherryUSB enumerates (its own hub thread),
@@ -30,6 +30,7 @@
 #include "usbh_hub.h"
 #include "usb_errno.h"
 
+#include "lkpi_usb_backend.h"	/* struct lkpi_usb_be_hubport: the engine-level port dev->_hport names */
 #include "linuxkpi_core.h"
 #include "linuxkpi_usb.h"
 #include <linux/usb.h>
@@ -70,6 +71,8 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	struct usb_interface *intf;
 	struct usb_host_interface *hostif;
 	struct usb_host_endpoint *eps;
+	struct lkpi_usb_be_hubport *be;
+	struct lkpi_usb_be_ep *be_eps;
 	unsigned int n_ep = 0;
 	unsigned int i;
 
@@ -83,8 +86,36 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	intf = kzalloc(sizeof(*intf), GFP_KERNEL);
 	hostif = kzalloc(sizeof(*hostif), GFP_KERNEL);
 	eps = kzalloc(sizeof(*eps) * (n_ep != 0 ? n_ep : 1), GFP_KERNEL);
-	if (dev == NULL || intf == NULL || hostif == NULL || eps == NULL)
+	/*
+	 * The engine-level port object the backend contract names
+	 * (lkpi_usb_backend.h:93-98): dev->_hport must be THIS type, not the
+	 * raw CherryUSB hubport - the backend reads port->hcpriv as its own
+	 * handle, so binding the raw struct made the backend interpret its
+	 * first bytes as a pointer (measured on the board: the control
+	 * transfer read hport->connected through garbage hcpriv and data-
+	 * aborted). hcpriv here is the CherryUSB hubport, which is what this
+	 * backend expects to find.
+	 */
+	/*
+	 * The engine-level port and endpoint objects in one allocation: the
+	 * engine stores usb_host_endpoint.hcpriv as a struct lkpi_usb_be_ep *
+	 * and hands it to the backend, which reads ITS hcpriv as the backend's
+	 * own handle (lkpi_usb_backend.h:86-91, 93-98). Binding the raw
+	 * descriptors (the previous shape) made the backend interpret
+	 * descriptor bytes as pointers - measured on the board as a data abort
+	 * in the first bulk RX submission, after the control-only probe path
+	 * had succeeded. The double indirection is the host mock's own shape
+	 * (mock_hcd.c:653-657): ep array hangs off the port so one free
+	 * releases both.
+	 */
+	be = kzalloc(sizeof(*be) +
+	    sizeof(*be_eps) * (n_ep != 0 ? n_ep : 1), GFP_KERNEL);
+	if (dev == NULL || intf == NULL || hostif == NULL || eps == NULL ||
+	    be == NULL)
 		goto fail;
+	be_eps = (struct lkpi_usb_be_ep *)(be + 1);
+	be->hcpriv = hport;
+	be->port = hport->port;
 
 	hostif->endpoint = eps;
 	hostif->num_endpoints = (int)n_ep;
@@ -96,7 +127,8 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 			continue;
 		memcpy(&eps[n_ep].desc, &alt->ep[i].ep_desc,
 		    sizeof(eps[n_ep].desc));
-		eps[n_ep].hcpriv = &alt->ep[i].ep_desc;
+		be_eps[n_ep].hcpriv = &alt->ep[i].ep_desc;
+		eps[n_ep].hcpriv = &be_eps[n_ep];
 		eps[n_ep].enabled = true;
 		n_ep++;
 	}
@@ -112,7 +144,7 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	intf->num_altsetting = 1;
 	intf->dev.name = "lkpiu";	/* one claimed device per image */
 
-	lkpi_usb_device_bind(dev, intf, hport);
+	lkpi_usb_device_bind(dev, intf, be);
 	*intf_out = intf;
 	return dev;
 
@@ -121,6 +153,7 @@ fail:
 	kfree(intf);
 	kfree(hostif);
 	kfree(eps);
+	kfree(be);
 	return NULL;
 }
 
@@ -132,6 +165,7 @@ lkpi_usbh_free_device(struct usb_device *dev)
 	if (dev == NULL)
 		return;
 	intf = (struct usb_interface *)dev->_intf;
+	kfree(dev->_hport);		/* the engine-level port built with the device */
 	if (intf != NULL) {
 		if (intf->cur_altsetting != NULL) {
 			kfree(intf->cur_altsetting->endpoint);
@@ -160,7 +194,7 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 		return -USB_ERR_NODEV;
 	}
 
-	lkpi_printf("usbh: lkpi msc claiming %04x:%04x\n",
+	lkpi_printf("usbh: lkpi claim attempt %04x:%04x\n",
 	    hport->device_desc.idVendor, hport->device_desc.idProduct);
 
 	dev = lkpi_usbh_build_device(hport, intf, &intfp);
@@ -186,7 +220,7 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 	return 0;
 }
 
-static void
+static int
 lkpi_msc_disconnect(struct usbh_hubport *hport, uint8_t intf)
 {
 	struct usb_device *dev = hport->config.intf[intf].priv;
@@ -196,10 +230,11 @@ lkpi_msc_disconnect(struct usbh_hubport *hport, uint8_t intf)
 		lkpi_claimed_intf = 0;
 	}
 	if (dev == NULL)
-		return;
+		return 0;
 	hport->config.intf[intf].priv = NULL;
 	lkpi_usb_disconnect_drivers((struct usb_interface *)dev->_intf);
 	lkpi_usbh_free_device(dev);
+	return 0;
 }
 
 static const struct usbh_class_driver lkpi_msc_class_driver = {
@@ -211,8 +246,8 @@ static const struct usbh_class_driver lkpi_msc_class_driver = {
 
 /*
  * Class match 08/06/50 = Mass Storage / SCSI transparent command set /
- * Bulk-Only transport (spec 开放问题 9: 类匹配最稳; the driver's own
- * id_table re-checks the same triple).  No VID/PID table - the negative
+ * Bulk-Only transport (the most reliable of the class triples; the driver's
+ * own id_table re-checks the same triple).  No VID/PID table - the negative
  * guard above handles the 1a2b CD-ROM persona.
  */
 CLASS_INFO_DEFINE const struct usbh_class_info lkpi_msc_class_info = {
@@ -222,6 +257,48 @@ CLASS_INFO_DEFINE const struct usbh_class_info lkpi_msc_class_info = {
 	.bInterfaceSubClass = 0x06,
 	.bInterfaceProtocol = 0x50,
 	.class_driver = &lkpi_msc_class_driver,
+};
+
+/*
+ * ------------------------------------------------------------------ */
+/* the wireless hook: vendor-specific interfaces (ff/ff/ff)            */
+/*                                                                     */
+/* The 8188eu dongle presents one vendor-specific interface (the       */
+/* driver's own id_table line asks for exactly 0bda:8179 with class    */
+/* 0xff/0xff/0xff, third-party/rtl8xxxu/core.c:8022), so the class     */
+/* match is the triple - no VID/PID list lives here: the real chip     */
+/* matching is the driver's id_table, run by lkpi_usb_probe_drivers()  */
+/* on the Linux view this hook builds.  The VID list would have to be  */
+/* duplicated for every supported Realtek part (the board carries two  */
+/* more of them) and would drift; the negative guard below covers the  */
+/* one device this hook must never grab.                               */
+/*                                                                     */
+/* The guard: 0bda:1a2b is the same dongle's CD-ROM personality while  */
+/* the eject assistant is mid-flip. Its interface is 08/05/50 (not     */
+/* ff/ff/ff), so the triple already misses it - the VID/PID backstop   */
+/* is kept for the same reason the MSC hook keeps it: a device whose   */
+/* personality flips while the walk is in flight must never be probed  */
+/* by a hook that had already matched it.                              */
+/* ------------------------------------------------------------------ */
+
+static const struct usbh_class_driver lkpi_wlan_class_driver = {
+	.driver_name = "lkpiwlan",
+	.driver_desc = "Linux usb_driver probes on the linuxkpi usb layer",
+	/* the shared claim path: build the Linux view and run the real id_table.
+	 * One assembly point for the view, which is why the connect/disconnect
+	 * pair is not written a second time here - a second path would be the
+	 * second place a claim can be lost. */
+	.connect = lkpi_msc_connect,
+	.disconnect = lkpi_msc_disconnect,
+};
+
+CLASS_INFO_DEFINE const struct usbh_class_info lkpi_wlan_class_info = {
+	.match_flags = USB_CLASS_MATCH_INTF_CLASS |
+	    USB_CLASS_MATCH_INTF_SUBCLASS | USB_CLASS_MATCH_INTF_PROTOCOL,
+	.bInterfaceClass = 0xff,
+	.bInterfaceSubClass = 0xff,
+	.bInterfaceProtocol = 0xff,
+	.class_driver = &lkpi_wlan_class_driver,
 };
 
 struct usbh_hubport *
@@ -239,7 +316,7 @@ lkpi_usbh_claimed_intf(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* linuxkpi-hub H2: the claim-less hub attachment (spec §3.3-1)         */
+/* linuxkpi-hub H2: the claim-less hub attachment */
 /*                                                                      */
 /* Registering a class-0x09 lkpi hook is a dead end either way (the     */
 /* section walk takes the first match, usbh_core.c:97-131, and a        */

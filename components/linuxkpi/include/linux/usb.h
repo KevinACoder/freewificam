@@ -151,7 +151,10 @@ struct usb_device {
 	u8		devnum;
 	u8		speed;
 	enum usb_device_state state;
-	struct device	*dev;
+	/* Embedded, the way the interface embeds it: drivers take the address of this
+	 * member (`&udev->dev`) to reach the device their logging and attribute calls
+	 * want, so a pointer here would hand them a struct device ** instead. */
+	struct device	dev;
 	/* the device descriptor ([LNX] usb_device.descriptor: the driver-
 	 * visible VID/PID path; the claim hook fills it) */
 	struct usb_device_descriptor descriptor;
@@ -224,6 +227,12 @@ static __always_inline __unused int
 usb_endpoint_dir_out(const struct usb_endpoint_descriptor *d)
 {
 	return !usb_endpoint_dir_in(d);
+}
+
+static __always_inline __unused int
+usb_endpoint_type(const struct usb_endpoint_descriptor *d)
+{
+	return d->bmAttributes & USB_ENDPOINT_XFER_INT_MASK;
 }
 
 static __always_inline __unused int
@@ -443,6 +452,10 @@ u16 usb_maxpacket(struct usb_device *udev, int pipe);
 int usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
     u8 requesttype, u16 value, u16 index, void *data, u16 size, int timeout);
 int usb_clear_halt(struct usb_device *dev, int pipe);
+/* Prepare a caller-owned urb structure for use. The body belongs to the engine,
+ * which keeps the urb bookkeeping of this component. */
+void usb_init_urb(struct urb *urb);
+
 int usb_reset_device(struct usb_device *dev);
 
 static __always_inline __unused void *
@@ -556,6 +569,7 @@ struct usb_driver {
 	void			(*disconnect)(struct usb_interface *);
 	const struct usb_device_id *id_table;
 	bool			soft_unbind;
+	bool			no_dynamic_id;
 	bool			disable_hub_initiated_lpm;
 };
 

@@ -1,0 +1,8 @@
+# The firmware image this tree compiles in, and the digest it must have.
+#
+# The bytes live in rtl8188eufw_blob.c (generated from the file the board Linux lane
+# ships for the same chip, which is the file the kernel driver loads); the digest below
+# is the anchor that ties the compiled-in array to that file.  The check that enforces
+# it is tests/host/linuxkpi-body-test/check-firmware.sh, which can also be pointed at a
+# reference copy of the image for a two-source comparison.
+2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4  rtl8188eufw.bin

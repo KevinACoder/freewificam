@@ -28,7 +28,13 @@
  * priority space (osPriority_t) has 56 levels and is mapped 1:1 onto the kernel. */
 #define configMAX_PRIORITIES                     56
 #define configMINIMAL_STACK_SIZE                 256
-#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 64 * 1024 ) )
+/* The host heap. Board flavors carry their own size in their variant headers; this
+ * one is the host's and only the host's. It grew from 64K when the linuxkpi service
+ * bodies became the real ones: their allocation now goes through this heap (the
+ * FreeRTOS backend's osMemoryAlloc) instead of libc, so the urb-stress streams and
+ * the mock suites' object churn live here - 64K was a board-shaped budget a host
+ * has no reason to hold. */
+#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 1024 * 1024 ) )
 
 /* Memory allocation. Static allocation is enabled because the application supplies the
  * idle and timer service task memory (freertos_hooks.c); dynamic allocation feeds every

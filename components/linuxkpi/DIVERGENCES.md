@@ -13,6 +13,11 @@ Deviations of this import from its source blobs. Empty at import time.
 | 7 | `usb/linuxkpi_usb.h` | Rewritten: the capture-ring / claim-plumbing declarations of the board line are replaced by the engine's own entry points plus the allocation-seam counters | Follows 3 | linuxkpi-usb-test R1 |
 | 8 | `linuxkpi_core.h` | Untouched; the host build supplies the service bodies it declares (allocation, logging, sleep, mutexes, DAIF spin sections, wait queues) in the mock test directory, and the critical-section extension header now lives beside the CMSIS-RTOS2 facade | The core implementation belongs to the later linuxkpi body; the mock round owns only the services its consumers call | linuxkpi-usb-test R1 |
 
+| 9 | `include/linux/usb.h` | Three changes to the driver-visible USB face: `struct usb_device.dev` becomes an embedded `struct device` (it was a pointer), `struct usb_driver` gains `no_dynamic_id`, and two helpers the drivers call are added (`usb_endpoint_type` as an inline, `usb_init_urb` as a declaration whose body belongs to the engine) | The embedded device is what the interface has, and drivers take its address: with a pointer member, the 81 `&udev->dev` uses of the first compiled driver would pass a `struct device **`. The two members and helpers are simply missing from the face and the driver's table and probe path need them. The pointer member was never assigned anywhere in this tree, so no consumer changes | rtl8188eus-port R1 |
+| 10 | `usb/linuxkpi_usb.c` | Four symbols the driver's link closure names get their bodies here: `usb_init_urb()` (zero + refcount + list arming, plus a birth registry for urbs embedded in driver containers), an embedded-urb branch in `usb_free_urb()` (the container is released through `kfree()`, the call Linux's `urb_destroy` makes; a second release is a named refusal), `lkpi_usb_init()` (the `.lkpi_module` section walker, weak bracket symbols, idempotent) and `lkpi_usb_debug_level()` | The declarations existed in the face with no bodies, and the first compiled driver calls `usb_init_urb()` for each of its 96 embedded TX/RX urbs and releases the containers through `usb_free_urb()` - without the branch those releases would be named stray refusals and the containers would leak. The walker is the mechanism the module macro (`linuxkpi_core.h:1535-1544`) and the linker bracket were built for | rtl8188eus-port R2a-3 |
+| 11 | `usb/linuxkpi_usb.c` | Two compile-time defects of the same file fixed while it was first compiled with warnings on: the endpoint lookup compares `usb_endpoint_num()`'s `int` against the unsigned pipe flag with an explicit cast, and the module bracket comparison uses `uintptr_t` arithmetic instead of a relational operator on two distinct arrays | Both are diagnostics-only fixes with identical behaviour; the second is a GCC `-Warray-compare` requirement | rtl8188eus-port R2a-3 |
+| 12 | `usb/lkpi_usbh_class.c` | The wireless hook joins the file (its own `usbh_class_info` for the vendor-specific triple `ff/ff/ff`, sharing the MSC hook's claim path), and the shared disconnect callback returns `int` (was `void`) with the stack's signature; three leftover Chinese comments became English | One assembly point for the Linux view (a second `build_device` path would be the second place a claim can be lost); the `void` return was a type mismatch against `struct usbh_class_driver.disconnect` that the file's first compile exposed - the hook had never been compiled before this round; the comments were the file's first pass through the repository's ASCII-only gate | rtl8188eus-port R2a-3 |
+
 Import state (2026-10-07): the nine imported files were byte-identical to their
 source blobs on the previous line's `feat/lkpi-stabilize-r1` branch (blob IDs in
 `PROVENANCE.md`) at import.  Rows 1-7 above are the engine-adoption round's
@@ -26,8 +31,9 @@ not rediscovered later):
 * `skbuff/skbuff_pool.h` declares the Linux-shaped skbuff contract face that
   `linuxkpi_core.h` includes, while the pool's source of truth is the verbatim
   TizenRT unit in `components/skbuff/`. The two faces converge in the memory
-  subsystem / consumer rounds; every step of that convergence is a ledger entry
-  here.
+  subsystem / consumer rounds; **the pool body landed in the pool-body R1 round:
+  its eight convergence entries and the one face addition
+  (`lkpi_skb_pool_configure`) are recorded in `skbuff/DIVERGENCES.md`**.
 * `usb/lkpi_usbh_class.c` and `usb/usbkpi_cmds.c` stay vendored but outside the
   host build (class hooks and diagnostics of the board line). Adopting them
   later - if a consumer appears - produces one entry per change.

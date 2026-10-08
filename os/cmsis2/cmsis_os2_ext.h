@@ -33,10 +33,28 @@
 #define CMSIS_OS2_EXT_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 typedef uint32_t os_critical_state_t;
 
 os_critical_state_t osCriticalEnter( void );
 void osCriticalExit( os_critical_state_t state );
+
+/**
+ * @brief   The heap, behind the facade like every other kernel service.
+ *
+ * CMSIS-RTOS2 does not define an allocator, but components above the port layer need
+ * one (a driver's descriptor blocks, buffers and objects all come from the heap), and
+ * the charter keeps kernel APIs inside their own port layer: this pair is the one
+ * allocator entry the components see, implemented per backend over the heap that
+ * backend actually has.
+ *
+ * Contract: osMemoryAlloc() returns NULL when the heap is exhausted (it never waits),
+ * the memory is at least word-aligned, and osMemoryFree() accepts exactly the pointers
+ * osMemoryAlloc() returned. Neither call may be made before the kernel is up on a
+ * backend whose heap lives inside the kernel (the FreeRTOS one does).
+ */
+void * osMemoryAlloc( size_t size );
+void   osMemoryFree( void * ptr );
 
 #endif /* CMSIS_OS2_EXT_H */

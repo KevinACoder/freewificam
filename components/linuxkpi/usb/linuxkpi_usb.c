@@ -113,6 +113,76 @@ usb_deregister(struct usb_driver *driver)
 	}
 }
 
+/* how many drivers are registered (the bring-up and its tests read this) */
+unsigned int
+lkpi_usb_driver_count_get(void)
+{
+
+	return lkpi_usb_driver_count;
+}
+
+/*
+ * The Linux module registration macro (linuxkpi_core.h:1535-1544) puts each
+ * registered driver's address into the `.lkpi_module` section, and this is the
+ * walker that turns the section back into usb_register() calls: the linker
+ * script brackets the section (arch/aarch64/baremetal.ld), a host build gets the
+ * same brackets from its own two anchor objects (the host suite's Makefile
+ * places them around the driver objects). The walk is the Linux kernel's own
+ * `module_usb_driver` shape: every entry is one driver, registered in section
+ * order, and the USB domain's start follows.
+ *
+ * The bracket symbols are weak on purpose: a build that links the engine without
+ * a module section (the mock suites that register their drivers by hand) keeps
+ * working, and says so - a silent zero-driver start would hide a missing bracket
+ * on a build that does carry drivers.
+ */
+extern void *__lkpi_module_start[] __attribute__((weak));
+extern void *__lkpi_module_end[] __attribute__((weak));
+
+void
+lkpi_usb_init(void)
+{
+	static bool walked;
+	void *const *it;
+	unsigned int n = 0;
+
+	if (walked) {
+		lkpi_usb_start();	/* idempotent: a second call is harmless */
+		return;
+	}
+	walked = true;
+	/* the bracket comparison is arithmetic on the addresses, never a
+	 * relational operator on two distinct arrays */
+	if (__lkpi_module_start != NULL && __lkpi_module_end != NULL &&
+	    (uintptr_t)__lkpi_module_end > (uintptr_t)__lkpi_module_start) {
+		for (it = __lkpi_module_start; it < __lkpi_module_end; it++) {
+			if (*it == NULL)
+				continue;
+			usb_register((struct usb_driver *)*it);
+			n++;
+		}
+		lkpi_printf("usbkpi: module section walk registered %u driver(s)\n",
+		    n);
+	} else {
+		lkpi_printf("usbkpi: no .lkpi_module bracket in this link; "
+		    "drivers must be registered explicitly\n");
+	}
+	lkpi_usb_start();
+}
+
+/*
+ * The diagnostic level the class hook reads when it prints a probe's bus (a
+ * port-layer build may raise it; the host and board builds leave it at the
+ * default and the driver's own debug parameter drives the noise).
+ */
+int
+lkpi_usb_debug_level(void)
+{
+	static int level;
+
+	return level;
+}
+
 /* ------------------------------------------------------------------ */
 /* the per-endpoint engine                                              */
 /*                                                                     */
@@ -647,8 +717,24 @@ static void lkpi_usb_kill_quiesce(struct urb *urb);
 #define	LKPI_URB_LIVE_MAX	64
 #define	LKPI_URB_FREED_RING	32
 
+/*
+ * Embedded urbs. A driver is allowed to put `struct urb` inside a container of
+ * its own, initialise it with usb_init_urb() and release it with usb_free_urb()
+ * - Linux's kref contract makes both calls lawful for such an urb, and the
+ * RTOS-family drivers use exactly that shape for their TX/RX urb pools (the
+ * first consumer embeds 96). Those urbs were never handed out by the seam's
+ * allocator, so they live in their own birth registry: usb_init_urb() records
+ * the address, usb_free_urb() releases the container through kfree() - the same
+ * call Linux's urb_destroy makes - and a pointer in neither registry is still a
+ * named stray refusal that never reaches the allocator.
+ */
+#define	LKPI_URB_EMBEDDED_MAX	256
+
 static struct lkpi_usb_mem_stats lkpi_usb_mem;
 static const struct urb *lkpi_usb_live[LKPI_URB_LIVE_MAX];
+static const struct urb *lkpi_usb_embedded[LKPI_URB_EMBEDDED_MAX];
+static unsigned int lkpi_usb_embedded_n;
+static unsigned int lkpi_usb_embedded_full;
 static const struct urb *lkpi_usb_freed[LKPI_URB_FREED_RING];
 static unsigned int lkpi_usb_freed_head;
 static const void *lkpi_usb_first_witness;
@@ -704,6 +790,55 @@ lkpi_usb_freed_note(const struct urb *urb)
 	lkpi_usb_freed_head++;
 }
 
+/* the birth/death ledger of embedded urbs (see the note above the storage) */
+static void
+lkpi_usb_embedded_note(const struct urb *urb)
+{
+	unsigned int i;
+
+	for (i = 0; i < lkpi_usb_embedded_n; i++) {
+		if (lkpi_usb_embedded[i] == urb)
+			return;		/* re-init of a live one: already known */
+	}
+	if (lkpi_usb_embedded_n >= LKPI_URB_EMBEDDED_MAX) {
+		lkpi_usb_embedded_full++;
+		return;
+	}
+	lkpi_usb_embedded[lkpi_usb_embedded_n++] = urb;
+}
+
+static int
+lkpi_usb_embedded_find(const struct urb *urb)
+{
+	unsigned int i;
+
+	for (i = 0; i < lkpi_usb_embedded_n; i++)
+		if (lkpi_usb_embedded[i] == urb)
+			return (int)i;
+	return -1;
+}
+
+static void
+lkpi_usb_embedded_del(unsigned int idx)
+{
+
+	lkpi_usb_embedded[idx] = lkpi_usb_embedded[lkpi_usb_embedded_n - 1];
+	lkpi_usb_embedded_n--;
+}
+
+/* the address is live again: any stale release record must go (the same rule
+ * usb_alloc_urb applies for seam-allocated urbs) */
+static void
+lkpi_usb_freed_clear(const struct urb *urb)
+{
+	unsigned int i;
+
+	for (i = 0; i < LKPI_URB_FREED_RING; i++) {
+		if (lkpi_usb_freed[i] == urb)
+			lkpi_usb_freed[i] = NULL;
+	}
+}
+
 void *
 lkpi_usb_alloc_coherent(size_t size, unsigned int mem_flags)
 {
@@ -734,6 +869,29 @@ lkpi_usb_urb_is_freed(const struct urb *urb)
 
 	return lkpi_usb_freed_hit(urb) || urb->_alloc_id == LKPI_URB_ID_POISON ?
 	    1 : 0;
+}
+
+/*
+ * usb_init_urb ([LNX] drivers/usb/core/urb.c:44-52): zero the structure and arm
+ * its refcount and lists. The driver's urbs are embedded in its own containers
+ * (the first consumer's TX/RX urb structs embed `struct urb` first) and
+ * usb_free_urb later releases such a container, which is the Linux kref
+ * contract this helper's birth note makes auditable: the address enters the
+ * embedded registry here, so the release is recognised as lawful instead of
+ * being refused as a stray, and a stale release record for a recycled address is
+ * cleared (`usb_alloc_urb` does exactly the same for seam-allocated urbs).
+ */
+void
+usb_init_urb(struct urb *urb)
+{
+
+	if (urb == NULL)
+		return;
+	memset(urb, 0, sizeof(*urb));
+	urb->_refs = 1;
+	INIT_LIST_HEAD(&urb->anchor_list);
+	lkpi_usb_freed_clear(urb);
+	lkpi_usb_embedded_note(urb);
 }
 
 struct urb *
@@ -772,6 +930,7 @@ usb_free_urb(struct urb *urb)
 {
 	bool live_entry_found = false;
 	unsigned int i;
+	int embedded;
 
 	if (urb == NULL)
 		return;
@@ -787,7 +946,8 @@ usb_free_urb(struct urb *urb)
 		(void)lkpi_usb_uaf_hit(urb);
 		return;
 	}
-	if (urb->_alloc_id == LKPI_URB_ID_POISON) {
+	embedded = lkpi_usb_embedded_find(urb);
+	if (urb->_alloc_id == LKPI_URB_ID_POISON && embedded < 0) {
 		lkpi_usb_mem.double_free++;
 		return;
 	}
@@ -803,7 +963,23 @@ usb_free_urb(struct urb *urb)
 		    urb->_alloc_id, urb->_qstate);
 		lkpi_usb_kill_quiesce(urb);
 	}
+	/* the per-urb DMA stage this seam may have granted */
 	lkpi_usb_stage_put(urb);
+	if (embedded >= 0) {
+		/*
+		 * A container the driver allocated and initialised through
+		 * usb_init_urb(): the release is lawful, the container is the
+		 * driver's and goes back through the same kfree() Linux's
+		 * urb_destroy uses (urb.c:20-28). Taking the address out of the
+		 * birth registry is what makes a second release of it a named
+		 * refusal rather than a heap double free.
+		 */
+		lkpi_usb_embedded_del((unsigned int)embedded);
+		lkpi_usb_mem.n_urb_free++;
+		lkpi_usb_freed_note(urb);
+		kfree(urb);
+		return;
+	}
 	for (i = 0; i < LKPI_URB_LIVE_MAX; i++) {
 		if (lkpi_usb_live[i] == urb) {
 			lkpi_usb_live[i] = NULL;
@@ -842,8 +1018,10 @@ lkpi_usb_find_hep(struct usb_device *dev, unsigned int pipe)
 		struct usb_host_endpoint *hep =
 		    &intf->cur_altsetting->endpoint[i];
 
-		if (usb_endpoint_num(&hep->desc) == usb_pipeendpoint(pipe) &&
-		    usb_endpoint_dir_in(&hep->desc) == usb_pipein(pipe))
+		if ((unsigned int)usb_endpoint_num(&hep->desc) ==
+		    usb_pipeendpoint(pipe) &&
+		    usb_endpoint_dir_in(&hep->desc) ==
+		    (usb_pipein(pipe) ? 1 : 0))
 			return hep;
 	}
 	return NULL;

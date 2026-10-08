@@ -11,6 +11,12 @@
 # seeded streams, mcu profile - and maps the observed summaries and the
 # determinism check into case lines.  The reverse controls (a wrong expectation
 # and a polluted invariant must go red) are run here too.
+#
+# The same shapes then run again against the production pool body
+# (skbuff-allocation-free-stress-real) and against the bounded build of it
+# (skbuff-allocation-free-stress-real-mcu, whose storage-budget assertion is a
+# compile-time fact): the body is what ships, and the identical matrix, judge
+# and streams are what hold it to the contract.
 
 set -eu
 
@@ -20,10 +26,14 @@ log_dir=$root/tools/mock/build/skbuff-allocation-free-stress
 mkdir -p "$log_dir"
 
 bin=$root/tests/host/skbuff-allocation-free-stress/build/skbuff-allocation-free-stress
-if [ ! -x "$bin" ]; then
-    echo "MOCK-BUILD skbuff-allocation-free-stress: $bin was not built" >&2
-    exit 2
-fi
+bin_real=$root/tests/host/skbuff-allocation-free-stress/build/skbuff-allocation-free-stress-real
+bin_mcu=$root/tests/host/skbuff-allocation-free-stress/build/skbuff-allocation-free-stress-real-mcu
+for b in "$bin" "$bin_real" "$bin_mcu"; do
+    if [ ! -x "$b" ]; then
+        echo "MOCK-BUILD skbuff-allocation-free-stress: $b was not built" >&2
+        exit 2
+    fi
+done
 
 failures=0
 
@@ -108,6 +118,49 @@ if grep -q '^SKBST: replay seed=' "$log_dir/must-red.log"; then
 else
     case_line replay FAIL
     echo "skbuff-allocation-free-stress: no replay confirmation in the control run" >&2
+fi
+
+# ---- the production pool body (the same shapes, the code that ships) ----------
+
+if "$bin_real" --fuzz > "$log_dir/real.log" 2>&1 &&
+    "$bin_real" > "$log_dir/real-matrix.log" 2>&1 &&
+    "$bin_real" --profile mcu > "$log_dir/real-mcu.log" 2>&1; then
+    if grep -q '^SKBST: matrix cells=19 pass=19 fail=0$' "$log_dir/real-matrix.log" &&
+        grep -q '^SKBST: fuzz seed=1 iters=200000 .* ok=1$' "$log_dir/real.log" &&
+        grep -q '^SKBST: fuzz seed=2 iters=200000 .* ok=1$' "$log_dir/real.log" &&
+        grep -q '^SKBST: fuzz seed=3 iters=200000 .* ok=1$' "$log_dir/real.log" &&
+        grep -q '^SKBST: matrix cells=19 pass=19 fail=0$' "$log_dir/real-mcu.log"; then
+        case_line real-pool PASS
+    else
+        case_line real-pool FAIL
+        echo "skbuff-allocation-free-stress: the production pool body did not hold the contract" >&2
+        tail -5 "$log_dir/real.log" >&2 || true
+    fi
+else
+    case_line real-pool FAIL
+    echo "skbuff-allocation-free-stress: the production-body run failed, see $log_dir/real.log" >&2
+    tail -5 "$log_dir/real.log" >&2 || true
+fi
+
+# The bounded build: the constrained geometry is compiled in, so what runs here
+# is the body as an MCU-shaped build would carry it (the storage budget is a
+# build-time assertion in that object).
+if "$bin_mcu" > "$log_dir/real-mcu-bounds.log" 2>&1 &&
+    "$bin_mcu" --profile mcu --fuzz > "$log_dir/real-bounded.log" 2>&1; then
+    if grep -q '^SKBST: profile=host header=8 data=8 data_sz=256 ' "$log_dir/real-mcu-bounds.log" &&
+        grep -q '^SKBST: matrix cells=19 pass=19 fail=0$' "$log_dir/real-mcu-bounds.log" &&
+        grep -q '^SKBST: matrix cells=19 pass=19 fail=0$' "$log_dir/real-bounded.log" &&
+        grep -q '^SKBST: fuzz seed=1 iters=200000 .* ok=1$' "$log_dir/real-bounded.log"; then
+        case_line real-pool-bounded PASS
+    else
+        case_line real-pool-bounded FAIL
+        echo "skbuff-allocation-free-stress: the bounded production build did not hold the contract" >&2
+        tail -5 "$log_dir/real-mcu-bounds.log" >&2 || true
+    fi
+else
+    case_line real-pool-bounded FAIL
+    echo "skbuff-allocation-free-stress: the bounded run failed, see $log_dir/real-mcu-bounds.log" >&2
+    tail -5 "$log_dir/real-mcu-bounds.log" >&2 || true
 fi
 
 exit "$failures"

@@ -98,6 +98,21 @@ SECTIONS
 		__usbh_class_info_end__ = .;
 	} :text
 
+	/* Linux driver registry: `module_usb_driver()` (the Linux module
+	 * registration macro's spelling in the linuxkpi contract header) puts
+	 * each registered struct usb_driver * here, and lkpi_usb_init() walks
+	 * the section between these two symbols to register them, exactly the
+	 * way the kernel's module loader would. Nothing references an entry by
+	 * address (each driver object keeps its own name), so the KEEP
+	 * discipline of the class-info table applies unchanged; the entries are
+	 * natural `void *` alignments, so no SUBALIGN is needed. The fixed step
+	 * makes the section's byte count a check: entries x 8. */
+	.lkpi_module : ALIGN(8) {
+		__lkpi_module_start = .;
+		KEEP(*(.lkpi_module))
+		__lkpi_module_end = .;
+	} :text
+
 	.data : ALIGN(8) {
 		__data_start = .;
 		*(.data .data.*)

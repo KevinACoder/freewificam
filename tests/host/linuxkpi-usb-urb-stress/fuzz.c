@@ -145,24 +145,6 @@ ring_put(unsigned int kind, unsigned int row, int rc)
 /* row bookkeeping                                                     */
 /* ------------------------------------------------------------------ */
 
-/* A released pointer may be handed to the engine's guard only while it still
- * sits in the allocator's released-pointer ring (a fixed-size FIFO): after the
- * ring moved on, the guard's fallback path would read the released block.  The
- * ring's size is 32 (linuxkpi_usb.c LKPI_URB_FREED_RING); the release epoch
- * below keeps the harness inside that window. */
-#define FUZZ_RING_SAFE	30u
-
-static int
-row_released_safe(const struct fuzz_row *r)
-{
-	struct lkpi_usb_mem_stats st;
-
-	if (r->state != FRS_RELEASED || r->u == NULL)
-		return 0;
-	env_stats(&st);
-	return (st.n_urb_free - r->rel_seq) <= FUZZ_RING_SAFE;
-}
-
 static struct fuzz_row *released_pick(void);
 
 static struct fuzz_row *
@@ -516,14 +498,26 @@ op_mis_submit_live(void)
 	ring_put(FZ_MIS_SUBMIT_LIVE, (unsigned int)(r - g_fr), rc2);
 }
 
+/* The misuse target: a row released *just now*, allocated and released in place
+ * so the misuse operators always have a deterministic target.
+ *
+ * Manufacturing the release at the point of use is what keeps the digest a
+ * function of (seed, iters) alone. Every other way of arming a misuse reads
+ * allocator behaviour: a row released earlier is only a lawful target while its
+ * address has not been handed out again (the engine clears that address's ring
+ * entry when it is, usb_alloc_urb), and *whether* the address was recycled is a
+ * property of the heap's free-list state - which differs between a process that
+ * ran the matrix first and a process that replays the stream alone (measured
+ * after the service bodies moved onto the kernel heap: the replay path's digest
+ * drifted from the stream's for exactly this reason). With the release made
+ * here, no allocation can intervene between the release and the block above it,
+ * so the guard's released-pointer ring always holds the target and the outcome
+ * no longer depends on the allocator's history. */
 static struct fuzz_row *
 released_pick(void)
 {
-	struct fuzz_row *r = row_pick(1u << FRS_RELEASED);
+	struct fuzz_row *r = row_pick(1u << FRS_FREE);
 
-	if (r != NULL && row_released_safe(r))
-		return r;
-	r = row_pick(1u << FRS_FREE);
 	if (r == NULL)
 		return NULL;
 	row_reset(r);
@@ -750,6 +744,14 @@ fuzz_run(unsigned int seed, unsigned int iters)
 	if (g_rng == 0)
 		g_rng = 0x2545f4914f6cdd1dULL;
 	g_op_index = 0;
+	/*
+	 * The controller knobs are sticky by design (a cell sets one and the next
+	 * submit obeys); the stream, whose digest claims to be a function of
+	 * (seed, iters) alone, starts from their declared defaults so a preceding
+	 * matrix run cannot change its outcomes. This is also what makes --replay
+	 * reproduce a run taken inside a --fuzz process.
+	 */
+	env_reset_knobs();
 	env_stats(&g_digest_base);
 
 	while (ops < iters) {

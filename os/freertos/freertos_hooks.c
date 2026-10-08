@@ -1,15 +1,25 @@
 /**
  * @file    freertos_hooks.c
- * @brief   FreeRTOS application-side obligations for the host port: fail-visible hooks
- *          and the static memory donors for the idle and timer service tasks.
+ * @brief   FreeRTOS application-side obligations: fail-visible hooks and the static
+ *          memory donors for the idle and timer service tasks.
  * @author  zhugengyu
  * @date    06.10.2026
  *
  * With configSUPPORT_STATIC_ALLOCATION == 1 and configKERNEL_PROVIDED_STATIC_MEMORY left
  * at its default 0, the kernel asks the application for the memory of the idle task and,
- * because configUSE_TIMERS == 1, of the timer service task. Both hooks print and abort so
- * that a failure is never silent; the message tag can be overridden at build time so that
- * a test suite can recognise its own failures.
+ * because configUSE_TIMERS == 1, of the timer service task. Both donors hand over static
+ * storage.
+ *
+ * The two failure hooks treat their events differently on purpose:
+ *   - an assertion is a broken invariant: print and abort, so a failure is never
+ *     silent and never continues on corrupt state;
+ *   - an allocation failure is a resource event, not an invariant break: print and
+ *     return. The kernel's allocator (Heap_4 here) has already refused the request
+ *     by the time the hook runs, so the caller receives NULL and decides. Tests in
+ *     this repository deliberately drive allocation-failure paths through the
+ *     allocator seam, and a board's own policy for a truly exhausted heap belongs
+ *     to the board layer, not to this shared hook. The message tag can be overridden
+ *     at build time so a suite recognises its own run in a log.
  */
 
 #include <stdio.h>
@@ -33,7 +43,7 @@ void vApplicationMallocFailedHook( void )
 {
     fprintf( stderr, FREERTOS_HOOKS_TAG ": MALLOC-FAIL\n" );
     fflush( stderr );
-    abort();
+    /* not fatal: see the file header - the allocator has already answered NULL */
 }
 
 void vApplicationGetIdleTaskMemory( StaticTask_t ** ppxIdleTaskTCBBuffer,
