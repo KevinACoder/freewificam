@@ -197,11 +197,24 @@ static int skel_set_countermeasures(void *priv, int enabled) {
 
 static int skel_scan2(void *priv, struct wpa_driver_scan_params *params) {
 	struct wpa_vendor_drv_data *drv = priv;
-	const u8 *ssid = params->num_ssids ? params->ssids[0].ssid : NULL;
-	size_t len = params->num_ssids ? params->ssids[0].ssid_len : 0;
+	const u8 *ssid = NULL;
+	size_t len = 0;
+	unsigned int i;
 
-	if (params->num_ssids > 1) {
+	/* A hidden-network scan arrives as the wildcard entry interleaved with
+	 * the specific SSID (hostap's own shape for scan_ssid=1). The vendor
+	 * table holds one target, so take the specific entry: the directed
+	 * probe is what makes a hidden AP answer at all, and the passive
+	 * sweep still records every visible neighbour. */
+	if (params->num_ssids > 2) {
 		return -1;
+	}
+	for (i = 0; i < params->num_ssids; i++) {
+		if (params->ssids[i].ssid_len != 0) {
+			ssid = params->ssids[i].ssid;
+			len = params->ssids[i].ssid_len;
+			break;
+		}
 	}
 	if (drv->vp == NULL || drv->vp->scan_start == NULL) {
 		SKEL_NO_BACKEND();

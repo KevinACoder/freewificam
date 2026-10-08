@@ -53,10 +53,14 @@ wlan_radio_task(void *arg)
 int
 wlan_radio_start(void)
 {
+	/* 8 KiB: this thread hands the stack its next channel, and that call
+	 * runs the probe request's whole transmit chain (state transition,
+	 * frame build, driver submit) inside it - the same depth the case
+	 * bodies carry, with the completion side on the drain thread. */
 	static const osThreadAttr_t attr = {
 		.name = "wlan-radio",
 		.priority = osPriorityNormal,
-		.stack_size = 2048U,
+		.stack_size = 8192U,
 	};
 
 	if (osThreadNew(wlan_radio_task, NULL, &attr) == NULL) {
