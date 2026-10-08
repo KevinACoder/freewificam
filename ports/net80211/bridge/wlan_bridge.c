@@ -40,6 +40,11 @@
  *      key is installed, encrypted - by net80211's own encap/crypto path, then
  *      handed to the driver. One if_start runs both queues because this port has
  *      one transmit path.
+ *   5. Association notification. A Linux-family driver learns that the station
+ *      joined (or left) a BSS only through bss_info_changed; the bridge emits it
+ *      on the state transition, carrying the BSSID and frequency the stack
+ *      settled on. Without it the driver never switches to its associated
+ *      behaviour while the stack already has.
  *
  * @date    08.10.2026
  */
@@ -87,6 +92,7 @@ static struct {
 	void *if_priv;
 	int attached;
 	int scanning;		/* a sweep is in flight (the filter is set) */
+	uint32_t tuned_freq;	/* the channel the driver was last told about */
 	unsigned int scan_starts;
 	unsigned int scan_completes;
 	unsigned int filter_sets;
@@ -223,6 +229,21 @@ bridge_start(struct ifnet *ifp)
  * (that header has no setter, so the bridge owns the wiring). The stack's own
  * handler is kept and called first: this only observes, it never replaces the
  * state machine.
+ *
+ * Two duties ride on the same transition:
+ *
+ *   - Channel. Every state transition is a use of the radio: the sweep's probe
+ *     request for the newly armed channel and the join's auth request on the
+ *     AP's channel both leave inside the stack's handler. So the radio is
+ *     pointed at ic_curchan BEFORE the handler runs. (The sweep arms its first
+ *     channel inside begin_scan, which is reached from the handler, so the
+ *     per-channel armings arrive here as their own transitions - the nested
+ *     new_state(S_SCAN) call - which is what makes the order work.)
+ *   - Association. A Linux-family driver learns about the join only through
+ *     bss_info_changed carrying BSS_CHANGED_ASSOC and BSS_CHANGED_BSSID, and
+ *     that is exactly what this family of drivers reads back (rtl8xxxu
+ *     core.c:3211 reads bssid and assoc). Without the call the driver keeps
+ *     believing it is unassociated while the stack has already joined.
  */
 static int (*bridge_orig_newstate)(struct ieee80211com *,
     enum ieee80211_state, int);
@@ -233,12 +254,23 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	enum ieee80211_state ostate = ic->ic_state;
 	int rc;
 
+	(void)wlan_bridge_tune_current();
 	rc = bridge_orig_newstate(ic, nstate, arg);
 
 	if (nstate == IEEE80211_S_RUN && ostate != IEEE80211_S_RUN) {
+		if (bridge.ops != NULL && bridge.ops->bss_info != NULL) {
+			struct ieee80211_node *bss = ic->ic_bss;
+
+			(void)bridge.ops->bss_info(bridge.drv, 1,
+			    bss != NULL ? bss->ni_bssid : ic->ic_myaddr,
+			    bss != NULL && bss->ni_chan != NULL ?
+			    bss->ni_chan->ic_freq : 0);
+		}
 		if (bridge.ifops != NULL && bridge.ifops->up != NULL)
 			(void)bridge.ifops->up(bridge.if_priv);
 	} else if (nstate != IEEE80211_S_RUN && ostate == IEEE80211_S_RUN) {
+		if (bridge.ops != NULL && bridge.ops->bss_info != NULL)
+			(void)bridge.ops->bss_info(bridge.drv, 0, NULL, 0);
 		if (bridge.ifops != NULL && bridge.ifops->down != NULL)
 			(void)bridge.ifops->down(bridge.if_priv);
 	}
@@ -449,6 +481,12 @@ wlan_bridge_scan_start(void)
  * returns 1 when it armed another channel and 0 when the sweep ended (it calls
  * end_scan itself); on the end the receive filter goes back and the driver is
  * told the scan completed.
+ *
+ * No tuning happens here: arming a channel runs the state transition (and with
+ * it the probe request) synchronously inside ieee80211_next_scan, so the tuning
+ * must have happened before that - the transition wrapper below owns it. The
+ * arm-time tune this function used to do was after the probe had already left,
+ * which on a real chip means every probe went out on the previous channel.
  */
 int
 wlan_bridge_scan_dwell(void)
@@ -468,6 +506,35 @@ wlan_bridge_scan_dwell(void)
 		bridge.filter_clears++;
 	}
 	return more;
+}
+
+/*
+ * Keep the driver's radio on the channel the stack currently sits on. Called
+ * from the state transition wrapper before the stack's own handler runs, so the
+ * order is always configure-then-use: the sweep's probe request for a channel
+ * leaves after the driver was told about that channel, and the join's auth
+ * request leaves after the driver moved to the AP's channel (ieee80211_sta_join
+ * retargets ic_curchan without touching the driver). The stack owns the
+ * decision; the bridge carries it to the driver exactly once per change.
+ */
+int
+wlan_bridge_tune_current(void)
+{
+	struct ieee80211_channel *chan;
+	int rc;
+
+	if (!bridge.attached || bridge.ic == NULL)
+		return -ENODEV;
+	chan = bridge.ic->ic_curchan;
+	if (chan == NULL || bridge.ops->config == NULL)
+		return -EINVAL;
+	if (chan->ic_freq == bridge.tuned_freq)
+		return 0;
+	rc = bridge.ops->config(bridge.drv, WLAN_SEAM_CONFIG_CHANNEL,
+	    chan->ic_freq);
+	if (rc == 0)
+		bridge.tuned_freq = chan->ic_freq;
+	return rc;
 }
 
 void
@@ -505,6 +572,35 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 /* ------------------------------------------------------------------ */
 /* data path and lifecycle for the presentation layer                  */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The key path. net80211's crypto policy layer decides which key goes where and
+ * the driver programs it; the bridge is the wire between them (the crypto
+ * layer's caller is the supplicant bridge of the authentication round, which is
+ * why this entry exists now and is exercised by the bridge tests). The cipher
+ * travels in the seam's own numbering.
+ */
+int
+wlan_bridge_key_set(int pairwise, int key_idx, int cipher, const uint8_t *key,
+    size_t key_len)
+{
+
+	if (!bridge.attached || bridge.ops->set_key == NULL)
+		return -ENODEV;
+	if (key == NULL && cipher != WLAN_SEAM_CIPHER_NONE)
+		return -EINVAL;
+	return bridge.ops->set_key(bridge.drv, pairwise, key_idx, cipher, key,
+	    key_len);
+}
+
+int
+wlan_bridge_key_clear(int pairwise, int key_idx)
+{
+
+	if (!bridge.attached || bridge.ops->clear_key == NULL)
+		return -ENODEV;
+	return bridge.ops->clear_key(bridge.drv, pairwise, key_idx);
+}
 
 int
 wlan_bridge_tx_raw(const uint8_t *frame, size_t len)

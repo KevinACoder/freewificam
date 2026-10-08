@@ -85,9 +85,19 @@ void	wlan_bridge_tx_complete(void);
 int	wlan_bridge_scan_start(void);
 int	wlan_bridge_scan_dwell(void);
 
+/* Tune the driver's radio to the channel the stack currently sits on (the scan
+ * walk advances the stack's channel; the driver must follow). */
+int	wlan_bridge_tune_current(void);
+
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);
+
+/* The key path: the crypto policy decides, the driver programs; the bridge is
+ * the wire. Cipher values are the seam's WLAN_SEAM_CIPHER_* numbering. */
+int	wlan_bridge_key_set(int pairwise, int key_idx, int cipher,
+	    const uint8_t *key, size_t key_len);
+int	wlan_bridge_key_clear(int pairwise, int key_idx);
 
 /* The driver's up/down chain (its ops->start / stop, through the seam). */
 int	wlan_bridge_up(void);
