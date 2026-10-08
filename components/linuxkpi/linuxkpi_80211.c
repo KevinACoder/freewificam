@@ -311,16 +311,19 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	/*
 	 * The driver leaves the status block in the control block
 	 * (IEEE80211_SKB_RXCB(skb) is `(struct ieee80211_rx_status *)skb->cb`).
-	 * The bridge gets the block, and the control block is cleared before the
-	 * frame travels on: net80211's world has its own metadata and a stale
-	 * mac80211 status block behind a frame would be a trap for whoever
-	 * reuses the buffer.
+	 * The bridge copies the frame into the net80211 world's own buffer, so
+	 * the skb is consumed here - the same ownership the Linux entry has
+	 * (mac80211's rx_irqsafe frees the skb once processing is done) and the
+	 * same thing the no-bridge path below does. The control block is cleared
+	 * first: a stale status block behind a buffer that returns to the pool
+	 * would be a trap for whoever gets it next.
 	 */
 	rs = (struct ieee80211_rx_status *)skb->cb;
 	ctx->rx_frames++;
 	if (bridge_ops != NULL && bridge_ops->rx != NULL) {
 		bridge_ops->rx(hw, rs, skb);
 		memset(skb->cb, 0, sizeof(skb->cb));
+		lkpi_skb_free(skb);
 		return;
 	}
 	lkpi_printf("lkpi80211: rx with no bridge; frame dropped\n");

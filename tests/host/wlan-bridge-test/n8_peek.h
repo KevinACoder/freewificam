@@ -1,0 +1,44 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/*
+ * @file    n8_peek.h
+ * @brief   The harness's scalar view into the net80211 world: scan-table
+ *          contents, the stack's state, the join trigger. Scalars and byte
+ *          arrays only - the same rule the port's seam carries, for the same
+ *          reason (the two worlds must never share a struct).
+ */
+
+#ifndef N8_PEEK_H
+#define N8_PEEK_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/* 0 and the candidate's ssid/freq when the BSSID is in the scan table; -1 when
+ * it is not */
+int	n8_peek_scan_table(const uint8_t bssid[6], uint8_t *ssid,
+	    size_t *ssid_len, uint32_t *freq);
+/* the scan candidate's match-relevant facts */
+int	n8_peek_node_info(const uint8_t bssid[6], unsigned int *capinfo,
+	    unsigned int *chan_ieee, int *chan_active, unsigned int *rate_count,
+	    unsigned int *esslen);
+/* configure the desired SSID before a scan (the joiner's own step) */
+void	n8_peek_set_ssid(const uint8_t *ssid, size_t len);
+/* the stack's current state value */
+int	n8_peek_state(void);
+/* the state values the cases compare against (the imported numbering) */
+int	n8_peek_run_state(void);
+int	n8_peek_scan_state(void);
+int	n8_peek_auth_state(void);
+int	n8_peek_hwaddr(uint8_t addr[6]);
+
+/* the CCMP round trip, stack-side: install the pairwise key on the joined node
+ * (what the supplicant does after the handshake), clear the privacy flag again,
+ * seal one AP-to-station frame with it (the peer's crypto), and read the named
+ * MIC failure counter. */
+int	n8_peek_install_ccmp_key(const uint8_t *key, size_t len);
+void	n8_peek_clear_privacy(void);
+int	n8_peek_seal_from_ap(const uint8_t *payload, size_t len, uint16_t seq,
+	    uint8_t *out, size_t *out_len);
+uint32_t n8_peek_ccmpmic_count(void);
+
+#endif /* N8_PEEK_H */
