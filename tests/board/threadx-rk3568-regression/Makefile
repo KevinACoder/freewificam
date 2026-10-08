@@ -45,6 +45,7 @@ USB_BOARD := $(ROOT)/board/rk3568-itx/usb
 LWIP := $(ROOT)/third-party/lwip
 LWIP_PORT := $(ROOT)/ports/lwip
 LWIP_INCLUDES := \
+	-I$(LWIP_PORT) \
 	-I$(LWIP_PORT)/include \
 	-I$(LWIP)/src/include \
 	-I$(LWIP)/contrib/apps/ping
@@ -97,13 +98,24 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 	-DTX_INCLUDE_USER_DEFINE_FILE -DEL1=1 \
 	-DCONFIG_TX_TICKS_PER_SECOND=1000 -DCONFIG_TX_TIMER_STACK=4096
 
-BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
+# Optimization level is a knob: the regression loop runs -Og (fast builds,
+# readable code), a measurement round passes OPT=-O2 - the small A55 core at
+# -Og produces fake performance numbers (the prior line's lesson, recorded in
+# the import spec's design notes), so throughput evidence must state and use
+# the optimized tier.
+# RX checksum offload is a lockstep switch: the driver enables the GMAC IPC
+# block and drops RDES1-flagged frames while lwipopts turns the software
+# verification off - so the define must reach every translation unit, both
+# the driver's and the stack's (lwipopts.h keys its block on this macro).
+OPT ?= -Og
+BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
 	-DCMSIS2_BACKEND_THREADX \
+	-DCONFIG_GMAC_RX_HWCSUM=1 \
 	-DSHELL_PORT_HOST='"rk3568"'
 
 # The freestanding libc surface is declared everywhere it is used: the vendored
@@ -150,6 +162,7 @@ BASE_SRCS := \
 	$(ROOT)/arch/aarch64/cache.c \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
+	$(ROOT)/board/rk3568-itx/reset.c \
 	$(ROOT)/os/baremetal/memops.c \
 	$(ROOT)/os/baremetal/minilibc.c \
 	$(ROOT)/os/baremetal/log.c \
@@ -174,7 +187,8 @@ COMMON_SRCS := \
 SHELL_SRCS := \
 	$(CURDIR)/main.c \
 	$(PORT)/shell_port.c \
-	$(PORT)/console_board.c
+	$(PORT)/console_board.c \
+	$(PORT)/board_cmds.c
 
 # Execution order = this list's order (link order for the BOARD_TESTS section).
 TESTS_SRCS := \
@@ -188,7 +202,9 @@ TESTS_SRCS := \
 	$(COMMON)/cases/usb_msc.c \
 	$(COMMON)/cases/usb_xhci.c \
 	$(COMMON)/cases/usb_ehci.c \
-	$(CURDIR)/tests/lwip_smoke.c
+	$(CURDIR)/tests/lwip_smoke.c \
+	$(CURDIR)/tests/lwip_stack.c \
+	$(CURDIR)/tests/gmac_dataplane.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -240,7 +256,8 @@ USB_INCLUDES := \
 # upstream level.
 LWIP_PORT_SRCS := \
 	$(LWIP_PORT)/sys_arch.c \
-	$(LWIP_PORT)/platform_hooks.c
+	$(LWIP_PORT)/platform_hooks.c \
+	$(LWIP_PORT)/ethnetif.c
 
 LWIP_STACK_SRCS := \
 	$(LWIP)/src/core/init.c \
@@ -284,10 +301,35 @@ LWIP_STACK_SRCS := \
 	$(LWIP)/src/netif/ethernet.c \
 	$(LWIP)/src/apps/lwiperf/lwiperf.c
 
-ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS) $(USB_BOARD_SRCS) $(USB_STACK_SRCS) $(LWIP_PORT_SRCS) $(LWIP_STACK_SRCS)
+# The contrib ping rides its own compile: the console anchors (one line per
+# echo reply) exist only under the stack's debug macro, which is switched on
+# for this one translation unit and stays off everywhere else.
+LWIP_PING_SRCS := $(LWIP)/contrib/apps/ping/ping.c
+
+# --- GMAC (DWC EQOS) domain --------------------------------------------------
+#
+# The board's own Ethernet drivers (MAC core, RK3568 SoC glue, PHY) live beside
+# the console driver; their includes are the board directories already on
+# INCLUDES, so no extra -I is needed.
+EQOS_SRCS := \
+	$(ROOT)/board/rk3568-itx/drivers/dwc_eqos.c \
+	$(ROOT)/board/rk3568-itx/drivers/eqos_rk3568.c \
+	$(ROOT)/board/rk3568-itx/drivers/rtl8211f.c
+
+EQOS_INCLUDES :=
+
+ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS) $(USB_BOARD_SRCS) $(USB_STACK_SRCS) $(LWIP_PORT_SRCS) $(LWIP_STACK_SRCS) $(LWIP_PING_SRCS) $(EQOS_SRCS)
 
 # Object names mirror the path below ROOT: the kernel and the port share flat
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide.
+# The vendored formatter engine (components/printf, mpaland): the freestanding
+# image formats only through this engine, bound in os/threadx... os/baremetal/
+# minilibc.c. Float and exponential rendering are compiled out - the build is
+# -mgeneral-regs-only and has no FP state.
+PRINTF_SRCS := $(ROOT)/components/printf/printf.c
+PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL
+ALL_SRCS += $(PRINTF_SRCS)
+
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 .PHONY: all check guards clean FORCE
@@ -299,18 +341,24 @@ $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@echo "  CC $$<"
 	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_WARNED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
 endef
+
+$(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
 $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(filter-out $(CURDIR)/tests/lwip_smoke.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(foreach s,$(filter-out $(CURDIR)/tests/lwip_smoke.c $(CURDIR)/tests/lwip_stack.c $(CURDIR)/tests/gmac_dataplane.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/lwip_smoke.c,$(LWIP_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/lwip_stack.c,$(LWIP_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/gmac_dataplane.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(USB_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(LWIP_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
 $(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
+$(eval $(call COMPILE_RULE,$(LWIP)/contrib/apps/ping/ping.c,$(LWIP_INCLUDES) -DLWIP_DEBUG))
+$(foreach s,$(EQOS_SRCS),$(eval $(call COMPILE_RULE,$(s),$(EQOS_INCLUDES))))
 
 $(TAG_STAMP): FORCE
 	@mkdir -p $(BUILD)
@@ -350,9 +398,9 @@ guards:
 		*) echo "FAIL: TCP/IP source outside the vendored tree or the port layer: $$s"; exit 1 ;; \
 		esac; \
 	done
-	@first=$$(echo "$(LWIP_INCLUDES)" | tr ' ' '\n' | sed '/^$$/d' | head -1); \
-	[ "$$first" = "-I$(LWIP_PORT)/include" ] \
-		|| { echo "FAIL: the port include directory is not the first lwIP -I (first=$$first)"; exit 1; }
+	@first=$$(echo "$(LWIP_INCLUDES)" | tr ' ' '\n' | sed '/^$$/d' | head -2 | tr '\n' ' '); \
+	[ "$$first" = "-I$(LWIP_PORT) -I$(LWIP_PORT)/include " ] \
+		|| { echo "FAIL: the port include directories do not lead the lwIP -I list (first=$$first)"; exit 1; }
 	@test -f $(LWIP_PORT)/include/lwipopts.h || { echo "FAIL: lwipopts.h missing"; exit 1; }
 	@test -f $(LWIP_PORT)/include/arch/cc.h || { echo "FAIL: arch/cc.h missing"; exit 1; }
 	@echo "$(TX_CFLAGS)" | grep -q -- "-I$(BOARD_CMSIS2) " \
@@ -415,12 +463,12 @@ check: guards $(TARGET).elf
 	bt=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_end"{print $$1}'); \
 	bt0=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_start"{print $$1}'); \
 	fsz=$$(( 0x$$fs - 0x$$fs0 )); vsz=$$(( 0x$$vs - 0x$$vs0 )); btz=$$(( 0x$$bt - 0x$$bt0 )); \
-	echo "fsymtab bytes=$$fsz (expect 4*40=160), vsymtab bytes=$$vsz (expect 2*24=48), board_tests bytes=$$btz"; \
-	[ $$fsz -eq 160 ] || { echo "FAIL: FSymTab is not dense"; exit 1; }; \
+	echo "fsymtab bytes=$$fsz (expect 8*40=320), vsymtab bytes=$$vsz (expect 2*24=48), board_tests bytes=$$btz"; \
+	[ $$fsz -eq 320 ] || { echo "FAIL: FSymTab is not dense"; exit 1; }; \
 	[ $$vsz -eq 48 ] || { echo "FAIL: VSymTab is not dense"; exit 1; }; \
 	[ $$(( btz % 16 )) -eq 0 ] || { echo "FAIL: BOARD_TESTS is not a whole number of entries"; exit 1; }; \
 	n=$$(( btz / 16 )); echo "board_tests entries=$$n"; \
-	[ $$n -ge 6 ] || { echo "FAIL: fewer than the six historical cases registered"; exit 1; }; \
+	[ $$n -ge 11 ] || { echo "FAIL: fewer than the eleven historical cases registered"; exit 1; }; \
 	echo "PASS: command and test tables dense (no inter-entry padding)"
 	@echo "== case-name reconciliation (image / suite.mk / judge) =="
 	@sh $(COMMON)/check-case-list.sh $(TARGET).elf $(CURDIR)/suite.mk $(CURDIR)/judge.py $(OBJCOPY) $(READELF) $(BUILD)

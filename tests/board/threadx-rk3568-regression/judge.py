@@ -42,6 +42,7 @@ CASES = [
     "usb-xhci",
     "usb-ehci",
     "lwip-loopback",
+    "gmac-up",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -52,6 +53,8 @@ CASES = [
 #:   tlsf-heap    os/threadx/board/rk3568-itx/heap.c (heap ready line)
 #:   lwip-loopback tests/board/threadx-rk3568-regression/tests/lwip_smoke.c
 #:                 (stack init callback line, loopback echo result line)
+#:   gmac-up      tests/board/threadx-rk3568-regression/tests/gmac_dataplane.c
+#:                 (PHY identity + link line, MAC address, channel start)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "kernel-up": [
@@ -81,6 +84,13 @@ ANCHORS = {
         r"net: READY tcpip=up lwip=\d+\.\d+\.\d+",
         r"net: loopback echo ok port=7777 sent=32 got=32",
     ],
+    "gmac-up": [
+        r"phy1: id 0x001c:0xc916 at mdio \d+",
+        r"phy1: link up, 1000 Mbps full duplex",
+        r"gmac1: channel start",
+        r"net: up gmac1 ip=192\.168\.0\.200/24 mac=02:e4:a5:35:68:01",
+        r"gmac1: dataplane up",
+    ],
 }
 
 LADDER_RE = re.compile(r"tick: t=(\d+)")
@@ -93,7 +103,7 @@ LADDER_SLACK = 2
 STAMP_TOLERANCE_MS = 10
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STEPS_PATH = os.path.join(HERE, "..", "common", "shell-steps.tsv")
+STEPS_PATH = os.path.join(HERE, "steps.tsv")
 VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 
 # --------------------------------------------------------------------------
@@ -107,8 +117,8 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[  12.260] BOARD-SUITE threadx-rk3568-regression "
-    "result=pass cases=10 ok=10 exit=0\r\n"
+    "[  12.360] BOARD-SUITE threadx-rk3568-regression "
+    "result=pass cases=11 ok=11 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
@@ -120,9 +130,9 @@ BASE_TRANSCRIPT = (
     "[   0.000] stamp: switched to tick\r\n"
     "[   0.001] heap: tlsf ready 1048576 bytes at 0xa026730\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-regression select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-regression start cases=10 sel=all "
+    "[  10.000] BOARD-SUITE threadx-rk3568-regression start cases=11 sel=all "
     "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
-    "os-timer,usb-xhci,usb-ehci,lwip-loopback\r\n"
+    "os-timer,usb-xhci,usb-ehci,lwip-loopback,gmac-up\r\n"
     + PROMPT
     + "[  10.010] cmsis2: prio 24 -> tx 19\r\n"
     "[  10.020] CASE threadx-rk3568-regression/shell-up PASS\r\n"
@@ -151,10 +161,20 @@ BASE_TRANSCRIPT = (
     "[  12.255] net: READY tcpip=up lwip=2.2.1\r\n"
     "[  12.258] net: loopback echo ok port=7777 sent=32 got=32\r\n"
     "[  12.260] CASE threadx-rk3568-regression/lwip-loopback PASS\r\n"
+    "[  12.265] gmac1: mac version 0x3051 at 0xfe010000 irq 64\r\n"
+    "[  12.270] phy1: id 0x001c:0xc916 at mdio 1\r\n"
+    "[  12.275] phy1: strapped RGMII tx delay already clear (mdio 1, d08.0x11 0x0009)\r\n"
+    "[  13.280] phy1: link up, 1000 Mbps full duplex\r\n"
+    "[  13.285] gmac1: link 1000 Mbps full duplex\r\n"
+    "[  13.290] gmac1: channel start\r\n"
+    "[  13.292] lwiperf: tcp server start\r\n"
+    "[  13.295] net: up gmac1 ip=192.168.0.200/24 mac=02:e4:a5:35:68:01\r\n"
+    "[  13.300] gmac1: dataplane up\r\n"
+    "[  13.310] CASE threadx-rk3568-regression/gmac-up PASS\r\n"
     + SENTINEL_LINE
     + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
-    "total function 4\r\n"
+    "total function 8\r\n"
     "  exit   -> /sbin - leave the shell\r\n"
     "\r\n"
     "total variable 2\r\n"
@@ -180,7 +200,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-regression/tlsf-heap PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=10 ok=10 exit=0", "cases=10 ok=9 exit=0"), 1),
+        "cases=11 ok=11 exit=0", "cases=11 ok=10 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-regression/tlsf-heap PASS",
@@ -190,13 +210,15 @@ MUTATIONS = [
         "heap: tlsf ready 1048576 bytes at 0xa026730\r\n", ""), 1),
     ("anchor dropped (net ready)", BASE_TRANSCRIPT.replace(
         "net: READY tcpip=up lwip=2.2.1\r\n", ""), 1),
+    ("anchor dropped (link up)", BASE_TRANSCRIPT.replace(
+        "phy1: link up, 1000 Mbps full duplex\r\n", ""), 1),
     ("ladder beat dropped", BASE_TRANSCRIPT.replace("tick: t=12000\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
-        "os-timer,usb-xhci,usb-ehci,lwip-loopback",
+        "os-timer,usb-xhci,usb-ehci,lwip-loopback,gmac-up",
         "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
-        "os-timer,usb-xhci,usb-ehci"), 1),
+        "os-timer,usb-xhci,usb-ehci,lwip-loopback"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 

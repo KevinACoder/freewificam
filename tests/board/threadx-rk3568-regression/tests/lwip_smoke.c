@@ -24,29 +24,14 @@
 
 #include "os/cmsis2/cmsis2.h"
 
-#include "lwip/tcpip.h"
 #include "lwip/sockets.h"
-#include "lwip/init.h"
 
 #include "log.h"
 
-#ifndef LWIP_VERSION_STRING
-#error "lwip/init.h must provide the version string"
-#endif
+#include "lwip_stack.h"
 
 #define ECHO_PORT 7777
 #define ECHO_LEN  32
-
-/* Signalled by the stack's init callback, which runs on the TCP/IP thread
- * once lwip_init() has completed (third-party/lwip/src/api/tcpip.c:142-146). */
-static osSemaphoreId_t tcpip_ready;
-
-static void tcpip_done(void *arg)
-{
-	(void)arg;
-	board_log("net: READY tcpip=up lwip=%s\n", LWIP_VERSION_STRING);
-	(void)osSemaphoreRelease(tcpip_ready);
-}
 
 /* Receive exactly len bytes, honouring the socket's receive timeout. */
 static int recv_all(int s, unsigned char *buf, int len)
@@ -82,16 +67,9 @@ static void lwip_loopback(void)
 	int server = -1;
 	int i;
 
-	tcpip_ready = osSemaphoreNew(1u, 0u, NULL);
-	if (tcpip_ready == NULL) {
-		board_case_fail("ready semaphore create failed");
-		return;
-	}
-
 	/* The stack's entry point: initialises the stack, adds the loopback
 	 * netif, creates the TCP/IP thread and runs the callback on it. */
-	tcpip_init(tcpip_done, NULL);
-	if (osSemaphoreAcquire(tcpip_ready, osKernelGetTickFreq() * 5u) != osOK) {
+	if (lwip_stack_up() != 0) {
 		board_case_fail("tcpip_init callback never ran (5s)");
 		return;
 	}

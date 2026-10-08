@@ -1,0 +1,16 @@
+# Interactive shell steps of the ThreadX regression image.
+# Column 1: bytes to send (\r -> CR, \t -> TAB; decoded by the host runner).
+# Column 2: expected response regex, matched in order on the ANSI-stripped
+# transcript with the transmitted (==> ) lines removed. The first row sends
+# nothing: it only asserts that the prompt is up.
+#
+# Separate from ../common/shell-steps.tsv because the expected command count
+# is image-specific: this image carries seven commands (the shell built-ins
+# plus the wired-line commands gmac/ping/iperf), the FreeRTOS line carries
+# the built-ins only.
+# send	expect
+	user@rk3568:/\$
+help\r	total function 8[\s\S]*total variable 2
+cl\t	user@rk3568:/\$ clear
+\r	user@rk3568:/\$
+exit\r	user@rk3568:/\$ exit[\s\S]*user@rk3568:/\$
