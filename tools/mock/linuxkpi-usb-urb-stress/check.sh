@@ -37,8 +37,8 @@ case_line() {
 # operations per seed) are the milestone-scale run; the container uses a shorter
 # stream with the same determinism contract to keep a change cycle fast.
 
-if "$bin" --fuzz --iters 20000 > "$log_dir/run.log" 2>&1; then
-    if grep -q '^URBSTRESS: matrix cells=28 pass=28 fail=0$' "$log_dir/run.log"; then
+if "$bin" --fuzz --iters 20000 > "$log_dir/stream.log" 2>&1; then
+    if grep -q '^URBSTRESS: matrix cells=28 pass=28 fail=0$' "$log_dir/stream.log"; then
         case_line matrix PASS
         for fam in B1 B2 B3 B4 B5 B6; do
             case_line "matrix-$fam" PASS
@@ -46,29 +46,29 @@ if "$bin" --fuzz --iters 20000 > "$log_dir/run.log" 2>&1; then
     else
         case_line matrix FAIL
         echo "linuxkpi-usb-urb-stress: matrix summary unexpected" >&2
-        tail -5 "$log_dir/run.log" >&2 || true
+        tail -5 "$log_dir/stream.log" >&2 || true
     fi
 
-    if grep -q '^URBSTRESS: pairing ' "$log_dir/run.log" &&
-        grep -q '^URBSTRESS: balance ' "$log_dir/run.log"; then
+    if grep -q '^URBSTRESS: pairing ' "$log_dir/stream.log" &&
+        grep -q '^URBSTRESS: balance ' "$log_dir/stream.log"; then
         case_line pairing-balance PASS
     else
         case_line pairing-balance FAIL
         echo "linuxkpi-usb-urb-stress: no pairing/balance anchor" >&2
     fi
 
-    if grep -q '^URBSTRESS: fuzz seed=[123] iters=20000 .* ok=1 ' "$log_dir/run.log"; then
+    if grep -q '^URBSTRESS: fuzz seed=[123] iters=20000 .* ok=1 ' "$log_dir/stream.log"; then
         case_line seeds PASS
     else
         case_line seeds FAIL
         echo "linuxkpi-usb-urb-stress: short stream did not pass" >&2
-        tail -5 "$log_dir/run.log" >&2 || true
+        tail -5 "$log_dir/stream.log" >&2 || true
     fi
 else
     case_line matrix FAIL
     case_line seeds FAIL
     echo "linuxkpi-usb-urb-stress: run failed, see $log_dir/run.log" >&2
-    tail -5 "$log_dir/run.log" >&2 || true
+    tail -5 "$log_dir/stream.log" >&2 || true
 fi
 
 # ---- the reverse controls -----------------------------------------------------
@@ -92,7 +92,7 @@ fi
 # The control run names its repro command, and the replay path must reproduce the
 # seeded stream's digest exactly (a replay that disagrees is a broken repro path).
 if grep -q '^URBSTRESS: repro linuxkpi-usb-urb-stress --fault double-complete$' "$log_dir/double-complete.log"; then
-    seed1=$(sed -n 's/^URBSTRESS: fuzz seed=1 iters=20000 ops=20000 digest=\([0-9a-f]*\) ok=1 .*$/\1/p' "$log_dir/run.log" | head -1)
+    seed1=$(sed -n 's/^URBSTRESS: fuzz seed=1 iters=20000 ops=20000 digest=\([0-9a-f]*\) ok=1 .*$/\1/p' "$log_dir/stream.log" | head -1)
     if [ -n "$seed1" ] && "$bin" --replay 1 20000 > "$log_dir/replay.log" 2>&1 &&
         grep -q "^URBSTRESS: replay seed=1 .*digest=$seed1$" "$log_dir/replay.log"; then
         case_line replay PASS

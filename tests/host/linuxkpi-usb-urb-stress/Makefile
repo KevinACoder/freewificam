@@ -64,10 +64,12 @@ CFLAGS := -ggdb3 -O1 -Wall -Wextra -ffunction-sections -fdata-sections \
 
 LDFLAGS := -pthread -Wl,--gc-sections $(SANITIZE)
 
-# The engine and its platform services.
+# The engine and its platform services. The services are the real body now
+# (components/linuxkpi/linuxkpi_core.c): the host stand-in the sibling suite
+# used to carry was retired when the real body landed.
 ENGINE_SRCS := \
     $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
-    $(ROUND_A)/lkpi_core_host.c
+    $(ROOT)/components/linuxkpi/linuxkpi_core.c
 
 # The test double, reused verbatim from the sibling suite: controller, scripted
 # device model, clean-room command-driver stand-in.

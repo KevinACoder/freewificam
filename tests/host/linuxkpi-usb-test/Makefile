@@ -60,10 +60,13 @@ CFLAGS := -ggdb3 -O0 -Wall -ffunction-sections -fdata-sections \
 
 LDFLAGS := -pthread -Wl,--gc-sections
 
-# The engine and its platform services.
+# The engine and its platform services. The services are the real body now
+# (components/linuxkpi/linuxkpi_core.c): the host stand-in this directory used
+# to carry was retired when the real body landed, keeping one implementation of
+# each service.
 ENGINE_SRCS := \
     $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
-    $(MAKEFILE_DIR)/lkpi_core_host.c
+    $(ROOT)/components/linuxkpi/linuxkpi_core.c
 
 # The test double: controller, device model, command-driver stand-in, loader.
 MOCK_SRCS := \

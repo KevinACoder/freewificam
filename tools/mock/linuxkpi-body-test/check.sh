@@ -34,11 +34,11 @@ case_line() {
 
 # ---- the suite itself ---------------------------------------------------------
 
-if timeout 120 "$bin" > "$log_dir/run.log" 2>&1; then
-    pass=$(grep -c '^LKPI: L[0-9]* PASS' "$log_dir/run.log" || true)
+if timeout 120 "$bin" > "$log_dir/stream.log" 2>&1; then
+    pass=$(grep -c '^LKPI: L[0-9]* PASS' "$log_dir/stream.log" || true)
     if [ "$pass" = 8 ] &&
-        grep -q '^LKPI: SUITE PASS cases=8$' "$log_dir/run.log" &&
-        ! grep -q '^LKPI: L[0-9]* FAIL' "$log_dir/run.log"; then
+        grep -q '^LKPI: SUITE PASS cases=8$' "$log_dir/stream.log" &&
+        ! grep -q '^LKPI: L[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line link-closure PASS
         case_line section-walk PASS
         case_line id-match-pos PASS
@@ -50,12 +50,12 @@ if timeout 120 "$bin" > "$log_dir/run.log" 2>&1; then
     else
         case_line link-closure FAIL
         echo "linuxkpi-body-test: the run did not report eight passing cases ($pass)" >&2
-        tail -8 "$log_dir/run.log" >&2 || true
+        tail -8 "$log_dir/stream.log" >&2 || true
     fi
 else
     case_line link-closure FAIL
     echo "linuxkpi-body-test: the run failed, see $log_dir/run.log" >&2
-    tail -8 "$log_dir/run.log" >&2 || true
+    tail -8 "$log_dir/stream.log" >&2 || true
 fi
 
 # ---- the compiled-in firmware image -------------------------------------------
