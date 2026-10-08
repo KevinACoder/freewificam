@@ -281,45 +281,91 @@ seam_clear_key(struct wlan_seam_drv *drv, int pairwise, int key_idx)
 
 static void
 seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
-    uint32_t freq)
+    uint32_t freq, uint16_t aid, const uint8_t *rates, size_t rates_len)
 {
 	u64 changed = 0;
 
 	(void)drv;
+	(void)freq;
 	if (adapter.hw == NULL || adapter.vif == NULL)
 		return;
 	/*
-	 * The associated-state notification. The bss_conf fields the driver
-	 * reads back are the BSSID, the association flag and the basic rate set
-	 * (core.c:3211 bss_info_changed reads bssid and assoc); the STA object
-	 * is created on join and released on leave, because the driver's rate
-	 * path needs a peer while associated and wants none afterwards.
+	 * The associated-state notification, carrying what the driver's
+	 * association branch actually reads: vif->cfg.assoc gates the branch,
+	 * vif->cfg.aid lands in the beacon-power-save report register, and the
+	 * station's rate bitmaps feed the rate-adaptation mask (core.c reads
+	 * all three; without cfg.assoc the driver runs its NOT-associated leg
+	 * - TSF update disabled, disconnect reported - while the stack has
+	 * already associated).
 	 */
 	if (joined) {
-		adapter.vif->bss_conf.bssid = bssid;
+		if (bssid != NULL)
+			memcpy(adapter.bssid_store, bssid, 6);
+		adapter.vif->bss_conf.bssid = adapter.bssid_store;
 		adapter.vif->bss_conf.assoc_capability = 0;
+		adapter.vif->cfg.assoc = true;
+		adapter.vif->cfg.aid = aid;
 		changed = BSS_CHANGED_ASSOC | BSS_CHANGED_BSSID |
 		    BSS_CHANGED_BASIC_RATES;
 		if (adapter.sta == NULL) {
 			adapter.sta = lkpi80211_drv_sta_add(adapter.hw,
-			    adapter.vif, bssid, 0);
+			    adapter.vif, adapter.bssid_store, aid);
+		}
+		if (adapter.sta != NULL) {
+			/*
+			 * The driver's rate bitmaps index its own registered
+			 * rate table (core.c rtl8xxxu_rates: 1,2,5.5,11 then
+			 * 6..54 Mbit/s, twelve entries - the same order every
+			 * mac80211 band bitmap uses), NOT the on-air half-
+			 * megabit value, so the transfer goes through a table;
+			 * the 0x80 flag on a rate marks the AP's basic set
+			 * (bss_conf->basic_rates feeds the driver's
+			 * response-rate register).
+			 */
+			static const struct { uint8_t half_mbps; uint8_t idx; }
+			    legacy[] = {
+			    { 2, 0 }, { 4, 1 }, { 11, 2 }, { 22, 3 },
+			    { 12, 4 }, { 18, 5 }, { 24, 6 }, { 36, 7 },
+			    { 48, 8 }, { 72, 9 }, { 96, 10 }, { 108, 11 },
+			};
+			u32 supp = 0, basic = 0;
+			size_t i, j;
+
+			for (i = 0; i < rates_len; i++) {
+				for (j = 0; j < sizeof(legacy)/sizeof(legacy[0]);
+				    j++) {
+					if ((rates[i] & 0x7fu) ==
+					    legacy[j].half_mbps) {
+						supp |= 1u << legacy[j].idx;
+						if ((rates[i] & 0x80u) != 0)
+							basic |=
+							    1u << legacy[j].idx;
+						break;
+					}
+				}
+			}
+			adapter.sta->deflink.supp_rates[0] = supp;
+			adapter.vif->bss_conf.basic_rates = basic;
 		}
 	} else {
-		adapter.vif->bss_conf.bssid = NULL;
+		adapter.vif->cfg.assoc = false;
+		adapter.vif->cfg.aid = 0;
 		changed = BSS_CHANGED_ASSOC;
 		if (adapter.sta != NULL) {
 			lkpi80211_drv_sta_remove(adapter.hw, adapter.vif,
 			    adapter.sta);
 			adapter.sta = NULL;
 		}
-	}
-	if (!joined) {
-		/* the hardware address check must not keep matching the old
-		 * AP while the interface is unassociated */
+		/*
+		 * No BSS_CHANGED_BSSID on the leave: mac80211 does not push a
+		 * NULL BSSID through bss_info_changed, and the driver's
+		 * handler dereferences the pointer to program the register -
+		 * a NULL there faults. The local view is cleared (so nothing
+		 * matches the old AP by address), and the register keeps its
+		 * last value until the next join reprograms it.
+		 */
 		adapter.vif->bss_conf.bssid = NULL;
-		changed |= BSS_CHANGED_BSSID;
 	}
-	(void)freq;
 	lkpi80211_drv_bss_changed(adapter.hw, adapter.vif, changed);
 }
 
@@ -405,7 +451,8 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 	if (skb == NULL)
 		return;
 	(void)wlan_bridge_input(skb->data, (size_t)skb->len,
-	    rs != NULL ? (int)rs->signal : 0);
+	    rs != NULL ? (int)rs->signal : 0,
+	    rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0);
 }
 
 static void

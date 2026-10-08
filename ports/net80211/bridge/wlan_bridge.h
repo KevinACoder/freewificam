@@ -51,6 +51,18 @@ struct wlan_bridge_counters {
 	unsigned int	scan_completes;
 	unsigned int	filter_sets;
 	unsigned int	filter_clears;
+	/* the discriminator family: which management answers actually cross
+	 * the radio, split by kind and by "from the BSSID this join targets",
+	 * plus the frames the chip flagged as FCS-failed (the wrong-channel
+	 * signature: a parked-off-channel radio receives garbage, a right
+	 * channel receives valid beacons). */
+	unsigned int	rx_beacon;
+	unsigned int	rx_beacon_tgt;
+	unsigned int	rx_probersp;
+	unsigned int	rx_fcs_bad;
+	unsigned int	tune_calls;
+	unsigned int	tune_fails;
+	uint32_t	tuned_freq;
 	int		attached;
 };
 
@@ -67,9 +79,12 @@ void	wlan_bridge_detach(void);
 /*
  * Receive: one 802.11 frame (no FCS) from the driver half, borrowed - the
  * bridge copies it into the stack's own buffer before returning. `rssi` is the
- * driver's signal report (0 when it has none).
+ * driver's signal report (0 when it has none); `fcs_bad` says the chip flagged
+ * the frame's checksum (it still arrives - nothing between the driver and here
+ * drops it - but it is noise, not an answer).
  */
-int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi);
+int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi,
+	    int fcs_bad);
 
 /* A transmitted frame completed (the driver half's tx-status callback). */
 void	wlan_bridge_tx_complete(void);
@@ -164,13 +179,24 @@ unsigned int wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6],
 /* The stack's current state value (the imported numbering), -1 when detached. */
 int	wlan_bridge_state(void);
 
-/* Is a sweep in flight? (the radio's dwell pump watches this) */
+/* Is a sweep in flight? (the stack state and the bookkeeping both standing) */
 int	wlan_bridge_scan_active(void);
+
+/* Does the sweep's bookkeeping stand, whatever the stack's state? The dwell
+ * pump dwells on THIS one: the dwell's entry check closes a sweep the stack
+ * already left (a cancelled scan on the way into a join), so gating the pump
+ * on scan_active() alone can strand the bookkeeping - and with it, every
+ * later scan_start - on a -EBUSY forever. */
+int	wlan_bridge_scan_pending(void);
 
 /* The 1 Hz stack tick: management-frame timeout and node inactivity. Without
  * it a lost auth/assoc response is never retried (the countdown that restarts
  * the scan is driven here). The radio pump calls it once a second. */
 void	wlan_bridge_watchdog(void);
+
+/* Diagnostic: the imported path's auth-response-in-wrong-state counter (see
+ * the definition; the join judgment reads it to split arrival from discard). */
+uint32_t wlan_bridge_stat_bad_auth(void);
 
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */

@@ -102,6 +102,14 @@ static struct {
 	unsigned int data_tx;
 	unsigned int rx_frames;
 	unsigned int rx_mgmt;	/* diagnostic: mgmt frames seen in input */
+	unsigned int rx_beacon;	/* diagnostic: beacons seen in input */
+	unsigned int rx_beacon_tgt;	/* ... from the BSSID this join targets */
+	unsigned int rx_probersp;	/* diagnostic: probe responses seen */
+	unsigned int rx_fcs_bad;	/* diagnostic: frames the chip flagged */
+	unsigned int tune_calls;	/* diagnostic: channel-program attempts */
+	unsigned int tune_fails;	/* diagnostic: ... that came back nonzero */
+	uint8_t bssid_last[6];	/* the join target the filter must match */
+	int bssid_last_set;
 	unsigned int tx_completes;
 } bridge;
 
@@ -305,6 +313,8 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 
 		if (bridge.ops != NULL && bridge.ops->bssid != NULL &&
 		    bss != NULL) {
+			memcpy(bridge.bssid_last, bss->ni_bssid, 6);
+			bridge.bssid_last_set = 1;
 			(void)bridge.ops->bssid(bridge.drv, bss->ni_bssid);
 		}
 	}
@@ -317,13 +327,19 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 			(void)bridge.ops->bss_info(bridge.drv, 1,
 			    bss != NULL ? bss->ni_bssid : ic->ic_myaddr,
 			    bss != NULL && bss->ni_chan != NULL ?
-			    bss->ni_chan->ic_freq : 0);
+			    bss->ni_chan->ic_freq : 0,
+			    /* ni_associd carries the 0xc000 marking; a
+			     * mac80211 driver wants the raw association id */
+			    bss != NULL ? (uint16_t)(bss->ni_associd & 0x3fff) : 0,
+			    bss != NULL ? bss->ni_rates.rs_rates : NULL,
+			    bss != NULL ? bss->ni_rates.rs_nrates : 0);
 		}
 		if (bridge.ifops != NULL && bridge.ifops->up != NULL)
 			(void)bridge.ifops->up(bridge.if_priv);
 	} else if (nstate != IEEE80211_S_RUN && ostate == IEEE80211_S_RUN) {
 		if (bridge.ops != NULL && bridge.ops->bss_info != NULL)
-			(void)bridge.ops->bss_info(bridge.drv, 0, NULL, 0);
+			(void)bridge.ops->bss_info(bridge.drv, 0, NULL, 0, 0,
+			    NULL, 0);
 		if (bridge.ifops != NULL && bridge.ifops->down != NULL)
 			(void)bridge.ifops->down(bridge.if_priv);
 	}
@@ -459,7 +475,7 @@ wlan_bridge_detach(void)
  * the imported path requires.
  */
 int
-wlan_bridge_input(const uint8_t *frame, size_t len, int rssi)
+wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad)
 {
 	struct ieee80211com *ic = bridge.ic;
 	struct ieee80211_node *ni;
@@ -473,17 +489,51 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi)
 		return -ENOMEM;
 	}
 	bridge.rx_frames++;
+	if (fcs_bad)
+		bridge.rx_fcs_bad++;
 	if (len >= 24 && (frame[0] & 0x0c) == 0x00) {	/* management */
-		if ((frame[0] & 0xf0) != 0x80 && bridge.rx_mgmt < 64) {
-			/* every non-beacon mgt frame, bounded: the auth and
-			 * assoc exchanges must be visible here */
+		uint8_t fc0 = frame[0];
+		uint8_t sub = (uint8_t)(fc0 & 0xf0);
+
+		/*
+		 * The discriminator family, counted (lines would flood at a
+		 * beacon's period): beacons split by "from the BSSID this
+		 * join targets", probe responses apart, and the FCS-flagged
+		 * noise above. A join wait with target beacons flowing says
+		 * the radio sits on the AP's channel AND the chip's address
+		 * filter passes the AP's frames; a wait with only flagged
+		 * noise says the opposite; an either-way absence of probe
+		 * responses during sweeps says the probes stopped being
+		 * answered.
+		 */
+		if (sub == 0x80) {
+			bridge.rx_beacon++;
+			if (bridge.bssid_last_set &&
+			    memcmp(&frame[16], bridge.bssid_last, 6) == 0)
+				bridge.rx_beacon_tgt++;
+		} else if (sub == 0x50) {
+			bridge.rx_probersp++;
+		}
+		/* The association-exchange family always logs (rare, and the
+		 * evidence a join judgment stands on); other frames are
+		 * sampled so the lines stay readable. */
+		if ((fc0 & 0x0c) == 0x00 && (sub == 0xb0 /* auth */ ||
+		    sub == 0x00 || sub == 0x10 /* assoc req/resp */)) {
+			wlan_osal_log("wlan: rx mgt fc=%02x a1=%02x:%02x:%02x:"
+			    "%02x:%02x:%02x a2=%02x:%02x:%02x:%02x:%02x:%02x "
+			    "len=%u\n", fc0, frame[4], frame[5], frame[6],
+			    frame[7], frame[8], frame[9], frame[10], frame[11],
+			    frame[12], frame[13], frame[14], frame[15],
+			    (unsigned)len);
+		} else if (sub != 0x80 && bridge.rx_mgmt < 64) {
 			bridge.rx_mgmt++;
 			wlan_osal_log("wlan: rx mgt fc=%02x a1=%02x:%02x:%02x:"
 			    "%02x:%02x:%02x a3=%02x:%02x:%02x:%02x:%02x:%02x "
-			    "len=%u\n", frame[0], frame[4], frame[5], frame[6],
-			    frame[7], frame[8], frame[9], frame[16], frame[17],
-			    frame[18], frame[19], frame[20], frame[21],
-			    (unsigned)len);
+			    "len=%u%s\n", fc0, frame[4],
+			    frame[5], frame[6], frame[7], frame[8], frame[9],
+			    frame[16], frame[17], frame[18], frame[19],
+			    frame[20], frame[21],
+			    (unsigned)len, fcs_bad ? " fcs!" : "");
 		}
 	}
 
@@ -552,6 +602,17 @@ wlan_bridge_scan_start(void)
 	 */
 	memcpy(bridge.ic->ic_chan_scan, bridge.ic->ic_chan_active,
 	    sizeof(bridge.ic->ic_chan_scan));
+	/*
+	 * Re-arm the scan flags with the same pair begin_scan() would set:
+	 * end_scan() cleared both at the last sweep's close, and a SCAN ->
+	 * SCAN re-entry emits no probe unless F_ASCAN is back (the re-entry
+	 * case gates probe_curchan on it), while F_SCAN is what the stack's
+	 * own rx-side helpers consult for "am I scanning". Without this every
+	 * sweep after the first is a silent passive walk over a stale table
+	 * (measured on the board: mgt frames frozen while the supplicant's
+	 * scans kept "completing").
+	 */
+	bridge.ic->ic_flags |= IEEE80211_F_SCAN | IEEE80211_F_ASCAN;
 	/* drive the stack's own scan machine: it builds and queues the probe
 	 * requests (moved by the management drain above) and arms the channel
 	 * walk the dwell advances */
@@ -599,7 +660,17 @@ wlan_bridge_scan_dwell(void)
 		bridge.filter_clears++;
 		return 0;
 	}
+	/*
+	 * Under the serializer: next_scan re-enters the stack's SCAN state
+	 * (tuning the radio to the next channel) and the join path's sta_join
+	 * runs under the same lock - the pair must not interleave, or an auth
+	 * request can leave on a channel the pump chose. bridge_start takes no
+	 * lock itself (the input path already runs it locked), so the probe
+	 * transmit this arms cannot recurse into this lock.
+	 */
+	wlan_port_serializer_lock();
 	more = ieee80211_next_scan(bridge.ic);
+	wlan_port_serializer_unlock();
 	if (more == 0) {
 		bridge.scanning = 0;
 		bridge.scan_completes++;
@@ -634,10 +705,20 @@ wlan_bridge_tune_current(void)
 		return -EINVAL;
 	if (chan->ic_freq == bridge.tuned_freq)
 		return 0;
+	bridge.tune_calls++;
 	rc = bridge.ops->config(bridge.drv, WLAN_SEAM_CONFIG_CHANNEL,
 	    chan->ic_freq);
-	if (rc == 0)
+	if (rc == 0) {
 		bridge.tuned_freq = chan->ic_freq;
+	} else {
+		/* logged, not swallowed: a refused retune leaves the radio on
+		 * the old channel while the stack believes otherwise - every
+		 * frame of the exchange that follows leaves on the wrong
+		 * channel, and nothing else would say so */
+		bridge.tune_fails++;
+		wlan_osal_log("wlan: tune %u MHz FAILED (%d); the radio stays "
+		    "on %u\n", chan->ic_freq, rc, bridge.tuned_freq);
+	}
 	return rc;
 }
 
@@ -665,11 +746,40 @@ wlan_bridge_scan_stats(unsigned int *starts, unsigned int *completes,
 int
 wlan_bridge_scan_active(void)
 {
-
 	/* the stack's own state is the authority: a sweep the stack has left
 	 * (a cancelled scan on the way into a join) must not be dwelt */
 	return bridge.attached && bridge.scanning && bridge.ic != NULL &&
 	    bridge.ic->ic_state == IEEE80211_S_SCAN;
+}
+
+/*
+ * Does the sweep's bookkeeping still stand (whatever the stack's state)?
+ * The dwell pump asks this, NOT scan_active(): a join can flip the stack
+ * out of S_SCAN between the pump's check and its dwell call, and a pump
+ * that then only idles leaves `scanning` set forever - every later
+ * scan_start refuses with -EBUSY and no code path clears it (the dwell's
+ * own entry check is the only runtime clearer, and it must be reached to
+ * run). The pump therefore dwells while the bookkeeping stands and lets
+ * the dwell's entry check close a sweep the stack already left.
+ */
+int
+wlan_bridge_scan_pending(void)
+{
+
+	return bridge.attached && bridge.scanning;
+}
+
+/*
+ * Diagnostic: the imported input path's "auth response in the wrong state"
+ * counter. It separates "the answer never reached the stack" from "the answer
+ * arrived and was discarded a layer above the radio" in one number.
+ */
+uint32_t
+wlan_bridge_stat_bad_auth(void)
+{
+
+	return bridge.attached && bridge.ic != NULL ?
+	    bridge.ic->ic_stats.is_rx_bad_auth : 0;
 }
 
 /*
@@ -825,8 +935,14 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 		ic->ic_bss->ni_authmode = ie_len != 0 ?
 		    IEEE80211_AUTH_8021X : IEEE80211_AUTH_OPEN;
 	}
-	wlan_port_serializer_unlock();
 
+	/*
+	 * sta_join stays inside the serializer: its new_state(S_AUTH) retunes
+	 * the radio and queues the auth request, and the dwell pump's
+	 * next_scan (which re-enters S_SCAN and retunes to the sweep's next
+	 * channel) runs under the same lock - without this, the two can
+	 * interleave and the auth request leaves on a channel the pump chose.
+	 */
 	if (ieee80211_sta_join(ic, ni)) {
 		wlan_osal_log("wlan: join %.*s bssid=%02x:%02x:%02x:%02x:%02x:%02x "
 		    "%s\n", (int)len, (const char *)ssid, ni->ni_bssid[0],
@@ -836,6 +952,7 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	} else {
 		ret = -EIO;
 	}
+	wlan_port_serializer_unlock();
 	/* sta_join consumed the reference on success (ic_bss holds it); a
 	 * failure leaves it to us */
 	if (ret != 0)
@@ -849,7 +966,9 @@ wlan_bridge_disconnect(int reason)
 
 	if (!bridge.attached || bridge.ic == NULL)
 		return;
+	wlan_port_serializer_lock();
 	(void)ieee80211_new_state(bridge.ic, IEEE80211_S_INIT, reason);
+	wlan_port_serializer_unlock();
 }
 
 /*
@@ -1071,6 +1190,13 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->scan_completes = bridge.scan_completes;
 	out->filter_sets = bridge.filter_sets;
 	out->filter_clears = bridge.filter_clears;
+	out->rx_beacon = bridge.rx_beacon;
+	out->rx_beacon_tgt = bridge.rx_beacon_tgt;
+	out->rx_probersp = bridge.rx_probersp;
+	out->rx_fcs_bad = bridge.rx_fcs_bad;
+	out->tune_calls = bridge.tune_calls;
+	out->tune_fails = bridge.tune_fails;
+	out->tuned_freq = bridge.tuned_freq;
 	out->attached = bridge.attached;
 }
 

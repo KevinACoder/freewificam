@@ -110,10 +110,16 @@ struct wlan_seam_drv_ops {
 	    int cipher, const uint8_t *key, size_t key_len);
 	int (*clear_key)(struct wlan_seam_drv *drv, int pairwise, int key_idx);
 
-	/* BSS state change: joined != 0 means associated to bssid on freq MHz;
-	 * joined == 0 means the connection went away. */
+	/* BSS state change: joined != 0 means associated to bssid on freq MHz
+	 * with association id aid (raw, no 0xc000 marking) and the peer's
+	 * rate set (rates_len values in 500 kbit/s units, the 0x80 flag marking
+	 * basic rates - the net80211 on-air encoding); joined == 0 means the
+	 * connection went away (aid 0, rates ignored). The aid and rates are
+	 * what a mac80211 driver's association branch reads out of vif->cfg and
+	 * the station - without them it runs its NOT-associated leg. */
 	void (*bss_info)(struct wlan_seam_drv *drv, int joined,
-	    const uint8_t bssid[6], uint32_t freq);
+	    const uint8_t bssid[6], uint32_t freq, uint16_t aid,
+	    const uint8_t *rates, size_t rates_len);
 
 	/* BSSID programming for the pre-association exchange. A chip's receive
 	 * filter compares frames against this register, so it must hold the

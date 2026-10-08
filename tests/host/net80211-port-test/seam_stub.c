@@ -136,11 +136,15 @@ static int stub_clear_key(struct wlan_seam_drv *drv, int pairwise, int key_idx)
 }
 
 static void stub_bss_info(struct wlan_seam_drv *drv, int joined,
-    const uint8_t bssid[6], uint32_t freq)
+    const uint8_t bssid[6], uint32_t freq, uint16_t aid,
+    const uint8_t *rates, size_t rates_len)
 {
 	(void) drv;
 	(void) joined;
 	(void) bssid;
+	(void) aid;
+	(void) rates;
+	(void) rates_len;
 	counters.last_freq = freq;
 	counters.bss_info++;
 }

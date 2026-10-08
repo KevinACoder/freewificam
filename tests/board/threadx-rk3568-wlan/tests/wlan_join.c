@@ -87,10 +87,20 @@ void wlan_join_chain(void)
 			struct wlan_bridge_counters c;
 
 			wlan_bridge_stats(&c);
+			/* the discriminator family rides the pulse: target
+			 * beacons flowing (bcnT) says the radio is on the AP's
+			 * channel and the chip's address filter passes the
+			 * AP's frames; fcs says how much of what arrives is
+			 * flagged garbage; tuned/tunes say where the channel
+			 * programming last stood */
 			board_log("wlan: join wait t=%us state=%s mgt_tx=%u "
-			    "rx=%u assoc=%u connected=%u\n",
+			    "rx=%u bad_auth=%u bcn=%u bcnT=%u prsp=%u fcs=%u "
+			    "tuned=%u tunes=%u/%u assoc=%u connected=%u\n",
 			    waited / 1000U, join_state_txt(wlan_bridge_state()),
-			    c.mgt_tx, c.rx_frames, wlan_wpa_obs_assoc_seen(),
+			    c.mgt_tx, c.rx_frames, wlan_bridge_stat_bad_auth(),
+			    c.rx_beacon, c.rx_beacon_tgt, c.rx_probersp,
+			    c.rx_fcs_bad, c.tuned_freq, c.tune_calls,
+			    c.tune_fails, wlan_wpa_obs_assoc_seen(),
 			    wlan_wpa_obs_connected());
 		}
 	}

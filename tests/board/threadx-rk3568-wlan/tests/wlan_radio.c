@@ -40,11 +40,14 @@ wlan_radio_task(void *arg)
 
 	(void)arg;
 	for (;;) {
-		if (wlan_bridge_scan_active()) {
+		if (wlan_bridge_scan_pending()) {
 			osDelay(WLAN_RADIO_DWELL_MS);
 			tick_accum += WLAN_RADIO_DWELL_MS;
-			/* the sweep may have ended inside the delay; the
-			 * bridge's dwell refuses when no sweep is armed */
+			/* pending, not active: the stack may have left S_SCAN
+			 * inside the delay (a join cancelled the sweep), and
+			 * the dwell's entry check is what closes that sweep's
+			 * bookkeeping - idling here instead would strand it
+			 * and refuse every later scan_start with -EBUSY */
 			(void)wlan_bridge_scan_dwell();
 		} else {
 			osDelay(50U);
