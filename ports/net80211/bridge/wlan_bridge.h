@@ -93,6 +93,68 @@ int	wlan_bridge_tune_current(void);
  * match then requires a candidate to carry it). Returns 0 or a negative error. */
 int	wlan_bridge_set_ssid(const uint8_t *ssid, size_t len);
 
+/*
+ * The supplicant-driven connect path. The bridge is put into MANUAL roaming
+ * first (wlan_bridge_set_manual): the stack then reports a finished sweep
+ * without joining on its own, and the supplicant's decision arrives here as
+ * an explicit join - the SSID and (for a PSK network) the RSN IE the
+ * supplicant built, against a candidate the sweep already recorded.
+ *   - `bssid` locks the candidate (NULL = match by SSID);
+ *   - `wpa_ie` non-NULL marks a PSK network: F_WPA2 (or F_WPA1 for a WPA IE)
+ *     and F_PRIVACY go up, the IE is carried in the association request, and
+ *     the node is put under 802.1X so RUN does not auto-authorize - the
+ *     pairwise key install afterwards is what opens the port.
+ * Returns 0 or a negative error.
+ */
+int	wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
+	    const uint8_t *wpa_ie, size_t ie_len);
+
+/* Disconnect with the given IEEE reason code (the stack returns to INIT). */
+void	wlan_bridge_disconnect(int reason);
+
+/*
+ * Roaming control. AUTO (the attach default) lets end_scan join the best
+ * candidate by itself; MANUAL makes the sweep report and stop, which is the
+ * mode a supplicant needs (its own decision must not race the stack's).
+ */
+void	wlan_bridge_set_manual(int on);
+
+/* WPA mode gate: the stack parses RSN/WPA IEs (and records them on scan
+ * candidates) only while a WPA flag is set, so this must precede any sweep a
+ * supplicant will read the table from. */
+void	wlan_bridge_set_wpa(int on);
+
+/*
+ * Pull one scan-table row (the supplicant's get_scan_results2 reads rows until
+ * a non-zero return). The IEs the row carries - rates plus the RSN/WPA element
+ * the candidate advertised - are assembled into a bridge-owned static buffer
+ * and borrowed by the caller until the next call. Returns 0 or a negative
+ * error (including "past the end").
+ */
+struct wlan_bridge_scan_res {
+	uint8_t	bssid[6];
+	uint8_t	ssid[33];
+	size_t	ssid_len;
+	int	freq;			/* MHz, 0 unknown */
+	uint16_t beacon_int;
+	uint16_t caps;			/* 802.11 capability info */
+	int	level;			/* RSSI, driver units */
+	const uint8_t *ies;		/* borrowed until the next fetch */
+	size_t	ies_len;
+};
+int	wlan_bridge_scan_fetch(int idx, struct wlan_bridge_scan_res *out);
+
+/*
+ * Install a key the way a supplicant's set_key does: the stack-side
+ * bookkeeping first (the cipher is attached to the slot, so encap/decrypt
+ * start using it), then the driver's CAM write through the seam - both legs
+ * belong to one key, which is why this is one call and not two. A pairwise
+ * install also marks the node authorized (the port opening the 802.1X gate
+ * waits for). `cipher` uses the seam's WLAN_SEAM_CIPHER_* numbering.
+ */
+int	wlan_bridge_key_install(int pairwise, int key_idx, int set_tx,
+	    int cipher, const uint8_t *key, size_t key_len);
+
 /* Walk the scan table, one callback per candidate, scalars only (the caller may
  * live in the other world). Returns the number of candidates seen. */
 unsigned int wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6],

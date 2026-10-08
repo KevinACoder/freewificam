@@ -91,6 +91,7 @@ static struct {
 	const struct wlan_port_ifops *ifops;
 	void *if_priv;
 	int attached;
+	int up;			/* the driver's start ran (up is idempotent) */
 	int scanning;		/* a sweep is in flight (the filter is set) */
 	uint32_t tuned_freq;	/* the channel the driver was last told about */
 	unsigned int scan_starts;
@@ -596,6 +597,295 @@ wlan_bridge_set_ssid(const uint8_t *ssid, size_t len)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* the supplicant-driven connect path                                  */
+/* ------------------------------------------------------------------ */
+
+void
+wlan_bridge_set_manual(int on)
+{
+
+	if (!bridge.attached || bridge.ic == NULL)
+		return;
+	bridge.ic->ic_roaming = on ? IEEE80211_ROAMING_MANUAL :
+	    IEEE80211_ROAMING_AUTO;
+}
+
+void
+wlan_bridge_set_wpa(int on)
+{
+
+	if (!bridge.attached || bridge.ic == NULL)
+		return;
+	if (on)
+		bridge.ic->ic_flags |= IEEE80211_F_WPA1 | IEEE80211_F_WPA2;
+	else
+		bridge.ic->ic_flags &= ~(unsigned int)
+		    (IEEE80211_F_WPA1 | IEEE80211_F_WPA2);
+}
+
+/*
+ * The join the supplicant decided on. Everything here is the stack's own
+ * documented policy surface (the prior carrier's board-proven associate
+ * shape): which candidate, which security state, and then sta_join - the
+ * stack's state machine runs auth/assoc from there exactly as it does on the
+ * automatic path.
+ *
+ * Two details are load-bearing:
+ *   - ni_authmode is set on ic_bss BEFORE sta_join, because copy_bss()
+ *     propagates it into the new bss node inside the join; 802.1X makes RUN
+ *     skip the auto-authorize, so the port stays closed until the pairwise
+ *     key lands (the 4-way handshake is what opens it).
+ *   - the RSN IE rides in ic_opt_ie, which the assoc-request builder appends
+ *     verbatim - this is the byte string the AP's 4-way will check itself
+ *     against, so it must be the supplicant's own IE, not a rebuilt one.
+ */
+int
+wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
+    const uint8_t *wpa_ie, size_t ie_len)
+{
+	struct ieee80211com *ic = bridge.ic;
+	struct ieee80211_node *ni = NULL;
+	uint8_t *ie_copy = NULL;
+	int ret = 0;
+
+	if (!bridge.attached || ic == NULL)
+		return -ENODEV;
+	if (ssid == NULL || len == 0 || len > IEEE80211_NWID_LEN)
+		return -EINVAL;
+	if (ie_len != 0) {
+		if (wpa_ie == NULL || ie_len > 256)
+			return -EINVAL;
+		ie_copy = wlan_osal_alloc(ie_len);
+		if (ie_copy == NULL)
+			return -ENOMEM;
+		memcpy(ie_copy, wpa_ie, ie_len);
+	}
+
+	wlan_port_serializer_lock();
+	if (bssid != NULL)
+		ni = ieee80211_find_node(&ic->ic_scan, bssid);
+	if (ni == NULL) {
+		struct ieee80211_node *n;
+
+		TAILQ_FOREACH(n, &ic->ic_scan.nt_node, ni_list) {
+			if (n->ni_esslen == (int)len &&
+			    memcmp(n->ni_essid, ssid, len) == 0) {
+				ni = ieee80211_ref_node(n);
+				break;
+			}
+		}
+	}
+	if (ni == NULL) {
+		wlan_port_serializer_unlock();
+		wlan_osal_free(ie_copy);
+		wlan_osal_log("wlan: join: no scan candidate for the ssid\n");
+		return -ENOENT;
+	}
+
+	ic->ic_des_esslen = (int)len;
+	memset(ic->ic_des_essid, 0, sizeof(ic->ic_des_essid));
+	memcpy(ic->ic_des_essid, ssid, len);
+	ic->ic_flags &= ~(unsigned int)(IEEE80211_F_WPA1 | IEEE80211_F_WPA2 |
+	    IEEE80211_F_DROPUNENC);
+	if (ie_len != 0) {
+		/* the element id says which generation the supplicant chose */
+		ic->ic_flags |= (wpa_ie[0] == 48 /* WLAN_EID_RSN */ ?
+		    IEEE80211_F_WPA2 : IEEE80211_F_WPA1);
+		ic->ic_flags |= IEEE80211_F_PRIVACY;
+	} else if ((ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0) {
+		ic->ic_flags |= IEEE80211_F_PRIVACY;
+	} else {
+		ic->ic_flags &= ~(unsigned int)IEEE80211_F_PRIVACY;
+	}
+
+	if (ic->ic_opt_ie != NULL) {
+		wlan_osal_free(ic->ic_opt_ie);
+	}
+	ic->ic_opt_ie = ie_copy;
+	ic->ic_opt_ie_len = (u_int16_t)ie_len;
+
+	if (ni->ni_chan != NULL)
+		ic->ic_curchan = ni->ni_chan;
+	if (ic->ic_bss != NULL) {
+		ic->ic_bss->ni_authmode = ie_len != 0 ?
+		    IEEE80211_AUTH_8021X : IEEE80211_AUTH_OPEN;
+	}
+	wlan_port_serializer_unlock();
+
+	if (!ieee80211_sta_join(ic, ni)) {
+		ret = -EIO;
+	}
+	/* sta_join consumed the reference on success (ic_bss holds it); a
+	 * failure leaves it to us */
+	if (ret != 0)
+		ieee80211_free_node(ni);
+	return ret;
+}
+
+void
+wlan_bridge_disconnect(int reason)
+{
+
+	if (!bridge.attached || bridge.ic == NULL)
+		return;
+	(void)ieee80211_new_state(bridge.ic, IEEE80211_S_INIT, reason);
+}
+
+/*
+ * Pull one scan-table row. The iterator runs inside the serializer; the IE
+ * buffer is file-scope because the caller consumes the assembled bytes after
+ * the lock is released (a stack-frame buffer would be read as garbage - a
+ * failure this line measured once).
+ */
+static struct {
+	uint8_t iebuf[320];
+} bridge_fetch;
+
+struct bridge_fetch_ctx {
+	int idx;
+	int found;
+	struct wlan_bridge_scan_res *out;
+};
+
+static void
+bridge_fetch_node(void *arg, struct ieee80211_node *ni)
+{
+	struct bridge_fetch_ctx *fc = arg;
+	struct wlan_bridge_scan_res *o = fc->out;
+	uint8_t *ie = bridge_fetch.iebuf;
+
+	/* the iterator walks the whole table: once the wanted row is copied,
+	 * later nodes must not overwrite it */
+	if (fc->found)
+		return;
+	if (fc->idx != 0) {
+		fc->idx--;
+		return;
+	}
+	fc->found = 1;
+	memset(o, 0, sizeof(*o));
+	memcpy(o->bssid, ni->ni_bssid, 6);
+	o->ssid_len = (size_t)ni->ni_esslen;
+	if (o->ssid_len > 32)
+		o->ssid_len = 32;
+	memcpy(o->ssid, ni->ni_essid, o->ssid_len);
+	o->freq = ni->ni_chan != NULL ? ni->ni_chan->ic_freq : 0;
+	o->beacon_int = (uint16_t)ni->ni_intval;
+	o->caps = (uint16_t)ni->ni_capinfo;
+	o->level = (int)ni->ni_rssi;
+	if (ni->ni_rates.rs_nrates != 0) {
+		size_t rn = ni->ni_rates.rs_nrates > 16 ?
+		    16 : (size_t)ni->ni_rates.rs_nrates;
+
+		ie[0] = 1;	/* rates element id */
+		ie[1] = (uint8_t)rn;
+		memcpy(ie + 2, ni->ni_rates.rs_rates, rn);
+		ie += 2 + rn;
+	}
+	if (ni->ni_wpa_ie != NULL) {
+		size_t n = 2 + ni->ni_wpa_ie[1];
+
+		if ((size_t)(ie - bridge_fetch.iebuf) + n >
+		    sizeof(bridge_fetch.iebuf)) {
+			n = sizeof(bridge_fetch.iebuf) -
+			    (size_t)(ie - bridge_fetch.iebuf);
+		}
+		memcpy(ie, ni->ni_wpa_ie, n);
+		ie += n;
+	}
+	o->ies = bridge_fetch.iebuf;
+	o->ies_len = (size_t)(ie - bridge_fetch.iebuf);
+}
+
+int
+wlan_bridge_scan_fetch(int idx, struct wlan_bridge_scan_res *out)
+{
+	struct bridge_fetch_ctx fc;
+
+	if (!bridge.attached || bridge.ic == NULL || out == NULL || idx < 0)
+		return -EINVAL;
+	fc.idx = idx;
+	fc.found = 0;
+	fc.out = out;
+	wlan_port_serializer_lock();
+	ieee80211_iterate_nodes(&bridge.ic->ic_scan, bridge_fetch_node, &fc);
+	wlan_port_serializer_unlock();
+	return fc.found ? 0 : -ENOENT;
+}
+
+/*
+ * The two legs of one key install. The stack side mirrors what the crypto
+ * layer's own callers do (newkey attaches the cipher template and allocates
+ * the slot, setkey validates and records); the driver side is the seam's
+ * CAM write. A pairwise success also authorizes the node: the 802.1X gate
+ * from the join is opened exactly here, which is why an aborted handshake
+ * leaves the port closed.
+ */
+int
+wlan_bridge_key_install(int pairwise, int key_idx, int set_tx, int cipher,
+    const uint8_t *key, size_t key_len)
+{
+	struct ieee80211com *ic = bridge.ic;
+	struct ieee80211_key *wk;
+	uint8_t zero_mac[IEEE80211_ADDR_LEN] = { 0 };
+	int stack_cipher;
+	int rc = -1;
+
+	if (!bridge.attached || ic == NULL || ic->ic_bss == NULL)
+		return -ENODEV;
+	if (key == NULL || key_len == 0 || key_len > IEEE80211_KEYBUF_SIZE)
+		return -EINVAL;
+
+	switch (cipher) {
+	case WLAN_SEAM_CIPHER_CCMP:
+		stack_cipher = IEEE80211_CIPHER_AES_CCM;
+		break;
+	default:
+		wlan_osal_log("wlan: unsupported key cipher %d\n", cipher);
+		return -EINVAL;
+	}
+
+	if (!pairwise && (key_idx < 0 || key_idx >= IEEE80211_WEP_NKID))
+		return -EINVAL;
+
+	wlan_port_serializer_lock();
+	ieee80211_key_update_begin(ic);
+	wk = pairwise ? &ic->ic_bss->ni_ucastkey : &ic->ic_nw_keys[key_idx];
+	if (ieee80211_crypto_newkey(ic, stack_cipher,
+	    IEEE80211_KEY_XMIT | IEEE80211_KEY_RECV |
+	    (pairwise ? 0 : IEEE80211_KEY_GROUP), wk)) {
+		wk->wk_keylen = (u_int8_t)key_len;
+		wk->wk_keyrsc = 0;
+		wk->wk_keytsc = 0;
+		memset(wk->wk_key, 0, sizeof(wk->wk_key));
+		memcpy(wk->wk_key, key, key_len);
+		if (ieee80211_crypto_setkey(ic, wk, pairwise ?
+		    ic->ic_bss->ni_macaddr : zero_mac)) {
+			rc = 0;
+			if (!pairwise && set_tx)
+				ic->ic_def_txkey = (ieee80211_keyix)key_idx;
+			if (pairwise)
+				ieee80211_node_authorize(ic->ic_bss);
+		}
+	}
+	ieee80211_key_update_end(ic);
+	wlan_port_serializer_unlock();
+
+	if (rc != 0) {
+		wlan_osal_log("wlan: key %s idx %d: the stack refused it\n",
+		    pairwise ? "pair" : "group", key_idx);
+		return rc;
+	}
+
+	/* the driver's CAM write: same seam the clear path uses */
+	rc = wlan_bridge_key_set(pairwise ? 1 : 0, key_idx,
+	    WLAN_SEAM_CIPHER_CCMP, key, key_len);
+	wlan_osal_log("wlan: key %s idx %d len %u set_tx %d -> %d\n",
+	    pairwise ? "pair" : "group", key_idx, (unsigned)key_len, set_tx, rc);
+	return rc;
+}
+
 /*
  * Walk the scan table, handing each candidate to the callback as scalars
  * (bytes and numbers only - the caller may live in the other world). Returns
@@ -733,16 +1023,26 @@ wlan_bridge_up(void)
 
 	if (!bridge.attached || bridge.ops->start == NULL)
 		return -ENODEV;
-	return bridge.ops->start(bridge.drv);
+	/* Idempotent: the driver's start submits fresh URBs and re-inits its
+	 * anchors, so a second call would stack another live set - and more than
+	 * one piece of bring-up logic asks for up (the probe path and the
+	 * supplicant's ensure_up). The first caller starts it, the rest ride. */
+	if (bridge.up)
+		return 0;
+	if (bridge.ops->start(bridge.drv) != 0)
+		return -EIO;
+	bridge.up = 1;
+	return 0;
 }
 
 void
 wlan_bridge_down(void)
 {
 
-	if (!bridge.attached || bridge.ops->stop == NULL)
+	if (!bridge.attached || !bridge.up || bridge.ops->stop == NULL)
 		return;
 	(void)bridge.ops->stop(bridge.drv);
+	bridge.up = 0;
 }
 
 int
