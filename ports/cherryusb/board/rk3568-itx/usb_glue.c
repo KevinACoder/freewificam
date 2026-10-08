@@ -76,6 +76,13 @@
 
 #include "usb_glue.h"
 
+/* The controller interrupt's raw GIC priority (four-bit space, lower = more
+ * urgent). The build may override it for kernels whose ports restrict API
+ * calls from interrupt context; see usb_board_irq_arm(). */
+#ifndef USB_BOARD_IRQ_PRIORITY_RAW
+#define USB_BOARD_IRQ_PRIORITY_RAW BOARD_SPI_DEFAULT_PRIORITY_RAW
+#endif
+
 /* --- symbols owned outside this file ------------------------------------- */
 
 /* The two controller driver tables. The USB2 table is a plain struct, the
@@ -136,7 +143,12 @@ static void usb_board_irq_arm(unsigned busid)
 
 	(void)irq_register(intid, usb_board_isr, (void *)(uintptr_t)busid);
 	(void)irq_set_mode_level(intid);
-	(void)irq_set_priority(intid, BOARD_SPI_DEFAULT_PRIORITY_RAW);
+	/* The completion path gives a semaphore from this handler, and kernels
+	 * differ in which interrupt priorities may call their API: a kernel
+	 * whose port forbids API calls above a threshold needs the line moved
+	 * below it, which is a per-image build decision (the default suits the
+	 * kernel with no such rule). */
+	(void)irq_set_priority(intid, USB_BOARD_IRQ_PRIORITY_RAW);
 	(void)irq_enable(intid);
 }
 

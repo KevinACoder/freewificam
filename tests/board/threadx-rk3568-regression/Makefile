@@ -167,16 +167,16 @@ SHELL_SRCS := \
 
 # Execution order = this list's order (link order for the BOARD_TESTS section).
 TESTS_SRCS := \
-	$(CURDIR)/tests/shell_up.c \
-	$(CURDIR)/tests/kernel_up.c \
-	$(CURDIR)/tests/tick_ladder.c \
-	$(CURDIR)/tests/thread_sched.c \
-	$(CURDIR)/tests/cmsis2_prio.c \
+	$(COMMON)/cases/shell_up.c \
+	$(COMMON)/cases/kernel_up.c \
+	$(COMMON)/cases/tick_ladder.c \
+	$(COMMON)/cases/thread_sched.c \
+	$(COMMON)/cases/cmsis2_prio.c \
 	$(CURDIR)/tests/tlsf_heap.c \
-	$(CURDIR)/tests/os_timer.c \
-	$(CURDIR)/tests/usb_msc.c \
-	$(CURDIR)/tests/usb_xhci.c \
-	$(CURDIR)/tests/usb_ehci.c
+	$(COMMON)/cases/os_timer.c \
+	$(COMMON)/cases/usb_msc.c \
+	$(COMMON)/cases/usb_xhci.c \
+	$(COMMON)/cases/usb_ehci.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \

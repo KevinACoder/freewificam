@@ -61,7 +61,13 @@ class Transcript:
     def __init__(self, text: str) -> None:
         self.raw = text
         self.raw_lines = split_lines(text)
-        self.lines = [STAMP_RE.sub("", line) for line in self.raw_lines]
+        # The protocol view: the log stamp removed AND escape sequences
+        # stripped. The console redraws itself from other contexts (a shell
+        # prompt repainting while a case prints), and its cursor/colour
+        # sequences can land at the start of a protocol line - measured on the
+        # board, where an SGR prefix hid a CASE line from the judge. Escape
+        # sequences carry no protocol meaning, so removing them here is safe.
+        self.lines = [SGR_RE.sub("", STAMP_RE.sub("", line)) for line in self.raw_lines]
         rx_lines = []
         for line in self.lines:
             cut = line.find(TX_MARK)

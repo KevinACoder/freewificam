@@ -32,7 +32,9 @@ static void cmsis2_prio( void )
 
 	if( osThreadNew( probe_body, 0, &probe_attr ) == 0 ) {
 		board_case_fail( "probe thread create failed" );
+		return;
 	}
+	board_log( "cmsis2: probe ok\n" );
 }
 
 BOARD_TEST( "cmsis2-prio", cmsis2_prio );
