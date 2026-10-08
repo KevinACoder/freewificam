@@ -5,13 +5,14 @@
 # deliberately carries only the two entries the gate definitions already name, so that
 # nothing here has to be undone when that skeleton lands.
 
-.PHONY: help mock mock-kernels mock-all gates
+.PHONY: help mock mock-kernels mock-all gates board-images
 
 help:
 	@echo "make mock         run the Gate1 mock suites over this repository's code (host only)"
 	@echo "make mock-kernels run the vendored-kernel regression suites (slow; only after"
 	@echo "                  a change under third-party/)"
 	@echo "make mock-all     every suite in the registry"
+	@echo "make board-images build every board image in tests/board/suites.mk"
 	@echo "make gates        run the static build-time gates"
 	@echo "tip: tools/mock/run.sh <suite>... runs just the named suites"
 
@@ -32,3 +33,22 @@ mock-all:
 # Static gates over the sources: today the machine-local knowledge scan.
 gates:
 	tools/gates/check-local-knowledge.sh
+
+# The board images: every suite in the board registry, built by its own
+# declaration. This is the rebuild half of a board regression round - the board
+# itself is driven from the workspace (the runner reads the same registry).
+# BOARD_SUITES_MK can point at another registry (e.g. the fixtures).
+BOARD_SUITES_MK ?= tests/board/suites.mk
+
+board-images:
+	@list=$$(sed -n 's/^[[:space:]]*SUITES_BOARD[[:space:]]*:=[[:space:]]*//p' $(BOARD_SUITES_MK)); \
+	if [ -z "$$list" ]; then \
+		echo "BOARD-NOTE: the suite registry is empty (nothing to build)"; \
+		exit 0; \
+	fi; \
+	root=$$(dirname $(BOARD_SUITES_MK)); \
+	for s in $$list; do \
+		echo "== board image: $$s"; \
+		$(MAKE) -C $$root/$$s || exit 1; \
+	done
+	@echo "board-images: every registered image built"
