@@ -1,0 +1,705 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/*
+ * @file    wlan_bridge.c
+ * @brief   The net80211-world half of the bridge: it owns the ieee80211com,
+ *          drains the stack's management and data queues into the driver
+ *          through the scalar seam, injects received frames into the stack, and
+ *          drives the scan group in the order the chip and the stack require.
+ *
+ * @design two-worlds adapter, net80211 half (wlan_bridge.h states why the bridge
+ *         comes in two halves). Everything on the net80211 side - scan state,
+ *         association, node management, crypto policy - stays in the imported
+ *         stack; this file only translates: the stack's asks become seam calls
+ *         (ports/net80211/seam.h: scalars, byte arrays and one opaque driver
+ *         handle, never a shared struct) and the driver's events become stack
+ *         calls. The drain and the injection follow the tested substitute
+ *         (tests/host/net80211-frame-test/vwifi.c:221-253 the mgtq drain with
+ *         its node-reference release, :272-304 the RX injection with
+ *         find_rxnode/input/free_node), promoted from a model to the production
+ *         path; the attach recipe follows the same suite's device attach
+ *         (main.c:114-156), including the CCMP template registration that stands
+ *         in for the import's compiled-out link set.
+ *
+ * The four obligations this file exists for, each with the reason it is not
+ * optional:
+ *
+ *   1. Management TX. net80211 queues management frames on ic_mgtq and calls
+ *      if_start; this port has no callouts, so the drain here is the only thing
+ *      that moves those frames - without it auth/assoc/probe-request sit in the
+ *      queue forever. The node reference the stack attached to the frame is
+ *      released here, exactly as the imported drain helper does.
+ *   2. Receive filter before any scan. A chip drops beacons from every BSS it
+ *      does not already know until its receive filter is promiscuous, so the
+ *      scan sets that bit before the sweep starts and clears it once the sweep
+ *      ends (the order the Linux core also uses). Without it the scan table
+ *      comes back empty - a fact this project measured on the board once.
+ *   3. Scan dwell. net80211's software scan arms a channel and waits for the
+ *      driver to report the channel done; that report is ieee80211_next_scan(),
+ *      and with no callouts in the port the bridge is its caller.
+ *   4. Data TX. Frames the stack hands to if_snd are encapsulated - and, when a
+ *      key is installed, encrypted - by net80211's own encap/crypto path, then
+ *      handed to the driver. One if_start runs both queues because this port has
+ *      one transmit path.
+ *
+ * @date    08.10.2026
+ */
+
+#include <string.h>
+
+#include <sys/param.h>
+#include <sys/mbuf.h>
+#include <sys/systm.h>
+#include <sys/endian.h>
+
+#include <net/if.h>
+#include <net/if_ether.h>
+#include <net/if_media.h>
+
+#include <net80211/ieee80211_var.h>
+#include <net80211/ieee80211_node.h>
+#include <net80211/ieee80211_proto.h>
+#include <net80211/ieee80211_crypto.h>
+#include <net80211/ieee80211_ioctl.h>
+
+#include <port/port.h>
+
+#include "osal/wlan_osal.h"
+#include "wlan_bridge.h"
+
+/* the 2.4 GHz channel set this chip family covers (channels 1..13) */
+#define WLAN_BRIDGE_CHAN_MIN	1
+#define WLAN_BRIDGE_CHAN_MAX	13
+
+/* ------------------------------------------------------------------ */
+/* state                                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * One bridge per driver instance. This port carries a single adapter, so the
+ * state is a singleton whose entries verify ownership rather than assume it.
+ */
+static struct {
+	struct wlan_seam_drv *drv;
+	const struct wlan_seam_drv_ops *ops;
+	struct ieee80211com *ic;
+	struct ifnet *ifp;
+	const struct wlan_port_ifops *ifops;
+	void *if_priv;
+	int attached;
+	int scanning;		/* a sweep is in flight (the filter is set) */
+	unsigned int scan_starts;
+	unsigned int scan_completes;
+	unsigned int filter_sets;
+	unsigned int filter_clears;
+	unsigned int mgt_tx;
+	unsigned int data_tx;
+	unsigned int rx_frames;
+	unsigned int tx_completes;
+} bridge;
+
+/* ------------------------------------------------------------------ */
+/* helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+static struct mbuf *
+bridge_mbuf_alloc(const uint8_t *frame, size_t len)
+{
+	struct mbuf *m;
+
+	if (len == 0 || len > MCLBYTES)
+		return NULL;
+	MGETHDR(m, M_NOWAIT, MT_DATA);
+	if (m == NULL)
+		return NULL;
+	memcpy(mtod(m, void *), frame, len);
+	m->m_len = (int)len;
+	m->m_pkthdr.len = (int)len;
+	return m;
+}
+
+static void
+bridge_oerror(struct ieee80211com *ic)
+{
+
+	if (ic->ic_ifp != NULL)
+		if_statinc(ic->ic_ifp, if_oerrors);
+}
+
+/* ------------------------------------------------------------------ */
+/* transmit: the single drain of both queues (obligations 1 and 4)      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The management queue drain. The stack queues with IFQ_ENQUEUE and attaches
+ * the destination node in M_CTX; that reference is released once the frame has
+ * left, which is what the imported drain helper does and what this loop
+ * repeats.
+ */
+static void
+bridge_drain_mgtq(struct ieee80211com *ic)
+{
+	struct mbuf *m;
+
+	for (;;) {
+		struct ieee80211_node *ni;
+		int rc;
+
+		IF_DEQUEUE(&ic->ic_mgtq, m);
+		if (m == NULL)
+			break;
+		rc = bridge.ops->tx(bridge.drv, mtod(m, const uint8_t *),
+		    (size_t)m->m_len, 1);
+		if (rc != 0)
+			bridge_oerror(ic);
+		else if (ic->ic_ifp != NULL)
+			if_statinc(ic->ic_ifp, if_opackets);
+		bridge.mgt_tx++;
+		ni = M_GETCTX(m, struct ieee80211_node *);
+		M_SETCTX(m, NULL);
+		if (ni != NULL)
+			ieee80211_free_node(ni);
+		m_freem(m);
+	}
+}
+
+/*
+ * The data queue drain: net80211's own encapsulation - and its crypto path when
+ * a key is installed - runs here, then the frame goes to the driver.
+ */
+static void
+bridge_drain_if_snd(struct ieee80211com *ic)
+{
+	struct ifnet *ifp = ic->ic_ifp;
+	struct mbuf *m;
+
+	for (;;) {
+		struct mbuf *enc;
+		struct ieee80211_node *ni;
+
+		IFQ_DEQUEUE(&ifp->if_snd, m);
+		if (m == NULL)
+			break;
+		ni = ic->ic_bss;
+		if (ni == NULL) {
+			m_freem(m);
+			if_statinc(ifp, if_oerrors);
+			continue;
+		}
+		enc = ieee80211_encap(ic, m, ni);
+		if (enc == NULL) {
+			if_statinc(ifp, if_oerrors);	/* encap consumed it */
+			continue;
+		}
+		if (bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
+		    (size_t)enc->m_len, 0) != 0)
+			if_statinc(ifp, if_oerrors);
+		else
+			if_statinc(ifp, if_opackets);
+		bridge.data_tx++;
+		m_freem(enc);
+	}
+}
+
+static void
+bridge_start(struct ifnet *ifp)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)ifp->if_softc;
+
+	if (!bridge.attached || ic == NULL || bridge.ops == NULL)
+		return;
+	/* management first: auth/assoc must not queue behind data */
+	bridge_drain_mgtq(ic);
+	bridge_drain_if_snd(ic);
+}
+
+/* ------------------------------------------------------------------ */
+/* the state transition the presentation layer watches                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * net80211 drives its state machine through ic_newstate. The presentation layer
+ * needs to know when the interface reaches RUN (DHCP starts) and when it leaves
+ * it; the wrapper below is the port's call point for port.h's wlan_port_ifops
+ * (that header has no setter, so the bridge owns the wiring). The stack's own
+ * handler is kept and called first: this only observes, it never replaces the
+ * state machine.
+ */
+static int (*bridge_orig_newstate)(struct ieee80211com *,
+    enum ieee80211_state, int);
+
+static int
+bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
+{
+	enum ieee80211_state ostate = ic->ic_state;
+	int rc;
+
+	rc = bridge_orig_newstate(ic, nstate, arg);
+
+	if (nstate == IEEE80211_S_RUN && ostate != IEEE80211_S_RUN) {
+		if (bridge.ifops != NULL && bridge.ifops->up != NULL)
+			(void)bridge.ifops->up(bridge.if_priv);
+	} else if (nstate != IEEE80211_S_RUN && ostate == IEEE80211_S_RUN) {
+		if (bridge.ifops != NULL && bridge.ifops->down != NULL)
+			(void)bridge.ifops->down(bridge.if_priv);
+	}
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
+/* attach / detach                                                     */
+/* ------------------------------------------------------------------ */
+
+int
+wlan_bridge_attach(struct wlan_seam_drv *drv,
+    const struct wlan_seam_drv_ops *ops, const uint8_t mac[6])
+{
+	struct ieee80211com *ic;
+	struct ifnet *ifp;
+	int ch;
+
+	if (bridge.attached) {
+		wlan_osal_log("wlan: a second attach refused (single adapter)\n");
+		return -EBUSY;
+	}
+	if (drv == NULL || ops == NULL || mac == NULL)
+		return -EINVAL;
+
+	ic = wlan_osal_zalloc(sizeof(*ic));
+	if (ic == NULL)
+		return -ENOMEM;
+	ifp = wlan_osal_zalloc(sizeof(*ifp));
+	if (ifp == NULL) {
+		wlan_osal_free(ic);
+		return -ENOMEM;
+	}
+
+	/* the attach recipe of the tested substitute (frame-test main.c:114-156) */
+	ic->ic_ifp = ifp;
+	ic->ic_phytype = IEEE80211_T_DS;
+	ic->ic_opmode = IEEE80211_M_STA;
+	ic->ic_state = IEEE80211_S_INIT;
+	memcpy(ic->ic_myaddr, mac, IEEE80211_ADDR_LEN);
+
+	for (ch = WLAN_BRIDGE_CHAN_MIN; ch <= WLAN_BRIDGE_CHAN_MAX; ch++) {
+		struct ieee80211_channel *c = &ic->ic_channels[ch];
+
+		c->ic_freq = 2407 + ch * 5;
+		c->ic_flags = IEEE80211_CHAN_CCK | IEEE80211_CHAN_OFDM |
+		    IEEE80211_CHAN_DYN | IEEE80211_CHAN_2GHZ;
+		setbit(ic->ic_chan_avail, ch);
+	}
+	ic->ic_curchan = &ic->ic_channels[1];
+
+	ic->ic_sup_rates[IEEE80211_MODE_11B] = ieee80211_std_rateset_11b;
+	ic->ic_sup_rates[IEEE80211_MODE_11G] = ieee80211_std_rateset_11g;
+
+	if (if_initialize(ifp) != 0) {
+		wlan_osal_free(ifp);
+		wlan_osal_free(ic);
+		return -EIO;
+	}
+	(void)if_percpuq_create(ifp);
+	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
+	ifp->if_softc = ic;
+	ifp->if_start = bridge_start;
+
+	/*
+	 * The cipher templates: the import's link-set registration is compiled
+	 * out on this port, so the templates the stack will actually use are
+	 * registered explicitly (CCMP is the WPA2 cipher this target uses; NONE
+	 * is installed by the crypto attach path itself).
+	 */
+	ieee80211_crypto_register(&ieee80211_cipher_ccmp);
+
+	ieee80211_ifattach(ic);
+	ieee80211_media_init(ic, ieee80211_media_change,
+	    ieee80211_media_status);
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
+
+	/* the observation wrapper is installed after ifattach (which installs
+	 * the stack's own handler) */
+	bridge_orig_newstate = ic->ic_newstate;
+	ic->ic_newstate = bridge_newstate;
+
+	/* the driver side learns about the interface (its own vif/priv area) */
+	if (ops->add_interface != NULL &&
+	    ops->add_interface(drv, mac, WLAN_SEAM_IFTYPE_STATION) != 0) {
+		wlan_osal_log("wlan: the driver refused the interface\n");
+		ic->ic_newstate = bridge_orig_newstate;
+		ieee80211_ifdetach(ic);
+		wlan_osal_free(ifp);
+		wlan_osal_free(ic);
+		return -EIO;
+	}
+
+	bridge.drv = drv;
+	bridge.ops = ops;
+	bridge.ic = ic;
+	bridge.ifp = ifp;
+	bridge.attached = 1;
+	wlan_osal_log("wlan: bridge attached %02x:%02x:%02x:%02x:%02x:%02x\n",
+	    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	return 0;
+}
+
+void
+wlan_bridge_detach(void)
+{
+
+	if (!bridge.attached)
+		return;
+	if (bridge.ops->stop != NULL)
+		(void)bridge.ops->stop(bridge.drv);
+	ieee80211_ifdetach(bridge.ic);
+	wlan_osal_free(bridge.ifp);
+	wlan_osal_free(bridge.ic);
+	bridge.drv = NULL;
+	bridge.ops = NULL;
+	bridge.ic = NULL;
+	bridge.ifp = NULL;
+	bridge.attached = 0;
+	bridge.scanning = 0;
+	wlan_osal_log("wlan: bridge detached\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* receive                                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Receive: the driver's frames reach the stack. The frame arrives without FCS;
+ * the bridge copies it into the stack's own buffer, so the caller keeps its
+ * buffer. The node reference find_rxnode returns is released after input, as
+ * the imported path requires.
+ */
+int
+wlan_bridge_input(const uint8_t *frame, size_t len, int rssi)
+{
+	struct ieee80211com *ic = bridge.ic;
+	struct ieee80211_node *ni;
+	struct mbuf *m;
+
+	if (!bridge.attached || ic == NULL || frame == NULL)
+		return -ENODEV;
+	m = bridge_mbuf_alloc(frame, len);
+	if (m == NULL) {
+		wlan_osal_log("wlan: rx without a buffer; frame dropped\n");
+		return -ENOMEM;
+	}
+	bridge.rx_frames++;
+
+	wlan_port_serializer_lock();
+	ni = ieee80211_find_rxnode(ic,
+	    (const struct ieee80211_frame_min *)m->m_data);
+	ieee80211_input(ic, m, ni, rssi, 0);
+	ieee80211_free_node(ni);
+	wlan_port_serializer_unlock();
+	return 0;
+}
+
+void
+wlan_bridge_tx_complete(void)
+{
+
+	bridge.tx_completes++;
+}
+
+/* ------------------------------------------------------------------ */
+/* the scan group (obligations 2 and 3)                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Start a sweep. The filter goes first (obligation 2): a chip that is not
+ * promiscuous answers no unknown beacon, so a sweep started before the bit is
+ * programmed records nothing.
+ */
+int
+wlan_bridge_scan_start(void)
+{
+
+	if (!bridge.attached)
+		return -ENODEV;
+	if (bridge.ops->filter == NULL ||
+	    bridge.ops->filter(bridge.drv, WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC,
+	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC) != 0) {
+		wlan_osal_log("wlan: receive filter refused; a scan would see "
+		    "nothing\n");
+		return -EIO;
+	}
+	bridge.filter_sets++;
+	if (bridge.ops->sw_scan_start != NULL &&
+	    bridge.ops->sw_scan_start(bridge.drv) != 0) {
+		(void)bridge.ops->filter(bridge.drv,
+		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+		bridge.filter_clears++;
+		return -EIO;
+	}
+	bridge.scanning = 1;
+	bridge.scan_starts++;
+	/* drive the stack's own scan machine: it builds and queues the probe
+	 * requests (moved by the management drain above) and arms the channel
+	 * walk the dwell advances */
+	ieee80211_new_state(bridge.ic, IEEE80211_S_SCAN, -1);
+	return 0;
+}
+
+/*
+ * The dwell ends: hand the stack to the next channel. ieee80211_next_scan()
+ * returns 1 when it armed another channel and 0 when the sweep ended (it calls
+ * end_scan itself); on the end the receive filter goes back and the driver is
+ * told the scan completed.
+ */
+int
+wlan_bridge_scan_dwell(void)
+{
+	int more;
+
+	if (!bridge.attached || !bridge.scanning)
+		return -EINVAL;
+	more = ieee80211_next_scan(bridge.ic);
+	if (more == 0) {
+		bridge.scanning = 0;
+		bridge.scan_completes++;
+		if (bridge.ops->sw_scan_complete != NULL)
+			bridge.ops->sw_scan_complete(bridge.drv);
+		(void)bridge.ops->filter(bridge.drv,
+		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+		bridge.filter_clears++;
+	}
+	return more;
+}
+
+void
+wlan_bridge_scan_stats(unsigned int *starts, unsigned int *completes,
+    unsigned int *filter_sets, unsigned int *filter_clears)
+{
+
+	if (starts != NULL)
+		*starts = bridge.scan_starts;
+	if (completes != NULL)
+		*completes = bridge.scan_completes;
+	if (filter_sets != NULL)
+		*filter_sets = bridge.filter_sets;
+	if (filter_clears != NULL)
+		*filter_clears = bridge.filter_clears;
+}
+
+void
+wlan_bridge_stats(struct wlan_bridge_counters *out)
+{
+
+	if (out == NULL)
+		return;
+	out->mgt_tx = bridge.mgt_tx;
+	out->data_tx = bridge.data_tx;
+	out->rx_frames = bridge.rx_frames;
+	out->tx_completes = bridge.tx_completes;
+	out->scan_starts = bridge.scan_starts;
+	out->scan_completes = bridge.scan_completes;
+	out->filter_sets = bridge.filter_sets;
+	out->filter_clears = bridge.filter_clears;
+	out->attached = bridge.attached;
+}
+
+/* ------------------------------------------------------------------ */
+/* data path and lifecycle for the presentation layer                  */
+/* ------------------------------------------------------------------ */
+
+int
+wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
+{
+	struct ifnet *ifp;
+	struct mbuf *m;
+	int qerr;
+
+	if (!bridge.attached || frame == NULL)
+		return -ENODEV;
+	ifp = bridge.ic->ic_ifp;
+	if (ifp == NULL)
+		return -ENODEV;
+	/*
+	 * A frame from the presentation layer (already an ethernet frame) enters
+	 * the stack through the interface's send queue: net80211's if_start then
+	 * encapsulates and encrypts it on the way out. Queueing rather than
+	 * handing it to the driver directly keeps one transmit path.
+	 */
+	m = bridge_mbuf_alloc(frame, len);
+	if (m == NULL)
+		return -ENOMEM;
+	IFQ_ENQUEUE(&ifp->if_snd, m, qerr);
+	if (qerr != 0) {
+		m_freem(m);
+		return -ENOBUFS;
+	}
+	bridge_start(ifp);
+	return (int)len;
+}
+
+int
+wlan_bridge_up(void)
+{
+
+	if (!bridge.attached || bridge.ops->start == NULL)
+		return -ENODEV;
+	return bridge.ops->start(bridge.drv);
+}
+
+void
+wlan_bridge_down(void)
+{
+
+	if (!bridge.attached || bridge.ops->stop == NULL)
+		return;
+	(void)bridge.ops->stop(bridge.drv);
+}
+
+int
+wlan_bridge_hwaddr(uint8_t addr[6])
+{
+
+	if (!bridge.attached)
+		return -ENODEV;
+	memcpy(addr, bridge.ic->ic_myaddr, IEEE80211_ADDR_LEN);
+	return 0;
+}
+
+void *
+wlan_bridge_ic(void)
+{
+
+	return bridge.attached ? bridge.ic : NULL;
+}
+
+void
+wlan_bridge_set_ifops(const struct wlan_port_ifops *ops, void *if_priv)
+{
+
+	bridge.ifops = ops;
+	bridge.if_priv = if_priv;
+}
+
+/* ------------------------------------------------------------------ */
+/* port.h entry points the bridge implements                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The port's control and diagnostics surface (port/port.h). Each entry names
+ * its consumer here rather than staying an unimplemented declaration: the board
+ * console and the presentation layer are those consumers, and an entry whose
+ * dependency is not up answers a refusal rather than nothing.
+ */
+
+int
+wlan_port_get_hwaddr(uint8_t addr[6])
+{
+
+	return wlan_bridge_hwaddr(addr);
+}
+
+int
+wlan_port_up(void)
+{
+
+	if (!bridge.attached)
+		return -1;
+	/*
+	 * The firmware the driver loads in probe is the check this port can make
+	 * from here: the registry is the loader and the blob registers itself at
+	 * start-up, so an unresolved name means the image cannot work.
+	 */
+	{
+		struct wlan_firmware fw;
+
+		if (wlan_port_firmware_get("rtlwifi/rtl8188eufw.bin", &fw) != 0)
+			wlan_osal_log("wlan: firmware blob is not registered\n");
+	}
+	return wlan_bridge_up();
+}
+
+void
+wlan_port_deinit(void)
+{
+
+	wlan_bridge_down();
+	wlan_bridge_detach();
+}
+
+int
+wlan_port_select(const char *name)
+{
+
+	if (name == NULL)
+		return -1;
+	return strcmp(name, WLAN_BRIDGE_ADAPTER_NAME) == 0 ? 0 : -1;
+}
+
+void *
+wlan_port_get_ic(void)
+{
+
+	return wlan_bridge_ic();
+}
+
+int
+wlan_port_scan(const uint8_t *ssid, size_t len)
+{
+
+	(void)ssid;
+	(void)len;	/* the SSID filter arrives with the supplicant round */
+	return wlan_bridge_scan_start();
+}
+
+int
+wlan_port_xmit(const uint8_t *frame, size_t len)
+{
+
+	return wlan_bridge_tx_raw(frame, len);
+}
+
+void
+wlan_port_status_dump(void)
+{
+	struct wlan_bridge_counters c;
+
+	wlan_bridge_stats(&c);
+	wlan_osal_log("wlan: attached=%d mgt_tx=%u data_tx=%u rx=%u tx_done=%u "
+	    "scan=%u/%u filter=%u/%u\n", c.attached, c.mgt_tx, c.data_tx,
+	    c.rx_frames, c.tx_completes, c.scan_starts, c.scan_completes,
+	    c.filter_sets, c.filter_clears);
+}
+
+void
+wlan_port_scan_dump(void)
+{
+
+	/*
+	 * The scan table is the stack's node table; the presentation layer owns
+	 * the iteration that prints it (it holds the table the walk needs).
+	 */
+	wlan_osal_log(bridge.attached ?
+	    "wlan: scan table dump is the presentation layer's iteration\n" :
+	    "wlan: no scan table (not attached)\n");
+}
+
+int
+wlan_port_firmware_get(const char *name, struct wlan_firmware *fw)
+{
+
+	if (name == NULL || fw == NULL)
+		return -1;
+	/*
+	 * The firmware registry this project compiles in is the loader. It is a
+	 * linuxkpi component, so it cannot be called from this world directly;
+	 * the driver half resolves the name and hands back borrowed bytes
+	 * through the seam's firmware hook.
+	 */
+	return wlan_bridge_fw_lookup(name, &fw->data, &fw->size);
+}
+
+void
+wlan_port_adapter_register(const struct wlan_port_adapter *adapter)
+{
+
+	(void)adapter;	/* this port's one adapter is the bridge itself */
+}
