@@ -1,10 +1,11 @@
 #!/bin/sh
 # Gate: kernel-interface isolation for the first-party port layers.
 #
-# Covered port trees: ports/net80211 (the wireless stack's port) and
+# Covered port trees: ports/net80211 (the wireless stack's port),
 # ports/cherryusb (the USB host stack's board layer, osal and class
-# application half). Each is compiled here under --port-objs/--sources; the
-# cross32 gate carries a per-tree translation-unit list.
+# application half) and ports/lwip (the TCP/IP stack's OS adapter, enabled by
+# --lwip-port). Each is compiled here under --port-objs/--sources; the cross32
+# gate carries a per-tree translation-unit list.
 #
 # The charter rule: components reach the kernel only through CMSIS-RTOS2, so no
 # object or source of this project may name another kernel's API. Three gates:
@@ -26,6 +27,7 @@
 #
 # Usage:
 #   check-kernel-isolation.sh --stack-objs DIR --port-objs DIR --sources "DIR DIR" [--canary]
+#                               [--lwip-port]
 #
 # Exit status: 0 clean, 1 findings or a failed canary proof.
 
@@ -35,6 +37,7 @@ stack_objs=
 port_objs=
 sources=
 canary=0
+lwip_port=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -42,6 +45,7 @@ while [ $# -gt 0 ]; do
 	--port-objs) port_objs=$2; shift 2 ;;
 	--sources) sources=$2; shift 2 ;;
 	--canary) canary=1; shift ;;
+	--lwip-port) lwip_port=1; shift ;;
 	*) echo "check-kernel-isolation: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -108,6 +112,29 @@ cross32_cherryusb() {
 }
 
 CROSS=${CROSS:-arm-none-eabi-gcc}
+
+cross32_lwip() {
+	# The lwIP port layer: the OS adapter (the only file that names
+	# CMSIS-RTOS2) and the platform hook file, plus a slice of the imported
+	# stack so the "no 64-bit assumptions" rule covers both sides. Compile
+	# only, syntax level: the gate proves 32-bit compilability, not a link.
+	root=$1
+	cmsis=$root/third-party/CMSIS_6/CMSIS/RTOS2/Include
+	flags="-std=c11 -Wall -DCMSIS2_BACKEND_THREADX
+	    -I$root/ports/lwip/include -I$root/third-party/lwip/src/include
+	    -I$root/third-party/lwip/contrib/apps/ping
+	    -I$root -I$root/os/cmsis2 -I$root/os/baremetal -I$root/arch/aarch64
+	    -I$cmsis"
+	# shellcheck disable=SC2086
+	for f in $root/ports/lwip/sys_arch.c $root/ports/lwip/platform_hooks.c \
+	    $root/third-party/lwip/src/core/pbuf.c \
+	    $root/third-party/lwip/src/core/netif.c \
+	    $root/third-party/lwip/src/apps/lwiperf/lwiperf.c; do
+		$CROSS -mcpu=cortex-m4 -mthumb $flags -fsyntax-only "$f" 2>&1 \
+			| grep -E 'error:' || true
+	done
+}
+
 cross32_scan() {
 	# The port layer and the stack, syntax only, 32-bit target. The flags mirror
 	# the contract build; the CMSIS include comes from the vendored CMSIS_6.
@@ -157,6 +184,9 @@ if command -v "$CROSS" >/dev/null 2>&1; then
 	fi
 	if [ -n "$root" ] && [ -d "$root/ports/cherryusb" ]; then
 		report "$(cross32_cherryusb "$root")" "cross32 gate, cherryusb port (arm-none-eabi, cortex-m4)"
+	fi
+	if [ "$lwip_port" = 1 ] && [ -n "$root" ] && [ -d "$root/ports/lwip" ]; then
+		report "$(cross32_lwip "$root")" "cross32 gate, lwip port (arm-none-eabi, cortex-m4)"
 	fi
 else
 	echo "check-kernel-isolation: BLOCKED (cross32 gate: $CROSS not on PATH)"
