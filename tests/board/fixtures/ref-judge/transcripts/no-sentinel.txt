@@ -1,0 +1,16 @@
+# Static fixture transcript: the run reached the summary anchor but the end
+# sentinel never printed (the image parked before closing the suite). Silence
+# must never read as a pass, so this is an incomplete run. Expected exit 1.
+#
+# @design static transcript fixture - ref tests/board/threadx-rk3568-regression/judge.py
+fixture-accept bring-up fixture-tag
+[   0.000] board: console up
+[   0.100] BOARD-SUITE fixture-accept select window_ms=5000
+[   5.000] BOARD-SUITE fixture-accept start cases=4 sel=all list=alpha,beta,gamma,delta
+[   5.020] CASE fixture-accept/alpha PASS
+[   5.040] CASE fixture-accept/beta PASS
+[   5.060] CASE fixture-accept/gamma PASS
+[   5.080] CASE fixture-accept/delta PASS
+[   5.090] BOARD-SUMMARY fixture-accept cases=4 ok=4 exit=0
+[   5.100] runner: closing the suite
+[   5.110] park: runner idle without a sentinel
