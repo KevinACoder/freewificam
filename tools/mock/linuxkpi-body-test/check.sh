@@ -36,8 +36,8 @@ case_line() {
 
 if timeout 120 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^LKPI: L[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 8 ] &&
-        grep -q '^LKPI: SUITE PASS cases=8$' "$log_dir/stream.log" &&
+    if [ "$pass" = 9 ] &&
+        grep -q '^LKPI: SUITE PASS cases=9$' "$log_dir/stream.log" &&
         ! grep -q '^LKPI: L[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line link-closure PASS
         case_line section-walk PASS
@@ -47,9 +47,10 @@ if timeout 120 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line urb-traffic PASS
         case_line pool-contract PASS
         case_line two-endpoints PASS
+        case_line class-hook-claim PASS
     else
         case_line link-closure FAIL
-        echo "linuxkpi-body-test: the run did not report eight passing cases ($pass)" >&2
+        echo "linuxkpi-body-test: the run did not report nine passing cases ($pass)" >&2
         tail -8 "$log_dir/stream.log" >&2 || true
     fi
 else

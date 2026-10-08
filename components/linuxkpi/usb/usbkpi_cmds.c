@@ -35,6 +35,7 @@
 #include "usbh_core.h"
 
 #include "linuxkpi_usb.h"
+#include "lkpi_usbh_class.h"
 #include <linux/usb.h>	/* USB_ENDPOINT_XFER_* for the filter words */
 
 /* single-command dump ceiling: matches the ring size so one command

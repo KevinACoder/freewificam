@@ -66,17 +66,25 @@ CFLAGS := -ggdb3 -O0 -Wall -Wextra -ffunction-sections -fdata-sections \
           -I$(USB_ROUND) \
           -I$(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Include
 
+# The class-hook case TU includes the CherryUSB headers (the hook's own
+# first-include rule), so it gets the imported stack's include set on top.
+CHERRYUSB := $(ROOT)/third-party/cherryusb
+CLAIM_CFLAGS := $(CFLAGS) \
+          -I$(CHERRYUSB)/common -I$(CHERRYUSB)/core -I$(CHERRYUSB)/class/hub \
+          -I$(ROOT)/ports/cherryusb/board/rk3568-itx
+
 LDFLAGS := -pthread -Wl,--gc-sections \
            -Wl,-T,$(MAKEFILE_DIR)/lkpi_module.ld
 
 # The bodies under test: the real service bodies, the real pool, the real
-# firmware registry and blob, the real USB engine. No doubles here.
+# firmware registry and blob, the real USB engine, and the real class hook.
 BODY_SRCS := \
     $(ROOT)/components/linuxkpi/linuxkpi_core.c \
     $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c \
     $(ROOT)/components/linuxkpi/fw_registry.c \
     $(ROOT)/components/linuxkpi/fw/rtl8188eufw_blob.c \
     $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
+    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c \
     $(MAKEFILE_DIR)/lkpi_platform_host.c
 
 # The synthetic controller and the device model (reused), plus this suite's
@@ -85,7 +93,7 @@ MOCK_SRCS := \
     $(USB_ROUND)/mock_hcd.c \
     $(MAKEFILE_DIR)/wlan_driver_stub.c
 
-APP_SRCS := $(MAKEFILE_DIR)/main.c
+APP_SRCS := $(MAKEFILE_DIR)/main.c $(MAKEFILE_DIR)/claim_case.c
 
 RUNTIME_SRCS := \
     $(ROOT)/os/freertos/freertos_hooks.c \
@@ -128,7 +136,17 @@ $(call OBJ,$(1)): $(1) | $(BUILD_DIR)
 	$$(CC) $$(CFLAGS) -c $$< -o $$@
 endef
 
-$(foreach src,$(filter-out $(POOL_SRC),$(SRCS)),$(eval $(call COMPILE_RULE,$(src))))
+$(foreach src,$(filter-out $(POOL_SRC) $(MAKEFILE_DIR)/claim_case.c \
+    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c,$(SRCS)),$(eval $(call COMPILE_RULE,$(src))))
+
+# the class hook and its case: the CherryUSB include set rides on top of the
+# common flags (the hook's first-include rule)
+$(call OBJ,$(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c): \
+    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c | $(BUILD_DIR)
+	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
+
+$(call OBJ,$(MAKEFILE_DIR)/claim_case.c): $(MAKEFILE_DIR)/claim_case.c | $(BUILD_DIR)
+	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
 
 # the pool body, with the host's platform hooks instead of the target's
 $(POOL_OBJ): $(POOL_SRC) | $(BUILD_DIR)
