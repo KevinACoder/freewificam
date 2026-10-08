@@ -13,3 +13,6 @@
 [submodule "third-party/FreeRTOS-Kernel-tests/CMock"]
 	path = third-party/FreeRTOS-Kernel-tests/CMock
 	url = https://github.com/ThrowTheSwitch/CMock.git
+[submodule "third-party/cherryusb"]
+	path = third-party/cherryusb
+	url = https://github.com/cherry-embedded/CherryUSB.git
