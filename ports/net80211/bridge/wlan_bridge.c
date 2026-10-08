@@ -596,6 +596,27 @@ wlan_bridge_scan_active(void)
 
 	return bridge.attached && bridge.scanning;
 }
+
+/*
+ * The 1 Hz stack tick. net80211 runs its management-frame timer and node
+ * inactivity timers here: a management frame (the auth request of a join, for
+ * one) carries a seconds-countdown, and its expiry is what restarts the scan
+ * when a response was lost - the retry the standard's state machine depends
+ * on. This port has no callout thread, so someone must call it with the same
+ * discipline the imported kernel's if_timer had; the radio pump does, once a
+ * second, for every state (the predecessor's worker called it on its own 1 Hz
+ * timer from this same position).
+ */
+void
+wlan_bridge_watchdog(void)
+{
+
+	if (!bridge.attached || bridge.ic == NULL)
+		return;
+	wlan_port_serializer_lock();
+	ieee80211_watchdog(bridge.ic);
+	wlan_port_serializer_unlock();
+}
 /*
  * Set the interface's desired SSID: what a joiner configures before a sweep,
  * and what the stack's own match then requires a candidate to carry. The

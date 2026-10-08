@@ -79,6 +79,20 @@ void wlan_join_chain(void)
 		}
 		osDelay(WLAN_JOIN_POLL_MS);
 		waited += WLAN_JOIN_POLL_MS;
+		/* a periodic pulse so a stalled join says where it sits: the
+		 * stack's state, the management frames that left, the
+		 * supplicant's latches (10 s period; the anchor table ignores
+		 * these lines) */
+		if ((waited % 10000U) == 0) {
+			struct wlan_bridge_counters c;
+
+			wlan_bridge_stats(&c);
+			board_log("wlan: join wait t=%us state=%s mgt_tx=%u "
+			    "rx=%u assoc=%u connected=%u\n",
+			    waited / 1000U, join_state_txt(wlan_bridge_state()),
+			    c.mgt_tx, c.rx_frames, wlan_wpa_obs_assoc_seen(),
+			    wlan_wpa_obs_connected());
+		}
 	}
 
 	if (!wlan_wpa_obs_connected() ||

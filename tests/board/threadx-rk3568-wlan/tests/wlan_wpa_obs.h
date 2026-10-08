@@ -14,6 +14,7 @@ void	wlan_wpa_obs_init(void);
 /* latched anchors */
 int	wlan_wpa_obs_negotiation_completed(void);
 int	wlan_wpa_obs_connected(void);
+int	wlan_wpa_obs_assoc_seen(void);
 
 /* the BSSID string from the CONNECTED message, "?" when absent */
 const char *wlan_wpa_obs_bssid_txt(void);

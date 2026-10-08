@@ -167,6 +167,11 @@ int	wlan_bridge_state(void);
 /* Is a sweep in flight? (the radio's dwell pump watches this) */
 int	wlan_bridge_scan_active(void);
 
+/* The 1 Hz stack tick: management-frame timeout and node inactivity. Without
+ * it a lost auth/assoc response is never retried (the countdown that restarts
+ * the scan is driven here). The radio pump calls it once a second. */
+void	wlan_bridge_watchdog(void);
+
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);

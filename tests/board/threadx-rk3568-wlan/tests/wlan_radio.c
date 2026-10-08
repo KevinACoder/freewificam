@@ -36,16 +36,27 @@
 static void
 wlan_radio_task(void *arg)
 {
+	unsigned int tick_accum = 0;
 
 	(void)arg;
 	for (;;) {
 		if (wlan_bridge_scan_active()) {
 			osDelay(WLAN_RADIO_DWELL_MS);
+			tick_accum += WLAN_RADIO_DWELL_MS;
 			/* the sweep may have ended inside the delay; the
 			 * bridge's dwell refuses when no sweep is armed */
 			(void)wlan_bridge_scan_dwell();
 		} else {
 			osDelay(50U);
+			tick_accum += 50U;
+		}
+		/* the stack's own management-frame and inactivity timers count
+		 * in seconds and only advance when someone calls the watchdog;
+		 * without it a lost auth/assoc response is never retried and a
+		 * join stalls until the supplicant gives up */
+		if (tick_accum >= 1000U) {
+			tick_accum = 0;
+			wlan_bridge_watchdog();
 		}
 	}
 }

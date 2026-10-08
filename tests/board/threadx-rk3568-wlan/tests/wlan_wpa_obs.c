@@ -27,6 +27,7 @@
 
 static volatile int obs_negotiation;
 static volatile int obs_connected;
+static volatile int obs_assoc;
 static char obs_bssid[18];
 
 static int
@@ -57,6 +58,10 @@ wlan_wpa_obs_msg(void *ctx, int level, enum wpa_msg_type type,
 	(void)level;
 	(void)type;
 
+	if (obs_contains(txt, len, "CTRL-EVENT-CONNECTED") ||
+	    obs_contains(txt, len, "CTRL-EVENT-ASSOC-REJECT")) {
+		obs_assoc = 1;
+	}
 	if (obs_contains(txt, len, "[PTK=CCMP GTK=CCMP]")) {
 		obs_negotiation = 1;
 	}
@@ -83,6 +88,7 @@ wlan_wpa_obs_init(void)
 
 	obs_negotiation = 0;
 	obs_connected = 0;
+	obs_assoc = 0;
 	obs_bssid[0] = '\0';
 	wpa_msg_register_cb(wlan_wpa_obs_msg);
 }
@@ -106,4 +112,11 @@ wlan_wpa_obs_bssid_txt(void)
 {
 
 	return obs_bssid[0] != '\0' ? obs_bssid : "?";
+}
+
+int
+wlan_wpa_obs_assoc_seen(void)
+{
+
+	return obs_assoc;
 }
