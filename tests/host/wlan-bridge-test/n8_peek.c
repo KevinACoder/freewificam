@@ -379,3 +379,17 @@ n8_peek_ccmpmic_count(void)
 
 	return ic != NULL ? ic->ic_stats.is_rx_ccmpmic : 0;
 }
+
+/* Red-control back door: drop the stack back into the state end_scan leaves
+ * behind (both scan flags cleared). The bridge's scan_start is what re-arms
+ * them; this poke simulates that re-arm being absent so the second-sweep case
+ * can prove it depends on the re-arm, not on luck. */
+void
+n8_poke_clear_active_scan(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	if (ic == NULL)
+		return;
+	ic->ic_flags &= ~(unsigned int)(IEEE80211_F_SCAN | IEEE80211_F_ASCAN);
+}

@@ -148,6 +148,26 @@ fake_bss_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	fake.bss_info_calls++;
 	fake.last_bss_joined = (changed & BSS_CHANGED_ASSOC) != 0 &&
 	    info->bssid != NULL;
+	if (fake.bss_ev_count < FAKE_DRIVER_BSS_EV_MAX) {
+		struct fake_bss_ev *ev = &fake.bss_ev[fake.bss_ev_count++];
+
+		ev->changed = changed;
+		ev->assoc = vif->cfg.assoc;
+		ev->aid = vif->cfg.aid;
+		ev->bssid_null = info->bssid == NULL;
+		if (info->bssid != NULL)
+			memcpy(ev->bssid, info->bssid, 6);
+		ev->basic = info->basic_rates;
+		if (info->bssid != NULL) {
+			struct ieee80211_sta *sta;
+
+			rcu_read_lock();
+			sta = ieee80211_find_sta(vif, info->bssid);
+			if (sta != NULL)
+				ev->supp0 = sta->deflink.supp_rates[0];
+			rcu_read_unlock();
+		}
+	}
 	if (info->bssid != NULL)
 		memcpy(fake.last_bssid, info->bssid, 6);
 	else

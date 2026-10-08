@@ -198,10 +198,13 @@ $(BUILD_DIR)/netif $(BUILD_DIR)/drv $(BUILD_DIR)/rt $(BUILD_DIR)/wpav:
 	mkdir -p $@
 
 # Explicit rules (the object name folds the whole source path, so a pattern
-# rule cannot express it): one per source group.
+# rule cannot express it): one per source group. -MMD -MP writes the header
+# dependencies next to each object - without them a header edit (the bridge's
+# counters struct, the seam's op signatures) leaves stale objects that compile
+# clean and then disagree about struct sizes at run time.
 define GRP_RULE
 $$(call OBJ,$(2),$(1)): $(1) | $(BUILD_DIR)/$(2)
-	$$(CC) $(3) -c $$< -o $$@
+	$$(CC) $(3) -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach src,$(STACK_SRCS),$(eval $(call GRP_RULE,$(src),stack,$(BSD_CFLAGS))))
@@ -216,10 +219,14 @@ $(foreach src,$(WPAV_SRCS),$(eval $(call GRP_RULE,$(src),wpav,$(WPAV_CFLAGS))))
 
 # the pool body, with the host's platform hooks
 $(POOL_OBJ): $(POOL_SRC) | $(BUILD_DIR)/kpi
-	$(CC) $(KPI_CFLAGS) -DLKPI_SKB_POOL_NO_TARGET_HOOKS -c $< -o $@
+	$(CC) $(KPI_CFLAGS) -MMD -MP -DLKPI_SKB_POOL_NO_TARGET_HOOKS -c $< -o $@
 
-$(BIN): $(STACK_OBJS) $(SEAM_OBJS) $(PORT_OBJS) $(KPI_OBJS) $(APP_OBJS) \
-	$(NETIF_OBJS) $(DRV_OBJS) $(RT_OBJS) $(WPAV_OBJS)
+ALL_OBJS := $(STACK_OBJS) $(SEAM_OBJS) $(PORT_OBJS) $(KPI_OBJS) $(APP_OBJS) \
+    $(NETIF_OBJS) $(DRV_OBJS) $(RT_OBJS) $(WPAV_OBJS)
+
+-include $(ALL_OBJS:.o=.d)
+
+$(BIN): $(ALL_OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
 
 run: $(BIN)

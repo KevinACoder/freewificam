@@ -1185,6 +1185,250 @@ case_b11(void)
 	return 0;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* the board-feedback cases (r13/r14): the second sweep, the mid-sweep
+ * join race, and the association wiring the driver actually reads           */
+/* ------------------------------------------------------------------ */
+
+/* how many probe requests carrying the configured SSID the driver was handed
+ * so far (the sweep's own footprint; a sweep that did not probe adds none) */
+static unsigned int
+count_ssid_probes(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	unsigned int i, n = 0;
+
+	for (i = 0; i < st->tx_count && i < FAKE_DRIVER_TX_MAX; i++) {
+		if (!st->tx_is_mgmt[i] || st->tx_lens[i] < 26)
+			continue;
+		if ((st->tx_frames[i][0] & IEEE80211_FCTL_STYPE) !=
+		    IEEE80211_STYPE_PROBE_REQ)
+			continue;
+		if (st->tx_frames[i][24] == IEEE80211_ELEMID_SSID &&
+		    st->tx_frames[i][25] == AP_SSID_LEN &&
+		    memcmp(&st->tx_frames[i][26], AP_SSID, AP_SSID_LEN) == 0)
+			n++;
+	}
+	return n;
+}
+
+/* one whole sweep, the pump's own rhythm: answer what the stack sent while
+ * the channel is still current, then hand the stack its next channel */
+static void
+run_one_sweep(void)
+{
+	unsigned int guard;
+
+	for (guard = 0; guard < 64; guard++) {
+		answer_new_tx_from_ap();
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+	answer_new_tx_from_ap();
+}
+
+/*
+ * B12: a sweep started while the stack already sits in its SCAN state (the
+ * MANUAL-roaming park) must still probe. The stack arms its active-scan flag
+ * only in begin_scan (the INIT -> SCAN entry); end_scan clears it; so the
+ * bridge's scan_start is the only thing that re-arms a parked stack - without
+ * it every sweep after the first walks the channels in silence (board r14:
+ * the supplicant's scans kept "completing" over a stale table while no probe
+ * left the radio).
+ */
+static int
+case_b12(void)
+{
+	unsigned int before = count_ssid_probes();
+	struct wlan_bridge_counters cb;
+	unsigned int done_before;
+	int rc;
+
+	wlan_bridge_stats(&cb);
+	done_before = cb.scan_completes;
+	rc = wlan_bridge_scan_start();
+	if (rc != 0) {
+		case_line("B12", 0, "the first sweep did not start (rc=%d)", rc);
+		return -1;
+	}
+	run_one_sweep();
+	if (count_ssid_probes() == before) {
+		case_line("B12", 0, "the first sweep transmitted no probe");
+		return -1;
+	}
+
+	/* the sweep ended; MANUAL roaming parks the stack in SCAN */
+	before = count_ssid_probes();
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B12", 0, "the second scan_start was refused (the "
+		    "sweep bookkeeping did not close)");
+		return -1;
+	}
+	if (fault_name != NULL && strcmp(fault_name, "no-rearm") == 0)
+		n8_poke_clear_active_scan();	/* red control: the old state */
+	run_one_sweep();
+	/* the threshold is the sweep, not the re-entry: scan_start's own
+	 * state re-entry emits one probe even with the flags cleared, so a
+	 * parked re-arm that failed would still show +1; a working re-arm
+	 * probes every dwelled channel */
+	if (count_ssid_probes() < before + 4) {
+		case_line("B12", 0, "the second sweep barely probed (+%u): the "
+		    "parked stack was not re-armed",
+		    count_ssid_probes() - before);
+		return -1;
+	}
+	wlan_bridge_stats(&cb);
+	if (cb.scan_completes <= done_before + 1) {
+		case_line("B12", 0, "the second sweep did not close "
+		    "(completes=%u)", cb.scan_completes);
+		return -1;
+	}
+	case_line("B12", 1, "a parked (SCAN-state) re-sweep still probes "
+	    "(+%u probes, scan-done reported)",
+	    count_ssid_probes() - before);
+	return 0;
+}
+
+/*
+ * B13: a join that lands while a sweep is mid-flight must not strand the
+ * sweep's bookkeeping. The pump's dwell is what closes a sweep the stack
+ * already left (its entry check); a stranded `scanning` flag refuses every
+ * later scan_start with -EBUSY - the board's structural hazard.
+ */
+static int
+case_b13(void)
+{
+	int rc;
+
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B13", 0, "the mid-flight sweep did not start");
+		return -1;
+	}
+	answer_new_tx_from_ap();
+	if (wlan_bridge_scan_dwell() != 1) {
+		case_line("B13", 0, "the dwell did not arm a second channel");
+		return -1;
+	}
+	/* the supplicant's move: join over the live sweep (open network) */
+	if (wlan_bridge_join((const uint8_t *)AP_SSID, AP_SSID_LEN, ap_bssid,
+	    NULL, 0) != 0) {
+		case_line("B13", 0, "the mid-sweep join was refused");
+		return -1;
+	}
+	{
+		unsigned int guard;
+
+		for (guard = 0; guard < 64; guard++) {
+			if (n8_peek_state() == n8_peek_run_state())
+				break;
+			answer_new_tx_from_ap();
+		}
+		if (n8_peek_state() != n8_peek_run_state()) {
+			case_line("B13", 0, "the mid-sweep join did not reach "
+			    "RUN (state=%d)", n8_peek_state());
+			return -1;
+		}
+	}
+	/* the pump's next dwell: the stack left S_SCAN, so this must close the
+	 * sweep (return 0) rather than drag the state machine back */
+	if (wlan_bridge_scan_dwell() != 0) {
+		case_line("B13", 0, "a dwell after the join tried to walk the "
+		    "sweep instead of closing it");
+		return -1;
+	}
+	if (wlan_bridge_scan_pending() != 0) {
+		case_line("B13", 0, "the closed sweep still reads pending");
+		return -1;
+	}
+	rc = wlan_bridge_scan_start();
+	if (rc != 0) {
+		case_line("B13", 0, "scan_start after the mid-sweep join was "
+		    "refused (rc=%d; the bookkeeping stranded)", rc);
+		return -1;
+	}
+	case_line("B13", 1, "mid-sweep join: dwell closes the sweep, state "
+	    "reaches RUN, scan_start recovers (no stranded EBUSY)");
+	return 0;
+}
+
+/*
+ * B14: the association wiring a mac80211 driver reads. The adapter's
+ * bss_info must carry vif->cfg.assoc/aid and the station's rate bitmaps on
+ * the join leg - the driver's association branch is gated on cfg.assoc and
+ * builds its rate mask from the station (without them it runs its
+ * NOT-associated leg while the stack has associated). The leave leg must not
+ * push a BSSID change with a NULL address (the driver dereferences it).
+ */
+static int
+case_b14(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	unsigned int ev_join = st->bss_ev_count, ev_leave;
+	unsigned int guard;
+
+	/* finish whatever sweep B13 armed, then join again under this case's
+	 * own eyes */
+	run_one_sweep();
+	if (wlan_bridge_join((const uint8_t *)AP_SSID, AP_SSID_LEN, ap_bssid,
+	    NULL, 0) != 0) {
+		case_line("B14", 0, "the join was refused");
+		return -1;
+	}
+	for (guard = 0; guard < 64; guard++) {
+		if (n8_peek_state() == n8_peek_run_state())
+			break;
+		answer_new_tx_from_ap();
+	}
+	if (n8_peek_state() != n8_peek_run_state()) {
+		case_line("B14", 0, "the join did not reach RUN (state=%d)",
+		    n8_peek_state());
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->bss_ev_count == 0 || st->bss_ev_count > FAKE_DRIVER_BSS_EV_MAX ||
+	    ev_join >= st->bss_ev_count) {
+		case_line("B14", 0, "no association event was recorded "
+		    "(count=%u ev_join=%u)", st->bss_ev_count, ev_join);
+		return -1;
+	}
+	ev_join = st->bss_ev_count - 1;
+	if (!st->bss_ev[ev_join].assoc || st->bss_ev[ev_join].aid == 0 ||
+	    st->bss_ev[ev_join].bssid_null ||
+	    memcmp(st->bss_ev[ev_join].bssid, ap_bssid, 6) != 0) {
+		case_line("B14", 0, "the association event lacks the driver's "
+		    "wiring (assoc=%d aid=%u null=%d)",
+		    st->bss_ev[ev_join].assoc, st->bss_ev[ev_join].aid,
+		    st->bss_ev[ev_join].bssid_null);
+		return -1;
+	}
+	if (st->bss_ev[ev_join].supp0 == 0) {
+		case_line("B14", 0, "the station carries no rate bitmap (the "
+		    "driver's rate mask would be empty)");
+		return -1;
+	}
+	ev_leave = st->bss_ev_count;
+	wlan_bridge_disconnect(3);
+	st = fake_driver_state();
+	if (st->bss_ev_count <= ev_leave) {
+		case_line("B14", 0, "the disconnect produced no event");
+		return -1;
+	}
+	ev_leave = st->bss_ev_count - 1;
+	if (st->bss_ev[ev_leave].assoc ||
+	    (st->bss_ev[ev_leave].changed & BSS_CHANGED_BSSID) != 0) {
+		case_line("B14", 0, "the leave leg is wrong (assoc=%d "
+		    "bssid-pushed=%llu)", st->bss_ev[ev_leave].assoc,
+		    (unsigned long long)(st->bss_ev[ev_leave].changed &
+		    BSS_CHANGED_BSSID));
+		return -1;
+	}
+	case_line("B14", 1, "assoc wiring carried (aid=%u rates=%#x); leave "
+	    "leg sends no NULL-BSSID push",
+	    st->bss_ev[ev_join].aid, st->bss_ev[ev_join].supp0);
+	return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* the flow                                                            */
 /* ------------------------------------------------------------------ */
@@ -1325,9 +1569,12 @@ run_suite(void)
 	(void)case_b9();
 	(void)case_b10();
 	(void)case_b11();
+	(void)case_b12();
+	(void)case_b13();
+	(void)case_b14();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=11\n");
+		printf("WLANBRIDGE: SUITE PASS cases=14\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -1358,13 +1605,15 @@ main(int argc, char **argv)
 			fault_name = argv[++i];
 		} else {
 			printf("WLANBRIDGE: usage: %s [--fault no-filter|"
-			    "tamper-auth|double-free-skb|no-manual]\n", argv[0]);
+			    "tamper-auth|double-free-skb|no-manual|"
+			    "no-rearm]\n", argv[0]);
 			return 2;
 		}
 	}
 	if (fault_name != NULL && strcmp(fault_name, "no-filter") != 0 &&
 	    strcmp(fault_name, "tamper-auth") != 0 &&
 	    strcmp(fault_name, "no-manual") != 0 &&
+	    strcmp(fault_name, "no-rearm") != 0 &&
 	    strcmp(fault_name, "double-free-skb") != 0) {
 		printf("WLANBRIDGE: unknown fault '%s'\n", fault_name);
 		return 2;

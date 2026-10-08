@@ -20,10 +20,15 @@
  * join exchange; a capture that filled up would silently drop the auth/assoc
  * request and the case would fail for a reason that is the harness's, not the
  * chain's. Anything dropped is counted (tx_lost) so that never stays invisible. */
-#define FAKE_DRIVER_TX_MAX	64
+/* three sweeps plus two join exchanges now ride one run (the re-sweep and
+ * the mid-sweep-join cases added their own); the capture must hold them all
+ * or the frames past the end fall out of the answerable window and the case
+ * fails for a reason that is the harness's, not the chain's */
+#define FAKE_DRIVER_TX_MAX	160
 #define FAKE_DRIVER_FRAME_MAX	1600
-#define FAKE_DRIVER_ORDER_MAX	256
+#define FAKE_DRIVER_ORDER_MAX	512
 #define FAKE_DRIVER_CONFIG_MAX	32
+#define FAKE_DRIVER_BSS_EV_MAX	24
 
 /* one entry per ops call, in the order the bridge made them */
 enum fake_call {
@@ -66,6 +71,20 @@ struct fake_driver_state {
 	unsigned int config_freq_count;
 	int last_bss_joined;
 	uint8_t last_bssid[6];
+	/* every bss_info_changed call, as the driver's association branch
+	 * would read it: the change bits, vif->cfg's assoc/aid at call time,
+	 * the BSSID (and whether it was NULL), and the rate bitmaps the
+	 * adapter built - the association wiring the join judgment stands on */
+	struct fake_bss_ev {
+		uint64_t	changed;
+		int		assoc;
+		unsigned int	aid;
+		uint8_t		bssid[6];
+		int		bssid_null;
+		uint32_t	supp0;
+		uint32_t	basic;
+	} bss_ev[FAKE_DRIVER_BSS_EV_MAX];
+	unsigned int bss_ev_count;
 	int last_key_pairwise;
 	int last_key_idx;
 	int last_key_cipher;

@@ -56,4 +56,8 @@ int	n8_peek_seal_from_ap(const uint8_t *payload, size_t len, uint16_t seq,
 	    uint8_t *out, size_t *out_len);
 uint32_t n8_peek_ccmpmic_count(void);
 
+/* red-control back door: clear the stack's scan flags (the state end_scan
+ * leaves), simulating a scan_start that forgot to re-arm them */
+void	n8_poke_clear_active_scan(void);
+
 #endif /* N8_PEEK_H */
