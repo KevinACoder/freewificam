@@ -363,12 +363,27 @@ struct wiphy {
 };
 
 /*
- * The device behind a wiphy is a stored pointer the caller both reads and assigns
- * (drivers set it from the interface's device), so both spellings are lvalues, as
- * the interface has them.
+ * The device behind a wiphy is a stored pointer the caller both reads and
+ * assigns (drivers set it from the interface's device). Both spellings are
+ * inline helpers rather than function-like macros: a macro whose parameter is
+ * named `dev` substitutes into its own `->dev` member access and rewrites the
+ * lvalue into `-><argument>` (found when this layer's own substitute called it
+ * with an argument that was not literally spelled `dev`). The interface spells
+ * these as inline functions, which is the fix here too.
  */
-#define	wiphy_dev(wiphy)		((wiphy)->dev)
-#define	set_wiphy_dev(wiphy, dev)	(((wiphy)->dev) = (dev))
+static __always_inline __unused struct device *
+wiphy_dev(struct wiphy *wiphy)
+{
+
+	return wiphy->dev;
+}
+
+static __always_inline __unused void
+set_wiphy_dev(struct wiphy *wiphy, struct device *dev)
+{
+
+	wiphy->dev = dev;
+}
 
 static inline void wiphy_ext_feature_set(struct wiphy *wiphy,
 					 enum nl80211_ext_feature_index ftidx)
