@@ -92,7 +92,10 @@ components/linuxkpi/include/linux/skbuff.h
 components/linuxkpi/include/linux/kernel.h
 components/linuxkpi/include/linux/printk.h
 components/linuxkpi/include/linux/list.h
-components/linuxkpi/include/linux/netdevice.h'
+components/linuxkpi/include/linux/netdevice.h
+components/linuxkpi/fw_registry.h
+components/linuxkpi/fw_registry.c
+components/linuxkpi/fw/rtl8188eufw_blob.c'
 
 files=$(git ls-files -- "$paths_self" "$paths_vendored" $paths_imported)
 records=$(git ls-files -- $imported_records)

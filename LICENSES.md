@@ -37,7 +37,7 @@ carry the same terms in their file header).
 
 | Unit | License | Notes |
 |---|---|---|
-| `rtl8188eufw.bin` (Realtek firmware) | Realtek binary redistribution terms | not in the tree yet; the carrier round records the source and keeps the license text next to the blob |
+| `rtl8188eufw.bin` (Realtek firmware, compiled in as `components/linuxkpi/fw/rtl8188eufw_blob.c`) | Realtek binary redistribution terms | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/rtl8188eufw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
 
 ## Distribution obligations
 
