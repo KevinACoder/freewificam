@@ -30,6 +30,7 @@
 #include "usbh_hub.h"
 #include "usb_errno.h"
 
+#include "lkpi_usb_backend.h"	/* struct lkpi_usb_be_hubport: the engine-level port dev->_hport names */
 #include "linuxkpi_core.h"
 #include "linuxkpi_usb.h"
 #include <linux/usb.h>
@@ -70,6 +71,7 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	struct usb_interface *intf;
 	struct usb_host_interface *hostif;
 	struct usb_host_endpoint *eps;
+	struct lkpi_usb_be_hubport *be;
 	unsigned int n_ep = 0;
 	unsigned int i;
 
@@ -83,8 +85,22 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	intf = kzalloc(sizeof(*intf), GFP_KERNEL);
 	hostif = kzalloc(sizeof(*hostif), GFP_KERNEL);
 	eps = kzalloc(sizeof(*eps) * (n_ep != 0 ? n_ep : 1), GFP_KERNEL);
-	if (dev == NULL || intf == NULL || hostif == NULL || eps == NULL)
+	/*
+	 * The engine-level port object the backend contract names
+	 * (lkpi_usb_backend.h:93-98): dev->_hport must be THIS type, not the
+	 * raw CherryUSB hubport - the backend reads port->hcpriv as its own
+	 * handle, so binding the raw struct made the backend interpret its
+	 * first bytes as a pointer (measured on the board: the control
+	 * transfer read hport->connected through garbage hcpriv and data-
+	 * aborted). hcpriv here is the CherryUSB hubport, which is what this
+	 * backend expects to find.
+	 */
+	be = kzalloc(sizeof(*be), GFP_KERNEL);
+	if (dev == NULL || intf == NULL || hostif == NULL || eps == NULL ||
+	    be == NULL)
 		goto fail;
+	be->hcpriv = hport;
+	be->port = hport->port;
 
 	hostif->endpoint = eps;
 	hostif->num_endpoints = (int)n_ep;
@@ -112,7 +128,7 @@ lkpi_usbh_build_device(struct usbh_hubport *hport, uint8_t intf_idx,
 	intf->num_altsetting = 1;
 	intf->dev.name = "lkpiu";	/* one claimed device per image */
 
-	lkpi_usb_device_bind(dev, intf, hport);
+	lkpi_usb_device_bind(dev, intf, be);
 	*intf_out = intf;
 	return dev;
 
@@ -121,6 +137,7 @@ fail:
 	kfree(intf);
 	kfree(hostif);
 	kfree(eps);
+	kfree(be);
 	return NULL;
 }
 
@@ -132,6 +149,7 @@ lkpi_usbh_free_device(struct usb_device *dev)
 	if (dev == NULL)
 		return;
 	intf = (struct usb_interface *)dev->_intf;
+	kfree(dev->_hport);		/* the engine-level port built with the device */
 	if (intf != NULL) {
 		if (intf->cur_altsetting != NULL) {
 			kfree(intf->cur_altsetting->endpoint);
