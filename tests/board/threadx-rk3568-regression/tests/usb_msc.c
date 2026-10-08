@@ -80,6 +80,7 @@ void usb_msc_case(unsigned busid, const char *hcd)
 		board_case_fail("usbh_initialize failed");
 		return;
 	}
+	usb_board_after_start(busid);
 
 	msc = msc_wait();
 	if (msc == 0) {

@@ -68,6 +68,7 @@
 #include "usb_dwc3.h"
 
 #include "usbh_core.h"
+#include "usbh_hub.h"
 /* The EHCI port's register header, for the root port status bits the speed
  * decode below needs; it also declares g_ehci_hcd. */
 #include "usb_hc_ehci.h"
@@ -219,6 +220,37 @@ void usb_hc_low_level2_init(struct usbh_bus *bus)
  * (the USB3 port decodes its own port register): a low-speed device holds
  * the port in the K state while it is being reset, and an enabled port with
  * neither indication is a high-speed device. */
+void usb_board_after_start(unsigned busid)
+{
+	struct usbh_bus *bus;
+	struct ehci_hcd *hcd;
+	unsigned port;
+
+	if (usb_board_bus_is_xhci(busid)) {
+		return;
+	}
+
+	bus = &g_usbhost_bus[busid];
+	hcd = &g_ehci_hcd[bus->hcd.hcd_id];
+
+	for (port = 1U; port <= (unsigned)hcd->n_ports; port++) {
+		uint32_t regval = usb_ehci_port_status(usb_board_bus_reg_base(busid), port - 1U);
+
+		board_log("usbh: bus%u port%u portsc=%08x ppc=%u\n", busid, port,
+			  (unsigned)regval, (unsigned)hcd->ppc);
+		if (hcd->ppc && (regval & USB_BOARD_EHCI_PORTSC_CCS) != 0U) {
+			regval = usb_ehci_port_power_cycle(usb_board_bus_reg_base(busid), port - 1U);
+			board_log("usbh: bus%u port%u kicked, now %08x\n", busid, port,
+				  (unsigned)regval);
+		}
+		bus->hcd.roothub.int_buffer[port / 8U] |= (uint8_t)(1U << (port % 8U));
+	}
+
+	board_log("usbh: bus%u wake hub thread (intbuf=%02x%02x)\n", busid,
+		  bus->hcd.roothub.int_buffer[1], bus->hcd.roothub.int_buffer[0]);
+	usbh_hub_thread_wakeup(&bus->hcd.roothub);
+}
+
 uint8_t usbh_get_port_speed(struct usbh_bus *bus, const uint8_t port)
 {
 	uintptr_t opbase = (uintptr_t)bus->hcd.reg_base +

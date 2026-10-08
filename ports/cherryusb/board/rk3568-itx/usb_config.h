@@ -58,12 +58,13 @@ void usbh_console_printf(const char *fmt, ...);
 #define CONFIG_USB_ALIGN_SIZE	64
 #endif
 
-/* Put the stack's DMA-visible statics in the board's non-cacheable window:
- * the linker script reserves the .noncacheable section (arch/aarch64/
- * baremetal.ld) and the MMU maps its pages as Normal non-cacheable
- * (arch/aarch64/mmu.c), so the controllers and the CPU see the same bytes
- * without per-buffer maintenance. */
-#define USB_NOCACHE_RAM_SECTION	__attribute__((section(".noncacheable")))
+/* The pools stay in cacheable memory: this image has no dedicated
+ * non-cacheable section, and the per-buffer maintenance the stack does when
+ * CONFIG_USB_DCACHE_ENABLE is on is the coherence discipline - the
+ * configuration the same stack ran with on this board when the controller
+ * path was proven there. Making the section real again is an experiment, not
+ * a default. */
+#define USB_NOCACHE_RAM_SECTION
 
 /* The maintenance primitives are implemented by the board glue on top of the
  * arch cache API. They stay compiled in even though the non-cacheable window

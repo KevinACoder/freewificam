@@ -32,6 +32,13 @@
  * board. */
 int usb_board_init(unsigned busid);
 
+/* Post-start board work, to be called right after usbh_initialize() for this
+ * bus. On an EHCI bus it manufactures the connect-change edge a device that
+ * was already attached at boot never produces: the root port's power is
+ * cycled, the root hub's change bits are seeded and the hub thread is woken,
+ * so enumeration starts. A no-op on the xHCI buses. */
+void usb_board_after_start(unsigned busid);
+
 /* The controller's register base, for usbh_initialize()'s reg_base argument.
  * Returns 0 for a busid this board does not wire out. */
 uintptr_t usb_board_reg_base(unsigned busid);

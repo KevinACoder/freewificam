@@ -355,6 +355,23 @@ uint32_t usb_xhci_core_id(uintptr_t base)
 	return *(volatile uint32_t *)(base + DWC3_GSNPSID);
 }
 
+/* Port power off, settle, power on, settle: the attach of a device already
+ * plugged at boot leaves CCS set without ever raising a connect change, so the
+ * root hub has nothing to report and enumeration never starts. Dropping and
+ * restoring port power forces the edge. */
+uint32_t usb_ehci_port_power_cycle(uintptr_t opbase, unsigned port_index)
+{
+	volatile uint32_t *portsc = (volatile uint32_t *)(opbase +
+			USB_BOARD_EHCI_PORTSC_OFFSET + 4U * (uintptr_t)port_index);
+	uint32_t regval = *portsc;
+
+	*portsc = regval & ~USB_BOARD_EHCI_PORTSC_PP;
+	usb_udelay(30000U);
+	*portsc = regval | USB_BOARD_EHCI_PORTSC_PP;
+	usb_udelay(30000U);
+	return *portsc;
+}
+
 uint32_t usb_ehci_port_status(uintptr_t opbase, unsigned port_index)
 {
 	return *(volatile uint32_t *)(opbase + USB_BOARD_EHCI_PORTSC_OFFSET +

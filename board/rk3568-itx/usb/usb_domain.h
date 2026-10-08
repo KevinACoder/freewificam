@@ -263,6 +263,16 @@ uint32_t usb_xhci_core_id(uintptr_t base);
  * controller reports); `port_index` is zero-based. The word is returned
  * undecoded - translating it into a USB speed is the host stack's contract,
  * not a board fact - but the register window stays owned here. */
+/* EHCI 1.0 PORTSC bits the pre-plugged-device kick needs (hardware facts):
+ * CCS = current connect status (bit 0), PP = port power (bit 12). */
+#define USB_BOARD_EHCI_PORTSC_CCS	0x00000001U
+#define USB_BOARD_EHCI_PORTSC_PP	0x00001000U
+
+/* Write accessor. The power cycle manufactures the connect-change edge a
+ * device that was already attached at boot never produces; returns the port
+ * status after the cycle. */
+uint32_t usb_ehci_port_power_cycle(uintptr_t opbase, unsigned port_index);
+
 uint32_t usb_ehci_port_status(uintptr_t opbase, unsigned port_index);
 
 #endif /* FREEWEBCAM_RK3568_USB_DOMAIN_H */
