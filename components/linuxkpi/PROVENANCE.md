@@ -54,6 +54,23 @@ The contract-header closure is self-contained with the relative layout preserved
   `usb/PROVENANCE-USB.md` `a7e7925325f97e92cb16a87af7ae420f33ceb9f0`,
   `usb/DIVERGENCES-USB.md` `7fe5d592893e3c57e29d40bf028e1dd99e1a83f1`.
 
+## Added by later rounds (first-party, under the imported include root)
+
+The imported set above is nine files. Later rounds add *new* first-party headers next
+to them under `components/linuxkpi/include/` rather than editing the pinned bytes; the
+additions are the declaration face a consumer needs and are listed here so the
+directory's contents stay auditable:
+
+| Round | Files |
+|---|---|
+| rtl8188eus-port R1 | `include/net/mac80211.h`, `include/net/cfg80211.h`, `include/linux/ieee80211.h`, `include/linux/if_ether.h`, `include/linux/etherdevice.h`, `include/linux/average.h`, `include/linux/iopoll.h`, `include/linux/firmware.h`, `include/linux/fs.h`, `include/linux/debugfs.h`, `include/linux/skbuff.h`, `include/linux/kernel.h`, `include/linux/printk.h`, `include/linux/list.h`, `include/linux/netdevice.h` |
+
+Each is first-party (BSD-2-Clause), carries a `@design` line naming its pattern and
+reference, and is declared only up to what a compiled consumer uses. The one exception
+to "new files only" is the ledger entry 9 in `DIVERGENCES.md`: a driver-visible defect
+of the pinned `usb.h` (an embedded struct modelled as a pointer) had to be corrected in
+place, and that entry records it.
+
 ## Rules for changes
 
 * These nine files stay byte-identical. Adaptations (for example dropping the

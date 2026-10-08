@@ -13,6 +13,8 @@ Deviations of this import from its source blobs. Empty at import time.
 | 7 | `usb/linuxkpi_usb.h` | Rewritten: the capture-ring / claim-plumbing declarations of the board line are replaced by the engine's own entry points plus the allocation-seam counters | Follows 3 | linuxkpi-usb-test R1 |
 | 8 | `linuxkpi_core.h` | Untouched; the host build supplies the service bodies it declares (allocation, logging, sleep, mutexes, DAIF spin sections, wait queues) in the mock test directory, and the critical-section extension header now lives beside the CMSIS-RTOS2 facade | The core implementation belongs to the later linuxkpi body; the mock round owns only the services its consumers call | linuxkpi-usb-test R1 |
 
+| 9 | `include/linux/usb.h` | Three changes to the driver-visible USB face: `struct usb_device.dev` becomes an embedded `struct device` (it was a pointer), `struct usb_driver` gains `no_dynamic_id`, and two helpers the drivers call are added (`usb_endpoint_type` as an inline, `usb_init_urb` as a declaration whose body belongs to the engine) | The embedded device is what the interface has, and drivers take its address: with a pointer member, the 81 `&udev->dev` uses of the first compiled driver would pass a `struct device **`. The two members and helpers are simply missing from the face and the driver's table and probe path need them. The pointer member was never assigned anywhere in this tree, so no consumer changes | rtl8188eus-port R1 |
+
 Import state (2026-10-07): the nine imported files were byte-identical to their
 source blobs on the previous line's `feat/lkpi-stabilize-r1` branch (blob IDs in
 `PROVENANCE.md`) at import.  Rows 1-7 above are the engine-adoption round's
