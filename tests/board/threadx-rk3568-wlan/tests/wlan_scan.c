@@ -117,7 +117,9 @@ void wlan_scan_chain(void)
 		board_case_fail("the sweep did not start (receive filter refused?)");
 		return;
 	}
-	board_log("wlan: scan start ssid=%s\n", WLAN_SCAN_SSID);
+	wlan_bridge_stats(&c);
+	board_log("wlan: scan start ssid=%s mgt_tx=%u rx=%u\n", WLAN_SCAN_SSID,
+	    c.mgt_tx, c.rx_frames);
 
 	/* one dwell per channel; the stack arms the next channel inside the call
 	 * and tells us when the sweep is over */
@@ -131,7 +133,10 @@ void wlan_scan_chain(void)
 	scan_rec.rows = 0;
 	scan_rec.gt_matches = 0;
 	(void)wlan_bridge_scan_walk(scan_row, NULL);
-	board_log("wlan: scan done rows=%u chans=%u\n", scan_rec.rows, chans);
+	wlan_bridge_stats(&c);
+	board_log("wlan: scan done rows=%u chans=%u mgt_tx=%u rx=%u "
+	    "scan=%u/%u\n", scan_rec.rows, chans, c.mgt_tx, c.rx_frames,
+	    c.scan_starts, c.scan_completes);
 
 	if (scan_rec.rows == 0) {
 		board_case_fail("the sweep finished with an empty table (the "

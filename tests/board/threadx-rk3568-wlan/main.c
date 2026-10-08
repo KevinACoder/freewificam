@@ -27,6 +27,8 @@
 #include "board_suite.h"
 #include "os/cmsis2/cmsis2.h"
 
+#include <string.h>
+
 #include "arch_asm.h"
 #include "uart.h"
 #include "log.h"
@@ -35,10 +37,34 @@ void lkpi_usb_cherryusb_init(void);
 void lkpi_usb_init(void);
 int lkpi_fw_rtl8188eufw_register(void);
 int wlan_seam_adapter_init(void);
+void lkpi_log_sink_register(void (*sink)(const char *line));
 
 #ifndef FW_BUILD_TAG
 #define FW_BUILD_TAG "local"
 #endif
+
+/*
+ * The linuxkpi log outlet: every lkpi_printf (the driver's own dev_info/dev_err
+ * lines included) lands on the board log, stamped and line-disciplined like the
+ * rest of the image. Without a sink the linuxkpi world is silent and the
+ * driver's probe trace - the evidence the probe case judges - is lost.
+ */
+static void wlan_lkpi_sink(const char *line)
+{
+	static char buf[200];
+	size_t n = 0;
+
+	if (line == NULL)
+		return;
+	while (line[n] != '\0' && n < sizeof(buf) - 1)
+		n++;
+	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+		n--;
+	memcpy(buf, line, n);
+	buf[n] = '\0';
+	if (n != 0)
+		board_log("lkpi: %s", buf);
+}
 
 static const osThreadAttr_t runner_thread_attr = {
 	.name = "regress",
@@ -74,6 +100,7 @@ int main( void )
 	}
 
 	/* The WLAN chain's registration order (see the file header). */
+	lkpi_log_sink_register(wlan_lkpi_sink);
 	lkpi_usb_cherryusb_init();
 	lkpi_usb_init();
 	if( lkpi_fw_rtl8188eufw_register() != 0 ) {

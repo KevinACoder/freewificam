@@ -94,6 +94,17 @@ void wlan_probe_chain(void)
 		return;
 	}
 
+	/*
+	 * The driver's operational start. net80211's side exists from attach, but
+	 * the chip only begins receiving after the driver's own start runs (it
+	 * submits the RX urbs there) - the host suite takes the same step after
+	 * its attach, and without it a sweep transmits but never hears a beacon.
+	 */
+	if (wlan_bridge_up() != 0) {
+		board_case_fail("the driver's start chain refused");
+		return;
+	}
+
 	wlan_bridge_stats(&c);
 	board_log("wlan: probe done attached=%d rx=%u mgt_tx=%u scan=%u/%u\n",
 		  c.attached, c.rx_frames, c.mgt_tx, c.scan_starts,

@@ -6,7 +6,7 @@
 # the only ones that need the dongle: a missing card reds this suite and leaves
 # the regression image's green untouched.
 SUITE_NAME            := threadx-rk3568-wlan
-SUITE_TRUTH_SOURCE    := the suite's own BOARD-SUITE/CASE channel plus the fixed anchor lines of the WLAN chain (driver probe log, firmware revision line, scan table rows), cross-checked against the Linux-lane same-card ground truth captured on this board (runs/20261008-rtl8188eus-port, the QiQiJia sweep)
+SUITE_TRUTH_SOURCE    := the suite's own BOARD-SUITE/CASE channel plus the fixed anchor lines of the WLAN chain (driver probe log, firmware revision line, scan table rows), cross-checked against the Linux-lane same-card ground truth captured on this board (the QiQiJia sweep of the ground-truth round)
 SUITE_IMAGE           := tests/board/threadx-rk3568-wlan/build/threadx-rk3568-wlan.bin
 SUITE_BUILD           := make -C tests/board/threadx-rk3568-wlan
 SUITE_PROFILE         := rtos
