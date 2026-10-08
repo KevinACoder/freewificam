@@ -39,7 +39,9 @@
 
 #define WLAN_SCAN_SSID		"QiQiJia"
 #define WLAN_SCAN_SSID_LEN	7
-#define WLAN_SCAN_DWELL_MS	120U
+/* the poll step while the radio pump walks the channels (the pump's own
+ * dwell period lives in tests/wlan_radio.c) */
+#define WLAN_SCAN_DWELL_MS	200U
 #define WLAN_SCAN_MAX_CHANS	32U
 
 /* The ground truth (Linux lane, same card, same board): the target AP and the
@@ -113,20 +115,41 @@ void wlan_scan_chain(void)
 		return;
 	}
 
-	if (wlan_bridge_scan_start() != 0) {
-		board_case_fail("the sweep did not start (receive filter refused?)");
-		return;
+	/* the supplicant may be sweeping on its own right now (it drives the
+	 * same radio through the backend); wait (bounded) for the air to be
+	 * free, then start. -EBUSY is retried rather than fatal for the same
+	 * reason: the two sweep drivers coexist by refusing, not by corrupting
+	 */
+	{
+		unsigned int wait = 0;
+		int rc;
+
+		while (wait < 30000U) {
+			if (!wlan_bridge_scan_active()) {
+				break;
+			}
+			osDelay(100);
+			wait += 100;
+		}
+		while ((rc = wlan_bridge_scan_start()) != 0 && wait < 30000U) {
+			osDelay(100);
+			wait += 100;
+		}
+		if (rc != 0) {
+			board_case_fail("the sweep did not start (receive filter "
+			    "refused or the radio stayed busy)");
+			return;
+		}
 	}
 	wlan_bridge_stats(&c);
 	board_log("wlan: scan start ssid=%s mgt_tx=%u rx=%u\n", WLAN_SCAN_SSID,
 	    c.mgt_tx, c.rx_frames);
 
-	/* one dwell per channel; the stack arms the next channel inside the call
-	 * and tells us when the sweep is over */
-	while (chans < WLAN_SCAN_MAX_CHANS) {
+	/* the dwell is the radio pump's job (tests/wlan_radio.c runs it for
+	 * every sweep, including the supplicant's own); this case watches the
+	 * sweep end. The guard is a ceiling, not the mechanism. */
+	while (wlan_bridge_scan_active() && chans < WLAN_SCAN_MAX_CHANS) {
 		osDelay(WLAN_SCAN_DWELL_MS);
-		if (wlan_bridge_scan_dwell() == 0)
-			break;
 		chans++;
 	}
 
