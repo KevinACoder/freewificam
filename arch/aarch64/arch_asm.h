@@ -14,6 +14,10 @@
 
 #define ARCH_ISB()	__asm__ __volatile__("isb" ::: "memory")
 #define ARCH_DSB()	__asm__ __volatile__("dsb sy" ::: "memory")
+/* Store-only barrier: DMA-visible stores ordered ahead of the doorbell
+ * register write without paying the full-system drain (the GMAC OWN-grant
+ * discipline). */
+#define ARCH_DSB_ST()	__asm__ __volatile__("dsb st" ::: "memory")
 #define ARCH_DMB()	__asm__ __volatile__("dmb ish" ::: "memory")
 
 /* --- wait instructions --- */
