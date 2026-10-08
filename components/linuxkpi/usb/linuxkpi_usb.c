@@ -142,9 +142,15 @@ extern void *__lkpi_module_end[] __attribute__((weak));
 void
 lkpi_usb_init(void)
 {
+	static bool walked;
 	void *const *it;
 	unsigned int n = 0;
 
+	if (walked) {
+		lkpi_usb_start();	/* idempotent: a second call is harmless */
+		return;
+	}
+	walked = true;
 	/* the bracket comparison is arithmetic on the addresses, never a
 	 * relational operator on two distinct arrays */
 	if (__lkpi_module_start != NULL && __lkpi_module_end != NULL &&
