@@ -15,6 +15,8 @@
 
 #include <pthread.h>
 
+#include "FreeRTOS.h"
+
 #include "os/cmsis2/cmsis2.h"
 
 static pthread_mutex_t   cmsis2_ext_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -38,4 +40,18 @@ void osCriticalExit( os_critical_state_t state )
     {
         ( void ) pthread_mutex_unlock( &cmsis2_ext_lock );
     }
+}
+
+/**
+ * The heap of this backend: the kernel's own heap (heap_4 in this build), which is
+ * where the kernel allocates its objects from as well.
+ */
+void * osMemoryAlloc( size_t size )
+{
+    return pvPortMalloc( size );
+}
+
+void osMemoryFree( void * ptr )
+{
+    vPortFree( ptr );
 }

@@ -17,6 +17,7 @@
 #include "tx_api.h"
 
 #include "os/cmsis2/cmsis2.h"
+#include "os/threadx/heap.h"
 
 os_critical_state_t osCriticalEnter( void )
 {
@@ -26,4 +27,18 @@ os_critical_state_t osCriticalEnter( void )
 void osCriticalExit( os_critical_state_t state )
 {
     ( void ) tx_interrupt_control( ( UINT ) state );
+}
+
+/**
+ * The heap of this backend: the board's TLSF pool, reached through the layer's own
+ * pvPortMalloc seam so the allocator can be replaced behind two functions.
+ */
+void * osMemoryAlloc( size_t size )
+{
+    return pvPortMalloc( size );
+}
+
+void osMemoryFree( void * ptr )
+{
+    vPortFree( ptr );
 }
