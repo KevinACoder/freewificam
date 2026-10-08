@@ -43,6 +43,8 @@
 #include "wpa_vendor_port.h"
 #include "wpa_port_api.h"
 
+#include "wlan_wpa_vendor.h"
+
 /* the port's receive/event seams (declared by the component's port.h; only
  * scalars cross here) */
 struct wlan_seam_drv;

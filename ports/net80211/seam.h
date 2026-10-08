@@ -114,6 +114,14 @@ struct wlan_seam_drv_ops {
 	 * joined == 0 means the connection went away. */
 	void (*bss_info)(struct wlan_seam_drv *drv, int joined,
 	    const uint8_t bssid[6], uint32_t freq);
+
+	/* BSSID programming for the pre-association exchange. A chip's receive
+	 * filter compares frames against this register, so it must hold the
+	 * AP's address BEFORE the auth request goes out or the AP's answers
+	 * are dropped in hardware (mac80211 programs it for the same reason;
+	 * this port measured the absence as an auth timeout with the requests
+	 * leaving). NULL clears it. */
+	int (*bssid)(struct wlan_seam_drv *drv, const uint8_t bssid[6]);
 };
 
 #endif /* _WLAN_NET80211_SEAM_H_ */

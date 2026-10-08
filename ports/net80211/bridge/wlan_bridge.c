@@ -281,6 +281,23 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	int rc;
 
 	(void)wlan_bridge_tune_current();
+	/*
+	 * Pre-association BSSID programming: entering AUTH uses the radio, and
+	 * the chip's receive filter compares incoming frames against its BSSID
+	 * register - without the join's target in it before the auth request
+	 * leaves, the AP's answers are dropped in hardware (measured on the
+	 * board: requests out, nothing back, the timeout loop with it). The
+	 * stack has already settled ic_bss onto the target when sta_join
+	 * re-entered this transition.
+	 */
+	if (nstate == IEEE80211_S_AUTH || nstate == IEEE80211_S_ASSOC) {
+		struct ieee80211_node *bss = ic->ic_bss;
+
+		if (bridge.ops != NULL && bridge.ops->bssid != NULL &&
+		    bss != NULL) {
+			(void)bridge.ops->bssid(bridge.drv, bss->ni_bssid);
+		}
+	}
 	rc = bridge_orig_newstate(ic, nstate, arg);
 
 	if (nstate == IEEE80211_S_RUN && ostate != IEEE80211_S_RUN) {

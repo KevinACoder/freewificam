@@ -55,6 +55,7 @@ static struct {
 	struct ieee80211_hw *hw;
 	struct ieee80211_vif *vif;
 	struct ieee80211_sta *sta;	/* the one peer of a STA image */
+	uint8_t bssid_store[6];		/* the pre-assoc BSSID the vif points at */
 	int vif_added;
 	int installed;
 	unsigned int filter_calls;
@@ -312,8 +313,38 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 			adapter.sta = NULL;
 		}
 	}
+	if (!joined) {
+		/* the hardware address check must not keep matching the old
+		 * AP while the interface is unassociated */
+		adapter.vif->bss_conf.bssid = NULL;
+		changed |= BSS_CHANGED_BSSID;
+	}
 	(void)freq;
 	lkpi80211_drv_bss_changed(adapter.hw, adapter.vif, changed);
+}
+
+/*
+ * Pre-association BSSID programming (see seam.h): the chip's receive filter
+ * compares against this register, so the AP's address must be in it before the
+ * auth request leaves - the driver's BSS_CHANGED_BSSID handler is its
+ * programming point (core.c:4989).
+ */
+static int
+seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6])
+{
+
+	(void)drv;
+	if (adapter.hw == NULL || adapter.vif == NULL)
+		return -1;
+	if (bssid == NULL) {
+		adapter.vif->bss_conf.bssid = NULL;
+	} else {
+		memcpy(adapter.bssid_store, bssid, 6);
+		adapter.vif->bss_conf.bssid = adapter.bssid_store;
+	}
+	lkpi80211_drv_bss_changed(adapter.hw, adapter.vif,
+	    BSS_CHANGED_BSSID);
+	return 0;
 }
 
 static const struct wlan_seam_drv_ops seam_ops = {
@@ -328,6 +359,7 @@ static const struct wlan_seam_drv_ops seam_ops = {
 	.set_key = seam_set_key,
 	.clear_key = seam_clear_key,
 	.bss_info = seam_bss_info,
+	.bssid = seam_bssid,
 };
 
 /* ------------------------------------------------------------------ */
