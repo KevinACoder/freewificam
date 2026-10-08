@@ -85,6 +85,19 @@ SECTIONS
 		__board_tests_end = .;
 	} :text
 
+	/* USB host class registry: the stack's class drivers publish a
+	 * struct usbh_class_info entry here (the hub and mass-storage classes
+	 * of this image), and usbh_initialize() walks the section between
+	 * these two symbols to match an enumerated interface against a class
+	 * driver. Nothing references the entries by address, so the KEEP
+	 * discipline of the shell and test tables applies unchanged; the
+	 * entries are declared byte-aligned, so no SUBALIGN is needed. */
+	.usbh_class_info : ALIGN(8) {
+		__usbh_class_info_start__ = .;
+		KEEP(*(.usbh_class_info))
+		__usbh_class_info_end__ = .;
+	} :text
+
 	.data : ALIGN(8) {
 		__data_start = .;
 		*(.data .data.*)
@@ -95,9 +108,39 @@ SECTIONS
 		__bss_start = .;
 		*(.bss .bss.*)
 		*(COMMON)
-		. = ALIGN(16);
-		__bss_end = .;
 	} :data
+
+	/* Non-cacheable DMA window: everything marked with the stack's
+	 * non-cacheable section attribute lands here, and mmu.c maps exactly
+	 * [__noncacheable_start, __noncacheable_end) with the non-cacheable
+	 * memory attribute. Three placement rules, all load-bearing:
+	 *
+	 *  - it sits inside the [__bss_start, __bss_end) span so the boot
+	 *    clear zeroes it like any other static (the controller drivers'
+	 *    pools are allocated by taking a slot from a zeroed array);
+	 *  - it is 2M aligned and the assertion below caps it at one 2M block,
+	 *    because the identity map describes the image's RAM with 1GiB L1
+	 *    and 2M L2 blocks and the arch layer reserves exactly ONE page
+	 *    table to refine that block into 4K pages;
+	 *  - it is NOLOAD: the window reserves address space, not file
+	 *    content, so the raw image the loader copies does not grow.
+	 *
+	 * One window serves every bus, not one per controller: the drivers'
+	 * pools are [bus][...] arrays sized by the bus count, so a per-bus
+	 * window would have to slice arrays that the drivers index
+	 * themselves. The window is sized by what is in it - the assertion
+	 * below is the check, and the pools' total is far below the 2M cap
+	 * (the transfer rings dominate at a few hundred KiB). */
+	.noncacheable (NOLOAD) : ALIGN(2M) {
+		__noncacheable_start = .;
+		*(.noncacheable)
+		*(.noncacheable.*)
+		. = ALIGN(4K);
+		__noncacheable_end = .;
+	} :data
+
+	. = ALIGN(16);
+	__bss_end = .;
 
 	/* Boot stack (the MMU page tables are plain .bss arrays, not a
 	 * separate section - bss is NOLOAD, so the reservation is free). */
@@ -131,4 +174,11 @@ SECTIONS
 
 	/* Guard: the image must fit the usable RAM window. */
 	ASSERT(. <= RAM_TOP, "image exceeds the usable RAM window")
+
+	/* Guard: the non-cacheable DMA window must stay inside the single 2M
+	 * block the arch layer maps it with (mmu.c reserves one page table
+	 * for it). Growing the window past this is a link error, not a
+	 * runtime surprise. */
+	ASSERT(__noncacheable_end - __noncacheable_start <= 2M,
+	       "the non-cacheable DMA window outgrew the 2M MMU block that maps it")
 }

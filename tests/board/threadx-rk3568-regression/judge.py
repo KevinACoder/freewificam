@@ -38,6 +38,9 @@ CASES = [
     "thread-sched",
     "cmsis2-prio",
     "tlsf-heap",
+    "os-timer",
+    "usb-xhci",
+    "usb-ehci",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -58,6 +61,19 @@ ANCHORS = {
     "thread-sched": [r"thr\[lo\]: n=(\d+)"],
     "cmsis2-prio": [r"cmsis2: prio 24 -> tx 19"],
     "tlsf-heap": [r"heap: tlsf ready 1048576 bytes at 0x"],
+    "os-timer": [r"os2-timer: periodic fires="],
+    "usb-xhci": [
+        r"usbh: core init bus=3 hcd=xhci",
+        r"usbh: class msc claimed lun=0",
+        r"usbh: msc read blk0=0x",
+        r"usbh: msc write/read roundtrip ok",
+    ],
+    "usb-ehci": [
+        r"usbh: core init bus=1 hcd=ehci",
+        r"usbh: class msc claimed lun=0",
+        r"usbh: msc read blk0=0x",
+        r"usbh: msc write/read roundtrip ok",
+    ],
 }
 
 LADDER_RE = re.compile(r"tick: t=(\d+)")
@@ -84,8 +100,8 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[  12.140] BOARD-SUITE threadx-rk3568-regression "
-    "result=pass cases=6 ok=6 exit=0\r\n"
+    "[  12.260] BOARD-SUITE threadx-rk3568-regression "
+    "result=pass cases=9 ok=9 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
@@ -97,8 +113,9 @@ BASE_TRANSCRIPT = (
     "[   0.000] stamp: switched to tick\r\n"
     "[   0.001] heap: tlsf ready 1048576 bytes at 0xa026730\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-regression select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-regression start cases=6 sel=all "
-    "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-regression start cases=9 sel=all "
+    "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
+    "os-timer,usb-xhci,usb-ehci\r\n"
     + PROMPT
     + "[  10.010] cmsis2: prio 24 -> tx 19\r\n"
     "[  10.020] CASE threadx-rk3568-regression/shell-up PASS\r\n"
@@ -112,6 +129,18 @@ BASE_TRANSCRIPT = (
     "[  12.110] cmsis2: prio 24 -> tx 19\r\n"
     "[  12.120] CASE threadx-rk3568-regression/cmsis2-prio PASS\r\n"
     "[  12.130] CASE threadx-rk3568-regression/tlsf-heap PASS\r\n"
+    "[  12.140] os2-timer: periodic fires=6 one-shot fires=1\r\n"
+    "[  12.150] CASE threadx-rk3568-regression/os-timer PASS\r\n"
+    "[  12.160] usbh: core init bus=3 hcd=xhci base=0xfcc00000\r\n"
+    "[  12.170] usbh: class msc claimed lun=0\r\n"
+    "[  12.180] usbh: msc read blk0=0x00000000 ok\r\n"
+    "[  12.190] usbh: msc write/read roundtrip ok at lba=1\r\n"
+    "[  12.200] CASE threadx-rk3568-regression/usb-xhci PASS\r\n"
+    "[  12.210] usbh: core init bus=1 hcd=ehci base=0xfd880000\r\n"
+    "[  12.220] usbh: class msc claimed lun=0\r\n"
+    "[  12.230] usbh: msc read blk0=0x00000000 ok\r\n"
+    "[  12.240] usbh: msc write/read roundtrip ok at lba=1\r\n"
+    "[  12.250] CASE threadx-rk3568-regression/usb-ehci PASS\r\n"
     + SENTINEL_LINE
     + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -141,7 +170,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-regression/tlsf-heap PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=6 ok=6 exit=0", "cases=6 ok=5 exit=0"), 1),
+        "cases=9 ok=9 exit=0", "cases=9 ok=8 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-regression/tlsf-heap PASS",
@@ -152,8 +181,10 @@ MUTATIONS = [
     ("ladder beat dropped", BASE_TRANSCRIPT.replace("tick: t=12000\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap",
-        "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio"), 1),
+        "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
+        "os-timer,usb-xhci,usb-ehci",
+        "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,tlsf-heap,"
+        "os-timer,usb-xhci"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 
@@ -236,6 +267,9 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
     if (sentinel["result"] == "pass") != (sentinel["ok"] == sentinel["cases"]):
         errors.append("sentinel result=%s contradicts ok=%d cases=%d"
                       % (sentinel["result"], sentinel["ok"], sentinel["cases"]))
+
+    if re.search(r"code=17", transcript.raw):
+        errors.append("controller completion code=17 (parameter error) in the transcript")
 
     unknown = [name for name in observed if name not in CASES]
     if unknown:

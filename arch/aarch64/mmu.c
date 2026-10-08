@@ -16,7 +16,10 @@
  * 2MiB:
  *
  *   L1[0]  0x00000000-0x3fffffff -> L2: 2MiB blocks, Device below the image
- *          RAM base (BOARD_MMU_IMAGE_RAM_BASE), Normal above it
+ *          RAM base (BOARD_MMU_IMAGE_RAM_BASE), Normal above it; the one
+ *          block carrying the non-cacheable DMA window is refined into 4KiB
+ *          pages (l3_nocache, mmu_map_noncacheable) so only that window
+ *          loses cacheability
  *   L1[1]  0x40000000-0x7fffffff -> 1GiB Normal block
  *   L1[2]  0x80000000-0xbfffffff -> 1GiB Normal block
  *   L1[3]  0xc0000000-0xffffffff -> L2: 2MiB blocks, Device everywhere
@@ -34,15 +37,18 @@
 /* MAIR attribute indices, referenced from the table descriptors below. */
 #define ATTR_IDX_NORMAL		0	/* MAIR byte 0: Normal write-back */
 #define ATTR_IDX_DEVICE		1	/* MAIR byte 1: Device-nGnRE */
+#define ATTR_IDX_NOCACHE	2	/* MAIR byte 2: Normal non-cacheable */
 
 #define DESC_TABLE		(3ULL << 0)	/* points at a next-level table */
 #define DESC_BLOCK		(1ULL << 0)	/* 1GiB (L1) or 2MiB (L2) block */
+#define DESC_PAGE		(3ULL << 0)	/* 4KiB (L3) page */
 #define DESC_AF			(1ULL << 10)	/* Access Flag: set, else first
 						 * access faults */
 #define DESC_SH_INNER		(3ULL << 8)	/* inner shareable */
 #define DESC_SH_NONE		(0ULL << 8)	/* non-shareable: Device only */
 #define DESC_ATTR_NORMAL	((uint64_t)ATTR_IDX_NORMAL << 2)
 #define DESC_ATTR_DEVICE	((uint64_t)ATTR_IDX_DEVICE << 2)
+#define DESC_ATTR_NOCACHE	((uint64_t)ATTR_IDX_NOCACHE << 2)
 #define DESC_XN			(1ULL << 54)	/* execute-never */
 
 #define PAGE_GRANULE		4096U
@@ -86,6 +92,19 @@ static uint64_t l1_table[512] __attribute__((aligned(PAGE_GRANULE)));
 static uint64_t l2_low[512]  __attribute__((aligned(PAGE_GRANULE)));
 static uint64_t l2_top[512]  __attribute__((aligned(PAGE_GRANULE)));
 
+/* Page table refining ONE 2MiB block of the image's RAM into 4KiB pages, so
+ * the non-cacheable DMA window inside it can carry a different attribute
+ * from its neighbours. Reserved statically (and only for this) because the
+ * linker script caps the window at one block: a dynamically sized mapping
+ * would need a page-table allocator that nothing else in this image wants.
+ * The window's own extent comes from the linker (__noncacheable_start /
+ * __noncacheable_end); an image without any non-cacheable data leaves this
+ * table unused. */
+static uint64_t l3_nocache[512] __attribute__((aligned(PAGE_GRANULE)));
+
+extern char __noncacheable_start[];
+extern char __noncacheable_end[];
+
 /* Normal memory: inner-shareable, cacheable (MAIR byte 0). */
 static uint64_t block_desc(uint64_t base, uint64_t attrs)
 {
@@ -108,6 +127,48 @@ static uint64_t device_block_desc(uint64_t base)
 	       DESC_ATTR_DEVICE | DESC_XN;
 }
 
+/* Refine the 2MiB block holding the non-cacheable DMA window into 4KiB
+ * pages: the window's pages take the non-cacheable attribute, every other
+ * page of that block keeps the cacheable one, and the neighbouring blocks
+ * keep their block descriptor. This sub-block precision is the reason the
+ * window exists at all - a whole 2MiB block of image RAM marked
+ * non-cacheable would slow down everything that shares it.
+ *
+ * Preconditions come from the linker script, which enforces them rather
+ * than this code re-deriving them: the window is 2MiB aligned, it fits
+ * inside one 2MiB block (the ASSERT in baremetal.ld), and it lies in the
+ * image's RAM inside the low 1GiB (the RAM window top is far below 1GiB),
+ * which is the L2 table this function refines. An image with no such data
+ * skips the work entirely and every entry stays a block. */
+static void mmu_map_noncacheable(void)
+{
+	uint64_t start = (uint64_t)(uintptr_t)__noncacheable_start;
+	uint64_t end = (uint64_t)(uintptr_t)__noncacheable_end;
+	uint64_t block;
+	uint32_t i;
+
+	if (end <= start) {
+		return;
+	}
+
+	block = start & ~(L2_BLOCK_SIZE - 1ULL);
+
+	for (i = 0U; i < 512U; i++) {
+		uint64_t page = block + ((uint64_t)i * PAGE_GRANULE);
+
+		if ((page >= start) && (page < end)) {
+			l3_nocache[i] = page | DESC_PAGE | DESC_AF |
+					DESC_SH_INNER | DESC_ATTR_NOCACHE;
+		} else {
+			l3_nocache[i] = page | DESC_PAGE | DESC_AF |
+					DESC_SH_INNER | DESC_ATTR_NORMAL;
+		}
+	}
+
+	l2_low[block / L2_BLOCK_SIZE] = DESC_TABLE |
+					(uint64_t)(uintptr_t)l3_nocache;
+}
+
 void mmu_enable(void)
 {
 	uint64_t value;
@@ -123,6 +184,11 @@ void mmu_enable(void)
 			l2_low[i] = device_block_desc(base);
 		}
 	}
+
+	/* Refine the one block that carries the non-cacheable DMA window (a
+	 * no-op when the image has none). Runs after the block pass because
+	 * it replaces one of the entries just written. */
+	mmu_map_noncacheable();
 
 	/* L2 covering the top 1GiB: the peripheral/Device window (GICD,
 	 * GICR, UART2 all live in this 1GiB). */
@@ -151,9 +217,9 @@ void mmu_enable(void)
 	l0_table[0] = DESC_TABLE | (uint64_t)(uintptr_t)l1_table;
 
 	/* MAIR: byte 0 Normal write-back read/write-allocate, byte 1
-	 * Device-nGnRE, byte 2 Normal non-cacheable (reserved: no
-	 * non-cacheable mapping in this image - the DMA round claims it).
-	 * Values match the 4-bit encodings in the ARM ARM. */
+	 * Device-nGnRE, byte 2 Normal non-cacheable (the attribute the DMA
+	 * window's pages are mapped with - ATTR_IDX_NOCACHE). Values match
+	 * the 4-bit encodings in the ARM ARM. */
 	value = 0xffULL | (0x04ULL << 8) | (0x44ULL << 16);
 	__asm__ __volatile__("msr mair_el1, %0" : : "r"(value) : "memory");
 

@@ -29,6 +29,15 @@ CHERRYSH := $(ROOT)/components/cherrysh
 PORT := $(ROOT)/ports/cherrysh
 COMMON := $(ROOT)/tests/board/common
 
+# USB host stack domain: the vendored import, the board's USB facts and the
+# port glue. CHERRYUSB is the tree to compile from - the vendored pin, or the
+# patched materialisation of it (tools/patches/replay.sh prints the path and
+# applies the declared patches to a build copy; the vendored tree itself is
+# never edited and never compiled from directly when patches exist).
+CHERRYUSB := $(shell sh $(ROOT)/tools/patches/replay.sh cherryusb)
+USB_PORT := $(ROOT)/ports/cherryusb
+USB_BOARD := $(ROOT)/board/rk3568-itx/usb
+
 SUITE_NAME := threadx-rk3568-regression
 
 AARCH64_CROSS_PATH ?= $(HOME)/workspace/env/src/xpack-aarch64-none-elf-gcc-13.2.1-1.1
@@ -42,10 +51,15 @@ SIZE := $(CROSS_COMPILE)size
 # same vector file the judges consume), so this one target needs the host cc.
 HOSTCC ?= cc
 
+# The build tag is stamped into the banner, so it is a real build input: it is
+# written to a stamp file and every object depends on it, or a tag that changes
+# without a source change would leave the old tag inside a "fresh" image (the
+# dirty-tree builds of this round did exactly that).
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
 
 BUILD := build
 TARGET := $(BUILD)/$(SUITE_NAME)
+TAG_STAMP := $(BUILD)/build-tag.stamp
 
 INCLUDES := \
 	-I$(ROOT) \
@@ -89,17 +103,29 @@ ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The vendored shell core is byte-identical upstream and cannot be edited; it
 # does trip -Wextra's sign-compare in one builtin. Its translation units are
-# compiled at the -Wall level the upstream project itself uses.
+# compiled at the -Wall level the upstream project itself uses. The imported
+# USB stack's sources get the same treatment for the same reason - they are
+# bytes this project does not own. (Recursive assignment: the imported list
+# is defined below this point.)
+VENDORED_WARNED_SRCS = $(VENDORED_SRCS) $(USB_STACK_SRCS)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 
 # --gc-sections drops everything nothing references, which would take the
 # CMSIS-RTOS2 extension's entry points (osCriticalEnter/Exit) with it - the
 # backend's public surface is part of the symbol contract. -u pins the two.
+# The USB domain is pinned the same way: the board entry points and the
+# stack's initialiser are the surface the USB cases call, and without the
+# pins the whole host stack (drivers, DMA pools, the non-cacheable window)
+# would be collected until those cases land, leaving the mapping and the
+# window's sizing unchecked in the meantime.
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
 	-Wl,--gc-sections \
 	-Wl,-u,osCriticalEnter \
 	-Wl,-u,osCriticalExit \
+	-Wl,-u,usb_board_init \
+	-Wl,-u,usb_board_reg_base \
+	-Wl,-u,usbh_initialize \
 	-Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map
 
@@ -146,7 +172,11 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/tick_ladder.c \
 	$(CURDIR)/tests/thread_sched.c \
 	$(CURDIR)/tests/cmsis2_prio.c \
-	$(CURDIR)/tests/tlsf_heap.c
+	$(CURDIR)/tests/tlsf_heap.c \
+	$(CURDIR)/tests/os_timer.c \
+	$(CURDIR)/tests/usb_msc.c \
+	$(CURDIR)/tests/usb_xhci.c \
+	$(CURDIR)/tests/usb_ehci.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -157,28 +187,66 @@ VENDORED_SRCS := \
 
 ALLOC_SRCS := $(ROOT)/components/tlsf/tlsf.c
 
-ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS)
+# --- USB host domain (imported stack + board facts + port glue) ------------
+#
+# Two source groups with different warning policy: the port/board sources are
+# this project's and compile under the full -Wall -Wextra set, the imported
+# stack's sources compile under the -Wall level the upstream project uses.
+# The board's usb_config.h is picked up by include path alone (the imported
+# headers include "usb_config.h" themselves), so the USB_PORT board directory
+# must come before the vendored tree's own paths.
+USB_BOARD_SRCS := \
+	$(USB_BOARD)/usb_domain.c \
+	$(USB_PORT)/board/rk3568-itx/usb_glue.c \
+	$(USB_PORT)/osal/cmsis2/osal_cmsis2.c \
+	$(USB_PORT)/class/msc_app.c
+
+USB_STACK_SRCS := \
+	$(CHERRYUSB)/core/usbh_core.c \
+	$(CHERRYUSB)/class/hub/usbh_hub.c \
+	$(CHERRYUSB)/class/msc/usbh_msc.c \
+	$(CHERRYUSB)/port/ehci/usb_hc_ehci.c \
+	$(CHERRYUSB)/port/xhci/usb_hc_xhci.c
+
+USB_INCLUDES := \
+	-I$(USB_PORT)/board/rk3568-itx \
+	-I$(USB_PORT)/class \
+	-I$(USB_BOARD) \
+	-I$(CHERRYUSB)/common \
+	-I$(CHERRYUSB)/core \
+	-I$(CHERRYUSB)/class/hub \
+	-I$(CHERRYUSB)/class/msc \
+	-I$(CHERRYUSB)/port/ehci \
+	-I$(CHERRYUSB)/port/xhci
+
+ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) $(ALLOC_SRCS) $(USB_BOARD_SRCS) $(USB_STACK_SRCS)
 
 # Object names mirror the path below ROOT: the kernel and the port share flat
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide.
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
-.PHONY: all check guards clean
+.PHONY: all check guards clean FORCE
 all: $(TARGET).bin check
 
 define COMPILE_RULE
-$(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1)
+$(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@mkdir -p $$(dir $$@)
 	@echo "  CC $$<"
-	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
+	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_WARNED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
 endef
 $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(foreach s,$(USB_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+
+$(TAG_STAMP): FORCE
+	@mkdir -p $(BUILD)
+	@printf '%s' '$(BUILD_TAG)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG)' > $@
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
@@ -194,6 +262,21 @@ guards:
 		|| { echo "FAIL: -DEL1=1 missing from TX_CFLAGS"; exit 1; }
 	@echo "$(TX_CFLAGS)" | grep -q -- '-DTX_INCLUDE_USER_DEFINE_FILE' \
 		|| { echo "FAIL: -DTX_INCLUDE_USER_DEFINE_FILE missing from TX_CFLAGS"; exit 1; }
+	@echo "$(USB_INCLUDES)" | grep -q "^ *-I$(USB_PORT)/board/rk3568-itx " \
+		|| { echo "FAIL: the USB board config directory is not the first USB -I"; exit 1; }
+	@test -f $(USB_PORT)/board/rk3568-itx/usb_config.h \
+		|| { echo "FAIL: the USB board configuration header is missing"; exit 1; }
+	@if ls $(ROOT)/patches/cherryusb/*.patch >/dev/null 2>&1; then \
+		case "$(CHERRYUSB)" in \
+		$(ROOT)/third-party/cherryusb) \
+			echo "FAIL: patches exist but the USB stack would compile from the vendored tree"; exit 1 ;; \
+		esac; \
+	fi
+	@for s in $(USB_STACK_SRCS); do \
+		case "$$s" in $(CHERRYUSB)/*) ;; \
+		*) echo "FAIL: imported USB source outside the replayed tree: $$s"; exit 1 ;; \
+		esac; \
+	done
 	@echo "$(TX_CFLAGS)" | grep -q -- "-I$(BOARD_CMSIS2) " \
 		|| { echo "FAIL: the CMSIS2 flavour directory is not the first -I"; exit 1; }
 	@[ "$$(basename $(CURDIR))" = "$(SUITE_NAME)" ] \

@@ -72,6 +72,8 @@ static int board_select_copy( char *dst, const char *src )
 	return 0;
 }
 
+/* The keyword includes its '=' ("only=" / "skip="), so acceptance is "the
+ * first five characters match and a non-empty glob body follows". */
 static int board_select_keyword( const char *tok, size_t len, const char *word )
 {
 	size_t i;
@@ -81,7 +83,7 @@ static int board_select_keyword( const char *tok, size_t len, const char *word )
 			return 0;
 		}
 	}
-	return len > 5U && tok[5] == '=';
+	return len > 5U;
 }
 
 int board_select_parse( const char *line, struct board_select *out )

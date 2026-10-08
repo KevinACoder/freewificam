@@ -12,12 +12,13 @@
  * besides the kernel configuration in this directory.
  *
  * Structure:
- *   - a fixed pool of thread slots. A slot carries the kernel control block, the
- *     thread's per-thread event-flags group (CMSIS thread flags) and the bookkeeping
- *     the CMSIS API needs; the thread id handed to the application is the slot.
+ *   - fixed pools of thread and timer slots. A slot carries the kernel control block,
+ *     the bookkeeping the CMSIS API needs and (for a thread) its per-thread event-flags
+ *     group (CMSIS thread flags); the id handed to the application is the slot, which
+ *     keeps that id stable for the object's lifetime.
  *   - deferred kernel object creation. The kernel does not exist until it is entered,
  *     so objects asked for before the kernel start call - threads, message queues,
- *     semaphores, mutexes - are only recorded and are created by the replay in
+ *     semaphores, mutexes, timers - are only recorded and are created by the replay in
  *     cmsis2_tx_application_define(); see the section on the deferred list below.
  *   - a priority map from the CMSIS bands (larger value = more urgent) onto the
  *     ThreadX ready-list order (smaller value = more urgent).
@@ -42,6 +43,7 @@
 #include "tx_mutex.h"
 #include "tx_semaphore.h"
 #include "tx_queue.h"
+#include "tx_timer.h"
 
 #include "cmsis_os2.h"
 
@@ -80,6 +82,25 @@ typedef struct {
 } thread_slot_t;
 
 static thread_slot_t slots[ CMSIS2_MAX_THREADS ];
+
+/* Timer slots. A slot holds the kernel timer, the CMSIS callback and its argument, and
+ * the CMSIS type; the id handed out is the slot, so the expiry trampoline reaches the
+ * callback through the same value every API call uses. The pool is fixed for the same
+ * reason as the thread pool: the CMSIS id has to stay valid for the timer's lifetime. */
+#ifndef CMSIS2_MAX_TIMERS
+#define CMSIS2_MAX_TIMERS    8
+#endif
+
+typedef struct {
+    TX_TIMER        timer;
+    osTimerFunc_t   func;
+    void *          arg;
+    osTimerType_t   type;
+    char            name[ 16 ];
+    slot_state_t    state;
+} timer_slot_t;
+
+static timer_slot_t timer_slots[ CMSIS2_MAX_TIMERS ];
 
 /* Kernel lifecycle: inactive -> ready at initialize -> running at start, which does not
  * return on this port. */
@@ -139,6 +160,7 @@ typedef enum {
     DEFER_QUEUE,
     DEFER_SEMAPHORE,
     DEFER_MUTEX,
+    DEFER_TIMER,            /* creates the timer, which is born inactive */
 } deferred_kind_t;
 
 typedef struct deferred_item {
@@ -192,6 +214,7 @@ static deferred_item_t * defer_new( deferred_kind_t kind, void * object, const c
 }
 
 static UINT create_thread_object( thread_slot_t * slot );
+static UINT create_timer_object( timer_slot_t * slot );
 
 /* The kernel's create calls take a plain name pointer and only read it, so the record is
  * passed as it is rather than casting the constness away four times over. */
@@ -231,6 +254,19 @@ static UINT create_deferred_item( deferred_item_t * item )
     case DEFER_MUTEX:
         rc = tx_mutex_create( ( TX_MUTEX * ) item->object, item->name, TX_INHERIT );
         break;
+
+    case DEFER_TIMER:
+    {
+        timer_slot_t * slot = item->object;
+
+        rc = create_timer_object( slot );
+        if( rc != TX_SUCCESS )
+        {
+            /* The kernel never took this slot, so it goes back to free. */
+            slot->state = SLOT_FREE;
+        }
+        break;
+    }
     }
 
     return rc;
@@ -783,6 +819,8 @@ osSemaphoreId_t osSemaphoreNew( uint32_t max_count, uint32_t initial_count,
     return ( osSemaphoreId_t ) sem;
 }
 
+
+
 osStatus_t osSemaphoreAcquire( osSemaphoreId_t semaphore_id, uint32_t timeout )
 {
     TX_SEMAPHORE * sem = ( TX_SEMAPHORE * ) semaphore_id;
@@ -977,5 +1015,181 @@ osStatus_t osMessageQueueDelete( osMessageQueueId_t mq_id )
         return osErrorResource;
     }
     vPortFree( queue );
+    return osOK;
+}
+
+/* --- timers ----------------------------------------------------------------------- */
+
+/* ThreadX expresses one-shot vs periodic as the timer's reschedule ticks: zero means
+ * the timer goes inactive when it expires, non-zero means the kernel reloads that value
+ * and keeps the timer running. That one number is the whole distinction, so the CMSIS
+ * type stays a property of the slot and each start arms the kernel with the matching
+ * reschedule value - no second kernel object and no second trampoline.
+ *
+ * The route taken is therefore: a timer is created inactive with the smallest legal
+ * placeholder interval (the error-checking kernel refuses a zero initial expiration;
+ * the inactive timer never reads the placeholder), and a start writes the caller's
+ * interval with tx_timer_change() before activating - tx_timer_activate() alone would
+ * fire with the ticks recorded at create time. The kernel's change call writes an
+ * inactive timer only and its activate call refuses an active one, so arming from any
+ * state is deactivate-then-change-then-activate: the kernel's own change-period
+ * sequence, and exactly what makes osTimerStart() the CMSIS "start or restart".
+ *
+ * The callback runs in the kernel's timer thread - TX_TIMER_PROCESS_IN_ISR is refused
+ * by tx_api.h, so the timer thread always exists - which is the context CMSIS
+ * documents for a timer callback. All in-kernel state changes are the kernel calls
+ * above; no separate critical section is needed here. */
+
+static void timer_expired( ULONG input )
+{
+    timer_slot_t * slot = &timer_slots[ input ];
+
+    /* Both fields are read before the call; the callback may delete the timer, which
+     * only releases the slot and never rewrites what is already being used. */
+    slot->func( slot->arg );
+}
+
+/* The running path and the deferred replay both come through here, so a timer is built
+ * one way only, as with the thread slot above. */
+static UINT create_timer_object( timer_slot_t * slot )
+{
+    UINT rc = tx_timer_create( &slot->timer, slot->name, timer_expired,
+                               ( ULONG ) ( slot - timer_slots ), 1UL, 0UL, TX_NO_ACTIVATE );
+
+    if( rc != TX_SUCCESS )
+    {
+        return rc;
+    }
+
+    slot->state = SLOT_LIVE;
+    return TX_SUCCESS;
+}
+
+osTimerId_t osTimerNew( osTimerFunc_t func, osTimerType_t type, void * argument,
+                        const osTimerAttr_t * attr )
+{
+    timer_slot_t * slot = NULL;
+    unsigned int   i;
+
+    if( func == NULL )
+    {
+        return NULL;
+    }
+
+    for( i = 0U; i < ( unsigned ) CMSIS2_MAX_TIMERS; i++ )
+    {
+        if( timer_slots[ i ].state == SLOT_FREE )
+        {
+            slot = &timer_slots[ i ];
+            break;
+        }
+    }
+
+    if( slot == NULL )
+    {
+        cmsis2_log( "cmsis2: timer pool exhausted (%u)\n", ( unsigned ) CMSIS2_MAX_TIMERS );
+        return NULL;
+    }
+
+    /* Claim the slot before anything else: the same first step as the thread path, so a
+     * second request cannot find this slot free. */
+    slot->state = SLOT_PENDING;
+    slot->func = func;
+    slot->arg = argument;
+    slot->type = ( type == osTimerOnce ) ? osTimerOnce : osTimerPeriodic;
+    copy_name( slot->name, sizeof( slot->name ), ( attr != NULL ) ? attr->name : NULL );
+
+    if( kernel_state != K_RUNNING )
+    {
+        /* The kernel is not running yet: the slot is recorded and the replay builds it
+         * at kernel entry, like every other deferred object. */
+        if( defer_new( DEFER_TIMER, slot, slot->name ) == NULL )
+        {
+            cmsis2_log( "cmsis2: no memory to defer '%s'\n", slot->name );
+            slot->state = SLOT_FREE;
+            return NULL;
+        }
+    }
+    else if( create_timer_object( slot ) != TX_SUCCESS )
+    {
+        cmsis2_log( "cmsis2: timer create failed for '%s'\n", slot->name );
+        slot->state = SLOT_FREE;
+        return NULL;
+    }
+
+    return ( osTimerId_t ) slot;
+}
+
+osStatus_t osTimerStart( osTimerId_t timer_id, uint32_t ticks )
+{
+    timer_slot_t * slot = ( timer_slot_t * ) timer_id;
+    ULONG          reschedule;
+
+    if( slot == NULL || slot->state != SLOT_LIVE )
+    {
+        return osErrorParameter;
+    }
+
+    if( ticks == 0U )
+    {
+        /* The kernel refuses a zero-tick activation (its error-checking calls answer
+         * TX_TICK_ERROR); CMSIS has no separate spelling for "expire now". */
+        return osErrorParameter;
+    }
+
+    /* Start or restart: leave any previous activation first. */
+    ( void ) tx_timer_deactivate( &slot->timer );
+
+    /* Zero for one-shot, the interval for periodic, which the kernel reloads after
+     * every expiration. */
+    reschedule = ( slot->type == osTimerPeriodic ) ? ( ULONG ) ticks : 0UL;
+
+    if( tx_timer_change( &slot->timer, ( ULONG ) ticks, reschedule ) != TX_SUCCESS )
+    {
+        return osError;
+    }
+
+    return tx_timer_activate( &slot->timer ) == TX_SUCCESS ? osOK : osError;
+}
+
+osStatus_t osTimerStop( osTimerId_t timer_id )
+{
+    timer_slot_t * slot = ( timer_slot_t * ) timer_id;
+    UINT           active = TX_FALSE;
+
+    if( slot == NULL || slot->state != SLOT_LIVE )
+    {
+        return osErrorParameter;
+    }
+
+    /* The kernel's deactivate is a harmless no-op for an inactive timer, so the state
+     * is read first: CMSIS answers osErrorResource when there was nothing to stop. */
+    if( tx_timer_info_get( &slot->timer, NULL, &active, NULL, NULL, NULL ) != TX_SUCCESS ||
+        active != TX_TRUE )
+    {
+        return osErrorResource;
+    }
+
+    return tx_timer_deactivate( &slot->timer ) == TX_SUCCESS ? osOK : osError;
+}
+
+osStatus_t osTimerDelete( osTimerId_t timer_id )
+{
+    timer_slot_t * slot = ( timer_slot_t * ) timer_id;
+
+    if( slot == NULL || slot->state != SLOT_LIVE )
+    {
+        return osErrorParameter;
+    }
+
+    /* The kernel deactivates an active timer as part of the delete; it refuses the call
+     * from its own timer thread - the context a CMSIS callback runs in - which leaves
+     * the timer as it was and the slot live. */
+    if( tx_timer_delete( &slot->timer ) != TX_SUCCESS )
+    {
+        return osErrorResource;
+    }
+
+    slot->state = SLOT_FREE;
     return osOK;
 }
