@@ -63,6 +63,7 @@ directory's contents stay auditable:
 
 | Round | Files |
 |---|---|
+| wlan-bridge R2a | `linuxkpi_core.c`, `linuxkpi_impl.h`, `fw_registry.c`, `fw_registry.h`, `fw/rtl8188eufw_blob.c` |
 | rtl8188eus-port R1 | `include/net/mac80211.h`, `include/net/cfg80211.h`, `include/linux/ieee80211.h`, `include/linux/if_ether.h`, `include/linux/etherdevice.h`, `include/linux/average.h`, `include/linux/iopoll.h`, `include/linux/firmware.h`, `include/linux/fs.h`, `include/linux/debugfs.h`, `include/linux/skbuff.h`, `include/linux/kernel.h`, `include/linux/printk.h`, `include/linux/list.h`, `include/linux/netdevice.h` |
 
 Each is first-party (BSD-2-Clause), carries a `@design` line naming its pattern and
