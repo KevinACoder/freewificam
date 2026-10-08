@@ -234,12 +234,14 @@ void usb_board_after_start(unsigned busid)
 	hcd = &g_ehci_hcd[bus->hcd.hcd_id];
 
 	for (port = 1U; port <= (unsigned)hcd->n_ports; port++) {
-		uint32_t regval = usb_ehci_port_status(usb_board_bus_reg_base(busid), port - 1U);
+		/* The controller comes out of reset unpowered; raise port power
+		 * and let VBUS ramp before asking the port anything. */
+		uint32_t regval = usb_ehci_port_power_on(usb_ehci_op_base(usb_board_bus_reg_base(busid)), port - 1U);
 
 		board_log("usbh: bus%u port%u portsc=%08x ppc=%u\n", busid, port,
 			  (unsigned)regval, (unsigned)hcd->ppc);
 		if (hcd->ppc && (regval & USB_BOARD_EHCI_PORTSC_CCS) != 0U) {
-			regval = usb_ehci_port_power_cycle(usb_board_bus_reg_base(busid), port - 1U);
+			regval = usb_ehci_port_power_cycle(usb_ehci_op_base(usb_board_bus_reg_base(busid)), port - 1U);
 			board_log("usbh: bus%u port%u kicked, now %08x\n", busid, port,
 				  (unsigned)regval);
 		}

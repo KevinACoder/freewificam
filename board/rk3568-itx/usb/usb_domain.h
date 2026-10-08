@@ -268,9 +268,19 @@ uint32_t usb_xhci_core_id(uintptr_t base);
 #define USB_BOARD_EHCI_PORTSC_CCS	0x00000001U
 #define USB_BOARD_EHCI_PORTSC_PP	0x00001000U
 
+/* The operational register block starts after the capability registers: the
+ * first byte of the controller window is CAPLENGTH (EHCI 1.0 section 2.2), so
+ * every PORTSC access has to be based there and not at the raw window. */
+static inline uintptr_t usb_ehci_op_base(uintptr_t reg_base)
+{
+	return reg_base + *(volatile const uint8_t *)reg_base;
+}
+
 /* Write accessor. The power cycle manufactures the connect-change edge a
  * device that was already attached at boot never produces; returns the port
  * status after the cycle. */
+uint32_t usb_ehci_port_power_on(uintptr_t opbase, unsigned port_index);
+
 uint32_t usb_ehci_port_power_cycle(uintptr_t opbase, unsigned port_index);
 
 uint32_t usb_ehci_port_status(uintptr_t opbase, unsigned port_index);

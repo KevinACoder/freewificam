@@ -38,6 +38,7 @@ CASES = [
     "thread-sched",
     "cmsis2-prio",
     "tlsf-heap",
+    "os-timer",
     "usb-xhci",
     "usb-ehci",
 ]
@@ -60,6 +61,7 @@ ANCHORS = {
     "thread-sched": [r"thr\[lo\]: n=(\d+)"],
     "cmsis2-prio": [r"cmsis2: prio 24 -> tx 19"],
     "tlsf-heap": [r"heap: tlsf ready 1048576 bytes at 0x"],
+    "os-timer": [r"os2-timer: periodic fires="],
     "usb-xhci": [
         r"usbh: core init bus=3 hcd=xhci",
         r"usbh: class msc claimed lun=0",

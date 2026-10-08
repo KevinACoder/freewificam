@@ -359,6 +359,19 @@ uint32_t usb_xhci_core_id(uintptr_t base)
  * plugged at boot leaves CCS set without ever raising a connect change, so the
  * root hub has nothing to report and enumeration never starts. Dropping and
  * restoring port power forces the edge. */
+/* Raise port power and let VBUS ramp: the controller comes out of reset with
+ * PP low, and an unpowered port reports no connection at all, so nothing can
+ * enumerate until this has run. */
+uint32_t usb_ehci_port_power_on(uintptr_t opbase, unsigned port_index)
+{
+	volatile uint32_t *portsc = (volatile uint32_t *)(opbase +
+			USB_BOARD_EHCI_PORTSC_OFFSET + 4U * (uintptr_t)port_index);
+
+	*portsc = (*portsc & ~USB_BOARD_EHCI_PORTSC_PP) | USB_BOARD_EHCI_PORTSC_PP;
+	usb_udelay(100000U);
+	return *portsc;
+}
+
 uint32_t usb_ehci_port_power_cycle(uintptr_t opbase, unsigned port_index)
 {
 	volatile uint32_t *portsc = (volatile uint32_t *)(opbase +

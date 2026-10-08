@@ -168,6 +168,7 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/thread_sched.c \
 	$(CURDIR)/tests/cmsis2_prio.c \
 	$(CURDIR)/tests/tlsf_heap.c \
+	$(CURDIR)/tests/os_timer.c \
 	$(CURDIR)/tests/usb_msc.c \
 	$(CURDIR)/tests/usb_xhci.c \
 	$(CURDIR)/tests/usb_ehci.c
