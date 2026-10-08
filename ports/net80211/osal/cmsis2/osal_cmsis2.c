@@ -27,11 +27,26 @@
 
 #include <errno.h>
 #include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <cmsis_os2.h>
+
+#ifdef WLAN_PORT_TARGET
+/*
+ * Target build: no C library behind this port. The display functions format
+ * into a bounded buffer (the freestanding minilibc surface) and hand the line
+ * to the board's own log sink - the same one-line idiom the USB glue's
+ * console sink uses - and the panic exit prints through the lock-free fault
+ * sink and parks: a failed assertion that speaks is findable, a silent one
+ * is not. The host build keeps the C library's vfprintf and abort().
+ */
+#include "log.h"
+#include "minilibc.h"
+#include "arch_asm.h"
+#else
+#include <stdio.h>
+#include <stdlib.h>
+#endif
 
 #include <sys/mutex.h>
 #include <sys/intr.h>
@@ -531,6 +546,67 @@ void kmem_intr_free(void *p, size_t size)
 /* Output and panic                                                    */
 /* ------------------------------------------------------------------ */
 
+#ifdef WLAN_PORT_TARGET
+
+/* The target's line sink: format, then hand to the board log (which owns the
+ * stamp and the CR LF discipline). `emergency` picks the fault-path outlet,
+ * which takes no print lock. */
+static int wlan_osal_vlog(int emergency, const char *fmt, va_list ap)
+{
+	char line[192];
+	int n;
+
+	n = vsnprintf(line, sizeof(line), fmt, ap);
+	if (emergency)
+		board_log_emergency("%s", line);
+	else
+		board_log("%s", line);
+	return n;
+}
+
+void wlan_osal_log(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	(void)wlan_osal_vlog(0, fmt, ap);
+	va_end(ap);
+}
+
+int kprintf(const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = wlan_osal_vlog(0, fmt, ap);
+	va_end(ap);
+	return n;
+}
+
+/* The imported sources' continuation-print family (if_printf and the debug
+ * dump helpers call vprintf directly). On the target it is the same sink as
+ * kprintf; the host build leaves the name to the C library. */
+int vprintf(const char *fmt, va_list ap)
+{
+
+	return wlan_osal_vlog(0, fmt, ap);
+}
+
+void panic(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	(void)wlan_osal_vlog(1, fmt, ap);
+	va_end(ap);
+	board_log_emergency("net80211 port panic: parked; power-cycle to recover");
+	for (;;)
+		ARCH_WFE();
+}
+
+#else /* host build */
+
 void wlan_osal_log(const char *fmt, ...)
 {
 	va_list ap;
@@ -563,6 +639,8 @@ void panic(const char *fmt, ...)
 	fflush(stdout);
 	abort();
 }
+
+#endif /* WLAN_PORT_TARGET */
 
 /* ------------------------------------------------------------------ */
 /* Single-context placeholder for the process shell                    */

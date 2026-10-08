@@ -43,6 +43,10 @@ long strtol(const char *s, char **endptr, int base);
 int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t cap, const char *fmt, ...);
 
+/* Unbounded sibling: the caller guarantees the destination's size (the
+ * rtl8xxxu chip-name fields pass literals into fixed arrays). */
+int sprintf(char *buf, const char *fmt, ...);
+
 /* --- minilibc.c: string completions + libc completion ---------------------- */
 
 char *strcpy(char *dest, const char *src);

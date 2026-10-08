@@ -89,6 +89,19 @@ int	wlan_bridge_scan_dwell(void);
  * walk advances the stack's channel; the driver must follow). */
 int	wlan_bridge_tune_current(void);
 
+/* Configure the desired SSID (the joiner's step before a sweep; the stack's
+ * match then requires a candidate to carry it). Returns 0 or a negative error. */
+int	wlan_bridge_set_ssid(const uint8_t *ssid, size_t len);
+
+/* Walk the scan table, one callback per candidate, scalars only (the caller may
+ * live in the other world). Returns the number of candidates seen. */
+unsigned int wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6],
+	    const uint8_t *ssid, size_t ssid_len, uint32_t freq, int rssi,
+	    void *arg), void *arg);
+
+/* The stack's current state value (the imported numbering), -1 when detached. */
+int	wlan_bridge_state(void);
+
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);

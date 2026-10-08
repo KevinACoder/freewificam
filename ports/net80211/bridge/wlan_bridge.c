@@ -169,8 +169,14 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 }
 
 /*
- * The data queue drain: net80211's own encapsulation - and its crypto path when
- * a key is installed - runs here, then the frame goes to the driver.
+ * The data queue drain: net80211's own encapsulation runs here, and then -
+ * when the frame came out marked protected - the crypto header and trailer are
+ * added by ieee80211_crypto_encap. That second call is the driver's own step in
+ * the imported design: the stack's encap leaves the packet marked (sets the WEP
+ * bit) and documents that the crypto header "is added when the driver calls
+ * back to ieee80211_crypto_encap to do crypto encapsulation"
+ * (ieee80211_output.c:445). The Linux-family driver on the far side of this
+ * seam does not do it - mac80211 does - so the bridge owes it here.
  */
 static void
 bridge_drain_if_snd(struct ieee80211com *ic)
@@ -181,6 +187,7 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 	for (;;) {
 		struct mbuf *enc;
 		struct ieee80211_node *ni;
+		struct ieee80211_frame *wh;
 
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == NULL)
@@ -196,8 +203,26 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			if_statinc(ifp, if_oerrors);	/* encap consumed it */
 			continue;
 		}
+		wh = mtod(enc, struct ieee80211_frame *);
+		if ((wh->i_fc[1] & IEEE80211_FC1_WEP) != 0) {
+			/*
+			 * The call seals in place and returns the key (NULL on
+			 * failure). It can in principle re-head the mbuf - the
+			 * imported function carries the known "we modify m"
+			 * caveat - but the frame just came out of encap, which
+			 * reserved the crypto header room for exactly this call
+			 * (output.c:440-445), so the header is prepended in
+			 * place. The tested carrier uses the call the same way
+			 * (frame-test main.c:630-641).
+			 */
+			if (ieee80211_crypto_encap(ic, ni, enc) == NULL) {
+				m_freem(enc);
+				if_statinc(ifp, if_oerrors);
+				continue;
+			}
+		}
 		if (bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
-		    (size_t)enc->m_len, 0) != 0)
+		    (size_t)enc->m_pkthdr.len, 0) != 0)
 			if_statinc(ifp, if_oerrors);
 		else
 			if_statinc(ifp, if_opackets);
@@ -552,6 +577,76 @@ wlan_bridge_scan_stats(unsigned int *starts, unsigned int *completes,
 		*filter_clears = bridge.filter_clears;
 }
 
+/*
+ * Set the interface's desired SSID: what a joiner configures before a sweep,
+ * and what the stack's own match then requires a candidate to carry. The
+ * scalar face of ic_des_essid/ic_des_esslen (the two fields stay in this
+ * world - callers pass bytes, not the com).
+ */
+int
+wlan_bridge_set_ssid(const uint8_t *ssid, size_t len)
+{
+
+	if (!bridge.attached || bridge.ic == NULL)
+		return -ENODEV;
+	if (ssid == NULL || len == 0 || len > IEEE80211_NWID_LEN)
+		return -EINVAL;
+	memcpy(bridge.ic->ic_des_essid, ssid, len);
+	bridge.ic->ic_des_esslen = (u_int8_t)len;
+	return 0;
+}
+
+/*
+ * Walk the scan table, handing each candidate to the callback as scalars
+ * (bytes and numbers only - the caller may live in the other world). Returns
+ * the number of candidates seen.
+ */
+unsigned int
+wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6], const uint8_t *ssid,
+    size_t ssid_len, uint32_t freq, int rssi, void *arg), void *arg)
+{
+	struct ieee80211com *ic = bridge.ic;
+	struct ieee80211_node *ni;
+	unsigned int n = 0;
+
+	if (ic == NULL || cb == NULL)
+		return 0;
+	TAILQ_FOREACH(ni, &ic->ic_scan.nt_node, ni_list) {
+		cb(ni->ni_bssid, ni->ni_essid, ni->ni_esslen,
+		    ni->ni_chan != NULL ? ni->ni_chan->ic_freq : 0,
+		    (int)ni->ni_rssi, arg);
+		n++;
+	}
+	return n;
+}
+
+/* the console's own callback: one line per candidate */
+static void
+bridge_print_bss(const uint8_t bssid[6], const uint8_t *ssid, size_t ssid_len,
+    uint32_t freq, int rssi, void *arg)
+{
+	char essid[IEEE80211_NWID_LEN + 1];
+	size_t n = ssid_len;
+
+	(void)arg;
+	if (n > IEEE80211_NWID_LEN)
+		n = IEEE80211_NWID_LEN;
+	memcpy(essid, ssid, n);
+	essid[n] = '\0';
+	wlan_osal_log("wlan: bss %02x:%02x:%02x:%02x:%02x:%02x ssid=%s "
+	    "freq=%u rssi=%d\n", bssid[0], bssid[1], bssid[2], bssid[3],
+	    bssid[4], bssid[5], essid, freq, rssi);
+}
+
+/* the current state value (the imported numbering), for the console */
+int
+wlan_bridge_state(void)
+{
+
+	return bridge.attached && bridge.ic != NULL ?
+	    (int)bridge.ic->ic_state : -1;
+}
+
 void
 wlan_bridge_stats(struct wlan_bridge_counters *out)
 {
@@ -770,12 +865,15 @@ wlan_port_scan_dump(void)
 {
 
 	/*
-	 * The scan table is the stack's node table; the presentation layer owns
-	 * the iteration that prints it (it holds the table the walk needs).
+	 * The scan table is the stack's node table; the walk below is the
+	 * net80211-world half of it (this file holds the ic), and the board
+	 * console prints through the same callback the cases use.
 	 */
-	wlan_osal_log(bridge.attached ?
-	    "wlan: scan table dump is the presentation layer's iteration\n" :
-	    "wlan: no scan table (not attached)\n");
+	if (!bridge.attached) {
+		wlan_osal_log("wlan: no scan table (not attached)\n");
+		return;
+	}
+	wlan_bridge_scan_walk(bridge_print_bss, NULL);
 }
 
 int

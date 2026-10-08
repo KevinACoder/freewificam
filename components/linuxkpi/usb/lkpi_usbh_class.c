@@ -160,7 +160,7 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 		return -USB_ERR_NODEV;
 	}
 
-	lkpi_printf("usbh: lkpi msc claiming %04x:%04x\n",
+	lkpi_printf("usbh: lkpi claim attempt %04x:%04x\n",
 	    hport->device_desc.idVendor, hport->device_desc.idProduct);
 
 	dev = lkpi_usbh_build_device(hport, intf, &intfp);

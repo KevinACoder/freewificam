@@ -48,6 +48,23 @@ int snprintf(char *buf, size_t cap, const char *fmt, ...)
 	return n;
 }
 
+/*
+ * sprintf: the bounded formatter's unbounded sibling. No bound means the
+ * caller guarantees the destination is large enough; the conversion itself is
+ * the same engine. Consumers in this tree (the rtl8xxxu chip-name fields) pass
+ * string literals into fixed device-private arrays.
+ */
+int sprintf(char *buf, const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf_(buf, (size_t)-1, fmt, ap);
+	va_end(ap);
+	return n;
+}
+
 int atoi(const char *s)
 {
 	int v = 0;

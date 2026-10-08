@@ -1,0 +1,11 @@
+# Interaction steps for the WLAN image: sent by the host runner in order, with
+# the expected response after each; the judge verifies the responses in the
+# received stream. One command per line, CR-terminated by the sender.
+#
+# The help count is 9 functions for this image (the WLAN command joins the
+# regression image's set of 8).
+# send	expect
+	user@rk3568:/\$
+help\r	total function 6[\s\S]*total variable 2
+wlan status\r	wlan: attached=\d+ state=-?\d+
+exit\r	user@rk3568:/\$ exit[\s\S]*user@rk3568:/\$
