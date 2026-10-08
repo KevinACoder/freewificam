@@ -101,6 +101,7 @@ static struct {
 	unsigned int mgt_tx;
 	unsigned int data_tx;
 	unsigned int rx_frames;
+	unsigned int rx_mgmt;	/* diagnostic: mgmt frames seen in input */
 	unsigned int tx_completes;
 } bridge;
 
@@ -154,6 +155,15 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 		IF_DEQUEUE(&ic->ic_mgtq, m);
 		if (m == NULL)
 			break;
+		if ((mtod(m, const uint8_t *)[0] & 0xf0) != 0x40) {
+			const uint8_t *fc = mtod(m, const uint8_t *);
+
+			wlan_osal_log("wlan: mgt tx fc=%02x len=%u a1=%02x:%02x:"
+			    "%02x:%02x:%02x:%02x a3=%02x:%02x:%02x:%02x:%02x:%02x\n",
+			    fc[0], (unsigned)m->m_len, fc[4], fc[5], fc[6], fc[7],
+			    fc[8], fc[9], fc[16], fc[17], fc[18], fc[19], fc[20],
+			    fc[21]);
+		}
 		rc = bridge.ops->tx(bridge.drv, mtod(m, const uint8_t *),
 		    (size_t)m->m_len, 1);
 		if (rc != 0)
@@ -463,6 +473,19 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi)
 		return -ENOMEM;
 	}
 	bridge.rx_frames++;
+	if (len >= 24 && (frame[0] & 0x0c) == 0x00) {	/* management */
+		if ((frame[0] & 0xf0) != 0x80 && bridge.rx_mgmt < 64) {
+			/* every non-beacon mgt frame, bounded: the auth and
+			 * assoc exchanges must be visible here */
+			bridge.rx_mgmt++;
+			wlan_osal_log("wlan: rx mgt fc=%02x a1=%02x:%02x:%02x:"
+			    "%02x:%02x:%02x a3=%02x:%02x:%02x:%02x:%02x:%02x "
+			    "len=%u\n", frame[0], frame[4], frame[5], frame[6],
+			    frame[7], frame[8], frame[9], frame[16], frame[17],
+			    frame[18], frame[19], frame[20], frame[21],
+			    (unsigned)len);
+		}
+	}
 
 	wlan_port_serializer_lock();
 	ni = ieee80211_find_rxnode(ic,
@@ -556,6 +579,26 @@ wlan_bridge_scan_dwell(void)
 
 	if (!bridge.attached || !bridge.scanning)
 		return -EINVAL;
+	/*
+	 * The stack may have left its scan world on its own (the supplicant
+	 * cancels the sweep and joins: ieee80211_cancel_scan runs inside
+	 * sta_join's transition). Dwelling then would drag it back into SCAN
+	 * through next_scan's own transition - measured on the board as a
+	 * join that oscillated SCAN/AUTH and had every auth response
+	 * discarded ("bad state"), because the stack was no longer in AUTH
+	 * when the answer arrived. The sweep is over the moment the stack
+	 * says so; the bookkeeping closes here exactly as at a natural end.
+	 */
+	if (bridge.ic->ic_state != IEEE80211_S_SCAN) {
+		bridge.scanning = 0;
+		bridge.scan_completes++;
+		if (bridge.ops->sw_scan_complete != NULL)
+			bridge.ops->sw_scan_complete(bridge.drv);
+		(void)bridge.ops->filter(bridge.drv,
+		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+		bridge.filter_clears++;
+		return 0;
+	}
 	more = ieee80211_next_scan(bridge.ic);
 	if (more == 0) {
 		bridge.scanning = 0;
@@ -623,7 +666,10 @@ int
 wlan_bridge_scan_active(void)
 {
 
-	return bridge.attached && bridge.scanning;
+	/* the stack's own state is the authority: a sweep the stack has left
+	 * (a cancelled scan on the way into a join) must not be dwelt */
+	return bridge.attached && bridge.scanning && bridge.ic != NULL &&
+	    bridge.ic->ic_state == IEEE80211_S_SCAN;
 }
 
 /*
