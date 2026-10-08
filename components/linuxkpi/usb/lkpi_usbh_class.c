@@ -186,7 +186,7 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 	return 0;
 }
 
-static void
+static int
 lkpi_msc_disconnect(struct usbh_hubport *hport, uint8_t intf)
 {
 	struct usb_device *dev = hport->config.intf[intf].priv;
@@ -196,10 +196,11 @@ lkpi_msc_disconnect(struct usbh_hubport *hport, uint8_t intf)
 		lkpi_claimed_intf = 0;
 	}
 	if (dev == NULL)
-		return;
+		return 0;
 	hport->config.intf[intf].priv = NULL;
 	lkpi_usb_disconnect_drivers((struct usb_interface *)dev->_intf);
 	lkpi_usbh_free_device(dev);
+	return 0;
 }
 
 static const struct usbh_class_driver lkpi_msc_class_driver = {
@@ -222,6 +223,48 @@ CLASS_INFO_DEFINE const struct usbh_class_info lkpi_msc_class_info = {
 	.bInterfaceSubClass = 0x06,
 	.bInterfaceProtocol = 0x50,
 	.class_driver = &lkpi_msc_class_driver,
+};
+
+/*
+ * ------------------------------------------------------------------ */
+/* the wireless hook: vendor-specific interfaces (ff/ff/ff)            */
+/*                                                                     */
+/* The 8188eu dongle presents one vendor-specific interface (the       */
+/* driver's own id_table line asks for exactly 0bda:8179 with class    */
+/* 0xff/0xff/0xff, third-party/rtl8xxxu/core.c:8022), so the class     */
+/* match is the triple - no VID/PID list lives here: the real chip     */
+/* matching is the driver's id_table, run by lkpi_usb_probe_drivers()  */
+/* on the Linux view this hook builds.  The VID list would have to be  */
+/* duplicated for every supported Realtek part (the board carries two  */
+/* more of them) and would drift; the negative guard below covers the  */
+/* one device this hook must never grab.                               */
+/*                                                                     */
+/* The guard: 0bda:1a2b is the same dongle's CD-ROM personality while  */
+/* the eject assistant is mid-flip. Its interface is 08/05/50 (not     */
+/* ff/ff/ff), so the triple already misses it - the VID/PID backstop   */
+/* is kept for the same reason the MSC hook keeps it: a device whose   */
+/* personality flips while the walk is in flight must never be probed  */
+/* by a hook that had already matched it.                              */
+/* ------------------------------------------------------------------ */
+
+static const struct usbh_class_driver lkpi_wlan_class_driver = {
+	.driver_name = "lkpiwlan",
+	.driver_desc = "Linux usb_driver probes on the linuxkpi usb layer",
+	/* the shared claim path: build the Linux view and run the real id_table.
+	 * One assembly point for the view, which is why the connect/disconnect
+	 * pair is not written a second time here - a second path would be the
+	 * second place a claim can be lost. */
+	.connect = lkpi_msc_connect,
+	.disconnect = lkpi_msc_disconnect,
+};
+
+CLASS_INFO_DEFINE const struct usbh_class_info lkpi_wlan_class_info = {
+	.match_flags = USB_CLASS_MATCH_INTF_CLASS |
+	    USB_CLASS_MATCH_INTF_SUBCLASS | USB_CLASS_MATCH_INTF_PROTOCOL,
+	.bInterfaceClass = 0xff,
+	.bInterfaceSubClass = 0xff,
+	.bInterfaceProtocol = 0xff,
+	.class_driver = &lkpi_wlan_class_driver,
 };
 
 struct usbh_hubport *
