@@ -38,6 +38,8 @@ CASES = [
     "thread-sched",
     "cmsis2-prio",
     "tlsf-heap",
+    "usb-xhci",
+    "usb-ehci",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -58,6 +60,18 @@ ANCHORS = {
     "thread-sched": [r"thr\[lo\]: n=(\d+)"],
     "cmsis2-prio": [r"cmsis2: prio 24 -> tx 19"],
     "tlsf-heap": [r"heap: tlsf ready 1048576 bytes at 0x"],
+    "usb-xhci": [
+        r"usbh: core init bus=3 hcd=xhci",
+        r"usbh: class msc claimed lun=0",
+        r"usbh: msc read blk0=0x",
+        r"usbh: msc write/read roundtrip ok",
+    ],
+    "usb-ehci": [
+        r"usbh: core init bus=1 hcd=ehci",
+        r"usbh: class msc claimed lun=0",
+        r"usbh: msc read blk0=0x",
+        r"usbh: msc write/read roundtrip ok",
+    ],
 }
 
 LADDER_RE = re.compile(r"tick: t=(\d+)")
@@ -236,6 +250,9 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
     if (sentinel["result"] == "pass") != (sentinel["ok"] == sentinel["cases"]):
         errors.append("sentinel result=%s contradicts ok=%d cases=%d"
                       % (sentinel["result"], sentinel["ok"], sentinel["cases"]))
+
+    if re.search(r"code=17", transcript.raw):
+        errors.append("controller completion code=17 (parameter error) in the transcript")
 
     unknown = [name for name in observed if name not in CASES]
     if unknown:

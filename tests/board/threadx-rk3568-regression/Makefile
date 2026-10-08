@@ -167,7 +167,10 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/tick_ladder.c \
 	$(CURDIR)/tests/thread_sched.c \
 	$(CURDIR)/tests/cmsis2_prio.c \
-	$(CURDIR)/tests/tlsf_heap.c
+	$(CURDIR)/tests/tlsf_heap.c \
+	$(CURDIR)/tests/usb_msc.c \
+	$(CURDIR)/tests/usb_xhci.c \
+	$(CURDIR)/tests/usb_ehci.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -227,7 +230,7 @@ $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
