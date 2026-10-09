@@ -96,7 +96,12 @@
  * ladder): the TCP/IP thread outranks its feeders, nothing starves it. */
 #define TCPIP_THREAD_PRIO               5
 #define TCPIP_MBOX_SIZE                 128
-#define DEFAULT_THREAD_STACKSIZE        2048
+/* Any other lwIP thread (the contrib apps ask for this constant). It has to
+ * carry the same transmit chain the TCP/IP thread does - raw API down through
+ * the netif, the bridge's encapsulation and CCMP, and the USB submit - so it
+ * gets the same budget: measured, a 2 KiB stack was exhausted by the ping
+ * thread's first echo request. */
+#define DEFAULT_THREAD_STACKSIZE        8192
 #define DEFAULT_THREAD_PRIO             3
 
 /* --- core locking ----------------------------------------------------------- */
