@@ -165,12 +165,46 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 			break;
 		if ((mtod(m, const uint8_t *)[0] & 0xf0) != 0x40) {
 			const uint8_t *fc = mtod(m, const uint8_t *);
+			/* the first association-family frame and the first
+			 * probe request go out as one hex line each: the air
+			 * audit's raw material (a frame that the chip never
+			 * answers is judged from its bytes, not from the
+			 * counter that handed it over) */
+			static int dumped_join;
 
+			if (!dumped_join) {
+				unsigned int k;
+
+				wlan_osal_log("wlan: mgt tx first-join-bytes "
+				    "len=%u:", (unsigned)m->m_len);
+				for (k = 0; k < (unsigned)m->m_len && k < 64;
+				    k++)
+					wlan_osal_log("%02x%s", fc[k],
+					    (k % 16) == 15u || k + 1u ==
+					    (unsigned)m->m_len ? "\n" : " ");
+				dumped_join = 1;
+			}
 			wlan_osal_log("wlan: mgt tx fc=%02x len=%u a1=%02x:%02x:"
 			    "%02x:%02x:%02x:%02x a3=%02x:%02x:%02x:%02x:%02x:%02x\n",
 			    fc[0], (unsigned)m->m_len, fc[4], fc[5], fc[6], fc[7],
 			    fc[8], fc[9], fc[16], fc[17], fc[18], fc[19], fc[20],
 			    fc[21]);
+		} else {
+			const uint8_t *fc = mtod(m, const uint8_t *);
+			static int dumped_probe2;
+
+			if (!dumped_probe2) {
+				unsigned int k;
+
+				dumped_probe2 = 1;
+				wlan_osal_log("wlan: mgt tx first-probe-bytes "
+				    "len=%u:", (unsigned)m->m_len);
+				for (k = 0; k < (unsigned)m->m_len && k < 96;
+				    k++)
+					wlan_osal_log("%02x%s", fc[k],
+					    (k % 16) == 15u || k + 1u ==
+					    (unsigned)m->m_len ? "\n" : " ");
+			}
 		}
 		rc = bridge.ops->tx(bridge.drv, mtod(m, const uint8_t *),
 		    (size_t)m->m_len, 1);
@@ -381,7 +415,15 @@ wlan_bridge_attach(struct wlan_seam_drv *drv,
 	ic->ic_state = IEEE80211_S_INIT;
 	memcpy(ic->ic_myaddr, mac, IEEE80211_ADDR_LEN);
 
+	/* the one-channel diagnostic build points here: the channel the
+	 * join targets is the only one invented, so no sweep and no join
+	 * ever switches the radio - the discriminator between "transmit
+	 * wedges after channel switching" and everything else */
+#ifdef WLAN_BRIDGE_SINGLE_CHANNEL
+	for (ch = WLAN_BRIDGE_CHAN_MIN; ch <= 1; ch++) {
+#else
 	for (ch = WLAN_BRIDGE_CHAN_MIN; ch <= WLAN_BRIDGE_CHAN_MAX; ch++) {
+#endif
 		struct ieee80211_channel *c = &ic->ic_channels[ch];
 
 		c->ic_freq = 2407 + ch * 5;
@@ -515,16 +557,32 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad)
 			bridge.rx_probersp++;
 		}
 		/* The association-exchange family always logs (rare, and the
-		 * evidence a join judgment stands on); other frames are
-		 * sampled so the lines stay readable. */
+		 * evidence a join judgment stands on), now with the FCS
+		 * verdict and, for the first few, the raw bytes: a frame
+		 * that arrives garbled splits "corrupted before the driver"
+		 * (fcs set) from "corrupted between the driver and here"
+		 * (fcs clear but the bytes are not an answer's shape);
+		 * other frames are sampled so the lines stay readable. */
 		if ((fc0 & 0x0c) == 0x00 && (sub == 0xb0 /* auth */ ||
 		    sub == 0x00 || sub == 0x10 /* assoc req/resp */)) {
-			wlan_osal_log("wlan: rx mgt fc=%02x a1=%02x:%02x:%02x:"
-			    "%02x:%02x:%02x a2=%02x:%02x:%02x:%02x:%02x:%02x "
-			    "len=%u\n", fc0, frame[4], frame[5], frame[6],
+			static unsigned int dumped;
+
+			wlan_osal_log("wlan: rx mgt fc=%02x fcs=%d a1=%02x:%02x:"
+			    "%02x:%02x:%02x:%02x a2=%02x:%02x:%02x:%02x:%02x:%02x "
+			    "len=%u\n", fc0, fcs_bad ? 1 : 0,
+			    frame[4], frame[5], frame[6],
 			    frame[7], frame[8], frame[9], frame[10], frame[11],
 			    frame[12], frame[13], frame[14], frame[15],
 			    (unsigned)len);
+			if (dumped < 8) {
+				unsigned int k;
+
+				dumped++;
+				wlan_osal_log("wlan: rx join-bytes:");
+				for (k = 0; k < len && k < 64; k++)
+					wlan_osal_log(" %02x", frame[k]);
+				wlan_osal_log("\n");
+			}
 		} else if (sub != 0x80 && bridge.rx_mgmt < 64) {
 			bridge.rx_mgmt++;
 			wlan_osal_log("wlan: rx mgt fc=%02x a1=%02x:%02x:%02x:"

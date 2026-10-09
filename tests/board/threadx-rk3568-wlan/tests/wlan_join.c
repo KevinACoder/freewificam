@@ -29,6 +29,11 @@
 
 #include "board_suite.h"
 #include "wlan_wpa_obs.h"
+/* the diagnostic half of the join wait: the skbuff pool's own forensics
+ * (double frees, stray frees, use-after-free writes) sit next to the radio
+ * counters because a recycled RX buffer is indistinguishable from bad air
+ * until the pool's accounting says which it was */
+#include "skbuff/skbuff_pool.h"
 
 /* how long the case waits for the console's connect to complete: the console
  * may arrive while the sweep is still in flight, the sweep must finish, the
@@ -85,22 +90,29 @@ void wlan_join_chain(void)
 		 * these lines) */
 		if ((waited % 10000U) == 0) {
 			struct wlan_bridge_counters c;
+			struct lkpi_skb_pool_stats ps;
 
 			wlan_bridge_stats(&c);
+			lkpi_skb_pool_stats(&ps);
 			/* the discriminator family rides the pulse: target
 			 * beacons flowing (bcnT) says the radio is on the AP's
 			 * channel and the chip's address filter passes the
 			 * AP's frames; fcs says how much of what arrives is
 			 * flagged garbage; tuned/tunes say where the channel
-			 * programming last stood */
+			 * programming last stood; txc says whether the
+			 * transmit handoffs actually completed below the
+			 * driver (mgt_tx counts handoffs only) */
 			board_log("wlan: join wait t=%us state=%s mgt_tx=%u "
-			    "rx=%u bad_auth=%u bcn=%u bcnT=%u prsp=%u fcs=%u "
-			    "tuned=%u tunes=%u/%u assoc=%u connected=%u\n",
+			    "txc=%u rx=%u bad_auth=%u bcn=%u bcnT=%u prsp=%u "
+			    "fcs=%u tuned=%u tunes=%u/%u pool(df/sf/uaf/af)="
+			    "%u/%u/%u/%u assoc=%u connected=%u\n",
 			    waited / 1000U, join_state_txt(wlan_bridge_state()),
-			    c.mgt_tx, c.rx_frames, wlan_bridge_stat_bad_auth(),
-			    c.rx_beacon, c.rx_beacon_tgt, c.rx_probersp,
-			    c.rx_fcs_bad, c.tuned_freq, c.tune_calls,
-			    c.tune_fails, wlan_wpa_obs_assoc_seen(),
+			    c.mgt_tx, c.tx_completes, c.rx_frames,
+			    wlan_bridge_stat_bad_auth(), c.rx_beacon,
+			    c.rx_beacon_tgt, c.rx_probersp, c.rx_fcs_bad,
+			    c.tuned_freq, c.tune_calls, c.tune_fails,
+			    ps.double_free, ps.stray_free, ps.uaf_write,
+			    ps.alloc_fail, wlan_wpa_obs_assoc_seen(),
 			    wlan_wpa_obs_connected());
 		}
 	}

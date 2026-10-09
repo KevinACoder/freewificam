@@ -95,6 +95,14 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DCMSIS2_BACKEND_THREADX \
 	-DSHELL_PORT_HOST='"rk3568"'
 
+# Diagnostic build switch (default off): WLAN_SINGLE=1 invents channel 1
+# only, so the whole image sweeps and joins without one channel switch -
+# the on-board discriminator for "transmit wedges after channel switching".
+WLAN_SINGLE ?= 0
+ifeq ($(WLAN_SINGLE),1)
+BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
+endif
+
 CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
 ASM_CFLAGS := $(BASE_CFLAGS)
 
@@ -495,7 +503,9 @@ $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(filter-out $(CURDIR)/tests/wlan_join.c $(CURDIR)/tests/wlan_dataplane.c $(CURDIR)/tests/wlan_cmds.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS) $(USB_INCLUDES))))
 # the supplicant-facing cases and the command compile in the WPA world's flags
-$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_join.c,$(WPA_PORT_CFLAGS) -I$(NPORT)/bridge -I$(CURDIR)/tests $(USB_INCLUDES)))
+# (the join case also reads the linuxkpi pool's forensic counters - the RX
+# corruption discriminators - so it carries the pool's include root)
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_join.c,$(WPA_PORT_CFLAGS) -I$(NPORT)/bridge -I$(CURDIR)/tests -I$(LKPI) $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_dataplane.c,$(LWIP_INCLUDES) $(WLAN_KPI_CFLAGS) -I$(PORT)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_cmds.c,$(WPA_CMD_CFLAGS) $(LWIP_INCLUDES) -I$(NPORT)/bridge $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_radio.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
