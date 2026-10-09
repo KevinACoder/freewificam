@@ -9,7 +9,6 @@ difference lives here and is applied at build time by `tools/patches/replay.sh`.
 | Upstream | https://github.com/cherry-embedded/CherryUSB.git |
 | Base (= pin) | `5019680e7a364c0a95b4b0cf0e30802047a26f59` (SHA-only; no tag at this commit) |
 | Patch list | `0001-xhci-host-controller-port.patch` - adds `port/xhci/usb_hc_xhci.c` and `.h` (the host controller driver for the RK3568's xHCI instances); `0002-ehci-iaad-qh-lifecycle.patch` - keeps the iaad flag consistent with the qh slot lifecycle (the four hunks that stop the pool walk from replaying a completion on a slot that is freed or rebound) |
-| Temporary | `0003-ehci-iaad-diagnostic.patch` - board diagnostic only, reports iaad replays on dead or rebound slots and changes no decision; carried for the fault round that verifies `0002` and removed before the branch merges |
 | Submission status | not submitted upstream (`0001` is a new-file port for a platform upstream does not carry; `0002` is a bug fix for the kill/reap path, written to be sendable as-is) |
 
 Rules (project patch policy):
