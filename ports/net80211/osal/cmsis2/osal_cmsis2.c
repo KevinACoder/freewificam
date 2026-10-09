@@ -554,14 +554,20 @@ void kmem_intr_free(void *p, size_t size)
 static int wlan_osal_vlog(int emergency, const char *fmt, va_list ap)
 {
 	char line[192];
-	int n;
+	size_t n;
 
-	n = vsnprintf(line, sizeof(line), fmt, ap);
+	n = (size_t)vsnprintf(line, sizeof(line), fmt, ap);
+	/* The line is terminated here: not every caller's format string ends
+	 * with a newline, and the console splits a line only at its length cap -
+	 * an unterminated print glues onto whatever is written next, and the
+	 * split then cuts a line (a judged anchor included) in half. */
+	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+		line[--n] = '\0';
 	if (emergency)
-		board_log_emergency("%s", line);
+		board_log_emergency("%s\n", line);
 	else
-		board_log("%s", line);
-	return n;
+		board_log("%s\n", line);
+	return (int)n;
 }
 
 void wlan_osal_log(const char *fmt, ...)

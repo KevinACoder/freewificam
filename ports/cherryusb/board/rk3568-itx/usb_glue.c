@@ -106,12 +106,20 @@ void usbh_console_printf(const char *fmt, ...)
 {
 	static char line[192];
 	va_list ap;
+	size_t n;
 
 	va_start(ap, fmt);
 	(void)vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
 
-	board_log("%s", line);
+	/* The line is terminated here: the stack's own format strings do not all
+	 * end with a newline, and the console splits a line only at its length
+	 * cap - an unterminated print glues onto whatever is written next, and
+	 * the split then cuts a line (a judged anchor included) in half. */
+	n = strlen(line);
+	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+		line[--n] = '\0';
+	board_log("%s\n", line);
 }
 
 /* The xHCI port prints its own bring-up anchors through the same sink; it
