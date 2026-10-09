@@ -14,7 +14,10 @@
 #     with section GC (-ffunction-sections -fdata-sections plus
 #     -Wl,--gc-sections): the engine's printf_/vprintf_ entry points reference
 #     an unbound _putchar sink and are not called by these images, so dropping
-#     them is what keeps the link resolvable (components/printf/PROVENANCE.md).
+#     them is what keeps the link resolvable (components/printf/PROVENANCE.md);
+#   - an image whose banner carries the build tag must rebuild when the tag
+#     changes (a stamp the objects depend on), or a stale banner from an
+#     earlier tree is certified as the committed build.
 #
 # Usage:
 #   tools/gates/check-board-images.sh               # scan the registered suites
@@ -62,6 +65,10 @@ check_makefile() {
         grep -qF -- '--gc-sections' "$mk" || bad="$bad no--gc-sections"
         grep -qF -- 'PRINTF_DISABLE_SUPPORT_FLOAT' "$mk" || bad="$bad no-float-switch"
         grep -qF -- 'PRINTF_DISABLE_SUPPORT_EXPONENTIAL' "$mk" || bad="$bad no-exponential-switch"
+    fi
+    if grep -qF 'FW_BUILD_TAG' "$mk"; then
+        grep -qF 'TAG_STAMP :=' "$mk" || bad="$bad no-build-tag-stamp"
+        grep -qF '$(TAG_STAMP)' "$mk" || bad="$bad build-tag-stamp-unused"
     fi
     [ -z "$bad" ]
 }
@@ -141,9 +148,13 @@ cp "$root/tests/board/freertos-rk3568-smoke/Makefile" "$tmp/tests/board/freertos
 sed 's/--gc-sections//' "$tmp/tests/board/threadx-rk3568-smoke/Makefile" > "$tmp/mk.tmp"
 mv "$tmp/mk.tmp" "$tmp/tests/board/threadx-rk3568-smoke/Makefile"
 expect 1 "section GC dropped"
+cp "$root/tests/board/threadx-rk3568-smoke/Makefile" "$tmp/tests/board/threadx-rk3568-smoke/Makefile"
+sed '/TAG_STAMP :=/d' "$tmp/tests/board/threadx-rk3568-smoke/Makefile" > "$tmp/mk.tmp"
+mv "$tmp/mk.tmp" "$tmp/tests/board/threadx-rk3568-smoke/Makefile"
+expect 1 "build-tag stamp dropped"
 
 if [ -n "$failed" ]; then
     echo "check-board-images: FAIL (selftest)"
     exit 1
 fi
-echo "check-board-images: PASS (selftest: pristine green, both mutations red)"
+echo "check-board-images: PASS (selftest: pristine green, every mutation red)"

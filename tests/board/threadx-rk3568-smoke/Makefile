@@ -39,6 +39,7 @@ BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || ech
 
 BUILD := build
 TARGET := $(BUILD)/threadx-rk3568
+TAG_STAMP := $(BUILD)/build-tag.stamp
 
 # The section flags plus --gc-sections are load-bearing: the vendored
 # formatter's printf_/vprintf_ entry points keep a reference to the unbound
@@ -109,11 +110,11 @@ ALL_SRCS += $(PRINTF_SRCS)
 
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
-.PHONY: all check guards clean
+.PHONY: all check guards clean FORCE
 all: $(TARGET).bin check
 
 define COMPILE_RULE
-$(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1)
+$(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@mkdir -p $$(dir $$@)
 	$(CC) $(CFLAGS) $(2) -c $$< -o $$@
 endef
@@ -121,6 +122,14 @@ endef
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
 $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
+
+# The banner carries the build tag, so every object depends on the stamp: a
+# commit or a merge changes the tag and must rebuild the image - otherwise a
+# stale banner is certified as the committed build (the regression images
+# carry the same stamp).
+$(TAG_STAMP): FORCE
+	@mkdir -p $(BUILD)
+	@printf '%s' '$(BUILD_TAG)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG)' > $@
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
