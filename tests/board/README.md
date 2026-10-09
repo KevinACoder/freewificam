@@ -27,6 +27,16 @@ bring-up only - the bisection tool) and a **regression** image (every supported
 feature plus a case table). Feature work does not add images; it adds rows to
 the regression image's table.
 
+Two shapes in each image's Makefile are load-bearing, and
+`tools/gates/check-board-images.sh` checks them from the source side: the
+per-file flag argument must reach the compile command (`COMPILE_RULE` applies
+`$(2)`, and no later rule redefines the same object without it), and an image
+that links the vendored formatter must link with section GC
+(`-ffunction-sections -fdata-sections` plus `-Wl,--gc-sections`). The formatter
+engine's `printf_`/`vprintf_` entry points reference an unbound `_putchar` sink
+and are not called by these images, so discarding their sections is what keeps
+the link resolvable (`components/printf/PROVENANCE.md`).
+
 ## In-image case table
 
 A regression image registers one entry per case through `BOARD_TEST(name, fn)`

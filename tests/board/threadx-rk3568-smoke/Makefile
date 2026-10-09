@@ -40,9 +40,15 @@ BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || ech
 BUILD := build
 TARGET := $(BUILD)/threadx-rk3568
 
+# The section flags plus --gc-sections are load-bearing: the vendored
+# formatter's printf_/vprintf_ entry points keep a reference to the unbound
+# _putchar sink, nothing in this image calls them, and section GC is what
+# discards them (the contract in components/printf/PROVENANCE.md:25-27) -
+# every sibling board image links this way.
 CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
+	-ffunction-sections -fdata-sections \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-I$(ROOT)/arch/aarch64 \
 	-I$(ROOT)/board/rk3568-itx \
@@ -61,6 +67,7 @@ TX_CFLAGS := -I$(TX)/common/inc -I$(TX_PORT)/inc -I$(BOARD_CFG) \
 
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
+	-Wl,--gc-sections \
 	-Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map
 
