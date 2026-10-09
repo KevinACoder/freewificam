@@ -203,7 +203,7 @@ TESTS_SRCS := \
 	$(COMMON)/cases/usb_xhci.c \
 	$(COMMON)/cases/usb_ehci.c \
 	$(CURDIR)/tests/lwip_smoke.c \
-	$(CURDIR)/tests/lwip_stack.c \
+	$(COMMON)/lwip_stack.c \
 	$(CURDIR)/tests/gmac_dataplane.c
 
 VENDORED_SRCS := \
@@ -347,9 +347,9 @@ $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(filter-out $(CURDIR)/tests/lwip_smoke.c $(CURDIR)/tests/lwip_stack.c $(CURDIR)/tests/gmac_dataplane.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(foreach s,$(filter-out $(CURDIR)/tests/lwip_smoke.c $(COMMON)/lwip_stack.c $(CURDIR)/tests/gmac_dataplane.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/lwip_smoke.c,$(LWIP_INCLUDES)))
-$(eval $(call COMPILE_RULE,$(CURDIR)/tests/lwip_stack.c,$(LWIP_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/gmac_dataplane.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))

@@ -30,6 +30,17 @@ err_t	wlannetif_add(struct netif *netif, const ip4_addr_t *ip,
 void	wlannetif_start(struct netif *netif);
 void	wlannetif_stop(struct netif *netif);
 
+/*
+ * Association and disassociation steps, exported because a WPA image has two
+ * event consumers and the port carries one event slot: the supplicant's
+ * backend owns the slot and forwards these two events here (the composition
+ * the driver-side backend documents). The actions are exactly what this
+ * layer's own event handler does - link state up/down, which is what the
+ * DHCP client watches.
+ */
+void	wlannetif_note_assoc(struct netif *netif);
+void	wlannetif_note_disassoc(struct netif *netif);
+
 /* counters: received frames, receive-path failures, transmitted frames,
  * transmit failures */
 void	wlannetif_get_diag(unsigned long *rx_frames, unsigned long *rx_input_fail,

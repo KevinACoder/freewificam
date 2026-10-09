@@ -35,6 +35,8 @@ CASES = [
     "shell-up",
     "wlan-probe",
     "wlan-scan",
+    "wlan-join",
+    "wlan-dataplane",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -56,6 +58,16 @@ ANCHORS = {
         r"wlan: scan done rows=",
         r"wlan: gt-check matched=[1-9]\d*/",
     ],
+    "wlan-join": [
+        r"wlan: join waiting for the supplicant",
+        r"wlan: join-ok bssid=",
+    ],
+    "wlan-dataplane": [
+        r"wlan: dataplane up, dhcp started",
+        r"wlan: dhcp bound ip=\d+\.\d+\.\d+\.\d+/",
+        r"wlan: ping window done",
+        r"wlan: iperf server ready port=5001",
+    ],
 }
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,15 +84,15 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  40.360] BOARD-SUITE threadx-rk3568-wlan "
-    "result=pass cases=3 ok=3 exit=0\r\n"
+    "result=pass cases=5 ok=5 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-wlan bring-up selftest-tag\r\n"
     "[   0.000] wlan: chain wired (backend + registry + firmware + bridge)\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-wlan select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-wlan start cases=3 sel=all "
-    "list=shell-up,wlan-probe,wlan-scan\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-wlan start cases=5 sel=all "
+    "list=shell-up,wlan-probe,wlan-scan,wlan-join,wlan-dataplane\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-wlan/shell-up PASS\r\n"
     "[  10.020] wlan: usb bus=1 hcd=ehci base=0xfd880000 started\r\n"
@@ -94,10 +106,27 @@ BASE_TRANSCRIPT = (
     "[  15.030] wlan: scan done rows=2 chans=12\r\n"
     "[  15.040] wlan: gt-check matched=1/3 rows=2\r\n"
     "[  15.050] CASE threadx-rk3568-wlan/wlan-scan PASS\r\n"
+    "[  16.000] wlan: join waiting for the supplicant (send 'wpa connect "
+    "<ssid> <psk>' on the console)\r\n"
+    "[  22.000] wlan0: WPA: Key negotiation completed with "
+    "14:a3:2f:18:07:2c [PTK=CCMP GTK=CCMP]\r\n"
+    "[  22.100] wlan: join-ok bssid=14:a3:2f:18:07:2c state=RUN mgt_tx=15 "
+    "data_tx=2 rx=90\r\n"
+    "[  22.200] CASE threadx-rk3568-wlan/wlan-join PASS\r\n"
+    "[  23.000] wlan: dataplane up, dhcp started\r\n"
+    "[  25.000] wlan: dhcp bound ip=192.168.0.211/24 gw=192.168.0.1\r\n"
+    "[  25.100] wlan: ping gw window=9 s\r\n"
+    "[  26.000] ping: recv 192.168.0.1 1 ms\r\n"
+    "[  27.000] ping: recv 192.168.0.1 2 ms\r\n"
+    "[  28.000] ping: recv 192.168.0.1 1 ms\r\n"
+    "[  29.000] ping: recv 192.168.0.1 1 ms\r\n"
+    "[  34.000] wlan: ping window done\r\n"
+    "[  34.100] wlan: iperf server ready port=5001\r\n"
+    "[  34.200] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
     + SENTINEL_LINE
     + PROMPT + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
-    "total function 6\r\n"
+    "total function 7\r\n"
     "  exit   -> /sbin - leave the shell\r\n"
     "\r\n"
     "total variable 2\r\n"
@@ -123,7 +152,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-wlan/wlan-scan PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=3 ok=3 exit=0", "cases=3 ok=2 exit=0"), 1),
+        "cases=5 ok=5 exit=0", "cases=5 ok=4 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-wlan/wlan-scan PASS",
@@ -137,8 +166,18 @@ MUTATIONS = [
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,wlan-probe,wlan-scan",
+        "list=shell-up,wlan-probe,wlan-scan,wlan-join,wlan-dataplane",
         "list=shell-up,wlan-probe"), 1),
+    ("join evidence dropped", BASE_TRANSCRIPT.replace(
+        "wlan: join-ok bssid=14:a3:2f:18:07:2c state=RUN mgt_tx=15 "
+        "data_tx=2 rx=90\r\n", "").replace(
+        "wlan0: WPA: Key negotiation completed with "
+        "14:a3:2f:18:07:2c [PTK=CCMP GTK=CCMP]\r\n", ""), 1),
+    ("dhcp bound dropped", BASE_TRANSCRIPT.replace(
+        "wlan: dhcp bound ip=192.168.0.211/24 gw=192.168.0.1\r\n", ""), 1),
+    ("ping replies starved", BASE_TRANSCRIPT.replace(
+        "ping: recv 192.168.0.1 2 ms\r\n", "").replace(
+        "ping: recv 192.168.0.1 1 ms\r\n", ""), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 
@@ -147,6 +186,16 @@ MUTATIONS = [
 #: the backstop against a transcript that papered over it).
 SCAN_ROW_RE = re.compile(r"wlan: scan done rows=(\d+)")
 SCAN_MATCH_RE = re.compile(r"wlan: gt-check matched=(\d+)/")
+
+#: The join and dataplane backstops: the anchors are the case's own verdict
+#: chain, and these are the independent cross-checks the spec's criteria name
+#: (a completed handshake anchor for A11; a bound address plus at least four
+#: echo replies for A12 - the ping module prints one "ping: recv" line per
+#: reply).
+JOIN_NEGOTIATION_RE = re.compile(r"Key negotiation completed with .* "
+                                 r"\[PTK=CCMP GTK=CCMP\]|wlan: join-ok bssid=")
+DHCP_BOUND_RE = re.compile(r"wlan: dhcp bound ip=(\d+\.\d+\.\d+\.\d+)/")
+PING_RECV_RE = re.compile(r"ping: recv")
 
 
 def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
@@ -244,6 +293,30 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
             errors.append("wlan-scan: no gt-check line (the case did not compare with the ground truth)")
         elif match_match == 0:
             errors.append("wlan-scan: zero ground-truth matches")
+
+    # A11 backstop: a join PASS must carry either the supplicant's negotiation
+    # anchor or the case's own join-ok line (the case prints the latter only
+    # after both latches fired, so one of the two is the handshake evidence).
+    if verdicts.get("wlan-join") == "PASS":
+        if not any(JOIN_NEGOTIATION_RE.search(line) for line in transcript.lines):
+            errors.append("wlan-join: no negotiation anchor and no join-ok line")
+
+    # A12 backstop: a dataplane PASS must show a bound (non-any) address and
+    # at least four echo replies; an all-zero or missing address, or a ping
+    # that never heard back, is not a data plane.
+    if verdicts.get("wlan-dataplane") == "PASS":
+        bound = None
+        for line in transcript.lines:
+            m = DHCP_BOUND_RE.search(line)
+            if m:
+                bound = m.group(1)
+        if bound is None:
+            errors.append("wlan-dataplane: no dhcp bound line")
+        elif bound == "0.0.0.0":
+            errors.append("wlan-dataplane: the bound address is 0.0.0.0")
+        replies = sum(1 for line in transcript.lines if PING_RECV_RE.search(line))
+        if replies < 4:
+            errors.append("wlan-dataplane: %d echo replies (< 4)" % replies)
 
     shell_selected = expected is None or "shell-up" in expected
     if steps_path and os.path.exists(steps_path):

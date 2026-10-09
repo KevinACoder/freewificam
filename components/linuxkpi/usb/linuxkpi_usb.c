@@ -1542,6 +1542,14 @@ usb_clear_halt(struct usb_device *dev, int pipe)
 	setup.wLength = 0;
 	lkpi_mutex_lock(&lkpi_usb_ctrl_mtx);
 	ret = lkpi_usb_be_control_transfer(hport, &setup, NULL);
+	if (ret == 0) {
+		struct usb_host_endpoint *hep = lkpi_usb_find_hep(dev, pipe);
+
+		/* USB 2.0 9.4.5: clearing halt resets this endpoint to DATA0.
+		 * Linux usb_clear_halt likewise calls usb_reset_endpoint. */
+		if (hep != NULL && hep->hcpriv != NULL)
+			((struct lkpi_usb_be_ep *)hep->hcpriv)->data_toggle = 0;
+	}
 	lkpi_mutex_unlock(&lkpi_usb_ctrl_mtx);
 	return ret == 0 ? 0 : lkpi_usb_errno(ret);
 }
@@ -1730,9 +1738,16 @@ lkpi_usb_start(void)
 	lkpi_usb_done_sem = osSemaphoreNew(1u, 0u, NULL);
 	/* the drain thread runs the driver completion callbacks; its
 	 * priority sits below the submitter's so a driver callback cannot
-	 * starve the context that queued the work */
+	 * starve the context that queued the work.
+	 *
+	 * The stack is sized from a measured overflow, not a guess: at 16 KiB
+	 * the ThreadX stack check fired on the board under the wireless rx
+	 * path (driver completion -> net80211 input -> event deep copy ->
+	 * debug line), 379 bytes short. 32 KiB is that measurement doubled,
+	 * which also covers the tx-completion and resubmit chains that share
+	 * this thread. */
 	attr.name = "lkpi_usb_drain";
-	attr.stack_size = 16384u;
+	attr.stack_size = 32768u;
 	attr.priority = osPriorityNormal;
 	lkpi_usb_drain_thread = osThreadNew(lkpi_usb_drain_thread_entry, NULL,
 	    &attr);

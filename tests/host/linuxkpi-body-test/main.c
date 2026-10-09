@@ -542,6 +542,45 @@ case_l8(struct mock_backend *b)
 }
 
 /* ------------------------------------------------------------------ */
+/* L9 class hook: claim then transfer (the board rounds' type defects) */
+/* ------------------------------------------------------------------ */
+
+/* the class-hook case lives in its own TU (it includes the CherryUSB
+ * headers); this declaration is its whole face */
+int	lkpi_body_case_claim(struct mock_backend *b, unsigned int *probe_before,
+	    unsigned int *probe_8188, unsigned int *disconnects_out,
+	    unsigned int *xfer_actual);
+
+static int
+case_l9(struct mock_backend *b)
+{
+	unsigned int probe_before = 0, probe_8188 = 0;
+	unsigned int disconnects = 0, actual = 0;
+	int rc;
+
+	mock_hcd_connect(b);
+	rc = lkpi_body_case_claim(b, &probe_before, &probe_8188, &disconnects,
+	    &actual);
+	if (rc != 0) {
+		case_line("L9", 0, "the claim chain failed at step %d", rc);
+		return -1;
+	}
+	if (probe_8188 < 1) {
+		case_line("L9", 0, "the id_table match did not report the "
+		    "8188eu row");
+		return -1;
+	}
+	if (actual != 32) {
+		case_line("L9", 0, "the claimed endpoint did not move the "
+		    "transfer (%u bytes)", actual);
+		return -1;
+	}
+	case_line("L9", 1, "claim + 8188eu match + endpoint chain + transfer + "
+	    "release all through the real hook");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* L7 pool contract on the real body                                   */
 /* ------------------------------------------------------------------ */
 
@@ -690,9 +729,11 @@ run_suite(void)
 	if (case_l7() != 0)
 		return;
 	(void)case_l8(b);
+	if (case_l9(b) != 0)
+		return;
 
 	if (failures == 0)
-		printf("LKPI: SUITE PASS cases=8\n");
+		printf("LKPI: SUITE PASS cases=9\n");
 	else
 		printf("LKPI: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);

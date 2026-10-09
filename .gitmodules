@@ -23,3 +23,7 @@
 	path = third-party/rtl8xxxu
 	url = https://github.com/KevinACoder/rtl8xxxu.git
 	branch = linux-7.3-rc2
+[submodule "third-party/wpa_supplicant"]
+	path = third-party/wpa_supplicant
+	url = https://github.com/KevinACoder/wpa_supplicant-rtos.git
+	branch = feat-embox-port

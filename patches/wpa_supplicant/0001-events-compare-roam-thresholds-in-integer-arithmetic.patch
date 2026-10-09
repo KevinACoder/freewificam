@@ -1,0 +1,75 @@
+From 1a7e8f51e39fcc9b92282951f409556630e9c2b5 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 9 Oct 2026 04:02:49 +0800
+Subject: [PATCH] wpa_supplicant: (fix) Compare roam thresholds in integer
+ arithmetic
+
+wpa_supplicant_need_to_roam_within_ess() compares estimated-throughput
+ratios against floating-point literals (1.2, 1.5, 1.1).  On images
+built without floating-point support - soft-float targets, or code
+compiled with registers reserved (e.g. -mgeneral-regs-only, where the
+FP registers are not part of the saved context) - those literals are
+not usable.
+
+The thresholds are exact ratios, so integer arithmetic expresses them
+exactly: x1.5 is *3/2, x1.2 is *6/5, x1.1 is *11/10, and e.g.
+a < b * 1.2 as (5*a < 6*b) matches the intent of the comparison
+without depending on how the decimal literal rounds.  The
+estimated-throughput values are small (kbit/s), so the unsigned
+intermediates - at most eleven times a threshold - stay far below the
+wrap range of unsigned int.
+
+No functional change is intended for the value ranges these
+thresholds see.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ wpa_supplicant/events.c | 18 +++++++++++-------
+ 1 file changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/wpa_supplicant/events.c b/wpa_supplicant/events.c
+index 85ed791..aa5d784 100644
+--- a/wpa_supplicant/events.c
++++ b/wpa_supplicant/events.c
+@@ -1847,7 +1847,11 @@ int wpa_supplicant_need_to_roam_within_ess(struct wpa_supplicant *wpa_s,
+ 
+     to_5ghz = selected->freq > 4000 && current_bss->freq < 4000;
+ 
+-    if (cur_level < 0 && cur_level > selected->level + to_5ghz * 2 && sel_est < cur_est * 1.2)
++    /* The ratio comparisons below are exact and are done in integer
++     * arithmetic to keep this function buildable on images without
++     * floating-point support (x1.2 == *6/5, x1.5 == *3/2, x1.1 ==
++     * *11/10; the unsigned intermediates stay far below the wrap range). */
++    if (cur_level < 0 && cur_level > selected->level + to_5ghz * 2 && sel_est * 5u < cur_est * 6u)
+     {
+         wpa_dbg(wpa_s, MSG_DEBUG,
+                 "Skip roam - Current BSS has better "
+@@ -1880,19 +1884,19 @@ int wpa_supplicant_need_to_roam_within_ess(struct wpa_supplicant *wpa_s,
+     else /* unspecified units (not in dBm) */
+         min_diff = 2;
+ 
+-    if (cur_est > sel_est * 1.5)
++    if (cur_est * 2u > sel_est * 3u)
+         min_diff += 10;
+-    else if (cur_est > sel_est * 1.2)
++    else if (cur_est * 6u > sel_est * 5u)
+         min_diff += 5;
+-    else if (cur_est > sel_est * 1.1)
++    else if (cur_est * 11u > sel_est * 10u)
+         min_diff += 2;
+     else if (cur_est > sel_est)
+         min_diff++;
+-    else if (sel_est > cur_est * 1.5)
++    else if (sel_est * 2u > cur_est * 3u)
+         min_diff -= 10;
+-    else if (sel_est > cur_est * 1.2)
++    else if (sel_est * 6u > cur_est * 5u)
+         min_diff -= 5;
+-    else if (sel_est > cur_est * 1.1)
++    else if (sel_est * 11u > cur_est * 10u)
+         min_diff -= 2;
+     else if (sel_est > cur_est)
+         min_diff--;
+-- 
+2.43.0
+

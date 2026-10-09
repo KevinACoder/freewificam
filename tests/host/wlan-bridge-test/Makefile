@@ -58,6 +58,14 @@ KPI_CFLAGS := -std=gnu11 -Wall -Wextra -DCMSIS2_BACKEND_THREADX \
     -I$(NET) -I$(PORT) -I$(PORT)/bridge -I$(MAKEFILE_DIR) \
     -I$(CMM)/CMSIS/RTOS2/Include -I$(ADAPT)/CMSIS/RTOS2/FreeRTOS/Include
 
+# the bridge's supplicant backend: net80211-world scalars (the bridge header)
+# plus the vendor contract; the registration TU is the port layer's own
+WPAV_PORT := $(ROOT)/ports/wpa_supplicant
+KPI_CFLAGS += -I$(WPAV_PORT)
+WPAV_CFLAGS := -std=gnu11 -g3 -O0 -Wall -Wextra -Werror \
+    -I$(ROOT) -I$(PORT) -I$(PORT)/bridge -I$(WPAV_PORT) -I$(MAKEFILE_DIR) \
+    -I$(ROOT)/os/cmsis2 -I$(CMM)/CMSIS/RTOS2/Include -DCMSIS2_BACKEND_THREADX
+
 # the driver units compile against the first-party mac80211 face, the flags the
 # driver build suite already proved (-Wall, the pinned-header relaxations)
 # the driver units compile exactly as the driver build suite compiles them:
@@ -139,6 +147,10 @@ NETIF_SRCS := $(ROOT)/ports/lwip/wlannetif.c $(MAKEFILE_DIR)/wlnetif_stub.c
 # the seam driver is net80211-world (it calls the port's own delivery paths)
 SEAM_SRCS := $(MAKEFILE_DIR)/seam_drive.c
 
+# the bridge's supplicant backend instance + the vendor registration TU
+WPAV_SRCS := $(PORT)/bridge/wlan_wpa_vendor.c \
+    $(WPAV_PORT)/wpa_vendor_port.c
+
 # the real driver: link closure only (see the header note)
 DRV_SRCS := \
     $(DRV)/core.c $(DRV)/8188e.c $(DRV)/8188f.c $(DRV)/8192c.c \
@@ -169,6 +181,7 @@ APP_OBJS   := $(foreach s,$(APP_SRCS),$(call OBJ,app,$(s)))
 NETIF_OBJS := $(foreach s,$(NETIF_SRCS),$(call OBJ,netif,$(s)))
 DRV_OBJS   := $(foreach s,$(DRV_SRCS),$(call OBJ,drv,$(s)))
 RT_OBJS    := $(foreach s,$(RT_SRCS),$(call OBJ,rt,$(s)))
+WPAV_OBJS  := $(foreach s,$(WPAV_SRCS),$(call OBJ,wpav,$(s)))
 
 # the pool's platform hooks are the host's (the same switch the sibling suites use)
 POOL_OBJ := $(call OBJ,kpi,$(POOL_SRC))
@@ -181,14 +194,17 @@ LDFLAGS := -pthread -lrt
 all: $(BIN)
 
 $(BUILD_DIR)/stack $(BUILD_DIR)/port $(BUILD_DIR)/kpi $(BUILD_DIR)/app \
-$(BUILD_DIR)/netif $(BUILD_DIR)/drv $(BUILD_DIR)/rt:
+$(BUILD_DIR)/netif $(BUILD_DIR)/drv $(BUILD_DIR)/rt $(BUILD_DIR)/wpav:
 	mkdir -p $@
 
 # Explicit rules (the object name folds the whole source path, so a pattern
-# rule cannot express it): one per source group.
+# rule cannot express it): one per source group. -MMD -MP writes the header
+# dependencies next to each object - without them a header edit (the bridge's
+# counters struct, the seam's op signatures) leaves stale objects that compile
+# clean and then disagree about struct sizes at run time.
 define GRP_RULE
 $$(call OBJ,$(2),$(1)): $(1) | $(BUILD_DIR)/$(2)
-	$$(CC) $(3) -c $$< -o $$@
+	$$(CC) $(3) -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach src,$(STACK_SRCS),$(eval $(call GRP_RULE,$(src),stack,$(BSD_CFLAGS))))
@@ -199,13 +215,18 @@ $(foreach src,$(APP_SRCS),$(eval $(call GRP_RULE,$(src),app,$(KPI_CFLAGS))))
 $(foreach src,$(NETIF_SRCS),$(eval $(call GRP_RULE,$(src),netif,$(NETIF_CFLAGS))))
 $(foreach src,$(DRV_SRCS),$(eval $(call GRP_RULE,$(src),drv,$(DRV_CFLAGS))))
 $(foreach src,$(RT_SRCS),$(eval $(call GRP_RULE,$(src),rt,$(RT_CFLAGS))))
+$(foreach src,$(WPAV_SRCS),$(eval $(call GRP_RULE,$(src),wpav,$(WPAV_CFLAGS))))
 
 # the pool body, with the host's platform hooks
 $(POOL_OBJ): $(POOL_SRC) | $(BUILD_DIR)/kpi
-	$(CC) $(KPI_CFLAGS) -DLKPI_SKB_POOL_NO_TARGET_HOOKS -c $< -o $@
+	$(CC) $(KPI_CFLAGS) -MMD -MP -DLKPI_SKB_POOL_NO_TARGET_HOOKS -c $< -o $@
 
-$(BIN): $(STACK_OBJS) $(SEAM_OBJS) $(PORT_OBJS) $(KPI_OBJS) $(APP_OBJS) \
-	$(NETIF_OBJS) $(DRV_OBJS) $(RT_OBJS)
+ALL_OBJS := $(STACK_OBJS) $(SEAM_OBJS) $(PORT_OBJS) $(KPI_OBJS) $(APP_OBJS) \
+    $(NETIF_OBJS) $(DRV_OBJS) $(RT_OBJS) $(WPAV_OBJS)
+
+-include $(ALL_OBJS:.o=.d)
+
+$(BIN): $(ALL_OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
 
 run: $(BIN)

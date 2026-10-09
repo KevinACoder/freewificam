@@ -136,11 +136,15 @@ static int stub_clear_key(struct wlan_seam_drv *drv, int pairwise, int key_idx)
 }
 
 static void stub_bss_info(struct wlan_seam_drv *drv, int joined,
-    const uint8_t bssid[6], uint32_t freq)
+    const uint8_t bssid[6], uint32_t freq, uint16_t aid,
+    const uint8_t *rates, size_t rates_len)
 {
 	(void) drv;
 	(void) joined;
 	(void) bssid;
+	(void) aid;
+	(void) rates;
+	(void) rates_len;
 	counters.last_freq = freq;
 	counters.bss_info++;
 }
@@ -183,7 +187,8 @@ void wlan_seam_stub_run(void)
 	(void) stub_ops.tx(drv, frame, sizeof(frame), 1);
 	(void) stub_ops.set_key(drv, 1, 0, WLAN_SEAM_CIPHER_CCMP, key,
 	    sizeof(key));
-	stub_ops.bss_info(drv, 1, bssid, 2412);
+	stub_ops.bss_info(drv, 1, bssid, 2412, 1,
+	    (const uint8_t []){ 0x82, 0x84, 0x0b, 0x16, 0x0c, 0x18 }, 6);
 }
 
 unsigned wlan_seam_stub_calls(void)

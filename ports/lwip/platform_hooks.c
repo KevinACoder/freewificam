@@ -43,11 +43,19 @@ void lwip_platform_diag(const char *fmt, ...)
 {
 	char buf[LWIP_HOOKS_LINE_MAX];
 	va_list ap;
+	size_t n;
 
 	va_start(ap, fmt);
 	(void)vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
-	board_log("%s", buf);
+	/* The line is terminated here: the stack's own format strings do not all
+	 * end with a newline, and the console splits a line only at its length
+	 * cap - an unterminated print glues onto whatever is written next, and
+	 * the split then cuts a line (a judged anchor included) in half. */
+	n = strlen(buf);
+	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+		buf[--n] = '\0';
+	board_log("%s\n", buf);
 }
 
 void lwip_platform_assert(const char *message, const char *file, int line)

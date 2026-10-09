@@ -273,6 +273,38 @@ wlnetif_stub_get(struct wlnetif_stub_result *out)
 	*out = res;
 }
 
+/* ------------------------------------------------------------------ */
+/* the WPA-image composition: the supplicant backend owns the port's   */
+/* single event slot and forwards the association to this layer        */
+/* ------------------------------------------------------------------ */
+
+/* declared here rather than through the backend's header: this file is an lwIP
+ * translation unit and must not include the net80211 world's headers */
+void	wlan_wpa_netif_bind(void *netif, void (*on_assoc)(void *),
+	    void (*on_disassoc)(void *));
+
+static void
+stub_wpa_on_assoc(void *netif)
+{
+
+	wlannetif_note_assoc((struct netif *)netif);
+}
+
+static void
+stub_wpa_on_disassoc(void *netif)
+{
+
+	wlannetif_note_disassoc((struct netif *)netif);
+}
+
+void
+wlnetif_stub_bind_wpa(void)
+{
+
+	wlan_wpa_netif_bind(&stub_netif, stub_wpa_on_assoc,
+	    stub_wpa_on_disassoc);
+}
+
 /* the flow reads the link flag right after each event arrives (the snapshot
  * alone cannot tell the two states apart, because both events have run) */
 void

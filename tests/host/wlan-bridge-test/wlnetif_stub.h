@@ -47,4 +47,9 @@ void	wlnetif_stub_note_link_down(void);
 /* take a snapshot of the recorder */
 void	wlnetif_stub_get(struct wlnetif_stub_result *out);
 
+/* bind the stub netif to the WPA backend's forwarding path (the composition
+ * an image with both consumers uses: the backend owns the event slot and hands
+ * the association to the presentation layer's steps) */
+void	wlnetif_stub_bind_wpa(void);
+
 #endif /* WLNETIF_STUB_H */

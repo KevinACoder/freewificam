@@ -2,10 +2,14 @@
 # the expected response after each; the judge verifies the responses in the
 # received stream. One command per line, CR-terminated by the sender.
 #
-# The help count is 9 functions for this image (the WLAN command joins the
-# regression image's set of 8).
+# Read-only checks only, and deliberately no `exit`: the round's operator
+# appends the run's own commands after these through the runner's
+# --steps-extra file (the connect command carries a credential, which must not
+# live in this repository), and an early exit would close the shell those
+# commands need.
+#
+# The help count for this image: the built-ins plus the WLAN and WPA commands.
 # send	expect
 	user@rk3568:/\$
-help\r	total function 6[\s\S]*total variable 2
+help\r	total function 7[\s\S]*total variable 2
 wlan status\r	wlan: attached=\d+ state=-?\d+
-exit\r	user@rk3568:/\$ exit[\s\S]*user@rk3568:/\$

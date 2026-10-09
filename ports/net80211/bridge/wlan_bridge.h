@@ -51,6 +51,38 @@ struct wlan_bridge_counters {
 	unsigned int	scan_completes;
 	unsigned int	filter_sets;
 	unsigned int	filter_clears;
+	/* the discriminator family: which management answers actually cross
+	 * the radio, split by kind and by "from the BSSID this join targets",
+	 * plus the frames the chip flagged as FCS-failed (the wrong-channel
+	 * signature: a parked-off-channel radio receives garbage, a right
+	 * channel receives valid beacons). */
+	unsigned int	rx_beacon;
+	unsigned int	rx_beacon_tgt;
+	unsigned int	rx_probersp;
+	unsigned int	rx_fcs_bad;
+	unsigned int	tune_calls;
+	unsigned int	tune_fails;
+	/* The data-plane discriminator family: the protection state of data
+	 * frames on the way out and on the way in, plus the stack's own crypto
+	 * verdicts. A frame that leaves in the clear, or leaves sealed under a
+	 * key id the peer does not index for it (a group-addressed frame under
+	 * the pairwise key), is dropped by the peer with no answer; a frame
+	 * that arrives and fails to decrypt lands in the crypto counters
+	 * instead. The pair says which side of the radio the fault is on. */
+	unsigned int	data_tx_enc;	/* data frames sent protected */
+	unsigned int	data_tx_plain;	/* data frames sent in the clear */
+	unsigned int	tx_noencap;	/* data frames dropped before the radio */
+	unsigned int	rx_data;	/* data frames received */
+	unsigned int	rx_data_enc;	/* ... that arrived protected */
+	unsigned int	rx_data_hwdec;	/* ... the chip already decrypted */
+	unsigned int	rx_data_hwdec_prot;	/* ... protected and chip-decrypted */
+	unsigned int	rx_wepfail;	/* stack: receive decrypt failed */
+	unsigned int	rx_ccmpformat;	/* stack: CCMP header malformed */
+	unsigned int	rx_ccmpreplay;	/* stack: CCMP sequence violation */
+	unsigned int	rx_ccmpmic;	/* stack: CCMP MIC mismatch */
+	unsigned int	tx_nodefkey;	/* stack: no transmit key to seal with */
+	unsigned int	tx_errors;	/* interface output errors */
+	uint32_t	tuned_freq;
 	int		attached;
 };
 
@@ -67,9 +99,16 @@ void	wlan_bridge_detach(void);
 /*
  * Receive: one 802.11 frame (no FCS) from the driver half, borrowed - the
  * bridge copies it into the stack's own buffer before returning. `rssi` is the
- * driver's signal report (0 when it has none).
+ * driver's signal report (0 when it has none); `fcs_bad` says the chip flagged
+ * the frame's checksum (it still arrives - nothing between the driver and here
+ * drops it - but it is noise, not an answer); `hw_dec` says the chip already
+ * decrypted the frame itself (the driver reports it per frame). The stack is a
+ * software-crypto one, so a frame that arrives already decrypted is one the
+ * stack will decrypt a second time and fail - which is exactly why the flag
+ * crosses this boundary: it is the only way that failure becomes visible.
  */
-int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi);
+int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi,
+	    int fcs_bad, int hw_dec);
 
 /* A transmitted frame completed (the driver half's tx-status callback). */
 void	wlan_bridge_tx_complete(void);
@@ -93,6 +132,68 @@ int	wlan_bridge_tune_current(void);
  * match then requires a candidate to carry it). Returns 0 or a negative error. */
 int	wlan_bridge_set_ssid(const uint8_t *ssid, size_t len);
 
+/*
+ * The supplicant-driven connect path. The bridge is put into MANUAL roaming
+ * first (wlan_bridge_set_manual): the stack then reports a finished sweep
+ * without joining on its own, and the supplicant's decision arrives here as
+ * an explicit join - the SSID and (for a PSK network) the RSN IE the
+ * supplicant built, against a candidate the sweep already recorded.
+ *   - `bssid` locks the candidate (NULL = match by SSID);
+ *   - `wpa_ie` non-NULL marks a PSK network: F_WPA2 (or F_WPA1 for a WPA IE)
+ *     and F_PRIVACY go up, the IE is carried in the association request, and
+ *     the node is put under 802.1X so RUN does not auto-authorize - the
+ *     pairwise key install afterwards is what opens the port.
+ * Returns 0 or a negative error.
+ */
+int	wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
+	    const uint8_t *wpa_ie, size_t ie_len);
+
+/* Disconnect with the given IEEE reason code (the stack returns to INIT). */
+void	wlan_bridge_disconnect(int reason);
+
+/*
+ * Roaming control. AUTO (the attach default) lets end_scan join the best
+ * candidate by itself; MANUAL makes the sweep report and stop, which is the
+ * mode a supplicant needs (its own decision must not race the stack's).
+ */
+void	wlan_bridge_set_manual(int on);
+
+/* WPA mode gate: the stack parses RSN/WPA IEs (and records them on scan
+ * candidates) only while a WPA flag is set, so this must precede any sweep a
+ * supplicant will read the table from. */
+void	wlan_bridge_set_wpa(int on);
+
+/*
+ * Pull one scan-table row (the supplicant's get_scan_results2 reads rows until
+ * a non-zero return). The IEs the row carries - rates plus the RSN/WPA element
+ * the candidate advertised - are assembled into a bridge-owned static buffer
+ * and borrowed by the caller until the next call. Returns 0 or a negative
+ * error (including "past the end").
+ */
+struct wlan_bridge_scan_res {
+	uint8_t	bssid[6];
+	uint8_t	ssid[33];
+	size_t	ssid_len;
+	int	freq;			/* MHz, 0 unknown */
+	uint16_t beacon_int;
+	uint16_t caps;			/* 802.11 capability info */
+	int	level;			/* RSSI, driver units */
+	const uint8_t *ies;		/* borrowed until the next fetch */
+	size_t	ies_len;
+};
+int	wlan_bridge_scan_fetch(int idx, struct wlan_bridge_scan_res *out);
+
+/*
+ * Install a key the way a supplicant's set_key does: the stack-side
+ * bookkeeping first (the cipher is attached to the slot, so encap/decrypt
+ * start using it), then the driver's CAM write through the seam - both legs
+ * belong to one key, which is why this is one call and not two. A pairwise
+ * install also marks the node authorized (the port opening the 802.1X gate
+ * waits for). `cipher` uses the seam's WLAN_SEAM_CIPHER_* numbering.
+ */
+int	wlan_bridge_key_install(int pairwise, int key_idx, int set_tx,
+	    int cipher, const uint8_t *key, size_t key_len);
+
 /* Walk the scan table, one callback per candidate, scalars only (the caller may
  * live in the other world). Returns the number of candidates seen. */
 unsigned int wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6],
@@ -101,6 +202,25 @@ unsigned int wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6],
 
 /* The stack's current state value (the imported numbering), -1 when detached. */
 int	wlan_bridge_state(void);
+
+/* Is a sweep in flight? (the stack state and the bookkeeping both standing) */
+int	wlan_bridge_scan_active(void);
+
+/* Does the sweep's bookkeeping stand, whatever the stack's state? The dwell
+ * pump dwells on THIS one: the dwell's entry check closes a sweep the stack
+ * already left (a cancelled scan on the way into a join), so gating the pump
+ * on scan_active() alone can strand the bookkeeping - and with it, every
+ * later scan_start - on a -EBUSY forever. */
+int	wlan_bridge_scan_pending(void);
+
+/* The 1 Hz stack tick: management-frame timeout and node inactivity. Without
+ * it a lost auth/assoc response is never retried (the countdown that restarts
+ * the scan is driven here). The radio pump calls it once a second. */
+void	wlan_bridge_watchdog(void);
+
+/* Diagnostic: the imported path's auth-response-in-wrong-state counter (see
+ * the definition; the join judgment reads it to split arrival from discard). */
+uint32_t wlan_bridge_stat_bad_auth(void);
 
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */

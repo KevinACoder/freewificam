@@ -95,6 +95,12 @@ int	wlan_bridge_up(void);
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);
 int	wlan_bridge_key_set(int pairwise, int key_idx, int cipher,
 	    const uint8_t *key, size_t key_len);
+int	wlan_bridge_key_clear(int pairwise, int key_idx);
+void	wlan_bridge_set_manual(int on);
+
+/* the supplicant backend instance registered with the port layer */
+#include "wpa_vendor_port.h"
+int	wlan_wpa_vendor_init(void);
 
 /* the port's event numbering and the seam's cipher numbering, as scalars */
 #define WLAN_EV_SCAN_DONE	0
@@ -109,6 +115,11 @@ int	wlan_bridge_key_set(int pairwise, int key_idx, int cipher,
 static int failures;
 static const char *fault_name;
 static struct ieee80211_hw *g_hw;
+
+/* the multicast address a group key install carries */
+static const uint8_t bcast_addr[6] = {
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+};
 
 static void
 case_line(const char *id, int ok, const char *fmt, ...)
@@ -195,9 +206,12 @@ on_data(const uint8_t *frame, size_t len, void *arg)
 static const uint8_t sta_mac[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
 
 /* one received frame, handed the way a driver hands it: an skb carrying the rx
- * status block through the substitute's rx entry */
+ * status block through the substitute's rx entry. `flags` and `signal` are the
+ * status fields the driver would set; RX_FLAG_FAILED_FCS_CRC and
+ * RX_FLAG_DECRYPTED are the two the bridge counts. */
 static void
-inject_rx(const uint8_t *frame, size_t len)
+inject_rx_flags(const uint8_t *frame, size_t len, unsigned int flags,
+    int signal)
 {
 	struct sk_buff *skb;
 	struct ieee80211_rx_status *rs;
@@ -212,8 +226,15 @@ inject_rx(const uint8_t *frame, size_t len)
 	memset(rs, 0, sizeof(*rs));
 	rs->freq = 2412;
 	rs->band = NL80211_BAND_2GHZ;
-	rs->signal = -50;
+	rs->signal = (int8_t)signal;
+	rs->flag = (uint8_t)flags;
 	ieee80211_rx_irqsafe(g_hw, skb);
+}
+
+static void
+inject_rx(const uint8_t *frame, size_t len)
+{
+	inject_rx_flags(frame, len, 0, -50);
 }
 
 /* the fake AP answers each transmitted frame exactly once, in the order the
@@ -846,8 +867,833 @@ case_b10(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* B11: the supplicant backend instance over the real bridge            */
+/* ------------------------------------------------------------------ */
+
+static unsigned int b11_scan_done;
+static unsigned int b11_assoc;
+static unsigned int b11_disassoc;
+
+static void
+b11_event(int event, const uint8_t *addr, const uint8_t *buf, size_t len,
+    void *arg)
+{
+
+	(void)addr;
+	(void)buf;
+	(void)len;
+	(void)arg;
+	switch (event) {
+	case 1:		/* WPA_VENDOR_EVENT_SCAN_DONE */
+		b11_scan_done++;
+		break;
+	case 2:		/* WPA_VENDOR_EVENT_ASSOC */
+		b11_assoc++;
+		break;
+	case 3:		/* WPA_VENDOR_EVENT_DISASSOC */
+		b11_disassoc++;
+		break;
+	}
+}
+
+/* the WPA2-PSK/CCMP RSN IE the supplicant would hand down */
+static const uint8_t b11_rsn_ie[22] = {
+	0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, 0xac, 0x04,
+	0x01, 0x00, 0x00, 0x0f, 0xac, 0x04, 0x01, 0x00,
+	0x00, 0x0f, 0xac, 0x02, 0x00, 0x00
+};
+
+static const uint8_t b11_tk[16] = {
+	0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+	0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00
+};
+
+static const uint8_t b11_gtk[16] = {
+	0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+	0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf
+};
+
+/* does any captured frame of this subtype carry the byte string? (the assoc
+ * request must carry the supplicant's RSN IE verbatim) */
+static int
+b11_capture_contains_mgmt(uint8_t subtype, const uint8_t *needle, size_t n)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	unsigned int f, i;
+
+	for (f = 0; f < st->tx_count && f < FAKE_DRIVER_TX_MAX; f++) {
+		if (!st->tx_is_mgmt[f] || st->tx_lens[f] < 24)
+			continue;
+		if ((st->tx_frames[f][0] & IEEE80211_FCTL_STYPE) != subtype)
+			continue;
+		for (i = 24; i + n <= st->tx_lens[f]; i++) {
+			if (memcmp(&st->tx_frames[f][i], needle, n) == 0)
+				return 1;
+		}
+	}
+	return 0;
+}
+
+/* did a data frame leave carrying the EAPOL ethertype behind LLC/SNAP? */
+static int
+b11_capture_eapol_out(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	unsigned int f, i;
+
+	for (f = 0; f < st->tx_count && f < FAKE_DRIVER_TX_MAX; f++) {
+		if (st->tx_is_mgmt[f] || st->tx_lens[f] < 24 + 8)
+			continue;
+		for (i = 24; i + 2 <= st->tx_lens[f]; i++) {
+			if (st->tx_frames[f][i] == 0x88 &&
+			    st->tx_frames[f][i + 1] == 0x8e)
+				return 1;
+		}
+	}
+	return 0;
+}
+
+/*
+ * The supplicant backend instance (the nine-op contract over the real bridge):
+ * ensure_up puts the stack in the supplicant's mode, the survey fills the pull
+ * model, the join takes the supplicant's own RSN IE, the two key installs land
+ * on both legs, the EAPOL exit reaches the data path, and the event pump feeds
+ * the presentation layer's forwarding.
+ */
+static int
+case_b11(void)
+{
+	const struct wpa_vendor_port *vp;
+	const struct fake_driver_state *st;
+	struct wpa_scan_res_ret row;
+	struct wpa_vendor_conn conn;
+	struct wpa_vendor_key key;
+	uint8_t own[6];
+	uint8_t eapol[20];
+	unsigned int guard, set_key_before, clear_key_before;
+	int rc;
+
+	if (wlan_wpa_vendor_init() != 0) {
+		case_line("B11", 0, "the backend did not register");
+		return -1;
+	}
+	vp = wpa_vendor_backend();
+	if (vp == NULL || vp->ensure_up == NULL || vp->connect == NULL) {
+		case_line("B11", 0, "the registered table is incomplete");
+		return -1;
+	}
+	vp->set_event_cb(b11_event, NULL);
+
+	if (vp->ensure_up() != 0) {
+		case_line("B11", 0, "ensure_up failed");
+		return -1;
+	}
+	if (fault_name != NULL && strcmp(fault_name, "no-manual") == 0) {
+		/* red control: the backend forgot the MANUAL switch, so the
+		 * stack's own matcher would race the supplicant's decision */
+		wlan_bridge_set_manual(0);
+	}
+	if (n8_peek_roaming() != 2) {	/* IEEE80211_ROAMING_MANUAL */
+		case_line("B11", 0, "ensure_up did not put the stack in MANUAL "
+		    "roaming (mode=%d)", n8_peek_roaming());
+		return -1;
+	}
+	if (vp->get_hwaddr(own) != 0 || memcmp(own, sta_mac, 6) != 0) {
+		case_line("B11", 0, "get_hwaddr did not report the interface "
+		    "address");
+		return -1;
+	}
+
+	/* the survey: the pull model must answer with the AP the scripted peer
+	 * advertised, and MANUAL must leave the stack un-joined afterwards */
+	if (vp->scan_start((const uint8_t *)AP_SSID, AP_SSID_LEN) != 0) {
+		case_line("B11", 0, "scan_start failed");
+		return -1;
+	}
+	for (guard = 0; guard < 64; guard++) {
+		answer_new_tx_from_ap();
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+	answer_new_tx_from_ap();
+	if (b11_scan_done < 1) {
+		case_line("B11", 0, "the scan-complete event did not arrive "
+		    "through the backend's pump");
+		return -1;
+	}
+	if (n8_peek_state() == n8_peek_run_state()) {
+		case_line("B11", 0, "MANUAL roaming still joined automatically "
+		    "(state=RUN)");
+		return -1;
+	}
+	if (vp->scan_fetch(0, &row) != 0) {
+		case_line("B11", 0, "scan_fetch(0) returned nothing");
+		return -1;
+	}
+	if (memcmp(row.bssid, ap_bssid, 6) != 0 || row.ssid_len != AP_SSID_LEN ||
+	    memcmp(row.ssid, AP_SSID, AP_SSID_LEN) != 0 || row.freq != 2412 ||
+	    row.ies_len < 2 || row.ies[0] != 1) {
+		case_line("B11", 0, "the fetched row does not describe the AP "
+		    "(ssid_len=%u freq=%d ies=%u)", (unsigned)row.ssid_len,
+		    row.freq, (unsigned)row.ies_len);
+		return -1;
+	}
+	if (vp->scan_fetch(1, &row) == 0) {
+		case_line("B11", 0, "scan_fetch past the end did not stop the "
+		    "iteration");
+		return -1;
+	}
+
+	/* the join: the supplicant's own RSN IE, the privacy/802.1X policy it
+	 * implies, and the assoc request that carries it */
+	memset(&conn, 0, sizeof(conn));
+	conn.ssid = (const uint8_t *)AP_SSID;
+	conn.ssid_len = AP_SSID_LEN;
+	conn.bssid = ap_bssid;
+	conn.bssid_set = 1;
+	conn.wpa_ie = b11_rsn_ie;
+	conn.wpa_ie_len = sizeof(b11_rsn_ie);
+	if (vp->connect(&conn) != 0) {
+		case_line("B11", 0, "connect refused the join");
+		return -1;
+	}
+	for (guard = 0; guard < 64; guard++) {
+		if (n8_peek_state() == n8_peek_run_state())
+			break;
+		answer_new_tx_from_ap();
+	}
+	if (n8_peek_state() != n8_peek_run_state()) {
+		case_line("B11", 0, "the join did not reach RUN (state=%d)",
+		    n8_peek_state());
+		return -1;
+	}
+	if (b11_assoc < 1) {
+		case_line("B11", 0, "the association event did not arrive "
+		    "through the backend's pump");
+		return -1;
+	}
+	if (!n8_peek_privacy()) {
+		case_line("B11", 0, "the join left the privacy flag unset");
+		return -1;
+	}
+	if (n8_peek_authmode() != n8_peek_authmode_8021x()) {
+		case_line("B11", 0, "the join did not put the node under 802.1X "
+		    "(authmode=%d)", n8_peek_authmode());
+		return -1;
+	}
+	if (!b11_capture_contains_mgmt(IEEE80211_STYPE_ASSOC_REQ, b11_rsn_ie,
+		sizeof(b11_rsn_ie))) {
+		case_line("B11", 0, "the assoc request did not carry the "
+		    "supplicant's RSN IE");
+		return -1;
+	}
+
+	/* EAPOL out before any key: the frame leaves through the one data path
+	 * and the ethertype survives the encapsulation */
+	memset(eapol, 0, sizeof(eapol));
+	eapol[0] = 0x02;
+	eapol[1] = 0x03;
+	for (guard = 0; guard < sizeof(eapol) - 2; guard++)
+		eapol[2 + guard] = (uint8_t)guard;
+	/* the contract's success shape: >= 0 (the l2_packet carrier turns the
+	 * non-negative return into the byte count) */
+	if (vp->eapol_xmit(ap_bssid, eapol, sizeof(eapol)) < 0) {
+		case_line("B11", 0, "eapol_xmit failed");
+		return -1;
+	}
+	if (!b11_capture_eapol_out()) {
+		case_line("B11", 0, "the EAPOL frame did not reach the data "
+		    "path");
+		return -1;
+	}
+
+	/* the two key installs: clear the slot first so the transition is real,
+	 * then verify both legs. The driver leg is asserted ABSENT: the port
+	 * never advertises a hardware cipher, so the stack's key is
+	 * software-crypto and net80211's own model keeps such a key out of the
+	 * driver (FreeBSD calls the driver's key hook only for hardware keys).
+	 * Handing it over anyway makes the chip decrypt received frames, and the
+	 * stack then decrypts the plaintext a second time and fails the MIC -
+	 * every protected frame, DHCP's offers included, dies there. */
+	st = fake_driver_state();
+	clear_key_before = fake_driver_state()->clear_key_calls;
+	set_key_before = st->set_key_calls;
+	(void)wlan_bridge_key_clear(1, 0);
+	if (fake_driver_state()->clear_key_calls != clear_key_before) {
+		case_line("B11", 0, "the driver's key clear ran (+%u calls) for a "
+		    "key the chip never held",
+		    fake_driver_state()->clear_key_calls - clear_key_before);
+		return -1;
+	}
+	if (n8_peek_key_defined(1, 0) != 0) {
+		case_line("B11", 0, "the pairwise slot did not clear");
+		return -1;
+	}
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 0;
+	key.addr = ap_bssid;		/* unicast: pairwise */
+	key.set_tx = 1;
+	key.key = b11_tk;
+	key.key_len = sizeof(b11_tk);
+	rc = vp->set_key(&key);
+	if (rc != 0 || n8_peek_key_defined(1, 0) != 1 ||
+	    n8_peek_node_authorized() != 1) {
+		case_line("B11", 0, "the pairwise install did not land on both "
+		    "legs (rc=%d defined=%d auth=%d)", rc,
+		    n8_peek_key_defined(1, 0), n8_peek_node_authorized());
+		return -1;
+	}
+	if (fake_driver_state()->set_key_calls != set_key_before) {
+		case_line("B11", 0, "a software-crypto key reached the driver's "
+		    "CAM (+%u calls): the chip would decrypt received frames and "
+		    "the stack would decrypt them again",
+		    fake_driver_state()->set_key_calls - set_key_before);
+		return -1;
+	}
+
+	set_key_before = fake_driver_state()->set_key_calls;
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 1;
+	key.addr = bcast_addr;		/* multicast bit: group key */
+	key.set_tx = 1;
+	key.key = b11_gtk;
+	key.key_len = sizeof(b11_gtk);
+	rc = vp->set_key(&key);
+	if (rc != 0 || n8_peek_key_defined(0, 1) != 1 ||
+	    n8_peek_def_txkey() != 1) {
+		case_line("B11", 0, "the group install did not land (rc=%d "
+		    "defined=%d def_tx=%d)", rc, n8_peek_key_defined(0, 1),
+		    n8_peek_def_txkey());
+		return -1;
+	}
+	if (fake_driver_state()->set_key_calls != set_key_before) {
+		case_line("B11", 0, "a software-crypto group key reached the "
+		    "driver's CAM (+%u calls)",
+		    fake_driver_state()->set_key_calls - set_key_before);
+		return -1;
+	}
+
+	/* the presentation layer's forwarding through the backend's slot */
+	{
+		struct wlnetif_stub_result r;
+
+		if (wlnetif_stub_assemble(NULL) != 0) {
+			case_line("B11", 0, "the netif did not assemble for the "
+			    "forwarding check");
+			return -1;
+		}
+		wlnetif_stub_bind_wpa();
+		if (seam_drive_event(SEAM_DRIVE_EV_ASSOC, ap_bssid) != 0) {
+			case_line("B11", 0, "the assoc delivery failed");
+			return -1;
+		}
+		wlnetif_stub_note_link_up();
+		wlnetif_stub_get(&r);
+		if (r.link_up_seen < 1 || !r.link_assoc_flag) {
+			case_line("B11", 0, "the backend did not forward the "
+			    "association to the netif (seenz=%u flag=%u)",
+			    r.link_up_seen, r.link_assoc_flag);
+			return -1;
+		}
+	}
+
+	/* disconnect: the stack leaves RUN and the event pump reports it */
+	vp->disconnect(3);
+	if (n8_peek_state() == n8_peek_run_state()) {
+		case_line("B11", 0, "disconnect did not leave the RUN state");
+		return -1;
+	}
+
+	case_line("B11", 1, "backend ops verified: MANUAL sweep + pull table, "
+	    "RSN join + 802.1X gate, CCMP install stack-side only (the chip is "
+	    "not asked to decrypt), 0x888E "
+	    "exit, event pump forwarded to the netif");
+	return 0;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* the board-feedback cases (r13/r14): the second sweep, the mid-sweep
+ * join race, and the association wiring the driver actually reads           */
+/* ------------------------------------------------------------------ */
+
+/* how many probe requests carrying the configured SSID the driver was handed
+ * so far (the sweep's own footprint; a sweep that did not probe adds none) */
+static unsigned int
+count_ssid_probes(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	unsigned int i, n = 0;
+
+	for (i = 0; i < st->tx_count && i < FAKE_DRIVER_TX_MAX; i++) {
+		if (!st->tx_is_mgmt[i] || st->tx_lens[i] < 26)
+			continue;
+		if ((st->tx_frames[i][0] & IEEE80211_FCTL_STYPE) !=
+		    IEEE80211_STYPE_PROBE_REQ)
+			continue;
+		if (st->tx_frames[i][24] == IEEE80211_ELEMID_SSID &&
+		    st->tx_frames[i][25] == AP_SSID_LEN &&
+		    memcmp(&st->tx_frames[i][26], AP_SSID, AP_SSID_LEN) == 0)
+			n++;
+	}
+	return n;
+}
+
+/* one whole sweep, the pump's own rhythm: answer what the stack sent while
+ * the channel is still current, then hand the stack its next channel */
+static void
+run_one_sweep(void)
+{
+	unsigned int guard;
+
+	for (guard = 0; guard < 64; guard++) {
+		answer_new_tx_from_ap();
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+	answer_new_tx_from_ap();
+}
+
+/*
+ * B12: a sweep started while the stack already sits in its SCAN state (the
+ * MANUAL-roaming park) must still probe. The stack arms its active-scan flag
+ * only in begin_scan (the INIT -> SCAN entry); end_scan clears it; so the
+ * bridge's scan_start is the only thing that re-arms a parked stack - without
+ * it every sweep after the first walks the channels in silence (board r14:
+ * the supplicant's scans kept "completing" over a stale table while no probe
+ * left the radio).
+ */
+static int
+case_b12(void)
+{
+	unsigned int before = count_ssid_probes();
+	struct wlan_bridge_counters cb;
+	unsigned int done_before;
+	int rc;
+
+	wlan_bridge_stats(&cb);
+	done_before = cb.scan_completes;
+	rc = wlan_bridge_scan_start();
+	if (rc != 0) {
+		case_line("B12", 0, "the first sweep did not start (rc=%d)", rc);
+		return -1;
+	}
+	run_one_sweep();
+	if (count_ssid_probes() == before) {
+		case_line("B12", 0, "the first sweep transmitted no probe");
+		return -1;
+	}
+
+	/* the sweep ended; MANUAL roaming parks the stack in SCAN */
+	before = count_ssid_probes();
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B12", 0, "the second scan_start was refused (the "
+		    "sweep bookkeeping did not close)");
+		return -1;
+	}
+	if (fault_name != NULL && strcmp(fault_name, "no-rearm") == 0)
+		n8_poke_clear_active_scan();	/* red control: the old state */
+	run_one_sweep();
+	/* the threshold is the sweep, not the re-entry: scan_start's own
+	 * state re-entry emits one probe even with the flags cleared, so a
+	 * parked re-arm that failed would still show +1; a working re-arm
+	 * probes every dwelled channel */
+	if (count_ssid_probes() < before + 4) {
+		case_line("B12", 0, "the second sweep barely probed (+%u): the "
+		    "parked stack was not re-armed",
+		    count_ssid_probes() - before);
+		return -1;
+	}
+	wlan_bridge_stats(&cb);
+	if (cb.scan_completes <= done_before + 1) {
+		case_line("B12", 0, "the second sweep did not close "
+		    "(completes=%u)", cb.scan_completes);
+		return -1;
+	}
+	case_line("B12", 1, "a parked (SCAN-state) re-sweep still probes "
+	    "(+%u probes, scan-done reported)",
+	    count_ssid_probes() - before);
+	return 0;
+}
+
+/*
+ * B13: a join that lands while a sweep is mid-flight must not strand the
+ * sweep's bookkeeping. The pump's dwell is what closes a sweep the stack
+ * already left (its entry check); a stranded `scanning` flag refuses every
+ * later scan_start with -EBUSY - the board's structural hazard.
+ */
+static int
+case_b13(void)
+{
+	int rc;
+
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B13", 0, "the mid-flight sweep did not start");
+		return -1;
+	}
+	answer_new_tx_from_ap();
+	if (wlan_bridge_scan_dwell() != 1) {
+		case_line("B13", 0, "the dwell did not arm a second channel");
+		return -1;
+	}
+	/* the supplicant's move: join over the live sweep (open network) */
+	if (wlan_bridge_join((const uint8_t *)AP_SSID, AP_SSID_LEN, ap_bssid,
+	    NULL, 0) != 0) {
+		case_line("B13", 0, "the mid-sweep join was refused");
+		return -1;
+	}
+	{
+		unsigned int guard;
+
+		for (guard = 0; guard < 64; guard++) {
+			if (n8_peek_state() == n8_peek_run_state())
+				break;
+			answer_new_tx_from_ap();
+		}
+		if (n8_peek_state() != n8_peek_run_state()) {
+			case_line("B13", 0, "the mid-sweep join did not reach "
+			    "RUN (state=%d)", n8_peek_state());
+			return -1;
+		}
+	}
+	/* the pump's next dwell: the stack left S_SCAN, so this must close the
+	 * sweep (return 0) rather than drag the state machine back */
+	if (wlan_bridge_scan_dwell() != 0) {
+		case_line("B13", 0, "a dwell after the join tried to walk the "
+		    "sweep instead of closing it");
+		return -1;
+	}
+	if (wlan_bridge_scan_pending() != 0) {
+		case_line("B13", 0, "the closed sweep still reads pending");
+		return -1;
+	}
+	rc = wlan_bridge_scan_start();
+	if (rc != 0) {
+		case_line("B13", 0, "scan_start after the mid-sweep join was "
+		    "refused (rc=%d; the bookkeeping stranded)", rc);
+		return -1;
+	}
+	case_line("B13", 1, "mid-sweep join: dwell closes the sweep, state "
+	    "reaches RUN, scan_start recovers (no stranded EBUSY)");
+	return 0;
+}
+
+/*
+ * B14: the association wiring a mac80211 driver reads. The adapter's
+ * bss_info must carry vif->cfg.assoc/aid and the station's rate bitmaps on
+ * the join leg - the driver's association branch is gated on cfg.assoc and
+ * builds its rate mask from the station (without them it runs its
+ * NOT-associated leg while the stack has associated). The leave leg must not
+ * push a BSSID change with a NULL address (the driver dereferences it).
+ */
+static int
+case_b14(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	unsigned int ev_join = st->bss_ev_count, ev_leave;
+	unsigned int guard;
+
+	/* finish whatever sweep B13 armed, then join again under this case's
+	 * own eyes */
+	run_one_sweep();
+	if (wlan_bridge_join((const uint8_t *)AP_SSID, AP_SSID_LEN, ap_bssid,
+	    NULL, 0) != 0) {
+		case_line("B14", 0, "the join was refused");
+		return -1;
+	}
+	for (guard = 0; guard < 64; guard++) {
+		if (n8_peek_state() == n8_peek_run_state())
+			break;
+		answer_new_tx_from_ap();
+	}
+	if (n8_peek_state() != n8_peek_run_state()) {
+		case_line("B14", 0, "the join did not reach RUN (state=%d)",
+		    n8_peek_state());
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->bss_ev_count == 0 || st->bss_ev_count > FAKE_DRIVER_BSS_EV_MAX ||
+	    ev_join >= st->bss_ev_count) {
+		case_line("B14", 0, "no association event was recorded "
+		    "(count=%u ev_join=%u)", st->bss_ev_count, ev_join);
+		return -1;
+	}
+	ev_join = st->bss_ev_count - 1;
+	if (!st->bss_ev[ev_join].assoc || st->bss_ev[ev_join].aid == 0 ||
+	    st->bss_ev[ev_join].bssid_null ||
+	    memcmp(st->bss_ev[ev_join].bssid, ap_bssid, 6) != 0) {
+		case_line("B14", 0, "the association event lacks the driver's "
+		    "wiring (assoc=%d aid=%u null=%d)",
+		    st->bss_ev[ev_join].assoc, st->bss_ev[ev_join].aid,
+		    st->bss_ev[ev_join].bssid_null);
+		return -1;
+	}
+	if (st->bss_ev[ev_join].supp0 == 0) {
+		case_line("B14", 0, "the station carries no rate bitmap (the "
+		    "driver's rate mask would be empty)");
+		return -1;
+	}
+	ev_leave = st->bss_ev_count;
+	wlan_bridge_disconnect(3);
+	st = fake_driver_state();
+	if (st->bss_ev_count <= ev_leave) {
+		case_line("B14", 0, "the disconnect produced no event");
+		return -1;
+	}
+	ev_leave = st->bss_ev_count - 1;
+	if (st->bss_ev[ev_leave].assoc ||
+	    (st->bss_ev[ev_leave].changed & BSS_CHANGED_BSSID) != 0) {
+		case_line("B14", 0, "the leave leg is wrong (assoc=%d "
+		    "bssid-pushed=%llu)", st->bss_ev[ev_leave].assoc,
+		    (unsigned long long)(st->bss_ev[ev_leave].changed &
+		    BSS_CHANGED_BSSID));
+		return -1;
+	}
+	case_line("B14", 1, "assoc wiring carried (aid=%u rates=%#x); leave "
+	    "leg sends no NULL-BSSID push",
+	    st->bss_ev[ev_join].aid, st->bss_ev[ev_join].supp0);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* the flow                                                            */
 /* ------------------------------------------------------------------ */
+
+/*
+ * B15: the transmit key of a group-addressed data frame on the station's
+ * uplink. A DHCP DISCOVER leaves the station with the broadcast destination
+ * address, but the 802.11 header's Address 1 is the AP - a unicast address -
+ * and the key choice follows Address 1: the pairwise key seals the frame and
+ * the CCMP header carries key id 0, while a group key sits at index 1 as the
+ * default transmit key all along (output.c:555-562 selects the unicast key in
+ * station mode, crypto.c:570-586 keys by Address 1). Choosing by the
+ * destination address instead - the group key for a broadcast destination -
+ * is the failure the board round had to rule out by hand: the peer indexes a
+ * station's uplink frame under the pairwise key and drops a group-sealed one
+ * with no answer, which reads exactly like a radio fault.
+ */
+static int
+case_b15(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	const struct wpa_vendor_port *vp;
+	struct wpa_vendor_key key;
+	struct wlan_bridge_counters before, after;
+	uint8_t frame[64];
+	unsigned int tx_before, i;
+	int sealed = 0, keyid_seen = -1;
+
+	vp = wpa_vendor_backend();
+	if (vp == NULL || vp->set_key == NULL) {
+		case_line("B15", 0, "the supplicant backend is not up");
+		return -1;
+	}
+	/* the association the case needs: the cases behind it park the stack in
+	 * SCAN (a parked re-sweep, a mid-sweep join that re-arms the sweep) and
+	 * B14 ends with the disconnect leg, so the case re-establishes it the
+	 * way the supplicant does - the vendor connect plus the scripted AP's
+	 * answers - and then keeps its own precondition honest */
+	if (n8_peek_state() != n8_peek_run_state()) {
+		struct wpa_vendor_conn conn;
+		unsigned int guard;
+
+		/* the connect resolves its BSS through the scan table the backend
+		 * pulls from, so the case sweeps first: the same two steps the
+		 * supplicant's own join takes */
+		if (vp->ensure_up != NULL && vp->ensure_up() != 0) {
+			case_line("B15", 0, "the backend did not come up");
+			return -1;
+		}
+		if (vp->scan_start == NULL ||
+		    vp->scan_start((const uint8_t *)AP_SSID, AP_SSID_LEN) != 0) {
+			case_line("B15", 0, "the re-sweep did not start");
+			return -1;
+		}
+		for (guard = 0; guard < 64; guard++) {
+			answer_new_tx_from_ap();
+			if (wlan_bridge_scan_dwell() == 0)
+				break;
+		}
+		answer_new_tx_from_ap();
+		memset(&conn, 0, sizeof(conn));
+		conn.ssid = (const uint8_t *)AP_SSID;
+		conn.ssid_len = AP_SSID_LEN;
+		conn.bssid = ap_bssid;
+		conn.bssid_set = 1;
+		conn.wpa_ie = b11_rsn_ie;
+		conn.wpa_ie_len = sizeof(b11_rsn_ie);
+		if (vp->connect == NULL || vp->connect(&conn) != 0) {
+			case_line("B15", 0, "the reconnect was refused");
+			return -1;
+		}
+		for (guard = 0; guard < 64; guard++) {
+			if (n8_peek_state() == n8_peek_run_state())
+				break;
+			answer_new_tx_from_ap();
+		}
+	}
+	if (n8_peek_state() != n8_peek_run_state()) {
+		case_line("B15", 0, "the station is not associated (state=%d)",
+		    n8_peek_state());
+		return -1;
+	}
+	/* the pairwise key at index 0, as the handshake installs it */
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 0;
+	key.addr = ap_bssid;
+	key.set_tx = 1;
+	key.key = b11_tk;
+	key.key_len = sizeof(b11_tk);
+	if (vp->set_key(&key) != 0 || n8_peek_key_defined(1, 0) != 1) {
+		case_line("B15", 0, "the pairwise key did not install");
+		return -1;
+	}
+	/* and the group key at index 1, which is the default transmit key: a
+	 * selection that follows the destination address would seal with this
+	 * one and stamp key id 1 */
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 1;
+	key.addr = bcast_addr;
+	key.set_tx = 1;
+	key.key = b11_gtk;
+	key.key_len = sizeof(b11_gtk);
+	if (vp->set_key(&key) != 0 || n8_peek_key_defined(0, 1) != 1 ||
+	    n8_peek_def_txkey() != 1) {
+		case_line("B15", 0, "the group key did not become the default "
+		    "transmit key (defined=%d def_tx=%d)",
+		    n8_peek_key_defined(0, 1), n8_peek_def_txkey());
+		return -1;
+	}
+
+	/* the frame a lease hunt sends: broadcast destination, IP payload */
+	memset(frame, 0, sizeof(frame));
+	memset(frame, 0xff, 6);
+	memcpy(frame + 6, sta_mac, 6);
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	for (i = 0; i < 24; i++)
+		frame[14 + i] = (uint8_t)(0x40 + i);
+	wlan_bridge_stats(&before);
+	tx_before = st->tx_count;
+	if (wlan_bridge_tx_raw(frame, 14 + 24) < 0) {
+		case_line("B15", 0, "the broadcast transmit was refused");
+		return -1;
+	}
+	st = fake_driver_state();
+	wlan_bridge_stats(&after);
+	for (i = tx_before; i < st->tx_count && i < FAKE_DRIVER_TX_MAX; i++) {
+		const uint8_t *fp = st->tx_frames[i];
+		unsigned int len = st->tx_lens[i];
+		unsigned int hdr = (fp[0] & 0x80) != 0 ? 26U : 24U;
+
+		if (len != hdr + 8 + 8 + 24 + 8)
+			continue;
+		if ((fp[1] & 0x40) == 0)		/* protected bit */
+			continue;
+		if (memcmp(fp + 4, ap_bssid, 6) != 0)	/* Address 1 */
+			continue;
+		if (memcmp(fp + hdr + 16, frame + 14, 24) == 0)
+			continue;			/* still plaintext */
+		keyid_seen = (int)((fp[hdr + 3] >> 6) & 0x3);
+		sealed = 1;
+		break;
+	}
+	if (!sealed) {
+		case_line("B15", 0, "no sealed broadcast frame left the driver "
+		    "(Address 1 must be the AP, not the broadcast address)");
+		return -1;
+	}
+	if (keyid_seen != 0) {
+		case_line("B15", 0, "the uplink frame carries key id %d: it was "
+		    "sealed with the group key the destination address points "
+		    "at, and the peer will drop it", keyid_seen);
+		return -1;
+	}
+	if (after.data_tx_enc != before.data_tx_enc + 1) {
+		case_line("B15", 0, "the protected-transmit counter did not move "
+		    "(+%u)", after.data_tx_enc - before.data_tx_enc);
+		return -1;
+	}
+	case_line("B15", 1, "a group-addressed uplink frame is sealed with the "
+	    "pairwise key (Address 1 = AP, key id 0) while the group key is the "
+	    "default transmit key");
+	return 0;
+}
+
+/*
+ * B16: the receive-status flags the driver hands over must reach the bridge's
+ * counters. A frame the chip flagged as FCS-failed is counted as such - it is
+ * the difference between "the peer never answered" and "the answer arrived
+ * garbled" - and a protected data frame the chip already decrypted is counted
+ * in both hardware-decrypt counters, which is the fingerprint the board round
+ * read to catch a software-crypto stack decrypting a second time.
+ */
+static int
+case_b16(void)
+{
+	struct wlan_bridge_counters before, after;
+	uint8_t frame[64];
+	unsigned int i;
+
+	wlan_bridge_stats(&before);
+	/* a beacon-shaped frame the chip flagged: counted as received, counted
+	 * as flagged, and still recognised as a beacon */
+	memset(frame, 0, sizeof(frame));
+	frame[0] = 0x80;			/* beacon */
+	memcpy(frame + 4, bcast_addr, 6);
+	memcpy(frame + 10, ap_bssid, 6);
+	memcpy(frame + 16, ap_bssid, 6);
+	inject_rx_flags(frame, 24, RX_FLAG_FAILED_FCS_CRC, -50);
+	wlan_bridge_stats(&after);
+	if (after.rx_fcs_bad != before.rx_fcs_bad + 1) {
+		case_line("B16", 0, "the FCS flag did not reach the counters "
+		    "(+%u): the seam stopped mapping RX_FLAG_FAILED_FCS_CRC",
+		    after.rx_fcs_bad - before.rx_fcs_bad);
+		return -1;
+	}
+	if (after.rx_frames != before.rx_frames + 1) {
+		case_line("B16", 0, "the flagged frame was not counted as "
+		    "received (+%u)", after.rx_frames - before.rx_frames);
+		return -1;
+	}
+
+	/* a protected data frame the chip already decrypted: both hardware
+	 * counters move, and the protection split sees it as protected */
+	before = after;
+	memset(frame, 0, sizeof(frame));
+	frame[0] = 0x08;
+	frame[1] = 0x40;			/* protected, to-DS */
+	memcpy(frame + 4, ap_bssid, 6);
+	memcpy(frame + 10, sta_mac, 6);
+	memcpy(frame + 16, sta_mac, 6);
+	for (i = 24; i < sizeof(frame); i++)
+		frame[i] = (uint8_t)i;
+	inject_rx_flags(frame, 48, RX_FLAG_DECRYPTED, -50);
+	wlan_bridge_stats(&after);
+	if (after.rx_data != before.rx_data + 1 ||
+	    after.rx_data_enc != before.rx_data_enc + 1) {
+		case_line("B16", 0, "the protected data frame was not counted "
+		    "(data +%u enc +%u)", after.rx_data - before.rx_data,
+		    after.rx_data_enc - before.rx_data_enc);
+		return -1;
+	}
+	if (after.rx_data_hwdec != before.rx_data_hwdec + 1 ||
+	    after.rx_data_hwdec_prot != before.rx_data_hwdec_prot + 1) {
+		case_line("B16", 0, "the chip-decrypted flag did not reach the "
+		    "counters (hwdec +%u prot +%u): the seam stopped mapping "
+		    "RX_FLAG_DECRYPTED",
+		    after.rx_data_hwdec - before.rx_data_hwdec,
+		    after.rx_data_hwdec_prot - before.rx_data_hwdec_prot);
+		return -1;
+	}
+	case_line("B16", 1, "the FCS and chip-decrypted status flags reach the "
+	    "bridge counters");
+	return 0;
+}
 
 static void
 run_suite(void)
@@ -984,9 +1830,17 @@ run_suite(void)
 	(void)case_b8();
 	(void)case_b9();
 	(void)case_b10();
+	(void)case_b11();
+	(void)case_b12();
+	(void)case_b13();
+	(void)case_b14();
+	/* last on purpose: B15 re-establishes the association itself, so it is
+	 * unaffected by the state the cases above leave behind */
+	(void)case_b15();
+	(void)case_b16();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=10\n");
+		printf("WLANBRIDGE: SUITE PASS cases=16\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -1017,12 +1871,15 @@ main(int argc, char **argv)
 			fault_name = argv[++i];
 		} else {
 			printf("WLANBRIDGE: usage: %s [--fault no-filter|"
-			    "tamper-auth|double-free-skb]\n", argv[0]);
+			    "tamper-auth|double-free-skb|no-manual|"
+			    "no-rearm]\n", argv[0]);
 			return 2;
 		}
 	}
 	if (fault_name != NULL && strcmp(fault_name, "no-filter") != 0 &&
 	    strcmp(fault_name, "tamper-auth") != 0 &&
+	    strcmp(fault_name, "no-manual") != 0 &&
+	    strcmp(fault_name, "no-rearm") != 0 &&
 	    strcmp(fault_name, "double-free-skb") != 0) {
 		printf("WLANBRIDGE: unknown fault '%s'\n", fault_name);
 		return 2;
