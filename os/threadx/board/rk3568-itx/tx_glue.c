@@ -150,22 +150,56 @@ void tx_fault_park(unsigned int kind)
 	static volatile unsigned long rec_elr;
 	static volatile unsigned long rec_lr;
 	static volatile unsigned long rec_sp;
+	static volatile unsigned long rec_sp_el0;
 
 	ARCH_MRS(esr_el1, rec_esr);
 	ARCH_MRS(far_el1, rec_far);
 	ARCH_MRS(elr_el1, rec_elr);
+	ARCH_MRS(sp_el0, rec_sp_el0);
 	__asm__ __volatile__("mov %0, x30" : "=r"(rec_lr));
 	__asm__ __volatile__("mov %0, sp" : "=r"(rec_sp));
 
 	/* Emergency outlet: a fault can land while the print lock is held by
 	 * an interrupted context - board_log here would spin in
 	 * print_lock_take with IRQs masked and the system would freeze
-	 * SILENTLY. The whole point of the park is to leave one line. */
-	board_log_emergency("tx_fault_park kind=%u esr=%lx far=%lx elr=%lx lr=%lx sp=%lx",
-			    kind,
-			    rec_esr & 0xffffffffUL,
-			    rec_far & 0xffffffffUL,
-			    rec_elr, rec_lr, rec_sp);
+	 * SILENTLY. The whole point of the park is to leave one line. Every
+	 * register goes out at full width: the faulting address decides which
+	 * address space was reached, and a truncated value reads as a
+	 * different address than the one the CPU actually used. */
+	board_log_emergency("tx_fault_park kind=%u esr=%lx far=%lx elr=%lx lr=%lx sp=%lx sp_el0=%lx",
+			    kind, rec_esr, rec_far, rec_elr, rec_lr, rec_sp,
+			    rec_sp_el0);
+
+	/*
+	 * The register set names the instruction that faulted, not the chain
+	 * that got there: a fault inside a leaf helper (a semaphore release, a
+	 * pool operation) is one line with no owner. The thread identity and a
+	 * window of the faulting stack close that gap - the addresses resolve
+	 * offline against the build's ELF. Four words a line, deliberately
+	 * compact: the console's ring drops bursts, so a dump has to be small
+	 * enough to survive it.
+	 */
+	{
+		TX_THREAD *thread = tx_thread_identify();
+		const char *name = (thread != NULL && thread->tx_thread_name != NULL) ?
+		    thread->tx_thread_name : "?";
+
+		board_log_emergency("tx_fault_park thread=%s fault_sp=%lx",
+				    name, rec_sp);
+	}
+
+	{
+		const unsigned long *stk =
+		    (const unsigned long *)(rec_sp & ~(unsigned long)0xf);
+		unsigned int i;
+
+		for (i = 0; i < 32U; i += 4U) {
+			board_log_emergency("fault_stack+%02x: %lx %lx %lx %lx",
+					    i * (unsigned int)sizeof(unsigned long),
+					    stk[i], stk[i + 1U], stk[i + 2U],
+					    stk[i + 3U]);
+		}
+	}
 
 	for (;;) {
 		ARCH_WFE();
