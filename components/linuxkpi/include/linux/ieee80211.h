@@ -35,7 +35,70 @@
 #ifndef offsetofend
 #define	offsetofend(type, member) \
 	(offsetof(type, member) + sizeof_field(type, member))
+
+
+
+
+
+
+
+
+
+/* [LNX] include/linux/ieee80211.h:751 */
+static inline bool ieee80211_is_nullfunc(__le16 fc);
+
+/* [LNX] include/linux/ieee80211.h: the header-length helper */
+unsigned int ieee80211_hdrlen(__le16 fc);
+bool ieee80211_is_qos_nullfunc(__le16 fc);
+
 #endif
+
+/* [LNX] include/linux/ieee80211-he.h:93 (the enumerators the compiled set names, at their computed positions) */
+
+
+enum ieee80211_he_mcs_support {
+	IEEE80211_HE_MCS_SUPPORT_0_11 = 2,
+	IEEE80211_HE_MCS_NOT_SUPPORTED = 3
+};
+/* [LNX] include/linux/ieee80211-he.h:604 (the enumerators the compiled set names, at their computed positions) */
+
+enum ieee80211_tx_power_category_6ghz {
+	IEEE80211_TPE_CAT_6GHZ_DEFAULT = 0
+};
+/* [LNX] include/linux/ieee80211-p2p.h:25 (the enumerators the compiled set names, at their computed positions) */
+enum ieee80211_p2p_attr_id {
+	IEEE80211_P2P_ATTR_ABSENCE_NOTICE = 12
+};
+/* [LNX] include/linux/ieee80211-vht.h:55 (the enumerators the compiled set names, at their computed positions) */
+enum ieee80211_vht_max_ampdu_length_exp {
+	IEEE80211_VHT_MAX_AMPDU_1024K = 7
+};
+/* [LNX] include/linux/ieee80211-vht.h:112 (the enumerators the compiled set names, at their computed positions) */
+enum ieee80211_vht_mcs_support {
+	IEEE80211_VHT_MCS_SUPPORT_0_9 = 2,
+	IEEE80211_VHT_MCS_NOT_SUPPORTED = 3
+};
+/* [LNX] include/linux/ieee80211.h:1843 (the enumerators the compiled set names, at their computed positions) */
+
+enum ieee80211_category {
+	WLAN_CATEGORY_SA_QUERY = 8
+};
+/* [LNX] include/linux/ieee80211.h:1592 (the enumerators the compiled set names, at their computed positions) */
+
+
+
+
+enum ieee80211_eid {
+	WLAN_EID_SSID = 0,
+	WLAN_EID_SUPP_RATES = 1,
+	WLAN_EID_EXT_CAPABILITY = 127,
+	WLAN_EID_VENDOR_SPECIFIC = 221
+};
+/* [LNX] include/linux/ieee80211.h:2188 (the enumerators the compiled set names, at their computed positions) */
+
+enum ieee80211_sa_query_action {
+	WLAN_ACTION_SA_QUERY_RESPONSE = 1
+};
 
 /*
  * An anonymous struct whose only content is a flexible array. The interface uses
@@ -416,4 +479,597 @@ static inline u8 *ieee80211_get_qos_ctl(struct ieee80211_hdr *hdr)
 		return (u8 *)&qos->addr3.qos_ctrl;
 }
 
+/* [LNX] include/linux/ieee80211.h:309 (record carried whole) */
+struct ieee80211_hdr_3addr {
+	__le16 frame_control;
+	__le16 duration_id;
+	u8 addr1[ETH_ALEN];
+	u8 addr2[ETH_ALEN];
+	u8 addr3[ETH_ALEN];
+	__le16 seq_ctrl;
+} __packed __aligned(2);
+
+/* [LNX] include/linux/ieee80211.h:339 (record carried whole) */
+struct ieee80211_trigger {
+	__le16 frame_control;
+	__le16 duration;
+	u8 ra[ETH_ALEN];
+	u8 ta[ETH_ALEN];
+	__le64 common_info;
+	u8 variable[];
+} __packed __aligned(2);
+
+/* [LNX] include/linux/ieee80211.h:1898-1911 */
+enum ieee80211_key_len {
+	WLAN_KEY_LEN_WEP40 = 5,
+	WLAN_KEY_LEN_WEP104 = 13,
+	WLAN_KEY_LEN_CCMP = 16,
+	WLAN_KEY_LEN_CCMP_256 = 32,
+	WLAN_KEY_LEN_TKIP = 32,
+	WLAN_KEY_LEN_AES_CMAC = 16,
+	WLAN_KEY_LEN_SMS4 = 32,
+	WLAN_KEY_LEN_GCMP = 16,
+	WLAN_KEY_LEN_GCMP_256 = 32,
+	WLAN_KEY_LEN_BIP_CMAC_256 = 32,
+	WLAN_KEY_LEN_BIP_GMAC_128 = 16,
+	WLAN_KEY_LEN_BIP_GMAC_256 = 32,
+};
+
+/* [LNX] include/linux/ieee80211-he.h:138 (record carried whole) */
+struct ieee80211_he_operation {
+	__le32 he_oper_params;
+	__le16 he_mcs_nss_set;
+	u8 optional[];
+} __packed;
+
+/* [LNX] include/linux/ieee80211-p2p.h:55 (record carried whole) */
+struct ieee80211_p2p_noa_desc {
+	u8 count;
+	__le32 duration;
+	__le32 interval;
+	__le32 start_time;
+} __packed;
+
+/* [LNX] include/linux/ieee80211-p2p.h:62 (record carried whole) */
+/* [LNX] include/linux/ieee80211-p2p.h:53 */
+#define	IEEE80211_P2P_NOA_DESC_MAX	4
+
+struct ieee80211_p2p_noa_attr {
+	u8 index;
+	u8 oppps_ctwindow;
+	struct ieee80211_p2p_noa_desc desc[IEEE80211_P2P_NOA_DESC_MAX];
+} __packed;
+
+/* [LNX] include/linux/ieee80211.h:2275 */
+/* [LNX] include/linux/ieee80211.h:2264 */
+#define WLAN_AKM_SUITE_WFA_DPP			SUITE(WLAN_OUI_WFA, 2)
+
+#define	WLAN_OUI_WFA			0x506f9a
+
+/* [LNX] include/linux/ieee80211.h:935-936 */
+#define	WLAN_MEMBERSHIP_LEN	8
+#define	WLAN_USER_POSITION_LEN	16
+
+/* [LNX] include/linux/ieee80211-vht.h:195-196 */
+#define IEEE80211_VHT_CAP_MAX_A_MPDU_LENGTH_EXPONENT_SHIFT	23
+/* [LNX] include/linux/ieee80211-vht.h:196-197 */
+#define IEEE80211_VHT_CAP_MAX_A_MPDU_LENGTH_EXPONENT_MASK	\
+		(7 << IEEE80211_VHT_CAP_MAX_A_MPDU_LENGTH_EXPONENT_SHIFT)
+
+/* [LNX] include/linux/ieee80211-eht.h:47 */
+#define IEEE80211_EHT_MCS_NSS_RX 0x0f
+
+/* [LNX] include/linux/ieee80211-eht.h:48 */
+#define IEEE80211_EHT_MCS_NSS_TX 0xf0
+
+/* [LNX] include/linux/ieee80211-eht.h:192 */
+#define IEEE80211_EHT_MAC_CAP0_MAX_MPDU_LEN_MASK		0xc0
+
+/* [LNX] include/linux/ieee80211-eht.h:205 */
+#define IEEE80211_EHT_PHY_CAP0_320MHZ_IN_6GHZ			0x02
+
+/* [LNX] include/linux/ieee80211-eht.h:207 */
+#define IEEE80211_EHT_PHY_CAP0_NDP_4_EHT_LFT_32_GI		0x08
+
+/* [LNX] include/linux/ieee80211-eht.h:210 */
+#define IEEE80211_EHT_PHY_CAP0_SU_BEAMFORMEE			0x40
+
+/* [LNX] include/linux/ieee80211-eht.h:213 */
+#define IEEE80211_EHT_PHY_CAP0_BEAMFORMEE_SS_80MHZ_MASK		0x80
+
+/* [LNX] include/linux/ieee80211-eht.h:214 */
+#define IEEE80211_EHT_PHY_CAP1_BEAMFORMEE_SS_80MHZ_MASK		0x03
+
+/* [LNX] include/linux/ieee80211-eht.h:216 */
+#define IEEE80211_EHT_PHY_CAP1_BEAMFORMEE_SS_160MHZ_MASK	0x1c
+
+/* [LNX] include/linux/ieee80211-eht.h:217 */
+#define IEEE80211_EHT_PHY_CAP1_BEAMFORMEE_SS_320MHZ_MASK	0xe0
+
+/* [LNX] include/linux/ieee80211-eht.h:227 */
+#define IEEE80211_EHT_PHY_CAP3_CODEBOOK_4_2_SU_FDBK		0x08
+
+/* [LNX] include/linux/ieee80211-eht.h:228 */
+#define IEEE80211_EHT_PHY_CAP3_CODEBOOK_7_5_MU_FDBK		0x10
+
+/* [LNX] include/linux/ieee80211-eht.h:229 */
+#define IEEE80211_EHT_PHY_CAP3_TRIG_SU_BF_FDBK			0x20
+
+/* [LNX] include/linux/ieee80211-eht.h:230 */
+#define IEEE80211_EHT_PHY_CAP3_TRIG_MU_BF_PART_BW_FDBK		0x40
+
+/* [LNX] include/linux/ieee80211-eht.h:235 */
+#define IEEE80211_EHT_PHY_CAP4_POWER_BOOST_FACT_SUPP		0x04
+
+/* [LNX] include/linux/ieee80211-eht.h:237 */
+#define IEEE80211_EHT_PHY_CAP4_MAX_NC_MASK			0xf0
+
+/* [LNX] include/linux/ieee80211-eht.h:242 */
+#define IEEE80211_EHT_PHY_CAP5_PPE_THRESHOLD_PRESENT		0x08
+
+/* [LNX] include/linux/ieee80211-eht.h:243 */
+#define IEEE80211_EHT_PHY_CAP5_COMMON_NOMINAL_PKT_PAD_MASK	0x30
+
+/* [LNX] include/linux/ieee80211-eht.h:247 */
+#define   IEEE80211_EHT_PHY_CAP5_COMMON_NOMINAL_PKT_PAD_20US	3
+
+/* [LNX] include/linux/ieee80211-eht.h:316 */
+#define IEEE80211_EHT_PPE_THRES_RU_INDEX_BITMASK_MASK	0x1f0
+
+/* [LNX] include/linux/ieee80211-eht.h:317 */
+#define IEEE80211_EHT_PPE_THRES_INFO_PPET_SIZE		3
+
+/* [LNX] include/linux/ieee80211-eht.h:318 */
+#define IEEE80211_EHT_PPE_THRES_INFO_HEADER_SIZE	9
+
+/* [LNX] include/linux/ieee80211-eht.h:505 */
+#define  IEEE80211_EML_CAP_EML_PADDING_DELAY_256US		4
+
+/* [LNX] include/linux/ieee80211-eht.h:513 */
+#define  IEEE80211_EML_CAP_EMLSR_TRANSITION_DELAY_256US		5
+
+/* [LNX] include/linux/ieee80211-he.h:195 */
+#define IEEE80211_HE_MAC_CAP0_HTC_HE				0x01
+
+/* [LNX] include/linux/ieee80211-he.h:220 */
+#define IEEE80211_HE_MAC_CAP1_TF_MAC_PAD_DUR_16US		0x08
+
+/* [LNX] include/linux/ieee80211-he.h:243 */
+#define IEEE80211_HE_MAC_CAP2_ALL_ACK				0x02
+
+/* [LNX] include/linux/ieee80211-he.h:245 */
+#define IEEE80211_HE_MAC_CAP2_BSR				0x08
+
+/* [LNX] include/linux/ieee80211-he.h:251 */
+#define IEEE80211_HE_MAC_CAP3_OMI_CONTROL			0x02
+
+/* [LNX] include/linux/ieee80211-he.h:260 */
+#define IEEE80211_HE_MAC_CAP3_MAX_AMPDU_LEN_EXP_EXT_2		0x10
+
+/* [LNX] include/linux/ieee80211-he.h:272 */
+#define IEEE80211_HE_MAC_CAP4_OPS				0x20
+
+/* [LNX] include/linux/ieee80211-he.h:273 */
+#define IEEE80211_HE_MAC_CAP4_AMSDU_IN_AMPDU			0x40
+
+/* [LNX] include/linux/ieee80211-he.h:286 */
+#define IEEE80211_HE_MAC_CAP5_HT_VHT_TRIG_FRAME_RX		0x80
+
+/* [LNX] include/linux/ieee80211-he.h:293 */
+#define IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G		0x02
+
+/* [LNX] include/linux/ieee80211-he.h:294 */
+#define IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G	0x04
+
+/* [LNX] include/linux/ieee80211-he.h:295 */
+#define IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_160MHZ_IN_5G		0x08
+
+/* [LNX] include/linux/ieee80211-he.h:296 */
+#define IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_80PLUS80_MHZ_IN_5G	0x10
+
+/* [LNX] include/linux/ieee80211-he.h:297 */
+#define IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_MASK_ALL		0x1e
+
+/* [LNX] include/linux/ieee80211-he.h:308 */
+#define IEEE80211_HE_PHY_CAP1_DEVICE_CLASS_A				0x10
+
+/* [LNX] include/linux/ieee80211-he.h:309 */
+#define IEEE80211_HE_PHY_CAP1_LDPC_CODING_IN_PAYLOAD			0x20
+
+/* [LNX] include/linux/ieee80211-he.h:310 */
+#define IEEE80211_HE_PHY_CAP1_HE_LTF_AND_GI_FOR_HE_PPDUS_0_8US		0x40
+
+/* [LNX] include/linux/ieee80211-he.h:315 */
+#define IEEE80211_HE_PHY_CAP2_NDP_4x_LTF_AND_3_2US			0x02
+
+/* [LNX] include/linux/ieee80211-he.h:316 */
+#define IEEE80211_HE_PHY_CAP2_STBC_TX_UNDER_80MHZ			0x04
+
+/* [LNX] include/linux/ieee80211-he.h:317 */
+#define IEEE80211_HE_PHY_CAP2_STBC_RX_UNDER_80MHZ			0x08
+
+/* [LNX] include/linux/ieee80211-he.h:318 */
+#define IEEE80211_HE_PHY_CAP2_DOPPLER_TX				0x10
+
+/* [LNX] include/linux/ieee80211-he.h:331 */
+#define IEEE80211_HE_PHY_CAP3_DCM_MAX_CONST_TX_16_QAM			0x03
+
+/* [LNX] include/linux/ieee80211-he.h:334 */
+#define IEEE80211_HE_PHY_CAP3_DCM_MAX_TX_NSS_2				0x04
+
+/* [LNX] include/linux/ieee80211-he.h:338 */
+#define IEEE80211_HE_PHY_CAP3_DCM_MAX_CONST_RX_16_QAM			0x18
+
+/* [LNX] include/linux/ieee80211-he.h:342 */
+#define IEEE80211_HE_PHY_CAP3_RX_PARTIAL_BW_SU_IN_20MHZ_MU		0x40
+
+/* [LNX] include/linux/ieee80211-he.h:343 */
+#define IEEE80211_HE_PHY_CAP3_SU_BEAMFORMER				0x80
+
+/* [LNX] include/linux/ieee80211-he.h:345 */
+#define IEEE80211_HE_PHY_CAP4_SU_BEAMFORMEE				0x01
+
+/* [LNX] include/linux/ieee80211-he.h:346 */
+#define IEEE80211_HE_PHY_CAP4_MU_BEAMFORMER				0x02
+
+/* [LNX] include/linux/ieee80211-he.h:349 */
+#define IEEE80211_HE_PHY_CAP4_BEAMFORMEE_MAX_STS_UNDER_80MHZ_4		0x0c
+
+/* [LNX] include/linux/ieee80211-he.h:357 */
+#define IEEE80211_HE_PHY_CAP4_BEAMFORMEE_MAX_STS_ABOVE_80MHZ_4		0x60
+
+/* [LNX] include/linux/ieee80211-he.h:372 */
+#define IEEE80211_HE_PHY_CAP5_BEAMFORMEE_NUM_SND_DIM_UNDER_80MHZ_MASK	0x07
+
+/* [LNX] include/linux/ieee80211-he.h:384 */
+#define IEEE80211_HE_PHY_CAP5_NG16_SU_FEEDBACK				0x40
+
+/* [LNX] include/linux/ieee80211-he.h:385 */
+#define IEEE80211_HE_PHY_CAP5_NG16_MU_FEEDBACK				0x80
+
+/* [LNX] include/linux/ieee80211-he.h:387 */
+#define IEEE80211_HE_PHY_CAP6_CODEBOOK_SIZE_42_SU			0x01
+
+/* [LNX] include/linux/ieee80211-he.h:388 */
+#define IEEE80211_HE_PHY_CAP6_CODEBOOK_SIZE_75_MU			0x02
+
+/* [LNX] include/linux/ieee80211-he.h:389 */
+#define IEEE80211_HE_PHY_CAP6_TRIG_SU_BEAMFORMING_FB			0x04
+
+/* [LNX] include/linux/ieee80211-he.h:392 */
+#define IEEE80211_HE_PHY_CAP6_PARTIAL_BW_EXT_RANGE			0x20
+
+/* [LNX] include/linux/ieee80211-he.h:394 */
+#define IEEE80211_HE_PHY_CAP6_PPE_THRESHOLD_PRESENT			0x80
+
+/* [LNX] include/linux/ieee80211-he.h:397 */
+#define IEEE80211_HE_PHY_CAP7_POWER_BOOST_FACTOR_SUPP			0x02
+
+/* [LNX] include/linux/ieee80211-he.h:398 */
+#define IEEE80211_HE_PHY_CAP7_HE_SU_MU_PPDU_4XLTF_AND_08_US_GI		0x04
+
+/* [LNX] include/linux/ieee80211-he.h:399 */
+#define IEEE80211_HE_PHY_CAP7_MAX_NC_1					0x08
+
+/* [LNX] include/linux/ieee80211-he.h:410 */
+#define IEEE80211_HE_PHY_CAP8_HE_ER_SU_PPDU_4XLTF_AND_08_US_GI		0x01
+
+/* [LNX] include/linux/ieee80211-he.h:412 */
+#define IEEE80211_HE_PHY_CAP8_20MHZ_IN_160MHZ_HE_PPDU			0x04
+
+/* [LNX] include/linux/ieee80211-he.h:413 */
+#define IEEE80211_HE_PHY_CAP8_80MHZ_IN_160MHZ_HE_PPDU			0x08
+
+/* [LNX] include/linux/ieee80211-he.h:414 */
+#define IEEE80211_HE_PHY_CAP8_HE_ER_SU_1XLTF_AND_08_US_GI		0x10
+
+/* [LNX] include/linux/ieee80211-he.h:418 */
+#define IEEE80211_HE_PHY_CAP8_DCM_MAX_RU_996				0x80
+
+/* [LNX] include/linux/ieee80211-he.h:422 */
+#define IEEE80211_HE_PHY_CAP9_LONGER_THAN_16_SIGB_OFDM_SYM		0x01
+
+/* [LNX] include/linux/ieee80211-he.h:424 */
+#define IEEE80211_HE_PHY_CAP9_TX_1024_QAM_LESS_THAN_242_TONE_RU		0x04
+
+/* [LNX] include/linux/ieee80211-he.h:425 */
+#define IEEE80211_HE_PHY_CAP9_RX_1024_QAM_LESS_THAN_242_TONE_RU		0x08
+
+/* [LNX] include/linux/ieee80211-he.h:426 */
+#define IEEE80211_HE_PHY_CAP9_RX_FULL_BW_SU_USING_MU_WITH_COMP_SIGB	0x10
+
+/* [LNX] include/linux/ieee80211-he.h:427 */
+#define IEEE80211_HE_PHY_CAP9_RX_FULL_BW_SU_USING_MU_WITH_NON_COMP_SIGB	0x20
+
+/* [LNX] include/linux/ieee80211-he.h:430 */
+#define IEEE80211_HE_PHY_CAP9_NOMINAL_PKT_PADDING_16US			0x2
+
+/* [LNX] include/linux/ieee80211-he.h:433 */
+#define IEEE80211_HE_PHY_CAP9_NOMINAL_PKT_PADDING_MASK			0xc0
+
+/* [LNX] include/linux/ieee80211-he.h:473 */
+#define IEEE80211_PPE_THRES_NSS_MASK				(7)
+
+/* [LNX] include/linux/ieee80211-he.h:476 */
+#define IEEE80211_PPE_THRES_RU_INDEX_BITMASK_MASK		0x78
+
+/* [LNX] include/linux/ieee80211-he.h:478 */
+#define IEEE80211_PPE_THRES_INFO_PPET_SIZE			(3)
+
+/* [LNX] include/linux/ieee80211-he.h:539 */
+#define IEEE80211_HE_OPERATION_ER_SU_DISABLE			0x00010000
+
+/* [LNX] include/linux/ieee80211-he.h:814 */
+#define IEEE80211_HE_6GHZ_CAP_MIN_MPDU_START	0x0007
+
+/* [LNX] include/linux/ieee80211-he.h:816 */
+#define IEEE80211_HE_6GHZ_CAP_MAX_AMPDU_LEN_EXP	0x0038
+
+/* [LNX] include/linux/ieee80211-he.h:818 */
+#define IEEE80211_HE_6GHZ_CAP_MAX_MPDU_LEN	0x00c0
+
+/* [LNX] include/linux/ieee80211-ht.h:28 */
+#define IEEE80211_HT_CTL_LEN		4
+
+/* [LNX] include/linux/ieee80211-ht.h:142 */
+#define		IEEE80211_HT_CAP_RX_STBC_SHIFT	8
+
+/* [LNX] include/linux/ieee80211-p2p.h:68 */
+#define IEEE80211_P2P_OPPPS_ENABLE_BIT		BIT(7)
+
+/* [LNX] include/linux/ieee80211-p2p.h:69 */
+#define IEEE80211_P2P_OPPPS_CTWINDOW_MASK	0x7F
+
+/* [LNX] include/linux/ieee80211-vht.h:96 */
+#define IEEE80211_VHT_EXT_NSS_BW_CAPABLE	(1 << 13)
+
+/* [LNX] include/linux/ieee80211-vht.h:167 */
+#define IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454			0x00000002
+
+/* [LNX] include/linux/ieee80211-vht.h:169 */
+#define IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160MHZ		0x00000004
+
+/* [LNX] include/linux/ieee80211-vht.h:173 */
+#define IEEE80211_VHT_CAP_RXLDPC				0x00000010
+
+/* [LNX] include/linux/ieee80211-vht.h:174 */
+#define IEEE80211_VHT_CAP_SHORT_GI_80				0x00000020
+
+/* [LNX] include/linux/ieee80211-vht.h:175 */
+#define IEEE80211_VHT_CAP_SHORT_GI_160				0x00000040
+
+/* [LNX] include/linux/ieee80211-vht.h:176 */
+#define IEEE80211_VHT_CAP_TXSTBC				0x00000080
+
+/* [LNX] include/linux/ieee80211-vht.h:177 */
+#define IEEE80211_VHT_CAP_RXSTBC_1				0x00000100
+
+/* [LNX] include/linux/ieee80211-vht.h:181 */
+#define IEEE80211_VHT_CAP_RXSTBC_MASK				0x00000700
+
+/* [LNX] include/linux/ieee80211-vht.h:183 */
+#define IEEE80211_VHT_CAP_SU_BEAMFORMER_CAPABLE			0x00000800
+
+/* [LNX] include/linux/ieee80211-vht.h:184 */
+#define IEEE80211_VHT_CAP_SU_BEAMFORMEE_CAPABLE			0x00001000
+
+/* [LNX] include/linux/ieee80211-vht.h:185 */
+#define IEEE80211_VHT_CAP_BEAMFORMEE_STS_SHIFT                  13
+
+/* [LNX] include/linux/ieee80211-vht.h:189 */
+#define IEEE80211_VHT_CAP_SOUNDING_DIMENSIONS_SHIFT	16
+#define IEEE80211_VHT_CAP_SOUNDING_DIMENSIONS_MASK		\
+		(7 << IEEE80211_VHT_CAP_SOUNDING_DIMENSIONS_SHIFT)
+
+/* [LNX] include/linux/ieee80211-vht.h:191 */
+#define IEEE80211_VHT_CAP_MU_BEAMFORMER_CAPABLE			0x00080000
+
+/* [LNX] include/linux/ieee80211-vht.h:192 */
+#define IEEE80211_VHT_CAP_MU_BEAMFORMEE_CAPABLE			0x00100000
+
+/* [LNX] include/linux/ieee80211-vht.h:194 */
+#define IEEE80211_VHT_CAP_HTC_VHT				0x00400000
+
+/* [LNX] include/linux/ieee80211.h:51 */
+#define IEEE80211_FCTL_PM		0x1000
+
+/* [LNX] include/linux/ieee80211.h:53 */
+#define IEEE80211_FCTL_PROTECTED	0x4000
+
+/* [LNX] include/linux/ieee80211.h:92 */
+#define IEEE80211_STYPE_DATA			0x0000
+
+/* [LNX] include/linux/ieee80211.h:159 */
+#define IEEE80211_SN_MASK		((IEEE80211_SCTL_SEQ) >> 4)
+
+/* [LNX] include/linux/ieee80211.h:239 */
+#define IEEE80211_QOS_CTL_TAG1D_MASK		0x0007
+
+/* [LNX] include/linux/ieee80211.h:243 */
+#define IEEE80211_QOS_CTL_EOSP			0x0010
+
+/* [LNX] include/linux/ieee80211.h:272 */
+#define IEEE80211_WMM_IE_STA_QOSINFO_SP_ALL	0x00
+
+/* [LNX] include/linux/ieee80211.h:280 */
+#define IEEE80211_TRIGGER_TYPE_MASK		0xf
+
+/* [LNX] include/linux/ieee80211.h:281 */
+#define IEEE80211_TRIGGER_TYPE_BASIC		0x0
+
+/* [LNX] include/linux/ieee80211.h:283 */
+#define IEEE80211_TRIGGER_TYPE_MU_BAR		0x2
+
+/* [LNX] include/linux/ieee80211.h:291 */
+#define IEEE80211_TRIGGER_ULBW_MASK		0xc0000
+
+/* [LNX] include/linux/ieee80211.h:295 */
+#define IEEE80211_TRIGGER_ULBW_160_80P80MHZ	0x3
+
+/* [LNX] include/linux/ieee80211.h:2014 */
+#define WLAN_EXT_CAPA1_EXT_CHANNEL_SWITCHING	BIT(2)
+
+/* [LNX] include/linux/ieee80211.h:2019 */
+#define WLAN_EXT_CAPA3_MULTI_BSSID_SUPPORT	BIT(6)
+
+/* [LNX] include/linux/ieee80211.h:2045 */
+#define WLAN_EXT_CAPA8_OPMODE_NOTIF	BIT(6)
+
+/* [LNX] include/linux/ieee80211.h:2066 */
+#define WLAN_EXT_CAPA10_OBSS_NARROW_BW_RU_TOLERANCE_SUPPORT BIT(7)
+
+/* [LNX] include/linux/ieee80211.h:2233 */
+#define WLAN_CIPHER_SUITE_GCMP		SUITE(0x000FAC, 8)
+
+/* [LNX] include/linux/ieee80211.h:2234 */
+#define WLAN_CIPHER_SUITE_GCMP_256	SUITE(0x000FAC, 9)
+
+/* [LNX] include/linux/ieee80211.h:2235 */
+#define WLAN_CIPHER_SUITE_CCMP_256	SUITE(0x000FAC, 10)
+
+/* [LNX] include/linux/ieee80211.h:2276 */
+#define WLAN_OUI_TYPE_WFA_P2P		9
+
+/* [LNX] include/linux/ieee80211.h:45 */
+#define	IEEE80211_FCTL_STYPE		0x00f0
+
+/* [LNX] include/linux/ieee80211.h:161 */
+/* [LNX] include/linux/ieee80211.h:160 */
+#define IEEE80211_MAX_SN		IEEE80211_SN_MASK
+
+#define	IEEE80211_SN_MODULO		(IEEE80211_MAX_SN + 1)
+
+/* [LNX] include/linux/ieee80211.h */
+#define	IEEE80211_STYPE_TRIGGER	0x0020
+
+/* [LNX] include/linux/ieee80211.h:84 */
+#define IEEE80211_STYPE_PSPOLL		0x00A0
+
+/* [LNX] include/linux/ieee80211.h:2727-2839 (record carried whole) */
+struct element {
+	u8 id;
+	u8 datalen;
+	u8 data[];
+} __packed;
+
+/* element iteration helpers */
+#define for_each_element(_elem, _data, _datalen)			\
+	for (_elem = (const struct element *)(_data);			\
+	     (const u8 *)(_data) + (_datalen) - (const u8 *)_elem >=	\
+		(int)sizeof(*_elem) &&					\
+	     (const u8 *)(_data) + (_datalen) - (const u8 *)_elem >=	\
+		(int)sizeof(*_elem) + _elem->datalen;			\
+	     _elem = (const struct element *)(_elem->data + _elem->datalen))
+
+#define for_each_element_id(element, _id, data, datalen)		\
+	for_each_element(element, data, datalen)			\
+		if (element->id == (_id))
+
+#define for_each_element_extid(element, extid, _data, _datalen)		\
+	for_each_element(element, _data, _datalen)			\
+		if (element->id == WLAN_EID_EXTENSION &&		\
+		    element->datalen > 0 &&				\
+		    element->data[0] == (extid))
+
+#define for_each_subelement(sub, element)				\
+	for_each_element(sub, (element)->data, (element)->datalen)
+
+#define for_each_subelement_id(sub, id, element)			\
+	for_each_element_id(sub, id, (element)->data, (element)->datalen)
+
+#define for_each_subelement_extid(sub, extid, element)			\
+	for_each_element_extid(sub, extid, (element)->data, (element)->datalen)
+
+/**
+ * for_each_element_completed - determine if element parsing consumed all data
+ * @element: element pointer after for_each_element() or friends
+ * @data: same data pointer as passed to for_each_element() or friends
+ * @datalen: same data length as passed to for_each_element() or friends
+ * Return: %true if all elements were iterated, %false otherwise; see notes
+ *
+ * This function returns %true if all the data was parsed or considered
+ * while walking the elements. Only use this if your for_each_element()
+ * loop cannot be broken out of, otherwise it always returns %false.
+ *
+ * If some data was malformed, this returns %false since the last parsed
+ * element will not fill the whole remaining data.
+ */
+static inline bool for_each_element_completed(const struct element *element,
+					      const void *data, size_t datalen)
+{
+	return (const u8 *)element == (const u8 *)data + datalen;
+}
+
+/*
+ * RSNX Capabilities:
+ * bits 0-3: Field length (n-1)
+ */
+#define WLAN_RSNX_CAPA_PROTECTED_TWT BIT(4)
+#define WLAN_RSNX_CAPA_SAE_H2E BIT(5)
+
+/* EBPCC = Enhanced BSS Parameter Change Count */
+#define IEEE80211_ENH_CRIT_UPD_EBPCC		0x0F
+#define IEEE80211_ENH_CRIT_UPD_TYPE		0x70
+#define IEEE80211_ENH_CRIT_UPD_TYPE_NO_UHR	0
+#define IEEE80211_ENH_CRIT_UPD_TYPE_UHR		1
+#define IEEE80211_ENH_CRIT_UPD_ALL		0x80
+
+/**
+ * struct ieee80211_enh_crit_upd - enhanced critical update (UHR)
+ * @v: value of the enhanced critical update data,
+ *	see %IEEE80211_ENH_CRIT_UPD_* to parse the bits
+ */
+struct ieee80211_enh_crit_upd {
+	u8 v;
+} __packed;
+
+/*
+ * reduced neighbor report, based on Draft P802.11ax_D6.1,
+ * section 9.4.2.170 and accepted contributions.
+ */
+#define IEEE80211_AP_INFO_TBTT_HDR_TYPE				0x03
+#define IEEE80211_AP_INFO_TBTT_HDR_FILTERED			0x04
+#define IEEE80211_AP_INFO_TBTT_HDR_COLOC			0x08
+#define IEEE80211_AP_INFO_TBTT_HDR_COUNT			0xF0
+#define IEEE80211_TBTT_INFO_TYPE_TBTT				0
+#define IEEE80211_TBTT_INFO_TYPE_MLD				1
+
+#define IEEE80211_RNR_TBTT_PARAMS_OCT_RECOMMENDED		0x01
+#define IEEE80211_RNR_TBTT_PARAMS_SAME_SSID			0x02
+#define IEEE80211_RNR_TBTT_PARAMS_MULTI_BSSID			0x04
+#define IEEE80211_RNR_TBTT_PARAMS_TRANSMITTED_BSSID		0x08
+#define IEEE80211_RNR_TBTT_PARAMS_COLOC_ESS			0x10
+#define IEEE80211_RNR_TBTT_PARAMS_PROBE_ACTIVE			0x20
+#define IEEE80211_RNR_TBTT_PARAMS_COLOC_AP			0x40
+#define IEEE80211_RNR_TBTT_PARAMS_SAME_SMD			0x80
+
+#define IEEE80211_RNR_TBTT_PARAMS_PSD_NO_LIMIT			127
+#define IEEE80211_RNR_TBTT_PARAMS_PSD_RESERVED			-128
+
+struct ieee80211_neighbor_ap_info {
+	u8 tbtt_info_hdr;
+	u8 tbtt_info_len;
+	u8 op_class;
+	u8 channel;
+} __packed;
+
+enum ieee80211_range_params_max_total_ltf {
+	IEEE80211_RANGE_PARAMS_MAX_TOTAL_LTF_4 = 0,
+	IEEE80211_RANGE_PARAMS_MAX_TOTAL_LTF_8,
+	IEEE80211_RANGE_PARAMS_MAX_TOTAL_LTF_16,
+	IEEE80211_RANGE_PARAMS_MAX_TOTAL_LTF_UNSPECIFIED,
+};
+
+/* [LNX] include/linux/ieee80211.h:1593 */
+#define	WLAN_EID_SSID	0
+/* [LNX] include/linux/ieee80211.h:1594 */
+#define	WLAN_EID_SUPP_RATES	1
+/* [LNX] include/linux/ieee80211.h:1705 */
+#define	WLAN_EID_EXT_CAPABILITY	127
+/* [LNX] include/linux/ieee80211.h:1780 */
+#define	WLAN_EID_VENDOR_SPECIFIC	221
+/* [LNX] include/linux/ieee80211.h:1852 */
+#define	WLAN_CATEGORY_SA_QUERY	8
+/* [LNX] include/linux/ieee80211.h:2190 */
+#define	WLAN_ACTION_SA_QUERY_RESPONSE	1
 #endif /* _LINUXKPI_LINUX_IEEE80211_H_ */

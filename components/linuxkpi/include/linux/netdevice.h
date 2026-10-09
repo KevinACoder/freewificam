@@ -674,4 +674,15 @@ napi_is_scheduled(struct napi_struct *n)
 #define	NETIF_F_TSO		__NETIF_F(TSO)
 #define	NETIF_F_TSO6		__NETIF_F(TSO6)
 
+/* [LNX] include/linux/netdevice.h: the napi caller waits for the poll to leave */
+/* [LNX] include/linux/netdevice.h:617 */
+static inline void napi_synchronize(const struct napi_struct *n)
+{
+	if (IS_ENABLED(CONFIG_SMP))
+		while (test_bit(NAPI_STATE_SCHED, &n->state))
+			msleep(1);
+	else
+		barrier();
+}
+
 #endif /* _LINUXKPI_LINUX_NETDEVICE_H_ */

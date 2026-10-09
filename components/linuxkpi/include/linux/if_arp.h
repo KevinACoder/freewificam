@@ -39,4 +39,7 @@ struct arphdr {
 	__be16		ar_op;		/* ARP opcode (command) */
 };
 
+/* [LNX] include/uapi/linux/if_arp.h:108 */
+#define	ARPOP_REPLY	2		/* ARP reply			*/
+
 #endif /* _LINUXKPI_LINUX_IF_ARP_H_ */

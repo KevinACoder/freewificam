@@ -23,6 +23,7 @@
 #define _LINUXKPI_LINUX_IP_H_
 
 #include "../../linuxkpi_core.h"
+#include <linux/in.h>
 
 struct sk_buff;
 struct iphdr;
@@ -36,5 +37,24 @@ struct iphdr;
  * must be given the port's real offset rather than a silently wrong one.
  */
 struct iphdr *ip_hdr(const struct sk_buff *skb);
+
+
+/* [LNX] include/uapi/linux/ip.h: the IPv4 wire header. The interface selects its
+ * bitfield order from the target's endianness; this port is little-endian, so the
+ * __LITTLE_ENDIAN_BITFIELD arm is the one stated. */
+struct iphdr {
+	__u8	ihl:4,
+		version:4;
+	__u8	tos;
+	__be16	tot_len;
+	__be16	id;
+	__be16	frag_off;
+	__u8	ttl;
+	__u8	protocol;
+	__sum16	check;
+	__be32	saddr;
+	__be32	daddr;
+	/*The options start here. */
+};
 
 #endif /* _LINUXKPI_LINUX_IP_H_ */

@@ -28,6 +28,19 @@
 #include <linux/etherdevice.h>
 #include <linux/ieee80211.h>
 #include <linux/skbuff.h>
+/* [LNX] include/net/cfg80211.h: the interface includes the ethtool surface its wiphy
+ * record sizes a member with */
+#include <linux/ethtool.h>
+#include <linux/rfkill.h>
+/* [LNX] include/net/cfg80211.h:26: the interface includes the regulatory flags itself */
+#include <net/regulatory.h>
+
+struct cfg80211_gtk_rekey_data;
+struct ieee80211_scan_request;
+struct ieee80211_low_level_stats;
+
+struct cfg80211_ops;
+struct regulatory_request;
 
 struct cfg80211_ops;
 struct regulatory_request;
@@ -340,6 +353,15 @@ enum ieee80211_bss_type {
 	IEEE80211_BSS_TYPE_ANY
 };
 
+/* [LNX] include/net/cfg80211.h:3204-3210 (record carried whole) */
+struct cfg80211_bss_ies {
+	u64 tsf;
+	struct rcu_head rcu_head;
+	int len;
+	bool from_beacon;
+	u8 data[];
+};
+
 struct ieee80211_channel {
 	enum nl80211_band	band;
 	u32			center_freq;
@@ -421,12 +443,29 @@ struct ieee80211_eht_cap_elem_fixed {
 	} __packed ppe_thres_info;
 } __packed;
 
+/* [LNX] include/linux/ieee80211-eht.h:72-82 (record carried whole) */
 struct ieee80211_eht_mcs_nss_supp_20mhz_only {
-	u8	rx_tx_mcs_0_7_tx_mcs_8_9;
+	union {
+		struct {
+			u8 rx_tx_mcs7_max_nss;
+			u8 rx_tx_mcs9_max_nss;
+			u8 rx_tx_mcs11_max_nss;
+			u8 rx_tx_mcs13_max_nss;
+		};
+		u8 rx_tx_max_nss[4];
+	};
 };
 
+/* [LNX] include/linux/ieee80211-eht.h:103-112 (record carried whole) */
 struct ieee80211_eht_mcs_nss_supp_bw {
-	u8	rx_tx_mcs_0_7_tx_mcs_8_9;
+	union {
+		struct {
+			u8 rx_tx_mcs9_max_nss;
+			u8 rx_tx_mcs11_max_nss;
+			u8 rx_tx_mcs13_max_nss;
+		};
+		u8 rx_tx_max_nss[3];
+	};
 };
 
 struct ieee80211_eht_mcs_nss_supp {
@@ -543,6 +582,7 @@ enum rate_info_bw {
 	RATE_INFO_BW_4,
 	RATE_INFO_BW_8,
 	RATE_INFO_BW_16,
+	RATE_INFO_BW_EHT_RU = 8
 };
 
 struct rate_info {
@@ -656,6 +696,9 @@ struct cfg80211_tid_stats {
  * also has mesh, MLO and hardware-timestamp members, which arrive with the caller
  * that names them.
  */
+/* [LNX] include/net/cfg80211.h:2205 */
+#define	IEEE80211_MAX_CHAINS	4
+
 struct station_info {
 	u64			filled;
 	u32			connected_time;
@@ -882,6 +925,35 @@ enum nl80211_ext_feature_index {
  * The `priv` area the driver's own data is allocated from is the record's tail
  * member, sized by wiphy_new().
  */
+/* [LNX] include/net/cfg80211.h:6047 (record carried whole) */
+struct wiphy_iftype_ext_capab {
+	enum nl80211_iftype iftype;
+	const u8 *extended_capabilities;
+	const u8 *extended_capabilities_mask;
+	u8 extended_capabilities_len;
+	u16 eml_capabilities;
+	u16 mld_capa_and_ops;
+	u16 ext_mld_capa_and_ops;
+};
+
+/* [LNX] include/net/cfg80211.h:2500 (record carried whole) */
+/* [LNX] include/net/cfg80211.h:2486 (record carried whole) */
+struct cfg80211_sar_freq_ranges {
+	u32 start_freq;
+	u32 end_freq;
+};
+
+/* [LNX] include/uapi/linux/nl80211.h:8780 (the enumerators the compiled set names, at their computed positions) */
+enum nl80211_sar_type {
+	NL80211_SAR_TYPE_POWER = 0
+};
+
+struct cfg80211_sar_capa {
+	enum nl80211_sar_type type;
+	u32 num_freq_ranges;
+	const struct cfg80211_sar_freq_ranges *freq_ranges;
+};
+
 struct wiphy {
 	u8			perm_addr[ETH_ALEN];
 	u8			addr_mask[ETH_ALEN];
@@ -894,6 +966,8 @@ struct wiphy {
 	u32			nl80211_ifyptes_unused;
 	u16			interface_modes;
 	u16			max_acl_mac_addrs;
+
+	char			fw_version[ETHTOOL_FWVERS_LEN];
 
 	u32			flags, regulatory_flags, features;
 	u8			ext_features[DIV_ROUND_UP(NUM_NL80211_EXT_FEATURES, 8)];
@@ -947,6 +1021,20 @@ struct wiphy {
 	/* the device this wiphy reports through, as the interface embeds it */
 	struct device		dev;
 
+	/* [LNX] include/net/cfg80211.h:6499-6511: the per-TID config support the compiled
+	 * set reads (attribute bitmaps per peer and per vif) */
+	struct {
+		u64 peer, vif;
+		u8 max_retry;
+	} tid_config_support;
+
+	struct rfkill *rfkill;
+	struct wiphy_iftype_ext_capab *iftype_ext_capab;
+	unsigned int		num_iftype_ext_capab;
+	const struct cfg80211_sar_capa *sar_capa;
+
+	struct mutex		mtx;
+
 	/* the driver private area, sized by wiphy_new() and reached through
 	 * wiphy_priv(); private to the interface otherwise */
 	int			priv[];
@@ -958,11 +1046,16 @@ struct wiphy {
 
 /*
  * The bound the per-interface record's link array is declared with. The interface
- * splits it out in include/linux/ieee80211-eht.h; the face keeps it here, next to
- * its only consumer.
+ * splits it out in include/linux/ieee80211-eht.h; the face keeps it here, next to its
+ * only consumer.
  */
 #define	IEEE80211_MLD_MAX_NUM_LINKS	15
 
+/*
+ * The bound the per-interface record's link array is declared with. The interface
+ * splits it out in include/linux/ieee80211-eht.h; the face keeps it here, next to
+ * its only consumer.
+ */
 /*
  * The per-interface record. Its size is taken (a monitor and a P2P-device wdev are
  * allocated with it) and its leading members are read and written by name, so the
@@ -973,6 +1066,29 @@ struct wiphy {
  * that owns them. `u` keeps the interface's member name and type at the cut, so the
  * size taken here matches the interface's leading region.
  */
+/* [LNX] include/net/regulatory.h:78-89 (record carried whole; stated next to the
+ * enumerations it names) */
+/* [LNX] include/net/regulatory.h:34-38 (enumerators at their computed positions);
+ * stated next to the request record that names it, for the include-edge reason */
+enum environment_cap {
+	ENVIRON_ANY = 0,
+	ENVIRON_INDOOR = 1,
+	ENVIRON_OUTDOOR = 2
+};
+
+struct regulatory_request {
+	struct rcu_head rcu_head;
+	int wiphy_idx;
+	enum nl80211_reg_initiator initiator;
+	enum nl80211_user_reg_hint_type user_reg_hint_type;
+	char alpha2[3];
+	enum nl80211_dfs_regions dfs_region;
+	bool intersect;
+	bool processed;
+	enum environment_cap country_ie_env;
+	struct list_head list;
+};
+
 struct wireless_dev {
 	struct wiphy		*wiphy;
 	enum nl80211_iftype	iftype;
@@ -1123,4 +1239,417 @@ wiphy_ext_feature_isset(struct wiphy *wiphy,
  */
 u32 cfg80211_calculate_bitrate(struct rate_info *rate);
 
+/* [LNX] include/net/cfg80211.h:2897 (record carried whole) */
+struct cfg80211_ssid {
+	u8 ssid[IEEE80211_MAX_SSID_LEN];
+	u8 ssid_len;
+};
+
+/* [LNX] include/net/cfg80211.h:892 (record carried whole) */
+/* [LNX] include/uapi/linux/nl80211.h:5925,5935,5950 */
+#define	NL80211_VHT_NSS_MAX		8
+#define	NL80211_HE_NSS_MAX		8
+#define	NL80211_EHT_NSS_MAX		16
+
+struct cfg80211_bitrate_mask {
+	struct {
+		u32 legacy;
+		u8 ht_mcs[IEEE80211_HT_MCS_MASK_LEN];
+		u16 vht_mcs[NL80211_VHT_NSS_MAX];
+		u16 he_mcs[NL80211_HE_NSS_MAX];
+		u16 eht_mcs[NL80211_EHT_NSS_MAX];
+		enum nl80211_txrate_gi gi;
+		enum nl80211_he_gi he_gi;
+		enum nl80211_eht_gi eht_gi;
+		enum nl80211_he_ltf he_ltf;
+		enum nl80211_eht_ltf eht_ltf;
+	} control[NUM_NL80211_BANDS];
+};
+
+/* [LNX] include/net/cfg80211.h:1321 (record carried whole) */
+struct survey_info {
+	struct ieee80211_channel *channel;
+	u64 time;
+	u64 time_busy;
+	u64 time_ext_busy;
+	u64 time_rx;
+	u64 time_tx;
+	u64 time_scan;
+	u64 time_bss_rx;
+	u32 filled;
+	s8 noise;
+};
+
+/* [LNX] include/net/cfg80211.h:924 (record carried whole) */
+/* [LNX] include/uapi/linux/nl80211.h:6083-6086 (enumerators at their computed positions) */
+enum nl80211_tx_rate_setting {
+	NL80211_TX_RATE_AUTOMATIC = 0,
+	NL80211_TX_RATE_LIMITED = 1,
+	NL80211_TX_RATE_FIXED = 2
+};
+
+/* [LNX] include/net/cfg80211.h:924-935 (record carried whole) */
+/* [LNX] include/uapi/linux/nl80211.h:6073 (the enumerators the compiled set names, at their computed positions) */
+enum nl80211_tid_config {
+	NL80211_TID_CONFIG_ENABLE = 0
+};
+
+struct cfg80211_tid_cfg {
+	bool config_override;
+	u8 tids;
+	u64 mask;
+	enum nl80211_tid_config noack;
+	u8 retry_long, retry_short;
+	enum nl80211_tid_config ampdu;
+	enum nl80211_tid_config rtscts;
+	enum nl80211_tid_config amsdu;
+	enum nl80211_tx_rate_setting txrate_type;
+	struct cfg80211_bitrate_mask txrate_mask;
+};
+
+/* [LNX] include/net/cfg80211.h:3025 (record carried whole) */
+struct cfg80211_match_set {
+	struct cfg80211_ssid ssid;
+	u8 bssid[ETH_ALEN];
+	s32 rssi_thold;
+};
+
+/* [LNX] include/net/cfg80211.h:2463 (record carried whole) */
+struct cfg80211_sar_sub_specs {
+	s32 power;
+	u32 freq_range_index;
+};
+
+
+
+/* [LNX] include/net/cfg80211.h:2474 (record carried whole) */
+struct cfg80211_sar_specs {
+	enum nl80211_sar_type type;
+	u32 num_sub_specs;
+	struct cfg80211_sar_sub_specs sub_specs[] __counted_by(num_sub_specs);
+};
+
+/* [LNX] include/net/cfg80211.h:2930 (record carried whole) */
+struct cfg80211_scan_6ghz_params {
+	u32 short_ssid;
+	u32 channel_idx;
+	u8 bssid[ETH_ALEN];
+	bool unsolicited_probe;
+	bool short_ssid_valid;
+	bool psc_no_listen;
+	s8 psd_20;
+};
+
+/* [LNX] include/net/cfg80211.h:3105 (record carried whole) */
+/* [LNX] include/net/cfg80211.h:3051 (record carried whole) */
+struct cfg80211_bss_select_adjust {
+	enum nl80211_band band;
+	s8 delta;
+};
+
+struct cfg80211_sched_scan_request {
+	u64 reqid;
+	struct cfg80211_ssid *ssids;
+	int n_ssids;
+	u32 n_channels;
+	const u8 *ie;
+	size_t ie_len;
+	u32 flags;
+	struct cfg80211_match_set *match_sets;
+	int n_match_sets;
+	s32 min_rssi_thold;
+	u32 delay;
+	struct cfg80211_sched_scan_plan *scan_plans;
+	int n_scan_plans;
+
+	u8 mac_addr[ETH_ALEN] __aligned(2);
+	u8 mac_addr_mask[ETH_ALEN] __aligned(2);
+
+	bool relative_rssi_set;
+	s8 relative_rssi;
+	struct cfg80211_bss_select_adjust rssi_adjust;
+
+	/* internal */
+	struct wiphy *wiphy;
+	struct net_device *dev;
+	unsigned long scan_start;
+	bool report_results;
+	struct rcu_head rcu_head;
+	u32 owner_nlportid;
+	bool nl_owner_dead;
+	struct list_head list;
+
+	/* keep last */
+	struct ieee80211_channel *channels[] __counted_by(n_channels);
+};
+
+/* [LNX] include/net/cfg80211.h:2911 (record carried whole) */
+struct cfg80211_scan_info {
+	u64 scan_start_tsf;
+	u8 tsf_bssid[ETH_ALEN] __aligned(2);
+	bool aborted;
+};
+
+/* [LNX] include/net/cfg80211.h:3254 (record carried whole) */
+struct cfg80211_bss {
+	struct ieee80211_channel *channel;
+
+	const struct cfg80211_bss_ies __rcu *ies;
+	const struct cfg80211_bss_ies __rcu *beacon_ies;
+	const struct cfg80211_bss_ies __rcu *proberesp_ies;
+
+	struct cfg80211_bss *hidden_beacon_bss;
+	struct cfg80211_bss *transmitted_bss;
+	struct list_head nontrans_list;
+
+	s32 signal;
+
+	u64 ts_boottime;
+
+	u16 beacon_interval;
+	u16 capability;
+
+	u8 bssid[ETH_ALEN];
+	u8 chains;
+	s8 chain_signal[IEEE80211_MAX_CHAINS];
+
+	u8 proberesp_ecsa_stuck:1;
+
+	u8 bssid_index;
+	u8 max_bssid_indicator;
+
+	u8 use_for;
+	u8 cannot_use_reasons;
+
+	u8 priv[] __aligned(sizeof(void *));
+};
+
+/* [LNX] include/net/cfg80211.h:332 (record carried whole) */
+struct cfg80211_he_bss_color {
+	u8 color;
+	bool enabled;
+	bool partial;
+};
+
+/* [LNX] include/net/cfg80211.h:943 (record carried whole) */
+struct cfg80211_tid_config {
+	const u8 *peer;
+	u32 n_tid_conf;
+	struct cfg80211_tid_cfg tid_conf[] __counted_by(n_tid_conf);
+};
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/net/cfg80211.h:8522 */
+void cfg80211_bss_iter(struct wiphy *wiphy,
+		       struct cfg80211_chan_def *chandef,
+		       void (*iter)(struct wiphy *wiphy,
+				    struct cfg80211_bss *bss,
+				    void *data),
+		       void *iter_data);
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/net/cfg80211.h:1010 */
+void cfg80211_chandef_create(struct cfg80211_chan_def *chandef,
+			     struct ieee80211_channel *channel,
+			     enum nl80211_channel_type chantype);
+
+bool cfg80211_channel_is_psc(struct ieee80211_channel *chan);
+
+
+
+
+
+const u8 *cfg80211_find_ie(u8 eid, const u8 *ies, int len);
+
+
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/net/cfg80211.h:8354 */
+int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
+				    enum nl80211_band band);
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/net/cfg80211.h:6813 */
+#define lockdep_assert_wiphy(wiphy) lockdep_assert_held(&(wiphy)->mtx)
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/net/cfg80211.h:8088 */
+int regulatory_hint(struct wiphy *wiphy, const char *alpha2);
+
+void wiphy_lock(struct wiphy *wiphy)
+	__acquires(&wiphy->mtx);
+
+
+
+void wiphy_rfkill_set_hw_state(struct wiphy *wiphy, bool blocked);
+
+
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/net/cfg80211.h:8749 */
+void wiphy_rfkill_start_polling(struct wiphy *wiphy);
+
+void wiphy_rfkill_stop_polling(struct wiphy *wiphy);
+
+
+
+void wiphy_unlock(struct wiphy *wiphy)
+	__releases(&wiphy->mtx);
+
+
+
+
+/* ------------------------------------------------------------------ */
+/* the wiphy work family                                               */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/net/cfg80211.h:6910-6923,6966-6971: work items the stack runs with the
+ * wiphy lock held. The interface's two initializers are inline and transcribed as such
+ * (they name INIT_LIST_HEAD and a member store); the queue/cancel/flush entry points are
+ * declared - their bodies are the serializing worker's, which the port owns. */
+struct wiphy_work;
+typedef void (*wiphy_work_func_t)(struct wiphy *, struct wiphy_work *);
+
+struct wiphy_work {
+	struct list_head entry;
+	wiphy_work_func_t func;
+};
+
+static __always_inline __unused void
+wiphy_work_init(struct wiphy_work *work, wiphy_work_func_t func)
+{
+	INIT_LIST_HEAD(&work->entry);
+	work->func = func;
+}
+
+struct wiphy_delayed_work {
+	struct wiphy_work work;
+	struct wiphy *wiphy;
+	struct timer_list timer;
+};
+
+static __always_inline __unused void
+wiphy_delayed_work_init(struct wiphy_delayed_work *dwork, wiphy_work_func_t func)
+{
+	wiphy_work_init(&dwork->work, func);
+}
+
+void wiphy_work_queue(struct wiphy *wiphy, struct wiphy_work *work);
+void wiphy_work_cancel(struct wiphy *wiphy, struct wiphy_work *work);
+void wiphy_work_flush(struct wiphy *wiphy, struct wiphy_work *work);
+void wiphy_delayed_work_queue(struct wiphy *wiphy, struct wiphy_delayed_work *dwork,
+			      unsigned long delay);
+void wiphy_delayed_work_cancel(struct wiphy *wiphy,
+			       struct wiphy_delayed_work *dwork);
+void wiphy_delayed_work_flush(struct wiphy *wiphy,
+			      struct wiphy_delayed_work *dwork);
+
+/* [LNX] include/net/cfg80211.h: the scan request a driver receives, transcribed with its
+ * members and their order; the channel array is the record's tail. */
+struct cfg80211_scan_request {
+	struct cfg80211_ssid *ssids;
+	int n_ssids;
+	u32 n_channels;
+	const u8 *ie;
+	size_t ie_len;
+	u16 duration;
+	bool duration_mandatory;
+	u32 flags;
+
+	u32 rates[NUM_NL80211_BANDS];
+
+	struct wireless_dev *wdev;
+
+	u8 mac_addr[ETH_ALEN] __aligned(2);
+	u8 mac_addr_mask[ETH_ALEN] __aligned(2);
+	u8 bssid[ETH_ALEN] __aligned(2);
+	struct wiphy *wiphy;
+	unsigned long scan_start;
+	bool no_cck;
+	bool scan_6ghz;
+	bool first_part;
+	u32 n_6ghz_params;
+	struct cfg80211_scan_6ghz_params *scan_6ghz_params;
+	s8 tsf_report_link_id;
+
+	/* keep last */
+	struct ieee80211_channel *channels[];
+};
+/* [LNX] include/net/cfg80211.h:7655 */
+extern const unsigned char rfc1042_header[6];
+
+/* [LNX] include/net/cfg80211.h:7142 (the enumerators the compiled set names, at their computed positions) */
+enum ieee80211_ap_reg_power {
+	IEEE80211_REG_LPI_AP = 1,
+	IEEE80211_REG_SP_AP = 2,
+	IEEE80211_REG_VLP_AP = 3
+};
+
+/* [LNX] include/net/cfg80211.h:1288 (the enumerators the compiled set names, at their computed positions) */
+enum survey_info_flags {
+	SURVEY_INFO_NOISE_DBM = 1
+};
+
+/* [LNX] include/uapi/linux/nl80211.h:6049 (the enumerators the compiled set names, at their computed positions) */
+enum nl80211_cqm_rssi_threshold_event {
+	NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW = 0,
+	NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH = 1
+};
+
+/* [LNX] include/uapi/linux/nl80211.h:6832 (the enumerators the compiled set names, at their computed positions) */
+enum nl80211_feature_flags {
+	NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR = 536870912
+};
+
+/* [LNX] include/uapi/linux/nl80211.h:4018 (the enumerators the compiled set names, at their computed positions) */
+enum nl80211_he_ru_alloc {
+	NL80211_RATE_INFO_HE_RU_ALLOC_26 = 0,
+	NL80211_RATE_INFO_HE_RU_ALLOC_52 = 1,
+	NL80211_RATE_INFO_HE_RU_ALLOC_106 = 2,
+	NL80211_RATE_INFO_HE_RU_ALLOC_242 = 3,
+	NL80211_RATE_INFO_HE_RU_ALLOC_484 = 4,
+	NL80211_RATE_INFO_HE_RU_ALLOC_996 = 5,
+	NL80211_RATE_INFO_HE_RU_ALLOC_2x996 = 6
+};
+
+
+
+/* [LNX] include/uapi/linux/nl80211.h:7320 (the enumerators the compiled set names, at their computed positions) */
+enum nl80211_scan_flags {
+	NL80211_SCAN_FLAG_RANDOM_ADDR = 8,
+	NL80211_SCAN_FLAG_RANDOM_SN = 2048,
+	NL80211_SCAN_FLAG_COLOCATED_6GHZ = 16384
+};
+
+
+
+/* [LNX] include/uapi/linux/nl80211.h:6133 (the enumerators the compiled set names, at their computed positions) */
+enum nl80211_tid_config_attr {
+	NL80211_TID_CONFIG_ATTR_AMPDU_CTRL = 9,
+	NL80211_TID_CONFIG_ATTR_AMSDU_CTRL = 11
+};
+
+/* [LNX] include/net/cfg80211.h: the interface's frequency/channel pair */
+int
+ieee80211_channel_to_frequency(int chan, enum nl80211_band band);
+int
+ieee80211_frequency_to_channel(int freq);
+
+/* [LNX] include/net/cfg80211.h:7849 */
+const u8 *
+cfg80211_find_ie_match(u8 eid, const u8 *ies, unsigned int len,
+		       const u8 *match, unsigned int match_len,
+		       unsigned int match_offset);
+
+/* [LNX] include/net/cfg80211.h:8736 */
+void wiphy_rfkill_set_hw_state_reason(struct wiphy *wiphy, bool blocked,
+				      enum rfkill_hard_block_reasons reason);
+
+/* [LNX] include/net/cfg80211.h:8757 */
+void rfkill_pause_polling(struct rfkill *rfkill);
+
+/* [LNX] include/net/cfg80211.h: the element-search helper */
+const struct element *cfg80211_find_elem(u8 eid, const u8 *ies, int len);
+
 #endif /* _LINUXKPI_NET_CFG80211_H_ */
+
