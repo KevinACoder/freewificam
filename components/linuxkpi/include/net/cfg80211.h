@@ -29,6 +29,9 @@
 #include <linux/ieee80211.h>
 #include <linux/skbuff.h>
 
+struct cfg80211_ops;
+struct regulatory_request;
+
 /* ------------------------------------------------------------------ */
 /* band, interface type and channel width                              */
 /* ------------------------------------------------------------------ */
@@ -920,6 +923,9 @@ struct wiphy {
 
 	u8			max_num_pmkids;
 
+	u32			available_antennas_tx;
+	u32			available_antennas_rx;
+
 	struct ieee80211_supported_band	*bands[NUM_NL80211_BANDS];
 
 	void (*reg_notifier)(struct wiphy *wiphy,
@@ -949,6 +955,13 @@ struct wiphy {
 /* ------------------------------------------------------------------ */
 /* the wireless device                                                 */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The bound the per-interface record's link array is declared with. The interface
+ * splits it out in include/linux/ieee80211-eht.h; the face keeps it here, next to
+ * its only consumer.
+ */
+#define	IEEE80211_MLD_MAX_NUM_LINKS	15
 
 /*
  * The per-interface record. Its size is taken (a monitor and a P2P-device wdev are
@@ -1031,8 +1044,6 @@ struct wireless_dev {
 	 * uses keeps one mechanism.
 	 */
 };
-
-#define	IEEE80211_MLD_MAX_NUM_LINKS	15
 
 #define	cfg80211_priv_size(wiphy)	0
 
