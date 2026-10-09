@@ -72,7 +72,12 @@ static void wlan_lkpi_sink(const char *line)
 	memcpy(buf, line, n);
 	buf[n] = '\0';
 	if (n != 0)
-		board_log("lkpi: %s", buf);
+		/* The line is terminated here: the driver's own dev_* format
+		 * strings do not all end with a newline, and the console only
+		 * splits a line at its length cap - an unterminated print glues
+		 * onto whatever is written next, and the split then cuts a line
+		 * (a judged anchor included) in half. */
+		board_log("lkpi: %s\n", buf);
 }
 
 static const osThreadAttr_t runner_thread_attr = {
@@ -125,9 +130,9 @@ int main( void )
 	 */
 	lkpi_log_sink_register(wlan_lkpi_sink);
 	lkpi_core_init();
-	board_log( "wlan: core services up" );
+	board_log( "wlan: core services up\n" );
 	lkpi_usb_cherryusb_init();
-	board_log( "wlan: usb backend registered" );
+	board_log( "wlan: usb backend registered\n" );
 	lkpi_usb_init();
 	/*
 	 * The transfer model the driver needs: rtl8xxxu rides completion
@@ -141,11 +146,11 @@ int main( void )
 	 * callback-based driver.
 	 */
 	lkpi_usb_force_sync_set(false);
-	board_log( "wlan: driver registry walked (async transfer model)" );
+	board_log( "wlan: driver registry walked (async transfer model)\n" );
 	if( lkpi_fw_rtl8188eufw_register() != 0 ) {
-		board_log( "wlan: firmware registration failed" );
+		board_log( "wlan: firmware registration failed\n" );
 	} else {
-		board_log( "wlan: firmware blob registered" );
+		board_log( "wlan: firmware blob registered\n" );
 	}
 	wlan_seam_adapter_init();
 	board_log( "wlan: chain wired (backend + registry + firmware + bridge)" );

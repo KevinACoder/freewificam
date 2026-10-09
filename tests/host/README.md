@@ -23,14 +23,20 @@ case line such as `CASE net80211-frame-test/...` leads straight to the project.
 
 | Project | Suite | Point under test |
 |---|---|---|
+| (none: `tools/mock/container-selftest/`) | `container-selftest` | The mock container's own judging, positive and negative controls |
 | `threadx-cmsis2-smoke` | `threadx-cmsis2-smoke` | The CMSIS-RTOS2 API over the ThreadX host port |
 | `freertos-cmsis2-smoke` | `freertos-cmsis2-smoke` | The CMSIS-RTOS2 API over the FreeRTOS host port |
 | `net80211-port-test` | `net80211-port-test` | The net80211 port layer: stack compile, include discipline, ThreadX run, isolation gates |
 | `net80211-frame-test` | `net80211-frame-test` | 802.11 frame formats and the wlan protocol path |
 | `linuxkpi-usb-test` | `linuxkpi-usb-test` | The linuxkpi USB API face over the backend seam (synthetic controller + scripted device) |
+| `linuxkpi-body-test` | `linuxkpi-body-test` | The USB body: link closure, section walk, endpoint ownership and the bulk-OUT toggle discipline |
 | `cherrysh-port-smoke` | `cherrysh-port-smoke` | The CherrySH console shell over the port layer (both CMSIS-RTOS2 host runtimes) |
 | `skbuff-allocation-free-stress` | `skbuff-allocation-free-stress` | The skbuff seam under allocation/free combination stress |
 | `linuxkpi-usb-urb-stress` | `linuxkpi-usb-urb-stress` | The urb engine under injection stress |
+| `lwip-port-build` | `lwip-port-build` | The lwIP port layer compiles and links on both kernels with no symbol leak |
+| `rtl8xxxu-port-build` | `rtl8xxxu-port-build` | The driver port compiles against the linuxkpi face and honours its contract |
+| `wlan-bridge-test` | `wlan-bridge-test` | The net80211 bridge: attach, scan, join and data path, the seam contract, key handling and the supplicant backend |
+| `wpa-port-test` | `wpa-port-test` | The supplicant port: the scan pull model, four-way completion, job timeouts and the backend on both kernels |
 
 Rules:
 

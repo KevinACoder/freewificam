@@ -206,9 +206,12 @@ on_data(const uint8_t *frame, size_t len, void *arg)
 static const uint8_t sta_mac[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
 
 /* one received frame, handed the way a driver hands it: an skb carrying the rx
- * status block through the substitute's rx entry */
+ * status block through the substitute's rx entry. `flags` and `signal` are the
+ * status fields the driver would set; RX_FLAG_FAILED_FCS_CRC and
+ * RX_FLAG_DECRYPTED are the two the bridge counts. */
 static void
-inject_rx(const uint8_t *frame, size_t len)
+inject_rx_flags(const uint8_t *frame, size_t len, unsigned int flags,
+    int signal)
 {
 	struct sk_buff *skb;
 	struct ieee80211_rx_status *rs;
@@ -223,8 +226,15 @@ inject_rx(const uint8_t *frame, size_t len)
 	memset(rs, 0, sizeof(*rs));
 	rs->freq = 2412;
 	rs->band = NL80211_BAND_2GHZ;
-	rs->signal = -50;
+	rs->signal = (int8_t)signal;
+	rs->flag = (uint8_t)flags;
 	ieee80211_rx_irqsafe(g_hw, skb);
+}
+
+static void
+inject_rx(const uint8_t *frame, size_t len)
+{
+	inject_rx_flags(frame, len, 0, -50);
 }
 
 /* the fake AP answers each transmitted frame exactly once, in the order the
@@ -1451,6 +1461,240 @@ case_b14(void)
 /* the flow                                                            */
 /* ------------------------------------------------------------------ */
 
+/*
+ * B15: the transmit key of a group-addressed data frame on the station's
+ * uplink. A DHCP DISCOVER leaves the station with the broadcast destination
+ * address, but the 802.11 header's Address 1 is the AP - a unicast address -
+ * and the key choice follows Address 1: the pairwise key seals the frame and
+ * the CCMP header carries key id 0, while a group key sits at index 1 as the
+ * default transmit key all along (output.c:555-562 selects the unicast key in
+ * station mode, crypto.c:570-586 keys by Address 1). Choosing by the
+ * destination address instead - the group key for a broadcast destination -
+ * is the failure the board round had to rule out by hand: the peer indexes a
+ * station's uplink frame under the pairwise key and drops a group-sealed one
+ * with no answer, which reads exactly like a radio fault.
+ */
+static int
+case_b15(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	const struct wpa_vendor_port *vp;
+	struct wpa_vendor_key key;
+	struct wlan_bridge_counters before, after;
+	uint8_t frame[64];
+	unsigned int tx_before, i;
+	int sealed = 0, keyid_seen = -1;
+
+	vp = wpa_vendor_backend();
+	if (vp == NULL || vp->set_key == NULL) {
+		case_line("B15", 0, "the supplicant backend is not up");
+		return -1;
+	}
+	/* the association the case needs: the cases behind it park the stack in
+	 * SCAN (a parked re-sweep, a mid-sweep join that re-arms the sweep) and
+	 * B14 ends with the disconnect leg, so the case re-establishes it the
+	 * way the supplicant does - the vendor connect plus the scripted AP's
+	 * answers - and then keeps its own precondition honest */
+	if (n8_peek_state() != n8_peek_run_state()) {
+		struct wpa_vendor_conn conn;
+		unsigned int guard;
+
+		/* the connect resolves its BSS through the scan table the backend
+		 * pulls from, so the case sweeps first: the same two steps the
+		 * supplicant's own join takes */
+		if (vp->ensure_up != NULL && vp->ensure_up() != 0) {
+			case_line("B15", 0, "the backend did not come up");
+			return -1;
+		}
+		if (vp->scan_start == NULL ||
+		    vp->scan_start((const uint8_t *)AP_SSID, AP_SSID_LEN) != 0) {
+			case_line("B15", 0, "the re-sweep did not start");
+			return -1;
+		}
+		for (guard = 0; guard < 64; guard++) {
+			answer_new_tx_from_ap();
+			if (wlan_bridge_scan_dwell() == 0)
+				break;
+		}
+		answer_new_tx_from_ap();
+		memset(&conn, 0, sizeof(conn));
+		conn.ssid = (const uint8_t *)AP_SSID;
+		conn.ssid_len = AP_SSID_LEN;
+		conn.bssid = ap_bssid;
+		conn.bssid_set = 1;
+		conn.wpa_ie = b11_rsn_ie;
+		conn.wpa_ie_len = sizeof(b11_rsn_ie);
+		if (vp->connect == NULL || vp->connect(&conn) != 0) {
+			case_line("B15", 0, "the reconnect was refused");
+			return -1;
+		}
+		for (guard = 0; guard < 64; guard++) {
+			if (n8_peek_state() == n8_peek_run_state())
+				break;
+			answer_new_tx_from_ap();
+		}
+	}
+	if (n8_peek_state() != n8_peek_run_state()) {
+		case_line("B15", 0, "the station is not associated (state=%d)",
+		    n8_peek_state());
+		return -1;
+	}
+	/* the pairwise key at index 0, as the handshake installs it */
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 0;
+	key.addr = ap_bssid;
+	key.set_tx = 1;
+	key.key = b11_tk;
+	key.key_len = sizeof(b11_tk);
+	if (vp->set_key(&key) != 0 || n8_peek_key_defined(1, 0) != 1) {
+		case_line("B15", 0, "the pairwise key did not install");
+		return -1;
+	}
+	/* and the group key at index 1, which is the default transmit key: a
+	 * selection that follows the destination address would seal with this
+	 * one and stamp key id 1 */
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 1;
+	key.addr = bcast_addr;
+	key.set_tx = 1;
+	key.key = b11_gtk;
+	key.key_len = sizeof(b11_gtk);
+	if (vp->set_key(&key) != 0 || n8_peek_key_defined(0, 1) != 1 ||
+	    n8_peek_def_txkey() != 1) {
+		case_line("B15", 0, "the group key did not become the default "
+		    "transmit key (defined=%d def_tx=%d)",
+		    n8_peek_key_defined(0, 1), n8_peek_def_txkey());
+		return -1;
+	}
+
+	/* the frame a lease hunt sends: broadcast destination, IP payload */
+	memset(frame, 0, sizeof(frame));
+	memset(frame, 0xff, 6);
+	memcpy(frame + 6, sta_mac, 6);
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	for (i = 0; i < 24; i++)
+		frame[14 + i] = (uint8_t)(0x40 + i);
+	wlan_bridge_stats(&before);
+	tx_before = st->tx_count;
+	if (wlan_bridge_tx_raw(frame, 14 + 24) < 0) {
+		case_line("B15", 0, "the broadcast transmit was refused");
+		return -1;
+	}
+	st = fake_driver_state();
+	wlan_bridge_stats(&after);
+	for (i = tx_before; i < st->tx_count && i < FAKE_DRIVER_TX_MAX; i++) {
+		const uint8_t *fp = st->tx_frames[i];
+		unsigned int len = st->tx_lens[i];
+		unsigned int hdr = (fp[0] & 0x80) != 0 ? 26U : 24U;
+
+		if (len != hdr + 8 + 8 + 24 + 8)
+			continue;
+		if ((fp[1] & 0x40) == 0)		/* protected bit */
+			continue;
+		if (memcmp(fp + 4, ap_bssid, 6) != 0)	/* Address 1 */
+			continue;
+		if (memcmp(fp + hdr + 16, frame + 14, 24) == 0)
+			continue;			/* still plaintext */
+		keyid_seen = (int)((fp[hdr + 3] >> 6) & 0x3);
+		sealed = 1;
+		break;
+	}
+	if (!sealed) {
+		case_line("B15", 0, "no sealed broadcast frame left the driver "
+		    "(Address 1 must be the AP, not the broadcast address)");
+		return -1;
+	}
+	if (keyid_seen != 0) {
+		case_line("B15", 0, "the uplink frame carries key id %d: it was "
+		    "sealed with the group key the destination address points "
+		    "at, and the peer will drop it", keyid_seen);
+		return -1;
+	}
+	if (after.data_tx_enc != before.data_tx_enc + 1) {
+		case_line("B15", 0, "the protected-transmit counter did not move "
+		    "(+%u)", after.data_tx_enc - before.data_tx_enc);
+		return -1;
+	}
+	case_line("B15", 1, "a group-addressed uplink frame is sealed with the "
+	    "pairwise key (Address 1 = AP, key id 0) while the group key is the "
+	    "default transmit key");
+	return 0;
+}
+
+/*
+ * B16: the receive-status flags the driver hands over must reach the bridge's
+ * counters. A frame the chip flagged as FCS-failed is counted as such - it is
+ * the difference between "the peer never answered" and "the answer arrived
+ * garbled" - and a protected data frame the chip already decrypted is counted
+ * in both hardware-decrypt counters, which is the fingerprint the board round
+ * read to catch a software-crypto stack decrypting a second time.
+ */
+static int
+case_b16(void)
+{
+	struct wlan_bridge_counters before, after;
+	uint8_t frame[64];
+	unsigned int i;
+
+	wlan_bridge_stats(&before);
+	/* a beacon-shaped frame the chip flagged: counted as received, counted
+	 * as flagged, and still recognised as a beacon */
+	memset(frame, 0, sizeof(frame));
+	frame[0] = 0x80;			/* beacon */
+	memcpy(frame + 4, bcast_addr, 6);
+	memcpy(frame + 10, ap_bssid, 6);
+	memcpy(frame + 16, ap_bssid, 6);
+	inject_rx_flags(frame, 24, RX_FLAG_FAILED_FCS_CRC, -50);
+	wlan_bridge_stats(&after);
+	if (after.rx_fcs_bad != before.rx_fcs_bad + 1) {
+		case_line("B16", 0, "the FCS flag did not reach the counters "
+		    "(+%u): the seam stopped mapping RX_FLAG_FAILED_FCS_CRC",
+		    after.rx_fcs_bad - before.rx_fcs_bad);
+		return -1;
+	}
+	if (after.rx_frames != before.rx_frames + 1) {
+		case_line("B16", 0, "the flagged frame was not counted as "
+		    "received (+%u)", after.rx_frames - before.rx_frames);
+		return -1;
+	}
+
+	/* a protected data frame the chip already decrypted: both hardware
+	 * counters move, and the protection split sees it as protected */
+	before = after;
+	memset(frame, 0, sizeof(frame));
+	frame[0] = 0x08;
+	frame[1] = 0x40;			/* protected, to-DS */
+	memcpy(frame + 4, ap_bssid, 6);
+	memcpy(frame + 10, sta_mac, 6);
+	memcpy(frame + 16, sta_mac, 6);
+	for (i = 24; i < sizeof(frame); i++)
+		frame[i] = (uint8_t)i;
+	inject_rx_flags(frame, 48, RX_FLAG_DECRYPTED, -50);
+	wlan_bridge_stats(&after);
+	if (after.rx_data != before.rx_data + 1 ||
+	    after.rx_data_enc != before.rx_data_enc + 1) {
+		case_line("B16", 0, "the protected data frame was not counted "
+		    "(data +%u enc +%u)", after.rx_data - before.rx_data,
+		    after.rx_data_enc - before.rx_data_enc);
+		return -1;
+	}
+	if (after.rx_data_hwdec != before.rx_data_hwdec + 1 ||
+	    after.rx_data_hwdec_prot != before.rx_data_hwdec_prot + 1) {
+		case_line("B16", 0, "the chip-decrypted flag did not reach the "
+		    "counters (hwdec +%u prot +%u): the seam stopped mapping "
+		    "RX_FLAG_DECRYPTED",
+		    after.rx_data_hwdec - before.rx_data_hwdec,
+		    after.rx_data_hwdec_prot - before.rx_data_hwdec_prot);
+		return -1;
+	}
+	case_line("B16", 1, "the FCS and chip-decrypted status flags reach the "
+	    "bridge counters");
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -1590,9 +1834,13 @@ run_suite(void)
 	(void)case_b12();
 	(void)case_b13();
 	(void)case_b14();
+	/* last on purpose: B15 re-establishes the association itself, so it is
+	 * unaffected by the state the cases above leave behind */
+	(void)case_b15();
+	(void)case_b16();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=14\n");
+		printf("WLANBRIDGE: SUITE PASS cases=16\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
