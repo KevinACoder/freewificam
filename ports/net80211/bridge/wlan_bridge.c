@@ -108,6 +108,21 @@ static struct {
 	unsigned int rx_fcs_bad;	/* diagnostic: frames the chip flagged */
 	unsigned int tune_calls;	/* diagnostic: channel-program attempts */
 	unsigned int tune_fails;	/* diagnostic: ... that came back nonzero */
+	/* The data-plane discriminator family: a data frame's protection state
+	 * on the way out and on the way in. "Left encrypted" vs "left in the
+	 * clear" separates a key-selection fault (the frame goes out with the
+	 * wrong key, or with none) from a radio/air fault, and the receive side
+	 * answers the other half - did the peer's answer reach the stack at
+	 * all, and did it arrive protected. */
+	unsigned int data_tx_enc;	/* data frames sent with the WEP bit */
+	unsigned int data_tx_plain;	/* data frames sent without it */
+	unsigned int rx_data;		/* data frames received (type 2) */
+	unsigned int rx_data_enc;	/* ... that arrived protected */
+	unsigned int rx_data_hwdec;	/* ... the chip already decrypted */
+	unsigned int rx_data_hwdec_prot;	/* ... protected AND chip-decrypted */
+	unsigned int tx_noencap;	/* data frames dropped by encap/crypto */
+	int data_tx_logged;	/* the one-shot first-frame dump ran */
+	int rx_data_logged;	/* ... and the receive-side one */
 	uint8_t bssid_last[6];	/* the join target the filter must match */
 	int bssid_last_set;
 	unsigned int tx_completes;
@@ -253,6 +268,7 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		}
 		enc = ieee80211_encap(ic, m, ni);
 		if (enc == NULL) {
+			bridge.tx_noencap++;
 			if_statinc(ifp, if_oerrors);	/* encap consumed it */
 			continue;
 		}
@@ -269,10 +285,38 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			 * (frame-test main.c:630-641).
 			 */
 			if (ieee80211_crypto_encap(ic, ni, enc) == NULL) {
+				bridge.tx_noencap++;
 				m_freem(enc);
 				if_statinc(ifp, if_oerrors);
 				continue;
 			}
+			bridge.data_tx_enc++;
+		} else {
+			bridge.data_tx_plain++;
+		}
+		/* the one-shot first-data-frame dump: the key id the frame
+		 * carries is what the peer indexes its decrypt with, so a
+		 * group-addressed frame sealed with the pairwise key (key id 0)
+		 * reads straight off this line. The id sits in the top two bits
+		 * of the CCMP header's fourth byte (the caller passes it
+		 * pre-shifted, ieee80211_crypto.c:585), and that byte starts
+		 * where the 802.11 header ends (ccmp_encap writes it in place
+		 * at ieee80211_hdrspace, ieee80211_crypto_ccmp.c:145-160). */
+		if (!bridge.data_tx_logged) {
+			const uint8_t *ccmp;
+
+			bridge.data_tx_logged = 1;
+			wh = mtod(enc, struct ieee80211_frame *);
+			ccmp = mtod(enc, const uint8_t *) +
+			    ieee80211_hdrspace(ic, mtod(enc, const void *));
+			wlan_osal_log("wlan: data tx first: dst=%02x:%02x:%02x:%02x:"
+			    "%02x:%02x prot=%d keyid=%d len=%u\n",
+			    wh->i_addr1[0], wh->i_addr1[1], wh->i_addr1[2],
+			    wh->i_addr1[3], wh->i_addr1[4], wh->i_addr1[5],
+			    (wh->i_fc[1] & IEEE80211_FC1_WEP) != 0,
+			    (wh->i_fc[1] & IEEE80211_FC1_WEP) != 0 ?
+			    (int)((ccmp[3] >> 6) & 0x3) : -1,
+			    (unsigned)enc->m_pkthdr.len);
 		}
 		if (bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
 		    (size_t)enc->m_pkthdr.len, 0) != 0)
@@ -517,7 +561,8 @@ wlan_bridge_detach(void)
  * the imported path requires.
  */
 int
-wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad)
+wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
+    int hw_dec)
 {
 	struct ieee80211com *ic = bridge.ic;
 	struct ieee80211_node *ni;
@@ -533,6 +578,43 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad)
 	bridge.rx_frames++;
 	if (fcs_bad)
 		bridge.rx_fcs_bad++;
+	/* the receive half of the data-plane discriminator: a data frame that
+	 * reached the bridge at all, and whether it came in protected. The
+	 * pair separates "the peer never answered" from "the answer arrived
+	 * and the stack dropped it" - and, with the crypto counters the stats
+	 * snapshot carries, from "the answer arrived and did not decrypt". */
+	if (len >= 24 && (frame[0] & 0x0c) == 0x08) {	/* data */
+		bridge.rx_data++;
+		if ((frame[1] & IEEE80211_FC1_WEP) != 0) {
+			bridge.rx_data_enc++;
+			/* protected and already decrypted by the chip: this is
+			 * the frame a software-crypto stack decrypts a second
+			 * time, so the count is the fingerprint itself */
+			if (hw_dec)
+				bridge.rx_data_hwdec_prot++;
+		}
+		if (hw_dec)
+			bridge.rx_data_hwdec++;
+		/* the one-shot first-data-frame dump: which addresses the frame
+		 * carries (the receiver address decides the key lookup, the
+		 * third address is the real destination), whether it arrived
+		 * protected, and whether the chip already decrypted it - the
+		 * last one is the fingerprint of a frame the stack will try to
+		 * decrypt a second time */
+		if (!bridge.rx_data_logged) {
+			bridge.rx_data_logged = 1;
+			wlan_osal_log("wlan: data rx first: fc=%02x%02x a1=%02x:%02x:"
+			    "%02x:%02x:%02x:%02x a2=%02x:%02x:%02x:%02x:%02x:%02x "
+			    "a3=%02x:%02x:%02x:%02x:%02x:%02x prot=%d hwdec=%d "
+			    "fcs=%d len=%u\n", frame[0], frame[1],
+			    frame[4], frame[5], frame[6], frame[7], frame[8],
+			    frame[9], frame[10], frame[11], frame[12], frame[13],
+			    frame[14], frame[15], frame[16], frame[17], frame[18],
+			    frame[19], frame[20], frame[21],
+			    (frame[1] & IEEE80211_FC1_WEP) != 0, hw_dec ? 1 : 0,
+			    fcs_bad ? 1 : 0, (unsigned)len);
+		}
+	}
 	if (len >= 24 && (frame[0] & 0x0c) == 0x00) {	/* management */
 		uint8_t fc0 = frame[0];
 		uint8_t sub = (uint8_t)(fc0 & 0xf0);
@@ -1254,6 +1336,26 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->rx_fcs_bad = bridge.rx_fcs_bad;
 	out->tune_calls = bridge.tune_calls;
 	out->tune_fails = bridge.tune_fails;
+	out->data_tx_enc = bridge.data_tx_enc;
+	out->data_tx_plain = bridge.data_tx_plain;
+	out->tx_noencap = bridge.tx_noencap;
+	out->rx_data = bridge.rx_data;
+	out->rx_data_enc = bridge.rx_data_enc;
+	out->rx_data_hwdec = bridge.rx_data_hwdec;
+	out->rx_data_hwdec_prot = bridge.rx_data_hwdec_prot;
+	/* the stack's own verdicts, read straight off the imported statistics
+	 * (the names are the import's: ieee80211_ioctl.h) - they are the only
+	 * place a decryption failure becomes visible at all */
+	if (bridge.ic != NULL) {
+		out->rx_wepfail = bridge.ic->ic_stats.is_rx_wepfail;
+		out->rx_ccmpformat = bridge.ic->ic_stats.is_rx_ccmpformat;
+		out->rx_ccmpreplay = bridge.ic->ic_stats.is_rx_ccmpreplay;
+		out->rx_ccmpmic = bridge.ic->ic_stats.is_rx_ccmpmic;
+		out->tx_nodefkey = bridge.ic->ic_stats.is_tx_nodefkey;
+		if (bridge.ic->ic_ifp != NULL)
+			out->tx_errors = (unsigned int)
+			    IF_STATGET(bridge.ic->ic_ifp, if_oerrors);
+	}
 	out->tuned_freq = bridge.tuned_freq;
 	out->attached = bridge.attached;
 }
@@ -1462,6 +1564,13 @@ wlan_port_status_dump(void)
 	    "scan=%u/%u filter=%u/%u\n", c.attached, c.mgt_tx, c.data_tx,
 	    c.rx_frames, c.tx_completes, c.scan_starts, c.scan_completes,
 	    c.filter_sets, c.filter_clears);
+	wlan_osal_log("wlan: data tx enc=%u plain=%u noenc=%u err=%u | "
+	    "rx data=%u enc=%u hwdec=%u/%u | crypto wepfail=%u ccmpfmt=%u "
+	    "replay=%u mic=%u nodefkey=%u\n", c.data_tx_enc, c.data_tx_plain,
+	    c.tx_noencap, c.tx_errors, c.rx_data, c.rx_data_enc,
+	    c.rx_data_hwdec_prot, c.rx_data_hwdec, c.rx_wepfail,
+	    c.rx_ccmpformat, c.rx_ccmpreplay,
+	    c.rx_ccmpmic, c.tx_nodefkey);
 }
 
 void

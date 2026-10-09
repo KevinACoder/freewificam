@@ -62,6 +62,26 @@ struct wlan_bridge_counters {
 	unsigned int	rx_fcs_bad;
 	unsigned int	tune_calls;
 	unsigned int	tune_fails;
+	/* The data-plane discriminator family: the protection state of data
+	 * frames on the way out and on the way in, plus the stack's own crypto
+	 * verdicts. A frame that leaves in the clear, or leaves sealed under a
+	 * key id the peer does not index for it (a group-addressed frame under
+	 * the pairwise key), is dropped by the peer with no answer; a frame
+	 * that arrives and fails to decrypt lands in the crypto counters
+	 * instead. The pair says which side of the radio the fault is on. */
+	unsigned int	data_tx_enc;	/* data frames sent protected */
+	unsigned int	data_tx_plain;	/* data frames sent in the clear */
+	unsigned int	tx_noencap;	/* data frames dropped before the radio */
+	unsigned int	rx_data;	/* data frames received */
+	unsigned int	rx_data_enc;	/* ... that arrived protected */
+	unsigned int	rx_data_hwdec;	/* ... the chip already decrypted */
+	unsigned int	rx_data_hwdec_prot;	/* ... protected and chip-decrypted */
+	unsigned int	rx_wepfail;	/* stack: receive decrypt failed */
+	unsigned int	rx_ccmpformat;	/* stack: CCMP header malformed */
+	unsigned int	rx_ccmpreplay;	/* stack: CCMP sequence violation */
+	unsigned int	rx_ccmpmic;	/* stack: CCMP MIC mismatch */
+	unsigned int	tx_nodefkey;	/* stack: no transmit key to seal with */
+	unsigned int	tx_errors;	/* interface output errors */
 	uint32_t	tuned_freq;
 	int		attached;
 };
@@ -81,10 +101,14 @@ void	wlan_bridge_detach(void);
  * bridge copies it into the stack's own buffer before returning. `rssi` is the
  * driver's signal report (0 when it has none); `fcs_bad` says the chip flagged
  * the frame's checksum (it still arrives - nothing between the driver and here
- * drops it - but it is noise, not an answer).
+ * drops it - but it is noise, not an answer); `hw_dec` says the chip already
+ * decrypted the frame itself (the driver reports it per frame). The stack is a
+ * software-crypto one, so a frame that arrives already decrypted is one the
+ * stack will decrypt a second time and fail - which is exactly why the flag
+ * crosses this boundary: it is the only way that failure becomes visible.
  */
 int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi,
-	    int fcs_bad);
+	    int fcs_bad, int hw_dec);
 
 /* A transmitted frame completed (the driver half's tx-status callback). */
 void	wlan_bridge_tx_complete(void);

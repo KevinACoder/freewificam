@@ -37,6 +37,8 @@
 #include "wlannetif.h"
 #include "lwip_stack.h"
 #include "wlan_wpa_obs.h"
+/* the lease-hunt pulse reads the bridge's data counters */
+#include "wlan_bridge.h"
 
 /* the lwIP address helpers the console command needs */
 #include "lwip/ip_addr.h"
@@ -115,6 +117,29 @@ dataplane_up(void)
 		}
 		osDelay(200U);
 		waited += 200U;
+		/* the lease-hunt pulse: data_tx splits "the client's discovers
+		 * never reached the radio" (the counter stays put - the fault
+		 * is above the bridge) from "they left but nothing came back"
+		 * (the counter climbs - the fault is the encrypted data path
+		 * or the air); the protection split and the receive pair then
+		 * say which half of that path, and the crypto counters catch
+		 * the answer that arrived but did not decrypt */
+		if ((waited % 10000U) == 0U) {
+			struct wlan_bridge_counters c;
+
+			wlan_bridge_stats(&c);
+			board_log("wlan: dhcp wait t=%us data_tx=%u(enc=%u "
+			    "plain=%u noenc=%u) rx=%u(data=%u enc=%u hwdec=%u/%u) "
+			    "crypto(rx_wepfail=%u ccmpfmt=%u replay=%u "
+			    "mic=%u nodefkey=%u) tx_err=%u link=%u\n",
+			    waited / 1000U, c.data_tx, c.data_tx_enc,
+			    c.data_tx_plain, c.tx_noencap, c.rx_frames,
+			    c.rx_data, c.rx_data_enc, c.rx_data_hwdec_prot,
+			    c.rx_data_hwdec,
+			    c.rx_wepfail, c.rx_ccmpformat, c.rx_ccmpreplay,
+			    c.rx_ccmpmic, c.tx_nodefkey, c.tx_errors,
+			    netif_is_link_up(&g_netif));
+		}
 	}
 	if (ip4_addr_isany_val(g_netif.ip_addr)) {
 		static char reason[160];

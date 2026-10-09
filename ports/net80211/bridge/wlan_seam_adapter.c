@@ -452,7 +452,8 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 		return;
 	(void)wlan_bridge_input(skb->data, (size_t)skb->len,
 	    rs != NULL ? (int)rs->signal : 0,
-	    rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0);
+	    rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0,
+	    rs != NULL && (rs->flag & RX_FLAG_DECRYPTED) != 0);
 }
 
 static void
