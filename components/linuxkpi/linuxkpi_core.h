@@ -31,6 +31,12 @@
 /* -std=c11 has no typeof keyword; the GNU spelling always exists. */
 #ifndef typeof
 #define	typeof(x)	__typeof__(x)
+/* [LNX] include/linux/random.h:39 */
+void get_random_bytes(void *buf, size_t len);
+
+/* [LNX] include/asm-generic/barrier.h:196 */
+void barrier(void);
+
 #endif
 
 /* IS_ENABLED/IS_REACHABLE over the kbuild convention: a CONFIG_ symbol is
@@ -91,6 +97,10 @@ typedef uint64_t		__le64;
 typedef uint16_t		__be16;
 typedef uint32_t		__be32;
 typedef uint64_t		__be64;
+/* the checksum types the wire-header layouts name (uapi/linux/types.h);
+ * __bitwise is a sparse annotation and a no-op for the compiler */
+typedef uint16_t		__sum16;
+typedef uint32_t		__wsum;
 
 typedef unsigned long		ulong;
 typedef unsigned int		uint;
@@ -107,10 +117,13 @@ typedef unsigned int		gfp_t;
  * the middle of declarations - without the define the whole struct
  * fails to parse (GCC error-recovery then poisons every member access) */
 #define	__rcu
+#define	__iftd
 #define	__percpu
 #define	__must_check
 #define	__init
 #define	__exit
+#define	__acquire(x)
+#define	__release(x)
 #define	__acquires(x)
 #define	__releases(x)
 #define	__printf(a, b)		__attribute__((__format__(printf, a, b)))
@@ -146,8 +159,12 @@ typedef unsigned int		gfp_t;
 #ifndef __unused
 #define	__unused		__attribute__((__unused__))
 #endif
+/* [LNX] include/linux/compiler_attributes.h:214: the fall-through marker a switch case
+ * states; the attribute arm is the one this face's compiler class supports (the
+ * do-while arm is for compilers without the statement attribute and would leave
+ * -Wimplicit-fallthrough firing) */
 #ifndef fallthrough
-#define	fallthrough		do {} while (0)
+#define	fallthrough		__attribute__((__fallthrough__))
 #endif
 
 #define	U8_MAX			0xffU
@@ -947,6 +964,9 @@ u32p_replace_bits(u32 *p, u32 v, u32 mask)
 /* the forever wait the timeout paths sentinel */
 #define	MAX_SCHEDULE_TIMEOUT	((unsigned long)0x7fffffff)
 
+/* [LNX] include/uapi/linux/if_ether.h:14 */
+#define	ETH_ALEN	6
+
 void *lkpi_kmem_alloc(size_t, int flags, bool zero);
 void lkpi_kmem_free(const void *);
 
@@ -1035,20 +1055,11 @@ devm_kmemdup_array(struct device *dev, const void *src, size_t n,
 	return kmemdup(src, n * size, flags);
 }
 
-/* The 6.14+/6.15+ allocation API forms. */
-#define	kzalloc_obj(p)		kzalloc(sizeof(p), GFP_KERNEL)
-/* kmalloc_obj: allocate one object of the pointed-to type (Linux 6.14
- * shape; rtw89's usb.c uses both the 1-arg and (ptr, GFP) forms) */
-#define	__lkpi_kmalloc_obj1(type)	kmalloc(sizeof(type), GFP_KERNEL)
-#define	__lkpi_kmalloc_obj2(type, flags)	kmalloc(sizeof(type), (flags))
-#define	__lkpi_kmalloc_obj_pick(_1, _2, NAME, ...)	NAME
-#define	kmalloc_obj(...)						\
-	__lkpi_kmalloc_obj_pick(__VA_ARGS__, __lkpi_kmalloc_obj2,	\
-				__lkpi_kmalloc_obj1)(__VA_ARGS__)
-#define	kzalloc_objs(type, count, ...)					\
-	kcalloc((count), sizeof(type), GFP_KERNEL)
-#define	kmalloc_objs(type, count, ...)					\
-	kmalloc((count) * sizeof(type), GFP_KERNEL)
+/* The object/flexible allocation family of the interface (include/linux/slab.h). The
+ * interface selects its optional trailing GFP argument with a comma-paste whose behaviour
+ * for an absent argument differs between GNU and strict modes; this port compiles in
+ * strict mode and carries the forms the compiled set calls (no explicit GFP), stating
+ * GFP_KERNEL as the default the interface's own pick yields. */
 #define	kmalloc_array(n, size, flags)	kmalloc((n) * (size), (flags))
 #define	kcalloc(n, size, flags)		kzalloc((n) * (size), (flags))
 #define	devm_kcalloc(dev, n, size, flags)				\
@@ -1741,12 +1752,12 @@ class_rcu_lock_ptr(class_rcu_t *g)
 /* class spinlock_irqsave: the shim spinlock is a passive mutex, so the
  * "irqsave" flavor is lock + flags==0 (see the spin_* macros above) */
 typedef struct {
-	struct mutex	*lock;
+	spinlock_t	*lock;
 	unsigned long	flags;
 } class_spinlock_irqsave_t;
 
 static __always_inline __unused class_spinlock_irqsave_t
-class_spinlock_irqsave_constructor(struct mutex *l)
+class_spinlock_irqsave_constructor(spinlock_t *l)
 {
 	class_spinlock_irqsave_t t = { .lock = l };
 
@@ -1787,6 +1798,9 @@ typedef unsigned long irqflags_t;
  * [lkpi-stabilize] FR-1); this header includes it so every existing
  * consumer keeps compiling unchanged. */
 #include "skbuff/skbuff_pool.h"
+
+struct firmware;
+struct pci_dev;
 /* ------------------------------------------------------------------ */
 
 struct sk_buff_head {
@@ -2135,6 +2149,16 @@ void complete_all(struct completion *c);
 #define	try_wait_for_completion(c)		lkpi_try_wait_for_completion(c)
 #define	completion_done(c)			lkpi_completion_done(c)
 
+/* [LNX] include/uapi/linux/stddef.h:56-60 via include/linux/stddef.h:93: the
+ * flexible-array spelling usable inside a union or a group. This face is compiled by one
+ * known compiler class, so the interface's arm selection is not carried and the GCC arm
+ * is the one stated. */
+#define	DECLARE_FLEX_ARRAY(TYPE, NAME)		\
+	struct {				\
+		struct { } __empty_ ## NAME;	\
+		TYPE NAME[];			\
+	}
+
 /* ------------------------------------------------------------------ */
 /* workqueues (linux/workqueue.h)                                      */
 /* ------------------------------------------------------------------ */
@@ -2197,7 +2221,7 @@ extern struct workqueue_struct *lkpi_system_wq;
 #define	queue_delayed_work(wq, w, j)	lkpi_queue_delayed_work((wq), (w), (j))
 #define	cancel_delayed_work(w)		lkpi_cancel_delayed_work(w)
 #define	cancel_delayed_work_sync(w)	lkpi_cancel_delayed_work_sync(w)
-#define	cancel_work_sync(w)		(lkpi_work_flush(w), true)
+#define	cancel_work_sync(w)		({ lkpi_work_flush(w); true; })
 #define	flush_work(w)			lkpi_work_flush(w)
 #define	flush_workqueue(wq)		do { (void)(wq); } while (0)
 #define	flush_delayed_work(w)		lkpi_flush_delayed_work(w)
@@ -2214,6 +2238,13 @@ alloc_workqueue(const char *fmt, unsigned int flags, int max_active, ...)
 #define	create_workqueue(name)			alloc_workqueue(name, 0, 1)
 #define	system_wq				lkpi_system_wq
 
+/* [LNX] include/linux/workqueue.h:371-416 (the enumerators the compiled set names, at
+ * their computed positions) */
+enum wq_flags {
+	WQ_UNBOUND = 2,
+	WQ_HIGHPRI = 16
+};
+
 /* ------------------------------------------------------------------ */
 /* timers (linux/timer.h)                                              */
 /* ------------------------------------------------------------------ */
@@ -2227,8 +2258,13 @@ struct timer_list {
 
 void lkpi_timer_setup(struct timer_list *, void (*)(struct timer_list *));
 int lkpi_mod_timer(struct timer_list *, unsigned long expires);
-void lkpi_del_timer(struct timer_list *);
-void lkpi_del_timer_sync(struct timer_list *);
+/* The delete pair returns whether the timer was still pending when the call arrived -
+ * the interface's own contract for del_timer()/del_timer_sync() and for the
+ * timer_delete()/timer_delete_sync() spellings it renamed them to, and a caller that
+ * distinguishes "cancelled a live timer" from "it had already fired" reads it (the
+ * vendored vendor driver's cancel path does). */
+int lkpi_del_timer(struct timer_list *);
+int lkpi_del_timer_sync(struct timer_list *);
 int lkpi_timer_pending(const struct timer_list *);
 
 #define	timer_setup(t, fn, flags)	lkpi_timer_setup((t), (fn))
@@ -2402,4 +2438,66 @@ struct ieee80211_tpt_blink {
 
 #endif /* _LINUXKPI_LINUX_LEDS_TYPES_ */
 
+/* [LNX] helper the compiled set names */
+/* [LNX] include/linux/netdevice.h:5034 */
+struct net_device *alloc_netdev_dummy(int sizeof_priv);
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/linux/firmware.h:105 */
+int firmware_request_nowarn(const struct firmware **fw, const char *name,
+			    struct device *device);
+
+void get_random_mask_addr(u8 *buf, const u8 *addr, const u8 *mask);
+
+
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/linux/slab.h:1159 */
+/* [LNX] include/linux/gfp.h:17-18, include/linux/overflow.h:452-453, and
+ * include/linux/slab.h:1106-1114: the flexible-family allocator the compiled set calls.
+ * The interface writes the trailing element count through __set_flex_counter(), which is
+ * keyed on the __counted_by annotation; this port's compiler has no such attribute, so
+ * the count store is the caller's - stated here rather than silently dropped, because
+ * the value a caller reads back through the counter member differs. The size arithmetic
+ * is the interface's own. */
+/* [LNX] include/linux/slab.h:1096-1100: the object-array arm of the same family */
+#define	__alloc_objs(KMALLOC, GFP, TYPE, COUNT)				\
+({									\
+	const size_t __obj_size = (size_t)sizeof(TYPE) * (size_t)(COUNT); \
+	(TYPE *)KMALLOC(__obj_size, GFP);				\
+})
+
+/* Two spellings of the object form are in use across the compiled set: one passes a
+ * pointer expression (the newer spelling) and one passes the type itself (the older one).
+ * Both are arity-correct under one mechanism here: the size is taken with sizeof(), which
+ * accepts a type name and a dereferenced pointer alike, and the optional trailing GFP
+ * argument is selected by arity - no comma-paste, so the strict mode this port compiles in
+ * cannot change the pick. */
+#define	__lkpi_obj_pick(_1, _2, NAME, ...)	NAME
+#define	__lkpi_kmalloc_obj1(T)			kmalloc(sizeof(T), GFP_KERNEL)
+#define	__lkpi_kmalloc_obj2(T, GFP)		kmalloc(sizeof(T), (GFP))
+#define	__lkpi_kzalloc_obj1(T)			kzalloc(sizeof(T), GFP_KERNEL)
+#define	__lkpi_kzalloc_obj2(T, GFP)		kzalloc(sizeof(T), (GFP))
+#define	kmalloc_obj(...)							\
+	__lkpi_obj_pick(__VA_ARGS__, __lkpi_kmalloc_obj2, __lkpi_kmalloc_obj1)(__VA_ARGS__)
+#define	kzalloc_obj(...)							\
+	__lkpi_obj_pick(__VA_ARGS__, __lkpi_kzalloc_obj2, __lkpi_kzalloc_obj1)(__VA_ARGS__)
+#define	kzalloc_objs(P, COUNT)			kzalloc(sizeof(P) * (COUNT), GFP_KERNEL)
+#define	kmalloc_objs(P, COUNT)			kmalloc(sizeof(P) * (COUNT), GFP_KERNEL)
+
+#define	__alloc_flex(KMALLOC, GFP, TYPE, FAM, COUNT)			\
+({									\
+	const size_t __count = (COUNT);					\
+	const size_t __obj_size = struct_size_t(TYPE, FAM, __count);	\
+	TYPE *__obj_ptr = KMALLOC(__obj_size, GFP);			\
+	__obj_ptr;							\
+})
+
+#define	kzalloc_flex(P, FAM, COUNT)	__alloc_flex(kzalloc, GFP_KERNEL, typeof(P), FAM, COUNT)
+
+/* [LNX] helper the compiled set names */
+/* [LNX] include/linux/string.h:281 */
+void *memchr_inv(const void *s, int c, size_t n);
+
+/* [LNX] helper the compiled set names */
 #endif /* LINUXKPI_CORE_H */

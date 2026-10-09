@@ -21,6 +21,7 @@ carry the same terms in their file header).
 | `lwip` | BSD-3-Clause style | `COPYING` at the tree root (Swedish Institute of Computer Science three-clause block) |
 | `FreeRTOS-Kernel-tests` | MIT | the test tree and its `CMock` submodule both carry MIT text |
 | `rtl8xxxu` | **GPL-2.0-only** | per-file `SPDX-License-Identifier: GPL-2.0-only` on every extracted file (13/13); no other SPDX form in the tree. Mainline Linux driver for the RTL8188EU family, extracted byte-faithfully from Linux 7.3-rc2. See "Distribution obligations" below |
+| `rtw89` | **GPL-2.0 OR BSD-3-Clause** | per-file dual SPDX on every extracted file (107/107, the only SPDX form in the tree); no separate license file at the tree root; each bus unit states `MODULE_LICENSE("Dual BSD/GPL")`. Mainline Linux SoftMAC driver for the RTL8851BU family, extracted byte-faithfully from Linux 7.3-rc2. This project takes the **BSD-3-Clause option** for it. See "Distribution obligations" below |
 
 ## Imported units (`components/`)
 
@@ -52,6 +53,13 @@ carry the same terms in their file header).
 * The GPL unit is built as its own translation units and touches first-party code only
   through header interfaces; first-party text is never merged into a GPL file. Keeping the
   driver a pinned submodule with zero local patches is what makes the obligation auditable.
+* `third-party/rtw89` is offered as `GPL-2.0 OR BSD-3-Clause` and this project takes the
+  **BSD-3-Clause option** for it. A distributed binary image containing it therefore
+  carries the BSD-3-Clause obligations - the copyright notice, the license text and the
+  disclaimer travel with the distribution, and no contributor's name is used to endorse
+  anything - and no GPL text is added for this unit, because the GPL arm is not the one
+  taken. A future patch to this tree written in GPL-only form would put that combined work
+  back under the GPL arm.
 * Units whose license is unknown or absent are not vendored. A new unit adds a row here in
   the same commit that vendors it.
 

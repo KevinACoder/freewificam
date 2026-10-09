@@ -80,7 +80,7 @@ FACE_PINNED_NO_SPDX := $(FACE)/linux/device.h $(FACE)/linux/sysfs.h
 
 # The three known warning sites of the pinned imported headers (see the note above);
 # matched by file and line so a different warning in the same file still counts.
-KNOWN_WARN := linuxkpi_core.h:1753 linuxkpi_core.h:1760 linuxkpi_core.h:2200 sysfs.h:47
+KNOWN_WARN := sysfs.h:47
 
 compile: $(OBJS)
 	@set -e; \

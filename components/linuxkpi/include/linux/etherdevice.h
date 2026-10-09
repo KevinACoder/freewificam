@@ -17,6 +17,21 @@
 #include "../../linuxkpi_core.h"
 #include <linux/if_ether.h>
 
+struct net_device;
+struct sk_buff;
+
+/*
+ * [LNX] include/linux/etherdevice.h:40: the receive-side protocol classifier. The
+ * interface declares it as an entry point (its body lives in the network stack's
+ * ethernet layer, where it inspects the frame's length/type field, decides between
+ * 802.3 and Ethernet II, pulls the link header and records the device and the mac
+ * header position on the buffer). Declared, not defined, for the same reason the
+ * interface's other entry points are: the frame-header conventions it decides between
+ * are the port's receive seam's answer, and an unresolved symbol reports a missing
+ * answer where a body invented here would decide the convention in the wrong place.
+ */
+__be16 eth_type_trans(struct sk_buff *skb, struct net_device *dev);
+
 static inline bool is_zero_ether_addr(const u8 *addr)
 {
 	return !(addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]);
