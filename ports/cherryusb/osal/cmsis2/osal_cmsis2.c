@@ -143,25 +143,86 @@ void usb_osal_thread_schedule_other(void)
 /* Semaphores                                                          */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Board diagnostic, temporary: a give whose handle is not a live semaphore of
+ * this osal dereferences whatever the caller passed (the kernel reads
+ * tx_semaphore_id out of the handle) and parks the board. The controller's
+ * completion path runs in the interrupt handler, so the report goes through
+ * the lock-free emergency outlet (os/baremetal/log.c) rather than the
+ * console-locking board_log, and the give is suppressed so the round survives
+ * with the evidence in the log. The counters are read by the suite's pulse.
+ * Remove together with the diagnosis.
+ */
+#include "log.h"
+
+#define USB_OSAL_SEM_TRACK_MAX 256
+
+static usb_osal_sem_t usb_osal_sem_tracked[USB_OSAL_SEM_TRACK_MAX];
+static volatile uint32_t usb_osal_sem_tracked_n;
+
+volatile uint32_t usb_osal_sem_bad_gives;
+volatile uint32_t usb_osal_sem_bad_handle_lo;
+volatile uint32_t usb_osal_sem_bad_handle_hi;
+volatile uint32_t usb_osal_sem_bad_ra;
+
+static void usb_osal_sem_track(usb_osal_sem_t sem)
+{
+	if ((sem != NULL) && (usb_osal_sem_tracked_n < USB_OSAL_SEM_TRACK_MAX)) {
+		usb_osal_sem_tracked[usb_osal_sem_tracked_n++] = sem;
+	}
+}
+
+static void usb_osal_sem_untrack(usb_osal_sem_t sem)
+{
+	uint32_t i;
+
+	for (i = 0U; i < usb_osal_sem_tracked_n; i++) {
+		if (usb_osal_sem_tracked[i] == sem) {
+			usb_osal_sem_tracked[i] = usb_osal_sem_tracked[--usb_osal_sem_tracked_n];
+			return;
+		}
+	}
+}
+
+static int usb_osal_sem_is_live(usb_osal_sem_t sem)
+{
+	uint32_t i;
+
+	for (i = 0U; i < usb_osal_sem_tracked_n; i++) {
+		if (usb_osal_sem_tracked[i] == sem) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 usb_osal_sem_t usb_osal_sem_create(uint32_t initial_count)
 {
+	usb_osal_sem_t sem;
+
 	/* Counting semaphore capped at one, the reference's shape. A larger initial
 	 * value cannot be represented by a one-token semaphore (the reference's kernel
 	 * asserts on it, the CMSIS-FreeRTOS backend returns NULL), so it clamps. */
 	if (initial_count > 1u) {
 		initial_count = 1u;
 	}
-	return (usb_osal_sem_t) osSemaphoreNew(1u, initial_count, NULL);
+	sem = (usb_osal_sem_t) osSemaphoreNew(1u, initial_count, NULL);
+	usb_osal_sem_track(sem);
+	return sem;
 }
 
 usb_osal_sem_t usb_osal_sem_create_counting(uint32_t max_count)
 {
-	return (usb_osal_sem_t) osSemaphoreNew(max_count, 0u, NULL);
+	usb_osal_sem_t sem = (usb_osal_sem_t) osSemaphoreNew(max_count, 0u, NULL);
+
+	usb_osal_sem_track(sem);
+	return sem;
 }
 
 void usb_osal_sem_delete(usb_osal_sem_t sem)
 {
 	if (sem != NULL) {
+		usb_osal_sem_untrack(sem);
 		(void) osSemaphoreDelete((osSemaphoreId_t) sem);
 	}
 }
@@ -178,7 +239,25 @@ int usb_osal_sem_give(usb_osal_sem_t sem)
 {
 	/* Interrupt-safe on both backends: the completion path of the stack gives the
 	 * semaphore that releases a waiting transfer, and nothing here spins. */
-	osStatus_t st = osSemaphoreRelease((osSemaphoreId_t) sem);
+	osStatus_t st;
+
+	/* Board diagnostic, temporary (see the semaphore section head): NULL keeps
+	 * the kernel's own no-op answer, anything else must be a live handle. */
+	if ((sem != NULL) && !usb_osal_sem_is_live(sem)) {
+		usb_osal_sem_bad_gives++;
+		usb_osal_sem_bad_handle_lo = (uint32_t)(uintptr_t)sem;
+		usb_osal_sem_bad_handle_hi = (uint32_t)((uint64_t)(uintptr_t)sem >> 32);
+		usb_osal_sem_bad_ra = (uint32_t)(uintptr_t)__builtin_return_address(0);
+		if (usb_osal_sem_bad_gives <= 4U) {
+			board_log_emergency("usb-osal: BAD sem give %p RA %p n=%u",
+			    (void *)(uintptr_t)sem,
+			    (void *)__builtin_return_address(0),
+			    (unsigned)usb_osal_sem_bad_gives);
+		}
+		return -USB_ERR_TIMEOUT;
+	}
+
+	st = osSemaphoreRelease((osSemaphoreId_t) sem);
 
 	return (st == osOK) ? 0 : -USB_ERR_TIMEOUT;
 }

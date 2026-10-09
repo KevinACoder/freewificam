@@ -1,0 +1,68 @@
+From f79635f2d3b67804614978c89901ae7865ecebbf Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 9 Oct 2026 14:54:52 +0800
+Subject: [PATCH] diagnostic: observe iaad replays on dead or rebound qh slots
+
+Board-diagnostic only, not for upstream: the iaad pool walk reports the two
+states its replay must never see, a flagged slot with no live transfer and a
+slot whose urb now belongs to another qh.  Observation only - the replay is
+still issued, so the crash signature stays reachable while the counters and
+the first lines tell which state the board actually reaches.  The report goes
+through the lock-free emergency outlet because the walk runs in the interrupt
+handler.  Remove together with the diagnosis.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ port/ehci/usb_hc_ehci.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/port/ehci/usb_hc_ehci.c b/port/ehci/usb_hc_ehci.c
+index 2ba1183..0f24a24 100644
+--- a/port/ehci/usb_hc_ehci.c
++++ b/port/ehci/usb_hc_ehci.c
+@@ -39,6 +39,14 @@ USB_NOCACHE_RAM_SECTION struct ehci_qh_hw g_periodic_qh_head[CONFIG_USBHOST_MAX_
+ /* The frame list */
+ USB_NOCACHE_RAM_SECTION uint32_t g_framelist[CONFIG_USBHOST_MAX_BUS][USB_ALIGN_UP(CONFIG_USB_EHCI_FRAME_LIST_SIZE, 1024)] __attribute__((aligned(4096)));
+ 
++/* Board diagnostic, temporary: the iaad walk runs in the interrupt handler,
++ * so a report from it must not take the console lock; this is the lock-free
++ * outlet the fault handler uses. Remove together with the diagnosis. */
++extern void board_log_emergency(const char *fmt, ...);
++static unsigned ehci_iaad_replays;
++static unsigned ehci_iaad_dead;
++static unsigned ehci_iaad_mismatch;
++
+ static struct ehci_qtd_hw *ehci_qtd_alloc(struct usbh_bus *bus)
+ {
+     struct ehci_qtd_hw *qtd;
+@@ -1506,6 +1514,27 @@ void USBH_IRQHandler(uint8_t busid)
+         for (uint8_t index = 0; index < CONFIG_USB_EHCI_QH_NUM; index++) {
+             struct ehci_qh_hw *qh = &ehci_qh_pool[bus->hcd.hcd_id][index];
+             if (qh->remove_in_iaad) {
++                /* Board diagnostic, temporary: report the two states the
++                 * replay must never see - a flagged slot with no live
++                 * transfer, and a slot whose urb now belongs to another qh.
++                 * Observation only: the replay below still runs, so the
++                 * crash signature stays reachable. */
++                ehci_iaad_replays++;
++                if (!(qh->inuse && qh->urb)) {
++                    ehci_iaad_dead++;
++                    if (ehci_iaad_dead <= 4U) {
++                        board_log_emergency("ehci: iaad on dead slot idx=%u inuse=%u urb=%p killed=%u n=%u",
++                            (unsigned)index, (unsigned)qh->inuse, (void *)qh->urb,
++                            (unsigned)qh->killed, ehci_iaad_dead);
++                    }
++                } else if (qh->urb->hcpriv != qh) {
++                    ehci_iaad_mismatch++;
++                    if (ehci_iaad_mismatch <= 4U) {
++                        board_log_emergency("ehci: iaad slot/urb mismatch idx=%u urb=%p hcpriv=%p n=%u",
++                            (unsigned)index, (void *)qh->urb,
++                            (void *)qh->urb->hcpriv, ehci_iaad_mismatch);
++                    }
++                }
+                 ehci_urb_waitup(bus, qh->urb);
+             }
+         }
+-- 
+2.43.0
+
