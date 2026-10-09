@@ -111,22 +111,6 @@ dataplane_up(void)
 	wlannetif_start(&g_netif);
 	board_log("wlan: dataplane up, dhcp started\n");
 
-	/* Board diagnostic, temporary: the osal latches every semaphore give whose
-	 * handle was not a live one (the fault this round chases), so a hit during
-	 * the join phase is still visible here. Remove with the diagnosis. */
-	{
-		extern volatile uint32_t usb_osal_sem_bad_gives;
-		extern volatile uint32_t usb_osal_sem_bad_handle_lo;
-		extern volatile uint32_t usb_osal_sem_bad_handle_hi;
-		extern volatile uint32_t usb_osal_sem_bad_ra;
-
-		board_log("wlan: usb-diag bad_gives=%u handle=%08x%08x ra=%08x\n",
-		    (unsigned)usb_osal_sem_bad_gives,
-		    (unsigned)usb_osal_sem_bad_handle_hi,
-		    (unsigned)usb_osal_sem_bad_handle_lo,
-		    (unsigned)usb_osal_sem_bad_ra);
-	}
-
 	while (waited < WLAN_DHCP_WAIT_MS) {
 		if (!ip4_addr_isany_val(g_netif.ip_addr)) {
 			break;
