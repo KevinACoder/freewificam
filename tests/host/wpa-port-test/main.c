@@ -431,13 +431,14 @@ static void case_psk_ladder(void) {
 	    ie_len == 22 && memcmp(ie, ap_ie, 22) == 0,
 	    detail);
 
-	/* the four-way: both CCMP keys installed with the peer's material */
+	/* the four-way: both CCMP keys installed with the peer's material, in
+	 * the handshake's order and with the transmit bits the exchange implies */
 	{
 		size_t tk_len = 0, gtk_len = 0, kn_len = 0;
 		const uint8_t *tk = backend_ap_tk(&tk_len);
 		const uint8_t *gtk = backend_ap_gtk(&gtk_len);
 		const uint8_t *k0;
-		int pair_ok = 0, group_ok = 0, n;
+		int pair_ok = 0, group_ok = 0, order_ok = 0, n;
 
 		for (n = 0; n < backend_key_count(); n++) {
 			const uint8_t *kb = backend_key_bytes(n, &kn_len);
@@ -456,14 +457,29 @@ static void case_psk_ladder(void) {
 				group_ok = 1;
 			}
 		}
+		/*
+		 * The order and the transmit bits, both from the exchange itself
+		 * (wpa.c:963 installs the PTK with set_tx 1 as M2 is answered,
+		 * wpa.c:1075 installs the GTK after M3 with the Tx bit the AP
+		 * sent - clear here). The pairwise-first order is the handshake's
+		 * requirement, and a port that promoted the group key to the
+		 * default transmit key would put every station uplink frame under
+		 * key id 1, which the peer drops: the board round had to rule that
+		 * out by reading the air.
+		 */
+		order_ok = backend_key_count() >= 2 &&
+		    backend_key_group_index(0) == 0 && backend_key_idx(0) == 0 &&
+		    backend_key_set_tx(0) == 1 &&
+		    backend_key_group_index(1) == 1 && backend_key_idx(1) == 1 &&
+		    backend_key_set_tx(1) == 0;
 
 		snprintf(detail, sizeof(detail),
-		    "keys=%d pair=%d group=%d m4=%d tx=%d connected=%d",
-		    backend_key_count(), pair_ok, group_ok,
+		    "keys=%d pair=%d group=%d order=%d m4=%d tx=%d connected=%d",
+		    backend_key_count(), pair_ok, group_ok, order_ok,
 		    backend_ap_expect_m4(), backend_eapol_tx_count(),
 		    seen_connected);
 		case_line("smoke.fourway",
-		    pair_ok && group_ok && seen_connected &&
+		    pair_ok && group_ok && order_ok && seen_connected &&
 		    backend_eapol_tx_count() >= 2,
 		    detail);
 	}
