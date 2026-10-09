@@ -12,6 +12,14 @@
 
 #include "../../linuxkpi_core.h"
 #include <linux/device.h>
+/* The interface's usb.h reaches the driver record through <linux/device.h>, which on the
+ * interface includes pm.h (include/linux/device.h:25) - that is how pm_message_t reaches
+ * a USB driver's suspend/resume callbacks. This face's device.h is the pinned imported
+ * header and does not carry that include, so the message type is included here, on the
+ * path that needs it. The driver's record type comes from the device-model header the
+ * interface splits it into, which this face keeps under the same name. */
+#include <linux/device/driver.h>
+#include <linux/pm.h>
 
 /* ------------------------------------------------------------------ */
 /* constants                                                           */
@@ -35,6 +43,12 @@
 #define	USB_ENDPOINT_XFER_BULK		0x02
 #define	USB_ENDPOINT_XFER_INT		0x03
 #define	USB_ENDPOINT_XFER_INT_MASK	0x03
+
+/* [LNX] include/uapi/linux/usb/ch9.h:444: the transfer-type field's mask under the name
+ * the interface uses for it (the face's own *_XFER_INT_MASK above is the same value
+ * under the name this component's USB face was written with; the vendored bytes name
+ * both). */
+#define	USB_ENDPOINT_XFERTYPE_MASK	0x03	/* in bmAttributes */
 
 #define	USB_ENDPOINT_NUMBER_MASK	0x0f
 #define	USB_ENDPOINT_DIR_MASK		0x80
@@ -128,8 +142,43 @@ struct usb_interface_descriptor {
 /* host-side shapes                                                    */
 /* ------------------------------------------------------------------ */
 
+/*
+ * [LNX] include/uapi/linux/usb/ch9.h (struct usb_config_descriptor) and
+ * :(struct usb_ss_ep_comp_descriptor): two more wire-format records of the same family as
+ * the descriptors above. They are stated outside the USB_DEF_H guard on purpose: the USB
+ * stack's descriptor header spells these two differently (it names the configuration
+ * record usb_configuration_descriptor and the companion record
+ * usb_endpoint_companion_descriptor), so there is no second definition under either
+ * name, while `struct usb_host_endpoint` below embeds the companion record and a build
+ * that set USB_DEF_H would otherwise have an incomplete member type.
+ */
+struct usb_config_descriptor {
+	u8	bLength;
+	u8	bDescriptorType;
+	u16	wTotalLength;
+	u8	bNumInterfaces;
+	u8	bConfigurationValue;
+	u8	iConfiguration;
+	u8	bmAttributes;
+	u8	bMaxPower;
+} __packed;
+
+struct usb_ss_ep_comp_descriptor {
+	u8	bLength;
+	u8	bDescriptorType;
+	u8	bMaxBurst;
+	u8	bmAttributes;
+	u16	wBytesPerInterval;
+} __packed;
+
 struct usb_host_endpoint {
 	struct usb_endpoint_descriptor desc;
+	/* The companion descriptor's streaming/burst cap, embedded the way the
+	 * interface embeds it ([LNX] include/linux/usb.h:227-247). The interface's
+	 * record also embeds the SSP isochronous companion and the eUSB2 companion,
+	 * which the compiled set never names and whose types are not part of the
+	 * subset this face carries. */
+	struct usb_ss_ep_comp_descriptor ss_ep_comp;
 	void		*hcpriv;	/* struct lkpi_usb_be_ep *, backend endpoint identity */
 	bool		enabled;
 };
@@ -157,6 +206,10 @@ struct usb_device {
 	char		*product;
 	char		*manufacturer;
 	char		*serial;
+	/* [LNX] include/linux/usb.h:686: the active configuration. A driver reads the
+	 * configuration descriptor out of it; resolved by the claiming hook, which is
+	 * the only place that knows the configured state of the device. */
+	struct usb_host_config *actconfig;
 	/* linuxkpi plumbing (set at claim time by the class hook) */
 	void		*_hport;	/* the usbh_hubport behind it */
 	void		*_intf;		/* the claiming usb_interface */
@@ -179,6 +232,19 @@ interface_to_usbdev(struct usb_interface *intf)
 {
 	return intf->udev;
 }
+
+/*
+ * [LNX] include/linux/usb.h:274-294 (struct usb_host_config), carried as the part the
+ * compiled set names: the configuration descriptor a driver reads the interface count
+ * and the configuration value out of. The interface's record also carries the
+ * configuration string, the interface-association descriptors, the interface array, the
+ * interface cache and the extra-descriptor block; no compiled unit names one, and the
+ * claiming hook is where this record is filled, so they arrive with the code that fills
+ * them.
+ */
+struct usb_host_config {
+	struct usb_config_descriptor	desc;
+};
 
 /* ------------------------------------------------------------------ */
 /* pipes: devnum | type | dir | endpoint, packed by linuxkpi_usb        */
@@ -280,6 +346,24 @@ static __always_inline __unused int
 usb_endpoint_maxp(const struct usb_endpoint_descriptor *d)
 {
 	return d->wMaxPacketSize;
+}
+
+/* [LNX] include/uapi/linux/usb/ch9.h:452-455: the transactional-opportunity field of
+ * wMaxPacketSize (bits 12:11) and its accessors. The descriptor's packet-size field is a
+ * plain word in this face (see usb_endpoint_maxp above), so the conversion the
+ * interface's body spells is the identity here and is kept for the shape. */
+#define	USB_EP_MAXP_MULT_SHIFT	11
+#define	USB_EP_MAXP_MULT_MASK	(3 << USB_EP_MAXP_MULT_SHIFT)
+#define	USB_EP_MAXP_MULT(m) \
+	(((m) & USB_EP_MAXP_MULT_MASK) >> USB_EP_MAXP_MULT_SHIFT)
+
+/* [LNX] include/uapi/linux/usb/ch9.h:670-676 */
+static __always_inline __unused int
+usb_endpoint_maxp_mult(const struct usb_endpoint_descriptor *epd)
+{
+	int maxp = __le16_to_cpu(epd->wMaxPacketSize);
+
+	return USB_EP_MAXP_MULT(maxp) + 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -509,6 +593,30 @@ usb_pipe_endpoint(struct usb_device *dev, unsigned int pipe)
 void usb_get_dev(struct usb_device *dev);
 void usb_put_dev(struct usb_device *dev);
 
+/*
+ * [LNX] include/linux/usb.h:826-840: the interface-autosuspend reference pair, in the
+ * branch the interface itself states for a build without runtime power management
+ * (CONFIG_PM unset): the getter reports success without taking a reference and the
+ * putter does nothing, because nothing can have suspended the device behind the
+ * caller's back. That is this port's situation exactly - the device is powered and
+ * active from claim to release and the image has no runtime power management - so the
+ * interface's own no-PM bodies are transcribed here rather than a new mechanism being
+ * invented. The asynchronous and no-resume variants the interface also declares in that
+ * branch are not carried: no compiled unit names one.
+ */
+static __always_inline __unused int
+usb_autopm_get_interface(struct usb_interface *intf)
+{
+	(void)intf;
+	return 0;
+}
+
+static __always_inline __unused void
+usb_autopm_put_interface(struct usb_interface *intf)
+{
+	(void)intf;
+}
+
 /* ------------------------------------------------------------------ */
 /* driver registration                                                 */
 /* ------------------------------------------------------------------ */
@@ -562,7 +670,18 @@ struct usb_driver {
 	int			(*probe)(struct usb_interface *,
 				    const struct usb_device_id *);
 	void			(*disconnect)(struct usb_interface *);
+	/* [LNX] include/linux/usb.h (struct usb_driver): the system-power callbacks. A
+	 * driver that wants system suspend installs them; whether the message arrives is
+	 * the port's bus-level power path's business, not this record's. */
+	int			(*suspend)(struct usb_interface *intf,
+					   pm_message_t message);
+	int			(*resume)(struct usb_interface *intf);
+	int			(*reset_resume)(struct usb_interface *intf);
 	const struct usb_device_id *id_table;
+	/* [LNX] include/linux/usb.h (struct usb_driver.driver): the device-model record
+	 * this bus driver embeds, which is where a driver's shutdown callback lives
+	 * (linux/device/driver.h carries that member here). */
+	struct device_driver	driver;
 	bool			soft_unbind;
 	bool			no_dynamic_id;
 	bool			disable_hub_initiated_lpm;

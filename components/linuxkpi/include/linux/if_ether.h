@@ -8,12 +8,21 @@
  *         are declared first-party and the values are transcribed from the interface
  *         definition (include/uapi/linux/if_ether.h), never copied as text. Subset:
  *         grown by the consumer, so only what the compiled drivers and this project's
- *         own code reach for is here.
- * @date    08.10.2026
+ *         own code reach for is here. One deliberate exception to the face's guard
+ *         spelling: this header takes the interface's own guard name
+ *         (`_LINUX_IF_ETHER_H`), because the vendored tree carries its own copy of
+ *         include/linux/if_ether.h (third-party/rtl8851bu/include/if_ether.h, reached by
+ *         the bare name `if_ether.h`) and the equal guard is what keeps that copy dead
+ *         on this build exactly as the kernel's header does on a Linux build - with a
+ *         face-specific guard both files define `struct ethhdr` and the translation unit
+ *         dies on the redefinition.
+ *         Reference for the face shape:
+ *         components/linuxkpi/include/linux/usb.h:1-20.
+ * @date    09.10.2026
  */
 
-#ifndef _LINUXKPI_LINUX_IF_ETHER_H_
-#define _LINUXKPI_LINUX_IF_ETHER_H_
+#ifndef _LINUX_IF_ETHER_H
+#define _LINUX_IF_ETHER_H
 
 #include "../../linuxkpi_core.h"
 
@@ -49,4 +58,4 @@ struct ethhdr {
 	__be16		h_proto;
 } __packed;
 
-#endif /* _LINUXKPI_LINUX_IF_ETHER_H_ */
+#endif /* _LINUX_IF_ETHER_H */

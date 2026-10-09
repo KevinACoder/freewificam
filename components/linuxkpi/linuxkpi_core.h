@@ -2227,8 +2227,13 @@ struct timer_list {
 
 void lkpi_timer_setup(struct timer_list *, void (*)(struct timer_list *));
 int lkpi_mod_timer(struct timer_list *, unsigned long expires);
-void lkpi_del_timer(struct timer_list *);
-void lkpi_del_timer_sync(struct timer_list *);
+/* The delete pair returns whether the timer was still pending when the call arrived -
+ * the interface's own contract for del_timer()/del_timer_sync() and for the
+ * timer_delete()/timer_delete_sync() spellings it renamed them to, and a caller that
+ * distinguishes "cancelled a live timer" from "it had already fired" reads it (the
+ * vendored vendor driver's cancel path does). */
+int lkpi_del_timer(struct timer_list *);
+int lkpi_del_timer_sync(struct timer_list *);
 int lkpi_timer_pending(const struct timer_list *);
 
 #define	timer_setup(t, fn, flags)	lkpi_timer_setup((t), (fn))

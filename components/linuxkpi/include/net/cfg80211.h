@@ -1,19 +1,22 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * @file    net/cfg80211.h
- * @brief   The configuration surface a Linux wireless driver talks to: the wiphy
- *          object, bands/channels/rates, interface combinations and the station rate
- *          reporting types.
+ * @brief   The configuration surface a Linux wireless driver talks to: the wireless
+ *          device and wiphy objects, the driver operation table, bands/channels/rates,
+ *          interface combinations, the scan/connection/AP/key request records and the
+ *          station rate reporting types.
  *
  * @design declaration-only compatibility face. Definitions are the interface's
  *         (include/net/cfg80211.h plus the uapi enumerations it includes), transcribed
  *         with their exact values because several of them are written into hardware
  *         descriptors or compared against hardware register fields; the bodies are
  *         first-party and live in the mac80211 face of this project. Subset by
- *         consumer: the regulatory, scan, connection and mesh surface arrives when a
- *         consumer needs it. Reference for the face shape:
+ *         consumer: the mesh, NAN, pmsr and scheduled-scan bodies of the operation
+ *         table arrive when a consumer needs them, and each is stated with the
+ *         interface's member name and its interface type in the interface's order.
+ *         Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
- * @date    08.10.2026
+ * @date    09.10.2026
  */
 
 #ifndef _LINUXKPI_NET_CFG80211_H_
@@ -24,6 +27,7 @@
 #include <linux/debugfs.h>
 #include <linux/etherdevice.h>
 #include <linux/ieee80211.h>
+#include <linux/skbuff.h>
 
 /* ------------------------------------------------------------------ */
 /* band, interface type and channel width                              */
@@ -56,6 +60,7 @@ enum nl80211_iftype {
 	NL80211_IFTYPE_NAN,
 
 	NUM_NL80211_IFTYPES,
+	NL80211_IFTYPE_MAX = NUM_NL80211_IFTYPES - 1,
 };
 
 enum nl80211_chan_width {
@@ -72,6 +77,237 @@ enum nl80211_chan_width {
 	NL80211_CHAN_WIDTH_4,
 	NL80211_CHAN_WIDTH_8,
 	NL80211_CHAN_WIDTH_16,
+	NL80211_CHAN_WIDTH_320,
+};
+
+/* The retired channel-type spelling: a uapi value a driver still converts to and
+ * from, kept whole because the enumeration defines the conversion's outputs. */
+enum nl80211_channel_type {
+	NL80211_CHAN_NO_HT,
+	NL80211_CHAN_HT20,
+	NL80211_CHAN_HT40MINUS,
+	NL80211_CHAN_HT40PLUS
+};
+
+/* ------------------------------------------------------------------ */
+/* uapi enumerations the driver compares against                        */
+/* ------------------------------------------------------------------ */
+
+enum nl80211_auth_type {
+	NL80211_AUTHTYPE_OPEN_SYSTEM,
+	NL80211_AUTHTYPE_SHARED_KEY,
+	NL80211_AUTHTYPE_FT,
+	NL80211_AUTHTYPE_NETWORK_EAP,
+	NL80211_AUTHTYPE_SAE,
+	NL80211_AUTHTYPE_FILS_SK,
+	NL80211_AUTHTYPE_FILS_SK_PFS,
+	NL80211_AUTHTYPE_FILS_PK,
+	NL80211_AUTHTYPE_EPPKE,
+	NL80211_AUTHTYPE_IEEE8021X,
+
+	/* keep last */
+	__NL80211_AUTHTYPE_NUM,
+	NL80211_AUTHTYPE_MAX = __NL80211_AUTHTYPE_NUM - 1,
+	NL80211_AUTHTYPE_AUTOMATIC
+};
+
+enum nl80211_key_type {
+	NL80211_KEYTYPE_GROUP,
+	NL80211_KEYTYPE_PAIRWISE,
+	NL80211_KEYTYPE_PEERKEY,
+
+	NUM_NL80211_KEYTYPES
+};
+
+enum nl80211_wpa_versions {
+	NL80211_WPA_VERSION_1 = 1 << 0,
+	NL80211_WPA_VERSION_2 = 1 << 1,
+	NL80211_WPA_VERSION_3 = 1 << 2,
+};
+
+enum nl80211_key_mode {
+	NL80211_KEY_RX_TX,
+	NL80211_KEY_NO_TX,
+	NL80211_KEY_SET_TX
+};
+
+enum nl80211_sae_pwe_mechanism {
+	NL80211_SAE_PWE_UNSPECIFIED,
+	NL80211_SAE_PWE_HUNT_AND_PECK,
+	NL80211_SAE_PWE_HASH_TO_ELEMENT,
+	NL80211_SAE_PWE_BOTH,
+};
+
+enum nl80211_external_auth_action {
+	NL80211_EXTERNAL_AUTH_START,
+	NL80211_EXTERNAL_AUTH_ABORT,
+};
+
+enum nl80211_acl_policy {
+	NL80211_ACL_POLICY_ACCEPT_UNLESS_LISTED,
+	NL80211_ACL_POLICY_DENY_UNLESS_LISTED,
+};
+
+enum nl80211_dfs_state {
+	NL80211_DFS_USABLE,
+	NL80211_DFS_UNAVAILABLE,
+	NL80211_DFS_AVAILABLE,
+};
+
+enum nl80211_radar_event {
+	NL80211_RADAR_DETECTED,
+	NL80211_RADAR_CAC_FINISHED,
+	NL80211_RADAR_CAC_ABORTED,
+	NL80211_RADAR_NOP_FINISHED,
+	NL80211_RADAR_PRE_CAC_EXPIRED,
+	NL80211_RADAR_CAC_STARTED,
+};
+
+enum nl80211_reg_initiator {
+	NL80211_REGDOM_SET_BY_CORE,
+	NL80211_REGDOM_SET_BY_USER,
+	NL80211_REGDOM_SET_BY_DRIVER,
+	NL80211_REGDOM_SET_BY_COUNTRY_IE,
+};
+
+enum nl80211_user_reg_hint_type {
+	NL80211_USER_REG_HINT_USER	= 0,
+	NL80211_USER_REG_HINT_CELL_BASE	= 1,
+	NL80211_USER_REG_HINT_INDOOR	= 2,
+};
+
+enum nl80211_dfs_regions {
+	NL80211_DFS_UNSET	= 0,
+	NL80211_DFS_FCC		= 1,
+	NL80211_DFS_ETSI	= 2,
+	NL80211_DFS_JP		= 3,
+};
+
+enum nl80211_tx_power_setting {
+	NL80211_TX_POWER_AUTOMATIC,
+	NL80211_TX_POWER_LIMITED,
+	NL80211_TX_POWER_FIXED,
+};
+
+enum nl80211_hidden_ssid {
+	NL80211_HIDDEN_SSID_NOT_IN_USE,
+	NL80211_HIDDEN_SSID_ZERO_LEN,
+	NL80211_HIDDEN_SSID_ZERO_CONTENTS
+};
+
+enum nl80211_mfp {
+	NL80211_MFP_NO,
+	NL80211_MFP_REQUIRED,
+	NL80211_MFP_OPTIONAL,
+};
+
+enum nl80211_ac {
+	NL80211_AC_VO,
+	NL80211_AC_VI,
+	NL80211_AC_BE,
+	NL80211_AC_BK,
+	NL80211_NUM_ACS
+};
+
+/* The TX queue's access class is spelled with the AC values, as the interface
+ * spells it; the enumeration itself carries no separate members. */
+#define	NL80211_TXQ_Q_VO	NL80211_AC_VO
+#define	NL80211_TXQ_Q_VI	NL80211_AC_VI
+#define	NL80211_TXQ_Q_BE	NL80211_AC_BE
+#define	NL80211_TXQ_Q_BK	NL80211_AC_BK
+
+enum nl80211_txrate_gi {
+	NL80211_TXRATE_DEFAULT_GI,
+	NL80211_TXRATE_FORCE_SGI,
+	NL80211_TXRATE_FORCE_LGI,
+};
+
+enum nl80211_he_gi {
+	NL80211_RATE_INFO_HE_GI_0_8,
+	NL80211_RATE_INFO_HE_GI_1_6,
+	NL80211_RATE_INFO_HE_GI_3_2,
+};
+
+enum nl80211_he_ltf {
+	NL80211_RATE_INFO_HE_1XLTF,
+	NL80211_RATE_INFO_HE_2XLTF,
+	NL80211_RATE_INFO_HE_4XLTF,
+};
+
+enum nl80211_eht_gi {
+	NL80211_RATE_INFO_EHT_GI_0_8,
+	NL80211_RATE_INFO_EHT_GI_1_6,
+	NL80211_RATE_INFO_EHT_GI_3_2,
+};
+
+enum nl80211_eht_ltf {
+	NL80211_RATE_INFO_EHT_1XLTF,
+	NL80211_RATE_INFO_EHT_2XLTF,
+	NL80211_RATE_INFO_EHT_4XLTF,
+	NL80211_RATE_INFO_EHT_6XLTF,
+	NL80211_RATE_INFO_EHT_8XLTF,
+};
+
+enum nl80211_tdls_operation {
+	NL80211_TDLS_DISCOVERY_REQ,
+	NL80211_TDLS_SETUP,
+	NL80211_TDLS_TEARDOWN,
+	NL80211_TDLS_ENABLE_LINK,
+	NL80211_TDLS_DISABLE_LINK,
+};
+
+enum nl80211_mesh_power_mode {
+	NL80211_MESH_POWER_UNKNOWN,
+	NL80211_MESH_POWER_ACTIVE,
+	NL80211_MESH_POWER_LIGHT_SLEEP,
+	NL80211_MESH_POWER_DEEP_SLEEP,
+
+	__NL80211_MESH_POWER_AFTER_LAST,
+	NL80211_MESH_POWER_MAX = __NL80211_MESH_POWER_AFTER_LAST - 1
+};
+
+enum nl80211_plink_state {
+	NL80211_PLINK_LISTEN,
+	NL80211_PLINK_OPN_SNT,
+	NL80211_PLINK_OPN_RCVD,
+	NL80211_PLINK_CNF_RCVD,
+	NL80211_PLINK_ESTAB,
+	NL80211_PLINK_HOLDING,
+	NL80211_PLINK_BLOCKED,
+
+	/* keep last */
+	NUM_NL80211_PLINK_STATES,
+	MAX_NL80211_PLINK_STATES = NUM_NL80211_PLINK_STATES - 1
+};
+
+enum cfg80211_station_type {
+	CFG80211_STA_AP_CLIENT,
+	CFG80211_STA_AP_CLIENT_UNASSOC,
+	CFG80211_STA_AP_MLME_CLIENT,
+	CFG80211_STA_AP_STA,
+	CFG80211_STA_IBSS,
+	CFG80211_STA_TDLS_PEER_SETUP,
+	CFG80211_STA_TDLS_PEER_ACTIVE,
+	CFG80211_STA_MESH_PEER_KERNEL,
+	CFG80211_STA_MESH_PEER_USER,
+	CFG80211_STA_NAN_MGMT,
+	CFG80211_STA_NAN_DATA,
+};
+
+enum nl80211_sta_flags {
+	__NL80211_STA_FLAG_INVALID,
+	NL80211_STA_FLAG_AUTHORIZED,
+	NL80211_STA_FLAG_SHORT_PREAMBLE,
+	NL80211_STA_FLAG_WME,
+	NL80211_STA_FLAG_MFP,
+	NL80211_STA_FLAG_AUTHENTICATED,
+	NL80211_STA_FLAG_TDLS_PEER,
+	NL80211_STA_FLAG_ASSOCIATED,
+	NL80211_STA_FLAG_SPP_AMSDU,
+
+	/* keep last */
+	__NL80211_STA_FLAG_AFTER_LAST,
+	NL80211_STA_FLAG_MAX = __NL80211_STA_FLAG_AFTER_LAST - 1
 };
 
 /* ------------------------------------------------------------------ */
@@ -84,7 +320,22 @@ enum nl80211_chan_width {
 #define	IEEE80211_CHAN_RADAR		0x0008
 #define	IEEE80211_CHAN_NO_HT40PLUS	0x0010
 #define	IEEE80211_CHAN_NO_HT40MINUS	0x0020
+#define	IEEE80211_CHAN_NO_HT40		(IEEE80211_CHAN_NO_HT40PLUS | \
+					 IEEE80211_CHAN_NO_HT40MINUS)
+#define	IEEE80211_CHAN_NO_80MHZ		0x0080
+#define	IEEE80211_CHAN_NO_160MHZ	0x0100
 #define	IEEE80211_CHAN_NO_20MHZ		0x1000
+#define	IEEE80211_CHAN_IR_CONCURRENT	0x2000
+
+#define	IEEE80211_DFS_MIN_NOP_TIME_MS	(30 * 60 * 1000)
+
+enum ieee80211_bss_type {
+	IEEE80211_BSS_TYPE_ESS,
+	IEEE80211_BSS_TYPE_PBSS,
+	IEEE80211_BSS_TYPE_IBSS,
+	IEEE80211_BSS_TYPE_MBSS,
+	IEEE80211_BSS_TYPE_ANY
+};
 
 struct ieee80211_channel {
 	enum nl80211_band	band;
@@ -96,7 +347,13 @@ struct ieee80211_channel {
 	int			max_power;
 	int			max_reg_power;
 	bool			beacon_found;
+	u32			orig_flags;
+	int			orig_mag, orig_mpwr;
+	enum nl80211_dfs_state	dfs_state;
+	unsigned long		dfs_state_entered;
 	unsigned int		dfs_cac_ms;
+	u64			cac_start_time;
+	s8			psd;
 };
 
 /* Rate flags: the bitrate field is in units of 100 kbit/s. */
@@ -127,6 +384,84 @@ struct ieee80211_sta_vht_cap {
 	struct ieee80211_vht_mcs_info	vht_mcs;
 };
 
+/*
+ * The HE capability records are the interface's element payloads, kept in the
+ * interface's split headers (include/linux/ieee80211-he.h) and packed exactly as the
+ * element's fixed fields are, because the driver copies received elements into them
+ * byte for byte.
+ */
+struct ieee80211_he_cap_elem {
+	u8	mac_cap_info[6];
+	u8	phy_cap_info[11];
+} __packed;
+
+struct ieee80211_he_mcs_nss_supp {
+	__le16	rx_mcs_80;
+	__le16	tx_mcs_80;
+	__le16	rx_mcs_160;
+	__le16	tx_mcs_160;
+	__le16	rx_mcs_80p80;
+	__le16	tx_mcs_80p80;
+} __packed;
+
+struct ieee80211_he_6ghz_capa {
+	/* uses IEEE80211_HE_6GHZ_CAP_* */
+	__le16	capa;
+} __packed;
+
+struct ieee80211_eht_cap_elem_fixed {
+	u8	mac_cap_info[2];
+	u8	phy_cap_info[9];
+	struct ieee80211_ppe_thres_info {
+		u8	info;
+		u8	count;
+	} __packed ppe_thres_info;
+} __packed;
+
+struct ieee80211_eht_mcs_nss_supp_20mhz_only {
+	u8	rx_tx_mcs_0_7_tx_mcs_8_9;
+};
+
+struct ieee80211_eht_mcs_nss_supp_bw {
+	u8	rx_tx_mcs_0_7_tx_mcs_8_9;
+};
+
+struct ieee80211_eht_mcs_nss_supp {
+	union {
+		struct ieee80211_eht_mcs_nss_supp_20mhz_only only_20mhz;
+		struct {
+			struct ieee80211_eht_mcs_nss_supp_bw _80;
+			struct ieee80211_eht_mcs_nss_supp_bw _160;
+			struct ieee80211_eht_mcs_nss_supp_bw _320;
+		} __packed bw;
+	} __packed;
+};
+
+struct ieee80211_sta_he_cap {
+	bool					has_he;
+	struct ieee80211_he_cap_elem		he_cap_elem;
+	struct ieee80211_he_mcs_nss_supp	he_mcs_nss_supp;
+	u8					ppe_thres[3];
+};
+
+struct ieee80211_sta_eht_cap {
+	bool					has_eht;
+	struct ieee80211_eht_cap_elem_fixed	eht_cap_elem;
+	struct ieee80211_eht_mcs_nss_supp	eht_mcs_nss_supp;
+	u8					eht_ppe_thres[3];
+};
+
+struct ieee80211_sband_iftype_data {
+	u16				types_mask;
+	struct ieee80211_sta_he_cap	he_cap;
+	struct ieee80211_he_6ghz_capa	he_6ghz_capa;
+	struct ieee80211_sta_eht_cap	eht_cap;
+	struct {
+		const u8	*data;
+		unsigned int	len;
+	} vendor_elems;
+};
+
 struct ieee80211_supported_band {
 	struct ieee80211_channel	*channels;
 	struct ieee80211_rate		*bitrates;
@@ -135,13 +470,19 @@ struct ieee80211_supported_band {
 	int				n_bitrates;
 	struct ieee80211_sta_ht_cap	ht_cap;
 	struct ieee80211_sta_vht_cap	vht_cap;
+	struct ieee80211_sband_iftype_data *iftype_data;
+	u8				n_iftype_data;
 };
 
 struct cfg80211_chan_def {
 	struct ieee80211_channel	*chan;
+	struct ieee80211_channel	*npca_chan;
 	enum nl80211_chan_width		width;
 	u32				center_freq1;
 	u32				center_freq2;
+	u16				freq1_offset;
+	u16				punctured, npca_punctured;
+	bool				s1g_primary_2mhz;
 };
 
 /* ------------------------------------------------------------------ */
@@ -162,6 +503,12 @@ struct ieee80211_iface_combination {
 	u8					radar_detect_widths;
 	u8					radar_detect_regions;
 	u32					beacon_int_min_gcd;
+};
+
+/* The bitmap of frame subtypes a driver can report to user space; one entry per
+ * management-frame type. */
+struct ieee80211_txrx_stypes {
+	u16 tx, rx;
 };
 
 /* ------------------------------------------------------------------ */
@@ -198,7 +545,7 @@ enum rate_info_bw {
 struct rate_info {
 	u16	flags;
 	u16	legacy;
-	u8	mcs;
+	s8	mcs;
 	u8	nss;
 	u8	bw;
 	u8	he_gi;
@@ -210,10 +557,9 @@ struct rate_info {
 };
 
 /*
- * The station attributes a driver can mark as reported. Only the prefix of the
- * interface's enumeration is carried; the members beyond it arrive with their
- * consumers, and their values are the interface's own (an attribute's number is a
- * uapi fact, so a partial enumeration must never be renumbered).
+ * The station attributes a driver can mark as reported. Transcribed whole rather than
+ * in prefix: unlike the payload records above, these are bitmap indices and a
+ * truncated list would silently renumber every entry that follows it.
  */
 enum nl80211_sta_info {
 	__NL80211_STA_INFO_INVALID,
@@ -225,12 +571,145 @@ enum nl80211_sta_info {
 	NL80211_STA_INFO_PLINK_STATE,
 	NL80211_STA_INFO_SIGNAL,
 	NL80211_STA_INFO_TX_BITRATE,
+	NL80211_STA_INFO_RX_PACKETS,
+	NL80211_STA_INFO_TX_PACKETS,
+	NL80211_STA_INFO_TX_RETRIES,
+	NL80211_STA_INFO_TX_FAILED,
+	NL80211_STA_INFO_SIGNAL_AVG,
+	NL80211_STA_INFO_RX_BITRATE,
+	NL80211_STA_INFO_BSS_PARAM,
+	NL80211_STA_INFO_CONNECTED_TIME,
+	NL80211_STA_INFO_STA_FLAGS,
+	NL80211_STA_INFO_BEACON_LOSS,
+	NL80211_STA_INFO_T_OFFSET,
+	NL80211_STA_INFO_LOCAL_PM,
+	NL80211_STA_INFO_PEER_PM,
+	NL80211_STA_INFO_NONPEER_PM,
+	NL80211_STA_INFO_RX_BYTES64,
+	NL80211_STA_INFO_TX_BYTES64,
+	NL80211_STA_INFO_CHAIN_SIGNAL,
+	NL80211_STA_INFO_CHAIN_SIGNAL_AVG,
+	NL80211_STA_INFO_EXPECTED_THROUGHPUT,
+	NL80211_STA_INFO_RX_DROP_MISC,
+	NL80211_STA_INFO_BEACON_RX,
+	NL80211_STA_INFO_BEACON_SIGNAL_AVG,
+	NL80211_STA_INFO_TID_STATS,
+	NL80211_STA_INFO_RX_DURATION,
+	NL80211_STA_INFO_PAD,
+	NL80211_STA_INFO_ACK_SIGNAL,
+	NL80211_STA_INFO_ACK_SIGNAL_AVG,
+	NL80211_STA_INFO_RX_MPDUS,
+	NL80211_STA_INFO_FCS_ERROR_COUNT,
+	NL80211_STA_INFO_CONNECTED_TO_GATE,
+	NL80211_STA_INFO_TX_DURATION,
+	NL80211_STA_INFO_AIRTIME_WEIGHT,
+	NL80211_STA_INFO_AIRTIME_LINK_METRIC,
+	NL80211_STA_INFO_ASSOC_AT_BOOTTIME,
+	NL80211_STA_INFO_CONNECTED_TO_AS,
+
+	/* keep last */
+	__NL80211_STA_INFO_AFTER_LAST,
+	NL80211_STA_INFO_MAX = __NL80211_STA_INFO_AFTER_LAST - 1
 };
 
+struct sta_bss_parameters {
+	u8	flags;
+	u8	dtim_period;
+	u16	beacon_interval;
+};
+
+struct nl80211_sta_flag_update {
+	__u32	mask;
+	__u32	set;
+} __attribute__((packed));
+
+struct cfg80211_tid_stats {
+	u32			filled;
+	u64			rx_msdu;
+	u64			tx_msdu;
+	u64			tx_msdu_retries;
+	u64			tx_msdu_failed;
+	struct {
+		u64		packets;
+		u64		bytes;
+		u64		overflow;
+		u64		overlimit;
+		u64		dropped;
+		u64		ecn_marks;
+		u64		ack;
+		u64		direct_reuse;
+		u64		reuse;
+		u64		frag_success;
+		u64		credit_drop;
+		u64		flow_limit_drop;
+		u64		flow_limit_wait;
+		u64		flow_limit_credit;
+	} txq_stats;
+};
+
+/*
+ * The station record a driver fills per peer. Only the members a compiled unit
+ * writes are carried, with their interface names and types; the interface's record
+ * also has mesh, MLO and hardware-timestamp members, which arrive with the caller
+ * that names them.
+ */
 struct station_info {
 	u64			filled;
-	struct rate_info	txrate;
+	u32			connected_time;
+	u32			inactive_time;
+	u64			assoc_at;
+	u64			rx_bytes;
+	u64			tx_bytes;
 	s8			signal;
+	s8			signal_avg;
+
+	u8			chains;
+	s8			chain_signal[IEEE80211_MAX_CHAINS];
+	s8			chain_signal_avg[IEEE80211_MAX_CHAINS];
+
+	struct rate_info	txrate;
+	struct rate_info	rxrate;
+	u32			rx_packets;
+	u32			tx_packets;
+	u32			tx_retries;
+	u32			tx_failed;
+	u32			rx_dropped_misc;
+	struct sta_bss_parameters bss_param;
+	struct nl80211_sta_flag_update sta_flags;
+
+	int			generation;
+
+	u32			beacon_loss_count;
+
+	const u8		*assoc_req_ies;
+	size_t			assoc_req_ies_len;
+
+	s64			t_offset;
+	u16			llid;
+	u16			plid;
+	u8			plink_state;
+	u8			connected_to_gate;
+	u8			connected_to_as;
+	u32			airtime_link_metric;
+	enum nl80211_mesh_power_mode local_pm;
+	enum nl80211_mesh_power_mode peer_pm;
+	enum nl80211_mesh_power_mode nonpeer_pm;
+
+	u32			expected_throughput;
+
+	u16			airtime_weight;
+
+	s8			ack_signal;
+	s8			avg_ack_signal;
+	struct cfg80211_tid_stats *pertid;
+
+	u64			tx_duration;
+	u64			rx_duration;
+	u64			rx_beacon;
+	u8			rx_beacon_signal_avg;
+
+	u32			rx_mpdu_count;
+	u32			fcs_err_count;
 };
 
 /* ------------------------------------------------------------------ */
@@ -238,8 +717,23 @@ struct station_info {
 /* ------------------------------------------------------------------ */
 
 enum wiphy_flags {
+	WIPHY_FLAG_SUPPORTS_EXT_KEK_KCK		= BIT(0),
+	WIPHY_FLAG_SUPPORTS_MLO			= BIT(1),
+	WIPHY_FLAG_SPLIT_SCAN_6GHZ		= BIT(2),
+	WIPHY_FLAG_NETNS_OK			= BIT(3),
+	WIPHY_FLAG_PS_ON_BY_DEFAULT		= BIT(4),
+	WIPHY_FLAG_4ADDR_AP			= BIT(5),
+	WIPHY_FLAG_4ADDR_STATION		= BIT(6),
+	WIPHY_FLAG_CONTROL_PORT_PROTOCOL	= BIT(7),
+	WIPHY_FLAG_IBSS_RSN			= BIT(8),
+	/* reuse bit 9 */
+	WIPHY_FLAG_MESH_AUTH			= BIT(10),
+	WIPHY_FLAG_SUPPORTS_EXT_KCK_32		= BIT(11),
+	WIPHY_FLAG_SUPPORTS_NSTR_NONPRIMARY	= BIT(12),
+	WIPHY_FLAG_SUPPORTS_FW_ROAM		= BIT(13),
 	WIPHY_FLAG_AP_UAPSD			= BIT(14),
 	WIPHY_FLAG_SUPPORTS_TDLS		= BIT(15),
+	WIPHY_FLAG_TDLS_EXTERNAL_SETUP		= BIT(16),
 	WIPHY_FLAG_HAVE_AP_SME			= BIT(17),
 	WIPHY_FLAG_REPORTS_OBSS			= BIT(18),
 	WIPHY_FLAG_AP_PROBE_RESP_OFFLOAD	= BIT(19),
@@ -247,7 +741,45 @@ enum wiphy_flags {
 	WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL	= BIT(21),
 	WIPHY_FLAG_HAS_CHANNEL_SWITCH		= BIT(23),
 	WIPHY_FLAG_NOTIFY_REGDOM_BY_DRIVER	= BIT(24),
+	WIPHY_FLAG_CHANNEL_CHANGE_ON_BEACON	= BIT(25),
 };
+
+enum wiphy_wowlan_support_flags {
+	WIPHY_WOWLAN_ANY		= BIT(0),
+	WIPHY_WOWLAN_MAGIC_PKT		= BIT(1),
+	WIPHY_WOWLAN_DISCONNECT		= BIT(2),
+	WIPHY_WOWLAN_SUPPORTS_GTK_REKEY	= BIT(3),
+	WIPHY_WOWLAN_GTK_REKEY_FAILURE	= BIT(4),
+	WIPHY_WOWLAN_EAP_IDENTITY_REQ	= BIT(5),
+	WIPHY_WOWLAN_4WAY_HANDSHAKE	= BIT(6),
+	WIPHY_WOWLAN_RFKILL_RELEASE	= BIT(7),
+	WIPHY_WOWLAN_NET_DETECT		= BIT(8),
+};
+
+struct wiphy_wowlan_support {
+	u32						flags;
+	int						n_patterns;
+	int						pattern_max_len;
+	int						pattern_min_len;
+	int						max_pkt_offset;
+	int						max_nd_match_sets;
+	const struct wiphy_wowlan_tcp_support		*tcp;
+};
+
+/* Parameters a driver sets through set_wiphy_params(). */
+#define	WIPHY_PARAM_RTS_THRESHOLD		BIT(0)
+#define	WIPHY_PARAM_FRAG_THRESHOLD		BIT(1)
+
+enum cfg80211_signal_type {
+	CFG80211_SIGNAL_TYPE_NONE,
+	CFG80211_SIGNAL_TYPE_MBM,
+	CFG80211_SIGNAL_TYPE_UNSPEC,
+};
+
+struct wiphy_vendor_command;
+struct nl80211_vendor_cmd_info;
+struct cfg80211_wowlan;
+struct ieee80211_regdomain;
 
 /*
  * The extended features a driver can advertise. Transcribed in full rather than in
@@ -338,32 +870,200 @@ enum nl80211_ext_feature_index {
 	MAX_NL80211_EXT_FEATURES = NUM_NL80211_EXT_FEATURES - 1,
 };
 
+/*
+ * The wireless hardware instance. The members carried are the ones a compiled unit
+ * names, in the interface's order with their interface types. The interface's record
+ * is far larger and its regions are private to cfg80211 (the locking state, the
+ * regulatory request bookkeeping, the NAN and MLO state); the leading capability
+ * block is what a driver sets before registration and is what is transcribed here.
+ * The `priv` area the driver's own data is allocated from is the record's tail
+ * member, sized by wiphy_new().
+ */
 struct wiphy {
-	/* Bookkeeping the interface keeps per physical device. */
-	struct device			*dev;
-	u8				perm_addr[ETH_ALEN];
-	u8				addr_mask[ETH_ALEN];
+	u8			perm_addr[ETH_ALEN];
+	u8			addr_mask[ETH_ALEN];
 
-	/* Capabilities a driver sets before registering. */
-	struct ieee80211_supported_band	*bands[NUM_NL80211_BANDS];
+	const struct ieee80211_txrx_stypes *mgmt_stypes;
+
 	const struct ieee80211_iface_combination *iface_combinations;
-	int				n_iface_combinations;
-	u16				interface_modes;
-	u16				max_scan_ssids;
-	u16				max_scan_ie_len;
-	u16				max_ap_assoc_sta;
-	u32				rts_threshold;
-	u32				flags;
-	u32				available_antennas_tx;
-	u32				available_antennas_rx;
-	u32				ext_features[DIV_ROUND_UP(NUM_NL80211_EXT_FEATURES, 32)];
+	int			n_iface_combinations;
+	u16			software_iftypes;
+	u32			nl80211_ifyptes_unused;
+	u16			interface_modes;
+	u16			max_acl_mac_addrs;
 
-	/* The diagnostics directory a driver may hang files under. */
-	struct dentry			*debugfsdir;
+	u32			flags, regulatory_flags, features;
+	u8			ext_features[DIV_ROUND_UP(NUM_NL80211_EXT_FEATURES, 8)];
+
+	enum cfg80211_signal_type	signal_type;
+
+	u8			max_scan_ssids;
+	u8			max_sched_scan_reqs;
+	u8			max_sched_scan_ssids;
+	u8			max_match_sets;
+	u16			max_scan_ie_len;
+	u16			max_sched_scan_ie_len;
+	u32			max_sched_scan_plans;
+	u32			max_sched_scan_plan_interval;
+	u32			max_sched_scan_plan_iterations;
+
+	int			n_cipher_suites;
+	const u32		*cipher_suites;
+
+	u32			frag_threshold;
+	u32			rts_threshold;
+
+	const struct wiphy_wowlan_support	*wowlan;
+	struct cfg80211_wowlan			*wowlan_config;
+
+	u16			max_remain_on_channel_duration;
+
+	u8			max_num_pmkids;
+
+	struct ieee80211_supported_band	*bands[NUM_NL80211_BANDS];
+
+	void (*reg_notifier)(struct wiphy *wiphy,
+			     struct regulatory_request *request);
+
+	const struct ieee80211_regdomain *regd;
+
+	const struct wiphy_vendor_command *vendor_commands;
+	const struct nl80211_vendor_cmd_info *vendor_events;
+	int			n_vendor_commands, n_vendor_events;
+
+	u16			max_ap_assoc_sta;
+
+	u8			max_num_csa_counters;
+
+	/* the diagnostics directory a driver may hang files under */
+	struct dentry		*debugfsdir;
+
+	/* the device this wiphy reports through, as the interface embeds it */
+	struct device		dev;
+
+	/* the driver private area, sized by wiphy_new() and reached through
+	 * wiphy_priv(); private to the interface otherwise */
+	int			priv[];
 };
 
+/* ------------------------------------------------------------------ */
+/* the wireless device                                                 */
+/* ------------------------------------------------------------------ */
+
 /*
- * The device behind a wiphy is a stored pointer the caller both reads and
+ * The per-interface record. Its size is taken (a monitor and a P2P-device wdev are
+ * allocated with it) and its leading members are read and written by name, so the
+ * prefix is transcribed in the interface's order. The interface's record continues
+ * with cfg80211-private bookkeeping - the mgmt-registration list, the connection
+ * state machine's cache, the CQM and pmsr state, the per-band union and the MLO link
+ * array - none of which a compiled unit names; those members arrive with the body
+ * that owns them. `u` keeps the interface's member name and type at the cut, so the
+ * size taken here matches the interface's leading region.
+ */
+struct wireless_dev {
+	struct wiphy		*wiphy;
+	enum nl80211_iftype	iftype;
+
+	/* the remainder of this struct is private to cfg80211 */
+	struct list_head	list;
+	struct net_device	*netdev;
+
+	u32			identifier;
+
+	struct list_head	mgmt_registrations;
+	u8			mgmt_registrations_need_update:1;
+
+	bool			use_4addr, is_running, registered, registering;
+
+	u8			address[ETH_ALEN] __aligned(sizeof(u16));
+
+	u8			connected:1;
+
+	bool			ps;
+	int			ps_timeout;
+
+	/*
+	 * The per-interface-type state union. Only the AP and the client arms are
+	 * carried - they are the two a compiled unit names - with the interface's
+	 * member names and types; the mesh, IBSS, OCB and NAN arms and the MLO link
+	 * array that the interface declares after it arrive with their consumers.
+	 */
+	union {
+		struct {
+			u8				connected_addr[ETH_ALEN] __aligned(2);
+			u8				ssid[IEEE80211_MAX_SSID_LEN];
+			u8				ssid_len;
+		} client;
+		struct {
+			struct cfg80211_chan_def	preset_chandef;
+			struct cfg80211_chan_def	chandef;
+			u8				ssid[IEEE80211_MAX_SSID_LEN];
+			u8				ssid_len;
+		} ap;
+	} u;
+
+	struct {
+		u8				addr[ETH_ALEN] __aligned(2);
+		union {
+			struct {
+				unsigned int		beacon_interval;
+				struct cfg80211_chan_def chandef;
+			} ap;
+			struct {
+				struct cfg80211_internal_bss *current_bss;
+			} client;
+		};
+
+		bool				cac_started;
+		unsigned long			cac_start_time;
+		unsigned int			cac_time_ms;
+	} links[IEEE80211_MLD_MAX_NUM_LINKS];
+	u16			valid_links;
+
+	u32			radio_mask;
+
+	/*
+	 * The compatibility spelling of the single-link client's current BSS: the
+	 * interface reaches the first link's client record through it. It is not a
+	 * stored member in the interface (which declares it only where the MLD
+	 * kernel patch is absent, as this face does), so it cannot be transcribed
+	 * as a field - a macro over the same expression the interface's own alias
+	 * uses keeps one mechanism.
+	 */
+};
+
+#define	IEEE80211_MLD_MAX_NUM_LINKS	15
+
+#define	cfg80211_priv_size(wiphy)	0
+
+/* ------------------------------------------------------------------ */
+/* lifecycle                                                           */
+/* ------------------------------------------------------------------ */
+
+struct wiphy *wiphy_new_nm(const struct cfg80211_ops *ops, int sizeof_priv,
+			   const char *requested_name);
+
+static inline struct wiphy *wiphy_new(const struct cfg80211_ops *ops,
+				      int sizeof_priv)
+{
+	return wiphy_new_nm(ops, sizeof_priv, NULL);
+}
+
+int wiphy_register(struct wiphy *wiphy);
+void wiphy_unregister(struct wiphy *wiphy);
+void wiphy_free(struct wiphy *wiphy);
+
+static inline void *wiphy_priv(struct wiphy *wiphy)
+{
+	return &wiphy->priv;
+}
+
+static inline const char *wiphy_name(const struct wiphy *wiphy)
+{
+	return dev_name(&wiphy->dev);
+}
+
+/* The device behind a wiphy is a stored pointer the caller both reads and
  * assigns (drivers set it from the interface's device). Both spellings are
  * inline helpers rather than function-like macros: a macro whose parameter is
  * named `dev` substitutes into its own `->dev` member access and rewrites the
@@ -375,23 +1075,33 @@ static __always_inline __unused struct device *
 wiphy_dev(struct wiphy *wiphy)
 {
 
-	return wiphy->dev;
+	return wiphy->dev.parent;
 }
 
 static __always_inline __unused void
 set_wiphy_dev(struct wiphy *wiphy, struct device *dev)
 {
 
-	wiphy->dev = dev;
+	wiphy->dev.parent = dev;
 }
 
 static inline void wiphy_ext_feature_set(struct wiphy *wiphy,
 					 enum nl80211_ext_feature_index ftidx)
 {
-	u32 index = (u32)ftidx / 32;
+	u8 *ft_byte;
 
-	if (index < ARRAY_SIZE(wiphy->ext_features))
-		wiphy->ext_features[index] |= (u32)BIT(ftidx % 32);
+	ft_byte = &wiphy->ext_features[ftidx / 8];
+	*ft_byte |= BIT(ftidx % 8);
+}
+
+static inline bool
+wiphy_ext_feature_isset(struct wiphy *wiphy,
+			enum nl80211_ext_feature_index ftidx)
+{
+	u8 ft_byte;
+
+	ft_byte = wiphy->ext_features[ftidx / 8];
+	return (ft_byte & BIT(ftidx % 8)) != 0;
 }
 
 /*

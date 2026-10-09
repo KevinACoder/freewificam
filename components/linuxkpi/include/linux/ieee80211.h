@@ -18,7 +18,7 @@
  *         Reference for the face shape: components/linuxkpi/include/linux/usb.h:1-20.
  *         Subset: grown by the consumer - a second split file (e.g. the upstream
  *         ieee80211-ht.h) is added when a consumer includes it by that name.
- * @date    08.10.2026
+ * @date    09.10.2026
  */
 
 #ifndef _LINUXKPI_LINUX_IEEE80211_H_
@@ -96,10 +96,30 @@
 /* ------------------------------------------------------------------ */
 
 #define	IEEE80211_MAX_DATA_LEN		2304	/* bytes in a frame body */
+/* [LNX] include/linux/ieee80211.h:227: the SSID field's ceiling. It sizes the SSID
+ * members of the records the configuration face carries by value, so it is a layout
+ * value, not a decoration. */
+#define	IEEE80211_MAX_SSID_LEN		32
 #define	IEEE80211_MAX_FRAME_LEN		2352	/* max 802.11 frame, no FCS */
 #define	IEEE80211_NUM_TIDS		16	/* traffic classes */
 #define	IEEE80211_NUM_ACS		4	/* access categories */
 #define	IEEE80211_MAX_CHAINS		4	/* RX chains reportable at once */
+
+/* ------------------------------------------------------------------ */
+/* unit conversions                                                    */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/linux/ieee80211.h:2624-2638: the frequency, time-unit and power
+ * conversions the interface groups here. The compiled set names MHZ_TO_KHZ (a regulatory
+ * rule table is written in kHz), MBM_TO_DBM (a power report is converted back to dBm)
+ * and the time-unit pair, whose second macro is spelled over the first; the rest of the
+ * interface's blocks are not named by a compiled unit and arrive with a caller, each
+ * with the interface's definition. */
+#define	TU_TO_JIFFIES(x)	(usecs_to_jiffies((x) * 1024))
+#define	TU_TO_EXP_TIME(x)	(jiffies + TU_TO_JIFFIES(x))
+
+#define	MHZ_TO_KHZ(freq)	((freq) * 1000)
+#define	MBM_TO_DBM(gain)	((gain) / 100)
 
 /* ------------------------------------------------------------------ */
 /* header layouts                                                      */
@@ -223,7 +243,7 @@ struct ieee80211_mgmt {
 
 #define	IEEE80211_HT_CAP_LDPC_CODING		0x0001
 #define	IEEE80211_HT_CAP_SUP_WIDTH_20_40	0x0002
-#define	IEEE80211_HT_CAP_SM_PS			0x000c
+#define	IEEE80211_HT_CAP_SM_PS			0x000C
 #define	IEEE80211_HT_CAP_GRN_FLD		0x0010
 #define	IEEE80211_HT_CAP_SGI_20			0x0020
 #define	IEEE80211_HT_CAP_SGI_40			0x0040
@@ -292,7 +312,7 @@ enum ieee80211_ht_mpdu_density {
 
 /* The block-ack action's parameters are two 16-bit fields inside a fixed
  * prefix, as the interface encodes them. */
-#define	IEEE80211_ADDBA_PARAM_TID_MASK		0x003c
+#define	IEEE80211_ADDBA_PARAM_TID_MASK		0x003C
 #define	IEEE80211_ADDBA_PARAM_BUF_SIZE_MASK	0xffc0
 
 /* ------------------------------------------------------------------ */

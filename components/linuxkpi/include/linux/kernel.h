@@ -10,13 +10,19 @@
  *         declared here, which is what lets the file stay portable across the project's
  *         targets. Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
- * @date    08.10.2026
+ * @date    09.10.2026
  */
 
 #ifndef _LINUXKPI_LINUX_KERNEL_H_
 #define _LINUXKPI_LINUX_KERNEL_H_
 
 #include "../../linuxkpi_core.h"
+
+/* [LNX] include/linux/kernel.h:30 includes <linux/printk.h> and :32 <linux/sprintf.h>.
+ * The face keeps the interface's own includes: the vendored logging macros expand
+ * printk(), and the formatted-output entry points are reached through this header. */
+#include <linux/printk.h>
+#include <linux/sprintf.h>
 
 /* Round x up to the next multiple of y (y a power of two in every caller here). */
 #define	roundup(x, y)	((((x) + ((y) - 1)) / (y)) * (y))

@@ -868,25 +868,30 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 	return was;
 }
 
-void lkpi_del_timer(struct timer_list *t)
+int lkpi_del_timer(struct timer_list *t)
 {
 	struct lkpi_callout_shell *shell =
 	    (struct lkpi_callout_shell *)(void *)t->_callout;
+	int was;
 
 	if (!shell->inited)
-		return;
+		return 0;
+	was = t->tl_pending ? 1 : 0;
 	(void)osTimerStop(shell->timer);
 	shell->pending = 0;
 	t->tl_pending = false;
+	return was;
 }
 
-void lkpi_del_timer_sync(struct timer_list *t)
+int lkpi_del_timer_sync(struct timer_list *t)
 {
-	lkpi_del_timer(t);
+	int was = lkpi_del_timer(t);
+
 	/* The callback clears the pending flag as its first act, so waiting for the
 	 * flag is waiting for a callback that was already in flight. */
 	while (t->tl_pending)
 		(void)osDelay(1);
+	return was;
 }
 
 int lkpi_timer_pending(const struct timer_list *t)
