@@ -144,11 +144,15 @@ all: $(TARGET).bin check
 define COMPILE_RULE
 $(BUILD)/obj/$(basename $(notdir $(1))).o: $(1)
 	@mkdir -p $(BUILD)/obj
-	$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(INCLUDES) -c $$< -o $$@
+	$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
 endef
 
+# The engine's rule carries PRINTF_CFLAGS; the generic loop must not redefine
+# the same object without them - the last definition wins in make, and the
+# disable switches are what keep the float paths out of a build that has no
+# FP state.
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
-$(foreach s,$(ALL_SRCS),$(eval $(call COMPILE_RULE,$(s))))
+$(foreach s,$(filter-out $(PRINTF_SRCS),$(ALL_SRCS)),$(eval $(call COMPILE_RULE,$(s))))
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@

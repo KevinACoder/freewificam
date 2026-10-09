@@ -47,13 +47,21 @@ INCLUDES := \
 
 # -DGUEST is load-bearing: without it the port builds for EL3, and on this
 # board the first yield executes SMC into firmware - a silent death.
+#
+# The section flags plus --gc-sections are load-bearing too: the vendored
+# formatter's printf_/vprintf_ entry points keep a reference to the unbound
+# _putchar sink, nothing in this image calls them, and section GC is what
+# discards them (the contract in components/printf/PROVENANCE.md:25-27) -
+# every sibling board image links this way.
 CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
+	-ffunction-sections -fdata-sections \
 	-DGUEST -DFW_BUILD_TAG='"$(BUILD_TAG)"'
 
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
+	-Wl,--gc-sections \
 	-Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map
 
@@ -95,11 +103,15 @@ all: $(TARGET).bin check
 define COMPILE_RULE
 $(BUILD)/obj/$(basename $(notdir $(1))).o: $(1)
 	@mkdir -p $(BUILD)/obj
-	$(CC) $(CFLAGS) $(INCLUDES) -c $$< -o $$@
+	$(CC) $(CFLAGS) $(2) $(INCLUDES) -c $$< -o $$@
 endef
 
+# The engine's rule carries PRINTF_CFLAGS; the generic loop must not redefine
+# the same object without them - the last definition wins in make, and the
+# disable switches are what keep the float paths out of a build that has no
+# FP state.
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
-$(foreach s,$(ALL_SRCS),$(eval $(call COMPILE_RULE,$(s))))
+$(foreach s,$(filter-out $(PRINTF_SRCS),$(ALL_SRCS)),$(eval $(call COMPILE_RULE,$(s))))
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
