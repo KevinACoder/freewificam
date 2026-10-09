@@ -59,6 +59,24 @@ else
     tail -8 "$log_dir/stream.log" >&2 || true
 fi
 
+# ---- the production adapter endpoint state ------------------------------------
+
+adapter=$root/tests/host/linuxkpi-body-test/build/cherryusb-adapter-test
+if timeout 20 "$adapter" > "$log_dir/adapter.log" 2>&1 &&
+    grep -q '^ADAPTER PASS ' "$log_dir/adapter.log"; then
+    case_line endpoint-toggle PASS
+else
+    case_line endpoint-toggle FAIL
+    tail -5 "$log_dir/adapter.log" >&2 || true
+fi
+if timeout 20 "$adapter" --fault-data0 > "$log_dir/adapter-red.log" 2>&1; then
+    case_line red-endpoint-toggle FAIL
+elif grep -q '^ADAPTER FAIL ep=' "$log_dir/adapter-red.log"; then
+    case_line red-endpoint-toggle PASS
+else
+    case_line red-endpoint-toggle FAIL
+fi
+
 # ---- the compiled-in firmware image -------------------------------------------
 
 if sh "$root/tests/host/linuxkpi-body-test/check-firmware.sh" > "$log_dir/firmware.log" 2>&1; then

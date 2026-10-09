@@ -126,7 +126,18 @@ OBJS := $(foreach s,$(SRCS),$(call OBJ,$(s)))
 
 .PHONY: all run clean
 
-all: $(BIN)
+all: $(BIN) $(BUILD_DIR)/cherryusb-adapter-test
+
+$(BUILD_DIR)/cherryusb-adapter-test: $(call OBJ,$(MAKEFILE_DIR)/adapter_case.c) \
+    $(call OBJ,$(ROOT)/ports/cherryusb/lkpi_usb_cherryusb.c) \
+    $(foreach s,$(BODY_SRCS) $(RUNTIME_SRCS),$(call OBJ,$(s)))
+	$(CC) $^ $(LDFLAGS) -o $@
+
+$(call OBJ,$(MAKEFILE_DIR)/adapter_case.c): $(MAKEFILE_DIR)/adapter_case.c | $(BUILD_DIR)
+	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
+
+$(call OBJ,$(ROOT)/ports/cherryusb/lkpi_usb_cherryusb.c): $(ROOT)/ports/cherryusb/lkpi_usb_cherryusb.c | $(BUILD_DIR)
+	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -159,4 +170,4 @@ run: $(BIN)
 	$(BIN)
 
 clean:
-	rm -rf $(BUILD_DIR)$(if $(filter off,$(PATCHES)),,/pinned)
+	rm -rf $(BUILD_DIR)

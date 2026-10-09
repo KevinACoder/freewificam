@@ -130,13 +130,8 @@ struct usb_interface_descriptor {
 
 struct usb_host_endpoint {
 	struct usb_endpoint_descriptor desc;
-	void		*hcpriv;	/* the CherryUSB descriptor behind it */
+	void		*hcpriv;	/* struct lkpi_usb_be_ep *, backend endpoint identity */
 	bool		enabled;
-	/* bulk-OUT data-toggle chain (patches/cherryusb/0003 keeps the
-	 * toggle in software): a Linux urb is fresh per submit here, so
-	 * the next-transfer toggle persists on the endpoint, not in the
-	 * usbh_urb (which is memset on every submit) */
-	u8		_data_toggle;
 };
 
 struct usb_host_interface {

@@ -86,6 +86,7 @@ struct lkpi_usb_be_hubport;
  * endpoint identity and never dereferences hcpriv itself */
 struct lkpi_usb_be_ep {
 	void	*hcpriv;
+	u8	data_toggle;	/* next DATA PID; endpoint-owned, initially DATA0 */
 };
 
 /* one root port of a backend; ep0 is the control endpoint the engine stages

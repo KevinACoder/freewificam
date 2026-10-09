@@ -52,9 +52,9 @@
  * transfer to the engine (return 0), which is the shape the engine's synchronous lane
  * reads (components/linuxkpi/usb/linuxkpi_usb.c:925-933).
  *
- * Compile-time shape: the adapter is target-only and is not part of the host mock
- * tier's link (the mock replaces it at the seam). It is compiled by the board build and
- * by the cross-compile gate, which is where its warning level is enforced.
+ * Compile-time shape: the board and cross-compile gate build this adapter.
+ * The dedicated host adapter test also links it against a scripted CherryUSB
+ * controller boundary; other mock suites replace it at the backend seam.
  */
 
 #include <stdint.h>
@@ -391,6 +391,12 @@ chu_complete(void *arg, int nbytes)
 		chu_stats.kill_translated++;
 	}
 
+	/* State belongs to the endpoint, not the recyclable transfer slot.
+	 * The HCD supplies the next PID even for partial/error completions.
+	 * Save before giveback can arm the next transfer. Reference: CherryUSB
+	 * EHCI usb_hc_ehci.c:512,608,724; Linux USB hcd.c:2002. */
+	if (be->ep != &be->hport->ep0)
+		be->ep->data_toggle = slot->urb.data_toggle;
 	be->actual_length = err == 0 ? (uint32_t)nbytes : slot->urb.actual_length;
 	be->errorcode = err;
 	chu_slot_finish(slot, err);
@@ -482,6 +488,8 @@ chu_seam_submit(void *ctx, struct lkpi_usb_be_urb *be)
 		break;
 	}
 
+	if (type != USB_ENDPOINT_TYPE_CONTROL)
+		slot->urb.data_toggle = be->ep->data_toggle;
 	chu_stats.submits++;
 	ret = usbh_submit_urb(&slot->urb);
 	if (be->timeout == 0) {
@@ -503,6 +511,8 @@ chu_seam_submit(void *ctx, struct lkpi_usb_be_urb *be)
 	 * synchronous lane reads exactly those two fields
 	 * (components/linuxkpi/usb/linuxkpi_usb.c:925-933).
 	 */
+	if (type != USB_ENDPOINT_TYPE_CONTROL)
+		be->ep->data_toggle = slot->urb.data_toggle;
 	be->actual_length = slot->urb.actual_length;
 	be->errorcode = ret;
 	chu_stats.completed++;
