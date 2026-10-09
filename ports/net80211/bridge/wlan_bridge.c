@@ -1257,6 +1257,27 @@ wlan_bridge_key_install(int pairwise, int key_idx, int set_tx, int cipher,
 		return rc;
 	}
 
+	/*
+	 * The driver's key write belongs to keys the hardware is going to use.
+	 * This port never advertises a hardware cipher, so the stack's key comes
+	 * back software-crypto, and net80211's own model keeps such a key out of
+	 * the driver (FreeBSD calls the driver's key hook only for hardware
+	 * keys). Handing it over anyway turns the chip's receive decryption on:
+	 * a protected frame then arrives already decrypted and this stack
+	 * decrypts the plaintext a second time, fails the CCMP MIC and drops it -
+	 * every protected frame from the peer, the DHCP offers included, dies
+	 * there while the management path keeps working. Measured on the board:
+	 * the count of chip-decrypted receive frames and the MIC-failure count
+	 * rose in lockstep (32/32, 71/71, 89/89, 113/113) with no lease.
+	 */
+	if ((wk->wk_flags & IEEE80211_KEY_SWCRYPT) != 0) {
+		wlan_osal_log("wlan: key %s idx %d len %u set_tx %d: stack-side "
+		    "only (software crypto; the chip is not asked to decrypt)\n",
+		    pairwise ? "pair" : "group", key_idx, (unsigned)key_len,
+		    set_tx);
+		return 0;
+	}
+
 	/* the driver's CAM write: same seam the clear path uses */
 	rc = wlan_bridge_key_set(pairwise ? 1 : 0, key_idx,
 	    WLAN_SEAM_CIPHER_CCMP, key, key_len);
@@ -1388,9 +1409,17 @@ int
 wlan_bridge_key_clear(int pairwise, int key_idx)
 {
 
+	/*
+	 * Nothing to clear on the driver side: a software-crypto key never
+	 * reaches the chip's key table (see wlan_bridge_key_install), and the
+	 * driver's own clear path re-enables its receive decryption engine on
+	 * the way past - the same trap, just without a key to decrypt with.
+	 */
 	if (!bridge.attached || bridge.ops->clear_key == NULL)
 		return -ENODEV;
-	return bridge.ops->clear_key(bridge.drv, pairwise, key_idx);
+	(void)pairwise;
+	(void)key_idx;
+	return 0;
 }
 
 int

@@ -960,7 +960,7 @@ case_b11(void)
 	struct wpa_vendor_key key;
 	uint8_t own[6];
 	uint8_t eapol[20];
-	unsigned int guard, set_key_before;
+	unsigned int guard, set_key_before, clear_key_before;
 	int rc;
 
 	if (wlan_wpa_vendor_init() != 0) {
@@ -1098,10 +1098,23 @@ case_b11(void)
 	}
 
 	/* the two key installs: clear the slot first so the transition is real,
-	 * then verify both legs (the stack's key record and the driver's CAM) */
+	 * then verify both legs. The driver leg is asserted ABSENT: the port
+	 * never advertises a hardware cipher, so the stack's key is
+	 * software-crypto and net80211's own model keeps such a key out of the
+	 * driver (FreeBSD calls the driver's key hook only for hardware keys).
+	 * Handing it over anyway makes the chip decrypt received frames, and the
+	 * stack then decrypts the plaintext a second time and fails the MIC -
+	 * every protected frame, DHCP's offers included, dies there. */
 	st = fake_driver_state();
+	clear_key_before = fake_driver_state()->clear_key_calls;
 	set_key_before = st->set_key_calls;
 	(void)wlan_bridge_key_clear(1, 0);
+	if (fake_driver_state()->clear_key_calls != clear_key_before) {
+		case_line("B11", 0, "the driver's key clear ran (+%u calls) for a "
+		    "key the chip never held",
+		    fake_driver_state()->clear_key_calls - clear_key_before);
+		return -1;
+	}
 	if (n8_peek_key_defined(1, 0) != 0) {
 		case_line("B11", 0, "the pairwise slot did not clear");
 		return -1;
@@ -1121,8 +1134,11 @@ case_b11(void)
 		    n8_peek_key_defined(1, 0), n8_peek_node_authorized());
 		return -1;
 	}
-	if (fake_driver_state()->set_key_calls != set_key_before + 1) {
-		case_line("B11", 0, "the driver's CAM write did not happen");
+	if (fake_driver_state()->set_key_calls != set_key_before) {
+		case_line("B11", 0, "a software-crypto key reached the driver's "
+		    "CAM (+%u calls): the chip would decrypt received frames and "
+		    "the stack would decrypt them again",
+		    fake_driver_state()->set_key_calls - set_key_before);
 		return -1;
 	}
 
@@ -1142,9 +1158,10 @@ case_b11(void)
 		    n8_peek_def_txkey());
 		return -1;
 	}
-	if (fake_driver_state()->set_key_calls != set_key_before + 1) {
-		case_line("B11", 0, "the driver's CAM write did not happen for "
-		    "the group key");
+	if (fake_driver_state()->set_key_calls != set_key_before) {
+		case_line("B11", 0, "a software-crypto group key reached the "
+		    "driver's CAM (+%u calls)",
+		    fake_driver_state()->set_key_calls - set_key_before);
 		return -1;
 	}
 
@@ -1180,7 +1197,8 @@ case_b11(void)
 	}
 
 	case_line("B11", 1, "backend ops verified: MANUAL sweep + pull table, "
-	    "RSN join + 802.1X gate, dual CCMP install (stack+CAM), 0x888E "
+	    "RSN join + 802.1X gate, CCMP install stack-side only (the chip is "
+	    "not asked to decrypt), 0x888E "
 	    "exit, event pump forwarded to the netif");
 	return 0;
 }
