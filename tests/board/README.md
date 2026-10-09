@@ -27,15 +27,17 @@ bring-up only - the bisection tool) and a **regression** image (every supported
 feature plus a case table). Feature work does not add images; it adds rows to
 the regression image's table.
 
-Two shapes in each image's Makefile are load-bearing, and
+Three shapes in each image's Makefile are load-bearing, and
 `tools/gates/check-board-images.sh` checks them from the source side: the
 per-file flag argument must reach the compile command (`COMPILE_RULE` applies
-`$(2)`, and no later rule redefines the same object without it), and an image
-that links the vendored formatter must link with section GC
-(`-ffunction-sections -fdata-sections` plus `-Wl,--gc-sections`). The formatter
-engine's `printf_`/`vprintf_` entry points reference an unbound `_putchar` sink
-and are not called by these images, so discarding their sections is what keeps
-the link resolvable (`components/printf/PROVENANCE.md`).
+`$(2)`, and no later rule redefines the same object without it); an image that
+links the vendored formatter must link with section GC
+(`-ffunction-sections -fdata-sections` plus `-Wl,--gc-sections`) - the
+formatter engine's `printf_`/`vprintf_` entry points reference an unbound
+`_putchar` sink and are not called by these images, so discarding their
+sections is what keeps the link resolvable (`components/printf/PROVENANCE.md`);
+and an image whose banner carries the build tag must depend on a tag stamp, so
+a commit or a merge rebuilds it instead of certifying a stale banner.
 
 ## In-image case table
 
