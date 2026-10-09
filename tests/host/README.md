@@ -35,6 +35,7 @@ case line such as `CASE net80211-frame-test/...` leads straight to the project.
 | `linuxkpi-usb-urb-stress` | `linuxkpi-usb-urb-stress` | The urb engine under injection stress |
 | `lwip-port-build` | `lwip-port-build` | The lwIP port layer compiles and links on both kernels with no symbol leak |
 | `rtl8xxxu-port-build` | `rtl8xxxu-port-build` | The driver port compiles against the linuxkpi face and honours its contract |
+| `rtw89-port-build` | `rtw89-port-build` | The mainline 8851BU driver's twenty-one translation units compile against the grown face, the face stands alone, and the license/isolation gates hold |
 | `wlan-bridge-test` | `wlan-bridge-test` | The net80211 bridge: attach, scan, join and data path, the seam contract, key handling and the supplicant backend |
 | `wpa-port-test` | `wpa-port-test` | The supplicant port: the scan pull model, four-way completion, job timeouts and the backend on both kernels |
 

@@ -908,7 +908,9 @@ enum ieee80211_key_flags {
 };
 
 struct ieee80211_key_conf {
-	u64	tx_pn;
+	/* [LNX] include/net/mac80211.h: the transmit packet number is the atomic the
+	 * driver increments per frame (the type is contract with that call) */
+	atomic64_t	tx_pn;
 	u32	cipher;
 	u8	icv_len;
 	u8	iv_len;

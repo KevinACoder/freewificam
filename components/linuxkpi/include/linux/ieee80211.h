@@ -44,14 +44,13 @@
 
 
 
-/* [LNX] include/linux/ieee80211.h:751 */
-static inline bool ieee80211_is_nullfunc(__le16 fc);
+#endif
 
-/* [LNX] include/linux/ieee80211.h: the header-length helper */
+/* [LNX] include/linux/ieee80211.h:751,1789: the frame helpers the compiled set calls
+ * (the interface defines them inline; their bodies are the header bits arithmetic) */
+bool ieee80211_is_nullfunc(__le16 fc);
 unsigned int ieee80211_hdrlen(__le16 fc);
 bool ieee80211_is_qos_nullfunc(__le16 fc);
-
-#endif
 
 /* [LNX] include/linux/ieee80211-he.h:93 (the enumerators the compiled set names, at their computed positions) */
 

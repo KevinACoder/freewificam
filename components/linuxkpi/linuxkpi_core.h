@@ -159,8 +159,12 @@ typedef unsigned int		gfp_t;
 #ifndef __unused
 #define	__unused		__attribute__((__unused__))
 #endif
+/* [LNX] include/linux/compiler_attributes.h:214: the fall-through marker a switch case
+ * states; the attribute arm is the one this face's compiler class supports (the
+ * do-while arm is for compilers without the statement attribute and would leave
+ * -Wimplicit-fallthrough firing) */
 #ifndef fallthrough
-#define	fallthrough		do {} while (0)
+#define	fallthrough		__attribute__((__fallthrough__))
 #endif
 
 #define	U8_MAX			0xffU

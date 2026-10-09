@@ -1029,7 +1029,7 @@ struct wiphy {
 	} tid_config_support;
 
 	struct rfkill *rfkill;
-	struct wiphy_iftype_ext_capab *iftype_ext_capab;
+	const struct wiphy_iftype_ext_capab *iftype_ext_capab;
 	unsigned int		num_iftype_ext_capab;
 	const struct cfg80211_sar_capa *sar_capa;
 

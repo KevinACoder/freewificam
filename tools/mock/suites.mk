@@ -5,7 +5,7 @@
 #
 # Default set = the suites that cover this repository's own code.  Fast enough to
 # run on every change; `make mock SUITES_FILE=...` or a named suite runs a subset.
-SUITES := container-selftest threadx-cmsis2-smoke freertos-cmsis2-smoke net80211-port-test net80211-frame-test linuxkpi-usb-test linuxkpi-body-test cherrysh-port-smoke skbuff-allocation-free-stress linuxkpi-usb-urb-stress lwip-port-build rtl8xxxu-port-build wlan-bridge-test wpa-port-test
+SUITES := container-selftest threadx-cmsis2-smoke freertos-cmsis2-smoke net80211-port-test net80211-frame-test linuxkpi-usb-test linuxkpi-body-test cherrysh-port-smoke skbuff-allocation-free-stress linuxkpi-usb-urb-stress lwip-port-build rtl8xxxu-port-build rtw89-port-build wlan-bridge-test wpa-port-test
 
 # The upstream kernels are vendored and do not change with this repository's work,
 # so their regression suites are a separate, deliberate run: `make mock-kernels`.
