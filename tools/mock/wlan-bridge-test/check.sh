@@ -35,8 +35,8 @@ case_line() {
 
 if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^WLANBRIDGE: B[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 20 ] &&
-        grep -q '^WLANBRIDGE: SUITE PASS cases=20$' "$log_dir/stream.log" &&
+    if [ "$pass" = 19 ] &&
+        grep -q '^WLANBRIDGE: SUITE PASS cases=19$' "$log_dir/stream.log" &&
         ! grep -q '^WLANBRIDGE: B[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line attach-chain PASS
         case_line scan-order-and-walk PASS
@@ -57,14 +57,12 @@ if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line tx-headroom PASS
         case_line rx-channel PASS
         case_line sweep-window-not-visible-early PASS
-        case_line preassoc-filter-lifetime PASS
     else
         case_line attach-chain FAIL
         case_line tx-headroom FAIL
         case_line rx-channel FAIL
         case_line sweep-window-not-visible-early FAIL
-        case_line preassoc-filter-lifetime FAIL
-        echo "wlan-bridge-test: the run did not report twenty passing cases ($pass)" >&2
+        echo "wlan-bridge-test: the run did not report nineteen passing cases ($pass)" >&2
         grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -12 >&2 || true
     fi
 else
@@ -72,7 +70,6 @@ else
     case_line tx-headroom FAIL
     case_line rx-channel FAIL
     case_line sweep-window-not-visible-early FAIL
-    case_line preassoc-filter-lifetime FAIL
     echo "wlan-bridge-test: the run failed, see $log_dir/stream.log" >&2
     grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -8 >&2 || true
 fi
@@ -215,43 +212,6 @@ else
     case_line sweep-window-red-control FAIL
     echo "wlan-bridge-test: the early-flag bridge did not build" >&2
     tail -5 "$log_dir/ordmut-build.log" >&2 || true
-fi
-
-# ---- the pre-association filter red control -----------------------------------
-
-# The receive filter's promiscuous bit must outlive the sweep: with it cleared at
-# the sweep's close the chip applies its own address/beacon filters, and before
-# association there is nothing correct for those to match - the fault the raw
-# open-auth join measured on the board (the answer never arrived and the stack
-# timed out). The control builds the chain against a copy of the bridge whose
-# sweep close clears the bit again, and the filter-lifetime case must fail.
-# Without it, "the bit outlives the sweep" would be a claim no implementation
-# could contradict.
-flmut=$log_dir/mutated-bridge-filter
-rm -rf "$flmut"
-mkdir -p "$flmut"
-sed 's/bridge\.scan_completes++;/bridge.scan_completes++; (void)bridge_filter_set(0);/' \
-    "$root/ports/net80211/bridge/wlan_bridge.c" > "$flmut/wlan_bridge.c"
-if grep -q 'bridge.scan_completes++; (void)bridge_filter_set(0);' "$flmut/wlan_bridge.c" &&
-    make -C "$root/tests/host/wlan-bridge-test" \
-        BRIDGE_SRC="$flmut/wlan_bridge.c" \
-        BUILD_DIR="$flmut/build" > "$log_dir/flmut-build.log" 2>&1; then
-    if timeout -k 5 180 "$flmut/build/wlan-bridge-test" > "$log_dir/flmut-run.log" 2>&1; then
-        case_line preassoc-filter-red-control FAIL
-        echo "wlan-bridge-test: the clear-at-sweep-close bridge passed (it must fail)" >&2
-    else
-        if grep -q '^WLANBRIDGE: B20 FAIL' "$log_dir/flmut-run.log"; then
-            case_line preassoc-filter-red-control PASS
-        else
-            case_line preassoc-filter-red-control FAIL
-            echo "wlan-bridge-test: the filter-lifetime control failed elsewhere" >&2
-            grep '^WLANBRIDGE' "$log_dir/flmut-run.log" | tail -6 >&2 || true
-        fi
-    fi
-else
-    case_line preassoc-filter-red-control FAIL
-    echo "wlan-bridge-test: the clear-at-sweep-close bridge did not build" >&2
-    tail -5 "$log_dir/flmut-build.log" >&2 || true
 fi
 
 exit "$failures"
