@@ -509,10 +509,36 @@ wlan_bridge_attach(struct wlan_seam_drv *drv,
 	bridge_orig_newstate = ic->ic_newstate;
 	ic->ic_newstate = bridge_newstate;
 
+	/*
+	 * The driver starts before its interface is added, which is the order
+	 * the interface itself uses: ieee80211_do_open starts the hardware, and
+	 * the interfaces are added afterwards, so a driver's add_interface may
+	 * assume the chip is already running.  rtw89 does - its add_interface
+	 * programs the interface's port and reads the host flow-control pages
+	 * back - and refuses the interface when the start has not run (measured
+	 * on the board: "add_interface refused (-14)").  bridge.up records that
+	 * the start has run, so wlan_bridge_up() below does not start it twice.
+	 */
+	if (ops->start != NULL) {
+		if (ops->start(drv) != 0) {
+			wlan_osal_log("wlan: the driver refused to start\n");
+			ic->ic_newstate = bridge_orig_newstate;
+			ieee80211_ifdetach(ic);
+			wlan_osal_free(ifp);
+			wlan_osal_free(ic);
+			return -EIO;
+		}
+		bridge.up = 1;
+	}
+
 	/* the driver side learns about the interface (its own vif/priv area) */
 	if (ops->add_interface != NULL &&
 	    ops->add_interface(drv, mac, WLAN_SEAM_IFTYPE_STATION) != 0) {
 		wlan_osal_log("wlan: the driver refused the interface\n");
+		if (bridge.up && ops->stop != NULL) {
+			(void)ops->stop(drv);
+			bridge.up = 0;
+		}
 		ic->ic_newstate = bridge_orig_newstate;
 		ieee80211_ifdetach(ic);
 		wlan_osal_free(ifp);

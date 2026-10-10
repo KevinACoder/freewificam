@@ -168,10 +168,17 @@ SECTIONS
 	 * loader's dirty lines over [_start, __heap_end), so this symbol is the
 	 * boot-hygiene extent. The RTOS heap is a .bss array (heap_4), not this
 	 * window - the reservation only marks the extent and leaves room for
-	 * future allocators. NOLOAD, costs nothing in the binary. */
+	 * future allocators. NOLOAD, costs nothing in the binary.
+	 *
+	 * The window's size is the image's to state, because how much a heap
+	 * needs is a property of the drivers in it: an image whose driver holds
+	 * multi-kilobyte receive buffers asks for more than the default through
+	 * --defsym=HEAP_SIZE=..., and the default stays what the first image on
+	 * this carrier needed. */
+	PROVIDE(HEAP_SIZE = 1M);
 	. = ALIGN(16);
 	__heap_start = .;
-	. = . + 1M;
+	. = . + HEAP_SIZE;
 	__heap_end = .;
 
 	/* The ThreadX cortex_a55 port dereferences this symbol during kernel

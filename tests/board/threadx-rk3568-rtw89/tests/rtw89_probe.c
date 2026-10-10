@@ -39,6 +39,8 @@
 
 /* net80211-world header of the bridge: scalars only, safe from this world */
 #include "wlan_bridge.h"
+/* the linuxkpi pool's ledger (scalars only, safe from this world) */
+#include "skbuff/skbuff_pool.h"
 
 #define WLAN_PROBE_WAIT_MS	60000U
 #define WLAN_PROBE_POLL_MS	100U
@@ -114,6 +116,25 @@ void rtw89_probe_chain(void)
 	board_log("wlan: probe done attached=%d rx=%u mgt_tx=%u scan=%u/%u\n",
 		  c.attached, c.rx_frames, c.mgt_tx, c.scan_starts,
 		  c.scan_completes);
+	/*
+	 * The allocation ledger, on the case's own line: this driver's receive
+	 * path holds sixteen 20 KB buffers and its firmware download allocates a
+	 * packet per transfer, so whether the image can carry it is a memory
+	 * question - and one the case should answer with numbers rather than
+	 * with a later failure's symptom.  dyalloc is how many of those buffers
+	 * came from the heap, alloc_fail how many requests the pool could not
+	 * serve at all.
+	 */
+	{
+		struct lkpi_skb_pool_stats st;
+
+		lkpi_skb_pool_stats(&st);
+		board_log("wlan: pool skb=%u/%u data=%u/%u heap_live=%u ovf=%u/%u "
+		    "fail=%u alloc=%u free=%u\n",
+		    st.skb_used, st.skb_high, st.data_used, st.data_high,
+		    st.dyalloc_live, st.slot_overflow, st.data_overflow,
+		    st.alloc_fail, st.n_alloc, st.n_free);
+	}
 }
 
 BOARD_TEST("rtw89-probe", rtw89_probe_chain);

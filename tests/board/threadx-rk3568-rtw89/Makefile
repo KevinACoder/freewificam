@@ -131,8 +131,20 @@ WLAN_BSD_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-include $(NPORT)/compat/prelude.h \
 	-I$(NPORT)/compat -I$(NET)/compat/netbsd -I$(NET) -I$(NPORT)
 
+# The skb pool's geometry, for the same reason: the receive path keeps sixteen
+# buffers alive for the driver's lifetime and the transmit path allocates one
+# per transfer, so the carrier's default (48 header slots, 32 heap-backed ones,
+# 2048-byte data slots) is exhausted before the firmware download can get its
+# first packet.  The data slots stay 2048 bytes - this driver's buffers are
+# larger than that and are served from the heap, which is where the window above
+# went.
+SKB_POOL_CFLAGS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
+	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=64 \
+	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=64
+
 WLAN_KPI_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+	$(SKB_POOL_CFLAGS) \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-I$(ROOT) -I$(LKPI) -I$(LKPI)/include \
 	-I$(LKPI)/usb -I$(NET) -I$(NPORT) -I$(NPORT)/bridge
@@ -147,7 +159,7 @@ WLAN_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
-	$(WLAN_DRV_CONFIG) \
+	$(WLAN_DRV_CONFIG) $(SKB_POOL_CFLAGS) \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
 	-I$(ROOT) -I$(LKPI) -I$(LKPI)/include -I$(DRV) \
 	-I$(CMSIS)/CMSIS/RTOS2/Include -Wno-unused-parameter \
@@ -201,8 +213,15 @@ LWIP_INCLUDES := \
 # entry points a case or the start-up order calls that the linker cannot see
 # transitively (the module-section walker, the backend registration, the
 # firmware registration, the USB board entry points).
+# The driver's receive path holds sixteen 20 KB buffers, its own descriptor
+# tables and the firmware download's packet buffers; the carrier's default heap
+# window (1 MB) is what the first image on it needed, not what this one does.
+HEAP_SIZE ?= 16M
+
+
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
+	-Wl,--defsym=HEAP_SIZE=$(HEAP_SIZE) \
 	-Wl,--gc-sections \
 	-Wl,-u,osCriticalEnter \
 	-Wl,-u,osCriticalExit \

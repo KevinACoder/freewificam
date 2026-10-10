@@ -493,16 +493,23 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 	} else if (cfg_heap_fallback) {
 		if (heap_live_n >= (uint32_t)CONFIG_LKPI_SKB_HEAP_HDR_MAX) {
 			stats.alloc_fail++;
+			lkpi_spl_log("alloc refused: header slots full (%u) and "
+			    "heap headers full (%u), size=%u", cfg_n_header,
+			    (unsigned)CONFIG_LKPI_SKB_HEAP_HDR_MAX, size);
 			goto out;
 		}
 		skb = (struct sk_buff *)lkpi_spl_malloc((unsigned int)sizeof(*skb));
 		if (skb == NULL) {
 			stats.alloc_fail++;
+			lkpi_spl_log("alloc refused: no heap for a header, size=%u",
+			    size);
 			goto out;
 		}
 		hdr_heap = 1;
 	} else {
 		stats.alloc_fail++;
+		lkpi_spl_log("alloc refused: no free header slot and no heap "
+		    "fallback, size=%u", size);
 		goto out;
 	}
 
@@ -532,6 +539,8 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 		ref = (uint32_t *)lkpi_spl_malloc(8u + need);
 		if (ref == NULL) {
 			stats.alloc_fail++;
+			lkpi_spl_log("alloc refused: no heap for %u bytes "
+			    "(data slot is %u)", 8u + need, cfg_data_sz);
 			goto fail_header;
 		}
 		*ref = 1;

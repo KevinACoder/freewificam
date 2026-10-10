@@ -347,6 +347,7 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
     thread_slot_t * slot = NULL;
     unsigned int    i;
     uint32_t        stack_size;
+    UINT            rc;
     osPriority_t    prio = ( attr != NULL ) ? attr->priority : osPriorityNormal;
 
     /* Legal CMSIS band is 1..osPriorityISR; the header marks an illegal priority as
@@ -409,9 +410,11 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
         }
         slot->state = SLOT_PENDING;
     }
-    else if( create_thread_object( slot ) != TX_SUCCESS )
+    else if( ( rc = create_thread_object( slot ) ) != TX_SUCCESS )
     {
-        cmsis2_log( "cmsis2: thread create failed for '%s'\n", slot->name );
+        cmsis2_log( "cmsis2: thread create failed for '%s' (tx rc=%u, "
+                    "stack=%u)\n", slot->name, ( unsigned ) rc,
+                    ( unsigned ) slot->stack_size );
         vPortFree( slot->stack );
         slot->stack = NULL;
         slot->state = SLOT_FREE;
@@ -450,6 +453,15 @@ osStatus_t osThreadTerminate( osThreadId_t thread_id )
     }
 
     tx_event_flags_delete( &slot->flags );
+    /*
+     * Release the kernel's own thread object as well.  A slot that goes back to
+     * free while its TX_THREAD still carries the created id cannot be created
+     * again: tx_thread_create answers TX_THREAD_ERROR for a control block it
+     * believes is live, which is how a second controller bring-up fails on the
+     * thread the first one left behind (observed on the board as
+     * "thread create failed for 'usbh_hub1' (tx rc=14)").
+     */
+    ( void ) tx_thread_delete( &slot->thread );
     vPortFree( slot->stack );
     slot->stack = NULL;
     slot->state = SLOT_FREE;
