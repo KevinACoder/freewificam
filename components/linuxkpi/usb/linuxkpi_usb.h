@@ -65,6 +65,51 @@ unsigned int	lkpi_usb_stage_grant_count(void);
 unsigned int	lkpi_usb_park_count(void);
 unsigned int	lkpi_usb_resume_count(void);
 unsigned int	lkpi_usb_parked_now(void);
+
+/* ------------------------------------------------------------------ */
+/* the transfer ledger (a bring-up's one-line evidence)                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The endpoint table's bookkeeping, aggregated and per endpoint.  This is what
+ * separates "the controller refused the transfer" from "the transfer never left"
+ * and from "it left and nothing came back": a receive path that submits but
+ * never completes shows enqueued climbing with completions flat; one the backend
+ * refuses shows parks climbing; one that never submits at all shows enqueued
+ * flat.  The board suite prints it, which is how a single boot names the failing
+ * leg instead of a round of guessing.
+ */
+struct lkpi_usb_engine_stats {
+	unsigned int	eps;		/* endpoints in the table */
+	unsigned int	enqueued;	/* submits accepted, summed */
+	unsigned int	kicks;		/* handovers attempted, summed */
+	unsigned int	completions;	/* completions delivered, summed */
+	unsigned int	kills;		/* kills, summed */
+	unsigned int	parks;		/* flow-control parks, summed */
+	unsigned int	resumes;	/* parks cleared, summed */
+	unsigned int	parked_now;	/* endpoints parked at report time */
+	unsigned int	in_flight;	/* endpoints with a transfer in flight */
+	unsigned int	qlen;		/* urbs queued behind the in-flight one */
+};
+
+struct lkpi_usb_ep_stats {
+	unsigned int	index;
+	unsigned int	ep_addr;
+	unsigned int	qlen;
+	unsigned int	in_flight;
+	unsigned int	parked;
+	unsigned int	enqueued;
+	unsigned int	kicks;
+	unsigned int	completions;
+	unsigned int	kills;
+	unsigned int	parks;
+	unsigned int	resumes;
+};
+
+unsigned int	lkpi_usb_ep_count(void);
+/* copy endpoint `index`'s bookkeeping; non-zero when the index is out of range */
+int		lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out);
+void		lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out);
 /* how many drivers the registry holds (the module-section walker's observable
  * result, and the bring-up's self-check before enumeration starts) */
 unsigned int	lkpi_usb_driver_count_get(void);

@@ -819,6 +819,64 @@ lkpi_usb_parked_now(void)
 	return n;
 }
 
+unsigned int
+lkpi_usb_ep_count(void)
+{
+
+	return LKPI_EP_N;
+}
+
+int
+lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out)
+{
+	const struct lkpi_usb_ep *ep;
+	unsigned long flags;
+
+	if (index >= LKPI_EP_N || out == NULL)
+		return -1;
+	ep = &lkpi_eps[index];
+	spin_lock_irqsave(&ep->lock, flags);
+	out->index = index;
+	out->ep_addr = ep->ep_addr;
+	out->qlen = ep->qlen;
+	out->in_flight = ep->cur != NULL ? 1u : 0u;
+	out->parked = ep->parked ? 1u : 0u;
+	out->enqueued = ep->enqueued;
+	out->kicks = ep->kicks;
+	out->completions = ep->completions;
+	out->kills = ep->kills;
+	out->parks = ep->parks;
+	out->resumes = ep->resumes;
+	spin_unlock_irqrestore(&ep->lock, flags);
+	return 0;
+}
+
+void
+lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
+{
+	unsigned int i;
+
+	if (out == NULL)
+		return;
+	memset(out, 0, sizeof(*out));
+	out->eps = LKPI_EP_N;
+	for (i = 0; i < LKPI_EP_N; i++) {
+		struct lkpi_usb_ep_stats s;
+
+		if (lkpi_usb_ep_stats_get(i, &s) != 0)
+			continue;
+		out->enqueued += s.enqueued;
+		out->kicks += s.kicks;
+		out->completions += s.completions;
+		out->kills += s.kills;
+		out->parks += s.parks;
+		out->resumes += s.resumes;
+		out->parked_now += s.parked;
+		out->in_flight += s.in_flight;
+		out->qlen += s.qlen;
+	}
+}
+
 /* ------------------------------------------------------------------ */
 /* urb lifecycle                                                       */
 /* ------------------------------------------------------------------ */
