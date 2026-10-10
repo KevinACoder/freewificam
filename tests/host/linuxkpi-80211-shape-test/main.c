@@ -683,6 +683,49 @@ case_zero_change_is_silent(void)
 	ieee80211_free_hw(hw);
 }
 
+static void
+case_station_default_link(void)
+{
+	struct ieee80211_hw *hw = fixture_new(SHAPE_73);
+	struct ieee80211_sta *sta = NULL;
+	struct ieee80211_vif *vif;
+	int ok;
+
+	if (hw == NULL) {
+		case_line("station-default-link", 0, "no hw");
+		return;
+	}
+	vif = join(hw, &sta);
+	if (vif == NULL || sta == NULL) {
+		case_line("station-default-link", 0, "the join did not complete");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/*
+	 * The station's default link is wired the way the interface wires every
+	 * station, MLD or not: sta->link[0] points at the station's own deflink
+	 * (net/mac80211/sta_info.c:sta_info_add_link), with the link's back
+	 * pointer, id and address filled.  A driver that needs the peer's link
+	 * record dereferences sta->link[link_id] and gives up on a NULL -
+	 * rtw89's association handler reads it to build its CMAC table
+	 * ("cannot find exact link_sta for link_id 0" on the board, after which
+	 * the chip sent data frames the AP never answered).
+	 */
+	ok = sta->link[0] == &sta->deflink &&
+	    sta->deflink.sta == sta &&
+	    sta->deflink.link_id == 0 &&
+	    memcmp(sta->deflink.addr, g_ap, 6) == 0;
+	case_line("station-default-link", ok,
+	    "link0=%u deflink=%u id=%u addr=%02x:%02x:%02x:%02x:%02x:%02x",
+	    sta->link[0] == &sta->deflink, sta->deflink.sta == sta,
+	    sta->deflink.link_id,
+	    sta->deflink.addr[0], sta->deflink.addr[1], sta->deflink.addr[2],
+	    sta->deflink.addr[3], sta->deflink.addr[4], sta->deflink.addr[5]);
+	lkpi80211_drv_sta_remove(hw, vif, sta);
+	lkpi80211_drv_vif_remove(hw, vif);
+	ieee80211_free_hw(hw);
+}
+
 /* ------------------------------------------------------------------ */
 /* the run                                                             */
 /* ------------------------------------------------------------------ */
@@ -700,6 +743,7 @@ app_task(void *arg)
 	case_link_bookkeeping();
 	case_default_link_address();
 	case_zero_change_is_silent();
+	case_station_default_link();
 	printf("SHAPE: summary cases=%u failed=%u\n", g_cases, g_fail);
 	fflush(stdout);
 	cmsis2_host_end_scheduler();

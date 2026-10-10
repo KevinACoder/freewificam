@@ -1057,8 +1057,23 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (sta == NULL)
 		return NULL;
 	memcpy(sta->addr, addr, 6);
+	memcpy(sta->deflink.addr, addr, 6);
 	sta->aid = aid;
 	ctx->stas[slot] = sta;
+	/*
+	 * The station's default link, wired the way the interface wires every
+	 * station, MLD or not (net/mac80211/sta_info.c:sta_info_add_link does
+	 * `rcu_assign_pointer(sta->link[link_id], link_info)` and, for a
+	 * non-MLD, links the deflink at id 0).  A driver that needs the peer's
+	 * link record dereferences sta->link[link_id] and gives up when it is
+	 * NULL: rtw89's association handler reads it to fill the CMAC table
+	 * ("cannot find exact link_sta for link_id 0", measured on the board
+	 * 2026-10-10 - the chip then ran the association without its CMAC
+	 * entry, so every data frame it sent went unanswered).
+	 */
+	sta->deflink.sta = sta;
+	sta->deflink.link_id = 0;
+	sta->link[0] = &sta->deflink;
 	/*
 	 * The station's per-TID txqs, before the driver hears about the station:
 	 * its station setup walks them to initialize the driver-private queue
