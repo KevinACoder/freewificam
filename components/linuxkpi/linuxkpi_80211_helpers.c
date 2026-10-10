@@ -788,3 +788,30 @@ ieee80211_beacon_get_tim(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	/* the same answer ieee80211_beacon_get gives: AP mode is a non-goal */
 	return NULL;
 }
+
+struct sk_buff *
+ieee80211_proberesp_get(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+{
+
+	(void)hw;
+	(void)vif;
+	/* the probe-response builder is the AP side's, the same non-goal
+	 * ieee80211_probereq_get and ieee80211_beacon_get_tim answer NULL for;
+	 * the one caller is the firmware offload template registration. */
+	return NULL;
+}
+
+void
+ieee80211_request_smps(struct ieee80211_vif *vif, unsigned int link_id,
+    enum ieee80211_smps_mode smps_mode)
+{
+
+	(void)vif;
+	(void)link_id;
+	(void)smps_mode;
+	/* [LNX] net/mac80211/vht.c: the stack asks the driver to change the
+	 * spatial-multiplexing power-save mode. This port's net80211 has no
+	 * SMPS negotiation to reflect, so there is no state to hand the driver
+	 * and the request is accepted and dropped - the same shape the other
+	 * stack-to-driver notices take here. */
+}
