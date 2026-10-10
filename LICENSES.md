@@ -41,6 +41,7 @@ carry the same terms in their file header).
 |---|---|---|
 | `rtl8188eufw.bin` (Realtek firmware, compiled in as `components/linuxkpi/fw/rtl8188eufw_blob.c`) | Realtek binary redistribution terms | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/rtl8188eufw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
 | `rtw8851b_fw-1.bin` (Realtek firmware, compiled in as `components/linuxkpi/fw/rtw8851b_fw_blob.c`) | Realtek binary redistribution terms (the same notice as the 8188EU image) | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/rtw8851b_fw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
+| `rtw88/rtw8821c_fw.bin` (Realtek firmware, compiled in as `components/linuxkpi/fw/rtw8821c_fw_blob.c`) | Realtek binary redistribution terms (the same notice as the 8188EU and 8851B images) | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/rtw8821c_fw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
 
 ## Distribution obligations
 

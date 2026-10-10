@@ -100,3 +100,47 @@ void release_firmware(const struct firmware *firmware)
 	/* The bytes belong to the table; only the description is ours to free. */
 	kfree((void *)firmware);
 }
+
+/*
+ * The asynchronous spelling. The interface's contract is that the caller is not
+ * blocked and the continuation runs with the result; this project's registry is
+ * a synchronous lookup with no filesystem or userland helper behind it, so the
+ * call is served by completing through the caller's continuation rather than by
+ * deferring it. The continuation therefore runs before this call returns, which
+ * is the same observable order the caller sees (it waits on its own completion
+ * afterwards); a lookup miss still runs the continuation, with no firmware, as
+ * the interface's async spelling does.
+ */
+int request_firmware_nowait(struct module *module, bool uevent, const char *name,
+			    struct device *device, gfp_t gfp, void *context,
+			    void (*cont)(const struct firmware *fw, void *context))
+{
+	const struct lkpi_fw_entry *entry;
+	struct firmware *view;
+
+	(void)module;
+	(void)uevent;
+	(void)device;
+	(void)gfp;
+
+	if (name == NULL || cont == NULL)
+		return -EINVAL;
+
+	entry = lkpi_fw_registry_find(name);
+	if (entry == NULL) {
+		cont(NULL, context);
+		return 0;
+	}
+
+	view = kmalloc(sizeof(*view), GFP_KERNEL);
+	if (view == NULL)
+		return -ENOMEM;
+
+	view->size = entry->size;
+	view->data = entry->data;
+	view->priv = (void *)entry;
+
+	cont(view, context);
+
+	return 0;
+}
