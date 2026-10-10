@@ -41,6 +41,8 @@
 #include "wlan_bridge.h"
 /* the linuxkpi pool's ledger (scalars only, safe from this world) */
 #include "skbuff/skbuff_pool.h"
+/* the USB transfer ledger's one-line print (engine + adapter counters) */
+#include "wlan_ledger.h"
 
 #define WLAN_PROBE_WAIT_MS	60000U
 #define WLAN_PROBE_POLL_MS	100U
@@ -135,6 +137,17 @@ void rtw89_probe_chain(void)
 		    st.dyalloc_live, st.slot_overflow, st.data_overflow,
 		    st.alloc_fail, st.n_alloc, st.n_free);
 	}
+	/*
+	 * The USB transfer ledger: whether the receive path is submitting, whether
+	 * the controller is accepting what it submits, and whether anything is
+	 * coming back.  A path that submits but never completes shows enq climbing
+	 * with comp flat; one the backend refuses shows parks climbing; one that
+	 * never submits shows enq flat.  The adapter's stage counters say why: a
+	 * request larger than one stage slot is refused for good (ovf climbing),
+	 * which separates a driver bug from an image sized for another driver's
+	 * receive buffer.
+	 */
+	wlan_ledger_usb("probe");
 }
 
 BOARD_TEST("rtw89-probe", rtw89_probe_chain);

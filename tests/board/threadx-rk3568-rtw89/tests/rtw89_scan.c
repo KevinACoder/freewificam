@@ -32,6 +32,10 @@
 
 #include "wlan_bridge.h"
 
+/* the USB transfer ledger's one-line print: the reading that separates "the
+ * sweep heard nothing" from "the receive path never completed a transfer" */
+#include "wlan_ledger.h"
+
 /* The SSID field's maximum length (802.11-2020 clause 9.4.2.2: the element's
  * length octet, SSID at most 32 octets). The driver-visible face carries no
  * net80211 constant, so the case spells its own, as the host suite does. */
@@ -160,6 +164,14 @@ void rtw89_scan_chain(void)
 	board_log("wlan: scan done rows=%u chans=%u mgt_tx=%u rx=%u "
 	    "scan=%u/%u\n", scan_rec.rows, chans, c.mgt_tx, c.rx_frames,
 	    c.scan_starts, c.scan_completes);
+	/*
+	 * The transfer ledger, taken here because this is the moment the receive
+	 * path matters: a sweep that reports no rows with enq climbing and comp
+	 * flat never got a completion, one with ovf climbing had its transfers
+	 * refused for good (the stage slot is smaller than the driver's receive
+	 * buffer), and one with enq flat never submitted at all.
+	 */
+	wlan_ledger_usb("scan");
 
 	if (scan_rec.rows == 0) {
 		board_case_fail("the sweep finished with an empty table (the "

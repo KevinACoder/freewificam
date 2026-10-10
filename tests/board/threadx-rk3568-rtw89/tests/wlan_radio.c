@@ -28,27 +28,39 @@
 #include "log.h"
 
 #include "wlan_bridge.h"
+#include "wlan_ledger.h"
 
 /* the per-channel dwell: one beacon interval plus one probe attempt at this
  * card's rates (the sweep the board-passed case uses) */
 #define WLAN_RADIO_DWELL_MS	200U
 
+/* How often the sweep's transfer ledger is printed.  A sweep that never closes
+ * never reaches the scan case's own reading, and this is the line that says
+ * whether the receive path moved at all while the radio walked the channels. */
+#define WLAN_RADIO_LEDGER_MS	3000U
+
 static void
 wlan_radio_task(void *arg)
 {
 	unsigned int tick_accum = 0;
+	unsigned int ledger_accum = 0;
 
 	(void)arg;
 	for (;;) {
 		if (wlan_bridge_scan_pending()) {
 			osDelay(WLAN_RADIO_DWELL_MS);
 			tick_accum += WLAN_RADIO_DWELL_MS;
+			ledger_accum += WLAN_RADIO_DWELL_MS;
 			/* pending, not active: the stack may have left S_SCAN
 			 * inside the delay (a join cancelled the sweep), and
 			 * the dwell's entry check is what closes that sweep's
 			 * bookkeeping - idling here instead would strand it
 			 * and refuse every later scan_start with -EBUSY */
 			(void)wlan_bridge_scan_dwell();
+			if (ledger_accum >= WLAN_RADIO_LEDGER_MS) {
+				ledger_accum = 0;
+				wlan_ledger_usb("sweep");
+			}
 		} else {
 			osDelay(50U);
 			tick_accum += 50U;
