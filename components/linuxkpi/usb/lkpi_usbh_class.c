@@ -39,10 +39,13 @@
 
 /*
  * Guard: the mass-storage hook must never grab a wireless dongle's
- * 0bda:1a2b CD-ROM persona - the modeswitch hook owns it while it is
- * mid-flip.  What keeps the eject running is the hook order in this file
- * (the modeswitch class_info is emitted before this one); this id backstop
- * covers the case where the walk reaches this hook first anyway.
+ * 0bda:1a2b CD-ROM persona - the modeswitch helper owns it.  The guard hands
+ * the device to that helper instead of refusing it, because the order in which
+ * the class_info objects land in the section is the compiler's to choose
+ * (measured: gcc emits them in reverse declaration order), so the walk may
+ * reach this hook before the modeswitch hook.  Handing it over is also what
+ * the device needs: the flip re-enumerates it as its network personality,
+ * which the wireless hook then claims.
  */
 
 /* the landed claim (set in connect, cleared in disconnect): the rawbulk
@@ -194,7 +197,11 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 	}
 	if (lkpi_msc_id_refused(hport->device_desc.idVendor,
 	    hport->device_desc.idProduct)) {
-		return -USB_ERR_NODEV;
+		/* Not this hook's device: hand it to the modeswitch helper,
+		 * which sends the eject and does not claim it either.  The
+		 * walk's first match is not this file's to order, so the eject
+		 * is reached from whichever hook the walk picks. */
+		return lkpi_modeswitch_connect(hport, intf);
 	}
 
 	lkpi_printf("usbh: lkpi claim attempt %04x:%04x\n",
@@ -244,15 +251,14 @@ lkpi_msc_disconnect(struct usbh_hubport *hport, uint8_t intf)
  * ------------------------------------------------------------------ */
 /* the CD-ROM modeswitch hook: a wireless dongle's fake-disk persona   */
 /*                                                                     */
-/* Matched by VID/PID alone (the persona's interface triple is the      */
-/* mass-storage one, which the hook below also matches), so it MUST be  */
-/* emitted before that hook: the section walk takes the first match and */
-/* a negative connect is not a fall-through, so a mass-storage match    */
-/* ahead of this one would have its id guard reject the device and the  */
-/* eject would never run.  The connect sends the eject and returns      */
-/* negative - it never claims; the device re-enumerates as the network  */
-/* personality, which the wireless hook owns.  Behaviour and message:   */
-/* lkpi_usbh_modeswitch.c.                                              */
+/* Matched by VID/PID alone, so it catches the persona whatever its     */
+/* interface class is; the mass-storage hook below matches the same     */
+/* device by class, and its id guard hands the device here, so the      */
+/* eject runs from whichever hook the section walk reaches first (the   */
+/* order of the class_info objects is the compiler's to choose).  The   */
+/* connect sends the eject and returns negative - it never claims; the  */
+/* device re-enumerates as the network personality, which the wireless  */
+/* hook owns.  Behaviour and message: lkpi_usbh_modeswitch.c.           */
 /* ------------------------------------------------------------------ */
 
 static const struct usbh_class_driver lkpi_modeswitch_class_driver = {

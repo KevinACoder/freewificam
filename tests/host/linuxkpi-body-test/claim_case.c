@@ -439,12 +439,22 @@ lkpi_body_case_modeswitch(unsigned int *eject_bytes, int *refused)
 		return -13;
 	}
 
-	/* (4) the shared guard: the wireless hook must refuse the CD-ROM
-	 * persona, so the two hooks cannot both act on it */
+	/* (4) the shared guard: the wireless hook must not claim the CD-ROM
+	 * persona - it hands the device to the modeswitch helper, which sends
+	 * the eject.  This is the path the walk takes when the mass-storage
+	 * hook is matched before the modeswitch one, which is the order the
+	 * compiler happened to emit (measured on the board: without the
+	 * hand-over the guard's silent refusal left the dongle unflipped and
+	 * the whole bring-up stuck at the first enumeration). */
+	g_ms_out_n = 0;
+	g_ms_in_n = 0;
 	build_modeswitch_hubport(0x1a2b, 0x08, 0x06, 0x50);
 	rc = lkpi_wlan_class_info.class_driver->connect(&g_ms_hp, 0);
 	if (rc >= 0 || g_ms_hp.config.intf[0].priv != NULL) {
 		return -14;
+	}
+	if (g_ms_out_n != 1 || g_ms_in_n != 1) {
+		return -15;		/* the hand-over must reach the eject */
 	}
 
 	return 0;
