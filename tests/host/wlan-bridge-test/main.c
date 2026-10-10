@@ -1932,6 +1932,49 @@ case_b18(void)
 	return 0;
 }
 
+/*
+ * B19: the sweep's bookkeeping must not be visible before the state transition
+ * that opens the window has finished.  The dwell pump gates on
+ * wlan_bridge_scan_pending(), and the transition arms the first channel and runs
+ * that channel's probe through the whole transmit chain - on the board that is
+ * longer than one dwell period.  A flag raised before the transition therefore
+ * lets the pump dwell on a stack that has not entered its scan state; the dwell's
+ * entry check reads "the stack left the scan" and closes the sweep, so the window
+ * dies before it opens - the intermittent `chans=0 entered=0` sweep measured on
+ * both driver lines.
+ *
+ * The observation point is the driver's channel config, which the bridge calls
+ * from inside the transition (configure-then-use): the fake records whether the
+ * flag was up while it ran.
+ */
+static int
+case_b19(void)
+{
+	const struct fake_driver_state *st;
+
+	/* a sweep from an earlier case may still be in flight; drain it, then scope
+	 * the observation to the one scan_start below (a walk's own transition
+	 * legitimately runs with a sweep in flight) */
+	while (wlan_bridge_scan_pending()) {
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+	fake_driver_reset_pending_probe();
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B19", 0, "the sweep did not start");
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->pending_seen_in_tx) {
+		case_line("B19", 0, "the sweep's bookkeeping was already visible "
+		    "while the opening transition transmitted its first probe");
+		return -1;
+	}
+	case_line("B19", 1, "the sweep's bookkeeping is raised only after the "
+	    "transition that opens the window has finished");
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -2077,9 +2120,10 @@ run_suite(void)
 	(void)case_b16();
 	(void)case_b17();
 	(void)case_b18();
+	(void)case_b19();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=18\n");
+		printf("WLANBRIDGE: SUITE PASS cases=19\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);

@@ -70,6 +70,10 @@ struct fake_driver_state {
 	unsigned int start_calls;
 	unsigned int stop_calls;
 
+	/* the sweep's bookkeeping was visible while a probe was transmitted from
+	 * inside a state transition (it must not be: see fake_tx) */
+	int pending_seen_in_tx;
+
 	unsigned int filter_completes;	/* clears (bit went back to zero) */
 	uint32_t filter_changed;
 	uint32_t filter_total;
@@ -121,6 +125,8 @@ struct fake_driver_state {
 const struct ieee80211_ops *fake_driver_ops(void);
 void	fake_driver_reset(void);
 const struct fake_driver_state *fake_driver_state(void);
+/* clear the sweep-bookkeeping observation (the case scopes it to one call) */
+void	fake_driver_reset_pending_probe(void);
 void	fake_driver_knob_filter_refuses(int on);
 void	fake_driver_knob_double_free_tx(unsigned int nth);
 

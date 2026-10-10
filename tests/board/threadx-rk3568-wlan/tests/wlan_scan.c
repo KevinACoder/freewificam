@@ -157,9 +157,30 @@ void wlan_scan_chain(void)
 	scan_rec.gt_matches = 0;
 	(void)wlan_bridge_scan_walk(scan_row, NULL);
 	wlan_bridge_stats(&c);
+	/*
+	 * The sweep's own verdict: how many candidates the table held, how many
+	 * dwell periods the case watched, and - the part that names a zero-length
+	 * window - the stack state at the end, whether the sweep ever reached
+	 * S_SCAN, and how it closed.  `chans=0` with `entered=0` is a sweep that
+	 * never opened; `chans=0` with `close=state` is one the stack left before
+	 * the case could watch it.
+	 */
 	board_log("wlan: scan done rows=%u chans=%u mgt_tx=%u rx=%u "
-	    "scan=%u/%u\n", scan_rec.rows, chans, c.mgt_tx, c.rx_frames,
-	    c.scan_starts, c.scan_completes);
+	    "scan=%u/%u state=%d entered=%u close=%u\n", scan_rec.rows, chans,
+	    c.mgt_tx, c.rx_frames, c.scan_starts, c.scan_completes,
+	    wlan_bridge_state(), c.scan_entered, c.scan_close);
+	/*
+	 * What the frames were, and what the stack did with them: beacons and
+	 * probe responses counted apart from everything else, and the stack's own
+	 * discard reasons.  An empty table with beacons arriving and no FCS flags
+	 * points at the stack's channel check rather than at the radio; an empty
+	 * table with `chanmismatch` climbing names that check outright, one with
+	 * `mgtdiscard` climbing says the frames arrived with no scan window up.
+	 */
+	board_log("wlan: scan rx bcn=%u bcnT=%u prsp=%u fcs=%u chmis=%u "
+	    "badchan=%u badbint=%u mgtdisc=%u wrongbss=%u\n", c.rx_beacon,
+	    c.rx_beacon_tgt, c.rx_probersp, c.rx_fcs_bad, c.rx_chanmismatch,
+	    c.rx_badchan, c.rx_badbintval, c.rx_mgtdiscard, c.rx_wrongbss);
 
 	if (scan_rec.rows == 0) {
 		board_case_fail("the sweep finished with an empty table (the "

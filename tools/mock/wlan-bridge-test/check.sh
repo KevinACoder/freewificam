@@ -35,8 +35,8 @@ case_line() {
 
 if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^WLANBRIDGE: B[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 18 ] &&
-        grep -q '^WLANBRIDGE: SUITE PASS cases=18$' "$log_dir/stream.log" &&
+    if [ "$pass" = 19 ] &&
+        grep -q '^WLANBRIDGE: SUITE PASS cases=19$' "$log_dir/stream.log" &&
         ! grep -q '^WLANBRIDGE: B[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line attach-chain PASS
         case_line scan-order-and-walk PASS
@@ -56,17 +56,20 @@ if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line rx-status-flags PASS
         case_line tx-headroom PASS
         case_line rx-channel PASS
+        case_line sweep-window-not-visible-early PASS
     else
         case_line attach-chain FAIL
         case_line tx-headroom FAIL
         case_line rx-channel FAIL
-        echo "wlan-bridge-test: the run did not report eighteen passing cases ($pass)" >&2
+        case_line sweep-window-not-visible-early FAIL
+        echo "wlan-bridge-test: the run did not report nineteen passing cases ($pass)" >&2
         grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -12 >&2 || true
     fi
 else
     case_line attach-chain FAIL
     case_line tx-headroom FAIL
     case_line rx-channel FAIL
+    case_line sweep-window-not-visible-early FAIL
     echo "wlan-bridge-test: the run failed, see $log_dir/stream.log" >&2
     grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -8 >&2 || true
 fi
@@ -173,6 +176,42 @@ else
     case_line rx-channel-red-control FAIL
     echo "wlan-bridge-test: the mutated bridge did not build" >&2
     tail -5 "$log_dir/rxmut-build.log" >&2 || true
+fi
+
+# ---- the sweep-window ordering red control ------------------------------------
+
+# The sweep's bookkeeping flag must not go up until the state transition that
+# opens the window has finished, because the dwell pump gates on it and the
+# transition can outlast a dwell period. The control builds the chain against a
+# copy of the bridge that raises the flag before the transition (the ordering
+# this case exists to forbid) and requires the case to fail. Without it, "the
+# window is not visible early" would be a claim no implementation could
+# contradict.
+ordmut=$log_dir/mutated-bridge-order
+rm -rf "$ordmut"
+mkdir -p "$ordmut"
+sed 's/bridge\.scan_starts++;/bridge.scanning = 1; bridge.scan_starts++;/' \
+    "$root/ports/net80211/bridge/wlan_bridge.c" > "$ordmut/wlan_bridge.c"
+if grep -q 'bridge.scanning = 1; bridge.scan_starts++;' "$ordmut/wlan_bridge.c" &&
+    make -C "$root/tests/host/wlan-bridge-test" \
+        BRIDGE_SRC="$ordmut/wlan_bridge.c" \
+        BUILD_DIR="$ordmut/build" > "$log_dir/ordmut-build.log" 2>&1; then
+    if timeout -k 5 180 "$ordmut/build/wlan-bridge-test" > "$log_dir/ordmut-run.log" 2>&1; then
+        case_line sweep-window-red-control FAIL
+        echo "wlan-bridge-test: the early-flag bridge passed (it must fail)" >&2
+    else
+        if grep -q '^WLANBRIDGE: B19 FAIL' "$log_dir/ordmut-run.log"; then
+            case_line sweep-window-red-control PASS
+        else
+            case_line sweep-window-red-control FAIL
+            echo "wlan-bridge-test: the ordering control failed elsewhere" >&2
+            grep '^WLANBRIDGE' "$log_dir/ordmut-run.log" | tail -6 >&2 || true
+        fi
+    fi
+else
+    case_line sweep-window-red-control FAIL
+    echo "wlan-bridge-test: the early-flag bridge did not build" >&2
+    tail -5 "$log_dir/ordmut-build.log" >&2 || true
 fi
 
 exit "$failures"

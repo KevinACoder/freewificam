@@ -34,6 +34,11 @@
 
 #include "fake_driver.h"
 
+/* the bridge's sweep-bookkeeping read, declared here as the suite declares the
+ * other bridge entries it reaches (this file is the linuxkpi world and must not
+ * pull the net80211-world header) */
+int	wlan_bridge_scan_pending(void);
+
 /* ------------------------------------------------------------------ */
 /* the recorder                                                        */
 /* ------------------------------------------------------------------ */
@@ -52,6 +57,16 @@ fake_driver_state(void)
 {
 
 	return &fake;
+}
+
+/* the sweep-bookkeeping observation is sticky, so a case that wants it scoped to
+ * one call clears it first (a walk's own transition legitimately runs with a
+ * sweep in flight; only the scan-start transition must not) */
+void
+fake_driver_reset_pending_probe(void)
+{
+
+	fake.pending_seen_in_tx = 0;
 }
 
 void
@@ -130,6 +145,15 @@ fake_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 
 	(void)radio_idx;
 	fake.config_calls++;
+	/*
+	 * The channel config runs inside the stack's state transition (the bridge
+	 * points the radio at the channel it is about to use, before the stack's
+	 * own handler).  That makes this callback the one place the rest of the
+	 * system can be observed *during* a scan start - which is what the sweep's
+	 * bookkeeping flag must not be visible from yet: the dwell pump gates on
+	 * that flag, and a flag raised before the transition lets the pump close a
+	 * sweep whose window has not opened.
+	 */
 	if (changed & IEEE80211_CONF_CHANGE_CHANNEL) {
 		if (hw->conf.chandef.chan != NULL) {
 			fake.last_freq = hw->conf.chandef.chan->center_freq;
@@ -258,6 +282,17 @@ fake_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 
 	(void)control;
 	fake.tx_calls++;
+	/*
+	 * The probe a scan start builds is transmitted from inside the state
+	 * transition that opens the window (the sweep's first channel is armed and
+	 * probed inside it), which makes this the one place the rest of the system
+	 * can be observed *during* that transition - and the sweep's bookkeeping
+	 * flag must not be visible from there yet: the dwell pump gates on it, and
+	 * a flag raised before the transition lets the pump close a sweep whose
+	 * window has not opened.
+	 */
+	if (wlan_bridge_scan_pending())
+		fake.pending_seen_in_tx = 1;
 	/* the headroom the frame arrived with: a driver's descriptor push depends on
 	 * it, and the bridge owes it per frame (see FAKE_DRIVER_TX_HEADROOM) */
 	{
