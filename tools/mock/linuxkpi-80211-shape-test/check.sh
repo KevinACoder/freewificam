@@ -168,4 +168,38 @@ else
     tail -5 "$log_dir/mutated-stalink-build.log" >&2 || true
 fi
 
+# The station's spatial-stream count floor: a driver that encodes it as n-1
+# turns a zero into the maximum instead of the minimum (rtw89 phy.c:482 into
+# a 3-bit field = 7 on a 1T1R chip).  The control builds the harness against
+# a substitute that leaves rx_nss zero; the station-default-link case must
+# then fail.
+mut4=$log_dir/mutated-nss
+rm -rf "$mut4"
+mkdir -p "$mut4"
+sed 's/sta->deflink.rx_nss = 1;/;/' \
+    "$root/components/linuxkpi/linuxkpi_80211.c" > "$mut4/linuxkpi_80211.c"
+if grep -q 'sta->deflink.rx_nss = 1;' "$mut4/linuxkpi_80211.c"; then
+    case_line sta-nss-red-control FAIL
+    echo "linuxkpi-80211-shape-test: the rx_nss mutation did not apply" >&2
+elif make -C "$root/tests/host/linuxkpi-80211-shape-test" \
+        ENGINE_EXTRA_SRC="$mut4/linuxkpi_80211.c" \
+        BUILD_DIR="$mut4/build" > "$log_dir/mutated-nss-build.log" 2>&1; then
+    if timeout -k 5 120 "$mut4/build/linuxkpi-80211-shape-test" > "$log_dir/mutated-nss-run.log" 2>&1; then
+        case_line sta-nss-red-control FAIL
+        echo "linuxkpi-80211-shape-test: the zero-nss substitute passed (it must fail)" >&2
+    else
+        if grep -q '^SHAPE: station-default-link FAIL' "$log_dir/mutated-nss-run.log"; then
+            case_line sta-nss-red-control PASS
+        else
+            case_line sta-nss-red-control FAIL
+            echo "linuxkpi-80211-shape-test: the rx_nss red control failed elsewhere" >&2
+            grep '^SHAPE: ' "$log_dir/mutated-nss-run.log" >&2 || true
+        fi
+    fi
+else
+    case_line sta-nss-red-control FAIL
+    echo "linuxkpi-80211-shape-test: the mutated substitute did not build" >&2
+    tail -5 "$log_dir/mutated-nss-build.log" >&2 || true
+fi
+
 exit "$failures"

@@ -1075,6 +1075,23 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	sta->deflink.link_id = 0;
 	sta->link[0] = &sta->deflink;
 	/*
+	 * The station's spatial-stream count, never below one: upstream's
+	 * ieee80211_sta_init_nss_bw_capa ends with `max_t(u8, 1, rx_nss)`
+	 * (net/mac80211/sta_info.c:3600), and every driver reads the number as
+	 * "at least a single stream is available".  Left zero, a driver that
+	 * feeds it into an N-1 encoding underflows: rtw89's rate-adaptation
+	 * setup computes min(link_sta->rx_nss, hal.tx_nss) - 1 (phy.c:482)
+	 * and stores it in a 3-bit field, so zero becomes 7 (core.h:4515) -
+	 * a spatial-stream count no 1T1R chip can honor, in the RA table the
+	 * firmware uses to pick data rates.  Management frames keep their
+	 * forced basic rates and flow; data frames (the 4-way handshake's
+	 * message 2, DHCP) go out with a rate configuration the firmware can
+	 * not realize, which matches the board's split exactly (messages 1 of
+	 * 4 received, our message 2 sent through USB without an accepted
+	 * answer).
+	 */
+	sta->deflink.rx_nss = 1;
+	/*
 	 * The station's per-TID txqs, before the driver hears about the station:
 	 * its station setup walks them to initialize the driver-private queue
 	 * state (rtw89 mac80211.c:516-517).  Index IEEE80211_NUM_TIDS (the

@@ -709,16 +709,22 @@ case_station_default_link(void)
 	 * record dereferences sta->link[link_id] and gives up on a NULL -
 	 * rtw89's association handler reads it to build its CMAC table
 	 * ("cannot find exact link_sta for link_id 0" on the board, after which
-	 * the chip sent data frames the AP never answered).
+	 * the chip sent data frames the AP never answered).  The link's
+	 * spatial-stream count is at least one, the floor upstream settles on
+	 * (net/mac80211/sta_info.c:3600 `max_t(u8, 1, rx_nss)`): a driver that
+	 * encodes it as n-1 turns a zero into the maximum instead of the
+	 * minimum (rtw89 phy.c:482 into a 3-bit field), so the RA table the
+	 * firmware rate-picks from becomes one no single-stream chip can honor.
 	 */
 	ok = sta->link[0] == &sta->deflink &&
 	    sta->deflink.sta == sta &&
 	    sta->deflink.link_id == 0 &&
-	    memcmp(sta->deflink.addr, g_ap, 6) == 0;
+	    memcmp(sta->deflink.addr, g_ap, 6) == 0 &&
+	    sta->deflink.rx_nss >= 1;
 	case_line("station-default-link", ok,
-	    "link0=%u deflink=%u id=%u addr=%02x:%02x:%02x:%02x:%02x:%02x",
+	    "link0=%u deflink=%u id=%u nss=%u addr=%02x:%02x:%02x:%02x:%02x:%02x",
 	    sta->link[0] == &sta->deflink, sta->deflink.sta == sta,
-	    sta->deflink.link_id,
+	    sta->deflink.link_id, sta->deflink.rx_nss,
 	    sta->deflink.addr[0], sta->deflink.addr[1], sta->deflink.addr[2],
 	    sta->deflink.addr[3], sta->deflink.addr[4], sta->deflink.addr[5]);
 	lkpi80211_drv_sta_remove(hw, vif, sta);
