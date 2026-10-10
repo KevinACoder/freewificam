@@ -42,9 +42,17 @@
 /* the target AP (QiQiJia on channel 1), the same row rtw89-scan matches */
 static const uint8_t join_raw_target[6] = { 0x14, 0xa3, 0x2f, 0x18, 0x07, 0x2c };
 
-/* the radio pump's dwell period and the ceiling the sweep loop watches */
+/* the radio pump's dwell period and the ceiling the sweep loop watches.
+ * The walk's own pacing is invisible from here: a chip-side register stall
+ * can stretch one channel's dwell by seconds (measured 2026-10-10: a c2h
+ * timeout held the walk ~2.3 s and pushed the sweep past a 32-dwell
+ * ceiling), and a join attempted while the walk is still on the air is
+ * aborted by the walk's own channel transitions (state AUTH -> SCAN within
+ * 100 ms, measured) - and then the chip delivers no further receives at all
+ * (rx frozen for the rest of that boot). 150 dwells = 30 s is the outer
+ * bound; past it the case fails named rather than joining mid-walk. */
 #define JOIN_RAW_DWELL_MS	200U
-#define JOIN_RAW_MAX_CHANS	32U
+#define JOIN_RAW_MAX_CHANS	150U
 /* a healthy driver answers in milliseconds (the rtl8xxxu line: 9 ms); this is
  * the ceiling above which the join is judged slow, not merely late */
 #define JOIN_RAW_PROMPT_MS	3000U
@@ -112,6 +120,12 @@ join_raw_fill_table(void)
 	while (wlan_bridge_scan_active() && chans < JOIN_RAW_MAX_CHANS) {
 		osDelay(JOIN_RAW_DWELL_MS);
 		chans++;
+	}
+	if (wlan_bridge_scan_active()) {
+		board_log("wlan: join-raw sweep did not close within %u dwells; "
+		    "the join is refused (a mid-walk join is aborted by the walk "
+		    "and stalls the chip's receive path)\n", chans);
+		return -2;
 	}
 	join_raw_rows = 0;
 	(void)wlan_bridge_scan_walk(join_raw_row, NULL);
@@ -187,8 +201,8 @@ void rtw89_join_raw_chain(void)
 	}
 
 	if (join_raw_fill_table() != 0) {
-		board_case_fail("the sweep recorded no candidate for the raw "
-		    "join (the table is empty)");
+		board_case_fail("the fill sweep did not produce a usable table "
+		    "(see the join-raw line above)");
 		return;
 	}
 
@@ -217,7 +231,8 @@ void rtw89_join_raw_chain(void)
 	wlan_bridge_disconnect(3);
 	osDelay(1000);
 	if (join_raw_fill_table() != 0) {
-		board_case_fail("the second sweep recorded no candidate");
+		board_case_fail("the second fill sweep did not produce a "
+		    "usable table (see the join-raw line above)");
 		return;
 	}
 	(void)wlan_bridge_filter_promisc(1);
