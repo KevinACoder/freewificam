@@ -36,6 +36,7 @@
 #include <linux/etherdevice.h>
 
 #include "linuxkpi_80211.h"
+#include "lkpi_rxtrace.h"
 
 /* ------------------------------------------------------------------ */
 /* work and delivery                                                   */
@@ -109,6 +110,12 @@ ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
 		lkpi80211_rx_fc_seen = true;
 		lkpi80211_rx_first_fc = skb->data[0];
 	}
+	/*
+	 * The receive boundary's delivery record, taken before the FCS trim
+	 * below so the recorded length is what the driver handed up (the
+	 * trace's own reading is in lkpi_rxtrace.h).
+	 */
+	lkpi_rxtrace_delivery(skb);
 	/*
 	 * A driver that leaves the FCS on the frames it hands up says so once, at
 	 * probe (IEEE80211_HW_RX_INCLUDES_FCS; rtw89 sets it at core.c:7497), and

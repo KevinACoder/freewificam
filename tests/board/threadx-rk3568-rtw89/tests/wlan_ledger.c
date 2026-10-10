@@ -14,6 +14,7 @@
 
 #include "linuxkpi_80211.h"
 #include "linuxkpi_usb.h"
+#include "lkpi_rxtrace.h"
 #include "ports/cherryusb/lkpi_usb_cherryusb.h"
 
 void
@@ -39,13 +40,44 @@ wlan_ledger_usb(const char *tag)
 	 * what arrived is even a frame.
 	 */
 	board_log("wlan: %s usb ep=%u enq=%u kick=%u comp=%u park=%u/%u qlen=%u "
-	    "inf=%u pkd=%u | chu sub=%u comp=%u stg=%u ovf=%u sex=%u aex=%u "
+	    "inf=%u pkd=%u err=%u | chu sub=%u comp=%u stg=%u ovf=%u sex=%u aex=%u "
 	    "sz=%u | mac80211 rx=%u fc=%s%02x\n",
 	    tag, es.eps, es.enqueued, es.kicks, es.completions, es.parks,
-	    es.resumes, es.qlen, es.in_flight, es.parked_now,
+	    es.resumes, es.qlen, es.in_flight, es.parked_now, es.errors,
 	    cs.submits, cs.completed, cs.stage_staged, cs.stage_overflow,
 	    cs.stage_exhausted, cs.slots_exhausted, cs.stage_size,
 	    rx_frames, rx_fc_seen ? "0x" : "(none)", rx_fc_seen ? rx_fc : 0u);
+	/*
+	 * The receive boundary trace's counters: completions against deliveries
+	 * is the transport-to-stack funnel's shape, anomalies names how many
+	 * frames the trace itself flagged, dumps how many snapshots were taken
+	 * (bounded to three; a fault before any dump means the anomaly classes
+	 * never saw it).
+	 */
+	{
+		u32 rt_c, rt_d, rt_a, rt_dm;
+
+		lkpi_rxtrace_stats(&rt_c, &rt_d, &rt_a, &rt_dm);
+		board_log("wlan: %s rxtrace comp=%u deliv=%u anom=%u dumps=%u\n",
+		    tag, rt_c, rt_d, rt_a, rt_dm);
+		if (rt_a != 0) {
+			u32 a_len, a_ptr;
+			u8 a_head[16];
+			int a_st;
+
+			if (lkpi_rxtrace_first_anom(&a_len, &a_ptr, &a_st,
+			    a_head) != 0)
+				board_log("wlan: %s anom1 len=%u ptr=%08x fcs=%d "
+				    "head=%02x%02x%02x%02x %02x%02x%02x%02x "
+				    "%02x%02x%02x%02x %02x%02x%02x%02x\n",
+				    tag, a_len, a_ptr, a_st,
+				    a_head[0], a_head[1], a_head[2], a_head[3],
+				    a_head[4], a_head[5], a_head[6], a_head[7],
+				    a_head[8], a_head[9], a_head[10], a_head[11],
+				    a_head[12], a_head[13], a_head[14],
+				    a_head[15]);
+		}
+	}
 	/*
 	 * Per endpoint, and only the ones that carried traffic: the totals hide
 	 * which endpoint is stuck - a receive endpoint that never completes looks
@@ -60,11 +92,11 @@ wlan_ledger_usb(const char *tag)
 		if (s.enqueued == 0)
 			continue;
 		board_log("wlan: %s ep[%u] addr=0x%02x qlen=%u inf=%u pkd=%u "
-		    "enq=%u kick=%u comp=%u park=%u/%u last_in=%u:"
+		    "enq=%u kick=%u comp=%u err=%u park=%u/%u last_in=%u:"
 		    "%08x %08x %08x %08x %08x %08x\n",
 		    tag, s.index, s.ep_addr, s.qlen, s.in_flight, s.parked,
-		    s.enqueued, s.kicks, s.completions, s.parks, s.resumes,
-		    s.last_in_len, s.last_in_words[0], s.last_in_words[1],
+		    s.enqueued, s.kicks, s.completions, s.errors, s.parks,
+		    s.resumes, s.last_in_len, s.last_in_words[0], s.last_in_words[1],
 		    s.last_in_words[2], s.last_in_words[3], s.last_in_words[4],
 		    s.last_in_words[5]);
 	}

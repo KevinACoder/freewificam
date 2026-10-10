@@ -90,6 +90,7 @@ struct lkpi_usb_engine_stats {
 	unsigned int	parked_now;	/* endpoints parked at report time */
 	unsigned int	in_flight;	/* endpoints with a transfer in flight */
 	unsigned int	qlen;		/* urbs queued behind the in-flight one */
+	unsigned int	errors;		/* error completions, summed */
 };
 
 struct lkpi_usb_ep_stats {
@@ -104,6 +105,10 @@ struct lkpi_usb_ep_stats {
 	unsigned int	kills;
 	unsigned int	parks;
 	unsigned int	resumes;
+	/* error completions (status != 0) this endpoint saw: a transfer the
+	 * driver's callback may treat as a reason to retire a buffer rather
+	 * than re-arm it */
+	unsigned int	errors;
 	/* the first six words of this endpoint's most recent successful IN
 	 * completion, and its length (0 when none): for a receive endpoint those
 	 * words are the descriptor the driver's dispatcher reads */

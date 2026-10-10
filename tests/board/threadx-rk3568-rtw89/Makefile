@@ -164,6 +164,7 @@ TX_CFLAGS += $(CMSIS2_CFLAGS)
 WLAN_KPI_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
 	$(SKB_POOL_CFLAGS) $(USB_STAGE_CFLAGS) \
+	-DCONFIG_LKPI_RXTRACE \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-I$(ROOT) -I$(LKPI) -I$(LKPI)/include \
 	-I$(LKPI)/usb -I$(NET) -I$(NPORT) -I$(NPORT)/bridge
@@ -376,6 +377,7 @@ LKPI_SRCS := \
 	$(LKPI)/linuxkpi_platform_target.c \
 	$(LKPI)/linuxkpi_80211.c \
 	$(LKPI)/linuxkpi_80211_helpers.c \
+	$(LKPI)/lkpi_rxtrace.c \
 	$(LKPI)/linuxkpi_wiphy_work.c \
 	$(LKPI)/linuxkpi_txq.c \
 	$(LKPI)/fw_registry.c \

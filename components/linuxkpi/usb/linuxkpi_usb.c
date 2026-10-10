@@ -38,6 +38,7 @@
 #include <linux/usb.h>
 #include "lkpi_usb_backend.h"
 #include "linuxkpi_usb.h"
+#include "lkpi_rxtrace.h"
 
 /* ------------------------------------------------------------------ */
 /* DMA staging hook (passthrough)                                      */
@@ -230,6 +231,11 @@ struct lkpi_usb_ep {
 	 * lkpi_usb_retry_parked). */
 	bool			parked;
 	u32			enqueued, completions, kicks, kills, parks, resumes;
+	/* error completions this endpoint saw (status != 0).  The driver above
+	 * may silently retire a buffer on a nonzero completion - rtw89's RX
+	 * path re-posts only on status == 0 - so this count is what separates
+	 * "the endpoint is idle" from "the endpoint is shedding transfers". */
+	u32			errors;
 	/* the first six words of the most recent successful IN completion, and its
 	 * length: for a driver that receives reports and frames on one bulk-in
 	 * endpoint those words ARE the receive descriptor (type, length, flags,
@@ -428,6 +434,8 @@ lkpi_usb_be_complete(void *arg, int nbytes)
 	st = raw_err != 0 ? lkpi_usb_errno((int)raw_err) : 0;
 	ep->cur = NULL;
 	ep->completions++;
+	if (st != 0)
+		ep->errors++;
 	urb->_qstate = LKPI_Q_DONE;
 	ep->done_urb = urb;
 	ep->done_status = st;
@@ -501,6 +509,19 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	 * data in place), so only an over-long report needs clamping */
 	urb->status = st;
 	urb->actual_length = len;
+#ifdef CONFIG_LKPI_RXTRACE
+	/*
+	 * The receive boundary's completion record: what the transport says it
+	 * delivered, taken before the driver's callback can parse it and before
+	 * the over-length clamp below rewrites the urb.  Non-ep0 traffic only
+	 * (the control endpoint's polling would flush every interesting record
+	 * out of a 32-entry ring); an errored completion records regardless
+	 * since it is itself a finding.
+	 */
+	if (ep->ep_addr != 0 && (usb_pipein(urb->pipe) || st != 0))
+		lkpi_rxtrace_completion(ep->ep_addr, st, len,
+		    urb->transfer_buffer);
+#endif
 	if (urb->status == 0 && usb_pipein(urb->pipe) &&
 	    urb->transfer_buffer != NULL && len >= sizeof(ep->last_in_words) &&
 	    urb->transfer_buffer_length >= sizeof(ep->last_in_words)) {
@@ -862,6 +883,7 @@ lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out)
 	out->kills = ep->kills;
 	out->parks = ep->parks;
 	out->resumes = ep->resumes;
+	out->errors = ep->errors;
 	memcpy(out->last_in_words, ep->last_in_words, sizeof(out->last_in_words));
 	out->last_in_len = ep->last_in_len;
 	spin_unlock_irqrestore(&ep->lock, flags);
@@ -888,6 +910,7 @@ lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
 		out->kills += s.kills;
 		out->parks += s.parks;
 		out->resumes += s.resumes;
+		out->errors += s.errors;
 		out->parked_now += s.parked;
 		out->in_flight += s.in_flight;
 		out->qlen += s.qlen;
