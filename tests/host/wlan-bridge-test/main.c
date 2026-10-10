@@ -1736,6 +1736,53 @@ case_b16(void)
 	return 0;
 }
 
+/*
+ * B17: the headroom the driver's transmit path depends on. A driver declares
+ * hw->extra_tx_headroom at registration and builds its transmit descriptor by
+ * pushing it onto the frame in front of the payload (rtw89 pushes 48 bytes: its
+ * txwd body plus the info word, usb.c:415-421, against a declared 52 at
+ * core.c:7481). mac80211 reserves that much room on every frame it hands the
+ * driver; the bridge owes the driver the same, and without it the push is
+ * refused at the pool's headroom guard - at the far end of the frame path, where
+ * the symptom is a transmit that silently does not happen. The double declares
+ * the headroom (fake_add_interface) and records what the frames arrived with.
+ */
+static int
+case_b17(void)
+{
+	const struct fake_driver_state *st;
+	unsigned int probes_before = count_ssid_probes();
+
+	/* a sweep is the cheapest way to make the bridge hand the driver a fresh
+	 * batch of frames under this case's own eyes */
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B17", 0, "the sweep did not start");
+		return -1;
+	}
+	run_one_sweep();
+	if (count_ssid_probes() == probes_before) {
+		case_line("B17", 0, "the sweep transmitted nothing to check");
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->tx_headroom_bad != 0) {
+		case_line("B17", 0, "%u of %u frames carried less headroom than the "
+		    "driver declared (%u bytes)", st->tx_headroom_bad, st->tx_count,
+		    FAKE_DRIVER_TX_HEADROOM);
+		return -1;
+	}
+	if (st->tx_headroom_min < FAKE_DRIVER_TX_HEADROOM) {
+		case_line("B17", 0, "the smallest headroom seen was %u bytes, below "
+		    "the driver's declared %u", st->tx_headroom_min,
+		    FAKE_DRIVER_TX_HEADROOM);
+		return -1;
+	}
+	case_line("B17", 1, "every one of the %u frames carried at least the "
+	    "driver's %u bytes of headroom (smallest %u)", st->tx_count,
+	    FAKE_DRIVER_TX_HEADROOM, st->tx_headroom_min);
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -1879,9 +1926,10 @@ run_suite(void)
 	 * unaffected by the state the cases above leave behind */
 	(void)case_b15();
 	(void)case_b16();
+	(void)case_b17();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=16\n");
+		printf("WLANBRIDGE: SUITE PASS cases=17\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);

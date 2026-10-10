@@ -34,7 +34,7 @@ CMM   := $(ROOT)/third-party/CMSIS_6
 ADAPT := $(ROOT)/third-party/CMSIS-FreeRTOS
 TX    := $(ROOT)/third-party/threadx
 
-BUILD_DIR := $(MAKEFILE_DIR)/build
+BUILD_DIR ?= $(MAKEFILE_DIR)/build
 BIN := $(BUILD_DIR)/wlan-bridge-test
 
 CC ?= cc
@@ -129,6 +129,12 @@ PORT_SRCS := \
 # bridge's driver half, and this suite's scripted driver
 POOL_SRC := $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c
 
+# The bridge's driver half.  A red control substitutes a mutated copy of this one
+# file (the same shape the txq suite's round-guard control uses), so it is a knob
+# rather than a fixed path; everything else in the chain stays the production
+# translation unit.
+SEAM_ADAPTER_SRC ?= $(PORT)/bridge/wlan_seam_adapter.c
+
 KPI_SRCS := \
     $(ROOT)/components/linuxkpi/linuxkpi_core.c \
     $(ROOT)/components/linuxkpi/linuxkpi_80211.c \
@@ -137,7 +143,7 @@ KPI_SRCS := \
     $(ROOT)/components/linuxkpi/linuxkpi_txq.c \
     $(ROOT)/components/linuxkpi/fw_registry.c \
     $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
-    $(PORT)/bridge/wlan_seam_adapter.c \
+    $(SEAM_ADAPTER_SRC) \
     $(MAKEFILE_DIR)/fake_driver.c \
     $(MAKEFILE_DIR)/lkpi_platform_host.c
 

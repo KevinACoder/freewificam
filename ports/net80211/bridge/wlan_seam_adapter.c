@@ -168,6 +168,7 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	struct sk_buff *skb;
 	unsigned char *p;
 	struct ieee80211_tx_info *info;
+	unsigned int headroom;
 
 	(void)drv;
 	if (adapter.hw == NULL || frame == NULL || len == 0)
@@ -175,13 +176,20 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	/*
 	 * The driver's tx path expects a socket buffer whose control block it
 	 * fills (the rate keys, the AC, the key) and whose headroom has room for
-	 * its own transmit descriptor - it pushes that on and checks the
-	 * headroom itself (core.c:5477/:5506). The pool's dev allocation
-	 * reserves the headroom Linux promises for exactly this.
+	 * its own transmit descriptor - it pushes that on and checks the headroom
+	 * itself (core.c:5477/:5506). That headroom is a promise mac80211 makes
+	 * to every driver: each frame handed to the driver's tx op carries
+	 * hw->extra_tx_headroom bytes, a number the driver declares when it
+	 * registers (rtw89: IEEE80211_HT_CTL_LEN + its txwd body and info = 52).
+	 * Reserve it the way mac80211 does - allocate the frame plus the headroom,
+	 * then move the data pointer past it - so the driver's descriptor push
+	 * always fits instead of being refused at the pool's headroom guard.
 	 */
-	skb = lkpi_dev_alloc_skb((unsigned int)len, GFP_ATOMIC);
+	headroom = adapter.hw->extra_tx_headroom;
+	skb = lkpi_dev_alloc_skb((unsigned int)len + headroom, GFP_ATOMIC);
 	if (skb == NULL)
 		return -1;
+	lkpi_skb_reserve(skb, headroom);
 	p = lkpi_skb_put(skb, (unsigned int)len);
 	memcpy(p, frame, len);
 

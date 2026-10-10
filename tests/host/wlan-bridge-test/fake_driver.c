@@ -112,7 +112,12 @@ static int
 fake_add_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 {
 
-	(void)hw;
+	/*
+	 * A driver declares its transmit-descriptor headroom before it is handed
+	 * frames, the way a real one does at registration (rtw89: core.c:7481).
+	 * The bridge reads this field when it builds each frame.
+	 */
+	hw->extra_tx_headroom = FAKE_DRIVER_TX_HEADROOM;
 	(void)vif;
 	fake.add_interface_calls++;
 	order_add(FAKE_CALL_ADD_INTERFACE);
@@ -253,6 +258,16 @@ fake_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 
 	(void)control;
 	fake.tx_calls++;
+	/* the headroom the frame arrived with: a driver's descriptor push depends on
+	 * it, and the bridge owes it per frame (see FAKE_DRIVER_TX_HEADROOM) */
+	{
+		unsigned int hr = skb_headroom(skb);
+
+		if (fake.tx_calls == 1 || hr < fake.tx_headroom_min)
+			fake.tx_headroom_min = hr;
+		if (hr < hw->extra_tx_headroom)
+			fake.tx_headroom_bad++;
+	}
 	if (skb->len >= 1 &&
 	    (skb->data[0] & IEEE80211_FCTL_FTYPE) == IEEE80211_FTYPE_MGMT)
 		fake.tx_mgmt_calls++;

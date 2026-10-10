@@ -945,6 +945,31 @@ lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	return LKPI80211_CTX(hw)->ops->set_key(hw, cmd, vif, sta, key);
 }
 
+/*
+ * The headroom promise, checked where it is owed. Every frame handed to a
+ * driver's tx op must carry hw->extra_tx_headroom bytes of headroom: that is
+ * what mac80211 reserves per frame before the driver's tx runs
+ * (net/mac80211/driver-ops.c:drv_tx over what ieee80211_alloc_tx_skb reserved).
+ * A frame that arrives without it fails much later and much less legibly - the
+ * driver's descriptor push is refused at the pool's headroom guard, at the far
+ * end of the frame path - so the shortfall is named here once, at the near end,
+ * with both numbers.
+ */
+static void
+lkpi80211_tx_headroom_check(struct ieee80211_hw *hw, struct sk_buff *skb)
+{
+	static int latched;
+
+	if (latched || hw->extra_tx_headroom == 0)
+		return;
+	if (skb_headroom(skb) >= hw->extra_tx_headroom)
+		return;
+	latched = 1;
+	lkpi_printf("lkpi80211: tx frame has %u bytes of headroom, the driver "
+	    "declared %u (its transmit descriptor push will be refused)\n",
+	    skb_headroom(skb), hw->extra_tx_headroom);
+}
+
 void
 lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
     struct ieee80211_sta *sta, struct sk_buff *skb)
@@ -959,6 +984,7 @@ lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		lkpi_skb_free(skb);
 		return;
 	}
+	lkpi80211_tx_headroom_check(hw, skb);
 	control.sta = sta;
 	(void)vif;
 	ctx->ops->tx(hw, &control, skb);

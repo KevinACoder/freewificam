@@ -30,6 +30,15 @@
 #define FAKE_DRIVER_CONFIG_MAX	32
 #define FAKE_DRIVER_BSS_EV_MAX	24
 
+/* The headroom the double declares, the way a real driver declares it at
+ * registration: mac80211 hands every frame to the driver's tx op with at least
+ * this much room in front, because the driver builds its transmit descriptor by
+ * pushing it on.  rtw89's is 52 (IEEE80211_HT_CTL_LEN + its txwd body and info,
+ * core.c:7469-7481); the value here only has to be larger than the pool's plain
+ * dev allocation (NET_SKB_PAD, 32) so that a bridge which forgets the
+ * reservation is caught rather than accidentally passing. */
+#define FAKE_DRIVER_TX_HEADROOM	52
+
 /* one entry per ops call, in the order the bridge made them */
 enum fake_call {
 	FAKE_CALL_ADD_INTERFACE = 1,
@@ -96,6 +105,10 @@ struct fake_driver_state {
 	unsigned int tx_is_mgmt[FAKE_DRIVER_TX_MAX];
 	unsigned int tx_count;
 	unsigned int tx_lost;		/* frames the capture could not hold */
+	/* the headroom the frames actually arrived with: the smallest seen, and how
+	 * many were short of the declared FAKE_DRIVER_TX_HEADROOM */
+	unsigned int tx_headroom_min;
+	unsigned int tx_headroom_bad;
 
 	enum fake_call order[FAKE_DRIVER_ORDER_MAX];
 	unsigned int order_count;

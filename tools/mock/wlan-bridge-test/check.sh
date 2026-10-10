@@ -35,8 +35,8 @@ case_line() {
 
 if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^WLANBRIDGE: B[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 16 ] &&
-        grep -q '^WLANBRIDGE: SUITE PASS cases=16$' "$log_dir/stream.log" &&
+    if [ "$pass" = 17 ] &&
+        grep -q '^WLANBRIDGE: SUITE PASS cases=17$' "$log_dir/stream.log" &&
         ! grep -q '^WLANBRIDGE: B[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line attach-chain PASS
         case_line scan-order-and-walk PASS
@@ -54,13 +54,16 @@ if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line assoc-wiring PASS
         case_line uplink-key-selection PASS
         case_line rx-status-flags PASS
+        case_line tx-headroom PASS
     else
         case_line attach-chain FAIL
-        echo "wlan-bridge-test: the run did not report sixteen passing cases ($pass)" >&2
+        case_line tx-headroom FAIL
+        echo "wlan-bridge-test: the run did not report seventeen passing cases ($pass)" >&2
         grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -12 >&2 || true
     fi
 else
     case_line attach-chain FAIL
+    case_line tx-headroom FAIL
     echo "wlan-bridge-test: the run failed, see $log_dir/stream.log" >&2
     grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -8 >&2 || true
 fi
@@ -93,6 +96,44 @@ else
         case_line fault-usage FAIL
         echo "wlan-bridge-test: an unknown fault name must be a usage error" >&2
     fi
+fi
+
+# ---- the headroom red control -------------------------------------------------
+
+# The bridge owes the driver hw->extra_tx_headroom bytes in front of every frame
+# it hands over, because the driver builds its transmit descriptor by pushing it
+# on (rtw89 pushes 48). The control builds the same chain against a copy of the
+# bridge's driver half whose reserve is a no-op: the frames then arrive with only
+# the pool's own pad, and the headroom case must fail. Without it, "the frames
+# carry the driver's headroom" would be a claim no implementation could
+# contradict. The copy keeps its sibling header one directory up (the file
+# includes "../seam.h"), so the mutated tree mirrors that one relative edge.
+mut=$log_dir/mutated-seam
+rm -rf "$mut"
+mkdir -p "$mut/bridge"
+sed 's/lkpi_skb_reserve(skb, headroom);/lkpi_skb_reserve(skb, 0);/' \
+    "$root/ports/net80211/bridge/wlan_seam_adapter.c" > "$mut/bridge/wlan_seam_adapter.c"
+cp "$root/ports/net80211/seam.h" "$mut/seam.h"
+if grep -q 'lkpi_skb_reserve(skb, 0);' "$mut/bridge/wlan_seam_adapter.c" &&
+    make -C "$root/tests/host/wlan-bridge-test" \
+        SEAM_ADAPTER_SRC="$mut/bridge/wlan_seam_adapter.c" \
+        BUILD_DIR="$mut/build" > "$log_dir/mutated-build.log" 2>&1; then
+    if timeout -k 5 180 "$mut/build/wlan-bridge-test" > "$log_dir/mutated-run.log" 2>&1; then
+        case_line tx-headroom-red-control FAIL
+        echo "wlan-bridge-test: the no-reserve bridge passed (it must fail)" >&2
+    else
+        if grep -q '^WLANBRIDGE: B17 FAIL' "$log_dir/mutated-run.log"; then
+            case_line tx-headroom-red-control PASS
+        else
+            case_line tx-headroom-red-control FAIL
+            echo "wlan-bridge-test: the red control failed elsewhere" >&2
+            grep '^WLANBRIDGE' "$log_dir/mutated-run.log" | tail -6 >&2 || true
+        fi
+    fi
+else
+    case_line tx-headroom-red-control FAIL
+    echo "wlan-bridge-test: the mutated bridge did not build" >&2
+    tail -5 "$log_dir/mutated-build.log" >&2 || true
 fi
 
 exit "$failures"
