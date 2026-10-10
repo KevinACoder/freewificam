@@ -38,8 +38,22 @@
  * pointer crosses this header, so the declaration is enough) */
 struct wlan_port_ifops;
 
-/* the adapter name the port shell answers to */
+/*
+ * What the image calls itself and which firmware its driver loads.  Both are
+ * image facts, not bridge facts: an image carries one driver, and these two
+ * names belong to that driver.  The values below are the first image built on
+ * this bridge (the rtl8xxxu line); another image overrides both on its own
+ * compile line, so the bridge never grows a second hardcoded name.  The
+ * firmware name must be the one the driver asks for first - rtw89 walks its
+ * format numbers downwards from the chip's maximum, so 8851B asks for the -1
+ * form before the bare one (fw.c:1006-1010, fw.h:4654-4661).
+ */
+#ifndef WLAN_BRIDGE_ADAPTER_NAME
 #define WLAN_BRIDGE_ADAPTER_NAME	"rtl8xxxu"
+#endif
+#ifndef WLAN_BRIDGE_FIRMWARE_NAME
+#define WLAN_BRIDGE_FIRMWARE_NAME	"rtlwifi/rtl8188eufw.bin"
+#endif
 
 /* the bridge's counters (one snapshot struct; the port shell prints it) */
 struct wlan_bridge_counters {
