@@ -35,8 +35,8 @@ case_line() {
 
 if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^WLANBRIDGE: B[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 17 ] &&
-        grep -q '^WLANBRIDGE: SUITE PASS cases=17$' "$log_dir/stream.log" &&
+    if [ "$pass" = 18 ] &&
+        grep -q '^WLANBRIDGE: SUITE PASS cases=18$' "$log_dir/stream.log" &&
         ! grep -q '^WLANBRIDGE: B[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line attach-chain PASS
         case_line scan-order-and-walk PASS
@@ -55,15 +55,18 @@ if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line uplink-key-selection PASS
         case_line rx-status-flags PASS
         case_line tx-headroom PASS
+        case_line rx-channel PASS
     else
         case_line attach-chain FAIL
         case_line tx-headroom FAIL
-        echo "wlan-bridge-test: the run did not report seventeen passing cases ($pass)" >&2
+        case_line rx-channel FAIL
+        echo "wlan-bridge-test: the run did not report eighteen passing cases ($pass)" >&2
         grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -12 >&2 || true
     fi
 else
     case_line attach-chain FAIL
     case_line tx-headroom FAIL
+    case_line rx-channel FAIL
     echo "wlan-bridge-test: the run failed, see $log_dir/stream.log" >&2
     grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -8 >&2 || true
 fi
@@ -134,6 +137,42 @@ else
     case_line tx-headroom-red-control FAIL
     echo "wlan-bridge-test: the mutated bridge did not build" >&2
     tail -5 "$log_dir/mutated-build.log" >&2 || true
+fi
+
+# ---- the rx-channel red control -----------------------------------------------
+
+# net80211's beacon parser takes a frame's receive channel from the interface's
+# current channel, so the bridge must point it at the channel the driver reported
+# for the frame being processed. The control builds the chain against a copy of
+# the bridge whose pointing is a no-op: a frame delivered across a dwell is then
+# judged against the wrong channel and discarded off-channel, and the rx-channel
+# case must fail. Without it, "the frame's own channel reaches the parser" would
+# be a claim no implementation could contradict.
+rxmut=$log_dir/mutated-bridge
+rm -rf "$rxmut"
+mkdir -p "$rxmut"
+sed 's/ic->ic_curchan = rx_chan;/ic->ic_curchan = saved_chan;/' \
+    "$root/ports/net80211/bridge/wlan_bridge.c" > "$rxmut/wlan_bridge.c"
+if grep -q 'ic->ic_curchan = saved_chan;' "$rxmut/wlan_bridge.c" &&
+    make -C "$root/tests/host/wlan-bridge-test" \
+        BRIDGE_SRC="$rxmut/wlan_bridge.c" \
+        BUILD_DIR="$rxmut/build" > "$log_dir/rxmut-build.log" 2>&1; then
+    if timeout -k 5 180 "$rxmut/build/wlan-bridge-test" > "$log_dir/rxmut-run.log" 2>&1; then
+        case_line rx-channel-red-control FAIL
+        echo "wlan-bridge-test: the no-rx-channel bridge passed (it must fail)" >&2
+    else
+        if grep -q '^WLANBRIDGE: B18 FAIL' "$log_dir/rxmut-run.log"; then
+            case_line rx-channel-red-control PASS
+        else
+            case_line rx-channel-red-control FAIL
+            echo "wlan-bridge-test: the rx-channel control failed elsewhere" >&2
+            grep '^WLANBRIDGE' "$log_dir/rxmut-run.log" | tail -6 >&2 || true
+        fi
+    fi
+else
+    case_line rx-channel-red-control FAIL
+    echo "wlan-bridge-test: the mutated bridge did not build" >&2
+    tail -5 "$log_dir/rxmut-build.log" >&2 || true
 fi
 
 exit "$failures"

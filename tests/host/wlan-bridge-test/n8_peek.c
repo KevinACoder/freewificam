@@ -237,6 +237,18 @@ n8_peek_scan_rows(void)
 	return n;
 }
 
+/* the channel index the stack currently sits on - the value the beacon parser's
+ * off-channel check reads (ieee80211_input.c:2118) */
+int
+n8_peek_curchan(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	if (ic == NULL || ic->ic_curchan == NULL)
+		return -1;
+	return (int)(ic->ic_curchan - ic->ic_channels);
+}
+
 /* ------------------------------------------------------------------ */
 /* the CCMP round trip, net80211-world half                            */
 /* ------------------------------------------------------------------ */
