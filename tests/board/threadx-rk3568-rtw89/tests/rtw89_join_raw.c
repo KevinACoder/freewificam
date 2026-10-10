@@ -192,8 +192,13 @@ void rtw89_join_raw_chain(void)
 		return;
 	}
 
-	/* Attempt 1: the join exactly as the supplicant leaves it - the filter
-	 * narrow, the radio parked on the AP's channel. */
+	/*
+	 * Attempt 1 (narrow): the join with the receive filter's promiscuous
+	 * bit forced down - the pre-association state a chip with no BSSID yet
+	 * would apply its own address/beacon filters in.  Forced explicitly so
+	 * the measurement does not depend on what the bridge does by default.
+	 */
+	(void)wlan_bridge_filter_promisc(0);
 	ms = join_raw_attempt("narrow");
 	if (ms >= 0 && (unsigned int)ms <= JOIN_RAW_PROMPT_MS) {
 		board_log("wlan: join-raw-ok filter=narrow ms=%d\n", ms);
