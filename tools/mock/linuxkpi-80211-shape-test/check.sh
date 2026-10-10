@@ -5,9 +5,11 @@
 #
 # The harness owns the mechanism (tests/host/linuxkpi-80211-shape-test): the
 # substitute body driven by scripted drivers of each op family.  This wrapper
-# runs it, groups the cases into two container case lines, and adds the control
-# that proves they can fail: the same harness built against a substitute that
-# never calls vif_cfg_changed must turn the 7.3 association case red.
+# runs it, groups the cases into two container case lines, and adds the controls
+# that prove they can fail: the same harness built against a substitute that
+# never calls vif_cfg_changed must turn the 7.3 association case red, and one
+# that leaves the default link's address zero must turn the link-address case
+# red.
 
 set -eu
 
@@ -33,7 +35,7 @@ case_line() {
 group() {
     name=$1
     shift
-    if grep -q '^SHAPE: summary cases=7 failed=0$' "$log_dir/run.log"; then
+    if grep -q '^SHAPE: summary cases=8 failed=0$' "$log_dir/run.log"; then
         ok=1
         for c in "$@"; do
             grep -q "^SHAPE: $c PASS" "$log_dir/run.log" || ok=0
@@ -56,7 +58,8 @@ group() {
 
 if "$bin" > "$log_dir/run.log" 2> "$log_dir/run.err"; then
     group 73-family-dispatch \
-        73-association 73-leave link-bookkeeping zero-change-is-silent
+        73-association 73-leave link-bookkeeping default-link-address \
+        zero-change-is-silent
     group 6x-family-dispatch \
         6x-association 6x-leave both-families
 else
@@ -97,6 +100,39 @@ else
     case_line vif-cfg-red-control FAIL
     echo "linuxkpi-80211-shape-test: the mutated substitute did not build" >&2
     tail -5 "$log_dir/mutated-build.log" >&2 || true
+fi
+
+# The default link's address is what a driver reads while taking the interface
+# to program the chip's own address filter (rtw89: mac80211.c:137-138).  The
+# control builds the harness against a substitute that leaves that field zero;
+# the default-link-address case must then fail.
+mut2=$log_dir/mutated-linkaddr
+rm -rf "$mut2"
+mkdir -p "$mut2"
+sed 's/memcpy(vif->bss_conf.addr, vif->addr, 6);/;/' \
+    "$root/components/linuxkpi/linuxkpi_80211.c" > "$mut2/linuxkpi_80211.c"
+if grep -q 'memcpy(vif->bss_conf.addr' "$mut2/linuxkpi_80211.c"; then
+    case_line link-addr-red-control FAIL
+    echo "linuxkpi-80211-shape-test: the link-address mutation did not apply" >&2
+elif make -C "$root/tests/host/linuxkpi-80211-shape-test" \
+        ENGINE_EXTRA_SRC="$mut2/linuxkpi_80211.c" \
+        BUILD_DIR="$mut2/build" > "$log_dir/mutated-linkaddr-build.log" 2>&1; then
+    if timeout -k 5 120 "$mut2/build/linuxkpi-80211-shape-test" > "$log_dir/mutated-linkaddr-run.log" 2>&1; then
+        case_line link-addr-red-control FAIL
+        echo "linuxkpi-80211-shape-test: the zero-link-address substitute passed (it must fail)" >&2
+    else
+        if grep -q '^SHAPE: default-link-address FAIL' "$log_dir/mutated-linkaddr-run.log"; then
+            case_line link-addr-red-control PASS
+        else
+            case_line link-addr-red-control FAIL
+            echo "linuxkpi-80211-shape-test: the link-address red control failed elsewhere" >&2
+            grep '^SHAPE: ' "$log_dir/mutated-linkaddr-run.log" >&2 || true
+        fi
+    fi
+else
+    case_line link-addr-red-control FAIL
+    echo "linuxkpi-80211-shape-test: the mutated substitute did not build" >&2
+    tail -5 "$log_dir/mutated-linkaddr-build.log" >&2 || true
 fi
 
 exit "$failures"

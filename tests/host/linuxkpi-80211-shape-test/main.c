@@ -185,11 +185,21 @@ log_dump(void)
 /* the driver ops                                                      */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The interface's link address as the driver saw it *inside* add_interface -
+ * which is the moment a driver reads it.  rtw89 copies it into its per-link
+ * record there and programs the chip's address CAM from it.
+ */
+static u8 g_add_link_addr[6];
+static int g_add_link_addr_seen;
+
 static int
 drv_add_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 {
 
 	(void)hw;
+	memcpy(g_add_link_addr, vif->bss_conf.addr, 6);
+	g_add_link_addr_seen = 1;
 	log_add(EV_ADD_IFACE, vif, 0, 0, 0, NULL);
 	return 0;
 }
@@ -609,6 +619,46 @@ case_link_bookkeeping(void)
 }
 
 static void
+case_default_link_address(void)
+{
+	struct ieee80211_hw *hw = fixture_new(SHAPE_73);
+	struct ieee80211_vif *vif;
+	int ok;
+
+	if (hw == NULL) {
+		case_line("default-link-address", 0, "no hw");
+		return;
+	}
+	g_add_link_addr_seen = 0;
+	memset(g_add_link_addr, 0, sizeof(g_add_link_addr));
+	vif = lkpi80211_drv_vif_add(hw, NL80211_IFTYPE_STATION, g_sta_mac);
+	if (vif == NULL) {
+		case_line("default-link-address", 0, "no vif");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/*
+	 * The default link carries the interface's own address, and the driver
+	 * already had it while taking the interface: a driver reads the link
+	 * address there, not vif->addr, and programs the chip's own address
+	 * filter from it (rtw89: mac80211.c:137-138 -> cam.c:874-879).  Left
+	 * zero, that filter matches nothing and every unicast frame to this
+	 * interface is dropped in hardware.
+	 */
+	ok = memcmp(vif->bss_conf.addr, g_sta_mac, 6) == 0 &&
+	    memcmp(vif->link_conf[0]->addr, g_sta_mac, 6) == 0 &&
+	    vif->bss_conf.vif == vif &&
+	    g_add_link_addr_seen && memcmp(g_add_link_addr, g_sta_mac, 6) == 0;
+	case_line("default-link-address", ok,
+	    "link_addr=%02x:%02x:%02x:%02x:%02x:%02x seen=%d",
+	    vif->bss_conf.addr[0], vif->bss_conf.addr[1], vif->bss_conf.addr[2],
+	    vif->bss_conf.addr[3], vif->bss_conf.addr[4], vif->bss_conf.addr[5],
+	    g_add_link_addr_seen);
+	lkpi80211_drv_vif_remove(hw, vif);
+	ieee80211_free_hw(hw);
+}
+
+static void
 case_zero_change_is_silent(void)
 {
 	struct ieee80211_hw *hw = fixture_new(SHAPE_73);
@@ -648,6 +698,7 @@ app_task(void *arg)
 	case_6x_leave();
 	case_both_families();
 	case_link_bookkeeping();
+	case_default_link_address();
 	case_zero_change_is_silent();
 	printf("SHAPE: summary cases=%u failed=%u\n", g_cases, g_fail);
 	fflush(stdout);
