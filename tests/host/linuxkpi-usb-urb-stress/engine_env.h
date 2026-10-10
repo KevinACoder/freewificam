@@ -100,6 +100,13 @@ void	env_knob_error(int seam_code);		/* this transfer reports seam_code */
 void	env_knob_order(unsigned int mode);	/* ENV_ORDER_* */
 void	env_knob_double_complete(void);		/* give the next transfer back twice */
 void	env_knob_control_timeout(int on);	/* sync control -> seam TIMEOUT */
+/* the flow-control family's injections (a spent controller pool, a hard
+ * refusal, the late giveback a refused submit must never receive) */
+void	env_knob_submit_shortage(unsigned int n); /* next n async submits: -NOMEM */
+void	env_knob_submit_refuse(int seam_code);	/* the next async submit is refused */
+int	env_control_poke(void);			/* one synchronous control transfer */
+int	env_late_giveback_poke(void);		/* a completion for the refused submit */
+void	env_yield(void);			/* let the drain deliver what it holds */
 
 enum env_order {
 	ENV_ORDER_FIFO = 0,

@@ -102,6 +102,12 @@ static int g_err;			/* the programmed seam error */
 static unsigned int g_order = ENV_ORDER_FIFO;
 static int g_double_complete;
 static int g_control_timeout;
+/* the flow-control family's injections: a transient backend shortage (the
+ * controller's slot/QH pool momentarily exhausted), a hard submit refusal, and
+ * the late giveback a refused submit must never receive */
+static unsigned int g_shortage;		/* remaining transient refusals */
+static int g_refuse;			/* one-shot hard refusal code (positive) */
+static struct lkpi_usb_be_urb *g_refused_be;	/* the refused submit's backend */
 
 /* the harness's device (one interface, the peer's two bulk endpoints) */
 static struct usb_device g_dev;
@@ -273,6 +279,24 @@ wrap_submit(void *ctx, struct lkpi_usb_be_urb *urb)
 	 * backend and must not be deferred: forward it as it is */
 	if (urb->timeout != 0 || urb->complete == NULL)
 		return g_mock_ops->submit_urb(g_mock_ctx, urb);
+
+	/* the flow-control injections sit ahead of the transfer bookkeeping: a
+	 * refused submit never becomes a pending transfer */
+	env_lock();
+	if (g_shortage != 0) {
+		g_shortage--;
+		env_unlock();
+		return -LKPI_USB_BE_ERR_NOMEM;
+	}
+	if (g_refuse != 0) {
+		int code = g_refuse;
+
+		g_refuse = 0;
+		g_refused_be = urb;
+		env_unlock();
+		return -code;
+	}
+	env_unlock();
 
 	env_lock();
 	s = env_be_row(urb);
@@ -555,6 +579,9 @@ env_reset_knobs(void)
 	g_order = ENV_ORDER_FIFO;
 	g_double_complete = 0;
 	g_control_timeout = 0;
+	g_shortage = 0;
+	g_refuse = 0;
+	g_refused_be = NULL;
 }
 
 void
@@ -603,6 +630,87 @@ void
 env_knob_control_timeout(int on)
 {
 	g_control_timeout = on;
+}
+
+/*
+ * The transient backend shortage: the controller's own transfer-descriptor /
+ * stage pool is momentarily exhausted, which the board adapter reports as
+ * -LKPI_USB_BE_ERR_NOMEM (ports/cherryusb/lkpi_usb_cherryusb.c:468-471) and the
+ * EHCI host controller as -USB_ERR_NOMEM when its QH pool is spent.  The engine
+ * must park the endpoint and retry, never surface it to the driver.
+ */
+void
+env_knob_submit_shortage(unsigned int n)
+{
+	g_shortage += n;
+}
+
+/*
+ * A hard submit refusal: the device is gone or the port is down.  An accepted
+ * submission still owes exactly one completion, and this is the code that
+ * completion carries; a later giveback for the same transfer (the
+ * env_late_giveback_poke injection) must be absorbed by the claim guard.
+ */
+void
+env_knob_submit_refuse(int seam_code)
+{
+	g_refuse = seam_code;
+}
+
+/*
+ * One synchronous control transfer, the way a driver polls a register between
+ * bulk chunks (rtw89's firmware-download ready poll is exactly this shape).
+ * The engine's control path runs the parked-endpoint retry pass when it
+ * returns, because the controller's pools are shared with the async endpoints.
+ */
+int
+env_control_poke(void)
+{
+	u8 buf[8];
+	unsigned int pipe = usb_rcvctrlpipe(env_device(), 0);
+
+	memset(buf, 0, sizeof(buf));
+	/* GET_DESCRIPTOR(DEVICE), the eight-byte prefix the enumeration reads:
+	 * the scripted device answers it from its own table */
+	return usb_control_msg(env_device(), pipe, 0x06, USB_DIR_IN,
+	    (0x01u << 8), 0, buf, sizeof(buf), 1000);
+}
+
+/*
+ * The late giveback: deliver one completion for the transfer whose submit the
+ * seam refused.  This is the shim-contract violation the engine's claim guard
+ * must absorb - a completion for a submission that was never accepted (the
+ * shape that double-freed a driver's txcb before the guard existed).
+ * Returns 0 when the injection was delivered, -1 when nothing was recorded.
+ */
+int
+env_late_giveback_poke(void)
+{
+	struct lkpi_usb_be_urb *be;
+
+	env_lock();
+	be = g_refused_be;
+	g_refused_be = NULL;
+	env_unlock();
+	if (be == NULL || be->complete == NULL)
+		return -1;
+	be->complete(be->arg, 0);
+	return 0;
+}
+
+/*
+ * Hand the CPU to the engine's drain thread for one bounded moment.  The
+ * completion the drain owes arrives as a release of the callback semaphore, so
+ * a step-and-yield loop drives a queue the engine still holds internally
+ * without waiting on the wrapper's "every accepted submission answered" gate
+ * (that gate is right for a transfer the wrapper already holds; a transfer the
+ * engine has queued behind its in-flight one is not the wrapper's to answer).
+ */
+void
+env_yield(void)
+{
+
+	(void)osSemaphoreAcquire(g_cb_sem, 2u);
 }
 
 /* ------------------------------------------------------------------ */

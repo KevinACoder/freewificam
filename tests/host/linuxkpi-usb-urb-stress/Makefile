@@ -66,9 +66,12 @@ LDFLAGS := -pthread -Wl,--gc-sections $(SANITIZE)
 
 # The engine and its platform services. The services are the real body now
 # (components/linuxkpi/linuxkpi_core.c): the host stand-in the sibling suite
-# used to carry was retired when the real body landed.
+# used to carry was retired when the real body landed.  ENGINE_DIR is
+# overridable so the wrapper's red control can build the same harness against
+# a mutated copy of the engine (a gate that cannot go red is itself broken).
+ENGINE_DIR ?= $(ROOT)/components/linuxkpi/usb
 ENGINE_SRCS := \
-    $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
+    $(ENGINE_DIR)/linuxkpi_usb.c \
     $(ROOT)/components/linuxkpi/linuxkpi_core.c
 
 # The test double, reused verbatim from the sibling suite: controller, scripted

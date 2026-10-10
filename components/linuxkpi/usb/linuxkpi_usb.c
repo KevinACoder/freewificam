@@ -223,7 +223,13 @@ struct lkpi_usb_ep {
 	int			done_status;
 	u32			done_len;
 	struct lkpi_usb_ep	*_done_next;	/* done-list linkage */
-	u32			enqueued, completions, kicks, kills;
+	/* Flow-control parking: the head urb waits for a backend resource the
+	 * controller refused to grant (a transient slot/QH shortage, never a
+	 * device error).  The driver never sees the shortage; a retry pass runs
+	 * wherever a backend resource can have been released (see
+	 * lkpi_usb_retry_parked). */
+	bool			parked;
+	u32			enqueued, completions, kicks, kills, parks, resumes;
 };
 
 static struct lkpi_usb_ep lkpi_eps[LKPI_EP_N];
@@ -382,6 +388,7 @@ static struct lkpi_usb_be_hubport *lkpi_usb_hport(struct usb_device *dev);
 /* ------------------------------------------------------------------ */
 
 static void lkpi_usb_kick(struct lkpi_usb_ep *ep);
+static void lkpi_usb_retry_parked(void);
 static void lkpi_usb_deliver(struct urb *urb);
 void usb_free_urb(struct urb *urb);
 
@@ -536,8 +543,14 @@ lkpi_usb_drain_thread_entry(void *arg)
 				ep->_done_next = NULL;
 			}
 			osCriticalExit(csr);
-			if (ep == NULL)
+			if (ep == NULL) {
+				/* the delivery batch released every resource the
+				 * completed transfers held: parked endpoints may
+				 * resume now (they have nothing in flight, so no
+				 * completion would arrive on them) */
+				lkpi_usb_retry_parked();
 				break;
+			}
 			lkpi_usb_drain_one(ep);
 		}
 	}
@@ -603,6 +616,44 @@ lkpi_usb_arm(struct lkpi_usb_ep *ep, struct urb *urb)
  * is idle and the FIFO is not, claim the head and hand it to the
  * backend.  Callers: a producer's submit and the drain thread after a
  * delivery; the ep lock decides which of them wins each claim. */
+/*
+ * Park the claimed head back at the front of the FIFO: the endpoint keeps
+ * owning the urb and the driver was told nothing.  The re-insert is under the
+ * ep lock because a concurrent submit may have appended behind us; the next
+ * retry pass (lkpi_usb_retry_parked) hands the urb to the backend again.
+ */
+static void
+lkpi_usb_park_head(struct lkpi_usb_ep *ep, struct urb *urb)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ep->lock, flags);
+	urb->_qnext = ep->q_head;
+	ep->q_head = urb;
+	if (ep->q_tail == NULL)
+		ep->q_tail = urb;
+	ep->qlen++;
+	urb->_qstate = LKPI_Q_QUEUED;
+	ep->cur = NULL;
+	ep->parked = true;
+	ep->parks++;
+	spin_unlock_irqrestore(&ep->lock, flags);
+}
+
+/* the endpoint handed a transfer over again: the park is over */
+static void
+lkpi_usb_park_clear(struct lkpi_usb_ep *ep)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ep->lock, flags);
+	if (ep->parked) {
+		ep->parked = false;
+		ep->resumes++;
+	}
+	spin_unlock_irqrestore(&ep->lock, flags);
+}
+
 static void
 lkpi_usb_kick(struct lkpi_usb_ep *ep)
 {
@@ -637,25 +688,30 @@ lkpi_usb_kick(struct lkpi_usb_ep *ep)
 		ret = lkpi_usb_arm(ep, urb);
 		if (ret == -ENOMEM) {
 			/* the DMA stage pool IS this pipeline's flow
-			 * control: re-insert at the head UNDER the lock
-			 * (a concurrent submit may have appended) and
-			 * wait for a completion's drain to free a stage.
-			 * The driver never sees the shortage. */
-			spin_lock_irqsave(&ep->lock, flags);
-			urb->_qnext = ep->q_head;
-			ep->q_head = urb;
-			if (ep->q_tail == NULL)
-				ep->q_tail = urb;
-			ep->qlen++;
-			urb->_qstate = LKPI_Q_QUEUED;
-			ep->cur = NULL;
-			spin_unlock_irqrestore(&ep->lock, flags);
+			 * control: park and wait for a retry pass.  The
+			 * driver never sees the shortage. */
+			lkpi_usb_park_head(ep, urb);
 			return;
 		}
 		if (ret == 0)
 			ret = lkpi_usb_be_submit_urb(&ep->be);
-		if (ret == 0)
+		if (ret == 0) {
+			lkpi_usb_park_clear(ep);
 			return;		/* in flight; the completion claim ends it */
+		}
+		if (ret == -LKPI_USB_BE_ERR_NOMEM) {
+			/* a transient backend shortage: the controller's own
+			 * transfer-descriptor / stage pool is momentarily
+			 * exhausted (the board adapter reports exactly this
+			 * code).  It is flow control, not an outcome - park
+			 * and let the retry pass hand the urb over once a
+			 * completed transfer, a control transfer or a
+			 * synchronous submit has released a resource.  The
+			 * driver never sees it; a real device error still
+			 * travels as the single completion below. */
+			lkpi_usb_park_head(ep, urb);
+			return;
+		}
 
 		/* the backend refused a claim we own (device gone / port
 		 * shutdown): the submission was accepted, so exactly one
@@ -691,6 +747,76 @@ lkpi_usb_kick(struct lkpi_usb_ep *ep)
 			continue;
 		}
 	}
+}
+
+/*
+ * Retry every parked endpoint.  A parked endpoint waits for a backend resource
+ * the controller refused to grant; that resource is released by a completed
+ * transfer (the drain thread's delivery batch), by a control transfer or by a
+ * synchronous submit - the controller's slot/stage pools are shared across all
+ * three.  Those are exactly this pass's call sites.  A parked endpoint has
+ * nothing in flight by construction, so no completion can be relied on to
+ * arrive on the same endpoint: the pass covers the whole table.
+ */
+static void
+lkpi_usb_retry_parked(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < LKPI_EP_N; i++) {
+		struct lkpi_usb_ep *ep = &lkpi_eps[i];
+		unsigned long flags;
+		bool retry;
+
+		spin_lock_irqsave(&ep->lock, flags);
+		retry = ep->parked && ep->qlen != 0 && ep->cur == NULL &&
+		    ep->done_urb == NULL;
+		spin_unlock_irqrestore(&ep->lock, flags);
+		if (retry)
+			lkpi_usb_kick(ep);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* the flow-control evidence                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * How many times an endpoint parked on a transient backend shortage, how many
+ * of those parks were resumed, and how many endpoints are parked right now.
+ * The host suites' flow-return cell reads these to prove a shortage was
+ * absorbed rather than absent; the board line's diagnostics may print them.
+ */
+unsigned int
+lkpi_usb_park_count(void)
+{
+	unsigned int i, n = 0;
+
+	for (i = 0; i < LKPI_EP_N; i++)
+		n += lkpi_eps[i].parks;
+	return n;
+}
+
+unsigned int
+lkpi_usb_resume_count(void)
+{
+	unsigned int i, n = 0;
+
+	for (i = 0; i < LKPI_EP_N; i++)
+		n += lkpi_eps[i].resumes;
+	return n;
+}
+
+unsigned int
+lkpi_usb_parked_now(void)
+{
+	unsigned int i, n = 0;
+
+	for (i = 0; i < LKPI_EP_N; i++) {
+		if (lkpi_eps[i].parked)
+			n++;
+	}
+	return n;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1151,8 +1277,14 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		return -ENODEV;
 	}
 	if (!async) {
-		/* the sync lane: the backend's blocking shape */
-		return lkpi_usb_submit_sync(urb, type);
+		/* the sync lane: the backend's blocking shape.  The transfer
+		 * took and released backend resources (the controller's pools
+		 * are shared with the async endpoints), so parked endpoints get
+		 * their retry pass here too. */
+		int ret = lkpi_usb_submit_sync(urb, type);
+
+		lkpi_usb_retry_parked();
+		return ret;
 	}
 	if (urb->_kill_barrier != 0)
 		return -EPERM;	/* rule 4 (kill_count, source :425-428) */
@@ -1475,6 +1607,24 @@ usb_kill_anchored_urbs(struct usb_anchor *anchor)
 	}
 }
 
+/*
+ * The synchronous control transfer, plus the retry pass a resource release
+ * earns: the controller's slot/stage pools are shared between control
+ * transfers and the async endpoints, so a control transfer that just ran may
+ * have freed exactly what a parked endpoint waits for.  One entry, so the
+ * pairing cannot be forgotten at a call site.
+ */
+static int
+lkpi_usb_control_transfer(struct lkpi_usb_be_hubport *hport,
+    const struct lkpi_usb_setup_packet *setup, void *buffer)
+{
+	int ret;
+
+	ret = lkpi_usb_be_control_transfer(hport, setup, buffer);
+	lkpi_usb_retry_parked();
+	return ret;
+}
+
 int
 usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
     u8 requesttype, u16 value, u16 index, void *data, u16 size, int timeout)
@@ -1510,7 +1660,7 @@ usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
 	setup.wLength = size;
 	if (!is_in && size != 0)
 		memcpy(stage, data, size);
-	ret = lkpi_usb_be_control_transfer(hport, &setup,
+	ret = lkpi_usb_control_transfer(hport, &setup,
 	    size != 0 ? stage : NULL);
 	if (ret == 0 && is_in && size != 0)
 		memcpy(data, stage, size);
@@ -1541,7 +1691,7 @@ usb_clear_halt(struct usb_device *dev, int pipe)
 	    (usb_pipein(pipe) ? 0x80 : 0));
 	setup.wLength = 0;
 	lkpi_mutex_lock(&lkpi_usb_ctrl_mtx);
-	ret = lkpi_usb_be_control_transfer(hport, &setup, NULL);
+	ret = lkpi_usb_control_transfer(hport, &setup, NULL);
 	if (ret == 0) {
 		struct usb_host_endpoint *hep = lkpi_usb_find_hep(dev, pipe);
 
