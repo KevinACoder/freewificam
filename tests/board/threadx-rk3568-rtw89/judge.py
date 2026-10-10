@@ -35,34 +35,46 @@ CASES = [
     "shell-up",
     "rtw89-probe",
     "rtw89-scan",
+    "rtw89-join-raw",
     "rtw89-join",
     "rtw89-dataplane",
+    "rtw89-floodping",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
 #: stamp-stripped transcript). Emitting sites:
 #:   shell-up    ports/cherrysh/shell_port.c (the REPL prompt)
 #:   rtw89-probe  the case's own lines plus the driver's own probe log routed
-#:               through the linuxkpi sink (third-party/rtl8xxxu/core.c, the
-#:               firmware revision line), and the linuxkpi class hook's claim
-#:               line (components/linuxkpi/usb/lkpi_usbh_class.c)
+#:               through the linuxkpi sink (third-party/rtw89/fw.c, the
+#:               firmware version line, and third-party/rtw89/core.c, the chip
+#:               information line), and the linuxkpi class hook's claim line
+#:               (components/linuxkpi/usb/lkpi_usbh_class.c)
 #:   rtw89-scan   the case's scan lines (start / one row per candidate / done)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "rtw89-probe": [
         r"wlan: usb bus=\d+ hcd=\w+ base=0x[0-9a-f]+ started",
         # the driver's own probe-time lines, through the linuxkpi log sink:
-        # the firmware it recognised (fw.c:755) and the chip it read back
-        # (core.c:7431).  Both are the driver's own text, so a pin bump that
-        # changes them is a data change here, not a logic change.
-        r"lkpi: Firmware version \d+\.\d+\.\d+\.\d+",
-        r"lkpi: chip info CID: [0-9a-f]+, CV: [0-9a-f]+, AID: [0-9a-f]+, ACV: [0-9a-f]+, RFE: \d+",
+        # the firmware it recognised (rtw89/fw.c) and the chip it read back
+        # (rtw89/core.c).  Both are the driver's own text, so a pin bump that
+        # changes them is a data change here, not a logic change.  The
+        # "lkpiu:" module tag between the sink's "lkpi:" prefix and the
+        # driver's message is the linuxkpi device name the class hook sets
+        # (components/linuxkpi/usb/lkpi_usbh_class.c), i.e. the same dev_info
+        # path a Linux printk would carry.
+        r"lkpi: lkpiu: Firmware version \d+\.\d+\.\d+\.\d+",
+        r"lkpi: lkpiu: chip info CID: [0-9a-f]+, CV: [0-9a-f]+, AID: [0-9a-f]+, ACV: [0-9a-f]+, RFE: \d+",
         r"wlan: probe done attached=1",
     ],
     "rtw89-scan": [
         r"wlan: scan start ssid=",
         r"wlan: scan done rows=",
         r"wlan: gt-check matched=[1-9]\d*/",
+    ],
+    # the case's own verdict line, printed only when the driver's open-auth
+    # exchange completed within the prompt ceiling (rtw89_join_raw.c)
+    "rtw89-join-raw": [
+        r"wlan: join-raw-ok filter=",
     ],
     "rtw89-join": [
         r"wlan: join waiting for the supplicant",
@@ -73,6 +85,16 @@ ANCHORS = {
         r"wlan: dhcp bound ip=\d+\.\d+\.\d+\.\d+/",
         r"wlan: ping window done",
         r"wlan: iperf server ready port=5001",
+    ],
+    # the case's own stream anchors and window markers; the clean phase's
+    # totals are the gated ones, the host reads the open marker to start its
+    # own load, and the loaded totals are recorded inside the window
+    "rtw89-floodping": [
+        r"wlan: flood board ping start peer=",
+        r"wlan: flood board ping cycles=\d+ replies=\d+ loss=\d+%",
+        r"wlan: flood host window open peer=",
+        r"wlan: flood board ping loaded cycles=\d+ replies=\d+ loss=\d+%",
+        r"wlan: flood host window close",
     ],
 }
 
@@ -89,23 +111,24 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[  40.360] BOARD-SUITE threadx-rk3568-rtw89 "
-    "result=pass cases=5 ok=5 exit=0\r\n"
+    "[  66.360] BOARD-SUITE threadx-rk3568-rtw89 "
+    "result=pass cases=7 ok=7 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-rtw89 bring-up selftest-tag\r\n"
     "[   0.000] wlan: chain wired (backend + registry + firmware + bridge)\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-rtw89 select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-rtw89 start cases=5 sel=all "
-    "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join,rtw89-dataplane\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-rtw89 start cases=7 sel=all "
+    "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join-raw,rtw89-join,"
+    "rtw89-dataplane,rtw89-floodping\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-rtw89/shell-up PASS\r\n"
     "[  10.020] wlan: usb bus=3 hcd=xhci base=0xfe000000 started\r\n"
     "[  10.030] usbh: lkpi claim attempt 0bda:b851\r\n"
-    "[  11.000] lkpi: Firmware version 0.29.22.0 (6a0d1e39), cmd version 1, "
+    "[  11.000] lkpi: lkpiu: Firmware version 0.29.22.0 (6a0d1e39), cmd version 1, "
     "type 1\r\n"
-    "[  11.500] lkpi: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n"
+    "[  11.500] lkpi: lkpiu: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n"
     "[  12.000] wlan: probe done attached=1 rx=0 mgt_tx=0 scan=0/0\r\n"
     "[  12.010] CASE threadx-rk3568-rtw89/rtw89-probe PASS\r\n"
     "[  12.020] wlan: scan start ssid=QiQiJia\r\n"
@@ -115,6 +138,14 @@ BASE_TRANSCRIPT = (
     "[  15.030] wlan: scan done rows=2 chans=12\r\n"
     "[  15.040] wlan: gt-check matched=1/3 rows=2\r\n"
     "[  15.050] CASE threadx-rk3568-rtw89/rtw89-scan PASS\r\n"
+    "[  15.060] wlan: join-raw sweep table rows=2 chans=12\r\n"
+    "[  15.070] wlan: join-raw narrow join rc=0 state=AUTH\r\n"
+    "[  15.080] wlan: join-raw narrow t=0ms state=AUTH bad_auth=0 "
+    "mgt_tx=1 txc=1 rx=90 bcnT=1 tuned=2412 tunes=1\r\n"
+    "[  15.180] wlan: join-raw narrow t=100ms state=ASSOC bad_auth=0 "
+    "mgt_tx=2 txc=2 rx=95 bcnT=2 tuned=2412 tunes=1\r\n"
+    "[  15.190] wlan: join-raw-ok filter=narrow ms=100\r\n"
+    "[  15.200] CASE threadx-rk3568-rtw89/rtw89-join-raw PASS\r\n"
     "[  16.000] wlan: join waiting for the supplicant (send 'wpa connect "
     "<ssid> <psk>' on the console)\r\n"
     "[  22.000] wlan0: WPA: Key negotiation completed with "
@@ -132,6 +163,14 @@ BASE_TRANSCRIPT = (
     "[  34.000] wlan: ping window done\r\n"
     "[  34.100] wlan: iperf server ready port=5001\r\n"
     "[  34.200] CASE threadx-rk3568-rtw89/rtw89-dataplane PASS\r\n"
+    "[  34.300] wlan: flood board ping start peer=192.168.0.18 secs=20\r\n"
+    "[  35.000] ping: recv 192.168.0.18 1 ms\r\n"
+    "[  36.000] ping: recv 192.168.0.18 2 ms\r\n"
+    "[  54.400] wlan: flood board ping cycles=360 replies=360 loss=0%\r\n"
+    "[  54.500] wlan: flood host window open peer=192.168.0.18 secs=45\r\n"
+    "[  84.400] wlan: flood board ping loaded cycles=540 replies=534 loss=1%\r\n"
+    "[  84.500] wlan: flood host window close\r\n"
+    "[  84.600] CASE threadx-rk3568-rtw89/rtw89-floodping PASS\r\n"
     + SENTINEL_LINE
     + PROMPT + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -161,7 +200,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-rtw89/rtw89-scan PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=5 ok=5 exit=0", "cases=5 ok=4 exit=0"), 1),
+        "cases=7 ok=7 exit=0", "cases=7 ok=6 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-rtw89/rtw89-scan PASS",
@@ -170,7 +209,7 @@ MUTATIONS = [
     ("anchor dropped (probe done)", BASE_TRANSCRIPT.replace(
         "wlan: probe done attached=1 rx=0 mgt_tx=0 scan=0/0\r\n", ""), 1),
     ("anchor dropped (chip info)", BASE_TRANSCRIPT.replace(
-        "[  11.500] lkpi: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n",
+        "[  11.500] lkpi: lkpiu: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n",
         ""), 1),
     ("anchor dropped (scan totals)", BASE_TRANSCRIPT.replace(
         "wlan: scan done rows=2 chans=12\r\n", ""), 1),
@@ -178,8 +217,11 @@ MUTATIONS = [
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join,rtw89-dataplane",
+        "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join-raw,rtw89-join,"
+        "rtw89-dataplane,rtw89-floodping",
         "list=shell-up,rtw89-probe"), 1),
+    ("raw join evidence dropped", BASE_TRANSCRIPT.replace(
+        "wlan: join-raw-ok filter=narrow ms=100\r\n", ""), 1),
     ("join evidence dropped", BASE_TRANSCRIPT.replace(
         "wlan: join-ok bssid=14:a3:2f:18:07:2c state=RUN mgt_tx=15 "
         "data_tx=2 rx=90\r\n", "").replace(
@@ -190,6 +232,10 @@ MUTATIONS = [
     ("ping replies starved", BASE_TRANSCRIPT.replace(
         "ping: recv 192.168.0.1 2 ms\r\n", "").replace(
         "ping: recv 192.168.0.1 1 ms\r\n", ""), 1),
+    ("flood totals dropped", BASE_TRANSCRIPT.replace(
+        "wlan: flood board ping cycles=360 replies=360 loss=0%\r\n", ""), 1),
+    ("flood loaded totals dropped", BASE_TRANSCRIPT.replace(
+        "wlan: flood board ping loaded cycles=540 replies=534 loss=1%\r\n", ""), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 

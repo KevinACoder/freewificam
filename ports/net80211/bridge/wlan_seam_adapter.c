@@ -42,6 +42,7 @@
 #include <string.h>
 
 #include "../seam.h"
+#include "../osal/wlan_osal.h"
 #include "wlan_bridge.h"
 
 #include "components/linuxkpi/linuxkpi_80211.h"
@@ -168,6 +169,7 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	struct sk_buff *skb;
 	unsigned char *p;
 	struct ieee80211_tx_info *info;
+	unsigned int headroom;
 
 	(void)drv;
 	if (adapter.hw == NULL || frame == NULL || len == 0)
@@ -175,13 +177,20 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	/*
 	 * The driver's tx path expects a socket buffer whose control block it
 	 * fills (the rate keys, the AC, the key) and whose headroom has room for
-	 * its own transmit descriptor - it pushes that on and checks the
-	 * headroom itself (core.c:5477/:5506). The pool's dev allocation
-	 * reserves the headroom Linux promises for exactly this.
+	 * its own transmit descriptor - it pushes that on and checks the headroom
+	 * itself (core.c:5477/:5506). That headroom is a promise mac80211 makes
+	 * to every driver: each frame handed to the driver's tx op carries
+	 * hw->extra_tx_headroom bytes, a number the driver declares when it
+	 * registers (rtw89: IEEE80211_HT_CTL_LEN + its txwd body and info = 52).
+	 * Reserve it the way mac80211 does - allocate the frame plus the headroom,
+	 * then move the data pointer past it - so the driver's descriptor push
+	 * always fits instead of being refused at the pool's headroom guard.
 	 */
-	skb = lkpi_dev_alloc_skb((unsigned int)len, GFP_ATOMIC);
+	headroom = adapter.hw->extra_tx_headroom;
+	skb = lkpi_dev_alloc_skb((unsigned int)len + headroom, GFP_ATOMIC);
 	if (skb == NULL)
 		return -1;
+	lkpi_skb_reserve(skb, headroom);
 	p = lkpi_skb_put(skb, (unsigned int)len);
 	memcpy(p, frame, len);
 
@@ -458,14 +467,63 @@ static void
 up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
     struct sk_buff *skb)
 {
+	static unsigned int traced;
+	static unsigned int authassoc_traced;
 
 	(void)hw;
 	if (skb == NULL)
 		return;
+	/*
+	 * The driver boundary's own reading, for the first few beacons/probe
+	 * responses: the receive status the driver filled in.  `freq` is the field
+	 * the bridge now carries across to net80211 (the parser's off-channel
+	 * check needs the frame's own channel, not the one the dwell has since
+	 * moved to); `band`/`encoding`/`rate_idx` are printed because a zero or
+	 * nonsense value here would mean the status block is not being populated
+	 * at all - a different fault from the channel one, and one no later
+	 * counter can distinguish.
+	 */
+	if (traced < 6 && skb->len >= 24 &&
+	    (skb->data[0] & 0x0c) == 0x00 && (skb->data[0] & 0xf0) == 0x80) {
+		traced++;
+		wlan_osal_log("wlan: rxstatus len=%u freq=%u band=%u signal=%d "
+		    "enc=%u rate=%u bw=%u flag=0x%x\n", (unsigned)skb->len,
+		    rs != NULL ? (unsigned)rs->freq : 0u,
+		    rs != NULL ? (unsigned)rs->band : 0u,
+		    rs != NULL ? (int)rs->signal : 0,
+		    rs != NULL ? (unsigned)rs->encoding : 0u,
+		    rs != NULL ? (unsigned)rs->rate_idx : 0u,
+		    rs != NULL ? (unsigned)rs->bw : 0u,
+		    rs != NULL ? (unsigned)rs->flag : 0u);
+	}
+	/*
+	 * The association exchange's own boundary reading, every frame: the
+	 * frame-control pair (byte 1 carries the Retry bit, which is what says
+	 * whether a burst of identical answers is the AP's MAC retransmitting
+	 * because it got no ACK from us - i.e. the chip did not accept them),
+	 * the sequence control, and the chip's free-run receive timestamp
+	 * (`mactime`), which dates the frame on the air independently of the
+	 * host clock.  Bounded so a retry storm cannot flood the console.
+	 */
+	if (skb->len >= 24 && (skb->data[0] & 0x0c) == 0x00) {
+		uint8_t sub = (uint8_t)(skb->data[0] >> 4);
+
+		if ((sub <= 3 || sub == 0xb) && authassoc_traced < 24) {
+			authassoc_traced++;
+			wlan_osal_log("wlan: rxmgt fc=%02x%02x retry=%u sc=%04x "
+			    "mactime=%u freq=%u len=%u\n", skb->data[0],
+			    skb->data[1], (skb->data[1] & 0x08) != 0,
+			    (unsigned)(skb->data[22] | (skb->data[23] << 8)),
+			    rs != NULL ? (unsigned)(rs->mactime & 0xffffffffu) : 0u,
+			    rs != NULL ? (unsigned)rs->freq : 0u,
+			    (unsigned)skb->len);
+		}
+	}
 	(void)wlan_bridge_input(skb->data, (size_t)skb->len,
 	    rs != NULL ? (int)rs->signal : 0,
 	    rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0,
-	    rs != NULL && (rs->flag & RX_FLAG_DECRYPTED) != 0);
+	    rs != NULL && (rs->flag & RX_FLAG_DECRYPTED) != 0,
+	    rs != NULL ? rs->freq : 0);
 }
 
 static void

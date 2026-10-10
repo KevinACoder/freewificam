@@ -56,6 +56,15 @@ void	wlan_wpa_vendor_events_arm(void);
 
 static struct netif g_netif;
 
+/* The bound dataplane interface, for the cases that run after this one (the
+ * floodping case pings the peer over the same netif).  NULL until DHCP has
+ * filled the address: a caller that sees NULL must not send. */
+struct netif *rtw89_dataplane_netif(void)
+{
+
+	return ip4_addr_isany_val(g_netif.ip_addr) ? NULL : &g_netif;
+}
+
 /* the presentation layer's steps, handed to the backend's forwarding slot */
 static void
 netif_on_assoc(void *netif)

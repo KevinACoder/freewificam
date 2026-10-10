@@ -17,6 +17,7 @@
 
 #include "os/cmsis2/cmsis2.h"
 #include "linuxkpi_core.h"
+#include "linuxkpi_impl.h"
 #include "linuxkpi_wiphy_work.h"
 
 #include <net/cfg80211.h>
@@ -227,6 +228,45 @@ case_delayed(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* the timer object a delayed work keeps                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A delayed work's timer is created once for the object, not once per queue.
+ * wiphy_delayed_work_queue calls the shim's timer setup on every queue, so the
+ * setup has to be idempotent: creating a new CMSIS timer object per call leaks a
+ * slot from a fixed, per-image table, and the day the table runs out every
+ * delayed work in the driver stops - which is exactly how the rtw89 board round
+ * lost its track/chanctx/coex works.  The shell's handle is the observable: it
+ * must be the same after the tenth queue as after the first.
+ */
+static struct wiphy_delayed_work g_reuse;
+
+static void
+case_timer_object_reused(void)
+{
+	struct lkpi_callout_shell *shell =
+	    (struct lkpi_callout_shell *)(void *)g_reuse.timer._callout;
+	osTimerId_t first;
+	unsigned int i;
+
+	memset(&g_reuse, 0, sizeof(g_reuse));
+	wiphy_delayed_work_init(&g_reuse, counting_work);
+	wiphy_delayed_work_queue(&g_wiphy, &g_reuse, 2);
+	first = shell->timer;
+	if (first == NULL || shell->inited == 0) {
+		case_line("timer-object-reused", 0,
+		    "the first queue created no timer object");
+		return;
+	}
+	for (i = 0; i < 9; i++)
+		wiphy_delayed_work_queue(&g_wiphy, &g_reuse, 2);
+	wiphy_delayed_work_cancel(&g_wiphy, &g_reuse);
+	case_line("timer-object-reused", shell->timer == first,
+	    "handle kept=%d after 10 queues", shell->timer == first);
+}
+
+/* ------------------------------------------------------------------ */
 /* the self-cancelling work and the uninitialized work                 */
 /* ------------------------------------------------------------------ */
 
@@ -276,6 +316,7 @@ app_task(void *arg)
 	case_flush_synchronous();
 	case_cancel_running_waits();
 	case_delayed();
+	case_timer_object_reused();
 	case_cancel_from_work();
 	case_uninit_refused();
 	printf("WIPHYWORK: summary cases=%u failed=%u\n", g_cases, g_fail);

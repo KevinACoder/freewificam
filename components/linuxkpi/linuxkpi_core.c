@@ -839,6 +839,20 @@ void lkpi_timer_setup(struct timer_list *t, void (*func)(struct timer_list *))
 	struct lkpi_callout_shell *shell =
 	    (struct lkpi_callout_shell *)(void *)t->_callout;
 
+	/*
+	 * timer_setup is called once per timer object in Linux, but this shim's
+	 * callers are not all that careful: wiphy_delayed_work_queue calls it on
+	 * every queue (linuxkpi_wiphy_work.c:254).  Creating an OS timer each time
+	 * would leak one CMSIS2 slot per call until the table is exhausted and
+	 * every delayed work stops - which is what the rtw89 board round hit.  So
+	 * the setup is idempotent for the object it is handed: an already
+	 * initialised timer keeps its OS object and only takes the new callback
+	 * (its pending flag is the scheduler's, not the setup's).
+	 */
+	if (shell->inited) {
+		t->tl_func = func;
+		return;
+	}
 	memset(t->_callout, 0, sizeof(t->_callout));
 	t->tl_func = func;
 	t->tl_pending = false;

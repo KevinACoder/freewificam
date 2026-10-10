@@ -35,8 +35,8 @@ case_line() {
 
 if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^WLANBRIDGE: B[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 16 ] &&
-        grep -q '^WLANBRIDGE: SUITE PASS cases=16$' "$log_dir/stream.log" &&
+    if [ "$pass" = 20 ] &&
+        grep -q '^WLANBRIDGE: SUITE PASS cases=20$' "$log_dir/stream.log" &&
         ! grep -q '^WLANBRIDGE: B[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line attach-chain PASS
         case_line scan-order-and-walk PASS
@@ -54,13 +54,25 @@ if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line assoc-wiring PASS
         case_line uplink-key-selection PASS
         case_line rx-status-flags PASS
+        case_line tx-headroom PASS
+        case_line rx-channel PASS
+        case_line sweep-window-not-visible-early PASS
+        case_line oversize-guard PASS
     else
         case_line attach-chain FAIL
-        echo "wlan-bridge-test: the run did not report sixteen passing cases ($pass)" >&2
+        case_line tx-headroom FAIL
+        case_line rx-channel FAIL
+        case_line sweep-window-not-visible-early FAIL
+        case_line oversize-guard FAIL
+        echo "wlan-bridge-test: the run did not report twenty passing cases ($pass)" >&2
         grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -12 >&2 || true
     fi
 else
     case_line attach-chain FAIL
+    case_line tx-headroom FAIL
+    case_line rx-channel FAIL
+    case_line sweep-window-not-visible-early FAIL
+    case_line oversize-guard FAIL
     echo "wlan-bridge-test: the run failed, see $log_dir/stream.log" >&2
     grep '^WLANBRIDGE' "$log_dir/stream.log" | tail -8 >&2 || true
 fi
@@ -93,6 +105,164 @@ else
         case_line fault-usage FAIL
         echo "wlan-bridge-test: an unknown fault name must be a usage error" >&2
     fi
+fi
+
+# ---- the headroom red control -------------------------------------------------
+
+# The bridge owes the driver hw->extra_tx_headroom bytes in front of every frame
+# it hands over, because the driver builds its transmit descriptor by pushing it
+# on (rtw89 pushes 48). The control builds the same chain against a copy of the
+# bridge's driver half whose reserve is a no-op: the frames then arrive with only
+# the pool's own pad, and the headroom case must fail. Without it, "the frames
+# carry the driver's headroom" would be a claim no implementation could
+# contradict. The copy keeps its sibling header one directory up (the file
+# includes "../seam.h"), so the mutated tree mirrors that one relative edge.
+mut=$log_dir/mutated-seam
+rm -rf "$mut"
+mkdir -p "$mut/bridge"
+sed 's/lkpi_skb_reserve(skb, headroom);/lkpi_skb_reserve(skb, 0);/' \
+    "$root/ports/net80211/bridge/wlan_seam_adapter.c" > "$mut/bridge/wlan_seam_adapter.c"
+cp "$root/ports/net80211/seam.h" "$mut/seam.h"
+if grep -q 'lkpi_skb_reserve(skb, 0);' "$mut/bridge/wlan_seam_adapter.c" &&
+    make -C "$root/tests/host/wlan-bridge-test" \
+        SEAM_ADAPTER_SRC="$mut/bridge/wlan_seam_adapter.c" \
+        BUILD_DIR="$mut/build" > "$log_dir/mutated-build.log" 2>&1; then
+    if timeout -k 5 180 "$mut/build/wlan-bridge-test" > "$log_dir/mutated-run.log" 2>&1; then
+        case_line tx-headroom-red-control FAIL
+        echo "wlan-bridge-test: the no-reserve bridge passed (it must fail)" >&2
+    else
+        if grep -q '^WLANBRIDGE: B17 FAIL' "$log_dir/mutated-run.log"; then
+            case_line tx-headroom-red-control PASS
+        else
+            case_line tx-headroom-red-control FAIL
+            echo "wlan-bridge-test: the red control failed elsewhere" >&2
+            grep '^WLANBRIDGE' "$log_dir/mutated-run.log" | tail -6 >&2 || true
+        fi
+    fi
+else
+    case_line tx-headroom-red-control FAIL
+    echo "wlan-bridge-test: the mutated bridge did not build" >&2
+    tail -5 "$log_dir/mutated-build.log" >&2 || true
+fi
+
+# ---- the rx-channel red control -----------------------------------------------
+
+# net80211's beacon parser takes a frame's receive channel from the interface's
+# current channel, so the bridge must point it at the channel the driver reported
+# for the frame being processed. The control builds the chain against a copy of
+# the bridge whose pointing is a no-op: a frame delivered across a dwell is then
+# judged against the wrong channel and discarded off-channel, and the rx-channel
+# case must fail. Without it, "the frame's own channel reaches the parser" would
+# be a claim no implementation could contradict.
+rxmut=$log_dir/mutated-bridge
+rm -rf "$rxmut"
+mkdir -p "$rxmut"
+sed 's/ic->ic_curchan = rx_chan;/ic->ic_curchan = saved_chan;/' \
+    "$root/ports/net80211/bridge/wlan_bridge.c" > "$rxmut/wlan_bridge.c"
+if grep -q 'ic->ic_curchan = saved_chan;' "$rxmut/wlan_bridge.c" &&
+    make -C "$root/tests/host/wlan-bridge-test" \
+        BRIDGE_SRC="$rxmut/wlan_bridge.c" \
+        BUILD_DIR="$rxmut/build" > "$log_dir/rxmut-build.log" 2>&1; then
+    if timeout -k 5 180 "$rxmut/build/wlan-bridge-test" > "$log_dir/rxmut-run.log" 2>&1; then
+        case_line rx-channel-red-control FAIL
+        echo "wlan-bridge-test: the no-rx-channel bridge passed (it must fail)" >&2
+    else
+        if grep -q '^WLANBRIDGE: B18 FAIL' "$log_dir/rxmut-run.log"; then
+            case_line rx-channel-red-control PASS
+        else
+            case_line rx-channel-red-control FAIL
+            echo "wlan-bridge-test: the rx-channel control failed elsewhere" >&2
+            grep '^WLANBRIDGE' "$log_dir/rxmut-run.log" | tail -6 >&2 || true
+        fi
+    fi
+else
+    case_line rx-channel-red-control FAIL
+    echo "wlan-bridge-test: the mutated bridge did not build" >&2
+    tail -5 "$log_dir/rxmut-build.log" >&2 || true
+fi
+
+# ---- the sweep-window ordering red control ------------------------------------
+
+# The sweep's bookkeeping flag must not go up until the state transition that
+# opens the window has finished, because the dwell pump gates on it and the
+# transition can outlast a dwell period. The control builds the chain against a
+# copy of the bridge that raises the flag before the transition (the ordering
+# this case exists to forbid) and requires the case to fail. Without it, "the
+# window is not visible early" would be a claim no implementation could
+# contradict.
+ordmut=$log_dir/mutated-bridge-order
+rm -rf "$ordmut"
+mkdir -p "$ordmut"
+sed 's/bridge\.scan_starts++;/bridge.scanning = 1; bridge.scan_starts++;/' \
+    "$root/ports/net80211/bridge/wlan_bridge.c" > "$ordmut/wlan_bridge.c"
+if grep -q 'bridge.scanning = 1; bridge.scan_starts++;' "$ordmut/wlan_bridge.c" &&
+    make -C "$root/tests/host/wlan-bridge-test" \
+        BRIDGE_SRC="$ordmut/wlan_bridge.c" \
+        BUILD_DIR="$ordmut/build" > "$log_dir/ordmut-build.log" 2>&1; then
+    if timeout -k 5 180 "$ordmut/build/wlan-bridge-test" > "$log_dir/ordmut-run.log" 2>&1; then
+        case_line sweep-window-red-control FAIL
+        echo "wlan-bridge-test: the early-flag bridge passed (it must fail)" >&2
+    else
+        if grep -q '^WLANBRIDGE: B19 FAIL' "$log_dir/ordmut-run.log"; then
+            case_line sweep-window-red-control PASS
+        else
+            case_line sweep-window-red-control FAIL
+            echo "wlan-bridge-test: the ordering control failed elsewhere" >&2
+            grep '^WLANBRIDGE' "$log_dir/ordmut-run.log" | tail -6 >&2 || true
+        fi
+    fi
+else
+    case_line sweep-window-red-control FAIL
+    echo "wlan-bridge-test: the early-flag bridge did not build" >&2
+    tail -5 "$log_dir/ordmut-build.log" >&2 || true
+fi
+
+# ---- the oversize-guard red control -------------------------------------------
+
+# The guard must compare against the mbuf's writable data area, not the whole
+# cluster: the first version compared len against MCLBYTES and copied a frame
+# of up to 4096 bytes into the 3840-byte data area, past the allocation (the
+# board's 4020-byte frame overran its heap block into the next block's
+# free-list links - the rtw89 join fault under the RX worker). The control
+# restores exactly that comparison in a copy of the bridge and requires the
+# oversize case to go red. On the host the overflow's own consequence is what
+# fires - glibc's heap checker aborts the mutant at the copying case - so the
+# red verdict accepts either the named B20 FAIL or that abort landing after
+# B19 (the case order puts B20 directly after it), with the corruption
+# message as the evidence.
+osmut=$log_dir/mutated-bridge-oversize
+rm -rf "$osmut"
+mkdir -p "$osmut"
+sed 's/space = (size_t)M_TRAILINGSPACE(m);/space = (size_t)MCLBYTES;/' \
+    "$root/ports/net80211/bridge/wlan_bridge.c" > "$osmut/wlan_bridge.c"
+if grep -q 'space = (size_t)MCLBYTES;' "$osmut/wlan_bridge.c" &&
+    make -C "$root/tests/host/wlan-bridge-test" \
+        BRIDGE_SRC="$osmut/wlan_bridge.c" \
+        BUILD_DIR="$osmut/build" > "$log_dir/osmut-build.log" 2>&1; then
+    if timeout -k 5 180 "$osmut/build/wlan-bridge-test" > "$log_dir/osmut-run.log" 2>&1; then
+        case_line oversize-guard-red-control FAIL
+        echo "wlan-bridge-test: the MCLBYTES-guard bridge passed (it must fail)" >&2
+    else
+        if grep -q '^WLANBRIDGE: B20 FAIL' "$log_dir/osmut-run.log"; then
+            case_line oversize-guard-red-control PASS
+        elif ! grep -q '^WLANBRIDGE: B20 ' "$log_dir/osmut-run.log" &&
+            grep -q '^WLANBRIDGE: B19 PASS' "$log_dir/osmut-run.log" &&
+            grep -qE 'double free or corruption|corrupted|AddressSanitizer' \
+                "$log_dir/osmut-run.log"; then
+            # the mutant's oversize copy corrupts the host heap and the
+            # checker aborts it inside the B20 case - the same failure this
+            # case exists to forbid, one layer down
+            case_line oversize-guard-red-control PASS
+        else
+            case_line oversize-guard-red-control FAIL
+            echo "wlan-bridge-test: the oversize control failed elsewhere" >&2
+            grep -E '^WLANBRIDGE|corruption' "$log_dir/osmut-run.log" | tail -6 >&2 || true
+        fi
+    fi
+else
+    case_line oversize-guard-red-control FAIL
+    echo "wlan-bridge-test: the MCLBYTES-guard bridge did not build" >&2
+    tail -5 "$log_dir/osmut-build.log" >&2 || true
 fi
 
 exit "$failures"

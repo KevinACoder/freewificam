@@ -242,6 +242,7 @@ TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(CURDIR)/tests/wlan_probe.c \
 	$(CURDIR)/tests/wlan_scan.c \
+	$(CURDIR)/tests/wlan_join_raw.c \
 	$(CURDIR)/tests/wlan_join.c \
 	$(CURDIR)/tests/wlan_dataplane.c \
 	$(CURDIR)/tests/wlan_cmds.c

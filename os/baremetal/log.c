@@ -209,6 +209,45 @@ static void console_feed(const char *s)
 	}
 }
 
+/*
+ * Consecutive identical lines collapse into one, with the length of the run
+ * reported when it ends.  A driver that logs the same fault from a retry loop
+ * can emit tens of thousands of copies - the rtw89 SWSI retry produced 7739 of
+ * one run's 10844 serial lines - and the lab's serial ring drops bursts, so the
+ * flood does not merely waste space: it evicts the lines the run is actually
+ * judged on (and read from).  The first copy is kept, because an anchor or a
+ * judge pattern must still match it, and the run's count is printed, so nothing
+ * is hidden.
+ */
+static char repeat_prev[CONSOLE_LINE_MAX];
+static unsigned int repeat_n;
+
+static void console_repeat_flush(void)
+{
+	char tail[64];
+
+	if (repeat_n > 1u) {
+		(void)snprintf(tail, sizeof(tail),
+		    "[previous line repeated %u times]\n", repeat_n - 1u);
+		console_feed(tail);
+	}
+	repeat_n = 0u;
+	repeat_prev[0] = '\0';
+}
+
+static void console_repeat_gate(const char *msg)
+{
+
+	if (repeat_n != 0u && strcmp(msg, repeat_prev) == 0) {
+		repeat_n++;
+		return;
+	}
+	console_repeat_flush();
+	(void)snprintf(repeat_prev, sizeof(repeat_prev), "%s", msg);
+	repeat_n = 1u;
+	console_feed(msg);
+}
+
 void board_log(const char *fmt, ...)
 {
 	char msg[CONSOLE_LINE_MAX];
@@ -222,7 +261,7 @@ void board_log(const char *fmt, ...)
 		uint64_t saved_daif;
 
 		print_lock_take(&saved_daif);
-		console_feed(msg);
+		console_repeat_gate(msg);
 		print_lock_give(saved_daif);
 	}
 }

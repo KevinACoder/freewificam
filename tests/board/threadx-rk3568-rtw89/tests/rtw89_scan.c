@@ -32,6 +32,10 @@
 
 #include "wlan_bridge.h"
 
+/* the USB transfer ledger's one-line print: the reading that separates "the
+ * sweep heard nothing" from "the receive path never completed a transfer" */
+#include "wlan_ledger.h"
+
 /* The SSID field's maximum length (802.11-2020 clause 9.4.2.2: the element's
  * length octet, SSID at most 32 octets). The driver-visible face carries no
  * net80211 constant, so the case spells its own, as the host suite does. */
@@ -157,9 +161,54 @@ void rtw89_scan_chain(void)
 	scan_rec.gt_matches = 0;
 	(void)wlan_bridge_scan_walk(scan_row, NULL);
 	wlan_bridge_stats(&c);
+	/*
+	 * The sweep's own verdict: how many candidates the table held, how many
+	 * dwell periods the case watched, and - the part that names a zero-length
+	 * window - the stack state at the end, whether the sweep ever reached
+	 * S_SCAN, and how it closed.  `chans=0` with `entered=0` is a sweep that
+	 * never opened; `chans=0` with `close=state` is one the stack left before
+	 * the case could watch it.
+	 */
 	board_log("wlan: scan done rows=%u chans=%u mgt_tx=%u rx=%u "
-	    "scan=%u/%u\n", scan_rec.rows, chans, c.mgt_tx, c.rx_frames,
-	    c.scan_starts, c.scan_completes);
+	    "scan=%u/%u state=%d entered=%u close=%u\n", scan_rec.rows, chans,
+	    c.mgt_tx, c.rx_frames, c.scan_starts, c.scan_completes,
+	    wlan_bridge_state(), c.scan_entered, c.scan_close);
+	/*
+	 * What the frames were, and what the stack did with them: beacons and
+	 * probe responses counted apart from everything else, and the stack's own
+	 * discard reasons.  An empty table with beacons arriving and no FCS flags
+	 * points at the stack's channel check rather than at the radio; an empty
+	 * table with `chanmismatch` climbing names that check outright, one with
+	 * `mgtdiscard` climbing says the frames arrived with no scan window up.
+	 */
+	board_log("wlan: scan rx bcn=%u bcnT=%u prsp=%u fcs=%u chmis=%u "
+	    "badchan=%u badbint=%u mgtdisc=%u wrongbss=%u\n", c.rx_beacon,
+	    c.rx_beacon_tgt, c.rx_probersp, c.rx_fcs_bad, c.rx_chanmismatch,
+	    c.rx_badchan, c.rx_badbintval, c.rx_mgtdiscard, c.rx_wrongbss);
+	/*
+	 * The sweep's coverage and the stack's own verdict on its table.  The
+	 * stack keys scan entries on a frame's transmitter address, so the pair
+	 * (distinct transmitters heard, entries refused) is what separates a
+	 * radio that only ever heard one AP from a table that refused the rest:
+	 * `rows` well under `seen` with `nodealloc` climbing is a table fault,
+	 * `seen` near one is a radio/coverage fault.  `nodes_max` against
+	 * `nodes_now` then separates "never inserted" from "inserted and lost",
+	 * and the split element counters name which parser gate ended a frame
+	 * (only `missing` and `toosmall` return before the table).
+	 */
+	board_log("wlan: scan cover seen=%u ovf=%u nodes_max=%u nodes_now=%u "
+	    "nodealloc=%u elem(u/m/b/s)=%u/%u/%u/%u\n",
+	    c.scan_bss_seen, c.scan_bss_seen_ovf, c.scan_nodes_max,
+	    c.scan_nodes_now, c.rx_nodealloc, c.rx_elem_unknown,
+	    c.rx_elem_missing, c.rx_elem_toobig, c.rx_elem_toosmall);
+	/*
+	 * The transfer ledger, taken here because this is the moment the receive
+	 * path matters: a sweep that reports no rows with enq climbing and comp
+	 * flat never got a completion, one with ovf climbing had its transfers
+	 * refused for good (the stage slot is smaller than the driver's receive
+	 * buffer), and one with enq flat never submitted at all.
+	 */
+	wlan_ledger_usb("scan");
 
 	if (scan_rec.rows == 0) {
 		board_case_fail("the sweep finished with an empty table (the "

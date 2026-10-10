@@ -142,9 +142,29 @@ SKB_POOL_CFLAGS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
 	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=64 \
 	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=64
 
+# The USB transfer stage is sized per image for the same reason: this driver's
+# receive path submits one 20480-byte bulk-in transfer per URB (its
+# RTW89_USB_RECVBUF_SZ, third-party/rtw89/usb.h), and a stage slot smaller than
+# that refuses every one of them for good - the engine parks and retries, the
+# driver never sees a completion, and the whole receive path (beacons, and the
+# firmware's own C2H reports) stays empty.  The 8188 line's default of 4096
+# covers a full 8188 frame; this driver needs the larger slot.
+# check-usb-stage-size.sh keeps the image's value in step with the driver's.
+USB_STAGE_SIZE := 20480
+USB_STAGE_CFLAGS := -DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$(USB_STAGE_SIZE)
+
+# The CMSIS2 static object tables are sized per image like the skb pool: this
+# driver's delayed-work population (wiphy_delayed_work plus the plain delayed
+# works) is larger than the 8188 line's.  The linuxkpi timer objects are reused
+# per timer_list, so this counts the distinct timers the driver keeps, not the
+# number of queue calls.
+CMSIS2_CFLAGS := -DCMSIS2_MAX_TIMERS=32
+TX_CFLAGS += $(CMSIS2_CFLAGS)
+
 WLAN_KPI_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
-	$(SKB_POOL_CFLAGS) \
+	$(SKB_POOL_CFLAGS) $(USB_STAGE_CFLAGS) \
+	-DCONFIG_LKPI_RXTRACE \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-I$(ROOT) -I$(LKPI) -I$(LKPI)/include \
 	-I$(LKPI)/usb -I$(NET) -I$(NPORT) -I$(NPORT)/bridge
@@ -277,8 +297,10 @@ TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(CURDIR)/tests/rtw89_probe.c \
 	$(CURDIR)/tests/rtw89_scan.c \
+	$(CURDIR)/tests/rtw89_join_raw.c \
 	$(CURDIR)/tests/rtw89_join.c \
 	$(CURDIR)/tests/rtw89_dataplane.c \
+	$(CURDIR)/tests/rtw89_floodping.c \
 	$(CURDIR)/tests/rtw89_cmds.c
 
 # the image's own non-case TUs: the radio's dwell pump, the supplicant's
@@ -287,6 +309,7 @@ TESTS_SRCS := \
 WLAN_HELPER_SRCS := \
 	$(CURDIR)/tests/wlan_radio.c \
 	$(CURDIR)/tests/wlan_wpa_obs.c \
+	$(CURDIR)/tests/wlan_ledger.c \
 	$(COMMON)/lwip_stack.c
 
 VENDORED_SRCS := \
@@ -355,6 +378,7 @@ LKPI_SRCS := \
 	$(LKPI)/linuxkpi_platform_target.c \
 	$(LKPI)/linuxkpi_80211.c \
 	$(LKPI)/linuxkpi_80211_helpers.c \
+	$(LKPI)/lkpi_rxtrace.c \
 	$(LKPI)/linuxkpi_wiphy_work.c \
 	$(LKPI)/linuxkpi_txq.c \
 	$(LKPI)/fw_registry.c \
@@ -488,7 +512,10 @@ LWIP_STACK_SRCS := \
 
 # The contrib ping rides its own compile: the console anchors (one line per
 # echo reply) exist only under the stack's debug macro, which is switched on
-# for this one translation unit and stays off everywhere else.
+# for this one translation unit and stays off everywhere else.  This image also
+# tightens the module's send delay (the floodping case's stream) and wires its
+# PING_RESULT hook to the case's counter; the hook's declaration is force
+# included because the module is compiled on its own, before the case's text.
 LWIP_PING_SRCS := $(LWIP)/contrib/apps/ping/ping.c
 
 # --- firmware + driver -------------------------------------------------------
@@ -554,14 +581,16 @@ $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(filter-out $(CURDIR)/tests/rtw89_join.c $(CURDIR)/tests/rtw89_dataplane.c $(CURDIR)/tests/rtw89_cmds.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS) $(USB_INCLUDES))))
+$(foreach s,$(filter-out $(CURDIR)/tests/rtw89_join.c $(CURDIR)/tests/rtw89_dataplane.c $(CURDIR)/tests/rtw89_floodping.c $(CURDIR)/tests/rtw89_cmds.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS) $(USB_INCLUDES))))
 # the supplicant-facing cases and the command compile in the WPA world's flags
 # (the join case also reads the linuxkpi pool's forensic counters - the RX
 # corruption discriminators - so it carries the pool's include root)
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_join.c,$(WPA_PORT_CFLAGS) -I$(NPORT)/bridge -I$(CURDIR)/tests -I$(LKPI) $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_dataplane.c,$(LWIP_INCLUDES) $(WLAN_KPI_CFLAGS) -I$(PORT)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_floodping.c,$(LWIP_INCLUDES) -I$(PORT)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_cmds.c,$(WPA_CMD_CFLAGS) $(LWIP_INCLUDES) -I$(NPORT)/bridge $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_radio.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_ledger.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$(CURDIR)/tests $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
@@ -584,7 +613,7 @@ $(foreach s,$(WPA_DRV_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_VENDOR_CFLAGS)
 $(foreach s,$(WPA_CMD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_CMD_CFLAGS))))
 $(foreach s,$(LWIP_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
 $(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
-$(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG))
+$(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG -DPING_DELAY=50 -include $(CURDIR)/tests/rtw89_floodping.h '-DPING_RESULT(ok)=rtw89_flood_ping_result(ok)'))
 $(foreach s,$(LIBCBIND_SRCS),$(eval $(call COMPILE_RULE,$(s),-I$(ROOT)/os/threadx)))
 
 $(TAG_STAMP): FORCE
@@ -660,6 +689,8 @@ check: guards $(TARGET).elf
 	echo "PASS: module section carries one registered driver; test table dense"
 	@echo "== case-name reconciliation (image / suite.mk / judge) =="
 	@sh $(COMMON)/check-case-list.sh $(TARGET).elf $(CURDIR)/suite.mk $(CURDIR)/judge.py $(OBJCOPY) $(READELF) $(BUILD)
+	@echo "== usb stage size vs the driver's widest receive transfer =="
+	@sh $(COMMON)/check-usb-stage-size.sh $(USB_STAGE_SIZE) $(DRV)/usb.h
 	@$(SIZE) $(TARGET).elf
 	@echo "build-tag: $(BUILD_TAG)"
 

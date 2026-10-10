@@ -46,6 +46,10 @@ int	n8_peek_node_authorized(void);
 /* the number of candidates in the scan table */
 int	n8_peek_scan_rows(void);
 
+/* the channel index the stack currently sits on (what the beacon parser's
+ * off-channel check reads); -1 when there is no interface */
+int	n8_peek_curchan(void);
+
 /* the CCMP round trip, stack-side: install the pairwise key on the joined node
  * (what the supplicant does after the handshake), clear the privacy flag again,
  * seal one AP-to-station frame with it (the peer's crypto), and read the named

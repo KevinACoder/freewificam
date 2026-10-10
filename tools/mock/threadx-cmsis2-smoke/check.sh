@@ -52,6 +52,8 @@ check_anchor() {
 }
 
 check_anchor kernel_running "kernel running"
+check_anchor timer_table_bounded "timer table bounded (n="
+check_anchor timer_slot_reuse "a released timer slot is reusable"
 check_anchor got_1 "got 1"
 check_anchor got_2 "got 2"
 check_anchor got_3 "got 3"

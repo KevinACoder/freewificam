@@ -34,7 +34,7 @@ CMM   := $(ROOT)/third-party/CMSIS_6
 ADAPT := $(ROOT)/third-party/CMSIS-FreeRTOS
 TX    := $(ROOT)/third-party/threadx
 
-BUILD_DIR := $(MAKEFILE_DIR)/build
+BUILD_DIR ?= $(MAKEFILE_DIR)/build
 BIN := $(BUILD_DIR)/wlan-bridge-test
 
 CC ?= cc
@@ -117,17 +117,28 @@ STACK_SRCS := \
     $(NET)/crypto/aes/aes_ccm_mbuf.c \
     $(NET)/port/aes_impl_compat.c
 
+# The bridge itself.  A red control substitutes a mutated copy of this one file
+# (the rx-channel control: the parser must judge a beacon against the channel it
+# arrived on), so it is a knob like SEAM_ADAPTER_SRC rather than a fixed path.
+BRIDGE_SRC ?= $(PORT)/bridge/wlan_bridge.c
+
 PORT_SRCS := \
     $(PORT)/osal/cmsis2/osal_memory.c \
     $(PORT)/osal/cmsis2/osal_cmsis2.c \
     $(PORT)/net/mbuf.c \
     $(PORT)/net/ifnet.c \
-    $(PORT)/bridge/wlan_bridge.c \
+    $(BRIDGE_SRC) \
     $(MAKEFILE_DIR)/n8_peek.c
 
 # the linuxkpi world: the substitute body, the pool it allocates from, the
 # bridge's driver half, and this suite's scripted driver
 POOL_SRC := $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c
+
+# The bridge's driver half.  A red control substitutes a mutated copy of this one
+# file (the same shape the txq suite's round-guard control uses), so it is a knob
+# rather than a fixed path; everything else in the chain stays the production
+# translation unit.
+SEAM_ADAPTER_SRC ?= $(PORT)/bridge/wlan_seam_adapter.c
 
 KPI_SRCS := \
     $(ROOT)/components/linuxkpi/linuxkpi_core.c \
@@ -137,7 +148,7 @@ KPI_SRCS := \
     $(ROOT)/components/linuxkpi/linuxkpi_txq.c \
     $(ROOT)/components/linuxkpi/fw_registry.c \
     $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
-    $(PORT)/bridge/wlan_seam_adapter.c \
+    $(SEAM_ADAPTER_SRC) \
     $(MAKEFILE_DIR)/fake_driver.c \
     $(MAKEFILE_DIR)/lkpi_platform_host.c
 

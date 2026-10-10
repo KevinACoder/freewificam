@@ -38,6 +38,7 @@
 #include <linux/usb.h>
 #include "lkpi_usb_backend.h"
 #include "linuxkpi_usb.h"
+#include "lkpi_rxtrace.h"
 
 /* ------------------------------------------------------------------ */
 /* DMA staging hook (passthrough)                                      */
@@ -230,6 +231,19 @@ struct lkpi_usb_ep {
 	 * lkpi_usb_retry_parked). */
 	bool			parked;
 	u32			enqueued, completions, kicks, kills, parks, resumes;
+	/* error completions this endpoint saw (status != 0).  The driver above
+	 * may silently retire a buffer on a nonzero completion - rtw89's RX
+	 * path re-posts only on status == 0 - so this count is what separates
+	 * "the endpoint is idle" from "the endpoint is shedding transfers". */
+	u32			errors;
+	/* the first six words of the most recent successful IN completion, and its
+	 * length: for a driver that receives reports and frames on one bulk-in
+	 * endpoint those words ARE the receive descriptor (type, length, flags,
+	 * ppdu count), which is what separates "the chip sent reports" from "the
+	 * chip sent frames", and shows which of the descriptor's own branches the
+	 * driver's dispatcher will take */
+	u32			last_in_words[6];
+	u32			last_in_len;
 };
 
 static struct lkpi_usb_ep lkpi_eps[LKPI_EP_N];
@@ -420,6 +434,8 @@ lkpi_usb_be_complete(void *arg, int nbytes)
 	st = raw_err != 0 ? lkpi_usb_errno((int)raw_err) : 0;
 	ep->cur = NULL;
 	ep->completions++;
+	if (st != 0)
+		ep->errors++;
 	urb->_qstate = LKPI_Q_DONE;
 	ep->done_urb = urb;
 	ep->done_status = st;
@@ -493,6 +509,26 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	 * data in place), so only an over-long report needs clamping */
 	urb->status = st;
 	urb->actual_length = len;
+#ifdef CONFIG_LKPI_RXTRACE
+	/*
+	 * The receive boundary's completion record: what the transport says it
+	 * delivered, taken before the driver's callback can parse it and before
+	 * the over-length clamp below rewrites the urb.  Non-ep0 traffic only
+	 * (the control endpoint's polling would flush every interesting record
+	 * out of a 32-entry ring); an errored completion records regardless
+	 * since it is itself a finding.
+	 */
+	if (ep->ep_addr != 0 && (usb_pipein(urb->pipe) || st != 0))
+		lkpi_rxtrace_completion(ep->ep_addr, st, len,
+		    urb->transfer_buffer);
+#endif
+	if (urb->status == 0 && usb_pipein(urb->pipe) &&
+	    urb->transfer_buffer != NULL && len >= sizeof(ep->last_in_words) &&
+	    urb->transfer_buffer_length >= sizeof(ep->last_in_words)) {
+		memcpy(ep->last_in_words, urb->transfer_buffer,
+		    sizeof(ep->last_in_words));
+		ep->last_in_len = len;
+	}
 	if (urb->status == 0 && usb_pipein(urb->pipe) &&
 	    urb->actual_length > urb->transfer_buffer_length) {
 		lkpi_printf("lkpi: RX overrun clamp %u -> %u\n",
@@ -815,6 +851,114 @@ lkpi_usb_parked_now(void)
 	for (i = 0; i < LKPI_EP_N; i++) {
 		if (lkpi_eps[i].parked)
 			n++;
+	}
+	return n;
+}
+
+unsigned int
+lkpi_usb_ep_count(void)
+{
+
+	return LKPI_EP_N;
+}
+
+int
+lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out)
+{
+	const struct lkpi_usb_ep *ep;
+	unsigned long flags;
+
+	if (index >= LKPI_EP_N || out == NULL)
+		return -1;
+	ep = &lkpi_eps[index];
+	spin_lock_irqsave(&ep->lock, flags);
+	out->index = index;
+	out->ep_addr = ep->ep_addr;
+	out->qlen = ep->qlen;
+	out->in_flight = ep->cur != NULL ? 1u : 0u;
+	out->parked = ep->parked ? 1u : 0u;
+	out->enqueued = ep->enqueued;
+	out->kicks = ep->kicks;
+	out->completions = ep->completions;
+	out->kills = ep->kills;
+	out->parks = ep->parks;
+	out->resumes = ep->resumes;
+	out->errors = ep->errors;
+	memcpy(out->last_in_words, ep->last_in_words, sizeof(out->last_in_words));
+	out->last_in_len = ep->last_in_len;
+	spin_unlock_irqrestore(&ep->lock, flags);
+	return 0;
+}
+
+void
+lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
+{
+	unsigned int i;
+
+	if (out == NULL)
+		return;
+	memset(out, 0, sizeof(*out));
+	out->eps = LKPI_EP_N;
+	for (i = 0; i < LKPI_EP_N; i++) {
+		struct lkpi_usb_ep_stats s;
+
+		if (lkpi_usb_ep_stats_get(i, &s) != 0)
+			continue;
+		out->enqueued += s.enqueued;
+		out->kicks += s.kicks;
+		out->completions += s.completions;
+		out->kills += s.kills;
+		out->parks += s.parks;
+		out->resumes += s.resumes;
+		out->errors += s.errors;
+		out->parked_now += s.parked;
+		out->in_flight += s.in_flight;
+		out->qlen += s.qlen;
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* the vendor control-transfer trace (see linuxkpi_usb.h)              */
+/* ------------------------------------------------------------------ */
+
+#define	LKPI_USB_CTRL_TRACE_N	12
+
+static struct lkpi_usb_ctrl_ev lkpi_ctrl_trace_buf[LKPI_USB_CTRL_TRACE_N];
+static unsigned int lkpi_ctrl_trace_head;	/* next slot to write */
+static unsigned int lkpi_ctrl_trace_n;
+
+static void
+lkpi_usb_ctrl_trace_add(unsigned int value, unsigned int index, unsigned int len,
+    int is_in, const void *buf)
+{
+	struct lkpi_usb_ctrl_ev *ev = &lkpi_ctrl_trace_buf[lkpi_ctrl_trace_head];
+	unsigned int d = 0;
+
+	if (buf != NULL && len != 0)
+		memcpy(&d, buf, len < 4u ? len : 4u);
+	ev->value = value;
+	ev->index = index;
+	ev->len = len;
+	ev->is_in = is_in;
+	ev->data = d;
+	lkpi_ctrl_trace_head = (lkpi_ctrl_trace_head + 1u) % LKPI_USB_CTRL_TRACE_N;
+	if (lkpi_ctrl_trace_n < LKPI_USB_CTRL_TRACE_N)
+		lkpi_ctrl_trace_n++;
+}
+
+unsigned int
+lkpi_usb_ctrl_trace(struct lkpi_usb_ctrl_ev *out, unsigned int max)
+{
+	unsigned int i, n;
+
+	if (out == NULL)
+		return 0;
+	n = lkpi_ctrl_trace_n < max ? lkpi_ctrl_trace_n : max;
+	for (i = 0; i < n; i++) {
+		unsigned int idx = (lkpi_ctrl_trace_head + LKPI_USB_CTRL_TRACE_N - 1u - i)
+		    % LKPI_USB_CTRL_TRACE_N;
+
+		out[i] = lkpi_ctrl_trace_buf[idx];
 	}
 	return n;
 }
@@ -1664,6 +1808,9 @@ usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
 	    size != 0 ? stage : NULL);
 	if (ret == 0 && is_in && size != 0)
 		memcpy(data, stage, size);
+	if (size != 0)
+		lkpi_usb_ctrl_trace_add(value, index, size, is_in,
+		    ret == 0 ? data : NULL);
 	lkpi_mutex_unlock(&lkpi_usb_ctrl_mtx);
 	if (ret < 0)
 		return lkpi_usb_errno(ret);

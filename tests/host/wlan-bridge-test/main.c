@@ -237,6 +237,29 @@ inject_rx(const uint8_t *frame, size_t len)
 	inject_rx_flags(frame, len, 0, -50);
 }
 
+/* the same handoff with the receive channel the driver reports. `freq` 0 is a
+ * driver that reports no channel at all - the state the bridge has to treat as
+ * "unknown", not as "channel 1". */
+static void
+inject_rx_freq(const uint8_t *frame, size_t len, uint32_t freq)
+{
+	struct sk_buff *skb;
+	struct ieee80211_rx_status *rs;
+
+	if (g_hw == NULL)
+		return;
+	skb = lkpi_dev_alloc_skb((unsigned int)len, GFP_ATOMIC);
+	if (skb == NULL)
+		return;
+	memcpy(lkpi_skb_put(skb, (unsigned int)len), frame, len);
+	rs = (struct ieee80211_rx_status *)skb->cb;
+	memset(rs, 0, sizeof(*rs));
+	rs->freq = freq;
+	rs->band = NL80211_BAND_2GHZ;
+	rs->signal = -50;
+	ieee80211_rx_irqsafe(g_hw, skb);
+}
+
 /* the fake AP answers each transmitted frame exactly once, in the order the
  * bridge handed them over (the frame-test suite's rhythm: one dispatch consumes
  * one captured frame). Re-answering an old request would inject a second
@@ -1736,6 +1759,277 @@ case_b16(void)
 	return 0;
 }
 
+/*
+ * B17: the headroom the driver's transmit path depends on. A driver declares
+ * hw->extra_tx_headroom at registration and builds its transmit descriptor by
+ * pushing it onto the frame in front of the payload (rtw89 pushes 48 bytes: its
+ * txwd body plus the info word, usb.c:415-421, against a declared 52 at
+ * core.c:7481). mac80211 reserves that much room on every frame it hands the
+ * driver; the bridge owes the driver the same, and without it the push is
+ * refused at the pool's headroom guard - at the far end of the frame path, where
+ * the symptom is a transmit that silently does not happen. The double declares
+ * the headroom (fake_add_interface) and records what the frames arrived with.
+ */
+static int
+case_b17(void)
+{
+	const struct fake_driver_state *st;
+	unsigned int probes_before = count_ssid_probes();
+
+	/* a sweep is the cheapest way to make the bridge hand the driver a fresh
+	 * batch of frames under this case's own eyes */
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B17", 0, "the sweep did not start");
+		return -1;
+	}
+	run_one_sweep();
+	if (count_ssid_probes() == probes_before) {
+		case_line("B17", 0, "the sweep transmitted nothing to check");
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->tx_headroom_bad != 0) {
+		case_line("B17", 0, "%u of %u frames carried less headroom than the "
+		    "driver declared (%u bytes)", st->tx_headroom_bad, st->tx_count,
+		    FAKE_DRIVER_TX_HEADROOM);
+		return -1;
+	}
+	if (st->tx_headroom_min < FAKE_DRIVER_TX_HEADROOM) {
+		case_line("B17", 0, "the smallest headroom seen was %u bytes, below "
+		    "the driver's declared %u", st->tx_headroom_min,
+		    FAKE_DRIVER_TX_HEADROOM);
+		return -1;
+	}
+	case_line("B17", 1, "every one of the %u frames carried at least the "
+	    "driver's %u bytes of headroom (smallest %u)", st->tx_count,
+	    FAKE_DRIVER_TX_HEADROOM, st->tx_headroom_min);
+	return 0;
+}
+
+/*
+ * A probe response from a chosen BSSID whose DS parameter set advertises a
+ * chosen channel. The scripted AP's own builder (ap_frames.c:77) hardcodes
+ * channel 1 and its BSSID; this case needs a candidate that is neither already
+ * in the table nor on the channel the dwell happens to sit on.
+ */
+static size_t
+build_probe_resp_chan(uint8_t *buf, const uint8_t *dst, const uint8_t bssid[6],
+    uint8_t chan)
+{
+	static const uint8_t rates[] = { 0x82, 0x84, 0x8b, 0x96 };
+	uint8_t *p = buf;
+
+	memset(buf, 0, 96);
+	p[0] = IEEE80211_STYPE_PROBE_RESP;
+	memcpy(p + 4, dst, 6);
+	memcpy(p + 10, bssid, 6);
+	memcpy(p + 16, bssid, 6);
+	p += 24;
+	p += 8;				/* timestamp */
+	*p++ = 0x64;			/* beacon interval 100 */
+	*p++ = 0x00;
+	*p++ = 0x01;			/* capability: ESS */
+	*p++ = 0x00;
+	*p++ = IEEE80211_ELEMID_SSID;	/* SSID */
+	*p++ = AP_SSID_LEN;
+	memcpy(p, AP_SSID, AP_SSID_LEN);
+	p += AP_SSID_LEN;
+	*p++ = IEEE80211_ELEMID_RATES;	/* supported rates */
+	*p++ = sizeof(rates);
+	memcpy(p, rates, sizeof(rates));
+	p += sizeof(rates);
+	*p++ = IEEE80211_ELEMID_DSPARMS;	/* DS parameter set */
+	*p++ = 1;
+	*p++ = chan;
+	return (size_t)(p - buf);
+}
+
+/*
+ * B18: a received frame's own channel must reach net80211's beacon parser.  The
+ * imported parser judges a beacon's advertised DS channel against the channel
+ * the interface is on *when the frame is processed* (ieee80211_input.c:2118),
+ * and discards a mismatch as off-channel before the candidate can be inserted
+ * (:2213).  With a synchronous driver those two are the same channel; this
+ * port's receive path runs on its own thread, so a frame delivered across a
+ * dwell is judged against the wrong one - which is why the driver's per-frame
+ * channel has to travel with the frame (up_rx -> wlan_bridge_input).  The setup
+ * puts the stack on a channel other than the frame's, so the two behaviours
+ * differ observably.
+ */
+static int
+case_b18(void)
+{
+	static const uint8_t other_bssid[6] =
+	    { 0x02, 0x33, 0x44, 0x55, 0x66, 0x77 };
+	uint8_t frame[96];
+	size_t flen;
+	unsigned int guard;
+	int rows, cur;
+
+	/* MANUAL: the sweep must report, not join on its own, so the table this
+	 * case reads is the one the case built (the supplicant's mode, and the one
+	 * B11 already runs in) */
+	wlan_bridge_set_manual(1);
+	wlan_bridge_set_ssid((const uint8_t *)AP_SSID, AP_SSID_LEN);
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B18", 0, "the sweep did not start");
+		return -1;
+	}
+	/*
+	 * Walk until the stack is off channel 1.  A sweep started from S_INIT arms
+	 * its first channel itself; one re-entered from a previous sweep's S_SCAN
+	 * arms nothing (the stack's SCAN -> SCAN case only probes), so the first
+	 * dwell here is what moves the walk - either way the loop's check is what
+	 * decides, and the frame's channel and the dwell's must differ for the
+	 * case to mean anything.
+	 */
+	for (guard = 0; guard < 32; guard++) {
+		answer_new_tx_from_ap();
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+		if (n8_peek_curchan() != 1)
+			break;
+	}
+	cur = n8_peek_curchan();
+	if (cur < 0) {
+		case_line("B18", 0, "there is no interface to scan on");
+		return -1;
+	}
+	if (cur == 1) {
+		case_line("B18", 0, "the walk did not leave channel 1; the frame's "
+		    "channel cannot be told from the dwell's");
+		return -1;
+	}
+
+	/* the frame advertises channel 1 (2412 MHz) - a channel the stack is not
+	 * on - and arrives with the driver reporting exactly that channel */
+	flen = build_probe_resp_chan(frame, sta_mac, other_bssid, 1);
+	rows = n8_peek_scan_rows();
+	inject_rx_freq(frame, flen, 2412);
+	if (n8_peek_scan_rows() != rows + 1) {
+		case_line("B18", 0, "the frame's own channel did not reach the "
+		    "parser: the candidate was discarded off-channel "
+		    "(rows %d -> %d, dwell on ch%d)", rows, n8_peek_scan_rows(),
+		    cur);
+		return -1;
+	}
+
+	/* the control: the same frame with the driver reporting no channel at all.
+	 * It must still be rejected - otherwise the leg above would pass for the
+	 * wrong reason (a parser that stopped checking the channel at all). */
+	rows = n8_peek_scan_rows();
+	inject_rx_freq(frame, flen, 0);
+	if (n8_peek_scan_rows() != rows) {
+		case_line("B18", 0, "a frame with no reported channel was admitted "
+		    "anyway (rows %d -> %d): the off-channel check is gone",
+		    rows, n8_peek_scan_rows());
+		return -1;
+	}
+
+	case_line("B18", 1, "the frame's own channel reaches the parser (a ch1 "
+	    "candidate admitted while the dwell sat on ch%d); an unreported "
+	    "channel is still rejected as off-channel", cur);
+	return 0;
+}
+
+/*
+ * B19: the sweep's bookkeeping must not be visible before the state transition
+ * that opens the window has finished.  The dwell pump gates on
+ * wlan_bridge_scan_pending(), and the transition arms the first channel and runs
+ * that channel's probe through the whole transmit chain - on the board that is
+ * longer than one dwell period.  A flag raised before the transition therefore
+ * lets the pump dwell on a stack that has not entered its scan state; the dwell's
+ * entry check reads "the stack left the scan" and closes the sweep, so the window
+ * dies before it opens - the intermittent `chans=0 entered=0` sweep measured on
+ * both driver lines.
+ *
+ * The observation point is the driver's channel config, which the bridge calls
+ * from inside the transition (configure-then-use): the fake records whether the
+ * flag was up while it ran.
+ */
+static int
+case_b19(void)
+{
+	const struct fake_driver_state *st;
+
+	/* a sweep from an earlier case may still be in flight; drain it, then scope
+	 * the observation to the one scan_start below (a walk's own transition
+	 * legitimately runs with a sweep in flight) */
+	while (wlan_bridge_scan_pending()) {
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+	fake_driver_reset_pending_probe();
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B19", 0, "the sweep did not start");
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->pending_seen_in_tx) {
+		case_line("B19", 0, "the sweep's bookkeeping was already visible "
+		    "while the opening transition transmitted its first probe");
+		return -1;
+	}
+	case_line("B19", 1, "the sweep's bookkeeping is raised only after the "
+	    "transition that opens the window has finished");
+	return 0;
+}
+
+/*
+ * B20: the receive-copy guard. The bridge copies every frame into an mbuf
+ * whose data pointer sits MH_ALIGN bytes into the cluster, so the writable
+ * area is M_TRAILINGSPACE, not MCLBYTES. The first version of the helper
+ * compared the length against MCLBYTES: a 3841..4096-byte frame (an aggregate
+ * the driver's descriptor parse cut wrong) was then copied past its
+ * allocation - on the board a 4020-byte frame overran its heap block by 172
+ * bytes into the next block, whose free-list links the allocator later walked
+ * as garbage (the rtw89 join fault under the RX worker). This case feeds a
+ * frame in that gap and requires it refused and counted; a frame that exactly
+ * fills the data area must still go through, so the guard is a bound and not a
+ * blanket size cap.
+ */
+static int
+case_b20(void)
+{
+	struct wlan_bridge_counters before, after;
+	static uint8_t big[4000];	/* > the data area (3840), <= MCLBYTES */
+	unsigned int i;
+
+	for (i = 0; i < sizeof(big); i++)
+		big[i] = (uint8_t)(i * 7);
+	big[0] = 0x08;			/* data: a leak would reach on_data() */
+	big[1] = 0x02;
+	memcpy(big + 4, sta_mac, 6);
+	memcpy(big + 10, ap_bssid, 6);
+	memcpy(big + 16, ap_bssid, 6);
+
+	wlan_bridge_stats(&before);
+	inject_rx(big, sizeof(big));
+	wlan_bridge_stats(&after);
+	if (after.oversize_drops != before.oversize_drops + 1) {
+		case_line("B20", 0, "an oversize frame was not refused by the "
+		    "data-area guard (oversize +%u)",
+		    after.oversize_drops - before.oversize_drops);
+		return -1;
+	}
+
+	/* the boundary on the accepting side: a frame exactly filling the data
+	 * area still goes through the allocator (whatever the stack then makes
+	 * of it); only past it is a refusal */
+	before = after;
+	inject_rx(big, 3840);
+	wlan_bridge_stats(&after);
+	if (after.oversize_drops != before.oversize_drops) {
+		case_line("B20", 0, "a frame exactly filling the mbuf data area "
+		    "was refused (oversize +%u)",
+		    after.oversize_drops - before.oversize_drops);
+		return -1;
+	}
+	case_line("B20", 1, "a frame past the mbuf data area is refused and "
+	    "counted; one that fits exactly still goes through");
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -1879,9 +2173,13 @@ run_suite(void)
 	 * unaffected by the state the cases above leave behind */
 	(void)case_b15();
 	(void)case_b16();
+	(void)case_b17();
+	(void)case_b18();
+	(void)case_b19();
+	(void)case_b20();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=16\n");
+		printf("WLANBRIDGE: SUITE PASS cases=20\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);

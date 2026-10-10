@@ -841,6 +841,19 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	 */
 	vif->bss_conf.link_id = 0;
 	vif->link_conf[0] = &vif->bss_conf;
+	/*
+	 * The default link's own address and its back-pointer to the vif, the
+	 * other half of what the interface sets up for that link.  A driver that
+	 * takes the interface reads the link address, not vif->addr: rtw89 copies
+	 * it into its per-link record at add_interface (mac80211.c:137-138),
+	 * pushes that to the address CAM as the source address (cam.c:874-879),
+	 * and restores it from the same field after every sweep
+	 * (core.c:7095-7096).  Left zero, the chip's own address filter matches
+	 * nothing, so every unicast frame to this interface - an authentication
+	 * response, an EAPOL key - is dropped in hardware.
+	 */
+	memcpy(vif->bss_conf.addr, vif->addr, 6);
+	vif->bss_conf.vif = vif;
 	ctx->vifs[i] = vif;
 	vif_hw_bind(vif, hw);
 	/*
@@ -945,6 +958,31 @@ lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	return LKPI80211_CTX(hw)->ops->set_key(hw, cmd, vif, sta, key);
 }
 
+/*
+ * The headroom promise, checked where it is owed. Every frame handed to a
+ * driver's tx op must carry hw->extra_tx_headroom bytes of headroom: that is
+ * what mac80211 reserves per frame before the driver's tx runs
+ * (net/mac80211/driver-ops.c:drv_tx over what ieee80211_alloc_tx_skb reserved).
+ * A frame that arrives without it fails much later and much less legibly - the
+ * driver's descriptor push is refused at the pool's headroom guard, at the far
+ * end of the frame path - so the shortfall is named here once, at the near end,
+ * with both numbers.
+ */
+static void
+lkpi80211_tx_headroom_check(struct ieee80211_hw *hw, struct sk_buff *skb)
+{
+	static int latched;
+
+	if (latched || hw->extra_tx_headroom == 0)
+		return;
+	if (skb_headroom(skb) >= hw->extra_tx_headroom)
+		return;
+	latched = 1;
+	lkpi_printf("lkpi80211: tx frame has %u bytes of headroom, the driver "
+	    "declared %u (its transmit descriptor push will be refused)\n",
+	    skb_headroom(skb), hw->extra_tx_headroom);
+}
+
 void
 lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
     struct ieee80211_sta *sta, struct sk_buff *skb)
@@ -959,6 +997,7 @@ lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		lkpi_skb_free(skb);
 		return;
 	}
+	lkpi80211_tx_headroom_check(hw, skb);
 	control.sta = sta;
 	(void)vif;
 	ctx->ops->tx(hw, &control, skb);
@@ -1018,8 +1057,40 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (sta == NULL)
 		return NULL;
 	memcpy(sta->addr, addr, 6);
+	memcpy(sta->deflink.addr, addr, 6);
 	sta->aid = aid;
 	ctx->stas[slot] = sta;
+	/*
+	 * The station's default link, wired the way the interface wires every
+	 * station, MLD or not (net/mac80211/sta_info.c:sta_info_add_link does
+	 * `rcu_assign_pointer(sta->link[link_id], link_info)` and, for a
+	 * non-MLD, links the deflink at id 0).  A driver that needs the peer's
+	 * link record dereferences sta->link[link_id] and gives up when it is
+	 * NULL: rtw89's association handler reads it to fill the CMAC table
+	 * ("cannot find exact link_sta for link_id 0", measured on the board
+	 * 2026-10-10 - the chip then ran the association without its CMAC
+	 * entry, so every data frame it sent went unanswered).
+	 */
+	sta->deflink.sta = sta;
+	sta->deflink.link_id = 0;
+	sta->link[0] = &sta->deflink;
+	/*
+	 * The station's spatial-stream count, never below one: upstream's
+	 * ieee80211_sta_init_nss_bw_capa ends with `max_t(u8, 1, rx_nss)`
+	 * (net/mac80211/sta_info.c:3600), and every driver reads the number as
+	 * "at least a single stream is available".  Left zero, a driver that
+	 * feeds it into an N-1 encoding underflows: rtw89's rate-adaptation
+	 * setup computes min(link_sta->rx_nss, hal.tx_nss) - 1 (phy.c:482)
+	 * and stores it in a 3-bit field, so zero becomes 7 (core.h:4515) -
+	 * a spatial-stream count no 1T1R chip can honor, in the RA table the
+	 * firmware uses to pick data rates.  Management frames keep their
+	 * forced basic rates and flow; data frames (the 4-way handshake's
+	 * message 2, DHCP) go out with a rate configuration the firmware can
+	 * not realize, which matches the board's split exactly (messages 1 of
+	 * 4 received, our message 2 sent through USB without an accepted
+	 * answer).
+	 */
+	sta->deflink.rx_nss = 1;
 	/*
 	 * The station's per-TID txqs, before the driver hears about the station:
 	 * its station setup walks them to initialize the driver-private queue

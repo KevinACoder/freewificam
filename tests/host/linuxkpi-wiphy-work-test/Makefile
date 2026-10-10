@@ -19,10 +19,13 @@ KERNEL  := $(ROOT)/third-party/FreeRTOS-Kernel
 CMSIS   := $(ROOT)/third-party/CMSIS_6
 ADAPTER := $(shell sh $(ROOT)/tools/patches/replay.sh CMSIS-FreeRTOS)
 
-BUILD_DIR := $(MAKEFILE_DIR)/build
+BUILD_DIR ?= $(MAKEFILE_DIR)/build
 BIN       := $(BUILD_DIR)/linuxkpi-wiphy-work-test
 
 ENGINE_EXTRA_SRC ?= $(ROOT)/components/linuxkpi/linuxkpi_wiphy_work.c
+# The core body is a knob too: a red control builds against a copy whose timer
+# setup is not idempotent, which is what the timer-object case must catch.
+CORE_EXTRA_SRC ?= $(ROOT)/components/linuxkpi/linuxkpi_core.c
 WIPHY_EXTRA_INC ?=
 
 SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=all \
@@ -50,7 +53,7 @@ CFLAGS := -ggdb3 -O1 -Wall -Wextra -ffunction-sections -fdata-sections \
 LDFLAGS := -pthread -Wl,--gc-sections $(SANITIZE)
 
 SRCS := \
-    $(ROOT)/components/linuxkpi/linuxkpi_core.c \
+    $(CORE_EXTRA_SRC) \
     $(ENGINE_EXTRA_SRC) \
     $(MAKEFILE_DIR)/main.c \
     $(ROOT)/os/freertos/freertos_hooks.c \
