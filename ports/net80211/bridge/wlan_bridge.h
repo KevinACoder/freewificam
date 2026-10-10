@@ -99,6 +99,34 @@ struct wlan_bridge_counters {
 	 * rejected after the window check". */
 	unsigned int	rx_mgtdiscard;	/* stack: mgmt frame dropped in the state gate */
 	unsigned int	rx_wrongbss;	/* stack: frame from a BSSID we are not on */
+	/* The sweep's coverage, and the stack's own verdict on its scan table.
+	 * net80211 keys that table on a frame's transmitter address
+	 * (ieee80211_add_scan), so a sweep that heard many distinct transmitters
+	 * and still recorded one row has a table or allocation fault - and
+	 * `rx_nodealloc` is the stack's own counter for a refused entry.  A sweep
+	 * that heard a single transmitter never had the chance to record more.
+	 * `rx_elem_bad` is the IE parser's own refusals, summed: a beacon whose
+	 * elements fail to parse is stored with no SSID and cannot be joined. */
+	unsigned int	scan_bss_seen;	/* distinct transmitters the sweep heard */
+	unsigned int	scan_bss_seen_ovf;	/* ... beyond the coverage table */
+	unsigned int	rx_nodealloc;	/* stack: the scan table refused an entry */
+	/* The element parser's refusals, split by kind, because only two of them
+	 * end the frame: `missing` (a mandatory element is absent, input.c:2047)
+	 * and `toosmall` (an element runs past the frame's end, input.c:2066)
+	 * return before the frame reaches the scan table, while `unknown` and
+	 * `toobig` only count and continue.  A sweep that heard many transmitters
+	 * and recorded nothing has to be told apart between those two families. */
+	unsigned int	rx_elem_unknown;	/* stack: element id not handled */
+	unsigned int	rx_elem_missing;	/* stack: mandatory element absent */
+	unsigned int	rx_elem_toobig;	/* stack: element longer than allowed */
+	unsigned int	rx_elem_toosmall;	/* stack: element past the frame end */
+	/* The scan table's own high-water mark during the sweep, and its size
+	 * when the snapshot is taken.  The pair separates "the sweep never
+	 * inserted anything" from "it inserted and the entries went away": a
+	 * high-water mark well above the snapshot is a lifetime problem, one
+	 * equal to it is an insertion problem. */
+	unsigned int	scan_nodes_max;	/* scan-table entries, high-water mark */
+	unsigned int	scan_nodes_now;	/* scan-table entries at snapshot time */
 	unsigned int	tune_calls;
 	unsigned int	tune_fails;
 	/* How the last sweep ended.  A sweep whose window was shorter than one

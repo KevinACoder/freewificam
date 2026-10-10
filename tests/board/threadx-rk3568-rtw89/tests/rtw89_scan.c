@@ -186,6 +186,22 @@ void rtw89_scan_chain(void)
 	    c.rx_beacon_tgt, c.rx_probersp, c.rx_fcs_bad, c.rx_chanmismatch,
 	    c.rx_badchan, c.rx_badbintval, c.rx_mgtdiscard, c.rx_wrongbss);
 	/*
+	 * The sweep's coverage and the stack's own verdict on its table.  The
+	 * stack keys scan entries on a frame's transmitter address, so the pair
+	 * (distinct transmitters heard, entries refused) is what separates a
+	 * radio that only ever heard one AP from a table that refused the rest:
+	 * `rows` well under `seen` with `nodealloc` climbing is a table fault,
+	 * `seen` near one is a radio/coverage fault.  `nodes_max` against
+	 * `nodes_now` then separates "never inserted" from "inserted and lost",
+	 * and the split element counters name which parser gate ended a frame
+	 * (only `missing` and `toosmall` return before the table).
+	 */
+	board_log("wlan: scan cover seen=%u ovf=%u nodes_max=%u nodes_now=%u "
+	    "nodealloc=%u elem(u/m/b/s)=%u/%u/%u/%u\n",
+	    c.scan_bss_seen, c.scan_bss_seen_ovf, c.scan_nodes_max,
+	    c.scan_nodes_now, c.rx_nodealloc, c.rx_elem_unknown,
+	    c.rx_elem_missing, c.rx_elem_toobig, c.rx_elem_toosmall);
+	/*
 	 * The transfer ledger, taken here because this is the moment the receive
 	 * path matters: a sweep that reports no rows with enq climbing and comp
 	 * flat never got a completion, one with ovf climbing had its transfers

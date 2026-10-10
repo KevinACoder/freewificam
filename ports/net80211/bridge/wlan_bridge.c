@@ -75,6 +75,12 @@
 #define WLAN_BRIDGE_CHAN_MIN	1
 #define WLAN_BRIDGE_CHAN_MAX	13
 
+/* How many distinct transmitters one sweep's coverage table holds.  A sweep of
+ * this environment hears on the order of ten; the table exists to tell "the
+ * radio heard one AP" from "the stack's table refused the rest", so it only has
+ * to be comfortably larger than the former. */
+#define WLAN_BRIDGE_BSS_SEEN_MAX	32
+
 /* ------------------------------------------------------------------ */
 /* state                                                               */
 /* ------------------------------------------------------------------ */
@@ -109,6 +115,18 @@ static struct {
 	unsigned int rx_mgtdiscard;	/* stack: mgmt frames dropped in the state gate */
 	unsigned int rx_wrongbss;	/* stack: frames from a BSSID we are not on */
 	unsigned int rx_trace;		/* the per-frame admission trace's budget */
+	/* The sweep's coverage, taken as it arrives: the distinct transmitters
+	 * (addr2) the current sweep's beacons and probe responses came from, and
+	 * how many did not fit the table.  The stack keys its scan table on addr2
+	 * (ieee80211_add_scan, node.c:1271), so `rows` alone cannot separate "the
+	 * radio heard one AP" from "the table refused the rest" - this pair can,
+	 * and it is the one measurement that tells a radio/channel fault from a
+	 * node-table one.  Reset when a sweep is armed. */
+	uint8_t		bss_seen[WLAN_BRIDGE_BSS_SEEN_MAX][6];
+	unsigned int	bss_seen_n;
+	unsigned int	bss_seen_ovf;
+	unsigned int	scan_nodes_max;	/* scan-table high-water mark this sweep */
+	unsigned int	elem_walk_logged;	/* bounded element-walk reports */
 	unsigned int scan_entered;	/* sweeps that reached S_SCAN */
 	unsigned int scan_close;	/* how the last sweep ended */
 	unsigned int tune_calls;	/* diagnostic: channel-program attempts */
@@ -151,6 +169,81 @@ bridge_mbuf_alloc(const uint8_t *frame, size_t len)
 	m->m_len = (int)len;
 	m->m_pkthdr.len = (int)len;
 	return m;
+}
+
+/*
+ * Note one sweep frame's transmitter.  net80211's scan table is keyed on addr2
+ * (ieee80211_add_scan), so the distinct-transmitter count is exactly the
+ * coverage a sweep had the chance to record: a sweep that notes one transmitter
+ * could never have produced more than one row, and one that notes many while
+ * the table still holds a single node has a table or allocation fault instead.
+ * Bounded and reset per sweep; overflow is counted, never silently dropped.
+ */
+static void
+bridge_bss_seen_note(const uint8_t *frame)
+{
+	unsigned int i;
+
+	for (i = 0; i < bridge.bss_seen_n; i++) {
+		if (memcmp(bridge.bss_seen[i], &frame[10], 6) == 0)
+			return;
+	}
+	if (bridge.bss_seen_n >= WLAN_BRIDGE_BSS_SEEN_MAX) {
+		bridge.bss_seen_ovf++;
+		return;
+	}
+	memcpy(bridge.bss_seen[bridge.bss_seen_n], &frame[10], 6);
+	bridge.bss_seen_n++;
+}
+
+/* How many entries the stack's scan table holds right now.  Taken as a
+ * high-water mark over a sweep so "the sweep inserted and the entries went
+ * away" can be told from "the sweep never inserted anything" - the final
+ * snapshot alone cannot.  The caller holds the serializer. */
+static unsigned int
+bridge_scan_nodes_count(void)
+{
+	struct ieee80211_node *ni;
+	unsigned int n = 0;
+
+	if (bridge.ic == NULL)
+		return 0;
+	TAILQ_FOREACH(ni, &bridge.ic->ic_scan.nt_node, ni_list)
+		n++;
+	return n;
+}
+
+/*
+ * Walk a beacon's element stream the way the imported parser does and report
+ * where it stops short.  The parser ends a frame with `is_rx_elem_toosmall`
+ * when an element's length runs past the end of the buffer (input.c:2122), so
+ * the offset it stops at is exactly how many bytes the delivered frame carries
+ * beyond its own element stream: four is an FCS the receive path did not strip,
+ * any other value is a length the receive path got wrong.  Bounded by the
+ * caller; the imported tree is not touched.
+ */
+static void
+bridge_elem_walk_report(const uint8_t *frame, size_t len)
+{
+	size_t off = 24;
+	unsigned int last_id = 0, last_el = 0;
+
+	while (off + 1 < len) {
+		unsigned int elen = frame[off + 1];
+
+		if (len - off < elen + 2) {
+			wlan_osal_log("wlan: rx elemwalk len=%u stop=%u over=%u "
+			    "last=(id=%u elen=%u)\n", (unsigned)len,
+			    (unsigned)off, (unsigned)(len - off),
+			    last_id, last_el);
+			return;
+		}
+		last_id = frame[off];
+		last_el = elen;
+		off += elen + 2;
+	}
+	wlan_osal_log("wlan: rx elemwalk len=%u clean (off=%u)\n",
+	    (unsigned)len, (unsigned)off);
 }
 
 static void
@@ -709,8 +802,14 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 			if (bridge.bssid_last_set &&
 			    memcmp(&frame[16], bridge.bssid_last, 6) == 0)
 				bridge.rx_beacon_tgt++;
+			bridge_bss_seen_note(frame);
+			if (bridge.elem_walk_logged < 3) {
+				bridge.elem_walk_logged++;
+				bridge_elem_walk_report(frame, len);
+			}
 		} else if (sub == 0x50) {
 			bridge.rx_probersp++;
+			bridge_bss_seen_note(frame);
 		}
 		/* The association-exchange family always logs (rare, and the
 		 * evidence a join judgment stands on), now with the FCS
@@ -818,6 +917,12 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 	ic->ic_curchan = saved_chan;
 	bridge.rx_mgtdiscard = ic->ic_stats.is_rx_mgtdiscard;
 	bridge.rx_wrongbss = ic->ic_stats.is_rx_wrongbss;
+	if (bridge.scanning) {
+		unsigned int n = bridge_scan_nodes_count();
+
+		if (n > bridge.scan_nodes_max)
+			bridge.scan_nodes_max = n;
+	}
 	wlan_port_serializer_unlock();
 	return 0;
 }
@@ -878,6 +983,9 @@ wlan_bridge_scan_start(void)
 	 */
 	bridge.scan_starts++;
 	bridge.scan_close = WLAN_BRIDGE_SCAN_CLOSE_NONE;
+	bridge.bss_seen_n = 0;
+	bridge.bss_seen_ovf = 0;
+	bridge.scan_nodes_max = bridge_scan_nodes_count();
 	/*
 	 * Every arm, not just the first: a sweep armed while a join is in
 	 * flight is what drags the stack out of AUTH (the transition below
@@ -1585,7 +1693,16 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 		out->rx_badbintval = bridge.ic->ic_stats.is_rx_badbintval;
 		out->rx_mgtdiscard = bridge.ic->ic_stats.is_rx_mgtdiscard;
 		out->rx_wrongbss = bridge.ic->ic_stats.is_rx_wrongbss;
+		out->rx_nodealloc = bridge.ic->ic_stats.is_rx_nodealloc;
+		out->rx_elem_unknown = bridge.ic->ic_stats.is_rx_elem_unknown;
+		out->rx_elem_missing = bridge.ic->ic_stats.is_rx_elem_missing;
+		out->rx_elem_toobig = bridge.ic->ic_stats.is_rx_elem_toobig;
+		out->rx_elem_toosmall = bridge.ic->ic_stats.is_rx_elem_toosmall;
 	}
+	out->scan_bss_seen = bridge.bss_seen_n;
+	out->scan_bss_seen_ovf = bridge.bss_seen_ovf;
+	out->scan_nodes_max = bridge.scan_nodes_max;
+	out->scan_nodes_now = bridge_scan_nodes_count();
 	out->scan_entered = bridge.scan_entered;
 	out->scan_close = bridge.scan_close;
 	out->tune_calls = bridge.tune_calls;
