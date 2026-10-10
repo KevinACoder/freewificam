@@ -841,6 +841,19 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	 */
 	vif->bss_conf.link_id = 0;
 	vif->link_conf[0] = &vif->bss_conf;
+	/*
+	 * The default link's own address and its back-pointer to the vif, the
+	 * other half of what the interface sets up for that link.  A driver that
+	 * takes the interface reads the link address, not vif->addr: rtw89 copies
+	 * it into its per-link record at add_interface (mac80211.c:137-138),
+	 * pushes that to the address CAM as the source address (cam.c:874-879),
+	 * and restores it from the same field after every sweep
+	 * (core.c:7095-7096).  Left zero, the chip's own address filter matches
+	 * nothing, so every unicast frame to this interface - an authentication
+	 * response, an EAPOL key - is dropped in hardware.
+	 */
+	memcpy(vif->bss_conf.addr, vif->addr, 6);
+	vif->bss_conf.vif = vif;
 	ctx->vifs[i] = vif;
 	vif_hw_bind(vif, hw);
 	/*
