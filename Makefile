@@ -30,13 +30,14 @@ mock-all:
 	tools/mock/run.sh $$(sed -n 's/^[[:space:]]*SUITES_KERNELS[[:space:]]*:=[[:space:]]*//p' tools/mock/suites.mk) \
 	    $$(sed -n 's/^[[:space:]]*SUITES[[:space:]]*:=[[:space:]]*//p' tools/mock/suites.mk)
 
-# Static gates over the sources: the machine-local knowledge scan and the board
-# images' build shape (the aggregate build stops at the first failure, and a
-# stale object can hide a compile-time defect, so the shape is also checked
-# from the source side).
+# Static gates over the sources: the machine-local knowledge scan, the board
+# images' build shape, and the host suites' build shape (the aggregate builds
+# stop at the first failure, and a stale object can hide a defect the sources
+# already state, so both shapes are also checked from the source side).
 gates:
 	tools/gates/check-local-knowledge.sh
 	tools/gates/check-board-images.sh
+	tools/gates/check-host-makefiles.sh
 
 # The board images: every suite in the board registry, built by its own
 # declaration. This is the rebuild half of a board regression round - the board

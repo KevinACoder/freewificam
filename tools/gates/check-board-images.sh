@@ -70,6 +70,11 @@ check_makefile() {
         grep -qF 'TAG_STAMP :=' "$mk" || bad="$bad no-build-tag-stamp"
         grep -qF '$(TAG_STAMP)' "$mk" || bad="$bad build-tag-stamp-unused"
     fi
+    # Header dependency tracking: without it a header edit leaves the objects
+    # that included it stale, and the stale image is what gets flashed and
+    # certified.  (The build tag stamp covers the tag, not the headers.)
+    grep -qF -- '-MMD' "$mk" || bad="$bad no-dependency-tracking"
+    grep -q '^-include' "$mk" || bad="$bad no-dependency-include"
     [ -z "$bad" ]
 }
 
@@ -152,6 +157,10 @@ cp "$root/tests/board/threadx-rk3568-smoke/Makefile" "$tmp/tests/board/threadx-r
 sed '/TAG_STAMP :=/d' "$tmp/tests/board/threadx-rk3568-smoke/Makefile" > "$tmp/mk.tmp"
 mv "$tmp/mk.tmp" "$tmp/tests/board/threadx-rk3568-smoke/Makefile"
 expect 1 "build-tag stamp dropped"
+cp "$root/tests/board/threadx-rk3568-smoke/Makefile" "$tmp/tests/board/threadx-rk3568-smoke/Makefile"
+sed 's/-MMD -MP//' "$tmp/tests/board/freertos-rk3568-smoke/Makefile" > "$tmp/mk.tmp"
+mv "$tmp/mk.tmp" "$tmp/tests/board/freertos-rk3568-smoke/Makefile"
+expect 1 "dependency tracking dropped"
 
 if [ -n "$failed" ]; then
     echo "check-board-images: FAIL (selftest)"
