@@ -6,9 +6,10 @@
 # @date    11.10.2026
 #
 # The heavy lifting lives in tests/host/rtw88-port-build's Makefile. This wrapper runs
-# its four gates and maps each into one case: the 8821CU translation units compile clean
+# its five gates and maps each into one case: the 8821CU translation units compile clean
 # for aarch64 against the first-party header face, the face compiles standalone, the
-# license split scans clean, and the kernel-isolation gates pass with their canaries.
+# driver's undefined-symbol set matches the recorded face ledger, the license split scans
+# clean, and the kernel-isolation gates pass with their canaries.
 
 set -eu
 
@@ -24,7 +25,7 @@ case_line() {
     [ "$2" = "PASS" ] || failures=$((failures + 1))
 }
 
-for gate in compile contract spdx gates; do
+for gate in compile contract closure spdx gates; do
     if make -C "$root/tests/host/rtw88-port-build" "$gate" \
             > "$log_dir/$gate.log" 2>&1; then
         case_line "$gate" PASS
