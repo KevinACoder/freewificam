@@ -29,11 +29,13 @@
 
 #include "usbh_core.h"
 #include "usbh_hub.h"
+#include "usb_errno.h"
 
 #include "linuxkpi_core.h"
 #include "linuxkpi_usb.h"
 #include "lkpi_usb_backend.h"
 #include "lkpi_usbh_class.h"
+#include "lkpi_usbh_modeswitch.h"
 #include <linux/usb.h>
 
 #include "mock_hcd.h"
@@ -42,6 +44,7 @@
 /* the hook's exported class tables (defined with the section macro in
  * lkpi_usbh_class.c; the extern declaration reuses the same type) */
 extern const struct usbh_class_info lkpi_wlan_class_info;
+extern const struct usbh_class_info lkpi_modeswitch_class_info;
 
 #define CLAIM_VID 0x0bda
 #define CLAIM_PID 0x8179
@@ -208,5 +211,241 @@ lkpi_body_case_claim(struct mock_backend *b, unsigned int *probe_before,
 		return -13;
 	}
 	*disconnects_out = wlan_stub_disconnect_calls();
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* the CD-ROM modeswitch hook: the eject message and the never-claim   */
+/*                                                                     */
+/* The hook owns a wireless dongle's fake-disk persona: on enumeration */
+/* it sends one Bulk-Only eject (a 31-byte CBW carrying SCSI START/    */
+/* STOP UNIT with LoEj, then the 13-byte CSW read back) and returns a  */
+/* negative connect value so the device is left unclaimed and the hub  */
+/* re-enumerates it as the network personality. This case drives the   */
+/* real hook against a scripted controller and asserts the exact bytes */
+/* the platform's Linux lane sends for the same id.                    */
+/* ------------------------------------------------------------------ */
+
+/* the eject message as the device's own mode-switch configuration carries
+ * it; the hook's constant must equal this byte for byte */
+static const uint8_t modeswitch_truth[31] = {
+	0x55, 0x53, 0x42, 0x43, 0x12, 0x34, 0x56, 0x78,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06,
+	0x1b, 0x00, 0x00, 0x00, 0x02, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+/* the scripted controller the hook submits through (the vendored core's
+ * usbh_submit_urb dispatch is real; only the controller behind it is
+ * scripted) */
+static struct usbh_bus g_ms_bus;
+static struct usbh_hc_driver g_ms_hcd;
+
+static unsigned int g_ms_out_n;
+static unsigned int g_ms_in_n;
+static unsigned int g_ms_out_len;
+static uint8_t g_ms_out[64];
+static int g_ms_out_fail;	/* the CBW submit fails: the device left the bus */
+
+static int
+modeswitch_submit(struct usbh_urb *urb)
+{
+	if ((urb->ep->bEndpointAddress & 0x80u) != 0u) {
+		g_ms_in_n++;
+		memset(urb->transfer_buffer, 0, urb->transfer_buffer_length);
+		urb->transfer_buffer[0] = 0x55;
+		urb->transfer_buffer[1] = 0x53;
+		urb->transfer_buffer[2] = 0x42;
+		urb->transfer_buffer[3] = 0x53;		/* "USBS" CSW signature */
+		urb->actual_length = 13;
+		return 0;
+	}
+	g_ms_out_n++;
+	if (g_ms_out_fail) {
+		return -USB_ERR_NODEV;
+	}
+	g_ms_out_len = urb->transfer_buffer_length;
+	if (g_ms_out_len > sizeof(g_ms_out)) {
+		g_ms_out_len = sizeof(g_ms_out);
+	}
+	memcpy(g_ms_out, urb->transfer_buffer, g_ms_out_len);
+	urb->actual_length = urb->transfer_buffer_length;
+	return 0;
+}
+
+static struct usbh_hubport g_ms_hp;
+
+static void
+build_modeswitch_hubport(uint16_t pid, uint8_t cls, uint8_t sub, uint8_t proto)
+{
+	struct usbh_interface_altsetting *alt;
+
+	memset(&g_ms_hp, 0, sizeof(g_ms_hp));
+	g_ms_hp.connected = true;
+	g_ms_hp.port = 1;
+	g_ms_hp.dev_addr = 2;
+	g_ms_hp.speed = USB_SPEED_HIGH;
+	g_ms_hp.device_desc.bLength = 18;
+	g_ms_hp.device_desc.bDescriptorType = 0x01;
+	g_ms_hp.device_desc.bcdUSB = 0x0200;
+	g_ms_hp.device_desc.idVendor = 0x0bda;
+	g_ms_hp.device_desc.idProduct = pid;
+	g_ms_hp.bus = &g_ms_bus;
+
+	alt = &g_ms_hp.config.intf[0].altsetting[0];
+	alt->intf_desc.bLength = 9;
+	alt->intf_desc.bDescriptorType = 0x04;
+	alt->intf_desc.bInterfaceNumber = 0;
+	alt->intf_desc.bNumEndpoints = 2;
+	alt->intf_desc.bInterfaceClass = cls;
+	alt->intf_desc.bInterfaceSubClass = sub;
+	alt->intf_desc.bInterfaceProtocol = proto;
+
+	alt->ep[0].ep_desc.bLength = 7;
+	alt->ep[0].ep_desc.bDescriptorType = 0x05;
+	alt->ep[0].ep_desc.bEndpointAddress = 0x8a;	/* bulk IN */
+	alt->ep[0].ep_desc.bmAttributes = 0x02;
+	alt->ep[0].ep_desc.wMaxPacketSize = 512;
+
+	alt->ep[1].ep_desc.bLength = 7;
+	alt->ep[1].ep_desc.bDescriptorType = 0x05;
+	alt->ep[1].ep_desc.bEndpointAddress = 0x0b;	/* bulk OUT */
+	alt->ep[1].ep_desc.bmAttributes = 0x02;
+	alt->ep[1].ep_desc.wMaxPacketSize = 512;
+}
+
+/*
+ * The red control for the byte assertion: when armed, the case compares the
+ * hook's output against a perturbed message instead of the truth, so a
+ * transcription error in the hook's own constant is what this control
+ * simulates - the assertion must then fail.
+ */
+static int g_ms_tamper;
+
+void
+lkpi_body_modeswitch_tamper(int on)
+{
+
+	g_ms_tamper = on;
+}
+
+/*
+ * Returns 0 when every assertion holds. *eject_bytes is the length of the
+ * message the hook put on the wire (the caller asserts it against the truth),
+ * *refused is set when the network personality was left alone.
+ */
+int
+lkpi_body_case_modeswitch(unsigned int *eject_bytes, int *refused)
+{
+	const struct usbh_class_driver *cd = lkpi_modeswitch_class_info.class_driver;
+	int rc;
+
+	*eject_bytes = 0;
+	*refused = 0;
+	if (cd == NULL || cd->connect == NULL || cd->disconnect == NULL) {
+		return -1;
+	}
+
+	/* the class table: VID/PID only, and it is this dongle's CD-ROM id */
+	if (lkpi_modeswitch_class_info.match_flags != USB_CLASS_MATCH_VID_PID) {
+		return -2;
+	}
+	if (lkpi_modeswitch_id_table[0][0] != 0x0bda ||
+	    lkpi_modeswitch_id_table[0][1] != 0x1a2b ||
+	    lkpi_modeswitch_id_table[1][0] != 0 ||
+	    lkpi_modeswitch_id_table[1][1] != 0) {
+		return -3;
+	}
+
+	g_ms_hcd.driver_name = "mock-modeswitch";
+	g_ms_hcd.driver_desc = "scripted controller for the modeswitch case";
+	g_ms_hcd.submit_urb = modeswitch_submit;
+	g_ms_bus.hc_driver = &g_ms_hcd;
+
+	/* (1) the CD-ROM persona: one eject, exact bytes, never a claim */
+	g_ms_out_n = 0;
+	g_ms_in_n = 0;
+	g_ms_out_len = 0;
+	g_ms_out_fail = 0;
+	build_modeswitch_hubport(0x1a2b, 0x08, 0x06, 0x50);
+	rc = cd->connect(&g_ms_hp, 0);
+	if (rc >= 0) {
+		return -4;			/* must never claim */
+	}
+	if (g_ms_hp.config.intf[0].priv != NULL) {
+		return -5;			/* and must leave no view behind */
+	}
+	if (g_ms_out_n != 1 || g_ms_in_n != 1) {
+		return -6;			/* one CBW out, one CSW in */
+	}
+	if (g_ms_out_len != sizeof(modeswitch_truth)) {
+		return -7;
+	}
+	{
+		uint8_t expect[sizeof(modeswitch_truth)];
+
+		memcpy(expect, modeswitch_truth, sizeof(expect));
+		if (g_ms_tamper) {
+			expect[15] ^= 0x01;	/* red control */
+		}
+		if (memcmp(g_ms_out, expect, sizeof(expect)) != 0) {
+			return -8;		/* the bytes must be the truth */
+		}
+	}
+	*eject_bytes = g_ms_out_len;
+
+	/* the same persona with the other mass-storage subclass must be handled
+	 * the same way (the guard keys on the class, not the subclass) */
+	g_ms_out_n = 0;
+	g_ms_in_n = 0;
+	build_modeswitch_hubport(0x1a2b, 0x08, 0x05, 0x50);
+	rc = cd->connect(&g_ms_hp, 0);
+	if (rc >= 0 || g_ms_out_n != 1 || g_ms_in_n != 1) {
+		return -9;
+	}
+
+	/* (2) the network personality is not this hook's device: it must be
+	 * left alone (no second eject after the flip) */
+	g_ms_out_n = 0;
+	g_ms_in_n = 0;
+	build_modeswitch_hubport(0xc820, 0xff, 0xff, 0xff);
+	rc = cd->connect(&g_ms_hp, 0);
+	if (rc >= 0) {
+		return -10;
+	}
+	if (g_ms_out_n != 0 || g_ms_in_n != 0) {
+		return -11;
+	}
+	*refused = 1;
+
+	/* a non-mass-storage interface under the same id must be left alone */
+	g_ms_out_n = 0;
+	g_ms_in_n = 0;
+	build_modeswitch_hubport(0x1a2b, 0xff, 0xff, 0xff);
+	rc = cd->connect(&g_ms_hp, 0);
+	if (rc >= 0 || g_ms_out_n != 0 || g_ms_in_n != 0) {
+		return -12;
+	}
+
+	/* (3) the device leaving the bus on the CBW is the flip itself, not a
+	 * failure: no CSW is expected then */
+	g_ms_out_n = 0;
+	g_ms_in_n = 0;
+	g_ms_out_fail = 1;
+	build_modeswitch_hubport(0x1a2b, 0x08, 0x06, 0x50);
+	rc = cd->connect(&g_ms_hp, 0);
+	g_ms_out_fail = 0;
+	if (rc >= 0 || g_ms_out_n != 1 || g_ms_in_n != 0) {
+		return -13;
+	}
+
+	/* (4) the shared guard: the wireless hook must refuse the CD-ROM
+	 * persona, so the two hooks cannot both act on it */
+	build_modeswitch_hubport(0x1a2b, 0x08, 0x06, 0x50);
+	rc = lkpi_wlan_class_info.class_driver->connect(&g_ms_hp, 0);
+	if (rc >= 0 || g_ms_hp.config.intf[0].priv != NULL) {
+		return -14;
+	}
+
 	return 0;
 }
