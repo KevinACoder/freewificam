@@ -385,6 +385,7 @@ LKPI_SRCS := \
 	$(LKPI)/skbuff/skbuff_pool.c \
 	$(LKPI)/usb/linuxkpi_usb.c \
 	$(LKPI)/usb/lkpi_usbh_class.c \
+	$(LKPI)/usb/lkpi_usbh_modeswitch.c \
 	$(NPORT)/bridge/wlan_seam_adapter.c \
 	$(ROOT)/ports/cherryusb/lkpi_usb_cherryusb.c
 
