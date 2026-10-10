@@ -57,7 +57,7 @@ SRCS := \
     $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c \
     $(ENGINE_EXTRA_SRC) \
     $(MAKEFILE_DIR)/main.c \
-    $(MAKEFILE_DIR)/platform_host.c \
+    $(ROOT)/tests/host/common/pool_platform_host.c \
     $(ROOT)/os/freertos/freertos_hooks.c \
     $(ROOT)/os/freertos/cmsis2_host.c \
     $(ROOT)/os/freertos/cmsis2_ext.c \

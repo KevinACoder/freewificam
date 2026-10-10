@@ -72,8 +72,8 @@ struct fake_driver_state {
 	int last_bss_joined;
 	uint8_t last_bssid[6];
 	/* every bss_info_changed call, as the driver's association branch
-	 * would read it: the change bits, vif->cfg's assoc/aid at call time,
-	 * the BSSID (and whether it was NULL), and the rate bitmaps the
+	 * would read it: the change bits, vif->cfg's assoc/aid/ap_addr at call
+	 * time, the BSSID (and whether it was NULL), and the rate bitmaps the
 	 * adapter built - the association wiring the join judgment stands on */
 	struct fake_bss_ev {
 		uint64_t	changed;
@@ -81,6 +81,7 @@ struct fake_driver_state {
 		unsigned int	aid;
 		uint8_t		bssid[6];
 		int		bssid_null;
+		uint8_t		ap_addr[6];
 		uint32_t	supp0;
 		uint32_t	basic;
 	} bss_ev[FAKE_DRIVER_BSS_EV_MAX];

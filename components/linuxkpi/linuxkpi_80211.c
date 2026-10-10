@@ -830,6 +830,17 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	vif->type = (enum nl80211_iftype)type;
 	memcpy(vif->addr, addr, 6);
 	vif->addr_valid = true;
+	/*
+	 * The default link's bookkeeping, the way the interface sets it up for
+	 * every vif (link.c:ieee80211_link_init with link_id -1: the default
+	 * link's conf IS the vif's own bss_conf and its link id is 0).  A
+	 * driver's link-level handlers read it - rtw89's link_info_changed
+	 * looks its own per-link record up by conf->link_id - and valid_links
+	 * stays 0, which is what a non-MLO vif carries (mlme.c:6460-6465) and
+	 * what ieee80211_vif_is_mld() answers from.
+	 */
+	vif->bss_conf.link_id = 0;
+	vif->link_conf[0] = &vif->bss_conf;
 	ctx->vifs[i] = vif;
 	vif_hw_bind(vif, hw);
 	/*
@@ -880,16 +891,45 @@ lkpi80211_drv_vif_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	lkpi_printf("lkpi80211: vif_remove of a foreign vif refused\n");
 }
 
+/*
+ * The vif-wide half of a BSS change: the bits that describe the interface
+ * rather than one of its links.  Upstream names the set in
+ * net/mac80211/main.c:203-208 (ASSOC, IDLE, PS, IBSS, ARP_FILTER, SSID); this
+ * face's enum carries the three of those the compiled drivers react to
+ * (include/net/mac80211.h:150: ASSOC, PS, ARP_FILTER), and the drivers here
+ * are never sent the other three.
+ */
+#define LKPI80211_VIF_CFG_FLAGS	(BSS_CHANGED_ASSOC | BSS_CHANGED_PS | \
+				 BSS_CHANGED_ARP_FILTER)
+
 void
 lkpi80211_drv_bss_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
     u64 changed)
 {
+	struct lkpi80211_hw_ctx *ctx;
+	u64 cfg = changed & (u64)LKPI80211_VIF_CFG_FLAGS;
 
-	if (hw == NULL || vif == NULL)
+	if (hw == NULL || vif == NULL || changed == 0)
 		return;
-	if (LKPI80211_CTX(hw)->ops->bss_info_changed != NULL)
-		LKPI80211_CTX(hw)->ops->bss_info_changed(hw, vif,
-		    &vif->bss_conf, changed);
+	ctx = LKPI80211_CTX(hw);
+	/*
+	 * The dispatch the interface itself makes (main.c:238-254): the
+	 * vif-wide bits go to vif_cfg_changed, everything else to
+	 * link_info_changed with the vif's own bss_conf as the link, and a
+	 * driver declaring the older bss_info_changed gets the whole mask as
+	 * it always did.  The two families are not exclusive upstream - a
+	 * driver that declares both is called twice - so neither is here; the
+	 * drivers this port carries declare one family each (rtl8xxxu
+	 * bss_info_changed, rtw89 vif_cfg_changed + link_info_changed).
+	 */
+	if (cfg != 0 && ctx->ops->vif_cfg_changed != NULL)
+		ctx->ops->vif_cfg_changed(hw, vif, cfg);
+	if ((changed & ~(u64)LKPI80211_VIF_CFG_FLAGS) != 0 &&
+	    ctx->ops->link_info_changed != NULL)
+		ctx->ops->link_info_changed(hw, vif, &vif->bss_conf,
+		    changed & ~(u64)LKPI80211_VIF_CFG_FLAGS);
+	if (ctx->ops->bss_info_changed != NULL)
+		ctx->ops->bss_info_changed(hw, vif, &vif->bss_conf, changed);
 }
 
 int
@@ -922,6 +962,33 @@ lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	control.sta = sta;
 	(void)vif;
 	ctx->ops->tx(hw, &control, skb);
+}
+
+/*
+ * The driver's station-state hook, whichever shape it declares.  A driver with
+ * .sta_state is given every transition; one without it is given .sta_add at
+ * AUTH -> ASSOC and .sta_remove at ASSOC -> AUTH, and the NOTEXIST boundaries
+ * reach no driver code at all - exactly what the interface's own dispatcher
+ * does for that case (net/mac80211/driver-ops.c:drv_sta_state).
+ */
+static int
+sta_state_call(struct lkpi80211_hw_ctx *ctx, struct ieee80211_hw *hw,
+    struct ieee80211_vif *vif, struct ieee80211_sta *sta,
+    enum ieee80211_sta_state old_state, enum ieee80211_sta_state new_state)
+{
+
+	if (ctx->ops->sta_state != NULL)
+		return ctx->ops->sta_state(hw, vif, sta, old_state, new_state);
+	if (old_state == IEEE80211_STA_AUTH &&
+	    new_state == IEEE80211_STA_ASSOC) {
+		if (ctx->ops->sta_add != NULL)
+			return ctx->ops->sta_add(hw, vif, sta);
+	} else if (old_state == IEEE80211_STA_ASSOC &&
+	    new_state == IEEE80211_STA_AUTH) {
+		if (ctx->ops->sta_remove != NULL)
+			ctx->ops->sta_remove(hw, vif, sta);
+	}
+	return 0;
 }
 
 struct ieee80211_sta *
@@ -963,15 +1030,24 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	 */
 	for (i = 0; i < IEEE80211_NUM_TIDS; i++)
 		sta->txq[i] = lkpi_txq_alloc(hw, vif, sta, (u8)i);
-	if (ctx->ops->sta_add != NULL) {
-		ret = ctx->ops->sta_add(hw, vif, sta);
-		if (ret != 0) {
-			lkpi_printf("lkpi80211: sta_add refused (%d)\n", ret);
-			ctx->stas[slot] = NULL;
-			lkpi_txq_free_sta(sta);
-			kfree(sta);
-			return NULL;
-		}
+	/*
+	 * The station appearing and then associating.  The interface runs the
+	 * whole ladder (NOTEXIST -> NONE -> AUTH -> ASSOC) across discovery and
+	 * association; this port has no separate discovery event, so the two
+	 * transitions that carry driver work happen together here.  NONE -> AUTH
+	 * is skipped: no driver in this repository acts on it.
+	 */
+	ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_NOTEXIST,
+	    IEEE80211_STA_NONE);
+	if (ret == 0)
+		ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_AUTH,
+		    IEEE80211_STA_ASSOC);
+	if (ret != 0) {
+		lkpi_printf("lkpi80211: sta add refused (%d)\n", ret);
+		ctx->stas[slot] = NULL;
+		lkpi_txq_free_sta(sta);
+		kfree(sta);
+		return NULL;
 	}
 	return sta;
 }
@@ -986,13 +1062,17 @@ lkpi80211_drv_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (hw == NULL || sta == NULL)
 		return;
 	ctx = LKPI80211_CTX(hw);
-	if (ctx->ops->sta_remove != NULL)
-		ctx->ops->sta_remove(hw, vif, sta);
+	/* the ladder back down, in the order the interface runs it: the
+	 * association ends, then the station is gone */
+	(void)sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_ASSOC,
+	    IEEE80211_STA_AUTH);
+	(void)sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_NONE,
+	    IEEE80211_STA_NOTEXIST);
 	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
 		if (ctx->stas[i] == sta) {
 			ctx->stas[i] = NULL;
-			/* after sta_remove: the driver's teardown still reads the
-			 * queues its station setup initialized */
+			/* after the driver's teardown: it still reads the queues
+			 * its station setup initialized */
 			lkpi_txq_free_sta(sta);
 			kfree(sta);
 			return;
