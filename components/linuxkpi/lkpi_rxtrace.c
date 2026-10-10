@@ -47,6 +47,7 @@ static u32			dv_seq;
 static u32			ck_n;
 static u32			dv_n;
 static u32			anom_n;
+static u32			short_n;
 static u32			dump_n;
 
 /*
@@ -184,20 +185,25 @@ lkpi_rxtrace_delivery(struct sk_buff *skb)
 	dv_n++;
 
 	/*
-	 * Anomaly classes: a single 802.11 frame cannot exceed ~2346 bytes, so
-	 * a delivery past 1600 is either an aggregate that was never split or
-	 * a length read out of the wrong bytes; below 24 there is not even a
-	 * management header; the FCS-failed flag on a frame that still reached
-	 * the stack means the parser was handed a frame the chip marked bad.
+	 * The anomaly classes that trigger a snapshot: a single 802.11 frame
+	 * cannot exceed ~2346 bytes, so a delivery past 1600 is either an
+	 * aggregate that was never split or a length read out of the wrong
+	 * bytes; a frame the chip flagged FCS-failed that still reached the
+	 * stack means the parser was handed a frame the chip marked bad.  A
+	 * short delivery only counts (`short`): 14-byte ACKs and other control
+	 * frames are legitimate traffic here (the substitute hands control
+	 * frames up like upstream does before it filters them), so they must
+	 * not spend the snapshot budget.
 	 */
-	if (len > 1600U || len < 24U || fcs_bad != 0) {
+	if (len > 1600U || fcs_bad != 0) {
 		anom_n++;
 		if (!first_dv_anom_seen) {
 			first_dv_anom_seen = 1;
 			first_dv_anom = e;
 		}
-		both_sides_dump(len > 1600U ? "delivery len high" :
-		    (len < 24U ? "delivery len low" : "delivery fcs"));
+		both_sides_dump(len > 1600U ? "delivery len high" : "delivery fcs");
+	} else if (len < 24U) {
+		short_n++;
 	}
 }
 
@@ -220,7 +226,7 @@ lkpi_rxtrace_first_anom(u32 *len, u32 *ptr, int *st, u8 head[16])
 
 void
 lkpi_rxtrace_stats(u32 *completions, u32 *deliveries, u32 *anomalies,
-    u32 *dumps)
+    u32 *shorts, u32 *dumps)
 {
 
 	if (completions != NULL)
@@ -229,6 +235,8 @@ lkpi_rxtrace_stats(u32 *completions, u32 *deliveries, u32 *anomalies,
 		*deliveries = dv_n;
 	if (anomalies != NULL)
 		*anomalies = anom_n;
+	if (shorts != NULL)
+		*shorts = short_n;
 	if (dumps != NULL)
 		*dumps = dump_n;
 }

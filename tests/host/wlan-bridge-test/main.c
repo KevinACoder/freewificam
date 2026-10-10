@@ -1975,6 +1975,61 @@ case_b19(void)
 	return 0;
 }
 
+/*
+ * B20: the receive-copy guard. The bridge copies every frame into an mbuf
+ * whose data pointer sits MH_ALIGN bytes into the cluster, so the writable
+ * area is M_TRAILINGSPACE, not MCLBYTES. The first version of the helper
+ * compared the length against MCLBYTES: a 3841..4096-byte frame (an aggregate
+ * the driver's descriptor parse cut wrong) was then copied past its
+ * allocation - on the board a 4020-byte frame overran its heap block by 172
+ * bytes into the next block, whose free-list links the allocator later walked
+ * as garbage (the rtw89 join fault under the RX worker). This case feeds a
+ * frame in that gap and requires it refused and counted; a frame that exactly
+ * fills the data area must still go through, so the guard is a bound and not a
+ * blanket size cap.
+ */
+static int
+case_b20(void)
+{
+	struct wlan_bridge_counters before, after;
+	static uint8_t big[4000];	/* > the data area (3840), <= MCLBYTES */
+	unsigned int i;
+
+	for (i = 0; i < sizeof(big); i++)
+		big[i] = (uint8_t)(i * 7);
+	big[0] = 0x08;			/* data: a leak would reach on_data() */
+	big[1] = 0x02;
+	memcpy(big + 4, sta_mac, 6);
+	memcpy(big + 10, ap_bssid, 6);
+	memcpy(big + 16, ap_bssid, 6);
+
+	wlan_bridge_stats(&before);
+	inject_rx(big, sizeof(big));
+	wlan_bridge_stats(&after);
+	if (after.oversize_drops != before.oversize_drops + 1) {
+		case_line("B20", 0, "an oversize frame was not refused by the "
+		    "data-area guard (oversize +%u)",
+		    after.oversize_drops - before.oversize_drops);
+		return -1;
+	}
+
+	/* the boundary on the accepting side: a frame exactly filling the data
+	 * area still goes through the allocator (whatever the stack then makes
+	 * of it); only past it is a refusal */
+	before = after;
+	inject_rx(big, 3840);
+	wlan_bridge_stats(&after);
+	if (after.oversize_drops != before.oversize_drops) {
+		case_line("B20", 0, "a frame exactly filling the mbuf data area "
+		    "was refused (oversize +%u)",
+		    after.oversize_drops - before.oversize_drops);
+		return -1;
+	}
+	case_line("B20", 1, "a frame past the mbuf data area is refused and "
+	    "counted; one that fits exactly still goes through");
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -2121,9 +2176,10 @@ run_suite(void)
 	(void)case_b17();
 	(void)case_b18();
 	(void)case_b19();
+	(void)case_b20();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=19\n");
+		printf("WLANBRIDGE: SUITE PASS cases=20\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);

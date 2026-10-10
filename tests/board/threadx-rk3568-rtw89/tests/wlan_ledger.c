@@ -55,11 +55,11 @@ wlan_ledger_usb(const char *tag)
 	 * never saw it).
 	 */
 	{
-		u32 rt_c, rt_d, rt_a, rt_dm;
+		u32 rt_c, rt_d, rt_a, rt_s, rt_dm;
 
-		lkpi_rxtrace_stats(&rt_c, &rt_d, &rt_a, &rt_dm);
-		board_log("wlan: %s rxtrace comp=%u deliv=%u anom=%u dumps=%u\n",
-		    tag, rt_c, rt_d, rt_a, rt_dm);
+		lkpi_rxtrace_stats(&rt_c, &rt_d, &rt_a, &rt_s, &rt_dm);
+		board_log("wlan: %s rxtrace comp=%u deliv=%u anom=%u short=%u "
+		    "dumps=%u\n", tag, rt_c, rt_d, rt_a, rt_s, rt_dm);
 		if (rt_a != 0) {
 			u32 a_len, a_ptr;
 			u8 a_head[16];

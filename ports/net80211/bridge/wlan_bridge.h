@@ -80,6 +80,12 @@ struct wlan_bridge_counters {
 	unsigned int	rx_beacon_tgt;
 	unsigned int	rx_probersp;
 	unsigned int	rx_fcs_bad;
+	/* Frames refused because they do not fit the buffer that was to carry
+	 * them (rx and tx both allocate through the same helper).  A frame
+	 * larger than a legal 802.11 MPDU means the lower layer handed up a
+	 * broken length or a misparsed aggregate; it is dropped counted rather
+	 * than copied past the mbuf's writable area. */
+	unsigned int	oversize_drops;
 	/* The stack's own reasons for dropping a received frame, which the stack
 	 * counts and this port only reports.  `chanmismatch` is the one that
 	 * matters for a sweep: net80211 silently discards a beacon or probe

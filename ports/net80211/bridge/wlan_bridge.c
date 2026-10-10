@@ -112,6 +112,7 @@ static struct {
 	unsigned int rx_beacon_tgt;	/* ... from the BSSID this join targets */
 	unsigned int rx_probersp;	/* diagnostic: probe responses seen */
 	unsigned int rx_fcs_bad;	/* diagnostic: frames the chip flagged */
+	unsigned int oversize_drops;	/* frames refused past the mbuf data area */
 	unsigned int rx_mgtdiscard;	/* stack: mgmt frames dropped in the state gate */
 	unsigned int rx_wrongbss;	/* stack: frames from a BSSID we are not on */
 	unsigned int rx_trace;		/* the per-frame admission trace's budget */
@@ -159,12 +160,33 @@ static struct mbuf *
 bridge_mbuf_alloc(const uint8_t *frame, size_t len)
 {
 	struct mbuf *m;
+	size_t space;
 
-	if (len == 0 || len > MCLBYTES)
+	if (len == 0)
 		return NULL;
 	MGETHDR(m, M_NOWAIT, MT_DATA);
 	if (m == NULL)
 		return NULL;
+	/*
+	 * The frame is copied where this mbuf's data pointer points, not at the
+	 * cluster head: a header mbuf's m_data sits MH_ALIGN bytes into the
+	 * cluster, so its writable space is M_TRAILINGSPACE, not MCLBYTES.  A
+	 * `len > MCLBYTES` guard (the first version of this helper) let a frame
+	 * of 3841..4096 bytes be copied past the allocation - a 4020-byte frame
+	 * overran its 4200-byte block by 172 bytes and landed in the next heap
+	 * block, whose free-list links the allocator then walked as garbage (the
+	 * rtw89 join fault: block_remove off a wild pointer).  A frame past a
+	 * legal 802.11 MPDU's size is malformed input either way; drop it named
+	 * and counted instead of scribbling on the heap.
+	 */
+	space = (size_t)M_TRAILINGSPACE(m);
+	if (len > space) {
+		m_freem(m);
+		bridge.oversize_drops++;
+		wlan_osal_log("wlan: frame of %u bytes exceeds the %u-byte mbuf "
+		    "data area; dropped\n", (unsigned)len, (unsigned)space);
+		return NULL;
+	}
 	memcpy(mtod(m, void *), frame, len);
 	m->m_len = (int)len;
 	m->m_pkthdr.len = (int)len;
@@ -1686,6 +1708,7 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->rx_beacon_tgt = bridge.rx_beacon_tgt;
 	out->rx_probersp = bridge.rx_probersp;
 	out->rx_fcs_bad = bridge.rx_fcs_bad;
+	out->oversize_drops = bridge.oversize_drops;
 	/* the stack's own discard reasons, read from the stack's counters */
 	if (bridge.ic != NULL) {
 		out->rx_chanmismatch = bridge.ic->ic_stats.is_rx_chanmismatch;

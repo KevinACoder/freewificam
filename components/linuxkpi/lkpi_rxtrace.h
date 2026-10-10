@@ -39,7 +39,7 @@ void	lkpi_rxtrace_completion(unsigned int ep_addr, int status, u32 len,
 	    const void *data);
 void	lkpi_rxtrace_delivery(struct sk_buff *skb);
 void	lkpi_rxtrace_stats(u32 *completions, u32 *deliveries,
-	    u32 *anomalies, u32 *dumps);
+	    u32 *anomalies, u32 *shorts, u32 *dumps);
 /*
  * The first delivery-side anomaly, kept for the ledger print so the decisive
  * datum survives even if the console ring drops the live dump: `len` what was
@@ -66,7 +66,7 @@ lkpi_rxtrace_delivery(struct sk_buff *skb)
 }
 static inline void
 lkpi_rxtrace_stats(u32 *completions, u32 *deliveries, u32 *anomalies,
-    u32 *dumps)
+    u32 *shorts, u32 *dumps)
 {
 
 	if (completions != NULL)
@@ -75,6 +75,8 @@ lkpi_rxtrace_stats(u32 *completions, u32 *deliveries, u32 *anomalies,
 		*deliveries = 0;
 	if (anomalies != NULL)
 		*anomalies = 0;
+	if (shorts != NULL)
+		*shorts = 0;
 	if (dumps != NULL)
 		*dumps = 0;
 }
