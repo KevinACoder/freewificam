@@ -44,20 +44,25 @@ CASES = [
 #: stamp-stripped transcript). Emitting sites:
 #:   shell-up    ports/cherrysh/shell_port.c (the REPL prompt)
 #:   rtw89-probe  the case's own lines plus the driver's own probe log routed
-#:               through the linuxkpi sink (third-party/rtl8xxxu/core.c, the
-#:               firmware revision line), and the linuxkpi class hook's claim
-#:               line (components/linuxkpi/usb/lkpi_usbh_class.c)
+#:               through the linuxkpi sink (third-party/rtw89/fw.c, the
+#:               firmware version line, and third-party/rtw89/core.c, the chip
+#:               information line), and the linuxkpi class hook's claim line
+#:               (components/linuxkpi/usb/lkpi_usbh_class.c)
 #:   rtw89-scan   the case's scan lines (start / one row per candidate / done)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "rtw89-probe": [
         r"wlan: usb bus=\d+ hcd=\w+ base=0x[0-9a-f]+ started",
         # the driver's own probe-time lines, through the linuxkpi log sink:
-        # the firmware it recognised (fw.c:755) and the chip it read back
-        # (core.c:7431).  Both are the driver's own text, so a pin bump that
-        # changes them is a data change here, not a logic change.
-        r"lkpi: Firmware version \d+\.\d+\.\d+\.\d+",
-        r"lkpi: chip info CID: [0-9a-f]+, CV: [0-9a-f]+, AID: [0-9a-f]+, ACV: [0-9a-f]+, RFE: \d+",
+        # the firmware it recognised (rtw89/fw.c) and the chip it read back
+        # (rtw89/core.c).  Both are the driver's own text, so a pin bump that
+        # changes them is a data change here, not a logic change.  The
+        # "lkpiu:" module tag between the sink's "lkpi:" prefix and the
+        # driver's message is the linuxkpi device name the class hook sets
+        # (components/linuxkpi/usb/lkpi_usbh_class.c), i.e. the same dev_info
+        # path a Linux printk would carry.
+        r"lkpi: lkpiu: Firmware version \d+\.\d+\.\d+\.\d+",
+        r"lkpi: lkpiu: chip info CID: [0-9a-f]+, CV: [0-9a-f]+, AID: [0-9a-f]+, ACV: [0-9a-f]+, RFE: \d+",
         r"wlan: probe done attached=1",
     ],
     "rtw89-scan": [
@@ -110,9 +115,9 @@ BASE_TRANSCRIPT = (
     + "[  10.010] CASE threadx-rk3568-rtw89/shell-up PASS\r\n"
     "[  10.020] wlan: usb bus=3 hcd=xhci base=0xfe000000 started\r\n"
     "[  10.030] usbh: lkpi claim attempt 0bda:b851\r\n"
-    "[  11.000] lkpi: Firmware version 0.29.22.0 (6a0d1e39), cmd version 1, "
+    "[  11.000] lkpi: lkpiu: Firmware version 0.29.22.0 (6a0d1e39), cmd version 1, "
     "type 1\r\n"
-    "[  11.500] lkpi: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n"
+    "[  11.500] lkpi: lkpiu: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n"
     "[  12.000] wlan: probe done attached=1 rx=0 mgt_tx=0 scan=0/0\r\n"
     "[  12.010] CASE threadx-rk3568-rtw89/rtw89-probe PASS\r\n"
     "[  12.020] wlan: scan start ssid=QiQiJia\r\n"
@@ -185,7 +190,7 @@ MUTATIONS = [
     ("anchor dropped (probe done)", BASE_TRANSCRIPT.replace(
         "wlan: probe done attached=1 rx=0 mgt_tx=0 scan=0/0\r\n", ""), 1),
     ("anchor dropped (chip info)", BASE_TRANSCRIPT.replace(
-        "[  11.500] lkpi: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n",
+        "[  11.500] lkpi: lkpiu: chip info CID: 1, CV: 1, AID: 0, ACV: 0, RFE: 4\r\n",
         ""), 1),
     ("anchor dropped (scan totals)", BASE_TRANSCRIPT.replace(
         "wlan: scan done rows=2 chans=12\r\n", ""), 1),
