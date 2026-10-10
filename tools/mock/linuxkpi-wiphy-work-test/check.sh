@@ -32,18 +32,21 @@ case_line() {
 # ---- the cases ----------------------------------------------------------------
 
 if "$bin" > "$log_dir/run.log" 2>&1; then
-    if grep -q '^WIPHYWORK: summary cases=11 failed=0$' "$log_dir/run.log"; then
+    if grep -q '^WIPHYWORK: summary cases=12 failed=0$' "$log_dir/run.log"; then
         case_line queue-cancel-flush PASS
         case_line delayed-and-guards PASS
+        case_line timer-object-reuse PASS
     else
         case_line queue-cancel-flush FAIL
         case_line delayed-and-guards FAIL
+        case_line timer-object-reuse FAIL
         echo "linuxkpi-wiphy-work-test: summary unexpected" >&2
         tail -8 "$log_dir/run.log" >&2 || true
     fi
 else
     case_line queue-cancel-flush FAIL
     case_line delayed-and-guards FAIL
+    case_line timer-object-reuse FAIL
     echo "linuxkpi-wiphy-work-test: run failed" >&2
     tail -8 "$log_dir/run.log" >&2 || true
 fi
@@ -80,6 +83,38 @@ else
     case_line cancel-red-control FAIL
     echo "linuxkpi-wiphy-work-test: the mutated engine did not build" >&2
     tail -5 "$log_dir/mutated-build.log" >&2 || true
+fi
+
+# A delayed work's timer object is created once and reused.  The control builds
+# the same harness against a copy of the core body whose timer setup always makes
+# a fresh object: the timer-object case must then fail (the handle changes under
+# it).  Without this, "the slot is not leaked" would be a claim no implementation
+# could contradict.
+mut2=$log_dir/mutated-core
+rm -rf "$mut2"
+mkdir -p "$mut2"
+sed 's/if (shell->inited) {/if (0) {/' \
+    "$root/components/linuxkpi/linuxkpi_core.c" > "$mut2/linuxkpi_core.c"
+if grep -q 'if (0) {' "$mut2/linuxkpi_core.c" &&
+    make -C "$root/tests/host/linuxkpi-wiphy-work-test" \
+        CORE_EXTRA_SRC="$mut2/linuxkpi_core.c" \
+        BUILD_DIR="$mut2/build" > "$log_dir/mutated-core-build.log" 2>&1; then
+    if timeout -k 5 120 "$mut2/build/linuxkpi-wiphy-work-test" > "$log_dir/mutated-core-run.log" 2>&1; then
+        case_line timer-reuse-red-control FAIL
+        echo "linuxkpi-wiphy-work-test: the recreating core passed (it must fail)" >&2
+    else
+        if grep -q '^WIPHYWORK: timer-object-reused FAIL' "$log_dir/mutated-core-run.log"; then
+            case_line timer-reuse-red-control PASS
+        else
+            case_line timer-reuse-red-control FAIL
+            echo "linuxkpi-wiphy-work-test: the red control failed elsewhere" >&2
+            tail -4 "$log_dir/mutated-core-run.log" >&2 || true
+        fi
+    fi
+else
+    case_line timer-reuse-red-control FAIL
+    echo "linuxkpi-wiphy-work-test: the mutated core did not build" >&2
+    tail -5 "$log_dir/mutated-core-build.log" >&2 || true
 fi
 
 exit "$failures"
