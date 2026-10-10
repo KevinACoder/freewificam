@@ -1,8 +1,15 @@
-# The firmware image this tree compiles in, and the digest it must have.
+# The firmware images this tree compiles in, and the digests they must have.
 #
-# The bytes live in rtl8188eufw_blob.c (generated from the file the board Linux lane
-# ships for the same chip, which is the file the kernel driver loads); the digest below
-# is the anchor that ties the compiled-in array to that file.  The check that enforces
-# it is tests/host/linuxkpi-body-test/check-firmware.sh, which can also be pointed at a
-# reference copy of the image for a two-source comparison.
-2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4  rtl8188eufw.bin
+# One line per image: the digest, the name the driver asks for it by, and the
+# blob translation unit that carries it.  The bytes are generated from the files
+# the board's Linux lane ships for the same chips - the files the kernel drivers
+# load; the digests below are the anchor that ties each compiled-in array back to
+# its file.  The check that enforces them is
+# tests/host/linuxkpi-body-test/check-firmware.sh, which can also be pointed at a
+# directory holding reference copies of the images for a two-source comparison.
+#
+# The driver name is the one the driver requests, not the file's name on a host:
+# a driver that walks format numbers downwards asks for the highest first (rtw89
+# on 8851B asks for the -1 form before the bare one, fw.c:1006-1010).
+2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4  rtl8188eufw.bin       rtl8188eufw_blob.c
+1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7  rtw8851b_fw-1.bin     rtw8851b_fw_blob.c
