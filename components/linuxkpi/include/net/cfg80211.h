@@ -1314,6 +1314,12 @@ struct cfg80211_match_set {
 	s32 rssi_thold;
 };
 
+/* [LNX] include/net/cfg80211.h:3040 (record carried whole) */
+struct cfg80211_sched_scan_plan {
+	u32 interval;
+	u32 iterations;
+};
+
 /* [LNX] include/net/cfg80211.h:2463 (record carried whole) */
 struct cfg80211_sar_sub_specs {
 	s32 power;
@@ -1460,6 +1466,19 @@ bool cfg80211_channel_is_psc(struct ieee80211_channel *chan);
 
 
 const u8 *cfg80211_find_ie(u8 eid, const u8 *ies, int len);
+
+/* [LNX] include/net/cfg80211.h:8365: the interface's own SSID comparison, an
+ * inline the 8821CU driver calls to match a scan result against a request. */
+static inline bool cfg80211_ssid_eq(struct cfg80211_ssid *a, struct cfg80211_ssid *b)
+{
+	if (WARN_ON(!a || !b))
+		return false;
+
+	if (a->ssid_len != b->ssid_len)
+		return false;
+
+	return memcmp(a->ssid, b->ssid, a->ssid_len) == 0;
+}
 
 
 

@@ -46,6 +46,9 @@
 
 #endif
 
+/* [LNX] include/linux/ieee80211.h:41 */
+#define	FCS_LEN	4
+
 /* [LNX] include/linux/ieee80211.h:751,1789: the frame helpers the compiled set calls.
  * The interface defines them inline - they are one-line predicates over the frame
  * control field and the header-length walk - and they are inline here too, in the
@@ -74,6 +77,8 @@ enum ieee80211_vht_max_ampdu_length_exp {
 };
 /* [LNX] include/linux/ieee80211-vht.h:112 (the enumerators the compiled set names, at their computed positions) */
 enum ieee80211_vht_mcs_support {
+	IEEE80211_VHT_MCS_SUPPORT_0_7 = 0,
+	IEEE80211_VHT_MCS_SUPPORT_0_8 = 1,
 	IEEE80211_VHT_MCS_SUPPORT_0_9 = 2,
 	IEEE80211_VHT_MCS_NOT_SUPPORTED = 3
 };
@@ -390,6 +395,9 @@ enum ieee80211_ht_mpdu_density {
 #define	WLAN_CIPHER_SUITE_CCMP		SUITE(0x000fac, 4)
 #define	WLAN_CIPHER_SUITE_WEP104	SUITE(0x000fac, 5)
 #define	WLAN_CIPHER_SUITE_AES_CMAC	SUITE(0x000fac, 6)
+#define	WLAN_CIPHER_SUITE_BIP_GMAC_128	SUITE(0x000fac, 11)
+#define	WLAN_CIPHER_SUITE_BIP_GMAC_256	SUITE(0x000fac, 12)
+#define	WLAN_CIPHER_SUITE_BIP_CMAC_256	SUITE(0x000fac, 13)
 
 /* ------------------------------------------------------------------ */
 /* frame predicates                                                    */
@@ -824,6 +832,11 @@ struct ieee80211_p2p_noa_attr {
 
 /* [LNX] include/linux/ieee80211-vht.h:167 */
 #define IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454			0x00000002
+
+/* [LNX] include/linux/ieee80211-vht.h:21-23 (the lengths the compiled set names) */
+#define IEEE80211_MAX_MPDU_LEN_VHT_3895				3895
+#define IEEE80211_MAX_MPDU_LEN_VHT_7991				7991
+#define IEEE80211_MAX_MPDU_LEN_VHT_11454			11454
 
 /* [LNX] include/linux/ieee80211-vht.h:169 */
 #define IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160MHZ		0x00000004

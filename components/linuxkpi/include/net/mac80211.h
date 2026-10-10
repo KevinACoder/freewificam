@@ -629,6 +629,8 @@ enum mac80211_rx_encoding {
 #define	RX_FLAG_AMPDU_IS_LAST		BIT(16)
 #define	RX_FLAG_AMPDU_DELIM_CRC_ERROR	BIT(17)
 #define	RX_FLAG_AMPDU_DELIM_CRC_KNOWN	BIT(18)
+/* [LNX] include/net/mac80211.h:1683 (the one further flag the compiled set names) */
+#define	RX_FLAG_NO_PSDU			BIT(29)
 
 struct ieee80211_rx_status {
 	u64	mactime;
@@ -1008,6 +1010,14 @@ enum ieee80211_sta_state {
 	IEEE80211_STA_ASSOC = 3
 };
 
+/* [LNX] include/net/mac80211.h:4068 (record carried whole) */
+struct ieee80211_prep_tx_info {
+	u16 duration;
+	u16 subtype;
+	u8 success:1, was_assoc:1;
+	int link_id;
+};
+
 struct ieee80211_ops {
 	void	(*tx)(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 		       struct sk_buff *skb);
@@ -1140,6 +1150,13 @@ struct ieee80211_ops {
 				struct ieee80211_vif *vif,
 				struct ieee80211_sta *sta,
 				u16 old_links, u16 new_links);
+	/* [LNX] include/net/mac80211.h:4981,5076 (the two callbacks only the 8821CU set names) */
+	void	(*mgd_prepare_tx)(struct ieee80211_hw *hw,
+				  struct ieee80211_vif *vif,
+				  struct ieee80211_prep_tx_info *info);
+	bool	(*can_aggregate_in_amsdu)(struct ieee80211_hw *hw,
+					  struct sk_buff *head,
+					  struct sk_buff *skb);
 };
 
 /* ------------------------------------------------------------------ */
@@ -1518,6 +1535,38 @@ static inline bool ieee80211_vif_is_mld(const struct ieee80211_vif *vif)
 {
 	return vif->valid_links != 0;
 }
+
+/*
+ * [LNX] include/net/mac80211.h: `static inline enum nl80211_iftype
+ * ieee80211_iftype_p2p(enum nl80211_iftype type, bool p2p)` - maps a base iftype to
+ * its P2P counterpart, and the vif-shaped wrapper the 8821CU driver calls.
+ */
+static inline enum nl80211_iftype
+ieee80211_iftype_p2p(enum nl80211_iftype type, bool p2p)
+{
+	if (p2p) {
+		switch (type) {
+		case NL80211_IFTYPE_STATION:
+			return NL80211_IFTYPE_P2P_CLIENT;
+		case NL80211_IFTYPE_AP:
+			return NL80211_IFTYPE_P2P_GO;
+		default:
+			break;
+		}
+	}
+
+	return type;
+}
+
+/* [LNX] include/net/mac80211.h:7487 */
+static inline enum nl80211_iftype ieee80211_vif_type_p2p(struct ieee80211_vif *vif)
+{
+	return ieee80211_iftype_p2p(vif->type, vif->p2p);
+}
+
+/* [LNX] include/net/mac80211.h:7161 */
+void ieee80211_request_smps(struct ieee80211_vif *vif, unsigned int link_id,
+			    enum ieee80211_smps_mode smps_mode);
 
 u16 ieee80211_vif_usable_links(const struct ieee80211_vif *vif);
 

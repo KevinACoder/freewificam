@@ -84,6 +84,15 @@ static inline void eth_zero_addr(u8 *addr)
 		addr[i] = 0x00;
 }
 
+/* [LNX] include/linux/etherdevice.h:237: a random unicast address with the
+ * locally-administered bit set, the form the 8821CU driver seeds a MAC with. */
+static inline void eth_random_addr(u8 *addr)
+{
+	get_random_bytes(addr, ETH_ALEN);
+	addr[0] &= 0xfe;	/* clear multicast bit */
+	addr[0] |= 0x02;	/* set local assignment bit (IEEE802) */
+}
+
 static inline void eth_broadcast_addr(u8 *addr)
 {
 	int i;
