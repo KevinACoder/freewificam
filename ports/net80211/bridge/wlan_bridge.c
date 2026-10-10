@@ -956,28 +956,34 @@ wlan_bridge_scan_dwell(void)
 	if (!bridge.attached || !bridge.scanning)
 		return -EINVAL;
 	/*
-	 * The stack may have left its scan world on its own (the supplicant
-	 * cancels the sweep and joins: ieee80211_cancel_scan runs inside
-	 * sta_join's transition). Dwelling then would drag it back into SCAN
-	 * through next_scan's own transition - measured on the board as a
-	 * join that oscillated SCAN/AUTH and had every auth response
-	 * discarded ("bad state"), because the stack was no longer in AUTH
-	 * when the answer arrived. The sweep is over the moment the stack
-	 * says so; the bookkeeping closes here exactly as at a natural end.
+	 * The state decision and the walk are one critical section.
+	 *
+	 * The stack may have left its scan world on its own (the supplicant cancels
+	 * the sweep and joins: ieee80211_cancel_scan runs inside sta_join's
+	 * transition, and sta_join runs under this same lock).  Dwelling then would
+	 * drag it back into SCAN through next_scan's own transition - measured on
+	 * the board as a join that oscillated SCAN/AUTH and had every auth response
+	 * discarded ("bad state"), because the stack was no longer in AUTH when the
+	 * answer arrived.
+	 *
+	 * Reading that state *outside* the lock leaves a window: a join can enter
+	 * AUTH between the read and the walk, and the walk then drags a joining
+	 * stack back to SCAN - the join's request goes out on a channel the pump
+	 * chose and the AP's answer lands in the wrong state.  Both the decision
+	 * and the walk happen under the lock here.
 	 */
+	wlan_port_serializer_lock();
 	if (bridge.ic->ic_state != IEEE80211_S_SCAN) {
+		wlan_port_serializer_unlock();
 		bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_STATE);
 		return 0;
 	}
 	/*
-	 * Under the serializer: next_scan re-enters the stack's SCAN state
-	 * (tuning the radio to the next channel) and the join path's sta_join
-	 * runs under the same lock - the pair must not interleave, or an auth
-	 * request can leave on a channel the pump chose. bridge_start takes no
-	 * lock itself (the input path already runs it locked), so the probe
-	 * transmit this arms cannot recurse into this lock.
+	 * next_scan re-enters the stack's SCAN state (tuning the radio to the next
+	 * channel); bridge_start takes no lock itself (the input path already runs
+	 * it locked), so the probe transmit this arms cannot recurse into this
+	 * lock.
 	 */
-	wlan_port_serializer_lock();
 	more = ieee80211_next_scan(bridge.ic);
 	wlan_port_serializer_unlock();
 	if (more == 0)
