@@ -296,6 +296,7 @@ TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(CURDIR)/tests/rtw89_probe.c \
 	$(CURDIR)/tests/rtw89_scan.c \
+	$(CURDIR)/tests/rtw89_join_raw.c \
 	$(CURDIR)/tests/rtw89_join.c \
 	$(CURDIR)/tests/rtw89_dataplane.c \
 	$(CURDIR)/tests/rtw89_cmds.c

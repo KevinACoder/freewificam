@@ -35,6 +35,7 @@ CASES = [
     "shell-up",
     "rtw89-probe",
     "rtw89-scan",
+    "rtw89-join-raw",
     "rtw89-join",
     "rtw89-dataplane",
 ]
@@ -64,6 +65,11 @@ ANCHORS = {
         r"wlan: scan done rows=",
         r"wlan: gt-check matched=[1-9]\d*/",
     ],
+    # the case's own verdict line, printed only when the driver's open-auth
+    # exchange completed within the prompt ceiling (rtw89_join_raw.c)
+    "rtw89-join-raw": [
+        r"wlan: join-raw-ok filter=",
+    ],
     "rtw89-join": [
         r"wlan: join waiting for the supplicant",
         r"wlan: join-ok bssid=",
@@ -90,15 +96,16 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  40.360] BOARD-SUITE threadx-rk3568-rtw89 "
-    "result=pass cases=5 ok=5 exit=0\r\n"
+    "result=pass cases=6 ok=6 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-rtw89 bring-up selftest-tag\r\n"
     "[   0.000] wlan: chain wired (backend + registry + firmware + bridge)\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-rtw89 select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-rtw89 start cases=5 sel=all "
-    "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join,rtw89-dataplane\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-rtw89 start cases=6 sel=all "
+    "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join-raw,rtw89-join,"
+    "rtw89-dataplane\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-rtw89/shell-up PASS\r\n"
     "[  10.020] wlan: usb bus=3 hcd=xhci base=0xfe000000 started\r\n"
@@ -115,6 +122,14 @@ BASE_TRANSCRIPT = (
     "[  15.030] wlan: scan done rows=2 chans=12\r\n"
     "[  15.040] wlan: gt-check matched=1/3 rows=2\r\n"
     "[  15.050] CASE threadx-rk3568-rtw89/rtw89-scan PASS\r\n"
+    "[  15.060] wlan: join-raw sweep table rows=2 chans=12\r\n"
+    "[  15.070] wlan: join-raw narrow join rc=0 state=AUTH\r\n"
+    "[  15.080] wlan: join-raw narrow t=0ms state=AUTH bad_auth=0 "
+    "mgt_tx=1 txc=1 rx=90 bcnT=1 tuned=2412 tunes=1\r\n"
+    "[  15.180] wlan: join-raw narrow t=100ms state=ASSOC bad_auth=0 "
+    "mgt_tx=2 txc=2 rx=95 bcnT=2 tuned=2412 tunes=1\r\n"
+    "[  15.190] wlan: join-raw-ok filter=narrow ms=100\r\n"
+    "[  15.200] CASE threadx-rk3568-rtw89/rtw89-join-raw PASS\r\n"
     "[  16.000] wlan: join waiting for the supplicant (send 'wpa connect "
     "<ssid> <psk>' on the console)\r\n"
     "[  22.000] wlan0: WPA: Key negotiation completed with "
@@ -161,7 +176,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-rtw89/rtw89-scan PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=5 ok=5 exit=0", "cases=5 ok=4 exit=0"), 1),
+        "cases=6 ok=6 exit=0", "cases=6 ok=5 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-rtw89/rtw89-scan PASS",
@@ -178,8 +193,11 @@ MUTATIONS = [
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join,rtw89-dataplane",
+        "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join-raw,rtw89-join,"
+        "rtw89-dataplane",
         "list=shell-up,rtw89-probe"), 1),
+    ("raw join evidence dropped", BASE_TRANSCRIPT.replace(
+        "wlan: join-raw-ok filter=narrow ms=100\r\n", ""), 1),
     ("join evidence dropped", BASE_TRANSCRIPT.replace(
         "wlan: join-ok bssid=14:a3:2f:18:07:2c state=RUN mgt_tx=15 "
         "data_tx=2 rx=90\r\n", "").replace(

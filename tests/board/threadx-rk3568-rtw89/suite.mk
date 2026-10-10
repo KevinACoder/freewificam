@@ -16,7 +16,7 @@ SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-rtw89 start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-rtw89 select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-rtw89 result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-rtw89 result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
-SUITE_CASE_NAMES      := shell-up rtw89-probe rtw89-scan rtw89-join rtw89-dataplane
+SUITE_CASE_NAMES      := shell-up rtw89-probe rtw89-scan rtw89-join-raw rtw89-join rtw89-dataplane
 SUITE_STEPS_FILE      := steps.tsv
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-rtw89/judge.py
 SUITE_TIMEOUT         := 480
