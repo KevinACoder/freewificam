@@ -33,6 +33,69 @@
 
 static osMessageQueueId_t xQueue;
 
+static void fail( const char * pcWhat );
+
+static void noopTimer( void * argument )
+{
+    ( void ) argument;
+}
+
+/*
+ * The static timer table behind osTimerNew is sized per image (the board images
+ * pass their own CMSIS2_MAX_TIMERS on the compile line; this smoke pins a small
+ * one).  Two properties are what a caller depends on, and both were once wrong
+ * on this backend: the table holds exactly that many objects - the next create is
+ * refused with NULL, never a silent overrun - and a released slot is reusable,
+ * so a subsystem that creates and deletes timers does not drain the table for
+ * the lifetime of the image.
+ */
+static void timerTable( void )
+{
+    osTimerId_t ids[ CMSIS2_MAX_TIMERS + 1U ];
+    uint32_t i;
+
+    for( i = 0U; i < ( uint32_t ) CMSIS2_MAX_TIMERS; i++ )
+    {
+        ids[ i ] = osTimerNew( noopTimer, osTimerOnce, NULL, NULL );
+
+        if( ids[ i ] == NULL )
+        {
+            fail( "timer create within the table" );
+        }
+    }
+
+    ids[ CMSIS2_MAX_TIMERS ] = osTimerNew( noopTimer, osTimerOnce, NULL, NULL );
+
+    if( ids[ CMSIS2_MAX_TIMERS ] != NULL )
+    {
+        fail( "timer create past the table was not refused" );
+    }
+
+    printf( TAG "timer table bounded (n=%u), the next create is refused\n",
+            ( unsigned ) CMSIS2_MAX_TIMERS );
+    fflush( stdout );
+
+    if( osTimerDelete( ids[ 0 ] ) != osOK )
+    {
+        fail( "timer delete" );
+    }
+
+    ids[ 0 ] = osTimerNew( noopTimer, osTimerOnce, NULL, NULL );
+
+    if( ids[ 0 ] == NULL )
+    {
+        fail( "a released timer slot was not reusable" );
+    }
+
+    printf( TAG "a released timer slot is reusable\n" );
+    fflush( stdout );
+
+    for( i = 0U; i < ( uint32_t ) CMSIS2_MAX_TIMERS; i++ )
+    {
+        ( void ) osTimerDelete( ids[ i ] );
+    }
+}
+
 static void fail( const char * pcWhat )
 {
     fflush( stdout );
@@ -72,6 +135,8 @@ static void producer( void * argument )
 
     printf( TAG "kernel running\n" );
     fflush( stdout );
+
+    timerTable();
 
     for( uint32_t value = 1U; value <= ITEM_COUNT; value++ )
     {

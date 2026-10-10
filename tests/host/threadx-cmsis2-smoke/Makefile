@@ -38,6 +38,13 @@ CFLAGS := -ggdb3 -O0 -Wall \
           -DCMSIS2_BACKEND_THREADX \
           $(INCLUDES)
 
+# The static object tables are sized per image (the board images pass their own
+# numbers on the compile line).  The smoke pins the smallest useful timer table
+# so its timer case can prove the two properties a caller depends on - the table
+# holds exactly this many, and a released slot is reusable - in milliseconds.
+SMOKE_TIMERS ?= 4
+CFLAGS += -DCMSIS2_MAX_TIMERS=$(SMOKE_TIMERS)
+
 LDFLAGS := -pthread -lrt
 
 # The kernel and the port together are the complete runtime, so every translation unit is
