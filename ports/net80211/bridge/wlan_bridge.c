@@ -845,7 +845,17 @@ wlan_bridge_scan_start(void)
 		bridge.filter_clears++;
 		return -EIO;
 	}
-	bridge.scanning = 1;
+	/*
+	 * The bookkeeping flag goes up only once the transition below has
+	 * finished.  The dwell pump gates on it, and the transition can take
+	 * longer than one dwell period (it arms the first channel and runs that
+	 * channel's probe through the whole transmit chain).  A flag set before
+	 * the transition lets the pump dwell on a stack that has not entered its
+	 * scan state yet: the dwell's entry check then reads "the stack left the
+	 * scan" and closes the sweep - the window is destroyed before it opens,
+	 * which is the intermittent `chans=0`/`entered=0` sweep measured on both
+	 * driver lines.
+	 */
 	bridge.scan_starts++;
 	bridge.scan_close = WLAN_BRIDGE_SCAN_CLOSE_NONE;
 	wlan_port_serializer_lock();
@@ -887,6 +897,9 @@ wlan_bridge_scan_start(void)
 		    "flags=0x%x) - the sweep has no window\n",
 		    (int)bridge.ic->ic_state, (unsigned)bridge.ic->ic_flags);
 	}
+	/* the window is open (or the sweep is a named no-entry one): from here the
+	 * dwell pump owns it */
+	bridge.scanning = 1;
 	wlan_port_serializer_unlock();
 	return 0;
 }
