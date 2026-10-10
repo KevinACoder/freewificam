@@ -6,8 +6,8 @@
  * Generalized from the prior line's usbh_rtw88_class.c (board-proven in the
  * rtw88 L1 round) per the class-hook rule "one claim hook per class" -
  * the build_device/claim plumbing below is class-agnostic, each consumer
- * instantiates its own usbh_class_info (the MSC hook and the wireless hook
- * are this tree's two consumers).
+ * instantiates its own usbh_class_info (the mass-storage hook, the CD-ROM
+ * modeswitch hook and the wireless hook are this tree's three consumers).
  *
  * This is the CherryUSB-side replacement for the Linux USB core's
  * enumerate-and-match loop: CherryUSB enumerates (its own hub thread),
@@ -35,11 +35,14 @@
 #include "linuxkpi_usb.h"
 #include <linux/usb.h>
 
+#include "lkpi_usbh_modeswitch.h"
+
 /*
- * R3 guard: the modeswitch helper owns the 0bda:1a2b CD-ROM persona (the
- * class match 08/06/50 does not hit its 08/05/50 ISO9660 personality, but
- * the VID-based backstop is cheap and spec-mandated - the MSC hook must
- * never grab a device the eject assistant is mid-flip on).
+ * Guard: the mass-storage hook must never grab a wireless dongle's
+ * 0bda:1a2b CD-ROM persona - the modeswitch hook owns it while it is
+ * mid-flip.  What keeps the eject running is the hook order in this file
+ * (the modeswitch class_info is emitted before this one); this id backstop
+ * covers the case where the walk reaches this hook first anyway.
  */
 
 /* the landed claim (set in connect, cleared in disconnect): the rawbulk
@@ -237,6 +240,35 @@ lkpi_msc_disconnect(struct usbh_hubport *hport, uint8_t intf)
 	return 0;
 }
 
+/*
+ * ------------------------------------------------------------------ */
+/* the CD-ROM modeswitch hook: a wireless dongle's fake-disk persona   */
+/*                                                                     */
+/* Matched by VID/PID alone (the persona's interface triple is the      */
+/* mass-storage one, which the hook below also matches), so it MUST be  */
+/* emitted before that hook: the section walk takes the first match and */
+/* a negative connect is not a fall-through, so a mass-storage match    */
+/* ahead of this one would have its id guard reject the device and the  */
+/* eject would never run.  The connect sends the eject and returns      */
+/* negative - it never claims; the device re-enumerates as the network  */
+/* personality, which the wireless hook owns.  Behaviour and message:   */
+/* lkpi_usbh_modeswitch.c.                                              */
+/* ------------------------------------------------------------------ */
+
+static const struct usbh_class_driver lkpi_modeswitch_class_driver = {
+	.driver_name = "lkpimodeswitch",
+	.driver_desc = "flips a wireless dongle's CD-ROM persona to its "
+	    "network personality",
+	.connect = lkpi_modeswitch_connect,
+	.disconnect = lkpi_modeswitch_disconnect,
+};
+
+CLASS_INFO_DEFINE const struct usbh_class_info lkpi_modeswitch_class_info = {
+	.match_flags = USB_CLASS_MATCH_VID_PID,
+	.id_table = lkpi_modeswitch_id_table,
+	.class_driver = &lkpi_modeswitch_class_driver,
+};
+
 static const struct usbh_class_driver lkpi_msc_class_driver = {
 	.driver_name = "lkpimsc",
 	.driver_desc = "Linux usb_driver probes on the linuxkpi usb layer",
@@ -274,11 +306,11 @@ CLASS_INFO_DEFINE const struct usbh_class_info lkpi_msc_class_info = {
 /* one device this hook must never grab.                               */
 /*                                                                     */
 /* The guard: 0bda:1a2b is the same dongle's CD-ROM personality while  */
-/* the eject assistant is mid-flip. Its interface is 08/05/50 (not     */
-/* ff/ff/ff), so the triple already misses it - the VID/PID backstop   */
-/* is kept for the same reason the MSC hook keeps it: a device whose   */
-/* personality flips while the walk is in flight must never be probed  */
-/* by a hook that had already matched it.                              */
+/* the modeswitch hook is mid-flip. Its interface is not the vendor-   */
+/* specific triple, so the class match already misses it - the VID/PID */
+/* backstop is kept for the same reason the mass-storage hook keeps    */
+/* it: a device whose personality flips while the walk is in flight    */
+/* must never be probed by a hook that had already matched it.         */
 /* ------------------------------------------------------------------ */
 
 static const struct usbh_class_driver lkpi_wlan_class_driver = {
