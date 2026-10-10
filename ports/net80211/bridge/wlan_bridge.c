@@ -106,6 +106,11 @@ static struct {
 	unsigned int rx_beacon_tgt;	/* ... from the BSSID this join targets */
 	unsigned int rx_probersp;	/* diagnostic: probe responses seen */
 	unsigned int rx_fcs_bad;	/* diagnostic: frames the chip flagged */
+	unsigned int rx_mgtdiscard;	/* stack: mgmt frames dropped in the state gate */
+	unsigned int rx_wrongbss;	/* stack: frames from a BSSID we are not on */
+	unsigned int rx_trace;		/* the per-frame admission trace's budget */
+	unsigned int scan_entered;	/* sweeps that reached S_SCAN */
+	unsigned int scan_close;	/* how the last sweep ended */
 	unsigned int tune_calls;	/* diagnostic: channel-program attempts */
 	unsigned int tune_fails;	/* diagnostic: ... that came back nonzero */
 	/* The data-plane discriminator family: a data frame's protection state
@@ -581,6 +586,29 @@ wlan_bridge_detach(void)
 /* ------------------------------------------------------------------ */
 
 /*
+ * The interface's channel for a receive frequency, or NULL when the driver
+ * reported no frequency or one this port's channel map does not carry (a 5 GHz
+ * report on a 2.4 GHz-only map, say).  Only channels the port invented at attach
+ * are eligible, so a stray report can never point the parser at a channel the
+ * map does not describe.
+ */
+static struct ieee80211_channel *
+bridge_chan_for_freq(struct ieee80211com *ic, uint32_t freq)
+{
+	unsigned int ch;
+
+	if (freq == 0)
+		return NULL;
+	for (ch = WLAN_BRIDGE_CHAN_MIN; ch <= WLAN_BRIDGE_CHAN_MAX; ch++) {
+		struct ieee80211_channel *c = &ic->ic_channels[ch];
+
+		if (c->ic_flags != 0 && c->ic_freq == freq)
+			return c;
+	}
+	return NULL;
+}
+
+/*
  * Receive: the driver's frames reach the stack. The frame arrives without FCS;
  * the bridge copies it into the stack's own buffer, so the caller keeps its
  * buffer. The node reference find_rxnode returns is released after input, as
@@ -588,10 +616,12 @@ wlan_bridge_detach(void)
  */
 int
 wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
-    int hw_dec)
+    int hw_dec, uint32_t rx_freq)
 {
 	struct ieee80211com *ic = bridge.ic;
 	struct ieee80211_node *ni;
+	struct ieee80211_channel *rx_chan;
+	struct ieee80211_channel *saved_chan;
 	struct mbuf *m;
 
 	if (!bridge.attached || ic == NULL || frame == NULL)
@@ -703,11 +733,71 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 		}
 	}
 
+	/*
+	 * The frame's own receive channel, pointed at for the duration of input.
+	 * The imported parser reads the receive channel off the interface's
+	 * *current* channel (ieee80211_input.c:2118) and silently discards a
+	 * beacon whose DS-parameter channel differs from it (:2213) - correct only
+	 * while the driver's delivery is synchronous with the dwell.  This port's
+	 * receive path runs on its own thread, so a frame delivered across a dwell
+	 * would be judged against the wrong channel and dropped; the frame carries
+	 * the channel it arrived on, and input runs with the current channel
+	 * pointed at it.  The serializer keeps a concurrent ieee80211_next_scan()
+	 * from interleaving, and the previous value is put back so the walk's own
+	 * bookkeeping is untouched.
+	 */
 	wlan_port_serializer_lock();
-	ni = ieee80211_find_rxnode(ic,
-	    (const struct ieee80211_frame_min *)m->m_data);
-	ieee80211_input(ic, m, ni, rssi, 0);
-	ieee80211_free_node(ni);
+	rx_chan = bridge_chan_for_freq(ic, rx_freq);
+	saved_chan = ic->ic_curchan;
+	if (rx_chan != NULL)
+		ic->ic_curchan = rx_chan;
+	/*
+	 * The admission trace: the stack's own drop reasons, taken as deltas
+	 * around one input call, on the first few beacons/probe responses.  An
+	 * empty scan table with `mgtdiscard` climbing means the frame arrived with
+	 * no scan window up; with `chanmismatch` climbing it means the frame was
+	 * judged against the wrong channel; with `nodealloc` climbing the table
+	 * itself refused the entry.  Bounded to a handful of lines so the console
+	 * stays readable.
+	 */
+	if (len >= 24 && (frame[0] & 0x0c) == 0x00 &&
+	    (frame[0] & 0xf0) == 0x80 && bridge.rx_trace < 6) {
+		struct ieee80211_stats *st = &ic->ic_stats;
+		u_int32_t mgt0 = st->is_rx_mgtdiscard;
+		u_int32_t wb0 = st->is_rx_wrongbss;
+		u_int32_t bc0 = st->is_rx_badchan;
+		u_int32_t cm0 = st->is_rx_chanmismatch;
+		u_int32_t na0 = st->is_rx_nodealloc;
+		u_int32_t fscan = (ic->ic_flags & IEEE80211_F_SCAN) != 0;
+		u_int32_t asc = (ic->ic_flags & IEEE80211_F_ASCAN) != 0;
+		int cur = rx_chan != NULL ?
+		    (int)(rx_chan - ic->ic_channels) : -1;
+		int was = saved_chan != NULL ?
+		    (int)(saved_chan - ic->ic_channels) : -1;
+
+		bridge.rx_trace++;
+		wlan_osal_log("wlan: rxtrace fc=%02x len=%u rx_freq=%u "
+		    "chan=%d cur=%d state=%d fscan=%u asc=%u scanning=%u\n",
+		    frame[0], (unsigned)len, rx_freq, cur, was,
+		    (int)ic->ic_state, fscan, asc, bridge.scanning);
+		ni = ieee80211_find_rxnode(ic,
+		    (const struct ieee80211_frame_min *)m->m_data);
+		ieee80211_input(ic, m, ni, rssi, 0);
+		ieee80211_free_node(ni);
+		wlan_osal_log("wlan: rxtrace  -> mgtdiscard=+%u wrongbss=+%u "
+		    "badchan=+%u chmis=+%u nodealloc=+%u\n",
+		    st->is_rx_mgtdiscard - mgt0, st->is_rx_wrongbss - wb0,
+		    st->is_rx_badchan - bc0, st->is_rx_chanmismatch - cm0,
+		    st->is_rx_nodealloc - na0);
+	} else {
+		ni = ieee80211_find_rxnode(ic,
+		    (const struct ieee80211_frame_min *)m->m_data);
+		ieee80211_input(ic, m, ni, rssi, 0);
+		ieee80211_free_node(ni);
+	}
+	ic->ic_curchan = saved_chan;
+	bridge.rx_mgtdiscard = ic->ic_stats.is_rx_mgtdiscard;
+	bridge.rx_wrongbss = ic->ic_stats.is_rx_wrongbss;
 	wlan_port_serializer_unlock();
 	return 0;
 }
@@ -757,6 +847,7 @@ wlan_bridge_scan_start(void)
 	}
 	bridge.scanning = 1;
 	bridge.scan_starts++;
+	bridge.scan_close = WLAN_BRIDGE_SCAN_CLOSE_NONE;
 	wlan_port_serializer_lock();
 	/*
 	 * Re-arm the channel list: in MANUAL roaming the stack stays in its
@@ -779,10 +870,23 @@ wlan_bridge_scan_start(void)
 	 * scans kept "completing").
 	 */
 	bridge.ic->ic_flags |= IEEE80211_F_SCAN | IEEE80211_F_ASCAN;
-	/* drive the stack's own scan machine: it builds and queues the probe
-	 * requests (moved by the management drain above) and arms the channel
-	 * walk the dwell advances */
 	ieee80211_new_state(bridge.ic, IEEE80211_S_SCAN, -1);
+	/*
+	 * A sweep is only real if the stack ended up in its scan state.  A
+	 * transition that returns without it (the state machine refused, or the
+	 * walk ran out before the first arm) leaves the dwell's first entry
+	 * check to close the sweep immediately - the case then reads an empty
+	 * table with nothing naming the cause.  Recorded here, and reported by
+	 * the case's own line, so a zero-length window is never silent.
+	 */
+	if (bridge.ic->ic_state == IEEE80211_S_SCAN) {
+		bridge.scan_entered++;
+	} else {
+		bridge.scan_close = WLAN_BRIDGE_SCAN_CLOSE_NOENTRY;
+		wlan_osal_log("wlan: scan start did not enter S_SCAN (state=%d "
+		    "flags=0x%x) - the sweep has no window\n",
+		    (int)bridge.ic->ic_state, (unsigned)bridge.ic->ic_flags);
+	}
 	wlan_port_serializer_unlock();
 	return 0;
 }
@@ -799,6 +903,38 @@ wlan_bridge_scan_start(void)
  * arm-time tune this function used to do was after the probe had already left,
  * which on a real chip means every probe went out on the previous channel.
  */
+/*
+ * Close a sweep: the filter goes back, the driver is told the scan completed, and
+ * the reason is recorded so a case that found nothing can name it.  Both closers
+ * (the stack leaving S_SCAN on its own, and the walk running out of channels) go
+ * through here - they used to be two copies of the same four calls.
+ */
+static void
+bridge_scan_close(unsigned int reason)
+{
+	static unsigned int logged;
+
+	bridge.scanning = 0;
+	bridge.scan_completes++;
+	bridge.scan_close = reason;
+	if (bridge.ops->sw_scan_complete != NULL)
+		bridge.ops->sw_scan_complete(bridge.drv);
+	(void)bridge.ops->filter(bridge.drv,
+	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+	bridge.filter_clears++;
+	if (!logged) {
+		logged = 1;
+		wlan_osal_log("wlan: sweep closed reason=%s entered=%u state=%d "
+		    "flags=0x%x starts=%u completes=%u\n",
+		    reason == WLAN_BRIDGE_SCAN_CLOSE_WALK ? "walk-end" :
+		    reason == WLAN_BRIDGE_SCAN_CLOSE_STATE ? "stack-left-scan" :
+		    "other", bridge.scan_entered,
+		    bridge.ic != NULL ? (int)bridge.ic->ic_state : -1,
+		    bridge.ic != NULL ? (unsigned)bridge.ic->ic_flags : 0u,
+		    bridge.scan_starts, bridge.scan_completes);
+	}
+}
+
 int
 wlan_bridge_scan_dwell(void)
 {
@@ -817,13 +953,7 @@ wlan_bridge_scan_dwell(void)
 	 * says so; the bookkeeping closes here exactly as at a natural end.
 	 */
 	if (bridge.ic->ic_state != IEEE80211_S_SCAN) {
-		bridge.scanning = 0;
-		bridge.scan_completes++;
-		if (bridge.ops->sw_scan_complete != NULL)
-			bridge.ops->sw_scan_complete(bridge.drv);
-		(void)bridge.ops->filter(bridge.drv,
-		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
-		bridge.filter_clears++;
+		bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_STATE);
 		return 0;
 	}
 	/*
@@ -837,15 +967,8 @@ wlan_bridge_scan_dwell(void)
 	wlan_port_serializer_lock();
 	more = ieee80211_next_scan(bridge.ic);
 	wlan_port_serializer_unlock();
-	if (more == 0) {
-		bridge.scanning = 0;
-		bridge.scan_completes++;
-		if (bridge.ops->sw_scan_complete != NULL)
-			bridge.ops->sw_scan_complete(bridge.drv);
-		(void)bridge.ops->filter(bridge.drv,
-		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
-		bridge.filter_clears++;
-	}
+	if (more == 0)
+		bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_WALK);
 	return more;
 }
 
@@ -1386,7 +1509,11 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 		out->rx_chanmismatch = bridge.ic->ic_stats.is_rx_chanmismatch;
 		out->rx_badchan = bridge.ic->ic_stats.is_rx_badchan;
 		out->rx_badbintval = bridge.ic->ic_stats.is_rx_badbintval;
+		out->rx_mgtdiscard = bridge.ic->ic_stats.is_rx_mgtdiscard;
+		out->rx_wrongbss = bridge.ic->ic_stats.is_rx_wrongbss;
 	}
+	out->scan_entered = bridge.scan_entered;
+	out->scan_close = bridge.scan_close;
 	out->tune_calls = bridge.tune_calls;
 	out->tune_fails = bridge.tune_fails;
 	out->data_tx_enc = bridge.data_tx_enc;

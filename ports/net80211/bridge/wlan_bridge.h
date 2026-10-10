@@ -55,6 +55,12 @@ struct wlan_port_ifops;
 #define WLAN_BRIDGE_FIRMWARE_NAME	"rtlwifi/rtl8188eufw.bin"
 #endif
 
+/* how the last sweep ended (see struct wlan_bridge_counters.scan_close) */
+#define WLAN_BRIDGE_SCAN_CLOSE_NONE	0	/* no sweep has run yet */
+#define WLAN_BRIDGE_SCAN_CLOSE_STATE	1	/* the stack left S_SCAN */
+#define WLAN_BRIDGE_SCAN_CLOSE_WALK	2	/* the walk ran out of channels */
+#define WLAN_BRIDGE_SCAN_CLOSE_NOENTRY	3	/* the stack never entered S_SCAN */
+
 /* the bridge's counters (one snapshot struct; the port shell prints it) */
 struct wlan_bridge_counters {
 	unsigned int	mgt_tx;
@@ -84,8 +90,23 @@ struct wlan_bridge_counters {
 	unsigned int	rx_chanmismatch;	/* stack: rx channel mismatch */
 	unsigned int	rx_badchan;	/* stack: rx on an inactive channel */
 	unsigned int	rx_badbintval;	/* stack: bogus beacon interval */
+	/* The two drop reasons that sit *before* the channel checks: a beacon or
+	 * probe response that arrives with no scan window up is discarded by the
+	 * beacon handler's own state gate (ieee80211_input.c:2092), and one from a
+	 * BSSID the interface is not on is discarded by the station address filter
+	 * (ieee80211_input.c:567).  A sweep that reports an empty table needs these
+	 * to separate "the window did not cover the arrival" from "the frame was
+	 * rejected after the window check". */
+	unsigned int	rx_mgtdiscard;	/* stack: mgmt frame dropped in the state gate */
+	unsigned int	rx_wrongbss;	/* stack: frame from a BSSID we are not on */
 	unsigned int	tune_calls;
 	unsigned int	tune_fails;
+	/* How the last sweep ended.  A sweep whose window was shorter than one
+	 * dwell closes with the stack never having entered S_SCAN; a normal one
+	 * ends when the walk runs out of channels.  Reported so "rows=0" always
+	 * names why the window was empty. */
+	unsigned int	scan_entered;	/* sweeps that did reach S_SCAN */
+	unsigned int	scan_close;	/* WLAN_BRIDGE_SCAN_CLOSE_* of the last sweep */
 	/* The data-plane discriminator family: the protection state of data
 	 * frames on the way out and on the way in, plus the stack's own crypto
 	 * verdicts. A frame that leaves in the clear, or leaves sealed under a
@@ -130,9 +151,19 @@ void	wlan_bridge_detach(void);
  * software-crypto one, so a frame that arrives already decrypted is one the
  * stack will decrypt a second time and fail - which is exactly why the flag
  * crosses this boundary: it is the only way that failure becomes visible.
+ *
+ * `rx_freq` is the channel the frame was received on, in MHz, as the driver's
+ * receive status reports it (0 when the driver reports none).  It is NOT
+ * decoration: the imported beacon parser takes the frame's receive channel from
+ * the interface's *current* channel and rejects any beacon whose DS-parameter
+ * channel differs from it (ieee80211_input.c:2118, :2213).  With a synchronous
+ * driver the two coincide; this port's receive path runs on its own thread and
+ * a dwell may have moved the current channel before the frame is processed, so
+ * the frame's own channel has to travel with it or every frame delivered across
+ * a channel change is discarded as off-channel and the scan table stays empty.
  */
 int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi,
-	    int fcs_bad, int hw_dec);
+	    int fcs_bad, int hw_dec, uint32_t rx_freq);
 
 /* A transmitted frame completed (the driver half's tx-status callback). */
 void	wlan_bridge_tx_complete(void);

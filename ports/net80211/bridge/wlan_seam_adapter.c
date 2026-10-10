@@ -42,6 +42,7 @@
 #include <string.h>
 
 #include "../seam.h"
+#include "../osal/wlan_osal.h"
 #include "wlan_bridge.h"
 
 #include "components/linuxkpi/linuxkpi_80211.h"
@@ -466,14 +467,39 @@ static void
 up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
     struct sk_buff *skb)
 {
+	static unsigned int traced;
 
 	(void)hw;
 	if (skb == NULL)
 		return;
+	/*
+	 * The driver boundary's own reading, for the first few beacons/probe
+	 * responses: the receive status the driver filled in.  `freq` is the field
+	 * the bridge now carries across to net80211 (the parser's off-channel
+	 * check needs the frame's own channel, not the one the dwell has since
+	 * moved to); `band`/`encoding`/`rate_idx` are printed because a zero or
+	 * nonsense value here would mean the status block is not being populated
+	 * at all - a different fault from the channel one, and one no later
+	 * counter can distinguish.
+	 */
+	if (traced < 6 && skb->len >= 24 &&
+	    (skb->data[0] & 0x0c) == 0x00 && (skb->data[0] & 0xf0) == 0x80) {
+		traced++;
+		wlan_osal_log("wlan: rxstatus len=%u freq=%u band=%u signal=%d "
+		    "enc=%u rate=%u bw=%u flag=0x%x\n", (unsigned)skb->len,
+		    rs != NULL ? (unsigned)rs->freq : 0u,
+		    rs != NULL ? (unsigned)rs->band : 0u,
+		    rs != NULL ? (int)rs->signal : 0,
+		    rs != NULL ? (unsigned)rs->encoding : 0u,
+		    rs != NULL ? (unsigned)rs->rate_idx : 0u,
+		    rs != NULL ? (unsigned)rs->bw : 0u,
+		    rs != NULL ? (unsigned)rs->flag : 0u);
+	}
 	(void)wlan_bridge_input(skb->data, (size_t)skb->len,
 	    rs != NULL ? (int)rs->signal : 0,
 	    rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0,
-	    rs != NULL && (rs->flag & RX_FLAG_DECRYPTED) != 0);
+	    rs != NULL && (rs->flag & RX_FLAG_DECRYPTED) != 0,
+	    rs != NULL ? rs->freq : 0);
 }
 
 static void
