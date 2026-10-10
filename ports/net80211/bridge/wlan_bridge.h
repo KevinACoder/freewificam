@@ -183,6 +183,11 @@ int	wlan_bridge_scan_dwell(void);
  * walk advances the stack's channel; the driver must follow). */
 int	wlan_bridge_tune_current(void);
 
+/* Diagnostic: hold the receive filter's promiscuous bit without arming a sweep.
+ * A join whose answer only arrives while the bit is up is a chip receive-filter
+ * fault; one that never arrives either way is not. Test-only. */
+int	wlan_bridge_filter_promisc(int on);
+
 /* Configure the desired SSID (the joiner's step before a sweep; the stack's
  * match then requires a candidate to carry it). Returns 0 or a negative error. */
 int	wlan_bridge_set_ssid(const uint8_t *ssid, size_t len);

@@ -381,6 +381,24 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	enum ieee80211_state ostate = ic->ic_state;
 	int rc;
 
+	/*
+	 * Every association-relevant transition, stamped by the log sink's own
+	 * boot clock.  A join that ends up back in SCAN has one cause per step
+	 * and the stack names it here: net80211's own management-frame timeout
+	 * (ieee80211.c:823, request+5 s) and the supplicant's recovery both
+	 * drive new_state, and the scan arm that follows is this bridge's own.
+	 * SCAN -> SCAN (one per dwell) is skipped: it carries no association
+	 * news and would flood the console.  This is the line that answers
+	 * "what moved the stack out of AUTH, and when".
+	 */
+	if (nstate >= IEEE80211_S_AUTH || ostate >= IEEE80211_S_AUTH)
+		wlan_osal_log("wlan: state %d -> %d arg=%d flags=0x%x cur=%d "
+		    "scanning=%d tuned=%u\n", (int)ostate, (int)nstate, arg,
+		    (unsigned)ic->ic_flags,
+		    ic->ic_curchan != NULL ?
+		    (int)(ic->ic_curchan - ic->ic_channels) : -1,
+		    bridge.scanning, bridge.tuned_freq);
+
 	(void)wlan_bridge_tune_current();
 	/*
 	 * Pre-association BSSID programming: entering AUTH uses the radio, and
@@ -705,9 +723,11 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 		    sub == 0x00 || sub == 0x10 /* assoc req/resp */)) {
 			static unsigned int dumped;
 
-			wlan_osal_log("wlan: rx mgt fc=%02x fcs=%d a1=%02x:%02x:"
-			    "%02x:%02x:%02x:%02x a2=%02x:%02x:%02x:%02x:%02x:%02x "
-			    "len=%u\n", fc0, fcs_bad ? 1 : 0,
+			wlan_osal_log("wlan: rx mgt fc=%02x fcs=%d retry=%u sc=%04x "
+			    "a1=%02x:%02x:%02x:%02x:%02x:%02x "
+			    "a2=%02x:%02x:%02x:%02x:%02x:%02x len=%u\n", fc0,
+			    fcs_bad ? 1 : 0, (frame[1] & 0x08) != 0,
+			    (unsigned)(frame[22] | (frame[23] << 8)),
 			    frame[4], frame[5], frame[6],
 			    frame[7], frame[8], frame[9], frame[10], frame[11],
 			    frame[12], frame[13], frame[14], frame[15],
@@ -858,6 +878,16 @@ wlan_bridge_scan_start(void)
 	 */
 	bridge.scan_starts++;
 	bridge.scan_close = WLAN_BRIDGE_SCAN_CLOSE_NONE;
+	/*
+	 * Every arm, not just the first: a sweep armed while a join is in
+	 * flight is what drags the stack out of AUTH (the transition below
+	 * forces S_SCAN), and the join's own answer then lands in the wrong
+	 * state.  With the arm and the state transition both stamped, "the
+	 * supplicant re-scanned before the answer" is a line, not a theory.
+	 */
+	wlan_osal_log("wlan: scan arm #%u state=%d flags=0x%x scanning=%d\n",
+	    bridge.scan_starts, (int)bridge.ic->ic_state,
+	    (unsigned)bridge.ic->ic_flags, bridge.scanning);
 	wlan_port_serializer_lock();
 	/*
 	 * Re-arm the channel list: in MANUAL roaming the stack stays in its
@@ -925,8 +955,6 @@ wlan_bridge_scan_start(void)
 static void
 bridge_scan_close(unsigned int reason)
 {
-	static unsigned int logged;
-
 	bridge.scanning = 0;
 	bridge.scan_completes++;
 	bridge.scan_close = reason;
@@ -935,17 +963,22 @@ bridge_scan_close(unsigned int reason)
 	(void)bridge.ops->filter(bridge.drv,
 	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
 	bridge.filter_clears++;
-	if (!logged) {
-		logged = 1;
-		wlan_osal_log("wlan: sweep closed reason=%s entered=%u state=%d "
-		    "flags=0x%x starts=%u completes=%u\n",
-		    reason == WLAN_BRIDGE_SCAN_CLOSE_WALK ? "walk-end" :
-		    reason == WLAN_BRIDGE_SCAN_CLOSE_STATE ? "stack-left-scan" :
-		    "other", bridge.scan_entered,
-		    bridge.ic != NULL ? (int)bridge.ic->ic_state : -1,
-		    bridge.ic != NULL ? (unsigned)bridge.ic->ic_flags : 0u,
-		    bridge.scan_starts, bridge.scan_completes);
-	}
+	/*
+	 * Every close, not just the first.  During a join that oscillates the
+	 * sweep is closed and re-armed once per supplicant retry, and the
+	 * filter going back to narrow between the arms is exactly the window
+	 * an answer can be lost in - so each close is a line, paired with its
+	 * arm above.
+	 */
+	wlan_osal_log("wlan: sweep close #%u reason=%s entered=%u state=%d "
+	    "flags=0x%x starts=%u\n", bridge.scan_completes,
+	    reason == WLAN_BRIDGE_SCAN_CLOSE_WALK ? "walk-end" :
+	    reason == WLAN_BRIDGE_SCAN_CLOSE_STATE ? "stack-left-scan" :
+	    reason == WLAN_BRIDGE_SCAN_CLOSE_NOENTRY ? "no-entry" : "other",
+	    bridge.scan_entered,
+	    bridge.ic != NULL ? (int)bridge.ic->ic_state : -1,
+	    bridge.ic != NULL ? (unsigned)bridge.ic->ic_flags : 0u,
+	    bridge.scan_starts);
 }
 
 int
@@ -989,6 +1022,28 @@ wlan_bridge_scan_dwell(void)
 	if (more == 0)
 		bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_WALK);
 	return more;
+}
+
+/*
+ * Diagnostic: hold the receive filter's promiscuous bit without arming a sweep.
+ * A join whose answer only arrives while the bit is up is a chip receive-filter
+ * fault - the frame reached the chip and the chip dropped it - while one that
+ * never arrives either way is not.  Test-only: no production path calls this,
+ * and the scan group owns the bit everywhere else.
+ */
+int
+wlan_bridge_filter_promisc(int on)
+{
+
+	if (!bridge.attached || bridge.ops->filter == NULL)
+		return -ENODEV;
+	if (on)
+		bridge.filter_sets++;
+	else
+		bridge.filter_clears++;
+	return bridge.ops->filter(bridge.drv,
+	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC,
+	    on ? WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC : 0);
 }
 
 /*

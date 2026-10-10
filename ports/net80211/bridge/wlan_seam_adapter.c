@@ -468,6 +468,7 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
     struct sk_buff *skb)
 {
 	static unsigned int traced;
+	static unsigned int authassoc_traced;
 
 	(void)hw;
 	if (skb == NULL)
@@ -494,6 +495,29 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 		    rs != NULL ? (unsigned)rs->rate_idx : 0u,
 		    rs != NULL ? (unsigned)rs->bw : 0u,
 		    rs != NULL ? (unsigned)rs->flag : 0u);
+	}
+	/*
+	 * The association exchange's own boundary reading, every frame: the
+	 * frame-control pair (byte 1 carries the Retry bit, which is what says
+	 * whether a burst of identical answers is the AP's MAC retransmitting
+	 * because it got no ACK from us - i.e. the chip did not accept them),
+	 * the sequence control, and the chip's free-run receive timestamp
+	 * (`mactime`), which dates the frame on the air independently of the
+	 * host clock.  Bounded so a retry storm cannot flood the console.
+	 */
+	if (skb->len >= 24 && (skb->data[0] & 0x0c) == 0x00) {
+		uint8_t sub = (uint8_t)(skb->data[0] >> 4);
+
+		if ((sub <= 3 || sub == 0xb) && authassoc_traced < 24) {
+			authassoc_traced++;
+			wlan_osal_log("wlan: rxmgt fc=%02x%02x retry=%u sc=%04x "
+			    "mactime=%u freq=%u len=%u\n", skb->data[0],
+			    skb->data[1], (skb->data[1] & 0x08) != 0,
+			    (unsigned)(skb->data[22] | (skb->data[23] << 8)),
+			    rs != NULL ? (unsigned)(rs->mactime & 0xffffffffu) : 0u,
+			    rs != NULL ? (unsigned)rs->freq : 0u,
+			    (unsigned)skb->len);
+		}
 	}
 	(void)wlan_bridge_input(skb->data, (size_t)skb->len,
 	    rs != NULL ? (int)rs->signal : 0,
