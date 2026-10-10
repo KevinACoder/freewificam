@@ -304,9 +304,26 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 			 * probe request go out as one hex line each: the air
 			 * audit's raw material (a frame that the chip never
 			 * answers is judged from its bytes, not from the
-			 * counter that handed it over) */
+			 * counter that handed it over).  The association
+			 * request gets its own one-shot dump: an AP that
+			 * answers the auth and then deauthenticates instead
+			 * of associating is judged from those bytes against
+			 * the working line's. */
 			static int dumped_join;
+			static int dumped_assoc;
 
+			if ((fc[0] & 0xf0) == 0x00 && !dumped_assoc) {
+				unsigned int k;
+
+				dumped_assoc = 1;
+				wlan_osal_log("wlan: mgt tx assoc-req-bytes "
+				    "len=%u:", (unsigned)m->m_len);
+				for (k = 0; k < (unsigned)m->m_len && k < 96;
+				    k++)
+					wlan_osal_log("%02x%s", fc[k],
+					    (k % 16) == 15u || k + 1u ==
+					    (unsigned)m->m_len ? "\n" : " ");
+			}
 			if (!dumped_join) {
 				unsigned int k;
 
@@ -871,6 +888,38 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 			    frame[16], frame[17], frame[18], frame[19],
 			    frame[20], frame[21],
 			    (unsigned)len, fcs_bad ? " fcs!" : "");
+		}
+		/*
+		 * A deauthenticate/disassociate from the AP is the one frame that
+		 * ends a join attempt from the AP's side; its reason code lives in
+		 * the first two bytes after the header.  An AP that answers the
+		 * auth and then deauthenticates the station (the rtw89 line
+		 * 2026-10-10: auth answered, assoc request sent, DEAUTH ~600 ms
+		 * later with the stack still in ASSOC) is judged from this code -
+		 * 2 = "previous auth invalid", 6/7 = class-2/3 frame from an
+		 * unauthenticated station, 15 = 4-way timeout.
+		 */
+		if ((fc0 & 0x0c) == 0x00 && (sub == 0xc0 /* deauth */ ||
+		    sub == 0xa0 /* disassoc */)) {
+			static unsigned int dumped_deauth;
+
+			wlan_osal_log("wlan: rx mgt %s reason=%u a1=%02x:%02x:%02x:"
+			    "%02x:%02x:%02x a2=%02x:%02x:%02x:%02x:%02x:%02x "
+			    "len=%u\n", sub == 0xc0 ? "deauth" : "disassoc",
+			    (unsigned)(len >= 26 ? (frame[24] | (frame[25] << 8))
+						 : 0xffffu),
+			    frame[4], frame[5], frame[6], frame[7], frame[8],
+			    frame[9], frame[10], frame[11], frame[12], frame[13],
+			    frame[14], frame[15], (unsigned)len);
+			if (dumped_deauth < 2) {
+				unsigned int k;
+
+				dumped_deauth++;
+				wlan_osal_log("wlan: rx deauth-bytes:");
+				for (k = 0; k < len && k < 48; k++)
+					wlan_osal_log(" %02x", frame[k]);
+				wlan_osal_log("\n");
+			}
 		}
 	}
 
