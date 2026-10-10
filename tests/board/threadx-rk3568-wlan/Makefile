@@ -319,6 +319,8 @@ LKPI_SRCS := \
 	$(LKPI)/linuxkpi_core.c \
 	$(LKPI)/linuxkpi_platform_target.c \
 	$(LKPI)/linuxkpi_80211.c \
+	$(LKPI)/linuxkpi_80211_helpers.c \
+	$(LKPI)/linuxkpi_wiphy_work.c \
 	$(LKPI)/linuxkpi_txq.c \
 	$(LKPI)/fw_registry.c \
 	$(LKPI)/skbuff/skbuff_pool.c \

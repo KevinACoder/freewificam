@@ -1079,6 +1079,54 @@ lkpi80211_drv_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		}
 }
 
+struct ieee80211_hw *
+wiphy_to_ieee80211_hw(struct wiphy *wiphy)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	/*
+	 * [LNX] include/net/mac80211.h: the interface answers this with
+	 * container_of over its own local record, and the same holds here for
+	 * the same reason: this port embeds the wiphy in the hw context it
+	 * allocates (hw first, wiphy behind it), so the address a driver read
+	 * out of hw->wiphy maps back to the hw it came from.
+	 */
+	if (wiphy == NULL)
+		return NULL;
+	ctx = container_of(wiphy, struct lkpi80211_hw_ctx, wiphy);
+	return &ctx->hw;
+}
+
+void
+wiphy_rfkill_set_hw_state(struct wiphy *wiphy, bool blocked)
+{
+
+	/*
+	 * [LNX] net/wireless/rfkill.c: report the hardware RF-kill switch.  The
+	 * consumer is the rfkill subsystem, which this port does not carry (the
+	 * stack on the other side of the bridge is net80211, and nothing there
+	 * listens for it), so the notice has no destination and is dropped
+	 * rather than invented.
+	 */
+	(void)wiphy;
+	(void)blocked;
+}
+
+void
+wiphy_rfkill_start_polling(struct wiphy *wiphy)
+{
+
+	/* [LNX] net/wireless/rfkill.c: the polling variant of the same notice */
+	(void)wiphy;
+}
+
+void
+wiphy_rfkill_stop_polling(struct wiphy *wiphy)
+{
+
+	(void)wiphy;
+}
+
 struct ieee80211_vif *
 lkpi80211_hw_vif(struct ieee80211_hw *hw, unsigned int idx)
 {
@@ -1095,6 +1143,36 @@ lkpi80211_hw_sta(struct ieee80211_hw *hw, unsigned int idx)
 	if (hw == NULL || idx >= CONFIG_LKPI80211_MAX_STAS)
 		return NULL;
 	return LKPI80211_CTX(hw)->stas[idx];
+}
+
+/*
+ * The walk the interface's for_each_station() macro is written against: the
+ * next occupied station slot after `prev`, or the first one when `prev` is
+ * NULL.  A slot index is the cursor, so a station removed mid-walk ends the
+ * walk rather than skipping its neighbour - the same "the table moved under
+ * you" the interface's own iterator answers by restarting from the caller.
+ */
+struct ieee80211_sta *
+lkpi80211_hw_sta_next(struct ieee80211_hw *hw, struct ieee80211_sta *prev)
+{
+	struct lkpi80211_hw_ctx *ctx;
+	unsigned int i = 0;
+
+	if (hw == NULL)
+		return NULL;
+	ctx = LKPI80211_CTX(hw);
+	if (prev != NULL) {
+		for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
+			if (ctx->stas[i] == prev)
+				break;
+		if (i == CONFIG_LKPI80211_MAX_STAS)
+			return NULL;	/* a station this hw does not hold */
+		i++;
+	}
+	for (; i < CONFIG_LKPI80211_MAX_STAS; i++)
+		if (ctx->stas[i] != NULL)
+			return ctx->stas[i];
+	return NULL;
 }
 
 unsigned int

@@ -20,6 +20,7 @@
 
 #include "../../linuxkpi_core.h"
 #include <linux/in.h>
+#include <linux/ip.h>
 
 struct sk_buff;
 
@@ -31,8 +32,24 @@ struct udphdr {
 	__sum16	check;
 };
 
-/* [LNX] include/linux/udp.h:21-24: `static inline struct udphdr *udp_hdr(const struct
- * sk_buff *skb) { return (struct udphdr *)skb_transport_header(skb); }` */
-struct udphdr *udp_hdr(const struct sk_buff *skb);
+/*
+ * [LNX] include/linux/udp.h:21-24: `static inline struct udphdr *udp_hdr(const struct
+ * sk_buff *skb) { return (struct udphdr *)skb_transport_header(skb); }`.
+ *
+ * Same port geometry as its IPv4 sibling (components/linuxkpi/include/linux/ip.h):
+ * the transport header sits behind the network header by the network header's own
+ * length.  A frame whose network header cannot be derived, or one whose IP header
+ * is not fully present, has no transport header and answers NULL.
+ */
+static __always_inline __unused struct udphdr *
+udp_hdr(const struct sk_buff *skb)
+{
+	const struct iphdr *iph = ip_hdr(skb);
+
+	if (iph == NULL)
+		return NULL;
+	return (struct udphdr *)((const unsigned char *)iph +
+	    ((unsigned int)iph->ihl * 4));
+}
 
 #endif /* _LINUXKPI_LINUX_UDP_H_ */

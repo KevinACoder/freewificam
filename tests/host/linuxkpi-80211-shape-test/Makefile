@@ -57,6 +57,8 @@ SRCS := \
     $(ROOT)/components/linuxkpi/linuxkpi_core.c \
     $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c \
     $(ROOT)/components/linuxkpi/linuxkpi_txq.c \
+    $(ROOT)/components/linuxkpi/linuxkpi_80211_helpers.c \
+    $(ROOT)/components/linuxkpi/linuxkpi_wiphy_work.c \
     $(ENGINE_EXTRA_SRC) \
     $(MAKEFILE_DIR)/main.c \
     $(ROOT)/tests/host/common/pool_platform_host.c \
