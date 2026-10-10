@@ -82,7 +82,7 @@ all: $(SMOKE) $(C9)
 
 define COMPILE_RULE
 $(BUILD_DIR)/$(notdir $(1:.c=.o)): $(1) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $$< -o $$@
+	$(CC) $(CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach src,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(src))))
@@ -96,6 +96,11 @@ $(SMOKE): $(COMMON_OBJS) $(BUILD_DIR)/main.o
 
 $(C9): $(COMMON_OBJS) $(BUILD_DIR)/c9-handle-trunc.o
 	$(CC) $^ $(LDFLAGS) -o $@
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD_DIR)

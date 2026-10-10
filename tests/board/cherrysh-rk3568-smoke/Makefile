@@ -145,7 +145,7 @@ all: $(TARGET).bin check
 define COMPILE_RULE
 $(BUILD)/obj/$(basename $(notdir $(1))).o: $(1) $(TAG_STAMP)
 	@mkdir -p $(BUILD)/obj
-	$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) -c $$< -o $$@
+	$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
 endef
 
 # The engine's rule carries PRINTF_CFLAGS; the generic loop must not redefine
@@ -217,6 +217,11 @@ check: guards $(TARGET).elf
 	echo "PASS: command and variable tables dense (no inter-entry padding)"
 	@$(SIZE) $(TARGET).elf
 	@echo "build-tag: $(BUILD_TAG)"
+
+# Header dependencies: -MMD -MP writes one .d per object, so a header
+# edit rebuilds every object that included it (a stale object would
+# otherwise be flashed as the current build).
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD)

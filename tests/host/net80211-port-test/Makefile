@@ -140,22 +140,22 @@ all: stack-compile headers link-threadx link-freertos gates
 
 define STACK_RULE
 $(call OBJ,stack,$(1)): $(1) | $(BUILD_DIR)/stack
-	$$(CC) $$(BSD_CFLAGS) -c $$< -o $$@
+	$$(CC) $$(BSD_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 define PORT_RULE
 $(call OBJ,port,$(1)): $(1) | $(BUILD_DIR)/port
-	$$(CC) $$(BSD_CFLAGS) $$(CMSIS_INC) -c $$< -o $$@
+	$$(CC) $$(BSD_CFLAGS) $$(CMSIS_INC)  -MMD -MP -c $$< -o $$@
 endef
 
 define TX_RULE
 $(call OBJ,tx,$(1)): $(1) | $(BUILD_DIR)/tx
-	$$(CC) $$(TX_CFLAGS) -c $$< -o $$@
+	$$(CC) $$(TX_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 define FR_RULE
 $(call OBJ,fr,$(1)): $(1) | $(BUILD_DIR)/fr
-	$$(CC) $$(FR_CFLAGS) -c $$< -o $$@
+	$$(CC) $$(FR_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach s,$(STACK_SRCS),$(eval $(call STACK_RULE,$(s))))
@@ -168,16 +168,16 @@ $(foreach s,$(FR_RUNTIME_SRCS),$(eval $(call FR_RULE,$(s))))
 # headers the kernel port needs. The backend define selects the CMSIS-RTOS2 backend
 # at link time, so the smoke is compiled once per backend.
 $(call OBJ,tx,$(MAKEFILE_DIR)/main.c): $(MAKEFILE_DIR)/main.c | $(BUILD_DIR)/tx
-	$(CC) $(TX_CFLAGS) $(BSD_CFLAGS) $(CMSIS_INC) -I$(PORT) -c $< -o $@
+	$(CC) $(TX_CFLAGS) $(BSD_CFLAGS) $(CMSIS_INC) -I$(PORT)  -MMD -MP -c $< -o $@
 
 $(call OBJ,tx,$(MAKEFILE_DIR)/seam_stub.c): $(MAKEFILE_DIR)/seam_stub.c | $(BUILD_DIR)/tx
-	$(CC) $(TX_CFLAGS) $(BSD_CFLAGS) -I$(PORT) -c $< -o $@
+	$(CC) $(TX_CFLAGS) $(BSD_CFLAGS) -I$(PORT)  -MMD -MP -c $< -o $@
 
 $(call OBJ,fr,$(MAKEFILE_DIR)/main.c): $(MAKEFILE_DIR)/main.c | $(BUILD_DIR)/fr
-	$(CC) $(FR_CFLAGS) $(BSD_CFLAGS) $(CMSIS_INC) -I$(PORT) -c $< -o $@
+	$(CC) $(FR_CFLAGS) $(BSD_CFLAGS) $(CMSIS_INC) -I$(PORT)  -MMD -MP -c $< -o $@
 
 $(call OBJ,fr,$(MAKEFILE_DIR)/seam_stub.c): $(MAKEFILE_DIR)/seam_stub.c | $(BUILD_DIR)/fr
-	$(CC) $(FR_CFLAGS) $(BSD_CFLAGS) -I$(PORT) -c $< -o $@
+	$(CC) $(FR_CFLAGS) $(BSD_CFLAGS) -I$(PORT)  -MMD -MP -c $< -o $@
 
 stack-compile: $(STACK_OBJS)
 	@echo "stack-compile: $(words $(STACK_OBJS)) translation units compiled (-c only)"
@@ -230,6 +230,11 @@ $(BUILD_DIR):
 
 $(BUILD_DIR)/stack $(BUILD_DIR)/port $(BUILD_DIR)/tx $(BUILD_DIR)/fr: | $(BUILD_DIR)
 	mkdir -p $@
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD_DIR)

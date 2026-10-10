@@ -132,7 +132,7 @@ flat = $(subst /,_,$(patsubst $(ROOT)/%,%,$(1)))
 
 define COMPILE_RULE
 $(1)/$(call flat,$(2)).o: $(2) | $(1)
-	$(CC) $(3) -c $$< -o $$@
+	$(CC) $(3)  -MMD -MP -c $$< -o $$@
 endef
 
 THREADX_APP_OBJS  := $(foreach src,$(SHELL_SRCS),$(THREADX_BUILD)/app/$(call flat,$(src)).o)
@@ -171,6 +171,11 @@ CROSS32_SRCS := \
 cross32:
 	$(CROSS) -std=gnu11 -Wall -Wno-unused-function -mcpu=cortex-m4 -mthumb \
 	    -fsyntax-only $(SHELL_INCLUDES) $(CROSS32_SRCS)
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(MAKEFILE_DIR)/build -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(MAKEFILE_DIR)/build

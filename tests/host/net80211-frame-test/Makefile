@@ -155,32 +155,32 @@ all: stack-compile smoke run link-freertos upstream
 
 define STACK_RULE
 $(call OBJ,stack,$(1)): $(1) | $(BUILD_DIR)/stack
-	$$(CC) $$(BSD_CFLAGS) -c $$< -o $$@
+	$$(CC) $$(BSD_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 define PORT_RULE
 $(call OBJ,port,$(1)): $(1) | $(BUILD_DIR)/port
-	$$(CC) $$(BSD_CFLAGS) $$(CMSIS_INC) -c $$< -o $$@
+	$$(CC) $$(BSD_CFLAGS) $$(CMSIS_INC)  -MMD -MP -c $$< -o $$@
 endef
 
 define SUITE_TX_RULE
 $(call OBJ,tx,$(1)): $(1) | $(BUILD_DIR)/tx
-	$$(CC) $$(TX_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(ROOT)/components -I$$(MAKEFILE_DIR) -c $$< -o $$@
+	$$(CC) $$(TX_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(ROOT)/components -I$$(MAKEFILE_DIR)  -MMD -MP -c $$< -o $$@
 endef
 
 define SUITE_FR_RULE
 $(call OBJ,fr,$(1)): $(1) | $(BUILD_DIR)/fr
-	$$(CC) $$(FR_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(ROOT)/components -I$$(MAKEFILE_DIR) -c $$< -o $$@
+	$$(CC) $$(FR_CFLAGS) $$(BSD_CFLAGS) $$(CMSIS_INC) -I$$(PORT) -I$$(ROOT)/components -I$$(MAKEFILE_DIR)  -MMD -MP -c $$< -o $$@
 endef
 
 define TX_RUNTIME_RULE
 $(call OBJ,tx,$(1)): $(1) | $(BUILD_DIR)/tx
-	$$(CC) $$(TX_CFLAGS) -c $$< -o $$@
+	$$(CC) $$(TX_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 define FR_RUNTIME_RULE
 $(call OBJ,fr,$(1)): $(1) | $(BUILD_DIR)/fr
-	$$(CC) $$(FR_CFLAGS) -c $$< -o $$@
+	$$(CC) $$(FR_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach s,$(STACK_SRCS),$(eval $(call STACK_RULE,$(s))))
@@ -212,7 +212,7 @@ $(FR_BIN): $(STACK_OBJS) $(PORT_OBJS) $(FR_OBJS)
 # <string.h>, force-included so the sources stay untouched.
 define UP_RULE
 $(call OBJ,up,$(1)): $(1) | $(BUILD_DIR)/up
-	$$(CC) $$(BSD_CFLAGS) -include string.h -c $$< -o $$@
+	$$(CC) $$(BSD_CFLAGS) -include string.h  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach s,$(UPSTREAM_ALL_SRCS),$(eval $(call UP_RULE,$(s))))
@@ -229,6 +229,11 @@ $(UP_CCM_BIN): $(UP_CCM_OBJS)
 
 $(BUILD_DIR)/stack $(BUILD_DIR)/port $(BUILD_DIR)/tx $(BUILD_DIR)/fr $(BUILD_DIR)/up:
 	mkdir -p $@
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD_DIR)

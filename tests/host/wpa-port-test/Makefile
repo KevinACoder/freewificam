@@ -192,12 +192,12 @@ SUITE_SET := $(SUITE_SRCS)
 
 define THX_RULE
 $(call OBJ,thx,$(1)): $(1) | $(BUILD)/thx
-	$(CC) $(2) $(THX_BACKEND) -c $$< -o $$@
+	$(CC) $(2) $(THX_BACKEND)  -MMD -MP -c $$< -o $$@
 endef
 
 define FR_RULE
 $(call OBJ,fr,$(1)): $(1) | $(BUILD)/fr
-	$(CC) $(2) $(FR_BACKEND) -c $$< -o $$@
+	$(CC) $(2) $(FR_BACKEND)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach s,$(WPA_SET),$(eval $(call THX_RULE,$(s),$(WPA_TU_CFLAGS))))
@@ -209,12 +209,12 @@ $(foreach s,$(SUITE_SET),$(eval $(call FR_RULE,$(s),$(SUITE_TU_CFLAGS))))
 
 define TX_RT_RULE
 $(call OBJ,txrt,$(1)): $(1) | $(BUILD)/txrt
-	$(CC) $(TX_RT_CFLAGS) -c $$< -o $$@
+	$(CC) $(TX_RT_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 define FR_RT_RULE
 $(call OBJ,frrt,$(1)): $(1) | $(BUILD)/frrt
-	$(CC) $(FR_RT_CFLAGS) -c $$< -o $$@
+	$(CC) $(FR_RT_CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach s,$(TX_RT_SRCS),$(eval $(call TX_RT_RULE,$(s))))
@@ -263,6 +263,11 @@ gates:
 	sh $(ROOT)/tools/gates/check-kernel-isolation.sh \
 	    --stack-objs "$(BUILD)/thx" --port-objs "$(BUILD)/thx" \
 	    --sources "$(PORT)" --root "$(ROOT)" --canary
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD)

@@ -120,7 +120,7 @@ $(BUILD_DIR):
 
 define COMPILE_RULE
 $(call OBJ,$(1)): $(1) | $(BUILD_DIR)
-	$$(CC) $$(CFLAGS) -c $$< -o $$@
+	$$(CC) $$(CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
@@ -128,5 +128,10 @@ $(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
 $(BIN): $(OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
 
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
+
 clean:
-	rm -rf $(BUILD_DIR)$(if $(filter off,$(PATCHES)),,/pinned)
+	rm -rf $(BUILD_DIR)
