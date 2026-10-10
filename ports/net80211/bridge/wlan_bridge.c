@@ -93,7 +93,6 @@ static struct {
 	int attached;
 	int up;			/* the driver's start ran (up is idempotent) */
 	int scanning;		/* a sweep is in flight (the filter is set) */
-	int filter_open;	/* the receive filter's promiscuous bit is up */
 	uint32_t tuned_freq;	/* the channel the driver was last told about */
 	unsigned int scan_starts;
 	unsigned int scan_completes;
@@ -376,10 +375,6 @@ bridge_start(struct ifnet *ifp)
 static int (*bridge_orig_newstate)(struct ieee80211com *,
     enum ieee80211_state, int);
 
-/* the receive filter's promiscuous bit, as one piece of state (defined with the
- * scan group below; the state transitions above need it) */
-static int bridge_filter_set(int on);
-
 static int
 bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 {
@@ -427,14 +422,6 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	rc = bridge_orig_newstate(ic, nstate, arg);
 
 	if (nstate == IEEE80211_S_RUN && ostate != IEEE80211_S_RUN) {
-		/*
-		 * The interface runs: the chip now has a BSSID and a channel to
-		 * filter against, so the sweep's promiscuous bit goes back.
-		 * wlan_bridge_scan_start held it open for the whole pre-
-		 * association exchange (see bridge_scan_close); closing it
-		 * earlier is what made the chip drop the AP's directed answers.
-		 */
-		(void)bridge_filter_set(0);
 		if (bridge.ops != NULL && bridge.ops->bss_info != NULL) {
 			struct ieee80211_node *bss = ic->ic_bss;
 
@@ -456,10 +443,6 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 			    NULL, 0);
 		if (bridge.ifops != NULL && bridge.ifops->down != NULL)
 			(void)bridge.ifops->down(bridge.if_priv);
-	} else if (nstate == IEEE80211_S_INIT) {
-		/* down: no interface left to filter for, so the bit goes back
-		 * until the next sweep asks for it again */
-		(void)bridge_filter_set(0);
 	}
 	return rc;
 }
@@ -851,35 +834,6 @@ wlan_bridge_tx_complete(void)
 /* ------------------------------------------------------------------ */
 
 /*
- * The receive filter's promiscuous bit, as one piece of state rather than a
- * call at each site.  It is up from the first sweep until the interface runs
- * (see wlan_bridge_scan_start for why it must outlive the sweep), and it is
- * the bridge's only lever on what the chip hands up: a chip that is not
- * promiscuous applies its own address/beacon filters, which before association
- * have nothing correct to match against.
- */
-static int
-bridge_filter_set(int on)
-{
-	int rc;
-
-	if (!bridge.attached || bridge.ops == NULL || bridge.ops->filter == NULL)
-		return -ENODEV;
-	if (on == bridge.filter_open)
-		return 0;
-	rc = bridge.ops->filter(bridge.drv, WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC,
-	    on ? WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC : 0);
-	if (rc != 0)
-		return rc;
-	bridge.filter_open = on;
-	if (on)
-		bridge.filter_sets++;
-	else
-		bridge.filter_clears++;
-	return 0;
-}
-
-/*
  * Start a sweep. The filter goes first (obligation 2): a chip that is not
  * promiscuous answers no unknown beacon, so a sweep started before the bit is
  * programmed records nothing.
@@ -896,15 +850,19 @@ wlan_bridge_scan_start(void)
 	 * by the caller retrying this refusal, not by nesting. */
 	if (bridge.scanning)
 		return -EBUSY;
-	bridge_filter_set(1);
-	if (!bridge.filter_open) {
+	if (bridge.ops->filter == NULL ||
+	    bridge.ops->filter(bridge.drv, WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC,
+	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC) != 0) {
 		wlan_osal_log("wlan: receive filter refused; a scan would see "
 		    "nothing\n");
 		return -EIO;
 	}
+	bridge.filter_sets++;
 	if (bridge.ops->sw_scan_start != NULL &&
 	    bridge.ops->sw_scan_start(bridge.drv) != 0) {
-		(void)bridge_filter_set(0);
+		(void)bridge.ops->filter(bridge.drv,
+		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+		bridge.filter_clears++;
 		return -EIO;
 	}
 	/*
@@ -1002,25 +960,15 @@ bridge_scan_close(unsigned int reason)
 	bridge.scan_close = reason;
 	if (bridge.ops->sw_scan_complete != NULL)
 		bridge.ops->sw_scan_complete(bridge.drv);
-	/*
-	 * The receive filter stays open.  The sweep's promiscuous bit used to go
-	 * back here, and on this port's chips that is exactly when the pre-
-	 * association exchange goes deaf: with the bit clear the chip applies
-	 * its own address and beacon-channel filters (the rtw89 clears
-	 * B_AX_A_A1_MATCH / B_AX_A_BC / B_AX_A_BCN_CHK_EN only while the bit is
-	 * set - mac80211.c:341-350), and before association there is nothing
-	 * correct for those to match against, so the AP's directed auth answer
-	 * is dropped in hardware and the join can never complete.  Measured on
-	 * the board: with the bit held, the raw join answers in milliseconds;
-	 * with it cleared at the sweep's close, the receive path delivered
-	 * nothing at all and the stack timed out.  The bit goes back when the
-	 * interface runs (bridge_newstate), which is when the chip does have a
-	 * BSSID and a channel to filter against.
-	 */
+	(void)bridge.ops->filter(bridge.drv,
+	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+	bridge.filter_clears++;
 	/*
 	 * Every close, not just the first.  During a join that oscillates the
-	 * sweep is closed and re-armed once per supplicant retry, and each arm
-	 * is a line paired with this one.
+	 * sweep is closed and re-armed once per supplicant retry, and the
+	 * filter going back to narrow between the arms is exactly the window
+	 * an answer can be lost in - so each close is a line, paired with its
+	 * arm above.
 	 */
 	wlan_osal_log("wlan: sweep close #%u reason=%s entered=%u state=%d "
 	    "flags=0x%x starts=%u\n", bridge.scan_completes,
@@ -1087,7 +1035,15 @@ int
 wlan_bridge_filter_promisc(int on)
 {
 
-	return bridge_filter_set(on);
+	if (!bridge.attached || bridge.ops->filter == NULL)
+		return -ENODEV;
+	if (on)
+		bridge.filter_sets++;
+	else
+		bridge.filter_clears++;
+	return bridge.ops->filter(bridge.drv,
+	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC,
+	    on ? WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC : 0);
 }
 
 /*
