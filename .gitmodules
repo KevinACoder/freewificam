@@ -31,3 +31,7 @@
 	path = third-party/rtw89
 	url = https://github.com/KevinACoder/rtw89.git
 	branch = linux-7.3-rc2
+[submodule "third-party/rtw88"]
+	path = third-party/rtw88
+	url = https://github.com/KevinACoder/rtw88.git
+	branch = linux-7.3-rc2

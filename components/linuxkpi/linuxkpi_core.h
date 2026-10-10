@@ -358,6 +358,14 @@ lkpi_fls32(uint32_t x)
 	return x == 0 ? 0 : 32 - __builtin_clz(x);
 }
 
+/* Linux's ffs() is the 1-based position of the lowest set bit. */
+static __always_inline __unused int
+lkpi_ffs32(uint32_t x)
+{
+
+	return x == 0 ? 0 : __builtin_ctz(x) + 1;
+}
+
 static __always_inline __unused s32
 sign_extend32(u32 value, int index)
 {
@@ -381,6 +389,7 @@ sign_extend64(u64 value, int index)
 #endif
 
 #define	fls(x)			lkpi_fls32((uint32_t)(x))
+#define	ffs(x)			lkpi_ffs32((uint32_t)(x))
 
 static __always_inline __unused unsigned int
 lkpi_hweight8(u8 w)
