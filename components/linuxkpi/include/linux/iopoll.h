@@ -67,34 +67,53 @@ static inline void cpu_relax(void)
 
 /*
  * The atomic flavour: same contract, but it must not sleep, so the wait between
- * attempts is the relaxation alone. The timeout still bounds the loop.
+ * attempts is a busy delay.  The budget accounting is the interface's: only the
+ * delay is charged against the timeout, never the operation's own execution
+ * time (upstream include/linux/iopoll.h poll_timeout_us_atomic: the budget is
+ * `__left_ns -= __delay_ns` per round plus one nanosecond, and the expiry is
+ * decided from the value the previous round left).  Charging wall-clock time
+ * here made a slow register read look like an expired budget: a real answer
+ * that took longer than the window was reported as -ETIMEDOUT (the rtw89 W2
+ * board round read a C2H answer in 5.2-6.1 ms against a 4 ms window and lost
+ * it).  The expiry is read before the operation and the operation runs before
+ * the decision, so the last round still gets its answer.
  */
 #define	read_poll_timeout_atomic(op, val, cond, delay_us, timeout_us,	\
 				 delay_before_read, args...)		\
 ({									\
 	u64 __timeout_us = (timeout_us);				\
+	s64 __left_ns = (s64)__timeout_us * 1000LL;			\
 	unsigned long __delay_us = (delay_us);				\
-	ktime_t __timeout = ktime_add_us(ktime_get(), __timeout_us);	\
-	unsigned long __delay_loops = __delay_us * 10;			\
+	s64 __delay_ns = (s64)__delay_us * 1000LL;			\
 	int __ret;							\
 									\
 	if (delay_before_read && __delay_us) {				\
 		udelay(__delay_us);					\
-		__delay_loops -= __delay_us * 10;			\
+		if (__timeout_us)					\
+			__left_ns -= __delay_ns;			\
 	}								\
 	for (;;) {							\
+		int __expired = __timeout_us && __left_ns < 0;		\
+									\
+		cpu_relax();	/* the interface's barrier() */		\
 		(val) = op(args);					\
-		if (cond)						\
-			break;						\
-		if (__timeout_us &&					\
-		    ktime_compare(ktime_get(), __timeout) > 0) {	\
-			(val) = op(args);				\
+		if (cond) {						\
+			__ret = 0;					\
 			break;						\
 		}							\
-		while (__delay_loops--)					\
-			cpu_relax();					\
+		if (__expired) {					\
+			__ret = -ETIMEDOUT;				\
+			break;						\
+		}							\
+		if (__delay_us) {					\
+			udelay(__delay_us);				\
+			if (__timeout_us)				\
+				__left_ns -= __delay_ns;		\
+		}							\
+		cpu_relax();						\
+		if (__timeout_us)					\
+			__left_ns--;					\
 	}								\
-	__ret = (cond) ? 0 : -ETIMEDOUT;				\
 	__ret;								\
 })
 

@@ -134,17 +134,17 @@ $(BUILD_DIR)/cherryusb-adapter-test: $(call OBJ,$(MAKEFILE_DIR)/adapter_case.c) 
 	$(CC) $^ $(LDFLAGS) -o $@
 
 $(call OBJ,$(MAKEFILE_DIR)/adapter_case.c): $(MAKEFILE_DIR)/adapter_case.c | $(BUILD_DIR)
-	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
+	$(CC) $(CLAIM_CFLAGS)  -MMD -MP -c $< -o $@
 
 $(call OBJ,$(ROOT)/ports/cherryusb/lkpi_usb_cherryusb.c): $(ROOT)/ports/cherryusb/lkpi_usb_cherryusb.c | $(BUILD_DIR)
-	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
+	$(CC) $(CLAIM_CFLAGS)  -MMD -MP -c $< -o $@
 
 $(BUILD_DIR):
 	mkdir -p $@
 
 define COMPILE_RULE
 $(call OBJ,$(1)): $(1) | $(BUILD_DIR)
-	$$(CC) $$(CFLAGS) -c $$< -o $$@
+	$$(CC) $$(CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach src,$(filter-out $(POOL_SRC) $(MAKEFILE_DIR)/claim_case.c \
@@ -154,20 +154,25 @@ $(foreach src,$(filter-out $(POOL_SRC) $(MAKEFILE_DIR)/claim_case.c \
 # common flags (the hook's first-include rule)
 $(call OBJ,$(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c): \
     $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c | $(BUILD_DIR)
-	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
+	$(CC) $(CLAIM_CFLAGS)  -MMD -MP -c $< -o $@
 
 $(call OBJ,$(MAKEFILE_DIR)/claim_case.c): $(MAKEFILE_DIR)/claim_case.c | $(BUILD_DIR)
-	$(CC) $(CLAIM_CFLAGS) -c $< -o $@
+	$(CC) $(CLAIM_CFLAGS)  -MMD -MP -c $< -o $@
 
 # the pool body, with the host's platform hooks instead of the target's
 $(POOL_OBJ): $(POOL_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLKPI_SKB_POOL_NO_TARGET_HOOKS -c $< -o $@
+	$(CC) $(CFLAGS) -DLKPI_SKB_POOL_NO_TARGET_HOOKS  -MMD -MP -c $< -o $@
 
 $(BIN): $(OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
 
 run: $(BIN)
 	$(BIN)
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD_DIR)

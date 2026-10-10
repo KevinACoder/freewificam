@@ -46,11 +46,11 @@
 
 #endif
 
-/* [LNX] include/linux/ieee80211.h:751,1789: the frame helpers the compiled set calls
- * (the interface defines them inline; their bodies are the header bits arithmetic) */
-bool ieee80211_is_nullfunc(__le16 fc);
-unsigned int ieee80211_hdrlen(__le16 fc);
-bool ieee80211_is_qos_nullfunc(__le16 fc);
+/* [LNX] include/linux/ieee80211.h:751,1789: the frame helpers the compiled set calls.
+ * The interface defines them inline - they are one-line predicates over the frame
+ * control field and the header-length walk - and they are inline here too, in the
+ * block below the helpers they are built from (a call through a symbol would cost
+ * more than the test it performs). */
 
 /* [LNX] include/linux/ieee80211-he.h:93 (the enumerators the compiled set names, at their computed positions) */
 
@@ -877,6 +877,10 @@ struct ieee80211_p2p_noa_attr {
 
 /* [LNX] include/linux/ieee80211.h:92 */
 #define IEEE80211_STYPE_DATA			0x0000
+/* [LNX] include/linux/ieee80211.h:95,103: the two null-function subtypes (the
+ * data-frame subtypes the interface names beside IEEE80211_STYPE_DATA) */
+#define IEEE80211_STYPE_NULLFUNC		0x0040
+#define IEEE80211_STYPE_QOS_NULLFUNC		0x00c0
 
 /* [LNX] include/linux/ieee80211.h:159 */
 #define IEEE80211_SN_MASK		((IEEE80211_SCTL_SEQ) >> 4)
@@ -1071,4 +1075,124 @@ enum ieee80211_range_params_max_total_ltf {
 #define	WLAN_CATEGORY_SA_QUERY	8
 /* [LNX] include/linux/ieee80211.h:2190 */
 #define	WLAN_ACTION_SA_QUERY_RESPONSE	1
+/*
+ * The rest of the frame-control and sequence helpers the interface states as
+ * inline functions (include/linux/ieee80211.h).  Bodies are the interface's, one
+ * for one; the sequence-number form uses this face's own SCTL_SEQ/SEQ_TO_SN pair
+ * (above), which is the same arithmetic under the interface's names.
+ */
+static inline bool ieee80211_has_order(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_ORDER)) != 0;
+}
+
+static inline bool ieee80211_is_ext(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_EXT);
+}
+
+static inline bool ieee80211_is_nullfunc(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_NULLFUNC);
+}
+
+static inline bool ieee80211_is_qos_nullfunc(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_QOS_NULLFUNC);
+}
+
+static inline bool ieee80211_is_probe_resp(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_PROBE_RESP);
+}
+
+static inline bool ieee80211_is_pspoll(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_CTL | IEEE80211_STYPE_PSPOLL);
+}
+
+static inline bool ieee80211_is_trigger(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_CTL | IEEE80211_STYPE_TRIGGER);
+}
+
+static inline bool ieee80211_is_any_nullfunc(__le16 fc)
+{
+	return (ieee80211_is_nullfunc(fc) || ieee80211_is_qos_nullfunc(fc));
+}
+
+static inline bool ieee80211_has_pm(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_PM)) != 0;
+}
+
+static inline u16 ieee80211_get_sn(struct ieee80211_hdr *hdr)
+{
+	return IEEE80211_SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl));
+}
+
+static inline u8 ieee80211_get_tid(struct ieee80211_hdr *hdr)
+{
+	u8 *qc = ieee80211_get_qos_ctl(hdr);
+
+	return qc[0] & IEEE80211_QOS_CTL_TID_MASK;
+}
+
+static inline bool ieee80211_sn_less(u16 sn1, u16 sn2)
+{
+	return ((sn1 - sn2) & IEEE80211_SN_MASK) > (IEEE80211_SN_MODULO >> 1);
+}
+
+static inline unsigned long ieee80211_tu_to_usec(unsigned long tu)
+{
+	return 1024 * tu;
+}
+
+static inline unsigned int ieee80211_hdrlen(__le16 fc)
+{
+	unsigned int hdrlen = 24;
+
+	if (ieee80211_is_ext(fc)) {
+		hdrlen = 4;
+		goto out;
+	}
+
+	if (ieee80211_is_data(fc)) {
+		if (ieee80211_has_a4(fc))
+			hdrlen = 30;
+		if (ieee80211_is_data_qos(fc)) {
+			hdrlen += IEEE80211_QOS_CTL_LEN;
+			if (ieee80211_has_order(fc))
+				hdrlen += IEEE80211_HT_CTL_LEN;
+		}
+		goto out;
+	}
+
+	if (ieee80211_is_mgmt(fc)) {
+		if (ieee80211_has_order(fc))
+			hdrlen += IEEE80211_HT_CTL_LEN;
+		goto out;
+	}
+
+	if (ieee80211_is_ctl(fc)) {
+		/*
+		 * ACK and CTS are 10 bytes, all others 16: the subtype bits
+		 * that separate them are 0x00e0, and the two short forms share
+		 * the value 0x00c0.
+		 */
+		if ((fc & cpu_to_le16(0x00e0)) == cpu_to_le16(0x00c0))
+			hdrlen = 10;
+		else
+			hdrlen = 16;
+	}
+out:
+	return hdrlen;
+}
+
 #endif /* _LINUXKPI_LINUX_IEEE80211_H_ */

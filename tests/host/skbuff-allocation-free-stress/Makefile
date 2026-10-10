@@ -75,13 +75,13 @@ $(BUILD_DIR)/double $(BUILD_DIR)/real $(BUILD_DIR)/mcu:
 	mkdir -p $@
 
 $(BUILD_DIR)/double/%.o: $(MAKEFILE_DIR)/%.c $(HDRS) | $(BUILD_DIR)/double
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS)  -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/real/%.o: $(MAKEFILE_DIR)/%.c $(HDRS) | $(BUILD_DIR)/real
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS)  -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/mcu/%.o: $(MAKEFILE_DIR)/%.c $(HDRS) | $(BUILD_DIR)/mcu
-	$(CC) $(CFLAGS) $(MCU_CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(MCU_CFLAGS)  -MMD -MP -c $< -o $@
 
 $(BIN): $(DOUBLE_OBJS)
 	$(CC) $(DOUBLE_OBJS) $(LDFLAGS) -o $@
@@ -94,6 +94,11 @@ $(BIN_MCU): $(MCU_OBJS)
 
 run: $(BIN)
 	$(BIN)
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD_DIR)

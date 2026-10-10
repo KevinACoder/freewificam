@@ -57,6 +57,14 @@ int	lkpi_usb_urb_is_freed(const struct urb *urb);
 void	lkpi_usb_uaf_hit(const void *p);
 /* DMA staging hook counter (passthrough in this build) */
 unsigned int	lkpi_usb_stage_grant_count(void);
+/* flow-control parking: a transient backend shortage (the controller's own
+ * slot/stage pool momentarily exhausted) parks the endpoint instead of
+ * surfacing an error to the driver; these counters are that mechanism's
+ * evidence (a park is resumed by the retry pass that follows a resource
+ * release: a delivery batch, a control transfer or a synchronous submit) */
+unsigned int	lkpi_usb_park_count(void);
+unsigned int	lkpi_usb_resume_count(void);
+unsigned int	lkpi_usb_parked_now(void);
 /* how many drivers the registry holds (the module-section walker's observable
  * result, and the bring-up's self-check before enumeration starts) */
 unsigned int	lkpi_usb_driver_count_get(void);

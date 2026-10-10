@@ -305,6 +305,16 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 		adapter.vif->bss_conf.assoc_capability = 0;
 		adapter.vif->cfg.assoc = true;
 		adapter.vif->cfg.aid = aid;
+		/*
+		 * The AP's address also goes into the vif's own config, which is
+		 * where the interface keeps it for a station (mlme.c:7210 copies
+		 * it there while the association request is built).  A driver
+		 * that has to find its own station from the vif reads it from
+		 * there: rtw89's association handler looks the peer up by
+		 * vif->cfg.ap_addr and gives up when it is still zero.
+		 */
+		if (bssid != NULL)
+			memcpy(adapter.vif->cfg.ap_addr, adapter.bssid_store, 6);
 		changed = BSS_CHANGED_ASSOC | BSS_CHANGED_BSSID |
 		    BSS_CHANGED_BASIC_RATES;
 		if (adapter.sta == NULL) {
@@ -350,6 +360,8 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 	} else {
 		adapter.vif->cfg.assoc = false;
 		adapter.vif->cfg.aid = 0;
+		/* the AP's address goes with the association (mlme.c:2903) */
+		memset(adapter.vif->cfg.ap_addr, 0, 6);
 		changed = BSS_CHANGED_ASSOC;
 		if (adapter.sta != NULL) {
 			lkpi80211_drv_sta_remove(adapter.hw, adapter.vif,

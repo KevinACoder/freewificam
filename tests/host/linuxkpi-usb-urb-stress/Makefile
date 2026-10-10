@@ -66,9 +66,12 @@ LDFLAGS := -pthread -Wl,--gc-sections $(SANITIZE)
 
 # The engine and its platform services. The services are the real body now
 # (components/linuxkpi/linuxkpi_core.c): the host stand-in the sibling suite
-# used to carry was retired when the real body landed.
+# used to carry was retired when the real body landed.  ENGINE_DIR is
+# overridable so the wrapper's red control can build the same harness against
+# a mutated copy of the engine (a gate that cannot go red is itself broken).
+ENGINE_DIR ?= $(ROOT)/components/linuxkpi/usb
 ENGINE_SRCS := \
-    $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
+    $(ENGINE_DIR)/linuxkpi_usb.c \
     $(ROOT)/components/linuxkpi/linuxkpi_core.c
 
 # The test double, reused verbatim from the sibling suite: controller, scripted
@@ -120,7 +123,7 @@ $(BUILD_DIR):
 
 define COMPILE_RULE
 $(call OBJ,$(1)): $(1) | $(BUILD_DIR)
-	$$(CC) $$(CFLAGS) -c $$< -o $$@
+	$$(CC) $$(CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
@@ -128,5 +131,10 @@ $(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
 $(BIN): $(OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
 
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
+
 clean:
-	rm -rf $(BUILD_DIR)$(if $(filter off,$(PATCHES)),,/pinned)
+	rm -rf $(BUILD_DIR)

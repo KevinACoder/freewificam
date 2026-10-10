@@ -1430,9 +1430,50 @@ case_b14(void)
 		    st->bss_ev[ev_join].bssid_null);
 		return -1;
 	}
-	if (st->bss_ev[ev_join].supp0 == 0) {
-		case_line("B14", 0, "the station carries no rate bitmap (the "
-		    "driver's rate mask would be empty)");
+	/*
+	 * The rate bitmap must be the AP's advertised set carried through the
+	 * interface's band-rate order (1, 2, 5.5, 11, 6, 9, 12, 18, 24, 36,
+	 * 48, 54 Mbit/s).  ap_frames.c advertises exactly the first eight of
+	 * those, so the bitmap is 0x00ff, and the basic subset - the four 11b
+	 * rates it marks basic - is 0x000f.  A bitmap truncated on its way in,
+	 * or one built from a hard-coded rate instead of the node's own set,
+	 * lands on a different value; "not zero" would not catch either.
+	 */
+	if (st->bss_ev[ev_join].supp0 != 0x00ff) {
+		case_line("B14", 0, "the station's rate bitmap is %#x, not the "
+		    "AP's advertised set (0x00ff)", st->bss_ev[ev_join].supp0);
+		return -1;
+	}
+	/*
+	 * The basic subset is empty, and that is net80211's doing, not the
+	 * adapter's: the node's rate set is negotiated against the interface's
+	 * own supported set, whose standard tables carry no basic flag
+	 * (ieee80211_std_rateset_11b, ieee80211.c:845), and the negotiation
+	 * overwrites each node entry with the local value
+	 * (ieee80211_fix_rate, ieee80211_proto.c:382-393).  So the AP's basic
+	 * marking never reaches this point.  It is benign for both drivers -
+	 * rtl8xxxu programs a zero response-rate set, which is what it has
+	 * always done, and rtw89 falls back to the lowest rate when
+	 * basic_rates is zero (core.c:775-778) - and it is registered as a
+	 * limitation rather than papered over here.
+	 */
+	if (st->bss_ev[ev_join].basic != 0) {
+		case_line("B14", 0, "the basic-rate bitmap is %#x; the AP's basic "
+		    "marking was not expected to survive net80211's rate "
+		    "negotiation", st->bss_ev[ev_join].basic);
+		return -1;
+	}
+	/*
+	 * The AP's address also has to be in the vif's own config: that is
+	 * where a driver which finds its station from the vif reads it, and
+	 * rtw89's association handler gives up when it is still zero.
+	 */
+	if (memcmp(st->bss_ev[ev_join].ap_addr, ap_bssid, 6) != 0) {
+		case_line("B14", 0, "vif->cfg.ap_addr does not carry the AP's "
+		    "address (%02x:%02x:%02x:%02x:%02x:%02x)",
+		    st->bss_ev[ev_join].ap_addr[0], st->bss_ev[ev_join].ap_addr[1],
+		    st->bss_ev[ev_join].ap_addr[2], st->bss_ev[ev_join].ap_addr[3],
+		    st->bss_ev[ev_join].ap_addr[4], st->bss_ev[ev_join].ap_addr[5]);
 		return -1;
 	}
 	ev_leave = st->bss_ev_count;

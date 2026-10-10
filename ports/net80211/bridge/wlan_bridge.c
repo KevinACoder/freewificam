@@ -1532,13 +1532,16 @@ wlan_port_up(void)
 	/*
 	 * The firmware the driver loads in probe is the check this port can make
 	 * from here: the registry is the loader and the blob registers itself at
-	 * start-up, so an unresolved name means the image cannot work.
+	 * start-up, so an unresolved name means the image cannot work.  Which
+	 * name that is belongs to the image (WLAN_BRIDGE_FIRMWARE_NAME), and it
+	 * is named in the log so a board log says which blob was missing.
 	 */
 	{
 		struct wlan_firmware fw;
 
-		if (wlan_port_firmware_get("rtlwifi/rtl8188eufw.bin", &fw) != 0)
-			wlan_osal_log("wlan: firmware blob is not registered\n");
+		if (wlan_port_firmware_get(WLAN_BRIDGE_FIRMWARE_NAME, &fw) != 0)
+			wlan_osal_log("wlan: firmware blob %s is not registered\n",
+			    WLAN_BRIDGE_FIRMWARE_NAME);
 	}
 	return wlan_bridge_up();
 }

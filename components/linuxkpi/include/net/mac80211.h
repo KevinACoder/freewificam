@@ -1380,33 +1380,12 @@ void ieee80211_cqm_rssi_notify(struct ieee80211_vif *vif,
 /* [LNX] include/net/mac80211.h:3448 */
 void ieee80211_free_txskb(struct ieee80211_hw *hw, struct sk_buff *skb);
 
-u16 ieee80211_get_sn(struct ieee80211_hdr *hdr);
-
-
-
-u8 ieee80211_get_tid(struct ieee80211_hdr *hdr);
-
-
-
-bool ieee80211_has_pm(__le16 fc);
-
-
-
-bool ieee80211_is_any_nullfunc(__le16 fc);
-
-
-
-bool ieee80211_is_probe_resp(__le16 fc);
-
-
-
-bool ieee80211_is_pspoll(__le16 fc);
-
-
-
-bool ieee80211_is_trigger(__le16 fc);
-
-
+/* [LNX] include/net/mac80211.h names these too, but the interface defines them
+ * inline beside the frame-control helpers they are built from; that is where
+ * their bodies live in this face as well (include/linux/ieee80211.h):
+ * ieee80211_get_sn, ieee80211_get_tid, ieee80211_has_pm,
+ * ieee80211_is_any_nullfunc, ieee80211_is_probe_resp, ieee80211_is_pspoll,
+ * ieee80211_is_trigger, ieee80211_sn_less, ieee80211_tu_to_usec. */
 
 /* [LNX] helper the compiled set names */
 /* [LNX] include/net/mac80211.h:6944 */
@@ -1491,10 +1470,6 @@ void ieee80211_scan_completed(struct ieee80211_hw *hw,
 /* [LNX] include/net/mac80211.h:8108 */
 int ieee80211_set_active_links(struct ieee80211_vif *vif, u16 active_links);
 
-bool ieee80211_sn_less(u16 sn1, u16 sn2);
-
-
-
 /* [LNX] helper the compiled set names */
 /* [LNX] include/net/mac80211.h:5505 */
 int ieee80211_sta_ps_transition(struct ieee80211_sta *sta, bool start);
@@ -1515,10 +1490,6 @@ void ieee80211_sta_uapsd_trigger(struct ieee80211_sta *sta, u8 tid);
 /* [LNX] include/net/mac80211.h:6690 */
 int ieee80211_stop_tx_ba_session(struct ieee80211_sta *sta, u16 tid);
 
-unsigned long ieee80211_tu_to_usec(unsigned long tu);
-
-
-
 struct sk_buff *ieee80211_tx_dequeue_ni(struct ieee80211_hw *hw,
 						      struct ieee80211_txq *txq);
 
@@ -1538,9 +1509,15 @@ void ieee80211_txq_schedule_end(struct ieee80211_hw *hw, u8 ac);
 /* [LNX] include/net/mac80211.h:7826 */
 void ieee80211_txq_schedule_start(struct ieee80211_hw *hw, u8 ac);
 
-bool ieee80211_vif_is_mld(const struct ieee80211_vif *vif);
-
-
+/*
+ * [LNX] include/net/mac80211.h: `static inline bool ieee80211_vif_is_mld(const
+ * struct ieee80211_vif *vif) { return vif->valid_links != 0; }` - a vif with no
+ * valid links is not an MLD, which is what every non-MLO interface carries.
+ */
+static inline bool ieee80211_vif_is_mld(const struct ieee80211_vif *vif)
+{
+	return vif->valid_links != 0;
+}
 
 u16 ieee80211_vif_usable_links(const struct ieee80211_vif *vif);
 

@@ -111,7 +111,7 @@ $(BUILD_DIR):
 
 define COMPILE_RULE
 $(call OBJ,$(1)): $(1) | $(BUILD_DIR)
-	$$(CC) $$(CFLAGS) -c $$< -o $$@
+	$$(CC) $$(CFLAGS)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
@@ -132,7 +132,7 @@ SKBUFF_HEADERS := $(SKBUFF)/skbuff.h $(SKBUFF)/freertos/freertos_skbuff.h
 LKPI_CFLAGS := -std=gnu11 -Wall -I$(LKPI)/include -I$(LKPI)
 
 contract-check: | $(BUILD_DIR)
-	@$(CC) $(LKPI_CFLAGS) -c $(MAKEFILE_DIR)/lkpi_contract_tu.c -o $(BUILD_DIR)/lkpi_contract_tu.o
+	@$(CC) $(LKPI_CFLAGS)  -MMD -MP -c $(MAKEFILE_DIR)/lkpi_contract_tu.c -o $(BUILD_DIR)/lkpi_contract_tu.o
 	@$(CC) $(LKPI_CFLAGS) -H -fsyntax-only $(MAKEFILE_DIR)/lkpi_contract_tu.c 2> $(BUILD_DIR)/lkpi-closure.raw
 	@grep -E '^\.+ ' $(BUILD_DIR)/lkpi-closure.raw | sed -e 's/^\.* //' | sort -u > $(BUILD_DIR)/lkpi-closure.txt
 	@grep -v -e '/usr/' -e 'components/linuxkpi' -e 'lkpi_contract_tu.c' \
@@ -146,5 +146,10 @@ contract-check: | $(BUILD_DIR)
 	done
 	@echo "contract-check: linuxkpi contract TU compiled, closure is in-repo + libc ($$(wc -l < $(BUILD_DIR)/lkpi-closure.txt) headers), skbuff headers clean"
 
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
+
 clean:
-	rm -rf $(BUILD_DIR)$(if $(filter off,$(PATCHES)),,/pinned)
+	rm -rf $(BUILD_DIR)

@@ -38,9 +38,9 @@ case_line() {
 # stream with the same determinism contract to keep a change cycle fast.
 
 if "$bin" --fuzz --iters 20000 > "$log_dir/stream.log" 2>&1; then
-    if grep -q '^URBSTRESS: matrix cells=28 pass=28 fail=0$' "$log_dir/stream.log"; then
+    if grep -q '^URBSTRESS: matrix cells=32 pass=32 fail=0$' "$log_dir/stream.log"; then
         case_line matrix PASS
-        for fam in B1 B2 B3 B4 B5 B6; do
+        for fam in B1 B2 B3 B4 B5 B6 B7; do
             case_line "matrix-$fam" PASS
         done
     else
@@ -69,6 +69,53 @@ else
     case_line seeds FAIL
     echo "linuxkpi-usb-urb-stress: run failed, see $log_dir/run.log" >&2
     tail -5 "$log_dir/stream.log" >&2 || true
+fi
+
+# ---- the flow-control family (B7) ---------------------------------------------
+
+# The burst cells run alone (the matrix run above already covers them; these
+# lines give the family its own named verdicts and keep its evidence in its own
+# log).  B7.1 is the firmware-download shape, B7.2 the live control that proves
+# B7.1's detector can fire, B7.3/B7.4 the refused-submit completion contract.
+for cell in B7.1 B7.2 B7.3 B7.4; do
+    name=$(printf 'flow-%s' "$(printf '%s' "$cell" | tr 'A-Z.' 'a-z-')")
+    if "$bin" --cell "$cell" > "$log_dir/$name.log" 2>&1; then
+        case_line "$name" PASS
+    else
+        case_line "$name" FAIL
+        tail -3 "$log_dir/$name.log" >&2 || true
+    fi
+done
+
+# The must-go-red control for the family: the parking that keeps a transient
+# shortage away from the driver is one branch in the engine.  The control
+# builds the same harness against a copy of the engine whose shortage branch is
+# disabled; the burst must then surface the shortage and B7.1 must go red with
+# a first witness.
+mut=$log_dir/mutated-engine
+rm -rf "$mut"
+mkdir -p "$mut"
+sed 's/if (ret == -LKPI_USB_BE_ERR_NOMEM)/if (0)/' \
+    "$root/components/linuxkpi/usb/linuxkpi_usb.c" > "$mut/linuxkpi_usb.c"
+if grep -q 'if (0)' "$mut/linuxkpi_usb.c" &&
+    make -C "$root/tests/host/linuxkpi-usb-urb-stress" \
+        ENGINE_DIR="$mut" BUILD_DIR="$mut/build" > "$log_dir/mutated-build.log" 2>&1; then
+    if "$mut/build/linuxkpi-usb-urb-stress" --cell B7.1 > "$log_dir/mutated-b7-1.log" 2>&1; then
+        case_line flow-return-red-control FAIL
+        echo "linuxkpi-usb-urb-stress: the no-parking engine passed B7.1 (it must fail)" >&2
+    else
+        if grep -q '^URBSTRESS: first-witness' "$log_dir/mutated-b7-1.log"; then
+            case_line flow-return-red-control PASS
+        else
+            case_line flow-return-red-control FAIL
+            echo "linuxkpi-usb-urb-stress: the red control failed without a witness" >&2
+            tail -3 "$log_dir/mutated-b7-1.log" >&2 || true
+        fi
+    fi
+else
+    case_line flow-return-red-control FAIL
+    echo "linuxkpi-usb-urb-stress: the mutated engine did not build" >&2
+    tail -5 "$log_dir/mutated-build.log" >&2 || true
 fi
 
 # ---- the reverse controls -----------------------------------------------------

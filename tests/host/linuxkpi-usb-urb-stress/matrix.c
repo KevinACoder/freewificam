@@ -1474,6 +1474,293 @@ cell_b6_4(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* the flow-control family (B7)                                        */
+/*                                                                     */
+/* The firmware-download shape: a long burst of submissions on one     */
+/* bulk-out endpoint while the controller's own pools run short.  The  */
+/* driver must see every submission accepted and every transfer        */
+/* completed exactly once with success - a spent pool is flow control, */
+/* not an outcome.  Truth: the board adapter reports a spent pool as   */
+/* -LKPI_USB_BE_ERR_NOMEM (ports/cherryusb/lkpi_usb_cherryusb.c:468),  */
+/* the EHCI controller as -USB_ERR_NOMEM when its QH pool is spent,    */
+/* and Linux's usb_submit_urb contract is that an error return means   */
+/* the submission was not accepted and no completion will follow.      */
+/*                                                                     */
+/* Two shapes, both deterministic: (A) one transfer at a time with the */
+/* shortage landing on the submit's own kick - the endpoint is idle,   */
+/* so the park is observable inside the submit path itself; (B) eight  */
+/* transfers per phase with the shortage on the FIRST submit, so seven */
+/* queue behind a parked head, which is the queue depth a firmware     */
+/* burst builds.                                                       */
+/* ------------------------------------------------------------------ */
+
+#define FLOW_SINGLE	600	/* phase A: one transfer at a time */
+#define FLOW_PHASES	12	/* phase B: 12 x 8 = 96 submissions */
+#define FLOW_ROWS	8
+/* 600 + 96 = 696 submissions; one shortage in every ten, so the total is the
+ * firmware burst's ~690 with 72 absorbed shortages */
+
+static unsigned int g_flow_shortages;	/* injected transient refusals */
+
+/* one submission on the shared arena slot */
+static int
+flow_submit(struct stress_urb *s, int arm_shortage)
+{
+	u8 *buf = env_buf(0, 16);
+
+	if (buf == NULL)
+		return -1;
+	memset(buf, 0, 16);
+	if (env_alloc(s, 1, 0) == NULL)
+		return -1;
+	env_fill_bulk(s, ENV_EP_BULK_OUT, buf, 16, 0);
+	if (arm_shortage) {
+		env_knob_submit_shortage(1);
+		g_flow_shortages++;
+	}
+	return 0;
+}
+
+/*
+ * Drive a phase to completion with bounded steps and yields.  The engine hands
+ * its queued transfers over one at a time, so the wrapper's "all rows settled"
+ * gate (env_settle) would wait on transfers the engine has not handed over yet;
+ * stepping plus yielding drives exactly the queue the engine holds.
+ */
+static void
+flow_drive(struct stress_urb *row[FLOW_ROWS], unsigned int n)
+{
+	unsigned int i, guard;
+
+	for (guard = 0; guard < 512; guard++) {
+		unsigned int done = 0;
+
+		for (i = 0; i < n; i++)
+			if (row[i]->cb_count != 0)
+				done++;
+		if (done == n)
+			return;
+		env_step();
+		env_yield();
+	}
+}
+
+/* phase A: the shortage lands on the submit's own kick */
+static void
+flow_single_round(struct stress_urb *s, int inject,
+    unsigned int *bad_submits, unsigned int *bad_status)
+{
+	unsigned int parks0 = lkpi_usb_park_count();
+
+	if (flow_submit(s, inject) != 0) {
+		(*bad_submits)++;
+		return;
+	}
+	if (env_submit(s) != 0)
+		(*bad_submits)++;
+	if (inject) {
+		/* the endpoint was idle, so the refusal parked the head right
+		 * here and nothing is in flight on it */
+		if (lkpi_usb_parked_now() == 0 || lkpi_usb_park_count() == parks0)
+			(*bad_submits)++;
+		/* the driver's register-poll shape: one synchronous control
+		 * transfer, which runs the parked-endpoint retry pass */
+		(void)env_control_poke();
+	}
+	flow_drive(&s, 1);
+	if (s->cb_count != 1 || s->cb_first != 0)
+		(*bad_status)++;
+	env_free_urb(s);
+	env_forget(s);
+}
+
+/* phase B: seven transfers queue behind the parked head */
+static void
+flow_queue_phase(struct stress_urb *row[FLOW_ROWS], unsigned int *bad_submits,
+    unsigned int *bad_status)
+{
+	unsigned int i, guard;
+	unsigned int parks0 = lkpi_usb_park_count();
+
+	/* The shortage is armed on the LAST submit: the phase's first transfer is
+	 * already in flight, so the refusal lands on the drain's kick once that
+	 * transfer completes, and the seven behind it stay queued.  With nothing
+	 * in flight on the endpoint afterwards, only the retry pass can resume it -
+	 * which is the case a firmware burst's tail really is. */
+	for (i = 0; i < FLOW_ROWS; i++) {
+		row[i] = &g_row[i];
+		if (flow_submit(row[i], i == FLOW_ROWS - 1) != 0) {
+			(*bad_submits)++;
+			return;
+		}
+		if (env_submit(row[i]) != 0)
+			(*bad_submits)++;
+	}
+	/* let the refusal land: the park is observable in the counter (the retry
+	 * pass may resume it inside the same drain batch, which is the engine
+	 * healing itself - the evidence is that it parked and resumed at all) */
+	for (guard = 0; guard < 64 && lkpi_usb_park_count() == parks0; guard++) {
+		env_step();
+		env_yield();
+	}
+	if (lkpi_usb_park_count() != parks0 + 1)
+		(*bad_submits)++;
+	(void)env_control_poke();
+	flow_drive(row, FLOW_ROWS);
+	for (i = 0; i < FLOW_ROWS; i++) {
+		if (row[i]->cb_count != 1 || row[i]->cb_first != 0)
+			(*bad_status)++;
+		env_free_urb(row[i]);
+		env_forget(row[i]);
+	}
+}
+
+/* B7.1 flow-return: the burst absorbs every transient shortage */
+static int
+cell_b7_1(void)
+{
+	struct stress_urb *row[FLOW_ROWS];
+	unsigned int i, phase, bad_submits = 0, bad_status = 0;
+	unsigned int parks0, resumes0, parks, resumes;
+	int ok;
+
+	cell_open("B7.1");
+	parks0 = lkpi_usb_park_count();
+	resumes0 = lkpi_usb_resume_count();
+	g_flow_shortages = 0;
+	for (i = 0; i < FLOW_SINGLE; i++)
+		flow_single_round(&g_row[0], (i % 10) == 9, &bad_submits,
+		    &bad_status);
+	for (phase = 0; phase < FLOW_PHASES; phase++)
+		flow_queue_phase(row, &bad_submits, &bad_status);
+	parks = lkpi_usb_park_count() - parks0;
+	resumes = lkpi_usb_resume_count() - resumes0;
+	ok = bad_submits == 0 && bad_status == 0 && g_flow_shortages != 0 &&
+	    parks == g_flow_shortages && resumes == g_flow_shortages &&
+	    lkpi_usb_parked_now() == 0;
+	judge_expect(bad_submits == 0, "every submit of the burst is accepted "
+	    "(a transient shortage is flow control, never -ENOMEM to the driver)",
+	    NULL, 0, (long)bad_submits);
+	judge_expect(bad_status == 0, "every transfer of the burst completes "
+	    "exactly once with success", NULL, 0, (long)bad_status);
+	judge_expect(parks == g_flow_shortages,
+	    "every injected shortage parked the endpoint (the shortage was "
+	    "absorbed, not absent)", NULL, (long)g_flow_shortages, (long)parks);
+	judge_expect(resumes == g_flow_shortages,
+	    "every park was resumed by the retry pass", NULL,
+	    (long)g_flow_shortages, (long)resumes);
+	judge_expect(lkpi_usb_parked_now() == 0, "no endpoint is left parked",
+	    NULL, 0, (long)lkpi_usb_parked_now());
+	judge_note("submits=%u shortages=%u parks=%u resumes=%u",
+	    FLOW_SINGLE + FLOW_PHASES * FLOW_ROWS, g_flow_shortages, parks,
+	    resumes);
+	return cell_close(ok);
+}
+
+/* B7.2 the live control for B7.1's "no failure surfaced" assertion */
+static int
+cell_b7_2(void)
+{
+	struct stress_urb *row[FLOW_ROWS];
+	unsigned int i, bad_status = 0, seen = 0;
+	int ok;
+
+	cell_open("B7.2");
+	/* A HARD refusal (the device is gone) must reach the driver as a failed
+	 * completion.  If this cell cannot produce a nonzero status, B7.1's
+	 * check is dead code and would pass on any engine - so this is the
+	 * control that keeps it live. */
+	for (i = 0; i < FLOW_ROWS; i++) {
+		row[i] = &g_row[i];
+		if (flow_submit(row[i], 0) != 0)
+			break;
+		if (i == FLOW_ROWS - 1)
+			env_knob_submit_refuse(LKPI_USB_BE_ERR_SHUTDOWN);
+		(void)env_submit(row[i]);
+	}
+	flow_drive(row, FLOW_ROWS);
+	for (i = 0; i < FLOW_ROWS; i++) {
+		if (row[i] == NULL || row[i]->u == NULL)
+			break;
+		if (row[i]->cb_count == 1 && row[i]->cb_first != 0)
+			bad_status++;
+		seen += (unsigned int)row[i]->cb_count;
+		env_free_urb(row[i]);
+		env_forget(row[i]);
+	}
+	ok = bad_status >= 1;
+	judge_expect(bad_status >= 1, "a hard refusal reaches the driver as a "
+	    "failed completion (the detector B7.1 relies on is live)", NULL, 1,
+	    (long)bad_status);
+	judge_note("hard_refusal_visible=%u callbacks=%u", bad_status, seen);
+	return cell_close(ok);
+}
+
+/* B7.3 submit-refused-no-completion: an unaccepted submit owes nothing */
+static int
+cell_b7_3(void)
+{
+	struct stress_urb *s;
+	unsigned int seam0;
+	int rc, ok;
+
+	cell_open("B7.3");
+	/* A submit the engine refuses at its own API: the pipe resolves to no
+	 * endpoint of the device, so usb_submit_urb reports -EINVAL before the
+	 * transfer is accepted.  An unaccepted submission owes no completion at
+	 * all and never reaches the seam (Linux usb_submit_urb; the shape whose
+	 * absence let a late giveback double-free a driver's txcb). */
+	s = row_bulk(0, LAWFUL_ANY, 0, 8);
+	s->u->pipe = usb_sndbulkpipe(env_device(), 7);
+	seam0 = env_seam_total();
+	rc = env_submit(s);
+	flow_drive(&s, 1);
+	ok = rc == -EINVAL && s->cb_count == 0 && s->seam_count == 0 &&
+	    env_seam_total() == seam0;
+	judge_expect(rc == -EINVAL, "a submit with no endpoint behind the pipe is "
+	    "refused with -EINVAL", s->u, -EINVAL, rc);
+	judge_expect(s->cb_count == 0 && s->seam_count == 0 &&
+	    env_seam_total() == seam0, "a refused submit owes no completion and "
+	    "never reaches the seam", s->u, 0, (long)s->cb_count);
+	judge_note("refusal=%d cb=%d seam=%d", rc, s->cb_count, s->seam_count);
+	return cell_close(ok);
+}
+
+/* B7.4 the late giveback after a refused submit is absorbed */
+static int
+cell_b7_4(void)
+{
+	struct stress_urb *s;
+	int rc, poke, ok;
+
+	cell_open("B7.4");
+	/* The accepted-then-refused shape: the submission was accepted, so
+	 * exactly one completion is owed and it carries the device error.  A
+	 * LATE giveback for the same transfer - a completion for a submission
+	 * that was refused - is the shim-contract violation that once
+	 * double-freed a driver's txcb; the engine's claim guard must absorb it
+	 * and the driver face must stay at one callback. */
+	s = row_bulk(1, LAWFUL_ANY, 0, 8);
+	env_knob_submit_refuse(LKPI_USB_BE_ERR_SHUTDOWN);
+	rc = env_submit(s);
+	flow_drive(&s, 1);
+	poke = env_late_giveback_poke();
+	flow_drive(&s, 1);
+	ok = rc == 0 && poke == 0 && s->cb_count == 1 && s->cb_first == -ENODEV;
+	judge_expect(rc == 0, "the submission is accepted (the refusal is the "
+	    "controller's, not the API's)", s->u, 0, rc);
+	judge_expect(s->cb_count == 1 && s->cb_first == -ENODEV,
+	    "the accepted submission gets exactly one completion, carrying the "
+	    "device error", s->u, 1, (long)s->cb_count);
+	judge_expect(poke == 0 && s->cb_count == 1,
+	    "the late giveback is absorbed: the driver face stays at one "
+	    "callback", s->u, 1, (long)s->cb_count);
+	judge_note("refused_submit rc=%d cb=%d status=%d late_giveback=%d",
+	    rc, s->cb_count, s->cb_first, poke);
+	return cell_close(ok);
+}
+
+/* ------------------------------------------------------------------ */
 /* the run                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -1493,6 +1780,8 @@ static const struct {
 	{ "B5.4", cell_b5_4 }, { "B5.5", cell_b5_5 },
 	{ "B6.1", cell_b6_1 }, { "B6.2", cell_b6_2 }, { "B6.3", cell_b6_3 },
 	{ "B6.4", cell_b6_4 },
+	{ "B7.1", cell_b7_1 }, { "B7.2", cell_b7_2 }, { "B7.3", cell_b7_3 },
+	{ "B7.4", cell_b7_4 },
 };
 
 #define MATRIX_N	((unsigned int)(sizeof(g_matrix) / sizeof(g_matrix[0])))

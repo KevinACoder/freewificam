@@ -132,12 +132,12 @@ all: compile-threadx compile-freertos symbols gates
 
 define STACK_RULE
 $(call OBJ,$(1),$(2)): $(2) | $(BUILD)/$(1)
-	$$(CC) $$(ARCH) $$(STACK_CFLAGS) $(3) $$(INC) -c $$< -o $$@
+	$$(CC) $$(ARCH) $$(STACK_CFLAGS) $(3) $$(INC)  -MMD -MP -c $$< -o $$@
 endef
 
 define PORT_RULE
 $(call OBJ,$(1),$(2)): $(2) | $(BUILD)/$(1)
-	$$(CC) $$(ARCH) $$(PORT_CFLAGS) $(3) $$(PORT_INC) -c $$< -o $$@
+	$$(CC) $$(ARCH) $$(PORT_CFLAGS) $(3) $$(PORT_INC)  -MMD -MP -c $$< -o $$@
 endef
 
 $(foreach s,$(STACK_SRCS),$(eval $(call STACK_RULE,thx,$(s),$(BACKEND_THX))))
@@ -207,6 +207,11 @@ $(BUILD)/thx $(BUILD)/fr: | $(BUILD)
 
 $(BUILD):
 	mkdir -p $@
+
+# Header dependencies: -MMD -MP writes one .d per object, so a
+# header edit rebuilds every object that included it (a stale object
+# here once linked two disagreeing struct layouts into one binary).
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD)

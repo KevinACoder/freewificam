@@ -24,19 +24,42 @@
 
 #include "../../linuxkpi_core.h"
 #include <linux/in.h>
+#include <linux/ieee80211.h>
 
 struct sk_buff;
 struct iphdr;
 
 /*
  * [LNX] include/linux/ip.h: `static inline struct iphdr *ip_hdr(const struct sk_buff
- * *skb) { return (struct iphdr *)skb_network_header(skb); }`. The vendored bytes use
- * ip_hdr() on a receive path, so the accessor is stated here; it needs the network
- * header offset the interface's sk_buff carries, which this project's sk_buff contract
- * (components/linuxkpi/linuxkpi_core.h) does not model - hence no body, and a caller
- * must be given the port's real offset rather than a silently wrong one.
+ * *skb) { return (struct iphdr *)skb_network_header(skb); }`.
+ *
+ * The interface reaches the network header through the offset its stack keeps on
+ * the sk_buff: mac80211 prepends the 802.11 header into the headroom and leaves
+ * that offset pointing at the IP header, so a driver's transmit path can read the
+ * header it was handed.  This port has no such offset - the bridge builds the
+ * whole 802.11 frame in the buffer - so the network header is derived from the
+ * frame's own geometry instead, which is the port's real offset and the one the
+ * drivers here are compiled against: an 802.11 data frame's payload opens with
+ * the LLC/SNAP header, and the network header follows it.  A frame that is not a
+ * data frame, or one too short to hold what the derivation names, has no network
+ * header and answers NULL.
  */
-struct iphdr *ip_hdr(const struct sk_buff *skb);
+static __always_inline __unused struct iphdr *
+ip_hdr(const struct sk_buff *skb)
+{
+	const struct ieee80211_hdr *hdr;
+	unsigned int off;
+
+	if (skb == NULL || skb->len < 24)
+		return NULL;
+	hdr = (const struct ieee80211_hdr *)skb->data;
+	if (!ieee80211_is_data(hdr->frame_control))
+		return NULL;
+	off = ieee80211_hdrlen(hdr->frame_control) + 8;	/* LLC/SNAP */
+	if (off > skb->len)
+		return NULL;
+	return (struct iphdr *)(skb->data + off);
+}
 
 
 /* [LNX] include/uapi/linux/ip.h: the IPv4 wire header. The interface selects its

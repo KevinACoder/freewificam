@@ -116,7 +116,7 @@ all: $(TARGET).bin check
 define COMPILE_RULE
 $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@mkdir -p $$(dir $$@)
-	$(CC) $(CFLAGS) $(2) -c $$< -o $$@
+	$(CC) $(CFLAGS) $(2) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
 endef
 
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
@@ -179,6 +179,11 @@ check: guards $(TARGET).elf
 	echo "PASS: _start=0x$$start, vectors=0x$$vec (0x800 aligned), kernel/schedule/tick symbols present, __top_of_ram resolved, 0 undefined"
 	@$(SIZE) $(TARGET).elf
 	@echo "build-tag: $(BUILD_TAG)"
+
+# Header dependencies: -MMD -MP writes one .d per object, so a header
+# edit rebuilds every object that included it (a stale object would
+# otherwise be flashed as the current build).
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 clean:
 	rm -rf $(BUILD)

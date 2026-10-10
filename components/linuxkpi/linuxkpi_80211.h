@@ -127,6 +127,10 @@ void	lkpi80211_drv_sta_remove(struct ieee80211_hw *hw,
 /* enumerate what the substitute holds (the bridge's bookkeeping) */
 struct ieee80211_vif *lkpi80211_hw_vif(struct ieee80211_hw *hw, unsigned int idx);
 struct ieee80211_sta *lkpi80211_hw_sta(struct ieee80211_hw *hw, unsigned int idx);
+/* the walk behind the interface's for_each_station(): the next station after
+ * `prev`, or the first one when `prev` is NULL */
+struct ieee80211_sta *lkpi80211_hw_sta_next(struct ieee80211_hw *hw,
+	    struct ieee80211_sta *prev);
 unsigned int	lkpi80211_hw_vif_count(struct ieee80211_hw *hw);
 
 /* the driver-private area behind an hw (hw->priv), for the bridge's own use */

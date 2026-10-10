@@ -154,6 +154,7 @@ fake_bss_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		ev->changed = changed;
 		ev->assoc = vif->cfg.assoc;
 		ev->aid = vif->cfg.aid;
+		memcpy(ev->ap_addr, vif->cfg.ap_addr, 6);
 		ev->bssid_null = info->bssid == NULL;
 		if (info->bssid != NULL)
 			memcpy(ev->bssid, info->bssid, 6);

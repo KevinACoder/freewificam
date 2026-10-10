@@ -46,6 +46,7 @@
 #include <net/cfg80211.h>
 
 #include "linuxkpi_80211.h"
+#include "linuxkpi_txq.h"
 
 /* ------------------------------------------------------------------ */
 /* compile-time contracts                                              */
@@ -214,10 +215,17 @@ ieee80211_free_hw(struct ieee80211_hw *hw)
 		lkpi_printf("lkpi80211: free_hw while registered; unregistering\n");
 		ieee80211_unregister_hw(hw);
 	}
-	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
+	/* stations before interfaces: a station's queues belong to its vif too */
+	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++) {
+		if (ctx->stas[i] != NULL)
+			lkpi_txq_free_sta(ctx->stas[i]);
 		kfree(ctx->stas[i]);
-	for (i = 0; i < CONFIG_LKPI80211_MAX_VIFS; i++)
+	}
+	for (i = 0; i < CONFIG_LKPI80211_MAX_VIFS; i++) {
+		if (ctx->vifs[i] != NULL)
+			lkpi_txq_free_vif(ctx->vifs[i]);
 		kfree(ctx->vifs[i]);
+	}
 	kfree(ctx);
 }
 
@@ -468,22 +476,15 @@ ieee80211_wake_queues(struct ieee80211_hw *hw)
 		return;
 	ctx = LKPI80211_CTX(hw);
 	/*
-	 * Software queues: the driver's own "is the tx path open" switch is the
-	 * queue state (_tx_stopped rides this pair in rtl8xxxu). The wake calls
-	 * the driver's wake_tx_queue op for each vif's queues, which is the
-	 * contract the driver's own implementation expects.
+	 * The driver's own "is the tx path open" switch is this queue state
+	 * (_tx_stopped rides the pair in rtl8xxxu).  Upstream's substance for
+	 * this call is the same: clearing the stop reasons, and nothing else
+	 * (util.c:ieee80211_wake_queues -> ieee80211_wake_queues_by_reason).
+	 * A driver's wake_tx_queue op is called when the stack has frames for a
+	 * txq - this port's enqueue side - not from here, so the pair stays a
+	 * pair and no driver is woken by a queue state change.
 	 */
 	ctx->queue_stopped = 0;
-	if (ctx->ops->wake_tx_queue != NULL) {
-		unsigned int i;
-
-		for (i = 0; i < CONFIG_LKPI80211_MAX_VIFS; i++) {
-			struct ieee80211_vif *vif = ctx->vifs[i];
-
-			if (vif != NULL && vif->txq != NULL)
-				ctx->ops->wake_tx_queue(hw, vif->txq);
-		}
-	}
 }
 
 void
@@ -491,20 +492,34 @@ ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
     struct ieee80211_txq *txq)
 {
 	struct lkpi80211_hw_ctx *ctx;
+	struct ieee80211_tx_control control;
+	struct sk_buff *skb;
+	u8 ac;
 
-	if (hw == NULL)
+	if (hw == NULL || txq == NULL)
 		return;
 	ctx = LKPI80211_CTX(hw);
+	ctx->queue_stopped = 0;
+	if (ctx->ops->tx == NULL)
+		return;
 	/*
-	 * The driver points its wake_tx_queue op at this helper (core.c:7600),
-	 * so this is the driver saying "my queues can take frames again". With
-	 * software queues the substance is the queue-state bookkeeping above and
-	 * the trace line; the frames themselves leave through the bridge's tx
-	 * path, which asks the driver directly.
+	 * The default wake handler (upstream util.c:ieee80211_handle_wake_tx_queue):
+	 * schedule the queue that woke, then drain whatever the round hands out
+	 * into the driver's own transmit entry.  A driver that points its
+	 * wake_tx_queue op here (rtl8xxxu core.c:7599) therefore needs no txq
+	 * code of its own, and a port whose bridge hands frames straight to
+	 * .tx (this one's, today) sees an empty drain and no change.
 	 */
-	(void)txq;
-	if (ctx->queue_stopped != 0)
-		ctx->queue_stopped = 0;
+	ac = txq->ac;
+	ieee80211_txq_schedule_start(hw, ac);
+	ieee80211_schedule_txq(hw, txq);
+	while ((txq = ieee80211_next_txq(hw, ac)) != NULL) {
+		control.sta = txq->sta;
+		while ((skb = ieee80211_tx_dequeue(hw, txq)) != NULL)
+			ctx->ops->tx(hw, &control, skb);
+		ieee80211_return_txq(hw, txq, false);
+	}
+	ieee80211_txq_schedule_end(hw, ac);
 }
 
 /* ------------------------------------------------------------------ */
@@ -815,13 +830,33 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	vif->type = (enum nl80211_iftype)type;
 	memcpy(vif->addr, addr, 6);
 	vif->addr_valid = true;
+	/*
+	 * The default link's bookkeeping, the way the interface sets it up for
+	 * every vif (link.c:ieee80211_link_init with link_id -1: the default
+	 * link's conf IS the vif's own bss_conf and its link id is 0).  A
+	 * driver's link-level handlers read it - rtw89's link_info_changed
+	 * looks its own per-link record up by conf->link_id - and valid_links
+	 * stays 0, which is what a non-MLO vif carries (mlme.c:6460-6465) and
+	 * what ieee80211_vif_is_mld() answers from.
+	 */
+	vif->bss_conf.link_id = 0;
+	vif->link_conf[0] = &vif->bss_conf;
 	ctx->vifs[i] = vif;
 	vif_hw_bind(vif, hw);
+	/*
+	 * The interface's own txq before the driver hears about the interface:
+	 * the driver's add_interface initializes its per-queue state through it
+	 * (rtw89 mac80211.c:201 -> rtw89_core_txq_init(rtwdev, vif->txq), which
+	 * answers a NULL queue by doing nothing).
+	 */
+	vif->txq = lkpi_txq_alloc(hw, vif, NULL, 0);
 	if (ctx->ops->add_interface != NULL) {
 		ret = ctx->ops->add_interface(hw, vif);
 		if (ret != 0) {
 			lkpi_printf("lkpi80211: add_interface refused (%d)\n", ret);
 			ctx->vifs[i] = NULL;
+			lkpi_txq_free(vif->txq);
+			vif->txq = NULL;
 			kfree(vif);
 			return NULL;
 		}
@@ -846,22 +881,55 @@ lkpi80211_drv_vif_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 		if (ctx->vifs[i] == vif) {
 			ctx->vifs[i] = NULL;
 			vif_hw_unbind(vif);
+			/* after remove_interface: the driver's teardown still
+			 * reads the queues it initialized in add_interface */
+			lkpi_txq_free_vif(vif);
+			vif->txq = NULL;
 			kfree(vif);
 			return;
 		}
 	lkpi_printf("lkpi80211: vif_remove of a foreign vif refused\n");
 }
 
+/*
+ * The vif-wide half of a BSS change: the bits that describe the interface
+ * rather than one of its links.  Upstream names the set in
+ * net/mac80211/main.c:203-208 (ASSOC, IDLE, PS, IBSS, ARP_FILTER, SSID); this
+ * face's enum carries the three of those the compiled drivers react to
+ * (include/net/mac80211.h:150: ASSOC, PS, ARP_FILTER), and the drivers here
+ * are never sent the other three.
+ */
+#define LKPI80211_VIF_CFG_FLAGS	(BSS_CHANGED_ASSOC | BSS_CHANGED_PS | \
+				 BSS_CHANGED_ARP_FILTER)
+
 void
 lkpi80211_drv_bss_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
     u64 changed)
 {
+	struct lkpi80211_hw_ctx *ctx;
+	u64 cfg = changed & (u64)LKPI80211_VIF_CFG_FLAGS;
 
-	if (hw == NULL || vif == NULL)
+	if (hw == NULL || vif == NULL || changed == 0)
 		return;
-	if (LKPI80211_CTX(hw)->ops->bss_info_changed != NULL)
-		LKPI80211_CTX(hw)->ops->bss_info_changed(hw, vif,
-		    &vif->bss_conf, changed);
+	ctx = LKPI80211_CTX(hw);
+	/*
+	 * The dispatch the interface itself makes (main.c:238-254): the
+	 * vif-wide bits go to vif_cfg_changed, everything else to
+	 * link_info_changed with the vif's own bss_conf as the link, and a
+	 * driver declaring the older bss_info_changed gets the whole mask as
+	 * it always did.  The two families are not exclusive upstream - a
+	 * driver that declares both is called twice - so neither is here; the
+	 * drivers this port carries declare one family each (rtl8xxxu
+	 * bss_info_changed, rtw89 vif_cfg_changed + link_info_changed).
+	 */
+	if (cfg != 0 && ctx->ops->vif_cfg_changed != NULL)
+		ctx->ops->vif_cfg_changed(hw, vif, cfg);
+	if ((changed & ~(u64)LKPI80211_VIF_CFG_FLAGS) != 0 &&
+	    ctx->ops->link_info_changed != NULL)
+		ctx->ops->link_info_changed(hw, vif, &vif->bss_conf,
+		    changed & ~(u64)LKPI80211_VIF_CFG_FLAGS);
+	if (ctx->ops->bss_info_changed != NULL)
+		ctx->ops->bss_info_changed(hw, vif, &vif->bss_conf, changed);
 }
 
 int
@@ -896,6 +964,33 @@ lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	ctx->ops->tx(hw, &control, skb);
 }
 
+/*
+ * The driver's station-state hook, whichever shape it declares.  A driver with
+ * .sta_state is given every transition; one without it is given .sta_add at
+ * AUTH -> ASSOC and .sta_remove at ASSOC -> AUTH, and the NOTEXIST boundaries
+ * reach no driver code at all - exactly what the interface's own dispatcher
+ * does for that case (net/mac80211/driver-ops.c:drv_sta_state).
+ */
+static int
+sta_state_call(struct lkpi80211_hw_ctx *ctx, struct ieee80211_hw *hw,
+    struct ieee80211_vif *vif, struct ieee80211_sta *sta,
+    enum ieee80211_sta_state old_state, enum ieee80211_sta_state new_state)
+{
+
+	if (ctx->ops->sta_state != NULL)
+		return ctx->ops->sta_state(hw, vif, sta, old_state, new_state);
+	if (old_state == IEEE80211_STA_AUTH &&
+	    new_state == IEEE80211_STA_ASSOC) {
+		if (ctx->ops->sta_add != NULL)
+			return ctx->ops->sta_add(hw, vif, sta);
+	} else if (old_state == IEEE80211_STA_ASSOC &&
+	    new_state == IEEE80211_STA_AUTH) {
+		if (ctx->ops->sta_remove != NULL)
+			ctx->ops->sta_remove(hw, vif, sta);
+	}
+	return 0;
+}
+
 struct ieee80211_sta *
 lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
     const u8 addr[6], u16 aid)
@@ -903,6 +998,7 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	struct lkpi80211_hw_ctx *ctx;
 	struct ieee80211_sta *sta;
 	unsigned int i;
+	unsigned int slot;
 	int ret;
 
 	if (hw == NULL || addr == NULL)
@@ -910,10 +1006,10 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	ctx = LKPI80211_CTX(hw);
 	if (ieee80211_find_sta_by_ifaddr(hw, addr, NULL) != NULL)
 		return ieee80211_find_sta_by_ifaddr(hw, addr, NULL);
-	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
-		if (ctx->stas[i] == NULL)
+	for (slot = 0; slot < CONFIG_LKPI80211_MAX_STAS; slot++)
+		if (ctx->stas[slot] == NULL)
 			break;
-	if (i == CONFIG_LKPI80211_MAX_STAS) {
+	if (slot == CONFIG_LKPI80211_MAX_STAS) {
 		lkpi_printf("lkpi80211: sta table full\n");
 		return NULL;
 	}
@@ -923,15 +1019,35 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		return NULL;
 	memcpy(sta->addr, addr, 6);
 	sta->aid = aid;
-	ctx->stas[i] = sta;
-	if (ctx->ops->sta_add != NULL) {
-		ret = ctx->ops->sta_add(hw, vif, sta);
-		if (ret != 0) {
-			lkpi_printf("lkpi80211: sta_add refused (%d)\n", ret);
-			ctx->stas[i] = NULL;
-			kfree(sta);
-			return NULL;
-		}
+	ctx->stas[slot] = sta;
+	/*
+	 * The station's per-TID txqs, before the driver hears about the station:
+	 * its station setup walks them to initialize the driver-private queue
+	 * state (rtw89 mac80211.c:516-517).  Index IEEE80211_NUM_TIDS (the
+	 * non-QoS queue) is left NULL: upstream only allocates it for a driver
+	 * that opted in through its hw flags (tx.c:1545-1554), and the walk
+	 * above answers a NULL queue by skipping it.
+	 */
+	for (i = 0; i < IEEE80211_NUM_TIDS; i++)
+		sta->txq[i] = lkpi_txq_alloc(hw, vif, sta, (u8)i);
+	/*
+	 * The station appearing and then associating.  The interface runs the
+	 * whole ladder (NOTEXIST -> NONE -> AUTH -> ASSOC) across discovery and
+	 * association; this port has no separate discovery event, so the two
+	 * transitions that carry driver work happen together here.  NONE -> AUTH
+	 * is skipped: no driver in this repository acts on it.
+	 */
+	ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_NOTEXIST,
+	    IEEE80211_STA_NONE);
+	if (ret == 0)
+		ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_AUTH,
+		    IEEE80211_STA_ASSOC);
+	if (ret != 0) {
+		lkpi_printf("lkpi80211: sta add refused (%d)\n", ret);
+		ctx->stas[slot] = NULL;
+		lkpi_txq_free_sta(sta);
+		kfree(sta);
+		return NULL;
 	}
 	return sta;
 }
@@ -946,14 +1062,69 @@ lkpi80211_drv_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (hw == NULL || sta == NULL)
 		return;
 	ctx = LKPI80211_CTX(hw);
-	if (ctx->ops->sta_remove != NULL)
-		ctx->ops->sta_remove(hw, vif, sta);
+	/* the ladder back down, in the order the interface runs it: the
+	 * association ends, then the station is gone */
+	(void)sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_ASSOC,
+	    IEEE80211_STA_AUTH);
+	(void)sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_NONE,
+	    IEEE80211_STA_NOTEXIST);
 	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
 		if (ctx->stas[i] == sta) {
 			ctx->stas[i] = NULL;
+			/* after the driver's teardown: it still reads the queues
+			 * its station setup initialized */
+			lkpi_txq_free_sta(sta);
 			kfree(sta);
 			return;
 		}
+}
+
+struct ieee80211_hw *
+wiphy_to_ieee80211_hw(struct wiphy *wiphy)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	/*
+	 * [LNX] include/net/mac80211.h: the interface answers this with
+	 * container_of over its own local record, and the same holds here for
+	 * the same reason: this port embeds the wiphy in the hw context it
+	 * allocates (hw first, wiphy behind it), so the address a driver read
+	 * out of hw->wiphy maps back to the hw it came from.
+	 */
+	if (wiphy == NULL)
+		return NULL;
+	ctx = container_of(wiphy, struct lkpi80211_hw_ctx, wiphy);
+	return &ctx->hw;
+}
+
+void
+wiphy_rfkill_set_hw_state(struct wiphy *wiphy, bool blocked)
+{
+
+	/*
+	 * [LNX] net/wireless/rfkill.c: report the hardware RF-kill switch.  The
+	 * consumer is the rfkill subsystem, which this port does not carry (the
+	 * stack on the other side of the bridge is net80211, and nothing there
+	 * listens for it), so the notice has no destination and is dropped
+	 * rather than invented.
+	 */
+	(void)wiphy;
+	(void)blocked;
+}
+
+void
+wiphy_rfkill_start_polling(struct wiphy *wiphy)
+{
+
+	/* [LNX] net/wireless/rfkill.c: the polling variant of the same notice */
+	(void)wiphy;
+}
+
+void
+wiphy_rfkill_stop_polling(struct wiphy *wiphy)
+{
+
+	(void)wiphy;
 }
 
 struct ieee80211_vif *
@@ -972,6 +1143,36 @@ lkpi80211_hw_sta(struct ieee80211_hw *hw, unsigned int idx)
 	if (hw == NULL || idx >= CONFIG_LKPI80211_MAX_STAS)
 		return NULL;
 	return LKPI80211_CTX(hw)->stas[idx];
+}
+
+/*
+ * The walk the interface's for_each_station() macro is written against: the
+ * next occupied station slot after `prev`, or the first one when `prev` is
+ * NULL.  A slot index is the cursor, so a station removed mid-walk ends the
+ * walk rather than skipping its neighbour - the same "the table moved under
+ * you" the interface's own iterator answers by restarting from the caller.
+ */
+struct ieee80211_sta *
+lkpi80211_hw_sta_next(struct ieee80211_hw *hw, struct ieee80211_sta *prev)
+{
+	struct lkpi80211_hw_ctx *ctx;
+	unsigned int i = 0;
+
+	if (hw == NULL)
+		return NULL;
+	ctx = LKPI80211_CTX(hw);
+	if (prev != NULL) {
+		for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
+			if (ctx->stas[i] == prev)
+				break;
+		if (i == CONFIG_LKPI80211_MAX_STAS)
+			return NULL;	/* a station this hw does not hold */
+		i++;
+	}
+	for (; i < CONFIG_LKPI80211_MAX_STAS; i++)
+		if (ctx->stas[i] != NULL)
+			return ctx->stas[i];
+	return NULL;
 }
 
 unsigned int
