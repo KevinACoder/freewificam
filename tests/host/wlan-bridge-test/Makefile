@@ -132,6 +132,7 @@ POOL_SRC := $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c
 KPI_SRCS := \
     $(ROOT)/components/linuxkpi/linuxkpi_core.c \
     $(ROOT)/components/linuxkpi/linuxkpi_80211.c \
+    $(ROOT)/components/linuxkpi/linuxkpi_txq.c \
     $(ROOT)/components/linuxkpi/fw_registry.c \
     $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
     $(PORT)/bridge/wlan_seam_adapter.c \
