@@ -185,7 +185,10 @@ typedef unsigned int		gfp_t;
 #define	U16_MIN			0
 #define	U32_MIN			0
 
-#define	ENOTSUPP		252	/* Linux's private ENOTSUPP */
+/* Linux's private ENOTSUPP: the value is the kernel's own (upstream
+ * include/linux/errno.h:27 states 524), not a number of this project's
+ * choosing - a driver's -ENOTSUPP must compare equal to the kernel's. */
+#define	ENOTSUPP		524
 
 /* byte-order convenience names (host order is LE here) */
 #define	htons(x)		cpu_to_be16(x)
