@@ -1381,6 +1381,12 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->rx_beacon_tgt = bridge.rx_beacon_tgt;
 	out->rx_probersp = bridge.rx_probersp;
 	out->rx_fcs_bad = bridge.rx_fcs_bad;
+	/* the stack's own discard reasons, read from the stack's counters */
+	if (bridge.ic != NULL) {
+		out->rx_chanmismatch = bridge.ic->ic_stats.is_rx_chanmismatch;
+		out->rx_badchan = bridge.ic->ic_stats.is_rx_badchan;
+		out->rx_badbintval = bridge.ic->ic_stats.is_rx_badbintval;
+	}
 	out->tune_calls = bridge.tune_calls;
 	out->tune_fails = bridge.tune_fails;
 	out->data_tx_enc = bridge.data_tx_enc;

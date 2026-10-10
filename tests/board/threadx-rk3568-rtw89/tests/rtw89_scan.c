@@ -165,6 +165,17 @@ void rtw89_scan_chain(void)
 	    "scan=%u/%u\n", scan_rec.rows, chans, c.mgt_tx, c.rx_frames,
 	    c.scan_starts, c.scan_completes);
 	/*
+	 * What the frames were, and what the stack did with them: beacons and
+	 * probe responses counted apart from everything else, and the stack's own
+	 * discard reasons.  An empty table with beacons arriving and no FCS flags
+	 * points at the stack's channel check rather than at the radio; an empty
+	 * table with `chanmismatch` climbing names that check outright.
+	 */
+	board_log("wlan: scan rx bcn=%u bcnT=%u prsp=%u fcs=%u chmis=%u "
+	    "badchan=%u badbint=%u\n", c.rx_beacon, c.rx_beacon_tgt,
+	    c.rx_probersp, c.rx_fcs_bad, c.rx_chanmismatch, c.rx_badchan,
+	    c.rx_badbintval);
+	/*
 	 * The transfer ledger, taken here because this is the moment the receive
 	 * path matters: a sweep that reports no rows with enq climbing and comp
 	 * flat never got a completion, one with ovf climbing had its transfers

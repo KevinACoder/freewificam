@@ -74,6 +74,16 @@ struct wlan_bridge_counters {
 	unsigned int	rx_beacon_tgt;
 	unsigned int	rx_probersp;
 	unsigned int	rx_fcs_bad;
+	/* The stack's own reasons for dropping a received frame, which the stack
+	 * counts and this port only reports.  `chanmismatch` is the one that
+	 * matters for a sweep: net80211 silently discards a beacon or probe
+	 * response whose DS-parameter channel differs from the channel it was
+	 * received on (ieee80211_input.c:2213), so a sweep whose radio and whose
+	 * channel bookkeeping disagree produces an empty table with every frame
+	 * "received". */
+	unsigned int	rx_chanmismatch;	/* stack: rx channel mismatch */
+	unsigned int	rx_badchan;	/* stack: rx on an inactive channel */
+	unsigned int	rx_badbintval;	/* stack: bogus beacon interval */
 	unsigned int	tune_calls;
 	unsigned int	tune_fails;
 	/* The data-plane discriminator family: the protection state of data
