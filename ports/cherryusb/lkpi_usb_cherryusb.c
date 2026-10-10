@@ -71,6 +71,7 @@
  * this file uses neither.
  */
 #include "components/linuxkpi/usb/lkpi_usb_backend.h"
+#include "ports/cherryusb/lkpi_usb_cherryusb.h"
 
 #undef DIV_ROUND_CLOSEST
 
@@ -81,24 +82,8 @@
 /* geometry                                                            */
 /* ------------------------------------------------------------------ */
 
-/* Transfer slots: one per engine transfer in flight plus the synchronous lane's
- * concurrency (the engine's LKPI_EP_N endpoints and its four synchronous slots). */
-#ifndef CONFIG_LKPI_USB_CHERRYUSB_SLOTS
-#define CONFIG_LKPI_USB_CHERRYUSB_SLOTS	16
-#endif
-
-/* Staging slots: the same concurrency, one transfer each. */
-#ifndef CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS
-#define CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS	16
-#endif
-
-/* One staged transfer's bytes: the widest buffer the 8188eu path moves (a full frame
- * is 2352 + the RX descriptor, rounded up; the engine's own control stage is 2048).
- * A larger request is refused with a named counter, never served from the heap. */
-#ifndef CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE
-#define CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE	4096
-#endif
-
+/* The stage geometry and the counter record live in the adapter's header (they
+ * are what a bring-up reads); this translation unit only validates them. */
 #define LKPI_CHU_CACHE_LINE	64
 
 _Static_assert(CONFIG_LKPI_USB_CHERRYUSB_SLOTS > 0,
@@ -112,29 +97,38 @@ _Static_assert(CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE % LKPI_CHU_CACHE_LINE == 0,
 /* named counters                                                      */
 /* ------------------------------------------------------------------ */
 
-struct lkpi_usb_chusb_stats {
-	unsigned int	submits;		/* submits handed to the stack */
-	unsigned int	kills;			/* kill calls */
-	unsigned int	control_transfers;	/* synchronous control transfers */
-	unsigned int	stage_staged;		/* transfers that took a stage slot */
-	unsigned int	stage_passthrough;	/* already inside the window */
-	unsigned int	stage_overflow;		/* request larger than a slot: refused */
-	unsigned int	stage_exhausted;	/* no free stage slot: refused */
-	unsigned int	slots_exhausted;	/* no free transfer slot: refused */
-	unsigned int	completed;		/* completions delivered to the seam */
-	unsigned int	complete_dropped;	/* a second completion for one transfer */
-	unsigned int	kill_translated;	/* HCD shutdown rewritten as cancelled */
-	unsigned int	zero_packet_ignored;	/* the flag the stack has no equivalent for */
-	unsigned int	refused;		/* malformed requests refused */
-};
-
 static struct lkpi_usb_chusb_stats chu_stats;
 
 void
 lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out)
 {
 
+	/* the geometry is a compile-time fact, published with the counters so a
+	 * reader never has to know which image it is looking at */
+	chu_stats.stage_size = CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE;
+	chu_stats.stage_slots = CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS;
 	*out = chu_stats;
+}
+
+/*
+ * A request larger than a stage slot is refused every time it is retried, so the
+ * counter alone hides the reason a transfer never completes: the request length
+ * is a permanent property of the caller, not a transient shortage.  Name it once
+ * with the two numbers that decide it.  The largest request in this project is a
+ * driver's receive buffer (rtw89 asks for 20480), so the ceiling belongs to the
+ * image's configuration, not to a constant chosen for another driver.
+ */
+static void
+chu_stage_overflow_report(unsigned int len)
+{
+	static int latched;
+
+	if (latched)
+		return;
+	latched = 1;
+	lkpi_printf("usbkpi: transfer of %u bytes refused - a stage slot holds %u "
+	    "bytes (raise CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE for this image)\n",
+	    len, (unsigned int)CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -304,6 +298,7 @@ chu_slot_prepare(struct lkpi_chu_slot *slot, struct lkpi_usb_be_urb *be, int is_
 	}
 	if (len > CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE) {
 		chu_stats.stage_overflow++;
+		chu_stage_overflow_report(len);
 		return -LKPI_USB_BE_ERR_NOMEM;
 	}
 	slot->stage = chu_stage_get();
@@ -584,6 +579,7 @@ chu_seam_control(void *ctx, struct lkpi_usb_be_hubport *port,
 			return -LKPI_USB_BE_ERR_INVAL;
 		if (len > CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE) {
 			chu_stats.stage_overflow++;
+			chu_stage_overflow_report(len);
 			return -LKPI_USB_BE_ERR_NOMEM;
 		}
 		if (chu_in_window(buffer)) {
