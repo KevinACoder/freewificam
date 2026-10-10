@@ -38,6 +38,7 @@ CASES = [
     "rtw89-join-raw",
     "rtw89-join",
     "rtw89-dataplane",
+    "rtw89-floodping",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -85,6 +86,16 @@ ANCHORS = {
         r"wlan: ping window done",
         r"wlan: iperf server ready port=5001",
     ],
+    # the case's own stream anchors and window markers; the clean phase's
+    # totals are the gated ones, the host reads the open marker to start its
+    # own load, and the loaded totals are recorded inside the window
+    "rtw89-floodping": [
+        r"wlan: flood board ping start peer=",
+        r"wlan: flood board ping cycles=\d+ replies=\d+ loss=\d+%",
+        r"wlan: flood host window open peer=",
+        r"wlan: flood board ping loaded cycles=\d+ replies=\d+ loss=\d+%",
+        r"wlan: flood host window close",
+    ],
 }
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -100,17 +111,17 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[  40.360] BOARD-SUITE threadx-rk3568-rtw89 "
-    "result=pass cases=6 ok=6 exit=0\r\n"
+    "[  66.360] BOARD-SUITE threadx-rk3568-rtw89 "
+    "result=pass cases=7 ok=7 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-rtw89 bring-up selftest-tag\r\n"
     "[   0.000] wlan: chain wired (backend + registry + firmware + bridge)\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-rtw89 select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-rtw89 start cases=6 sel=all "
+    "[  10.000] BOARD-SUITE threadx-rk3568-rtw89 start cases=7 sel=all "
     "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join-raw,rtw89-join,"
-    "rtw89-dataplane\r\n"
+    "rtw89-dataplane,rtw89-floodping\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-rtw89/shell-up PASS\r\n"
     "[  10.020] wlan: usb bus=3 hcd=xhci base=0xfe000000 started\r\n"
@@ -152,6 +163,14 @@ BASE_TRANSCRIPT = (
     "[  34.000] wlan: ping window done\r\n"
     "[  34.100] wlan: iperf server ready port=5001\r\n"
     "[  34.200] CASE threadx-rk3568-rtw89/rtw89-dataplane PASS\r\n"
+    "[  34.300] wlan: flood board ping start peer=192.168.0.18 secs=20\r\n"
+    "[  35.000] ping: recv 192.168.0.18 1 ms\r\n"
+    "[  36.000] ping: recv 192.168.0.18 2 ms\r\n"
+    "[  54.400] wlan: flood board ping cycles=360 replies=360 loss=0%\r\n"
+    "[  54.500] wlan: flood host window open peer=192.168.0.18 secs=45\r\n"
+    "[  84.400] wlan: flood board ping loaded cycles=540 replies=534 loss=1%\r\n"
+    "[  84.500] wlan: flood host window close\r\n"
+    "[  84.600] CASE threadx-rk3568-rtw89/rtw89-floodping PASS\r\n"
     + SENTINEL_LINE
     + PROMPT + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -181,7 +200,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-rtw89/rtw89-scan PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=6 ok=6 exit=0", "cases=6 ok=5 exit=0"), 1),
+        "cases=7 ok=7 exit=0", "cases=7 ok=6 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-rtw89/rtw89-scan PASS",
@@ -199,7 +218,7 @@ MUTATIONS = [
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,rtw89-probe,rtw89-scan,rtw89-join-raw,rtw89-join,"
-        "rtw89-dataplane",
+        "rtw89-dataplane,rtw89-floodping",
         "list=shell-up,rtw89-probe"), 1),
     ("raw join evidence dropped", BASE_TRANSCRIPT.replace(
         "wlan: join-raw-ok filter=narrow ms=100\r\n", ""), 1),
@@ -213,6 +232,10 @@ MUTATIONS = [
     ("ping replies starved", BASE_TRANSCRIPT.replace(
         "ping: recv 192.168.0.1 2 ms\r\n", "").replace(
         "ping: recv 192.168.0.1 1 ms\r\n", ""), 1),
+    ("flood totals dropped", BASE_TRANSCRIPT.replace(
+        "wlan: flood board ping cycles=360 replies=360 loss=0%\r\n", ""), 1),
+    ("flood loaded totals dropped", BASE_TRANSCRIPT.replace(
+        "wlan: flood board ping loaded cycles=540 replies=534 loss=1%\r\n", ""), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 

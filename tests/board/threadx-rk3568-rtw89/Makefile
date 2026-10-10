@@ -300,6 +300,7 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/rtw89_join_raw.c \
 	$(CURDIR)/tests/rtw89_join.c \
 	$(CURDIR)/tests/rtw89_dataplane.c \
+	$(CURDIR)/tests/rtw89_floodping.c \
 	$(CURDIR)/tests/rtw89_cmds.c
 
 # the image's own non-case TUs: the radio's dwell pump, the supplicant's
@@ -511,7 +512,10 @@ LWIP_STACK_SRCS := \
 
 # The contrib ping rides its own compile: the console anchors (one line per
 # echo reply) exist only under the stack's debug macro, which is switched on
-# for this one translation unit and stays off everywhere else.
+# for this one translation unit and stays off everywhere else.  This image also
+# tightens the module's send delay (the floodping case's stream) and wires its
+# PING_RESULT hook to the case's counter; the hook's declaration is force
+# included because the module is compiled on its own, before the case's text.
 LWIP_PING_SRCS := $(LWIP)/contrib/apps/ping/ping.c
 
 # --- firmware + driver -------------------------------------------------------
@@ -577,12 +581,13 @@ $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(filter-out $(CURDIR)/tests/rtw89_join.c $(CURDIR)/tests/rtw89_dataplane.c $(CURDIR)/tests/rtw89_cmds.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS) $(USB_INCLUDES))))
+$(foreach s,$(filter-out $(CURDIR)/tests/rtw89_join.c $(CURDIR)/tests/rtw89_dataplane.c $(CURDIR)/tests/rtw89_floodping.c $(CURDIR)/tests/rtw89_cmds.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS) $(USB_INCLUDES))))
 # the supplicant-facing cases and the command compile in the WPA world's flags
 # (the join case also reads the linuxkpi pool's forensic counters - the RX
 # corruption discriminators - so it carries the pool's include root)
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_join.c,$(WPA_PORT_CFLAGS) -I$(NPORT)/bridge -I$(CURDIR)/tests -I$(LKPI) $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_dataplane.c,$(LWIP_INCLUDES) $(WLAN_KPI_CFLAGS) -I$(PORT)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_floodping.c,$(LWIP_INCLUDES) -I$(PORT)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/rtw89_cmds.c,$(WPA_CMD_CFLAGS) $(LWIP_INCLUDES) -I$(NPORT)/bridge $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_radio.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_ledger.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
@@ -608,7 +613,7 @@ $(foreach s,$(WPA_DRV_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_VENDOR_CFLAGS)
 $(foreach s,$(WPA_CMD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_CMD_CFLAGS))))
 $(foreach s,$(LWIP_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
 $(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
-$(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG))
+$(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG -DPING_DELAY=50 -include $(CURDIR)/tests/rtw89_floodping.h '-DPING_RESULT(ok)=rtw89_flood_ping_result(ok)'))
 $(foreach s,$(LIBCBIND_SRCS),$(eval $(call COMPILE_RULE,$(s),-I$(ROOT)/os/threadx)))
 
 $(TAG_STAMP): FORCE
