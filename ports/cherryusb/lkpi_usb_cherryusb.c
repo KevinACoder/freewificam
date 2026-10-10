@@ -607,8 +607,16 @@ chu_seam_control(void *ctx, struct lkpi_usb_be_hubport *port,
 		return -LKPI_USB_BE_ERR_SHORT;
 	}
 	if (stage != NULL) {
-		if (ret >= 0 && is_in && len != 0)
+		if (ret >= 0 && is_in && len != 0) {
+			/* the device-facing bytes, taken before the copy-back: the
+			 * caller's own view of the same transfer is what a
+			 * register read reports, and the two must agree */
+			if (len >= 4u)
+				memcpy(&chu_stats.last_in_stage_word, stage,
+				    sizeof(chu_stats.last_in_stage_word));
+			chu_stats.last_in_stage_len = (unsigned int)ret;
 			memcpy(buffer, stage, len);
+		}
 		chu_stage_put(stage);
 	}
 	return ret < 0 ? ret : 0;

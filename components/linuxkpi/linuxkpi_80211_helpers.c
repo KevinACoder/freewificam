@@ -66,6 +66,29 @@ ieee80211_queue_delayed_work(struct ieee80211_hw *hw,
 	(void)lkpi_queue_delayed_work(lkpi_system_wq, dwork, delay);
 }
 
+/*
+ * The receive entry's own evidence.  A bring-up that sees an empty receive table
+ * needs to tell three things apart: nothing was handed over, frames were handed
+ * over but the bridge dropped them, or what arrived is not a frame at all (the
+ * firmware's own reports ride the same path).  The count answers the first, and
+ * the first frame's type/subtype answers the third.
+ */
+static u32 lkpi80211_rx_frames;
+static bool lkpi80211_rx_fc_seen;
+static u8 lkpi80211_rx_first_fc;
+
+void
+lkpi80211_rx_counters(u32 *frames, u32 *first_fc, int *fc_seen)
+{
+
+	if (frames != NULL)
+		*frames = lkpi80211_rx_frames;
+	if (first_fc != NULL)
+		*first_fc = lkpi80211_rx_first_fc;
+	if (fc_seen != NULL)
+		*fc_seen = lkpi80211_rx_fc_seen ? 1 : 0;
+}
+
 void
 ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
     struct sk_buff *skb, struct napi_struct *napi)
@@ -81,6 +104,11 @@ ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
 	 */
 	(void)sta;
 	(void)napi;
+	lkpi80211_rx_frames++;
+	if (!lkpi80211_rx_fc_seen && skb != NULL && skb->len >= 1) {
+		lkpi80211_rx_fc_seen = true;
+		lkpi80211_rx_first_fc = skb->data[0];
+	}
 	ieee80211_rx_irqsafe(hw, skb);
 }
 

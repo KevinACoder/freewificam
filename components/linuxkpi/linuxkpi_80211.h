@@ -136,4 +136,13 @@ unsigned int	lkpi80211_hw_vif_count(struct ieee80211_hw *hw);
 /* the driver-private area behind an hw (hw->priv), for the bridge's own use */
 void	*lkpi80211_hw_priv(struct ieee80211_hw *hw);
 
+/*
+ * The receive entry's counters: how many frames the driver handed to
+ * ieee80211_rx_napi, and the frame-control byte of the first one (with a flag
+ * for "none seen", since 0x00 is a legal byte).  A bring-up that finds an empty
+ * receive table reads them to tell "nothing was handed over" from "what arrived
+ * was not a frame".
+ */
+void	lkpi80211_rx_counters(u32 *frames, u32 *first_fc, int *fc_seen);
+
 #endif /* LINUXKPI_80211_H */

@@ -104,12 +104,36 @@ struct lkpi_usb_ep_stats {
 	unsigned int	kills;
 	unsigned int	parks;
 	unsigned int	resumes;
+	/* the first six words of this endpoint's most recent successful IN
+	 * completion, and its length (0 when none): for a receive endpoint those
+	 * words are the descriptor the driver's dispatcher reads */
+	unsigned int	last_in_words[6];
+	unsigned int	last_in_len;
 };
 
 unsigned int	lkpi_usb_ep_count(void);
 /* copy endpoint `index`'s bookkeeping; non-zero when the index is out of range */
 int		lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out);
 void		lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out);
+
+/*
+ * The last few control transfers that carried data, newest first: the register
+ * address the caller asked for (the vendor protocol puts it in wValue/wIndex)
+ * and the first four bytes it got back.  A bring-up needs this because a
+ * register read that "succeeds" and returns a constant is indistinguishable
+ * from one that works, and the driver on top of it only reports the symptom
+ * (a status bit that never appears).
+ */
+struct lkpi_usb_ctrl_ev {
+	unsigned int	value;	/* wValue: the low half of the register address */
+	unsigned int	index;	/* wIndex: bits 16-23 of the register address */
+	unsigned int	len;	/* wLength */
+	int		is_in;
+	unsigned int	data;	/* the first four bytes, little endian */
+};
+
+/* copy up to `max` of the most recent events; returns how many were copied */
+unsigned int	lkpi_usb_ctrl_trace(struct lkpi_usb_ctrl_ev *out, unsigned int max);
 /* how many drivers the registry holds (the module-section walker's observable
  * result, and the bring-up's self-check before enumeration starts) */
 unsigned int	lkpi_usb_driver_count_get(void);

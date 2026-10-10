@@ -54,6 +54,14 @@ struct lkpi_usb_chusb_stats {
 	unsigned int	refused;		/* malformed requests refused */
 	unsigned int	stage_size;		/* the compiled stage slot size */
 	unsigned int	stage_slots;		/* the compiled stage slot count */
+	/* the first four bytes of the last control IN transfer's stage, taken
+	 * BEFORE the copy-back to the caller: the device-facing value.  Read
+	 * together with the caller's own view of the same transfer, it separates
+	 * "the device returned this" from "the copy back lost it" - a register
+	 * read that returns a constant is otherwise indistinguishable from one
+	 * whose answer never left the DMA buffer. */
+	unsigned int	last_in_stage_word;
+	unsigned int	last_in_stage_len;
 };
 
 void lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out);

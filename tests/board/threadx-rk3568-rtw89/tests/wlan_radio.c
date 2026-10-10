@@ -64,6 +64,15 @@ wlan_radio_task(void *arg)
 		} else {
 			osDelay(50U);
 			tick_accum += 50U;
+			ledger_accum += 50U;
+			/* the ledger also runs with no sweep in flight: the driver's own
+			 * bring-up (its start path runs RF calibration) is exactly the
+			 * window a receive-path fault shows up in, and a sweep-only
+			 * trigger would never look there */
+			if (ledger_accum >= WLAN_RADIO_LEDGER_MS) {
+				ledger_accum = 0;
+				wlan_ledger_usb("idle");
+			}
 		}
 		/* the stack's own management-frame and inactivity timers count
 		 * in seconds and only advance when someone calls the watchdog;

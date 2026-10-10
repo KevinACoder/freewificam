@@ -230,6 +230,14 @@ struct lkpi_usb_ep {
 	 * lkpi_usb_retry_parked). */
 	bool			parked;
 	u32			enqueued, completions, kicks, kills, parks, resumes;
+	/* the first six words of the most recent successful IN completion, and its
+	 * length: for a driver that receives reports and frames on one bulk-in
+	 * endpoint those words ARE the receive descriptor (type, length, flags,
+	 * ppdu count), which is what separates "the chip sent reports" from "the
+	 * chip sent frames", and shows which of the descriptor's own branches the
+	 * driver's dispatcher will take */
+	u32			last_in_words[6];
+	u32			last_in_len;
 };
 
 static struct lkpi_usb_ep lkpi_eps[LKPI_EP_N];
@@ -493,6 +501,13 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	 * data in place), so only an over-long report needs clamping */
 	urb->status = st;
 	urb->actual_length = len;
+	if (urb->status == 0 && usb_pipein(urb->pipe) &&
+	    urb->transfer_buffer != NULL && len >= sizeof(ep->last_in_words) &&
+	    urb->transfer_buffer_length >= sizeof(ep->last_in_words)) {
+		memcpy(ep->last_in_words, urb->transfer_buffer,
+		    sizeof(ep->last_in_words));
+		ep->last_in_len = len;
+	}
 	if (urb->status == 0 && usb_pipein(urb->pipe) &&
 	    urb->actual_length > urb->transfer_buffer_length) {
 		lkpi_printf("lkpi: RX overrun clamp %u -> %u\n",
@@ -847,6 +862,8 @@ lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out)
 	out->kills = ep->kills;
 	out->parks = ep->parks;
 	out->resumes = ep->resumes;
+	memcpy(out->last_in_words, ep->last_in_words, sizeof(out->last_in_words));
+	out->last_in_len = ep->last_in_len;
 	spin_unlock_irqrestore(&ep->lock, flags);
 	return 0;
 }
@@ -875,6 +892,52 @@ lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
 		out->in_flight += s.in_flight;
 		out->qlen += s.qlen;
 	}
+}
+
+/* ------------------------------------------------------------------ */
+/* the vendor control-transfer trace (see linuxkpi_usb.h)              */
+/* ------------------------------------------------------------------ */
+
+#define	LKPI_USB_CTRL_TRACE_N	12
+
+static struct lkpi_usb_ctrl_ev lkpi_ctrl_trace_buf[LKPI_USB_CTRL_TRACE_N];
+static unsigned int lkpi_ctrl_trace_head;	/* next slot to write */
+static unsigned int lkpi_ctrl_trace_n;
+
+static void
+lkpi_usb_ctrl_trace_add(unsigned int value, unsigned int index, unsigned int len,
+    int is_in, const void *buf)
+{
+	struct lkpi_usb_ctrl_ev *ev = &lkpi_ctrl_trace_buf[lkpi_ctrl_trace_head];
+	unsigned int d = 0;
+
+	if (buf != NULL && len != 0)
+		memcpy(&d, buf, len < 4u ? len : 4u);
+	ev->value = value;
+	ev->index = index;
+	ev->len = len;
+	ev->is_in = is_in;
+	ev->data = d;
+	lkpi_ctrl_trace_head = (lkpi_ctrl_trace_head + 1u) % LKPI_USB_CTRL_TRACE_N;
+	if (lkpi_ctrl_trace_n < LKPI_USB_CTRL_TRACE_N)
+		lkpi_ctrl_trace_n++;
+}
+
+unsigned int
+lkpi_usb_ctrl_trace(struct lkpi_usb_ctrl_ev *out, unsigned int max)
+{
+	unsigned int i, n;
+
+	if (out == NULL)
+		return 0;
+	n = lkpi_ctrl_trace_n < max ? lkpi_ctrl_trace_n : max;
+	for (i = 0; i < n; i++) {
+		unsigned int idx = (lkpi_ctrl_trace_head + LKPI_USB_CTRL_TRACE_N - 1u - i)
+		    % LKPI_USB_CTRL_TRACE_N;
+
+		out[i] = lkpi_ctrl_trace_buf[idx];
+	}
+	return n;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1722,6 +1785,9 @@ usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
 	    size != 0 ? stage : NULL);
 	if (ret == 0 && is_in && size != 0)
 		memcpy(data, stage, size);
+	if (size != 0)
+		lkpi_usb_ctrl_trace_add(value, index, size, is_in,
+		    ret == 0 ? data : NULL);
 	lkpi_mutex_unlock(&lkpi_usb_ctrl_mtx);
 	if (ret < 0)
 		return lkpi_usb_errno(ret);
