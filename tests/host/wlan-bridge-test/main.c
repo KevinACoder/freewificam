@@ -354,15 +354,9 @@ case_b2(void)
 		    "(filter=%d scan=%d)", f, s);
 		return -1;
 	}
-	if (st->filter_completes < 1) {
-		case_line("B2", 0, "the filter was never cleared after the sweep");
-		return -1;
-	}
-	if (st->filter_last_total != 0) {
-		case_line("B2", 0, "the filter did not go back to zero (total=%#x)",
-		    st->filter_last_total);
-		return -1;
-	}
+	/* the filter's lifetime is case_b20's business (it owns the whole
+	 * pre-association window under MANUAL roaming); this case is the
+	 * ordering: the promiscuous bit must be up before the sweep starts */
 	/* the channel walk: the driver is told about every channel, ascending,
 	 * once each, and the last tune is the settle on the joined AP's channel.
 	 * The sweep dwells on 13 channels, so the config sequence is ch1..ch13
@@ -394,8 +388,8 @@ case_b2(void)
 			return -1;
 		}
 	}
-	case_line("B2", 1, "filter(idx=%d) before scan(idx=%d); cleared after; "
-	    "channel walk ascending (%u configs, last=%u)",
+	case_line("B2", 1, "filter(idx=%d) before scan(idx=%d); channel walk "
+	    "ascending (%u configs, last=%u)",
 	    f, s, st->config_freq_count,
 	    st->config_freq_count > 0 ?
 	    st->config_freqs[st->config_freq_count - 1] : 0);
@@ -486,6 +480,13 @@ case_b4(void)
 	}
 	if (memcmp(st->last_bssid, ap_bssid, 6) != 0) {
 		case_line("B4", 0, "the driver was given the wrong BSSID");
+		return -1;
+	}
+	/* the interface runs, so the sweep's promiscuous bit goes back: the chip
+	 * now has a BSSID and a channel to filter against (see case_b20) */
+	if (st->filter_last_total != 0) {
+		case_line("B4", 0, "the filter is still open at RUN (total=%#x)",
+		    st->filter_last_total);
 		return -1;
 	}
 	case_line("B4", 1, "auth+assoc drained, RUN reached, assoc event + bssid");
@@ -1975,6 +1976,71 @@ case_b19(void)
 	return 0;
 }
 
+static int
+case_b20(void)
+{
+	const struct fake_driver_state *st;
+	unsigned int guard;
+
+	/*
+	 * The receive filter's promiscuous bit must outlive the sweep and go
+	 * back only when the interface runs.  With the bit cleared at the
+	 * sweep's close the chip applies its own address and beacon filters
+	 * (the rtw89 clears them only while the bit is set), and before
+	 * association there is nothing correct for those to match against - so
+	 * the AP's directed answer is dropped in hardware.  Measured on the
+	 * board: with the bit held the raw open-auth join answers in
+	 * milliseconds, with it cleared at the sweep's close the receive path
+	 * delivered nothing at all and the stack timed out.
+	 *
+	 * MANUAL roaming so the sweep reports and stops instead of joining on
+	 * its own: the bit's whole pre-association lifetime is then visible.
+	 */
+	wlan_bridge_set_manual(1);
+	while (wlan_bridge_scan_pending()) {
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B20", 0, "the sweep did not start");
+		return -1;
+	}
+	run_one_sweep();
+	st = fake_driver_state();
+	if (st->filter_last_total == 0) {
+		case_line("B20", 0, "the filter went back to zero when the sweep "
+		    "closed; the pre-association exchange needs it open");
+		return -1;
+	}
+
+	/* ... and it goes back when the interface runs: the chip then has a BSSID
+	 * and a channel to filter against. */
+	if (wlan_bridge_join((const uint8_t *)AP_SSID, AP_SSID_LEN, ap_bssid,
+	    NULL, 0) != 0) {
+		case_line("B20", 0, "the join was refused");
+		return -1;
+	}
+	for (guard = 0; guard < 64; guard++) {
+		if (n8_peek_state() == n8_peek_run_state())
+			break;
+		answer_new_tx_from_ap();
+	}
+	if (n8_peek_state() != n8_peek_run_state()) {
+		case_line("B20", 0, "the join did not reach RUN (state=%d)",
+		    n8_peek_state());
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->filter_last_total != 0) {
+		case_line("B20", 0, "the filter is still open at RUN (total=%#x)",
+		    st->filter_last_total);
+		return -1;
+	}
+	case_line("B20", 1, "the promiscuous bit outlives the sweep and goes "
+	    "back at RUN");
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -2121,9 +2187,10 @@ run_suite(void)
 	(void)case_b17();
 	(void)case_b18();
 	(void)case_b19();
+	(void)case_b20();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=19\n");
+		printf("WLANBRIDGE: SUITE PASS cases=20\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
