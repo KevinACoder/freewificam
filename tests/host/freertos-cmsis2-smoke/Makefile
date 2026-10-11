@@ -41,6 +41,7 @@ C9        := $(BUILD_DIR)/c9-handle-trunc
 # Core include directory itself is deliberately absent so no ARM-only header is reached.
 INCLUDES := \
     -I$(ROOT) \
+    -I$(ROOT)/components/ulog/src \
     -I$(ROOT)/os/freertos \
     -I$(ROOT)/os/cmsis2/host-compat \
     -I$(KERNEL)/include \

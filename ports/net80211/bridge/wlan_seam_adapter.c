@@ -209,7 +209,7 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 		info->control.vif = adapter.vif;
 		if (adapter.sta == NULL) {
 			lkpi_skb_free(skb);
-			lkpi_printf("wlans: tx of a data frame with no peer\n");
+			lkpi_printf(ULOG_ERROR_LEVEL, "wlans: tx of a data frame with no peer\n");
 			return -1;
 		}
 		info->control.rates[0].idx = 0;
@@ -574,6 +574,6 @@ wlan_seam_adapter_init(void)
 	memset(&adapter, 0, sizeof(adapter));
 	lkpi80211_bridge_register(&up_ops, NULL);
 	adapter.installed = 1;
-	lkpi_printf("wlan: seam adapter ready\n");
+	lkpi_printf(ULOG_INFO_LEVEL, "wlan: seam adapter ready\n");
 	return 0;
 }

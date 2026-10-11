@@ -102,7 +102,8 @@ COMMON := -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -g3 -O2 \
 INC := -I$(PORT)/include -I$(LWIP)/src/include -I$(LWIP)/contrib/apps/ping \
     -I$(ROOT)
 PORT_INC := $(INC) -I$(ROOT)/components/net80211 -I$(ROOT)/os/cmsis2 \
-    -I$(ROOT)/os/baremetal -I$(ROOT)/arch/aarch64 -I$(CMSIS)/CMSIS/RTOS2/Include
+    -I$(ROOT)/os/baremetal -I$(ROOT)/components/ulog/src \
+    -I$(ROOT)/arch/aarch64 -I$(CMSIS)/CMSIS/RTOS2/Include
 
 # The imported bytes are not ours to keep warning-clean beyond the level the
 # upstream project itself takes; the port layer gets the full set. Both

@@ -150,7 +150,7 @@ static void lwip_loopback(void)
 		goto out;
 	}
 
-	board_log("net: loopback echo ok port=%u sent=%u got=%u\n",
+	LOG_INFO("net: loopback echo ok port=%u sent=%u got=%u\n",
 		  (unsigned)ECHO_PORT, (unsigned)ECHO_LEN, (unsigned)ECHO_LEN);
 
 out:

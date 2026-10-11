@@ -566,7 +566,7 @@ static int wlan_osal_vlog(int emergency, const char *fmt, va_list ap)
 	if (emergency)
 		board_log_emergency("%s\n", line);
 	else
-		board_log("%s\n", line);
+		LOG_INFO("%s\n", line);
 	return (int)n;
 }
 

@@ -14,6 +14,8 @@
 
 #include "os/cmsis2/cmsis2.h"
 
+#include "os/baremetal/log.h"
+
 static volatile unsigned timer_fires;
 static volatile unsigned oneshot_fires;
 
@@ -50,7 +52,7 @@ static void os_timer(void)
 	}
 
 	osDelay(600U);
-	board_log("os2-timer: periodic fires=%u one-shot fires=%u\n",
+	LOG_ANCHOR("os2-timer: periodic fires=%u one-shot fires=%u\n",
 		  timer_fires, oneshot_fires);
 	if (osTimerStop(periodic) != osOK) {
 		board_case_fail("periodic stop failed");

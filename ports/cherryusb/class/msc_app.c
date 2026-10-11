@@ -34,19 +34,19 @@ void usbh_msc_run(struct usbh_msc *msc_class)
 	int ret;
 
 	if (slot >= MSC_APP_MAX) {
-		board_log("usbh_msc: ordinal %c outside the table\n", (char)msc_class->sdchar);
+		LOG_ERROR("usbh_msc: ordinal %c outside the table\n", (char)msc_class->sdchar);
 		return;
 	}
 
 	ret = usbh_msc_scsi_init(msc_class);
 	if (ret < 0) {
-		board_log("usbh_msc: init failed bus=%u err=%d\n",
+		LOG_ERROR("usbh_msc: init failed bus=%u err=%d\n",
 			  msc_class->hport->bus->busid, ret);
 		return;
 	}
 
 	msc_app_table[slot] = msc_class;
-	board_log("usbh_msc: ready bus=%u dev=%u blocks=%u bsize=%u (%u MiB)\n",
+	LOG_INFO("usbh_msc: ready bus=%u dev=%u blocks=%u bsize=%u (%u MiB)\n",
 		  msc_class->hport->bus->busid, msc_class->hport->dev_addr,
 		  (unsigned)msc_class->blocknum, (unsigned)msc_class->blocksize,
 		  (unsigned)(((uint64_t)msc_class->blocknum * msc_class->blocksize) >> 20));

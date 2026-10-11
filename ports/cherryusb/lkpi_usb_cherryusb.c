@@ -126,7 +126,7 @@ chu_stage_overflow_report(unsigned int len)
 	if (latched)
 		return;
 	latched = 1;
-	lkpi_printf("usbkpi: transfer of %u bytes refused - a stage slot holds %u "
+	lkpi_printf(ULOG_ERROR_LEVEL, "usbkpi: transfer of %u bytes refused - a stage slot holds %u "
 	    "bytes (raise CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE for this image)\n",
 	    len, (unsigned int)CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE);
 }

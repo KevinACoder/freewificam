@@ -50,6 +50,7 @@ SHELL_SRCS := \
 
 SHELL_INCLUDES := \
     -I$(ROOT) \
+    -I$(ROOT)/components/ulog/src \
     -I$(ROOT)/os/cmsis2 \
     -I$(ROOT)/os/cmsis2/host-compat \
     -I$(ROOT)/components/cherrysh \

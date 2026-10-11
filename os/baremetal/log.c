@@ -35,6 +35,9 @@
 #include <stdint.h>
 
 #include "log.h"
+#ifdef ULOG_ENABLED
+#include "log_anchors.h"
+#endif
 #include "minilibc.h"
 #include "arch_asm.h"
 #include "generic_timer.h"
@@ -120,9 +123,12 @@ void board_log_stamp_use_tick(void)
 static volatile unsigned int print_lock_held;
 
 /* LDAXR/STXR pair, inline: __atomic_test_and_set would call into libatomic,
- * which a -nostdlib image does not have. Returns 0 when the lock was taken. */
+ * which a -nostdlib image does not have. Returns 0 when the lock was taken.
+ * The host spelling is for the outlet suite, which compiles this file to
+ * exercise the line assembly and the repeat gate; there libatomic exists. */
 static inline unsigned int print_try_lock(void)
 {
+#ifdef __aarch64__
 	unsigned int status;
 	unsigned int wanted = 1u;
 
@@ -136,23 +142,33 @@ static inline unsigned int print_try_lock(void)
 		: "memory");
 
 	return status;
+#else
+	return __atomic_test_and_set(&print_lock_held, __ATOMIC_ACQUIRE) ? 1u : 0u;
+#endif
 }
 
 static void print_lock_take(uint64_t *saved_daif)
 {
+#ifdef __aarch64__
 	/* Mask IRQs for the whole hold, restore the caller's DAIF after
 	 * release: same-core re-entrancy would otherwise deadlock (an ISR
 	 * spinning on the lock its own interrupted context holds). */
 	ARCH_DAIF_GET(*saved_daif);
 	ARCH_IRQ_MASK();
+#else
+	*saved_daif = 0u;
+#endif
 
 	while (print_try_lock() != 0u) {
+#ifdef __aarch64__
 		__asm__ __volatile__("yield" ::: "memory");
+#endif
 	}
 }
 
 static void print_lock_give(uint64_t saved_daif)
 {
+#ifdef __aarch64__
 	/* STLR: store with release semantics, the pairing half of LDAXR. */
 	__asm__ __volatile__("stlr %w1, %0"
 			     : "=Q"(print_lock_held)
@@ -163,6 +179,10 @@ static void print_lock_give(uint64_t saved_daif)
 	 * the I bit: callers in ISR context arrive with IRQs masked and must
 	 * stay that way). */
 	ARCH_DAIF_PUT(saved_daif);
+#else
+	(void)saved_daif;
+	__atomic_store_n(&print_lock_held, 0u, __ATOMIC_RELEASE);
+#endif
 }
 
 /* --- the stamped line sink -------------------------------------------------- */
@@ -222,6 +242,11 @@ static void console_feed(const char *s)
 static char repeat_prev[CONSOLE_LINE_MAX];
 static unsigned int repeat_n;
 
+#ifdef ULOG_ENABLED
+/* Defined with the level plane below. */
+static bool log_anchor_promote(const char *msg);
+#endif
+
 static void console_repeat_flush(void)
 {
 	char tail[64];
@@ -237,6 +262,18 @@ static void console_repeat_flush(void)
 
 static void console_repeat_gate(const char *msg)
 {
+#ifdef ULOG_ENABLED
+	/* A line a judge reads is evidence, and a judge may count it: the
+	 * dataplane case counts the ping replies. Folding a judged line would
+	 * hand such a judge one copy and a run length it does not read, so a
+	 * never-filtered line is never folded. The fold stays for everything
+	 * else - the retry-loop noise it exists for. */
+	if (log_anchor_promote(msg)) {
+		console_repeat_flush();
+		console_feed(msg);
+		return;
+	}
+#endif
 
 	if (repeat_n != 0u && strcmp(msg, repeat_prev) == 0) {
 		repeat_n++;
@@ -248,6 +285,116 @@ static void console_repeat_gate(const char *msg)
 	console_feed(msg);
 }
 
+/* --- the level plane -------------------------------------------------------- */
+
+#ifdef ULOG_ENABLED
+
+/*
+ * A line that matches a never-filtered family is promoted to ALWAYS, so no
+ * runtime threshold can silence a judged line, a one-boot ledger line, a
+ * protocol line or a fault line. This is the one place the promotion happens,
+ * which is what lets vendored trees (whose call sites we cannot annotate) stay
+ * judged: their lines are promoted here by text. The family table is generated
+ * from the judges' anchor tables by tools/gates/log-anchors.py.
+ */
+static bool log_anchor_promote(const char *msg)
+{
+	unsigned int i;
+
+	for (i = 0U; i < log_anchor_family_count; i++) {
+		if (strstr(msg, log_anchor_families[i]) != NULL) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Outlet subscriber. The engine calls this with the entry-held print lock, so
+ * the line discipline runs without taking the lock again. */
+static void log_sink(ulog_level_t severity, char *msg)
+{
+	(void)severity;
+	console_repeat_gate(msg);
+}
+
+static bool log_ready;
+static ulog_level_t log_current_level = (ulog_level_t)LOG_DEFAULT_LEVEL;
+
+void log_emit(ulog_level_t severity, const char *fmt, ...)
+{
+	char msg[CONSOLE_LINE_MAX];
+	va_list ap;
+	uint64_t saved_daif;
+
+	va_start(ap, fmt);
+	(void)vsnprintf(msg, sizeof(msg), fmt, ap);
+	va_end(ap);
+
+	/* The promotion must see the text, so the format happens before the
+	 * gate. A filtered line still pays one vsnprintf - cheaper than the
+	 * serial write it would otherwise cost. */
+	if (log_anchor_promote(msg)) {
+		severity = ULOG_ALWAYS_LEVEL;
+	}
+
+	print_lock_take(&saved_daif);
+	if (!log_ready) {
+		/* Lazy: boot-early callers (the heap probe) print before main. */
+		ULOG_INIT();
+		(void)ULOG_SUBSCRIBE(log_sink, (ulog_level_t)LOG_DEFAULT_LEVEL);
+		log_ready = true;
+	}
+	ulog_message(severity, "%s", msg);
+	print_lock_give(saved_daif);
+}
+
+ulog_level_t log_level_get(void)
+{
+	return log_current_level;
+}
+
+void log_level_set(ulog_level_t severity)
+{
+	uint64_t saved_daif;
+
+	print_lock_take(&saved_daif);
+	if (!log_ready) {
+		ULOG_INIT();
+		log_ready = true;
+	}
+	/* ulog's change model: re-subscribing an existing function updates its
+	 * threshold (and a first call with no prior subscription installs it). */
+	(void)ULOG_SUBSCRIBE(log_sink, severity);
+	log_current_level = severity;
+	print_lock_give(saved_daif);
+}
+
+#else /* !ULOG_ENABLED */
+
+/*
+ * The compile-time master gate. With ULOG_ENABLED undefined the level plane
+ * generates no code at all: the entry points stay, so the call sites and the
+ * console command still link, and the raw outlets below (the console bytes and
+ * the emergency print) are what remains of the console.
+ */
+void log_emit(ulog_level_t severity, const char *fmt, ...)
+{
+	(void)severity;
+	(void)fmt;
+}
+
+ulog_level_t log_level_get(void)
+{
+	return (ulog_level_t)LOG_DEFAULT_LEVEL;
+}
+
+void log_level_set(ulog_level_t severity)
+{
+	(void)severity;
+}
+
+#endif /* ULOG_ENABLED */
+
 void board_log(const char *fmt, ...)
 {
 	char msg[CONSOLE_LINE_MAX];
@@ -257,13 +404,7 @@ void board_log(const char *fmt, ...)
 	(void)vsnprintf(msg, sizeof(msg), fmt, ap);
 	va_end(ap);
 
-	{
-		uint64_t saved_daif;
-
-		print_lock_take(&saved_daif);
-		console_repeat_gate(msg);
-		print_lock_give(saved_daif);
-	}
+	log_emit(ULOG_INFO_LEVEL, "%s", msg);
 }
 
 void board_console_write_raw(const char *data, unsigned int len)

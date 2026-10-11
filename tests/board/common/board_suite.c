@@ -101,7 +101,7 @@ static void board_print_start( const struct board_select *sel, const char *spec,
 		}
 		off += ( size_t )n;
 	}
-	board_log( "BOARD-SUITE %s start cases=%u sel=%s list=%s\n",
+	LOG_ANCHOR( "BOARD-SUITE %s start cases=%u sel=%s list=%s\n",
 		   BOARD_SUITE_NAME, cases, spec, list );
 }
 
@@ -117,7 +117,7 @@ void board_suite_run( void *argument )
 
 	(void)argument;
 
-	board_log( "BOARD-SUITE %s select window_ms=%u\n",
+	LOG_ANCHOR( "BOARD-SUITE %s select window_ms=%u\n",
 		   BOARD_SUITE_NAME, ( unsigned )BOARD_SELECT_WINDOW_MS );
 
 	board_win_len = 0;
@@ -134,7 +134,7 @@ void board_suite_run( void *argument )
 				selected = 1;
 				continue;
 			}
-			board_log( "BOARD-SUITE-note select ignored: %s\n", board_win_buf );
+			LOG_INFO( "BOARD-SUITE-note select ignored: %s\n", board_win_buf );
 			board_win_len = 0;
 		}
 		osDelay( 10U );
@@ -153,7 +153,7 @@ void board_suite_run( void *argument )
 	}
 	board_print_start( &sel, spec, cases );
 	if( cases == 0 ) {
-		board_log( "BOARD-SUITE-note select empty\n" );
+		LOG_INFO( "BOARD-SUITE-note select empty\n" );
 	}
 
 	for( const struct board_test *t = __board_tests_start; t < __board_tests_end; t++ ) {
@@ -164,15 +164,15 @@ void board_suite_run( void *argument )
 		t->fn();
 		if( board_case_reason ) {
 			failed++;
-			board_log( "BOARD-SUITE-note case %s: %s\n", t->name, board_case_reason );
-			board_log( "CASE %s/%s FAIL\n", BOARD_SUITE_NAME, t->name );
+			LOG_INFO( "BOARD-SUITE-note case %s: %s\n", t->name, board_case_reason );
+			LOG_ANCHOR( "CASE %s/%s FAIL\n", BOARD_SUITE_NAME, t->name );
 		} else {
 			ok++;
-			board_log( "CASE %s/%s PASS\n", BOARD_SUITE_NAME, t->name );
+			LOG_ANCHOR( "CASE %s/%s PASS\n", BOARD_SUITE_NAME, t->name );
 		}
 	}
 
-	board_log( "BOARD-SUITE %s result=%s cases=%u ok=%u exit=%u\n",
+	LOG_ANCHOR( "BOARD-SUITE %s result=%s cases=%u ok=%u exit=%u\n",
 		   BOARD_SUITE_NAME, failed ? "fail" : "pass", cases, ok, failed );
 
 	/* Park: the shell and the tick keep running, the transcript stays

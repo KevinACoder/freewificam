@@ -136,11 +136,11 @@ void rtw89_floodping_chain(void)
 	}
 
 	/* phase 1: the clean stream the case judges itself by */
-	board_log("wlan: flood board ping start peer=%s secs=%u\n",
+	LOG_ANCHOR("wlan: flood board ping start peer=%s secs=%u\n",
 	    RTW89_FLOOD_PEER, (unsigned)(RTW89_FLOOD_CLEAN_MS / 1000U));
 	flood_stream(&peer, 0, RTW89_FLOOD_CLEAN_MS);
 	loss = flood_loss_pct(g_clean_cycles, g_clean_replies);
-	board_log("wlan: flood board ping cycles=%u replies=%u loss=%u%%\n",
+	LOG_ANCHOR("wlan: flood board ping cycles=%u replies=%u loss=%u%%\n",
 	    g_clean_cycles, g_clean_replies, loss);
 
 	if (g_clean_cycles < RTW89_FLOOD_MIN_CYCLES) {
@@ -155,13 +155,13 @@ void rtw89_floodping_chain(void)
 
 	/* phase 2: the window the host loads the link inside.  The open marker
 	 * is the host's start signal; the totals are recorded, not judged. */
-	board_log("wlan: flood host window open peer=%s secs=%u\n",
+	LOG_ANCHOR("wlan: flood host window open peer=%s secs=%u\n",
 	    RTW89_FLOOD_PEER, (unsigned)(RTW89_FLOOD_LOADED_MS / 1000U));
 	flood_stream(&peer, 1, RTW89_FLOOD_LOADED_MS);
-	board_log("wlan: flood board ping loaded cycles=%u replies=%u loss=%u%%\n",
+	LOG_ANCHOR("wlan: flood board ping loaded cycles=%u replies=%u loss=%u%%\n",
 	    g_loaded_cycles, g_loaded_replies,
 	    flood_loss_pct(g_loaded_cycles, g_loaded_replies));
-	board_log("wlan: flood host window close\n");
+	LOG_ANCHOR("wlan: flood host window close\n");
 }
 
 BOARD_TEST("rtw89-floodping", rtw89_floodping_chain);

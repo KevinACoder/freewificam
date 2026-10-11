@@ -154,7 +154,7 @@ lkpi_txq_alloc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	spin_unlock_irqrestore(&eng.lock, flags);
 	if (t == NULL) {
 		eng.refusals++;
-		lkpi_printf("lkpi_txq: table full (%u queues)\n",
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi_txq: table full (%u queues)\n",
 		    (unsigned)CONFIG_LKPI_TXQ_MAX);
 		return NULL;
 	}

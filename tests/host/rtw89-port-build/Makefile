@@ -59,7 +59,7 @@ SRCS := $(DRV)/core.c $(DRV)/mac80211.c $(DRV)/mac.c $(DRV)/phy.c $(DRV)/fw.c \
 ARCH   := -mcpu=cortex-a55 -mgeneral-regs-only -mstrict-align -mno-outline-atomics
 COMMON := -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -g3 -O2 \
     -ffunction-sections -fdata-sections
-INC    := -I$(FACE) -I$(DRV)
+INC    := -I$(FACE) -I$(DRV) -I$(ROOT)/components/ulog/src
 # The chip and bus selection the kernel's Kconfig resolves for the 8851BU.
 DRV_CONFIG := -DCONFIG_RTW89_CORE -DCONFIG_RTW89_8851B -DCONFIG_RTW89_USB \
     -DCONFIG_RTW89_8851BU

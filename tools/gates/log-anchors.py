@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Generate (and check) the console log's never-filtered family table.
+
+The console log plane promotes any line matching a family to ALWAYS, so no
+runtime threshold can silence it. The families are derived from the board
+judges' anchor tables - the very tables the judges match a transcript against -
+so a line a judge depends on can never be filtered away. That matters most for
+lines a vendored tree emits through the print-helper macros (the rtw89 firmware
+revision line, the lwIP ping receive line): their call sites are not ours to
+annotate, so the promotion has to happen by text.
+
+The unique source is the judges; the header is a generated artifact. A second
+hand-maintained copy of "what must not be filtered" would drift from the judges
+the first time a suite gained a case.
+
+Usage:
+  tools/gates/log-anchors.py --write      rewrite os/baremetal/log_anchors.h
+  tools/gates/log-anchors.py --check      fail if the header is not current
+  tools/gates/log-anchors.py --selftest   prove the check can go red
+
+Exit status: 0 ok, 1 findings (or a stale header), 2 usage/config error.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+BOARD = os.path.join(ROOT, "tests", "board")
+COMMON = os.path.join(BOARD, "common")
+OUT = os.path.join(ROOT, "os", "baremetal", "log_anchors.h")
+
+#: Protocol lines the shared runner emits (tests/board/common/board_suite.c).
+#: They are the suite's own vocabulary, so they are families regardless of any
+#: judge's table.
+PROTOCOL_FAMILIES = ("BOARD-SUITE ", "CASE ")
+
+#: Regex escape sequences that stand for a literal character (so the prefix may
+#: continue through them) versus ones that stand for a class or an anchor (where
+#: the literal prefix stops).
+_LITERAL_ESCAPES = set("[]().*+?{}|^$/\\-")
+
+
+def _judge_files() -> list[str]:
+    found = []
+    for name in sorted(os.listdir(BOARD)):
+        path = os.path.join(BOARD, name, "judge.py")
+        if os.path.isfile(path):
+            found.append(path)
+    return found
+
+
+def _load_module(path: str, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _collect_patterns() -> list[tuple[str, str]]:
+    """(pattern, source) for every judge anchor, boot anchor and fault pattern."""
+    out = []
+    if COMMON not in sys.path:
+        sys.path.insert(0, COMMON)
+    for index, path in enumerate(_judge_files()):
+        suite = os.path.basename(os.path.dirname(path))
+        module = _load_module(path, "_judge_%d" % index)
+        anchors = getattr(module, "ANCHORS", {})
+        if isinstance(anchors, dict):
+            for name, patterns in anchors.items():
+                for pattern in patterns:
+                    out.append((pattern, "%s:%s" % (suite, name)))
+        boot = getattr(module, "BOOT_ANCHORS", [])
+        for pattern in boot:
+            out.append((pattern, "%s:boot" % suite))
+        # Every module-level regex the judge matches the transcript with. A
+        # pattern that selects lines is a claim about lines that must not be
+        # filtered, even when it is not in the anchor table: the ping receive
+        # line the dataplane case counts, the tick ladder, the join
+        # negotiation. Missing one is how a strict threshold can silently
+        # starve a case.
+        for name in dir(module):
+            if not name.endswith("_RE"):
+                continue
+            value = getattr(module, name)
+            pattern = getattr(value, "pattern", None)
+            if pattern is None and isinstance(value, str):
+                pattern = value
+            if pattern:
+                out.append((pattern, "%s:%s" % (suite, name)))
+    judge = _load_module(os.path.join(COMMON, "board_judge.py"), "_board_judge")
+    for pattern in getattr(judge, "FAULT_PATTERNS", ()):
+        out.append((pattern, "board_judge:fault"))
+    return out
+
+
+def literal_prefix(pattern: str) -> str:
+    """The leading run of literal characters in a regex.
+
+    Stops at the first character that is not a literal: an unescaped metachar,
+    a class escape (\\d, \\w, \\s), or a control escape. Escapes of a metachar
+    (\\[, \\.) contribute the character itself and the run continues.
+    """
+    out = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            if i + 1 >= len(pattern):
+                break
+            nxt = pattern[i + 1]
+            if nxt in _LITERAL_ESCAPES:
+                out.append(nxt)
+                i += 2
+                continue
+            break                      # \d, \w, \s, \n, ... : not literal
+        if ch in ".^$*+?()[]{}|":
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def families() -> list[str]:
+    prefixes = set(PROTOCOL_FAMILIES)
+    for pattern, _source in _collect_patterns():
+        prefix = literal_prefix(pattern)
+        if prefix:
+            prefixes.add(prefix)
+    # Longest first: a longer family is the more specific match, and the scan
+    # short-circuits on the first hit.
+    return sorted(prefixes, key=lambda s: (-len(s), s))
+
+
+def render() -> str:
+    lines = [
+        "/*",
+        " * @file   log_anchors.h",
+        " * @brief  Never-filtered log families (generated).",
+        " *",
+        " * GENERATED by tools/gates/log-anchors.py --write - do not edit.",
+        " *",
+        " * A line containing any of these substrings is promoted to ALWAYS at the",
+        " * single funnel in log.c, so no runtime threshold can silence a judged",
+        " * line, a one-boot ledger line, a protocol line or a fault line. The",
+        " * families are the literal prefixes of the board judges' anchor tables",
+        " * plus the shared runner's protocol vocabulary; regenerate after any",
+        " * judge change and let the gate prove it is current.",
+        " */",
+        "",
+        "#ifndef FREEWIFICAM_LOG_ANCHORS_H",
+        "#define FREEWIFICAM_LOG_ANCHORS_H",
+        "",
+        "static const char *const log_anchor_families[] = {",
+    ]
+    for family in families():
+        escaped = family.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append('\t"%s",' % escaped)
+    lines += [
+        "};",
+        "",
+        "static const unsigned int log_anchor_family_count = "
+        "sizeof(log_anchor_families) / sizeof(log_anchor_families[0]);",
+        "",
+        "#endif /* FREEWIFICAM_LOG_ANCHORS_H */",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def main(argv: list[str]) -> int:
+    if "--write" in argv:
+        with open(OUT, "w", encoding="utf-8") as handle:
+            handle.write(render())
+        print("log-anchors: wrote %s (%d families)"
+              % (os.path.relpath(OUT, ROOT), len(families())))
+        return 0
+
+    if "--check" in argv:
+        with open(OUT, encoding="utf-8") as handle:
+            current = handle.read()
+        if current != render():
+            print("log-anchors: STALE - regenerate with --write")
+            return 1
+        print("log-anchors: current (%d families)" % len(families()))
+        return 0
+
+    if "--selftest" in argv:
+        # Red control: a check that cannot go red is not a check. Dropping a
+        # family from the header must be detected.
+        import tempfile
+        good = render()
+        mutated = good.replace('"BOARD-SUITE ",', "")
+        ok = mutated != good
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "log_anchors.h")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(mutated)
+            with open(path, encoding="utf-8") as handle:
+                stale = handle.read() != good
+        ok = ok and stale
+        print("log-anchors: selftest %s" % ("PASS" if ok else "FAIL"))
+        return 0 if ok else 1
+
+    print("usage: log-anchors.py --write | --check | --selftest", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

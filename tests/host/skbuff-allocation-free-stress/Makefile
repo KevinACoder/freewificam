@@ -36,6 +36,7 @@ CC     ?= cc
 CFLAGS := -std=gnu11 -Wall -Wextra -Werror -ggdb3 -O1 \
           -fsanitize=address,undefined -fno-omit-frame-pointer \
           -I$(ROOT)/components -I$(ROOT)/components/linuxkpi \
+          -I$(ROOT)/components/ulog/src \
           -I$(ROOT)/components/linuxkpi/include -I$(MAKEFILE_DIR)
 LDFLAGS := -fsanitize=address,undefined
 

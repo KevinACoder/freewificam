@@ -42,6 +42,6 @@ void print_hex_dump(const char *level, const char *prefix_str, int prefix_type,
  * the contract header's pr_* helpers already funnel through - and unlike those helpers
  * this mapping appends no newline, which is printk()'s own contract.
  */
-#define	printk(fmt, ...)	lkpi_printf(fmt, ##__VA_ARGS__)
+#define	printk(fmt, ...)	lkpi_printf(ULOG_INFO_LEVEL, fmt, ##__VA_ARGS__)
 
 #endif /* _LINUXKPI_LINUX_PRINTK_H_ */

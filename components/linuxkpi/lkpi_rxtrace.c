@@ -107,7 +107,7 @@ static void
 evt_dump(const struct lkpi_rx_evt *e, const char *side)
 {
 
-	lkpi_printf("rxtrace %s seq=%u t=%u ptr=%08x ep=%02x st=%d len=%u "
+	lkpi_printf(ULOG_DEBUG_LEVEL, "rxtrace %s seq=%u t=%u ptr=%08x ep=%02x st=%d len=%u "
 	    "head=%02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x "
 	    "%02x%02x%02x%02x\n", side, e->seq, e->t_ms, e->ptr, e->ep,
 	    (int)e->st, e->len,
@@ -133,16 +133,16 @@ both_sides_dump(const char *why)
 		return;
 	dump_n++;
 
-	lkpi_printf("rxtrace: dump #%u (%s) comp_n=%u deliv_n=%u anom=%u\n",
+	lkpi_printf(ULOG_DEBUG_LEVEL, "rxtrace: dump #%u (%s) comp_n=%u deliv_n=%u anom=%u\n",
 	    dump_n, why, ck_n, dv_n, anom_n);
 
 	n = evt_copy(ck_ring, ck_seq, 16, ev);
-	lkpi_printf("rxtrace: completion last %u:\n", n);
+	lkpi_printf(ULOG_DEBUG_LEVEL, "rxtrace: completion last %u:\n", n);
 	for (i = 0; i < n; i++)
 		evt_dump(&ev[i], "c");
 
 	n = evt_copy(dv_ring, dv_seq, 16, ev);
-	lkpi_printf("rxtrace: delivery last %u:\n", n);
+	lkpi_printf(ULOG_DEBUG_LEVEL, "rxtrace: delivery last %u:\n", n);
 	for (i = 0; i < n; i++)
 		evt_dump(&ev[i], "d");
 }

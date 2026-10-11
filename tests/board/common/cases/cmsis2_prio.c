@@ -14,6 +14,8 @@
 
 #include "os/cmsis2/cmsis2.h"
 
+#include "os/baremetal/log.h"
+
 static void probe_body( void *argument )
 {
 	(void)argument;
@@ -34,7 +36,7 @@ static void cmsis2_prio( void )
 		board_case_fail( "probe thread create failed" );
 		return;
 	}
-	board_log( "cmsis2: probe ok\n" );
+	LOG_ANCHOR( "cmsis2: probe ok\n" );
 }
 
 BOARD_TEST( "cmsis2-prio", cmsis2_prio );

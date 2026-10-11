@@ -79,10 +79,10 @@ void usb_msc_case(unsigned busid, const char *hcd)
 	uint32_t elapsed_ms;
 
 	if (usb_board_init(busid) != 0) {
-		board_log("usbh: fail board layer bring-up at bus%u\n", busid);
+		LOG_ERROR("usbh: fail board layer bring-up at bus%u\n", busid);
 		return -1;
 	}
-	board_log("usbh: core init bus=%u hcd=%s base=0x%lx\n", busid, hcd,
+	LOG_INFO("usbh: core init bus=%u hcd=%s base=0x%lx\n", busid, hcd,
 		  (unsigned long)usb_board_reg_base(busid));
 
 	if (usbh_initialize(busid, usb_board_reg_base(busid), usb_board_event_handler) != 0) {
@@ -96,13 +96,13 @@ void usb_msc_case(unsigned busid, const char *hcd)
 		board_case_fail("no mass-storage instance within 60 s");
 		return;
 	}
-	board_log("usbh: class msc claimed lun=0 blk=%u\n", (unsigned)msc->blocknum);
+	LOG_ANCHOR("usbh: class msc claimed lun=0 blk=%u\n", (unsigned)msc->blocknum);
 
 	if (usbh_msc_scsi_read10(msc, 0, msc_buf, 1) != 0) {
 		board_case_fail("read of block zero failed");
 		return;
 	}
-	board_log("usbh: msc read blk0=0x%02x%02x%02x%02x ok\n",
+	LOG_ANCHOR("usbh: msc read blk0=0x%02x%02x%02x%02x ok\n",
 		  msc_buf[0], msc_buf[1], msc_buf[2], msc_buf[3]);
 
 	/* Inside the device, outside any partition table or filesystem. */
@@ -123,7 +123,7 @@ void usb_msc_case(unsigned busid, const char *hcd)
 			return;
 		}
 	}
-	board_log("usbh: msc write/read roundtrip ok at lba=%u\n", (unsigned)scratch);
+	LOG_ANCHOR("usbh: msc write/read roundtrip ok at lba=%u\n", (unsigned)scratch);
 
 	start_ms = osKernelGetTickCount();
 	for (uint32_t done = 0; done < MSC_READ_SECTORS; done += MSC_CHUNK_SECTORS) {
@@ -133,7 +133,7 @@ void usb_msc_case(unsigned busid, const char *hcd)
 		}
 	}
 	elapsed_ms = osKernelGetTickCount() - start_ms;
-	board_log("usbh: msc read %u MiB in %u ms\n", (unsigned)(MSC_READ_SECTORS * MSC_BLOCK_BYTES >> 20),
+	LOG_INFO("usbh: msc read %u MiB in %u ms\n", (unsigned)(MSC_READ_SECTORS * MSC_BLOCK_BYTES >> 20),
 		  (unsigned)elapsed_ms);
 
 	start_ms = osKernelGetTickCount();
@@ -144,7 +144,7 @@ void usb_msc_case(unsigned busid, const char *hcd)
 		}
 	}
 	elapsed_ms = osKernelGetTickCount() - start_ms;
-	board_log("usbh: msc write %u MiB in %u ms\n", (unsigned)(MSC_WRITE_SECTORS * MSC_BLOCK_BYTES >> 20),
+	LOG_INFO("usbh: msc write %u MiB in %u ms\n", (unsigned)(MSC_WRITE_SECTORS * MSC_BLOCK_BYTES >> 20),
 		  (unsigned)elapsed_ms);
 	return 0;
 }

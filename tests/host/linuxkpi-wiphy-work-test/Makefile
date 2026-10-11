@@ -38,6 +38,7 @@ CFLAGS := -ggdb3 -O1 -Wall -Wextra -ffunction-sections -fdata-sections \
           -DFREERTOS_HOOKS_TAG='"lkpi-wiphy-work"' \
           $(WIPHY_EXTRA_INC) \
           -I$(ROOT) \
+          -I$(ROOT)/components/ulog/src \
           -I$(ROOT)/os/freertos \
           -I$(ROOT)/os/cmsis2 \
           -I$(ROOT)/os/cmsis2/host-compat \

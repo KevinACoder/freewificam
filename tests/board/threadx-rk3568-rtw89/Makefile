@@ -72,6 +72,8 @@ INCLUDES := \
 	-I$(ROOT)/board/rk3568-itx \
 	-I$(ROOT)/board/rk3568-itx/drivers \
 	-I$(ROOT)/os/baremetal \
+	-I$(ROOT)/components/ulog/src \
+	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
 	-I$(CHERRYSH) \
 	-I$(PORT) \
 	-I$(ROOT)/components/tlsf \
@@ -103,7 +105,8 @@ ifeq ($(WLAN_SINGLE),1)
 BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
 endif
 
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
+CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h \
+	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream
@@ -270,6 +273,7 @@ BASE_SRCS := \
 	$(ROOT)/os/baremetal/memops.c \
 	$(ROOT)/os/baremetal/minilibc.c \
 	$(ROOT)/os/baremetal/log.c \
+	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
 
 TX_SRCS := \

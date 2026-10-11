@@ -57,7 +57,7 @@ void cmsis2_log( const char * fmt, ... )
     ( void ) vsnprintf( buf, sizeof( buf ), fmt, ap );
     va_end( ap );
 
-    board_log( "%s", buf );
+    LOG_INFO( "%s", buf );
 }
 
 void cmsis2_tx_kernel_enter( void )

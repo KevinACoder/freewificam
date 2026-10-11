@@ -1064,7 +1064,7 @@ void lkpi_spl_log(const char *fmt, ...)
 	va_start(ap, fmt);
 	(void)vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
-	lkpi_printf("lkpi_skb: %s\n", line);
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpi_skb: %s\n", line);
 }
 
 void *lkpi_spl_malloc(unsigned int size)

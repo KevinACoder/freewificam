@@ -102,7 +102,7 @@ static void lwiperf_report(void *arg, enum lwiperf_report_type type,
 	    (type == LWIPERF_TCP_ABORTED_REMOTE)) {
 		g_client_session = NULL;
 	}
-	board_log("lwiperf: report type=%d bytes=%u ms=%u %ukbit/s\n",
+	LOG_INFO("lwiperf: report type=%d bytes=%u ms=%u %ukbit/s\n",
 		  (int)type, (unsigned)bytes, (unsigned)ms, (unsigned)kbitpsec);
 }
 
@@ -133,7 +133,7 @@ static void thr_service(void *arg)
 			dwc_eqos_get_stats(g_port, &stats);
 			dwc_eqos_get_mmc_stats(g_port, &mmc);
 			ethnetif_get_diag(&d_poll, &d_pool, &d_input, &d_fed);
-			board_log("gmac%u: hb rx=%u err=%u tx=%u txdrop=%u txerr=%u dmaerr=%u "
+			LOG_INFO("gmac%u: hb rx=%u err=%u tx=%u txdrop=%u txerr=%u dmaerr=%u "
 				  "| fed=%lu poolfail=%lu inputfail=%lu mmc_ovf=%u mmc_crc=%u\n",
 				  g_port,
 				  (unsigned)stats.rx_frames, (unsigned)stats.rx_errors,
@@ -155,30 +155,30 @@ static int gmac_bring_up(unsigned int port)
 	uint32_t configure;
 
 	if (plat == NULL) {
-		board_log("gmac: no plat for port %u\n", (unsigned)port);
+		LOG_INFO("gmac: no plat for port %u\n", (unsigned)port);
 		return -1;
 	}
 	if (dwc_eqos_initialize(port, plat) != EQOS_OK) {
-		board_log("gmac%u: initialize FAIL\n", (unsigned)port);
+		LOG_ERROR("gmac%u: initialize FAIL\n", (unsigned)port);
 		return -1;
 	}
 	if (dwc_eqos_power_control(port, EQOS_POWER_FULL) != EQOS_OK) {
-		board_log("gmac%u: power FAIL\n", (unsigned)port);
+		LOG_ERROR("gmac%u: power FAIL\n", (unsigned)port);
 		return -1;
 	}
 	if (rtl8211f_initialize(port, (void *)(uintptr_t)port,
 				eqos_board_mdio_read, eqos_board_mdio_write) != EQOS_OK) {
-		board_log("phy%u: initialize FAIL\n", (unsigned)port);
+		LOG_ERROR("phy%u: initialize FAIL\n", (unsigned)port);
 		return -1;
 	}
 	if (rtl8211f_power_control(port, EQOS_POWER_FULL) != EQOS_OK) {
-		board_log("phy%u: power FAIL\n", (unsigned)port);
+		LOG_ERROR("phy%u: power FAIL\n", (unsigned)port);
 		return -1;
 	}
 	(void)rtl8211f_set_interface(port, EQOS_INTERFACE_RGMII);
 	if (rtl8211f_set_mode(port,
 			      EQOS_PHY_AUTO_NEGOTIATE | EQOS_PHY_SPEED_1G) != EQOS_OK) {
-		board_log("phy%u: no link (autoneg timeout)\n", (unsigned)port);
+		LOG_WARNING("phy%u: no link (autoneg timeout)\n", (unsigned)port);
 		return -1;
 	}
 
@@ -187,7 +187,7 @@ static int gmac_bring_up(unsigned int port)
 	(void)dwc_eqos_control(port, DWC_EQOS_CONFIGURE, configure);
 	(void)dwc_eqos_control(port, DWC_EQOS_CONTROL_TX, 1);
 	(void)dwc_eqos_control(port, DWC_EQOS_CONTROL_RX, 1);
-	board_log("gmac%u: channel start\n", (unsigned)port);
+	LOG_INFO("gmac%u: channel start\n", (unsigned)port);
 
 	return 0;
 }
@@ -210,19 +210,19 @@ static int gmac_line_up(void)
 
 	g_rx_sem = osSemaphoreNew(0xFFFFu, 0u, NULL);
 	if (g_rx_sem == NULL) {
-		board_log("lan: rx semaphore FAIL\n");
+		LOG_ERROR("lan: rx semaphore FAIL\n");
 		return -1;
 	}
 	dwc_eqos_set_rx_notify(rx_notify);
 	if (osThreadNew(thr_rx, NULL,
 			&(osThreadAttr_t){ .name = "gmacrx",
 					   .priority = osPriorityNormal }) == NULL) {
-		board_log("lan: rx thread FAIL\n");
+		LOG_ERROR("lan: rx thread FAIL\n");
 		return -1;
 	}
 
 	if (lwip_stack_up() != 0) {
-		board_log("lan: stack FAIL\n");
+		LOG_ERROR("lan: stack FAIL\n");
 		return -1;
 	}
 
@@ -233,14 +233,14 @@ static int gmac_line_up(void)
 	LOCK_TCPIP_CORE();
 	ethnetif_add(&g_netif, g_port, &ip, &mask, &gw);
 	if (lwiperf_start_tcp_server_default(lwiperf_report, NULL) != NULL) {
-		board_log("lwiperf: tcp server start\n");
+		LOG_INFO("lwiperf: tcp server start\n");
 	} else {
-		board_log("lwiperf: server START FAILED\n");
+		LOG_ERROR("lwiperf: server START FAILED\n");
 	}
 	UNLOCK_TCPIP_CORE();
 
 	(void)dwc_eqos_get_mac_address(g_port, mac);
-	board_log("net: up gmac%u ip=%u.%u.%u.%u/24 mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+	LOG_INFO("net: up gmac%u ip=%u.%u.%u.%u/24 mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
 		  g_port, ip4_addr1_16(&ip), ip4_addr2_16(&ip),
 		  ip4_addr3_16(&ip), ip4_addr4_16(&ip),
 		  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -248,12 +248,12 @@ static int gmac_line_up(void)
 	if (osThreadNew(thr_service, NULL,
 			&(osThreadAttr_t){ .name = "lansvc",
 					   .priority = osPriorityNormal }) == NULL) {
-		board_log("lan: service thread FAIL\n");
+		LOG_ERROR("lan: service thread FAIL\n");
 		return -1;
 	}
 
 	g_up = 1;
-	board_log("gmac%u: dataplane up\n", g_port);
+	LOG_INFO("gmac%u: dataplane up\n", g_port);
 
 	return 0;
 }
@@ -287,7 +287,7 @@ static void net_print_stack(void)
 		if (!etharp_get_entry(i, &ip, &nif, &eth) || (ip == NULL) || (eth == NULL)) {
 			continue;
 		}
-		board_log("net: arp[%u] %u.%u.%u.%u -> %02x:%02x:%02x:%02x:%02x:%02x\n",
+		LOG_INFO("net: arp[%u] %u.%u.%u.%u -> %02x:%02x:%02x:%02x:%02x:%02x\n",
 			  (unsigned)i,
 			  ip4_addr1_16(ip), ip4_addr2_16(ip), ip4_addr3_16(ip), ip4_addr4_16(ip),
 			  eth->addr[0], eth->addr[1], eth->addr[2], eth->addr[3],
@@ -295,7 +295,7 @@ static void net_print_stack(void)
 	}
 
 #if LWIP_STATS
-	board_log("net: stats etharp tx=%u rx=%u drop=%u | ip rx=%u chkerr=%u drop=%u tx=%u | "
+	LOG_INFO("net: stats etharp tx=%u rx=%u drop=%u | ip rx=%u chkerr=%u drop=%u tx=%u | "
 		  "icmp rx=%u chkerr=%u drop=%u tx=%u | link rx=%u tx=%u drop=%u memerr=%u\n",
 		  (unsigned)lwip_stats.etharp.xmit, (unsigned)lwip_stats.etharp.recv,
 		  (unsigned)lwip_stats.etharp.drop,
