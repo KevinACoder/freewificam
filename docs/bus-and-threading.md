@@ -27,8 +27,8 @@ than changing the engine.
 ## The threading model
 
 The kernel is reached only through CMSIS-RTOS2, and only from the `os/` port
-layer. Everything above it — the components, the ports, the application, the
-tests — calls the kernel exclusively through `cmsis_os2.h` plus the project's
+layer. Everything above it -- the components, the ports, the application, the
+tests -- calls the kernel exclusively through `cmsis_os2.h` plus the project's
 extension header. This is enforced, not advised: the components must build and
 link on both kernels, and a gate checks the compiled objects for foreign kernel
 symbols. A direct kernel call is not a shortcut, it is a portability defect.
