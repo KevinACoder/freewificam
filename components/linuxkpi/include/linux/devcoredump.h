@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/devcoredump.h
  * @brief   The device-core-dump entry point under the name a driver includes it.

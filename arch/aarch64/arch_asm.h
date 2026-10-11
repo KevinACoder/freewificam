@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * arch_asm.h - the AArch64 common-instruction macros. The only place
  * component/port/OS/app code takes these instructions from; run

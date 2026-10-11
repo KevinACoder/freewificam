@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    fw/rtw8851b_fw_blob.c
  * @brief   The RTL8851BU firmware image, compiled in as the one blob the driver

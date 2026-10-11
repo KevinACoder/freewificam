@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    claim_case.c
  * @brief   The class-hook claim case: it drives lkpi_usbh_class.c's own

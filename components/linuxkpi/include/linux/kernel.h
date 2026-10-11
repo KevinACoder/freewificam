@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/kernel.h
  * @brief   The small arithmetic and diagnostic helpers Linux code reaches for that

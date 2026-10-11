@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linuxkpi_wiphy_work.h
  * @brief   The wiphy work engine's own evidence beside the interface it serves.

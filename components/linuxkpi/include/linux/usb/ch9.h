@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/usb/ch9.h
  * @brief   The include a driver names for the USB chapter 9 types; in this face those

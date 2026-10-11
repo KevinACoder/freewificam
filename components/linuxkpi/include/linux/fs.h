@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/fs.h
  * @brief   The slice of the VFS objects a driver touches: the file, its inode and the

@@ -11,8 +11,8 @@
  * user-handler slot.
  */
 
-#ifndef FREEWEBCAM_TICK_H
-#define FREEWEBCAM_TICK_H
+#ifndef FREEWIFICAM_TICK_H
+#define FREEWIFICAM_TICK_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -58,4 +58,4 @@ uint32_t os_tick_get_count32(void);
 /* Configured tick rate (for stamp rendering). */
 uint32_t os_tick_freq_hz(void);
 
-#endif /* FREEWEBCAM_TICK_H */
+#endif /* FREEWIFICAM_TICK_H */

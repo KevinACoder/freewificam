@@ -30,8 +30,8 @@
  * @date   16.09.2026 (board-verified core) / 02.10.2026 (port re-arrangement)
  */
 
-#ifndef FREEWEBCAM_RTL8211F_H
-#define FREEWEBCAM_RTL8211F_H
+#ifndef FREEWIFICAM_RTL8211F_H
+#define FREEWIFICAM_RTL8211F_H
 
 #include <stdint.h>
 
@@ -70,4 +70,4 @@ eqos_link_state_t rtl8211f_get_link_state(unsigned int index);
 eqos_link_info_t rtl8211f_get_link_info(unsigned int index);
 void rtl8211f_get_info(unsigned int index, struct rtl8211f_info *info);
 
-#endif /* FREEWEBCAM_RTL8211F_H */
+#endif /* FREEWIFICAM_RTL8211F_H */

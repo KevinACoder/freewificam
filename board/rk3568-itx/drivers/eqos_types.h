@@ -13,8 +13,8 @@
  * @date   02.10.2026
  */
 
-#ifndef FREEWEBCAM_EQOS_TYPES_H
-#define FREEWEBCAM_EQOS_TYPES_H
+#ifndef FREEWIFICAM_EQOS_TYPES_H
+#define FREEWIFICAM_EQOS_TYPES_H
 
 #include <stdint.h>
 
@@ -67,4 +67,4 @@ typedef int32_t (*eqos_mdio_read_t)(void *ctx, uint8_t phy_addr,
 typedef int32_t (*eqos_mdio_write_t)(void *ctx, uint8_t phy_addr,
 				     uint8_t reg_addr, uint16_t data);
 
-#endif /* FREEWEBCAM_EQOS_TYPES_H */
+#endif /* FREEWIFICAM_EQOS_TYPES_H */

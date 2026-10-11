@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/bcd.h
  * @brief   Binary-coded-decimal conversion under the name a driver includes them.

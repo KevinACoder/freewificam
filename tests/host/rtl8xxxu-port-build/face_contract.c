@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    face_contract.c
  * @brief   One translation unit that includes the whole first-party Linux API face on

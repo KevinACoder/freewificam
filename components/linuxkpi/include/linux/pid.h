@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/pid.h
  * @brief   The process-id record and the lookup a driver's thread-signalling path names.

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    fw_registry.c
  * @brief   The compiled-in firmware registry and the two calls the Linux face exposes

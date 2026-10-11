@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    net/regulatory.h
  * @brief   The regulatory flag bits a driver sets on its wiphy.

@@ -13,7 +13,7 @@
 #              behind the bytes it serves
 #   spdx       the license split is mechanical: the extracted files carry exactly one
 #              SPDX form (GPL-2.0 OR BSD-3-Clause), the first-party face carries the
-#              project's (BSD-2-Clause) and no license text copied from elsewhere
+#              project's (BSD-3-Clause) and no license text copied from elsewhere
 #   gates      the kernel-isolation gates over the driver objects (symbol gate) and
 #              the first-party face sources, with their canary proofs
 #
@@ -147,13 +147,13 @@ spdx:
 	extra=$$(grep -h 'SPDX-License-Identifier' $$extract | sort -u | grep -v 'GPL-2.0 OR BSD-3-Clause' || true); \
 	if [ -n "$$extra" ]; then echo "FAIL: a second SPDX form in the extracted tree:"; printf '%s\n' "$$extra"; exit 1; fi; \
 	face="$$(find $(FACE)/linux $(FACE)/net -name '*.h' | grep -vE '$(subst $(space),|,$(FACE_PINNED_NO_SPDX))')"; \
-	bad=$$(grep -L 'SPDX-License-Identifier: BSD-2-Clause' $$face || true); \
+	bad=$$(grep -L 'SPDX-License-Identifier: BSD-3-Clause' $$face || true); \
 	if [ -n "$$bad" ]; then echo "FAIL: first-party face file without the project SPDX:"; printf '%s\n' "$$bad"; exit 1; fi; \
-	other=$$(grep -h 'SPDX-License-Identifier' $$face | sort -u | grep -v 'BSD-2-Clause' || true); \
+	other=$$(grep -h 'SPDX-License-Identifier' $$face | sort -u | grep -v 'BSD-3-Clause' || true); \
 	if [ -n "$$other" ]; then echo "FAIL: a non-project SPDX form in the face:"; printf '%s\n' "$$other"; exit 1; fi; \
 	copy=$$(grep -l 'GNU General Public' $$face || true); \
 	if [ -n "$$copy" ]; then echo "FAIL: license text copied into the first-party face:"; printf '%s\n' "$$copy"; exit 1; fi; \
-	echo "spdx: $$n/$$total extracted files dual-licensed with no second form; $$(printf '%s\n' $$face | wc -l) face files BSD-2-Clause with no copied license text"
+	echo "spdx: $$n/$$total extracted files dual-licensed with no second form; $$(printf '%s\n' $$face | wc -l) face files BSD-3-Clause with no copied license text"
 
 # ---- gates: kernel isolation over the driver objects and the face sources -----
 

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    fw_registry.h
  * @brief   The compiled-in firmware registry: the loader this project has instead of a

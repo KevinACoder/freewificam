@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/kern_levels.h
  * @brief   The message-level prefixes the interface's logging macros put in front of a

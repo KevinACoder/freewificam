@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/semaphore.h
  * @brief   The counting semaphore a driver's thread-signalling paths use.

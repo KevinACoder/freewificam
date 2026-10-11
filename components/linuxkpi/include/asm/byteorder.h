@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    asm/byteorder.h
  * @brief   The architecture's byte-order entry point: pick the endianness variant of

@@ -37,8 +37,8 @@
  * @date   16.09.2026 (board-verified core) / 02.10.2026 (port re-arrangement)
  */
 
-#ifndef FREEWEBCAM_DWC_EQOS_H
-#define FREEWEBCAM_DWC_EQOS_H
+#ifndef FREEWIFICAM_DWC_EQOS_H
+#define FREEWIFICAM_DWC_EQOS_H
 
 #include <stdint.h>
 
@@ -456,4 +456,4 @@ struct dwc_eqos_mmc_stats {
 
 void dwc_eqos_get_mmc_stats(unsigned int index, struct dwc_eqos_mmc_stats *stats);
 
-#endif /* FREEWEBCAM_DWC_EQOS_H */
+#endif /* FREEWIFICAM_DWC_EQOS_H */

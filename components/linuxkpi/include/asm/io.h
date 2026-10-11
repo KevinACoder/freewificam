@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    asm/io.h
  * @brief   The architecture's I/O entry point: the raw MMIO accessors for a

@@ -9,8 +9,8 @@
  * retired.
  */
 
-#ifndef FREEWEBCAM_CACHE_H
-#define FREEWEBCAM_CACHE_H
+#ifndef FREEWIFICAM_CACHE_H
+#define FREEWIFICAM_CACHE_H
 
 #include <stdint.h>
 
@@ -35,4 +35,4 @@ void cache_init(void);
  * breakpoint patching, self-modifying code). */
 void cache_icache_sync_range(uintptr_t addr, unsigned long size);
 
-#endif /* FREEWEBCAM_CACHE_H */
+#endif /* FREEWIFICAM_CACHE_H */

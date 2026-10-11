@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linuxkpi_impl.h
  * @brief   The implementation side of the linuxkpi contract: the fixed-size shells the

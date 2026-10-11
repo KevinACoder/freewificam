@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlan_wpa_vendor.c
  * @brief   The net80211 bridge's wpa_supplicant backend: the nine-operation

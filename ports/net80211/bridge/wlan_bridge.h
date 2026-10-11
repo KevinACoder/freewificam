@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlan_bridge.h
  * @brief   The net80211-world face of the bridge: attach/detach driven by the

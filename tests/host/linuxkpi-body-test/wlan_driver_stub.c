@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlan_driver_stub.c
  * @brief   A real usb_driver registered through the module-section mechanism, with

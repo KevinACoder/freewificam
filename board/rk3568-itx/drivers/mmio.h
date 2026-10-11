@@ -9,8 +9,8 @@
  * Device attribute already orders Device-vs-Device).
  */
 
-#ifndef FREEWEBCAM_MMIO_H
-#define FREEWEBCAM_MMIO_H
+#ifndef FREEWIFICAM_MMIO_H
+#define FREEWIFICAM_MMIO_H
 
 #include <stdint.h>
 
@@ -24,4 +24,4 @@ static inline void mmio_wr32(uintptr_t addr, uint32_t value)
 	*(volatile uint32_t *)addr = value;
 }
 
-#endif /* FREEWEBCAM_MMIO_H */
+#endif /* FREEWIFICAM_MMIO_H */

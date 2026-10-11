@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linuxkpi_core.c
  * @brief   The linuxkpi service bodies: allocation, logging, time and delays, locks,

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    main.c
  * @brief   The bridge chain suite: the real net80211 stack, the real bridge (both

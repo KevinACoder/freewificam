@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    net/ieee80211_radiotap.h
  * @brief   The radiotap capture header a monitor-mode receive path prepends: the base

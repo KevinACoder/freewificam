@@ -28,8 +28,8 @@
  *         stack and priority in class/hub/usbh_hub.c:738.
  */
 
-#ifndef FREEWEBCAM_RK3568_USB_CONFIG_H
-#define FREEWEBCAM_RK3568_USB_CONFIG_H
+#ifndef FREEWIFICAM_RK3568_USB_CONFIG_H
+#define FREEWIFICAM_RK3568_USB_CONFIG_H
 
 #include <stddef.h>
 
@@ -243,4 +243,4 @@ void usbh_console_printf(const char *fmt, ...);
 #define CONFIG_USBHOST_MSC_READY_CHECK_TIMES	10
 #endif
 
-#endif /* FREEWEBCAM_RK3568_USB_CONFIG_H */
+#endif /* FREEWIFICAM_RK3568_USB_CONFIG_H */

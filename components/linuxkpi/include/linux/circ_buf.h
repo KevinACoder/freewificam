@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/circ_buf.h
  * @brief   The ring-buffer count helpers and the ring-buffer record, as the interface

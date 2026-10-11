@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/debugfs.h
  * @brief   The diagnostics files a driver may create under its wiphy directory.

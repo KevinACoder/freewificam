@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/vmalloc.h
  * @brief   The include a driver names for the virtually-mapped allocator; the

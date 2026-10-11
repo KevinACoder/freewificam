@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    backend.h
  * @brief   The scripted vendor backend for the wpa port suite: it plays the

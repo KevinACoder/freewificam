@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    lkpi_usbh_class.h
  * @brief   The class hook's observable face: which hubport/interface a driver

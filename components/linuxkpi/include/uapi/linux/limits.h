@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    uapi/linux/limits.h
  * @brief   The value limits the interface publishes to its users: path, name and

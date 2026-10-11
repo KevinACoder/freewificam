@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/ieee80211.h
  * @brief   The 802.11 wire vocabulary (frame control, header layouts, management

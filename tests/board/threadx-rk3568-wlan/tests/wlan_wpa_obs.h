@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlan_wpa_obs.h
  * @brief   The supplicant message observer's face (see wlan_wpa_obs.c).

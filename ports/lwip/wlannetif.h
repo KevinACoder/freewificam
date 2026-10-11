@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlannetif.h
  * @brief   The WLAN netif's face: assembly, start/stop and the diagnostics the

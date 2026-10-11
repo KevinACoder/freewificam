@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/proc_fs.h
  * @brief   The include a driver's debug surface names; the surface is switched off for

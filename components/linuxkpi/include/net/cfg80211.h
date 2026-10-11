@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    net/cfg80211.h
  * @brief   The configuration surface a Linux wireless driver talks to: the wireless

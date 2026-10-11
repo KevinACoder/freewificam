@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * skb_contract.h - the host harness double for the skbuff pool contract,
  * plus the boundary that lets the production headers be compiled here.

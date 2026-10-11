@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    n8_peek.h
  * @brief   The harness's scalar view into the net80211 world: scan-table

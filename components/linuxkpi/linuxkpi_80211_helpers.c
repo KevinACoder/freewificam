@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linuxkpi_80211_helpers.c
  * @brief   The rest of the mac80211 face's closure: the calls the interface

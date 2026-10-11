@@ -9,7 +9,7 @@ between the two.
 |---|---|
 | Fact source | `components/skbuff/` - the verbatim TizenRT/Realtek osdep skbuff pool (Apache-2.0; pin and file digests in its own `PROVENANCE.md`) |
 | API face | `skbuff_pool.h` (this directory), imported from the previous line; the body implements exactly its declarations |
-| License | BSD-2-Clause (body, first-party); the pool's shape and the dual-pool discipline descend from the Apache-2.0 fact source, recorded in `../../LICENSES.md` |
+| License | BSD-3-Clause (body, first-party); the pool's shape and the dual-pool discipline descend from the Apache-2.0 fact source, recorded in `../../LICENSES.md` |
 | Written | 2026-10-08 |
 | Local differences | none to the fact source (it is read-only); every deliberate convergence of the body away from it is a numbered entry in `DIVERGENCES.md` |
 

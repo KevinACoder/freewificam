@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    backend.c
  * @brief   The scripted vendor backend: NIC side and scripted AP peer.

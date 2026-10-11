@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * linuxkpi core (driver-facing) - the Linux kernel API surface the
  * verbatim drivers compile against, and NOTHING ELSE: this header is

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    fw/rtw8821c_fw_blob.c
  * @brief   The RTL8821CU firmware image, compiled in as the one blob the driver

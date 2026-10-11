@@ -8,8 +8,8 @@
  * integer subset (defined in minilibc.c).
  */
 
-#ifndef FREEWEBCAM_MINILIBC_H
-#define FREEWEBCAM_MINILIBC_H
+#ifndef FREEWIFICAM_MINILIBC_H
+#define FREEWIFICAM_MINILIBC_H
 
 #include <stddef.h>
 
@@ -61,4 +61,4 @@ void qsort(void *base, size_t nmemb, size_t width,
 int sscanf(const char *str, const char *fmt, ...);
 int strcasecmp(const char *a, const char *b);
 
-#endif /* FREEWEBCAM_MINILIBC_H */
+#endif /* FREEWIFICAM_MINILIBC_H */
