@@ -188,7 +188,7 @@ static void sdio_dp_card_state( const char *when )
 	b = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IORX, false, &iorx );
 	c = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_BUS_IFACE, false, &bus );
 
-	LOG_INFO( "sdio: card after %s ioex=%d/%#04x iorx=%d/%#04x busif=%d/%#04x\n",
+	LOG_INFO( "sdio: card after %s ioex=%d/0x%02x iorx=%d/0x%02x busif=%d/0x%02x\n",
 		  when, a, ioex, b, iorx, c, bus );
 }
 
@@ -529,7 +529,7 @@ void sdio_datapath_chain( void )
 		board_case_fail( "reading the card's pending-interrupt word failed" );
 		return;
 	}
-	LOG_ANCHOR( "sdio: pump quiet pending=%#04x\n", pending );
+	LOG_ANCHOR( "sdio: pump quiet pending=0x%02x\n", pending );
 	if( pending != 0U ) {
 		board_case_fail( "the card reports a pending interrupt on a quiet line" );
 		return;

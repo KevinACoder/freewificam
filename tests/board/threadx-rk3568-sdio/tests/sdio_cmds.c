@@ -48,7 +48,7 @@ cmd_sdio(int argc, char **argv)
 		if (st == 0) {
 			(void)lkpi_sdio_be_io_direct(0U, SDIO_CCCR_IO_ENABLE, false, &enable);
 		}
-		csh_printf(csh, "sdio: ready=%d card=%d cccr=%#04x ioex=%#04x\n",
+		csh_printf(csh, "sdio: ready=%d card=%d cccr=0x%02x ioex=0x%02x\n",
 			   (int)lkpi_sdio_be_ready(), (st == 0) ? 1 : 0, cccr, enable);
 		return 0;
 	}

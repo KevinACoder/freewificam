@@ -17,7 +17,7 @@
  *
  * Anchors (the judge checks each on PASS):
  *   sdio: pump 16 polls quiet
- *   sdio: pump done, cccr=%#04x
+ *   sdio: pump done, cccr=0x%02x
  */
 
 #include "board_suite.h"
@@ -74,7 +74,7 @@ void sdio_pump_chain( void )
 		board_case_fail( "the card stopped answering after the polling window" );
 		return;
 	}
-	LOG_ANCHOR( "sdio: pump done, cccr=%#04x\n", cccr );
+	LOG_ANCHOR( "sdio: pump done, cccr=0x%02x\n", cccr );
 	if( cccr == 0U || cccr == 0xffU ) {
 		board_case_fail( "the card's revision register reads as no answer" );
 		return;

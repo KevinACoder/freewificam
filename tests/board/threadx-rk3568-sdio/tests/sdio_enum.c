@@ -126,7 +126,7 @@ void sdio_enum_chain( void )
 	 * like from the outside. */
 	(void)lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_BUS_IFACE, false, &bus_iface );
 	LOG_INFO( "sdio: identity sdio_rev=%u cccr_rev=%u ocr=%#x width=%u "
-		  "card_bus_iface=%#04x fn0_max_block=%u memory=%u multi_block=%u\n",
+		  "card_bus_iface=0x%02x fn0_max_block=%u memory=%u multi_block=%u\n",
 		  info.sdio_version, info.cccr_version, info.ocr, info.bus_width,
 		  bus_iface, info.fn0_max_block, info.memory_present, info.multi_block );
 
@@ -181,7 +181,7 @@ void sdio_enum_chain( void )
 		board_case_fail( "reading the IO enable register back failed" );
 		return;
 	}
-	LOG_ANCHOR( "sdio: func1 enabled ioex=%#04x\n", cccr );
+	LOG_ANCHOR( "sdio: func1 enabled ioex=0x%02x\n", cccr );
 	if( ( cccr & 0x02U ) == 0U ) {
 		board_case_fail( "the function's enable bit did not stick" );
 		return;
@@ -203,7 +203,7 @@ void sdio_enum_chain( void )
 		waited++;
 	}
 
-	LOG_ANCHOR( "sdio: func1 ready iorx=%#04x polls=%u\n", ready, waited );
+	LOG_ANCHOR( "sdio: func1 ready iorx=0x%02x polls=%u\n", ready, waited );
 	if( ( ready & 0x02U ) == 0U ) {
 		board_case_fail( "the function never reported itself ready" );
 		return;
