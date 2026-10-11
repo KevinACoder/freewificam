@@ -56,6 +56,10 @@ cmd_sdio(int argc, char **argv)
 		sdio_enum_chain();
 		return 0;
 	}
+	if (strcmp(argv[1], "engine") == 0) {
+		sdio_engine_chain();
+		return 0;
+	}
 	if (strcmp(argv[1], "datapath") == 0) {
 		sdio_datapath_chain();
 		return 0;
@@ -64,12 +68,13 @@ cmd_sdio(int argc, char **argv)
 		sdio_pump_chain();
 		return 0;
 	}
-	csh_printf(csh, "usage: sdio [status|enum|datapath|pump]\n");
+	csh_printf(csh, "usage: sdio [status|enum|engine|datapath|pump]\n");
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_sdio, sdio, "sdio [status|enum|datapath|pump]",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_sdio, sdio, "sdio [status|enum|engine|datapath|pump]",
 			  "sdio status - the card's revision and function-enable registers;\n"
 			  "sdio enum - bring the card up and print its identity;\n"
+			  "sdio engine - the same register and byte reads through the SDIO engine;\n"
 			  "sdio datapath - the CIS block read and the two-byte register write;\n"
 			  "sdio pump - poll the card's pending-interrupt word\n")
