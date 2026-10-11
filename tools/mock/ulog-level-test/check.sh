@@ -34,18 +34,18 @@ case_line() {
 # ---- the cases -----------------------------------------------------------------
 
 if "$bin" > "$log_dir/run.log" 2>&1; then
-    if grep -q '^ULOGLEVEL: summary cases=11 failed=0$' "$log_dir/run.log"; then
+    if grep -q '^ULOGLEVEL: summary cases=12 failed=0$' "$log_dir/run.log"; then
         for c in engine-subscriber-cap engine-threshold engine-always \
                  engine-level-name wrapper-promotion wrapper-gate \
                  outlet-line-assembly outlet-cr-lf outlet-repeat-fold \
-                 outlet-emergency anchor-table; do
+                 outlet-judged-not-folded outlet-emergency anchor-table; do
             case_line "$c" PASS
         done
     else
         for c in engine-subscriber-cap engine-threshold engine-always \
                  engine-level-name wrapper-promotion wrapper-gate \
                  outlet-line-assembly outlet-cr-lf outlet-repeat-fold \
-                 outlet-emergency anchor-table; do
+                 outlet-judged-not-folded outlet-emergency anchor-table; do
             case_line "$c" FAIL
         done
         echo "ulog-level-test: summary unexpected" >&2

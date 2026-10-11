@@ -242,6 +242,11 @@ static void console_feed(const char *s)
 static char repeat_prev[CONSOLE_LINE_MAX];
 static unsigned int repeat_n;
 
+#ifdef ULOG_ENABLED
+/* Defined with the level plane below. */
+static bool log_anchor_promote(const char *msg);
+#endif
+
 static void console_repeat_flush(void)
 {
 	char tail[64];
@@ -257,6 +262,18 @@ static void console_repeat_flush(void)
 
 static void console_repeat_gate(const char *msg)
 {
+#ifdef ULOG_ENABLED
+	/* A line a judge reads is evidence, and a judge may count it: the
+	 * dataplane case counts the ping replies. Folding a judged line would
+	 * hand such a judge one copy and a run length it does not read, so a
+	 * never-filtered line is never folded. The fold stays for everything
+	 * else - the retry-loop noise it exists for. */
+	if (log_anchor_promote(msg)) {
+		console_repeat_flush();
+		console_feed(msg);
+		return;
+	}
+#endif
 
 	if (repeat_n != 0u && strcmp(msg, repeat_prev) == 0) {
 		repeat_n++;

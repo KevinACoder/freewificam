@@ -204,6 +204,35 @@ static void case_outlet_repeat_fold(void)
 	}
 }
 
+static void case_outlet_judged_not_folded(void)
+{
+	ulog_test_clock_set(1000000u);
+	ulog_test_wire_reset();
+
+	/* A judged line is evidence, and a judge may count it: the wlan
+	 * dataplane case counts the ping replies. Repeating one must not fold,
+	 * or a counting judge sees one copy and a run length it does not read.
+	 * (At the default level other lines interleave and break the run; at a
+	 * strict threshold they are filtered and the run becomes visible.) */
+	LOG_ANCHOR("ping: recv\n");
+	LOG_ANCHOR("ping: recv\n");
+	LOG_ANCHOR("ping: recv\n");
+
+	{
+		const char *w = ulog_test_wire();
+		const char *p = w;
+		unsigned int n = 0;
+
+		while ((p = strstr(p, "ping: recv")) != NULL) {
+			n++;
+			p++;
+		}
+		case_result("outlet-judged-not-folded", n == 3,
+		    n == 3 ? "a judged line prints once per occurrence" :
+		    "a judged line was folded");
+	}
+}
+
 static void case_outlet_emergency(void)
 {
 	ulog_test_wire_reset();
@@ -255,6 +284,7 @@ int main(void)
 	case_outlet_line_assembly();
 	case_outlet_cr_lf();
 	case_outlet_repeat_fold();
+	case_outlet_judged_not_folded();
 	case_outlet_emergency();
 	case_anchor_table();
 
