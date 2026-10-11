@@ -5,9 +5,11 @@
  * @date    08.10.2026
  * @design  see board_select.h - the matcher is the single implementation of
  *          the glob semantics; the host self-test compiles this file with
- *          -DBOARD_SELECT_HOSTTEST and replays select-vectors.tsv, and the
- *          suite judges replay the same vector file against their Python
- *          twin.
+ *          -DBOARD_SELECT_HOSTTEST and replays select-vectors.tsv (glob
+ *          vectors, and match vectors that also pin the always-selected
+ *          console prerequisite; the two kinds share the file and are told
+ *          apart by their first field), and the suite judges replay the same
+ *          vector file against their Python twin.
  */
 
 #include <stddef.h>
@@ -135,8 +137,27 @@ int board_select_parse( const char *line, struct board_select *out )
 	return ( out->have_only || out->have_skip ) ? 0 : -1;
 }
 
+/* Is this the console prerequisite's name?  Compared without string.h: the
+ * name is a compile-time constant, so a plain walk is enough. */
+static int board_select_is_prereq( const char *name )
+{
+	const char *p = BOARD_SELECT_PREREQ;
+
+	while( *p && *p == *name ) {
+		p++;
+		name++;
+	}
+	return *p == '\0' && *name == '\0';
+}
+
 int board_select_match( const struct board_select *sel, const char *name )
 {
+	/* The console prerequisite is always selected (board_select.h): a
+	 * directive filters the test cases, never the infrastructure the
+	 * interaction steps need. */
+	if( board_select_is_prereq( name ) ) {
+		return 1;
+	}
 	if( sel->have_only && !board_glob_match( sel->only, name ) ) {
 		return 0;
 	}
@@ -152,6 +173,40 @@ int board_select_match( const struct board_select *sel, const char *name )
  * Python twin, so one vector set pins both implementations. */
 #include <stdio.h>
 #include <string.h>
+
+/* Split a match vector line ("<directive>\t<name>\t<expect>") into its fields
+ * in place.  The separator is the TAB, not the blank: the directive may itself
+ * hold a blank (only=... skip=...).  Returns 0 on success. */
+static int board_match_vector( char *line, char **spec, char **name, int *expect )
+{
+	char *tab1 = 0;
+	char *tab2 = 0;
+	char *p = line;
+
+	while( *p && *p != '\n' && *p != '\r' ) {
+		if( *p == '\t' ) {
+			if( tab1 == 0 ) {
+				tab1 = p;
+			} else if( tab2 == 0 ) {
+				tab2 = p;
+			}
+		}
+		p++;
+	}
+	*p = '\0';
+	if( tab1 == 0 || tab2 == 0 || tab2 == tab1 + 1 || tab1 == line ) {
+		return -1;
+	}
+	*tab1 = '\0';
+	*tab2 = '\0';
+	if( tab2[1] != '0' && tab2[1] != '1' ) {
+		return -1;
+	}
+	*spec = line;
+	*name = tab1 + 1;
+	*expect = tab2[1] == '1';
+	return 0;
+}
 
 int main( int argc, char **argv )
 {
@@ -171,6 +226,32 @@ int main( int argc, char **argv )
 		int expect;
 
 		if( line[0] == '#' || line[0] == '\n' ) {
+			continue;
+		}
+		/* A match vector's first field is a directive ("only="/"skip="); a
+		 * case name can never start that way, so one file carries both kinds
+		 * without ambiguity (the separator is the TAB in either). */
+		if( strncmp( line, "only=", 5 ) == 0 || strncmp( line, "skip=", 5 ) == 0 ) {
+			struct board_select sel;
+			char *spec;
+			char *mname;
+
+			if( board_match_vector( line, &spec, &mname, &expect ) != 0 ) {
+				continue;
+			}
+			checked++;
+			if( board_select_parse( spec, &sel ) != 0 ) {
+				failed++;
+				printf( "FAIL: match [%s] directive rejected\n", spec );
+				continue;
+			}
+			int got = board_select_match( &sel, mname );
+
+			if( got != expect ) {
+				failed++;
+				printf( "FAIL: match [%s] %s expect=%d got=%d\n",
+					spec, mname, expect, got );
+			}
 			continue;
 		}
 		if( sscanf( line, "%63s %63s %d", name, pattern, &expect ) != 3 ) {

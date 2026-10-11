@@ -49,6 +49,12 @@ FAULT_PATTERNS = (
 
 _GLOB_RE = re.compile(r"^[a-z0-9\-*?]{1,32}$")
 
+#: The console prerequisite's case name (the image's BOARD_SELECT_PREREQ).  It
+#: is always selected - a directive filters the test cases, never the shell the
+#: interaction steps need.  The image's board_select_match is the twin this
+#: mirrors; select-vectors.tsv pins the two together.
+CONSOLE_PREREQ = "shell-up"
+
 
 def split_lines(text: str) -> list[str]:
     return re.split(r"\r\n|\r|\n", text)
@@ -96,9 +102,13 @@ class Transcript:
     # -- judgment channel ---------------------------------------------------
 
     def start_line(self, name: str) -> dict | None:
+        # The directive is captured to the " list=" that closes it, not to the
+        # first blank: a valid directive may carry both only= and skip= (the
+        # runner sends that form whenever a round wants part of a suite), and
+        # matching one token made a legal run report "start line absent".
         pattern = re.compile(
             r"(?:^|\s)BOARD-SUITE " + re.escape(name)
-            + r" start cases=(\d+) sel=(\S+) list=(\S*)$"
+            + r" start cases=(\d+) sel=(.+?) list=(\S*)$"
         )
         for line in self.lines:
             match = pattern.search(line.strip())
@@ -210,6 +220,11 @@ def select_names(names: list[str], spec: str) -> list[str] | None:
                 return None
     selected = []
     for name in names:
+        # the console prerequisite is always selected, whatever the directive
+        # says (CONSOLE_PREREQ); the image's matcher applies the same rule
+        if name == CONSOLE_PREREQ:
+            selected.append(name)
+            continue
         if only is not None and not glob_match(only, name):
             continue
         if skip is not None and glob_match(skip, name):
@@ -218,11 +233,18 @@ def select_names(names: list[str], spec: str) -> list[str] | None:
     return selected
 
 
+def _is_match_line(line: str) -> bool:
+    """A match vector's first field is a directive; a case name never is."""
+    return line.startswith("only=") or line.startswith("skip=")
+
+
 def load_vectors(path: str) -> list[tuple[str, str, bool]]:
     vectors = []
     with open(path, encoding="utf-8") as handle:
         for line in handle:
             if line.startswith("#") or not line.strip():
+                continue
+            if _is_match_line(line):      # a match vector, not a glob vector
                 continue
             parts = line.split()
             if len(parts) != 3:
@@ -239,6 +261,65 @@ def check_vectors(path: str) -> tuple[int, list[str]]:
         if glob_match(pattern, name) != expect:
             bad.append("%s ~ %s expect=%d" % (name, pattern, expect))
     return len(vectors), bad
+
+
+def load_match_vectors(path: str) -> list[tuple[str, str, bool]]:
+    """Match vectors: "<directive>\\t<name>\\t<expect>", TAB-separated because
+    a directive may itself hold a blank ("only=... skip=...")."""
+    vectors = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not _is_match_line(line):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) != 3:
+                continue
+            spec, name, expect = parts
+            vectors.append((spec, name, expect.strip() == "1"))
+    return vectors
+
+
+def check_match_vectors(path: str) -> tuple[int, list[str]]:
+    """Replay the shared match vectors through select_names.
+
+    The image's board_select_match consumes the same file, so a drift between
+    the image and the judge's recomputation shows up in every suite's
+    --selftest instead of on the board, after a boot was already spent.
+    """
+    bad = []
+    vectors = load_match_vectors(path)
+    for spec, name, expect in vectors:
+        selected = select_names([name], spec)
+        if selected is None:
+            bad.append("match [%s] %s: directive rejected" % (spec, name))
+            continue
+        if bool(selected) != expect:
+            bad.append("match [%s] %s expect=%d" % (spec, name, expect))
+    return len(vectors), bad
+
+
+def check_start_line_parse() -> list[str]:
+    """Pin the start-line parser against a two-token directive.
+
+    A legal directive may carry both only= and skip= (the runner sends that
+    form whenever a round wants part of a suite).  A parser that matched one
+    token reported such a run as "start line absent" and mis-graded its
+    missing interaction steps as hard failures.
+    """
+    bad = []
+    text = (
+        "BOARD-SUITE x-suite select window_ms=5000\r\n"
+        "BOARD-SUITE x-suite start cases=2 sel=only=x-* skip=x-join-raw "
+        "list=shell-up,x-probe\r\n"
+    )
+    start = Transcript(text).start_line("x-suite")
+    if not start:
+        bad.append("two-token sel: start line not parsed")
+    elif start["sel"] != "only=x-* skip=x-join-raw":
+        bad.append("two-token sel: parsed as %r" % start["sel"])
+    elif start["list"] != ["shell-up", "x-probe"]:
+        bad.append("two-token sel: list %r" % start["list"])
+    return bad
 
 
 # -- interaction steps ------------------------------------------------------
@@ -341,12 +422,25 @@ def main(judge_fn, argv: list[str], steps_path: str | None, vectors_path: str | 
     if "--selftest" in argv:
         code, report = run_selftest(base_text, mutations, judge_fn, steps_path)
         print(report)
+        sl_bad = check_start_line_parse()
+        for entry in sl_bad:
+            print("selftest: start-line parse: %s" % entry)
+        print("selftest: start-line two-token directive %s"
+              % ("FAIL" if sl_bad else "ok"))
+        if sl_bad:
+            code = 1
         if vectors_path:
             total, bad = check_vectors(vectors_path)
             for entry in bad:
                 print("selftest: vector mismatch: %s" % entry)
             print("selftest: matcher vectors checked=%d bad=%d" % (total, len(bad)))
             if bad:
+                code = 1
+            mtotal, mbad = check_match_vectors(vectors_path)
+            for entry in mbad:
+                print("selftest: match-vector mismatch: %s" % entry)
+            print("selftest: match vectors checked=%d bad=%d" % (mtotal, len(mbad)))
+            if mbad:
                 code = 1
         print("judge-selftest: %s" % ("PASS" if code == 0 else "FAIL"))
         return code

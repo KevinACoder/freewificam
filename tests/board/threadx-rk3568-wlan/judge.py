@@ -245,7 +245,11 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
     expected = bj.select_names(CASES, start["sel"]) if start else None
     if start and expected is None:
         errors.append("malformed selection directive: %s" % start["sel"])
-    if expected is not None and not expected:
+    # A selection that keeps only the console prerequisite selected nothing the
+    # round asked for: the directive and the suite disagree, so this is a
+    # configuration error, not a test failure.  (The prerequisite is never
+    # filtered out, so a truly empty list cannot happen.)
+    if expected is not None and not [n for n in expected if n != bj.CONSOLE_PREREQ]:
         out.append("selection: %s" % start["sel"])
         out.append("verdict: configuration error (empty selection)")
         return 2, "\n".join(out)

@@ -149,7 +149,7 @@ def judge_text(text: str) -> tuple[int, str]:
         selected = bj.select_names(list(CASES), start["sel"])
         if selected is None:
             config.append("malformed selection directive: %s" % start["sel"])
-        elif not selected:
+        elif not [n for n in selected if n != bj.CONSOLE_PREREQ]:
             config.append("empty selection: %s" % start["sel"])
 
     out.append("cases: %d observed, %d passed, %d failed"
