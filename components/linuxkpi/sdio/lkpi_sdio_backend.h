@@ -65,7 +65,9 @@
 
 /* what the card turned out to be; the engine's function layer and the driver's
  * id table both read this, so it carries identity and geometry only - never a
- * register image */
+ * register image. The two host limits are the controller's own ceilings: the
+ * engine's transfer splitter respects them, and the backend is the only party
+ * that knows them. */
 struct lkpi_sdio_be_card_info {
 	u16	vendor;				/* manufacturer code from the CIS */
 	u16	device;				/* manufacturer information from the CIS */
@@ -76,6 +78,8 @@ struct lkpi_sdio_be_card_info {
 	u8	sdio_version;			/* SDIO specification version */
 	u32	ocr;				/* the card's OCR, as the card reported it */
 	u32	clock_hz;			/* the bus clock the card came up at */
+	u32	host_max_blk_size;		/* the host's largest single block */
+	u32	host_max_blk_count;		/* the host's largest block count in one transfer */
 	u8	bus_width;			/* data lines in use (1, 4 or 8) */
 	bool	memory_present;			/* the card also carries memory */
 	bool	high_speed;			/* the bus was switched to high speed */

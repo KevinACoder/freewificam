@@ -34,6 +34,11 @@ void sdio_enum_chain( void );
  *  ones until its internal power sequence has run. */
 void sdio_card_enable_chain( void );
 
+/** Read the same function register and the same first bytes through the SDIO
+ *  engine's own interface, and check them against the seam path. Runs after the
+ *  power sequence for the same reason the datapath case does. */
+void sdio_engine_chain( void );
+
 /** Read the card's CIS twice, and write the function's block-size register
  *  through the seam's extended path. */
 void sdio_datapath_chain( void );

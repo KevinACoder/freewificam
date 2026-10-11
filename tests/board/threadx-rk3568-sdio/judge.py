@@ -35,6 +35,7 @@ CASES = [
     "shell-up",
     "sdio-enum",
     "sdio-card-enable",
+    "sdio-engine",
     "sdio-datapath",
     "sdio-pump",
 ]
@@ -48,6 +49,8 @@ CASES = [
 #:   sdio-datapath  the case's own lines (tests/.../tests/sdio_datapath.c)
 #:   sdio-card-enable
 #:                  the case's own lines (tests/.../tests/sdio_card_enable.c)
+#:   sdio-engine    the case's own lines (tests/.../tests/sdio_engine.c), whose
+#:                  values come from the engine's own interface
 #:   sdio-pump      the case's own lines (tests/.../tests/sdio_pump.c)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
@@ -69,6 +72,14 @@ ANCHORS = {
         r"sdio: card ext read cr rc=0 bytes=[0-9a-f]{8}",
         r"sdio: card ext read local rc=0 bytes=[0-9a-f]{8}",
         r"sdio: card ext read matches the byte path",
+    ],
+    "sdio-engine": [
+        r"sdio: engine up funcs=\d+ cccr=0x[0-9a-f]{2} bus=\d+ kHz",
+        r"sdio: engine readb addr=0x[0-9a-f]{2} seam=0x[0-9a-f]{2} "
+        r"engine=0x[0-9a-f]{2}",
+        r"sdio: engine ext read seam=[0-9a-f]{8} engine=[0-9a-f]{8}",
+        r"sdio: engine claim held=1",
+        r"sdio: engine matches the seam path",
     ],
     "sdio-datapath": [
         r"sdio: probe ok first=\w",
@@ -99,14 +110,14 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  22.360] BOARD-SUITE threadx-rk3568-sdio "
-    "result=pass cases=5 ok=5 exit=0\r\n"
+    "result=pass cases=6 ok=6 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-sdio bring-up selftest-tag\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-sdio select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-sdio start cases=5 sel=all "
-    "list=shell-up,sdio-enum,sdio-card-enable,sdio-datapath,sdio-pump\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-sdio start cases=6 sel=all "
+    "list=shell-up,sdio-enum,sdio-card-enable,sdio-engine,sdio-datapath,sdio-pump\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-sdio/shell-up PASS\r\n"
     "[  10.500] sdio: card 24c:f179, 1 IO func(s), CCCR v0.2, "
@@ -128,6 +139,12 @@ BASE_TRANSCRIPT = (
     "[  10.640] sdio: card ext read local rc=0 bytes=00010000\r\n"
     "[  10.650] sdio: card ext read matches the byte path\r\n"
     "[  10.660] CASE threadx-rk3568-sdio/sdio-card-enable PASS\r\n"
+    "[  10.670] sdio: engine up funcs=1 cccr=0x02 bus=50000 kHz\r\n"
+    "[  10.680] sdio: engine readb addr=0x00 seam=0x00 engine=0x00\r\n"
+    "[  10.690] sdio: engine ext read seam=00010000 engine=00010000\r\n"
+    "[  10.695] sdio: engine claim held=1\r\n"
+    "[  10.698] sdio: engine matches the seam path\r\n"
+    "[  10.699] CASE threadx-rk3568-sdio/sdio-engine PASS\r\n"
     "[  10.700] sdio: probe byte4-f1-000 rc=0 first=00010000\r\n"
     "[  10.705] sdio: probe byte4-f1-0b0 rc=0 first=00010000\r\n"
     "[  10.710] sdio: probe byte8-f1-000 rc=0 first=00010000\r\n"
@@ -175,7 +192,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-sdio/sdio-datapath PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=5 ok=5 exit=0", "cases=5 ok=4 exit=0"), 1),
+        "cases=6 ok=6 exit=0", "cases=6 ok=5 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-sdio/sdio-pump PASS",
@@ -198,6 +215,10 @@ MUTATIONS = [
         "sdio: card post hci=0x02 ctrl=0x01 pwr=0x02 cr=0x063f\r\n", ""), 1),
     ("card extended read anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: card ext read matches the byte path\r\n", ""), 1),
+    ("engine agreement anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: engine matches the seam path\r\n", ""), 1),
+    ("engine claim anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: engine claim held=1\r\n", ""), 1),
     ("probe anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: probe ok first=byte4-f1-000\r\n", ""), 1),
     ("write probe anchor dropped", BASE_TRANSCRIPT.replace(
@@ -215,7 +236,7 @@ MUTATIONS = [
     ("step response dropped", BASE_TRANSCRIPT.replace(
         "total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,sdio-enum,sdio-card-enable,sdio-datapath,sdio-pump",
+        "list=shell-up,sdio-enum,sdio-card-enable,sdio-engine,sdio-datapath,sdio-pump",
         "list=shell-up,sdio-enum"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]

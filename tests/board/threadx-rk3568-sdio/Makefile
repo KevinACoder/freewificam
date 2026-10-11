@@ -115,6 +115,7 @@ SDIO_PORT_CFLAGS := $(CFLAGS) \
 SDIO_CASE_SRCS := \
 	$(CURDIR)/tests/sdio_enum.c \
 	$(CURDIR)/tests/sdio_card_enable.c \
+	$(CURDIR)/tests/sdio_engine.c \
 	$(CURDIR)/tests/sdio_datapath.c \
 	$(CURDIR)/tests/sdio_pump.c \
 	$(CURDIR)/tests/sdio_cmds.c
@@ -123,6 +124,20 @@ SDIO_CMD_CFLAGS := $(CFLAGS) \
 	-DLKPI_ABS_PLATFORM_PROVIDED \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-I$(LKPI)/sdio -I$(LKPI) -I$(LKPI)/include
+
+# The linuxkpi domain this image needs: the service bodies the SDIO engine rides
+# on (the same two files the wireless images compile, so one body serves every
+# image), and the engine itself. The engine's own interface is the SDIO face
+# (linux/mmc/*), which the case files above also reach.
+LKPI_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
+	-DLKPI_ABS_PLATFORM_PROVIDED \
+	-DCMSIS_device_header='"cmsis_os2.h"' \
+	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio
+
+LKPI_SDIO_SRCS := \
+	$(LKPI)/linuxkpi_core.c \
+	$(LKPI)/linuxkpi_platform_target.c \
+	$(LKPI)/sdio/linuxkpi_sdio.c
 
 # --gc-sections drops everything nothing references. The pins below are the
 # entry points the start-up order calls that the linker cannot see
@@ -182,6 +197,7 @@ TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(CURDIR)/tests/sdio_enum.c \
 	$(CURDIR)/tests/sdio_card_enable.c \
+	$(CURDIR)/tests/sdio_engine.c \
 	$(CURDIR)/tests/sdio_datapath.c \
 	$(CURDIR)/tests/sdio_pump.c \
 	$(CURDIR)/tests/sdio_cmds.c
@@ -218,7 +234,7 @@ PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONEN
 LIBCBIND_SRCS := $(ROOT)/os/threadx/board/rk3568-itx/libc_bindings.c
 
 ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) \
-	$(SDIO_VENDOR_SRCS) $(SDIO_PORT_SRCS) \
+	$(SDIO_VENDOR_SRCS) $(SDIO_PORT_SRCS) $(LKPI_SDIO_SRCS) \
 	$(VENDORED_SRCS) $(ALLOC_SRCS) $(PRINTF_SRCS) $(LIBCBIND_SRCS)
 
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
@@ -248,6 +264,7 @@ $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(eval $(call COMPILE_RULE,$(ROOT)/os/baremetal/minilibc.c,-DCONFIG_LIBC_COMPLETION))
 $(foreach s,$(SDIO_VENDOR_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SDIO_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(LKPI_SDIO_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LKPI_SDIO_CFLAGS))))
 $(foreach s,$(LIBCBIND_SRCS),$(eval $(call COMPILE_RULE,$(s),-I$(ROOT)/os/threadx)))
 
 $(TAG_STAMP): FORCE
@@ -288,7 +305,8 @@ check: guards $(TARGET).elf
 	         SDIO_CfgInitialize SDMMCHOST_Init SDIO_IO_Read_Extended \
 	         SDIO_IO_Write_Extended SDIO_SetBlockSize SDIO_GetPendingInterrupt \
 	         dwc_mmc_init dwc_mmc_transfer dwc_mmc_board_cfg \
-	         lkpi_sdio_fsl_install lkpi_sdio_be_card_init sdmmc_card_start; do \
+	         lkpi_sdio_fsl_install lkpi_sdio_be_card_init sdmmc_card_start \
+	         lkpi_sdio_start lkpi_sdio_func sdio_readb sdio_memcpy_fromio; do \
 		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" \
 			|| { echo "FAIL: $$s not in the image"; exit 1; }; \
 	done; \

@@ -116,6 +116,17 @@ components/linuxkpi/linuxkpi_wiphy_work.h
 components/linuxkpi/skbuff/skbuff_pool.c
 components/linuxkpi/skbuff/PROVENANCE.md
 components/linuxkpi/skbuff/DIVERGENCES.md
+components/linuxkpi/include/linux/device-id/sdio.h
+components/linuxkpi/include/linux/mmc/card.h
+components/linuxkpi/include/linux/mmc/host.h
+components/linuxkpi/include/linux/mmc/pm.h
+components/linuxkpi/include/linux/mmc/sdio.h
+components/linuxkpi/include/linux/mmc/sdio_func.h
+components/linuxkpi/include/linux/mmc/sdio_ids.h
+components/linuxkpi/sdio/lkpi_sdio_backend.h
+components/linuxkpi/sdio/lkpi_sdio_be.c
+components/linuxkpi/sdio/linuxkpi_sdio.c
+components/linuxkpi/sdio/linuxkpi_sdio.h
 components/linuxkpi/usb/linuxkpi_usb.c
 components/linuxkpi/usb/linuxkpi_usb.h
 components/linuxkpi/usb/lkpi_usbh_class.c

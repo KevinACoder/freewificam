@@ -136,6 +136,12 @@ static int lkpi_sdio_fsl_card_init(void *ctx, struct lkpi_sdio_be_card_info *inf
 	info->sdio_version = card->sdioVersion;
 	info->ocr = card->ocr;
 	info->clock_hz = card->busClock_Hz;
+	/* The controller's own ceilings, which the host glue recorded at init: the
+	 * engine's transfer splitter bounds a byte-mode chunk and a block count by
+	 * them, so a request the controller cannot perform in one transfer is split
+	 * before it reaches this seam. */
+	info->host_max_blk_size = card->host->maxBlockSize;
+	info->host_max_blk_count = card->host->maxBlockCount;
 	info->bus_width = (u8)card->host->currBusWidth;
 	info->memory_present = card->memPresentFlag;
 	info->high_speed = (card->currentTiming == kSD_TimingSDR25HighSpeedMode);

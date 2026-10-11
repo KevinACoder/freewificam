@@ -1,0 +1,73 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * @file    linuxkpi_sdio.h
+ * @brief   The SDIO engine's own entry points: bring the card up, reach the
+ *          function objects, drive one interrupt-poll cycle, read the counters.
+ *
+ * @design ports & adapters, the core side: the engine (linuxkpi_sdio.c) is the
+ *         adapter-neutral core of the SDIO layer. It speaks Linux semantics to
+ *         its callers (the interface in linux/mmc/sdio_func.h) and reaches the
+ *         card through the narrow seam (lkpi_sdio_backend.h) only. This header
+ *         publishes what the bring-up and the tests need; a driver needs none of
+ *         it, since a driver only ever sees the interface.
+ *         Shape reference: components/linuxkpi/usb/linuxkpi_usb.h:1-40.
+ * @date    12.10.2026
+ */
+
+#ifndef LKPI_SDIO_H
+#define LKPI_SDIO_H
+
+#include "linuxkpi_core.h"
+
+#include <linux/mmc/sdio_func.h>
+
+/*
+ * What the engine did, as counters a test or a bring-up can read. The split is
+ * the seam's own vocabulary (direct and extended transfers, claim traffic) plus
+ * the pump's (polls, callbacks), so a run can be checked against the operations
+ * the caller asked for rather than against the card's behaviour.
+ */
+struct lkpi_sdio_stats {
+	unsigned int	cards;		/* cards brought up */
+	unsigned int	drivers;	/* drivers registered */
+	unsigned int	probes;		/* probes that claimed a function */
+	unsigned int	claims;		/* claim acquisitions */
+	unsigned int	releases;	/* claim releases */
+	unsigned int	io_direct;	/* single-register transfers */
+	unsigned int	io_extended;	/* buffered transfers */
+	unsigned int	pump_polls;	/* interrupt-poll cycles that queried the card */
+	unsigned int	callbacks;	/* IRQ handler invocations */
+	unsigned int	irq_claims;	/* function IRQs claimed */
+	unsigned int	errors;		/* transfers or polls that failed */
+};
+
+/*
+ * Bring the card up and hand it to the registered drivers: enumerate through the
+ * backend, build the interface objects, then match and probe. Idempotent - a
+ * second call does nothing. A missing backend or a failed bring-up leaves the
+ * engine not ready and says so on the console.
+ */
+void	lkpi_sdio_start(void);
+
+/* non-zero once a card is up and its function objects exist */
+int	lkpi_sdio_ready(void);
+
+/* the function object of the given function number, or NULL when the card does
+ * not carry it (function 0 is the card itself and is always present once up) */
+struct sdio_func	*lkpi_sdio_func(unsigned int num);
+
+/* function 0's object, the card's own register window */
+struct sdio_func	*lkpi_sdio_func0(void);
+
+/* whether the calling thread holds the bus claim right now. The interrupt pump
+ * holds it while it runs a handler, which is the contract a handler relies on
+ * when it touches the card without claiming. */
+bool	lkpi_sdio_claim_held_by_current(void);
+
+/* run one interrupt-poll cycle and return once it finished. The pump thread
+ * does this on its own timer; this entry makes a test's cycle deterministic. */
+void	lkpi_sdio_pump_kick(void);
+
+void	lkpi_sdio_stats_get(struct lkpi_sdio_stats *out);
+
+#endif /* LKPI_SDIO_H */
