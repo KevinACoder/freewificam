@@ -36,7 +36,7 @@ slice.
 ## Running it
 
 ```
-make -C freewebcam mock freertos-kernel-unit      # through the container
+make -C freewificam mock freertos-kernel-unit      # through the container
 sh tools/mock/freertos-kernel-unit/build.sh       # build only
 sh tools/mock/freertos-kernel-unit/run-tests.sh   # judge what was built
 ```

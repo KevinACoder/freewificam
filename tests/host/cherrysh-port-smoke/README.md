@@ -24,7 +24,7 @@ target (arm-none-eabi, cortex-m4) as a syntax-only contract check.
 One session per backend, driven by `input.txt` (`help`, TAB completion of `cl`,
 an unknown command, then `exit`). The run is accepted when:
 
-* the prompt appears (`user@freewebcam:/$ `, plain-text anchors `freewebcam`
+* the prompt appears (`user@freewificam:/$ `, plain-text anchors `freewificam`
   and `$ ` - the segments carry SGR colour codes);
 * `help` lists the registered commands (the decisive name is `shsize`, which
   never appears as typed input);

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Gate: keep this repository free of machine-local knowledge.
 #
-# freewebcam is an upstream-facing open-source project. Sources, docs and
+# freewificam is an upstream-facing open-source project. Sources, docs and
 # commit messages must read correctly to anyone who has never seen the
 # development machine. Not allowed in the tree:
 #   - absolute local paths (home/mnt/tmp), home-relative paths;

@@ -1,4 +1,4 @@
-# freewebcam - top level entry points.
+# freewificam - top level entry points.
 #
 # The repository bootstrap milestone defines the full build skeleton: per-target
 # configuration, the host and board flavours, and the cross toolchain wiring. This file

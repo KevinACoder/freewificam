@@ -13,7 +13,7 @@ stripped. Five cases per backend:
 
 | Case | Assertion | Expected value comes from |
 |---|---|---|
-| `<backend>-prompt` | the prompt line `user@freewebcam:/$ ` appears | the prompt segment construction in `chry_shell.c` |
+| `<backend>-prompt` | the prompt line `user@freewificam:/$ ` appears | the prompt segment construction in `chry_shell.c` |
 | `<backend>-help` | the listing shows `total function 4`, `total variable 2` and `shsize` | the counts are computed by the vendored `help` command from the tables; `shsize` never appears as typed input |
 | `<backend>-completion` | `clear` was submitted (no `cl: command not found`) | TAB completion must resolve `cl` to a real command |
 | `<backend>-notfound` | `nosuchcmd: command not found` appears | the literal in `chry_shell.c` |
