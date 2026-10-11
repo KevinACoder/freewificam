@@ -35,6 +35,7 @@ carry the same terms in their file header).
 | `printf` | MIT | `LICENSE` at the unit root (mpaland/printf) |
 | `ulog` | MIT | `LICENSE` at the unit root (rdpoor/ulog, Copyright (c) 2019 Robert Poor); the level engine behind the console log outlets |
 | `tlsf` | BSD-3-Clause | terms are in the `tlsf.h` copyright header (including the endorsement clause); no separate license file |
+| `fsl_sdmmc` | BSD-3-Clause | NXP copyright blocks (plus the lab's in-tree modifications) on the vendored `common/`, `mmc/`, `sd/`, `sdio/`, `osa/` files; `COPYING-BSD-3` is kept next to the unit and `MANIFEST.sha256` anchors the bytes. Imported byte-faithfully from the RK3568 lab standalone SDK (see `components/fsl_sdmmc/PROVENANCE.md`) |
 
 ## Binaries and data
 
