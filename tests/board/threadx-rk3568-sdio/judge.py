@@ -59,6 +59,7 @@ ANCHORS = {
     ],
     "sdio-datapath": [
         r"sdio: probe ok first=\w",
+        r"sdio: probe write4 rc=0 after=\d+",
         r"sdio: fbr read twice identical \(\d+ bytes\)",
         r"sdio: fbr cmd52 and cmd53 agree first=[0-9a-f]{8}",
         r"sdio: cis block read twice identical \(\d+ bytes\)",
@@ -108,6 +109,7 @@ BASE_TRANSCRIPT = (
     "[  10.580] CASE threadx-rk3568-sdio/sdio-enum PASS\r\n"
     "[  10.700] sdio: probe byte4-f1-000 rc=0 first=00010000\r\n"
     "[  10.800] sdio: probe ok first=byte4-f1-000\r\n"
+    "[  10.900] sdio: probe write4 rc=0 after=256\r\n"
     "[  11.000] sdio: fbr read twice identical (8 bytes)\r\n"
     "[  11.100] sdio: fbr cmd52 and cmd53 agree first=00010000\r\n"
     "[  11.200] sdio: func1 cis@0x1000\r\n"
@@ -162,6 +164,8 @@ MUTATIONS = [
         "sdio: func1 ready iorx=0x02 polls=0\r\n", ""), 1),
     ("probe anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: probe ok first=byte4-f1-000\r\n", ""), 1),
+    ("write probe anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: probe write4 rc=0 after=256\r\n", ""), 1),
     ("register read anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: fbr read twice identical (8 bytes)\r\n", ""), 1),
     ("cross-path agreement dropped", BASE_TRANSCRIPT.replace(

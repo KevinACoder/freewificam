@@ -180,6 +180,53 @@ void sdio_datapath_chain( void )
 		return;
 	}
 
+	/*
+	 * The ladder above only ever asks the card to send. A read that produces
+	 * nothing is consistent with two very different things - a card that will
+	 * not drive, and a controller that never enters a data phase at all - and
+	 * only a write separates them: the card confirms a write by letting it be
+	 * read back. The target is function 0's block-size register for function 1,
+	 * whose four bytes are read first and written back unchanged at the end, so
+	 * nothing about the card's configuration changes either way.
+	 */
+	uint8_t word[4];
+	unsigned int before = 0U;
+
+	for( unsigned int i = 0U; i < sizeof( word ); i++ ) {
+		st = lkpi_sdio_be_io_direct( 0U, SDIO_FBR_BASE_ADDR + SDIO_FBR_BLOCK_SIZE + i,
+					     false, &word[i] );
+		if( st != 0 ) {
+			board_case_fail( "reading the register the write probe targets failed" );
+			return;
+		}
+	}
+	before = (unsigned int)word[0] | ((unsigned int)word[1] << 8);
+
+	uint8_t probe_word[4] = { 0x00U, 0x01U, word[2], word[3] }; /* 256, reserved kept */
+
+	st = lkpi_sdio_be_io_extended( 0U, SDIO_FBR_BASE_ADDR + SDIO_FBR_BLOCK_SIZE,
+				       probe_word, sizeof( probe_word ),
+				       LKPI_SDIO_BE_F_WRITE | LKPI_SDIO_BE_F_INCR );
+	unsigned int after = 0U;
+
+	if( st == 0 ) {
+		(void)sdio_dp_read_block_size( &after );
+	}
+	LOG_INFO( "sdio: probe write4-f0-110 rc=%d before=%u after=%u\n", st, before,
+		  after );
+
+	/* restore whatever was there, whether the write worked or not */
+	for( unsigned int i = 0U; i < sizeof( word ); i++ ) {
+		(void)lkpi_sdio_be_io_direct( 0U, SDIO_FBR_BASE_ADDR + SDIO_FBR_BLOCK_SIZE + i,
+					      true, &word[i] );
+	}
+
+	LOG_ANCHOR( "sdio: probe write4 rc=%d after=%u\n", st, after );
+	if( ( st != 0 ) || ( after != 256U ) ) {
+		board_case_fail( "an extended write did not reach the card - see the probe line" );
+		return;
+	}
+
 	/* --- the chosen shape, twice, and against the byte-at-a-time path ---- */
 
 	(void)memset( sdio_dp_first, 0, sizeof( sdio_dp_first ) );
