@@ -26,8 +26,6 @@
 #include "arch_asm.h"
 #include "uart.h"
 
-#include "dwc_mmc.h"
-
 #ifndef FW_BUILD_TAG
 #define FW_BUILD_TAG "local"
 #endif
@@ -40,17 +38,6 @@ static const osThreadAttr_t runner_thread_attr = {
 	 * driver each hold a frame across the command sequence. */
 	.stack_size = 8192U,
 };
-
-/*
- * The datapath case's bring-up bisection switch, defined here because the flag
- * itself belongs to the controller driver and the cases do not carry that
- * header (sdio_cases.h says why). The wiring is the one place in this image that
- * owns both sides of that boundary.
- */
-void sdio_suite_ref_data_path_set( bool on )
-{
-	dwc_mmc_ref_data_path_set( on );
-}
 
 /* Unrecoverable bring-up failure: report and park (a failure that cannot
  * speak is indistinguishable from a dead board). */

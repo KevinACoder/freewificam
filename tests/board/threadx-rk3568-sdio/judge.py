@@ -71,10 +71,8 @@ ANCHORS = {
         r"sdio: card ext read matches the byte path",
     ],
     "sdio-datapath": [
-        r"sdio: probe ref first=\w",
-        r"sdio: probe ours first=\w",
-        r"sdio: probe write4 ref rc=0 before=\d+ after=\d+",
-        r"sdio: probe write4 ours rc=0 before=\d+ after=\d+",
+        r"sdio: probe ok first=\w",
+        r"sdio: probe write4 rc=0 before=\d+ after=\d+",
         r"sdio: extended read twice identical \(\d+ bytes\)",
         r"sdio: extended and byte path agree first=[0-9a-f]{8}",
         r"sdio: cis read twice identical \(\d+ bytes\)",
@@ -130,23 +128,15 @@ BASE_TRANSCRIPT = (
     "[  10.640] sdio: card ext read local rc=0 bytes=00010000\r\n"
     "[  10.650] sdio: card ext read matches the byte path\r\n"
     "[  10.660] CASE threadx-rk3568-sdio/sdio-card-enable PASS\r\n"
-    "[  10.700] sdio: probe ref byte4-f1-000 rc=0 first=00010000\r\n"
-    "[  10.705] sdio: probe ref byte4-f1-0b0 rc=0 first=00010000\r\n"
-    "[  10.710] sdio: probe ref byte8-f1-000 rc=0 first=00010000\r\n"
-    "[  10.715] sdio: probe ref block512-f1-000 rc=0 first=00010000\r\n"
-    "[  10.718] sdio: probe ref byte4-f0-fbr rc=0 first=07000100\r\n"
-    "[  10.720] sdio: probe ref byte4-f0-cis rc=0 first=00010000\r\n"
-    "[  10.730] sdio: probe ref first=byte4-f1-000\r\n"
-    "[  10.740] sdio: probe ours byte4-f1-000 rc=0 first=00010000\r\n"
-    "[  10.745] sdio: probe ours byte4-f1-0b0 rc=0 first=00010000\r\n"
-    "[  10.750] sdio: probe ours byte8-f1-000 rc=0 first=00010000\r\n"
-    "[  10.755] sdio: probe ours block512-f1-000 rc=0 first=00010000\r\n"
-    "[  10.758] sdio: probe ours byte4-f0-fbr rc=0 first=07000100\r\n"
-    "[  10.760] sdio: probe ours byte4-f0-cis rc=0 first=00010000\r\n"
-    "[  10.770] sdio: probe ours first=byte4-f1-000\r\n"
+    "[  10.700] sdio: probe byte4-f1-000 rc=0 first=00010000\r\n"
+    "[  10.705] sdio: probe byte4-f1-0b0 rc=0 first=00010000\r\n"
+    "[  10.710] sdio: probe byte8-f1-000 rc=0 first=00010000\r\n"
+    "[  10.715] sdio: probe block512-f1-000 rc=0 first=00010000\r\n"
+    "[  10.718] sdio: probe byte4-f0-fbr rc=0 first=07000100\r\n"
+    "[  10.720] sdio: probe byte4-f0-cis rc=0 first=00010000\r\n"
+    "[  10.770] sdio: probe ok first=byte4-f1-000\r\n"
     "[  10.780] sdio: data cmd=53 arg=0x14000004 blksz=4 blkcnt=1 len=4 read\r\n"
-    "[  10.790] sdio: probe write4 ref rc=0 before=512 after=256\r\n"
-    "[  10.800] sdio: probe write4 ours rc=0 before=512 after=256\r\n"
+    "[  10.800] sdio: probe write4 rc=0 before=512 after=256\r\n"
     "[  10.810] sdio: card after ladder ioex=0/0x02 iorx=0/0x02 busif=0/0x02\r\n"
     "[  11.000] sdio: extended read twice identical (4 bytes)\r\n"
     "[  11.100] sdio: extended and byte path agree first=00010000\r\n"
@@ -208,14 +198,10 @@ MUTATIONS = [
         "sdio: card post hci=0x02 ctrl=0x01 pwr=0x02 cr=0x063f\r\n", ""), 1),
     ("card extended read anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: card ext read matches the byte path\r\n", ""), 1),
-    ("reference probe anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: probe ref first=byte4-f1-000\r\n", ""), 1),
-    ("own-path probe anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: probe ours first=byte4-f1-000\r\n", ""), 1),
-    ("reference write probe anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: probe write4 ref rc=0 before=512 after=256\r\n", ""), 1),
-    ("own-path write probe anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: probe write4 ours rc=0 before=512 after=256\r\n", ""), 1),
+    ("probe anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: probe ok first=byte4-f1-000\r\n", ""), 1),
+    ("write probe anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: probe write4 rc=0 before=512 after=256\r\n", ""), 1),
     ("register read anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: extended read twice identical (4 bytes)\r\n", ""), 1),
     ("cross-path agreement dropped", BASE_TRANSCRIPT.replace(

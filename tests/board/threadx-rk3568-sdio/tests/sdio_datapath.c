@@ -15,13 +15,6 @@
  * repaired by the controller reset before the next is tried. Whichever shape
  * answers first is then the one the rest of the case uses.
  *
- * The ladder runs twice, once per data-path flavour: the port's own (the steps
- * this port adds over the board-proven reference) and the reference's exact
- * shape. One boot then says whether a failure belongs to those additions or to
- * something older than them, which is the question a data phase that never
- * starts turns on. Both flavours read the card through the seam; only the
- * switch itself comes from the port (sdmmc_port.h).
- *
  * The two witnesses that follow are what the acceptance criteria ask for:
  *   - a block read of the card's CIS, taken twice, must return the same bytes
  *     (the receive path on this controller has corrupted data before by reading
@@ -34,10 +27,8 @@
  *     gave. The value is read back and the original restored.
  *
  * Anchors (the judge checks each on PASS):
- *   sdio: probe ref first=<shape>
- *   sdio: probe ours first=<shape>
- *   sdio: probe write4 ref rc=<n> after=<n>
- *   sdio: probe write4 ours rc=<n> after=<n>
+ *   sdio: probe ok first=<shape>
+ *   sdio: probe write4 rc=<n> after=<n>
  *   sdio: extended read twice identical (<n> bytes)
  *   sdio: extended and byte path agree first=<bytes>
  *   sdio: cis read twice identical (<n> bytes)
@@ -192,11 +183,8 @@ static void sdio_dp_card_state( const char *when )
 		  when, a, ioex, b, iorx, c, bus );
 }
 
-/* Run the whole ladder once under the named data-path flavour and return the
- * first shape that answered, or NULL. The flavour is printed with every probe,
- * because the whole point of running it twice is that the two runs stay apart
- * in the log. */
-static const struct sdio_dp_shape *sdio_dp_ladder( const char *mode )
+/* Run the whole ladder and return the first shape that answered, or NULL. */
+static const struct sdio_dp_shape *sdio_dp_ladder( void )
 {
 	const struct sdio_dp_shape *working = NULL;
 	int st;
@@ -206,8 +194,8 @@ static const struct sdio_dp_shape *sdio_dp_ladder( const char *mode )
 
 		(void)memset( sdio_dp_first, 0, sizeof( sdio_dp_first ) );
 		st = sdio_dp_read( shape, sdio_dp_first );
-		LOG_INFO( "sdio: probe %s %s rc=%d first=%02x%02x%02x%02x\n",
-			  mode, shape->name, st, sdio_dp_first[0], sdio_dp_first[1],
+		LOG_INFO( "sdio: probe %s rc=%d first=%02x%02x%02x%02x\n",
+			  shape->name, st, sdio_dp_first[0], sdio_dp_first[1],
 			  sdio_dp_first[2], sdio_dp_first[3] );
 		if( ( st == 0 ) && ( working == NULL ) ) {
 			working = shape;
@@ -233,7 +221,7 @@ static const struct sdio_dp_shape *sdio_dp_ladder( const char *mode )
  * register is two bytes wide, and the case holds itself to that one further
  * down.
  */
-static int sdio_dp_write_probe( const char *mode, unsigned int *after )
+static int sdio_dp_write_probe( unsigned int *after )
 {
 	uint8_t word[4];
 	uint8_t back[4];
@@ -249,8 +237,8 @@ static int sdio_dp_write_probe( const char *mode, unsigned int *after )
 					     SDIO_FBR_BASE_ADDR + SDIO_FBR_BLOCK_SIZE + i,
 					     false, &word[i] );
 		if( st != 0 ) {
-			LOG_INFO( "sdio: probe write4 %s: reading the target failed (%d)\n",
-				  mode, st );
+			LOG_INFO( "sdio: probe write4: reading the target failed (%d)\n",
+				  st );
 			return st;
 		}
 	}
@@ -275,10 +263,10 @@ static int sdio_dp_write_probe( const char *mode, unsigned int *after )
 	}
 	(void)sdio_dp_read_block_size( after );
 
-	LOG_ANCHOR( "sdio: probe write4 %s rc=%d before=%u after=%u\n", mode, st,
-		    before, *after );
-	LOG_INFO( "sdio: probe write4 %s wrote %02x%02x%02x%02x read "
-		  "%02x%02x%02x%02x reserved %02x%02x\n", mode, probe_word[0],
+	LOG_ANCHOR( "sdio: probe write4 rc=%d before=%u after=%u\n", st, before,
+		    *after );
+	LOG_INFO( "sdio: probe write4 wrote %02x%02x%02x%02x read "
+		  "%02x%02x%02x%02x reserved %02x%02x\n", probe_word[0],
 		  probe_word[1], probe_word[2], probe_word[3], back[0], back[1],
 		  back[2], back[3], word[2], word[3] );
 
@@ -297,13 +285,11 @@ void sdio_datapath_chain( void )
 	uint8_t two[2];
 	uint8_t pending = 0xffU;
 	uint8_t probe = 0U;
-	const struct sdio_dp_shape *working_ref = NULL;
 	const struct sdio_dp_shape *working = NULL;
 	uint32_t func_cis = 0U;
 	unsigned int nbytes = 0U;
 	unsigned int size = 0U;
 	unsigned int written = 0U;
-	unsigned int after_ref = 0U;
 	unsigned int after = 0U;
 	int st;
 
@@ -314,39 +300,22 @@ void sdio_datapath_chain( void )
 		return;
 	}
 
-	/* --- the probe ladder, once per data-path flavour -------------------- */
+	/* --- the probe ladder ------------------------------------------------ */
 
-	sdio_suite_ref_data_path_set( true );
-	working_ref = sdio_dp_ladder( "ref" );
-	LOG_ANCHOR( "sdio: probe ref first=%s\n",
-		    ( working_ref != NULL ) ? working_ref->name : "none" );
-
-	sdio_suite_ref_data_path_set( false );
-	working = sdio_dp_ladder( "ours" );
-	LOG_ANCHOR( "sdio: probe ours first=%s\n",
+	working = sdio_dp_ladder();
+	LOG_ANCHOR( "sdio: probe ok first=%s\n",
 		    ( working != NULL ) ? working->name : "none" );
 
-	/* --- the write direction, once per flavour --------------------------- */
+	/* --- the write direction --------------------------------------------- */
 
-	/* The reference flavour's write probe is taken for its anchor line only:
-	 * the verdict below is about this port's own data path, which is the one
-	 * the image ships. */
-	sdio_suite_ref_data_path_set( true );
-	(void)sdio_dp_write_probe( "ref", &after_ref );
-	sdio_suite_ref_data_path_set( false );
-	st = sdio_dp_write_probe( "ours", &after );
+	st = sdio_dp_write_probe( &after );
 
 	/* --- what the card looks like after all of that ---------------------- */
 
 	sdio_dp_card_state( "ladder" );
 
 	if( working == NULL ) {
-		if( working_ref != NULL ) {
-			board_case_fail( "the reference data path answered and this "
-					 "port's own did not - see the probe lines" );
-		} else {
-			board_case_fail( "no shape of extended read answered - see the probe lines" );
-		}
+		board_case_fail( "no shape of extended read answered - see the probe lines" );
 		return;
 	}
 	if( st != 0 ) {

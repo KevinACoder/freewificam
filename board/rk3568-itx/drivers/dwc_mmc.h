@@ -104,18 +104,6 @@ void dwc_mmc_set_bus_width(struct dwc_mmc *hc, unsigned int width);
 /* Whether the slot reads as occupied. */
 bool dwc_mmc_card_present(const struct dwc_mmc *hc);
 
-/*
- * Bring-up bisection switch, and only that: it makes the data path follow the
- * board-proven reference implementation exactly, by dropping the two steps this
- * driver adds over it (the IDMAC software reset before arming, and the poll
- * demand after) and by stopping the glue layer from checking the R5 response
- * CRC. It exists to separate "one of our own additions broke the data phase"
- * from "the data phase never starts for a reason that predates them", and goes
- * away once the data path is settled.
- */
-void dwc_mmc_ref_data_path_set(bool on);
-bool dwc_mmc_ref_data_path_get(void);
-
 /* Run one command, with its data stage when the command carries one, and
  * return when it completed (DWC_MMC_OK) or why it did not. */
 int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd);
