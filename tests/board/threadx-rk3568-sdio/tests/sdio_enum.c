@@ -1,7 +1,7 @@
 /**
  * @file    sdio_enum.c
- * @brief   Case sdio-enum: the card is enumerated and its identity is read, and
- *          the function's registers answer through the seam.
+ * @brief   Case sdio-enum: the card is enumerated and its identity is read, its
+ *          descriptors are read, and the function is enabled and configured.
  * @author  zhugengyu
  * @date    12.10.2026
  * @design  case row of the suite's table (tests/board/common/board_suite.h); the
@@ -12,12 +12,20 @@
  * The chain, in order: install the backend over this port's card service, bring
  * the card up (power, the identification clock, CMD0/CMD5/CMD3/CMD7, CCCR and
  * CIS, the bus-width switch, the timing switch), print what the card turned out
- * to be, read the function's CIS pointer and the first bytes of its CIS, set the
- * block size and read the function register back, write a second block size and
- * restore the first, and enable the function through the CCCR.
+ * to be, read the card's common CIS pointer and the first bytes it points at,
+ * enable the function, set the function's block size and read the register back,
+ * write a second block size and restore the first.
+ *
+ * The order carries one decision worth naming: the CIS is read one byte at a
+ * time, which is how a card's CIS is meant to be read, and the function is
+ * enabled BEFORE anything addresses it with an extended transfer. A function
+ * that has not been enabled does not answer one, and the card here answers a
+ * refused transfer by leaving the host's data path armed - the failure then
+ * looks like a broken data path rather than a disabled function.
  *
  * Anchors (the judge checks each on PASS):
  *   sdio: card <vid>:<pid>, <n> IO func(s), CCCR v<a>.<b>, bus <k> kHz (<mode>)
+ *   sdio: func1 enabled ioex=<value>
  *   sdio: func1 block size set=512 read=512
  *   sdio: func1 fbr write 256 read=256 restore 512 read=512
  *   sdio: SDIO READY
@@ -32,11 +40,12 @@
 
 /* The card registers this case reads and writes, by their SDIO addresses. */
 #define SDIO_CCCR_IO_ENABLE	0x02U	/* IOEx, one bit per function */
+#define SDIO_CCCR_COMMON_CIS	0x09U	/* the common CIS pointer, three bytes */
 #define SDIO_FBR_BLOCK_SIZE	0x10U	/* the function's block size, two bytes */
-#define SDIO_FBR_CIS_POINTER	0x09U	/* the function's CIS pointer, three bytes */
 
 #define SDIO_ENUM_BLOCK_SIZE	512U
 #define SDIO_ENUM_OTHER_SIZE	256U
+#define SDIO_ENUM_CIS_BYTES	8U
 
 static int read_block_size( unsigned int func, unsigned int *out )
 {
@@ -62,9 +71,10 @@ void sdio_enum_chain( void )
 {
 	struct lkpi_sdio_be_card_info info;
 	uint8_t pointer[3];
-	uint8_t cis[8];
+	uint8_t cis[SDIO_ENUM_CIS_BYTES];
 	uint8_t cccr = 0U;
 	unsigned int size = 0U;
+	unsigned int other = 0U;
 	uint32_t cis_addr;
 	int st;
 
@@ -95,27 +105,56 @@ void sdio_enum_chain( void )
 		  info.sdio_version, info.cccr_version, info.ocr, info.bus_width,
 		  info.fn0_max_block, info.memory_present, info.multi_block );
 
-	/* The function's CIS pointer, then the first bytes of the CIS it points at:
-	 * the descriptors are read before the function is configured. */
+	/* The card's common CIS pointer, then the first bytes it points at - read
+	 * one byte at a time, which is the access the CIS is defined for. */
 	for( unsigned int i = 0U; i < sizeof( pointer ); i++ ) {
-		st = lkpi_sdio_be_io_direct( 1U, SDIO_FBR_CIS_POINTER + i, false,
+		st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_COMMON_CIS + i, false,
 					     &pointer[i] );
 		if( st != 0 ) {
-			board_case_fail( "reading the function's CIS pointer failed" );
+			board_case_fail( "reading the card's common CIS pointer failed" );
 			return;
 		}
 	}
 	cis_addr = (uint32_t)pointer[0] | ((uint32_t)pointer[1] << 8) |
 		   ((uint32_t)pointer[2] << 16);
+	LOG_INFO( "sdio: common cis@%#x\n", cis_addr );
 
-	st = lkpi_sdio_be_io_extended( 1U, cis_addr, cis, sizeof( cis ),
-				       LKPI_SDIO_BE_F_INCR );
+	for( unsigned int i = 0U; i < sizeof( cis ); i++ ) {
+		st = lkpi_sdio_be_io_direct( 0U, cis_addr + i, false, &cis[i] );
+		if( st != 0 ) {
+			board_case_fail( "reading the card's common CIS failed" );
+			return;
+		}
+	}
+	LOG_INFO( "sdio: cis bytes %02x %02x %02x %02x\n", cis[0], cis[1], cis[2],
+		  cis[3] );
+
+	/*
+	 * Enable function 1. Everything that addresses the function with an
+	 * extended transfer depends on this having happened first, so it comes
+	 * before the block-size work below and before the next case's transfers.
+	 */
+	st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_ENABLE, false, &cccr );
 	if( st != 0 ) {
-		board_case_fail( "reading the function's CIS failed" );
+		board_case_fail( "reading the IO enable register failed" );
 		return;
 	}
-	LOG_INFO( "sdio: func1 cis@%#x bytes %02x %02x %02x\n", cis_addr, cis[0],
-		  cis[1], cis[2] );
+	cccr |= 0x02U; /* function 1 */
+	st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_ENABLE, true, &cccr );
+	if( st != 0 ) {
+		board_case_fail( "writing the IO enable register failed" );
+		return;
+	}
+	st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_ENABLE, false, &cccr );
+	if( st != 0 ) {
+		board_case_fail( "reading the IO enable register back failed" );
+		return;
+	}
+	LOG_ANCHOR( "sdio: func1 enabled ioex=%#04x\n", cccr );
+	if( ( cccr & 0x02U ) == 0U ) {
+		board_case_fail( "the function's enable bit did not stick" );
+		return;
+	}
 
 	/* Set the block size, then read the function register back. */
 	st = lkpi_sdio_be_set_block_size( 1U, SDIO_ENUM_BLOCK_SIZE );
@@ -142,7 +181,6 @@ void sdio_enum_chain( void )
 		board_case_fail( "setting the alternate block size failed" );
 		return;
 	}
-	unsigned int other = 0U;
 	st = read_block_size( 1U, &other );
 	if( st != 0 ) {
 		board_case_fail( "reading the alternate block size failed" );
@@ -164,29 +202,6 @@ void sdio_enum_chain( void )
 		    (unsigned)SDIO_ENUM_BLOCK_SIZE, size );
 	if( ( other != SDIO_ENUM_OTHER_SIZE ) || ( size != SDIO_ENUM_BLOCK_SIZE ) ) {
 		board_case_fail( "the block-size register did not take the written values" );
-		return;
-	}
-
-	/* Enable the function through the card's common control register. */
-	st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_ENABLE, false, &cccr );
-	if( st != 0 ) {
-		board_case_fail( "reading the IO enable register failed" );
-		return;
-	}
-	cccr |= 0x02U; /* function 1 */
-	st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_ENABLE, true, &cccr );
-	if( st != 0 ) {
-		board_case_fail( "writing the IO enable register failed" );
-		return;
-	}
-	st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_ENABLE, false, &cccr );
-	if( st != 0 ) {
-		board_case_fail( "reading the IO enable register back failed" );
-		return;
-	}
-	LOG_INFO( "sdio: func1 io enable cccr=%#04x\n", cccr );
-	if( ( cccr & 0x02U ) == 0U ) {
-		board_case_fail( "the function's enable bit did not stick" );
 		return;
 	}
 

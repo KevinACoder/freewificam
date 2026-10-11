@@ -74,6 +74,8 @@ struct dwc_mmc_cmd {
 struct dwc_mmc {
 	struct dwc_mmc_cfg cfg;
 	uint32_t	src_hz;		/* CRU source the card clock divides */
+	uint32_t	clock_hz;	/* the card clock last asked for */
+	unsigned int	width;		/* data lines last programmed */
 	bool		ready;
 };
 

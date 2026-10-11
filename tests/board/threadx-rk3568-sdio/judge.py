@@ -51,11 +51,14 @@ ANCHORS = {
     "sdio-enum": [
         r"sdio: card [0-9a-f]+:[0-9a-f]+, \d+ IO func\(s\), "
         r"CCCR v\d+\.\d+, bus \d+ kHz \((?:HS|DS)\)",
+        r"sdio: func1 enabled ioex=0x[0-9a-f]{2}",
         r"sdio: func1 block size set=\d+ read=\d+",
         r"sdio: func1 fbr write \d+ read=\d+ restore \d+ read=\d+",
         r"sdio: SDIO READY",
     ],
     "sdio-datapath": [
+        r"sdio: fbr read twice identical \(\d+ bytes\)",
+        r"sdio: fbr cmd52 and cmd53 agree first=[0-9a-f]{8}",
         r"sdio: cis block read twice identical \(\d+ bytes\)",
         r"sdio: fbr 2-byte write read=\d+ restore read=\d+",
         r"sdio: pump quiet pending=0x[0-9a-f]{2}",
@@ -92,17 +95,21 @@ BASE_TRANSCRIPT = (
     "[  10.500] sdio: card 24c:f179, 1 IO func(s), CCCR v0.2, "
     "bus 50000 kHz (HS)\r\n"
     "[  10.510] sdio: identity sdio_rev=3 cccr_rev=2 ocr=0xffffff "
-    "width=4 fn0_max_block=512 memory=0 multi_block=1\r\n"
-    "[  10.520] sdio: func1 cis@0x1000 bytes 20 01 01\r\n"
-    "[  10.530] sdio: func1 block size set=512 read=512\r\n"
-    "[  10.540] sdio: func1 fbr write 256 read=256 restore 512 read=512\r\n"
-    "[  10.550] sdio: func1 io enable cccr=0x02\r\n"
-    "[  10.560] sdio: SDIO READY\r\n"
-    "[  10.570] CASE threadx-rk3568-sdio/sdio-enum PASS\r\n"
-    "[  11.000] sdio: cis block read twice identical (512 bytes)\r\n"
-    "[  11.100] sdio: fbr 2-byte write read=256 restore read=512\r\n"
-    "[  11.200] sdio: pump quiet pending=0x00\r\n"
-    "[  11.300] CASE threadx-rk3568-sdio/sdio-datapath PASS\r\n"
+    "width=4 fn0_max_block=8 memory=0 multi_block=1\r\n"
+    "[  10.520] sdio: common cis@0x1000\r\n"
+    "[  10.530] sdio: cis bytes 20 01 01 02\r\n"
+    "[  10.540] sdio: func1 enabled ioex=0x02\r\n"
+    "[  10.550] sdio: func1 block size set=512 read=512\r\n"
+    "[  10.560] sdio: func1 fbr write 256 read=256 restore 512 read=512\r\n"
+    "[  10.570] sdio: SDIO READY\r\n"
+    "[  10.580] CASE threadx-rk3568-sdio/sdio-enum PASS\r\n"
+    "[  11.000] sdio: fbr read twice identical (8 bytes)\r\n"
+    "[  11.100] sdio: fbr cmd52 and cmd53 agree first=00010000\r\n"
+    "[  11.200] sdio: func1 cis@0x1000\r\n"
+    "[  11.300] sdio: cis block read twice identical (512 bytes)\r\n"
+    "[  11.400] sdio: fbr 2-byte write read=256 restore read=512\r\n"
+    "[  11.500] sdio: pump quiet pending=0x00\r\n"
+    "[  11.600] CASE threadx-rk3568-sdio/sdio-datapath PASS\r\n"
     "[  12.000] sdio: pump 16 polls quiet\r\n"
     "[  12.100] sdio: pump done, cccr=0x32\r\n"
     "[  12.200] CASE threadx-rk3568-sdio/sdio-pump PASS\r\n"
@@ -144,6 +151,12 @@ MUTATIONS = [
         "sdio: SDIO READY\r\n", ""), 1),
     ("block size evidence dropped", BASE_TRANSCRIPT.replace(
         "sdio: func1 block size set=512 read=512\r\n", ""), 1),
+    ("enable anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: func1 enabled ioex=0x02\r\n", ""), 1),
+    ("register read anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: fbr read twice identical (8 bytes)\r\n", ""), 1),
+    ("cross-path agreement dropped", BASE_TRANSCRIPT.replace(
+        "sdio: fbr cmd52 and cmd53 agree first=00010000\r\n", ""), 1),
     ("cis repeat anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: cis block read twice identical (512 bytes)\r\n", ""), 1),
     ("two-byte write anchor dropped", BASE_TRANSCRIPT.replace(

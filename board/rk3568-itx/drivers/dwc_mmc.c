@@ -649,6 +649,14 @@ int dwc_mmc_reset(struct dwc_mmc *hc)
 
 	dwc_mmc_reprogram(hc);
 
+	/* A controller reset clears the clock and the bus width along with
+	 * everything else, so both are put back: a caller that resets to recover
+	 * must not be left talking to the card at 400 kHz over one line. */
+	if (hc->clock_hz != 0U) {
+		(void)dwc_mmc_set_clock(hc, hc->clock_hz);
+	}
+	dwc_mmc_set_bus_width(hc, hc->width);
+
 	return DWC_MMC_OK;
 }
 
@@ -680,6 +688,8 @@ uint32_t dwc_mmc_set_clock(struct dwc_mmc *hc, uint32_t hz)
 	/* let the card see a settled clock before the next command */
 	osDelay(1U);
 
+	hc->clock_hz = hz;
+
 	return (div == 0U) ? hc->src_hz : (hc->src_hz / (2U * div));
 }
 
@@ -701,6 +711,8 @@ void dwc_mmc_set_bus_width(struct dwc_mmc *hc, unsigned int width)
 		ctype = DWC_MMC_CTYPE_4BIT;
 	}
 
+	hc->width = width;
+
 	mmio_wr32(hc->cfg.base + DWC_MMC_CTYPE, ctype);
 }
 
@@ -712,6 +724,8 @@ bool dwc_mmc_card_present(const struct dwc_mmc *hc)
 
 int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 {
+	int ret;
+
 	if ((hc == NULL) || (cmd == NULL)) {
 		return DWC_MMC_ERR_ARG;
 	}
@@ -725,8 +739,24 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	}
 
 	if (cmd->data != NULL) {
-		return dwc_mmc_transfer_data(hc, cmd);
+		ret = dwc_mmc_transfer_data(hc, cmd);
+	} else {
+		ret = dwc_mmc_send_command(hc, cmd);
 	}
 
-	return dwc_mmc_send_command(hc, cmd);
+	/*
+	 * A failed transfer leaves the controller's data and command state machines
+	 * armed. Left alone, the next command times out for a reason that has
+	 * nothing to do with itself, and the failure's real cause is buried under a
+	 * pile of follow-on timeouts - measured on this board: one refused CMD53
+	 * turned every later command into a timeout. The reset puts the controller
+	 * back in a known state so the next transfer's verdict is about itself.
+	 */
+	if (ret != DWC_MMC_OK) {
+		LOG_ERROR("dwc_mmc: CMD%u failed (%d); resetting the controller\n",
+			  cmd->index, ret);
+		(void)dwc_mmc_reset(hc);
+	}
+
+	return ret;
 }
