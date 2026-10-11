@@ -350,7 +350,7 @@ static void eqos_apply_configure(struct dwc_eqos_dev *dev)
 	}
 	eqos_wr(dev, DWC_EQOS_MAC_CONFIGURATION, reg);
 
-	board_log("%s: link %s Mbps %s duplex\n", eqos_dev_name(dev), str,
+	LOG_INFO("%s: link %s Mbps %s duplex\n", eqos_dev_name(dev), str,
 		  ((arg & EQOS_DUPLEX_Msk) == EQOS_DUPLEX_HALF) ? "half" : "full");
 }
 
@@ -406,7 +406,7 @@ static int eqos_hw_reset(struct dwc_eqos_dev *dev)
 	}
 
 	if (!cleared) {
-		board_log("%s: dma soft reset timeout, mode=0x%08x\n",
+		LOG_WARNING("%s: dma soft reset timeout, mode=0x%08x\n",
 			  eqos_dev_name(dev),
 			  (unsigned int)eqos_rd(dev, DWC_EQOS_DMA_MODE));
 		return EQOS_ERROR;
@@ -547,7 +547,7 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	 * simply re-entered: nothing at a lower interrupt priority, the tick
 	 * included, runs again. This driver polls the link over MDIO instead,
 	 * so it wants none of these. */
-	board_log("%s: mac intr status=0x%08x enable=0x%08x\n", eqos_dev_name(dev),
+	LOG_INFO("%s: mac intr status=0x%08x enable=0x%08x\n", eqos_dev_name(dev),
 		  (unsigned int)eqos_rd(dev, DWC_EQOS_MAC_INTERRUPT_STATUS),
 		  (unsigned int)eqos_rd(dev, DWC_EQOS_MAC_INTERRUPT_ENABLE));
 	eqos_wr(dev, DWC_EQOS_MAC_INTERRUPT_STATUS,
@@ -627,7 +627,7 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	reg = eqos_rd(dev, DWC_EQOS_MAC_CONFIGURATION);
 	reg |= DWC_EQOS_MAC_CONF_IPC;
 	eqos_wr(dev, DWC_EQOS_MAC_CONFIGURATION, reg);
-	board_log("%s: rx hw checksum (IPC) on\n", eqos_dev_name(dev));
+	LOG_INFO("%s: rx hw checksum (IPC) on\n", eqos_dev_name(dev));
 #endif
 
 
@@ -1092,7 +1092,7 @@ void dwc_eqos_irq(void *arg)
 			/* Fatal bus error: shut the channel down. No sleeping
 			 * is allowed here, so no full re-initialization. */
 			dev->stats.dma_errors++;
-			board_log("%s: dma fatal bus error, channel stopped\n",
+			LOG_INFO("%s: dma fatal bus error, channel stopped\n",
 				  eqos_dev_name(dev));
 			eqos_hw_stop(dev);
 			return;
@@ -1191,7 +1191,7 @@ int32_t dwc_eqos_power_control(unsigned int index, eqos_power_state_t state)
 		/* Before the clocks are up the register block may read
 		 * anything (the firmware usually leaves the GMAC clocks
 		 * running, which is why this read is logged twice). */
-		board_log("%s: mac version 0x%08x before soc init\n",
+		LOG_INFO("%s: mac version 0x%08x before soc init\n",
 			  eqos_dev_name(dev),
 			  (unsigned int)eqos_rd(dev, DWC_EQOS_MAC_VERSION));
 
@@ -1202,7 +1202,7 @@ int32_t dwc_eqos_power_control(unsigned int index, eqos_power_state_t state)
 			return EQOS_ERROR;
 		}
 
-		board_log("%s: mac version 0x%08x at 0x%08x irq %u\n",
+		LOG_INFO("%s: mac version 0x%08x at 0x%08x irq %u\n",
 			  eqos_dev_name(dev),
 			  (unsigned int)eqos_rd(dev, DWC_EQOS_MAC_VERSION),
 			  (unsigned int)dev->plat->base_addr,
@@ -1362,7 +1362,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 
 	dev->stats.tx_dropped++;
 	if (dev->stats.tx_dropped == 1) {
-		board_log("%s: tx ring full, frame dropped\n", eqos_dev_name(dev));
+		LOG_INFO("%s: tx ring full, frame dropped\n", eqos_dev_name(dev));
 	}
 
 	return EQOS_ERROR_BUSY;

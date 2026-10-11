@@ -31,7 +31,7 @@ static void hi_body( void *argument )
 		osDelay( 10U );
 	}
 	sched_hi_done = 1U;
-	board_log( "task[hi] running loop=%u\n", sched_hi_done );
+	LOG_ANCHOR( "task[hi] running loop=%u\n", sched_hi_done );
 	for( ;; ) {
 		osDelay( 1000U );
 	}
@@ -44,7 +44,7 @@ static void lo_body( void *argument )
 		osDelay( 10U );
 	}
 	sched_lo_done = 1U;
-	board_log( "task[lo] running loop=%u\n", sched_lo_done );
+	LOG_ANCHOR( "task[lo] running loop=%u\n", sched_lo_done );
 	for( ;; ) {
 		osDelay( 1000U );
 	}

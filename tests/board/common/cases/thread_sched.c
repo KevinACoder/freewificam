@@ -38,7 +38,7 @@ static void sched_lo_body( void *argument )
 {
 	(void)argument;
 	sched_lo++;
-	board_log( "thr[lo]: n=%lu\n", ( unsigned long )sched_lo );
+	LOG_ANCHOR( "thr[lo]: n=%lu\n", ( unsigned long )sched_lo );
 	while( sched_lo < SCHED_TARGET ) {
 		sched_lo++;
 		osDelay( 10U );

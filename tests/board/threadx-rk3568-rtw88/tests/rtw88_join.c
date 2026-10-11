@@ -74,7 +74,7 @@ void rtw88_join_chain(void)
 		return;
 	}
 
-	board_log("wlan: join waiting for the supplicant (send 'wpa connect "
+	LOG_ANCHOR("wlan: join waiting for the supplicant (send 'wpa connect "
 	    "<ssid> <psk>' on the console)\n");
 
 	while (waited < WLAN_JOIN_WAIT_MS) {
@@ -102,7 +102,7 @@ void rtw88_join_chain(void)
 			 * programming last stood; txc says whether the
 			 * transmit handoffs actually completed below the
 			 * driver (mgt_tx counts handoffs only) */
-			board_log("wlan: join wait t=%us state=%s mgt_tx=%u "
+			LOG_INFO("wlan: join wait t=%us state=%s mgt_tx=%u "
 			    "txc=%u rx=%u bad_auth=%u bcn=%u bcnT=%u prsp=%u "
 			    "fcs=%u tuned=%u tunes=%u/%u pool(df/sf/uaf/af)="
 			    "%u/%u/%u/%u assoc=%u connected=%u\n",
@@ -143,7 +143,7 @@ void rtw88_join_chain(void)
 		return;
 	}
 
-	board_log("wlan: join-ok bssid=%s state=RUN mgt_tx=%u data_tx=%u rx=%u\n",
+	LOG_ANCHOR("wlan: join-ok bssid=%s state=RUN mgt_tx=%u data_tx=%u rx=%u\n",
 	    wlan_wpa_obs_bssid_txt(), c.mgt_tx, c.data_tx, c.rx_frames);
 }
 

@@ -75,7 +75,7 @@ static void scan_row(const uint8_t bssid[6], const uint8_t *ssid,
 	essid[n] = '\0';
 
 	scan_rec.rows++;
-	board_log("wlan: bss %02x:%02x:%02x:%02x:%02x:%02x ssid=%s freq=%u "
+	LOG_INFO("wlan: bss %02x:%02x:%02x:%02x:%02x:%02x ssid=%s freq=%u "
 	    "rssi=%d\n", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4],
 	    bssid[5], essid, freq, rssi);
 
@@ -90,7 +90,7 @@ static void scan_row(const uint8_t bssid[6], const uint8_t *ssid,
 			scan_rec.gt_index[i] = 1;
 			scan_rec.gt_matches++;
 		}
-		board_log("wlan: gt-match idx=%u bssid=%02x:%02x:%02x:%02x:%02x:%02x "
+		LOG_INFO("wlan: gt-match idx=%u bssid=%02x:%02x:%02x:%02x:%02x:%02x "
 		    "freq=%u seen=1\n", i, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq);
 	}
@@ -142,7 +142,7 @@ void wlan_scan_chain(void)
 		}
 	}
 	wlan_bridge_stats(&c);
-	board_log("wlan: scan start ssid=%s mgt_tx=%u rx=%u\n", WLAN_SCAN_SSID,
+	LOG_ANCHOR("wlan: scan start ssid=%s mgt_tx=%u rx=%u\n", WLAN_SCAN_SSID,
 	    c.mgt_tx, c.rx_frames);
 
 	/* the dwell is the radio pump's job (tests/wlan_radio.c runs it for
@@ -165,7 +165,7 @@ void wlan_scan_chain(void)
 	 * never opened; `chans=0` with `close=state` is one the stack left before
 	 * the case could watch it.
 	 */
-	board_log("wlan: scan done rows=%u chans=%u mgt_tx=%u rx=%u "
+	LOG_ANCHOR("wlan: scan done rows=%u chans=%u mgt_tx=%u rx=%u "
 	    "scan=%u/%u state=%d entered=%u close=%u\n", scan_rec.rows, chans,
 	    c.mgt_tx, c.rx_frames, c.scan_starts, c.scan_completes,
 	    wlan_bridge_state(), c.scan_entered, c.scan_close);
@@ -177,7 +177,7 @@ void wlan_scan_chain(void)
 	 * table with `chanmismatch` climbing names that check outright, one with
 	 * `mgtdiscard` climbing says the frames arrived with no scan window up.
 	 */
-	board_log("wlan: scan rx bcn=%u bcnT=%u prsp=%u fcs=%u chmis=%u "
+	LOG_DEBUG("wlan: scan rx bcn=%u bcnT=%u prsp=%u fcs=%u chmis=%u "
 	    "badchan=%u badbint=%u mgtdisc=%u wrongbss=%u\n", c.rx_beacon,
 	    c.rx_beacon_tgt, c.rx_probersp, c.rx_fcs_bad, c.rx_chanmismatch,
 	    c.rx_badchan, c.rx_badbintval, c.rx_mgtdiscard, c.rx_wrongbss);
@@ -192,7 +192,7 @@ void wlan_scan_chain(void)
 		    "the full sweep)");
 		return;
 	}
-	board_log("wlan: gt-check matched=%u/%u rows=%u\n", scan_rec.gt_matches,
+	LOG_ANCHOR("wlan: gt-check matched=%u/%u rows=%u\n", scan_rec.gt_matches,
 	    (unsigned)GT_ROWS, scan_rec.rows);
 }
 

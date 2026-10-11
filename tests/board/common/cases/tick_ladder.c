@@ -39,7 +39,7 @@ static void tick_ladder( void )
 			osDelay( LADDER_STEP );
 		}
 		now = osKernelGetTickCount();
-		board_log( "tick: t=%lu\n", ( unsigned long )now );
+		LOG_INFO( "tick: t=%lu\n", ( unsigned long )now );
 		if( i == 0U ) {
 			prev = now;
 			continue;

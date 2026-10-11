@@ -27,7 +27,7 @@ static int stack_is_up;
 static void stack_done(void *arg)
 {
 	(void)arg;
-	board_log("net: READY tcpip=up lwip=%s\n", LWIP_VERSION_STRING);
+	LOG_ANCHOR("net: READY tcpip=up lwip=%s\n", LWIP_VERSION_STRING);
 	(void)osSemaphoreRelease(stack_ready);
 }
 
@@ -51,7 +51,7 @@ int lwip_stack_up(void)
 	/* The callback releases the semaphore once; later callers read the
 	 * sticky flag instead of consuming a second count. */
 	if (osSemaphoreAcquire(stack_ready, osKernelGetTickFreq() * 5u) != osOK) {
-		board_log("net: stack bring-up callback never ran (5s)\n");
+		LOG_INFO("net: stack bring-up callback never ran (5s)\n");
 		return -1;
 	}
 	stack_is_up = 1;

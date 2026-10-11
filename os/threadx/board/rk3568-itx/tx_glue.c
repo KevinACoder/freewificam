@@ -108,14 +108,14 @@ void tx_application_define(void *first_unused_memory)
 {
 	vbar_install();
 
-	board_log("tx: kernel entered version=%s\n", TX_GLUE_KERNEL_VERSION);
+	LOG_INFO("tx: kernel entered version=%s\n", TX_GLUE_KERNEL_VERSION);
 
 	/* The port dereferenced __top_of_ram into _tx_initialize_unused_memory;
 	 * this image never consumes the value, so printing the pointer is the
 	 * whole proof that the read landed in mapped RAM. Spelled as explicit
 	 * hex rather than %p so the line reads the same under any formatter the
 	 * image links. */
-	board_log("tx: unused_mem=0x%08x\n", (unsigned)(uintptr_t)first_unused_memory);
+	LOG_ANCHOR("tx: unused_mem=0x%08x\n", (unsigned)(uintptr_t)first_unused_memory);
 
 	tx_thread_stack_error_notify(tx_stack_error_handler);
 
@@ -124,16 +124,16 @@ void tx_application_define(void *first_unused_memory)
 	 * unmasks them; the timer pends meanwhile. */
 	if (OS_Tick_Setup((uint32_t)CONFIG_TX_TICKS_PER_SECOND,
 			  tx_tick_kernel_work) == 0) {
-		board_log("tick: source=%s irq=%d freq=%uHz\n",
+		LOG_INFO("tick: source=%s irq=%d freq=%uHz\n",
 			  board_tick_config.source == OS_TICK_SOURCE_VIRT ?
 				  "virt" : "phys_ns",
 			  OS_Tick_GetIRQn(),
 			  (unsigned)(OS_Tick_GetClock() /
 				     OS_Tick_GetInterval()));
 		board_log_stamp_use_tick();
-		board_log("stamp: switched to tick\n");
+		LOG_ANCHOR("stamp: switched to tick\n");
 	} else {
-		board_log("tick: SETUP FAILED\n");
+		LOG_ANCHOR("tick: SETUP FAILED\n");
 	}
 
 	tx_board_app_define();

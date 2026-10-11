@@ -109,7 +109,7 @@ dataplane_up(void)
 	}
 
 	wlannetif_start(&g_netif);
-	board_log("wlan: dataplane up, dhcp started\n");
+	LOG_ANCHOR("wlan: dataplane up, dhcp started\n");
 
 	while (waited < WLAN_DHCP_WAIT_MS) {
 		if (!ip4_addr_isany_val(g_netif.ip_addr)) {
@@ -128,7 +128,7 @@ dataplane_up(void)
 			struct wlan_bridge_counters c;
 
 			wlan_bridge_stats(&c);
-			board_log("wlan: dhcp wait t=%us data_tx=%u(enc=%u "
+			LOG_INFO("wlan: dhcp wait t=%us data_tx=%u(enc=%u "
 			    "plain=%u noenc=%u) rx=%u(data=%u enc=%u hwdec=%u/%u) "
 			    "crypto(rx_wepfail=%u ccmpfmt=%u replay=%u "
 			    "mic=%u nodefkey=%u) tx_err=%u link=%u\n",
@@ -150,7 +150,7 @@ dataplane_up(void)
 		board_case_fail(reason);
 		return -1;
 	}
-	board_log("wlan: dhcp bound ip=%u.%u.%u.%u/%u gw=%u.%u.%u.%u\n",
+	LOG_ANCHOR("wlan: dhcp bound ip=%u.%u.%u.%u/%u gw=%u.%u.%u.%u\n",
 	    ip4_addr1_16(&g_netif.ip_addr), ip4_addr2_16(&g_netif.ip_addr),
 	    ip4_addr3_16(&g_netif.ip_addr), ip4_addr4_16(&g_netif.ip_addr),
 	    ip4_addr1_16(&g_netif.netmask) == 255 ? 24u : 0u,
@@ -169,14 +169,14 @@ void wlan_dataplane_chain(void)
 
 	/* the gateway reachability: the contrib ping (socket mode, its own
 	 * thread); the judge counts the echo replies from its console lines */
-	board_log("wlan: ping gw window=%u s\n",
+	LOG_INFO("wlan: ping gw window=%u s\n",
 	    (unsigned)(WLAN_PING_WAIT_MS / 1000));
 	ping_init(&g_netif.gw);
 	for (waited = 0; waited < WLAN_PING_WAIT_MS; waited += 100U) {
 		osDelay(100U);
 	}
 	ping_stop();
-	board_log("wlan: ping window done\n");
+	LOG_ANCHOR("wlan: ping window done\n");
 
 	/* the measurement phase's server: the generic-TCP lwiperf server every
 	 * TCP port 5001 client can drive (the round's runner plays the host
@@ -188,7 +188,7 @@ void wlan_dataplane_chain(void)
 		return;
 	}
 	UNLOCK_TCPIP_CORE();
-	board_log("wlan: iperf server ready port=%u\n", LWIPERF_TCP_PORT_DEFAULT);
+	LOG_INFO("wlan: iperf server ready port=%u\n", LWIPERF_TCP_PORT_DEFAULT);
 }
 
 BOARD_TEST("wlan-dataplane", wlan_dataplane_chain);

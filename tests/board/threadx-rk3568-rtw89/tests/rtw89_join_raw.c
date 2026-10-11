@@ -122,14 +122,14 @@ join_raw_fill_table(void)
 		chans++;
 	}
 	if (wlan_bridge_scan_active()) {
-		board_log("wlan: join-raw sweep did not close within %u dwells; "
+		LOG_WARNING("wlan: join-raw sweep did not close within %u dwells; "
 		    "the join is refused (a mid-walk join is aborted by the walk "
 		    "and stalls the chip's receive path)\n", chans);
 		return -2;
 	}
 	join_raw_rows = 0;
 	(void)wlan_bridge_scan_walk(join_raw_row, NULL);
-	board_log("wlan: join-raw %s table rows=%u chans=%u\n",
+	LOG_INFO("wlan: join-raw %s table rows=%u chans=%u\n",
 	    "sweep", join_raw_rows, chans);
 	return join_raw_rows == 0 ? -1 : 0;
 }
@@ -149,7 +149,7 @@ join_raw_attempt(const char *tag)
 
 	rc = wlan_bridge_join((const uint8_t *)JOIN_RAW_SSID, JOIN_RAW_SSID_LEN,
 	    join_raw_target, NULL, 0);
-	board_log("wlan: join-raw %s join rc=%d state=%s\n", tag, rc,
+	LOG_INFO("wlan: join-raw %s join rc=%d state=%s\n", tag, rc,
 	    join_raw_state_txt(wlan_bridge_state()));
 	if (rc != 0)
 		return -1;
@@ -162,7 +162,7 @@ join_raw_attempt(const char *tag)
 
 			wlan_bridge_stats(&c);
 			last = st;
-			board_log("wlan: join-raw %s t=%ums state=%s bad_auth=%u "
+			LOG_INFO("wlan: join-raw %s t=%ums state=%s bad_auth=%u "
 			    "mgt_tx=%u txc=%u rx=%u bcnT=%u tuned=%u tunes=%u\n",
 			    tag, waited, join_raw_state_txt(st),
 			    wlan_bridge_stat_bad_auth(), c.mgt_tx,
@@ -215,11 +215,11 @@ void rtw89_join_raw_chain(void)
 	(void)wlan_bridge_filter_promisc(0);
 	ms = join_raw_attempt("narrow");
 	if (ms >= 0 && (unsigned int)ms <= JOIN_RAW_PROMPT_MS) {
-		board_log("wlan: join-raw-ok filter=narrow ms=%d\n", ms);
+		LOG_ANCHOR("wlan: join-raw-ok filter=narrow ms=%d\n", ms);
 		wlan_bridge_disconnect(3);
 		return;
 	}
-	board_log("wlan: join-raw narrow slow or stalled (ms=%d, ceiling=%u)\n",
+	LOG_WARNING("wlan: join-raw narrow slow or stalled (ms=%d, ceiling=%u)\n",
 	    ms, (unsigned int)JOIN_RAW_PROMPT_MS);
 
 	/*
@@ -241,7 +241,7 @@ void rtw89_join_raw_chain(void)
 	wlan_bridge_disconnect(3);
 
 	if (ms >= 0 && (unsigned int)ms <= JOIN_RAW_PROMPT_MS) {
-		board_log("wlan: join-raw-ok filter=promisc ms=%d\n", ms);
+		LOG_ANCHOR("wlan: join-raw-ok filter=promisc ms=%d\n", ms);
 		return;
 	}
 

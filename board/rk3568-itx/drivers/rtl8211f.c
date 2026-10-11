@@ -177,14 +177,14 @@ static void rtl8211f_clear_tx_delay(unsigned int index, struct rtl8211f_dev *dev
 		if ((val & RTL8211F_TXDELAY_EN) != 0) {
 			(void)phy_reg_write(dev, RTL8211F_REG_TXDELAY,
 					    val & (uint16_t)~RTL8211F_TXDELAY_EN);
-			board_log("%s: cleared strapped RGMII tx delay"
+			LOG_INFO("%s: cleared strapped RGMII tx delay"
 				  " (mdio %u, d08.0x11 0x%04x -> 0x%04x)\n",
 				  rtl8211f_name(index), dev->addr, val,
 				  val & (uint16_t)~RTL8211F_TXDELAY_EN);
 		} else {
 			/* Say so when it is already clear: the value that comes
 			 * back here is how the re-latch behaviour was caught. */
-			board_log("%s: strapped RGMII tx delay already clear"
+			LOG_INFO("%s: strapped RGMII tx delay already clear"
 				  " (mdio %u, d08.0x11 0x%04x)\n",
 				  rtl8211f_name(index), dev->addr, val);
 		}
@@ -319,16 +319,16 @@ int32_t rtl8211f_power_control(unsigned int index, eqos_power_state_t state)
 			return EQOS_OK;
 		}
 		if (rtl8211f_detect(dev) != 0) {
-			board_log("%s: no phy answered on mdio\n", rtl8211f_name(index));
+			LOG_INFO("%s: no phy answered on mdio\n", rtl8211f_name(index));
 			return EQOS_ERROR;
 		}
-		board_log("%s: id 0x%04x:0x%04x at mdio %u\n", rtl8211f_name(index),
+		LOG_INFO("%s: id 0x%04x:0x%04x at mdio %u\n", rtl8211f_name(index),
 			  dev->id1, dev->id2, dev->addr);
 		if (dev->id1 != RTL8211F_PHYSID1 || dev->id2 != RTL8211F_PHYSID2) {
 			/* Keep going - the clause-22 flow below is standard -
 			 * but say so, because every RTL8211F-specific step in
 			 * this file is then a guess. */
-			board_log("%s: not an RTL8211F (expected 0x001c:0xc916)\n",
+			LOG_INFO("%s: not an RTL8211F (expected 0x001c:0xc916)\n",
 				  rtl8211f_name(index));
 		}
 
@@ -341,7 +341,7 @@ int32_t rtl8211f_power_control(unsigned int index, eqos_power_state_t state)
 		 * documented double-delay failure, on the port with the known
 		 * narrower margin. */
 		if (rtl8211f_softreset(dev) != EQOS_OK) {
-			board_log("%s: soft reset timeout\n", rtl8211f_name(index));
+			LOG_WARNING("%s: soft reset timeout\n", rtl8211f_name(index));
 			return EQOS_ERROR;
 		}
 		rtl8211f_clear_tx_delay(index, dev);
@@ -455,7 +455,7 @@ int32_t rtl8211f_set_mode(unsigned int index, uint32_t mode)
 		}
 		if (bmsr & BMSR_LSTATUS) {
 			info = rtl8211f_link_info(dev);
-			board_log("%s: link up, %s Mbps %s duplex\n",
+			LOG_INFO("%s: link up, %s Mbps %s duplex\n",
 				  rtl8211f_name(index),
 				  (info.speed == EQOS_SPEED_1G) ? "1000"
 				  : (info.speed == EQOS_SPEED_100M) ? "100" : "10",
@@ -465,7 +465,7 @@ int32_t rtl8211f_set_mode(unsigned int index, uint32_t mode)
 		osDelay(1);
 	}
 
-	board_log("%s: autonegotiation timeout (no link)\n", rtl8211f_name(index));
+	LOG_WARNING("%s: autonegotiation timeout (no link)\n", rtl8211f_name(index));
 
 	return EQOS_ERROR_TIMEOUT;
 }

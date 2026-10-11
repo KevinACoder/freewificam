@@ -77,7 +77,7 @@ static void wlan_lkpi_sink(const char *line)
 		 * splits a line at its length cap - an unterminated print glues
 		 * onto whatever is written next, and the split then cuts a line
 		 * (a judged anchor included) in half. */
-		board_log("lkpi: %s\n", buf);
+		LOG_INFO("lkpi: %s\n", buf);
 }
 
 static const osThreadAttr_t runner_thread_attr = {
@@ -130,9 +130,9 @@ int main( void )
 	 */
 	lkpi_log_sink_register(wlan_lkpi_sink);
 	lkpi_core_init();
-	board_log( "wlan: core services up\n" );
+	LOG_INFO( "wlan: core services up\n" );
 	lkpi_usb_cherryusb_init();
-	board_log( "wlan: usb backend registered\n" );
+	LOG_INFO( "wlan: usb backend registered\n" );
 	lkpi_usb_init();
 	/*
 	 * The transfer model the driver needs: rtw89 rides completion callbacks
@@ -146,14 +146,14 @@ int main( void )
 	 * sets before driving a callback-based driver.
 	 */
 	lkpi_usb_force_sync_set(false);
-	board_log( "wlan: driver registry walked (async transfer model)\n" );
+	LOG_INFO( "wlan: driver registry walked (async transfer model)\n" );
 	if( lkpi_fw_rtw8851b_fw_register() != 0 ) {
-		board_log( "wlan: firmware registration failed\n" );
+		LOG_ERROR( "wlan: firmware registration failed\n" );
 	} else {
-		board_log( "wlan: firmware blob registered\n" );
+		LOG_INFO( "wlan: firmware blob registered\n" );
 	}
 	wlan_seam_adapter_init();
-	board_log( "wlan: chain wired (backend + registry + firmware + bridge)" );
+	LOG_INFO( "wlan: chain wired (backend + registry + firmware + bridge)" );
 
 	/*
 	 * The supplicant chain (each step the same idempotent shape as above):
@@ -164,12 +164,12 @@ int main( void )
 	 */
 	wlan_wpa_obs_init();
 	if( wlan_wpa_vendor_init() != 0 ) {
-		board_log( "wlan: wpa backend registration failed" );
+		LOG_ERROR( "wlan: wpa backend registration failed" );
 	} else {
-		board_log( "wlan: wpa backend registered" );
+		LOG_INFO( "wlan: wpa backend registered" );
 	}
 	if( wlan_radio_start() != 0 ) {
-		board_log( "wlan: radio pump start failed" );
+		LOG_ERROR( "wlan: radio pump start failed" );
 	}
 
 	if( osThreadNew( board_suite_run, 0, &runner_thread_attr ) == 0 ) {

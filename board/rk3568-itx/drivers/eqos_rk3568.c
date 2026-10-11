@@ -270,7 +270,7 @@ void eqos_board_golden_dump(unsigned int index)
 	 * clkgate_con15/17 must read 0 = unguarded). */
 	clksel_off = soc->clksel_con_off;
 	clkgate_off = soc->clkgate_con_off;
-	board_log("golden: gmac%u clksel[0x%x]=0x%08x clkgate[0x%x]=0x%08x"
+	LOG_INFO("golden: gmac%u clksel[0x%x]=0x%08x clkgate[0x%x]=0x%08x"
 		  " grf[0x%x]=0x%08x grf[0x%x]=0x%08x\n",
 		  index, clksel_off,
 		  (unsigned)mmio_rd32(RK3568_CRU_BASE + clksel_off),

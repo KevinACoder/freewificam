@@ -67,15 +67,15 @@ static int wlan_try_bus(unsigned busid, const char *hcd)
 	unsigned spins = WLAN_PROBE_WAIT_MS / WLAN_PROBE_POLL_MS;
 
 	if (usb_board_init(busid) != 0) {
-		board_log("wlan: bus%u board layer bring-up failed\n", busid);
+		LOG_ERROR("wlan: bus%u board layer bring-up failed\n", busid);
 		return 0;
 	}
-	board_log("wlan: usb bus=%u hcd=%s base=0x%lx started\n", busid, hcd,
+	LOG_ANCHOR("wlan: usb bus=%u hcd=%s base=0x%lx started\n", busid, hcd,
 		  (unsigned long)usb_board_reg_base(busid));
 
 	if (usbh_initialize(busid, usb_board_reg_base(busid),
 	    usb_board_event_handler) != 0) {
-		board_log("wlan: bus%u usbh_initialize failed\n", busid);
+		LOG_ERROR("wlan: bus%u usbh_initialize failed\n", busid);
 		return 0;
 	}
 	usb_board_after_start(busid);
@@ -121,7 +121,7 @@ void rtw88_probe_chain(void)
 	}
 
 	wlan_bridge_stats(&c);
-	board_log("wlan: probe done attached=%d rx=%u mgt_tx=%u scan=%u/%u\n",
+	LOG_INFO("wlan: probe done attached=%d rx=%u mgt_tx=%u scan=%u/%u\n",
 		  c.attached, c.rx_frames, c.mgt_tx, c.scan_starts,
 		  c.scan_completes);
 	/*
@@ -137,7 +137,7 @@ void rtw88_probe_chain(void)
 		struct lkpi_skb_pool_stats st;
 
 		lkpi_skb_pool_stats(&st);
-		board_log("wlan: pool skb=%u/%u data=%u/%u heap_live=%u ovf=%u/%u "
+		LOG_DEBUG("wlan: pool skb=%u/%u data=%u/%u heap_live=%u ovf=%u/%u "
 		    "fail=%u alloc=%u free=%u\n",
 		    st.skb_used, st.skb_high, st.data_used, st.data_high,
 		    st.dyalloc_live, st.slot_overflow, st.data_overflow,

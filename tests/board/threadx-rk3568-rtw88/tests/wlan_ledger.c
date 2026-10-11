@@ -39,7 +39,7 @@ wlan_ledger_usb(const char *tag)
 	 * mac80211's receive entry, and the first frame's control byte says whether
 	 * what arrived is even a frame.
 	 */
-	board_log("wlan: %s usb ep=%u enq=%u kick=%u comp=%u park=%u/%u qlen=%u "
+	LOG_DEBUG("wlan: %s usb ep=%u enq=%u kick=%u comp=%u park=%u/%u qlen=%u "
 	    "inf=%u pkd=%u err=%u | chu sub=%u comp=%u stg=%u ovf=%u sex=%u aex=%u "
 	    "sz=%u | mac80211 rx=%u fc=%s%02x\n",
 	    tag, es.eps, es.enqueued, es.kicks, es.completions, es.parks,
@@ -58,7 +58,7 @@ wlan_ledger_usb(const char *tag)
 		u32 rt_c, rt_d, rt_a, rt_s, rt_dm;
 
 		lkpi_rxtrace_stats(&rt_c, &rt_d, &rt_a, &rt_s, &rt_dm);
-		board_log("wlan: %s rxtrace comp=%u deliv=%u anom=%u short=%u "
+		LOG_DEBUG("wlan: %s rxtrace comp=%u deliv=%u anom=%u short=%u "
 		    "dumps=%u\n", tag, rt_c, rt_d, rt_a, rt_s, rt_dm);
 		if (rt_a != 0) {
 			u32 a_len, a_ptr;
@@ -67,7 +67,7 @@ wlan_ledger_usb(const char *tag)
 
 			if (lkpi_rxtrace_first_anom(&a_len, &a_ptr, &a_st,
 			    a_head) != 0)
-				board_log("wlan: %s anom1 len=%u ptr=%08x fcs=%d "
+				LOG_DEBUG("wlan: %s anom1 len=%u ptr=%08x fcs=%d "
 				    "head=%02x%02x%02x%02x %02x%02x%02x%02x "
 				    "%02x%02x%02x%02x %02x%02x%02x%02x\n",
 				    tag, a_len, a_ptr, a_st,
@@ -91,7 +91,7 @@ wlan_ledger_usb(const char *tag)
 			continue;
 		if (s.enqueued == 0)
 			continue;
-		board_log("wlan: %s ep[%u] addr=0x%02x qlen=%u inf=%u pkd=%u "
+		LOG_DEBUG("wlan: %s ep[%u] addr=0x%02x qlen=%u inf=%u pkd=%u "
 		    "enq=%u kick=%u comp=%u err=%u park=%u/%u last_in=%u:"
 		    "%08x %08x %08x %08x %08x %08x\n",
 		    tag, s.index, s.ep_addr, s.qlen, s.in_flight, s.parked,
@@ -112,13 +112,13 @@ wlan_ledger_usb(const char *tag)
 		unsigned int n = lkpi_usb_ctrl_trace(ev, 12);
 
 		for (i = 0; i < n; i++)
-			board_log("wlan: %s ctrl[%u] %s addr=0x%05x len=%u "
+			LOG_DEBUG("wlan: %s ctrl[%u] %s addr=0x%05x len=%u "
 			    "data=0x%08x\n", tag, i, ev[i].is_in ? "in " : "out",
 			    (ev[i].index << 16) | ev[i].value, ev[i].len,
 			    ev[i].data);
 		/* the device-facing bytes of the last control IN, for the same
 		 * comparison from the other side */
-		board_log("wlan: %s ctrl-stage last_in=%08x/%u\n", tag,
+		LOG_DEBUG("wlan: %s ctrl-stage last_in=%08x/%u\n", tag,
 		    cs.last_in_stage_word, cs.last_in_stage_len);
 	}
 }

@@ -119,7 +119,7 @@ void usbh_console_printf(const char *fmt, ...)
 	n = strlen(line);
 	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
 		line[--n] = '\0';
-	board_log("%s\n", line);
+	LOG_INFO("%s\n", line);
 }
 
 /* The xHCI port prints its own bring-up anchors through the same sink; it
@@ -208,7 +208,7 @@ void usb_hc_low_level_init(struct usbh_bus *bus)
 
 		usb_xhci_dwc3_host_init(bus->hcd.reg_base);
 
-		board_log("usbh: bus%u gsnpsid=%08x\n", (unsigned)bus->busid,
+		LOG_DEBUG("usbh: bus%u gsnpsid=%08x\n", (unsigned)bus->busid,
 			  usb_xhci_core_id(bus->hcd.reg_base));
 		return;
 	}
@@ -273,7 +273,7 @@ static const char *usbh_event_name(uint8_t event)
 void usb_board_event_handler(uint8_t busid, uint8_t hub_index, uint8_t hub_port,
 			     uint8_t intf, uint8_t event)
 {
-	board_log("usbh: bus%u event %s hub=%u port=%u intf=%u\n", busid,
+	LOG_DEBUG("usbh: bus%u event %s hub=%u port=%u intf=%u\n", busid,
 		  usbh_event_name(event), hub_index, hub_port, intf);
 
 	if (event == USBH_EVENT_DEVICE_DISCONNECTED) {
@@ -308,17 +308,17 @@ void usb_board_after_start(unsigned busid)
 		 * and let VBUS ramp before asking the port anything. */
 		uint32_t regval = usb_ehci_port_power_on(usb_ehci_op_base(usb_board_bus_reg_base(busid)), port - 1U);
 
-		board_log("usbh: bus%u port%u portsc=%08x ppc=%u\n", busid, port,
+		LOG_DEBUG("usbh: bus%u port%u portsc=%08x ppc=%u\n", busid, port,
 			  (unsigned)regval, (unsigned)hcd->ppc);
 		if (hcd->ppc && (regval & USB_BOARD_EHCI_PORTSC_CCS) != 0U) {
 			regval = usb_ehci_port_power_cycle(usb_ehci_op_base(usb_board_bus_reg_base(busid)), port - 1U);
-			board_log("usbh: bus%u port%u kicked, now %08x\n", busid, port,
+			LOG_DEBUG("usbh: bus%u port%u kicked, now %08x\n", busid, port,
 				  (unsigned)regval);
 		}
 		bus->hcd.roothub.int_buffer[port / 8U] |= (uint8_t)(1U << (port % 8U));
 	}
 
-	board_log("usbh: bus%u wake hub thread (intbuf=%02x%02x)\n", busid,
+	LOG_DEBUG("usbh: bus%u wake hub thread (intbuf=%02x%02x)\n", busid,
 		  bus->hcd.roothub.int_buffer[1], bus->hcd.roothub.int_buffer[0]);
 	usbh_hub_thread_wakeup(&bus->hcd.roothub);
 }

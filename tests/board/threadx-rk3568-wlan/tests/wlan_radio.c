@@ -78,9 +78,9 @@ wlan_radio_start(void)
 	};
 
 	if (osThreadNew(wlan_radio_task, NULL, &attr) == NULL) {
-		board_log("wlan: radio pump FAIL\n");
+		LOG_ERROR("wlan: radio pump FAIL\n");
 		return -1;
 	}
-	board_log("wlan: radio dwell pump up\n");
+	LOG_INFO("wlan: radio dwell pump up\n");
 	return 0;
 }

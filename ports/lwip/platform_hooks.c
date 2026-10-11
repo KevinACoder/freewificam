@@ -55,7 +55,7 @@ void lwip_platform_diag(const char *fmt, ...)
 	n = strlen(buf);
 	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
 		buf[--n] = '\0';
-	board_log("%s\n", buf);
+	LOG_INFO("%s\n", buf);
 }
 
 void lwip_platform_assert(const char *message, const char *file, int line)

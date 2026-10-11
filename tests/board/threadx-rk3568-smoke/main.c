@@ -65,9 +65,9 @@ static void thr_hi(ULONG id)
 
 	for (;;) {
 		beats++;
-		board_log("tick: t=%lu\n", (unsigned long)tx_time_get());
+		LOG_INFO("tick: t=%lu\n", (unsigned long)tx_time_get());
 		if (beats == 3U) {
-			board_log("threadx: smoke PASS\n");
+			LOG_ANCHOR("threadx: smoke PASS\n");
 		}
 		(void)tx_thread_sleep(1000U);
 	}
@@ -82,7 +82,7 @@ static void thr_lo(ULONG id)
 	(void)id;
 	for (;;) {
 		(void)tx_thread_sleep(2000U);
-		board_log("thr[lo]: n=%u\n", ++n);
+		LOG_ANCHOR("thr[lo]: n=%u\n", ++n);
 	}
 }
 

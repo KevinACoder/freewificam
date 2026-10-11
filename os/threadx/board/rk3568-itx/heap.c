@@ -58,20 +58,20 @@ static int heap_init(void)
 
 		*p = 0xa55a5aa5U;
 		if (*p != 0xa55a5aa5U) {
-			board_log("heap: RAM probe FAIL\n");
+			LOG_ERROR("heap: RAM probe FAIL\n");
 			return -1;
 		}
 	}
 
 	heap_tlsf = tlsf_create_with_pool(base, size);
 	if (heap_tlsf == 0) {
-		board_log("heap: tlsf_create FAIL (%u bytes)\n", (unsigned)size);
+		LOG_ERROR("heap: tlsf_create FAIL (%u bytes)\n", (unsigned)size);
 		return -1;
 	}
 
 	/* Explicit hex rather than %p: the anchor line reads the same under any
 	 * formatter the image links. */
-	board_log("heap: tlsf ready %u bytes at 0x%08x\n", (unsigned)size,
+	LOG_INFO("heap: tlsf ready %u bytes at 0x%08x\n", (unsigned)size,
 		  (unsigned)(uintptr_t)base);
 	return 1;
 }
@@ -93,7 +93,7 @@ void *pvPortMalloc(size_t size)
 	(void)tx_interrupt_control(posture);
 
 	if (p == NULL) {
-		board_log("heap: OOM %u bytes\n", (unsigned)size);
+		LOG_INFO("heap: OOM %u bytes\n", (unsigned)size);
 	}
 	return p;
 }
