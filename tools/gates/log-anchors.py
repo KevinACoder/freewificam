@@ -77,6 +77,21 @@ def _collect_patterns() -> list[tuple[str, str]]:
         boot = getattr(module, "BOOT_ANCHORS", [])
         for pattern in boot:
             out.append((pattern, "%s:boot" % suite))
+        # Every module-level regex the judge matches the transcript with. A
+        # pattern that selects lines is a claim about lines that must not be
+        # filtered, even when it is not in the anchor table: the ping receive
+        # line the dataplane case counts, the tick ladder, the join
+        # negotiation. Missing one is how a strict threshold can silently
+        # starve a case.
+        for name in dir(module):
+            if not name.endswith("_RE"):
+                continue
+            value = getattr(module, name)
+            pattern = getattr(value, "pattern", None)
+            if pattern is None and isinstance(value, str):
+                pattern = value
+            if pattern:
+                out.append((pattern, "%s:%s" % (suite, name)))
     judge = _load_module(os.path.join(COMMON, "board_judge.py"), "_board_judge")
     for pattern in getattr(judge, "FAULT_PATTERNS", ()):
         out.append((pattern, "board_judge:fault"))
