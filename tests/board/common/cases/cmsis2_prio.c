@@ -14,6 +14,8 @@
 
 #include "os/cmsis2/cmsis2.h"
 
+#include "os/baremetal/log.h"
+
 static void probe_body( void *argument )
 {
 	(void)argument;

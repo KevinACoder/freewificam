@@ -123,7 +123,8 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 # The freestanding libc surface is declared everywhere it is used: the vendored
 # shell core calls strnlen without a prototype of its own, and the runner builds
 # its start line with snprintf. Assembly files do not take the C header.
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
+CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h \
+	-DLOG_CMD_USB_KEY=0
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The vendored shell core is byte-identical upstream and cannot be edited; it
@@ -466,8 +467,8 @@ check: guards $(TARGET).elf
 	bt=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_end"{print $$1}'); \
 	bt0=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_start"{print $$1}'); \
 	fsz=$$(( 0x$$fs - 0x$$fs0 )); vsz=$$(( 0x$$vs - 0x$$vs0 )); btz=$$(( 0x$$bt - 0x$$bt0 )); \
-	echo "fsymtab bytes=$$fsz (expect 8*40=320), vsymtab bytes=$$vsz (expect 2*24=48), board_tests bytes=$$btz"; \
-	[ $$fsz -eq 320 ] || { echo "FAIL: FSymTab is not dense"; exit 1; }; \
+	echo "fsymtab bytes=$$fsz (expect 9*40=360), vsymtab bytes=$$vsz (expect 2*24=48), board_tests bytes=$$btz"; \
+	[ $$fsz -eq 360 ] || { echo "FAIL: FSymTab is not dense"; exit 1; }; \
 	[ $$vsz -eq 48 ] || { echo "FAIL: VSymTab is not dense"; exit 1; }; \
 	[ $$(( btz % 16 )) -eq 0 ] || { echo "FAIL: BOARD_TESTS is not a whole number of entries"; exit 1; }; \
 	n=$$(( btz / 16 )); echo "board_tests entries=$$n"; \

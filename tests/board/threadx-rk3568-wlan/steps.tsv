@@ -11,5 +11,5 @@
 # The help count for this image: the built-ins plus the WLAN and WPA commands.
 # send	expect
 	user@rk3568:/\$
-help\r	total function 7[\s\S]*total variable 2
+help\r	total function 8[\s\S]*total variable 2
 wlan status\r	wlan: attached=\d+ state=-?\d+

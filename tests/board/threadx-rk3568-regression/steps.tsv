@@ -10,7 +10,7 @@
 # the built-ins only.
 # send	expect
 	user@rk3568:/\$
-help\r	total function 8[\s\S]*total variable 2
+help\r	total function 9[\s\S]*total variable 2
 cl\t	user@rk3568:/\$ clear
 \r	user@rk3568:/\$
 exit\r	user@rk3568:/\$ exit[\s\S]*user@rk3568:/\$

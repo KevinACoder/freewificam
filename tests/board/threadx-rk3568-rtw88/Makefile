@@ -105,7 +105,8 @@ ifeq ($(WLAN_SINGLE),1)
 BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
 endif
 
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
+CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h \
+	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream

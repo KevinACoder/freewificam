@@ -14,6 +14,8 @@
 
 #include "os/cmsis2/cmsis2.h"
 
+#include "os/baremetal/log.h"
+
 static volatile unsigned timer_fires;
 static volatile unsigned oneshot_fires;
 

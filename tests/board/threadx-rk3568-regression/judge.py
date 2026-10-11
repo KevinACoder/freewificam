@@ -174,7 +174,7 @@ BASE_TRANSCRIPT = (
     + SENTINEL_LINE
     + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
-    "total function 8\r\n"
+    "total function 9\r\n"
     "  exit   -> /sbin - leave the shell\r\n"
     "\r\n"
     "total variable 2\r\n"
