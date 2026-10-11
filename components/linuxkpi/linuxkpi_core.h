@@ -28,6 +28,13 @@
 #include <stdarg.h>
 #include <string.h>
 
+/*
+ * The console level vocabulary is the vendored engine's (components/ulog). The
+ * component borrows only the type and the constants, so the line sink can carry
+ * a severity without the project growing a second set of level names.
+ */
+#include "ulog.h"
+
 /* -std=c11 has no typeof keyword; the GNU spelling always exists. */
 #ifndef typeof
 #define	typeof(x)	__typeof__(x)
@@ -1489,8 +1496,8 @@ struct va_format {
 	va_list		*va;
 };
 
-int lkpi_printf(const char *fmt, ...);
-void lkpi_dev_printk(struct device *dev, const char *fmt, ...);
+int lkpi_printf(ulog_level_t level, const char *fmt, ...);
+void lkpi_dev_printk(struct device *dev, ulog_level_t level, const char *fmt, ...);
 void lkpi_fatal(const char *what);
 
 /*
@@ -1498,14 +1505,19 @@ void lkpi_fatal(const char *what);
  * paths use the Linux "%pV" wrapped-format convention, which the port
  * printf does not understand - without the special case it prints the
  * pointer instead of the message.
+ *
+ * Each helper carries the console level the vendored call site means. The
+ * generic dev_printk() form has no level to carry here: every KERN_ constant is
+ * an empty string in this port (the level prefix is not part of the line), so it
+ * logs at INFO and the named helpers below are what select a level.
  */
 #define	dev_printk(level, dev, fmt, ...)				\
-	lkpi_dev_printk((dev), (fmt), ##__VA_ARGS__)
-#define	dev_err(dev, fmt, ...)		dev_printk(KERN_ERR, dev, fmt, ##__VA_ARGS__)
-#define	dev_warn(dev, fmt, ...)		dev_printk(KERN_WARNING, dev, fmt, ##__VA_ARGS__)
-#define	dev_info(dev, fmt, ...)		dev_printk(KERN_INFO, dev, fmt, ##__VA_ARGS__)
+	lkpi_dev_printk((dev), ULOG_INFO_LEVEL, (fmt), ##__VA_ARGS__)
+#define	dev_err(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_ERROR_LEVEL, (fmt), ##__VA_ARGS__)
+#define	dev_warn(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_WARNING_LEVEL, (fmt), ##__VA_ARGS__)
+#define	dev_info(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_INFO_LEVEL, (fmt), ##__VA_ARGS__)
 #define	dev_notice(dev, fmt, ...)	dev_info(dev, fmt, ##__VA_ARGS__)
-#define	dev_dbg(dev, fmt, ...)		dev_printk(KERN_DEBUG, dev, fmt, ##__VA_ARGS__)
+#define	dev_dbg(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_DEBUG_LEVEL, (fmt), ##__VA_ARGS__)
 #define	dev_warn_once(dev, fmt, ...)	dev_warn(dev, fmt, ##__VA_ARGS__)
 #define	dev_err_once(dev, fmt, ...)	dev_err(dev, fmt, ##__VA_ARGS__)
 #define	dev_dbg_ratelimited(dev, fmt, ...) do { } while (0)
@@ -1517,14 +1529,14 @@ static __always_inline __unused const char *str_enable_disable(bool v) { return 
 static __always_inline __unused const char *str_on_off(bool v) { return v ? "on" : "off"; }
 static __always_inline __unused const char *str_read_write(bool v) { return v ? "read" : "write"; }
 static __always_inline __unused const char *str_yes_no(bool v) { return v ? "yes" : "no"; }
-#define	pr_err(fmt, ...)		lkpi_printf(fmt "\n", ##__VA_ARGS__)
-#define	pr_warn(fmt, ...)		lkpi_printf(fmt "\n", ##__VA_ARGS__)
-#define	pr_info(fmt, ...)		lkpi_printf(fmt "\n", ##__VA_ARGS__)
-#define	pr_notice(fmt, ...)		lkpi_printf(fmt "\n", ##__VA_ARGS__)
+#define	pr_err(fmt, ...)		lkpi_printf(ULOG_ERROR_LEVEL, fmt "\n", ##__VA_ARGS__)
+#define	pr_warn(fmt, ...)		lkpi_printf(ULOG_WARNING_LEVEL, fmt "\n", ##__VA_ARGS__)
+#define	pr_info(fmt, ...)		lkpi_printf(ULOG_INFO_LEVEL, fmt "\n", ##__VA_ARGS__)
+#define	pr_notice(fmt, ...)		lkpi_printf(ULOG_INFO_LEVEL, fmt "\n", ##__VA_ARGS__)
 #define	pr_warn_once(fmt, ...)		pr_warn(fmt, ##__VA_ARGS__)
 #define	pr_err_once(fmt, ...)		pr_err(fmt, ##__VA_ARGS__)
 #define	pr_debug(fmt, ...)		do { } while (0)
-#define	pr_cont(fmt, ...)		lkpi_printf(fmt, ##__VA_ARGS__)
+#define	pr_cont(fmt, ...)		lkpi_printf(ULOG_INFO_LEVEL, fmt, ##__VA_ARGS__)
 
 static __always_inline __unused const char *
 dev_name(const struct device *dev)
@@ -1573,7 +1585,7 @@ struct usb_driver;
 #define	WARN_ON(cond)		({					\
 	bool __w = (cond);						\
 	if (__w)							\
-		lkpi_printf("%s:%d: WARN_ON(%s)\n", __FILE__, __LINE__, #cond); \
+		lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN_ON(%s)\n", __FILE__, __LINE__, #cond); \
 	__w;								\
 })
 #define	WARN_ON_ONCE(cond)	WARN_ON(cond)

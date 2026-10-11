@@ -104,26 +104,26 @@ lkpi_modeswitch_eject(struct usbh_hubport *hport,
 
 		n = lkpi_modeswitch_bulk(hport, epout,
 		    sizeof(lkpi_modeswitch_eject_cbw));
-		lkpi_printf("usbh: modeswitch eject attempt %u: %d byte(s) "
+		lkpi_printf(ULOG_INFO_LEVEL, "usbh: modeswitch eject attempt %u: %d byte(s) "
 		    "sent\n", attempt, n);
 		if (n < 0) {
 			/* The device left the bus on the eject: that is the
 			 * flip itself, not a failure. */
-			lkpi_printf("usbh: modeswitch accepted (device left "
+			lkpi_printf(ULOG_INFO_LEVEL, "usbh: modeswitch accepted (device left "
 			    "the bus)\n");
 			return 0;
 		}
 
 		n = lkpi_modeswitch_bulk(hport, epin, LKPI_MODESWITCH_CSW_LEN);
 		if (n >= LKPI_MODESWITCH_CSW_LEN) {
-			lkpi_printf("usbh: modeswitch CSW: %d byte(s), "
+			lkpi_printf(ULOG_INFO_LEVEL, "usbh: modeswitch CSW: %d byte(s), "
 			    "signature %02x%02x%02x%02x status %02x\n", n,
 			    lkpi_modeswitch_buf[0], lkpi_modeswitch_buf[1],
 			    lkpi_modeswitch_buf[2], lkpi_modeswitch_buf[3],
 			    lkpi_modeswitch_buf[12]);
 			return 0;
 		}
-		lkpi_printf("usbh: modeswitch CSW read %d byte(s), "
+		lkpi_printf(ULOG_INFO_LEVEL, "usbh: modeswitch CSW read %d byte(s), "
 		    "retrying\n", n);
 	}
 	return -1;
@@ -163,15 +163,15 @@ lkpi_modeswitch_connect(struct usbh_hubport *hport, uint8_t intf)
 		}
 	}
 	if (epin == NULL || epout == NULL) {
-		lkpi_printf("usbh: modeswitch %04x:%04x: no bulk endpoint "
+		lkpi_printf(ULOG_INFO_LEVEL, "usbh: modeswitch %04x:%04x: no bulk endpoint "
 		    "pair\n", LKPI_MODESWITCH_VID, LKPI_MODESWITCH_PID);
 		return -USB_ERR_INVAL;
 	}
 
-	lkpi_printf("usbh: modeswitch %04x:%04x CD-ROM persona, ejecting\n",
+	lkpi_printf(ULOG_INFO_LEVEL, "usbh: modeswitch %04x:%04x CD-ROM persona, ejecting\n",
 	    LKPI_MODESWITCH_VID, LKPI_MODESWITCH_PID);
 	ret = lkpi_modeswitch_eject(hport, epout, epin);
-	lkpi_printf("usbh: modeswitch %s, expecting %04x:%04x\n",
+	lkpi_printf(ULOG_INFO_LEVEL, "usbh: modeswitch %s, expecting %04x:%04x\n",
 	    ret == 0 ? "sent" : "failed", LKPI_MODESWITCH_VID,
 	    LKPI_MODESWITCH_TARGET_PID);
 

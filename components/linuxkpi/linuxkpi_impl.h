@@ -29,6 +29,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* the console level vocabulary the line sink contract carries (see linuxkpi_core.h) */
+#include "ulog.h"
+
 #include "os/cmsis2/cmsis2.h"
 
 /*
@@ -73,9 +76,11 @@ void lkpi_core_init(void);
 
 /*
  * Install the line sink. The component formats a complete line (with its trailing
- * newline) and hands it over; the sink owns stamping and the wire discipline. Passing
- * NULL removes the sink and silences the component.
+ * newline) and hands it over with the console level the call site meant; the sink owns
+ * stamping, the wire discipline and the threshold. Passing NULL removes the sink and
+ * silences the component. The level is the vendored engine's (components/ulog), so a
+ * sink that owns the engine filters on it directly.
  */
-void lkpi_log_sink_register(void (*sink)(const char *line));
+void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 
 #endif /* _LINUXKPI_IMPL_H_ */

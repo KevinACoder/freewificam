@@ -26,7 +26,7 @@
 #include "skbuff/skbuff_pool.h"
 
 /* the suite's sink, installed at start-up */
-static void lkpi_platform_sink(const char *line);
+static void lkpi_platform_sink(ulog_level_t level, const char *line);
 
 /* ------------------------------------------------------------------ */
 /* pool platform hooks                                                 */
@@ -93,8 +93,9 @@ lkpi_body_test_platform_init(void)
 }
 
 static void
-lkpi_platform_sink(const char *line)
+lkpi_platform_sink(ulog_level_t level, const char *line)
 {
+	(void)level;
 
 	if (line == NULL)
 		return;

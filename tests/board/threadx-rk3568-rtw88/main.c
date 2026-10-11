@@ -58,7 +58,7 @@ int wlan_radio_start(void);
  * rest of the image. Without a sink the linuxkpi world is silent and the
  * driver's probe trace - the evidence the probe case judges - is lost.
  */
-static void wlan_lkpi_sink(const char *line)
+static void wlan_lkpi_sink(ulog_level_t level, const char *line)
 {
 	static char buf[200];
 	size_t n = 0;
@@ -77,7 +77,7 @@ static void wlan_lkpi_sink(const char *line)
 		 * splits a line at its length cap - an unterminated print glues
 		 * onto whatever is written next, and the split then cuts a line
 		 * (a judged anchor included) in half. */
-		LOG_INFO("lkpi: %s\n", buf);
+		log_emit(level, "lkpi: %s\n", buf);
 }
 
 static const osThreadAttr_t runner_thread_attr = {

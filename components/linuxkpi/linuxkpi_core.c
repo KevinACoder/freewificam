@@ -33,9 +33,9 @@
 /* logging                                                             */
 /* ------------------------------------------------------------------ */
 
-static void (*lkpi_sink)(const char *line);
+static void (*lkpi_sink)(ulog_level_t level, const char *line);
 
-void lkpi_log_sink_register(void (*sink)(const char *line))
+void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line))
 {
 	lkpi_sink = sink;
 }
@@ -43,9 +43,10 @@ void lkpi_log_sink_register(void (*sink)(const char *line))
 /*
  * Assemble one line and hand it to the sink. The buffer is bounded on purpose: a log
  * line is a diagnostic, and a driver that formats more than this loses the tail of a
- * line rather than the line.
+ * line rather than the line. The level travels with the line so the sink can filter
+ * (the sink owns the threshold; this component only states what the call site meant).
  */
-static int lkpi_vlog(const char *fmt, va_list ap)
+static int lkpi_vlog(ulog_level_t level, const char *fmt, va_list ap)
 {
 	char line[256];
 	int n;
@@ -54,22 +55,22 @@ static int lkpi_vlog(const char *fmt, va_list ap)
 		return 0;
 
 	n = vsnprintf(line, sizeof(line), fmt, ap);
-	lkpi_sink(line);
+	lkpi_sink(level, line);
 	return n;
 }
 
-int lkpi_printf(const char *fmt, ...)
+int lkpi_printf(ulog_level_t level, const char *fmt, ...)
 {
 	va_list ap;
 	int n;
 
 	va_start(ap, fmt);
-	n = lkpi_vlog(fmt, ap);
+	n = lkpi_vlog(level, fmt, ap);
 	va_end(ap);
 	return n;
 }
 
-void lkpi_dev_printk(struct device *dev, const char *fmt, ...)
+void lkpi_dev_printk(struct device *dev, ulog_level_t level, const char *fmt, ...)
 {
 	char line[256];
 	va_list ap;
@@ -86,7 +87,7 @@ void lkpi_dev_printk(struct device *dev, const char *fmt, ...)
 	(void)vsnprintf(line + n, sizeof(line) - (size_t)n, fmt, ap);
 	va_end(ap);
 
-	lkpi_sink(line);
+	lkpi_sink(level, line);
 }
 
 /*
@@ -97,7 +98,7 @@ void lkpi_dev_printk(struct device *dev, const char *fmt, ...)
  */
 void lkpi_fatal(const char *what)
 {
-	lkpi_printf("lkpi: fatal: %s\n", what != NULL ? what : "(unspecified)");
+	lkpi_printf(ULOG_INFO_LEVEL, ULOG_CRITICAL_LEVEL, "lkpi: fatal: %s\n", what != NULL ? what : "(unspecified)");
 	abort();
 }
 
@@ -151,7 +152,7 @@ void lkpi_kmem_free(const void *ptr)
 
 	hdr = ((struct lkpi_mem_hdr *)ptr) - 1;
 	if (hdr->magic != LKPI_MEM_MAGIC) {
-		lkpi_printf("lkpi: free of a pointer this allocator never handed out\n");
+		lkpi_printf(ULOG_INFO_LEVEL, "lkpi: free of a pointer this allocator never handed out\n");
 		return;
 	}
 	hdr->magic = 0;

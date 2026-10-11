@@ -53,6 +53,7 @@ KPI_CFLAGS := -std=gnu11 -Wall -Wextra -DCMSIS2_BACKEND_THREADX \
     -I$(ROOT) -I$(ROOT)/os/freertos -I$(ROOT)/os/cmsis2 \
     -I$(ROOT)/os/cmsis2/host-compat \
     -I$(ROOT)/components/linuxkpi \
+    -I$(ROOT)/components/ulog/src \
     -I$(ROOT)/components/linuxkpi/include \
     -I$(ROOT)/components/linuxkpi/usb \
     -I$(NET) -I$(PORT) -I$(PORT)/bridge -I$(MAKEFILE_DIR) \
@@ -75,6 +76,7 @@ DRV_CFLAGS := -std=c11 -O2 -Wall \
     -I$(ROOT) -I$(ROOT)/os/freertos -I$(ROOT)/os/cmsis2 \
     -I$(ROOT)/os/cmsis2/host-compat \
     -I$(ROOT)/components/linuxkpi \
+    -I$(ROOT)/components/ulog/src \
     -I$(ROOT)/components/linuxkpi/include \
     -I$(CMM)/CMSIS/RTOS2/Include \
     -Wno-unused-parameter

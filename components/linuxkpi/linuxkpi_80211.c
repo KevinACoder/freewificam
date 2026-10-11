@@ -176,7 +176,7 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	unsigned int i;
 
 	if (ops == NULL) {
-		lkpi_printf("lkpi80211: alloc_hw without an ops table\n");
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: alloc_hw without an ops table\n");
 		return NULL;
 	}
 	/*
@@ -186,7 +186,7 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	 */
 	ctx = kzalloc(sizeof(*ctx) + priv_data_len, GFP_KERNEL);
 	if (ctx == NULL) {
-		lkpi_printf("lkpi80211: no memory for an hw context\n");
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: no memory for an hw context\n");
 		return NULL;
 	}
 	ctx->ops = ops;
@@ -198,7 +198,7 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	ctx->hw.queues = 4;
 	for (i = 0; i < IEEE80211_NUM_ACS; i++)
 		ctx->hw.conf.chandef.chan = &ctx->chan;
-	lkpi_printf("lkpi80211: hw allocated priv=%u ctx=%u\n",
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: hw allocated priv=%u ctx=%u\n",
 	    (unsigned)priv_data_len, (unsigned)sizeof(*ctx));
 	return &ctx->hw;
 }
@@ -213,7 +213,7 @@ ieee80211_free_hw(struct ieee80211_hw *hw)
 		return;
 	ctx = LKPI80211_CTX(hw);
 	if (ctx->registered) {
-		lkpi_printf("lkpi80211: free_hw while registered; unregistering\n");
+		lkpi_printf(ULOG_WARNING_LEVEL, "lkpi80211: free_hw while registered; unregistering\n");
 		ieee80211_unregister_hw(hw);
 	}
 	/* stations before interfaces: a station's queues belong to its vif too */
@@ -251,12 +251,12 @@ ieee80211_register_hw(struct ieee80211_hw *hw)
 		 * be powered but nothing would see a frame. Fail honestly - a
 		 * silent success would leave the driver believing it is live.
 		 */
-		lkpi_printf("lkpi80211: register_hw without a bridge (-ENODEV)\n");
+		lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: register_hw without a bridge (-ENODEV)\n");
 		return -ENODEV;
 	}
 	ret = bridge_ops->attach(hw);
 	if (ret != 0) {
-		lkpi_printf("lkpi80211: bridge attach failed (%d)\n", ret);
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: bridge attach failed (%d)\n", ret);
 		return ret;
 	}
 	/*
@@ -268,7 +268,7 @@ ieee80211_register_hw(struct ieee80211_hw *hw)
 	 */
 	set_wiphy_dev(&ctx->wiphy, ctx->bus_dev);
 	ctx->registered = 1;
-	lkpi_printf("lkpi80211: hw registered\n");
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: hw registered\n");
 	return 0;
 }
 
@@ -301,7 +301,7 @@ ieee80211_unregister_hw(struct ieee80211_hw *hw)
 	ctx->registered = 0;
 	ctx->scanning = 0;
 	ctx->queue_stopped = 0;
-	lkpi_printf("lkpi80211: hw unregistered\n");
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: hw unregistered\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -348,7 +348,7 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 		lkpi_skb_free(skb);
 		return;
 	}
-	lkpi_printf("lkpi80211: rx with no bridge; frame dropped\n");
+	lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: rx with no bridge; frame dropped\n");
 	lkpi_skb_free(skb);
 }
 
@@ -585,7 +585,7 @@ ieee80211_beacon_get(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	(void)hw;
 	(void)vif;
 	(void)link_id;
-	lkpi_printf("lkpi80211: beacon_get (AP mode is not supported here)\n");
+	lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: beacon_get (AP mode is not supported here)\n");
 	return NULL;
 }
 
@@ -643,7 +643,7 @@ ieee80211_emulate_change_chanctx(struct ieee80211_hw *hw,
 		return;
 	h = LKPI80211_CTX(hw);
 	if (!h->have_chanctx) {
-		lkpi_printf("lkpi80211: change_chanctx with none assigned\n");
+		lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: change_chanctx with none assigned\n");
 		return;
 	}
 	h->chanctx = *ctx;
@@ -831,7 +831,7 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 		if (ctx->vifs[i] == NULL)
 			break;
 	if (i == CONFIG_LKPI80211_MAX_VIFS) {
-		lkpi_printf("lkpi80211: vif table full\n");
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: vif table full\n");
 		return NULL;
 	}
 	/* the vif area is the driver's size (hw->vif_data_size, set before
@@ -880,7 +880,7 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	if (ctx->ops->add_interface != NULL) {
 		ret = ctx->ops->add_interface(hw, vif);
 		if (ret != 0) {
-			lkpi_printf("lkpi80211: add_interface refused (%d)\n", ret);
+			lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: add_interface refused (%d)\n", ret);
 			ctx->vifs[i] = NULL;
 			lkpi_txq_free(vif->txq);
 			vif->txq = NULL;
@@ -888,7 +888,7 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 			return NULL;
 		}
 	}
-	lkpi_printf("lkpi80211: vif added idx=%u type=%u priv=%u\n", i, type,
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: vif added idx=%u type=%u priv=%u\n", i, type,
 	    (unsigned)hw->vif_data_size);
 	return vif;
 }
@@ -915,7 +915,7 @@ lkpi80211_drv_vif_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 			kfree(vif);
 			return;
 		}
-	lkpi_printf("lkpi80211: vif_remove of a foreign vif refused\n");
+	lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: vif_remove of a foreign vif refused\n");
 }
 
 /*
@@ -992,7 +992,7 @@ lkpi80211_tx_headroom_check(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (skb_headroom(skb) >= hw->extra_tx_headroom)
 		return;
 	latched = 1;
-	lkpi_printf("lkpi80211: tx frame has %u bytes of headroom, the driver "
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: tx frame has %u bytes of headroom, the driver "
 	    "declared %u (its transmit descriptor push will be refused)\n",
 	    skb_headroom(skb), hw->extra_tx_headroom);
 }
@@ -1063,7 +1063,7 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		if (ctx->stas[slot] == NULL)
 			break;
 	if (slot == CONFIG_LKPI80211_MAX_STAS) {
-		lkpi_printf("lkpi80211: sta table full\n");
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: sta table full\n");
 		return NULL;
 	}
 	sta = kzalloc(offsetof(struct ieee80211_sta, drv_priv) +
@@ -1128,7 +1128,7 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_AUTH,
 		    IEEE80211_STA_ASSOC);
 	if (ret != 0) {
-		lkpi_printf("lkpi80211: sta add refused (%d)\n", ret);
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: sta add refused (%d)\n", ret);
 		ctx->stas[slot] = NULL;
 		lkpi_txq_free_sta(sta);
 		kfree(sta);

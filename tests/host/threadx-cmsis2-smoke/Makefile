@@ -20,6 +20,7 @@ TARGET    := $(BUILD_DIR)/threadx-cmsis2-smoke
 # Core include directory itself is deliberately absent so no ARM-only header is reached.
 INCLUDES := \
     -I$(ROOT) \
+    -I$(ROOT)/components/ulog/src \
     -I$(ROOT)/os/threadx \
     -I$(ROOT)/os/cmsis2 \
     -I$(ROOT)/os/cmsis2/host-compat \

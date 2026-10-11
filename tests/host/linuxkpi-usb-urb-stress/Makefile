@@ -48,6 +48,7 @@ CFLAGS := -ggdb3 -O1 -Wall -Wextra -ffunction-sections -fdata-sections \
           -DCMSIS_device_header='"cmsis_host_device.h"' \
           -DFREERTOS_HOOKS_TAG='"lkpi-usb-stress-mock"' \
           -I$(ROOT) \
+          -I$(ROOT)/components/ulog/src \
           -I$(ROOT)/os/freertos \
           -I$(ROOT)/os/cmsis2 \
           -I$(ROOT)/os/cmsis2/host-compat \

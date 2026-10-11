@@ -21,7 +21,7 @@
 
 #include "skbuff/skbuff_pool.h"
 
-static void lkpi_platform_sink(const char *line);
+static void lkpi_platform_sink(ulog_level_t level, const char *line);
 
 unsigned long
 lkpi_spl_irqsave(void)
@@ -69,8 +69,9 @@ lkpi_wlan_test_platform_init(void)
 }
 
 static void
-lkpi_platform_sink(const char *line)
+lkpi_platform_sink(ulog_level_t level, const char *line)
 {
+	(void)level;
 
 	if (line == NULL)
 		return;

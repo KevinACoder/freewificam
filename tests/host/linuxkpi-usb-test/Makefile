@@ -45,6 +45,7 @@ CFLAGS := -ggdb3 -O0 -Wall -ffunction-sections -fdata-sections \
           -DCMSIS_device_header='"cmsis_host_device.h"' \
           -DFREERTOS_HOOKS_TAG='"linuxkpi-usb-test"' \
           -I$(ROOT) \
+          -I$(ROOT)/components/ulog/src \
           -I$(ROOT)/os/freertos \
           -I$(ROOT)/os/cmsis2 \
           -I$(ROOT)/os/cmsis2/host-compat \
@@ -124,18 +125,20 @@ $(BIN): $(OBJS)
 # The linuxkpi contract header must keep compiling as a translation unit whose
 # include closure is the in-repo headers plus libc (a header that reaches into
 # the machine or a package would break a consumer build), and the skbuff unit's
-# two self-contained headers must stay syntax-clean on their own.
+# two self-contained headers must stay syntax-clean on their own. The one
+# component the contract reaches into is the console engine, whose level
+# vocabulary the line-sink contract carries (components/ulog/src/ulog.h).
 
 LKPI     := $(ROOT)/components/linuxkpi
 SKBUFF   := $(ROOT)/components/skbuff
 SKBUFF_HEADERS := $(SKBUFF)/skbuff.h $(SKBUFF)/freertos/freertos_skbuff.h
-LKPI_CFLAGS := -std=gnu11 -Wall -I$(LKPI)/include -I$(LKPI)
+LKPI_CFLAGS := -std=gnu11 -Wall -I$(LKPI)/include -I$(LKPI) -I$(ROOT)/components/ulog/src
 
 contract-check: | $(BUILD_DIR)
 	@$(CC) $(LKPI_CFLAGS)  -MMD -MP -c $(MAKEFILE_DIR)/lkpi_contract_tu.c -o $(BUILD_DIR)/lkpi_contract_tu.o
 	@$(CC) $(LKPI_CFLAGS) -H -fsyntax-only $(MAKEFILE_DIR)/lkpi_contract_tu.c 2> $(BUILD_DIR)/lkpi-closure.raw
 	@grep -E '^\.+ ' $(BUILD_DIR)/lkpi-closure.raw | sed -e 's/^\.* //' | sort -u > $(BUILD_DIR)/lkpi-closure.txt
-	@grep -v -e '/usr/' -e 'components/linuxkpi' -e 'lkpi_contract_tu.c' \
+	@grep -v -e '/usr/' -e 'components/linuxkpi' -e 'components/ulog' -e 'lkpi_contract_tu.c' \
 	    $(BUILD_DIR)/lkpi-closure.txt > $(BUILD_DIR)/lkpi-closure-outside.txt || true
 	@if [ -s $(BUILD_DIR)/lkpi-closure-outside.txt ]; then \
 	    echo "contract-check: FAILED - headers outside the repository closure:"; \

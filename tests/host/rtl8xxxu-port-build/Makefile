@@ -57,7 +57,7 @@ SRCS := $(DRV)/core.c $(DRV)/8188e.c
 ARCH   := -mcpu=cortex-a55 -mgeneral-regs-only -mstrict-align -mno-outline-atomics
 COMMON := -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -g3 -O2 \
     -ffunction-sections -fdata-sections
-INC    := -I$(FACE) -I$(DRV)
+INC    := -I$(FACE) -I$(DRV) -I$(ROOT)/components/ulog/src
 # Header dependencies are tracked: the face is edited far more often than the driver
 # bytes, and a stale object would report the previous header's warnings.
 DEPFLAGS := -MMD -MP

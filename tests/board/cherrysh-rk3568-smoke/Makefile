@@ -56,6 +56,7 @@ INCLUDES := \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
 	-I$(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Include \
 	-I$(ROOT) \
+	-I$(ROOT)/components/ulog/src \
 	-I$(ROOT)/arch/aarch64 \
 	-I$(ROOT)/board/rk3568-itx \
 	-I$(ROOT)/board/rk3568-itx/drivers \

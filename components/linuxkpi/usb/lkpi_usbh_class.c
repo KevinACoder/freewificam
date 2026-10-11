@@ -204,7 +204,7 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 		return lkpi_modeswitch_connect(hport, intf);
 	}
 
-	lkpi_printf("usbh: lkpi claim attempt %04x:%04x\n",
+	lkpi_printf(ULOG_INFO_LEVEL, "usbh: lkpi claim attempt %04x:%04x\n",
 	    hport->device_desc.idVendor, hport->device_desc.idProduct);
 
 	dev = lkpi_usbh_build_device(hport, intf, &intfp);
@@ -217,7 +217,7 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 
 	ret = lkpi_usb_probe_drivers(intfp);
 	if (ret != 0) {
-		lkpi_printf("usbh: usb_driver probe failed (ret %d) for "
+		lkpi_printf(ULOG_ERROR_LEVEL, "usbh: usb_driver probe failed (ret %d) for "
 		    "%04x:%04x\n", ret, dev->_vendor, dev->_product);
 		hport->config.intf[intf].priv = NULL;
 		lkpi_usbh_free_device(dev);
@@ -403,16 +403,16 @@ lkpi_usbh_hub_attach(void)
 	int ret;
 
 	if (lkpi_hub_dev != NULL) {
-		lkpi_printf("usbh: lkpi_hub already attached\n");
+		lkpi_printf(ULOG_INFO_LEVEL, "usbh: lkpi_hub already attached\n");
 		return -1;
 	}
 	hport = lkpi_hub_find_hport();
 	if (hport == NULL) {
-		lkpi_printf("usbh: lkpi_hub attach: no hub device in the "
+		lkpi_printf(ULOG_INFO_LEVEL, "usbh: lkpi_hub attach: no hub device in the "
 		    "tree\n");
 		return -1;
 	}
-	lkpi_printf("usbh: lkpi_hub attach %04x:%04x addr %u roothub port "
+	lkpi_printf(ULOG_INFO_LEVEL, "usbh: lkpi_hub attach %04x:%04x addr %u roothub port "
 	    "%u\n", hport->device_desc.idVendor,
 	    hport->device_desc.idProduct, hport->dev_addr, hport->port);
 
@@ -421,7 +421,7 @@ lkpi_usbh_hub_attach(void)
 		return -1;
 	ret = lkpi_usb_probe_drivers(intfp);
 	if (ret != 0) {
-		lkpi_printf("usbh: lkpi_hub probe failed (ret %d)\n", ret);
+		lkpi_printf(ULOG_ERROR_LEVEL, "usbh: lkpi_hub probe failed (ret %d)\n", ret);
 		lkpi_usbh_free_device(dev);
 		return ret;
 	}

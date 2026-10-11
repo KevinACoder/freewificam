@@ -99,7 +99,7 @@ usb_register(struct usb_driver *driver)
 	if (lkpi_usb_driver_count >= LKPI_USB_DRIVERS_MAX)
 		return -ENOSPC;
 	lkpi_usb_drivers[lkpi_usb_driver_count++] = driver;
-	lkpi_printf("usbkpi: usb driver '%s' registered\n", driver->name);
+	lkpi_printf(ULOG_INFO_LEVEL, "usbkpi: usb driver '%s' registered\n", driver->name);
 	return 0;
 }
 
@@ -162,10 +162,10 @@ lkpi_usb_init(void)
 			usb_register((struct usb_driver *)*it);
 			n++;
 		}
-		lkpi_printf("usbkpi: module section walk registered %u driver(s)\n",
+		lkpi_printf(ULOG_INFO_LEVEL, "usbkpi: module section walk registered %u driver(s)\n",
 		    n);
 	} else {
-		lkpi_printf("usbkpi: no .lkpi_module bracket in this link; "
+		lkpi_printf(ULOG_ERROR_LEVEL, "usbkpi: no .lkpi_module bracket in this link; "
 		    "drivers must be registered explicitly\n");
 	}
 	lkpi_usb_start();
@@ -264,7 +264,7 @@ lkpi_vio_latch(u32 *cnt, const char *what, u32 id, u32 state)
 {
 
 	if (++*cnt == 1)
-		lkpi_printf("usbkpi: VIO %s id=%u state=%u\n",
+		lkpi_printf(ULOG_DEBUG_LEVEL, "usbkpi: VIO %s id=%u state=%u\n",
 		    what, id, state);
 }
 
@@ -317,7 +317,7 @@ void lkpi_usb_force_sync_set(bool on)
 {
 
 	lkpi_usb_force_sync = on;
-	lkpi_printf("usb: sync-submit %s\n", on ? "on" : "off");
+	lkpi_printf(ULOG_INFO_LEVEL, "usb: sync-submit %s\n", on ? "on" : "off");
 }
 
 static int
@@ -531,7 +531,7 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	}
 	if (urb->status == 0 && usb_pipein(urb->pipe) &&
 	    urb->actual_length > urb->transfer_buffer_length) {
-		lkpi_printf("lkpi: RX overrun clamp %u -> %u\n",
+		lkpi_printf(ULOG_WARNING_LEVEL, "lkpi: RX overrun clamp %u -> %u\n",
 		    urb->actual_length, urb->transfer_buffer_length);
 		urb->actual_length = urb->transfer_buffer_length;
 	}
@@ -1207,7 +1207,7 @@ usb_free_urb(struct urb *urb)
 	/* trace-gated: once a receive path flows this fires per completed
 	 * frame and swamps the console */
 	if (lkpi_usb_trace)
-		lkpi_printf("usbkpi: free_urb %p id=%u refs %d\n",
+		lkpi_printf(ULOG_DEBUG_LEVEL, "usbkpi: free_urb %p id=%u refs %d\n",
 		    (void *)urb, urb->_alloc_id, urb->_refs);
 	/* the seam guard: a released pointer (or one this seam never
 	 * handed out) is named and refused before any field is read */
@@ -1415,7 +1415,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	if (urb->_alloc_id == LKPI_URB_ID_POISON) {
 		lkpi_probe_urb_submit_dead++;
 		if (lkpi_probe_urb_submit_dead == 1)
-			lkpi_printf("usbkpi: PROBE submit of DEAD urb %p "
+			lkpi_printf(ULOG_ERROR_LEVEL, "usbkpi: PROBE submit of DEAD urb %p "
 			    "(ra=%p) refused\n", (void *)urb,
 			    __builtin_return_address(0));
 		return -ENODEV;
@@ -1447,7 +1447,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 	}
 	ep = lkpi_ep_find(key, true);
 	if (ep == NULL) {
-		lkpi_printf("usbkpi: ep table full ep%02x\n",
+		lkpi_printf(ULOG_ERROR_LEVEL, "usbkpi: ep table full ep%02x\n",
 		    usb_pipeendpoint(urb->pipe) |
 		    (usb_pipein(urb->pipe) ? 0x80 : 0));
 		return -ENOMEM;
@@ -1460,7 +1460,7 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 		lkpi_usb_start();
 
 	if (lkpi_usb_trace)
-		lkpi_printf("usb: urb#%u ep%02x len%u\n",
+		lkpi_printf(ULOG_DEBUG_LEVEL, "usb: urb#%u ep%02x len%u\n",
 		    ++lkpi_usb_trace_n,
 		    usb_pipeendpoint(urb->pipe) |
 		    (usb_pipein(urb->pipe) ? 0x80 : 0),
@@ -1657,7 +1657,7 @@ usb_kill_urb(struct urb *urb)
 	if (lkpi_usb_freed_hit(urb) || urb->_alloc_id == LKPI_URB_ID_POISON) {
 		lkpi_probe_urb_submit_dead++;
 		if (lkpi_probe_urb_submit_dead == 1)
-			lkpi_printf("usbkpi: PROBE kill of DEAD urb %p "
+			lkpi_printf(ULOG_ERROR_LEVEL, "usbkpi: PROBE kill of DEAD urb %p "
 			    "(ra=%p) refused\n", (void *)urb,
 			    __builtin_return_address(0));
 		return;
@@ -1789,7 +1789,7 @@ usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
 	if (size != 0 && data == NULL)
 		return -EINVAL;
 	if (size > sizeof(stage)) {
-		lkpi_printf("usbkpi: control transfer %u bytes exceeds "
+		lkpi_printf(ULOG_ERROR_LEVEL, "usbkpi: control transfer %u bytes exceeds "
 		    "staging\n", (unsigned int)size);
 		return -ENOMEM;
 	}
@@ -1859,7 +1859,7 @@ usb_reset_device(struct usb_device *dev)
 	 * honestly instead of a lying 0 - a driver that lands here
 	 * recovers by reconnect, and the console line records it */
 	(void)dev;
-	lkpi_printf("usbkpi: usb_reset_device -EOPNOTSUPP (no reattach "
+	lkpi_printf(ULOG_INFO_LEVEL, "usbkpi: usb_reset_device -EOPNOTSUPP (no reattach "
 	    "chain)\n");
 	return -EOPNOTSUPP;
 }
@@ -1937,7 +1937,7 @@ lkpi_usb_probe_drivers(struct usb_interface *intf)
 			r = drv->probe(intf, id);
 			if (r == 0) {
 				intf->claimed = true;
-				lkpi_printf("usbkpi: '%s' claimed %04x:%04x\n",
+				lkpi_printf(ULOG_INFO_LEVEL, "usbkpi: '%s' claimed %04x:%04x\n",
 				    drv->name, udev->_vendor, udev->_product);
 				return 0;
 			}
@@ -1976,7 +1976,7 @@ lkpi_usb_trace_set(bool on)
 
 	lkpi_usb_trace = on;
 	lkpi_usb_trace_n = 0;
-	lkpi_printf("usb: trace %s\n", on ? "on" : "off");
+	lkpi_printf(ULOG_DEBUG_LEVEL, "usb: trace %s\n", on ? "on" : "off");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2049,14 +2049,14 @@ lkpi_usb_start(void)
 	lkpi_usb_drain_thread = osThreadNew(lkpi_usb_drain_thread_entry, NULL,
 	    &attr);
 	if (lkpi_usb_drain_thread == NULL) {
-		lkpi_printf("usbkpi: cannot start the drain thread\n");
+		lkpi_printf(ULOG_ERROR_LEVEL, "usbkpi: cannot start the drain thread\n");
 		return;
 	}
 	lkpi_usb_done_ready = true;
-	lkpi_printf("usbkpi: %u usb driver(s) registered\n",
+	lkpi_printf(ULOG_INFO_LEVEL, "usbkpi: %u usb driver(s) registered\n",
 	    lkpi_usb_driver_count);
 	/* size anchors for the heap-trail arguments: read from the built
 	 * image, never derived from another header by hand */
-	lkpi_printf("usbkpi: sizes sk_buff=%u urb=%u\n",
+	lkpi_printf(ULOG_DEBUG_LEVEL, "usbkpi: sizes sk_buff=%u urb=%u\n",
 	    (unsigned)sizeof(struct sk_buff), (unsigned)sizeof(struct urb));
 }
