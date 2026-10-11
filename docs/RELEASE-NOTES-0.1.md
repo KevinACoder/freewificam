@@ -53,22 +53,25 @@ data flows. It does not mean the throughput is good - see below.
 
 ## Throughput
 
-These are board measurements of the RTOS stack, host to board, single TCP
-stream. The Linux column is the same card under Linux on the same board; it is
-left pending on purpose, because the figures have to be taken on the same
-channel and bandwidth as the RTOS figure to be comparable, and that control run
-is not finished. Older Linux numbers taken on a different band are **not** a
-valid comparison and are not shown here.
+These are board measurements, host to board, single TCP stream. The Linux column
+is the same card under Linux on the same board, from a clean upstream build, on
+the same channel and the same access point, so the two columns are comparable.
+One caveat on width: Linux negotiates HT40 on this access point while the RTOS
+port runs 20 MHz legacy, so the Linux figures carry a wider-channel advantage.
+Older Linux numbers taken on a different band are **not** a valid comparison and
+are not shown here.
 
 | Line | RTOS (host to board) | Linux, same card, same channel |
 |---|---|---|
-| RTL8188EUS | 4.00 / 4.66 Mbit/s | 30.5 / 32.9 / 43.1 Mbit/s |
-| RTL8821CU | 3.65 Mbit/s | pending (control run) |
-| RTL8851BU | 136 / 173 Kbit/s | pending (control run) |
+| RTL8188EUS | 4.00 / 4.66 Mbit/s | 42.6 / 43.9 / 45.3 Mbit/s |
+| RTL8821CU | 3.65 Mbit/s | 63.7 / 66.0 / 68.2 Mbit/s |
+| RTL8851BU | 136 / 173 Kbit/s | 23.9 / 25.3 / 26.5 Mbit/s |
 
-The RTL8188EUS row is a fair comparison: both sides are on channel 1 against
-the same access point, and the RTOS figure is about one eighth of the Linux
-figure. The other two rows' Linux figures are not yet taken.
+All three rows are on channel 1 (2412 MHz) against the same access point, BSSID
+`14:a3:2f:18:07:2c`; each Linux cell is min/avg/max over three 30 s runs. The
+RTOS figures are roughly one tenth, one eighteenth and one hundred-and-seventieth
+of the Linux figures. Linux also moves data board to host on all three lines; the
+RTOS reverse direction is not measured yet.
 
 The gap to Linux is large, and it is the current open problem. It is stated
 here rather than hidden because the value of the port is in the structure, not

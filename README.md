@@ -50,19 +50,24 @@ mean the throughput is good.
 ### Throughput
 
 Host to board, single TCP stream, measured on the board. The Linux column is
-the same card under Linux on the same board, on the same channel and bandwidth;
-it is left pending because that control run is not finished. Older Linux
-figures taken on a different band are not comparable and are not used here.
+the same card under Linux on the same board, from a clean upstream build, on the
+same channel and the same access point. Note the channel width: Linux negotiates
+HT40 on this access point while the RTOS port runs 20 MHz legacy, so the Linux
+figures carry a wider-channel advantage. Older Linux figures taken on a different
+band are not comparable and are not used here.
 
 | Line | RTOS (host to board) | Linux, same card, same channel |
 |---|---|---|
-| RTL8188EUS | 4.00 / 4.66 Mbit/s | **30.5 / 32.9 / 43.1 Mbit/s** (ch1, same BSSID) |
-| RTL8821CU | 3.65 Mbit/s | pending (control run) |
-| RTL8851BU | 136 / 173 Kbit/s | pending (control run) |
+| RTL8188EUS | 4.00 / 4.66 Mbit/s | **42.6 / 43.9 / 45.3 Mbit/s** |
+| RTL8821CU | 3.65 Mbit/s | **63.7 / 66.0 / 68.2 Mbit/s** |
+| RTL8851BU | 136 / 173 Kbit/s | **23.9 / 25.3 / 26.5 Mbit/s** |
 
-On the RTL8188EUS line both sides are measured on channel 1, against the same
-access point: the RTOS figure is about one eighth of the Linux figure. The
-other two lines' Linux figures are pending.
+All three lines are measured on channel 1 (2412 MHz) against the same access
+point, BSSID `14:a3:2f:18:07:2c`; each Linux cell is min/avg/max over three 30 s
+runs. The RTOS figures are roughly one tenth, one eighteenth and one
+hundred-and-seventieth of the Linux figures. Linux also moves data in the
+reverse direction on all three lines; the RTOS reverse direction is not measured
+yet.
 
 The gap to Linux is large, and it is the current open problem. It is stated
 here rather than hidden: the value of the port so far is in the structure, not
@@ -174,16 +179,19 @@ DHCP 得址 → 网关 ping → TCP 传数；它**不代表**吞吐好。
 
 ### 吞吐
 
-宿主→板、单 TCP 流、板上实测。Linux 列是同一张卡在同一块板、同信道同带宽下的
-数字，**留空待补**——那条公平对照还没跑完。频段不同的旧数字不可比，此处不用。
+宿主→板、单 TCP 流、板上实测。Linux 列是同一张卡在同一块板、干净上游构建、同信道、
+同一个 AP 下的数字。注意**带宽口径**：Linux 在这个 AP 上协商到 HT40，而 RTOS 口跑
+20 MHz legacy，所以 Linux 数字带一份「更宽信道」的红利。频段不同的旧数字不可比，此处不用。
 
 | 线 | RTOS（宿主→板） | Linux 同卡同信道 |
 |---|---|---|
-| RTL8188EUS | 4.00 / 4.66 Mbit/s | **30.5 / 32.9 / 43.1 Mbit/s**（ch1，同一 BSSID） |
-| RTL8821CU | 3.65 Mbit/s | 待对照轮 |
-| RTL8851BU | 136 / 173 Kbit/s | 待对照轮 |
+| RTL8188EUS | 4.00 / 4.66 Mbit/s | **42.6 / 43.9 / 45.3 Mbit/s** |
+| RTL8821CU | 3.65 Mbit/s | **63.7 / 66.0 / 68.2 Mbit/s** |
+| RTL8851BU | 136 / 173 Kbit/s | **23.9 / 25.3 / 26.5 Mbit/s** |
 
-8188 线两边都在 ch1、对着同一个 AP 测：RTOS 约为 Linux 的 **1/8**。另两条的 Linux 数字待补。
+三线都在 ch1（2412 MHz）、对着同一个 AP（BSSID `14:a3:2f:18:07:2c`）测；Linux 每格是
+3 次 30 s 的 min/avg/max。RTOS 三个数字分别约为 Linux 的 **1/10、1/18、1/170**。
+Linux 三线都做了反向（板→宿主）；RTOS 反向尚未测。
 
 与 Linux 的差距很大，这是当前待解的问题。写在这里而不是藏着：目前这条线的价值
 在结构，不在数字。详见 [docs/known-limitations.md](docs/known-limitations.md)。
