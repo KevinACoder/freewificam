@@ -18,6 +18,11 @@ SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-rtw88 result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-rtw88 result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
 SUITE_CASE_NAMES      := shell-up rtw88-probe rtw88-scan rtw88-join-raw rtw88-join rtw88-dataplane rtw88-floodping
 SUITE_STEPS_FILE      := steps.tsv
+# The case that consumes the round's own steps (the credential): the runner
+# holds --steps-extra until this line appears, so the connect lands after the
+# sweep has finished and while the join case is waiting, not at a guessed
+# moment during the scan (see tools/gates/board_runner.py).
+SUITE_EXTRA_AFTER_PATTERN := wlan: join waiting for the supplicant
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-rtw88/judge.py
 SUITE_TIMEOUT         := 480
 SUITE_SEGMENTS        := -
