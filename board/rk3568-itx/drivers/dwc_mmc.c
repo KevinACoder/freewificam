@@ -56,6 +56,21 @@
 static struct dwc_mmc_desc dwc_mmc_desc_pool[DWC_MMC_DESC_NUM]
 	__attribute__((section(".noncacheable"), aligned(64)));
 
+/* The bring-up bisection switch declared in the header. One flag, read by both
+ * the data path below and the glue layer above, so a single boot can run the
+ * whole ladder twice and say which side of the comparison a result belongs to. */
+static bool dwc_mmc_ref_data_path;
+
+void dwc_mmc_ref_data_path_set(bool on)
+{
+	dwc_mmc_ref_data_path = on;
+}
+
+bool dwc_mmc_ref_data_path_get(void)
+{
+	return dwc_mmc_ref_data_path;
+}
+
 /* The controllers this board wires. One entry: sdmmc0 carries the SDIO part. */
 static const struct dwc_mmc_cfg dwc_mmc_board[] = {
 	{ .base = DWC_MMC0_BASE, .index = 0U, .intid = DWC_MMC0_INTID },
@@ -264,8 +279,9 @@ static void dwc_mmc_dump_state(struct dwc_mmc *hc)
 {
 	uintptr_t base = hc->cfg.base;
 
-	LOG_ERROR("dwc_mmc: state cmd=0x%x ctrl=0x%x bmod=0x%x ctype=0x%x "
+	LOG_ERROR("dwc_mmc: state cmd=0x%x arg=0x%x ctrl=0x%x bmod=0x%x ctype=0x%x "
 		  "clkena=0x%x clkdiv=0x%x\n", hc->last_cmd,
+		  mmio_rd32(base + DWC_MMC_CMDARG),
 		  mmio_rd32(base + DWC_MMC_CTRL), mmio_rd32(base + DWC_MMC_BMOD),
 		  mmio_rd32(base + DWC_MMC_CTYPE), mmio_rd32(base + DWC_MMC_CLKENA),
 		  mmio_rd32(base + DWC_MMC_CLKDIV));
@@ -516,16 +532,18 @@ static int dwc_mmc_prepare_dma(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd
 	/* Software-reset the IDMAC before switching it on: the reference drivers do
 	 * this on every transfer, and an engine that was left mid-transfer by an
 	 * earlier failure is otherwise switched on in a state of its own. */
-	ctrl = mmio_rd32(base + DWC_MMC_BMOD);
-	ctrl |= DWC_MMC_IDMAC_SWRESET;
-	mmio_wr32(base + DWC_MMC_BMOD, ctrl);
-	loop = DWC_MMC_RESET_POLLS;
-	while ((mmio_rd32(base + DWC_MMC_BMOD) & DWC_MMC_IDMAC_SWRESET) != 0U) {
-		if (--loop == 0U) {
-			LOG_ERROR("dwc_mmc: the IDMAC reset did not self-clear\n");
-			return DWC_MMC_ERR_TIMEOUT;
+	if (!dwc_mmc_ref_data_path) {
+		ctrl = mmio_rd32(base + DWC_MMC_BMOD);
+		ctrl |= DWC_MMC_IDMAC_SWRESET;
+		mmio_wr32(base + DWC_MMC_BMOD, ctrl);
+		loop = DWC_MMC_RESET_POLLS;
+		while ((mmio_rd32(base + DWC_MMC_BMOD) & DWC_MMC_IDMAC_SWRESET) != 0U) {
+			if (--loop == 0U) {
+				LOG_ERROR("dwc_mmc: the IDMAC reset did not self-clear\n");
+				return DWC_MMC_ERR_TIMEOUT;
+			}
+			dwc_mmc_udelay(DWC_MMC_POLL_US);
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
 	}
 
 	/* INT_ENABLE comes along: the FIFO reset above cleared it */
@@ -556,7 +574,9 @@ static int dwc_mmc_prepare_dma(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd
 	 * list. u-boot does not raise it, so it is not universally required - but
 	 * an engine that never walks its list is indistinguishable, from outside,
 	 * from a card that never sends. */
-	mmio_wr32(base + DWC_MMC_PLDMND, 1U);
+	if (!dwc_mmc_ref_data_path) {
+		mmio_wr32(base + DWC_MMC_PLDMND, 1U);
+	}
 
 	mmio_wr32(base + DWC_MMC_BLKSIZ, d->blksz);
 	mmio_wr32(base + DWC_MMC_BYTCNT, d->len);

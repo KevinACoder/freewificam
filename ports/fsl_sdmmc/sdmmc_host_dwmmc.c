@@ -200,9 +200,11 @@ static void fdwmmchost_convert_cmd(const sdmmchost_transfer_t *content,
 	/*
 	 * Check the response CRC wherever one exists. R3 and R4 are the two
 	 * response types without a CRC field, so asking for one there would turn
-	 * every CMD5 answer into a failure.
+	 * every CMD5 answer into a failure. The reference implementation this port
+	 * was aligned to never asked for one on any command; the bring-up switch
+	 * drops it back to that shape so the two can be told apart.
 	 */
-	cmd->resp_crc = cmd->resp && !cmd->resp_long &&
+	cmd->resp_crc = !dwc_mmc_ref_data_path_get() && cmd->resp && !cmd->resp_long &&
 			(in->responseType != kCARD_ResponseTypeR3) &&
 			(in->responseType != kCARD_ResponseTypeR4);
 
@@ -222,6 +224,15 @@ static void fdwmmchost_convert_cmd(const sdmmchost_transfer_t *content,
 	data->blksz = (uint32_t)content->data->blockSize;
 	data->blkcnt = content->data->blockCount;
 	data->len = data->blksz * data->blkcnt;
+
+	/*
+	 * What fsl asked for, printed next to what the controller reports it was
+	 * handed: the two disagreeing is the difference between a stack that built
+	 * the wrong transfer and one whose transfer never started at all.
+	 */
+	SDMMC_LOG("sdio: data cmd=%u arg=0x%x blksz=%u blkcnt=%u len=%u %s\n",
+		  cmd->index, cmd->arg, data->blksz, data->blkcnt, data->len,
+		  data->write ? "write" : "read");
 
 	cmd->data = data;
 }
