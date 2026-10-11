@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/socket.h
  * @brief   The generic socket address record, which the wireless request records embed.

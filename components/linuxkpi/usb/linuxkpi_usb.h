@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * linuxkpi_usb.h - the in-tree face of the linuxkpi USB layer.
  *

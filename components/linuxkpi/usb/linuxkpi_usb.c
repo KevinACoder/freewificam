@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * linuxkpi_usb - the Linux USB host API over a narrow backend seam.
  *

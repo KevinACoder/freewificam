@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * usbkpi_cmds.c - shell command for the linuxkpi USB layer: the dump exit
  * the linux<->rtos byte comparison reads (SPEC S6/linuxkpi R2.4).

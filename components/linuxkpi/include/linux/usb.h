@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * linux/usb.h - the Linux USB host API the verbatim drivers compile
  * against.  The backend is CherryUSB's usbh_urb engine (linuxkpi_usb.c);

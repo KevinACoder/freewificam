@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    fake_driver.h
  * @brief   The scripted driver's face: its ops table, the recorder the cases

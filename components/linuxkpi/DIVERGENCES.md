@@ -17,13 +17,17 @@ Deviations of this import from its source blobs. Empty at import time.
 | 10 | `usb/linuxkpi_usb.c` | Four symbols the driver's link closure names get their bodies here: `usb_init_urb()` (zero + refcount + list arming, plus a birth registry for urbs embedded in driver containers), an embedded-urb branch in `usb_free_urb()` (the container is released through `kfree()`, the call Linux's `urb_destroy` makes; a second release is a named refusal), `lkpi_usb_init()` (the `.lkpi_module` section walker, weak bracket symbols, idempotent) and `lkpi_usb_debug_level()` | The declarations existed in the face with no bodies, and the first compiled driver calls `usb_init_urb()` for each of its 96 embedded TX/RX urbs and releases the containers through `usb_free_urb()` - without the branch those releases would be named stray refusals and the containers would leak. The walker is the mechanism the module macro (`linuxkpi_core.h:1535-1544`) and the linker bracket were built for | rtl8188eus-port R2a-3 |
 | 11 | `usb/linuxkpi_usb.c` | Two compile-time defects of the same file fixed while it was first compiled with warnings on: the endpoint lookup compares `usb_endpoint_num()`'s `int` against the unsigned pipe flag with an explicit cast, and the module bracket comparison uses `uintptr_t` arithmetic instead of a relational operator on two distinct arrays | Both are diagnostics-only fixes with identical behaviour; the second is a GCC `-Warray-compare` requirement | rtl8188eus-port R2a-3 |
 | 12 | `usb/lkpi_usbh_class.c` | The wireless hook joins the file (its own `usbh_class_info` for the vendor-specific triple `ff/ff/ff`, sharing the MSC hook's claim path), and the shared disconnect callback returns `int` (was `void`) with the stack's signature; three leftover Chinese comments became English | One assembly point for the Linux view (a second `build_device` path would be the second place a claim can be lost); the `void` return was a type mismatch against `struct usbh_class_driver.disconnect` that the file's first compile exposed - the hook had never been compiled before this round; the comments were the file's first pass through the repository's ASCII-only gate | rtl8188eus-port R2a-3 |
+| 13 | the eight code files of the import (`include/linux/{usb,device,sysfs}.h`, `linuxkpi_core.h`, `usb/{linuxkpi_usb.c,lkpi_usbh_class.c,linuxkpi_usb.h,usbkpi_cmds.c}`) | The `SPDX-License-Identifier` line changed from `BSD-2-Clause` to `BSD-3-Clause`; no other byte changed | Project first-party license unification (user ruling 2026-10-11): the first-party license is BSD-3-Clause, and these files are clean-room first-party code of this project's previous line, so their own license line follows the project's. The manifest's blob IDs still name the source blobs on the previous line; only the license line of our copy moved | license-and-guards |
 
 Import state (2026-10-07): the nine imported files were byte-identical to their
 source blobs on the previous line's `feat/lkpi-stabilize-r1` branch (blob IDs in
 `PROVENANCE.md`) at import.  Rows 1-7 above are the engine-adoption round's
 entries; `PROVENANCE.md`'s manifest keeps the original blob IDs as the import
 anchor, and re-checking those blobs against the working tree now shows exactly
-the entries listed here.
+the entries listed here.  Row 13 (2026-10-11) is the only entry that moves the
+license line of the import: the eight code files' `SPDX-License-Identifier` now
+reads `BSD-3-Clause`, following the project's first-party license; every other
+byte of those files is still the imported one.
 
 Known convergence work that will produce the first entries (recorded here so it is
 not rediscovered later):

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    lkpi_platform_host.c
  * @brief   The host implementation of the linuxkpi platform hooks the pool body

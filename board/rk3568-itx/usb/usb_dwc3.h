@@ -15,8 +15,8 @@
  * one IP block stay in one place.
  */
 
-#ifndef FREEWEBCAM_RK3568_USB_DWC3_H
-#define FREEWEBCAM_RK3568_USB_DWC3_H
+#ifndef FREEWIFICAM_RK3568_USB_DWC3_H
+#define FREEWIFICAM_RK3568_USB_DWC3_H
 
 /* --- global register offsets (relative to the controller base) ------------- */
 
@@ -65,4 +65,4 @@
  * release 0x290a on. */
 #define DWC3_GUCTL1_DEV_FORCE_20_CLK_FOR_30_CLK	(1U << 26)
 
-#endif /* FREEWEBCAM_RK3568_USB_DWC3_H */
+#endif /* FREEWIFICAM_RK3568_USB_DWC3_H */

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    net/mac80211.h
  * @brief   The mac80211 surface a Linux SoftMAC driver talks to: the hardware

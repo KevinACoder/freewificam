@@ -3,8 +3,8 @@
  * @brief  Console UART2 early polled path (board interface).
  */
 
-#ifndef FREEWEBCAM_UART_H
-#define FREEWEBCAM_UART_H
+#ifndef FREEWIFICAM_UART_H
+#define FREEWIFICAM_UART_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,4 +33,4 @@ bool uart_early_try_getc(int *out);
  * dead board, and a fault may fire before any init. */
 void uart_early_panic(const char *message);
 
-#endif /* FREEWEBCAM_UART_H */
+#endif /* FREEWIFICAM_UART_H */

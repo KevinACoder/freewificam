@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/linkage.h
  * @brief   The linkage marker a kernel function declaration wears, as the interface

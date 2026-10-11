@@ -22,8 +22,8 @@
  * @date   16.09.2026 (board-verified) / 02.10.2026 (port re-arrangement)
  */
 
-#ifndef FREEWEBCAM_EQOS_RK3568_H
-#define FREEWEBCAM_EQOS_RK3568_H
+#ifndef FREEWIFICAM_EQOS_RK3568_H
+#define FREEWIFICAM_EQOS_RK3568_H
 
 #include <stdint.h>
 
@@ -85,4 +85,4 @@ int32_t eqos_board_mdio_read(void *ctx, uint8_t phy_addr, uint8_t reg_addr,
 int32_t eqos_board_mdio_write(void *ctx, uint8_t phy_addr, uint8_t reg_addr,
 			      uint16_t data);
 
-#endif /* FREEWEBCAM_EQOS_RK3568_H */
+#endif /* FREEWIFICAM_EQOS_RK3568_H */

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlnetif_stub.h
  * @brief   The presentation-layer stub test's face: the step functions the

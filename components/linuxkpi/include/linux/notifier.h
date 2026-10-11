@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/notifier.h
  * @brief   The callback-block record and result codes of the kernel's notifier chains,

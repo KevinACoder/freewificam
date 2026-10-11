@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    ap_frames.c
  * @brief   The scripted AP's frames, byte-built from the 802.11 frame formats

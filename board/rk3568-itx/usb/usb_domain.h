@@ -39,8 +39,8 @@
  * controller bases and interrupt numbers are part of the bus map below.
  */
 
-#ifndef FREEWEBCAM_RK3568_USB_DOMAIN_H
-#define FREEWEBCAM_RK3568_USB_DOMAIN_H
+#ifndef FREEWIFICAM_RK3568_USB_DOMAIN_H
+#define FREEWIFICAM_RK3568_USB_DOMAIN_H
 
 #include <stdint.h>
 
@@ -285,4 +285,4 @@ uint32_t usb_ehci_port_power_cycle(uintptr_t opbase, unsigned port_index);
 
 uint32_t usb_ehci_port_status(uintptr_t opbase, unsigned port_index);
 
-#endif /* FREEWEBCAM_RK3568_USB_DOMAIN_H */
+#endif /* FREEWIFICAM_RK3568_USB_DOMAIN_H */

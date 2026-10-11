@@ -8,8 +8,8 @@
  * without guessing the library's device-name convention.
  */
 
-#ifndef FREEWEBCAM_CHERRYUSB_MSC_APP_H
-#define FREEWEBCAM_CHERRYUSB_MSC_APP_H
+#ifndef FREEWIFICAM_CHERRYUSB_MSC_APP_H
+#define FREEWIFICAM_CHERRYUSB_MSC_APP_H
 
 struct usbh_msc;
 
@@ -20,4 +20,4 @@ struct usbh_msc *usb_msc_instance(void);
 /* Its device ordinal ('a' for the first disk), or -1 when none is ready. */
 int usb_msc_ordinal(void);
 
-#endif /* FREEWEBCAM_CHERRYUSB_MSC_APP_H */
+#endif /* FREEWIFICAM_CHERRYUSB_MSC_APP_H */

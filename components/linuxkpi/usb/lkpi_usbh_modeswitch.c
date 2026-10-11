@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    lkpi_usbh_modeswitch.c
  * @brief   Flip the RTL8821CU-class dongle from its CD-ROM persona to its

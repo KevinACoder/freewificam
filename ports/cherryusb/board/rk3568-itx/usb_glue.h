@@ -17,8 +17,8 @@
  * imported headers themselves.
  */
 
-#ifndef FREEWEBCAM_CHERRYUSB_RK3568_USB_GLUE_H
-#define FREEWEBCAM_CHERRYUSB_RK3568_USB_GLUE_H
+#ifndef FREEWIFICAM_CHERRYUSB_RK3568_USB_GLUE_H
+#define FREEWIFICAM_CHERRYUSB_RK3568_USB_GLUE_H
 
 #include <stdint.h>
 
@@ -56,4 +56,4 @@ void usb_board_after_start(unsigned busid);
  * Returns 0 for a busid this board does not wire out. */
 uintptr_t usb_board_reg_base(unsigned busid);
 
-#endif /* FREEWEBCAM_CHERRYUSB_RK3568_USB_GLUE_H */
+#endif /* FREEWIFICAM_CHERRYUSB_RK3568_USB_GLUE_H */

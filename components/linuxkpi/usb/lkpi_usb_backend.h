@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * lkpi_usb_backend.h - the backend seam of the linuxkpi USB layer.
  *

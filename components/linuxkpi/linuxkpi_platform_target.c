@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linuxkpi_platform_target.c
  * @brief   The linuxkpi platform stubs a target image has no machinery for:

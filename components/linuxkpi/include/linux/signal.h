@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/signal.h
  * @brief   The signal numbers, the handler sentinels and the kernel-thread signal

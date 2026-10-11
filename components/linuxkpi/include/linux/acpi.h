@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/acpi.h
  * @brief   The ACPI surface a driver's platform layer names: the object records, the

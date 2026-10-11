@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/skbuff.h
  * @brief   The socket-buffer allocation spelling Linux network drivers use that the

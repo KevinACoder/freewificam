@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * lkpi_usbh_class.c - the CherryUSB class hook that hands a claimed
  * interface to the Linux usb_driver registered through usb_register().

@@ -4,7 +4,7 @@
 |---|---|
 | Upstream | first-party code of this project's previous line (`freewebcam` repository, branch `feat/lkpi-stabilize-r1`, tip `f8e33c3fabcd1d1417068511e547b8996df2b51c`); the files are clean-room first-party except `skbuff/skbuff_pool.h` (see License) |
 | Pin | per-file blob IDs below, taken from the committed blobs of that branch with `git show <branch>:<path>`; the branch's working tree has staged edits on four of the files, so no working-tree content was read |
-| License | BSD-2-Clause for the eight code files; `skbuff/skbuff_pool.h` carries no SPDX line and self-describes an Apache-2.0 lineage from the TizenRT/Realtek osdep skbuff pool, whose verbatim import now lives in `components/skbuff/` |
+| License | BSD-3-Clause for the eight code files; `skbuff/skbuff_pool.h` carries no SPDX line and self-describes an Apache-2.0 lineage from the TizenRT/Realtek osdep skbuff pool, whose verbatim import now lives in `components/skbuff/` |
 | Vendoring | vendored verbatim from the committed blobs (blob IDs below); not a git submodule (user ruling 2026-10-07: a component, not third-party) |
 | Fetched | 2026-10-07 |
 | Local differences | the engine-adoption round (linuxkpi-usb-test R1) changed eight files/call sites (`usb/linuxkpi_usb.c`, `usb/linuxkpi_usb.h`); every change is registered in `DIVERGENCES.md`. The other seven files keep their import bytes; the manifest's blob IDs remain the import anchor |
@@ -16,15 +16,15 @@
 
 | File | Lines | Source blob (previous line, `feat/lkpi-stabilize-r1`) | License | Lineage |
 |---|---|---|---|---|
-| `include/linux/usb.h` | 571 | `1397ecf386b97aca22cb2c1df18980ea77da135b` | BSD-2 | first-party (Linux API shapes) |
-| `include/linux/device.h` | 36 | `bba0cd4a4b953150198d852514a2f001c5209971` | BSD-2 | first-party |
-| `include/linux/sysfs.h` | 69 | `7ca5fe9da5bd3a89499f622c31012654da393a35` | BSD-2 | first-party |
-| `linuxkpi_core.h` | 2406 | `adf8cd5e9fc8b950fc27bfca623c83db7d40a6e2` | BSD-2 | first-party |
+| `include/linux/usb.h` | 571 | `1397ecf386b97aca22cb2c1df18980ea77da135b` | BSD-3 | first-party (Linux API shapes) |
+| `include/linux/device.h` | 36 | `bba0cd4a4b953150198d852514a2f001c5209971` | BSD-3 | first-party |
+| `include/linux/sysfs.h` | 69 | `7ca5fe9da5bd3a89499f622c31012654da393a35` | BSD-3 | first-party |
+| `linuxkpi_core.h` | 2406 | `adf8cd5e9fc8b950fc27bfca623c83db7d40a6e2` | BSD-3 | first-party |
 | `skbuff/skbuff_pool.h` | 138 | `0c7f54658433d08b50e6ec51502657ac5c0f550a` | Apache-2.0 lineage, no SPDX line | descended from the TizenRT/Realtek osdep skbuff pool (verbatim unit: `components/skbuff/`) |
-| `usb/linuxkpi_usb.c` | 2241 | `c1f4f86dcdd557b78f7260c66ef9a514fa3aa031` | BSD-2 | semantic port of FreeBSD `sys/compat/linuxkpi/common/src/linux_usb.c` at `d5c09e32c` |
-| `usb/lkpi_usbh_class.c` | 316 | `77c2f37728a7469de1017d361943f6d33e6c354c` | BSD-2 | first-party (class hooks) |
-| `usb/linuxkpi_usb.h` | 83 | `aee1fe834428dbb43503de15c588cd17fbbaef51` | BSD-2 | first-party (usbkpi record ring) |
-| `usb/usbkpi_cmds.c` | 360 | `38eb3fe3088c53715f760f3e37addb3d93ef2c7f` | BSD-2 | first-party (usbkpi diagnostics) |
+| `usb/linuxkpi_usb.c` | 2241 | `c1f4f86dcdd557b78f7260c66ef9a514fa3aa031` | BSD-3 | semantic port of FreeBSD `sys/compat/linuxkpi/common/src/linux_usb.c` at `d5c09e32c` |
+| `usb/lkpi_usbh_class.c` | 316 | `77c2f37728a7469de1017d361943f6d33e6c354c` | BSD-3 | first-party (class hooks) |
+| `usb/linuxkpi_usb.h` | 83 | `aee1fe834428dbb43503de15c588cd17fbbaef51` | BSD-3 | first-party (usbkpi record ring) |
+| `usb/usbkpi_cmds.c` | 360 | `38eb3fe3088c53715f760f3e37addb3d93ef2c7f` | BSD-3 | first-party (usbkpi diagnostics) |
 
 The contract-header closure is self-contained with the relative layout preserved:
 `include/linux/usb.h` includes `../../linuxkpi_core.h` and `<linux/device.h>`;
@@ -66,7 +66,7 @@ directory's contents stay auditable:
 | wlan-bridge R2a | `linuxkpi_core.c`, `linuxkpi_impl.h`, `fw_registry.c`, `fw_registry.h`, `fw/rtl8188eufw_blob.c` |
 | rtl8188eus-port R1 | `include/net/mac80211.h`, `include/net/cfg80211.h`, `include/linux/ieee80211.h`, `include/linux/if_ether.h`, `include/linux/etherdevice.h`, `include/linux/average.h`, `include/linux/iopoll.h`, `include/linux/firmware.h`, `include/linux/fs.h`, `include/linux/debugfs.h`, `include/linux/skbuff.h`, `include/linux/kernel.h`, `include/linux/printk.h`, `include/linux/list.h`, `include/linux/netdevice.h` |
 
-Each is first-party (BSD-2-Clause), carries a `@design` line naming its pattern and
+Each is first-party (BSD-3-Clause), carries a `@design` line naming its pattern and
 reference, and is declared only up to what a compiled consumer uses. The one exception
 to "new files only" is the ledger entry 9 in `DIVERGENCES.md`: a driver-visible defect
 of the pinned `usb.h` (an embedded struct modelled as a pointer) had to be corrected in
@@ -75,9 +75,12 @@ place, and that entry records it.
 ## Rules for changes
 
 * These nine files stay byte-identical. Adaptations (for example dropping the
-  `tx_api.h` dependency of the USB engine, placing `cmsis_os2_ext.h`, replacing the
+  `tx_api.h` dependency of the USB engine, placing `cmsis2_ext.h`, replacing the
   board timer header, or the skbuff header convergence) happen in the round that
-  consumes them and are recorded in `DIVERGENCES.md` before they land.
+  consumes them and are recorded in `DIVERGENCES.md` before they land. The one
+  exception to date is ledger entry 13: the `SPDX-License-Identifier` line of the
+  eight code files moved from `BSD-2-Clause` to `BSD-3-Clause` with the project's
+  first-party license (2026-10-11); no other byte of those files moved.
 * The imported blobs carry the previous line's comments, including Chinese ones in
   the USB engine and `linuxkpi_core.h`; the bytes stay as they are. Like the other
   imported units they are exempt from this repository's authoring scans (the

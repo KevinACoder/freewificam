@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    skbuff_pool.c
  * @brief   The skbuff pool body: the dual static pool (header slots plus linear data

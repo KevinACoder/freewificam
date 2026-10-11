@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/kthread.h
  * @brief   The kernel-thread creation and control calls a driver's worker paths use.

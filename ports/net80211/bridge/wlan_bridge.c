@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlan_bridge.c
  * @brief   The net80211-world half of the bridge: it owns the ieee80211com,

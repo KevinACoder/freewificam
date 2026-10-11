@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    fake_driver.c
  * @brief   The scripted driver behind the bridge's seam: it records every ops

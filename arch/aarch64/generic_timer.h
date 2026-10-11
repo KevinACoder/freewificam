@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * generic_timer.h - the AArch64 Generic Timer register face. The only
  * headers components may include for counter/timer access; raw

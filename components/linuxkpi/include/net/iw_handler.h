@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    net/iw_handler.h
  * @brief   The wireless-extension handler side: the handler type a driver exports

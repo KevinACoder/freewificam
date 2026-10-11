@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/iopoll.h
  * @brief   Poll a register (or any expression) until it satisfies a condition or a

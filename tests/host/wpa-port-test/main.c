@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    main.c
  * @brief   Gate1 suite for the wpa_supplicant port: vector anchors, then the

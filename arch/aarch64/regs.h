@@ -10,8 +10,8 @@
  * -mstrict-align keeps every access naturally aligned.
  */
 
-#ifndef FREEWEBCAM_REGS_H
-#define FREEWEBCAM_REGS_H
+#ifndef FREEWIFICAM_REGS_H
+#define FREEWIFICAM_REGS_H
 
 #include <stdint.h>
 
@@ -45,4 +45,4 @@ static inline void reg_wr64(uintptr_t addr, uint64_t value)
 	*(volatile uint64_t *)addr = value;
 }
 
-#endif /* FREEWEBCAM_REGS_H */
+#endif /* FREEWIFICAM_REGS_H */

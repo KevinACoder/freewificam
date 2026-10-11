@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    byteorder/generic.h
  * @brief   The generic (host-order-neutral) half of the byte-order interface.

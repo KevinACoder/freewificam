@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    byteorder/swab.h
  * @brief   The byte-swap primitives the interface's byte-order headers build on.

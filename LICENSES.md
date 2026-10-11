@@ -6,7 +6,7 @@ provenance of each byte in a built image is answerable without reading every tre
 
 The top-level `LICENSE` for first-party code is added with the bootstrap milestone; until
 then this file is the authority for component terms. First-party files in this repository
-carry `SPDX-License-Identifier: BSD-2-Clause` (files written before this registry exists
+carry `SPDX-License-Identifier: BSD-3-Clause` (files written before this registry exists
 carry the same terms in their file header).
 
 ## Vendored trees (`third-party/`, pinned submodules)
@@ -30,7 +30,7 @@ carry the same terms in their file header).
 |---|---|---|
 | `net80211` | BSD-3-Clause (`net80211/`, NetBSD per-file blocks) and BSD-2-Clause (`port/`, `compat/`, `crypto/` per-file blocks) | per-directory summary kept in `components/net80211/LICENSES/README.md`; the retired driver directory of the upstream library was ISC (not present in this tree) |
 | `skbuff` | Apache-2.0 | TizenRT/Realtek lineage, `LICENSE.Apache-2.0` kept next to the unit |
-| `linuxkpi` | BSD-2-Clause (code files); `skbuff/skbuff_pool.h` self-describes an Apache-2.0 lineage | declarations of the Linux kernel API surface, written first-party; the pool body `skbuff/skbuff_pool.c` is first-party BSD-2-Clause written against the Apache-2.0 TizenRT/Realtek fact source (lineage and the change ledger are in `components/linuxkpi/skbuff/`) |
+| `linuxkpi` | BSD-3-Clause (code files); `skbuff/skbuff_pool.h` self-describes an Apache-2.0 lineage | declarations of the Linux kernel API surface, written first-party; the pool body `skbuff/skbuff_pool.c` is first-party BSD-3-Clause written against the Apache-2.0 TizenRT/Realtek fact source (lineage and the change ledger are in `components/linuxkpi/skbuff/`) |
 | `cherrysh` | Apache-2.0 | `LICENSE` at the unit root |
 | `printf` | MIT | `LICENSE` at the unit root (mpaland/printf) |
 | `tlsf` | BSD-3-Clause | terms are in the `tlsf.h` copyright header (including the endorsement clause); no separate license file |
@@ -45,7 +45,7 @@ carry the same terms in their file header).
 
 ## Distribution obligations
 
-* First-party source files keep their own terms (BSD-2-Clause). They are not relicensed by
+* First-party source files keep their own terms (BSD-3-Clause). They are not relicensed by
   being combined with a copyleft unit, and a source-only distribution of first-party files
   is unaffected.
 * `third-party/rtl8xxxu` is GPL-2.0-only. A distributed **binary image** that contains it is

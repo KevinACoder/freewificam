@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/sched/types.h
  * @brief   The CPU-time accounting record the interface's sched-types header carries.

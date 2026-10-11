@@ -12,8 +12,8 @@
  * loudly, the failure mode is recorded next to the value.
  */
 
-#ifndef FREEWEBCAM_RK3568_BOARD_CONF_H
-#define FREEWEBCAM_RK3568_BOARD_CONF_H
+#ifndef FREEWIFICAM_RK3568_BOARD_CONF_H
+#define FREEWIFICAM_RK3568_BOARD_CONF_H
 
 /* --- register bases ------------------------------------------------------- */
 
@@ -88,4 +88,4 @@
  * UNPREDICTABLE). */
 #define BOARD_MMU_TCR_PS	(2ULL << 32)
 
-#endif /* FREEWEBCAM_RK3568_BOARD_CONF_H */
+#endif /* FREEWIFICAM_RK3568_BOARD_CONF_H */

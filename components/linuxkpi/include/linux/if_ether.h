@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/if_ether.h
  * @brief   The Ethernet constants and the wire header, as the Linux-family drivers

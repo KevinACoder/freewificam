@@ -13,8 +13,8 @@
  *    writer expands '\n' to CR LF itself.
  */
 
-#ifndef FREEWEBCAM_LOG_H
-#define FREEWEBCAM_LOG_H
+#ifndef FREEWIFICAM_LOG_H
+#define FREEWIFICAM_LOG_H
 
 #include <stdarg.h>
 
@@ -40,4 +40,4 @@ void board_log_emergency(const char *fmt, ...);
  * announced by a caller log line. */
 void board_log_stamp_use_tick(void);
 
-#endif /* FREEWEBCAM_LOG_H */
+#endif /* FREEWIFICAM_LOG_H */

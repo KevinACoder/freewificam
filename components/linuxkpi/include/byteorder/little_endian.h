@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    byteorder/little_endian.h
  * @brief   The byte-order interface for a little-endian target.

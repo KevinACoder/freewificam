@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    ap_frames.h
  * @brief   The scripted AP's frame builders (SSID, BSSID, the three management

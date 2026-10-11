@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linuxkpi_wiphy_work.c
  * @brief   The serializing wiphy work family: the queue/cancel/flush entry points

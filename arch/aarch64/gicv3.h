@@ -3,8 +3,8 @@
  * @brief  GIC-600 (GICv3) bring-up + simplified IRQ registry (arch interface).
  */
 
-#ifndef FREEWEBCAM_GICV3_H
-#define FREEWEBCAM_GICV3_H
+#ifndef FREEWIFICAM_GICV3_H
+#define FREEWIFICAM_GICV3_H
 
 #include <stdint.h>
 
@@ -66,4 +66,4 @@ void gic_irq_eoi(uint32_t iar);
  * (PSTATE.I set by the exception entry); no nesting. */
 uint32_t gic_irq_dispatch(uint32_t iar);
 
-#endif /* FREEWEBCAM_GICV3_H */
+#endif /* FREEWIFICAM_GICV3_H */

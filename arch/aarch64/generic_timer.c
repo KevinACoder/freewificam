@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * generic_timer.c - the AArch64 Generic Timer (System Counter + EL1
  * physical/virtual timers) register face. The single place raw

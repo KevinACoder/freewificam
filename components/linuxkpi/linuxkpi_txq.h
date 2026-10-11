@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linuxkpi_txq.h
  * @brief   The software transmit-queue engine's allocation and stack side,

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/rfkill.h
  * @brief   The rfkill switch surface a wireless driver's platform layer names.

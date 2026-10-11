@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    wlan_seam_adapter.c
  * @brief   The linuxkpi-world half of the bridge: it implements the scalar seam

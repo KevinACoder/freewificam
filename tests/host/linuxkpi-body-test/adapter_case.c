@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /* Exercise the production adapter with a controller that checks USB packet
  * sequence state. Fresh transfer objects must retain endpoint state.
  * Reference: USB 2.0 sections 8.6 and 9.4.5; CherryUSB EHCI's URB toggle

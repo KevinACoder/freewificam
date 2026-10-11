@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    lkpi_usbh_modeswitch.h
  * @brief   The CD-ROM-persona flip for the RTL8821CU-class dongles: the class

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/wireless.h
  * @brief   The wireless-extension request records a driver's ioctl-style configuration

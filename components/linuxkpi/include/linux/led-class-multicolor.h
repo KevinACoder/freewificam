@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file    linux/led-class-multicolor.h
  * @brief   The multicolor LED record a driver embeds beside the plain LED class device.
