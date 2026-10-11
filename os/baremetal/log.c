@@ -35,7 +35,9 @@
 #include <stdint.h>
 
 #include "log.h"
+#ifdef ULOG_ENABLED
 #include "log_anchors.h"
+#endif
 #include "minilibc.h"
 #include "arch_asm.h"
 #include "generic_timer.h"
@@ -121,9 +123,12 @@ void board_log_stamp_use_tick(void)
 static volatile unsigned int print_lock_held;
 
 /* LDAXR/STXR pair, inline: __atomic_test_and_set would call into libatomic,
- * which a -nostdlib image does not have. Returns 0 when the lock was taken. */
+ * which a -nostdlib image does not have. Returns 0 when the lock was taken.
+ * The host spelling is for the outlet suite, which compiles this file to
+ * exercise the line assembly and the repeat gate; there libatomic exists. */
 static inline unsigned int print_try_lock(void)
 {
+#ifdef __aarch64__
 	unsigned int status;
 	unsigned int wanted = 1u;
 
@@ -137,23 +142,33 @@ static inline unsigned int print_try_lock(void)
 		: "memory");
 
 	return status;
+#else
+	return __atomic_test_and_set(&print_lock_held, __ATOMIC_ACQUIRE) ? 1u : 0u;
+#endif
 }
 
 static void print_lock_take(uint64_t *saved_daif)
 {
+#ifdef __aarch64__
 	/* Mask IRQs for the whole hold, restore the caller's DAIF after
 	 * release: same-core re-entrancy would otherwise deadlock (an ISR
 	 * spinning on the lock its own interrupted context holds). */
 	ARCH_DAIF_GET(*saved_daif);
 	ARCH_IRQ_MASK();
+#else
+	*saved_daif = 0u;
+#endif
 
 	while (print_try_lock() != 0u) {
+#ifdef __aarch64__
 		__asm__ __volatile__("yield" ::: "memory");
+#endif
 	}
 }
 
 static void print_lock_give(uint64_t saved_daif)
 {
+#ifdef __aarch64__
 	/* STLR: store with release semantics, the pairing half of LDAXR. */
 	__asm__ __volatile__("stlr %w1, %0"
 			     : "=Q"(print_lock_held)
@@ -164,6 +179,10 @@ static void print_lock_give(uint64_t saved_daif)
 	 * the I bit: callers in ISR context arrive with IRQs masked and must
 	 * stay that way). */
 	ARCH_DAIF_PUT(saved_daif);
+#else
+	(void)saved_daif;
+	__atomic_store_n(&print_lock_held, 0u, __ATOMIC_RELEASE);
+#endif
 }
 
 /* --- the stamped line sink -------------------------------------------------- */
@@ -251,6 +270,8 @@ static void console_repeat_gate(const char *msg)
 
 /* --- the level plane -------------------------------------------------------- */
 
+#ifdef ULOG_ENABLED
+
 /*
  * A line that matches a never-filtered family is promoted to ALWAYS, so no
  * runtime threshold can silence a judged line, a one-boot ledger line, a
@@ -330,6 +351,32 @@ void log_level_set(ulog_level_t severity)
 	log_current_level = severity;
 	print_lock_give(saved_daif);
 }
+
+#else /* !ULOG_ENABLED */
+
+/*
+ * The compile-time master gate. With ULOG_ENABLED undefined the level plane
+ * generates no code at all: the entry points stay, so the call sites and the
+ * console command still link, and the raw outlets below (the console bytes and
+ * the emergency print) are what remains of the console.
+ */
+void log_emit(ulog_level_t severity, const char *fmt, ...)
+{
+	(void)severity;
+	(void)fmt;
+}
+
+ulog_level_t log_level_get(void)
+{
+	return (ulog_level_t)LOG_DEFAULT_LEVEL;
+}
+
+void log_level_set(ulog_level_t severity)
+{
+	(void)severity;
+}
+
+#endif /* ULOG_ENABLED */
 
 void board_log(const char *fmt, ...)
 {
