@@ -26,6 +26,7 @@
  * Anchors (the judge checks each on PASS):
  *   sdio: card <vid>:<pid>, <n> IO func(s), CCCR v<a>.<b>, bus <k> kHz (<mode>)
  *   sdio: func1 enabled ioex=<value>
+ *   sdio: func1 ready iorx=<value> polls=<n>
  *   sdio: func1 block size set=512 read=512
  *   sdio: func1 fbr write 256 read=256 restore 512 read=512
  *   sdio: SDIO READY
@@ -36,10 +37,12 @@
 
 #include "lkpi_sdio_backend.h"
 
+#include "os/cmsis2/cmsis2.h"
 #include "log.h"
 
 /* The card registers this case reads and writes, by their SDIO addresses. */
 #define SDIO_CCCR_IO_ENABLE	0x02U	/* IOEx, one bit per function */
+#define SDIO_CCCR_IO_READY	0x03U	/* IORx, one bit per function */
 #define SDIO_CCCR_BUS_IFACE	0x07U	/* bus interface: the width in use */
 #define SDIO_CCCR_COMMON_CIS	0x09U	/* the common CIS pointer, three bytes */
 #define SDIO_FBR_BLOCK_SIZE	0x10U	/* the function's block size, two bytes */
@@ -47,6 +50,13 @@
 #define SDIO_ENUM_BLOCK_SIZE	512U
 #define SDIO_ENUM_OTHER_SIZE	256U
 #define SDIO_ENUM_CIS_BYTES	8U
+
+/* How long the function may take to report itself ready after it is enabled.
+ * The card's own ceiling is in its function CIS; this is the ceiling the
+ * specification's default implies, and the poll is bounded so a card that never
+ * answers is reported rather than waited on forever. */
+#define SDIO_ENUM_READY_POLLS	50U
+#define SDIO_ENUM_READY_GAP_MS	10U
 
 /* A function's basic registers live in function 0's address space, at one
  * 0x100-sized block per function. Reading a function's block-size register is
@@ -145,9 +155,15 @@ void sdio_enum_chain( void )
 		  cis[3] );
 
 	/*
-	 * Enable function 1. Everything that addresses the function with an
-	 * extended transfer depends on this having happened first, so it comes
-	 * before the block-size work below and before the next case's transfers.
+	 * Enable function 1, and then wait for it to say it is ready.
+	 *
+	 * The enable bit and the ready bit are two different things: a card may
+	 * accept the enable and take a while before its function can service
+	 * transfers, and while it cannot, the common registers keep answering
+	 * (they are function 0's) so a host that only reads those never notices.
+	 * Everything that addresses the function with an extended transfer depends
+	 * on this having completed, so it comes before the block-size work below
+	 * and before the next case's transfers.
 	 */
 	st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_ENABLE, false, &cccr );
 	if( st != 0 ) {
@@ -168,6 +184,28 @@ void sdio_enum_chain( void )
 	LOG_ANCHOR( "sdio: func1 enabled ioex=%#04x\n", cccr );
 	if( ( cccr & 0x02U ) == 0U ) {
 		board_case_fail( "the function's enable bit did not stick" );
+		return;
+	}
+
+	uint8_t ready = 0U;
+	unsigned int waited = 0U;
+
+	while( waited < SDIO_ENUM_READY_POLLS ) {
+		st = lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_IO_READY, false, &ready );
+		if( st != 0 ) {
+			board_case_fail( "reading the IO ready register failed" );
+			return;
+		}
+		if( ( ready & 0x02U ) != 0U ) {
+			break;
+		}
+		osDelay( SDIO_ENUM_READY_GAP_MS );
+		waited++;
+	}
+
+	LOG_ANCHOR( "sdio: func1 ready iorx=%#04x polls=%u\n", ready, waited );
+	if( ( ready & 0x02U ) == 0U ) {
+		board_case_fail( "the function never reported itself ready" );
 		return;
 	}
 

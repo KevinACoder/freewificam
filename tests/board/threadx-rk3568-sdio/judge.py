@@ -52,6 +52,7 @@ ANCHORS = {
         r"sdio: card [0-9a-f]+:[0-9a-f]+, \d+ IO func\(s\), "
         r"CCCR v\d+\.\d+, bus \d+ kHz \((?:HS|DS)\)",
         r"sdio: func1 enabled ioex=0x[0-9a-f]{2}",
+        r"sdio: func1 ready iorx=0x[0-9a-f]{2} polls=\d+",
         r"sdio: func1 block size set=\d+ read=\d+",
         r"sdio: func1 fbr write \d+ read=\d+ restore \d+ read=\d+",
         r"sdio: SDIO READY",
@@ -100,6 +101,7 @@ BASE_TRANSCRIPT = (
     "[  10.520] sdio: common cis@0x1000\r\n"
     "[  10.530] sdio: cis bytes 20 01 01 02\r\n"
     "[  10.540] sdio: func1 enabled ioex=0x02\r\n"
+    "[  10.545] sdio: func1 ready iorx=0x02 polls=0\r\n"
     "[  10.550] sdio: func1 block size set=512 read=512\r\n"
     "[  10.560] sdio: func1 fbr write 256 read=256 restore 512 read=512\r\n"
     "[  10.570] sdio: SDIO READY\r\n"
@@ -156,6 +158,8 @@ MUTATIONS = [
         "sdio: func1 block size set=512 read=512\r\n", ""), 1),
     ("enable anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: func1 enabled ioex=0x02\r\n", ""), 1),
+    ("ready anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: func1 ready iorx=0x02 polls=0\r\n", ""), 1),
     ("probe anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: probe ok first=byte4-f1-000\r\n", ""), 1),
     ("register read anchor dropped", BASE_TRANSCRIPT.replace(
