@@ -117,19 +117,11 @@ ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
 	 */
 	lkpi_rxtrace_delivery(skb);
 	/*
-	 * A driver that leaves the FCS on the frames it hands up says so once, at
-	 * probe (IEEE80211_HW_RX_INCLUDES_FCS; rtw89 sets it at core.c:7497), and
-	 * the receive entry strips those four octets before the stack sees the
-	 * frame.  The substitute did not, so an rtw89 frame reached the bridge
-	 * four octets longer than its own element stream; the imported parser
-	 * ends such a frame with is_rx_elem_toosmall (input.c:2122) before it can
-	 * reach the scan table, which dropped every beacon and left a sweep with
-	 * nothing recorded.  rtl8xxxu never sets the flag, which is why only
-	 * rtw89 was affected.
+	 * The receive entry does the rest, the FCS trim a driver that sets
+	 * IEEE80211_HW_RX_INCLUDES_FCS asks for included: that lives at
+	 * ieee80211_rx_irqsafe so it covers the drivers that call it directly
+	 * (the 8821CU's USB path does) as well as this napi entry.
 	 */
-	if (skb != NULL && ieee80211_hw_check(hw, RX_INCLUDES_FCS) &&
-	    skb->len > ETH_FCS_LEN)
-		skb_trim(skb, skb->len - ETH_FCS_LEN);
 	ieee80211_rx_irqsafe(hw, skb);
 }
 

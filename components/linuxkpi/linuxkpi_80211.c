@@ -42,6 +42,7 @@
 #include <string.h>
 
 #include "linuxkpi_core.h"
+#include <linux/if_ether.h>
 #include <net/mac80211.h>
 #include <net/cfg80211.h>
 
@@ -315,6 +316,19 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	if (hw == NULL || skb == NULL)
 		return;
+	/*
+	 * A driver that leaves the FCS on the frames it hands up says so once, at
+	 * probe (IEEE80211_HW_RX_INCLUDES_FCS), and those four octets come off
+	 * here - at the entry every receive path funnels through.  The 8821CU's
+	 * USB receive path calls this directly rather than going through
+	 * ieee80211_rx_napi, so a trim placed only in the napi entry never ran for
+	 * it: every frame reached the stack four octets longer than its own
+	 * element stream, the imported parser ended it with is_rx_elem_toosmall
+	 * (input.c:2122) before it could reach the scan table, and the sweep came
+	 * back empty while the radio was hearing beacons.
+	 */
+	if (ieee80211_hw_check(hw, RX_INCLUDES_FCS) && skb->len > ETH_FCS_LEN)
+		skb_trim(skb, skb->len - ETH_FCS_LEN);
 	ctx = LKPI80211_CTX(hw);
 	/*
 	 * The driver leaves the status block in the control block
