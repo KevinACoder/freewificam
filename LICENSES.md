@@ -33,6 +33,7 @@ carry the same terms in their file header).
 | `linuxkpi` | BSD-3-Clause (code files); `skbuff/skbuff_pool.h` self-describes an Apache-2.0 lineage | declarations of the Linux kernel API surface, written first-party; the pool body `skbuff/skbuff_pool.c` is first-party BSD-3-Clause written against the Apache-2.0 TizenRT/Realtek fact source (lineage and the change ledger are in `components/linuxkpi/skbuff/`) |
 | `cherrysh` | Apache-2.0 | `LICENSE` at the unit root |
 | `printf` | MIT | `LICENSE` at the unit root (mpaland/printf) |
+| `ulog` | MIT | `LICENSE` at the unit root (rdpoor/ulog, Copyright (c) 2019 Robert Poor); the level engine behind the console log outlets |
 | `tlsf` | BSD-3-Clause | terms are in the `tlsf.h` copyright header (including the endorsement clause); no separate license file |
 
 ## Binaries and data

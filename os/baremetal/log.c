@@ -35,6 +35,7 @@
 #include <stdint.h>
 
 #include "log.h"
+#include "log_anchors.h"
 #include "minilibc.h"
 #include "arch_asm.h"
 #include "generic_timer.h"
@@ -248,6 +249,88 @@ static void console_repeat_gate(const char *msg)
 	console_feed(msg);
 }
 
+/* --- the level plane -------------------------------------------------------- */
+
+/*
+ * A line that matches a never-filtered family is promoted to ALWAYS, so no
+ * runtime threshold can silence a judged line, a one-boot ledger line, a
+ * protocol line or a fault line. This is the one place the promotion happens,
+ * which is what lets vendored trees (whose call sites we cannot annotate) stay
+ * judged: their lines are promoted here by text. The family table is generated
+ * from the judges' anchor tables by tools/gates/log-anchors.py.
+ */
+static bool log_anchor_promote(const char *msg)
+{
+	unsigned int i;
+
+	for (i = 0U; i < log_anchor_family_count; i++) {
+		if (strstr(msg, log_anchor_families[i]) != NULL) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Outlet subscriber. The engine calls this with the entry-held print lock, so
+ * the line discipline runs without taking the lock again. */
+static void log_sink(ulog_level_t severity, char *msg)
+{
+	(void)severity;
+	console_repeat_gate(msg);
+}
+
+static bool log_ready;
+static ulog_level_t log_current_level = (ulog_level_t)LOG_DEFAULT_LEVEL;
+
+void log_emit(ulog_level_t severity, const char *fmt, ...)
+{
+	char msg[CONSOLE_LINE_MAX];
+	va_list ap;
+	uint64_t saved_daif;
+
+	va_start(ap, fmt);
+	(void)vsnprintf(msg, sizeof(msg), fmt, ap);
+	va_end(ap);
+
+	/* The promotion must see the text, so the format happens before the
+	 * gate. A filtered line still pays one vsnprintf - cheaper than the
+	 * serial write it would otherwise cost. */
+	if (log_anchor_promote(msg)) {
+		severity = ULOG_ALWAYS_LEVEL;
+	}
+
+	print_lock_take(&saved_daif);
+	if (!log_ready) {
+		/* Lazy: boot-early callers (the heap probe) print before main. */
+		ULOG_INIT();
+		(void)ULOG_SUBSCRIBE(log_sink, (ulog_level_t)LOG_DEFAULT_LEVEL);
+		log_ready = true;
+	}
+	ulog_message(severity, "%s", msg);
+	print_lock_give(saved_daif);
+}
+
+ulog_level_t log_level_get(void)
+{
+	return log_current_level;
+}
+
+void log_level_set(ulog_level_t severity)
+{
+	uint64_t saved_daif;
+
+	print_lock_take(&saved_daif);
+	if (!log_ready) {
+		ULOG_INIT();
+		log_ready = true;
+	}
+	/* ulog's change model: re-subscribing an existing function updates its
+	 * threshold (and a first call with no prior subscription installs it). */
+	(void)ULOG_SUBSCRIBE(log_sink, severity);
+	log_current_level = severity;
+	print_lock_give(saved_daif);
+}
+
 void board_log(const char *fmt, ...)
 {
 	char msg[CONSOLE_LINE_MAX];
@@ -257,13 +340,7 @@ void board_log(const char *fmt, ...)
 	(void)vsnprintf(msg, sizeof(msg), fmt, ap);
 	va_end(ap);
 
-	{
-		uint64_t saved_daif;
-
-		print_lock_take(&saved_daif);
-		console_repeat_gate(msg);
-		print_lock_give(saved_daif);
-	}
+	log_emit(ULOG_INFO_LEVEL, "%s", msg);
 }
 
 void board_console_write_raw(const char *data, unsigned int len)

@@ -118,6 +118,7 @@ cross32_cherryusb() {
 	cu=$root/third-party/cherryusb
 	flags="-std=c11 -Wall -DCMSIS2_BACKEND_THREADX
 	    -I$root -I$root/os/cmsis2 -I$root/os/baremetal -I$cfg
+	    -I$root/components/ulog/src -DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256
 	    -I$cu/common -I$cu/core -I$cu/class/hub -I$cu/class/msc
 	    -I$root/third-party/CMSIS_6/CMSIS/RTOS2/Include"
 	# shellcheck disable=SC2086
@@ -141,6 +142,7 @@ cross32_lwip() {
 	    -I$root/ports/lwip/include -I$root/third-party/lwip/src/include
 	    -I$root/third-party/lwip/contrib/apps/ping
 	    -I$root -I$root/os/cmsis2 -I$root/os/baremetal -I$root/arch/aarch64
+	    -I$root/components/ulog/src -DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256
 	    -I$cmsis"
 	# shellcheck disable=SC2086
 	for f in $root/ports/lwip/sys_arch.c $root/ports/lwip/platform_hooks.c \

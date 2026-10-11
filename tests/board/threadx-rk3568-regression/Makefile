@@ -80,6 +80,8 @@ INCLUDES := \
 	-I$(ROOT)/board/rk3568-itx \
 	-I$(ROOT)/board/rk3568-itx/drivers \
 	-I$(ROOT)/os/baremetal \
+	-I$(ROOT)/components/ulog/src \
+	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
 	-I$(CHERRYSH) \
 	-I$(PORT) \
 	-I$(ROOT)/components/tlsf \
@@ -166,6 +168,7 @@ BASE_SRCS := \
 	$(ROOT)/os/baremetal/memops.c \
 	$(ROOT)/os/baremetal/minilibc.c \
 	$(ROOT)/os/baremetal/log.c \
+	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
 
 # The port's fp_enable/fp_disable .c files are NOT built (no FP state under

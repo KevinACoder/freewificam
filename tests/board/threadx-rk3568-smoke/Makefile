@@ -54,7 +54,9 @@ CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-I$(ROOT)/arch/aarch64 \
 	-I$(ROOT)/board/rk3568-itx \
 	-I$(ROOT)/board/rk3568-itx/drivers \
-	-I$(ROOT)/os/baremetal
+	-I$(ROOT)/os/baremetal \
+	-I$(ROOT)/components/ulog/src \
+	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256
 
 # -DEL1=1 is load-bearing: the port picks its exception-return register bank
 # (SPSR/ELR_EL1 vs _EL2 vs _EL3) from this compile-time macro - undefined, it
@@ -93,6 +95,7 @@ BASE_SRCS := \
 	$(ROOT)/os/baremetal/memops.c \
 	$(ROOT)/os/baremetal/minilibc.c \
 	$(ROOT)/os/baremetal/log.c \
+	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
 
 TX_SRCS := $(KERNEL_SRCS) $(PORT_SRCS) $(GLUE_SRCS) $(APP_SRCS)

@@ -63,6 +63,8 @@ INCLUDES := \
 	-I$(ROOT)/board/rk3568-itx \
 	-I$(ROOT)/board/rk3568-itx/drivers \
 	-I$(ROOT)/os/baremetal \
+	-I$(ROOT)/components/ulog/src \
+	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
 	-I$(CHERRYSH) \
 	-I$(PORT) \
 	-I$(COMMON) \
@@ -118,6 +120,7 @@ BASE_SRCS := \
 	$(ROOT)/os/baremetal/memops.c \
 	$(ROOT)/os/baremetal/minilibc.c \
 	$(ROOT)/os/baremetal/log.c \
+	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
 
 KERNEL_SRCS := \
