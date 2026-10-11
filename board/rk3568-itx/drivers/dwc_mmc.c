@@ -274,6 +274,13 @@ static void dwc_mmc_dump_state(struct dwc_mmc *hc)
 		  mmio_rd32(base + DWC_MMC_STATUS), mmio_rd32(base + DWC_MMC_TMOUT),
 		  mmio_rd32(base + DWC_MMC_DSCADDR), mmio_rd32(base + DWC_MMC_BUFADDR),
 		  mmio_rd32(base + DWC_MMC_IDSTS), mmio_rd32(base + DWC_MMC_IDINTEN));
+	/* The two progress counters say which side stopped: the card-side byte
+	 * count moving without the buffer-side count is a host path that is not
+	 * consuming, and both at zero is a data phase that never happened. */
+	LOG_ERROR("dwc_mmc: state blksiz=0x%x bytcnt=0x%x tcb=0x%x tbb=0x%x "
+		  "hcon=0x%x\n", mmio_rd32(base + DWC_MMC_BLKSIZ),
+		  mmio_rd32(base + DWC_MMC_BYTCNT), mmio_rd32(base + DWC_MMC_TCBCNT),
+		  mmio_rd32(base + DWC_MMC_TBBCNT), mmio_rd32(base + DWC_MMC_HCON));
 }
 
 /* --- command issue -------------------------------------------------------- */
@@ -407,7 +414,16 @@ static uint32_t dwc_mmc_build_descs(uintptr_t buf, uint32_t len)
 			desc->flags |= DWC_MMC_DESC_FD;
 		}
 		if (chunk >= remain) {
+			/*
+			 * The last descriptor: the chain bit is cleared, because there is
+			 * no next descriptor to follow and its address is zero. The kernel
+			 * driver clears it here too; leaving it set with a zero address is
+			 * an arrangement neither reference driver uses (u-boot keeps the
+			 * bit but supplies a real address), and an engine that follows a
+			 * null next-pointer is an engine that never moves data.
+			 */
 			desc->flags |= DWC_MMC_DESC_LD;
+			desc->flags &= ~(uint32_t)DWC_MMC_DESC_CH;
 			desc->next = 0U;
 		} else {
 			desc->next = (uint32_t)(pool + (uintptr_t)(n + 1U) *

@@ -85,6 +85,8 @@
 #define DWC_MMC_IDINTEN				0x090U
 #define DWC_MMC_DSCADDR				0x094U
 #define DWC_MMC_BUFADDR				0x098U
+#define DWC_MMC_TCBCNT				0x05cU
+#define DWC_MMC_TBBCNT				0x060U
 #define DWC_MMC_CARDTHRCTL			0x100U
 
 /* Rockchip clock-phase registers (dw_mmc-rockchip's SDMMC_TIMING_CON0/1): the
