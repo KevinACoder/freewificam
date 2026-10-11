@@ -62,9 +62,13 @@ valid comparison and are not shown here.
 
 | Line | RTOS (host to board) | Linux, same card, same channel |
 |---|---|---|
-| RTL8188EUS | 4.00 / 4.66 Mbit/s | pending (control run) |
+| RTL8188EUS | 4.00 / 4.66 Mbit/s | 30.5 / 32.9 / 43.1 Mbit/s |
 | RTL8821CU | 3.65 Mbit/s | pending (control run) |
 | RTL8851BU | 136 / 173 Kbit/s | pending (control run) |
+
+The RTL8188EUS row is a fair comparison: both sides are on channel 1 against
+the same access point, and the RTOS figure is about one eighth of the Linux
+figure. The other two rows' Linux figures are not yet taken.
 
 The gap to Linux is large, and it is the current open problem. It is stated
 here rather than hidden because the value of the port is in the structure, not
