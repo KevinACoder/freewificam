@@ -40,6 +40,7 @@
 
 /* The card registers this case reads and writes, by their SDIO addresses. */
 #define SDIO_CCCR_IO_ENABLE	0x02U	/* IOEx, one bit per function */
+#define SDIO_CCCR_BUS_IFACE	0x07U	/* bus interface: the width in use */
 #define SDIO_CCCR_COMMON_CIS	0x09U	/* the common CIS pointer, three bytes */
 #define SDIO_FBR_BLOCK_SIZE	0x10U	/* the function's block size, two bytes */
 
@@ -80,6 +81,7 @@ void sdio_enum_chain( void )
 	uint8_t pointer[3];
 	uint8_t cis[SDIO_ENUM_CIS_BYTES];
 	uint8_t cccr = 0U;
+	uint8_t bus_iface = 0U;
 	unsigned int size = 0U;
 	unsigned int other = 0U;
 	uint32_t cis_addr;
@@ -107,10 +109,16 @@ void sdio_enum_chain( void )
 		    (unsigned)( info.cccr_version & 0x0fU ),
 		    (unsigned)( info.clock_hz / 1000U ),
 		    info.high_speed ? "HS" : "DS" );
+
+	/* The bus interface register is the width the card believes it is on, and
+	 * the host's own record is the width it programmed: the two must agree, and
+	 * a mismatch here is exactly what a data phase that never starts looks
+	 * like from the outside. */
+	(void)lkpi_sdio_be_io_direct( 0U, SDIO_CCCR_BUS_IFACE, false, &bus_iface );
 	LOG_INFO( "sdio: identity sdio_rev=%u cccr_rev=%u ocr=%#x width=%u "
-		  "fn0_max_block=%u memory=%u multi_block=%u\n",
+		  "card_bus_iface=%#04x fn0_max_block=%u memory=%u multi_block=%u\n",
 		  info.sdio_version, info.cccr_version, info.ocr, info.bus_width,
-		  info.fn0_max_block, info.memory_present, info.multi_block );
+		  bus_iface, info.fn0_max_block, info.memory_present, info.multi_block );
 
 	/* The card's common CIS pointer, then the first bytes it points at - read
 	 * one byte at a time, which is the access the CIS is defined for. */

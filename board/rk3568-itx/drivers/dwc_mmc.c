@@ -22,6 +22,7 @@
 #include "os/cmsis2/cmsis2.h"
 #include "log.h"
 
+#include "arch_asm.h"
 #include "cache.h"
 #include "generic_timer.h"
 #include "mmio.h"
@@ -35,13 +36,25 @@
 #define DWC_MMC_DATA_POLLS		3000U	/* 300 ms for one data stage */
 #define DWC_MMC_RESET_POLLS		500U	/* 50 ms for a self-clearing step */
 
-/* The IDMAC descriptor list. One controller, one card and transfers serialised
- * by the stack above, so a single static list is the whole requirement; 64-byte
- * alignment keeps a descriptor from sharing a cache line with its neighbour's
- * tail. The list lives in the identity-mapped image window, so its virtual
- * address is its physical address. */
+/* The poll at which a data wait says what it is seeing: 10 ms in, a data phase
+ * that has not started at all and one that started and stalled look the same
+ * from outside, and this line is what separates them. */
+#define DWC_MMC_DATA_SAMPLE_POLL	100U
+
+/*
+ * The IDMAC descriptor list. One controller, one card and transfers serialised
+ * by the stack above, so a single static list is the whole requirement.
+ *
+ * It lives in the linker's non-cacheable window, which is this board's rule for
+ * DMA-visible memory (arch/aarch64/baremetal.ld `.noncacheable`, the same
+ * placement the ethernet driver's descriptor rings use): a 16-byte descriptor
+ * shares a 64-byte cache line with its neighbours, and arming one of them would
+ * flush a stale copy of an already-completed neighbour back over what the
+ * engine wrote. The window is identity-mapped, so the list's virtual address is
+ * the address the engine takes.
+ */
 static struct dwc_mmc_desc dwc_mmc_desc_pool[DWC_MMC_DESC_NUM]
-	__attribute__((aligned(64)));
+	__attribute__((section(".noncacheable"), aligned(64)));
 
 /* The controllers this board wires. One entry: sdmmc0 carries the SDIO part. */
 static const struct dwc_mmc_cfg dwc_mmc_board[] = {
@@ -445,9 +458,12 @@ static int dwc_mmc_prepare_dma(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd
 		return DWC_MMC_ERR_ARG;
 	}
 
-	/* The list is CPU-written and device-read: clean it before the doorbell. */
-	cache_dcache_flush((uintptr_t)dwc_mmc_desc_pool,
-			   (unsigned long)descs * sizeof(struct dwc_mmc_desc));
+	/*
+	 * The list is in the non-cacheable window, so the engine reads what the
+	 * CPU wrote once the store reaches memory - which is what this barrier
+	 * orders, in place of a cache clean the window makes unnecessary.
+	 */
+	ARCH_DSB();
 
 	/*
 	 * The buffer crosses in the other direction. A read hands it to the device,
@@ -566,6 +582,19 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 
 		if ((mask & DWC_MMC_INT_DTO) != 0U) {
 			break;
+		}
+
+		/* A data phase that never started and one that started and stalled look
+		 * identical from the outside; the status word tells them apart (bit 9
+		 * is the card holding the data lines busy), so it is read once, well
+		 * into the wait. */
+		if (loop == (DWC_MMC_DATA_POLLS - DWC_MMC_DATA_SAMPLE_POLL)) {
+			LOG_ERROR("dwc_mmc: CMD%u data wait status=0x%x rintsts=0x%x "
+				  "idsts=0x%x dsc=0x%x buf=0x%x\n", cmd->index,
+				  mmio_rd32(base + DWC_MMC_STATUS), mask,
+				  mmio_rd32(base + DWC_MMC_IDSTS),
+				  mmio_rd32(base + DWC_MMC_DSCADDR),
+				  mmio_rd32(base + DWC_MMC_BUFADDR));
 		}
 
 		dwc_mmc_udelay(DWC_MMC_POLL_US);
