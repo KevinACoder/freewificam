@@ -281,6 +281,12 @@ static void dwc_mmc_dump_state(struct dwc_mmc *hc)
 		  "hcon=0x%x\n", mmio_rd32(base + DWC_MMC_BLKSIZ),
 		  mmio_rd32(base + DWC_MMC_BYTCNT), mmio_rd32(base + DWC_MMC_TCBCNT),
 		  mmio_rd32(base + DWC_MMC_TBBCNT), mmio_rd32(base + DWC_MMC_HCON));
+	/* The descriptor's own bit is the one piece of state that says whether the
+	 * engine ever walked its list: still owned by the engine means it never
+	 * consumed this transfer at all. */
+	LOG_ERROR("dwc_mmc: state desc0=0x%x desc1=0x%x pldmnd=0x%x\n",
+		  dwc_mmc_desc_pool[0].flags, dwc_mmc_desc_pool[0].cnt,
+		  mmio_rd32(base + DWC_MMC_PLDMND));
 }
 
 /* --- command issue -------------------------------------------------------- */
@@ -544,6 +550,13 @@ static int dwc_mmc_prepare_dma(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd
 	ctrl = mmio_rd32(base + DWC_MMC_BMOD);
 	ctrl |= DWC_MMC_IDMAC_ENABLE | DWC_MMC_IDMAC_FB;
 	mmio_wr32(base + DWC_MMC_BMOD, ctrl);
+
+	/* The poll demand: the kernel driver raises it after switching the engine
+	 * on, and it is the kick that makes the engine start walking the descriptor
+	 * list. u-boot does not raise it, so it is not universally required - but
+	 * an engine that never walks its list is indistinguishable, from outside,
+	 * from a card that never sends. */
+	mmio_wr32(base + DWC_MMC_PLDMND, 1U);
 
 	mmio_wr32(base + DWC_MMC_BLKSIZ, d->blksz);
 	mmio_wr32(base + DWC_MMC_BYTCNT, d->len);
