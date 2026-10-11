@@ -236,7 +236,31 @@ static void dwc_mmc_reprogram(struct dwc_mmc *hc)
 	mmio_wr32(base + DWC_MMC_FIFOTH,
 		  DWC_MMC_FIFOTH_MSIZE(6) | DWC_MMC_FIFOTH_RX_WMARK(0x7fu) |
 		  DWC_MMC_FIFOTH_TX_WMARK(0x80u));
+	/* The data timeout counter is disabled while this register reads zero, and
+	 * a disabled counter is why a data phase that never starts looks like a
+	 * silent hang instead of a timeout. The reference drivers leave it at its
+	 * maximum. */
+	mmio_wr32(base + DWC_MMC_TMOUT, 0xffffffffU);
 	mmio_wr32(base + DWC_MMC_PWREN, 1U);
+}
+
+/* One line of controller state, for the moment a transfer failed: a verdict
+ * about a data path is only worth anything next to the register values that
+ * produced it. */
+static void dwc_mmc_dump_state(struct dwc_mmc *hc)
+{
+	uintptr_t base = hc->cfg.base;
+
+	LOG_ERROR("dwc_mmc: state cmd=0x%x ctrl=0x%x bmod=0x%x ctype=0x%x "
+		  "clkena=0x%x clkdiv=0x%x\n", hc->last_cmd,
+		  mmio_rd32(base + DWC_MMC_CTRL), mmio_rd32(base + DWC_MMC_BMOD),
+		  mmio_rd32(base + DWC_MMC_CTYPE), mmio_rd32(base + DWC_MMC_CLKENA),
+		  mmio_rd32(base + DWC_MMC_CLKDIV));
+	LOG_ERROR("dwc_mmc: state status=0x%x tmout=0x%x dsc=0x%x buf=0x%x "
+		  "idsts=0x%x idinten=0x%x\n",
+		  mmio_rd32(base + DWC_MMC_STATUS), mmio_rd32(base + DWC_MMC_TMOUT),
+		  mmio_rd32(base + DWC_MMC_DSCADDR), mmio_rd32(base + DWC_MMC_BUFADDR),
+		  mmio_rd32(base + DWC_MMC_IDSTS), mmio_rd32(base + DWC_MMC_IDINTEN));
 }
 
 /* --- command issue -------------------------------------------------------- */
@@ -311,8 +335,9 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
 
 	mmio_wr32(base + DWC_MMC_CMDARG, cmd->arg);
-	mmio_wr32(base + DWC_MMC_CMD,
-		  dwc_mmc_make_raw_cmd(cmd) | DWC_MMC_CMD_USE_HOLD_REG | DWC_MMC_CMD_START);
+	hc->last_cmd = dwc_mmc_make_raw_cmd(cmd) | DWC_MMC_CMD_USE_HOLD_REG |
+		       DWC_MMC_CMD_START;
+	mmio_wr32(base + DWC_MMC_CMD, hc->last_cmd);
 
 	loop = DWC_MMC_CMD_POLLS;
 	do {
@@ -324,11 +349,8 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	} while (--loop != 0U);
 
 	if (loop == 0U) {
-		LOG_ERROR("dwc_mmc: CMD%u timed out (ctrl=0x%x clkena=0x%x clkdiv=0x%x "
-			  "status=0x%x rintsts=0x%x)\n", cmd->index,
-			  mmio_rd32(base + DWC_MMC_CTRL), mmio_rd32(base + DWC_MMC_CLKENA),
-			  mmio_rd32(base + DWC_MMC_CLKDIV), mmio_rd32(base + DWC_MMC_STATUS),
-			  mask);
+		LOG_ERROR("dwc_mmc: CMD%u timed out (rintsts=0x%x)\n", cmd->index, mask);
+		dwc_mmc_dump_state(hc);
 		mmio_wr32(base + DWC_MMC_RINTSTS, mask);
 		return DWC_MMC_ERR_TIMEOUT;
 	}
@@ -453,6 +475,21 @@ static int dwc_mmc_prepare_dma(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd
 
 	mmio_wr32(base + DWC_MMC_DBADDR, (uint32_t)(uintptr_t)dwc_mmc_desc_pool);
 
+	/* Software-reset the IDMAC before switching it on: the reference drivers do
+	 * this on every transfer, and an engine that was left mid-transfer by an
+	 * earlier failure is otherwise switched on in a state of its own. */
+	ctrl = mmio_rd32(base + DWC_MMC_BMOD);
+	ctrl |= DWC_MMC_IDMAC_SWRESET;
+	mmio_wr32(base + DWC_MMC_BMOD, ctrl);
+	loop = DWC_MMC_RESET_POLLS;
+	while ((mmio_rd32(base + DWC_MMC_BMOD) & DWC_MMC_IDMAC_SWRESET) != 0U) {
+		if (--loop == 0U) {
+			LOG_ERROR("dwc_mmc: the IDMAC reset did not self-clear\n");
+			return DWC_MMC_ERR_TIMEOUT;
+		}
+		dwc_mmc_udelay(DWC_MMC_POLL_US);
+	}
+
 	/* INT_ENABLE comes along: the FIFO reset above cleared it */
 	ctrl = mmio_rd32(base + DWC_MMC_CTRL);
 	ctrl |= DWC_MMC_CTRL_USE_IDMAC | DWC_MMC_CTRL_DMA_ENABLE | DWC_MMC_CTRL_INT_ENABLE;
@@ -519,8 +556,9 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 		mask = mmio_rd32(base + DWC_MMC_RINTSTS);
 
 		if ((mask & (DWC_MMC_INT_DATA_ERR | DWC_MMC_INT_DATA_TOUT)) != 0U) {
-			LOG_ERROR("dwc_mmc: CMD%u data error (rintsts=0x%x)\n",
-				  cmd->index, mask);
+			LOG_ERROR("dwc_mmc: CMD%u data error (rintsts=0x%x r5=0x%x)\n",
+				  cmd->index, mask, cmd->response[0]);
+			dwc_mmc_dump_state(hc);
 			mmio_wr32(base + DWC_MMC_RINTSTS, mask);
 			mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
 			return DWC_MMC_ERR_DATA;
@@ -534,9 +572,9 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 	} while (--loop != 0U);
 
 	if (loop == 0U) {
-		LOG_ERROR("dwc_mmc: CMD%u data timeout (rintsts=0x%x idsts=0x%x "
-			  "r5=0x%x)\n", cmd->index, mask,
-			  mmio_rd32(base + DWC_MMC_IDSTS), cmd->response[0]);
+		LOG_ERROR("dwc_mmc: CMD%u data timeout (rintsts=0x%x r5=0x%x)\n",
+			  cmd->index, mask, cmd->response[0]);
+		dwc_mmc_dump_state(hc);
 		mmio_wr32(base + DWC_MMC_RINTSTS, mask);
 		return DWC_MMC_ERR_TIMEOUT;
 	}
