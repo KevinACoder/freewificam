@@ -17,7 +17,7 @@ SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-sdio start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-sdio select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-sdio result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-sdio result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
-SUITE_CASE_NAMES      := shell-up sdio-enum sdio-datapath sdio-pump
+SUITE_CASE_NAMES      := shell-up sdio-enum sdio-card-enable sdio-datapath sdio-pump
 SUITE_STEPS_FILE      := steps.tsv
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-sdio/judge.py
 SUITE_TIMEOUT         := 240

@@ -34,6 +34,7 @@ SUITE = "threadx-rk3568-sdio"
 CASES = [
     "shell-up",
     "sdio-enum",
+    "sdio-card-enable",
     "sdio-datapath",
     "sdio-pump",
 ]
@@ -45,6 +46,8 @@ CASES = [
 #:                  tests/sdio_enum.c), whose identity values come from the
 #:                  card's CIS through the imported stack
 #:   sdio-datapath  the case's own lines (tests/.../tests/sdio_datapath.c)
+#:   sdio-card-enable
+#:                  the case's own lines (tests/.../tests/sdio_card_enable.c)
 #:   sdio-pump      the case's own lines (tests/.../tests/sdio_pump.c)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
@@ -57,12 +60,25 @@ ANCHORS = {
         r"sdio: func1 fbr write \d+ read=\d+ restore \d+ read=\d+",
         r"sdio: SDIO READY",
     ],
+    "sdio-card-enable": [
+        r"sdio: card pre hci=0x[0-9a-f]{2} ctrl=0x[0-9a-f]{2} "
+        r"pwr=0x[0-9a-f]{2} cr=0x[0-9a-f]{4}",
+        r"sdio: card enable rc=0 polls=\d+/\d+",
+        r"sdio: card post hci=0x[0-9a-f]{2} ctrl=0x[0-9a-f]{2} "
+        r"pwr=0x[0-9a-f]{2} cr=0x[0-9a-f]{4}",
+        r"sdio: card ext read cr rc=0 bytes=[0-9a-f]{8}",
+        r"sdio: card ext read local rc=0 bytes=[0-9a-f]{8}",
+        r"sdio: card ext read matches the byte path",
+    ],
     "sdio-datapath": [
-        r"sdio: probe ok first=\w",
-        r"sdio: probe write4 rc=0 after=\d+",
-        r"sdio: fbr read twice identical \(\d+ bytes\)",
-        r"sdio: fbr cmd52 and cmd53 agree first=[0-9a-f]{8}",
-        r"sdio: cis block read twice identical \(\d+ bytes\)",
+        r"sdio: probe ref first=\w",
+        r"sdio: probe ours first=\w",
+        r"sdio: probe write4 ref rc=0 before=\d+ after=\d+",
+        r"sdio: probe write4 ours rc=0 before=\d+ after=\d+",
+        r"sdio: extended read twice identical \(\d+ bytes\)",
+        r"sdio: extended and byte path agree first=[0-9a-f]{8}",
+        r"sdio: cis read twice identical \(\d+ bytes\)",
+        r"sdio: cis digest [0-9a-f]{8}",
         r"sdio: fbr 2-byte write read=\d+ restore read=\d+",
         r"sdio: pump quiet pending=0x[0-9a-f]{2}",
     ],
@@ -85,14 +101,14 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  22.360] BOARD-SUITE threadx-rk3568-sdio "
-    "result=pass cases=4 ok=4 exit=0\r\n"
+    "result=pass cases=5 ok=5 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-sdio bring-up selftest-tag\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-sdio select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-sdio start cases=4 sel=all "
-    "list=shell-up,sdio-enum,sdio-datapath,sdio-pump\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-sdio start cases=5 sel=all "
+    "list=shell-up,sdio-enum,sdio-card-enable,sdio-datapath,sdio-pump\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-sdio/shell-up PASS\r\n"
     "[  10.500] sdio: card 24c:f179, 1 IO func(s), CCCR v0.2, "
@@ -107,13 +123,37 @@ BASE_TRANSCRIPT = (
     "[  10.560] sdio: func1 fbr write 256 read=256 restore 512 read=512\r\n"
     "[  10.570] sdio: SDIO READY\r\n"
     "[  10.580] CASE threadx-rk3568-sdio/sdio-enum PASS\r\n"
-    "[  10.700] sdio: probe byte4-f1-000 rc=0 first=00010000\r\n"
-    "[  10.800] sdio: probe ok first=byte4-f1-000\r\n"
-    "[  10.900] sdio: probe write4 rc=0 after=256\r\n"
-    "[  11.000] sdio: fbr read twice identical (8 bytes)\r\n"
-    "[  11.100] sdio: fbr cmd52 and cmd53 agree first=00010000\r\n"
-    "[  11.200] sdio: func1 cis@0x1000\r\n"
-    "[  11.300] sdio: cis block read twice identical (512 bytes)\r\n"
+    "[  10.600] sdio: card pre hci=0x00 ctrl=0x03 pwr=0x00 cr=0x0000\r\n"
+    "[  10.610] sdio: card enable rc=0 polls=0/0\r\n"
+    "[  10.620] sdio: card post hci=0x02 ctrl=0x01 pwr=0x02 cr=0x063f\r\n"
+    "[  10.630] sdio: card ext read cr rc=0 bytes=3f060000\r\n"
+    "[  10.640] sdio: card ext read local rc=0 bytes=00010000\r\n"
+    "[  10.650] sdio: card ext read matches the byte path\r\n"
+    "[  10.660] CASE threadx-rk3568-sdio/sdio-card-enable PASS\r\n"
+    "[  10.700] sdio: probe ref byte4-f1-000 rc=0 first=00010000\r\n"
+    "[  10.705] sdio: probe ref byte4-f1-0b0 rc=0 first=00010000\r\n"
+    "[  10.710] sdio: probe ref byte8-f1-000 rc=0 first=00010000\r\n"
+    "[  10.715] sdio: probe ref block512-f1-000 rc=0 first=00010000\r\n"
+    "[  10.718] sdio: probe ref byte4-f0-fbr rc=0 first=07000100\r\n"
+    "[  10.720] sdio: probe ref byte4-f0-cis rc=0 first=00010000\r\n"
+    "[  10.730] sdio: probe ref first=byte4-f1-000\r\n"
+    "[  10.740] sdio: probe ours byte4-f1-000 rc=0 first=00010000\r\n"
+    "[  10.745] sdio: probe ours byte4-f1-0b0 rc=0 first=00010000\r\n"
+    "[  10.750] sdio: probe ours byte8-f1-000 rc=0 first=00010000\r\n"
+    "[  10.755] sdio: probe ours block512-f1-000 rc=0 first=00010000\r\n"
+    "[  10.758] sdio: probe ours byte4-f0-fbr rc=0 first=07000100\r\n"
+    "[  10.760] sdio: probe ours byte4-f0-cis rc=0 first=00010000\r\n"
+    "[  10.770] sdio: probe ours first=byte4-f1-000\r\n"
+    "[  10.780] sdio: data cmd=53 arg=0x14000004 blksz=4 blkcnt=1 len=4 read\r\n"
+    "[  10.790] sdio: probe write4 ref rc=0 before=512 after=256\r\n"
+    "[  10.800] sdio: probe write4 ours rc=0 before=512 after=256\r\n"
+    "[  10.810] sdio: card after ladder ioex=0/0x02 iorx=0/0x02 busif=0/0x02\r\n"
+    "[  11.000] sdio: extended read twice identical (4 bytes)\r\n"
+    "[  11.100] sdio: extended and byte path agree first=00010000\r\n"
+    "[  11.200] sdio: func1 cis@0x1100\r\n"
+    "[  11.205] sdio: common cis@0x1000\r\n"
+    "[  11.300] sdio: cis read twice identical (8 bytes)\r\n"
+    "[  11.310] sdio: cis digest 20010102\r\n"
     "[  11.400] sdio: fbr 2-byte write read=256 restore read=512\r\n"
     "[  11.500] sdio: pump quiet pending=0x00\r\n"
     "[  11.600] CASE threadx-rk3568-sdio/sdio-datapath PASS\r\n"
@@ -145,7 +185,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-sdio/sdio-datapath PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=4 ok=4 exit=0", "cases=4 ok=3 exit=0"), 1),
+        "cases=5 ok=5 exit=0", "cases=5 ok=4 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-sdio/sdio-pump PASS",
@@ -162,16 +202,26 @@ MUTATIONS = [
         "sdio: func1 enabled ioex=0x02\r\n", ""), 1),
     ("ready anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: func1 ready iorx=0x02 polls=0\r\n", ""), 1),
-    ("probe anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: probe ok first=byte4-f1-000\r\n", ""), 1),
-    ("write probe anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: probe write4 rc=0 after=256\r\n", ""), 1),
+    ("card enable anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: card enable rc=0 polls=0/0\r\n", ""), 1),
+    ("card enable state dropped", BASE_TRANSCRIPT.replace(
+        "sdio: card post hci=0x02 ctrl=0x01 pwr=0x02 cr=0x063f\r\n", ""), 1),
+    ("card extended read anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: card ext read matches the byte path\r\n", ""), 1),
+    ("reference probe anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: probe ref first=byte4-f1-000\r\n", ""), 1),
+    ("own-path probe anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: probe ours first=byte4-f1-000\r\n", ""), 1),
+    ("reference write probe anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: probe write4 ref rc=0 before=512 after=256\r\n", ""), 1),
+    ("own-path write probe anchor dropped", BASE_TRANSCRIPT.replace(
+        "sdio: probe write4 ours rc=0 before=512 after=256\r\n", ""), 1),
     ("register read anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: fbr read twice identical (8 bytes)\r\n", ""), 1),
+        "sdio: extended read twice identical (4 bytes)\r\n", ""), 1),
     ("cross-path agreement dropped", BASE_TRANSCRIPT.replace(
-        "sdio: fbr cmd52 and cmd53 agree first=00010000\r\n", ""), 1),
+        "sdio: extended and byte path agree first=00010000\r\n", ""), 1),
     ("cis repeat anchor dropped", BASE_TRANSCRIPT.replace(
-        "sdio: cis block read twice identical (512 bytes)\r\n", ""), 1),
+        "sdio: cis read twice identical (8 bytes)\r\n", ""), 1),
     ("two-byte write anchor dropped", BASE_TRANSCRIPT.replace(
         "sdio: fbr 2-byte write read=256 restore read=512\r\n", ""), 1),
     ("pump quiet anchor dropped", BASE_TRANSCRIPT.replace(
@@ -179,7 +229,7 @@ MUTATIONS = [
     ("step response dropped", BASE_TRANSCRIPT.replace(
         "total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,sdio-enum,sdio-datapath,sdio-pump",
+        "list=shell-up,sdio-enum,sdio-card-enable,sdio-datapath,sdio-pump",
         "list=shell-up,sdio-enum"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
@@ -193,7 +243,7 @@ IDENTITY_RE = re.compile(
 
 #: The datapath backstop: the two block reads agreeing is the case's whole
 #: claim, so a PASS without that line is refused.
-CIS_REPEAT_RE = re.compile(r"sdio: cis block read twice identical")
+CIS_REPEAT_RE = re.compile(r"sdio: cis read twice identical")
 
 
 def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:

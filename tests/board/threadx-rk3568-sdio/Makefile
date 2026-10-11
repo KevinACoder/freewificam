@@ -114,6 +114,7 @@ SDIO_PORT_CFLAGS := $(CFLAGS) \
 # they carry the seam's include roots and nothing of the imported stack.
 SDIO_CASE_SRCS := \
 	$(CURDIR)/tests/sdio_enum.c \
+	$(CURDIR)/tests/sdio_card_enable.c \
 	$(CURDIR)/tests/sdio_datapath.c \
 	$(CURDIR)/tests/sdio_pump.c \
 	$(CURDIR)/tests/sdio_cmds.c
@@ -180,6 +181,7 @@ SHELL_SRCS := \
 TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(CURDIR)/tests/sdio_enum.c \
+	$(CURDIR)/tests/sdio_card_enable.c \
 	$(CURDIR)/tests/sdio_datapath.c \
 	$(CURDIR)/tests/sdio_pump.c \
 	$(CURDIR)/tests/sdio_cmds.c
