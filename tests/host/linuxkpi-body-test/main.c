@@ -57,6 +57,7 @@ void lkpi_body_test_platform_init(void);
 
 /* the blob's registration entry (rtl8188eufw_blob.c) */
 int lkpi_fw_rtl8188eufw_register(void);
+int lkpi_fw_rtw8821c_fw_register(void);
 
 /* ------------------------------------------------------------------ */
 /* case scaffolding                                                    */
@@ -315,6 +316,22 @@ case_l4(struct mock_backend *b)
 /* L5 firmware by name                                                 */
 /* ------------------------------------------------------------------ */
 
+/* the asynchronous spelling's continuation: it must run with the result and
+ * the caller's context */
+struct fw_async_watch {
+	const struct firmware	*fw;
+	unsigned int		calls;
+};
+
+static void
+fw_async_cb(const struct firmware *fw, void *context)
+{
+	struct fw_async_watch *w = context;
+
+	w->calls++;
+	w->fw = fw;
+}
+
 static int
 case_l5(void)
 {
@@ -345,7 +362,42 @@ case_l5(void)
 		case_line("L5", 0, "red-control: firmware name check disabled");
 		return -1;
 	}
-	case_line("L5", 1, "known name -> 15262 bytes, unknown name -> %d", ret);
+
+	/* the asynchronous spelling: the continuation runs with the blob the
+	 * name resolves to (the driver asks for its image this way) */
+	{
+		struct fw_async_watch w = { NULL, 0 };
+
+		ret = request_firmware_nowait(NULL, true,
+		    "rtw88/rtw8821c_fw.bin", NULL, GFP_KERNEL, &w, fw_async_cb);
+		if (ret != 0 || w.calls != 1 || w.fw == NULL) {
+			case_line("L5", 0, "the async request must deliver through "
+			    "its continuation (ret=%d calls=%u)", ret, w.calls);
+			return -1;
+		}
+		if (w.fw->size != 139472) {
+			case_line("L5", 0, "the async blob must be the 139472-byte "
+			    "image (got %zu)", w.fw->size);
+			release_firmware(w.fw);
+			return -1;
+		}
+		release_firmware(w.fw);
+	}
+	/* an unknown name still runs the continuation, with no firmware */
+	{
+		struct fw_async_watch w = { NULL, 0 };
+
+		ret = request_firmware_nowait(NULL, true, "no/such/image.bin",
+		    NULL, GFP_KERNEL, &w, fw_async_cb);
+		if (ret != 0 || w.calls != 1 || w.fw != NULL) {
+			case_line("L5", 0, "an unknown async name must deliver a "
+			    "null firmware (ret=%d calls=%u)", ret, w.calls);
+			return -1;
+		}
+	}
+
+	case_line("L5", 1, "known name -> 15262 bytes, unknown name -> %d, "
+	    "async delivers 139472", ret);
 	return 0;
 }
 
@@ -581,6 +633,44 @@ case_l9(struct mock_backend *b)
 }
 
 /* ------------------------------------------------------------------ */
+/* L10 the CD-ROM modeswitch hook (claim_case.c)                       */
+/* ------------------------------------------------------------------ */
+
+/* the modeswitch case also lives in the class-hook TU (same CherryUSB
+ * include rule); this declaration is its whole face */
+int	lkpi_body_case_modeswitch(unsigned int *eject_bytes, int *refused);
+void	lkpi_body_modeswitch_tamper(int on);
+
+static int
+case_l10(void)
+{
+	unsigned int eject = 0;
+	int refused = 0;
+	int rc;
+
+	if (fault_name != NULL && strcmp(fault_name, "ms-eject") == 0) {
+		lkpi_body_modeswitch_tamper(1);
+	}
+	rc = lkpi_body_case_modeswitch(&eject, &refused);
+	if (rc != 0) {
+		case_line("L10", 0, "the modeswitch hook failed at step %d", rc);
+		return -1;
+	}
+	if (eject != 31) {
+		case_line("L10", 0, "the eject message must be 31 bytes (%u)",
+		    eject);
+		return -1;
+	}
+	if (refused != 1) {
+		case_line("L10", 0, "the network personality must be left alone");
+		return -1;
+	}
+	case_line("L10", 1, "CD-ROM eject byte-exact, never claimed, network "
+	    "personality untouched");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* L7 pool contract on the real body                                   */
 /* ------------------------------------------------------------------ */
 
@@ -693,7 +783,8 @@ run_suite(void)
 
 	/* the blob registers itself on the initialisation path, exactly as a
 	 * board build would before the drivers run */
-	if (lkpi_fw_rtl8188eufw_register() != 0) {
+	if (lkpi_fw_rtl8188eufw_register() != 0 ||
+	    lkpi_fw_rtw8821c_fw_register() != 0) {
 		case_line("L1", 0, "the firmware blob registration failed");
 		return;
 	}
@@ -731,9 +822,11 @@ run_suite(void)
 	(void)case_l8(b);
 	if (case_l9(b) != 0)
 		return;
+	if (case_l10() != 0)
+		return;
 
 	if (failures == 0)
-		printf("LKPI: SUITE PASS cases=9\n");
+		printf("LKPI: SUITE PASS cases=10\n");
 	else
 		printf("LKPI: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -759,14 +852,15 @@ main(int argc, char **argv)
 		if (strcmp(argv[i], "--fault") == 0 && i + 1 < argc) {
 			fault_name = argv[++i];
 		} else {
-			printf("LKPI: usage: %s [--fault no-walk|fw-name]\n",
+			printf("LKPI: usage: %s [--fault no-walk|fw-name|ms-eject]\n",
 			    argv[0]);
 			return 2;
 		}
 	}
 
 	if (fault_name != NULL && strcmp(fault_name, "no-walk") != 0 &&
-	    strcmp(fault_name, "fw-name") != 0) {
+	    strcmp(fault_name, "fw-name") != 0 &&
+	    strcmp(fault_name, "ms-eject") != 0) {
 		printf("LKPI: unknown fault '%s'\n", fault_name);
 		return 2;
 	}

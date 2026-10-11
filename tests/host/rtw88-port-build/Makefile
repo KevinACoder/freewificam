@@ -83,9 +83,9 @@ DRV_WARN    := -Wall -Wextra -Wno-address-of-packed-member -Wno-maybe-uninitiali
 DRV_CFLAGS  := $(COMMON) $(DRV_CONFIG) $(DRV_WARN)
 FACE_CFLAGS := $(COMMON) -Wall -Wextra
 
-.PHONY: all compile contract spdx gates clean
+.PHONY: all compile contract closure spdx gates clean
 
-all: compile contract spdx gates
+all: compile contract closure spdx gates
 
 # ---- compile: the vendored bytes against the first-party face ----------------
 
@@ -137,6 +137,32 @@ $(BUILD)/face_contract.o: $(MAKEFILE_DIR)/face_contract.c | $(BUILD)
 		{ cat $(BUILD)/face_contract.compile.log; exit 1; }
 
 -include $(wildcard $(BUILD)/*.d)
+
+# ---- closure: what the driver's bytes need from the rest of the system --------
+#
+# The compile gate is per translation unit, so it cannot see a symbol the driver
+# calls that nothing defines - that only shows up when the units are put
+# together. This gate links them relocatably (no garbage collection, so nothing
+# is dropped before it can be counted) and checks the undefined set against the
+# checked-in ledger face-undefined.txt. A new entry is a face gap; a removed one
+# is a face change. Either way the ledger has to be updated deliberately, which
+# is the point: the rtw88 round found two face gaps this way that the compile
+# gate had passed (ieee80211_request_smps and ieee80211_proberesp_get - declared
+# in the face, never defined).
+LD := $(CROSS_COMPILE)ld
+NM := $(CROSS_COMPILE)nm
+
+closure: $(OBJS)
+	@set -e; \
+	$(LD) -r -o $(BUILD)/rtw88-all.o $(OBJS); \
+	$(NM) -u $(BUILD)/rtw88-all.o | awk '{print $$NF}' | LC_ALL=C sort -u > $(BUILD)/undefined.txt; \
+	if ! diff -u $(MAKEFILE_DIR)/face-undefined.txt $(BUILD)/undefined.txt > $(BUILD)/closure.diff; then \
+		echo "FAIL: the driver's undefined-symbol set changed (a face gap, or a face change):"; \
+		cat $(BUILD)/closure.diff; \
+		echo "(if the change is intended, update $(MAKEFILE_DIR)/face-undefined.txt)"; \
+		exit 1; \
+	fi; \
+	echo "closure: $$(wc -l < $(BUILD)/undefined.txt) undefined symbols, exactly the recorded face ledger"
 
 # ---- spdx: the license split, mechanically ------------------------------------
 

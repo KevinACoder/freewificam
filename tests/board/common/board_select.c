@@ -5,9 +5,11 @@
  * @date    08.10.2026
  * @design  see board_select.h - the matcher is the single implementation of
  *          the glob semantics; the host self-test compiles this file with
- *          -DBOARD_SELECT_HOSTTEST and replays select-vectors.tsv, and the
- *          suite judges replay the same vector file against their Python
- *          twin.
+ *          -DBOARD_SELECT_HOSTTEST and replays select-vectors.tsv (glob
+ *          vectors, and match vectors that also pin the always-selected
+ *          console prerequisite; the two kinds share the file and are told
+ *          apart by their first field), and the suite judges replay the same
+ *          vector file against their Python twin.
  */
 
 #include <stddef.h>
@@ -52,23 +54,24 @@ int board_glob_match( const char *pattern, const char *name )
 }
 
 /* Copy one glob token body (after the '='), validating the alphabet and the
- * length; the caller has already checked the keyword. */
-static int board_select_copy( char *dst, const char *src )
+ * length.  The body is the token's own span, not the rest of the line: a
+ * directive may carry a second token after it, and reading to the line's end
+ * rejected every two-token directive (only=... skip=...) because the blank
+ * that separates them is not part of the glob alphabet. */
+static int board_select_copy( char *dst, const char *src, size_t len )
 {
-	size_t len = 0;
-
-	while( src[len] ) {
-		if( !board_select_gchar( src[len] ) || len >= BOARD_SELECT_PATTERN_MAX ) {
-			return -1;
-		}
-		len++;
-	}
-	if( len == 0 ) {
+	if( len == 0U || len > BOARD_SELECT_PATTERN_MAX ) {
 		return -1;
 	}
-	for( size_t i = 0; i <= len; i++ ) {
+	for( size_t i = 0; i < len; i++ ) {
+		if( !board_select_gchar( src[i] ) ) {
+			return -1;
+		}
+	}
+	for( size_t i = 0; i < len; i++ ) {
 		dst[i] = src[i];
 	}
+	dst[len] = '\0';
 	return 0;
 }
 
@@ -112,12 +115,14 @@ int board_select_parse( const char *line, struct board_select *out )
 		len = ( size_t )( p - tok );
 
 		if( board_select_keyword( tok, len, "only=" ) ) {
-			if( out->have_only || board_select_copy( out->only, tok + 5 ) != 0 ) {
+			if( out->have_only ||
+			    board_select_copy( out->only, tok + 5, len - 5U ) != 0 ) {
 				return -1;
 			}
 			out->have_only = 1;
 		} else if( board_select_keyword( tok, len, "skip=" ) ) {
-			if( out->have_skip || board_select_copy( out->skip, tok + 5 ) != 0 ) {
+			if( out->have_skip ||
+			    board_select_copy( out->skip, tok + 5, len - 5U ) != 0 ) {
 				return -1;
 			}
 			out->have_skip = 1;
@@ -125,11 +130,34 @@ int board_select_parse( const char *line, struct board_select *out )
 			return -1;
 		}
 	}
-	return 0;
+	/* A directive has to name at least one keyword: an empty line is malformed,
+	 * not "run everything".  The window's own timeout is what means "run
+	 * everything", and the header's rule is that a bad directive must never
+	 * silently turn into it. */
+	return ( out->have_only || out->have_skip ) ? 0 : -1;
+}
+
+/* Is this the console prerequisite's name?  Compared without string.h: the
+ * name is a compile-time constant, so a plain walk is enough. */
+static int board_select_is_prereq( const char *name )
+{
+	const char *p = BOARD_SELECT_PREREQ;
+
+	while( *p && *p == *name ) {
+		p++;
+		name++;
+	}
+	return *p == '\0' && *name == '\0';
 }
 
 int board_select_match( const struct board_select *sel, const char *name )
 {
+	/* The console prerequisite is always selected (board_select.h): a
+	 * directive filters the test cases, never the infrastructure the
+	 * interaction steps need. */
+	if( board_select_is_prereq( name ) ) {
+		return 1;
+	}
 	if( sel->have_only && !board_glob_match( sel->only, name ) ) {
 		return 0;
 	}
@@ -144,6 +172,41 @@ int board_select_match( const struct board_select *sel, const char *name )
  * the regression image's `make check`; the same file feeds the judges'
  * Python twin, so one vector set pins both implementations. */
 #include <stdio.h>
+#include <string.h>
+
+/* Split a match vector line ("<directive>\t<name>\t<expect>") into its fields
+ * in place.  The separator is the TAB, not the blank: the directive may itself
+ * hold a blank (only=... skip=...).  Returns 0 on success. */
+static int board_match_vector( char *line, char **spec, char **name, int *expect )
+{
+	char *tab1 = 0;
+	char *tab2 = 0;
+	char *p = line;
+
+	while( *p && *p != '\n' && *p != '\r' ) {
+		if( *p == '\t' ) {
+			if( tab1 == 0 ) {
+				tab1 = p;
+			} else if( tab2 == 0 ) {
+				tab2 = p;
+			}
+		}
+		p++;
+	}
+	*p = '\0';
+	if( tab1 == 0 || tab2 == 0 || tab2 == tab1 + 1 || tab1 == line ) {
+		return -1;
+	}
+	*tab1 = '\0';
+	*tab2 = '\0';
+	if( tab2[1] != '0' && tab2[1] != '1' ) {
+		return -1;
+	}
+	*spec = line;
+	*name = tab1 + 1;
+	*expect = tab2[1] == '1';
+	return 0;
+}
 
 int main( int argc, char **argv )
 {
@@ -165,6 +228,32 @@ int main( int argc, char **argv )
 		if( line[0] == '#' || line[0] == '\n' ) {
 			continue;
 		}
+		/* A match vector's first field is a directive ("only="/"skip="); a
+		 * case name can never start that way, so one file carries both kinds
+		 * without ambiguity (the separator is the TAB in either). */
+		if( strncmp( line, "only=", 5 ) == 0 || strncmp( line, "skip=", 5 ) == 0 ) {
+			struct board_select sel;
+			char *spec;
+			char *mname;
+
+			if( board_match_vector( line, &spec, &mname, &expect ) != 0 ) {
+				continue;
+			}
+			checked++;
+			if( board_select_parse( spec, &sel ) != 0 ) {
+				failed++;
+				printf( "FAIL: match [%s] directive rejected\n", spec );
+				continue;
+			}
+			int got = board_select_match( &sel, mname );
+
+			if( got != expect ) {
+				failed++;
+				printf( "FAIL: match [%s] %s expect=%d got=%d\n",
+					spec, mname, expect, got );
+			}
+			continue;
+		}
 		if( sscanf( line, "%63s %63s %d", name, pattern, &expect ) != 3 ) {
 			continue;
 		}
@@ -177,6 +266,55 @@ int main( int argc, char **argv )
 		}
 	}
 	fclose( f );
+
+	/*
+	 * The directive grammar, pinned here because the glob vectors above never
+	 * reach the parser: the two-token form (only=... skip=...) is what the
+	 * runner sends when a round wants part of a suite, and a glob read to the
+	 * line's end instead of the token's span rejected every one of them.
+	 */
+	{
+		static const struct {
+			const char *spec;
+			int ok;
+			const char *only;
+			const char *skip;
+		} cases[] = {
+			{ "only=rtw88-*", 1, "rtw88-*", "" },
+			{ "skip=rtw88-join-raw", 1, "", "rtw88-join-raw" },
+			{ "only=rtw88-* skip=rtw88-join-raw", 1, "rtw88-*", "rtw88-join-raw" },
+			{ "skip=rtw88-join-raw only=rtw88-*", 1, "rtw88-*", "rtw88-join-raw" },
+			{ "only=rtw88-*  skip=rtw88-join-raw", 1, "rtw88-*", "rtw88-join-raw" },
+			{ "only=rtw88-* only=rtw88-scan", 0, "", "" },
+			{ "only=", 0, "", "" },
+			{ "only=rtw88-* nope=x", 0, "", "" },
+			{ "", 0, "", "" },
+		};
+		size_t i;
+
+		for( i = 0; i < sizeof( cases ) / sizeof( cases[0] ); i++ ) {
+			struct board_select sel;
+			int r = board_select_parse( cases[i].spec, &sel );
+
+			checked++;
+			if( ( r == 0 ) != ( cases[i].ok != 0 ) ) {
+				failed++;
+				printf( "FAIL: directive [%s] expect ok=%d got %d\n",
+					cases[i].spec, cases[i].ok, r == 0 );
+				continue;
+			}
+			if( r != 0 ) {
+				continue;
+			}
+			if( strcmp( sel.only, cases[i].only ) != 0 ||
+			    strcmp( sel.skip, cases[i].skip ) != 0 ) {
+				failed++;
+				printf( "FAIL: directive [%s] only=[%s] skip=[%s]\n",
+					cases[i].spec, sel.only, sel.skip );
+			}
+		}
+	}
+
 	printf( "select-vectors: checked=%u failed=%u\n", checked, failed );
 	return failed ? 1 : 0;
 }

@@ -275,6 +275,19 @@ void usb_board_event_handler(uint8_t busid, uint8_t hub_index, uint8_t hub_port,
 {
 	board_log("usbh: bus%u event %s hub=%u port=%u intf=%u\n", busid,
 		  usbh_event_name(event), hub_index, hub_port, intf);
+
+	if (event == USBH_EVENT_DEVICE_DISCONNECTED) {
+		/*
+		 * The hub layer re-initializes the child in place, so a device
+		 * that left and came back (a modeswitch flip) re-enumerates on
+		 * the same hubport struct.  The controller's slot for it must
+		 * go away now: a slot left enabled with a halted endpoint rings
+		 * the doorbell into nothing and every transfer of the next
+		 * enumeration times out.  No-op on a bus whose xHCI port is not
+		 * running, so an EHCI bus is unaffected.
+		 */
+		usbh_xhci_forget_hport(busid, hub_index, hub_port);
+	}
 }
 
 void usb_board_after_start(unsigned busid)

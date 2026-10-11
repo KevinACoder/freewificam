@@ -14,6 +14,13 @@
  * Silence (window timeout) means "run everything". A malformed line is
  * ignored and the window keeps waiting - a bad directive must never silently
  * turn into "run all", and it must never turn into "run nothing" either.
+ *
+ * The console prerequisite (BOARD_SELECT_PREREQ) is the one exception to the
+ * filter: it is infrastructure, not a test.  Every suite's interaction steps
+ * need a shell, so a directive selects among the test cases and can never
+ * remove the case that brings the console up.  Without this, `only=` silently
+ * dropped the shell and the round's console commands were never read - a whole
+ * board round was mis-graded as a join failure (the image had no shell at all).
  */
 
 #ifndef BOARD_SELECT_H
@@ -22,6 +29,11 @@
 #include <stddef.h>
 
 #define BOARD_SELECT_PATTERN_MAX 32U
+
+/** The console prerequisite's case name: always selected, whatever the
+ *  directive says (see the grammar note above).  Every suite registers a case
+ *  under this name and lists it first. */
+#define BOARD_SELECT_PREREQ "shell-up"
 
 /** One parsed directive. */
 struct board_select {

@@ -97,6 +97,7 @@ components/linuxkpi/fw_registry.h
 components/linuxkpi/fw_registry.c
 components/linuxkpi/fw/MANIFEST.sha256
 components/linuxkpi/fw/rtl8188eufw_blob.c
+components/linuxkpi/fw/rtw8821c_fw_blob.c
 components/linuxkpi/fw/rtw8851b_fw_blob.c
 components/linuxkpi/linuxkpi_impl.h
 components/linuxkpi/linuxkpi_core.c
@@ -113,6 +114,8 @@ components/linuxkpi/skbuff/DIVERGENCES.md
 components/linuxkpi/usb/linuxkpi_usb.c
 components/linuxkpi/usb/linuxkpi_usb.h
 components/linuxkpi/usb/lkpi_usbh_class.c
+components/linuxkpi/usb/lkpi_usbh_modeswitch.c
+components/linuxkpi/usb/lkpi_usbh_modeswitch.h
 components/linuxkpi/linuxkpi_platform_target.c'
 
 files=$(git ls-files -- "$paths_self" "$paths_vendored" $paths_imported)

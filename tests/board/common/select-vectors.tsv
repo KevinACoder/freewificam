@@ -30,3 +30,23 @@ usb-msc-read	usb-*	1
 usb-msc-read	*-read	1
 usb-msc-read	usb-msc-read	1
 usb-msc-read	usb-msc-write	0
+
+# Match vectors: "<directive>\t<name>\t<expected(1|0)>", fed to
+# board_select_match (C) and select_names (Python).  A line is a match vector
+# when its first field is a directive ("only="/"skip="); a case name can never
+# start that way, so the two kinds share one file without ambiguity.  These pin
+# the console prerequisite: whatever the directive says, "shell-up" stays
+# selected - an `only=` that dropped it left a board round with no shell and
+# mis-graded the missing console commands as a join failure.
+only=rtw88-*	shell-up	1
+only=rtw88-*	rtw88-scan	1
+only=rtw88-*	rtw88-join-raw	1
+only=rtw88-*	wlan-probe	0
+only=*	shell-up	1
+skip=rtw88-join-raw	rtw88-join-raw	0
+skip=rtw88-join-raw	rtw88-scan	1
+skip=rtw88-join-raw	shell-up	1
+skip=shell-up	shell-up	1
+only=rtw88-* skip=rtw88-join-raw	rtw88-scan	1
+only=rtw88-* skip=rtw88-join-raw	rtw88-join-raw	0
+only=rtw88-* skip=rtw88-join-raw	shell-up	1

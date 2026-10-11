@@ -83,9 +83,19 @@ BODY_SRCS := \
     $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c \
     $(ROOT)/components/linuxkpi/fw_registry.c \
     $(ROOT)/components/linuxkpi/fw/rtl8188eufw_blob.c \
+    $(ROOT)/components/linuxkpi/fw/rtw8821c_fw_blob.c \
     $(ROOT)/components/linuxkpi/usb/linuxkpi_usb.c \
     $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c \
+    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_modeswitch.c \
     $(MAKEFILE_DIR)/lkpi_platform_host.c
+
+# The class hook's modeswitch entry submits through the host stack's own
+# transfer entry (usbh_submit_urb), so the vendored core is linked for it. With
+# function/data sections and --gc-sections only that entry and its callees are
+# kept - the hub thread, the bus tables and the rest of the core are dropped
+# because nothing in this suite reaches them.
+CHERRYUSB_CORE_SRCS := \
+    $(CHERRYUSB)/core/usbh_core.c
 
 # The synthetic controller and the device model (reused), plus this suite's
 # stand-in wireless driver registered through the module section.
@@ -121,7 +131,7 @@ endef
 POOL_SRC := $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c
 POOL_OBJ := $(call OBJ,$(POOL_SRC))
 
-SRCS := $(BODY_SRCS) $(MOCK_SRCS) $(APP_SRCS) $(RUNTIME_SRCS)
+SRCS := $(BODY_SRCS) $(MOCK_SRCS) $(APP_SRCS) $(RUNTIME_SRCS) $(CHERRYUSB_CORE_SRCS)
 OBJS := $(foreach s,$(SRCS),$(call OBJ,$(s)))
 
 .PHONY: all run clean
@@ -148,12 +158,21 @@ $(call OBJ,$(1)): $(1) | $(BUILD_DIR)
 endef
 
 $(foreach src,$(filter-out $(POOL_SRC) $(MAKEFILE_DIR)/claim_case.c \
-    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c,$(SRCS)),$(eval $(call COMPILE_RULE,$(src))))
+    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c \
+    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_modeswitch.c \
+    $(CHERRYUSB_CORE_SRCS),$(SRCS)),$(eval $(call COMPILE_RULE,$(src))))
 
 # the class hook and its case: the CherryUSB include set rides on top of the
 # common flags (the hook's first-include rule)
 $(call OBJ,$(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c): \
     $(ROOT)/components/linuxkpi/usb/lkpi_usbh_class.c | $(BUILD_DIR)
+	$(CC) $(CLAIM_CFLAGS)  -MMD -MP -c $< -o $@
+
+$(call OBJ,$(ROOT)/components/linuxkpi/usb/lkpi_usbh_modeswitch.c): \
+    $(ROOT)/components/linuxkpi/usb/lkpi_usbh_modeswitch.c | $(BUILD_DIR)
+	$(CC) $(CLAIM_CFLAGS)  -MMD -MP -c $< -o $@
+
+$(call OBJ,$(CHERRYUSB)/core/usbh_core.c): $(CHERRYUSB)/core/usbh_core.c | $(BUILD_DIR)
 	$(CC) $(CLAIM_CFLAGS)  -MMD -MP -c $< -o $@
 
 $(call OBJ,$(MAKEFILE_DIR)/claim_case.c): $(MAKEFILE_DIR)/claim_case.c | $(BUILD_DIR)

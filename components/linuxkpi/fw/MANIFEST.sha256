@@ -13,3 +13,4 @@
 # on 8851B asks for the -1 form before the bare one, fw.c:1006-1010).
 2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4  rtl8188eufw.bin       rtl8188eufw_blob.c
 1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7  rtw8851b_fw-1.bin     rtw8851b_fw_blob.c
+2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0  rtw88/rtw8821c_fw.bin  rtw8821c_fw_blob.c
