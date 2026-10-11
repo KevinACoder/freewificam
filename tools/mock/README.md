@@ -7,7 +7,7 @@ red on purpose-built input. `make mock` runs the lot.
 ## Running
 
 ```
-make -C freewebcam mock              # every suite in suites.mk
+make -C freewificam mock              # every suite in suites.mk
 tools/mock/run.sh --list             # what is registered
 tools/mock/run.sh threadx-regression # one suite
 ```

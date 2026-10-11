@@ -54,7 +54,7 @@ run_backend() {
 
     # prompt: the whole prompt line, plain text once the colours are stripped
     prompt=1
-    grep -qF 'user@freewebcam:/$ ' "$text" || prompt=0
+    grep -qF 'user@freewificam:/$ ' "$text" || prompt=0
     case_line "$backend-prompt" "$prompt"
 
     # help: the listing proves the tables this build links (4 commands:

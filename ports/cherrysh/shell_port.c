@@ -24,7 +24,7 @@
 
 /* The prompt's host field; the board port uses its own constant. */
 #ifndef SHELL_PORT_HOST
-#define SHELL_PORT_HOST "freewebcam"
+#define SHELL_PORT_HOST "freewificam"
 #endif
 
 static chry_shell_t csh;

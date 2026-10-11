@@ -1,4 +1,4 @@
-# freewebcam
+# freewificam
 
 A portable RTOS webcam stack: boot, OS, drivers, components and application. Two headline
 milestones — wireless (Wi-Fi) and the USB camera (UVC) — with the end goal of streaming
@@ -75,7 +75,7 @@ including the distribution obligations that come with the one copyleft unit in t
 
 ---
 
-# freewebcam（中文）
+# freewificam（中文）
 
 **可移植的** RTOS 摄像头固件栈（引导 + OS + 驱动 + 组件 + 应用）。两个重要
 里程碑 —— 无线（WiFi）与 USB 摄像头（UVC）—— 终点是让摄像头数据经无线长时间稳定
