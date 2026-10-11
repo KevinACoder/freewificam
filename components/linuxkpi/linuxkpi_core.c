@@ -29,6 +29,8 @@
 #include "linuxkpi_core.h"
 #include "linuxkpi_impl.h"
 
+#include <linux/sched.h>
+
 /* ------------------------------------------------------------------ */
 /* logging                                                             */
 /* ------------------------------------------------------------------ */
@@ -979,6 +981,115 @@ int lkpi_waitq_timedwait(struct wait_queue_head *wq, int ms)
 		cv->waiters--;
 
 	return (st == osOK) ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* module init entries                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The interface's module_init() lands each entry point in the .lkpi_init
+ * section; this is the walker that runs them, in section order, once. The
+ * section is bracketed by its own two symbols and kept apart from .lkpi_module
+ * (the usb_driver registry, whose walk is lkpi_usb_init()), so the two walks
+ * cannot disturb each other's byte layout. The bracket symbols are weak for the
+ * same reason the module walker's are: a build that carries no entries says so
+ * instead of failing to link.
+ */
+extern lkpi_init_fn_t __lkpi_init_start[] __attribute__((weak));
+extern lkpi_init_fn_t __lkpi_init_end[] __attribute__((weak));
+
+void lkpi_module_init_run(void)
+{
+	static bool walked;
+	lkpi_init_fn_t *it;
+	unsigned int n = 0;
+
+	if (walked)
+		return;
+	walked = true;
+
+	if (__lkpi_init_start == NULL || __lkpi_init_end == NULL ||
+	    (uintptr_t)__lkpi_init_end <= (uintptr_t)__lkpi_init_start) {
+		lkpi_printf(ULOG_INFO_LEVEL,
+		    "lkpi: no .lkpi_init entries in this link\n");
+		return;
+	}
+	for (it = __lkpi_init_start; it < __lkpi_init_end; it++) {
+		if (*it == NULL)
+			continue;
+		(void)(*it)();
+		n++;
+	}
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpi: %u module init entr%s run\n", n,
+	    n == 1u ? "y" : "ies");
+}
+
+/* ------------------------------------------------------------------ */
+/* the calling thread's task object                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The interface resolves `current` to the running task's record. On this port a
+ * task IS a thread, so the body hands back one stable object per thread, keyed
+ * on the identity the kernel gave it. The table is fixed and small, and a
+ * thread that arrives when it is full is counted and refused - a NULL, never a
+ * shared object: two threads sharing one identity would look alike to every
+ * caller that compares `current`, and a driver's own "am I the interrupt
+ * thread?" test compares exactly that. The table is sized for the images this
+ * repository builds; an overflow is a bring-up bug and prints once.
+ */
+#define	LKPI_TASK_SLOTS		16
+
+struct lkpi_task_slot {
+	osThreadId_t		id;
+	struct task_struct	task;
+};
+
+static struct lkpi_task_slot lkpi_task_slots[LKPI_TASK_SLOTS];
+static unsigned int lkpi_task_count;
+static unsigned int lkpi_task_overflow;
+
+/*
+ * The thread name is a nicety of the task record, and a minimal CMSIS backend
+ * (the ones some host suites link) does not carry it. The reference is weak for
+ * exactly that reason: a backend without the call leaves comm empty instead of
+ * failing the link, and every other field of the record is still the port's own.
+ */
+extern const char *osThreadGetName(osThreadId_t thread_id) __attribute__((weak));
+
+struct task_struct *lkpi_current(void)
+{
+	osThreadId_t id = osThreadGetId();
+	unsigned int i;
+
+	if (id == NULL)
+		return NULL;
+	for (i = 0; i < LKPI_TASK_SLOTS; i++) {
+		if (lkpi_task_slots[i].id == id)
+			return &lkpi_task_slots[i].task;
+	}
+	if (lkpi_task_count >= LKPI_TASK_SLOTS) {
+		lkpi_task_overflow++;
+		if (lkpi_task_overflow == 1u)
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi: task identity table full (%u slots); a thread that "
+			    "needs current must get a slot\n",
+			    (unsigned int)LKPI_TASK_SLOTS);
+		return NULL;
+	}
+	i = lkpi_task_count++;
+	lkpi_task_slots[i].id = id;
+	(void)memset(&lkpi_task_slots[i].task, 0, sizeof(lkpi_task_slots[i].task));
+	lkpi_task_slots[i].task.pid = (pid_t)(i + 1u);
+	if (osThreadGetName != NULL) {
+		const char *name = osThreadGetName(id);
+
+		if (name != NULL)
+			(void)snprintf(lkpi_task_slots[i].task.comm,
+			    sizeof(lkpi_task_slots[i].task.comm), "%s", name);
+	}
+	return &lkpi_task_slots[i].task;
 }
 
 /* ------------------------------------------------------------------ */

@@ -113,6 +113,19 @@ SECTIONS
 		__lkpi_module_end = .;
 	} :text
 
+	/* Module init entries: `module_init()` (the same contract header) puts
+	 * each driver's entry point here, and lkpi_module_init_run() walks the
+	 * section between these two symbols and runs them in section order, once.
+	 * It is deliberately a separate section from .lkpi_module above, so the
+	 * two walks cannot disturb each other's byte layout; the entries are
+	 * function pointers, so the natural alignment is the same fixed step and
+	 * the byte count is entries x 8. */
+	.lkpi_init : ALIGN(8) {
+		__lkpi_init_start = .;
+		KEEP(*(.lkpi_init))
+		__lkpi_init_end = .;
+	} :text
+
 	.data : ALIGN(8) {
 		__data_start = .;
 		*(.data .data.*)

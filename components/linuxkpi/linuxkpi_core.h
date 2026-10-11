@@ -1565,7 +1565,21 @@ dev_name(const struct device *dev)
 #define	module_param(a, b, c)
 #define	MODULE_DEVICE_TABLE(t, n)
 #define	module_exit(fn)
-#define	module_init(fn)
+
+/*
+ * module_init(fn): the entry point lands in the .lkpi_init section and
+ * lkpi_module_init_run() (linuxkpi_core.c) runs the entries in section order,
+ * once. The section is kept apart from .lkpi_module - the usb_driver registry
+ * below - so the two walks cannot disturb each other's byte layout: each
+ * section is bracketed by its own pair of symbols and holds its own kind of
+ * entry. A driver whose entry point is static and only reachable through this
+ * macro (the vendored SDIO drivers register that way) is registered by the walk.
+ */
+typedef int (*lkpi_init_fn_t)(void);
+
+#define	module_init(fn)							\
+	static __used __section(".lkpi_init")				\
+	lkpi_init_fn_t __lkpi_init_##fn = (fn)
 
 /*
  * module_usb_driver(drv): the struct usb_driver pointer lands in the
@@ -1577,6 +1591,14 @@ struct usb_driver;
 #define	module_usb_driver(__usb_driver)					\
 	static __used __section(".lkpi_module")				\
 	void *__lkpi_module_##__usb_driver = &(__usb_driver)
+
+/*
+ * Run the .lkpi_init entries in section order, once. The image's start-up calls
+ * this after the platform and the buses are up, so an entry that registers a
+ * driver runs against a live system (the order the kernel's module loader gives
+ * its initcalls). Idempotent; a link without the section says so and returns.
+ */
+void	lkpi_module_init_run(void);
 
 /* ------------------------------------------------------------------ */
 /* bugs and assertions                                                 */
