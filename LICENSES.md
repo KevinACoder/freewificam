@@ -23,6 +23,7 @@ carry the same terms in their file header).
 | `rtl8xxxu` | **GPL-2.0-only** | per-file `SPDX-License-Identifier: GPL-2.0-only` on every extracted file (13/13); no other SPDX form in the tree. Mainline Linux driver for the RTL8188EU family, extracted byte-faithfully from Linux 7.3-rc2. See "Distribution obligations" below |
 | `rtw89` | **GPL-2.0 OR BSD-3-Clause** | per-file dual SPDX on every extracted file (107/107, the only SPDX form in the tree); no separate license file at the tree root; each bus unit states `MODULE_LICENSE("Dual BSD/GPL")`. Mainline Linux SoftMAC driver for the RTL8851BU family, extracted byte-faithfully from Linux 7.3-rc2. This project takes the **BSD-3-Clause option** for it. See "Distribution obligations" below |
 | `rtw88` | **GPL-2.0 OR BSD-3-Clause** | dual SPDX on 96 `.c`/`.h` files and the `Makefile` (97 of 98 tracked files); the one exception is `Kconfig`, whose line is `GPL-2.0-only` - it is build metadata and is not compiled; no separate license file at the tree root; each bus unit states `MODULE_LICENSE("Dual BSD/GPL")`. Mainline Linux SoftMAC driver for the RTL8821CU family, extracted byte-faithfully from Linux 7.3-rc2. This project takes the **BSD-3-Clause option** for it. See "Distribution obligations" below |
+| `rtl8189fs` | **GPL-2.0-only** | no SPDX line anywhere and no separate license file; 518 of the 532 tracked files carry the Realtek "version 2 of the GNU General Public License" block at the top, 2 are kernel-derived GPL-2.0 (`os_dep/linux/rhashtable.{c,h}`), 2 carry no license header and 10 are build metadata or scripts; no second license form is present, and the tree needs `grep -a` (ISO-8859 bytes). Realtek vendor driver for the RTL8189FTV (RTL8188F) SDIO part, vendored byte-faithfully from the fork's `rtl8189fs` branch. See "Distribution obligations" below |
 
 ## Imported units (`components/`)
 
@@ -71,6 +72,14 @@ carry the same terms in their file header).
   this unit. The single `GPL-2.0-only` file in the tree is `Kconfig`, which is not compiled
   into any image and therefore does not pull the combined work under the GPL arm; if a
   future patch to this tree is written in GPL-only form, that changes.
+* `third-party/rtl8189fs` is GPL-2.0-only, on the same footing as `rtl8xxxu`: a distributed
+  **binary image** that contains it is a combined work under those terms - distribution
+  requires the corresponding source of the combined image and the GPL text, and the image
+  may not be distributed under more restrictive terms than GPL-2.0-only allows. The
+  obligation attaches to the distributed image, not to the first-party source files
+  individually. The unit is built as its own translation units and touches first-party code
+  only through header interfaces, first-party text is never merged into a GPL file, and it
+  stays a pinned submodule with zero local patches.
 * Units whose license is unknown or absent are not vendored. A new unit adds a row here in
   the same commit that vendors it.
 
