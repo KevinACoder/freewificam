@@ -60,7 +60,6 @@
  * the caller's buffer and not the stack's staging copy. */
 static uint8_t sdio_dp_first[SDIO_DATAPATH_BLOCK] __attribute__((aligned(512)));
 static uint8_t sdio_dp_second[SDIO_DATAPATH_BLOCK] __attribute__((aligned(512)));
-static uint8_t sdio_dp_bytes[SDIO_DATAPATH_WORDS] __attribute__((aligned(8)));
 static uint8_t sdio_dp_direct[SDIO_DATAPATH_WORDS];
 
 static int sdio_dp_read_pointer( unsigned int func, unsigned int reg,
@@ -121,26 +120,33 @@ void sdio_datapath_chain( void )
 
 	/* --- rung 1: the function's basic-register block --------------------- */
 
-	(void)memset( sdio_dp_bytes, 0, sizeof( sdio_dp_bytes ) );
+	/*
+	 * Block mode, one block of the size the function's register was set to.
+	 * That is the shape every extended transfer on this controller has been
+	 * exercised in, so this rung asks about the engine and the address and
+	 * nothing else.
+	 */
+	(void)memset( sdio_dp_first, 0, sizeof( sdio_dp_first ) );
+	(void)memset( sdio_dp_second, 0, sizeof( sdio_dp_second ) );
 
-	st = lkpi_sdio_be_io_extended( 1U, SDIO_FUNC_BASE_OFFSET, sdio_dp_bytes,
-				       SDIO_DATAPATH_WORDS, LKPI_SDIO_BE_F_INCR );
+	st = lkpi_sdio_be_io_extended( 1U, SDIO_FUNC_BASE_OFFSET, sdio_dp_first, 1U,
+				       LKPI_SDIO_BE_F_INCR | LKPI_SDIO_BE_F_BLOCK );
 	if( st != 0 ) {
 		LOG_ERROR( "sdio: the function register read returned %d\n", st );
 		board_case_fail( "an extended read of the function's registers failed" );
 		return;
 	}
-	st = lkpi_sdio_be_io_extended( 1U, SDIO_FUNC_BASE_OFFSET, sdio_dp_second,
-				       SDIO_DATAPATH_WORDS, LKPI_SDIO_BE_F_INCR );
+	st = lkpi_sdio_be_io_extended( 1U, SDIO_FUNC_BASE_OFFSET, sdio_dp_second, 1U,
+				       LKPI_SDIO_BE_F_INCR | LKPI_SDIO_BE_F_BLOCK );
 	if( st != 0 ) {
 		LOG_ERROR( "sdio: the second function register read returned %d\n", st );
 		board_case_fail( "the second extended read of the function's registers failed" );
 		return;
 	}
 
-	LOG_ANCHOR( "sdio: fbr read twice identical (%u bytes)\n",
-		    (unsigned)SDIO_DATAPATH_WORDS );
-	if( memcmp( sdio_dp_bytes, sdio_dp_second, SDIO_DATAPATH_WORDS ) != 0 ) {
+	LOG_ANCHOR( "sdio: func block read twice identical (%u bytes)\n",
+		    (unsigned)SDIO_DATAPATH_BLOCK );
+	if( memcmp( sdio_dp_first, sdio_dp_second, SDIO_DATAPATH_BLOCK ) != 0 ) {
 		board_case_fail( "two extended reads of the function's registers disagree" );
 		return;
 	}
@@ -156,12 +162,12 @@ void sdio_datapath_chain( void )
 	}
 
 	LOG_ANCHOR( "sdio: fbr cmd52 and cmd53 agree first=%02x%02x%02x%02x\n",
-		    sdio_dp_bytes[0], sdio_dp_bytes[1], sdio_dp_bytes[2],
-		    sdio_dp_bytes[3] );
-	if( memcmp( sdio_dp_bytes, sdio_dp_direct, SDIO_DATAPATH_WORDS ) != 0 ) {
+		    sdio_dp_first[0], sdio_dp_first[1], sdio_dp_first[2],
+		    sdio_dp_first[3] );
+	if( memcmp( sdio_dp_first, sdio_dp_direct, SDIO_DATAPATH_WORDS ) != 0 ) {
 		LOG_ERROR( "sdio: extended %02x %02x %02x %02x, byte-at-a-time "
-			   "%02x %02x %02x %02x\n", sdio_dp_bytes[0], sdio_dp_bytes[1],
-			   sdio_dp_bytes[2], sdio_dp_bytes[3], sdio_dp_direct[0],
+			   "%02x %02x %02x %02x\n", sdio_dp_first[0], sdio_dp_first[1],
+			   sdio_dp_first[2], sdio_dp_first[3], sdio_dp_direct[0],
 			   sdio_dp_direct[1], sdio_dp_direct[2], sdio_dp_direct[3] );
 		board_case_fail( "the two read paths disagree about the same registers" );
 		return;

@@ -534,8 +534,9 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 	} while (--loop != 0U);
 
 	if (loop == 0U) {
-		LOG_ERROR("dwc_mmc: CMD%u data timeout (rintsts=0x%x idsts=0x%x)\n",
-			  cmd->index, mask, mmio_rd32(base + DWC_MMC_IDSTS));
+		LOG_ERROR("dwc_mmc: CMD%u data timeout (rintsts=0x%x idsts=0x%x "
+			  "r5=0x%x)\n", cmd->index, mask,
+			  mmio_rd32(base + DWC_MMC_IDSTS), cmd->response[0]);
 		mmio_wr32(base + DWC_MMC_RINTSTS, mask);
 		return DWC_MMC_ERR_TIMEOUT;
 	}

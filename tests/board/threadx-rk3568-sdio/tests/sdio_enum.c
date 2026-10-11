@@ -47,17 +47,24 @@
 #define SDIO_ENUM_OTHER_SIZE	256U
 #define SDIO_ENUM_CIS_BYTES	8U
 
+/* A function's basic registers live in function 0's address space, at one
+ * 0x100-sized block per function. Reading a function's block-size register is
+ * therefore a function-0 read of 0x100 * func + 0x10, which is also where the
+ * imported stack writes it. */
+#define SDIO_FBR_WINDOW(func)	((unsigned int)(func) * 0x100U)
+
 static int read_block_size( unsigned int func, unsigned int *out )
 {
+	unsigned int base = SDIO_FBR_WINDOW( func ) + SDIO_FBR_BLOCK_SIZE;
 	uint8_t low = 0U;
 	uint8_t high = 0U;
 	int st;
 
-	st = lkpi_sdio_be_io_direct( func, SDIO_FBR_BLOCK_SIZE, false, &low );
+	st = lkpi_sdio_be_io_direct( 0U, base, false, &low );
 	if( st != 0 ) {
 		return st;
 	}
-	st = lkpi_sdio_be_io_direct( func, SDIO_FBR_BLOCK_SIZE + 1U, false, &high );
+	st = lkpi_sdio_be_io_direct( 0U, base + 1U, false, &high );
 	if( st != 0 ) {
 		return st;
 	}
