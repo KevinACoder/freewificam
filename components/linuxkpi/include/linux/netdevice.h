@@ -59,6 +59,9 @@
 #include <linux/ethtool.h>
 #include <linux/if.h>
 #include <linux/notifier.h>
+/* [LNX] include/linux/netdevice.h:26 pulls the net-namespace header for the initial
+ * namespace object the device lookups anchor at. */
+#include <net/net_namespace.h>
 
 struct net_device;
 struct iw_handler_def;
@@ -554,6 +557,15 @@ void dev_addr_mod(struct net_device *dev, unsigned int offset,
 		  const void *addr, size_t len);
 void netdev_set_default_ethtool_ops(struct net_device *dev,
 				    const struct ethtool_ops *ops);
+
+/* [LNX] include/linux/netdevice.h: the device lookup by name and its reference drop,
+ * plus the network-namespace pointer they take. The compiled set reaches a bridge
+ * device by name, so the lookup is declared with the interface's signature; its body is
+ * the port's registry. The namespace itself is an opaque tag here - the interface's
+ * include/linux/net_namespace.h, whose single global instance the port owns. */
+struct net;
+struct net_device *dev_get_by_name(struct net *net, const char *name);
+void dev_put(struct net_device *dev);
 
 /*
  * [LNX] include/linux/etherdevice.h:57-60: the ethernet device allocators. The

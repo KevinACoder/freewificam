@@ -16,6 +16,7 @@
 
 #include "../../linuxkpi_core.h"
 #include <linux/if_ether.h>
+#include <linux/netdevice.h>
 
 struct net_device;
 struct sk_buff;
@@ -99,6 +100,15 @@ static inline void eth_broadcast_addr(u8 *addr)
 
 	for (i = 0; i < ETH_ALEN; i++)
 		addr[i] = 0xff;
+}
+
+/* [LNX] include/linux/etherdevice.h:324-327: the address setter a driver's MAC-change
+ * path calls. The interface's body is __dev_addr_set(dev, addr, ETH_ALEN), which is
+ * dev_addr_mod() at offset zero; that is the call stated here, over the face's
+ * dev_addr_mod() (include/linux/netdevice.h). */
+static inline void eth_hw_addr_set(struct net_device *dev, const u8 *addr)
+{
+	dev_addr_mod(dev, 0, addr, ETH_ALEN);
 }
 
 #endif /* _LINUXKPI_LINUX_ETHERDEVICE_H_ */

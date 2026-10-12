@@ -386,7 +386,7 @@ struct urb {
 	u32			actual_length;
 	usb_complete_t		complete;
 	void			*context;
-	/* the control-request line (8-byte usb_ctrlrequest, gap §3.6-1/9:
+	/* the control-request line (8-byte usb_ctrlrequest, gap section 3.6-1/9:
 	 * a control urb cannot be expressed without it); filled by
 	 * usb_fill_control_urb, staged aligned at submit time */
 	unsigned char		*setup_packet;
@@ -413,7 +413,7 @@ struct urb {
 	/* kill barrier (protocol rule 4): set before a kill examines any
 	 * queue/HC state; submits during the barrier fail with -EPERM */
 	u8			_kill_barrier;
-	/* allocation identity (observability, spec §6): pairs with the
+	/* allocation identity (observability, spec section 6): pairs with the
 	 * submission id in every latch/violation line */
 	u32			_alloc_id;
 	/* (no embedded backend urb: FR-2 moved the async backend to the
@@ -426,7 +426,7 @@ struct urb {
 	void			*_stage;
 	void			*_stage_raw;
 	u32			_stage_len;
-	/* 64-byte-aligned stage for the control-setup line (§3.6-1: the
+	/* 64-byte-aligned stage for the control-setup line (section 3.6-1: the
 	 * xHCI port asserts urb->setup alignment; the driver's storage is
 	 * arbitrary, so the kpi stages the 8 bytes like the data stage) */
 	void			*_setup_stage;
@@ -437,7 +437,7 @@ struct urb {
 	 * an async submit and expect it to outlive the call */
 	int			_refs;
 	/* anchor membership (usb_anchor_urb; the anchor's list iterates
-	 * these - spec §3.3 urb gap row / §3.6-4) */
+	 * these - spec section 3.3 urb gap row / section 3.6-4) */
 	struct list_head	anchor_list;
 	struct usb_anchor	*anchor;
 	/* D-3 forensics: CNTP tick at HC completion now lives on the
@@ -490,7 +490,7 @@ usb_fill_control_urb(struct urb *urb, struct usb_device *dev,
 	urb->transfer_buffer_length = (u32)buffer_length;
 	urb->complete = complete_fn;
 	urb->context = context;
-	/* the setup line rides the urb now (§3.6-1): usb_submit_urb stages
+	/* the setup line rides the urb now (section 3.6-1): usb_submit_urb stages
 	 * it 64-byte aligned for the HC; the caller keeps the storage
 	 * addressable until completion, same contract as Linux */
 	urb->setup_packet = setup_packet;
@@ -503,7 +503,7 @@ usb_fill_int_urb(struct urb *urb, struct usb_device *dev, unsigned int pipe,
 {
 	usb_fill_bulk_urb(urb, dev, pipe, transfer_buffer, buffer_length,
 	    complete_fn, context);
-	/* [LNX] usb.h:1785-1792 truth (linuxkpi-hub spec §3.5-1): the
+	/* [LNX] usb.h:1785-1792 truth (linuxkpi-hub spec section 3.5-1): the
 	 * caller passes the endpoint descriptor's bInterval encoding.
 	 * HS/SS re-express it in microframes (2^(n-1) of 1/8 ms, clamped
 	 * to 1..16); LS/FS keep the raw frame count.  Without this the
@@ -522,7 +522,7 @@ usb_fill_int_urb(struct urb *urb, struct usb_device *dev, unsigned int pipe,
 	}
 }
 
-/* the packet-size ceiling a bulk segmentation loop needs (§3.6-2):
+/* the packet-size ceiling a bulk segmentation loop needs (section 3.6-2):
  * shape-identical to [LNX] usb.h:2060 (static inline there - the Linux
  * compile of a consumer sees the kernel's own); our side resolves through
  * the claiming interface's descriptors, defined in linuxkpi_usb.c */

@@ -149,4 +149,9 @@ struct sched_param {
 extern int sched_setscheduler(struct task_struct *, int,
 			      const struct sched_param *);
 
+/* [LNX] include/linux/sched.h: `void __sched yield(void);` - the cooperative
+ * reschedule the vendored polling paths call. Declared, not defined: what "yield" means
+ * is the port's scheduler decision. */
+void yield(void);
+
 #endif /* _LINUXKPI_LINUX_SCHED_H_ */

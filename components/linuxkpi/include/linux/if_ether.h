@@ -45,7 +45,13 @@
 #define	ETH_P_PUP		0x0200
 #define	ETH_P_IP		0x0800
 #define	ETH_P_ARP		0x0806
+#define	ETH_P_ATALK		0x809B
+#define	ETH_P_AARP		0x80F3
+#define	ETH_P_8021Q		0x8100		/* 802.1Q VLAN Extended Header */
+#define	ETH_P_IPX		0x8137
 #define	ETH_P_IPV6		0x86DD
+#define	ETH_P_PPP_DISC		0x8863
+#define	ETH_P_PPP_SES		0x8864
 #define	ETH_P_PAE		0x888E		/* EAPOL over Ethernet */
 
 /* ------------------------------------------------------------------ */

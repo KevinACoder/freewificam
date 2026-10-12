@@ -43,6 +43,9 @@
  * interface's own include, which is how the atomic API reaches a unit that takes this
  * header. */
 #include <linux/atomic.h>
+/* [LNX] include/linux/skbuff.h:32 includes <linux/if_packet.h>; the receive
+ * classification a driver stamps onto the buffer reaches a unit through it. */
+#include <linux/if_packet.h>
 
 struct net_device;
 

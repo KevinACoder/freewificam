@@ -42,8 +42,26 @@ struct ieee80211_low_level_stats;
 struct cfg80211_ops;
 struct regulatory_request;
 
-struct cfg80211_ops;
-struct regulatory_request;
+/* Tags the compiled set reaches only through pointers; their bodies arrive with a
+ * caller that reads a member. */
+struct vif_params;
+struct station_parameters;
+struct cfg80211_update_ft_ies_params;
+struct netlink_ext_ack;
+struct ieee80211_ht_operation;
+struct ieee80211_vht_operation;
+struct ieee80211_eht_operation;
+struct ieee80211_uhr_operation;
+struct cfg80211_mbssid_elems;
+struct cfg80211_rnr_elems;
+struct cfg80211_roam_info;
+struct cfg80211_fils_discovery;
+struct cfg80211_unsol_bcast_probe_resp;
+struct cfg80211_s1g_short_beacon;
+struct ieee80211_he_obss_pd;
+struct cfg80211_mbssid_config;
+struct cfg80211_acl_data;
+struct mac_address;
 
 /* ------------------------------------------------------------------ */
 /* band, interface type and channel width                              */
@@ -192,12 +210,9 @@ enum nl80211_user_reg_hint_type {
 	NL80211_USER_REG_HINT_INDOOR	= 2,
 };
 
-enum nl80211_dfs_regions {
-	NL80211_DFS_UNSET	= 0,
-	NL80211_DFS_FCC		= 1,
-	NL80211_DFS_ETSI	= 2,
-	NL80211_DFS_JP		= 3,
-};
+/* The DFS region enumeration lives in the regulatory face (net/regulatory.h), which is
+ * the interface's own home for it and the file the domain record that names it is
+ * declared in; this header includes that one. */
 
 enum nl80211_tx_power_setting {
 	NL80211_TX_POWER_AUTOMATIC,
@@ -1495,6 +1510,11 @@ int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
 /* [LNX] include/net/cfg80211.h:8088 */
 int regulatory_hint(struct wiphy *wiphy, const char *alpha2);
 
+/* [LNX] include/net/cfg80211.h:8133-8134: the custom-domain submission the compiled
+ * set calls with its static domain tables. */
+void wiphy_apply_custom_regulatory(struct wiphy *wiphy,
+				   const struct ieee80211_regdomain *regd);
+
 void wiphy_lock(struct wiphy *wiphy)
 	__acquires(&wiphy->mtx);
 
@@ -1669,6 +1689,668 @@ void rfkill_pause_polling(struct rfkill *rfkill);
 
 /* [LNX] include/net/cfg80211.h: the element-search helper */
 const struct element *cfg80211_find_elem(u8 eid, const u8 *ies, int len);
+
+/* ------------------------------------------------------------------ */
+/* the request records the operation table names                       */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/net/cfg80211.h:1334 and include/uapi/linux/nl80211.h:3843 */
+#define	CFG80211_MAX_NUM_AKM_SUITES	10
+#define	NL80211_MAX_NR_CIPHER_SUITES	5
+
+/* [LNX] include/net/cfg80211.h:836-846 (record carried whole) */
+struct key_params {
+	const u8 *key;
+	const u8 *seq;
+	int key_len;
+	int seq_len;
+	u16 vlan_id;
+	u32 cipher;
+	enum nl80211_key_mode mode;
+	const u8 *ltf_keyseed;
+	size_t ltf_keyseed_len;
+};
+
+/* [LNX] include/net/cfg80211.h:1377-1396 (record carried whole) */
+struct cfg80211_crypto_settings {
+	u32 wpa_versions;
+	u32 cipher_group;
+	int n_ciphers_pairwise;
+	u32 ciphers_pairwise[NL80211_MAX_NR_CIPHER_SUITES];
+	int n_akm_suites;
+	u32 akm_suites[CFG80211_MAX_NUM_AKM_SUITES];
+	bool control_port;
+	__be16 control_port_ethertype;
+	bool control_port_no_encrypt;
+	bool control_port_over_nl80211;
+	bool control_port_no_preauth;
+	const u8 *psk;
+	const u8 *sae_pwd;
+	u8 sae_pwd_len;
+	enum nl80211_sae_pwe_mechanism sae_pwe;
+};
+
+/* [LNX] include/uapi/linux/nl80211.h:7569-7576 (the enumerators the compiled set names,
+ * at their computed positions) */
+enum nl80211_bss_select_attr {
+	__NL80211_BSS_SELECT_ATTR_INVALID,
+	NL80211_BSS_SELECT_ATTR_RSSI,
+	NL80211_BSS_SELECT_ATTR_BAND_PREF,
+	NL80211_BSS_SELECT_ATTR_RSSI_ADJUST,
+};
+
+/* [LNX] include/net/cfg80211.h:3593-3600 (record carried whole) */
+struct cfg80211_bss_selection {
+	enum nl80211_bss_select_attr behaviour;
+	union {
+		enum nl80211_band band_pref;
+		struct cfg80211_bss_select_adjust adjust;
+	} param;
+};
+
+/* [LNX] include/net/cfg80211.h:512-526 (the enumerators the compiled set names, at
+ * their computed positions) */
+enum ieee80211_edmg_bw_config {
+	IEEE80211_EDMG_BW_CONFIG_4	= 4,
+	IEEE80211_EDMG_BW_CONFIG_5	= 5,
+	IEEE80211_EDMG_BW_CONFIG_6	= 6,
+	IEEE80211_EDMG_BW_CONFIG_7	= 7,
+	IEEE80211_EDMG_BW_CONFIG_8	= 8,
+	IEEE80211_EDMG_BW_CONFIG_9	= 9,
+	IEEE80211_EDMG_BW_CONFIG_10	= 10,
+	IEEE80211_EDMG_BW_CONFIG_11	= 11,
+	IEEE80211_EDMG_BW_CONFIG_12	= 12,
+	IEEE80211_EDMG_BW_CONFIG_13	= 13,
+	IEEE80211_EDMG_BW_CONFIG_14	= 14,
+	IEEE80211_EDMG_BW_CONFIG_15	= 15,
+};
+
+/* [LNX] include/net/cfg80211.h:540-543 (record carried whole) */
+struct ieee80211_edmg {
+	u8 channels;
+	enum ieee80211_edmg_bw_config bw_config;
+};
+
+/* [LNX] include/net/cfg80211.h:3664-3699 (record carried whole) */
+struct cfg80211_connect_params {
+	struct ieee80211_channel *channel;
+	struct ieee80211_channel *channel_hint;
+	const u8 *bssid;
+	const u8 *bssid_hint;
+	const u8 *ssid;
+	size_t ssid_len;
+	enum nl80211_auth_type auth_type;
+	const u8 *ie;
+	size_t ie_len;
+	bool privacy;
+	enum nl80211_mfp mfp;
+	struct cfg80211_crypto_settings crypto;
+	const u8 *key;
+	u8 key_len, key_idx;
+	u32 flags;
+	int bg_scan_period;
+	struct ieee80211_ht_cap ht_capa;
+	struct ieee80211_ht_cap ht_capa_mask;
+	struct ieee80211_vht_cap vht_capa;
+	struct ieee80211_vht_cap vht_capa_mask;
+	bool pbss;
+	struct cfg80211_bss_selection bss_select;
+	const u8 *prev_bssid;
+	const u8 *fils_erp_username;
+	size_t fils_erp_username_len;
+	const u8 *fils_erp_realm;
+	size_t fils_erp_realm_len;
+	u16 fils_erp_next_seq_num;
+	const u8 *fils_erp_rrk;
+	size_t fils_erp_rrk_len;
+	bool want_1x;
+	struct ieee80211_edmg edmg;
+};
+
+/* [LNX] include/net/cfg80211.h:3780-3790 (record carried whole) */
+struct cfg80211_pmksa {
+	const u8 *bssid;
+	const u8 *pmkid;
+	const u8 *pmk;
+	size_t pmk_len;
+	const u8 *ssid;
+	size_t ssid_len;
+	const u8 *cache_id;
+	u32 pmk_lifetime;
+	u8 pmk_reauth_threshold;
+};
+
+/* [LNX] include/net/cfg80211.h:3565-3586 (record carried whole) */
+struct cfg80211_ibss_params {
+	const u8 *ssid;
+	const u8 *bssid;
+	struct cfg80211_chan_def chandef;
+	const u8 *ie;
+	u8 ssid_len, ie_len;
+	u16 beacon_interval;
+	u32 basic_rates;
+	bool channel_fixed;
+	bool privacy;
+	bool control_port;
+	bool control_port_over_nl80211;
+	bool userspace_handles_dfs;
+	int mcast_rate[NUM_NL80211_BANDS];
+	struct ieee80211_ht_cap ht_capa;
+	struct ieee80211_ht_cap ht_capa_mask;
+	struct key_params *wep_keys;
+	int wep_tx_key;
+};
+
+/* [LNX] include/net/cfg80211.h:1484-1520 (record carried whole) */
+struct cfg80211_beacon_data {
+	unsigned int link_id;
+
+	const u8 *head, *tail;
+	const u8 *beacon_ies;
+	const u8 *proberesp_ies;
+	const u8 *assocresp_ies;
+	const u8 *probe_resp;
+	const u8 *lci;
+	const u8 *civicloc;
+	struct cfg80211_mbssid_elems *mbssid_ies;
+	struct cfg80211_rnr_elems *rnr_ies;
+	s8 ftm_responder;
+
+	size_t head_len, tail_len;
+	size_t beacon_ies_len;
+	size_t proberesp_ies_len;
+	size_t assocresp_ies_len;
+	size_t probe_resp_len;
+	size_t lci_len;
+	size_t civicloc_len;
+	struct cfg80211_he_bss_color he_bss_color;
+	bool he_bss_color_valid;
+
+	bool ht_required, vht_required;
+	const struct ieee80211_ht_operation *ht_oper;
+	const struct ieee80211_vht_operation *vht_oper;
+	const struct ieee80211_he_operation *he_oper;
+	const struct ieee80211_eht_operation *eht_oper;
+	const struct ieee80211_uhr_operation *uhr_oper;
+};
+
+/* [LNX] include/net/cfg80211.h: the FILS / unsolicited-probe / S1G beacon parameter
+ * records the AP settings embed by value. */
+struct cfg80211_fils_discovery {
+	bool update;
+	u32 min_interval;
+	u32 max_interval;
+	size_t tmpl_len;
+	const u8 *tmpl;
+};
+
+struct cfg80211_unsol_bcast_probe_resp {
+	bool update;
+	u32 interval;
+	size_t tmpl_len;
+	const u8 *tmpl;
+};
+
+struct cfg80211_s1g_short_beacon {
+	bool update;
+	const u8 *short_head;
+	const u8 *short_tail;
+	size_t short_head_len;
+	size_t short_tail_len;
+};
+
+/* [LNX] include/net/cfg80211.h:1402-1411 (record carried whole) */
+struct cfg80211_mbssid_config {
+	struct wireless_dev *tx_wdev;
+	u8 tx_link_id;
+	u8 index;
+	bool ema;
+};
+
+/* [LNX] include/net/cfg80211.h:315-325 (record carried whole) */
+struct ieee80211_he_obss_pd {
+	bool enable;
+	u8 sr_ctrl;
+	u8 non_srg_max_offset;
+	u8 min_offset;
+	u8 max_offset;
+	u8 bss_color_bitmap[8];
+	u8 partial_bssid_bitmap[8];
+};
+
+/* [LNX] include/net/cfg80211.h: the EHT capability element: the fixed part the face
+ * already carries, plus the optional trailing bytes. */
+struct ieee80211_eht_cap_elem {
+	struct ieee80211_eht_cap_elem_fixed fixed;
+	u8 optional[];
+} __packed;
+
+/* [LNX] include/net/cfg80211.h:1627-1665 (record carried whole) */
+struct cfg80211_ap_settings {
+	struct cfg80211_chan_def chandef;
+
+	struct cfg80211_beacon_data beacon;
+
+	int beacon_interval, dtim_period;
+	const u8 *ssid;
+	size_t ssid_len;
+	enum nl80211_hidden_ssid hidden_ssid;
+	struct cfg80211_crypto_settings crypto;
+	bool privacy;
+	enum nl80211_auth_type auth_type;
+	int inactivity_timeout;
+	u8 p2p_ctwindow;
+	bool p2p_opp_ps;
+	const struct cfg80211_acl_data *acl;
+	bool pbss;
+	struct cfg80211_bitrate_mask beacon_rate;
+
+	const struct ieee80211_ht_cap *ht_cap;
+	const struct ieee80211_vht_cap *vht_cap;
+	const struct ieee80211_he_cap_elem *he_cap;
+	const struct ieee80211_eht_cap_elem *eht_cap;
+	bool twt_responder;
+	u32 flags;
+	struct ieee80211_he_obss_pd he_obss_pd;
+	struct cfg80211_fils_discovery fils_discovery;
+	struct cfg80211_unsol_bcast_probe_resp unsol_bcast_probe_resp;
+	struct cfg80211_mbssid_config mbssid_config;
+	u8 s1g_long_beacon_period;
+	struct cfg80211_s1g_short_beacon s1g_short_beacon;
+};
+
+/* [LNX] include/net/cfg80211.h:1671-1685 (record carried whole) */
+struct cfg80211_ap_update {
+	struct cfg80211_beacon_data beacon;
+	struct cfg80211_fils_discovery fils_discovery;
+	struct cfg80211_unsol_bcast_probe_resp unsol_bcast_probe_resp;
+	struct cfg80211_s1g_short_beacon s1g_short_beacon;
+};
+
+/* [LNX] include/net/cfg80211.h: the MAC-address record the ACL list is built from. */
+struct mac_address {
+	u8 addr[ETH_ALEN];
+};
+
+/* [LNX] include/net/cfg80211.h:1528-1536 (record carried whole) */
+struct cfg80211_acl_data {
+	enum nl80211_acl_policy acl_policy;
+	int n_acl_entries;
+
+	/* Keep it last */
+	struct mac_address mac_addrs[];
+};
+
+/* [LNX] include/net/cfg80211.h:4013-4023 (record carried whole) */
+struct cfg80211_mgmt_tx_params {
+	struct ieee80211_channel *chan;
+	bool offchan;
+	unsigned int wait;
+	const u8 *buf;
+	size_t len;
+	bool no_cck;
+	bool dont_wait_for_ack;
+	int n_csa_offsets;
+	const u16 *csa_offsets;
+	int link_id;
+};
+
+/* [LNX] include/net/cfg80211.h:2662-2673 (record carried whole) */
+struct bss_parameters {
+	int link_id;
+	int use_cts_prot;
+	int use_short_preamble;
+	int use_short_slot_time;
+	const u8 *basic_rates;
+	u8 basic_rates_len;
+	int ap_isolate;
+	int ht_opmode;
+	s8 p2p_ctwindow, p2p_opp_ps;
+};
+
+/* [LNX] include/net/cfg80211.h:2860-2867 (record carried whole) */
+struct ieee80211_txq_params {
+	enum nl80211_ac ac;
+	u16 txop;
+	u16 cwmin;
+	u16 cwmax;
+	u8 aifs;
+	int link_id;
+};
+
+/* [LNX] include/net/cfg80211.h:1958-1963 (record carried whole) */
+struct station_del_parameters {
+	const u8 *mac;
+	u8 subtype;
+	u16 reason_code;
+	int link_id;
+};
+
+/* [LNX] include/net/cfg80211.h:4843-4846 (record carried whole) */
+struct mgmt_frame_regs {
+	u32 global_stypes, interface_stypes;
+	u32 global_mcast_stypes, interface_mcast_stypes;
+};
+
+/* [LNX] include/net/cfg80211.h: the roaming report the compiled set fills by member
+ * and hands to cfg80211_roamed(). Only the members a compiled unit writes are carried,
+ * in the interface's order; the interface's FILS block between resp_ie_len and links
+ * arrives with a caller that names it. */
+struct cfg80211_roam_info {
+	const u8 *req_ie;
+	size_t req_ie_len;
+	const u8 *resp_ie;
+	size_t resp_ie_len;
+
+	const u8 *ap_mld_addr;
+	u16 valid_links;
+	struct {
+		const u8 *addr;
+		const u8 *bssid;
+		struct ieee80211_channel *channel;
+		struct cfg80211_bss *bss;
+	} links[IEEE80211_MLD_MAX_NUM_LINKS];
+};
+
+/* [LNX] include/net/cfg80211.h: the BSS-selection privacy filter, at the interface's
+ * values, with the interface's macro over it. */
+enum ieee80211_privacy {
+	IEEE80211_PRIVACY_ON,
+	IEEE80211_PRIVACY_OFF,
+	IEEE80211_PRIVACY_ANY
+};
+
+#define	IEEE80211_PRIVACY(x)	\
+	((x) ? IEEE80211_PRIVACY_ON : IEEE80211_PRIVACY_OFF)
+
+/* [LNX] include/uapi/linux/nl80211.h:5605,7242: the two uapi values the helpers below
+ * default to. */
+enum nl80211_bss_use_for {
+	NL80211_BSS_USE_FOR_NORMAL = 1 << 0,
+};
+
+enum nl80211_timeout_reason {
+	NL80211_TIMEOUT_UNSPECIFIED,
+	NL80211_TIMEOUT_SCAN,
+	NL80211_TIMEOUT_AUTH,
+	NL80211_TIMEOUT_ASSOC,
+};
+
+/* ------------------------------------------------------------------ */
+/* the operation table                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/net/cfg80211.h:5280-5688: the driver operation table. Transcribed with
+ * the interface's members and signatures, in the interface's order; the members the
+ * compiled set does not name are omitted (they arrive with a caller), and the two
+ * legacy spellings the vendored bytes reach are noted at their sites. `action` is the
+ * one member 7.3 no longer has: it was replaced by `mgmt_tx`, and this face carries it
+ * as a legacy member for the driver generations whose initializers still name it.
+ */
+struct cfg80211_ops {
+	int	(*suspend)(struct wiphy *wiphy, struct cfg80211_wowlan *wow);
+	int	(*resume)(struct wiphy *wiphy);
+
+	struct wireless_dev * (*add_virtual_intf)(struct wiphy *wiphy,
+						  const char *name,
+						  unsigned char name_assign_type,
+						  enum nl80211_iftype type,
+						  struct vif_params *params);
+	int	(*del_virtual_intf)(struct wiphy *wiphy,
+				    struct wireless_dev *wdev);
+	int	(*change_virtual_intf)(struct wiphy *wiphy,
+				       struct net_device *dev,
+				       enum nl80211_iftype type,
+				       struct vif_params *params);
+
+	int	(*add_key)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			   int link_id, u8 key_index, bool pairwise,
+			   const u8 *mac_addr, struct key_params *params);
+	int	(*get_key)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			   int link_id, u8 key_index, bool pairwise,
+			   const u8 *mac_addr, void *cookie,
+			   void (*callback)(void *cookie, struct key_params*));
+	int	(*del_key)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			   int link_id, u8 key_index, bool pairwise,
+			   const u8 *mac_addr);
+	int	(*set_default_key)(struct wiphy *wiphy,
+				   struct net_device *netdev, int link_id,
+				   u8 key_index, bool unicast, bool multicast);
+	int	(*set_default_mgmt_key)(struct wiphy *wiphy,
+					struct wireless_dev *wdev, int link_id,
+					u8 key_index);
+
+	int	(*start_ap)(struct wiphy *wiphy, struct net_device *dev,
+			    struct cfg80211_ap_settings *settings);
+	int	(*change_beacon)(struct wiphy *wiphy, struct net_device *dev,
+				 struct cfg80211_ap_update *info);
+	int	(*stop_ap)(struct wiphy *wiphy, struct net_device *dev,
+			   unsigned int link_id);
+
+	int	(*add_station)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			       const u8 *mac,
+			       struct station_parameters *params);
+	int	(*del_station)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			       struct station_del_parameters *params);
+	int	(*change_station)(struct wiphy *wiphy, struct wireless_dev *wdev,
+				  const u8 *mac,
+				  struct station_parameters *params);
+	int	(*get_station)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			       const u8 *mac, struct station_info *sinfo);
+	int	(*dump_station)(struct wiphy *wiphy, struct wireless_dev *wdev,
+				int idx, u8 *mac, struct station_info *sinfo);
+
+	int	(*change_bss)(struct wiphy *wiphy, struct net_device *dev,
+			      struct bss_parameters *params);
+
+	int	(*set_txq_params)(struct wiphy *wiphy, struct net_device *dev,
+				  struct ieee80211_txq_params *params);
+
+	int	(*set_monitor_channel)(struct wiphy *wiphy,
+				       struct net_device *dev,
+				       struct cfg80211_chan_def *chandef);
+
+	int	(*scan)(struct wiphy *wiphy,
+			struct cfg80211_scan_request *request);
+
+	int	(*connect)(struct wiphy *wiphy, struct net_device *dev,
+			   struct cfg80211_connect_params *sme);
+	int	(*disconnect)(struct wiphy *wiphy, struct net_device *dev,
+			      u16 reason_code);
+
+	int	(*join_ibss)(struct wiphy *wiphy, struct net_device *dev,
+			     struct cfg80211_ibss_params *params);
+	int	(*leave_ibss)(struct wiphy *wiphy, struct net_device *dev);
+
+	int	(*set_wiphy_params)(struct wiphy *wiphy, int radio_idx,
+				    u32 changed);
+
+	int	(*set_tx_power)(struct wiphy *wiphy, struct wireless_dev *wdev,
+				int radio_idx,
+				enum nl80211_tx_power_setting type, int mbm);
+	int	(*get_tx_power)(struct wiphy *wiphy, struct wireless_dev *wdev,
+				int radio_idx, unsigned int link_id, int *dbm);
+
+	void	(*rfkill_poll)(struct wiphy *wiphy);
+
+	int	(*dump_survey)(struct wiphy *wiphy, struct net_device *netdev,
+			int idx, struct survey_info *info);
+
+	int	(*set_pmksa)(struct wiphy *wiphy, struct net_device *netdev,
+			     struct cfg80211_pmksa *pmksa);
+	int	(*del_pmksa)(struct wiphy *wiphy, struct net_device *netdev,
+			     struct cfg80211_pmksa *pmksa);
+	int	(*flush_pmksa)(struct wiphy *wiphy, struct net_device *netdev);
+
+	int	(*remain_on_channel)(struct wiphy *wiphy,
+				     struct wireless_dev *wdev,
+				     struct ieee80211_channel *chan,
+				     unsigned int duration,
+				     u64 cookie, const u8 *rx_addr);
+	int	(*cancel_remain_on_channel)(struct wiphy *wiphy,
+					    struct wireless_dev *wdev,
+					    u64 cookie);
+
+	int	(*mgmt_tx)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			   struct cfg80211_mgmt_tx_params *params,
+			   u64 cookie);
+	/*
+	 * The legacy management-frame transmit callback: 7.3 replaced it with
+	 * `mgmt_tx`, and it is carried here for the older driver initializers that
+	 * still name `.action`.
+	 */
+	int	(*action)(struct wiphy *wiphy, struct wireless_dev *wdev,
+			  struct cfg80211_mgmt_tx_params *params,
+			  u64 *cookie);
+
+	int	(*set_power_mgmt)(struct wiphy *wiphy, struct net_device *dev,
+				  bool enabled, int timeout);
+
+	void	(*update_mgmt_frame_registrations)(struct wiphy *wiphy,
+						   struct wireless_dev *wdev,
+						   struct mgmt_frame_regs *upd);
+
+	int	(*sched_scan_start)(struct wiphy *wiphy,
+				struct net_device *dev,
+				struct cfg80211_sched_scan_request *request);
+	int	(*sched_scan_stop)(struct wiphy *wiphy, struct net_device *dev,
+				   u64 reqid);
+
+	int	(*set_rekey_data)(struct wiphy *wiphy, struct net_device *dev,
+				  struct cfg80211_gtk_rekey_data *data);
+
+	int	(*tdls_mgmt)(struct wiphy *wiphy, struct net_device *dev,
+			     const u8 *peer, int link_id,
+			     u8 action_code, u8 dialog_token, u16 status_code,
+			     u32 peer_capability, bool initiator,
+			     const u8 *buf, size_t len);
+	int	(*tdls_oper)(struct wiphy *wiphy, struct net_device *dev,
+			     const u8 *peer, enum nl80211_tdls_operation oper);
+
+	int	(*start_p2p_device)(struct wiphy *wiphy,
+				    struct wireless_dev *wdev);
+	void	(*stop_p2p_device)(struct wiphy *wiphy,
+				   struct wireless_dev *wdev);
+
+	int	(*set_mac_acl)(struct wiphy *wiphy, struct net_device *dev,
+			       const struct cfg80211_acl_data *params);
+
+	int	(*update_ft_ies)(struct wiphy *wiphy, struct net_device *dev,
+				 struct cfg80211_update_ft_ies_params *ftie);
+};
+
+/* ------------------------------------------------------------------ */
+/* the notification helpers the compiled set calls                     */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/net/cfg80211.h: the BSS and scan helpers. Declared as the interface
+ * declares them; their bodies belong to the cfg80211 seam this port owns. */
+struct cfg80211_bss * __must_check
+cfg80211_inform_bss_frame(struct wiphy *wiphy,
+			  struct ieee80211_channel *rx_channel,
+			  struct ieee80211_mgmt *mgmt, size_t len,
+			  s32 signal, gfp_t gfp);
+struct cfg80211_bss *
+cfg80211_get_bss(struct wiphy *wiphy, struct ieee80211_channel *channel,
+		 const u8 *bssid, const u8 *ssid, size_t ssid_len,
+		 enum ieee80211_bss_type bss_type,
+		 enum ieee80211_privacy privacy);
+void cfg80211_put_bss(struct wiphy *wiphy, struct cfg80211_bss *bss);
+void cfg80211_unlink_bss(struct wiphy *wiphy, struct cfg80211_bss *bss);
+void cfg80211_scan_done(struct cfg80211_scan_request *request,
+			struct cfg80211_scan_info *info);
+
+/* [LNX] include/net/cfg80211.h: the connection/link notification helpers. */
+void cfg80211_connect_result(struct net_device *dev, const u8 *bssid,
+			     const u8 *req_ie, size_t req_ie_len,
+			     const u8 *resp_ie, size_t resp_ie_len,
+			     u16 status, gfp_t gfp);
+void cfg80211_disconnected(struct net_device *dev, u16 reason,
+			   const u8 *ie, size_t ie_len,
+			   bool locally_generated, gfp_t gfp);
+void cfg80211_roamed(struct net_device *dev, struct cfg80211_roam_info *info,
+		     gfp_t gfp);
+void cfg80211_ibss_joined(struct net_device *dev, const u8 *bssid,
+			  struct ieee80211_channel *channel, gfp_t gfp);
+void cfg80211_new_sta(struct wireless_dev *wdev, const u8 *mac_addr,
+		      struct station_info *sinfo, gfp_t gfp);
+void cfg80211_del_sta(struct wireless_dev *wdev, const u8 *mac_addr,
+		      gfp_t gfp);
+void cfg80211_michael_mic_failure(struct net_device *dev, const u8 *addr,
+				  enum nl80211_key_type key_type, int key_id,
+				  const u8 *tsc, gfp_t gfp);
+
+/* [LNX] include/net/cfg80211.h: the management-frame and remain-on-channel
+ * notifications. */
+bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_dbm,
+		      const u8 *buf, size_t len, u32 flags);
+void cfg80211_mgmt_tx_status(struct wireless_dev *wdev, u64 cookie,
+			     const u8 *buf, size_t len, bool ack, gfp_t gfp);
+void cfg80211_ready_on_channel(struct wireless_dev *wdev, u64 cookie,
+			       struct ieee80211_channel *chan,
+			       unsigned int duration, gfp_t gfp);
+void cfg80211_remain_on_channel_expired(struct wireless_dev *wdev, u64 cookie,
+					struct ieee80211_channel *chan,
+					gfp_t gfp);
+void cfg80211_ch_switch_notify(struct net_device *dev,
+			       struct cfg80211_chan_def *chandef,
+			       unsigned int link_id);
+
+/* [LNX] include/net/cfg80211.h:7491: the channel lookup the compiled set calls. */
+struct ieee80211_channel *
+ieee80211_get_channel(struct wiphy *wiphy, int freq);
+
+/* ------------------------------------------------------------------ */
+/* the vendor-command surface                                          */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/uapi/linux/nl80211.h:7488-7491 */
+struct nl80211_vendor_cmd_info {
+	__u32 vendor_id;
+	__u32 subcmd;
+};
+
+/* [LNX] include/net/cfg80211.h: the vendor-command flags and the raw-data policy tag the
+ * compiled set's vendor command table is written with. */
+enum wiphy_vendor_command_flags {
+	WIPHY_VENDOR_CMD_NEED_WDEV = BIT(0),
+	WIPHY_VENDOR_CMD_NEED_NETDEV = BIT(1),
+	WIPHY_VENDOR_CMD_NEED_RUNNING = BIT(2),
+};
+
+struct nla_policy;
+
+/* [LNX] include/net/cfg80211.h:6001 */
+#define	VENDOR_CMD_RAW_DATA ((const struct nla_policy *)(long)(-ENODATA))
+
+/* [LNX] include/net/cfg80211.h: the vendor command record the compiled set's table is
+ * built from. */
+struct wiphy_vendor_command {
+	struct nl80211_vendor_cmd_info info;
+	u32 flags;
+	int (*doit)(struct wiphy *wiphy, struct wireless_dev *wdev,
+		    const void *data, int data_len);
+	int (*dumpit)(struct wiphy *wiphy, struct wireless_dev *wdev,
+		      struct sk_buff *skb, const void *data, int data_len,
+		      unsigned long *storage);
+	const struct nla_policy *policy;
+	unsigned int maxattr;
+};
+
+/* [LNX] include/uapi/linux/nl80211.h:1597: the vendor command id (at its computed
+ * position in the command enumeration). */
+#define	NL80211_CMD_VENDOR	103
+
+/* [LNX] include/net/cfg80211.h: the vendor-command/event reply helpers the compiled set
+ * calls. Declared as the interface declares them. */
+struct sk_buff *
+cfg80211_vendor_cmd_alloc_reply_skb(struct wiphy *wiphy, int approxlen);
+int cfg80211_vendor_cmd_reply(struct sk_buff *skb);
+struct sk_buff *
+cfg80211_vendor_event_alloc(struct wiphy *wiphy, struct wireless_dev *wdev,
+			    int approxlen, int event_idx, gfp_t gfp);
+void cfg80211_vendor_event(struct sk_buff *skb, gfp_t gfp);
 
 #endif /* _LINUXKPI_NET_CFG80211_H_ */
 

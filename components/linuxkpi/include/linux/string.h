@@ -26,4 +26,37 @@
 /* [LNX] include/linux/string.h:207: extern char * strsep(char **, const char *); */
 extern char *strsep(char **s, const char *ct);
 
+/* [LNX] include/linux/string.h:167: the case-insensitive comparison the compiled set
+ * names (the vendored parsing paths use it). */
+extern int strncasecmp(const char *s1, const char *s2, size_t n);
+
+/* [LNX] include/linux/string.h:390: the bounded copy that pads the tail, declared as
+ * the interface declares it; its body belongs to the port's C library. */
+void memcpy_and_pad(void *dest, size_t dest_len, const void *src, size_t count,
+		    int pad);
+
+/*
+ * [LNX] include/linux/string.h:126-146: strscpy_pad(). The interface spells it as a
+ * macro chain that dispatches on the argument count (the two-argument form sizes the
+ * destination from the array); the compiled set only names the explicit-count form, so
+ * that one is stated here, over this component's strscpy, with the interface's
+ * semantics: the destination is always NUL-terminated and the tail is zero-filled, and
+ * a truncation answers -E2BIG.
+ */
+static __always_inline __unused ssize_t
+strscpy_pad(char *dst, const char *src, size_t count)
+{
+	size_t srclen = strlen(src);
+	size_t n;
+
+	if (count == 0)
+		return -E2BIG;
+	n = srclen < count - 1 ? srclen : count - 1;
+	memcpy(dst, src, n);
+	for (; n < count; n++)
+		dst[n] = '\0';
+
+	return srclen < count ? (ssize_t)srclen : -E2BIG;
+}
+
 #endif /* _LINUXKPI_LINUX_STRING_H_ */

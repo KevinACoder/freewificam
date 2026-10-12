@@ -40,4 +40,45 @@ static inline void list_splice_init(struct list_head *list,
 	INIT_LIST_HEAD(list);
 }
 
+/* [LNX] include/linux/list.h: the splice without reinitialising the source; same node
+ * move as the init variant, leaving `list` in the interface's "undefined but empty of
+ * meaning" state. */
+static inline void list_splice(struct list_head *list, struct list_head *head)
+{
+	struct list_head *pos, *tmp, *first;
+
+	if (list_empty(list))
+		return;
+	first = head->next;
+	for (pos = list->next; pos != list; pos = tmp) {
+		tmp = pos->next;
+		list_add_tail(pos, first);
+	}
+}
+
+/* [LNX] include/linux/list.h: the RCU-safe hash-list insert/remove. This port's RCU is
+ * the plain store (components/linuxkpi/linuxkpi_core.h, READ_ONCE/WRITE_ONCE), so the
+ * bodies are the interface's writes over that; the ordering the interface relies on is
+ * the store order, which is preserved. */
+static inline void hlist_add_head_rcu(struct hlist_node *n, struct hlist_head *h)
+{
+	struct hlist_node *first = h->first;
+
+	n->next = first;
+	n->pprev = &h->first;
+	WRITE_ONCE(h->first, n);
+	if (first)
+		WRITE_ONCE(first->pprev, &n->next);
+}
+
+static inline void hlist_del_rcu(struct hlist_node *n)
+{
+	struct hlist_node *next = n->next;
+	struct hlist_node **pprev = n->pprev;
+
+	WRITE_ONCE(*pprev, next);
+	if (next)
+		WRITE_ONCE(next->pprev, pprev);
+}
+
 #endif /* _LINUXKPI_LINUX_LIST_H_ */

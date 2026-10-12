@@ -29,4 +29,15 @@
 __printf(2, 3) int sprintf(char *buf, const char *fmt, ...);
 __printf(2, 0) int vsprintf(char *buf, const char *fmt, va_list args);
 
+/* [LNX] include/linux/sprintf.h:21-22: the scan family the compiled set names (the
+ * vendored debug parsers read a numeric argument with sscanf). Declared, not defined:
+ * the binding is the port's. The format-checking attribute is the interface's __scanf
+ * ([LNX] include/linux/compiler_attributes.h), stated here because the contract
+ * header's attribute block carries its __printf twin but not this one. */
+#ifndef __scanf
+#define	__scanf(a, b)		__attribute__((__format__(scanf, a, b)))
+#endif
+__scanf(2, 3) int sscanf(const char *buf, const char *fmt, ...);
+__scanf(2, 0) int vsscanf(const char *buf, const char *fmt, va_list args);
+
 #endif /* _LINUXKPI_LINUX_SPRINTF_H_ */

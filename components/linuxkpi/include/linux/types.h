@@ -25,4 +25,12 @@
 typedef unsigned long	__kernel_size_t;
 typedef long		__kernel_ssize_t;
 
+/* [LNX] include/linux/types.h:100-107: the legacy BSD-style scalar spellings the
+ * interface keeps for old sources; the vendored bridge extension's DHCP record is
+ * written with them. */
+typedef u8		u_int8_t;
+typedef u16		u_int16_t;
+typedef u32		u_int32_t;
+typedef u64		u_int64_t;
+
 #endif /* _LINUXKPI_LINUX_TYPES_H_ */

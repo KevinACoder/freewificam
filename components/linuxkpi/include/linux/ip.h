@@ -5,22 +5,23 @@
  *          header itself belongs to the vendored tree in this build, and this face
  *          states why.
  *
- * @design declaration-only compatibility face, deliberately without the IPv4 wire
- *         header. The interface (include/linux/ip.h) defines `struct iphdr` and
- *         ip_hdr(); in this build the vendored tree carries its own include/ip.h with
- *         the same `struct iphdr` (and its own include guard), and that header is
- *         included after this one by the driver's own type header - so defining the
- *         struct here as well would be a redefinition of one wire format, which is
- *         exactly the duplicate the project forbids. The struct is therefore
- *         forward-declared for any pointer use; the byte layout has exactly one
- *         definition in this build, the vendored one, and the day the vendored header
- *         stops providing it the layout moves here rather than appearing twice.
- *         Reference for the face shape: components/linuxkpi/include/linux/usb.h:1-20.
+ * @design declaration-only compatibility face carrying the IPv4 wire header. The face is
+ *         the single definition of `struct iphdr` in this build: the mainline drivers here
+ *         reach `ip_hdr(skb)->protocol` through it, and the face contract asserts the
+ *         layout. A vendored tree that ships its own replacement `include/ip.h` (the SDIO
+ *         vendor driver does) must not define the struct a second time, and on the
+ *         interface the mechanism that keeps it from doing so is the include guard: the
+ *         interface's `linux/ip.h` and the vendored replacement use the same guard name,
+ *         so the replacement is skipped once the interface's header has been read. This
+ *         face therefore carries the interface's guard name (`_LINUX_IP_H`) rather than the
+ *         project's own, which is what makes a vendored shadow header behave here exactly
+ *         as it behaves on the interface. Reference for the face shape:
+ *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    09.10.2026
  */
 
-#ifndef _LINUXKPI_LINUX_IP_H_
-#define _LINUXKPI_LINUX_IP_H_
+#ifndef _LINUX_IP_H
+#define _LINUX_IP_H
 
 #include "../../linuxkpi_core.h"
 #include <linux/in.h>
@@ -80,4 +81,4 @@ struct iphdr {
 	/*The options start here. */
 };
 
-#endif /* _LINUXKPI_LINUX_IP_H_ */
+#endif /* _LINUX_IP_H */

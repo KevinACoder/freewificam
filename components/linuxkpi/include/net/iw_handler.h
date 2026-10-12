@@ -52,4 +52,12 @@ struct iw_handler_def {
 	struct iw_statistics	*(*get_wireless_stats)(struct net_device *dev);
 };
 
+/* [LNX] include/net/iw_handler.h:463-483: the stream builders a get-handler calls to
+ * append one event to the reply buffer. Declared, not defined: the layout arithmetic
+ * is the port's when it has a wireless-extension stream to build. */
+char *iwe_stream_add_event(struct iw_request_info *info, char *stream,
+			   char *ends, struct iw_event *iwe, int event_len);
+char *iwe_stream_add_point(struct iw_request_info *info, char *stream,
+			   char *ends, struct iw_event *iwe, char *extra);
+
 #endif /* _LINUXKPI_NET_IW_HANDLER_H_ */
