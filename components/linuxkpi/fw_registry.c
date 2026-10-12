@@ -102,6 +102,20 @@ void release_firmware(const struct firmware *firmware)
 }
 
 /*
+ * [LNX] include/linux/firmware.h: `firmware_request_nowarn()` is the interface's
+ * spelling for "load this, and do not print a message when it is absent" - the
+ * optional-firmware path (iwlwifi asks for the PNVM this way). The registry is the
+ * only loader and it is silent already, so the difference from request_firmware()
+ * is exactly nothing here; the entry point exists so the caller compiles and reads
+ * unchanged, and the name says which of the two contracts it is under.
+ */
+int firmware_request_nowarn(const struct firmware **fw, const char *name,
+			    struct device *device)
+{
+	return request_firmware(fw, name, device);
+}
+
+/*
  * The asynchronous spelling. The interface's contract is that the caller is not
  * blocked and the continuation runs with the result; this project's registry is
  * a synchronous lookup with no filesystem or userland helper behind it, so the

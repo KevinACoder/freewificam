@@ -46,4 +46,21 @@ enum rfkill_hard_block_reasons {
 	RFKILL_HARD_BLOCK_NOT_OWNER	= 1 << 1,
 };
 
+/*
+ * [LNX] include/linux/rfkill.h:239,313-316: `bool rfkill_soft_blocked(struct
+ * rfkill *)` is a real entry point in the rfkill core and, in that header's
+ * !IS_ENABLED(CONFIG_RFKILL) arm, an inline returning false. This port has no
+ * rfkill switch and no rfkill core (the wiphy record's `rfkill` member is never
+ * set), so the no-core arm is the honest mapping: the switch is never
+ * soft-blocked. The iwlwifi caller reads it as "is the radio soft-blocked" and
+ * takes its default (not-blocked) path, which is the interface's own answer when
+ * there is no switch.
+ */
+static __always_inline __unused bool
+rfkill_soft_blocked(struct rfkill *rfkill)
+{
+	(void)rfkill;
+	return false;
+}
+
 #endif /* _LINUXKPI_LINUX_RFKILL_H_ */

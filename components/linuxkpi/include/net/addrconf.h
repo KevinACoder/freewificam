@@ -25,4 +25,13 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/net/addrconf.h: the interface defines the inet6 device record in
+ * this header. A compiled consumer names the type in a prototype
+ * (iwl_mvm_ipv6_addr_change's third parameter), and with no declaration the type
+ * is invented at that prototype - a different type at every other use, and a
+ * diagnostic the interface's own build cannot report because its header defines
+ * it. This port has no inet6 layer, so only the name is fixed here; the record's
+ * members arrive with a caller that reads them. */
+struct inet6_dev;
+
 #endif /* _LINUXKPI_NET_ADDRCONF_H_ */

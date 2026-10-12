@@ -41,9 +41,6 @@
 /* [LNX] include/linux/random.h:39 */
 void get_random_bytes(void *buf, size_t len);
 
-/* [LNX] include/asm-generic/barrier.h:196 */
-void barrier(void);
-
 #endif
 
 /* IS_ENABLED/IS_REACHABLE over the kbuild convention: a CONFIG_ symbol is
@@ -80,30 +77,41 @@ int snprintf(char *buf, size_t size, const char *fmt, ...);
 /* basic types                                                         */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The interface's widths, and specifically its 64-bit spelling: [LNX]
+ * include/uapi/asm-generic/int-ll64.h:33-34 makes __s64/__u64 `long long` /
+ * `unsigned long long` on every architecture (the file's own comment: "int-ll64 is
+ * used everywhere now"), and arm64 reaches it through
+ * include/uapi/asm-generic/types.h. It is not interchangeable with `long` even
+ * where both are 64 bits: a driver's format strings are written against the
+ * interface's spelling, so `%lld`/`%llu`/`%llx` match here only if the type is the
+ * same one - and with `long` the gate reports the driver's own correct format
+ * strings as mismatches while hiding the ones the interface would reject.
+ */
 typedef uint8_t			u8;
 typedef uint16_t		u16;
 typedef uint32_t		u32;
-typedef uint64_t		u64;
+typedef unsigned long long	u64;
 typedef int8_t			s8;
 typedef int16_t			s16;
 typedef int32_t			s32;
-typedef int64_t			s64;
+typedef long long		s64;
 
 typedef uint8_t			__u8;
 typedef uint16_t		__u16;
 typedef uint32_t		__u32;
-typedef uint64_t		__u64;
+typedef unsigned long long	__u64;
 typedef int8_t			__s8;
 typedef int16_t			__s16;
 typedef int32_t			__s32;
-typedef int64_t			__s64;
+typedef long long		__s64;
 
 typedef uint16_t		__le16;
 typedef uint32_t		__le32;
-typedef uint64_t		__le64;
+typedef unsigned long long	__le64;
 typedef uint16_t		__be16;
 typedef uint32_t		__be32;
-typedef uint64_t		__be64;
+typedef unsigned long long	__be64;
 /* the checksum types the wire-header layouts name (uapi/linux/types.h);
  * __bitwise is a sparse annotation and a no-op for the compiler */
 typedef uint16_t		__sum16;
@@ -230,6 +238,38 @@ unsigned int lkpi_random_u32(void);
 #define	get_random_u32()	lkpi_random_u32()
 #endif
 
+/*
+ * [LNX] include/linux/random.h:56-59 (the bounded draw) and 110-115 (the inclusive
+ * form). The interface's bounded draw returns a value in [0, ceil) with uniform
+ * distribution; this port's source is the core's xorshift stream, so the bounded
+ * draw is the interface's rejection rule (discard a draw in the top partial band,
+ * then take the remainder) and the inclusive form is the interface's own
+ * `floor + get_random_u32_below(ceil - floor + 1)`. The interface's
+ * constant-folding fast path is an optimisation of the same answer and is not
+ * carried.
+ */
+static __always_inline __unused u32
+get_random_u32_below(u32 ceil)
+{
+	u32 reject, r;
+
+	if (ceil <= 1)
+		return 0;
+	/* (2^32 mod ceil) values at the bottom of the range would bias the
+	 * remainder; they are the ones rejected here. */
+	reject = (u32)(0u - ceil) % ceil;
+	do {
+		r = (u32)get_random_u32();
+	} while (r < reject);
+	return r % ceil;
+}
+
+static __always_inline __unused u32
+get_random_u32_inclusive(u32 floor, u32 ceil)
+{
+	return floor + get_random_u32_below(ceil - floor + 1);
+}
+
 #ifndef static_assert
 #define	static_assert		_Static_assert
 #endif
@@ -297,7 +337,11 @@ struct device {
 #define	BITS_PER_LONG		(8 * sizeof(unsigned long))
 #define	BITS_PER_BYTE		8
 #ifndef PAGE_SIZE
-#define	PAGE_SIZE		4096
+/* [LNX] arch/arm64/include/asm/page-def.h: `#define PAGE_SIZE (_AC(1, UL) <<
+ * PAGE_SHIFT)` - an unsigned long, not a bare int. The width shows through
+ * arithmetic a driver logs with %lu/%lx (pages * PAGE_SIZE), which the
+ * interface's own build accepts. */
+#define	PAGE_SIZE		(1UL << 12)
 #endif
 #ifndef PAGE_SHIFT
 #define	PAGE_SHIFT		12
@@ -341,6 +385,31 @@ div_u64(u64 dividend, u32 divisor)
 
 	return div_u64_rem(dividend, divisor, &rem);
 }
+
+/*
+ * The 64-bit-by-64-bit divide family. The interface states these as inlines in
+ * linux/math64.h (include/linux/math64.h:81-84 and 159-163); they are carried in
+ * the core's divide family, next to div_u64()/div_u64_rem() above, because the
+ * compiled set reaches the divide vocabulary through the core contract rather than
+ * through linux/math64.h (the interface's own BITS_PER_LONG == 64 arm, which is the
+ * arm this port compiles).
+ */
+/* [LNX] include/linux/math64.h:81-84 */
+static __always_inline __unused u64
+div64_u64(u64 dividend, u64 divisor)
+{
+	return dividend / divisor;
+}
+
+/* [LNX] include/linux/math64.h:159-163: the interface computes the quotient
+ * through div_s64_rem() and discards the remainder, so the result is the plain
+ * signed divide; the divisor is the interface's 32-bit s32. */
+static __always_inline __unused s64
+div_s64(s64 dividend, s32 divisor)
+{
+	return dividend / divisor;
+}
+
 /* Linux's overflow-checked size arithmetic, without the checked parts
  * (the counts here are chip-table lengths, never near overflow); the
  * member expressions ride sizeof, so they are never evaluated - which
@@ -514,6 +583,12 @@ lkpi_hweight64(u64 w)
 #define	HWEIGHT32(w)	(__builtin_constant_p(w) ? __const_hweight32(w) : lkpi_hweight32(w))
 #define	HWEIGHT64(w)	(__builtin_constant_p(w) ? __const_hweight64(w) : lkpi_hweight64(w))
 
+/* [LNX] include/linux/bitops.h:94-97: `static __always_inline unsigned long
+ * hweight_long(unsigned long w)` picks the width from sizeof(w); on this port
+ * unsigned long is 64 bits, so it reaches the hweight64 body above. */
+#define	hweight_long(w)							\
+	((unsigned long)(sizeof(w) == 4 ? hweight32(w) : hweight64((u64)(w))))
+
 static __always_inline __unused unsigned long
 __ffs(unsigned long word)
 {
@@ -527,6 +602,10 @@ __fls(unsigned long word)
 
 	return word == 0 ? 0 : (unsigned long)(63 - __builtin_clzll(word));
 }
+
+/* [LNX] include/asm-generic/bitops/ffz.h:11: `#define ffz(x) __ffs(~(x))` - the
+ * index of the first zero bit, which is the first set bit of the complement. */
+#define	ffz(x)			__ffs(~(unsigned long)(x))
 
 #define	do_div(n, base)		({ unsigned long __r = (n) % (base);	\
 				   (n) = (n) / (base); __r; })
@@ -547,11 +626,49 @@ __fls(unsigned long word)
 #define	__roundup_pow_of_two(n)	(1UL << (ilog2((n) - 1) + 1))
 #define	roundup_pow_of_two(n)	__roundup_pow_of_two(n)
 
+/*
+ * [LNX] include/linux/log2.h:45-48: `static __always_inline bool
+ * is_power_of_2(unsigned long n)` with the interface's own body `n - 1 < (n ^
+ * (n - 1))`. Zero is not a power of two (n-1 wraps to ULONG_MAX, which is not
+ * less than 1), which is the interface's contract.
+ */
+static __always_inline __unused bool
+is_power_of_2(unsigned long n)
+{
+	return n - 1 < (n ^ (n - 1));
+}
+
+/* [LNX] include/linux/log2.h:65-69 and 191-195: the interface's round-down, whose
+ * runtime arm is `1UL << (fls_long(n) - 1)` - the 0-based highest-set-bit index,
+ * which is this port's __fls() above (fls_long(n) - 1 == __fls(n)). The constant
+ * arm folds through the exact-for-constants ilog2 the round-up helper already
+ * uses. */
+#define	__rounddown_pow_of_two(n)	(1UL << __fls((unsigned long)(n)))
+#define	rounddown_pow_of_two(n)						\
+	(__builtin_constant_p(n) ? (1UL << ilog2(n)) : __rounddown_pow_of_two(n))
+
 #ifndef READ_ONCE
 #define	READ_ONCE(x)		(*(volatile typeof(x) *)&(x))
 #endif
 #ifndef WRITE_ONCE
 #define	WRITE_ONCE(x, v)	do { *(volatile typeof(x) *)&(x) = (v); } while (0)
+#endif
+
+/*
+ * [LNX] include/linux/compiler.h:85: `#define barrier() __asm__ __volatile__("": :
+ * :"memory")` - the compiler-only barrier (no CPU instruction, but the compiler
+ * may not reorder or merge accesses across it). It is the interface's own body,
+ * carried as the interface's macro rather than as the extern declaration an earlier
+ * revision of this header had, because the interface spells it as a macro and a
+ * driver may name it in a context an out-of-line call would not survive.
+ */
+#ifndef barrier
+#define	barrier()		__asm__ __volatile__("": : :"memory")
+#endif
+/* [LNX] include/asm-generic/barrier.h:113: the !CONFIG_SMP arm of smp_mb(), which
+ * is `barrier()` - this port runs one CPU, so that is the reachable arm. */
+#ifndef smp_mb
+#define	smp_mb()		barrier()
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -679,6 +796,13 @@ test_and_clear_bit(unsigned int nr, volatile unsigned long *addr)
 /* the __-prefixed form is the non-atomic-bitops name; same impl */
 #define	__test_and_set_bit(nr, addr)	test_and_set_bit((nr), (addr))
 #define	__test_and_clear_bit(nr, addr)	test_and_clear_bit((nr), (addr))
+/* [LNX] include/linux/bitops.h:53-54: `#define __set_bit(nr, addr)
+ * bitop(___set_bit, nr, addr)` and its clear twin - the non-atomic, non-ordered
+ * form. This port's set_bit/clear_bit (above) are already plain stores, so the
+ * underscored spelling is the same operation under the interface's other name
+ * rather than a second mechanism. */
+#define	__set_bit(nr, addr)		set_bit((nr), (addr))
+#define	__clear_bit(nr, addr)		clear_bit((nr), (addr))
 
 static __always_inline __unused void
 bitmap_zero(unsigned long *dst, unsigned int nbits)
@@ -725,6 +849,25 @@ find_first_bit(const unsigned long *addr, unsigned long size)
 {
 
 	return find_next_bit(addr, size, 0);
+}
+
+/*
+ * [LNX] include/linux/find.h:404-412 (the interface's inline, over the
+ * _find_last_bit() library body at lib/find_bit.c:221): the highest set bit at or
+ * below size, or size when none is set. The interface's body scans the last word
+ * down; this port states the same walk directly over the bitmap helpers above
+ * rather than carrying the interface's small_const_nbits() fast path, which is an
+ * optimisation and not a difference in the answer.
+ */
+static __always_inline __unused unsigned long
+find_last_bit(const unsigned long *addr, unsigned long size)
+{
+	unsigned long i;
+
+	for (i = size; i > 0; i--)
+		if (test_bit((unsigned int)(i - 1), addr))
+			return i - 1;
+	return size;
 }
 
 /* rtw89's MLO link bookkeeping walks these directly (12 sites) - the
@@ -831,6 +974,51 @@ bitmap_weight(const unsigned long *src, unsigned int nbits)
 #define	htole64(x)		cpu_to_le64(x)
 #define	le32_to_cpup(p)		le32_to_cpu(*(const __le32 *)(p))
 #define	le16_to_cpup(p)		le16_to_cpu(*(const __le16 *)(p))
+/*
+ * The underscored "pointer" spellings. The interface states them as
+ * static __always_inline functions (include/uapi/linux/byteorder/little_endian.h:
+ * 57,65,89), so they are carried as functions here rather than as macros: the
+ * byteorder face (components/linuxkpi/include/byteorder/) spells the same three as
+ * macros that reach the core's conversions, and a function and a function-like
+ * macro of one name coexist (the macro shadows the function at the call site),
+ * whereas two macros of one name would not. The compiled set reaches these names
+ * through the core contract rather than through the byteorder face.
+ */
+/* [LNX] include/uapi/linux/byteorder/little_endian.h:57-60 */
+static __always_inline __unused u32
+__le32_to_cpup(const __le32 *p)
+{
+	return (u32)*p;
+}
+
+/* [LNX] include/uapi/linux/byteorder/little_endian.h:65-68 */
+static __always_inline __unused u16
+__le16_to_cpup(const __le16 *p)
+{
+	return (u16)*p;
+}
+
+/* [LNX] include/uapi/linux/byteorder/little_endian.h:89-92 (the little-endian
+ * spelling of __be16_to_cpup, which byte-swaps the loaded value). */
+static __always_inline __unused u16
+be16_to_cpup(const __be16 *p)
+{
+	return be16_to_cpu(*p);
+}
+/*
+ * [LNX] include/net/checksum.h:107-110: `static __always_inline __wsum
+ * csum_unfold(__sum16 n) { return (__force __wsum)n; }`. The interface keeps it in
+ * net/checksum.h, next to the checksum arithmetic; the compiled set reaches it
+ * through a translation unit that does not include that header, so it is stated
+ * here with the rest of the wire-order conversions it belongs with. It is the
+ * interface's own body: the 16-bit folded sum and the 32-bit unfolded sum share a
+ * representation, so the "unfold" is the identity reinterpretation.
+ */
+static __always_inline __unused __wsum
+csum_unfold(__sum16 n)
+{
+	return (__wsum)n;
+}
 static __always_inline __unused void
 le16_add_cpu(__le16 *var, u16 val)
 {
@@ -861,22 +1049,30 @@ le32_add_cpu(__le32 *var, u32 val)
 #define	get_unaligned_le64(p)	le64_to_cpu((__force __le64)					\
 				    (u64)get_unaligned_le32((const u8 *)(p)) |		\
 				    ((u64)get_unaligned_le32((const u8 *)(p) + 4) << 32))
+/*
+ * The internal temporary of each store carries the width in its name. The
+ * interface's own __put_unaligned_le32() is a function, so its local cannot
+ * collide with the caller's; these are macros, and a shared `__v` makes the
+ * 64-bit form's argument to the 32-bit form read the 32-bit form's own
+ * not-yet-initialised local instead of the outer value (measured as an
+ * uninitialised read and a shift past the width at the driver's warning level).
+ */
 #define	put_unaligned_le16(v, p) do {						\
-	u16 __v = le16_to_cpu((__force __u16)(v));				\
-	((u8 *)(p))[0] = (u8)__v;						\
-	((u8 *)(p))[1] = (u8)(__v >> 8);					\
+	u16 __lkpi_le16v = le16_to_cpu((__force __u16)(v));			\
+	((u8 *)(p))[0] = (u8)__lkpi_le16v;					\
+	((u8 *)(p))[1] = (u8)(__lkpi_le16v >> 8);				\
 } while (0)
 #define	put_unaligned_le32(v, p) do {						\
-	u32 __v = le32_to_cpu((__force __u32)(v));				\
-	((u8 *)(p))[0] = (u8)__v;						\
-	((u8 *)(p))[1] = (u8)(__v >> 8);					\
-	((u8 *)(p))[2] = (u8)(__v >> 16);					\
-	((u8 *)(p))[3] = (u8)(__v >> 24);					\
+	u32 __lkpi_le32v = le32_to_cpu((__force __u32)(v));			\
+	((u8 *)(p))[0] = (u8)__lkpi_le32v;					\
+	((u8 *)(p))[1] = (u8)(__lkpi_le32v >> 8);				\
+	((u8 *)(p))[2] = (u8)(__lkpi_le32v >> 16);				\
+	((u8 *)(p))[3] = (u8)(__lkpi_le32v >> 24);				\
 } while (0)
 #define	put_unaligned_le64(v, p) do {						\
-	u64 __v = le64_to_cpu((__force __u64)(v));				\
-	put_unaligned_le32((__u32)__v, p);					\
-	put_unaligned_le32((__u32)(__v >> 32), (u8 *)(p) + 4);			\
+	u64 __lkpi_le64v = le64_to_cpu((__force __u64)(v));			\
+	put_unaligned_le32((__u32)__lkpi_le64v, p);				\
+	put_unaligned_le32((__u32)(__lkpi_le64v >> 32), (u8 *)(p) + 4);		\
 } while (0)
 
 /* ------------------------------------------------------------------ */
@@ -1061,6 +1257,11 @@ u32p_replace_bits(u32 *p, u32 v, u32 mask)
 
 void *lkpi_kmem_alloc(size_t, int flags, bool zero);
 void lkpi_kmem_free(const void *);
+/* The size the heap handed out for a block, read back from the block's own header
+ * (linuxkpi_core.c, "allocation"). Zero for NULL or for a pointer this allocator
+ * never handed out - which is what makes krealloc()/kfree_sensitive() below able to
+ * preserve or clear exactly the old bytes. */
+size_t lkpi_kmem_size(const void *);
 
 static __always_inline __unused void *
 kmalloc(size_t size, gfp_t flags)
@@ -1115,6 +1316,24 @@ vfree(const void *p)
 {
 	lkpi_kmem_free(p);
 }
+
+/*
+ * The reallocation and the "sensitive" free of the interface's allocator family
+ * (include/linux/slab.h). Their bodies are in linuxkpi_compat.c, over this port's
+ * heap: the interface declares them extern, and the port's heap carries each block's
+ * size in its own header (lkpi_kmem_size() above), which is what lets krealloc()
+ * preserve the old bytes and kfree_sensitive() clear them without a second
+ * allocator. kvfree() is the interface's "free either a kmalloc or a vmalloc
+ * block"; on this port vmalloc() is the same heap, so it is kfree().
+ */
+/* [LNX] include/linux/slab.h:593 (krealloc over krealloc_node) */
+void *krealloc(const void *p, size_t new_size, gfp_t flags);
+/* [LNX] include/linux/slab.h:1422 */
+void kvfree(const void *addr);
+/* [LNX] include/linux/string.h:304 */
+void *kvmemdup(const void *src, size_t len, gfp_t gfp);
+/* [LNX] include/linux/slab.h:597 */
+void kfree_sensitive(const void *objp);
 
 /* devm allocations are plain allocations: the driver lives as long as the
  * image and every boot starts from a clean slate. */
@@ -1258,6 +1477,36 @@ static __always_inline __unused void
 list_splice_tail(struct list_head *list, struct list_head *head)
 {
 	lkpi_list_splice_tail(list, head);
+}
+
+/* [LNX] include/linux/list.h:632-640: the tail-splice that also reinitialises the
+ * emptied source. The core's lkpi_list_splice_tail() above already leaves the
+ * source a valid empty list, so the init variant is that operation under the
+ * interface's other name. */
+static __always_inline __unused void
+list_splice_tail_init(struct list_head *list, struct list_head *head)
+{
+	lkpi_list_splice_tail(list, head);
+}
+
+/* [LNX] include/linux/list.h:280-289: replace `old` with `new` in place, relinking
+ * the neighbours around the new node (the interface's body). */
+static __always_inline __unused void
+list_replace(struct list_head *old, struct list_head *new)
+{
+	new->next = old->next;
+	new->next->prev = new;
+	new->prev = old->prev;
+	new->prev->next = new;
+}
+
+/* [LNX] include/linux/list.h:303-307: the replace that also reinitialises the old
+ * node, which is what lets it be reused or tested for emptiness afterwards. */
+static __always_inline __unused void
+list_replace_init(struct list_head *old, struct list_head *new)
+{
+	list_replace(old, new);
+	INIT_LIST_HEAD(old);
 }
 
 static __always_inline __unused void
@@ -1449,6 +1698,47 @@ call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *head))
 	func(head);
 }
 
+/*
+ * The rest of the RCU pointer vocabulary the compiled set names. The interface's
+ * checked forms (include/linux/rcupdate.h:660,741) are rcu_dereference() under a
+ * condition that only the lockdep validator evaluates - with the validator off the
+ * condition is not evaluated at all (RCU_LOCKDEP_WARN() expands to nothing), which
+ * is exactly this port's state. So the checked dereferences are the plain read the
+ * core's rcu_dereference() already is, and the condition argument is carried
+ * (unused) so a caller reads unchanged.
+ */
+/* [LNX] include/linux/rcupdate.h:1041 */
+#define	RCU_INIT_POINTER(p, v)		do { WRITE_ONCE((p), (v)); } while (0)
+/* [LNX] include/linux/rcupdate.h:660-662 */
+#define	rcu_dereference_check(p, c)	(p)
+/* [LNX] include/linux/rcupdate.h:741-742 */
+#define	rcu_dereference_protected(p, c)	(p)
+
+/*
+ * [LNX] include/net/cfg80211.h:6834-6835 and include/net/mac80211.h:2345-2346,
+ * 2775-2776: the wiphy- and link-scoped accessors the wireless stack builds on
+ * rcu_dereference_protected(). Their home headers are the net/cfg80211.h and
+ * net/mac80211.h faces (which state the sibling _check accessors); the compiled set
+ * reaches these names through the core contract, and the port has no wiphy mutex to
+ * assert on, so they are the same plain link/wiphy read the face's _check accessors
+ * already are.
+ */
+#define	wiphy_dereference(wiphy, p)					\
+	rcu_dereference_protected((p), lockdep_is_held(&(wiphy)->mtx))
+#define	link_conf_dereference_protected(vif, link_id)			\
+	((vif)->link_conf[link_id])
+#define	link_sta_dereference_protected(sta, link_id)			\
+	((sta)->link[link_id])
+
+/*
+ * [LNX] include/linux/netdevice.h:90: `void synchronize_net(void);`. The interface's
+ * body waits for RCU readers and drains the rtnl todo list; this port's
+ * synchronize_rcu() is a no-op (no grace period exists) and its RTNL has no todo
+ * list, so the body (linuxkpi_compat.c) is empty. It is stated with the RCU
+ * synchronize it is built on.
+ */
+void synchronize_net(void);
+
 /* ------------------------------------------------------------------ */
 /* atomics (linux/atomic.h) - plain int with libcall fallbacks          */
 /* ------------------------------------------------------------------ */
@@ -1487,6 +1777,50 @@ lkpi_atomic_cmpxchg(atomic_t *v, int old, int new)
 #define	atomic_add(i, v)	lkpi_atomic_add((i), (v))
 #define	atomic_sub(i, v)	lkpi_atomic_sub((i), (v))
 
+/*
+ * [LNX] include/linux/atomic/atomic-arch-fallback.h:2549-2563 (the body reached
+ * through atomic-instrumented.h:1590): `atomic_dec_if_positive` decrements only
+ * while the value is positive and returns the new value (or the unchanged,
+ * non-positive value when it declined). The interface's body is a cmpxchg retry
+ * loop; that is the same loop the contract's atomic_add_unless already spells, so
+ * it is stated here in the same shape rather than as a second atomic model.
+ */
+static __always_inline __unused int
+atomic_dec_if_positive(atomic_t *v)
+{
+	int old = atomic_read(v);
+	int dec;
+
+	for (;;) {
+		dec = old - 1;
+		if (dec < 0)
+			return dec;
+		if (lkpi_atomic_cmpxchg(v, old, dec) == old)
+			return dec;
+		old = atomic_read(v);
+	}
+}
+
+/*
+ * [LNX] include/linux/atomic/atomic-arch-fallback.h:2421-2432 (reached through
+ * atomic-instrumented.h:1493): `atomic_fetch_add_unless` adds `a` only when the
+ * value is not `u`, and returns the value it saw. The interface's cmpxchg retry
+ * loop is carried in the same shape as atomic_dec_if_positive() above.
+ */
+static __always_inline __unused int
+atomic_fetch_add_unless(atomic_t *v, int a, int u)
+{
+	int old = atomic_read(v);
+
+	for (;;) {
+		if (old == u)
+			return old;
+		if (lkpi_atomic_cmpxchg(v, old, old + a) == old)
+			return old;
+		old = atomic_read(v);
+	}
+}
+
 /* ------------------------------------------------------------------ */
 /* time (linux/{jiffies,ktime,delay,math64}.h)                         */
 /* ------------------------------------------------------------------ */
@@ -1506,8 +1840,27 @@ unsigned long lkpi_jiffies(void);
 #define	time_before(a, b)	time_after((b), (a))
 #define	time_after_eq(a, b)	((long)((a) - (b)) >= 0)
 #define	time_before_eq(a, b)	time_after_eq((b), (a))
+/* [LNX] include/linux/jiffies.h:258,273: the two "against now" comparisons, which
+ * the interface builds directly on the wrap-safe pair above. They are stated here
+ * with that pair because a compiled translation unit reaches the clock through the
+ * core contract rather than through linux/jiffies.h. */
+#define	time_is_before_jiffies(a)	time_after(jiffies, (a))
+#define	time_is_after_jiffies(a)	time_before(jiffies, (a))
 
-typedef int64_t ktime_t;
+/*
+ * [LNX] include/linux/timer.h:176: `unsigned long round_jiffies(unsigned long j);`.
+ * The interface rounds an absolute time up to the next second so many wakeups
+ * coalesce; this port runs no deferred-timer wheel to round against, so the body
+ * (linuxkpi_compat.c) is the identity - the same choice the relative form above
+ * already records. It is stated as the interface's extern function rather than as
+ * the macro an earlier revision of linux/jiffies.h carried, because the compiled
+ * set reaches it through the core contract.
+ */
+unsigned long round_jiffies(unsigned long j);
+
+/* [LNX] include/linux/ktime.h: `typedef s64 ktime_t;` - the interface's own
+ * width, which the driver's %lld/%llu format strings are written against. */
+typedef s64 ktime_t;
 
 /* ktime counts nanoseconds, scaled off the hardclock tick */
 ktime_t lkpi_ktime_get(void);
@@ -1525,6 +1878,51 @@ ktime_t lkpi_ktime_get(void);
 #define	ktime_get_boottime_ns()	((u64)lkpi_ktime_get())
 #define	ktime_compare(a, b)	((a) < (b) ? -1 : ((a) > (b) ? 1 : 0))
 #define	ktime_after(a, b)	((a) > (b))
+
+/* [LNX] include/vdso/time64.h: the nanosecond multiples the compiled set scales
+ * tick arithmetic with. Stated before the ktime constructors below, which are
+ * defined in terms of NSEC_PER_SEC. */
+#define	NSEC_PER_SEC		1000000000L
+#define	NSEC_PER_USEC		1000L
+/* [LNX] include/linux/time64.h:22-24: the microsecond and millisecond multiples. */
+#define	MSEC_PER_SEC		1000L
+#define	USEC_PER_SEC		1000000L
+#define	USEC_PER_MSEC		1000L
+
+/* [LNX] include/linux/time64.h:30-32: the representable range of a ktime, which
+ * ktime_set() saturates against. */
+#define	KTIME_MAX		((s64)~((u64)1 << 63))
+#define	KTIME_SEC_MAX		(KTIME_MAX / NSEC_PER_SEC)
+
+/* [LNX] include/linux/ktime.h:36-41: `static inline ktime_t ktime_set(const s64
+ * secs, const unsigned long nsecs)` - the interface's seconds/nanoseconds
+ * constructor, saturating at KTIME_MAX rather than wrapping. */
+static __always_inline __unused ktime_t
+ktime_set(const s64 secs, const unsigned long nsecs)
+{
+	if (secs >= KTIME_SEC_MAX)
+		return KTIME_MAX;
+	return secs * NSEC_PER_SEC + (s64)nsecs;
+}
+
+/* [LNX] include/linux/ktime.h:78-81: `static inline s64 ktime_to_ns(const ktime_t
+ * kt)` - a ktime already counts nanoseconds, so the conversion is the identity. */
+static __always_inline __unused s64
+ktime_to_ns(const ktime_t kt)
+{
+	return kt;
+}
+
+/* [LNX] include/linux/timekeeping.h:238-241: `static inline time64_t
+ * ktime_get_boottime_seconds(void) { return ktime_divns(ktime_get_coarse_boottime(),
+ * NSEC_PER_SEC); }`. This port's boot-time clock is the core's monotonic read
+ * (ktime_get_boottime(), above), so the seconds form is that read divided by the
+ * nanosecond multiple. */
+static __always_inline __unused time64_t
+ktime_get_boottime_seconds(void)
+{
+	return (time64_t)(ktime_get_boottime() / NSEC_PER_SEC);
+}
 
 unsigned int get_random_int(void);
 
@@ -1551,15 +1949,6 @@ fsleep(unsigned long usecs)
 }
 
 #define	nsecs_to_jiffies(n)	usecs_to_jiffies((unsigned long)((n) / 1000))
-
-/* [LNX] include/vdso/time64.h: the nanosecond multiples the compiled set scales
- * tick arithmetic with. */
-#define	NSEC_PER_SEC		1000000000L
-#define	NSEC_PER_USEC		1000L
-/* [LNX] include/linux/time64.h:22-24: the microsecond and millisecond multiples. */
-#define	MSEC_PER_SEC		1000L
-#define	USEC_PER_SEC		1000000L
-#define	USEC_PER_MSEC		1000L
 
 /* ------------------------------------------------------------------ */
 /* logging                                                             */
@@ -1595,6 +1984,11 @@ void lkpi_fatal(const char *what);
  */
 #define	dev_printk(level, dev, fmt, ...)				\
 	lkpi_dev_printk((dev), ULOG_INFO_LEVEL, (fmt), ##__VA_ARGS__)
+/* [LNX] include/linux/dev_printk.h:149: dev_crit() logs at the critical level, which
+ * is this port's ULOG_CRITICAL_LEVEL. It is stated here with the dev_* family the
+ * core already carries (the interface's own header is not one a compiled set
+ * includes on this port). */
+#define	dev_crit(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_CRITICAL_LEVEL, (fmt), ##__VA_ARGS__)
 #define	dev_err(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_ERROR_LEVEL, (fmt), ##__VA_ARGS__)
 #define	dev_warn(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_WARNING_LEVEL, (fmt), ##__VA_ARGS__)
 #define	dev_info(dev, fmt, ...)		lkpi_dev_printk((dev), ULOG_INFO_LEVEL, (fmt), ##__VA_ARGS__)
@@ -1619,6 +2013,16 @@ static __always_inline __unused const char *str_yes_no(bool v) { return v ? "yes
 #define	pr_err_once(fmt, ...)		pr_err(fmt, ##__VA_ARGS__)
 #define	pr_debug(fmt, ...)		do { } while (0)
 #define	pr_cont(fmt, ...)		lkpi_printf(ULOG_INFO_LEVEL, fmt, ##__VA_ARGS__)
+
+/*
+ * [LNX] include/linux/net.h:313: `int net_ratelimit(void);` - the gate a driver
+ * checks before an unthrottled message (the interface pairs it with its
+ * net_ratelimited_function() macro). Its home header is linux/net.h, which this
+ * face does not carry; the compiled set reaches it through the core contract, so
+ * the declaration is stated here with the logging vocabulary it gates. The body
+ * (linuxkpi_compat.c) is the port's rate limiter.
+ */
+int net_ratelimit(void);
 
 static __always_inline __unused const char *
 dev_name(const struct device *dev)
@@ -1646,7 +2050,19 @@ dev_name(const struct device *dev)
 #define	module_param_named(a, b, c, d)
 #define	module_param(a, b, c)
 #define	MODULE_DEVICE_TABLE(t, n)
-#define	module_exit(fn)
+
+/*
+ * module_exit(fn): the interface records the function as an exitcall, which is
+ * what makes a static exit function count as used. This port links one image
+ * with no unload path, so nothing is ever called through it - but the reference
+ * is kept, because dropping it leaves the driver's own static exit function
+ * reading as "defined but not used" at the warning level the driver's build
+ * takes (the kernel's own build has no such diagnostic, since its __exitcall
+ * references the function). No exit section and no walk: registering one would
+ * be a second mechanism for something the image's lifetime already answers.
+ */
+#define	module_exit(fn)							\
+	static __used void (*__lkpi_exit_##fn)(void) = (fn)
 
 /*
  * module_init(fn): the entry point lands in the .lkpi_init section and
@@ -1735,8 +2151,13 @@ void	lkpi_module_init_run(void);
 }))
 #define	might_sleep()		do { } while (0)
 #define	might_sleep_if(cond)	do { } while (0)
-#define	lockdep_assert_held(l)	do { } while (0)
-#define	lockdep_assert_held_read(l) do { } while (0)
+/* [LNX] include/linux/lockdep.h: the validator-off arm of lockdep_assert_held()
+ * still names its argument (`do { (void)(l); } while (0)`), which is what keeps a
+ * lock pointer that is only read by the assertion from reading as an unused
+ * variable at the driver's warning level. */
+#define	lockdep_assert_held(l)		do { (void)(l); } while (0)
+#define	lockdep_assert_held_read(l)	do { (void)(l); } while (0)
+#define	lockdep_assert_held_write(l)	do { (void)(l); } while (0)
 #define	DEBUG_LOCKS_WARN_ON(c)	0
 
 static __always_inline __unused void
@@ -1812,6 +2233,12 @@ int lkpi_spin_trylock(spinlock_t *l);
 	     (void)(flags); } while (0)
 #define	spin_lock_irq(l)		spin_lock(l)
 #define	spin_unlock_irq(l)		spin_unlock(l)
+/* [LNX] include/linux/spinlock.h:362-366: `spin_lock_nested(lock, subclass)` is the
+ * plain take with a lockdep subclass annotation naming a nested acquisition order.
+ * This port's spinlock is an interrupt-masking section and it runs no lock
+ * validator, so there is no subclass to record and the take is the plain lock; the
+ * subclass argument is carried (unused) so a caller reads unchanged. */
+#define	spin_lock_nested(l, subclass)	do { spin_lock(l); } while (0)
 /* on this UP port a running thread cannot observe a taken spinlock: the
  * holder masked the interrupts and cannot have been preempted - so a
  * trylock always succeeds (recursive take is invalid upstream too) */
@@ -2127,7 +2554,12 @@ skb_reserve(struct sk_buff *skb, unsigned int len)
 unsigned char *lkpi_skb_put(struct sk_buff *skb, unsigned int len);
 void *lkpi_skb_push(struct sk_buff *skb, unsigned int len);
 
-static __always_inline __unused unsigned char *
+/* [LNX] include/linux/skbuff.h:2768: `void *skb_put(struct sk_buff *, unsigned
+ * int)`. The interface returns void, not a byte pointer, and a driver relies on
+ * it: the radiotap builders assign the result straight to a typed descriptor
+ * pointer, which a byte-pointer return turns into a warning the interface's own
+ * build does not have. */
+static __always_inline __unused void *
 skb_put(struct sk_buff *skb, unsigned int len)
 {
 	return lkpi_skb_put(skb, len);
@@ -2155,7 +2587,8 @@ skb_pull(struct sk_buff *skb, unsigned int len)
 	return skb->data;
 }
 
-static __always_inline __unused unsigned char *
+/* [LNX] include/linux/skbuff.h:2769: `static inline void *__skb_put(...)`. */
+static __always_inline __unused void *
 __skb_put(struct sk_buff *skb, unsigned int len)
 {
 	return lkpi_skb_put(skb, len);
@@ -2521,6 +2954,29 @@ strscpy(char *dst, const char *src, size_t len)
 		dst[n] = '\0';
 	}
 	return dst;
+}
+
+/*
+ * [LNX] include/linux/string.h:126-146: strscpy_pad(). The interface spells it as a
+ * macro chain that dispatches on the argument count; this port's compiled set names
+ * only the explicit-count form, so that one is stated here, over strscpy() above,
+ * with the interface's semantics: the destination is always NUL-terminated and the
+ * tail is zero-filled, and a truncation answers -E2BIG.
+ */
+static __always_inline __unused ssize_t
+strscpy_pad(char *dst, const char *src, size_t count)
+{
+	size_t srclen = strlen(src);
+	size_t n;
+
+	if (count == 0)
+		return -E2BIG;
+	n = srclen < count - 1 ? srclen : count - 1;
+	memcpy(dst, src, n);
+	for (; n < count; n++)
+		dst[n] = '\0';
+
+	return srclen < count ? (ssize_t)srclen : -E2BIG;
 }
 
 static __always_inline __unused void *

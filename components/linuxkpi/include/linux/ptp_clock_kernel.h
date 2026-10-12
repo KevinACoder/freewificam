@@ -10,8 +10,11 @@
  *         shape a driver fills member by member; what is carried here are the
  *         members a compiled consumer names, in the interface's order, with the
  *         callback signatures transcribed from the interface. The registration
- *         bodies belong to the kernel's PTP core and have no counterpart on this
- *         port yet, so the calls are declared as the interface declares them.
+ *         calls have no PTP core on this port, so the interface's own
+ *         !IS_ENABLED(CONFIG_PTP_1588_CLOCK) arm is carried: register answers NULL,
+ *         unregister answers 0, index answers -1 - which is exactly the interface's
+ *         answer on a kernel built without the clock core, and the driver's PTP
+ *         path is unreachable on this line (no pps/PHC source is registered).
  *         Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026
@@ -48,10 +51,30 @@ struct ptp_clock_info {
 				     const struct timespec64 *ts);
 };
 
-/* [LNX] include/linux/ptp_clock_kernel.h:345,354,372 */
-struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
-				     struct device *parent);
-int ptp_clock_unregister(struct ptp_clock *ptp);
-int ptp_clock_index(struct ptp_clock *ptp);
+/* [LNX] include/linux/ptp_clock_kernel.h:345,354,372 (the core entries) and
+ * :445-460 (the !CONFIG_PTP_1588_CLOCK arm, which is what this port carries: no
+ * PTP clock core exists here, so a registration has no object to return and the
+ * driver's iwl_mvm_ptp_init/remove path is unreachable on this line). */
+static __always_inline __unused struct ptp_clock *
+ptp_clock_register(struct ptp_clock_info *info, struct device *parent)
+{
+	(void)info;
+	(void)parent;
+	return NULL;
+}
+
+static __always_inline __unused int
+ptp_clock_unregister(struct ptp_clock *ptp)
+{
+	(void)ptp;
+	return 0;
+}
+
+static __always_inline __unused int
+ptp_clock_index(struct ptp_clock *ptp)
+{
+	(void)ptp;
+	return -1;
+}
 
 #endif /* _LINUXKPI_LINUX_PTP_CLOCK_KERNEL_H_ */

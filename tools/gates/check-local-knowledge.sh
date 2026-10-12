@@ -104,6 +104,14 @@ components/linuxkpi/linuxkpi_core.c
 components/linuxkpi/linuxkpi_core.h
 components/linuxkpi/linuxkpi_80211.c
 components/linuxkpi/linuxkpi_80211.h
+components/linuxkpi/linuxkpi_80211_helpers.c
+components/linuxkpi/linuxkpi_cfg80211.c
+components/linuxkpi/linuxkpi_cfg80211.h
+components/linuxkpi/linuxkpi_compat.c
+components/linuxkpi/linuxkpi_netdev.c
+components/linuxkpi/linuxkpi_osdep.c
+components/linuxkpi/lkpi_rxtrace.c
+components/linuxkpi/lkpi_rxtrace.h
 components/linuxkpi/linuxkpi_txq.c
 components/linuxkpi/linuxkpi_txq.h
 components/linuxkpi/linuxkpi_wiphy_work.c

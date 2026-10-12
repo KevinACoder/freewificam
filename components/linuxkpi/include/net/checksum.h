@@ -8,7 +8,11 @@
  *         names only csum_partial(), the running one's-complement sum a rewritten
  *         ICMPv6 checksum is recomputed from. It is declared as the interface declares
  *         it; the body is the port's, since whether the target has a checksum
- *         instruction decides it. Reference for the face shape:
+ *         instruction decides it. The interface's csum_unfold() - the identity
+ *         reinterpretation of a folded sum as an unfolded one - is stated in the core
+ *         contract (components/linuxkpi/linuxkpi_core.h, with the wire-order
+ *         conversions), because a compiled translation unit reaches it through the
+ *         core rather than through this header. Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    11.10.2026
  */

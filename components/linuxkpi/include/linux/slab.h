@@ -13,8 +13,9 @@
  *         second allocator API. It adds the named-cache vocabulary a compiled consumer
  *         reaches through it: the cache record is carried as an opaque handle, the
  *         allocation and free calls are declared with the interface's signatures, and
- *         their bodies belong to the kernel's slab allocator and have no counterpart on
- *         this port yet. Reference for the face shape:
+ *         their bodies (linuxkpi_compat.c) are the port's one heap under those names -
+ *         a cache is a heap record holding a name and an object size, and an object
+ *         from it is a heap block of that size. Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026
  */

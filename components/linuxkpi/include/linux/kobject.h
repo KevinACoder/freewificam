@@ -9,9 +9,11 @@
  *         embeds is already carried by the core contract
  *         (components/linuxkpi/linuxkpi_core.h, its device record). What this
  *         header adds is the uevent-action enumeration and the one entry point a
- *         compiled consumer names, whose body belongs to the driver core and has
- *         no counterpart on this port yet. Reference for the face shape:
- *         components/linuxkpi/include/linux/usb.h:1-20.
+ *         compiled consumer names. That entry point's body (linuxkpi_compat.c) is
+ *         the honest empty answer: the interface delivers a uevent to userspace
+ *         over netlink, and this port has neither a userspace listener nor a
+ *         netlink socket, so there is nothing to deliver the event to. Reference
+ *         for the face shape: components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026
  */
 

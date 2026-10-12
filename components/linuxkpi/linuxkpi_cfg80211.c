@@ -258,6 +258,52 @@ wiphy_apply_custom_regulatory(struct wiphy *wiphy,
 		wiphy->regd = regd;
 }
 
+/*
+ * [LNX] include/net/cfg80211.h:8101,8115: the self-managed-regdomain submission
+ * (driver: mvm/nvm.c:615/:667, mvm/mac80211.c). Real cfg80211 requires the wiphy
+ * to be flagged REGULATORY_WIPHY_SELF_MANAGED and installs the domain through the
+ * regulatory core; this port carries no regulatory core, so the domain is stored on
+ * the wiphy (the same member wiphy_apply_custom_regulatory writes) and the sync
+ * form is the identical store - the interface's sync form only differs in applying
+ * immediately under the wiphy lock, and there is no deferred work here to flush.
+ * Both answer success, which is what the driver's regulatory setup expects.
+ */
+int
+regulatory_set_wiphy_regd(struct wiphy *wiphy, struct ieee80211_regdomain *rd)
+{
+
+	if (wiphy == NULL || rd == NULL)
+		return -EINVAL;
+	wiphy->regd = rd;
+	return 0;
+}
+
+int
+regulatory_set_wiphy_regd_sync(struct wiphy *wiphy,
+    struct ieee80211_regdomain *rd)
+{
+
+	return regulatory_set_wiphy_regd(wiphy, rd);
+}
+
+/*
+ * [LNX] include/net/cfg80211.h:8200: query the internal regulatory database for a
+ * WMM rule. This port carries no database (see regulatory_hint,
+ * linuxkpi_80211_helpers.c:562), so there is no rule to return and the interface's
+ * own "not found" answer is -ENODATA. The caller (iwl-nvm-parse.c:1868) applies a
+ * rule only when the query succeeds, so a device whose NVM names a country simply
+ * keeps the rule the firmware/regulatory face already set.
+ */
+int
+reg_query_regdb_wmm(char *alpha2, int freq, struct ieee80211_reg_rule *rule)
+{
+
+	(void)alpha2;
+	(void)freq;
+	(void)rule;
+	return -ENODATA;
+}
+
 /* ------------------------------------------------------------------ */
 /* channel lookup (driver: ioctl_cfg80211.c:218, wifi_regd.c:287)       */
 /* ------------------------------------------------------------------ */
@@ -298,6 +344,51 @@ ieee80211_get_channel(struct wiphy *wiphy, int freq)
 		for (c = 0; c < (unsigned int)band->n_channels; c++)
 			if ((int)band->channels[c].center_freq == freq)
 				return &band->channels[c];
+	}
+	return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* element search (driver: mvm/tx.c:736, mvm/ftm-initiator.c:1455)      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/net/cfg80211.h:7825-7854: the interface's inline wrapper over
+ * cfg80211_find_elem_match() with a match byte array. The offset counts from the
+ * element's ID byte (the inline subtracts the two header bytes before calling the
+ * element form), the returned pointer is the ID byte, and a nonzero match_len
+ * requires match_offset >= 2 - all the inline's contract. The walk below is the
+ * same one this component's cfg80211_find_ie() uses (linuxkpi_80211_helpers.c:302);
+ * the extra test is the match array, at the caller's offset, bounded by the
+ * element's own length.
+ */
+const u8 *
+cfg80211_find_ie_match(u8 eid, const u8 *ies, unsigned int len,
+    const u8 *match, unsigned int match_len, unsigned int match_offset)
+{
+	const u8 *pos = ies;
+	const u8 *end = ies + len;
+
+	if (ies == NULL || (int)len <= 0)
+		return NULL;
+	/* the interface's WARN_ON contract: a nonzero match_len comes with an
+	 * offset of at least 2, a zero match_len with an offset of zero */
+	if (match_len != 0 && match_offset < 2)
+		return NULL;
+	if (match_len == 0 && match_offset != 0)
+		return NULL;
+
+	while (pos + 2 <= end) {
+		if (pos[1] > (size_t)(end - pos - 2))
+			return NULL;
+		if (pos[0] == eid) {
+			if (match_len == 0)
+				return pos;
+			if (pos[1] >= match_offset - 2 + match_len &&
+			    memcmp(pos + match_offset, match, match_len) == 0)
+				return pos;
+		}
+		pos += pos[1] + 2;
 	}
 	return NULL;
 }
@@ -460,6 +551,22 @@ cfg80211_unlink_bss(struct wiphy *wiphy, struct cfg80211_bss *bss)
 			ctx->bss_count--;
 			return;
 		}
+}
+
+/*
+ * [LNX] include/net/cfg80211.h:10643: the interface drops every BSS row of a
+ * wiphy. The driver calls it on a firmware restart (mvm/fw.c:447), where the rows'
+ * GP2 timestamps are stale. This substitute's whole scan-entry store is the one
+ * table, so emptying it is the flush; the seam's own clear
+ * (lkpicfg_bss_clear, below) is the same operation, kept for the board test.
+ */
+void
+cfg80211_bss_flush(struct wiphy *wiphy)
+{
+	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
+
+	if (ctx != NULL)
+		ctx->bss_count = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -985,6 +1092,65 @@ cfg80211_remain_on_channel_expired(struct wireless_dev *wdev, u64 cookie,
 	(void)wdev;
 	(void)cookie;
 	(void)chan;
+	(void)gfp;
+}
+
+/*
+ * [LNX] include/net/cfg80211.h:8659: an unprotected deauth/disassoc the driver
+ * dropped in station mode. Unreachable on this line - the only callers are the MQ
+ * receive path (mvm/rxmq.c:409) and the MLD path (mld/rx.c:1901), and the AC 7260
+ * is a non-MQ, non-MLD part. The body is inert for the same reason every other
+ * notification here is: no nl80211 listener exists on this port to be told.
+ */
+void
+cfg80211_rx_unprot_mlme_mgmt(struct net_device *dev, const u8 *buf, size_t len)
+{
+
+	(void)dev;
+	(void)buf;
+	(void)len;
+}
+
+/*
+ * [LNX] include/net/cfg80211.h:10394: close every interface of a wiphy after a
+ * fatal error. Unreachable on this line - its one caller is the MEI nic-stolen
+ * handler (mvm/ops.c:1185), built only with CONFIG_IWLMEI, whose units this line
+ * excludes. There is no interface to close and no error to recover from, so the
+ * body is inert.
+ */
+void
+cfg80211_shutdown_all_interfaces(struct wiphy *wiphy)
+{
+
+	(void)wiphy;
+}
+
+/*
+ * [LNX] include/net/cfg80211.h:10529,10543: the peer-measurement result and
+ * completion reports. Unreachable on this line - the FTM initiator that makes them
+ * (mvm/ftm-initiator.c) runs only for a userspace peer-measurement request that
+ * arrives through nl80211, and this port has no nl80211 socket. Inert for that
+ * reason.
+ */
+void
+cfg80211_pmsr_report(struct wireless_dev *wdev,
+    struct cfg80211_pmsr_request *req, struct cfg80211_pmsr_result *result,
+    gfp_t gfp)
+{
+
+	(void)wdev;
+	(void)req;
+	(void)result;
+	(void)gfp;
+}
+
+void
+cfg80211_pmsr_complete(struct wireless_dev *wdev,
+    struct cfg80211_pmsr_request *req, gfp_t gfp)
+{
+
+	(void)wdev;
+	(void)req;
 	(void)gfp;
 }
 

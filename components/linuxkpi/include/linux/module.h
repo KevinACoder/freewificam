@@ -43,4 +43,39 @@ struct module;
  * metadata for the loader; this project links one image, so it is inert. */
 #define	MODULE_IMPORT_NS(ns)			extern int lkpi_module_import_ns_inert__
 
+/* ------------------------------------------------------------------ */
+/* The reference-count and module-request calls the compiled set       */
+/* names, in the interface's !CONFIG_MODULES arm. This project links   */
+/* every driver into one image whose lifetime is the boot: there is no */
+/* module to reference-count and no loader that could refuse a         */
+/* reference, so the take always succeeds and the release is empty.    */
+/* THIS_MODULE is NULL (linuxkpi_core.h:1663), which both tolerate.    */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/linux/module.h:831-834 (!CONFIG_MODULES) */
+static __always_inline __unused bool
+try_module_get(struct module *module)
+{
+	(void)module;
+	return true;
+}
+
+/* [LNX] include/linux/module.h:836-838 (!CONFIG_MODULES) */
+static __always_inline __unused void
+module_put(struct module *module)
+{
+	(void)module;
+}
+
+/* [LNX] include/linux/kmod.h:28 (!CONFIG_MODULES): the interface reaches this
+ * through <linux/module.h>, which includes <linux/kmod.h>; a driver's firmware
+ * path names it when the op-mode it wants is not registered. One image has no
+ * module to load, so the interface's own not-available answer is the honest one. */
+static __always_inline __unused int
+request_module_nowait(const char *name, ...)
+{
+	(void)name;
+	return -ENOSYS;
+}
+
 #endif /* _LINUXKPI_LINUX_MODULE_H_ */

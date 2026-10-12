@@ -109,6 +109,26 @@ enum ieee80211_sa_query_action {
 };
 
 /*
+ * [LNX] include/linux/ieee80211.h:1613,1844-1855,1877,1894,1991-1992: the
+ * management-action category/action-code and element-id constants the
+ * frame-classification helpers below (ieee80211_action_contains_tpc,
+ * ieee80211_is_bufferable_mmpdu, ieee80211_is_timing_measurement,
+ * ieee80211_is_ftm) read off a frame. Values are the interface's, at their
+ * computed positions.
+ */
+#define	WLAN_CATEGORY_SPECTRUM_MGMT	0
+#define	WLAN_CATEGORY_PUBLIC		4
+#define	WLAN_CATEGORY_RADIO_MEASUREMENT	5
+#define	WLAN_CATEGORY_PROTECTED_DUAL_OF_ACTION	9
+#define	WLAN_CATEGORY_WNM_UNPROTECTED	11
+#define	WLAN_ACTION_SPCT_TPC_RPRT	3
+#define	WLAN_UNPROTECTED_WNM_ACTION_TIMING_MEASUREMENT_RESPONSE	1
+#define	WLAN_PUB_ACTION_FTM_REQUEST	32
+#define	WLAN_PUB_ACTION_FTM_RESPONSE	33
+/* [LNX] include/linux/ieee80211.h:1613: the TPC report element id. */
+#define	WLAN_EID_TPC_REPORT		35
+
+/*
  * An anonymous struct whose only content is a flexible array. The interface uses
  * the same construct (DECLARE_FLEX_ARRAY) because a bare flexible array member
  * inside a union is not valid C; carrying the payload this way keeps the union
@@ -125,11 +145,15 @@ enum ieee80211_sa_query_action {
 /* ------------------------------------------------------------------ */
 
 #define	IEEE80211_FCTL_FTYPE		0x000c
+/* [LNX] include/linux/ieee80211.h:45 */
+#define	IEEE80211_FCTL_STYPE		0x00f0
 #define	IEEE80211_FCTL_TODS		0x0100
 #define	IEEE80211_FCTL_FROMDS		0x0200
 #define	IEEE80211_FCTL_MOREFRAGS	0x0400
 #define	IEEE80211_FCTL_RETRY		0x0800
 #define	IEEE80211_FCTL_MOREDATA		0x2000
+/* [LNX] include/linux/ieee80211.h:53 */
+#define	IEEE80211_FCTL_PROTECTED	0x4000
 #define	IEEE80211_FCTL_ORDER		0x8000
 
 #define	IEEE80211_FTYPE_MGMT		0x0000
@@ -144,6 +168,8 @@ enum ieee80211_sa_query_action {
 #define	IEEE80211_STYPE_PROBE_RESP	0x0050
 #define	IEEE80211_STYPE_BEACON		0x0080
 #define	IEEE80211_STYPE_QOS_DATA	0x0080
+/* [LNX] include/linux/ieee80211.h:82: the block-ack-request control subtype. */
+#define	IEEE80211_STYPE_BACK_REQ	0x0080
 #define	IEEE80211_STYPE_DISASSOC	0x00a0
 #define	IEEE80211_STYPE_AUTH		0x00b0
 #define	IEEE80211_STYPE_DEAUTH		0x00c0
@@ -235,6 +261,14 @@ struct ieee80211_qos_hdr_4addr {
 	__le16	qos_ctrl;
 } __packed __aligned(2);
 
+/* [LNX] include/linux/ieee80211.h:946 (record carried whole): the TPC report
+ * element body, read by ieee80211_action_contains_tpc() through the action
+ * union below. */
+struct ieee80211_tpc_report_ie {
+	u8	tx_power;
+	u8	link_margin;
+} __packed;
+
 struct ieee80211_mgmt {
 	__le16	frame_control;
 	__le16	duration;
@@ -305,6 +339,15 @@ struct ieee80211_mgmt {
 					__le16	params;
 					__le16	reason_code;
 				} __packed delba;
+				/* [LNX] include/linux/ieee80211.h:1130-1135: the
+				 * spectrum-management/radio-measurement TPC report body
+				 * ieee80211_action_contains_tpc() reads. */
+				struct {
+					u8	dialog_token;
+					u8	tpc_elem_id;
+					u8	tpc_elem_length;
+					struct ieee80211_tpc_report_ie tpc;
+				} __packed tpc_report;
 				/* [LNX] include/linux/ieee80211.h:1138-1156: the
 				 * timing-measurement action bodies the compiled set reads a
 				 * dialog token from. */
@@ -492,6 +535,205 @@ static inline bool ieee80211_is_action(__le16 fc)
 {
 	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | 0x00f0)) ==
 	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ACTION);
+}
+
+/*
+ * [LNX] include/linux/ieee80211.h:384,394,424,505,520,542,575,619,641,663:
+ * the frame-control predicates the AC 7260 transmit/receive path tests. Each
+ * body is the interface's own inline, one for one.
+ */
+static inline bool ieee80211_has_morefrags(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_MOREFRAGS)) != 0;
+}
+
+static inline bool ieee80211_has_retry(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_RETRY)) != 0;
+}
+
+static inline bool ieee80211_has_protected(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_PROTECTED)) != 0;
+}
+
+static inline bool ieee80211_is_data_present(__le16 fc)
+{
+	/*
+	 * mask with 0x40 and test that that bit is clear to only return true
+	 * for the data-containing substypes.
+	 */
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | 0x40)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_DATA);
+}
+
+static inline bool ieee80211_is_assoc_req(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ASSOC_REQ);
+}
+
+static inline bool ieee80211_is_reassoc_req(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_REASSOC_REQ);
+}
+
+static inline bool ieee80211_is_probe_req(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_PROBE_REQ);
+}
+
+static inline bool ieee80211_is_disassoc(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_DISASSOC);
+}
+
+static inline bool ieee80211_is_deauth(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_DEAUTH);
+}
+
+static inline bool ieee80211_is_back_req(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_CTL | IEEE80211_STYPE_BACK_REQ);
+}
+
+/*
+ * [LNX] include/linux/ieee80211.h:2490: a public action frame is an action
+ * frame in the WLAN_CATEGORY_PUBLIC category; the length check is against the
+ * fixed category/action-code prefix (IEEE80211_MIN_ACTION_SIZE(category)).
+ */
+static inline bool ieee80211_is_public_action(struct ieee80211_hdr *hdr,
+					      size_t len)
+{
+	struct ieee80211_mgmt *mgmt = (void *)hdr;
+
+	if (len < IEEE80211_MIN_ACTION_SIZE(category))
+		return false;
+	if (!ieee80211_is_action(hdr->frame_control))
+		return false;
+	return mgmt->u.action.category == WLAN_CATEGORY_PUBLIC;
+}
+
+/*
+ * [LNX] include/linux/ieee80211.h:2401: whether the frame is a bufferable MMPDU
+ * (disassociation/deauthentication, or an action frame that is not a public or
+ * protected-dual FTM request/response).
+ */
+static inline bool ieee80211_is_bufferable_mmpdu(struct sk_buff *skb)
+{
+	struct ieee80211_mgmt *mgmt = (void *)skb->data;
+	__le16 fc = mgmt->frame_control;
+
+	if (!ieee80211_is_mgmt(fc))
+		return false;
+
+	if (ieee80211_is_disassoc(fc) || ieee80211_is_deauth(fc))
+		return true;
+
+	if (!ieee80211_is_action(fc))
+		return false;
+
+	if (skb->len < IEEE80211_MIN_ACTION_SIZE(action_code))
+		return true;
+
+	/* action frame - additionally check for non-bufferable FTM */
+
+	if (mgmt->u.action.category != WLAN_CATEGORY_PUBLIC &&
+	    mgmt->u.action.category != WLAN_CATEGORY_PROTECTED_DUAL_OF_ACTION)
+		return true;
+
+	if (mgmt->u.action.action_code == WLAN_PUB_ACTION_FTM_REQUEST ||
+	    mgmt->u.action.action_code == WLAN_PUB_ACTION_FTM_RESPONSE)
+		return false;
+
+	return true;
+}
+
+/*
+ * [LNX] include/linux/ieee80211.h:2649: whether an action frame carries a TPC
+ * report (a spectrum-management or radio-measurement TPC/link-measurement
+ * report).
+ */
+static inline bool ieee80211_action_contains_tpc(struct sk_buff *skb)
+{
+	struct ieee80211_mgmt *mgmt = (void *)skb->data;
+
+	if (!ieee80211_is_action(mgmt->frame_control))
+		return false;
+
+	if (skb->len < IEEE80211_MIN_ACTION_SIZE(tpc_report))
+		return false;
+
+	/*
+	 * TPC report - check that:
+	 * category = 0 (Spectrum Management) or 5 (Radio Measurement)
+	 * spectrum management action = 3 (TPC/Link Measurement report)
+	 * TPC report EID = 35
+	 * TPC report element length = 2
+	 *
+	 * The spectrum management's tpc_report struct is used here both for
+	 * parsing tpc_report and radio measurement's link measurement report
+	 * frame, since the relevant part is identical in both frames.
+	 */
+	if (mgmt->u.action.category != WLAN_CATEGORY_SPECTRUM_MGMT &&
+	    mgmt->u.action.category != WLAN_CATEGORY_RADIO_MEASUREMENT)
+		return false;
+
+	/* both spectrum mgmt and link measurement have same action code */
+	if (mgmt->u.action.action_code != WLAN_ACTION_SPCT_TPC_RPRT)
+		return false;
+
+	if (mgmt->u.action.tpc_report.tpc_elem_id != WLAN_EID_TPC_REPORT ||
+	    mgmt->u.action.tpc_report.tpc_elem_length !=
+	    sizeof(struct ieee80211_tpc_report_ie))
+		return false;
+
+	return true;
+}
+
+/*
+ * [LNX] include/linux/ieee80211.h:2691: whether the frame is an unprotected-WNM
+ * timing-measurement response.
+ */
+static inline bool ieee80211_is_timing_measurement(struct sk_buff *skb)
+{
+	struct ieee80211_mgmt *mgmt = (void *)skb->data;
+
+	if (skb->len < IEEE80211_MIN_ACTION_SIZE(wnm_timing_msr))
+		return false;
+
+	if (!ieee80211_is_action(mgmt->frame_control))
+		return false;
+
+	if (mgmt->u.action.category == WLAN_CATEGORY_WNM_UNPROTECTED &&
+	    mgmt->u.action.action_code ==
+			WLAN_UNPROTECTED_WNM_ACTION_TIMING_MEASUREMENT_RESPONSE)
+		return true;
+
+	return false;
+}
+
+/*
+ * [LNX] include/linux/ieee80211.h:2714: whether the frame is a public-action
+ * FTM response.
+ */
+static inline bool ieee80211_is_ftm(struct sk_buff *skb)
+{
+	struct ieee80211_mgmt *mgmt = (void *)skb->data;
+
+	if (skb->len < IEEE80211_MIN_ACTION_SIZE(ftm))
+		return false;
+
+	if (!ieee80211_is_public_action((void *)mgmt, skb->len))
+		return false;
+
+	return mgmt->u.action.action_code == WLAN_PUB_ACTION_FTM_RESPONSE;
 }
 
 /* ------------------------------------------------------------------ */
@@ -945,11 +1187,31 @@ struct ieee80211_vht_cap {
 /* [LNX] include/linux/ieee80211-vht.h:194 */
 #define IEEE80211_VHT_CAP_HTC_VHT				0x00400000
 
+/* [LNX] include/linux/ieee80211-vht.h:171-172,202-203: the two VHT
+ * capability sub-fields ieee80211_get_vht_max_nss() extracts. */
+#define IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK			0x0000000C
+#define IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_SHIFT			2
+#define IEEE80211_VHT_CAP_EXT_NSS_BW_SHIFT			30
+#define IEEE80211_VHT_CAP_EXT_NSS_BW_MASK			0xc0000000
+
+/* [LNX] include/linux/ieee80211-vht.h:140: the VHT channel-width argument of
+ * ieee80211_get_vht_max_nss(), at the interface's computed positions. */
+enum ieee80211_vht_chanwidth {
+	IEEE80211_VHT_CHANWIDTH_USE_HT		= 0,
+	IEEE80211_VHT_CHANWIDTH_80MHZ		= 1,
+	IEEE80211_VHT_CHANWIDTH_160MHZ		= 2,
+	IEEE80211_VHT_CHANWIDTH_80P80MHZ	= 3,
+};
+
+/* [LNX] include/linux/ieee80211-vht.h:224: the per-MCS NSS ceiling the rate
+ * path asks for; body in linuxkpi_80211_helpers.c (net/wireless/util.c:2883). */
+int ieee80211_get_vht_max_nss(struct ieee80211_vht_cap *cap,
+			      enum ieee80211_vht_chanwidth bw,
+			      int mcs, bool ext_nss_bw_capable,
+			      unsigned int max_vht_nss);
+
 /* [LNX] include/linux/ieee80211.h:51 */
 #define IEEE80211_FCTL_PM		0x1000
-
-/* [LNX] include/linux/ieee80211.h:53 */
-#define IEEE80211_FCTL_PROTECTED	0x4000
 
 /* [LNX] include/linux/ieee80211.h:92 */
 #define IEEE80211_STYPE_DATA			0x0000
@@ -1008,9 +1270,6 @@ struct ieee80211_vht_cap {
 
 /* [LNX] include/linux/ieee80211.h:2276 */
 #define WLAN_OUI_TYPE_WFA_P2P		9
-
-/* [LNX] include/linux/ieee80211.h:45 */
-#define	IEEE80211_FCTL_STYPE		0x00f0
 
 /* [LNX] include/linux/ieee80211.h:161 */
 /* [LNX] include/linux/ieee80211.h:160 */
@@ -1220,6 +1479,23 @@ static inline u8 ieee80211_get_tid(struct ieee80211_hdr *hdr)
 	return qc[0] & IEEE80211_QOS_CTL_TID_MASK;
 }
 
+/* [LNX] include/linux/ieee80211.h:188,193,198: the sequence-number arithmetic
+ * the receive reorder path uses. Bodies are the interface's own inlines. */
+static inline u16 ieee80211_sn_add(u16 sn1, u16 sn2)
+{
+	return (sn1 + sn2) & IEEE80211_SN_MASK;
+}
+
+static inline u16 ieee80211_sn_inc(u16 sn)
+{
+	return ieee80211_sn_add(sn, 1);
+}
+
+static inline u16 ieee80211_sn_sub(u16 sn1, u16 sn2)
+{
+	return (sn1 - sn2) & IEEE80211_SN_MASK;
+}
+
 static inline bool ieee80211_sn_less(u16 sn1, u16 sn2)
 {
 	return ((sn1 - sn2) & IEEE80211_SN_MASK) > (IEEE80211_SN_MODULO >> 1);
@@ -1347,6 +1623,10 @@ out:
 #define	WLAN_EID_EXT_SUPP_RATES			50
 #define	WLAN_EID_DS_PARAMS			3
 #define	WLAN_REASON_TDLS_TEARDOWN_UNSPECIFIED	26
+/* [LNX] include/linux/ieee80211.h:1571,1588: the two framing element ids the
+ * IE-buffer walk (for_each_element_extid and ieee80211_ie_split) reads. */
+#define	WLAN_EID_EXTENSION			255
+#define	WLAN_EID_FRAGMENT			242
 
 /* [LNX] include/linux/ieee80211.h:2048-2049: the extended-capability byte-8 and
  * byte-9 fields. */

@@ -10,9 +10,11 @@
  *         macros. The record is transcribed field for field in the interface's
  *         CONFIG_NEED_SG_DMA_LENGTH-off shape (this port's entries carry one
  *         address, not a separate mapped length), the small accessors are the
- *         interface's inline shapes, and the two entry points whose bodies belong
- *         to the kernel's library (sg_init_table, sg_pcopy_from_buffer) are
- *         declared with the interface's signatures. Reference for the face shape:
+ *         interface's inline shapes, and the three entry points whose bodies belong
+ *         to the kernel's library (sg_init_table, sg_nents, sg_pcopy_from_buffer)
+ *         are declared with the interface's signatures and carried by the PCI
+ *         engine's first-party body (components/linuxkpi/pci/linuxkpi_pci.c).
+ *         Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026
  */
@@ -145,8 +147,9 @@ sg_next(struct scatterlist *sg)
 #define	for_each_sgtable_dma_sg(sgt, sg, i)	\
 	for_each_sg((sgt)->sgl, sg, (sgt)->nents, i)
 
-/* [LNX] include/linux/scatterlist.h:447,524 */
+/* [LNX] include/linux/scatterlist.h:447,442,524 */
 void sg_init_table(struct scatterlist *, unsigned int);
+int sg_nents(struct scatterlist *sg);
 size_t sg_pcopy_from_buffer(struct scatterlist *sgl, unsigned int nents,
 			    const void *buf, size_t buflen, loff_t skip);
 

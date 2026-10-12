@@ -12,6 +12,16 @@
 /* [LNX] include/linux/device.h:18 includes <linux/kobject.h>; the device embeds a
  * sysfs object, and the uevent vocabulary reaches a unit through this include. */
 #include <linux/kobject.h>
+/* [LNX] include/linux/device.h:33 includes <linux/cleanup.h>, which includes
+ * <linux/err.h> (include/linux/cleanup.h:9). This face's cleanup.h does not carry
+ * that include, so the device-model header names err.h itself: it is the path a
+ * compiled consumer reaches the error-pointer helpers through (net/cfg80211.h
+ * includes linux/device.h). */
+#include <linux/err.h>
+/* [LNX] include/linux/interrupt.h:211-215 declares the device-managed threaded
+ * interrupt request over irq_handler_t; the type and the request/release pair live
+ * in that header, so the devm_* declaration below reaches its handler type here. */
+#include <linux/interrupt.h>
 
 /* device_attribute / DEVICE_ATTR_RO: the sysfs attribute shape rtw89's
  * usb.c declares (serial_number/uuid show callbacks).  `struct device`
@@ -49,5 +59,41 @@ struct device_attribute {
 struct bus_type {
 	const char	*name;
 };
+
+/* ------------------------------------------------------------------ */
+/* The device-model entry points the compiled set names. Each is the  */
+/* interface's own signature; the bodies are the PCI engine's         */
+/* (components/linuxkpi/pci/linuxkpi_pci.c), because this port's only */
+/* device model is the PCI one and the engine owns the device table.  */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/linux/device.h:1312,1316: the manual bind/unbind pair. The
+ * interface's device_release_driver unbinds a device from its driver and
+ * device_reprobe re-runs the bus match; a driver's recovery path names both. */
+void device_release_driver(struct device *dev);
+int __must_check device_reprobe(struct device *dev);
+
+/* [LNX] include/linux/device.h:1360-1361: the reference pair. The interface takes
+ * and drops a reference on the device; this port's device records live in the
+ * engine's table for the life of the image (see pci_dev_put's note), so both are
+ * the identity here - the signatures are the interface's. */
+struct device *get_device(struct device *dev);
+void put_device(struct device *dev);
+
+/* [LNX] include/linux/device/devres.h:93-94 (reached from the interface's
+ * include/linux/device.h:31): the device-managed format-into-memory helper. */
+char * __printf(3, 4)
+devm_kasprintf(struct device *dev, gfp_t gfp, const char *fmt, ...);
+
+/* [LNX] include/linux/interrupt.h:211-215: the device-managed threaded interrupt
+ * request. The interface declares it in the interrupt header; this face states it
+ * with the rest of the devm_* family, because the device-managed lifetime is what
+ * the call means and the interrupt header is a pinned face this round does not
+ * extend. handler is the hard-irq half and thread_fn the threaded half. */
+int __must_check
+devm_request_threaded_irq(struct device *dev, unsigned int irq,
+			  irq_handler_t handler, irq_handler_t thread_fn,
+			  unsigned long irqflags, const char *devname,
+			  void *dev_id);
 
 #endif /* _LINUXKPI_LINUX_DEVICE_H_ */

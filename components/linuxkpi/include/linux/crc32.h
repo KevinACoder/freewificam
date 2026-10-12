@@ -6,9 +6,10 @@
  * @design declaration-only compatibility face. The interface declares the
  *         least-significant-bit-first variant (include/linux/crc32.h:31) and
  *         makes the plain name an inline alias for it (include/linux/crc32.h:34);
- *         the body belongs to the kernel's library and has no counterpart on this
- *         port yet. Both spellings are stated, because a caller may reach either,
- *         and the alias is carried inline exactly as the interface carries it.
+ *         the body is stated in linuxkpi_compat.c as the definitional bit-at-a-time
+ *         form the interface's table-driven implementation is an optimisation of.
+ *         Both spellings are stated, because a caller may reach either, and the
+ *         alias is carried inline exactly as the interface carries it.
  *         Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026

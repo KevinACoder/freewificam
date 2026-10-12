@@ -8,14 +8,14 @@
  *         is a large surface (link kinds, attributes, message builders); the only part
  *         the vendored bytes reach is the one global RTNL lock, which on a Linux kernel
  *         serialises every change to network configuration. The lock is declared with
- *         the interface's exact signatures and with no body: this project presents its
- *         interfaces through lwIP rather than through the Linux netdev registry, and
- *         whether that stack needs - or has - one global configuration lock is the port's
- *         decision, not the face's, so a caller that reaches these gets an unresolved
- *         symbol instead of a silent no-op that would pretend the configuration is
- *         serialised. The interface's own include of linux/mutex.h is kept. Reference for
- *         Reference for the face shape:
- *         components/linuxkpi/include/linux/usb.h:1-20.
+ *         the interface's exact signatures. Its body (linuxkpi_compat.c) is a real
+ *         global lock, not a silent no-op: the port takes the core's mutex, the same
+ *         blocking lock the interface takes, so the configuration changes the driver
+ *         brackets with it are actually serialised. The other queries (rtnl_trylock,
+ *         rtnl_is_locked, rtnl_lock_interruptible) are declared for the interface's
+ *         shape but not reached by the compiled set, so they have no body. The
+ *         interface's own include of linux/mutex.h is kept. Reference for the face
+ *         shape: components/linuxkpi/include/linux/usb.h:1-20.
  * @date    09.10.2026
  */
 

@@ -299,6 +299,20 @@ m_dma_unmap(void *ctx, void *cpu, size_t len, int dir)
 	b->dma_dir_n++;
 }
 
+static void
+m_dma_sync(void *ctx, void *cpu, size_t len, int dir)
+{
+	struct mock_pcie_backend *b = ctx;
+
+	(void)cpu;
+	(void)len;
+	/* The synthetic host records the direction on the same log the map and
+	 * unmap paths use, so a case can tell a sync from a map by the sequence. */
+	if (b->dma_dir_n < (sizeof(b->dma_dir_log) / sizeof(b->dma_dir_log[0])))
+		b->dma_dir_log[b->dma_dir_n] = dir;
+	b->dma_dir_n++;
+}
+
 static const struct lkpi_pcie_be_ops mock_ops = {
 	.bus_up = m_bus_up,
 	.bus_down = m_bus_down,
@@ -311,6 +325,7 @@ static const struct lkpi_pcie_be_ops mock_ops = {
 	.dma_free = m_dma_free,
 	.dma_map = m_dma_map,
 	.dma_unmap = m_dma_unmap,
+	.dma_sync = m_dma_sync,
 };
 
 const struct lkpi_pcie_be_ops *

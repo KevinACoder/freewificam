@@ -6,14 +6,17 @@
  *
  * @design declaration-only compatibility face. The interface's mm header owns the
  *         page record and the allocation/free entry points; this port's allocator
- *         is the sk_buff/heap seam rather than a buddy allocator, so what a driver
- *         reaches here is the page record as an opaque handle plus the entry
- *         points the compiled set names. The bodies belong to the kernel's memory
- *         management and have no counterpart on this port yet, so the signatures
- *         are stated as the interface states them (alloc_pages and alloc_page are
- *         the interface's macro over the noprof form) and a caller reads
- *         unchanged. The page-size constants (PAGE_SIZE, PAGE_SHIFT) and PAGE_ALIGN
- *         are part of the core contract. Reference for the face shape:
+ *         is the heap, not a buddy allocator, so what a driver reaches here is the
+ *         page record as an opaque handle plus the entry points the compiled set
+ *         names. The bodies (linuxkpi_compat.c) are the heap under the interface's
+ *         names: a "page" on this port is the buffer address itself (no compiled
+ *         caller reads a field of struct page - callers only pass it to
+ *         page_address() or back to the frees), so alloc_pages() hands out
+ *         PAGE_SIZE << order bytes and page_address() returns that address. The
+ *         signatures are stated as the interface states them (alloc_pages and
+ *         alloc_page are the interface's macro over the noprof form) and a caller
+ *         reads unchanged. The page-size constants (PAGE_SIZE, PAGE_SHIFT) and
+ *         PAGE_ALIGN are part of the core contract. Reference for the face shape:
  *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026
  */
@@ -42,8 +45,18 @@ void __free_pages(struct page *page, unsigned int order);
 void free_pages(unsigned long addr, unsigned int order);
 #define	__free_page(page)	__free_pages((page), 0)
 
-/* [LNX] include/linux/mm.h:3104 */
-void *page_address(const struct page *page);
+/* [LNX] include/linux/mm.h:3104: `void *page_address(const struct page *page)`.
+ * The interface's body is a real function because its page record lives in a
+ * mem_map array; this port's page handle IS the buffer's address (see the record's
+ * note above), so the accessor is the cast and is carried inline. Inline rather
+ * than out of line on purpose: a translation unit that reaches the page API only
+ * through this accessor - the skbuff pool's fragment path does - must not have to
+ * link the allocator bodies to get it. */
+static __always_inline __unused void *
+page_address(const struct page *page)
+{
+	return (void *)(uintptr_t)page;
+}
 
 /* [LNX] include/linux/mm.h: the reference the interface takes on a page it is
  * about to hand to another owner. This port's page records are opaque handles
