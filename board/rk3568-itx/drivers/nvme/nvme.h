@@ -73,6 +73,10 @@ typedef struct _ARM_DRIVER_NVME {
 	uint32_t (*GetTransferStatus)(uint32_t ctrl);
 } ARM_DRIVER_NVME;
 
+/* The board's NVMe driver instance (board/rk3568-itx/drivers/nvme/dwc_nvme.c),
+ * the single object a caller addresses the controller through. */
+extern ARM_DRIVER_NVME Driver_NVME;
+
 #ifdef __cplusplus
 }
 #endif

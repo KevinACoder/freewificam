@@ -23,15 +23,17 @@
 
 #include <stdint.h>
 
+#include "gicv3.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* --- geometry (what this board's GIC-600 demands) ------------------------- */
 
-/* First LPI INTID. LPIs are numbered from here, not from 0: INTID 8192 is
- * LPI slot 0. Handlers are registered as (IRQ_LPI_INTID_FIRST + slot). */
-#define IRQ_LPI_INTID_FIRST	8192U
+/* First LPI INTID (IRQ_LPI_INTID_FIRST, 8192) comes from gicv3.h: it is a
+ * GICv3 architectural number, shared with the registry that dispatches the
+ * LPI. Handlers are registered as (IRQ_LPI_INTID_FIRST + slot). */
 
 /* LPI slots the driver hands out. The number is what the self-test grid and
  * the PCIe MSI allocator were sized against. */

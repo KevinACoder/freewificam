@@ -33,6 +33,10 @@ void dwc_nvme_init(void);
 /* Controllers that came up. */
 uint32_t dwc_nvme_ctrl_count(void);
 
+/* Message interrupts this controller has taken (the delivery evidence a
+ * polled completion cannot show). Zero when the controller came up polled. */
+uint32_t dwc_nvme_irq_count(uint32_t ctrl);
+
 
 #ifdef __cplusplus
 }

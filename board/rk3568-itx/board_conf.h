@@ -105,6 +105,19 @@
 #define BOARD_PCIE_DOORBELL_BASE	0xfd450000ULL
 #define BOARD_PCIE_DOORBELL_SIZE	0x1000ULL
 
+/* --- PCIe DBI MMU windows (consumed by arch/aarch64/mmu.c) ------------------ */
+
+/* The two DesignWare DBI frames sit above 4GiB, inside the 1GiB region the L1
+ * entry 15 covers - a region the identity map otherwise leaves unmapped, so
+ * any DBI access would fault. Each frame is mapped Device for its own 4MiB and
+ * nothing else of that region is mapped. The APB/CFG/MEM windows
+ * (0xfe260000, 0xfe280000, 0xf4000000, 0xf0000000, 0xf4200000, 0xf0200000)
+ * all fall inside L1[3], which is already Device, and need no mapping here. */
+#define BOARD_MMU_PCIE_DBI0_BASE	0x3c0000000ULL
+#define BOARD_MMU_PCIE_DBI0_END		(BOARD_MMU_PCIE_DBI0_BASE + 0x400000ULL)
+#define BOARD_MMU_PCIE_DBI1_BASE	0x3c0800000ULL
+#define BOARD_MMU_PCIE_DBI1_END		(BOARD_MMU_PCIE_DBI1_BASE + 0x400000ULL)
+
 /* --- core identity ---------------------------------------------------------- */
 
 /* HOW A CORE'S LOGICAL NUMBER IS EXTRACTED FROM MPIDR_EL1.

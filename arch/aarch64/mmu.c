@@ -25,6 +25,9 @@
  *   L1[3]  0xc0000000-0xffffffff -> L2: 2MiB blocks, Device everywhere
  *          (an ITS LPI window would return with that round; this image has
  *          no ITS)
+ *   L1[15] 0x3c0000000-0x3ffffffff -> L2: the two DesignWare PCIe DBI frames
+ *          (4MiB Device each, BOARD_MMU_PCIE_DBI*); the rest of the region
+ *          stays unmapped and faults
  */
 
 #include <stdint.h>
@@ -92,6 +95,13 @@ static uint64_t l1_table[512] __attribute__((aligned(PAGE_GRANULE)));
 static uint64_t l2_low[512]  __attribute__((aligned(PAGE_GRANULE)));
 static uint64_t l2_top[512]  __attribute__((aligned(PAGE_GRANULE)));
 
+/* Page table for L1[15] (0x3c0000000-0x3ffffffff): the two DesignWare PCIe DBI
+ * frames sit in this otherwise-unmapped 1GiB region. Only the frames' own
+ * 2MiB blocks are filled in as Device; every other entry stays zero, so an
+ * access anywhere else in the region raises a translation fault rather than
+ * reaching a peripheral by accident. */
+static uint64_t l2_pcie[512] __attribute__((aligned(PAGE_GRANULE)));
+
 /* Page table refining ONE 2MiB block of the image's RAM into 4KiB pages, so
  * the non-cacheable DMA window inside it can carry a different attribute
  * from its neighbours. Reserved statically (and only for this) because the
@@ -125,6 +135,27 @@ static uint64_t device_block_desc(uint64_t base)
 {
 	return base | DESC_BLOCK | DESC_AF | DESC_SH_NONE |
 	       DESC_ATTR_DEVICE | DESC_XN;
+}
+
+/* Fill the 2MiB blocks of an L2 table that fall inside [start, end) with
+ * Device block descriptors, leaving the rest of the table as it was. The table
+ * is the one L1 entry covering the window's own 1GiB, derived from the
+ * window's base, so a caller only hands over the window's own extent. The PCIe
+ * DBI frames are the only windows mapped this way: their region is above 4GiB,
+ * where the flat L1 map stops, and an unmapped entry there faults instead of
+ * reaching the frame. */
+static void mmu_map_device_window(uint64_t *l2, uint64_t start, uint64_t end)
+{
+	uint64_t base = start & ~(L1_BLOCK_SIZE - 1ULL);
+	uint32_t i;
+
+	for (i = 0; i < 512U; i++) {
+		uint64_t block = base + ((uint64_t)i * L2_BLOCK_SIZE);
+
+		if ((block >= start) && (block < end)) {
+			l2[i] = device_block_desc(block);
+		}
+	}
 }
 
 /* Refine the 2MiB block holding the non-cacheable DMA window into 4KiB
@@ -198,6 +229,18 @@ void mmu_enable(void)
 		l2_top[i] = device_block_desc(base);
 	}
 
+	/* L2 covering the PCIe DBI frames' 1GiB (L1[15]): the two frames are the
+	 * only mapped part of that region, each a 4MiB Device window. Everything
+	 * else in the table is left zero (unmapped, so it faults). The
+	 * APB/CFG/MEM windows all sit in L1[3] above and need nothing here. */
+	for (i = 0; i < 512U; i++) {
+		l2_pcie[i] = 0;
+	}
+	mmu_map_device_window(l2_pcie, BOARD_MMU_PCIE_DBI0_BASE,
+			      BOARD_MMU_PCIE_DBI0_END);
+	mmu_map_device_window(l2_pcie, BOARD_MMU_PCIE_DBI1_BASE,
+			      BOARD_MMU_PCIE_DBI1_END);
+
 	/* L1 covering the low 4GiB. */
 	for (i = 0; i < 512U; i++) {
 		l1_table[i] = 0;
@@ -208,6 +251,10 @@ void mmu_enable(void)
 	l1_table[2] = block_desc(L1_BLOCK_SIZE * 2ULL,
 				 DESC_ATTR_NORMAL);
 	l1_table[3] = DESC_TABLE | (uint64_t)(uintptr_t)l2_top;
+	/* The PCIe DBI frames above 4GiB: L1[15] is the 1GiB region
+	 * 0x3c0000000-0x3ffffffff, mapped only where the frames are. */
+	l1_table[BOARD_MMU_PCIE_DBI0_BASE / L1_BLOCK_SIZE] =
+		DESC_TABLE | (uint64_t)(uintptr_t)l2_pcie;
 
 	/* L0: where the walk actually starts for a 48-bit VA. Only table
 	 * descriptors are valid at this level. */

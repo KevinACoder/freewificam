@@ -25,8 +25,9 @@
  *  2. The redistributor needs the WAKER handshake: clear ProcessorSleep,
  *     wait for ChildrenAsleep to clear. Skipping it leaves the redistributor
  *     asleep and PPIs/SPIs never arrive.
- *  3. Nothing is written to GICR_CTLR (EnableLPIs belongs to an LPI/ITS
- *     setup this image does not have) and the SGI/PPI bank gets no blanket
+ *  3. Nothing is written to GICR_CTLR here (EnableLPIs and the LPI property/
+ *     pending base registers belong to the ITS's own setup, arch/aarch64/
+ *     gicv3_its.c) and the SGI/PPI bank gets no blanket
  *     writes - it covers all 32 SGIs and PPIs including firmware's secure
  *     lines (the EL1 secure physical timer PPI 29 is OP-TEE's, Group 0); a
  *     bank-wide rewrite is a non-secure write to secure state and RESETS
@@ -99,9 +100,22 @@
 #define IRQ_INTID_SPI_MAX	1019u
 #define IRQ_INTID_SPURIOUS	1023u
 
+/* An INTID is 24 bits on this architecture. The acknowledged value must be
+ * masked with this and NOT with the 10-bit SPI ceiling: an LPI's INTID starts
+ * at 8192, so a 10-bit mask turns LPI 8192 into INTID 0 and the interrupt is
+ * dispatched to nothing - silently. */
+#define IRQ_INTID_MASK		0xffffffu
+
 /* The registry covers SGI/PPI + the low SPIs this milestone will ever name
  * (UART 150 reserved); hardware paths below cover the full SPI range. */
 #define IRQ_TABLE_SIZE		256u
+
+/* LPIs are numbered from 8192, far outside the table above, so they get their
+ * own table indexed by slot. It is still ONE registry - irq_register and
+ * gic_irq_dispatch both route on the INTID - so a driver arms an LPI exactly as
+ * it arms an SPI. Sized for the ITS's LPI window (ITS_LPI_QUANTITY) plus
+ * headroom; an LPI outside it is rejected rather than aliased onto a slot. */
+#define IRQ_LPI_TABLE_SIZE	64u
 
 /* Bounded waits: a stuck RWP must surface as a visible failure, not an
  * unbounded hang. */
@@ -114,6 +128,11 @@ static struct {
 	irq_handler_t fn;
 	void *arg;
 } irq_table[IRQ_TABLE_SIZE];
+
+static struct {
+	irq_handler_t fn;
+	void *arg;
+} irq_lpi_table[IRQ_LPI_TABLE_SIZE];
 
 static uint8_t irq_mode_level[IRQ_TABLE_SIZE];
 
@@ -313,6 +332,17 @@ void gicv3_init(void)
 
 int32_t irq_register(uint32_t intid, irq_handler_t handler, void *arg)
 {
+	if (intid >= IRQ_LPI_INTID_FIRST) {
+		uint32_t slot = intid - IRQ_LPI_INTID_FIRST;
+
+		if (slot >= IRQ_LPI_TABLE_SIZE) {
+			return -1;
+		}
+		irq_lpi_table[slot].fn = handler;
+		irq_lpi_table[slot].arg = arg;
+		return 0;
+	}
+
 	if (intid >= IRQ_TABLE_SIZE) {
 		return -1;
 	}
@@ -485,7 +515,7 @@ void gic_irq_eoi(uint32_t iar)
  * (see the file header) and gets the value back through the return. */
 uint32_t gic_irq_dispatch(uint32_t iar)
 {
-	uint32_t intid = iar & 0x3ffu;
+	uint32_t intid = iar & IRQ_INTID_MASK;
 	irq_handler_t fn;
 	void *arg;
 
@@ -493,8 +523,16 @@ uint32_t gic_irq_dispatch(uint32_t iar)
 		return iar;
 	}
 
-	fn = (intid < IRQ_TABLE_SIZE) ? irq_table[intid].fn : 0;
-	arg = (intid < IRQ_TABLE_SIZE) ? irq_table[intid].arg : 0;
+	if (intid >= IRQ_LPI_INTID_FIRST) {
+		uint32_t slot = intid - IRQ_LPI_INTID_FIRST;
+
+		fn = (slot < IRQ_LPI_TABLE_SIZE) ? irq_lpi_table[slot].fn : 0;
+		arg = (slot < IRQ_LPI_TABLE_SIZE) ? irq_lpi_table[slot].arg : 0;
+	} else {
+		fn = (intid < IRQ_TABLE_SIZE) ? irq_table[intid].fn : 0;
+		arg = (intid < IRQ_TABLE_SIZE) ? irq_table[intid].arg : 0;
+	}
+
 	if (fn != 0) {
 		fn(arg);
 	}

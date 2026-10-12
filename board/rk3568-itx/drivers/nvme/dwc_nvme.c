@@ -729,6 +729,15 @@ uint32_t dwc_nvme_ctrl_count(void)
 	return nvme_ctrl_count;
 }
 
+uint32_t dwc_nvme_irq_count(uint32_t ctrl)
+{
+	if (ctrl >= DWC_NVME_CTRL_MAX) {
+		return 0;
+	}
+
+	return nvme_ctrls[ctrl].irq_count;
+}
+
 /* --- CMSIS ARM_DRIVER_NVME (drivers/nvme/nvme.h) --------------------------- */
 
 static ARM_DRIVER_VERSION nvme_get_version(void)
