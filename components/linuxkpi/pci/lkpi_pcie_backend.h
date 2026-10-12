@@ -31,8 +31,10 @@
  * delivery path - see the line's design note).
  *
  * DMA contract: dma_alloc hands out a coherent buffer (CPU address and bus
- * address); dma_map / dma_unmap make a streaming buffer visible in a direction.
- * The seam carries no cache vocabulary on purpose - the adapter below it owns the
+ * address); dma_map / dma_unmap make a streaming buffer visible in a direction;
+ * dma_sync re-makes a live streaming mapping visible in a direction, for the
+ * hand-back the map/unmap pair cannot express while the mapping stays live. The
+ * seam carries no cache vocabulary on purpose - the adapter below it owns the
  * cache maintenance the host needs, and a synthetic backend ignores it entirely.
  *
  * Error codes are this seam's own; the low values are kept identical to the
@@ -42,7 +44,7 @@
  * the library's unused range. Error values travel as the negative of the code.
  *
  * @design ports & adapters: the engine is the adapter-neutral core, a backend is
- *         the adapter; the seam is deliberately narrow (eleven operations, one
+ *         the adapter; the seam is deliberately narrow (twelve operations, one
  *         device record) so a second backend cannot fork the engine. Shape
  *         reference: this project's USB seam, components/linuxkpi/usb/
  *         lkpi_usb_backend.h:1-37 (the vocabulary discipline, the error-code
@@ -140,6 +142,13 @@ struct lkpi_pcie_be_ops {
 	 * maintenance; the bus address is handed back for the device). */
 	int	(*dma_map)(void *ctx, void *cpu, size_t len, int dir, u64 *bus);
 	void	(*dma_unmap)(void *ctx, void *cpu, size_t len, int dir);
+	/* Re-make a live streaming mapping visible in `dir` without unmapping it
+	 * (the CPU and the device hand the same buffer back and forth). The
+	 * maintenance is the adapter's, exactly as for dma_map / dma_unmap, and
+	 * `dir` selects it: a to-device buffer is cleaned, a from-device buffer
+	 * invalidated. An adapter that needs cache maintenance for its streaming
+	 * buffers must implement it, because the mapping stays live. */
+	void	(*dma_sync)(void *ctx, void *cpu, size_t len, int dir);
 };
 
 /* install the backend (the host mock harness and the target bring-up call this
@@ -166,5 +175,6 @@ int	lkpi_pcie_be_dma_alloc(size_t len, void **cpu, u64 *bus);
 void	lkpi_pcie_be_dma_free(void *cpu, u64 bus, size_t len);
 int	lkpi_pcie_be_dma_map(void *cpu, size_t len, int dir, u64 *bus);
 void	lkpi_pcie_be_dma_unmap(void *cpu, size_t len, int dir);
+void	lkpi_pcie_be_dma_sync(void *cpu, size_t len, int dir);
 
 #endif /* LKPI_PCIE_BACKEND_H */

@@ -2,9 +2,11 @@
 /*
  * @file    linuxkpi_netdev.c
  * @brief   The net-device bodies: the device registry, the allocator that owns
- *          the object (name, address storage, private area, transmit queues),
- *          the link/queue state helpers, the receive entry point and the
- *          ethernet receive classifier a vendored driver's data path calls.
+ *          the object (name, address storage, private area, transmit queues), the
+ *          link/queue state helpers, the receive entry point, the ethernet receive
+ *          classifier a vendored driver's data path calls, the NAPI lifecycle a
+ *          PCIe receive path drives, and the dummy-device allocator that carries a
+ *          NAPI context.
  *
  * @design registry + adapter, the same shape the cfg80211 substitute uses
  *         (components/linuxkpi/linuxkpi_cfg80211.c:1-46). The net-device face
@@ -183,6 +185,30 @@ free_netdev(struct net_device *dev)
 		kfree((void *)dev->dev_addr);
 	kfree(dev->_tx);
 	kfree(dev);
+}
+
+/*
+ * [LNX] include/linux/netdevice.h:5034: `struct net_device *alloc_netdev_dummy(int
+ * sizeof_priv)`. The interface allocates a net device with no name, no address and
+ * no transmit queues (dummy_setup), used as the carrier for a NAPI context that is
+ * not itself an interface. That is exactly the PCIe port's use
+ * (pcie/gen1_2/trans.c:3879): the returned device is never registered, and its
+ * private area holds a back-pointer (rx.c:1002 reads it back through netdev_priv).
+ * One block for the record plus the private tail, zeroed - the same object shape
+ * alloc_etherdev_mqs uses, without the ethernet setup this device does not want.
+ */
+struct net_device *
+alloc_netdev_dummy(int sizeof_priv)
+{
+	struct net_device *dev;
+
+	if (sizeof_priv < 0)
+		return NULL;
+	dev = kzalloc(sizeof(*dev) + (size_t)sizeof_priv, GFP_KERNEL);
+	if (dev == NULL)
+		return NULL;
+	/* the private area is the record's `priv[]` tail (netdev_priv) */
+	return dev;
 }
 
 /* ------------------------------------------------------------------ */
@@ -477,6 +503,104 @@ netif_rx(struct sk_buff *skb)
 	/* no presentation layer registered: the frame is consumed here */
 	kfree_skb(skb);
 	return NET_RX_DROP;
+}
+
+/* ------------------------------------------------------------------ */
+/* the NAPI context (driver: pcie/gen1_2/rx.c:1136 netif_napi_add,      */
+/* :1138 napi_enable, :1236 napi_disable, :1237 netif_napi_del,         */
+/* :1026/:1058 napi_complete_done)                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The port's NAPI has no softirq poller: the scheduling pair that hands an
+ * instance to the poller (napi_schedule_prep/__napi_schedule) already lives with
+ * the mac80211 substitute (linuxkpi_80211_helpers.c:506-540) and runs the poll in
+ * the caller's context. What is defined here is the lifecycle around it - add,
+ * enable, disable, complete, delete - so the driver's own pairing (add then
+ * enable; disable then del) is coherent. The state transitions are the
+ * interface's (net/core/dev.c:7612 netif_napi_add_weight_locked, :7658
+ * napi_disable_locked, :7719 napi_enable_locked): an instance starts SCHED|NPSVC
+ * (added but not schedulable), napi_enable() clears them, and napi_disable()
+ * sets them again. The interface's wait loops are absent because nothing here
+ * polls concurrently - the poll, when it runs, runs inline in the caller.
+ */
+void
+netif_napi_add(struct net_device *dev, struct napi_struct *napi,
+    int (*poll)(struct napi_struct *, int))
+{
+
+	if (napi == NULL)
+		return;
+	napi->dev = dev;
+	napi->poll = poll;
+	napi->weight = NAPI_POLL_WEIGHT;
+	INIT_LIST_HEAD(&napi->poll_list);
+	set_bit(NAPI_STATE_SCHED, &napi->state);
+	set_bit(NAPI_STATE_NPSVC, &napi->state);
+}
+
+void
+netif_napi_del(struct napi_struct *napi)
+{
+
+	if (napi == NULL)
+		return;
+	napi->poll = NULL;
+	napi->dev = NULL;
+}
+
+void
+napi_enable(struct napi_struct *n)
+{
+
+	if (n == NULL)
+		return;
+	clear_bit(NAPI_STATE_SCHED, &n->state);
+	clear_bit(NAPI_STATE_NPSVC, &n->state);
+}
+
+void
+napi_disable(struct napi_struct *n)
+{
+
+	if (n == NULL)
+		return;
+	set_bit(NAPI_STATE_SCHED, &n->state);
+	set_bit(NAPI_STATE_NPSVC, &n->state);
+}
+
+/*
+ * [LNX] include/linux/netdevice.h:592: `bool napi_complete_done(struct
+ * napi_struct *n, int work_done)` returns false when the device should avoid
+ * rearming interrupts. This port has no interrupt to rearm (the poll runs inline
+ * in __napi_schedule, which clears SCHED on return), so the answer is always
+ * "complete, safe to rearm" - true - and the SCHED clear is idempotent with the
+ * scheduler's.
+ */
+bool
+napi_complete_done(struct napi_struct *n, int work_done)
+{
+
+	(void)work_done;
+	if (n == NULL)
+		return false;
+	clear_bit(NAPI_STATE_SCHED, &n->state);
+	return true;
+}
+
+/*
+ * [LNX] include/linux/netdevice.h:5325: the interface copies out of a per-boot
+ * random RSS key; this port has no such key store, so the caller's buffer is
+ * filled from the port's random source. The driver seeds a firmware command's
+ * secret key with it (mvm/fw.c:67), which wants fresh random bytes either way.
+ */
+void
+netdev_rss_key_fill(void *buffer, size_t len)
+{
+
+	if (buffer == NULL || len == 0)
+		return;
+	get_random_bytes(buffer, len);
 }
 
 /* ------------------------------------------------------------------ */

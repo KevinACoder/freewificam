@@ -102,7 +102,8 @@ void lkpi_dev_printk(struct device *dev, ulog_level_t level, const char *fmt, ..
  */
 void lkpi_fatal(const char *what)
 {
-	lkpi_printf(ULOG_INFO_LEVEL, ULOG_CRITICAL_LEVEL, "lkpi: fatal: %s\n", what != NULL ? what : "(unspecified)");
+	lkpi_printf(ULOG_CRITICAL_LEVEL, "lkpi: fatal: %s\n",
+	    what != NULL ? what : "(unspecified)");
 	abort();
 }
 
@@ -247,6 +248,27 @@ void lkpi_kmem_free(const void *ptr)
 	}
 	hdr->magic = 0;
 	osMemoryFree(hdr);
+}
+
+/*
+ * The size this heap handed out for a block, read from the block's own header. It
+ * is what lets the interface's reallocating and clearing forms (krealloc,
+ * kfree_sensitive - linuxkpi_compat.c) preserve or wipe exactly the old bytes
+ * without a second allocator or a size argument from the caller. Zero for NULL and
+ * for a pointer this heap never handed out, which makes those callers take the
+ * "nothing to preserve/clear" path rather than read a foreign header.
+ */
+size_t lkpi_kmem_size(const void *ptr)
+{
+	const struct lkpi_mem_hdr *hdr;
+
+	if (ptr == NULL)
+		return 0;
+
+	hdr = ((const struct lkpi_mem_hdr *)ptr) - 1;
+	if (hdr->magic != LKPI_MEM_MAGIC)
+		return 0;
+	return hdr->size;
 }
 
 /* ------------------------------------------------------------------ */

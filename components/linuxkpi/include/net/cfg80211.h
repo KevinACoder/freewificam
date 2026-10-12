@@ -501,18 +501,25 @@ struct ieee80211_eht_mcs_nss_supp {
 	} __packed;
 };
 
+/* [LNX] include/net/cfg80211.h:374,417: the two PPE-threshold array bounds. The
+ * records below were sized by eye before a compiled consumer named them; a bound
+ * of 3 against the interface's 25/32 both truncates what a caller may store and
+ * makes the driver's own four-byte default read as an initialiser overflow. */
+#define IEEE80211_HE_PPE_THRES_MAX_LEN		25
+#define IEEE80211_EHT_PPE_THRES_MAX_LEN		32
+
 struct ieee80211_sta_he_cap {
 	bool					has_he;
 	struct ieee80211_he_cap_elem		he_cap_elem;
 	struct ieee80211_he_mcs_nss_supp	he_mcs_nss_supp;
-	u8					ppe_thres[3];
+	u8					ppe_thres[IEEE80211_HE_PPE_THRES_MAX_LEN];
 };
 
 struct ieee80211_sta_eht_cap {
 	bool					has_eht;
 	struct ieee80211_eht_cap_elem_fixed	eht_cap_elem;
 	struct ieee80211_eht_mcs_nss_supp	eht_mcs_nss_supp;
-	u8					eht_ppe_thres[3];
+	u8					eht_ppe_thres[IEEE80211_EHT_PPE_THRES_MAX_LEN];
 };
 
 /* [LNX] include/linux/ieee80211-uhr.h:454,488: the UHR capability records a band's
@@ -1604,6 +1611,21 @@ struct cfg80211_pmsr_request {
 	struct cfg80211_pmsr_request_peer peers[];
 };
 
+/*
+ * [LNX] include/net/cfg80211.h:10529,10543: the peer-measurement result and
+ * completion reports a driver makes upward. Unreachable on this line: the report
+ * path is the FTM initiator (mvm/ftm-initiator.c), which only runs when a
+ * userspace peer-measurement request arrives through nl80211, and this port has no
+ * nl80211 socket. The bodies (linuxkpi_cfg80211.c) are inert for that reason.
+ */
+void cfg80211_pmsr_report(struct wireless_dev *wdev,
+			  struct cfg80211_pmsr_request *req,
+			  struct cfg80211_pmsr_result *result,
+			  gfp_t gfp);
+void cfg80211_pmsr_complete(struct wireless_dev *wdev,
+			    struct cfg80211_pmsr_request *req,
+			    gfp_t gfp);
+
 /* [LNX] include/net/cfg80211.h:3254 (record carried whole) */
 struct cfg80211_bss {
 	struct ieee80211_channel *channel;
@@ -1703,6 +1725,29 @@ int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
 /* [LNX] include/net/cfg80211.h:8088 */
 int regulatory_hint(struct wiphy *wiphy, const char *alpha2);
 
+/*
+ * [LNX] include/net/cfg80211.h:8101,8115: the regdomain submission a self-managed
+ * driver makes. The interface validates and installs the domain through the
+ * regulatory core and requires the wiphy to be flagged
+ * REGULATORY_WIPHY_SELF_MANAGED; this port has no regulatory core, so the domain
+ * is stored on the wiphy (the member the face already carries) and the sync form
+ * is the same store - stated at the body (linuxkpi_cfg80211.c). The driver calls
+ * both from its regulatory setup (mvm/nvm.c:615/:667).
+ */
+int regulatory_set_wiphy_regd(struct wiphy *wiphy,
+			      struct ieee80211_regdomain *rd);
+int regulatory_set_wiphy_regd_sync(struct wiphy *wiphy,
+				   struct ieee80211_regdomain *rd);
+
+/*
+ * [LNX] include/net/cfg80211.h:8200: the WMM-rule query against the internal
+ * regulatory database. The body (linuxkpi_cfg80211.c) answers the interface's own
+ * "no rule" result, -ENODATA, because this port carries no database; the caller
+ * (iwl-nvm-parse.c:1868) only applies a rule when the query succeeds.
+ */
+int reg_query_regdb_wmm(char *alpha2, int freq,
+			struct ieee80211_reg_rule *rule);
+
 /* [LNX] include/net/cfg80211.h:8133-8134: the custom-domain submission the compiled
  * set calls with its static domain tables. */
 void wiphy_apply_custom_regulatory(struct wiphy *wiphy,
@@ -1727,6 +1772,15 @@ void wiphy_rfkill_stop_polling(struct wiphy *wiphy);
 
 void wiphy_unlock(struct wiphy *wiphy)
 	__releases(&wiphy->mtx);
+
+/*
+ * [LNX] include/net/cfg80211.h:10394: shut down every interface of a wiphy after a
+ * fatal device error. Unreachable on this line: its one caller is the MEI
+ * nic-stolen handler (mvm/ops.c:1185), which is built only with CONFIG_IWLMEI and
+ * this line excludes the mei units. The body (linuxkpi_cfg80211.c) is inert for
+ * that reason - there is no interface to close and no error to recover from here.
+ */
+void cfg80211_shutdown_all_interfaces(struct wiphy *wiphy);
 
 
 
@@ -2455,6 +2509,14 @@ void cfg80211_unlink_bss(struct wiphy *wiphy, struct cfg80211_bss *bss);
 void cfg80211_scan_done(struct cfg80211_scan_request *request,
 			struct cfg80211_scan_info *info);
 
+/*
+ * [LNX] include/net/cfg80211.h:10643: reset every scan entry of a wiphy. The driver
+ * calls it when it restarts the firmware (mvm/fw.c:447), to drop the BSS rows whose
+ * GP2 timestamps are no longer meaningful. The body (linuxkpi_cfg80211.c) empties
+ * this port's BSS table, which is the substitute's whole scan-entry store.
+ */
+void cfg80211_bss_flush(struct wiphy *wiphy);
+
 /* [LNX] include/net/cfg80211.h: the connection/link notification helpers. */
 void cfg80211_connect_result(struct net_device *dev, const u8 *bssid,
 			     const u8 *req_ie, size_t req_ie_len,
@@ -2479,6 +2541,17 @@ void cfg80211_michael_mic_failure(struct net_device *dev, const u8 *addr,
  * notifications. */
 bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_dbm,
 		      const u8 *buf, size_t len, u32 flags);
+
+/*
+ * [LNX] include/net/cfg80211.h:8659: report an unprotected deauth/disassoc (or a
+ * BIGTK-invalid beacon) that was dropped in station mode. Unreachable on this line:
+ * its callers are the MQ receive path (mvm/rxmq.c:409) and the MLD path
+ * (mld/rx.c:1901), and the AC 7260 is a non-MQ, non-MLD part (cfg/7000.c leaves
+ * mq_rx_supported clear), so its receive path never reaches it. The body
+ * (linuxkpi_cfg80211.c) is inert - no nl80211 listener exists here to be told.
+ */
+void cfg80211_rx_unprot_mlme_mgmt(struct net_device *dev,
+				  const u8 *buf, size_t len);
 void cfg80211_mgmt_tx_status(struct wireless_dev *wdev, u64 cookie,
 			     const u8 *buf, size_t len, bool ack, gfp_t gfp);
 void cfg80211_ready_on_channel(struct wireless_dev *wdev, u64 cookie,

@@ -69,6 +69,17 @@ static inline bool ether_addr_equal(const u8 *addr1, const u8 *addr2)
 	return true;
 }
 
+/* [LNX] include/linux/etherdevice.h:406-413: the comparison for addresses that may
+ * not be 16-bit aligned. The interface's !CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
+ * arm is a plain memcmp(), which is what this port's byte-wise ether_addr_equal()
+ * above already is; stated separately because a caller names this spelling when it
+ * cannot promise alignment, and the compiler may then emit an unaligned-safe
+ * compare. */
+static inline bool ether_addr_equal_unaligned(const u8 *addr1, const u8 *addr2)
+{
+	return memcmp(addr1, addr2, ETH_ALEN) == 0;
+}
+
 static inline void ether_addr_copy(u8 *dst, const u8 *src)
 {
 	int i;

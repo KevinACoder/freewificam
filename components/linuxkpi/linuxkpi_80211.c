@@ -93,6 +93,14 @@ struct lkpi80211_hw_ctx {
 	struct ieee80211_chanctx_conf chanctx;	/* the emulated context */
 	struct ieee80211_vif	*vifs[CONFIG_LKPI80211_MAX_VIFS];
 	struct ieee80211_sta	*stas[CONFIG_LKPI80211_MAX_STAS];
+	/*
+	 * The per-vif wireless_dev the interface embeds in each of its own
+	 * interfaces (net/mac80211/iface.c: `sdata->wdev`), which
+	 * ieee80211_vif_to_wdev() hands back.  A compiled caller reads only its
+	 * iftype (the firmware debug-trigger match) and its wiphy; netdev stays
+	 * NULL because this port has no net_device per interface.
+	 */
+	struct wireless_dev	wdevs[CONFIG_LKPI80211_MAX_VIFS];
 	u32			queue_stopped;	/* bit per AC, the queue family */
 	u32			filter_total;	/* the last programmed filter */
 	unsigned int		registered:1;
@@ -101,6 +109,7 @@ struct lkpi80211_hw_ctx {
 	unsigned int		tx_ba_sessions;
 	unsigned int		rx_frames;
 	unsigned int		tx_completions;
+	unsigned int		scan_completions;
 };
 
 #define LKPI80211_CTX(_hw)	((struct lkpi80211_hw_ctx *)(_hw))
@@ -164,6 +173,192 @@ lkpi80211_bridge_register(const struct lkpi80211_bridge_ops *ops, void *arg)
 	bridge_ops = ops;
 	bridge_arg = arg;
 }
+
+/* ------------------------------------------------------------------ */
+/* the key table                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The keys the interface would keep in its own per-interface key_list.  In this
+ * port the key policy lives with net80211 behind the bridge, and the driver is
+ * told about each key through its set_key op; this table records those keys so
+ * the interface's own key walk (ieee80211_iter_keys / ieee80211_iter_keys_rcu),
+ * its per-key receive-sequence read (ieee80211_get_key_rx_seq) and its per-key
+ * notices (ieee80211_key_mic_failure / ieee80211_key_replay) answer from what was
+ * actually installed, rather than from a list that does not exist.
+ *
+ * Ownership: the interface owns the key object it hands the driver, and a driver
+ * may keep the pointer (the AC 7260 stores it for the beacon-protection keys -
+ * mvm/mac80211.c:4269 rcu_assign_pointer(mvmvif->bcn_prot.keys[..], key)).  The
+ * bridge's own set_key caller allocates its key_conf and frees it as soon as the
+ * call returns (ports/net80211/bridge/wlan_seam_adapter.c kzalloc/free around
+ * lkpi80211_drv_key), so the substitute takes a stable copy, records it, and
+ * hands THAT to the driver - the same ownership the interface's key_list gives.
+ * A key is identified the way the interface identifies it: by (vif, sta, keyidx,
+ * pairwise), which is what a DISABLE_KEY names.
+ */
+#ifndef CONFIG_LKPI80211_MAX_KEYS
+#define CONFIG_LKPI80211_MAX_KEYS	8
+#endif
+
+struct lkpi80211_key_entry {
+	unsigned int		used:1;
+	struct ieee80211_hw	*hw;
+	struct ieee80211_vif	*vif;
+	struct ieee80211_sta	*sta;
+	struct ieee80211_key_conf *conf;	/* heap copy, sizeof(*conf)+keylen */
+	unsigned int		icverrors;
+	unsigned int		replays;
+	/*
+	 * The per-TID receive sequence the interface keeps per key.  This port's
+	 * receive IV checking is net80211's, on the bridge's side, so nothing
+	 * advances it here: a read answers the key's initial value, which is the
+	 * honest answer for a device that does not do RX IV checking itself.
+	 */
+	union {
+		struct {
+			u32 iv32;
+			u16 iv16;
+		} tkip[IEEE80211_NUM_TIDS];
+		u8 pn[IEEE80211_NUM_TIDS + 1][IEEE80211_CCMP_PN_LEN];
+	} rx;
+};
+
+static struct lkpi80211_key_entry lkpi80211_keys[CONFIG_LKPI80211_MAX_KEYS];
+
+/* the record that owns this exact key object (what the driver was handed) */
+static struct lkpi80211_key_entry *
+lkpi80211_key_find_conf(struct ieee80211_key_conf *keyconf)
+{
+	unsigned int i;
+
+	for (i = 0; i < CONFIG_LKPI80211_MAX_KEYS; i++)
+		if (lkpi80211_keys[i].used && lkpi80211_keys[i].conf == keyconf)
+			return &lkpi80211_keys[i];
+	return NULL;
+}
+
+/* the record for this key identity, the way a DISABLE_KEY names it */
+static struct lkpi80211_key_entry *
+lkpi80211_key_find_id(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, s8 keyidx, bool pairwise)
+{
+	unsigned int i;
+
+	for (i = 0; i < CONFIG_LKPI80211_MAX_KEYS; i++) {
+		struct lkpi80211_key_entry *e = &lkpi80211_keys[i];
+		bool e_pairwise;
+
+		if (!e->used || e->conf == NULL || e->hw != hw)
+			continue;
+		if (e->vif != vif || e->sta != sta || e->conf->keyidx != keyidx)
+			continue;
+		e_pairwise = (e->conf->flags & IEEE80211_KEY_FLAG_PAIRWISE) != 0;
+		if (e_pairwise == pairwise)
+			return e;
+	}
+	return NULL;
+}
+
+static void
+lkpi80211_key_release(struct lkpi80211_key_entry *e)
+{
+
+	kfree(e->conf);
+	memset(e, 0, sizeof(*e));
+}
+
+/*
+ * Take a stable copy of `key`, record it, and return the record (whose ->conf
+ * is the object the driver is to be handed).  Returns NULL if the table is full
+ * or the copy cannot be made; the caller then falls back to the bridge's own
+ * key_conf, so a full table degrades to "not tracked" rather than a failed
+ * set_key.
+ */
+static struct lkpi80211_key_entry *
+lkpi80211_key_install(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, struct ieee80211_key_conf *key)
+{
+	struct lkpi80211_key_entry *e;
+	struct ieee80211_key_conf *copy;
+	bool pairwise = (key->flags & IEEE80211_KEY_FLAG_PAIRWISE) != 0;
+	unsigned int i;
+
+	/* a re-set of the same key replaces its record */
+	e = lkpi80211_key_find_id(hw, vif, sta, key->keyidx, pairwise);
+	if (e != NULL) {
+		kfree(e->conf);
+		e->conf = NULL;
+	} else {
+		for (i = 0; i < CONFIG_LKPI80211_MAX_KEYS; i++)
+			if (!lkpi80211_keys[i].used)
+				break;
+		if (i == CONFIG_LKPI80211_MAX_KEYS) {
+			lkpi_printf(ULOG_WARNING_LEVEL, "lkpi80211: key table full; key %d not tracked\n",
+			    key->keyidx);
+			return NULL;
+		}
+		e = &lkpi80211_keys[i];
+		e->used = 1;
+	}
+	copy = kzalloc(sizeof(*copy) + key->keylen, GFP_KERNEL);
+	if (copy == NULL) {
+		e->used = 0;
+		e->conf = NULL;
+		return NULL;
+	}
+	memcpy(copy, key, sizeof(*copy) + key->keylen);
+	e->hw = hw;
+	e->vif = vif;
+	e->sta = sta;
+	e->conf = copy;
+	memset(&e->rx, 0, sizeof(e->rx));
+	e->icverrors = 0;
+	e->replays = 0;
+	return e;
+}
+
+static void
+lkpi80211_key_drop(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, struct ieee80211_key_conf *key)
+{
+	struct lkpi80211_key_entry *e;
+
+	e = lkpi80211_key_find_conf(key);
+	if (e == NULL)
+		e = lkpi80211_key_find_id(hw, vif, sta, key->keyidx,
+		    (key->flags & IEEE80211_KEY_FLAG_PAIRWISE) != 0);
+	if (e != NULL)
+		lkpi80211_key_release(e);
+}
+
+static void
+lkpi80211_keys_drop_hw(struct ieee80211_hw *hw)
+{
+	unsigned int i;
+
+	for (i = 0; i < CONFIG_LKPI80211_MAX_KEYS; i++)
+		if (lkpi80211_keys[i].used && lkpi80211_keys[i].hw == hw)
+			lkpi80211_key_release(&lkpi80211_keys[i]);
+}
+
+/* ------------------------------------------------------------------ */
+/* the rate-control algorithm registry                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The algorithms a driver registers at module init.  The interface keeps them
+ * in a list and looks one up by name when it needs to pick rates; this port's
+ * transmit path is driven by the bridge (which does not consult mac80211 rate
+ * control), so the registry is what a registration has to mean here: the ops
+ * are remembered and a duplicate name is refused, exactly as the interface
+ * refuses it, so the driver's own module-init ordering still holds.
+ */
+#ifndef CONFIG_LKPI80211_MAX_RC
+#define CONFIG_LKPI80211_MAX_RC	4
+#endif
+
+static const struct rate_control_ops *lkpi80211_rc_ops[CONFIG_LKPI80211_MAX_RC];
 
 /* ------------------------------------------------------------------ */
 /* hw allocation (driver calls: core.c:7813 ieee80211_alloc_hw)         */
@@ -301,6 +496,7 @@ ieee80211_unregister_hw(struct ieee80211_hw *hw)
 	ctx->registered = 0;
 	ctx->scanning = 0;
 	ctx->queue_stopped = 0;
+	lkpi80211_keys_drop_hw(hw);
 	lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: hw unregistered\n");
 }
 
@@ -352,8 +548,15 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	lkpi_skb_free(skb);
 }
 
-void
-ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
+/*
+ * The one transmit-completion body.  ieee80211_tx_status_irqsafe() is the
+ * interface's deferred form, ieee80211_tx_status_ext()/ieee80211_tx_status_skb()
+ * its synchronous forms (net/mac80211/status.c); this port defers nothing, so
+ * all three end here - one mechanism, one body, so a frame cannot be reported
+ * twice through two entry points that drifted apart.
+ */
+static void
+lkpi80211_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct lkpi80211_hw_ctx *ctx;
 
@@ -382,6 +585,40 @@ ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	memset(skb->cb, 0, sizeof(skb->cb));
 	/* the substitute owns the release (the caller has stopped caring) */
 	lkpi_skb_free(skb);
+}
+
+void
+ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
+{
+
+	lkpi80211_tx_complete(hw, skb);
+}
+
+void
+ieee80211_tx_status_ext(struct ieee80211_hw *hw,
+    struct ieee80211_tx_status *status)
+{
+
+	/*
+	 * [LNX] net/mac80211/status.c:ieee80211_tx_status_ext.  The interface's
+	 * body walks its own rate control and station bookkeeping; this port's
+	 * equivalent is the completion body above, so the substance carried here
+	 * is the frame it names (status->skb).  A caller that hands no skb has
+	 * nothing for this port to complete and returns.
+	 */
+	if (status == NULL || status->skb == NULL)
+		return;
+	lkpi80211_tx_complete(hw, status->skb);
+}
+
+void
+ieee80211_tx_status_skb(struct ieee80211_hw *hw, struct sk_buff *skb)
+{
+
+	/* [LNX] net/mac80211/status.c:ieee80211_tx_status_skb - the skb form of
+	 * the same completion, which the AC 7260's own transmit-completion path
+	 * calls (mvm/tx.c:1685,2066) */
+	lkpi80211_tx_complete(hw, skb);
 }
 
 /* ------------------------------------------------------------------ */
@@ -466,6 +703,197 @@ ieee80211_iterate_stations_atomic(struct ieee80211_hw *hw,
 	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++) {
 		if (ctx->stas[i] != NULL)
 			iterator(data, ctx->stas[i]);
+	}
+}
+
+void
+ieee80211_iterate_interfaces(struct ieee80211_hw *hw, u32 iter_flags,
+    void (*iterator)(void *data, u8 *mac, struct ieee80211_vif *vif),
+    void *data)
+{
+
+	/*
+	 * [LNX] net/mac80211/util.c:ieee80211_iterate_interfaces.  The
+	 * interface's body takes its iflist_mtx and walks local->interfaces,
+	 * skipping monitors and AP-VLANs and (for the ACTIVE flag) interfaces
+	 * not in the driver; this port's interfaces are the vif table and every
+	 * one is in the driver once added, so the walk is the atomic form's -
+	 * the same interfaces, in slot order - and the non-atomic form adds only
+	 * the sleeping allowance the port does not need to distinguish.
+	 * ieee80211_iterate_active_interfaces() (an inline in the face) passes
+	 * the ACTIVE flag through to here.
+	 */
+	ieee80211_iterate_active_interfaces_atomic(hw, iter_flags, iterator, data);
+}
+
+/* ------------------------------------------------------------------ */
+/* the key-table walk and the per-key notices                          */
+/* ------------------------------------------------------------------ */
+
+void
+ieee80211_iter_keys(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    void (*iter)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+		 struct ieee80211_sta *sta, struct ieee80211_key_conf *key,
+		 void *data),
+    void *iter_data)
+{
+	unsigned int i;
+
+	/*
+	 * [LNX] net/mac80211/key.c:ieee80211_iter_keys walks the stack's own
+	 * key_list.  This port has no stack-side key_list; the keys it was told
+	 * about are recorded in lkpi80211_keys (see lkpi80211_key_record), and
+	 * the walk hands back exactly those, filtered to the requested vif when
+	 * one is named - the same (hw, vif, sta, key) tuple the interface's
+	 * callback receives.
+	 */
+	if (hw == NULL || iter == NULL)
+		return;
+	for (i = 0; i < CONFIG_LKPI80211_MAX_KEYS; i++) {
+		struct lkpi80211_key_entry *e = &lkpi80211_keys[i];
+
+		if (!e->used || e->conf == NULL || e->hw != hw)
+			continue;
+		if (vif != NULL && e->vif != vif)
+			continue;
+		iter(hw, e->vif, e->sta, e->conf, iter_data);
+	}
+}
+
+void
+ieee80211_iter_keys_rcu(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    void (*iter)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+		 struct ieee80211_sta *sta, struct ieee80211_key_conf *key,
+		 void *data),
+    void *iter_data)
+{
+
+	/* [LNX] net/mac80211/key.c:ieee80211_iter_keys_rcu - the rcu-walk form
+	 * of the same walk.  This port holds no rcu and the key table is not
+	 * published locklessly, so the substance is the same walk. */
+	ieee80211_iter_keys(hw, vif, iter, iter_data);
+}
+
+void
+ieee80211_get_key_rx_seq(struct ieee80211_key_conf *keyconf, int tid,
+    struct ieee80211_key_seq *seq)
+{
+	struct lkpi80211_key_entry *e;
+
+	/*
+	 * [LNX] net/mac80211/key.c:ieee80211_get_key_rx_seq reads the key's own
+	 * per-TID receive sequence.  This port's receive IV checking is
+	 * net80211's (the bridge's), so the per-key sequence is never advanced
+	 * here and the read answers the key's recorded (initial) value; the
+	 * shape - which arm each cipher fills, and the tid range each accepts -
+	 * is the interface's, so a caller sees the same contract either way.
+	 */
+	if (keyconf == NULL || seq == NULL)
+		return;
+	memset(seq, 0, sizeof(*seq));
+	e = lkpi80211_key_find_conf(keyconf);
+	if (e == NULL)
+		return;
+	switch (keyconf->cipher) {
+	case WLAN_CIPHER_SUITE_TKIP:
+		if (tid < 0 || tid >= IEEE80211_NUM_TIDS)
+			return;
+		seq->tkip.iv32 = e->rx.tkip[tid].iv32;
+		seq->tkip.iv16 = e->rx.tkip[tid].iv16;
+		break;
+	case WLAN_CIPHER_SUITE_CCMP:
+	case WLAN_CIPHER_SUITE_CCMP_256:
+		if (tid < -1 || tid >= IEEE80211_NUM_TIDS)
+			return;
+		memcpy(seq->ccmp.pn,
+		    e->rx.pn[tid < 0 ? IEEE80211_NUM_TIDS : tid],
+		    IEEE80211_CCMP_PN_LEN);
+		break;
+	case WLAN_CIPHER_SUITE_GCMP:
+	case WLAN_CIPHER_SUITE_GCMP_256:
+		if (tid < -1 || tid >= IEEE80211_NUM_TIDS)
+			return;
+		memcpy(seq->gcmp.pn,
+		    e->rx.pn[tid < 0 ? IEEE80211_NUM_TIDS : tid],
+		    IEEE80211_GCMP_PN_LEN);
+		break;
+	default:
+		break;
+	}
+}
+
+void
+ieee80211_key_mic_failure(struct ieee80211_key_conf *keyconf)
+{
+	struct lkpi80211_key_entry *e = lkpi80211_key_find_conf(keyconf);
+
+	/*
+	 * [LNX] net/mac80211/key.c:ieee80211_key_mic_failure - the interface
+	 * counts a Michael integrity failure on the key.  The counter lives on
+	 * this port's key record; a read of it is the same read the interface
+	 * would answer.
+	 */
+	if (e != NULL)
+		e->icverrors++;
+}
+
+void
+ieee80211_key_replay(struct ieee80211_key_conf *keyconf)
+{
+	struct lkpi80211_key_entry *e = lkpi80211_key_find_conf(keyconf);
+
+	/* [LNX] net/mac80211/key.c:ieee80211_key_replay - the replay counter on
+	 * the key, kept the same way. */
+	if (e != NULL)
+		e->replays++;
+}
+
+/* ------------------------------------------------------------------ */
+/* the rate-control algorithm registry                                 */
+/* ------------------------------------------------------------------ */
+
+int
+ieee80211_rate_control_register(const struct rate_control_ops *ops)
+{
+	unsigned int i;
+
+	/*
+	 * [LNX] net/mac80211/rate.c:ieee80211_rate_control_register.  The
+	 * interface refuses an unnamed algorithm and a duplicate name and
+	 * remembers the rest; the registry here is fixed-size, so a full one
+	 * answers the same -ENOMEM the interface answers when its allocation
+	 * fails.
+	 */
+	if (ops == NULL || ops->name == NULL)
+		return -EINVAL;
+	for (i = 0; i < CONFIG_LKPI80211_MAX_RC; i++) {
+		if (lkpi80211_rc_ops[i] != NULL &&
+		    strcmp(lkpi80211_rc_ops[i]->name, ops->name) == 0)
+			return -EALREADY;
+	}
+	for (i = 0; i < CONFIG_LKPI80211_MAX_RC; i++) {
+		if (lkpi80211_rc_ops[i] == NULL) {
+			lkpi80211_rc_ops[i] = ops;
+			lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: rate control '%s' registered\n",
+			    ops->name);
+			return 0;
+		}
+	}
+	lkpi_printf(ULOG_WARNING_LEVEL, "lkpi80211: rate-control registry full\n");
+	return -ENOMEM;
+}
+
+void
+ieee80211_rate_control_unregister(const struct rate_control_ops *ops)
+{
+	unsigned int i;
+
+	/* [LNX] net/mac80211/rate.c:ieee80211_rate_control_unregister */
+	for (i = 0; i < CONFIG_LKPI80211_MAX_RC; i++) {
+		if (lkpi80211_rc_ops[i] == ops) {
+			lkpi80211_rc_ops[i] = NULL;
+			return;
+		}
 	}
 }
 
@@ -797,6 +1225,29 @@ lkpi80211_drv_scan_complete(struct ieee80211_hw *hw)
 	ctx->scanning = 0;
 }
 
+void
+ieee80211_scan_completed(struct ieee80211_hw *hw, struct cfg80211_scan_info *info)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	/*
+	 * [LNX] net/mac80211/scan.c:540: the driver's scan finished.  The
+	 * interface sets its SCAN_COMPLETED/SCAN_ABORTED state and queues its
+	 * scan work; the MLME that consumes the completion (net80211, on the
+	 * bridge's side) is told through the bridge's own path, so what this
+	 * port's substitute owns and can update is its own scan state: the
+	 * scanning flag cleared, the aborted outcome recorded, and a count that
+	 * makes the completion visible.  The driver calls this after its
+	 * hardware sweep (mvm/scan.c:445,3260,3459,3506,3558).
+	 */
+	if (hw == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	ctx->scanning = 0;
+	ctx->scan_completions++;
+	(void)info;
+}
+
 int
 lkpi80211_drv_filter(struct ieee80211_hw *hw, u32 changed, u32 total)
 {
@@ -871,6 +1322,16 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	ctx->vifs[i] = vif;
 	vif_hw_bind(vif, hw);
 	/*
+	 * The interface's own wireless_dev, which ieee80211_vif_to_wdev() hands
+	 * back (the interface embeds one per sub-interface).  Only its wiphy and
+	 * iftype are ever read on this line (the firmware debug-trigger match);
+	 * netdev stays NULL, this port having no net_device per interface.
+	 */
+	memset(&ctx->wdevs[i], 0, sizeof(ctx->wdevs[i]));
+	ctx->wdevs[i].wiphy = &ctx->wiphy;
+	ctx->wdevs[i].iftype = (enum nl80211_iftype)type;
+	memcpy(ctx->wdevs[i].address, vif->addr, ETH_ALEN);
+	/*
 	 * The interface's own txq before the driver hears about the interface:
 	 * the driver's add_interface initializes its per-queue state through it
 	 * (rtw89 mac80211.c:201 -> rtw89_core_txq_init(rtwdev, vif->txq), which
@@ -907,6 +1368,7 @@ lkpi80211_drv_vif_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	for (i = 0; i < CONFIG_LKPI80211_MAX_VIFS; i++)
 		if (ctx->vifs[i] == vif) {
 			ctx->vifs[i] = NULL;
+			memset(&ctx->wdevs[i], 0, sizeof(ctx->wdevs[i]));
 			vif_hw_unbind(vif);
 			/* after remove_interface: the driver's teardown still
 			 * reads the queues it initialized in add_interface */
@@ -964,12 +1426,36 @@ lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
     struct ieee80211_vif *vif, struct ieee80211_sta *sta,
     struct ieee80211_key_conf *key)
 {
+	struct ieee80211_key_conf *fwd = key;
+	struct lkpi80211_key_entry *e = NULL;
+	int ret;
 
 	if (hw == NULL || vif == NULL || key == NULL)
 		return -EINVAL;
 	if (LKPI80211_CTX(hw)->ops->set_key == NULL)
 		return -EOPNOTSUPP;
-	return LKPI80211_CTX(hw)->ops->set_key(hw, cmd, vif, sta, key);
+	/*
+	 * A key this port installs is recorded first, and the driver is handed
+	 * the record's own stable copy (see the key table above): the bridge's
+	 * caller frees its key_conf as soon as this returns, so handing that
+	 * pointer on would leave a driver that keeps it - the AC 7260 keeps the
+	 * beacon-protection keys - holding freed memory.  The copy is only taken
+	 * when the driver is about to take the key; a DISABLE_KEY names the key
+	 * by identity and gets the caller's own sparse key_conf.
+	 */
+	if (cmd == SET_KEY) {
+		e = lkpi80211_key_install(hw, vif, sta, key);
+		if (e != NULL)
+			fwd = e->conf;
+	}
+	ret = LKPI80211_CTX(hw)->ops->set_key(hw, cmd, vif, sta, fwd);
+	if (cmd == SET_KEY) {
+		if (ret != 0 && e != NULL)
+			lkpi80211_key_release(e);	/* the driver refused it */
+	} else {
+		lkpi80211_key_drop(hw, vif, sta, key);
+	}
+	return ret;
 }
 
 /*
@@ -1164,11 +1650,37 @@ lkpi80211_drv_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		}
 }
 
+/*
+ * [LNX] net/mac80211/util.c:ieee80211_vif_to_wdev returns `&vif_to_sdata(vif)->wdev`
+ * - the wireless_dev the interface embeds in each sub-interface.  This port has
+ * no sub_if_data; the vif's slot in the hw context carries the embedded wdev
+ * (ctx->wdevs[i], filled at vif add), so the same address the driver would read
+ * maps back here.  A compiled caller reads only iftype (the firmware
+ * debug-trigger match, mvm/time-event.c:274) and wiphy.
+ */
+struct wireless_dev *
+ieee80211_vif_to_wdev(struct ieee80211_vif *vif)
+{
+	struct lkpi80211_hw_ctx *ctx;
+	struct ieee80211_hw *hw;
+	unsigned int i;
+
+	if (vif == NULL)
+		return NULL;
+	hw = vif_hw(vif);
+	if (hw == NULL)
+		return NULL;
+	ctx = LKPI80211_CTX(hw);
+	for (i = 0; i < CONFIG_LKPI80211_MAX_VIFS; i++)
+		if (ctx->vifs[i] == vif)
+			return &ctx->wdevs[i];
+	return NULL;
+}
+
 struct ieee80211_hw *
 wiphy_to_ieee80211_hw(struct wiphy *wiphy)
 {
 	struct lkpi80211_hw_ctx *ctx;
-
 	/*
 	 * [LNX] include/net/mac80211.h: the interface answers this with
 	 * container_of over its own local record, and the same holds here for

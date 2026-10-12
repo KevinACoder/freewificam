@@ -41,6 +41,10 @@
  * complete statement a caller needs. */
 struct ieee80211_scan_ies;
 struct ieee80211_tdls_ch_sw_params;
+/* [LNX] include/net/mac80211.h:5755: the beacon-template offsets record. Named
+ * by pointer only (every compiled caller passes NULL), so the declaration is
+ * the whole statement a caller needs. */
+struct ieee80211_mutable_offsets;
 
 
 struct cfg80211_gtk_rekey_data;
@@ -1052,9 +1056,10 @@ struct ieee80211_tx_control {
 	struct ieee80211_sta	*sta;
 };
 
-/* [LNX] include/net/mac80211.h:4050 (the enumerators the compiled set names, at their computed positions) */
+/* [LNX] include/net/mac80211.h:4050-4053 (both enumerators, at their computed positions) */
 enum ieee80211_reconfig_type {
-	IEEE80211_RECONFIG_TYPE_RESTART = 0
+	IEEE80211_RECONFIG_TYPE_RESTART = 0,
+	IEEE80211_RECONFIG_TYPE_SUSPEND = 1
 };
 
 /* [LNX] include/net/mac80211.h:4034-4035 (the enumerators the compiled set names, at their computed positions) */
@@ -2002,6 +2007,10 @@ struct ieee80211_tdls_ch_sw_params {
 	#define	IEEE80211_LINK_UNSPECIFIED	0xf
 	/* [LNX] net/mac80211.h:2452 */
 	#define	IEEE80211_MAX_PN_LEN	16
+	/* [LNX] include/net/mac80211.h:2454-2455: the TKIP packet-number split
+	 * ieee80211_tkip_add_iv() writes (the interface's own macros). */
+	#define	TKIP_PN_TO_IV16(pn)	((u16)((pn) & 0xffff))
+	#define	TKIP_PN_TO_IV32(pn)	((u32)(((pn) >> 16) & 0xffffffff))
 	/* [LNX] net/mac80211.h:842 */
 	#define	IEEE80211_RECONFIG_TYPE_SUSPEND	1
 	/* [LNX] net/mac80211.h:285 */
@@ -2061,6 +2070,330 @@ struct ieee80211_key_seq {
  * each line names the interface header and line it was transcribed from. */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* rate-control inline helpers (interface: include/net/mac80211.h:1290-1310) */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/net/mac80211.h:1290,1297,1303: the VHT MCS/NSS packer and the
+ * two unpackers the AC 7260 transmit path uses to fill/read a rate entry.
+ * Bodies are the interface's own inlines, one for one. */
+static inline void ieee80211_rate_set_vht(struct ieee80211_tx_rate *rate,
+					  u8 mcs, u8 nss)
+{
+	WARN_ON(mcs & ~0xF);
+	WARN_ON((nss - 1) & ~0x7);
+	rate->idx = ((nss - 1) << 4) | mcs;
+}
+
+static inline u8
+ieee80211_rate_get_vht_mcs(const struct ieee80211_tx_rate *rate)
+{
+	return rate->idx & 0xF;
+}
+
+static inline u8
+ieee80211_rate_get_vht_nss(const struct ieee80211_tx_rate *rate)
+{
+	return (rate->idx >> 4) + 1;
+}
+
+/* [LNX] include/net/mac80211.h:2293: whether a given link is active; a non-MLD
+ * vif (every vif this port carries) is active on link 0 only. */
+static inline bool ieee80211_vif_link_active(const struct ieee80211_vif *vif,
+					     unsigned int link_id)
+{
+	if (!ieee80211_vif_is_mld(vif))
+		return link_id == 0;
+	return vif->active_links & BIT(link_id);
+}
+
+/* ------------------------------------------------------------------ */
+/* band capability accessors (interface: include/net/cfg80211.h:632-720) */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/net/cfg80211.h:632,644,668,706,7500,7528: the sband iftype-data
+ * walk and the HE/EHT capability accessors built on it. The interface keeps
+ * these beside the band record; this face declares them here (mac80211.h is the
+ * header a compiled consumer includes them through). Bodies are the interface's
+ * own inlines, with __force dropped because this face's band pointer is not
+ * address-space annotated.
+ */
+#define	for_each_sband_iftype_data(sband, i, iftd)			\
+	for (i = 0,								\
+	     iftd = (const struct ieee80211_sband_iftype_data *)&(sband)->iftype_data[i]; \
+	     i < (sband)->n_iftype_data;					\
+	     i++, iftd = (const struct ieee80211_sband_iftype_data *)&(sband)->iftype_data[i])
+
+static inline const struct ieee80211_sband_iftype_data *
+ieee80211_get_sband_iftype_data(const struct ieee80211_supported_band *sband,
+				u8 iftype)
+{
+	const struct ieee80211_sband_iftype_data *data;
+	int i;
+
+	if (WARN_ON(iftype >= NUM_NL80211_IFTYPES))
+		return NULL;
+
+	if (iftype == NL80211_IFTYPE_AP_VLAN)
+		iftype = NL80211_IFTYPE_AP;
+
+	for_each_sband_iftype_data(sband, i, data) {
+		if (data->types_mask & BIT(iftype))
+			return data;
+	}
+
+	return NULL;
+}
+
+static inline const struct ieee80211_sta_he_cap *
+ieee80211_get_he_iftype_cap(const struct ieee80211_supported_band *sband,
+			    u8 iftype)
+{
+	const struct ieee80211_sband_iftype_data *data =
+		ieee80211_get_sband_iftype_data(sband, iftype);
+
+	if (data && data->he_cap.has_he)
+		return &data->he_cap;
+
+	return NULL;
+}
+
+static inline const struct ieee80211_sta_eht_cap *
+ieee80211_get_eht_iftype_cap(const struct ieee80211_supported_band *sband,
+			     enum nl80211_iftype iftype)
+{
+	const struct ieee80211_sband_iftype_data *data =
+		ieee80211_get_sband_iftype_data(sband, iftype);
+
+	if (data && data->eht_cap.has_eht)
+		return &data->eht_cap;
+
+	return NULL;
+}
+
+static inline const struct ieee80211_sta_he_cap *
+ieee80211_get_he_iftype_cap_vif(const struct ieee80211_supported_band *sband,
+				struct ieee80211_vif *vif)
+{
+	return ieee80211_get_he_iftype_cap(sband, ieee80211_vif_type_p2p(vif));
+}
+
+static inline const struct ieee80211_sta_eht_cap *
+ieee80211_get_eht_iftype_cap_vif(const struct ieee80211_supported_band *sband,
+				 struct ieee80211_vif *vif)
+{
+	return ieee80211_get_eht_iftype_cap(sband, ieee80211_vif_type_p2p(vif));
+}
+
+/* ------------------------------------------------------------------ */
+/* interface iteration (interface: include/net/mac80211.h:6462-6485) */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/net/mac80211.h:6425: the sleeping form of the interface walk
+ * (the atomic form is ieee80211_iterate_active_interfaces_atomic). Body in
+ * linuxkpi_80211.c beside the atomic one. */
+void ieee80211_iterate_interfaces(struct ieee80211_hw *hw, u32 iter_flags,
+				  void (*iterator)(void *data, u8 *mac,
+						   struct ieee80211_vif *vif),
+				  void *data);
+
+/* [LNX] include/net/mac80211.h:6477: the ACTIVE-flagged wrapper. This port's
+ * interfaces are all active once added, so the flag only forwards; the body is
+ * the interface's own inline. */
+static inline void
+ieee80211_iterate_active_interfaces(struct ieee80211_hw *hw, u32 iter_flags,
+				    void (*iterator)(void *data, u8 *mac,
+						     struct ieee80211_vif *vif),
+				    void *data)
+{
+	ieee80211_iterate_interfaces(hw,
+				     iter_flags | IEEE80211_IFACE_ITER_ACTIVE,
+				     iterator, data);
+}
+
+/* ------------------------------------------------------------------ */
+/* IE-buffer split (interface: include/net/cfg80211.h:10194-10253) */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/net/cfg80211.h:10220,10250: the IE-buffer split. This face
+ * carries the wrapper form (no RIC list), which is the only one a compiled
+ * caller uses (mvm/scan.c:718); the two static helpers below are
+ * ieee80211_ie_split_ric's own id_in_list()/skip_ie(), and the loop is that
+ * function's with the RIC arm removed.
+ */
+static inline bool
+lkpi80211_ie_in_list(const u8 *ids, int n_ids, u8 id, bool id_ext)
+{
+	int i = 0;
+
+	while (i < n_ids) {
+		if (ids[i] == WLAN_EID_EXTENSION) {
+			if (id_ext && (ids[i + 1] == id))
+				return true;
+			i += 2;
+			continue;
+		}
+		if (ids[i] == id && !id_ext)
+			return true;
+		i++;
+	}
+	return false;
+}
+
+static inline size_t
+lkpi80211_ie_skip(const u8 *ies, size_t ielen, size_t pos)
+{
+	u8 len = ies[pos + 1];
+
+	pos += 2 + len;
+	/* the IE itself must have 255 bytes for fragments to follow */
+	if (len < 255)
+		return pos;
+	while (pos < ielen && ies[pos] == WLAN_EID_FRAGMENT) {
+		len = ies[pos + 1];
+		pos += 2 + len;
+	}
+	return pos;
+}
+
+static inline size_t ieee80211_ie_split(const u8 *ies, size_t ielen,
+					const u8 *ids, int n_ids, size_t offset)
+{
+	size_t pos = offset;
+
+	while (pos < ielen) {
+		u8 ext = 0;
+
+		if (ies[pos] == WLAN_EID_EXTENSION)
+			ext = 2;
+		if ((pos + ext) >= ielen)
+			break;
+
+		if (!lkpi80211_ie_in_list(ids, n_ids, ies[pos + ext],
+					  ies[pos] == WLAN_EID_EXTENSION))
+			break;
+
+		pos = lkpi80211_ie_skip(ies, ielen, pos);
+	}
+
+	return pos;
+}
+
+/* ------------------------------------------------------------------ */
+/* the remaining entry points the compiled set names                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/net/mac80211.h: the transmit-completion entry points. The
+ * interface's ieee80211_tx_status_ext()/ieee80211_tx_status_skb() are the
+ * synchronous forms of ieee80211_tx_status_irqsafe() (which this face already
+ * carries); this port has no deferred work for them to differ by, so all three
+ * funnel into the same completion body (linuxkpi_80211.c).
+ */
+void ieee80211_tx_status_ext(struct ieee80211_hw *hw,
+			     struct ieee80211_tx_status *status);
+void ieee80211_tx_status_skb(struct ieee80211_hw *hw, struct sk_buff *skb);
+
+/* [LNX] include/net/mac80211.h:6920,6944: the key-table walk (the rcu form has
+ * no rcu here; both walk the keys this face recorded at set_key). */
+void ieee80211_iter_keys(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+			 void (*iter)(struct ieee80211_hw *hw,
+				      struct ieee80211_vif *vif,
+				      struct ieee80211_sta *sta,
+				      struct ieee80211_key_conf *key,
+				      void *data),
+			 void *iter_data);
+
+/* [LNX] include/net/mac80211.h:6251: the per-TID receive sequence of a key. */
+void ieee80211_get_key_rx_seq(struct ieee80211_key_conf *keyconf,
+			      int tid, struct ieee80211_key_seq *seq);
+
+/* [LNX] include/net/mac80211.h:6328,6338: the two receive-side key notices. */
+void ieee80211_key_mic_failure(struct ieee80211_key_conf *keyconf);
+void ieee80211_key_replay(struct ieee80211_key_conf *keyconf);
+
+/* [LNX] include/net/mac80211.h:7433,7434: the rate-control algorithm registry. */
+int ieee80211_rate_control_register(const struct rate_control_ops *ops);
+void ieee80211_rate_control_unregister(const struct rate_control_ops *ops);
+
+/* [LNX] include/net/mac80211.h:7057: the driver-requested disconnect. */
+void ieee80211_disconnect(struct ieee80211_vif *vif, bool reconnect);
+
+/* [LNX] include/net/mac80211.h:7090: the post-hardware-restart disconnect. */
+void ieee80211_hw_restart_disconnect(struct ieee80211_vif *vif);
+
+/* [LNX] include/net/mac80211.h:7116: the CQM beacon-loss notice. */
+void ieee80211_cqm_beacon_loss_notify(struct ieee80211_vif *vif, gfp_t gfp);
+
+/* [LNX] include/net/mac80211.h:7138: the channel-switch completion. */
+void ieee80211_chswitch_done(struct ieee80211_vif *vif, bool success,
+			     unsigned int link_id);
+
+/* [LNX] include/net/mac80211.h:7149: the channel-switch failure disconnect. */
+void ieee80211_channel_switch_disconnect(struct ieee80211_vif *vif);
+
+/* [LNX] include/net/mac80211.h:5785,5918,5932: the beacon template and the two
+ * countdown setters (AP/beaconing, a declared non-goal of this line). */
+struct sk_buff *
+ieee80211_beacon_get_template(struct ieee80211_hw *hw,
+			      struct ieee80211_vif *vif,
+			      struct ieee80211_mutable_offsets *offs,
+			      unsigned int link_id);
+u8 ieee80211_beacon_update_cntdwn(struct ieee80211_vif *vif,
+				  unsigned int link_id);
+void ieee80211_beacon_set_cntdwn(struct ieee80211_vif *vif, u8 counter);
+
+/* [LNX] include/net/mac80211.h:7704: the TDLS operation request (TDLS is not
+ * carried by this line). */
+void ieee80211_tdls_oper_request(struct ieee80211_vif *vif, const u8 *peer,
+				 enum nl80211_tdls_operation oper,
+				 u16 reason_code, gfp_t gfp);
+
+/* [LNX] include/net/mac80211.h:6408,6420: the scheduled-scan result/stop
+ * notices (scheduled scan is not carried by this line). */
+void ieee80211_sched_scan_results(struct ieee80211_hw *hw);
+void ieee80211_sched_scan_stopped(struct ieee80211_hw *hw);
+
+/* [LNX] include/net/mac80211.h:6836: the EOSP null-function (U-APSD power save,
+ * not carried by this line). */
+void ieee80211_send_eosp_nullfunc(struct ieee80211_sta *pubsta, int tid);
+
+/* [LNX] include/net/mac80211.h: the MU-group update (MU-MIMO grouping, not
+ * carried by this line). */
+void ieee80211_update_mu_groups(struct ieee80211_vif *vif, unsigned int link_id,
+				const u8 *membership, const u8 *position);
+
+/* [LNX] include/net/mac80211.h:5517,5533: the station power-save notices. */
+void ieee80211_sta_block_awake(struct ieee80211_hw *hw,
+			       struct ieee80211_sta *pubsta, bool block);
+void ieee80211_sta_eosp(struct ieee80211_sta *pubsta);
+void ieee80211_sta_set_buffered(struct ieee80211_sta *pubsta, u8 tid,
+				bool buffered);
+
+/* [LNX] include/net/mac80211.h: the aggregation callbacks (aggregation is
+ * refused by this line, so its session never starts). */
+void ieee80211_start_tx_ba_cb_irqsafe(struct ieee80211_vif *vif,
+				      const u8 *ra, u16 tid);
+void ieee80211_rx_ba_timer_expired(struct ieee80211_vif *vif,
+				   const u8 *addr, unsigned int tid);
+void ieee80211_mark_rx_ba_filtered_frames(struct ieee80211_sta *pubsta, u8 tid,
+					  u16 ssn, u64 filtered,
+					  u16 received_mpdus);
+
+/* [LNX] include/net/mac80211.h:7727,7738: the TID reservation (a TDLS/PS
+ * mechanism this line does not carry). */
+int ieee80211_reserve_tid(struct ieee80211_sta *pubsta, u8 tid);
+void ieee80211_unreserve_tid(struct ieee80211_sta *pubsta, u8 tid);
+
+/* [LNX] include/net/mac80211.h:6217,6236,6203: the TKIP helpers (TKIP is not
+ * the security mode of this line's target association). */
+void ieee80211_get_tkip_p2k(struct ieee80211_key_conf *keyconf,
+			    struct sk_buff *skb, u8 *p2k);
+void ieee80211_get_tkip_rx_p1k(struct ieee80211_key_conf *keyconf,
+			       const u8 *ta, u32 iv32, u16 *p1k);
+u8 *ieee80211_tkip_add_iv(u8 *pos, struct ieee80211_key_conf *keyconf, u64 pn);
 
 #endif /* _LINUXKPI_NET_MAC80211_H_ */
 

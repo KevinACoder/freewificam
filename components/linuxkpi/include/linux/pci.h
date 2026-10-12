@@ -22,6 +22,15 @@
 #include "../../linuxkpi_core.h"
 #include <linux/device/driver.h>
 #include <linux/device-id/pci.h>
+/* [LNX] include/linux/pci.h:1754 includes <linux/dmapool.h>: that is how a PCI
+ * driver's transmit path reaches the coherent pool a command table is carved from
+ * (the interface names the include mid-file; this face keeps its includes
+ * together at the top). */
+#include <linux/dmapool.h>
+/* [LNX] include/linux/pci.h:40 includes <linux/io.h>: that is how a PCI driver's
+ * register access (readl/writel on a mapped BAR) compiles without naming an
+ * architecture header itself. */
+#include <linux/io.h>
 
 /* [LNX] include/linux/pci.h:38: the "match anything" id. */
 #define	PCI_ANY_ID		(~0U)
@@ -32,6 +41,14 @@
 
 /* [LNX] include/linux/pci.h:63-64: the standard BAR count. */
 #define	PCI_STD_NUM_BARS	6
+
+/* [LNX] include/uapi/linux/pci.h:31-33: the slot/function encoding. The interface
+ * documents it in include/linux/pci.h:60-70 and defines the three macros in the
+ * uapi header (include/linux/pci.h:69 says so); the shapes are the interface's.
+ *   devfn = (slot << 3) | function, 5 bits of slot, 3 of function. */
+#define	PCI_DEVFN(slot, func)	((((slot) & 0x1f) << 3) | ((func) & 0x07))
+#define	PCI_SLOT(devfn)		(((devfn) >> 3) & 0x1f)
+#define	PCI_FUNC(devfn)		((devfn) & 0x07)
 
 /* [LNX] include/linux/pci.h:197-201: the config-space capability ids this face
  * names (a driver walks the list with pci_find_capability). */
@@ -215,6 +232,11 @@ void	pci_disable_msi(struct pci_dev *dev);
 const char	*pci_name(const struct pci_dev *dev);
 void	pci_dev_put(struct pci_dev *dev);
 
+/* [LNX] include/linux/pci.h:614: the device-model node a probe receives is the
+ * pci_dev's embedded `dev`, so a callback that is handed the device gets the
+ * function record back through the interface's own container_of. */
+#define	to_pci_dev(n)	container_of(n, struct pci_dev, dev)
+
 /* [LNX] include/linux/pci.h:2161-2168: the driver-data accessors. */
 static inline void pci_set_drvdata(struct pci_dev *pdev, void *data)
 {
@@ -277,6 +299,74 @@ const struct pci_device_id *pci_match_id(const struct pci_device_id *ids,
 bool pci_pme_capable(struct pci_dev *dev, pci_power_t state);
 /* [LNX] include/linux/pci.h:1485 */
 int pci_reset_function(struct pci_dev *dev);
+
+/* [LNX] include/linux/pci.h:1356: read one word out of the PCIe capability
+ * structure (the interface's accessor, whose `pos` is an offset inside that
+ * capability, e.g. PCI_EXP_LNKCTL). */
+int pcie_capability_read_word(struct pci_dev *dev, int pos, u16 *val);
+
+/* [LNX] include/linux/pci.h:1430: the device-managed enable. */
+int __must_check pcim_enable_device(struct pci_dev *pdev);
+/* [LNX] include/linux/pci.h:2543-2544: the device-managed resource requests. */
+int pcim_request_all_regions(struct pci_dev *pdev, const char *name);
+void __iomem *pcim_iomap(struct pci_dev *pdev, int bar, unsigned long maxlen);
+
+/* ------------------------------------------------------------------ */
+/* The PCIe topology helpers the compiled set names. The interface    */
+/* reaches the root port by walking the bridge chain and testing each  */
+/* device's port type; the shapes are transcribed, stated over this    */
+/* port's device record (see the notes on the two helpers that cannot  */
+/* be answered exactly here).                                          */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/uapi/linux/pci_regs.h:488: the device/port type a root port
+ * reports in the PCIe capability's flags register. */
+#define	PCI_EXP_TYPE_ROOT_PORT	0x4	/* Root Port */
+
+/* [LNX] include/linux/pci.h:2698-2701: the interface's pci_pcie_cap() returns the
+ * capability offset; this face records the same fact as the one-bit pcie_cap
+ * ("the device carries a PCIe capability", see struct pci_dev), which is what the
+ * test needs. */
+static inline bool pci_is_pcie(struct pci_dev *dev)
+{
+	return dev->pcie_cap;
+}
+
+/* [LNX] include/linux/pci.h:826-833: the bridge the device hangs off, or NULL on
+ * the root bus. pci_physfn() is the identity here (the interface's CONFIG_PCI_IOV
+ * branch is off), so the walk is the interface's own. */
+static inline struct pci_dev *pci_upstream_bridge(struct pci_dev *dev)
+{
+	if (dev->bus == NULL || dev->bus->parent == NULL)
+		return NULL;
+	return dev->bus->self;
+}
+
+/* [LNX] include/linux/pci.h:2716-2719: the interface reads the device/port type
+ * out of the PCIe capability-flags register (dev->pcie_flags_reg). This face
+ * carries no such register - the one fact it records about a function's PCIe
+ * support is the pcie_cap bit - so the port type is the endpoint type (0), which
+ * is what the only device this port enumerates is. The value is consumed by the
+ * root-port walk below, which therefore cannot stop on a downstream port. */
+static inline int pci_pcie_type(const struct pci_dev *dev)
+{
+	(void)dev;
+	return 0;
+}
+
+/* [LNX] include/linux/pci.h:2728-2737: walk up to the PCIe root port. This port
+ * enumerates one host bridge and no downstream bridge, so bus->self and
+ * bus->parent are never set, pci_upstream_bridge() answers NULL on the first step,
+ * and the answer is NULL - the interface's walk, stated over this port's records. */
+static inline struct pci_dev *pcie_find_root_port(struct pci_dev *dev)
+{
+	while (dev) {
+		if (pci_is_pcie(dev) && pci_pcie_type(dev) == PCI_EXP_TYPE_ROOT_PORT)
+			return dev;
+		dev = pci_upstream_bridge(dev);
+	}
+	return NULL;
+}
 
 /* [LNX] include/linux/pci.h:2929,2933: the per-device log lines, over the device
  * model's own log macros. */

@@ -646,14 +646,6 @@ ieee80211_cqm_rssi_notify(struct ieee80211_vif *vif,
 }
 
 void
-ieee80211_scan_completed(struct ieee80211_hw *hw, struct cfg80211_scan_info *info)
-{
-
-	(void)hw;
-	(void)info;
-}
-
-void
 ieee80211_restart_hw(struct ieee80211_hw *hw)
 {
 
@@ -662,24 +654,6 @@ ieee80211_restart_hw(struct ieee80211_hw *hw)
 	 * and does nothing, which is the honest answer for a stack that would
 	 * have to re-run probe to mean it. */
 	(void)hw;
-}
-
-void
-ieee80211_iter_keys_rcu(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-    void (*iter)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-		 struct ieee80211_sta *sta, struct ieee80211_key_conf *key,
-		 void *data),
-    void *iter_data)
-{
-
-	/* [LNX] net/mac80211/key.c: walk the keys the stack installed.  In this
-	 * port the key set lives with the supplicant on the bridge's side and
-	 * the driver is told about each key as it is installed, so there is no
-	 * stack-side key list to walk. */
-	(void)hw;
-	(void)vif;
-	(void)iter;
-	(void)iter_data;
 }
 
 void
@@ -806,4 +780,474 @@ ieee80211_request_smps(struct ieee80211_vif *vif, unsigned int link_id,
 	 * SMPS negotiation to reflect, so there is no state to hand the driver
 	 * and the request is accepted and dropped - the same shape the other
 	 * stack-to-driver notices take here. */
+}
+
+/* ------------------------------------------------------------------ */
+/* the wider closure: the AC 7260 station path's own entry points      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] net/wireless/util.c:2883:ieee80211_get_vht_max_nss.  The interface's
+ * own arithmetic: find the highest NSS the peer's RX MCS map supports at the
+ * requested encoding, then apply the extended-NSS-bandwidth factor the VHT
+ * capability and the operating width call for (802.11-2016 Table 9-250).  The
+ * rate path asks for this per association (mvm/rs.c:1390, mvm/rs-fw.c:170), so
+ * the body is the interface's, not a refusal.
+ */
+int
+ieee80211_get_vht_max_nss(struct ieee80211_vht_cap *cap,
+    enum ieee80211_vht_chanwidth bw, int mcs, bool ext_nss_bw_capable,
+    unsigned int max_vht_nss)
+{
+	u16 map = le16_to_cpu(cap->supp_mcs.rx_mcs_map);
+	int ext_nss_bw;
+	int supp_width;
+	int i, mcs_encoding;
+
+	if (map == 0xffff)
+		return 0;
+
+	if (WARN_ON(mcs > 9 || max_vht_nss > 8))
+		return 0;
+	if (mcs <= 7)
+		mcs_encoding = 0;
+	else if (mcs == 8)
+		mcs_encoding = 1;
+	else
+		mcs_encoding = 2;
+
+	if (!max_vht_nss) {
+		/* find max_vht_nss for the given MCS */
+		for (i = 7; i >= 0; i--) {
+			int supp = (map >> (2 * i)) & 3;
+
+			if (supp == 3)
+				continue;
+
+			if (supp >= mcs_encoding) {
+				max_vht_nss = i + 1;
+				break;
+			}
+		}
+	}
+
+	if (!(cap->supp_mcs.tx_mcs_map &
+			cpu_to_le16(IEEE80211_VHT_EXT_NSS_BW_CAPABLE)))
+		return max_vht_nss;
+
+	ext_nss_bw = le32_get_bits(cap->vht_cap_info,
+				   IEEE80211_VHT_CAP_EXT_NSS_BW_MASK);
+	supp_width = le32_get_bits(cap->vht_cap_info,
+				   IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK);
+
+	/* if not capable, treat ext_nss_bw as 0 */
+	if (!ext_nss_bw_capable)
+		ext_nss_bw = 0;
+
+	/* This is invalid */
+	if (supp_width == 3)
+		return 0;
+
+	/* This is an invalid combination so pretend nothing is supported */
+	if (supp_width == 2 && (ext_nss_bw == 1 || ext_nss_bw == 2))
+		return 0;
+
+	/*
+	 * Cover all the special cases according to IEEE 802.11-2016
+	 * Table 9-250. All other cases are either factor of 1 or not
+	 * valid/supported.
+	 */
+	switch (bw) {
+	case IEEE80211_VHT_CHANWIDTH_USE_HT:
+	case IEEE80211_VHT_CHANWIDTH_80MHZ:
+		if ((supp_width == 1 || supp_width == 2) &&
+		    ext_nss_bw == 3)
+			return 2 * max_vht_nss;
+		break;
+	case IEEE80211_VHT_CHANWIDTH_160MHZ:
+		if (supp_width == 0 &&
+		    (ext_nss_bw == 1 || ext_nss_bw == 2))
+			return max_vht_nss / 2;
+		if (supp_width == 0 &&
+		    ext_nss_bw == 3)
+			return (3 * max_vht_nss) / 4;
+		if (supp_width == 1 &&
+		    ext_nss_bw == 3)
+			return 2 * max_vht_nss;
+		break;
+	case IEEE80211_VHT_CHANWIDTH_80P80MHZ:
+		if (supp_width == 0 && ext_nss_bw == 1)
+			return 0; /* not possible */
+		if (supp_width == 0 &&
+		    ext_nss_bw == 2)
+			return max_vht_nss / 2;
+		if (supp_width == 0 &&
+		    ext_nss_bw == 3)
+			return (3 * max_vht_nss) / 4;
+		if (supp_width == 1 &&
+		    ext_nss_bw == 0)
+			return 0; /* not possible */
+		if (supp_width == 1 &&
+		    ext_nss_bw == 1)
+			return max_vht_nss / 2;
+		if (supp_width == 1 &&
+		    ext_nss_bw == 2)
+			return (3 * max_vht_nss) / 4;
+		break;
+	}
+
+	/* not covered or invalid combination received */
+	return max_vht_nss;
+}
+
+/*
+ * The driver-issued MLME notices: a disconnect request, the post-hardware-restart
+ * disconnect, the CQM beacon-loss report, and the two channel-switch completions.
+ * In the interface each of these feeds the MLME (net/mac80211/mlme.c / cfg.c /
+ * vht.c) or the cfg80211 userspace report.  In this port the MLME is net80211,
+ * on the other side of the bridge seam, and the seam carries only the four
+ * upward calls in linuxkpi_80211.h (attach/detach, a received frame, a transmit
+ * completion) - none of them a driver-to-MLME notice.  The notice therefore has
+ * no destination here and is dropped rather than re-entered into a state machine
+ * that is not the one running the connection; carrying it would need a new seam
+ * call, which is a change to linuxkpi_80211.h, not to this face.
+ */
+void
+ieee80211_disconnect(struct ieee80211_vif *vif, bool reconnect)
+{
+
+	/* [LNX] net/mac80211/mlme.c:ieee80211_disconnect queues the managed-mode
+	 * disconnect work; the acting MLME here is net80211 behind the seam. */
+	(void)vif;
+	(void)reconnect;
+}
+
+void
+ieee80211_hw_restart_disconnect(struct ieee80211_vif *vif)
+{
+
+	/* [LNX] net/mac80211/util.c:2423:ieee80211_hw_restart_disconnect */
+	(void)vif;
+}
+
+void
+ieee80211_cqm_beacon_loss_notify(struct ieee80211_vif *vif, gfp_t gfp)
+{
+
+	/* [LNX] net/mac80211/mlme.c:ieee80211_cqm_beacon_loss_notify reports to
+	 * cfg80211 (userspace); this port carries no cfg80211 userspace and the
+	 * connection-quality state is net80211's. */
+	(void)vif;
+	(void)gfp;
+}
+
+void
+ieee80211_chswitch_done(struct ieee80211_vif *vif, bool success,
+    unsigned int link_id)
+{
+
+	/* [LNX] net/mac80211/mlme.c:ieee80211_chswitch_done completes the
+	 * channel switch in the MLME. */
+	(void)vif;
+	(void)success;
+	(void)link_id;
+}
+
+void
+ieee80211_channel_switch_disconnect(struct ieee80211_vif *vif)
+{
+
+	/* [LNX] net/mac80211/cfg.c:4417:ieee80211_channel_switch_disconnect */
+	(void)vif;
+}
+
+/* ------------------------------------------------------------------ */
+/* the calls that belong to features this line does not execute        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * What follows are the remaining names the AC 7260 driver references whose
+ * feature this line never runs.  Each body says which feature and why it is
+ * absent, so a later round can tell a "not reached here" from a "not done".
+ * The distinction is the point: a silent no-op where the interface would work
+ * is a bug, so every one of these names its reason.
+ */
+
+/*
+ * AP/beaconing: this line is a station.  The beacon template and its countdown
+ * setters are the AP side's (mvm/mac-ctxt.c and mvm/debugfs.c reach them only
+ * under an AP interface, which this line never creates).
+ */
+struct sk_buff *
+ieee80211_beacon_get_template(struct ieee80211_hw *hw,
+    struct ieee80211_vif *vif, struct ieee80211_mutable_offsets *offs,
+    unsigned int link_id)
+{
+
+	(void)hw;
+	(void)vif;
+	(void)offs;
+	(void)link_id;
+	/* [LNX] net/mac80211/tx.c: the beacon-template builder; the same answer
+	 * ieee80211_beacon_get gives - AP mode is a declared non-goal. */
+	return NULL;
+}
+
+u8
+ieee80211_beacon_update_cntdwn(struct ieee80211_vif *vif, unsigned int link_id)
+{
+
+	/* [LNX] net/mac80211/tx.c: the beacon countdown the device would ask to
+	 * advance.  No beacon is ever built here, so the countdown stays at its
+	 * initial value. */
+	(void)vif;
+	(void)link_id;
+	return 0;
+}
+
+void
+ieee80211_beacon_set_cntdwn(struct ieee80211_vif *vif, u8 counter)
+{
+
+	/* [LNX] net/mac80211/tx.c: the beacon countdown the device sets */
+	(void)vif;
+	(void)counter;
+}
+
+/*
+ * TDLS: the AC 7260 driver references the TDLS operation request and the TID
+ * reservation (mvm/tdls.c, mvm/mac80211.c), both of which this line's station
+ * never starts (there is no TDLS peer and no off-channel session).
+ */
+void
+ieee80211_tdls_oper_request(struct ieee80211_vif *vif, const u8 *peer,
+    enum nl80211_tdls_operation oper, u16 reason_code, gfp_t gfp)
+{
+
+	/* [LNX] net/mac80211/tdls.c: request a TDLS operation from userspace */
+	(void)vif;
+	(void)peer;
+	(void)oper;
+	(void)reason_code;
+	(void)gfp;
+}
+
+int
+ieee80211_reserve_tid(struct ieee80211_sta *pubsta, u8 tid)
+{
+
+	/* [LNX] net/mac80211/tx.c: reserve a TID for a TDLS session.  No TDLS
+	 * session exists here, so the reservation is refused the way the
+	 * interface refuses it for an unsupported case. */
+	(void)pubsta;
+	(void)tid;
+	return -EOPNOTSUPP;
+}
+
+void
+ieee80211_unreserve_tid(struct ieee80211_sta *pubsta, u8 tid)
+{
+
+	/* [LNX] net/mac80211/tx.c: the matching release; nothing was reserved */
+	(void)pubsta;
+	(void)tid;
+}
+
+/*
+ * Scheduled scan: the driver references both notices (mvm/scan.c), but this
+ * line scans only through the ordinary hw_scan sweep; no scheduled scan is ever
+ * started, so neither notice has a scan to report on.
+ */
+void
+ieee80211_sched_scan_results(struct ieee80211_hw *hw)
+{
+
+	/* [LNX] net/mac80211/scan.c:1431: report scheduled-scan results */
+	(void)hw;
+}
+
+void
+ieee80211_sched_scan_stopped(struct ieee80211_hw *hw)
+{
+
+	/* [LNX] net/mac80211/scan.c:1466: report a scheduled scan stopped */
+	(void)hw;
+}
+
+/*
+ * U-APSD power save: the EOSP null-function and the three station power-save
+ * notices belong to the interface's PS state machine, which this port does not
+ * carry (its own PS entry points already refuse - see linuxkpi_80211.c).
+ */
+void
+ieee80211_send_eosp_nullfunc(struct ieee80211_sta *pubsta, int tid)
+{
+
+	/* [LNX] net/mac80211/sta_info.c:2380: the EOSP null-function */
+	(void)pubsta;
+	(void)tid;
+}
+
+void
+ieee80211_sta_block_awake(struct ieee80211_hw *hw, struct ieee80211_sta *pubsta,
+    bool block)
+{
+
+	/* [LNX] net/mac80211/sta_info.c: the driver's awake/sleep block */
+	(void)hw;
+	(void)pubsta;
+	(void)block;
+}
+
+void
+ieee80211_sta_eosp(struct ieee80211_sta *pubsta)
+{
+
+	/* [LNX] net/mac80211/sta_info.c: clear the station's service-period flag */
+	(void)pubsta;
+}
+
+void
+ieee80211_sta_set_buffered(struct ieee80211_sta *pubsta, u8 tid, bool buffered)
+{
+
+	/* [LNX] net/mac80211/sta_info.c: record that the driver buffers a TID
+	 * for the station.  This port has no PS buffering (no PS state machine),
+	 * so there is no TIM to recompute. */
+	(void)pubsta;
+	(void)tid;
+	(void)buffered;
+}
+
+/*
+ * Aggregation: the block-ack callbacks belong to a BA session.  This port
+ * refuses to start one (ieee80211_start_tx_ba_session answers -EOPNOTSUPP in
+ * linuxkpi_80211.c), so no session reaches the driver's ampdu_action and none
+ * of these callbacks is ever reached.
+ */
+void
+ieee80211_start_tx_ba_cb_irqsafe(struct ieee80211_vif *vif, const u8 *ra,
+    u16 tid)
+{
+
+	/* [LNX] net/mac80211/agg-tx.c: the ADDBA-response callback */
+	(void)vif;
+	(void)ra;
+	(void)tid;
+}
+
+void
+ieee80211_rx_ba_timer_expired(struct ieee80211_vif *vif, const u8 *addr,
+    unsigned int tid)
+{
+
+	/* [LNX] net/mac80211/agg-rx.c: the RX BA session-timer expiry */
+	(void)vif;
+	(void)addr;
+	(void)tid;
+}
+
+void
+ieee80211_mark_rx_ba_filtered_frames(struct ieee80211_sta *pubsta, u8 tid,
+    u16 ssn, u64 filtered, u16 received_mpdus)
+{
+
+	/* [LNX] net/mac80211/rx.c: mark frames the device filtered in an RX
+	 * reorder buffer.  No RX BA session exists here. */
+	(void)pubsta;
+	(void)tid;
+	(void)ssn;
+	(void)filtered;
+	(void)received_mpdus;
+}
+
+/*
+ * MU-MIMO grouping: ieee80211_update_mu_groups writes the group-membership and
+ * user-position fields the interface keeps on a link whose mu_mimo_owner is
+ * set.  This line is a non-AP station and never owns the MU group (mvm only
+ * calls this from its AP path).
+ */
+void
+ieee80211_update_mu_groups(struct ieee80211_vif *vif, unsigned int link_id,
+    const u8 *membership, const u8 *position)
+{
+
+	/* [LNX] net/mac80211/vht.c: the MU group-membership/position update */
+	(void)vif;
+	(void)link_id;
+	(void)membership;
+	(void)position;
+}
+
+/*
+ * TKIP: this line's target association is WPA2/CCMP (spec
+ * iwlwifi-ac7260-port FR-10), so the driver's TKIP arm (mvm/tx.c:480-481) is
+ * never taken.  The IV writer is carried whole (it needs only the key), but the
+ * phase-2 key is not computed: with no TKIP key ever installed, the only
+ * caller that would reach it never runs, and a body that returned a key anyway
+ * would be a fabricated one.
+ */
+u8 *
+ieee80211_tkip_add_iv(u8 *pos, struct ieee80211_key_conf *keyconf, u64 pn)
+{
+	u16 iv16 = TKIP_PN_TO_IV16(pn);
+
+	/* [LNX] net/mac80211/tkip.c:143: write the TKIP IV, the Extended IV and
+	 * the key id (write_tkip_iv's three octets, then the Ext-IV octet and
+	 * the IV32). */
+	*pos++ = iv16 >> 8;
+	*pos++ = ((iv16 >> 8) | 0x20) & 0x7f;
+	*pos++ = iv16 & 0xFF;
+	*pos++ = (keyconf->keyidx << 6) | (1 << 5) /* Ext IV */;
+	put_unaligned_le32(TKIP_PN_TO_IV32(pn), pos);
+	return pos + 4;
+}
+
+void
+ieee80211_get_tkip_p2k(struct ieee80211_key_conf *keyconf, struct sk_buff *skb,
+    u8 *p2k)
+{
+
+	/* [LNX] net/mac80211/tkip.c:196: compute the TKIP phase-2 RC4 key.  Not
+	 * computed here (see the TKIP note above); a zero key is written so the
+	 * caller's buffer is defined rather than left uninitialised. */
+	(void)keyconf;
+	(void)skb;
+	memset(p2k, 0, 16);
+}
+
+void
+ieee80211_get_tkip_rx_p1k(struct ieee80211_key_conf *keyconf, const u8 *ta,
+    u32 iv32, u16 *p1k)
+{
+
+	/* [LNX] net/mac80211/tkip.c:185: compute the TKIP receive phase-1 key.
+	 * Not computed here (see the TKIP note above); a zero key is written so
+	 * the caller's buffer is defined. */
+	(void)keyconf;
+	(void)ta;
+	(void)iv32;
+	memset(p1k, 0, 5 * sizeof(u16));
+}
+
+/* ------------------------------------------------------------------ */
+/* the radio-kill notice                                               */
+/* ------------------------------------------------------------------ */
+
+void
+wiphy_rfkill_set_hw_state_reason(struct wiphy *wiphy, bool blocked,
+    enum rfkill_hard_block_reasons reason)
+{
+
+	/*
+	 * [LNX] net/wireless/rfkill.c: report the hardware RF-kill switch and
+	 * its reason to the rfkill subsystem.  This port carries no rfkill
+	 * subsystem (the stack on the other side of the bridge is net80211, and
+	 * nothing there listens for it), so the notice has no destination and is
+	 * dropped rather than invented - the same shape wiphy_rfkill_set_hw_state
+	 * takes in linuxkpi_80211.c.
+	 */
+	(void)wiphy;
+	(void)blocked;
+	(void)reason;
 }

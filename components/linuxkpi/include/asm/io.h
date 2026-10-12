@@ -11,13 +11,13 @@
  *         (include/asm-generic/io.h:115-176). On a machine with no MMU window to remap,
  *         the raw accessor is the volatile access itself, which is what both the
  *         interface's arch file and its generic fallback say; the ordered/little-endian
- *         forms (readb()/readl(), include/asm-generic/io.h:188-249) are that access
- *         followed by a byte swap, and the port is little-endian, so they arrive with
- *         the first caller that needs them rather than being stated twice now. The
- *         vendored driver reaches this header through osdep_service.h but its Linux
- *         platform layer names no MMIO accessor on the USB path, which is why the set
- *         here is the raw one. Reference for the face shape:
- *         components/linuxkpi/include/linux/usb.h:1-20.
+ *         forms (readl()/writel()/writeb(), include/asm-generic/io.h:188-281) are that
+ *         access with the endian conversion the interface spells around it, which on
+ *         this little-endian port is the identity. The vendored driver reaches this
+ *         header through osdep_service.h but its Linux platform layer names no MMIO
+ *         accessor on the USB path, which is why the set here is the raw one; the PCIe
+ *         port's trans.c is the caller that names the ordered three. Reference for the
+ *         face shape: components/linuxkpi/include/linux/usb.h:1-20.
  * @date    09.10.2026
  */
 
@@ -74,6 +74,36 @@ static __always_inline __unused u64
 __raw_readq(const volatile void __iomem *addr)
 {
 	return *(const volatile u64 __iomem *)addr;
+}
+
+/*
+ * [LNX] include/asm-generic/io.h:188-281: the ordered, little-endian forms. The
+ * interface reads/writes little-endian memory and returns/takes the value in CPU
+ * byte order: readl() is `__le32_to_cpu((__le32 __force)__raw_readl(addr))`,
+ * writel() is `__raw_writel((u32 __force)__cpu_to_le32(value), addr)`, and writeb()
+ * is the raw store (a byte needs no conversion). The interface wraps each in an
+ * I/O barrier (__io_br/__io_ar/__io_bw/__io_aw) that orders it against other MMIO
+ * on a weakly-ordered machine; the conversion, not the barrier, is the part that
+ * changes the value, and on this little-endian port __le32_to_cpu()/__cpu_to_le32()
+ * are the identity, so the raw volatile access (asm/io.h above) is the whole effect
+ * - stated rather than hidden, so a big-endian port would add the swap here.
+ */
+static __always_inline __unused u32
+readl(const volatile void __iomem *addr)
+{
+	return __raw_readl(addr);
+}
+
+static __always_inline __unused void
+writeb(u8 value, volatile void __iomem *addr)
+{
+	__raw_writeb(value, addr);
+}
+
+static __always_inline __unused void
+writel(u32 value, volatile void __iomem *addr)
+{
+	__raw_writel(value, addr);
 }
 
 #endif /* _LINUXKPI_ASM_IO_H_ */

@@ -4,14 +4,20 @@
  * @brief   The coherent-DMA allocation pool a driver's bus-command tables are
  *          carved out of.
  *
- * @design declaration-only compatibility face. The interface declares a fixed-size
- *         coherent-DMA pool (include/linux/dmapool.h:26-46) with a device-managed
- *         creation form; the pool record is carried as an opaque handle because no
- *         compiled unit reads a field of it. What the compiled set names is the
- *         device-managed create, the allocate and the free; their bodies belong to
- *         the kernel's DMA layer and have no counterpart on this port yet, so the
- *         signatures are stated as the interface states them. Reference for the
- *         face shape: components/linuxkpi/include/linux/usb.h:1-20.
+ * @design compatibility face over the engine's coherent allocator. The interface
+ *         declares a fixed-size coherent-DMA pool (include/linux/dmapool.h:26-46)
+ *         with a device-managed creation form; the pool record is carried as an
+ *         opaque handle because no compiled unit reads a field of it. What the
+ *         compiled set names is the device-managed create, the allocate and the
+ *         free; the bodies belong to the kernel's DMA layer, so this port states
+ *         them over its one coherent allocator (dma_alloc_coherent /
+ *         dma_free_coherent in components/linuxkpi/pci/linuxkpi_pci.c), which is
+ *         the mechanism the pool's blocks would be carved from. The interface's
+ *         auto-release-on-detach half of dmam_pool_create has no counterpart here
+ *         (this port has no devres). The first consumer of these three is the gen2 transmit byte-count table, which the
+ *         AC 7260's family never selects (mac_cfg->gen2 is false for the 7000
+ *         family), so the path is stated but not taken on this part.
+ *         Reference for the face shape: components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026
  */
 

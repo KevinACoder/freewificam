@@ -102,4 +102,30 @@ int	request_irq(unsigned int irq, irq_handler_t handler, unsigned long flags,
 	    const char *name, void *dev);
 void	free_irq(unsigned int irq, void *dev_id);
 
+/*
+ * [LNX] include/linux/hardirq.h:13: `extern void synchronize_irq(unsigned int
+ * irq);` - wait until no handler is running on that line. The interface's home for
+ * it is linux/hardirq.h (which linux/interrupt.h includes); this face keeps it
+ * beside the request/release pair. The body is in linuxkpi_compat.c: this port's
+ * handler runs to completion before the engine returns from the interrupt, so
+ * there is no in-flight handler to wait for and the wait is empty.
+ */
+void	synchronize_irq(unsigned int irq);
+
+/* [LNX] include/linux/interrupt.h: the affinity-hint setter. The interface selects
+ * between a CONFIG_SMP arm and the !CONFIG_SMP arm at include/linux/interrupt.h:407,
+ * which is `return -EINVAL` - this port runs one CPU and has no IRQ affinity to
+ * program, so that is the reachable arm and its body is carried verbatim. The
+ * parameter type is the interface's (struct cpumask, forward-declared here; the
+ * caller passes NULL to clear the hint). */
+struct cpumask;
+
+static __always_inline __unused int
+irq_set_affinity_hint(unsigned int irq, const struct cpumask *m)
+{
+	(void)irq;
+	(void)m;
+	return -EINVAL;
+}
+
 #endif /* _LINUXKPI_LINUX_INTERRUPT_H_ */

@@ -154,4 +154,20 @@ extern int sched_setscheduler(struct task_struct *, int,
  * is the port's scheduler decision. */
 void yield(void);
 
+/*
+ * [LNX] include/linux/sched.h:2176-2179 (the macro) over the !CONFIG_PREEMPTION arm
+ * of _cond_resched() at include/linux/sched.h:2160-2163, which is `return 0` - this
+ * port runs no preemptible scheduler, so there is no voluntary reschedule point to
+ * offer and the call reports that it did nothing. The interface wraps the call in
+ * __might_resched(); this port's might_sleep() is the core's no-op, stated here so
+ * the shape a caller reads matches the interface.
+ */
+static __always_inline __unused int
+lkpi_cond_resched(void)
+{
+	return 0;
+}
+
+#define	cond_resched()		({ might_sleep(); lkpi_cond_resched(); })
+
 #endif /* _LINUXKPI_LINUX_SCHED_H_ */

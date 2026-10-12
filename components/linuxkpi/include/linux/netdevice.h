@@ -56,6 +56,17 @@
 
 #include "../../linuxkpi_core.h"
 
+/*
+ * [LNX] include/linux/netdevice.h:2211: the interface's net-device record carries
+ * `struct inet6_dev __rcu *ip6_ptr`, and that member is what puts the tag in scope
+ * for everything downstream - a driver header naming `struct inet6_dev *` in a
+ * prototype (iwlwifi's IPv6 address-change callback) gets it from here, through
+ * net/cfg80211.h and net/mac80211.h. This face's net-device record does not carry
+ * the member, so the name is stated directly; without it the driver's prototype
+ * invents a private tag and every later use is a different type.
+ */
+struct inet6_dev;
+
 #include <linux/ethtool.h>
 #include <linux/if.h>
 #include <linux/notifier.h>
@@ -624,6 +635,16 @@ bool napi_complete_done(struct napi_struct *n, int work_done);
 bool napi_schedule_prep(struct napi_struct *n);
 void __napi_schedule(struct napi_struct *n);
 
+/*
+ * [LNX] include/linux/netdevice.h:5325: `void netdev_rss_key_fill(void *buffer,
+ * size_t len)`. The interface copies `len` bytes out of a per-boot random RSS key
+ * it seeds once; this port has no such key store, so the body (the net-device
+ * seam, linuxkpi_netdev.c) fills the caller's buffer from the port's random
+ * source. The driver uses it to seed a firmware command's secret key, so a fresh
+ * random fill is the interface's own answer.
+ */
+void netdev_rss_key_fill(void *buffer, size_t len);
+
 /* [LNX] include/linux/netdevice.h:594-597 */
 static __always_inline __unused bool
 napi_complete(struct napi_struct *n)
@@ -721,6 +742,11 @@ struct netdev_hw_addr_list {
 	struct list_head	list;
 	unsigned int		count;
 };
+
+/* [LNX] include/linux/netdevice.h:261: `#define netdev_hw_addr_list_count(l)
+ * ((l)->count)`. The multicast-address count the driver reads before it walks the
+ * list; carried as the interface's macro over the record's own counter. */
+#define	netdev_hw_addr_list_count(l)	((l)->count)
 
 #define	netdev_hw_addr_list_for_each(ha, l)	\
 	list_for_each_entry(ha, &(l)->list, list)

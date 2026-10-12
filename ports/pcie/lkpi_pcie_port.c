@@ -427,6 +427,19 @@ static void port_dma_unmap(void *ctx, void *cpu, size_t len, int dir)
 	}
 }
 
+/* The interface's dma_sync_single_for_{device,cpu}: a live streaming mapping
+ * whose direction of use has turned around. The maintenance is the same body the
+ * map and unmap paths use, so it is the same call - what differs is only when it
+ * happens, and that is the caller's. Without this op the engine's dispatcher
+ * would have nothing to call and the driver's sync would silently do nothing on
+ * the board, which is exactly the shape of bug a descriptor ring hides. */
+static void port_dma_sync_op(void *ctx, void *cpu, size_t len, int dir)
+{
+
+	(void)ctx;
+	port_dma_sync(cpu, len, dir);
+}
+
 static const struct lkpi_pcie_be_ops port_ops = {
 	.bus_up = port_bus_up,
 	.bus_down = port_bus_down,
@@ -439,6 +452,7 @@ static const struct lkpi_pcie_be_ops port_ops = {
 	.dma_free = port_dma_free_op,
 	.dma_map = port_dma_map,
 	.dma_unmap = port_dma_unmap,
+	.dma_sync = port_dma_sync_op,
 };
 
 void lkpi_pcie_port_install(void)

@@ -16,10 +16,13 @@
  *         one coherent pool, so the calls ignore the device argument and the
  *         coherent window is a single global non-cacheable region; a coherent
  *         buffer needs no explicit maintenance, and a streaming buffer is made
- *         visible by the map/unmap pair. The face therefore does not carry
- *         dma_sync_single_for_* yet: no compiled consumer names it, and inventing
- *         the operation without one would fix a seam shape the first consumer has
- *         not asked for.
+ *         visible by the map/unmap pair. The single-direction sync pair
+ *         (dma_sync_single_for_cpu / _for_device) arrived with its first consumer,
+ *         the iwlwifi receive and firmware-download paths: a streaming buffer that
+ *         the CPU and the device hand back and forth needs the ownership transfer
+ *         the map/unmap pair cannot express while the mapping stays live. It is
+ *         carried through the seam's dma_sync operation, so the adapter below the
+ *         seam owns the maintenance and a synthetic backend ignores it.
  *
  *         Reference for the face shape: components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026

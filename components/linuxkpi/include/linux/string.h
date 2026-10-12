@@ -36,27 +36,10 @@ void memcpy_and_pad(void *dest, size_t dest_len, const void *src, size_t count,
 		    int pad);
 
 /*
- * [LNX] include/linux/string.h:126-146: strscpy_pad(). The interface spells it as a
- * macro chain that dispatches on the argument count (the two-argument form sizes the
- * destination from the array); the compiled set only names the explicit-count form, so
- * that one is stated here, over this component's strscpy, with the interface's
- * semantics: the destination is always NUL-terminated and the tail is zero-filled, and
- * a truncation answers -E2BIG.
+ * [LNX] include/linux/string.h:126-146: strscpy_pad() now lives in the contract
+ * header (components/linuxkpi/linuxkpi_core.h, its misc-helpers section, next to
+ * strscpy()), because a compiled translation unit reaches the string vocabulary
+ * through the core rather than through this header. It is not restated here.
  */
-static __always_inline __unused ssize_t
-strscpy_pad(char *dst, const char *src, size_t count)
-{
-	size_t srclen = strlen(src);
-	size_t n;
-
-	if (count == 0)
-		return -E2BIG;
-	n = srclen < count - 1 ? srclen : count - 1;
-	memcpy(dst, src, n);
-	for (; n < count; n++)
-		dst[n] = '\0';
-
-	return srclen < count ? (ssize_t)srclen : -E2BIG;
-}
 
 #endif /* _LINUXKPI_LINUX_STRING_H_ */

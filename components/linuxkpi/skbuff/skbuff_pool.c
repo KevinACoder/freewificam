@@ -711,6 +711,36 @@ int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len)
 	return 0;
 }
 
+/*
+ * [LNX] include/linux/skbuff.h:2702-2708: the interface attaches a page as
+ * fragment `i` of the buffer's shared record. This port's sk_buff is one linear
+ * store with no fragment storage (skbuff_pool.h:45-83; the face's shared record is
+ * the linear one, skbuff.h), so a fragment is materialized into the linear payload:
+ * the bytes are appended at the tail, which is what keeps the whole received frame
+ * readable by the receive path. `i` names a fragment slot the port does not have
+ * and is accepted and unused; the interface's truesize addition is not applied,
+ * because this port's truesize is the pool's own, fixed at allocation
+ * (skbuff_pool.c:568). The caller is the non-MQ receive path the AC 7260 runs
+ * (mvm/rx.c:89), so the copy is the reachable answer rather than a stub. If the
+ * linear payload has no room the pool's own put refuses it and names the geometry
+ * violation (lkpi_skb_put below); the page the interface would have taken ownership
+ * of stays the caller's, since no fragment descriptor here records it.
+ */
+void skb_add_rx_frag(struct sk_buff *skb, int i, struct page *page, int off,
+		     int size, unsigned int truesize)
+{
+	unsigned char *p;
+
+	(void)i;
+	(void)truesize;
+	if (skb == NULL || page == NULL || size <= 0)
+		return;
+	p = lkpi_skb_put(skb, (unsigned int)size);
+	if (p == NULL)
+		return;		/* the linear payload had no room; put named it */
+	memcpy(p, (const char *)page_address(page) + off, (size_t)size);
+}
+
 /* ------------------------------------------------------------------ */
 /* release                                                             */
 /* ------------------------------------------------------------------ */
