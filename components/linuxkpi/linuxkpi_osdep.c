@@ -3,10 +3,11 @@
  * @file    linuxkpi_osdep.c
  * @brief   The osdep service bodies the vendored driver's closure names that the
  *          service core (linuxkpi_core.c) does not already carry: the kernel
- *          thread, the scheduler entry points, the counting semaphore, the
- *          deferred-callback object, the file seam, the process/signal seams,
- *          the netlink attribute builders, the checksum primitives and the
- *          initial network namespace.
+ *          thread, the scheduler entry points, the counting semaphore, the file
+ *          seam, the process/signal seams, the netlink attribute builders, the
+ *          checksum primitives and the initial network namespace.
+ *          (The deferred-callback object is not one of them: its seam is the
+ *          service core's deferred work, so its body lives there.)
  *
  * @design adapter over one OS surface, the same shape as the service core
  *         (components/linuxkpi/linuxkpi_core.c:1-20). The contract header and the
@@ -329,37 +330,6 @@ mutex_lock_interruptible(struct mutex *lock)
 		return -EINVAL;
 	lkpi_mutex_lock(lock);
 	return 0;
-}
-
-/* ------------------------------------------------------------------ */
-/* the deferred-callback object (driver: rtl8189fs_recv.c:451 init)     */
-/* ------------------------------------------------------------------ */
-
-void
-tasklet_init(struct tasklet_struct *t, void (*func)(unsigned long),
-    unsigned long data)
-{
-
-	if (t == NULL)
-		return;
-	t->next = NULL;
-	t->state = 0;
-	t->count.counter = 0;
-	t->use_callback = false;
-	t->func = func;
-	t->data = data;
-}
-
-void
-tasklet_kill(struct tasklet_struct *t)
-{
-
-	/*
-	 * tasklet_schedule is the contract header's no-op macro, so no callback
-	 * is ever armed and there is nothing to wait for; the driver's teardown
-	 * call still returns cleanly.
-	 */
-	(void)t;
 }
 
 /* ------------------------------------------------------------------ */

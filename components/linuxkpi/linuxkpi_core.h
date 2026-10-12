@@ -1845,7 +1845,16 @@ typedef unsigned long irqflags_t;
 #define	in_softirq()			0
 #define	IRQ_NONE			0
 #define	IRQ_HANDLED			1
-#define	tasklet_schedule(t)		do { (void)(t); } while (0)
+/*
+ * The deferred callback of the interrupt face. The object (struct tasklet_struct)
+ * and its remaining entry points are the face header's (linux/interrupt.h); the
+ * mechanism is this file's deferred-work seam - a tasklet is a coalescing work
+ * item and the worker thread is the softirq context. The body is in linuxkpi_core.c
+ * ("deferred callbacks"), because that is where the seam it stands on lives.
+ */
+struct tasklet_struct;
+void lkpi_tasklet_schedule(struct tasklet_struct *t);
+#define	tasklet_schedule(t)		lkpi_tasklet_schedule(t)
 
 /* ------------------------------------------------------------------ */
 /* sk_buff (linux/skbuff.h) - data shape, operations in the impl        */

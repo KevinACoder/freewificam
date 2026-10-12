@@ -80,6 +80,7 @@ lkpi_spin_lock_irqsave
 lkpi_spin_unlock
 lkpi_spin_unlock_irqrestore
 lkpi_system_wq
+lkpi_tasklet_schedule
 lkpi_timer_setup
 lkpi_udelay
 lkpi_usleep_range
