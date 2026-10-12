@@ -109,6 +109,22 @@ uint32_t dwc_pcie_requester_id(const struct dwc_pcie_dev *dev);
 #define PCI_MSIX_ENTRY_VECTOR_CTRL	0x0c
 #define PCI_MSIX_ENTRY_CTRL_MASKBIT	0x00000001u
 
+/* MSI capability layout (the non-X form), relative to the capability offset.
+ * The address and data offsets depend on the 64-bit-capable bit: a 64-bit
+ * function carries the upper address half and pushes the data word down. */
+#define PCI_MSI_FLAGS		0x02	/* 16 bit: ENABLE, MMC, MME, 64BIT, MASK */
+#define PCI_MSI_ADDR_LOW	0x04	/* 32 bit: message address, low half */
+#define PCI_MSI_ADDR_HIGH	0x08	/* 32 bit: message address, high half (64BIT) */
+#define PCI_MSI_DATA_32		0x08	/* 16 bit: message data (32-bit form) */
+#define PCI_MSI_DATA_64		0x0c	/* 16 bit: message data (64-bit form) */
+#define PCI_MSI_MASK_32		0x0c	/* 32 bit: per-vector mask (32-bit form) */
+#define PCI_MSI_MASK_64		0x10	/* 32 bit: per-vector mask (64-bit form) */
+#define PCI_MSI_FLAGS_ENABLE	(1u << 0)
+#define PCI_MSI_FLAGS_64BIT	(1u << 7)
+#define PCI_MSI_FLAGS_MASK	(1u << 8)
+#define PCI_MSI_MME_SHIFT	4
+#define PCI_MSI_MME_MASK	0x7u
+
 #ifdef __cplusplus
 }
 #endif
