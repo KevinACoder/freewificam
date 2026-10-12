@@ -36,8 +36,8 @@ case_line() {
 
 if timeout 120 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^LKPI: L[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 10 ] &&
-        grep -q '^LKPI: SUITE PASS cases=10$' "$log_dir/stream.log" &&
+    if [ "$pass" = 11 ] &&
+        grep -q '^LKPI: SUITE PASS cases=11$' "$log_dir/stream.log" &&
         ! grep -q '^LKPI: L[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line link-closure PASS
         case_line section-walk PASS
@@ -49,9 +49,10 @@ if timeout 120 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line two-endpoints PASS
         case_line class-hook-claim PASS
         case_line modeswitch-eject PASS
+        case_line deferred-callback PASS
     else
         case_line link-closure FAIL
-        echo "linuxkpi-body-test: the run did not report ten passing cases ($pass)" >&2
+        echo "linuxkpi-body-test: the run did not report eleven passing cases ($pass)" >&2
         tail -8 "$log_dir/stream.log" >&2 || true
     fi
 else
@@ -89,7 +90,7 @@ fi
 
 # ---- the red controls (each must fail) ----------------------------------------
 
-for fault in no-walk fw-name ms-eject; do
+for fault in no-walk fw-name ms-eject tasklet-inert; do
     if timeout 60 "$bin" --fault "$fault" > "$log_dir/fault-$fault.log" 2>&1; then
         case_line "red-$fault" FAIL
         echo "linuxkpi-body-test: the $fault control passed (it must fail)" >&2
