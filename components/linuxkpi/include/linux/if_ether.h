@@ -53,6 +53,8 @@
 #define	ETH_P_PPP_DISC		0x8863
 #define	ETH_P_PPP_SES		0x8864
 #define	ETH_P_PAE		0x888E		/* EAPOL over Ethernet */
+/* [LNX] include/uapi/linux/if_ether.h:112 */
+#define	ETH_P_TDLS		0x890D		/* TDLS */
 
 /* ------------------------------------------------------------------ */
 /* the wire header                                                     */

@@ -36,6 +36,9 @@ struct device_driver {
 
 	void (*shutdown) (struct device *dev);
 	const struct dev_pm_ops	*pm;
+	/* [LNX] include/linux/device/driver.h:123: the device-coredump entry a driver
+	 * hangs off its driver record. */
+	void (*coredump) (struct device *dev);
 };
 
 #endif /* _LINUXKPI_LINUX_DEVICE_DRIVER_H_ */

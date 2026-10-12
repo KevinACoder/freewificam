@@ -19,5 +19,9 @@
 #define _LINUXKPI_LINUX_DEVCOREDUMP_H_
 
 #include "../../linuxkpi_core.h"
+/* [LNX] include/linux/devcoredump.h:12 includes <linux/scatterlist.h>; the face
+ * keeps the interface's own include, which is how the scatter/gather record a
+ * firmware-dump caller hands to the entry point reaches a unit through it. */
+#include <linux/scatterlist.h>
 
 #endif /* _LINUXKPI_LINUX_DEVCOREDUMP_H_ */

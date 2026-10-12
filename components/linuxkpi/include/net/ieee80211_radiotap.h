@@ -81,6 +81,16 @@ enum ieee80211_radiotap_presence {
 	IEEE80211_RADIOTAP_UHR = 38,
 };
 
+/* [LNX] include/net/ieee80211_radiotap.h:405-412: the vendor-namespace radiotap
+ * content record the receive path measures. */
+struct ieee80211_radiotap_vendor_content {
+	u8	oui[3];
+	u8	oui_subtype;
+	__le16	vendor_type;
+	__le16	reserved;
+	u8	data[];
+} __packed;
+
 /* [LNX] include/net/ieee80211_radiotap.h:102-110: the IEEE80211_RADIOTAP_FLAGS field's
  * bits. */
 enum ieee80211_radiotap_flags {
@@ -197,6 +207,11 @@ enum ieee80211_radiotap_he_mu_bits {
 	IEEE80211_RADIOTAP_HE_MU_FLAGS1_SIG_B_COMP_KNOWN	= 0x4000,
 	IEEE80211_RADIOTAP_HE_MU_FLAGS1_SIG_B_SYMS_USERS_KNOWN	= 0x8000,
 	IEEE80211_RADIOTAP_HE_MU_FLAGS2_BW_FROM_SIG_A_BW	= 0x0003,
+	/* [LNX] net/ieee80211_radiotap.h:359-362: the signal-A bandwidth values. */
+	IEEE80211_RADIOTAP_HE_MU_FLAGS2_BW_FROM_SIG_A_BW_20MHZ	= 0x0000,
+	IEEE80211_RADIOTAP_HE_MU_FLAGS2_BW_FROM_SIG_A_BW_40MHZ	= 0x0001,
+	IEEE80211_RADIOTAP_HE_MU_FLAGS2_BW_FROM_SIG_A_BW_80MHZ	= 0x0002,
+	IEEE80211_RADIOTAP_HE_MU_FLAGS2_BW_FROM_SIG_A_BW_160MHZ	= 0x0003,
 	IEEE80211_RADIOTAP_HE_MU_FLAGS2_BW_FROM_SIG_A_BW_KNOWN	= 0x0004,
 	IEEE80211_RADIOTAP_HE_MU_FLAGS2_SIG_B_COMP		= 0x0008,
 	IEEE80211_RADIOTAP_HE_MU_FLAGS2_SIG_B_SYMS_USERS	= 0x00f0,
@@ -265,5 +280,216 @@ static inline u16 ieee80211_get_radiotap_len(const char *data)
 
 	return get_unaligned_le16(&hdr->it_len);
 }
+
+/* ------------------------------------------------------------------ */
+/* the remaining radiotap field constants the compiled set names, each
+ * enumerated in the interface's own headers (the reference on each line
+ * names the file and line it was transcribed from). */
+/* ------------------------------------------------------------------ */
+
+	/* [LNX] net/ieee80211_radiotap.h:402 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA0_EHT_LTF	14336
+	/* [LNX] net/ieee80211_radiotap.h:403 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA0_LDPC_EXTRA_SYM_OM	16384
+	/* [LNX] net/ieee80211_radiotap.h:401 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA0_LTF	1536
+	/* [LNX] net/ieee80211_radiotap.h:408 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA0_PE_DISAMBIGUITY_OM	131072
+	/* [LNX] net/ieee80211_radiotap.h:405 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA0_PRE_PADD_FACOR_OM	98304
+	/* [LNX] net/ieee80211_radiotap.h:398 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA0_SPATIAL_REUSE	120
+	/* [LNX] net/ieee80211_radiotap.h:426 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA1_PRIMARY_80	3221225472
+	/* [LNX] net/ieee80211_radiotap.h:479 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA7_BEAMFORMED_S	65536
+	/* [LNX] net/ieee80211_radiotap.h:478 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA7_NSS_S	61440
+	/* [LNX] net/ieee80211_radiotap.h:480 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA7_NUM_OF_NON_OFDMA_USERS	917504
+	/* [LNX] net/ieee80211_radiotap.h:486 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA8_RU_ALLOC_TB_FMT_B0	2
+	/* [LNX] net/ieee80211_radiotap.h:487 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA8_RU_ALLOC_TB_FMT_B7_B1	508
+	/* [LNX] net/ieee80211_radiotap.h:485 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA8_RU_ALLOC_TB_FMT_PS_160	1
+	/* [LNX] net/ieee80211_radiotap.h:376 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_BEAMFORMED_S	262144
+	/* [LNX] net/ieee80211_radiotap.h:361 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_EHT_LTF	16
+	/* [LNX] net/ieee80211_radiotap.h:362 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_LDPC_EXTRA_SYM_OM	32
+	/* [LNX] net/ieee80211_radiotap.h:377 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_NR_NON_OFDMA_USERS_M	524288
+	/* [LNX] net/ieee80211_radiotap.h:373 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_NSS_S	131072
+	/* [LNX] net/ieee80211_radiotap.h:364 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_PE_DISAMBIGUITY_OM	128
+	/* [LNX] net/ieee80211_radiotap.h:363 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_PRE_PADD_FACOR_OM	64
+	/* [LNX] net/ieee80211_radiotap.h:393 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_PRIMARY_80	33554432
+	/* [LNX] net/ieee80211_radiotap.h:388 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_RU_ALLOC_TB_FMT	16777216
+	/* [LNX] net/ieee80211_radiotap.h:360 */
+	#define	IEEE80211_RADIOTAP_EHT_KNOWN_SPATIAL_REUSE	2
+	/* [LNX] net/ieee80211_radiotap.h:493 */
+	#define	IEEE80211_RADIOTAP_EHT_USER_INFO_BEAMFORMING_KNOWN_O	32
+	/* [LNX] net/ieee80211_radiotap.h:501 */
+	#define	IEEE80211_RADIOTAP_EHT_USER_INFO_BEAMFORMING_O	536870912
+	/* [LNX] net/ieee80211_radiotap.h:495 */
+	#define	IEEE80211_RADIOTAP_EHT_USER_INFO_DATA_FOR_USER	128
+	/* [LNX] net/ieee80211_radiotap.h:496 */
+	#define	IEEE80211_RADIOTAP_EHT_USER_INFO_STA_ID	524032
+	/* [LNX] net/ieee80211_radiotap.h:489 */
+	#define	IEEE80211_RADIOTAP_EHT_USER_INFO_STA_ID_KNOWN	1
+	/* [LNX] net/ieee80211_radiotap.h:524 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG1_MU_B20_B24_DISREGARD	31
+	/* [LNX] net/ieee80211_radiotap.h:526 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG1_MU_B25_VALIDATE	32
+	/* [LNX] net/ieee80211_radiotap.h:539 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG1_TB_B20_B25_DISREGARD	31
+	/* [LNX] net/ieee80211_radiotap.h:527 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_MU_B0_B1_PPDU_TYPE	192
+	/* [LNX] net/ieee80211_radiotap.h:533 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_MU_B11_B15_EHT_SIG_SYMBOLS	4063232
+	/* [LNX] net/ieee80211_radiotap.h:534 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_MU_B16_B19_CRC	62914560
+	/* [LNX] net/ieee80211_radiotap.h:529 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_MU_B2_VALIDATE	256
+	/* [LNX] net/ieee80211_radiotap.h:530 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_MU_B3_B7_PUNCTURED_INFO	15872
+	/* [LNX] net/ieee80211_radiotap.h:531 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_MU_B8_VALIDATE	16384
+	/* [LNX] net/ieee80211_radiotap.h:532 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_MU_B9_B10_SIG_MCS	98304
+	/* [LNX] net/ieee80211_radiotap.h:540 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_TB_B0_B1_PPDU_TYPE	192
+	/* [LNX] net/ieee80211_radiotap.h:545 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_TB_B11_B15_DISREGARD	4063232
+	/* [LNX] net/ieee80211_radiotap.h:545 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_TB_B16_B19_CRC	62914560
+	/* [LNX] net/ieee80211_radiotap.h:541 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_TB_B2_VALIDATE	256
+	/* [LNX] net/ieee80211_radiotap.h:542 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_TB_B3_B6_SPATIAL_REUSE_1	7680
+	/* [LNX] net/ieee80211_radiotap.h:544 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG2_TB_B7_B10_SPATIAL_REUSE_2	122880
+	/* [LNX] net/ieee80211_radiotap.h:510 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_BAD_USIG_CRC	32
+	/* [LNX] net/ieee80211_radiotap.h:522 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_BSS_COLOR	33030144
+	/* [LNX] net/ieee80211_radiotap.h:508 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_BSS_COLOR_KNOWN	8
+	/* [LNX] net/ieee80211_radiotap.h:514 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_PHY_VER	28672
+	/* [LNX] net/ieee80211_radiotap.h:505 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_PHY_VER_KNOWN	1
+	/* [LNX] net/ieee80211_radiotap.h:523 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_TXOP	4261412864
+	/* [LNX] net/ieee80211_radiotap.h:509 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_TXOP_KNOWN	16
+	/* [LNX] net/ieee80211_radiotap.h:521 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_UL_DL	262144
+	/* [LNX] net/ieee80211_radiotap.h:507 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_UL_DL_KNOWN	4
+	/* [LNX] net/ieee80211_radiotap.h:512 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_VALIDATE_BITS_CHECKED	64
+	/* [LNX] net/ieee80211_radiotap.h:513 */
+	#define	IEEE80211_RADIOTAP_EHT_USIG_COMMON_VALIDATE_BITS_OK	128
+	/* [LNX] net/ieee80211_radiotap.h:208 */
+	#define	IEEE80211_RADIOTAP_HE_DATA1_DATA_DCM_KNOWN	64
+	/* [LNX] net/ieee80211_radiotap.h:232 */
+	#define	IEEE80211_RADIOTAP_HE_DATA2_NUM_LTF_SYMS_KNOWN	4
+	/* [LNX] net/ieee80211_radiotap.h:229 */
+	#define	IEEE80211_RADIOTAP_HE_DATA2_PRISEC_80_KNOWN	1
+	/* [LNX] net/ieee80211_radiotap.h:242 */
+	#define	IEEE80211_RADIOTAP_HE_DATA2_PRISEC_80_SEC	32768
+	/* [LNX] net/ieee80211_radiotap.h:240 */
+	#define	IEEE80211_RADIOTAP_HE_DATA2_RU_OFFSET	16128
+	/* [LNX] net/ieee80211_radiotap.h:241 */
+	#define	IEEE80211_RADIOTAP_HE_DATA2_RU_OFFSET_KNOWN	16384
+	/* [LNX] net/ieee80211_radiotap.h:279 */
+	#define	IEEE80211_RADIOTAP_HE_DATA5_LTF_SIZE	192
+	/* [LNX] net/ieee80211_radiotap.h:281 */
+	#define	IEEE80211_RADIOTAP_HE_DATA5_LTF_SIZE_1X	1
+	/* [LNX] net/ieee80211_radiotap.h:283 */
+	#define	IEEE80211_RADIOTAP_HE_DATA5_LTF_SIZE_2X	2
+	/* [LNX] net/ieee80211_radiotap.h:284 */
+	#define	IEEE80211_RADIOTAP_HE_DATA5_LTF_SIZE_4X	3
+	/* [LNX] net/ieee80211_radiotap.h:280 */
+	#define	IEEE80211_RADIOTAP_HE_DATA5_LTF_SIZE_UNKNOWN	0
+	/* [LNX] net/ieee80211_radiotap.h:285 */
+	#define	IEEE80211_RADIOTAP_HE_DATA5_NUM_LTF_SYMS	1792
+	/* [LNX] net/ieee80211_radiotap.h:293 */
+	#define	IEEE80211_RADIOTAP_HE_DATA6_TB_PPDU_BW	192
+	/* [LNX] net/ieee80211_radiotap.h:292 */
+	#define	IEEE80211_RADIOTAP_HE_DATA6_TB_PPDU_BW_KNOWN	32
+	/* [LNX] net/ieee80211_radiotap.h:334 */
+	#define	IEEE80211_RADIOTAP_LSIG_DATA1_LENGTH_KNOWN	2
+	/* [LNX] net/ieee80211_radiotap.h:339 */
+	#define	IEEE80211_RADIOTAP_LSIG_DATA2_LENGTH	65520
+	/* [LNX] net/ieee80211_radiotap.h:182 */
+	#define	IEEE80211_RADIOTAP_TIMESTAMP_SPOS_PLCP_SIG_ACQ	16
+	/* [LNX] net/ieee80211_radiotap.h:175 */
+	#define	IEEE80211_RADIOTAP_TIMESTAMP_UNIT_US	1
+	/* [LNX] net/ieee80211_radiotap.h:347 */
+	#define	IEEE80211_RADIOTAP_ZERO_LEN_PSDU_NOT_CAPTURED	1
+	/* [LNX] net/ieee80211_radiotap.h:347 */
+	#define	IEEE80211_RADIOTAP_ZERO_LEN_PSDU_SOUNDING	0
+	/* [LNX] net/ieee80211_radiotap.h:348 */
+	#define	IEEE80211_RADIOTAP_ZERO_LEN_PSDU_VENDOR	255
+
+/* ------------------------------------------------------------------ */
+/* The remaining radiotap field constants the compiled set names,
+ * each line names the interface header and line it was transcribed from. */
+/* ------------------------------------------------------------------ */
+
+	/* [LNX] net/ieee80211_radiotap.h:421 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA1_RU_ALLOC_CC_1_1_1	4186112
+	/* [LNX] net/ieee80211_radiotap.h:425 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA1_RU_ALLOC_CC_1_1_1_KNOWN	4194304
+	/* [LNX] net/ieee80211_radiotap.h:434 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA2_RU_ALLOC_CC_1_1_2	523264
+	/* [LNX] net/ieee80211_radiotap.h:435 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA2_RU_ALLOC_CC_1_1_2_KNOWN	524288
+	/* [LNX] net/ieee80211_radiotap.h:428 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA2_RU_ALLOC_CC_2_1_1	511
+	/* [LNX] net/ieee80211_radiotap.h:431 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA2_RU_ALLOC_CC_2_1_1_KNOWN	512
+	/* [LNX] net/ieee80211_radiotap.h:439 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA2_RU_ALLOC_CC_2_1_2	535822336
+	/* [LNX] net/ieee80211_radiotap.h:444 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA2_RU_ALLOC_CC_2_1_2_KNOWN	536870912
+	/* [LNX] net/ieee80211_radiotap.h:445 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA3_RU_ALLOC_CC_1_2_1	511
+	/* [LNX] net/ieee80211_radiotap.h:447 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA3_RU_ALLOC_CC_1_2_1_KNOWN	512
+	/* [LNX] net/ieee80211_radiotap.h:451 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA3_RU_ALLOC_CC_1_2_2	535822336
+	/* [LNX] net/ieee80211_radiotap.h:452 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA3_RU_ALLOC_CC_1_2_2_KNOWN	536870912
+	/* [LNX] net/ieee80211_radiotap.h:448 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA3_RU_ALLOC_CC_2_2_1	523264
+	/* [LNX] net/ieee80211_radiotap.h:449 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA3_RU_ALLOC_CC_2_2_1_KNOWN	524288
+	/* [LNX] net/ieee80211_radiotap.h:453 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA4_RU_ALLOC_CC_2_2_2	511
+	/* [LNX] net/ieee80211_radiotap.h:454 */
+	#define	IEEE80211_RADIOTAP_EHT_DATA4_RU_ALLOC_CC_2_2_2_KNOWN	512
+	/* [LNX] net/ieee80211_radiotap.h:297 */
+	#define	IEEE80211_RADIOTAP_HE_DATA6_TB_PPDU_BW_160MHZ	3
+	/* [LNX] net/ieee80211_radiotap.h:294 */
+	#define	IEEE80211_RADIOTAP_HE_DATA6_TB_PPDU_BW_20MHZ	0
+	/* [LNX] net/ieee80211_radiotap.h:295 */
+	#define	IEEE80211_RADIOTAP_HE_DATA6_TB_PPDU_BW_40MHZ	1
+	/* [LNX] net/ieee80211_radiotap.h:296 */
+	#define	IEEE80211_RADIOTAP_HE_DATA6_TB_PPDU_BW_80MHZ	2
+
+/* [LNX] include/net/ieee80211_radiotap.h: the L-SIG field record the receive path
+ * measures. */
+struct ieee80211_radiotap_lsig {
+	__le16	data1, data2;
+};
 
 #endif /* _LINUXKPI_NET_IEEE80211_RADIOTAP_H_ */

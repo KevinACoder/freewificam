@@ -677,6 +677,7 @@ napi_is_scheduled(struct napi_struct *n)
 #define	NETIF_F_GSO_SHIFT		16	/* keep the order of SKB_GSO_* bits */
 #define	NETIF_F_TSO_BIT			16	/* ... TCPv4 segmentation */
 #define	NETIF_F_TSO6_BIT		20	/* ... TCPv6 segmentation */
+#define	NETIF_F_RXCSUM_BIT		40	/* Receive checksumming offload */
 
 #define	NETIF_F_SG		__NETIF_F(SG)
 #define	NETIF_F_IP_CSUM		__NETIF_F(IP_CSUM)
@@ -685,6 +686,7 @@ napi_is_scheduled(struct napi_struct *n)
 #define	NETIF_F_GSO		__NETIF_F(GSO)
 #define	NETIF_F_TSO		__NETIF_F(TSO)
 #define	NETIF_F_TSO6		__NETIF_F(TSO6)
+#define	NETIF_F_RXCSUM		__NETIF_F(RXCSUM)
 
 /* [LNX] include/linux/netdevice.h: the napi caller waits for the poll to leave */
 /* [LNX] include/linux/netdevice.h:617 */
@@ -696,5 +698,31 @@ static inline void napi_synchronize(const struct napi_struct *n)
 	else
 		barrier();
 }
+
+/* [LNX] include/linux/netdevice.h:231 includes <linux/skbuff.h>; the face keeps
+ * the interface's own include at the same late position, after the device record
+ * is defined, which is how the buffer vocabulary and the DMA mapping API it pulls
+ * in reach a unit that takes this header. */
+#include <linux/skbuff.h>
+
+/* [LNX] include/linux/netdevice.h:263-264, the hardware-address list a driver
+ * walks. The record keeps the interface's list link and address; the rbtree node
+ * and the reference bookkeeping the interface also carries are not named by a
+ * compiled consumer. */
+#define	MAX_ADDR_LEN	32
+
+struct netdev_hw_addr {
+	struct list_head	list;
+	unsigned char		addr[MAX_ADDR_LEN];
+	unsigned char		type;
+};
+
+struct netdev_hw_addr_list {
+	struct list_head	list;
+	unsigned int		count;
+};
+
+#define	netdev_hw_addr_list_for_each(ha, l)	\
+	list_for_each_entry(ha, &(l)->list, list)
 
 #endif /* _LINUXKPI_LINUX_NETDEVICE_H_ */

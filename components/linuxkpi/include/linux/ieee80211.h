@@ -59,6 +59,9 @@
 
 
 enum ieee80211_he_mcs_support {
+	/* [LNX] include/linux/ieee80211.h:94-95 */
+	IEEE80211_HE_MCS_SUPPORT_0_7 = 0,
+	IEEE80211_HE_MCS_SUPPORT_0_9 = 1,
 	IEEE80211_HE_MCS_SUPPORT_0_11 = 2,
 	IEEE80211_HE_MCS_NOT_SUPPORTED = 3
 };
@@ -275,7 +278,11 @@ struct ieee80211_mgmt {
 			__le16	capab_info;
 			u8	variable[];
 		} __packed beacon, probe_resp;
-		IEEE80211_FLEX_ARRAY(u8, probe_req) __packed;
+		/* [LNX] include/linux/ieee80211.h:1049: the probe-request body, whose
+		 * only content is the variable element list. */
+		struct {
+			IEEE80211_FLEX_ARRAY(u8, variable);
+		} __packed probe_req;
 		struct {
 			u8	category;
 			u8	action_code;
@@ -298,6 +305,26 @@ struct ieee80211_mgmt {
 					__le16	params;
 					__le16	reason_code;
 				} __packed delba;
+				/* [LNX] include/linux/ieee80211.h:1138-1156: the
+				 * timing-measurement action bodies the compiled set reads a
+				 * dialog token from. */
+				struct {
+					u8	dialog_token;
+					u8	follow_up;
+					u8	tod[6];
+					u8	toa[6];
+					__le16	tod_error;
+					__le16	toa_error;
+					u8	variable[];
+				} __packed ftm;
+				struct {
+					u8	dialog_token;
+					u8	follow_up;
+					u32	tod;
+					u32	toa;
+					u8	max_tod_error;
+					u8	max_toa_error;
+				} __packed wnm_timing_msr;
 			};
 		} __packed action;
 	} u;
@@ -1243,5 +1270,217 @@ static inline unsigned int ieee80211_hdrlen(__le16 fc)
 out:
 	return hdrlen;
 }
+
+/* [LNX] include/linux/ieee80211.h:1927: the CCMP packet-number length a firmware
+ * record carries. */
+#define	IEEE80211_CCMP_PN_LEN	6
+
+/* [LNX] include/linux/ieee80211-vht.h:201: the VHT capability bit the compiled set
+ * tests. */
+#define	IEEE80211_VHT_CAP_TX_ANTENNA_PATTERN	0x20000000
+#define	IEEE80211_VHT_CAP_RX_ANTENNA_PATTERN	0x10000000
+
+/* [LNX] include/linux/ieee80211.h:165: the VHT MPDU-length capability value. */
+#define	IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_3895	0x00000000
+#define	IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_7991	0x00000001
+
+/* [LNX] include/linux/ieee80211.h:217-218: the HT operation-mode protection mask
+ * and its "no protection" value. */
+#define	IEEE80211_HT_OP_MODE_PROTECTION		0x0003
+#define	IEEE80211_HT_OP_MODE_PROTECTION_NONE	0
+#define	IEEE80211_HT_OP_MODE_PROTECTION_NONMEMBER	1
+#define	IEEE80211_HT_OP_MODE_PROTECTION_20MHZ	2
+#define	IEEE80211_HT_OP_MODE_PROTECTION_NONHT_MIXED	3
+
+/* [LNX] include/linux/ieee80211-vht.h:143: the VHT channel-width values. */
+#define	IEEE80211_VHT_CHANWIDTH_160MHZ		2
+
+/* [LNX] include/linux/ieee80211.h:1925-1926,1931-1932 */
+#define	IEEE80211_CCMP_HDR_LEN			8
+#define	IEEE80211_CCMP_MIC_LEN			8
+#define	IEEE80211_TKIP_IV_LEN			8
+#define	IEEE80211_TKIP_ICV_LEN			4
+#define	IEEE80211_WEP_IV_LEN			4
+#define	IEEE80211_WEP_ICV_LEN			4
+
+/* [LNX] include/linux/ieee80211.h:187: the EHT MAC-capability field value. */
+#define	IEEE80211_EHT_MAC_CAP0_OM_CONTROL	0x02
+/* [LNX] include/linux/ieee80211.h:195: the EHT MAC-capability MPDU-length values. */
+#define	IEEE80211_EHT_MAC_CAP0_MAX_MPDU_LEN_7991	1
+#define	IEEE80211_EHT_MAC_CAP0_MAX_MPDU_LEN_11454	2
+/* [LNX] include/linux/ieee80211.h:206,236: the EHT PHY-capability field values. */
+#define	IEEE80211_EHT_PHY_CAP0_242_TONE_RU_GT20MHZ	0x04
+#define	IEEE80211_EHT_PHY_CAP4_EHT_MU_PPDU_4_EHT_LTF_08_GI	0x08
+
+/* [LNX] include/linux/ieee80211.h:1937 */
+#define	IEEE80211_GCMP_PN_LEN			6
+
+/* [LNX] include/linux/ieee80211.h:1433: the spectrum-measurement report type. */
+#define	IEEE80211_SPCT_MSR_RPRT_TYPE_LCI	8
+
+/* [LNX] include/linux/ieee80211.h:252: the HE A-MPDU buffer size. */
+#define	IEEE80211_MAX_AMPDU_BUF_HE		0x100
+
+/* [LNX] include/linux/ieee80211.h:265-268: the WMM station QoS-info access-category
+ * bits. */
+#define	IEEE80211_WMM_IE_STA_QOSINFO_AC_VO	(1 << 0)
+#define	IEEE80211_WMM_IE_STA_QOSINFO_AC_VI	(1 << 1)
+#define	IEEE80211_WMM_IE_STA_QOSINFO_AC_BK	(1 << 2)
+#define	IEEE80211_WMM_IE_STA_QOSINFO_AC_BE	(1 << 3)
+
+/* [LNX] include/linux/ieee80211.h:60: the block-ack control TID field. */
+#define	IEEE80211_BAR_CTRL_TID_INFO_MASK	0xf000
+#define	IEEE80211_BAR_CTRL_TID_INFO_SHIFT	12
+
+/* [LNX] include/linux/ieee80211.h:2279: the Microsoft OUI a WMM element carries. */
+#define	WLAN_OUI_MICROSOFT		0x0050f2
+
+/* [LNX] include/linux/ieee80211.h:251 */
+#define	IEEE80211_QOS_CTL_A_MSDU_PRESENT	0x0080
+
+/* [LNX] include/linux/ieee80211.h:197: the EHT MAC-capability field mask. */
+#define	IEEE80211_EHT_MAC_CAP1_MAX_AMPDU_LEN_MASK	0x01
+
+/* [LNX] include/linux/ieee80211.h:1602,1617,1628,1561 */
+#define	WLAN_EID_REQUEST			10
+#define	WLAN_EID_MEASURE_REPORT			39
+#define	WLAN_EID_EXT_SUPP_RATES			50
+#define	WLAN_EID_DS_PARAMS			3
+#define	WLAN_REASON_TDLS_TEARDOWN_UNSPECIFIED	26
+
+/* [LNX] include/linux/ieee80211.h:2048-2049: the extended-capability byte-8 and
+ * byte-9 fields. */
+#define	WLAN_EXT_CAPA8_MAX_MSDU_IN_AMSDU_LSB	BIT(7)
+#define	WLAN_EXT_CAPA9_MAX_MSDU_IN_AMSDU_MSB	BIT(0)
+/* [LNX] include/linux/ieee80211.h:2024: the extended-capability byte-3 field. */
+#define	WLAN_EXT_CAPA3_TIMING_MEASUREMENT_SUPPORT	BIT(7)
+/* [LNX] include/linux/ieee80211.h:2058: the extended-capability byte-10 field. */
+#define	WLAN_EXT_CAPA10_TWT_REQUESTER_SUPPORT		BIT(5)
+
+/* [LNX] include/linux/ieee80211-ht.h:47-54: the block-ack-request frame the
+ * transmit path reads a control word and a sequence number from. */
+struct ieee80211_bar {
+	__le16	frame_control;
+	__le16	duration;
+	__u8	ra[ETH_ALEN];
+	__u8	ta[ETH_ALEN];
+	__le16	control;
+	__le16	start_seq_num;
+} __packed;
+
+/* [LNX] include/linux/ieee80211.h:1233-1240: the management MIC information element
+ * the protected-management receive path inspects. */
+struct ieee80211_mmie {
+	u8	element_id;
+	u8	length;
+	__le16	key_id;
+	u8	sequence_number[6];
+	u8	mic[8];
+} __packed;
+
+/* ------------------------------------------------------------------ */
+/* the remaining wire-vocabulary constants the compiled set names, each
+ * enumerated in the interface's own headers (the reference on each line
+ * names the file and line it was transcribed from). */
+/* ------------------------------------------------------------------ */
+
+	/* [LNX] linux/ieee80211.h:1935 */
+	#define	IEEE80211_GCMP_HDR_LEN	8
+	/* [LNX] linux/ieee80211.h:208 */
+	#define	IEEE80211_MAX_RTS_THRESHOLD	2353
+	/* [LNX] linux/ieee80211.h:57 */
+	#define	IEEE80211_SCTL_FRAG	0x000F
+	/* [LNX] linux/ieee80211.h:1434 */
+	#define	IEEE80211_SPCT_MSR_RPRT_TYPE_CIVIC	11
+	/* [LNX] linux/ieee80211.h:2223: the OUI-and-id packer the suite constants are
+	 * written with. */
+	#define	SUITE(oui, id)	(((oui) << 8) | (id))
+	/* [LNX] linux/ieee80211.h:2250 */
+	#define	WLAN_AKM_SUITE_SAE	SUITE(0x000FAC, 8)
+	/* [LNX] linux/ieee80211.h:1013 */
+	#define	WLAN_EID_CHANNEL_SWITCH	37
+	/* [LNX] linux/ieee80211.h:1042 */
+	#define	WLAN_EID_EXT_CHANSWITCH_ANN	60
+	/* [LNX] linux/ieee80211.h:1218 */
+	#define	WLAN_EID_S1G_TWT	216
+	/* [LNX] linux/ieee80211.h:994 */
+	#define	WLAN_EID_TIM	5
+	/* [LNX] linux/ieee80211.h:2283 */
+	#define	WLAN_OUI_TYPE_MICROSOFT_TPC	8
+	/* [LNX] linux/ieee80211.h:1477 */
+	#define	WLAN_TDLS_CHANNEL_SWITCH_REQUEST	5
+	/* [LNX] linux/ieee80211.h:1478 */
+	#define	WLAN_TDLS_CHANNEL_SWITCH_RESPONSE	6
+	/* [LNX] linux/ieee80211-eht.h:223 */
+	#define	IEEE80211_EHT_PHY_CAP2_SOUNDING_DIM_320MHZ_MASK	0xc0
+	/* [LNX] linux/ieee80211-eht.h:244 */
+	#define	IEEE80211_EHT_PHY_CAP5_COMMON_NOMINAL_PKT_PAD_0US	0
+	/* [LNX] linux/ieee80211-eht.h:246 */
+	#define	IEEE80211_EHT_PHY_CAP5_COMMON_NOMINAL_PKT_PAD_16US	2
+	/* [LNX] linux/ieee80211-eht.h:245 */
+	#define	IEEE80211_EHT_PHY_CAP5_COMMON_NOMINAL_PKT_PAD_8US	1
+	/* [LNX] linux/ieee80211-eht.h:241 */
+	#define	IEEE80211_EHT_PHY_CAP5_RX_LESS_242_TONE_RU_SUPP	0x04
+	/* [LNX] linux/ieee80211-eht.h:251 */
+	#define	IEEE80211_EHT_PHY_CAP5_SUPP_EXTRA_EHT_LTF	0x40
+	/* [LNX] linux/ieee80211-eht.h:240 */
+	#define	IEEE80211_EHT_PHY_CAP5_TX_LESS_242_TONE_RU_SUPP	0x02
+	/* [LNX] linux/ieee80211-eht.h:269 */
+	#define	IEEE80211_EHT_PHY_CAP8_RX_1024QAM_WIDER_BW_DL_OFDMA	0x01
+	/* [LNX] linux/ieee80211-eht.h:270 */
+	#define	IEEE80211_EHT_PHY_CAP8_RX_4096QAM_WIDER_BW_DL_OFDMA	0x02
+	/* [LNX] linux/ieee80211-eht.h:315 */
+	#define	IEEE80211_EHT_PPE_THRES_NSS_MASK	0xf
+	/* [LNX] linux/ieee80211-eht.h:498 */
+	#define	IEEE80211_EML_CAP_EMLSR_SUPP	0x0001
+	/* [LNX] linux/ieee80211-eht.h:511 */
+	#define	IEEE80211_EML_CAP_EMLSR_TRANSITION_DELAY_64US	3
+	/* [LNX] linux/ieee80211-eht.h:499 */
+	#define	IEEE80211_EML_CAP_EML_PADDING_DELAY	0x000e
+	/* [LNX] linux/ieee80211-eht.h:502 */
+	#define	IEEE80211_EML_CAP_EML_PADDING_DELAY_32US	1
+	/* [LNX] linux/ieee80211-eht.h:506 */
+	#define	IEEE80211_EML_CAP_EML_TRANSITION_DELAY	0x0070
+	/* [LNX] linux/ieee80211-eht.h:543 */
+	#define	IEEE80211_MLD_CAP_OP_LINK_RECONF_SUPPORT	0x2000
+	/* [LNX] linux/ieee80211-eht.h:536 */
+	#define	IEEE80211_MLD_CAP_OP_TID_TO_LINK_MAP_NEG_SUPP	0x0060
+	/* [LNX] linux/ieee80211-eht.h:538 */
+	#define	IEEE80211_MLD_CAP_OP_TID_TO_LINK_MAP_NEG_SUPP_SAME	1
+	/* [LNX] linux/ieee80211-he.h:822 */
+	#define	IEEE80211_HE_6GHZ_CAP_RX_ANTPAT_CONS	0x1000
+	/* [LNX] linux/ieee80211-he.h:823 */
+	#define	IEEE80211_HE_6GHZ_CAP_TX_ANTPAT_CONS	0x2000
+	/* [LNX] linux/ieee80211-he.h:479 */
+	#define	IEEE80211_HE_PPE_THRES_INFO_HEADER_SIZE	(7)
+	/* [LNX] linux/ieee80211-he.h:424 */
+	#define	IEEE80211_TPE_CAT_6GHZ_SUBORDINATE	1
+	/* [LNX] linux/ieee80211-ht.h:25 */
+	#define	IEEE80211_MAX_MPDU_LEN_HT_3839	3839
+	/* [LNX] linux/ieee80211-ht.h:22 */
+	#define	IEEE80211_MAX_MPDU_LEN_HT_BA	4095
+	/* [LNX] linux/ieee80211-uhr.h:392 */
+	#define	IEEE80211_UHR_MAC_CAP0_DPS_SUPP	0x01
+	/* [LNX] linux/ieee80211-uhr.h:395 */
+	#define	IEEE80211_UHR_MAC_CAP0_NPCA_SUPP	0x10
+	/* [LNX] linux/ieee80211-uhr.h:402 */
+	#define	IEEE80211_UHR_MAC_CAP1_DBE_SUPP	0x04
+	/* [LNX] linux/ieee80211-uhr.h:407 */
+	#define	IEEE80211_UHR_MAC_CAP1_DUO_SUPP	0x80
+	/* [LNX] linux/ieee80211-uhr.h:465 */
+	#define	IEEE80211_UHR_PHY_CAP_ELR_RX	0x00000080
+	/* [LNX] linux/ieee80211-uhr.h:464 */
+	#define	IEEE80211_UHR_PHY_CAP_ELR_TX	0x00000040
+	/* [LNX] linux/ieee80211-vht.h:168 */
+	#define	IEEE80211_VHT_CAP_MAX_MPDU_MASK	0x00000003
+
+/* [LNX] include/linux/ieee80211.h: the vendor-specific information element a
+ * compiled set measures. */
+struct ieee80211_vendor_ie {
+	u8	element_id;
+	u8	len;
+	u8	oui[3];
+	u8	oui_type;
+} __packed;
 
 #endif /* _LINUXKPI_LINUX_IEEE80211_H_ */

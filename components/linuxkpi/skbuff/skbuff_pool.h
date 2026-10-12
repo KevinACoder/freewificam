@@ -60,6 +60,9 @@ struct sk_buff {
 	uint32_t	priority;
 	uint8_t		pkt_type;
 	uint8_t		ip_summed;
+	/* [LNX] skbuff.h: the running checksum a transmit path stamps onto a buffer
+	 * it hands to a hardware-checksum device. */
+	uint32_t	csum;
 
 	/* slot state, pool-owned: 0 = never handed out, small positive =
 	 * allocation generation of the current owner, LKPI_SKB_FREED_MAGIC

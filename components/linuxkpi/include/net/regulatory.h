@@ -30,6 +30,8 @@ enum ieee80211_regulatory_flags {
 	REGULATORY_STRICT_REG			= BIT(1),
 	REGULATORY_DISABLE_BEACON_HINTS		= BIT(2),
 	REGULATORY_COUNTRY_IE_IGNORE		= BIT(4),
+	/* [LNX] include/net/regulatory.h:168 */
+	REGULATORY_WIPHY_SELF_MANAGED		= BIT(7),
 };
 
 /* [LNX] include/uapi/linux/nl80211.h:5077-5082: the DFS region enumeration the
@@ -125,5 +127,13 @@ struct ieee80211_regdomain {
 
 #define	REG_RULE(start, end, bw, gain, eirp, reg_flags) \
 	REG_RULE_EXT(start, end, bw, gain, eirp, 0, reg_flags)
+
+/* ------------------------------------------------------------------ */
+/* The remaining regulatory flags the compiled set names,
+ * each line names the interface header and line it was transcribed from. */
+/* ------------------------------------------------------------------ */
+
+	/* [LNX] net/regulatory.h:18 */
+	#define	REGULATORY_ENABLE_RELAX_NO_IR	32
 
 #endif /* _LINUXKPI_NET_REGULATORY_H_ */

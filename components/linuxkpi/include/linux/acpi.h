@@ -130,4 +130,13 @@ acpi_evaluate_dsm(acpi_handle handle, const guid_t *guid, u64 rev, u64 func,
 	return NULL;
 }
 
+/* [LNX] include/acpi/actypes.h:412,415: the boolean spellings the interface's ACPI
+ * header defines and a compiled set reaches through it. */
+#ifndef TRUE
+#define	TRUE		(1 == 1)
+#endif
+#ifndef FALSE
+#define	FALSE		(1 == 0)
+#endif
+
 #endif /* _LINUXKPI_LINUX_ACPI_H_ */

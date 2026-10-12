@@ -50,4 +50,15 @@ struct ipv6hdr {
 /* [LNX] include/uapi/linux/in6.h:135 */
 #define	IPPROTO_ICMPV6		58	/* ICMPv6 */
 
+/* [LNX] include/uapi/linux/ipv6.h:63-68: the extension-header record a transmit
+ * path walks with ipv6_optlen(). */
+struct ipv6_opt_hdr {
+	__u8	nexthdr;
+	__u8	hdrlen;
+	/* TLV encoded option data follows. */
+} __packed;
+
+/* [LNX] include/linux/ipv6.h:8 */
+#define	ipv6_optlen(p)		((((p)->hdrlen) + 1) << 3)
+
 #endif /* _LINUXKPI_LINUX_IPV6_H_ */

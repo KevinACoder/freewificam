@@ -39,5 +39,8 @@ struct module;
 #define	MODULE_VERSION(version)			extern int lkpi_module_version_inert__
 #define	MODULE_SUPPORTED_DEVICE(name)		extern int lkpi_module_supported_inert__
 #define	MODULE_ALIAS(alias)			extern int lkpi_module_alias_inert__
+/* [LNX] include/linux/module.h:302: the imported-namespace line. It is module
+ * metadata for the loader; this project links one image, so it is inert. */
+#define	MODULE_IMPORT_NS(ns)			extern int lkpi_module_import_ns_inert__
 
 #endif /* _LINUXKPI_LINUX_MODULE_H_ */
