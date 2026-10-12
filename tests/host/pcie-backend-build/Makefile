@@ -57,6 +57,7 @@ LINE_SRCS := \
 	$(ARCH)/irq_ctrl.c \
 	$(PCIE)/pcie_dw.c \
 	$(PCIE)/dwc_msix.c \
+	$(PCIE)/dwc_msi.c \
 	$(PCIE)/dwc_pcie.c \
 	$(NVME)/dwc_nvme.c
 
@@ -161,6 +162,7 @@ SPDX_FILES := \
     $(ARCH)/gicv3_its.c $(ARCH)/gicv3_its.h $(ARCH)/gicv3_msi.c $(ARCH)/msi.h \
     $(ARCH)/irq_ctrl.c \
     $(PCIE)/pcie_dw.c $(PCIE)/pcie_dw.h $(PCIE)/dwc_msix.c $(PCIE)/dwc_msix.h \
+    $(PCIE)/dwc_msi.c $(PCIE)/dwc_msi.h \
     $(PCIE)/dwc_pcie.c $(PCIE)/dwc_pcie.h \
     $(NVME)/dwc_nvme.c $(NVME)/dwc_nvme.h $(NVME)/dwc_nvme_regs.h $(NVME)/nvme.h \
     $(MAKEFILE_DIR)/face_contract.c
