@@ -84,9 +84,9 @@ DRV_WARN    := -Wall -Wextra -Wno-address-of-packed-member -Wno-maybe-uninitiali
 DRV_CFLAGS  := $(COMMON) $(DRV_CONFIG) $(DRV_WARN)
 FACE_CFLAGS := $(COMMON) -Wall -Wextra
 
-.PHONY: all compile contract spdx gates clean
+.PHONY: all compile contract spdx gates symbols clean
 
-all: compile contract spdx gates
+all: compile contract spdx gates symbols
 
 # ---- compile: the vendored bytes against the first-party face ----------------
 
@@ -191,6 +191,34 @@ gates: $(OBJS)
 	    --sources "$(FACE) $(MAKEFILE_DIR)" \
 	    --canary-src "$(MAKEFILE_DIR)" \
 	    --canary
+
+# ---- symbols: the closure's lower bound ---------------------------------------
+#
+# A translation unit that compiles proves nothing about what it calls: a
+# declaration with no definition behind it compiles and fails at link time. The
+# 63 units are relocatably linked against nothing, so every symbol they reference
+# and none of them defines is exactly what the rest of the port has to supply.
+# The set is recorded; a symbol that disappears or appears is a change to the
+# port's obligations, and this gate refuses to let it pass unnoticed.
+
+LEDGER := $(MAKEFILE_DIR)/face-undefined.txt
+
+symbols: $(OBJS)
+	@set -e; \
+	$(CROSS_COMPILE)ld -r -o $(BUILD)/closure.o $(OBJS); \
+	$(CROSS_COMPILE)nm -u $(BUILD)/closure.o | awk '{print $$2}' | LC_ALL=C sort -u > $(BUILD)/undefined.txt; \
+	n=$$(wc -l < $(BUILD)/undefined.txt); \
+	if [ ! -f "$(LEDGER)" ]; then \
+		cp $(BUILD)/undefined.txt $(LEDGER); \
+		echo "symbols: recorded $$n referenced-but-undefined symbols in $(notdir $(LEDGER))"; \
+		exit 0; \
+	fi; \
+	if ! diff -u $(LEDGER) $(BUILD)/undefined.txt > $(BUILD)/undefined.diff; then \
+		echo "FAIL: the closure's undefined set changed:"; \
+		head -40 $(BUILD)/undefined.diff; \
+		exit 1; \
+	fi; \
+	echo "symbols: $$n referenced-but-undefined symbols, unchanged from the ledger"
 
 $(BUILD):
 	mkdir -p $@
