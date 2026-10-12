@@ -685,6 +685,26 @@ out:
 	return clone;
 }
 
+/*
+ * Copy a run of bytes out of a buffer. [LNX] include/linux/skbuff.h:4286: the
+ * interface's body copies from the linear area and then walks the fragment list,
+ * answering -EFAULT when the range does not fit. Every buffer this port produces
+ * is one linear store with no fragment list (skbuff_pool.h:45-83), so the linear
+ * copy is the whole body and the range check is the interface's. The vendored
+ * transmit path reads a management frame's bytes through this
+ * (third-party/rtl8189fs/os_dep/linux/xmit_linux.c:46).
+ */
+int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len)
+{
+	if (skb == NULL || to == NULL || len < 0)
+		return -EFAULT;
+	if (offset < 0 ||
+	    (unsigned int)offset + (unsigned int)len > skb->len)
+		return -EFAULT;
+	memcpy(to, skb->data + offset, (size_t)len);
+	return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* release                                                             */
 /* ------------------------------------------------------------------ */
