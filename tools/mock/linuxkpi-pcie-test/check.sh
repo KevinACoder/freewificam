@@ -12,7 +12,10 @@
 # the smoke verdict last), and the two scripted faults whose red controls are part
 # of the run - a perturbed config byte the identity assertion reads, and a host
 # that raises the vector but delivers nothing. Every group is a witness for its own
-# failure mode, so a green run says what it claims.
+# failure mode, so a green run says what it claims. A fourth group judges the AC
+# 7260 synthetic chain (the driver line's stage i), which is its own invocation
+# because the engine's driver registry is bounded and the default run already holds
+# three drivers.
 
 set -eu
 
@@ -157,5 +160,42 @@ else
     echo "  $suite: the lying host did not go red (exit=$lying_code)" >&2
 fi
 
-echo "$suite: exit=$code tamper=$tamper_code lying=$lying_code failures=$failures"
+# ---------------------------------------------------------------------------
+# the AC 7260 synthetic chain, stage i: the driver line's host-side proof
+#
+# The synthetic host presents the Intel AC 7260 (8086:08b1, class 0280), the
+# engine enumerates it, the driver's id table claims it and the probe entry runs
+# once with both records. Its own invocation, for the registry-bound reason above.
+# ---------------------------------------------------------------------------
+set +e
+timeout 60 "$binary" --scenario ac7260 > "$log" 2>&1
+chain_code=$?
+set -e
+
+case_line chain_exit "$([ "$chain_code" = 0 ] && echo 1 || echo 0)"
+
+chain_anchors="pcie-smoke: chain enumerated id=8086:08b1 found=1
+pcie-smoke: chain class=0x028000
+pcie-smoke: chain bdf=21:00.0
+pcie-smoke: chain probe n=1 ok=1
+pcie-smoke: chain id=8086:08b1 driver_data=1
+pcie-smoke: chain negative probe n=0 ok=1
+pcie-smoke: chain cfg vendor-device=0x08b18086
+pcie-smoke: chain bar0 len=4096 map=1 ok=1
+pcie-smoke: chain stats ok=1 errors=0
+pcie-smoke: PASS"
+
+while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    if grep -qF -e "$pat" "$log"; then
+        case_line "$(anchor_case_name "$pat")" 1
+    else
+        case_line "$(anchor_case_name "$pat")" 0
+        echo "  $suite: missing chain anchor line: $pat" >&2
+    fi
+done <<EOF
+$chain_anchors
+EOF
+
+echo "$suite: exit=$code tamper=$tamper_code lying=$lying_code chain=$chain_code failures=$failures"
 [ "$failures" = 0 ]

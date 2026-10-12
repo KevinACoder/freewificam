@@ -105,6 +105,16 @@ struct lkpi80211_hw_ctx {
 	u32			filter_total;	/* the last programmed filter */
 	unsigned int		registered:1;
 	unsigned int		scanning:1;
+	/*
+	 * The hardware-scan route's own state. `hw_scanning` is set while a
+	 * firmware sweep is in flight (there the driver owns the dwell, so the
+	 * end arrives as a call rather than as the bridge's walk running out),
+	 * and `hw_scan_req` is the request object handed to ops->hw_scan: it
+	 * must outlive that call, so it is held here until the completion or a
+	 * cancel releases it.
+	 */
+	unsigned int		hw_scanning:1;
+	struct ieee80211_scan_request *hw_scan_req;
 	unsigned int		have_chanctx:1;
 	unsigned int		tx_ba_sessions;
 	unsigned int		rx_frames;
@@ -1225,10 +1235,119 @@ lkpi80211_drv_scan_complete(struct ieee80211_hw *hw)
 	ctx->scanning = 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* the hardware-scan route                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A driver with ops->hw_scan and no ops->sw_scan_start has no software
+ * fallback: the AC 7260's mvm ops table is exactly that shape
+ * (mvm/mac80211.c:6367 has hw_scan/cancel_hw_scan and no sw_scan_start), so a
+ * sweep on that line can only be a firmware one. The bridge asks this to pick
+ * the route and then drives the driver through the three calls below.
+ *
+ * The request object is built here rather than in the bridge because it is
+ * made of mac80211 types (the same division of labour the rest of this seam
+ * follows). Its shape is the interface's: mac80211 allocates
+ * `struct_size(req, req.channels, n_channels)` and fills n_channels/channels
+ * from the cfg80211 request (net/mac80211/scan.c:780, ieee80211_prep_hw_scan
+ * :379-445), and the AC 7260 sets IEEE80211_HW_SINGLE_SCAN_ON_ALL_BANDS
+ * (mvm/mac80211.c:515), which is the branch that puts every channel of every
+ * band in one request - so one call covers the bridge's whole channel set.
+ *
+ * A wildcard sweep is what the bridge wants (it is collecting every beacon),
+ * so n_ssids stays 0 and no probe IEs are carried: the firmware then probes
+ * with the broadcast SSID, which is the same air traffic a software sweep
+ * produces from the bridge's side.
+ */
+#ifndef CONFIG_LKPI80211_MAX_HW_SCAN_CHANNELS
+#define CONFIG_LKPI80211_MAX_HW_SCAN_CHANNELS	64
+#endif
+
+int
+lkpi80211_drv_has_hw_scan(struct ieee80211_hw *hw)
+{
+
+	if (hw == NULL)
+		return 0;
+	return LKPI80211_CTX(hw)->ops->hw_scan != NULL;
+}
+
+int
+lkpi80211_drv_hw_scan(struct ieee80211_hw *hw, const u32 *freqs,
+    unsigned int n_freqs)
+{
+	struct lkpi80211_hw_ctx *ctx;
+	struct ieee80211_scan_request *req;
+	unsigned int i, n = 0;
+	int rc;
+
+	if (hw == NULL || freqs == NULL || n_freqs == 0)
+		return -EINVAL;
+	ctx = LKPI80211_CTX(hw);
+	if (ctx->ops->hw_scan == NULL)
+		return -EOPNOTSUPP;
+	if (ctx->hw_scanning)
+		return -EBUSY;
+	if (n_freqs > CONFIG_LKPI80211_MAX_HW_SCAN_CHANNELS)
+		n_freqs = CONFIG_LKPI80211_MAX_HW_SCAN_CHANNELS;
+
+	req = kzalloc(struct_size(req, req.channels, n_freqs), GFP_KERNEL);
+	if (req == NULL)
+		return -ENOMEM;
+
+	req->req.wiphy = ctx->hw.wiphy;
+	req->req.wdev = ctx->vifs[0] != NULL ? &ctx->wdevs[0] : NULL;
+	for (i = 0; i < n_freqs; i++) {
+		struct ieee80211_channel *chan =
+		    ieee80211_get_channel(ctx->hw.wiphy, (int)freqs[i]);
+
+		/* a frequency the wiphy does not carry is not scannable here;
+		 * dropping it keeps the request a subset of the bridge's set
+		 * rather than a request the driver would refuse whole */
+		if (chan == NULL)
+			continue;
+		req->req.channels[n++] = chan;
+	}
+	if (n == 0) {
+		kfree(req);
+		return -EINVAL;
+	}
+	req->req.n_channels = n;
+
+	ctx->hw_scan_req = req;
+	ctx->hw_scanning = 1;
+	rc = ctx->ops->hw_scan(hw, ctx->vifs[0], req);
+	if (rc != 0) {
+		ctx->hw_scanning = 0;
+		ctx->hw_scan_req = NULL;
+		kfree(req);
+	}
+	return rc;
+}
+
+void
+lkpi80211_drv_hw_scan_cancel(struct ieee80211_hw *hw)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	if (ctx->ops->cancel_hw_scan != NULL && ctx->hw_scanning)
+		ctx->ops->cancel_hw_scan(hw, ctx->vifs[0]);
+	ctx->hw_scanning = 0;
+	if (ctx->hw_scan_req != NULL) {
+		kfree(ctx->hw_scan_req);
+		ctx->hw_scan_req = NULL;
+	}
+}
+
 void
 ieee80211_scan_completed(struct ieee80211_hw *hw, struct cfg80211_scan_info *info)
 {
 	struct lkpi80211_hw_ctx *ctx;
+	int was_hw;
 
 	/*
 	 * [LNX] net/mac80211/scan.c:540: the driver's scan finished.  The
@@ -1239,13 +1358,28 @@ ieee80211_scan_completed(struct ieee80211_hw *hw, struct cfg80211_scan_info *inf
 	 * scanning flag cleared, the aborted outcome recorded, and a count that
 	 * makes the completion visible.  The driver calls this after its
 	 * hardware sweep (mvm/scan.c:445,3260,3459,3506,3558).
+	 *
+	 * For a hardware scan this call is also the *only* way the bridge can
+	 * learn the sweep ended - the bridge drove no channel walk to run out -
+	 * so the completion is forwarded through the bridge ops.  A software
+	 * scan's completion comes from the bridge's own walk, so the forward is
+	 * made only when a firmware sweep was actually in flight; that keeps the
+	 * three shipping software-scan lines' behaviour unchanged.
 	 */
 	if (hw == NULL)
 		return;
 	ctx = LKPI80211_CTX(hw);
+	was_hw = ctx->hw_scanning;
 	ctx->scanning = 0;
+	ctx->hw_scanning = 0;
 	ctx->scan_completions++;
+	if (ctx->hw_scan_req != NULL) {
+		kfree(ctx->hw_scan_req);
+		ctx->hw_scan_req = NULL;
+	}
 	(void)info;
+	if (was_hw && bridge_ops != NULL && bridge_ops->scan_complete != NULL)
+		bridge_ops->scan_complete(hw);
 }
 
 int

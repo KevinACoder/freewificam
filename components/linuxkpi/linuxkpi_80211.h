@@ -68,6 +68,19 @@ struct lkpi80211_bridge_ops {
 	 * release exactly once.
 	 */
 	void	(*tx_complete)(struct ieee80211_hw *hw, struct sk_buff *skb);
+
+	/*
+	 * The driver reported a hardware scan finished - it called
+	 * ieee80211_scan_completed(). The bridge closes its sweep window here.
+	 *
+	 * This is the hw_scan path's only completion signal, and it exists
+	 * because the two scan routes end differently: a software scan ends when
+	 * the bridge's own channel walk runs out (the bridge drives it and knows
+	 * when), while a hardware scan ends when the *driver* says so - the
+	 * firmware owned the dwell. Without this the bridge would have no way to
+	 * learn that a firmware sweep ended.
+	 */
+	void	(*scan_complete)(struct ieee80211_hw *hw);
 };
 
 /* install the bridge; without one, register_hw fails with -ENODEV */
@@ -90,6 +103,24 @@ int	lkpi80211_drv_config_channel(struct ieee80211_hw *hw, u32 freq,
 /* ops->sw_scan_start(hw, vif, addr) / sw_scan_complete(hw, vif) */
 int	lkpi80211_drv_scan_start(struct ieee80211_hw *hw);
 void	lkpi80211_drv_scan_complete(struct ieee80211_hw *hw);
+
+/*
+ * The hardware-scan route, for a driver that exposes ops->hw_scan and no
+ * ops->sw_scan_start (the AC 7260's mvm path: its ops table has no software
+ * fallback, so a sweep there can only be a firmware one).
+ *
+ * `has_hw_scan` is what the bridge asks to choose the route; `hw_scan` builds
+ * the scan request from the bridge's channel list and hands it to the driver,
+ * which owns the dwell from then on; `hw_scan_cancel` takes it back. The
+ * completion comes up the other way, through the bridge ops' scan_complete.
+ *
+ * The channel list is the bridge's because net80211 owns the channel set (the
+ * driver-side request wants the same channels, as frequencies in MHz).
+ */
+int	lkpi80211_drv_has_hw_scan(struct ieee80211_hw *hw);
+int	lkpi80211_drv_hw_scan(struct ieee80211_hw *hw, const u32 *freqs,
+	    unsigned int n_freqs);
+void	lkpi80211_drv_hw_scan_cancel(struct ieee80211_hw *hw);
 
 /* ops->configure_filter(hw, changed, &total, 0) */
 int	lkpi80211_drv_filter(struct ieee80211_hw *hw, u32 changed, u32 total);

@@ -5,8 +5,10 @@
 #
 # One binary, linuxkpi-80211-shape-test: the substitute body
 # (components/linuxkpi/linuxkpi_80211.c) driven by scripted drivers that
-# declare each of the two station/interface op families the interface allows,
-# on the FreeRTOS host runtime.  What is under test is which op is called, in
+# declare each of the station/interface op families the interface allows and
+# the mixed combination a real driver ships - new-form sta_state with the old
+# bss_info_changed, plus the txq transmit path (the AC 7260's ops table) - on
+# the FreeRTOS host runtime.  What is under test is which op is called, in
 # what order, and with what mask - not what a real driver does with it.
 #
 # ENGINE_EXTRA_SRC lets the wrapper's red control build the harness against a
@@ -84,7 +86,7 @@ endef
 
 OBJS := $(foreach s,$(SRCS),$(call OBJ,$(s)))
 
-.PHONY: all clean
+.PHONY: all run clean
 
 all: $(BIN)
 
@@ -100,6 +102,9 @@ $(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
 
 $(BIN): $(OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
+
+run: $(BIN)
+	$(BIN)
 
 # Header dependencies: -MMD -MP writes one .d per object, so a header edit
 # rebuilds every object that included it.

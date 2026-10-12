@@ -11,6 +11,14 @@
  * op is called, in what order, and with which bits - the rules upstream states
  * in net/mac80211/driver-ops.c:drv_sta_state and net/mac80211/main.c:203-254.
  *
+ * The families are not declared as a pair: a driver may take the newer station
+ * chain and the older BSS chain at once, and one does.  The AC 7260's ops table
+ * (iwlwifi mvm/mac80211.c:6351 iwl_mvm_hw_ops) carries .sta_state (:6370) with
+ * the older .bss_info_changed (:6366) and neither half of the split pair, and
+ * adds the txq transmit path (.wake_tx_queue :6353, .tx :6352).  That mixed
+ * combination is the third shape here: the newer station ladder, the older BSS
+ * mask, and a frame handed to the TXQ path reaching the driver's transmit entry.
+ *
  * Exit status is 0 only when every case held.
  */
 
@@ -22,6 +30,8 @@
 #include "linuxkpi_impl.h"
 #include "linuxkpi_core.h"
 #include "linuxkpi_80211.h"
+#include "linuxkpi_txq.h"
+#include "skbuff/skbuff_pool.h"
 
 #include <net/mac80211.h>
 
@@ -59,6 +69,7 @@ enum shape {
 	SHAPE_73,	/* vif_cfg_changed + link_info_changed + sta_state */
 	SHAPE_6X,	/* bss_info_changed + sta_add/sta_remove */
 	SHAPE_BOTH,	/* both families at once (the interface allows it) */
+	SHAPE_7260,	/* sta_state + bss_info_changed + tx/wake_tx_queue */
 };
 
 /* what the private area holds: which table this hw was allocated with */
@@ -76,13 +87,15 @@ enum ev_kind {
 	EV_VIF_CFG,
 	EV_LINK_INFO,
 	EV_BSS_INFO,
+	EV_TX,
+	EV_WAKE_TXQ,
 	EV_MAX
 };
 
 static const char *const ev_name[EV_MAX] = {
 	"add_interface", "remove_interface", "sta_state", "sta_add",
 	"sta_remove", "vif_cfg_changed", "link_info_changed",
-	"bss_info_changed",
+	"bss_info_changed", "tx", "wake_tx_queue",
 };
 
 #define LOG_MAX	32
@@ -272,6 +285,38 @@ drv_bss_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	log_add(EV_BSS_INFO, vif, changed, 0, 0, conf);
 }
 
+/*
+ * The transmit entry, shared by the direct path and the txq drain.  A driver
+ * owns every frame it is handed, so this one releases it - the pool's pairing
+ * then stays exact across the case.
+ */
+static void
+drv_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
+    struct sk_buff *skb)
+{
+
+	(void)hw;
+	(void)control;
+	log_add(EV_TX, NULL, 0, 0, 0, NULL);
+	lkpi_skb_free(skb);
+}
+
+/*
+ * The driver's own wake entry, the shape the AC 7260 declares
+ * (mvm/mac80211.c:928 iwl_mvm_mac_wake_tx_queue -> iwl_mvm_mac_itxq_xmit): the
+ * stack wakes the queue and the driver dequeues it into its transmit entry.
+ * This scripted driver's drain is the interface's default one
+ * (ieee80211_handle_wake_tx_queue), which schedules the queue and hands each
+ * frame to ops->tx - the same dequeue-then-tx the AC 7260 performs.
+ */
+static void
+drv_wake_tx_queue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
+{
+
+	log_add(EV_WAKE_TXQ, txq->vif, 0, 0, 0, NULL);
+	ieee80211_handle_wake_tx_queue(hw, txq);
+}
+
 /* the two families, declared one per table exactly as the drivers do */
 static const struct ieee80211_ops ops_73 = {
 	.add_interface		= drv_add_interface,
@@ -298,6 +343,23 @@ static const struct ieee80211_ops ops_both = {
 	.vif_cfg_changed	= drv_vif_cfg_changed,
 	.link_info_changed	= drv_link_info_changed,
 	.bss_info_changed	= drv_bss_info_changed,
+};
+
+/*
+ * The mixed combination the AC 7260 ships (mvm/mac80211.c:6351 iwl_mvm_hw_ops):
+ * the newer station chain (.sta_state) with the older BSS chain
+ * (.bss_info_changed), and neither .sta_add/.sta_remove nor the split
+ * .vif_cfg_changed/.link_info_changed - plus the txq transmit path
+ * (.wake_tx_queue + .tx).  No shipping case pairs the new station chain with
+ * the old BSS chain, so the substitute's per-member dispatch is what this pins.
+ */
+static const struct ieee80211_ops ops_7260 = {
+	.add_interface		= drv_add_interface,
+	.remove_interface	= drv_remove_interface,
+	.sta_state		= drv_sta_state,
+	.bss_info_changed	= drv_bss_info_changed,
+	.tx			= drv_tx,
+	.wake_tx_queue		= drv_wake_tx_queue,
 };
 
 /* ------------------------------------------------------------------ */
@@ -327,6 +389,9 @@ fixture_new(enum shape shape)
 		break;
 	case SHAPE_6X:
 		ops = &ops_6x;
+		break;
+	case SHAPE_7260:
+		ops = &ops_7260;
 		break;
 	default:
 		ops = &ops_both;
@@ -586,6 +651,135 @@ case_both_families(void)
 }
 
 static void
+case_7260_association(void)
+{
+	struct ieee80211_hw *hw = fixture_new(SHAPE_7260);
+	struct ieee80211_sta *sta = NULL;
+	struct ieee80211_vif *vif;
+	const struct ev *appears, *assoc, *bss;
+	int ok = 1;
+
+	if (hw == NULL) {
+		case_line("7260-association", 0, "no hw");
+		return;
+	}
+	log_reset();
+	vif = join(hw, &sta);
+	if (vif == NULL || sta == NULL) {
+		case_line("7260-association", 0, "the join did not complete");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/*
+	 * The newer station chain with no old hooks: the AC 7260 declares
+	 * sta_state and no sta_add/sta_remove, so the whole ladder reaches
+	 * sta_state (NOTEXIST -> NONE as the station appears, AUTH -> ASSOC as it
+	 * associates) and the old station members are never touched -
+	 * dispatching the association to a NULL .sta_add is the crash this pins.
+	 */
+	appears = log_nth(EV_STA_STATE, 0);
+	assoc = log_nth(EV_STA_STATE, 1);
+	if (log_count(EV_STA_STATE) != 2 || appears == NULL || assoc == NULL)
+		ok = 0;
+	else if (appears->old_state != IEEE80211_STA_NOTEXIST ||
+	    appears->new_state != IEEE80211_STA_NONE ||
+	    assoc->old_state != IEEE80211_STA_AUTH ||
+	    assoc->new_state != IEEE80211_STA_ASSOC)
+		ok = 0;
+	if (log_count(EV_STA_ADD) != 0 || log_count(EV_STA_REMOVE) != 0)
+		ok = 0;
+	/*
+	 * The older BSS chain with no split pair: the AC 7260 declares
+	 * bss_info_changed and neither .vif_cfg_changed nor .link_info_changed,
+	 * so the whole mask arrives at that one member (main.c:238-254) and the
+	 * split members stay silent - the mask is not halved into a pair that
+	 * this driver does not have.
+	 */
+	bss = log_first(EV_BSS_INFO);
+	if (log_count(EV_BSS_INFO) != 1 || bss == NULL)
+		ok = 0;
+	else if (bss->changed != (u64)ASSOC_CHANGED ||
+	    bss->conf != &vif->bss_conf)
+		ok = 0;
+	if (log_count(EV_VIF_CFG) != 0 || log_count(EV_LINK_INFO) != 0)
+		ok = 0;
+	case_line("7260-association", ok,
+	    "sta_state=%u sta_add=%u bss_info=%u cfg=%u link=%u",
+	    log_count(EV_STA_STATE), log_count(EV_STA_ADD),
+	    log_count(EV_BSS_INFO), log_count(EV_VIF_CFG),
+	    log_count(EV_LINK_INFO));
+	if (!ok)
+		log_dump();
+	ieee80211_free_hw(hw);
+}
+
+static void
+case_7260_txq(void)
+{
+	struct ieee80211_hw *hw = fixture_new(SHAPE_7260);
+	struct ieee80211_sta *sta = NULL;
+	struct ieee80211_vif *vif;
+	struct ieee80211_txq *txq;
+	struct sk_buff *frame, *left;
+	int ok = 1;
+
+	if (hw == NULL) {
+		case_line("7260-txq", 0, "no hw");
+		return;
+	}
+	vif = join(hw, &sta);
+	if (vif == NULL || sta == NULL) {
+		case_line("7260-txq", 0, "the join did not complete");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/*
+	 * The station's first TID queue, allocated by the substitute when the
+	 * station appeared (a driver's station setup walks these).
+	 */
+	txq = sta->txq[0];
+	if (txq == NULL) {
+		case_line("7260-txq", 0, "the station has no txq");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	log_reset();
+	frame = alloc_skb(64, GFP_KERNEL);
+	if (frame == NULL || skb_put(frame, 64) == NULL) {
+		case_line("7260-txq", 0, "no frame");
+		lkpi_skb_free(frame);
+		ieee80211_free_hw(hw);
+		return;
+	}
+	if (lkpi_txq_enqueue(txq, frame) != 0) {
+		case_line("7260-txq", 0, "the frame would not queue");
+		lkpi_skb_free(frame);
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/*
+	 * A frame on the queue is handed to the TXQ path: the stack wakes the
+	 * queue, the driver's wake entry drains it, and the frame reaches the
+	 * driver's transmit entry - .wake_tx_queue and then .tx, the transmit
+	 * chain the AC 7260's ops table declares.
+	 */
+	ops_7260.wake_tx_queue(hw, txq);
+	if (log_count(EV_WAKE_TXQ) != 1 || log_count(EV_TX) != 1)
+		ok = 0;
+	/* the queue drained: nothing is left to hand out */
+	left = ieee80211_tx_dequeue(hw, txq);
+	if (left != NULL) {
+		ok = 0;
+		lkpi_skb_free(left);
+	}
+	case_line("7260-txq", ok, "wake_tx_queue=%u tx=%u",
+	    log_count(EV_WAKE_TXQ), log_count(EV_TX));
+	if (!ok)
+		log_dump();
+	ieee80211_free_hw(hw);
+}
+
+static void
 case_link_bookkeeping(void)
 {
 	struct ieee80211_hw *hw = fixture_new(SHAPE_6X);
@@ -746,6 +940,8 @@ app_task(void *arg)
 	case_6x_association();
 	case_6x_leave();
 	case_both_families();
+	case_7260_association();
+	case_7260_txq();
 	case_link_bookkeeping();
 	case_default_link_address();
 	case_zero_change_is_silent();

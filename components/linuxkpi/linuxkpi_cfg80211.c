@@ -329,24 +329,8 @@ ieee80211_frequency_to_channel(int freq)
 	return 0;
 }
 
-struct ieee80211_channel *
-ieee80211_get_channel(struct wiphy *wiphy, int freq)
-{
-	unsigned int b, c;
-
-	if (wiphy == NULL)
-		return NULL;
-	for (b = 0; b < NUM_NL80211_BANDS; b++) {
-		struct ieee80211_supported_band *band = wiphy->bands[b];
-
-		if (band == NULL)
-			continue;
-		for (c = 0; c < (unsigned int)band->n_channels; c++)
-			if ((int)band->channels[c].center_freq == freq)
-				return &band->channels[c];
-	}
-	return NULL;
-}
+/* ieee80211_get_channel() is the face's inline (net/cfg80211.h): its body is a
+ * walk over the caller's own wiphy band tables, so it is not a body here. */
 
 /* ------------------------------------------------------------------ */
 /* element search (driver: mvm/tx.c:736, mvm/ftm-initiator.c:1455)      */

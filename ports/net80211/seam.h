@@ -99,6 +99,24 @@ struct wlan_seam_drv_ops {
 	int (*sw_scan_start)(struct wlan_seam_drv *drv);
 	void (*sw_scan_complete)(struct wlan_seam_drv *drv);
 
+	/*
+	 * Hardware scan. A driver whose ops table carries hw_scan and no
+	 * sw_scan_start has no software route at all (the AC 7260's mvm path),
+	 * so the sweep has to be asked for as a firmware one: the bridge hands
+	 * its channel set down, the device owns the dwell, and the end arrives
+	 * back up through the bridge's scan-complete notification instead of
+	 * from the bridge's own channel walk.
+	 *
+	 * `has_hw_scan` is the capability question the bridge asks to choose
+	 * between this route and the software one - a query, not a state
+	 * change. `hw_scan_start` returns 0 when the device accepted the sweep.
+	 * `freqs` are centre frequencies in MHz, `n_freqs` their count.
+	 */
+	int (*has_hw_scan)(struct wlan_seam_drv *drv);
+	int (*hw_scan_start)(struct wlan_seam_drv *drv, const uint32_t *freqs,
+	    size_t n_freqs);
+	void (*hw_scan_cancel)(struct wlan_seam_drv *drv);
+
 	/* Transmit one 802.11 frame. is_mgmt separates management frames (the
 	 * driver may need to wait for them) from data frames. */
 	int (*tx)(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,

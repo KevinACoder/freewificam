@@ -45,6 +45,23 @@ int	wlan_bridge_scan_pending(void);
 
 static struct fake_driver_state fake;
 
+/*
+ * The channel table a driver advertises at registration. The hardware-scan
+ * request builder resolves each frequency the bridge hands down through the
+ * wiphy's own band tables (ieee80211_get_channel), so a driver without them
+ * would get an empty request and the hardware route would fail for a reason
+ * that is the harness's, not the chain's. The set is the stack's own 2.4 GHz
+ * table (2412..2472, 13 channels), the same one the bridge's software walk
+ * visits.
+ */
+#define FAKE_DRIVER_BAND_CHANS	13
+static struct ieee80211_channel fake_band_channels[FAKE_DRIVER_BAND_CHANS];
+static struct ieee80211_supported_band fake_band = {
+	.channels = fake_band_channels,
+	.band = NL80211_BAND_2GHZ,
+	.n_channels = FAKE_DRIVER_BAND_CHANS,
+};
+
 void
 fake_driver_reset(void)
 {
@@ -126,6 +143,7 @@ record_tx(struct sk_buff *skb, int is_mgmt)
 static int
 fake_add_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 {
+	unsigned int i;
 
 	/*
 	 * A driver declares its transmit-descriptor headroom before it is handed
@@ -133,6 +151,18 @@ fake_add_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	 * The bridge reads this field when it builds each frame.
 	 */
 	hw->extra_tx_headroom = FAKE_DRIVER_TX_HEADROOM;
+	/*
+	 * The wiphy band table, which a real driver fills in before registering.
+	 * The hardware-scan request builder resolves the bridge's frequencies
+	 * through it (ieee80211_get_channel), so the shape has to be here for that
+	 * route to have a request to build at all.
+	 */
+	for (i = 0; i < FAKE_DRIVER_BAND_CHANS; i++) {
+		fake_band_channels[i].band = NL80211_BAND_2GHZ;
+		fake_band_channels[i].center_freq = 2412 + i * 5;
+		fake_band_channels[i].hw_value = (u16)(i + 1);
+	}
+	hw->wiphy->bands[NL80211_BAND_2GHZ] = &fake_band;
 	(void)vif;
 	fake.add_interface_calls++;
 	order_add(FAKE_CALL_ADD_INTERFACE);
@@ -248,6 +278,51 @@ fake_sw_scan_complete(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	order_add(FAKE_CALL_SCAN_COMPLETE);
 }
 
+/*
+ * The hardware-scan op (the shape an AC 7260-class driver registers: hw_scan
+ * plus cancel_hw_scan, no sw_scan_start). The request object is the one the
+ * substitute built, and it is live for the duration of this call - the driver
+ * reads its channel list here, which is exactly what a real firmware-scan
+ * driver does when it packs the request for the firmware.
+ */
+static int
+fake_hw_scan(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_scan_request *req)
+{
+	unsigned int i;
+
+	(void)hw;
+	(void)vif;
+	fake.hw_scan_calls++;
+	order_add(FAKE_CALL_HW_SCAN);
+	if (req != NULL) {
+		fake.hw_scan_n_channels = req->req.n_channels;
+		fake.hw_scan_n_ssids = (unsigned int)req->req.n_ssids;
+		fake.hw_scan_req_readable = 1;
+		for (i = 0; i < req->req.n_channels &&
+		    i < FAKE_DRIVER_HW_SCAN_MAX; i++) {
+			const struct ieee80211_channel *c = req->req.channels[i];
+
+			if (c == NULL) {
+				fake.hw_scan_req_readable = 0;
+				continue;
+			}
+			fake.hw_scan_freqs[i] = c->center_freq;
+		}
+	}
+	return 0;
+}
+
+static void
+fake_cancel_hw_scan(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+{
+
+	(void)hw;
+	(void)vif;
+	fake.hw_scan_cancel_calls++;
+	order_add(FAKE_CALL_HW_SCAN_CANCEL);
+}
+
 static int
 fake_start(struct ieee80211_hw *hw)
 {
@@ -354,7 +429,13 @@ fake_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	return 0;
 }
 
-static const struct ieee80211_ops fake_ops = {
+/*
+ * The ops table is mutable on purpose: the suite switches this same object
+ * between the software shape and the hardware one (fake_driver_knob_hw_scan),
+ * and the substitute holds the pointer, so the route the bridge reads follows
+ * the switch. A const table would need a second registration to change shape.
+ */
+static struct ieee80211_ops fake_ops = {
 	.tx = fake_tx,
 	.wake_tx_queue = fake_wake_tx_queue,
 	.add_interface = fake_add_interface,
@@ -373,4 +454,27 @@ fake_driver_ops(void)
 {
 
 	return &fake_ops;
+}
+
+/*
+ * The route switch. `on` gives the driver the AC 7260's mvm shape - hw_scan and
+ * cancel_hw_scan present, sw_scan_start/sw_scan_complete absent - so the bridge
+ * has no software route to take; off restores the software shape the other
+ * cases run on.
+ */
+void
+fake_driver_knob_hw_scan(int on)
+{
+
+	if (on) {
+		fake_ops.hw_scan = fake_hw_scan;
+		fake_ops.cancel_hw_scan = fake_cancel_hw_scan;
+		fake_ops.sw_scan_start = NULL;
+		fake_ops.sw_scan_complete = NULL;
+	} else {
+		fake_ops.hw_scan = NULL;
+		fake_ops.cancel_hw_scan = NULL;
+		fake_ops.sw_scan_start = fake_sw_scan_start;
+		fake_ops.sw_scan_complete = fake_sw_scan_complete;
+	}
 }

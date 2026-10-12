@@ -162,6 +162,42 @@ seam_scan_complete(struct wlan_seam_drv *drv)
 		lkpi80211_drv_scan_complete(adapter.hw);
 }
 
+/*
+ * The hardware-scan route's three calls. The capability question is answered
+ * from the driver's own ops table (the substitute reads it), so the bridge's
+ * route choice follows the driver rather than a per-image build flag.
+ */
+static int
+seam_has_hw_scan(struct wlan_seam_drv *drv)
+{
+
+	(void)drv;
+	if (adapter.hw == NULL)
+		return 0;
+	return lkpi80211_drv_has_hw_scan(adapter.hw);
+}
+
+static int
+seam_hw_scan_start(struct wlan_seam_drv *drv, const uint32_t *freqs,
+    size_t n_freqs)
+{
+
+	(void)drv;
+	if (adapter.hw == NULL)
+		return -1;
+	return lkpi80211_drv_hw_scan(adapter.hw, freqs,
+	    (unsigned int)n_freqs);
+}
+
+static void
+seam_hw_scan_cancel(struct wlan_seam_drv *drv)
+{
+
+	(void)drv;
+	if (adapter.hw != NULL)
+		lkpi80211_drv_hw_scan_cancel(adapter.hw);
+}
+
 static int
 seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
     int is_mgmt)
@@ -422,6 +458,9 @@ static const struct wlan_seam_drv_ops seam_ops = {
 	.filter = seam_filter,
 	.sw_scan_start = seam_scan_start,
 	.sw_scan_complete = seam_scan_complete,
+	.has_hw_scan = seam_has_hw_scan,
+	.hw_scan_start = seam_hw_scan_start,
+	.hw_scan_cancel = seam_hw_scan_cancel,
 	.tx = seam_tx,
 	.set_key = seam_set_key,
 	.clear_key = seam_clear_key,
@@ -535,11 +574,25 @@ up_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 	wlan_bridge_tx_complete();
 }
 
+/*
+ * The driver reported its hardware sweep finished. This is the hw_scan route's
+ * only end-of-sweep signal: the bridge drove no channel walk to run out, so the
+ * window has to be closed from here.
+ */
+static void
+up_scan_complete(struct ieee80211_hw *hw)
+{
+
+	(void)hw;
+	wlan_bridge_scan_hw_complete();
+}
+
 static const struct lkpi80211_bridge_ops up_ops = {
 	.attach = up_attach,
 	.detach = up_detach,
 	.rx = up_rx,
 	.tx_complete = up_tx_complete,
+	.scan_complete = up_scan_complete,
 };
 
 /* ------------------------------------------------------------------ */

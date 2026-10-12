@@ -60,6 +60,7 @@ struct wlan_port_ifops;
 #define WLAN_BRIDGE_SCAN_CLOSE_STATE	1	/* the stack left S_SCAN */
 #define WLAN_BRIDGE_SCAN_CLOSE_WALK	2	/* the walk ran out of channels */
 #define WLAN_BRIDGE_SCAN_CLOSE_NOENTRY	3	/* the stack never entered S_SCAN */
+#define WLAN_BRIDGE_SCAN_CLOSE_HW	4	/* the device reported its sweep done */
 
 /* the bridge's counters (one snapshot struct; the port shell prints it) */
 struct wlan_bridge_counters {
@@ -212,6 +213,13 @@ void	wlan_bridge_tx_complete(void);
  */
 int	wlan_bridge_scan_start(void);
 int	wlan_bridge_scan_dwell(void);
+
+/*
+ * The device reported its hardware sweep finished. Only the hw_scan route calls
+ * this: there the device owned the dwell, so the bridge's own walk never runs
+ * out and this is what closes the window. It is a no-op when no sweep is armed.
+ */
+void	wlan_bridge_scan_hw_complete(void);
 
 /* Tune the driver's radio to the channel the stack currently sits on (the scan
  * walk advances the stack's channel; the driver must follow). */

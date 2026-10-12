@@ -17,10 +17,15 @@
  *   G6  MSI-X single vector, and the no-vector path
  *   G7  DMA: coherent conservation, the streaming direction order, the mask
  *   G8  the driver registry: the wildcard match, the late claim, the counters
+ *   G9  the synthetic chain, stage i: the AC 7260 enumerated, claimed by its id
+ *       table and reached at the probe entry (the "--scenario ac7260" run)
  *
  * Modes: the default run above; "--fault cfg-tamper" perturbs a config byte the
  * identity assertion reads and must go red; "--fault lying-host" makes the
- * scripted doorbell deliver nothing and must go red.
+ * scripted doorbell deliver nothing and must go red; "--scenario ac7260" appends
+ * the Intel AC 7260 to the synthetic host and runs only the G9 chain (a separate
+ * run because the engine's driver registry is bounded at four, and the default
+ * run's three drivers plus the chain's two would not fit).
  *
  * @design composition over the sibling mock suites - ref
  *         tests/host/linuxkpi-usb-test/main.c (synthetic host + scripted device +
@@ -47,13 +52,16 @@
 /* ------------------------------------------------------------------ */
 
 static int failures;
+static unsigned int g_cases;
 static const char *g_fault;
+static const char *g_scenario;
 
 static void
 anchor(int held, const char *fmt, ...)
 {
 	va_list ap;
 
+	g_cases++;
 	printf("pcie-smoke: ");
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
@@ -124,6 +132,61 @@ static const struct pci_device_id ids_b[] = {
 
 static const struct pci_device_id ids_c[] = {
 	{ PCI_DEVICE(0xabcd, 0x0001) },
+	{ }
+};
+
+/* ------------------------------------------------------------------ */
+/* the synthetic chain's drivers (the AC 7260 stage-i run)             */
+/* ------------------------------------------------------------------ */
+
+/* the driver-private word the vendored iwlwifi table stores in each row (the real
+ * one points at the MAC config); the case only proves the probe reads it back */
+static int iwl7000_mac_cfg_marker;
+
+struct chain_driver {
+	struct pci_driver		drv;
+	unsigned int			probes;
+	struct pci_dev			*last;
+	const struct pci_device_id	*id;
+	unsigned long			driver_data;
+};
+
+static struct chain_driver chain_drv, neg_drv;
+
+static int
+probe_chain(struct pci_dev *dev, const struct pci_device_id *id)
+{
+
+	chain_drv.probes++;
+	chain_drv.last = dev;
+	chain_drv.id = id;
+	chain_drv.driver_data = (id != NULL) ? id->driver_data : 0;
+	pci_set_drvdata(dev, &chain_drv);
+	return 0;
+}
+
+static int
+probe_neg(struct pci_dev *dev, const struct pci_device_id *id)
+{
+
+	(void)id;
+	neg_drv.probes++;
+	neg_drv.last = dev;
+	return 0;
+}
+
+/* the id table the AC 7260's driver registers: the exact row the vendored iwlwifi
+ * tree carries (third-party/iwlwifi/pcie/drv.c: PCI_DEVICE(0x8086, 0x08b1)) with
+ * its driver-private word */
+static const struct pci_device_id ids_iwl[] = {
+	{ PCI_DEVICE(0x8086, 0x08b1),
+	  .driver_data = (unsigned long)&iwl7000_mac_cfg_marker },
+	{ }
+};
+
+/* the negative control: a table that does not name the AC 7260's id */
+static const struct pci_device_id ids_neg[] = {
+	{ PCI_DEVICE(0x8086, 0x08b2) },
 	{ }
 };
 
@@ -326,32 +389,130 @@ run(void)
 	    stats_copy.probe_errors);
 }
 
+/* ------------------------------------------------------------------ */
+/* the synthetic chain, stage i (the "--scenario ac7260" run)          */
+/* ------------------------------------------------------------------ */
+
+/* The host the board will run for real: the synthetic host presents the Intel AC
+ * 7260 (8086:08b1, class 0280), the engine enumerates it, the driver's id table
+ * claims it and the probe entry runs once with both records. This is the path the
+ * board's bring-up takes, exercised in the host before any hardware is touched. */
+static void
+run_ac7260_chain(void)
+{
+	struct pci_dev *dev = NULL;
+	const struct lkpi_pci_stats *stats;
+	unsigned int i;
+	u32 v32 = 0;
+	int rc;
+
+	/* ---- the host presents it and the engine enumerates it ------- */
+	for (i = 0; i < lkpi_pci_dev_count_get(); i++) {
+		struct pci_dev *d = lkpi_pci_dev_get(i);
+
+		if (d != NULL && d->vendor == 0x8086 && d->device == 0x08b1) {
+			dev = d;
+			break;
+		}
+	}
+	anchor(dev != NULL && dev->vendor == 0x8086 && dev->device == 0x08b1,
+	    "chain enumerated id=%04x:%04x found=%d",
+	    dev != NULL ? dev->vendor : 0, dev != NULL ? dev->device : 0,
+	    dev != NULL);
+	anchor(dev != NULL && dev->class == 0x028000u, "chain class=0x%06x",
+	    dev != NULL ? dev->class : 0);
+	anchor(dev != NULL && dev->bus != NULL && dev->bus->number == 0x21 &&
+	    dev->devfn == 0, "chain bdf=%s",
+	    dev != NULL ? pci_name(dev) : "?");
+
+	/* ---- the id table claims it and the probe runs once ---------- */
+	anchor(chain_drv.probes == 1 && chain_drv.last == dev,
+	    "chain probe n=%u ok=%d", chain_drv.probes, chain_drv.probes == 1);
+	anchor(chain_drv.id != NULL && chain_drv.id->vendor == 0x8086 &&
+	    chain_drv.id->device == 0x08b1 &&
+	    chain_drv.driver_data == (unsigned long)&iwl7000_mac_cfg_marker,
+	    "chain id=%04x:%04x driver_data=%d",
+	    chain_drv.id != NULL ? chain_drv.id->vendor : 0,
+	    chain_drv.id != NULL ? chain_drv.id->device : 0,
+	    chain_drv.driver_data == (unsigned long)&iwl7000_mac_cfg_marker);
+
+	/* ---- the negative control was not claimed -------------------- */
+	anchor(neg_drv.probes == 0, "chain negative probe n=%u ok=%d",
+	    neg_drv.probes, neg_drv.probes == 0);
+
+	/* ---- the probe entry reads config and maps the BAR ----------- */
+	rc = pci_read_config_dword(dev, MOCK_CFG_VENDOR, &v32);
+	anchor(rc == 0 && v32 == 0x08b18086u, "chain cfg vendor-device=0x%08x", v32);
+	{
+		resource_size_t len = pci_resource_len(dev, 0);
+		volatile u8 *p = (volatile u8 *)pci_ioremap_bar(dev, 0);
+		int ok = 0;
+
+		if (p != NULL) {
+			p[0x10] = 0x5a;
+			ok = (p[0x10] == 0x5a);
+		}
+		anchor(p != NULL && len == MOCK_PCIE_BAR_SIZE && ok,
+		    "chain bar0 len=%u map=%d ok=%d", (unsigned)len, p != NULL, ok);
+	}
+
+	stats = lkpi_pci_stats_get();
+	anchor(stats->probes == 1 && stats->probe_errors == 0,
+	    "chain stats ok=%u errors=%u", stats->probes, stats->probe_errors);
+}
+
 static void
 app_task(void *arg)
 {
+	int chain = g_scenario != NULL && strcmp(g_scenario, "ac7260") == 0;
 
 	(void)arg;
 	mock_pcie_reset();
-	if (g_fault != NULL && strcmp(g_fault, "cfg-tamper") == 0)
-		mock_pcie_backend()->dev[0].cfg[MOCK_CFG_VENDOR] ^= 0xff;
-	if (g_fault != NULL && strcmp(g_fault, "lying-host") == 0)
-		mock_pcie_set_lying(true);
+	if (chain) {
+		/* the synthetic chain presents the AC 7260 as a fourth function; the
+		 * default three keep the identity every other case reads */
+		mock_pcie_script_ac7260();
+	} else {
+		if (g_fault != NULL && strcmp(g_fault, "cfg-tamper") == 0)
+			mock_pcie_backend()->dev[0].cfg[MOCK_CFG_VENDOR] ^= 0xff;
+		if (g_fault != NULL && strcmp(g_fault, "lying-host") == 0)
+			mock_pcie_set_lying(true);
+	}
 
 	lkpi_pcie_be_register(mock_pcie_ops(), mock_pcie_backend());
 
-	drv_a.drv.name = "mock-a";
-	drv_a.drv.id_table = ids_a;
-	drv_a.drv.probe = probe_a;
-	drv_b.drv.name = "mock-b";
-	drv_b.drv.id_table = ids_b;
-	drv_b.drv.probe = probe_b;
-	(void)pci_register_driver(&drv_a.drv);
-	(void)pci_register_driver(&drv_b.drv);
+	if (chain) {
+		chain_drv.drv.name = "iwlwifi";
+		chain_drv.drv.id_table = ids_iwl;
+		chain_drv.drv.probe = probe_chain;
+		neg_drv.drv.name = "mock-neg";
+		neg_drv.drv.id_table = ids_neg;
+		neg_drv.drv.probe = probe_neg;
+		(void)pci_register_driver(&chain_drv.drv);
+		(void)pci_register_driver(&neg_drv.drv);
 
-	lkpi_pci_start();
+		lkpi_pci_start();
 
-	run();
+		run_ac7260_chain();
+	} else {
+		drv_a.drv.name = "mock-a";
+		drv_a.drv.id_table = ids_a;
+		drv_a.drv.probe = probe_a;
+		drv_b.drv.name = "mock-b";
+		drv_b.drv.id_table = ids_b;
+		drv_b.drv.probe = probe_b;
+		(void)pci_register_driver(&drv_a.drv);
+		(void)pci_register_driver(&drv_b.drv);
 
+		lkpi_pci_start();
+
+		run();
+	}
+
+	/* the case count the suite states for itself (the anchors above), before the
+	 * verdict anchor so the last line stays "pcie-smoke: PASS" */
+	printf("pcie-smoke: cases=%u failed=%d\n", g_cases, failures);
+	fflush(stdout);
 	if (failures == 0)
 		anchor(1, "PASS");
 	else
@@ -369,9 +530,11 @@ main(int argc, char **argv)
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--fault") == 0 && i + 1 < argc) {
 			g_fault = argv[++i];
+		} else if (strcmp(argv[i], "--scenario") == 0 && i + 1 < argc) {
+			g_scenario = argv[++i];
 		} else {
-			printf("pcie-smoke: usage: %s [--fault cfg-tamper|lying-host]\n",
-			    argv[0]);
+			printf("pcie-smoke: usage: %s [--fault cfg-tamper|lying-host]"
+			    " [--scenario ac7260]\n", argv[0]);
 			return 2;
 		}
 	}
