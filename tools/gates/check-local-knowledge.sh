@@ -83,21 +83,13 @@ report() {
 # file this project wrote underneath it is ours to keep clean, so the paths are named
 # here and unioned into the scan set.  Add a path when a new first-party file is
 # written under such a unit.
-authored_in_units='components/linuxkpi/include/net/mac80211.h
-components/linuxkpi/include/net/cfg80211.h
-components/linuxkpi/include/linux/ieee80211.h
-components/linuxkpi/include/linux/if_ether.h
-components/linuxkpi/include/linux/etherdevice.h
-components/linuxkpi/include/linux/average.h
-components/linuxkpi/include/linux/iopoll.h
-components/linuxkpi/include/linux/firmware.h
-components/linuxkpi/include/linux/fs.h
-components/linuxkpi/include/linux/debugfs.h
-components/linuxkpi/include/linux/skbuff.h
-components/linuxkpi/include/linux/kernel.h
-components/linuxkpi/include/linux/printk.h
-components/linuxkpi/include/linux/list.h
-components/linuxkpi/include/linux/netdevice.h
+#
+# The compatibility face is named as a whole directory rather than file by file: every
+# header under components/linuxkpi/include is written by this project (it is the face the
+# vendored drivers compile against, not an import), and enumerating them meant a header
+# added by a later round was silently unscanned.  The remaining first-party files of the
+# unit are named individually.
+authored_in_units='components/linuxkpi/include
 components/linuxkpi/fw_registry.h
 components/linuxkpi/fw_registry.c
 components/linuxkpi/fw/MANIFEST.sha256
@@ -116,13 +108,6 @@ components/linuxkpi/linuxkpi_wiphy_work.h
 components/linuxkpi/skbuff/skbuff_pool.c
 components/linuxkpi/skbuff/PROVENANCE.md
 components/linuxkpi/skbuff/DIVERGENCES.md
-components/linuxkpi/include/linux/device-id/sdio.h
-components/linuxkpi/include/linux/mmc/card.h
-components/linuxkpi/include/linux/mmc/host.h
-components/linuxkpi/include/linux/mmc/pm.h
-components/linuxkpi/include/linux/mmc/sdio.h
-components/linuxkpi/include/linux/mmc/sdio_func.h
-components/linuxkpi/include/linux/mmc/sdio_ids.h
 components/linuxkpi/sdio/lkpi_sdio_backend.h
 components/linuxkpi/sdio/lkpi_sdio_be.c
 components/linuxkpi/sdio/linuxkpi_sdio.c
