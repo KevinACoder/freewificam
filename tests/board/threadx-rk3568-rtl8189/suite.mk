@@ -17,9 +17,14 @@ SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-rtl8189 start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-rtl8189 select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-rtl8189 result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-rtl8189 result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
-SUITE_CASE_NAMES      := shell-up wlan8189-probe wlan8189-scan
+SUITE_CASE_NAMES      := shell-up wlan8189-probe wlan8189-scan wlan8189-join wlan8189-dataplane
 SUITE_STEPS_FILE      := steps.tsv
+# The case that consumes the round's own steps (the credential): the runner holds
+# --steps-extra until this line appears, so the connect lands after the scan has
+# finished and while the join case is waiting, not at a guessed moment during the
+# sweep (see tools/gates/board_runner.py).
+SUITE_EXTRA_AFTER_PATTERN := wlan8189: join waiting for the supplicant
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-rtl8189/judge.py
-SUITE_TIMEOUT         := 300
+SUITE_TIMEOUT         := 480
 SUITE_SEGMENTS        := -
 SUITE_WIRELESS        := 0

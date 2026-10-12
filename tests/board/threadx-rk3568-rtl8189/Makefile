@@ -46,6 +46,13 @@ BOARD_DRV := $(ROOT)/board/rk3568-itx/drivers
 # submodule, compiled here as its own translation units, byte-identical).
 DRV := $(ROOT)/third-party/rtl8189fs
 
+# WPA domain: the vendored supplicant (through the patch channel) and its port
+# layer; the TCP/IP domain rides the lwIP port's own source groups.
+WPA := $(shell sh $(ROOT)/tools/patches/replay.sh wpa_supplicant)
+WPA_PORT := $(ROOT)/ports/wpa_supplicant
+LWIP := $(ROOT)/third-party/lwip
+LWIP_PORT := $(ROOT)/ports/lwip
+
 SUITE_NAME := threadx-rk3568-rtl8189
 
 AARCH64_CROSS_PATH ?= $(HOME)/workspace/env/src/xpack-aarch64-none-elf-gcc-13.2.1-1.1
@@ -124,10 +131,14 @@ SDIO_PORT_CFLAGS := $(CFLAGS) \
 
 # The suite's own cases and console command reach the driver through the
 # runtime face and the card through the SDIO seam, so they carry both include
-# roots.
+# roots.  Execution order = this list's order (link order for the BOARD_TESTS
+# section): the console command contributes no case entry, so the table the
+# runner walks is probe, scan, join, dataplane.
 WLAN8189_CASE_SRCS := \
 	$(CURDIR)/tests/wlan8189_probe.c \
 	$(CURDIR)/tests/wlan8189_scan.c \
+	$(CURDIR)/tests/wlan8189_join.c \
+	$(CURDIR)/tests/wlan8189_dataplane.c \
 	$(CURDIR)/tests/wlan8189_cmds.c
 
 WLAN8189_CASE_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
@@ -136,6 +147,16 @@ WLAN8189_CASE_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(CURDIR)/tests \
 	$(SDIO_INCLUDES)
+
+# The supplicant-facing cases live in other worlds than the plain case set: the
+# join case reads the backend's counters and the netif adapter's diagnostics (the
+# WPA header set plus the seam header), and the dataplane case assembles the lwIP
+# interface over the driver's net device (the lwIP header world, which the join
+# case's world cannot share - see lkpinetif_seam.h).  Their include roots are the
+# ones each world names.  Recursive (not :=): the WPA/lwIP flag sets are defined
+# further down, so these must expand when the compile rules are built.
+WLAN8189_JOIN_CFLAGS = $(WPA_PORT_CFLAGS) -I$(CURDIR)/tests -I$(LWIP_PORT)
+WLAN8189_DATAPLANE_CFLAGS = $(LWIP_INCLUDES) -I$(WPA_PORT) -I$(CURDIR)/tests
 
 # The skb pool's geometry, which is a compile-time contract between the
 # driver's view of the pool (the header) and the pool body: both sides must see
@@ -196,6 +217,12 @@ DRV_CFLAGS := -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector \
 # the driver is a FullMAC vendor stack that talks to cfg80211 directly), the
 # netdev bodies and the skb pool.  The pool geometry is passed here too: it is a
 # compile-time contract between this body and the driver's view of it.
+#
+# The netif adapter's netdev half (ports/lwip/lkpinetif.c) rides this set: it
+# owns the driver's world (the net device, the receive hook, the buffer) and no
+# lwIP header, so it compiles with the same component flags as the rest.  Its
+# stack half (ports/lwip/lkpinetif_lwip.c) is a lwIP-world unit and rides the
+# lwIP port set below instead - the two worlds cannot share a translation unit.
 LKPI_RT_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-DLKPI_ABS_PLATFORM_PROVIDED $(SKB_POOL_CFLAGS) \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
@@ -208,7 +235,71 @@ LKPI_RT_SRCS := \
 	$(LKPI)/skbuff/skbuff_pool.c \
 	$(LKPI)/linuxkpi_cfg80211.c \
 	$(LKPI)/linuxkpi_netdev.c \
-	$(LKPI)/linuxkpi_osdep.c
+	$(LKPI)/linuxkpi_osdep.c \
+	$(LWIP_PORT)/lkpinetif.c
+
+# --- WPA domain flag sets ----------------------------------------------------
+#
+# The supplicant world's build shape (the same keys the host port suite and the
+# WLAN line use): the shim directory leads the include path (no sockets world),
+# the port config is force-included, and the script-interface token is renamed so
+# the image's own sscanf stays the only plain one.  The vendored units compile at
+# the import's warning level; the port layer is warning-honest.
+WPA_BACKEND_KEY := -DCONFIG_WPA_BACKEND_VENDOR=1 -DWPA_PORT_DRIVER_NAME='"embox"'
+
+WPA_INC := -I$(WPA_PORT)/shim -I$(WPA) -I$(WPA)/src -I$(WPA)/src/utils \
+	-I$(WPA)/src/drivers -I$(WPA)/src/l2_packet -I$(WPA)/wpa_supplicant \
+	-I$(WPA_PORT) -I$(ROOT) -I$(ROOT)/os/cmsis2 \
+	-I$(CMSIS)/CMSIS/RTOS2/Include
+
+# The vendored supplicant carries its own copy of hostapd's AES/OMAC code
+# (src/crypto/aes-internal.c, aes-omac1.c, src/utils/common.c), and this line's
+# vendor driver carries a second copy of the same upstream code (core/
+# rtw_security.c and os_dep/osdep_service.c).  In userspace the two never share
+# an address space; in this image they do, so the six global names both copies
+# export would be a link-time multiple definition.  Renaming the supplicant's
+# side at compile time keeps each world's own implementation and is the same
+# mechanism the port already uses for its script-interface token.
+WPA_SYM_PREFIX := \
+	-DTe0=wpa_Te0 -DTd0=wpa_Td0 -DTd4s=wpa_Td4s -Drcons=wpa_rcons \
+	-Dhexstr2bin=wpa_hexstr2bin -Domac1_aes_128=wpa_omac1_aes_128
+
+WPA_CFG := -include stdarg.h -include $(WPA_PORT)/wpa_port_config.h \
+	$(WPA_BACKEND_KEY) \
+	-DCONFIG_WPA_THREAD_STACK=65536 \
+	-DCONFIG_WPA_SUPP_DEBUG_LEVEL=2 \
+	-Dsscanf=wpa_port_sscanf \
+	$(WPA_SYM_PREFIX)
+
+WPA_VENDOR_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -w \
+	-DLKPI_ABS_PLATFORM_PROVIDED \
+	$(WPA_CFG) $(WPA_INC)
+WPA_PORT_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) \
+	-DLKPI_ABS_PLATFORM_PROVIDED \
+	$(WPA_CFG) $(WPA_INC)
+WPA_CMD_CFLAGS := $(WPA_PORT_CFLAGS)
+
+# The backend is a linuxkpi-world adapter: it needs the vendor contract's header
+# (wpa_vendor_port.h) and the netif seam, but NOT the supplicant's own build
+# config - force-including wpa_port_config.h here would collide with the
+# linuxkpi face's own ARRAY_SIZE definition (the two worlds meet in this one
+# translation unit by design).  It carries the WPA include roots, the component
+# roots and the seam's header path.
+WPA_BACKEND_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
+	-DLKPI_ABS_PLATFORM_PROVIDED \
+	-I$(LKPI) -I$(LKPI)/include -I$(LWIP_PORT) $(WPA_INC)
+
+# LWIP domain flags: the port's include directory leads (lwipopts.h and arch/cc.h
+# come from there by shadowing), then the stack's own root.  The driver's headers
+# are deliberately absent: the presentation layer crosses to them through its own
+# seam header (ports/lwip/lkpinetif_seam.h), never by including both worlds in one
+# translation unit.
+LWIP_INCLUDES := \
+	-I$(LWIP_PORT) \
+	-I$(LWIP_PORT)/include \
+	-I$(LWIP)/src/include \
+	-I$(LWIP)/contrib/apps/ping \
+	-I$(ROOT)/os/cmsis2
 
 # --gc-sections drops everything nothing references. The pins below are the
 # entry points the start-up order calls that the linker cannot see
@@ -351,6 +442,141 @@ DRV_SRCS := \
 	$(DRV)/hal/phydm/rtl8188f/phydm_rtl8188f.c \
 	$(DRV)/platform/platform_ops.c
 
+# --- wpa_supplicant domain (vendored compile set + port layer) ----------------
+#
+# The same vendored core the WLAN line compiles (PSK-only, internal crypto), its
+# port layer, the driver slot and the EAPOL carrier, and the console control
+# face.  The backend instance is this line's own: the cfg80211 substitute's
+# driver-side adapter (ports/wpa_supplicant/backend_cfg80211.c) instead of the
+# net80211 bridge's vendor instance.
+WPA_CORE_SRCS := \
+	$(WPA)/src/common/wpa_common.c \
+	$(WPA)/src/common/ieee802_11_common.c \
+	$(WPA)/src/common/hw_features_common.c \
+	$(WPA)/src/drivers/driver_common.c \
+	$(WPA)/src/drivers/drivers.c \
+	$(WPA)/src/rsn_supp/wpa.c \
+	$(WPA)/src/rsn_supp/wpa_ie.c \
+	$(WPA)/src/rsn_supp/pmksa_cache.c \
+	$(WPA)/src/rsn_supp/preauth.c \
+	$(WPA)/src/utils/common.c \
+	$(WPA)/src/utils/wpabuf.c \
+	$(WPA)/src/utils/base64.c \
+	$(WPA)/src/utils/bitfield.c \
+	$(WPA)/src/utils/wpa_debug.c \
+	$(WPA)/src/crypto/crypto_internal.c \
+	$(WPA)/src/crypto/aes-internal.c \
+	$(WPA)/src/crypto/aes-internal-dec.c \
+	$(WPA)/src/crypto/aes-internal-enc.c \
+	$(WPA)/src/crypto/aes-wrap.c \
+	$(WPA)/src/crypto/aes-unwrap.c \
+	$(WPA)/src/crypto/aes-omac1.c \
+	$(WPA)/src/crypto/sha1.c \
+	$(WPA)/src/crypto/sha1-internal.c \
+	$(WPA)/src/crypto/sha1-prf.c \
+	$(WPA)/src/crypto/sha1-pbkdf2.c \
+	$(WPA)/src/crypto/md5.c \
+	$(WPA)/src/crypto/md5-internal.c \
+	$(WPA)/src/crypto/rc4.c \
+	$(WPA)/src/crypto/sha256.c \
+	$(WPA)/src/crypto/sha256-internal.c \
+	$(WPA)/src/crypto/sha256-prf.c \
+	$(WPA)/src/crypto/tls_none.c \
+	$(WPA)/wpa_supplicant/wpa_supplicant.c \
+	$(WPA)/wpa_supplicant/events.c \
+	$(WPA)/wpa_supplicant/scan.c \
+	$(WPA)/wpa_supplicant/bss.c \
+	$(WPA)/wpa_supplicant/config.c \
+	$(WPA)/wpa_supplicant/config_none.c \
+	$(WPA)/wpa_supplicant/notify.c \
+	$(WPA)/wpa_supplicant/wpas_glue.c \
+	$(WPA)/wpa_supplicant/bssid_ignore.c \
+	$(WPA)/wpa_supplicant/eap_register.c \
+	$(WPA)/wpa_supplicant/op_classes.c \
+	$(WPA)/wpa_supplicant/rrm.c \
+	$(WPA)/wpa_supplicant/robust_av.c
+
+WPA_PORT_SRCS := \
+	$(WPA_PORT)/wpa_vendor_port.c \
+	$(WPA_PORT)/os_port.c \
+	$(WPA_PORT)/eloop_port.c \
+	$(WPA_PORT)/supp_main.c
+
+# the driver slot (the backbone skeleton) and the EAPOL carrier
+WPA_DRV_SRCS := \
+	$(WPA_PORT)/driver_vendor.c \
+	$(WPA_PORT)/l2_packet_direct.c
+
+# the console control face (the WPA key gates the shell on the host build's own
+# dependency rule: the command is the control plane)
+WPA_CMD_SRCS := $(WPA_PORT)/wpa_cmd.c
+
+# this line's backend instance (the substitute's driver-side adapter)
+WPA_BACKEND_SRCS := $(WPA_PORT)/backend_cfg80211.c
+
+# --- TCP/IP domain (the lwIP presentation layer over the driver's net device) --
+#
+# The stack half of the presentation layer (lkpinetif_lwip.c) rides here, with
+# lwIP's own port files; the netdev half (lkpinetif.c) rides the linuxkpi runtime
+# set above.
+LWIP_PORT_SRCS := \
+	$(LWIP_PORT)/sys_arch.c \
+	$(LWIP_PORT)/platform_hooks.c \
+	$(LWIP_PORT)/lkpinetif_lwip.c
+
+LWIP_STACK_SRCS := \
+	$(LWIP)/src/core/init.c \
+	$(LWIP)/src/core/def.c \
+	$(LWIP)/src/core/dns.c \
+	$(LWIP)/src/core/inet_chksum.c \
+	$(LWIP)/src/core/ip.c \
+	$(LWIP)/src/core/mem.c \
+	$(LWIP)/src/core/memp.c \
+	$(LWIP)/src/core/netif.c \
+	$(LWIP)/src/core/pbuf.c \
+	$(LWIP)/src/core/raw.c \
+	$(LWIP)/src/core/stats.c \
+	$(LWIP)/src/core/sys.c \
+	$(LWIP)/src/core/altcp.c \
+	$(LWIP)/src/core/altcp_alloc.c \
+	$(LWIP)/src/core/altcp_tcp.c \
+	$(LWIP)/src/core/tcp.c \
+	$(LWIP)/src/core/tcp_in.c \
+	$(LWIP)/src/core/tcp_out.c \
+	$(LWIP)/src/core/timeouts.c \
+	$(LWIP)/src/core/udp.c \
+	$(LWIP)/src/core/ipv4/acd.c \
+	$(LWIP)/src/core/ipv4/autoip.c \
+	$(LWIP)/src/core/ipv4/dhcp.c \
+	$(LWIP)/src/core/ipv4/etharp.c \
+	$(LWIP)/src/core/ipv4/icmp.c \
+	$(LWIP)/src/core/ipv4/igmp.c \
+	$(LWIP)/src/core/ipv4/ip4_frag.c \
+	$(LWIP)/src/core/ipv4/ip4.c \
+	$(LWIP)/src/core/ipv4/ip4_addr.c \
+	$(LWIP)/src/api/api_lib.c \
+	$(LWIP)/src/api/api_msg.c \
+	$(LWIP)/src/api/err.c \
+	$(LWIP)/src/api/if_api.c \
+	$(LWIP)/src/api/netbuf.c \
+	$(LWIP)/src/api/netdb.c \
+	$(LWIP)/src/api/netifapi.c \
+	$(LWIP)/src/api/sockets.c \
+	$(LWIP)/src/api/tcpip.c \
+	$(LWIP)/src/netif/ethernet.c \
+	$(LWIP)/src/apps/lwiperf/lwiperf.c
+
+# The contrib ping rides its own compile: the console anchors (one line per echo
+# reply) exist only under the stack's debug macro, which is switched on for this
+# one translation unit and stays off everywhere else.
+LWIP_PING_SRCS := $(LWIP)/contrib/apps/ping/ping.c
+
+# the image's own non-case TUs: the supplicant's message observer and the TCP/IP
+# stack's bring-up helper
+WLAN8189_HELPER_SRCS := \
+	$(CURDIR)/tests/wlan8189_wpa_obs.c \
+	$(COMMON)/lwip_stack.c
+
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
 	$(CHERRYSH)/cherryrl/chry_readline.c \
@@ -369,6 +595,9 @@ LIBCBIND_SRCS := $(ROOT)/os/threadx/board/rk3568-itx/libc_bindings.c
 
 ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) \
 	$(SDIO_VENDOR_SRCS) $(SDIO_PORT_SRCS) $(LKPI_RT_SRCS) $(DRV_SRCS) \
+	$(WPA_CORE_SRCS) $(WPA_PORT_SRCS) $(WPA_DRV_SRCS) $(WPA_CMD_SRCS) \
+	$(WPA_BACKEND_SRCS) $(WLAN8189_HELPER_SRCS) \
+	$(LWIP_PORT_SRCS) $(LWIP_STACK_SRCS) $(LWIP_PING_SRCS) \
 	$(VENDORED_SRCS) $(ALLOC_SRCS) $(PRINTF_SRCS) $(LIBCBIND_SRCS)
 
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
@@ -380,7 +609,7 @@ define COMPILE_RULE
 $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@mkdir -p $$(dir $$@)
 	@echo "  CC $$<"
-	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS) $(SDIO_VENDOR_SRCS)),$(if $(filter $(1),$(SDIO_VENDOR_SRCS)),$(SDIO_VENDOR_CFLAGS),$(VENDORED_CFLAGS)),$(if $(filter $(1),$(SDIO_PORT_SRCS)),$(SDIO_PORT_CFLAGS),$(if $(filter $(1),$(LKPI_RT_SRCS)),$(LKPI_RT_CFLAGS),$(if $(filter $(1),$(DRV_SRCS)),$(DRV_CFLAGS),$(if $(filter $(1),$(WLAN8189_CASE_SRCS)),$(WLAN8189_CASE_CFLAGS),$(CFLAGS))))))) $(2) $(INCLUDES) $(if $(filter $(1),$(SDIO_VENDOR_SRCS) $(SDIO_PORT_SRCS)),$(SDIO_INCLUDES),) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
+	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS) $(SDIO_VENDOR_SRCS) $(LWIP_STACK_SRCS)),$(if $(filter $(1),$(SDIO_VENDOR_SRCS)),$(SDIO_VENDOR_CFLAGS),$(VENDORED_CFLAGS)),$(if $(filter $(1),$(SDIO_PORT_SRCS)),$(SDIO_PORT_CFLAGS),$(if $(filter $(1),$(LKPI_RT_SRCS)),$(LKPI_RT_CFLAGS),$(if $(filter $(1),$(DRV_SRCS)),$(DRV_CFLAGS),$(if $(filter $(1),$(WLAN8189_CASE_SRCS)),$(WLAN8189_CASE_CFLAGS),$(CFLAGS))))))) $(2) $(INCLUDES) $(if $(filter $(1),$(SDIO_VENDOR_SRCS) $(SDIO_PORT_SRCS)),$(SDIO_INCLUDES),) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
 endef
 
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
@@ -390,7 +619,11 @@ $(foreach s,$(filter-out $(ROOT)/os/baremetal/minilibc.c,$(BASE_SRCS)),$(eval $(
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(filter-out $(WLAN8189_CASE_SRCS),$(SHELL_SRCS) $(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(WLAN8189_CASE_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WLAN8189_CASE_CFLAGS))))
+# the plain case set (probe/scan/the console command) carries the runtime face's
+# flags; the two supplicant-facing cases carry their own world's flags
+$(foreach s,$(filter-out $(CURDIR)/tests/wlan8189_join.c $(CURDIR)/tests/wlan8189_dataplane.c,$(WLAN8189_CASE_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN8189_CASE_CFLAGS))))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_join.c,$(WLAN8189_JOIN_CFLAGS)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_dataplane.c,$(WLAN8189_DATAPLANE_CFLAGS)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 # the freestanding libc completion block (abs and friends) is part of this
@@ -400,6 +633,19 @@ $(foreach s,$(SDIO_VENDOR_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SDIO_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(LKPI_RT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LKPI_RT_CFLAGS))))
 $(foreach s,$(DRV_SRCS),$(eval $(call COMPILE_RULE,$(s),$(DRV_CFLAGS))))
+$(foreach s,$(WPA_CORE_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_VENDOR_CFLAGS))))
+# the backend reaches the substitute's face and the netif seam; it never includes
+# an lwIP header (the seam header is lwIP-free), so it carries the component
+# include roots rather than an lwIP path, and its own flag set (see above)
+$(foreach s,$(WPA_BACKEND_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_BACKEND_CFLAGS))))
+$(foreach s,$(WPA_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_PORT_CFLAGS))))
+$(foreach s,$(WPA_DRV_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_VENDOR_CFLAGS))))
+$(foreach s,$(WPA_CMD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_CMD_CFLAGS))))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$(CURDIR)/tests))
+$(foreach s,$(LWIP_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
+$(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
+$(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG))
+$(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(foreach s,$(LIBCBIND_SRCS),$(eval $(call COMPILE_RULE,$(s),-I$(ROOT)/os/threadx)))
 
 $(TAG_STAMP): FORCE
@@ -422,6 +668,12 @@ guards:
 		|| { echo "FAIL: -DTX_INCLUDE_USER_DEFINE_FILE missing from TX_CFLAGS"; exit 1; }
 	@[ "$$(basename $(CURDIR))" = "$(SUITE_NAME)" ] \
 		|| { echo "FAIL: SUITE_NAME ($(SUITE_NAME)) is not the directory name"; exit 1; }
+	@if ls $(ROOT)/patches/wpa_supplicant/*.patch >/dev/null 2>&1; then \
+		case "$(WPA)" in \
+		$(ROOT)/third-party/wpa_supplicant) \
+			echo "FAIL: patches exist but the supplicant would compile from the vendored tree"; exit 1 ;; \
+		esac; \
+	fi
 	@if echo "$(ALL_SRCS)" | tr ' ' '\n' | grep -qE "^$(ROOT)/os/threadx/(cmsis2_host|heap|tx_glue)\.c$$"; then \
 		echo "FAIL: a host-side os/threadx file entered the compile set"; exit 1; \
 	fi
@@ -441,7 +693,9 @@ check: guards $(TARGET).elf
 	         dwc_mmc_init dwc_mmc_transfer dwc_mmc_board_cfg \
 	         lkpi_sdio_fsl_install lkpi_sdio_be_card_init sdmmc_card_start \
 	         lkpi_sdio_start sdio_readb sdio_memcpy_fromio \
-	         array_mp_8188f_fw_nic lkpi_module_init_run; do \
+	         array_mp_8188f_fw_nic lkpi_module_init_run \
+	         lkpi_wpa_cfg80211_init wpa_vendor_port_register \
+	         lkpinetif_bind lkpinetif_deliver lwip_stack_up tcpip_init; do \
 		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" \
 			|| { echo "FAIL: $$s not in the image"; exit 1; }; \
 	done; \

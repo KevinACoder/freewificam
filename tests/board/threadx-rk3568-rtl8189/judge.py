@@ -13,12 +13,14 @@ Truth sources, all independent of the transcript's own claims:
   * the interaction steps - tests/board/threadx-rk3568-rtl8189/steps.tsv, the
     same file the host runner sends from.
 
-Two backstops run on top of the case verdicts, because a case that reports PASS
-while its own evidence says otherwise is exactly what a judgment channel exists
-to catch: a passing probe must have named a hardware address that is not all
-zero (the driver reads it from the chip's eFuse, so an all-zero address means it
-never reached the chip), and a passing scan must have reported at least one row
-(an empty table is not a scan, whatever the CASE line says).
+Backstops run on top of the case verdicts, because a case that reports PASS while
+its own evidence says otherwise is exactly what a judgment channel exists to
+catch: a passing probe must have named a hardware address that is not all zero
+(the driver reads it from the chip's eFuse, so an all-zero address means it never
+reached the chip), a passing scan must have reported at least one row (an empty
+table is not a scan, whatever the CASE line says), a passing join must carry the
+supplicant's own handshake anchor, and a passing dataplane must show a bound
+(non-any) address plus at least four ping echo replies.
 """
 
 import os
@@ -37,6 +39,8 @@ CASES = [
     "shell-up",
     "wlan8189-probe",
     "wlan8189-scan",
+    "wlan8189-join",
+    "wlan8189-dataplane",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -51,6 +55,13 @@ CASES = [
 #:                   scan it asked the driver for, the rows the driver reported
 #:                   back through the cfg80211 substitute, and the comparison
 #:                   against the access points this board's Linux lane recorded
+#:   wlan8189-join   the case's own lines (tests/.../tests/wlan8189_join.c): the
+#:                   wait line the runner's credential step is held for, and the
+#:                   join-ok line printed once the supplicant reported both the
+#:                   association and the completed 4-way
+#:   wlan8189-       the case's own lines (tests/.../tests/wlan8189_dataplane.c):
+#:   dataplane       the interface bring-up, the DHCP lease, the ping window, the
+#:                   netif adapter's diagnostic counters, and the iperf server
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "wlan8189-probe": [
@@ -64,6 +75,17 @@ ANCHORS = {
         r"wlan8189: scan done rows=\d+ chans=\d+",
         r"wlan8189: gt-check matched=\d+/\d+",
         r"wlan8189: scan ok",
+    ],
+    "wlan8189-join": [
+        r"wlan8189: join waiting for the supplicant",
+        r"wlan8189: join-ok bssid=",
+    ],
+    "wlan8189-dataplane": [
+        r"wlan8189: dataplane up, dhcp started",
+        r"wlan8189: dhcp bound ip=\d+\.\d+\.\d+\.\d+/",
+        r"wlan8189: ping window done",
+        r"wlan8189: diag rx=\d+ eapol=\d+ tx=\d+ fail=\d+",
+        r"wlan8189: iperf server ready port=5001",
     ],
 }
 
@@ -80,14 +102,15 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  41.100] BOARD-SUITE threadx-rk3568-rtl8189 "
-    "result=pass cases=3 ok=3 exit=0\r\n"
+    "result=pass cases=5 ok=5 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-rtl8189 bring-up selftest-tag\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-rtl8189 select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-rtl8189 start cases=3 sel=all "
-    "list=shell-up,wlan8189-probe,wlan8189-scan\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-rtl8189 start cases=5 sel=all "
+    "list=shell-up,wlan8189-probe,wlan8189-scan,wlan8189-join,"
+    "wlan8189-dataplane\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-rtl8189/shell-up PASS\r\n"
     "[  12.400] wlan8189: sdio up card=24c:f179 funcs=1\r\n"
@@ -101,9 +124,26 @@ BASE_TRANSCRIPT = (
     "[  38.510] wlan8189: gt-check matched=1/3\r\n"
     "[  38.520] wlan8189: scan ok\r\n"
     "[  38.530] CASE threadx-rk3568-rtl8189/wlan8189-scan PASS\r\n"
-    "[  40.000] total function 9\r\n"
-    "[  40.010] total variable 2\r\n"
-    "[  40.020] wlan8189: attached=1 bss=17\r\n"
+    "[  39.000] wlan8189: join waiting for the supplicant (send 'wpa connect "
+    "<ssid> <psk>' on the console)\r\n"
+    "[  42.000] wlan0: WPA: Key negotiation completed with "
+    "14:a3:2f:18:07:2c [PTK=CCMP GTK=CCMP]\r\n"
+    "[  42.100] wlan8189: join-ok bssid=14:a3:2f:18:07:2c state=RUN\r\n"
+    "[  42.200] CASE threadx-rk3568-rtl8189/wlan8189-join PASS\r\n"
+    "[  43.000] wlan8189: dataplane up, dhcp started\r\n"
+    "[  45.000] wlan8189: dhcp bound ip=192.168.0.211/24 gw=192.168.0.1\r\n"
+    "[  45.100] wlan8189: ping gw window=9 s\r\n"
+    "[  46.000] ping: recv 192.168.0.1 1 ms\r\n"
+    "[  47.000] ping: recv 192.168.0.1 2 ms\r\n"
+    "[  48.000] ping: recv 192.168.0.1 1 ms\r\n"
+    "[  49.000] ping: recv 192.168.0.1 1 ms\r\n"
+    "[  54.000] wlan8189: ping window done\r\n"
+    "[  54.100] wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n"
+    "[  54.200] wlan8189: iperf server ready port=5001\r\n"
+    "[  54.300] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"
+    "[  56.000] total function 9\r\n"
+    "[  56.010] total variable 2\r\n"
+    "[  56.020] wlan8189: attached=1 bss=17\r\n"
     + SENTINEL_LINE
 )
 
@@ -149,8 +189,22 @@ MUTATIONS = [
         "total variable 2\r\n", ""), 1),
     ("status response dropped", BASE_TRANSCRIPT.replace(
         "wlan8189: attached=1 bss=17\r\n", ""), 1),
+    ("join wait anchor dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: join waiting for the supplicant (send 'wpa connect "
+        "<ssid> <psk>' on the console)\r\n", ""), 1),
+    ("join evidence dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: join-ok bssid=14:a3:2f:18:07:2c state=RUN\r\n", "").replace(
+        "wlan0: WPA: Key negotiation completed with "
+        "14:a3:2f:18:07:2c [PTK=CCMP GTK=CCMP]\r\n", ""), 1),
+    ("dhcp bound dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: dhcp bound ip=192.168.0.211/24 gw=192.168.0.1\r\n", ""), 1),
+    ("diag line dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n", ""), 1),
+    ("ping replies starved", BASE_TRANSCRIPT.replace(
+        "ping: recv 192.168.0.1 2 ms\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,wlan8189-probe,wlan8189-scan",
+        "list=shell-up,wlan8189-probe,wlan8189-scan,wlan8189-join,"
+        "wlan8189-dataplane",
         "list=shell-up,wlan8189-probe"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
@@ -163,6 +217,16 @@ MAC_RE = re.compile(r"wlan8189: driver attached mac=([0-9a-f:]{17})")
 #: The scan backstop: the rows the driver reported are the case's whole claim,
 #: so a PASS with an empty table is refused.
 ROWS_RE = re.compile(r"wlan8189: scan done rows=(\d+) chans=\d+")
+
+#: The join and dataplane backstops: the anchors are the case's own verdict
+#: chain, and these are the independent cross-checks the criteria name (a
+#: completed handshake anchor for the join; a bound address plus at least four
+#: echo replies for the dataplane - the ping module prints one "ping: recv" line
+#: per reply).
+JOIN_NEGOTIATION_RE = re.compile(r"Key negotiation completed with .* "
+                                 r"\[PTK=CCMP GTK=CCMP\]|wlan8189: join-ok bssid=")
+DHCP_BOUND_RE = re.compile(r"wlan8189: dhcp bound ip=(\d+\.\d+\.\d+\.\d+)/")
+PING_RECV_RE = re.compile(r"ping: recv")
 
 
 def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
@@ -264,6 +328,30 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
             errors.append("wlan8189-scan: no scan-result line")
         elif rows == 0:
             errors.append("wlan8189-scan: the scan reported an empty table")
+
+    # the join backstop: a PASS must carry either the supplicant's negotiation
+    # anchor or the case's own join-ok line (the case prints the latter only
+    # after both latches fired, so one of the two is the handshake evidence)
+    if verdicts.get("wlan8189-join") == "PASS":
+        if not any(JOIN_NEGOTIATION_RE.search(line) for line in transcript.lines):
+            errors.append("wlan8189-join: no negotiation anchor and no join-ok line")
+
+    # the dataplane backstop: a PASS must show a bound (non-any) address and at
+    # least four echo replies; an all-zero or missing address, or a ping that
+    # never heard back, is not a data plane
+    if verdicts.get("wlan8189-dataplane") == "PASS":
+        bound = None
+        for line in transcript.lines:
+            m = DHCP_BOUND_RE.search(line)
+            if m:
+                bound = m.group(1)
+        if bound is None:
+            errors.append("wlan8189-dataplane: no dhcp bound line")
+        elif bound == "0.0.0.0":
+            errors.append("wlan8189-dataplane: the bound address is 0.0.0.0")
+        replies = sum(1 for line in transcript.lines if PING_RECV_RE.search(line))
+        if replies < 4:
+            errors.append("wlan8189-dataplane: %d echo replies (< 4)" % replies)
 
     shell_selected = expected is None or "shell-up" in expected
     if steps_path and os.path.exists(steps_path):
