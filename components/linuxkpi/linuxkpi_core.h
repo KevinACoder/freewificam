@@ -233,6 +233,14 @@ unsigned int lkpi_random_u32(void);
 
 struct attribute_group;
 
+/* [LNX] include/linux/pm.h: struct dev_pm_info. The interface's record is wide (it carries
+ * the whole runtime-PM state machine); this face states the one field the compiled set
+ * reads, `is_prepared`, which a cfg80211 consumer asks before it suspends a device. The
+ * rest arrives with a consumer that names it. */
+struct dev_pm_info {
+	bool		is_prepared;
+};
+
 struct device {
 	const char	*name;
 	void		*driver_data;
@@ -241,6 +249,8 @@ struct device {
 	/* rtw89's usb.c assigns the sysfs attribute groups here (the
 	 * groups are never walked on this image; see linux/sysfs.h) */
 	const struct attribute_group **groups;
+	/* the runtime-PM state a cfg80211 consumer reads; see dev_pm_info above */
+	struct dev_pm_info power;
 };
 
 #define	dev_set_drvdata(dev, data)	do { (dev)->driver_data = (data); } while (0)
