@@ -120,6 +120,8 @@ components/linuxkpi/usb/linuxkpi_usb.h
 components/linuxkpi/usb/lkpi_usbh_class.c
 components/linuxkpi/usb/lkpi_usbh_modeswitch.c
 components/linuxkpi/usb/lkpi_usbh_modeswitch.h
+components/linuxkpi/pci
+components/linuxkpi/fw/iwl7260fw_blob.c
 components/linuxkpi/linuxkpi_platform_target.c'
 
 files=$(git ls-files -- "$paths_self" "$paths_vendored" $paths_imported)
