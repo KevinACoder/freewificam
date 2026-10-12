@@ -72,4 +72,34 @@ extern void tasklet_init(struct tasklet_struct *t,
 extern void tasklet_kill(struct tasklet_struct *t);
 extern void tasklet_hi_schedule(struct tasklet_struct *t);
 
+/* ------------------------------------------------------------------ */
+/* the interrupt-request surface                                       */
+/* ------------------------------------------------------------------ */
+
+/* [LNX] include/linux/irqreturn.h:8-16: what a handler returns. The interface
+ * spells this an enum; the contract header already carries IRQ_NONE and
+ * IRQ_HANDLED as the value macros every existing consumer compares against, so
+ * this face keeps those and states the third value beside them. */
+#ifndef IRQ_WAKE_THREAD
+#define	IRQ_WAKE_THREAD		2
+#endif
+typedef int irqreturn_t;
+
+/* [LNX] include/linux/interrupt.h:30: the handler signature. */
+typedef irqreturn_t (*irq_handler_t)(int irq, void *dev_id);
+
+/* [LNX] include/linux/interrupt.h:41-56: the flags this face names. A driver that
+ * registers a shared or a one-shot line passes one of these. */
+#define	IRQF_SHARED		0x00000080
+#define	IRQF_ONESHOT		0x00002000
+#define	IRQF_NO_AUTOEN		0x00004000
+
+/* [LNX] include/linux/interrupt.h:154-160: the request/release pair. `irq` is the
+ * interrupt the engine allocated (a pci_dev's .irq); the engine routes the
+ * handler to the backend's registered vector. free_irq's dev_id must be the same
+ * pointer the request named. */
+int	request_irq(unsigned int irq, irq_handler_t handler, unsigned long flags,
+	    const char *name, void *dev);
+void	free_irq(unsigned int irq, void *dev_id);
+
 #endif /* _LINUXKPI_LINUX_INTERRUPT_H_ */
