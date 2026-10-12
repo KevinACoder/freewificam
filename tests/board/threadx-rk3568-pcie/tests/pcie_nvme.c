@@ -65,9 +65,9 @@ void pcie_nvme_chain( void )
 
 	/* --- the root complex ------------------------------------------------ */
 
-	/* Idempotent: a second call (the console command's re-run path) keeps the
-	 * link the first one inherited. */
-	dwc_pcie_init();
+	/* The shared bring-up (idempotent, once per boot): the storage cases run
+	 * after this one and must not re-probe what this call already did. */
+	(void)pcie_nvme_bringup();
 
 	ctrls = dwc_pcie_ctrl_count();
 	devs = dwc_pcie_dev_count();
@@ -83,7 +83,6 @@ void pcie_nvme_chain( void )
 
 	/* --- the NVMe controller --------------------------------------------- */
 
-	dwc_nvme_init();
 	if( dwc_nvme_ctrl_count() < 1U ) {
 		LOG_ERROR( "pcie-nvme: nvme=%u\n", dwc_nvme_ctrl_count() );
 		board_case_fail( "no NVMe controller found" );

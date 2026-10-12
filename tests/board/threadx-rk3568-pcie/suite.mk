@@ -19,9 +19,9 @@ SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-pcie start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-pcie select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-pcie result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-pcie result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
-SUITE_CASE_NAMES      := shell-up pcie-nvme
+SUITE_CASE_NAMES      := shell-up pcie-nvme pcie-nvme-fs pcie-nvme-fs-verify
 SUITE_STEPS_FILE      := steps.tsv
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-pcie/judge.py
-SUITE_TIMEOUT         := 240
+SUITE_TIMEOUT         := 900
 SUITE_SEGMENTS        := -
 SUITE_WIRELESS        := 0
