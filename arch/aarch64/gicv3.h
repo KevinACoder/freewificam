@@ -10,14 +10,22 @@
 
 typedef void (*irq_handler_t)(void *arg);
 
+/* First LPI INTID. LPIs are numbered from here, not from 0 (INTID 8192 is LPI
+ * slot 0). A message interrupt is an architectural GICv3 line, so the number
+ * belongs with the controller rather than with the ITS driver that hands the
+ * slots out. */
+#define IRQ_LPI_INTID_FIRST	8192U
+
 /* Bring the controller up (idempotent). Conditional RMW everywhere: firmware
  * hands over with the distributor partially enabled, and a careless store
  * clears ARE and wedges the CPU interface (every IAR1 read then returns the
  * spurious 1023 - an interrupt storm). */
 void gicv3_init(void);
 
-/* Registry: one handler per INTID (this milestone uses PPI 27/30 and keeps
- * UART INTID 150 reserved). Registering does not enable. */
+/* Registry: one handler per INTID, over the whole GICv3 INTID space - SGI/PPI,
+ * SPI and LPI alike, because dispatch is by the acknowledged INTID. Registering
+ * does not enable: an SPI/PPI is enabled through the distributor/redistributor,
+ * an LPI through its property byte. */
 int32_t irq_register(uint32_t intid, irq_handler_t handler, void *arg);
 
 /* Enable/disable one INTID. For SGI/PPI this is a single-bit read-modify-
