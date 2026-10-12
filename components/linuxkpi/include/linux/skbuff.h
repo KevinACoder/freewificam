@@ -99,11 +99,25 @@ skb_tail_pointer(const struct sk_buff *skb)
 	return skb->head + skb->tail;
 }
 
-/* [LNX] include/linux/skbuff.h:2735-2738 (offset build) */
+/* [LNX] include/linux/skbuff.h:2726-2730 (offset build). The offset is relative to
+ * the data pointer: the interface moves the tail to the payload's start first
+ * (skb_reset_tail_pointer, the contract header's), so skb_tail_pointer() answers
+ * data + offset whatever headroom the buffer carries. Getting this wrong is not a
+ * cosmetic slip - a buffer with headroom then reports a tail short by exactly that
+ * headroom, and a driver that bounds a frame against the tail (the vendored SDIO
+ * receive path does, hal/rtl8188f/sdio/sdio_ops.c:1367-1381) rejects frames that
+ * reach the end of their buffer.
+ *
+ * The payload length follows here, where the interface leaves it alone: this port's
+ * pool enforces "the tail covers headroom plus payload" on every geometry operation
+ * (skbuff_pool.c:234-249), and a helper that legally desyncs the two in Linux would
+ * make that check refuse the driver's next skb_put. */
 static __always_inline __unused void
 skb_set_tail_pointer(struct sk_buff *skb, const int offset)
 {
-	skb->tail = (unsigned int)offset;
+	skb_reset_tail_pointer(skb);
+	skb->tail += (unsigned int)offset;
+	skb->len = skb->tail - (unsigned int)(skb->data - skb->head);
 }
 
 /*
