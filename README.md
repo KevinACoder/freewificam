@@ -37,7 +37,7 @@ link on both, and a gate rejects a foreign kernel call in a component.
 
 ## What runs today
 
-Three USB WiFi lines are brought up on the reference board. "Full chain" means
+Three USB WiFi lines and one SDIO line are brought up on the reference board. "Full chain" means
 the card is enumerated, its firmware loaded, it scans, it joins a WPA2 network,
 it gets an address over DHCP, it answers ping, and TCP data flows. It does not
 mean the throughput is good.
@@ -47,7 +47,7 @@ mean the throughput is good.
 | `rtl8xxxu` | RTL8188EUS | Full chain. |
 | `rtw88` | RTL8821CU | Full chain, including a boot-time CD-ROM to WLAN mode switch. |
 | `rtw89` | RTL8851BU | **Experimental**: full chain reached, join intermittent, link poor. |
-| SDIO | RTL8189FTV | Bus enumerated on board; vendor driver vendored and building; wireless bring-up in progress. |
+| SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. |
 
 ### Throughput
 
@@ -63,13 +63,19 @@ band are not comparable and are not used here.
 | RTL8188EUS | 4.00 / 4.66 Mbit/s | **42.6 / 43.9 / 45.3 Mbit/s** |
 | RTL8821CU | 3.65 Mbit/s | **63.7 / 66.0 / 68.2 Mbit/s** |
 | RTL8851BU | 136 / 173 Kbit/s | **23.9 / 25.3 / 26.5 Mbit/s** |
+| RTL8189FTV (SDIO) | 10.6 / 1.18 / 10.9 Mbit/s | **45.0 / 46.4 Mbit/s** |
 
-All three lines are measured on channel 1 (2412 MHz) against the same access
+All four lines are measured on channel 1 (2412 MHz) against the same access
 point, BSSID `14:a3:2f:18:07:2c`; each Linux cell is min/avg/max over three 30 s
-runs. The RTOS figures are roughly one tenth, one eighteenth and one
-hundred-and-seventieth of the Linux figures. Linux also moves data in the
-reverse direction on all three lines; the RTOS reverse direction is not measured
-yet.
+runs, except RTL8189FTV whose Linux cell is the range the lab's ground-truth
+ledger records for the same card. The RTOS figures are roughly one tenth, one
+eighteenth, one hundred-and-seventieth and (for the SDIO line) one quarter of
+the Linux figures. The SDIO line is the closest to Linux, and the least stable:
+two of its three runs sat at 10.6 and 10.9 Mbit/s while the third collapsed to
+1.18 Mbit/s — the signature of the driver's default power management, the same
+thing the Linux lane had to turn off to stop TCP stalling. Linux also moves data
+in the reverse direction on all four lines; the RTOS reverse direction is not
+measured yet.
 
 The gap to Linux is large, and it is the current open problem. It is stated
 here rather than hidden: the value of the port so far is in the structure, not
