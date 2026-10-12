@@ -113,12 +113,17 @@ typedef unsigned long		ulong;
 typedef unsigned int		uint;
 typedef int64_t			loff_t;
 typedef int64_t			ssize_t;	/* sysfs show/store signatures */
+typedef int64_t			time64_t;	/* the second count of a timespec64 */
 typedef uint64_t		dma_addr_t;
 typedef unsigned int		gfp_t;
 
 #define	__user
 #define	__iomem
 #define	__force
+/* the sparse bitwise-endianness marker: a no-op for the compiler, but it sits
+ * between the base type and the declarator (`typedef unsigned int __bitwise
+ * foo_t;`), so without the define the declaration fails to parse */
+#define	__bitwise
 /* sparse address-space markers: no-ops for the compiler, but rtw89's
  * rcu-protected pointers (`struct foo __rcu *`) put the annotation in
  * the middle of declarations - without the define the whole struct
@@ -150,6 +155,21 @@ typedef unsigned int		gfp_t;
 #endif
 #ifndef __aligned
 #define	__aligned(x)		__attribute__((__aligned__(x)))
+#endif
+/* [LNX] include/linux/cache.h: the cacheline-alignment markers. This port runs a
+ * single CPU, so the SMP-specific marker is the interface's own empty shape. */
+#ifndef ____cacheline_aligned
+#define	____cacheline_aligned		__attribute__((__aligned__(64)))
+#endif
+#ifndef ____cacheline_aligned_in_smp
+#define	____cacheline_aligned_in_smp
+#endif
+#ifndef __cacheline_aligned
+#define	__cacheline_aligned		____cacheline_aligned
+#endif
+/* [LNX] asm-generic/cache.h:11: the cacheline size (aarch64's L1_CACHE_SHIFT is 6). */
+#ifndef SMP_CACHE_BYTES
+#define	SMP_CACHE_BYTES			(1 << 6)
 #endif
 #ifndef __packed
 #define	__packed		__attribute__((__packed__))
@@ -241,16 +261,30 @@ struct dev_pm_info {
 	bool		is_prepared;
 };
 
+struct bus_type;
+
+/* [LNX] include/linux/kobject.h: the sysfs object a device embeds. The compiled
+ * set takes its address and hands it to the uevent call; nothing here walks it. */
+struct kobject {
+	const char	*name;
+};
+
 struct device {
 	const char	*name;
 	void		*driver_data;
 	void		*platform_data;
 	struct device	*parent;
+	/* [LNX] include/linux/device.h: the sysfs object the device embeds. */
+	struct kobject	kobj;
 	/* rtw89's usb.c assigns the sysfs attribute groups here (the
 	 * groups are never walked on this image; see linux/sysfs.h) */
 	const struct attribute_group **groups;
 	/* the runtime-PM state a cfg80211 consumer reads; see dev_pm_info above */
 	struct dev_pm_info power;
+	/* [LNX] include/linux/device.h: the bus this device sits on. The compiled
+	 * set reads the bus name off a device (a firmware-dump line); nothing on
+	 * this port assigns the record, so the pointer is carried for the read. */
+	struct bus_type	*bus;
 };
 
 #define	dev_set_drvdata(dev, data)	do { (dev)->driver_data = (data); } while (0)
@@ -267,6 +301,9 @@ struct device {
 #endif
 #ifndef PAGE_SHIFT
 #define	PAGE_SHIFT		12
+#endif
+#ifndef PAGE_MASK
+#define	PAGE_MASK		(~(PAGE_SIZE - 1))
 #endif
 
 #ifndef BIT
@@ -468,6 +505,14 @@ lkpi_hweight64(u64 w)
 #define	hweight16(w)	(__builtin_constant_p(w) ? __const_hweight16(w) : lkpi_hweight16(w))
 #define	hweight32(w)	(__builtin_constant_p(w) ? __const_hweight32(w) : lkpi_hweight32(w))
 #define	hweight64(w)	(__builtin_constant_p(w) ? __const_hweight64(w) : lkpi_hweight64(w))
+/* [LNX] include/linux/bitops.h: the upper-case spelling of the same family. The
+ * interface carries both (HWEIGHTn is the "hardware popcount" name a driver uses
+ * when it wants the count itself rather than the mask test); they fold to the same
+ * helper here, so there is one mechanism under two names. */
+#define	HWEIGHT8(w)	(__builtin_constant_p(w) ? __const_hweight8(w) : lkpi_hweight8(w))
+#define	HWEIGHT16(w)	(__builtin_constant_p(w) ? __const_hweight16(w) : lkpi_hweight16(w))
+#define	HWEIGHT32(w)	(__builtin_constant_p(w) ? __const_hweight32(w) : lkpi_hweight32(w))
+#define	HWEIGHT64(w)	(__builtin_constant_p(w) ? __const_hweight64(w) : lkpi_hweight64(w))
 
 static __always_inline __unused unsigned long
 __ffs(unsigned long word)
@@ -486,11 +531,21 @@ __fls(unsigned long word)
 #define	do_div(n, base)		({ unsigned long __r = (n) % (base);	\
 				   (n) = (n) / (base); __r; })
 
-#define	__stringify(x)		#x
+/* [LNX] include/linux/stringify.h:9-10: the two-level indirection, so an argument
+ * that is itself a macro is expanded before it is stringified. */
+#define	__stringify_1(x...)	#x
+#define	__stringify(x...)	__stringify_1(x)
 
 /* ilog2: exact for constants (the drivers use it on table sizes) and a
  * floor-log2 at runtime */
 #define	ilog2(n)		((unsigned long)__builtin_ctzll((unsigned long long)(n)))
+
+/* [LNX] include/linux/math.h: the round-up-to-a-power-of-two helper. It is a
+ * macro over the exact-for-constants ilog2 above, because a compiled consumer
+ * names it inside an alignment attribute, where only a constant expression is
+ * accepted. */
+#define	__roundup_pow_of_two(n)	(1UL << (ilog2((n) - 1) + 1))
+#define	roundup_pow_of_two(n)	__roundup_pow_of_two(n)
 
 #ifndef READ_ONCE
 #define	READ_ONCE(x)		(*(volatile typeof(x) *)&(x))
@@ -552,6 +607,11 @@ __fls(unsigned long word)
 #define	ENOLINK			67
 #define	EOPNOTSUPP		95
 #define	EPIPE			32
+/* [LNX] uapi/asm-generic/errno.h:121 */
+#define	ERFKILL			132
+/* [LNX] uapi/asm-generic/errno.h:89,96 */
+#define	ENOBUFS			105
+#define	EHOSTDOWN		112
 /* the urb-cancellation code usb_kill_urb delivers on Linux (hub.c's
  * stop set consumes it); the kpi kill surfaces -ENOENT/-ENODEV, the
  * driver's stop set lists both spellings */
@@ -843,6 +903,9 @@ le32_add_cpu(__le32 *var, u32 val)
 #endif
 #define	FIELD_MAX(_mask)	((_mask) >> __builtin_ctzl(_mask))
 #define	FIELD_FIT(_mask, _val)	(((typeof(_mask))(_val) << __builtin_ctzl(_mask)) >> __builtin_ctzl(_mask) == (typeof(_mask))(_val))
+/* [LNX] include/linux/bitfield.h:47: the shift a field mask names, which a compiled
+ * set uses to place a value into a multi-bit field constant. */
+#define	__bf_shf		__builtin_ctzll
 
 static __always_inline __unused u32
 le32_get_bits(__le32 v, u32 mask)
@@ -1489,6 +1552,15 @@ fsleep(unsigned long usecs)
 
 #define	nsecs_to_jiffies(n)	usecs_to_jiffies((unsigned long)((n) / 1000))
 
+/* [LNX] include/vdso/time64.h: the nanosecond multiples the compiled set scales
+ * tick arithmetic with. */
+#define	NSEC_PER_SEC		1000000000L
+#define	NSEC_PER_USEC		1000L
+/* [LNX] include/linux/time64.h:22-24: the microsecond and millisecond multiples. */
+#define	MSEC_PER_SEC		1000L
+#define	USEC_PER_SEC		1000000L
+#define	USEC_PER_MSEC		1000L
+
 /* ------------------------------------------------------------------ */
 /* logging                                                             */
 /* ------------------------------------------------------------------ */
@@ -1724,6 +1796,10 @@ void lkpi_spin_unlock_irqrestore(spinlock_t *l, unsigned long long flags);
 int lkpi_spin_trylock(spinlock_t *l);
 
 #define	spin_lock_init(l)		((void)((l)->_daif = 0))
+/* [LNX] include/linux/spinlock_types.h: the static-initialiser spelling; the port's
+ * spinlock is a passive mutex created lazily from zeroed storage, so the zeroed
+ * object is the initialised one. */
+#define	DEFINE_SPINLOCK(x)		spinlock_t x
 #define	spin_lock_destroy(l)		do { } while (0)
 #define	spin_lock(l)			lkpi_spin_lock(l)
 #define	spin_unlock(l)			lkpi_spin_unlock(l)
@@ -2302,6 +2378,16 @@ alloc_workqueue(const char *fmt, unsigned int flags, int max_active, ...)
 #define	create_singlethread_workqueue(name)	alloc_workqueue(name, 0, 1)
 #define	create_workqueue(name)			alloc_workqueue(name, 0, 1)
 #define	system_wq				lkpi_system_wq
+/* [LNX] include/linux/workqueue.h: the default-flags system workqueue. This port
+ * runs one system workqueue, so both spellings reach it. */
+#define	system_dfl_wq				lkpi_system_wq
+/* [LNX] include/linux/workqueue.h:469: the unbound system workqueue. This port runs
+ * one system workqueue and it is not CPU-bound, so the unbound spelling reaches
+ * the same queue. */
+#define	system_unbound_wq			lkpi_system_wq
+/* [LNX] include/linux/workqueue.h: the per-CPU system workqueue; this port runs one
+ * system workqueue on its single CPU, so the per-CPU spelling reaches it too. */
+#define	system_percpu_wq			lkpi_system_wq
 
 /* [LNX] include/linux/workqueue.h:371-416 (the enumerators the compiled set names, at
  * their computed positions) */
@@ -2319,6 +2405,9 @@ struct timer_list {
 	void	*_callout[14];
 	void	(*tl_func)(struct timer_list *);
 	bool	tl_pending;
+	/* [LNX] include/linux/timer.h: the expiry a compiled consumer reads off a
+	 * timer it armed. */
+	unsigned long	expires;
 };
 
 void lkpi_timer_setup(struct timer_list *, void (*)(struct timer_list *));
@@ -2340,6 +2429,10 @@ int lkpi_timer_pending(const struct timer_list *);
 #define	timer_pending(t)		lkpi_timer_pending(t)
 #define	timer_delete(t)			lkpi_del_timer(t)
 #define	timer_delete_sync(t)		lkpi_del_timer_sync(t)
+/* [LNX] include/linux/timer.h: the shutdown-sync form stops the timer and leaves
+ * it unable to re-arm; this port's callout has no re-arm flag to clear once it is
+ * deleted, so the delete-sync contract is the whole of it. */
+#define	timer_shutdown_sync(t)		lkpi_del_timer_sync(t)
 #define	from_timer(var, timer, field)	container_of(timer, typeof(*var), field)
 /* 6.15+ rename of from_timer */
 #define	timer_container_of(var, timer, field)	container_of(timer, typeof(*var), field)
@@ -2539,6 +2632,8 @@ void get_random_mask_addr(u8 *buf, const u8 *addr, const u8 *mask);
  * argument is selected by arity - no comma-paste, so the strict mode this port compiles in
  * cannot change the pick. */
 #define	__lkpi_obj_pick(_1, _2, NAME, ...)	NAME
+#define	__lkpi_obj_pick3(_1, _2, _3, NAME, ...)	NAME
+#define	__lkpi_obj_pick4(_1, _2, _3, _4, NAME, ...)	NAME
 #define	__lkpi_kmalloc_obj1(T)			kmalloc(sizeof(T), GFP_KERNEL)
 #define	__lkpi_kmalloc_obj2(T, GFP)		kmalloc(sizeof(T), (GFP))
 #define	__lkpi_kzalloc_obj1(T)			kzalloc(sizeof(T), GFP_KERNEL)
@@ -2547,8 +2642,17 @@ void get_random_mask_addr(u8 *buf, const u8 *addr, const u8 *mask);
 	__lkpi_obj_pick(__VA_ARGS__, __lkpi_kmalloc_obj2, __lkpi_kmalloc_obj1)(__VA_ARGS__)
 #define	kzalloc_obj(...)							\
 	__lkpi_obj_pick(__VA_ARGS__, __lkpi_kzalloc_obj2, __lkpi_kzalloc_obj1)(__VA_ARGS__)
-#define	kzalloc_objs(P, COUNT)			kzalloc(sizeof(P) * (COUNT), GFP_KERNEL)
-#define	kmalloc_objs(P, COUNT)			kmalloc(sizeof(P) * (COUNT), GFP_KERNEL)
+/* The array form carries an optional trailing GFP argument the same way the
+ * object form does; three positions are needed because the two mandatory
+ * arguments precede it. */
+#define	__lkpi_kzalloc_objs1(P, COUNT)		kzalloc(sizeof(P) * (COUNT), GFP_KERNEL)
+#define	__lkpi_kzalloc_objs2(P, COUNT, GFP)	kzalloc(sizeof(P) * (COUNT), (GFP))
+#define	__lkpi_kmalloc_objs1(P, COUNT)		kmalloc(sizeof(P) * (COUNT), GFP_KERNEL)
+#define	__lkpi_kmalloc_objs2(P, COUNT, GFP)	kmalloc(sizeof(P) * (COUNT), (GFP))
+#define	kzalloc_objs(...)							\
+	__lkpi_obj_pick3(__VA_ARGS__, __lkpi_kzalloc_objs2, __lkpi_kzalloc_objs1)(__VA_ARGS__)
+#define	kmalloc_objs(...)							\
+	__lkpi_obj_pick3(__VA_ARGS__, __lkpi_kmalloc_objs2, __lkpi_kmalloc_objs1)(__VA_ARGS__)
 
 #define	__alloc_flex(KMALLOC, GFP, TYPE, FAM, COUNT)			\
 ({									\
@@ -2558,7 +2662,12 @@ void get_random_mask_addr(u8 *buf, const u8 *addr, const u8 *mask);
 	__obj_ptr;							\
 })
 
-#define	kzalloc_flex(P, FAM, COUNT)	__alloc_flex(kzalloc, GFP_KERNEL, typeof(P), FAM, COUNT)
+#define	kzalloc_flex(...)							\
+	__lkpi_obj_pick4(__VA_ARGS__, __lkpi_kzalloc_flex2, __lkpi_kzalloc_flex1)(__VA_ARGS__)
+#define	__lkpi_kzalloc_flex1(P, FAM, COUNT)					\
+	__alloc_flex(kzalloc, GFP_KERNEL, typeof(P), FAM, COUNT)
+#define	__lkpi_kzalloc_flex2(P, FAM, COUNT, GFP)				\
+	__alloc_flex(kzalloc, (GFP), typeof(P), FAM, COUNT)
 
 /* [LNX] helper the compiled set names */
 /* [LNX] include/linux/string.h:281 */

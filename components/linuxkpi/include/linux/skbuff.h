@@ -39,6 +39,21 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/skbuff.h:28 includes <linux/dma-mapping.h>; the face keeps
+ * the interface's own include, which is how the DMA direction and mapping API
+ * reaches a unit that takes this header. */
+#include <linux/dma-mapping.h>
+
+/* [LNX] include/linux/skbuff.h:31 includes <linux/in6.h>; the face keeps the
+ * interface's own include, which is how the IPv6 address record reaches a unit
+ * that takes this header. */
+#include <linux/in6.h>
+
+/* [LNX] include/linux/skbuff.h: the interface reaches the page record and
+ * page_address() through <linux/mm.h>; the fragment views below are stated over
+ * that call. */
+#include <linux/mm.h>
+
 /* [LNX] include/linux/skbuff.h:23 includes <linux/atomic.h>; the face keeps the
  * interface's own include, which is how the atomic API reaches a unit that takes this
  * header. */
@@ -121,14 +136,74 @@ skb_set_tail_pointer(struct sk_buff *skb, const int offset)
 }
 
 /*
+ * [LNX] include/linux/skbuff.h: the paged-fragment record and the fragment views a
+ * transmit path names. The interface spells the record as its block-vector type
+ * (page, length, offset); this face states that shape directly, because no compiled
+ * unit reaches the vector type by name. This port's buffers carry no fragments (the
+ * shared record's nr_frags is 0), so the helpers below are reached only from a loop
+ * whose bound is that zero; they are stated so that loop compiles, and the DMA view
+ * reuses the one streaming map this face already has rather than adding a second
+ * mapping mechanism.
+ */
+struct device;
+
+typedef struct skb_frag {
+	struct page	*bv_page;
+	unsigned int	bv_len;
+	unsigned int	bv_offset;
+} skb_frag_t;
+
+/* [LNX] include/linux/skbuff.h:354: the fragment capacity of the shared record. */
+#define	MAX_SKB_FRAGS	17
+
+static __always_inline __unused unsigned int
+skb_frag_size(const skb_frag_t *frag)
+{
+	return frag->bv_len;
+}
+
+static __always_inline __unused struct page *
+skb_frag_page(const skb_frag_t *frag)
+{
+	return frag->bv_page;
+}
+
+/* [LNX] include/linux/skbuff.h:3766-3771 */
+static __always_inline __unused void *
+skb_frag_address(const skb_frag_t *frag)
+{
+	return (void *)((char *)page_address(frag->bv_page) + frag->bv_offset);
+}
+
+/* [LNX] include/linux/skbuff.h: skb_frag_dma_map() maps the fragment for a device.
+ * This face has one streaming map (dma_map_single), so the fragment view is that
+ * call over the fragment's address. */
+static __always_inline __unused dma_addr_t
+skb_frag_dma_map(struct device *dev, const skb_frag_t *frag, size_t offset,
+		 size_t size, enum dma_data_direction dir)
+{
+	return dma_map_single(dev, (void *)((char *)skb_frag_address(frag) + offset),
+			      size, dir);
+}
+
+/*
  * [LNX] include/linux/skbuff.h (struct skb_shared_info): the per-buffer record carrying
  * the fragment list, the segmentation parameters and the destructor argument. The
  * members carried here are the ones the compiled set names, in the interface's order
- * (flags, meta_len, nr_frags, tx_flags, gso_size, gso_segs, frag_list) so their relative
- * offsets are the interface's; everything from the timestamp union on is not carried -
- * no compiled unit names it, and the types it drags (skb_frag_t, ubuf_info, the
- * hardware-timestamp records) have no counterpart on this port.
+ * (flags, meta_len, nr_frags, tx_flags, gso_size, gso_segs, frag_list, frags) so their
+ * relative offsets are the interface's; everything from the timestamp union on is not
+ * carried - no compiled unit names it, and the types it drags (ubuf_info, the
+ * hardware-timestamp records) have no counterpart on this port. The fragment array is
+ * carried because a compiled transmit loop indexes it; its bound is the record's own
+ * nr_frags, which is zero for every buffer this port produces.
  */
+/* [LNX] include/linux/skbuff.h:462-468: the hardware-timestamp record. The
+ * interface unions the timestamp with a net-device cookie; the timestamp member is
+ * the one the compiled set names. */
+struct skb_shared_hwtstamps {
+	ktime_t		hwtstamp;
+};
+
 struct skb_shared_info {
 	__u8		flags;
 	__u8		meta_len;
@@ -137,6 +212,10 @@ struct skb_shared_info {
 	unsigned short	gso_size;
 	unsigned short	gso_segs;
 	struct sk_buff	*frag_list;
+	skb_frag_t	frags[MAX_SKB_FRAGS];
+	/* [LNX] include/linux/skbuff.h:603: the hardware-timestamp record the receive
+	 * path stamps a buffer with. */
+	struct skb_shared_hwtstamps hwtstamps;
 };
 
 /*
@@ -171,6 +250,15 @@ lkpi_skb_shinfo_linear(const struct sk_buff *skb)
 }
 
 #define	skb_shinfo(SKB)	lkpi_skb_shinfo_linear(SKB)
+
+/* [LNX] include/linux/skbuff.h:1786-1789: the hardware-timestamp record of a
+ * buffer. This port reaches it through the same shared record as everything else
+ * (see skb_shinfo above), so the accessor is that record's member. */
+static __always_inline __unused struct skb_shared_hwtstamps *
+skb_hwtstamps(struct sk_buff *skb)
+{
+	return &skb_shinfo(skb)->hwtstamps;
+}
 
 /* [LNX] include/linux/skbuff.h:2527-2530 */
 static __always_inline __unused bool
@@ -275,5 +363,46 @@ skb_linearize(struct sk_buff *skb)
  */
 #define	skb_walk_frags(skb, iter)					\
 	for ((iter) = NULL; (iter) != NULL; (iter) = (iter)->next)
+
+/*
+ * [LNX] include/linux/skbuff.h:3120-3123: `static inline unsigned char
+ * *skb_mac_header(const struct sk_buff *skb) { return skb->head + skb->mac_header; }`.
+ *
+ * This port's sk_buff carries no mac_header offset: the 802.11 header is the
+ * buffer's data, built there by the bridge (see the contract header's sk_buff and
+ * the ip_hdr() derivation in components/linuxkpi/include/linux/ip.h, which opens
+ * the payload at the header's own length). The accessor therefore answers the
+ * buffer's data pointer, which is the port's real mac header, and the setter has
+ * no offset to store - the header is where the caller put it.
+ */
+static __always_inline __unused unsigned char *
+skb_mac_header(const struct sk_buff *skb)
+{
+	return skb->data;
+}
+
+static __always_inline __unused void
+skb_set_mac_header(struct sk_buff *skb, int offset)
+{
+	(void)skb;
+	(void)offset;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:4253-4256: the buffer-list walk a transmit path
+ * uses to step a segmented list. Same empty range as skb_walk_frags above, stated
+ * as the interface's loop shape so the call site's body stays a loop body.
+ */
+#define	skb_list_walk_safe(first, skb, next_skb)			\
+	for ((skb) = (first), (next_skb) = (skb) ? (skb)->next : NULL;	\
+	     (skb) != NULL;						\
+	     (skb) = (next_skb), (next_skb) = (skb) ? (skb)->next : NULL)
+
+/* [LNX] include/linux/skbuff.h:1789-1792 */
+static __always_inline __unused void
+skb_mark_not_on_list(struct sk_buff *skb)
+{
+	skb->next = NULL;
+}
 
 #endif /* _LINUXKPI_LINUX_SKBUFF_H_ */

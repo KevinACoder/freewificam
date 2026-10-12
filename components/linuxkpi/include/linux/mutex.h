@@ -29,4 +29,10 @@
 extern int __must_check mutex_lock_interruptible(struct mutex *lock);
 extern int __must_check mutex_lock_killable(struct mutex *lock);
 
+/* [LNX] include/linux/mutex.h: the static-initialiser spelling. The interface
+ * initialises the lock and its lockdep map in place; this port's mutex creates its
+ * kernel object lazily from zeroed storage (components/linuxkpi/linuxkpi_core.c),
+ * so the definition is the zeroed object the lazy initialiser expects. */
+#define	DEFINE_MUTEX(mutexname)		struct mutex mutexname
+
 #endif /* _LINUXKPI_LINUX_MUTEX_H_ */

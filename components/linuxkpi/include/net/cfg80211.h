@@ -355,8 +355,15 @@ enum nl80211_sta_flags {
 					 IEEE80211_CHAN_NO_HT40MINUS)
 #define	IEEE80211_CHAN_NO_80MHZ		0x0080
 #define	IEEE80211_CHAN_NO_160MHZ	0x0100
+/* [LNX] include/net/cfg80211.h:141 */
+#define	IEEE80211_CHAN_INDOOR_ONLY	0x0200
 #define	IEEE80211_CHAN_NO_20MHZ		0x1000
 #define	IEEE80211_CHAN_IR_CONCURRENT	0x2000
+/* [LNX] include/net/cfg80211.h:151-154 */
+#define	IEEE80211_CHAN_NO_6GHZ_VLP_CLIENT	0x00400000
+#define	IEEE80211_CHAN_NO_6GHZ_AFC_CLIENT	0x00800000
+#define	IEEE80211_CHAN_CAN_MONITOR		0x01000000
+#define	IEEE80211_CHAN_ALLOW_6GHZ_VLP_AP	0x02000000
 
 #define	IEEE80211_DFS_MIN_NOP_TIME_MS	(30 * 60 * 1000)
 
@@ -508,11 +515,29 @@ struct ieee80211_sta_eht_cap {
 	u8					eht_ppe_thres[3];
 };
 
+/* [LNX] include/linux/ieee80211-uhr.h:454,488: the UHR capability records a band's
+ * per-interface-type data carries. */
+struct ieee80211_uhr_cap_mac {
+	u8	mac_cap[6];
+} __packed;
+
+struct ieee80211_uhr_cap_phy {
+	__le32	cap;
+	u8	reserved;
+} __packed;
+
+struct ieee80211_sta_uhr_cap {
+	bool				has_uhr;
+	struct ieee80211_uhr_cap_mac	mac;
+	struct ieee80211_uhr_cap_phy	phy;
+};
+
 struct ieee80211_sband_iftype_data {
 	u16				types_mask;
 	struct ieee80211_sta_he_cap	he_cap;
 	struct ieee80211_he_6ghz_capa	he_6ghz_capa;
 	struct ieee80211_sta_eht_cap	eht_cap;
+	struct ieee80211_sta_uhr_cap	uhr_cap;
 	struct {
 		const u8	*data;
 		unsigned int	len;
@@ -1048,6 +1073,14 @@ struct wiphy {
 	unsigned int		num_iftype_ext_capab;
 	const struct cfg80211_sar_capa *sar_capa;
 
+	/* [LNX] include/net/cfg80211.h: the remaining members the compiled set
+	 * names, at their interface types. */
+	const struct cfg80211_pmsr_capabilities *pmsr_capa;
+	struct mac_address	*addresses;
+	u16			n_addresses;
+	u32			hw_version;
+	u16			hw_timestamp_max_peers;
+
 	struct mutex		mtx;
 
 	/* the driver private area, sized by wiphy_new() and reached through
@@ -1411,6 +1444,166 @@ struct cfg80211_scan_info {
 	bool aborted;
 };
 
+/* [LNX] include/net/cfg80211.h: the fine-timing-measurement responder counters a
+ * driver fills and reports. */
+struct cfg80211_ftm_responder_stats {
+	u32 filled;
+	u32 success_num;
+	u32 partial_num;
+	u32 failed_num;
+	u32 asap_num;
+	u32 non_asap_num;
+	u64 total_duration_ms;
+	u32 unknown_triggers_num;
+	u32 reschedule_requests_num;
+	u32 out_of_window_triggers_num;
+};
+
+/* [LNX] include/uapi/linux/nl80211.h: the peer-measurement result and capability
+ * enumerations a driver's FTM path names. */
+enum nl80211_preamble {
+	NL80211_PREAMBLE_LEGACY,
+	NL80211_PREAMBLE_HT,
+	NL80211_PREAMBLE_VHT,
+	NL80211_PREAMBLE_DMG,
+	NL80211_PREAMBLE_HE,
+};
+
+/* [LNX] include/uapi/linux/nl80211.h:3837-3838 */
+#define	NL80211_TKIP_DATA_OFFSET_TX_MIC_KEY	16
+#define	NL80211_TKIP_DATA_OFFSET_RX_MIC_KEY	24
+
+enum nl80211_peer_measurement_status {
+	NL80211_PMSR_STATUS_SUCCESS,
+	NL80211_PMSR_STATUS_REFUSED,
+	NL80211_PMSR_STATUS_TIMEOUT,
+	NL80211_PMSR_STATUS_FAILURE,
+};
+
+enum nl80211_peer_measurement_type {
+	NL80211_PMSR_TYPE_INVALID,
+	NL80211_PMSR_TYPE_FTM,
+	NUM_NL80211_PMSR_TYPES,
+	NL80211_PMSR_TYPE_MAX = NUM_NL80211_PMSR_TYPES - 1
+};
+
+enum nl80211_peer_measurement_ftm_failure_reasons {
+	NL80211_PMSR_FTM_FAILURE_UNSPECIFIED,
+	NL80211_PMSR_FTM_FAILURE_NO_RESPONSE,
+	NL80211_PMSR_FTM_FAILURE_REJECTED,
+	NL80211_PMSR_FTM_FAILURE_WRONG_CHANNEL,
+	NL80211_PMSR_FTM_FAILURE_PEER_NOT_CAPABLE,
+	NL80211_PMSR_FTM_FAILURE_INVALID_TIMESTAMP,
+	NL80211_PMSR_FTM_FAILURE_PEER_BUSY,
+	NL80211_PMSR_FTM_FAILURE_BAD_CHANGED_PARAMS,
+};
+
+/* [LNX] include/net/cfg80211.h: the FTM measurement result. The interface's record
+ * is much wider (the location, the rates, the distance statistics); the members
+ * carried here are the ones the compiled set names, in the interface's order. */
+struct cfg80211_pmsr_ftm_result {
+	const u8 *lci;
+	const u8 *civicloc;
+	size_t	lci_len;
+	size_t	civicloc_len;
+	enum nl80211_peer_measurement_ftm_failure_reasons failure_reason;
+	u32	num_ftmr_attempts, num_ftmr_successes;
+	s16	burst_index;
+	u8	busy_retry_time;
+	s32	rssi_avg;
+	s32	rssi_spread;
+	s64	rtt_avg;
+	s64	rtt_variance;
+	s64	rtt_spread;
+
+	u32	rssi_avg_valid:1,
+		rssi_spread_valid:1,
+		rtt_avg_valid:1,
+		rtt_variance_valid:1,
+		rtt_spread_valid:1,
+		num_ftmr_attempts_valid:1,
+		num_ftmr_successes_valid:1;
+};
+
+/* [LNX] include/net/cfg80211.h: the peer-measurement result record a driver's
+ * callback fills. */
+struct cfg80211_pmsr_result {
+	u64	host_time, ap_tsf;
+	enum nl80211_peer_measurement_status status;
+	u8	addr[ETH_ALEN];
+	u8	final:1,
+		ap_tsf_valid:1;
+	enum nl80211_peer_measurement_type type;
+	union {
+		struct cfg80211_pmsr_ftm_result ftm;
+	};
+};
+
+/* [LNX] include/net/cfg80211.h: the peer-measurement capability record a driver
+ * registers. The interface's FTM block carries the whole ranging-capability set;
+ * the members carried here are the ones the compiled set names, in the
+ * interface's order. */
+struct cfg80211_pmsr_capabilities {
+	unsigned int	max_peers;
+	u8		report_ap_tsf:1,
+			randomize_mac_addr:1;
+	struct {
+		u32	preambles;
+		u32	bandwidths;
+		s8	max_bursts_exponent;
+		u8	max_ftms_per_burst;
+		u8	supported:1,
+			asap:1,
+			non_asap:1,
+			request_lci:1,
+			request_civicloc:1,
+			trigger_based:1,
+			non_trigger_based:1;
+	} ftm;
+};
+
+/* [LNX] include/net/cfg80211.h: the per-peer FTM request and the peer record a
+ * peer-measurement request carries. The request record is carried as the
+ * interface's header plus a flexible peer array; the fields are the ones the
+ * compiled set names. */
+struct cfg80211_pmsr_ftm_request_peer {
+	enum nl80211_preamble preamble;
+	u16	burst_period;
+	u8	requested:1,
+		asap:1,
+		request_lci:1,
+		request_civicloc:1,
+		trigger_based:1,
+		non_trigger_based:1,
+		lmr_feedback:1,
+		rsta:1;
+	u8	num_bursts_exp;
+	u8	burst_duration;
+	u8	ftms_per_burst;
+	u8	ftmr_retries;
+	u8	bss_color;
+	u32	request_type;
+};
+
+struct cfg80211_pmsr_request_peer {
+	u8	addr[ETH_ALEN];
+	struct cfg80211_chan_def chandef;
+	u8	report_ap_tsf:1;
+	struct cfg80211_pmsr_ftm_request_peer ftm;
+};
+
+struct cfg80211_pmsr_request {
+	u64	cookie;
+	void	*drv_data;
+	u32	n_peers;
+	u32	nl_portid;
+	u32	timeout;
+	u8	mac_addr[ETH_ALEN] __aligned(2);
+	u8	mac_addr_mask[ETH_ALEN] __aligned(2);
+	struct list_head list;
+	struct cfg80211_pmsr_request_peer peers[];
+};
+
 /* [LNX] include/net/cfg80211.h:3254 (record carried whole) */
 struct cfg80211_bss {
 	struct ieee80211_channel *channel;
@@ -1619,6 +1812,7 @@ extern const unsigned char rfc1042_header[6];
 
 /* [LNX] include/net/cfg80211.h:7142 (the enumerators the compiled set names, at their computed positions) */
 enum ieee80211_ap_reg_power {
+	IEEE80211_REG_UNSET_AP = 0,
 	IEEE80211_REG_LPI_AP = 1,
 	IEEE80211_REG_SP_AP = 2,
 	IEEE80211_REG_VLP_AP = 3
@@ -2351,6 +2545,131 @@ struct sk_buff *
 cfg80211_vendor_event_alloc(struct wiphy *wiphy, struct wireless_dev *wdev,
 			    int approxlen, int event_idx, gfp_t gfp);
 void cfg80211_vendor_event(struct sk_buff *skb, gfp_t gfp);
+
+/* ------------------------------------------------------------------ */
+/* The remaining nl80211 enumerators the compiled set names,
+ * each line names the interface header and line it was transcribed from. */
+/* ------------------------------------------------------------------ */
+
+	/* [LNX] uapi/linux/nl80211.h:929 */
+	#define	NL80211_FEATURE_AP_MODE_CHAN_WIDTH_CHANGE	262144
+	/* [LNX] uapi/linux/nl80211.h:930 */
+	#define	NL80211_FEATURE_DS_PARAM_SET_IE_IN_PROBES	524288
+	/* [LNX] uapi/linux/nl80211.h:935 */
+	#define	NL80211_FEATURE_DYNAMIC_SMPS	33554432
+	/* [LNX] uapi/linux/nl80211.h:917 */
+	#define	NL80211_FEATURE_HT_IBSS	2
+	/* [LNX] uapi/linux/nl80211.h:921 */
+	#define	NL80211_FEATURE_LOW_PRIORITY_SCAN	64
+	/* [LNX] uapi/linux/nl80211.h:925 */
+	#define	NL80211_FEATURE_P2P_GO_CTWIN	2048
+	/* [LNX] uapi/linux/nl80211.h:925 */
+	#define	NL80211_FEATURE_P2P_GO_OPPPS	4096
+	/* [LNX] uapi/linux/nl80211.h:931 */
+	#define	NL80211_FEATURE_QUIET	2097152
+	/* [LNX] uapi/linux/nl80211.h:939 */
+	#define	NL80211_FEATURE_SCHED_SCAN_RANDOM_MAC_ADDR	1073741824
+	/* [LNX] uapi/linux/nl80211.h:6864 */
+	#define	NL80211_FEATURE_ND_RANDOM_MAC_ADDR	2147483648U
+	/* [LNX] uapi/linux/nl80211.h:935 */
+	#define	NL80211_FEATURE_STATIC_SMPS	16777216
+	/* [LNX] uapi/linux/nl80211.h:936 */
+	#define	NL80211_FEATURE_SUPPORTS_WMM_ADMISSION	67108864
+	/* [LNX] uapi/linux/nl80211.h:937 */
+	#define	NL80211_FEATURE_TDLS_CHANNEL_SWITCH	268435456
+	/* [LNX] uapi/linux/nl80211.h:932 */
+	#define	NL80211_FEATURE_TX_POWER_INSERTION	4194304
+	/* [LNX] uapi/linux/nl80211.h:930 */
+	#define	NL80211_FEATURE_WFA_TPC_IE_IN_PROBES	1048576
+	/* [LNX] uapi/linux/nl80211.h:1117 */
+	#define	NL80211_FTM_STATS_ASAP_NUM	4
+	/* [LNX] uapi/linux/nl80211.h:1117 */
+	#define	NL80211_FTM_STATS_FAILED_NUM	3
+	/* [LNX] uapi/linux/nl80211.h:1117 */
+	#define	NL80211_FTM_STATS_NON_ASAP_NUM	5
+	/* [LNX] uapi/linux/nl80211.h:1120 */
+	#define	NL80211_FTM_STATS_OUT_OF_WINDOW_TRIGGERS_NUM	9
+	/* [LNX] uapi/linux/nl80211.h:1116 */
+	#define	NL80211_FTM_STATS_PARTIAL_NUM	2
+	/* [LNX] uapi/linux/nl80211.h:1119 */
+	#define	NL80211_FTM_STATS_RESCHEDULE_REQUESTS_NUM	8
+	/* [LNX] uapi/linux/nl80211.h:1115 */
+	#define	NL80211_FTM_STATS_SUCCESS_NUM	1
+	/* [LNX] uapi/linux/nl80211.h:1118 */
+	#define	NL80211_FTM_STATS_TOTAL_DURATION_MSEC	6
+	/* [LNX] uapi/linux/nl80211.h:1119 */
+	#define	NL80211_FTM_STATS_UNKNOWN_TRIGGERS_NUM	7
+	/* [LNX] uapi/linux/nl80211.h:3835 */
+	#define	NL80211_MAX_SUPP_REG_RULES	128
+	/* [LNX] uapi/linux/nl80211.h:650 */
+	#define	NL80211_RRF_ALLOW_20MHZ_ACTIVITY	33554432
+	/* [LNX] uapi/linux/nl80211.h:650 */
+	#define	NL80211_RRF_ALLOW_6GHZ_VLP_AP	16777216
+	/* [LNX] uapi/linux/nl80211.h:648 */
+	#define	NL80211_RRF_DFS_CONCURRENT	2097152
+	/* [LNX] uapi/linux/nl80211.h:645 */
+	#define	NL80211_RRF_NO_320MHZ	262144
+	/* [LNX] uapi/linux/nl80211.h:649 */
+	#define	NL80211_RRF_NO_6GHZ_AFC_CLIENT	8388608
+	/* [LNX] uapi/linux/nl80211.h:648 */
+	#define	NL80211_RRF_NO_6GHZ_VLP_CLIENT	4194304
+	/* [LNX] uapi/linux/nl80211.h:645 */
+	#define	NL80211_RRF_NO_EHT	524288
+	/* [LNX] uapi/linux/nl80211.h:644 */
+	#define	NL80211_RRF_NO_HE	131072
+	/* [LNX] uapi/linux/nl80211.h:5041-5042 */
+	#define	NL80211_RRF_NO_HT40MINUS	8192
+	#define	NL80211_RRF_NO_HT40PLUS	16384
+	/* [LNX] uapi/linux/nl80211.h:5060 */
+	#define	NL80211_RRF_NO_HT40	(NL80211_RRF_NO_HT40MINUS | NL80211_RRF_NO_HT40PLUS)
+	/* [LNX] uapi/linux/nl80211.h:651 */
+	#define	NL80211_RRF_NO_UHR	67108864
+	/* [LNX] uapi/linux/nl80211.h:1018 */
+	#define	NL80211_SCAN_FLAG_ACCEPT_BCAST_PROBE_RESP	32
+	/* [LNX] uapi/linux/nl80211.h:1017 */
+	#define	NL80211_SCAN_FLAG_FILS_MAX_CHANNEL_TIME	16
+	/* [LNX] uapi/linux/nl80211.h:1019 */
+	#define	NL80211_SCAN_FLAG_OCE_PROBE_REQ_DEFERRAL_SUPPRESSION	128
+	/* [LNX] uapi/linux/nl80211.h:1018 */
+	#define	NL80211_SCAN_FLAG_OCE_PROBE_REQ_HIGH_TX_RATE	64
+	/* [LNX] net/cfg80211.h:382 */
+	#define	SURVEY_INFO_TIME	4
+	/* [LNX] net/cfg80211.h:382 */
+	#define	SURVEY_INFO_TIME_BUSY	8
+	/* [LNX] net/cfg80211.h:384 */
+	#define	SURVEY_INFO_TIME_RX	32
+	/* [LNX] net/cfg80211.h:385 */
+	#define	SURVEY_INFO_TIME_SCAN	128
+	/* [LNX] net/cfg80211.h:384 */
+	#define	SURVEY_INFO_TIME_TX	64
+
+/* [LNX] include/uapi/linux/nl80211.h: the EHT RU-allocation enumeration a compiled
+ * consumer names as a type and by member. */
+enum nl80211_eht_ru_alloc {
+	NL80211_RATE_INFO_EHT_RU_ALLOC_26,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_52,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_52P26,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_106,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_106P26,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_242,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_484,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_484P242,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_996,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_996P484,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_996P484P242,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_2x996,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_2x996P484,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_3x996,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_3x996P484,
+	NL80211_RATE_INFO_EHT_RU_ALLOC_4x996,
+};
+
+/* [LNX] include/net/cfg80211.h: the hardware-timestamp configuration a driver's
+ * set_hw_timestamp callback receives. */
+struct cfg80211_set_hw_timestamp {
+	const u8	*macaddr;
+	bool		enable;
+};
 
 #endif /* _LINUXKPI_NET_CFG80211_H_ */
 

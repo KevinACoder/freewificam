@@ -30,6 +30,9 @@
 
 #include "../../linuxkpi_core.h"
 
+struct page;
+struct sg_table;
+
 /* [LNX] include/linux/dma-direction.h:6-11, values kept identical (a driver
  * compares a direction, and the adapter switches on it). */
 enum dma_data_direction {
@@ -38,6 +41,11 @@ enum dma_data_direction {
 	DMA_FROM_DEVICE = 2,
 	DMA_NONE = 3,
 };
+
+/* [LNX] include/linux/dma-mapping.h:37: the attribute bit that asks the platform
+ * to skip cache maintenance on the mapping (the vendored transmit path's page
+ * mappings carry it). */
+#define	DMA_ATTR_SKIP_CPU_SYNC		(1UL << 5)
 
 /* [LNX] include/linux/dma-mapping.h:22: the all-ones handle a failed map returns. */
 #define	DMA_MAPPING_ERROR	(~(dma_addr_t)0)
@@ -54,6 +62,25 @@ dma_addr_t	dma_map_single(struct device *dev, void *ptr, size_t size,
 	    enum dma_data_direction dir);
 void	dma_unmap_single(struct device *dev, dma_addr_t addr, size_t size,
 	    enum dma_data_direction dir);
+
+/* [LNX] include/linux/dma-mapping.h: the page and attribute-map forms, the
+ * single-direction sync pair, and the scatter/gather table pair. They reach the
+ * same engine as the single map/unmap above. */
+dma_addr_t	dma_map_page(struct device *dev, struct page *page,
+	    size_t offset, size_t size, enum dma_data_direction dir);
+void	dma_unmap_page(struct device *dev, dma_addr_t addr, size_t size,
+	    enum dma_data_direction dir);
+dma_addr_t	dma_map_page_attrs(struct device *dev, struct page *page,
+	    size_t offset, size_t size, enum dma_data_direction dir,
+	    unsigned long attrs);
+void	dma_sync_single_for_cpu(struct device *dev, dma_addr_t addr,
+	    size_t size, enum dma_data_direction dir);
+void	dma_sync_single_for_device(struct device *dev, dma_addr_t addr,
+	    size_t size, enum dma_data_direction dir);
+int	dma_map_sgtable(struct device *dev, struct sg_table *sgt,
+	    enum dma_data_direction dir, unsigned long attrs);
+void	dma_unmap_sgtable(struct device *dev, struct sg_table *sgt,
+	    enum dma_data_direction dir, unsigned long attrs);
 
 int	dma_set_mask_and_coherent(struct device *dev, u64 mask);
 

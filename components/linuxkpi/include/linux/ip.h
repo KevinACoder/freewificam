@@ -81,4 +81,44 @@ struct iphdr {
 	/*The options start here. */
 };
 
+/*
+ * The interface reaches these three through offsets its stack keeps on the
+ * sk_buff (include/linux/skbuff.h: skb->network_header / skb->transport_header).
+ * This port's sk_buff carries neither offset: the network header is the
+ * derivation ip_hdr() states above, and the transport header is the network
+ * header plus the IPv4 header's own length. The three accessors are therefore
+ * stated here, over that one derivation, so a driver that names any of them reads
+ * the port's real addresses rather than an unset offset.
+ */
+static __always_inline __unused unsigned char *
+skb_network_header(const struct sk_buff *skb)
+{
+	return (unsigned char *)ip_hdr(skb);
+}
+
+/* [LNX] include/linux/skbuff.h:3270: `return skb->transport_header -
+ * skb->network_header;` - the length of the network header alone. */
+static __always_inline __unused u32
+skb_network_header_len(const struct sk_buff *skb)
+{
+	const struct iphdr *iph = ip_hdr(skb);
+
+	if (iph == NULL)
+		return 0;
+	return (u32)iph->ihl * 4;
+}
+
+/* [LNX] include/linux/skbuff.h:3090: the transport header follows the network
+ * header by its length, which is the geometry udp_hdr() states for its own
+ * family. */
+static __always_inline __unused unsigned char *
+skb_transport_header(const struct sk_buff *skb)
+{
+	const struct iphdr *iph = ip_hdr(skb);
+
+	if (iph == NULL)
+		return NULL;
+	return (unsigned char *)iph + (unsigned int)iph->ihl * 4;
+}
+
 #endif /* _LINUX_IP_H */

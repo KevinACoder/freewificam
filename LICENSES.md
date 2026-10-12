@@ -24,6 +24,7 @@ carry the same terms in their file header).
 | `rtw89` | **GPL-2.0 OR BSD-3-Clause** | per-file dual SPDX on every extracted file (107/107, the only SPDX form in the tree); no separate license file at the tree root; each bus unit states `MODULE_LICENSE("Dual BSD/GPL")`. Mainline Linux SoftMAC driver for the RTL8851BU family, extracted byte-faithfully from Linux 7.3-rc2. This project takes the **BSD-3-Clause option** for it. See "Distribution obligations" below |
 | `rtw88` | **GPL-2.0 OR BSD-3-Clause** | dual SPDX on 96 `.c`/`.h` files and the `Makefile` (97 of 98 tracked files); the one exception is `Kconfig`, whose line is `GPL-2.0-only` - it is build metadata and is not compiled; no separate license file at the tree root; each bus unit states `MODULE_LICENSE("Dual BSD/GPL")`. Mainline Linux SoftMAC driver for the RTL8821CU family, extracted byte-faithfully from Linux 7.3-rc2. This project takes the **BSD-3-Clause option** for it. See "Distribution obligations" below |
 | `rtl8189fs` | **GPL-2.0-only** | no SPDX line anywhere and no separate license file; 518 of the 532 tracked files carry the Realtek "version 2 of the GNU General Public License" block at the top, 2 are kernel-derived GPL-2.0 (`os_dep/linux/rhashtable.{c,h}`), 2 carry no license header and 10 are build metadata or scripts; no second license form is present, and the tree needs `grep -a` (ISO-8859 bytes). Realtek vendor driver for the RTL8189FTV (RTL8188F) SDIO part, vendored byte-faithfully from the fork's `rtl8189fs` branch. See "Distribution obligations" below |
+| `iwlwifi` | **GPL-2.0-only** (whole tree, by project ruling) | mixed SPDX in the tree: 241 files `GPL-2.0 OR BSD-3-Clause`, 48 `GPL-2.0-only`, 3 plain `GPL-2.0` and 1 with no SPDX line (measured in this checkout). The `GPL-2.0-only` group is not avoidable by electing BSD per file - it includes `mvm/rs.{c,h}` and `iwl-debug.h`, which the compiled mvm path consumes - so the tree is registered as **one GPL-2.0-only unit** and the driver states `MODULE_LICENSE("GPL")`. Mainline Linux driver for the Intel Wireless 7260 (AC 7260, `8086:08b1`) family, extracted byte-faithfully from Linux 7.3-rc2. See "Distribution obligations" below |
 
 ## Imported units (`components/`)
 
@@ -46,6 +47,7 @@ carry the same terms in their file header).
 | `rtl8188eufw.bin` (Realtek firmware, compiled in as `components/linuxkpi/fw/rtl8188eufw_blob.c`) | Realtek binary redistribution terms | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/rtl8188eufw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
 | `rtw8851b_fw-1.bin` (Realtek firmware, compiled in as `components/linuxkpi/fw/rtw8851b_fw_blob.c`) | Realtek binary redistribution terms (the same notice as the 8188EU image) | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/rtw8851b_fw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
 | `rtw88/rtw8821c_fw.bin` (Realtek firmware, compiled in as `components/linuxkpi/fw/rtw8821c_fw_blob.c`) | Realtek binary redistribution terms (the same notice as the 8188EU and 8851B images) | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/rtw8821c_fw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
+| `iwlwifi-7260-17.ucode` (Intel firmware, compiled in as `components/linuxkpi/fw/iwl7260fw_blob.c`) | Intel binary redistribution terms (`LICENCE.iwlwifi_firmware`: redistribution in binary form without modification permitted; **no reverse engineering, decompilation or disassembly**) | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/iwl7260_fw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
 | `docs/boards/rk3568-e4ap5g1-itx/` (board photographs and the block diagram) | board vendor's user manual for the RK3568-E4AP5G1-ITX (IndiumEngine) | reproduced to document the hardware this project targets; vendor documentation, not first-party, and not covered by the project's BSD-3-Clause license. No redistribution grant is recorded for it: remove this directory and the figures it backs in `docs/boards/rk3568-e4ap5g1-itx.md` before a public release unless a grant is confirmed |
 
 ## Distribution obligations
@@ -82,6 +84,21 @@ carry the same terms in their file header).
   individually. The unit is built as its own translation units and touches first-party code
   only through header interfaces, first-party text is never merged into a GPL file, and it
   stays a pinned submodule with zero local patches.
+* `third-party/iwlwifi` is GPL-2.0-only by project ruling, on the same footing as
+  `rtl8xxxu`: the tree mixes `GPL-2.0 OR BSD-3-Clause` files with `GPL-2.0-only` ones, and
+  the `GPL-2.0-only` group (`mvm/rs.{c,h}`, `iwl-debug.h`) is inside the mvm path this
+  project compiles, so electing the BSD arm per file buys nothing. A distributed **binary
+  image** that contains it is a combined work under those terms - distribution requires the
+  corresponding source of the combined image and the GPL text, and the image may not be
+  distributed under more restrictive terms than GPL-2.0-only allows. The unit is built as
+  its own translation units and touches first-party code only through header interfaces,
+  first-party text is never merged into a GPL file, and it stays a pinned submodule with
+  zero local patches.
+* `iwlwifi-7260-17.ucode` is Intel firmware, redistributable in unmodified binary form
+  under `LICENCE.iwlwifi_firmware` (kept at
+  `components/linuxkpi/fw/iwl7260_fw.LICENCE.txt`); the terms forbid reverse engineering,
+  decompilation or disassembly of the image, which this project does not do - the blob is
+  stored and handed to the device verbatim.
 * Units whose license is unknown or absent are not vendored. A new unit adds a row here in
   the same commit that vendors it.
 

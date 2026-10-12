@@ -36,6 +36,13 @@
  * which is how a unit that only takes mac80211.h sees the per-field records. */
 #include <net/ieee80211_radiotap.h>
 
+/* [LNX] include/net/mac80211.h: the two records the ops table names in
+ * parameter lists; they are named by pointer only, so the declaration is the
+ * complete statement a caller needs. */
+struct ieee80211_scan_ies;
+struct ieee80211_tdls_ch_sw_params;
+
+
 struct cfg80211_gtk_rekey_data;
 struct ieee80211_low_level_stats;
 
@@ -43,6 +50,10 @@ struct ieee80211_hw;
 struct ieee80211_vif;
 struct ieee80211_sta;
 struct ieee80211_key_conf;
+struct netdev_hw_addr_list;
+struct ieee80211_channel_switch;
+struct ieee80211_event;
+struct cfg80211_set_hw_timestamp;
 /* [LNX] include/net/mac80211.h (the queue record, drv_priv last) */
 struct ieee80211_txq {
 	struct ieee80211_vif *vif;
@@ -160,6 +171,7 @@ enum ieee80211_bss_change {
 	BSS_CHANGED_BEACON_ENABLED	= 1 << 9,
 	BSS_CHANGED_CQM = 1024,
 	BSS_CHANGED_ARP_FILTER = 4096,
+	BSS_CHANGED_QOS = 8192,
 	BSS_CHANGED_PS = 131072,
 	BSS_CHANGED_P2P_PS = 524288,
 	BSS_CHANGED_MU_GROUPS = 8388608,
@@ -570,6 +582,9 @@ struct ieee80211_tx_info {
 			u8 ampdu_len;
 			u8 antenna;
 			u8 pad;
+			/* [LNX] include/net/mac80211.h:1409: the airtime a compiled set
+			 * reports for a transmission. */
+			u16 tx_time;
 			u8 flags;
 			void *status_driver_data[16 / sizeof(void *)];
 		} status;
@@ -629,6 +644,13 @@ enum mac80211_rx_encoding {
 #define	RX_FLAG_AMPDU_IS_LAST		BIT(16)
 #define	RX_FLAG_AMPDU_DELIM_CRC_ERROR	BIT(17)
 #define	RX_FLAG_AMPDU_DELIM_CRC_KNOWN	BIT(18)
+/* [LNX] include/net/mac80211.h:1669: the mactime-source selector the compiled set
+ * sets (the interface's value). */
+#define	RX_FLAG_MACTIME_PLCP_START	(1 << 16)
+/* [LNX] include/net/mac80211.h:1675 */
+#define	RX_FLAG_MIC_STRIPPED		BIT(21)
+/* [LNX] include/net/mac80211.h:1676 */
+#define	RX_FLAG_ALLOW_SAME_PN		BIT(22)
 /* [LNX] include/net/mac80211.h:1683 (the one further flag the compiled set names) */
 #define	RX_FLAG_NO_PSDU			BIT(29)
 
@@ -659,9 +681,16 @@ struct ieee80211_rx_status {
 	s8	signal;
 	u8	chains;
 	s8	chain_signal[IEEE80211_MAX_CHAINS];
-	u64	boottime_ns;
+	/* [LNX] include/net/mac80211.h:1782-1784: the interface unions the boot time
+	 * with the ack-transmit hardware timestamp in the same storage. */
+	union {
+		u64	boottime_ns;
+		ktime_t	ack_tx_hwtstamp;
+	};
 	u32	ampdu_reference;
 	u8	link_valid:1, link_id:4;
+	/* [LNX] include/net/mac80211.h:1815: the zero-length-PSDU classification. */
+	u8	zero_length_psdu_type;
 };
 
 /* ------------------------------------------------------------------ */
@@ -691,6 +720,8 @@ enum ieee80211_smps_mode {
 	IEEE80211_SMPS_STATIC,
 	IEEE80211_SMPS_DYNAMIC,
 	IEEE80211_SMPS_AUTOMATIC,
+	/* [LNX] include/net/mac80211.h: the interface's keep-last count */
+	IEEE80211_SMPS_NUM_MODES,
 };
 
 struct ieee80211_conf {
@@ -708,6 +739,9 @@ struct ieee80211_conf {
 struct ieee80211_chanctx_conf {
 	struct cfg80211_chan_def def;
 	struct cfg80211_chan_def min_def;
+	struct cfg80211_chan_def ap;
+	int			radio_idx;
+	u8			rx_chains_static, rx_chains_dynamic;
 	bool			radar_enabled;
 	u8			drv_priv[] __aligned(sizeof(void *));
 };
@@ -733,6 +767,7 @@ enum ieee80211_chanctx_switch_mode {
 
 struct ieee80211_vif_cfg {
 	__be32			arp_addr_list[IEEE80211_BSS_ARP_ADDR_LIST_LEN];
+	int			arp_addr_cnt;
 	bool	assoc, ibss_joined;
 	bool	ibss_creator;
 	bool	ps;
@@ -800,6 +835,26 @@ struct ieee80211_bss_conf {
 	struct ieee80211_chanctx_conf __rcu *chanctx_conf;
 	unsigned int		link_id;
 	bool			he_support;
+	u8			htc_trig_based_pkt_ext;
+	bool			uora_exists;
+	bool			qos;
+	int			txpower;
+	u8			sync_dtim_count;
+	u32			sync_device_ts;
+	u64			sync_tsf;
+	bool			twt_requester;
+	bool			twt_protected;
+	bool			twt_broadcast;
+	u8			bssid_indicator;
+	u8			profile_periodicity;
+	bool			ema_ap;
+	bool			mu_mimo_owner;
+	struct cfg80211_bitrate_mask beacon_tx_rate;
+	struct ieee80211_rate	*beacon_rate;
+	u16			frame_time_rts_th;
+	u8			uora_ocw_range;
+	bool			ftm_responder;
+	struct ieee80211_ftm_responder_params *ftmr_params;
 	u8			transmitter_bssid[ETH_ALEN] __aligned(2);
 	u8			bssid_index;
 	bool			nontransmitted;
@@ -867,6 +922,7 @@ struct ieee80211_link_sta {
 	 * the compiled set reads off a link, in the interface's order */
 	struct ieee80211_sta_he_cap	he_cap;
 	struct ieee80211_sta_eht_cap	eht_cap;
+	struct ieee80211_he_6ghz_capa	he_6ghz_capa;
 	struct ieee80211_sta_aggregates	agg;
 	u8				rx_nss;
 	enum ieee80211_sta_rx_bandwidth	bandwidth;
@@ -881,12 +937,14 @@ struct ieee80211_sta {
 	u8				max_sp;
 	struct ieee80211_sta_rates __rcu *rates;
 	bool				tdls;
+	bool				tdls_initiator;
 	bool				mfp;
 	bool				mlo;
 	u8				max_amsdu_subframes;
 	/* [LNX] include/net/mac80211.h:2749,2755: the per-TID queues and the per-link
 	 * records the compiled set indexes */
 	struct ieee80211_txq *txq[IEEE80211_NUM_TIDS + 1];
+	struct ieee80211_sta_aggregates *cur;
 	struct ieee80211_link_sta	deflink;
 	struct ieee80211_link_sta __rcu *link[IEEE80211_MLD_MAX_NUM_LINKS];
 	u8				drv_priv[] __aligned(sizeof(void *));
@@ -907,6 +965,8 @@ enum ieee80211_key_flags {
 	IEEE80211_KEY_FLAG_RESERVE_TAILROOM	= BIT(7),
 	IEEE80211_KEY_FLAG_PUT_MIC_SPACE	= BIT(8),
 	IEEE80211_KEY_FLAG_NO_AUTO_TX		= BIT(9),
+	/* [LNX] include/net/mac80211.h:2412 */
+	IEEE80211_KEY_FLAG_SPP_AMSDU		= BIT(11),
 };
 
 struct ieee80211_key_conf {
@@ -997,8 +1057,9 @@ enum ieee80211_reconfig_type {
 	IEEE80211_RECONFIG_TYPE_RESTART = 0
 };
 
-/* [LNX] include/net/mac80211.h:4034 (the enumerators the compiled set names, at their computed positions) */
+/* [LNX] include/net/mac80211.h:4034-4035 (the enumerators the compiled set names, at their computed positions) */
 enum ieee80211_roc_type {
+	IEEE80211_ROC_TYPE_NORMAL = 0,
 	IEEE80211_ROC_TYPE_MGMT_TX = 1
 };
 
@@ -1007,7 +1068,8 @@ enum ieee80211_sta_state {
 	IEEE80211_STA_NOTEXIST = 0,
 	IEEE80211_STA_NONE = 1,
 	IEEE80211_STA_AUTH = 2,
-	IEEE80211_STA_ASSOC = 3
+	IEEE80211_STA_ASSOC = 3,
+	IEEE80211_STA_AUTHORIZED = 4
 };
 
 /* [LNX] include/net/mac80211.h:4068 (record carried whole) */
@@ -1016,6 +1078,87 @@ struct ieee80211_prep_tx_info {
 	u16 subtype;
 	u8 success:1, was_assoc:1;
 	int link_id;
+};
+
+/* [LNX] include/net/mac80211.h:826-828: the frame-release reason a compiled
+ * consumer passes by name and as a parameter type. */
+enum ieee80211_frame_release_type {
+	IEEE80211_FRAME_RELEASE_PSPOLL	= 0,
+	IEEE80211_FRAME_RELEASE_UAPSD	= 1,
+};
+
+/* [LNX] include/net/mac80211.h:701-702: the station power-transition command a
+ * compiled consumer passes by name and as a parameter type. */
+enum sta_notify_cmd {
+	STA_NOTIFY_SLEEP,
+	STA_NOTIFY_AWAKE,
+};
+
+/* [LNX] include/net/mac80211.h: the connection-event vocabulary a compiled
+ * consumer names as types and by member. */
+enum ieee80211_event_type {
+	RSSI_EVENT,
+	MLME_EVENT,
+	BAR_RX_EVENT,
+	BA_FRAME_TIMEOUT,
+};
+
+enum ieee80211_mlme_event_data {
+	AUTH_EVENT,
+	ASSOC_EVENT,
+	DEAUTH_RX_EVENT,
+	DEAUTH_TX_EVENT,
+};
+
+enum ieee80211_mlme_event_status {
+	MLME_SUCCESS,
+	MLME_DENIED,
+	MLME_TIMEOUT,
+};
+
+struct ieee80211_ba_event {
+	struct ieee80211_sta *sta;
+	u16 tid;
+	u16 ssn;
+};
+
+struct ieee80211_mlme_event {
+	enum ieee80211_mlme_event_data data;
+	enum ieee80211_mlme_event_status status;
+	u16 reason;
+};
+
+/* [LNX] include/net/mac80211.h:446-459: the RSSI event's value enum and the record
+ * the event union carries. The enum is stated here because the record embeds it by
+ * value, so it has to be complete before the union that names the record. */
+enum ieee80211_rssi_event_data {
+	RSSI_EVENT_HIGH,
+	RSSI_EVENT_LOW,
+};
+
+struct ieee80211_rssi_event {
+	enum ieee80211_rssi_event_data data;
+};
+
+struct ieee80211_event {
+	enum ieee80211_event_type type;
+	union {
+		struct ieee80211_rssi_event rssi;
+		struct ieee80211_mlme_event mlme;
+		struct ieee80211_ba_event ba;
+	} u;
+};
+
+/* [LNX] include/net/mac80211.h: the channel-switch request a compiled consumer
+ * passes to the channel-switch callbacks. */
+struct ieee80211_channel_switch {
+	u64 timestamp;
+	u32 device_timestamp;
+	bool block_tx;
+	struct cfg80211_chan_def chandef;
+	u8 count;
+	u8 link_id;
+	u32 delay;
 };
 
 struct ieee80211_ops {
@@ -1046,6 +1189,9 @@ struct ieee80211_ops {
 			    struct ieee80211_bss_conf *link_conf);
 	void (*stop_ap)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			struct ieee80211_bss_conf *link_conf);
+	/* [LNX] include/net/mac80211.h:4778-4779 */
+	u64	(*prepare_multicast)(struct ieee80211_hw *hw,
+				     struct netdev_hw_addr_list *mc_list);
 	void	(*configure_filter)(struct ieee80211_hw *hw,
 				    unsigned int changed_flags,
 				    unsigned int *total_flags, u64 multicast);
@@ -1157,6 +1303,36 @@ struct ieee80211_ops {
 	bool	(*can_aggregate_in_amsdu)(struct ieee80211_hw *hw,
 					  struct sk_buff *head,
 					  struct sk_buff *skb);
+	/* [LNX] include/net/mac80211.h: the operation callbacks the compiled set
+	 * names, each at the interface's own line. */
+	void (*abort_channel_switch)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_bss_conf *link_conf);
+	void (*abort_pmsr)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct cfg80211_pmsr_request *request);
+	void (*allow_buffered_frames)(struct ieee80211_hw *hw, struct ieee80211_sta *sta, u16 tids, int num_frames, enum ieee80211_frame_release_type reason, bool more_data);
+	void (*channel_switch)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_channel_switch *ch_switch);
+	void (*channel_switch_rx_beacon)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_channel_switch *ch_switch);
+	void (*config_iface_filter)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, unsigned int filter_flags, unsigned int changed_flags);
+	void (*event_callback)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, const struct ieee80211_event *event);
+	void (*flush_sta)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_sta *sta);
+	int (*get_ftm_responder_stats)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct cfg80211_ftm_responder_stats *ftm_stats);
+	int (*join_ibss)(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
+	void (*leave_ibss)(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
+	void (*mgd_complete_tx)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_prep_tx_info *info);
+	void (*mgd_protect_tdls_discover)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, unsigned int link_id);
+	int (*post_channel_switch)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_bss_conf *link_conf);
+	int (*pre_channel_switch)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_channel_switch *ch_switch);
+	void (*release_buffered_frames)(struct ieee80211_hw *hw, struct ieee80211_sta *sta, u16 tids, int num_frames, enum ieee80211_frame_release_type reason, bool more_data);
+	int (*sched_scan_start)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct cfg80211_sched_scan_request *req, struct ieee80211_scan_ies *ies);
+	int (*sched_scan_stop)(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
+	int (*set_hw_timestamp)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct cfg80211_set_hw_timestamp *hwts);
+	void (*sta_notify)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, enum sta_notify_cmd, struct ieee80211_sta *sta);
+	void (*sta_pre_rcu_remove)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_sta *sta);
+	int (*start_pmsr)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct cfg80211_pmsr_request *request);
+	void (*sync_rx_queues)(struct ieee80211_hw *hw);
+	void (*tdls_cancel_channel_switch)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_sta *sta);
+	int (*tdls_channel_switch)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_sta *sta, u8 oper_class, struct cfg80211_chan_def *chandef, struct sk_buff *tmpl_skb, u32 ch_sw_tm_ie);
+	void (*tdls_recv_channel_switch)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_tdls_ch_sw_params *params);
+	int (*tx_last_beacon)(struct ieee80211_hw *hw);
+	void (*update_tkip_key)(struct ieee80211_hw *hw, struct ieee80211_vif *vif, struct ieee80211_key_conf *conf, struct ieee80211_sta *sta, u32 iv32, u16 *phase1key);
 };
 
 /* ------------------------------------------------------------------ */
@@ -1189,6 +1365,12 @@ struct ieee80211_hw {
 	u8			offchannel_tx_hw_queue;
 	u8			radiotap_mcs_details;
 	u16			radiotap_vht_details;
+	/* [LNX] include/net/mac80211.h:3305-3308: the radiotap timestamp-field
+	 * description a compiled set fills in. */
+	struct {
+		int	units_pos;
+		s16	accuracy;
+	} radiotap_timestamp;
 	netdev_features_t	netdev_features;
 	u8			uapsd_queues;
 	u8			uapsd_max_sp_len;
@@ -1601,7 +1783,9 @@ enum ieee80211_rate_control_changed {
 /* [LNX] include/net/mac80211.h:2008 (the enumerators the compiled set names, at their computed positions) */
 enum ieee80211_vif_flags {
 	IEEE80211_VIF_BEACON_FILTER = 1,
-	IEEE80211_VIF_SUPPORTS_CQM_RSSI = 2
+	IEEE80211_VIF_SUPPORTS_CQM_RSSI = 2,
+	/* [LNX] include/net/mac80211.h:2015 (BIT(6)) */
+	IEEE80211_VIF_REMOVE_AP_AFTER_DISASSOC = 0x40
 };
 
 /* [LNX] include/net/mac80211.h:1216 (the enumerators the compiled set names, at their computed positions) */
@@ -1669,6 +1853,214 @@ void ieee80211_txq_get_depth(struct ieee80211_txq *txq, unsigned long *sch,
 void _ieee80211_set_sband_iftype_data(struct ieee80211_supported_band *sband,
 				      const struct ieee80211_sband_iftype_data *iftd,
 				      u16 n_iftd);
+
+/* [LNX] include/net/mac80211.h: the fine-timing-measurement responder parameters a
+ * driver's measurement path hands to the stack. */
+struct ieee80211_ftm_responder_params {
+	const u8	*lci;
+	const u8	*civicloc;
+	size_t		lci_len;
+	size_t		civicloc_len;
+};
+
+/* [LNX] include/net/mac80211.h:2349-2352,2301-2305: the link-record accessor and
+ * the per-link iteration a compiled consumer names. The interface's accessor is
+ * an rcu_dereference_check guarded by the wiphy mutex; this port has neither, so
+ * the accessor is the plain link-record read, and the iteration is the
+ * interface's own loop shape over it. */
+#define	link_conf_dereference_check(vif, link_id)	((vif)->link_conf[link_id])
+
+#define	for_each_vif_active_link(vif, link, link_id)			\
+	for ((link_id) = 0; (link_id) < ARRAY_SIZE((vif)->link_conf); (link_id)++) \
+		if ((!(vif)->active_links ||				\
+		     (vif)->active_links & BIT(link_id)) &&		\
+		    ((link) = link_conf_dereference_check(vif, link_id)))
+
+/* [LNX] include/net/mac80211.h: the record the rate-control algorithm is handed on
+ * every transmit. Transcribed whole because it is a public shape a driver's
+ * callback receives by pointer and reads field by field. */
+struct ieee80211_tx_rate_control {
+	struct ieee80211_hw		*hw;
+	struct ieee80211_supported_band	*sband;
+	struct ieee80211_bss_conf	*bss_conf;
+	struct sk_buff			*skb;
+	struct ieee80211_tx_rate	reported_rate;
+	bool				rts, short_preamble;
+	u32				rate_idx_mask;
+	u8				*rate_idx_mcs_mask;
+	bool				bss;
+};
+
+/* [LNX] include/net/mac80211.h:2338 */
+struct wireless_dev *ieee80211_vif_to_wdev(struct ieee80211_vif *vif);
+
+/* [LNX] include/net/mac80211.h:2783-2787: the per-link station iteration a
+ * compiled consumer names. The interface's accessor is an rcu_dereference_check
+ * guarded by the wiphy mutex; this port has neither, so the accessor is the plain
+ * link-record read and the iteration is the interface's own loop shape over it. */
+#define	link_sta_dereference_check(sta, link_id)	((sta)->link[link_id])
+
+#define	for_each_sta_active_link(vif, sta, link_sta, link_id)		\
+	for ((link_id) = 0; (link_id) < ARRAY_SIZE((sta)->link); (link_id)++) \
+		if ((!(vif)->active_links ||				\
+		     (vif)->active_links & BIT(link_id)) &&		\
+		    ((link_sta) = link_sta_dereference_check(sta, link_id)))
+
+/* [LNX] include/net/mac80211.h:1455-1459: the per-rate transmit status a driver
+ * reports. */
+struct ieee80211_rate_status {
+	struct rate_info	rate_idx;
+	u8			try_count;
+	u8			tx_power_idx;
+};
+
+/* [LNX] include/net/mac80211.h: the transmit status a driver hands the stack. */
+struct ieee80211_tx_status {
+	struct ieee80211_sta	*sta;
+	struct ieee80211_tx_info *info;
+	struct sk_buff		*skb;
+	struct ieee80211_rate_status *rates;
+	ktime_t			ack_hwtstamp;
+	u8			n_rates;
+	struct list_head	*free_list;
+};
+
+/* [LNX] include/net/mac80211.h: the rate-control operations table a driver
+ * registers. Transcribed whole because it is a public shape a driver fills member
+ * by member. */
+struct dentry;
+
+/* [LNX] include/net/mac80211.h:7337-7341: the rate-control capability bits a
+ * driver's operations table declares. */
+enum rate_control_capabilities {
+	RATE_CTRL_CAPA_VHT_EXT_NSS_BW	= BIT(0),
+	RATE_CTRL_CAPA_AMPDU_TRIGGER	= BIT(1),
+};
+
+struct rate_control_ops {
+	unsigned long	capa;
+	const char	*name;
+	void *(*alloc)(struct ieee80211_hw *hw);
+	void (*add_debugfs)(struct ieee80211_hw *hw, void *priv,
+			    struct dentry *debugfsdir);
+	void (*free)(void *priv);
+	void *(*alloc_sta)(void *priv, struct ieee80211_sta *sta, gfp_t gfp);
+	void (*rate_init)(void *priv, struct ieee80211_supported_band *sband,
+			  struct cfg80211_chan_def *chandef,
+			  struct ieee80211_sta *sta, void *priv_sta);
+	void (*rate_update)(void *priv, struct ieee80211_supported_band *sband,
+			    struct cfg80211_chan_def *chandef,
+			    struct ieee80211_sta *sta, void *priv_sta,
+			    u32 changed);
+	void (*free_sta)(void *priv, struct ieee80211_sta *sta, void *priv_sta);
+	void (*tx_status_ext)(void *priv, struct ieee80211_supported_band *sband,
+			      void *priv_sta, struct ieee80211_tx_status *st);
+	void (*tx_status)(void *priv, struct ieee80211_supported_band *sband,
+			  struct ieee80211_sta *sta, void *priv_sta,
+			  struct sk_buff *skb);
+	void (*get_rate)(void *priv, struct ieee80211_sta *sta, void *priv_sta,
+			 struct ieee80211_tx_rate_control *txrc);
+	void (*add_sta_debugfs)(void *priv, void *priv_sta, struct dentry *dir);
+	u32 (*get_expected_throughput)(void *priv_sta);
+};
+
+/* [LNX] include/net/mac80211.h:3360-3371: the TDLS channel-switch parameters a
+ * driver's callback receives. */
+struct ieee80211_tdls_ch_sw_params {
+	struct ieee80211_sta	*sta;
+	struct cfg80211_chan_def *chandef;
+	u8			action_code;
+	u32			status;
+	u32			timestamp;
+	u16			switch_time;
+	u16			switch_timeout;
+	struct sk_buff		*tmpl_skb;
+	u32			ch_sw_tm_ie;
+};
+
+/* ------------------------------------------------------------------ */
+/* the remaining mac80211 flag constants the compiled set names, each
+ * enumerated in the interface's own headers (the reference on each line
+ * names the file and line it was transcribed from). */
+/* ------------------------------------------------------------------ */
+
+	/* [LNX] net/mac80211.h:85 */
+	#define	BSS_CHANGED_BANDWIDTH	2097152
+	/* [LNX] net/mac80211.h:83 */
+	#define	BSS_CHANGED_BEACON_INFO	1048576
+	/* [LNX] net/mac80211.h:92 */
+	#define	BSS_CHANGED_FTM_RESPONDER	67108864
+	/* [LNX] net/mac80211.h:79 */
+	#define	BSS_CHANGED_IDLE	16384
+	/* [LNX] net/mac80211.h:82 */
+	#define	BSS_CHANGED_TXPOWER	262144
+	/* [LNX] net/mac80211.h:40 */
+	#define	IEEE80211_CHANCTX_CHANGE_RADAR	4
+	/* [LNX] net/mac80211.h:40 */
+	#define	IEEE80211_CHANCTX_CHANGE_RX_CHAINS	2
+	/* [LNX] net/mac80211.h:1162 */
+	#define	IEEE80211_LINK_UNSPECIFIED	0xf
+	/* [LNX] net/mac80211.h:2452 */
+	#define	IEEE80211_MAX_PN_LEN	16
+	/* [LNX] net/mac80211.h:842 */
+	#define	IEEE80211_RECONFIG_TYPE_SUSPEND	1
+	/* [LNX] net/mac80211.h:285 */
+	#define	IEEE80211_TX_CTRL_MLO_LINK	4026531840
+	/* [LNX] net/mac80211.h:268 */
+	#define	IEEE80211_TX_CTRL_RATE_INJECT	4
+	/* [LNX] net/mac80211.h:261 */
+	#define	IEEE80211_TX_STATUS_EOSP	268435456
+	/* [LNX] net/mac80211.h:521 */
+	#define	IEEE80211_VIF_EML_ACTIVE	16
+	/* [LNX] net/mac80211.h:517 */
+	#define	IEEE80211_VIF_SUPPORTS_UAPSD	4
+	/* [LNX] net/mac80211.h:421 */
+	#define	RX_FLAG_AMPDU_EOF_BIT	16777216
+	/* [LNX] net/mac80211.h:422 */
+	#define	RX_FLAG_AMPDU_EOF_BIT_KNOWN	33554432
+	/* [LNX] net/mac80211.h:414 */
+	#define	RX_FLAG_AMSDU_MORE	524288
+	/* [LNX] net/mac80211.h:421 */
+	#define	RX_FLAG_ICV_STRIPPED	8388608
+	/* [LNX] net/mac80211.h:410 */
+	#define	RX_FLAG_MACTIME	196608
+	/* [LNX] net/mac80211.h:402 */
+	#define	RX_FLAG_MACTIME_IS_RTAP_TS64	128
+	/* [LNX] net/mac80211.h:425 */
+	#define	RX_FLAG_RADIOTAP_LSIG	268435456
+
+/* [LNX] include/net/mac80211.h: the per-cipher packet-number sequence a compiled
+ * set reports. */
+struct ieee80211_key_seq {
+	union {
+		struct {
+			u32 iv32;
+			u16 iv16;
+		} tkip;
+		struct {
+			u8 pn[6];
+		} ccmp;
+		struct {
+			u8 pn[6];
+		} aes_cmac;
+		struct {
+			u8 pn[6];
+		} aes_gmac;
+		struct {
+			u8 pn[6];
+		} gcmp;
+		struct {
+			u8 seq[IEEE80211_MAX_PN_LEN];
+			u8 seq_len;
+		} hw;
+	};
+};
+
+/* ------------------------------------------------------------------ */
+/* The remaining mac80211 event and notify enumerators the compiled set names,
+ * each line names the interface header and line it was transcribed from. */
+/* ------------------------------------------------------------------ */
+
 
 #endif /* _LINUXKPI_NET_MAC80211_H_ */
 
