@@ -25,7 +25,7 @@
 /* sha256 5d81a6003df0228a497ad27f916ba2c979614b4c439b0f45a5f2873dc0607fe8
  * (the file the board's Linux lane loads for this part; the same digest the
  * runtime round pinned on hardware) */
-static const uint8_t iwl7260_fw_data[] = {
+static const unsigned char iwl7260fw_data[] = {
 	0x00, 0x00, 0x00, 0x00, 0x49, 0x57, 0x4c, 0x0a, 0x4e, 0x2f, 0x41, 0x3a, 0x3a, 0x62, 0x66, 0x62,
 	0x35, 0x38, 0x35, 0x33, 0x38, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -65615,11 +65615,11 @@ static const uint8_t iwl7260_fw_data[] = {
 /* The image size the driver checks against (its own header is inside the blob). */
 #define IWL7260_FW_SIZE 1049340
 
-_Static_assert(sizeof(iwl7260_fw_data) == IWL7260_FW_SIZE,
+_Static_assert(sizeof(iwl7260fw_data) == IWL7260_FW_SIZE,
 	       "the compiled-in firmware image must have the size it was generated from");
 
 int lkpi_fw_iwl7260_fw_register(void)
 {
-	return lkpi_fw_register("iwlwifi-7260-17.ucode", iwl7260_fw_data,
-			       sizeof(iwl7260_fw_data));
+	return lkpi_fw_register("iwlwifi-7260-17.ucode", iwl7260fw_data,
+			       sizeof(iwl7260fw_data));
 }

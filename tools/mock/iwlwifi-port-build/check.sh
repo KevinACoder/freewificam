@@ -4,7 +4,7 @@
 #          test directory's static gates into container case lines.
 #
 # The heavy lifting lives in tests/host/iwlwifi-port-build's Makefile. This wrapper
-# runs its four gates and maps each into one case: the 7260's 63 translation units
+# runs its five gates and maps each into one case: the 7260's 63 translation units
 # compile clean for aarch64, the first-party face compiles standalone, the license
 # split scans clean, and the kernel-isolation gates pass with their canaries.
 
@@ -22,7 +22,7 @@ case_line() {
     [ "$2" = "PASS" ] || failures=$((failures + 1))
 }
 
-for gate in compile contract spdx gates; do
+for gate in compile contract spdx symbols gates; do
     if make -C "$root/tests/host/iwlwifi-port-build" "$gate" \
             > "$log_dir/$gate.log" 2>&1; then
         case_line "$gate" PASS
