@@ -58,6 +58,21 @@
 /* the interface caps a single extended transfer at 511 blocks */
 #define	LKPI_SDIO_EXT_MAX_BLOCKS	511u
 
+/*
+ * The largest single byte-mode transfer this engine hands down. The seam's
+ * backend performs a byte-mode request as one extended transfer per 508 bytes
+ * plus a direct (single-byte) transfer for each byte of the remainder, because
+ * the host cannot move a count that is not a multiple of four. A chunk of 512
+ * therefore ends in four direct transfers - and a direct transfer to a FIFO port
+ * is not a data transfer: the card's receive FIFO pointer does not advance with
+ * it, so the next read starts four bytes into the next frame and every frame
+ * after that parses as garbage. Keeping the chunk at the backend's own ceiling
+ * keeps every chunk a multiple of four, which is also what the vendor driver
+ * aligns its own receive reads to (RND4 in its sd_recv_rxfifo), so the direct
+ * path is never reached for a data port.
+ */
+#define	LKPI_SDIO_BYTE_CHUNK_MAX	508u
+
 /* the byte-mode ceiling the interface states for a card without quirks */
 #define	LKPI_SDIO_BYTE_MODE_MAX		512u
 
@@ -298,10 +313,10 @@ sdio_max_byte_size(const struct sdio_func *func)
 
 	if (func->max_blksize != 0u && mval > func->max_blksize)
 		mval = func->max_blksize;
-	if (mval > LKPI_SDIO_BYTE_MODE_MAX)
-		mval = LKPI_SDIO_BYTE_MODE_MAX;
+	if (mval > LKPI_SDIO_BYTE_CHUNK_MAX)
+		mval = LKPI_SDIO_BYTE_CHUNK_MAX;
 	if (mval == 0u)
-		mval = LKPI_SDIO_BYTE_MODE_MAX;
+		mval = LKPI_SDIO_BYTE_CHUNK_MAX;
 	return mval;
 }
 
@@ -382,15 +397,105 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 	return 0;
 }
 
+/*
+ * A receive-FIFO read carries the hardware's own descriptor, so when a driver's
+ * receive path misbehaves the raw bytes are the evidence that separates "the
+ * card wrote what the driver expects" from "the port delivered something else".
+ * The receive FIFO is the one port whose address sits in the 0xE000 window
+ * (WLAN_RX0FF_DEVICE_ID = 7 shifted into the command address, the vendor
+ * driver's HalSdioGetCmdAddr8188FSdio), and the dump is bounded so a busy
+ * receive path cannot drown the console.
+ */
+#define	LKPI_SDIO_RX_DUMP_MAX	24
+
+static unsigned int lkpi_sdio_rx_dumps;
+
+static u32 lkpi_sdio_le32(const u8 *p)
+{
+	return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
+	    ((u32)p[3] << 24);
+}
+
+static void
+lkpi_sdio_rx_read_show(unsigned int addr, const void *buf, unsigned int count,
+    int ret)
+{
+	const u8 *p = buf;
+	unsigned int n = count & ~3u;
+	char chain[96];
+	char types[64];
+	size_t clen = 0;
+	size_t tlen = 0;
+	unsigned int frames = 0;
+	unsigned int off = 0;
+
+	if ((addr & 0xE000u) != 0xE000u || count < 32u)
+		return;
+	lkpi_sdio_rx_dumps++;
+	/* The first reads of a run are the interesting ones, and a sparse sample
+	 * after them keeps a later window (a join's authentication exchange, whose
+	 * frames are small) from being hidden by an earlier busy one. */
+	if (lkpi_sdio_rx_dumps > LKPI_SDIO_RX_DUMP_MAX &&
+	    (lkpi_sdio_rx_dumps % LKPI_SDIO_RX_DUMP_MAX) != 0u)
+		return;
+
+	/*
+	 * Walk the buffer the way the driver's receive loop does
+	 * (hal/rtl8188f/sdio/rtl8189fs_recv.c:59-99): the descriptor at a position
+	 * gives pkt_len (bits 13:0), drvinfo_sz (bits 19:16, in eights) and shift
+	 * (bits 25:24), and the next frame starts 24 + drvinfo_sz + shift + pkt_len
+	 * further on. Printing the chain says whether the frames inside one read are
+	 * contiguous - which is what separates "the port delivered a buffer the
+	 * driver cannot walk" from "the driver's own stride is wrong". The frame's
+	 * own header follows the report, and its type and address-3 identify what
+	 * was received (a beacon is 0x80 and carries the access point's BSSID in
+	 * address 3) - the question a stalled join turns on.
+	 */
+	while (off + 24u <= n && frames < 4u) {
+		u32 w0 = lkpi_sdio_le32(p + off);
+		unsigned int plen = w0 & 0x3FFFu;
+		unsigned int dinfo = ((w0 >> 16) & 0xFu) << 3;
+		unsigned int shift = (w0 >> 24) & 0x3u;
+		unsigned int step = 24u + dinfo + shift + plen;
+		const u8 *hdr = p + off + 24u + dinfo + shift;
+		int wrote;
+
+		wrote = snprintf(chain + clen, sizeof(chain) - clen, "%s%u+%u",
+		    frames != 0u ? " " : "", off, step);
+		if (wrote < 0 || (size_t)wrote >= sizeof(chain) - clen)
+			break;
+		clen += (size_t)wrote;
+		if (off + 24u + dinfo + shift + 22u <= n) {
+			wrote = snprintf(types + tlen, sizeof(types) - tlen,
+			    "%s%02x%02x:%02x%02x%02x%02x%02x%02x",
+			    frames != 0u ? " " : "", hdr[0], hdr[1],
+			    hdr[16], hdr[17], hdr[18], hdr[19], hdr[20], hdr[21]);
+			if (wrote > 0 && (size_t)wrote < sizeof(types) - tlen)
+				tlen += (size_t)wrote;
+		}
+		if (step < 24u || off + step > n)
+			break;
+		off += step;
+		frames++;
+	}
+
+	lkpi_printf(ULOG_DEBUG_LEVEL,
+	    "sdiokpi: rxread#%u addr=0x%x count=%u ret=%d walk=[%s] hdr=[%s] walked=%u\n",
+	    lkpi_sdio_rx_dumps, addr, count, ret, chain, types, off);
+}
+
 int
 sdio_memcpy_fromio(struct sdio_func *func, void *dst, unsigned int addr,
     int count)
 {
+	int ret;
 
 	if (count <= 0)
 		return -EINVAL;
-	return sdio_io_rw_ext_helper(func, false, addr, true, dst,
+	ret = sdio_io_rw_ext_helper(func, false, addr, true, dst,
 	    (unsigned int)count);
+	lkpi_sdio_rx_read_show(addr, dst, (unsigned int)count, ret);
+	return ret;
 }
 
 int
