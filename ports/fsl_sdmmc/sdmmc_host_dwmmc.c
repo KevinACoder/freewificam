@@ -226,9 +226,12 @@ static void fdwmmchost_convert_cmd(const sdmmchost_transfer_t *content,
 	/*
 	 * What fsl asked for, printed next to what the controller reports it was
 	 * handed: the two disagreeing is the difference between a stack that built
-	 * the wrong transfer and one whose transfer never started at all.
+	 * the wrong transfer and one whose transfer never started at all. This is a
+	 * per-transfer trace - a driver that programs its registers in a loop emits
+	 * tens of thousands of them - so it lives at the verbose level and stays
+	 * off the console unless the level is raised deliberately.
 	 */
-	SDMMC_LOG("sdio: data cmd=%u arg=0x%x blksz=%u blkcnt=%u len=%u %s\n",
+	LOG_DEBUG("sdio: data cmd=%u arg=0x%x blksz=%u blkcnt=%u len=%u %s\n",
 		  cmd->index, cmd->arg, data->blksz, data->blkcnt, data->len,
 		  data->write ? "write" : "read");
 

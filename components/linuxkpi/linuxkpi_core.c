@@ -31,6 +31,7 @@
 
 #include <linux/sched.h>
 #include <linux/seq_file.h>
+#include <linux/interrupt.h>
 
 /* ------------------------------------------------------------------ */
 /* logging                                                             */
@@ -909,6 +910,88 @@ void *lkpi_worker_thread_id(void)
 	if (lkpi_system_wq == NULL)
 		return NULL;
 	return (void *)lkpi_wq_of(lkpi_system_wq)->thread;
+}
+
+/* ------------------------------------------------------------------ */
+/* deferred callbacks (linux/interrupt.h)                              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A tasklet is a coalescing work item on this port: arming it queues one work
+ * item, and the worker thread is the softirq context - which is what makes the
+ * callback run outside the context that armed it (a driver whose receive path
+ * arms from its bus interrupt thread and then hands frames up the stack cannot
+ * do that hand-off in the interrupter's context).
+ *
+ * Why arming must not be allowed to lose the callback: the vendored SDIO driver
+ * drains its receive buffers nowhere else - sd_rxhandler() enqueues a buffer and
+ * arms the tasklet (hal/rtl8188f/sdio/sdio_ops.c:1466-1468), and
+ * rtl8188fs_recv_priv's teardown is the only other reference. A dropped arm
+ * stops the drain permanently (its pool of 8 buffers is then never refilled), so
+ * the one case the seam cannot serve - a full queue - runs the callback here
+ * instead of dropping it.
+ */
+static void lkpi_tasklet_run(struct work_struct *w)
+{
+	struct tasklet_struct *t = container_of(w, struct tasklet_struct, work);
+
+	if (t->func != NULL)
+		t->func(t->data);
+}
+
+void lkpi_tasklet_schedule(struct tasklet_struct *t)
+{
+	if (t == NULL)
+		return;
+
+	if (lkpi_queue_work(lkpi_system_wq, &t->work))
+		return;
+
+	/*
+	 * Not queued. Already armed is the coalescing case (the interface schedules
+	 * a tasklet that is pending without a second run), and needs nothing; a
+	 * refused slot or a seam that is not up yet is the case that must not lose
+	 * the callback, so it runs here.
+	 */
+	if (t->work.wk_queued != 0)
+		return;
+	lkpi_tasklet_run(&t->work);
+}
+
+void tasklet_hi_schedule(struct tasklet_struct *t)
+{
+	/* One seam carries both of the interface's lists; the priority split has no
+	 * counterpart here (the worker is one thread at the scheduler's normal
+	 * priority), so the high list arms exactly as the normal one does. */
+	lkpi_tasklet_schedule(t);
+}
+
+void tasklet_init(struct tasklet_struct *t, void (*func)(unsigned long),
+    unsigned long data)
+{
+
+	if (t == NULL)
+		return;
+	t->next = NULL;
+	t->state = 0;
+	t->count.counter = 0;
+	t->use_callback = false;
+	t->func = func;
+	t->data = data;
+	lkpi_work_init(&t->work, lkpi_tasklet_run);
+}
+
+void tasklet_kill(struct tasklet_struct *t)
+{
+
+	if (t == NULL)
+		return;
+	/* Wait for an armed or running callback to leave the seam: the driver's
+	 * teardown calls this before it releases the buffers the callback reads
+	 * (hal/rtl8188f/sdio/rtl8189fs_recv.c:497). This flush runs a callback that
+	 * is still pending rather than discarding it, which is why the ordering the
+	 * driver uses (kill, then free) is the one that holds here. */
+	lkpi_work_flush(&t->work);
 }
 
 /* ------------------------------------------------------------------ */

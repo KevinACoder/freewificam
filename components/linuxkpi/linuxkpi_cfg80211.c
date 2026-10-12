@@ -69,6 +69,16 @@ extern struct net_device *lkpi_netdev_by_wiphy(struct wiphy *wiphy);
 #ifndef CONFIG_LKPICFG_MAX_SCAN_CHANNELS
 #define CONFIG_LKPICFG_MAX_SCAN_CHANNELS	64
 #endif
+/*
+ * The element stream one table entry keeps.  A supplicant cannot match a PSK
+ * network without the frame's RSN/WPA element, so the entry stores what the
+ * driver reported; the bound is a table-entry budget, and truncation cuts the
+ * stream's tail (the security element sits early, after SSID/rates/DS), so a
+ * frame with more elements than the bound still carries the ones that matter.
+ */
+#ifndef CONFIG_LKPICFG_BSS_IES_MAX
+#define CONFIG_LKPICFG_BSS_IES_MAX	256
+#endif
 
 /*
  * One access point as the substitute holds it: the public cfg80211 object the
@@ -80,6 +90,8 @@ extern struct net_device *lkpi_netdev_by_wiphy(struct wiphy *wiphy);
 struct lkpicfg_bss_entry {
 	struct cfg80211_bss	bss;
 	struct lkpicfg_bss	info;
+	u8			ies[CONFIG_LKPICFG_BSS_IES_MAX];
+	size_t			ies_len;
 };
 
 /*
@@ -366,6 +378,17 @@ cfg80211_inform_bss_frame(struct wiphy *wiphy,
 	    len - offsetofend(struct ieee80211_mgmt, u.beacon.capab_info) : 0;
 	lkpicfg_parse_ssid(ies, ielen, &entry->info);
 
+	/*
+	 * Keep the element stream itself: the seam's consumer is a supplicant, and
+	 * matching a PSK network needs the RSN/WPA element that only lives here
+	 * (see the header's note on the borrowed pointer).
+	 */
+	entry->ies_len = ielen > sizeof(entry->ies) ? sizeof(entry->ies) : ielen;
+	if (entry->ies_len != 0)
+		memcpy(entry->ies, ies, entry->ies_len);
+	entry->info.ies = entry->ies;
+	entry->info.ies_len = entry->ies_len;
+
 	/* the public object the driver holds a pointer to */
 	memcpy(entry->bss.bssid, mgmt->bssid, ETH_ALEN);
 	entry->bss.channel = rx_channel;
@@ -590,6 +613,199 @@ lkpicfg_netdev_up(struct wiphy *wiphy)
 		return -EOPNOTSUPP;
 	/* the driver's own ndo_open path (rtw netdev_open) */
 	return dev->netdev_ops->ndo_open(dev);
+}
+
+/* ------------------------------------------------------------------ */
+/* the MLME calls (driver: ioctl_cfg80211.c:3834 connect, :4084        */
+/* disconnect, :1660 add_key)                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The security selection a connect request carries, read out of the caller's
+ * association elements.  The driver's connect takes the version, the group
+ * cipher, the pairwise cipher and the AKM as separate fields of
+ * cfg80211_connect_params and reads the group cipher unconditionally
+ * (ioctl_cfg80211.c:4019 - a zero there turns its encryption state off even when
+ * the pairwise entry is set), so the element stream is the one place these
+ * values can come from without this port inventing a policy.
+ */
+struct lkpicfg_secsel {
+	u32	wpa_version;	/* NL80211_WPA_VERSION_*; 0 = no security element */
+	u32	group;		/* cipher suite selector, 0 = none */
+	u32	pairwise;	/* first pairwise suite, 0 = none */
+	u32	akm;		/* first AKM suite, 0 = none */
+};
+
+/* A four-byte selector ([LNX] include/linux/ieee80211.h: the
+ * 00:0f:ac:xx space, which is what WLAN_CIPHER_SUITE_* / WLAN_AKM_SUITE_* are) */
+static u32
+lkpicfg_selector(const u8 *p)
+{
+
+	return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3];
+}
+
+/*
+ * Read one security element's body (the fields after the element's own two-byte
+ * header).  The RSN element (WLAN_EID_RSN) and the WPA one (a vendor element
+ * whose body starts after its OUI and type) carry the same field order; the WPA
+ * form spells its selectors in the 00:50:f2 OUI, whose last byte is the same
+ * suite number, so it is mapped into the 802.11 selector space the driver
+ * compares against.  `sel->wpa_version` then says which element it was.
+ */
+static int
+lkpicfg_parse_security_body(const u8 *body, size_t len, int wpa1,
+    struct lkpicfg_secsel *sel)
+{
+	const u8 *p = body;
+	const u8 *end = body + len;
+	u16 n;
+
+	if (len < 6)		/* version + one four-byte selector */
+		return -1;
+	p += 2;			/* the element's version field */
+	sel->group = wpa1 ? SUITE(0x000fac, p[3]) : lkpicfg_selector(p);
+	p += 4;
+	if (p + 2 > end)
+		return -1;
+	/* The element's counts are little-endian on the wire (the selectors below
+	 * are four-byte arrays and read in wire order, which is why the two
+	 * spellings differ). */
+	n = (u16)(p[0] | (p[1] << 8));
+	p += 2;
+	if (n == 0 || p + 4 > end)
+		return -1;
+	sel->pairwise = wpa1 ? SUITE(0x000fac, p[3]) : lkpicfg_selector(p);
+	p += 4 * (size_t)n;
+	if (p + 2 > end)
+		return -1;
+	n = (u16)(p[0] | (p[1] << 8));
+	p += 2;
+	if (n == 0 || p + 4 > end)
+		return -1;
+	sel->akm = wpa1 ? SUITE(0x000fac, p[3]) : lkpicfg_selector(p);
+	sel->wpa_version = wpa1 ? NL80211_WPA_VERSION_1 : NL80211_WPA_VERSION_2;
+	return 0;
+}
+
+static void
+lkpicfg_parse_security(const u8 *ies, size_t ielen, struct lkpicfg_secsel *sel)
+{
+	size_t i = 0;
+
+	memset(sel, 0, sizeof(*sel));
+	while (i + 2 <= ielen) {
+		u8 id = ies[i];
+		u8 elen = ies[i + 1];
+
+		if (i + 2 + (size_t)elen > ielen)
+			break;
+		if (id == WLAN_EID_RSN) {
+			if (lkpicfg_parse_security_body(ies + i + 2, elen, 0,
+			    sel) == 0)
+				return;
+		} else if (id == WLAN_EID_VENDOR_SPECIFIC && elen >= 4 + 6 &&
+		    ies[i + 2] == 0x00 && ies[i + 3] == 0x50 &&
+		    ies[i + 4] == 0xf2 && ies[i + 5] == 0x01) {
+			if (lkpicfg_parse_security_body(ies + i + 6,
+			    (size_t)elen - 4, 1, sel) == 0)
+				return;
+		}
+		i += 2 + (size_t)elen;
+	}
+}
+
+int
+lkpicfg_connect(struct wiphy *wiphy, const u8 *ssid, size_t ssid_len,
+    const u8 *bssid, const u8 *ie, size_t ie_len)
+{
+	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
+	struct cfg80211_connect_params sme;
+	struct lkpicfg_secsel sel;
+	struct net_device *dev;
+
+	if (ctx == NULL || ctx->ops == NULL || ctx->ops->connect == NULL)
+		return -EOPNOTSUPP;
+	if (ssid == NULL || ssid_len == 0 || ssid_len > IEEE80211_MAX_SSID_LEN)
+		return -EINVAL;
+	dev = lkpi_netdev_by_wiphy(wiphy);
+	if (dev == NULL)
+		return -ENODEV;
+
+	memset(&sme, 0, sizeof(sme));
+	sme.ssid = ssid;
+	sme.ssid_len = ssid_len;
+	sme.bssid = bssid;
+	sme.auth_type = NL80211_AUTHTYPE_OPEN_SYSTEM;
+	sme.ie = ie;
+	sme.ie_len = ie_len;
+	sme.privacy = (ie != NULL && ie_len != 0);
+
+	lkpicfg_parse_security(ie, ie_len, &sel);
+	sme.crypto.wpa_versions = sel.wpa_version;
+	sme.crypto.cipher_group = sel.group;
+	if (sel.pairwise != 0) {
+		sme.crypto.n_ciphers_pairwise = 1;
+		sme.crypto.ciphers_pairwise[0] = sel.pairwise;
+	}
+	if (sel.akm != 0) {
+		sme.crypto.n_akm_suites = 1;
+		sme.crypto.akm_suites[0] = sel.akm;
+	}
+
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "lkpicfg: connect ssid_len=%u bssid=%s ie=%u ver=0x%x group=0x%x pairwise=0x%x akm=0x%x\n",
+	    (unsigned)ssid_len, bssid != NULL ? "pinned" : "any", (unsigned)ie_len,
+	    (unsigned)sel.wpa_version, (unsigned)sel.group,
+	    (unsigned)sel.pairwise, (unsigned)sel.akm);
+	return ctx->ops->connect(wiphy, dev, &sme);
+}
+
+int
+lkpicfg_disconnect(struct wiphy *wiphy, u16 reason)
+{
+	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
+	struct net_device *dev;
+
+	if (ctx == NULL || ctx->ops == NULL || ctx->ops->disconnect == NULL)
+		return -EOPNOTSUPP;
+	dev = lkpi_netdev_by_wiphy(wiphy);
+	if (dev == NULL)
+		return -ENODEV;
+	return ctx->ops->disconnect(wiphy, dev, reason);
+}
+
+int
+lkpicfg_set_key(struct wiphy *wiphy, unsigned int key_idx, int pairwise,
+    const u8 *mac_addr, const u8 *key, size_t key_len,
+    const u8 *seq, size_t seq_len)
+{
+	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
+	struct key_params params;
+	struct net_device *dev;
+
+	if (ctx == NULL || ctx->ops == NULL || ctx->ops->add_key == NULL)
+		return -EOPNOTSUPP;
+	if (key == NULL || key_len == 0)
+		return -EINVAL;
+	dev = lkpi_netdev_by_wiphy(wiphy);
+	if (dev == NULL || dev->ieee80211_ptr == NULL)
+		return -ENODEV;
+
+	memset(&params, 0, sizeof(params));
+	params.key = key;
+	params.key_len = (int)key_len;
+	params.seq = seq;
+	params.seq_len = (int)seq_len;
+	params.cipher = WLAN_CIPHER_SUITE_CCMP;
+
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "lkpicfg: set key idx=%u pairwise=%d len=%u seq=%u\n",
+	    key_idx, pairwise, (unsigned)key_len, (unsigned)seq_len);
+	/* link_id 0: this port's interface has no multi-link identity, and the
+	 * driver's add_key ignores it (ioctl_cfg80211.c:1660-1668) */
+	return ctx->ops->add_key(wiphy, dev->ieee80211_ptr, 0, (u8)key_idx,
+	    pairwise != 0, mac_addr, &params);
 }
 
 /* ------------------------------------------------------------------ */

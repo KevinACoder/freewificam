@@ -227,9 +227,17 @@ static void tomb_add(uintptr_t p)
 }
 
 /*
- * The linear invariant, read off the face's documented shape (skbuff_pool.h:14:
- * offset-style tail/end; linuxkpi_core.h:2057-2058: tail always covers headroom
- * plus payload, this shim never carries paged data).
+ * The structural invariant of a geometry-op target (skbuff_pool.h:14: offset-style
+ * tail/end; this shim never carries paged data): the head, data and tail pointers
+ * are ordered and inside the slot.
+ *
+ * The payload length is deliberately NOT part of it. The interface maintains no
+ * such relation - its own operations only need tailroom and pointer order - and the
+ * vendored receive path depends on that freedom: rtw_os_alloc_recvframe() assigns
+ * pkt_copy->len directly and then aligns the buffer with two skb_reserve() calls
+ * (os_dep/linux/recv_linux.c:92-98), which a "tail covers headroom plus payload"
+ * check refuses, leaving the frame buffer unaligned and every frame it carries
+ * mis-framed.
  */
 static int geom_ok(const struct sk_buff *skb)
 {
@@ -241,8 +249,6 @@ static int geom_ok(const struct sk_buff *skb)
 		return 0;
 	off = (uintptr_t)skb->data - (uintptr_t)skb->head;
 	if (off > skb->tail || skb->tail > skb->end)
-		return 0;
-	if (skb->len != (unsigned int)(skb->tail - off))
 		return 0;
 	if (skb->data_len != 0)
 		return 0;

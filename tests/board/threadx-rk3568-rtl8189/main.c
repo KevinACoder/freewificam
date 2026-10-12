@@ -43,11 +43,52 @@
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_core_init(void);
 
+/* the WPA world's wiring: the supplicant backend instance and the message
+ * observer (both scalars-only faces) */
+int lkpi_wpa_cfg80211_init(void);
+void wlan8189_wpa_obs_init(void);
+
 /*
  * The linuxkpi world's console outlet: every line the core and the driver
  * produce (its own `RTW: ` prints included) lands on the board log, stamped and
  * line-disciplined like the rest of the image.
  */
+/*
+ * The driver's per-frame diagnostics repeat for every frame it processes (its
+ * receive walk's bounds report and the concurrent-mode clone compare). Each line
+ * differs in the addresses and lengths it carries, so the log layer's
+ * identical-line collapse does not fold them - a prefix gate is needed, and this
+ * is it: the first few lines of a family are printed, the rest are dropped
+ * silently. The level travels through unchanged, so the level filter still
+ * decides what is seen at all.
+ */
+#define SINK_SIG_LEN	28
+#define SINK_SIG_KEEP	2
+
+static char wlan8189_sink_sig[SINK_SIG_LEN];
+static unsigned int wlan8189_sink_repeats;
+
+static void wlan8189_sink_collapse(ulog_level_t level, const char *line)
+{
+	char sig[SINK_SIG_LEN];
+	size_t i = 0;
+
+	while (line[i] != '\0' && i + 1 < sizeof(sig)) {
+		sig[i] = line[i];
+		i++;
+	}
+	sig[i] = '\0';
+
+	if (strcmp(sig, wlan8189_sink_sig) == 0) {
+		if (++wlan8189_sink_repeats > SINK_SIG_KEEP)
+			return;	/* the same family again: dropped, not printed */
+	} else {
+		wlan8189_sink_repeats = 0;
+		memcpy(wlan8189_sink_sig, sig, sizeof(sig));
+	}
+	log_emit(level, "lkpi: %s\n", line);
+}
+
 static void wlan8189_lkpi_sink(ulog_level_t level, const char *line)
 {
 	static char buf[200];
@@ -67,7 +108,7 @@ static void wlan8189_lkpi_sink(ulog_level_t level, const char *line)
 		 * splits a line at its length cap - an unterminated print glues
 		 * onto whatever is written next, and the split then cuts a line
 		 * (a judged anchor included) in half. */
-		log_emit(level, "lkpi: %s\n", buf);
+		wlan8189_sink_collapse(level, buf);
 }
 
 static const osThreadAttr_t runner_thread_attr = {
@@ -111,6 +152,21 @@ int main( void )
 	 * through (without it the driver's whole world is silent) */
 	lkpi_log_sink_register( wlan8189_lkpi_sink );
 	lkpi_core_init();
+
+	/*
+	 * The supplicant chain (each step the same idempotent shape as the WLAN
+	 * image's): the message observer latches the association anchors the join
+	 * case and the judge read, and the backend instance registers the nine
+	 * vendor operations against the substitute's seam - this line's driver is a
+	 * FullMAC stack that talks cfg80211, so the backend is the cfg80211
+	 * instance rather than the net80211 bridge's.
+	 */
+	wlan8189_wpa_obs_init();
+	if( lkpi_wpa_cfg80211_init() != 0 ) {
+		LOG_ERROR( "wlan8189: wpa backend registration failed" );
+	} else {
+		LOG_INFO( "wlan8189: wpa backend registered" );
+	}
 
 	if( osThreadNew( board_suite_run, 0, &runner_thread_attr ) == 0 ) {
 		wlan8189_fatal( "runner thread create failed" );

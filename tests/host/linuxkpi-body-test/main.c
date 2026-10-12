@@ -29,6 +29,14 @@
  *       misuse counters (double free refused, use-after-free write refused).
  *   L8  cnurrent endpoints: transfers on two endpoints in flight together, each
  *       completing exactly once (the concurrency the driver's RX/TX urbs need).
+ *   L9  the class hook end to end: claim, identifier match, endpoint chain and a
+ *       transfer, all through the real hook.
+ *   L10 the CD-ROM modeswitch hook: the eject message byte-exact, the network
+ *       personality never claimed.
+ *   L11 the deferred callback (tasklet) on the real seam: the arm runs the
+ *       callback later and on another thread, two arms with no drain between
+ *       them run once, teardown leaves nothing outstanding, and a burst past the
+ *       queue's depth loses no callback.
  *
  * A failure prints the case line with `FAIL` and a detail, the run stops there,
  * and the exit code is the number of failures (0 when clean). A red-control mode
@@ -44,6 +52,7 @@
 #include "os/cmsis2/cmsis2.h"
 #include "linuxkpi_core.h"
 #include "linuxkpi_usb.h"
+#include <linux/interrupt.h>
 #include <linux/usb.h>
 #include <linux/firmware.h>
 
@@ -771,6 +780,211 @@ case_l7(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* L11 the deferred callback (tasklet) on the real seam                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The vendored SDIO driver's receive path arms a tasklet from its bus interrupt
+ * thread and drains its pending receive buffers nowhere else, so "the arm runs
+ * the callback later, on another thread, exactly once, and never loses it" is a
+ * load-bearing contract of this port rather than a convenience. The legs below
+ * assert it on the real seam: deferred off the arming thread; two arms with no
+ * drain between them run once; teardown waits and leaves the object usable; and a
+ * burst larger than the queue's depth runs every callback (the refused slot runs
+ * it in the caller, which is the one case a drop would break the drain with).
+ */
+
+#define TK_N	40
+
+struct tk_slot {
+	volatile unsigned int	runs;
+	volatile unsigned int	inline_runs;
+};
+
+static struct tk_slot		tk_slots[TK_N];
+static struct tasklet_struct	tk_tasks[TK_N];
+static struct tasklet_struct	tk_gate_task;
+static volatile int		tk_gate_open;
+static volatile unsigned int	tk_gate_entered;
+static volatile osThreadId_t	tk_arming_thread;
+static int			tk_inert;	/* the red control's arm */
+
+static void
+tk_cb(unsigned long data)
+{
+	struct tk_slot *s = &tk_slots[data];
+
+	s->runs++;
+	if (osThreadGetId() == tk_arming_thread)
+		s->inline_runs++;
+}
+
+/* Holds the seam's worker inside a callback until the case releases it, so the
+ * arms that follow have no drain between them (what makes the coalescing leg
+ * deterministic) and the queue can be filled on purpose. */
+static void
+tk_gate_cb(unsigned long data)
+{
+
+	(void)data;
+	tk_gate_entered = 1;
+	while (!tk_gate_open)
+		lkpi_msleep(1);
+}
+
+/* The arm the case uses: with --fault tasklet-inert it is the pre-fix no-op, so
+ * the case's own claims have to catch it. */
+static void
+tk_arm(struct tasklet_struct *t)
+{
+
+	if (tk_inert)
+		return;
+	tasklet_schedule(t);
+}
+
+static int
+tk_wait(volatile unsigned int *what, unsigned int want, unsigned int spins)
+{
+
+	while (spins-- > 0) {
+		if (*what >= want)
+			return 0;
+		lkpi_msleep(1);
+	}
+	return -1;
+}
+
+/* arm the gate tasklet and wait until the worker is inside it */
+static int
+tk_hold_worker(void)
+{
+
+	tk_gate_open = 0;
+	tk_gate_entered = 0;
+	tasklet_init(&tk_gate_task, tk_gate_cb, 0);
+	tk_arm(&tk_gate_task);
+	return tk_wait(&tk_gate_entered, 1, 2000);
+}
+
+static int
+case_l11(void)
+{
+	unsigned int inline_runs = 0;
+	unsigned int total = 0;
+	unsigned int i;
+
+	tk_arming_thread = osThreadGetId();
+
+	/* (1) deferred, and it runs: the arm must not run the callback in the
+	 * arming context, and the callback must arrive on another one */
+	tasklet_init(&tk_tasks[0], tk_cb, 0);
+	tk_arm(&tk_tasks[0]);
+	if (tk_slots[0].runs != 0) {
+		case_line("L11", 0, "the arm ran the callback inline");
+		return -1;
+	}
+	if (tk_wait(&tk_slots[0].runs, 1, 2000) != 0) {
+		case_line("L11", 0, "the deferred callback did not run");
+		return -1;
+	}
+	if (tk_slots[0].runs != 1 || tk_slots[0].inline_runs != 0) {
+		case_line("L11", 0, "the callback must run once, off the arming "
+		    "thread (runs=%u inline=%u)", tk_slots[0].runs,
+		    tk_slots[0].inline_runs);
+		return -1;
+	}
+	/* the high-priority spelling reaches the same seam */
+	tasklet_hi_schedule(&tk_tasks[0]);
+	if (tk_wait(&tk_slots[0].runs, 2, 2000) != 0) {
+		case_line("L11", 0, "tasklet_hi_schedule did not run the callback");
+		return -1;
+	}
+
+	/* (2) coalescing: with the worker held inside another callback, the two
+	 * arms have no drain between them - the interface schedules a pending
+	 * tasklet without producing a second run */
+	if (tk_hold_worker() != 0) {
+		case_line("L11", 0, "the gate callback did not hold the worker");
+		return -1;
+	}
+	tasklet_init(&tk_tasks[1], tk_cb, 1);
+	tk_arm(&tk_tasks[1]);
+	tk_arm(&tk_tasks[1]);
+	tk_gate_open = 1;
+	if (tk_wait(&tk_slots[1].runs, 1, 2000) != 0) {
+		case_line("L11", 0, "the coalesced callback did not run");
+		return -1;
+	}
+	lkpi_msleep(50);	/* a second run would have had ample time by now */
+	if (tk_slots[1].runs != 1) {
+		case_line("L11", 0, "two arms with no drain between them must "
+		    "run once (runs=%u)", tk_slots[1].runs);
+		return -1;
+	}
+
+	/* (3) no loss past the queue's depth: the worker is held again and the
+	 * burst is larger than the seam's queue (32 slots), so some arms are
+	 * refused the slot and must run in this context - none may be dropped */
+	if (tk_hold_worker() != 0) {
+		case_line("L11", 0, "the second gate did not hold the worker");
+		return -1;
+	}
+	for (i = 2; i < TK_N; i++) {
+		tasklet_init(&tk_tasks[i], tk_cb, i);
+		tk_arm(&tk_tasks[i]);
+	}
+	tk_gate_open = 1;
+	for (i = 2; i < TK_N; i++) {
+		if (tk_wait(&tk_slots[i].runs, 1, 5000) != 0) {
+			case_line("L11", 0, "the burst lost the callback of slot "
+			    "%u", i);
+			return -1;
+		}
+		total += tk_slots[i].runs;
+		inline_runs += tk_slots[i].inline_runs;
+	}
+	lkpi_msleep(50);
+	for (i = 2; i < TK_N; i++) {
+		if (tk_slots[i].runs != 1) {
+			case_line("L11", 0, "slot %u ran %u times, not once",
+			    i, tk_slots[i].runs);
+			return -1;
+		}
+	}
+	if (inline_runs < 1) {
+		case_line("L11", 0, "a burst past the queue's depth must run the "
+		    "refused arms in the caller (inline=%u)", inline_runs);
+		return -1;
+	}
+
+	/* (4) teardown: kill waits for an armed or running callback to leave the
+	 * seam and leaves the object usable (the driver kills in its teardown and
+	 * re-inits on the next bring-up) */
+	tasklet_init(&tk_tasks[1], tk_cb, 1);
+	tk_arm(&tk_tasks[1]);
+	tasklet_kill(&tk_tasks[1]);
+	if (tk_slots[1].runs != 2 || tk_tasks[1].work.wk_queued != 0 ||
+	    tk_tasks[1].work.wk_running != 0) {
+		case_line("L11", 0, "kill must leave nothing outstanding "
+		    "(runs=%u queued=%d running=%d)", tk_slots[1].runs,
+		    tk_tasks[1].work.wk_queued, tk_tasks[1].work.wk_running);
+		return -1;
+	}
+	tk_arm(&tk_tasks[1]);
+	if (tk_wait(&tk_slots[1].runs, 3, 2000) != 0) {
+		case_line("L11", 0, "the object must still run after kill (the "
+		    "driver re-arms on the next bring-up)");
+		return -1;
+	}
+
+	case_line("L11", 1, "deferred off-thread; two arms -> one run; kill "
+	    "leaves nothing outstanding; the %u-callback burst ran complete "
+	    "(%u in the caller)", total, inline_runs);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -824,9 +1038,11 @@ run_suite(void)
 		return;
 	if (case_l10() != 0)
 		return;
+	if (case_l11() != 0)
+		return;
 
 	if (failures == 0)
-		printf("LKPI: SUITE PASS cases=10\n");
+		printf("LKPI: SUITE PASS cases=11\n");
 	else
 		printf("LKPI: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -852,17 +1068,22 @@ main(int argc, char **argv)
 		if (strcmp(argv[i], "--fault") == 0 && i + 1 < argc) {
 			fault_name = argv[++i];
 		} else {
-			printf("LKPI: usage: %s [--fault no-walk|fw-name|ms-eject]\n",
-			    argv[0]);
+			printf("LKPI: usage: %s [--fault no-walk|fw-name|ms-eject"
+			    "|tasklet-inert]\n", argv[0]);
 			return 2;
 		}
 	}
 
-	if (fault_name != NULL && strcmp(fault_name, "no-walk") != 0 &&
-	    strcmp(fault_name, "fw-name") != 0 &&
-	    strcmp(fault_name, "ms-eject") != 0) {
-		printf("LKPI: unknown fault '%s'\n", fault_name);
-		return 2;
+	if (fault_name != NULL) {
+		if (strcmp(fault_name, "no-walk") != 0 &&
+		    strcmp(fault_name, "fw-name") != 0 &&
+		    strcmp(fault_name, "ms-eject") != 0 &&
+		    strcmp(fault_name, "tasklet-inert") != 0) {
+			printf("LKPI: unknown fault '%s'\n", fault_name);
+			return 2;
+		}
+		if (strcmp(fault_name, "tasklet-inert") == 0)
+			tk_inert = 1;
 	}
 
 	/* the CMSIS-RTOS2 kernel hosts the suite's tasks; the suite body runs as

@@ -116,6 +116,17 @@ status_t sdmmc_card_start(void)
      *    derives the host's maximum block count from it (maxTransSize /
      *    defBlockSize), so the two stay consistent: the largest block transfer
      *    the stack will assemble is exactly what one staging copy can hold.
+     *    That second role is why it is sized for the widest read a card driver
+     *    makes rather than for one block: the SDIO engine splits a request into
+     *    transfers of at most that block count and, when the caller asked for an
+     *    increasing address, advances the address between them. A receive-FIFO
+     *    read must not be split that way - the FIFO is a port, not a register
+     *    window, so an advanced address reads somewhere else, and the transfer
+     *    then reports success while delivering nothing for every block after the
+     *    first (which a driver sees as "only the first frame of every aggregate
+     *    arrives"). One transfer per receive read is what a Linux host does too,
+     *    because its block count comes from the controller, not from a staging
+     *    buffer.
      */
     config.hostId         = 0U;
     config.hostType       = (uint32_t)kSDMMCHOST_TYPE_FDWMMC;
@@ -124,7 +135,10 @@ status_t sdmmc_card_start(void)
     config.enableDMA      = true;
     config.prefixedTiming = false;
     config.endianMode     = (uint32_t)kSDMMCHOST_EndianModeLittle;
-    config.maxTransSize   = (size_t)FSL_SDMMC_CARD_INTERNAL_BUFFER_SIZE;
+    /* 16 KiB covers the widest read the RTL8188F driver asks for (its receive
+     * buffer caps at 15360 bytes) and keeps the derived block count a whole
+     * read: 32 blocks of 512. */
+    config.maxTransSize   = 16384U;
     config.defBlockSize   = (size_t)FSL_SDMMC_DEFAULT_BLOCK_SIZE;
     config.cardClock      = SDMMC_PORT_CARD_CLOCK_HZ;
     config.isUHSCard      = false;

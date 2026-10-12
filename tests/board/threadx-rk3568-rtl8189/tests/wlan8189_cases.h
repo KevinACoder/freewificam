@@ -14,5 +14,7 @@
 
 void wlan8189_probe_chain( void );
 void wlan8189_scan_chain( void );
+void wlan8189_join_chain( void );
+void wlan8189_dataplane_chain( void );
 
 #endif /* WLAN8189_CASES_H */
