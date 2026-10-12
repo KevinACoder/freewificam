@@ -35,7 +35,6 @@ filp_open
 find_vpid
 free_netdev
 ieee80211_frequency_to_channel
-ieee80211_get_channel
 init_net
 kernel_read
 kernel_sigaction

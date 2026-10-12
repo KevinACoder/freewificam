@@ -2564,9 +2564,32 @@ void cfg80211_ch_switch_notify(struct net_device *dev,
 			       struct cfg80211_chan_def *chandef,
 			       unsigned int link_id);
 
-/* [LNX] include/net/cfg80211.h:7491: the channel lookup the compiled set calls. */
-struct ieee80211_channel *
-ieee80211_get_channel(struct wiphy *wiphy, int freq);
+/*
+ * [LNX] include/net/cfg80211.h:7491: the channel lookup the compiled set calls.
+ * The interface's body (net/wireless/util.c) walks the wiphy's own band tables,
+ * which the caller already holds - no port state is involved - so it is carried
+ * as an inline. That is also what keeps the mac80211 substitute (which builds a
+ * scan request out of these channel records) from having to link the cfg80211
+ * substitute just for this walk.
+ */
+static __always_inline __unused struct ieee80211_channel *
+ieee80211_get_channel(struct wiphy *wiphy, int freq)
+{
+	unsigned int b, c;
+
+	if (wiphy == NULL)
+		return NULL;
+	for (b = 0; b < NUM_NL80211_BANDS; b++) {
+		struct ieee80211_supported_band *band = wiphy->bands[b];
+
+		if (band == NULL)
+			continue;
+		for (c = 0; c < (unsigned int)band->n_channels; c++)
+			if ((int)band->channels[c].center_freq == freq)
+				return &band->channels[c];
+	}
+	return NULL;
+}
 
 /* ------------------------------------------------------------------ */
 /* the vendor-command surface                                          */

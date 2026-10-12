@@ -2030,6 +2030,176 @@ case_b20(void)
 	return 0;
 }
 
+/*
+ * B21: the hardware-scan route. A driver whose ops table carries .hw_scan and
+ * .cancel_hw_scan but no .sw_scan_start (the AC 7260's mvm shape:
+ * mvm/mac80211.c has no software fallback) cannot be swept by the bridge's own
+ * channel walk - there is nothing to call. The bridge has to ask the device
+ * instead: the capability query picks the route, the stack's active channel set
+ * goes down as the request, the device owns the dwell, and the sweep ends when
+ * the device says so (ieee80211_scan_completed), not when a walk runs out.
+ *
+ * The case runs one sweep on each shape and asserts the two differ exactly
+ * where they must: the software driver still gets sw_scan_start and a channel
+ * walk, while the hardware driver gets hw_scan carrying the stack's channels as
+ * a wildcard request and never a sw_scan_start; the dwell walks nothing for the
+ * firmware sweep; and the device's completion closes the window with the hw
+ * reason, without cancelling the sweep it already finished, and leaves no
+ * stranded -EBUSY behind.
+ */
+static int
+case_b21(void)
+{
+	const struct fake_driver_state *st;
+	struct wlan_bridge_counters cb;
+	struct cfg80211_scan_info info;
+	uint32_t active[64];
+	size_t n_active, i;
+	unsigned int sw_before, hw_before, cancel_before, complete_before;
+	int cur_before, cur_after, rc;
+
+	/* drain whatever sweep an earlier case left armed (B19 opens one and
+	 * returns without closing it) */
+	while (wlan_bridge_scan_pending()) {
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+
+	/* ---- the software driver still takes the software route ---- */
+	fake_driver_knob_hw_scan(0);
+	st = fake_driver_state();
+	sw_before = st->scan_start_calls;
+	hw_before = st->hw_scan_calls;
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B21", 0, "the software-route sweep did not start");
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->scan_start_calls != sw_before + 1 ||
+	    st->hw_scan_calls != hw_before) {
+		case_line("B21", 0, "the software driver did not take the software "
+		    "route (sw_scan_start +%u, hw_scan +%u)",
+		    st->scan_start_calls - sw_before, st->hw_scan_calls - hw_before);
+		return -1;
+	}
+	run_one_sweep();
+
+	/* ---- the hardware driver takes the hardware route ---- */
+	fake_driver_knob_hw_scan(1);
+	n_active = n8_peek_chan_active_freqs(active, 64);
+	if (n_active == 0) {
+		case_line("B21", 0, "the stack has no active channel to scan");
+		return -1;
+	}
+	st = fake_driver_state();
+	sw_before = st->scan_start_calls;
+	hw_before = st->hw_scan_calls;
+	rc = wlan_bridge_scan_start();
+	if (rc != 0) {
+		case_line("B21", 0, "the hardware-route sweep did not start (rc=%d, "
+		    "pending=%d)", rc, wlan_bridge_scan_pending());
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->hw_scan_calls != hw_before + 1) {
+		case_line("B21", 0, "the driver's hw_scan was not called (calls=%u)",
+		    st->hw_scan_calls);
+		return -1;
+	}
+	if (st->scan_start_calls != sw_before) {
+		case_line("B21", 0, "the hardware route still called sw_scan_start "
+		    "(+%u)", st->scan_start_calls - sw_before);
+		return -1;
+	}
+	if (st->hw_scan_n_channels != n_active) {
+		case_line("B21", 0, "the hw scan request carried %u channels; the "
+		    "stack's active set is %u", st->hw_scan_n_channels,
+		    (unsigned)n_active);
+		return -1;
+	}
+	if (!st->hw_scan_req_readable) {
+		case_line("B21", 0, "the request object was not readable from the "
+		    "driver's hw_scan");
+		return -1;
+	}
+	for (i = 0; i < n_active; i++) {
+		if (st->hw_scan_freqs[i] != active[i]) {
+			case_line("B21", 0, "the hw scan request's channel %u is %u "
+			    "MHz; the stack's active channel is %u", (unsigned)i,
+			    st->hw_scan_freqs[i], active[i]);
+			return -1;
+		}
+	}
+	if (st->hw_scan_n_ssids != 0) {
+		case_line("B21", 0, "the hw scan request is not a wildcard "
+		    "(n_ssids=%u)", st->hw_scan_n_ssids);
+		return -1;
+	}
+
+	/* ---- the dwell walks nothing for a firmware sweep ---- */
+	cur_before = n8_peek_curchan();
+	rc = wlan_bridge_scan_dwell();
+	cur_after = n8_peek_curchan();
+	if (rc == 0) {
+		case_line("B21", 0, "the dwell ended the hardware sweep: the device "
+		    "owns the dwell, the bridge's walk must not");
+		return -1;
+	}
+	if (cur_after != cur_before) {
+		case_line("B21", 0, "the dwell advanced the stack's channel "
+		    "(%d -> %d): the bridge walked under the firmware sweep",
+		    cur_before, cur_after);
+		return -1;
+	}
+
+	/* ---- the device ends the sweep ---- */
+	st = fake_driver_state();
+	cancel_before = st->hw_scan_cancel_calls;
+	complete_before = st->scan_complete_calls;
+	memset(&info, 0, sizeof(info));
+	ieee80211_scan_completed(g_hw, &info);
+	wlan_bridge_stats(&cb);
+	if (cb.scan_close != WLAN_BRIDGE_SCAN_CLOSE_HW) {
+		case_line("B21", 0, "the device's completion did not close the sweep "
+		    "as a hardware one (reason=%u)", cb.scan_close);
+		return -1;
+	}
+	if (wlan_bridge_scan_pending()) {
+		case_line("B21", 0, "the sweep still reads pending after the "
+		    "device's completion");
+		return -1;
+	}
+	st = fake_driver_state();
+	if (st->hw_scan_cancel_calls != cancel_before) {
+		case_line("B21", 0, "the device-initiated close also cancelled the "
+		    "sweep it already finished (+%u)",
+		    st->hw_scan_cancel_calls - cancel_before);
+		return -1;
+	}
+	if (st->scan_complete_calls != complete_before) {
+		case_line("B21", 0, "the hardware close called sw_scan_complete "
+		    "(+%u)", st->scan_complete_calls - complete_before);
+		return -1;
+	}
+
+	/* the window closed cleanly: a fresh sweep is accepted again (no stranded
+	 * -EBUSY), and the same completion closes that one too */
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B21", 0, "a sweep after the hardware completion was "
+		    "refused: the bookkeeping stranded");
+		return -1;
+	}
+	ieee80211_scan_completed(g_hw, &info);
+
+	/* restore the software shape for any case that runs after this one */
+	fake_driver_knob_hw_scan(0);
+	case_line("B21", 1, "hw route: hw_scan got the stack's %u channels as a "
+	    "wildcard request, no sw_scan_start, the dwell walked nothing, and the "
+	    "device's completion closed it as hw-done with no stranded EBUSY",
+	    (unsigned)n_active);
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -2177,9 +2347,10 @@ run_suite(void)
 	(void)case_b18();
 	(void)case_b19();
 	(void)case_b20();
+	(void)case_b21();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=20\n");
+		printf("WLANBRIDGE: SUITE PASS cases=21\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);

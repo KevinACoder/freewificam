@@ -68,6 +68,25 @@ mock_pcie_reset(void)
 	memset(mock_dma_used, 0, sizeof(mock_dma_used));
 }
 
+/* The AC 7260 the driver line's synthetic chain claims: vendor 8086, device 08b1,
+ * class 0280 (network controller, other), on bus 21 so the BDF the engine builds
+ * is the 21:00.0 the board's bring-up log prints. Appended, not substituted: the
+ * default three functions keep the identity every other case reads. */
+void
+mock_pcie_script_ac7260(void)
+{
+	struct mock_pcie_dev *d;
+
+	if (mock.n_devs >= MOCK_PCIE_MAX_DEVS)
+		return;
+	d = &mock.dev[mock.n_devs];
+	mock_dev_build(d, 0x21, 0x08b1, 0x80);
+	d->vendor = 0x8086;
+	d->cfg[MOCK_CFG_VENDOR] = 0x86;
+	d->cfg[MOCK_CFG_VENDOR + 1] = 0x80;
+	mock.n_devs++;
+}
+
 struct mock_pcie_backend *
 mock_pcie_backend(void)
 {

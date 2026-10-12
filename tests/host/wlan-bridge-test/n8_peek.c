@@ -249,6 +249,31 @@ n8_peek_curchan(void)
 	return (int)(ic->ic_curchan - ic->ic_channels);
 }
 
+/*
+ * The stack's active channels as centre frequencies, in channel order. This is
+ * the set the bridge's own channel walk visits (ic_chan_active, the mask
+ * ieee80211_next_scan consults), so it is the truth a hardware scan's request
+ * has to carry - read straight from the stack rather than re-derived.
+ */
+size_t
+n8_peek_chan_active_freqs(uint32_t *freqs, size_t max)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+	size_t n = 0;
+	int ch;
+
+	if (ic == NULL || freqs == NULL)
+		return 0;
+	for (ch = 0; ch <= IEEE80211_CHAN_MAX && n < max; ch++) {
+		if (!isset(ic->ic_chan_active, ch))
+			continue;
+		if (ic->ic_channels[ch].ic_freq == 0)
+			continue;
+		freqs[n++] = ic->ic_channels[ch].ic_freq;
+	}
+	return n;
+}
+
 /* ------------------------------------------------------------------ */
 /* the CCMP round trip, net80211-world half                            */
 /* ------------------------------------------------------------------ */

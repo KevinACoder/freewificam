@@ -96,7 +96,7 @@ endef
 
 OBJS := $(foreach s,$(SRCS),$(call OBJ,$(s)))
 
-.PHONY: all contract-check clean
+.PHONY: all contract-check run clean
 
 all: $(BIN) contract-check
 
@@ -112,6 +112,14 @@ $(foreach src,$(SRCS),$(eval $(call COMPILE_RULE,$(src))))
 
 $(BIN): $(OBJS)
 	$(CC) $^ $(LDFLAGS) -o $@
+
+# Run the suite: the default run (the engine over the three-function synthetic
+# host) and the AC 7260 synthetic-chain run (the driver line's stage i). The two
+# are separate invocations because the engine's driver registry is bounded and the
+# default run already holds three drivers; each run states its own case count.
+run: $(BIN)
+	$(BIN)
+	$(BIN) --scenario ac7260
 
 # ---- compile-time contract of the new face headers ----------------------------
 #

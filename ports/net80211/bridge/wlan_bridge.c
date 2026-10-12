@@ -99,6 +99,16 @@ static struct {
 	int attached;
 	int up;			/* the driver's start ran (up is idempotent) */
 	int scanning;		/* a sweep is in flight (the filter is set) */
+	/*
+	 * Which route the sweep in flight took. A software sweep is driven from
+	 * here: the dwell pump walks the channels and the walk running out
+	 * closes the window. A hardware sweep is driven by the device - the
+	 * request went down once, no channel walk runs here, and the window
+	 * closes when the device says so (wlan_bridge_scan_hw_complete). The flag
+	 * is what keeps the dwell pump from walking channels under a firmware
+	 * sweep, which would tune the radio out from under it.
+	 */
+	int scan_hw;
 	uint32_t tuned_freq;	/* the channel the driver was last told about */
 	unsigned int scan_starts;
 	unsigned int scan_completes;
@@ -1009,6 +1019,34 @@ wlan_bridge_tx_complete(void)
 /* the scan group (obligations 2 and 3)                                */
 /* ------------------------------------------------------------------ */
 
+/* The hardware-scan request carries a bounded channel list; the cap matches the
+ * substitute's own (components/linuxkpi/linuxkpi_80211.c, whose request object
+ * holds the same bound). */
+#define WLAN_BRIDGE_SCAN_FREQ_MAX	64
+
+/*
+ * The stack's active channels, as the centre frequencies a hardware scan wants.
+ * `ic_chan_active` is the mask the walk itself consults
+ * (ieee80211_next_scan, ieee80211_node.c:328-360: `isset(ic_chan_scan, ...)`
+ * over the same table), so this is the walk's own channel set in another
+ * spelling rather than a second opinion about which channels exist.
+ */
+static size_t
+bridge_scan_active_freqs(uint32_t *freqs, size_t max)
+{
+	size_t n = 0;
+	int i;
+
+	for (i = 0; i <= IEEE80211_CHAN_MAX && n < max; i++) {
+		if (!isset(bridge.ic->ic_chan_active, i))
+			continue;
+		if (bridge.ic->ic_channels[i].ic_freq == 0)
+			continue;
+		freqs[n++] = bridge.ic->ic_channels[i].ic_freq;
+	}
+	return n;
+}
+
 /*
  * Start a sweep. The filter goes first (obligation 2): a chip that is not
  * promiscuous answers no unknown beacon, so a sweep started before the bit is
@@ -1034,7 +1072,39 @@ wlan_bridge_scan_start(void)
 		return -EIO;
 	}
 	bridge.filter_sets++;
-	if (bridge.ops->sw_scan_start != NULL &&
+	/*
+	 * Which route this sweep takes: the driver answers for itself, because
+	 * the two are not interchangeable. A driver with a software scan takes
+	 * it and the bridge drives the walk below. A driver whose ops table has
+	 * only a hardware scan (the AC 7260's mvm path, which has no
+	 * sw_scan_start at all) gets the request form instead: the channel set
+	 * goes down once and the device owns the dwell, so no walk runs here and
+	 * the window closes from wlan_bridge_scan_hw_complete.
+	 *
+	 * The set handed down is the stack's own active channel list - the same
+	 * one the walk would have visited - so the firmware sweeps what a
+	 * software sweep would have.
+	 */
+	bridge.scan_hw = bridge.ops->has_hw_scan != NULL &&
+	    bridge.ops->has_hw_scan(bridge.drv) != 0;
+	if (bridge.scan_hw) {
+		uint32_t freqs[WLAN_BRIDGE_SCAN_FREQ_MAX];
+		size_t n_freqs = bridge_scan_active_freqs(freqs,
+		    WLAN_BRIDGE_SCAN_FREQ_MAX);
+		int hw_rc;
+
+		hw_rc = n_freqs == 0 || bridge.ops->hw_scan_start == NULL ?
+		    -1 : bridge.ops->hw_scan_start(bridge.drv, freqs, n_freqs);
+		if (hw_rc != 0) {
+			wlan_osal_log("wlan: hw scan refused (freqs=%u)\n",
+			    (unsigned)n_freqs);
+			bridge.scan_hw = 0;
+			(void)bridge.ops->filter(bridge.drv,
+			    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+			bridge.filter_clears++;
+			return -EIO;
+		}
+	} else if (bridge.ops->sw_scan_start != NULL &&
 	    bridge.ops->sw_scan_start(bridge.drv) != 0) {
 		(void)bridge.ops->filter(bridge.drv,
 		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
@@ -1137,8 +1207,21 @@ bridge_scan_close(unsigned int reason)
 	bridge.scanning = 0;
 	bridge.scan_completes++;
 	bridge.scan_close = reason;
-	if (bridge.ops->sw_scan_complete != NULL)
+	if (bridge.scan_hw) {
+		/*
+		 * A hardware sweep: the device owns it. When the close came from
+		 * the device (WLAN_BRIDGE_SCAN_CLOSE_HW) it has already stopped
+		 * and released its own request; any other close means the stack
+		 * left the scan on its own, so the device has to be told to stop
+		 * or it keeps dwelling on a radio nobody is collecting from.
+		 */
+		if (reason != WLAN_BRIDGE_SCAN_CLOSE_HW &&
+		    bridge.ops->hw_scan_cancel != NULL)
+			bridge.ops->hw_scan_cancel(bridge.drv);
+		bridge.scan_hw = 0;
+	} else if (bridge.ops->sw_scan_complete != NULL) {
 		bridge.ops->sw_scan_complete(bridge.drv);
+	}
 	(void)bridge.ops->filter(bridge.drv,
 	    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
 	bridge.filter_clears++;
@@ -1153,11 +1236,29 @@ bridge_scan_close(unsigned int reason)
 	    "flags=0x%x starts=%u\n", bridge.scan_completes,
 	    reason == WLAN_BRIDGE_SCAN_CLOSE_WALK ? "walk-end" :
 	    reason == WLAN_BRIDGE_SCAN_CLOSE_STATE ? "stack-left-scan" :
-	    reason == WLAN_BRIDGE_SCAN_CLOSE_NOENTRY ? "no-entry" : "other",
+	    reason == WLAN_BRIDGE_SCAN_CLOSE_NOENTRY ? "no-entry" :
+	    reason == WLAN_BRIDGE_SCAN_CLOSE_HW ? "hw-done" : "other",
 	    bridge.scan_entered,
 	    bridge.ic != NULL ? (int)bridge.ic->ic_state : -1,
 	    bridge.ic != NULL ? (unsigned)bridge.ic->ic_flags : 0u,
 	    bridge.scan_starts);
+}
+
+/*
+ * The device reported its hardware sweep finished (the substitute forwards the
+ * driver's ieee80211_scan_completed here). This is the hw route's end-of-sweep
+ * signal: nothing on this side walks a channel list for a firmware sweep, so
+ * without it the window would stay open until the stack happened to leave the
+ * scan state. A completion with no sweep armed is not an error - the device may
+ * report a sweep this side already closed - so it is ignored.
+ */
+void
+wlan_bridge_scan_hw_complete(void)
+{
+
+	if (!bridge.attached || !bridge.scanning)
+		return;
+	bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_HW);
 }
 
 int
@@ -1167,6 +1268,24 @@ wlan_bridge_scan_dwell(void)
 
 	if (!bridge.attached || !bridge.scanning)
 		return -EINVAL;
+	/*
+	 * A hardware sweep has no walk to dwell: the device is tuning and
+	 * listening on its own, and calling next_scan here would tune the radio
+	 * out from under it (the request's channel list is the device's, not
+	 * this walk's). What still matters is the state check: if the stack left
+	 * its scan world on its own, the window has to close and the device has
+	 * to be told to stop, which is the same close the software path does.
+	 */
+	if (bridge.scan_hw) {
+		wlan_port_serializer_lock();
+		if (bridge.ic->ic_state != IEEE80211_S_SCAN) {
+			wlan_port_serializer_unlock();
+			bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_STATE);
+			return 0;
+		}
+		wlan_port_serializer_unlock();
+		return 1;
+	}
 	/*
 	 * The state decision and the walk are one critical section.
 	 *

@@ -21,6 +21,9 @@
  * the bus came up claims, and one left unclaimed so a driver registered afterwards
  * can claim it (the "device already there" order) */
 #define	MOCK_PCIE_DEVS		3
+/* the table's capacity: the AC 7260 script appends a fourth function, so a case
+ * can hand a driver's id table a device the default three do not name */
+#define	MOCK_PCIE_MAX_DEVS	4
 #define	MOCK_PCIE_BAR_SIZE	4096
 
 /* the config-space layout the model answers with (the offsets the engine walks) */
@@ -46,7 +49,7 @@ struct mock_pcie_dev {
 };
 
 struct mock_pcie_backend {
-	struct mock_pcie_dev	dev[MOCK_PCIE_DEVS];
+	struct mock_pcie_dev	dev[MOCK_PCIE_MAX_DEVS];
 	int			n_devs;
 	/* fault injection (one-shot unless noted) */
 	int			cfg_fail_at;		/* this offset's next read fails */
@@ -71,6 +74,11 @@ struct mock_pcie_backend {
 
 /* build a fresh model: the three functions above, no fault armed */
 void	mock_pcie_reset(void);
+
+/* append the Intel AC 7260 (8086:08b1, class 0x0280) on bus 21 as a fourth
+ * function, for the driver line's synthetic chain. Call it after mock_pcie_reset
+ * and before the bus comes up; the default three functions are untouched. */
+void	mock_pcie_script_ac7260(void);
 
 /* the one live model */
 struct mock_pcie_backend *mock_pcie_backend(void);

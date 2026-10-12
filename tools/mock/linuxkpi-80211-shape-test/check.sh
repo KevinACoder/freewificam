@@ -4,12 +4,14 @@
 #          cases and the red control, and map each into container case lines.
 #
 # The harness owns the mechanism (tests/host/linuxkpi-80211-shape-test): the
-# substitute body driven by scripted drivers of each op family.  This wrapper
-# runs it, groups the cases into two container case lines, and adds the controls
-# that prove they can fail: the same harness built against a substitute that
-# never calls vif_cfg_changed must turn the 7.3 association case red, and one
-# that leaves the default link's address zero must turn the link-address case
-# red.
+# substitute body driven by scripted drivers of each op family, plus the mixed
+# combination the AC 7260 ships (new sta_state with old bss_info_changed and the
+# txq transmit path).  This wrapper runs it, groups the cases into container case
+# lines, and adds the controls that prove they can fail: the same harness built
+# against a substitute that never calls vif_cfg_changed must turn the 7.3
+# association case red, one that leaves the default link's address zero must turn
+# the link-address case red, and one whose txq drain hands nothing to the
+# driver's transmit entry must turn the 7260 txq case red.
 
 set -eu
 
@@ -35,7 +37,7 @@ case_line() {
 group() {
     name=$1
     shift
-    if grep -q '^SHAPE: summary cases=9 failed=0$' "$log_dir/run.log"; then
+    if grep -q '^SHAPE: summary cases=11 failed=0$' "$log_dir/run.log"; then
         ok=1
         for c in "$@"; do
             grep -q "^SHAPE: $c PASS" "$log_dir/run.log" || ok=0
@@ -62,9 +64,12 @@ if "$bin" > "$log_dir/run.log" 2> "$log_dir/run.err"; then
         zero-change-is-silent station-default-link
     group 6x-family-dispatch \
         6x-association 6x-leave both-families
+    group 7260-mixed-family-dispatch \
+        7260-association 7260-txq
 else
     case_line 73-family-dispatch FAIL
     case_line 6x-family-dispatch FAIL
+    case_line 7260-mixed-family-dispatch FAIL
     echo "linuxkpi-80211-shape-test: run failed" >&2
     tail -8 "$log_dir/run.log" >&2 || true
 fi
@@ -200,6 +205,39 @@ else
     case_line sta-nss-red-control FAIL
     echo "linuxkpi-80211-shape-test: the mutated substitute did not build" >&2
     tail -5 "$log_dir/mutated-nss-build.log" >&2 || true
+fi
+
+# The txq transmit path: a frame on a station queue must reach the driver's
+# transmit entry when the stack wakes the queue.  The control builds the harness
+# against a substitute whose txq drain never dequeues, so nothing is handed to
+# ops->tx; the 7260 txq case must then fail.
+mut5=$log_dir/mutated-txdrain
+rm -rf "$mut5"
+mkdir -p "$mut5"
+sed 's/while ((skb = ieee80211_tx_dequeue(hw, txq)) != NULL)/while (0)/' \
+    "$root/components/linuxkpi/linuxkpi_80211.c" > "$mut5/linuxkpi_80211.c"
+if grep -q 'while ((skb = ieee80211_tx_dequeue' "$mut5/linuxkpi_80211.c"; then
+    case_line tx-drain-red-control FAIL
+    echo "linuxkpi-80211-shape-test: the tx-drain mutation did not apply" >&2
+elif make -C "$root/tests/host/linuxkpi-80211-shape-test" \
+        ENGINE_EXTRA_SRC="$mut5/linuxkpi_80211.c" \
+        BUILD_DIR="$mut5/build" > "$log_dir/mutated-txdrain-build.log" 2>&1; then
+    if timeout -k 5 120 "$mut5/build/linuxkpi-80211-shape-test" > "$log_dir/mutated-txdrain-run.log" 2>&1; then
+        case_line tx-drain-red-control FAIL
+        echo "linuxkpi-80211-shape-test: the non-draining substitute passed (it must fail)" >&2
+    else
+        if grep -q '^SHAPE: 7260-txq FAIL' "$log_dir/mutated-txdrain-run.log"; then
+            case_line tx-drain-red-control PASS
+        else
+            case_line tx-drain-red-control FAIL
+            echo "linuxkpi-80211-shape-test: the tx-drain red control failed elsewhere" >&2
+            grep '^SHAPE: ' "$log_dir/mutated-txdrain-run.log" >&2 || true
+        fi
+    fi
+else
+    case_line tx-drain-red-control FAIL
+    echo "linuxkpi-80211-shape-test: the mutated substitute did not build" >&2
+    tail -5 "$log_dir/mutated-txdrain-build.log" >&2 || true
 fi
 
 exit "$failures"

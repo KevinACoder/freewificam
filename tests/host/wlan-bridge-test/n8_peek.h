@@ -50,6 +50,11 @@ int	n8_peek_scan_rows(void);
  * off-channel check reads); -1 when there is no interface */
 int	n8_peek_curchan(void);
 
+/* the stack's active channels as centre frequencies (MHz), in channel order -
+ * the set a hardware scan is handed. Returns the count written (bounded by
+ * `max`). */
+size_t	n8_peek_chan_active_freqs(uint32_t *freqs, size_t max);
+
 /* the CCMP round trip, stack-side: install the pairwise key on the joined node
  * (what the supplicant does after the handshake), clear the privacy flag again,
  * seal one AP-to-station frame with it (the peer's crypto), and read the named

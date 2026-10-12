@@ -29,6 +29,8 @@
 #define FAKE_DRIVER_ORDER_MAX	512
 #define FAKE_DRIVER_CONFIG_MAX	32
 #define FAKE_DRIVER_BSS_EV_MAX	24
+/* the hardware-scan request's channel list (the substitute's own cap is 64) */
+#define FAKE_DRIVER_HW_SCAN_MAX	64
 
 /* The headroom the double declares, the way a real driver declares it at
  * registration: mac80211 hands every frame to the driver's tx op with at least
@@ -54,6 +56,8 @@ enum fake_call {
 	FAKE_CALL_START,
 	FAKE_CALL_STOP,
 	FAKE_CALL_WAKE_TXQ,
+	FAKE_CALL_HW_SCAN,
+	FAKE_CALL_HW_SCAN_CANCEL,
 };
 
 struct fake_driver_state {
@@ -114,6 +118,16 @@ struct fake_driver_state {
 	unsigned int tx_headroom_min;
 	unsigned int tx_headroom_bad;
 
+	/* the hardware-scan route's record: what the driver's hw_scan op was
+	 * handed (the request object's channel list and SSID count), whether the
+	 * object was readable while the call ran, and the cancel count */
+	unsigned int hw_scan_calls;
+	unsigned int hw_scan_cancel_calls;
+	unsigned int hw_scan_n_channels;
+	unsigned int hw_scan_n_ssids;
+	int hw_scan_req_readable;
+	uint32_t hw_scan_freqs[FAKE_DRIVER_HW_SCAN_MAX];
+
 	enum fake_call order[FAKE_DRIVER_ORDER_MAX];
 	unsigned int order_count;
 
@@ -129,5 +143,12 @@ const struct fake_driver_state *fake_driver_state(void);
 void	fake_driver_reset_pending_probe(void);
 void	fake_driver_knob_filter_refuses(int on);
 void	fake_driver_knob_double_free_tx(unsigned int nth);
+/*
+ * Give the driver the hardware-scan shape (ops->hw_scan + cancel_hw_scan, no
+ * sw_scan_start - the AC 7260's mvm ops table) or the software one. The ops
+ * table the bridge holds is the one this switches, so the bridge's own route
+ * choice follows it on the next wlan_bridge_scan_start().
+ */
+void	fake_driver_knob_hw_scan(int on);
 
 #endif /* FAKE_DRIVER_H */
