@@ -60,5 +60,8 @@ void qsort(void *base, size_t nmemb, size_t width,
 	   int (*cmp)(const void *, const void *));
 int sscanf(const char *str, const char *fmt, ...);
 int strcasecmp(const char *a, const char *b);
+int strncasecmp(const char *a, const char *b, size_t n);
+char *strpbrk(const char *s, const char *accept);
+char *strsep(char **stringp, const char *delim);
 
 #endif /* FREEWIFICAM_MINILIBC_H */

@@ -30,6 +30,7 @@
 #include "linuxkpi_impl.h"
 
 #include <linux/sched.h>
+#include <linux/seq_file.h>
 
 /* ------------------------------------------------------------------ */
 /* logging                                                             */
@@ -102,6 +103,92 @@ void lkpi_fatal(const char *what)
 {
 	lkpi_printf(ULOG_INFO_LEVEL, ULOG_CRITICAL_LEVEL, "lkpi: fatal: %s\n", what != NULL ? what : "(unspecified)");
 	abort();
+}
+
+/* ------------------------------------------------------------------ */
+/* two kernel helpers the face declares and the core owns              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * simple_strtoul ([LNX] include/linux/kernel.h): the permissive integer parser
+ * the kernel keeps beside its stricter kstrto* family. The contract header
+ * declares it (linuxkpi_core.h), so its body lives here with the rest of the
+ * service core. It parses in place, honours a base of 0 or 16 with the 0x
+ * prefix, and always reports where it stopped - the vendored callers use that
+ * end pointer to walk a comma-separated list, which is why a parse that stops
+ * early must still set it.
+ */
+unsigned long simple_strtoul(const char *cp, char **endp, unsigned int base)
+{
+	unsigned long result = 0UL;
+
+	if (cp == NULL) {
+		if (endp != NULL) {
+			*endp = NULL;
+		}
+		return 0UL;
+	}
+
+	if (base == 0U) {
+		if (cp[0] == '0' && (cp[1] == 'x' || cp[1] == 'X')) {
+			base = 16U;
+			cp += 2;
+		} else if (cp[0] == '0') {
+			base = 8U;
+			cp += 1;
+		} else {
+			base = 10U;
+		}
+	} else if (base == 16U && cp[0] == '0' && (cp[1] == 'x' || cp[1] == 'X')) {
+		cp += 2;
+	}
+
+	for (;; cp++) {
+		unsigned char c = (unsigned char)*cp;
+		unsigned long value;
+
+		if (c >= '0' && c <= '9') {
+			value = (unsigned long)(c - '0');
+		} else if (c >= 'a' && c <= 'z') {
+			value = (unsigned long)(c - 'a') + 10UL;
+		} else if (c >= 'A' && c <= 'Z') {
+			value = (unsigned long)(c - 'A') + 10UL;
+		} else {
+			break;
+		}
+		if (value >= (unsigned long)base) {
+			break;
+		}
+		result = result * (unsigned long)base + value;
+	}
+
+	if (endp != NULL) {
+		*endp = (char *)cp;
+	}
+
+	return result;
+}
+
+/*
+ * seq_printf ([LNX] include/linux/seq_file.h): the face declares it because the
+ * vendored debug headers expand it from their own logging macros, and it has no
+ * body on this port because the whole /proc surface is compiled out. The
+ * vendored callers are register and reserved-page dumps, so the information has
+ * exactly one place to go here: the console log the rest of the port writes to.
+ * The formatting is bounded, so a dump cannot overflow the log line.
+ */
+void seq_printf(struct seq_file *m, const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+
+	(void)m;
+
+	va_start(ap, fmt);
+	(void)vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+
+	lkpi_printf(ULOG_INFO_LEVEL, "%s", line);
 }
 
 /* ------------------------------------------------------------------ */

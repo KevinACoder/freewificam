@@ -477,4 +477,70 @@ void abort(void)
 	for (;;) {
 	}
 }
+
+/* --- three more of the same shape ------------------------------------------
+ *
+ * The vendor driver's parsing paths (its efuse and register-dump readers, and
+ * the string splitter behind them) reference these three, and the face declares
+ * them (components/linuxkpi/include/linux/string.h) without owning a body -
+ * they are plain C string helpers, so they belong to this surface rather than
+ * to the compatibility face, exactly like strcasecmp above.
+ */
+
+int strncasecmp(const char *a, const char *b, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		unsigned char ca = (unsigned char)a[i];
+		unsigned char cb = (unsigned char)b[i];
+		int da = (ca >= 'A' && ca <= 'Z') ? ca - 'A' + 'a' : ca;
+		int db = (cb >= 'A' && cb <= 'Z') ? cb - 'A' + 'a' : cb;
+
+		if (da != db) {
+			return da - db;
+		}
+		if (ca == '\0') {
+			break;
+		}
+	}
+
+	return 0;
+}
+
+char *strpbrk(const char *s, const char *accept)
+{
+	for (; *s != '\0'; s++) {
+		const char *a;
+
+		for (a = accept; *a != '\0'; a++) {
+			if (*s == *a) {
+				return (char *)s;
+			}
+		}
+	}
+
+	return 0;
+}
+
+char *strsep(char **stringp, const char *delim)
+{
+	char *start;
+	char *end;
+
+	if (stringp == 0 || *stringp == 0) {
+		return 0;
+	}
+
+	start = *stringp;
+	end = strpbrk(start, delim);
+	if (end != 0) {
+		*end = '\0';
+		*stringp = end + 1;
+	} else {
+		*stringp = 0;
+	}
+
+	return start;
+}
 #endif /* CONFIG_LIBC_COMPLETION */
