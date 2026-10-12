@@ -1,0 +1,15 @@
+# Interaction steps for the RTL8189FTV image: sent by the host runner in order,
+# with the expected response after each; the judge verifies the responses in the
+# received stream. One command per line, CR-terminated by the sender.
+#
+# Read-only checks only, and deliberately no `exit`: an early exit would close
+# the shell the round's operator may still want after these.
+#
+# Both steps are race-free by construction: `help` lists the command tables the
+# image was built with, and `wlan8189 status` answers in one fixed shape whether
+# or not the driver has attached yet (the case table and the shell run
+# concurrently).
+# send	expect
+	user@rk3568:/\$
+help\r	total function \d+[\s\S]*total variable \d+
+wlan8189 status\r	wlan8189: attached=\d+ bss=\d+
