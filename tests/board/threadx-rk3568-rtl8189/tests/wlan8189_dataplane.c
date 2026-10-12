@@ -55,6 +55,13 @@ struct wiphy *lkpicfg_wiphy(void);
 #define WLAN8189_DHCP_WAIT_MS	45000U
 #define WLAN8189_PING_WAIT_MS	9000U
 
+/* The measurement window: the host runner powers the board down as soon as the
+ * suite's result line prints, so a host-side client connecting to the server
+ * below would be cut off mid-run. The case keeps the server up for this bounded
+ * window first, long enough for the round's client to connect and finish. The
+ * throughput is recorded, not judged, so the window is not a verdict input. */
+#define WLAN8189_IPERF_WINDOW_MS	20000U
+
 static struct netif g_netif;
 
 /* the presentation layer's link steps, handed to the backend's forwarding slot */
@@ -202,6 +209,15 @@ void wlan8189_dataplane_chain( void )
 	UNLOCK_TCPIP_CORE();
 	LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 	    LWIPERF_TCP_PORT_DEFAULT );
+
+	/* hold the server up for the measurement window (see the define): the
+	 * tcpip thread services it independently of this case thread */
+	LOG_ANCHOR( "wlan8189: iperf window %u s\n",
+	    (unsigned)( WLAN8189_IPERF_WINDOW_MS / 1000U ) );
+	for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS; waited += 200U ) {
+		(void)osDelay( 200U );
+	}
+	LOG_ANCHOR( "wlan8189: iperf window done\n" );
 }
 
 BOARD_TEST( "wlan8189-dataplane", wlan8189_dataplane_chain );
