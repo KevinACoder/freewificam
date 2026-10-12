@@ -28,7 +28,8 @@ the camera side is not started.
   single port layer for the OS, the bus and the network presentation.
 - Linux SoftMAC driver lines, taken unchanged, with the RTOS-facing interface
   supplied underneath them.
-- A USB host stack (CherryUSB) with a first-party interface layer.
+- A USB host stack (CherryUSB) with a first-party interface layer, and an
+  SDIO/SDMMC host stack with a first-party interface layer.
 - A supplicant port and an lwIP network stack.
 - Two test tiers: a host mock tier that runs in seconds to minutes, and a board
   regression tier.
@@ -36,16 +37,19 @@ the camera side is not started.
 
 ## Supported hardware and line status
 
-Reference board: an RK3568 ITX board (64-bit ARM). The three USB WiFi lines
-below are brought up on it. The status of each line is what has actually been
-measured, not what is planned.
+Reference board: an RK3568 ITX board (64-bit ARM). Three USB WiFi lines and one
+SDIO line are brought up on it. The status of each line is what has actually
+been measured, not what is planned.
 
 | Line | Chip | State |
 |---|---|---|
 | `rtl8xxxu` | RTL8188EUS | Full chain on hardware: probe, scan, WPA2, DHCP, ping, TCP data. |
 | `rtw88` | RTL8821CU | Full chain on hardware, including a boot-time CD-ROM to WLAN mode switch. |
 | `rtw89` | RTL8851BU | **Experimental.** Full chain reached, but join is intermittent and the link is poor. |
-| SDIO | RTL8189FTV | Design only; no hardware evidence. |
+| SDIO | RTL8189FTV | Full chain on hardware, over the SDIO bus rather than USB. The vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. |
+
+The SDIO line and its figures below landed after the `0.1.0` tag was cut; the
+tag itself predates it.
 
 "Full chain" means the card is enumerated, its firmware loaded, it scans, it
 joins a WPA2 network, it gets an address over DHCP, it answers ping, and TCP
@@ -66,12 +70,17 @@ are not shown here.
 | RTL8188EUS | 4.00 / 4.66 Mbit/s | 42.6 / 43.9 / 45.3 Mbit/s |
 | RTL8821CU | 3.65 Mbit/s | 63.7 / 66.0 / 68.2 Mbit/s |
 | RTL8851BU | 136 / 173 Kbit/s | 23.9 / 25.3 / 26.5 Mbit/s |
+| RTL8189FTV (SDIO) | 10.6 / 1.18 / 10.9 Mbit/s | 45.0 / 46.4 Mbit/s |
 
-All three rows are on channel 1 (2412 MHz) against the same access point, BSSID
-`14:a3:2f:18:07:2c`; each Linux cell is min/avg/max over three 30 s runs. The
-RTOS figures are roughly one tenth, one eighteenth and one hundred-and-seventieth
-of the Linux figures. Linux also moves data board to host on all three lines; the
-RTOS reverse direction is not measured yet.
+All four rows are on channel 1 (2412 MHz) against the same access point, BSSID
+`14:a3:2f:18:07:2c`; each Linux cell is min/avg/max over three 30 s runs, except
+the SDIO row, whose Linux cell is the range the lab's ground-truth ledger records
+for the same card. The RTOS figures are roughly one tenth, one eighteenth, one
+hundred-and-seventieth and (for the SDIO line) one quarter of the Linux figures.
+The SDIO line is the closest to Linux and the least stable: two of its three runs
+sat at 10.6 and 10.9 Mbit/s while the third collapsed to 1.18 Mbit/s. Linux also
+moves data board to host on all four lines; the RTOS reverse direction is not
+measured yet.
 
 The gap to Linux is large, and it is the current open problem. It is stated
 here rather than hidden because the value of the port is in the structure, not
