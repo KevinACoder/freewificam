@@ -27,8 +27,8 @@
  *
  * Anchors (the judge checks each on PASS):
  *   wlan8189: sdio up card=<vid>:<pid> funcs=<n>
- *   wlan8189: driver attached mac=<addr>
  *   wlan8189: netdev up rc=0
+ *   wlan8189: driver attached mac=<addr>
  *   wlan8189: probe ok
  */
 
@@ -40,6 +40,8 @@
 #include "lkpi_sdio_backend.h"
 #include "linuxkpi_sdio.h"
 #include "linuxkpi_cfg80211.h"
+
+#include <linux/netdevice.h>
 
 /* the board side of the SDIO seam: the install entry point the case calls. The
  * port header names the imported stack's types, so the stack's own SDIO header
@@ -54,6 +56,7 @@ void wlan8189_probe_chain( void )
 {
 	struct lkpi_sdio_be_card_info info;
 	struct wiphy *wiphy;
+	struct net_device *dev;
 	uint8_t mac[6];
 	unsigned int i;
 	int st;
@@ -87,6 +90,20 @@ void wlan8189_probe_chain( void )
 		return;
 	}
 
+	/*
+	 * Bring the interface up first: the driver's open path is what runs its
+	 * hal init far enough for the interface to be usable, and its scan path
+	 * refuses while the device still reads as stopped. Doing it here rather
+	 * than after the address check means a wrong address does not also leave
+	 * the interface closed.
+	 */
+	st = lkpicfg_netdev_up( wiphy );
+	LOG_ANCHOR( "wlan8189: netdev up rc=%d\n", st );
+	if( st != 0 ) {
+		board_case_fail( "the driver's network interface could not be brought up" );
+		return;
+	}
+
 	if( lkpicfg_get_hwaddr( wiphy, mac ) != 0 ) {
 		board_case_fail( "the registered device reports no hardware address" );
 		return;
@@ -95,8 +112,18 @@ void wlan8189_probe_chain( void )
 	LOG_ANCHOR( "wlan8189: driver attached mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
 		    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5] );
 
-	/* a hardware address of all zeros is the shape of "the driver never read
-	 * the chip's eFuse", so it is refused here rather than counted as attach */
+	/* the second address source, named so a disagreement between the two is
+	 * visible in the log rather than inferred */
+	dev = lkpicfg_netdev( wiphy );
+	if( dev != NULL ) {
+		LOG_ANCHOR( "wlan8189: netdev addr=%02x:%02x:%02x:%02x:%02x:%02x\n",
+			    dev->dev_addr[0], dev->dev_addr[1], dev->dev_addr[2],
+			    dev->dev_addr[3], dev->dev_addr[4], dev->dev_addr[5] );
+	}
+
+	/* a hardware address of all zeros on BOTH sources is the shape of "the
+	 * driver never read the chip's eFuse", so it is refused here rather than
+	 * counted as attach */
 	for( i = 0U; i < sizeof( mac ); i++ ) {
 		if( mac[i] != 0U ) {
 			break;
@@ -104,13 +131,6 @@ void wlan8189_probe_chain( void )
 	}
 	if( i == sizeof( mac ) ) {
 		board_case_fail( "the hardware address is all zero (the driver did not read the chip)" );
-		return;
-	}
-
-	st = lkpicfg_netdev_up( wiphy );
-	LOG_ANCHOR( "wlan8189: netdev up rc=%d\n", st );
-	if( st != 0 ) {
-		board_case_fail( "the driver's network interface could not be brought up" );
 		return;
 	}
 

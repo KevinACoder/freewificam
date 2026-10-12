@@ -132,6 +132,17 @@ void wlan8189_scan_chain( void )
 		return;
 	}
 
+	/*
+	 * The interface must be up before the driver will consider a scan: its
+	 * scan path refuses while the device still reads as stopped, and it is the
+	 * open path that takes it out of that state. The call is idempotent on this
+	 * driver, so a probe case that already opened the interface costs nothing.
+	 */
+	if( lkpicfg_netdev_up( wiphy ) != 0 ) {
+		board_case_fail( "the driver's network interface could not be brought up" );
+		return;
+	}
+
 	scan_done_seen = 0U;
 	scan_bss_reports = 0U;
 	if( lkpicfg_consumer_register( &wlan8189_consumer, NULL ) != 0 ) {
