@@ -81,6 +81,30 @@ enum ieee80211_radiotap_presence {
 	IEEE80211_RADIOTAP_UHR = 38,
 };
 
+/* [LNX] include/net/ieee80211_radiotap.h:102-110: the IEEE80211_RADIOTAP_FLAGS field's
+ * bits. */
+enum ieee80211_radiotap_flags {
+	IEEE80211_RADIOTAP_F_CFP = 0x01,
+	IEEE80211_RADIOTAP_F_SHORTPRE = 0x02,
+	IEEE80211_RADIOTAP_F_WEP = 0x04,
+	IEEE80211_RADIOTAP_F_FRAG = 0x08,
+	IEEE80211_RADIOTAP_F_FCS = 0x10,
+	IEEE80211_RADIOTAP_F_DATAPAD = 0x20,
+	IEEE80211_RADIOTAP_F_BADFCS = 0x40,
+};
+
+/* [LNX] include/net/ieee80211_radiotap.h:113-121: the IEEE80211_RADIOTAP_CHANNEL
+ * field's band/modulation bits. */
+enum ieee80211_radiotap_channel_flags {
+	IEEE80211_CHAN_CCK = 0x0020,
+	IEEE80211_CHAN_OFDM = 0x0040,
+	IEEE80211_CHAN_2GHZ = 0x0080,
+	IEEE80211_CHAN_5GHZ = 0x0100,
+	IEEE80211_CHAN_DYN = 0x0400,
+	IEEE80211_CHAN_HALF = 0x4000,
+	IEEE80211_CHAN_QUARTER = 0x8000,
+};
+
 /* [LNX] include/net/ieee80211_radiotap.h:140-147 */
 enum ieee80211_radiotap_mcs_have {
 	IEEE80211_RADIOTAP_MCS_HAVE_FEC = 0x10,
@@ -232,5 +256,14 @@ enum ieee80211_radiotap_eht_usig_common {
 		IEEE80211_RADIOTAP_EHT_USIG_COMMON_BW_160MHZ		= 3,
 		IEEE80211_RADIOTAP_EHT_USIG_COMMON_BW_320MHZ_1		= 4,
 };
+
+/* [LNX] include/net/ieee80211_radiotap.h:800-805: the header-length accessor the
+ * monitor-mode receive path calls to step over a captured radiotap header. */
+static inline u16 ieee80211_get_radiotap_len(const char *data)
+{
+	const struct ieee80211_radiotap_header *hdr = (const void *)data;
+
+	return get_unaligned_le16(&hdr->it_len);
+}
 
 #endif /* _LINUXKPI_NET_IEEE80211_RADIOTAP_H_ */

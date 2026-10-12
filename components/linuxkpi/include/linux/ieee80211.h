@@ -135,11 +135,14 @@ enum ieee80211_sa_query_action {
 
 /* Subtypes this project reaches for; the rest arrive with their consumers. */
 #define	IEEE80211_STYPE_ASSOC_REQ	0x0000
+#define	IEEE80211_STYPE_REASSOC_REQ	0x0020
 #define	IEEE80211_STYPE_PROBE_REQ	0x0040
 #define	IEEE80211_STYPE_PROBE_RESP	0x0050
 #define	IEEE80211_STYPE_BEACON		0x0080
 #define	IEEE80211_STYPE_QOS_DATA	0x0080
+#define	IEEE80211_STYPE_DISASSOC	0x00a0
 #define	IEEE80211_STYPE_AUTH		0x00b0
+#define	IEEE80211_STYPE_DEAUTH		0x00c0
 #define	IEEE80211_STYPE_ACTION		0x00d0
 
 /* ------------------------------------------------------------------ */
@@ -187,6 +190,11 @@ enum ieee80211_sa_query_action {
 
 #define	MHZ_TO_KHZ(freq)	((freq) * 1000)
 #define	MBM_TO_DBM(gain)	((gain) / 100)
+/* [LNX] include/linux/ieee80211.h:2635-2638: the antenna-gain and EIRP conversions the
+ * regulatory rule macro is written with. */
+#define	DBI_TO_MBI(gain)	((gain) * 100)
+#define	MBI_TO_DBI(gain)	((gain) / 100)
+#define	DBM_TO_MBM(gain)	((gain) * 100)
 
 /* ------------------------------------------------------------------ */
 /* header layouts                                                      */
@@ -545,6 +553,33 @@ struct ieee80211_p2p_noa_attr {
 	u8 index;
 	u8 oppps_ctwindow;
 	struct ieee80211_p2p_noa_desc desc[IEEE80211_P2P_NOA_DESC_MAX];
+} __packed;
+
+/* [LNX] include/linux/ieee80211.h:2270 */
+#define	WLAN_PMKID_LEN			16
+
+/* [LNX] include/linux/ieee80211.h:2243-2244: the two AKM selectors the compiled set
+ * names, at the interface's values. */
+#define	WLAN_AKM_SUITE_8021X		SUITE(0x000FAC, 1)
+#define	WLAN_AKM_SUITE_PSK		SUITE(0x000FAC, 2)
+
+/* [LNX] include/linux/ieee80211.h: the HT and VHT capability elements, carried whole
+ * because the connection and IBSS request records embed them by value. */
+struct ieee80211_ht_cap {
+	__le16	cap_info;
+	u8	ampdu_params_info;
+
+	/* 16 bytes MCS information */
+	struct ieee80211_mcs_info mcs;
+
+	__le16	extended_ht_cap_info;
+	__le32	tx_BF_cap_info;
+	u8	antenna_selection_info;
+} __packed;
+
+struct ieee80211_vht_cap {
+	__le32	vht_cap_info;
+	struct ieee80211_vht_mcs_info supp_mcs;
 } __packed;
 
 /* [LNX] include/linux/ieee80211.h:2275 */

@@ -29,4 +29,27 @@
 #define	__noreturn		__attribute__((__noreturn__))
 #endif
 
+/*
+ * The interface's spelling of `inline` ([LNX] include/linux/compiler_types.h:235:
+ * `#define inline inline __gnu_inline __inline_maybe_unused notrace`, with
+ * __gnu_inline from compiler_attributes.h:165). It is carried here because it is a
+ * semantic switch, not a decoration: without the __gnu_inline marker a plain `inline`
+ * function has C99 external linkage, and GCC then diagnoses every reference it makes
+ * to an internal-linkage helper ("is static but used in inline function ... which is
+ * not static") - a diagnostic the interface's own spelling does not produce, so the
+ * vendored bytes are compiled here with the interface's spelling. The __unused part
+ * is the interface's __inline_maybe_unused and only silences the not-used diagnostic
+ * for an inline the compiler chooses not to emit. `__inline` (one underscore) is left
+ * alone on purpose: the interface reserves it for the bare keyword (compiler_types.h:
+ * "the spelling __inline is strictly reserved for referring to the bare keyword").
+ */
+#ifndef __gnu_inline
+#define	__gnu_inline		__attribute__((__gnu_inline__))
+#endif
+#ifndef __inline_maybe_unused
+#define	__inline_maybe_unused	__maybe_unused
+#endif
+#define	inline			inline __gnu_inline __inline_maybe_unused
+#define	__inline__		inline
+
 #endif /* _LINUXKPI_LINUX_COMPILER_H_ */

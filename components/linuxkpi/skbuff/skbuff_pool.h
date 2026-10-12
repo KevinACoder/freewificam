@@ -40,6 +40,7 @@ extern "C" {
 
 /* ---- struct sk_buff (Linux shape, moved from linuxkpi_core.h) ------ */
 struct sk_buff_head;
+struct net_device;
 
 struct sk_buff {
 	struct sk_buff	*next;
@@ -66,7 +67,9 @@ struct sk_buff {
 	 * value is the magic is a use-after-free write and is named. */
 	uint32_t	_gen;
 
-	void		*dev;		/* struct device * */
+	struct net_device *dev;	/* the interface this buffer is on, as on the interface
+				 * ([LNX] skbuff.h: `struct net_device *dev`); typed, not
+				 * void, because the drivers read fields through it */
 	void		*sk;
 
 	/* mac80211 control/status block (IEEE80211_SKB_CB lives here).

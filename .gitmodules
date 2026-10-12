@@ -35,3 +35,7 @@
 	path = third-party/rtw88
 	url = https://github.com/KevinACoder/rtw88.git
 	branch = linux-7.3-rc2
+[submodule "third-party/rtl8189fs"]
+	path = third-party/rtl8189fs
+	url = https://github.com/KevinACoder/rtl8189ES_linux.git
+	branch = rtl8189fs

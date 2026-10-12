@@ -38,6 +38,19 @@
 #endif
 #else
 #include "../../linuxkpi_core.h"
+
+/*
+ * [LNX] include/uapi/asm-generic/errno.h:84,109: the two numbers the compiled set
+ * names that the contract header's error-number block does not (yet) state. They are
+ * the platform's values (ENETDOWN 100, ENOMEDIUM 123) and are guarded so a future
+ * statement in the contract header wins without a redefinition.
+ */
+#ifndef ENETDOWN
+#define ENETDOWN 100
+#endif
+#ifndef ENOMEDIUM
+#define ENOMEDIUM 123
+#endif
 #endif
 
 #endif /* _LINUXKPI_LINUX_ERRNO_H_ */

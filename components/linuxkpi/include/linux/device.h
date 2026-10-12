@@ -2,6 +2,9 @@
 #define _LINUXKPI_LINUX_DEVICE_H_
 #include "../../linuxkpi_core.h"
 #include <linux/sysfs.h>
+/* [LNX] include/linux/device.h:25 includes <linux/pm.h>; the power-management table a
+ * driver hangs off its bus driver record reaches a unit through it. */
+#include <linux/pm.h>
 
 /* device_attribute / DEVICE_ATTR_RO: the sysfs attribute shape rtw89's
  * usb.c declares (serial_number/uuid show callbacks).  `struct device`
