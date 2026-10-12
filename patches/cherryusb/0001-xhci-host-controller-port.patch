@@ -86,7 +86,7 @@ new file mode 100644
 index 0000000..bac3b09
 --- /dev/null
 +++ b/port/xhci/usb_hc_xhci.c
-@@ -0,0 +1,2699 @@
+@@ -0,0 +1,2719 @@
 +/*
 + * @file   usb_hc_xhci.c
 + * @brief  DWC3 xHCI host controller driver for the RK3568 USB3 socket
@@ -531,9 +531,21 @@ index 0000000..bac3b09
 + * re-arm the ring). */
 +static struct xhci_dev *xhci_find_dev(struct xhci_hcd *hcd, uint8_t slot_id);
 +static void xhci_event_process(struct xhci_hcd *hcd);
++
++#ifndef CONFIG_USBHOST_XHCI_DBG_DUMP
++/* Bring-up forensics: the xHCI register and context dump the 2026-09/10 debug
++ * rounds used.  Off by default - it prints a burst per control transfer and per
++ * timeout, and those lines are unique in their addresses, so a log sink cannot
++ * fold them and a throughput measurement's own lines disappear under them.  Set
++ * it to 1 to bring the dump back for a debugging round. */
++#define CONFIG_USBHOST_XHCI_DBG_DUMP 0
++#endif
++
++#if CONFIG_USBHOST_XHCI_DBG_DUMP
 +static void xhci_ep0_dbg_dump(struct xhci_hcd *hcd, struct xhci_dev *dev,
 +			      struct xhci_ring *ring, struct usbh_urb *urb,
 +			      uint32_t irq0, uint32_t tevt0, const char *why);
++#endif /* CONFIG_USBHOST_XHCI_DBG_DUMP */
 +
 +static int xhci_do_command(struct xhci_hcd *hcd, const struct xhci_trb *trb,
 +			   uint32_t timeout_ms)
@@ -1737,18 +1749,22 @@ index 0000000..bac3b09
 +		 * (~200 ctrl/s); the ep0 path has since been board-proven
 +		 * through a LINK-straddling wrap, so the steady-state
 +		 * sample dropped to every 4096 - timeouts still dump */
++#if CONFIG_USBHOST_XHCI_DBG_DUMP
 +		if ((hcd->dbg_ctrl_n <= 4U) ||
 +		    ((hcd->dbg_ctrl_n & 0xFFFU) == 0U)) {
 +			xhci_ep0_dbg_dump(hcd, dev, ring, urb, hcd->dbg_irq_n,
 +					  hcd->dbg_tevt_n, "submit");
 +		}
++#endif /* CONFIG_USBHOST_XHCI_DBG_DUMP */
 +	}
 +
 +	if (urb->timeout > 0U) {
 +		/* the completion path gives the ring's waitsem (the ehci
 +		 * qh->waitsem shape) */
++#if CONFIG_USBHOST_XHCI_DBG_DUMP
 +		uint32_t irq0 = hcd->dbg_irq_n;
 +		uint32_t tevt0 = hcd->dbg_tevt_n;
++#endif /* CONFIG_USBHOST_XHCI_DBG_DUMP */
 +
 +		ret = usb_osal_sem_take(ring->waitsem, urb->timeout);
 +		if (ret < 0) {
@@ -1763,11 +1779,13 @@ index 0000000..bac3b09
 +		if (ret < 0) {
 +			urb->timeout = 0U;
 +			hcd->dbg_tmo_n++;
++#if CONFIG_USBHOST_XHCI_DBG_DUMP
 +			if ((hcd->dbg_tmo_n <= 4U) ||
 +			    ((hcd->dbg_tmo_n & 0x1FU) == 0U)) {
 +				xhci_ep0_dbg_dump(hcd, dev, ring, urb, irq0,
 +						  tevt0, "timeout");
 +			}
++#endif /* CONFIG_USBHOST_XHCI_DBG_DUMP */
 +			usbh_kill_urb(urb);
 +			return ret;
 +		}
@@ -1783,6 +1801,7 @@ index 0000000..bac3b09
 + * The controller-owned device context is invalidated before the read; the
 + * event window shows the control words of the cells the next drain pass
 + * would evaluate; the irq/tevt snapshots bound what moved during the wait. */
++#if CONFIG_USBHOST_XHCI_DBG_DUMP
 +static void xhci_ep0_dbg_dump(struct xhci_hcd *hcd, struct xhci_dev *dev,
 +			      struct xhci_ring *ring, struct usbh_urb *urb,
 +			      uint32_t irq0, uint32_t tevt0, const char *why)
@@ -1846,6 +1865,7 @@ index 0000000..bac3b09
 +		hcd->dbg_tevt_n, hcd->dbg_drop_urb, hcd->dbg_drop_dev,
 +		hcd->dbg_ctrl_n, hcd->dbg_tmo_n);
 +}
++#endif /* CONFIG_USBHOST_XHCI_DBG_DUMP */
 +
 +int usbh_submit_urb(struct usbh_urb *urb)
 +{
