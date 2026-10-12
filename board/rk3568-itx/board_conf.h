@@ -63,6 +63,48 @@
 /* Distributor default SPI priority (mid). Callers override per interrupt. */
 #define BOARD_SPI_DEFAULT_PRIORITY_RAW	0xa0u
 
+/* Priority for handlers that call a kernel FromISR API, RAW 8-bit GIC form:
+ * logical level 11 in the top nibble. Lower raw = more urgent, so a line left
+ * at the SPI default (0xa0) sits ABOVE this ceiling and a handler that wakes a
+ * waiter trips the port's own priority assertion. The PCIe completion handlers
+ * (LPI property bytes) use this level. */
+#define BOARD_IRQ_PRIORITY_API_CALL_RAW	0xb0u
+
+/* --- GICv3 ITS (message interrupts for PCIe endpoints) --------------------- */
+
+/* GIC-600 ITS register file. An endpoint's MSI is a posted write to the ITS
+ * GITS_TRANSLATER register inside this frame; the ITS driver owns that
+ * register's offset and hands the resulting address to the MSI domain, so the
+ * only fact this table carries is the frame's base. */
+#define BOARD_ITS_BASE		0xfd440000UL
+
+/* --- PCIe controllers (DesignWare root complex) ---------------------------- */
+
+/* Two controllers. DBI frames sit above 4GiB and are mapped Device by mmu.c;
+ * the MEM windows are where firmware assigned the endpoint BARs (the NVMe's
+ * BAR0 lands at 0xf4300000, inside pcie2x1's window). Both keep the
+ * firmware-trained link - this line does not bring a link up itself. */
+#define BOARD_PCIE2X1_APB_BASE	0xfe260000UL	/* M.2 slot: the NVMe */
+#define BOARD_PCIE2X1_DBI_BASE	0x3c0000000ULL
+#define BOARD_PCIE2X1_CFG_BASE	0xf4000000ULL
+#define BOARD_PCIE2X1_MEM_BASE	0xf4200000ULL
+#define BOARD_PCIE2X1_MEM_SIZE	0x1e00000ULL	/* 30 MiB */
+
+#define BOARD_PCIE3X2_APB_BASE	0xfe280000UL	/* x4 slot: the 7260 */
+#define BOARD_PCIE3X2_DBI_BASE	0x3c0800000ULL
+#define BOARD_PCIE3X2_CFG_BASE	0xf0000000ULL
+#define BOARD_PCIE3X2_MEM_BASE	0xf0200000ULL
+#define BOARD_PCIE3X2_MEM_SIZE	0x1e00000ULL	/* 30 MiB */
+
+/* Config viewport: one bus's worth of config space (32 dev x 8 fn x 4 KiB). */
+#define BOARD_PCIE_CFG_SIZE	0x100000ULL
+
+/* MSI doorbell page the inbound iATU must forward: it is the page containing
+ * the ITS GITS_TRANSLATER register (BOARD_ITS_BASE + 0x10000). The card's DMA
+ * buffers and this page are the two inbound addresses an endpoint needs. */
+#define BOARD_PCIE_DOORBELL_BASE	0xfd450000ULL
+#define BOARD_PCIE_DOORBELL_SIZE	0x1000ULL
+
 /* --- core identity ---------------------------------------------------------- */
 
 /* HOW A CORE'S LOGICAL NUMBER IS EXTRACTED FROM MPIDR_EL1.
