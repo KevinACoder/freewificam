@@ -6,6 +6,7 @@ understand or port the stack, not just build it.
 
 | Document | Covers |
 |---|---|
+| [boards/rk3568-e4ap5g1-itx.md](boards/rk3568-e4ap5g1-itx.md) | The RK3568 ITX board: its peripherals, its pin and PHY multiplexing, and which connectors this project drives. One document per board, under `boards/` |
 | [net80211.md](net80211.md) | The wireless core: the vendored net80211 and the thin port layer under it |
 | [bus-and-threading.md](bus-and-threading.md) | The bus interface layers (USB / PCIe / SDIO) and the threading model |
 | [memory-model.md](memory-model.md) | The heap, the packet pools and the ownership rules |

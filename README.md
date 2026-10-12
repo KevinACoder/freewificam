@@ -49,6 +49,10 @@ mean the throughput is good.
 | `rtw89` | RTL8851BU | **Experimental**: full chain reached, join intermittent, link poor. |
 | SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. |
 
+The board, the connectors and pin/PHY multiplexing behind these lines, and which
+port each line is wired to, are documented per board under
+[docs/boards/](docs/boards/rk3568-e4ap5g1-itx.md).
+
 ### Throughput
 
 Host to board, single TCP stream, measured on the board. The Linux column is
