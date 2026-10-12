@@ -9,7 +9,8 @@
 #     development-ledger paths (a spec, issue or run directory reference is
 #     meaningless outside the development workspace; a URL that merely contains
 #     one of these words is not matched);
-#   - any non-ASCII text outside README.md (README.md is bilingual on purpose).
+#   - any non-ASCII text outside the README pair (README.md is the English text,
+#     README_zh.md its Chinese translation; both are deliberately non-ASCII-capable).
 #
 # This script excludes itself from the scans: it necessarily spells out the
 # very patterns it looks for. It also excludes the vendored upstream test tree
@@ -127,10 +128,10 @@ files=$(printf '%s\n%s\n%s\n' "$files" "$records" "$authored" | grep -v '^$' | s
 findings=$(printf '%s\n' "$files" | xargs -r grep -nHIE "$patterns" -- 2>/dev/null || true)
 report "$findings" "local-path/identifier scan"
 
-nonscii=$(printf '%s\n' "$files" | grep -v '^README\.md$' \
+nonscii=$(printf '%s\n' "$files" | grep -vE '^README(_zh)?\.md$' \
 	| xargs -r grep -nHP '[^\x00-\x7F]' -- 2>/dev/null \
 	| cut -d: -f1 | sort -u || true)
-report "$nonscii" "ASCII-only scan (README.md excluded)"
+report "$nonscii" "ASCII-only scan (README.md / README_zh.md excluded)"
 
 if [ $# -ge 1 ]; then
 	msgs=$(git log --format='%H%n%s%n%b' "$1" | grep -nE "$patterns" || true)
