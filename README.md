@@ -103,7 +103,8 @@ an isochronous transfer path, and the camera class is not ported.
     skbuff/  tlsf/  ...   supporting units
   ports/                  first-party glue for the imported units
     net80211/             osal / bus / net port + the driver bridge
-    cherryusb/  lwip/     bus and network backends
+    cherryusb/  fsl_sdmmc/   bus backends (USB host, SDIO host)
+    lwip/                 the network stack backend
   third-party/            pinned upstream trees (Linux drivers, RTOS kernels)
   tests/host/  tests/board/   the two test tiers
 ```

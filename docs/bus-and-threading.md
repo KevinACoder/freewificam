@@ -11,10 +11,10 @@ in-repo interface instead of the kernel's.
 |---|---|---|
 | USB | `components/linuxkpi/usb/` (the urb engine and the host-controller interface) | `ports/cherryusb/` over the vendored CherryUSB host stack (EHCI / xHCI) |
 | PCIe | `components/linuxkpi/pcie/` (in progress) | a first-party controller driver |
-| SDIO | `components/linuxkpi/sdio/` (in progress) | `ports/fsl_sdmmc/` |
+| SDIO | `components/linuxkpi/sdio/` (the byte and block transfer path, card identity and the interrupt machinery) | `ports/fsl_sdmmc/` |
 
-Only USB is exercised by a board line today. The PCIe and SDIO interface
-layers are designed and drafted but not yet brought up on hardware; see
+USB and SDIO are each exercised by a board line today. The PCIe interface layer
+is designed and drafted but not yet brought up on hardware; see
 [known-limitations.md](known-limitations.md).
 
 The shape of each layer is the same: a facade that presents the kernel API, an
