@@ -16,6 +16,14 @@
 #ifndef PCIE_CASES_H
 #define PCIE_CASES_H
 
+/** Bring the PCIe root complex and the NVMe controller up (dwc_pcie_init +
+ *  dwc_nvme_init). Runs the drivers' bring-up once per boot; a later call
+ *  reports the state the first one reached rather than re-probing, because the
+ *  storage cases run after the bus case and must not repeat what it already
+ *  did. The drivers are idempotent either way.
+ *  @retval 1 when at least one NVMe controller is up, 0 otherwise. */
+int pcie_nvme_bringup( void );
+
 /** Bring the PCIe root complex up, probe the NVMe controller, read its
  *  namespace geometry and force one real I/O completion through the interrupt
  *  path. */

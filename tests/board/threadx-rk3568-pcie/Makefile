@@ -28,6 +28,14 @@ CHERRYSH := $(ROOT)/components/cherrysh
 PORT := $(ROOT)/ports/cherrysh
 COMMON := $(ROOT)/tests/board/common
 
+# The storage stack: the vendored FatFs core (components/fatfs, upstream's own
+# bytes) and the first-party exFAT adapter (ports/fatfs: the block-device seam,
+# the diskio translation, the OS glue, the mount face and the `stor` console
+# family). The core compiles at the vendored warning level; the adapter is
+# first-party and stays warning-honest.
+FATFS := $(ROOT)/components/fatfs
+FATFS_PORT := $(ROOT)/ports/fatfs
+
 # The PCIe + NVMe domain: the board root-complex core, MSI-X table programming
 # and the flat device list, plus the NVMe block driver.
 BOARD_DRV := $(ROOT)/board/rk3568-itx/drivers
@@ -66,6 +74,8 @@ INCLUDES := \
 	-I$(PORT) \
 	-I$(ROOT)/components/tlsf \
 	-I$(COMMON) \
+	-I$(FATFS) \
+	-I$(FATFS_PORT) \
 	-I$(CMSIS)/CMSIS/Driver/Include \
 	-I$(CMSIS)/CMSIS/Core/Include/a-profile \
 	-I$(CMSIS)/CMSIS/RTOS2/Include
@@ -164,9 +174,16 @@ SHELL_SRCS := \
 	$(PORT)/board_cmds.c
 
 # Execution order = this list's order (link order for the BOARD_TESTS section).
+# pcie_bringup.c carries the shared root-complex/NVMe bring-up (no case of its
+# own); pcie_nvme_fs.c registers pcie-nvme-fs and pcie_nvme_fs_verify.c
+# registers pcie-nvme-fs-verify (a separate unit, so the table lists them in
+# execution order).
 TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
+	$(CURDIR)/tests/pcie_bringup.c \
 	$(CURDIR)/tests/pcie_nvme.c \
+	$(CURDIR)/tests/pcie_nvme_fs.c \
+	$(CURDIR)/tests/pcie_nvme_fs_verify.c \
 	$(CURDIR)/tests/pcie_cmds.c
 
 VENDORED_SRCS := \
@@ -175,6 +192,20 @@ VENDORED_SRCS := \
 	$(CHERRYSH)/builtin/clear.c \
 	$(CHERRYSH)/builtin/help.c \
 	$(CHERRYSH)/builtin/shsize.c
+
+# FatFs's vendored core: upstream's bytes, compiled at the vendored warning
+# level (VENDORED_CFLAGS), never edited.
+FATFS_VENDOR_SRCS := \
+	$(FATFS)/ff.c \
+	$(FATFS)/ffunicode.c
+
+# The first-party exFAT adapter over the vendored core (ports/fatfs).
+FATFS_PORT_SRCS := \
+	$(FATFS_PORT)/blkdev.c \
+	$(FATFS_PORT)/diskio.c \
+	$(FATFS_PORT)/fatfs_os.c \
+	$(FATFS_PORT)/fs.c \
+	$(FATFS_PORT)/fatfs_cmds.c
 
 ALLOC_SRCS := $(ROOT)/components/tlsf/tlsf.c
 
@@ -187,7 +218,8 @@ LIBCBIND_SRCS := $(ROOT)/os/threadx/board/rk3568-itx/libc_bindings.c
 
 ALL_SRCS := $(BASE_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_NVME_SRCS) $(TX_SRCS) \
 	$(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) \
-	$(VENDORED_SRCS) $(ALLOC_SRCS) $(PRINTF_SRCS) $(LIBCBIND_SRCS)
+	$(VENDORED_SRCS) $(FATFS_VENDOR_SRCS) $(FATFS_PORT_SRCS) \
+	$(ALLOC_SRCS) $(PRINTF_SRCS) $(LIBCBIND_SRCS)
 
 OBJS := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
@@ -198,7 +230,7 @@ define COMPILE_RULE
 $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@mkdir -p $$(dir $$@)
 	@echo "  CC $$<"
-	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(if $(filter $(1),$(ARCH_PCIE_SRCS) $(PCIE_NVME_SRCS)),$(PCIE_NVME_CFLAGS),$(CFLAGS)))) $(2) $(INCLUDES) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
+	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS) $(FATFS_VENDOR_SRCS)),$(VENDORED_CFLAGS),$(if $(filter $(1),$(ARCH_PCIE_SRCS) $(PCIE_NVME_SRCS)),$(PCIE_NVME_CFLAGS),$(CFLAGS)))) $(2) $(INCLUDES) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
 endef
 
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
@@ -209,6 +241,10 @@ $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS) $(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
+# the storage stack: FatFs's vendored core (vendored warning level) and the
+# first-party adapter (project warning level)
+$(foreach s,$(FATFS_VENDOR_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(FATFS_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 # the freestanding libc completion block (abs and friends) is part of this
 # image's C surface: the imported units reference the symbols
@@ -257,7 +293,10 @@ check: guards $(TARGET).elf
 	         dwc_pcie_init dwc_pcie_ctrl_count dwc_pcie_dev_count dwc_pcie_dev \
 	         dwc_pcie_cfg_read dwc_pcie_cfg_write dwc_pcie_requester_id \
 	         dwc_msix_alloc dwc_msix_release \
-	         dwc_nvme_init dwc_nvme_ctrl_count dwc_nvme_irq_count Driver_NVME; do \
+	         dwc_nvme_init dwc_nvme_ctrl_count dwc_nvme_irq_count Driver_NVME \
+	         blkdev_bind_nvme blkdev_count blkdev_read blkdev_write \
+	         fs_init fs_mount fs_unmount fs_format_exfat fs_is_mounted \
+	         fs_type_name fs_sector_size f_mount f_mkfs disk_read disk_write; do \
 		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" \
 			|| { echo "FAIL: $$s not in the image"; exit 1; }; \
 	done; \
@@ -271,7 +310,7 @@ check: guards $(TARGET).elf
 	btz=$$(( 0x$$bt - 0x$$bt0 )); \
 	[ $$(( btz % 16 )) -eq 0 ] || { echo "FAIL: BOARD_TESTS is not a whole number of entries"; exit 1; }; \
 	n=$$(( btz / 16 )); echo "board_tests bytes=$$btz entries=$$n"; \
-	[ $$n -eq 2 ] || { echo "FAIL: expected 2 cases registered, found $$n"; exit 1; }; \
+	[ $$n -eq 4 ] || { echo "FAIL: expected 4 cases registered, found $$n"; exit 1; }; \
 	echo "PASS: test table dense (no inter-entry padding)"
 	@echo "== case-name reconciliation (image / suite.mk / judge) =="
 	@sh $(COMMON)/check-case-list.sh $(TARGET).elf $(CURDIR)/suite.mk $(CURDIR)/judge.py $(OBJCOPY) $(READELF) $(BUILD)
