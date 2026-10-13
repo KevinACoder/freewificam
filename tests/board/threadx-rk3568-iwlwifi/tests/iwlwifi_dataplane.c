@@ -56,7 +56,7 @@ void	wlan_wpa_vendor_events_arm(void);
 /* the host-measurement window held after the iperf server is up: long enough
  * for the host's 15 s iperf2 client plus two flood-ping rounds (the sibling
  * line's tool), short enough to stay inside the suite's own timeout */
-#define WLAN_MEASURE_WINDOW_MS	45000U
+#define WLAN_MEASURE_WINDOW_MS	90000U
 
 static struct netif g_netif;
 
