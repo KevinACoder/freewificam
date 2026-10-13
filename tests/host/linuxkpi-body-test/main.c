@@ -37,6 +37,14 @@
  *       callback later and on another thread, two arms with no drain between
  *       them run once, teardown leaves nothing outstanding, and a burst past the
  *       queue's depth loses no callback.
+ *   L12 the wrapped-format conversion ("%pV") on the real face: a producer in
+ *       the vendored driver's own shape (a struct va_format handed through
+ *       dev_*("%pV", &vaf)) comes out as the message text, the vaf stays usable
+ *       for a second call (Linux's va_copy discipline), a literal "%" is not a
+ *       conversion, nested wrapped formats expand, and a format that mixes
+ *       "%pV" with other conversions is passed through unexpanded *and said
+ *       once* - the blindness this conversion removes must not come back in
+ *       silence.
  *
  * A failure prints the case line with `FAIL` and a detail, the run stops there,
  * and the exit code is the number of failures (0 when clean). A red-control mode
@@ -51,6 +59,7 @@
 
 #include "os/cmsis2/cmsis2.h"
 #include "linuxkpi_core.h"
+#include "linuxkpi_impl.h"
 #include "linuxkpi_usb.h"
 #include <linux/interrupt.h>
 #include <linux/usb.h>
@@ -985,6 +994,239 @@ case_l11(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* L12 the wrapped-format conversion ("%pV") on the real face          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The vendored driver's log helpers wrap a format and its arguments in a
+ * struct va_format and hand the pair through one "%pV" conversion
+ * (third-party/iwlwifi/iwl-debug.c: __iwl_err, __iwl_info, __iwl_warn,
+ * __iwl_crit, and the "(RFKILL) %pV" line). A formatter without that
+ * conversion prints the pointer and a literal 'V' - which is what the board's
+ * serial log showed (lkpi: 03:00.0: 000000000A719370V) while a probe failed,
+ * so not one word the driver said could be read. This case drives the
+ * producer's own shape and checks the text that comes out.
+ */
+
+#define L12_LINES	12
+
+static char	l12_lines[L12_LINES][256];
+static unsigned	l12_count;
+static int	l12_fault_pv_inert;	/* --fault pv-inert: the pre-fix engine path */
+
+/* capture the line and keep the platform sink's observable shape (everything
+ * the sink takes is also on stdout) */
+static void
+l12_record(const char *line)
+{
+	if (l12_count < L12_LINES)
+		snprintf(l12_lines[l12_count], sizeof(l12_lines[0]), "%s", line);
+	l12_count++;
+
+	fputs("lkpi: ", stdout);
+	fputs(line, stdout);
+	if (line[0] != '\0' && line[strlen(line) - 1] != '\n')
+		fputc('\n', stdout);
+	fflush(stdout);
+}
+
+static void
+l12_sink(ulog_level_t level, const char *line)
+{
+
+	(void)level;
+	l12_record(line);
+}
+
+/*
+ * The pre-fix face, kept for the red control: it hands the format straight to
+ * the formatter, which is the behavior that put the pointer and the 'V' on the
+ * board. With --fault pv-inert the producers below route through this instead
+ * of dev_*(), so the case's own content checks have to catch the blindness.
+ */
+static void
+l12_legacy_engine(struct device *dev, const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	int n;
+
+	n = snprintf(line, sizeof(line), "%s: ", dev->name);
+	if (n < 0)
+		return;
+	va_start(ap, fmt);
+	(void)vsnprintf(line + n, sizeof(line) - (size_t)n, fmt, ap);
+	va_end(ap);
+	l12_record(line);
+}
+
+/* the producer's shape, verbatim from iwl-debug.c: the same vaf is used twice
+ * (there it feeds dev_*() and then the trace point) */
+static void
+l12_iwl_info(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	if (l12_fault_pv_inert) {
+		l12_legacy_engine(dev, "%pV", &vaf);
+	} else {
+		dev_info(dev, "%pV", &vaf);	/* the wrapped message */
+		dev_info(dev, "%pV", &vaf);	/* and the same vaf again */
+	}
+	va_end(args);
+}
+
+/* the literal-prefix shape (__iwl_err's rfkill branch) */
+static void
+l12_rfkill_err(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	if (l12_fault_pv_inert)
+		l12_legacy_engine(dev, "(RFKILL) %pV", &vaf);
+	else
+		dev_err(dev, "(RFKILL) %pV", &vaf);
+	va_end(args);
+}
+
+/* a literal prefix that holds a "%%" escape: the escape is literal text and
+ * must not turn into a conversion hunt */
+static void
+l12_prefix_pct(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	if (l12_fault_pv_inert)
+		l12_legacy_engine(dev, "%% literal then %pV", &vaf);
+	else
+		dev_info(dev, "%% literal then %pV", &vaf);
+	va_end(args);
+}
+
+/* a wrapped format inside a wrapped format: the conversion recurses */
+static void
+l12_nested_emit(struct device *dev, struct va_format *leaf)
+{
+
+	if (l12_fault_pv_inert)
+		l12_legacy_engine(dev, "wrap(%pV)done", leaf);
+	else
+		dev_info(dev, "wrap(%pV)done", leaf);
+}
+
+static void
+l12_nested(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	l12_nested_emit(dev, &vaf);
+	va_end(args);
+}
+
+/* the documented boundary: "%pV" beside other conversions cannot be consumed
+ * correctly on this ABI, so it is passed through - and said once */
+static void
+l12_dbg_mixed(struct device *dev, const char *fn, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	dev_info(dev, "%s %pV", fn, &vaf);
+	va_end(args);
+}
+
+static int
+l12_expect(unsigned idx, const char *want, const char *what)
+{
+
+	if (idx >= l12_count || strcmp(l12_lines[idx], want) != 0) {
+		case_line("L12", 0, "%s: want \"%s\", got \"%s\"", what, want,
+		    idx < l12_count ? l12_lines[idx] : "(no line)");
+		return -1;
+	}
+	return 0;
+}
+
+static int
+case_l12(void)
+{
+	struct device dev = { .name = "03:00.0" };
+	unsigned notices = 0;
+	unsigned i;
+
+	lkpi_log_sink_register(l12_sink);
+
+	l12_iwl_info(&dev, "Detected Intel(R) %s rev %u", "AC 7260", 3);
+	l12_rfkill_err(&dev, "radio state %d", 1);
+	l12_prefix_pct(&dev, "n=%u", 9);
+	dev_info(&dev, "100%%pV ok");		/* no conversion at all */
+	dev_info(&dev, "plain %s=%d", "x", 42);	/* ordinary conversions intact */
+	l12_nested(&dev, "leaf=%u", 7);
+	l12_dbg_mixed(&dev, "iwl_dbg", "fn-inner %u", 5);
+	l12_dbg_mixed(&dev, "iwl_dbg", "fn-inner %u", 6);
+
+	if (l12_expect(0, "03:00.0: Detected Intel(R) AC 7260 rev 3",
+	    "wrapped message") != 0)
+		return -1;
+	if (l12_expect(1, "03:00.0: Detected Intel(R) AC 7260 rev 3",
+	    "the vaf reused after the call") != 0)
+		return -1;
+	if (l12_expect(2, "03:00.0: (RFKILL) radio state 1",
+	    "literal prefix") != 0)
+		return -1;
+	if (l12_expect(3, "03:00.0: % literal then n=9",
+	    "a %% escape in the prefix") != 0)
+		return -1;
+	if (l12_expect(4, "03:00.0: 100%pV ok", "the literal %pV text") != 0)
+		return -1;
+	if (l12_expect(5, "03:00.0: plain x=42", "ordinary convs") != 0)
+		return -1;
+	if (l12_expect(6, "03:00.0: wrap(leaf=7)done", "nested wrapped") != 0)
+		return -1;
+
+	/* the mixed shape: the wrapped text must NOT appear (the engine got the
+	 * format as-is), the notice must have been said exactly once for both
+	 * calls, and both producer lines must still be there */
+	if (l12_count != 10) {
+		case_line("L12", 0, "expected 10 lines (2 mixed + 1 notice), got %u",
+		    l12_count);
+		return -1;
+	}
+	for (i = 0; i < l12_count; i++) {
+		if (strstr(l12_lines[i], "fn-inner") != NULL) {
+			case_line("L12", 0, "a mixed format expanded anyway: \"%s\"",
+			    l12_lines[i]);
+			return -1;
+		}
+		if (strstr(l12_lines[i], "not expanded") != NULL)
+			notices++;
+	}
+	if (notices != 1) {
+		case_line("L12", 0, "the mixed-format notice must be said once "
+		    "(said %u times)", notices);
+		return -1;
+	}
+
+	case_line("L12", 1, "wrapped/%%-literal/nested expanded; vaf reusable; "
+	    "mixed shape noted once");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1040,9 +1282,11 @@ run_suite(void)
 		return;
 	if (case_l11() != 0)
 		return;
+	if (case_l12() != 0)
+		return;
 
 	if (failures == 0)
-		printf("LKPI: SUITE PASS cases=11\n");
+		printf("LKPI: SUITE PASS cases=12\n");
 	else
 		printf("LKPI: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -1069,7 +1313,7 @@ main(int argc, char **argv)
 			fault_name = argv[++i];
 		} else {
 			printf("LKPI: usage: %s [--fault no-walk|fw-name|ms-eject"
-			    "|tasklet-inert]\n", argv[0]);
+			    "|tasklet-inert|pv-inert]\n", argv[0]);
 			return 2;
 		}
 	}
@@ -1078,12 +1322,15 @@ main(int argc, char **argv)
 		if (strcmp(fault_name, "no-walk") != 0 &&
 		    strcmp(fault_name, "fw-name") != 0 &&
 		    strcmp(fault_name, "ms-eject") != 0 &&
-		    strcmp(fault_name, "tasklet-inert") != 0) {
+		    strcmp(fault_name, "tasklet-inert") != 0 &&
+		    strcmp(fault_name, "pv-inert") != 0) {
 			printf("LKPI: unknown fault '%s'\n", fault_name);
 			return 2;
 		}
 		if (strcmp(fault_name, "tasklet-inert") == 0)
 			tk_inert = 1;
+		if (strcmp(fault_name, "pv-inert") == 0)
+			l12_fault_pv_inert = 1;
 	}
 
 	/* the CMSIS-RTOS2 kernel hosts the suite's tasks; the suite body runs as

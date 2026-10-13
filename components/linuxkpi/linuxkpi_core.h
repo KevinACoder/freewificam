@@ -1972,10 +1972,12 @@ void lkpi_dev_printk(struct device *dev, ulog_level_t level, const char *fmt, ..
 void lkpi_fatal(const char *what);
 
 /*
- * The dist print helpers funnel everything through dev_*(); the debug
- * paths use the Linux "%pV" wrapped-format convention, which the port
- * printf does not understand - without the special case it prints the
- * pointer instead of the message.
+ * The dist print helpers funnel everything through dev_*(); the debug paths
+ * use the Linux "%pV" wrapped-format convention (the conversion's argument is
+ * a struct va_format *). The port's printf carries no such conversion, so the
+ * core expands it above whichever formatter the build selected (linuxkpi_core.c,
+ * lkpi_vformat) - which is what lets the vendored callers keep their spelling
+ * unchanged.
  *
  * Each helper carries the console level the vendored call site means. The
  * generic dev_printk() form has no level to carry here: every KERN_ constant is
