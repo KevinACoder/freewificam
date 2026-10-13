@@ -5,11 +5,11 @@
 | Upstream | https://github.com/cherry-embedded/CherryUSB.git |
 | Pin | commit `51fef88da1382a395f7e6c0e907626d9e205abdd` (2026-10-06, "chore: add adb into build") - the upstream master tip as of 2026-10-08, SHA-only (no tag at this commit). Ruling: the tip carries the multi-host-controller registration API and the latest host-side fixes; the pin is the SHA, so the branch moving does not move it |
 | License | Apache-2.0 (`LICENSE` at the tree root) |
-| Vendoring | git submodule, sparse checkout: `core/ common/ class/hub/ class/msc/ osal/ port/ehci/ port/xhci/` with `!/port/xhci/*/` |
+| Vendoring | git submodule at the pin, full working tree checked out (verified 2026-10-13: no sparse filter is configured; the whole upstream tree - `core/ common/ class/ osal/ port/ demo/ docs/ tests/ platform/` - is materialized). Notes here once described a sparse set; that no longer matches the checkout and the video-class work depends on the full one |
 | Fetched | 2026-10-08 from the upstream remote (`git fetch origin master`, reachable at fetch time); the frozen read-only carrier copy of this tree (kept outside this repository) holds the earlier pin `5019680e7a364c0a95b4b0cf0e30802047a26f59` as a fallback and a comparison point |
 | Local differences | none (zero patch) |
-| Compiled set | `core/usbh_core.c`, `class/hub/usbh_hub.c`, `class/msc/usbh_msc.c`, `common/` headers, the first-party osal backend and the host controller driver replayed from `patches/CherryUSB/` |
-| Consumers | `ports/cherryusb/` (single CMSIS-RTOS2 osal backend, board configuration and glue) and the ThreadX board regression image |
+| Compiled set | per image: `core/usbh_core.c`, `class/hub/usbh_hub.c`, `class/msc/usbh_msc.c` (storage images) or `class/video/usbh_video.c` (the UVC camera image), the controller ports `port/ehci/usb_hc_ehci.c` and `port/xhci/usb_hc_xhci.c` (both replayed - the xHCI host port and the EHCI isochronous engine travel in `patches/cherryusb/`), the first-party osal backend and the board glue |
+| Consumers | `ports/cherryusb/` (single CMSIS-RTOS2 osal backend, board configuration and glue) and the ThreadX board images (regression, wireless lines, the UVC camera image) |
 | Reason | USB host stack for the RTOS lines: the RK3568 board's USB controllers (two xHCI instances, two EHCI lines) need a host stack whose OS coupling is one small osal, so a single CMSIS-RTOS2 backend serves both kernels. Recorded as a deferred candidate in the repository-bootstrap ledger (C14); the stack-selection ruling itself belongs to the USB camera milestone |
 
 Notes:
@@ -25,13 +25,13 @@ Notes:
   in both; the tip additionally carries host-side fixes since 2026-09-23.
 * At this pin the EHCI port declares `usb_hc_low_level_init`/`usb_hc_low_level_deinit`
   as extern rather than weak: the board glue must provide both.
-* `port/xhci/` is deliberately absent from the working tree: at this pin it holds only a
-  closed-source static library restricted to another vendor's platform. It is not checked
-  out, not compiled and not distributed. The xHCI host controller driver this project
-  builds is the replayed patch under `patches/CherryUSB/`, whose lineage is documented
+* `port/xhci/` holds only vendor platform material at this pin (`phytium/`: glue sources and
+  prebuilt `libxhci_a*.a` libraries for another vendor's platform). No image here compiles
+  it; the xHCI host controller driver this project builds is the replayed patch
+  `patches/cherryusb/0001-xhci-host-controller-port.patch`, whose lineage is documented
   there.
-* `VERSION` (1.6.1 at the pin) and the demo/test/platform trees are outside the sparse
-  set; nothing in the build refers to them.
+* `VERSION` (1.6.1 at the pin), `demo/`, `docs/`, `tests/` and `platform/` are present in
+  the working tree but outside every compile set; nothing in the builds refers to them.
 * The upstream `osal/` implementations (FreeRTOS, ThreadX, RT-Thread, ...) are not
   compiled: this project uses one CMSIS-RTOS2 backend for both kernels
   (`ports/cherryusb/osal/cmsis2/`).
