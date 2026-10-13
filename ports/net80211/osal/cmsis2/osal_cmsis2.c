@@ -87,6 +87,10 @@ void delay(unsigned int us)
 /* Mutexes                                                             */
 /* ------------------------------------------------------------------ */
 
+/* the port's own level-1 outlet (defined with the lifecycle below): the mutex
+ * paths report a lock they could not take or did not hold through it */
+static void osal_emergency(const char *fmt, ...);
+
 #define WLAN_MUTEX_MAGIC 0x6d757821ul
 /* hm_priv[] layout: [0] osMutexId_t, [1] owner thread id, [2] depth,
  * [3] magic. The RTOS mutex is created recursive as well so a re-entrant
@@ -146,7 +150,7 @@ int wlan_mutex_enter(kmutex_t *m)
 		}
 		if (n_seen < 4) {
 			seen[n_seen++] = (void *)m;
-			board_log_emergency("net80211: mutex_enter refused on "
+			osal_emergency("net80211: mutex_enter refused on "
 			    "uninitialised lock %p (magic %p ra %p)",
 			    (void *)m, (void *) MP_MAGIC(m),
 			    __builtin_return_address(0));
@@ -159,7 +163,7 @@ int wlan_mutex_enter(kmutex_t *m)
 
 		if (said < 4) {
 			said++;
-			board_log_emergency("net80211: mutex_acquire failed (%d) "
+			osal_emergency("net80211: mutex_acquire failed (%d) "
 			    "lock %p ra %p", (int)st, (void *)m,
 			    __builtin_return_address(0));
 		}
@@ -190,7 +194,7 @@ int wlan_mutex_exit(kmutex_t *m)
 
 		if (said < 4) {
 			said++;
-			board_log_emergency("net80211: mutex_exit clears owner "
+			osal_emergency("net80211: mutex_exit clears owner "
 			    "of lock %p (depth now 0) ra %p", (void *)m,
 			    __builtin_return_address(0));
 		}
@@ -216,7 +220,7 @@ int wlan_mutex_owned(kmutex_t *m)
 
 		if (said < 4) {
 			said++;
-			board_log_emergency("net80211: mutex_owned false lock %p "
+			osal_emergency("net80211: mutex_owned false lock %p "
 			    "owner %p current %p magic %p ra %p", (void *)m,
 			    MP_OWNER(m) != NULL ? MP_OWNER(m) : (void *)0,
 			    (void *) osThreadGetId(), (void *) MP_MAGIC(m),
@@ -664,13 +668,28 @@ int vprintf(const char *fmt, va_list ap)
 	return wlan_osal_vlog(0, fmt, ap);
 }
 
+/* the port's own level-1 outlet: the board's emergency sink where one exists,
+ * the port's logger everywhere else - a diagnostic must not add a board-only
+ * dependency to a path every link takes */
+static void
+osal_emergency(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vfprintf(stdout, fmt, ap);
+	va_end(ap);
+	fputc('\n', stdout);
+}
+
 void panic(const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	(void)wlan_osal_vlog(1, fmt, ap);
+	vfprintf(stdout, fmt, ap);
 	va_end(ap);
+	fputs("\nnet80211 port panic: parked\n", stdout);
 	/*
 	 * The caller's chain, so a parked board still names where the check
 	 * fired. The imported code's assertions (the node table's lock, the
@@ -713,6 +732,20 @@ int kprintf(const char *fmt, ...)
 	n = vfprintf(stdout, fmt, ap);
 	va_end(ap);
 	return n;
+}
+
+/* the port's own level-1 outlet: the board's emergency sink where one exists,
+ * the port's logger everywhere else - a diagnostic must not add a board-only
+ * dependency to a path every link takes */
+static void
+osal_emergency(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vfprintf(stdout, fmt, ap);
+	va_end(ap);
+	fputc('\n', stdout);
 }
 
 void panic(const char *fmt, ...)

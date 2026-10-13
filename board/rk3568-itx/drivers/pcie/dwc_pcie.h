@@ -48,12 +48,7 @@ struct dwc_pcie_dev {
 	uint8_t subclass;
 	uint8_t msix_cap;	/* config offset of the MSI-X capability, 0 = none */
 	uint8_t msi_cap;	/* config offset of the MSI capability, 0 = none */
-	/* the windows as the firmware assigned them: 64-bit, because a
-	 * 64-bit memory BAR folds both config words (pcie_dw.c) and the AC
-	 * 7260's BAR0 is one */
-	uint64_t bar[6];
-	uint64_t bar_size[6];
-	uint32_t bar_flags[6];
+	uint32_t bar[6];
 };
 
 /* Bring the root complex up and scan the downstream bus. Idempotent. */

@@ -138,9 +138,7 @@ void dwc_pcie_init(void)
 		d->msi_cap = (uint8_t)func.msi_cap;
 
 		for (uint32_t b = 0; b < func.bar_count && b < 6; b++) {
-			d->bar[b] = func.bars[b].phys_addr;
-			d->bar_size[b] = func.bars[b].size;
-			d->bar_flags[b] = func.bars[b].flags;
+			d->bar[b] = (uint32_t)func.bars[b].phys_addr;
 		}
 
 		/* Class is not in the claim record: byte 0x0b is the base class

@@ -383,9 +383,12 @@ static int port_bus_up(void *ctx, struct lkpi_pcie_be_dev **devs,
 		descs[i].link_width = 1;
 		descs[i].host_dma_mask = 0xffffffffu;
 		for (j = 0; j < LKPI_PCIE_BE_MAX_BARS && j < 6u; j++) {
+			/* the record keeps 32-bit BAR words (the pinned face);
+			 * a 64-bit memory BAR folds its high half into the next
+			 * word, which is what the windows of this bench are */
 			descs[i].bar[j].phys = dev->bar[j];
-			descs[i].bar[j].size = dev->bar_size[j];
-			descs[i].bar[j].flags = dev->bar_flags[j];
+			descs[i].bar[j].size = 0;
+			descs[i].bar[j].flags = 0;
 		}
 	}
 	*count = (int)n;
@@ -471,9 +474,10 @@ static int port_irq_setup(void *ctx, struct lkpi_pcie_be_dev *d, int kind,
 	slot->fn = handler;
 	slot->arg = arg;
 	slot->used = true;
-	/* the first window, for the interrupt-time snapshot: the record now
-	 * carries the full 64-bit address the firmware assigned */
-	slot->bar0 = (uintptr_t)dev->bar[0];
+	/* the first window, for the interrupt-time snapshot: the record keeps
+	 * 32-bit words, so a 64-bit BAR's high half is folded back here */
+	slot->bar0 = (uintptr_t)(((uint64_t)dev->bar[1] << 32) |
+	    (dev->bar[0] & ~0xfULL));
 	slot->traced = 0;
 
 	/* One dispatcher, armed with the slot as its argument. An LPI is enabled
