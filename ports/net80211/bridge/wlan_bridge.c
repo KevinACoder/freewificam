@@ -370,7 +370,11 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 		}
 		rc = bridge.ops->tx(bridge.drv, mtod(m, const uint8_t *),
 		    (size_t)m->m_len, 1);
-		if (rc != 0)
+		if (rc < 0)		/* the seam answers the frame's own length
+					 * on success and a negative error
+					 * otherwise (wlan_seam_adapter.c
+					 * seam_tx), so only a negative return
+					 * is an output error */
 			bridge_oerror(ic);
 		else if (ic->ic_ifp != NULL)
 			if_statinc(ic->ic_ifp, if_opackets);
@@ -466,8 +470,11 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			    (unsigned)enc->m_pkthdr.len);
 		}
 		if (bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
-		    (size_t)enc->m_pkthdr.len, 0) != 0)
-			if_statinc(ifp, if_oerrors);
+		    (size_t)enc->m_pkthdr.len, 0) < 0)
+			if_statinc(ifp, if_oerrors);	/* same return contract as
+							 * the management drain: a
+							 * negative answer is the
+							 * error */
 		else
 			if_statinc(ifp, if_opackets);
 		bridge.data_tx++;
