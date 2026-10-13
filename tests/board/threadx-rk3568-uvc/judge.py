@@ -39,6 +39,7 @@ CASES = [
     "usb-host-up",
     "uvc-open",
     "uvc-iso-smoke",
+    "uvc-stream",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -57,6 +58,9 @@ ANCHORS = {
         r"uvc: open mjpeg 640x480 alt=4 fmt=\d+ frm=\d+ mps=\d+ dmp=\d+ ival=\d+",
     ],
     "uvc-iso-smoke": [],  # numeric checks below
+    "uvc-stream": [
+        r"uvc: stream open mjpeg 640x480 mps=\d+ dmp=\d+ pool=\d+",
+    ],
 }
 
 #: Smoke tolerances. The acceptance criterion is "completions > 0, packet
@@ -69,6 +73,16 @@ SMOKE_URBS_MIN = 14
 SMOKE_ERRPKT_MAX = 8
 SMOKE_RE = re.compile(
     r"uvc: iso smoke done=(\d+)/(\d+) bytes=(\d+) errpkt=(\d+) errurb=(\d+) max=(\d+)"
+)
+#: The streaming criterion's floor.  The Linux ground truth measured on this
+#: board and camera on 2026-10-14 was 4.69 fps (a dark scene: the camera's
+#: auto-exposure stretches the frame interval); the acceptance ratio is 2/3 of
+#: the measured truth, so the floor is 313 (x100).  The number is a data row:
+#: a brighter scene raises the truth and, with it, this floor.
+STREAM_MIN_FPS_X100 = 313
+STREAM_RE = re.compile(
+    r"uvc: stream done window_ms=(\d+) frames=(\d+) timeouts=(\d+) bytes=(\d+) "
+    r"max=(\d+) fps_x100=(\d+) kbit_s=(\d+) dropped=(\d+) errpkt=(\d+)"
 )
 OPEN_MPS_RE = re.compile(r"uvc: open mjpeg 640x480 alt=4 fmt=\d+ frm=\d+ mps=(\d+)")
 
@@ -85,8 +99,8 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[  14.100] BOARD-SUITE threadx-rk3568-uvc "
-    "result=pass cases=4 ok=4 exit=0\r\n"
+    "[  36.100] BOARD-SUITE threadx-rk3568-uvc "
+    "result=pass cases=5 ok=5 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
@@ -94,8 +108,8 @@ BASE_TRANSCRIPT = (
     "gicv3: ready ctlr=00000012 waker=00000000\r\n"
     "[   0.000] tx: kernel entered version=6.5.1.202602a\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-uvc select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-uvc start cases=4 sel=all "
-    "list=shell-up,usb-host-up,uvc-open,uvc-iso-smoke\r\n"
+    "[  10.000] BOARD-SUITE threadx-rk3568-uvc start cases=5 sel=all "
+    "list=shell-up,usb-host-up,uvc-open,uvc-iso-smoke,uvc-stream\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-uvc/shell-up PASS\r\n"
     "[  10.500] usbh: core init bus=0 hcd=ehci base=0xfd800000\r\n"
@@ -105,6 +119,11 @@ BASE_TRANSCRIPT = (
     "[  13.400] CASE threadx-rk3568-uvc/uvc-open PASS\r\n"
     "[  13.500] uvc: iso smoke done=16/16 bytes=102400 errpkt=0 errurb=0 max=640\r\n"
     "[  14.000] CASE threadx-rk3568-uvc/uvc-iso-smoke PASS\r\n"
+    "[  14.100] uvc: stream open mjpeg 640x480 mps=512 dmp=384 pool=3\r\n"
+    "[  14.200] uvc: stream first frame size=9310\r\n"
+    "[  34.200] uvc: stream done window_ms=20001 frames=94 timeouts=3 bytes=931000 "
+    "max=11200 fps_x100=469 kbit_s=372 dropped=0 errpkt=0\r\n"
+    "[  34.300] CASE threadx-rk3568-uvc/uvc-stream PASS\r\n"
     + SENTINEL_LINE
     + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -130,7 +149,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-uvc/uvc-open PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=4 ok=4 exit=0", "cases=4 ok=3 exit=0"), 1),
+        "cases=5 ok=5 exit=0", "cases=5 ok=4 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-uvc/uvc-open PASS",
@@ -151,9 +170,16 @@ MUTATIONS = [
     ("smoke packet over the bound", BASE_TRANSCRIPT.replace(
         "uvc: iso smoke done=16/16 bytes=102400 errpkt=0 errurb=0 max=640",
         "uvc: iso smoke done=16/16 bytes=115200 errpkt=0 errurb=0 max=1024"), 1),
+    ("anchor dropped (stream open)", BASE_TRANSCRIPT.replace(
+        "uvc: stream open mjpeg 640x480 mps=512 dmp=384 pool=3\r\n",
+        ""), 1),
+    ("stream rate below the floor", BASE_TRANSCRIPT.replace(
+        "fps_x100=469 kbit_s=372", "fps_x100=200 kbit_s=159"), 1),
+    ("stream no frames", BASE_TRANSCRIPT.replace(
+        "frames=94 timeouts=3 bytes=931000", "frames=0 timeouts=97 bytes=0"), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
-        "list=shell-up,usb-host-up,uvc-open,uvc-iso-smoke",
-        "list=shell-up,usb-host-up,uvc-open"), 1),
+        "list=shell-up,usb-host-up,uvc-open,uvc-iso-smoke,uvc-stream",
+        "list=shell-up,usb-host-up,uvc-open,uvc-iso-smoke"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 
@@ -194,6 +220,31 @@ def check_smoke(transcript: bj.Transcript) -> list[str]:
         mps = int(open_match.group(1))
         if maxlen > mps:
             errors.append("iso smoke: packet %d bytes exceeds the bound %d" % (maxlen, mps))
+    return errors
+
+
+def check_stream(transcript: bj.Transcript) -> list[str]:
+    """The streaming numbers against the acceptance floor."""
+    errors = []
+    lines = transcript.anchor_lines(STREAM_RE.pattern)
+    if not lines:
+        return ["stream: anchor line absent"]
+    match = STREAM_RE.search(lines[-1])
+    window_ms = int(match.group(1))
+    frames = int(match.group(2))
+    bytes_total = int(match.group(4))
+    fps_x100 = int(match.group(6))
+
+    if window_ms == 0:
+        errors.append("stream: an empty measurement window")
+    if frames == 0:
+        errors.append("stream: no frame arrived")
+    if bytes_total == 0:
+        errors.append("stream: no payload bytes")
+    if fps_x100 < STREAM_MIN_FPS_X100:
+        errors.append("stream: %d.%02d fps below the floor %d.%02d (2/3 of the measured truth)"
+                      % (fps_x100 // 100, fps_x100 % 100,
+                         STREAM_MIN_FPS_X100 // 100, STREAM_MIN_FPS_X100 % 100))
     return errors
 
 
@@ -279,6 +330,8 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
                 errors.append("case %s: anchor missing: %s" % (name, pattern))
     if verdicts.get("uvc-iso-smoke") == "PASS":
         errors.extend(check_smoke(transcript))
+    if verdicts.get("uvc-stream") == "PASS":
+        errors.extend(check_stream(transcript))
 
     shell_selected = expected is None or "shell-up" in expected
     if steps_path and os.path.exists(steps_path):

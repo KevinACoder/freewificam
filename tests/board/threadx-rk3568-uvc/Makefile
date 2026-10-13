@@ -179,7 +179,8 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/uvc_app.c \
 	$(CURDIR)/tests/uvc_detect.c \
 	$(CURDIR)/tests/uvc_open.c \
-	$(CURDIR)/tests/uvc_iso_smoke.c
+	$(CURDIR)/tests/uvc_iso_smoke.c \
+	$(CURDIR)/tests/uvc_stream.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -207,6 +208,7 @@ USB_STACK_SRCS := \
 	$(CHERRYUSB)/core/usbh_core.c \
 	$(CHERRYUSB)/class/hub/usbh_hub.c \
 	$(CHERRYUSB)/class/video/usbh_video.c \
+	$(CHERRYUSB)/class/video/usbh_uvc_stream.c \
 	$(CHERRYUSB)/port/ehci/usb_hc_ehci.c \
 	$(CHERRYUSB)/port/ehci/usb_hc_ehci_iso.c \
 	$(CHERRYUSB)/port/xhci/usb_hc_xhci.c
@@ -336,6 +338,8 @@ check: guards $(TARGET).elf
 	         board_suite_run board_case_fail board_glob_match board_select_parse \
 	         usb_board_init usb_board_after_start usb_board_reg_base usbh_initialize \
 	         usbh_submit_urb usbh_video_open usbh_video_run usbh_video_stop \
+	         usbh_video_stream_attach usbh_video_stream_create usbh_video_stream_start \
+	         usbh_video_stream_stop usbh_video_stream_dequeue usbh_video_stream_enqueue \
 	         ehci_iso_urb_init ehci_kill_iso_urb ehci_scan_isochronous_list; do \
 		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" \
 			|| { echo "FAIL: $$s not in the image"; exit 1; }; \
@@ -357,7 +361,7 @@ check: guards $(TARGET).elf
 	[ $$vsz -eq 48 ] || { echo "FAIL: VSymTab is not dense"; exit 1; }; \
 	[ $$(( btz % 16 )) -eq 0 ] || { echo "FAIL: BOARD_TESTS is not a whole number of entries"; exit 1; }; \
 	n=$$(( btz / 16 )); echo "board_tests entries=$$n"; \
-	[ $$n -eq 4 ] || { echo "FAIL: the table does not carry the four camera cases"; exit 1; }; \
+	[ $$n -eq 5 ] || { echo "FAIL: the table does not carry the five camera cases"; exit 1; }; \
 	echo "PASS: command and test tables dense (no inter-entry padding)"
 	@echo "== case-name reconciliation (image / suite.mk / judge) =="
 	@sh $(COMMON)/check-case-list.sh $(TARGET).elf $(CURDIR)/suite.mk $(CURDIR)/judge.py $(OBJCOPY) $(READELF) $(BUILD)

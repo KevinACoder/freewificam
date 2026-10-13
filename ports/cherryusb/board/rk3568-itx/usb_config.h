@@ -270,4 +270,23 @@ void usbh_console_printf(const char *fmt, ...);
 #define CONFIG_USBHOST_MAX_VIDEO_CLASS	1
 #endif
 
+/* The UVC stream engine (class/video/usbh_uvc_stream.c): the isochronous urbs
+ * in flight, the micro-frames one urb spans (one USB frame at the streaming
+ * endpoints' bInterval of one), and the pump thread's stack and priority.
+ * The ring tiles the frame list, so four urbs of one frame each cover the
+ * controller's four isochronous slots; the pump is event-driven and sits just
+ * below the stack's own threads. */
+#ifndef CONFIG_UVC_STREAM_URBS
+#define CONFIG_UVC_STREAM_URBS	4
+#endif
+#ifndef CONFIG_UVC_STREAM_PACKETS
+#define CONFIG_UVC_STREAM_PACKETS	8
+#endif
+#ifndef CONFIG_UVC_STREAM_STACKSIZE
+#define CONFIG_UVC_STREAM_STACKSIZE	4096
+#endif
+#ifndef CONFIG_UVC_STREAM_PRIO
+#define CONFIG_UVC_STREAM_PRIO	1
+#endif
+
 #endif /* FREEWIFICAM_RK3568_USB_CONFIG_H */

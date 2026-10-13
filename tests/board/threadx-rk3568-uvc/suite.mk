@@ -15,7 +15,7 @@ SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-uvc start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-uvc select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-uvc result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-uvc result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
-SUITE_CASE_NAMES      := shell-up usb-host-up uvc-open uvc-iso-smoke
+SUITE_CASE_NAMES      := shell-up usb-host-up uvc-open uvc-iso-smoke uvc-stream
 SUITE_STEPS_FILE      := steps.tsv
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-uvc/judge.py
 SUITE_TIMEOUT         := 240

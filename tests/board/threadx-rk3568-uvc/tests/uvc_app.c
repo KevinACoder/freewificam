@@ -23,6 +23,7 @@
 
 #include "usbh_core.h"
 #include "usbh_video.h"
+#include "usbh_uvc_stream.h"
 
 /* The acceptance slice's format: 640x480 MJPEG - the only configuration the
  * Linux ground truth on this board was captured with. */
@@ -40,6 +41,7 @@ static struct usbh_video *uvc_instance;
 void usbh_video_run(struct usbh_video *video_class)
 {
 	uvc_instance = video_class;
+	(void)usbh_video_stream_attach(video_class);
 
 	LOG_ANCHOR("uvc: connect vid=%04x pid=%04x bus=%u dev=%u minor=%u formats=%u alts=%u\n",
 		   (unsigned)video_class->hport->device_desc.idVendor,
@@ -65,6 +67,17 @@ void usbh_video_stop(struct usbh_video *video_class)
 struct usbh_video *uvc_app_class(void)
 {
 	return uvc_instance;
+}
+
+/* Close the camera if it is open.  The stream case uses this to hand the
+ * camera back so the stream engine performs its own open sequence (probe,
+ * bandwidth question, alternate-setting selection). */
+int uvc_app_close(void)
+{
+	if ((uvc_instance != 0) && uvc_instance->is_opened) {
+		return usbh_video_close(uvc_instance);
+	}
+	return 0;
 }
 
 /* Idempotent: the class driver treats an already-open camera as success, so
