@@ -977,9 +977,10 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 
 		bridge.rx_trace++;
 		wlan_osal_log("wlan: rxtrace fc=%02x len=%u rx_freq=%u "
-		    "chan=%d cur=%d state=%d fscan=%u asc=%u scanning=%u\n",
-		    frame[0], (unsigned)len, rx_freq, cur, was,
-		    (int)ic->ic_state, fscan, asc, bridge.scanning);
+		    "chan=%d cur=%d state=%d fscan=%u asc=%u scanning=%u "
+		    "ic=%p\n", frame[0], (unsigned)len, rx_freq, cur, was,
+		    (int)ic->ic_state, fscan, asc, bridge.scanning,
+		    (void *)ic);
 		ni = ieee80211_find_rxnode(ic,
 		    (const struct ieee80211_frame_min *)m->m_data);
 		ieee80211_input(ic, m, ni, rssi, 0);

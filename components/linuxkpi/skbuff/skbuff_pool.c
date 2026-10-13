@@ -562,7 +562,19 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 	skb->head = buf;
 	skb->data = buf;
 	skb->tail = 0;
-	skb->end = need;
+	/*
+	 * The linear capacity is the *buffer's*, not the request's: a slot
+	 * serves every request up to its payload size, so a caller that asked
+	 * for a little and then receives a whole frame into it must be able to
+	 * put that frame - the vendored receive path branches on exactly this
+	 * (third-party/iwlwifi/mvm/rx.c:79: `len <= skb_tailroom(skb) ? len :
+	 * hdrlen + crypt_len + 8`), and with `end` at the request a 250-byte
+	 * beacon took the fragment branch, where this port has no fragment
+	 * storage to put it in: the frame was truncated to its header and the
+	 * sweep compared a 32-byte stub. A heap-backed buffer has no larger
+	 * capacity than its request, which is why the two cases differ.
+	 */
+	skb->end = (rec.kind == LKPI_SKB_BUF_POOL) ? cfg_data_sz : need;
 	skb->len = 0;
 	skb->data_len = 0;
 	skb->truesize = (unsigned int)sizeof(*skb) + need;
