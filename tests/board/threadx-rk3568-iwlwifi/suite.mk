@@ -22,9 +22,9 @@ SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-iwlwifi start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-iwlwifi select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-iwlwifi result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-iwlwifi result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
-SUITE_CASE_NAMES      := shell-up iwlwifi-probe iwlwifi-scan
+SUITE_CASE_NAMES      := shell-up iwlwifi-probe iwlwifi-scan iwlwifi-join iwlwifi-dataplane
 SUITE_STEPS_FILE      := steps.tsv
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-iwlwifi/judge.py
-SUITE_TIMEOUT         := 900
+SUITE_TIMEOUT         := 600
 SUITE_SEGMENTS        := -
 SUITE_WIRELESS        := 0

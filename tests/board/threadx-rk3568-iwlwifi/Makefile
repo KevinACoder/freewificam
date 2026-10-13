@@ -354,6 +354,8 @@ TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(CURDIR)/tests/iwlwifi_probe.c \
 	$(CURDIR)/tests/iwlwifi_scan.c \
+	$(CURDIR)/tests/iwlwifi_join.c \
+	$(CURDIR)/tests/iwlwifi_dataplane.c \
 	$(CURDIR)/tests/iwlwifi_cmds.c
 
 # the image's own non-case TUs: the radio's dwell pump, the supplicant's
@@ -624,8 +626,13 @@ $(foreach s,$(PCIE_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(filter-out $(CURDIR)/tests/iwlwifi_cmds.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS))))
+$(foreach s,$(filter-out $(CURDIR)/tests/iwlwifi_cmds.c $(CURDIR)/tests/iwlwifi_join.c $(CURDIR)/tests/iwlwifi_dataplane.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS))))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/iwlwifi_cmds.c,$(WPA_CMD_CFLAGS) $(LWIP_INCLUDES) -I$(NPORT)/bridge))
+# the join case reads the supplicant observer (the wpa port's include set) and the
+# dataplane case the lwIP presentation layer - the same per-TU sets the rtw89
+# suite carries for the same two cases
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/iwlwifi_join.c,$(WPA_CMD_CFLAGS) -I$(NPORT)/bridge -I$(CURDIR)/tests -I$(LKPI)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/iwlwifi_dataplane.c,$(LWIP_INCLUDES) $(WLAN_KPI_CFLAGS) -I$(PORT)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_radio.c,$(WLAN_KPI_CFLAGS)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$(CURDIR)/tests))
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
