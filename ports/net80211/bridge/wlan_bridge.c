@@ -1291,6 +1291,18 @@ bridge_scan_close(unsigned int reason)
  * without it the window would stay open until the stack happened to leave the
  * scan state. A completion with no sweep armed is not an error - the device may
  * report a sweep this side already closed - so it is ignored.
+ *
+ * The stack's own end-of-scan runs here too. On the walk route the sweep ends
+ * inside ieee80211_next_scan, whose last step is ieee80211_end_scan - that is
+ * where the interface clears its scan flags and, through
+ * ieee80211_notify_scan_done, tells the port the results are ready. The device
+ * route bypasses the walk entirely, so without this call the port half of that
+ * contract never fires: a consumer that scans through the interface (the
+ * supplicant's scan request) waits for its own abort timer instead of the
+ * completion - measured on the board as a ~60 s scan cycle that made the join
+ * miss its window. Manual roaming (the mode every supplicant-driven connect
+ * runs in) makes end_scan stop after the notification, so the candidate choice
+ * stays with the consumer.
  */
 void
 wlan_bridge_scan_hw_complete(void)
@@ -1299,6 +1311,10 @@ wlan_bridge_scan_hw_complete(void)
 	if (!bridge.attached || !bridge.scanning)
 		return;
 	bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_HW);
+	wlan_port_serializer_lock();
+	if (bridge.ic != NULL && bridge.ic->ic_state == IEEE80211_S_SCAN)
+		ieee80211_end_scan(bridge.ic);
+	wlan_port_serializer_unlock();
 }
 
 int
