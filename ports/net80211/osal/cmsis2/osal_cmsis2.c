@@ -126,6 +126,31 @@ int wlan_mutex_enter(kmutex_t *m)
 	osStatus_t st;
 
 	if (m == NULL || MP_MAGIC(m) != (void *) WLAN_MUTEX_MAGIC) {
+		/*
+		 * A lock the port never initialised is a silent no-op today, and
+		 * a no-op enter is invisible until something checks ownership:
+		 * the imported code's own assert (ieee80211_node.c's
+		 * _ieee80211_find_node) then parks the board on a lock that was
+		 * never taken. Name each distinct object once, with the caller
+		 * and the word that is in its magic slot, so the site and the
+		 * object both come off the serial line.
+		 */
+		static void *seen[4];
+		static unsigned int n_seen;
+		unsigned int i;
+
+		for (i = 0; i < n_seen; i++) {
+			if (seen[i] == (void *)m) {
+				return EINVAL;
+			}
+		}
+		if (n_seen < 4) {
+			seen[n_seen++] = (void *)m;
+			board_log_emergency("net80211: mutex_enter refused on "
+			    "uninitialised lock %p (magic %p ra %p)",
+			    (void *)m, (void *) MP_MAGIC(m),
+			    __builtin_return_address(0));
+		}
 		return EINVAL;
 	}
 	st = osMutexAcquire((osMutexId_t) MP_ID(m), osWaitForever);
