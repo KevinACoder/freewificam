@@ -37,6 +37,10 @@
  *       callback later and on another thread, two arms with no drain between
  *       them run once, teardown leaves nothing outstanding, and a burst past the
  *       queue's depth loses no callback.
+ *   L13 the page-order arithmetic: get_order() on the receive sizes the
+ *       driver asks for (2K/4K/8K/16K), which is the hand-off between a buffer
+ *       size and the order the page allocator sees - the board's
+ *       alloc_pages(order=4294967285) was this arithmetic going wrong.
  *   L12 the wrapped-format conversion ("%pV") on the real face: a producer in
  *       the vendored driver's own shape (a struct va_format handed through
  *       dev_*("%pV", &vaf)) comes out as the message text, the vaf stays usable
@@ -62,6 +66,7 @@
 #include "linuxkpi_impl.h"
 #include "linuxkpi_usb.h"
 #include <linux/interrupt.h>
+#include <linux/mm.h>
 #include <linux/usb.h>
 #include <linux/firmware.h>
 
@@ -1227,6 +1232,64 @@ case_l12(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* L13 the page-order arithmetic on the real contract header           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * get_order() is what turns a buffer size into the order the page allocator is
+ * asked for, and it hands ilog2() a size MINUS ONE on purpose - never a power
+ * of two. The board named the cost of getting that wrong: the iwlwifi receive
+ * path's 4 KiB buffers came back as order -11 (the serial line read
+ * `alloc_pages(order=4294967285)`), every receive-buffer allocation was
+ * refused, and the firmware never reached ALIVE. The case pins the arithmetic
+ * the driver's receive sizes ride.
+ */
+
+static int	l13_fault_ctz;	/* --fault order-ctz: the pre-fix ilog2 */
+
+static int
+l13_order_of(unsigned long size)
+{
+
+	if (l13_fault_ctz) {
+		/* the pre-fix form: ilog2 as the trailing-zero count */
+		if (size < (1UL << 12))
+			return 0;
+		return (int)(__builtin_ctzll(size - 1) - 12 + 1);
+	}
+	return get_order(size);
+}
+
+static int
+case_l13(void)
+{
+	static const struct {
+		unsigned long	size;
+		unsigned int	order;
+	} rows[] = {
+		{ 2048, 0 },	/* 2K: below one page */
+		{ 4096, 0 },	/* 4K: exactly one page */
+		{ 8192, 1 },
+		{ 16384, 2 },
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+		int got = l13_order_of(rows[i].size);
+
+		if (got != (int)rows[i].order) {
+			case_line("L13", 0, "get_order(%lu) = %d, want %u",
+			    rows[i].size, got, rows[i].order);
+			return -1;
+		}
+	}
+	case_line("L13", 1, "get_order: %u/%u/%u/%u for 2K/4K/8K/16K",
+	    (unsigned)l13_order_of(2048), (unsigned)l13_order_of(4096),
+	    (unsigned)l13_order_of(8192), (unsigned)l13_order_of(16384));
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1284,9 +1347,11 @@ run_suite(void)
 		return;
 	if (case_l12() != 0)
 		return;
+	if (case_l13() != 0)
+		return;
 
 	if (failures == 0)
-		printf("LKPI: SUITE PASS cases=12\n");
+		printf("LKPI: SUITE PASS cases=13\n");
 	else
 		printf("LKPI: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -1313,7 +1378,7 @@ main(int argc, char **argv)
 			fault_name = argv[++i];
 		} else {
 			printf("LKPI: usage: %s [--fault no-walk|fw-name|ms-eject"
-			    "|tasklet-inert|pv-inert]\n", argv[0]);
+			    "|tasklet-inert|pv-inert|order-ctz]\n", argv[0]);
 			return 2;
 		}
 	}
@@ -1323,7 +1388,8 @@ main(int argc, char **argv)
 		    strcmp(fault_name, "fw-name") != 0 &&
 		    strcmp(fault_name, "ms-eject") != 0 &&
 		    strcmp(fault_name, "tasklet-inert") != 0 &&
-		    strcmp(fault_name, "pv-inert") != 0) {
+		    strcmp(fault_name, "pv-inert") != 0 &&
+		    strcmp(fault_name, "order-ctz") != 0) {
 			printf("LKPI: unknown fault '%s'\n", fault_name);
 			return 2;
 		}
@@ -1331,6 +1397,8 @@ main(int argc, char **argv)
 			tk_inert = 1;
 		if (strcmp(fault_name, "pv-inert") == 0)
 			l12_fault_pv_inert = 1;
+		if (strcmp(fault_name, "order-ctz") == 0)
+			l13_fault_ctz = 1;
 	}
 
 	/* the CMSIS-RTOS2 kernel hosts the suite's tasks; the suite body runs as

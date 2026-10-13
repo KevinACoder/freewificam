@@ -615,9 +615,16 @@ __fls(unsigned long word)
 #define	__stringify_1(x...)	#x
 #define	__stringify(x...)	__stringify_1(x)
 
-/* ilog2: exact for constants (the drivers use it on table sizes) and a
- * floor-log2 at runtime */
-#define	ilog2(n)		((unsigned long)__builtin_ctzll((unsigned long long)(n)))
+/* [LNX] include/linux/log2.h:193: `#define ilog2(n) __ilog2_u64(n)` with
+ * `fls64(n) - 1` - the 0-based index of the HIGHEST set bit. The previous form
+ * counted trailing zeros (__builtin_ctzll), which agrees with the floor log
+ * only on pure powers of two - and get_order() feeds it `size - 1` on purpose
+ * (the generic getorder.h arithmetic), so a 4 KiB receive buffer came back as
+ * order -11: the board named it as `alloc_pages(order=4294967285)` and the
+ * iwlwifi receive path's every buffer allocation was refused, which in turn
+ * starved the firmware-ALIVE handshake. Exact for constants, as the interface
+ * is, because both builtins fold. */
+#define	ilog2(n)	((unsigned long)(63 - __builtin_clzll((unsigned long long)(n))))
 
 /* [LNX] include/linux/math.h: the round-up-to-a-power-of-two helper. It is a
  * macro over the exact-for-constants ilog2 above, because a compiled consumer
