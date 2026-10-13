@@ -136,6 +136,31 @@ record_tx(struct sk_buff *skb, int is_mgmt)
 	}
 }
 
+/* the station ladder: the recorder the peer-registration case reads.  What
+ * matters is the moment, not the shape: how many management frames had already
+ * been handed over when the driver heard each transition - the authentication
+ * request must find the station (mac80211 uploads the AP's station while it
+ * prepares the connection), and the association step comes after it. */
+static int
+fake_sta_state(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, enum ieee80211_sta_state old_state,
+    enum ieee80211_sta_state new_state)
+{
+
+	(void)hw;
+	(void)vif;
+	(void)sta;
+	if (fake.sta_state_calls < FAKE_DRIVER_STA_MAX) {
+		fake.sta_state_old[fake.sta_state_calls] = (int)old_state;
+		fake.sta_state_new[fake.sta_state_calls] = (int)new_state;
+		fake.sta_state_mgmt_at[fake.sta_state_calls] =
+		    fake.tx_mgmt_calls;
+	}
+	fake.sta_state_calls++;
+	order_add(FAKE_CALL_STA_STATE);
+	return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* the ops table                                                       */
 /* ------------------------------------------------------------------ */
@@ -441,6 +466,7 @@ static struct ieee80211_ops fake_ops = {
 	.add_interface = fake_add_interface,
 	.config = fake_config,
 	.bss_info_changed = fake_bss_info_changed,
+	.sta_state = fake_sta_state,
 	.configure_filter = fake_configure_filter,
 	.start = fake_start,
 	.stop = fake_stop,

@@ -514,6 +514,57 @@ ieee80211_unregister_hw(struct ieee80211_hw *hw)
 /* rx / tx status (driver: core.c:6423, :6531 rx; :5171 tx status)      */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The receive boundary's frame rebuild. The vendored receive path keeps a frame
+ * larger than its (128-byte) linear request in page fragments
+ * (third-party/iwlwifi/mvm/rx.c:80-91), and this port's net80211 side speaks
+ * linear frames - the bridge copies a frame's bytes out of one buffer. So the
+ * single entry every receive path funnels through materializes the whole frame
+ * before anything else reads it: the substitute's own linearization, in the
+ * place the interface's own receive processing would have run (net/mac80211/rx.c
+ * hands the stack a frame it has already pulled together). The original
+ * buffer's release puts the fragment pages back, so only the new buffer lives
+ * on. A refused allocation drops the frame loudly once - a silent drop here is
+ * the "empty scan table while the radio hears beacons" failure this port has
+ * paid for before.
+ */
+static struct sk_buff *
+lkpi80211_rx_linearize(struct ieee80211_hw *hw, struct sk_buff *skb)
+{
+	struct sk_buff *lin;
+	unsigned char *p;
+	unsigned int total;
+
+	if (skb->data_len == 0)
+		return skb;		/* already linear: the frame is the buffer */
+	(void)hw;
+	total = skb->len;
+	lin = lkpi_dev_alloc_skb(total, GFP_ATOMIC);
+	if (lin == NULL) {
+		static bool said;
+
+		if (!said) {
+			said = true;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: rx frame of %u bytes could not be linearized; frame dropped\n",
+			    total);
+		}
+		lkpi_skb_free(skb);
+		return NULL;
+	}
+	p = lkpi_skb_put(lin, total);
+	if (p == NULL || skb_copy_bits(skb, 0, p, (int)total) != 0) {
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: rx frame rebuild failed; frame dropped\n");
+		lkpi_skb_free(lin);
+		lkpi_skb_free(skb);
+		return NULL;
+	}
+	memcpy(lin->cb, skb->cb, sizeof(lin->cb));
+	lin->protocol = skb->protocol;
+	lkpi_skb_free(skb);
+	return lin;
+}
+
 void
 ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
@@ -522,6 +573,9 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	if (hw == NULL || skb == NULL)
 		return;
+	skb = lkpi80211_rx_linearize(hw, skb);
+	if (skb == NULL)
+		return;		/* refused, freed, and it said so */
 	/*
 	 * A driver that leaves the FCS on the frames it hands up says so once, at
 	 * probe (IEEE80211_HW_RX_INCLUDES_FCS), and those four octets come off
@@ -1472,6 +1526,14 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	 * answers a NULL queue by doing nothing).
 	 */
 	vif->txq = lkpi_txq_alloc(hw, vif, NULL, 0);
+	/*
+	 * The interface's own management queue - the one no station owns, which
+	 * the interface sets up beside vif->txq (tx.c:1530-1535).  A bufferable
+	 * management frame (a deauthentication, say) that a station does not own
+	 * rides it, and the transmit path's txq selection below is where it is
+	 * picked.
+	 */
+	vif->txq_mgmt = lkpi_txq_alloc(hw, vif, NULL, IEEE80211_NUM_TIDS);
 	if (ctx->ops->add_interface != NULL) {
 		ret = ctx->ops->add_interface(hw, vif);
 		if (ret != 0) {
@@ -1638,6 +1700,87 @@ lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 }
 
 /*
+ * The transmit handoff mac80211 performs before a driver's own transmit entry:
+ * the txq selection (net/mac80211/tx.c:1299-1355, ieee80211_get_txq) and, when
+ * a queue owns the frame, the enqueue-and-wake pair (tx.c:1663-1687,
+ * ieee80211_queue_skb).
+ *
+ * Why the selection has to exist at all: a driver that implements
+ * .wake_tx_queue receives most of its frames through the txq abstraction, and
+ * the AC 7260's driver enforces that contract from the other side - its
+ * legacy .tx drops a management frame on a station vif outright
+ * (third-party/iwlwifi/mvm/mac80211.c:845-853: management frames that a txq
+ * did not deliver "shouldn't even happen").  The board showed the cost: with
+ * every frame taking .tx, the authentication request was counted as handed
+ * over and never completed - no transmit status ever came back, and no driver
+ * message named why.
+ *
+ * This round transcribes the management branches of the selection - the ones
+ * a station's authentication, association and probe frames take.  The data
+ * branches (a station's per-TID queues, the interface's own queue) still ride
+ * lkpi80211_drv_tx: that route is what the other drivers on this port were
+ * brought up on, and moving them is a change with its own board work; the
+ * boundary is recorded in the issue ledger rather than left silent.
+ */
+void
+lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, struct sk_buff *skb)
+{
+	struct lkpi80211_hw_ctx *ctx;
+	struct ieee80211_hdr *hdr;
+	struct ieee80211_txq *txq = NULL;
+	__le16 fc;
+
+	if (hw == NULL || skb == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	hdr = (struct ieee80211_hdr *)skb->data;
+	fc = hdr->frame_control;
+
+	if (vif != NULL && ieee80211_is_mgmt(fc)) {
+		/*
+		 * The management branches of ieee80211_get_txq (tx.c:1319-1336):
+		 * a management frame rides the station's management queue when
+		 * the vif is a station - or the frame is bufferable or one of
+		 * the association frames - and a station owns it; a bufferable
+		 * frame no station owns rides the interface's own management
+		 * queue.  The interface's `sta->uploaded` gate is a construction
+		 * fact here: every station this port hands out was inserted and
+		 * uploaded by lkpi80211_drv_sta_add above, so a station that is
+		 * not NULL is an uploaded one.
+		 */
+		if ((ieee80211_is_bufferable_mmpdu(skb) ||
+		     ieee80211_is_assoc(fc) ||
+		     vif->type == NL80211_IFTYPE_STATION) &&
+		    sta != NULL)
+			txq = sta->txq[IEEE80211_NUM_TIDS];
+		else if (ieee80211_is_bufferable_mmpdu(skb) && sta == NULL)
+			txq = vif->txq_mgmt;
+	}
+
+	if (txq == NULL) {
+		/* nothing owns it: the interface's own transmit entry */
+		lkpi80211_drv_tx(hw, vif, sta, skb);
+		return;
+	}
+	if (ctx->ops->wake_tx_queue == NULL) {
+		/* a queue without a driver to wake would hold the frame forever;
+		 * the interface's own entry is the honest fallback */
+		lkpi80211_drv_tx(hw, vif, sta, skb);
+		return;
+	}
+	lkpi80211_tx_headroom_check(hw, skb);
+	if (lkpi_txq_enqueue(txq, skb) != 0) {
+		lkpi_skb_free(skb);
+		return;
+	}
+	/* schedule_and_wake_txq (tx.c:1650-1661): the queue joins its access
+	 * category's list, then the driver is told to come and drain it */
+	ieee80211_schedule_txq(hw, txq);
+	ctx->ops->wake_tx_queue(hw, txq);
+}
+
+/*
  * The driver's station-state hook, whichever shape it declares.  A driver with
  * .sta_state is given every transition; one without it is given .sta_add at
  * AUTH -> ASSOC and .sta_remove at ASSOC -> AUTH, and the NOTEXIST boundaries
@@ -1728,25 +1871,34 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	/*
 	 * The station's per-TID txqs, before the driver hears about the station:
 	 * its station setup walks them to initialize the driver-private queue
-	 * state (rtw89 mac80211.c:516-517).  Index IEEE80211_NUM_TIDS (the
-	 * non-QoS queue) is left NULL: upstream only allocates it for a driver
-	 * that opted in through its hw flags (tx.c:1545-1554), and the walk
-	 * above answers a NULL queue by skipping it.
+	 * state (rtw89 mac80211.c:516-517).
 	 */
 	for (i = 0; i < IEEE80211_NUM_TIDS; i++)
 		sta->txq[i] = lkpi_txq_alloc(hw, vif, sta, (u8)i);
 	/*
-	 * The station appearing and then associating.  The interface runs the
-	 * whole ladder (NOTEXIST -> NONE -> AUTH -> ASSOC) across discovery and
-	 * association; this port has no separate discovery event, so the two
-	 * transitions that carry driver work happen together here.  NONE -> AUTH
-	 * is skipped: no driver in this repository acts on it.
+	 * The station's management-MPDU queue, for the drivers that declared it:
+	 * the interface creates sta->txq[IEEE80211_NUM_TIDS] exactly when the
+	 * driver opted in through its hw flags - STA_MMPDU_TXQ on a station vif,
+	 * BUFF_MMPDU_TXQ otherwise (net/mac80211/tx.c:1545-1556) - and the
+	 * transmit path routes the station's management frames through it.  The
+	 * declared flag is consumed here; a driver that did not declare it keeps
+	 * the index NULL and its management frames reach .tx instead (the branch
+	 * a walk of the per-TID queues answers by skipping the NULL entry).
+	 */
+	if (ieee80211_hw_check(hw, STA_MMPDU_TXQ))
+		sta->txq[IEEE80211_NUM_TIDS] =
+		    lkpi_txq_alloc(hw, vif, sta, IEEE80211_NUM_TIDS);
+	/*
+	 * The station appears: the upload step of the ladder, the one mac80211
+	 * runs while it prepares a connection - ieee80211_prep_connection
+	 * inserts and uploads the AP's station before the authentication
+	 * request leaves, which is what lets the transmit path find the peer
+	 * and its queues.  NONE -> AUTH is skipped: no driver in this
+	 * repository acts on it.  The association's own transition
+	 * (AUTH -> ASSOC) is lkpi80211_drv_sta_assoc below.
 	 */
 	ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_NOTEXIST,
 	    IEEE80211_STA_NONE);
-	if (ret == 0)
-		ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_AUTH,
-		    IEEE80211_STA_ASSOC);
 	if (ret != 0) {
 		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: sta add refused (%d)\n", ret);
 		ctx->stas[slot] = NULL;
@@ -1757,12 +1909,51 @@ lkpi80211_drv_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	return sta;
 }
 
+/*
+ * The association step of the station ladder (AUTH -> ASSOC), driven where the
+ * association actually completes - the seam's joined notification.  Split from
+ * the upload step above because the two happen at different moments: mac80211
+ * uploads the peer before the authentication request and associates it only
+ * when the association response arrives, and this port's seam has the same two
+ * moments (the bridge's AUTH entry and its RUN entry).
+ */
+int
+lkpi80211_drv_sta_assoc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, u16 aid)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL || sta == NULL)
+		return -EINVAL;
+	ctx = LKPI80211_CTX(hw);
+	sta->aid = aid;
+	return sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_AUTH,
+	    IEEE80211_STA_ASSOC);
+}
+
+/* the slot release both wind-downs share: the station's table entry, its
+ * queues, then the record itself */
+static void
+sta_release(struct lkpi80211_hw_ctx *ctx, struct ieee80211_sta *sta)
+{
+	unsigned int i;
+
+	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
+		if (ctx->stas[i] == sta) {
+			ctx->stas[i] = NULL;
+			/* after the driver's teardown: it still reads the queues
+			 * its station setup initialized */
+			lkpi_txq_free_sta(sta);
+			kfree(sta);
+			return;
+		}
+}
+
 void
 lkpi80211_drv_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
     struct ieee80211_sta *sta)
 {
 	struct lkpi80211_hw_ctx *ctx;
-	unsigned int i;
 
 	if (hw == NULL || sta == NULL)
 		return;
@@ -1773,15 +1964,28 @@ lkpi80211_drv_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    IEEE80211_STA_AUTH);
 	(void)sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_NONE,
 	    IEEE80211_STA_NOTEXIST);
-	for (i = 0; i < CONFIG_LKPI80211_MAX_STAS; i++)
-		if (ctx->stas[i] == sta) {
-			ctx->stas[i] = NULL;
-			/* after the driver's teardown: it still reads the queues
-			 * its station setup initialized */
-			lkpi_txq_free_sta(sta);
-			kfree(sta);
-			return;
-		}
+	sta_release(ctx, sta);
+}
+
+/*
+ * The wind-down of a station that never associated: mac80211 destroys the AP's
+ * station when a connection attempt ends before the association (a failed
+ * authentication), and the driver's view has to follow - the station's ladder
+ * is stepped from where it actually stands (NONE -> NOTEXIST), not through an
+ * association that never happened.
+ */
+void
+lkpi80211_drv_sta_free(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL || sta == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	(void)sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_NONE,
+	    IEEE80211_STA_NOTEXIST);
+	sta_release(ctx, sta);
 }
 
 /*

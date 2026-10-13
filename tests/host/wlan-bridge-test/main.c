@@ -50,6 +50,7 @@
  * coexist in this order (the sibling suites put the face first for the same
  * reason) */
 #include "linuxkpi_core.h"
+#include <linux/skbuff.h>
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -255,6 +256,37 @@ inject_rx_freq(const uint8_t *frame, size_t len, uint32_t freq)
 	rs = (struct ieee80211_rx_status *)skb->cb;
 	memset(rs, 0, sizeof(*rs));
 	rs->freq = freq;
+	rs->band = NL80211_BAND_2GHZ;
+	rs->signal = -50;
+	ieee80211_rx_irqsafe(g_hw, skb);
+}
+
+/* the driver's fragmented delivery: `head_len` bytes linear and the rest as one
+ * page fragment (mvm/rx.c:80-91). `with_frag` 0 delivers the linear part alone,
+ * which is the pre-fix observable the control uses. */
+static uint8_t b_inject_frag_page[512] __attribute__((aligned(64)));
+
+static void
+inject_rx_fragmented(const uint8_t *frame, size_t len, size_t head_len,
+    int with_frag)
+{
+	struct sk_buff *skb;
+	struct ieee80211_rx_status *rs;
+
+	if (g_hw == NULL || head_len == 0 || head_len > len)
+		return;
+	skb = lkpi_dev_alloc_skb((unsigned int)head_len, GFP_ATOMIC);
+	if (skb == NULL)
+		return;
+	memcpy(lkpi_skb_put(skb, (unsigned int)head_len), frame, head_len);
+	if (with_frag && len > head_len) {
+		memcpy(b_inject_frag_page, frame + head_len, len - head_len);
+		skb_add_rx_frag(skb, 0, (struct page *)(void *)b_inject_frag_page,
+		    0, (int)(len - head_len), 0);
+	}
+	rs = (struct ieee80211_rx_status *)skb->cb;
+	memset(rs, 0, sizeof(*rs));
+	rs->freq = 2412;
 	rs->band = NL80211_BAND_2GHZ;
 	rs->signal = -50;
 	ieee80211_rx_irqsafe(g_hw, skb);
@@ -2200,6 +2232,143 @@ case_b21(void)
 	return 0;
 }
 
+/*
+ * B22: a frame the driver delivers in fragments must still reach the stack
+ * whole. The AC 7260's receive path keeps everything past its 128-byte linear
+ * request in a page fragment (third-party/iwlwifi/mvm/rx.c:80-91), and this
+ * port's net80211 side speaks linear frames - so the substitute's common
+ * receive entry rebuilds the frame before the bridge copies it out
+ * (linuxkpi_80211.c, ieee80211_rx_irqsafe). The board named what a fragment
+ * lost means: every beacon arrived as a 32-byte stub and the scan table stayed
+ * empty while the radio heard beacons. The control (--fault rx-truncate)
+ * injects the linear part alone - the pre-fix observable - and must leave the
+ * table unchanged.
+ */
+static int
+case_b22(void)
+{
+	static const uint8_t bssid[6] = { 0x02, 0x10, 0x20, 0x30, 0x40, 0x50 };
+	uint8_t frame[96];
+	size_t flen;
+	unsigned int guard;
+	int rows;
+
+	/* drain whatever sweep an earlier case left armed (B19 opens one) */
+	while (wlan_bridge_scan_pending()) {
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+	}
+
+	/* MANUAL: the sweep must report, not join on its own (B11/B18's mode) -
+	 * and the frame is injected while the walk is still running, which is
+	 * when the core is willing to take a candidate (B18's window) */
+	wlan_bridge_set_manual(1);
+	wlan_bridge_set_ssid((const uint8_t *)AP_SSID, AP_SSID_LEN);
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B22", 0, "the sweep did not start");
+		return -1;
+	}
+	for (guard = 0; guard < 32; guard++) {
+		answer_new_tx_from_ap();
+		if (wlan_bridge_scan_dwell() == 0)
+			break;
+		if (n8_peek_curchan() != 1)
+			break;
+	}
+
+	flen = build_probe_resp_chan(frame, sta_mac, bssid, 1);
+	if (flen <= 32 || flen > sizeof(frame)) {
+		case_line("B22", 0, "the frame did not build (%zu bytes)", flen);
+		return -1;
+	}
+	rows = n8_peek_scan_rows();
+	/* 32 bytes linear, the rest in one page fragment; the control delivers
+	 * the 32-byte stub alone */
+	inject_rx_fragmented(frame, flen, 32,
+	    (fault_name != NULL && strcmp(fault_name, "rx-truncate") == 0) ? 0 : 1);
+	if (n8_peek_scan_rows() != rows + 1) {
+		case_line("B22", 0, "the fragmented frame did not reach the parser "
+		    "whole (rows %d -> %d)", rows, n8_peek_scan_rows());
+		return -1;
+	}
+	case_line("B22", 1, "a %zu-byte frame split at 32 bytes parsed as one "
+	    "candidate (rows %d -> %d)", flen, rows, n8_peek_scan_rows());
+	return 0;
+}
+
+/*
+ * B23: the peer station must exist inside the driver before the authentication
+ * request reaches it.  mac80211 uploads the AP's station while it prepares the
+ * connection, and this port's seam does the same at the bridge's AUTH entry
+ * (the BSSID programming point, which runs before the request leaves) - the
+ * driver's own contract is why: the AC 7260 routes a station's management
+ * frames through the station's management queue and drops them in .tx
+ * otherwise (mvm/mac80211.c:845, "this shouldn't even happen").  The board's
+ * join stopped exactly there.  The case reads the driver's recorder: when it
+ * heard the upload, and when the association step arrived, both measured in
+ * management frames already handed over.
+ */
+static int
+case_b23(void)
+{
+	const struct fake_driver_state *st = fake_driver_state();
+	unsigned int i, uploads = 0, assocs = 0, upload_before = 0;
+	unsigned int assoc_after = 0;
+	int auth_index = -1;
+
+	/* the sweep's probes are management frames too: the authentication
+	 * request is the one with the authentication subtype */
+	for (i = 0; i < st->tx_count && i < FAKE_DRIVER_TX_MAX; i++) {
+		if (st->tx_lens[i] >= 1 &&
+		    (st->tx_frames[i][0] & (uint8_t)0xfc) == (uint8_t)0xb0) {
+			auth_index = (int)i;
+			break;
+		}
+	}
+	/* several connection attempts ride one run (the recovery cases add
+	 * their own), so the case reads the relationship per attempt rather
+	 * than a count: every upload must be matched by an association, at
+	 * least one peer must have been uploaded before this run's first
+	 * authentication request, and the association must follow it */
+	for (i = 0; i < st->sta_state_calls && i < FAKE_DRIVER_STA_MAX; i++) {
+		if (st->sta_state_old[i] == IEEE80211_STA_NOTEXIST &&
+		    st->sta_state_new[i] == IEEE80211_STA_NONE) {
+			uploads++;
+			if (st->sta_state_mgmt_at[i] <= (unsigned int)auth_index)
+				upload_before++;
+		}
+		if (st->sta_state_old[i] == IEEE80211_STA_AUTH &&
+		    st->sta_state_new[i] == IEEE80211_STA_ASSOC) {
+			assocs++;
+			if (st->sta_state_mgmt_at[i] > (unsigned int)auth_index)
+				assoc_after++;
+		}
+	}
+	if (auth_index < 0) {
+		case_line("B23", 0, "no authentication request was handed to the driver");
+		return -1;
+	}
+	if (uploads == 0 || uploads != assocs) {
+		case_line("B23", 0, "the station ladder is unbalanced "
+		    "(uploads=%u assocs=%u)", uploads, assocs);
+		return -1;
+	}
+	if (upload_before == 0) {
+		case_line("B23", 0, "no peer was uploaded before the "
+		    "authentication request (frame #%d): the driver cannot route "
+		    "the request through its station queue", auth_index);
+		return -1;
+	}
+	if (assoc_after == 0) {
+		case_line("B23", 0, "no association transition followed the "
+		    "authentication request (frame #%d)", auth_index);
+		return -1;
+	}
+	case_line("B23", 1, "peer uploaded before the auth request (frame #%d) "
+	    "and associated after it (%u attempts)", auth_index, uploads);
+	return 0;
+}
+
 static void
 run_suite(void)
 {
@@ -2348,9 +2517,11 @@ run_suite(void)
 	(void)case_b19();
 	(void)case_b20();
 	(void)case_b21();
+	(void)case_b22();
+	(void)case_b23();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=21\n");
+		printf("WLANBRIDGE: SUITE PASS cases=23\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -2382,7 +2553,7 @@ main(int argc, char **argv)
 		} else {
 			printf("WLANBRIDGE: usage: %s [--fault no-filter|"
 			    "tamper-auth|double-free-skb|no-manual|"
-			    "no-rearm]\n", argv[0]);
+			    "no-rearm|rx-truncate]\n", argv[0]);
 			return 2;
 		}
 	}
@@ -2390,6 +2561,7 @@ main(int argc, char **argv)
 	    strcmp(fault_name, "tamper-auth") != 0 &&
 	    strcmp(fault_name, "no-manual") != 0 &&
 	    strcmp(fault_name, "no-rearm") != 0 &&
+	    strcmp(fault_name, "rx-truncate") != 0 &&
 	    strcmp(fault_name, "double-free-skb") != 0) {
 		printf("WLANBRIDGE: unknown fault '%s'\n", fault_name);
 		return 2;

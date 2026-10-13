@@ -410,7 +410,10 @@ fixture_new(enum shape shape)
 /*
  * One association, driven through the seam exactly as the bridge drives it: the
  * interface appears, the station appears and associates, and the BSS change
- * carries the association's bits.
+ * carries the association's bits.  The station's two ladder moments are the
+ * seam's two: the upload happens while the connection is prepared (before the
+ * authentication request leaves), the AUTH -> ASSOC step when the association
+ * completes.
  */
 static struct ieee80211_vif *
 join(struct ieee80211_hw *hw, struct ieee80211_sta **sta_out)
@@ -425,8 +428,10 @@ join(struct ieee80211_hw *hw, struct ieee80211_sta **sta_out)
 	vif->cfg.aid = 1;
 	memcpy(vif->cfg.ap_addr, g_ap, 6);
 	vif->bss_conf.bssid = g_ap;
-	sta = lkpi80211_drv_sta_add(hw, vif, g_ap, 1);
+	sta = lkpi80211_drv_sta_add(hw, vif, g_ap, 0);
 	if (sta == NULL)
+		return NULL;
+	if (lkpi80211_drv_sta_assoc(hw, vif, sta, 1) != 0)
 		return NULL;
 	lkpi80211_drv_bss_changed(hw, vif, ASSOC_CHANGED);
 	*sta_out = sta;
@@ -779,6 +784,95 @@ case_7260_txq(void)
 	ieee80211_free_hw(hw);
 }
 
+/*
+ * The flag that decides where a station's management frames enter the driver.
+ * The AC 7260 declares STA_MMPDU_TXQ (mvm/mac80211.c:364), the interface
+ * creates sta->txq[IEEE80211_NUM_TIDS] for it (tx.c:1545-1556) and routes the
+ * station's management frames through that queue (tx.c:1319-1336); the driver
+ * enforces the contract from its side - its legacy .tx drops a management frame
+ * on a station vif outright ("this shouldn't even happen", mvm/mac80211.c:845).
+ * The board's join stopped on exactly that: the authentication request left
+ * through .tx, was counted as handed over, and never completed - no transmit
+ * status, no driver message.
+ *
+ * `flag_set` picks the side.  With the flag, the management queue exists and
+ * the frame reaches the driver's wake entry (the txq route, then .tx from the
+ * driver's own drain - what iwl_mvm_mac_wake_tx_queue does); without it no
+ * management queue is created and the frame takes .tx directly, the pre-fix
+ * observable.  Both are asserted, so a face that ignored the flag would fail
+ * one of the two.
+ */
+static void
+case_7260_mgttxq(int flag_set)
+{
+	const char *id = flag_set ? "7260-mgttxq-route" : "7260-mgttxq-off";
+	struct ieee80211_hw *hw = fixture_new(SHAPE_7260);
+	struct ieee80211_sta *sta = NULL;
+	struct ieee80211_vif *vif;
+	struct sk_buff *frame;
+	unsigned char *p;
+	int ok = 1;
+
+	if (hw == NULL) {
+		case_line(id, 0, "no hw");
+		return;
+	}
+	if (flag_set)
+		ieee80211_hw_set(hw, STA_MMPDU_TXQ);
+	vif = join(hw, &sta);
+	if (vif == NULL || sta == NULL) {
+		case_line(id, 0, "the join did not complete");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/* the interface's own management queue exists either way */
+	if (vif->txq_mgmt == NULL) {
+		case_line(id, 0, "the interface's management queue was not created");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	if (flag_set && sta->txq[IEEE80211_NUM_TIDS] == NULL) {
+		case_line(id, 0, "STA_MMPDU_TXQ was declared but the station's management queue is NULL");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	if (!flag_set && sta->txq[IEEE80211_NUM_TIDS] != NULL) {
+		case_line(id, 0, "no opt-in was declared but a station management queue exists");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/* one authentication frame, built the way the bridge hands it */
+	frame = alloc_skb(64, GFP_KERNEL);
+	if (frame == NULL) {
+		case_line(id, 0, "no frame");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	p = lkpi_skb_put(frame, 30);
+	if (p == NULL) {
+		case_line(id, 0, "the frame would not take its bytes");
+		lkpi_skb_free(frame);
+		ieee80211_free_hw(hw);
+		return;
+	}
+	memset(p, 0, 30);
+	p[0] = 0xb0;		/* authentication */
+	p[1] = 0x00;
+	memcpy(&p[4], g_ap, 6);
+	memcpy(&p[10], g_sta_mac, 6);
+	memcpy(&p[16], g_ap, 6);
+	log_reset();
+	lkpi80211_tx(hw, vif, sta, frame);
+	if (log_count(EV_WAKE_TXQ) != (flag_set ? 1u : 0u) ||
+	    log_count(EV_TX) != 1u)
+		ok = 0;
+	case_line(id, ok, "wake_tx_queue=%u tx=%u",
+	    log_count(EV_WAKE_TXQ), log_count(EV_TX));
+	if (!ok)
+		log_dump();
+	ieee80211_free_hw(hw);
+}
+
 static void
 case_link_bookkeeping(void)
 {
@@ -942,6 +1036,8 @@ app_task(void *arg)
 	case_both_families();
 	case_7260_association();
 	case_7260_txq();
+	case_7260_mgttxq(1);
+	case_7260_mgttxq(0);
 	case_link_bookkeeping();
 	case_default_link_address();
 	case_zero_change_is_silent();

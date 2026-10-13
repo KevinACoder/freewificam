@@ -567,6 +567,20 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 			bridge.bssid_last_set = 1;
 			(void)bridge.ops->bssid(bridge.drv, bss->ni_bssid);
 		}
+	} else if (ostate >= IEEE80211_S_AUTH && nstate < IEEE80211_S_AUTH &&
+	    bridge.ops != NULL && bridge.ops->bssid != NULL) {
+		/*
+		 * The connection attempt is over without having reached RUN (a
+		 * failed authentication, an aborted join): the target comes off
+		 * the driver's view, the way mac80211 destroys the AP's station
+		 * when a connection fails.  A target that did reach RUN is wound
+		 * down by the leave notification below instead.  No NULL BSSID
+		 * reaches the registers: the drivers' handlers dereference the
+		 * pointer, so the seam only clears its own view (the rule the
+		 * seam's leave path documents).
+		 */
+		bridge.bssid_last_set = 0;
+		(void)bridge.ops->bssid(bridge.drv, NULL);
 	}
 	rc = bridge_orig_newstate(ic, nstate, arg);
 

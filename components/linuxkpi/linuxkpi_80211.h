@@ -148,11 +148,25 @@ int	lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 void	lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    struct ieee80211_sta *sta, struct sk_buff *skb);
 
+/* the transmit handoff the interface performs: the txq selection first
+ * (ieee80211_get_txq) and, when a queue owns the frame, the enqueue and the
+ * driver's wake - a driver's management frames take this route, not drv_tx */
+void	lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+	    struct ieee80211_sta *sta, struct sk_buff *skb);
+
 /* Sta lifetime (call ops->sta_add / sta_remove; the sta carries
- * sta_data_size bytes of zeroed driver-private area) */
+ * sta_data_size bytes of zeroed driver-private area).  The ladder is split the
+ * way the association splits: drv_sta_add uploads the peer (the moment mac80211
+ * prepares a connection), drv_sta_assoc runs AUTH -> ASSOC when the association
+ * completes, drv_sta_remove winds a joined station down, and drv_sta_free winds
+ * down a station that never associated. */
 struct ieee80211_sta *lkpi80211_drv_sta_add(struct ieee80211_hw *hw,
 	    struct ieee80211_vif *vif, const u8 addr[6], u16 aid);
+int	lkpi80211_drv_sta_assoc(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_sta *sta, u16 aid);
 void	lkpi80211_drv_sta_remove(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_sta *sta);
+void	lkpi80211_drv_sta_free(struct ieee80211_hw *hw,
 	    struct ieee80211_vif *vif, struct ieee80211_sta *sta);
 
 /* enumerate what the substitute holds (the bridge's bookkeeping) */
