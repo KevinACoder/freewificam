@@ -2032,25 +2032,49 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		}
 	}
 
-	if (vif != NULL && ieee80211_is_mgmt(fc)) {
+	if (vif != NULL &&
+	    !(IEEE80211_SKB_CB(skb)->flags & IEEE80211_TX_CTL_HW_80211_ENCAP) &&
+	    !ieee80211_is_data_present(fc)) {
 		/*
-		 * The management branches of ieee80211_get_txq (tx.c:1319-1336):
-		 * a management frame rides the station's management queue when
-		 * the vif is a station - or the frame is bufferable or one of
-		 * the association frames - and a station owns it; a bufferable
-		 * frame no station owns rides the interface's own management
-		 * queue.  The interface's `sta->uploaded` gate is a construction
-		 * fact here: every station this port hands out was inserted and
-		 * uploaded by lkpi80211_drv_sta_add above, so a station that is
-		 * not NULL is an uploaded one.
+		 * The management/control branches of ieee80211_get_txq
+		 * (tx.c:1319-1341): a frame that is not a data frame rides the
+		 * station's management queue when a station owns it (a bufferable
+		 * MMPDU, an association frame, or any frame on a station vif), and
+		 * a bufferable frame no station owns rides the interface's own
+		 * management queue.  The interface's `sta->uploaded` gate is a
+		 * construction fact here: every station this port hands out was
+		 * inserted and uploaded by lkpi80211_drv_sta_add above, so a
+		 * station that is not NULL is an uploaded one.
 		 */
-		if ((ieee80211_is_bufferable_mmpdu(skb) ||
+		if ((!ieee80211_is_mgmt(fc) ||
+		     ieee80211_is_bufferable_mmpdu(skb) ||
 		     ieee80211_is_assoc(fc) ||
 		     vif->type == NL80211_IFTYPE_STATION) &&
 		    sta != NULL)
 			txq = sta->txq[IEEE80211_NUM_TIDS];
-		else if (ieee80211_is_bufferable_mmpdu(skb) && sta == NULL)
+		else if ((!ieee80211_is_mgmt(fc) ||
+			  ieee80211_is_bufferable_mmpdu(skb)) && sta == NULL)
 			txq = vif->txq_mgmt;
+	} else if (sta != NULL) {
+		/*
+		 * The data branch (tx.c:1341-1348): a data frame owned by a
+		 * station rides that station's per-TID queue, the TID read off
+		 * the socket priority exactly as the interface selects it.  The
+		 * AC 7260's driver enforces this from the other side: its
+		 * transmit path for a station looks the frame's TID up in the
+		 * station's queue table and refuses the frame when the queue was
+		 * never allocated ("Invalid TXQ id", mvm/tx.c:1157) - which is
+		 * what happened to the supplicant's EAPOL-Key 2/4 on the board
+		 * while data frames still rode the legacy route.
+		 */
+		u8 tid = (u8)(skb->priority & IEEE80211_QOS_CTL_TID_MASK);
+
+		if (tid < IEEE80211_NUM_TIDS)
+			txq = sta->txq[tid];
+	} else if (vif != NULL) {
+		/* tx.c:1349-1350: no station, a data frame - the interface's
+		 * own queue */
+		txq = vif->txq;
 	}
 
 	if (txq == NULL) {

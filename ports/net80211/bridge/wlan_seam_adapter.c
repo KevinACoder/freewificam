@@ -243,6 +243,10 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 
 	info = (struct ieee80211_tx_info *)skb->cb;
 	memset(info, 0, sizeof(*info));
+	/* the queue-selection byte: the bridge's frames come from a L2 world
+	 * with no per-socket priority, so the TID is the best-effort one - set
+	 * explicitly rather than left to whatever the pool slot held */
+	skb->priority = 0;
 	if (is_mgmt) {
 		/* management frames: the driver's rate-control key and the vif
 		 * are what its descriptor build reads (core.c:5467, :5290) */
@@ -263,19 +267,25 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 		info->control.rates[0].count = 1;
 	}
 	adapter.tx_calls++;
-	if (is_mgmt) {
-		/*
-		 * Management frames take the interface's own transmit handoff:
-		 * the txq selection routes them through the station's management
-		 * queue when the driver declared one, and through .tx when no
-		 * queue owns them.  A Linux-family driver may drop them in the
-		 * .tx route (the AC 7260's does, silently, on a station vif),
-		 * which is why the selection cannot be skipped for them.
-		 */
-		lkpi80211_tx(adapter.hw, adapter.vif, adapter.sta, skb);
-	} else {
-		lkpi80211_drv_tx(adapter.hw, adapter.vif, adapter.sta, skb);
-	}
+	/*
+	 * Every 802.11 frame takes the interface's own transmit handoff, whose
+	 * selection mirrors ieee80211_get_txq: a station's management frames
+	 * ride its management queue, a station's data frames ride its per-TID
+	 * queue, and anything no queue owns rides .tx.  A Linux-family driver
+	 * may drop a frame in the .tx route (the AC 7260 drops station
+	 * management frames silently and refuses station data whose TID queue
+	 * was never allocated), which is why the selection cannot be skipped
+	 * for either.
+	 *
+	 * The TID a data frame's queue is chosen by comes off the socket
+	 * priority the same way mac80211 reads it (skb->priority masked to the
+	 * TID field); the bridge's frames arrive from a L2 world with no
+	 * per-socket priority, so the byte is zero unless the caller set one -
+	 * which still selects the station's queue, exactly what the EAPOL-Key
+	 * exchange needs (the AC 7260's driver refuses a station data frame
+	 * with no TID queue: "Invalid TXQ id", mvm/tx.c:1157).
+	 */
+	lkpi80211_tx(adapter.hw, adapter.vif, adapter.sta, skb);
 	/* the driver owns the skb from here (its completion path releases it
 	 * through the substitute's tx-status entry) */
 	return (int)len;
