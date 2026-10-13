@@ -250,8 +250,25 @@ static int port_bus_up(void *ctx, struct lkpi_pcie_be_dev **devs,
 		devs[i] = (struct lkpi_pcie_be_dev *)dev;
 		descs[i].vendor = dev->vendor;
 		descs[i].device = dev->device;
-		descs[i].subsys_vendor = 0;
-		descs[i].subsys_device = 0;
+		/*
+		 * The subsystem ids, read from the type-0 header's 0x2c dword
+		 * (subsystem vendor id in its low half, subsystem id in the high
+		 * half). They are not decoration: a driver's id table may pin the
+		 * subsystem id, and iwlwifi's does - its AC 7260 rows are
+		 * IWL_PCI_DEVICE(0x08B1, 0x5070, ...) and the macro leaves
+		 * .subvendor wild but sets .subdevice, so a device record with a
+		 * zero subsystem id matches no row at all and the probe never
+		 * runs (measured on the board: the part enumerated and nothing
+		 * claimed it).
+		 */
+		{
+			uint32_t subsys = 0;
+
+			(void)dwc_pcie_cfg_read(dev->busn, dev->devfn, 0x2c, 4,
+						&subsys);
+			descs[i].subsys_vendor = (uint16_t)(subsys & 0xffffu);
+			descs[i].subsys_device = (uint16_t)((subsys >> 16) & 0xffffu);
+		}
 		(void)dwc_pcie_cfg_read(dev->busn, dev->devfn, PCI_CFG_REVISION, 4,
 					&progif);
 		/* class/subclass/prog-if, as the interface packs them: the byte at
