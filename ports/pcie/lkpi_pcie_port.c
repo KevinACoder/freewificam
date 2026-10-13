@@ -95,6 +95,10 @@ struct port_irq {
 	void		(*fn)(void *);
 	void		*arg;
 	bool		used;
+	/* the function's first window and how many deliveries were traced:
+	 * see the interrupt-time snapshot below */
+	uintptr_t	bar0;
+	unsigned int	traced;
 };
 
 static struct port_irq port_irq[PORT_IRQ_MAX];
@@ -103,6 +107,26 @@ static struct port_irq port_irq[PORT_IRQ_MAX];
 /* the interrupt dispatcher                                            */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The AC 7260's control/status registers, at fixed offsets from the function's
+ * first window (third-party/iwlwifi/iwl-csr.h): the raw interrupt cause, the
+ * mask the driver programmed, the FH cause, the reset control and the general
+ * control. An interrupt is the one moment the device speaks to the host
+ * without being asked, so the trace prints what it said and what the driver
+ * had programmed - the first board runs could show neither, and a failed ALIVE
+ * handshake with a receive walk that ran anyway (third-party/iwlwifi/pcie/
+ * gen1_2/rx.c:1337: "frame on invalid queue - is on 0 and indicates 1") needed
+ * exactly these values to tell a lost notification from a device that never
+ * started its firmware. Reads only: every one of these registers is
+ * read-only or write-one-to-clear.
+ */
+#define PORT_CSR_INT		0x008u
+#define PORT_CSR_INT_MASK	0x00cu
+#define PORT_CSR_FH_INT_STATUS	0x010u
+#define PORT_CSR_RESET		0x020u
+#define PORT_CSR_GP_CNTRL	0x024u
+#define PORT_IRQ_TRACE_MAX	6u
+
 /* One dispatcher for every vector: the registry carries the slot as the handler's
  * argument, so the delivery finds the pair the engine registered. */
 static void port_irq_dispatch(void *arg)
@@ -110,6 +134,20 @@ static void port_irq_dispatch(void *arg)
 	struct port_irq *slot = arg;
 
 	if (slot->fn != NULL) {
+		if (slot->traced < PORT_IRQ_TRACE_MAX && slot->bar0 != 0) {
+			volatile uint32_t *csr =
+			    (volatile uint32_t *)slot->bar0;
+
+			slot->traced++;
+			LOG_INFO("pcie: irq %d bar0=0x%08x csr int=0x%08x "
+			    "mask=0x%08x fh=0x%08x reset=0x%08x gp=0x%08x\n",
+			    slot->intid, (unsigned)slot->bar0,
+			    csr[PORT_CSR_INT / 4u],
+			    csr[PORT_CSR_INT_MASK / 4u],
+			    csr[PORT_CSR_FH_INT_STATUS / 4u],
+			    csr[PORT_CSR_RESET / 4u],
+			    csr[PORT_CSR_GP_CNTRL / 4u]);
+		}
 		slot->fn(slot->arg);
 	}
 }
@@ -346,8 +384,8 @@ static int port_bus_up(void *ctx, struct lkpi_pcie_be_dev **devs,
 		descs[i].host_dma_mask = 0xffffffffu;
 		for (j = 0; j < LKPI_PCIE_BE_MAX_BARS && j < 6u; j++) {
 			descs[i].bar[j].phys = dev->bar[j];
-			descs[i].bar[j].size = 0;
-			descs[i].bar[j].flags = 0;
+			descs[i].bar[j].size = dev->bar_size[j];
+			descs[i].bar[j].flags = dev->bar_flags[j];
 		}
 	}
 	*count = (int)n;
@@ -433,6 +471,10 @@ static int port_irq_setup(void *ctx, struct lkpi_pcie_be_dev *d, int kind,
 	slot->fn = handler;
 	slot->arg = arg;
 	slot->used = true;
+	/* the first window, for the interrupt-time snapshot: the record now
+	 * carries the full 64-bit address the firmware assigned */
+	slot->bar0 = (uintptr_t)dev->bar[0];
+	slot->traced = 0;
 
 	/* One dispatcher, armed with the slot as its argument. An LPI is enabled
 	 * through its property byte rather than a distributor bit, so the enable
