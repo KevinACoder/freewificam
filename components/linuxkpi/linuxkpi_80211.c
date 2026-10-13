@@ -78,6 +78,17 @@ _Static_assert(sizeof(struct ieee80211_rx_status) <=
 #ifndef CONFIG_LKPI80211_MAX_STAS
 #define CONFIG_LKPI80211_MAX_STAS	8
 #endif
+/* the deferred receive queue's depth: a burst the driver hands up between two
+ * deliveries of the receive worker; beyond it the oldest frame is dropped and
+ * counted (mac80211's own queue grows instead, but a fixed ring keeps the
+ * port's memory accounting honest) */
+#ifndef CONFIG_LKPI80211_RXQ_DEPTH
+#define CONFIG_LKPI80211_RXQ_DEPTH	32
+#endif
+
+/* the deferred-receive worker (body below ieee80211_rx_irqsafe): the hw
+ * allocator arms it before any driver can hand a frame up */
+static void lkpi80211_rx_work(struct work_struct *w);
 
 /*
  * The hw context this file owns. `hw` is first so a pointer to the context and
@@ -126,6 +137,23 @@ struct lkpi80211_hw_ctx {
 	 * cancel releases it.
 	 */
 	unsigned int		hw_scanning:1;
+	/*
+	 * The deferred receive queue (mac80211's local->rx_skb_queue, drained
+	 * by its tasklet): ieee80211_rx_irqsafe only enqueues, and a worker
+	 * delivers to the bridge.  Running the delivery inline in the caller
+	 * deadlocks: the AC 7260's receive runs on the threaded IRQ, which also
+	 * completes host commands, while the stack-side input takes the port
+	 * serializer - so a frame handed up while another context holds the
+	 * serializer inside a driver call that waits for a host command makes
+	 * that command wait behind its own completion (measured on the board:
+	 * SCD_QUEUE_CFG timed out and the driver force-fired an NMI).  Linux's
+	 * irqsafe form exists exactly to break that chain.
+	 */
+	struct sk_buff		*rxq[CONFIG_LKPI80211_RXQ_DEPTH];
+	unsigned int		rxq_head, rxq_tail, rxq_len;
+	struct work_struct	rx_work;
+	struct workqueue_struct *rx_wq;
+	unsigned long		rxq_drops;
 	struct ieee80211_scan_request *hw_scan_req;
 	unsigned int		have_chanctx:1;
 	/*
@@ -424,6 +452,19 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	ctx->ops = ops;
 	ctx->hw.priv = (u8 *)ctx + sizeof(*ctx);
 	ctx->hw.wiphy = &ctx->wiphy;
+	/*
+	 * The deferred-receive executor: the interface's own receive thread.
+	 * One queue, one worker - the receive order is the order the driver
+	 * handed the frames up, which the parser relies on (scan results and
+	 * the association exchange both read their sequence from it).
+	 */
+	INIT_WORK(&ctx->rx_work, lkpi80211_rx_work);
+	ctx->rx_wq = lkpi_alloc_workqueue("lkpi80211-rx", 0, 1);
+	if (ctx->rx_wq == NULL) {
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: no receive executor\n");
+		kfree(ctx);
+		return NULL;
+	}
 	/* the queue count the driver reads back (core.c:7891 sets 4; the
 	 * engine's own default matches so a driver that does not set it still
 	 * gets a workable value) */
@@ -458,6 +499,22 @@ ieee80211_free_hw(struct ieee80211_hw *hw)
 		if (ctx->vifs[i] != NULL)
 			lkpi_txq_free_vif(ctx->vifs[i]);
 		kfree(ctx->vifs[i]);
+	}
+	/* the receive executor before the context it sits in: no delivery can be
+	 * in flight after the drain returns */
+	if (ctx->rx_wq != NULL) {
+		lkpi_work_flush(&ctx->rx_work);
+		lkpi_destroy_workqueue(ctx->rx_wq);
+		ctx->rx_wq = NULL;
+	}
+	while (ctx->rxq_len > 0) {
+		struct sk_buff *skb = ctx->rxq[ctx->rxq_head];
+
+		ctx->rxq[ctx->rxq_head] = NULL;
+		ctx->rxq_head = (ctx->rxq_head + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
+		ctx->rxq_len--;
+		if (skb != NULL)
+			lkpi_skb_free(skb);
 	}
 	kfree(ctx);
 }
@@ -611,10 +668,47 @@ lkpi80211_rx_linearize(struct ieee80211_hw *hw, struct sk_buff *skb)
 	return lin;
 }
 
+/*
+ * The deferred receive worker: what ieee80211_rx_irqsafe enqueued, delivered to
+ * the bridge from its own context.  Linux drains the same queue from a tasklet
+ * (net/mac80211/rx.c: ieee80211_rx_irqsafe), and the reason is the one this
+ * port measured: the frame's delivery enters the stack under the port
+ * serializer, while the driver's receive context (here the PCI threaded IRQ)
+ * is also the context that completes host commands - a delivery running inline
+ * there can deadlock a command whose completion it is itself carrying.
+ */
+static void
+lkpi80211_rx_work(struct work_struct *w)
+{
+	struct lkpi80211_hw_ctx *ctx =
+	    container_of(w, struct lkpi80211_hw_ctx, rx_work);
+
+	for (;;) {
+		struct sk_buff *skb;
+		struct ieee80211_rx_status *rs;
+
+		if (ctx->rxq_len == 0)
+			return;
+		skb = ctx->rxq[ctx->rxq_head];
+		ctx->rxq[ctx->rxq_head] = NULL;
+		ctx->rxq_head = (ctx->rxq_head + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
+		ctx->rxq_len--;
+
+		rs = (struct ieee80211_rx_status *)skb->cb;
+		ctx->rx_frames++;
+		if (bridge_ops != NULL && bridge_ops->rx != NULL)
+			bridge_ops->rx(&ctx->hw, rs, skb);
+		else
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: rx with no bridge; frame dropped\n");
+		memset(skb->cb, 0, sizeof(skb->cb));
+		lkpi_skb_free(skb);
+	}
+}
+
 void
 ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
-	struct ieee80211_rx_status *rs;
 	struct lkpi80211_hw_ctx *ctx;
 
 	if (hw == NULL || skb == NULL)
@@ -637,25 +731,33 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 		skb_trim(skb, skb->len - ETH_FCS_LEN);
 	ctx = LKPI80211_CTX(hw);
 	/*
-	 * The driver leaves the status block in the control block
-	 * (IEEE80211_SKB_RXCB(skb) is `(struct ieee80211_rx_status *)skb->cb`).
-	 * The bridge copies the frame into the net80211 world's own buffer, so
-	 * the skb is consumed here - the same ownership the Linux entry has
-	 * (mac80211's rx_irqsafe frees the skb once processing is done) and the
-	 * same thing the no-bridge path below does. The control block is cleared
-	 * first: a stale status block behind a buffer that returns to the pool
-	 * would be a trap for whoever gets it next.
+	 * Irqsafe means enqueue-and-return: the caller is a driver receive
+	 * context (an interrupt thread, a bus worker) and must not run the
+	 * stack's input there.  Linux's own contract for this entry is exactly
+	 * that ("irqsafe" = the real processing is deferred), and the port's
+	 * consumer depends on it, because the bridge's input takes the port
+	 * serializer - the same lock a driver call can hold while waiting for a
+	 * host command that only this caller can complete.  A full queue drops
+	 * the oldest frame and counts the loss; the frame's skb is only freed by
+	 * the worker that delivers it.
 	 */
-	rs = (struct ieee80211_rx_status *)skb->cb;
-	ctx->rx_frames++;
-	if (bridge_ops != NULL && bridge_ops->rx != NULL) {
-		bridge_ops->rx(hw, rs, skb);
-		memset(skb->cb, 0, sizeof(skb->cb));
-		lkpi_skb_free(skb);
-		return;
+	if (ctx->rxq_len >= CONFIG_LKPI80211_RXQ_DEPTH) {
+		struct sk_buff *old = ctx->rxq[ctx->rxq_head];
+
+		ctx->rxq[ctx->rxq_head] = NULL;
+		ctx->rxq_head = (ctx->rxq_head + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
+		ctx->rxq_len--;
+		ctx->rxq_drops++;
+		if (old != NULL)
+			lkpi_skb_free(old);
 	}
-	lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: rx with no bridge; frame dropped\n");
-	lkpi_skb_free(skb);
+	ctx->rxq[ctx->rxq_tail] = skb;
+	ctx->rxq_tail = (ctx->rxq_tail + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
+	ctx->rxq_len++;
+	if (ctx->rx_wq != NULL)
+		(void)queue_work(ctx->rx_wq, &ctx->rx_work);
+	else
+		lkpi80211_rx_work(&ctx->rx_work);
 }
 
 /*
