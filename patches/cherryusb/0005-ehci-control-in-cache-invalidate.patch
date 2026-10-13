@@ -1,0 +1,47 @@
+From 284e0a746962519b844267531a66caf0377c7be6 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Wed, 14 Oct 2026 07:40:10 +0800
+Subject: [PATCH] fix(port/ehci): invalidate control-IN buffers on
+ completion
+
+ehci_urb_waitup() decides whether the transfer buffer holds device-written
+bytes from the endpoint address, but endpoint zero's address is 0x00 by
+definition: the invalidate never ran for control-IN reads, so the CPU kept
+whatever cache line it happened to hold in place of the bytes the transfer
+delivered.  On the board it reads as the device descriptor coming back all
+zeros once in a while (a stale line), and it makes every control-IN result
+depend on cache history instead of on the transfer.
+
+Take the direction from the setup packet for control transfers and keep the
+endpoint address for the rest; the lengths the two paths pass follow the
+same split as before (control strips the eight setup bytes).
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ port/ehci/usb_hc_ehci.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/port/ehci/usb_hc_ehci.c b/port/ehci/usb_hc_ehci.c
+index 7a77769..7d9c523 100644
+--- a/port/ehci/usb_hc_ehci.c
++++ b/port/ehci/usb_hc_ehci.c
+@@ -651,7 +651,18 @@ static void ehci_urb_waitup(struct usbh_bus *bus, struct usbh_urb *urb)
+     qh->killed = 0;
+ 
+ #ifdef CONFIG_USB_DCACHE_ENABLE
+-    if (urb->transfer_buffer && (urb->ep->bEndpointAddress & 0x80) && urb->errorcode == 0) {
++    /* The direction that decides whether the buffer was written by the device
++     * lives in the setup packet for a control pipe: endpoint zero's address is
++     * 0x00 by definition, so testing the endpoint address alone skips the
++     * invalidate of every control-IN read - the CPU can then keep a stale
++     * cache line in place of the bytes the transfer just delivered (the
++     * device descriptor read back as zeros is what it looks like on a
++     * board).  Non-control transfers carry the direction in their endpoint
++     * descriptor as before. */
++    if (urb->transfer_buffer &&
++        ((urb->setup && (urb->setup->bmRequestType & 0x80)) ||
++         (!urb->setup && (urb->ep->bEndpointAddress & 0x80))) &&
++        urb->errorcode == 0) {
+         switch (USB_GET_ENDPOINT_TYPE(urb->ep->bmAttributes)) {
+             case USB_ENDPOINT_TYPE_CONTROL:
+                 usb_dcache_invalidate((uintptr_t)urb->transfer_buffer, USB_ALIGN_UP(urb->actual_length - 8, CONFIG_USB_ALIGN_SIZE));

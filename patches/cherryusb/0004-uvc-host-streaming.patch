@@ -1,6 +1,6 @@
-From 607700e1e7f9ec47d4384bfa64c5de5a2626a5f8 Mon Sep 17 00:00:00 2001
+From 5c4b281edf3889c93f67334e75987b86f82f1f30 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu2023@gmail.com>
-Date: Wed, 14 Oct 2026 03:32:04 +0800
+Date: Wed, 14 Oct 2026 07:40:10 +0800
 Subject: [PATCH] class/video: add the UVC host streaming engine
 
 The host-UVC demos this tree carries call usbh_video_stream_create/start/
@@ -46,18 +46,18 @@ rest of the stack's keys.
 
 Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
 ---
- class/video/usbh_uvc_stream.c | 800 ++++++++++++++++++++++++++++++++++
+ class/video/usbh_uvc_stream.c | 837 ++++++++++++++++++++++++++++++++++
  class/video/usbh_uvc_stream.h |  89 ++++
- 2 files changed, 889 insertions(+)
+ 2 files changed, 926 insertions(+)
  create mode 100644 class/video/usbh_uvc_stream.c
  create mode 100644 class/video/usbh_uvc_stream.h
 
 diff --git a/class/video/usbh_uvc_stream.c b/class/video/usbh_uvc_stream.c
 new file mode 100644
-index 0000000..01103fd
+index 0000000..7afb81d
 --- /dev/null
 +++ b/class/video/usbh_uvc_stream.c
-@@ -0,0 +1,800 @@
+@@ -0,0 +1,837 @@
 +/*
 + * Copyright (c) 2026, zhugengyu
 + *
@@ -516,6 +516,35 @@ index 0000000..01103fd
 +    return best;
 +}
 +
++/* One SET_INTERFACE request on the streaming interface. */
++static int stream_set_interface(struct usbh_video *video, uint8_t alt)
++{
++    struct usb_setup_packet *setup = video->hport->setup;
++
++    setup->bmRequestType = USB_REQUEST_DIR_OUT | USB_REQUEST_STANDARD | USB_REQUEST_RECIPIENT_INTERFACE;
++    setup->bRequest = USB_REQUEST_SET_INTERFACE;
++    setup->wValue = alt;
++    setup->wIndex = video->data_intf;
++    setup->wLength = 0;
++    return usbh_control_transfer(video->hport, setup, NULL);
++}
++
++/* Take the streaming interface through one enter-and-leave cycle.  The
++ * setting entered is the one the last open used when that is known (the
++ * device has already accepted it), else the smallest one the ladder carries.
++ * Errors are ignored: the caller's next probe reports the state. */
++static void stream_interface_rearm(struct usbh_video *video)
++{
++    uint8_t alt = stream_alt_pick(video, video->isoin_mps ? video->isoin_mps : 0);
++
++    if (alt == 0) {
++        return;
++    }
++    (void)stream_set_interface(video, alt);
++    usb_osal_msleep(100);
++    (void)stream_set_interface(video, 0);
++}
++
 +/* ------------------------------------------------------------------------
 + * Public interface
 + * --------------------------------------------------------------------- */
@@ -603,16 +632,24 @@ index 0000000..01103fd
 +            return ret;
 +        }
 +        /* Ask the device what the configuration needs (bytes per USB frame)
-+         * before committing, exactly as the class's open sequence does.  A
-+         * camera that just left a streaming configuration can refuse a
-+         * control request while it settles, so the probe exchange is retried
-+         * the way the class's own get path retries. */
-+        for (uint32_t retry = 0; retry < 5; retry++) {
++         * before committing, exactly as the class's open sequence does.
++         *
++         * A camera that was just taken out of a streaming setting can refuse
++         * VS class requests outright: every attempt then times out on its
++         * data stage (or has its status stage held off) while standard
++         * requests keep working, and the refusal survives retries and waits
++         * for seconds.  The observed cure, and the reason for the ladder
++         * below, is to take the streaming interface through one streaming
++         * setting and back - only then does the camera answer the probe
++         * again.  Each failed attempt therefore runs one re-arm cycle before
++         * the next try. */
++        for (uint32_t attempt = 0; attempt < 4; attempt++) {
 +            ret = usbh_videostreaming_set_cur_probe(video, formatidx, frameidx, interval);
 +            if (ret == 0) {
 +                break;
 +            }
 +            usb_osal_msleep(100);
++            stream_interface_rearm(video);
 +        }
 +        if (ret < 0) {
 +            USB_LOG_ERR("start: probe set failed (%d)\r\n", (int)ret);
@@ -953,6 +990,3 @@ index 0000000..a87d544
 +#endif
 +
 +#endif /* USBH_UVC_STREAM_H */
--- 
-2.43.0
-
