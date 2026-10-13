@@ -57,9 +57,26 @@
  * table asserts its DMA address is ICT_SIZE-aligned (third-party/iwlwifi/pcie/
  * gen1_2/rx.c:2196), which a 64-byte pool cannot promise. The block header is the
  * alignment wide, so every block - and therefore every payload - starts on that
- * boundary; the pool is sized for the driver's queue and command buffers with
- * room over. */
-#define PORT_DMA_POOL_SIZE	(1u * 1024u * 1024u)
+ * boundary.
+ *
+ * The size is the AC 7260 probe's measured demand, term by term, not a wish. The
+ * coherent consumers on that path: the interrupt-cause table (ICT_SIZE 4 KiB), the
+ * receive descriptor ring (free_bd_size 4 x RX_QUEUE_SIZE 256) and the RB status
+ * page (one iwl_rb_status for the single receive queue), the scheduler's
+ * byte-count table (num_of_queues 31 x BC_TABLE_SIZE 640), the keep-warm buffer
+ * (IWL_KW_SIZE 4 KiB), the firmware monitor block the debug TLV asks for
+ * ("Allocated 0x00020000 bytes for firmware monitor", 128 KiB), and the transmit
+ * queues - the dominant term: 30 data queues of max_tfd_queue_size (256) TFDs of
+ * 128 bytes (struct iwl_tfd, IWL_NUM_OF_TBS 20) plus 256 first-TB buffers of
+ * ALIGN(IWL_FIRST_TB_SIZE 20, 64), and one command queue of 32 - which is 48 KiB
+ * of payload per data queue and, with one block header per coherent allocation,
+ * 56 KiB per queue and ~1.64 MiB for the 31 (pcie/gen1_2/tx.c, the queue
+ * allocator). The whole set is ~1.9 MiB, and the 2 MiB non-cacheable window is
+ * what the arch layer maps as one block (arch/aarch64/mmu.c, asserted in the
+ * linker script), so this pool is the window. An image whose demand outgrows the
+ * window fails at link time, not at run time - and a request the pool cannot serve
+ * logs what it wanted and what is left before it fails. */
+#define PORT_DMA_POOL_SIZE	(2u * 1024u * 1024u)
 #define PORT_DMA_ALIGN		4096u
 
 struct port_dma_blk {
@@ -135,11 +152,42 @@ static void port_dma_init(void)
 	blk->size = PORT_DMA_POOL_SIZE - sizeof(*blk);
 	blk->used = 0;
 	port_dma_ready = true;
+	LOG_INFO("pcie: coherent pool %u KiB (non-cacheable)\n",
+	    PORT_DMA_POOL_SIZE / 1024u);
 }
 
 static uint8_t *port_dma_block_next(const struct port_dma_blk *blk)
 {
 	return (uint8_t *)blk + sizeof(*blk) + blk->size;
+}
+
+/* What a refused request gets told: how much of the pool is free and how large
+ * its largest run is. A request that fits in the total but not in any run is
+ * fragmentation; one larger than the total is capacity. The line has to say
+ * which, because the picture on the serial console is otherwise a driver whose
+ * allocation failed for no visible reason (which is what the AC 7260's first
+ * board run looked like). */
+static void port_dma_report_free(size_t want, const char *why)
+{
+	struct port_dma_blk *blk;
+	uint8_t *end = port_dma_pool + PORT_DMA_POOL_SIZE;
+	size_t free_bytes = 0, largest = 0;
+
+	for (blk = (struct port_dma_blk *)port_dma_pool;
+	     (uint8_t *)blk + sizeof(*blk) <= end;
+	     blk = (struct port_dma_blk *)port_dma_block_next(blk)) {
+		if (blk->used) {
+			continue;
+		}
+		free_bytes += blk->size;
+		if (blk->size > largest) {
+			largest = blk->size;
+		}
+	}
+	LOG_WARNING("pcie: coherent pool %s: %u bytes wanted, %u free, "
+	    "largest run %u (pool %u)\n",
+	    why, (unsigned)want, (unsigned)free_bytes, (unsigned)largest,
+	    (unsigned)PORT_DMA_POOL_SIZE);
 }
 
 /* First fit over the pool's block list. A freed block coalesces with its
@@ -152,6 +200,11 @@ static int port_dma_alloc(size_t len, void **cpu, u64 *bus)
 
 	port_dma_init();
 	if (len == 0 || len > PORT_DMA_POOL_SIZE - sizeof(*blk)) {
+		/* A caller probing for a size it cannot have (the firmware
+		 * monitor walks its sizes down) is a policy, not a fault: say
+		 * what was refused, and let the caller step down. */
+		LOG_INFO("pcie: coherent pool: %u bytes refused (pool %u)\n",
+		    (unsigned)len, (unsigned)PORT_DMA_POOL_SIZE);
 		return -LKPI_PCIE_BE_ERR_RANGE;
 	}
 	len = (len + PORT_DMA_ALIGN - 1u) & ~(size_t)(PORT_DMA_ALIGN - 1u);
@@ -177,6 +230,7 @@ static int port_dma_alloc(size_t len, void **cpu, u64 *bus)
 		*bus = (u64)(uintptr_t)*cpu;
 		return 0;
 	}
+	port_dma_report_free(len, "exhausted");
 	return -LKPI_PCIE_BE_ERR_FAIL;
 }
 
