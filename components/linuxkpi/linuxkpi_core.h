@@ -2121,18 +2121,23 @@ void	lkpi_module_init_run(void);
 /*
  * The message-carrying forms. The interface's WARN()/WARN_ONCE() print the
  * condition's site AND the call site's formatted message with its arguments
- * ([LNX] include/asm-generic/bug.h: the second parameter is a format). The
- * previous spelling collapsed both onto WARN_ON() and dropped the message -
- * which is exactly where a driver puts the values a diagnosis needs: the
- * vendored receive path's "frame on invalid queue - is on %d and indicates
- * %d" (third-party/iwlwifi/pcie/gen1_2/rx.c:1339) was the one line the board
- * could not show, and it is the line that says which queue the hardware
- * actually reported.
+ * ([LNX] include/asm-generic/bug.h: the second parameter is a format), and
+ * they print them as two lines - the site, then the message. The previous
+ * spelling collapsed both onto WARN_ON() and dropped the message, which is
+ * exactly where a driver puts the values a diagnosis needs: the vendored
+ * receive path's "frame on invalid queue - is on %d and indicates %d"
+ * (third-party/iwlwifi/pcie/gen1_2/rx.c:1339) was the one line the board could
+ * not show. The two lines are also what keeps the message inside the
+ * console's own line budget: a single line carrying the site's full path, the
+ * stringified condition and the message was cut by the log's line limit on
+ * the serial console, and the values sat in the part that was cut.
  */
 #define	WARN(cond, fmt, ...)	({					\
 	bool __w = (cond);						\
-	if (__w)							\
-		lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN(%s): " fmt "\n", __FILE__, __LINE__, #cond, ##__VA_ARGS__); \
+	if (__w) {							\
+		lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN\n", __FILE__, __LINE__); \
+		lkpi_printf(ULOG_WARNING_LEVEL, fmt "\n", ##__VA_ARGS__); \
+	}								\
 	__w;								\
 })
 #define	WARN_ONCE(cond, fmt, ...)	WARN(cond, fmt, ##__VA_ARGS__)
