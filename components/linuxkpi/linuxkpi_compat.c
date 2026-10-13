@@ -420,23 +420,40 @@ void kmem_cache_free(struct kmem_cache *s, void *objp)
 
 /*
  * [LNX] include/linux/gfp.h:302-307 and 342-346, include/linux/mm.h:3104 (the
- * declarations). On this port a "page" is the buffer itself: the interface's struct
- * page is an opaque handle whose fields no compiled caller reads, and every caller
- * only passes it to page_address() (to get the CPU address) or back to
- * __free_pages()/free_pages() (to release it). So alloc_pages() hands out a heap
- * block of PAGE_SIZE << order and returns its address as the page handle,
- * page_address() returns that same address, and the frees release it. The block's
- * header makes the release order-independent, so the order argument is not needed.
- * A caller that required real page alignment (a DMA mapping, say) is not served by
- * this and is the DMA face's concern, not this one's.
+ * declarations). On this port a "page" is a buffer whose address is the handle:
+ * the interface's struct page is opaque and every compiled caller only passes it
+ * to page_address() (the CPU address) or back to __free_pages()/free_pages().
+ *
+ * The alignment is not a convenience here, it is the contract's load-bearing
+ * part, and getting it wrong cost the AC 7260 a firmware ALIVE handshake: the
+ * receive path hands each "page" to the device through the single-queue
+ * descriptor form, which keeps the address shifted by eight bits
+ * (third-party/iwlwifi/pcie/gen1_2/rx.c:137-140), so a pointer whose low eight
+ * bits are not zero makes the device write to a different address than the one
+ * the driver later reads - and the driver read the heap's stale bytes instead
+ * of the notification ("frame on invalid queue - is on 0 and indicates 1",
+ * then a firmware ALIVE that never arrived). The heap hands out headers, so
+ * pages are carved here: the block is over-allocated by one page, the page
+ * starts at the next page boundary, and the block's own base is kept in the
+ * word before it for the release path.
+ *
+ * A caller that requires the kernel's other page property (an allocator that
+ * swaps, a struct page the kernel walks) is still not served by this, and is
+ * the DMA face's concern, not this one's.
  */
+struct lkpi_page_base {
+	uintptr_t	base;	/* the heap block the page was carved from */
+};
+
 struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
 {
 	size_t size = (size_t)PAGE_SIZE << order;
-	struct page *page = (struct page *)lkpi_kmem_alloc(size, (int)gfp_mask,
-	    (gfp_mask & __GFP_ZERO) != 0);
+	struct lkpi_page_base *hdr;
+	uint8_t *raw, *page;
+	uintptr_t aligned;
 
-	if (page == NULL) {
+	raw = lkpi_kmem_alloc(size + PAGE_SIZE, (int)gfp_mask, false);
+	if (raw == NULL) {
 		/*
 		 * The vendored receive path reports the refusal but not the
 		 * request: its order-carrying line is debug-gated and its
@@ -454,20 +471,35 @@ struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
 			    "lkpi: alloc_pages(order=%u) refused, %u bytes\n",
 			    order, (unsigned)size);
 		}
+		return NULL;
 	}
-	return page;
+
+	aligned = ((uintptr_t)raw + sizeof(*hdr) + PAGE_SIZE - 1u) &
+	    ~(uintptr_t)(PAGE_SIZE - 1u);
+	hdr = (struct lkpi_page_base *)(aligned - sizeof(*hdr));
+	hdr->base = (uintptr_t)raw;
+	page = (uint8_t *)aligned;
+
+	if ((gfp_mask & __GFP_ZERO) != 0)
+		memset(page, 0, size);
+	return (struct page *)page;
 }
 
 void __free_pages(struct page *page, unsigned int order)
 {
+	const struct lkpi_page_base *hdr;
+
 	(void)order;
-	lkpi_kmem_free(page);
+	if (page == NULL)
+		return;
+	hdr = (const struct lkpi_page_base *)page - 1;
+	lkpi_kmem_free((const void *)hdr->base);
 }
 
 void free_pages(unsigned long addr, unsigned int order)
 {
-	(void)order;
-	lkpi_kmem_free((const void *)(uintptr_t)addr);
+
+	__free_pages((struct page *)(uintptr_t)addr, order);
 }
 
 /* page_address() is the accessor's inline in include/linux/mm.h, not a body here:
