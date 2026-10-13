@@ -50,11 +50,17 @@
 #define PORT_IRQ_MAX	8
 
 /* The coherent window. It is the same non-cacheable section the other DMA-capable
- * drivers use, so the pool needs no mapping call and no maintenance; the size is
- * what the first consumer asks for (a few queue and command buffers) with room
- * left over. */
-#define PORT_DMA_POOL_SIZE	(256u * 1024u)
-#define PORT_DMA_ALIGN		64u
+ * drivers use, so the pool needs no mapping call and no maintenance; the size and
+ * the alignment are the interface's contract rather than the first consumer's
+ * wish. dma_alloc_coherent() returns memory aligned to at least the smallest page
+ * size, and a driver is entitled to rely on it: the AC 7260's interrupt-cause
+ * table asserts its DMA address is ICT_SIZE-aligned (third-party/iwlwifi/pcie/
+ * gen1_2/rx.c:2196), which a 64-byte pool cannot promise. The block header is the
+ * alignment wide, so every block - and therefore every payload - starts on that
+ * boundary; the pool is sized for the driver's queue and command buffers with
+ * room over. */
+#define PORT_DMA_POOL_SIZE	(1u * 1024u * 1024u)
+#define PORT_DMA_ALIGN		4096u
 
 struct port_dma_blk {
 	uint32_t	size;		/* payload bytes in this block */
@@ -250,8 +256,25 @@ static int port_bus_up(void *ctx, struct lkpi_pcie_be_dev **devs,
 		devs[i] = (struct lkpi_pcie_be_dev *)dev;
 		descs[i].vendor = dev->vendor;
 		descs[i].device = dev->device;
-		descs[i].subsys_vendor = 0;
-		descs[i].subsys_device = 0;
+		/*
+		 * The subsystem ids, read from the type-0 header's 0x2c dword
+		 * (subsystem vendor id in its low half, subsystem id in the high
+		 * half). They are not decoration: a driver's id table may pin the
+		 * subsystem id, and iwlwifi's does - its AC 7260 rows are
+		 * IWL_PCI_DEVICE(0x08B1, 0x5070, ...) and the macro leaves
+		 * .subvendor wild but sets .subdevice, so a device record with a
+		 * zero subsystem id matches no row at all and the probe never
+		 * runs (measured on the board: the part enumerated and nothing
+		 * claimed it).
+		 */
+		{
+			uint32_t subsys = 0;
+
+			(void)dwc_pcie_cfg_read(dev->busn, dev->devfn, 0x2c, 4,
+						&subsys);
+			descs[i].subsys_vendor = (uint16_t)(subsys & 0xffffu);
+			descs[i].subsys_device = (uint16_t)((subsys >> 16) & 0xffffu);
+		}
 		(void)dwc_pcie_cfg_read(dev->busn, dev->devfn, PCI_CFG_REVISION, 4,
 					&progif);
 		/* class/subclass/prog-if, as the interface packs them: the byte at
