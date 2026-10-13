@@ -42,6 +42,7 @@
 #include <string.h>
 
 #include "linuxkpi_core.h"
+#include <linux/etherdevice.h>
 #include <linux/if_ether.h>
 #include <net/mac80211.h>
 #include <net/cfg80211.h>
@@ -476,6 +477,25 @@ ieee80211_register_hw(struct ieee80211_hw *hw)
 	ctx = LKPI80211_CTX(hw);
 	if (ctx->registered)
 		return -EALREADY;
+	/*
+	 * The interface address the driver registered, into the permanent one:
+	 * the driver fills wiphy->addresses[0] while it probes (the AC 7260 from
+	 * its own NVM, mvm/mac80211.c:568-570) and the interface's own
+	 * registration copies the first entry into perm_addr (net/wireless/
+	 * core.c:976-977, wiphy_register).  The bridge reads perm_addr when it
+	 * attaches, so without the copy the interface comes up with an all-zero
+	 * address - and that address is what the driver hands the firmware in
+	 * the MAC context it programs for the vif.
+	 */
+	if (ctx->wiphy.addresses != NULL && ctx->wiphy.n_addresses > 0 &&
+	    is_valid_ether_addr(ctx->wiphy.addresses[0].addr)) {
+		memcpy(ctx->wiphy.perm_addr, ctx->wiphy.addresses[0].addr,
+		    ETH_ALEN);
+	} else {
+		lkpi_printf(ULOG_WARNING_LEVEL,
+		    "lkpi80211: the driver registered no usable address (n_addresses=%u); the interface keeps the zero address\n",
+		    (unsigned)ctx->wiphy.n_addresses);
+	}
 	if (bridge_ops == NULL || bridge_ops->attach == NULL) {
 		/*
 		 * No bridge means no net80211 behind the face: the radio could
