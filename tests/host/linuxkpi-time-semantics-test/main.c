@@ -184,6 +184,84 @@ case_completion(void)
 	    "observed=%u", observed);
 }
 
+/* ------------------------------------------------------------------ */
+/* the wait_event_timeout cases                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The wrapped wait's result has to reach the caller the right way round: a
+ * condition that came true - because it already held, or because a wake-up
+ * delivered it - is 1, and only a real timeout is 0. The wake-up leg is the one
+ * the vendored driver's firmware-chunk wait rides (it tests the result for
+ * zero, third-party/iwlwifi/pcie/gen1_2/trans.c:646), and every leg is bounded:
+ * an implementation that re-arms the whole budget after a missed wake-up would
+ * turn a bounded wait into an unbounded one.
+ */
+
+struct we_case {
+	struct wait_queue_head	wq;
+	volatile int		cond;
+};
+
+static struct we_case we;
+
+static void
+we_waker(void *arg)
+{
+	struct we_case *c = arg;
+
+	osDelay(50);
+	c->cond = 1;
+	lkpi_waitqueue_wake(&c->wq);
+	/* a task entry must not return (the port's own assertion says so) */
+	osThreadExit();
+}
+
+static void
+case_wait_event(void)
+{
+	osThreadAttr_t attr = { 0 };
+	unsigned long t0, dt;
+	osThreadId_t t;
+	int rc;
+
+	lkpi_waitqueue_init(&we.wq);
+
+	/* (1) the condition already holds: no wait happens, the result is "true" */
+	we.cond = 1;
+	t0 = jiffies;
+	rc = wait_event_timeout(we.wq, we.cond, msecs_to_jiffies(200));
+	dt = jiffies - t0;
+	case_line("wait-event-satisfied", rc == 1 && dt < 100,
+	    "rc=%d dt=%lums", rc, dt);
+
+	/* (2) a wake-up delivers the condition: the waiter must report "true",
+	 * and it must return at the wake-up, not at the deadline */
+	we.cond = 0;
+	attr.name = "we-waker";
+	attr.stack_size = 4096u;
+	attr.priority = osPriorityNormal;
+	t = osThreadNew(we_waker, &we, &attr);
+	if (t == NULL) {
+		case_line("wait-event-woken", 0, "the waker did not start");
+		return;
+	}
+	t0 = jiffies;
+	rc = wait_event_timeout(we.wq, we.cond, msecs_to_jiffies(2000));
+	dt = jiffies - t0;
+	case_line("wait-event-woken", rc == 1 && dt >= 30 && dt < 1000,
+	    "rc=%d dt=%lums", rc, dt);
+
+	/* (3) nothing delivers the condition: the wait must time out and say so,
+	 * within the budget it was given */
+	we.cond = 0;
+	t0 = jiffies;
+	rc = wait_event_timeout(we.wq, we.cond, msecs_to_jiffies(200));
+	dt = jiffies - t0;
+	case_line("wait-event-times-out", rc == 0 && dt >= 180 && dt < 800,
+	    "rc=%d dt=%lums", rc, dt);
+}
+
 static void
 app_task(void *arg)
 {
@@ -193,6 +271,7 @@ app_task(void *arg)
 	case_delay_before_read();
 	case_first_read();
 	case_completion();
+	case_wait_event();
 	printf("TIMESEM: summary cases=%u failed=%u\n", g_cases, g_fail);
 	fflush(stdout);
 	cmsis2_host_end_scheduler();

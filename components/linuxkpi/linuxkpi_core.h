@@ -2898,16 +2898,37 @@ int lkpi_waitq_timedwait(struct wait_queue_head *, int ms);
 #define	wake_up_interruptible(wq)	lkpi_waitqueue_wake(wq)
 #define	wake_up_all(wq)			lkpi_waitqueue_wake(wq)
 
-/* Returns 1 if the condition became true, 0 on timeout (Linux semantics). */
+/*
+ * Returns 1 when the condition became true, 0 on timeout - the interface's
+ * remaining-jiffies result read the only way this port's callers read it.
+ *
+ * The budget is a deadline on the port's own millisecond clock, not a count of
+ * wake-ups: the condition is re-checked after every wake, a wake-up meant for
+ * another waiter does not re-arm the full timeout, and a waiter whose wake was
+ * missed still leaves at the deadline. The deadline is what makes the mapping
+ * safe to state plainly - the previous form mapped lkpi_waitq_timedwait's own
+ * result (1 is "woken") the wrong way round, so a satisfied condition read as a
+ * timeout and a real timeout re-armed the whole budget and looped. Its first
+ * live consumer was the vendored driver's firmware-chunk wait
+ * (third-party/iwlwifi/pcie/gen1_2/trans.c:646), which reported
+ * "Failed to load firmware chunk!" after 5 ms against a 5 s wait while the
+ * device had in fact completed the transfer.
+ */
 #define	wait_event_timeout(wq, cond, timeout)				\
 ({									\
-	int __ret = 0;							\
 	int __ms = (int)jiffies_to_msecs(timeout);			\
+	unsigned long __deadline = jiffies + (unsigned long)__ms;	\
+	int __ret;							\
 	lkpi_waitq_lock(&(wq));						\
-	while (!(cond) && __ret == 0)					\
-		__ret = lkpi_waitq_timedwait(&(wq), __ms);		\
+	while (!(cond)) {						\
+		long __left = (long)(__deadline - jiffies);		\
+		if (__left <= 0 ||					\
+		    !lkpi_waitq_timedwait(&(wq), (int)__left))		\
+			break;						\
+	}								\
+	__ret = (cond) ? 1 : 0;						\
 	lkpi_waitq_unlock(&(wq));					\
-	__ret == 0 ? 1 : 0;						\
+	__ret;								\
 })
 
 #define	wait_event(wq, cond)						\

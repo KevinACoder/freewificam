@@ -32,7 +32,7 @@ case_line() {
 # ---- the cases ----------------------------------------------------------------
 
 if "$bin" > "$log_dir/run.log" 2>&1; then
-    if grep -q '^TIMESEM: summary cases=6 failed=0$' "$log_dir/run.log"; then
+    if grep -q '^TIMESEM: summary cases=9 failed=0$' "$log_dir/run.log"; then
         case_line budget PASS
         case_line completion-layout PASS
     else
@@ -41,9 +41,19 @@ if "$bin" > "$log_dir/run.log" 2>&1; then
         echo "linuxkpi-time-semantics-test: summary unexpected" >&2
         tail -8 "$log_dir/run.log" >&2 || true
     fi
+    # the wrapped wait's own container: all three legs present and green
+    wait_pass=$(grep -c '^TIMESEM: wait-event-.* PASS' "$log_dir/run.log" || true)
+    wait_fail=$(grep -c '^TIMESEM: wait-event-.* FAIL' "$log_dir/run.log" || true)
+    if [ "$wait_pass" = 3 ] && [ "$wait_fail" = 0 ]; then
+        case_line wait-event-timeout PASS
+    else
+        case_line wait-event-timeout FAIL
+        echo "linuxkpi-time-semantics-test: the wrapped-wait legs are not all green ($wait_pass pass, $wait_fail fail)" >&2
+    fi
 else
     case_line budget FAIL
     case_line completion-layout FAIL
+    case_line wait-event-timeout FAIL
     echo "linuxkpi-time-semantics-test: run failed" >&2
     tail -8 "$log_dir/run.log" >&2 || true
 fi
@@ -83,6 +93,52 @@ else
     case_line budget-red-control FAIL
     echo "linuxkpi-time-semantics-test: the mutated header did not build" >&2
     tail -5 "$log_dir/mutated-build.log" >&2 || true
+fi
+
+# ---- the wrapped-wait red control ---------------------------------------------
+
+# The mapping under test is which result the wrapped wait reports.  The control
+# builds the same harness against a wrapper header that restores the pre-fix
+# form - a satisfied condition read as a timeout, and a missed wake-up
+# re-arming the whole budget - so the woken leg has to go red.  The timeout leg
+# that follows it would spin under that form, so the control's run is bounded
+# and only the red line is read.
+mut2=$log_dir/mutated-core
+rm -rf "$mut2"
+mkdir -p "$mut2"
+cat > "$mut2/linuxkpi_core.h" <<'EOF'
+/* the pre-fix wait_event_timeout, restored for the red control */
+#include "REAL_CORE_HEADER"
+#undef wait_event_timeout
+#define	wait_event_timeout(wq, cond, timeout)				\
+({									\
+	int __ret = 0;							\
+	int __ms = (int)jiffies_to_msecs(timeout);			\
+	lkpi_waitq_lock(&(wq));						\
+	while (!(cond) && __ret == 0)					\
+		__ret = lkpi_waitq_timedwait(&(wq), __ms);		\
+	lkpi_waitq_unlock(&(wq));					\
+	__ret == 0 ? 1 : 0;						\
+})
+EOF
+sed -i "s|REAL_CORE_HEADER|$root/components/linuxkpi/linuxkpi_core.h|" "$mut2/linuxkpi_core.h"
+if grep -q '#undef wait_event_timeout' "$mut2/linuxkpi_core.h" &&
+    make -C "$root/tests/host/linuxkpi-time-semantics-test" \
+        CORE_EXTRA_INC="-I$mut2" BUILD_DIR="$mut2/build" > "$log_dir/mutated-core-build.log" 2>&1; then
+    set +e
+    timeout 60 "$mut2/build/linuxkpi-time-semantics-test" > "$log_dir/mutated-core-run.log" 2>&1
+    set -e
+    if grep -q '^TIMESEM: wait-event-woken FAIL' "$log_dir/mutated-core-run.log"; then
+        case_line wait-event-red-control PASS
+    else
+        case_line wait-event-red-control FAIL
+        echo "linuxkpi-time-semantics-test: the pre-fix mapping did not turn the woken leg red" >&2
+        tail -4 "$log_dir/mutated-core-run.log" >&2 || true
+    fi
+else
+    case_line wait-event-red-control FAIL
+    echo "linuxkpi-time-semantics-test: the wrapped-wait control did not build" >&2
+    tail -5 "$log_dir/mutated-core-build.log" >&2 || true
 fi
 
 exit "$failures"

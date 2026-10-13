@@ -10,7 +10,9 @@
 #
 # IOPOLL_EXTRA_INC lets the wrapper's red control prepend a directory holding a
 # mutated copy of linux/iopoll.h: the same harness must then go red, which is
-# what proves the cases can fail at all.
+# what proves the cases can fail at all. CORE_EXTRA_INC does the same for the
+# wrapped-wait control, whose mutation is a wrapper around linuxkpi_core.h that
+# restores the pre-fix wait_event_timeout mapping.
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 ROOT         := $(abspath $(MAKEFILE_DIR)/../../..)
@@ -23,6 +25,7 @@ BUILD_DIR := $(MAKEFILE_DIR)/build
 BIN       := $(BUILD_DIR)/linuxkpi-time-semantics-test
 
 IOPOLL_EXTRA_INC ?=
+CORE_EXTRA_INC ?=
 
 SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=all \
             -fno-omit-frame-pointer
@@ -33,6 +36,7 @@ CFLAGS := -ggdb3 -O1 -Wall -Wextra -ffunction-sections -fdata-sections \
           -DCMSIS_device_header='"cmsis_host_device.h"' \
           -DFREERTOS_HOOKS_TAG='"lkpi-time-semantics"' \
           $(IOPOLL_EXTRA_INC) \
+          $(CORE_EXTRA_INC) \
           -I$(ROOT) \
           -I$(ROOT)/components/ulog/src \
           -I$(ROOT)/os/freertos \
