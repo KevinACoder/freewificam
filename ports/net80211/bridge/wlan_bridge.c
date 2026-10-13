@@ -1135,7 +1135,19 @@ wlan_bridge_scan_start(void)
 
 		hw_rc = n_freqs == 0 || bridge.ops->hw_scan_start == NULL ?
 		    -1 : bridge.ops->hw_scan_start(bridge.drv, freqs, n_freqs);
-		if (hw_rc != 0) {
+		if (hw_rc == 1 && bridge.ops->sw_scan_start != NULL) {
+			/*
+			 * mac80211's own fallback (scan.c:896-906): a driver
+			 * answers 1 for "this request cannot be taken as a
+			 * hardware scan", and the interface then runs the
+			 * software route instead of failing the sweep.  The
+			 * Realtek vendors' drivers register both routes and
+			 * answer 1 while their firmware has no scan offload,
+			 * which is a live configuration on this board - treating
+			 * the answer as an error killed their sweeps outright.
+			 */
+			bridge.scan_hw = 0;
+		} else if (hw_rc != 0) {
 			wlan_osal_log("wlan: hw scan refused (freqs=%u)\n",
 			    (unsigned)n_freqs);
 			bridge.scan_hw = 0;
@@ -1144,7 +1156,8 @@ wlan_bridge_scan_start(void)
 			bridge.filter_clears++;
 			return -EIO;
 		}
-	} else if (bridge.ops->sw_scan_start != NULL &&
+	}
+	if (!bridge.scan_hw && bridge.ops->sw_scan_start != NULL &&
 	    bridge.ops->sw_scan_start(bridge.drv) != 0) {
 		(void)bridge.ops->filter(bridge.drv,
 		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
