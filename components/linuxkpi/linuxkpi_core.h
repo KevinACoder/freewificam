@@ -2118,8 +2118,24 @@ void	lkpi_module_init_run(void);
 	__w;								\
 })
 #define	WARN_ON_ONCE(cond)	WARN_ON(cond)
-#define	WARN_ONCE(cond, fmt, ...)	WARN_ON(cond)
-#define	WARN(cond, fmt, ...)	WARN_ON(cond)
+/*
+ * The message-carrying forms. The interface's WARN()/WARN_ONCE() print the
+ * condition's site AND the call site's formatted message with its arguments
+ * ([LNX] include/asm-generic/bug.h: the second parameter is a format). The
+ * previous spelling collapsed both onto WARN_ON() and dropped the message -
+ * which is exactly where a driver puts the values a diagnosis needs: the
+ * vendored receive path's "frame on invalid queue - is on %d and indicates
+ * %d" (third-party/iwlwifi/pcie/gen1_2/rx.c:1339) was the one line the board
+ * could not show, and it is the line that says which queue the hardware
+ * actually reported.
+ */
+#define	WARN(cond, fmt, ...)	({					\
+	bool __w = (cond);						\
+	if (__w)							\
+		lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN(%s): " fmt "\n", __FILE__, __LINE__, #cond, ##__VA_ARGS__); \
+	__w;								\
+})
+#define	WARN_ONCE(cond, fmt, ...)	WARN(cond, fmt, ##__VA_ARGS__)
 #define	BUG_ON(cond)		do { if (cond) lkpi_fatal("BUG_ON(" #cond ")"); } while (0)
 /* print_hex_dump prefix args ([LNX] kernel.h) */
 #define	DUMP_PREFIX_NONE	0
