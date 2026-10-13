@@ -134,7 +134,7 @@ lkpi_pci_irq_alloc_slot(void)
 	return NULL;
 }
 
-/* the threaded half, on the engine's workqueue (a thread, so it may sleep) */
+/* the threaded half, on its own executor (a thread, so it may sleep) */
 static void
 lkpi_pci_irq_thread_work(struct work_struct *w)
 {
@@ -145,13 +145,34 @@ lkpi_pci_irq_thread_work(struct work_struct *w)
 		(void)slot->thread_fn(slot->intid, slot->dev);
 }
 
+/*
+ * The threaded half's executor, created before the first vector is armed and
+ * kept for the engine's lifetime.
+ *
+ * It is deliberately NOT the shared system workqueue. The interface gives a
+ * threaded IRQ its own kthread (kernel/irq/manage.c), and a driver may schedule
+ * work that then blocks on a command whose completion arrives only through this
+ * threaded half. One example is the vendored iwlwifi's management-queue
+ * allocation: the wake schedules add_stream_wk (mvm/mac80211.c:950), that worker
+ * sends SCD_QUEUE_CFG synchronously (mvm/sta.c:1432, :1002) and waits for its
+ * response, and the response is reclaimed by the receive path the threaded half
+ * drives (pcie/gen1_2/rx.c:2104 -> the engine polls NAPI inline,
+ * linuxkpi_80211_helpers.c:523). On the single-threaded shared queue the worker
+ * blocks waiting on work the queue itself cannot run - the command times out and
+ * the driver force-fires an NMI
+ * (pcie/gen1_2/tx.c:2597 -> iwl_trans_pcie_sync_nmi -> iwl_force_nmi). A
+ * dedicated executor restores the interface's two independent contexts, which is
+ * the property the port needs - not a shared queue with more threads.
+ */
+static struct workqueue_struct *lkpi_pci_irq_wq;
+
 /* what the backend calls: it carries the slot, and the slot carries the handler
  * the caller registered (a vector with no handler yet is delivered and dropped).
  * When the hard half returns IRQ_WAKE_THREAD, the threaded half is queued to the
- * workqueue: the delivery path is an interrupt, and the interface's threaded half
- * is the half allowed to sleep and to take locks. (The previous spelling ran it
- * inline on the delivery path; the vendored receive path is what found the
- * difference.) */
+ * engine's own IRQ executor: the delivery path is an interrupt, and the
+ * interface's threaded half is the half allowed to sleep and to take locks. (The
+ * previous spelling ran it inline on the delivery path; the vendored receive path
+ * is what found the difference.) */
 static void
 lkpi_pci_irq_trampoline(void *arg)
 {
@@ -162,8 +183,15 @@ lkpi_pci_irq_trampoline(void *arg)
 	if (slot->fn == NULL)
 		return;
 	ret = slot->fn(slot->intid, slot->dev);
-	if (ret == IRQ_WAKE_THREAD && slot->thread_fn != NULL)
-		schedule_work(&slot->thread_work);
+	if (ret == IRQ_WAKE_THREAD && slot->thread_fn != NULL) {
+		/* A vector can only be armed after the executor exists (irq_setup
+		 * creates it), so the shared queue is a fallback that should never
+		 * be taken; running the half at all beats losing the interrupt. */
+		if (lkpi_pci_irq_wq != NULL)
+			(void)queue_work(lkpi_pci_irq_wq, &slot->thread_work);
+		else
+			schedule_work(&slot->thread_work);
+	}
 }
 
 /* record the threaded half of a request_irq() that has just been accepted */
@@ -184,6 +212,12 @@ lkpi_pci_irq_setup(struct pci_dev *pdev, int kind, int *irqn)
 
 	if (pdev == NULL || !pdev->be_present || irqn == NULL)
 		return -LKPI_PCIE_BE_ERR_NODEV;
+	/* the threaded half's own executor, before the first vector is armed */
+	if (lkpi_pci_irq_wq == NULL) {
+		lkpi_pci_irq_wq = lkpi_alloc_workqueue("lkpi-pci-irq", 0, 1);
+		if (lkpi_pci_irq_wq == NULL)
+			return -ENOMEM;
+	}
 	slot = lkpi_pci_irq_alloc_slot();
 	if (slot == NULL)
 		return -ENOSPC;
