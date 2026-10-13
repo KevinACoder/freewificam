@@ -29,8 +29,11 @@
 /* the device model in stubs.c */
 extern struct usbh_hubport g_hport;
 extern uint32_t g_stub_want;
+extern uint32_t g_stub_probe_refusals;
 extern uint8_t g_stub_open_alt;
 extern uint32_t g_stub_probe_calls;
+extern int g_stub_iface_calls;
+extern uint8_t g_stub_iface_alts[16];
 extern uint16_t g_frame;
 extern struct usbh_urb *g_pending[];
 extern int g_pending_n;
@@ -210,6 +213,69 @@ static bool case_alt_select(char *why, size_t n)
     if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) >= 0) {
         snprintf(why, n, "an ask beyond the ladder was accepted");
         usbh_video_stream_stop();
+        return false;
+    }
+    return true;
+}
+
+/* A camera that refuses the probe until the streaming interface is taken
+ * through one enter-and-leave cycle (the state the board camera enters after
+ * a stream): the engine must run the cycle and then succeed. */
+static bool case_probe_rearm(char *why, size_t n)
+{
+    case_reset(why, n, TEST_FRAME_BUF, TEST_POOL_MAX, 640);
+    /* the board's state after a stream: closed, but the last open's endpoint
+     * payload (640 bytes = alt4) is still recorded - it is what the re-arm
+     * cycle enters */
+    g_video.isoin_mps = 640;
+    g_stub_probe_refusals = 2; /* two refusals: two cycles */
+    if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) != 0) {
+        snprintf(why, n, "start refused although the cycle cures the device");
+        return false;
+    }
+    if (g_stub_probe_calls != 3) {
+        snprintf(why, n, "probe ran %u times, expected 3 (two refusals, one answer)",
+                 (unsigned)g_stub_probe_calls);
+        return false;
+    }
+    /* each failed attempt runs exactly one cycle: alt=<payload>, then 0 */
+    if (g_stub_iface_calls != 4 || g_stub_iface_alts[0] != 4 || g_stub_iface_alts[1] != 0 ||
+        g_stub_iface_alts[2] != 4 || g_stub_iface_alts[3] != 0) {
+        snprintf(why, n, "re-arm cycles: %d calls, alts %u/%u/%u/%u (expected 4/0/4/0)",
+                 g_stub_iface_calls, g_stub_iface_alts[0], g_stub_iface_alts[1],
+                 g_stub_iface_alts[2], g_stub_iface_alts[3]);
+        return false;
+    }
+    if (g_stub_open_alt != 4) {
+        snprintf(why, n, "open at alt %u, expected 4", g_stub_open_alt);
+        return false;
+    }
+    usbh_video_stream_stop();
+
+    /* no refusals: no cycle, and the device's answer still picks the setting */
+    case_reset(why, n, TEST_FRAME_BUF, TEST_POOL_MAX, 640);
+    if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) != 0) {
+        snprintf(why, n, "start refused with a willing device");
+        return false;
+    }
+    if (g_stub_probe_calls != 1 || g_stub_iface_calls != 0) {
+        snprintf(why, n, "a willing probe ran %u times with %d cycles, expected 1/0",
+                 (unsigned)g_stub_probe_calls, g_stub_iface_calls);
+        return false;
+    }
+    usbh_video_stream_stop();
+
+    /* a device that never answers: the attempt ladder is bounded */
+    case_reset(why, n, TEST_FRAME_BUF, TEST_POOL_MAX, 640);
+    g_stub_probe_refusals = 100;
+    if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) >= 0) {
+        snprintf(why, n, "a permanently refusing device was accepted");
+        usbh_video_stream_stop();
+        return false;
+    }
+    if (g_stub_probe_calls != 4) {
+        snprintf(why, n, "the refusal ladder ran %u attempts, expected 4",
+                 (unsigned)g_stub_probe_calls);
         return false;
     }
     return true;
@@ -509,6 +575,7 @@ int main(void)
         bool (*fn)(char *, size_t);
     } cases[] = {
         { "alt-select", case_alt_select },
+        { "probe-rearm", case_probe_rearm },
         { "frame-assembly", case_frame_assembly },
         { "eof-boundary", case_eof_boundary },
         { "flip-no-eof", case_flip_no_eof },

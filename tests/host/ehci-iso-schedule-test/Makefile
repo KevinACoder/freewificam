@@ -21,8 +21,10 @@ $(error tools/patches/replay.sh returned no source root for cherryusb)
 endif
 
 # The engine source is overridable so the red control can point the build at a
-# mutated copy (tools/mock/ehci-iso-schedule-test/check.sh).
+# mutated copy (tools/mock/ehci-iso-schedule-test/check.sh); the port source is
+# overridable for the same reason (the control-IN invalidate red control).
 ISO_SRC   ?= $(CU)/port/ehci/usb_hc_ehci_iso.c
+PORT_SRC  ?= $(CU)/port/ehci/usb_hc_ehci.c
 BUILD_DIR ?= $(MAKEFILE_DIR)/build
 BIN       := $(BUILD_DIR)/ehci-iso-schedule-test
 
@@ -34,7 +36,7 @@ CFLAGS := -m32 -ggdb3 -O0 -Wall -Wextra -ffunction-sections -fdata-sections \
 LDFLAGS := -m32 -pthread -Wl,--gc-sections
 
 SRCS := \
-    $(CU)/port/ehci/usb_hc_ehci.c \
+    $(PORT_SRC) \
     $(ISO_SRC) \
     $(MAKEFILE_DIR)/host_stubs.c \
     $(MAKEFILE_DIR)/iso_case.c

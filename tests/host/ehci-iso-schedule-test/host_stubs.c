@@ -140,16 +140,64 @@ void usb_osal_msleep(uint32_t delay)
 
 /* ---- cache maintenance (host caches are coherent) ------------------------ */
 
+/* The calls are recorded instead of performed: the host's caches are coherent,
+ * so what the suite can assert is the port's call order and arguments (the
+ * acceptance assertions), not cache hardware behaviour.  The descriptor
+ * maintenance calls interleave with the transfer-buffer ones, so the log lets
+ * a case count the calls that name one particular address. */
+#define HOST_CACHE_LOG 64
+static struct {
+    uintptr_t addr;
+    size_t size;
+} host_cache_inv_log[HOST_CACHE_LOG];
+static unsigned host_cache_inv_n;
+uintptr_t host_cache_last_invalidate_addr;
+size_t host_cache_last_invalidate_size;
+int host_cache_invalidates;
+uintptr_t host_cache_last_clean_addr;
+size_t host_cache_last_clean_size;
+int host_cache_cleans;
+
+void host_cache_log_reset(void)
+{
+    host_cache_inv_n = 0;
+    host_cache_last_invalidate_addr = 0;
+    host_cache_last_invalidate_size = 0;
+    host_cache_invalidates = 0;
+    host_cache_last_clean_addr = 0;
+    host_cache_last_clean_size = 0;
+    host_cache_cleans = 0;
+}
+
+unsigned host_cache_invalidations_of(uintptr_t addr)
+{
+    unsigned hits = 0;
+
+    for (unsigned i = 0; i < host_cache_inv_n; i++) {
+        if (host_cache_inv_log[i].addr == addr) {
+            hits++;
+        }
+    }
+    return hits;
+}
+
 void usb_dcache_clean(uintptr_t addr, size_t size)
 {
-    (void)addr;
-    (void)size;
+    host_cache_last_clean_addr = addr;
+    host_cache_last_clean_size = size;
+    host_cache_cleans++;
 }
 
 void usb_dcache_invalidate(uintptr_t addr, size_t size)
 {
-    (void)addr;
-    (void)size;
+    host_cache_last_invalidate_addr = addr;
+    host_cache_last_invalidate_size = size;
+    host_cache_invalidates++;
+    if (host_cache_inv_n < HOST_CACHE_LOG) {
+        host_cache_inv_log[host_cache_inv_n].addr = addr;
+        host_cache_inv_log[host_cache_inv_n].size = size;
+        host_cache_inv_n++;
+    }
 }
 
 void usb_dcache_flush(uintptr_t addr, size_t size)

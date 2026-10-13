@@ -56,6 +56,20 @@ extern int usbh_ehci_kill_urb(struct usbh_urb *urb);
 /* The periodic queue head is the driver's own global (no header declares it);
  * the suite needs it to assert the "chain untouched" expectation. */
 extern struct ehci_qh_hw g_periodic_qh_head[CONFIG_USBHOST_MAX_BUS];
+/* The async head is the same kind of global; the control-transfer case needs it
+ * to observe the completion walk. */
+extern struct ehci_qh_hw g_async_qh_head[CONFIG_USBHOST_MAX_BUS];
+/* The IRQ entry point, under the multi-controller name the board build uses. */
+extern void usbh_ehci_irq_handler(uint8_t busid);
+/* The dispatcher's per-bus table (host_stubs.c): the IRQ handler resolves its
+ * bus from there, so the control case points bus 0 at the RAM register
+ * window the rest of the fixture uses. */
+extern struct usbh_bus g_usbhost_bus[CONFIG_USBHOST_MAX_BUS];
+/* The cache-call recorder in host_stubs.c. */
+extern void host_cache_log_reset(void);
+extern unsigned host_cache_invalidations_of(uintptr_t addr);
+extern uintptr_t host_cache_last_invalidate_addr;
+extern size_t host_cache_last_invalidate_size;
 
 /* ------------------------------------------------------------------------
  * fixture
@@ -88,6 +102,9 @@ static void controller_reset(uint16_t frame)
     memset(&g_bus, 0, sizeof(g_bus));
     g_bus.hcd.hcd_id = TEST_BUS;
     g_bus.hcd.reg_base = (uintptr_t)&g_regs;
+    memset(&g_usbhost_bus[TEST_BUS], 0, sizeof(g_usbhost_bus[TEST_BUS]));
+    g_usbhost_bus[TEST_BUS].hcd.hcd_id = TEST_BUS;
+    g_usbhost_bus[TEST_BUS].hcd.reg_base = (uintptr_t)&g_regs;
 
     memset(&g_ehci_hcd[TEST_BUS], 0, sizeof(g_ehci_hcd[TEST_BUS]));
     memset(g_framelist[TEST_BUS], 0, sizeof(uint32_t) * CONFIG_USB_EHCI_FRAME_LIST_SIZE);
@@ -99,6 +116,16 @@ static void controller_reset(uint16_t frame)
     g_periodic_qh_head[TEST_BUS].hw.overlay.alt_next_qtd = QTD_LIST_END;
     g_periodic_qh_head[TEST_BUS].hw.overlay.token = QTD_TOKEN_STATUS_HALTED;
     g_periodic_qh_head[TEST_BUS].first_qtd = QTD_LIST_END;
+
+    /* The async head as the port's init leaves it: a self-linked ring with the
+     * H bit; the control-transfer case completes a transfer through it. */
+    memset(&g_async_qh_head[TEST_BUS], 0, sizeof(struct ehci_qh_hw));
+    g_async_qh_head[TEST_BUS].hw.hlp = QH_HLP_QH(&g_async_qh_head[TEST_BUS]);
+    g_async_qh_head[TEST_BUS].hw.epchar = QH_EPCHAR_H;
+    g_async_qh_head[TEST_BUS].hw.overlay.next_qtd = QTD_LIST_END;
+    g_async_qh_head[TEST_BUS].hw.overlay.alt_next_qtd = QTD_LIST_END;
+    g_async_qh_head[TEST_BUS].hw.overlay.token = QTD_TOKEN_STATUS_HALTED;
+    g_async_qh_head[TEST_BUS].first_qtd = QTD_LIST_END;
 
     for (uint32_t i = 0; i < CONFIG_USB_EHCI_FRAME_LIST_SIZE; i++) {
         g_framelist[TEST_BUS][i] = QH_HLP_QH(&g_periodic_qh_head[TEST_BUS]);
@@ -920,6 +947,124 @@ static bool case_sync_wait(char *why, size_t n)
     return true;
 }
 
+/* Control transfers run through the asynchronous list and the doorbell.  The
+ * completion path must invalidate a control-IN buffer before the CPU reads it
+ * - the direction lives in the setup packet, since endpoint zero's address is
+ * 0x00 by definition - and must leave an OUT buffer alone.  The transfer is
+ * completed the way the controller would (qTDs cleared, then the two
+ * interrupts: the scan, and the async-advance doorbell that releases the
+ * waiter). */
+static struct usb_setup_packet g_setup __attribute__((aligned(64)));
+
+static bool ctrl_run_to_completion(struct usbh_urb *urb, char *why, size_t n)
+{
+    struct ehci_qh_hw *qh = (struct ehci_qh_hw *)urb->hcpriv;
+    struct ehci_qtd_hw *qtd;
+
+    if (qh == NULL || qh->first_qtd == QTD_LIST_END) {
+        snprintf(why, n, "no queue head / qTD chain after submit");
+        return false;
+    }
+    for (qtd = EHCI_ADDR2QTD(qh->first_qtd); qtd != NULL; qtd = EHCI_ADDR2QTD(qtd->hw.next_qtd)) {
+        qtd->hw.token &= ~(QTD_TOKEN_STATUS_ACTIVE | QTD_TOKEN_NBYTES_MASK);
+    }
+
+    g_regs.usbintr = EHCI_USBSTS_INT | EHCI_USBSTS_IAA;
+    g_regs.usbsts = EHCI_USBSTS_INT;
+    usbh_ehci_irq_handler(TEST_BUS);
+    g_regs.usbsts = EHCI_USBSTS_IAA;
+    usbh_ehci_irq_handler(TEST_BUS);
+    return true;
+}
+
+static bool case_control_in_cache(char *why, size_t n)
+{
+    struct usbh_urb *urb;
+
+    /* IN: the bytes the device sent must be made visible to the CPU */
+    controller_reset(500);
+    ep_default(0x00, 64, 0);
+    g_ep.bmAttributes = USB_ENDPOINT_TYPE_CONTROL;
+    memset(&g_setup, 0, sizeof(g_setup));
+    g_setup.bmRequestType = 0x80; /* device-to-host: GET_DESCRIPTOR */
+    g_setup.bRequest = 0x06;
+    g_setup.wLength = 8;
+    urb = urb_new(1, 8);
+    if (urb == NULL) {
+        snprintf(why, n, "alloc failed");
+        return false;
+    }
+    urb->setup = &g_setup;
+    urb->transfer_buffer = g_arena;
+    urb->transfer_buffer_length = 8;
+    urb->timeout = 0;
+
+    host_cache_log_reset();
+    if (TEST_SUBMIT(urb) != 0) {
+        snprintf(why, n, "control-IN submit failed");
+        urb_free(urb);
+        return false;
+    }
+    if (!ctrl_run_to_completion(urb, why, n)) {
+        urb_free(urb);
+        return false;
+    }
+    if (host_cache_invalidations_of((uintptr_t)g_arena) != 2) {
+        /* one invalidate at submit (the submit path's own direction test) and
+         * one at completion - the one this case exists for */
+        snprintf(why, n, "control-IN buffer invalidated %u times, expected 2 (submit + completion)",
+                 host_cache_invalidations_of((uintptr_t)g_arena));
+        urb_free(urb);
+        return false;
+    }
+    if (host_cache_last_invalidate_addr != (uintptr_t)g_arena || host_cache_last_invalidate_size != 64) {
+        snprintf(why, n, "control-IN invalidate covered %lx+%zu, expected %p+64",
+                 (unsigned long)host_cache_last_invalidate_addr, host_cache_last_invalidate_size, (void *)g_arena);
+        urb_free(urb);
+        return false;
+    }
+    if (urb->actual_length != 16 || urb->hcpriv != NULL) {
+        snprintf(why, n, "control-IN left actual %u hcpriv %p", (unsigned)urb->actual_length, urb->hcpriv);
+        urb_free(urb);
+        return false;
+    }
+    urb_free(urb);
+
+    /* OUT: the same completion must not invalidate the buffer */
+    controller_reset(600);
+    memset(&g_setup, 0, sizeof(g_setup));
+    g_setup.bmRequestType = 0x00; /* host-to-device */
+    g_setup.bRequest = 0x0b;
+    urb = urb_new(1, 8);
+    if (urb == NULL) {
+        snprintf(why, n, "alloc failed (OUT)");
+        return false;
+    }
+    urb->setup = &g_setup;
+    urb->transfer_buffer = g_arena + 0x40;
+    urb->transfer_buffer_length = 8;
+    urb->timeout = 0;
+
+    host_cache_log_reset();
+    if (TEST_SUBMIT(urb) != 0) {
+        snprintf(why, n, "control-OUT submit failed");
+        urb_free(urb);
+        return false;
+    }
+    if (!ctrl_run_to_completion(urb, why, n)) {
+        urb_free(urb);
+        return false;
+    }
+    if (host_cache_invalidations_of((uintptr_t)(g_arena + 0x40)) != 0) {
+        snprintf(why, n, "control-OUT buffer invalidated %u times, expected 0",
+                 host_cache_invalidations_of((uintptr_t)(g_arena + 0x40)));
+        urb_free(urb);
+        return false;
+    }
+    urb_free(urb);
+    return true;
+}
+
 /* The rejection matrix: unsupported periods and speeds, malformed packet
  * lists, and the buffer-window bound; nothing is linked, no slot is leaked. */
 static bool case_reject_matrix(char *why, size_t n)
@@ -1167,6 +1312,7 @@ int main(void)
         { "slot-exhaustion", case_slot_exhaustion },
         { "completion-map", case_completion_map },
         { "sync-wait", case_sync_wait },
+        { "control-in-cache", case_control_in_cache },
         { "reject-matrix", case_reject_matrix },
         { "direction-out", case_direction_out },
         { "schedule-tiling", case_schedule_tiling },
