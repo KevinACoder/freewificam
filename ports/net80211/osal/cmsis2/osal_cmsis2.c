@@ -155,6 +155,14 @@ int wlan_mutex_enter(kmutex_t *m)
 	}
 	st = osMutexAcquire((osMutexId_t) MP_ID(m), osWaitForever);
 	if (st != osOK) {
+		static unsigned int said;
+
+		if (said < 4) {
+			said++;
+			board_log_emergency("net80211: mutex_acquire failed (%d) "
+			    "lock %p ra %p", (int)st, (void *)m,
+			    __builtin_return_address(0));
+		}
 		return EINVAL;
 	}
 	MP_OWNER(m) = (void *) osThreadGetId();
@@ -173,6 +181,19 @@ int wlan_mutex_exit(kmutex_t *m)
 		MP_DEPTH(m) = (void *) ((uintptr_t) MP_DEPTH(m) - 1);
 	}
 	if ((uintptr_t) MP_DEPTH(m) == 0) {
+		/*
+		 * Clearing the owner is the one write that can turn a held lock
+		 * into a false ownership verdict; name the first few, with the
+		 * caller, so a clear that should not have happened shows.
+		 */
+		static unsigned int said;
+
+		if (said < 4) {
+			said++;
+			board_log_emergency("net80211: mutex_exit clears owner "
+			    "of lock %p (depth now 0) ra %p", (void *)m,
+			    __builtin_return_address(0));
+		}
 		MP_OWNER(m) = NULL;
 	}
 	st = osMutexRelease((osMutexId_t) MP_ID(m));
@@ -184,7 +205,26 @@ int wlan_mutex_owned(kmutex_t *m)
 	if (m == NULL || MP_MAGIC(m) != (void *) WLAN_MUTEX_MAGIC) {
 		return 0;
 	}
-	return MP_OWNER(m) == (void *) osThreadGetId() && MP_OWNER(m) != NULL;
+	if (!(MP_OWNER(m) == (void *) osThreadGetId() && MP_OWNER(m) != NULL)) {
+		/*
+		 * Who asks and who holds: a false verdict from the imported
+		 * code's asserts parks the board, and the object, the owner it
+		 * saw and the caller are what say whether the lock was never
+		 * taken, taken by another thread, or clobbered.
+		 */
+		static unsigned int said;
+
+		if (said < 4) {
+			said++;
+			board_log_emergency("net80211: mutex_owned false lock %p "
+			    "owner %p current %p magic %p ra %p", (void *)m,
+			    MP_OWNER(m) != NULL ? MP_OWNER(m) : (void *)0,
+			    (void *) osThreadGetId(), (void *) MP_MAGIC(m),
+			    __builtin_return_address(0));
+		}
+		return 0;
+	}
+	return 1;
 }
 
 void wlan_mutex_destroy(kmutex_t *m)

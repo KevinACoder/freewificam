@@ -601,6 +601,18 @@ wlan_bridge_attach(struct wlan_seam_drv *drv,
 	struct ifnet *ifp;
 	int ch;
 
+	/*
+	 * The port's own init: the serializer, the sleep slots and the tick
+	 * rate. It belongs here rather than in each image's start-up because
+	 * every line attaches through this call, and it is idempotent
+	 * (wlan_osal_init's RUN_ONCE) for the suites that call it themselves.
+	 * The board's first sweep found what its absence costs: the serializer
+	 * was a no-op (mutex_enter refused an uninitialised lock - the port's
+	 * own alarm), so the sweep and the driver's receive thread ran
+	 * unserialised, which single-threaded lines had never exposed.
+	 */
+	wlan_osal_init();
+
 	if (bridge.attached) {
 		wlan_osal_log("wlan: a second attach refused (single adapter)\n");
 		return -EBUSY;
