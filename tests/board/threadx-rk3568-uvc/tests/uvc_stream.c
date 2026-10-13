@@ -48,7 +48,8 @@ static void uvc_stream( void )
 		board_case_fail( "camera not detected" );
 		return;
 	}
-	(void)uvc_app_close(); /* the engine opens the camera itself */
+
+	(void)uvc_app_close(); /* the engine opens the camera itself, from alt 0 */
 
 	for( unsigned i = 0; i < UVC_STREAM_POOL_FRAMES; i++ ) {
 		stream_pool[i].frame_buf = stream_bufs[i];
@@ -57,9 +58,16 @@ static void uvc_stream( void )
 	}
 	usbh_video_stream_create( stream_pool, UVC_STREAM_POOL_FRAMES );
 
-	if( usbh_video_stream_start( 640, 480, USBH_VIDEO_FORMAT_MJPEG ) != 0 ) {
-		board_case_fail( "usbh_video_stream_start failed" );
-		return;
+	{
+		int ret = usbh_video_stream_start( 640, 480, USBH_VIDEO_FORMAT_MJPEG );
+
+		if( ret != 0 ) {
+			static char note[64];
+
+			snprintf( note, sizeof( note ), "usbh_video_stream_start failed ret=%d", ret );
+			board_case_fail( note );
+			return;
+		}
 	}
 	video_class = uvc_app_class();
 	LOG_ANCHOR( "uvc: stream open mjpeg 640x480 mps=%u dmp=%u pool=%u\n",

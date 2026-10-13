@@ -1,6 +1,6 @@
-From 818fcced776a2eb4ba81dc5545bb80fcff72703e Mon Sep 17 00:00:00 2001
+From 607700e1e7f9ec47d4384bfa64c5de5a2626a5f8 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu2023@gmail.com>
-Date: Wed, 14 Oct 2026 02:22:47 +0800
+Date: Wed, 14 Oct 2026 03:32:04 +0800
 Subject: [PATCH] class/video: add the UVC host streaming engine
 
 The host-UVC demos this tree carries call usbh_video_stream_create/start/
@@ -46,18 +46,18 @@ rest of the stack's keys.
 
 Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
 ---
- class/video/usbh_uvc_stream.c | 761 ++++++++++++++++++++++++++++++++++
+ class/video/usbh_uvc_stream.c | 800 ++++++++++++++++++++++++++++++++++
  class/video/usbh_uvc_stream.h |  89 ++++
- 2 files changed, 850 insertions(+)
+ 2 files changed, 889 insertions(+)
  create mode 100644 class/video/usbh_uvc_stream.c
  create mode 100644 class/video/usbh_uvc_stream.h
 
 diff --git a/class/video/usbh_uvc_stream.c b/class/video/usbh_uvc_stream.c
 new file mode 100644
-index 0000000..d44f218
+index 0000000..01103fd
 --- /dev/null
 +++ b/class/video/usbh_uvc_stream.c
-@@ -0,0 +1,761 @@
+@@ -0,0 +1,800 @@
 +/*
 + * Copyright (c) 2026, zhugengyu
 + *
@@ -108,6 +108,10 @@ index 0000000..d44f218
 +#include "usbh_core.h"
 +#include "usbh_video.h"
 +#include "usbh_uvc_stream.h"
++
++#undef USB_DBG_TAG
++#define USB_DBG_TAG "uvc_stream"
++#include "usb_log.h"
 +
 +/* The class's probe-control helpers are defined in usbh_video.c but not
 + * declared in its header at this pin; the engine uses them for the pre-open
@@ -584,18 +588,45 @@ index 0000000..d44f218
 +        uint32_t interval = 0;
 +        uint8_t alt;
 +
++        /* A device may defer its video-streaming requests for a moment after
++         * the interface leaves a streaming setting; the class's own close only
++         * stops the interface, so give the device the settle the application's
++         * gap would otherwise provide (a deferred request that is aborted can
++         * wedge such a device's control engine, which is why the retries below
++         * exist only as defence and the first attempt is patient). */
++        usb_osal_msleep(200);
++
 +        ret = stream_lookup(video, format_type, wWidth, wHeight, &formatidx, &frameidx, &interval);
 +        if (ret < 0) {
++            USB_LOG_ERR("start: %ux%u format %u not in the device's tables (%d)\r\n",
++                        wWidth, wHeight, format_type, (int)ret);
 +            return ret;
 +        }
-+        /* ask the device what the configuration needs (bytes per USB frame)
-+         * before committing, exactly as the class's open sequence does */
-+        ret = usbh_videostreaming_set_cur_probe(video, formatidx, frameidx, interval);
++        /* Ask the device what the configuration needs (bytes per USB frame)
++         * before committing, exactly as the class's open sequence does.  A
++         * camera that just left a streaming configuration can refuse a
++         * control request while it settles, so the probe exchange is retried
++         * the way the class's own get path retries. */
++        for (uint32_t retry = 0; retry < 5; retry++) {
++            ret = usbh_videostreaming_set_cur_probe(video, formatidx, frameidx, interval);
++            if (ret == 0) {
++                break;
++            }
++            usb_osal_msleep(100);
++        }
 +        if (ret < 0) {
++            USB_LOG_ERR("start: probe set failed (%d)\r\n", (int)ret);
 +            return ret;
 +        }
-+        ret = usbh_videostreaming_get_cur_probe(video);
++        for (uint32_t retry = 0; retry < 5; retry++) {
++            ret = usbh_videostreaming_get_cur_probe(video);
++            if (ret == 0) {
++                break;
++            }
++            usb_osal_msleep(100);
++        }
 +        if (ret < 0) {
++            USB_LOG_ERR("start: probe get failed (%d)\r\n", (int)ret);
 +            return ret;
 +        }
 +        want = video->probe.dwMaxPayloadTransferSize;
@@ -604,15 +635,19 @@ index 0000000..d44f218
 +        }
 +        alt = stream_alt_pick(video, want);
 +        if (alt == 0) {
++            USB_LOG_ERR("start: no setting carries the requested %u bytes per frame\r\n",
++                        (unsigned)want);
 +            return -USB_ERR_NOTSUPP;
 +        }
 +        ret = usbh_video_open(video, format_type, wWidth, wHeight, alt);
 +        if (ret < 0) {
++            USB_LOG_ERR("start: open at setting %u failed (%d)\r\n", alt, (int)ret);
 +            return ret;
 +        }
 +    }
 +
 +    if ((video->isoin == NULL) || (video->isoin_mps == 0)) {
++        USB_LOG_ERR("start: no isochronous endpoint after open\r\n");
 +        return -USB_ERR_NODEV;
 +    }
 +
@@ -624,6 +659,7 @@ index 0000000..d44f218
 +    s->urb_done = usb_osal_sem_create_counting(CONFIG_UVC_STREAM_URBS);
 +    s->pump_exited = usb_osal_sem_create(0);
 +    if ((s->urb_done == NULL) || (s->pump_exited == NULL)) {
++        USB_LOG_ERR("start: semaphore creation failed\r\n");
 +        ret = -USB_ERR_NOMEM;
 +        goto fail;
 +    }
@@ -636,6 +672,7 @@ index 0000000..d44f218
 +        slot->urb = usb_osal_malloc(urb_size);
 +        slot->packet_mem = usb_osal_malloc(pkt_size * CONFIG_UVC_STREAM_PACKETS + CONFIG_USB_ALIGN_SIZE);
 +        if ((slot->urb == NULL) || (slot->packet_mem == NULL)) {
++            USB_LOG_ERR("start: ring allocation failed at urb %u\r\n", (unsigned)i);
 +            ret = -USB_ERR_NOMEM;
 +            goto fail;
 +        }
@@ -663,6 +700,7 @@ index 0000000..d44f218
 +    s->pump = usb_osal_thread_create("uvc_stream", CONFIG_UVC_STREAM_STACKSIZE,
 +                                     CONFIG_UVC_STREAM_PRIO, uvc_stream_pump, s);
 +    if (s->pump == NULL) {
++        USB_LOG_ERR("start: pump thread creation failed\r\n");
 +        s->running = false;
 +        ret = -USB_ERR_NOMEM;
 +        goto fail;
@@ -679,6 +717,7 @@ index 0000000..d44f218
 +        }
 +    }
 +    if (submitted == 0) {
++        USB_LOG_ERR("start: no urb was accepted\r\n");
 +        ret = -USB_ERR_IO;
 +        goto fail;
 +    }

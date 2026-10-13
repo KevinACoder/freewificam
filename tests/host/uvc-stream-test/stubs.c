@@ -18,6 +18,8 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <sys/time.h>
 #include <stdlib.h>
 #include <string.h>
@@ -215,6 +217,17 @@ size_t usb_osal_enter_critical_section(void)
 void usb_osal_leave_critical_section(size_t flag)
 {
     (void)flag;
+}
+
+/* The board's console sink (the stack's diagnostics reach it through
+ * CONFIG_USB_PRINTF); the suite prints them to stdout. */
+void usbh_console_printf(const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
 }
 
 /* ------------------------------------------------------------------------
