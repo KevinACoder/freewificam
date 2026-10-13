@@ -906,6 +906,20 @@ lkpi_pci_probe_all(void)
 /* device records                                                      */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The bus under every enumerated function. The interface's device model gives a
+ * device's bus a name, and Linux's PCI core is what supplies it: the name of
+ * pci_bus_type is "pci" (drivers/pci/pci-driver.c). One reader in the compiled
+ * set exists - the vendored firmware-error dump copies it into its
+ * human-readable field (third-party/iwlwifi/fw/dbg-old.c:849,
+ * fwrt->dev->bus->name) - and leaving the pointer unset made that read a wild
+ * dereference: the first board run that reached the dump took a translation
+ * fault on the address a NULL-derived pointer produces (far=0x180120).
+ */
+static struct bus_type lkpi_pci_bus_type = {
+	.name = "pci",
+};
+
 static void
 lkpi_pci_dev_build(unsigned int index, struct lkpi_pcie_be_dev *be,
     const struct lkpi_pcie_be_desc *desc)
@@ -927,6 +941,7 @@ lkpi_pci_dev_build(unsigned int index, struct lkpi_pcie_be_dev *be,
 	d->class = desc->class_code;
 	d->bus = &lkpi_pci_buses[index];
 	d->bus->number = desc->bus;
+	d->dev.bus = &lkpi_pci_bus_type;
 	d->devfn = (unsigned int)((desc->dev << 3) | desc->func);
 	for (i = 0; i < LKPI_PCIE_BE_MAX_BARS && i < PCI_STD_NUM_BARS; i++) {
 		d->resource[i].start = desc->bar[i].phys;

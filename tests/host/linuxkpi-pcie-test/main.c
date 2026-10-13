@@ -42,6 +42,7 @@
 #include <linux/pci.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
+#include <linux/device.h>
 
 #include "lkpi_pcie_backend.h"
 #include "linuxkpi_pci.h"
@@ -233,6 +234,15 @@ run(void)
 	    "dev %s id=%04x:%04x class=0x%06x", dev0 != NULL ? pci_name(dev0) : "?",
 	    dev0 != NULL ? dev0->vendor : 0, dev0 != NULL ? dev0->device : 0,
 	    dev0 != NULL ? dev0->class : 0);
+	/* every device carries the bus its bus name is read from: the vendored
+	 * firmware-error dump copies dev->bus->name into its human-readable field
+	 * (third-party/iwlwifi/fw/dbg-old.c:849), and an unset pointer there is a
+	 * wild dereference - the first board run that reached the dump faulted on
+	 * the address a NULL-derived pointer produces */
+	anchor(dev0 != NULL && dev0->dev.bus != NULL &&
+	    strcmp(dev0->dev.bus->name, "pci") == 0,
+	    "dev %s bus=%s", dev0 != NULL ? pci_name(dev0) : "?",
+	    (dev0 != NULL && dev0->dev.bus != NULL) ? dev0->dev.bus->name : "(unset)");
 	anchor(dev1 != NULL && dev1->device == 0x5679 && dev1->class == 0x028000u,
 	    "dev %s id=%04x:%04x class=0x%06x", dev1 != NULL ? pci_name(dev1) : "?",
 	    dev1 != NULL ? dev1->vendor : 0, dev1 != NULL ? dev1->device : 0,
