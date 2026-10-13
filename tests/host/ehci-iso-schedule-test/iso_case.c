@@ -1016,6 +1016,110 @@ static bool case_direction_out(char *why, size_t n)
  * runner
  * --------------------------------------------------------------------- */
 
+
+/* Back-to-back submissions on one bus tile the frame list instead of sharing
+ * frames: two transfers of one endpoint cannot share a micro-frame (the
+ * endpoint answers a single transaction per micro-frame, so the second
+ * descriptor armed for the same micro-frame only collects a NAK), so the
+ * second submission must start after the frames the first reserved.  A stale
+ * reservation - a stream that stopped left the cursor behind - is ignored. */
+static bool case_schedule_tiling(char *why, size_t n)
+{
+    struct usbh_urb *a;
+    struct usbh_urb *b;
+    uint16_t start_a;
+    uint16_t start_b;
+
+    controller_reset(1000); /* free frame = 1002 */
+    ep_default(0x81, 0x0180, 1);
+
+    a = urb_new(10, 64); /* two descriptors -> two frames */
+    b = urb_new(8, 64);  /* one descriptor  -> one frame  */
+    if (a == NULL || b == NULL) {
+        snprintf(why, n, "alloc failed");
+        return false;
+    }
+    if (TEST_SUBMIT(a) != 0) {
+        snprintf(why, n, "submit A failed");
+        urb_free(a);
+        urb_free(b);
+        return false;
+    }
+    start_a = a->start_frame;
+    if (start_a != (uint16_t)((1000 + 2) % CONFIG_USB_EHCI_FRAME_LIST_SIZE)) {
+        snprintf(why, n, "A start_frame %u, expected 1002", start_a);
+        TEST_KILL(a);
+        urb_free(a);
+        urb_free(b);
+        return false;
+    }
+    if (TEST_SUBMIT(b) != 0) {
+        snprintf(why, n, "submit B failed");
+        TEST_KILL(a);
+        urb_free(a);
+        urb_free(b);
+        return false;
+    }
+    start_b = (uint16_t)((start_a + 2) % CONFIG_USB_EHCI_FRAME_LIST_SIZE);
+    if (b->start_frame != start_b) {
+        snprintf(why, n, "B start_frame %u, expected %u (tiled behind A)", b->start_frame, start_b);
+        TEST_KILL(b);
+        TEST_KILL(a);
+        urb_free(a);
+        urb_free(b);
+        return false;
+    }
+    TEST_KILL(b);
+    TEST_KILL(a);
+    urb_free(a);
+    urb_free(b);
+
+    /* A cursor left behind by a stopped stream must not drag the next stream
+     * back to its old frames: the free frame again decides. */
+    controller_reset(1100); /* free frame = 1102, far past the cursor */
+    a = urb_new(8, 64);
+    if (a == NULL) {
+        snprintf(why, n, "alloc failed (stale cursor)");
+        return false;
+    }
+    if (TEST_SUBMIT(a) != 0) {
+        snprintf(why, n, "submit failed (stale cursor)");
+        urb_free(a);
+        return false;
+    }
+    if (a->start_frame != (uint16_t)((1100 + 2) % CONFIG_USB_EHCI_FRAME_LIST_SIZE)) {
+        snprintf(why, n, "stale cursor honoured: start %u, expected 1102", a->start_frame);
+        TEST_KILL(a);
+        urb_free(a);
+        return false;
+    }
+    TEST_KILL(a);
+    urb_free(a);
+
+    /* The tiling steps over the frame-list wrap like the free frame does. */
+    controller_reset((uint16_t)(CONFIG_USB_EHCI_FRAME_LIST_SIZE - 2)); /* free frame = 0 */
+    a = urb_new(8, 64);
+    b = urb_new(8, 64);
+    if (a == NULL || b == NULL) {
+        snprintf(why, n, "alloc failed (wrap)");
+        return false;
+    }
+    if (TEST_SUBMIT(a) != 0 || a->start_frame != 0) {
+        snprintf(why, n, "wrap: A start %u, expected 0", a->start_frame);
+        return false;
+    }
+    if (TEST_SUBMIT(b) != 0 || b->start_frame != 1) {
+        snprintf(why, n, "wrap: B start %u, expected 1", b->start_frame);
+        TEST_KILL(a);
+        return false;
+    }
+    TEST_KILL(b);
+    TEST_KILL(a);
+    urb_free(a);
+    urb_free(b);
+    return true;
+}
+
 int main(void)
 {
     static const struct {
@@ -1031,6 +1135,7 @@ int main(void)
         { "sync-wait", case_sync_wait },
         { "reject-matrix", case_reject_matrix },
         { "direction-out", case_direction_out },
+        { "schedule-tiling", case_schedule_tiling },
     };
     int failed = 0;
 

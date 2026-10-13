@@ -3,7 +3,7 @@
 # @brief   Wrapper for the ehci-iso-schedule-test suite: run the cases and the
 #          red control, and map each into container case lines.
 #
-# The harness owns the mechanism (tests/host/ehci-iso-schedule-test): nine
+# The harness owns the mechanism (tests/host/ehci-iso-schedule-test): ten
 # cases driving the port's real translation units against a controller in RAM.
 # This wrapper runs it and adds the control that proves the cases can fail: the
 # same harness built against a mutated copy of the engine whose
@@ -23,7 +23,7 @@ if [ ! -x "$bin" ]; then
     exit 2
 fi
 
-cases="period-mask tscl-encode frame-link link-unlink slot-exhaustion completion-map sync-wait reject-matrix direction-out"
+cases="period-mask tscl-encode frame-link link-unlink slot-exhaustion completion-map sync-wait reject-matrix direction-out schedule-tiling"
 
 failures=0
 case_line() {
@@ -42,7 +42,7 @@ if "$bin" > "$log_dir/cases.log" 2>&1; then
             grep "^EHCIISO: $c" "$log_dir/cases.log" >&2 || true
         fi
     done
-    if ! grep -q '^EHCIISO: summary cases=9 failed=0$' "$log_dir/cases.log"; then
+    if ! grep -q '^EHCIISO: summary cases=10 failed=0$' "$log_dir/cases.log"; then
         echo "ehci-iso-schedule-test: summary unexpected" >&2
         tail -8 "$log_dir/cases.log" >&2 || true
     fi

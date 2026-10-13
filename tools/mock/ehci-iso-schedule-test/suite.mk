@@ -5,8 +5,8 @@
 # port (port/ehci/usb_hc_ehci.c) and the engine the iso patch adds
 # (port/ehci/usb_hc_ehci_iso.c, replayed from patches/cherryusb/0003) as one
 # 32-bit program, with the controller's register window living in RAM, and
-# asserts the iTD encoding, the frame list placement, the slot discipline and
-# the completion mapping; the wrapper adds the red control.
+# asserts the iTD encoding, the frame list placement and tiling, the slot
+# discipline and the completion mapping; the wrapper adds the red control.
 
 SUITE_NAME := ehci-iso-schedule-test
 SUITE_TIMEOUT := 120

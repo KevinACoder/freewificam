@@ -1,4 +1,4 @@
-From f082a6a5af71a6549185c0c93e1e3d47e9c8bcdf Mon Sep 17 00:00:00 2001
+From a40d89dde060b4f269b8efff502d4e648f9fc4bc Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu2023@gmail.com>
 Date: Tue, 13 Oct 2026 22:18:57 +0800
 Subject: [PATCH] port/ehci: add the high-speed isochronous transfer engine
@@ -22,6 +22,16 @@ Design, in the shape the port's descriptor work already has:
     front of whatever that entry already carries (normally the periodic
     queue head), so the interrupt schedule is untouched, and the unlink
     restores the entry exactly;
+  - transfers are tiled on the frame list: a submission starts after the
+    frames every earlier transfer on that bus reserved, because two
+    transfers of one endpoint cannot share a micro-frame - the endpoint
+    answers a single transaction per micro-frame, so a second descriptor
+    armed for the same micro-frame only collects a NAK and the data lands
+    in the first one.  The scheduling cursor lives with the port's
+    per-bus state (struct ehci_hcd, next to ehci_iso_used); a reservation
+    is honoured only while it is both inside a small horizon ahead of the
+    free frame and recent, so a cursor left behind by a stopped stream is
+    overridden by the next stream's free frame;
   - one iTD spans the eight micro-frames of one frame; the urb's
     iso_packet[] array is laid out one micro-frame scheduled transaction
     per packet, on the micro-frames the endpoint's high-speed period
@@ -47,17 +57,21 @@ Two small changes go with it in port/ehci/usb_hc_ehci.c: the isochronous
 submit branch returns the engine's result directly (the shared tail waits
 on a queue head waitsem, and there is no queue head here), and the
 isochronous branch of usbh_kill_urb() invokes the completion callback the
-way the other endpoint types' kill path does.
+way the other endpoint types' kill path does.  port/ehci/usb_hc_ehci.h
+gains the two frame-cursor fields in struct ehci_hcd.
 
 Limits: high-speed endpoints only (full/low-speed isochronous needs the
-split-transaction descriptor of paragraph 3.4), and periods up to one
-frame.
+split-transaction descriptor of paragraph 3.4), periods up to one frame,
+and transfers submitted on one bus never share frames - two isochronous
+endpoints of one bus are served one after the other instead of
+co-scheduled.
 
 Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
 ---
  port/ehci/usb_hc_ehci.c     |   7 +-
- port/ehci/usb_hc_ehci_iso.c | 601 ++++++++++++++++++++++++++++++++++++
- 2 files changed, 607 insertions(+), 1 deletion(-)
+ port/ehci/usb_hc_ehci.h     |   2 +
+ port/ehci/usb_hc_ehci_iso.c | 640 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 648 insertions(+), 1 deletion(-)
  create mode 100644 port/ehci/usb_hc_ehci_iso.c
 
 diff --git a/port/ehci/usb_hc_ehci.c b/port/ehci/usb_hc_ehci.c
@@ -85,12 +99,25 @@ index 2ba1183..dbbcb95 100644
          return 0;
  #endif
      }
+diff --git a/port/ehci/usb_hc_ehci.h b/port/ehci/usb_hc_ehci.h
+index 918feb3..d4b8705 100644
+--- a/port/ehci/usb_hc_ehci.h
++++ b/port/ehci/usb_hc_ehci.h
+@@ -84,6 +84,8 @@ struct ehci_iso_hw {
+ 
+ struct ehci_hcd {
+     bool ehci_iso_used[CONFIG_USB_EHCI_ISO_NUM];
++    uint16_t iso_frame_next; /* first unreserved frame of the isochronous tiling */
++    uint16_t iso_frame_base; /* the free frame the reservation was taken at */
+     bool ppc;      /* Port Power Control */
+     bool has_tt;   /* if use tt instead of Companion Controller */
+     uint8_t n_cc;  /* Number of Companion Controller */
 diff --git a/port/ehci/usb_hc_ehci_iso.c b/port/ehci/usb_hc_ehci_iso.c
 new file mode 100644
-index 0000000..7bc3367
+index 0000000..e53be6d
 --- /dev/null
 +++ b/port/ehci/usb_hc_ehci_iso.c
-@@ -0,0 +1,601 @@
+@@ -0,0 +1,640 @@
 +/*
 + * @file   usb_hc_ehci_iso.c
 + * @brief  High-speed isochronous transfer engine for the EHCI host port: the
@@ -153,6 +180,16 @@ index 0000000..7bc3367
 + * submission lands in, so the descriptors are visible before the controller
 + * reaches them. */
 +#define EHCI_ISO_START_FRAME_LEAD  2
++
++/* Transfers are tiled on the frame list: a submission starts in the frame
++ * after every transfer already scheduled on that bus, because two transfers
++ * of one endpoint cannot share a micro-frame - the endpoint answers a single
++ * transaction per micro-frame, so a second descriptor armed for the same
++ * micro-frame only collects a NAK and the data lands in the first one.  The
++ * reservation this makes is a frame number per bus; a reservation further
++ * ahead than this horizon is stale (left behind by a stream that stopped) and
++ * is not honoured. */
++#define EHCI_ISO_FRAME_HORIZON     32
 +
 +/* Two transfers in flight, each with CONFIG_USB_EHCI_ITD_NUM descriptors,
 + * are the port's declared dimension (CONFIG_USB_EHCI_ISO_NUM slots). */
@@ -331,6 +368,36 @@ index 0000000..7bc3367
 +{
 +    (void)bus;
 +    return (uint16_t)(((EHCI_HCOR->frindex & EHCI_FRINDEX_MASK) >> 3) & 0x3ff);
++}
++
++/* Reserve the frames a transfer of itd_num descriptors needs and return the
++ * first one.  Runs under the caller's critical section, like the linking.
++ *
++ * The cursor's two fields are read modulo the frame list: the reservation
++ * counts as live only while it lies inside the horizon ahead of the free
++ * frame AND the cursor was advanced no longer than the horizon ago - the
++ * second test is what tells a live reservation apart from a stream's stale
++ * one, whose distance aliases into the same window after a frame-count
++ * wrap. */
++static uint16_t ehci_iso_frame_take(struct usbh_bus *bus, uint32_t itd_num)
++{
++    struct ehci_hcd *hcd = &g_ehci_hcd[bus->hcd.hcd_id];
++    uint16_t free_frame = (uint16_t)((ehci_iso_frame_number(bus) + EHCI_ISO_START_FRAME_LEAD) %
++                                     CONFIG_USB_EHCI_FRAME_LIST_SIZE);
++    uint16_t reserved = hcd->iso_frame_next;
++    uint16_t ahead = (uint16_t)((reserved - free_frame) & (CONFIG_USB_EHCI_FRAME_LIST_SIZE - 1));
++    uint16_t base_age = (uint16_t)((free_frame - hcd->iso_frame_base) & (CONFIG_USB_EHCI_FRAME_LIST_SIZE - 1));
++    uint16_t start;
++
++    if ((ahead > 0) && (ahead < EHCI_ISO_FRAME_HORIZON) &&
++        (base_age < EHCI_ISO_FRAME_HORIZON)) {
++        start = reserved;
++    } else {
++        start = free_frame;
++    }
++    hcd->iso_frame_base = free_frame;
++    hcd->iso_frame_next = (uint16_t)((start + itd_num) % CONFIG_USB_EHCI_FRAME_LIST_SIZE);
++    return start;
 +}
 +
 +static void ehci_iso_itd_flush(struct ehci_itd_hw *itd)
@@ -603,8 +670,7 @@ index 0000000..7bc3367
 +    }
 +
 +    if (ret == 0) {
-+        start_frame = ehci_iso_frame_number(bus);
-+        start_frame = (uint16_t)((start_frame + EHCI_ISO_START_FRAME_LEAD) % CONFIG_USB_EHCI_FRAME_LIST_SIZE);
++        start_frame = ehci_iso_frame_take(bus, itd_num);
 +
 +        slot->itd_num = itd_num;
 +        for (uint32_t k = 0; k < itd_num; k++) {
