@@ -1,6 +1,6 @@
-From a40d89dde060b4f269b8efff502d4e648f9fc4bc Mon Sep 17 00:00:00 2001
+From 56cf1e3ab34571e62c2b72d793a1026b0ad6d895 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu2023@gmail.com>
-Date: Tue, 13 Oct 2026 22:18:57 +0800
+Date: Wed, 14 Oct 2026 03:32:04 +0800
 Subject: [PATCH] port/ehci: add the high-speed isochronous transfer engine
 
 The EHCI port declares ehci_iso_urb_init(), ehci_kill_iso_urb() and
@@ -32,6 +32,15 @@ Design, in the shape the port's descriptor work already has:
     is honoured only while it is both inside a small horizon ahead of the
     free frame and recent, so a cursor left behind by a stopped stream is
     overridden by the next stream's free frame;
+  - descriptor lifetime is explicit: a retired transfer keeps its descriptors
+    chained in the frame list, and only the next user of the slot unlinks them
+    - after waiting for the frames they were scheduled in to lie behind the
+    controller by a small margin.  Neither unlinking nor refilling descriptor
+    memory while the controller may still traverse or have cached the schedule
+    of a frame that just passed is safe; Linux's scheduler makes the same
+    distinction (a free descriptor whose frame is the current one is refused,
+    and finished descriptors are freed with a delay).  The kill path stops the
+    periodic schedule and awaits a frame boundary before touching the list;
   - one iTD spans the eight micro-frames of one frame; the urb's
     iso_packet[] array is laid out one micro-frame scheduled transaction
     per packet, on the micro-frames the endpoint's high-speed period
@@ -40,7 +49,9 @@ Design, in the shape the port's descriptor work already has:
     would need frame-scheduled descriptors and are rejected);
   - the iTD buffer page window is seven consecutive pages anchored at
     the descriptor's first packet, and every packet of the descriptor is
-    checked to start and finish inside that window;
+    checked to start and finish inside that window, to stay within the
+    specification's 0xc00-byte transaction limit and to leave the window's
+    last page uncrossed;
   - completion maps back from the interrupt scan: a TSCL slot still
     carrying ACTIVE has not retired, and once every slot of every iTD of
     a transfer has retired, the per-packet actual lengths and error codes
@@ -70,8 +81,8 @@ Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
 ---
  port/ehci/usb_hc_ehci.c     |   7 +-
  port/ehci/usb_hc_ehci.h     |   2 +
- port/ehci/usb_hc_ehci_iso.c | 640 ++++++++++++++++++++++++++++++++++++
- 3 files changed, 648 insertions(+), 1 deletion(-)
+ port/ehci/usb_hc_ehci_iso.c | 719 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 727 insertions(+), 1 deletion(-)
  create mode 100644 port/ehci/usb_hc_ehci_iso.c
 
 diff --git a/port/ehci/usb_hc_ehci.c b/port/ehci/usb_hc_ehci.c
@@ -114,10 +125,10 @@ index 918feb3..d4b8705 100644
      uint8_t n_cc;  /* Number of Companion Controller */
 diff --git a/port/ehci/usb_hc_ehci_iso.c b/port/ehci/usb_hc_ehci_iso.c
 new file mode 100644
-index 0000000..e53be6d
+index 0000000..5a9a298
 --- /dev/null
 +++ b/port/ehci/usb_hc_ehci_iso.c
-@@ -0,0 +1,640 @@
+@@ -0,0 +1,719 @@
 +/*
 + * @file   usb_hc_ehci_iso.c
 + * @brief  High-speed isochronous transfer engine for the EHCI host port: the
@@ -176,6 +187,10 @@ index 0000000..e53be6d
 + * anchored at the first packet's page of that descriptor. */
 +#define EHCI_ISO_BPL_WINDOW        (7 * 4096)
 +
++/* The specification's per-transaction limit (the TSCL field encodes up to
++ * 0xfff, but 0xc00 is the maximum a transaction may carry). */
++#define EHCI_ISO_TSCL_LENGTH_MAX   0xc00
++
 +/* The first scheduled frame is placed a couple of frames after the frame the
 + * submission lands in, so the descriptors are visible before the controller
 + * reaches them. */
@@ -191,10 +206,25 @@ index 0000000..e53be6d
 + * is not honoured. */
 +#define EHCI_ISO_FRAME_HORIZON     32
 +
++/* Descriptor lifetime: a retired transfer keeps its descriptors chained in the
++ * frame list, and only the next user of the slot unlinks them - after waiting
++ * for the frames they were scheduled in to lie this far behind the
++ * controller.  Neither unlinking nor refilling descriptor memory while the
++ * controller may still traverse or have cached the schedule of a frame that
++ * just passed is safe; Linux's scheduler refuses to reuse an iTD whose frame
++ * is the current one and frees finished ones only after a delay, which is the
++ * same rule with the same reason. */
++#define EHCI_ISO_FRAME_MARGIN      2
++
 +/* Two transfers in flight, each with CONFIG_USB_EHCI_ITD_NUM descriptors,
 + * are the port's declared dimension (CONFIG_USB_EHCI_ISO_NUM slots). */
 +USB_NOCACHE_RAM_SECTION static struct ehci_iso_hw ehci_iso_pool[CONFIG_USBHOST_MAX_BUS][CONFIG_USB_EHCI_ISO_NUM];
 +static usb_osal_sem_t ehci_iso_sem[CONFIG_USBHOST_MAX_BUS][CONFIG_USB_EHCI_ISO_NUM];
++
++/* Per slot: the frame its last schedule ends in, and whether its descriptors
++ * are still chained in (see EHCI_ISO_FRAME_MARGIN). */
++static uint16_t ehci_iso_slot_end[CONFIG_USBHOST_MAX_BUS][CONFIG_USB_EHCI_ISO_NUM];
++static bool ehci_iso_slot_linked[CONFIG_USBHOST_MAX_BUS][CONFIG_USB_EHCI_ISO_NUM];
 +
 +/* ------------------------------------------------------------------------
 + * Scheduling core: descriptor structures only (host-testable)
@@ -277,7 +307,9 @@ index 0000000..e53be6d
 +            /* the descriptor would not hold the packets the period promises */
 +            return -USB_ERR_INVAL;
 +        }
-+        if (len > (ITD_TSCL_LENGTH_MASK >> ITD_TSCL_LENGTH_SHIFT)) {
++        /* the field's encoding cap is 12 bits, but the specification limits a
++         * transaction to 0xc00 bytes */
++        if (len > EHCI_ISO_TSCL_LENGTH_MAX) {
 +            return -USB_ERR_INVAL;
 +        }
 +        if (addr < base) {
@@ -285,6 +317,10 @@ index 0000000..e53be6d
 +        }
 +        rel = addr - base;
 +        if ((rel + len) > EHCI_ISO_BPL_WINDOW) {
++            return -USB_ERR_INVAL;
++        }
++        /* a transaction starting in the window's last page must not wrap it */
++        if (((rel >> 12) == 6) && (((addr & 0xfffU) + len) > 0x1000U)) {
 +            return -USB_ERR_INVAL;
 +        }
 +
@@ -368,6 +404,28 @@ index 0000000..e53be6d
 +{
 +    (void)bus;
 +    return (uint16_t)(((EHCI_HCOR->frindex & EHCI_FRINDEX_MASK) >> 3) & 0x3ff);
++}
++
++/* True when the frame `end` lies at least `margin` frames behind `now`. */
++static bool ehci_iso_frame_passed(uint16_t end, uint16_t now, uint16_t margin)
++{
++    uint16_t behind = (uint16_t)((now - end) & (CONFIG_USB_EHCI_FRAME_LIST_SIZE - 1));
++
++    return behind >= margin;
++}
++
++/* Wait - best effort, bounded - until the frames the given slot was last
++ * scheduled in are behind the controller, so its descriptor memory may be
++ * unlinked and reused.  Called before the submit's critical section. */
++static void ehci_iso_slot_settle(struct usbh_bus *bus, uint32_t index)
++{
++    for (uint32_t spin = 0; spin < 16; spin++) {
++        if (ehci_iso_frame_passed(ehci_iso_slot_end[bus->hcd.hcd_id][index],
++                                  ehci_iso_frame_number(bus), EHCI_ISO_FRAME_MARGIN)) {
++            return;
++        }
++        usb_osal_msleep(1);
++    }
 +}
 +
 +/* Reserve the frames a transfer of itd_num descriptors needs and return the
@@ -484,24 +542,35 @@ index 0000000..e53be6d
 +{
 +    struct ehci_iso_hw *slot = &ehci_iso_pool[bus->hcd.hcd_id][index];
 +
-+    slot->itd_num = 0;
++    /* itd_num is kept: a retired transfer's descriptors remain chained in the
++     * frame list until the next user of the slot unlinks them (see
++     * EHCI_ISO_FRAME_MARGIN) */
 +    slot->itd_pool[0].urb = NULL;
 +    g_ehci_hcd[bus->hcd.hcd_id].ehci_iso_used[index] = false;
 +}
 +
 +/* Detach an in-flight transfer: unlink its descriptors and free its slot.
-+ * Runs under the caller's critical section. */
++ * Runs under the caller's critical section; the callers have stopped the
++ * periodic schedule, and the frame boundary is awaited here before the
++ * descriptors a controller walk may still be inside are touched (a bounded
++ * spin on the frame counter, the same idiom the port's iaad wait uses). */
 +static void ehci_iso_urb_detach(struct usbh_bus *bus, struct usbh_urb *urb)
 +{
 +    uint32_t index;
 +    struct ehci_iso_hw *slot = ehci_iso_slot_of(bus, urb, &index);
++    uint16_t frame;
 +
 +    if (slot == NULL) {
 +        return;
 +    }
++    frame = ehci_iso_frame_number(bus);
++    for (volatile uint32_t spin = 0;
++         (ehci_iso_frame_number(bus) == frame) && (spin < 20000U); spin++) {
++    }
 +    for (uint32_t k = 0; k < slot->itd_num; k++) {
 +        ehci_iso_framelist_unlink(bus, &slot->itd_pool[k]);
 +    }
++    ehci_iso_slot_linked[bus->hcd.hcd_id][index] = false;
 +    ehci_iso_slot_release(bus, index);
 +}
 +
@@ -514,9 +583,10 @@ index 0000000..e53be6d
 +
 +    flags = usb_osal_enter_critical_section();
 +
-+    for (uint32_t k = 0; k < slot->itd_num; k++) {
-+        ehci_iso_framelist_unlink(bus, &slot->itd_pool[k]);
-+    }
++    /* the descriptors stay chained: all their transactions are retired (the
++     * scan proved it), so the controller skips them, and the next user of the
++     * slot unlinks them once their frames are safely behind (see
++     * EHCI_ISO_FRAME_MARGIN) */
 +
 +    urb->actual_length = 0;
 +    urb->errorcode = 0;
@@ -600,6 +670,15 @@ index 0000000..e53be6d
 +#endif
 +    }
 +
++    /* Pick the slot the claim below will most likely take and let its
++     * previous schedule pass before anything touches its memory. */
++    for (uint32_t i = 0; i < CONFIG_USB_EHCI_ISO_NUM; i++) {
++        if (!g_ehci_hcd[bus->hcd.hcd_id].ehci_iso_used[i]) {
++            ehci_iso_slot_settle(bus, i);
++            break;
++        }
++    }
++
 +    flags = usb_osal_enter_critical_section();
 +
 +    /* the per-slot semaphore exists before the transfer can complete */
@@ -625,6 +704,14 @@ index 0000000..e53be6d
 +    if (slot == NULL) {
 +        usb_osal_leave_critical_section(flags);
 +        return -USB_ERR_NOMEM;
++    }
++    /* the previous owner's descriptors are still chained in; unlink them
++     * before their memory is reused */
++    if (ehci_iso_slot_linked[bus->hcd.hcd_id][slot_index]) {
++        for (uint32_t k = 0; k < slot->itd_num; k++) {
++            ehci_iso_framelist_unlink(bus, &slot->itd_pool[k]);
++        }
++        ehci_iso_slot_linked[bus->hcd.hcd_id][slot_index] = false;
 +    }
 +    /* invisible to a concurrent interrupt scan until the descriptors below
 +     * are filled and the slot is published */
@@ -677,6 +764,9 @@ index 0000000..e53be6d
 +            ehci_iso_framelist_link(bus, &slot->itd_pool[k],
 +                                    (uint16_t)((start_frame + k) % CONFIG_USB_EHCI_FRAME_LIST_SIZE));
 +        }
++        ehci_iso_slot_linked[bus->hcd.hcd_id][slot_index] = true;
++        ehci_iso_slot_end[bus->hcd.hcd_id][slot_index] =
++            (uint16_t)((start_frame + itd_num) % CONFIG_USB_EHCI_FRAME_LIST_SIZE);
 +
 +        urb->start_frame = start_frame;
 +        urb->hcpriv = &slot->itd_pool[0];

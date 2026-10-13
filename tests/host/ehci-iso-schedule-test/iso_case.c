@@ -645,16 +645,50 @@ static bool case_link_unlink(char *why, size_t n)
         host_retire(itd, p, 64, 0);
     }
     ehci_scan_isochronous_list(&g_bus);
-    if (g_framelist[TEST_BUS][urb->start_frame] != head) {
-        snprintf(why, n, "completion left the entry at 0x%08x, expected 0x%08x", g_framelist[TEST_BUS][urb->start_frame], head);
-        urb_free(urb);
-        return false;
-    }
     if (urb->errorcode != 0) {
         snprintf(why, n, "completion reported errorcode %d", urb->errorcode);
         urb_free(urb);
         return false;
     }
+    /* a retired transfer keeps its descriptors chained (the controller may
+     * still be traversing or have cached the frame that just passed); the
+     * next user of the slot unlinks them. */
+    if (g_framelist[TEST_BUS][urb->start_frame] != ITD_NLP_ITD(itd)) {
+        snprintf(why, n, "completion unlinked the descriptor (entry 0x%08x, wanted the retired itd)",
+                 g_framelist[TEST_BUS][urb->start_frame]);
+        urb_free(urb);
+        return false;
+    }
+    uint16_t done_frame = urb->start_frame;
+
+    urb_free(urb);
+
+    /* the slot's next submit unlinks the retired descriptors first, once their
+     * frames are behind the controller; the entry is restored by then */
+    urb = urb_new(4, 64);
+    if (urb == NULL) {
+        snprintf(why, n, "alloc failed (reuse)");
+        return false;
+    }
+    if (TEST_SUBMIT(urb) != 0) {
+        snprintf(why, n, "submit failed (reuse)");
+        urb_free(urb);
+        return false;
+    }
+    if (g_framelist[TEST_BUS][done_frame] != head) {
+        snprintf(why, n, "reuse left the old entry at 0x%08x, expected 0x%08x",
+                 g_framelist[TEST_BUS][done_frame], head);
+        TEST_KILL(urb);
+        urb_free(urb);
+        return false;
+    }
+    if (linked_itd(urb->start_frame) == NULL) {
+        snprintf(why, n, "reuse did not link the new descriptor");
+        TEST_KILL(urb);
+        urb_free(urb);
+        return false;
+    }
+    TEST_KILL(urb);
     urb_free(urb);
     return true;
 }
