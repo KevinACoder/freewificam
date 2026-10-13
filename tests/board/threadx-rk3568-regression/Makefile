@@ -238,6 +238,7 @@ USB_STACK_SRCS := \
 	$(CHERRYUSB)/class/hub/usbh_hub.c \
 	$(CHERRYUSB)/class/msc/usbh_msc.c \
 	$(CHERRYUSB)/port/ehci/usb_hc_ehci.c \
+	$(CHERRYUSB)/port/ehci/usb_hc_ehci_iso.c \
 	$(CHERRYUSB)/port/xhci/usb_hc_xhci.c
 
 USB_INCLUDES := \

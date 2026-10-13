@@ -191,6 +191,24 @@ void usbh_console_printf(const char *fmt, ...);
  * (unimplemented here) companion controllers. */
 #define CONFIG_USB_EHCI_CONFIGFLAG	1
 
+/* Isochronous transfers, the capability the camera class sits on. Upstream
+ * declares the three port entry points but ships no definition (the feature
+ * is part of the commercial tier there), so the engine travels as a patch
+ * file and every image that compiles the EHCI port compiles it too - the
+ * switch is a board fact, not a per-image deviation. */
+#ifndef CONFIG_USB_EHCI_ISO
+#define CONFIG_USB_EHCI_ISO	1
+#endif
+
+/* Isochronous transaction descriptors, per bus. One descriptor covers eight
+ * micro-frames (a whole USB frame at high speed); the stream engine lays a
+ * frame's worth of transactions into one descriptor, so this bounds how many
+ * USB frames a single isochronous URB may span. Five is the import's own
+ * default; the board stream round retunes it from measured behaviour. */
+#ifndef CONFIG_USB_EHCI_ITD_NUM
+#define CONFIG_USB_EHCI_ITD_NUM	5
+#endif
+
 /* --- xHCI (the two USB3 instances) --------------------------------------- */
 
 /* Ring depths, in transfer request blocks. 256 per ring is the value this
@@ -241,6 +259,15 @@ void usbh_console_printf(const char *fmt, ...);
 #endif
 #ifndef CONFIG_USBHOST_MSC_READY_CHECK_TIMES
 #define CONFIG_USBHOST_MSC_READY_CHECK_TIMES	10
+#endif
+
+/* Video class (UVC camera): one class instance per attached camera. The
+ * format/frame tables inside it keep the import's defaults (12 frames,
+ * 3 formats) - the board's camera reports 7 frame descriptors over 2
+ * formats, so the defaults hold. Only the camera image compiles this
+ * class. */
+#ifndef CONFIG_USBHOST_MAX_VIDEO_CLASS
+#define CONFIG_USBHOST_MAX_VIDEO_CLASS	1
 #endif
 
 #endif /* FREEWIFICAM_RK3568_USB_CONFIG_H */
