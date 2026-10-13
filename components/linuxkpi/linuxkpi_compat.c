@@ -546,6 +546,17 @@ void __free_pages(struct page *page, unsigned int order)
 	put_page(page);
 }
 
+/*
+ * The skbuff pool's fragment release binds here (skbuff_pool.h): the page
+ * record and its reference count live in this file, so the binding is the real
+ * one wherever this allocator is linked, overriding the pool's weak default.
+ */
+void lkpi_spl_page_put(struct page *page)
+{
+
+	put_page(page);
+}
+
 void free_pages(unsigned long addr, unsigned int order)
 {
 

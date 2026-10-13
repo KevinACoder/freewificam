@@ -1238,10 +1238,23 @@ void lkpi_spl_free(void *p)
 	osMemoryFree(p);
 }
 
-void lkpi_spl_page_put(struct page *page)
+/*
+ * The page reference a fragment release returns.  The page record and its
+ * reference count live with the allocator (linuxkpi_compat.c), and not every
+ * image links that file - an image whose drivers never take pages has no
+ * allocator and can never hand one back.  Where it is linked, its own strong
+ * definition of this binding (put_page) overrides the weak default here; this
+ * default exists so such an image links, and it names the impossible case
+ * rather than swallowing it.
+ */
+__attribute__((weak)) void lkpi_spl_page_put(struct page *page)
 {
-	/* the interface's own release (mm.h): one reference back, the block
-	 * returned when it was the last */
-	put_page(page);
+	static bool said;
+
+	if (!said) {
+		said = true;
+		lkpi_spl_log("fragment page release with no page allocator linked");
+	}
+	(void)page;
 }
 #endif /* LKPI_SKB_POOL_NO_TARGET_HOOKS */
