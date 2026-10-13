@@ -421,10 +421,20 @@ fake_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 static void
 fake_wake_tx_queue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 {
+	struct sk_buff *skb;
 
-	(void)hw;
-	(void)txq;
 	order_add(FAKE_CALL_WAKE_TXQ);
+	/*
+	 * The interface's contract for a driver that implements this callback:
+	 * the wake is the invitation to drain the queue (the vendored AC 7260
+	 * driver's itxq_xmit loop does exactly this).  Without the drain a
+	 * frame handed to a txq would sit there forever, and the suite's data
+	 * case reads the ordinary tx record to see the encapsulated frame.
+	 */
+	if (txq == NULL)
+		return;
+	while ((skb = ieee80211_tx_dequeue(hw, txq)) != NULL)
+		fake_tx(hw, NULL, skb);
 }
 
 static int

@@ -760,6 +760,20 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 		lkpi80211_rx_work(&ctx->rx_work);
 }
 
+void
+lkpi80211_rx_flush(struct ieee80211_hw *hw)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	if (ctx->rx_wq != NULL)
+		lkpi_work_flush(&ctx->rx_work);
+	else
+		lkpi80211_rx_work(&ctx->rx_work);
+}
+
 /*
  * The one transmit-completion body.  ieee80211_tx_status_irqsafe() is the
  * interface's deferred form, ieee80211_tx_status_ext()/ieee80211_tx_status_skb()

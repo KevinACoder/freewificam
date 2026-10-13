@@ -230,6 +230,10 @@ inject_rx_flags(const uint8_t *frame, size_t len, unsigned int flags,
 	rs->signal = (int8_t)signal;
 	rs->flag = (uint8_t)flags;
 	ieee80211_rx_irqsafe(g_hw, skb);
+	/* the receive is deferred by contract (the interface's own irqsafe
+	 * shape); this suite inspects the stack right after injecting, so it
+	 * drains the delivery work first */
+	lkpi80211_rx_flush(g_hw);
 }
 
 static void
@@ -259,6 +263,7 @@ inject_rx_freq(const uint8_t *frame, size_t len, uint32_t freq)
 	rs->band = NL80211_BAND_2GHZ;
 	rs->signal = -50;
 	ieee80211_rx_irqsafe(g_hw, skb);
+	lkpi80211_rx_flush(g_hw);
 }
 
 /* the driver's fragmented delivery: `head_len` bytes linear and the rest as one
@@ -290,6 +295,7 @@ inject_rx_fragmented(const uint8_t *frame, size_t len, size_t head_len,
 	rs->band = NL80211_BAND_2GHZ;
 	rs->signal = -50;
 	ieee80211_rx_irqsafe(g_hw, skb);
+	lkpi80211_rx_flush(g_hw);
 }
 
 /* the fake AP answers each transmitted frame exactly once, in the order the
