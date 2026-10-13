@@ -52,6 +52,9 @@ void lkpi_pcie_port_install(void);
 void lkpi_module_init_run(void);
 int lkpi_fw_iwl7260_fw_register(void);
 int wlan_seam_adapter_init(void);
+/* the driver's debug mask (tests/iwlwifi_dbg.c, the one TU that reaches the
+ * driver's own headers) */
+void iwlwifi_set_debug_level(unsigned int mask);
 
 /* the WPA world's wiring: the supplicant backend instance and the message
  * observer (both scalars-only faces) */
@@ -146,6 +149,16 @@ int main( void )
 	LOG_INFO( "iwlwifi: pcie backend registered\n" );
 	lkpi_module_init_run();
 	LOG_INFO( "iwlwifi: driver registry walked\n" );
+	/*
+	 * The driver's debug mask, set before its probe runs so the whole
+	 * bring-up speaks: the command sequence the firmware sees (HCMD), the
+	 * queue it configures for a station (TX_QUEUES), and what its transmit
+	 * path drops (DROP) are what a bring-up diagnosis reads - and a driver
+	 * that refuses a command says why at this level and nowhere above it.
+	 * The mask is the driver's own IWL_DL_* set; the console's `wlan dbg`
+	 * changes it at run time.
+	 */
+	iwlwifi_set_debug_level(0x80803006);
 	if( lkpi_fw_iwl7260_fw_register() != 0 ) {
 		LOG_ERROR( "iwlwifi: firmware registration failed\n" );
 	} else {

@@ -29,6 +29,9 @@ void iwlwifi_join_chain(void);
 void iwlwifi_dataplane_chain(void);
 /* the measurement session's console face (tests/iwlwifi_dataplane.c) */
 void iwlwifi_dataplane_iperf_cmd(chry_shell_t *csh, int argc, char **argv);
+/* the driver's debug mask (tests/iwlwifi_dbg.c, compiled with the driver's
+ * headers under CONFIG_IWLWIFI_DEBUG) */
+void iwlwifi_set_debug_level(unsigned int mask);
 
 static int
 cmd_wlan(int argc, char **argv)
@@ -66,15 +69,43 @@ cmd_wlan(int argc, char **argv)
 		iwlwifi_dataplane_iperf_cmd(csh, argc - 1, argv + 1);
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan [status|probe|scan|join|dataplane|iperf]\n");
+	if (strcmp(argv[1], "dbg") == 0) {
+		unsigned int mask = 0;
+
+		if (argc >= 3) {
+			const char *p = argv[2];
+
+			if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
+				p += 2;
+			while (*p != '\0') {
+				unsigned int d;
+
+				if (*p >= '0' && *p <= '9')
+					d = (unsigned int)(*p - '0');
+				else if (*p >= 'a' && *p <= 'f')
+					d = (unsigned int)(*p - 'a' + 10);
+				else if (*p >= 'A' && *p <= 'F')
+					d = (unsigned int)(*p - 'A' + 10);
+				else
+					break;
+				mask = (mask << 4) | d;
+				p++;
+			}
+		}
+		iwlwifi_set_debug_level(mask);
+		csh_printf(csh, "wlan: iwlwifi debug_level=0x%x\n", mask);
+		return 0;
+	}
+	csh_printf(csh, "usage: wlan [status|probe|scan|join|dataplane|iperf|dbg <mask>]\n");
 	return 0;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan,
-			  "wlan [status|probe|scan|join|dataplane|iperf]",
+			  "wlan [status|probe|scan|join|dataplane|iperf|dbg]",
 			  "wlan status - bridge counters and state;\n"
 			  "wlan probe - bring up the PCIe chain and wait for the driver;\n"
 			  "wlan scan - sweep the channels and compare with the ground truth;\n"
 			  "wlan join - wait for the supplicant's WPA2 association;\n"
 			  "wlan dataplane - lwIP over the bridge, DHCP, ping, iperf server;\n"
-			  "wlan iperf <ip>|server|stop - the TCP measurement session\n")
+			  "wlan iperf <ip>|server|stop - the TCP measurement session;\n"
+			  "wlan dbg <hex> - the driver's debug mask (needs CONFIG_IWLWIFI_DEBUG)\n")
