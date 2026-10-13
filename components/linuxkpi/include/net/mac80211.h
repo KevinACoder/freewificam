@@ -1767,6 +1767,9 @@ struct ieee80211_hw *wiphy_to_ieee80211_hw(struct wiphy *wiphy);
 /* [LNX] include/net/mac80211.h:224 (the enumerators the compiled set names, at their computed positions) */
 enum ieee80211_chanctx_change {
 	IEEE80211_CHANCTX_CHANGE_WIDTH = 1,
+	IEEE80211_CHANCTX_CHANGE_RX_CHAINS = 2,
+	IEEE80211_CHANCTX_CHANGE_RADAR = 4,
+	IEEE80211_CHANCTX_CHANGE_CHANNEL = 8,
 	IEEE80211_CHANCTX_CHANGE_PUNCTURING = 64,
 	IEEE80211_CHANCTX_CHANGE_MIN_DEF = 16,
 	IEEE80211_CHANCTX_CHANGE_AP = 32

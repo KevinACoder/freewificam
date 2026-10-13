@@ -148,6 +148,14 @@ int	lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 void	lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    struct ieee80211_sta *sta, struct sk_buff *skb);
 
+/* the channel context lifecycle (ops->add_chanctx / assign_vif_chanctx /
+ * remove_chanctx): the interface reserves one when an interface starts using a
+ * channel, and a driver may refuse a station upload without the binding */
+int	lkpi80211_drv_chanctx_use(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, u32 freq, u8 hw_value, u8 band, u8 width);
+void	lkpi80211_drv_chanctx_release(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif);
+
 /* the transmit handoff the interface performs: the txq selection first
  * (ieee80211_get_txq) and, when a queue owns the frame, the enqueue and the
  * driver's wake - a driver's management frames take this route, not drv_tx */

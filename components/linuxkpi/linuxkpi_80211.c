@@ -91,6 +91,17 @@ struct lkpi80211_hw_ctx {
 	struct device		*bus_dev;	/* the bus device behind the wiphy */
 	struct ieee80211_channel chan;		/* the current channel descriptor */
 	struct ieee80211_chanctx_conf chanctx;	/* the emulated context */
+	/*
+	 * The driver-private tail that record ends with (drv_priv[]): the
+	 * interface reserves hw->chanctx_data_size bytes behind every channel
+	 * context and a driver stores its own handle there - the AC 7260 keeps
+	 * its PHY-context id in those two bytes (mvm/mac80211.c:4987 reads
+	 * `(u16 *)ctx->drv_priv`).  The record above is a fixed member, so its
+	 * flexible array has no storage of its own; this array is that storage,
+	 * and the size a driver declares is checked against it before the
+	 * driver is told about the context.
+	 */
+	u8 chanctx_priv[64];
 	struct ieee80211_vif	*vifs[CONFIG_LKPI80211_MAX_VIFS];
 	struct ieee80211_sta	*stas[CONFIG_LKPI80211_MAX_STAS];
 	/*
@@ -1256,6 +1267,103 @@ lkpi80211_drv_config_channel(struct ieee80211_hw *hw, u32 freq, u8 hw_value,
 	if (ctx->ops->config == NULL)
 		return 0;
 	return ctx->ops->config(hw, 0, IEEE80211_CONF_CHANGE_CHANNEL);
+}
+
+/*
+ * The channel context a connection runs on.  mac80211 reserves one when an
+ * interface starts using a channel (ieee80211_vif_use_channel, reached from
+ * ieee80211_prep_connection before the peer's station is uploaded) and hands it
+ * to the driver: ops->add_chanctx lets the driver allocate its own PHY context
+ * and keep the handle in ctx->drv_priv, ops->assign_vif_chanctx binds the
+ * interface to it, and the interface records the binding on the link
+ * (bss_conf.chanctx_conf).  A driver reads that binding back before it can say
+ * anything about a peer - the AC 7260's station upload refuses outright without
+ * it (WARN_ON(!mvmvif->link[link_id]->phy_ctxt) then -EINVAL,
+ * mvm/mac80211.c:4008-4012; measured on the board 2026-10-13, where the peer
+ * registration this round added came back as "sta add refused (-22)").
+ *
+ * So the substitute drives the same lifecycle at the same moment: the seam
+ * calls this where the bridge points the radio at the connection's channel.
+ */
+int
+lkpi80211_drv_chanctx_use(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    u32 freq, u8 hw_value, u8 band, u8 width)
+{
+	struct lkpi80211_hw_ctx *ctx;
+	int ret;
+
+	if (hw == NULL || vif == NULL || freq == 0)
+		return -EINVAL;
+	ctx = LKPI80211_CTX(hw);
+	if ((unsigned int)hw->chanctx_data_size > sizeof(ctx->chanctx_priv)) {
+		lkpi_printf(ULOG_ERROR_LEVEL,
+		    "lkpi80211: the driver declares %d bytes of channel-context private data, more than the %u this face holds\n",
+		    hw->chanctx_data_size, (unsigned int)sizeof(ctx->chanctx_priv));
+		return -ENOSPC;
+	}
+	ctx->chan.center_freq = freq;
+	ctx->chan.hw_value = hw_value;
+	ctx->chan.band = (enum nl80211_band)band;
+	ctx->chanctx.def.chan = &ctx->chan;
+	ctx->chanctx.def.width = (enum nl80211_chan_width)width;
+	ctx->chanctx.def.center_freq1 = freq;
+	ctx->chanctx.min_def = ctx->chanctx.def;
+
+	if (!ctx->have_chanctx) {
+		if (ctx->ops->add_chanctx != NULL) {
+			ret = ctx->ops->add_chanctx(hw, &ctx->chanctx);
+			if (ret != 0) {
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "lkpi80211: add_chanctx refused (%d)\n", ret);
+				return ret;
+			}
+		}
+		ctx->have_chanctx = 1;
+		if (ctx->ops->assign_vif_chanctx != NULL) {
+			ret = ctx->ops->assign_vif_chanctx(hw, vif,
+			    &vif->bss_conf, &ctx->chanctx);
+			if (ret != 0) {
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "lkpi80211: assign_vif_chanctx refused (%d)\n",
+				    ret);
+				return ret;
+			}
+		}
+		vif->bss_conf.chanctx_conf = &ctx->chanctx;
+		return 0;
+	}
+	/* already assigned: a different channel is a change, the call mac80211
+	 * makes when the interface moves (the same record, the same driver
+	 * handle in its private tail) */
+	if (ctx->ops->change_chanctx != NULL)
+		ctx->ops->change_chanctx(hw, &ctx->chanctx,
+		    IEEE80211_CHANCTX_CHANGE_CHANNEL);
+	return 0;
+}
+
+/*
+ * The release: unassign, then remove, the order the interface uses when an
+ * interface stops using its channel (ieee80211_vif_release_channel).
+ */
+void
+lkpi80211_drv_chanctx_release(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	if (!ctx->have_chanctx)
+		return;
+	if (vif != NULL && ctx->ops->unassign_vif_chanctx != NULL)
+		ctx->ops->unassign_vif_chanctx(hw, vif, &vif->bss_conf,
+		    &ctx->chanctx);
+	if (vif != NULL)
+		vif->bss_conf.chanctx_conf = NULL;
+	if (ctx->ops->remove_chanctx != NULL)
+		ctx->ops->remove_chanctx(hw, &ctx->chanctx);
+	memset(&ctx->chanctx, 0, sizeof(ctx->chanctx));
+	ctx->have_chanctx = 0;
 }
 
 int

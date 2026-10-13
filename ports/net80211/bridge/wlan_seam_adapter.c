@@ -61,6 +61,8 @@ static struct {
 					 * so it winds down as an unassociated
 					 * station, not through sta_remove */
 	uint8_t bssid_store[6];		/* the pre-assoc BSSID the vif points at */
+	uint32_t tuned_freq;		/* the channel the radio was last tuned to */
+	uint8_t tuned_hw_value;
 	int vif_added;
 	int installed;
 	unsigned int filter_calls;
@@ -128,6 +130,11 @@ seam_config(struct wlan_seam_drv *drv, uint32_t changed, uint32_t freq)
 	if (freq < 2412 || freq > 2472)
 		return -1;
 	hw_value = (uint8_t)((freq - 2407) / 5);
+	/* the last channel the bridge pointed the radio at: the connection's own
+	 * channel is programmed by the same op, and the channel context a
+	 * connection runs on is built from it at the AUTH entry (seam_bssid) */
+	adapter.tuned_freq = freq;
+	adapter.tuned_hw_value = hw_value;
 	return lkpi80211_drv_config_channel(adapter.hw, freq, hw_value,
 	    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20, 0);
 }
@@ -451,6 +458,7 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 			adapter.sta = NULL;
 		}
 		adapter.sta_preauth = 0;
+		lkpi80211_drv_chanctx_release(adapter.hw, adapter.vif);
 		/*
 		 * No BSS_CHANGED_BSSID on the leave: mac80211 does not push a
 		 * NULL BSSID through bss_info_changed, and the driver's
@@ -492,6 +500,9 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6])
 			adapter.sta = NULL;
 			adapter.sta_preauth = 0;
 		}
+		/* the channel context goes with the attempt (the interface
+		 * releases the channel when a connection ends without one) */
+		lkpi80211_drv_chanctx_release(adapter.hw, adapter.vif);
 		/*
 		 * No BSS_CHANGED_BSSID on the way out - the same contract the
 		 * leave path above documents: a driver's handler dereferences
@@ -503,6 +514,22 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6])
 	}
 	memcpy(adapter.bssid_store, bssid, 6);
 	adapter.vif->bss_conf.bssid = adapter.bssid_store;
+	/*
+	 * The channel context first: the interface reserves one when an
+	 * interface starts using a channel, before it uploads the peer's
+	 * station - and a driver refuses that upload without the binding (the
+	 * AC 7260's station state does exactly that).  The channel is the one
+	 * the bridge just tuned to, which for this transition is the target
+	 * AP's.
+	 */
+	if (adapter.tuned_freq != 0) {
+		int cr = lkpi80211_drv_chanctx_use(adapter.hw, adapter.vif,
+		    adapter.tuned_freq, adapter.tuned_hw_value,
+		    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20);
+
+		if (cr != 0)
+			return cr;
+	}
 	/*
 	 * The peer station, before the stack sends anything to it: this is the
 	 * interface's prepare-a-connection moment - mac80211 inserts and uploads
