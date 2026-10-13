@@ -50,11 +50,17 @@
 #define PORT_IRQ_MAX	8
 
 /* The coherent window. It is the same non-cacheable section the other DMA-capable
- * drivers use, so the pool needs no mapping call and no maintenance; the size is
- * what the first consumer asks for (a few queue and command buffers) with room
- * left over. */
-#define PORT_DMA_POOL_SIZE	(256u * 1024u)
-#define PORT_DMA_ALIGN		64u
+ * drivers use, so the pool needs no mapping call and no maintenance; the size and
+ * the alignment are the interface's contract rather than the first consumer's
+ * wish. dma_alloc_coherent() returns memory aligned to at least the smallest page
+ * size, and a driver is entitled to rely on it: the AC 7260's interrupt-cause
+ * table asserts its DMA address is ICT_SIZE-aligned (third-party/iwlwifi/pcie/
+ * gen1_2/rx.c:2196), which a 64-byte pool cannot promise. The block header is the
+ * alignment wide, so every block - and therefore every payload - starts on that
+ * boundary; the pool is sized for the driver's queue and command buffers with
+ * room over. */
+#define PORT_DMA_POOL_SIZE	(1u * 1024u * 1024u)
+#define PORT_DMA_ALIGN		4096u
 
 struct port_dma_blk {
 	uint32_t	size;		/* payload bytes in this block */
