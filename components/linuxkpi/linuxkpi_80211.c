@@ -1898,6 +1898,38 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	hdr = (struct ieee80211_hdr *)skb->data;
 	fc = hdr->frame_control;
 
+	/*
+	 * The managed-exchange preparation, before the frame is handed down:
+	 * Linux's MLME calls drv_mgd_prepare_tx right before the authentication
+	 * (mlme.c:8991-8992) and association (mlme.c:2777) frames leave, and the
+	 * AC 7260's driver turns that into session protection - a firmware time
+	 * event that keeps the device on-channel and awake for the exchange
+	 * (mvm/mac80211.c:4140-4152 -> iwl_mvm_protect_assoc).  Without it the
+	 * board showed the authentication frame read out of the management queue
+	 * by the device and then held until the queue was torn down - reclaimed
+	 * with FIFO_FLUSHED, never transmitted, and the join's management timer
+	 * expired instead.  The info record carries what Linux fills in: the
+	 * subtype of the frame about to leave, link 0, zero duration, and
+	 * was_assoc from the interface's own association state (the driver skips
+	 * protection for a re-association of an already-associated interface).
+	 */
+	if (vif != NULL && vif->type == NL80211_IFTYPE_STATION &&
+	    ctx->ops->mgd_prepare_tx != NULL) {
+		__le16 stype = (__le16)(fc & cpu_to_le16(IEEE80211_FCTL_STYPE));
+
+		if (stype == cpu_to_le16(IEEE80211_STYPE_AUTH) ||
+		    stype == cpu_to_le16(IEEE80211_STYPE_ASSOC_REQ) ||
+		    stype == cpu_to_le16(IEEE80211_STYPE_REASSOC_REQ)) {
+			struct ieee80211_prep_tx_info info;
+
+			memset(&info, 0, sizeof(info));
+			info.subtype = stype;
+			info.link_id = 0;
+			info.was_assoc = vif->cfg.assoc ? 1 : 0;
+			ctx->ops->mgd_prepare_tx(hw, vif, &info);
+		}
+	}
+
 	if (vif != NULL && ieee80211_is_mgmt(fc)) {
 		/*
 		 * The management branches of ieee80211_get_txq (tx.c:1319-1336):
