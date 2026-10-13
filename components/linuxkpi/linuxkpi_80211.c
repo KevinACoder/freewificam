@@ -127,6 +127,21 @@ struct lkpi80211_hw_ctx {
 	unsigned int		hw_scanning:1;
 	struct ieee80211_scan_request *hw_scan_req;
 	unsigned int		have_chanctx:1;
+	/*
+	 * The face's "the interface is running" bitmap, one bit per vif slot -
+	 * mac80211's IEEE80211_SDATA_IN_DRIVER / SDATA_STATE_RUNNING pair in the
+	 * one place this port needs it.  The interface marks a vif running only
+	 * AFTER the driver's add_interface has returned (iface.c:1261 calls
+	 * drv_add_interface, :1275 sets SDATA_STATE_RUNNING), and its active-
+	 * interface iteration skips the ones that are not (util.c
+	 * __iterate_interfaces).  A driver leans on that: the AC 7260's
+	 * MAC-context setup walks the active interfaces to hand out MAC/TSF ids
+	 * and treats "the vif is already there" as a resume, skipping the whole
+	 * setup (mvm/mac-ctxt.c:258-268) - which is how a vif visible too early
+	 * ends up with no MAC context in the firmware, no link initialisation,
+	 * and a firmware assert on the first queue it configures.
+	 */
+	u32			vif_running;
 	unsigned int		tx_ba_sessions;
 	unsigned int		rx_frames;
 	unsigned int		tx_completions;
@@ -759,7 +774,11 @@ ieee80211_iterate_active_interfaces_atomic(struct ieee80211_hw *hw,
 	for (i = 0; i < CONFIG_LKPI80211_MAX_VIFS; i++) {
 		struct ieee80211_vif *vif = ctx->vifs[i];
 
-		if (vif == NULL)
+		/* the interface's own filter (util.c __iterate_interfaces): an
+		 * interface that is not running yet is not in the driver's view -
+		 * which is what keeps a driver's add_interface from finding the
+		 * vif it is adding */
+		if (vif == NULL || (ctx->vif_running & (1u << i)) == 0)
 			continue;
 		iterator(data, vif->addr, vif);
 	}
@@ -1663,6 +1682,9 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 			return NULL;
 		}
 	}
+	/* running from here on: the active-interface iteration may show it (the
+	 * interface's own order, see vif_running above) */
+	ctx->vif_running |= 1u << i;
 	lkpi_printf(ULOG_INFO_LEVEL, "lkpi80211: vif added idx=%u type=%u priv=%u\n", i, type,
 	    (unsigned)hw->vif_data_size);
 	return vif;
@@ -1682,6 +1704,7 @@ lkpi80211_drv_vif_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	for (i = 0; i < CONFIG_LKPI80211_MAX_VIFS; i++)
 		if (ctx->vifs[i] == vif) {
 			ctx->vifs[i] = NULL;
+			ctx->vif_running &= ~(1u << i);
 			memset(&ctx->wdevs[i], 0, sizeof(ctx->wdevs[i]));
 			vif_hw_unbind(vif);
 			/* after remove_interface: the driver's teardown still
