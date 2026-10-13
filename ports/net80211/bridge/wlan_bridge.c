@@ -565,7 +565,13 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 		    bss != NULL) {
 			memcpy(bridge.bssid_last, bss->ni_bssid, 6);
 			bridge.bssid_last_set = 1;
-			(void)bridge.ops->bssid(bridge.drv, bss->ni_bssid);
+			/* the AP's own timing travels with the target: the
+			 * interface fills it while it prepares the connection,
+			 * and a driver reads it before it takes a station */
+			(void)bridge.ops->bssid(bridge.drv, bss->ni_bssid,
+			    (uint16_t)bss->ni_intval,
+			    bss->ni_dtim_period != 0 ?
+			    (uint8_t)bss->ni_dtim_period : 1);
 		}
 	} else if (ostate >= IEEE80211_S_AUTH && nstate < IEEE80211_S_AUTH &&
 	    bridge.ops != NULL && bridge.ops->bssid != NULL) {
@@ -580,7 +586,7 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 		 * seam's leave path documents).
 		 */
 		bridge.bssid_last_set = 0;
-		(void)bridge.ops->bssid(bridge.drv, NULL);
+		(void)bridge.ops->bssid(bridge.drv, NULL, 0, 0);
 	}
 	rc = bridge_orig_newstate(ic, nstate, arg);
 

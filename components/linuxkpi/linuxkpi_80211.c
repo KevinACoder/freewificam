@@ -1330,6 +1330,16 @@ lkpi80211_drv_chanctx_use(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			}
 		}
 		vif->bss_conf.chanctx_conf = &ctx->chanctx;
+		/*
+		 * The link's operating channel request, which the interface fills
+		 * with the same binding (ieee80211_vif_use_channel sets
+		 * link->conf->chanreq.oper).  A driver reads it off the vif when
+		 * it programs a station - the AC 7260 takes the band from
+		 * `vif->bss_conf.chanreq.oper.chan` while it builds the station
+		 * command (mvm/sta.c:211), so a NULL there is a NULL dereference,
+		 * not a refusal.
+		 */
+		vif->bss_conf.chanreq.oper = ctx->chanctx.def;
 		return 0;
 	}
 	/* already assigned: a different channel is a change, the call mac80211

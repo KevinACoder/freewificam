@@ -89,6 +89,11 @@ enum ev_kind {
 	EV_BSS_INFO,
 	EV_TX,
 	EV_WAKE_TXQ,
+	EV_ADD_CHANCTX,
+	EV_ASSIGN_CHANCTX,
+	EV_CHANGE_CHANCTX,
+	EV_UNASSIGN_CHANCTX,
+	EV_REMOVE_CHANCTX,
 	EV_MAX
 };
 
@@ -96,6 +101,8 @@ static const char *const ev_name[EV_MAX] = {
 	"add_interface", "remove_interface", "sta_state", "sta_add",
 	"sta_remove", "vif_cfg_changed", "link_info_changed",
 	"bss_info_changed", "tx", "wake_tx_queue",
+	"add_chanctx", "assign_vif_chanctx", "change_chanctx",
+	"unassign_vif_chanctx", "remove_chanctx",
 };
 
 #define LOG_MAX	32
@@ -317,6 +324,72 @@ drv_wake_tx_queue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 	ieee80211_handle_wake_tx_queue(hw, txq);
 }
 
+/*
+ * The channel-context ops, the shape the AC 7260 declares
+ * (mvm/mac80211.c:6355-6360): the driver allocates its own PHY context in
+ * add_chanctx and keeps the handle in the context's private tail, and
+ * assign_vif_chanctx reads it back - which is why the interface must pass the
+ * same record to both and give the tail real storage.  The id the fixture
+ * stashes is what the case looks for.
+ */
+#define FIXTURE_PHY_CTXT_ID	7
+
+static int
+drv_add_chanctx(struct ieee80211_hw *hw, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	if (ctx->def.chan == NULL)
+		return -EINVAL;
+	*(u16 *)(void *)ctx->drv_priv = FIXTURE_PHY_CTXT_ID;
+	log_add(EV_ADD_CHANCTX, NULL, ctx->def.chan->center_freq, 0, 0, NULL);
+	return 0;
+}
+
+static int
+drv_assign_vif_chanctx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_bss_conf *link_conf, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	if (link_conf != &vif->bss_conf)
+		return -EINVAL;
+	if (*(u16 *)(void *)ctx->drv_priv != FIXTURE_PHY_CTXT_ID)
+		return -EINVAL;	/* the interface did not carry the handle */
+	log_add(EV_ASSIGN_CHANCTX, vif, ctx->def.chan->center_freq, 0, 0, NULL);
+	return 0;
+}
+
+static void
+drv_unassign_vif_chanctx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_bss_conf *link_conf, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	(void)link_conf;
+	(void)ctx;
+	log_add(EV_UNASSIGN_CHANCTX, vif, 0, 0, 0, NULL);
+}
+
+static void
+drv_remove_chanctx(struct ieee80211_hw *hw, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	(void)ctx;
+	log_add(EV_REMOVE_CHANCTX, NULL, 0, 0, 0, NULL);
+}
+
+static void
+drv_change_chanctx(struct ieee80211_hw *hw,
+    struct ieee80211_chanctx_conf *ctx, u32 changed)
+{
+
+	(void)hw;
+	log_add(EV_CHANGE_CHANCTX, NULL, ctx->def.chan->center_freq, 0, 0, NULL);
+	(void)changed;
+}
+
 /* the two families, declared one per table exactly as the drivers do */
 static const struct ieee80211_ops ops_73 = {
 	.add_interface		= drv_add_interface,
@@ -360,6 +433,11 @@ static const struct ieee80211_ops ops_7260 = {
 	.bss_info_changed	= drv_bss_info_changed,
 	.tx			= drv_tx,
 	.wake_tx_queue		= drv_wake_tx_queue,
+	.add_chanctx		= drv_add_chanctx,
+	.remove_chanctx		= drv_remove_chanctx,
+	.change_chanctx		= drv_change_chanctx,
+	.assign_vif_chanctx	= drv_assign_vif_chanctx,
+	.unassign_vif_chanctx	= drv_unassign_vif_chanctx,
 };
 
 /* ------------------------------------------------------------------ */
@@ -785,6 +863,74 @@ case_7260_txq(void)
 }
 
 /*
+ * 7260-chanctx: the channel context a connection runs on.  The interface
+ * reserves one when an interface starts using a channel and hands it to the
+ * driver - add_chanctx lets the driver allocate its own PHY context and keep
+ * the handle in the context's private tail, assign_vif_chanctx reads it back
+ * and binds the interface (mac80211's ieee80211_vif_use_channel, reached from
+ * prep_connection).  A driver may refuse everything about a peer without that
+ * binding: the AC 7260's station upload warns and returns -EINVAL
+ * (mvm/mac80211.c:4008-4012), which is what the board showed as "sta add
+ * refused (-22)" the moment the peer was registered before the authentication
+ * request.  The case pins the lifecycle and the two facts a driver depends on:
+ * the same record reaches both calls, and its private tail has real storage.
+ */
+static void
+case_7260_chanctx(void)
+{
+	struct ieee80211_hw *hw = fixture_new(SHAPE_7260);
+	struct ieee80211_vif *vif;
+	struct ieee80211_sta *sta = NULL;
+	int ok = 1;
+
+	if (hw == NULL) {
+		case_line("7260-chanctx", 0, "no hw");
+		return;
+	}
+	vif = join(hw, &sta);
+	if (vif == NULL || sta == NULL) {
+		case_line("7260-chanctx", 0, "the join did not complete");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	log_reset();
+	if (lkpi80211_drv_chanctx_use(hw, vif, 2417, 2, NL80211_BAND_2GHZ,
+	    NL80211_CHAN_WIDTH_20) != 0) {
+		case_line("7260-chanctx", 0, "reserving the channel context failed");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	if (log_count(EV_ADD_CHANCTX) != 1 || log_count(EV_ASSIGN_CHANCTX) != 1 ||
+	    log_pos(EV_ADD_CHANCTX) > log_pos(EV_ASSIGN_CHANCTX))
+		ok = 0;
+	if (vif->bss_conf.chanctx_conf == NULL)
+		ok = 0;
+	/* a second reservation on another channel is a change, not a re-add */
+	if (lkpi80211_drv_chanctx_use(hw, vif, 2437, 6, NL80211_BAND_2GHZ,
+	    NL80211_CHAN_WIDTH_20) != 0)
+		ok = 0;
+	if (log_count(EV_ADD_CHANCTX) != 1 || log_count(EV_CHANGE_CHANCTX) != 1)
+		ok = 0;
+	if (log_first(EV_CHANGE_CHANCTX) != NULL &&
+	    log_first(EV_CHANGE_CHANCTX)->changed != 2437)
+		ok = 0;
+	lkpi80211_drv_chanctx_release(hw, vif);
+	if (log_count(EV_UNASSIGN_CHANCTX) != 1 ||
+	    log_count(EV_REMOVE_CHANCTX) != 1 ||
+	    log_pos(EV_UNASSIGN_CHANCTX) > log_pos(EV_REMOVE_CHANCTX))
+		ok = 0;
+	if (vif->bss_conf.chanctx_conf != NULL)
+		ok = 0;
+	case_line("7260-chanctx", ok, "add=%u assign=%u change=%u unassign=%u remove=%u",
+	    log_count(EV_ADD_CHANCTX), log_count(EV_ASSIGN_CHANCTX),
+	    log_count(EV_CHANGE_CHANCTX), log_count(EV_UNASSIGN_CHANCTX),
+	    log_count(EV_REMOVE_CHANCTX));
+	if (!ok)
+		log_dump();
+	ieee80211_free_hw(hw);
+}
+
+/*
  * The flag that decides where a station's management frames enter the driver.
  * The AC 7260 declares STA_MMPDU_TXQ (mvm/mac80211.c:364), the interface
  * creates sta->txq[IEEE80211_NUM_TIDS] for it (tx.c:1545-1556) and routes the
@@ -1038,6 +1184,7 @@ app_task(void *arg)
 	case_7260_txq();
 	case_7260_mgttxq(1);
 	case_7260_mgttxq(0);
+	case_7260_chanctx();
 	case_link_bookkeeping();
 	case_default_link_address();
 	case_zero_change_is_silent();

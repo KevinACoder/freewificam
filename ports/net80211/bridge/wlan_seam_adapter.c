@@ -479,7 +479,8 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
  * programming point (core.c:4989).
  */
 static int
-seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6])
+seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
+    uint16_t beacon_int, uint8_t dtim_period)
 {
 
 	(void)drv;
@@ -514,6 +515,17 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6])
 	}
 	memcpy(adapter.bssid_store, bssid, 6);
 	adapter.vif->bss_conf.bssid = adapter.bssid_store;
+	/*
+	 * The AP's advertised timing, as the interface fills it while it prepares
+	 * the connection (ieee80211_prep_connection: the beacon interval from the
+	 * AP's beacon, the DTIM period defaulting to 1).  A driver reads both off
+	 * the vif before it will take a station - the AC 7260 refuses one whose
+	 * beacon interval is below its minimum, which is how the board's first
+	 * peer registration ended ("Beacon interval 0 for AP ... is too small"
+	 * then "sta add refused (-22)").
+	 */
+	adapter.vif->bss_conf.beacon_int = beacon_int;
+	adapter.vif->bss_conf.dtim_period = dtim_period != 0 ? dtim_period : 1;
 	/*
 	 * The channel context first: the interface reserves one when an
 	 * interface starts using a channel, before it uploads the peer's
