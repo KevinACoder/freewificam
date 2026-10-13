@@ -433,9 +433,29 @@ void kmem_cache_free(struct kmem_cache *s, void *objp)
 struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
 {
 	size_t size = (size_t)PAGE_SIZE << order;
-
-	return (struct page *)lkpi_kmem_alloc(size, (int)gfp_mask,
+	struct page *page = (struct page *)lkpi_kmem_alloc(size, (int)gfp_mask,
 	    (gfp_mask & __GFP_ZERO) != 0);
+
+	if (page == NULL) {
+		/*
+		 * The vendored receive path reports the refusal but not the
+		 * request: its order-carrying line is debug-gated and its
+		 * always-on line is not (third-party/iwlwifi/pcie/gen1_2/
+		 * rx.c:394-403). Name the request once, so a refusal this port
+		 * causes is diagnosable from the serial log alone - and a size
+		 * of zero says the caller's order was garbage, which is the
+		 * other defect the same line exposes.
+		 */
+		static bool said;
+
+		if (!said) {
+			said = true;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi: alloc_pages(order=%u) refused, %u bytes\n",
+			    order, (unsigned)size);
+		}
+	}
+	return page;
 }
 
 void __free_pages(struct page *page, unsigned int order)
