@@ -2671,8 +2671,10 @@ skb_copy(const struct sk_buff *skb, gfp_t gfp)
 	n = lkpi_skb_alloc(skb->end, gfp);
 	if (n == NULL)
 		return NULL;
-	/* this shim never carries paged data (data_len 0), so tail always
-	 * covers headroom + payload - copy the whole [head, head+tail) */
+	/* the callers that reach this entry copy linear buffers (transmit
+	 * templates), so tail covers headroom + payload and the whole
+	 * [head, head+tail) is the frame; a fragmented source would need the
+	 * frame rebuild the substitute's receive entry performs instead */
 	memcpy(n->head, skb->head, skb->tail);
 	n->data = n->head + headroom;
 	n->tail = skb->tail;

@@ -437,12 +437,23 @@ void kmem_cache_free(struct kmem_cache *s, void *objp)
  * starts at the next page boundary, and the block's own base is kept in the
  * word before it for the release path.
  *
+ * The record also carries the interface's reference count and the allocation
+ * order: a page is released when its last reference goes (put_page /
+ * __free_pages), and the vendored PCIe receive path leans on exactly that - one
+ * order-N block serves several receive buffers, each holding its own reference
+ * (third-party/iwlwifi/pcie/gen1_2/rx.c:380-410 and iwl-trans.h:252), and a
+ * buffer whose page is stolen for a socket-buffer fragment releases the
+ * receive queue's reference while the fragment's keeps the block alive until
+ * the fragment is freed.
+ *
  * A caller that requires the kernel's other page property (an allocator that
  * swaps, a struct page the kernel walks) is still not served by this, and is
  * the DMA face's concern, not this one's.
  */
 struct lkpi_page_base {
 	uintptr_t	base;	/* the heap block the page was carved from */
+	uint32_t	refcnt;	/* the allocator's one plus one per get_page() */
+	uint32_t	order;	/* kept so put_page() can free the block it names */
 };
 
 struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
@@ -478,6 +489,8 @@ struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
 	    ~(uintptr_t)(PAGE_SIZE - 1u);
 	hdr = (struct lkpi_page_base *)(aligned - sizeof(*hdr));
 	hdr->base = (uintptr_t)raw;
+	hdr->refcnt = 1;
+	hdr->order = order;
 	page = (uint8_t *)aligned;
 
 	if ((gfp_mask & __GFP_ZERO) != 0)
@@ -485,15 +498,52 @@ struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
 	return (struct page *)page;
 }
 
-void __free_pages(struct page *page, unsigned int order)
+/* [LNX] include/linux/mm.h: the take on a page about to be handed to another
+ * owner; the face's get_page() is this call. */
+void lkpi_page_get(struct page *page)
 {
-	const struct lkpi_page_base *hdr;
+	struct lkpi_page_base *hdr;
 
-	(void)order;
 	if (page == NULL)
 		return;
-	hdr = (const struct lkpi_page_base *)page - 1;
+	hdr = (struct lkpi_page_base *)page - 1;
+	hdr->refcnt++;
+}
+
+/* [LNX] include/linux/mm.h: `put_page()` drops one reference and returns the
+ * block on the last. The interface reads the order back from its page record;
+ * this port's header kept it at allocation, so no argument is needed here
+ * either. A release below zero is named and refused rather than passed to the
+ * allocator - the header bytes sit in the block being freed, so the check is
+ * best-effort, and the heap's own guard is the backstop. */
+void put_page(struct page *page)
+{
+	struct lkpi_page_base *hdr;
+
+	if (page == NULL)
+		return;
+	hdr = (struct lkpi_page_base *)page - 1;
+	if (hdr->refcnt == 0) {
+		static bool said;
+
+		if (!said) {
+			said = true;
+			lkpi_printf(ULOG_INFO_LEVEL,
+			    "lkpi: release of a page with no references left refused (base=%p)\n",
+			    (void *)hdr->base);
+		}
+		return;
+	}
+	if (--hdr->refcnt != 0)
+		return;
 	lkpi_kmem_free((const void *)hdr->base);
+}
+
+void __free_pages(struct page *page, unsigned int order)
+{
+
+	(void)order;		/* the record carries its own; see put_page() */
+	put_page(page);
 }
 
 void free_pages(unsigned long addr, unsigned int order)

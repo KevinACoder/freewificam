@@ -41,6 +41,7 @@ extern "C" {
 /* ---- struct sk_buff (Linux shape, moved from linuxkpi_core.h) ------ */
 struct sk_buff_head;
 struct net_device;
+struct page;
 
 struct sk_buff {
 	struct sk_buff	*next;
@@ -149,6 +150,11 @@ void lkpi_spl_irqrestore(unsigned long flags);
 void lkpi_spl_log(const char *fmt, ...);
 void *lkpi_spl_malloc(unsigned int size);	/* dyalloc backing */
 void lkpi_spl_free(void *p);
+/* [LNX] include/linux/mm.h: return one reference to a page (put_page).  The
+ * fragment release calls it when a payload with rx fragments dies; the target
+ * binds it to the interface's own put_page, a host harness to whatever its page
+ * model needs. */
+void lkpi_spl_page_put(struct page *page);
 
 #ifdef __cplusplus
 }

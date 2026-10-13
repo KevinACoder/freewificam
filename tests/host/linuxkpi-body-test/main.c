@@ -67,6 +67,7 @@
 #include "linuxkpi_usb.h"
 #include <linux/interrupt.h>
 #include <linux/mm.h>
+#include <linux/skbuff.h>
 #include <linux/usb.h>
 #include <linux/firmware.h>
 
@@ -1309,6 +1310,121 @@ case_l13(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* L14: the buffer's fragment storage                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The board named the cost of this face having no fragment storage: the AC 7260
+ * receive path keeps a frame larger than its 128-byte request in a page
+ * fragment (third-party/iwlwifi/mvm/rx.c:80-91), the fragment was refused with
+ * "put past the tail refused (len=250 tailroom=96)", and every beacon reached
+ * the stack as a 32-byte stub - the scan table stayed empty while the radio
+ * heard beacons. The case pins the three facts the fix rests on: the record
+ * attaches (page, offset and length in the buffer's own shared record), the
+ * frame reads back across the linear/fragment boundary, and the page's
+ * reference goes back exactly once - when the payload dies, not before.
+ * With --fault frag-inert the attachment copies nothing (the pre-fix face),
+ * and the record assertions must fail.
+ */
+static int	l14_fault_inert;	/* --fault frag-inert: no fragment storage */
+unsigned long	lkpi_host_page_puts(void);
+
+/* the fragment's page: this harness has no page allocator of its own, so a
+ * page is this static block - the pool's fragment code reaches it through
+ * page_address() only, and the release is the harness's counted binding */
+static unsigned char l14_page[512] __attribute__((aligned(64)));
+
+static int
+case_l14(void)
+{
+	static unsigned char head[24];
+	struct sk_buff *skb;
+	unsigned char got[300];
+	unsigned int i;
+	unsigned long puts0;
+
+	for (i = 0; i < sizeof(head); i++)
+		head[i] = (unsigned char)(0x40 + i);
+	for (i = 0; i < sizeof(l14_page); i++)
+		l14_page[i] = (unsigned char)(i * 7 + 3);
+
+	skb = lkpi_skb_alloc(64, GFP_KERNEL);
+	if (skb == NULL) {
+		case_line("L14", 0, "the pool refused the frame's linear head");
+		return -1;
+	}
+	if (skb_tailroom(skb) != 64) {
+		case_line("L14", 0, "the request geometry did not survive (tailroom=%d)",
+		    skb_tailroom(skb));
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	if (lkpi_skb_put(skb, sizeof(head)) == NULL) {
+		case_line("L14", 0, "the linear head would not go in");
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	memcpy(skb->data, head, sizeof(head));
+
+	puts0 = lkpi_host_page_puts();
+	if (l14_fault_inert) {
+		/* the pre-fix path: the fragment is "materialized" into the
+		 * linear payload, which has no room here - and records nothing */
+		(void)lkpi_skb_put(skb, 250);
+	} else {
+		skb_add_rx_frag(skb, 0, (struct page *)(void *)l14_page, 16, 250, 0);
+	}
+
+	if (skb->len != 24u + 250u || skb->data_len != 250u ||
+	    skb_headlen(skb) != 24u || skb_shinfo(skb)->nr_frags != 1u ||
+	    skb_shinfo(skb)->frags[0].bv_len != 250u ||
+	    skb_shinfo(skb)->frags[0].bv_offset != 16u ||
+	    page_address(skb_shinfo(skb)->frags[0].bv_page) != (void *)l14_page) {
+		case_line("L14", 0, "the fragment record is wrong (len=%u data_len=%u nr_frags=%u)",
+		    skb->len, skb->data_len, skb_shinfo(skb)->nr_frags);
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	if (lkpi_host_page_puts() != puts0) {
+		case_line("L14", 0, "the fragment's page was released before the payload died");
+		lkpi_skb_free(skb);
+		return -1;
+	}
+
+	/* a read that straddles the boundary: 4 bytes of head, then the fragment */
+	memset(got, 0, sizeof(got));
+	if (skb_copy_bits(skb, 20, got, 254) != 0) {
+		case_line("L14", 0, "reading across the linear/fragment boundary failed");
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	for (i = 0; i < 4; i++)
+		if (got[i] != head[20 + i]) {
+			case_line("L14", 0, "byte %u of the head is wrong (%02x, want %02x)",
+			    20u + i, got[i], head[20 + i]);
+			lkpi_skb_free(skb);
+			return -1;
+		}
+	for (i = 0; i < 250; i++)
+		if (got[4 + i] != l14_page[16 + i]) {
+			case_line("L14", 0, "fragment byte %u is wrong (%02x, want %02x)",
+			    i, got[4 + i], l14_page[16 + i]);
+			lkpi_skb_free(skb);
+			return -1;
+		}
+
+	/* the release: one reference back, exactly when the payload dies */
+	lkpi_skb_free(skb);
+	if (lkpi_host_page_puts() != puts0 + 1u) {
+		case_line("L14", 0, "the fragment's page release is wrong (%lu references returned, want 1)",
+		    lkpi_host_page_puts() - puts0);
+		return -1;
+	}
+	case_line("L14", 1, "fragment recorded (250 B at off 16); the frame reads across the boundary; the page goes back once on release");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1368,9 +1484,11 @@ run_suite(void)
 		return;
 	if (case_l13() != 0)
 		return;
+	if (case_l14() != 0)
+		return;
 
 	if (failures == 0)
-		printf("LKPI: SUITE PASS cases=13\n");
+		printf("LKPI: SUITE PASS cases=14\n");
 	else
 		printf("LKPI: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -1397,7 +1515,7 @@ main(int argc, char **argv)
 			fault_name = argv[++i];
 		} else {
 			printf("LKPI: usage: %s [--fault no-walk|fw-name|ms-eject"
-			    "|tasklet-inert|pv-inert|order-ctz]\n", argv[0]);
+			    "|tasklet-inert|pv-inert|order-ctz|frag-inert]\n", argv[0]);
 			return 2;
 		}
 	}
@@ -1408,7 +1526,8 @@ main(int argc, char **argv)
 		    strcmp(fault_name, "ms-eject") != 0 &&
 		    strcmp(fault_name, "tasklet-inert") != 0 &&
 		    strcmp(fault_name, "pv-inert") != 0 &&
-		    strcmp(fault_name, "order-ctz") != 0) {
+		    strcmp(fault_name, "order-ctz") != 0 &&
+		    strcmp(fault_name, "frag-inert") != 0) {
 			printf("LKPI: unknown fault '%s'\n", fault_name);
 			return 2;
 		}
@@ -1418,6 +1537,8 @@ main(int argc, char **argv)
 			l12_fault_pv_inert = 1;
 		if (strcmp(fault_name, "order-ctz") == 0)
 			l13_fault_ctz = 1;
+		if (strcmp(fault_name, "frag-inert") == 0)
+			l14_fault_inert = 1;
 	}
 
 	/* the CMSIS-RTOS2 kernel hosts the suite's tasks; the suite body runs as

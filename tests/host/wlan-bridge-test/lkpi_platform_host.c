@@ -60,6 +60,16 @@ lkpi_spl_free(void *p)
 	free(p);
 }
 
+/* the fragment release's page binding (skbuff_pool.h): the harness has no page
+ * allocator of its own - a page in these suites is whatever the test hands the
+ * pool - so the reference's return is a no-op here */
+void
+lkpi_spl_page_put(struct page *page)
+{
+
+	(void)page;
+}
+
 void
 lkpi_wlan_test_platform_init(void)
 {
