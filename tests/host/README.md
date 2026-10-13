@@ -38,6 +38,7 @@ case line such as `CASE net80211-frame-test/...` leads straight to the project.
 | `rtw89-port-build` | `rtw89-port-build` | The mainline 8851BU driver's twenty-one translation units compile against the grown face, the face stands alone, and the license/isolation gates hold |
 | `wlan-bridge-test` | `wlan-bridge-test` | The net80211 bridge: attach, scan, join and data path, the seam contract, key handling and the supplicant backend |
 | `wpa-port-test` | `wpa-port-test` | The supplicant port: the scan pull model, four-way completion, job timeouts and the backend on both kernels |
+| `ehci-iso-schedule-test` | `ehci-iso-schedule-test` | The EHCI isochronous engine: micro-frame scheduling, frame list placement, slot discipline and completion mapping against a controller in RAM |
 
 Rules:
 
