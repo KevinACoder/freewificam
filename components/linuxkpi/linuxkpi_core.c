@@ -169,12 +169,35 @@ static int lkpi_vformat(char *buf, size_t size, const char *fmt, va_list ap,
 	if (fmt == NULL)
 		return 0;
 
+	/*
+	 * The one producer with a conversion before the wrapped one: the debug
+	 * path writes the function's own name there
+	 * (third-party/iwlwifi/iwl-debug.c: __iwl_dbg's "%s %pV", whose first
+	 * argument is the caller's function string, not a struct va_format).
+	 * The prefix is consumed here - a value this function owns, unlike the
+	 * formatter's own consumption, which would restart the list - and the
+	 * rest is classified and expanded as usual.
+	 */
+	if (fmt[0] == '%' && fmt[1] == 's') {
+		const char *prefix = va_arg(ap, const char *);
+		int n = snprintf(buf, size, "%s",
+		    prefix != NULL ? prefix : "(null)");
+
+		if (n < 0)
+			return 0;
+		used += (size_t)n;
+		fmt += 2;
+		seg = fmt;
+	}
+
 	cls = lkpi_pV_classify(fmt);
 	if (cls == LKPI_PV_NONE)
-		return vsnprintf(buf, size, fmt, ap);
+		return (int)used + vsnprintf(used < size ? buf + used : buf,
+		    used < size ? size - used : 0, fmt, ap);
 	if (cls != LKPI_PV_ONLY || depth > LKPI_VAF_MAX_DEPTH) {
 		lkpi_pV_note(fmt);
-		return vsnprintf(buf, size, fmt, ap);
+		return (int)used + vsnprintf(used < size ? buf + used : buf,
+		    used < size ? size - used : 0, fmt, ap);
 	}
 
 	for (;;) {

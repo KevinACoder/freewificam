@@ -1140,10 +1140,11 @@ l12_nested(struct device *dev, const char *fmt, ...)
 	va_end(args);
 }
 
-/* the documented boundary: "%pV" beside other conversions cannot be consumed
- * correctly on this ABI, so it is passed through - and said once */
+/* the debug path's shape: a leading "%s" (the function's own name) before the
+ * wrapped conversion - third-party/iwlwifi/iwl-debug.c: __iwl_dbg. The prefix
+ * is a value the expansion can consume itself, so this shape expands too. */
 static void
-l12_dbg_mixed(struct device *dev, const char *fn, const char *fmt, ...)
+l12_dbg_prefix(struct device *dev, const char *fn, const char *fmt, ...)
 {
 	struct va_format vaf = { .fmt = fmt, };
 	va_list args;
@@ -1151,6 +1152,20 @@ l12_dbg_mixed(struct device *dev, const char *fn, const char *fmt, ...)
 	va_start(args, fmt);
 	vaf.va = &args;
 	dev_info(dev, "%s %pV", fn, &vaf);
+	va_end(args);
+}
+
+/* the documented boundary: "%pV" beside conversions the expansion cannot
+ * consume by type is passed through - and said once */
+static void
+l12_dbg_mixed(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	dev_info(dev, "n=%d %pV", 7, &vaf);
 	va_end(args);
 }
 
@@ -1181,8 +1196,9 @@ case_l12(void)
 	dev_info(&dev, "100%%pV ok");		/* no conversion at all */
 	dev_info(&dev, "plain %s=%d", "x", 42);	/* ordinary conversions intact */
 	l12_nested(&dev, "leaf=%u", 7);
-	l12_dbg_mixed(&dev, "iwl_dbg", "fn-inner %u", 5);
-	l12_dbg_mixed(&dev, "iwl_dbg", "fn-inner %u", 6);
+	l12_dbg_prefix(&dev, "iwlwifi_fn", "fn-inner %u", 8);
+	l12_dbg_mixed(&dev, "mixed-inner %u", 5);
+	l12_dbg_mixed(&dev, "mixed-inner %u", 6);
 
 	if (l12_expect(0, "03:00.0: Detected Intel(R) AC 7260 rev 3",
 	    "wrapped message") != 0)
@@ -1202,17 +1218,20 @@ case_l12(void)
 		return -1;
 	if (l12_expect(6, "03:00.0: wrap(leaf=7)done", "nested wrapped") != 0)
 		return -1;
+	if (l12_expect(7, "03:00.0: iwlwifi_fn fn-inner 8",
+	    "the debug path's function prefix") != 0)
+		return -1;
 
 	/* the mixed shape: the wrapped text must NOT appear (the engine got the
 	 * format as-is), the notice must have been said exactly once for both
 	 * calls, and both producer lines must still be there */
-	if (l12_count != 10) {
-		case_line("L12", 0, "expected 10 lines (2 mixed + 1 notice), got %u",
+	if (l12_count != 11) {
+		case_line("L12", 0, "expected 11 lines (2 mixed + 1 notice), got %u",
 		    l12_count);
 		return -1;
 	}
 	for (i = 0; i < l12_count; i++) {
-		if (strstr(l12_lines[i], "fn-inner") != NULL) {
+		if (strstr(l12_lines[i], "mixed-inner") != NULL) {
 			case_line("L12", 0, "a mixed format expanded anyway: \"%s\"",
 			    l12_lines[i]);
 			return -1;
