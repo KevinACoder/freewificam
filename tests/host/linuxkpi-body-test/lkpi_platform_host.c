@@ -73,6 +73,29 @@ lkpi_spl_free(void *p)
 	free(p);
 }
 
+/*
+ * The fragment release's page binding (skbuff_pool.h): this harness counts the
+ * references the pool hands back, because the fragment cases assert on exactly
+ * that - a page's reference goes back once, when the payload dies, and not
+ * before. The page memory itself belongs to the test that made the block.
+ */
+static unsigned long host_page_puts;
+
+unsigned long
+lkpi_host_page_puts(void)
+{
+
+	return host_page_puts;
+}
+
+void
+lkpi_spl_page_put(struct page *page)
+{
+
+	(void)page;
+	host_page_puts++;
+}
+
 /* ------------------------------------------------------------------ */
 /* the suite's start-up                                                */
 /* ------------------------------------------------------------------ */

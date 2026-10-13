@@ -37,6 +37,18 @@
  *       callback later and on another thread, two arms with no drain between
  *       them run once, teardown leaves nothing outstanding, and a burst past the
  *       queue's depth loses no callback.
+ *   L13 the page-order arithmetic: get_order() on the receive sizes the
+ *       driver asks for (2K/4K/8K/16K), which is the hand-off between a buffer
+ *       size and the order the page allocator sees - the board's
+ *       alloc_pages(order=4294967285) was this arithmetic going wrong.
+ *   L12 the wrapped-format conversion ("%pV") on the real face: a producer in
+ *       the vendored driver's own shape (a struct va_format handed through
+ *       dev_*("%pV", &vaf)) comes out as the message text, the vaf stays usable
+ *       for a second call (Linux's va_copy discipline), a literal "%" is not a
+ *       conversion, nested wrapped formats expand, and a format that mixes
+ *       "%pV" with other conversions is passed through unexpanded *and said
+ *       once* - the blindness this conversion removes must not come back in
+ *       silence.
  *
  * A failure prints the case line with `FAIL` and a detail, the run stops there,
  * and the exit code is the number of failures (0 when clean). A red-control mode
@@ -51,8 +63,11 @@
 
 #include "os/cmsis2/cmsis2.h"
 #include "linuxkpi_core.h"
+#include "linuxkpi_impl.h"
 #include "linuxkpi_usb.h"
 #include <linux/interrupt.h>
+#include <linux/mm.h>
+#include <linux/skbuff.h>
 #include <linux/usb.h>
 #include <linux/firmware.h>
 
@@ -985,6 +1000,431 @@ case_l11(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* L12 the wrapped-format conversion ("%pV") on the real face          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The vendored driver's log helpers wrap a format and its arguments in a
+ * struct va_format and hand the pair through one "%pV" conversion
+ * (third-party/iwlwifi/iwl-debug.c: __iwl_err, __iwl_info, __iwl_warn,
+ * __iwl_crit, and the "(RFKILL) %pV" line). A formatter without that
+ * conversion prints the pointer and a literal 'V' - which is what the board's
+ * serial log showed (lkpi: 03:00.0: 000000000A719370V) while a probe failed,
+ * so not one word the driver said could be read. This case drives the
+ * producer's own shape and checks the text that comes out.
+ */
+
+#define L12_LINES	12
+
+static char	l12_lines[L12_LINES][256];
+static unsigned	l12_count;
+static int	l12_fault_pv_inert;	/* --fault pv-inert: the pre-fix engine path */
+
+/* capture the line and keep the platform sink's observable shape (everything
+ * the sink takes is also on stdout) */
+static void
+l12_record(const char *line)
+{
+	if (l12_count < L12_LINES)
+		snprintf(l12_lines[l12_count], sizeof(l12_lines[0]), "%s", line);
+	l12_count++;
+
+	fputs("lkpi: ", stdout);
+	fputs(line, stdout);
+	if (line[0] != '\0' && line[strlen(line) - 1] != '\n')
+		fputc('\n', stdout);
+	fflush(stdout);
+}
+
+static void
+l12_sink(ulog_level_t level, const char *line)
+{
+
+	(void)level;
+	l12_record(line);
+}
+
+/*
+ * The pre-fix face, kept for the red control: it hands the format straight to
+ * the formatter, which is the behavior that put the pointer and the 'V' on the
+ * board. With --fault pv-inert the producers below route through this instead
+ * of dev_*(), so the case's own content checks have to catch the blindness.
+ */
+static void
+l12_legacy_engine(struct device *dev, const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	int n;
+
+	n = snprintf(line, sizeof(line), "%s: ", dev->name);
+	if (n < 0)
+		return;
+	va_start(ap, fmt);
+	(void)vsnprintf(line + n, sizeof(line) - (size_t)n, fmt, ap);
+	va_end(ap);
+	l12_record(line);
+}
+
+/* the producer's shape, verbatim from iwl-debug.c: the same vaf is used twice
+ * (there it feeds dev_*() and then the trace point) */
+static void
+l12_iwl_info(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	if (l12_fault_pv_inert) {
+		l12_legacy_engine(dev, "%pV", &vaf);
+	} else {
+		dev_info(dev, "%pV", &vaf);	/* the wrapped message */
+		dev_info(dev, "%pV", &vaf);	/* and the same vaf again */
+	}
+	va_end(args);
+}
+
+/* the literal-prefix shape (__iwl_err's rfkill branch) */
+static void
+l12_rfkill_err(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	if (l12_fault_pv_inert)
+		l12_legacy_engine(dev, "(RFKILL) %pV", &vaf);
+	else
+		dev_err(dev, "(RFKILL) %pV", &vaf);
+	va_end(args);
+}
+
+/* a literal prefix that holds a "%%" escape: the escape is literal text and
+ * must not turn into a conversion hunt */
+static void
+l12_prefix_pct(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	if (l12_fault_pv_inert)
+		l12_legacy_engine(dev, "%% literal then %pV", &vaf);
+	else
+		dev_info(dev, "%% literal then %pV", &vaf);
+	va_end(args);
+}
+
+/* a wrapped format inside a wrapped format: the conversion recurses */
+static void
+l12_nested_emit(struct device *dev, struct va_format *leaf)
+{
+
+	if (l12_fault_pv_inert)
+		l12_legacy_engine(dev, "wrap(%pV)done", leaf);
+	else
+		dev_info(dev, "wrap(%pV)done", leaf);
+}
+
+static void
+l12_nested(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	l12_nested_emit(dev, &vaf);
+	va_end(args);
+}
+
+/* the debug path's shape: a leading "%s" (the function's own name) before the
+ * wrapped conversion - third-party/iwlwifi/iwl-debug.c: __iwl_dbg. The prefix
+ * is a value the expansion can consume itself, so this shape expands too. */
+static void
+l12_dbg_prefix(struct device *dev, const char *fn, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	dev_info(dev, "%s %pV", fn, &vaf);
+	va_end(args);
+}
+
+/* the documented boundary: "%pV" beside conversions the expansion cannot
+ * consume by type is passed through - and said once */
+static void
+l12_dbg_mixed(struct device *dev, const char *fmt, ...)
+{
+	struct va_format vaf = { .fmt = fmt, };
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.va = &args;
+	dev_info(dev, "n=%d %pV", 7, &vaf);
+	va_end(args);
+}
+
+static int
+l12_expect(unsigned idx, const char *want, const char *what)
+{
+
+	if (idx >= l12_count || strcmp(l12_lines[idx], want) != 0) {
+		case_line("L12", 0, "%s: want \"%s\", got \"%s\"", what, want,
+		    idx < l12_count ? l12_lines[idx] : "(no line)");
+		return -1;
+	}
+	return 0;
+}
+
+static int
+case_l12(void)
+{
+	struct device dev = { .name = "03:00.0" };
+	unsigned notices = 0;
+	unsigned i;
+
+	lkpi_log_sink_register(l12_sink);
+
+	l12_iwl_info(&dev, "Detected Intel(R) %s rev %u", "AC 7260", 3);
+	l12_rfkill_err(&dev, "radio state %d", 1);
+	l12_prefix_pct(&dev, "n=%u", 9);
+	dev_info(&dev, "100%%pV ok");		/* no conversion at all */
+	dev_info(&dev, "plain %s=%d", "x", 42);	/* ordinary conversions intact */
+	l12_nested(&dev, "leaf=%u", 7);
+	l12_dbg_prefix(&dev, "iwlwifi_fn", "fn-inner %u", 8);
+	l12_dbg_mixed(&dev, "mixed-inner %u", 5);
+	l12_dbg_mixed(&dev, "mixed-inner %u", 6);
+
+	if (l12_expect(0, "03:00.0: Detected Intel(R) AC 7260 rev 3",
+	    "wrapped message") != 0)
+		return -1;
+	if (l12_expect(1, "03:00.0: Detected Intel(R) AC 7260 rev 3",
+	    "the vaf reused after the call") != 0)
+		return -1;
+	if (l12_expect(2, "03:00.0: (RFKILL) radio state 1",
+	    "literal prefix") != 0)
+		return -1;
+	if (l12_expect(3, "03:00.0: % literal then n=9",
+	    "a %% escape in the prefix") != 0)
+		return -1;
+	if (l12_expect(4, "03:00.0: 100%pV ok", "the literal %pV text") != 0)
+		return -1;
+	if (l12_expect(5, "03:00.0: plain x=42", "ordinary convs") != 0)
+		return -1;
+	if (l12_expect(6, "03:00.0: wrap(leaf=7)done", "nested wrapped") != 0)
+		return -1;
+	if (l12_expect(7, "03:00.0: iwlwifi_fn fn-inner 8",
+	    "the debug path's function prefix") != 0)
+		return -1;
+
+	/* the mixed shape: the wrapped text must NOT appear (the engine got the
+	 * format as-is), the notice must have been said exactly once for both
+	 * calls, and both producer lines must still be there */
+	if (l12_count != 11) {
+		case_line("L12", 0, "expected 11 lines (2 mixed + 1 notice), got %u",
+		    l12_count);
+		return -1;
+	}
+	for (i = 0; i < l12_count; i++) {
+		if (strstr(l12_lines[i], "mixed-inner") != NULL) {
+			case_line("L12", 0, "a mixed format expanded anyway: \"%s\"",
+			    l12_lines[i]);
+			return -1;
+		}
+		if (strstr(l12_lines[i], "not expanded") != NULL)
+			notices++;
+	}
+	if (notices != 1) {
+		case_line("L12", 0, "the mixed-format notice must be said once "
+		    "(said %u times)", notices);
+		return -1;
+	}
+
+	case_line("L12", 1, "wrapped/%%-literal/nested expanded; vaf reusable; "
+	    "mixed shape noted once");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* L13 the page-order arithmetic on the real contract header           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * get_order() is what turns a buffer size into the order the page allocator is
+ * asked for, and it hands ilog2() a size MINUS ONE on purpose - never a power
+ * of two. The board named the cost of getting that wrong: the iwlwifi receive
+ * path's 4 KiB buffers came back as order -11 (the serial line read
+ * `alloc_pages(order=4294967285)`), every receive-buffer allocation was
+ * refused, and the firmware never reached ALIVE. The case pins the arithmetic
+ * the driver's receive sizes ride.
+ */
+
+static int	l13_fault_ctz;	/* --fault order-ctz: the pre-fix ilog2 */
+
+static int
+l13_order_of(unsigned long size)
+{
+
+	if (l13_fault_ctz) {
+		/* the pre-fix form: ilog2 as the trailing-zero count */
+		if (size < (1UL << 12))
+			return 0;
+		return (int)(__builtin_ctzll(size - 1) - 12 + 1);
+	}
+	return get_order(size);
+}
+
+static int
+case_l13(void)
+{
+	static const struct {
+		unsigned long	size;
+		unsigned int	order;
+	} rows[] = {
+		{ 2048, 0 },	/* 2K: below one page */
+		{ 4096, 0 },	/* 4K: exactly one page */
+		{ 8192, 1 },
+		{ 16384, 2 },
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+		int got = l13_order_of(rows[i].size);
+
+		if (got != (int)rows[i].order) {
+			case_line("L13", 0, "get_order(%lu) = %d, want %u",
+			    rows[i].size, got, rows[i].order);
+			return -1;
+		}
+	}
+	case_line("L13", 1, "get_order: %u/%u/%u/%u for 2K/4K/8K/16K",
+	    (unsigned)l13_order_of(2048), (unsigned)l13_order_of(4096),
+	    (unsigned)l13_order_of(8192), (unsigned)l13_order_of(16384));
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* L14: the buffer's fragment storage                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The board named the cost of this face having no fragment storage: the AC 7260
+ * receive path keeps a frame larger than its 128-byte request in a page
+ * fragment (third-party/iwlwifi/mvm/rx.c:80-91), the fragment was refused with
+ * "put past the tail refused (len=250 tailroom=96)", and every beacon reached
+ * the stack as a 32-byte stub - the scan table stayed empty while the radio
+ * heard beacons. The case pins the three facts the fix rests on: the record
+ * attaches (page, offset and length in the buffer's own shared record), the
+ * frame reads back across the linear/fragment boundary, and the page's
+ * reference goes back exactly once - when the payload dies, not before.
+ * With --fault frag-inert the attachment copies nothing (the pre-fix face),
+ * and the record assertions must fail.
+ */
+static int	l14_fault_inert;	/* --fault frag-inert: no fragment storage */
+unsigned long	lkpi_host_page_puts(void);
+
+/* the fragment's page: this harness has no page allocator of its own, so a
+ * page is this static block - the pool's fragment code reaches it through
+ * page_address() only, and the release is the harness's counted binding */
+static unsigned char l14_page[512] __attribute__((aligned(64)));
+
+static int
+case_l14(void)
+{
+	static unsigned char head[24];
+	struct sk_buff *skb;
+	unsigned char got[300];
+	unsigned int i;
+	unsigned long puts0;
+
+	for (i = 0; i < sizeof(head); i++)
+		head[i] = (unsigned char)(0x40 + i);
+	for (i = 0; i < sizeof(l14_page); i++)
+		l14_page[i] = (unsigned char)(i * 7 + 3);
+
+	skb = lkpi_skb_alloc(64, GFP_KERNEL);
+	if (skb == NULL) {
+		case_line("L14", 0, "the pool refused the frame's linear head");
+		return -1;
+	}
+	if (skb_tailroom(skb) != 64) {
+		case_line("L14", 0, "the request geometry did not survive (tailroom=%d)",
+		    skb_tailroom(skb));
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	if (lkpi_skb_put(skb, sizeof(head)) == NULL) {
+		case_line("L14", 0, "the linear head would not go in");
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	memcpy(skb->data, head, sizeof(head));
+
+	puts0 = lkpi_host_page_puts();
+	if (l14_fault_inert) {
+		/* the pre-fix path: the fragment is "materialized" into the
+		 * linear payload, which has no room here - and records nothing */
+		(void)lkpi_skb_put(skb, 250);
+	} else {
+		skb_add_rx_frag(skb, 0, (struct page *)(void *)l14_page, 16, 250, 0);
+	}
+
+	if (skb->len != 24u + 250u || skb->data_len != 250u ||
+	    skb_headlen(skb) != 24u || skb_shinfo(skb)->nr_frags != 1u ||
+	    skb_shinfo(skb)->frags[0].bv_len != 250u ||
+	    skb_shinfo(skb)->frags[0].bv_offset != 16u ||
+	    page_address(skb_shinfo(skb)->frags[0].bv_page) != (void *)l14_page) {
+		case_line("L14", 0, "the fragment record is wrong (len=%u data_len=%u nr_frags=%u)",
+		    skb->len, skb->data_len, skb_shinfo(skb)->nr_frags);
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	if (lkpi_host_page_puts() != puts0) {
+		case_line("L14", 0, "the fragment's page was released before the payload died");
+		lkpi_skb_free(skb);
+		return -1;
+	}
+
+	/* a read that straddles the boundary: 4 bytes of head, then the fragment */
+	memset(got, 0, sizeof(got));
+	if (skb_copy_bits(skb, 20, got, 254) != 0) {
+		case_line("L14", 0, "reading across the linear/fragment boundary failed");
+		lkpi_skb_free(skb);
+		return -1;
+	}
+	for (i = 0; i < 4; i++)
+		if (got[i] != head[20 + i]) {
+			case_line("L14", 0, "byte %u of the head is wrong (%02x, want %02x)",
+			    20u + i, got[i], head[20 + i]);
+			lkpi_skb_free(skb);
+			return -1;
+		}
+	for (i = 0; i < 250; i++)
+		if (got[4 + i] != l14_page[16 + i]) {
+			case_line("L14", 0, "fragment byte %u is wrong (%02x, want %02x)",
+			    i, got[4 + i], l14_page[16 + i]);
+			lkpi_skb_free(skb);
+			return -1;
+		}
+
+	/* the release: one reference back, exactly when the payload dies */
+	lkpi_skb_free(skb);
+	if (lkpi_host_page_puts() != puts0 + 1u) {
+		case_line("L14", 0, "the fragment's page release is wrong (%lu references returned, want 1)",
+		    lkpi_host_page_puts() - puts0);
+		return -1;
+	}
+	case_line("L14", 1, "fragment recorded (250 B at off 16); the frame reads across the boundary; the page goes back once on release");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1040,9 +1480,15 @@ run_suite(void)
 		return;
 	if (case_l11() != 0)
 		return;
+	if (case_l12() != 0)
+		return;
+	if (case_l13() != 0)
+		return;
+	if (case_l14() != 0)
+		return;
 
 	if (failures == 0)
-		printf("LKPI: SUITE PASS cases=11\n");
+		printf("LKPI: SUITE PASS cases=14\n");
 	else
 		printf("LKPI: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
@@ -1069,7 +1515,7 @@ main(int argc, char **argv)
 			fault_name = argv[++i];
 		} else {
 			printf("LKPI: usage: %s [--fault no-walk|fw-name|ms-eject"
-			    "|tasklet-inert]\n", argv[0]);
+			    "|tasklet-inert|pv-inert|order-ctz|frag-inert]\n", argv[0]);
 			return 2;
 		}
 	}
@@ -1078,12 +1524,21 @@ main(int argc, char **argv)
 		if (strcmp(fault_name, "no-walk") != 0 &&
 		    strcmp(fault_name, "fw-name") != 0 &&
 		    strcmp(fault_name, "ms-eject") != 0 &&
-		    strcmp(fault_name, "tasklet-inert") != 0) {
+		    strcmp(fault_name, "tasklet-inert") != 0 &&
+		    strcmp(fault_name, "pv-inert") != 0 &&
+		    strcmp(fault_name, "order-ctz") != 0 &&
+		    strcmp(fault_name, "frag-inert") != 0) {
 			printf("LKPI: unknown fault '%s'\n", fault_name);
 			return 2;
 		}
 		if (strcmp(fault_name, "tasklet-inert") == 0)
 			tk_inert = 1;
+		if (strcmp(fault_name, "pv-inert") == 0)
+			l12_fault_pv_inert = 1;
+		if (strcmp(fault_name, "order-ctz") == 0)
+			l13_fault_ctz = 1;
+		if (strcmp(fault_name, "frag-inert") == 0)
+			l14_fault_inert = 1;
 	}
 
 	/* the CMSIS-RTOS2 kernel hosts the suite's tasks; the suite body runs as

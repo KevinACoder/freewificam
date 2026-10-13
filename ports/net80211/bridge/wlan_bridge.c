@@ -370,7 +370,11 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 		}
 		rc = bridge.ops->tx(bridge.drv, mtod(m, const uint8_t *),
 		    (size_t)m->m_len, 1);
-		if (rc != 0)
+		if (rc < 0)		/* the seam answers the frame's own length
+					 * on success and a negative error
+					 * otherwise (wlan_seam_adapter.c
+					 * seam_tx), so only a negative return
+					 * is an output error */
 			bridge_oerror(ic);
 		else if (ic->ic_ifp != NULL)
 			if_statinc(ic->ic_ifp, if_opackets);
@@ -466,8 +470,11 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			    (unsigned)enc->m_pkthdr.len);
 		}
 		if (bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
-		    (size_t)enc->m_pkthdr.len, 0) != 0)
-			if_statinc(ifp, if_oerrors);
+		    (size_t)enc->m_pkthdr.len, 0) < 0)
+			if_statinc(ifp, if_oerrors);	/* same return contract as
+							 * the management drain: a
+							 * negative answer is the
+							 * error */
 		else
 			if_statinc(ifp, if_opackets);
 		bridge.data_tx++;
@@ -558,8 +565,28 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 		    bss != NULL) {
 			memcpy(bridge.bssid_last, bss->ni_bssid, 6);
 			bridge.bssid_last_set = 1;
-			(void)bridge.ops->bssid(bridge.drv, bss->ni_bssid);
+			/* the AP's own timing travels with the target: the
+			 * interface fills it while it prepares the connection,
+			 * and a driver reads it before it takes a station */
+			(void)bridge.ops->bssid(bridge.drv, bss->ni_bssid,
+			    (uint16_t)bss->ni_intval,
+			    bss->ni_dtim_period != 0 ?
+			    (uint8_t)bss->ni_dtim_period : 1);
 		}
+	} else if (ostate >= IEEE80211_S_AUTH && nstate < IEEE80211_S_AUTH &&
+	    bridge.ops != NULL && bridge.ops->bssid != NULL) {
+		/*
+		 * The connection attempt is over without having reached RUN (a
+		 * failed authentication, an aborted join): the target comes off
+		 * the driver's view, the way mac80211 destroys the AP's station
+		 * when a connection fails.  A target that did reach RUN is wound
+		 * down by the leave notification below instead.  No NULL BSSID
+		 * reaches the registers: the drivers' handlers dereference the
+		 * pointer, so the seam only clears its own view (the rule the
+		 * seam's leave path documents).
+		 */
+		bridge.bssid_last_set = 0;
+		(void)bridge.ops->bssid(bridge.drv, NULL, 0, 0);
 	}
 	rc = bridge_orig_newstate(ic, nstate, arg);
 
@@ -600,6 +627,18 @@ wlan_bridge_attach(struct wlan_seam_drv *drv,
 	struct ieee80211com *ic;
 	struct ifnet *ifp;
 	int ch;
+
+	/*
+	 * The port's own init: the serializer, the sleep slots and the tick
+	 * rate. It belongs here rather than in each image's start-up because
+	 * every line attaches through this call, and it is idempotent
+	 * (wlan_osal_init's RUN_ONCE) for the suites that call it themselves.
+	 * The board's first sweep found what its absence costs: the serializer
+	 * was a no-op (mutex_enter refused an uninitialised lock - the port's
+	 * own alarm), so the sweep and the driver's receive thread ran
+	 * unserialised, which single-threaded lines had never exposed.
+	 */
+	wlan_osal_init();
 
 	if (bridge.attached) {
 		wlan_osal_log("wlan: a second attach refused (single adapter)\n");
@@ -977,9 +1016,10 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 
 		bridge.rx_trace++;
 		wlan_osal_log("wlan: rxtrace fc=%02x len=%u rx_freq=%u "
-		    "chan=%d cur=%d state=%d fscan=%u asc=%u scanning=%u\n",
-		    frame[0], (unsigned)len, rx_freq, cur, was,
-		    (int)ic->ic_state, fscan, asc, bridge.scanning);
+		    "chan=%d cur=%d state=%d fscan=%u asc=%u scanning=%u "
+		    "ic=%p\n", frame[0], (unsigned)len, rx_freq, cur, was,
+		    (int)ic->ic_state, fscan, asc, bridge.scanning,
+		    (void *)ic);
 		ni = ieee80211_find_rxnode(ic,
 		    (const struct ieee80211_frame_min *)m->m_data);
 		ieee80211_input(ic, m, ni, rssi, 0);
@@ -1095,7 +1135,19 @@ wlan_bridge_scan_start(void)
 
 		hw_rc = n_freqs == 0 || bridge.ops->hw_scan_start == NULL ?
 		    -1 : bridge.ops->hw_scan_start(bridge.drv, freqs, n_freqs);
-		if (hw_rc != 0) {
+		if (hw_rc == 1 && bridge.ops->sw_scan_start != NULL) {
+			/*
+			 * mac80211's own fallback (scan.c:896-906): a driver
+			 * answers 1 for "this request cannot be taken as a
+			 * hardware scan", and the interface then runs the
+			 * software route instead of failing the sweep.  The
+			 * Realtek vendors' drivers register both routes and
+			 * answer 1 while their firmware has no scan offload,
+			 * which is a live configuration on this board - treating
+			 * the answer as an error killed their sweeps outright.
+			 */
+			bridge.scan_hw = 0;
+		} else if (hw_rc != 0) {
 			wlan_osal_log("wlan: hw scan refused (freqs=%u)\n",
 			    (unsigned)n_freqs);
 			bridge.scan_hw = 0;
@@ -1104,7 +1156,8 @@ wlan_bridge_scan_start(void)
 			bridge.filter_clears++;
 			return -EIO;
 		}
-	} else if (bridge.ops->sw_scan_start != NULL &&
+	}
+	if (!bridge.scan_hw && bridge.ops->sw_scan_start != NULL &&
 	    bridge.ops->sw_scan_start(bridge.drv) != 0) {
 		(void)bridge.ops->filter(bridge.drv,
 		    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
@@ -1251,6 +1304,18 @@ bridge_scan_close(unsigned int reason)
  * without it the window would stay open until the stack happened to leave the
  * scan state. A completion with no sweep armed is not an error - the device may
  * report a sweep this side already closed - so it is ignored.
+ *
+ * The stack's own end-of-scan runs here too. On the walk route the sweep ends
+ * inside ieee80211_next_scan, whose last step is ieee80211_end_scan - that is
+ * where the interface clears its scan flags and, through
+ * ieee80211_notify_scan_done, tells the port the results are ready. The device
+ * route bypasses the walk entirely, so without this call the port half of that
+ * contract never fires: a consumer that scans through the interface (the
+ * supplicant's scan request) waits for its own abort timer instead of the
+ * completion - measured on the board as a ~60 s scan cycle that made the join
+ * miss its window. Manual roaming (the mode every supplicant-driven connect
+ * runs in) makes end_scan stop after the notification, so the candidate choice
+ * stays with the consumer.
  */
 void
 wlan_bridge_scan_hw_complete(void)
@@ -1259,6 +1324,10 @@ wlan_bridge_scan_hw_complete(void)
 	if (!bridge.attached || !bridge.scanning)
 		return;
 	bridge_scan_close(WLAN_BRIDGE_SCAN_CLOSE_HW);
+	wlan_port_serializer_lock();
+	if (bridge.ic != NULL && bridge.ic->ic_state == IEEE80211_S_SCAN)
+		ieee80211_end_scan(bridge.ic);
+	wlan_port_serializer_unlock();
 }
 
 int

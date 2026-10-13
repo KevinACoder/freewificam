@@ -139,13 +139,21 @@ struct wlan_seam_drv_ops {
 	    const uint8_t bssid[6], uint32_t freq, uint16_t aid,
 	    const uint8_t *rates, size_t rates_len);
 
-	/* BSSID programming for the pre-association exchange. A chip's receive
+	/* BSSID programming for the pre-association exchange, carrying the AP's
+	 * advertised timing as the interface fills it while it prepares the
+	 * connection (ieee80211_prep_connection takes bss_conf->beacon_int from
+	 * the AP's beacon and defaults the DTIM period to 1).  A driver reads
+	 * those off the vif before it will take a station: the AC 7260 refuses
+	 * one whose beacon interval is below its minimum ("Beacon interval 0
+	 * for AP ... is too small", mvm/mac80211.c:3702).  A NULL bssid clears
+	 * the target.  A chip's receive
 	 * filter compares frames against this register, so it must hold the
 	 * AP's address BEFORE the auth request goes out or the AP's answers
 	 * are dropped in hardware (mac80211 programs it for the same reason;
 	 * this port measured the absence as an auth timeout with the requests
 	 * leaving). NULL clears it. */
-	int (*bssid)(struct wlan_seam_drv *drv, const uint8_t bssid[6]);
+	int (*bssid)(struct wlan_seam_drv *drv, const uint8_t bssid[6],
+	    uint16_t beacon_int, uint8_t dtim_period);
 };
 
 #endif /* _WLAN_NET80211_SEAM_H_ */

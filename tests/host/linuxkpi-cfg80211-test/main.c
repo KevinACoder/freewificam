@@ -113,6 +113,16 @@ lkpi_spl_free(void *p)
 	free(p);
 }
 
+/* the fragment release's page binding (skbuff_pool.h): the harness has no page
+ * allocator of its own - a page in these suites is whatever the test hands the
+ * pool - so the reference's return is a no-op here */
+void
+lkpi_spl_page_put(struct page *page)
+{
+
+	(void)page;
+}
+
 /* the console sink, so the component's own lines stay visible in the log */
 static void
 lkpi_platform_sink(ulog_level_t level, const char *line)

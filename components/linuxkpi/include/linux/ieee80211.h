@@ -163,7 +163,9 @@ enum ieee80211_sa_query_action {
 
 /* Subtypes this project reaches for; the rest arrive with their consumers. */
 #define	IEEE80211_STYPE_ASSOC_REQ	0x0000
+#define	IEEE80211_STYPE_ASSOC_RESP	0x0010
 #define	IEEE80211_STYPE_REASSOC_REQ	0x0020
+#define	IEEE80211_STYPE_REASSOC_RESP	0x0030
 #define	IEEE80211_STYPE_PROBE_REQ	0x0040
 #define	IEEE80211_STYPE_PROBE_RESP	0x0050
 #define	IEEE80211_STYPE_BEACON		0x0080
@@ -577,6 +579,26 @@ static inline bool ieee80211_is_reassoc_req(__le16 fc)
 {
 	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
 	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_REASSOC_REQ);
+}
+
+/* [LNX] include/linux/ieee80211.h:564: the (re)association request/response
+ * test - the form the transmit path's txq selection names. */
+static inline bool ieee80211_is_assoc_resp(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ASSOC_RESP);
+}
+
+static inline bool ieee80211_is_reassoc_resp(__le16 fc)
+{
+	return (fc & cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)) ==
+	       cpu_to_le16(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_REASSOC_RESP);
+}
+
+static inline bool ieee80211_is_assoc(__le16 fc)
+{
+	return ieee80211_is_assoc_req(fc) || ieee80211_is_reassoc_req(fc) ||
+	       ieee80211_is_assoc_resp(fc) || ieee80211_is_reassoc_resp(fc);
 }
 
 static inline bool ieee80211_is_probe_req(__le16 fc)

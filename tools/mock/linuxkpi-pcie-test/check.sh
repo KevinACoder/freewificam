@@ -60,6 +60,7 @@ case_line run_exit "$([ "$code" = 0 ] && echo 1 || echo 0)"
 # registry, and the smoke verdict last.
 anchors="pcie-smoke: hcd registered devs=3
 pcie-smoke: dev 01:00.0 id=1234:5678 class=0x020000
+pcie-smoke: dev 01:00.0 bus=pci
 pcie-smoke: dev 02:00.0 id=1234:5679 class=0x028000
 pcie-smoke: cfg dword vendor-device=0x56781234
 pcie-smoke: cfg sizes byte=0x34 word=0x1234 dword=0x56781234

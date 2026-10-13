@@ -31,6 +31,9 @@
 #define FAKE_DRIVER_BSS_EV_MAX	24
 /* the hardware-scan request's channel list (the substitute's own cap is 64) */
 #define FAKE_DRIVER_HW_SCAN_MAX	64
+/* the station ladder's transitions the recorder keeps (a join is one upload
+ * plus one association; the bound leaves room for a retried connection) */
+#define FAKE_DRIVER_STA_MAX	8
 
 /* The headroom the double declares, the way a real driver declares it at
  * registration: mac80211 hands every frame to the driver's tx op with at least
@@ -58,6 +61,7 @@ enum fake_call {
 	FAKE_CALL_WAKE_TXQ,
 	FAKE_CALL_HW_SCAN,
 	FAKE_CALL_HW_SCAN_CANCEL,
+	FAKE_CALL_STA_STATE,
 };
 
 struct fake_driver_state {
@@ -73,6 +77,12 @@ struct fake_driver_state {
 	unsigned int bss_info_calls;
 	unsigned int start_calls;
 	unsigned int stop_calls;
+	unsigned int sta_state_calls;
+	int sta_state_old[FAKE_DRIVER_STA_MAX];
+	int sta_state_new[FAKE_DRIVER_STA_MAX];
+	/* how many management frames had been handed to the driver when it heard
+	 * each transition - the ordering the peer-registration case reads */
+	unsigned int sta_state_mgmt_at[FAKE_DRIVER_STA_MAX];
 
 	/* the sweep's bookkeeping was visible while a probe was transmitted from
 	 * inside a state transition (it must not be: see fake_tx) */

@@ -89,6 +89,11 @@ enum ev_kind {
 	EV_BSS_INFO,
 	EV_TX,
 	EV_WAKE_TXQ,
+	EV_ADD_CHANCTX,
+	EV_ASSIGN_CHANCTX,
+	EV_CHANGE_CHANCTX,
+	EV_UNASSIGN_CHANCTX,
+	EV_REMOVE_CHANCTX,
 	EV_MAX
 };
 
@@ -96,6 +101,8 @@ static const char *const ev_name[EV_MAX] = {
 	"add_interface", "remove_interface", "sta_state", "sta_add",
 	"sta_remove", "vif_cfg_changed", "link_info_changed",
 	"bss_info_changed", "tx", "wake_tx_queue",
+	"add_chanctx", "assign_vif_chanctx", "change_chanctx",
+	"unassign_vif_chanctx", "remove_chanctx",
 };
 
 #define LOG_MAX	32
@@ -317,6 +324,72 @@ drv_wake_tx_queue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 	ieee80211_handle_wake_tx_queue(hw, txq);
 }
 
+/*
+ * The channel-context ops, the shape the AC 7260 declares
+ * (mvm/mac80211.c:6355-6360): the driver allocates its own PHY context in
+ * add_chanctx and keeps the handle in the context's private tail, and
+ * assign_vif_chanctx reads it back - which is why the interface must pass the
+ * same record to both and give the tail real storage.  The id the fixture
+ * stashes is what the case looks for.
+ */
+#define FIXTURE_PHY_CTXT_ID	7
+
+static int
+drv_add_chanctx(struct ieee80211_hw *hw, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	if (ctx->def.chan == NULL)
+		return -EINVAL;
+	*(u16 *)(void *)ctx->drv_priv = FIXTURE_PHY_CTXT_ID;
+	log_add(EV_ADD_CHANCTX, NULL, ctx->def.chan->center_freq, 0, 0, NULL);
+	return 0;
+}
+
+static int
+drv_assign_vif_chanctx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_bss_conf *link_conf, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	if (link_conf != &vif->bss_conf)
+		return -EINVAL;
+	if (*(u16 *)(void *)ctx->drv_priv != FIXTURE_PHY_CTXT_ID)
+		return -EINVAL;	/* the interface did not carry the handle */
+	log_add(EV_ASSIGN_CHANCTX, vif, ctx->def.chan->center_freq, 0, 0, NULL);
+	return 0;
+}
+
+static void
+drv_unassign_vif_chanctx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_bss_conf *link_conf, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	(void)link_conf;
+	(void)ctx;
+	log_add(EV_UNASSIGN_CHANCTX, vif, 0, 0, 0, NULL);
+}
+
+static void
+drv_remove_chanctx(struct ieee80211_hw *hw, struct ieee80211_chanctx_conf *ctx)
+{
+
+	(void)hw;
+	(void)ctx;
+	log_add(EV_REMOVE_CHANCTX, NULL, 0, 0, 0, NULL);
+}
+
+static void
+drv_change_chanctx(struct ieee80211_hw *hw,
+    struct ieee80211_chanctx_conf *ctx, u32 changed)
+{
+
+	(void)hw;
+	log_add(EV_CHANGE_CHANCTX, NULL, ctx->def.chan->center_freq, 0, 0, NULL);
+	(void)changed;
+}
+
 /* the two families, declared one per table exactly as the drivers do */
 static const struct ieee80211_ops ops_73 = {
 	.add_interface		= drv_add_interface,
@@ -360,6 +433,11 @@ static const struct ieee80211_ops ops_7260 = {
 	.bss_info_changed	= drv_bss_info_changed,
 	.tx			= drv_tx,
 	.wake_tx_queue		= drv_wake_tx_queue,
+	.add_chanctx		= drv_add_chanctx,
+	.remove_chanctx		= drv_remove_chanctx,
+	.change_chanctx		= drv_change_chanctx,
+	.assign_vif_chanctx	= drv_assign_vif_chanctx,
+	.unassign_vif_chanctx	= drv_unassign_vif_chanctx,
 };
 
 /* ------------------------------------------------------------------ */
@@ -410,7 +488,10 @@ fixture_new(enum shape shape)
 /*
  * One association, driven through the seam exactly as the bridge drives it: the
  * interface appears, the station appears and associates, and the BSS change
- * carries the association's bits.
+ * carries the association's bits.  The station's two ladder moments are the
+ * seam's two: the upload happens while the connection is prepared (before the
+ * authentication request leaves), the AUTH -> ASSOC step when the association
+ * completes.
  */
 static struct ieee80211_vif *
 join(struct ieee80211_hw *hw, struct ieee80211_sta **sta_out)
@@ -425,8 +506,10 @@ join(struct ieee80211_hw *hw, struct ieee80211_sta **sta_out)
 	vif->cfg.aid = 1;
 	memcpy(vif->cfg.ap_addr, g_ap, 6);
 	vif->bss_conf.bssid = g_ap;
-	sta = lkpi80211_drv_sta_add(hw, vif, g_ap, 1);
+	sta = lkpi80211_drv_sta_add(hw, vif, g_ap, 0);
 	if (sta == NULL)
+		return NULL;
+	if (lkpi80211_drv_sta_assoc(hw, vif, sta, 1) != 0)
 		return NULL;
 	lkpi80211_drv_bss_changed(hw, vif, ASSOC_CHANGED);
 	*sta_out = sta;
@@ -779,6 +862,163 @@ case_7260_txq(void)
 	ieee80211_free_hw(hw);
 }
 
+/*
+ * 7260-chanctx: the channel context a connection runs on.  The interface
+ * reserves one when an interface starts using a channel and hands it to the
+ * driver - add_chanctx lets the driver allocate its own PHY context and keep
+ * the handle in the context's private tail, assign_vif_chanctx reads it back
+ * and binds the interface (mac80211's ieee80211_vif_use_channel, reached from
+ * prep_connection).  A driver may refuse everything about a peer without that
+ * binding: the AC 7260's station upload warns and returns -EINVAL
+ * (mvm/mac80211.c:4008-4012), which is what the board showed as "sta add
+ * refused (-22)" the moment the peer was registered before the authentication
+ * request.  The case pins the lifecycle and the two facts a driver depends on:
+ * the same record reaches both calls, and its private tail has real storage.
+ */
+static void
+case_7260_chanctx(void)
+{
+	struct ieee80211_hw *hw = fixture_new(SHAPE_7260);
+	struct ieee80211_vif *vif;
+	struct ieee80211_sta *sta = NULL;
+	int ok = 1;
+
+	if (hw == NULL) {
+		case_line("7260-chanctx", 0, "no hw");
+		return;
+	}
+	vif = join(hw, &sta);
+	if (vif == NULL || sta == NULL) {
+		case_line("7260-chanctx", 0, "the join did not complete");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	log_reset();
+	if (lkpi80211_drv_chanctx_use(hw, vif, 2417, 2, NL80211_BAND_2GHZ,
+	    NL80211_CHAN_WIDTH_20) != 0) {
+		case_line("7260-chanctx", 0, "reserving the channel context failed");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	if (log_count(EV_ADD_CHANCTX) != 1 || log_count(EV_ASSIGN_CHANCTX) != 1 ||
+	    log_pos(EV_ADD_CHANCTX) > log_pos(EV_ASSIGN_CHANCTX))
+		ok = 0;
+	if (vif->bss_conf.chanctx_conf == NULL)
+		ok = 0;
+	/* a second reservation on another channel is a change, not a re-add */
+	if (lkpi80211_drv_chanctx_use(hw, vif, 2437, 6, NL80211_BAND_2GHZ,
+	    NL80211_CHAN_WIDTH_20) != 0)
+		ok = 0;
+	if (log_count(EV_ADD_CHANCTX) != 1 || log_count(EV_CHANGE_CHANCTX) != 1)
+		ok = 0;
+	if (log_first(EV_CHANGE_CHANCTX) != NULL &&
+	    log_first(EV_CHANGE_CHANCTX)->changed != 2437)
+		ok = 0;
+	lkpi80211_drv_chanctx_release(hw, vif);
+	if (log_count(EV_UNASSIGN_CHANCTX) != 1 ||
+	    log_count(EV_REMOVE_CHANCTX) != 1 ||
+	    log_pos(EV_UNASSIGN_CHANCTX) > log_pos(EV_REMOVE_CHANCTX))
+		ok = 0;
+	if (vif->bss_conf.chanctx_conf != NULL)
+		ok = 0;
+	case_line("7260-chanctx", ok, "add=%u assign=%u change=%u unassign=%u remove=%u",
+	    log_count(EV_ADD_CHANCTX), log_count(EV_ASSIGN_CHANCTX),
+	    log_count(EV_CHANGE_CHANCTX), log_count(EV_UNASSIGN_CHANCTX),
+	    log_count(EV_REMOVE_CHANCTX));
+	if (!ok)
+		log_dump();
+	ieee80211_free_hw(hw);
+}
+
+/*
+ * The flag that decides where a station's management frames enter the driver.
+ * The AC 7260 declares STA_MMPDU_TXQ (mvm/mac80211.c:364), the interface
+ * creates sta->txq[IEEE80211_NUM_TIDS] for it (tx.c:1545-1556) and routes the
+ * station's management frames through that queue (tx.c:1319-1336); the driver
+ * enforces the contract from its side - its legacy .tx drops a management frame
+ * on a station vif outright ("this shouldn't even happen", mvm/mac80211.c:845).
+ * The board's join stopped on exactly that: the authentication request left
+ * through .tx, was counted as handed over, and never completed - no transmit
+ * status, no driver message.
+ *
+ * `flag_set` picks the side.  With the flag, the management queue exists and
+ * the frame reaches the driver's wake entry (the txq route, then .tx from the
+ * driver's own drain - what iwl_mvm_mac_wake_tx_queue does); without it no
+ * management queue is created and the frame takes .tx directly, the pre-fix
+ * observable.  Both are asserted, so a face that ignored the flag would fail
+ * one of the two.
+ */
+static void
+case_7260_mgttxq(int flag_set)
+{
+	const char *id = flag_set ? "7260-mgttxq-route" : "7260-mgttxq-off";
+	struct ieee80211_hw *hw = fixture_new(SHAPE_7260);
+	struct ieee80211_sta *sta = NULL;
+	struct ieee80211_vif *vif;
+	struct sk_buff *frame;
+	unsigned char *p;
+	int ok = 1;
+
+	if (hw == NULL) {
+		case_line(id, 0, "no hw");
+		return;
+	}
+	if (flag_set)
+		ieee80211_hw_set(hw, STA_MMPDU_TXQ);
+	vif = join(hw, &sta);
+	if (vif == NULL || sta == NULL) {
+		case_line(id, 0, "the join did not complete");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/* the interface's own management queue exists either way */
+	if (vif->txq_mgmt == NULL) {
+		case_line(id, 0, "the interface's management queue was not created");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	if (flag_set && sta->txq[IEEE80211_NUM_TIDS] == NULL) {
+		case_line(id, 0, "STA_MMPDU_TXQ was declared but the station's management queue is NULL");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	if (!flag_set && sta->txq[IEEE80211_NUM_TIDS] != NULL) {
+		case_line(id, 0, "no opt-in was declared but a station management queue exists");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	/* one authentication frame, built the way the bridge hands it */
+	frame = alloc_skb(64, GFP_KERNEL);
+	if (frame == NULL) {
+		case_line(id, 0, "no frame");
+		ieee80211_free_hw(hw);
+		return;
+	}
+	p = lkpi_skb_put(frame, 30);
+	if (p == NULL) {
+		case_line(id, 0, "the frame would not take its bytes");
+		lkpi_skb_free(frame);
+		ieee80211_free_hw(hw);
+		return;
+	}
+	memset(p, 0, 30);
+	p[0] = 0xb0;		/* authentication */
+	p[1] = 0x00;
+	memcpy(&p[4], g_ap, 6);
+	memcpy(&p[10], g_sta_mac, 6);
+	memcpy(&p[16], g_ap, 6);
+	log_reset();
+	lkpi80211_tx(hw, vif, sta, frame);
+	if (log_count(EV_WAKE_TXQ) != (flag_set ? 1u : 0u) ||
+	    log_count(EV_TX) != 1u)
+		ok = 0;
+	case_line(id, ok, "wake_tx_queue=%u tx=%u",
+	    log_count(EV_WAKE_TXQ), log_count(EV_TX));
+	if (!ok)
+		log_dump();
+	ieee80211_free_hw(hw);
+}
+
 static void
 case_link_bookkeeping(void)
 {
@@ -942,6 +1182,9 @@ app_task(void *arg)
 	case_both_families();
 	case_7260_association();
 	case_7260_txq();
+	case_7260_mgttxq(1);
+	case_7260_mgttxq(0);
+	case_7260_chanctx();
 	case_link_bookkeeping();
 	case_default_link_address();
 	case_zero_change_is_silent();

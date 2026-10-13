@@ -10,10 +10,11 @@ off-the-shelf USB WiFi dongle - the same one you would plug into a PC - with no
 vendor SDK and no vendor blob: the mainline Linux driver, taken unchanged,
 running on ThreadX or FreeRTOS.
 
-**An open-source port of the rtw88 and rtw89 SoftMAC drivers to an RTOS.** The
+**An open-source port of the mainline Linux SoftMAC drivers to an RTOS.** The
 rtw88 and rtw89 drivers are the mainline Linux drivers for a large family of
-Realtek WiFi chips. To our knowledge this is the first open-source port of
-these two drivers to an RTOS: the driver bytes are unchanged, and the
+Realtek WiFi chips; iwlwifi (the mvm generation) is Intel's mainline driver for
+the Wireless-AC family. To our knowledge these are the first open-source ports
+of this driver set to an RTOS: the driver bytes are unchanged, and the
 RTOS-facing interface is provided underneath them.
 
 The end goal is a camera whose data streams over WiFi for long, unattended runs
@@ -37,10 +38,10 @@ link on both, and a gate rejects a foreign kernel call in a component.
 
 ## What runs today
 
-Three USB WiFi lines and one SDIO line are brought up on the reference board. "Full chain" means
-the card is enumerated, its firmware loaded, it scans, it joins a WPA2 network,
-it gets an address over DHCP, it answers ping, and TCP data flows. It does not
-mean the throughput is good.
+Three USB WiFi lines, one SDIO line and one PCIe line are brought up on the
+reference board. "Full chain" means the card is enumerated, its firmware
+loaded, it scans, it joins a WPA2 network, it gets an address over DHCP, it
+answers ping, and TCP data flows. It does not mean the throughput is good.
 
 | Line | Chip | Board state |
 |---|---|---|
@@ -48,6 +49,7 @@ mean the throughput is good.
 | `rtw88` | RTL8821CU | Full chain, including a boot-time CD-ROM to WLAN mode switch. |
 | `rtw89` | RTL8851BU | **Experimental**: full chain reached, join intermittent, link poor. |
 | SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. |
+| `iwlwifi` | Intel Wireless-AC 7260 | Full chain, over PCIe message interrupts (GICv3 ITS): the driver routes station management and data frames through its transmit queues, and the port owns the two delivery contexts a threaded interrupt needs. |
 
 The board, the connectors and pin/PHY multiplexing behind these lines, and which
 port each line is wired to, are documented per board under
@@ -68,17 +70,20 @@ band are not comparable and are not used here.
 | RTL8821CU | 3.65 Mbit/s | **63.7 / 66.0 / 68.2 Mbit/s** |
 | RTL8851BU | 136 / 173 Kbit/s | **23.9 / 25.3 / 26.5 Mbit/s** |
 | RTL8189FTV (SDIO) | 10.6 / 1.18 / 10.9 Mbit/s | **45.0 / 46.4 Mbit/s** |
+| Intel Wireless-AC 7260 (PCIe) | 0.24 Mbit/s | **167 Mbit/s** |
 
-All four lines are measured on channel 1 (2412 MHz) against the same access
+All five lines are measured on channel 1 (2412 MHz) against the same access
 point, BSSID `14:a3:2f:18:07:2c`; each Linux cell is min/avg/max over three 30 s
 runs, except RTL8189FTV whose Linux cell is the range the lab's ground-truth
-ledger records for the same card. The RTOS figures are roughly one tenth, one
-eighteenth, one hundred-and-seventieth and (for the SDIO line) one quarter of
-the Linux figures. The SDIO line is the closest to Linux, and the least stable:
+ledger records for the same card, and the 7260 whose Linux cell is a single
+20 s run of the same iperf session (the RTOS cell is a single 31 s run). The
+RTOS figures are roughly one tenth, one eighteenth, one hundred-and-seventieth,
+one quarter and (for the PCIe line) one seven-hundredth of the Linux figures.
+The SDIO line is the closest to Linux, and the least stable:
 two of its three runs sat at 10.6 and 10.9 Mbit/s while the third collapsed to
 1.18 Mbit/s — the signature of the driver's default power management, the same
 thing the Linux lane had to turn off to stop TCP stalling. Linux also moves data
-in the reverse direction on all four lines; the RTOS reverse direction is not
+in the reverse direction on all five lines; the RTOS reverse direction is not
 measured yet.
 
 The gap to Linux is large, and it is the current open problem. It is stated

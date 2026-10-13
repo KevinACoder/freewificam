@@ -148,11 +148,43 @@ int	lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 void	lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    struct ieee80211_sta *sta, struct sk_buff *skb);
 
+/*
+ * Drain the deferred receive queue.  ieee80211_rx_irqsafe enqueues and a
+ * worker delivers (the interface's own contract, net/mac80211/rx.c); a caller
+ * that must observe the delivery - a host test that injects a frame and then
+ * inspects the stack, or a shutdown path - waits for the worker to finish
+ * here, the same way the interface flushes its rx work before tearing a
+ * device down.
+ */
+void	lkpi80211_rx_flush(struct ieee80211_hw *hw);
+
+/* the channel context lifecycle (ops->add_chanctx / assign_vif_chanctx /
+ * remove_chanctx): the interface reserves one when an interface starts using a
+ * channel, and a driver may refuse a station upload without the binding */
+int	lkpi80211_drv_chanctx_use(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, u32 freq, u8 hw_value, u8 band, u8 width);
+void	lkpi80211_drv_chanctx_release(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif);
+
+/* the transmit handoff the interface performs: the txq selection first
+ * (ieee80211_get_txq) and, when a queue owns the frame, the enqueue and the
+ * driver's wake - a driver's management frames take this route, not drv_tx */
+void	lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+	    struct ieee80211_sta *sta, struct sk_buff *skb);
+
 /* Sta lifetime (call ops->sta_add / sta_remove; the sta carries
- * sta_data_size bytes of zeroed driver-private area) */
+ * sta_data_size bytes of zeroed driver-private area).  The ladder is split the
+ * way the association splits: drv_sta_add uploads the peer (the moment mac80211
+ * prepares a connection), drv_sta_assoc runs AUTH -> ASSOC when the association
+ * completes, drv_sta_remove winds a joined station down, and drv_sta_free winds
+ * down a station that never associated. */
 struct ieee80211_sta *lkpi80211_drv_sta_add(struct ieee80211_hw *hw,
 	    struct ieee80211_vif *vif, const u8 addr[6], u16 aid);
+int	lkpi80211_drv_sta_assoc(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_sta *sta, u16 aid);
 void	lkpi80211_drv_sta_remove(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_sta *sta);
+void	lkpi80211_drv_sta_free(struct ieee80211_hw *hw,
 	    struct ieee80211_vif *vif, struct ieee80211_sta *sta);
 
 /* enumerate what the substitute holds (the bridge's bookkeeping) */

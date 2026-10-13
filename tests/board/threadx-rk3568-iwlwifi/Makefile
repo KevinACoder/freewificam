@@ -190,7 +190,13 @@ WLAN_KPI_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 # first-party header face the driver compiles against (the same face the
 # host build gate uses, tests/host/iwlwifi-port-build/Makefile); the driver's
 # own root is its header root.
-DRV_CONFIG := -DCONFIG_IWLWIFI -DCONFIG_IWLMVM
+# CONFIG_IWLWIFI_DEBUG turns on the driver's own debug output (its debug_level
+# parameter and the IWL_DEBUG_* families behind it).  It is off in a shipping
+# kernel and on upstream's Linux, so the RTOS bring-up turns it on here - it is
+# this image's build configuration, not a change to the driver - because a
+# driver that refuses a command deep in its transmit path says why at debug
+# level, and that is what the console's `wlan dbg <mask>` reads.
+DRV_CONFIG := -DCONFIG_IWLWIFI -DCONFIG_IWLMVM -DCONFIG_IWLWIFI_DEBUG
 
 # The driver's bytes are compiled at the warning level its own build takes (the
 # kernel's default set for a driver directory, transcribed from
@@ -354,7 +360,10 @@ TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(CURDIR)/tests/iwlwifi_probe.c \
 	$(CURDIR)/tests/iwlwifi_scan.c \
-	$(CURDIR)/tests/iwlwifi_cmds.c
+	$(CURDIR)/tests/iwlwifi_join.c \
+	$(CURDIR)/tests/iwlwifi_dataplane.c \
+	$(CURDIR)/tests/iwlwifi_cmds.c \
+	$(CURDIR)/tests/iwlwifi_dbg.c
 
 # the image's own non-case TUs: the radio's dwell pump, the supplicant's
 # message observer, and the TCP/IP stack's bring-up helper (the bridge images'
@@ -624,8 +633,15 @@ $(foreach s,$(PCIE_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(filter-out $(CURDIR)/tests/iwlwifi_cmds.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS))))
+$(foreach s,$(filter-out $(CURDIR)/tests/iwlwifi_cmds.c $(CURDIR)/tests/iwlwifi_join.c $(CURDIR)/tests/iwlwifi_dataplane.c $(CURDIR)/tests/iwlwifi_dbg.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN_KPI_CFLAGS))))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/iwlwifi_cmds.c,$(WPA_CMD_CFLAGS) $(LWIP_INCLUDES) -I$(NPORT)/bridge))
+# the join case reads the supplicant observer (the wpa port's include set) and the
+# dataplane case the lwIP presentation layer - the same per-TU sets the rtw89
+# suite carries for the same two cases
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/iwlwifi_join.c,$(WPA_CMD_CFLAGS) -I$(NPORT)/bridge -I$(CURDIR)/tests -I$(LKPI)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/iwlwifi_dataplane.c,$(LWIP_INCLUDES) $(WLAN_KPI_CFLAGS) -I$(PORT)))
+# the debug door reaches the driver's own headers, so it compiles at the driver's flag set
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/iwlwifi_dbg.c,$(DRV_CFLAGS)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_radio.c,$(WLAN_KPI_CFLAGS)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$(CURDIR)/tests))
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))

@@ -615,9 +615,16 @@ __fls(unsigned long word)
 #define	__stringify_1(x...)	#x
 #define	__stringify(x...)	__stringify_1(x)
 
-/* ilog2: exact for constants (the drivers use it on table sizes) and a
- * floor-log2 at runtime */
-#define	ilog2(n)		((unsigned long)__builtin_ctzll((unsigned long long)(n)))
+/* [LNX] include/linux/log2.h:193: `#define ilog2(n) __ilog2_u64(n)` with
+ * `fls64(n) - 1` - the 0-based index of the HIGHEST set bit. The previous form
+ * counted trailing zeros (__builtin_ctzll), which agrees with the floor log
+ * only on pure powers of two - and get_order() feeds it `size - 1` on purpose
+ * (the generic getorder.h arithmetic), so a 4 KiB receive buffer came back as
+ * order -11: the board named it as `alloc_pages(order=4294967285)` and the
+ * iwlwifi receive path's every buffer allocation was refused, which in turn
+ * starved the firmware-ALIVE handshake. Exact for constants, as the interface
+ * is, because both builtins fold. */
+#define	ilog2(n)	((unsigned long)(63 - __builtin_clzll((unsigned long long)(n))))
 
 /* [LNX] include/linux/math.h: the round-up-to-a-power-of-two helper. It is a
  * macro over the exact-for-constants ilog2 above, because a compiled consumer
@@ -1972,10 +1979,12 @@ void lkpi_dev_printk(struct device *dev, ulog_level_t level, const char *fmt, ..
 void lkpi_fatal(const char *what);
 
 /*
- * The dist print helpers funnel everything through dev_*(); the debug
- * paths use the Linux "%pV" wrapped-format convention, which the port
- * printf does not understand - without the special case it prints the
- * pointer instead of the message.
+ * The dist print helpers funnel everything through dev_*(); the debug paths
+ * use the Linux "%pV" wrapped-format convention (the conversion's argument is
+ * a struct va_format *). The port's printf carries no such conversion, so the
+ * core expands it above whichever formatter the build selected (linuxkpi_core.c,
+ * lkpi_vformat) - which is what lets the vendored callers keep their spelling
+ * unchanged.
  *
  * Each helper carries the console level the vendored call site means. The
  * generic dev_printk() form has no level to carry here: every KERN_ constant is
@@ -2109,8 +2118,29 @@ void	lkpi_module_init_run(void);
 	__w;								\
 })
 #define	WARN_ON_ONCE(cond)	WARN_ON(cond)
-#define	WARN_ONCE(cond, fmt, ...)	WARN_ON(cond)
-#define	WARN(cond, fmt, ...)	WARN_ON(cond)
+/*
+ * The message-carrying forms. The interface's WARN()/WARN_ONCE() print the
+ * condition's site AND the call site's formatted message with its arguments
+ * ([LNX] include/asm-generic/bug.h: the second parameter is a format), and
+ * they print them as two lines - the site, then the message. The previous
+ * spelling collapsed both onto WARN_ON() and dropped the message, which is
+ * exactly where a driver puts the values a diagnosis needs: the vendored
+ * receive path's "frame on invalid queue - is on %d and indicates %d"
+ * (third-party/iwlwifi/pcie/gen1_2/rx.c:1339) was the one line the board could
+ * not show. The two lines are also what keeps the message inside the
+ * console's own line budget: a single line carrying the site's full path, the
+ * stringified condition and the message was cut by the log's line limit on
+ * the serial console, and the values sat in the part that was cut.
+ */
+#define	WARN(cond, fmt, ...)	({					\
+	bool __w = (cond);						\
+	if (__w) {							\
+		lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN\n", __FILE__, __LINE__); \
+		lkpi_printf(ULOG_WARNING_LEVEL, fmt "\n", ##__VA_ARGS__); \
+	}								\
+	__w;								\
+})
+#define	WARN_ONCE(cond, fmt, ...)	WARN(cond, fmt, ##__VA_ARGS__)
 #define	BUG_ON(cond)		do { if (cond) lkpi_fatal("BUG_ON(" #cond ")"); } while (0)
 /* print_hex_dump prefix args ([LNX] kernel.h) */
 #define	DUMP_PREFIX_NONE	0
@@ -2641,8 +2671,10 @@ skb_copy(const struct sk_buff *skb, gfp_t gfp)
 	n = lkpi_skb_alloc(skb->end, gfp);
 	if (n == NULL)
 		return NULL;
-	/* this shim never carries paged data (data_len 0), so tail always
-	 * covers headroom + payload - copy the whole [head, head+tail) */
+	/* the callers that reach this entry copy linear buffers (transmit
+	 * templates), so tail covers headroom + payload and the whole
+	 * [head, head+tail) is the frame; a fragmented source would need the
+	 * frame rebuild the substitute's receive entry performs instead */
 	memcpy(n->head, skb->head, skb->tail);
 	n->data = n->head + headroom;
 	n->tail = skb->tail;
@@ -2896,16 +2928,37 @@ int lkpi_waitq_timedwait(struct wait_queue_head *, int ms);
 #define	wake_up_interruptible(wq)	lkpi_waitqueue_wake(wq)
 #define	wake_up_all(wq)			lkpi_waitqueue_wake(wq)
 
-/* Returns 1 if the condition became true, 0 on timeout (Linux semantics). */
+/*
+ * Returns 1 when the condition became true, 0 on timeout - the interface's
+ * remaining-jiffies result read the only way this port's callers read it.
+ *
+ * The budget is a deadline on the port's own millisecond clock, not a count of
+ * wake-ups: the condition is re-checked after every wake, a wake-up meant for
+ * another waiter does not re-arm the full timeout, and a waiter whose wake was
+ * missed still leaves at the deadline. The deadline is what makes the mapping
+ * safe to state plainly - the previous form mapped lkpi_waitq_timedwait's own
+ * result (1 is "woken") the wrong way round, so a satisfied condition read as a
+ * timeout and a real timeout re-armed the whole budget and looped. Its first
+ * live consumer was the vendored driver's firmware-chunk wait
+ * (third-party/iwlwifi/pcie/gen1_2/trans.c:646), which reported
+ * "Failed to load firmware chunk!" after 5 ms against a 5 s wait while the
+ * device had in fact completed the transfer.
+ */
 #define	wait_event_timeout(wq, cond, timeout)				\
 ({									\
-	int __ret = 0;							\
 	int __ms = (int)jiffies_to_msecs(timeout);			\
+	unsigned long __deadline = jiffies + (unsigned long)__ms;	\
+	int __ret;							\
 	lkpi_waitq_lock(&(wq));						\
-	while (!(cond) && __ret == 0)					\
-		__ret = lkpi_waitq_timedwait(&(wq), __ms);		\
+	while (!(cond)) {						\
+		long __left = (long)(__deadline - jiffies);		\
+		if (__left <= 0 ||					\
+		    !lkpi_waitq_timedwait(&(wq), (int)__left))		\
+			break;						\
+	}								\
+	__ret = (cond) ? 1 : 0;						\
 	lkpi_waitq_unlock(&(wq));					\
-	__ret == 0 ? 1 : 0;						\
+	__ret;								\
 })
 
 #define	wait_event(wq, cond)						\

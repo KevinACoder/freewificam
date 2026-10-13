@@ -45,6 +45,212 @@ void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line))
 }
 
 /*
+ * ------------------------------------------------------------------ */
+/* the wrapped-format conversion ("%pV") the vendored printf lacks     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] lib/vsprintf.c: va_format() (reached from pointer()'s 'V' case): the
+ * argument of a "%pV" conversion is a `struct va_format *` carrying a format and
+ * its argument list, and the conversion formats the wrapped string with the
+ * wrapped arguments. It exists so an intermediary can pass a format and its
+ * arguments through without copying them - the vendored driver's log helpers
+ * (iwlwifi's __iwl_err/__iwl_info/__iwl_warn spell every one of their messages
+ * that way) are written exactly so - and the two layers below carry no such
+ * conversion: the printf the port links is a verbatim vendored tree, and on the
+ * host the C library's is not printk's either. The expansion therefore lives
+ * here, above whichever formatter the build selected.
+ *
+ * Why this is a rewrite of the format and not a walk over the argument list:
+ * a va_list handed to a formatting function is the callee's copy on this ABI
+ * (the caller copies it per call), so the port can never let the formatter
+ * consume part of a list and continue itself. The only shape the port can
+ * consume correctly is one where the wrapped conversions are the list's own
+ * conversions: the scan below classifies the format for exactly that, expands
+ * the ones it can, and says so once - rather than printing the pointer and a
+ * literal 'V' in silence - when a format mixes "%pV" with other conversions.
+ *
+ * Two deliberate deviations from the kernel's conversion are recorded here so a
+ * reader need not infer them: a bare "%p" prints the raw pointer (the kernel
+ * hashes it; this port's board diagnostics are read for the address), and a
+ * flags/width-decorated "%pV" is not decoration-padded (Linux's va_format()
+ * does not pad the wrapped string either).
+ */
+
+#define	LKPI_VAF_MAX_DEPTH	4
+
+/* format classes the scan below reports */
+#define	LKPI_PV_NONE		0	/* no "%pV" at all: hand to the formatter */
+#define	LKPI_PV_ONLY		1	/* only "%pV": expand */
+#define	LKPI_PV_MIXED		2	/* "%pV" beside other conversions */
+
+/*
+ * Classify a format string. LKPI_PV_ONLY means the format carries at least one
+ * "%pV" and no other conversion (literal characters and "%%" in between), so
+ * the whole argument list belongs to wrapped conversions and the port can
+ * consume it itself. A format without "%pV" is LKPI_PV_NONE whatever else it
+ * carries - it is the formatter's business, and the common case.
+ */
+static int lkpi_pV_classify(const char *fmt)
+{
+	int has_wrapped = 0;
+	int has_other = 0;
+
+	for (; *fmt != '\0'; fmt++) {
+		if (*fmt != '%')
+			continue;
+		if (fmt[1] == '%') {	/* a literal percent, not a conversion */
+			fmt++;
+			continue;
+		}
+		if (fmt[1] == 'p' && fmt[2] == 'V') {
+			has_wrapped = 1;
+			fmt += 2;
+		} else {
+			has_other = 1;
+		}
+	}
+	if (!has_wrapped)
+		return LKPI_PV_NONE;
+	return has_other ? LKPI_PV_MIXED : LKPI_PV_ONLY;
+}
+
+/*
+ * Emit a literal range of a format, collapsing "%%" to "%". Returns the number
+ * of characters the range contributes (the caller's length accounting has to
+ * stay right even when the line buffer runs out), writing only what fits. The
+ * run is terminated so that a literal tail - a range emitted after the last
+ * conversion - leaves a printable string behind.
+ */
+static size_t lkpi_lit_emit(char *buf, size_t size, size_t used,
+    const char *s, size_t n)
+{
+	size_t emitted = 0;
+
+	while (n > 0) {
+		char c = *s++;
+
+		n--;
+		if (c == '%' && n > 0 && *s == '%') {
+			s++;
+			n--;
+		}
+		if (used + emitted < size)
+			buf[used + emitted] = c;
+		emitted++;
+	}
+	if (used + emitted < size)
+		buf[used + emitted] = '\0';
+	return emitted;
+}
+
+/* the one-time note a mixed format earns (see the class comment above) */
+static void lkpi_pV_note(const char *fmt)
+{
+	static int said;
+	char line[192];
+
+	if (said || lkpi_sink == NULL)
+		return;
+	said = 1;
+	snprintf(line, sizeof(line),
+	    "printk: \"%%pV\" not expanded (unsupported format shape): %s",
+	    fmt != NULL ? fmt : "(null)");
+	lkpi_sink(ULOG_WARNING_LEVEL, line);
+}
+
+static int lkpi_vformat(char *buf, size_t size, const char *fmt, va_list ap,
+    unsigned depth)
+{
+	size_t used = 0;
+	const char *seg = fmt;
+	int cls;
+
+	if (fmt == NULL)
+		return 0;
+
+	/*
+	 * The one producer with a conversion before the wrapped one: the debug
+	 * path writes the function's own name there
+	 * (third-party/iwlwifi/iwl-debug.c: __iwl_dbg's "%s %pV", whose first
+	 * argument is the caller's function string, not a struct va_format).
+	 * The prefix is consumed here - a value this function owns, unlike the
+	 * formatter's own consumption, which would restart the list - and the
+	 * rest is classified and expanded as usual.
+	 */
+	if (fmt[0] == '%' && fmt[1] == 's') {
+		const char *prefix = va_arg(ap, const char *);
+		int n = snprintf(buf, size, "%s",
+		    prefix != NULL ? prefix : "(null)");
+
+		if (n < 0)
+			return 0;
+		used += (size_t)n;
+		fmt += 2;
+		seg = fmt;
+	}
+
+	cls = lkpi_pV_classify(fmt);
+	if (cls == LKPI_PV_NONE)
+		return (int)used + vsnprintf(used < size ? buf + used : buf,
+		    used < size ? size - used : 0, fmt, ap);
+	if (cls != LKPI_PV_ONLY || depth > LKPI_VAF_MAX_DEPTH) {
+		lkpi_pV_note(fmt);
+		return (int)used + vsnprintf(used < size ? buf + used : buf,
+		    used < size ? size - used : 0, fmt, ap);
+	}
+
+	for (;;) {
+		const char *hit;
+
+		/* the next wrapped conversion in the rest of the format */
+		for (hit = seg; *hit != '\0'; hit++) {
+			if (*hit != '%')
+				continue;
+			if (hit[1] == '%') {	/* a literal percent */
+				hit++;
+				continue;
+			}
+			break;	/* the conversion: the scan above proved it is "%pV" */
+		}
+		if (*hit == '\0') {
+			used += lkpi_lit_emit(buf, size, used, seg,
+			    strlen(seg));
+			return (int)used;
+		}
+
+		/* the literal run before it */
+		used += lkpi_lit_emit(buf, size, used, seg,
+		    (size_t)(hit - seg));
+
+		/* its argument: a wrapped format, formatted with its own list
+		 * (va_copy, as the kernel's va_format() does - the caller keeps
+		 * using its va_format after the log call) */
+		{
+			struct va_format *vaf = va_arg(ap, struct va_format *);
+			va_list inner;
+			int n;
+
+			if (vaf == NULL || vaf->fmt == NULL) {
+				/* nothing to expand: leave a printable string */
+				if (used < size)
+					buf[used] = '\0';
+				return (int)used;
+			}
+			va_copy(inner, *vaf->va);
+			n = lkpi_vformat(
+			    used < size ? buf + used : buf,
+			    used < size ? size - used : 0,
+			    vaf->fmt, inner, depth + 1);
+			va_end(inner);
+			if (n > 0)
+				used += (size_t)n;
+		}
+		seg = hit + 3;	/* past the "%pV" */
+	}
+}
+
+/*
  * Assemble one line and hand it to the sink. The buffer is bounded on purpose: a log
  * line is a diagnostic, and a driver that formats more than this loses the tail of a
  * line rather than the line. The level travels with the line so the sink can filter
@@ -58,7 +264,7 @@ static int lkpi_vlog(ulog_level_t level, const char *fmt, va_list ap)
 	if (lkpi_sink == NULL)
 		return 0;
 
-	n = vsnprintf(line, sizeof(line), fmt, ap);
+	n = lkpi_vformat(line, sizeof(line), fmt, ap, 0);
 	lkpi_sink(level, line);
 	return n;
 }
@@ -88,7 +294,7 @@ void lkpi_dev_printk(struct device *dev, ulog_level_t level, const char *fmt, ..
 		return;
 
 	va_start(ap, fmt);
-	(void)vsnprintf(line + n, sizeof(line) - (size_t)n, fmt, ap);
+	(void)lkpi_vformat(line + n, sizeof(line) - (size_t)n, fmt, ap, 0);
 	va_end(ap);
 
 	lkpi_sink(level, line);

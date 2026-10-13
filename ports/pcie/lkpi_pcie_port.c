@@ -57,9 +57,26 @@
  * table asserts its DMA address is ICT_SIZE-aligned (third-party/iwlwifi/pcie/
  * gen1_2/rx.c:2196), which a 64-byte pool cannot promise. The block header is the
  * alignment wide, so every block - and therefore every payload - starts on that
- * boundary; the pool is sized for the driver's queue and command buffers with
- * room over. */
-#define PORT_DMA_POOL_SIZE	(1u * 1024u * 1024u)
+ * boundary.
+ *
+ * The size is the AC 7260 probe's measured demand, term by term, not a wish. The
+ * coherent consumers on that path: the interrupt-cause table (ICT_SIZE 4 KiB), the
+ * receive descriptor ring (free_bd_size 4 x RX_QUEUE_SIZE 256) and the RB status
+ * page (one iwl_rb_status for the single receive queue), the scheduler's
+ * byte-count table (num_of_queues 31 x BC_TABLE_SIZE 640), the keep-warm buffer
+ * (IWL_KW_SIZE 4 KiB), the firmware monitor block the debug TLV asks for
+ * ("Allocated 0x00020000 bytes for firmware monitor", 128 KiB), and the transmit
+ * queues - the dominant term: 30 data queues of max_tfd_queue_size (256) TFDs of
+ * 128 bytes (struct iwl_tfd, IWL_NUM_OF_TBS 20) plus 256 first-TB buffers of
+ * ALIGN(IWL_FIRST_TB_SIZE 20, 64), and one command queue of 32 - which is 48 KiB
+ * of payload per data queue and, with one block header per coherent allocation,
+ * 56 KiB per queue and ~1.64 MiB for the 31 (pcie/gen1_2/tx.c, the queue
+ * allocator). The whole set is ~1.9 MiB, and the 2 MiB non-cacheable window is
+ * what the arch layer maps as one block (arch/aarch64/mmu.c, asserted in the
+ * linker script), so this pool is the window. An image whose demand outgrows the
+ * window fails at link time, not at run time - and a request the pool cannot serve
+ * logs what it wanted and what is left before it fails. */
+#define PORT_DMA_POOL_SIZE	(2u * 1024u * 1024u)
 #define PORT_DMA_ALIGN		4096u
 
 struct port_dma_blk {
@@ -78,6 +95,10 @@ struct port_irq {
 	void		(*fn)(void *);
 	void		*arg;
 	bool		used;
+	/* the function's first window and how many deliveries were traced:
+	 * see the interrupt-time snapshot below */
+	uintptr_t	bar0;
+	unsigned int	traced;
 };
 
 static struct port_irq port_irq[PORT_IRQ_MAX];
@@ -86,6 +107,26 @@ static struct port_irq port_irq[PORT_IRQ_MAX];
 /* the interrupt dispatcher                                            */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The AC 7260's control/status registers, at fixed offsets from the function's
+ * first window (third-party/iwlwifi/iwl-csr.h): the raw interrupt cause, the
+ * mask the driver programmed, the FH cause, the reset control and the general
+ * control. An interrupt is the one moment the device speaks to the host
+ * without being asked, so the trace prints what it said and what the driver
+ * had programmed - the first board runs could show neither, and a failed ALIVE
+ * handshake with a receive walk that ran anyway (third-party/iwlwifi/pcie/
+ * gen1_2/rx.c:1337: "frame on invalid queue - is on 0 and indicates 1") needed
+ * exactly these values to tell a lost notification from a device that never
+ * started its firmware. Reads only: every one of these registers is
+ * read-only or write-one-to-clear.
+ */
+#define PORT_CSR_INT		0x008u
+#define PORT_CSR_INT_MASK	0x00cu
+#define PORT_CSR_FH_INT_STATUS	0x010u
+#define PORT_CSR_RESET		0x020u
+#define PORT_CSR_GP_CNTRL	0x024u
+#define PORT_IRQ_TRACE_MAX	6u
+
 /* One dispatcher for every vector: the registry carries the slot as the handler's
  * argument, so the delivery finds the pair the engine registered. */
 static void port_irq_dispatch(void *arg)
@@ -93,6 +134,20 @@ static void port_irq_dispatch(void *arg)
 	struct port_irq *slot = arg;
 
 	if (slot->fn != NULL) {
+		if (slot->traced < PORT_IRQ_TRACE_MAX && slot->bar0 != 0) {
+			volatile uint32_t *csr =
+			    (volatile uint32_t *)slot->bar0;
+
+			slot->traced++;
+			LOG_INFO("pcie: irq %d bar0=0x%08x csr int=0x%08x "
+			    "mask=0x%08x fh=0x%08x reset=0x%08x gp=0x%08x\n",
+			    slot->intid, (unsigned)slot->bar0,
+			    csr[PORT_CSR_INT / 4u],
+			    csr[PORT_CSR_INT_MASK / 4u],
+			    csr[PORT_CSR_FH_INT_STATUS / 4u],
+			    csr[PORT_CSR_RESET / 4u],
+			    csr[PORT_CSR_GP_CNTRL / 4u]);
+		}
 		slot->fn(slot->arg);
 	}
 }
@@ -135,11 +190,42 @@ static void port_dma_init(void)
 	blk->size = PORT_DMA_POOL_SIZE - sizeof(*blk);
 	blk->used = 0;
 	port_dma_ready = true;
+	LOG_INFO("pcie: coherent pool %u KiB (non-cacheable)\n",
+	    PORT_DMA_POOL_SIZE / 1024u);
 }
 
 static uint8_t *port_dma_block_next(const struct port_dma_blk *blk)
 {
 	return (uint8_t *)blk + sizeof(*blk) + blk->size;
+}
+
+/* What a refused request gets told: how much of the pool is free and how large
+ * its largest run is. A request that fits in the total but not in any run is
+ * fragmentation; one larger than the total is capacity. The line has to say
+ * which, because the picture on the serial console is otherwise a driver whose
+ * allocation failed for no visible reason (which is what the AC 7260's first
+ * board run looked like). */
+static void port_dma_report_free(size_t want, const char *why)
+{
+	struct port_dma_blk *blk;
+	uint8_t *end = port_dma_pool + PORT_DMA_POOL_SIZE;
+	size_t free_bytes = 0, largest = 0;
+
+	for (blk = (struct port_dma_blk *)port_dma_pool;
+	     (uint8_t *)blk + sizeof(*blk) <= end;
+	     blk = (struct port_dma_blk *)port_dma_block_next(blk)) {
+		if (blk->used) {
+			continue;
+		}
+		free_bytes += blk->size;
+		if (blk->size > largest) {
+			largest = blk->size;
+		}
+	}
+	LOG_WARNING("pcie: coherent pool %s: %u bytes wanted, %u free, "
+	    "largest run %u (pool %u)\n",
+	    why, (unsigned)want, (unsigned)free_bytes, (unsigned)largest,
+	    (unsigned)PORT_DMA_POOL_SIZE);
 }
 
 /* First fit over the pool's block list. A freed block coalesces with its
@@ -152,6 +238,11 @@ static int port_dma_alloc(size_t len, void **cpu, u64 *bus)
 
 	port_dma_init();
 	if (len == 0 || len > PORT_DMA_POOL_SIZE - sizeof(*blk)) {
+		/* A caller probing for a size it cannot have (the firmware
+		 * monitor walks its sizes down) is a policy, not a fault: say
+		 * what was refused, and let the caller step down. */
+		LOG_INFO("pcie: coherent pool: %u bytes refused (pool %u)\n",
+		    (unsigned)len, (unsigned)PORT_DMA_POOL_SIZE);
 		return -LKPI_PCIE_BE_ERR_RANGE;
 	}
 	len = (len + PORT_DMA_ALIGN - 1u) & ~(size_t)(PORT_DMA_ALIGN - 1u);
@@ -177,6 +268,7 @@ static int port_dma_alloc(size_t len, void **cpu, u64 *bus)
 		*bus = (u64)(uintptr_t)*cpu;
 		return 0;
 	}
+	port_dma_report_free(len, "exhausted");
 	return -LKPI_PCIE_BE_ERR_FAIL;
 }
 
@@ -291,6 +383,9 @@ static int port_bus_up(void *ctx, struct lkpi_pcie_be_dev **devs,
 		descs[i].link_width = 1;
 		descs[i].host_dma_mask = 0xffffffffu;
 		for (j = 0; j < LKPI_PCIE_BE_MAX_BARS && j < 6u; j++) {
+			/* the record keeps 32-bit BAR words (the pinned face);
+			 * a 64-bit memory BAR folds its high half into the next
+			 * word, which is what the windows of this bench are */
 			descs[i].bar[j].phys = dev->bar[j];
 			descs[i].bar[j].size = 0;
 			descs[i].bar[j].flags = 0;
@@ -379,6 +474,11 @@ static int port_irq_setup(void *ctx, struct lkpi_pcie_be_dev *d, int kind,
 	slot->fn = handler;
 	slot->arg = arg;
 	slot->used = true;
+	/* the first window, for the interrupt-time snapshot: the record keeps
+	 * 32-bit words, so a 64-bit BAR's high half is folded back here */
+	slot->bar0 = (uintptr_t)(((uint64_t)dev->bar[1] << 32) |
+	    (dev->bar[0] & ~0xfULL));
+	slot->traced = 0;
 
 	/* One dispatcher, armed with the slot as its argument. An LPI is enabled
 	 * through its property byte rather than a distributor bit, so the enable

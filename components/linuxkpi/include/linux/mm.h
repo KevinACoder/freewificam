@@ -59,14 +59,23 @@ page_address(const struct page *page)
 }
 
 /* [LNX] include/linux/mm.h: the reference the interface takes on a page it is
- * about to hand to another owner. This port's page records are opaque handles
- * with no reference count yet, so the take has nothing to increment; it is stated
- * as the interface's void shape so a caller reads unchanged. */
+ * about to hand to another owner. This port's page record carries a reference
+ * count (in the header the allocator carves in front of the page,
+ * linuxkpi_compat.c), and the take is the increment; the release below returns
+ * the block only when the last reference goes. Out of line because the count
+ * lives in the allocator's private header rather than in this face. */
+void	lkpi_page_get(struct page *page);
+
 static __always_inline __unused void
 get_page(struct page *page)
 {
-	(void)page;
+	lkpi_page_get(page);
 }
+
+/* [LNX] include/linux/mm.h: `put_page()` drops one reference and returns the
+ * block on the last. The interface reads the order back from its page record;
+ * this port's allocation header kept it, so the release needs no argument. */
+void	put_page(struct page *page);
 
 /* [LNX] include/asm-generic/getorder.h:29: the generic inline body, stated here
  * because the interface's own home for it is an asm-generic header this face does

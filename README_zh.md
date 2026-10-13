@@ -9,9 +9,10 @@
 上的 USB 无线网卡（就是你插到电脑上的那种），不需要厂商 SDK、不需要厂商二进制
 固件：直接跑**未经改动的主线 Linux 驱动**，运行在 ThreadX 或 FreeRTOS 上。
 
-**rtw88 / rtw89 SoftMAC 驱动的开源 RTOS 移植。** rtw88 与 rtw89 是主线 Linux
-里一大票 Realtek 无线芯片的驱动。据我们所知，这是这两个驱动在 RTOS 上的首个
-开源移植：驱动源码一字未改，RTOS 侧的接口在它下面提供。
+**主线 Linux SoftMAC 驱动的开源 RTOS 移植。** rtw88 与 rtw89 是主线 Linux
+里一大票 Realtek 无线芯片的驱动；iwlwifi（mvm 一代）是 Intel 的 Wireless-AC
+系列主线驱动。据我们所知，这是这组驱动在 RTOS 上的首个开源移植：驱动源码
+一字未改，RTOS 侧的接口在它下面提供。
 
 终局目标 = **摄像头数据经无线长时间打流**（RTOS 上的无线 IP 摄像头）。本次快照
 只覆盖无线侧；摄像头侧尚未开始。
@@ -29,7 +30,7 @@ RTOS 内核上的开源 802.11 支持长期依赖厂商 SDK 与二进制固件�
 
 ## 当前跑通的东西
 
-参考板上有三条 USB 无线线和一条 SDIO 无线线跑通。"全链" = 认卡 → 下固件 → 扫描 → WPA2 关联 →
+参考板上有三条 USB 无线线、一条 SDIO 无线线和一条 PCIe 无线线跑通。"全链" = 认卡 → 下固件 → 扫描 → WPA2 关联 →
 DHCP 得址 → 网关 ping → TCP 传数；它**不代表**吞吐好。
 
 | 线 | 芯片 | 板上状态 |
@@ -38,6 +39,7 @@ DHCP 得址 → 网关 ping → TCP 传数；它**不代表**吞吐好。
 | `rtw88` | RTL8821CU | 全链通过（含冷启动光盘模式→网卡模式切换） |
 | `rtw89` | RTL8851BU | **实验性**：全链摸到过，但关联间歇、链路差 |
 | SDIO | RTL8189FTV | 全链通过（走 SDIO 总线而非 USB；vendor 驱动自带 MLME，对接本仓的 cfg80211 与 netdev 面） |
+| `iwlwifi` | Intel Wireless-AC 7260 | 全链通过（走 PCIe 消息中断（GICv3 ITS）；驱动的站点管理帧与数据帧经其发送队列路由，端口侧提供线程化中断所需的两个独立上下文） |
 
 ### 吞吐
 
@@ -51,12 +53,14 @@ DHCP 得址 → 网关 ping → TCP 传数；它**不代表**吞吐好。
 | RTL8821CU | 3.65 Mbit/s | **63.7 / 66.0 / 68.2 Mbit/s** |
 | RTL8851BU | 136 / 173 Kbit/s | **23.9 / 25.3 / 26.5 Mbit/s** |
 | RTL8189FTV（SDIO） | 10.6 / 1.18 / 10.9 Mbit/s | **45.0 / 46.4 Mbit/s** |
+| Intel Wireless-AC 7260（PCIe） | 0.24 Mbit/s | **167 Mbit/s** |
 
-四线都在 ch1（2412 MHz）、对着同一个 AP（BSSID `14:a3:2f:18:07:2c`）测；Linux 每格是
-3 次 30 s 的 min/avg/max，RTL8189FTV 一格是实验室台账记的同卡真值范围。RTOS 四个数字
-分别约为 Linux 的 **1/10、1/18、1/170、1/4**。SDIO 线最接近 Linux，也最不稳：三次里两次
+五线都在 ch1（2412 MHz）、对着同一个 AP（BSSID `14:a3:2f:18:07:2c`）测；Linux 每格是
+3 次 30 s 的 min/avg/max，RTL8189FTV 一格是实验室台账记的同卡真值范围，7260 一格是
+同款 iperf 会话单次 20 s（RTOS 一格为单次 31 s）。RTOS 五个数字
+分别约为 Linux 的 **1/10、1/18、1/170、1/4、（PCIe 线）1/700**。SDIO 线最接近 Linux，也最不稳：三次里两次
 稳在 10.6 / 10.9 Mbit/s，一次塌到 1.18 Mbit/s——这是驱动默认省电态的形态，Linux 那条线
-正是靠关掉省电才止住 TCP 崩。Linux 四线都做了反向（板→宿主）；RTOS 反向尚未测。
+正是靠关掉省电才止住 TCP 崩。Linux 五线都做了反向（板→宿主）；RTOS 反向尚未测。
 
 与 Linux 的差距很大，这是当前待解的问题。写在这里而不是藏着：目前这条线的价值
 在结构，不在数字。详见 [docs/known-limitations.md](docs/known-limitations.md)。

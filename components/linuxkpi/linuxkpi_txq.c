@@ -166,14 +166,25 @@ lkpi_txq_alloc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	}
 	txq->vif = vif;
 	if (sta == NULL) {
-		/* the interface's own queue, and the one its beacons ride */
+		/*
+		 * The interface's own queues, as it sets them up (tx.c:1526-1544):
+		 * `sdata->vif.txq` is the no-station data queue (BE) and
+		 * `sdata->vif.txq_mgmt` is the management queue no station owns
+		 * (the tid == IEEE80211_NUM_TIDS form, VO).
+		 */
 		txq->sta = NULL;
-		txq->tid = 0;
-		txq->ac = IEEE80211_AC_BE;
+		txq->tid = tid;
+		txq->ac = (tid == IEEE80211_NUM_TIDS) ? IEEE80211_AC_VO :
+		    IEEE80211_AC_BE;
 	} else {
 		txq->sta = sta;
 		txq->tid = tid;
-		txq->ac = lkpi_txq_ac_from_tid(tid);
+		/*
+		 * The station's management MPDU queue rides VO (tx.c:1556-1558);
+		 * a per-TID queue rides its access category.
+		 */
+		txq->ac = (tid == IEEE80211_NUM_TIDS) ? IEEE80211_AC_VO :
+		    lkpi_txq_ac_from_tid(tid);
 	}
 	spin_lock_irqsave(&eng.lock, flags);
 	t->txq = txq;

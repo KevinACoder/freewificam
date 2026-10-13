@@ -37,7 +37,7 @@ case_line() {
 group() {
     name=$1
     shift
-    if grep -q '^SHAPE: summary cases=11 failed=0$' "$log_dir/run.log"; then
+    if grep -q '^SHAPE: summary cases=14 failed=0$' "$log_dir/run.log"; then
         ok=1
         for c in "$@"; do
             grep -q "^SHAPE: $c PASS" "$log_dir/run.log" || ok=0
@@ -65,7 +65,8 @@ if "$bin" > "$log_dir/run.log" 2> "$log_dir/run.err"; then
     group 6x-family-dispatch \
         6x-association 6x-leave both-families
     group 7260-mixed-family-dispatch \
-        7260-association 7260-txq
+        7260-association 7260-txq 7260-mgttxq-route 7260-mgttxq-off \
+        7260-chanctx
 else
     case_line 73-family-dispatch FAIL
     case_line 6x-family-dispatch FAIL

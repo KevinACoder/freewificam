@@ -50,10 +50,12 @@ REAL_SRCS   := skb_real.c $(SHARED_SRCS)
 
 # The bounded build: eight slots, 256-byte payloads, and the pool's own
 # storage-budget assertion turned on, so the MCU-shaped claim is a build-time
-# fact rather than a comment.
+# fact rather than a comment. The budget carries the per-buffer shared record
+# every slot now reserves (linux/skbuff.h, skb_shinfo: the receive path's
+# fragment storage), which is the growth from 8192 this round.
 MCU_CFLAGS := -DCONFIG_LKPI_SKB_POOL_NUM=8 -DCONFIG_LKPI_SKB_DATA_POOL_NUM=8 \
               -DCONFIG_LKPI_SKB_DATA_BUF_SZ=256 \
-              -DCONFIG_LKPI_SKB_POOL_BUDGET_BYTES=8192
+              -DCONFIG_LKPI_SKB_POOL_BUDGET_BYTES=12288
 
 DOUBLE_OBJS := $(addprefix $(BUILD_DIR)/double/,$(DOUBLE_SRCS:.c=.o))
 REAL_OBJS   := $(addprefix $(BUILD_DIR)/real/,$(REAL_SRCS:.c=.o))

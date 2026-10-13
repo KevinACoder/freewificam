@@ -73,6 +73,18 @@ _Static_assert(LKPI_SKB_DATA_MAXSZ > 0, "a data slot needs a payload size");
 /* ------------------------------------------------------------------ */
 
 /*
+ * The trailing shared record every buffer carries (linux/skbuff.h, skb_shinfo):
+ * it sits at an 8-byte boundary at or just past head + `end`, inside the storage,
+ * so a buffer must be able to hold the payload the request can reach plus the
+ * alignment gap (up to seven bytes) plus the record.  The record moves with the
+ * request (its accessor derives the address), not with the slot, which is why
+ * the reserve is appended to the payload array rather than addressed at a fixed
+ * offset.
+ */
+#define LKPI_SKB_SHINFO_MAXSZ \
+	(((unsigned int)sizeof(struct skb_shared_info) + 7u + 63u) & ~63u)
+
+/*
  * A data slot: the reference count (0 = free, 1 = owned, one more per clone
  * sharing the payload) and the payload itself, cache-line aligned. The previous
  * bring-up lost bulk transfers by handing the DMA path a buffer whose alignment
@@ -85,17 +97,19 @@ _Static_assert(LKPI_SKB_DATA_MAXSZ > 0, "a data slot needs a payload size");
 struct lkpi_skb_data_slot {
 	uint32_t	ref;
 	uint32_t	_pad;
-	unsigned char	buf[CONFIG_LKPI_SKB_DATA_BUF_SZ] __attribute__((aligned(64)));
+	unsigned char	buf[CONFIG_LKPI_SKB_DATA_BUF_SZ + LKPI_SKB_SHINFO_MAXSZ]
+	    __attribute__((aligned(64)));
 };
 
-/* The stride must carry header plus payload: if the payload were declared as a
- * flexible member, the array element would be header-sized and every slot's
- * payload would land on its neighbour's header. */
+/* The stride must carry header, payload and shared record: if the payload were
+ * declared as a flexible member, the array element would be header-sized and every
+ * slot's payload would land on its neighbour's header. */
 _Static_assert(offsetof(struct lkpi_skb_data_slot, buf) % 64u == 0u,
     "a data slot's payload must be cache-line aligned");
 _Static_assert(sizeof(struct lkpi_skb_data_slot) >=
-    offsetof(struct lkpi_skb_data_slot, buf) + LKPI_SKB_DATA_MAXSZ,
-    "a data slot's stride must contain its payload");
+    offsetof(struct lkpi_skb_data_slot, buf) + LKPI_SKB_DATA_MAXSZ +
+    LKPI_SKB_SHINFO_MAXSZ,
+    "a data slot's stride must contain its payload and the shared record");
 
 /* where a live object's linear buffer came from; the record survives the
  * header's release so the fence scan can still reach the buffer */
@@ -228,8 +242,9 @@ static void tomb_add(uintptr_t p)
 
 /*
  * The structural invariant of a geometry-op target (skbuff_pool.h:14: offset-style
- * tail/end; this shim never carries paged data): the head, data and tail pointers
- * are ordered and inside the slot.
+ * tail/end; the geometry entry points apply to the linear area, and a buffer whose
+ * frame continues into fragments is refused below by its nonzero data_len): the
+ * head, data and tail pointers are ordered and inside the slot.
  *
  * The payload length is deliberately NOT part of it. The interface maintains no
  * such relation - its own operations only need tailroom and pointer order - and the
@@ -322,15 +337,32 @@ static void buf_ref_inc(const struct lkpi_skb_buf_rec *rec)
 	}
 }
 
+/* the page fragments a dying payload owns: each fragment's page reference goes
+ * back exactly once, here, where the payload itself is released - the interface's
+ * own rule (a clone that shares the payload must not release them again) */
+static void frag_pages_release(struct sk_buff *skb)
+{
+	struct skb_shared_info *sh = skb_shinfo(skb);
+	unsigned int i;
+
+	if (sh->nr_frags == 0)
+		return;
+	for (i = 0; i < (unsigned int)sh->nr_frags && i < (unsigned int)MAX_SKB_FRAGS;
+	    i++)
+		lkpi_spl_page_put(sh->frags[i].bv_page);
+	sh->nr_frags = 0;
+}
+
 /* one reference to a linear buffer goes away: the last one returns the slot to
  * the pool (fence-filled) or frees the heap buffer */
-static void buf_ref_put(const struct lkpi_skb_buf_rec *rec)
+static void buf_ref_put(const struct lkpi_skb_buf_rec *rec, struct sk_buff *skb)
 {
 	if (rec->kind == LKPI_SKB_BUF_POOL) {
 		struct lkpi_skb_data_slot *ds = &skb_data[rec->idx];
 
 		if (ds->ref > 0 && --ds->ref > 0)
 			return;		/* a clone still owns the payload */
+		frag_pages_release(skb);
 		memset(ds->buf, fence_byte(rec->idx), cfg_data_sz);
 		stats.data_used--;
 	} else if (rec->kind == LKPI_SKB_BUF_HEAP) {
@@ -338,6 +370,7 @@ static void buf_ref_put(const struct lkpi_skb_buf_rec *rec)
 
 		if (*ref > 0 && --(*ref) > 0)
 			return;
+		frag_pages_release(skb);
 		stats.dyalloc_live--;
 		lkpi_spl_free((unsigned char *)rec->heap - 8);
 	}
@@ -541,12 +574,14 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 			goto fail_header;
 		}
 		/* one reference word in front of the payload, so a clone can share
-		 * a heap-backed buffer exactly like a pool slot */
-		ref = (uint32_t *)lkpi_spl_malloc(8u + need);
+		 * a heap-backed buffer exactly like a pool slot; the trailing
+		 * shared record rides the same allocation */
+		ref = (uint32_t *)lkpi_spl_malloc(8u + need + LKPI_SKB_SHINFO_MAXSZ);
 		if (ref == NULL) {
 			stats.alloc_fail++;
 			lkpi_spl_log("alloc refused: no heap for %u bytes "
-			    "(data slot is %u)", 8u + need, cfg_data_sz);
+			    "(data slot is %u)", 8u + need + LKPI_SKB_SHINFO_MAXSZ,
+			    cfg_data_sz);
 			goto fail_header;
 		}
 		*ref = 1;
@@ -562,11 +597,31 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 	skb->head = buf;
 	skb->data = buf;
 	skb->tail = 0;
+	/*
+	 * `end` is the request's - the interface's own geometry (alloc_skb(64)
+	 * followed by skb_reserve(NET_SKB_PAD) leaves 64 bytes of tailroom), and
+	 * the two host suites record exactly that. A frame larger than the request
+	 * therefore takes the vendored receive path's fragment branch again
+	 * (third-party/iwlwifi/mvm/rx.c:80: `len <= skb_tailroom(skb) ? len : ...`)
+	 * - and now has somewhere to go: the buffer's own shared record carries the
+	 * page fragments (skb_add_rx_frag below), and the substitute's receive
+	 * entry linearizes the frame before the stack sees it. `end` no longer has
+	 * to stand in for fragment storage it does not have.
+	 */
 	skb->end = need;
 	skb->len = 0;
 	skb->data_len = 0;
 	skb->truesize = (unsigned int)sizeof(*skb) + need;
 	skb->_gen = gen_next();
+	/*
+	 * The buffer's trailing shared record, zeroed at every allocation: the
+	 * bytes it occupies were payload for whoever held this buffer last (a
+	 * slot) or are uninitialised (a fresh heap block), and a stale nr_frags
+	 * or frag_list would be read by the first driver that asks.  Its address
+	 * is the accessor's (an 8-byte boundary at or past the payload), never
+	 * recomputed here.
+	 */
+	memset(skb_shinfo(skb), 0, sizeof(struct skb_shared_info));
 
 	if (hdr_heap) {
 		heap_live[heap_live_n].p = skb;
@@ -667,7 +722,7 @@ struct sk_buff *skb_clone(const struct sk_buff *skb, gfp_t gfp_mask)
 	clone->tail = skb->tail;
 	clone->end = skb->end;
 	clone->len = skb->len;
-	clone->data_len = 0;
+	clone->data_len = skb->data_len;
 	clone->truesize = skb->truesize;
 	clone->dev = skb->dev;
 	clone->protocol = skb->protocol;
@@ -694,51 +749,97 @@ out:
 /*
  * Copy a run of bytes out of a buffer. [LNX] include/linux/skbuff.h:4286: the
  * interface's body copies from the linear area and then walks the fragment list,
- * answering -EFAULT when the range does not fit. Every buffer this port produces
- * is one linear store with no fragment list (skbuff_pool.h:45-83), so the linear
- * copy is the whole body and the range check is the interface's. The vendored
- * transmit path reads a management frame's bytes through this
+ * answering -EFAULT when the range does not fit. This port's fragments are the
+ * buffer's own record entries (linux/skbuff.h, skb_shinfo), and the walk below is
+ * the interface's: the linear part first, then the fragments in order. The
+ * vendored transmit path reads a management frame's bytes through this
  * (third-party/rtl8189fs/os_dep/linux/xmit_linux.c:46).
  */
 int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len)
 {
+	const struct skb_shared_info *sh;
+	unsigned int headlen, off;
+	unsigned int left;
+	unsigned char *dst = to;
+	unsigned int i;
+
 	if (skb == NULL || to == NULL || len < 0)
 		return -EFAULT;
 	if (offset < 0 ||
 	    (unsigned int)offset + (unsigned int)len > skb->len)
 		return -EFAULT;
-	memcpy(to, skb->data + offset, (size_t)len);
-	return 0;
+
+	off = (unsigned int)offset;
+	left = (unsigned int)len;
+	headlen = skb->len - skb->data_len;
+	if (off < headlen) {
+		unsigned int n = headlen - off;
+
+		if (n > left)
+			n = left;
+		memcpy(dst, skb->data + off, n);
+		dst += n;
+		off += n;
+		left -= n;
+	}
+	sh = skb_shinfo(skb);
+	for (i = 0; left > 0 && i < (unsigned int)sh->nr_frags; i++) {
+		const skb_frag_t *frag = &sh->frags[i];
+		unsigned int flen = frag->bv_len;
+		unsigned int from, n;
+
+		if (off >= headlen + flen) {
+			headlen += flen;
+			continue;
+		}
+		from = off > headlen ? off - headlen : 0;
+		n = flen - from;
+		if (n > left)
+			n = left;
+		memcpy(dst, (const unsigned char *)page_address(frag->bv_page) +
+		    frag->bv_offset + from, n);
+		dst += n;
+		off += n;
+		left -= n;
+		headlen += flen;
+	}
+	return left == 0 ? 0 : -EFAULT;
 }
 
 /*
  * [LNX] include/linux/skbuff.h:2702-2708: the interface attaches a page as
- * fragment `i` of the buffer's shared record. This port's sk_buff is one linear
- * store with no fragment storage (skbuff_pool.h:45-83; the face's shared record is
- * the linear one, skbuff.h), so a fragment is materialized into the linear payload:
- * the bytes are appended at the tail, which is what keeps the whole received frame
- * readable by the receive path. `i` names a fragment slot the port does not have
- * and is accepted and unused; the interface's truesize addition is not applied,
- * because this port's truesize is the pool's own, fixed at allocation
- * (skbuff_pool.c:568). The caller is the non-MQ receive path the AC 7260 runs
- * (mvm/rx.c:89), so the copy is the reachable answer rather than a stub. If the
- * linear payload has no room the pool's own put refuses it and names the geometry
- * violation (lkpi_skb_put below); the page the interface would have taken ownership
- * of stays the caller's, since no fragment descriptor here records it.
+ * fragment `i` of the buffer's shared record, a reference the record now owns
+ * (the page arrives with the reference its previous holder carried - the
+ * vendored receive path's steal, iwl-trans.h:252), and adds the fragment's
+ * length to the buffer's accounting. This port's record is the buffer's own
+ * storage (linux/skbuff.h, skb_shinfo), and the fragment stays a fragment: the
+ * substitute's common receive entry linearizes the whole frame before the
+ * net80211 side - which speaks linear frames - sees it (linuxkpi_80211.c,
+ * ieee80211_rx_irqsafe); the fragment's page is released when the payload dies
+ * (frag_pages_release above). The interface's truesize addition is not applied:
+ * this port's truesize is the pool's own, fixed at allocation.
  */
 void skb_add_rx_frag(struct sk_buff *skb, int i, struct page *page, int off,
 		     int size, unsigned int truesize)
 {
-	unsigned char *p;
+	struct skb_shared_info *sh;
 
-	(void)i;
 	(void)truesize;
 	if (skb == NULL || page == NULL || size <= 0)
 		return;
-	p = lkpi_skb_put(skb, (unsigned int)size);
-	if (p == NULL)
-		return;		/* the linear payload had no room; put named it */
-	memcpy(p, (const char *)page_address(page) + off, (size_t)size);
+	if (i < 0 || i >= (int)MAX_SKB_FRAGS) {
+		lkpi_spl_log("rx fragment index %d out of range (cap %u); fragment dropped",
+		    i, (unsigned)MAX_SKB_FRAGS);
+		return;
+	}
+	sh = skb_shinfo(skb);
+	sh->frags[i].bv_page = page;
+	sh->frags[i].bv_offset = (unsigned int)off;
+	sh->frags[i].bv_len = (unsigned int)size;
+	if ((unsigned int)sh->nr_frags < (unsigned int)i + 1u)
+		sh->nr_frags = (unsigned char)(i + 1);
+	skb->data_len += (unsigned int)size;
+	skb->len += (unsigned int)size;
 }
 
 /* ------------------------------------------------------------------ */
@@ -775,7 +876,7 @@ void lkpi_skb_free(struct sk_buff *skb)
 		 */
 		if (skb->list != NULL)
 			lkpi_skb_do_unlink(skb, skb->list);
-		buf_ref_put(&slot_buf[slot]);
+		buf_ref_put(&slot_buf[slot], skb);
 		/* The buffer record stays: a released slot without its head pointer
 		 * can still be integrity-scanned through this record (the fence scan
 		 * checks the data slot is still free before reading it). Only a heap
@@ -794,7 +895,7 @@ void lkpi_skb_free(struct sk_buff *skb)
 
 		if (skb->list != NULL)
 			lkpi_skb_do_unlink(skb, skb->list);
-		buf_ref_put(&heap_live[hi].buf);
+		buf_ref_put(&heap_live[hi].buf, skb);
 		lkpi_spl_free(skb);
 		tomb_add(addr);
 		heap_live_del((unsigned int)hi);
@@ -823,8 +924,12 @@ unsigned char *lkpi_skb_put(struct sk_buff *skb, unsigned int len)
 		goto out;
 	if (len > skb->end - skb->tail) {
 		geo_bad++;
-		lkpi_spl_log("put past the tail refused (len=%u tailroom=%u)",
-		    len, skb->end - skb->tail);
+		/* the geometry and the caller: a refusal is a contract mismatch
+		 * someone has to name, and the put site is not in this file */
+		lkpi_spl_log("put past the tail refused (len=%u tailroom=%u "
+		    "head=%p end=%u tail=%u ra=%p)", len, skb->end - skb->tail,
+		    (void *)skb->head, skb->end, skb->tail,
+		    __builtin_return_address(0));
 		goto out;
 	}
 	p = skb->head + skb->tail;	/* the old tail, Linux semantics */
@@ -1131,5 +1236,25 @@ void *lkpi_spl_malloc(unsigned int size)
 void lkpi_spl_free(void *p)
 {
 	osMemoryFree(p);
+}
+
+/*
+ * The page reference a fragment release returns.  The page record and its
+ * reference count live with the allocator (linuxkpi_compat.c), and not every
+ * image links that file - an image whose drivers never take pages has no
+ * allocator and can never hand one back.  Where it is linked, its own strong
+ * definition of this binding (put_page) overrides the weak default here; this
+ * default exists so such an image links, and it names the impossible case
+ * rather than swallowing it.
+ */
+__attribute__((weak)) void lkpi_spl_page_put(struct page *page)
+{
+	static bool said;
+
+	if (!said) {
+		said = true;
+		lkpi_spl_log("fragment page release with no page allocator linked");
+	}
+	(void)page;
 }
 #endif /* LKPI_SKB_POOL_NO_TARGET_HOOKS */

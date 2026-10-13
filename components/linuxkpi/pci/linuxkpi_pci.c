@@ -83,9 +83,12 @@ static struct lkpi_pci_stats lkpi_pci_stats;
 
 /* one delivered vector: the INTID the backend returned, the function it belongs
  * to, the handler the caller registered and (for a threaded request) the half the
- * hard handler asks to run. This port has no separate interrupt thread, so the
- * threaded half runs on the delivery path when the hard half returns
- * IRQ_WAKE_THREAD - see lkpi_pci_irq_trampoline(). */
+ * hard handler asks to run. The threaded half may sleep - that is the interface's
+ * contract for it - so it runs on the engine's workqueue and never on the
+ * delivery path, which is an interrupt: a vendored receive path that takes a lock
+ * there is refused by a thread-only lock (the AC 7260's sweep: CMSIS answered
+ * "resource" to a mutex acquire from interrupt context, the lock silently stayed
+ * unheld, and the imported code's own assert then parked the board). */
 struct lkpi_pci_irq_slot {
 	int		intid;
 	int		kind;
@@ -94,6 +97,7 @@ struct lkpi_pci_irq_slot {
 	irq_handler_t	thread_fn;
 	void		*dev;
 	bool		active;
+	struct work_struct	thread_work;
 };
 
 static struct lkpi_pci_irq_slot lkpi_pci_irq[LKPI_PCI_IRQ_MAX];
@@ -130,12 +134,45 @@ lkpi_pci_irq_alloc_slot(void)
 	return NULL;
 }
 
+/* the threaded half, on its own executor (a thread, so it may sleep) */
+static void
+lkpi_pci_irq_thread_work(struct work_struct *w)
+{
+	struct lkpi_pci_irq_slot *slot =
+	    container_of(w, struct lkpi_pci_irq_slot, thread_work);
+
+	if (slot->thread_fn != NULL)
+		(void)slot->thread_fn(slot->intid, slot->dev);
+}
+
+/*
+ * The threaded half's executor, created before the first vector is armed and
+ * kept for the engine's lifetime.
+ *
+ * It is deliberately NOT the shared system workqueue. The interface gives a
+ * threaded IRQ its own kthread (kernel/irq/manage.c), and a driver may schedule
+ * work that then blocks on a command whose completion arrives only through this
+ * threaded half. One example is the vendored iwlwifi's management-queue
+ * allocation: the wake schedules add_stream_wk (mvm/mac80211.c:950), that worker
+ * sends SCD_QUEUE_CFG synchronously (mvm/sta.c:1432, :1002) and waits for its
+ * response, and the response is reclaimed by the receive path the threaded half
+ * drives (pcie/gen1_2/rx.c:2104 -> the engine polls NAPI inline,
+ * linuxkpi_80211_helpers.c:523). On the single-threaded shared queue the worker
+ * blocks waiting on work the queue itself cannot run - the command times out and
+ * the driver force-fires an NMI
+ * (pcie/gen1_2/tx.c:2597 -> iwl_trans_pcie_sync_nmi -> iwl_force_nmi). A
+ * dedicated executor restores the interface's two independent contexts, which is
+ * the property the port needs - not a shared queue with more threads.
+ */
+static struct workqueue_struct *lkpi_pci_irq_wq;
+
 /* what the backend calls: it carries the slot, and the slot carries the handler
  * the caller registered (a vector with no handler yet is delivered and dropped).
- * When the hard half returns IRQ_WAKE_THREAD, the threaded half runs here, on the
- * delivery path: this port has no separate interrupt thread, so the two halves of
- * a threaded request share the delivery context (the interface's contract for the
- * threaded half - it may sleep - is the adapter's to honour). */
+ * When the hard half returns IRQ_WAKE_THREAD, the threaded half is queued to the
+ * engine's own IRQ executor: the delivery path is an interrupt, and the
+ * interface's threaded half is the half allowed to sleep and to take locks. (The
+ * previous spelling ran it inline on the delivery path; the vendored receive path
+ * is what found the difference.) */
 static void
 lkpi_pci_irq_trampoline(void *arg)
 {
@@ -146,8 +183,15 @@ lkpi_pci_irq_trampoline(void *arg)
 	if (slot->fn == NULL)
 		return;
 	ret = slot->fn(slot->intid, slot->dev);
-	if (ret == IRQ_WAKE_THREAD && slot->thread_fn != NULL)
-		(void)slot->thread_fn(slot->intid, slot->dev);
+	if (ret == IRQ_WAKE_THREAD && slot->thread_fn != NULL) {
+		/* A vector can only be armed after the executor exists (irq_setup
+		 * creates it), so the shared queue is a fallback that should never
+		 * be taken; running the half at all beats losing the interrupt. */
+		if (lkpi_pci_irq_wq != NULL)
+			(void)queue_work(lkpi_pci_irq_wq, &slot->thread_work);
+		else
+			schedule_work(&slot->thread_work);
+	}
 }
 
 /* record the threaded half of a request_irq() that has just been accepted */
@@ -168,6 +212,12 @@ lkpi_pci_irq_setup(struct pci_dev *pdev, int kind, int *irqn)
 
 	if (pdev == NULL || !pdev->be_present || irqn == NULL)
 		return -LKPI_PCIE_BE_ERR_NODEV;
+	/* the threaded half's own executor, before the first vector is armed */
+	if (lkpi_pci_irq_wq == NULL) {
+		lkpi_pci_irq_wq = lkpi_alloc_workqueue("lkpi-pci-irq", 0, 1);
+		if (lkpi_pci_irq_wq == NULL)
+			return -ENOMEM;
+	}
 	slot = lkpi_pci_irq_alloc_slot();
 	if (slot == NULL)
 		return -ENOSPC;
@@ -183,6 +233,8 @@ lkpi_pci_irq_setup(struct pci_dev *pdev, int kind, int *irqn)
 	slot->fn = NULL;
 	slot->thread_fn = NULL;
 	slot->dev = NULL;
+	/* the deferral must be usable before any delivery can queue it */
+	INIT_WORK(&slot->thread_work, lkpi_pci_irq_thread_work);
 	slot->active = true;
 	*irqn = intid;
 	return 0;
@@ -197,6 +249,9 @@ lkpi_pci_irq_clear(struct pci_dev *pdev, int kind, int irqn)
 	if (pdev != NULL && pdev->be_present)
 		lkpi_pcie_be_irq_clear(pdev->be, irqn);
 	if (slot != NULL) {
+		/* a queued or running threaded half finishes before the slot can
+		 * be handed to another device */
+		cancel_work_sync(&slot->thread_work);
 		slot->active = false;
 		slot->fn = NULL;
 		slot->thread_fn = NULL;
@@ -230,6 +285,7 @@ free_irq(unsigned int irq, void *dev_id)
 	(void)dev_id;
 	if (slot == NULL)
 		return;
+	cancel_work_sync(&slot->thread_work);
 	slot->fn = NULL;
 	slot->thread_fn = NULL;
 	slot->dev = NULL;
@@ -906,6 +962,20 @@ lkpi_pci_probe_all(void)
 /* device records                                                      */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The bus under every enumerated function. The interface's device model gives a
+ * device's bus a name, and Linux's PCI core is what supplies it: the name of
+ * pci_bus_type is "pci" (drivers/pci/pci-driver.c). One reader in the compiled
+ * set exists - the vendored firmware-error dump copies it into its
+ * human-readable field (third-party/iwlwifi/fw/dbg-old.c:849,
+ * fwrt->dev->bus->name) - and leaving the pointer unset made that read a wild
+ * dereference: the first board run that reached the dump took a translation
+ * fault on the address a NULL-derived pointer produces (far=0x180120).
+ */
+static struct bus_type lkpi_pci_bus_type = {
+	.name = "pci",
+};
+
 static void
 lkpi_pci_dev_build(unsigned int index, struct lkpi_pcie_be_dev *be,
     const struct lkpi_pcie_be_desc *desc)
@@ -927,6 +997,7 @@ lkpi_pci_dev_build(unsigned int index, struct lkpi_pcie_be_dev *be,
 	d->class = desc->class_code;
 	d->bus = &lkpi_pci_buses[index];
 	d->bus->number = desc->bus;
+	d->dev.bus = &lkpi_pci_bus_type;
 	d->devfn = (unsigned int)((desc->dev << 3) | desc->func);
 	for (i = 0; i < LKPI_PCIE_BE_MAX_BARS && i < PCI_STD_NUM_BARS; i++) {
 		d->resource[i].start = desc->bar[i].phys;

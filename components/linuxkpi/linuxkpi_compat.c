@@ -420,34 +420,147 @@ void kmem_cache_free(struct kmem_cache *s, void *objp)
 
 /*
  * [LNX] include/linux/gfp.h:302-307 and 342-346, include/linux/mm.h:3104 (the
- * declarations). On this port a "page" is the buffer itself: the interface's struct
- * page is an opaque handle whose fields no compiled caller reads, and every caller
- * only passes it to page_address() (to get the CPU address) or back to
- * __free_pages()/free_pages() (to release it). So alloc_pages() hands out a heap
- * block of PAGE_SIZE << order and returns its address as the page handle,
- * page_address() returns that same address, and the frees release it. The block's
- * header makes the release order-independent, so the order argument is not needed.
- * A caller that required real page alignment (a DMA mapping, say) is not served by
- * this and is the DMA face's concern, not this one's.
+ * declarations). On this port a "page" is a buffer whose address is the handle:
+ * the interface's struct page is opaque and every compiled caller only passes it
+ * to page_address() (the CPU address) or back to __free_pages()/free_pages().
+ *
+ * The alignment is not a convenience here, it is the contract's load-bearing
+ * part, and getting it wrong cost the AC 7260 a firmware ALIVE handshake: the
+ * receive path hands each "page" to the device through the single-queue
+ * descriptor form, which keeps the address shifted by eight bits
+ * (third-party/iwlwifi/pcie/gen1_2/rx.c:137-140), so a pointer whose low eight
+ * bits are not zero makes the device write to a different address than the one
+ * the driver later reads - and the driver read the heap's stale bytes instead
+ * of the notification ("frame on invalid queue - is on 0 and indicates 1",
+ * then a firmware ALIVE that never arrived). The heap hands out headers, so
+ * pages are carved here: the block is over-allocated by one page, the page
+ * starts at the next page boundary, and the block's own base is kept in the
+ * word before it for the release path.
+ *
+ * The record also carries the interface's reference count and the allocation
+ * order: a page is released when its last reference goes (put_page /
+ * __free_pages), and the vendored PCIe receive path leans on exactly that - one
+ * order-N block serves several receive buffers, each holding its own reference
+ * (third-party/iwlwifi/pcie/gen1_2/rx.c:380-410 and iwl-trans.h:252), and a
+ * buffer whose page is stolen for a socket-buffer fragment releases the
+ * receive queue's reference while the fragment's keeps the block alive until
+ * the fragment is freed.
+ *
+ * A caller that requires the kernel's other page property (an allocator that
+ * swaps, a struct page the kernel walks) is still not served by this, and is
+ * the DMA face's concern, not this one's.
  */
+struct lkpi_page_base {
+	uintptr_t	base;	/* the heap block the page was carved from */
+	uint32_t	refcnt;	/* the allocator's one plus one per get_page() */
+	uint32_t	order;	/* kept so put_page() can free the block it names */
+};
+
 struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
 {
 	size_t size = (size_t)PAGE_SIZE << order;
+	struct lkpi_page_base *hdr;
+	uint8_t *raw, *page;
+	uintptr_t aligned;
 
-	return (struct page *)lkpi_kmem_alloc(size, (int)gfp_mask,
-	    (gfp_mask & __GFP_ZERO) != 0);
+	raw = lkpi_kmem_alloc(size + PAGE_SIZE, (int)gfp_mask, false);
+	if (raw == NULL) {
+		/*
+		 * The vendored receive path reports the refusal but not the
+		 * request: its order-carrying line is debug-gated and its
+		 * always-on line is not (third-party/iwlwifi/pcie/gen1_2/
+		 * rx.c:394-403). Name the request once, so a refusal this port
+		 * causes is diagnosable from the serial log alone - and a size
+		 * of zero says the caller's order was garbage, which is the
+		 * other defect the same line exposes.
+		 */
+		static bool said;
+
+		if (!said) {
+			said = true;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi: alloc_pages(order=%u) refused, %u bytes\n",
+			    order, (unsigned)size);
+		}
+		return NULL;
+	}
+
+	aligned = ((uintptr_t)raw + sizeof(*hdr) + PAGE_SIZE - 1u) &
+	    ~(uintptr_t)(PAGE_SIZE - 1u);
+	hdr = (struct lkpi_page_base *)(aligned - sizeof(*hdr));
+	hdr->base = (uintptr_t)raw;
+	hdr->refcnt = 1;
+	hdr->order = order;
+	page = (uint8_t *)aligned;
+
+	if ((gfp_mask & __GFP_ZERO) != 0)
+		memset(page, 0, size);
+	return (struct page *)page;
+}
+
+/* [LNX] include/linux/mm.h: the take on a page about to be handed to another
+ * owner; the face's get_page() is this call. */
+void lkpi_page_get(struct page *page)
+{
+	struct lkpi_page_base *hdr;
+
+	if (page == NULL)
+		return;
+	hdr = (struct lkpi_page_base *)page - 1;
+	hdr->refcnt++;
+}
+
+/* [LNX] include/linux/mm.h: `put_page()` drops one reference and returns the
+ * block on the last. The interface reads the order back from its page record;
+ * this port's header kept it at allocation, so no argument is needed here
+ * either. A release below zero is named and refused rather than passed to the
+ * allocator - the header bytes sit in the block being freed, so the check is
+ * best-effort, and the heap's own guard is the backstop. */
+void put_page(struct page *page)
+{
+	struct lkpi_page_base *hdr;
+
+	if (page == NULL)
+		return;
+	hdr = (struct lkpi_page_base *)page - 1;
+	if (hdr->refcnt == 0) {
+		static bool said;
+
+		if (!said) {
+			said = true;
+			lkpi_printf(ULOG_INFO_LEVEL,
+			    "lkpi: release of a page with no references left refused (base=%p)\n",
+			    (void *)hdr->base);
+		}
+		return;
+	}
+	if (--hdr->refcnt != 0)
+		return;
+	lkpi_kmem_free((const void *)hdr->base);
 }
 
 void __free_pages(struct page *page, unsigned int order)
 {
-	(void)order;
-	lkpi_kmem_free(page);
+
+	(void)order;		/* the record carries its own; see put_page() */
+	put_page(page);
+}
+
+/*
+ * The skbuff pool's fragment release binds here (skbuff_pool.h): the page
+ * record and its reference count live in this file, so the binding is the real
+ * one wherever this allocator is linked, overriding the pool's weak default.
+ */
+void lkpi_spl_page_put(struct page *page)
+{
+
+	put_page(page);
 }
 
 void free_pages(unsigned long addr, unsigned int order)
 {
-	(void)order;
-	lkpi_kmem_free((const void *)(uintptr_t)addr);
+
+	__free_pages((struct page *)(uintptr_t)addr, order);
 }
 
 /* page_address() is the accessor's inline in include/linux/mm.h, not a body here:

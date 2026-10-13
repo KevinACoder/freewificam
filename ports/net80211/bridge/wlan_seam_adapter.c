@@ -56,7 +56,13 @@ static struct {
 	struct ieee80211_hw *hw;
 	struct ieee80211_vif *vif;
 	struct ieee80211_sta *sta;	/* the one peer of a STA image */
+	int sta_preauth;		/* the peer was registered when the
+					 * connection was prepared (before AUTH),
+					 * so it winds down as an unassociated
+					 * station, not through sta_remove */
 	uint8_t bssid_store[6];		/* the pre-assoc BSSID the vif points at */
+	uint32_t tuned_freq;		/* the channel the radio was last tuned to */
+	uint8_t tuned_hw_value;
 	int vif_added;
 	int installed;
 	unsigned int filter_calls;
@@ -124,6 +130,11 @@ seam_config(struct wlan_seam_drv *drv, uint32_t changed, uint32_t freq)
 	if (freq < 2412 || freq > 2472)
 		return -1;
 	hw_value = (uint8_t)((freq - 2407) / 5);
+	/* the last channel the bridge pointed the radio at: the connection's own
+	 * channel is programmed by the same op, and the channel context a
+	 * connection runs on is built from it at the AUTH entry (seam_bssid) */
+	adapter.tuned_freq = freq;
+	adapter.tuned_hw_value = hw_value;
 	return lkpi80211_drv_config_channel(adapter.hw, freq, hw_value,
 	    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20, 0);
 }
@@ -232,6 +243,10 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 
 	info = (struct ieee80211_tx_info *)skb->cb;
 	memset(info, 0, sizeof(*info));
+	/* the queue-selection byte: the bridge's frames come from a L2 world
+	 * with no per-socket priority, so the TID is the best-effort one - set
+	 * explicitly rather than left to whatever the pool slot held */
+	skb->priority = 0;
 	if (is_mgmt) {
 		/* management frames: the driver's rate-control key and the vif
 		 * are what its descriptor build reads (core.c:5467, :5290) */
@@ -252,7 +267,25 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 		info->control.rates[0].count = 1;
 	}
 	adapter.tx_calls++;
-	lkpi80211_drv_tx(adapter.hw, adapter.vif, adapter.sta, skb);
+	/*
+	 * Every 802.11 frame takes the interface's own transmit handoff, whose
+	 * selection mirrors ieee80211_get_txq: a station's management frames
+	 * ride its management queue, a station's data frames ride its per-TID
+	 * queue, and anything no queue owns rides .tx.  A Linux-family driver
+	 * may drop a frame in the .tx route (the AC 7260 drops station
+	 * management frames silently and refuses station data whose TID queue
+	 * was never allocated), which is why the selection cannot be skipped
+	 * for either.
+	 *
+	 * The TID a data frame's queue is chosen by comes off the socket
+	 * priority the same way mac80211 reads it (skb->priority masked to the
+	 * TID field); the bridge's frames arrive from a L2 world with no
+	 * per-socket priority, so the byte is zero unless the caller set one -
+	 * which still selects the station's queue, exactly what the EAPOL-Key
+	 * exchange needs (the AC 7260's driver refuses a station data frame
+	 * with no TID queue: "Invalid TXQ id", mvm/tx.c:1157).
+	 */
+	lkpi80211_tx(adapter.hw, adapter.vif, adapter.sta, skb);
 	/* the driver owns the skb from here (its completion path releases it
 	 * through the substitute's tx-status entry) */
 	return (int)len;
@@ -363,6 +396,12 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 		changed = BSS_CHANGED_ASSOC | BSS_CHANGED_BSSID |
 		    BSS_CHANGED_BASIC_RATES;
 		if (adapter.sta == NULL) {
+			/*
+			 * No prepared peer: a connection that never passed the
+			 * bridge's AUTH entry (or a caller that jumps straight to
+			 * the association).  Register it here, as this seam always
+			 * did; the ladder's AUTH -> ASSOC step below completes it.
+			 */
 			adapter.sta = lkpi80211_drv_sta_add(adapter.hw,
 			    adapter.vif, adapter.bssid_store, aid);
 		}
@@ -401,7 +440,22 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 			}
 			adapter.sta->deflink.supp_rates[0] = supp;
 			adapter.vif->bss_conf.basic_rates = basic;
+			/*
+			 * The association step of the station ladder, now that the
+			 * association actually happened.  It is separate from the
+			 * upload (which the AUTH entry performed) because the
+			 * interface runs the two at the two different moments - and
+			 * a driver acts on both: iwlwifi's station setup needs the
+			 * peer uploaded to transmit the authentication request, and
+			 * its association handler needs this transition to program
+			 * the association.
+			 */
+			(void)lkpi80211_drv_sta_assoc(adapter.hw, adapter.vif,
+			    adapter.sta, aid);
 		}
+		/* the peer is associated now (or was never registered): its
+		 * wind-down is the joined station's, not the pre-auth one's */
+		adapter.sta_preauth = 0;
 	} else {
 		adapter.vif->cfg.assoc = false;
 		adapter.vif->cfg.aid = 0;
@@ -413,6 +467,8 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 			    adapter.sta);
 			adapter.sta = NULL;
 		}
+		adapter.sta_preauth = 0;
+		lkpi80211_drv_chanctx_release(adapter.hw, adapter.vif);
 		/*
 		 * No BSS_CHANGED_BSSID on the leave: mac80211 does not push a
 		 * NULL BSSID through bss_info_changed, and the driver's
@@ -433,7 +489,8 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
  * programming point (core.c:4989).
  */
 static int
-seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6])
+seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
+    uint16_t beacon_int, uint8_t dtim_period)
 {
 
 	(void)drv;
@@ -441,9 +498,74 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6])
 		return -1;
 	if (bssid == NULL) {
 		adapter.vif->bss_conf.bssid = NULL;
-	} else {
-		memcpy(adapter.bssid_store, bssid, 6);
-		adapter.vif->bss_conf.bssid = adapter.bssid_store;
+		/*
+		 * The connection attempt ended before the association: the peer
+		 * comes off the driver, the way mac80211 destroys the AP's
+		 * station when the authentication fails.  A peer that reached
+		 * the association is wound down by the leave notification
+		 * instead (its ladder step is the joined station's).
+		 */
+		if (adapter.sta != NULL && adapter.sta_preauth) {
+			lkpi80211_drv_sta_free(adapter.hw, adapter.vif,
+			    adapter.sta);
+			adapter.sta = NULL;
+			adapter.sta_preauth = 0;
+		}
+		/* the channel context goes with the attempt (the interface
+		 * releases the channel when a connection ends without one) */
+		lkpi80211_drv_chanctx_release(adapter.hw, adapter.vif);
+		/*
+		 * No BSS_CHANGED_BSSID on the way out - the same contract the
+		 * leave path above documents: a driver's handler dereferences
+		 * the BSSID pointer to program its register, and this one is
+		 * NULL.  The register keeps its last value until the next join
+		 * reprograms it.
+		 */
+		return 0;
+	}
+	memcpy(adapter.bssid_store, bssid, 6);
+	adapter.vif->bss_conf.bssid = adapter.bssid_store;
+	/*
+	 * The AP's advertised timing, as the interface fills it while it prepares
+	 * the connection (ieee80211_prep_connection: the beacon interval from the
+	 * AP's beacon, the DTIM period defaulting to 1).  A driver reads both off
+	 * the vif before it will take a station - the AC 7260 refuses one whose
+	 * beacon interval is below its minimum, which is how the board's first
+	 * peer registration ended ("Beacon interval 0 for AP ... is too small"
+	 * then "sta add refused (-22)").
+	 */
+	adapter.vif->bss_conf.beacon_int = beacon_int;
+	adapter.vif->bss_conf.dtim_period = dtim_period != 0 ? dtim_period : 1;
+	/*
+	 * The channel context first: the interface reserves one when an
+	 * interface starts using a channel, before it uploads the peer's
+	 * station - and a driver refuses that upload without the binding (the
+	 * AC 7260's station state does exactly that).  The channel is the one
+	 * the bridge just tuned to, which for this transition is the target
+	 * AP's.
+	 */
+	if (adapter.tuned_freq != 0) {
+		int cr = lkpi80211_drv_chanctx_use(adapter.hw, adapter.vif,
+		    adapter.tuned_freq, adapter.tuned_hw_value,
+		    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20);
+
+		if (cr != 0)
+			return cr;
+	}
+	/*
+	 * The peer station, before the stack sends anything to it: this is the
+	 * interface's prepare-a-connection moment - mac80211 inserts and uploads
+	 * the AP's station before the authentication request leaves - and it is
+	 * what lets the transmit handoff find the station's management queue for
+	 * that request.  A driver that routes a station's management frames
+	 * through the queue (the AC 7260's does, and drops them in .tx
+	 * otherwise) needs the station here, not at the association.
+	 */
+	if (adapter.sta == NULL) {
+		adapter.sta = lkpi80211_drv_sta_add(adapter.hw, adapter.vif,
+		    bssid, 0);
+		if (adapter.sta != NULL)
+			adapter.sta_preauth = 1;
 	}
 	lkpi80211_drv_bss_changed(adapter.hw, adapter.vif,
 	    BSS_CHANGED_BSSID);
@@ -499,6 +621,7 @@ up_detach(struct ieee80211_hw *hw)
 	adapter.hw = NULL;
 	adapter.vif = NULL;
 	adapter.sta = NULL;
+	adapter.sta_preauth = 0;
 	adapter.vif_added = 0;
 }
 
