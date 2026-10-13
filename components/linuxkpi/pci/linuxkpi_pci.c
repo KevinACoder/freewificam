@@ -83,9 +83,12 @@ static struct lkpi_pci_stats lkpi_pci_stats;
 
 /* one delivered vector: the INTID the backend returned, the function it belongs
  * to, the handler the caller registered and (for a threaded request) the half the
- * hard handler asks to run. This port has no separate interrupt thread, so the
- * threaded half runs on the delivery path when the hard half returns
- * IRQ_WAKE_THREAD - see lkpi_pci_irq_trampoline(). */
+ * hard handler asks to run. The threaded half may sleep - that is the interface's
+ * contract for it - so it runs on the engine's workqueue and never on the
+ * delivery path, which is an interrupt: a vendored receive path that takes a lock
+ * there is refused by a thread-only lock (the AC 7260's sweep: CMSIS answered
+ * "resource" to a mutex acquire from interrupt context, the lock silently stayed
+ * unheld, and the imported code's own assert then parked the board). */
 struct lkpi_pci_irq_slot {
 	int		intid;
 	int		kind;
@@ -94,6 +97,7 @@ struct lkpi_pci_irq_slot {
 	irq_handler_t	thread_fn;
 	void		*dev;
 	bool		active;
+	struct work_struct	thread_work;
 };
 
 static struct lkpi_pci_irq_slot lkpi_pci_irq[LKPI_PCI_IRQ_MAX];
@@ -130,12 +134,24 @@ lkpi_pci_irq_alloc_slot(void)
 	return NULL;
 }
 
+/* the threaded half, on the engine's workqueue (a thread, so it may sleep) */
+static void
+lkpi_pci_irq_thread_work(struct work_struct *w)
+{
+	struct lkpi_pci_irq_slot *slot =
+	    container_of(w, struct lkpi_pci_irq_slot, thread_work);
+
+	if (slot->thread_fn != NULL)
+		(void)slot->thread_fn(slot->intid, slot->dev);
+}
+
 /* what the backend calls: it carries the slot, and the slot carries the handler
  * the caller registered (a vector with no handler yet is delivered and dropped).
- * When the hard half returns IRQ_WAKE_THREAD, the threaded half runs here, on the
- * delivery path: this port has no separate interrupt thread, so the two halves of
- * a threaded request share the delivery context (the interface's contract for the
- * threaded half - it may sleep - is the adapter's to honour). */
+ * When the hard half returns IRQ_WAKE_THREAD, the threaded half is queued to the
+ * workqueue: the delivery path is an interrupt, and the interface's threaded half
+ * is the half allowed to sleep and to take locks. (The previous spelling ran it
+ * inline on the delivery path; the vendored receive path is what found the
+ * difference.) */
 static void
 lkpi_pci_irq_trampoline(void *arg)
 {
@@ -147,7 +163,7 @@ lkpi_pci_irq_trampoline(void *arg)
 		return;
 	ret = slot->fn(slot->intid, slot->dev);
 	if (ret == IRQ_WAKE_THREAD && slot->thread_fn != NULL)
-		(void)slot->thread_fn(slot->intid, slot->dev);
+		schedule_work(&slot->thread_work);
 }
 
 /* record the threaded half of a request_irq() that has just been accepted */
@@ -183,6 +199,8 @@ lkpi_pci_irq_setup(struct pci_dev *pdev, int kind, int *irqn)
 	slot->fn = NULL;
 	slot->thread_fn = NULL;
 	slot->dev = NULL;
+	/* the deferral must be usable before any delivery can queue it */
+	INIT_WORK(&slot->thread_work, lkpi_pci_irq_thread_work);
 	slot->active = true;
 	*irqn = intid;
 	return 0;
@@ -197,6 +215,9 @@ lkpi_pci_irq_clear(struct pci_dev *pdev, int kind, int irqn)
 	if (pdev != NULL && pdev->be_present)
 		lkpi_pcie_be_irq_clear(pdev->be, irqn);
 	if (slot != NULL) {
+		/* a queued or running threaded half finishes before the slot can
+		 * be handed to another device */
+		cancel_work_sync(&slot->thread_work);
 		slot->active = false;
 		slot->fn = NULL;
 		slot->thread_fn = NULL;
@@ -230,6 +251,7 @@ free_irq(unsigned int irq, void *dev_id)
 	(void)dev_id;
 	if (slot == NULL)
 		return;
+	cancel_work_sync(&slot->thread_work);
 	slot->fn = NULL;
 	slot->thread_fn = NULL;
 	slot->dev = NULL;
