@@ -52,21 +52,25 @@ CASES = [
 #:                 (components/linuxkpi/linuxkpi_80211.c), and the case's own
 #:                 "probe done" line
 #:                 (tests/board/threadx-rk3568-iwlwifi/tests/iwlwifi_probe.c).
-#:                 The "01:00.0" between the sink's "lkpi: " prefix and the
+#:                 The "03:00.0" between the sink's "lkpi: " prefix and the
 #:                 driver's message is the linuxkpi device name the PCI engine
-#:                 sets for the function (linuxkpi_pci.c: the BDF, the single
-#:                 downstream function the root complex enumerates), i.e. the
+#:                 sets for the function (linuxkpi_pci.c: the BDF), i.e. the
 #:                 same dev_info path a Linux printk would carry; it is pinned
 #:                 literally, like the sibling suites pin their device tag, so
 #:                 the log-anchor family stays specific instead of promoting
-#:                 every lkpi line to the never-filtered set.
+#:                 every lkpi line to the never-filtered set.  On this bench
+#:                 both root complexes enumerate: the NVMe function on bus 1
+#:                 (01:00.0) and the AC 7260 on bus 3 (03:00.0) - the pinned
+#:                 BDF is what keeps the anchor on the wireless function
+#:                 (board evidence: the enumeration and the driver's own lines
+#:                 both carry 03:00.0).
 #:   iwlwifi-scan  the case's scan lines (start / one row per candidate / done)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "iwlwifi-probe": [
         r"pcie: 'iwlwifi' claimed 8086:08b1",
-        r"lkpi: 01:00.0: Detected Intel\(R\) Dual Band Wireless (AC|N) 7260",
-        r"lkpi: 01:00.0: loaded firmware version .* op_mode iwlmvm",
+        r"lkpi: 03:00.0: Detected Intel\(R\) Dual Band Wireless (AC|N) 7260",
+        r"lkpi: 03:00.0: loaded firmware version .* op_mode iwlmvm",
         r"lkpi: lkpi80211: hw registered",
         r"wlan: probe done attached=1",
     ],
@@ -104,8 +108,8 @@ BASE_TRANSCRIPT = (
     + "[  10.010] CASE threadx-rk3568-iwlwifi/shell-up PASS\r\n"
     "[  10.020] pcie: bus up, 1 device(s)\r\n"
     "[  10.030] pcie: 'iwlwifi' claimed 8086:08b1\r\n"
-    "[  10.040] lkpi: 01:00.0: Detected Intel(R) Dual Band Wireless AC 7260\r\n"
-    "[  11.000] lkpi: 01:00.0: loaded firmware version 17.0.0.0 op_mode "
+    "[  10.040] lkpi: 03:00.0: Detected Intel(R) Dual Band Wireless AC 7260\r\n"
+    "[  11.000] lkpi: 03:00.0: loaded firmware version 17.0.0.0 op_mode "
     "iwlmvm\r\n"
     "[  11.100] lkpi: lkpi80211: hw registered\r\n"
     "[  11.200] iwlwifi: pci bus up, 1 device(s)\r\n"
@@ -157,9 +161,9 @@ MUTATIONS = [
     ("claim anchor dropped", BASE_TRANSCRIPT.replace(
         "pcie: 'iwlwifi' claimed 8086:08b1\r\n", ""), 1),
     ("chip-identification anchor dropped", BASE_TRANSCRIPT.replace(
-        "lkpi: 01:00.0: Detected Intel(R) Dual Band Wireless AC 7260\r\n", ""), 1),
+        "lkpi: 03:00.0: Detected Intel(R) Dual Band Wireless AC 7260\r\n", ""), 1),
     ("firmware anchor dropped", BASE_TRANSCRIPT.replace(
-        "lkpi: 01:00.0: loaded firmware version 17.0.0.0 op_mode iwlmvm\r\n",
+        "lkpi: 03:00.0: loaded firmware version 17.0.0.0 op_mode iwlmvm\r\n",
         ""), 1),
     ("hw registered anchor dropped", BASE_TRANSCRIPT.replace(
         "lkpi: lkpi80211: hw registered\r\n", ""), 1),
