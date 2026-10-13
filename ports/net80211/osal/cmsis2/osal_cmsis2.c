@@ -677,9 +677,8 @@ osal_emergency(const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	vfprintf(stdout, fmt, ap);
+	(void)wlan_osal_vlog(1, fmt, ap);
 	va_end(ap);
-	fputc('\n', stdout);
 }
 
 void panic(const char *fmt, ...)
@@ -687,9 +686,8 @@ void panic(const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	vfprintf(stdout, fmt, ap);
+	(void)wlan_osal_vlog(1, fmt, ap);
 	va_end(ap);
-	fputs("\nnet80211 port panic: parked\n", stdout);
 	/*
 	 * The caller's chain, so a parked board still names where the check
 	 * fired. The imported code's assertions (the node table's lock, the
