@@ -53,6 +53,10 @@ void	wlan_wpa_vendor_events_arm(void);
 
 #define WLAN_DHCP_WAIT_MS	45000U
 #define WLAN_PING_WAIT_MS	9000U
+/* the host-measurement window held after the iperf server is up: long enough
+ * for the host's 15 s iperf2 client plus two flood-ping rounds (the sibling
+ * line's tool), short enough to stay inside the suite's own timeout */
+#define WLAN_MEASURE_WINDOW_MS	30000U
 
 static struct netif g_netif;
 
@@ -198,6 +202,33 @@ void iwlwifi_dataplane_chain(void)
 	}
 	UNLOCK_TCPIP_CORE();
 	LOG_INFO("wlan: iperf server ready port=%u\n", LWIPERF_TCP_PORT_DEFAULT);
+
+	/*
+	 * The host-measurement window.  The runner powers the board off the
+	 * moment the suite prints its result line, so a host client started on
+	 * "server ready" would be cut off mid-transfer and its number would be
+	 * a truncation artifact, not a throughput (measured on the sibling SDIO
+	 * line: a 2.48 Mbit/s "result" that was really the first two seconds of
+	 * a 10.6 Mbit/s link).  The case therefore holds a bounded window after
+	 * the server is up: the open marker is the host driver's start signal
+	 * (tools/host-flood-measure.sh), the tcpip thread keeps serving while
+	 * this thread sleeps, and the suite's result line waits for the window
+	 * to close.  The numbers inside are recorded, not judged.
+	 */
+	LOG_ANCHOR("wlan: flood host window open peer=%s secs=%u\n",
+	    "gw", (unsigned)(WLAN_MEASURE_WINDOW_MS / 1000U));
+	for (waited = 0; waited < WLAN_MEASURE_WINDOW_MS; waited += 100U) {
+		osDelay(100U);
+	}
+	/* the window's own link accounting, recorded for the round's evidence */
+	{
+		struct wlan_bridge_counters c;
+
+		wlan_bridge_stats(&c);
+		LOG_ANCHOR("wlan: flood host window close data_tx=%u rx=%u "
+		    "rx_data=%u txc=%u\n", c.data_tx, c.rx_frames, c.rx_data,
+		    c.tx_completes);
+	}
 }
 
 BOARD_TEST("iwlwifi-dataplane", iwlwifi_dataplane_chain);
