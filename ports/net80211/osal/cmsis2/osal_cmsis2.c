@@ -610,21 +610,18 @@ void panic(const char *fmt, ...)
 	 * The caller's chain, so a parked board still names where the check
 	 * fired. The imported code's assertions (the node table's lock, the
 	 * channel checks) reach here from among hundreds of call sites, and the
-	 * chain exists only on the board; the addresses resolve offline against
-	 * the image's own ELF. Four frames is what the calling convention
-	 * guarantees on this target.
+	 * chain exists only on the board; the raw window resolves offline
+	 * against the image's own ELF, the same way the exception handler's
+	 * dump does.
 	 */
 	{
-		unsigned long ra;
+		unsigned long *sp = (unsigned long *)__builtin_frame_address(0);
+		unsigned int i;
 
-		ra = (unsigned long)__builtin_return_address(0);
-		board_log_emergency("net80211 panic ra0=0x%08lx", ra);
-		ra = (unsigned long)__builtin_return_address(1);
-		board_log_emergency("net80211 panic ra1=0x%08lx", ra);
-		ra = (unsigned long)__builtin_return_address(2);
-		board_log_emergency("net80211 panic ra2=0x%08lx", ra);
-		ra = (unsigned long)__builtin_return_address(3);
-		board_log_emergency("net80211 panic ra3=0x%08lx", ra);
+		for (i = 0; i < 16; i++) {
+			board_log_emergency("net80211 panic stack+%02x=%08lx",
+			    i * 8u, (unsigned long)sp[i]);
+		}
 	}
 	board_log_emergency("net80211 port panic: parked; power-cycle to recover");
 	for (;;)

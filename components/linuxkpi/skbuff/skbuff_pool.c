@@ -823,8 +823,12 @@ unsigned char *lkpi_skb_put(struct sk_buff *skb, unsigned int len)
 		goto out;
 	if (len > skb->end - skb->tail) {
 		geo_bad++;
-		lkpi_spl_log("put past the tail refused (len=%u tailroom=%u)",
-		    len, skb->end - skb->tail);
+		/* the geometry and the caller: a refusal is a contract mismatch
+		 * someone has to name, and the put site is not in this file */
+		lkpi_spl_log("put past the tail refused (len=%u tailroom=%u "
+		    "head=%p end=%u tail=%u ra=%p)", len, skb->end - skb->tail,
+		    (void *)skb->head, skb->end, skb->tail,
+		    __builtin_return_address(0));
 		goto out;
 	}
 	p = skb->head + skb->tail;	/* the old tail, Linux semantics */
