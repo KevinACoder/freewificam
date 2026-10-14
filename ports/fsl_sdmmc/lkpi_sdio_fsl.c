@@ -51,6 +51,10 @@
 
 #include "sdmmc_port.h"
 
+#ifdef CONFIG_LKPI_CENSUS
+#include "lkpi_census.h"
+#endif
+
 /* The extended transfer's byte count is a nine-bit field, so the largest single
  * byte-mode transfer the host accepts is 511 bytes - and it must also be a
  * multiple of four for the engine, which makes 508 the useful chunk. */
@@ -98,6 +102,50 @@ static int sdmmc_fsl_err(status_t st)
 		return -LKPI_SDIO_BE_ERR_FAIL;
 	}
 }
+
+/* --- census --------------------------------------------------------------- */
+
+/*
+ * The census this backend contributes: what the engine's requests became at the
+ * host's own limits (chunk counts, block sizes, bytes per direction) and how
+ * long a request took end to end. The split counts are the splitter's arithmetic
+ * made visible: a byte-mode request larger than the host's chunk ceiling shows
+ * up as several ops, and any trailing direct transfer shows up in tail_ops at
+ * one per byte - the host's word-length rule leaving the remainder.
+ */
+#ifdef CONFIG_LKPI_CENSUS
+struct lkpi_fsl_census {
+	uint32_t	ext_calls;
+	uint32_t	blk_ops;
+	uint32_t	byt_ops;
+	uint32_t	byt_tail_ops;
+	uint32_t	errs;
+	uint64_t	rx_bytes;
+	uint64_t	tx_bytes;
+	struct lkpi_census_histo	lat;
+};
+
+static struct lkpi_fsl_census lkpi_fsl_census_state;
+
+void
+lkpi_fsl_census_reset(void)
+{
+
+	(void)memset(&lkpi_fsl_census_state, 0, sizeof(lkpi_fsl_census_state));
+}
+
+void
+lkpi_fsl_census_print(void)
+{
+	struct lkpi_fsl_census *c = &lkpi_fsl_census_state;
+
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A fsl ext=%u blk=%u byt=%u tail=%u errs=%u rx_bytes=%llu tx_bytes=%llu\n",
+	    c->ext_calls, c->blk_ops, c->byt_ops, c->byt_tail_ops, c->errs,
+	    c->rx_bytes, c->tx_bytes);
+	lkpi_census_histo_print("perf census: A fsl_lat", &c->lat);
+}
+#endif	/* CONFIG_LKPI_CENSUS */
 
 /* --- card bring-up -------------------------------------------------------- */
 
@@ -220,6 +268,13 @@ static int sdmmc_fsl_byte_transfer(sdio_card_t *card, unsigned int func,
 
 		done += n;
 		full -= n;
+#ifdef CONFIG_LKPI_CENSUS
+		lkpi_fsl_census_state.byt_ops++;
+		if (write)
+			lkpi_fsl_census_state.tx_bytes += n;
+		else
+			lkpi_fsl_census_state.rx_bytes += n;
+#endif
 		if (incr) {
 			addr += n;
 		}
@@ -241,6 +296,13 @@ static int sdmmc_fsl_byte_transfer(sdio_card_t *card, unsigned int func,
 		if (st != kStatus_Success) {
 			return sdmmc_fsl_err(st);
 		}
+#ifdef CONFIG_LKPI_CENSUS
+		lkpi_fsl_census_state.byt_tail_ops++;
+		if (write)
+			lkpi_fsl_census_state.tx_bytes += 1U;
+		else
+			lkpi_fsl_census_state.rx_bytes += 1U;
+#endif
 
 		if (incr) {
 			addr += 1U;
@@ -289,6 +351,16 @@ static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 					   blocks, flags);
 	}
 
+#ifdef CONFIG_LKPI_CENSUS
+	if (st == kStatus_Success) {
+		lkpi_fsl_census_state.blk_ops++;
+		if (write)
+			lkpi_fsl_census_state.tx_bytes += (uint64_t)blksz * blocks;
+		else
+			lkpi_fsl_census_state.rx_bytes += (uint64_t)blksz * blocks;
+	}
+#endif
+
 	return sdmmc_fsl_err(st);
 }
 
@@ -298,6 +370,10 @@ static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int 
 	sdio_card_t *card = sdmmc_card();
 	bool write = (flags & LKPI_SDIO_BE_F_WRITE) != 0U;
 	bool incr = (flags & LKPI_SDIO_BE_F_INCR) != 0U;
+	int ret;
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0 = lkpi_census_now_ns();
+#endif
 
 	(void)ctx;
 
@@ -310,10 +386,19 @@ static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int 
 	}
 
 	if ((flags & LKPI_SDIO_BE_F_BLOCK) != 0U) {
-		return sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
+		ret = sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
+	} else {
+		ret = sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);
 	}
 
-	return sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_fsl_census_state.ext_calls++;
+	if (ret != 0)
+		lkpi_fsl_census_state.errs++;
+	lkpi_census_histo_add(&lkpi_fsl_census_state.lat, lkpi_census_now_ns() - t0);
+#endif
+
+	return ret;
 }
 
 /* --- block size and interrupts -------------------------------------------- */

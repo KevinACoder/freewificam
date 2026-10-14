@@ -48,6 +48,10 @@
 #include "lkpi_sdio_backend.h"
 #include "linuxkpi_sdio.h"
 
+#ifdef CONFIG_LKPI_CENSUS
+#include "lkpi_census.h"
+#endif
+
 /* ------------------------------------------------------------------ */
 /* constants and state                                                 */
 /* ------------------------------------------------------------------ */
@@ -116,6 +120,267 @@ static struct lkpi_sdio_card lkpi_sdio_card_state;
 static struct lkpi_sdio_stats lkpi_sdio_stats;
 static bool lkpi_sdio_started;
 
+/*
+ * The census this engine contributes: the physical transfers the splitter
+ * issued, the claim, and the pump's own cadence. The gap histograms are the
+ * discrimination a throughput round turns on - batches with clear space between
+ * them are a cadence limit, evenly spaced transactions are a per-op cost limit.
+ * The helpers below are no-ops when the census is off, which keeps every call
+ * site unconditional.
+ */
+#ifdef CONFIG_LKPI_CENSUS
+struct lkpi_sdio_census {
+	/* the direct transfers */
+	uint32_t	cmd52;
+	struct lkpi_census_histo	cmd52_lat;
+	/* the extended transfers, per direction */
+	uint32_t	cmd53_r;
+	uint32_t	cmd53_r_blk;
+	uint32_t	cmd53_r_byt;
+	uint64_t	cmd53_r_bytes;
+	struct lkpi_census_histo	cmd53_r_lat;
+	struct lkpi_census_histo	cmd53_r_sz;
+	struct lkpi_census_histo	cmd53_r_gap;
+	uint32_t	cmd53_w;
+	uint32_t	cmd53_w_blk;
+	uint32_t	cmd53_w_byt;
+	uint64_t	cmd53_w_bytes;
+	struct lkpi_census_histo	cmd53_w_lat;
+	struct lkpi_census_histo	cmd53_w_sz;
+	struct lkpi_census_histo	cmd53_w_gap;
+	uint64_t	last_r_ns;
+	uint64_t	last_w_ns;
+	/* the driver-facing claim */
+	uint32_t	claim_calls;
+	uint64_t	claim_held_ns;
+	struct lkpi_census_histo	claim_wait;
+	struct lkpi_census_histo	claim_hold;
+	/* the pump */
+	uint32_t	wake_kick;
+	uint32_t	wake_timeout;
+	uint32_t	cycles;
+	uint32_t	cycles_busy;
+	uint32_t	cycles_empty;
+	uint32_t	cycles_err;
+	struct lkpi_census_histo	cyc_term;
+	struct lkpi_census_histo	cyc_claim_wait;
+	struct lkpi_census_histo	cyc_handler;
+};
+
+static struct lkpi_sdio_census lkpi_sdio_census_state;
+
+static uint64_t
+lkpi_sdio_census_now(void)
+{
+
+	return lkpi_census_now_ns();
+}
+
+static void
+lkpi_sdio_census_note_direct(uint64_t t0, uint64_t t1)
+{
+
+	lkpi_sdio_census_state.cmd52++;
+	lkpi_census_histo_add(&lkpi_sdio_census_state.cmd52_lat, t1 - t0);
+}
+
+static void
+lkpi_sdio_census_note_ext(bool write, bool block, unsigned int bytes,
+    uint64_t t0, uint64_t t1)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+	uint64_t *last = write ? &c->last_w_ns : &c->last_r_ns;
+
+	if (*last != 0u)
+		lkpi_census_histo_add(write ? &c->cmd53_w_gap : &c->cmd53_r_gap,
+		    t0 - *last);
+	*last = t1;
+	if (write) {
+		c->cmd53_w++;
+		if (block)
+			c->cmd53_w_blk++;
+		else
+			c->cmd53_w_byt++;
+		c->cmd53_w_bytes += bytes;
+		lkpi_census_histo_add(&c->cmd53_w_lat, t1 - t0);
+		lkpi_census_histo_add(&c->cmd53_w_sz, bytes);
+	} else {
+		c->cmd53_r++;
+		if (block)
+			c->cmd53_r_blk++;
+		else
+			c->cmd53_r_byt++;
+		c->cmd53_r_bytes += bytes;
+		lkpi_census_histo_add(&c->cmd53_r_lat, t1 - t0);
+		lkpi_census_histo_add(&c->cmd53_r_sz, bytes);
+	}
+}
+
+static void
+lkpi_sdio_census_note_claim_wait(uint64_t t0, uint64_t t1)
+{
+
+	lkpi_sdio_census_state.claim_calls++;
+	lkpi_census_histo_add(&lkpi_sdio_census_state.claim_wait, t1 - t0);
+}
+
+static void
+lkpi_sdio_census_note_claim_hold(uint64_t t1)
+{
+
+	lkpi_sdio_census_state.claim_held_ns = t1;
+}
+
+static void
+lkpi_sdio_census_note_claim_release(uint64_t t1)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+
+	if (c->claim_held_ns != 0u) {
+		lkpi_census_histo_add(&c->claim_hold, t1 - c->claim_held_ns);
+		c->claim_held_ns = 0u;
+	}
+}
+
+static void
+lkpi_sdio_census_note_wake(bool kicked)
+{
+
+	if (kicked)
+		lkpi_sdio_census_state.wake_kick++;
+	else
+		lkpi_sdio_census_state.wake_timeout++;
+}
+
+static void
+lkpi_sdio_census_note_cycle(uint64_t t0, uint64_t t1, uint64_t t2, bool busy,
+    bool err)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+
+	c->cycles++;
+	if (err)
+		c->cycles_err++;
+	else if (busy)
+		c->cycles_busy++;
+	else
+		c->cycles_empty++;
+	lkpi_census_histo_add(&c->cyc_term, t2 - t0);
+	lkpi_census_histo_add(&c->cyc_claim_wait, t1 - t0);
+	lkpi_census_histo_add(&c->cyc_handler, t2 - t1);
+}
+
+void
+lkpi_sdio_census_reset(void)
+{
+
+	(void)memset(&lkpi_sdio_census_state, 0, sizeof(lkpi_sdio_census_state));
+}
+
+void
+lkpi_sdio_census_print(void)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: A cmd52 n=%u\n", c->cmd52);
+	lkpi_census_histo_print("perf census: A cmd52_lat", &c->cmd52_lat);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A cmd53rx n=%u blk=%u byt=%u bytes=%llu\n",
+	    c->cmd53_r, c->cmd53_r_blk, c->cmd53_r_byt, c->cmd53_r_bytes);
+	lkpi_census_histo_print("perf census: A cmd53rx_lat", &c->cmd53_r_lat);
+	lkpi_census_histo_print("perf census: A cmd53rx_sz", &c->cmd53_r_sz);
+	lkpi_census_histo_print("perf census: A cmd53rx_gap", &c->cmd53_r_gap);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A cmd53tx n=%u blk=%u byt=%u bytes=%llu\n",
+	    c->cmd53_w, c->cmd53_w_blk, c->cmd53_w_byt, c->cmd53_w_bytes);
+	lkpi_census_histo_print("perf census: A cmd53tx_lat", &c->cmd53_w_lat);
+	lkpi_census_histo_print("perf census: A cmd53tx_sz", &c->cmd53_w_sz);
+	lkpi_census_histo_print("perf census: A cmd53tx_gap", &c->cmd53_w_gap);
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: A claim n=%u\n",
+	    c->claim_calls);
+	lkpi_census_histo_print("perf census: A claim_wait", &c->claim_wait);
+	lkpi_census_histo_print("perf census: A claim_hold", &c->claim_hold);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: D pump cycles=%u kick=%u timeout=%u busy=%u empty=%u err=%u\n",
+	    c->cycles, c->wake_kick, c->wake_timeout, c->cycles_busy,
+	    c->cycles_empty, c->cycles_err);
+	lkpi_census_histo_print("perf census: D pump_cyc", &c->cyc_term);
+	lkpi_census_histo_print("perf census: D pump_wait", &c->cyc_claim_wait);
+	lkpi_census_histo_print("perf census: D pump_handler", &c->cyc_handler);
+}
+
+#else	/* !CONFIG_LKPI_CENSUS */
+
+static uint64_t
+lkpi_sdio_census_now(void)
+{
+
+	return 0u;
+}
+
+static void
+lkpi_sdio_census_note_direct(uint64_t t0, uint64_t t1)
+{
+
+	(void)t0;
+	(void)t1;
+}
+
+static void
+lkpi_sdio_census_note_ext(bool write, bool block, unsigned int bytes,
+    uint64_t t0, uint64_t t1)
+{
+
+	(void)write;
+	(void)block;
+	(void)bytes;
+	(void)t0;
+	(void)t1;
+}
+
+static void
+lkpi_sdio_census_note_claim_wait(uint64_t t0, uint64_t t1)
+{
+
+	(void)t0;
+	(void)t1;
+}
+
+static void
+lkpi_sdio_census_note_claim_hold(uint64_t t1)
+{
+
+	(void)t1;
+}
+
+static void
+lkpi_sdio_census_note_claim_release(uint64_t t1)
+{
+
+	(void)t1;
+}
+
+static void
+lkpi_sdio_census_note_wake(bool kicked)
+{
+
+	(void)kicked;
+}
+
+static void
+lkpi_sdio_census_note_cycle(uint64_t t0, uint64_t t1, uint64_t t2, bool busy,
+    bool err)
+{
+
+	(void)t0;
+	(void)t1;
+	(void)t2;
+	(void)busy;
+	(void)err;
+}
+
+#endif	/* CONFIG_LKPI_CENSUS */
+
 static struct sdio_driver *lkpi_sdio_drivers[LKPI_SDIO_DRIVERS_MAX];
 static unsigned int lkpi_sdio_driver_count;
 
@@ -168,10 +433,14 @@ void
 sdio_claim_host(struct sdio_func *func)
 {
 	struct lkpi_sdio_card *c = lkpi_sdio_live();
+	uint64_t t0;
 
 	if (func == NULL || c == NULL || c->claim == NULL)
 		return;
+	t0 = lkpi_sdio_census_now();
 	(void)osMutexAcquire(c->claim, osWaitForever);
+	lkpi_sdio_census_note_claim_wait(t0, lkpi_sdio_census_now());
+	lkpi_sdio_census_note_claim_hold(lkpi_sdio_census_now());
 	c->claim_owner = osThreadGetId();
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
@@ -187,6 +456,7 @@ sdio_release_host(struct sdio_func *func)
 	c->host.claimed = false;
 	c->claim_owner = NULL;
 	lkpi_sdio_stats.releases++;
+	lkpi_sdio_census_note_claim_release(lkpi_sdio_census_now());
 	(void)osMutexRelease(c->claim);
 }
 
@@ -206,8 +476,11 @@ static int
 lkpi_sdio_direct(unsigned int func, unsigned int addr, bool write, u8 *value)
 {
 	int st;
+	uint64_t t0;
 
+	t0 = lkpi_sdio_census_now();
 	st = lkpi_sdio_be_io_direct(func, addr, write, value);
+	lkpi_sdio_census_note_direct(t0, lkpi_sdio_census_now());
 	lkpi_sdio_stats.io_direct++;
 	if (st != 0)
 		lkpi_sdio_stats.errors++;
@@ -336,6 +609,7 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 	unsigned int remainder = size;
 	unsigned int max_blocks;
 	unsigned int base;
+	uint64_t t0;
 
 	if (func == NULL || c == NULL)
 		return -ENODEV;
@@ -363,8 +637,11 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 			if (blocks > max_blocks)
 				blocks = max_blocks;
 			bytes = blocks * func->cur_blksize;
+			t0 = lkpi_sdio_census_now();
 			st = lkpi_sdio_be_io_extended(func->num, addr, buf, blocks,
 			    base | LKPI_SDIO_BE_F_BLOCK);
+			lkpi_sdio_census_note_ext(write, true, bytes, t0,
+			    lkpi_sdio_census_now());
 			lkpi_sdio_stats.io_extended++;
 			if (st != 0) {
 				lkpi_sdio_stats.errors++;
@@ -383,7 +660,10 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 
 		if (n > remainder)
 			n = remainder;
+		t0 = lkpi_sdio_census_now();
 		st = lkpi_sdio_be_io_extended(func->num, addr, buf, n, base);
+		lkpi_sdio_census_note_ext(write, false, n, t0,
+		    lkpi_sdio_census_now());
 		lkpi_sdio_stats.io_extended++;
 		if (st != 0) {
 			lkpi_sdio_stats.errors++;
@@ -708,19 +988,25 @@ lkpi_sdio_pump_cycle(void)
 	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
 	u8 pending = 0;
 	unsigned int i;
+	uint64_t t0, t1, t2;
 
+	t0 = lkpi_sdio_census_now();
 	(void)osMutexAcquire(c->claim, osWaitForever);
+	t1 = lkpi_sdio_census_now();
 	c->claim_owner = osThreadGetId();
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
 
 	lkpi_sdio_stats.pump_polls++;
 	if (lkpi_sdio_be_irq_pending(&pending) == 0) {
+		bool busy = false;
+
 		for (i = 1u; i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; i++) {
 			if ((pending & (1u << i)) == 0)
 				continue;
 			if (c->func[i].irq_handler != NULL) {
 				lkpi_sdio_stats.callbacks++;
+				busy = true;
 				c->func[i].irq_handler(&c->func[i]);
 			} else {
 				lkpi_printf(ULOG_WARNING_LEVEL,
@@ -728,8 +1014,12 @@ lkpi_sdio_pump_cycle(void)
 				    i);
 			}
 		}
+		t2 = lkpi_sdio_census_now();
+		lkpi_sdio_census_note_cycle(t0, t1, t2, busy, false);
 	} else {
 		lkpi_sdio_stats.errors++;
+		t2 = lkpi_sdio_census_now();
+		lkpi_sdio_census_note_cycle(t0, t1, t2, false, true);
 	}
 
 	c->host.claimed = false;
@@ -748,6 +1038,7 @@ lkpi_sdio_pump_entry(void *arg)
 
 		requested = osSemaphoreAcquire(lkpi_sdio_card_state.pump_req,
 		    LKPI_SDIO_PUMP_IDLE_MS) == osOK;
+		lkpi_sdio_census_note_wake(requested);
 		if (lkpi_sdio_has_handler())
 			lkpi_sdio_pump_cycle();
 		if (requested)

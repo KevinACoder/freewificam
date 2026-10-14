@@ -108,4 +108,30 @@ bool dwc_mmc_card_present(const struct dwc_mmc *hc);
  * return when it completed (DWC_MMC_OK) or why it did not. */
 int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd);
 
+#ifdef CONFIG_LKPI_CENSUS
+/* The controller's census: transfers and bytes by direction, plus the polled
+ * waits' iteration counts and wall time - the number that says how much of a
+ * transfer's cost sat inside this controller's own wait loops. Plain counters;
+ * the suite's snapshot command reads them and prints. */
+struct dwc_mmc_census {
+	uint32_t	transfers;	/* every dwc_mmc_transfer call */
+	uint32_t	with_data;	/* transfers that carried a data stage */
+	uint32_t	errors;		/* non-OK outcomes */
+	uint64_t	rx_bytes;
+	uint64_t	tx_bytes;
+	uint32_t	cmd_polls;	/* poll iterations of the CDONE wait */
+	uint64_t	cmd_wait_ns;
+	uint64_t	cmd_wait_max_ns;
+	uint32_t	data_polls;	/* poll iterations of the DTO wait */
+	uint64_t	data_wait_ns;
+	uint64_t	data_wait_max_ns;
+	uint32_t	idmac_polls;	/* poll iterations of the IDMAC drain wait */
+	uint64_t	idmac_wait_ns;
+	uint64_t	idmac_wait_max_ns;
+};
+
+void dwc_mmc_census_get(struct dwc_mmc_census *out);
+void dwc_mmc_census_reset(void);
+#endif	/* CONFIG_LKPI_CENSUS */
+
 #endif /* FREEWIFICAM_DWC_MMC_H */

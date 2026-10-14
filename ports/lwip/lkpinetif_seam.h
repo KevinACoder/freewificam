@@ -60,7 +60,9 @@ int	lkpinetif_deliver(const uint8_t *frame, size_t len);
 /* --- diagnostics ---------------------------------------------------------- */
 
 /* Loss counters, so a receive loss localizes to the interface, the EAPOL sink or
- * the stack without a debugger (wlannetif_get_diag's shape). */
+ * the stack without a debugger (wlannetif_get_diag's shape). The byte and time
+ * fields are the census extension: what the handoff carried and what it cost,
+ * nanoseconds summed and maximized (zero on images built without the census). */
 struct lkpinetif_diag {
 	unsigned long	rx_frames;	/* frames the driver handed over */
 	unsigned long	rx_foreign;	/* another interface's frames */
@@ -69,6 +71,12 @@ struct lkpinetif_diag {
 	unsigned long	rx_input_fail;	/* the stack refused them */
 	unsigned long	tx_frames;	/* frames handed to the transmit entry */
 	unsigned long	tx_fail;	/* no interface or no buffer */
+	unsigned long	rx_bytes;	/* frame bytes delivered to the stack */
+	unsigned long	tx_bytes;	/* frame bytes handed to the transmit entry */
+	unsigned long long rx_deliver_ns;	/* summed time inside the handoff */
+	unsigned long long rx_deliver_max_ns;
+	unsigned long long tx_ndo_ns;	/* summed time inside ndo_start_xmit */
+	unsigned long long tx_ndo_max_ns;
 };
 
 void	lkpinetif_get_diag(struct lkpinetif_diag *out);
