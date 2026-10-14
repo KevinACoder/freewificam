@@ -36,6 +36,7 @@
 #include "lwip/netif.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/dhcp.h"
+#include "lwip/udp.h"
 #include "lwip/apps/lwiperf.h"
 #include "lwip/stats.h"
 #include "lwip/memp.h"
@@ -69,7 +70,7 @@ struct wiphy *lkpicfg_wiphy(void);
  * throughput round is judged on), and the census snapshot prints after each
  * window closes. */
 #define WLAN8189_IPERF_WINDOW_MS	20000U
-#define WLAN8189_IPERF_PHASES		3U
+#define WLAN8189_IPERF_PHASES		4U
 
 static struct netif g_netif;
 
@@ -177,6 +178,36 @@ dataplane_up(void)
 }
 
 /*
+ * The UDP receive sink: a datagram socket that only counts what arrives. A UDP
+ * blast has no acknowledgement clock - the sender never waits for us - so the
+ * sink's byte count is the receive path's own ceiling under the current pump
+ * mode, and the difference to the TCP number is what the acknowledgement path
+ * costs the sender. The counters reset with the census, so a phase's sink is
+ * that phase's burst.
+ */
+#define WLAN8189_UDP_SINK_PORT	5002U
+
+static struct udp_pcb *g_udp_pcb;
+static volatile unsigned int g_udp_pkts;
+static volatile unsigned long g_udp_bytes;
+
+static void
+udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+    const ip_addr_t *addr, u16_t port)
+{
+
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p != NULL) {
+		g_udp_bytes += (unsigned long)p->tot_len;
+		g_udp_pkts++;
+		pbuf_free(p);
+	}
+}
+
+/*
  * The lwIP half of the census snapshot: this file owns the lwIP header world,
  * so the stack's own counters print from here (the driver-world half prints
  * from wlan8189_census.c). STAT_COUNTER is lwIP's own width, so the snapshot is
@@ -251,22 +282,40 @@ void wlan8189_dataplane_chain( void )
 	LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 	    LWIPERF_TCP_PORT_DEFAULT );
 
+	/* the UDP ceiling probe's sink (the host blasts datagrams at it; the
+	 * receive path drains them with no acknowledgement clock in the way) */
+	LOCK_TCPIP_CORE();
+	g_udp_pcb = udp_new();
+	if( g_udp_pcb != NULL &&
+	    udp_bind( g_udp_pcb, IP_ANY_TYPE, WLAN8189_UDP_SINK_PORT ) == ERR_OK ) {
+		udp_recv( g_udp_pcb, udp_sink_recv, NULL );
+	} else {
+		UNLOCK_TCPIP_CORE();
+		board_case_fail( "the UDP sink did not bind" );
+		return;
+	}
+	UNLOCK_TCPIP_CORE();
+	LOG_ANCHOR( "wlan8189: udp sink ready port=%u\n",
+	    WLAN8189_UDP_SINK_PORT );
+
 	/*
-	 * The phases (see the defines): P1 the pump at its fixed cadence, P2 the
-	 * adaptive (hot-hold) cadence, P3 back to fixed - equal windows in one
-	 * boot, so the three numbers are comparable and the middle one carries the
-	 * round-2 treatment. The pump policy is set explicitly per phase, so the
-	 * same pair is measured whether or not the engine's own default has been
-	 * flipped; the card's aggregation threshold is re-asserted at the driver's
-	 * stock value every phase (the smaller-batch cell measured worse and is
-	 * recorded in the 2x2 run), and power save stays at the driver's built-in
-	 * policy. The census reset and snapshot bracket each window, and the
-	 * snapshot prints only after it closed (the console at 115200 would drag a
-	 * measurement).
+	 * The phases (see the defines): a two-transport sheet over one boot - the
+	 * pump cadence (fixed / adaptive hot) against the client's transport (TCP,
+	 * which the sender paces by our acknowledgements, and UDP, which it does
+	 * not): P1 fixed+TCP, P2 hot+TCP, P3 hot+UDP, P4 fixed+UDP. The pump
+	 * policy is set explicitly per phase, so the same cells are measured
+	 * whether or not the engine's own default has been flipped; the card's
+	 * aggregation threshold is re-asserted at the driver's stock value, and
+	 * power save stays at the driver's built-in policy. The census reset and
+	 * snapshot bracket each window, and the snapshot prints only after it
+	 * closed (the console at 115200 would drag a measurement).
 	 */
 	{
 		static const char *const phase_policy[WLAN8189_IPERF_PHASES] = {
-			"fixed", "adaptive", "fixed"
+			"fixed", "adaptive", "adaptive", "fixed"
+		};
+		static const char *const phase_client[WLAN8189_IPERF_PHASES] = {
+			"tcp", "tcp", "udp", "udp"
 		};
 		unsigned int phase;
 
@@ -274,10 +323,12 @@ void wlan8189_dataplane_chain( void )
 			(void)wlan8189_pump_set( phase_policy[phase - 1U] );
 			wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
 
+			g_udp_pkts = 0U;
+			g_udp_bytes = 0UL;
 			wlan8189_census_reset();
-			LOG_ANCHOR( "wlan8189: phase %u ready pump=%s agg=%u lps=%d\n",
+			LOG_ANCHOR( "wlan8189: phase %u ready pump=%s agg=%u client=%s lps=%d\n",
 			    phase, phase_policy[phase - 1U], WLAN8189_AGG_STOCK_KB,
-			    wlan8189_ps_get() );
+			    phase_client[phase - 1U], wlan8189_ps_get() );
 			LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 			    LWIPERF_TCP_PORT_DEFAULT );
 			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
@@ -286,6 +337,8 @@ void wlan8189_dataplane_chain( void )
 				(void)osDelay( 200U );
 			}
 			LOG_ANCHOR( "wlan8189: iperf window done\n" );
+			LOG_ANCHOR( "wlan8189: udp sink pkts=%u bytes=%lu\n",
+			    g_udp_pkts, g_udp_bytes );
 			wlan8189_census_print();
 			census_print_lwip();
 			LOG_ANCHOR( "wlan8189: phase %u done\n", phase );

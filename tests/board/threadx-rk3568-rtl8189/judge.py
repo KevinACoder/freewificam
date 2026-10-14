@@ -90,6 +90,8 @@ ANCHORS = {
         r"wlan8189: iperf server ready port=5001",
         r"wlan8189: phase 1 ready",
         r"wlan8189: phase 3 done",
+        r"wlan8189: udp sink ready port=\d+",
+        r"wlan8189: udp sink pkts=\d+ bytes=\d+",
         r"perf census: A ",
         r"perf census: A card ",
         r"wlan8189: rate ",
@@ -158,10 +160,12 @@ BASE_TRANSCRIPT = (
     "[  54.000] wlan8189: ping window done\r\n"
     "[  54.100] wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n"
     "[  54.200] wlan8189: iperf server ready port=5001\r\n"
-    "[  54.300] wlan8189: phase 1 ready pump=fixed agg=15 lps=2\r\n"
+    "[  54.250] wlan8189: udp sink ready port=5002\r\n"
+    "[  54.300] wlan8189: phase 1 ready pump=fixed agg=15 client=tcp lps=2\r\n"
     "[  54.310] wlan8189: iperf server ready port=5001\r\n"
     "[  54.320] wlan8189: iperf window 20 s\r\n"
     "[  74.000] wlan8189: iperf window done\r\n"
+    "[  74.050] wlan8189: udp sink pkts=0 bytes=0\r\n"
     "[  74.100] perf census: A cmd52 n=3\r\n"
     "[  74.150] perf census: A card full_drop=+0 hisr=0x00 rxerr=0 rxfovw=0 agg=0x010f (base=0x00)\r\n"
     "[  74.200] perf census: D pump cycles=95 kick=0 timeout=0 hot=95 busy=90 empty=5 err=0 mode=fixed period_ms=10 span_ms=19800 busy_span=90\r\n"
@@ -169,12 +173,15 @@ BASE_TRANSCRIPT = (
     "[  74.400] wlan8189: ps lps=2 leisure=1 fw_ps=0 cpwm=0 enter=0 leave=0\r\n"
     "[  74.450] wlan8189: pump policy=fixed period_ms=10\r\n"
     "[  74.500] wlan8189: phase 1 done\r\n"
-    "[  74.600] wlan8189: phase 2 ready pump=adaptive agg=15 lps=2\r\n"
+    "[  74.600] wlan8189: phase 2 ready pump=adaptive agg=15 client=tcp lps=2\r\n"
     "[  74.610] wlan8189: iperf server ready port=5001\r\n"
     "[  94.000] wlan8189: phase 2 done\r\n"
-    "[  94.100] wlan8189: phase 3 ready pump=fixed agg=15 lps=2\r\n"
+    "[  94.100] wlan8189: phase 3 ready pump=adaptive agg=15 client=udp lps=2\r\n"
     "[  94.110] wlan8189: iperf server ready port=5001\r\n"
     "[ 114.000] wlan8189: phase 3 done\r\n"
+    "[ 114.100] wlan8189: phase 4 ready pump=fixed agg=15 client=udp lps=2\r\n"
+    "[ 114.110] wlan8189: iperf server ready port=5001\r\n"
+    "[ 134.000] wlan8189: phase 4 done\r\n"
     "[ 114.100] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"
     "[  56.000] total function 9\r\n"
     "[  56.010] total variable 2\r\n"
@@ -240,6 +247,10 @@ MUTATIONS = [
         "perf census: A card full_drop=+0 hisr=0x00 rxerr=0 rxfovw=0 agg=0x010f (base=0x00)\r\n", ""), 1),
     ("card counter dropped", BASE_TRANSCRIPT.replace(
         "perf census: A card full_drop=+0 hisr=0x00 rxerr=0 rxfovw=0 agg=0x010f (base=0x00)\r\n", ""), 1),
+    ("udp sink dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: udp sink ready port=5002\r\n", ""), 1),
+    ("udp sink count dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: udp sink pkts=0 bytes=0\r\n", ""), 1),
     ("pump readout dropped", BASE_TRANSCRIPT.replace(
         "wlan8189: pump policy=fixed period_ms=10\r\n", ""), 1),
     ("phase machinery dropped", BASE_TRANSCRIPT.replace(
