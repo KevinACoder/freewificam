@@ -364,6 +364,24 @@ class Runner:
     def out(self, cmd: str, **kw) -> str:
         return self.run(cmd, **kw)[1]
 
+    def start(self, cmd: str, priv: bool = False) -> subprocess.Popen | None:
+        """Start a command alongside a phase window; dry-run starts nothing.
+
+        The alongside-commands (the loaded-link ping, the mid-window socket
+        read) are the tool's own instruments, so they are built and wrapped
+        here rather than with a bare Popen at the call site: dry-run must not
+        execute them either, and an offline test can then exercise the branch
+        without a radio or a board."""
+
+        full = self._wrap(cmd, priv)
+        if self.dry_run:
+            info("dry-run (bg): %s", full)
+            return None
+        argv = (["ssh", "-o", "BatchMode=yes", self.host, full] if self.host
+                else ["sh", "-c", full])
+        return subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+
     def ok(self, cmd: str, priv: bool = False) -> bool:
         if self.dry_run:
             info("dry-run: %s", self._wrap(cmd, priv))
@@ -1504,23 +1522,14 @@ def measure_phase(r: Runner, outdir: str, n: int, peer: str, seconds: int,
          n, peer, seconds, udp, window, ping_during, ss_during)
     ping = None
     if ping_during:
-        # in the background on the measurement host; its summary lands in
-        # phaseN-ping.txt
+        # alongside the transfer; its summary lands in phaseN-ping.txt
         pcmd = "ping -c %d -i 0.2 %s" % (max(1, seconds * 5), peer)
-        wrapped = r._wrap(pcmd)
-        ping = subprocess.Popen(
-            (["ssh", "-o", "BatchMode=yes", r.host, wrapped] if r.host
-             else ["sh", "-c", wrapped]),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        ping = r.start(pcmd)
     ss = None
     if ss_during and not udp:
         # mid-window, so the transfer is up and steady when it is read
         scmd = "sleep %d; ss -tin dst %s" % (max(1, seconds // 2), peer)
-        wrapped = r._wrap(scmd)
-        ss = subprocess.Popen(
-            (["ssh", "-o", "BatchMode=yes", r.host, wrapped] if r.host
-             else ["sh", "-c", wrapped]),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        ss = r.start(scmd)
     cmd = phase_client_cmd(peer, seconds, udp, udp_port, udp_bw, window)
     try:
         _, text = r.run(cmd, timeout=seconds + 60)
@@ -1993,6 +2002,22 @@ def selftest() -> int:
     check("phase-cmd-default-no-window",
           phase_client_cmd("10.0.0.5", 8, False, 5002, "60M", None)
           == "iperf -c 10.0.0.5 -p 5001 -t 8 -i 2")
+
+    # a dry-run phase must build every command it would run - the client, the
+    # alongside ping and the mid-window socket read - and execute none of them.
+    # This is the branch an offline test can reach, and it is where a broken
+    # call in that construction is caught instead of on the board.
+    tmpd = tempfile.mkdtemp(prefix="prober-selftest-")
+    dry = Runner(None, True, False)
+    res = measure_phase(dry, tmpd, 1, "10.0.0.9", 1, False,
+                        ping_during=True, ss_during=True, window="256K")
+    check("phase-dryrun-builds-actions",
+          res.get("mbit") is None
+          and os.path.exists(os.path.join(tmpd, "phase1.txt"))
+          and not os.path.exists(os.path.join(tmpd, "phase1-ping.txt"))
+          and not os.path.exists(os.path.join(tmpd, "phase1-ss.txt")))
+    os.remove(os.path.join(tmpd, "phase1.txt"))
+    os.rmdir(tmpd)
 
     # the field discovery: only names the tool actually has are used
     known = set("frame.time_epoch wlan.fc.type_subtype frame.len wlan.ta".split())
