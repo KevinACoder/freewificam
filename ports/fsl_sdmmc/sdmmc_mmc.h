@@ -74,4 +74,11 @@ int sdmmc_mmc_write(uint64_t lba, const void *buf, uint32_t blocks);
 /* Push the card's own cache to its non-volatile store. */
 int sdmmc_mmc_flush(void);
 
+/* Ask the card for its status word (SEND_STATUS). Returns 0 with the raw R1
+ * response in *r1, or a negative value when the card did not answer. The
+ * current-state field is bits [12:9] of the word: 4 is the transfer state, and
+ * anything else after a completed transfer means the card was left mid-transfer
+ * - the condition a failed data stage leaves behind. */
+int sdmmc_mmc_status_get(uint32_t *r1);
+
 #endif /* FREEWIFICAM_SDMMC_MMC_H */

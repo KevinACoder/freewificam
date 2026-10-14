@@ -225,3 +225,29 @@ int sdmmc_mmc_flush(void)
 
 	return (MMC_FlushCache(&sdmmc_mmc_card_dev.card) == kStatus_Success) ? 0 : -1;
 }
+
+int sdmmc_mmc_status_get(uint32_t *r1)
+{
+	sdmmchost_transfer_t content = { 0 };
+	sdmmchost_cmd_t command = { 0 };
+
+	if ((r1 == NULL) || !sdmmc_mmc_card_up) {
+		return -1;
+	}
+
+	/* The card layer's own status command, sent through the same host face
+	 * every other command goes through (the stack keeps its status helper
+	 * private, so the command is built here). */
+	command.index = 13U;		/* SEND_STATUS */
+	command.argument = sdmmc_mmc_card_dev.card.relativeAddress << 16U;
+	command.responseType = kCARD_ResponseTypeR1;
+	content.command = &command;
+
+	if (SDMMCHOST_TransferFunction(&sdmmc_mmc_card_dev.host, &content) != kStatus_Success) {
+		return -1;
+	}
+
+	*r1 = command.response[0];
+
+	return 0;
+}

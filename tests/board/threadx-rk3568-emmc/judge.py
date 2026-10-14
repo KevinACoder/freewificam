@@ -79,6 +79,9 @@ ANCHORS = {
         r"emmc-block: verify ok checksum=[0-9a-f]{8}",
         r"emmc-block: cmd23 issued=\d+",
         r"emmc-block: boundary-crossed lba=\d+ len=\d+ events=\d+",
+        r"emmc-block: status after-touch r1=[0-9a-f]{8} state=\d+",
+        r"emmc-block: status after-roundtrip r1=[0-9a-f]{8} state=\d+",
+        r"emmc-block: status after-boundary r1=[0-9a-f]{8} state=\d+",
     ],
     "emmc-fs": [
         r"emmc-fs: bound emmc0 blocks=\d+ sector=\d+",
@@ -123,6 +126,10 @@ PROBE_CMD23_RE = re.compile(r"emmc: cmd23 (on|off)")
 
 #: The probe's own counters (transfers, errors).
 PROBE_COUNTERS_RE = re.compile(r"emmc-probe: transfers=(\d+) errors=(\d+)")
+
+#: The card-state lines: the card must be in its transfer state (4) after each
+#: phase, because a card left mid-transfer refuses the next case's commands.
+BLOCK_STATE_RE = re.compile(r"emmc-block: status (\S+) r1=[0-9a-f]{8} state=(\d+)")
 
 #: The block case's first data touch, and its counters.
 BLOCK_TOUCH_WRITE_RE = re.compile(r"emmc-block: touch write lba=\d+ rc=(-?\d+)")
@@ -177,11 +184,14 @@ BASE_TRANSCRIPT = (
     "[  10.070] CASE threadx-rk3568-emmc/emmc-probe PASS\r\n"
     "[  10.070] emmc-block: touch write lba=60965888 rc=0\r\n"
     "[  10.075] emmc-block: touch read lba=60965888 rc=0\r\n"
+    "[  10.076] emmc-block: status after-touch r1=00000900 state=4\r\n"
     "[  10.080] emmc-block: write bytes=8388608 ms=350 kib=23967\r\n"
     "[  10.090] emmc-block: read bytes=8388608 ms=200 kib=41943\r\n"
     "[  10.100] emmc-block: verify ok checksum=1a2b3c4d\r\n"
+    "[  10.105] emmc-block: status after-roundtrip r1=00000900 state=4\r\n"
     "[  10.110] emmc-block: cmd23 issued=258\r\n"
     "[  10.120] emmc-block: boundary-crossed lba=60965888 len=8192 events=1\r\n"
+    "[  10.125] emmc-block: status after-boundary r1=00000900 state=4\r\n"
     "[  10.130] CASE threadx-rk3568-emmc/emmc-block PASS\r\n"
     "[  10.140] emmc-fs: bound emmc0 blocks=61071360 sector=512\r\n"
     "[  10.150] emmc-fs: formatted exFAT sector=4096\r\n"
@@ -283,6 +293,11 @@ MUTATIONS = [
     ("block with no boundary event (backstop)", BASE_TRANSCRIPT.replace(
         "emmc-block: boundary-crossed lba=60965888 len=8192 events=1\r\n",
         "emmc-block: boundary-crossed lba=60965888 len=8192 events=0\r\n"), 1),
+    ("block state anchor dropped", BASE_TRANSCRIPT.replace(
+        "emmc-block: status after-touch r1=00000900 state=4\r\n", ""), 1),
+    ("card left mid-transfer (backstop)", BASE_TRANSCRIPT.replace(
+        "emmc-block: status after-boundary r1=00000900 state=4\r\n",
+        "emmc-block: status after-boundary r1=00004b00 state=5\r\n"), 1),
     ("fs bound anchor dropped", BASE_TRANSCRIPT.replace(
         "emmc-fs: bound emmc0 blocks=61071360 sector=512\r\n", ""), 1),
     ("fs formatted anchor dropped", BASE_TRANSCRIPT.replace(
@@ -497,6 +512,14 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
             errors.append("emmc-block: no boundary-crossing line")
         elif int(boundary.group(1)) < 1:
             errors.append("emmc-block: the boundary transfer recorded no event")
+        states = [m for line in transcript.lines
+                  for m in [BLOCK_STATE_RE.search(line)] if m]
+        if not states:
+            errors.append("emmc-block: no card-state lines")
+        for match in states:
+            if int(match.group(2)) != 4:
+                errors.append("emmc-block: the card was in state %s after %s"
+                              % (match.group(2), match.group(1)))
 
     # the file case's backstops: the floors and the conservation of moved bytes.
     if verdicts.get("emmc-fs") == "PASS":

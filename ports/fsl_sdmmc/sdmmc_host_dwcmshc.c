@@ -299,32 +299,6 @@ static bool fdwmshchost_is_bus_test(uint32_t index)
 	return (index == SDMMC_HOST_CMD_BUS_TEST_W) || (index == SDMMC_HOST_CMD_BUS_TEST_R);
 }
 
-/*
- * Abort the card's data transfer after one failed. A card whose data stage
- * failed - a CRC error, a lost end bit, a stopped engine - stays in its data
- * state until it is told to stop, and every command it receives in that state
- * (the next transfer's block-count command included) is refused or ignored:
- * measured on the board, where a failed read left the card in its data state
- * and the file case's first CMD23 then timed out. STOP_TRANSMISSION is the
- * command that ends it, and the reference hosts send it on this path too.
- */
-static void fdwmshchost_abort_data(sdmmchost_t *host)
-{
-	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
-	struct dwc_mshc_cmd cmd;
-
-	if (dev == NULL) {
-		return;
-	}
-
-	/* The command itself ends the card's transfer; no data stage is needed. */
-	(void)memset(&cmd, 0, sizeof(cmd));
-	cmd.index = 12U;		/* STOP_TRANSMISSION */
-	cmd.resp = true;
-	cmd.resp_crc = true;
-	(void)dwc_mshc_transfer(&dev->hc, &cmd);
-}
-
 static status_t fdwmshchost_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content)
 {
 	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
@@ -367,9 +341,6 @@ static status_t fdwmshchost_transfer(sdmmchost_t *host, sdmmchost_transfer_t *co
 			LOG_INFO("emmc: cmd%u data stage failed, ignored at the stack's request\n",
 				 cmd.index);
 		} else {
-			if (content->data != NULL) {
-				fdwmshchost_abort_data(host);
-			}
 			return kStatus_SDMMC_TransferFailed;
 		}
 	}

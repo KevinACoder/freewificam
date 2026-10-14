@@ -199,6 +199,38 @@ static int emmc_block_boundary( uint64_t lba, uint32_t *events_out )
 	return 0;
 }
 
+/* The card's transfer state, as the R1 status word's current-state field. */
+#define EMMC_CARD_STATE_TRAN		4U
+
+/*
+ * Read the card's status and refuse anything but its transfer state: a card left
+ * mid-transfer by a failed data stage refuses the next case's commands, which is
+ * exactly how one round's file case failed behind a failed read. Each phase of
+ * this case ends by asking.
+ */
+static int emmc_block_card_state( const char *phase )
+{
+	uint32_t r1 = 0U;
+	unsigned int state;
+
+	if( sdmmc_mmc_status_get( &r1 ) != 0 ) {
+		LOG_ERROR( "emmc-block: %s: the card did not answer a status read\n", phase );
+		return -1;
+	}
+
+	state = (unsigned int)( ( r1 >> 9 ) & 0xfU );
+	LOG_ANCHOR( "emmc-block: status %s r1=%08lx state=%u\n", phase,
+		    (unsigned long)r1, state );
+
+	if( state != EMMC_CARD_STATE_TRAN ) {
+		LOG_ERROR( "emmc-block: %s: the card is in state %u, not its transfer state\n",
+			   phase, state );
+		return -1;
+	}
+
+	return 0;
+}
+
 /*
  * The first data touch: one block written and read back at the round trip's own
  * window, before the megabyte-scale pass. Its whole purpose is to name which
@@ -261,6 +293,10 @@ void emmc_block_chain( void )
 	      ( EMMC_BLOCK_BYTES / 512U );
 
 	emmc_block_touch( lba );
+	if( emmc_block_card_state( "after-touch" ) != 0 ) {
+		board_case_fail( "the card was left mid-transfer by the first touch" );
+		return;
+	}
 
 	if( emmc_block_write( lba, &ms ) != 0 ) {
 		board_case_fail( "the block write failed" );
@@ -284,6 +320,11 @@ void emmc_block_chain( void )
 		    (unsigned long)emmc_kib( EMMC_BLOCK_BYTES, ms ) );
 	LOG_ANCHOR( "emmc-block: verify ok checksum=%08lx\n", (unsigned long)hash );
 
+	if( emmc_block_card_state( "after-roundtrip" ) != 0 ) {
+		board_case_fail( "the card was left mid-transfer by the round trip" );
+		return;
+	}
+
 	dwc_mshc_census_get( &census );
 	LOG_ANCHOR( "emmc-block: cmd23 issued=%lu\n", (unsigned long)census.cmd23 );
 
@@ -299,6 +340,11 @@ void emmc_block_chain( void )
 	LOG_ANCHOR( "emmc-block: boundary-crossed lba=%lu len=%lu events=%lu\n",
 		    (unsigned long)lba, (unsigned long)EMMC_BOUNDARY_LEN,
 		    (unsigned long)events );
+
+	if( emmc_block_card_state( "after-boundary" ) != 0 ) {
+		board_case_fail( "the card was left mid-transfer by the boundary pair" );
+		return;
+	}
 }
 
 BOARD_TEST( "emmc-block", emmc_block_chain );

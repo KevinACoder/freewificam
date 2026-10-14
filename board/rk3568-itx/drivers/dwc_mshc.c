@@ -604,6 +604,7 @@ static int dwc_mshc_prepare_dma(struct dwc_mshc *hc, const struct dwc_mshc_cmd *
 	const struct dwc_mshc_data *d = cmd->data;
 	uintptr_t buf = (uintptr_t)d->buf;
 	uint32_t xfer;
+	int ret;
 
 	if ((d->buf == NULL) || (d->len == 0U) || (d->blkcnt == 0U)) {
 		return DWC_MSHC_ERR_ARG;
@@ -626,6 +627,21 @@ static int dwc_mshc_prepare_dma(struct dwc_mshc *hc, const struct dwc_mshc_cmd *
 		cache_dcache_flush(buf, (unsigned long)d->len);
 	} else {
 		cache_dcache_invalidate(buf, (unsigned long)d->len);
+	}
+
+	/*
+	 * The data circuit is reset before every transfer, the way this project's
+	 * older driver for the other DesignWare controller empties its FIFO
+	 * before arming the engine on every transfer. The board's own evidence
+	 * here is the same shape: the first data transfer after the bus-mode
+	 * switches failed (the card's CRC status token came back garbled) while
+	 * its retry - which the error path resets the data circuit first -
+	 * succeeded, so the reset is what a transfer needs before it starts
+	 * rather than after it fails.
+	 */
+	ret = dwc_mshc_soft_reset(hc, (uint8_t)DWC_MSHC_SW_RESET_DAT);
+	if (ret != DWC_MSHC_OK) {
+		return ret;
 	}
 
 	mmio_wr32(base + DWC_MSHC_SDMA_ADDR, (uint32_t)buf);
