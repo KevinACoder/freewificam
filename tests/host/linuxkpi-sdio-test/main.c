@@ -706,15 +706,17 @@ case_pump_adaptive(struct sdio_func *f)
 	hot = st.pump_polls - base;
 	ok = ok && hot >= 20u;
 
-	/* idle: with nothing pending the controller backs off a step per empty
-	 * cycle, so 30 ms holds a handful of polls, not a spin */
+	/* idle: once the hot hold has expired the controller backs off a step per
+	 * empty cycle, so a minute's one-second window holds a handful of polls,
+	 * not a spin (a spin would be thousands) */
 	mock_sdio_card_set_pending(0x00u);
+	lkpi_msleep(40);		/* let the hot hold lapse, backoff starts */
 	lkpi_sdio_stats_get(&st);
 	base = st.pump_polls;
-	lkpi_msleep(30);
+	lkpi_msleep(60);
 	lkpi_sdio_stats_get(&st);
 	idle = st.pump_polls - base;
-	ok = ok && idle <= 20u;
+	ok = ok && idle <= 16u;
 
 	ok = ok && sdio_release_irq(f) == 0;
 	lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_FIXED);

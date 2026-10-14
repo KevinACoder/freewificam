@@ -227,6 +227,7 @@ wlan8189_card_stats_show(void)
 	_adapter *adapter = census_adapter();
 	u32 now;
 	u8 hisr;
+	u32 agg = 0u;
 
 	if (adapter == NULL) {
 		printk("perf census: A card adapter=absent\n");
@@ -234,12 +235,39 @@ wlan8189_card_stats_show(void)
 	}
 	now = card_full_drop_read(adapter);
 	hisr = rtw_read8(adapter, SDIO_REG_HISR);
+	agg = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH) & 0xffffu;
 	/* the delta is masked to the counter's own width, so a wrap inside one
 	 * phase still reads as a count rather than as a borrow */
-	printk("perf census: A card full_drop=+%u hisr=0x%02x rxerr=%u rxfovw=%u (base=0x%02x)\n",
+	printk("perf census: A card full_drop=+%u hisr=0x%02x rxerr=%u rxfovw=%u agg=0x%04x (base=0x%02x)\n",
 	    (unsigned)((now - card_full_drop_base) & RXERR_COUNTER_MASK),
 	    (unsigned)hisr, (unsigned)((hisr >> 3) & 1u),
-	    (unsigned)((hisr >> 5) & 1u), (unsigned)card_hisr_base);
+	    (unsigned)((hisr >> 5) & 1u), (unsigned)agg,
+	    (unsigned)card_hisr_base);
+}
+
+/* --- the card's receive aggregation thresholds ---------------------------- */
+
+/*
+ * REG_RXDMA_AGG_PG_TH (0x0280): the timeout in the high byte, the length
+ * threshold in the low byte in kilobytes (the driver's own clamp divides by
+ * 1024 - hal/rtl8188f/sdio/sdio_halinit.c HalRxAggr8188FSdio). The card
+ * releases a burst when either the accumulated length crosses the threshold or
+ * the timeout expires; the driver writes the register once at init, and this
+ * runtime knob re-writes the length byte per phase so one boot can compare
+ * batch sizes against the throughput (the timeout byte and every other bit are
+ * preserved by the read-modify-write).
+ */
+void
+wlan8189_agg_set(unsigned int size_kb)
+{
+	_adapter *adapter = census_adapter();
+	u32 v;
+
+	if (adapter == NULL)
+		return;
+	v = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH);
+	v = (v & ~0xffu) | (size_kb & 0xffu);
+	rtw_write32(adapter, REG_RXDMA_AGG_PG_TH, v);
 }
 
 /* --- the snapshot --------------------------------------------------------- */

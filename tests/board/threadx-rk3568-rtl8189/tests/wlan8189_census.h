@@ -30,6 +30,13 @@ void	wlan8189_rate_show(void);
  * raw HISR word, both read at phase boundaries) */
 void	wlan8189_card_stats_show(void);
 
+/* the card's RX aggregation length threshold in kilobytes: STOCK is the value
+ * the driver's init wrote, LOW is the round's smaller-batch treatment (the
+ * timeout byte is left alone) */
+#define	WLAN8189_AGG_STOCK_KB	15u
+#define	WLAN8189_AGG_LOW_KB	4u
+void	wlan8189_agg_set(unsigned int size_kb);
+
 /* the SDIO pump's cadence policy: "fixed" holds the idle period between cycles,
  * "adaptive" services a busy card back-to-back and backs off when it is idle;
  * show prints the effective policy and the controller's current period */
