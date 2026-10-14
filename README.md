@@ -18,8 +18,9 @@ of this driver set to an RTOS: the driver bytes are unchanged, and the
 RTOS-facing interface is provided underneath them.
 
 The end goal is a camera whose data streams over WiFi for long, unattended runs
-- a wireless IP camera on an RTOS. This snapshot covers the wireless side; the
-camera side is not started.
+- a wireless IP camera on an RTOS. Both halves are in the tree: the wireless
+side is brought up on hardware, and the USB camera line captures and streams
+frames on the same board.
 
 ## Why this project
 
@@ -39,9 +40,10 @@ link on both, and a gate rejects a foreign kernel call in a component.
 ## What runs today
 
 Three USB WiFi lines, one SDIO line and one PCIe line are brought up on the
-reference board. "Full chain" means the card is enumerated, its firmware
-loaded, it scans, it joins a WPA2 network, it gets an address over DHCP, it
-answers ping, and TCP data flows. It does not mean the throughput is good.
+reference board, and the USB camera line streams frames on the same board.
+"Full chain" means the card is enumerated, its firmware loaded, it scans, it
+joins a WPA2 network, it gets an address over DHCP, it answers ping, and TCP
+data flows. It does not mean the throughput is good.
 
 | Line | Chip | Board state |
 |---|---|---|
@@ -50,6 +52,7 @@ answers ping, and TCP data flows. It does not mean the throughput is good.
 | `rtw89` | RTL8851BU | **Experimental**: full chain reached, join intermittent, link poor. |
 | SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. |
 | `iwlwifi` | Intel Wireless-AC 7260 | Full chain, over PCIe message interrupts (GICv3 ITS): the driver routes station management and data frames through its transmit queues, and the port owns the two delivery contexts a threaded interrupt needs. |
+| UVC | Logitech Pro 9000 | Camera enumerated, opened and streaming MJPEG 640x480 over its isochronous endpoint (see [The camera line](#the-camera-line)). |
 
 The board, the connectors and pin/PHY multiplexing behind these lines, and which
 port each line is wired to, are documented per board under
@@ -92,9 +95,25 @@ in the numbers. See [docs/known-limitations.md](docs/known-limitations.md).
 
 ### The camera line
 
-The USB camera (UVC) line is the second headline milestone and is in progress.
-It has no board evidence yet: the USB host stack in this tree does not include
-an isochronous transfer path, and the camera class is not ported.
+The USB camera (UVC) line is the second headline milestone, and it streams on
+the reference board. A Logitech Pro 9000 on the board's USB 2.0 host: the
+camera is enumerated, the probe/commit exchange runs, an alternate setting is
+selected, and MJPEG 640x480 frames come out of an isochronous URB ring and are
+assembled by payload-header boundaries - **267 to 275 frames per 20-second
+window over cold boots, about 13.5 fps and 1.9 Mbit/s**. The same camera and
+board under Linux gave the ground truth in the dim scene it was captured in
+(4.69 fps, 372 kbit/s); the acceptance floor is two thirds of that, and the
+stream runs several times above it.
+
+Two pieces of the vendored USB stack needed filling in, and each travels as a
+patch to it, written to be sendable upstream: the high-speed isochronous
+transfer engine the stack declares but does not define, and the running-stream
+half of its video class - the streaming engine (the alternate-setting choice
+from the device's own answer, payload-header frame assembly, the frame pool) is
+not in the open-source tier. See
+[patches/cherryusb/](patches/cherryusb/README.md), and
+[docs/known-limitations.md](docs/known-limitations.md) for what is measured and
+what is not.
 
 ## How it is built
 
@@ -111,6 +130,7 @@ an isochronous transfer path, and the camera class is not ported.
     cherryusb/  fsl_sdmmc/   bus backends (USB host, SDIO host)
     lwip/                 the network stack backend
   third-party/            pinned upstream trees (Linux drivers, RTOS kernels)
+  patches/                diffs replayed onto the vendored trees at build time
   tests/host/  tests/board/   the two test tiers
 ```
 

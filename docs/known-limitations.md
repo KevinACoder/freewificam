@@ -26,10 +26,23 @@ weak, and what is not started. Nothing here should be read as a promise.
 
 ## The camera line
 
-The USB camera (UVC / isochronous) line is a headline milestone but has no
-board evidence yet. The USB host stack in the tree does not include an
-isochronous transfer path for the open-source controller, and the camera class
-is not ported. Treat the camera side as not started.
+The USB camera (UVC / isochronous) line has board evidence: a Logitech Pro 9000
+on the reference board is enumerated, opened and streaming MJPEG 640x480 over
+its isochronous endpoint (267-275 frames per 20-second window over cold boots,
+about 13.5 fps and 1.9 Mbit/s). The isochronous transfer engine and the video
+class's streaming half are not in the vendored stack's open-source tier and
+travel as patches to it.
+
+What is not shown: the failure model is not understood well enough to trust it.
+A stream stop that takes the camera out of its streaming setting (the class
+close's `SET_INTERFACE(0)`) can leave this camera refusing the video-streaming
+class requests for the rest of the boot, and the recovery sequences measured so
+far are not reproducible. The workaround the port ships is to avoid provoking
+it - a camera the caller opened is left open and in its streaming setting
+across a stream, so the engine's later start issues no class requests - rather
+than to establish why the camera behaves this way or to make the close path
+protocol-perfect. Onboard-only, single camera model, and the reverse (camera to
+WiFi) direction and long unattended runs are not demonstrated.
 
 ## The bus and platform coverage
 

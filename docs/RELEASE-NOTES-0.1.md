@@ -51,6 +51,14 @@ been measured, not what is planned.
 The SDIO line and its figures below landed after the `0.1.0` tag was cut; the
 tag itself predates it.
 
+**After the `0.1.0` tag.** Two further lines landed on the reference board after
+this release and are not part of it: the `iwlwifi` PCIe line (Intel
+Wireless-AC 7260, full chain over GICv3 message interrupts) and the USB camera
+(UVC) line (a Logitech Pro 9000 enumerated, opened and streaming MJPEG 640x480
+at about 13.5 fps). The statements below that say "the camera side is not
+started" describe the `0.1.0` snapshot, not the current tree; the live status is
+in [known-limitations.md](known-limitations.md).
+
 "Full chain" means the card is enumerated, its firmware loaded, it scans, it
 joins a WPA2 network, it gets an address over DHCP, it answers ping, and TCP
 data flows. It does not mean the throughput is good - see below.
