@@ -50,6 +50,12 @@ carry the same terms in their file header).
 | `iwlwifi-7260-17.ucode` (Intel firmware, compiled in as `components/linuxkpi/fw/iwl7260fw_blob.c`) | Intel binary redistribution terms (`LICENCE.iwlwifi_firmware`: redistribution in binary form without modification permitted; **no reverse engineering, decompilation or disassembly**) | unmodified binary and therefore redistributable; the notice is kept at `components/linuxkpi/fw/iwl7260_fw.LICENCE.txt` and the bytes are anchored by the digest in `components/linuxkpi/fw/MANIFEST.sha256` |
 | `docs/boards/rk3568-e4ap5g1-itx/` (board photographs and the block diagram) | board vendor's user manual for the RK3568-E4AP5G1-ITX (IndiumEngine) | reproduced to document the hardware this project targets; vendor documentation, not first-party, and not covered by the project's BSD-3-Clause license. No redistribution grant is recorded for it: remove this directory and the figures it backs in `docs/boards/rk3568-e4ap5g1-itx.md` before a public release unless a grant is confirmed |
 
+## Reference material (consulted, not vendored)
+
+| Source | License | Use |
+|---|---|---|
+| Eclipse ThreadX USBX (upstream https://github.com/eclipse-threadx/usbx; the pinned read-only copy consulted here is the development workspace's `usbx/` snapshot) | MIT, Microsoft / Eclipse ThreadX contributors (every consulted file carries an `SPDX-License-Identifier: MIT` line) | consulted as the mechanism reference for the EHCI high-speed isochronous engine (`patches/cherryusb/0003`) and for the "smallest sufficient alternate setting" rule of the UVC stream engine (`patches/cherryusb/0004`). The files themselves were written first-party against CherryUSB's own scaffolding (the pin's `struct ehci_itd_hw` fields etc.) and the EHCI / USB 2.0 / UVC specifications; this row is the attribution MIT asks for the consultation |
+
 ## Distribution obligations
 
 * First-party source files keep their own terms (BSD-3-Clause). They are not relicensed by
