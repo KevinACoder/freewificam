@@ -311,6 +311,13 @@ lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 }
 
 static void
+lkpi_sdio_census_note_pump(void)
+{
+
+	lkpi_census_pump_probe();
+}
+
+static void
 lkpi_sdio_census_note_cycle(uint64_t t0, uint64_t t1, uint64_t t2, bool busy,
     bool err, uint64_t moved_bytes)
 {
@@ -442,6 +449,11 @@ lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 
 	(void)kicked;
 	(void)wait_ms;
+}
+
+static void
+lkpi_sdio_census_note_pump(void)
+{
 }
 
 static void
@@ -1078,6 +1090,7 @@ lkpi_sdio_pump_cycle(void)
 	uint64_t t0, t1, t2;
 	uint64_t moved0 = c->rx_bytes + c->tx_bytes;
 
+	lkpi_sdio_census_note_pump();
 	t0 = lkpi_sdio_census_now();
 	(void)osMutexAcquire(c->claim, osWaitForever);
 	t1 = lkpi_sdio_census_now();
@@ -1473,7 +1486,19 @@ lkpi_sdio_pump_start(void)
 	}
 	attr.name = "lkpi_sdio_pump";
 	attr.stack_size = LKPI_SDIO_PUMP_STACK;
-	attr.priority = osPriorityNormal;
+	/*
+	 * Below the normal band on purpose: this port creates threads without a
+	 * time slice (os/threadx/cmsis2_threadx.c slot_tx_create, TX_NO_TIME_SLICE),
+	 * so an equal-priority pump would run until it blocks and starve the
+	 * workqueue thread that runs the driver's receive bottom half - the thread
+	 * that recycles the receive buffers the pump is about to ask for. A hot
+	 * pump then finds the buffer queue empty, the driver answers with its 10 ms
+	 * shortage sleep, and that sleep becomes the cadence. Below normal, the
+	 * consumers (bottom half, stack, transmit thread) always preempt the
+	 * producer, and the claim's priority inheritance still lets a drain finish
+	 * promptly when a higher thread wants the bus.
+	 */
+	attr.priority = osPriorityBelowNormal;
 	c->pump = osThreadNew(lkpi_sdio_pump_entry, c, &attr);
 	if (c->pump == NULL) {
 		lkpi_printf(ULOG_ERROR_LEVEL, "sdiokpi: cannot start the pump thread\n");

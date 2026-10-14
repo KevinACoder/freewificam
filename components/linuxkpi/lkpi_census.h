@@ -68,6 +68,13 @@ struct lkpi_census_sites {
  * defines CONFIG_LKPI_CENSUS). */
 uint64_t	lkpi_census_now_ns(void);
 
+/* A per-pump-cycle probe the image implements, called before each cycle claims
+ * the bus: the board samples what only it can see - the driver's receive-buffer
+ * free count - and keeps its own marks beside its snapshot print. A probe that
+ * walks a queue concurrently may read a torn count; it is an instrument, not an
+ * invariant. */
+void	lkpi_census_pump_probe(void);
+
 void	lkpi_census_histo_reset(struct lkpi_census_histo *h);
 void	lkpi_census_histo_add(struct lkpi_census_histo *h, uint64_t delta_ns);
 void	lkpi_census_histo_print(const char *tag, const struct lkpi_census_histo *h);

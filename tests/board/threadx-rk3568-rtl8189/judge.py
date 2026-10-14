@@ -172,7 +172,7 @@ BASE_TRANSCRIPT = (
     "[  74.600] wlan8189: phase 2 ready pump=adaptive agg=15 lps=2\r\n"
     "[  74.610] wlan8189: iperf server ready port=5001\r\n"
     "[  94.000] wlan8189: phase 2 done\r\n"
-    "[  94.100] wlan8189: phase 3 ready pump=adaptive agg=4 lps=2\r\n"
+    "[  94.100] wlan8189: phase 3 ready pump=fixed agg=15 lps=2\r\n"
     "[  94.110] wlan8189: iperf server ready port=5001\r\n"
     "[ 114.000] wlan8189: phase 3 done\r\n"
     "[ 114.100] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"

@@ -245,6 +245,68 @@ wlan8189_card_stats_show(void)
 	    (unsigned)card_hisr_base);
 }
 
+/* --- the driver's receive-buffer free count (per pump cycle) --------------- */
+
+/*
+ * The number the shortage path turns on: how many of the driver's eight receive
+ * buffers are free at the moment the pump is about to ask for one. The count is
+ * taken by walking the free queue's list - the driver's own cache of that count
+ * (free_recv_buf_queue_cnt) is only ever written at init and teardown, so it
+ * cannot be read as a live value. The walk is bounded and runs on the pump
+ * thread while the bottom half may move elements; a torn read costs one wrong
+ * sample, which is why this is an instrument and not an invariant.
+ */
+static u32 card_free_min = ~0u;
+static u32 card_free_zero;
+static u32 card_free_sum;
+static u32 card_free_n;
+
+static u32
+card_free_recvbuf_count(_adapter *adapter)
+{
+	const struct list_head *head = &adapter->recvpriv.free_recv_buf_queue.queue;
+	const struct list_head *p = head->next;
+	u32 n = 0u;
+
+	if (head->next == NULL || head->prev == NULL)
+		return 0u;
+	while (p != head && n < 32u) {
+		n++;
+		p = p->next;
+		if (p == NULL)
+			break;
+	}
+	return n;
+}
+
+void
+lkpi_census_pump_probe(void)
+{
+	_adapter *adapter = census_adapter();
+	u32 free_n;
+
+	if (adapter == NULL)
+		return;
+	free_n = card_free_recvbuf_count(adapter);
+	card_free_n++;
+	card_free_sum += free_n;
+	if (free_n < card_free_min)
+		card_free_min = free_n;
+	if (free_n == 0u)
+		card_free_zero++;
+}
+
+void
+wlan8189_cardq_show(void)
+{
+	u32 avg_x10 = (card_free_n != 0u) ?
+	    (u32)(((unsigned long long)card_free_sum * 10u) / card_free_n) : 0u;
+
+	printk("perf census: A cardq free_min=%u free_avg_x10=%u zero=%u n=%u\n",
+	    (unsigned)((card_free_min == ~0u) ? 0u : card_free_min),
+	    (unsigned)avg_x10, (unsigned)card_free_zero, (unsigned)card_free_n);
+}
+
 /* --- the card's receive aggregation thresholds ---------------------------- */
 
 /*
@@ -282,6 +344,10 @@ wlan8189_census_reset(void)
 	lkpi_fsl_census_reset();
 	dwc_mmc_census_reset();
 	card_stats_note_base(census_adapter());
+	card_free_min = ~0u;
+	card_free_zero = 0u;
+	card_free_sum = 0u;
+	card_free_n = 0u;
 }
 
 void
@@ -351,6 +417,7 @@ wlan8189_census_print(void)
 	printk("perf census: N net80211 linked=0 frames=0 (FullMAC line: the data path never crosses net80211)\n");
 
 	wlan8189_card_stats_show();
+	wlan8189_cardq_show();
 	wlan8189_rate_show();
 	wlan8189_ps_show();
 	wlan8189_pump_show();

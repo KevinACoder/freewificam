@@ -69,7 +69,7 @@ struct wiphy *lkpicfg_wiphy(void);
  * throughput round is judged on), and the census snapshot prints after each
  * window closes. */
 #define WLAN8189_IPERF_WINDOW_MS	20000U
-#define WLAN8189_IPERF_PHASES		5U
+#define WLAN8189_IPERF_PHASES		3U
 
 static struct netif g_netif;
 
@@ -252,35 +252,31 @@ void wlan8189_dataplane_chain( void )
 	    LWIPERF_TCP_PORT_DEFAULT );
 
 	/*
-	 * The phases (see the defines): a two-factor sheet over one boot - the
-	 * pump cadence (fixed / adaptive) against the card's RX aggregation length
-	 * threshold (stock 15 KB / 4 KB), with the baseline repeated at the end so
-	 * drift is visible: P1 fixed+stock, P2 adaptive+stock, P3 adaptive+low,
-	 * P4 fixed+low, P5 fixed+stock. Every lever is set explicitly per phase, so
-	 * the sheet measures the same cells whether or not an engine default has
-	 * been flipped; power save stays at the driver's built-in policy
-	 * throughout. The census reset and snapshot bracket each window, and the
+	 * The phases (see the defines): P1 the pump at its fixed cadence, P2 the
+	 * adaptive (hot-hold) cadence, P3 back to fixed - equal windows in one
+	 * boot, so the three numbers are comparable and the middle one carries the
+	 * round-2 treatment. The pump policy is set explicitly per phase, so the
+	 * same pair is measured whether or not the engine's own default has been
+	 * flipped; the card's aggregation threshold is re-asserted at the driver's
+	 * stock value every phase (the smaller-batch cell measured worse and is
+	 * recorded in the 2x2 run), and power save stays at the driver's built-in
+	 * policy. The census reset and snapshot bracket each window, and the
 	 * snapshot prints only after it closed (the console at 115200 would drag a
 	 * measurement).
 	 */
 	{
 		static const char *const phase_policy[WLAN8189_IPERF_PHASES] = {
-			"fixed", "adaptive", "adaptive", "fixed", "fixed"
-		};
-		static const unsigned int phase_agg[WLAN8189_IPERF_PHASES] = {
-			WLAN8189_AGG_STOCK_KB, WLAN8189_AGG_STOCK_KB,
-			WLAN8189_AGG_LOW_KB, WLAN8189_AGG_LOW_KB,
-			WLAN8189_AGG_STOCK_KB
+			"fixed", "adaptive", "fixed"
 		};
 		unsigned int phase;
 
 		for( phase = 1U; phase <= WLAN8189_IPERF_PHASES; phase++ ) {
 			(void)wlan8189_pump_set( phase_policy[phase - 1U] );
-			wlan8189_agg_set( phase_agg[phase - 1U] );
+			wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
 
 			wlan8189_census_reset();
 			LOG_ANCHOR( "wlan8189: phase %u ready pump=%s agg=%u lps=%d\n",
-			    phase, phase_policy[phase - 1U], phase_agg[phase - 1U],
+			    phase, phase_policy[phase - 1U], WLAN8189_AGG_STOCK_KB,
 			    wlan8189_ps_get() );
 			LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 			    LWIPERF_TCP_PORT_DEFAULT );
