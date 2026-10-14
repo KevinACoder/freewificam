@@ -1,6 +1,6 @@
-From 5c4b281edf3889c93f67334e75987b86f82f1f30 Mon Sep 17 00:00:00 2001
+From 90c2ed28a362e940a8d3a2d0dbecd143a27d2733 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu2023@gmail.com>
-Date: Wed, 14 Oct 2026 07:40:10 +0800
+Date: Wed, 14 Oct 2026 08:38:40 +0800
 Subject: [PATCH] class/video: add the UVC host streaming engine
 
 The host-UVC demos this tree carries call usbh_video_stream_create/start/
@@ -46,18 +46,18 @@ rest of the stack's keys.
 
 Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
 ---
- class/video/usbh_uvc_stream.c | 837 ++++++++++++++++++++++++++++++++++
+ class/video/usbh_uvc_stream.c | 823 ++++++++++++++++++++++++++++++++++
  class/video/usbh_uvc_stream.h |  89 ++++
- 2 files changed, 926 insertions(+)
+ 2 files changed, 912 insertions(+)
  create mode 100644 class/video/usbh_uvc_stream.c
  create mode 100644 class/video/usbh_uvc_stream.h
 
 diff --git a/class/video/usbh_uvc_stream.c b/class/video/usbh_uvc_stream.c
 new file mode 100644
-index 0000000..7afb81d
+index 0000000..be7b770
 --- /dev/null
 +++ b/class/video/usbh_uvc_stream.c
-@@ -0,0 +1,837 @@
+@@ -0,0 +1,823 @@
 +/*
 + * Copyright (c) 2026, zhugengyu
 + *
@@ -153,6 +153,11 @@ index 0000000..7afb81d
 +    uint32_t ready_head, ready_tail, ready_count;
 +    usb_osal_mutex_t lock;
 +    usb_osal_sem_t frame_ready;
++
++    /* Whether the engine's own start path ran the class open: the camera is
++     * then the engine's to hand back on stop.  A camera the caller opened is
++     * left open (and in its streaming setting) on stop. */
++    bool opened_by_engine;
 +
 +    struct uvc_urb_slot slots[CONFIG_UVC_STREAM_URBS];
 +    usb_osal_sem_t urb_done;
@@ -516,35 +521,6 @@ index 0000000..7afb81d
 +    return best;
 +}
 +
-+/* One SET_INTERFACE request on the streaming interface. */
-+static int stream_set_interface(struct usbh_video *video, uint8_t alt)
-+{
-+    struct usb_setup_packet *setup = video->hport->setup;
-+
-+    setup->bmRequestType = USB_REQUEST_DIR_OUT | USB_REQUEST_STANDARD | USB_REQUEST_RECIPIENT_INTERFACE;
-+    setup->bRequest = USB_REQUEST_SET_INTERFACE;
-+    setup->wValue = alt;
-+    setup->wIndex = video->data_intf;
-+    setup->wLength = 0;
-+    return usbh_control_transfer(video->hport, setup, NULL);
-+}
-+
-+/* Take the streaming interface through one enter-and-leave cycle.  The
-+ * setting entered is the one the last open used when that is known (the
-+ * device has already accepted it), else the smallest one the ladder carries.
-+ * Errors are ignored: the caller's next probe reports the state. */
-+static void stream_interface_rearm(struct usbh_video *video)
-+{
-+    uint8_t alt = stream_alt_pick(video, video->isoin_mps ? video->isoin_mps : 0);
-+
-+    if (alt == 0) {
-+        return;
-+    }
-+    (void)stream_set_interface(video, alt);
-+    usb_osal_msleep(100);
-+    (void)stream_set_interface(video, 0);
-+}
-+
 +/* ------------------------------------------------------------------------
 + * Public interface
 + * --------------------------------------------------------------------- */
@@ -632,24 +608,22 @@ index 0000000..7afb81d
 +            return ret;
 +        }
 +        /* Ask the device what the configuration needs (bytes per USB frame)
-+         * before committing, exactly as the class's open sequence does.
-+         *
-+         * A camera that was just taken out of a streaming setting can refuse
-+         * VS class requests outright: every attempt then times out on its
-+         * data stage (or has its status stage held off) while standard
-+         * requests keep working, and the refusal survives retries and waits
-+         * for seconds.  The observed cure, and the reason for the ladder
-+         * below, is to take the streaming interface through one streaming
-+         * setting and back - only then does the camera answer the probe
-+         * again.  Each failed attempt therefore runs one re-arm cycle before
-+         * the next try. */
-+        for (uint32_t attempt = 0; attempt < 4; attempt++) {
++         * before committing, exactly as the class's open sequence does.  A
++         * camera that just left a streaming configuration may defer or refuse
++         * these requests for a moment; the retries are defence, bounded so a
++         * camera that is simply gone still fails out.  (A device that has
++         * been made to refuse by an earlier leave-notice may not recover
++         * here at all; the integration policy that avoids provoking it is to
++         * keep the camera in its streaming setting between streams, which the
++         * class's open already establishes.) */
++        for (uint32_t attempt = 0; attempt < 5; attempt++) {
 +            ret = usbh_videostreaming_set_cur_probe(video, formatidx, frameidx, interval);
 +            if (ret == 0) {
 +                break;
 +            }
++            USB_LOG_ERR("start: probe attempt %u refused (%d), retrying\r\n",
++                        (unsigned)(attempt + 1), (int)ret);
 +            usb_osal_msleep(100);
-+            stream_interface_rearm(video);
 +        }
 +        if (ret < 0) {
 +            USB_LOG_ERR("start: probe set failed (%d)\r\n", (int)ret);
@@ -681,6 +655,7 @@ index 0000000..7afb81d
 +            USB_LOG_ERR("start: open at setting %u failed (%d)\r\n", alt, (int)ret);
 +            return ret;
 +        }
++        s->opened_by_engine = true;
 +    }
 +
 +    if ((video->isoin == NULL) || (video->isoin_mps == 0)) {
@@ -791,6 +766,7 @@ index 0000000..7afb81d
 +    if (video->is_opened) {
 +        (void)usbh_video_close(video);
 +    }
++    s->opened_by_engine = false;
 +    return ret;
 +}
 +
@@ -836,7 +812,17 @@ index 0000000..7afb81d
 +    }
 +
 +    if ((s->video != NULL) && s->video->is_opened) {
-+        (void)usbh_video_close(s->video);
++        if (s->opened_by_engine) {
++            (void)usbh_video_close(s->video);
++        } else {
++            /* The caller opened the camera; leave it open and in its streaming
++             * setting, so a later start needs no class requests at all.  The
++             * board camera is also the reason: it can stop answering VS
++             * settings after it has been made to leave a streaming setting,
++             * and there is nothing to regain by taking it out here. */
++            USB_LOG_INFO("stop: camera left open (caller-owned)\r\n");
++        }
++        s->opened_by_engine = false;
 +    }
 +
 +    /* frames still in the ready queue stay there; the application's dequeue

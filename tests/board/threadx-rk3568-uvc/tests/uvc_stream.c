@@ -32,7 +32,6 @@
 #define UVC_STREAM_FRAME_BYTES (48U * 1024U) /* MJPEG 640x480 fits well inside */
 
 struct usbh_video *uvc_app_class(void);
-int uvc_app_close(void);
 
 static uint8_t stream_bufs[UVC_STREAM_POOL_FRAMES][UVC_STREAM_FRAME_BYTES] __attribute__((aligned(64)));
 static struct usbh_videoframe stream_pool[UVC_STREAM_POOL_FRAMES];
@@ -49,7 +48,12 @@ static void uvc_stream( void )
 		return;
 	}
 
-	(void)uvc_app_close(); /* the engine opens the camera itself, from alt 0 */
+	/* Start from the camera the open case already brought up (alt4).  The
+	 * stream engine supports an already-open camera and then issues no VS
+	 * class requests at all; taking it out of its streaming setting first
+	 * (uvc_app_close) is what can leave this camera refusing VS requests
+	 * for the rest of the boot, so the camera is handed over open. */
+
 
 	for( unsigned i = 0; i < UVC_STREAM_POOL_FRAMES; i++ ) {
 		stream_pool[i].frame_buf = stream_bufs[i];

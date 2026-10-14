@@ -8,7 +8,7 @@
 # two controls that prove the cases can fail: the same harness built against a
 # mutated copy of the engine whose alternate-setting comparison drops the
 # "equal" case must turn the alt-select case red, and one whose probe ladder
-# skips the interface re-arm must turn the probe-rearm case red.
+# skips the cure cycle must turn the probe-rearm case red.
 
 set -eu
 
@@ -87,32 +87,34 @@ else
     tail -5 "$log_dir/mutated-build.log" >&2 || true
 fi
 
-# The probe ladder's cure is the interface re-arm cycle; a build that skips it
-# must fail the probe-rearm case (the refused camera never answers again).
-mut=$log_dir/mutated-norescue
+# The ownership rule: an engine-opened camera must be closed by stop, a
+# caller-opened one must be left open.  The control builds the harness against
+# a copy whose stop drops that rule (always closes); the probe-rearm case must
+# go red.
+mut=$log_dir/mutated-ownership
 rm -rf "$mut"
 mkdir -p "$mut"
-sed -e 's/^            stream_interface_rearm(video);$/            \/* mutated: no re-arm *\//' \
+sed -e 's/if (s->opened_by_engine) {/if (1) {/' \
     "$CU/class/video/usbh_uvc_stream.c" > "$mut/usbh_uvc_stream.c"
-if grep -q 'mutated: no re-arm' "$mut/usbh_uvc_stream.c" &&
+if grep -q 'if (1) {' "$mut/usbh_uvc_stream.c" &&
     make -C "$root/tests/host/uvc-stream-test" \
-        STREAM_SRC="$mut/usbh_uvc_stream.c" BUILD_DIR="$mut/build" > "$log_dir/mutated-norescue-build.log" 2>&1; then
-    if "$mut/build/uvc-stream-test" > "$log_dir/mutated-norescue-run.log" 2>&1; then
+        STREAM_SRC="$mut/usbh_uvc_stream.c" BUILD_DIR="$mut/build" > "$log_dir/mutated-ownership-build.log" 2>&1; then
+    if "$mut/build/uvc-stream-test" > "$log_dir/mutated-ownership-run.log" 2>&1; then
         case_line probe-rearm-red-control FAIL
-        echo "uvc-stream-test: without the re-arm the probe case passed (it must fail)" >&2
+        echo "uvc-stream-test: the always-close stop passed (it must fail)" >&2
     else
-        if grep -q '^UVCSTREAM: probe-rearm FAIL' "$log_dir/mutated-norescue-run.log"; then
+        if grep -q '^UVCSTREAM: probe-rearm FAIL' "$log_dir/mutated-ownership-run.log"; then
             case_line probe-rearm-red-control PASS
         else
             case_line probe-rearm-red-control FAIL
             echo "uvc-stream-test: the red control failed elsewhere" >&2
-            tail -4 "$log_dir/mutated-norescue-run.log" >&2 || true
+            tail -4 "$log_dir/mutated-ownership-run.log" >&2 || true
         fi
     fi
 else
     case_line probe-rearm-red-control FAIL
     echo "uvc-stream-test: the mutated engine did not build" >&2
-    tail -5 "$log_dir/mutated-norescue-build.log" >&2 || true
+    tail -5 "$log_dir/mutated-ownership-build.log" >&2 || true
 fi
 
 exit "$failures"
