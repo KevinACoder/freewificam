@@ -28,8 +28,31 @@
 extern "C" {
 #endif
 
-/* Console binding: the imported units print progress through this macro. */
+/* Console binding: the imported units print progress through these macros. The
+ * upstream tree binds the levelled forms to its own debug console, whose macro
+ * takes the unit's tag as the first argument; the tag is carried here as a
+ * suffix on the message, so a line states which unit emitted it and the
+ * project's log levels stay the ones that decide whether it is shown. */
 #define SDMMC_LOG(...) LOG_INFO(__VA_ARGS__)
+#define SDMMC_LOGD(tag, format, ...) LOG_DEBUG(format "%s", ##__VA_ARGS__, tag)
+#define SDMMC_LOGI(tag, format, ...) LOG_INFO(format "%s", ##__VA_ARGS__, tag)
+#define SDMMC_LOGW(tag, format, ...) LOG_WARNING(format "%s", ##__VA_ARGS__, tag)
+#define SDMMC_LOGE(tag, format, ...) LOG_ERROR(format "%s", ##__VA_ARGS__, tag)
+
+/* Sizes, values verbatim from the SDK's kernel helper header. The MMC card
+ * dump prints a capacity in gigabytes and divides by the first of them. */
+#if !defined(SZ_1K)
+#define SZ_1K				0x00000400
+#endif
+#if !defined(SZ_4K)
+#define SZ_4K				0x00001000
+#endif
+#if !defined(SZ_1M)
+#define SZ_1M				0x00100000
+#endif
+#if !defined(SZ_1G)
+#define SZ_1G				0x40000000
+#endif
 
 /*! @brief Construct a status code value from a group and code number. */
 #define MAKE_STATUS(group, code) ((((group)*100L) + (code)))

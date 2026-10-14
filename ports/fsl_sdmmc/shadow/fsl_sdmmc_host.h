@@ -9,8 +9,10 @@
  * and data descriptors, the host ops table, the host instance and the inline
  * dispatchers are verbatim from the upstream header; the wrappers the imported
  * SDIO compile set does not call (the MMC boot path, HS400/strobe helpers, the
- * endian converter, card-busy and card-interrupt enabling) are not carried - the
- * interrupt tier is deferred by the design and will re-add its wrapper when needed.
+ * endian converter, card-busy and card-interrupt enabling) were not carried
+ * until the MMC compile set needed them - the endian converter, card-busy and
+ * the boot trio are now here for that set, and the card-interrupt tier is still
+ * deferred by the design.
  */
 
 #ifndef FSL_SDMMC_HOST_H_SHADOW
@@ -383,6 +385,72 @@ static inline status_t SDMMCHOST_ExecuteTuning(sdmmchost_t *host, uint32_t tunin
     if (host->ops.executeTuning)
     {
         return host->ops.executeTuning(host, tuningCmd, revBuf, blockSize);
+    }
+    return kStatus_Fail;
+}
+
+static inline void SDMMCHOST_EnableHS400Mode(sdmmchost_t *host, bool enable)
+{
+    if (host->ops.enableHS400Mode)
+    {
+        host->ops.enableHS400Mode(host, enable);
+    }
+}
+
+static inline void SDMMCHOST_EnableStrobeDll(sdmmchost_t *host, bool enable)
+{
+    if (host->ops.enableStrobeDll)
+    {
+        host->ops.enableStrobeDll(host, enable);
+    }
+}
+
+/*
+ * The endian conversion and card-busy questions are answered by the host when it
+ * has anything to say about them. A host that leaves the converter unset is one
+ * whose memory order already matches the packet order (this board's), and a host
+ * that leaves card-busy unset never reports a busy card - both are the host
+ * driver's own statement, made by leaving the op out.
+ */
+static inline void SDMMCHOST_ConvertDataToLittleEndian(sdmmchost_t *host, uint32_t *data, uint32_t wordSize, uint32_t format)
+{
+    if (host->ops.convertDataToLittleEndian)
+    {
+        host->ops.convertDataToLittleEndian(host, data, wordSize, format);
+    }
+}
+
+static inline bool SDMMCHOST_IsCardBusy(sdmmchost_t *host)
+{
+    if (host->ops.cardIsBusy)
+    {
+        return host->ops.cardIsBusy(host);
+    }
+    return false;
+}
+
+static inline void SDMMCHOST_EnableBoot(sdmmchost_t *host, bool enable)
+{
+    if (host->ops.enableBoot)
+    {
+        host->ops.enableBoot(host, enable);
+    }
+}
+
+static inline status_t SDMMCHOST_StartBoot(sdmmchost_t *host, sdmmchost_boot_config_t *hostConfig, sdmmchost_cmd_t *cmd, uint8_t *buffer)
+{
+    if (host->ops.startBoot)
+    {
+        return host->ops.startBoot(host, hostConfig, cmd, buffer);
+    }
+    return kStatus_Fail;
+}
+
+static inline status_t SDMMCHOST_ReadBootData(sdmmchost_t *host, sdmmchost_boot_config_t *hostConfig, uint8_t *buffer)
+{
+    if (host->ops.readBootData)
+    {
+        return host->ops.readBootData(host, hostConfig, buffer);
     }
     return kStatus_Fail;
 }

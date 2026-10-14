@@ -33,7 +33,8 @@ INCLUDES := \
 # The RTOS backend key is required by the CMSIS-RTOS2 facade the OS glue includes
 # (os/cmsis2/cmsis2.h); the backend itself is the host stand-in in host_cmsis.c,
 # because the RTOS is not what this suite tests.
-CFLAGS := -std=c11 -g -O1 -Wall -Wextra -DCMSIS2_BACKEND_FREERTOS
+CFLAGS := -std=c11 -g -O1 -Wall -Wextra -DCMSIS2_BACKEND_FREERTOS \
+    -DBLKDEV_BACKEND_NVME
 
 # Header dependencies are tracked: a header edit must rebuild every object that
 # included it, or the run would exercise a binary whose units disagree about the

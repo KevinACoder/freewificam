@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Interaction steps for the eMMC image: sent by the host runner in order, with
+# the expected response after each; the judge verifies the responses in the
+# received stream. One command per line, CR-terminated by the sender.
+#
+# Read-only checks only, and deliberately no `exit`: an early exit would close
+# the shell the round's operator may still want after these.
+#
+# The steps are the storage line's own report: the shell lists the command
+# tables this image was built with, and `stor info` names the block device the
+# registry actually holds - which is the one line that says whether this image
+# bound the eMMC and not some other storage driver.
+	user@rk3568:/\$
+help\r	total function \d+[\s\S]*total variable \d+
+stor info\r	stor: volume 0, device emmc0, sector \d+
