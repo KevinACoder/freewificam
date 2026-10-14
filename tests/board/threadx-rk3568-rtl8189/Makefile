@@ -94,10 +94,15 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 	-DCMSIS2_MAX_TIMERS=128 -DCMSIS2_MAX_THREADS=24
 
 OPT ?= -Og
+# The throughput census is this image's: the instrumented layers (linuxkpi
+# core/SDIO engine/osdep, the SDIO port, the controller driver, the netif
+# adapter, the console sink) carry their counters behind this key, and every
+# other image and host build links none of it.
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
+	-DCONFIG_LKPI_CENSUS \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
 	-DCMSIS2_BACKEND_THREADX \
@@ -230,6 +235,7 @@ LKPI_RT_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 
 LKPI_RT_SRCS := \
 	$(LKPI)/linuxkpi_core.c \
+	$(LKPI)/lkpi_census.c \
 	$(LKPI)/linuxkpi_platform_target.c \
 	$(LKPI)/sdio/linuxkpi_sdio.c \
 	$(LKPI)/skbuff/skbuff_pool.c \
@@ -577,6 +583,20 @@ WLAN8189_HELPER_SRCS := \
 	$(CURDIR)/tests/wlan8189_wpa_obs.c \
 	$(COMMON)/lwip_stack.c
 
+# The census face is a driver-world translation unit: it includes the vendored
+# headers (the driver's own counters, station record and power setters are read
+# through its accessors), so it takes the driver's warning filters and build
+# configuration on top of this project's flags - the same reason the driver's
+# own bytes compile that way.
+WLAN8189_CENSUS_SRCS := $(CURDIR)/tests/wlan8189_census.c
+
+WLAN8189_CENSUS_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 $(DRV_WARN) \
+	-DLKPI_ABS_PLATFORM_PROVIDED $(SKB_POOL_CFLAGS) $(DRV_CONFIG) \
+	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio \
+	-I$(DRV) -I$(DRV)/include -I$(DRV)/platform -I$(DRV)/hal/phydm \
+	-I$(DRV)/hal/btc \
+	-I$(LWIP_PORT) -I$(CURDIR)/tests
+
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
 	$(CHERRYSH)/cherryrl/chry_readline.c \
@@ -596,7 +616,7 @@ LIBCBIND_SRCS := $(ROOT)/os/threadx/board/rk3568-itx/libc_bindings.c
 ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) \
 	$(SDIO_VENDOR_SRCS) $(SDIO_PORT_SRCS) $(LKPI_RT_SRCS) $(DRV_SRCS) \
 	$(WPA_CORE_SRCS) $(WPA_PORT_SRCS) $(WPA_DRV_SRCS) $(WPA_CMD_SRCS) \
-	$(WPA_BACKEND_SRCS) $(WLAN8189_HELPER_SRCS) \
+	$(WPA_BACKEND_SRCS) $(WLAN8189_HELPER_SRCS) $(WLAN8189_CENSUS_SRCS) \
 	$(LWIP_PORT_SRCS) $(LWIP_STACK_SRCS) $(LWIP_PING_SRCS) \
 	$(VENDORED_SRCS) $(ALLOC_SRCS) $(PRINTF_SRCS) $(LIBCBIND_SRCS)
 
@@ -642,6 +662,7 @@ $(foreach s,$(WPA_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_PORT_CFLAGS))
 $(foreach s,$(WPA_DRV_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_VENDOR_CFLAGS))))
 $(foreach s,$(WPA_CMD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WPA_CMD_CFLAGS))))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$(CURDIR)/tests))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_census.c,$(WLAN8189_CENSUS_CFLAGS)))
 $(foreach s,$(LWIP_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
 $(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
 $(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG))

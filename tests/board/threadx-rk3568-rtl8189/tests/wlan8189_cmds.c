@@ -1,7 +1,7 @@
 /**
  * @file    wlan8189_cmds.c
  * @brief   The console command face of the RTL8189FTV image: wlan8189
- *          [status|probe|scan].
+ *          [status|probe|scan|census|ps|rate].
  * @author  zhugengyu
  * @date    12.10.2026
  * @design  console command row - same shape as the SDIO image's command set
@@ -9,7 +9,9 @@
  *          CSH_CMD_EXPORT_ALIAS_FULL registers the name, the handler reads the
  *          shell from argv[argc + 1] and prints with csh_printf, and the first
  *          argument lives at argv[1]. The command is the human re-run path for
- *          the same chains the cases exercise.
+ *          the same chains the cases exercise; the census subcommands call the
+ *          same snapshot/readout functions the dataplane case brackets its
+ *          phases with, so an operator can re-run any piece by hand.
  *
  * The status read goes through the substitute only, so the command file carries
  * no dependency on the driver's internals: it reports whether a wireless device
@@ -24,6 +26,7 @@
 #include "linuxkpi_cfg80211.h"
 
 #include "wlan8189_cases.h"
+#include "wlan8189_census.h"
 
 static int
 cmd_wlan8189(int argc, char **argv)
@@ -51,11 +54,36 @@ cmd_wlan8189(int argc, char **argv)
 		wlan8189_scan_chain();
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan8189 [status|probe|scan]\n");
+	if (strcmp(argv[1], "census") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0)
+			wlan8189_census_reset();
+		else
+			wlan8189_census_print();
+		return 0;
+	}
+	if (strcmp(argv[1], "ps") == 0) {
+		if (argc >= 4 && strcmp(argv[2], "ips") == 0)
+			(void)wlan8189_ps_ips_set(atoi(argv[3]));
+		else if (argc >= 3 && strcmp(argv[2], "show") != 0)
+			(void)wlan8189_ps_set(atoi(argv[2]));
+		wlan8189_ps_show();
+		return 0;
+	}
+	if (strcmp(argv[1], "rate") == 0) {
+		wlan8189_rate_show();
+		return 0;
+	}
+	csh_printf(csh, "usage: wlan8189 [status|probe|scan|census [reset]|"
+		   "ps [show|lps-mode]|ps ips <mode>|rate]\n");
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189, "wlan8189 [status|probe|scan]",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
+			  "wlan8189 [status|probe|scan|census|ps|rate]",
 			  "wlan8189 status - whether the driver attached and how many BSS rows are held;\n"
 			  "wlan8189 probe - bring the bus and the card up and run the driver's probe;\n"
-			  "wlan8189 scan - ask the driver for a scan and print the table it reports\n")
+			  "wlan8189 scan - ask the driver for a scan and print the table it reports\n"
+			  "wlan8189 census [reset] - print (or zero) the throughput census snapshot;\n"
+			  "wlan8189 ps [show|<lps-mode>] - read back (or set) the power-save policy;\n"
+			  "wlan8189 ps ips <mode> - set the idle power-save policy;\n"
+			  "wlan8189 rate - print the connected station's rate/bandwidth/BA state\n")

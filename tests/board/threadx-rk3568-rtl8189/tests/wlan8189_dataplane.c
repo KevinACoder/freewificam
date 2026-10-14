@@ -37,11 +37,14 @@
 #include "lwip/ip4_addr.h"
 #include "lwip/dhcp.h"
 #include "lwip/apps/lwiperf.h"
+#include "lwip/stats.h"
+#include "lwip/memp.h"
 
 #include "ping.h"
 
 #include "board_suite.h"
 #include "wlan8189_cases.h"
+#include "wlan8189_census.h"
 #include "lkpinetif.h"
 #include "lwip_stack.h"
 #include "wlan8189_wpa_obs.h"
@@ -59,8 +62,13 @@ struct wiphy *lkpicfg_wiphy(void);
  * suite's result line prints, so a host-side client connecting to the server
  * below would be cut off mid-run. The case keeps the server up for this bounded
  * window first, long enough for the round's client to connect and finish. The
- * throughput is recorded, not judged, so the window is not a verdict input. */
+ * throughput is recorded, not judged, so the window is not a verdict input.
+ *
+ * The window runs WLAN8189_IPERF_PHASES times in one boot - the power policy is
+ * toggled between the phases (the A/B/A the power question is judged on), and
+ * the census snapshot prints after each window closes. */
 #define WLAN8189_IPERF_WINDOW_MS	20000U
+#define WLAN8189_IPERF_PHASES		3U
 
 static struct netif g_netif;
 
@@ -167,6 +175,38 @@ dataplane_up(void)
 	return 0;
 }
 
+/*
+ * The lwIP half of the census snapshot: this file owns the lwIP header world,
+ * so the stack's own counters print from here (the driver-world half prints
+ * from wlan8189_census.c). STAT_COUNTER is lwIP's own width, so the snapshot is
+ * per phase and the RUN sums per-phase deltas.
+ */
+static void
+census_print_lwip(void)
+{
+#if LWIP_STATS && MEM_STATS
+	LOG_ANCHOR("perf census: C lwip_mem err=%u avail=%u used=%u max=%u\n",
+	    (unsigned)lwip_stats.mem.err, (unsigned)lwip_stats.mem.avail,
+	    (unsigned)lwip_stats.mem.used, (unsigned)lwip_stats.mem.max);
+#endif
+#if LWIP_STATS && TCP_STATS
+	LOG_ANCHOR("perf census: C lwip_tcp recv=%u xmit=%u drop=%u chkerr=%u memerr=%u err=%u\n",
+	    (unsigned)lwip_stats.tcp.recv, (unsigned)lwip_stats.tcp.xmit,
+	    (unsigned)lwip_stats.tcp.drop, (unsigned)lwip_stats.tcp.chkerr,
+	    (unsigned)lwip_stats.tcp.memerr, (unsigned)lwip_stats.tcp.err);
+#endif
+#if LWIP_STATS && MEMP_STATS
+	LOG_ANCHOR("perf census: C lwip_msg err=%u max=%u\n",
+	    (unsigned)lwip_stats.memp[MEMP_TCPIP_MSG_INPKT]->err,
+	    (unsigned)lwip_stats.memp[MEMP_TCPIP_MSG_INPKT]->max);
+#endif
+#if LWIP_STATS && SYS_STATS
+	LOG_ANCHOR("perf census: C lwip_sys mbox_used=%u mbox_max=%u mbox_err=%u\n",
+	    (unsigned)lwip_stats.sys.mbox.used, (unsigned)lwip_stats.sys.mbox.max,
+	    (unsigned)lwip_stats.sys.mbox.err);
+#endif
+}
+
 void wlan8189_dataplane_chain( void )
 {
 	unsigned int waited;
@@ -199,7 +239,7 @@ void wlan8189_dataplane_chain( void )
 
 	/* the measurement phase's server: the generic-TCP lwiperf server every
 	 * TCP port 5001 client can drive (the round's runner plays the host side
-	 * against it) */
+	 * against it); it keeps listening across the phases, one client at a time */
 	LOCK_TCPIP_CORE();
 	if( lwiperf_start_tcp_server_default( NULL, NULL ) == NULL ) {
 		UNLOCK_TCPIP_CORE();
@@ -210,14 +250,39 @@ void wlan8189_dataplane_chain( void )
 	LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 	    LWIPERF_TCP_PORT_DEFAULT );
 
-	/* hold the server up for the measurement window (see the define): the
-	 * tcpip thread services it independently of this case thread */
-	LOG_ANCHOR( "wlan8189: iperf window %u s\n",
-	    (unsigned)( WLAN8189_IPERF_WINDOW_MS / 1000U ) );
-	for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS; waited += 200U ) {
-		(void)osDelay( 200U );
+	/*
+	 * The phases (see the defines): P1 the built-in policy, P2 power save
+	 * forced off (PS_MODE_ACTIVE), P3 back to the built-in value - equal
+	 * windows in one boot, so the three numbers are comparable. The census
+	 * reset and snapshot bracket each window, and the snapshot prints only
+	 * after it closed (the console at 115200 would drag a measurement).
+	 */
+	{
+		int ps_default = wlan8189_ps_get();
+		unsigned int phase;
+
+		for( phase = 1U; phase <= WLAN8189_IPERF_PHASES; phase++ ) {
+			if( phase == 2U )
+				(void)wlan8189_ps_set( 0 );
+			else if( phase == 3U )
+				(void)wlan8189_ps_set( ps_default );
+
+			wlan8189_census_reset();
+			LOG_ANCHOR( "wlan8189: phase %u ready lps=%d\n", phase,
+			    wlan8189_ps_get() );
+			LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
+			    LWIPERF_TCP_PORT_DEFAULT );
+			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
+			    (unsigned)( WLAN8189_IPERF_WINDOW_MS / 1000U ) );
+			for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS; waited += 200U ) {
+				(void)osDelay( 200U );
+			}
+			LOG_ANCHOR( "wlan8189: iperf window done\n" );
+			wlan8189_census_print();
+			census_print_lwip();
+			LOG_ANCHOR( "wlan8189: phase %u done\n", phase );
+		}
 	}
-	LOG_ANCHOR( "wlan8189: iperf window done\n" );
 }
 
 BOARD_TEST( "wlan8189-dataplane", wlan8189_dataplane_chain );
