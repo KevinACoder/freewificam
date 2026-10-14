@@ -285,11 +285,12 @@ yield(void)
 
 /*
  * The census this file contributes: the waiting takes of the counting
- * semaphore and the spurious re-checks their parking made. The parking object
- * below is why an empty take no longer sleeps a tick: a waiter parks on a CMSIS
- * semaphore the release side wakes, so a woken thread runs as soon as the
- * releasing thread lets go of the CPU - the tick granularity that used to pace
- * every driver thread (and the transmit path above all) is gone from this path.
+ * semaphore, the spurious re-checks their parking made, and - the number the
+ * transmit-path question turns on - the wake-to-take latency: for each release,
+ * how long it took the woken thread to actually take the permit. A worker that
+ * is runnable but not running (no time slice between equal priorities) shows up
+ * here and nowhere else; a permit that is taken immediately shows the release
+ * side is not the holder.
  */
 #ifdef CONFIG_LKPI_CENSUS
 struct lkpi_osdep_census {
@@ -297,15 +298,61 @@ struct lkpi_osdep_census {
 	uint64_t	down_iters;
 	uint64_t	down_spent_ns;
 	uint64_t	down_max_ns;
+	uint32_t	wake_takes;
+	struct lkpi_census_histo	wake_delay;
 };
 
 static struct lkpi_osdep_census lkpi_osdep_census_state;
+
+/* the last release per semaphore (address-keyed, small and evicting), so a
+ * take can be dated against the release that should have woken it */
+#define	LKPI_SEM_RELEASE_TRACK	8
+static const void *lkpi_sem_release_where[LKPI_SEM_RELEASE_TRACK];
+static uint64_t lkpi_sem_release_ns[LKPI_SEM_RELEASE_TRACK];
+static unsigned int lkpi_sem_release_next;
+
+static void
+lkpi_sem_release_note(const void *sem, uint64_t when)
+{
+	unsigned int i;
+
+	for (i = 0u; i < (unsigned int)LKPI_SEM_RELEASE_TRACK; i++) {
+		if (lkpi_sem_release_where[i] == sem) {
+			lkpi_sem_release_ns[i] = when;
+			return;
+		}
+	}
+	i = lkpi_sem_release_next;
+	lkpi_sem_release_next = (lkpi_sem_release_next + 1u) %
+	    (unsigned int)LKPI_SEM_RELEASE_TRACK;
+	lkpi_sem_release_where[i] = sem;
+	lkpi_sem_release_ns[i] = when;
+}
+
+static void
+lkpi_sem_take_note(const void *sem, uint64_t now)
+{
+	unsigned int i;
+
+	for (i = 0u; i < (unsigned int)LKPI_SEM_RELEASE_TRACK; i++) {
+		if (lkpi_sem_release_where[i] != sem || lkpi_sem_release_ns[i] == 0u)
+			continue;
+		if (now > lkpi_sem_release_ns[i]) {
+			lkpi_census_histo_add(&lkpi_osdep_census_state.wake_delay,
+			    now - lkpi_sem_release_ns[i]);
+			lkpi_osdep_census_state.wake_takes++;
+		}
+		lkpi_sem_release_ns[i] = 0u;
+		return;
+	}
+}
 
 void
 lkpi_osdep_census_reset(void)
 {
 
 	(void)memset(&lkpi_osdep_census_state, 0, sizeof(lkpi_osdep_census_state));
+	(void)memset(lkpi_sem_release_ns, 0, sizeof(lkpi_sem_release_ns));
 }
 
 void
@@ -317,6 +364,9 @@ lkpi_osdep_census_print(void)
 	    "perf census: D sem down n=%u iters=%llu spent_us=%llu max_us=%llu\n",
 	    c->down_calls, c->down_iters, c->down_spent_ns / 1000u,
 	    c->down_max_ns / 1000u);
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D semwake n=%u\n",
+	    c->wake_takes);
+	lkpi_census_histo_print("perf census: D semwake", &c->wake_delay);
 }
 #endif	/* CONFIG_LKPI_CENSUS */
 
@@ -381,6 +431,7 @@ down_interruptible(struct semaphore *sem)
 			sem->count--;
 			lkpi_spin_unlock_irqrestore(&sem->lock, flags);
 #ifdef CONFIG_LKPI_CENSUS
+			lkpi_sem_take_note(sem, lkpi_census_now_ns());
 			{
 				uint64_t spent = lkpi_census_now_ns() - t0;
 
@@ -420,8 +471,15 @@ up(struct semaphore *sem)
 		wake = (osSemaphoreId_t)sem->first_waiter;
 	sem->count++;
 	lkpi_spin_unlock_irqrestore(&sem->lock, flags);
-	if (wake != NULL)
+	if (wake != NULL) {
+#ifdef CONFIG_LKPI_CENSUS
+		/* the release that wakes a parked waiter: date it before the wake,
+		 * so the take it wakes can report how long the thread stayed
+		 * runnable-but-not-run */
+		lkpi_sem_release_note(sem, lkpi_census_now_ns());
+#endif
 		(void)osSemaphoreRelease(wake);
+	}
 }
 
 int

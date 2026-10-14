@@ -248,8 +248,10 @@ lkpi_sdio_census_note_ext(bool write, bool block, unsigned int bytes,
 	if (write) {
 		uint64_t req = lkpi_census_tx_request_take();
 
-		if (req != 0u && t1 > req) {
-			lkpi_census_histo_add(&c->tx_age, t1 - req);
+		/* dated to the write's start, so the age is "how long the frame
+		 * waited to reach the bus" rather than to its completion */
+		if (req != 0u && t0 > req) {
+			lkpi_census_histo_add(&c->tx_age, t0 - req);
 			c->tx_age_n++;
 		}
 		c->cmd53_w++;
