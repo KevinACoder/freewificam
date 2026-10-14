@@ -152,6 +152,9 @@ make -C freewificam board-images   # build every board image
 
 A single suite: `freewificam/tools/mock/run.sh <suite>` (`--list` shows the
 registry). The board tier is driven by `freewificam/tools/gates/run-gate2.sh`.
+The air, from outside the board, is measured by `freewificam/tools/prober/`
+(monitor, station, access point and traffic roles on a Linux host with a
+monitor-capable USB card; see its README).
 The two tiers and what they guarantee are described in
 [docs/bus-and-threading.md](docs/bus-and-threading.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md).
