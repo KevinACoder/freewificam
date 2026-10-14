@@ -73,17 +73,47 @@ cmd_wlan8189(int argc, char **argv)
 		wlan8189_rate_show();
 		return 0;
 	}
+	if (strcmp(argv[1], "pump") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "show") != 0)
+			(void)wlan8189_pump_set(argv[2]);
+		wlan8189_pump_show();
+		return 0;
+	}
+	if (strcmp(argv[1], "agg") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "show") != 0) {
+			if (strcmp(argv[2], "timeout") == 0) {
+				if (argc >= 4)
+					wlan8189_agg_timeout_set(
+					    (unsigned int)atoi(argv[3]));
+			} else {
+				wlan8189_agg_set((unsigned int)atoi(argv[2]));
+			}
+		}
+		wlan8189_card_stats_show();
+		return 0;
+	}
+	if (strcmp(argv[1], "dwc") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "show") != 0)
+			(void)wlan8189_dwc_poll_set((unsigned int)atoi(argv[2]));
+		wlan8189_dwc_show();
+		return 0;
+	}
 	csh_printf(csh, "usage: wlan8189 [status|probe|scan|census [reset]|"
-		   "ps [show|lps-mode]|ps ips <mode>|rate]\n");
+		   "ps [show|lps-mode]|ps ips <mode>|rate|"
+		   "pump [show|fixed|adaptive|yield|noyield]|"
+		   "agg [show|<size-kb>|timeout <units>]|dwc [show|<poll-us>]]\n");
 	return 0;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
-			  "wlan8189 [status|probe|scan|census|ps|rate]",
+			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc]",
 			  "wlan8189 status - whether the driver attached and how many BSS rows are held;\n"
 			  "wlan8189 probe - bring the bus and the card up and run the driver's probe;\n"
 			  "wlan8189 scan - ask the driver for a scan and print the table it reports\n"
 			  "wlan8189 census [reset] - print (or zero) the throughput census snapshot;\n"
 			  "wlan8189 ps [show|<lps-mode>] - read back (or set) the power-save policy;\n"
 			  "wlan8189 ps ips <mode> - set the idle power-save policy;\n"
-			  "wlan8189 rate - print the connected station's rate/bandwidth/BA state\n")
+			  "wlan8189 rate - print the connected station's rate/bandwidth/BA state\n"
+			  "wlan8189 pump [show|fixed|adaptive|yield|noyield] - SDIO pump cadence and fairness\n"
+			  "wlan8189 agg [show|<size-kb>|timeout <units>] - card RX aggregation length/timeout\n"
+			  "wlan8189 dwc [show|<poll-us>] - host controller completion-poll step\n")

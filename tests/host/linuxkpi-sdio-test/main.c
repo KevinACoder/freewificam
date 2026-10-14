@@ -21,6 +21,8 @@
  *   enable-disable     the function power-up sequence
  *   claim-serial       two threads claim without overlapping; I/O does not self-claim
  *   irq-pump           pending dispatch under the claim, and release stops delivery
+ *   pump-policy        the cadence knob round-trips and defaults to the fixed shape
+ *   pump-adaptive      an active card is serviced back-to-back, an idle one backs off
  *   current-identity   one stable task object per thread, and the pump thread's own
  *   init-entries       the module_init section runs in order, once
  *   section-coexist    the module_init section did not disturb the usb driver section
@@ -639,6 +641,115 @@ case_irq_pump(struct sdio_func *f)
 	    "the interrupt pump contract did not hold");
 }
 
+/* ------------------------------------------------------------------ */
+/* the pump-cadence cases                                              */
+/* ------------------------------------------------------------------ */
+
+static void
+case_pump_policy(void)
+{
+	unsigned int mode = lkpi_sdio_pump_mode_get();
+	int ok;
+
+	/* the engine starts at the fixed cadence, and the runtime knob round-trips
+	 * with the controller's period reset to the idle one on every switch */
+	ok = mode == LKPI_SDIO_PUMP_MODE_FIXED;
+	lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_ADAPTIVE);
+	ok = ok && lkpi_sdio_pump_mode_get() == LKPI_SDIO_PUMP_MODE_ADAPTIVE &&
+	    lkpi_sdio_pump_period_get() == 10u;
+	lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_FIXED);
+	ok = ok && lkpi_sdio_pump_mode_get() == LKPI_SDIO_PUMP_MODE_FIXED &&
+	    lkpi_sdio_pump_period_get() == 10u;
+
+	/* the fairness yield defaults off (the shape every measurement ran under)
+	 * and round-trips; the bus identity reads back the negotiated tier */
+	ok = ok && !lkpi_sdio_pump_yield_get();
+	lkpi_sdio_pump_yield_set(true);
+	ok = ok && lkpi_sdio_pump_yield_get();
+	lkpi_sdio_pump_yield_set(false);
+	ok = ok && !lkpi_sdio_pump_yield_get();
+
+	case_report("pump-policy", ok,
+	    ok ? "the cadence knob round-trips and defaults to fixed" :
+	    "the cadence knob did not round-trip");
+}
+
+static void
+case_bus_info(void)
+{
+	struct lkpi_sdio_bus_info bus;
+	int ok;
+
+	lkpi_sdio_bus_info_get(&bus);
+	/* the mock card negotiates a real tier, so the readback has to name one:
+	 * a clock, four data lines and a non-zero block size */
+	ok = bus.clock_hz != 0u && bus.bus_width == 4u && bus.blk_size != 0u;
+
+	case_report("bus-info", ok,
+	    ok ? "the bus identity reads back the negotiated clock/width/block size" :
+	    "the bus identity did not read back");
+}
+
+/* a handler whose cycle moves bytes: one extended read per dispatch, which is
+ * what the adaptive controller measures progress by (a direct register read
+ * deliberately counts as no progress - see the engine's note) */
+static volatile int pump_adaptive_hits;
+
+static void
+pump_adaptive_handler(struct sdio_func *f)
+{
+	u8 buf[16];
+
+	pump_adaptive_hits++;
+	(void)sdio_memcpy_fromio(f, buf, 0x00, sizeof(buf));
+}
+
+static void
+case_pump_adaptive(struct sdio_func *f)
+{
+	struct lkpi_sdio_stats st;
+	unsigned int base, hot, idle;
+	int ok;
+
+	ok = sdio_claim_irq(f, pump_adaptive_handler) == 0;
+	if (ok == 0) {
+		case_report("pump-adaptive", 0, "the IRQ could not be claimed");
+		return;
+	}
+
+	/* hot: with the card pending and every cycle moving bytes, the period
+	 * halves toward zero and cycles run back-to-back - far more polls land in
+	 * 40 ms than the fixed cadence's four */
+	lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_ADAPTIVE);
+	mock_sdio_card_set_pending(0x02u);
+	lkpi_sdio_pump_kick();
+	lkpi_sdio_stats_get(&st);
+	base = st.pump_polls;
+	lkpi_msleep(40);
+	lkpi_sdio_stats_get(&st);
+	hot = st.pump_polls - base;
+	ok = ok && hot >= 20u;
+
+	/* idle: once the hot hold has expired the controller backs off a step per
+	 * empty cycle, so a minute's one-second window holds a handful of polls,
+	 * not a spin (a spin would be thousands) */
+	mock_sdio_card_set_pending(0x00u);
+	lkpi_msleep(40);		/* let the hot hold lapse, backoff starts */
+	lkpi_sdio_stats_get(&st);
+	base = st.pump_polls;
+	lkpi_msleep(60);
+	lkpi_sdio_stats_get(&st);
+	idle = st.pump_polls - base;
+	ok = ok && idle <= 16u;
+
+	ok = ok && sdio_release_irq(f) == 0;
+	lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_FIXED);
+
+	case_report("pump-adaptive", ok,
+	    ok ? "an active card is serviced back-to-back and an idle one backs off" :
+	    "the adaptive cadence did not follow the workload");
+}
+
 static void
 case_current_identity(void)
 {
@@ -754,6 +865,9 @@ run_scenario(void)
 	case_error_mapping(f1);
 	case_claim_serial(f1);
 	case_irq_pump(f1);
+	case_pump_policy();
+	case_bus_info();
+	case_pump_adaptive(f1);
 	case_current_identity();
 	case_init_entries();
 	case_section_coexist();

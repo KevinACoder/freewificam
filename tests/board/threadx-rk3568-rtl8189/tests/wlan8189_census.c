@@ -34,6 +34,7 @@
 #include "dwc_mmc.h"
 #include "lkpinetif_seam.h"
 #include "lkpi_census.h"
+#include "linuxkpi_sdio.h"
 
 #include "wlan8189_census.h"
 
@@ -151,6 +152,272 @@ wlan8189_rate_show(void)
 	dump_sta_info(RTW_DBGDUMP, psta);
 }
 
+/* --- the pump cadence (the round-2 lever) --------------------------------- */
+
+/*
+ * The engine's cadence knob, read back as the image's own line: the policy the
+ * phase ran under is part of the measurement's identity, so it prints next to
+ * the numbers it shaped.
+ */
+void
+wlan8189_pump_show(void)
+{
+	unsigned int mode = lkpi_sdio_pump_mode_get();
+	struct lkpi_sdio_bus_info bus;
+	_adapter *adapter = census_adapter();
+
+	lkpi_sdio_bus_info_get(&bus);
+	printk("wlan8189: pump policy=%s period_ms=%u yield=%u clk_khz=%u bus=%u blk=%u\n",
+	    (mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ? "adaptive" : "fixed",
+	    lkpi_sdio_pump_period_get(), lkpi_sdio_pump_yield_get() ? 1u : 0u,
+	    bus.clock_hz / 1000u, bus.bus_width, bus.blk_size);
+	/*
+	 * The counting semaphores' addresses, so the wake-latency table keyed by
+	 * semaphore address can be read: they are heap objects, so a symbol map
+	 * cannot name them, and the driver's own structures can. Printed next to
+	 * the cadence line because both are "what the phase ran on".
+	 */
+	if (adapter != NULL) {
+		printk("wlan8189: sem addr xmit_sema=%lx sdio_xmit_sema=%lx xmitbuf_sema=%lx\n",
+		    (unsigned long)&adapter->xmitpriv.xmit_sema,
+		    (unsigned long)&adapter->xmitpriv.SdioXmitSema,
+		    (unsigned long)&adapter->xmitpriv.sdio_free_xmitbuf_sema);
+	}
+}
+
+int
+wlan8189_pump_set(const char *policy)
+{
+
+	if (strcmp(policy, "fixed") == 0)
+		lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_FIXED);
+	else if (strcmp(policy, "adaptive") == 0)
+		lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_ADAPTIVE);
+	else if (strcmp(policy, "yield") == 0)
+		lkpi_sdio_pump_yield_set(true);
+	else if (strcmp(policy, "noyield") == 0)
+		lkpi_sdio_pump_yield_set(false);
+	else
+		return -1;
+	return (int)lkpi_sdio_pump_mode_get();
+}
+
+void
+wlan8189_pump_yield_set(int on)
+{
+
+	lkpi_sdio_pump_yield_set(on != 0);
+}
+
+int
+wlan8189_pump_yield_get(void)
+{
+
+	return lkpi_sdio_pump_yield_get() ? 1 : 0;
+}
+
+/* --- the card-side receiver account --------------------------------------- */
+
+/*
+ * The card's own receive error counter and the raw HISR word. The counter is
+ * REG_RXERR_RPT (0x0664): the top nibble selects which internal counter the
+ * register shows and the low twenty bits carry it (hal_com_reg.h: RXERR_RPT_SEL
+ * / RXERR_COUNTER_MASK), and the read sequence is the driver's own MP-mode one
+ * (core/rtw_mp.c GetPhyRxPktCounts: select, then read the 32-bit word). Type 15
+ * is RX_FULL_DROP: frames the card dropped because its receive FIFO was full -
+ * the number that separates "the host services too slowly" from "the card
+ * overflows regardless". The HISR byte is read raw because its RXERR and RXFOVW
+ * bits sit outside the driver's interrupt mask and therefore stay set once the
+ * card raised them (a since-boot flag the delta cannot give).
+ * The reads are plain card register accesses through the driver's own wrappers,
+ * i.e. the bus claim is taken for the moment of the read - the caller reads at
+ * phase boundaries, where no traffic is in flight.
+ */
+static u32 card_full_drop_base;
+static u8 card_hisr_base;
+
+static u32
+card_full_drop_read(_adapter *adapter)
+{
+
+	rtw_write32(adapter, REG_RXERR_RPT,
+	    _RXERR_RPT_SEL(RXERR_TYPE_RX_FULL_DROP));
+	return rtw_read32(adapter, REG_RXERR_RPT) & RXERR_COUNTER_MASK;
+}
+
+static void
+card_stats_note_base(_adapter *adapter)
+{
+
+	if (adapter == NULL)
+		return;
+	card_full_drop_base = card_full_drop_read(adapter);
+	card_hisr_base = rtw_read8(adapter, SDIO_REG_HISR);
+}
+
+void
+wlan8189_card_stats_show(void)
+{
+	_adapter *adapter = census_adapter();
+	u32 now;
+	u8 hisr;
+	u32 agg = 0u;
+
+	if (adapter == NULL) {
+		printk("perf census: A card adapter=absent\n");
+		return;
+	}
+	now = card_full_drop_read(adapter);
+	hisr = rtw_read8(adapter, SDIO_REG_HISR);
+	agg = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH) & 0xffffu;
+	/* the delta is masked to the counter's own width, so a wrap inside one
+	 * phase still reads as a count rather than as a borrow */
+	printk("perf census: A card full_drop=+%u hisr=0x%02x rxerr=%u rxfovw=%u agg=0x%04x (base=0x%02x)\n",
+	    (unsigned)((now - card_full_drop_base) & RXERR_COUNTER_MASK),
+	    (unsigned)hisr, (unsigned)((hisr >> 3) & 1u),
+	    (unsigned)((hisr >> 5) & 1u), (unsigned)agg,
+	    (unsigned)card_hisr_base);
+}
+
+/* --- the driver's receive-buffer free count (per pump cycle) --------------- */
+
+/*
+ * The number the shortage path turns on: how many of the driver's eight receive
+ * buffers are free at the moment the pump is about to ask for one. The count is
+ * taken by walking the free queue's list - the driver's own cache of that count
+ * (free_recv_buf_queue_cnt) is only ever written at init and teardown, so it
+ * cannot be read as a live value. The walk is bounded and runs on the pump
+ * thread while the bottom half may move elements; a torn read costs one wrong
+ * sample, which is why this is an instrument and not an invariant.
+ */
+static u32 card_free_min = ~0u;
+static u32 card_free_zero;
+static u32 card_free_sum;
+static u32 card_free_n;
+
+static u32
+card_free_recvbuf_count(_adapter *adapter)
+{
+	const struct list_head *head = &adapter->recvpriv.free_recv_buf_queue.queue;
+	const struct list_head *p = head->next;
+	u32 n = 0u;
+
+	if (head->next == NULL || head->prev == NULL)
+		return 0u;
+	while (p != head && n < 32u) {
+		n++;
+		p = p->next;
+		if (p == NULL)
+			break;
+	}
+	return n;
+}
+
+void
+lkpi_census_pump_probe(void)
+{
+	_adapter *adapter = census_adapter();
+	u32 free_n;
+
+	if (adapter == NULL)
+		return;
+	free_n = card_free_recvbuf_count(adapter);
+	card_free_n++;
+	card_free_sum += free_n;
+	if (free_n < card_free_min)
+		card_free_min = free_n;
+	if (free_n == 0u)
+		card_free_zero++;
+}
+
+void
+wlan8189_cardq_show(void)
+{
+	u32 avg_x10 = (card_free_n != 0u) ?
+	    (u32)(((unsigned long long)card_free_sum * 10u) / card_free_n) : 0u;
+
+	printk("perf census: A cardq free_min=%u free_avg_x10=%u zero=%u n=%u\n",
+	    (unsigned)((card_free_min == ~0u) ? 0u : card_free_min),
+	    (unsigned)avg_x10, (unsigned)card_free_zero, (unsigned)card_free_n);
+}
+
+/* --- the card's receive aggregation thresholds ---------------------------- */
+
+/*
+ * REG_RXDMA_AGG_PG_TH (0x0280): the timeout in the high byte, the length
+ * threshold in the low byte in kilobytes (the driver's own clamp divides by
+ * 1024 - hal/rtl8188f/sdio/sdio_halinit.c HalRxAggr8188FSdio). The card
+ * releases a burst when either the accumulated length crosses the threshold or
+ * the timeout expires; the driver writes the register once at init, and this
+ * runtime knob re-writes either byte per phase so one boot can compare release
+ * policies against the throughput (the byte it is not setting, and every other
+ * bit, are preserved by the read-modify-write).
+ *
+ * The measured card releases ~4 KB per burst against a 15 KB length threshold,
+ * i.e. the timeout, not the length, is what ends most bursts. The timeout byte
+ * is therefore its own lever, and it is the one this knob's second form moves.
+ */
+void
+wlan8189_agg_set(unsigned int size_kb)
+{
+	_adapter *adapter = census_adapter();
+	u32 v;
+
+	if (adapter == NULL)
+		return;
+	v = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH);
+	v = (v & ~0xffu) | (size_kb & 0xffu);
+	rtw_write32(adapter, REG_RXDMA_AGG_PG_TH, v);
+}
+
+void
+wlan8189_agg_timeout_set(unsigned int timeout_units)
+{
+	_adapter *adapter = census_adapter();
+	u32 v;
+
+	if (adapter == NULL)
+		return;
+	v = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH);
+	v = (v & ~0xff00u) | ((timeout_units & 0xffu) << 8);
+	rtw_write32(adapter, REG_RXDMA_AGG_PG_TH, v);
+}
+
+unsigned int
+wlan8189_agg_get(void)
+{
+	_adapter *adapter = census_adapter();
+
+	if (adapter == NULL)
+		return 0u;
+	return rtw_read32(adapter, REG_RXDMA_AGG_PG_TH) & 0xffffu;
+}
+
+/* --- the host controller's completion-poll step --------------------------- */
+
+/*
+ * The step the controller's completion waits sleep between status reads, in
+ * microseconds. It is the round's lever for the question "is the 100 us step on
+ * the critical path": every command's completion was quantised to one step, so
+ * a finer step pays off exactly when the wait was consuming the step rather
+ * than the hardware's own completion time. The readback goes out on the pump
+ * line so a phase reports the step it ran at.
+ */
+void
+wlan8189_dwc_show(void)
+{
+
+	printk("wlan8189: dwc poll_us=%u\n", dwc_mmc_get_poll_us());
+}
+
+unsigned int
+wlan8189_dwc_poll_set(unsigned int us)
+{
+
+	dwc_mmc_set_poll_us(us);
+	return dwc_mmc_get_poll_us();
+}
+
 /* --- the snapshot --------------------------------------------------------- */
 
 void
@@ -162,6 +429,11 @@ wlan8189_census_reset(void)
 	lkpi_osdep_census_reset();
 	lkpi_fsl_census_reset();
 	dwc_mmc_census_reset();
+	card_stats_note_base(census_adapter());
+	card_free_min = ~0u;
+	card_free_zero = 0u;
+	card_free_sum = 0u;
+	card_free_n = 0u;
 }
 
 void
@@ -230,6 +502,9 @@ wlan8189_census_print(void)
 	 * readout below, not an 802.11 input count */
 	printk("perf census: N net80211 linked=0 frames=0 (FullMAC line: the data path never crosses net80211)\n");
 
+	wlan8189_card_stats_show();
+	wlan8189_cardq_show();
 	wlan8189_rate_show();
 	wlan8189_ps_show();
+	wlan8189_pump_show();
 }

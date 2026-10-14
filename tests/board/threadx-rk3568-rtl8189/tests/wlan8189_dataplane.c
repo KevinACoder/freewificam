@@ -36,6 +36,7 @@
 #include "lwip/netif.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/dhcp.h"
+#include "lwip/udp.h"
 #include "lwip/apps/lwiperf.h"
 #include "lwip/stats.h"
 #include "lwip/memp.h"
@@ -64,11 +65,59 @@ struct wiphy *lkpicfg_wiphy(void);
  * window first, long enough for the round's client to connect and finish. The
  * throughput is recorded, not judged, so the window is not a verdict input.
  *
- * The window runs WLAN8189_IPERF_PHASES times in one boot - the power policy is
- * toggled between the phases (the A/B/A the power question is judged on), and
- * the census snapshot prints after each window closes. */
+ * The window runs WLAN8189_IPERF_PHASES times in one boot. The sheet is
+ * A/B/A/B rather than A/B/A: the pump-cadence round measured the same
+ * configuration twice in one boot and saw the two phases differ by 41% (8.28
+ * then 11.7), so a single treatment phase against a single control cannot
+ * separate a lever under 40% from drift. Two of each, averaged, can.
+ *
+ * Which lever the sheet moves is a build-time choice (WLAN8189_LEVER_* below):
+ * one lever per image keeps each boot's comparison single-variable, which is
+ * the round's whole discipline. */
 #define WLAN8189_IPERF_WINDOW_MS	20000U
-#define WLAN8189_IPERF_PHASES		3U
+#define WLAN8189_IPERF_PHASES		4U
+
+/* the levers this sheet can carry. The census and the engine read the
+ * treatments back per phase, so a phase's own line says which one it ran. */
+#define WLAN8189_LEVER_PUMP	1	/* the pump cadence: adaptive vs fixed */
+#define WLAN8189_LEVER_POLL	2	/* the controller's completion-poll step */
+#define WLAN8189_LEVER_AGG	3	/* the card's RX aggregation timeout byte */
+#define WLAN8189_LEVER_YIELD	4	/* the pump's fairness yield */
+
+#ifndef WLAN8189_LEVER
+#define WLAN8189_LEVER	WLAN8189_LEVER_AGG
+#endif
+
+/* which arm leads: 0 = control on the odd phases (default), 1 = treatment */
+#ifndef WLAN8189_ARM_B_FIRST
+#define WLAN8189_ARM_B_FIRST	0
+#endif
+
+/* the treatments each lever moves between. DWC poll: the controller's
+ * completion wait sleeps this long between status reads, so a 100 us step makes
+ * every command's completion read as ~100 us even when the hardware finished
+ * sooner; the treatment step is the fine end of the same knob.
+ *
+ * Aggregation timeout: REG_RXDMA_AGG_PG_TH's high byte. The card releases a
+ * burst on length OR timeout; the round measured the driver's stock timeout
+ * (0x01) as the binding one - the card released ~4 KB per burst against a 15 KB
+ * length threshold - and holding it longer was worth +42% / +45% on two tiers
+ * across two boots, while going further (0x40) was worse and did not grow the
+ * bursts at all. So the confirmed value is the baseline every phase starts
+ * from, and the sheet's default treatment is the driver's stock value, which
+ * makes an unparameterised boot re-demonstrate the lever it was chosen for.
+ * Writing it from the test rather than the driver keeps the vendored tree
+ * untouched. */
+#define WLAN8189_DWC_POLL_STOCK_US	100U
+#ifndef WLAN8189_DWC_POLL_TREAT_US
+#define WLAN8189_DWC_POLL_TREAT_US	5U
+#endif
+#ifndef WLAN8189_AGG_TIMEOUT_BASE
+#define WLAN8189_AGG_TIMEOUT_BASE	0x20u
+#endif
+#ifndef WLAN8189_AGG_TIMEOUT_TREAT
+#define WLAN8189_AGG_TIMEOUT_TREAT	WLAN8189_AGG_TIMEOUT_STOCK
+#endif
 
 static struct netif g_netif;
 
@@ -176,6 +225,36 @@ dataplane_up(void)
 }
 
 /*
+ * The UDP receive sink: a datagram socket that only counts what arrives. A UDP
+ * blast has no acknowledgement clock - the sender never waits for us - so the
+ * sink's byte count is the receive path's own ceiling under the current pump
+ * mode, and the difference to the TCP number is what the acknowledgement path
+ * costs the sender. The counters reset with the census, so a phase's sink is
+ * that phase's burst.
+ */
+#define WLAN8189_UDP_SINK_PORT	5002U
+
+static struct udp_pcb *g_udp_pcb;
+static volatile unsigned int g_udp_pkts;
+static volatile unsigned long g_udp_bytes;
+
+static void
+udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+    const ip_addr_t *addr, u16_t port)
+{
+
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p != NULL) {
+		g_udp_bytes += (unsigned long)p->tot_len;
+		g_udp_pkts++;
+		pbuf_free(p);
+	}
+}
+
+/*
  * The lwIP half of the census snapshot: this file owns the lwIP header world,
  * so the stack's own counters print from here (the driver-world half prints
  * from wlan8189_census.c). STAT_COUNTER is lwIP's own width, so the snapshot is
@@ -250,26 +329,91 @@ void wlan8189_dataplane_chain( void )
 	LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 	    LWIPERF_TCP_PORT_DEFAULT );
 
+	/* the UDP ceiling probe's sink (the host blasts datagrams at it; the
+	 * receive path drains them with no acknowledgement clock in the way) */
+	LOCK_TCPIP_CORE();
+	g_udp_pcb = udp_new();
+	if( g_udp_pcb != NULL &&
+	    udp_bind( g_udp_pcb, IP_ANY_TYPE, WLAN8189_UDP_SINK_PORT ) == ERR_OK ) {
+		udp_recv( g_udp_pcb, udp_sink_recv, NULL );
+	} else {
+		UNLOCK_TCPIP_CORE();
+		board_case_fail( "the UDP sink did not bind" );
+		return;
+	}
+	UNLOCK_TCPIP_CORE();
+	LOG_ANCHOR( "wlan8189: udp sink ready port=%u\n",
+	    WLAN8189_UDP_SINK_PORT );
+
 	/*
-	 * The phases (see the defines): P1 the built-in policy, P2 power save
-	 * forced off (PS_MODE_ACTIVE), P3 back to the built-in value - equal
-	 * windows in one boot, so the three numbers are comparable. The census
-	 * reset and snapshot bracket each window, and the snapshot prints only
-	 * after it closed (the console at 115200 would drag a measurement).
+	 * The phases (see the defines): A/B/A/B around one lever, equal windows in
+	 * one boot, so the four numbers are comparable and the two treatment phases
+	 * average out the drift the earlier single-treatment sheet could not tell
+	 * from its lever. Every phase re-asserts the full baseline state - pump
+	 * cadence, controller poll step, card aggregation pair, fairness yield - so
+	 * a phase is exactly the lever's setting and nothing carried over. Power
+	 * save stays at the driver's built-in policy (the latency matrix measured
+	 * power a secondary lever). The census reset and snapshot bracket each
+	 * window, and the phase line prints the effective settings so the numbers
+	 * carry their own identity.
 	 */
 	{
-		int ps_default = wlan8189_ps_get();
 		unsigned int phase;
 
 		for( phase = 1U; phase <= WLAN8189_IPERF_PHASES; phase++ ) {
-			if( phase == 2U )
-				(void)wlan8189_ps_set( 0 );
-			else if( phase == 3U )
-				(void)wlan8189_ps_set( ps_default );
+			/* which arm a phase runs is a build choice: the default puts the
+			 * control first (arm A on the odd phases), and the confirmatory
+			 * boot runs the treatment first so both of its samples land before
+			 * the last phase, which is where this sheet's predecessor wedged */
+#if WLAN8189_ARM_B_FIRST
+			const int treatment = ((phase % 2U) == 1U);
+#else
+			const int treatment = ((phase % 2U) == 0U);
+#endif
+			const char *pump;
+			unsigned int poll_us;
+			unsigned int agg_timeout;
 
+			(void)wlan8189_pump_set( "fixed" );
+			wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
+			wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_BASE );
+			agg_timeout = WLAN8189_AGG_TIMEOUT_BASE;
+			wlan8189_pump_yield_set( 0 );
+			poll_us = wlan8189_dwc_poll_set( WLAN8189_DWC_POLL_STOCK_US );
+
+#if WLAN8189_LEVER == WLAN8189_LEVER_PUMP
+			pump = treatment ? "adaptive" : "fixed";
+			(void)wlan8189_pump_set( pump );
+#elif WLAN8189_LEVER == WLAN8189_LEVER_POLL
+			pump = "adaptive";
+			(void)wlan8189_pump_set( pump );
+			if (treatment)
+				poll_us = wlan8189_dwc_poll_set(
+				    WLAN8189_DWC_POLL_TREAT_US );
+#elif WLAN8189_LEVER == WLAN8189_LEVER_AGG
+			pump = "adaptive";
+			(void)wlan8189_pump_set( pump );
+			if (treatment) {
+				agg_timeout = WLAN8189_AGG_TIMEOUT_TREAT;
+				wlan8189_agg_timeout_set( agg_timeout );
+			}
+#elif WLAN8189_LEVER == WLAN8189_LEVER_YIELD
+			pump = "adaptive";
+			(void)wlan8189_pump_set( pump );
+			wlan8189_pump_yield_set( treatment ? 1 : 0 );
+#else
+#error "WLAN8189_LEVER is not a known lever"
+#endif
+			(void)agg_timeout;
+
+			g_udp_pkts = 0U;
+			g_udp_bytes = 0UL;
 			wlan8189_census_reset();
-			LOG_ANCHOR( "wlan8189: phase %u ready lps=%d\n", phase,
-			    wlan8189_ps_get() );
+			LOG_ANCHOR( "wlan8189: phase %u ready lever=%u arm=%c pump=%s "
+			    "poll_us=%u agg=0x%04x yield=%d lps=%d\n",
+			    phase, (unsigned)WLAN8189_LEVER, treatment ? 'B' : 'A',
+			    pump, poll_us, wlan8189_agg_get(),
+			    wlan8189_pump_yield_get(), wlan8189_ps_get() );
 			LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 			    LWIPERF_TCP_PORT_DEFAULT );
 			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
@@ -278,6 +422,8 @@ void wlan8189_dataplane_chain( void )
 				(void)osDelay( 200U );
 			}
 			LOG_ANCHOR( "wlan8189: iperf window done\n" );
+			LOG_ANCHOR( "wlan8189: udp sink pkts=%u bytes=%lu\n",
+			    g_udp_pkts, g_udp_bytes );
 			wlan8189_census_print();
 			census_print_lwip();
 			LOG_ANCHOR( "wlan8189: phase %u done\n", phase );

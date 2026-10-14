@@ -104,6 +104,15 @@ void dwc_mmc_set_bus_width(struct dwc_mmc *hc, unsigned int width);
 /* Whether the slot reads as occupied. */
 bool dwc_mmc_card_present(const struct dwc_mmc *hc);
 
+/* The completion-poll step, in microseconds: how long each completion wait
+ * sleeps between readings of the controller's status register. A coarser step
+ * notices a completed transfer up to one step late; a finer one spends
+ * proportionally more CPU inside the wait loop. The absolute timeout budgets do
+ * not change with it (they are wall-clock budgets, not iteration counts). The
+ * default is the value this driver used to hard-code. */
+void dwc_mmc_set_poll_us(uint32_t us);
+uint32_t dwc_mmc_get_poll_us(void);
+
 /* Run one command, with its data stage when the command carries one, and
  * return when it completed (DWC_MMC_OK) or why it did not. */
 int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd);

@@ -68,6 +68,50 @@ bool	lkpi_sdio_claim_held_by_current(void);
  * does this on its own timer; this entry makes a test's cycle deterministic. */
 void	lkpi_sdio_pump_kick(void);
 
+/*
+ * The pump's cadence: FIXED holds the idle period between cycles (the polled
+ * host's shape); ADAPTIVE shortens the period after a cycle that moved bytes
+ * and lengthens it again after one that moved none, the shape Linux' polled-host
+ * IRQ thread uses (drivers/mmc/core/sdio_irq.c sdio_irq_thread()). The mode is a
+ * runtime knob so one boot can measure both under the same RF; default FIXED.
+ */
+#define	LKPI_SDIO_PUMP_MODE_FIXED	0u
+#define	LKPI_SDIO_PUMP_MODE_ADAPTIVE	1u
+
+void	lkpi_sdio_pump_mode_set(unsigned int mode);
+unsigned int	lkpi_sdio_pump_mode_get(void);
+
+/*
+ * The fairness yield: when on, a pump cycle that would re-take the bus while a
+ * driver thread is already parked on the claim skips that turn instead, so the
+ * parked caller gets the bus rather than queueing behind the pump again. Off by
+ * default - the pump's own cadence owns the bus, which is the shape every
+ * earlier measurement ran under. It is a runtime knob so one boot can measure
+ * both.
+ */
+void	lkpi_sdio_pump_yield_set(bool on);
+bool	lkpi_sdio_pump_yield_get(void);
+
+/* the adaptive controller's current period, milliseconds (the idle period when
+ * the mode is fixed) */
+unsigned int	lkpi_sdio_pump_period_get(void);
+
+/*
+ * The bus identity the transfers above actually ran on: the card clock the
+ * driver negotiated, the data-line width, and the block size the data function
+ * transfers in. The bring-up line reports these once, which is not enough for a
+ * measurement - a throughput phase has to say which tier it ran at, or two
+ * numbers from different boots are not comparable.
+ */
+struct lkpi_sdio_bus_info {
+	uint32_t	clock_hz;
+	unsigned int	bus_width;	/* data lines */
+	unsigned int	blk_size;	/* function 1's current block size, 0 if none */
+	unsigned int	blk_max;	/* that function's ceiling */
+};
+
+void	lkpi_sdio_bus_info_get(struct lkpi_sdio_bus_info *out);
+
 void	lkpi_sdio_stats_get(struct lkpi_sdio_stats *out);
 
 #endif /* LKPI_SDIO_H */
