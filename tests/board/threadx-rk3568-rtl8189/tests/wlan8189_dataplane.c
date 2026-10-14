@@ -98,29 +98,25 @@ struct wiphy *lkpicfg_wiphy(void);
  * every command's completion read as ~100 us even when the hardware finished
  * sooner; the treatment step is the fine end of the same knob.
  *
- * Aggregation timeout: REG_RXDMA_AGG_PG_TH's high byte - the card releases a
- * burst on length OR timeout, the round's earlier measurement showed the card
- * releasing ~4 KB against a 15 KB length threshold (so the timeout, not the
- * length, ends most bursts), and the byte's units are undocumented. The
- * treatment makes the card hold clearly longer, which is the decisive test: if
- * the byte governs release, burst sizes grow toward the length threshold and
- * the burst period stretches; if the burst pattern does not move at all, the
- * byte does not govern release on this silicon and the direction is closed.
- * The card's own full-drop counter and the RX-transfer size histogram are both
- * reported per phase, so an overflow the longer hold causes cannot pass unseen. */
+ * Aggregation timeout: REG_RXDMA_AGG_PG_TH's high byte. The card releases a
+ * burst on length OR timeout; the round measured the driver's stock timeout
+ * (0x01) as the binding one - the card released ~4 KB per burst against a 15 KB
+ * length threshold - and holding it longer was worth +42% / +45% on two tiers
+ * across two boots, while going further (0x40) was worse and did not grow the
+ * bursts at all. So the confirmed value is the baseline every phase starts
+ * from, and the sheet's default treatment is the driver's stock value, which
+ * makes an unparameterised boot re-demonstrate the lever it was chosen for.
+ * Writing it from the test rather than the driver keeps the vendored tree
+ * untouched. */
 #define WLAN8189_DWC_POLL_STOCK_US	100U
 #ifndef WLAN8189_DWC_POLL_TREAT_US
 #define WLAN8189_DWC_POLL_TREAT_US	5U
 #endif
-#ifndef WLAN8189_AGG_TIMEOUT_TREAT
-#define WLAN8189_AGG_TIMEOUT_TREAT	0x20u
-#endif
-/* The aggregation timeout every phase starts from. Once a lever is confirmed it
- * becomes the baseline, and the next lever is measured on top of it - a
- * comparison against the driver's stock value would otherwise re-measure the
- * first lever in every phase. */
 #ifndef WLAN8189_AGG_TIMEOUT_BASE
-#define WLAN8189_AGG_TIMEOUT_BASE	WLAN8189_AGG_TIMEOUT_STOCK
+#define WLAN8189_AGG_TIMEOUT_BASE	0x20u
+#endif
+#ifndef WLAN8189_AGG_TIMEOUT_TREAT
+#define WLAN8189_AGG_TIMEOUT_TREAT	WLAN8189_AGG_TIMEOUT_STOCK
 #endif
 
 static struct netif g_netif;
