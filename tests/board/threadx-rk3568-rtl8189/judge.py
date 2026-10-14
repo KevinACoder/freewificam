@@ -20,7 +20,10 @@ catch: a passing probe must have named a hardware address that is not all zero
 reached the chip), a passing scan must have reported at least one row (an empty
 table is not a scan, whatever the CASE line says), a passing join must carry the
 supplicant's own handshake anchor, and a passing dataplane must show a bound
-(non-any) address plus at least four ping echo replies.
+(non-any) address, at least four ping echo replies, and an uplink stage that
+either ran its sheet (four ready/result pairs, both arms present, every result
+carrying bytes) or said why it did not - the stage's silent omission is the one
+thing it may not do.
 """
 
 import os
@@ -62,8 +65,11 @@ CASES = [
 #:   wlan8189-       the case's own lines (tests/.../tests/wlan8189_dataplane.c):
 #:   dataplane       the interface bring-up, the DHCP lease, the ping window, the
 #:                   netif adapter's diagnostic counters, the iperf server, and
-#:                   the census instrumentation (the three measurement phases,
-#:                   their `perf census:` snapshots, and the rate/BA readout)
+#:                   the census instrumentation (the four-phase measurement
+#:                   sheet, its `perf census:` snapshots, the rate/BA readout,
+#:                   and the uplink sheet's standby line - the uplink stage's
+#:                   verdict strength lives in the backstop below, because a
+#:                   boot with no configured peer legally skips the stage)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "wlan8189-probe": [
@@ -94,6 +100,7 @@ ANCHORS = {
         r"wlan8189: phase 2 ready lever=\d+ arm=[AB]",
         r"wlan8189: udp sink ready port=\d+",
         r"wlan8189: udp sink pkts=\d+ bytes=\d+",
+        r"wlan8189: uplink standby",
         r"perf census: A ",
         r"perf census: A card ",
         r"perf census: D semwake_sem ",
@@ -164,7 +171,7 @@ BASE_TRANSCRIPT = (
     "[  54.100] wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n"
     "[  54.200] wlan8189: iperf server ready port=5001\r\n"
     "[  54.250] wlan8189: udp sink ready port=5002\r\n"
-    "[  54.300] wlan8189: phase 1 ready lever=3 arm=A pump=adaptive poll_us=100 agg=0x010f yield=0 lps=2\r\n"
+    "[  54.300] wlan8189: phase 1 ready lever=3 arm=A pump=adaptive poll_us=100 data_us=100 agg=0x010f yield=0 lps=2\r\n"
     "[  54.310] wlan8189: iperf server ready port=5001\r\n"
     "[  54.320] wlan8189: iperf window 20 s\r\n"
     "[  74.000] wlan8189: iperf window done\r\n"
@@ -177,15 +184,37 @@ BASE_TRANSCRIPT = (
     "[  74.400] wlan8189: ps lps=2 leisure=1 fw_ps=0 cpwm=0 enter=0 leave=0\r\n"
     "[  74.450] wlan8189: pump policy=adaptive period_ms=10 yield=0 clk_khz=50000 bus=4 blk=512\r\n"
     "[  74.500] wlan8189: phase 1 done\r\n"
-    "[  74.600] wlan8189: phase 2 ready lever=3 arm=B pump=adaptive poll_us=100 agg=0x200f yield=0 lps=2\r\n"
+    "[  74.600] wlan8189: phase 2 ready lever=3 arm=B pump=adaptive poll_us=100 data_us=100 agg=0x200f yield=0 lps=2\r\n"
     "[  74.610] wlan8189: iperf server ready port=5001\r\n"
     "[  94.000] wlan8189: phase 2 done\r\n"
-    "[  94.100] wlan8189: phase 3 ready lever=3 arm=A pump=adaptive poll_us=100 agg=0x010f yield=0 lps=2\r\n"
+    "[  94.100] wlan8189: phase 3 ready lever=3 arm=A pump=adaptive poll_us=100 data_us=100 agg=0x010f yield=0 lps=2\r\n"
     "[  94.110] wlan8189: iperf server ready port=5001\r\n"
     "[ 114.000] wlan8189: phase 3 done\r\n"
-    "[ 114.100] wlan8189: phase 4 ready lever=3 arm=B pump=adaptive poll_us=100 agg=0x200f yield=0 lps=2\r\n"
+    "[ 114.100] wlan8189: phase 4 ready lever=3 arm=B pump=adaptive poll_us=100 data_us=100 agg=0x200f yield=0 lps=2\r\n"
     "[ 114.110] wlan8189: iperf server ready port=5001\r\n"
     "[ 134.000] wlan8189: phase 4 done\r\n"
+    "[ 134.100] wlan8189: uplink standby (configure with 'wlan8189 uplink "
+    "<peer-ip>')\r\n"
+    "[ 134.200] wlan8189: uplink phase 1 ready lever=3 arm=A pump=adaptive "
+    "poll_us=100 data_us=100 agg=0x010f yield=0 lps=2\r\n"
+    "[ 145.000] wlan8189: uplink phase 1 result bytes=2640000 ms=10001 "
+    "kbit=21118 type=1\r\n"
+    "[ 145.100] wlan8189: uplink phase 1 done\r\n"
+    "[ 145.200] wlan8189: uplink phase 2 ready lever=3 arm=B pump=adaptive "
+    "poll_us=100 data_us=100 agg=0x200f yield=0 lps=2\r\n"
+    "[ 156.000] wlan8189: uplink phase 2 result bytes=2910000 ms=10001 "
+    "kbit=23278 type=1\r\n"
+    "[ 156.100] wlan8189: uplink phase 2 done\r\n"
+    "[ 156.200] wlan8189: uplink phase 3 ready lever=3 arm=A pump=adaptive "
+    "poll_us=100 data_us=100 agg=0x010f yield=0 lps=2\r\n"
+    "[ 167.000] wlan8189: uplink phase 3 result bytes=2690000 ms=10001 "
+    "kbit=21518 type=1\r\n"
+    "[ 167.100] wlan8189: uplink phase 3 done\r\n"
+    "[ 167.200] wlan8189: uplink phase 4 ready lever=3 arm=B pump=adaptive "
+    "poll_us=100 data_us=100 agg=0x200f yield=0 lps=2\r\n"
+    "[ 178.000] wlan8189: uplink phase 4 result bytes=2880000 ms=10001 "
+    "kbit=23038 type=1\r\n"
+    "[ 178.100] wlan8189: uplink phase 4 done\r\n"
     "[ 114.100] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"
     "[  56.000] total function 9\r\n"
     "[  56.010] total variable 2\r\n"
@@ -262,6 +291,20 @@ MUTATIONS = [
     ("lever arm dropped", BASE_TRANSCRIPT.replace(
         "wlan8189: phase 2 ready lever=3 arm=B", "wlan8189: phase 2 ready"), 1),
     ("both arms dropped", BASE_TRANSCRIPT.replace("arm=A", "arm=B"), 1),
+    ("uplink standby dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: uplink standby (configure with 'wlan8189 uplink "
+        "<peer-ip>')\r\n", ""), 1),
+    ("uplink ready dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: uplink phase 3 ready lever=3 arm=A pump=adaptive "
+        "poll_us=100 data_us=100 agg=0x010f yield=0 lps=2\r\n", ""), 1),
+    ("uplink arm dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: uplink phase 2 ready lever=3 arm=B",
+        "wlan8189: uplink phase 2 ready lever=3 arm=A").replace(
+        "wlan8189: uplink phase 4 ready lever=3 arm=B",
+        "wlan8189: uplink phase 4 ready lever=3 arm=A"), 1),
+    ("uplink result zeroed", BASE_TRANSCRIPT.replace(
+        "wlan8189: uplink phase 2 result bytes=2910000",
+        "wlan8189: uplink phase 2 result bytes=0"), 1),
     ("semwake split dropped", BASE_TRANSCRIPT.replace(
         "perf census: D semwake_sem n=2 spent_us=4 sites=[a0c1234:2:4]\r\n", ""), 1),
     ("rate readout dropped", BASE_TRANSCRIPT.replace(
@@ -297,6 +340,14 @@ PING_RECV_RE = re.compile(r"ping: recv")
 
 #: the arm a measurement phase ran under (see the phase ready line)
 PHASE_ARM_RE = re.compile(r"wlan8189: phase \d+ ready lever=\d+ arm=([AB])")
+
+#: The uplink sheet's lines (the same phase machinery, the reverse direction):
+#: the ready line names the arm a window ran under, the result line carries what
+#: the board's own iperf client moved, and the skip line is the stage's only
+#: legal way of not running at all - a silent omission must fail the judge.
+UPLINK_READY_RE = re.compile(r"wlan8189: uplink phase \d+ ready lever=\d+ arm=([AB])")
+UPLINK_RESULT_RE = re.compile(r"wlan8189: uplink phase (\d+) result bytes=(\d+) ms=\d+ kbit=\d+")
+UPLINK_SKIP_RE = re.compile(r"wlan8189: uplink skipped reason=(\S+)")
 
 
 def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
@@ -433,6 +484,29 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         if arms and arms != {"A", "B"}:
             errors.append("wlan8189-dataplane: the phase sheet printed only arm(s) %s"
                           % ",".join(sorted(arms)))
+        # the uplink sheet's backstop: the stage either ran (four ready/result
+        # pairs, both arms, every result carrying bytes - a window that moved
+        # nothing is not a measurement) or said why it did not; the one thing it
+        # may not do is vanish silently
+        up_arms = [m.group(1) for line in transcript.lines
+                   for m in [UPLINK_READY_RE.search(line)] if m]
+        up_results = [m for line in transcript.lines
+                      for m in [UPLINK_RESULT_RE.search(line)] if m]
+        up_skip = any(UPLINK_SKIP_RE.search(line) for line in transcript.lines)
+        if not up_arms and not up_results and not up_skip:
+            errors.append("wlan8189-dataplane: the uplink stage neither ran "
+                          "nor said why")
+        elif up_arms or up_results:
+            if len(up_arms) != len(up_results):
+                errors.append("wlan8189-dataplane: %d uplink ready lines but "
+                              "%d results" % (len(up_arms), len(up_results)))
+            if set(up_arms) != {"A", "B"}:
+                errors.append("wlan8189-dataplane: the uplink sheet printed "
+                              "only arm(s) %s" % ",".join(sorted(set(up_arms))))
+            zero = [m.group(1) for m in up_results if int(m.group(2)) == 0]
+            if zero:
+                errors.append("wlan8189-dataplane: uplink phase(s) %s moved "
+                              "zero bytes" % ",".join(zero))
 
     shell_selected = expected is None or "shell-up" in expected
     if steps_path and os.path.exists(steps_path):

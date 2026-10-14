@@ -42,9 +42,12 @@ void	wlan8189_agg_timeout_set(unsigned int timeout_units);
 unsigned int	wlan8189_agg_get(void);
 
 /* the host controller's completion-poll step, in microseconds (0 leaves it
- * alone); show prints the step in effect */
+ * alone); show prints the step in effect. The data step is the same knob
+ * restricted to the data-stage waits (see dwc_mmc.h) and is the round's lever:
+ * the sheet sets it per phase and the phase line reports it back. */
 void	wlan8189_dwc_show(void);
 unsigned int	wlan8189_dwc_poll_set(unsigned int us);
+unsigned int	wlan8189_dwc_data_set(unsigned int us);
 
 /* the SDIO pump's cadence policy: "fixed" holds the idle period between cycles,
  * "adaptive" services a busy card back-to-back and backs off when it is idle;

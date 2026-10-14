@@ -113,6 +113,19 @@ bool dwc_mmc_card_present(const struct dwc_mmc *hc);
 void dwc_mmc_set_poll_us(uint32_t us);
 uint32_t dwc_mmc_get_poll_us(void);
 
+/* The step the data-stage waits use, in microseconds: the same knob as above
+ * but for the two waits that cover a data stage (DTO, and the IDMAC drain that
+ * trails it) instead of the command completions. Separate because the two waits
+ * answer different questions: a command's completion is quantised by the step
+ * on the critical path of every register access, while a data stage pays it
+ * once per transfer - so the data step can be made fine without multiplying the
+ * CPU spent in the many small command waits. The sibling controller port in
+ * ports/fsl_sdmmc (the eMMC line) runs with its data wait an order of magnitude
+ * finer than its command wait; this driver ran both at one step until that
+ * comparison was measured. Default: the command step's default. */
+void dwc_mmc_set_data_poll_us(uint32_t us);
+uint32_t dwc_mmc_get_data_poll_us(void);
+
 /* Run one command, with its data stage when the command carries one, and
  * return when it completed (DWC_MMC_OK) or why it did not. */
 int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd);

@@ -402,12 +402,18 @@ wlan8189_agg_get(void)
  * a finer step pays off exactly when the wait was consuming the step rather
  * than the hardware's own completion time. The readback goes out on the pump
  * line so a phase reports the step it ran at.
+ *
+ * The data-stage waits carry their own step (see dwc_mmc.h): the eMMC line's
+ * controller port runs its data wait an order of magnitude finer than its
+ * command wait, and this port ran both at one step until that comparison was
+ * made - so the data step is the lever this round's sheet moves.
  */
 void
 wlan8189_dwc_show(void)
 {
 
-	printk("wlan8189: dwc poll_us=%u\n", dwc_mmc_get_poll_us());
+	printk("wlan8189: dwc poll_us=%u data_us=%u\n",
+	    dwc_mmc_get_poll_us(), dwc_mmc_get_data_poll_us());
 }
 
 unsigned int
@@ -416,6 +422,14 @@ wlan8189_dwc_poll_set(unsigned int us)
 
 	dwc_mmc_set_poll_us(us);
 	return dwc_mmc_get_poll_us();
+}
+
+unsigned int
+wlan8189_dwc_data_set(unsigned int us)
+{
+
+	dwc_mmc_set_data_poll_us(us);
+	return dwc_mmc_get_data_poll_us();
 }
 
 /* --- the snapshot --------------------------------------------------------- */

@@ -28,6 +28,43 @@
 #include "wlan8189_cases.h"
 #include "wlan8189_census.h"
 
+/*
+ * The uplink command's address, parsed here: this file links no lwIP world (so
+ * no inet_aton), and this port's address vocabulary is a strict IPv4 dotted
+ * quad - four decimal octets, each 1..3 digits and <= 255, nothing else. The
+ * value is the human order (a<<24|b<<16|c<<8|d); the dataplane case turns it
+ * into an lwIP address without assuming a byte order.
+ */
+static int
+parse_ipv4(const char *s, unsigned int *out)
+{
+	unsigned int octets[4];
+	unsigned int value = 0U;
+	unsigned int digits = 0U;
+	unsigned int field = 0U;
+	const char *p = s;
+
+	for (; *p != '\0'; p++) {
+		if (*p >= '0' && *p <= '9') {
+			value = value * 10U + (unsigned int)(*p - '0');
+			if (++digits > 3U || value > 255U)
+				return -1;
+			continue;
+		}
+		if (*p != '.' || digits == 0U || field >= 3U)
+			return -1;
+		octets[field++] = value;
+		value = 0U;
+		digits = 0U;
+	}
+	if (digits == 0U || field != 3U)
+		return -1;
+	octets[3] = value;
+	*out = (octets[0] << 24) | (octets[1] << 16) |
+	    (octets[2] << 8) | octets[3];
+	return 0;
+}
+
 static int
 cmd_wlan8189(int argc, char **argv)
 {
@@ -93,20 +130,37 @@ cmd_wlan8189(int argc, char **argv)
 		return 0;
 	}
 	if (strcmp(argv[1], "dwc") == 0) {
-		if (argc >= 3 && strcmp(argv[2], "show") != 0)
+		if (argc >= 4 && strcmp(argv[2], "data") == 0)
+			(void)wlan8189_dwc_data_set((unsigned int)atoi(argv[3]));
+		else if (argc >= 3 && strcmp(argv[2], "show") != 0)
 			(void)wlan8189_dwc_poll_set((unsigned int)atoi(argv[2]));
 		wlan8189_dwc_show();
+		return 0;
+	}
+	if (strcmp(argv[1], "uplink") == 0) {
+		unsigned int peer = 0U;
+
+		if (argc >= 3 && parse_ipv4(argv[2], &peer) == 0) {
+			wlan8189_uplink_peer_set(peer);
+			csh_printf(csh, "wlan8189: uplink peer=%u.%u.%u.%u "
+			    "configured\n", (peer >> 24) & 0xffU,
+			    (peer >> 16) & 0xffU, (peer >> 8) & 0xffU,
+			    peer & 0xffU);
+		} else {
+			csh_printf(csh, "usage: wlan8189 uplink <a.b.c.d>\n");
+		}
 		return 0;
 	}
 	csh_printf(csh, "usage: wlan8189 [status|probe|scan|census [reset]|"
 		   "ps [show|lps-mode]|ps ips <mode>|rate|"
 		   "pump [show|fixed|adaptive|yield|noyield]|"
-		   "agg [show|<size-kb>|timeout <units>]|dwc [show|<poll-us>]]\n");
+		   "agg [show|<size-kb>|timeout <units>]|"
+		   "dwc [show|<poll-us>|data <us>]|uplink <a.b.c.d>]\n");
 	return 0;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
-			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc]",
+			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc|uplink]",
 			  "wlan8189 status - whether the driver attached and how many BSS rows are held;\n"
 			  "wlan8189 probe - bring the bus and the card up and run the driver's probe;\n"
 			  "wlan8189 scan - ask the driver for a scan and print the table it reports\n"
@@ -116,4 +170,5 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
 			  "wlan8189 rate - print the connected station's rate/bandwidth/BA state\n"
 			  "wlan8189 pump [show|fixed|adaptive|yield|noyield] - SDIO pump cadence and fairness\n"
 			  "wlan8189 agg [show|<size-kb>|timeout <units>] - card RX aggregation length/timeout\n"
-			  "wlan8189 dwc [show|<poll-us>] - host controller completion-poll step\n")
+			  "wlan8189 dwc [show|<poll-us>|data <us>] - host controller command/data poll step\n"
+			  "wlan8189 uplink <a.b.c.d> - the peer the uplink stage's iperf client sends to\n")
