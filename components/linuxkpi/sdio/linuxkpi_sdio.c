@@ -97,6 +97,18 @@
 /* the longest a pump_kick() waits for its cycle to finish */
 #define	LKPI_SDIO_KICK_TIMEOUT_MS	200u
 
+/*
+ * The pump's cadence modes (LKPI_SDIO_PUMP_MODE_*, linuxkpi_sdio.h). FIXED
+ * spaces every cycle by the idle period above - the shape a polled host has
+ * always had here. ADAPTIVE is the shape Linux' polled-host IRQ thread uses
+ * (drivers/mmc/core/sdio_irq.c sdio_irq_thread(): idle_period 10 ms,
+ * `period /= 2` after a cycle that found work, `period++` back toward idle
+ * after one that found none): a busy card is serviced as fast as the pump can
+ * turn around, and an idle one is left alone at the idle period. The runtime
+ * knob exists so one boot can measure both shapes under the same RF (the
+ * round-2 A/B discrimination); the default stays FIXED.
+ */
+
 struct lkpi_sdio_card {
 	bool				present;
 	struct lkpi_sdio_be_card_info	info;
@@ -114,6 +126,18 @@ struct lkpi_sdio_card {
 	osSemaphoreId_t			pump_req;
 	osSemaphoreId_t			pump_done;
 	bool				pump_running;
+	/* the pump's cadence: the mode is the runtime knob, the period is the
+	 * adaptive controller's state (milliseconds, idle period when fixed) */
+	unsigned int			pump_mode;
+	unsigned int			pump_period_ms;
+	/* always-on accounting of the bytes the splitter moved, by direction.
+	 * The adaptive controller measures "did this cycle move anything" by
+	 * these, so the progress signal is the transfers themselves and not a
+	 * pending bit that may still be set while the card has nothing to give;
+	 * the counters are plain sums, so a lost increment under a preemption
+	 * costs one backoff step, never a stall. */
+	uint64_t			rx_bytes;
+	uint64_t			tx_bytes;
 };
 
 static struct lkpi_sdio_card lkpi_sdio_card_state;
@@ -158,6 +182,7 @@ struct lkpi_sdio_census {
 	/* the pump */
 	uint32_t	wake_kick;
 	uint32_t	wake_timeout;
+	uint32_t	wake_hot;
 	uint32_t	cycles;
 	uint32_t	cycles_busy;
 	uint32_t	cycles_empty;
@@ -165,6 +190,19 @@ struct lkpi_sdio_census {
 	struct lkpi_census_histo	cyc_term;
 	struct lkpi_census_histo	cyc_claim_wait;
 	struct lkpi_census_histo	cyc_handler;
+	/* the service gap between consecutive busy cycles: the active-interval
+	 * denominator (first/last busy boundaries plus the count inside them),
+	 * so a measurement window's idle tail stops diluting the cadence share. */
+	uint64_t	busy_first_ns;
+	uint64_t	busy_last_ns;
+	uint32_t	busy_span;
+	struct lkpi_census_histo	busy_gap;
+	/* transmit age: from the stack handing a frame to the driver's transmit
+	 * entry (lkpi_census_tx_request_note) to the card write that carried it -
+	 * "how long an ACK waited behind the claim", the number the RX-cadence
+	 * discussion turns on. */
+	uint32_t	tx_age_n;
+	struct lkpi_census_histo	tx_age;
 };
 
 static struct lkpi_sdio_census lkpi_sdio_census_state;
@@ -196,6 +234,12 @@ lkpi_sdio_census_note_ext(bool write, bool block, unsigned int bytes,
 		    t0 - *last);
 	*last = t1;
 	if (write) {
+		uint64_t req = lkpi_census_tx_request_take();
+
+		if (req != 0u && t1 > req) {
+			lkpi_census_histo_add(&c->tx_age, t1 - req);
+			c->tx_age_n++;
+		}
 		c->cmd53_w++;
 		if (block)
 			c->cmd53_w_blk++;
@@ -243,11 +287,13 @@ lkpi_sdio_census_note_claim_release(uint64_t t1)
 }
 
 static void
-lkpi_sdio_census_note_wake(bool kicked)
+lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 {
 
 	if (kicked)
 		lkpi_sdio_census_state.wake_kick++;
+	else if (wait_ms == 0u)
+		lkpi_sdio_census_state.wake_hot++;
 	else
 		lkpi_sdio_census_state.wake_timeout++;
 }
@@ -268,6 +314,14 @@ lkpi_sdio_census_note_cycle(uint64_t t0, uint64_t t1, uint64_t t2, bool busy,
 	lkpi_census_histo_add(&c->cyc_term, t2 - t0);
 	lkpi_census_histo_add(&c->cyc_claim_wait, t1 - t0);
 	lkpi_census_histo_add(&c->cyc_handler, t2 - t1);
+	if (busy && !err) {
+		if (c->busy_first_ns == 0u)
+			c->busy_first_ns = t0;
+		else
+			lkpi_census_histo_add(&c->busy_gap, t0 - c->busy_last_ns);
+		c->busy_last_ns = t2;
+		c->busy_span++;
+	}
 }
 
 void
@@ -301,12 +355,20 @@ lkpi_sdio_census_print(void)
 	lkpi_census_histo_print("perf census: A claim_wait", &c->claim_wait);
 	lkpi_census_histo_print("perf census: A claim_hold", &c->claim_hold);
 	lkpi_printf(ULOG_INFO_LEVEL,
-	    "perf census: D pump cycles=%u kick=%u timeout=%u busy=%u empty=%u err=%u\n",
-	    c->cycles, c->wake_kick, c->wake_timeout, c->cycles_busy,
-	    c->cycles_empty, c->cycles_err);
+	    "perf census: D pump cycles=%u kick=%u timeout=%u hot=%u busy=%u empty=%u err=%u mode=%s period_ms=%u span_ms=%llu busy_span=%u\n",
+	    c->cycles, c->wake_kick, c->wake_timeout, c->wake_hot,
+	    c->cycles_busy, c->cycles_empty, c->cycles_err,
+	    (lkpi_sdio_card_state.pump_mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ?
+	    "adaptive" : "fixed",
+	    lkpi_sdio_card_state.pump_period_ms,
+	    (unsigned long long)((c->busy_last_ns - c->busy_first_ns) / 1000000u),
+	    c->busy_span);
 	lkpi_census_histo_print("perf census: D pump_cyc", &c->cyc_term);
 	lkpi_census_histo_print("perf census: D pump_wait", &c->cyc_claim_wait);
 	lkpi_census_histo_print("perf census: D pump_handler", &c->cyc_handler);
+	lkpi_census_histo_print("perf census: D pump_gap", &c->busy_gap);
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D txage n=%u\n", c->tx_age_n);
+	lkpi_census_histo_print("perf census: D txage", &c->tx_age);
 }
 
 #else	/* !CONFIG_LKPI_CENSUS */
@@ -361,10 +423,11 @@ lkpi_sdio_census_note_claim_release(uint64_t t1)
 }
 
 static void
-lkpi_sdio_census_note_wake(bool kicked)
+lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 {
 
 	(void)kicked;
+	(void)wait_ms;
 }
 
 static void
@@ -647,6 +710,10 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 				lkpi_sdio_stats.errors++;
 				return lkpi_sdio_errno(st);
 			}
+			if (write)
+				c->tx_bytes += bytes;
+			else
+				c->rx_bytes += bytes;
 			remainder -= bytes;
 			buf += bytes;
 			if (incr)
@@ -669,6 +736,10 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 			lkpi_sdio_stats.errors++;
 			return lkpi_sdio_errno(st);
 		}
+		if (write)
+			c->tx_bytes += n;
+		else
+			c->rx_bytes += n;
 		remainder -= n;
 		buf += n;
 		if (incr)
@@ -980,15 +1051,17 @@ lkpi_sdio_has_handler(void)
  * One poll cycle, on the pump thread: claim the bus, read the card's pending
  * word, hand each pending function to its handler with the claim still held (the
  * interface's contract - a handler must not claim), then release. A function
- * with a pending bit but no handler is a finding, not a dispatch.
+ * with a pending bit but no handler is a finding, not a dispatch. Returns
+ * whether the cycle moved any bytes - the adaptive cadence's progress signal.
  */
-static void
+static bool
 lkpi_sdio_pump_cycle(void)
 {
 	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
 	u8 pending = 0;
 	unsigned int i;
 	uint64_t t0, t1, t2;
+	uint64_t moved0 = c->rx_bytes + c->tx_bytes;
 
 	t0 = lkpi_sdio_census_now();
 	(void)osMutexAcquire(c->claim, osWaitForever);
@@ -1026,23 +1099,35 @@ lkpi_sdio_pump_cycle(void)
 	c->claim_owner = NULL;
 	lkpi_sdio_stats.releases++;
 	(void)osMutexRelease(c->claim);
+	return (c->rx_bytes + c->tx_bytes) != moved0;
 }
 
 static void
 lkpi_sdio_pump_entry(void *arg)
 {
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
 
 	(void)arg;
 	for (;;) {
 		bool requested;
+		bool progress = false;
 
-		requested = osSemaphoreAcquire(lkpi_sdio_card_state.pump_req,
-		    LKPI_SDIO_PUMP_IDLE_MS) == osOK;
-		lkpi_sdio_census_note_wake(requested);
+		requested = osSemaphoreAcquire(c->pump_req,
+		    c->pump_period_ms) == osOK;
+		lkpi_sdio_census_note_wake(requested, c->pump_period_ms);
 		if (lkpi_sdio_has_handler())
-			lkpi_sdio_pump_cycle();
+			progress = lkpi_sdio_pump_cycle();
 		if (requested)
-			(void)osSemaphoreRelease(lkpi_sdio_card_state.pump_done);
+			(void)osSemaphoreRelease(c->pump_done);
+		if (c->pump_mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) {
+			/* a cycle that moved bytes is followed by one right away
+			 * (the period halves toward zero); a cycle that moved none
+			 * backs off a step toward the idle period. */
+			if (progress)
+				c->pump_period_ms /= 2u;
+			else if (c->pump_period_ms < LKPI_SDIO_PUMP_IDLE_MS)
+				c->pump_period_ms++;
+		}
 	}
 }
 
@@ -1055,6 +1140,30 @@ lkpi_sdio_pump_kick(void)
 		return;
 	(void)osSemaphoreRelease(c->pump_req);
 	(void)osSemaphoreAcquire(c->pump_done, LKPI_SDIO_KICK_TIMEOUT_MS);
+}
+
+void
+lkpi_sdio_pump_mode_set(unsigned int mode)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+
+	c->pump_mode = (mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ?
+	    LKPI_SDIO_PUMP_MODE_ADAPTIVE : LKPI_SDIO_PUMP_MODE_FIXED;
+	c->pump_period_ms = LKPI_SDIO_PUMP_IDLE_MS;
+}
+
+unsigned int
+lkpi_sdio_pump_mode_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_mode;
+}
+
+unsigned int
+lkpi_sdio_pump_period_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_period_ms;
 }
 
 int
@@ -1330,6 +1439,8 @@ lkpi_sdio_pump_start(void)
 
 	if (c->pump_running)
 		return;
+	c->pump_mode = LKPI_SDIO_PUMP_MODE_FIXED;
+	c->pump_period_ms = LKPI_SDIO_PUMP_IDLE_MS;
 	c->pump_req = osSemaphoreNew(1u, 0u, NULL);
 	c->pump_done = osSemaphoreNew(1u, 0u, NULL);
 	if (c->pump_req == NULL || c->pump_done == NULL) {

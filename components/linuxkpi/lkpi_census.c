@@ -144,4 +144,35 @@ lkpi_census_sites_print(const char *tag, const struct lkpi_census_sites *s)
 	    s->total_count, s->total_ns / 1000u, sites);
 }
 
+/* ------------------------------------------------------------------ */
+/* the transmit-request stamp                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * One stamp, the oldest transmit request still unwritten: a frame entering the
+ * driver's transmit entry notes its time here, and the transfer path that writes
+ * it to the card takes the stamp and adds the difference to its histogram. A
+ * request that is never written (a dropped frame) ages until the next write
+ * claims it - rare enough to be one outlier sample, and the write path's own
+ * counters show whether drops happen at all.
+ */
+static uint64_t lkpi_census_tx_request_ns;
+
+void
+lkpi_census_tx_request_note(void)
+{
+
+	if (lkpi_census_tx_request_ns == 0u)
+		lkpi_census_tx_request_ns = lkpi_census_now_ns();
+}
+
+uint64_t
+lkpi_census_tx_request_take(void)
+{
+	uint64_t t = lkpi_census_tx_request_ns;
+
+	lkpi_census_tx_request_ns = 0u;
+	return t;
+}
+
 #endif /* CONFIG_LKPI_CENSUS */

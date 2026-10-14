@@ -35,8 +35,10 @@
 #ifdef CONFIG_LKPI_CENSUS
 #include "lkpi_census.h"
 #define	LKPINETIF_NOW_NS()	lkpi_census_now_ns()
+#define	LKPINETIF_TX_REQUEST_NOTE()	lkpi_census_tx_request_note()
 #else
 #define	LKPINETIF_NOW_NS()	((uint64_t)0u)
+#define	LKPINETIF_TX_REQUEST_NOTE()	do { } while (0)
 #endif
 
 #include "lkpinetif_seam.h"
@@ -123,6 +125,7 @@ lkpinetif_tx_frame(const uint8_t *frame, size_t len)
 	memcpy(skb->data, frame, len);
 	g_diag.tx_frames++;
 	g_diag.tx_bytes += (unsigned long)len;
+	LKPINETIF_TX_REQUEST_NOTE();
 	t0 = LKPINETIF_NOW_NS();
 	/* the driver's entry owns the skb from here on (see the file's note) */
 	(void)g_dev->netdev_ops->ndo_start_xmit(skb, g_dev);

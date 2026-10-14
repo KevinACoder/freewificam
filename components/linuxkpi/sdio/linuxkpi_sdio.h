@@ -68,6 +68,23 @@ bool	lkpi_sdio_claim_held_by_current(void);
  * does this on its own timer; this entry makes a test's cycle deterministic. */
 void	lkpi_sdio_pump_kick(void);
 
+/*
+ * The pump's cadence: FIXED holds the idle period between cycles (the polled
+ * host's shape); ADAPTIVE shortens the period after a cycle that moved bytes
+ * and lengthens it again after one that moved none, the shape Linux' polled-host
+ * IRQ thread uses (drivers/mmc/core/sdio_irq.c sdio_irq_thread()). The mode is a
+ * runtime knob so one boot can measure both under the same RF; default FIXED.
+ */
+#define	LKPI_SDIO_PUMP_MODE_FIXED	0u
+#define	LKPI_SDIO_PUMP_MODE_ADAPTIVE	1u
+
+void	lkpi_sdio_pump_mode_set(unsigned int mode);
+unsigned int	lkpi_sdio_pump_mode_get(void);
+
+/* the adaptive controller's current period, milliseconds (the idle period when
+ * the mode is fixed) */
+unsigned int	lkpi_sdio_pump_period_get(void);
+
 void	lkpi_sdio_stats_get(struct lkpi_sdio_stats *out);
 
 #endif /* LKPI_SDIO_H */

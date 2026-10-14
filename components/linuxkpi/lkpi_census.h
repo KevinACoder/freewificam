@@ -88,6 +88,14 @@ void	lkpi_osdep_census_print(void);
 void	lkpi_fsl_census_reset(void);
 void	lkpi_fsl_census_print(void);
 
+/* the transmit-request stamp: where the stack hands a frame to the driver's
+ * transmit entry, a note records when; the transfer path that finally writes it
+ * to the card takes the stamp and ages the write with it. One stamp is kept -
+ * the oldest request still waiting for its write - so the age reads as the worst
+ * a frame of the moment waited; zero when nothing is pending. */
+void	lkpi_census_tx_request_note(void);
+uint64_t	lkpi_census_tx_request_take(void);
+
 #endif /* CONFIG_LKPI_CENSUS */
 
 #endif /* LKPI_CENSUS_H */
