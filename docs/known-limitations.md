@@ -10,19 +10,23 @@ weak, and what is not started. Nothing here should be read as a promise.
 | RTL8188EUS (`rtl8xxxu`) | Full chain works on hardware: probe, scan, WPA2, DHCP, ping, TCP data. Throughput is well below the Linux same-card figure. |
 | RTL8821CU (`rtw88`) | Full chain works on hardware, including a CD-ROM to WLAN mode switch at boot. Throughput is well below Linux. |
 | RTL8851BU (`rtw89`) | **Experimental.** The full chain has been reached on hardware, but join is intermittent and the link is poor. Not on the mainline branch; published as experimental. |
-| RTL8189FTV (SDIO) | Full chain works on hardware: probe, scan, WPA2, DHCP, ping, TCP data. The vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. Throughput is the closest to Linux of the four lines, but the least stable. |
+| RTL8189FTV (SDIO) | Full chain works on hardware: probe, scan, WPA2, DHCP, ping, TCP data. The vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. Throughput is the closest to Linux of the lines, and its reverse direction is measured; it also runs as an open access point a station can associate to. Its access-point-mode reverse direction is still variable run to run. |
 
-- **Throughput.** Every line is well below the same card under Linux. The RTOS
-  figure is roughly a tenth of the Linux figure on the 8188EUS line, about a
-  quarter on the SDIO line, and roughly a hundred-and-seventieth on the 8851BU
-  line. The SDIO line is the least stable of the four: one of its measured runs
-  collapsed about nine-fold, with the shape of a power-management stall. The
-  numbers are recorded, not gated; the project does not yet claim a target.
+- **Throughput.** Every line is below the same card under Linux. The RTOS
+  figure is roughly a tenth of the Linux figure on the 8188EUS line, about
+  1/1.7 (down) and 1/1.9 (up) on the SDIO line after two adopted levers, and
+  roughly a hundred-and-seventieth on the 8851BU line. The SDIO line's earlier
+  nine-fold collapse has not recurred since the receive-aggregation work, but
+  its access-point-mode reverse direction is variable across boots (14-18
+  Mbit/s in three of four, one abort). The numbers are recorded, not gated;
+  the project does not yet claim a target.
 - **Long-run stability.** A long, unattended streaming run (the project's core
   goal) has not been demonstrated. The 8851BU line in particular is not stable
   enough for it.
-- **Reverse direction.** Board-to-host throughput needs a host firewall change
-  to measure; it is not in the current figures.
+- **Reverse direction.** Board-to-host throughput is measured on the SDIO line
+  (the board runs the iperf client against a host server on the measurement
+  host, so no host firewall change is involved). The other lines' reverse
+  directions are not measured yet.
 
 ## The camera line
 

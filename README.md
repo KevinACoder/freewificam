@@ -50,7 +50,7 @@ data flows. It does not mean the throughput is good.
 | `rtl8xxxu` | RTL8188EUS | Full chain. |
 | `rtw88` | RTL8821CU | Full chain, including a boot-time CD-ROM to WLAN mode switch. |
 | `rtw89` | RTL8851BU | **Experimental**: full chain reached, join intermittent, link poor. |
-| SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. |
+| SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. **It also runs as an open access point**: a station associates to the board, and both directions measure (see [Throughput](#throughput)). |
 | `iwlwifi` | Intel Wireless-AC 7260 | Full chain, over PCIe message interrupts (GICv3 ITS): the driver routes station management and data frames through its transmit queues, and the port owns the two delivery contexts a threaded interrupt needs. |
 | UVC | Logitech Pro 9000 | Camera enumerated, opened and streaming MJPEG 640x480 over its isochronous endpoint (see [The camera line](#the-camera-line)). |
 
@@ -60,38 +60,39 @@ port each line is wired to, are documented per board under
 
 ### Throughput
 
-Host to board, single TCP stream, measured on the board. The Linux column is
-the same card under Linux on the same board, from a clean upstream build, on the
-same channel and the same access point. Note the channel width: Linux negotiates
-HT40 on this access point while the RTOS port runs 20 MHz legacy, so the Linux
-figures carry a wider-channel advantage. Older Linux figures taken on a different
-band are not comparable and are not used here.
+Single TCP stream, measured at the receiver, against the same access point
+(channel 1). The Linux column is the same card under Linux on the same board,
+from a clean upstream build. Channel width drifts across boots on this access
+point, so the figures below name the width they were taken at, and the RTOS and
+Linux cells of a row are the same width.
 
-| Line | RTOS (host to board) | Linux, same card, same channel |
-|---|---|---|
-| RTL8188EUS | 4.00 / 4.66 Mbit/s | **42.6 / 43.9 / 45.3 Mbit/s** |
-| RTL8821CU | 3.65 Mbit/s | **63.7 / 66.0 / 68.2 Mbit/s** |
-| RTL8851BU | 136 / 173 Kbit/s | **23.9 / 25.3 / 26.5 Mbit/s** |
-| RTL8189FTV (SDIO) | 10.6 / 1.18 / 10.9 Mbit/s | **45.0 / 46.4 Mbit/s** |
-| Intel Wireless-AC 7260 (PCIe) | 0.24 Mbit/s | **167 Mbit/s** |
+| Line | RTOS, down (host to board) | RTOS, up (board to host) | Linux, same card, same channel |
+|---|---|---|---|
+| RTL8188EUS | 4.00 / 4.66 Mbit/s (HT40) | not measured | **42.6 / 43.9 / 45.3 Mbit/s** |
+| RTL8821CU | 3.65 Mbit/s | not measured | **63.7 / 66.0 / 68.2 Mbit/s** |
+| RTL8851BU | 136 / 173 Kbit/s | not measured | **23.9 / 25.3 / 26.5 Mbit/s** |
+| RTL8189FTV (SDIO) | **18.1 (HT20) / 20.5 (HT40)** Mbit/s | **15.1-16.8 (HT20)** Mbit/s | **31.4 down / 30.7 up (HT20)**, 44.2 / 50.5 (HT40) |
+| Intel Wireless-AC 7260 (PCIe) | 0.24 Mbit/s | not measured | **167 Mbit/s** |
 
-All five lines are measured on channel 1 (2412 MHz) against the same access
-point, BSSID `14:a3:2f:18:07:2c`; each Linux cell is min/avg/max over three 30 s
-runs, except RTL8189FTV whose Linux cell is the range the lab's ground-truth
-ledger records for the same card, and the 7260 whose Linux cell is a single
-20 s run of the same iperf session (the RTOS cell is a single 31 s run). The
-RTOS figures are roughly one tenth, one eighteenth, one hundred-and-seventieth,
-one quarter and (for the PCIe line) one seven-hundredth of the Linux figures.
-The SDIO line is the closest to Linux, and the least stable:
-two of its three runs sat at 10.6 and 10.9 Mbit/s while the third collapsed to
-1.18 Mbit/s — the signature of the driver's default power management, the same
-thing the Linux lane had to turn off to stop TCP stalling. Linux also moves data
-in the reverse direction on all five lines; the RTOS reverse direction is not
-measured yet.
+All lines are measured against the same access point, BSSID
+`14:a3:2f:18:07:2c`. Each Linux cell is min/avg/max over three 30 s runs (the
+7260's is a single 20 s run). The RTL8189FTV line is the one that has been
+worked on: its receive path was measured first and two levers were found and
+adopted - a pump cadence that keeps serving a busy card (+45%) and the card's
+own receive-aggregation timeout byte (+42% at HT20) - which moved it from one
+fourth of Linux to **about 1/1.7 (down) and 1/1.9 (up)**, the closest of the
+lines. Its reverse direction was measured for the first time on the same rig
+(board as the iperf client), so the "not measured" cells above are per-line
+facts, not a blanket one. Its access point mode, brought up later, measures
+19.8-20.2 Mbit/s down and 18.3 Mbit/s up with a station associated to the board
+itself. The other lines' gaps are as recorded: one tenth (8188EUS), one
+eighteenth (8821CU), one hundred-and-seventieth (8851BU), one
+seven-hundredth (7260).
 
-The gap to Linux is large, and it is the current open problem. It is stated
-here rather than hidden: the value of the port so far is in the structure, not
-in the numbers. See [docs/known-limitations.md](docs/known-limitations.md).
+The gap to Linux is still large on most lines, and it is the current open
+problem. It is stated here rather than hidden: the value of the port so far is
+in the structure, not in the numbers. See
+[docs/known-limitations.md](docs/known-limitations.md).
 
 ### The camera line
 
