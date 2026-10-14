@@ -31,7 +31,7 @@ Usage:
   prober.py run --serial-hub <url> --out <dir> [--phases <n>] [--seconds <s>]
                 [--uplink-phases <n>] [--iface <if>] [--channel <mhz>]
                 [--width HT20] [--wpa-conf <file>] [--peer <addr>]
-                [--host user@addr]
+                [--udp] [--ping-during] [--host user@addr]
   prober.py analyze <pcap> [--sta <mac>] [--out <json>] [--host user@addr]
   prober.py selftest
 
@@ -1130,6 +1130,8 @@ def cmd_run(argv: list[str], r: Runner) -> int:
     width = arg_value(argv, "--width", "HT20")
     wpa_conf = arg_value(argv, "--wpa-conf")
     peer_opt = arg_value(argv, "--peer")
+    udp = has(argv, "--udp")
+    ping_during = has(argv, "--ping-during")
     ssid = arg_value(argv, "--ssid")
     psk = arg_value(argv, "--psk")
     bssid = arg_value(argv, "--bssid")
@@ -1165,7 +1167,7 @@ def cmd_run(argv: list[str], r: Runner) -> int:
     try:
         return _run_phases(r, hub, outdir, phases_want, seconds, deadline_s,
                            peer_opt, wpa_conf, ssid, psk, bssid, work,
-                           uplink_phases_want)
+                           uplink_phases_want, udp, ping_during)
     finally:
         if dumpcap is not None:
             # dumpcap ends on its own duration; if the round finished early,
@@ -1301,7 +1303,8 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
                     warn("phase %d opened before a peer address was known; "
                          "pass --peer to measure without waiting for the lease", n)
                     continue
-                res = measure_phase(r, outdir, n, peer, seconds)
+                res = measure_phase(r, outdir, n, peer, seconds, udp,
+                                    ping_during=ping_during)
                 pending[n] = pending.get(n, "") + "\n" + json.dumps(res)
                 continue
 
@@ -1423,16 +1426,52 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
     return 0 if ok else 1
 
 
-def measure_phase(r: Runner, outdir: str, n: int, peer: str, seconds: int) -> dict:
-    info("run phase %d: client vs %s for %ss", n, peer, seconds)
-    cmd = "iperf -c %s -p 5001 -t %d -i 2" % (peer, seconds)
+def measure_phase(r: Runner, outdir: str, n: int, peer: str, seconds: int,
+                  udp: bool = False, udp_port: int = 5002,
+                  udp_bw: str = "60M", ping_during: bool = False) -> dict:
+    """Drive one phase window and collect what it moved.
+
+    The default action is the TCP client the rounds have always used. Two
+    optional actions answer the question the TCP number alone cannot: `udp`
+    blasts datagrams at the board's own sink (no acknowledgement clock, so the
+    receive path's own ceiling), and `ping_during` runs a ping alongside the
+    transfer (the round-trip time while the link is loaded, which is what any
+    window-versus-flight-size arithmetic needs)."""
+
+    info("run phase %d: client vs %s for %ss udp=%s ping=%s", n, peer, seconds,
+         udp, ping_during)
+    ping = None
+    if ping_during:
+        # in the background on the measurement host; its summary lands in
+        # phaseN-ping.txt
+        pcmd = "ping -c %d -i 0.2 %s" % (max(1, seconds * 5), peer)
+        wrapped = r._wrap(pcmd)
+        ping = subprocess.Popen(
+            (["ssh", "-o", "BatchMode=yes", r.host, wrapped] if r.host
+             else ["sh", "-c", wrapped]),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if udp:
+        cmd = "iperf -c %s -p %d -t %d -i 2 -u -b %s" % (peer, udp_port,
+                                                         seconds, udp_bw)
+    else:
+        cmd = "iperf -c %s -p 5001 -t %d -i 2" % (peer, seconds)
     try:
         _, text = r.run(cmd, timeout=seconds + 60)
     except RuntimeError as e:
         warn("phase %d client failed: %s", n, e)
+        if ping is not None:
+            ping.terminate()
         return {"error": str(e)}
     with open(os.path.join(outdir, "phase%d.txt" % n), "w") as f:
         f.write(text)
+    if ping is not None:
+        try:
+            out_text, _ = ping.communicate(timeout=seconds + 60)
+        except Exception:
+            ping.terminate()
+            out_text = ""
+        with open(os.path.join(outdir, "phase%d-ping.txt" % n), "w") as f:
+            f.write(out_text)
     return parse_iperf(text)
 
 
