@@ -900,6 +900,81 @@ lkpicfg_set_key(struct wiphy *wiphy, unsigned int key_idx, int pairwise,
 }
 
 /* ------------------------------------------------------------------ */
+/* the access-point calls (driver: ioctl_cfg80211.c:5009 start_ap,      */
+/* :5073 stop_ap)                                                      */
+/* ------------------------------------------------------------------ */
+
+int
+lkpicfg_ap_start(struct wiphy *wiphy, const u8 *ssid, size_t ssid_len,
+    const u8 *beacon_head, size_t head_len,
+    const u8 *beacon_tail, size_t tail_len)
+{
+	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
+	struct cfg80211_ap_settings settings;
+	struct net_device *dev;
+
+	if (ctx == NULL || ctx->ops == NULL || ctx->ops->start_ap == NULL)
+		return -EOPNOTSUPP;
+	if (ssid == NULL || ssid_len == 0 || ssid_len > IEEE80211_MAX_SSID_LEN)
+		return -EINVAL;
+	/* the driver's own beacon contract (ioctl_cfg80211.c:4884): the head
+	 * carries the 802.11 header, so anything shorter cannot hold one */
+	if (beacon_head == NULL || head_len < 24)
+		return -EINVAL;
+	dev = lkpi_netdev_by_wiphy(wiphy);
+	if (dev == NULL || dev->ieee80211_ptr == NULL)
+		return -ENODEV;
+
+	/* The order is the contract: the driver's start_ap entry switches the
+	 * card's mode from this field (rtw_cfg80211_sync_iftype reads
+	 * wdev->iftype) and its beacon step refuses to run unless the card is
+	 * already in AP state - so the type is set here, immediately before the
+	 * op, and the caller has no way to get it wrong. */
+	dev->ieee80211_ptr->iftype = NL80211_IFTYPE_AP;
+
+	memset(&settings, 0, sizeof(settings));
+	settings.beacon.head = beacon_head;
+	settings.beacon.head_len = head_len;
+	settings.beacon.tail = beacon_tail;
+	settings.beacon.tail_len = tail_len;
+	settings.ssid = ssid;
+	settings.ssid_len = ssid_len;
+	settings.hidden_ssid = NL80211_HIDDEN_SSID_NOT_IN_USE;
+	settings.auth_type = NL80211_AUTHTYPE_OPEN_SYSTEM;
+
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "lkpicfg: ap start ssid_len=%u head=%u tail=%u\n",
+	    (unsigned)ssid_len, (unsigned)head_len, (unsigned)tail_len);
+	return ctx->ops->start_ap(wiphy, dev, &settings);
+}
+
+int
+lkpicfg_ap_stop(struct wiphy *wiphy)
+{
+	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
+	struct net_device *dev;
+	int rc;
+
+	if (ctx == NULL || ctx->ops == NULL || ctx->ops->stop_ap == NULL)
+		return -EOPNOTSUPP;
+	dev = lkpi_netdev_by_wiphy(wiphy);
+	if (dev == NULL || dev->ieee80211_ptr == NULL)
+		return -ENODEV;
+
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpicfg: ap stop\n");
+	/* link_id 0: this port's interface has no multi-link identity (the
+	 * driver's stop_ap ignores it, ioctl_cfg80211.c:5073) */
+	rc = ctx->ops->stop_ap(wiphy, dev, 0);
+	if (rc == 0) {
+		/* the interface is a station again, and this field is the port's
+		 * own record of the type (the driver reads it to sync the card),
+		 * so it must not stay at AP after the mode has been left */
+		dev->ieee80211_ptr->iftype = NL80211_IFTYPE_STATION;
+	}
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
 /* the connection/link notifications (driver: ioctl_cfg80211.c:1129,    */
 /* :1195, :1200, :1212)                                                 */
 /* ------------------------------------------------------------------ */
@@ -970,34 +1045,43 @@ cfg80211_ibss_joined(struct net_device *dev, const u8 *bssid,
 }
 
 /* ------------------------------------------------------------------ */
-/* the notifications with no consumer on this port                      */
+/* the notifications the substitute forwards                            */
 /* ------------------------------------------------------------------ */
 
 /*
- * AP-mode, mesh, TDLS, remain-on-channel, channel-switch and vendor reports are
- * a declared non-goal for this port (the SDIO port's spec names the STA mainline
- * as the target). Each body below is inert for the same reason: nothing on this
- * port listens for the event, so it is dropped rather than invented, and the
- * driver's own call site still returns cleanly.
+ * The station events (AP mode): the driver reports a station joining or leaving
+ * the access point it runs (ioctl_cfg80211.c:4327/:4381, gated on
+ * RTW_USE_CFG80211_STA_EVENT, which this port's builds define), and the
+ * consumer decides what that becomes - on this port, a console line the board
+ * round anchors on. Everything else in this section (mesh, TDLS,
+ * remain-on-channel, channel-switch, vendor reports) stays a declared
+ * non-goal: nothing on this port listens for it, so it is dropped rather than
+ * invented, and the driver's own call site still returns cleanly.
  */
 void
 cfg80211_new_sta(struct wireless_dev *wdev, const u8 *mac_addr,
     struct station_info *sinfo, gfp_t gfp)
 {
+	struct wiphy *wiphy = NULL;
 
-	(void)wdev;
-	(void)mac_addr;
 	(void)sinfo;
 	(void)gfp;
+	if (wdev != NULL)
+		wiphy = wdev->wiphy;
+	if (lkpicfg_consumer != NULL && lkpicfg_consumer->sta_joined != NULL)
+		lkpicfg_consumer->sta_joined(wiphy, mac_addr);
 }
 
 void
 cfg80211_del_sta(struct wireless_dev *wdev, const u8 *mac_addr, gfp_t gfp)
 {
+	struct wiphy *wiphy = NULL;
 
-	(void)wdev;
-	(void)mac_addr;
 	(void)gfp;
+	if (wdev != NULL)
+		wiphy = wdev->wiphy;
+	if (lkpicfg_consumer != NULL && lkpicfg_consumer->sta_left != NULL)
+		lkpicfg_consumer->sta_left(wiphy, mac_addr);
 }
 
 void

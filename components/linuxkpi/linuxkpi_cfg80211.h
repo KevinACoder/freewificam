@@ -70,6 +70,12 @@ struct lkpicfg_consumer_ops {
 	void	(*connected)(struct wiphy *wiphy, const u8 bssid[6], u16 status);
 	/* Called from cfg80211_disconnected(). */
 	void	(*disconnected)(struct wiphy *wiphy, u16 reason);
+	/* Called from cfg80211_new_sta()/cfg80211_del_sta(): a station joined or
+	 * left the access point this device runs. The driver reports both (it
+	 * already does, the substitute used to drop them); the consumer is what
+	 * turns them into visibility - a console line, a log, bookkeeping. */
+	void	(*sta_joined)(struct wiphy *wiphy, const u8 mac[6]);
+	void	(*sta_left)(struct wiphy *wiphy, const u8 mac[6]);
 };
 
 /* Install the consumer.  Without one the substitute still records everything;
@@ -133,5 +139,29 @@ int	lkpicfg_set_key(struct wiphy *wiphy, unsigned int key_idx, int pairwise,
 /* The network interface the driver registered, for a consumer that wants to
  * name it (NULL before registration). */
 struct net_device *lkpicfg_netdev(struct wiphy *wiphy);
+
+/* ------------------------------------------------------------------ */
+/* downward: the access-point calls a hostapd-role consumer drives     */
+/* ------------------------------------------------------------------ */
+
+/* Bring the interface up as an access point.  `beacon_head`/`head_len` and
+ * `beacon_tail`/`tail_len` are the beacon the caller assembled (the driver
+ * takes head[24:] plus tail as its element stream, so the head must carry the
+ * 802.11 header and the 12 fixed bytes: timestamp, beacon interval,
+ * capability).  `ssid`/`ssid_len` name the network the driver records.
+ *
+ * The ordering this call enforces is the driver's own contract, not a
+ * preference: its start_ap entry reads the interface type to switch the card
+ * into AP mode before it takes the beacon (rtw_cfg80211_sync_iftype), and it
+ * refuses a beacon when the card is not in that state - so the type is set
+ * here, immediately before the op, and a caller cannot get the order wrong.
+ * Returns the driver's own result. */
+int	lkpicfg_ap_start(struct wiphy *wiphy, const u8 *ssid, size_t ssid_len,
+	    const u8 *beacon_head, size_t head_len,
+	    const u8 *beacon_tail, size_t tail_len);
+
+/* Take the interface down from access-point mode (the driver's stop_ap path,
+ * which also returns the card's mode to station). */
+int	lkpicfg_ap_stop(struct wiphy *wiphy);
 
 #endif /* LINUXKPI_CFG80211_H */

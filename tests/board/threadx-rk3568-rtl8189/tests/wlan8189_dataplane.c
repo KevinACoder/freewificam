@@ -429,6 +429,15 @@ wlan8189_uplink_peer_get( unsigned int *peer )
 	return 0;
 }
 
+/* the interface this case assembled: the AP case (same boot, after this one)
+ * puts the access point's static address on it */
+void *
+wlan8189_dataplane_netif( void )
+{
+
+	return &g_netif;
+}
+
 /* the client test's report (fires in the TCP/IP thread; the stage polls the
  * latch, so the two never share a payload struct) */
 static volatile unsigned int g_uplink_report_seen;
@@ -463,7 +472,8 @@ uplink_report( void *arg, enum lwiperf_report_type report_type,
  * between the console command and lwIP's address type.
  */
 static int
-uplink_phase_run( unsigned int phase, int treatment, unsigned int peer )
+uplink_phase_run( unsigned int phase, int treatment, unsigned int peer,
+    const char *sheet )
 {
 	struct wlan8189_phase_ident id;
 	ip_addr_t remote;
@@ -472,7 +482,7 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer )
 
 	phase_apply_levers( treatment, &id );
 	wlan8189_census_reset();
-	phase_print_ready( "uplink ", phase, treatment, &id );
+	phase_print_ready( sheet, phase, treatment, &id );
 
 	IP_ADDR4( &remote, (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
 	    (peer >> 8) & 0xffU, peer & 0xffU );
@@ -510,12 +520,16 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer )
 		return -1;
 	}
 
-	LOG_ANCHOR( "wlan8189: uplink phase %u result bytes=%lu ms=%lu "
-	    "kbit=%lu type=%u\n", phase, g_uplink_bytes, g_uplink_ms,
+	/* the sheet name is the whole prefix (the ready line uses the same one
+	 * through phase_print_ready): the dataplane's uplink phases print as
+	 * `wlan8189: uplink phase N ...`, the AP case's window as
+	 * `wlan8189: ap uplink phase N ...`, and neither doubles a word */
+	LOG_ANCHOR( "wlan8189: %sphase %u result bytes=%lu ms=%lu "
+	    "kbit=%lu type=%u\n", sheet, phase, g_uplink_bytes, g_uplink_ms,
 	    g_uplink_kbit, g_uplink_report_type );
 	wlan8189_census_print();
 	census_print_lwip();
-	LOG_ANCHOR( "wlan8189: uplink phase %u done\n", phase );
+	LOG_ANCHOR( "wlan8189: %sphase %u done\n", sheet, phase );
 
 	if( g_uplink_bytes == 0UL ) {
 		board_case_fail( "the uplink window moved no bytes "
@@ -523,6 +537,24 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer )
 		return -1;
 	}
 	return 0;
+}
+
+/*
+ * One uplink window toward `peer`, for a case that needs one outside the
+ * dataplane sheet (the AP case, whose window the peer measures in): the same
+ * machinery the sheet's uplink phases run - the arm is the baseline, the census
+ * brackets the window, the result line is the board's own account. Returns 0
+ * when the window moved bytes, non-zero otherwise (the named failure is already
+ * printed).
+ */
+int
+wlan8189_uplink_window( unsigned int peer, unsigned int phase )
+{
+
+	/* the sheet name keeps this window's lines out of the dataplane sheet's
+	 * own counts (the judge reconciles those), while the machinery - arm,
+	 * census bracket, report - is the same code path */
+	return uplink_phase_run( phase, 0, peer, "ap uplink " );
 }
 
 void wlan8189_dataplane_chain( void )
@@ -669,7 +701,7 @@ void wlan8189_dataplane_chain( void )
 			treatment = ((phase % 2U) == 0U);
 #endif
 			if( uplink_phase_run( phase, treatment,
-			    uplink_peer ) != 0 ) {
+			    uplink_peer, "uplink " ) != 0 ) {
 				return;
 			}
 		}

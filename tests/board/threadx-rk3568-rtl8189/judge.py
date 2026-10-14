@@ -23,7 +23,10 @@ supplicant's own handshake anchor, and a passing dataplane must show a bound
 (non-any) address, at least four ping echo replies, and an uplink stage that
 either ran its sheet (four ready/result pairs, both arms present, every result
 carrying bytes) or said why it did not - the stage's silent omission is the one
-thing it may not do.
+thing it may not do. The AP case is judged the same way: the access point must
+have started and stopped cleanly, and it must either have seen a station join or
+have said that none came - a boot with no peer is still a boot whose access
+point came up, and both are named rather than inferred.
 """
 
 import os
@@ -44,6 +47,7 @@ CASES = [
     "wlan8189-scan",
     "wlan8189-join",
     "wlan8189-dataplane",
+    "wlan8189-ap",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -70,6 +74,12 @@ CASES = [
 #:                   and the uplink sheet's standby line - the uplink stage's
 #:                   verdict strength lives in the backstop below, because a
 #:                   boot with no configured peer legally skips the stage)
+#:   wlan8189-ap     the case's own lines (tests/.../tests/wlan8189_ap.c): the
+#:                   access point coming up (its start line and the interface's
+#:                   static address), the wait for a station, and either the
+#:                   station event the backend forwards or the explicit line
+#:                   saying none arrived - a boot without a peer is still a
+#:                   boot whose access point reached the air
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "wlan8189-probe": [
@@ -107,6 +117,13 @@ ANCHORS = {
         r"wlan8189: rate ",
         r"wlan8189: pump ",
     ],
+    "wlan8189-ap": [
+        r"wlan8189: ap start ssid=\S+ ch=\d+ rc=0",
+        r"wlan8189: ap addr ip=\d+\.\d+\.\d+\.\d+/24",
+        r"wlan8189: ap waiting for a station window=\d+ s",
+        r"wlan8189: ap (sta joined mac=|no station within \d+ s)",
+        r"wlan8189: ap stop rc=0",
+    ],
 }
 
 #: The census, phase, power and cadence families: every `perf census:` line is a
@@ -132,15 +149,15 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  41.100] BOARD-SUITE threadx-rk3568-rtl8189 "
-    "result=pass cases=5 ok=5 exit=0\r\n"
+    "result=pass cases=6 ok=6 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-rtl8189 bring-up selftest-tag\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-rtl8189 select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-rtl8189 start cases=5 sel=all "
+    "[  10.000] BOARD-SUITE threadx-rk3568-rtl8189 start cases=6 sel=all "
     "list=shell-up,wlan8189-probe,wlan8189-scan,wlan8189-join,"
-    "wlan8189-dataplane\r\n"
+    "wlan8189-dataplane,wlan8189-ap\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-rtl8189/shell-up PASS\r\n"
     "[  12.400] wlan8189: sdio up card=24c:f179 funcs=1\r\n"
@@ -216,6 +233,16 @@ BASE_TRANSCRIPT = (
     "kbit=23038 type=1\r\n"
     "[ 178.100] wlan8189: uplink phase 4 done\r\n"
     "[ 114.100] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"
+    "[ 180.000] wlan8189: ap start ssid=FWC-AP-8189 ch=1 rc=0\r\n"
+    "[ 180.100] wlan8189: ap addr ip=192.168.99.1/24\r\n"
+    "[ 180.200] wlan8189: ap waiting for a station window=60 s\r\n"
+    "[ 183.000] wlan8189: ap sta joined mac=aa:bb:cc:dd:ee:ff n=1\r\n"
+    "[ 183.100] wlan8189: ap window 40 s\r\n"
+    "[ 185.000] wlan8189: ap peer=192.168.99.2 uplink window\r\n"
+    "[ 195.000] wlan8189: ap uplink phase 1 result bytes=21000000 ms=10012 kbit=16780 type=1\r\n"
+    "[ 223.200] wlan8189: ap window done joined=1 left=0\r\n"
+    "[ 223.300] wlan8189: ap stop rc=0\r\n"
+    "[ 223.400] CASE threadx-rk3568-rtl8189/wlan8189-ap PASS\r\n"
     "[  56.000] total function 9\r\n"
     "[  56.010] total variable 2\r\n"
     "[  56.020] wlan8189: attached=1 bss=17\r\n"
@@ -305,6 +332,16 @@ MUTATIONS = [
     ("uplink result zeroed", BASE_TRANSCRIPT.replace(
         "wlan8189: uplink phase 2 result bytes=2910000",
         "wlan8189: uplink phase 2 result bytes=0"), 1),
+    ("ap start dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: ap start ssid=FWC-AP-8189 ch=1 rc=0\r\n", ""), 1),
+    ("ap stop failed", BASE_TRANSCRIPT.replace(
+        "wlan8189: ap stop rc=0", "wlan8189: ap stop rc=-1"), 1),
+    ("ap peer line dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: ap peer=192.168.99.2 uplink window\r\n", "").replace(
+        "wlan8189: ap no peer for the uplink window\r\n", ""), 1),
+    ("ap station lines dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: ap sta joined mac=aa:bb:cc:dd:ee:ff n=1\r\n", "").replace(
+        "wlan8189: ap no station within 60 s\r\n", ""), 1),
     ("semwake split dropped", BASE_TRANSCRIPT.replace(
         "perf census: D semwake_sem n=2 spent_us=4 sites=[a0c1234:2:4]\r\n", ""), 1),
     ("rate readout dropped", BASE_TRANSCRIPT.replace(
@@ -314,7 +351,7 @@ MUTATIONS = [
         "ping: recv 192.168.0.1 2 ms\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,wlan8189-probe,wlan8189-scan,wlan8189-join,"
-        "wlan8189-dataplane",
+        "wlan8189-dataplane,wlan8189-ap",
         "list=shell-up,wlan8189-probe"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
@@ -348,6 +385,18 @@ PHASE_ARM_RE = re.compile(r"wlan8189: phase \d+ ready lever=\d+ arm=([AB])")
 UPLINK_READY_RE = re.compile(r"wlan8189: uplink phase \d+ ready lever=\d+ arm=([AB])")
 UPLINK_RESULT_RE = re.compile(r"wlan8189: uplink phase (\d+) result bytes=(\d+) ms=\d+ kbit=\d+")
 UPLINK_SKIP_RE = re.compile(r"wlan8189: uplink skipped reason=(\S+)")
+
+#: The AP case's conditional evidence: a station event, or the explicit line
+#: saying none arrived, and the window that only runs once one did.
+AP_STA_JOINED_RE = re.compile(r"wlan8189: ap sta joined mac=[0-9a-f:]{17}")
+AP_NO_STA_RE = re.compile(r"wlan8189: ap no station within \d+ s")
+AP_WINDOW_DONE_RE = re.compile(r"wlan8189: ap window done joined=\d+ left=\d+")
+#: the reverse direction inside the AP window: the far end named on the console,
+#: or the explicit line saying none was
+AP_PEER_RE = re.compile(r"wlan8189: ap (peer=\d+\.\d+\.\d+\.\d+ uplink window"
+                        r"|no peer for the uplink window)")
+#: the AP case's own reverse window (the same machinery, its own sheet name)
+AP_UPLINK_RE = re.compile(r"wlan8189: ap uplink phase \d+ result bytes=(\d+)")
 
 
 def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
@@ -507,6 +556,35 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
             if zero:
                 errors.append("wlan8189-dataplane: uplink phase(s) %s moved "
                               "zero bytes" % ",".join(zero))
+
+    # the AP case's backstop: the access point must have said what happened to
+    # the peer - a station event, or the explicit "none within N s" line - and
+    # when a station did join, the window it opens must have run and closed.
+    # Silence is the one thing this case may not leave behind.
+    if verdicts.get("wlan8189-ap") == "PASS":
+        joined = any(AP_STA_JOINED_RE.search(line) for line in transcript.lines)
+        none = any(AP_NO_STA_RE.search(line) for line in transcript.lines)
+        window = any(AP_WINDOW_DONE_RE.search(line)
+                     for line in transcript.lines)
+        if not joined and not none:
+            errors.append("wlan8189-ap: neither a station event nor the "
+                          "explicit no-station line")
+        if joined and not window:
+            errors.append("wlan8189-ap: a station joined but the window never "
+                          "closed")
+        peer_lines = [m.group(1) for line in transcript.lines
+                      for m in [AP_PEER_RE.search(line)] if m]
+        if joined and not peer_lines:
+            errors.append("wlan8189-ap: the window ran but neither the reverse "
+                          "window nor the line saying no peer was named")
+        if joined and peer_lines and peer_lines[0].startswith("peer="):
+            results = [m.group(1) for line in transcript.lines
+                       for m in [AP_UPLINK_RE.search(line)] if m]
+            if not results:
+                errors.append("wlan8189-ap: a peer was named for the reverse "
+                              "window but no result line followed")
+            elif all(int(v) == 0 for v in results):
+                errors.append("wlan8189-ap: the reverse window moved zero bytes")
 
     shell_selected = expected is None or "shell-up" in expected
     if steps_path and os.path.exists(steps_path):

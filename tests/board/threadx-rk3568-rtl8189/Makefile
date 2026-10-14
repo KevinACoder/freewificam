@@ -174,6 +174,8 @@ WLAN8189_CASE_SRCS := \
 	$(CURDIR)/tests/wlan8189_scan.c \
 	$(CURDIR)/tests/wlan8189_join.c \
 	$(CURDIR)/tests/wlan8189_dataplane.c \
+	$(CURDIR)/tests/wlan8189_ap.c \
+	$(CURDIR)/tests/wlan8189_ap_beacon.c \
 	$(CURDIR)/tests/wlan8189_cmds.c
 
 WLAN8189_CASE_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
@@ -192,6 +194,10 @@ WLAN8189_CASE_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 # further down, so these must expand when the compile rules are built.
 WLAN8189_JOIN_CFLAGS = $(WPA_PORT_CFLAGS) -I$(CURDIR)/tests -I$(LWIP_PORT)
 WLAN8189_DATAPLANE_CFLAGS = $(LWIP_INCLUDES) -I$(WPA_PORT) -I$(CURDIR)/tests
+# the AP case lives in the same lwIP header world (it puts the access point's
+# static address on the interface the dataplane case assembled) and includes the
+# beacon builder, so it rides the same set
+WLAN8189_AP_CFLAGS = $(LWIP_INCLUDES) -I$(WPA_PORT) -I$(CURDIR)/tests
 
 # The skb pool's geometry, which is a compile-time contract between the
 # driver's view of the pool (the header) and the pool body: both sides must see
@@ -671,9 +677,10 @@ $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(filter-out $(WLAN8189_CASE_SRCS),$(SHELL_SRCS) $(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),)))
 # the plain case set (probe/scan/the console command) carries the runtime face's
 # flags; the two supplicant-facing cases carry their own world's flags
-$(foreach s,$(filter-out $(CURDIR)/tests/wlan8189_join.c $(CURDIR)/tests/wlan8189_dataplane.c,$(WLAN8189_CASE_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN8189_CASE_CFLAGS))))
+$(foreach s,$(filter-out $(CURDIR)/tests/wlan8189_join.c $(CURDIR)/tests/wlan8189_dataplane.c $(CURDIR)/tests/wlan8189_ap.c,$(WLAN8189_CASE_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(WLAN8189_CASE_CFLAGS))))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_join.c,$(WLAN8189_JOIN_CFLAGS)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_dataplane.c,$(WLAN8189_DATAPLANE_CFLAGS)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_ap.c,$(WLAN8189_AP_CFLAGS)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 # the freestanding libc completion block (abs and friends) is part of this
