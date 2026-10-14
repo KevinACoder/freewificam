@@ -39,8 +39,8 @@ case_line() {
 
 if timeout 60 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^CFG: C[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 10 ] &&
-        grep -q '^CFG: SUITE PASS cases=10$' "$log_dir/stream.log" &&
+    if [ "$pass" = 15 ] &&
+        grep -q '^CFG: SUITE PASS cases=15$' "$log_dir/stream.log" &&
         ! grep -q '^CFG: C[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line wiphy-lifecycle PASS
         case_line bss-table-elements PASS
@@ -52,9 +52,14 @@ if timeout 60 "$bin" > "$log_dir/stream.log" 2>&1; then
         case_line disconnect PASS
         case_line scan-request PASS
         case_line truncated-element PASS
+        case_line ap-start-order PASS
+        case_line ap-stop PASS
+        case_line ap-beacon-head PASS
+        case_line ap-beacon-tail PASS
+        case_line sta-events PASS
     else
         case_line wiphy-lifecycle FAIL
-        echo "linuxkpi-cfg80211-test: the run did not report ten passing cases ($pass)" >&2
+        echo "linuxkpi-cfg80211-test: the run did not report fifteen passing cases ($pass)" >&2
         tail -8 "$log_dir/stream.log" >&2 || true
     fi
 else
@@ -63,7 +68,7 @@ else
     tail -8 "$log_dir/stream.log" >&2 || true
 fi
 
-# ---- the red control (must fail) ----------------------------------------------
+# ---- the red controls (must fail) ----------------------------------------------
 
 if timeout 30 "$bin" --fault weak-expect > "$log_dir/fault-weak-expect.log" 2>&1; then
     case_line red-weak-expect FAIL
@@ -74,6 +79,70 @@ else
     case_line red-weak-expect FAIL
     echo "linuxkpi-cfg80211-test: the weak-expect control failed without naming C3" >&2
     tail -3 "$log_dir/fault-weak-expect.log" >&2 || true
+fi
+
+# the ordering control: with the wrong expectation for the interface type the op
+# sees, C11 must be the case that fails
+if timeout 30 "$bin" --fault ap-order > "$log_dir/fault-ap-order.log" 2>&1; then
+    case_line red-ap-order FAIL
+    echo "linuxkpi-cfg80211-test: the ap-order control passed (it must fail)" >&2
+elif grep -q '^CFG: C11 FAIL' "$log_dir/fault-ap-order.log"; then
+    case_line red-ap-order PASS
+else
+    case_line red-ap-order FAIL
+    echo "linuxkpi-cfg80211-test: the ap-order control failed without naming C11" >&2
+    tail -3 "$log_dir/fault-ap-order.log" >&2 || true
+fi
+
+# the payload control: one byte less of beacon tail must fail C11
+if timeout 30 "$bin" --fault ap-head > "$log_dir/fault-ap-head.log" 2>&1; then
+    case_line red-ap-head FAIL
+    echo "linuxkpi-cfg80211-test: the ap-head control passed (it must fail)" >&2
+elif grep -q '^CFG: C11 FAIL' "$log_dir/fault-ap-head.log"; then
+    case_line red-ap-head PASS
+else
+    case_line red-ap-head FAIL
+    echo "linuxkpi-cfg80211-test: the ap-head control failed without naming C11" >&2
+    tail -3 "$log_dir/fault-ap-head.log" >&2 || true
+fi
+
+# the station-event control: with one event too many expected, C15 must be the
+# case that fails
+if timeout 30 "$bin" --fault sta-event > "$log_dir/fault-sta-event.log" 2>&1; then
+    case_line red-sta-event FAIL
+    echo "linuxkpi-cfg80211-test: the sta-event control passed (it must fail)" >&2
+elif grep -q '^CFG: C15 FAIL' "$log_dir/fault-sta-event.log"; then
+    case_line red-sta-event PASS
+else
+    case_line red-sta-event FAIL
+    echo "linuxkpi-cfg80211-test: the sta-event control failed without naming C15" >&2
+    tail -3 "$log_dir/fault-sta-event.log" >&2 || true
+fi
+
+# the element-walk control: with one element's declared length shortened, the
+# walk in C14 must be the case that fails
+if timeout 30 "$bin" --fault ap-ie-len > "$log_dir/fault-ap-ie-len.log" 2>&1; then
+    case_line red-ap-ie-len FAIL
+    echo "linuxkpi-cfg80211-test: the ap-ie-len control passed (it must fail)" >&2
+elif grep -q '^CFG: C14 FAIL' "$log_dir/fault-ap-ie-len.log"; then
+    case_line red-ap-ie-len PASS
+else
+    case_line red-ap-ie-len FAIL
+    echo "linuxkpi-cfg80211-test: the ap-ie-len control failed without naming C14" >&2
+    tail -3 "$log_dir/fault-ap-ie-len.log" >&2 || true
+fi
+
+# the beacon-oracle control: with one byte of the expectation corrupted, the
+# byte-for-byte comparison in C14 must be the case that fails
+if timeout 30 "$bin" --fault ap-beacon > "$log_dir/fault-ap-beacon.log" 2>&1; then
+    case_line red-ap-beacon FAIL
+    echo "linuxkpi-cfg80211-test: the ap-beacon control passed (it must fail)" >&2
+elif grep -q '^CFG: C14 FAIL' "$log_dir/fault-ap-beacon.log"; then
+    case_line red-ap-beacon PASS
+else
+    case_line red-ap-beacon FAIL
+    echo "linuxkpi-cfg80211-test: the ap-beacon control failed without naming C14" >&2
+    tail -3 "$log_dir/fault-ap-beacon.log" >&2 || true
 fi
 
 # an unknown fault name is a usage error, not a red mode

@@ -54,6 +54,7 @@ CFLAGS := -ggdb3 -O0 -Wall -Wextra -ffunction-sections -fdata-sections \
           -I$(ROOT)/os/cmsis2/host-compat \
           -I$(ROOT)/components/linuxkpi \
           -I$(ROOT)/components/linuxkpi/include \
+          -I$(ROOT)/tests/board/threadx-rk3568-rtl8189/tests \
           -I$(KERNEL)/include \
           -I$(KERNEL)/portable/ThirdParty/GCC/Posix \
           -I$(KERNEL)/portable/ThirdParty/GCC/Posix/utils \
@@ -76,6 +77,13 @@ POOL_SRC := $(ROOT)/components/linuxkpi/skbuff/skbuff_pool.c
 
 APP_SRCS := $(MAKEFILE_DIR)/main.c
 
+# The AP beacon assembly is compiled here as well as into the board image: it is
+# the same file the board suite's AP command feeds to the substitute, so the
+# byte-level expectation this suite pins (cases C13/C14) is pinned on the one
+# implementation that goes on the board - a host-only copy would be free to
+# drift from it.
+AP_SRCS := $(ROOT)/tests/board/threadx-rk3568-rtl8189/tests/wlan8189_ap_beacon.c
+
 RUNTIME_SRCS := \
     $(ROOT)/os/freertos/freertos_hooks.c \
     $(ROOT)/os/freertos/cmsis2_host.c \
@@ -97,7 +105,7 @@ define OBJ
 $(BUILD_DIR)/obj_$(subst /,_,$(patsubst $(ROOT)/%,%,$(1))).o
 endef
 
-SRCS := $(BODY_SRCS) $(POOL_SRC) $(APP_SRCS) $(RUNTIME_SRCS)
+SRCS := $(BODY_SRCS) $(POOL_SRC) $(APP_SRCS) $(AP_SRCS) $(RUNTIME_SRCS)
 OBJS := $(foreach s,$(SRCS),$(call OBJ,$(s)))
 
 .PHONY: all run clean

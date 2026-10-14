@@ -151,16 +151,37 @@ cmd_wlan8189(int argc, char **argv)
 		}
 		return 0;
 	}
+	if (strcmp(argv[1], "ap") == 0) {
+		if (argc >= 4 && strcmp(argv[2], "start") == 0) {
+			unsigned int ch = 1U;
+			int rc;
+
+			if (argc >= 5)
+				ch = (unsigned int)atoi(argv[4]);
+			rc = wlan8189_ap_start(argv[3], ch);
+			csh_printf(csh, "wlan8189: ap start ssid=%s ch=%u "
+			    "rc=%d\n", argv[3], ch, rc);
+		} else if (argc >= 3 && strcmp(argv[2], "stop") == 0) {
+			int rc = wlan8189_ap_stop();
+
+			csh_printf(csh, "wlan8189: ap stop rc=%d\n", rc);
+		} else {
+			csh_printf(csh, "usage: wlan8189 ap start <ssid> [ch] | "
+			    "ap stop\n");
+		}
+		return 0;
+	}
 	csh_printf(csh, "usage: wlan8189 [status|probe|scan|census [reset]|"
 		   "ps [show|lps-mode]|ps ips <mode>|rate|"
 		   "pump [show|fixed|adaptive|yield|noyield]|"
 		   "agg [show|<size-kb>|timeout <units>]|"
-		   "dwc [show|<poll-us>|data <us>]|uplink <a.b.c.d>]\n");
+		   "dwc [show|<poll-us>|data <us>]|uplink <a.b.c.d>|"
+		   "ap start <ssid> [ch]|ap stop]\n");
 	return 0;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
-			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc|uplink]",
+			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc|uplink|ap]",
 			  "wlan8189 status - whether the driver attached and how many BSS rows are held;\n"
 			  "wlan8189 probe - bring the bus and the card up and run the driver's probe;\n"
 			  "wlan8189 scan - ask the driver for a scan and print the table it reports\n"
@@ -171,4 +192,6 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
 			  "wlan8189 pump [show|fixed|adaptive|yield|noyield] - SDIO pump cadence and fairness\n"
 			  "wlan8189 agg [show|<size-kb>|timeout <units>] - card RX aggregation length/timeout\n"
 			  "wlan8189 dwc [show|<poll-us>|data <us>] - host controller command/data poll step\n"
-			  "wlan8189 uplink <a.b.c.d> - the peer the uplink stage's iperf client sends to\n")
+			  "wlan8189 uplink <a.b.c.d> - the peer the uplink stage's iperf client sends to\n"
+			  "wlan8189 ap start <ssid> [ch] - run the interface as an open access point\n"
+			  "wlan8189 ap stop - leave access-point mode\n")

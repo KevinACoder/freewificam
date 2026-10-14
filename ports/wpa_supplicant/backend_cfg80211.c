@@ -114,12 +114,50 @@ wp_consumer_disconnected(struct wiphy *wiphy, uint16_t reason)
 	(void)reason;
 }
 
+/*
+ * The access point's station events: forwarded verbatim to whoever bound them
+ * (the board's AP case), because the backend owns the substitute's consumer slot
+ * and everything the driver reports comes through it. Nothing bound means
+ * nothing to do.
+ */
+static void (*wp_sta_joined)(const uint8_t mac[6]);
+static void (*wp_sta_left)(const uint8_t mac[6]);
+
+void
+lkpi_wpa_cfg80211_ap_bind(void (*on_joined)(const uint8_t mac[6]),
+    void (*on_left)(const uint8_t mac[6]))
+{
+
+	wp_sta_joined = on_joined;
+	wp_sta_left = on_left;
+}
+
+static void
+wp_consumer_sta_joined(struct wiphy *wiphy, const uint8_t mac[6])
+{
+
+	(void)wiphy;
+	if (wp_sta_joined != NULL)
+		wp_sta_joined(mac);
+}
+
+static void
+wp_consumer_sta_left(struct wiphy *wiphy, const uint8_t mac[6])
+{
+
+	(void)wiphy;
+	if (wp_sta_left != NULL)
+		wp_sta_left(mac);
+}
+
 static const struct lkpicfg_consumer_ops wp_consumer = {
 	.attached = wp_consumer_attached,
 	.scan_done = wp_consumer_scan_done,
 	.bss = wp_consumer_bss,
 	.connected = wp_consumer_connected,
 	.disconnected = wp_consumer_disconnected,
+	.sta_joined = wp_consumer_sta_joined,
+	.sta_left = wp_consumer_sta_left,
 };
 
 /*

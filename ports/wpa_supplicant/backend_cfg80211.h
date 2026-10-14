@@ -34,6 +34,14 @@ void	lkpi_wpa_cfg80211_netif_bind(void *netif, void (*on_up)(void *),
  * chain back in that shape (wlan_wpa_vendor_events_arm's shape). */
 void	lkpi_wpa_cfg80211_events_arm(void);
 
+/* Bind the access point's station events: the substitute forwards a station
+ * joining or leaving the AP the driver runs (cfg80211_new_sta/del_sta), and the
+ * backend passes both on - all scalars, the same shape as the netif bind above.
+ * The board's AP case is the consumer; with nothing bound the events go where
+ * everything the backend does not forward goes, nowhere. */
+void	lkpi_wpa_cfg80211_ap_bind(void (*on_joined)(const uint8_t mac[6]),
+	    void (*on_left)(const uint8_t mac[6]));
+
 /* Diagnostics for the console and the board runs. */
 void	lkpi_wpa_cfg80211_stats(unsigned int *eapol_rx, unsigned int *badframe,
 	    unsigned int *bss_seen);

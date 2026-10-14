@@ -39,11 +39,28 @@
  *   C10 truncated element: a stream that runs out mid-way still reaches the
  *       driver, with the fields the parse could read (the group cipher and the
  *       first pairwise suite) and the version and AKM list left unset.
+ *   C11 ap start: the ordering contract (the interface reads AP inside the op,
+ *       because the driver switches the card's mode from that field before it
+ *       takes the beacon), the beacon/SSID pass-through, and the refusals (a
+ *       head that cannot hold an 802.11 header, an empty SSID) that must never
+ *       reach the driver.
+ *   C12 ap stop: the op runs with link_id 0 and the interface's recorded type
+ *       returns to station.
+ *   C13 beacon head: the 24 zero header bytes, the zero timestamp (what keeps
+ *       the network open), the interval and the capability - each byte named.
+ *   C14 beacon tail: the element stream byte for byte against the capture's
+ *       oracle (the template's elements with the name and channel substituted).
+ *   C15 station events: cfg80211_new_sta/del_sta reach the consumer with the
+ *       wiphy and the address.
  *
  * A failure prints the case line with `FAIL` and a detail, the run stops there,
  * and the exit code is non-zero. `--fault weak-expect` makes C3 compare the WPA
- * version against 0 instead of NL80211_WPA_VERSION_2, so the suite proves it can
- * go red.
+ * version against 0 instead of NL80211_WPA_VERSION_2, `--fault ap-order` makes
+ * C11 expect the wrong interface type inside the op, `--fault ap-head` one byte
+ * less of beacon tail than was handed in, `--fault ap-beacon` corrupts one byte
+ * of the beacon oracle, `--fault ap-ie-len` shortens one element's declared
+ * length and `--fault sta-event` expects one station event too many, so the
+ * suite proves those checks can go red.
  */
 
 #include <stdarg.h>
@@ -60,6 +77,8 @@
 #include <linux/ieee80211.h>
 #include <linux/netdevice.h>
 #include <net/cfg80211.h>
+
+#include "wlan8189_ap_beacon.h"
 
 /* ------------------------------------------------------------------ */
 /* the host platform hooks the pool body declares                      */
@@ -185,8 +204,35 @@ consumer_attached(struct wiphy *wiphy)
 	g_attached_wiphy = wiphy;
 }
 
+/* the station events: what the consumer receives is the whole claim of the
+ * forwarding, so both halves are recorded (the wiphy and the address) */
+static unsigned int g_sta_joined;
+static unsigned int g_sta_left;
+static struct wiphy *g_sta_wiphy;
+static u8 g_sta_mac[6];
+
+static void
+consumer_sta_joined(struct wiphy *wiphy, const u8 mac[6])
+{
+
+	g_sta_joined++;
+	g_sta_wiphy = wiphy;
+	memcpy(g_sta_mac, mac, sizeof(g_sta_mac));
+}
+
+static void
+consumer_sta_left(struct wiphy *wiphy, const u8 mac[6])
+{
+
+	(void)wiphy;
+	(void)mac;
+	g_sta_left++;
+}
+
 static const struct lkpicfg_consumer_ops g_consumer = {
 	.attached = consumer_attached,
+	.sta_joined = consumer_sta_joined,
+	.sta_left = consumer_sta_left,
 };
 
 struct rec_connect {
@@ -289,11 +335,68 @@ drv_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request)
 	return 0;
 }
 
+/* the access-point ops: what they record is what the ordering contract is made
+ * of - the interface type the op itself sees (the driver switches the card from
+ * it, so AP must already be set when start_ap runs) and the beacon the caller
+ * handed over */
+struct rec_ap {
+	unsigned int		start_calls;
+	unsigned int		stop_calls;
+	struct net_device	*dev;
+	struct wireless_dev	*wdev;
+	unsigned int		iftype_at_call;
+	const u8		*head;
+	size_t			head_len;
+	const u8		*tail;
+	size_t			tail_len;
+	const u8		*ssid;
+	size_t			ssid_len;
+	int			auth_type;
+	int			hidden_ssid;
+	unsigned int		stop_link_id;
+};
+
+static struct rec_ap	g_ap;
+
+static int
+drv_start_ap(struct wiphy *wiphy, struct net_device *dev,
+    struct cfg80211_ap_settings *settings)
+{
+
+	(void)wiphy;
+	g_ap.start_calls++;
+	g_ap.dev = dev;
+	g_ap.wdev = dev->ieee80211_ptr;
+	g_ap.iftype_at_call = (unsigned int)dev->ieee80211_ptr->iftype;
+	g_ap.head = settings->beacon.head;
+	g_ap.head_len = settings->beacon.head_len;
+	g_ap.tail = settings->beacon.tail;
+	g_ap.tail_len = settings->beacon.tail_len;
+	g_ap.ssid = settings->ssid;
+	g_ap.ssid_len = settings->ssid_len;
+	g_ap.auth_type = (int)settings->auth_type;
+	g_ap.hidden_ssid = (int)settings->hidden_ssid;
+	return 0;
+}
+
+static int
+drv_stop_ap(struct wiphy *wiphy, struct net_device *dev, unsigned int link_id)
+{
+
+	(void)wiphy;
+	(void)dev;
+	g_ap.stop_calls++;
+	g_ap.stop_link_id = link_id;
+	return 0;
+}
+
 static const struct cfg80211_ops g_drv_ops = {
 	.connect = drv_connect,
 	.disconnect = drv_disconnect,
 	.add_key = drv_add_key,
 	.scan = drv_scan,
+	.start_ap = drv_start_ap,
+	.stop_ap = drv_stop_ap,
 };
 
 /* ------------------------------------------------------------------ */
@@ -344,6 +447,27 @@ static const u8 g_rsn_trunc_body[] = {
 
 static const u8 g_bssid[ETH_ALEN] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 };
 static const u8 g_ssid[] = "CFG-TEST-NET";
+
+/*
+ * The beacon a caller assembles for the access point: 24 header bytes plus the
+ * 12 fixed bytes (timestamp, beacon interval, capability), then the elements.
+ * The fixed bytes are all zero here on purpose - the driver reads its
+ * capability from the stream's first two bytes, i.e. the timestamp
+ * (third-party/rtl8189fs/core/rtw_ap.c:1979), so a zero timestamp is what keeps
+ * the network open, while the capability that goes on air is the one at
+ * offset 10.
+ */
+static u8 g_beacon_head[36];
+
+/* SSID + supported rates + DS: the minimum the driver's parser needs to find a
+ * network name, a rate set and a channel */
+static const u8 g_beacon_tail[] = {
+	0x00, 0x0b, 'C', 'F', 'G', '-', 'T', 'E', 'S', 'T', '-', 'A', 'P',
+	0x01, 0x08, 0x82, 0x84, 0x8b, 0x96, 0x24, 0x30, 0x48, 0x6c,
+	0x03, 0x01, 0x01,
+};
+
+static const u8 g_ap_ssid[] = "CFG-TEST-AP";
 #define SSID_LEN	(sizeof(g_ssid) - 1)
 
 /* the 2.4 GHz band the driver fills in before registering */
@@ -776,6 +900,282 @@ case_c10(void)
 	    g_connect.crypto.n_akm_suites);
 }
 
+/*
+ * C11 ap start: the ordering contract and the pass-through. The interface must
+ * already read AP inside the op (the driver switches the card's mode from that
+ * field before it takes the beacon), the beacon pointers and lengths reach the
+ * driver unchanged, and the refusals - a head that cannot hold an 802.11 header,
+ * an empty SSID - never reach it at all.
+ */
+static void
+case_c11(void)
+{
+	unsigned int want_iftype = NL80211_IFTYPE_AP;
+	size_t want_head = sizeof(g_beacon_head);
+	size_t want_tail = sizeof(g_beacon_tail);
+	int rc;
+	int ok = 1;
+
+	/* the red controls move the expectation, not the code: ap-order expects
+	 * the wrong interface type inside the op, ap-head one byte less than was
+	 * handed in */
+	if (g_fault != NULL && strcmp(g_fault, "ap-order") == 0)
+		want_iftype = NL80211_IFTYPE_STATION;
+	if (g_fault != NULL && strcmp(g_fault, "ap-head") == 0)
+		want_tail = sizeof(g_beacon_tail) - 1;
+
+	/* the interface is a station before the call: the type the op sees is
+	 * therefore the substitute's doing, not the fixture's */
+	g_wdev.iftype = NL80211_IFTYPE_STATION;
+
+	/* refusals first: neither may reach the driver */
+	rc = lkpicfg_ap_start(g_wiphy, g_ap_ssid, sizeof(g_ap_ssid) - 1,
+	    g_beacon_head, 12, g_beacon_tail, sizeof(g_beacon_tail));
+	if (rc != -EINVAL || g_ap.start_calls != 0)
+		ok = 0;
+	rc = lkpicfg_ap_start(g_wiphy, NULL, 0, g_beacon_head,
+	    sizeof(g_beacon_head), g_beacon_tail, sizeof(g_beacon_tail));
+	if (rc != -EINVAL || g_ap.start_calls != 0)
+		ok = 0;
+
+	rc = lkpicfg_ap_start(g_wiphy, g_ap_ssid, sizeof(g_ap_ssid) - 1,
+	    g_beacon_head, sizeof(g_beacon_head), g_beacon_tail,
+	    sizeof(g_beacon_tail));
+	if (rc != 0 || g_ap.start_calls != 1)
+		ok = 0;
+	else if (g_ap.iftype_at_call != want_iftype)
+		ok = 0;
+	else if (g_ap.head != g_beacon_head || g_ap.head_len != want_head)
+		ok = 0;
+	else if (g_ap.tail != g_beacon_tail || g_ap.tail_len != want_tail)
+		ok = 0;
+	else if (g_ap.ssid != g_ap_ssid ||
+	    g_ap.ssid_len != sizeof(g_ap_ssid) - 1)
+		ok = 0;
+	else if (g_ap.auth_type != NL80211_AUTHTYPE_OPEN_SYSTEM)
+		ok = 0;
+	else if (g_ap.hidden_ssid != NL80211_HIDDEN_SSID_NOT_IN_USE)
+		ok = 0;
+	else if (g_ap.wdev != &g_wdev || g_ap.dev != g_netdev)
+		ok = 0;
+
+	case_line("C11", ok, "rc=%d calls=%u iftype=%u head=%u tail=%u ssid=%u",
+	    rc, g_ap.start_calls, g_ap.iftype_at_call, (unsigned)g_ap.head_len,
+	    (unsigned)g_ap.tail_len, (unsigned)g_ap.ssid_len);
+}
+
+/*
+ * C12 ap stop: the op runs with link_id 0, and the interface's recorded type
+ * returns to station - that field is the port's own record of the type and the
+ * driver reads it to sync the card, so it must not stay at AP after the mode
+ * has been left.
+ */
+static void
+case_c12(void)
+{
+	int rc;
+	int ok = 1;
+
+	rc = lkpicfg_ap_stop(g_wiphy);
+	if (rc != 0 || g_ap.stop_calls != 1)
+		ok = 0;
+	else if (g_ap.stop_link_id != 0)
+		ok = 0;
+	else if (g_wdev.iftype != NL80211_IFTYPE_STATION)
+		ok = 0;
+
+	case_line("C12", ok, "rc=%d calls=%u link_id=%u iftype=%u", rc,
+	    g_ap.stop_calls, g_ap.stop_link_id, (unsigned)g_wdev.iftype);
+}
+
+/*
+ * The oracle for the beacon assembly: the element stream the captured template
+ * carried - the open hostapd access point on the measurement host's own radio
+ * (the round's ledger holds the capture; this is its frame 7) - with the two
+ * values this build chooses, the network name and the channel, substituted.
+ * It is written here as the capture's bytes, deliberately not as a second run
+ * of the builder, so C14 compares the one implementation against the air.
+ */
+static const u8 g_ap_tail_oracle[] = {
+	0x00, 0x0b, 'C', 'F', 'G', '-', 'T', 'E', 'S', 'T', '-', 'A', 'P',
+	0x01, 0x08, 0x82, 0x84, 0x8b, 0x96, 0x24, 0x30, 0x48, 0x6c,
+	0x03, 0x01, 0x01,
+	0x2a, 0x01, 0x00,
+	0x32, 0x04, 0x0c, 0x12, 0x18, 0x60,
+	0x2d, 0x1a, 0x21, 0x00, 0x17, 0xff,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00,
+	0x3d, 0x16, 0x01, 0x08, 0x11,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0xdd, 0x18, 0x00, 0x50, 0xf2, 0x02, 0x01, 0x01, 0x80, 0x00, 0x03, 0xa4,
+	0x00, 0x00, 0x27, 0xa4, 0x00, 0x00, 0x42, 0x43, 0x5e, 0x00, 0x62, 0x32,
+	0x2f, 0x00,
+};
+
+/*
+ * C13 beacon head: 24 zero header bytes (the driver strips them), the zero
+ * timestamp (the field the driver reads its capability from, which is what
+ * keeps the network open), the interval and the capability - each byte named -
+ * and a buffer one byte short refused rather than overrun.
+ */
+static void
+case_c13(void)
+{
+	static const u8 want[WLAN8189_AP_BEACON_HEAD_LEN] = {
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,		/* timestamp */
+		0x64, 0x00,			/* interval 100 TU, LE */
+		0x01, 0x15,			/* capability 0x1501, LE */
+	};
+	u8 buf[WLAN8189_AP_BEACON_HEAD_LEN + 8u];
+	unsigned int n;
+	int ok = 1;
+
+	n = wlan8189_ap_beacon_head(buf, sizeof(buf), WLAN8189_AP_INTERVAL_TU,
+	    WLAN8189_AP_CAPABILITY);
+	if (n != WLAN8189_AP_BEACON_HEAD_LEN)
+		ok = 0;
+	else if (memcmp(buf, want, sizeof(want)) != 0)
+		ok = 0;
+	/* one byte short: refused, and nothing written past the caller's word */
+	else if (wlan8189_ap_beacon_head(buf, WLAN8189_AP_BEACON_HEAD_LEN - 1u,
+	    WLAN8189_AP_INTERVAL_TU, WLAN8189_AP_CAPABILITY) != 0)
+		ok = 0;
+	else if (wlan8189_ap_beacon_head(NULL, sizeof(buf),
+	    WLAN8189_AP_INTERVAL_TU, WLAN8189_AP_CAPABILITY) != 0)
+		ok = 0;
+
+	case_line("C13", ok, "n=%u want=%u", n, WLAN8189_AP_BEACON_HEAD_LEN);
+}
+
+/*
+ * C14 beacon tail: the assembled element stream walked element by element
+ * (every declared length must fit and the ids must appear in the template's
+ * order, with the stream fully consumed) and then compared byte for byte
+ * against the capture's oracle, plus the refusals (no name, an over-long name,
+ * a short buffer).
+ *
+ * The walk is the check that does not depend on the oracle being transcribed
+ * correctly: a hand-copied expectation can be wrong in the same way as the
+ * table it checks (it was, once: an element two bytes short passed the byte
+ * comparison because both sides carried the same mistake). A declared length
+ * that does not match its content, or a stream that does not end exactly where
+ * the last element says, fails here whatever the oracle says.
+ */
+static void
+case_c14(void)
+{
+	static const u8 want_ids[] = { 0x00, 0x01, 0x03, 0x2a, 0x32, 0x2d, 0x3d, 0xdd };
+	u8 buf[160];
+	u8 oracle[sizeof(g_ap_tail_oracle)];
+	unsigned int n;
+	unsigned int i;
+	unsigned int ie;
+	int ok = 1;
+
+	memcpy(oracle, g_ap_tail_oracle, sizeof(oracle));
+	if (g_fault != NULL && strcmp(g_fault, "ap-beacon") == 0)
+		oracle[sizeof(oracle) - 1u] ^= 0x01u;
+
+	n = wlan8189_ap_beacon_tail(buf, sizeof(buf), g_ap_ssid,
+	    sizeof(g_ap_ssid) - 1u, 1u);
+
+	/* the red control for the walk: shorten one element's declared length by
+	 * a byte, the exact shape of the defect the walk exists for */
+	if (g_fault != NULL && strcmp(g_fault, "ap-ie-len") == 0) {
+		for (i = 0u; i + 1u < n; i++) {
+			if (buf[i] == 0x2d && buf[i + 1u] == 26u) {
+				buf[i + 1u] = 25u;
+				break;
+			}
+		}
+	}
+
+	/* the walk */
+	for (i = 0u, ie = 0u; ok && i < n; ie++) {
+		unsigned int elen;
+
+		if (i + 2u > n || ie >= sizeof(want_ids)) {
+			ok = 0;
+			break;
+		}
+		if (buf[i] != want_ids[ie]) {
+			ok = 0;
+			break;
+		}
+		elen = buf[i + 1u];
+		if (i + 2u + elen > n) {
+			ok = 0;
+			break;
+		}
+		i += 2u + elen;
+	}
+	if (ok && i != n)
+		ok = 0;			/* the stream must end where the last IE says */
+
+	if (!ok) {
+		case_line("C14", 0, "walk failed at %u", i);
+		return;
+	}
+
+	if (n != sizeof(oracle))
+		ok = 0;
+	else if (memcmp(buf, oracle, sizeof(oracle)) != 0)
+		ok = 0;
+	/* refusals: no name, an over-long name, a buffer one byte short */
+	else if (wlan8189_ap_beacon_tail(buf, sizeof(buf), g_ap_ssid, 0u, 1u) != 0)
+		ok = 0;
+	else if (wlan8189_ap_beacon_tail(buf, sizeof(buf), g_ap_ssid, 33u, 1u) != 0)
+		ok = 0;
+	else if (wlan8189_ap_beacon_tail(buf, sizeof(oracle) - 1u, g_ap_ssid,
+	    sizeof(g_ap_ssid) - 1u, 1u) != 0)
+		ok = 0;
+	else if (wlan8189_ap_beacon_tail(NULL, sizeof(buf), g_ap_ssid,
+	    sizeof(g_ap_ssid) - 1u, 1u) != 0)
+		ok = 0;
+
+	case_line("C14", ok, "n=%u want=%u", n, (unsigned)sizeof(oracle));
+}
+
+/*
+ * C15 station events: the driver's AP-mode reports reach the consumer - the
+ * wiphy and the address are passed through, and the two halves (joined, left)
+ * are separate notifications. The driver's own call sites are
+ * ioctl_cfg80211.c:4327/:4381, gated on RTW_USE_CFG80211_STA_EVENT, which this
+ * port's builds define; the substitute used to drop both on the floor.
+ */
+static void
+case_c15(void)
+{
+	static const u8 sta[6] = { 0x02, 0x00, 0x5e, 0x11, 0x22, 0x33 };
+	unsigned int want_joined = 1;
+	int ok = 1;
+
+	/* the red control moves the expectation, not the code */
+	if (g_fault != NULL && strcmp(g_fault, "sta-event") == 0)
+		want_joined = 2;
+
+	g_sta_joined = 0;
+	g_sta_left = 0;
+	g_sta_wiphy = NULL;
+
+	cfg80211_new_sta(&g_wdev, sta, NULL, 0);
+	cfg80211_del_sta(&g_wdev, sta, 0);
+
+	if (g_sta_joined != want_joined || g_sta_left != 1)
+		ok = 0;
+	else if (g_sta_wiphy != g_wiphy)
+		ok = 0;
+	else if (memcmp(g_sta_mac, sta, sizeof(sta)) != 0)
+		ok = 0;
+
+	case_line("C15", ok, "joined=%u left=%u wiphy=%s", g_sta_joined,
+	    g_sta_left, g_sta_wiphy == g_wiphy ? "match" : "mismatch");
+}
+
 /* ------------------------------------------------------------------ */
 /* the run                                                             */
 /* ------------------------------------------------------------------ */
@@ -822,6 +1222,21 @@ run_suite(void)
 	if (g_fail != 0)
 		goto done;
 	case_c10();
+	if (g_fail != 0)
+		goto done;
+	case_c11();
+	if (g_fail != 0)
+		goto done;
+	case_c12();
+	if (g_fail != 0)
+		goto done;
+	case_c13();
+	if (g_fail != 0)
+		goto done;
+	case_c14();
+	if (g_fail != 0)
+		goto done;
+	case_c15();
 
 done:
 	if (g_fail == 0)
@@ -851,11 +1266,17 @@ main(int argc, char **argv)
 		if (strcmp(argv[i], "--fault") == 0 && i + 1 < argc) {
 			g_fault = argv[++i];
 		} else {
-			printf("CFG: usage: %s [--fault weak-expect]\n", argv[0]);
+			printf("CFG: usage: %s [--fault weak-expect|ap-order|"
+			    "ap-head|ap-beacon|ap-ie-len|sta-event]\n", argv[0]);
 			return 2;
 		}
 	}
-	if (g_fault != NULL && strcmp(g_fault, "weak-expect") != 0) {
+	if (g_fault != NULL && strcmp(g_fault, "weak-expect") != 0 &&
+	    strcmp(g_fault, "ap-order") != 0 &&
+	    strcmp(g_fault, "ap-head") != 0 &&
+	    strcmp(g_fault, "ap-beacon") != 0 &&
+	    strcmp(g_fault, "sta-event") != 0 &&
+	    strcmp(g_fault, "ap-ie-len") != 0) {
 		printf("CFG: unknown fault '%s'\n", g_fault);
 		return 2;
 	}
