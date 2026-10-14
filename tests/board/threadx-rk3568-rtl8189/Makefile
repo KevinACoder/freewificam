@@ -98,9 +98,9 @@ OPT ?= -Og
 # or the control arm first without editing source: LEVER picks which lever the
 # four-phase sheet moves (see the WLAN8189_LEVER_* values in the dataplane
 # case), ARM_B_FIRST=1 puts the treatment arm on the leading phases,
-# AGG_TIMEOUT/AGG_TIMEOUT_BASE/POLL_TREAT_US override the treatment value, the
-# baseline every phase starts from, and the poll-step treatment. All default to
-# what an unparameterised build already did.
+# AGG_TIMEOUT/AGG_TIMEOUT_BASE/POLL_TREAT_US/DWC_DATA_* override the treatment
+# value, the baseline every phase starts from, and the step treatments. All
+# default to what an unparameterised build already did.
 LEVER_CFLAGS :=
 ifneq ($(LEVER),)
 LEVER_CFLAGS += -DWLAN8189_LEVER=$(LEVER)
@@ -116,6 +116,12 @@ LEVER_CFLAGS += -DWLAN8189_AGG_TIMEOUT_BASE=$(AGG_TIMEOUT_BASE)
 endif
 ifneq ($(POLL_TREAT_US),)
 LEVER_CFLAGS += -DWLAN8189_DWC_POLL_TREAT_US=$(POLL_TREAT_US)
+endif
+ifneq ($(DWC_DATA_TREAT_US),)
+LEVER_CFLAGS += -DWLAN8189_DWC_DATA_TREAT_US=$(DWC_DATA_TREAT_US)
+endif
+ifneq ($(DWC_DATA_BASE_US),)
+LEVER_CFLAGS += -DWLAN8189_DWC_DATA_BASE_US=$(DWC_DATA_BASE_US)
 endif
 # The throughput census is this image's: the instrumented layers (linuxkpi
 # core/SDIO engine/osdep, the SDIO port, the controller driver, the netif

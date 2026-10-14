@@ -100,6 +100,15 @@ records the wall clock, drives the client, and collects the board's own
 `perf census:` lines that fall inside the window. It writes `result.json`, one
 file per phase, a copy of the console, and the capture.
 
+The reverse direction needs no extra flag: when the board's console announces
+its uplink stage, `run` brings up an iperf2 server on this host, tells the board
+on the console the address to send to - this host's address on the path to the
+board, found with `ip route get` - and then records the stage's own ready and
+result lines per window. The server's log is kept with the products
+(`uplink-server.log`) and its per-test rows are the receiver-side figures the
+uplink numbers are quoted from. A board boot that was not given a peer skips the
+stage and says so on its console; `run` reports that as a skip, not a failure.
+
 Analysis, either on a capture just taken or on an older file:
 
 ```

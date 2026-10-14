@@ -77,12 +77,24 @@ struct wiphy *lkpicfg_wiphy(void);
 #define WLAN8189_IPERF_WINDOW_MS	20000U
 #define WLAN8189_IPERF_PHASES		4U
 
+/* The uplink sheet's own shape: the same phase count and arm order as the
+ * downlink sheet, but the window is the library's - lwiperf's client hard-codes
+ * its test duration (10 s: settings.amount = -1000 ten-ms units) - so an uplink
+ * window is that duration plus the connect and the report's own end. The peer
+ * wait bounds the stage's standby: a normal boot's runner sends the peer with
+ * its join-time extra steps, minutes before the stage runs, so the wait only
+ * ever covers the unconfigured case. */
+#define WLAN8189_UPLINK_PHASES		4U
+#define WLAN8189_UPLINK_PEER_WAIT_MS	15000U
+#define WLAN8189_UPLINK_REPORT_WAIT_MS	25000U
+
 /* the levers this sheet can carry. The census and the engine read the
  * treatments back per phase, so a phase's own line says which one it ran. */
 #define WLAN8189_LEVER_PUMP	1	/* the pump cadence: adaptive vs fixed */
 #define WLAN8189_LEVER_POLL	2	/* the controller's completion-poll step */
 #define WLAN8189_LEVER_AGG	3	/* the card's RX aggregation timeout byte */
 #define WLAN8189_LEVER_YIELD	4	/* the pump's fairness yield */
+#define WLAN8189_LEVER_DWCDATA	5	/* the controller's data-wait step */
 
 #ifndef WLAN8189_LEVER
 #define WLAN8189_LEVER	WLAN8189_LEVER_AGG
@@ -111,6 +123,21 @@ struct wiphy *lkpicfg_wiphy(void);
 #define WLAN8189_DWC_POLL_STOCK_US	100U
 #ifndef WLAN8189_DWC_POLL_TREAT_US
 #define WLAN8189_DWC_POLL_TREAT_US	5U
+#endif
+/* The data-stage waits' step, the same knob restricted to the waits that cover
+ * a data stage (the DTO wait and the IDMAC drain behind it). The eMMC line's
+ * controller port runs that wait an order of magnitude finer than its command
+ * wait (ports/fsl_sdmmc/sdmmc_host_dwcmshc.c), and this port ran both at one
+ * step - so the treatment moves only the data waits, which pay their step once
+ * per transfer instead of once per command access. Unlike the global step
+ * (which the poll lever's round measured at +5.5% for 22x the wait-loop
+ * iterations), this one should buy the same quantisation relief with a
+ * fraction of the CPU, and both directions of the link pay it. */
+#ifndef WLAN8189_DWC_DATA_BASE_US
+#define WLAN8189_DWC_DATA_BASE_US	100U
+#endif
+#ifndef WLAN8189_DWC_DATA_TREAT_US
+#define WLAN8189_DWC_DATA_TREAT_US	5U
 #endif
 #ifndef WLAN8189_AGG_TIMEOUT_BASE
 #define WLAN8189_AGG_TIMEOUT_BASE	0x20u
@@ -286,6 +313,218 @@ census_print_lwip(void)
 #endif
 }
 
+/* ------------------------------------------------------------------ */
+/* the phase machinery both sheets share                               */
+/* ------------------------------------------------------------------ */
+
+/* The effective state a phase ran under, read back after the arm was applied:
+ * the phase line carries this identity so a number can never be read against
+ * the wrong treatment. */
+struct wlan8189_phase_ident {
+	const char	*pump;
+	unsigned int	poll_us;
+	unsigned int	data_us;
+	unsigned int	agg;
+	int		yield;
+};
+
+/*
+ * Put one phase's arm in place: re-assert the full baseline every phase starts
+ * from - pump fixed, the adopted aggregation pair, no fairness yield, stock
+ * command and data steps - then move the one lever this image was built to
+ * measure. Both sheets call this, so a phase is exactly the lever's setting and
+ * nothing carried over, and the arm definition cannot drift between the two
+ * directions.
+ */
+static void
+phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
+{
+
+	(void)wlan8189_pump_set( "fixed" );
+	wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
+	wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_BASE );
+	wlan8189_pump_yield_set( 0 );
+	id->poll_us = wlan8189_dwc_poll_set( WLAN8189_DWC_POLL_STOCK_US );
+	id->data_us = wlan8189_dwc_data_set( WLAN8189_DWC_DATA_BASE_US );
+
+#if WLAN8189_LEVER == WLAN8189_LEVER_PUMP
+	id->pump = treatment ? "adaptive" : "fixed";
+	(void)wlan8189_pump_set( id->pump );
+#elif WLAN8189_LEVER == WLAN8189_LEVER_POLL
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	if( treatment ) {
+		id->poll_us = wlan8189_dwc_poll_set(
+		    WLAN8189_DWC_POLL_TREAT_US );
+	}
+#elif WLAN8189_LEVER == WLAN8189_LEVER_AGG
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	if( treatment ) {
+		wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_TREAT );
+	}
+#elif WLAN8189_LEVER == WLAN8189_LEVER_YIELD
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	wlan8189_pump_yield_set( treatment ? 1 : 0 );
+#elif WLAN8189_LEVER == WLAN8189_LEVER_DWCDATA
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	if( treatment ) {
+		id->data_us = wlan8189_dwc_data_set(
+		    WLAN8189_DWC_DATA_TREAT_US );
+	}
+#else
+#error "WLAN8189_LEVER is not a known lever"
+#endif
+	id->agg = wlan8189_agg_get();
+	id->yield = wlan8189_pump_yield_get();
+}
+
+/* The ready line: one shape for both sheets. The downlink's stays the original
+ * line byte for byte (the judge anchors and the round's ledgers read it); the
+ * uplink's carries its sheet name after the suite prefix. */
+static void
+phase_print_ready( const char *sheet, unsigned int phase, int treatment,
+    const struct wlan8189_phase_ident *id )
+{
+
+	LOG_ANCHOR( "wlan8189: %sphase %u ready lever=%u arm=%c pump=%s "
+	    "poll_us=%u data_us=%u agg=0x%04x yield=%d lps=%d\n",
+	    sheet, phase, (unsigned)WLAN8189_LEVER, treatment ? 'B' : 'A',
+	    id->pump, id->poll_us, id->data_us, id->agg, id->yield,
+	    wlan8189_ps_get() );
+}
+
+/* ------------------------------------------------------------------ */
+/* the uplink sheet                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The reverse direction of the same link under the same lever: the board is
+ * the iperf *client* here - the runner's host is the server - because the lwIP
+ * stack's client is the end that can drive a send test. The far end's address
+ * arrives from the console (`wlan8189 uplink <a.b.c.d>`, sent by the runner's
+ * extra steps); with none the stage prints why and leaves the verdict the
+ * downlink part earned, so a regression boot - which configures no peer - is
+ * not a failure, while a configured window that moved no bytes is one.
+ */
+static volatile unsigned int g_uplink_peer;	/* host order; 0 = unset */
+
+void
+wlan8189_uplink_peer_set( unsigned int peer )
+{
+
+	g_uplink_peer = peer;
+}
+
+int
+wlan8189_uplink_peer_get( unsigned int *peer )
+{
+
+	if( g_uplink_peer == 0U || peer == NULL ) {
+		return -1;
+	}
+	*peer = g_uplink_peer;
+	return 0;
+}
+
+/* the client test's report (fires in the TCP/IP thread; the stage polls the
+ * latch, so the two never share a payload struct) */
+static volatile unsigned int g_uplink_report_seen;
+static volatile unsigned int g_uplink_report_type;
+static volatile unsigned long g_uplink_bytes;
+static volatile unsigned long g_uplink_ms;
+static volatile unsigned long g_uplink_kbit;
+
+static void
+uplink_report( void *arg, enum lwiperf_report_type report_type,
+    const ip_addr_t *local_addr, u16_t local_port,
+    const ip_addr_t *remote_addr, u16_t remote_port,
+    u32_t bytes_transferred, u32_t ms_duration, u32_t bandwidth_kbitpsec )
+{
+
+	(void)arg;
+	(void)local_addr;
+	(void)local_port;
+	(void)remote_addr;
+	(void)remote_port;
+	g_uplink_report_type = (unsigned int)report_type;
+	g_uplink_bytes = (unsigned long)bytes_transferred;
+	g_uplink_ms = (unsigned long)ms_duration;
+	g_uplink_kbit = (unsigned long)bandwidth_kbitpsec;
+	g_uplink_report_seen = 1U;
+}
+
+/*
+ * One uplink window: apply the arm, bracket the census, run the client to its
+ * own end, and record the far end's own account of what arrived. The peer is in
+ * host order; its octets are split out here so no byte-order assumption sits
+ * between the console command and lwIP's address type.
+ */
+static int
+uplink_phase_run( unsigned int phase, int treatment, unsigned int peer )
+{
+	struct wlan8189_phase_ident id;
+	ip_addr_t remote;
+	void *session;
+	unsigned int waited;
+
+	phase_apply_levers( treatment, &id );
+	wlan8189_census_reset();
+	phase_print_ready( "uplink ", phase, treatment, &id );
+
+	IP_ADDR4( &remote, (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
+	    (peer >> 8) & 0xffU, peer & 0xffU );
+
+	g_uplink_report_seen = 0U;
+	g_uplink_report_type = 0U;
+	g_uplink_bytes = 0UL;
+	g_uplink_ms = 0UL;
+	g_uplink_kbit = 0UL;
+
+	LOCK_TCPIP_CORE();
+	session = lwiperf_start_tcp_client( &remote, LWIPERF_TCP_PORT_DEFAULT,
+	    LWIPERF_CLIENT, uplink_report, NULL );
+	UNLOCK_TCPIP_CORE();
+	if( session == NULL ) {
+		board_case_fail( "the uplink iperf client did not start" );
+		return -1;
+	}
+
+	/* the client's own duration (10 s) plus the connect and the report's
+	 * delivery; the wait is a ceiling, the report ends it */
+	for( waited = 0; waited < WLAN8189_UPLINK_REPORT_WAIT_MS;
+	    waited += 100U ) {
+		if( g_uplink_report_seen ) {
+			break;
+		}
+		(void)osDelay( 100U );
+	}
+	if( !g_uplink_report_seen ) {
+		LOCK_TCPIP_CORE();
+		lwiperf_abort( session );
+		UNLOCK_TCPIP_CORE();
+		board_case_fail( "the uplink window ended without a report "
+		    "from the far end (is the runner's iperf server up?)" );
+		return -1;
+	}
+
+	LOG_ANCHOR( "wlan8189: uplink phase %u result bytes=%lu ms=%lu "
+	    "kbit=%lu type=%u\n", phase, g_uplink_bytes, g_uplink_ms,
+	    g_uplink_kbit, g_uplink_report_type );
+	wlan8189_census_print();
+	census_print_lwip();
+	LOG_ANCHOR( "wlan8189: uplink phase %u done\n", phase );
+
+	if( g_uplink_bytes == 0UL ) {
+		board_case_fail( "the uplink window moved no bytes "
+		    "(peer reachable and server listening?)" );
+		return -1;
+	}
+	return 0;
+}
+
 void wlan8189_dataplane_chain( void )
 {
 	unsigned int waited;
@@ -350,12 +589,13 @@ void wlan8189_dataplane_chain( void )
 	 * one boot, so the four numbers are comparable and the two treatment phases
 	 * average out the drift the earlier single-treatment sheet could not tell
 	 * from its lever. Every phase re-asserts the full baseline state - pump
-	 * cadence, controller poll step, card aggregation pair, fairness yield - so
-	 * a phase is exactly the lever's setting and nothing carried over. Power
-	 * save stays at the driver's built-in policy (the latency matrix measured
-	 * power a secondary lever). The census reset and snapshot bracket each
-	 * window, and the phase line prints the effective settings so the numbers
-	 * carry their own identity.
+	 * cadence, controller command and data steps, card aggregation pair,
+	 * fairness yield - so a phase is exactly the lever's setting and nothing
+	 * carried over. Power save stays at the driver's built-in policy (the
+	 * latency matrix measured power a secondary lever). The census reset and
+	 * snapshot bracket each window, and the phase line prints the effective
+	 * settings so the numbers carry their own identity. The same machinery runs
+	 * the uplink sheet below, one arm definition for both directions.
 	 */
 	{
 		unsigned int phase;
@@ -370,50 +610,14 @@ void wlan8189_dataplane_chain( void )
 #else
 			const int treatment = ((phase % 2U) == 0U);
 #endif
-			const char *pump;
-			unsigned int poll_us;
-			unsigned int agg_timeout;
+			struct wlan8189_phase_ident id;
 
-			(void)wlan8189_pump_set( "fixed" );
-			wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
-			wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_BASE );
-			agg_timeout = WLAN8189_AGG_TIMEOUT_BASE;
-			wlan8189_pump_yield_set( 0 );
-			poll_us = wlan8189_dwc_poll_set( WLAN8189_DWC_POLL_STOCK_US );
-
-#if WLAN8189_LEVER == WLAN8189_LEVER_PUMP
-			pump = treatment ? "adaptive" : "fixed";
-			(void)wlan8189_pump_set( pump );
-#elif WLAN8189_LEVER == WLAN8189_LEVER_POLL
-			pump = "adaptive";
-			(void)wlan8189_pump_set( pump );
-			if (treatment)
-				poll_us = wlan8189_dwc_poll_set(
-				    WLAN8189_DWC_POLL_TREAT_US );
-#elif WLAN8189_LEVER == WLAN8189_LEVER_AGG
-			pump = "adaptive";
-			(void)wlan8189_pump_set( pump );
-			if (treatment) {
-				agg_timeout = WLAN8189_AGG_TIMEOUT_TREAT;
-				wlan8189_agg_timeout_set( agg_timeout );
-			}
-#elif WLAN8189_LEVER == WLAN8189_LEVER_YIELD
-			pump = "adaptive";
-			(void)wlan8189_pump_set( pump );
-			wlan8189_pump_yield_set( treatment ? 1 : 0 );
-#else
-#error "WLAN8189_LEVER is not a known lever"
-#endif
-			(void)agg_timeout;
+			phase_apply_levers( treatment, &id );
 
 			g_udp_pkts = 0U;
 			g_udp_bytes = 0UL;
 			wlan8189_census_reset();
-			LOG_ANCHOR( "wlan8189: phase %u ready lever=%u arm=%c pump=%s "
-			    "poll_us=%u agg=0x%04x yield=%d lps=%d\n",
-			    phase, (unsigned)WLAN8189_LEVER, treatment ? 'B' : 'A',
-			    pump, poll_us, wlan8189_agg_get(),
-			    wlan8189_pump_yield_get(), wlan8189_ps_get() );
+			phase_print_ready( "", phase, treatment, &id );
 			LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 			    LWIPERF_TCP_PORT_DEFAULT );
 			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
@@ -427,6 +631,47 @@ void wlan8189_dataplane_chain( void )
 			wlan8189_census_print();
 			census_print_lwip();
 			LOG_ANCHOR( "wlan8189: phase %u done\n", phase );
+		}
+	}
+
+	/*
+	 * The uplink sheet - the reverse direction of the same link under the same
+	 * lever (see the machinery above). Standby first: the runner's host server
+	 * must be listening before the client's connect, so this line is its cue,
+	 * and the peer address arrives from the console (the runner's extra steps)
+	 * long before. Without a peer the stage says why and leaves the case's
+	 * verdict exactly as the downlink part earned it.
+	 */
+	LOG_ANCHOR( "wlan8189: uplink standby (configure with 'wlan8189 uplink "
+	    "<peer-ip>')\n" );
+	{
+		unsigned int phase;
+		unsigned int uplink_peer = 0U;
+
+		for( waited = 0; waited < WLAN8189_UPLINK_PEER_WAIT_MS;
+		    waited += 100U ) {
+			if( wlan8189_uplink_peer_get( &uplink_peer ) == 0 ) {
+				break;
+			}
+			(void)osDelay( 100U );
+		}
+		if( wlan8189_uplink_peer_get( &uplink_peer ) != 0 ) {
+			LOG_ANCHOR( "wlan8189: uplink skipped reason=no-peer\n" );
+			return;
+		}
+
+		for( phase = 1U; phase <= WLAN8189_UPLINK_PHASES; phase++ ) {
+			int treatment;
+
+#if WLAN8189_ARM_B_FIRST
+			treatment = ((phase % 2U) == 1U);
+#else
+			treatment = ((phase % 2U) == 0U);
+#endif
+			if( uplink_phase_run( phase, treatment,
+			    uplink_peer ) != 0 ) {
+				return;
+			}
 		}
 	}
 }

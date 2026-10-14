@@ -25,6 +25,9 @@ SUITE_STEPS_FILE      := steps.tsv
 # sweep (see tools/gates/board_runner.py).
 SUITE_EXTRA_AFTER_PATTERN := wlan8189: join waiting for the supplicant
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-rtl8189/judge.py
-SUITE_TIMEOUT         := 480
+# 480 s covered the four 20 s downlink phases; the uplink sheet adds four more
+# bounded windows (the lwIP client's own 10 s each) plus its report waits, so a
+# configured boot runs several minutes longer - a ceiling, not a cost.
+SUITE_TIMEOUT         := 900
 SUITE_SEGMENTS        := -
 SUITE_WIRELESS        := 0

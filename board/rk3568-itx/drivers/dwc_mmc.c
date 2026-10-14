@@ -49,12 +49,27 @@
 #define DWC_MMC_DATA_SAMPLE_US		10000U
 
 static uint32_t dwc_mmc_poll_us = DWC_MMC_POLL_US_DEFAULT;
+/* The data-stage waits' step. Same knob, separate value: a command completion
+ * sits on the critical path of every register access (a coarse step there is a
+ * per-command tax), while a data stage pays its step once per transfer, which
+ * makes a fine data step cheap in aggregate CPU - the eMMC line's controller
+ * port runs exactly this split (ports/fsl_sdmmc/sdmmc_host_dwcmshc.c). */
+static uint32_t dwc_mmc_data_poll_us = DWC_MMC_POLL_US_DEFAULT;
 
 /* The iteration budget that covers a wall-clock budget at the current step. */
 static uint32_t
 dwc_mmc_polls_for(uint32_t budget_us)
 {
 	uint32_t n = budget_us / dwc_mmc_poll_us;
+
+	return (n == 0U) ? 1U : n;
+}
+
+/* the same, at the data-stage waits' step */
+static uint32_t
+dwc_mmc_data_polls_for(uint32_t budget_us)
+{
+	uint32_t n = budget_us / dwc_mmc_data_poll_us;
 
 	return (n == 0U) ? 1U : n;
 }
@@ -650,7 +665,7 @@ static int dwc_mmc_wait_idmac_rx(struct dwc_mmc *hc)
 {
 	uintptr_t base = hc->cfg.base;
 	uint32_t idsts = 0U;
-	uint32_t loop = dwc_mmc_polls_for(DWC_MMC_DATA_BUDGET_US);
+	uint32_t loop = dwc_mmc_data_polls_for(DWC_MMC_DATA_BUDGET_US);
 #ifdef CONFIG_LKPI_CENSUS
 	uint64_t t0, t1;
 
@@ -670,11 +685,11 @@ static int dwc_mmc_wait_idmac_rx(struct dwc_mmc *hc)
 			dwc_mmc_census_note_wait(&dwc_mmc_census_state.idmac_polls,
 			    &dwc_mmc_census_state.idmac_wait_ns,
 			    &dwc_mmc_census_state.idmac_wait_max_ns,
-			    dwc_mmc_polls_for(DWC_MMC_DATA_BUDGET_US) - loop, t0, t1);
+			    dwc_mmc_data_polls_for(DWC_MMC_DATA_BUDGET_US) - loop, t0, t1);
 #endif
 			return DWC_MMC_OK;
 		}
-		dwc_mmc_udelay(dwc_mmc_poll_us);
+		dwc_mmc_udelay(dwc_mmc_data_poll_us);
 	} while (--loop != 0U);
 
 	mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
@@ -685,9 +700,9 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 {
 	uintptr_t base = hc->cfg.base;
 	uint32_t mask = 0U;
-	uint32_t loop = dwc_mmc_polls_for(DWC_MMC_DATA_BUDGET_US);
+	uint32_t loop = dwc_mmc_data_polls_for(DWC_MMC_DATA_BUDGET_US);
 	uint32_t budget = loop;
-	uint32_t sample_at = dwc_mmc_polls_for(DWC_MMC_DATA_SAMPLE_US);
+	uint32_t sample_at = dwc_mmc_data_polls_for(DWC_MMC_DATA_SAMPLE_US);
 #ifdef CONFIG_LKPI_CENSUS
 	uint64_t t0, t1;
 
@@ -723,7 +738,7 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 				  mmio_rd32(base + DWC_MMC_BUFADDR));
 		}
 
-		dwc_mmc_udelay(dwc_mmc_poll_us);
+		dwc_mmc_udelay(dwc_mmc_data_poll_us);
 	} while (--loop != 0U);
 
 #ifdef CONFIG_LKPI_CENSUS
@@ -802,6 +817,26 @@ uint32_t dwc_mmc_get_poll_us(void)
 {
 
 	return dwc_mmc_poll_us;
+}
+
+/*
+ * The data-stage waits' step, in microseconds: the same knob restricted to the
+ * waits that cover a data stage (the DTO wait and the IDMAC drain behind it).
+ * The split exists because the two waits pay their step differently - once per
+ * command for the command waits, once per transfer for the data waits - so the
+ * data step can be set fine without the command waits' per-access tax.
+ */
+void dwc_mmc_set_data_poll_us(uint32_t us)
+{
+
+	if (us != 0U)
+		dwc_mmc_data_poll_us = us;
+}
+
+uint32_t dwc_mmc_get_data_poll_us(void)
+{
+
+	return dwc_mmc_data_poll_us;
 }
 
 int dwc_mmc_init(struct dwc_mmc *hc, const struct dwc_mmc_cfg *cfg)
