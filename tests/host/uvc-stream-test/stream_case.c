@@ -29,11 +29,11 @@
 /* the device model in stubs.c */
 extern struct usbh_hubport g_hport;
 extern uint32_t g_stub_want;
-extern uint32_t g_stub_probe_refusals;
+extern uint32_t g_stub_blocked;
 extern uint8_t g_stub_open_alt;
 extern uint32_t g_stub_probe_calls;
-extern int g_stub_iface_calls;
-extern uint8_t g_stub_iface_alts[16];
+extern uint32_t g_stub_close_calls;
+extern uint32_t g_stub_never_answer;
 extern uint16_t g_frame;
 extern struct usbh_urb *g_pending[];
 extern int g_pending_n;
@@ -218,63 +218,82 @@ static bool case_alt_select(char *why, size_t n)
     return true;
 }
 
-/* A camera that refuses the probe until the streaming interface is taken
- * through one enter-and-leave cycle (the state the board camera enters after
- * a stream): the engine must run the cycle and then succeed. */
+/* Who owns the camera across a stream: when the caller opened it (the board
+ * image's case order), start issues no class requests at all and stop leaves
+ * the camera open - in its streaming setting - so the next start is always
+ * possible; when the engine opened it, stop hands it back with a close.  The
+ * board camera is what makes this matter: it can stop answering VS requests
+ * after it has been made to leave a streaming setting, and a wedge costs the
+ * whole stream. */
 static bool case_probe_rearm(char *why, size_t n)
 {
+    /* caller-owned camera (the open case's state): one frame's script - no
+     * probes, no SET_INTERFACE, no close on stop */
     case_reset(why, n, TEST_FRAME_BUF, TEST_POOL_MAX, 640);
-    /* the board's state after a stream: closed, but the last open's endpoint
-     * payload (640 bytes = alt4) is still recorded - it is what the re-arm
-     * cycle enters */
+    g_video.is_opened = true;
+    g_video.isoin = &g_hport.config.intf[1].altsetting[4].ep[0].ep_desc;
     g_video.isoin_mps = 640;
-    g_stub_probe_refusals = 2; /* two refusals: two cycles */
     if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) != 0) {
-        snprintf(why, n, "start refused although the cycle cures the device");
+        snprintf(why, n, "start on an open camera failed");
         return false;
     }
-    if (g_stub_probe_calls != 3) {
-        snprintf(why, n, "probe ran %u times, expected 3 (two refusals, one answer)",
+    if (g_stub_probe_calls != 0) {
+        snprintf(why, n, "a start on an open camera ran %u probes, expected 0",
                  (unsigned)g_stub_probe_calls);
         return false;
     }
-    /* each failed attempt runs exactly one cycle: alt=<payload>, then 0 */
-    if (g_stub_iface_calls != 4 || g_stub_iface_alts[0] != 4 || g_stub_iface_alts[1] != 0 ||
-        g_stub_iface_alts[2] != 4 || g_stub_iface_alts[3] != 0) {
-        snprintf(why, n, "re-arm cycles: %d calls, alts %u/%u/%u/%u (expected 4/0/4/0)",
-                 g_stub_iface_calls, g_stub_iface_alts[0], g_stub_iface_alts[1],
-                 g_stub_iface_alts[2], g_stub_iface_alts[3]);
+    if (g_stub_open_alt != 0) {
+        snprintf(why, n, "a start on an open camera reopened it (alt %u)", g_stub_open_alt);
         return false;
     }
-    if (g_stub_open_alt != 4) {
-        snprintf(why, n, "open at alt %u, expected 4", g_stub_open_alt);
+    usbh_video_stream_stop();
+    if (g_stub_close_calls != 0) {
+        snprintf(why, n, "stop closed a caller-owned camera (%u closes)", (unsigned)g_stub_close_calls);
+        return false;
+    }
+    if (!g_video.is_opened) {
+        snprintf(why, n, "stop dropped the caller's open state");
+        return false;
+    }
+    /* the second start runs the same way - the setting is still in force */
+    if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) != 0) {
+        snprintf(why, n, "a second start on the same open camera failed");
+        return false;
+    }
+    if (g_stub_probe_calls != 0) {
+        snprintf(why, n, "the second start ran %u probes, expected 0", (unsigned)g_stub_probe_calls);
         return false;
     }
     usbh_video_stream_stop();
 
-    /* no refusals: no cycle, and the device's answer still picks the setting */
+    /* a camera the engine opened itself: stop hands it back */
     case_reset(why, n, TEST_FRAME_BUF, TEST_POOL_MAX, 640);
     if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) != 0) {
-        snprintf(why, n, "start refused with a willing device");
+        snprintf(why, n, "start on a fresh camera failed");
         return false;
     }
-    if (g_stub_probe_calls != 1 || g_stub_iface_calls != 0) {
-        snprintf(why, n, "a willing probe ran %u times with %d cycles, expected 1/0",
-                 (unsigned)g_stub_probe_calls, g_stub_iface_calls);
+    if (g_stub_probe_calls != 1 || g_stub_open_alt != 4) {
+        snprintf(why, n, "a fresh start ran %u probes, opened alt %u (expected 1, 4)",
+                 (unsigned)g_stub_probe_calls, g_stub_open_alt);
         return false;
     }
     usbh_video_stream_stop();
+    if (g_stub_close_calls != 1 || g_video.is_opened) {
+        snprintf(why, n, "stop left an engine-opened camera open (%u closes, opened %d)",
+                 (unsigned)g_stub_close_calls, g_video.is_opened);
+        return false;
+    }
 
-    /* a device that never answers: the attempt ladder is bounded */
+    /* a device that never answers the probe: the ladder is bounded */
     case_reset(why, n, TEST_FRAME_BUF, TEST_POOL_MAX, 640);
-    g_stub_probe_refusals = 100;
+    g_stub_never_answer = 1;
     if (usbh_video_stream_start(640, 480, USBH_VIDEO_FORMAT_MJPEG) >= 0) {
         snprintf(why, n, "a permanently refusing device was accepted");
         usbh_video_stream_stop();
         return false;
     }
-    if (g_stub_probe_calls != 4) {
-        snprintf(why, n, "the refusal ladder ran %u attempts, expected 4",
+    if (g_stub_probe_calls != 5) {
+        snprintf(why, n, "the refusal ladder ran %u probes, expected 5",
                  (unsigned)g_stub_probe_calls);
         return false;
     }

@@ -264,18 +264,23 @@ uint16_t g_frame;
 
 /* The probe answer the fake device gives (bytes per USB frame). */
 uint32_t g_stub_want = 640;
-/* How many probes the fake device refuses before answering (the state the
- * board camera enters after leaving a streaming setting). */
-uint32_t g_stub_probe_refusals;
+/* The board camera's post-stream state: while blocked, every probe is refused
+ * until one is attempted while a streaming setting is selected - that attempt
+ * itself is refused too, and clears the block (the measured cure). */
+uint32_t g_stub_blocked;
+/* A device that is simply gone: refuse everything, no cure. */
+uint32_t g_stub_never_answer;
 /* What the stub observed. */
+uint32_t g_stub_close_calls;
 uint8_t g_stub_open_alt;
 uint32_t g_stub_probe_calls;
 uint8_t g_stub_probe_formatidx, g_stub_probe_frameidx;
 uint32_t g_stub_probe_interval;
-/* The SET_INTERFACE requests the engine issued (the re-arm cycle): the
- * alternate setting of each, in order. */
+/* The SET_INTERFACE requests the engine issued (the cure cycle): the
+ * alternate setting of each, in order, and the setting in force. */
 int g_stub_iface_calls;
-uint8_t g_stub_iface_alts[16];
+uint8_t g_stub_iface_alts[32];
+uint8_t g_stub_cur_alt;
 
 void stub_device_reset(void)
 {
@@ -303,12 +308,15 @@ void stub_device_reset(void)
     }
 
     g_stub_open_alt = 0;
-    g_stub_probe_refusals = 0;
+    g_stub_blocked = 0;
+    g_stub_never_answer = 0;
     g_stub_probe_calls = 0;
     g_stub_probe_formatidx = 0;
     g_stub_probe_frameidx = 0;
     g_stub_probe_interval = 0;
     g_stub_iface_calls = 0;
+    g_stub_cur_alt = 0;
+    g_stub_close_calls = 0;
     memset(g_stub_iface_alts, 0, sizeof(g_stub_iface_alts));
     g_frame = 0;
     g_pending_n = 0;
@@ -339,6 +347,7 @@ int usbh_video_open(struct usbh_video *video_class, uint8_t format_type,
 
 int usbh_video_close(struct usbh_video *video_class)
 {
+    g_stub_close_calls++;
     video_class->is_opened = false;
     return 0;
 }
@@ -347,9 +356,8 @@ int usbh_videostreaming_set_cur_probe(struct usbh_video *video_class, uint8_t fo
                                       uint8_t frameindex, uint32_t dwFrameInterval)
 {
     g_stub_probe_calls++;
-    if (g_stub_probe_refusals > 0) {
-        g_stub_probe_refusals--;
-        return -USB_ERR_TIMEOUT; /* the refusal the board saw */
+    if (g_stub_never_answer) {
+        return -USB_ERR_TIMEOUT;
     }
     g_stub_probe_formatidx = formatindex;
     g_stub_probe_frameidx = frameindex;
@@ -365,8 +373,8 @@ int usbh_videostreaming_get_cur_probe(struct usbh_video *video_class)
     return 0;
 }
 
-/* The engine's re-arm cycle issues plain control transfers (SET_INTERFACE);
- * the stub records them and always acknowledges. */
+/* The engine's cure cycle issues plain control transfers (SET_INTERFACE);
+ * the stub records them (and the setting in force) and always acknowledges. */
 int usbh_control_transfer(struct usbh_hubport *hport, struct usb_setup_packet *setup, uint8_t *buffer)
 {
     (void)hport;
@@ -376,6 +384,7 @@ int usbh_control_transfer(struct usbh_hubport *hport, struct usb_setup_packet *s
             g_stub_iface_alts[g_stub_iface_calls] = (uint8_t)setup->wValue;
         }
         g_stub_iface_calls++;
+        g_stub_cur_alt = (uint8_t)setup->wValue;
     }
     return 0;
 }
