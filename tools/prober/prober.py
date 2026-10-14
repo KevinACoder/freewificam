@@ -1090,10 +1090,15 @@ def uplink_server_stop(r: Runner) -> None:
 
 
 def uplink_server_totals(text: str) -> list[dict]:
-    """One row per test the server saw - the receiver-side figure."""
+    """One row per test the server saw - the receiver-side figure.
+
+    iperf2 also prints a `[SUM]` row aggregating connections that overlapped in
+    time; that is not a test of its own, so it is skipped here."""
 
     rows = []
     for line in text.splitlines():
+        if "[SUM]" in line:
+            continue
         m = UPLINK_SERVER_SUM_RE.search(line)
         if not m:
             continue
