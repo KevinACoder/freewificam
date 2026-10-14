@@ -266,7 +266,7 @@ static void pcie_nvme_fs_chain( void )
 	/* --- the bus and the block device ------------------------------------ */
 
 	(void)pcie_nvme_bringup();
-	if( blkdev_bind_nvme() != BLKDEV_OK ) {
+	if( blkdev_bind() != BLKDEV_OK ) {
 		board_case_fail( "no NVMe controller to bind (the bus or the endpoint is absent)" );
 		return;
 	}
@@ -376,7 +376,7 @@ void pcie_nvme_fs_verify_chain( void )
 	const char *type;
 
 	(void)pcie_nvme_bringup();
-	if( blkdev_bind_nvme() != BLKDEV_OK ) {
+	if( blkdev_bind() != BLKDEV_OK ) {
 		board_case_fail( "no NVMe controller to bind (the bus or the endpoint is absent)" );
 		return;
 	}

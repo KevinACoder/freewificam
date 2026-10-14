@@ -95,7 +95,8 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
 	-DCMSIS2_BACKEND_THREADX \
-	-DSHELL_PORT_HOST='"rk3568"'
+	-DSHELL_PORT_HOST='"rk3568"' \
+	-DBLKDEV_BACKEND_NVME
 
 CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
 ASM_CFLAGS := $(BASE_CFLAGS)
@@ -294,7 +295,7 @@ check: guards $(TARGET).elf
 	         dwc_pcie_cfg_read dwc_pcie_cfg_write dwc_pcie_requester_id \
 	         dwc_msix_alloc dwc_msix_release \
 	         dwc_nvme_init dwc_nvme_ctrl_count dwc_nvme_irq_count Driver_NVME \
-	         blkdev_bind_nvme blkdev_count blkdev_read blkdev_write \
+	         blkdev_bind blkdev_count blkdev_read blkdev_write \
 	         fs_init fs_mount fs_unmount fs_format_exfat fs_is_mounted \
 	         fs_type_name fs_sector_size f_mount f_mkfs disk_read disk_write; do \
 		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" \
