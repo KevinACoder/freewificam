@@ -272,7 +272,22 @@ static status_t fdwmshchost_transfer(sdmmchost_t *host, sdmmchost_transfer_t *co
 
 	ret = dwc_mshc_transfer(&dev->hc, &cmd);
 	if (ret != DWC_MSHC_OK) {
-		return kStatus_SDMMC_TransferFailed;
+		/*
+		 * The stack marks the bus-width test's transfers as ones whose
+		 * errors are to be ignored - its own comment says so, to improve
+		 * the chances the test works - and the data stage of those two
+		 * commands can fail while the command itself was answered. A host
+		 * that turned that into a transfer failure would fail the whole
+		 * card bring-up over an optional test; the stack still reads the
+		 * command's own R1 status after this returns, so the command's
+		 * outcome is not lost.
+		 */
+		if ((content->data != NULL) && content->data->enableIgnoreError) {
+			LOG_INFO("emmc: cmd%u data stage failed, ignored at the stack's request\n",
+				 cmd.index);
+		} else {
+			return kStatus_SDMMC_TransferFailed;
+		}
 	}
 
 	if (cmd.resp) {

@@ -754,12 +754,41 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 	return DWC_MSHC_ERR_TIMEOUT;
 }
 
+/*
+ * The bus-width test's two commands (BUSTEST_W 19 and BUSTEST_R 14) are the one
+ * pair whose evidence needs more than the ladder's pass or fail around them:
+ * whether the card answered the command at all, and what the controller was
+ * actually programmed with, are what separate "this card does not run the
+ * optional test" from "this port's data path is wrong". The stack performs the
+ * test on every bring-up, so these two lines are the whole cost.
+ */
+#define DWC_MSHC_CMD_BUS_TEST_W		19U
+#define DWC_MSHC_CMD_BUS_TEST_R		14U
+
+static bool dwc_mshc_is_bus_test(uint32_t index)
+{
+	return (index == DWC_MSHC_CMD_BUS_TEST_W) || (index == DWC_MSHC_CMD_BUS_TEST_R);
+}
+
 int dwc_mshc_transfer(struct dwc_mshc *hc, struct dwc_mshc_cmd *cmd)
 {
+	uintptr_t base;
 	int ret;
 
 	if ((hc == NULL) || (cmd == NULL)) {
 		return DWC_MSHC_ERR_ARG;
+	}
+
+	base = hc->cfg.base;
+
+	if (dwc_mshc_is_bus_test(cmd->index)) {
+		LOG_INFO("dwc_mshc: bus-test cmd=%u blksz=%u blkcnt=%u buf=0x%lx xfer=0x%x\n",
+			 cmd->index,
+			 (cmd->data != NULL) ? (unsigned)cmd->data->blksz : 0U,
+			 (cmd->data != NULL) ? (unsigned)cmd->data->blkcnt : 0U,
+			 (cmd->data != NULL) ? (unsigned long)(uintptr_t)cmd->data->buf : 0UL,
+			 (cmd->data != NULL) ?
+				 (unsigned)mmio_rd16(base + DWC_MSHC_XFER_MODE) : 0U);
 	}
 
 	dwc_mshc_census_state.transfers++;
@@ -791,6 +820,16 @@ int dwc_mshc_transfer(struct dwc_mshc *hc, struct dwc_mshc_cmd *cmd)
 				dwc_mshc_census_state.rx_bytes += cmd->data->len;
 			}
 		}
+	}
+
+	if (dwc_mshc_is_bus_test(cmd->index)) {
+		LOG_INFO("dwc_mshc: bus-test cmd=%u rc=%d r1=0x%08x nint=0x%x eint=0x%x "
+			 "sdmasa=0x%x blkcnt=0x%x\n", cmd->index, ret,
+			 (unsigned)cmd->response[0],
+			 (unsigned)mmio_rd16(base + DWC_MSHC_NORMAL_INT_STAT),
+			 (unsigned)mmio_rd16(base + DWC_MSHC_ERROR_INT_STAT),
+			 (unsigned)mmio_rd32(base + DWC_MSHC_SDMA_ADDR),
+			 (unsigned)mmio_rd16(base + DWC_MSHC_BLOCK_COUNT));
 	}
 
 	if (ret != DWC_MSHC_OK) {
