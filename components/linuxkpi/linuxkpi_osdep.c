@@ -300,6 +300,13 @@ struct lkpi_osdep_census {
 	uint64_t	down_max_ns;
 	uint32_t	wake_takes;
 	struct lkpi_census_histo	wake_delay;
+	/* the same latency keyed by the semaphore that was released. The transmit
+	 * path has more than one counted semaphore (the vendor driver's assembly
+	 * and write threads each wait on their own), and the aggregate histogram
+	 * above cannot say which one the tail belongs to. The address is the key -
+	 * it resolves to the owning object through the image's own symbol map, the
+	 * way the delay-site tables already read. */
+	struct lkpi_census_sites	wake_by_sem;
 };
 
 static struct lkpi_osdep_census lkpi_osdep_census_state;
@@ -338,8 +345,12 @@ lkpi_sem_take_note(const void *sem, uint64_t now)
 		if (lkpi_sem_release_where[i] != sem || lkpi_sem_release_ns[i] == 0u)
 			continue;
 		if (now > lkpi_sem_release_ns[i]) {
+			uint64_t delta = now - lkpi_sem_release_ns[i];
+
 			lkpi_census_histo_add(&lkpi_osdep_census_state.wake_delay,
-			    now - lkpi_sem_release_ns[i]);
+			    delta);
+			lkpi_census_sites_add(&lkpi_osdep_census_state.wake_by_sem,
+			    sem, delta);
 			lkpi_osdep_census_state.wake_takes++;
 		}
 		lkpi_sem_release_ns[i] = 0u;
@@ -367,6 +378,7 @@ lkpi_osdep_census_print(void)
 	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D semwake n=%u\n",
 	    c->wake_takes);
 	lkpi_census_histo_print("perf census: D semwake", &c->wake_delay);
+	lkpi_census_sites_print("perf census: D semwake_sem", &c->wake_by_sem);
 }
 #endif	/* CONFIG_LKPI_CENSUS */
 

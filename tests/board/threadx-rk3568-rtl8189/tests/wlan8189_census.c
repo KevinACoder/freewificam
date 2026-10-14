@@ -163,10 +163,26 @@ void
 wlan8189_pump_show(void)
 {
 	unsigned int mode = lkpi_sdio_pump_mode_get();
+	struct lkpi_sdio_bus_info bus;
+	_adapter *adapter = census_adapter();
 
-	printk("wlan8189: pump policy=%s period_ms=%u\n",
+	lkpi_sdio_bus_info_get(&bus);
+	printk("wlan8189: pump policy=%s period_ms=%u yield=%u clk_khz=%u bus=%u blk=%u\n",
 	    (mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ? "adaptive" : "fixed",
-	    lkpi_sdio_pump_period_get());
+	    lkpi_sdio_pump_period_get(), lkpi_sdio_pump_yield_get() ? 1u : 0u,
+	    bus.clock_hz / 1000u, bus.bus_width, bus.blk_size);
+	/*
+	 * The counting semaphores' addresses, so the wake-latency table keyed by
+	 * semaphore address can be read: they are heap objects, so a symbol map
+	 * cannot name them, and the driver's own structures can. Printed next to
+	 * the cadence line because both are "what the phase ran on".
+	 */
+	if (adapter != NULL) {
+		printk("wlan8189: sem addr xmit_sema=%lx sdio_xmit_sema=%lx xmitbuf_sema=%lx\n",
+		    (unsigned long)&adapter->xmitpriv.xmit_sema,
+		    (unsigned long)&adapter->xmitpriv.SdioXmitSema,
+		    (unsigned long)&adapter->xmitpriv.sdio_free_xmitbuf_sema);
+	}
 }
 
 int
@@ -177,9 +193,27 @@ wlan8189_pump_set(const char *policy)
 		lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_FIXED);
 	else if (strcmp(policy, "adaptive") == 0)
 		lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_ADAPTIVE);
+	else if (strcmp(policy, "yield") == 0)
+		lkpi_sdio_pump_yield_set(true);
+	else if (strcmp(policy, "noyield") == 0)
+		lkpi_sdio_pump_yield_set(false);
 	else
 		return -1;
 	return (int)lkpi_sdio_pump_mode_get();
+}
+
+void
+wlan8189_pump_yield_set(int on)
+{
+
+	lkpi_sdio_pump_yield_set(on != 0);
+}
+
+int
+wlan8189_pump_yield_get(void)
+{
+
+	return lkpi_sdio_pump_yield_get() ? 1 : 0;
 }
 
 /* --- the card-side receiver account --------------------------------------- */
@@ -315,9 +349,13 @@ wlan8189_cardq_show(void)
  * 1024 - hal/rtl8188f/sdio/sdio_halinit.c HalRxAggr8188FSdio). The card
  * releases a burst when either the accumulated length crosses the threshold or
  * the timeout expires; the driver writes the register once at init, and this
- * runtime knob re-writes the length byte per phase so one boot can compare
- * batch sizes against the throughput (the timeout byte and every other bit are
- * preserved by the read-modify-write).
+ * runtime knob re-writes either byte per phase so one boot can compare release
+ * policies against the throughput (the byte it is not setting, and every other
+ * bit, are preserved by the read-modify-write).
+ *
+ * The measured card releases ~4 KB per burst against a 15 KB length threshold,
+ * i.e. the timeout, not the length, is what ends most bursts. The timeout byte
+ * is therefore its own lever, and it is the one this knob's second form moves.
  */
 void
 wlan8189_agg_set(unsigned int size_kb)
@@ -330,6 +368,54 @@ wlan8189_agg_set(unsigned int size_kb)
 	v = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH);
 	v = (v & ~0xffu) | (size_kb & 0xffu);
 	rtw_write32(adapter, REG_RXDMA_AGG_PG_TH, v);
+}
+
+void
+wlan8189_agg_timeout_set(unsigned int timeout_units)
+{
+	_adapter *adapter = census_adapter();
+	u32 v;
+
+	if (adapter == NULL)
+		return;
+	v = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH);
+	v = (v & ~0xff00u) | ((timeout_units & 0xffu) << 8);
+	rtw_write32(adapter, REG_RXDMA_AGG_PG_TH, v);
+}
+
+unsigned int
+wlan8189_agg_get(void)
+{
+	_adapter *adapter = census_adapter();
+
+	if (adapter == NULL)
+		return 0u;
+	return rtw_read32(adapter, REG_RXDMA_AGG_PG_TH) & 0xffffu;
+}
+
+/* --- the host controller's completion-poll step --------------------------- */
+
+/*
+ * The step the controller's completion waits sleep between status reads, in
+ * microseconds. It is the round's lever for the question "is the 100 us step on
+ * the critical path": every command's completion was quantised to one step, so
+ * a finer step pays off exactly when the wait was consuming the step rather
+ * than the hardware's own completion time. The readback goes out on the pump
+ * line so a phase reports the step it ran at.
+ */
+void
+wlan8189_dwc_show(void)
+{
+
+	printk("wlan8189: dwc poll_us=%u\n", dwc_mmc_get_poll_us());
+}
+
+unsigned int
+wlan8189_dwc_poll_set(unsigned int us)
+{
+
+	dwc_mmc_set_poll_us(us);
+	return dwc_mmc_get_poll_us();
 }
 
 /* --- the snapshot --------------------------------------------------------- */

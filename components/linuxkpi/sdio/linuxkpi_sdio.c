@@ -149,6 +149,13 @@ struct lkpi_sdio_card {
 	 * costs one backoff step, never a stall. */
 	uint64_t			rx_bytes;
 	uint64_t			tx_bytes;
+	/* how many threads the pump's own claims have left waiting (the fairness
+	 * yield's input). A driver thread that wants the bus while the pump holds it
+	 * parks here; the pump reads the count before it takes the claim, so it can
+	 * stand aside for a turn instead of re-taking the bus ahead of them (see
+	 * lkpi_sdio_pump_yield_set). */
+	unsigned int			claim_waiters;
+	bool				pump_yield;
 };
 
 static struct lkpi_sdio_card lkpi_sdio_card_state;
@@ -198,6 +205,7 @@ struct lkpi_sdio_census {
 	uint32_t	cycles_busy;
 	uint32_t	cycles_empty;
 	uint32_t	cycles_err;
+	uint32_t	yields;	/* cycles the fairness knob gave away */
 	struct lkpi_census_histo	cyc_term;
 	struct lkpi_census_histo	cyc_claim_wait;
 	struct lkpi_census_histo	cyc_handler;
@@ -313,6 +321,13 @@ lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 }
 
 static void
+lkpi_sdio_census_note_yield(void)
+{
+
+	lkpi_sdio_census_state.yields++;
+}
+
+static void
 lkpi_sdio_census_note_pump(void)
 {
 
@@ -377,9 +392,9 @@ lkpi_sdio_census_print(void)
 	lkpi_census_histo_print("perf census: A claim_wait", &c->claim_wait);
 	lkpi_census_histo_print("perf census: A claim_hold", &c->claim_hold);
 	lkpi_printf(ULOG_INFO_LEVEL,
-	    "perf census: D pump cycles=%u kick=%u timeout=%u hot=%u busy=%u empty=%u err=%u mode=%s period_ms=%u span_ms=%llu busy_span=%u\n",
+	    "perf census: D pump cycles=%u kick=%u timeout=%u hot=%u busy=%u empty=%u err=%u yields=%u mode=%s period_ms=%u span_ms=%llu busy_span=%u\n",
 	    c->cycles, c->wake_kick, c->wake_timeout, c->wake_hot,
-	    c->cycles_busy, c->cycles_empty, c->cycles_err,
+	    c->cycles_busy, c->cycles_empty, c->cycles_err, c->yields,
 	    (lkpi_sdio_card_state.pump_mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ?
 	    "adaptive" : "fixed",
 	    lkpi_sdio_card_state.pump_period_ms,
@@ -451,6 +466,11 @@ lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 
 	(void)kicked;
 	(void)wait_ms;
+}
+
+static void
+lkpi_sdio_census_note_yield(void)
+{
 }
 
 static void
@@ -530,7 +550,11 @@ sdio_claim_host(struct sdio_func *func)
 	if (func == NULL || c == NULL || c->claim == NULL)
 		return;
 	t0 = lkpi_sdio_census_now();
+	/* announced before the wait, so the pump can see the request and stand aside
+	 * for a turn rather than re-taking the bus ahead of this caller */
+	c->claim_waiters++;
 	(void)osMutexAcquire(c->claim, osWaitForever);
+	c->claim_waiters--;
 	lkpi_sdio_census_note_claim_wait(t0, lkpi_sdio_census_now());
 	lkpi_sdio_census_note_claim_hold(lkpi_sdio_census_now());
 	c->claim_owner = osThreadGetId();
@@ -1146,6 +1170,22 @@ lkpi_sdio_pump_entry(void *arg)
 		requested = osSemaphoreAcquire(c->pump_req,
 		    c->pump_period_ms) == osOK;
 		lkpi_sdio_census_note_wake(requested, c->pump_period_ms);
+		/*
+		 * The fairness yield: a driver thread parked on the claim is waiting for
+		 * the bus the pump is about to take again. When the knob is on, the pump
+		 * gives that turn away rather than queueing in front of it - it skips one
+		 * cycle and comes back after a tick, which is enough for the parked
+		 * contend for the now-free claim. Off (the default), the pump's own
+		 * cadence owns the bus, which is the shape every earlier measurement ran
+		 * under.
+		 */
+		if (c->pump_yield && c->claim_waiters != 0u) {
+			lkpi_sdio_census_note_yield();
+			(void)osDelay(1);
+			if (requested)
+				(void)osSemaphoreRelease(c->pump_done);
+			continue;
+		}
 		if (lkpi_sdio_has_handler())
 			progress = lkpi_sdio_pump_cycle();
 		if (requested)
@@ -1203,6 +1243,44 @@ lkpi_sdio_pump_period_get(void)
 {
 
 	return lkpi_sdio_card_state.pump_period_ms;
+}
+
+void
+lkpi_sdio_pump_yield_set(bool on)
+{
+
+	lkpi_sdio_card_state.pump_yield = on;
+}
+
+bool
+lkpi_sdio_pump_yield_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_yield;
+}
+
+void
+lkpi_sdio_bus_info_get(struct lkpi_sdio_bus_info *out)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+	struct sdio_func *f;
+	unsigned int n;
+
+	if (out == NULL)
+		return;
+	(void)memset(out, 0, sizeof(*out));
+	out->clock_hz = c->host.ios.clock;
+	out->bus_width = (c->host.ios.bus_width == MMC_BUS_WIDTH_4) ? 4u : 1u;
+	/* the data function is the one that carries bulk traffic; the block size it
+	 * settled on is the unit the engine's splitter issues in */
+	for (n = 1u; n <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; n++) {
+		f = &c->func[n];
+		if (f->num != n || f->cur_blksize == 0u)
+			continue;
+		out->blk_size = f->cur_blksize;
+		out->blk_max = f->max_blksize;
+		break;
+	}
 }
 
 int

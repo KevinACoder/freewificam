@@ -661,9 +661,33 @@ case_pump_policy(void)
 	ok = ok && lkpi_sdio_pump_mode_get() == LKPI_SDIO_PUMP_MODE_FIXED &&
 	    lkpi_sdio_pump_period_get() == 10u;
 
+	/* the fairness yield defaults off (the shape every measurement ran under)
+	 * and round-trips; the bus identity reads back the negotiated tier */
+	ok = ok && !lkpi_sdio_pump_yield_get();
+	lkpi_sdio_pump_yield_set(true);
+	ok = ok && lkpi_sdio_pump_yield_get();
+	lkpi_sdio_pump_yield_set(false);
+	ok = ok && !lkpi_sdio_pump_yield_get();
+
 	case_report("pump-policy", ok,
 	    ok ? "the cadence knob round-trips and defaults to fixed" :
 	    "the cadence knob did not round-trip");
+}
+
+static void
+case_bus_info(void)
+{
+	struct lkpi_sdio_bus_info bus;
+	int ok;
+
+	lkpi_sdio_bus_info_get(&bus);
+	/* the mock card negotiates a real tier, so the readback has to name one:
+	 * a clock, four data lines and a non-zero block size */
+	ok = bus.clock_hz != 0u && bus.bus_width == 4u && bus.blk_size != 0u;
+
+	case_report("bus-info", ok,
+	    ok ? "the bus identity reads back the negotiated clock/width/block size" :
+	    "the bus identity did not read back");
 }
 
 /* a handler whose cycle moves bytes: one extended read per dispatch, which is
@@ -842,6 +866,7 @@ run_scenario(void)
 	case_claim_serial(f1);
 	case_irq_pump(f1);
 	case_pump_policy();
+	case_bus_info();
 	case_pump_adaptive(f1);
 	case_current_identity();
 	case_init_entries();

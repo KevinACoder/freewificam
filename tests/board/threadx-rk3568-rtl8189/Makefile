@@ -94,6 +94,29 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 	-DCMSIS2_MAX_TIMERS=128 -DCMSIS2_MAX_THREADS=24
 
 OPT ?= -Og
+# The measurement sheet's knobs, so one code revision can run the treatment arm
+# or the control arm first without editing source: LEVER picks which lever the
+# four-phase sheet moves (see the WLAN8189_LEVER_* values in the dataplane
+# case), ARM_B_FIRST=1 puts the treatment arm on the leading phases,
+# AGG_TIMEOUT/AGG_TIMEOUT_BASE/POLL_TREAT_US override the treatment value, the
+# baseline every phase starts from, and the poll-step treatment. All default to
+# what an unparameterised build already did.
+LEVER_CFLAGS :=
+ifneq ($(LEVER),)
+LEVER_CFLAGS += -DWLAN8189_LEVER=$(LEVER)
+endif
+ifeq ($(ARM_B_FIRST),1)
+LEVER_CFLAGS += -DWLAN8189_ARM_B_FIRST=1
+endif
+ifneq ($(AGG_TIMEOUT),)
+LEVER_CFLAGS += -DWLAN8189_AGG_TIMEOUT_TREAT=$(AGG_TIMEOUT)
+endif
+ifneq ($(AGG_TIMEOUT_BASE),)
+LEVER_CFLAGS += -DWLAN8189_AGG_TIMEOUT_BASE=$(AGG_TIMEOUT_BASE)
+endif
+ifneq ($(POLL_TREAT_US),)
+LEVER_CFLAGS += -DWLAN8189_DWC_POLL_TREAT_US=$(POLL_TREAT_US)
+endif
 # The throughput census is this image's: the instrumented layers (linuxkpi
 # core/SDIO engine/osdep, the SDIO port, the controller driver, the netif
 # adapter, the console sink) carry their counters behind this key, and every
@@ -103,6 +126,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	-DCONFIG_LKPI_CENSUS \
+	$(LEVER_CFLAGS) \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
 	-DCMSIS2_BACKEND_THREADX \

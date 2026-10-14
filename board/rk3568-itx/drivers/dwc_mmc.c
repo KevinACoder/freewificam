@@ -30,16 +30,34 @@
 #include "dwc_mmc.h"
 #include "dwc_mmc_regs.h"
 
-/* polling budget: the loop counts 100 us steps */
-#define DWC_MMC_POLL_US			100U
-#define DWC_MMC_CMD_POLLS		1000U	/* 100 ms for one command */
-#define DWC_MMC_DATA_POLLS		3000U	/* 300 ms for one data stage */
-#define DWC_MMC_RESET_POLLS		500U	/* 50 ms for a self-clearing step */
+/*
+ * Polling. Every completion wait samples the controller's status register, and
+ * the step between samples is a runtime knob rather than a constant: the census
+ * showed each command's completion wait quantised to one step (a 100 us step
+ * made every CMD52 read ~104 us), so the step is a throughput lever and not a
+ * detail. The budgets below are wall-clock budgets, not iteration counts - a
+ * coarser step shortens the loop, it does not shorten the timeout.
+ */
+#define DWC_MMC_POLL_US_DEFAULT		100U
+#define DWC_MMC_CMD_BUDGET_US		100000U	/* 100 ms for one command */
+#define DWC_MMC_DATA_BUDGET_US		300000U	/* 300 ms for one data stage */
+#define DWC_MMC_RESET_BUDGET_US		50000U	/* 50 ms for a self-clearing step */
 
-/* The poll at which a data wait says what it is seeing: 10 ms in, a data phase
- * that has not started at all and one that started and stalled look the same
- * from outside, and this line is what separates them. */
-#define DWC_MMC_DATA_SAMPLE_POLL	100U
+/* How far into a data wait a stalled phase is reported: 10 ms in, one that never
+ * started and one that started and stalled look the same from outside, and this
+ * line is what separates them. */
+#define DWC_MMC_DATA_SAMPLE_US		10000U
+
+static uint32_t dwc_mmc_poll_us = DWC_MMC_POLL_US_DEFAULT;
+
+/* The iteration budget that covers a wall-clock budget at the current step. */
+static uint32_t
+dwc_mmc_polls_for(uint32_t budget_us)
+{
+	uint32_t n = budget_us / dwc_mmc_poll_us;
+
+	return (n == 0U) ? 1U : n;
+}
 
 /*
  * The IDMAC descriptor list. One controller, one card and transfers serialised
@@ -218,14 +236,14 @@ static void dwc_mmc_select_clock(struct dwc_mmc *hc, uint32_t target, uint32_t *
 /* One update-clock step: raise the command and wait for the CIU to take it. */
 static int dwc_mmc_clock_step(uintptr_t base, uint32_t bits)
 {
-	uint32_t loop = DWC_MMC_RESET_POLLS;
+	uint32_t loop = dwc_mmc_polls_for(DWC_MMC_RESET_BUDGET_US);
 
 	mmio_wr32(base + DWC_MMC_CMD, bits | DWC_MMC_CMD_START);
 	while ((mmio_rd32(base + DWC_MMC_CMD) & DWC_MMC_CMD_START) != 0U) {
 		if (--loop == 0U) {
 			return DWC_MMC_ERR_TIMEOUT;
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	}
 
 	return DWC_MMC_OK;
@@ -265,7 +283,7 @@ static int dwc_mmc_clock_update(struct dwc_mmc *hc, uint32_t div)
 static int dwc_mmc_soft_reset(struct dwc_mmc *hc)
 {
 	uintptr_t base = hc->cfg.base;
-	uint32_t loop = DWC_MMC_RESET_POLLS;
+	uint32_t loop = dwc_mmc_polls_for(DWC_MMC_RESET_BUDGET_US);
 
 	mmio_wr32(base + DWC_MMC_CTRL, DWC_MMC_CTRL_ALL_RESET_FLAGS);
 	while ((mmio_rd32(base + DWC_MMC_CTRL) & DWC_MMC_CTRL_ALL_RESET_FLAGS) != 0U) {
@@ -274,7 +292,7 @@ static int dwc_mmc_soft_reset(struct dwc_mmc *hc)
 				  mmio_rd32(base + DWC_MMC_CTRL));
 			return DWC_MMC_ERR_TIMEOUT;
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	}
 
 	return DWC_MMC_OK;
@@ -389,18 +407,22 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	uintptr_t base = hc->cfg.base;
 	uint32_t mask = 0U;
 	uint32_t loop;
+	uint32_t budget;
 #ifdef CONFIG_LKPI_CENSUS
 	uint64_t t0, t1;
 #endif
 
+	/* one iteration budget for both waits, so the census reads the same loop */
+	budget = dwc_mmc_polls_for(DWC_MMC_CMD_BUDGET_US);
+
 	/* the data path must be idle before a command may use it */
-	loop = DWC_MMC_CMD_POLLS;
+	loop = budget;
 	while ((mmio_rd32(base + DWC_MMC_STATUS) & DWC_MMC_STATUS_DATA_BUSY) != 0U) {
 		if (--loop == 0U) {
 			LOG_ERROR("dwc_mmc: data path stayed busy before CMD%u\n", cmd->index);
 			return DWC_MMC_ERR_TIMEOUT;
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	}
 
 	mmio_wr32(base + DWC_MMC_RINTSTS, DWC_MMC_INT_ALL);
@@ -411,7 +433,7 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 		       DWC_MMC_CMD_START;
 	mmio_wr32(base + DWC_MMC_CMD, hc->last_cmd);
 
-	loop = DWC_MMC_CMD_POLLS;
+	loop = budget;
 #ifdef CONFIG_LKPI_CENSUS
 	t0 = dwc_mmc_census_now();
 #endif
@@ -420,14 +442,14 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 		if ((mask & DWC_MMC_INT_CDONE) != 0U) {
 			break;
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	} while (--loop != 0U);
 #ifdef CONFIG_LKPI_CENSUS
 	t1 = dwc_mmc_census_now();
 	dwc_mmc_census_note_wait(&dwc_mmc_census_state.cmd_polls,
 	    &dwc_mmc_census_state.cmd_wait_ns,
 	    &dwc_mmc_census_state.cmd_wait_max_ns,
-	    DWC_MMC_CMD_POLLS - loop, t0, t1);
+	    budget - loop, t0, t1);
 #endif
 
 	if (loop == 0U) {
@@ -558,13 +580,13 @@ static int dwc_mmc_prepare_dma(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd
 
 	/* the FIFO is emptied and the reset waited out before the engine is armed */
 	mmio_wr32(base + DWC_MMC_CTRL, DWC_MMC_CTRL_FIFO_RESET);
-	loop = DWC_MMC_RESET_POLLS;
+	loop = dwc_mmc_polls_for(DWC_MMC_RESET_BUDGET_US);
 	while ((mmio_rd32(base + DWC_MMC_CTRL) & DWC_MMC_CTRL_FIFO_RESET) != 0U) {
 		if (--loop == 0U) {
 			LOG_ERROR("dwc_mmc: FIFO reset did not self-clear\n");
 			return DWC_MMC_ERR_TIMEOUT;
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	}
 
 	mmio_wr32(base + DWC_MMC_DBADDR, (uint32_t)(uintptr_t)dwc_mmc_desc_pool);
@@ -575,13 +597,13 @@ static int dwc_mmc_prepare_dma(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd
 	ctrl = mmio_rd32(base + DWC_MMC_BMOD);
 	ctrl |= DWC_MMC_IDMAC_SWRESET;
 	mmio_wr32(base + DWC_MMC_BMOD, ctrl);
-	loop = DWC_MMC_RESET_POLLS;
+	loop = dwc_mmc_polls_for(DWC_MMC_RESET_BUDGET_US);
 	while ((mmio_rd32(base + DWC_MMC_BMOD) & DWC_MMC_IDMAC_SWRESET) != 0U) {
 		if (--loop == 0U) {
 			LOG_ERROR("dwc_mmc: the IDMAC reset did not self-clear\n");
 			return DWC_MMC_ERR_TIMEOUT;
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	}
 
 	/* INT_ENABLE comes along: the FIFO reset above cleared it */
@@ -628,7 +650,7 @@ static int dwc_mmc_wait_idmac_rx(struct dwc_mmc *hc)
 {
 	uintptr_t base = hc->cfg.base;
 	uint32_t idsts = 0U;
-	uint32_t loop = DWC_MMC_DATA_POLLS;
+	uint32_t loop = dwc_mmc_polls_for(DWC_MMC_DATA_BUDGET_US);
 #ifdef CONFIG_LKPI_CENSUS
 	uint64_t t0, t1;
 
@@ -648,11 +670,11 @@ static int dwc_mmc_wait_idmac_rx(struct dwc_mmc *hc)
 			dwc_mmc_census_note_wait(&dwc_mmc_census_state.idmac_polls,
 			    &dwc_mmc_census_state.idmac_wait_ns,
 			    &dwc_mmc_census_state.idmac_wait_max_ns,
-			    DWC_MMC_DATA_POLLS - loop, t0, t1);
+			    dwc_mmc_polls_for(DWC_MMC_DATA_BUDGET_US) - loop, t0, t1);
 #endif
 			return DWC_MMC_OK;
 		}
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	} while (--loop != 0U);
 
 	mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
@@ -663,7 +685,9 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 {
 	uintptr_t base = hc->cfg.base;
 	uint32_t mask = 0U;
-	uint32_t loop = DWC_MMC_DATA_POLLS;
+	uint32_t loop = dwc_mmc_polls_for(DWC_MMC_DATA_BUDGET_US);
+	uint32_t budget = loop;
+	uint32_t sample_at = dwc_mmc_polls_for(DWC_MMC_DATA_SAMPLE_US);
 #ifdef CONFIG_LKPI_CENSUS
 	uint64_t t0, t1;
 
@@ -690,7 +714,7 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 		 * identical from the outside; the status word tells them apart (bit 9
 		 * is the card holding the data lines busy), so it is read once, well
 		 * into the wait. */
-		if (loop == (DWC_MMC_DATA_POLLS - DWC_MMC_DATA_SAMPLE_POLL)) {
+		if (loop == (budget - sample_at)) {
 			LOG_ERROR("dwc_mmc: CMD%u data wait status=0x%x rintsts=0x%x "
 				  "idsts=0x%x dsc=0x%x buf=0x%x\n", cmd->index,
 				  mmio_rd32(base + DWC_MMC_STATUS), mask,
@@ -699,7 +723,7 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 				  mmio_rd32(base + DWC_MMC_BUFADDR));
 		}
 
-		dwc_mmc_udelay(DWC_MMC_POLL_US);
+		dwc_mmc_udelay(dwc_mmc_poll_us);
 	} while (--loop != 0U);
 
 #ifdef CONFIG_LKPI_CENSUS
@@ -707,7 +731,7 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 	dwc_mmc_census_note_wait(&dwc_mmc_census_state.data_polls,
 	    &dwc_mmc_census_state.data_wait_ns,
 	    &dwc_mmc_census_state.data_wait_max_ns,
-	    DWC_MMC_DATA_POLLS - loop, t0, t1);
+	    budget - loop, t0, t1);
 #endif
 
 	if (loop == 0U) {
@@ -759,6 +783,26 @@ static int dwc_mmc_transfer_data(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 }
 
 /* --- public interface ----------------------------------------------------- */
+
+/*
+ * The completion-poll step, in microseconds. A coarser step notices a completed
+ * transfer up to one step late; a finer step notices it sooner but spends
+ * proportionally more of the CPU inside the wait loop, on a core every other
+ * thread shares. The default is the value this driver ran with before the knob
+ * existed.
+ */
+void dwc_mmc_set_poll_us(uint32_t us)
+{
+
+	if (us != 0U)
+		dwc_mmc_poll_us = us;
+}
+
+uint32_t dwc_mmc_get_poll_us(void)
+{
+
+	return dwc_mmc_poll_us;
+}
 
 int dwc_mmc_init(struct dwc_mmc *hc, const struct dwc_mmc_cfg *cfg)
 {
@@ -924,7 +968,9 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 
 #ifdef CONFIG_LKPI_CENSUS
 	dwc_mmc_census_state.transfers++;
-	if (cmd->data != NULL) {
+	if (ret == DWC_MMC_OK && cmd->data != NULL) {
+		/* only a transfer that actually completed moved the bytes it asked
+		 * for; a failed stage is counted by errors, not as traffic */
 		dwc_mmc_census_state.with_data++;
 		if (cmd->data->write)
 			dwc_mmc_census_state.tx_bytes += cmd->data->len;
