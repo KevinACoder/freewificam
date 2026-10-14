@@ -29,8 +29,9 @@ Usage:
   prober.py traffic --peer <addr> --port <p> --seconds <s> [--tool iperf|iperf3]
                     [--reverse] [--server] [--host user@addr]
   prober.py run --serial-hub <url> --out <dir> [--phases <n>] [--seconds <s>]
-                [--iface <if>] [--channel <mhz>] [--width HT20]
-                [--wpa-conf <file>] [--peer <addr>] [--host user@addr]
+                [--uplink-phases <n>] [--iface <if>] [--channel <mhz>]
+                [--width HT20] [--wpa-conf <file>] [--peer <addr>]
+                [--host user@addr]
   prober.py analyze <pcap> [--sta <mac>] [--out <json>] [--host user@addr]
   prober.py selftest
 
@@ -119,6 +120,7 @@ PHASE_READY_RE = re.compile(
     r" arm=(?P<arm>[AB])"
     r" pump=(?P<pump>\w+)"
     r" poll_us=(?P<poll_us>\d+)"
+    r"(?: data_us=(?P<data_us>\d+))?"
     r" agg=0x(?P<agg>[0-9a-fA-F]+)"
     r" yield=(?P<yield>\d+)"
     r" lps=(?P<lps>-?\d+))?"
@@ -128,8 +130,31 @@ DHCP_BOUND_RE = re.compile(
     r"wlan8189: dhcp bound ip=(?P<ip>\d+\.\d+\.\d+\.\d+)/"
 )
 JOIN_WAIT_RE = re.compile(r"wlan8189: join waiting for the supplicant")
+JOIN_OK_RE = re.compile(r"wlan8189: join-ok bssid=|Key negotiation completed")
 CENSUS_RE = re.compile(r"perf census: ")
 BW_MODE_RE = re.compile(r"RTW: bw_mode : (?P<bw>\S+), ra_bw_mode : (?P<ra>\S+)")
+
+# The uplink sheet (the reverse direction): the board's own iperf client runs
+# each window and the far end is this host, so this tool's part is only to put a
+# server up and hand the board this host's address. The lines are the stage's
+# own; the skip line is the stage saying why it did not run (no peer configured
+# - a boot that did not ask for the measurement is not a failure).
+UPLINK_STANDBY_RE = re.compile(r"wlan8189: uplink standby")
+UPLINK_READY_RE = re.compile(
+    r"wlan8189: uplink phase (?P<phase>\d+) ready .*?arm=(?P<arm>[AB])")
+UPLINK_RESULT_RE = re.compile(
+    r"wlan8189: uplink phase (?P<phase>\d+) result bytes=(?P<bytes>\d+) "
+    r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)")
+UPLINK_DONE_RE = re.compile(r"wlan8189: uplink phase (?P<phase>\d+) done")
+UPLINK_SKIP_RE = re.compile(r"wlan8189: uplink skipped reason=(?P<reason>\S+)")
+
+# The host server's own per-test summary (the receiver-side number the uplink
+# figures are quoted from): iperf2 prints one line per completed connection.
+UPLINK_SERVER_SUM_RE = re.compile(
+    r"\]\s+\d+\.\d+-\s*(?P<secs>[\d.]+)\s*sec\s+"
+    r"(?P<val>[\d.]+)\s*(?P<vunit>[KMG])?Bytes\s+"
+    r"(?P<rate>[\d.]+)\s*(?P<runit>[KMG])?bits/sec"
+)
 
 IPERF_SUM_RE = re.compile(
     r"\]\s+(?P<lo>[\d.]+)-\s*(?P<hi>[\d.]+)\s+sec\s+"
@@ -145,8 +170,17 @@ TOOL = "prober"
 
 # How long a run waits for the board to say it is waiting for a join before
 # sending the join command anyway. The board's own trigger line is printed once
-# and can be behind the reader's starting point.
-JOIN_GRACE_S = 20
+# and can be behind the reader's starting point. Counted from the board's first
+# line, not from this reader's start (a reader started before the boot must not
+# fire into a board that is still in U-Boot), and longer than the board's own
+# sweep, so an un-anchored attempt lands after the scan rather than inside it.
+JOIN_GRACE_S = 45
+
+# How often a join command is retried until the board reports the association
+# or the first phase opens. A connect typed before the board's shell is up is
+# lost, and one that lands inside the sweep can fail - both leave the board
+# still waiting, so the retry is what makes the earlier attempt harmless.
+JOIN_RETRY_S = 20
 
 
 # --------------------------------------------------------------------------
@@ -984,6 +1018,96 @@ class SerialHub:
 
 
 # --------------------------------------------------------------------------
+# run: the uplink sheet's host side (server + the address to hand over)
+# --------------------------------------------------------------------------
+
+def local_addr_for(r: Runner, target: str) -> str | None:
+    """The local IPv4 address that reaches `target`, as the host sees it.
+
+    The uplink stage needs the address the *board* should send to, and that is
+    this host's address on the path to the board - not necessarily the first one
+    a lookup returns (a host can sit on several networks, and the measurement
+    host is expected to be one Linux box among others)."""
+
+    try:
+        _, text = r.run("ip -4 route get %s" % shlex.quote(target))
+    except RuntimeError:
+        text = ""
+    m = re.search(r"\bsrc\s+(\d+\.\d+\.\d+\.\d+)", text)
+    if m:
+        return m.group(1)
+    try:
+        _, text = r.run("ip -4 -o addr show scope global")
+    except RuntimeError:
+        return None
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", text)
+    return m.group(1) if m else None
+
+
+def uplink_server_start(r: Runner, work: str) -> bool:
+    """Put an iperf2 server on this host for the uplink sheet.
+
+    iperf2, not iperf3: the board's client is lwIP's lwiperf, which speaks the
+    iperf2 control protocol. The server's own report is the receiver-side
+    number, so its output is kept and fetched with the round's products.
+
+    `work` is the capture's own path (the same value dumpcap is pointed at), so
+    the log goes beside it - in the working directory the tool created."""
+
+    log = "%s/uplink-server.log" % os.path.dirname(work)
+    cmd = ("sh -c 'pkill -x iperf 2>/dev/null; sleep 0.3; "
+           "nohup iperf -s -p 5001 > %s 2>&1 & sleep 1; pgrep -x iperf'"
+           % shlex.quote(log))
+    try:
+        _, text = r.run(cmd)
+    except RuntimeError as e:
+        warn("uplink server did not start: %s", e)
+        return False
+    if "iperf" not in text:
+        warn("uplink server not visible after start")
+        return False
+    info("uplink server listening on 5001 (log kept with the products)")
+    return True
+
+
+def uplink_server_fetch(r: Runner, work: str, outdir: str) -> str:
+    log = "%s/uplink-server.log" % os.path.dirname(work)
+    try:
+        _, text = r.run("cat %s" % shlex.quote(log))
+    except RuntimeError as e:
+        warn("uplink server log not readable: %s", e)
+        return ""
+    with open(os.path.join(outdir, "uplink-server.log"), "w") as f:
+        f.write(text)
+    return text
+
+
+def uplink_server_stop(r: Runner) -> None:
+    try:
+        r.run("pkill -x iperf 2>/dev/null; true")
+    except RuntimeError:
+        pass
+
+
+def uplink_server_totals(text: str) -> list[dict]:
+    """One row per test the server saw - the receiver-side figure."""
+
+    rows = []
+    for line in text.splitlines():
+        m = UPLINK_SERVER_SUM_RE.search(line)
+        if not m:
+            continue
+        vmult = {"K": 1e3, "M": 1e6, "G": 1e9, None: 1.0}[m.group("vunit")]
+        rmult = {"K": 1e3, "M": 1e6, "G": 1e9, None: 1.0}[m.group("runit")]
+        rows.append({
+            "seconds": float(m.group("secs")),
+            "bytes": round(float(m.group("val")) * vmult),
+            "kbit": round(float(m.group("rate")) * rmult / 1e3),
+        })
+    return rows
+
+
+# --------------------------------------------------------------------------
 # run: one measurement round against the board's phase sheet
 # --------------------------------------------------------------------------
 
@@ -994,6 +1118,7 @@ def cmd_run(argv: list[str], r: Runner) -> int:
         return die("run needs --serial-hub <url> and --out <dir>")
 
     phases_want = int(arg_value(argv, "--phases", "4"))
+    uplink_phases_want = int(arg_value(argv, "--uplink-phases", "4"))
     seconds = int(arg_value(argv, "--seconds", "8"))
     iface = arg_value(argv, "--iface")
     channel = arg_value(argv, "--channel")
@@ -1034,7 +1159,8 @@ def cmd_run(argv: list[str], r: Runner) -> int:
 
     try:
         return _run_phases(r, hub, outdir, phases_want, seconds, deadline_s,
-                           peer_opt, wpa_conf, ssid, psk, bssid)
+                           peer_opt, wpa_conf, ssid, psk, bssid, work,
+                           uplink_phases_want)
     finally:
         if dumpcap is not None:
             # dumpcap ends on its own duration; if the round finished early,
@@ -1052,58 +1178,112 @@ def cmd_run(argv: list[str], r: Runner) -> int:
 def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
                 seconds: int, deadline_s: int, peer_opt: str | None,
                 wpa_conf: str | None, ssid: str | None,
-                psk: str | None, bssid: str | None = None) -> int:
+                psk: str | None, bssid: str | None = None,
+                work: str = "", uplink_phases_want: int = 4) -> int:
     cursor = hub.cursor()
     info("run serial cursor=%d", cursor)
     peer = peer_opt
     phases: dict[int, dict] = {}
     pending: dict[int, str] = {}
-    join_sent = False
-    join_deadline = time.time() + JOIN_GRACE_S
+    # the join's own state: the command is sent when the board says it is
+    # waiting, and retried on a period until the board reports the association
+    # (or the first phase opens). Two failure modes make the retry load-bearing:
+    # a command typed before the board's shell is up is simply lost, and one
+    # sent too early can start the connect while the sweep is still in flight
+    # (the dwell drags the replies off-channel). Both end the same way - the
+    # board still waiting - so the retry is what turns a lost attempt into a
+    # later good one.
+    join_ok = False
+    join_wait_seen = False
+    join_last_send = -1.0e9
+    join_deadline: float | None = None
     started = time.time()
     phase_open: int | None = None
     t_open = 0.0
     seen_bw: list[str] = []
+    # the uplink sheet's state: the stage announces itself with its standby
+    # line, this side answers with a server and this host's address, and the
+    # stage's own ready/result/done lines then read like the downlink's
+    uplink_seen = False
+    uplink_done = False
+    uplink_peer_sent = False
+    uplink_peer_tried = False
+    uplink_addr: str | None = None
+    uplink_phases: dict[int, dict] = {}
+    uplink_open: int | None = None
+    uplink_skip: str | None = None
 
-    while time.time() - started < deadline_s and len(phases) < phases_want:
+    while time.time() - started < deadline_s and (
+            len(phases) < phases_want or
+            (uplink_seen and not uplink_done and not uplink_skip)):
         text, cursor = hub.read(cursor)
-        # The board prints its "waiting for the supplicant" line once, and a
-        # reader that starts after it - which is the normal case, because the
-        # capture has to be running before the phases begin - would never see
-        # the trigger. So the join is also sent on a short deadline, once, if
-        # nothing has joined by then: the command is idempotent at the board.
-        if (ssid and psk and not join_sent and time.time() > join_deadline):
-            info("run sending join for ssid=%s (no join seen within %ds)",
-                 ssid, JOIN_GRACE_S)
+        # The join command, sent when the anchor is seen and retried on a period
+        # otherwise. The grace is counted from the first line of the board's own
+        # suite (not from this reader's start, which can be minutes earlier - a
+        # reader started before the boot must not fire into a board that is
+        # still in U-Boot), and it is longer than the scan, so an un-anchored
+        # attempt lands after the sweep rather than inside it.
+        if (ssid and psk and not join_ok and not phases
+                and join_deadline is not None
+                and (join_wait_seen or time.time() > join_deadline)
+                and time.time() - join_last_send >= JOIN_RETRY_S):
+            info("run sending join for ssid=%s (anchor=%s)", ssid, join_wait_seen)
+            # the console face takes the access point's address too when it is
+            # given, which is what keeps a same-name neighbour from being joined
             cmd = "wpa connect %s %s" % (ssid, psk)
             if bssid:
                 cmd += " " + bssid
-            join_sent = hub.send(cmd)
+            if hub.send(cmd):
+                join_last_send = time.time()
         if not text:
             time.sleep(0.5)
             continue
         with open(os.path.join(outdir, "serial.log"), "a") as f:
             f.write(text)
         for line in text.splitlines():
+            if "wlan8189:" in line:
+                # the board is running its suite: arm the join grace (once),
+                # which is what lets an un-anchored reader still send the join
+                if join_deadline is None:
+                    join_deadline = time.time() + JOIN_GRACE_S
+            if JOIN_OK_RE.search(line):
+                join_ok = True
+            if JOIN_WAIT_RE.search(line):
+                join_wait_seen = True
+
             m = DHCP_BOUND_RE.search(line)
             if m and peer is None:
                 peer = m.group("ip")
                 info("run peer from dhcp lease: %s", peer)
 
-            if ssid and psk and not join_sent and JOIN_WAIT_RE.search(line):
-                info("run sending join for ssid=%s", ssid)
-                # the console face takes the access point's address too when it
-                # is given, which is what keeps a same-name neighbour from
-                # being joined instead
-                cmd = "wpa connect %s %s" % (ssid, psk)
-                if bssid:
-                    cmd += " " + bssid
-                if hub.send(cmd):
-                    join_sent = True
+            # The uplink stage's handover: once the board has announced the
+            # stage and its own address is known (the lease above, or --peer),
+            # this host's reachable address goes to the board's console and the
+            # board's own client drives the windows from there.
+            if uplink_seen and peer and not uplink_peer_tried:
+                uplink_peer_tried = True
+                addr = local_addr_for(r, peer)
+                if addr and hub.send("wlan8189 uplink %s" % addr):
+                    uplink_addr = addr
+                    uplink_peer_sent = True
+                    info("run uplink peer sent: the board sends to %s", addr)
+                else:
+                    warn("uplink peer not sent: no local address reaching %s",
+                         peer)
 
             m = BW_MODE_RE.search(line)
             if m:
                 seen_bw.append(m.group("bw"))
+
+            if UPLINK_STANDBY_RE.search(line):
+                uplink_seen = True
+                info("run uplink stage standby: bringing the host server up")
+                if work:
+                    uplink_server_start(r, work)
+                else:
+                    warn("uplink stage seen but no work directory; the server "
+                         "was not started")
+                continue
 
             m = PHASE_READY_RE.search(line)
             if m:
@@ -1135,16 +1315,80 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
                     info("run phase %d closed", n)
                 phase_open = None
 
-            if CENSUS_RE.search(line) and phases:
-                last = max(phases)
-                phases[last]["census"].append(line.strip())
+            # the uplink sheet's own lines: the board drives the windows, so
+            # these are read, not driven - the ready line carries the arm, the
+            # result line what the board's client moved, and the host server's
+            # log (fetched at the end) carries the receiver-side figure
+            m = UPLINK_READY_RE.search(line)
+            if m:
+                n = int(m.group("phase"))
+                uplink_open = n
+                uplink_phases[n] = {
+                    "phase_line": line.strip(),
+                    "arm": m.group("arm"),
+                    "t_open": time.time(),
+                    "census": [],
+                }
+                info("run uplink phase %d open arm=%s", n, m.group("arm"))
+                continue
 
+            m = UPLINK_RESULT_RE.search(line)
+            if m:
+                n = int(m.group("phase"))
+                if n in uplink_phases:
+                    uplink_phases[n]["result"] = {
+                        "bytes": int(m.group("bytes")),
+                        "ms": int(m.group("ms")),
+                        "kbit": int(m.group("kbit")),
+                    }
+                    info("run uplink phase %d result bytes=%s kbit=%s",
+                         n, m.group("bytes"), m.group("kbit"))
+                continue
+
+            m = UPLINK_DONE_RE.search(line)
+            if m:
+                n = int(m.group("phase"))
+                if n in uplink_phases:
+                    uplink_phases[n]["t_close"] = time.time()
+                uplink_open = None
+                if n >= uplink_phases_want:
+                    uplink_done = True
+                continue
+
+            m = UPLINK_SKIP_RE.search(line)
+            if m:
+                uplink_skip = m.group("reason")
+                uplink_done = True
+                info("run uplink stage skipped by the board: %s", uplink_skip)
+                continue
+
+            if CENSUS_RE.search(line):
+                if uplink_open is not None and uplink_open in uplink_phases:
+                    uplink_phases[uplink_open]["census"].append(line.strip())
+                elif phases:
+                    last = max(phases)
+                    phases[last]["census"].append(line.strip())
+
+    server_log = uplink_server_fetch(r, work, outdir) if uplink_seen else ""
+    if uplink_seen:
+        uplink_server_stop(r)
     result = {
         "phases": [phases[k] for k in sorted(phases)],
         "phases_wanted": phases_want,
         "bandwidth_mode_seen": sorted(set(seen_bw)),
         "peer": peer,
         "host": r.host or "local",
+        "uplink": {
+            "stage_seen": uplink_seen,
+            "skipped": uplink_skip,
+            "host_addr": uplink_addr,
+            "phases": [uplink_phases[k] for k in sorted(uplink_phases)],
+            "server": uplink_server_totals(server_log),
+            "server_log": "uplink-server.log" if server_log else None,
+            "note": ("the board's own client drives the uplink windows; the "
+                     "server rows are the receiver-side figures, the phase "
+                     "result lines are the sender's own account"),
+        },
         "note": ("the client window is the same 8 s inside the board's 20 s "
                  "window the earlier rounds used, so the numbers stay "
                  "comparable"),
@@ -1155,8 +1399,21 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
         c = p.get("client") or {}
         out("%s: phase %s mbit=%s" % (
             TOOL, p["phase_line"].split("ready")[0].split()[-1], c.get("mbit")))
+    for p in result["uplink"]["phases"]:
+        res = p.get("result") or {}
+        out("%s: uplink phase %s arm=%s kbit=%s" % (
+            TOOL, p["phase_line"].split("phase")[1].split()[0],
+            p.get("arm"), res.get("kbit")))
+    for row in result["uplink"]["server"]:
+        out("%s: uplink server row seconds=%.1f kbit=%s" % (
+            TOOL, row["seconds"], row["kbit"]))
     ok = len(phases) >= phases_want
-    info("run complete phases=%d/%d result=%s", len(phases), phases_want,
+    if uplink_seen and not uplink_skip:
+        ok = ok and len(uplink_phases) >= uplink_phases_want and all(
+            "result" in p for p in uplink_phases.values())
+    info("run complete phases=%d/%d uplink=%d/%d result=%s", len(phases),
+         phases_want, len(uplink_phases),
+         uplink_phases_want if uplink_seen else 0,
          os.path.join(outdir, "result.json"))
     return 0 if ok else 1
 
@@ -1525,6 +1782,53 @@ def selftest() -> int:
     check("phase-parse-minimal", bool(m2) and m2.group("arm") is None)
     broken = "[  55.145] wlan8189: phase ready arm=B"
     check("phase-parse-rejects-broken", PHASE_READY_RE.search(broken) is None)
+
+    # the phase line's data-step field: parsed when present, absent (not
+    # defaulted) on an older image's line
+    pre = ("[  55.145] wlan8189: phase 2 ready lever=3 arm=B pump=adaptive "
+           "poll_us=100 agg=0x010f yield=0 lps=2")
+    m = PHASE_READY_RE.search(pre)
+    check("phase-parse-pre-datastep", bool(m) and m.group("arm") == "B"
+          and m.group("data_us") is None)
+    new = ("[  55.145] wlan8189: phase 2 ready lever=5 arm=B pump=adaptive "
+           "poll_us=100 data_us=5 agg=0x200f yield=0 lps=2")
+    m = PHASE_READY_RE.search(new)
+    check("phase-parse-datastep", bool(m) and m.group("data_us") == "5"
+          and m.group("agg") == "200f")
+
+    # the uplink sheet's parsers: the ready/result lines, the skip line (the
+    # only legal way of not running), and the host server's own row
+    up_ready = ("[ 127.107] wlan8189: uplink phase 1 ready lever=5 arm=A "
+                "pump=adaptive poll_us=100 data_us=100 agg=0x200f yield=0 lps=2")
+    m = UPLINK_READY_RE.search(up_ready)
+    check("uplink-ready-parse", bool(m) and m.group("phase") == "1"
+          and m.group("arm") == "A")
+    up_res = ("[ 127.405] wlan8189: uplink phase 1 result bytes=20830574 "
+              "ms=10234 kbit=16280 type=1")
+    m = UPLINK_RESULT_RE.search(up_res)
+    check("uplink-result-parse", bool(m) and m.group("bytes") == "20830574"
+          and m.group("kbit") == "16280")
+    check("uplink-skip-parse",
+          UPLINK_SKIP_RE.search("wlan8189: uplink skipped reason=no-peer")
+          is not None)
+    check("uplink-ready-rejects-skip",
+          UPLINK_READY_RE.search(
+              "wlan8189: uplink skipped reason=no-peer") is None)
+    rows = uplink_server_totals(
+        "[  1] 0.0000-11.0440 sec  19.9 MBytes  15.1 Mbits/sec")
+    check("uplink-server-row", len(rows) == 1 and rows[0]["kbit"] == 15100
+          and rows[0]["bytes"] == 19900000)
+    check("uplink-server-empty", uplink_server_totals("no rows") == [])
+
+    # the join's completion latch: the board's own line and the supplicant's
+    # handshake line both count, and the wait line must not read as completion
+    check("join-ok-parse",
+          JOIN_OK_RE.search(
+              "wlan8189: join-ok bssid=14:a3:2f:18:07:2c state=RUN") is not None
+          and JOIN_OK_RE.search(
+              "wlan0: WPA: Key negotiation completed with aa") is not None
+          and JOIN_OK_RE.search(
+              "wlan8189: join waiting for the supplicant") is None)
 
     # the channel-pinned branch: frames without a beacon is the pinned-failure
     # signature, and an empty capture is a different verdict again
