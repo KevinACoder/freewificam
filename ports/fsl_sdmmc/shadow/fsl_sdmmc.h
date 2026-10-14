@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Minimal first-party shadow of the SDK's sdmmc dispatch header, narrowed to
- * the SDIO instance this port builds. The upstream header pulls in the SD and
- * MMC card types behind configuration macros; those subsystems are out of scope
- * (no eMMC/storage line), so only the SDIO instance and its one entry point are
- * declared here.
+ * the instances this port builds. The upstream header pulls in the SD, MMC and
+ * SDIO card types behind configuration macros; this port builds the SDIO
+ * instance (the WiFi line) and the MMC one (the storage line), and the SD
+ * instance is not carried.
  */
 
 #ifndef FSL_SDMMC_H_SHADOW
@@ -21,8 +21,24 @@
 #include "fsl_sdio.h"
 #endif
 
+#if defined(CONFIG_FSL_SDMMC_ENABLE_MMC)
+#include "fsl_mmc.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#if defined(CONFIG_FSL_SDMMC_ENABLE_MMC)
+/*!@brief sdmmc (MMC) instance */
+typedef struct _sdmmc_mmc_
+{
+    sdmmchost_t host;
+    mmc_card_t card;
+} sdmmc_mmc_t;
+
+/*! @brief Configure and initialize host controller for the MMC (eMMC) card. */
+status_t MMC_CfgInitialize(sdmmc_mmc_t *sdmmc, sdmmchost_config_t *config);
 #endif
 
 #if defined(CONFIG_FSL_SDMMC_ENABLE_SDIO)
