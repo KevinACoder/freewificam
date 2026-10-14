@@ -36,12 +36,27 @@
 #include "log.h"
 
 /* The bus-timing value the imported stack uses for eMMC high speed
- * (kMMC_HighSpeedTiming), and the data-bus-width value for eight lines
- * (kMMC_DataBusWidth8bit). Spelled out here rather than pulled from the stack's
- * header: the case reads the card's record, and the two numbers are part of
- * what it asserts about it. */
+ * (kMMC_HighSpeedTiming), and its data-bus-width values (1, 4 and 8 lines are
+ * 0, 1 and 2). Spelled out here rather than pulled from the stack's header: the
+ * case reads the card's record, and these numbers are part of what it asserts
+ * about it. */
 #define EMMC_TIMING_HIGH_SPEED		1U
+#define EMMC_BUS_WIDTH_1BIT		0U
+#define EMMC_BUS_WIDTH_4BIT		1U
 #define EMMC_BUS_WIDTH_8BIT		2U
+
+/* The stack's width value as a count of lines. */
+static unsigned emmc_probe_lines( uint32_t width )
+{
+	if( width == EMMC_BUS_WIDTH_8BIT ) {
+		return 8U;
+	}
+	if( width == EMMC_BUS_WIDTH_4BIT ) {
+		return 4U;
+	}
+
+	return 1U;
+}
 
 /* The CRU's 50 MHz slot selector (DWC_MSHC_CRU_CCLK_SEL_50M) and the rate it
  * carries on this board. */
@@ -79,8 +94,12 @@ void emmc_probe_chain( void )
 	 * is the number a clock-chain defect would move. */
 	LOG_ANCHOR( "emmc: mode %s bus %u-bit clock=%uMHz\n",
 		    ( info.timing == EMMC_TIMING_HIGH_SPEED ) ? "HS" : "other",
-		    (unsigned)( ( info.width == EMMC_BUS_WIDTH_8BIT ) ? 8U : 4U ),
+		    emmc_probe_lines( info.width ),
 		    (unsigned)( info.clock_hz / 1000000U ) );
+	/* The controller's own programming, beside the stack's record: the two
+	 * disagreeing is the difference between a card that refused the width and
+	 * a host that never offered it. */
+	LOG_ANCHOR( "emmc: host-lines=%u\n", (unsigned)info.host_lines );
 
 	if( info.timing != EMMC_TIMING_HIGH_SPEED ) {
 		board_case_fail( "the card did not switch to high-speed timing" );
@@ -88,6 +107,10 @@ void emmc_probe_chain( void )
 	}
 	if( info.width != EMMC_BUS_WIDTH_8BIT ) {
 		board_case_fail( "the card did not switch to the eight-line bus" );
+		return;
+	}
+	if( info.host_lines != 8U ) {
+		board_case_fail( "the controller was not programmed for eight lines" );
 		return;
 	}
 	if( info.clock_hz != EMMC_CLOCK_50MHZ ) {

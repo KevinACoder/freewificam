@@ -39,7 +39,8 @@ struct sdmmc_mmc_info {
 	uint32_t	clock_hz;	/* the bus clock the card runs at */
 	uint32_t	clock_asked_hz;	/* the rate the stack asked for */
 	uint32_t	timing;		/* the stack's bus-timing value */
-	uint32_t	width;		/* data lines in use */
+	uint32_t	width;		/* the width the stack recorded for the card */
+	uint32_t	host_lines;	/* the data lines the controller was programmed with */
 	uint32_t	cclk_sel;	/* the CRU CCLK_EMMC selector in effect */
 	uint32_t	serial;		/* the CID's product serial number */
 	uint8_t		manufacturer;	/* the CID's manufacturer ID */

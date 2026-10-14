@@ -66,11 +66,14 @@ ANCHORS = {
     "emmc-probe": [
         r"emmc: \S+ manufacturer=\d+ serial=\d+ blocks=\d+ block=512",
         r"emmc: mode HS bus 8-bit clock=\d+MHz",
+        r"emmc: host-lines=\d+",
         r"emmc: cru cclk_emmc sel=\d+ dll=bypass",
         r"emmc: cmd23 on",
         r"emmc-probe: transfers=\d+ errors=\d+",
     ],
     "emmc-block": [
+        r"emmc-block: touch write lba=\d+ rc=\d+",
+        r"emmc-block: touch read lba=\d+ rc=\d+",
         r"emmc-block: write bytes=\d+ ms=\d+ kib=\d+",
         r"emmc-block: read bytes=\d+ ms=\d+ kib=\d+",
         r"emmc-block: verify ok checksum=[0-9a-f]{8}",
@@ -121,7 +124,9 @@ PROBE_CMD23_RE = re.compile(r"emmc: cmd23 (on|off)")
 #: The probe's own counters (transfers, errors).
 PROBE_COUNTERS_RE = re.compile(r"emmc-probe: transfers=(\d+) errors=(\d+)")
 
-#: The block case's counters.
+#: The block case's first data touch, and its counters.
+BLOCK_TOUCH_WRITE_RE = re.compile(r"emmc-block: touch write lba=\d+ rc=(-?\d+)")
+BLOCK_TOUCH_READ_RE = re.compile(r"emmc-block: touch read lba=\d+ rc=(-?\d+)")
 BLOCK_CMD23_RE = re.compile(r"emmc-block: cmd23 issued=(\d+)")
 BLOCK_BOUNDARY_RE = re.compile(r"emmc-block: boundary-crossed lba=\d+ len=\d+ events=(\d+)")
 
@@ -165,10 +170,13 @@ BASE_TRANSCRIPT = (
     + "[  10.010] CASE threadx-rk3568-emmc/shell-up PASS\r\n"
     "[  10.020] emmc: ARJ11X manufacturer=112 serial=1234567890 blocks=61071360 block=512\r\n"
     "[  10.030] emmc: mode HS bus 8-bit clock=50MHz\r\n"
+    "[  10.035] emmc: host-lines=8\r\n"
     "[  10.040] emmc: cru cclk_emmc sel=4 dll=bypass\r\n"
     "[  10.050] emmc: cmd23 on\r\n"
     "[  10.060] emmc-probe: transfers=41 errors=0\r\n"
     "[  10.070] CASE threadx-rk3568-emmc/emmc-probe PASS\r\n"
+    "[  10.070] emmc-block: touch write lba=60965888 rc=0\r\n"
+    "[  10.075] emmc-block: touch read lba=60965888 rc=0\r\n"
     "[  10.080] emmc-block: write bytes=8388608 ms=350 kib=23967\r\n"
     "[  10.090] emmc-block: read bytes=8388608 ms=200 kib=41943\r\n"
     "[  10.100] emmc-block: verify ok checksum=1a2b3c4d\r\n"
@@ -234,6 +242,17 @@ MUTATIONS = [
         "emmc: cmd23 on\r\n", ""), 1),
     ("probe counters anchor dropped", BASE_TRANSCRIPT.replace(
         "emmc-probe: transfers=41 errors=0\r\n", ""), 1),
+    ("host-lines anchor dropped", BASE_TRANSCRIPT.replace(
+        "emmc: host-lines=8\r\n", ""), 1),
+    ("host-lines disagreeing (backstop)", BASE_TRANSCRIPT.replace(
+        "emmc: host-lines=8\r\n", "emmc: host-lines=4\r\n"), 1),
+    ("touch write anchor dropped", BASE_TRANSCRIPT.replace(
+        "emmc-block: touch write lba=60965888 rc=0\r\n", ""), 1),
+    ("touch read anchor dropped", BASE_TRANSCRIPT.replace(
+        "emmc-block: touch read lba=60965888 rc=0\r\n", ""), 1),
+    ("touch write failed (backstop)", BASE_TRANSCRIPT.replace(
+        "emmc-block: touch write lba=60965888 rc=0\r\n",
+        "emmc-block: touch write lba=60965888 rc=-1\r\n"), 1),
     ("probe at the wrong clock (backstop)", BASE_TRANSCRIPT.replace(
         "emmc: mode HS bus 8-bit clock=50MHz\r\n",
         "emmc: mode HS bus 8-bit clock=25MHz\r\n"), 1),
@@ -437,6 +456,13 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         elif cmd23.group(1) != "on":
             errors.append("emmc-probe: block-count commands are off")
 
+        lines = _last_match(transcript, r"emmc: host-lines=(\d+)")
+        if lines is None:
+            errors.append("emmc-probe: no controller-width line")
+        elif int(lines.group(1)) != 8:
+            errors.append("emmc-probe: the controller is programmed for %s lines"
+                          % lines.group(1))
+
         counters = _last_match(transcript, PROBE_COUNTERS_RE)
         if counters is None:
             errors.append("emmc-probe: no controller counters line")
@@ -453,6 +479,14 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
     # the block case's backstops: the write path was pre-announced with a block
     # count, and the boundary-crossing transfer really crossed.
     if verdicts.get("emmc-block") == "PASS":
+        for phase, pattern in (("write", BLOCK_TOUCH_WRITE_RE),
+                               ("read", BLOCK_TOUCH_READ_RE)):
+            match = _last_match(transcript, pattern)
+            if match is None:
+                errors.append("emmc-block: no touch-%s line" % phase)
+            elif int(match.group(1)) != 0:
+                errors.append("emmc-block: the touch %s reported rc=%s"
+                              % (phase, match.group(1)))
         cmd23 = _last_match(transcript, BLOCK_CMD23_RE)
         if cmd23 is None:
             errors.append("emmc-block: no block-count count line")

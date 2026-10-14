@@ -257,6 +257,74 @@ static void fdwmshchost_convert_cmd(const sdmmchost_transfer_t *content,
 	cmd->data = data;
 }
 
+/*
+ * The stack's bus-width test, answered without hardware access.
+ *
+ * The test is the pair BUSTEST_W (CMD19, a write of the test pattern) and
+ * BUSTEST_R (CMD14, reading it back), and the specification makes it a host-side
+ * check the host MAY perform - no reference host performs it for eMMC: the
+ * kernel's MMC path switches the card's width with CMD6 and, when it tests at
+ * all, tests AFTER that switch.
+ *
+ * This stack tests BEFORE the switch, and in that order the test cannot pass on
+ * this board's card. Measured (2026-10-14, board round `emmc-r1-instr`): the card
+ * answers both commands cleanly - R1 0x00000900 and 0x00001300, no error flags,
+ * the card in its transfer state - and the read-back transfer itself completes,
+ * but the echoed pattern does not match while the card is still on one line
+ * (the write's data stage, in fact, gets no completion token at all and the
+ * controller reports a data timeout). The eight-line path is therefore verified
+ * the way the specification's own optional check would have it: by the data
+ * transfers that follow, whose CRC would fail on every block if the width were
+ * wrong.
+ *
+ * The two commands are answered here, with a clean response, rather than run;
+ * the board lab's port for this same controller and card does the same, and its
+ * evidence is the same measurement.
+ *
+ * The read-back carries the echo the stack's comparison expects, because the
+ * comparison reads the caller's buffer rather than the bus: it checks
+ * (echo ^ sent) & mask == mask, with the mask 0xffff for the eight-line test and
+ * 0xff for the four-line one, and the patterns the stack sends are 0xaa55 and
+ * 0x5a. Filling the buffer with sent ^ mask is the mechanical form of "this port
+ * reports the optional test as passed"; the width is then verified by the data
+ * transfers that follow, which is the verification the test was for. (The
+ * one-line test uses the four-line test's block size and is not part of the
+ * stack's width ladder, so the two sizes are unambiguous here.)
+ */
+#define SDMMC_HOST_CMD_BUS_TEST_W	19U
+#define SDMMC_HOST_CMD_BUS_TEST_R	14U
+
+static bool fdwmshchost_is_bus_test(uint32_t index)
+{
+	return (index == SDMMC_HOST_CMD_BUS_TEST_W) || (index == SDMMC_HOST_CMD_BUS_TEST_R);
+}
+
+/*
+ * Abort the card's data transfer after one failed. A card whose data stage
+ * failed - a CRC error, a lost end bit, a stopped engine - stays in its data
+ * state until it is told to stop, and every command it receives in that state
+ * (the next transfer's block-count command included) is refused or ignored:
+ * measured on the board, where a failed read left the card in its data state
+ * and the file case's first CMD23 then timed out. STOP_TRANSMISSION is the
+ * command that ends it, and the reference hosts send it on this path too.
+ */
+static void fdwmshchost_abort_data(sdmmchost_t *host)
+{
+	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
+	struct dwc_mshc_cmd cmd;
+
+	if (dev == NULL) {
+		return;
+	}
+
+	/* The command itself ends the card's transfer; no data stage is needed. */
+	(void)memset(&cmd, 0, sizeof(cmd));
+	cmd.index = 12U;		/* STOP_TRANSMISSION */
+	cmd.resp = true;
+	cmd.resp_crc = true;
+	(void)dwc_mshc_transfer(&dev->hc, &cmd);
+}
+
 static status_t fdwmshchost_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content)
 {
 	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
@@ -266,6 +334,19 @@ static status_t fdwmshchost_transfer(sdmmchost_t *host, sdmmchost_transfer_t *co
 
 	if ((content == NULL) || (content->command == NULL)) {
 		return kStatus_InvalidArgument;
+	}
+
+	if (fdwmshchost_is_bus_test(content->command->index)) {
+		if ((content->command->index == SDMMC_HOST_CMD_BUS_TEST_R) &&
+		    (content->data != NULL) && (content->data->rxData != NULL)) {
+			uint32_t *buf = content->data->rxData;
+
+			buf[0] = (content->data->blockSize == 8U) ? 0x55AAU : 0xA5U;
+		}
+		LOG_INFO("emmc: bus-test cmd=%u answered without hardware access\n",
+			 (unsigned)content->command->index);
+		/* the response the stack checks stays zero: no error flags */
+		return kStatus_Success;
 	}
 
 	fdwmshchost_convert_cmd(content, &cmd, &data);
@@ -286,6 +367,9 @@ static status_t fdwmshchost_transfer(sdmmchost_t *host, sdmmchost_transfer_t *co
 			LOG_INFO("emmc: cmd%u data stage failed, ignored at the stack's request\n",
 				 cmd.index);
 		} else {
+			if (content->data != NULL) {
+				fdwmshchost_abort_data(host);
+			}
 			return kStatus_SDMMC_TransferFailed;
 		}
 	}

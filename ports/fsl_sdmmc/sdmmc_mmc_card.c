@@ -191,7 +191,7 @@ int sdmmc_mmc_info_get(struct sdmmc_mmc_info *out)
 		out->clock_asked_hz = hc_state.clock_asked_hz;
 		out->clock_hz = hc_state.clock_hz;
 		out->cclk_sel = hc_state.cclk_sel;
-		out->width = hc_state.width;
+		out->host_lines = hc_state.width;
 	}
 
 	return 0;

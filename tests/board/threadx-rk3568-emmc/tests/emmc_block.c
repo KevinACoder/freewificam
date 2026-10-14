@@ -199,6 +199,42 @@ static int emmc_block_boundary( uint64_t lba, uint32_t *events_out )
 	return 0;
 }
 
+/*
+ * The first data touch: one block written and read back at the round trip's own
+ * window, before the megabyte-scale pass. Its whole purpose is to name which
+ * direction broke when the data path does not work: the bring-up's reads (the
+ * card's registers) are all reads, so a write path defect and a bus-mode defect
+ * look the same from the big round trip alone.
+ */
+static void emmc_block_touch( uint64_t lba )
+{
+	uint32_t i;
+	int rc;
+
+	for( i = 0U; i < 512U; i++ ) {
+		emmc_block_buf[i] = emmc_pattern( i );
+	}
+
+	rc = sdmmc_mmc_write( lba, emmc_block_buf, 1U );
+	LOG_ANCHOR( "emmc-block: touch write lba=%lu rc=%d\n",
+		    (unsigned long)lba, rc );
+
+	(void)memset( emmc_block_buf, 0, 512U );
+	rc = sdmmc_mmc_read( lba, emmc_block_buf, 1U );
+	LOG_ANCHOR( "emmc-block: touch read lba=%lu rc=%d\n",
+		    (unsigned long)lba, rc );
+
+	if( rc == 0 ) {
+		for( i = 0U; i < 512U; i++ ) {
+			if( emmc_block_buf[i] != emmc_pattern( i ) ) {
+				LOG_ERROR( "emmc-block: touch readback mismatch at %u\n",
+					   (unsigned)i );
+				break;
+			}
+		}
+	}
+}
+
 void emmc_block_chain( void )
 {
 	struct sdmmc_mmc_info info;
@@ -223,6 +259,8 @@ void emmc_block_chain( void )
 	 * itself so the same blocks are used on every boot. */
 	lba = ( ( (uint64_t)info.blocks - EMMC_BLOCK_TAIL_BLOCKS ) / ( EMMC_BLOCK_BYTES / 512U ) ) *
 	      ( EMMC_BLOCK_BYTES / 512U );
+
+	emmc_block_touch( lba );
 
 	if( emmc_block_write( lba, &ms ) != 0 ) {
 		board_case_fail( "the block write failed" );

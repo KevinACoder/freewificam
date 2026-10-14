@@ -49,6 +49,18 @@
 #define DWC_MSHC_DATA_BUDGET_US		3000000U
 #define DWC_MSHC_RESET_BUDGET_US	50000U
 
+/*
+ * The step a data transfer's wait uses. It is finer than the command wait's
+ * because of what the SDMA engine does at a boundary: it stops there and waits
+ * to be pointed at the continuation address, and until the driver notices, a
+ * read's incoming data has nowhere to go - the controller's FIFO fills and the
+ * transfer fails. Measured on the board: with the command wait's 100 us step a
+ * boundary-crossing read failed and its retry succeeded, which is the signature
+ * of a continuation that arrived too late. A few microseconds keeps the
+ * continuation ahead of the FIFO without spinning a core for the whole budget.
+ */
+#define DWC_MSHC_DATA_POLL_US		4U
+
 /* How long the card is given after a clock change before the next command. */
 #define DWC_MSHC_CLOCK_SETTLE_US	1000U
 
@@ -100,6 +112,14 @@ static void dwc_mshc_udelay(uint32_t usec)
 static uint32_t dwc_mshc_polls_for(uint32_t budget_us)
 {
 	uint32_t n = budget_us / DWC_MSHC_POLL_US;
+
+	return (n == 0U) ? 1U : n;
+}
+
+/* The iteration budget of a data wait, at the data step. */
+static uint32_t dwc_mshc_data_polls_for(uint32_t budget_us)
+{
+	uint32_t n = budget_us / DWC_MSHC_DATA_POLL_US;
 
 	return (n == 0U) ? 1U : n;
 }
@@ -702,11 +722,12 @@ static int dwc_mshc_send_command(struct dwc_mshc *hc, struct dwc_mshc_cmd *cmd)
 static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cmd)
 {
 	uintptr_t base = hc->cfg.base;
-	uint32_t loop = dwc_mshc_polls_for(DWC_MSHC_DATA_BUDGET_US);
+	uint32_t loop = dwc_mshc_data_polls_for(DWC_MSHC_DATA_BUDGET_US);
 	uintptr_t addr = (uintptr_t)cmd->data->buf;
 	uintptr_t end = addr + cmd->data->len;
 	uint32_t stat;
 	uint32_t err;
+	uint32_t boundaries = 0U;
 
 	do {
 		stat = mmio_rd16(base + DWC_MSHC_NORMAL_INT_STAT);
@@ -714,9 +735,12 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 
 		if ((err & DWC_MSHC_EINT_DATA_ERRORS) != 0U) {
 			LOG_ERROR("dwc_mshc: CMD%u data error (eint=0x%x nint=0x%x "
-				  "blksz=0x%x blkcnt=0x%x)\n", cmd->index, err, stat,
+				  "blksz=0x%x blkcnt=0x%x sdmasa=0x%x boundaries=%u)\n",
+				  cmd->index, err, stat,
 				  mmio_rd16(base + DWC_MSHC_BLOCK_SIZE),
-				  mmio_rd16(base + DWC_MSHC_BLOCK_COUNT));
+				  mmio_rd16(base + DWC_MSHC_BLOCK_COUNT),
+				  mmio_rd32(base + DWC_MSHC_SDMA_ADDR),
+				  (unsigned)boundaries);
 			dwc_mshc_int_status_clear(hc);
 			return DWC_MSHC_ERR_DATA;
 		}
@@ -739,12 +763,13 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 			mmio_wr16(base + DWC_MSHC_NORMAL_INT_STAT, (uint16_t)DWC_MSHC_INT_DMA);
 			addr = dwc_mshc_sdma_continue(addr);
 			dwc_mshc_census_state.boundary_events++;
+			boundaries++;
 			if (addr < end) {
 				mmio_wr32(base + DWC_MSHC_SDMA_ADDR, (uint32_t)addr);
 			}
 		}
 
-		dwc_mshc_udelay(DWC_MSHC_POLL_US);
+		dwc_mshc_udelay(DWC_MSHC_DATA_POLL_US);
 	} while (--loop != 0U);
 
 	LOG_ERROR("dwc_mshc: CMD%u data timeout (nint=0x%x eint=0x%x pstate=0x%x)\n",
@@ -754,41 +779,12 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 	return DWC_MSHC_ERR_TIMEOUT;
 }
 
-/*
- * The bus-width test's two commands (BUSTEST_W 19 and BUSTEST_R 14) are the one
- * pair whose evidence needs more than the ladder's pass or fail around them:
- * whether the card answered the command at all, and what the controller was
- * actually programmed with, are what separate "this card does not run the
- * optional test" from "this port's data path is wrong". The stack performs the
- * test on every bring-up, so these two lines are the whole cost.
- */
-#define DWC_MSHC_CMD_BUS_TEST_W		19U
-#define DWC_MSHC_CMD_BUS_TEST_R		14U
-
-static bool dwc_mshc_is_bus_test(uint32_t index)
-{
-	return (index == DWC_MSHC_CMD_BUS_TEST_W) || (index == DWC_MSHC_CMD_BUS_TEST_R);
-}
-
 int dwc_mshc_transfer(struct dwc_mshc *hc, struct dwc_mshc_cmd *cmd)
 {
-	uintptr_t base;
 	int ret;
 
 	if ((hc == NULL) || (cmd == NULL)) {
 		return DWC_MSHC_ERR_ARG;
-	}
-
-	base = hc->cfg.base;
-
-	if (dwc_mshc_is_bus_test(cmd->index)) {
-		LOG_INFO("dwc_mshc: bus-test cmd=%u blksz=%u blkcnt=%u buf=0x%lx xfer=0x%x\n",
-			 cmd->index,
-			 (cmd->data != NULL) ? (unsigned)cmd->data->blksz : 0U,
-			 (cmd->data != NULL) ? (unsigned)cmd->data->blkcnt : 0U,
-			 (cmd->data != NULL) ? (unsigned long)(uintptr_t)cmd->data->buf : 0UL,
-			 (cmd->data != NULL) ?
-				 (unsigned)mmio_rd16(base + DWC_MSHC_XFER_MODE) : 0U);
 	}
 
 	dwc_mshc_census_state.transfers++;
@@ -820,16 +816,6 @@ int dwc_mshc_transfer(struct dwc_mshc *hc, struct dwc_mshc_cmd *cmd)
 				dwc_mshc_census_state.rx_bytes += cmd->data->len;
 			}
 		}
-	}
-
-	if (dwc_mshc_is_bus_test(cmd->index)) {
-		LOG_INFO("dwc_mshc: bus-test cmd=%u rc=%d r1=0x%08x nint=0x%x eint=0x%x "
-			 "sdmasa=0x%x blkcnt=0x%x\n", cmd->index, ret,
-			 (unsigned)cmd->response[0],
-			 (unsigned)mmio_rd16(base + DWC_MSHC_NORMAL_INT_STAT),
-			 (unsigned)mmio_rd16(base + DWC_MSHC_ERROR_INT_STAT),
-			 (unsigned)mmio_rd32(base + DWC_MSHC_SDMA_ADDR),
-			 (unsigned)mmio_rd16(base + DWC_MSHC_BLOCK_COUNT));
 	}
 
 	if (ret != DWC_MSHC_OK) {
