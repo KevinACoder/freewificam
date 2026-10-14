@@ -91,17 +91,21 @@ ANCHORS = {
         r"wlan8189: phase 1 ready",
         r"wlan8189: phase 3 done",
         r"perf census: A ",
+        r"perf census: A card ",
         r"wlan8189: rate ",
+        r"wlan8189: pump ",
     ],
 }
 
-#: The census and phase families: every `perf census:` line is a one-boot
-#: ledger line and every phase line marks a measurement window, so the log
-#: plane must never fold or filter them away (they feed the round's RUN as
-#: well as the judge). Collected by tools/gates/log-anchors.py by name.
+#: The census, phase, power and cadence families: every `perf census:` line is a
+#: one-boot ledger line, every phase line marks a measurement window, and the
+#: power and pump readbacks name the treatment each window ran under, so the log
+#: plane must never fold or filter them away (they feed the round's RUN as well
+#: as the judge). Collected by tools/gates/log-anchors.py by name.
 CENSUS_LINE_RE = re.compile(r"perf census: ")
 PHASE_LINE_RE = re.compile(r"wlan8189: phase \d")
 PS_LINE_RE = re.compile(r"wlan8189: ps ")
+PUMP_LINE_RE = re.compile(r"wlan8189: pump ")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STEPS_PATH = os.path.join(HERE, "steps.tsv")
@@ -154,19 +158,21 @@ BASE_TRANSCRIPT = (
     "[  54.000] wlan8189: ping window done\r\n"
     "[  54.100] wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n"
     "[  54.200] wlan8189: iperf server ready port=5001\r\n"
-    "[  54.300] wlan8189: phase 1 ready lps=2\r\n"
+    "[  54.300] wlan8189: phase 1 ready pump=fixed lps=2\r\n"
     "[  54.310] wlan8189: iperf server ready port=5001\r\n"
     "[  54.320] wlan8189: iperf window 20 s\r\n"
     "[  74.000] wlan8189: iperf window done\r\n"
     "[  74.100] perf census: A cmd52 n=3\r\n"
-    "[  74.200] perf census: D pump cycles=95 kick=0 timeout=95 busy=90 empty=5 err=0\r\n"
+    "[  74.150] perf census: A card full_drop=+0 hisr=0x00 rxerr=0 rxfovw=0 (base=0x00)\r\n"
+    "[  74.200] perf census: D pump cycles=95 kick=0 timeout=0 hot=95 busy=90 empty=5 err=0 mode=fixed period_ms=10 span_ms=19800 busy_span=90\r\n"
     "[  74.300] wlan8189: rate bssid=14:a3:2f:18:07:2c bitmap=0x01 ramask=0x00000000000fffff bw=1 sgi=1\r\n"
     "[  74.400] wlan8189: ps lps=2 leisure=1 fw_ps=0 cpwm=0 enter=0 leave=0\r\n"
+    "[  74.450] wlan8189: pump policy=fixed period_ms=10\r\n"
     "[  74.500] wlan8189: phase 1 done\r\n"
-    "[  74.600] wlan8189: phase 2 ready lps=0\r\n"
+    "[  74.600] wlan8189: phase 2 ready pump=adaptive lps=2\r\n"
     "[  74.610] wlan8189: iperf server ready port=5001\r\n"
     "[  94.000] wlan8189: phase 2 done\r\n"
-    "[  94.100] wlan8189: phase 3 ready lps=2\r\n"
+    "[  94.100] wlan8189: phase 3 ready pump=fixed lps=2\r\n"
     "[  94.110] wlan8189: iperf server ready port=5001\r\n"
     "[ 114.000] wlan8189: phase 3 done\r\n"
     "[ 114.100] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"
@@ -230,7 +236,12 @@ MUTATIONS = [
     ("diag line dropped", BASE_TRANSCRIPT.replace(
         "wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n", ""), 1),
     ("census snapshot dropped", BASE_TRANSCRIPT.replace(
-        "perf census: A cmd52 n=3\r\n", ""), 1),
+        "perf census: A cmd52 n=3\r\n", "").replace(
+        "perf census: A card full_drop=+0 hisr=0x00 rxerr=0 rxfovw=0 (base=0x00)\r\n", ""), 1),
+    ("card counter dropped", BASE_TRANSCRIPT.replace(
+        "perf census: A card full_drop=+0 hisr=0x00 rxerr=0 rxfovw=0 (base=0x00)\r\n", ""), 1),
+    ("pump readout dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: pump policy=fixed period_ms=10\r\n", ""), 1),
     ("phase machinery dropped", BASE_TRANSCRIPT.replace(
         "wlan8189: phase 3 done\r\n", ""), 1),
     ("rate readout dropped", BASE_TRANSCRIPT.replace(

@@ -26,6 +26,16 @@ void	wlan8189_ps_show(void);
 /* the rate / bandwidth / BA readout (the driver's own station dump) */
 void	wlan8189_rate_show(void);
 
+/* the card's own receive account (REG_RXERR_RPT full-drop counter delta and the
+ * raw HISR word, both read at phase boundaries) */
+void	wlan8189_card_stats_show(void);
+
+/* the SDIO pump's cadence policy: "fixed" holds the idle period between cycles,
+ * "adaptive" services a busy card back-to-back and backs off when it is idle;
+ * show prints the effective policy and the controller's current period */
+void	wlan8189_pump_show(void);
+int	wlan8189_pump_set(const char *policy);
+
 /* the console sink's line accounting (counted in main.c, read by the census) */
 void	wlan8189_census_log_get(unsigned long *in_lines, unsigned long *in_bytes,
 	    unsigned long *out_lines, unsigned long *out_bytes);

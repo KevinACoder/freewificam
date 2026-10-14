@@ -34,6 +34,7 @@
 #include "dwc_mmc.h"
 #include "lkpinetif_seam.h"
 #include "lkpi_census.h"
+#include "linuxkpi_sdio.h"
 
 #include "wlan8189_census.h"
 
@@ -151,6 +152,96 @@ wlan8189_rate_show(void)
 	dump_sta_info(RTW_DBGDUMP, psta);
 }
 
+/* --- the pump cadence (the round-2 lever) --------------------------------- */
+
+/*
+ * The engine's cadence knob, read back as the image's own line: the policy the
+ * phase ran under is part of the measurement's identity, so it prints next to
+ * the numbers it shaped.
+ */
+void
+wlan8189_pump_show(void)
+{
+	unsigned int mode = lkpi_sdio_pump_mode_get();
+
+	printk("wlan8189: pump policy=%s period_ms=%u\n",
+	    (mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ? "adaptive" : "fixed",
+	    lkpi_sdio_pump_period_get());
+}
+
+int
+wlan8189_pump_set(const char *policy)
+{
+
+	if (strcmp(policy, "fixed") == 0)
+		lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_FIXED);
+	else if (strcmp(policy, "adaptive") == 0)
+		lkpi_sdio_pump_mode_set(LKPI_SDIO_PUMP_MODE_ADAPTIVE);
+	else
+		return -1;
+	return (int)lkpi_sdio_pump_mode_get();
+}
+
+/* --- the card-side receiver account --------------------------------------- */
+
+/*
+ * The card's own receive error counter and the raw HISR word. The counter is
+ * REG_RXERR_RPT (0x0664): the top nibble selects which internal counter the
+ * register shows and the low twenty bits carry it (hal_com_reg.h: RXERR_RPT_SEL
+ * / RXERR_COUNTER_MASK), and the read sequence is the driver's own MP-mode one
+ * (core/rtw_mp.c GetPhyRxPktCounts: select, then read the 32-bit word). Type 15
+ * is RX_FULL_DROP: frames the card dropped because its receive FIFO was full -
+ * the number that separates "the host services too slowly" from "the card
+ * overflows regardless". The HISR byte is read raw because its RXERR and RXFOVW
+ * bits sit outside the driver's interrupt mask and therefore stay set once the
+ * card raised them (a since-boot flag the delta cannot give).
+ * The reads are plain card register accesses through the driver's own wrappers,
+ * i.e. the bus claim is taken for the moment of the read - the caller reads at
+ * phase boundaries, where no traffic is in flight.
+ */
+static u32 card_full_drop_base;
+static u8 card_hisr_base;
+
+static u32
+card_full_drop_read(_adapter *adapter)
+{
+
+	rtw_write32(adapter, REG_RXERR_RPT,
+	    _RXERR_RPT_SEL(RXERR_TYPE_RX_FULL_DROP));
+	return rtw_read32(adapter, REG_RXERR_RPT) & RXERR_COUNTER_MASK;
+}
+
+static void
+card_stats_note_base(_adapter *adapter)
+{
+
+	if (adapter == NULL)
+		return;
+	card_full_drop_base = card_full_drop_read(adapter);
+	card_hisr_base = rtw_read8(adapter, SDIO_REG_HISR);
+}
+
+void
+wlan8189_card_stats_show(void)
+{
+	_adapter *adapter = census_adapter();
+	u32 now;
+	u8 hisr;
+
+	if (adapter == NULL) {
+		printk("perf census: A card adapter=absent\n");
+		return;
+	}
+	now = card_full_drop_read(adapter);
+	hisr = rtw_read8(adapter, SDIO_REG_HISR);
+	/* the delta is masked to the counter's own width, so a wrap inside one
+	 * phase still reads as a count rather than as a borrow */
+	printk("perf census: A card full_drop=+%u hisr=0x%02x rxerr=%u rxfovw=%u (base=0x%02x)\n",
+	    (unsigned)((now - card_full_drop_base) & RXERR_COUNTER_MASK),
+	    (unsigned)hisr, (unsigned)((hisr >> 3) & 1u),
+	    (unsigned)((hisr >> 5) & 1u), (unsigned)card_hisr_base);
+}
+
 /* --- the snapshot --------------------------------------------------------- */
 
 void
@@ -162,6 +253,7 @@ wlan8189_census_reset(void)
 	lkpi_osdep_census_reset();
 	lkpi_fsl_census_reset();
 	dwc_mmc_census_reset();
+	card_stats_note_base(census_adapter());
 }
 
 void
@@ -230,6 +322,8 @@ wlan8189_census_print(void)
 	 * readout below, not an 802.11 input count */
 	printk("perf census: N net80211 linked=0 frames=0 (FullMAC line: the data path never crosses net80211)\n");
 
+	wlan8189_card_stats_show();
 	wlan8189_rate_show();
 	wlan8189_ps_show();
+	wlan8189_pump_show();
 }

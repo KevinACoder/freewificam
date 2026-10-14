@@ -251,25 +251,27 @@ void wlan8189_dataplane_chain( void )
 	    LWIPERF_TCP_PORT_DEFAULT );
 
 	/*
-	 * The phases (see the defines): P1 the built-in policy, P2 power save
-	 * forced off (PS_MODE_ACTIVE), P3 back to the built-in value - equal
-	 * windows in one boot, so the three numbers are comparable. The census
-	 * reset and snapshot bracket each window, and the snapshot prints only
-	 * after it closed (the console at 115200 would drag a measurement).
+	 * The phases (see the defines): P1 the pump at its fixed cadence, P2 the
+	 * adaptive cadence, P3 back to fixed - equal windows in one boot, so the
+	 * three numbers are comparable and the middle one carries the round-2
+	 * treatment. The policy is set explicitly per phase, so the same pair is
+	 * measured whether or not the engine's own default has been flipped; power
+	 * save stays at the driver's built-in policy throughout. The census reset
+	 * and snapshot bracket each window, and the snapshot prints only after it
+	 * closed (the console at 115200 would drag a measurement).
 	 */
 	{
-		int ps_default = wlan8189_ps_get();
+		static const char *const phase_policy[WLAN8189_IPERF_PHASES] = {
+			"fixed", "adaptive", "fixed"
+		};
 		unsigned int phase;
 
 		for( phase = 1U; phase <= WLAN8189_IPERF_PHASES; phase++ ) {
-			if( phase == 2U )
-				(void)wlan8189_ps_set( 0 );
-			else if( phase == 3U )
-				(void)wlan8189_ps_set( ps_default );
+			(void)wlan8189_pump_set( phase_policy[phase - 1U] );
 
 			wlan8189_census_reset();
-			LOG_ANCHOR( "wlan8189: phase %u ready lps=%d\n", phase,
-			    wlan8189_ps_get() );
+			LOG_ANCHOR( "wlan8189: phase %u ready pump=%s lps=%d\n", phase,
+			    phase_policy[phase - 1U], wlan8189_ps_get() );
 			LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 			    LWIPERF_TCP_PORT_DEFAULT );
 			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
