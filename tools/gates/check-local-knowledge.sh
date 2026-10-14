@@ -110,6 +110,8 @@ components/linuxkpi/linuxkpi_cfg80211.h
 components/linuxkpi/linuxkpi_compat.c
 components/linuxkpi/linuxkpi_netdev.c
 components/linuxkpi/linuxkpi_osdep.c
+components/linuxkpi/lkpi_census.c
+components/linuxkpi/lkpi_census.h
 components/linuxkpi/lkpi_rxtrace.c
 components/linuxkpi/lkpi_rxtrace.h
 components/linuxkpi/linuxkpi_txq.c

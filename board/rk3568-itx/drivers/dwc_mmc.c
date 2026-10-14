@@ -98,6 +98,48 @@ static void dwc_mmc_cru_write(uintptr_t reg, uint32_t mask, uint32_t val)
 	mmio_wr32(reg, ((mask & 0xffffu) << 16) | (val & mask));
 }
 
+/* --- census --------------------------------------------------------------- */
+
+#ifdef CONFIG_LKPI_CENSUS
+static struct dwc_mmc_census dwc_mmc_census_state;
+
+static uint64_t
+dwc_mmc_census_now(void)
+{
+	uint64_t freq = (uint64_t)gtimer_freq_get();
+
+	if (freq == 0u)
+		return 0u;
+	return (gtimer_count_get() * 1000000000ULL) / freq;
+}
+
+static void
+dwc_mmc_census_note_wait(uint32_t *polls, uint64_t *ns, uint64_t *max_ns,
+    uint32_t iters, uint64_t t0, uint64_t t1)
+{
+
+	*polls += iters;
+	*ns += t1 - t0;
+	if ((t1 - t0) > *max_ns)
+		*max_ns = t1 - t0;
+}
+
+void
+dwc_mmc_census_reset(void)
+{
+
+	(void)memset(&dwc_mmc_census_state, 0, sizeof(dwc_mmc_census_state));
+}
+
+void
+dwc_mmc_census_get(struct dwc_mmc_census *out)
+{
+
+	if (out != NULL)
+		*out = dwc_mmc_census_state;
+}
+#endif	/* CONFIG_LKPI_CENSUS */
+
 /* --- CRU: gates, reset release, clock source ------------------------------ */
 
 static void dwc_mmc_cru_clock_init(struct dwc_mmc *hc)
@@ -347,6 +389,9 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	uintptr_t base = hc->cfg.base;
 	uint32_t mask = 0U;
 	uint32_t loop;
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0, t1;
+#endif
 
 	/* the data path must be idle before a command may use it */
 	loop = DWC_MMC_CMD_POLLS;
@@ -367,6 +412,9 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	mmio_wr32(base + DWC_MMC_CMD, hc->last_cmd);
 
 	loop = DWC_MMC_CMD_POLLS;
+#ifdef CONFIG_LKPI_CENSUS
+	t0 = dwc_mmc_census_now();
+#endif
 	do {
 		mask = mmio_rd32(base + DWC_MMC_RINTSTS);
 		if ((mask & DWC_MMC_INT_CDONE) != 0U) {
@@ -374,6 +422,13 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 		}
 		dwc_mmc_udelay(DWC_MMC_POLL_US);
 	} while (--loop != 0U);
+#ifdef CONFIG_LKPI_CENSUS
+	t1 = dwc_mmc_census_now();
+	dwc_mmc_census_note_wait(&dwc_mmc_census_state.cmd_polls,
+	    &dwc_mmc_census_state.cmd_wait_ns,
+	    &dwc_mmc_census_state.cmd_wait_max_ns,
+	    DWC_MMC_CMD_POLLS - loop, t0, t1);
+#endif
 
 	if (loop == 0U) {
 		LOG_ERROR("dwc_mmc: CMD%u timed out (rintsts=0x%x)\n", cmd->index, mask);
@@ -574,6 +629,11 @@ static int dwc_mmc_wait_idmac_rx(struct dwc_mmc *hc)
 	uintptr_t base = hc->cfg.base;
 	uint32_t idsts = 0U;
 	uint32_t loop = DWC_MMC_DATA_POLLS;
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0, t1;
+
+	t0 = dwc_mmc_census_now();
+#endif
 
 	do {
 		idsts = mmio_rd32(base + DWC_MMC_IDSTS);
@@ -583,6 +643,13 @@ static int dwc_mmc_wait_idmac_rx(struct dwc_mmc *hc)
 		}
 		if ((idsts & DWC_MMC_IDMAC_INT_RI) != 0U) {
 			mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
+#ifdef CONFIG_LKPI_CENSUS
+			t1 = dwc_mmc_census_now();
+			dwc_mmc_census_note_wait(&dwc_mmc_census_state.idmac_polls,
+			    &dwc_mmc_census_state.idmac_wait_ns,
+			    &dwc_mmc_census_state.idmac_wait_max_ns,
+			    DWC_MMC_DATA_POLLS - loop, t0, t1);
+#endif
 			return DWC_MMC_OK;
 		}
 		dwc_mmc_udelay(DWC_MMC_POLL_US);
@@ -597,6 +664,11 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 	uintptr_t base = hc->cfg.base;
 	uint32_t mask = 0U;
 	uint32_t loop = DWC_MMC_DATA_POLLS;
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0, t1;
+
+	t0 = dwc_mmc_census_now();
+#endif
 
 	do {
 		mask = mmio_rd32(base + DWC_MMC_RINTSTS);
@@ -629,6 +701,14 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 
 		dwc_mmc_udelay(DWC_MMC_POLL_US);
 	} while (--loop != 0U);
+
+#ifdef CONFIG_LKPI_CENSUS
+	t1 = dwc_mmc_census_now();
+	dwc_mmc_census_note_wait(&dwc_mmc_census_state.data_polls,
+	    &dwc_mmc_census_state.data_wait_ns,
+	    &dwc_mmc_census_state.data_wait_max_ns,
+	    DWC_MMC_DATA_POLLS - loop, t0, t1);
+#endif
 
 	if (loop == 0U) {
 		LOG_ERROR("dwc_mmc: CMD%u data timeout (rintsts=0x%x r5=0x%x)\n",
@@ -841,6 +921,19 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	} else {
 		ret = dwc_mmc_send_command(hc, cmd);
 	}
+
+#ifdef CONFIG_LKPI_CENSUS
+	dwc_mmc_census_state.transfers++;
+	if (cmd->data != NULL) {
+		dwc_mmc_census_state.with_data++;
+		if (cmd->data->write)
+			dwc_mmc_census_state.tx_bytes += cmd->data->len;
+		else
+			dwc_mmc_census_state.rx_bytes += cmd->data->len;
+	}
+	if (ret != DWC_MMC_OK)
+		dwc_mmc_census_state.errors++;
+#endif
 
 	/*
 	 * A failed transfer leaves the controller's data and command state machines

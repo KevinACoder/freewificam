@@ -38,6 +38,10 @@
 
 #include "linuxkpi_core.h"
 
+#ifdef CONFIG_LKPI_CENSUS
+#include "lkpi_census.h"
+#endif
+
 #include "os/cmsis2/cmsis2.h"
 
 /*
@@ -279,9 +283,48 @@ yield(void)
 /* the counting semaphore (driver: osdep_service.c:1241 up, :1268 down)  */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The census this file contributes: the waiting takes of the counting
+ * semaphore and the ticks their empty polls spin on. This port has no wait
+ * queue, so an empty take sleeps one tick and re-checks - the iteration count
+ * is how long a woken thread can lag behind the release that woke it.
+ */
+#ifdef CONFIG_LKPI_CENSUS
+struct lkpi_osdep_census {
+	uint32_t	down_calls;
+	uint64_t	down_iters;
+	uint64_t	down_spent_ns;
+	uint64_t	down_max_ns;
+};
+
+static struct lkpi_osdep_census lkpi_osdep_census_state;
+
+void
+lkpi_osdep_census_reset(void)
+{
+
+	(void)memset(&lkpi_osdep_census_state, 0, sizeof(lkpi_osdep_census_state));
+}
+
+void
+lkpi_osdep_census_print(void)
+{
+	struct lkpi_osdep_census *c = &lkpi_osdep_census_state;
+
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: D sem down n=%u iters=%llu spent_us=%llu max_us=%llu\n",
+	    c->down_calls, c->down_iters, c->down_spent_ns / 1000u,
+	    c->down_max_ns / 1000u);
+}
+#endif	/* CONFIG_LKPI_CENSUS */
+
 int
 down_interruptible(struct semaphore *sem)
 {
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0 = lkpi_census_now_ns();
+	uint64_t iters = 0u;
+#endif
 
 	/*
 	 * The face's semaphore is a count and a lock slot; this port keeps the
@@ -298,10 +341,24 @@ down_interruptible(struct semaphore *sem)
 		if (sem->count > 0) {
 			sem->count--;
 			lkpi_spin_unlock_irqrestore(&sem->lock, flags);
+#ifdef CONFIG_LKPI_CENSUS
+			{
+				uint64_t spent = lkpi_census_now_ns() - t0;
+
+				lkpi_osdep_census_state.down_calls++;
+				lkpi_osdep_census_state.down_iters += iters;
+				lkpi_osdep_census_state.down_spent_ns += spent;
+				if (spent > lkpi_osdep_census_state.down_max_ns)
+					lkpi_osdep_census_state.down_max_ns = spent;
+			}
+#endif
 			return 0;
 		}
 		lkpi_spin_unlock_irqrestore(&sem->lock, flags);
 		(void)osDelay(1);
+#ifdef CONFIG_LKPI_CENSUS
+		iters++;
+#endif
 	}
 }
 

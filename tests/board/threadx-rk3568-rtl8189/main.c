@@ -68,11 +68,43 @@ void wlan8189_wpa_obs_init(void);
 static char wlan8189_sink_sig[SINK_SIG_LEN];
 static unsigned int wlan8189_sink_repeats;
 
+/*
+ * The census's log-volume account: how much the driver world asked the console
+ * to print, and how much actually went to the board log. The difference is the
+ * console's own filtering (level, repeated-line folding); the emitted bytes are
+ * what the 115200 line has to carry - the wall-clock side of the log-level
+ * candidate. Counted only in census images.
+ */
+#ifdef CONFIG_LKPI_CENSUS
+static unsigned long wlan8189_log_in_lines;
+static unsigned long wlan8189_log_in_bytes;
+static unsigned long wlan8189_log_out_lines;
+static unsigned long wlan8189_log_out_bytes;
+
+void
+wlan8189_census_log_get(unsigned long *in_lines, unsigned long *in_bytes,
+    unsigned long *out_lines, unsigned long *out_bytes)
+{
+	if (in_lines != NULL)
+		*in_lines = wlan8189_log_in_lines;
+	if (in_bytes != NULL)
+		*in_bytes = wlan8189_log_in_bytes;
+	if (out_lines != NULL)
+		*out_lines = wlan8189_log_out_lines;
+	if (out_bytes != NULL)
+		*out_bytes = wlan8189_log_out_bytes;
+}
+#endif	/* CONFIG_LKPI_CENSUS */
+
 static void wlan8189_sink_collapse(ulog_level_t level, const char *line)
 {
 	char sig[SINK_SIG_LEN];
 	size_t i = 0;
 
+#ifdef CONFIG_LKPI_CENSUS
+	wlan8189_log_in_lines++;
+	wlan8189_log_in_bytes += (unsigned long)strlen(line) + 1u;
+#endif
 	while (line[i] != '\0' && i + 1 < sizeof(sig)) {
 		sig[i] = line[i];
 		i++;
@@ -86,6 +118,10 @@ static void wlan8189_sink_collapse(ulog_level_t level, const char *line)
 		wlan8189_sink_repeats = 0;
 		memcpy(wlan8189_sink_sig, sig, sizeof(sig));
 	}
+#ifdef CONFIG_LKPI_CENSUS
+	wlan8189_log_out_lines++;
+	wlan8189_log_out_bytes += (unsigned long)strlen(line) + 1u;
+#endif
 	log_emit(level, "lkpi: %s\n", line);
 }
 

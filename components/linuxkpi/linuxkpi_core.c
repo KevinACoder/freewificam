@@ -29,6 +29,10 @@
 #include "linuxkpi_core.h"
 #include "linuxkpi_impl.h"
 
+#ifdef CONFIG_LKPI_CENSUS
+#include "lkpi_census.h"
+#endif
+
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/interrupt.h>
@@ -43,6 +47,61 @@ void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line))
 {
 	lkpi_sink = sink;
 }
+
+#ifdef CONFIG_LKPI_CENSUS
+/*
+ * The census this core contributes: the delay primitives' call counts, the
+ * amounts they were asked for, and the time they actually spent - with the
+ * callers of the ones that can sleep away a whole tick (a sub-millisecond
+ * request costs one 1 kHz tick here; a millisecond sleep was granted as asked).
+ * The caller tables answer the follow-up question: which code path is sleeping,
+ * by return address, mapped back to a symbol offline.
+ */
+struct lkpi_core_census {
+	uint32_t	udelay_calls;
+	uint64_t	udelay_req_us;
+	struct lkpi_census_sites	udelay_where;
+	uint32_t	mdelay_calls;
+	uint64_t	mdelay_req_ms;
+	uint32_t	usleep_calls;
+	uint64_t	usleep_req_us;
+	struct lkpi_census_sites	usleep_where;
+	uint32_t	msleep_calls;
+	uint64_t	msleep_req_ms;
+	struct lkpi_census_sites	msleep_where;
+	uint32_t	printf_calls;
+	uint64_t	printf_bytes;
+};
+
+static struct lkpi_core_census lkpi_core_census_state;
+
+void
+lkpi_core_census_reset(void)
+{
+
+	(void)memset(&lkpi_core_census_state, 0, sizeof(lkpi_core_census_state));
+}
+
+void
+lkpi_core_census_print(void)
+{
+	struct lkpi_core_census *c = &lkpi_core_census_state;
+
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D udelay n=%u req_us=%llu\n",
+	    c->udelay_calls, c->udelay_req_us);
+	lkpi_census_sites_print("perf census: D udelay_spent", &c->udelay_where);
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D usleep n=%u req_us=%llu\n",
+	    c->usleep_calls, c->usleep_req_us);
+	lkpi_census_sites_print("perf census: D usleep_spent", &c->usleep_where);
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D msleep n=%u req_ms=%llu\n",
+	    c->msleep_calls, c->msleep_req_ms);
+	lkpi_census_sites_print("perf census: D msleep_spent", &c->msleep_where);
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D mdelay n=%u req_ms=%llu\n",
+	    c->mdelay_calls, c->mdelay_req_ms);
+	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D log printf=%u bytes=%llu\n",
+	    c->printf_calls, c->printf_bytes);
+}
+#endif	/* CONFIG_LKPI_CENSUS */
 
 /*
  * ------------------------------------------------------------------ */
@@ -265,6 +324,11 @@ static int lkpi_vlog(ulog_level_t level, const char *fmt, va_list ap)
 		return 0;
 
 	n = lkpi_vformat(line, sizeof(line), fmt, ap, 0);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_core_census_state.printf_calls++;
+	if (n > 0)
+		lkpi_core_census_state.printf_bytes += (uint64_t)n;
+#endif
 	lkpi_sink(level, line);
 	return n;
 }
@@ -500,34 +564,77 @@ ktime_t lkpi_ktime_get(void)
  */
 void lkpi_udelay(unsigned int us)
 {
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0;
+#endif
+
 	if (us == 0)
 		return;
+#ifdef CONFIG_LKPI_CENSUS
+	t0 = lkpi_census_now_ns();
+#endif
 	(void)osDelay(1);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_core_census_state.udelay_calls++;
+	lkpi_core_census_state.udelay_req_us += us;
+	lkpi_census_sites_add(&lkpi_core_census_state.udelay_where,
+	    __builtin_return_address(0), lkpi_census_now_ns() - t0);
+#endif
 }
 
 void lkpi_mdelay(unsigned int ms)
 {
+
 	if (ms == 0)
 		return;
 	(void)osDelay(ms);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_core_census_state.mdelay_calls++;
+	lkpi_core_census_state.mdelay_req_ms += ms;
+#endif
 }
 
 void lkpi_usleep_range(unsigned int min_us, unsigned int max_us)
 {
 	unsigned int ms;
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0;
+#endif
 
 	(void)max_us;
 	if (min_us == 0)
 		return;
 	ms = (min_us + 999u) / 1000u;
+#ifdef CONFIG_LKPI_CENSUS
+	t0 = lkpi_census_now_ns();
+#endif
 	(void)osDelay(ms == 0 ? 1u : ms);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_core_census_state.usleep_calls++;
+	lkpi_core_census_state.usleep_req_us += min_us;
+	lkpi_census_sites_add(&lkpi_core_census_state.usleep_where,
+	    __builtin_return_address(0), lkpi_census_now_ns() - t0);
+#endif
 }
 
 void lkpi_msleep(unsigned int ms)
 {
+#ifdef CONFIG_LKPI_CENSUS
+	uint64_t t0;
+#endif
+
 	if (ms == 0)
 		return;
+#ifdef CONFIG_LKPI_CENSUS
+	t0 = lkpi_census_now_ns();
+#endif
 	(void)osDelay(ms);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_core_census_state.msleep_calls++;
+	lkpi_core_census_state.msleep_req_ms += ms;
+	lkpi_census_sites_add(&lkpi_core_census_state.msleep_where,
+	    __builtin_return_address(0), lkpi_census_now_ns() - t0);
+#endif
 }
 
 /* ------------------------------------------------------------------ */

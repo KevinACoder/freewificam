@@ -61,7 +61,9 @@ CASES = [
 #:                   association and the completed 4-way
 #:   wlan8189-       the case's own lines (tests/.../tests/wlan8189_dataplane.c):
 #:   dataplane       the interface bring-up, the DHCP lease, the ping window, the
-#:                   netif adapter's diagnostic counters, and the iperf server
+#:                   netif adapter's diagnostic counters, the iperf server, and
+#:                   the census instrumentation (the three measurement phases,
+#:                   their `perf census:` snapshots, and the rate/BA readout)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "wlan8189-probe": [
@@ -86,8 +88,20 @@ ANCHORS = {
         r"wlan8189: ping window done",
         r"wlan8189: diag rx=\d+ eapol=\d+ tx=\d+ fail=\d+",
         r"wlan8189: iperf server ready port=5001",
+        r"wlan8189: phase 1 ready",
+        r"wlan8189: phase 3 done",
+        r"perf census: A ",
+        r"wlan8189: rate ",
     ],
 }
+
+#: The census and phase families: every `perf census:` line is a one-boot
+#: ledger line and every phase line marks a measurement window, so the log
+#: plane must never fold or filter them away (they feed the round's RUN as
+#: well as the judge). Collected by tools/gates/log-anchors.py by name.
+CENSUS_LINE_RE = re.compile(r"perf census: ")
+PHASE_LINE_RE = re.compile(r"wlan8189: phase \d")
+PS_LINE_RE = re.compile(r"wlan8189: ps ")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STEPS_PATH = os.path.join(HERE, "steps.tsv")
@@ -140,7 +154,22 @@ BASE_TRANSCRIPT = (
     "[  54.000] wlan8189: ping window done\r\n"
     "[  54.100] wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n"
     "[  54.200] wlan8189: iperf server ready port=5001\r\n"
-    "[  54.300] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"
+    "[  54.300] wlan8189: phase 1 ready lps=2\r\n"
+    "[  54.310] wlan8189: iperf server ready port=5001\r\n"
+    "[  54.320] wlan8189: iperf window 20 s\r\n"
+    "[  74.000] wlan8189: iperf window done\r\n"
+    "[  74.100] perf census: A cmd52 n=3\r\n"
+    "[  74.200] perf census: D pump cycles=95 kick=0 timeout=95 busy=90 empty=5 err=0\r\n"
+    "[  74.300] wlan8189: rate bssid=14:a3:2f:18:07:2c bitmap=0x01 ramask=0x00000000000fffff bw=1 sgi=1\r\n"
+    "[  74.400] wlan8189: ps lps=2 leisure=1 fw_ps=0 cpwm=0 enter=0 leave=0\r\n"
+    "[  74.500] wlan8189: phase 1 done\r\n"
+    "[  74.600] wlan8189: phase 2 ready lps=0\r\n"
+    "[  74.610] wlan8189: iperf server ready port=5001\r\n"
+    "[  94.000] wlan8189: phase 2 done\r\n"
+    "[  94.100] wlan8189: phase 3 ready lps=2\r\n"
+    "[  94.110] wlan8189: iperf server ready port=5001\r\n"
+    "[ 114.000] wlan8189: phase 3 done\r\n"
+    "[ 114.100] CASE threadx-rk3568-rtl8189/wlan8189-dataplane PASS\r\n"
     "[  56.000] total function 9\r\n"
     "[  56.010] total variable 2\r\n"
     "[  56.020] wlan8189: attached=1 bss=17\r\n"
@@ -200,6 +229,13 @@ MUTATIONS = [
         "wlan8189: dhcp bound ip=192.168.0.211/24 gw=192.168.0.1\r\n", ""), 1),
     ("diag line dropped", BASE_TRANSCRIPT.replace(
         "wlan8189: diag rx=42 eapol=8 tx=13 fail=0\r\n", ""), 1),
+    ("census snapshot dropped", BASE_TRANSCRIPT.replace(
+        "perf census: A cmd52 n=3\r\n", ""), 1),
+    ("phase machinery dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: phase 3 done\r\n", ""), 1),
+    ("rate readout dropped", BASE_TRANSCRIPT.replace(
+        "wlan8189: rate bssid=14:a3:2f:18:07:2c bitmap=0x01 "
+        "ramask=0x00000000000fffff bw=1 sgi=1\r\n", ""), 1),
     ("ping replies starved", BASE_TRANSCRIPT.replace(
         "ping: recv 192.168.0.1 2 ms\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(

@@ -32,6 +32,13 @@
 #include <linux/if_ether.h>
 #include <linux/netdevice.h>
 
+#ifdef CONFIG_LKPI_CENSUS
+#include "lkpi_census.h"
+#define	LKPINETIF_NOW_NS()	lkpi_census_now_ns()
+#else
+#define	LKPINETIF_NOW_NS()	((uint64_t)0u)
+#endif
+
 #include "lkpinetif_seam.h"
 
 /* the interface this adapter serves */
@@ -93,6 +100,7 @@ int
 lkpinetif_tx_frame(const uint8_t *frame, size_t len)
 {
 	struct sk_buff *skb;
+	uint64_t t0, t1;
 
 	if (frame == NULL || len == 0)
 		return -EINVAL;
@@ -114,8 +122,14 @@ lkpinetif_tx_frame(const uint8_t *frame, size_t len)
 	}
 	memcpy(skb->data, frame, len);
 	g_diag.tx_frames++;
+	g_diag.tx_bytes += (unsigned long)len;
+	t0 = LKPINETIF_NOW_NS();
 	/* the driver's entry owns the skb from here on (see the file's note) */
 	(void)g_dev->netdev_ops->ndo_start_xmit(skb, g_dev);
+	t1 = LKPINETIF_NOW_NS();
+	g_diag.tx_ndo_ns += (unsigned long long)(t1 - t0);
+	if ((unsigned long long)(t1 - t0) > g_diag.tx_ndo_max_ns)
+		g_diag.tx_ndo_max_ns = (unsigned long long)(t1 - t0);
 	return 0;
 }
 
@@ -137,6 +151,7 @@ lkpi_netdev_rx(struct sk_buff *skb)
 	const uint8_t *frame;
 	size_t len;
 	int ret;
+	uint64_t t0, t1;
 
 	if (skb == NULL)
 		return;
@@ -184,10 +199,18 @@ lkpi_netdev_rx(struct sk_buff *skb)
 	/* lwIP takes a whole ethernet frame, header included */
 	frame = skb->data - ETH_HLEN;
 	len = (size_t)skb->len + ETH_HLEN;
+	t0 = LKPINETIF_NOW_NS();
 	ret = lkpinetif_deliver(frame, len);
-	if (ret == -1)
+	t1 = LKPINETIF_NOW_NS();
+	if (ret == -1) {
 		g_diag.rx_no_netif++;
-	else if (ret != 0)
+	} else if (ret != 0) {
 		g_diag.rx_input_fail++;
+	} else {
+		g_diag.rx_bytes += (unsigned long)len;
+		g_diag.rx_deliver_ns += (unsigned long long)(t1 - t0);
+		if ((unsigned long long)(t1 - t0) > g_diag.rx_deliver_max_ns)
+			g_diag.rx_deliver_max_ns = (unsigned long long)(t1 - t0);
+	}
 	kfree_skb(skb);
 }
