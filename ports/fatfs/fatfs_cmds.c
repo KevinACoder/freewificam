@@ -28,6 +28,7 @@
 
 #include "csh.h"
 
+#include "blkdev.h"
 #include "ff.h"
 #include "fs.h"
 
@@ -104,9 +105,13 @@ static void cmd_info(chry_shell_t *csh)
 	uint64_t total = 0;
 	uint64_t freeb = 0;
 	const char *type;
+	const char *device = blkdev_name(STOR_VOLUME);
 
+	/* The device's own name, asked of the registry rather than assumed: which
+	 * storage driver this image carries is a build-time decision, and a report
+	 * that named the wrong one would be a lie in the round's evidence. */
 	csh_printf(csh, "stor: volume %u, device %s, sector %lu\r\n",
-		   (unsigned)STOR_VOLUME, "nvme0",
+		   (unsigned)STOR_VOLUME, (device != NULL) ? device : "?",
 		   (unsigned long)fs_sector_size());
 
 	if (!fs_is_mounted(STOR_VOLUME)) {

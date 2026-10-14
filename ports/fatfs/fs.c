@@ -44,7 +44,7 @@ int fs_init(void)
 		return 0;
 	}
 
-	if (blkdev_bind_nvme() != BLKDEV_OK) {
+	if (blkdev_bind() != BLKDEV_OK) {
 		return -1;
 	}
 

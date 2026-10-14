@@ -76,10 +76,12 @@ typedef struct {
  * (static data). */
 int blkdev_register(const BLKDEV_OPS *ops, void *ctx, const char *name);
 
-/* Bind the board's NVMe controller 0 as device 0. Idempotent; returns BLKDEV_OK
+/* Bind this image's storage backend as device 0. Idempotent; returns BLKDEV_OK
  * when the controller came up and was registered, BLKDEV_ERR_NODEV when it did
- * not. This is the single place the storage driver is named. */
-int blkdev_bind_nvme(void);
+ * not. Which driver that is is a build-time decision made where the driver is
+ * named (blkdev.c): the images that carry a storage line each carry exactly one
+ * of them, and nothing above this seam knows which. */
+int blkdev_bind(void);
 
 /* --- consumption (diskio and any other reader) ----------------------------- */
 
