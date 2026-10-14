@@ -170,6 +170,41 @@ def die(fmt: str, *a) -> int:
     return 2
 
 
+#: options that take a value, so that a positional-word scan can tell a value
+#: from a command. Anything not listed is a switch.
+FLAGS_WITH_VALUE = {
+    "--host", "--iface", "--channel", "--width", "--out", "--duration",
+    "--ssid", "--psk", "--bssid", "--addr", "--lease", "--workdir", "--peer",
+    "--port", "--seconds", "--tool", "--bandwidth", "--serial-hub", "--phases",
+    "--deadline", "--sta", "--field-cache", "--wpa-conf",
+}
+
+
+def positional(argv: list[str]) -> list[str]:
+    """The command words in argv, with options and their values removed.
+
+    Options may appear before, after or between the words, so the handlers
+    cannot index argv directly; they ask for the words instead.
+    """
+
+    words = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith("--"):
+            if "=" not in a and a in FLAGS_WITH_VALUE:
+                i += 2
+                continue
+            i += 1
+            continue
+        if a.startswith("-") and len(a) > 1:
+            i += 1
+            continue
+        words.append(a)
+        i += 1
+    return words
+
+
 def arg_value(argv: list[str], name: str, default: str | None = None) -> str | None:
     """The value of --name (either form), or the default."""
 
@@ -430,15 +465,23 @@ def capture_workpath(r: Runner, tag: str) -> str:
     widens, and the artifact is copied to the caller's path afterwards.
     """
 
-    work = "/var/tmp/prober-%s-%d-%d" % (tag, os.getpid(), int(time.time()))
-    if not r.dry_run:
-        # One command, so the privilege applies to all of it, and the mode is
-        # set at creation: the capture engine drops to an unprivileged user
-        # after opening the radio, and needs the directory writable by it.
-        r.run("mkdir -m 777 -p %s" % shlex.quote(work), check=False, priv=True)
-        if not r.ok("test -w %s" % shlex.quote(work)):
-            warn("capture directory %s is not writable; the capture will fail",
-                 work)
+    name = "prober-%s-%d-%d" % (tag, os.getpid(), int(time.time()))
+    if r.dry_run:
+        return "<work>/%s/capture.pcapng" % name
+    if r.host:
+        # Asked on the host, never assumed: the working directory has to be
+        # there, and naming it from here would describe the wrong machine.
+        work = r.out("mktemp -d -t %s-XXXXXX" % name, check=False).strip()
+        if not work:
+            warn("could not create a working directory on %s", r.host)
+            work = name
+    else:
+        base = os.environ.get("PROBER_WORK_BASE") or tempfile.gettempdir()
+        work = tempfile.mkdtemp(prefix=name + "-", dir=base)
+    # The capture engine opens the radio with privilege and then drops to an
+    # unprivileged user, so the directory has to be writable by that user and
+    # not only by whoever started the capture.
+    r.run("chmod 777 %s" % shlex.quote(work), check=False, priv=True)
     return work + "/capture.pcapng"
 
 
@@ -600,7 +643,8 @@ def cmd_radios(argv: list[str], r: Runner) -> int:
 # --------------------------------------------------------------------------
 
 def cmd_mon(argv: list[str], r: Runner) -> int:
-    action = argv[1] if len(argv) > 1 else ""
+    words = positional(argv)
+    action = words[1] if len(words) > 1 else ""
     iface = arg_value(argv, "--iface")
     if action in ("up", "down", "status") and not iface:
         return die("mon %s needs --iface", action)
@@ -675,7 +719,8 @@ def cmd_mon(argv: list[str], r: Runner) -> int:
 # --------------------------------------------------------------------------
 
 def cmd_sta(argv: list[str], r: Runner) -> int:
-    action = argv[1] if len(argv) > 1 else ""
+    words = positional(argv)
+    action = words[1] if len(words) > 1 else ""
     iface = arg_value(argv, "--iface")
     if action in ("up", "down") and not iface:
         return die("sta %s needs --iface", action)
@@ -741,7 +786,8 @@ def dnsmasq_conf(iface: str, addr: str, lease: str | None) -> str:
 
 
 def cmd_ap(argv: list[str], r: Runner) -> int:
-    action = argv[1] if len(argv) > 1 else ""
+    words = positional(argv)
+    action = words[1] if len(words) > 1 else ""
 
     if action == "down":
         r.run("pkill -f 'hostapd .*prober-ap'", check=False, priv=True)
@@ -1160,9 +1206,10 @@ def fields_available(r: Runner, cache: str | None) -> dict[str, str]:
 
 
 def cmd_analyze(argv: list[str], r: Runner) -> int:
-    if len(argv) < 2 or argv[1].startswith("-"):
+    words = positional(argv)
+    if len(words) < 2:
         return die("usage: prober.py analyze <pcap> [--sta <mac>] [--out <json>]")
-    pcap = argv[1]
+    pcap = words[1]
     sta = (arg_value(argv, "--sta") or "").lower()
     out_path = arg_value(argv, "--out")
 
@@ -1565,11 +1612,15 @@ def main(argv: list[str]) -> int:
     if not argv or has(argv, "--help") or has(argv, "-h"):
         out(__doc__.strip())
         return 0
-    if argv[0] == "selftest":
+
+    words = positional(argv)
+    if not words:
+        return die("no command given (see --help)")
+    cmd = words[0]
+    if cmd == "selftest":
         return selftest()
 
     r = make_runner(argv)
-    cmd = argv[0]
     if cmd == "radios":
         return cmd_radios(argv, r)
     if cmd in ("mon", "sta", "ap"):
