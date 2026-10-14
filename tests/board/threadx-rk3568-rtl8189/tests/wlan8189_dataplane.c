@@ -70,7 +70,7 @@ struct wiphy *lkpicfg_wiphy(void);
  * throughput round is judged on), and the census snapshot prints after each
  * window closes. */
 #define WLAN8189_IPERF_WINDOW_MS	20000U
-#define WLAN8189_IPERF_PHASES		4U
+#define WLAN8189_IPERF_PHASES		3U
 
 static struct netif g_netif;
 
@@ -299,23 +299,25 @@ void wlan8189_dataplane_chain( void )
 	    WLAN8189_UDP_SINK_PORT );
 
 	/*
-	 * The phases (see the defines): a two-transport sheet over one boot - the
-	 * pump cadence (fixed / adaptive hot) against the client's transport (TCP,
-	 * which the sender paces by our acknowledgements, and UDP, which it does
-	 * not): P1 fixed+TCP, P2 hot+TCP, P3 hot+UDP, P4 fixed+UDP. The pump
-	 * policy is set explicitly per phase, so the same cells are measured
-	 * whether or not the engine's own default has been flipped; the card's
-	 * aggregation threshold is re-asserted at the driver's stock value, and
-	 * power save stays at the driver's built-in policy. The census reset and
-	 * snapshot bracket each window, and the snapshot prints only after it
-	 * closed (the console at 115200 would drag a measurement).
+	 * The phases (see the defines): P1 the pump at its fixed cadence, P2 the
+	 * adaptive (hot-hold) cadence, P3 back to fixed - equal windows in one
+	 * boot, so the three numbers are comparable and the middle one carries the
+	 * round's treatment. The pump policy is set explicitly per phase, so the
+	 * same pair is measured whether or not the engine's own default has been
+	 * flipped; the card's aggregation threshold is re-asserted at the driver's
+	 * stock value, and power save stays at the driver's built-in policy. The
+	 * UDP sink stays bound but unused here - its flood cell is the
+	 * two-transport run's, where a later phase wedged the board
+	 * (runs/20261014-sdio-p2-udp/RUN.md records it as its own finding). The
+	 * census reset and snapshot bracket each window, and the snapshot prints
+	 * only after it closed (the console at 115200 would drag a measurement).
 	 */
 	{
 		static const char *const phase_policy[WLAN8189_IPERF_PHASES] = {
-			"fixed", "adaptive", "adaptive", "fixed"
+			"fixed", "adaptive", "fixed"
 		};
 		static const char *const phase_client[WLAN8189_IPERF_PHASES] = {
-			"tcp", "tcp", "udp", "udp"
+			"tcp", "tcp", "tcp"
 		};
 		unsigned int phase;
 

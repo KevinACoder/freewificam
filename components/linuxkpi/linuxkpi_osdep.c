@@ -285,9 +285,11 @@ yield(void)
 
 /*
  * The census this file contributes: the waiting takes of the counting
- * semaphore and the ticks their empty polls spin on. This port has no wait
- * queue, so an empty take sleeps one tick and re-checks - the iteration count
- * is how long a woken thread can lag behind the release that woke it.
+ * semaphore and the spurious re-checks their parking made. The parking object
+ * below is why an empty take no longer sleeps a tick: a waiter parks on a CMSIS
+ * semaphore the release side wakes, so a woken thread runs as soon as the
+ * releasing thread lets go of the CPU - the tick granularity that used to pace
+ * every driver thread (and the transmit path above all) is gone from this path.
  */
 #ifdef CONFIG_LKPI_CENSUS
 struct lkpi_osdep_census {
@@ -318,6 +320,41 @@ lkpi_osdep_census_print(void)
 }
 #endif	/* CONFIG_LKPI_CENSUS */
 
+/*
+ * The parking objects. One per semaphore that ever waits, attached lazily
+ * under the semaphore's own lock and carried in the face's waiter slot - the
+ * interface's field, reused with this port's meaning (the object never has a
+ * real waiter list here). A release wakes the parked waiter directly; a waiter
+ * that loses a race re-checks the count and parks again. The pool is a fixed
+ * table because the semaphores live inside the driver's control blocks for the
+ * life of the image; when it is full, a take falls back to the interface's
+ * portable shape, sleeping a tick between re-checks (correct, just slow), and
+ * says so once.
+ */
+#ifndef CONFIG_LKPI_SEM_WAKE_MAX
+#define	CONFIG_LKPI_SEM_WAKE_MAX	32
+#endif
+
+static osSemaphoreId_t	lkpi_sem_wakes[CONFIG_LKPI_SEM_WAKE_MAX];
+static unsigned int	lkpi_sem_wake_count;
+
+static osSemaphoreId_t
+lkpi_sem_wake_of(struct semaphore *sem)
+{
+	osSemaphoreId_t wake;
+
+	if (sem->first_waiter != NULL)
+		return (osSemaphoreId_t)sem->first_waiter;
+	if (lkpi_sem_wake_count >= (unsigned int)CONFIG_LKPI_SEM_WAKE_MAX)
+		return NULL;
+	wake = osSemaphoreNew(1u, 0u, NULL);
+	if (wake == NULL)
+		return NULL;
+	lkpi_sem_wakes[lkpi_sem_wake_count++] = wake;
+	sem->first_waiter = (struct semaphore_waiter *)wake;
+	return wake;
+}
+
 int
 down_interruptible(struct semaphore *sem)
 {
@@ -327,15 +364,17 @@ down_interruptible(struct semaphore *sem)
 #endif
 
 	/*
-	 * The face's semaphore is a count and a lock slot; this port keeps the
-	 * count and waits by yielding a tick, because there is no wait-queue
-	 * object to park on and no signal delivery to interrupt the wait. The
-	 * take is the interface's: succeed when the count is positive, consume
-	 * it atomically.
+	 * The face's semaphore is a count and a lock slot; this port adds a parking
+	 * object the release side wakes (first_waiter). The take is the interface's:
+	 * succeed when the count is positive, consume it atomically; otherwise park
+	 * on the wake object and re-check after each wakeup. The interface's
+	 * signal-interruption has no counterpart on this port (no signal delivery),
+	 * so the take always reports success once it has a permit.
 	 */
 	if (sem == NULL)
 		return -EINVAL;
 	for (;;) {
+		osSemaphoreId_t wake;
 		unsigned long long flags = lkpi_spin_lock_irqsave(&sem->lock);
 
 		if (sem->count > 0) {
@@ -354,11 +393,17 @@ down_interruptible(struct semaphore *sem)
 #endif
 			return 0;
 		}
+		wake = lkpi_sem_wake_of(sem);
 		lkpi_spin_unlock_irqrestore(&sem->lock, flags);
-		(void)osDelay(1);
+		if (wake == NULL) {
+			/* the parking table is full: the portable re-check shape */
+			(void)osDelay(1);
 #ifdef CONFIG_LKPI_CENSUS
-		iters++;
+			iters++;
 #endif
+			continue;
+		}
+		(void)osSemaphoreAcquire(wake, osWaitForever);
 	}
 }
 
@@ -366,12 +411,17 @@ void
 up(struct semaphore *sem)
 {
 	unsigned long long flags;
+	osSemaphoreId_t wake = NULL;
 
 	if (sem == NULL)
 		return;
 	flags = lkpi_spin_lock_irqsave(&sem->lock);
+	if (sem->count == 0u && sem->first_waiter != NULL)
+		wake = (osSemaphoreId_t)sem->first_waiter;
 	sem->count++;
 	lkpi_spin_unlock_irqrestore(&sem->lock, flags);
+	if (wake != NULL)
+		(void)osSemaphoreRelease(wake);
 }
 
 int

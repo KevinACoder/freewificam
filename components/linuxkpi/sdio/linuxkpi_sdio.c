@@ -1487,16 +1487,16 @@ lkpi_sdio_pump_start(void)
 	attr.name = "lkpi_sdio_pump";
 	attr.stack_size = LKPI_SDIO_PUMP_STACK;
 	/*
-	 * Below the normal band on purpose: this port creates threads without a
-	 * time slice (os/threadx/cmsis2_threadx.c slot_tx_create, TX_NO_TIME_SLICE),
-	 * so an equal-priority pump would run until it blocks and starve the
-	 * workqueue thread that runs the driver's receive bottom half - the thread
-	 * that recycles the receive buffers the pump is about to ask for. A hot
-	 * pump then finds the buffer queue empty, the driver answers with its 10 ms
-	 * shortage sleep, and that sleep becomes the cadence. Below normal, the
-	 * consumers (bottom half, stack, transmit thread) always preempt the
-	 * producer, and the claim's priority inheritance still lets a drain finish
-	 * promptly when a higher thread wants the bus.
+	 * Below the normal band on purpose: the OS port creates threads without a
+	 * time slice, so an equal-priority pump would run until it blocks and
+	 * starve the workqueue thread that runs the driver's receive bottom half -
+	 * the thread that recycles the receive buffers the pump is about to ask
+	 * for. A hot pump then finds the buffer queue empty, the driver answers
+	 * with its 10 ms shortage sleep, and that sleep becomes the cadence. Below
+	 * normal, the consumers (bottom half, stack, transmit thread) always
+	 * preempt the producer, and the claim's priority inheritance still lets a
+	 * drain finish promptly when a higher thread wants the bus. The port that
+	 * has a time slice may run the pump at the normal band instead.
 	 */
 	attr.priority = osPriorityBelowNormal;
 	c->pump = osThreadNew(lkpi_sdio_pump_entry, c, &attr);
