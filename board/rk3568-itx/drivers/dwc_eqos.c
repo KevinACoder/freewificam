@@ -57,6 +57,7 @@
 
 #include "arch_asm.h"
 #include "cache.h"
+#include "generic_timer.h"
 #include "os/cmsis2/cmsis2.h"
 #include "gicv3.h"
 #include "log.h"
@@ -86,6 +87,23 @@
  * rate a full 64-slot ring drains in under a millisecond, so a couple of
  * milliseconds is generous; longer than that means the link is not moving. */
 #define DWC_EQOS_TX_WAIT_MS	4u
+
+/* RX sweep context. Default (2026-10-17) = the BOTTOM HALF: the ISR signals and
+ * the RX thread runs the sweep, because holding the interrupt across an
+ * O(ring) walk over non-cacheable memory (28 us measured) is what starved the
+ * path - the split measured +24% uplink at zero cost. The interrupt-context
+ * sweep stays reachable as a reverse lever (-DCONFIG_GMAC_RX_BH=0), since every
+ * measurement before 2026-10-17 was taken with it. CONFIG_GMAC_RX_NAPI implies
+ * the bottom half and adds the interrupt mask + budget on top (dwc_eqos_rx_poll). */
+#if !defined(CONFIG_GMAC_RX_BH)
+#define DWC_EQOS_RX_BH		1
+#else
+#define DWC_EQOS_RX_BH		CONFIG_GMAC_RX_BH
+#endif
+#if defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
+#undef DWC_EQOS_RX_BH
+#define DWC_EQOS_RX_BH		1
+#endif
 
 /* Staged received frame (the ISR copies and re-arms immediately - the RX
  * DMA stops on any un-owned slot it laps, so the copy is what keeps the
@@ -118,6 +136,28 @@ struct dwc_eqos_dev {
 	 * walks the whole ring because the DMA laps past software rather
 	 * than stopping at a moving head. */
 	uint8_t   rx_in_flight[DWC_EQOS_RX_DESC_COUNT];
+	/* Sweep cursor: the first slot that may hold a frame the DMA has not
+	 * written back yet. The DMA writes back in ring order, so everything
+	 * from here up to the first descriptor it still owns is complete - the
+	 * bounded walk (CONFIG_GMAC_RX_SCAN=2) starts here and stops there
+	 * instead of probing all 128 slots. Advanced by the sweep only. */
+	unsigned int rx_scan;
+	/* Last slot the sweep re-armed (-1 = none), for the ring snapshot. */
+	int       rx_last_armed;
+	/* Sticky sweep telemetry: what the LAST sweep saw. The phase-boundary
+	 * snapshots cannot see a failure's steady state (traffic stops and the
+	 * 100 ms watchdog drains the ring), so the numbers that explain a
+	 * collapse have to be recorded while it happens. */
+	uint32_t  sw_sweeps;		/* sweeps that ran */
+	uint32_t  sw_clear_seen;	/* OWN-clear slots this sweep saw */
+	uint32_t  sw_max_clear;		/* worst case of the above */
+	int32_t   sw_curdesc;		/* CUR_RX_DESC slot read at sweep entry */
+	int32_t   sw_last_armed;	/* the same sweep's last_armed */
+	int32_t   rx_dma_pos;		/* DMA frontier (SCAN=3): last position read */
+	uint32_t  sw_span;		/* slots the SCAN=3 walk covered */
+	/* NAPI shape: 1 while the RX interrupt is masked and the RX thread owns
+	 * the drain (dwc_eqos_rx_poll). */
+	uint8_t   rx_masked;
 	/* Next slot the reader consumes from; the DMA writes back in ring
 	 * order, so staged slots always run consecutively from here. */
 	unsigned int rx_read_tail;
@@ -173,6 +213,12 @@ struct dwc_eqos_dev {
 	uint32_t tx_waits;	/* sends that found the ring full */
 	uint32_t tx_wait_ticks;	/* kernel ticks spent parked on tx_sem */
 	uint32_t tx_occ_max;	/* peak descriptors in flight */
+
+	/* CONFIG_GMAC_TX_CSUM capability, latched at hw_start: the CIC tagging
+	 * only happens when the core actually has the inserter (HW_FEATURE1
+	 * TXCOSEL), because a zero-checksum TCP frame without it would leave
+	 * broken - the one failure mode this feature must not have. */
+	uint8_t tx_csum_cap;
 };
 
 /* Per-instance state and DMA memory. Static, not allocated: the DMA needs
@@ -188,6 +234,18 @@ struct dwc_eqos_dev {
  * multiple of cache lines and has a single software writer, so its
  * flush/invalidate discipline is sound as-is. */
 static struct dwc_eqos_dev devs[DWC_EQOS_PORT_COUNT];
+
+/* Service-time profile storage (see struct dwc_eqos_prof in the header and
+ * dwc_eqos_get_prof below). The counter is the 24 MHz system counter, so one
+ * tick is 41.7 ns: a bucket is meaningful in aggregate (a phase is seconds
+ * long), not per event. Reads cost tens of cycles, which is why the buckets
+ * sit at operation boundaries (per interrupt, per frame), not inside loops. */
+static struct dwc_eqos_prof eqos_prof[DWC_EQOS_PORT_COUNT];
+
+static inline uint64_t eqos_prof_t0(void)
+{
+	return gtimer_count_get();
+}
 
 #define NOC_SECTION \
 	__attribute__((section(".noncacheable"), aligned(DWC_EQOS_BUF_ALIGN)))
@@ -512,7 +570,15 @@ static int eqos_hw_start(struct dwc_eqos_dev *dev)
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
 		(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
 
+#if defined(CONFIG_GMAC_RX_POLL) && CONFIG_GMAC_RX_POLL
+	/* Pure polling (2026-10-16): no channel interrupt at all. The RX service
+	 * thread calls dwc_eqos_watchdog in a loop instead, so the whole path -
+	 * the descriptor sweep included - runs in THREAD context, where it can
+	 * yield, and no interrupt ever preempts the TCP/IP thread. */
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE, 0);
+#else
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE, DWC_EQOS_CH0_INTR_DEFAULT);
+#endif
 
 #if defined(CONFIG_GMAC_RX_COALESCE) && CONFIG_GMAC_RX_COALESCE
 	/* RX interrupt coalescing (N7 R3): with every RX descriptor's IOC off,
@@ -527,6 +593,12 @@ static int eqos_hw_start(struct dwc_eqos_dev *dev)
 		eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_CONTROL) | DWC_EQOS_TX_CTRL_ST);
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_CONTROL,
 		eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_CONTROL) | DWC_EQOS_RX_CTRL_SR);
+
+	/* Sweep bookkeeping restarts with the channel: the DMA fetches from the
+	 * ring base, so that is the frontier until the first sweep reads it. */
+	dev->rx_scan = 0;
+	dev->rx_dma_pos = 0;
+	dev->rx_last_armed = -1;
 
 	reg = eqos_rd(dev, DWC_EQOS_MAC_CONFIGURATION);
 	reg |= DWC_EQOS_MAC_CONF_TE | DWC_EQOS_MAC_CONF_RE;
@@ -603,6 +675,16 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	/* MTL queue sizes from the hardware feature register: the FIFO size is
 	 * encoded as log2(n/128), and TQS/RQS hold fifo/256 - 1. */
 	hw_feat = eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE1);
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+	dev->tx_csum_cap =
+		((eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE0) & DWC_EQOS_HW_TXCOSEL) != 0u)
+		? 1u : 0u;
+	if (dev->tx_csum_cap == 0u) {
+		LOG_WARNING("%s: tx checksum offload requested but the core "
+			    "has no inserter (HW_FEATURE0 TXCOSEL=0); CIC stays 0\n",
+			    eqos_dev_name(dev));
+	}
+#endif
 	reg = DWC_EQOS_MTL_TXQ0_OP_TXQEN_EN | DWC_EQOS_MTL_TXQ0_OP_TSF;
 	reg |= ((((128u << ((hw_feat & DWC_EQOS_HW_TXFIFOSZ_MASK)
 			    >> DWC_EQOS_HW_TXFIFOSZ_SHIFT)) >> 8) - 1u)
@@ -703,6 +785,7 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 {
 	unsigned int next = (dev->rx_stage_head + 1) % dev->rx_stage_count;
 	struct dwc_eqos_stage *stage;
+	struct dwc_eqos_prof *prof = &eqos_prof[dev->plat->index];
 
 	if (next == dev->rx_stage_tail) {
 		/* Full: drop this frame rather than delay the ring. */
@@ -715,6 +798,26 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 	memcpy(stage->data, buf, len);
 	dev->rx_stage_head = next;
 	dev->stats.rx_frames++;
+
+	/* Arrival rhythm + reader lag (see struct dwc_eqos_prof): the staging
+	 * instant is the DMA's arrival seen by software (the completion sweep
+	 * runs within a wake of the writeback), and the ring occupancy right
+	 * after this put is how far the reader trails the producer. */
+	{
+		uint64_t now = eqos_prof_t0();
+		unsigned int occ = (dev->rx_stage_head + dev->rx_stage_count
+				    - dev->rx_stage_tail) % dev->rx_stage_count;
+
+		if (prof->rx_last_stage_ticks != 0u) {
+			prof->rx_gap_hist[gmac_prof_hist_bucket(
+				now - prof->rx_last_stage_ticks)]++;
+			prof->rx_gap_samples++;
+		}
+		prof->rx_last_stage_ticks = now;
+		if (occ > prof->rx_stage_high_water) {
+			prof->rx_stage_high_water = occ;
+		}
+	}
 
 	return 0;
 }
@@ -775,84 +878,231 @@ static unsigned int eqos_zc_handoff(struct dwc_eqos_dev *dev, unsigned int own,
 }
 #endif
 
+static int eqos_ring_slot(const struct dwc_eqos_dev *dev, uint32_t addr);
+
+/* Sweep the descriptors the DMA has written back and re-arm each one.
+ *
+ * TWO SHAPES, AND ONLY ONE OF THEM WORKS - board-measured 2026-10-17, do not
+ * "fix" this by shortening the walk:
+ *
+ *  - whole-ring scan (default): probe all 128 slots, re-arm every one the DMA
+ *    wrote back, and write RX_END = the HIGHEST index re-armed.
+ *  - bounded walk (CONFIG_GMAC_RX_SCAN=2, FALSIFIED): start at the software
+ *    cursor, stop at the first descriptor the DMA still owns.
+ *
+ * The bounded walk is correct about *coverage* - the `gmac ring` snapshot
+ * shows `stale=0` throughout, i.e. it never left an OWN-clear slot outside its
+ * run - and it still collapsed the downlink to 2.0-2.6 Mbit/s (uplink 30.8)
+ * with `ovf=173`, the third such failure (the 2026-10-16 cursor and linux-shape
+ * arms and the 2026-10-17 bounded-walk arm). The working arm reproduces the
+ * baseline exactly (269.5 up / 481.7 down, zero loss) and its snapshot shows
+ * the tail invariant that matters: RX_END = cursor-1 = last re-armed, with
+ * CUR_RX_DESC sitting exactly ON the cursor, and zero OWN-clear slots at rest.
+ * The bounded arm's snapshot in the failing state shows the same relative
+ * geometry with five slots outstanding and the DMA already at CUR_RX_DESC=17
+ * while the cursor is 12 - so what breaks is the *interaction* between the
+ * landing point and how far the DMA is allowed to run ahead, not the coverage.
+ * Settling that needs the controller's tail semantics, which is an open
+ * question (consulted 2026-10-17); until then the whole-ring scan ships.
+ *
+ * What the scan costs is the point of the exercise: 128 uncached descriptor
+ * probes per sweep measured 101 probes per interrupt and 17.6 us per delivered
+ * frame (walkslots/rxwalk, crc 23b5b7f8) - 1.4 s of every wall-clock second at
+ * 940 Mbit/s, i.e. the whole gap to the Linux lane. */
 static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 {
+	unsigned int port = dev->plat->index;
 	int delivered = 0;
 	int last_armed = -1;
+	int stop_slot = -1;	/* first descriptor still owned when a walk breaks */
 	int i;
+	int left;
+	uint64_t t_walk = eqos_prof_t0();
 
-	for (i = 0; i < DWC_EQOS_RX_DESC_COUNT; i++) {
+	eqos_prof[port].rx_sweeps++;
+#if defined(CONFIG_GMAC_SWEEP_WIDE) && CONFIG_GMAC_SWEEP_WIDE
+	/* One pure-load pass over the non-cacheable ring, then process from
+	 * these values: with nothing but loads in the loop the core can keep
+	 * several misses in flight at once, so the same 128 values arrive
+	 * sooner. Semantics are unchanged - same probes, same tail landing
+	 * point. 512 bytes of stack, and the array cannot be static: the ISR
+	 * and the RX thread can both sweep (RXBH), and the ISR can preempt the
+	 * thread's sweep. */
+	uint32_t own[DWC_EQOS_RX_DESC_COUNT];
+#endif
+
+#if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 3)
+	/* Hardware-frontier walk: the controller's own position decides the
+	 * range, not the software's cursor. The walk covers the slots between
+	 * the position read last sweep and the position read now - i.e. exactly
+	 * what the DMA wrote in between - which is the same set the whole-ring
+	 * scan consumes, but reached in O(frames) probes and immune to the
+	 * software losing track of the DMA through a ring wrap. One extra slot
+	 * is covered because CUR_RX_DESC may report either the descriptor being
+	 * fetched or the next one; the OWN test rejects the extra, and `continue`
+	 * (not `break`) is used so the span bound is what stops the walk. */
+	{
+		int slot = eqos_ring_slot(dev,
+			eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_RX_DESC));
+
+		if (slot < 0) {
+			slot = 0;
+		}
+		if (dev->rx_dma_pos < 0) {
+			dev->rx_dma_pos = slot;
+		}
+		dev->sw_span = (uint32_t)((slot - dev->rx_dma_pos
+					   + DWC_EQOS_RX_DESC_COUNT)
+					  % DWC_EQOS_RX_DESC_COUNT) + 1u;
+		dev->sw_curdesc = slot;
+		i = (int)dev->rx_dma_pos;
+		dev->rx_dma_pos = slot;
+	}
+	left = (int)dev->sw_span;
+#elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 4)
+	/* FIXED bounded walk (2026-10-17): probe from the cursor to the first
+	 * still-owned descriptor, but publish the tail as the STOP POINT, not as
+	 * the last slot re-armed. See the tail rule below. */
+	i = (int)dev->rx_scan;
+	left = DWC_EQOS_RX_DESC_COUNT;
+#elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 2)
+	i = (int)dev->rx_scan;
+	left = DWC_EQOS_RX_DESC_COUNT;
+#else
+	i = 0;
+	left = DWC_EQOS_RX_DESC_COUNT;
+#endif
+	dev->sw_sweeps++;
+	dev->sw_clear_seen = 0;
+#if defined(CONFIG_GMAC_SWEEP_WIDE) && CONFIG_GMAC_SWEEP_WIDE
+	{
+		int n;
+		int k = i;	/* same start as the walk, so the two levers combine */
+
+		for (n = 0; n < left; n++, k = (k + 1) % DWC_EQOS_RX_DESC_COUNT) {
+			own[k] = dev->rx_ring[k].des3;
+		}
+	}
+#endif
+	for (; left > 0; left--, i = (i + 1) % DWC_EQOS_RX_DESC_COUNT) {
 		struct dwc_eqos_desc *desc;
 		uint8_t *buf;
 		unsigned int len;
+		uint32_t d3;
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
 		unsigned int slot_now = dev->rx_desc_slot[i];
 #else
 		const unsigned int slot_now = (unsigned int)i;
 #endif
 
+		eqos_prof[port].rx_walk_slots++;
 		if (dev->rx_in_flight[i] != 1) {
 			continue;
 		}
 		desc = &dev->rx_ring[i];
 		/* No invalidate: non-cacheable ring, the read hits memory. */
-		if (desc->des3 & DWC_EQOS_DESC_OWN) {
+#if defined(CONFIG_GMAC_SWEEP_WIDE) && CONFIG_GMAC_SWEEP_WIDE
+		d3 = own[i];
+#else
+		d3 = desc->des3;
+#endif
+		if (d3 & DWC_EQOS_DESC_OWN) {
+#if defined(CONFIG_GMAC_RX_SCAN) && ((CONFIG_GMAC_RX_SCAN == 2) || (CONFIG_GMAC_RX_SCAN == 4))
+			/* Still the DMA's: not written back yet, and it writes
+			 * back in ring order, so nothing past here is complete
+			 * either. Sweep done. */
+			stop_slot = i;
+			break;
+#else
+			/* Scan modes 1 and 3 probe a fixed range: an owned
+			 * descriptor inside it is simply not ours yet. */
 			continue;
+#endif
 		}
+		dev->sw_clear_seen++;
 
 		dev->rx_in_flight[i] = 2;
 		buf = rx_buffers[dev->plat->index][slot_now];
-		len = desc->des3 & DWC_EQOS_DESC_RX_LEN_MASK;
+		len = d3 & DWC_EQOS_DESC_RX_LEN_MASK;
 
 		/* The slot the descriptor re-arms with: a spare when the frame
 		 * was lent out (zero-copy), its own buffer in every other
 		 * case - the frame is dropped, never parked, so the DMA never
 		 * waits on a descriptor. */
-		{
-			unsigned int rearm = slot_now;
+			{
+				unsigned int rearm = slot_now;
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
-			int handed = 0;
+				int handed = 0;
 #endif
 
-			if (len < 4) {
-				dev->stats.rx_errors++;
-			} else if (
+				if (len < 4) {
+					dev->stats.rx_errors++;
+				} else if (
 #if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
-				   /* IPC verdict first (descriptor reads only - a
-				    * dropped frame costs no cache maintenance).
-				    * RDES1_VALID is set for IP frames only, so
-				    * ARP & friends pass this gate untouched. */
-				   ((desc->des3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
-				   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
-						   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
+					   /* IPC verdict first (descriptor reads only - a
+					    * dropped frame costs no cache maintenance).
+					    * RDES1_VALID is set for IP frames only, so
+					    * ARP & friends pass this gate untouched. */
+					   ((d3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
+					   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
+							   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
 #else
-				   1
+					   1
 #endif
-			) {
-				cache_dcache_invalidate((uintptr_t)buf, len);
-				/* Strip the frame check sequence: the MAC was
-				 * configured not to, and one strip is the
-				 * right number. */
-				len -= 4;
-#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
-				rearm = eqos_zc_handoff(dev, slot_now, buf, len,
-							&handed);
-				if (handed) {
-					delivered++;
-				}
-#else
-				if (eqos_stage_put(dev, buf, len) == 0) {
-					delivered++;
-				}
-#endif
-			} else {
-				dev->stats.rx_csum_drops++;
-			}
+				) {
+					uint64_t t_cache = eqos_prof_t0();
 
-			eqos_setup_rx_desc(dev, i, rearm);
-		}
+					cache_dcache_invalidate((uintptr_t)buf, len);
+					eqos_prof[port].irq_rx_cache_ticks +=
+						eqos_prof_t0() - t_cache;
+					/* Strip the frame check sequence: the MAC was
+					 * configured not to, and one strip is the
+					 * right number. */
+					len -= 4;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+					rearm = eqos_zc_handoff(dev, slot_now, buf, len,
+								&handed);
+					if (handed) {
+						delivered++;
+					}
+#else
+					{
+						uint64_t t_copy = eqos_prof_t0();
+
+						if (eqos_stage_put(dev, buf, len) == 0) {
+							delivered++;
+						}
+						eqos_prof[port].irq_rx_copy_ticks +=
+							eqos_prof_t0() - t_copy;
+					}
+#endif
+				} else {
+					dev->stats.rx_csum_drops++;
+				}
+
+				{
+					uint64_t t_rearm = eqos_prof_t0();
+
+					eqos_setup_rx_desc(dev, i, rearm);
+					eqos_prof[port].irq_rx_cache_ticks +=
+						eqos_prof_t0() - t_rearm;
+				}
+			}
 		dev->rx_in_flight[i] = 1;
+		eqos_prof[port].rx_frames++;
 		last_armed = i;
+	}
+	eqos_prof[port].rx_walk_ticks += eqos_prof_t0() - t_walk;
+
+	dev->rx_last_armed = last_armed;
+	dev->sw_last_armed = last_armed;
+	if (dev->sw_clear_seen > dev->sw_max_clear) {
+		dev->sw_max_clear = dev->sw_clear_seen;
+	}
+	if (last_armed >= 0) {
+		/* The bounded walk resumes one past the last slot it re-armed. */
+		dev->rx_scan =
+			(unsigned int)(last_armed + 1) % DWC_EQOS_RX_DESC_COUNT;
 	}
 
 	/* Advance the RX tail: the DMA's fetch window is [base, tail) and it
@@ -860,12 +1110,41 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	 * a hard 127-frames-per-watchdog-poke ceiling (1270 frames/s at the
 	 * 100 ms watchdog cadence, 95% of a UDP flood dropped to FIFO
 	 * overflow, N7 R2b board-measured). The Linux driver's RX_END is
-	 * moving for the same reason. Writing the last slot we re-armed
-	 * extends the window over it; the next sweep extends it further. */
+	 * moving for the same reason.
+	 *
+	 * WHICH SLOT IS PUBLISHED IS THE WHOLE BALLGAME (2026-10-17). The
+	 * healthy whole-ring scan publishes the highest index it re-armed, which
+	 * for a full sweep is by construction the global frontier - everything
+	 * below it has been re-armed, so the channel is always granted the right
+	 * to walk on. A PARTIAL sweep has no such property: its last re-armed
+	 * index can sit BEHIND the descriptor the DMA is already parked on, and
+	 * writing it retracts the grant. The channel then only moves on the
+	 * crumbs the 100 ms watchdog leaves (it pokes ring[LAST]), which is
+	 * exactly the 2 Mbit/s the first bounded walk measured, with the ring
+	 * snapshot showing the tell: cursor 12 / last re-armed 11 while the DMA
+	 * sat at 17.
+	 *
+	 * SCAN=4 therefore publishes the STOP POINT - the first descriptor the
+	 * DMA still owns - because everything before it was processed and
+	 * re-armed, which makes it the frontier by the same argument the full
+	 * sweep uses. Probes stay O(frames); the grant never lags.
+	 *
+	 * The whole-ring scan keeps its last-re-armed landing point: that is
+	 * what every working measurement was taken with. */
+#if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 4)
+	if (stop_slot >= 0) {
+		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
+			(uint32_t)(uintptr_t)&dev->rx_ring[stop_slot]);
+	} else if (last_armed >= 0) {
+		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
+			(uint32_t)(uintptr_t)&dev->rx_ring[last_armed]);
+	}
+#else
 	if (last_armed >= 0) {
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
 			(uint32_t)(uintptr_t)&dev->rx_ring[last_armed]);
 	}
+#endif
 
 	return delivered;
 }
@@ -1029,6 +1308,18 @@ void dwc_eqos_watchdog(unsigned int index)
 	(void)eqos_tx_complete(dev);
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
 		(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
+#if defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
+	/* Liveness heal: never leave the RX interrupt masked across a watchdog
+	 * tick. Under saturation the drain re-masks it immediately, so the cost
+	 * is one interrupt window per 100 ms; if the RX thread ever stalls, this
+	 * is what keeps the ring moving. */
+	if (dev->rx_masked) {
+		eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE,
+			eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE)
+			| DWC_EQOS_CH0_INTR_RIE);
+		dev->rx_masked = 0;
+	}
+#endif
 	eqos_unlock(dev);
 
 	/* N7 R1 fix: the ISR only notifies when IT moved frames; frames the
@@ -1040,15 +1331,62 @@ void dwc_eqos_watchdog(unsigned int index)
 	}
 }
 
+#if defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
+int dwc_eqos_rx_poll(unsigned int index, int budget)
+{
+	struct dwc_eqos_dev *dev;
+	int delivered = 0;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (budget <= 0)) {
+		return 0;
+	}
+	dev = &devs[index];
+	if (!dev->started) {
+		return 0;
+	}
+
+	eqos_lock(dev);
+	while (budget > 0) {
+		int n = eqos_rx_complete(dev);
+
+		if (n <= 0) {
+			/* An empty sweep is the drained signal: the bounded walk
+			 * stopped on the first descriptor the DMA still owns. */
+			break;
+		}
+		delivered += n;
+		budget -= n;
+	}
+	/* Hand the ring back to the interrupt in BOTH exits: drained means the
+	 * next completion raises RI, and budget-exhausted means RI is already
+	 * pending (latched level), so re-enabling the bit makes the line fire
+	 * again immediately and this thread returns for the next batch - the
+	 * NAPI "poll again" shape, riding the interrupt line itself. The first
+	 * version re-enabled only on the drained exit and parked the RX path
+	 * until the 100 ms liveness heal whenever a budget ran out under load,
+	 * which is the 2026-10-17 NAPI arm's ovf=3338. */
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE,
+		eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE)
+		| DWC_EQOS_CH0_INTR_RIE);
+	dev->rx_masked = 0;
+	eqos_unlock(dev);
+
+	return delivered;
+}
+#endif
+
 /* Combined MAC/DMA interrupt. Registered through gicv3 with the instance
  * index as the handler argument. The NO_SYS image has no event callback: the
  * frames land in the staging ring and the main loop finds them there. */
 void dwc_eqos_irq(void *arg)
 {
 	struct dwc_eqos_dev *dev = &devs[(unsigned int)(uintptr_t)arg];
+	unsigned int port = dev->plat->index;
+	uint64_t t_irq = eqos_prof_t0();
 	int pass;
 
 	dev->irq_n++;
+	eqos_prof[port].irq_entries++;
 	for (pass = 0; pass < 8; pass++) {
 		uint32_t status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
 
@@ -1085,6 +1423,7 @@ void dwc_eqos_irq(void *arg)
 			 * lock-free emergency outlet - a storm must not die
 			 * silently), and bound the damage with a burst gate. */
 			uint32_t now;
+			uint64_t t_odd = eqos_prof_t0();
 
 			dev->irq_odd++;
 			if ((dev->irq_odd == 1u) ||
@@ -1128,6 +1467,7 @@ void dwc_eqos_irq(void *arg)
 						~DWC_EQOS_CH0_INTR_AIE));
 			}
 #endif
+			eqos_prof[port].irq_odd_ticks += eqos_prof_t0() - t_odd;
 			break;
 		}
 
@@ -1138,25 +1478,60 @@ void dwc_eqos_irq(void *arg)
 			LOG_INFO("%s: dma fatal bus error, channel stopped\n",
 				  eqos_dev_name(dev));
 			eqos_hw_stop(dev);
+			eqos_prof[port].irq_ticks += eqos_prof_t0() - t_irq;
 			return;
 		}
 
 		if (status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_RWT)) {
+			uint64_t t_rx = eqos_prof_t0();
+
 			/* RWT (watchdog expiry) is the coalesced RI: with the
 			 * RX descriptor IOC off it is the only RX interrupt
 			 * source. Counted here, not at entry, so TX-only
 			 * passes do not dilute the coalescing gauge. */
 			dev->stats.rx_irqs++;
+#if defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
+			/* NAPI shape (2026-10-17): mask the RX interrupt ONLY. TI and
+			 * NIE stay enabled so TX completion keeps being reclaimed
+			 * here - RXPOLL zeroed the whole enable register, the TX
+			 * reclaim died with it and cost 40350 dropped frames. The RX
+			 * thread drains under a budget and re-enables RI when the
+			 * ring comes up empty (dwc_eqos_rx_poll). */
+			if (!dev->rx_masked) {
+				uint32_t ien = eqos_rd(dev,
+					DWC_EQOS_DMA_CH0_INTR_ENABLE);
+
+				eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE,
+					ien & ~DWC_EQOS_CH0_INTR_RIE);
+				dev->rx_masked = 1;
+			}
+			if (s_rx_notify != NULL) {
+				s_rx_notify((unsigned int)(uintptr_t)arg);
+			}
+#elif DWC_EQOS_RX_BH
+			/* Bottom half: signal only, the RX thread runs the sweep
+			 * (dwc_eqos_watchdog -> eqos_rx_complete). */
+			if (s_rx_notify != NULL) {
+				s_rx_notify((unsigned int)(uintptr_t)arg);
+			}
+#else
 			if (eqos_rx_complete(dev) > 0) {
 				if (s_rx_notify != NULL) {
 					s_rx_notify((unsigned int)(uintptr_t)arg);
 				}
 			}
+#endif
+			eqos_prof[port].irq_rx_sweep_ticks += eqos_prof_t0() - t_rx;
 		}
 		if (status & DWC_EQOS_CH0_STATUS_TI) {
+			uint64_t t_tx = eqos_prof_t0();
+
 			(void)eqos_tx_complete(dev);
+			eqos_prof[port].irq_tx_done_ticks += eqos_prof_t0() - t_tx;
 		}
 	}
+
+	eqos_prof[port].irq_ticks += eqos_prof_t0() - t_irq;
 }
 
 /* --- driver entry points --------------------------------------------------- */
@@ -1321,10 +1696,151 @@ int32_t dwc_eqos_set_mac_address(unsigned int index, const uint8_t *addr)
 	return EQOS_OK;
 }
 
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+/* Checksum offload preparation for one frame. Returns 1 when the frame is
+ * now ready for CIC=3 (the L4 checksum field holds S(pseudo-header) - the
+ * plain sum - and the MAC inserts the final checksums), 0 to leave the frame
+ * alone.
+ *
+ * The contract, and how it was pinned down:
+ *  - lwIP has no TX-offload API. The one thing it can do, with
+ *    LWIP_CHECKSUM_CTRL_PER_NETIF, is stop generating the L4 checksum for
+ *    this netif, which leaves the field zeroed (tcp_out.c:1563,
+ *    udp.c:788). Filling it back in is this function's job.
+ *  - The field content and the tag position both come from the production
+ *    code that drives this same core on this same board: Linux writes
+ *    `th->check = ~tcp_v4_check(len, saddr, daddr, 0)` (include/net/tcp.h:
+ *    2447), which is the plain pseudo sum after the double negation
+ *    (csum_fold complements, so tcp_v4_check and the caller's ~ cancel),
+ *    and tags CIC=3 in TDES3[17:16] (stmmac_main.c:4851,
+ *    dwmac4_descs.c:321). The first board attempt wrote the same field
+ *    content but put the tag in TDES2, where [17:16] is not the insertion
+ *    field: insertion never engaged, every outbound TCP frame (data and
+ *    ACKs) carried the bare seed as its checksum and was rejected - uplink
+ *    aborted locally after 9.7 s, downlink stalled behind the bad ACKs.
+ *    Position and content are two separate traps on this path.
+ *  - With CIC=3 the MAC also computes the IP header checksum, so the IP
+ *    header field needs no software help; the software's whole job is the
+ *    12-byte L4 pseudo-header sum above.
+ *
+ * The shape rule stays narrow: Ethernet II + IPv4 + TCP/UDP, the header
+ * without options, unfragmented, and the field still zero (GEN switched off
+ * for this netif). Anything else goes out untouched; a zero-checksum TCP
+ * frame that fails the shape rule is counted, because it would leave broken
+ * (TCP cannot encode "no checksum") - acceptance reads that counter as 0.
+ * ICMP is deliberately out: no pseudo-header in the protocol, so the MAC's
+ * CIC=3 computation would produce a wrong one (Linux leaves ICMP to software
+ * for the same reason). */
+#define EQOS_TXCSUM_LEAVE		0
+#define EQOS_TXCSUM_OFFLOAD		1
+#define EQOS_TXCSUM_TCP_UNCHECKED	2
+
+static uint16_t eqos_txcsum_add(uint32_t acc, uint16_t word)
+{
+	acc += word;
+	/* End-around carry, twice: the first fold can itself produce 0x10000
+	 * (0xffff + 1), which one more fold maps to 0x0001 instead of
+	 * truncating to 0. */
+	acc = (acc & 0xffffu) + (acc >> 16);
+	acc = (acc & 0xffffu) + (acc >> 16);
+	return (uint16_t)acc;
+}
+
+static int eqos_tx_csum_prepare(uint8_t *frame, unsigned int len)
+{
+	unsigned int ip_off = 14u;
+	unsigned int ihl;
+	unsigned int l4_off;
+	unsigned int csum_off;
+	unsigned int l4_len;
+	uint32_t acc = 0u;
+	uint16_t csum;
+	uint8_t proto;
+	uint16_t frag;
+	uint16_t ip_total;
+	unsigned int i;
+	int is_tcp;
+
+	if (len < 34u) {
+		return EQOS_TXCSUM_LEAVE;
+	}
+	if ((frame[12] != 0x08u) || (frame[13] != 0x00u)) {
+		return EQOS_TXCSUM_LEAVE;	/* not IPv4 (EtherType 0x0800) */
+	}
+	ihl = (unsigned int)(frame[ip_off] & 0x0fu) * 4u;
+	if (((frame[ip_off] >> 4) != 4u) || (ihl < 20u) || (len < ip_off + ihl)) {
+		return EQOS_TXCSUM_LEAVE;	/* version mismatch or a bad IHL */
+	}
+	proto = frame[ip_off + 9];
+	if ((proto != 6u) && (proto != 17u)) {
+		return EQOS_TXCSUM_LEAVE;	/* not TCP/UDP (ARP, ICMP, ...) */
+	}
+	is_tcp = (proto == 6u);
+	ip_total = (uint16_t)(((uint16_t)frame[ip_off + 2] << 8)
+			      | frame[ip_off + 3]);
+	l4_off = ip_off + ihl;
+	if ((ip_total < ihl + (is_tcp ? 20u : 8u))
+	    || (l4_off + (is_tcp ? 20u : 8u) > len)) {
+		return is_tcp ? EQOS_TXCSUM_TCP_UNCHECKED : EQOS_TXCSUM_LEAVE;
+	}
+	l4_len = (unsigned int)ip_total - ihl;
+	csum_off = l4_off + (is_tcp ? 16u : 6u);
+	csum = (uint16_t)(((uint16_t)frame[csum_off] << 8)
+			  | frame[csum_off + 1]);
+	if (csum != 0u) {
+		/* Filled in by the stack for this frame: a correct checksum,
+		 * leave the bytes alone. */
+		return EQOS_TXCSUM_LEAVE;
+	}
+	frag = (uint16_t)(((uint16_t)frame[ip_off + 6] << 8)
+			  | frame[ip_off + 7]);
+	if ((ihl != 20u) || ((frag & 0x3fffu) != 0u)) {
+		/* A zero L4 checksum and a shape the MAC's byte range cannot be
+		 * trusted to match: leave it. TCP cannot encode "no checksum",
+		 * so this frame would leave broken - counted for acceptance.
+		 * UDP's zero is legal and stays legal. */
+		return is_tcp ? EQOS_TXCSUM_TCP_UNCHECKED : EQOS_TXCSUM_LEAVE;
+	}
+	/* The field takes S(pseudo) - the plain one's-complement sum of the six
+	 * pseudo-header words (src/dst, [zero|proto], length) - derived from the
+	 * production code that drives this same core on this same board:
+	 * include/net/tcp.h:2447 `th->check = ~tcp_v4_check(len, saddr, daddr,
+	 * 0)`, and tcp_v4_check returns the FOLDED-AND-COMPLEMENTED sum
+	 * (csum_fold returns ~sum, asm-generic/checksum.h), so the double
+	 * negation lands on the plain sum. That is the classic offload seed:
+	 * the MAC adds the payload and inserts the complement, under the
+	 * "engine keeps the field as a base" reading; under the "engine
+	 * computes the pseudo itself" reading the value is ignored. Either way
+	 * S(pseudo) is the compatible content.
+	 *
+	 * The 2026-10-18 falsification was NOT here: the first arm wrote this
+	 * same S(pseudo) but tagged CIC into TDES2, where bits [17:16] are not
+	 * the insertion field on this layout - insertion never engaged, the
+	 * seed went out as the frame's "checksum", and every outbound TCP
+	 * frame (data and ACKs alike) was rejected, which killed the uplink
+	 * (lwiperf aborted-local after 9.7 s) and the downlink with it. */
+	for (i = 0u; i < 8u; i += 2u) {
+		acc = eqos_txcsum_add(acc,
+			(uint16_t)(((uint16_t)frame[ip_off + 12u + i] << 8)
+				   | frame[ip_off + 13u + i]));
+	}
+	acc = eqos_txcsum_add(acc, (uint16_t)proto);
+	acc = eqos_txcsum_add(acc, (uint16_t)l4_len);
+	csum = (uint16_t)acc;
+	if (csum == 0u) {
+		csum = 0xffffu;	/* -0 is 0xffff in one's complement */
+	}
+	frame[csum_off] = (uint8_t)(csum >> 8);
+	frame[csum_off + 1] = (uint8_t)(csum & 0xffu);
+	return EQOS_TXCSUM_OFFLOAD;
+}
+#endif
+
 int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t len)
 {
 	struct dwc_eqos_dev *dev;
 	unsigned int tries;
+	uint64_t t_tx;
 
 	if (index >= DWC_EQOS_PORT_COUNT) {
 		return EQOS_ERROR_PARAMETER;
@@ -1336,21 +1852,26 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 	if (!dev->powered) {
 		return EQOS_ERROR;
 	}
+	t_tx = eqos_prof_t0();
 
 	for (tries = 0; tries <= DWC_EQOS_TX_WAIT_MS; tries++) {
 		struct dwc_eqos_desc *desc;
 		unsigned int tx_len;
 		unsigned int ioc;
+		uint32_t ioc_cic = 0u;
 		uint8_t *buf;
 		int cur;
 		int next;
+		uint64_t t_copy;
 
 		eqos_lock(dev);
 		cur = dev->tx_head;
 		next = (cur + 1) % DWC_EQOS_TX_DESC_COUNT;
 		if (next != dev->tx_tail) {
 			buf = tx_buffers[index][cur];
+			t_copy = eqos_prof_t0();
 			memcpy(buf, frame, len);
+			eqos_prof[index].tx_memcpy_ticks += eqos_prof_t0() - t_copy;
 
 			/* Ethernet requires 60 bytes before the FCS: a
 			 * shorter frame (a 42-byte ARP reply, for one) is
@@ -1360,7 +1881,6 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 				memset(buf + len, 0, DWC_EQOS_MIN_TX_FRAME - len);
 				tx_len = DWC_EQOS_MIN_TX_FRAME;
 			}
-			cache_dcache_flush((uintptr_t)buf, tx_len);
 
 			/* One completion interrupt per IOC_DIV frames, plus
 			 * the frame that empties the ring (cur == tx_tail
@@ -1379,11 +1899,53 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			 * length in des3 (as the rx writeback does) and the
 			 * completion-interrupt enable in des2 bit 31. No flush:
 			 * non-cacheable ring, the OWN grant is visible to the
-			 * DMA before the end pointer below moves. */
+			 * DMA before the end pointer below moves.
+			 *
+			 * CONFIG_GMAC_TX_CSUM = checksum insertion offload: tag
+			 * IPv4/TCP and IPv4/UDP frames with CIC=3 so the MAC
+			 * computes and inserts both checksums (TRM Part2 ch.20
+			 * TDES3[17:16]; Linux programs the same value, descs.h:179).
+			 * The stack side is the other half of the same switch: lwIP
+			 * leaves the checksum fields zero on those frames (per-netif
+			 * NETIF_CHECKSUM_GEN_* off) and eqos_tx_csum_prepare seeds
+			 * them with the pseudo-header sum; the MAC inserts the
+			 * finals. */
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+			if (dev->tx_csum_cap != 0u) {
+				switch (eqos_tx_csum_prepare(buf, tx_len)) {
+				case EQOS_TXCSUM_OFFLOAD:
+					ioc_cic = DWC_EQOS_DESC_TX_CIC_FULL;
+					dev->stats.tx_csum_frames++;
+					break;
+				case EQOS_TXCSUM_TCP_UNCHECKED:
+					/* A zero-checksum TCP frame the classifier can't
+					 * vouch for: count it (arm acceptance reads zero).
+					 * CIC stays 0 and the frame goes out as the stack
+					 * wrote it. */
+					dev->stats.tx_csum_uncovered++;
+					break;
+				default:
+					break;
+				}
+			}
+#endif
+			/* The clean must come AFTER the checksum classifier: the
+			 * seeded pseudo-header sum is a write into this frame, and
+			 * tx_buffers live in cacheable .bss (no DMA snooping), so a
+			 * clean taken before it would leave those bytes to reach
+			 * memory by accident. Flush covers the final bytes the DMA
+			 * reads, seed included. */
+			{
+				uint64_t t_flush = eqos_prof_t0();
+
+				cache_dcache_flush((uintptr_t)buf, tx_len);
+				eqos_prof[index].tx_flush_ticks +=
+					eqos_prof_t0() - t_flush;
+			}
 			desc->des2 = (ioc ? DWC_EQOS_DESC_TX_IOC : 0u)
 				   | (tx_len & 0x3fffu);
 			desc->des3 = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_TX_FD
-				   | DWC_EQOS_DESC_TX_LD | tx_len;
+				   | DWC_EQOS_DESC_TX_LD | ioc_cic | tx_len;
 			/* Grant reaches memory before the end pointer moves. */
 			eqos_dsb_st();
 
@@ -1410,6 +1972,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			eqos_unlock(dev);
 
 			dev->stats.tx_frames++;
+			eqos_prof[index].tx_frames++;
+			eqos_prof[index].tx_total_ticks += eqos_prof_t0() - t_tx;
 			return EQOS_OK;
 		}
 		eqos_unlock(dev);
@@ -1444,6 +2008,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		LOG_INFO("%s: tx ring full, frame dropped\n", eqos_dev_name(dev));
 	}
 
+	eqos_prof[index].tx_total_ticks += eqos_prof_t0() - t_tx;
 	return EQOS_ERROR_BUSY;
 }
 
@@ -1596,6 +2161,41 @@ void dwc_eqos_irq_dump(unsigned int index)
 		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_RX_IPC_INTR_MASK));
 }
 
+/* --- service-time profile (see struct dwc_eqos_prof) -----------------------
+ * The counter is the 24 MHz system counter, so one tick is 41.7 ns: a bucket
+ * is meaningful in aggregate (a phase is seconds long), not per event. Reads
+ * are ~tens of cycles, which is why the buckets sit at operation boundaries
+ * (per interrupt, per frame) and not inside loops. The storage sits with the
+ * other per-port statics, above every user. */
+
+void dwc_eqos_get_prof(unsigned int index, struct dwc_eqos_prof *prof)
+{
+	if ((index >= DWC_EQOS_PORT_COUNT) || (prof == NULL)) {
+		return;
+	}
+	*prof = eqos_prof[index];
+}
+
+void dwc_eqos_reset_prof(unsigned int index)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	memset(&eqos_prof[index], 0, sizeof(eqos_prof[index]));
+}
+
+void dwc_eqos_reset_rx_hist(unsigned int index)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	memset(eqos_prof[index].rx_gap_hist, 0,
+	       sizeof(eqos_prof[index].rx_gap_hist));
+	eqos_prof[index].rx_gap_samples = 0u;
+	eqos_prof[index].rx_last_stage_ticks = 0u;
+	eqos_prof[index].rx_stage_high_water = 0u;
+}
+
 void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)
 {
 	struct dwc_eqos_dev *dev;
@@ -1640,4 +2240,142 @@ void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)
 
 	diag->tx_sem_count = (dev->tx_sem != NULL)
 				     ? osSemaphoreGetCount(dev->tx_sem) : 0u;
+}
+
+/* Map a DMA ring address back to its slot index; -1 when it is outside the
+ * ring (the controller reports the descriptor it is ABOUT to fetch as well,
+ * which is one past the last one and lands here). */
+static int eqos_ring_slot(const struct dwc_eqos_dev *dev, uint32_t addr)
+{
+	uintptr_t base = (uintptr_t)&dev->rx_ring[0];
+	uintptr_t a = (uintptr_t)addr;
+
+	if ((a < base) ||
+	    (a >= base + (DWC_EQOS_RX_DESC_COUNT * sizeof(struct dwc_eqos_desc)))) {
+		return -1;
+	}
+	return (int)((a - base) / sizeof(struct dwc_eqos_desc));
+}
+
+int dwc_eqos_get_ring(unsigned int index, struct dwc_eqos_ring *ring)
+{
+	struct dwc_eqos_dev *dev;
+	int n;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (ring == NULL)) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	dev = &devs[index];
+	if ((dev->plat == NULL) || (dev->rx_ring == NULL)) {
+		return EQOS_ERROR;
+	}
+
+	memset(ring, 0, sizeof(*ring));
+
+	eqos_lock(dev);
+	ring->rx_base = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_BASE_ADDR_LO);
+	ring->rx_end = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR);
+	ring->rx_ring_len = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_RING_LEN);
+	ring->cur_rx_desc = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_RX_DESC);
+	ring->cur_rx_buf = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_RX_BUF_ADDR);
+	ring->rx_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_CONTROL);
+	ring->ch0_status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
+	ring->rx_scan = (int32_t)dev->rx_scan;
+	ring->last_armed = (int32_t)dev->rx_last_armed;
+	ring->cur_desc_slot = eqos_ring_slot(dev, ring->cur_rx_desc);
+	ring->end_slot = eqos_ring_slot(dev, ring->rx_end);
+	if ((ring->cur_desc_slot >= 0) && (ring->end_slot >= 0)) {
+		ring->end_gap = (int32_t)(((unsigned int)ring->cur_desc_slot
+					   - (unsigned int)ring->end_slot
+					   + DWC_EQOS_RX_DESC_COUNT)
+					  % DWC_EQOS_RX_DESC_COUNT);
+	} else {
+		ring->end_gap = -1;
+	}
+	ring->sw_sweeps = dev->sw_sweeps;
+	ring->sw_clear_seen = dev->sw_clear_seen;
+	ring->sw_max_clear = dev->sw_max_clear;
+	ring->sw_span = dev->sw_span;
+	ring->sw_curdesc = dev->sw_curdesc;
+	ring->sw_last_armed = dev->sw_last_armed;
+
+	for (n = 0; n < DWC_EQOS_RX_DESC_COUNT; n++) {
+		int word = n / 32;
+		uint32_t bit = 1u << (n % 32);
+
+		if (dev->rx_in_flight[n] == 1) {
+			ring->in_flight_mask[word] |= bit;
+			ring->ring_armed++;
+		}
+		if (dev->rx_ring[n].des3 & DWC_EQOS_DESC_OWN) {
+			ring->dma_owned_mask[word] |= bit;
+		} else {
+			ring->own_clear++;
+		}
+	}
+
+	/* What the bounded walk would cover from the cursor, and whether
+	 * anything the DMA has finished sits outside that run (a non-zero
+	 * stale count is the walk leaking a slot). */
+	for (n = 0; n < DWC_EQOS_RX_DESC_COUNT; n++) {
+		int slot = (int)((dev->rx_scan + (unsigned int)n)
+				 % DWC_EQOS_RX_DESC_COUNT);
+
+		if (dev->rx_ring[slot].des3 & DWC_EQOS_DESC_OWN) {
+			break;
+		}
+		ring->walk_run++;
+	}
+	if (ring->own_clear > ring->walk_run) {
+		ring->stale_slots = ring->own_clear - ring->walk_run;
+	}
+	eqos_unlock(dev);
+
+	return EQOS_OK;
+}
+
+/* The register snapshot the Linux-parity round diffs against the Linux lane's
+ * own dump of the same offsets. Nothing here is written; this is the "what
+ * did the hardware actually get told" half of every register-difference
+ * claim, so it reads what the channel is running with right now (live, not
+ * shadow copies of what we meant to write). */
+int dwc_eqos_get_regs(unsigned int index, struct dwc_eqos_regs *regs)
+{
+	struct dwc_eqos_dev *dev;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (regs == NULL)) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	dev = &devs[index];
+	if ((dev->plat == NULL) || (dev->rx_ring == NULL)) {
+		return EQOS_ERROR;
+	}
+
+	memset(regs, 0, sizeof(*regs));
+
+	eqos_lock(dev);
+	regs->mac_configuration = eqos_rd(dev, DWC_EQOS_MAC_CONFIGURATION);
+	regs->mac_packet_filter = eqos_rd(dev, DWC_EQOS_MAC_PACKET_FILTER);
+	regs->mac_q0_tx_flow_ctrl = eqos_rd(dev, DWC_EQOS_MAC_Q0_TX_FLOW_CTRL);
+	regs->mac_rx_flow_ctrl = eqos_rd(dev, DWC_EQOS_MAC_RX_FLOW_CTRL);
+	regs->hw_feature0 = eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE0);
+	regs->hw_feature1 = eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE1);
+	regs->mtl_txq0_op = eqos_rd(dev, DWC_EQOS_MTL_TXQ0_OPERATION_MODE);
+	regs->mtl_rxq0_op = eqos_rd(dev, DWC_EQOS_MTL_RXQ0_OPERATION_MODE);
+	regs->dma_mode = eqos_rd(dev, DWC_EQOS_DMA_MODE);
+	regs->sysbus_mode = eqos_rd(dev, DWC_EQOS_DMA_SYSBUS_MODE);
+	regs->ch0_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_CONTROL);
+	regs->ch0_tx_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_CONTROL);
+	regs->ch0_rx_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_CONTROL);
+	regs->ch0_tx_end = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR);
+	regs->ch0_rx_end = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR);
+	regs->ch0_tx_ring_len = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_RING_LEN);
+	regs->ch0_rx_ring_len = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_RING_LEN);
+	regs->ch0_intr_enable = eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE);
+	regs->ch0_rx_watchdog = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_WATCHDOG);
+	regs->ch0_cur_rx_desc = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_RX_DESC);
+	regs->ch0_status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
+	eqos_unlock(dev);
+
+	return EQOS_OK;
 }

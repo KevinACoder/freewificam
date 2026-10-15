@@ -29,7 +29,14 @@ gtimer_count_get(void)
 {
 	uint64_t count;
 
+	/* The ISBs are load-bearing, not decoration: this core issues
+	 * out-of-order, so without them the counter read may retire before the
+	 * code being timed has drained (or the timed code may start before the
+	 * read), which shows up as a sample that disagrees with the wall
+	 * clock. Every caller treats the value as an ordering point. */
+	__asm__ __volatile__("isb" ::: "memory");
 	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(count));
+	__asm__ __volatile__("isb" ::: "memory");
 	return count;
 }
 

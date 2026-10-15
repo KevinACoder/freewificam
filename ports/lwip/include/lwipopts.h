@@ -109,9 +109,19 @@
 
 /* --- core locking ----------------------------------------------------------- */
 
+/* The #ifndef wrappers are what make these two overridable from a build: every
+ * other option in this file is a hard #define, so a -D would lose to it. */
+#ifndef LWIP_TCPIP_CORE_LOCKING
 #define LWIP_TCPIP_CORE_LOCKING         1
-/* LWIP_TCPIP_CORE_LOCKING_INPUT stays at its default (off): input runs on
- * the TCP/IP thread, fed through the mailbox by the driver. */
+#endif
+/* Input on the CALLER's thread under the core lock (2026-10-17 lever): the
+ * driver's RX thread runs the stack's input path itself instead of posting one
+ * mailbox message per frame and switching to the TCP/IP thread. Off by default:
+ * it moves which thread executes the input path, so it is measured, not
+ * assumed. */
+#ifndef LWIP_TCPIP_CORE_LOCKING_INPUT
+#define LWIP_TCPIP_CORE_LOCKING_INPUT   0
+#endif
 
 /* --- loopback --------------------------------------------------------------- */
 
@@ -151,9 +161,16 @@
 #define LWIP_WND_SCALE                  1
 #define TCP_RCV_SCALE                   4
 #define TCP_WND                         524288
+/* Guarded so the SNDBUF= make lever can win (the queue-walk experiment);
+ * unset = the converged default. TCP_SND_QUEUELEN's floor is
+ * 4 * TCP_SND_BUF / TCP_MSS. */
+#ifndef TCP_SND_BUF
 #define TCP_SND_BUF                     524288
-/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 1436. */
+#endif
+/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 1436 at the default size. */
+#ifndef TCP_SND_QUEUELEN
 #define TCP_SND_QUEUELEN                1536
+#endif
 /* The opt.h default (TCP_SND_BUF / 2) trips the u16 guard sanity check;
  * 32 KB keeps the writer awake far from it. */
 #define TCP_SNDLOWAT                    32768
@@ -178,6 +195,22 @@
 #define CHECKSUM_CHECK_UDP              0
 #endif
 
+/* --- TX checksum offload (the other half of the same lockstep) ---------------
+ *
+ * With CONFIG_GMAC_TX_CSUM the driver writes the IPv4/TCP or IPv4/UDP
+ * pseudo-header sum into the checksum field and tags the descriptor CIC=3, so
+ * the MAC computes and inserts both checksums (dwc_eqos.c eqos_tx_csum_prepare
+ * carries the full contract, TRM Part2 ch.20 TDES3). The stack side must stop
+ * generating those checksums on this netif or the MAC would checksum over an
+ * already-correct value; lwIP expresses that with the per-netif control block
+ * (the GEN switches stop being global and become netif flags), which is why
+ * the whole option only exists in builds that also enable the driver side.
+ * ICMP keeps its software generation - no pseudo-header in the protocol - so
+ * its two bits stay set in the netif flags (ports/lwip/ethnetif.c). */
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+#define LWIP_CHECKSUM_CTRL_PER_NETIF    1
+#endif
+
 /* --- debugging -------------------------------------------------------------- */
 
 /* Stays off: every diagnostic line would go out the 115200 console, which
@@ -188,5 +221,35 @@
  * increment per event. */
 #define LWIP_STATS                      1
 #define LWIP_STATS_DISPLAY              0
+
+/* TCP-gap probe tier (2026-10-19): MIB2's TCP segment counters - out/in and,
+ * crucially, fast retransmits (tcp_out.c tcp_rexmit) - are the direct read on
+ * whether the 548 Mbit/s ceiling carries a retransmission load. Compiled in
+ * only under the instrument lever (CONFIG_GMAC_TCP_PROBE); the increments are
+ * one u32 add per segment, but the default image stays byte-for-byte on the
+ * shipped profile unless the lever says otherwise (the suite Makefile's
+ * TCPPROBE=1). A full RTO retransmit is NOT in MIB2; it rides the probe
+ * counter in patches/lwip.
+ *
+ * LWIP_STATS_LARGE is load-bearing with it: the default STAT_COUNTER is u16,
+ * and at 500 Mbit/s the segment counters wrap several times inside one 10 s
+ * phase - a wrapped differential is silently wrong (it reads as a small
+ * positive delta). u32 counters make the phase diffs honest. */
+#if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
+#define MIB2_STATS                      1
+#define LWIP_STATS_LARGE                1
+#endif
+
+/* Fine-grained TCP input-path probe (2026-10-19 round 3, FINE=1 lever):
+ * patch 0002 adds LWIP_HOOK_TCP_PROBE at fixed points of tcp_input /
+ * tcp_output; here the hook is pointed at the bridge's tick-based pair
+ * accumulator (ports/lwip/ethnetif.c), which `gmac tcpfine` reads out. The
+ * hook adds a counter read and a dispatch per site (~8 sites per input
+ * entry, a few hundred ns each) - measurement-only, the default profile
+ * never defines it. */
+#if defined(CONFIG_GMAC_TCP_FINE) && CONFIG_GMAC_TCP_FINE
+void ethnetif_tcp_fine_mark(unsigned int site);
+#define LWIP_HOOK_TCP_PROBE(site) ethnetif_tcp_fine_mark((unsigned int)(site))
+#endif
 
 #endif /* FREEWEB_LWIPOPTS_H */

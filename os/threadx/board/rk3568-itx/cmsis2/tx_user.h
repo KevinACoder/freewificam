@@ -63,4 +63,25 @@
  *                             - all stay off (single core; no FIQ owner in
  *                             this image; error checking wanted on) */
 
+/* --- measurement-only profile kit (EPK=1 build lever) ----------------------
+ *
+ * TX_EXECUTION_PROFILE_ENABLE (injected by the build) rebuilds the kernel and
+ * the port so every thread switch and ISR boundary accumulates per-thread
+ * execution time from the time source below - the per-thread answer to "who
+ * eats the single core". The source is CNTVCT (24 MHz, always counting, and
+ * WFI-independent: the PMU route is closed because WFI stops PMCCNTR while
+ * this board's idle genuinely busy-polls). EXECUTION_TIME_SOURCE_TYPE is
+ * unsigned long = 64-bit here, so no wrap handling ever triggers; the max
+ * constant is set to the full width to match. Off by default: the switch
+ * changes the TX_THREAD layout and adds a counter read per context switch,
+ * so the shipped image stays byte-for-byte without it (the same lever
+ * discipline as the throughput arms). */
+#if defined(TX_EXECUTION_PROFILE_ENABLE)
+#ifndef __ASSEMBLER__
+extern unsigned long long gtimer_count_get(void);
+#endif
+#define TX_EXECUTION_TIME_SOURCE	((EXECUTION_TIME_SOURCE_TYPE)gtimer_count_get())
+#define TX_EXECUTION_MAX_TIME_SOURCE	0xFFFFFFFFFFFFFFFFULL
+#endif
+
 #endif /* OS_THREADX_BOARD_RK3568_CMSIS2_TX_USER_H */

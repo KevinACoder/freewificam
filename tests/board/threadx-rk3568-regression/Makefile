@@ -97,6 +97,7 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 	-I$(ROOT)/os/threadx \
 	-I$(TX)/common/inc \
 	-I$(TX_PORT)/inc \
+	$(if $(EPK),-I$(TX)/utility/execution_profile_kit) \
 	-DTX_INCLUDE_USER_DEFINE_FILE -DEL1=1 \
 	-DCONFIG_TX_TICKS_PER_SECOND=1000 -DCONFIG_TX_TIMER_STACK=4096
 
@@ -135,6 +136,128 @@ LEVER_CFLAGS += -DCONFIG_GMAC_TX_IOC_DIV=$(TX_IOC_DIV)
 endif
 ifneq ($(TX_NONBLOCK),)
 LEVER_CFLAGS += -DCONFIG_GMAC_TX_NONBLOCK=1
+endif
+# Interrupt-shape levers. RXPOLL removes every DMA interrupt (the RX thread
+# polls). The bottom-half split (ISR signals, the RX thread sweeps) is the
+# DEFAULT since 2026-10-17; RXBH=0 is the reverse lever back to the
+# interrupt-context sweep. NAPI is the bottom half plus the RI mask and the
+# frame budget; RXPRIO lifts the RX thread above the TCP/IP thread.
+ifneq ($(RXPOLL),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_POLL=1
+endif
+ifneq ($(RXBH),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BH=$(RXBH)
+endif
+ifneq ($(NAPI),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_NAPI=1
+endif
+ifneq ($(RXPRIO),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_PRIO_HI=1
+endif
+# lwIP input path: CORELOCKIN=1 runs the stack's input on the caller's (RX)
+# thread under the core lock instead of one mailbox post per frame. The option
+# has an #ifndef wrapper in ports/lwip/include/lwipopts.h so a -D can win.
+# 2026-10-18 board-measured: +13% up (332 -> 375) and +22% down (461 -> 563)
+# with zero loss - the first arm to move both directions. Adopted as this
+# round's baseline.
+ifneq ($(CORELOCKIN),)
+LEVER_CFLAGS += -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+endif
+# TX checksum offload: the driver writes the pseudo-header sum and tags CIC=3
+# so the MAC inserts the IPv4/TCP and IPv4/UDP checksums (dwc_eqos.c
+# eqos_tx_csum_prepare; TRM Part2 ch.20 TDES3[17:16]). lwipopts.h flips the
+# per-netif checksum control in lockstep and ethnetif.c clears the GEN bits
+# for this netif; ICMP stays software on both sides. The peer's own TCP
+# checksum validation is the natural red control: wrong insertion cannot
+# complete a session.
+ifneq ($(TX_CSUM),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_CSUM=1
+endif
+# RX batch drain: one core-lock acquisition for the whole staged-frame drain
+# instead of two CMSIS mutex calls per frame (ethnetif.c ethnetif_poll; the
+# per-frame cost shows in the bridgeinput bucket). Requires CORELOCKIN, since
+# the batch hands frames to ethernet_input directly under the lock it took.
+ifneq ($(BATCH),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BATCH=1
+endif
+# TCP-gap instrument tier: compiles MIB2's TCP segment counters (out/in and
+# fast retransmits) into the stack - lwipopts.h keys its MIB2_STATS block on
+# this macro, so it must reach both the stack TUs and the console TU that
+# prints them (`gmac tcp`). Not a treatment: measured rounds state it in the
+# ledger like any other build input.
+ifneq ($(TCPPROBE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TCP_PROBE=1
+endif
+# Input-bucket dissection (2026-10-19 round 2): each received frame's input
+# call is timed in two halves - the core-lock acquisition and the
+# ethernet_input body - and both are indexed by frame class (data / pure ACK
+# / dup ACK / window update / UDP / other); the TX send-gap histogram rides
+# the same switch. The lock sequence is byte-for-byte tcpip_inpkt's under
+# LWIP_TCPIP_CORE_LOCKING_INPUT (tcpip.c:254-262); two extra counter reads
+# per frame are the only cost. Mutually exclusive with BATCH (the batch holds
+# the lock across the drain; the core lock is not recursive).
+ifneq ($(INPUTSPLIT),)
+LEVER_CFLAGS += -DCONFIG_GMAC_INPUT_SPLIT=1
+endif
+# RX copy-chain cut (2026-10-19, the cost-bound fix): the bridge reads each
+# staged frame straight into the pool pbuf, dropping the linear scratch + the
+# pbuf_take copy. One less 1500-byte memcpy per received frame.
+ifneq ($(RXDIRECT),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_DIRECT=1
+endif
+# Fine TCP-path probe (2026-10-19 round 3): patch 0002's LWIP_HOOK_TCP_PROBE
+# is pointed at the bridge's site-pair accumulator, so one tcp_input entry's
+# cost splits into segment processing / sent callback / queue walk / wire
+# handoff (`gmac tcpfine`). FINE=1 rides the INPUTSPLIT instrument tier.
+# Measurement-only: a counter read per site.
+ifneq ($(FINE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TCP_FINE=1
+endif
+# Execution Profile Kit (EPK=1): rebuilds the kernel + the A55 port with
+# TX_EXECUTION_PROFILE_ENABLE so every thread switch and ISR boundary
+# accumulates per-thread execution time from CNTVCT (tx_user.h supplies the
+# source), adds utility/execution_profile_kit to the compile set, and arms the
+# `gmac etime` report. Measurement-only: the switch changes the TX_THREAD
+# layout and adds a counter read per switch, so the shipped image stays
+# byte-for-byte without it.
+ifneq ($(EPK),)
+LEVER_CFLAGS += -DTX_EXECUTION_PROFILE_ENABLE=1
+endif
+# TCP send-buffer size lever (codex hypothesis 3: large unsent/unacked queues
+# make tcp_write and tcp_output walk long segment lists on every ACK). Smaller
+# buffers shorten the walks; the receive window is untouched, so the flight
+# limit stays 512 KB. The queue length follows the 4*SND_BUF/MSS floor.
+ifneq ($(SNDBUF),)
+LEVER_CFLAGS += -DTCP_SND_BUF=$(SNDBUF) \
+	-DTCP_SND_QUEUELEN=$(shell echo $$(( $(SNDBUF) / 365 + 2 )))
+endif
+# Delayed-ACK watermark lever (ACKDELAY=N; patch 0003, default 2). N=4 holds
+# the ACK across four in-order data segments - the downlink's per-frame cost
+# is half ACK send (B1: ctrl+dack ~= 3.45 us/frame); halving the ACK count
+# attacks that directly, at the price of feedback latency. RFC 1122 4.2.3.2
+# says SHOULD every second segment, so non-2 values are measurement builds.
+ifneq ($(ACKDELAY),)
+LEVER_CFLAGS += -DLWIP_TCP_ACK_DELAY_SEGMENTS=$(ACKDELAY)
+endif
+# RX completion-sweep shape. The DEFAULT is the whole-ring scan (every
+# measurement this line has is taken with it). SCAN=2 selects the bounded walk,
+# which is FALSIFIED (2026-10-17: downlink 481 -> 2.0-2.6 Mbit/s, ovf=173, with
+# stale=0) and kept only as a lever for the tail-semantics question.
+ifneq ($(SCAN),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_SCAN=$(SCAN)
+endif
+# Sweep probe shape: SWEEPWIDE=1 pulls every descriptor's status word in one
+# store-free pass before processing, so the non-cacheable loads pipeline
+# instead of serialising behind the arming writes. Semantics unchanged.
+ifneq ($(SWEEPWIDE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_SWEEP_WIDE=1
+endif
+# RX ring depth: the sweep is O(depth) per interrupt and only ~1 frame completes
+# per sweep at line rate, so depth is the probes-per-frame multiplier (128 ->
+# 66.4 probes/frame measured). Shallow rings trade burst tolerance for a
+# proportional cut in the dominant per-frame cost.
+ifneq ($(RX_RING),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_RING=$(RX_RING)
 endif
 
 OPT ?= -Og
@@ -211,7 +334,8 @@ TX_SRCS := \
 	$(ROOT)/os/threadx/board/rk3568-itx/heap.c \
 	$(ROOT)/os/threadx/board/rk3568-itx/cmsis2/cmsis2_board.c \
 	$(ROOT)/os/threadx/cmsis2_threadx.c \
-	$(ROOT)/os/threadx/cmsis2_ext.c
+	$(ROOT)/os/threadx/cmsis2_ext.c \
+	$(if $(EPK),$(TX)/utility/execution_profile_kit/tx_execution_profile.c)
 
 COMMON_SRCS := \
 	$(COMMON)/board_suite.c \

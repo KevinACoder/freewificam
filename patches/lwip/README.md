@@ -8,8 +8,8 @@ applied at build time by `tools/patches/replay.sh`.
 |---|---|
 | Upstream | https://github.com/lwip-tcpip/lwip.git |
 | Base (= pin) | `77dcd25a72509eb83f72b033d219b1d40cd8eb95` (tag `STABLE-2_2_1_RELEASE`) |
-| Patch list | `0001-lwiperf-boundary.patch` |
-| Submission status | `0001` not yet submitted: it is written to be sent as-is (one concern, `git format-patch` form, `Signed-off-by`, no local knowledge) and is waiting on the board acceptance run that measures the modes it unblocks |
+| Patch list | `0001-lwiperf-boundary.patch`, `0002-tcp-probe-hook.patch`, `0003-tcp-ack-delay-watermark.patch` |
+| Submission status | `0001` not yet submitted: it is written to be sent as-is (one concern, `git format-patch` form, `Signed-off-by`, no local knowledge) and is waiting on the board acceptance run that measures the modes it unblocks. `0002` not submitted: it is a neutral extension point (upstream-able as-is) that the local build points at its own timing hook; no upstream consumer yet, so it stays local until someone needs the same taps. `0003` not submitted: a build-time option (default keeps upstream behaviour), upstream-able as-is if the maintainers want the watermark tunable |
 
 ## 0001 - lwiperf: take plain payload at the 128 KiB boundary as data
 
@@ -30,6 +30,31 @@ unchanged.
 
 Acceptance: a board run with `iperf -c <board> -d` against the image's lwiperf
 server must show both legs carrying bytes (the receive leg used to abort).
+
+## 0002 - tcp: add an optional probe hook on the input-to-output handoff
+
+Time inside `tcp_input` is opaque: segment processing, the application
+`sent`/`recv` callbacks it runs, and the deferred `tcp_output` that sends
+queued data all happen inside one call. The patch adds
+`LWIP_HOOK_TCP_PROBE(site)` (default: does nothing) at eight fixed places -
+`tcp_input` entry, around `TCP_EVENT_SENT`, before the deferred `tcp_output`,
+and `tcp_output` entry / after the unacked walk / per data segment sent /
+per control segment sent - so a build option can timestamp the pieces. The
+hook must not change state; with no hook defined the calls compile to
+nothing. The local build points it at `ports/lwip/ethnetif.c`, whose
+`gmac tcpfine` console command buckets tick deltas per site pair.
+
+## 0003 - tcp: make the delayed-ACK watermark a build-time option
+
+The delayed-ACK mechanism acknowledges every second in-order data segment via
+a single `TF_ACK_DELAY` bit, and is not tunable. The patch adds
+`LWIP_TCP_ACK_DELAY_SEGMENTS` (default 2, upstream behaviour unchanged):
+1 acknowledges every segment immediately, larger values hold the ACK across
+that many segments. Non-default builds count in-order segments in a new pcb
+field; the count restarts whenever `TF_ACK_DELAY` is set anew, so paths that
+clear the flag elsewhere (data segment carrying the ACK, `tcp_fasttmr` flush)
+need no extra bookkeeping. Local use: the downlink's per-frame cost is about
+half ACK send, so a measurement build can halve the ACK count.
 
 Rules (project patch policy):
 

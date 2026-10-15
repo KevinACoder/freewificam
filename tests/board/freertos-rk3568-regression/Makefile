@@ -108,6 +108,50 @@ endif
 ifneq ($(TX_NONBLOCK),)
 LEVER_CFLAGS += -DCONFIG_GMAC_TX_NONBLOCK=1
 endif
+# Interrupt-shape levers (same knob set and rationale as the ThreadX suite):
+# the bottom half is the default, RXBH=0 reverses it, NAPI adds the RI mask and
+# the budget, RXPRIO lifts the RX thread above the TCP/IP thread.
+ifneq ($(RXPOLL),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_POLL=1
+endif
+ifneq ($(RXBH),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BH=$(RXBH)
+endif
+ifneq ($(NAPI),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_NAPI=1
+endif
+ifneq ($(RXPRIO),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_PRIO_HI=1
+endif
+# CORELOCKIN=1: input on the caller's thread (see the ThreadX suite;
+# 2026-10-18 board-measured +13% up / +22% down, adopted as the baseline).
+ifneq ($(CORELOCKIN),)
+LEVER_CFLAGS += -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+endif
+# TX_CSUM=1: checksum insertion offload - driver writes the pseudo-header sum
+# and tags CIC=3, lwipopts flips the per-netif checksum control in lockstep
+# (see the ThreadX suite for the full contract).
+ifneq ($(TX_CSUM),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_CSUM=1
+endif
+# BATCH=1: one core-lock acquisition for the whole RX drain (see the ThreadX
+# suite; requires CORELOCKIN).
+ifneq ($(BATCH),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BATCH=1
+endif
+# RX completion-sweep shape: default = the whole-ring scan, SCAN=2 = the bounded
+# walk (falsified 2026-10-17; same knob and rationale as the ThreadX suite).
+ifneq ($(SCAN),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_SCAN=$(SCAN)
+endif
+# SWEEPWIDE=1: store-free probe pass (same rationale as the ThreadX suite).
+ifneq ($(SWEEPWIDE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_SWEEP_WIDE=1
+endif
+# RX_RING: RX ring depth (same knob and rationale as the ThreadX suite).
+ifneq ($(RX_RING),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_RING=$(RX_RING)
+endif
 
 BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \

@@ -1,0 +1,135 @@
+From 0b7b2d28ea0efba6d1887640ac2c6324bd287883 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 16 Oct 2026 05:27:55 +0800
+Subject: [PATCH] tcp: add an optional probe hook on the input-to-output
+ handoff
+
+Time spent inside tcp_input is opaque: the processing of a received
+segment, the sent/receive callbacks it runs, and the deferred tcp_output
+that sends queued data all share one entry point, so a profile can say
+"tcp_input is expensive" but not which of those parts is. Add
+LWIP_HOOK_TCP_PROBE(site): a build-time hook (default: does nothing) that
+TCP calls at fixed points of the input path -
+
+  0 tcp_input entry
+  1 after segment processing, before TCP_EVENT_SENT
+  2 after TCP_EVENT_SENT
+  3 before the deferred tcp_output at the end of tcp_input
+  4 tcp_output entry (past the in-input suppression check)
+  5 after the unacked-queue walk, before the send loop
+  6 one data segment handed to the netif (end of tcp_output_segment)
+  7 one control segment handed to the netif (end of
+    tcp_output_control_segment_netif)
+
+so a build option can record timestamps per site and attribute the
+input cost to segment processing, the application callback, the queue
+walk, or the wire send. The hook must not change state; with no hook
+defined the calls compile to nothing.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ src/core/tcp_in.c                | 5 +++++
+ src/core/tcp_out.c               | 8 ++++++++
+ src/include/lwip/priv/tcp_priv.h | 9 +++++++++
+ 3 files changed, 22 insertions(+)
+
+diff --git a/src/core/tcp_in.c b/src/core/tcp_in.c
+index 1b17e40..eda9f58 100644
+--- a/src/core/tcp_in.c
++++ b/src/core/tcp_in.c
+@@ -130,6 +130,8 @@ tcp_input(struct pbuf *p, struct netif *inp)
+   LWIP_ASSERT_CORE_LOCKED();
+   LWIP_ASSERT("tcp_input: invalid pbuf", p != NULL);
+ 
++  LWIP_HOOK_TCP_PROBE(0);
++
+   PERF_START;
+ 
+   TCP_STATS_INC(tcp.recv);
+@@ -452,6 +454,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
+         /* If the application has registered a "sent" function to be
+            called when new send buffer space is available, we call it
+            now. */
++        LWIP_HOOK_TCP_PROBE(1);
+         if (recv_acked > 0) {
+           u16_t acked16;
+ #if LWIP_WND_SCALE
+@@ -472,6 +475,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
+           }
+           recv_acked = 0;
+         }
++        LWIP_HOOK_TCP_PROBE(2);
+         if (tcp_input_delayed_close(pcb)) {
+           goto aborted;
+         }
+@@ -550,6 +554,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
+           goto aborted;
+         }
+         /* Try to send something out. */
++        LWIP_HOOK_TCP_PROBE(3);
+         tcp_output(pcb);
+ #if TCP_INPUT_DEBUG
+ #if TCP_DEBUG
+diff --git a/src/core/tcp_out.c b/src/core/tcp_out.c
+index cfcc55d..a3f02f4 100644
+--- a/src/core/tcp_out.c
++++ b/src/core/tcp_out.c
+@@ -1263,6 +1263,8 @@ tcp_output(struct tcp_pcb *pcb)
+     return ERR_OK;
+   }
+ 
++  LWIP_HOOK_TCP_PROBE(4);
++
+   wnd = LWIP_MIN(pcb->snd_wnd, pcb->cwnd);
+ 
+   seg = pcb->unsent;
+@@ -1332,6 +1334,7 @@ tcp_output(struct tcp_pcb *pcb)
+   if (useg != NULL) {
+     for (; useg->next != NULL; useg = useg->next);
+   }
++  LWIP_HOOK_TCP_PROBE(5);
+   /* data available and window allows it to be sent? */
+   while (seg != NULL &&
+          lwip_ntohl(seg->tcphdr->seqno) - pcb->lastack + seg->len <= wnd) {
+@@ -1621,6 +1624,8 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
+   }
+ #endif
+ 
++  LWIP_HOOK_TCP_PROBE(6);
++
+   return err;
+ }
+ 
+@@ -1973,6 +1978,9 @@ tcp_output_control_segment_netif(const struct tcp_pcb *pcb, struct pbuf *p,
+   NETIF_RESET_HINTS(netif);
+ 
+   pbuf_free(p);
++
++  LWIP_HOOK_TCP_PROBE(7);
++
+   return err;
+ }
+ 
+diff --git a/src/include/lwip/priv/tcp_priv.h b/src/include/lwip/priv/tcp_priv.h
+index a8e87e5..346a789 100644
+--- a/src/include/lwip/priv/tcp_priv.h
++++ b/src/include/lwip/priv/tcp_priv.h
+@@ -105,6 +105,15 @@ err_t            tcp_process_refused_data(struct tcp_pcb *pcb);
+                             ) ? 1 : 0)
+ #define tcp_output_nagle(tpcb) (tcp_do_output_nagle(tpcb) ? tcp_output(tpcb) : ERR_OK)
+ 
++/* An out-of-tree tap on the TCP input->output handoff, for timing probes.
++   TCP calls it at fixed points of the input path with a small site number
++   (see the call sites in tcp_in.c and tcp_out.c). Build options may record a
++   timestamp or a count, or make it expand to nothing. It runs on the TCP/IP
++   context and must not change any state. */
++#ifndef LWIP_HOOK_TCP_PROBE
++#define LWIP_HOOK_TCP_PROBE(site)
++#endif
++
+ 
+ #define TCP_SEQ_LT(a,b)     (((u32_t)((u32_t)(a) - (u32_t)(b)) & 0x80000000u) != 0)
+ #define TCP_SEQ_LEQ(a,b)    (!(TCP_SEQ_LT(b,a)))
+-- 
+2.43.0
+
