@@ -74,8 +74,16 @@
  * maximum-frame receive never needs a chain. */
 #define PBUF_POOL_BUFSIZE               1600
 /* One pbuf per transmitted frame: the driver's transmit path is written
- * against a single-buffer frame. */
+ * against a single-buffer frame. The #ifndef wrapper lets a measurement
+ * build flip it to 0 (lever PBREF=1): with the app writing by reference
+ * (lwiperf's payload path), tcp_write then takes a PBUF_ROM reference to
+ * the caller's data instead of a PBUF_RAM allocation plus copy - the
+ * copy and the heap walk leave the per-callback write path. The driver
+ * still copies into its own transmit buffers, so the reference lifetime
+ * is one call deep. */
+#ifndef LWIP_NETIF_TX_SINGLE_PBUF
 #define LWIP_NETIF_TX_SINGLE_PBUF       1
+#endif
 
 /* --- protocols -------------------------------------------------------------- */
 

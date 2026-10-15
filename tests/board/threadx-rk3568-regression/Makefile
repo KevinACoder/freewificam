@@ -199,6 +199,16 @@ endif
 ifneq ($(INPUTSPLIT),)
 LEVER_CFLAGS += -DCONFIG_GMAC_INPUT_SPLIT=1
 endif
+# Reference writes on the TCP send path (PBREF=1, 2026-10-19 round 4): flips
+# LWIP_NETIF_TX_SINGLE_PBUF to 0 so tcp_write takes a PBUF_ROM reference to
+# the application's data instead of allocating PBUF_RAM and copying. On the
+# uplink the application (lwiperf) writes from const buffers and declares
+# "no copying needed"; the driver still copies into its transmit buffers.
+# Measurement lever: proves how much of the per-callback cost is the
+# allocation + copy half of the write path. Default off.
+ifneq ($(PBREF),)
+LEVER_CFLAGS += -DLWIP_NETIF_TX_SINGLE_PBUF=0
+endif
 # RX copy-chain cut (2026-10-19, the cost-bound fix): the bridge reads each
 # staged frame straight into the pool pbuf, dropping the linear scratch + the
 # pbuf_take copy. One less 1500-byte memcpy per received frame.
