@@ -57,6 +57,7 @@
 
 #include "arch_asm.h"
 #include "cache.h"
+#include "generic_timer.h"
 #include "os/cmsis2/cmsis2.h"
 #include "gicv3.h"
 #include "log.h"
@@ -188,6 +189,18 @@ struct dwc_eqos_dev {
  * multiple of cache lines and has a single software writer, so its
  * flush/invalidate discipline is sound as-is. */
 static struct dwc_eqos_dev devs[DWC_EQOS_PORT_COUNT];
+
+/* Service-time profile storage (see struct dwc_eqos_prof in the header and
+ * dwc_eqos_get_prof below). The counter is the 24 MHz system counter, so one
+ * tick is 41.7 ns: a bucket is meaningful in aggregate (a phase is seconds
+ * long), not per event. Reads cost tens of cycles, which is why the buckets
+ * sit at operation boundaries (per interrupt, per frame), not inside loops. */
+static struct dwc_eqos_prof eqos_prof[DWC_EQOS_PORT_COUNT];
+
+static inline uint64_t eqos_prof_t0(void)
+{
+	return gtimer_count_get();
+}
 
 #define NOC_SECTION \
 	__attribute__((section(".noncacheable"), aligned(DWC_EQOS_BUF_ALIGN)))
@@ -777,6 +790,7 @@ static unsigned int eqos_zc_handoff(struct dwc_eqos_dev *dev, unsigned int own,
 
 static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 {
+	unsigned int port = dev->plat->index;
 	int delivered = 0;
 	int last_armed = -1;
 	int i;
@@ -808,49 +822,65 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		 * was lent out (zero-copy), its own buffer in every other
 		 * case - the frame is dropped, never parked, so the DMA never
 		 * waits on a descriptor. */
-		{
-			unsigned int rearm = slot_now;
+			{
+				unsigned int rearm = slot_now;
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
-			int handed = 0;
+				int handed = 0;
 #endif
 
-			if (len < 4) {
-				dev->stats.rx_errors++;
-			} else if (
+				if (len < 4) {
+					dev->stats.rx_errors++;
+				} else if (
 #if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
-				   /* IPC verdict first (descriptor reads only - a
-				    * dropped frame costs no cache maintenance).
-				    * RDES1_VALID is set for IP frames only, so
-				    * ARP & friends pass this gate untouched. */
-				   ((desc->des3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
-				   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
-						   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
+					   /* IPC verdict first (descriptor reads only - a
+					    * dropped frame costs no cache maintenance).
+					    * RDES1_VALID is set for IP frames only, so
+					    * ARP & friends pass this gate untouched. */
+					   ((desc->des3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
+					   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
+							   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
 #else
-				   1
+					   1
 #endif
-			) {
-				cache_dcache_invalidate((uintptr_t)buf, len);
-				/* Strip the frame check sequence: the MAC was
-				 * configured not to, and one strip is the
-				 * right number. */
-				len -= 4;
-#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
-				rearm = eqos_zc_handoff(dev, slot_now, buf, len,
-							&handed);
-				if (handed) {
-					delivered++;
-				}
-#else
-				if (eqos_stage_put(dev, buf, len) == 0) {
-					delivered++;
-				}
-#endif
-			} else {
-				dev->stats.rx_csum_drops++;
-			}
+				) {
+					uint64_t t_cache = eqos_prof_t0();
 
-			eqos_setup_rx_desc(dev, i, rearm);
-		}
+					cache_dcache_invalidate((uintptr_t)buf, len);
+					eqos_prof[port].irq_rx_cache_ticks +=
+						eqos_prof_t0() - t_cache;
+					/* Strip the frame check sequence: the MAC was
+					 * configured not to, and one strip is the
+					 * right number. */
+					len -= 4;
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+					rearm = eqos_zc_handoff(dev, slot_now, buf, len,
+								&handed);
+					if (handed) {
+						delivered++;
+					}
+#else
+					{
+						uint64_t t_copy = eqos_prof_t0();
+
+						if (eqos_stage_put(dev, buf, len) == 0) {
+							delivered++;
+						}
+						eqos_prof[port].irq_rx_copy_ticks +=
+							eqos_prof_t0() - t_copy;
+					}
+#endif
+				} else {
+					dev->stats.rx_csum_drops++;
+				}
+
+				{
+					uint64_t t_rearm = eqos_prof_t0();
+
+					eqos_setup_rx_desc(dev, i, rearm);
+					eqos_prof[port].irq_rx_cache_ticks +=
+						eqos_prof_t0() - t_rearm;
+				}
+			}
 		dev->rx_in_flight[i] = 1;
 		last_armed = i;
 	}
@@ -1046,9 +1076,12 @@ void dwc_eqos_watchdog(unsigned int index)
 void dwc_eqos_irq(void *arg)
 {
 	struct dwc_eqos_dev *dev = &devs[(unsigned int)(uintptr_t)arg];
+	unsigned int port = dev->plat->index;
+	uint64_t t_irq = eqos_prof_t0();
 	int pass;
 
 	dev->irq_n++;
+	eqos_prof[port].irq_entries++;
 	for (pass = 0; pass < 8; pass++) {
 		uint32_t status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
 
@@ -1085,6 +1118,7 @@ void dwc_eqos_irq(void *arg)
 			 * lock-free emergency outlet - a storm must not die
 			 * silently), and bound the damage with a burst gate. */
 			uint32_t now;
+			uint64_t t_odd = eqos_prof_t0();
 
 			dev->irq_odd++;
 			if ((dev->irq_odd == 1u) ||
@@ -1128,6 +1162,7 @@ void dwc_eqos_irq(void *arg)
 						~DWC_EQOS_CH0_INTR_AIE));
 			}
 #endif
+			eqos_prof[port].irq_odd_ticks += eqos_prof_t0() - t_odd;
 			break;
 		}
 
@@ -1138,10 +1173,13 @@ void dwc_eqos_irq(void *arg)
 			LOG_INFO("%s: dma fatal bus error, channel stopped\n",
 				  eqos_dev_name(dev));
 			eqos_hw_stop(dev);
+			eqos_prof[port].irq_ticks += eqos_prof_t0() - t_irq;
 			return;
 		}
 
 		if (status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_RWT)) {
+			uint64_t t_rx = eqos_prof_t0();
+
 			/* RWT (watchdog expiry) is the coalesced RI: with the
 			 * RX descriptor IOC off it is the only RX interrupt
 			 * source. Counted here, not at entry, so TX-only
@@ -1152,11 +1190,17 @@ void dwc_eqos_irq(void *arg)
 					s_rx_notify((unsigned int)(uintptr_t)arg);
 				}
 			}
+			eqos_prof[port].irq_rx_sweep_ticks += eqos_prof_t0() - t_rx;
 		}
 		if (status & DWC_EQOS_CH0_STATUS_TI) {
+			uint64_t t_tx = eqos_prof_t0();
+
 			(void)eqos_tx_complete(dev);
+			eqos_prof[port].irq_tx_done_ticks += eqos_prof_t0() - t_tx;
 		}
 	}
+
+	eqos_prof[port].irq_ticks += eqos_prof_t0() - t_irq;
 }
 
 /* --- driver entry points --------------------------------------------------- */
@@ -1325,6 +1369,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 {
 	struct dwc_eqos_dev *dev;
 	unsigned int tries;
+	uint64_t t_tx;
 
 	if (index >= DWC_EQOS_PORT_COUNT) {
 		return EQOS_ERROR_PARAMETER;
@@ -1336,6 +1381,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 	if (!dev->powered) {
 		return EQOS_ERROR;
 	}
+	t_tx = eqos_prof_t0();
 
 	for (tries = 0; tries <= DWC_EQOS_TX_WAIT_MS; tries++) {
 		struct dwc_eqos_desc *desc;
@@ -1344,13 +1390,16 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		uint8_t *buf;
 		int cur;
 		int next;
+		uint64_t t_copy;
 
 		eqos_lock(dev);
 		cur = dev->tx_head;
 		next = (cur + 1) % DWC_EQOS_TX_DESC_COUNT;
 		if (next != dev->tx_tail) {
 			buf = tx_buffers[index][cur];
+			t_copy = eqos_prof_t0();
 			memcpy(buf, frame, len);
+			eqos_prof[index].tx_memcpy_ticks += eqos_prof_t0() - t_copy;
 
 			/* Ethernet requires 60 bytes before the FCS: a
 			 * shorter frame (a 42-byte ARP reply, for one) is
@@ -1360,7 +1409,13 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 				memset(buf + len, 0, DWC_EQOS_MIN_TX_FRAME - len);
 				tx_len = DWC_EQOS_MIN_TX_FRAME;
 			}
-			cache_dcache_flush((uintptr_t)buf, tx_len);
+			{
+				uint64_t t_flush = eqos_prof_t0();
+
+				cache_dcache_flush((uintptr_t)buf, tx_len);
+				eqos_prof[index].tx_flush_ticks +=
+					eqos_prof_t0() - t_flush;
+			}
 
 			/* One completion interrupt per IOC_DIV frames, plus
 			 * the frame that empties the ring (cur == tx_tail
@@ -1410,6 +1465,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			eqos_unlock(dev);
 
 			dev->stats.tx_frames++;
+			eqos_prof[index].tx_frames++;
+			eqos_prof[index].tx_total_ticks += eqos_prof_t0() - t_tx;
 			return EQOS_OK;
 		}
 		eqos_unlock(dev);
@@ -1444,6 +1501,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		LOG_INFO("%s: tx ring full, frame dropped\n", eqos_dev_name(dev));
 	}
 
+	eqos_prof[index].tx_total_ticks += eqos_prof_t0() - t_tx;
 	return EQOS_ERROR_BUSY;
 }
 
@@ -1594,6 +1652,29 @@ void dwc_eqos_irq_dump(unsigned int index)
 		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_RX_INTR_MASK),
 		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_TX_INTR_MASK),
 		(unsigned int)eqos_rd(dev, DWC_EQOS_MMC_RX_IPC_INTR_MASK));
+}
+
+/* --- service-time profile (see struct dwc_eqos_prof) -----------------------
+ * The counter is the 24 MHz system counter, so one tick is 41.7 ns: a bucket
+ * is meaningful in aggregate (a phase is seconds long), not per event. Reads
+ * are ~tens of cycles, which is why the buckets sit at operation boundaries
+ * (per interrupt, per frame) and not inside loops. The storage sits with the
+ * other per-port statics, above every user. */
+
+void dwc_eqos_get_prof(unsigned int index, struct dwc_eqos_prof *prof)
+{
+	if ((index >= DWC_EQOS_PORT_COUNT) || (prof == NULL)) {
+		return;
+	}
+	*prof = eqos_prof[index];
+}
+
+void dwc_eqos_reset_prof(unsigned int index)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	memset(&eqos_prof[index], 0, sizeof(eqos_prof[index]));
 }
 
 void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)

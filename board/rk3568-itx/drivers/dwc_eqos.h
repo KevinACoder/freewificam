@@ -459,6 +459,38 @@ struct dwc_eqos_diag {
 
 void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag);
 
+/* Per-phase service-time profile. The wired ladder is down to "where does the
+ * single core's time go", and only an exclusive-time split can answer it: the
+ * counters below are read from the system counter (24 MHz, 41.7 ns) at the
+ * operation boundaries, so each bucket is exclusive of the others except
+ * where it is nested (the RX sweep contains its cache and copy buckets; the
+ * whole-ISR bucket contains all the interrupt-side ones). The harness samples
+ * this before and after a phase and diffs, so a phase's upload and download
+ * halves are attributable separately.
+ *
+ * Nested, in order of containment:
+ *   irq_ticks > irq_odd_ticks | irq_rx_sweep_ticks | irq_tx_done_ticks
+ *   irq_rx_sweep_ticks > irq_rx_cache_ticks | irq_rx_copy_ticks
+ *   tx_total_ticks > tx_memcpy_ticks | tx_flush_ticks
+ */
+struct dwc_eqos_prof {
+	uint64_t irq_ticks;		/* whole ISR, entry to exit */
+	uint64_t irq_odd_ticks;		/* passes that service nothing */
+	uint64_t irq_rx_sweep_ticks;	/* the descriptor-ring scan */
+	uint64_t irq_rx_cache_ticks;	/* cache maintenance inside the sweep */
+	uint64_t irq_rx_copy_ticks;	/* the ISR staging copy */
+	uint64_t irq_tx_done_ticks;	/* the completion reclaim */
+	uint64_t tx_total_ticks;	/* send_frame, whole */
+	uint64_t tx_memcpy_ticks;	/* send_frame's copy into the DMA buffer */
+	uint64_t tx_flush_ticks;	/* send_frame's cache flush */
+	uint64_t irq_entries;		/* samples, so a bucket can be averaged */
+	uint64_t rx_frames;		/* frames through the sweep */
+	uint64_t tx_frames;		/* frames through send_frame */
+};
+
+void dwc_eqos_get_prof(unsigned int index, struct dwc_eqos_prof *prof);
+void dwc_eqos_reset_prof(unsigned int index);
+
 /* Interrupt-source forensics (N7-stab freeze round): emergency-print every
  * block that shares this port's interrupt line (MAC status - read-clear,
  * MTL queue interrupt, MMC counter interrupts + masks). Call from a

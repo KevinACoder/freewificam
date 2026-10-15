@@ -345,6 +345,36 @@ static int cmd_gmac(int argc, char **argv)
 			   (unsigned)d.last_status);
 		return 0;
 	}
+	/* `gmac prof`: the service-time profile (struct dwc_eqos_prof). The
+	 * counters are cumulative, so a measurement round samples this before
+	 * and after a phase and diffs: the wired ladder needs to know which
+	 * bucket the single core's time actually goes to, not which one looks
+	 * expensive. Units are microseconds of system-counter time. */
+	if (argc >= 2 && strcmp(argv[1], "prof") == 0) {
+		struct dwc_eqos_prof p;
+
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
+			dwc_eqos_reset_prof(g_port);
+			csh_printf(csh, "gmac%u: prof reset\n", g_port);
+			return 0;
+		}
+		dwc_eqos_get_prof(g_port, &p);
+		csh_printf(csh, "gmac%u: prof irq=%u odd=%u rxsweep=%u rxcache=%u "
+			   "rxcopy=%u txdone=%u txtot=%u txcopy=%u txflush=%u "
+			   "irqn=%u rx=%u tx=%u\n",
+			   g_port,
+			   (unsigned)(p.irq_ticks / 24u), (unsigned)(p.irq_odd_ticks / 24u),
+			   (unsigned)(p.irq_rx_sweep_ticks / 24u),
+			   (unsigned)(p.irq_rx_cache_ticks / 24u),
+			   (unsigned)(p.irq_rx_copy_ticks / 24u),
+			   (unsigned)(p.irq_tx_done_ticks / 24u),
+			   (unsigned)(p.tx_total_ticks / 24u),
+			   (unsigned)(p.tx_memcpy_ticks / 24u),
+			   (unsigned)(p.tx_flush_ticks / 24u),
+			   (unsigned)p.irq_entries, (unsigned)p.rx_frames,
+			   (unsigned)p.tx_frames);
+		return 0;
+	}
 	if ((argc >= 3) && (strcmp(argv[1], "riwt") == 0)) {
 		unsigned long v = strtoul(argv[2], NULL, 0);
 
@@ -473,8 +503,9 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac net | gmac hb on|off | gmac riwt <n>",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac net | gmac hb on|off | gmac riwt <n>",
 			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
+			  "gmac prof [reset] - service-time profile in us (cumulative; diff it);\n"
 			  "gmac net - ARP table + stack counters;\n"
 			  "gmac hb on|off - quiet the 1 Hz heartbeat for a measurement round;\n"
 			  "gmac riwt <n> - set the RX watchdog (coalescing batch size, 256-tick units)\n")
