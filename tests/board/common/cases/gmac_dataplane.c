@@ -811,6 +811,52 @@ static int cmd_gmac(int argc, char **argv)
 		return 0;
 	}
 
+	/* `gmac split [reset]`: the input bucket's dissection (INPUTSPLIT=1
+	 * builds) - per frame class, the wall time blocked on the core lock
+	 * (wait) versus the ethernet_input body (proc), plus the TX send-gap
+	 * histogram. The classes are disjoint, so wait+proc across the row is
+	 * the priced version of `gmac prof`'s bridgeinput bucket. Keys are
+	 * kv-parseable (_c calls, _w wait us, _p proc us); tgN = log2 gap
+	 * buckets of the 24 MHz counter (bucket k spans [2^(k-1),2^k) ticks).
+	 * Off-lever builds print `unavailable` instead of zeros. */
+	if (argc >= 2 && strcmp(argv[1], "split") == 0) {
+#if defined(CONFIG_GMAC_INPUT_SPLIT) && CONFIG_GMAC_INPUT_SPLIT
+		static const char *names[ETHNETIF_CLASSES] = {
+			"data", "ackn", "ackdup", "ackwu", "udp", "oth"
+		};
+		uint64_t wait[ETHNETIF_CLASSES], proc[ETHNETIF_CLASSES];
+		unsigned long calls[ETHNETIF_CLASSES];
+		uint64_t hist[DWC_EQOS_PROF_HIST_BUCKETS], samples;
+		unsigned int i;
+
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
+			ethnetif_reset_input_split();
+			ethnetif_reset_tx_gap();
+			csh_printf(csh, "gmac%u: split reset\n", g_port);
+			return 0;
+		}
+		ethnetif_get_input_split(wait, proc, calls);
+		ethnetif_get_tx_gap(hist, &samples);
+		csh_printf(csh, "gmac%u: split", g_port);
+		for (i = 0; i < ETHNETIF_CLASSES; i++) {
+			csh_printf(csh, " %s_c=%lu %s_w=%u %s_p=%u",
+				   names[i], calls[i], names[i],
+				   (unsigned)(wait[i] / 24u), names[i],
+				   (unsigned)(proc[i] / 24u));
+		}
+		csh_printf(csh, " tg_n=%llu", (unsigned long long)samples);
+		for (i = 0; i < DWC_EQOS_PROF_HIST_BUCKETS; i++) {
+			csh_printf(csh, " tg%u=%llu", i,
+				   (unsigned long long)hist[i]);
+		}
+		csh_printf(csh, "\n");
+#else
+		csh_printf(csh, "gmac%u: split unavailable (build without INPUTSPLIT=1)\n",
+			   g_port);
+#endif
+		return 0;
+	}
+
 	/* `gmac etime`: per-thread execution-time attribution (EPK=1 builds; the
 	 * upstream ThreadX Execution Profile Kit behind osExecProfileGet). One
 	 * line per thread, ticks in the 24 MHz system counter - /24000 = ms. The
@@ -957,7 +1003,7 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac split | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
 			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
 			  "gmac prof [reset] - service-time profile in us (cumulative; diff it);\n"
 			  "gmac ring - RX ring snapshot (tail/DMA position/ownership);\n"
@@ -967,6 +1013,7 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | g
 			  "gmac gap [reset] - RX inter-arrival histogram (log2 buckets, 24 MHz ticks);\n"
 			  "gmac idle [cal] - idle-thread spin gauge (cal = calibrate on a quiet line);\n"
 			  "gmac shape [reset] - TX/RX TCP frame shapes (data/ACK/dup-ACK);\n"
+			  "gmac split [reset] - input wait/proc per frame class + TX gap (INPUTSPLIT=1);\n"
 			  "gmac etime - per-thread execution time in ms (EPK=1 builds);\n"
 			  "gmac udpstat [reset] - UDP sink counters (burst rate board-side);\n"
 			  "gmac udpsend <ip> [ms] - raw-API UDP send loop (default 5000 ms);\n"

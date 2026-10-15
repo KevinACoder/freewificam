@@ -188,6 +188,17 @@ endif
 ifneq ($(TCPPROBE),)
 LEVER_CFLAGS += -DCONFIG_GMAC_TCP_PROBE=1
 endif
+# Input-bucket dissection (2026-10-19 round 2): each received frame's input
+# call is timed in two halves - the core-lock acquisition and the
+# ethernet_input body - and both are indexed by frame class (data / pure ACK
+# / dup ACK / window update / UDP / other); the TX send-gap histogram rides
+# the same switch. The lock sequence is byte-for-byte tcpip_inpkt's under
+# LWIP_TCPIP_CORE_LOCKING_INPUT (tcpip.c:254-262); two extra counter reads
+# per frame are the only cost. Mutually exclusive with BATCH (the batch holds
+# the lock across the drain; the core lock is not recursive).
+ifneq ($(INPUTSPLIT),)
+LEVER_CFLAGS += -DCONFIG_GMAC_INPUT_SPLIT=1
+endif
 # RX copy-chain cut (2026-10-19, the cost-bound fix): the bridge reads each
 # staged frame straight into the pool pbuf, dropping the linear scratch + the
 # pbuf_take copy. One less 1500-byte memcpy per received frame.

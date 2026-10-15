@@ -60,4 +60,36 @@ struct ethnetif_shape {
 void ethnetif_get_shape(struct ethnetif_shape *rx, struct ethnetif_shape *tx);
 void ethnetif_reset_shape(void);
 
+/* Frame classes for the input-cost split (2026-10-19 round 2). The shape
+ * counters say how many of each kind crossed; these index the split arrays
+ * below so the same kinds can be priced individually - "the input bucket is
+ * 6.36 us/frame" is not actionable until it is known WHICH frame class pays
+ * it. Disjoint by construction: every classified frame lands in exactly one. */
+#define ETHNETIF_CLASS_DATA	0	/* TCP with payload */
+#define ETHNETIF_CLASS_ACK	1	/* pure ACK, new (seq, ack) */
+#define ETHNETIF_CLASS_ACKDUP	2	/* pure ACK repeating (seq, ack, win) */
+#define ETHNETIF_CLASS_ACKWUPD	3	/* pure ACK, same (seq, ack), new win */
+#define ETHNETIF_CLASS_UDP	4	/* IPv4/UDP (the control protocol) */
+#define ETHNETIF_CLASS_OTHER	5	/* SYN/FIN/RST/malformed/anything else */
+#define ETHNETIF_CLASSES	6
+
+/* The receive input call, split (INPUTSPLIT=1 builds). wait = wall time
+ * blocked acquiring the core lock; proc = the ethernet_input body itself
+ * (ARP/IP/TCP state machine, including any transmission it triggers). Both
+ * are ticks of the 24 MHz system counter and both are indexed by frame class,
+ * so `wait[ACK]` answers "how much of the uplink's per-ACK cost is lock
+ * handoff" directly. calls[] is the denominator. Without the lever the
+ * arrays stay zero and `gmac split` says so. */
+void ethnetif_get_input_split(uint64_t *wait_ticks, uint64_t *proc_ticks,
+			      unsigned long *calls);
+void ethnetif_reset_input_split(void);
+
+/* TX inter-arrival rhythm (INPUTSPLIT=1 builds): log2 histogram of the gap
+ * between consecutive eth_linkoutput entries, same bucket helper as the RX
+ * gap instrument. The uplink's send cadence - ACKs in, data segments out -
+ * lives here; a paced flow shows a fat tail, a back-to-back burst piles into
+ * the low buckets. */
+void ethnetif_get_tx_gap(uint64_t *hist, uint64_t *samples);
+void ethnetif_reset_tx_gap(void);
+
 #endif /* FREEWEB_LWIP_ETHNETIF_H */

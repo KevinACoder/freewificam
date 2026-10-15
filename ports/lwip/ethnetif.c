@@ -83,8 +83,27 @@ static uint32_t g_tx_last_ack_seq;
 static uint32_t g_tx_last_ack_ack;
 static uint16_t g_tx_last_ack_win;
 
-static void ethnetif_classify(const uint8_t *frame, unsigned int len,
-			      struct ethnetif_shape *shape, int ingress)
+/* Input-cost split (2026-10-19 round 2, INPUTSPLIT=1 builds): the input
+ * bucket is the single largest per-frame term, so it gets torn in two -
+ * wall time blocked on the core lock versus the ethernet_input body - and
+ * both halves are indexed by the frame class the classifier just computed.
+ * The arrays stay compiled in every build (zero cost, they accumulate only
+ * under the lever) so the console command links either way. */
+static uint64_t g_split_wait[ETHNETIF_CLASSES];
+static uint64_t g_split_proc[ETHNETIF_CLASSES];
+static unsigned long g_split_calls[ETHNETIF_CLASSES];
+
+/* TX inter-arrival rhythm (same lever): the send cadence of the direction
+ * under test. One counter read per transmitted frame. */
+static uint64_t g_tx_gap_hist[DWC_EQOS_PROF_HIST_BUCKETS];
+static uint64_t g_tx_gap_samples;
+static uint64_t g_tx_gap_last_ticks;
+
+/* Classify one frame and report which class it is (the shape counters are a
+ * side effect). Returns one of ETHNETIF_CLASS_*; `ingress` selects which
+ * ACK-history pair the duplicate/window-update split compares against. */
+static unsigned int ethnetif_classify(const uint8_t *frame, unsigned int len,
+				      struct ethnetif_shape *shape, int ingress)
 {
 	const uint8_t *ip;
 	unsigned int ip_hlen;
@@ -92,21 +111,29 @@ static void ethnetif_classify(const uint8_t *frame, unsigned int len,
 	shape->frames++;
 	if (len < 34u) {
 		shape->other++;
-		return;
+		return ETHNETIF_CLASS_OTHER;
 	}
 	if (((frame[12] << 8) | frame[13]) != 0x0800u) {	/* IPv4 only */
 		shape->other++;
-		return;
+		return ETHNETIF_CLASS_OTHER;
 	}
 	ip = &frame[14];
 	if ((ip[0] >> 4) != 4u) {
 		shape->other++;
-		return;
+		return ETHNETIF_CLASS_OTHER;
 	}
 	ip_hlen = (unsigned int)(ip[0] & 0x0fu) * 4u;
-	if ((ip_hlen < 20u) || (ip[9] != 6u)) {		/* TCP only */
+	if (ip_hlen < 20u) {
 		shape->other++;
-		return;
+		return ETHNETIF_CLASS_OTHER;
+	}
+	if (ip[9] == 17u) {			/* UDP: the control protocol */
+		shape->other++;
+		return ETHNETIF_CLASS_UDP;
+	}
+	if (ip[9] != 6u) {			/* TCP only from here on */
+		shape->other++;
+		return ETHNETIF_CLASS_OTHER;
 	}
 	{
 		unsigned int l4_off = 14u + ip_hlen;
@@ -116,7 +143,7 @@ static void ethnetif_classify(const uint8_t *frame, unsigned int len,
 
 		if (len < l4_off + 20u) {
 			shape->other++;
-			return;
+			return ETHNETIF_CLASS_OTHER;
 		}
 		flags = frame[l4_off + 13];
 		seq = ((uint32_t)frame[l4_off + 4] << 24)
@@ -131,13 +158,21 @@ static void ethnetif_classify(const uint8_t *frame, unsigned int len,
 				 | frame[l4_off + 15]);
 		if ((flags & 0x02u) != 0u) {		/* SYN */
 			shape->syn++;
-		} else if ((flags & 0x01u) != 0u) {	/* FIN */
+			return ETHNETIF_CLASS_OTHER;
+		}
+		if ((flags & 0x01u) != 0u) {		/* FIN */
 			shape->fin++;
-		} else if ((flags & 0x04u) != 0u) {	/* RST */
+			return ETHNETIF_CLASS_OTHER;
+		}
+		if ((flags & 0x04u) != 0u) {		/* RST */
 			shape->rst++;
-		} else if ((ip[2] << 8 | ip[3]) > (ip_hlen + 20u)) {
+			return ETHNETIF_CLASS_OTHER;
+		}
+		if ((ip[2] << 8 | ip[3]) > (int)(ip_hlen + 20u)) {
 			shape->data++;
-		} else if ((flags & 0x10u) != 0u) {	/* pure ACK */
+			return ETHNETIF_CLASS_DATA;
+		}
+		if ((flags & 0x10u) != 0u) {		/* pure ACK */
 			uint32_t *last_seq = ingress ? &g_rx_last_ack_seq
 						     : &g_tx_last_ack_seq;
 			uint32_t *last_ack = ingress ? &g_rx_last_ack_ack
@@ -150,16 +185,24 @@ static void ethnetif_classify(const uint8_t *frame, unsigned int len,
 			    && (*last_seq == seq) && (*last_ack == ack)) {
 				if (*last_win == win) {
 					shape->ack_dup++;
-				} else {
-					shape->ack_wupd++;
+					*last_seq = seq;
+					*last_ack = ack;
+					*last_win = win;
+					return ETHNETIF_CLASS_ACKDUP;
 				}
+				shape->ack_wupd++;
+				*last_seq = seq;
+				*last_ack = ack;
+				*last_win = win;
+				return ETHNETIF_CLASS_ACKWUPD;
 			}
 			*last_seq = seq;
 			*last_ack = ack;
 			*last_win = win;
-		} else {
-			shape->other++;
+			return ETHNETIF_CLASS_ACK;
 		}
+		shape->other++;
+		return ETHNETIF_CLASS_OTHER;
 	}
 }
 
@@ -179,6 +222,46 @@ void ethnetif_reset_shape(void)
 	g_tx_last_ack_seq = 0u;
 	g_tx_last_ack_ack = 0u;
 	g_tx_last_ack_win = 0u;
+}
+
+void ethnetif_get_input_split(uint64_t *wait_ticks, uint64_t *proc_ticks,
+			      unsigned long *calls)
+{
+	unsigned int i;
+
+	for (i = 0; i < ETHNETIF_CLASSES; i++) {
+		wait_ticks[i] = g_split_wait[i];
+		proc_ticks[i] = g_split_proc[i];
+		calls[i] = g_split_calls[i];
+	}
+}
+
+void ethnetif_reset_input_split(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ETHNETIF_CLASSES; i++) {
+		g_split_wait[i] = 0u;
+		g_split_proc[i] = 0u;
+		g_split_calls[i] = 0u;
+	}
+}
+
+void ethnetif_get_tx_gap(uint64_t *hist, uint64_t *samples)
+{
+	unsigned int i;
+
+	for (i = 0; i < DWC_EQOS_PROF_HIST_BUCKETS; i++) {
+		hist[i] = g_tx_gap_hist[i];
+	}
+	*samples = g_tx_gap_samples;
+}
+
+void ethnetif_reset_tx_gap(void)
+{
+	memset(g_tx_gap_hist, 0, sizeof(g_tx_gap_hist));
+	g_tx_gap_samples = 0u;
+	g_tx_gap_last_ticks = 0u;
 }
 
 void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
@@ -211,6 +294,21 @@ static err_t eth_linkoutput(struct netif *netif, struct pbuf *p)
 	uint32_t len = 0;
 	struct pbuf *q;
 
+#if defined(CONFIG_GMAC_INPUT_SPLIT) && CONFIG_GMAC_INPUT_SPLIT
+	/* The send-cadence instrument (see ethnetif_get_tx_gap). Timed at the
+	 * bridge's entry so it sees the stack's emission rhythm, before the
+	 * driver's own copy/flush costs smear it. */
+	{
+		uint64_t now = gtimer_count_get();
+
+		if (g_tx_gap_last_ticks != 0u) {
+			g_tx_gap_hist[gmac_prof_hist_bucket(
+				now - g_tx_gap_last_ticks)]++;
+			g_tx_gap_samples++;
+		}
+		g_tx_gap_last_ticks = now;
+	}
+#endif
 	if (p->tot_len > ETHNETIF_LINEAR_BUF) {
 		return ERR_BUF;
 	}
@@ -309,6 +407,7 @@ unsigned int ethnetif_poll(struct netif *netif)
 		int len;
 		struct pbuf *p;
 		uint64_t t0;
+		unsigned int cls = ETHNETIF_CLASS_OTHER;
 
 		len = (int)dwc_eqos_get_rx_frame_size(port);
 		if (len <= 0) {
@@ -333,8 +432,8 @@ unsigned int ethnetif_poll(struct netif *netif)
 			g_pool_fail++;
 			continue;
 		}
-		ethnetif_classify((const uint8_t *)p->payload, (unsigned int)len,
-				  &g_rx_shape, 1);
+		cls = ethnetif_classify((const uint8_t *)p->payload,
+					(unsigned int)len, &g_rx_shape, 1);
 		{
 			uint64_t t1 = gtimer_count_get();
 
@@ -345,7 +444,8 @@ unsigned int ethnetif_poll(struct netif *netif)
 			break;
 		}
 		t0 = gtimer_count_get();
-		ethnetif_classify(in_linear, (unsigned int)len, &g_rx_shape, 1);
+		cls = ethnetif_classify(in_linear, (unsigned int)len,
+					&g_rx_shape, 1);
 		p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_POOL);
 		if (p == NULL) {
 			/* Pool exhaustion: drop the frame (the staging slot is
@@ -368,10 +468,35 @@ unsigned int ethnetif_poll(struct netif *netif)
 			/* Already under the core lock: hand the frame straight
 			 * to the stack's ethernet entry, the same function the
 			 * locking tcpip_input would call after re-locking. */
-			if (ethernet_input(p, netif) != ERR_OK) {
+			err_t rv = ethernet_input(p, netif);
+#elif defined(CONFIG_GMAC_INPUT_SPLIT) && CONFIG_GMAC_INPUT_SPLIT \
+	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
+			/* The input bucket, torn in two (2026-10-19 round 2):
+			 * the lock acquisition is timed on its own, then the
+			 * ethernet_input body. This is the exact sequence
+			 * tcpip_inpkt runs under LWIP_TCPIP_CORE_LOCKING_INPUT
+			 * (tcpip.c:254-262) - LOCK, input_fn, UNLOCK - so the
+			 * only cost added is two counter reads per frame. Not
+			 * combinable with BATCH (the batch already holds the
+			 * lock; it is not recursive). */
+			err_t rv;
+			{
+				uint64_t w0, w1, p1;
+
+				w0 = gtimer_count_get();
+				LOCK_TCPIP_CORE();
+				w1 = gtimer_count_get();
+				rv = ethernet_input(p, netif);
+				p1 = gtimer_count_get();
+				UNLOCK_TCPIP_CORE();
+				g_split_wait[cls] += w1 - w0;
+				g_split_proc[cls] += p1 - w1;
+				g_split_calls[cls]++;
+			}
 #else
-			if (netif->input(p, netif) != ERR_OK) {
+			err_t rv = netif->input(p, netif);
 #endif
+			if (rv != ERR_OK) {
 				pbuf_free(p);
 				g_input_fail++;
 				g_input_ticks += gtimer_count_get() - t1;
@@ -380,6 +505,9 @@ unsigned int ethnetif_poll(struct netif *netif)
 			g_input_ticks += gtimer_count_get() - t1;
 			g_input_calls++;
 		}
+		/* The class is consumed by the INPUTSPLIT arrays inside the branch
+		 * above; in every other build it is benignly dropped here. */
+		(void)cls;
 		fed++;
 		g_fed_total++;
 	}
