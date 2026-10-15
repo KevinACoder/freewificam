@@ -63,10 +63,13 @@
 /* AArch64 pointers are 8 bytes: aligned blocks keep every pointer field of
  * every pbuf naturally aligned. */
 #define MEM_ALIGNMENT                   8
-/* 256 buffers: the RX ring depth (128) plus an in-flight TCP burst must fit
+/* 448 buffers: the RX ring depth (128) plus an in-flight TCP burst must fit
  * without pool exhaustion - a 40-deep pool dropped 13.5% of ACKs in the
- * earlier gigabit baseline. */
-#define PBUF_POOL_SIZE                  256
+ * earlier gigabit baseline. Raised from 256 with the 512 KB window below,
+ * because the pool has to be able to hold a whole window of received data
+ * (512 KB / 1600 = 328 buffers) on top of the ring and the burst: a pool that
+ * cannot hold the window makes the stack advertise one it cannot back. */
+#define PBUF_POOL_SIZE                  448
 /* One full 1518-byte frame plus headroom in a single pool buffer, so a
  * maximum-frame receive never needs a chain. */
 #define PBUF_POOL_BUFSIZE               1600
@@ -132,19 +135,30 @@
 #if LWIP_PERF_TIER
 #define TCP_MSS                         1460
 /* Window scaling: announced window = TCP_WND >> TCP_RCV_SCALE = 32768,
- * which fits the 16-bit header field; the receive window itself is 256 KB,
- * i.e. >1 Gbit/s of headroom at the measured RTT. */
+ * which fits the 16-bit header field; the receive window itself is 512 KB.
+ * The scale moved from 3 to 4 with the window, so the announced field stays
+ * at 32768: lwIP refuses a TCP_WND above 0xFFFF << TCP_RCV_SCALE, and 512 KB
+ * is just past what scale 3 allows (524280).
+ *
+ * The window is sized against the RTT measured while the link is loaded, not
+ * the idle one. The loaded RTT is ~70-100 ms (the sender's smoothed round trip
+ * and the ping running alongside a bulk window agree), because the card holds
+ * received frames to aggregate them, and at that RTT a 256 KB window caps a
+ * single stream at ~20 Mbit/s - which is where the port sat: a UDP blast
+ * reached 63 Mbit/s on the same boot and channel while TCP held 18.4, so the
+ * ceiling was the window and not the receive path. 512 KB puts the same
+ * arithmetic at ~40-58 Mbit/s, above the target. */
 #define LWIP_WND_SCALE                  1
-#define TCP_RCV_SCALE                   3
-#define TCP_WND                         262144
-#define TCP_SND_BUF                     262144
-/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 719. */
-#define TCP_SND_QUEUELEN                768
+#define TCP_RCV_SCALE                   4
+#define TCP_WND                         524288
+#define TCP_SND_BUF                     524288
+/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 1436. */
+#define TCP_SND_QUEUELEN                1536
 /* The opt.h default (TCP_SND_BUF / 2) trips the u16 guard sanity check;
  * 32 KB keeps the writer awake far from it. */
 #define TCP_SNDLOWAT                    32768
 #define TCP_QUEUE_OOSEQ                 1
-#define MEMP_NUM_TCP_SEG                768
+#define MEMP_NUM_TCP_SEG                1536
 /* Matches TCPIP_MBOX_SIZE: an mbox slot without its msg-pool element drops
  * the frame anyway, so sizing only the mbox is dead weight. */
 #define MEMP_NUM_TCPIP_MSG_INPKT        128
