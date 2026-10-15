@@ -67,6 +67,13 @@
 
 #include "dwc_eqos.h"
 
+/* The line's GIC priority: the board's default SPI class, or the kernel's
+ * API-call ceiling when the build has to respect one (the FreeRTOS board
+ * image passes 0xd0u, the same value its USB controller line carries). */
+#ifndef EQOS_BOARD_IRQ_PRIORITY_RAW
+#define EQOS_BOARD_IRQ_PRIORITY_RAW BOARD_SPI_DEFAULT_PRIORITY_RAW
+#endif
+
 /* Bus clock the MAC sees: pclk_gmac is 100 MHz after the CRU dividers. It sets
  * the 1us tick counter and the MDIO divider (see DWC_EQOS_MDIO_CR). */
 #define DWC_EQOS_PCLK_HZ	100000000u
@@ -914,6 +921,35 @@ void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index))
 	s_rx_notify = fn;
 }
 
+/* Runtime RX-watchdog knob: RIWT is the coalescing batch size (unit 256 DMA
+ * clock ticks), so a measurement round sweeps it inside one boot instead of
+ * one boot per value. Only the register moves; the descriptor IOC bits stay
+ * as the build set them. */
+void dwc_eqos_set_rx_riwt(unsigned int index, uint32_t riwt)
+{
+	struct dwc_eqos_dev *dev;
+
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	dev = &devs[index];
+	if (!dev->powered) {
+		return;
+	}
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_WATCHDOG, riwt);
+}
+
+uint32_t dwc_eqos_get_rx_riwt(unsigned int index)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return 0u;
+	}
+	if (!devs[index].powered) {
+		return 0u;
+	}
+	return eqos_rd(&devs[index], DWC_EQOS_DMA_CH0_RX_WATCHDOG);
+}
+
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
 void dwc_eqos_set_rx_zc(dwc_eqos_rx_wrap_fn fn)
 {
@@ -1213,14 +1249,22 @@ int32_t dwc_eqos_power_control(unsigned int index, eqos_power_state_t state)
 		}
 
 		/* The gicv3 registration carries the instance index in the
-		 * handler argument; level mode and the board's default SPI
-		 * priority class, then enable (the same arming shape as every
-		 * other SPI line in this image). */
+		 * handler argument; level mode and the line's priority class,
+		 * then enable (the same arming shape as every other SPI line
+		 * in this image).
+		 *
+		 * EQOS_BOARD_IRQ_PRIORITY_RAW: the handler releases the RX
+		 * semaphore from the interrupt, so on a kernel that forbids
+		 * API calls from interrupts more urgent than its ceiling
+		 * (FreeRTOS: configMAX_API_CALL_INTERRUPT_PRIORITY) the line
+		 * has to sit at that ceiling - the same seam, and the same
+		 * raw value, as the USB controller line
+		 * (ports/cherryusb/board/rk3568-itx/usb_glue.c:82-83). */
 		(void)irq_register(dev->plat->irq_num, dwc_eqos_irq,
 				   (void *)(uintptr_t)index);
 		(void)irq_set_mode_level(dev->plat->irq_num);
 		(void)irq_set_priority(dev->plat->irq_num,
-				       BOARD_SPI_DEFAULT_PRIORITY_RAW);
+				       EQOS_BOARD_IRQ_PRIORITY_RAW);
 		(void)irq_enable(dev->plat->irq_num);
 
 		dev->powered = 1;

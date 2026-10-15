@@ -378,6 +378,11 @@ void dwc_eqos_irq(void *arg);
  * event_rx_frame, reduced to the one event the bridge consumes). */
 void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index));
 
+/* Runtime RX-watchdog (coalescing batch size) knob: the register value, so a
+ * measurement round sweeps RIWT inside one boot. */
+void dwc_eqos_set_rx_riwt(unsigned int index, uint32_t riwt);
+uint32_t dwc_eqos_get_rx_riwt(unsigned int index);
+
 /* Zero-copy RX (CONFIG_GMAC_RX_ZC, N7 R4): the driver lends completed
  * frames out instead of copying them into the staging ring.
  *
