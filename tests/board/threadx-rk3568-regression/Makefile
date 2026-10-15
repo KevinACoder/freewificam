@@ -109,6 +109,22 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 # block and drops RDES1-flagged frames while lwipopts turns the software
 # verification off - so the define must reach every translation unit, both
 # the driver's and the stack's (lwipopts.h keys its block on this macro).
+# Measurement levers: the wired throughput ladder moves one arm at a time, so
+# a treatment is a build knob rather than an edit (the pattern of the rtl8189
+# suite's LEVER_CFLAGS block, tests/board/threadx-rk3568-rtl8189/Makefile:
+# 101-121). Unset = the shipped defaults; the round's ledger names the value
+# each boot carried.
+LEVER_CFLAGS :=
+ifneq ($(COALESCE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_COALESCE=1 -DCONFIG_GMAC_RX_RIWT=$(COALESCE)
+endif
+ifneq ($(ZC),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_ZC=1
+endif
+ifneq ($(IRQ_BREAKER),)
+LEVER_CFLAGS += -DCONFIG_GMAC_IRQ_BREAKER=1
+endif
+
 OPT ?= -Og
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
@@ -118,6 +134,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
 	-DCMSIS2_BACKEND_THREADX \
 	-DCONFIG_GMAC_RX_HWCSUM=1 \
+	$(LEVER_CFLAGS) \
 	-DSHELL_PORT_HOST='"rk3568"'
 
 # The freestanding libc surface is declared everywhere it is used: the vendored
@@ -206,9 +223,9 @@ TESTS_SRCS := \
 	$(COMMON)/cases/usb_msc.c \
 	$(COMMON)/cases/usb_xhci.c \
 	$(COMMON)/cases/usb_ehci.c \
-	$(CURDIR)/tests/lwip_smoke.c \
+	$(COMMON)/cases/lwip_smoke.c \
 	$(COMMON)/lwip_stack.c \
-	$(CURDIR)/tests/gmac_dataplane.c
+	$(COMMON)/cases/gmac_dataplane.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -352,10 +369,10 @@ $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(filter-out $(CURDIR)/tests/lwip_smoke.c $(COMMON)/lwip_stack.c $(CURDIR)/tests/gmac_dataplane.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
-$(eval $(call COMPILE_RULE,$(CURDIR)/tests/lwip_smoke.c,$(LWIP_INCLUDES)))
+$(foreach s,$(filter-out $(COMMON)/cases/lwip_smoke.c $(COMMON)/lwip_stack.c $(COMMON)/cases/gmac_dataplane.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(eval $(call COMPILE_RULE,$(COMMON)/cases/lwip_smoke.c,$(LWIP_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
-$(eval $(call COMPILE_RULE,$(CURDIR)/tests/gmac_dataplane.c,$(LWIP_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(COMMON)/cases/gmac_dataplane.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
@@ -365,9 +382,14 @@ $(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))
 $(eval $(call COMPILE_RULE,$(LWIP)/contrib/apps/ping/ping.c,$(LWIP_INCLUDES) -DLWIP_DEBUG))
 $(foreach s,$(EQOS_SRCS),$(eval $(call COMPILE_RULE,$(s),$(EQOS_INCLUDES))))
 
+# The stamp carries the compile flags as well as the build tag: make does not
+# treat a flag change as a reason to recompile, so a lever build on top of a
+# default build would otherwise ship the default binary under a new name (the
+# 2026-10-15 wired round measured exactly that: COALESCE=0xa0 rebuilt nothing
+# and produced the baseline's crc32).
 $(TAG_STAMP): FORCE
 	@mkdir -p $(BUILD)
-	@printf '%s' '$(BUILD_TAG)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG)' > $@
+	@printf '%s' '$(BUILD_TAG) $(LEVER_CFLAGS)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG) $(LEVER_CFLAGS)' > $@
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@

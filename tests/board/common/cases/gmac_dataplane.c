@@ -320,6 +320,34 @@ static int cmd_gmac(int argc, char **argv)
 		net_print_stack();
 		return 0;
 	}
+	/* `gmac diag`: the driver's black box in one line - ring indices, the
+	 * live channel status and interrupt-enable words, and the odd-pass /
+	 * breaker counters. A measurement round samples it between phases to
+	 * see WHEN a direction degrades and which bit moved. */
+	if (argc >= 2 && strcmp(argv[1], "diag") == 0) {
+		struct dwc_eqos_diag d;
+
+		dwc_eqos_get_diag(g_port, &d);
+		csh_printf(csh, "gmac%u: diag txhead=%u txtail=%u ioc=%u txsc=%u "
+			   "rrdy=%u rfree=%u "
+			   "irq=%u odd=%u brk=%u st=%08x ien=%08x pend=%d last=%08x\n",
+			   g_port, (unsigned)d.tx_head, (unsigned)d.tx_tail,
+			   (unsigned)d.tx_ioc_seq, (unsigned)d.tx_sem_count,
+			   (unsigned)d.rx_ready_count, (unsigned)d.rx_free_count,
+			   (unsigned)d.irq_n, (unsigned)d.irq_odd,
+			   (unsigned)d.irq_breaker, (unsigned)d.ch0_status,
+			   (unsigned)d.intr_enable, (int)d.gic_pending,
+			   (unsigned)d.last_status);
+		return 0;
+	}
+	if ((argc >= 3) && (strcmp(argv[1], "riwt") == 0)) {
+		unsigned long v = strtoul(argv[2], NULL, 0);
+
+		dwc_eqos_set_rx_riwt(g_port, (uint32_t)v);
+		csh_printf(csh, "gmac: riwt %lu readback %lu\n", v,
+			   (unsigned long)dwc_eqos_get_rx_riwt(g_port));
+		return 0;
+	}
 	if ((argc >= 3) && (strcmp(argv[1], "hb") == 0)) {
 		g_hb_on = (strcmp(argv[2], "on") == 0);
 		csh_printf(csh, "gmac: heartbeat %s\n", g_hb_on ? "on" : "off");
@@ -440,9 +468,11 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac net | gmac hb on|off",
-			  "gmac stat - driver counters; gmac net - ARP table + stack counters;\n"
-			  "gmac hb on|off - quiet the 1 Hz heartbeat for a measurement round\n")
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac net | gmac hb on|off | gmac riwt <n>",
+			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
+			  "gmac net - ARP table + stack counters;\n"
+			  "gmac hb on|off - quiet the 1 Hz heartbeat for a measurement round;\n"
+			  "gmac riwt <n> - set the RX watchdog (coalescing batch size, 256-tick units)\n")
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_ping, ping, "ping <ip> | ping stop",
 			  "ping <ip> - ICMP echo via the lwIP socket API\n")
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_iperf, iperf, "iperf <ip> | iperf server | iperf stop",

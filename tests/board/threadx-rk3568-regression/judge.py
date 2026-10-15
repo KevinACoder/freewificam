@@ -51,10 +51,10 @@ CASES = [
 #:   thread-sched tests/board/threadx-rk3568-regression/tests/thread_sched.c
 #:   cmsis2-prio  os/threadx/cmsis2_threadx.c (priority map print)
 #:   tlsf-heap    os/threadx/board/rk3568-itx/heap.c (heap ready line)
-#:   lwip-loopback tests/board/threadx-rk3568-regression/tests/lwip_smoke.c
-#:                 (stack init callback line, loopback echo result line)
-#:   gmac-up      tests/board/threadx-rk3568-regression/tests/gmac_dataplane.c
-#:                 (PHY identity + link line, MAC address, channel start)
+#:   lwip-loopback tests/board/common/cases/lwip_smoke.c (stack init callback
+#:                 line, loopback echo result line)
+#:   gmac-up      tests/board/common/cases/gmac_dataplane.c (PHY identity +
+#:                 link line, MAC address, channel start)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "kernel-up": [
