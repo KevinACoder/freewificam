@@ -27,7 +27,7 @@ ROOT := $(abspath $(MAKEFILE_DIR)/../../..)
 
 NET   := $(ROOT)/components/net80211
 PORT  := $(ROOT)/ports/net80211
-LWIP  := $(ROOT)/third-party/lwip
+LWIP  := $(shell sh $(ROOT)/tools/patches/replay.sh lwip)
 DRV   := $(ROOT)/third-party/rtl8xxxu
 FR    := $(ROOT)/third-party/FreeRTOS-Kernel
 CMM   := $(ROOT)/third-party/CMSIS_6

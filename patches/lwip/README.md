@@ -8,8 +8,28 @@ applied at build time by `tools/patches/replay.sh`.
 |---|---|
 | Upstream | https://github.com/lwip-tcpip/lwip.git |
 | Base (= pin) | `77dcd25a72509eb83f72b033d219b1d40cd8eb95` (tag `STABLE-2_2_1_RELEASE`) |
-| Patch list | (empty) |
-| Submission status | no patches to submit - the import is zero-patch by design: the OS coupling is the first-party `ports/lwip/` adapter over CMSIS-RTOS2, and every configuration knob the stack offers is used through `lwipopts.h` and `arch/cc.h`, so no upstream byte needs to change |
+| Patch list | `0001-lwiperf-boundary.patch` |
+| Submission status | `0001` not yet submitted: it is written to be sent as-is (one concern, `git format-patch` form, `Signed-off-by`, no local knowledge) and is waiting on the board acceptance run that measures the modes it unblocks |
+
+## 0001 - lwiperf: take plain payload at the 128 KiB boundary as data
+
+`lwiperf_tcp_recv()` requires the packet crossing the 128 KiB boundary to start
+with a repeat of the 24-byte settings block whenever `ANSWER_TEST` is set, and
+closes the session with `LWIPERF_TCP_ABORTED_LOCAL_DATAERROR` when it does not.
+That repeat is lwiperf's own client's behaviour; the iperf2 client never
+repeats it, so the modes that set `ANSWER_TEST` - `iperf -d` (dualtest) and
+`iperf -r` (tradeoff) - die on the receive leg on the second packet. The same
+branch also strips 24 bytes of payload when the flag is *not* set, i.e. a long
+single-direction transfer loses 24 bytes per crossing and reports 24 bytes more
+than it received.
+
+The patch consumes the repeated block only when the packet really starts with
+one and lets everything else fall through to the data path. It does not change
+what lwiperf's own client sends, and the receive behaviour for that client is
+unchanged.
+
+Acceptance: a board run with `iperf -c <board> -d` against the image's lwiperf
+server must show both legs carrying bytes (the receive leg used to abort).
 
 Rules (project patch policy):
 
