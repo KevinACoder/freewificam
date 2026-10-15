@@ -134,8 +134,11 @@
 
 #if LWIP_PERF_TIER
 #define TCP_MSS                         1460
-/* Window scaling: announced window = TCP_WND >> TCP_RCV_SCALE = 65536,
+/* Window scaling: announced window = TCP_WND >> TCP_RCV_SCALE = 32768,
  * which fits the 16-bit header field; the receive window itself is 512 KB.
+ * The scale moved from 3 to 4 with the window, so the announced field stays
+ * at 32768: lwIP refuses a TCP_WND above 0xFFFF << TCP_RCV_SCALE, and 512 KB
+ * is just past what scale 3 allows (524280).
  *
  * The window is sized against the RTT measured while the link is loaded, not
  * the idle one. The loaded RTT is ~70-100 ms (the sender's smoothed round trip
@@ -146,7 +149,7 @@
  * ceiling was the window and not the receive path. 512 KB puts the same
  * arithmetic at ~40-58 Mbit/s, above the target. */
 #define LWIP_WND_SCALE                  1
-#define TCP_RCV_SCALE                   3
+#define TCP_RCV_SCALE                   4
 #define TCP_WND                         524288
 #define TCP_SND_BUF                     524288
 /* Floor is 4 * TCP_SND_BUF / TCP_MSS = 1436. */
