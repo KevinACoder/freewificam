@@ -76,6 +76,15 @@ static err_t eth_linkoutput(struct netif *netif, struct pbuf *p)
 	if (p->tot_len > ETHNETIF_LINEAR_BUF) {
 		return ERR_BUF;
 	}
+	/* LWIP_NETIF_TX_SINGLE_PBUF makes the common case a single contiguous
+	 * pbuf, and the driver copies into its own DMA buffer anyway: handing it
+	 * the payload directly saves the whole-frame copy this bridge used to
+	 * pay for nothing. Chains (the rare case) still linearize. */
+	if (p->next == NULL) {
+		return (dwc_eqos_send_frame(port, (const uint8_t *)p->payload,
+					    p->tot_len) == EQOS_OK)
+		       ? ERR_OK : ERR_IF;
+	}
 	for (q = p; q != NULL; q = q->next) {
 		memcpy(&out_linear[len], q->payload, q->len);
 		len += q->len;
