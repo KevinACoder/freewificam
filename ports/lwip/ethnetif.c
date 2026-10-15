@@ -99,6 +99,47 @@ static uint64_t g_tx_gap_hist[DWC_EQOS_PROF_HIST_BUCKETS];
 static uint64_t g_tx_gap_samples;
 static uint64_t g_tx_gap_last_ticks;
 
+/* Fine TCP-path probe (FINE=1 builds, patch 0002): deltas between
+ * consecutive LWIP_HOOK_TCP_PROBE sites, bucketed by the site PAIR they
+ * span. The TCP path runs on one thread under the core lock, so the mark
+ * stream is strictly serialized; a site-0 mark opens a new entry and drops
+ * the delta left by the previous entry (that is inter-frame time, not
+ * input-path cost). Everything lands in every build (link safety); only a
+ * FINE build accumulates. */
+#if defined(CONFIG_GMAC_TCP_FINE) && CONFIG_GMAC_TCP_FINE
+static const struct {
+	uint8_t from;
+	uint8_t to;
+} g_fine_pairs[ETHNETIF_TCP_FINE_PAIRS] = {
+	{ 0, 1 },	/* segp : entry -> state machine done (tcp_process) */
+	{ 1, 2 },	/* sent : TCP_EVENT_SENT body (lwiperf writes segments) */
+	{ 2, 3 },	/* tail : recv delivery / FIN / pre-output tail */
+	{ 3, 4 },	/* ocall: tcp_output call + input-suppression check */
+	{ 4, 5 },	/* opre : route + window checks + unacked walk */
+	{ 5, 6 },	/* snd1 : first data segment to the wire (incl. driver) */
+	{ 6, 6 },	/* sndn : each further data segment (send + loop tail) */
+	{ 4, 7 },	/* ctrl : empty ACK, unsent queue empty at entry */
+	{ 5, 7 },	/* dack : empty ACK after the walk (delayed ACK due) */
+	{ 0, 7 },	/* cctrl: empty ACK sent mid-processing (dup-ACK path) */
+	{ 7, 1 },	/* ctrlt: resume processing after that empty ACK */
+};
+#endif
+
+const char *const ethnetif_tcp_fine_names[ETHNETIF_TCP_FINE_PAIRS] = {
+	"segp", "sent", "tail", "ocall", "opre",
+	"snd1", "sndn", "ctrl", "dack", "cctrl", "ctrlt",
+};
+
+static uint64_t g_fine_ticks[ETHNETIF_TCP_FINE_PAIRS];
+static unsigned long g_fine_calls[ETHNETIF_TCP_FINE_PAIRS];
+static uint64_t g_fine_other;
+static uint64_t g_fine_last;
+static unsigned int g_fine_prev;
+static int g_fine_prev_valid;
+static unsigned long g_fine_entries;
+static unsigned long g_fine_data_handoffs;
+static unsigned long g_fine_ctrl_handoffs;
+
 /* Classify one frame and report which class it is (the shape counters are a
  * side effect). Returns one of ETHNETIF_CLASS_*; `ingress` selects which
  * ACK-history pair the duplicate/window-update split compares against. */
@@ -262,6 +303,77 @@ void ethnetif_reset_tx_gap(void)
 	memset(g_tx_gap_hist, 0, sizeof(g_tx_gap_hist));
 	g_tx_gap_samples = 0u;
 	g_tx_gap_last_ticks = 0u;
+}
+
+void ethnetif_tcp_fine_mark(unsigned int site)
+{
+#if defined(CONFIG_GMAC_TCP_FINE) && CONFIG_GMAC_TCP_FINE
+	uint64_t now;
+	unsigned int i;
+
+	if (site > 7u) {
+		return;
+	}
+	now = gtimer_count_get();
+	if (site == 0u) {
+		/* A new entry: the delta still hanging on the previous mark is
+		 * inter-frame time (the bridge loop, other traffic) - dropped by
+		 * design, the instrument prices the input path only. */
+		g_fine_entries++;
+	} else if (g_fine_prev_valid) {
+		for (i = 0; i < ETHNETIF_TCP_FINE_PAIRS; i++) {
+			if (g_fine_pairs[i].from == g_fine_prev &&
+			    g_fine_pairs[i].to == site) {
+				g_fine_ticks[i] += now - g_fine_last;
+				g_fine_calls[i]++;
+				break;
+			}
+		}
+		if (i == ETHNETIF_TCP_FINE_PAIRS) {
+			g_fine_other += now - g_fine_last;
+		}
+	}
+	g_fine_last = now;
+	g_fine_prev = site;
+	g_fine_prev_valid = 1;
+	if (site == 6u) {
+		g_fine_data_handoffs++;
+	} else if (site == 7u) {
+		g_fine_ctrl_handoffs++;
+	}
+#else
+	(void)site;
+#endif
+}
+
+void ethnetif_get_tcp_fine(uint64_t *pair_ticks, unsigned long *pair_calls,
+			   uint64_t *other_ticks, unsigned long *entries,
+			   unsigned long *data_handoffs,
+			   unsigned long *ctrl_handoffs)
+{
+	unsigned int i;
+
+	for (i = 0; i < ETHNETIF_TCP_FINE_PAIRS; i++) {
+		pair_ticks[i] = g_fine_ticks[i];
+		pair_calls[i] = g_fine_calls[i];
+	}
+	*other_ticks = g_fine_other;
+	*entries = g_fine_entries;
+	*data_handoffs = g_fine_data_handoffs;
+	*ctrl_handoffs = g_fine_ctrl_handoffs;
+}
+
+void ethnetif_reset_tcp_fine(void)
+{
+	memset(g_fine_ticks, 0, sizeof(g_fine_ticks));
+	memset(g_fine_calls, 0, sizeof(g_fine_calls));
+	g_fine_other = 0u;
+	g_fine_last = 0u;
+	g_fine_prev = 0u;
+	g_fine_prev_valid = 0;
+	g_fine_entries = 0u;
+	g_fine_data_handoffs = 0u;
+	g_fine_ctrl_handoffs = 0u;
 }
 
 void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,

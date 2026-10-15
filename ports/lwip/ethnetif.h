@@ -92,4 +92,36 @@ void ethnetif_reset_input_split(void);
 void ethnetif_get_tx_gap(uint64_t *hist, uint64_t *samples);
 void ethnetif_reset_tx_gap(void);
 
+/* Fine-grained TCP input-path probe (FINE=1 builds; patch 0002): the lwIP
+ * TCP layer calls ethnetif_tcp_fine_mark() through LWIP_HOOK_TCP_PROBE at
+ * fixed points of the input path, and this side buckets the 24 MHz tick
+ * deltas by the site PAIR they span. The measured ~30 us per pure ACK is one
+ * tcp_input entry that internally does the ACK's state-machine work, the
+ * application sent callback (lwiperf writes the next segment) and the
+ * deferred tcp_output that hands that segment to the wire - the pair table
+ * is what splits those apart. Pair order is ABI for `gmac tcpfine`. */
+#define ETHNETIF_TCP_FINE_PAIRS 11
+
+/* Names for the pair deltas, in slot order; defined next to the table. */
+extern const char *const ethnetif_tcp_fine_names[ETHNETIF_TCP_FINE_PAIRS];
+
+/* The lwIP-side hook target. `site` is the LWIP_HOOK_TCP_PROBE site number:
+ * 0 tcp_input entry, 1 before TCP_EVENT_SENT, 2 after it, 3 before the
+ * deferred tcp_output, 4 tcp_output entry, 5 after the unacked walk, 6 one
+ * data segment sent, 7 one control segment sent. Runs on the TCP/IP context
+ * (single-threaded under the core lock); must not change any state. */
+void ethnetif_tcp_fine_mark(unsigned int site);
+
+/* Read the buckets: per-pair tick totals and call counts, the "other" pile
+ * (deltas between sites that are not a tabled pair - e.g. a timer-context
+ * tcp_output landing after a send; the tail/inter-frame delta left by an
+ * entry's LAST site is dropped at the next entry, by design), and the
+ * denominator counters: entries (site 0 seen), data handoffs (site 6),
+ * control handoffs (site 7). */
+void ethnetif_get_tcp_fine(uint64_t *pair_ticks, unsigned long *pair_calls,
+			   uint64_t *other_ticks, unsigned long *entries,
+			   unsigned long *data_handoffs,
+			   unsigned long *ctrl_handoffs);
+void ethnetif_reset_tcp_fine(void);
+
 #endif /* FREEWEB_LWIP_ETHNETIF_H */

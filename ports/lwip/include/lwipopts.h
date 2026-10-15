@@ -240,4 +240,16 @@
 #define LWIP_STATS_LARGE                1
 #endif
 
+/* Fine-grained TCP input-path probe (2026-10-19 round 3, FINE=1 lever):
+ * patch 0002 adds LWIP_HOOK_TCP_PROBE at fixed points of tcp_input /
+ * tcp_output; here the hook is pointed at the bridge's tick-based pair
+ * accumulator (ports/lwip/ethnetif.c), which `gmac tcpfine` reads out. The
+ * hook adds a counter read and a dispatch per site (~8 sites per input
+ * entry, a few hundred ns each) - measurement-only, the default profile
+ * never defines it. */
+#if defined(CONFIG_GMAC_TCP_FINE) && CONFIG_GMAC_TCP_FINE
+void ethnetif_tcp_fine_mark(unsigned int site);
+#define LWIP_HOOK_TCP_PROBE(site) ethnetif_tcp_fine_mark((unsigned int)(site))
+#endif
+
 #endif /* FREEWEB_LWIPOPTS_H */

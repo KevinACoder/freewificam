@@ -205,6 +205,14 @@ endif
 ifneq ($(RXDIRECT),)
 LEVER_CFLAGS += -DCONFIG_GMAC_RX_DIRECT=1
 endif
+# Fine TCP-path probe (2026-10-19 round 3): patch 0002's LWIP_HOOK_TCP_PROBE
+# is pointed at the bridge's site-pair accumulator, so one tcp_input entry's
+# cost splits into segment processing / sent callback / queue walk / wire
+# handoff (`gmac tcpfine`). FINE=1 rides the INPUTSPLIT instrument tier.
+# Measurement-only: a counter read per site.
+ifneq ($(FINE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TCP_FINE=1
+endif
 # Execution Profile Kit (EPK=1): rebuilds the kernel + the A55 port with
 # TX_EXECUTION_PROFILE_ENABLE so every thread switch and ISR boundary
 # accumulates per-thread execution time from CNTVCT (tx_user.h supplies the

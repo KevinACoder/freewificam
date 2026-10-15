@@ -857,6 +857,44 @@ static int cmd_gmac(int argc, char **argv)
 		return 0;
 	}
 
+	/* `gmac tcpfine [reset]`: the fine TCP-path probe (FINE=1 builds, patch
+	 * 0002). The lwIP TCP layer marks fixed sites of tcp_input/tcp_output;
+	 * the bridge buckets the tick deltas by site pair, so one input entry's
+	 * ~30 us reads as segp / sent / tail / opre / walk / snd1 / sndn / ctrl
+	 * instead of one number. _c = pair occurrences, _t = cumulative us
+	 * (24 MHz counter / 24); ent_c/segout_c/ctrlout_c are the denominators
+	 * (input entries and data/control handoffs). Off-lever builds print
+	 * `unavailable` instead of zeros, same convention as `gmac split`. */
+	if (argc >= 2 && strcmp(argv[1], "tcpfine") == 0) {
+#if defined(CONFIG_GMAC_TCP_FINE) && CONFIG_GMAC_TCP_FINE
+		uint64_t ticks[ETHNETIF_TCP_FINE_PAIRS], other;
+		unsigned long calls[ETHNETIF_TCP_FINE_PAIRS];
+		unsigned long entries, data_h, ctrl_h;
+		unsigned int i;
+
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
+			ethnetif_reset_tcp_fine();
+			csh_printf(csh, "gmac%u: tcpfine reset\n", g_port);
+			return 0;
+		}
+		ethnetif_get_tcp_fine(ticks, calls, &other, &entries, &data_h,
+				      &ctrl_h);
+		csh_printf(csh, "gmac%u: tcpfine ent_c=%lu segout_c=%lu ctrlout_c=%lu",
+			   g_port, entries, data_h, ctrl_h);
+		for (i = 0; i < ETHNETIF_TCP_FINE_PAIRS; i++) {
+			csh_printf(csh, " %s_c=%lu %s_t=%u",
+				   ethnetif_tcp_fine_names[i], calls[i],
+				   ethnetif_tcp_fine_names[i],
+				   (unsigned)(ticks[i] / 24u));
+		}
+		csh_printf(csh, " oth_t=%u\n", (unsigned)(other / 24u));
+#else
+		csh_printf(csh, "gmac%u: tcpfine unavailable (build without FINE=1)\n",
+			   g_port);
+#endif
+		return 0;
+	}
+
 	/* `gmac etime`: per-thread execution-time attribution (EPK=1 builds; the
 	 * upstream ThreadX Execution Profile Kit behind osExecProfileGet). One
 	 * line per thread, ticks in the 24 MHz system counter - /24000 = ms. The
@@ -1003,7 +1041,7 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac split | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac split | gmac tcpfine | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
 			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
 			  "gmac prof [reset] - service-time profile in us (cumulative; diff it);\n"
 			  "gmac ring - RX ring snapshot (tail/DMA position/ownership);\n"
@@ -1014,6 +1052,7 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | g
 			  "gmac idle [cal] - idle-thread spin gauge (cal = calibrate on a quiet line);\n"
 			  "gmac shape [reset] - TX/RX TCP frame shapes (data/ACK/dup-ACK);\n"
 			  "gmac split [reset] - input wait/proc per frame class + TX gap (INPUTSPLIT=1);\n"
+			  "gmac tcpfine [reset] - TCP input-path site-pair times in us (FINE=1);\n"
 			  "gmac etime - per-thread execution time in ms (EPK=1 builds);\n"
 			  "gmac udpstat [reset] - UDP sink counters (burst rate board-side);\n"
 			  "gmac udpsend <ip> [ms] - raw-API UDP send loop (default 5000 ms);\n"
