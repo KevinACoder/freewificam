@@ -156,8 +156,28 @@ endif
 # lwIP input path: CORELOCKIN=1 runs the stack's input on the caller's (RX)
 # thread under the core lock instead of one mailbox post per frame. The option
 # has an #ifndef wrapper in ports/lwip/include/lwipopts.h so a -D can win.
+# 2026-10-18 board-measured: +13% up (332 -> 375) and +22% down (461 -> 563)
+# with zero loss - the first arm to move both directions. Adopted as this
+# round's baseline.
 ifneq ($(CORELOCKIN),)
 LEVER_CFLAGS += -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+endif
+# TX checksum offload: the driver writes the pseudo-header sum and tags CIC=3
+# so the MAC inserts the IPv4/TCP and IPv4/UDP checksums (dwc_eqos.c
+# eqos_tx_csum_prepare; TRM Part2 ch.20 TDES3[17:16]). lwipopts.h flips the
+# per-netif checksum control in lockstep and ethnetif.c clears the GEN bits
+# for this netif; ICMP stays software on both sides. The peer's own TCP
+# checksum validation is the natural red control: wrong insertion cannot
+# complete a session.
+ifneq ($(TX_CSUM),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_CSUM=1
+endif
+# RX batch drain: one core-lock acquisition for the whole staged-frame drain
+# instead of two CMSIS mutex calls per frame (ethnetif.c ethnetif_poll; the
+# per-frame cost shows in the bridgeinput bucket). Requires CORELOCKIN, since
+# the batch hands frames to ethernet_input directly under the lock it took.
+ifneq ($(BATCH),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BATCH=1
 endif
 # RX completion-sweep shape. The DEFAULT is the whole-ring scan (every
 # measurement this line has is taken with it). SCAN=2 selects the bounded walk,

@@ -55,8 +55,9 @@
  *
  * IT IS ALSO THE SWEEP COST MULTIPLIER (measured 2026-10-17): the completion
  * sweep is O(depth) - every descriptor is probed because this controller
- * exposes no completion boundary (CUR_RX_DESC turns out to be a fetch pointer
- * that does not move while the channel is parked, runs/20261017-scan3) - while
+ * exposes no completion boundary (CUR_RX_DESC turned out to be a fetch pointer
+ * that does not move while the channel is parked, on the 2026-10-17 scan-shape
+ * arm) - while
  * the work between two sweeps is O(frames), and at line rate only ~1-1.5
  * frames complete per sweep. So probes per frame is depth / frames-per-sweep:
  * 66.4 measured at depth 128, i.e. 17.6 us of every frame. Halving the depth
@@ -210,6 +211,16 @@
 #define  DWC_EQOS_HW_TXFIFOSZ_SHIFT          6
 #define  DWC_EQOS_HW_TXFIFOSZ_MASK           (0x1fu << 6)
 #define  DWC_EQOS_HW_RXFIFOSZ_MASK           0x1fu
+/* Capability register 0 (TRM Part2 ch.20 GMAC_MAC_HW_Feature0, 0x011C; the
+ * same one Linux reads for these bits - dwmac4_dma.c:383). TRM reset value
+ * on this SoC is 0x160171E3, i.e. TXCOSEL and RXCOESEL are both 1. */
+#define DWC_EQOS_MAC_HW_FEATURE0             0x11C
+/* TX checksum offload capability, FEATURE0 bit 14 (Linux dwmac4.h
+ * GMAC_HW_FEAT_TXCOSEL, dwmac4_dma.c:402): 0 = the core was not synthesized
+ * with the inserter and CIC writes do nothing, which for a zero-checksum TCP
+ * frame means it leaves broken - so the CIC tagging is gated on this bit at
+ * runtime, not on the build switch alone. */
+#define  DWC_EQOS_HW_TXCOSEL                 (1u << 14)
 
 #define DWC_EQOS_MAC_VERSION                 0x110
 
@@ -349,6 +360,21 @@ struct dwc_eqos_desc {
 #define DWC_EQOS_DESC_TX_ERR			(1u << 15)	/* writeback:
 							 error summary */
 #define DWC_EQOS_DESC_RX_LEN_MASK		0x7fffu
+/* TX checksum insertion control (TDES3[17:16] on this core; RK3568 TRM
+ * Part2 ch.20 "Transmit Descriptor 3": 2'b11 = IP header checksum and
+ * payload checksum calculation and insertion enabled with the pseudo-header
+ * checksum computed in hardware - the same full-offload encoding Linux
+ * programs for CHECKSUM_PARTIAL frames, value 3, descs.h:179). Linux
+ * proves the field position twice: dwmac4_descs.h:32 TDES3_CHECKSUM_
+ * INSERTION_MASK = GENMASK(17,16), and dwmac4_descs.c:321 writes it into
+ * tdes3. The first board attempt of this feature put the tag in des2 and
+ * the frames left rejected (2026-10-18) - the field belongs to the SAME
+ * double-word as the length and OWN. The stack side stops generating the L4
+ * checksum and the driver seeds the field with the plain pseudo-header sum
+ * (eqos_tx_csum_prepare carries the derivation); both halves move under one
+ * build switch (CONFIG_GMAC_TX_CSUM). */
+#define DWC_EQOS_DESC_TX_CIC_SHIFT		16
+#define DWC_EQOS_DESC_TX_CIC_FULL		(3u << 16)
 /* RX writeback checksum status (the IPC block's report, Linux dwmac4_descs.h
  * RDES1_*): valid only when the des3 RDES1_VALID flag is set, which the MAC
  * does for IPv4/IPv6 frames only - ARP and friends sail through unchecked,
@@ -458,6 +484,12 @@ struct dwc_eqos_stats {
 				 * (the coalescing gauge: compare against
 				 * rx_frames per heartbeat) */
 	uint32_t rx_csum_drops;	/* RDES1-flagged bad-checksum frames (IPC) */
+	uint32_t tx_csum_frames;	/* frames sent with CIC=3 (the MAC inserts
+					 * the IPv4/TCP or IPv4/UDP checksums) */
+	uint32_t tx_csum_uncovered;	/* zero-checksum TCP frames the CIC
+					 * classifier could not vouch for: arm
+					 * acceptance requires zero (see
+					 * eqos_tx_csum_prepare) */
 };
 
 void dwc_eqos_get_stats(unsigned int index, struct dwc_eqos_stats *stats);
@@ -536,6 +568,40 @@ struct dwc_eqos_ring {
 
 int dwc_eqos_get_ring(unsigned int index, struct dwc_eqos_ring *ring);
 
+/* Live MAC/DMA register snapshot (2026-10-18). The Linux lane answers the
+ * same question by reading these offsets out of its own driver (devmem /
+ * ethtool -d), and the parity round diffs the two hardware pictures cell by
+ * cell: every "the source says X" claim about bus bursts, FIFO watermarks,
+ * flow control, coalescing and checksum offload has to become "the hardware
+ * was seen at X" on BOTH stacks or it is not a difference, just a reading
+ * of the source. Console context only; single read burst, no lock held
+ * across it beyond the port line. */
+struct dwc_eqos_regs {
+	uint32_t mac_configuration;	/* 0x000 */
+	uint32_t mac_packet_filter;	/* 0x008 */
+	uint32_t mac_q0_tx_flow_ctrl;	/* 0x070 */
+	uint32_t mac_rx_flow_ctrl;	/* 0x090 */
+	uint32_t hw_feature0;		/* 0x11c: capability set 0 (csum engines) */
+	uint32_t hw_feature1;		/* 0x120: TX/RX FIFO sizes */
+	uint32_t mtl_txq0_op;		/* 0xd00 */
+	uint32_t mtl_rxq0_op;		/* 0xd30 */
+	uint32_t dma_mode;		/* 0x1000 */
+	uint32_t sysbus_mode;		/* 0x1004 */
+	uint32_t ch0_control;		/* 0x1100 */
+	uint32_t ch0_tx_control;	/* 0x1104 */
+	uint32_t ch0_rx_control;	/* 0x1108 */
+	uint32_t ch0_tx_end;		/* 0x1120 */
+	uint32_t ch0_rx_end;		/* 0x1128 */
+	uint32_t ch0_tx_ring_len;	/* 0x112c */
+	uint32_t ch0_rx_ring_len;	/* 0x1130 */
+	uint32_t ch0_intr_enable;	/* 0x1134 */
+	uint32_t ch0_rx_watchdog;	/* 0x1138 */
+	uint32_t ch0_cur_rx_desc;	/* 0x114c */
+	uint32_t ch0_status;		/* 0x1160 */
+};
+
+int dwc_eqos_get_regs(unsigned int index, struct dwc_eqos_regs *regs);
+
 /* Per-phase service-time profile. The wired ladder is down to "where does the
  * single core's time go", and only an exclusive-time split can answer it: the
  * counters below are read from the system counter (24 MHz, 41.7 ns) at the
@@ -572,6 +638,11 @@ struct dwc_eqos_prof {
 	uint64_t tx_flush_ticks;	/* send_frame's cache flush */
 	uint64_t irq_entries;		/* samples, so a bucket can be averaged */
 	uint64_t rx_frames;		/* frames through the sweep */
+	uint64_t rx_sweeps;		/* eqos_rx_complete calls, any context:
+					 * rx_frames/rx_sweeps is the batching
+					 * factor the wake-cost accounting needs
+					 * (~1 = wake per frame, as in the
+					 * per-frame-RI baseline) */
 	uint64_t tx_frames;		/* frames through send_frame */
 };
 

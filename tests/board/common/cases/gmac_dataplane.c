@@ -35,6 +35,7 @@
 #include "lwip/etharp.h"
 #include "lwip/stats.h"
 #include "lwip/apps/lwiperf.h"
+#include "lwip/udp.h"
 #include "ping.h"
 
 #include "log.h"
@@ -63,6 +64,46 @@ static volatile int g_up;
  * taken from the flow under measurement. The driver watchdog sweep keeps
  * running either way; only the print stops. */
 static volatile int g_hb_on = 1;
+
+/* --- UDP probe path (2026-10-18) -----------------------------------------------
+ *
+ * The decisive driver-vs-stack cut: a raw-API UDP sink on 5002 that only counts,
+ * so a host flood arrives through the same driver, bridge and netif chain as
+ * TCP but without congestion control, windowing, ACKs or retransmits. If UDP
+ * lands at the same ceiling as TCP the wall is below the stack; if it runs much
+ * higher the wall is TCP-state processing on the single core.
+ *
+ * The sink timestamps its own first and last datagram from the kernel tick so
+ * the rate is computed board-side over the burst's own span - the harness's
+ * phase boundaries are up to a second wide and would smear the number.
+ * The source side (`gmac udpsend`) is the same shape in reverse: a tight
+ * pbuf_realloc + udp_sendto loop, printing bytes and its own elapsed ticks. */
+#define GMAC_UDP_SINK_PORT	5002u
+
+static struct udp_pcb *g_udp_pcb;
+static volatile uint32_t g_udp_pkts;
+static volatile uint32_t g_udp_bytes;
+static volatile uint32_t g_udp_first_tick;
+static volatile uint32_t g_udp_last_tick;
+
+static void udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+			  const ip_addr_t *addr, u16_t port)
+{
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p == NULL) {
+		return;
+	}
+	if (g_udp_pkts == 0u) {
+		g_udp_first_tick = osKernelGetTickCount();
+	}
+	g_udp_last_tick = osKernelGetTickCount();
+	g_udp_pkts++;
+	g_udp_bytes += p->tot_len;
+	pbuf_free(p);
+}
 
 /* --- bring-up ----------------------------------------------------------------- */
 
@@ -283,6 +324,14 @@ static int gmac_line_up(void)
 	} else {
 		LOG_ERROR("lwiperf: server START FAILED\n");
 	}
+	g_udp_pcb = udp_new();
+	if ((g_udp_pcb != NULL) &&
+	    (udp_bind(g_udp_pcb, IP_ANY_TYPE, GMAC_UDP_SINK_PORT) == ERR_OK)) {
+		udp_recv(g_udp_pcb, udp_sink_recv, NULL);
+		LOG_INFO("udp: sink bound :%u\n", GMAC_UDP_SINK_PORT);
+	} else {
+		LOG_ERROR("udp: sink BIND FAILED\n");
+	}
 	UNLOCK_TCPIP_CORE();
 
 	(void)dwc_eqos_get_mac_address(g_port, mac);
@@ -398,6 +447,8 @@ static int cmd_gmac(int argc, char **argv)
 	 * expensive. Units are microseconds of system-counter time. */
 	if (argc >= 2 && strcmp(argv[1], "prof") == 0) {
 		struct dwc_eqos_prof p;
+		uint64_t prep_ticks, input_ticks;
+		unsigned long input_calls;
 
 		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
 			dwc_eqos_reset_prof(g_port);
@@ -405,9 +456,11 @@ static int cmd_gmac(int argc, char **argv)
 			return 0;
 		}
 		dwc_eqos_get_prof(g_port, &p);
+		ethnetif_get_stack_prof(&prep_ticks, &input_ticks, &input_calls);
 		csh_printf(csh, "gmac%u: prof irq=%u odd=%u rxsweep=%u rxcache=%u "
 			   "rxcopy=%u txdone=%u txtot=%u txcopy=%u txflush=%u "
-			   "rxwalk=%u walkslots=%llu "
+			   "rxwalk=%u walkslots=%llu sweeps=%llu "
+			   "bridgeprep=%u bridgeinput=%u bridgecalls=%lu "
 			   "irqn=%u rx=%u tx=%u\n",
 			   g_port,
 			   (unsigned)(p.irq_ticks / 24u), (unsigned)(p.irq_odd_ticks / 24u),
@@ -420,6 +473,9 @@ static int cmd_gmac(int argc, char **argv)
 			   (unsigned)(p.tx_flush_ticks / 24u),
 			   (unsigned)(p.rx_walk_ticks / 24u),
 			   (unsigned long long)p.rx_walk_slots,
+			   (unsigned long long)p.rx_sweeps,
+			   (unsigned)(prep_ticks / 24u),
+			   (unsigned)(input_ticks / 24u), input_calls,
 			   (unsigned)p.irq_entries, (unsigned)p.rx_frames,
 			   (unsigned)p.tx_frames);
 		return 0;
@@ -483,6 +539,128 @@ static int cmd_gmac(int argc, char **argv)
 		csh_printf(csh, "gmac: heartbeat %s\n", g_hb_on ? "on" : "off");
 		return 0;
 	}
+	/* `gmac regs`: the live MAC/DMA register picture, same offsets the Linux
+	 * lane dumps, so the parity round diffs hardware against hardware. One
+	 * line, name:value cells; the harness keys on the `gmacN: regs ` prefix. */
+	if (argc >= 2 && strcmp(argv[1], "regs") == 0) {
+		struct dwc_eqos_regs r;
+
+		if (dwc_eqos_get_regs(g_port, &r) != EQOS_OK) {
+			csh_printf(csh, "gmac%u: regs unavailable\n", g_port);
+			return 1;
+		}
+		csh_printf(csh, "gmac%u: regs macconf=%08x pktflt=%08x "
+			   "q0txfc=%08x rxfc=%08x feat0=%08x feat1=%08x "
+			   "mtltxq0=%08x mtlrxq0=%08x dmamode=%08x sysbus=%08x "
+			   "ch0ctl=%08x txtrl=%08x rxctl=%08x "
+			   "txend=%08x rxend=%08x txrlen=%08x rxrlen=%08x "
+			   "ien=%08x riwt=%08x currx=%08x status=%08x\n",
+			   g_port,
+			   (unsigned)r.mac_configuration, (unsigned)r.mac_packet_filter,
+			   (unsigned)r.mac_q0_tx_flow_ctrl, (unsigned)r.mac_rx_flow_ctrl,
+			   (unsigned)r.hw_feature0,
+			   (unsigned)r.hw_feature1,
+			   (unsigned)r.mtl_txq0_op, (unsigned)r.mtl_rxq0_op,
+			   (unsigned)r.dma_mode, (unsigned)r.sysbus_mode,
+			   (unsigned)r.ch0_control, (unsigned)r.ch0_tx_control,
+			   (unsigned)r.ch0_rx_control,
+			   (unsigned)r.ch0_tx_end, (unsigned)r.ch0_rx_end,
+			   (unsigned)r.ch0_tx_ring_len, (unsigned)r.ch0_rx_ring_len,
+			   (unsigned)r.ch0_intr_enable, (unsigned)r.ch0_rx_watchdog,
+			   (unsigned)r.ch0_cur_rx_desc, (unsigned)r.ch0_status);
+		return 0;
+	}
+	/* `gmac udpstat [reset]`: the sink counters. Diff scheme and rate are
+	 * derived board-side; reset starts a fresh burst window. */
+	if (argc >= 2 && strcmp(argv[1], "udpstat") == 0) {
+		uint32_t pkts, bytes, first, last;
+
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
+			g_udp_pkts = 0u;
+			g_udp_bytes = 0u;
+			g_udp_first_tick = 0u;
+			g_udp_last_tick = 0u;
+			csh_printf(csh, "gmac%u: udpstat reset\n", g_port);
+			return 0;
+		}
+		pkts = g_udp_pkts;
+		bytes = g_udp_bytes;
+		first = g_udp_first_tick;
+		last = g_udp_last_tick;
+		csh_printf(csh, "gmac%u: udpstat pkts=%u bytes=%u span_ms=%u "
+			   "rate_mbit=%u first=%u last=%u\n",
+			   g_port, (unsigned)pkts, (unsigned)bytes,
+			   (unsigned)((pkts > 1u) ? (last - first) : 0u),
+			   (unsigned)((pkts > 1u) && (last != first)
+				      ? ((uint64_t)bytes * 8u)
+					/ ((uint64_t)(last - first) * 1000u)
+				      : 0u),
+			   (unsigned)first, (unsigned)last);
+		return 0;
+	}
+	/* `gmac udpsend <ip> [ms]`: the reverse UDP leg - a tight raw-API send
+	 * loop at 1472-byte payloads, no ACKs, no window. The rate it reaches is
+	 * the transmit-half answer to the sink's receive-half one. Runs on the
+	 * console thread with the core lock per packet (the locking shape the
+	 * stack's own callers use), so its number is the path's, not a
+	 * specially-optimized one's. */
+	if ((argc >= 3) && (strcmp(argv[1], "udpsend") == 0)) {
+		ip_addr_t remote;
+		struct udp_pcb *pcb;
+		uint32_t duration_ms = 5000u;
+		uint32_t t0, t1;
+		uint32_t sent = 0u;
+		uint32_t send_bytes = 0u;
+
+		if (!g_up) {
+			csh_printf(csh, "gmac: line is not up\n");
+			return 1;
+		}
+		if (!ipaddr_aton(argv[2], &remote)) {
+			csh_printf(csh, "gmac: udpsend bad address %s\n", argv[2]);
+			return 1;
+		}
+		if (argc >= 4) {
+			duration_ms = (uint32_t)strtoul(argv[3], NULL, 0);
+		}
+		LOCK_TCPIP_CORE();
+		pcb = udp_new();
+		UNLOCK_TCPIP_CORE();
+		if (pcb == NULL) {
+			csh_printf(csh, "gmac: udpsend pcb alloc FAILED\n");
+			return 1;
+		}
+		t0 = osKernelGetTickCount();
+		do {
+			struct pbuf *p;
+
+			LOCK_TCPIP_CORE();
+			p = pbuf_alloc(PBUF_TRANSPORT, 1472, PBUF_POOL);
+			if (p != NULL) {
+				memset(p->payload, 0x5a, 1472);
+				if (udp_sendto(pcb, p, &remote,
+					       GMAC_UDP_SINK_PORT) == ERR_OK) {
+					sent++;
+					send_bytes += 1472u;
+				}
+				pbuf_free(p);
+			}
+			UNLOCK_TCPIP_CORE();
+			t1 = osKernelGetTickCount();
+		} while ((uint32_t)(t1 - t0) < duration_ms);
+		LOCK_TCPIP_CORE();
+		udp_remove(pcb);
+		UNLOCK_TCPIP_CORE();
+		csh_printf(csh, "gmac%u: udpsend pkts=%u bytes=%u span_ms=%u "
+			   "rate_mbit=%u\n",
+			   g_port, (unsigned)sent, (unsigned)send_bytes,
+			   (unsigned)(t1 - t0),
+			   (unsigned)((t1 != t0)
+				      ? ((uint64_t)send_bytes * 8u)
+					/ ((uint64_t)(t1 - t0) * 1000u)
+				      : 0u));
+		return 0;
+	}
 
 	if (!g_up) {
 		csh_printf(csh, "gmac: line is not up (run at boot by the gmac-up case)\n");
@@ -492,13 +670,14 @@ static int cmd_gmac(int argc, char **argv)
 	dwc_eqos_get_mmc_stats(g_port, &mmc);
 	ethnetif_get_diag(&d_poll, &d_pool, &d_input, &d_fed);
 	csh_printf(csh, "gmac%u: rx=%u err=%u tx=%u txdrop=%u txerr=%u dmaerr=%u irq=%u "
-			"csdrop=%u | fed=%lu poll=%lu poolfail=%lu inputfail=%lu | "
+			"csdrop=%u txcsum=%u txcsumun=%u | fed=%lu poll=%lu poolfail=%lu inputfail=%lu | "
 			"mmc pkts=%u ovf=%u crc=%u\n",
 		   g_port,
 		   (unsigned)stats.rx_frames, (unsigned)stats.rx_errors,
 		   (unsigned)stats.tx_frames, (unsigned)stats.tx_dropped,
 		   (unsigned)stats.tx_errors, (unsigned)stats.dma_errors,
 		   (unsigned)stats.rx_irqs, (unsigned)stats.rx_csum_drops,
+		   (unsigned)stats.tx_csum_frames, (unsigned)stats.tx_csum_uncovered,
 		   d_fed, d_poll, d_pool, d_input,
 		   (unsigned)mmc.rx_pkts_gb, (unsigned)mmc.rx_fifo_overflow,
 		   (unsigned)mmc.rx_crc_error);
@@ -598,10 +777,14 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac net | gmac hb on|off | gmac riwt <n>",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
 			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
 			  "gmac prof [reset] - service-time profile in us (cumulative; diff it);\n"
+			  "gmac ring - RX ring snapshot (tail/DMA position/ownership);\n"
+			  "gmac regs - live MAC/DMA register dump (Linux-parity table);\n"
 			  "gmac net - ARP table + stack counters;\n"
+			  "gmac udpstat [reset] - UDP sink counters (burst rate board-side);\n"
+			  "gmac udpsend <ip> [ms] - raw-API UDP send loop (default 5000 ms);\n"
 			  "gmac hb on|off - quiet the 1 Hz heartbeat for a measurement round;\n"
 			  "gmac riwt <n> - set the RX watchdog (coalescing batch size, 256-tick units)\n")
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_ping, ping, "ping <ip> | ping stop",

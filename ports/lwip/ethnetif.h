@@ -30,4 +30,12 @@ unsigned int ethnetif_poll(struct netif *netif);
 void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 		       unsigned long *input_fail, unsigned long *fed_total);
 
+/* Service-time split of the receive bridge (2026-10-18): prep = pbuf_alloc +
+ * pbuf_take, input = the netif->input call (ethernet_input on the caller's
+ * thread under CORE_LOCKING_INPUT, else just a mailbox post). Ticks are the
+ * 24 MHz system counter. The UDP-vs-TCP cut needs to know which half the
+ * protocol-dependent cost sits in. */
+void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
+			     unsigned long *input_calls);
+
 #endif /* FREEWEB_LWIP_ETHNETIF_H */

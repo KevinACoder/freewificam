@@ -188,6 +188,22 @@
 #define CHECKSUM_CHECK_UDP              0
 #endif
 
+/* --- TX checksum offload (the other half of the same lockstep) ---------------
+ *
+ * With CONFIG_GMAC_TX_CSUM the driver writes the IPv4/TCP or IPv4/UDP
+ * pseudo-header sum into the checksum field and tags the descriptor CIC=3, so
+ * the MAC computes and inserts both checksums (dwc_eqos.c eqos_tx_csum_prepare
+ * carries the full contract, TRM Part2 ch.20 TDES3). The stack side must stop
+ * generating those checksums on this netif or the MAC would checksum over an
+ * already-correct value; lwIP expresses that with the per-netif control block
+ * (the GEN switches stop being global and become netif flags), which is why
+ * the whole option only exists in builds that also enable the driver side.
+ * ICMP keeps its software generation - no pseudo-header in the protocol - so
+ * its two bits stay set in the netif flags (ports/lwip/ethnetif.c). */
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+#define LWIP_CHECKSUM_CTRL_PER_NETIF    1
+#endif
+
 /* --- debugging -------------------------------------------------------------- */
 
 /* Stays off: every diagnostic line would go out the 115200 console, which

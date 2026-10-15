@@ -213,6 +213,12 @@ struct dwc_eqos_dev {
 	uint32_t tx_waits;	/* sends that found the ring full */
 	uint32_t tx_wait_ticks;	/* kernel ticks spent parked on tx_sem */
 	uint32_t tx_occ_max;	/* peak descriptors in flight */
+
+	/* CONFIG_GMAC_TX_CSUM capability, latched at hw_start: the CIC tagging
+	 * only happens when the core actually has the inserter (HW_FEATURE1
+	 * TXCOSEL), because a zero-checksum TCP frame without it would leave
+	 * broken - the one failure mode this feature must not have. */
+	uint8_t tx_csum_cap;
 };
 
 /* Per-instance state and DMA memory. Static, not allocated: the DMA needs
@@ -669,6 +675,16 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	/* MTL queue sizes from the hardware feature register: the FIFO size is
 	 * encoded as log2(n/128), and TQS/RQS hold fifo/256 - 1. */
 	hw_feat = eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE1);
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+	dev->tx_csum_cap =
+		((eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE0) & DWC_EQOS_HW_TXCOSEL) != 0u)
+		? 1u : 0u;
+	if (dev->tx_csum_cap == 0u) {
+		LOG_WARNING("%s: tx checksum offload requested but the core "
+			    "has no inserter (HW_FEATURE0 TXCOSEL=0); CIC stays 0\n",
+			    eqos_dev_name(dev));
+	}
+#endif
 	reg = DWC_EQOS_MTL_TXQ0_OP_TXQEN_EN | DWC_EQOS_MTL_TXQ0_OP_TSF;
 	reg |= ((((128u << ((hw_feat & DWC_EQOS_HW_TXFIFOSZ_MASK)
 			    >> DWC_EQOS_HW_TXFIFOSZ_SHIFT)) >> 8) - 1u)
@@ -856,8 +872,8 @@ static int eqos_ring_slot(const struct dwc_eqos_dev *dev, uint32_t addr);
  * The bounded walk is correct about *coverage* - the `gmac ring` snapshot
  * shows `stale=0` throughout, i.e. it never left an OWN-clear slot outside its
  * run - and it still collapsed the downlink to 2.0-2.6 Mbit/s (uplink 30.8)
- * with `ovf=173`, the third such failure (see runs/20261016-gmac-cursor,
- * -linuxshape, runs/20261017-rxwalk-bounded). The working arm reproduces the
+ * with `ovf=173`, the third such failure (the 2026-10-16 cursor and linux-shape
+ * arms and the 2026-10-17 bounded-walk arm). The working arm reproduces the
  * baseline exactly (269.5 up / 481.7 down, zero loss) and its snapshot shows
  * the tail invariant that matters: RX_END = cursor-1 = last re-armed, with
  * CUR_RX_DESC sitting exactly ON the cursor, and zero OWN-clear slots at rest.
@@ -881,6 +897,8 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	int i;
 	int left;
 	uint64_t t_walk = eqos_prof_t0();
+
+	eqos_prof[port].rx_sweeps++;
 #if defined(CONFIG_GMAC_SWEEP_WIDE) && CONFIG_GMAC_SWEEP_WIDE
 	/* One pure-load pass over the non-cacheable ring, then process from
 	 * these values: with nothing but loads in the loop the core can keep
@@ -1318,16 +1336,18 @@ int dwc_eqos_rx_poll(unsigned int index, int budget)
 		delivered += n;
 		budget -= n;
 	}
-	if (budget > 0) {
-		/* Drained: hand the ring back to the interrupt. No re-check is
-		 * needed - RI is a latched level, so a completion that landed
-		 * while it was masked re-asserts the line the moment the enable
-		 * bit goes back up. */
-		eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE,
-			eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE)
-			| DWC_EQOS_CH0_INTR_RIE);
-		dev->rx_masked = 0;
-	}
+	/* Hand the ring back to the interrupt in BOTH exits: drained means the
+	 * next completion raises RI, and budget-exhausted means RI is already
+	 * pending (latched level), so re-enabling the bit makes the line fire
+	 * again immediately and this thread returns for the next batch - the
+	 * NAPI "poll again" shape, riding the interrupt line itself. The first
+	 * version re-enabled only on the drained exit and parked the RX path
+	 * until the 100 ms liveness heal whenever a budget ran out under load,
+	 * which is the 2026-10-17 NAPI arm's ovf=3338. */
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE,
+		eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE)
+		| DWC_EQOS_CH0_INTR_RIE);
+	dev->rx_masked = 0;
 	eqos_unlock(dev);
 
 	return delivered;
@@ -1655,6 +1675,146 @@ int32_t dwc_eqos_set_mac_address(unsigned int index, const uint8_t *addr)
 	return EQOS_OK;
 }
 
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+/* Checksum offload preparation for one frame. Returns 1 when the frame is
+ * now ready for CIC=3 (the L4 checksum field holds S(pseudo-header) - the
+ * plain sum - and the MAC inserts the final checksums), 0 to leave the frame
+ * alone.
+ *
+ * The contract, and how it was pinned down:
+ *  - lwIP has no TX-offload API. The one thing it can do, with
+ *    LWIP_CHECKSUM_CTRL_PER_NETIF, is stop generating the L4 checksum for
+ *    this netif, which leaves the field zeroed (tcp_out.c:1563,
+ *    udp.c:788). Filling it back in is this function's job.
+ *  - The field content and the tag position both come from the production
+ *    code that drives this same core on this same board: Linux writes
+ *    `th->check = ~tcp_v4_check(len, saddr, daddr, 0)` (include/net/tcp.h:
+ *    2447), which is the plain pseudo sum after the double negation
+ *    (csum_fold complements, so tcp_v4_check and the caller's ~ cancel),
+ *    and tags CIC=3 in TDES3[17:16] (stmmac_main.c:4851,
+ *    dwmac4_descs.c:321). The first board attempt wrote the same field
+ *    content but put the tag in TDES2, where [17:16] is not the insertion
+ *    field: insertion never engaged, every outbound TCP frame (data and
+ *    ACKs) carried the bare seed as its checksum and was rejected - uplink
+ *    aborted locally after 9.7 s, downlink stalled behind the bad ACKs.
+ *    Position and content are two separate traps on this path.
+ *  - With CIC=3 the MAC also computes the IP header checksum, so the IP
+ *    header field needs no software help; the software's whole job is the
+ *    12-byte L4 pseudo-header sum above.
+ *
+ * The shape rule stays narrow: Ethernet II + IPv4 + TCP/UDP, the header
+ * without options, unfragmented, and the field still zero (GEN switched off
+ * for this netif). Anything else goes out untouched; a zero-checksum TCP
+ * frame that fails the shape rule is counted, because it would leave broken
+ * (TCP cannot encode "no checksum") - acceptance reads that counter as 0.
+ * ICMP is deliberately out: no pseudo-header in the protocol, so the MAC's
+ * CIC=3 computation would produce a wrong one (Linux leaves ICMP to software
+ * for the same reason). */
+#define EQOS_TXCSUM_LEAVE		0
+#define EQOS_TXCSUM_OFFLOAD		1
+#define EQOS_TXCSUM_TCP_UNCHECKED	2
+
+static uint16_t eqos_txcsum_add(uint32_t acc, uint16_t word)
+{
+	acc += word;
+	/* End-around carry, twice: the first fold can itself produce 0x10000
+	 * (0xffff + 1), which one more fold maps to 0x0001 instead of
+	 * truncating to 0. */
+	acc = (acc & 0xffffu) + (acc >> 16);
+	acc = (acc & 0xffffu) + (acc >> 16);
+	return (uint16_t)acc;
+}
+
+static int eqos_tx_csum_prepare(uint8_t *frame, unsigned int len)
+{
+	unsigned int ip_off = 14u;
+	unsigned int ihl;
+	unsigned int l4_off;
+	unsigned int csum_off;
+	unsigned int l4_len;
+	uint32_t acc = 0u;
+	uint16_t csum;
+	uint8_t proto;
+	uint16_t frag;
+	uint16_t ip_total;
+	unsigned int i;
+	int is_tcp;
+
+	if (len < 34u) {
+		return EQOS_TXCSUM_LEAVE;
+	}
+	if ((frame[12] != 0x08u) || (frame[13] != 0x00u)) {
+		return EQOS_TXCSUM_LEAVE;	/* not IPv4 (EtherType 0x0800) */
+	}
+	ihl = (unsigned int)(frame[ip_off] & 0x0fu) * 4u;
+	if (((frame[ip_off] >> 4) != 4u) || (ihl < 20u) || (len < ip_off + ihl)) {
+		return EQOS_TXCSUM_LEAVE;	/* version mismatch or a bad IHL */
+	}
+	proto = frame[ip_off + 9];
+	if ((proto != 6u) && (proto != 17u)) {
+		return EQOS_TXCSUM_LEAVE;	/* not TCP/UDP (ARP, ICMP, ...) */
+	}
+	is_tcp = (proto == 6u);
+	ip_total = (uint16_t)(((uint16_t)frame[ip_off + 2] << 8)
+			      | frame[ip_off + 3]);
+	l4_off = ip_off + ihl;
+	if ((ip_total < ihl + (is_tcp ? 20u : 8u))
+	    || (l4_off + (is_tcp ? 20u : 8u) > len)) {
+		return is_tcp ? EQOS_TXCSUM_TCP_UNCHECKED : EQOS_TXCSUM_LEAVE;
+	}
+	l4_len = (unsigned int)ip_total - ihl;
+	csum_off = l4_off + (is_tcp ? 16u : 6u);
+	csum = (uint16_t)(((uint16_t)frame[csum_off] << 8)
+			  | frame[csum_off + 1]);
+	if (csum != 0u) {
+		/* Filled in by the stack for this frame: a correct checksum,
+		 * leave the bytes alone. */
+		return EQOS_TXCSUM_LEAVE;
+	}
+	frag = (uint16_t)(((uint16_t)frame[ip_off + 6] << 8)
+			  | frame[ip_off + 7]);
+	if ((ihl != 20u) || ((frag & 0x3fffu) != 0u)) {
+		/* A zero L4 checksum and a shape the MAC's byte range cannot be
+		 * trusted to match: leave it. TCP cannot encode "no checksum",
+		 * so this frame would leave broken - counted for acceptance.
+		 * UDP's zero is legal and stays legal. */
+		return is_tcp ? EQOS_TXCSUM_TCP_UNCHECKED : EQOS_TXCSUM_LEAVE;
+	}
+	/* The field takes S(pseudo) - the plain one's-complement sum of the six
+	 * pseudo-header words (src/dst, [zero|proto], length) - derived from the
+	 * production code that drives this same core on this same board:
+	 * include/net/tcp.h:2447 `th->check = ~tcp_v4_check(len, saddr, daddr,
+	 * 0)`, and tcp_v4_check returns the FOLDED-AND-COMPLEMENTED sum
+	 * (csum_fold returns ~sum, asm-generic/checksum.h), so the double
+	 * negation lands on the plain sum. That is the classic offload seed:
+	 * the MAC adds the payload and inserts the complement, under the
+	 * "engine keeps the field as a base" reading; under the "engine
+	 * computes the pseudo itself" reading the value is ignored. Either way
+	 * S(pseudo) is the compatible content.
+	 *
+	 * The 2026-10-18 falsification was NOT here: the first arm wrote this
+	 * same S(pseudo) but tagged CIC into TDES2, where bits [17:16] are not
+	 * the insertion field on this layout - insertion never engaged, the
+	 * seed went out as the frame's "checksum", and every outbound TCP
+	 * frame (data and ACKs alike) was rejected, which killed the uplink
+	 * (lwiperf aborted-local after 9.7 s) and the downlink with it. */
+	for (i = 0u; i < 8u; i += 2u) {
+		acc = eqos_txcsum_add(acc,
+			(uint16_t)(((uint16_t)frame[ip_off + 12u + i] << 8)
+				   | frame[ip_off + 13u + i]));
+	}
+	acc = eqos_txcsum_add(acc, (uint16_t)proto);
+	acc = eqos_txcsum_add(acc, (uint16_t)l4_len);
+	csum = (uint16_t)acc;
+	if (csum == 0u) {
+		csum = 0xffffu;	/* -0 is 0xffff in one's complement */
+	}
+	frame[csum_off] = (uint8_t)(csum >> 8);
+	frame[csum_off + 1] = (uint8_t)(csum & 0xffu);
+	return EQOS_TXCSUM_OFFLOAD;
+}
+#endif
+
 int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t len)
 {
 	struct dwc_eqos_dev *dev;
@@ -1677,6 +1837,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		struct dwc_eqos_desc *desc;
 		unsigned int tx_len;
 		unsigned int ioc;
+		uint32_t ioc_cic = 0u;
 		uint8_t *buf;
 		int cur;
 		int next;
@@ -1724,11 +1885,40 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			 * length in des3 (as the rx writeback does) and the
 			 * completion-interrupt enable in des2 bit 31. No flush:
 			 * non-cacheable ring, the OWN grant is visible to the
-			 * DMA before the end pointer below moves. */
+			 * DMA before the end pointer below moves.
+			 *
+			 * CONFIG_GMAC_TX_CSUM = checksum insertion offload: tag
+			 * IPv4/TCP and IPv4/UDP frames with CIC=3 so the MAC
+			 * computes and inserts both checksums (TRM Part2 ch.20
+			 * TDES3[17:16]; Linux programs the same value, descs.h:179).
+			 * The stack side is the other half of the same switch: lwIP
+			 * leaves the checksum fields zero on those frames (per-netif
+			 * NETIF_CHECKSUM_GEN_* off) and eqos_tx_csum_prepare seeds
+			 * them with the pseudo-header sum; the MAC inserts the
+			 * finals. */
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
+			if (dev->tx_csum_cap != 0u) {
+				switch (eqos_tx_csum_prepare(buf, tx_len)) {
+				case EQOS_TXCSUM_OFFLOAD:
+					ioc_cic = DWC_EQOS_DESC_TX_CIC_FULL;
+					dev->stats.tx_csum_frames++;
+					break;
+				case EQOS_TXCSUM_TCP_UNCHECKED:
+					/* A zero-checksum TCP frame the classifier can't
+					 * vouch for: count it (arm acceptance reads zero).
+					 * CIC stays 0 and the frame goes out as the stack
+					 * wrote it. */
+					dev->stats.tx_csum_uncovered++;
+					break;
+				default:
+					break;
+				}
+			}
+#endif
 			desc->des2 = (ioc ? DWC_EQOS_DESC_TX_IOC : 0u)
 				   | (tx_len & 0x3fffu);
 			desc->des3 = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_TX_FD
-				   | DWC_EQOS_DESC_TX_LD | tx_len;
+				   | DWC_EQOS_DESC_TX_LD | ioc_cic | tx_len;
 			/* Grant reaches memory before the end pointer moves. */
 			eqos_dsb_st();
 
@@ -2100,6 +2290,52 @@ int dwc_eqos_get_ring(unsigned int index, struct dwc_eqos_ring *ring)
 	if (ring->own_clear > ring->walk_run) {
 		ring->stale_slots = ring->own_clear - ring->walk_run;
 	}
+	eqos_unlock(dev);
+
+	return EQOS_OK;
+}
+
+/* The register snapshot the Linux-parity round diffs against the Linux lane's
+ * own dump of the same offsets. Nothing here is written; this is the "what
+ * did the hardware actually get told" half of every register-difference
+ * claim, so it reads what the channel is running with right now (live, not
+ * shadow copies of what we meant to write). */
+int dwc_eqos_get_regs(unsigned int index, struct dwc_eqos_regs *regs)
+{
+	struct dwc_eqos_dev *dev;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (regs == NULL)) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	dev = &devs[index];
+	if ((dev->plat == NULL) || (dev->rx_ring == NULL)) {
+		return EQOS_ERROR;
+	}
+
+	memset(regs, 0, sizeof(*regs));
+
+	eqos_lock(dev);
+	regs->mac_configuration = eqos_rd(dev, DWC_EQOS_MAC_CONFIGURATION);
+	regs->mac_packet_filter = eqos_rd(dev, DWC_EQOS_MAC_PACKET_FILTER);
+	regs->mac_q0_tx_flow_ctrl = eqos_rd(dev, DWC_EQOS_MAC_Q0_TX_FLOW_CTRL);
+	regs->mac_rx_flow_ctrl = eqos_rd(dev, DWC_EQOS_MAC_RX_FLOW_CTRL);
+	regs->hw_feature0 = eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE0);
+	regs->hw_feature1 = eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE1);
+	regs->mtl_txq0_op = eqos_rd(dev, DWC_EQOS_MTL_TXQ0_OPERATION_MODE);
+	regs->mtl_rxq0_op = eqos_rd(dev, DWC_EQOS_MTL_RXQ0_OPERATION_MODE);
+	regs->dma_mode = eqos_rd(dev, DWC_EQOS_DMA_MODE);
+	regs->sysbus_mode = eqos_rd(dev, DWC_EQOS_DMA_SYSBUS_MODE);
+	regs->ch0_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_CONTROL);
+	regs->ch0_tx_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_CONTROL);
+	regs->ch0_rx_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_CONTROL);
+	regs->ch0_tx_end = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR);
+	regs->ch0_rx_end = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR);
+	regs->ch0_tx_ring_len = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_RING_LEN);
+	regs->ch0_rx_ring_len = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_RING_LEN);
+	regs->ch0_intr_enable = eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE);
+	regs->ch0_rx_watchdog = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_WATCHDOG);
+	regs->ch0_cur_rx_desc = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_RX_DESC);
+	regs->ch0_status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
 	eqos_unlock(dev);
 
 	return EQOS_OK;

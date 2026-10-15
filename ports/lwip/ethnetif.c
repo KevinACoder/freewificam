@@ -34,6 +34,7 @@
 #include "netif/ethernet.h"
 
 #include "dwc_eqos.h"
+#include "generic_timer.h"
 
 #include "ethnetif.h"
 
@@ -50,6 +51,25 @@ static unsigned long g_poll_calls;
 static unsigned long g_pool_fail;
 static unsigned long g_input_fail;
 static unsigned long g_fed_total;
+
+/* Service-time split (2026-10-18): the UDP-vs-TCP cut proved the receive
+ * chain sustains wire rate for UDP while TCP caps far below, so the question
+ * is no longer "is the bridge expensive" but "which half of it is the TCP
+ * half". These two buckets answer exactly that: the pbuf preparation
+ * (alloc + take, identical work for both protocols) and the input call
+ * (trivial for UDP, the whole TCP state machine for TCP). Ticks are the
+ * 24 MHz system counter, so /24 gives microseconds; two reads per frame. */
+static uint64_t g_prep_ticks;
+static uint64_t g_input_ticks;
+static unsigned long g_input_calls;
+
+void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
+			     unsigned long *input_calls)
+{
+	*prep_ticks = g_prep_ticks;
+	*input_ticks = g_input_ticks;
+	*input_calls = g_input_calls;
+}
 
 void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 		       unsigned long *input_fail, unsigned long *fed_total)
@@ -121,21 +141,53 @@ void ethnetif_add(struct netif *netif, unsigned int port,
 {
 	(void)netif_add(netif, ip, mask, gw, (void *)(uintptr_t)port,
 			eth_init, tcpip_input);
+#if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM && LWIP_CHECKSUM_CTRL_PER_NETIF
+	/* Hand the IPv4 header + TCP/UDP checksum generation to the MAC
+	 * (dwc_eqos.c eqos_tx_csum_prepare writes the pseudo-header sum and
+	 * sets CIC=3). The netif's switches must move together with the driver
+	 * build flag or frames leave with either no checksum or a double one:
+	 * same lockstep discipline as the RX IPC pair (lwipopts.h). ICMP is NOT
+	 * offloaded - no pseudo-header in the protocol - so its GEN bit stays
+	 * on, and its CHECK bit too (the RX IPC block does not cover ICMP). */
+	NETIF_SET_CHECKSUM_CTRL(netif,
+				NETIF_CHECKSUM_GEN_ICMP | NETIF_CHECKSUM_CHECK_ICMP
+				| NETIF_CHECKSUM_CHECK_IP
+				| NETIF_CHECKSUM_CHECK_TCP
+				| NETIF_CHECKSUM_CHECK_UDP
+				);
+#else
+	(void)netif;
+#endif
 	netif_set_default(netif);
 	netif_set_up(netif);
 }
 
 /* The driver-side seam: drain the staged frames into the stack. Returns the
- * number of frames handed to netif->input (the heartbeat's "fed" counter). */
+ * number of frames handed to netif->input (the heartbeat's "fed" counter).
+ *
+ * CONFIG_GMAC_RX_BATCH: take the core lock ONCE for the whole drain instead
+ * of letting each tcpip_input take and release it. Both shapes end in the
+ * same input path; the difference is the lock traffic - the per-frame shape
+ * pays two CMSIS mutex kernel calls per frame (tcpip.c:259-261 in
+ * LWIP_TCPIP_CORE_LOCKING_INPUT mode), and the bridge's own bucket for the
+ * input call is where that cost shows. The lock is recursive in neither
+ * backend, so this only works because nothing inside the drain re-locks;
+ * that is exactly what tcpip_input does, so the batch wraps the loop and the
+ * unbatched path is kept as the reverse lever. */
 unsigned int ethnetif_poll(struct netif *netif)
 {
 	unsigned int port = port_of(netif);
 	unsigned int fed = 0;
 
 	g_poll_calls++;
+#if defined(CONFIG_GMAC_RX_BATCH) && CONFIG_GMAC_RX_BATCH \
+	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
+	LOCK_TCPIP_CORE();
+#endif
 	while (dwc_eqos_get_rx_frame_size(port) > 0U) {
 		int len = dwc_eqos_read_frame(port, in_linear, sizeof(in_linear));
 		struct pbuf *p;
+		uint64_t t0 = gtimer_count_get();
 
 		if (len <= 0) {
 			break;
@@ -152,14 +204,34 @@ unsigned int ethnetif_poll(struct netif *netif)
 			g_pool_fail++;
 			continue;
 		}
-		if (netif->input(p, netif) != ERR_OK) {
-			pbuf_free(p);
-			g_input_fail++;
-			continue;
+		{
+			uint64_t t1 = gtimer_count_get();
+
+			g_prep_ticks += t1 - t0;
+#if defined(CONFIG_GMAC_RX_BATCH) && CONFIG_GMAC_RX_BATCH \
+	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
+			/* Already under the core lock: hand the frame straight
+			 * to the stack's ethernet entry, the same function the
+			 * locking tcpip_input would call after re-locking. */
+			if (ethernet_input(p, netif) != ERR_OK) {
+#else
+			if (netif->input(p, netif) != ERR_OK) {
+#endif
+				pbuf_free(p);
+				g_input_fail++;
+				g_input_ticks += gtimer_count_get() - t1;
+				continue;
+			}
+			g_input_ticks += gtimer_count_get() - t1;
+			g_input_calls++;
 		}
 		fed++;
 		g_fed_total++;
 	}
+#if defined(CONFIG_GMAC_RX_BATCH) && CONFIG_GMAC_RX_BATCH \
+	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
+	UNLOCK_TCPIP_CORE();
+#endif
 
 	return fed;
 }

@@ -123,9 +123,21 @@ endif
 ifneq ($(RXPRIO),)
 LEVER_CFLAGS += -DCONFIG_GMAC_RX_PRIO_HI=1
 endif
-# CORELOCKIN=1: input on the caller's thread (see the ThreadX suite).
+# CORELOCKIN=1: input on the caller's thread (see the ThreadX suite;
+# 2026-10-18 board-measured +13% up / +22% down, adopted as the baseline).
 ifneq ($(CORELOCKIN),)
 LEVER_CFLAGS += -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+endif
+# TX_CSUM=1: checksum insertion offload - driver writes the pseudo-header sum
+# and tags CIC=3, lwipopts flips the per-netif checksum control in lockstep
+# (see the ThreadX suite for the full contract).
+ifneq ($(TX_CSUM),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_CSUM=1
+endif
+# BATCH=1: one core-lock acquisition for the whole RX drain (see the ThreadX
+# suite; requires CORELOCKIN).
+ifneq ($(BATCH),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BATCH=1
 endif
 # RX completion-sweep shape: default = the whole-ring scan, SCAN=2 = the bounded
 # walk (falsified 2026-10-17; same knob and rationale as the ThreadX suite).
