@@ -31,7 +31,8 @@ Usage:
   prober.py run --serial-hub <url> --out <dir> [--phases <n>] [--seconds <s>]
                 [--uplink-phases <n>] [--iface <if>] [--channel <mhz>]
                 [--width HT20] [--wpa-conf <file>] [--peer <addr>]
-                [--udp] [--ping-during] [--host user@addr]
+                [--udp] [--window <size>] [--phase-actions <spec>]
+                [--ping-during] [--ss-during] [--host user@addr]
   prober.py analyze <pcap> [--sta <mac>] [--out <json>] [--host user@addr]
   prober.py selftest
 
@@ -362,6 +363,24 @@ class Runner:
 
     def out(self, cmd: str, **kw) -> str:
         return self.run(cmd, **kw)[1]
+
+    def start(self, cmd: str, priv: bool = False) -> subprocess.Popen | None:
+        """Start a command alongside a phase window; dry-run starts nothing.
+
+        The alongside-commands (the loaded-link ping, the mid-window socket
+        read) are the tool's own instruments, so they are built and wrapped
+        here rather than with a bare Popen at the call site: dry-run must not
+        execute them either, and an offline test can then exercise the branch
+        without a radio or a board."""
+
+        full = self._wrap(cmd, priv)
+        if self.dry_run:
+            info("dry-run (bg): %s", full)
+            return None
+        argv = (["ssh", "-o", "BatchMode=yes", self.host, full] if self.host
+                else ["sh", "-c", full])
+        return subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
 
     def ok(self, cmd: str, priv: bool = False) -> bool:
         if self.dry_run:
@@ -1132,6 +1151,17 @@ def cmd_run(argv: list[str], r: Runner) -> int:
     peer_opt = arg_value(argv, "--peer")
     udp = has(argv, "--udp")
     ping_during = has(argv, "--ping-during")
+    ss_during = has(argv, "--ss-during")
+    window = arg_value(argv, "--window")
+    if window is not None and not re.match(r"^\d+[KMkm]?$", window):
+        return die("--window wants a size like 256K, got %r" % window)
+    try:
+        phase_actions = parse_phase_actions(arg_value(argv, "--phase-actions", ""))
+    except ValueError as e:
+        return die("%s" % e)
+    if len(phase_actions) > phases_want:
+        return die("--phase-actions names %d phases but --phases is %d"
+                   % (len(phase_actions), phases_want))
     ssid = arg_value(argv, "--ssid")
     psk = arg_value(argv, "--psk")
     bssid = arg_value(argv, "--bssid")
@@ -1167,7 +1197,9 @@ def cmd_run(argv: list[str], r: Runner) -> int:
     try:
         return _run_phases(r, hub, outdir, phases_want, seconds, deadline_s,
                            peer_opt, wpa_conf, ssid, psk, bssid, work,
-                           uplink_phases_want, udp, ping_during)
+                           uplink_phases_want, udp, ping_during,
+                           phase_actions=phase_actions, window=window,
+                           ss_during=ss_during)
     finally:
         if dumpcap is not None:
             # dumpcap ends on its own duration; if the round finished early,
@@ -1186,7 +1218,11 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
                 seconds: int, deadline_s: int, peer_opt: str | None,
                 wpa_conf: str | None, ssid: str | None,
                 psk: str | None, bssid: str | None = None,
-                work: str = "", uplink_phases_want: int = 4) -> int:
+                work: str = "", uplink_phases_want: int = 4,
+                udp: bool = False, ping_during: bool = False,
+                phase_actions: list[dict] | None = None,
+                window: str | None = None,
+                ss_during: bool = False) -> int:
     cursor = hub.cursor()
     info("run serial cursor=%d", cursor)
     peer = peer_opt
@@ -1303,8 +1339,13 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
                     warn("phase %d opened before a peer address was known; "
                          "pass --peer to measure without waiting for the lease", n)
                     continue
-                res = measure_phase(r, outdir, n, peer, seconds, udp,
-                                    ping_during=ping_during)
+                act = (phase_actions[n - 1]
+                       if phase_actions and n <= len(phase_actions)
+                       else {"udp": udp, "window": window})
+                res = measure_phase(r, outdir, n, peer, seconds, act["udp"],
+                                    ping_during=ping_during,
+                                    window=act.get("window"),
+                                    ss_during=ss_during)
                 pending[n] = pending.get(n, "") + "\n" + json.dumps(res)
                 continue
 
@@ -1426,41 +1467,78 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
     return 0 if ok else 1
 
 
+PHASE_ACTION_RE = re.compile(r"^(tcp|udp)(?:-w(\d+[KMkm]?))?$")
+
+
+def parse_phase_actions(spec: str) -> list[dict]:
+    """Per-phase client actions, one token per phase, left to right.
+
+    A token is `tcp` or `udp`, and a TCP token may pin the socket buffer it
+    asks the sender for (`tcp-w256K`). That pin exists because the sender's own
+    window is one of the limits a bulk transfer runs into, and the run-level
+    flags cannot vary it inside one boot - an A/B/A/B needs the variation per
+    phase. Phases beyond the spec keep the run-level defaults."""
+
+    acts = []
+    for tok in [t.strip() for t in spec.split(",") if t.strip()]:
+        m = PHASE_ACTION_RE.match(tok)
+        if not m:
+            raise ValueError("bad phase action %r (want tcp, udp or tcp-w<size>)"
+                             % tok)
+        acts.append({"udp": m.group(1) == "udp", "window": m.group(2)})
+    return acts
+
+
+def phase_client_cmd(peer: str, seconds: int, udp: bool, udp_port: int,
+                     udp_bw: str, window: str | None) -> str:
+    """The iperf command one phase window is measured on."""
+
+    if udp:
+        return "iperf -c %s -p %d -t %d -i 2 -u -b %s" % (peer, udp_port,
+                                                          seconds, udp_bw)
+    cmd = "iperf -c %s -p 5001 -t %d -i 2" % (peer, seconds)
+    if window:
+        cmd += " -w %s" % window
+    return cmd
+
+
 def measure_phase(r: Runner, outdir: str, n: int, peer: str, seconds: int,
                   udp: bool = False, udp_port: int = 5002,
-                  udp_bw: str = "60M", ping_during: bool = False) -> dict:
+                  udp_bw: str = "60M", ping_during: bool = False,
+                  window: str | None = None, ss_during: bool = False) -> dict:
     """Drive one phase window and collect what it moved.
 
-    The default action is the TCP client the rounds have always used. Two
+    The default action is the TCP client the rounds have always used. Three
     optional actions answer the question the TCP number alone cannot: `udp`
     blasts datagrams at the board's own sink (no acknowledgement clock, so the
-    receive path's own ceiling), and `ping_during` runs a ping alongside the
+    receive path's own ceiling), `ping_during` runs a ping alongside the
     transfer (the round-trip time while the link is loaded, which is what any
-    window-versus-flight-size arithmetic needs)."""
+    window-versus-flight-size arithmetic needs), and `ss_during` reads the
+    sender's own socket mid-window (congestion window, smoothed round trip,
+    unacknowledged bytes, and the send buffer it was given - the four numbers a
+    "which window binds" question is decided on)."""
 
-    info("run phase %d: client vs %s for %ss udp=%s ping=%s", n, peer, seconds,
-         udp, ping_during)
+    info("run phase %d: client vs %s for %ss udp=%s window=%s ping=%s ss=%s",
+         n, peer, seconds, udp, window, ping_during, ss_during)
     ping = None
     if ping_during:
-        # in the background on the measurement host; its summary lands in
-        # phaseN-ping.txt
+        # alongside the transfer; its summary lands in phaseN-ping.txt
         pcmd = "ping -c %d -i 0.2 %s" % (max(1, seconds * 5), peer)
-        wrapped = r._wrap(pcmd)
-        ping = subprocess.Popen(
-            (["ssh", "-o", "BatchMode=yes", r.host, wrapped] if r.host
-             else ["sh", "-c", wrapped]),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if udp:
-        cmd = "iperf -c %s -p %d -t %d -i 2 -u -b %s" % (peer, udp_port,
-                                                         seconds, udp_bw)
-    else:
-        cmd = "iperf -c %s -p 5001 -t %d -i 2" % (peer, seconds)
+        ping = r.start(pcmd)
+    ss = None
+    if ss_during and not udp:
+        # mid-window, so the transfer is up and steady when it is read
+        scmd = "sleep %d; ss -tin dst %s" % (max(1, seconds // 2), peer)
+        ss = r.start(scmd)
+    cmd = phase_client_cmd(peer, seconds, udp, udp_port, udp_bw, window)
     try:
         _, text = r.run(cmd, timeout=seconds + 60)
     except RuntimeError as e:
         warn("phase %d client failed: %s", n, e)
         if ping is not None:
             ping.terminate()
+        if ss is not None:
+            ss.terminate()
         return {"error": str(e)}
     with open(os.path.join(outdir, "phase%d.txt" % n), "w") as f:
         f.write(text)
@@ -1471,6 +1549,14 @@ def measure_phase(r: Runner, outdir: str, n: int, peer: str, seconds: int,
             ping.terminate()
             out_text = ""
         with open(os.path.join(outdir, "phase%d-ping.txt" % n), "w") as f:
+            f.write(out_text)
+    if ss is not None:
+        try:
+            out_text, _ = ss.communicate(timeout=seconds + 60)
+        except Exception:
+            ss.terminate()
+            out_text = ""
+        with open(os.path.join(outdir, "phase%d-ss.txt" % n), "w") as f:
             f.write(out_text)
     return parse_iperf(text)
 
@@ -1892,6 +1978,46 @@ def selftest() -> int:
     r2 = parse_iperf("[  3]  0.0- 8.0 sec  0.00 Bytes  0.00 bits/sec\n")
     check("iperf-parse-zero", r2["mbit"] == 0.0)
     check("iperf-parse-empty", parse_iperf("no summary here")["mbit"] is None)
+
+    # per-phase actions: the token grammar both ways, and the command each
+    # token builds - the window pin is the point of the whole flag
+    pa = parse_phase_actions("tcp,tcp-w256K,udp")
+    check("phase-actions-parse",
+          [a["udp"] for a in pa] == [False, False, True]
+          and pa[1]["window"] == "256K" and pa[0]["window"] is None)
+    check("phase-actions-empty", parse_phase_actions("") == [])
+    bad = 0
+    for spec in ("bogus", "tcp-w2X5", "udp-w", "tcp,tcp-w"):
+        try:
+            parse_phase_actions(spec)
+        except ValueError:
+            bad += 1
+    check("phase-actions-rejects-bad", bad == 4)
+    check("phase-cmd-window",
+          phase_client_cmd("10.0.0.5", 8, False, 5002, "60M", "256K")
+          == "iperf -c 10.0.0.5 -p 5001 -t 8 -i 2 -w 256K")
+    check("phase-cmd-udp-no-window",
+          phase_client_cmd("10.0.0.5", 8, True, 5002, "60M", "256K")
+          == "iperf -c 10.0.0.5 -p 5002 -t 8 -i 2 -u -b 60M")
+    check("phase-cmd-default-no-window",
+          phase_client_cmd("10.0.0.5", 8, False, 5002, "60M", None)
+          == "iperf -c 10.0.0.5 -p 5001 -t 8 -i 2")
+
+    # a dry-run phase must build every command it would run - the client, the
+    # alongside ping and the mid-window socket read - and execute none of them.
+    # This is the branch an offline test can reach, and it is where a broken
+    # call in that construction is caught instead of on the board.
+    tmpd = tempfile.mkdtemp(prefix="prober-selftest-")
+    dry = Runner(None, True, False)
+    res = measure_phase(dry, tmpd, 1, "10.0.0.9", 1, False,
+                        ping_during=True, ss_during=True, window="256K")
+    check("phase-dryrun-builds-actions",
+          res.get("mbit") is None
+          and os.path.exists(os.path.join(tmpd, "phase1.txt"))
+          and not os.path.exists(os.path.join(tmpd, "phase1-ping.txt"))
+          and not os.path.exists(os.path.join(tmpd, "phase1-ss.txt")))
+    os.remove(os.path.join(tmpd, "phase1.txt"))
+    os.rmdir(tmpd)
 
     # the field discovery: only names the tool actually has are used
     known = set("frame.time_epoch wlan.fc.type_subtype frame.len wlan.ta".split())

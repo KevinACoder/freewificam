@@ -100,6 +100,26 @@ records the wall clock, drives the client, and collects the board's own
 `perf census:` lines that fall inside the window. It writes `result.json`, one
 file per phase, a copy of the console, and the capture.
 
+The client inside a phase is the TCP stream by default, and four options change
+what it does and what else is recorded. `--udp` blasts datagrams at the board's
+own sink instead (no acknowledgement clock, so the receive path's own ceiling);
+`--window <size>` pins the sender's socket buffer (`-w`), because the sender's
+own window is one of the limits a bulk transfer runs into; `--ping-during` runs
+a ping alongside the transfer and keeps its summary in `phaseN-ping.txt` (the
+round trip while the link is loaded); `--ss-during` reads the sender's socket
+mid-window into `phaseN-ss.txt` (congestion window, smoothed round trip,
+unacknowledged bytes, send buffer). `--phase-actions` overrides the arm and the
+window per phase, left to right, so one boot can carry an A/B/A/B:
+
+```
+prober.py run ... --phase-actions "tcp,tcp-w256K,udp,tcp-w256K" \
+    --ping-during --ss-during
+```
+
+A phase beyond the spec keeps the run-level defaults, and a token is `tcp`,
+`udp` or `tcp-w<size>` - a window on a UDP phase is a usage error rather than a
+silently ignored flag.
+
 The reverse direction needs no extra flag: when the board's console announces
 its uplink stage, `run` brings up an iperf2 server on this host, tells the board
 on the console the address to send to - this host's address on the path to the
