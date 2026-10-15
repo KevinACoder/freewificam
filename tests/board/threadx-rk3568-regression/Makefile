@@ -97,6 +97,7 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 	-I$(ROOT)/os/threadx \
 	-I$(TX)/common/inc \
 	-I$(TX_PORT)/inc \
+	$(if $(EPK),-I$(TX)/utility/execution_profile_kit) \
 	-DTX_INCLUDE_USER_DEFINE_FILE -DEL1=1 \
 	-DCONFIG_TX_TICKS_PER_SECOND=1000 -DCONFIG_TX_TIMER_STACK=4096
 
@@ -178,6 +179,38 @@ endif
 # the batch hands frames to ethernet_input directly under the lock it took.
 ifneq ($(BATCH),)
 LEVER_CFLAGS += -DCONFIG_GMAC_RX_BATCH=1
+endif
+# TCP-gap instrument tier: compiles MIB2's TCP segment counters (out/in and
+# fast retransmits) into the stack - lwipopts.h keys its MIB2_STATS block on
+# this macro, so it must reach both the stack TUs and the console TU that
+# prints them (`gmac tcp`). Not a treatment: measured rounds state it in the
+# ledger like any other build input.
+ifneq ($(TCPPROBE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TCP_PROBE=1
+endif
+# RX copy-chain cut (2026-10-19, the cost-bound fix): the bridge reads each
+# staged frame straight into the pool pbuf, dropping the linear scratch + the
+# pbuf_take copy. One less 1500-byte memcpy per received frame.
+ifneq ($(RXDIRECT),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_DIRECT=1
+endif
+# Execution Profile Kit (EPK=1): rebuilds the kernel + the A55 port with
+# TX_EXECUTION_PROFILE_ENABLE so every thread switch and ISR boundary
+# accumulates per-thread execution time from CNTVCT (tx_user.h supplies the
+# source), adds utility/execution_profile_kit to the compile set, and arms the
+# `gmac etime` report. Measurement-only: the switch changes the TX_THREAD
+# layout and adds a counter read per switch, so the shipped image stays
+# byte-for-byte without it.
+ifneq ($(EPK),)
+LEVER_CFLAGS += -DTX_EXECUTION_PROFILE_ENABLE=1
+endif
+# TCP send-buffer size lever (codex hypothesis 3: large unsent/unacked queues
+# make tcp_write and tcp_output walk long segment lists on every ACK). Smaller
+# buffers shorten the walks; the receive window is untouched, so the flight
+# limit stays 512 KB. The queue length follows the 4*SND_BUF/MSS floor.
+ifneq ($(SNDBUF),)
+LEVER_CFLAGS += -DTCP_SND_BUF=$(SNDBUF) \
+	-DTCP_SND_QUEUELEN=$(shell echo $$(( $(SNDBUF) / 365 + 2 )))
 endif
 # RX completion-sweep shape. The DEFAULT is the whole-ring scan (every
 # measurement this line has is taken with it). SCAN=2 selects the bounded walk,
@@ -274,7 +307,8 @@ TX_SRCS := \
 	$(ROOT)/os/threadx/board/rk3568-itx/heap.c \
 	$(ROOT)/os/threadx/board/rk3568-itx/cmsis2/cmsis2_board.c \
 	$(ROOT)/os/threadx/cmsis2_threadx.c \
-	$(ROOT)/os/threadx/cmsis2_ext.c
+	$(ROOT)/os/threadx/cmsis2_ext.c \
+	$(if $(EPK),$(TX)/utility/execution_profile_kit/tx_execution_profile.c)
 
 COMMON_SRCS := \
 	$(COMMON)/board_suite.c \

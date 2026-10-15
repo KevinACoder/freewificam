@@ -161,9 +161,16 @@
 #define LWIP_WND_SCALE                  1
 #define TCP_RCV_SCALE                   4
 #define TCP_WND                         524288
+/* Guarded so the SNDBUF= make lever can win (the queue-walk experiment);
+ * unset = the converged default. TCP_SND_QUEUELEN's floor is
+ * 4 * TCP_SND_BUF / TCP_MSS. */
+#ifndef TCP_SND_BUF
 #define TCP_SND_BUF                     524288
-/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 1436. */
+#endif
+/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 1436 at the default size. */
+#ifndef TCP_SND_QUEUELEN
 #define TCP_SND_QUEUELEN                1536
+#endif
 /* The opt.h default (TCP_SND_BUF / 2) trips the u16 guard sanity check;
  * 32 KB keeps the writer awake far from it. */
 #define TCP_SNDLOWAT                    32768
@@ -214,5 +221,23 @@
  * increment per event. */
 #define LWIP_STATS                      1
 #define LWIP_STATS_DISPLAY              0
+
+/* TCP-gap probe tier (2026-10-19): MIB2's TCP segment counters - out/in and,
+ * crucially, fast retransmits (tcp_out.c tcp_rexmit) - are the direct read on
+ * whether the 548 Mbit/s ceiling carries a retransmission load. Compiled in
+ * only under the instrument lever (CONFIG_GMAC_TCP_PROBE); the increments are
+ * one u32 add per segment, but the default image stays byte-for-byte on the
+ * shipped profile unless the lever says otherwise (the suite Makefile's
+ * TCPPROBE=1). A full RTO retransmit is NOT in MIB2; it rides the probe
+ * counter in patches/lwip.
+ *
+ * LWIP_STATS_LARGE is load-bearing with it: the default STAT_COUNTER is u16,
+ * and at 500 Mbit/s the segment counters wrap several times inside one 10 s
+ * phase - a wrapped differential is silently wrong (it reads as a small
+ * positive delta). u32 counters make the phase diffs honest. */
+#if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
+#define MIB2_STATS                      1
+#define LWIP_STATS_LARGE                1
+#endif
 
 #endif /* FREEWEB_LWIPOPTS_H */

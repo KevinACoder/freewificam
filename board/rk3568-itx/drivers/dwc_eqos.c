@@ -785,6 +785,7 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 {
 	unsigned int next = (dev->rx_stage_head + 1) % dev->rx_stage_count;
 	struct dwc_eqos_stage *stage;
+	struct dwc_eqos_prof *prof = &eqos_prof[dev->plat->index];
 
 	if (next == dev->rx_stage_tail) {
 		/* Full: drop this frame rather than delay the ring. */
@@ -797,6 +798,26 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 	memcpy(stage->data, buf, len);
 	dev->rx_stage_head = next;
 	dev->stats.rx_frames++;
+
+	/* Arrival rhythm + reader lag (see struct dwc_eqos_prof): the staging
+	 * instant is the DMA's arrival seen by software (the completion sweep
+	 * runs within a wake of the writeback), and the ring occupancy right
+	 * after this put is how far the reader trails the producer. */
+	{
+		uint64_t now = eqos_prof_t0();
+		unsigned int occ = (dev->rx_stage_head + dev->rx_stage_count
+				    - dev->rx_stage_tail) % dev->rx_stage_count;
+
+		if (prof->rx_last_stage_ticks != 0u) {
+			prof->rx_gap_hist[gmac_prof_hist_bucket(
+				now - prof->rx_last_stage_ticks)]++;
+			prof->rx_gap_samples++;
+		}
+		prof->rx_last_stage_ticks = now;
+		if (occ > prof->rx_stage_high_water) {
+			prof->rx_stage_high_water = occ;
+		}
+	}
 
 	return 0;
 }
@@ -1860,13 +1881,6 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 				memset(buf + len, 0, DWC_EQOS_MIN_TX_FRAME - len);
 				tx_len = DWC_EQOS_MIN_TX_FRAME;
 			}
-			{
-				uint64_t t_flush = eqos_prof_t0();
-
-				cache_dcache_flush((uintptr_t)buf, tx_len);
-				eqos_prof[index].tx_flush_ticks +=
-					eqos_prof_t0() - t_flush;
-			}
 
 			/* One completion interrupt per IOC_DIV frames, plus
 			 * the frame that empties the ring (cur == tx_tail
@@ -1915,6 +1929,19 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 				}
 			}
 #endif
+			/* The clean must come AFTER the checksum classifier: the
+			 * seeded pseudo-header sum is a write into this frame, and
+			 * tx_buffers live in cacheable .bss (no DMA snooping), so a
+			 * clean taken before it would leave those bytes to reach
+			 * memory by accident. Flush covers the final bytes the DMA
+			 * reads, seed included. */
+			{
+				uint64_t t_flush = eqos_prof_t0();
+
+				cache_dcache_flush((uintptr_t)buf, tx_len);
+				eqos_prof[index].tx_flush_ticks +=
+					eqos_prof_t0() - t_flush;
+			}
 			desc->des2 = (ioc ? DWC_EQOS_DESC_TX_IOC : 0u)
 				   | (tx_len & 0x3fffu);
 			desc->des3 = DWC_EQOS_DESC_OWN | DWC_EQOS_DESC_TX_FD
@@ -2155,6 +2182,18 @@ void dwc_eqos_reset_prof(unsigned int index)
 		return;
 	}
 	memset(&eqos_prof[index], 0, sizeof(eqos_prof[index]));
+}
+
+void dwc_eqos_reset_rx_hist(unsigned int index)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	memset(eqos_prof[index].rx_gap_hist, 0,
+	       sizeof(eqos_prof[index].rx_gap_hist));
+	eqos_prof[index].rx_gap_samples = 0u;
+	eqos_prof[index].rx_last_stage_ticks = 0u;
+	eqos_prof[index].rx_stage_high_water = 0u;
 }
 
 void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)

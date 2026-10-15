@@ -624,6 +624,23 @@ int dwc_eqos_get_regs(unsigned int index, struct dwc_eqos_regs *regs);
  * discriminator between the blind whole-ring scan (128 per sweep) and the
  * bounded walk (one or two).
  */
+/* The arrival-histogram shape: log2 buckets, the highest an overflow. Index =
+ * position of the highest set bit, so bucket k spans [2^(k-1), 2^k) ticks
+ * (41.7 ns each at 24 MHz); bucket 0 is "under one tick". Buckets resolve
+ * gaps up to 2^16 ticks = 2.7 ms and 16 + 1 = 18 buckets far exceed any
+ * line-rate spacing; the top bucket saturates at 2^17 ticks = 5.5 ms. */
+#define DWC_EQOS_PROF_HIST_BUCKETS	18
+static inline unsigned int gmac_prof_hist_bucket(uint64_t ticks)
+{
+	unsigned int b = 0u;
+
+	while ((ticks >>= 1) != 0u) {
+		b++;
+	}
+	return (b < (DWC_EQOS_PROF_HIST_BUCKETS - 1u)) ? b
+						       : (DWC_EQOS_PROF_HIST_BUCKETS - 1u);
+}
+
 struct dwc_eqos_prof {
 	uint64_t irq_ticks;		/* whole ISR, entry to exit */
 	uint64_t irq_odd_ticks;		/* passes that service nothing */
@@ -644,10 +661,32 @@ struct dwc_eqos_prof {
 					 * (~1 = wake per frame, as in the
 					 * per-frame-RI baseline) */
 	uint64_t tx_frames;		/* frames through send_frame */
+
+	/* Frame-arrival rhythm (2026-10-19 instrument): the inter-arrival
+	 * histogram of staged RX frames, bucketed by gmac_prof_hist_bucket()
+	 * (log2, 41.7 ns per tick at 24 MHz). The TCP question this answers:
+	 * does the peer's stream arrive as a bursty train separated by idle
+	 * gaps (a pacing/feedback limit - samples pile into the ms buckets),
+	 * or as a smooth line-rate wall (a per-frame-cost limit - everything
+	 * in the sub-10-us buckets)? At the measured ~1 frame per sweep the
+	 * staging instants ARE the arrival instants. */
+	uint64_t rx_gap_hist[DWC_EQOS_PROF_HIST_BUCKETS];
+	uint64_t rx_gap_samples;	/* intervals counted */
+	uint64_t rx_last_stage_ticks;	/* last staging instant (absolute) */
+	uint32_t rx_stage_high_water;	/* peak staged frames waiting for the
+					 * reader: near 0 means the RX thread keeps
+					 * up with the DMA; near the ring depth means
+					 * the reader is the lagging consumer */
 };
 
 void dwc_eqos_get_prof(unsigned int index, struct dwc_eqos_prof *prof);
 void dwc_eqos_reset_prof(unsigned int index);
+
+/* Clear only the arrival-rhythm fields of the profile (gap histogram,
+ * samples, stage high-water, last-staging instant), so a measurement can reset
+ * the rhythm instrument between phases without stomping the service-time
+ * buckets the same `gmac prof` diff carries. */
+void dwc_eqos_reset_rx_hist(unsigned int index);
 
 /* Interrupt-source forensics (N7-stab freeze round): emergency-print every
  * block that shares this port's interrupt line (MAC status - read-clear,

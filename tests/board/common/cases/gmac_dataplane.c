@@ -44,6 +44,7 @@
 #include "eqos_rk3568.h"
 #include "rtl8211f.h"
 #include "ethnetif.h"
+#include "generic_timer.h"
 
 #include "csh.h"
 
@@ -85,6 +86,29 @@ static volatile uint32_t g_udp_pkts;
 static volatile uint32_t g_udp_bytes;
 static volatile uint32_t g_udp_first_tick;
 static volatile uint32_t g_udp_last_tick;
+
+/* --- idle-time gauge (2026-10-19, the PMCCNTR replacement) ---------------------
+ *
+ * The cycle-counter route is closed on this board: WFI stops PMCCNTR, and both
+ * CMSIS backends idle by busy polling (the board's tx_user.h leaves the WFI
+ * option deliberately undefined), so a "how much of the single core is really
+ * idle" number has to come from the scheduler instead of the PMU. The gauge is
+ * a lowest priority thread whose loop only advances a counter: it runs exactly
+ * when nothing else can, so its spin rate over a window, divided by the rate
+ * measured while the line is quiet (`gmac idle cal`), IS the idle fraction.
+ * The loop body is one increment - the cheapest thing a thread can do - so the
+ * gauge cannot hide work behind itself. */
+static volatile uint64_t g_idle_spins;
+static uint64_t g_idle_cal_spm;		/* spins per millisecond, quiet line */
+static uint32_t g_idle_cal_ms;
+
+static void thr_idle(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		g_idle_spins++;
+	}
+}
 
 static void udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 			  const ip_addr_t *addr, u16_t port)
@@ -344,6 +368,12 @@ static int gmac_line_up(void)
 			&(osThreadAttr_t){ .name = "lansvc",
 					   .priority = osPriorityNormal }) == NULL) {
 		LOG_ERROR("lan: service thread FAIL\n");
+		return -1;
+	}
+	if (osThreadNew(thr_idle, NULL,
+			&(osThreadAttr_t){ .name = "gmacidle",
+					   .priority = osPriorityLow }) == NULL) {
+		LOG_ERROR("lan: idle gauge thread FAIL\n");
 		return -1;
 	}
 
@@ -662,6 +692,155 @@ static int cmd_gmac(int argc, char **argv)
 		return 0;
 	}
 
+	/* `gmac tcp [reset]`: the TCP layer's own counters. The lwIP stats block
+	 * is always compiled; MIB2's segment counters (out/in/fast-retransmit)
+	 * come with the TCPPROBE=1 lever. Diff between phase boundaries: the
+	 * retransmit delta is the direct read on whether the ceiling carries a
+	 * recovery load (world b) or the flows are clean (worlds a/c). */
+	if (argc >= 2 && strcmp(argv[1], "tcp") == 0) {
+#if LWIP_STATS
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
+			memset(&lwip_stats.tcp, 0, sizeof(lwip_stats.tcp));
+#if MIB2_STATS
+			lwip_stats.mib2.tcpoutsegs = 0u;
+			lwip_stats.mib2.tcpinsegs = 0u;
+			lwip_stats.mib2.tcpretranssegs = 0u;
+			lwip_stats.mib2.tcpoutrsts = 0u;
+#endif
+			csh_printf(csh, "gmac%u: tcp reset\n", g_port);
+			return 0;
+		}
+		csh_printf(csh, "gmac%u: tcp recv=%u xmit=%u drop=%u chkerr=%u "
+			   "memerr=%u lenerr=%u err=%u proterr=%u",
+			   g_port,
+			   (unsigned)lwip_stats.tcp.recv, (unsigned)lwip_stats.tcp.xmit,
+			   (unsigned)lwip_stats.tcp.drop, (unsigned)lwip_stats.tcp.chkerr,
+			   (unsigned)lwip_stats.tcp.memerr, (unsigned)lwip_stats.tcp.lenerr,
+			   (unsigned)lwip_stats.tcp.err, (unsigned)lwip_stats.tcp.proterr);
+#if MIB2_STATS
+		csh_printf(csh, " outsegs=%u insegs=%u rexmit=%u outrst=%u",
+			   (unsigned)lwip_stats.mib2.tcpoutsegs,
+			   (unsigned)lwip_stats.mib2.tcpinsegs,
+			   (unsigned)lwip_stats.mib2.tcpretranssegs,
+			   (unsigned)lwip_stats.mib2.tcpoutrsts);
+#endif
+		csh_printf(csh, "\n");
+#else
+		csh_printf(csh, "gmac: LWIP_STATS off\n");
+#endif
+		return 0;
+	}
+	/* `gmac gap [reset]`: the arrival-rhythm instrument (see struct
+	 * dwc_eqos_prof). Bucket k spans [2^(k-1), 2^k) system-counter ticks
+	 * (41.7 ns): a smooth line-rate flow piles every sample into the low
+	 * buckets, a paced/bursty one shows a fat tail at the ms buckets.
+	 * hw = peak staged frames waiting for the reader. */
+	if (argc >= 2 && strcmp(argv[1], "gap") == 0) {
+		struct dwc_eqos_prof p;
+		unsigned int i;
+
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
+			dwc_eqos_reset_rx_hist(g_port);
+			csh_printf(csh, "gmac%u: gap reset\n", g_port);
+			return 0;
+		}
+		dwc_eqos_get_prof(g_port, &p);
+		csh_printf(csh, "gmac%u: gap n=%llu hw=%u",
+			   g_port, (unsigned long long)p.rx_gap_samples,
+			   (unsigned)p.rx_stage_high_water);
+		for (i = 0; i < DWC_EQOS_PROF_HIST_BUCKETS; i++) {
+			csh_printf(csh, " b%u=%llu", i,
+				   (unsigned long long)p.rx_gap_hist[i]);
+		}
+		csh_printf(csh, "\n");
+		return 0;
+	}
+	/* `gmac idle [cal]`: the real-idle gauge. The idle thread is the lowest
+	 * priority thread in the image, so its spin count advances only when
+	 * every other thread is blocked. `cal` measures the quiet-line rate
+	 * (spins per millisecond) once; afterwards the harness diffs two plain
+	 * samples around a phase: idle_pct = (dspins / dt_ms) * 100 / cal_spm.
+	 * Plain samples print absolute counts, so no state is kept per phase. */
+	if (argc >= 2 && strcmp(argv[1], "idle") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "cal") == 0) {
+			uint64_t s0, s1, t0, t1;
+			uint64_t elapsed_us;
+
+			s0 = g_idle_spins;
+			t0 = gtimer_count_get();
+			(void)osDelay(200u);
+			t1 = gtimer_count_get();
+			s1 = g_idle_spins;
+			elapsed_us = (t1 - t0) / 24u;
+			g_idle_cal_spm = (elapsed_us != 0u)
+				? ((s1 - s0) * 1000u) / elapsed_us : 0u;
+			g_idle_cal_ms = (uint32_t)(elapsed_us / 1000u);
+			csh_printf(csh, "gmac%u: idle cal spins=%llu ms=%u spm=%llu\n",
+				   g_port, (unsigned long long)(s1 - s0),
+				   (unsigned)g_idle_cal_ms,
+				   (unsigned long long)g_idle_cal_spm);
+			return 0;
+		}
+		csh_printf(csh, "gmac%u: idle spins=%llu ticks=%llu cal_spm=%llu\n",
+			   g_port, (unsigned long long)g_idle_spins,
+			   (unsigned long long)gtimer_count_get(),
+			   (unsigned long long)g_idle_cal_spm);
+		return 0;
+	}
+	/* `gmac shape [reset]`: what the TCP flow is made of, both directions:
+	 * data segments, pure ACKs, and a duplicate-ACK proxy (a pure ACK whose
+	 * (seq, ack) equals the previous one - three in a row trigger fast
+	 * retransmit). This is the read that turns "ACK:data = 0.54" into
+	 * "which shapes those 0.54 are". */
+	if (argc >= 2 && strcmp(argv[1], "shape") == 0) {
+		struct ethnetif_shape rx, tx;
+
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0) {
+			ethnetif_reset_shape();
+			csh_printf(csh, "gmac%u: shape reset\n", g_port);
+			return 0;
+		}
+		ethnetif_get_shape(&rx, &tx);
+		csh_printf(csh, "gmac%u: shape rx data=%lu ack=%lu ackdup=%lu ackwu=%lu "
+			   "syn=%lu fin=%lu rst=%lu other=%lu | "
+			   "tx data=%lu ack=%lu ackdup=%lu ackwu=%lu syn=%lu fin=%lu rst=%lu other=%lu\n",
+			   g_port, rx.data, rx.pure_ack, rx.ack_dup, rx.ack_wupd,
+			   rx.syn, rx.fin, rx.rst, rx.other,
+			   tx.data, tx.pure_ack, tx.ack_dup, tx.ack_wupd,
+			   tx.syn, tx.fin, tx.rst, tx.other);
+		return 0;
+	}
+
+	/* `gmac etime`: per-thread execution-time attribution (EPK=1 builds; the
+	 * upstream ThreadX Execution Profile Kit behind osExecProfileGet). One
+	 * line per thread, ticks in the 24 MHz system counter - /24000 = ms. The
+	 * totals answer "who eats the single core" directly, no inference from
+	 * counters. `isr` and `idle` are the kit's accumulators; when the build
+	 * has no profile kit the line says so instead of printing zeros. */
+	if (argc >= 2 && strcmp(argv[1], "etime") == 0) {
+		os_exec_profile_entry_t prof[OS_EXEC_PROFILE_MAX_ENTRIES];
+		uint64_t isr_ticks = 0u, idle_ticks = 0u;
+		size_t n, i;
+
+		n = osExecProfileGet(prof, OS_EXEC_PROFILE_MAX_ENTRIES,
+				     &isr_ticks, &idle_ticks);
+		if (n == 0u && isr_ticks == 0u && idle_ticks == 0u) {
+			csh_printf(csh, "gmac%u: etime unavailable (build without EPK)\n",
+				   g_port);
+			return 0;
+		}
+		csh_printf(csh, "gmac%u: etime isr_ms=%llu idle_ms=%llu",
+			   g_port, (unsigned long long)(isr_ticks / 24000u),
+			   (unsigned long long)(idle_ticks / 24000u));
+		for (i = 0; i < n; i++) {
+			csh_printf(csh, " %s=%llu",
+				   prof[i].name ? prof[i].name : "?",
+				   (unsigned long long)(prof[i].ticks / 24000u));
+		}
+		csh_printf(csh, "\n");
+		return 0;
+	}
+
 	if (!g_up) {
 		csh_printf(csh, "gmac: line is not up (run at boot by the gmac-up case)\n");
 		return 1;
@@ -670,13 +849,14 @@ static int cmd_gmac(int argc, char **argv)
 	dwc_eqos_get_mmc_stats(g_port, &mmc);
 	ethnetif_get_diag(&d_poll, &d_pool, &d_input, &d_fed);
 	csh_printf(csh, "gmac%u: rx=%u err=%u tx=%u txdrop=%u txerr=%u dmaerr=%u irq=%u "
-			"csdrop=%u txcsum=%u txcsumun=%u | fed=%lu poll=%lu poolfail=%lu inputfail=%lu | "
+			"csdrop=%u rxdrop=%u txcsum=%u txcsumun=%u | fed=%lu poll=%lu poolfail=%lu inputfail=%lu | "
 			"mmc pkts=%u ovf=%u crc=%u\n",
 		   g_port,
 		   (unsigned)stats.rx_frames, (unsigned)stats.rx_errors,
 		   (unsigned)stats.tx_frames, (unsigned)stats.tx_dropped,
 		   (unsigned)stats.tx_errors, (unsigned)stats.dma_errors,
 		   (unsigned)stats.rx_irqs, (unsigned)stats.rx_csum_drops,
+		   (unsigned)stats.rx_dropped,
 		   (unsigned)stats.tx_csum_frames, (unsigned)stats.tx_csum_uncovered,
 		   d_fed, d_poll, d_pool, d_input,
 		   (unsigned)mmc.rx_pkts_gb, (unsigned)mmc.rx_fifo_overflow,
@@ -777,12 +957,17 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
 			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
 			  "gmac prof [reset] - service-time profile in us (cumulative; diff it);\n"
 			  "gmac ring - RX ring snapshot (tail/DMA position/ownership);\n"
 			  "gmac regs - live MAC/DMA register dump (Linux-parity table);\n"
 			  "gmac net - ARP table + stack counters;\n"
+			  "gmac tcp [reset] - TCP stats (+ MIB2 segment counters under TCPPROBE=1);\n"
+			  "gmac gap [reset] - RX inter-arrival histogram (log2 buckets, 24 MHz ticks);\n"
+			  "gmac idle [cal] - idle-thread spin gauge (cal = calibrate on a quiet line);\n"
+			  "gmac shape [reset] - TX/RX TCP frame shapes (data/ACK/dup-ACK);\n"
+			  "gmac etime - per-thread execution time in ms (EPK=1 builds);\n"
 			  "gmac udpstat [reset] - UDP sink counters (burst rate board-side);\n"
 			  "gmac udpsend <ip> [ms] - raw-API UDP send loop (default 5000 ms);\n"
 			  "gmac hb on|off - quiet the 1 Hz heartbeat for a measurement round;\n"

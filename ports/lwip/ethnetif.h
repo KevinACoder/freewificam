@@ -38,4 +38,26 @@ void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
 			     unsigned long *input_calls);
 
+/* Traffic-shape classification (2026-10-19): every IP/TCP frame crossing the
+ * bridge, split by what it is. The TCP-gap round needs the shape mix - is the
+ * flow data segments with a few ACKs, or a wall of tiny pure ACKs? - because
+ * "which end is short" cannot be read from byte counters alone. */
+struct ethnetif_shape {
+	unsigned long frames;
+	unsigned long data;		/* TCP with payload */
+	unsigned long pure_ack;		/* TCP header only, ACK set */
+	unsigned long ack_dup;		/* pure ACK identical to the previous
+					 * one in (seq, ack) AND window: the true
+					 * duplicate-ACK signature */
+	unsigned long ack_wupd;		/* same (seq, ack), different window:
+					 * a window update, not a hole report */
+	unsigned long syn;
+	unsigned long fin;
+	unsigned long rst;
+	unsigned long other;		/* non-IPv4, non-TCP, malformed */
+};
+
+void ethnetif_get_shape(struct ethnetif_shape *rx, struct ethnetif_shape *tx);
+void ethnetif_reset_shape(void);
+
 #endif /* FREEWEB_LWIP_ETHNETIF_H */

@@ -57,4 +57,35 @@ void osCriticalExit( os_critical_state_t state );
 void * osMemoryAlloc( size_t size );
 void   osMemoryFree( void * ptr );
 
+/**
+ * @brief   Per-thread execution-time profile (measurement builds only).
+ *
+ * The wired-throughput rounds need "which thread eats the single core" as a
+ * first-class reading, not an inference. CMSIS-RTOS2 has no such query; the
+ * ThreadX backend answers it from the upstream Execution Profile Kit when the
+ * build enables it (TX_EXECUTION_PROFILE_ENABLE, the EPK=1 lever), and every
+ * other backend answers with an empty profile so the caller needs no
+ * per-kernel switch.
+ *
+ * Contract: fills up to `max` entries with the created threads' names and
+ * accumulated execution time in the time source's units (the ThreadX board
+ * source is CNTVCT: 24 MHz ticks; the shipped build carries it because WFI
+ * stops PMCCNTR and this board's idle genuinely busy-polls, so the PMU route
+ * is closed). `*isr_ticks` / `*idle_ticks` receive the ISR and idle
+ * accumulators (0 when unknown). Returns the number of entries written. The
+ * sums are monotonic since kernel entry and are only meaningful when the
+ * profile kit is compiled in; an empty result plus zero totals means the
+ * build has no profile, not that nothing ran. Callable from a thread; the
+ * EPK's per-thread totals are read racily by design (the running thread's
+ * own total is only complete after its next switch). */
+#define OS_EXEC_PROFILE_MAX_ENTRIES	16
+
+typedef struct {
+	const char *name;	/* NULL when the slot is unused */
+	uint64_t    ticks;	/* accumulated execution time, source units */
+} os_exec_profile_entry_t;
+
+size_t osExecProfileGet(os_exec_profile_entry_t *entries, size_t max,
+			uint64_t *isr_ticks, uint64_t *idle_ticks);
+
 #endif /* CMSIS_OS2_EXT_H */

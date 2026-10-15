@@ -119,6 +119,14 @@ void tx_application_define(void *first_unused_memory)
 
 	tx_thread_stack_error_notify(tx_stack_error_handler);
 
+#if defined(TX_EXECUTION_PROFILE_ENABLE)
+	/* Per-thread execution attribution (EPK=1 builds): the counters start at
+	 * the scheduler's first switch; the console's `gmac etime` reads totals
+	 * plus the ISR and idle accumulators. Anchored so the round can prove the
+	 * kit actually armed rather than reading zeros as "no thread ran". */
+	LOG_ANCHOR("tx: execution profile enabled\n");
+#endif
+
 	/* Arm the tick through the OS_Tick_* seam (the board layer carries no
 	 * kernel dependency). Interrupts stay masked until _tx_thread_schedule
 	 * unmasks them; the timer pends meanwhile. */
