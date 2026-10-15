@@ -118,12 +118,6 @@ struct dwc_eqos_dev {
 	 * reader has not consumed the copy yet, 0 = slot free. The sweep
 	 * walks the whole ring because the DMA laps past software rather
 	 * than stopping at a moving head. */
-	/* Consumer cursor for the RX sweep: the next descriptor the completion
-	 * walk starts from. Descriptors complete in ring order, so the sweep
-	 * only has to look from here to the first one the DMA still owns - the
-	 * whole-ring scan it replaces cost 43-55% of the wall clock (see
-	 * eqos_rx_complete). */
-	int       rx_dirty;
 	uint8_t   rx_in_flight[DWC_EQOS_RX_DESC_COUNT];
 	/* Next slot the reader consumes from; the DMA writes back in ring
 	 * order, so staged slots always run consecutively from here. */
@@ -672,7 +666,6 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 	memset(dev->tx_ring, 0, DWC_EQOS_TX_DESC_COUNT * sizeof(struct dwc_eqos_desc));
 
 	memset(dev->rx_in_flight, 1, DWC_EQOS_RX_DESC_COUNT);
-	dev->rx_dirty = 0;
 	dev->tx_head = 0;
 	dev->tx_tail = 0;
 	dev->rx_read_tail = 0;
@@ -800,31 +793,24 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	unsigned int port = dev->plat->index;
 	int delivered = 0;
 	int last_armed = -1;
-	int n;
 	int i;
 
-	/* Walk from the consumer cursor and STOP at the first descriptor the DMA
-	 * still owns. The descriptors complete in ring order, so everything from
-	 * the cursor up to that one is ours.
-	 *
-	 * This used to scan all 128 descriptors on every interrupt, and the ring
-	 * lives in the non-cacheable window, so each probe is an uncached read.
-	 * The 2026-10-16 profile measured that scan at 32 us (upload) / 23 us
-	 * (download) per interrupt - 43-55% of the whole wall clock and 93-94%
-	 * of all interrupt time, while every copy in the path was under 1 s of a
-	 * 12 s phase. The cursor is the same shape the Linux stmmac driver uses
-	 * (its dirty_rx walk stops at the first owned descriptor). */
-	for (n = 0; n < DWC_EQOS_RX_DESC_COUNT; n++) {
+	/* Whole-ring scan. A cursor walk that stops at the first DMA-owned
+	 * descriptor was tried on 2026-10-16 and collapsed the uplink to
+	 * 0.3 Mbit/s: the RX_END written at the bottom of this function is the
+	 * DMA's fetch-window END, and the window only stays ahead of the DMA
+	 * because the scan re-arms to the highest completed index every time.
+	 * Stopping early leaves RX_END at the DMA's own position and the
+	 * channel stalls. Do not shorten this walk until the tail semantics are
+	 * settled against the controller manual. */
+	for (i = 0; i < DWC_EQOS_RX_DESC_COUNT; i++) {
 		struct dwc_eqos_desc *desc;
 		uint8_t *buf;
 		unsigned int len;
-		unsigned int slot_now;
-
-		i = (dev->rx_dirty + n) % DWC_EQOS_RX_DESC_COUNT;
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
-		slot_now = dev->rx_desc_slot[i];
+		unsigned int slot_now = dev->rx_desc_slot[i];
 #else
-		slot_now = (unsigned int)i;
+		const unsigned int slot_now = (unsigned int)i;
 #endif
 
 		if (dev->rx_in_flight[i] != 1) {
@@ -833,7 +819,7 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		desc = &dev->rx_ring[i];
 		/* No invalidate: non-cacheable ring, the read hits memory. */
 		if (desc->des3 & DWC_EQOS_DESC_OWN) {
-			break;
+			continue;
 		}
 
 		dev->rx_in_flight[i] = 2;
@@ -905,7 +891,6 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 			}
 		dev->rx_in_flight[i] = 1;
 		eqos_prof[port].rx_frames++;
-		dev->rx_dirty = (i + 1) % DWC_EQOS_RX_DESC_COUNT;
 		last_armed = i;
 	}
 
