@@ -41,6 +41,8 @@ CASES = [
     "os-timer",
     "usb-xhci",
     "usb-ehci",
+    "lwip-loopback",
+    "gmac-up",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -50,6 +52,10 @@ CASES = [
 #:   thread-sched  the shared case body
 #:   cmsis2-prio   the shared case body
 #:   freertos-sched tests/board/freertos-rk3568-regression/tests/freertos_sched.c
+#:   lwip-loopback tests/board/common/cases/lwip_smoke.c (stack init callback
+#:                 line, loopback echo result line)
+#:   gmac-up      tests/board/common/cases/gmac_dataplane.c (PHY identity +
+#:                 link line, MAC address, channel start)
 ANCHORS = {
     "shell-up": [r"user@rk3568:/\$"],
     "kernel-up": [
@@ -73,6 +79,17 @@ ANCHORS = {
         r"usbh: class msc claimed lun=0",
         r"usbh: msc read blk0=0x",
         r"usbh: msc write/read roundtrip ok",
+    ],
+    "lwip-loopback": [
+        r"net: READY tcpip=up lwip=\d+\.\d+\.\d+",
+        r"net: loopback echo ok port=7777 sent=32 got=32",
+    ],
+    "gmac-up": [
+        r"phy1: id 0x001c:0xc916 at mdio \d+",
+        r"phy1: link up, 1000 Mbps full duplex",
+        r"gmac1: channel start",
+        r"net: up gmac1 ip=192\.168\.0\.200/24 mac=02:e4:a5:35:68:01",
+        r"gmac1: dataplane up",
     ],
 }
 
@@ -101,7 +118,7 @@ PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
     "[  12.260] BOARD-SUITE freertos-rk3568-regression "
-    "result=pass cases=9 ok=9 exit=0\r\n"
+    "result=pass cases=11 ok=11 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
@@ -110,9 +127,9 @@ BASE_TRANSCRIPT = (
     "gicv3: ready ctlr=00000012 waker=00000000\r\n"
     "tick: source=cntv irq=27 freq=1000Hz\r\n"
     "[   5.000] BOARD-SUITE freertos-rk3568-regression select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE freertos-rk3568-regression start cases=9 sel=all "
+    "[  10.000] BOARD-SUITE freertos-rk3568-regression start cases=11 sel=all "
     "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,freertos-sched,"
-    "os-timer,usb-xhci,usb-ehci\r\n"
+    "os-timer,usb-xhci,usb-ehci,lwip-loopback,gmac-up\r\n"
     "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ "
     "[  10.010] cmsis2: probe ok\r\n"
     "[  10.020] CASE freertos-rk3568-regression/shell-up PASS\r\n"
@@ -139,10 +156,19 @@ BASE_TRANSCRIPT = (
     "[  12.230] usbh: msc read blk0=0x00000000 ok\r\n"
     "[  12.240] usbh: msc write/read roundtrip ok at lba=1\r\n"
     "[  12.250] CASE freertos-rk3568-regression/usb-ehci PASS\r\n"
+    "[  12.255] net: READY tcpip=up lwip=2.2.0\r\n"
+    "[  12.256] net: loopback echo ok port=7777 sent=32 got=32\r\n"
+    "[  12.257] CASE freertos-rk3568-regression/lwip-loopback PASS\r\n"
+    "[  12.258] phy1: id 0x001c:0xc916 at mdio 1\r\n"
+    "[  12.259] phy1: link up, 1000 Mbps full duplex\r\n"
+    "[  12.259] gmac1: channel start\r\n"
+    "[  12.259] net: up gmac1 ip=192.168.0.200/24 mac=02:e4:a5:35:68:01\r\n"
+    "[  12.259] gmac1: dataplane up\r\n"
+    "[  12.260] CASE freertos-rk3568-regression/gmac-up PASS\r\n"
     + SENTINEL_LINE
     + "==> help\r\n"
     "user@rk3568:/$ help\r\n"
-    "total function 4\r\n"
+    "total function 7\r\n"
     "  exit   -> /sbin - leave the shell\r\n"
     "\r\n"
     "total variable 2\r\n"
@@ -168,7 +194,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE freertos-rk3568-regression/freertos-sched PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=9 ok=9 exit=0", "cases=9 ok=8 exit=0"), 1),
+        "cases=11 ok=11 exit=0", "cases=11 ok=10 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE freertos-rk3568-regression/freertos-sched PASS",
@@ -176,13 +202,17 @@ MUTATIONS = [
         "CASE freertos-rk3568-regression/freertos-sched PASS"), 1),
     ("anchor dropped (kernel identity)", BASE_TRANSCRIPT.replace(
         "freertos: kernel FreeRTOS api=0x0a0000\r\n", ""), 1),
+    ("anchor dropped (gmac link)", BASE_TRANSCRIPT.replace(
+        "phy1: link up, 1000 Mbps full duplex\r\n", ""), 1),
+    ("anchor dropped (loopback result)", BASE_TRANSCRIPT.replace(
+        "net: loopback echo ok port=7777 sent=32 got=32\r\n", ""), 1),
     ("ladder beat dropped", BASE_TRANSCRIPT.replace("tick: t=12000\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,freertos-sched,"
-        "os-timer,usb-xhci,usb-ehci",
+        "os-timer,usb-xhci,usb-ehci,lwip-loopback,gmac-up",
         "list=shell-up,kernel-up,tick-ladder,thread-sched,cmsis2-prio,freertos-sched,"
-        "os-timer,usb-xhci"), 1),
+        "os-timer,usb-xhci,usb-ehci"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
 ]
 

@@ -81,7 +81,24 @@ INCLUDES := \
 #
 # The vendored shell core is byte-identical upstream and cannot be edited; it
 # trips -Wextra's sign-compare in one builtin, so its units compile at the
-# level the upstream project uses.
+# level the upstream project uses. The imported stack groups follow the same
+# rule (the ThreadX regression image's VENDORED_WARNED_SRCS).
+#
+# The wired measurement arm is the ThreadX regression image's compile set with
+# this kernel behind it: -DCONFIG_GMAC_RX_HWCSUM is the lockstep switch the
+# driver and lwipopts.h share, and the LEVER knobs mirror that image's block so
+# one lever state can be built for either kernel.
+LEVER_CFLAGS :=
+ifneq ($(COALESCE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_COALESCE=1 -DCONFIG_GMAC_RX_RIWT=$(COALESCE)
+endif
+ifneq ($(ZC),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_ZC=1
+endif
+ifneq ($(IRQ_BREAKER),)
+LEVER_CFLAGS += -DCONFIG_GMAC_IRQ_BREAKER=1
+endif
+
 BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
@@ -89,8 +106,11 @@ BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-DGUEST -DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
 	-DCMSIS2_BACKEND_FREERTOS \
+	-DCONFIG_GMAC_RX_HWCSUM=1 \
+	$(LEVER_CFLAGS) \
 	-DSHELL_PORT_HOST='"rk3568"' \
-	-DUSB_BOARD_IRQ_PRIORITY_RAW=0xd0u
+	-DUSB_BOARD_IRQ_PRIORITY_RAW=0xd0u \
+	-DEQOS_BOARD_IRQ_PRIORITY_RAW=0xd0u
 
 CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
 ASM_CFLAGS := $(BASE_CFLAGS)
@@ -174,7 +194,82 @@ USB_STACK_SRCS := \
 	$(CHERRYUSB)/port/ehci/usb_hc_ehci_iso.c \
 	$(CHERRYUSB)/port/xhci/usb_hc_xhci.c
 
+# --- TCP/IP stack and GMAC domain -------------------------------------------
+#
+# The wired measurement cases (lwip-loopback, gmac-up) and everything they
+# need. The compile set is copied from the ThreadX regression image
+# (tests/board/threadx-rk3568-regression/Makefile:41-51 and :258-326) on
+# purpose: the two images must differ in the kernel and in nothing else, or
+# the kernel comparison the two runs feed says nothing.
+LWIP := $(shell sh $(ROOT)/tools/patches/replay.sh lwip)
+LWIP_PORT := $(ROOT)/ports/lwip
+LWIP_INCLUDES := \
+	-I$(LWIP_PORT) \
+	-I$(LWIP_PORT)/include \
+	-I$(LWIP)/src/include \
+	-I$(LWIP)/contrib/apps/ping
+
+LWIP_PORT_SRCS := \
+	$(LWIP_PORT)/sys_arch.c \
+	$(LWIP_PORT)/platform_hooks.c \
+	$(LWIP_PORT)/ethnetif.c
+
+LWIP_STACK_SRCS := \
+	$(LWIP)/src/core/init.c \
+	$(LWIP)/src/core/def.c \
+	$(LWIP)/src/core/dns.c \
+	$(LWIP)/src/core/inet_chksum.c \
+	$(LWIP)/src/core/ip.c \
+	$(LWIP)/src/core/mem.c \
+	$(LWIP)/src/core/memp.c \
+	$(LWIP)/src/core/netif.c \
+	$(LWIP)/src/core/pbuf.c \
+	$(LWIP)/src/core/raw.c \
+	$(LWIP)/src/core/stats.c \
+	$(LWIP)/src/core/sys.c \
+	$(LWIP)/src/core/altcp.c \
+	$(LWIP)/src/core/altcp_alloc.c \
+	$(LWIP)/src/core/altcp_tcp.c \
+	$(LWIP)/src/core/tcp.c \
+	$(LWIP)/src/core/tcp_in.c \
+	$(LWIP)/src/core/tcp_out.c \
+	$(LWIP)/src/core/timeouts.c \
+	$(LWIP)/src/core/udp.c \
+	$(LWIP)/src/core/ipv4/acd.c \
+	$(LWIP)/src/core/ipv4/autoip.c \
+	$(LWIP)/src/core/ipv4/dhcp.c \
+	$(LWIP)/src/core/ipv4/etharp.c \
+	$(LWIP)/src/core/ipv4/icmp.c \
+	$(LWIP)/src/core/ipv4/igmp.c \
+	$(LWIP)/src/core/ipv4/ip4_frag.c \
+	$(LWIP)/src/core/ipv4/ip4.c \
+	$(LWIP)/src/core/ipv4/ip4_addr.c \
+	$(LWIP)/src/api/api_lib.c \
+	$(LWIP)/src/api/api_msg.c \
+	$(LWIP)/src/api/err.c \
+	$(LWIP)/src/api/if_api.c \
+	$(LWIP)/src/api/netbuf.c \
+	$(LWIP)/src/api/netdb.c \
+	$(LWIP)/src/api/netifapi.c \
+	$(LWIP)/src/api/sockets.c \
+	$(LWIP)/src/api/tcpip.c \
+	$(LWIP)/src/netif/ethernet.c \
+	$(LWIP)/src/apps/lwiperf/lwiperf.c
+
+# The contrib ping rides its own compile: the console anchors (one line per
+# echo reply) exist only under the stack's debug macro, switched on for this
+# one translation unit and off everywhere else.
+LWIP_PING_SRCS := $(LWIP)/contrib/apps/ping/ping.c
+
+# The board's own Ethernet drivers (MAC core, RK3568 SoC glue, PHY); their
+# includes are the board directories already on INCLUDES.
+EQOS_SRCS := \
+	$(ROOT)/board/rk3568-itx/drivers/dwc_eqos.c \
+	$(ROOT)/board/rk3568-itx/drivers/eqos_rk3568.c \
+	$(ROOT)/board/rk3568-itx/drivers/rtl8211f.c
+
 # Execution order = this list's order (link order for the BOARD_TESTS section).
+# The two wired cases sit last, exactly as in the ThreadX regression image.
 TESTS_SRCS := \
 	$(COMMON)/cases/shell_up.c \
 	$(COMMON)/cases/kernel_up.c \
@@ -185,7 +280,10 @@ TESTS_SRCS := \
 	$(COMMON)/cases/os_timer.c \
 	$(COMMON)/cases/usb_msc.c \
 	$(COMMON)/cases/usb_xhci.c \
-	$(COMMON)/cases/usb_ehci.c
+	$(COMMON)/cases/usb_ehci.c \
+	$(COMMON)/cases/lwip_smoke.c \
+	$(COMMON)/lwip_stack.c \
+	$(COMMON)/cases/gmac_dataplane.c
 
 VENDORED_SRCS := \
 	$(CHERRYSH)/chry_shell.c \
@@ -195,7 +293,12 @@ VENDORED_SRCS := \
 	$(CHERRYSH)/builtin/shsize.c
 
 ALL_SRCS := $(BASE_SRCS) $(KERNEL_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $(VENDORED_SRCS) \
-	$(USB_BOARD_SRCS) $(USB_STACK_SRCS)
+	$(USB_BOARD_SRCS) $(USB_STACK_SRCS) $(LWIP_PORT_SRCS) $(LWIP_STACK_SRCS) \
+	$(LWIP_PING_SRCS) $(EQOS_SRCS)
+
+# The imported groups compile at the upstream warning level (see the CFLAGS
+# block above).
+VENDORED_WARNED_SRCS = $(VENDORED_SRCS) $(USB_STACK_SRCS) $(LWIP_STACK_SRCS)
 
 # Object names mirror the path below ROOT (the kernel and the port share flat
 # basenames, so $(notdir) would collide).
@@ -216,7 +319,7 @@ define COMPILE_RULE
 $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 	@mkdir -p $$(dir $$@)
 	@echo "  CC $$<"
-	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
+	@$(CC) $(if $(filter %.S,$(1)),$(ASM_CFLAGS),$(if $(filter $(1),$(VENDORED_WARNED_SRCS)),$(VENDORED_CFLAGS),$(CFLAGS))) $(2) $(INCLUDES) $(if $(filter %.S,$(1)),,-MMD -MP) -c $$< -o $$@
 endef
 
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
@@ -224,14 +327,26 @@ $(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(KERNEL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SHELL_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-$(foreach s,$(TESTS_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(foreach s,$(filter-out $(COMMON)/cases/lwip_smoke.c $(COMMON)/lwip_stack.c $(COMMON)/cases/gmac_dataplane.c,$(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(eval $(call COMPILE_RULE,$(COMMON)/cases/lwip_smoke.c,$(LWIP_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(COMMON)/cases/gmac_dataplane.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(USB_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
+$(foreach s,$(LWIP_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
+$(foreach s,$(LWIP_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LWIP_INCLUDES))))
+$(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG))
+$(foreach s,$(EQOS_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 
+# The stamp carries the compile flags as well as the build tag: make does not
+# treat a flag change as a reason to recompile, so a lever build on top of a
+# default build would otherwise ship the default binary under a new name (the
+# 2026-10-15 wired round measured exactly that: COALESCE=0xa0 rebuilt nothing
+# and produced the baseline's crc32).
 $(TAG_STAMP): FORCE
 	@mkdir -p $(BUILD)
-	@printf '%s' '$(BUILD_TAG)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG)' > $@
+	@printf '%s' '$(BUILD_TAG) $(LEVER_CFLAGS)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG) $(LEVER_CFLAGS)' > $@
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
@@ -302,8 +417,8 @@ check: guards $(TARGET).elf
 	bt=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_end"{print $$1}'); \
 	bt0=$$($(NM) $(TARGET).elf | awk '$$3=="__board_tests_start"{print $$1}'); \
 	fsz=$$(( 0x$$fs - 0x$$fs0 )); vsz=$$(( 0x$$vs - 0x$$vs0 )); btz=$$(( 0x$$bt - 0x$$bt0 )); \
-	echo "fsymtab bytes=$$fsz (expect 4*40=160), vsymtab bytes=$$vsz (expect 2*24=48), board_tests bytes=$$btz"; \
-	[ $$fsz -eq 160 ] || { echo "FAIL: FSymTab is not dense"; exit 1; }; \
+	echo "fsymtab bytes=$$fsz (expect 7*40=280), vsymtab bytes=$$vsz (expect 2*24=48), board_tests bytes=$$btz"; \
+	[ $$fsz -eq 280 ] || { echo "FAIL: FSymTab is not dense"; exit 1; }; \
 	[ $$vsz -eq 48 ] || { echo "FAIL: VSymTab is not dense"; exit 1; }; \
 	[ $$(( btz % 16 )) -eq 0 ] || { echo "FAIL: BOARD_TESTS is not a whole number of entries"; exit 1; }; \
 	n=$$(( btz / 16 )); echo "board_tests entries=$$n"; \

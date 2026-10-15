@@ -706,9 +706,14 @@ $(eval $(call COMPILE_RULE,$(LWIP_PING_SRCS),$(LWIP_INCLUDES) -DLWIP_DEBUG))
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(foreach s,$(LIBCBIND_SRCS),$(eval $(call COMPILE_RULE,$(s),-I$(ROOT)/os/threadx)))
 
+# The stamp carries the compile flags as well as the build tag: make does not
+# treat a flag change as a reason to recompile, so a lever build on top of a
+# default build would otherwise ship the default binary under a new name (the
+# 2026-10-15 wired round measured exactly that: COALESCE=0xa0 rebuilt nothing
+# and produced the baseline's crc32).
 $(TAG_STAMP): FORCE
 	@mkdir -p $(BUILD)
-	@printf '%s' '$(BUILD_TAG)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG)' > $@
+	@printf '%s' '$(BUILD_TAG) $(LEVER_CFLAGS)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG) $(LEVER_CFLAGS)' > $@
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
