@@ -231,6 +231,14 @@ ifneq ($(SNDBUF),)
 LEVER_CFLAGS += -DTCP_SND_BUF=$(SNDBUF) \
 	-DTCP_SND_QUEUELEN=$(shell echo $$(( $(SNDBUF) / 365 + 2 )))
 endif
+# Delayed-ACK watermark lever (ACKDELAY=N; patch 0003, default 2). N=4 holds
+# the ACK across four in-order data segments - the downlink's per-frame cost
+# is half ACK send (B1: ctrl+dack ~= 3.45 us/frame); halving the ACK count
+# attacks that directly, at the price of feedback latency. RFC 1122 4.2.3.2
+# says SHOULD every second segment, so non-2 values are measurement builds.
+ifneq ($(ACKDELAY),)
+LEVER_CFLAGS += -DLWIP_TCP_ACK_DELAY_SEGMENTS=$(ACKDELAY)
+endif
 # RX completion-sweep shape. The DEFAULT is the whole-ring scan (every
 # measurement this line has is taken with it). SCAN=2 selects the bounded walk,
 # which is FALSIFIED (2026-10-17: downlink 481 -> 2.0-2.6 Mbit/s, ovf=173, with
