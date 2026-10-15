@@ -50,7 +50,7 @@ DRV := $(ROOT)/third-party/rtl8189fs
 # layer; the TCP/IP domain rides the lwIP port's own source groups.
 WPA := $(shell sh $(ROOT)/tools/patches/replay.sh wpa_supplicant)
 WPA_PORT := $(ROOT)/ports/wpa_supplicant
-LWIP := $(ROOT)/third-party/lwip
+LWIP := $(shell sh $(ROOT)/tools/patches/replay.sh lwip)
 LWIP_PORT := $(ROOT)/ports/lwip
 
 SUITE_NAME := threadx-rk3568-rtl8189

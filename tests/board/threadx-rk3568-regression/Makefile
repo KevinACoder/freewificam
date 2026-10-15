@@ -42,7 +42,7 @@ USB_BOARD := $(ROOT)/board/rk3568-itx/usb
 # port's include directory comes first on the include path: lwipopts.h and
 # arch/cc.h are supplied by shadowing the stack's own include root (the
 # standard mechanism lwIP reaches them through).
-LWIP := $(ROOT)/third-party/lwip
+LWIP := $(shell sh $(ROOT)/tools/patches/replay.sh lwip)
 LWIP_PORT := $(ROOT)/ports/lwip
 LWIP_INCLUDES := \
 	-I$(LWIP_PORT) \

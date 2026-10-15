@@ -27,7 +27,7 @@
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 ROOT   := $(abspath $(MAKEFILE_DIR)/../../..)
-LWIP   := $(ROOT)/third-party/lwip
+LWIP   := $(shell sh $(ROOT)/tools/patches/replay.sh lwip)
 PORT   := $(ROOT)/ports/lwip
 CMSIS  := $(ROOT)/third-party/CMSIS_6
 

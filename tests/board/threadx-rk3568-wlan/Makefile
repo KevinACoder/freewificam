@@ -45,7 +45,7 @@ DRV := $(ROOT)/third-party/rtl8xxxu
 # layer; the TCP/IP domain rides the regression image's own source groups.
 WPA := $(shell sh $(ROOT)/tools/patches/replay.sh wpa_supplicant)
 WPA_PORT := $(ROOT)/ports/wpa_supplicant
-LWIP := $(ROOT)/third-party/lwip
+LWIP := $(shell sh $(ROOT)/tools/patches/replay.sh lwip)
 LWIP_PORT := $(ROOT)/ports/lwip
 
 SUITE_NAME := threadx-rk3568-wlan
