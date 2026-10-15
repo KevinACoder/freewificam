@@ -321,18 +321,23 @@ static int cmd_gmac(int argc, char **argv)
 		return 0;
 	}
 	/* `gmac diag`: the driver's black box in one line - ring indices, the
-	 * live channel status and interrupt-enable words, and the odd-pass /
-	 * breaker counters. A measurement round samples it between phases to
-	 * see WHEN a direction degrades and which bit moved. */
+	 * live channel status and interrupt-enable words, the odd-pass /
+	 * breaker counters, and the TX-ladder discriminators (how often a
+	 * sender found the ring full, how long it parked, how deep the ring
+	 * ran). A measurement round samples it between phases to see WHEN a
+	 * direction degrades and which bit moved. */
 	if (argc >= 2 && strcmp(argv[1], "diag") == 0) {
 		struct dwc_eqos_diag d;
 
 		dwc_eqos_get_diag(g_port, &d);
 		csh_printf(csh, "gmac%u: diag txhead=%u txtail=%u ioc=%u txsc=%u "
+			   "twait=%u tticks=%u toccmax=%u "
 			   "rrdy=%u rfree=%u "
 			   "irq=%u odd=%u brk=%u st=%08x ien=%08x pend=%d last=%08x\n",
 			   g_port, (unsigned)d.tx_head, (unsigned)d.tx_tail,
 			   (unsigned)d.tx_ioc_seq, (unsigned)d.tx_sem_count,
+			   (unsigned)d.tx_waits, (unsigned)d.tx_wait_ticks,
+			   (unsigned)d.tx_occ_max,
 			   (unsigned)d.rx_ready_count, (unsigned)d.rx_free_count,
 			   (unsigned)d.irq_n, (unsigned)d.irq_odd,
 			   (unsigned)d.irq_breaker, (unsigned)d.ch0_status,

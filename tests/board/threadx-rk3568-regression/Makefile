@@ -124,6 +124,18 @@ endif
 ifneq ($(IRQ_BREAKER),)
 LEVER_CFLAGS += -DCONFIG_GMAC_IRQ_BREAKER=1
 endif
+# TX ladder: one arm at a time. TX_RING widens the descriptor ring,
+# TX_IOC_DIV shortens the completion interval, TX_NONBLOCK stops the sender
+# parking the tcpip thread on a full ring.
+ifneq ($(TX_RING),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_RING=$(TX_RING)
+endif
+ifneq ($(TX_IOC_DIV),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_IOC_DIV=$(TX_IOC_DIV)
+endif
+ifneq ($(TX_NONBLOCK),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_NONBLOCK=1
+endif
 
 OPT ?= -Og
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \

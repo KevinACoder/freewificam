@@ -54,7 +54,14 @@
  * at the end, so both counts must match the hardware's ring-length register
  * (count - 1). */
 #define DWC_EQOS_RX_DESC_COUNT	128
-#define DWC_EQOS_TX_DESC_COUNT	64
+/* TX ring depth. 64 is the board-verified depth; the TX ladder sweeps it
+ * (the Phytium fgmac lwIP port runs 128). The copy path needs exactly the
+ * ring depth in buffers, so this multiplies the whole TX buffer block - a
+ * 128-deep ring costs another 256 KiB of .bss. */
+#ifndef CONFIG_GMAC_TX_RING
+#define CONFIG_GMAC_TX_RING	64
+#endif
+#define DWC_EQOS_TX_DESC_COUNT	CONFIG_GMAC_TX_RING
 
 /* DMA buffer slots. The copy path needs exactly the ring depth (each frame's
  * buffer is its only home until the ISR copies it out). The zero-copy path
@@ -88,8 +95,13 @@
 #define DWC_EQOS_RX_STAGE_COUNT	128
 
 /* One TX completion interrupt per this many frames (the last frame of a
- * burst always interrupts, so a quiet line never waits on the counter). */
-#define DWC_EQOS_TX_IOC_DIV	8
+ * burst always interrupts, so a quiet line never waits on the counter).
+ * Swept by the TX ladder: 1 gives every frame its own completion, which
+ * shortens the reclaim latency at the cost of one interrupt per frame. */
+#ifndef CONFIG_GMAC_TX_IOC_DIV
+#define CONFIG_GMAC_TX_IOC_DIV	8
+#endif
+#define DWC_EQOS_TX_IOC_DIV	CONFIG_GMAC_TX_IOC_DIV
 
 /* MDIO clock divider. pclk_gmac runs at 100 MHz here, and CR=4 selects the
  * 150-250 MHz range in the dwmac4 encoding, which keeps MDC at ~8.3 MHz -
@@ -428,6 +440,12 @@ struct dwc_eqos_diag {
 	uint32_t tx_tail;
 	uint32_t tx_ioc_seq;
 	uint32_t tx_sem_count;	/* release-on-completion signals pending */
+	/* TX-ladder discriminators: whether the ring is the limiter shows up
+	 * here as senders finding it full, time parked on the completion
+	 * semaphore, and how deep the ring actually ran. */
+	uint32_t tx_waits;	/* sends that found the ring full */
+	uint32_t tx_wait_ticks;	/* kernel ticks spent parked on tx_sem */
+	uint32_t tx_occ_max;	/* peak descriptors in flight */
 	uint32_t rx_ready_count;	/* ZC frames waiting for the consumer */
 	uint32_t rx_free_count;	/* spare slots left in the ZC pool */
 	uint32_t irq_n;

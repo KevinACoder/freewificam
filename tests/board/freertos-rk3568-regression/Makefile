@@ -98,6 +98,16 @@ endif
 ifneq ($(IRQ_BREAKER),)
 LEVER_CFLAGS += -DCONFIG_GMAC_IRQ_BREAKER=1
 endif
+# TX ladder: one arm at a time (same knob set as the ThreadX suite).
+ifneq ($(TX_RING),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_RING=$(TX_RING)
+endif
+ifneq ($(TX_IOC_DIV),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_IOC_DIV=$(TX_IOC_DIV)
+endif
+ifneq ($(TX_NONBLOCK),)
+LEVER_CFLAGS += -DCONFIG_GMAC_TX_NONBLOCK=1
+endif
 
 BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \

@@ -166,6 +166,13 @@ struct dwc_eqos_dev {
 	/* Signalled by the completion sweep (freed > 0): a sender parked on a
 	 * full TX ring waits on this instead of polling a 1 ms tick. */
 	osSemaphoreId_t tx_sem;
+
+	/* TX-ladder discriminators (see struct dwc_eqos_diag). Written from the
+	 * sender thread only; the diag getter reads them as a forensic
+	 * snapshot, exactly like the IRQ black box above. */
+	uint32_t tx_waits;	/* sends that found the ring full */
+	uint32_t tx_wait_ticks;	/* kernel ticks spent parked on tx_sem */
+	uint32_t tx_occ_max;	/* peak descriptors in flight */
 };
 
 /* Per-instance state and DMA memory. Static, not allocated: the DMA needs
@@ -1382,6 +1389,20 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 
 			dev->tx_head = next;
 
+			/* Occupancy after this enqueue: how deep the ring ran is
+			 * the TX ladder's first discriminator (a ring that never
+			 * gets near its depth is not the limiter). */
+			{
+				int occ = dev->tx_head - dev->tx_tail;
+
+				if (occ < 0) {
+					occ += DWC_EQOS_TX_DESC_COUNT;
+				}
+				if ((uint32_t)occ > dev->tx_occ_max) {
+					dev->tx_occ_max = (uint32_t)occ;
+				}
+			}
+
 			/* Kick the DMA: the fetch window is [base, END), so
 			 * the end must point past the descriptor just armed. */
 			eqos_wr(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR,
@@ -1398,10 +1419,24 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		 * timeout is only the belt-and-braces against a lost signal
 		 * (and bounds the tcpip thread's stall while the ring drains
 		 * at line rate). */
-		if ((dev->tx_sem == NULL) ||
-			(osSemaphoreAcquire(dev->tx_sem, DWC_EQOS_TX_WAIT_MS) != osOK)) {
-			(void)osThreadYield();
+		dev->tx_waits++;
+#if defined(CONFIG_GMAC_TX_NONBLOCK) && CONFIG_GMAC_TX_NONBLOCK
+		/* TX-ladder lever: hand the full ring straight back to the
+		 * caller instead of parking the tcpip thread on the completion
+		 * semaphore. lwIP retries the segment - the non-blocking shape
+		 * the Phytium fgmac port uses. */
+		break;
+#else
+		{
+			uint32_t wait_t0 = osKernelGetTickCount();
+
+			if ((dev->tx_sem == NULL) ||
+				(osSemaphoreAcquire(dev->tx_sem, DWC_EQOS_TX_WAIT_MS) != osOK)) {
+				(void)osThreadYield();
+			}
+			dev->tx_wait_ticks += osKernelGetTickCount() - wait_t0;
 		}
+#endif
 	}
 
 	dev->stats.tx_dropped++;
@@ -1584,6 +1619,9 @@ void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)
 	eqos_unlock(dev);
 
 	diag->tx_ioc_seq = dev->tx_ioc_seq;
+	diag->tx_waits = dev->tx_waits;
+	diag->tx_wait_ticks = dev->tx_wait_ticks;
+	diag->tx_occ_max = dev->tx_occ_max;
 	diag->irq_n = dev->irq_n;
 	diag->irq_odd = dev->irq_odd;
 	diag->last_status = dev->last_status;
