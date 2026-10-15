@@ -525,7 +525,15 @@ static int eqos_hw_start(struct dwc_eqos_dev *dev)
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
 		(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
 
+#if defined(CONFIG_GMAC_RX_POLL) && CONFIG_GMAC_RX_POLL
+	/* Pure polling (2026-10-16): no channel interrupt at all. The RX service
+	 * thread calls dwc_eqos_watchdog in a loop instead, so the whole path -
+	 * the descriptor sweep included - runs in THREAD context, where it can
+	 * yield, and no interrupt ever preempts the TCP/IP thread. */
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE, 0);
+#else
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE, DWC_EQOS_CH0_INTR_DEFAULT);
+#endif
 
 #if defined(CONFIG_GMAC_RX_COALESCE) && CONFIG_GMAC_RX_COALESCE
 	/* RX interrupt coalescing (N7 R3): with every RX descriptor's IOC off,
@@ -1194,11 +1202,22 @@ void dwc_eqos_irq(void *arg)
 			 * source. Counted here, not at entry, so TX-only
 			 * passes do not dilute the coalescing gauge. */
 			dev->stats.rx_irqs++;
+#if defined(CONFIG_GMAC_RX_BH) && CONFIG_GMAC_RX_BH
+			/* Bottom-half split (2026-10-16): the sweep is O(ring) over
+			 * non-cacheable memory (32 us measured) and holding the
+			 * interrupt across it is what the round suspected of
+			 * starving the send/receive path. Signal only; the RX
+			 * thread runs the same sweep via dwc_eqos_watchdog. */
+			if (s_rx_notify != NULL) {
+				s_rx_notify((unsigned int)(uintptr_t)arg);
+			}
+#else
 			if (eqos_rx_complete(dev) > 0) {
 				if (s_rx_notify != NULL) {
 					s_rx_notify((unsigned int)(uintptr_t)arg);
 				}
 			}
+#endif
 			eqos_prof[port].irq_rx_sweep_ticks += eqos_prof_t0() - t_rx;
 		}
 		if (status & DWC_EQOS_CH0_STATUS_TI) {

@@ -79,8 +79,20 @@ static void thr_rx(void *arg)
 {
 	(void)arg;
 	for (;;) {
+#if defined(CONFIG_GMAC_RX_POLL) && CONFIG_GMAC_RX_POLL
+		/* No DMA interrupt: this thread drives the whole RX path. */
+		dwc_eqos_watchdog(g_port);
+		(void)ethnetif_poll(&g_netif);
+		(void)osThreadYield();
+#elif defined(CONFIG_GMAC_RX_BH) && CONFIG_GMAC_RX_BH
+		/* Bottom half: the ISR signalled; run the sweep here. */
+		(void)osSemaphoreAcquire(g_rx_sem, osWaitForever);
+		dwc_eqos_watchdog(g_port);
+		(void)ethnetif_poll(&g_netif);
+#else
 		(void)osSemaphoreAcquire(g_rx_sem, osWaitForever);
 		(void)ethnetif_poll(&g_netif);
+#endif
 	}
 }
 

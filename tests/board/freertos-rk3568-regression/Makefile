@@ -108,6 +108,14 @@ endif
 ifneq ($(TX_NONBLOCK),)
 LEVER_CFLAGS += -DCONFIG_GMAC_TX_NONBLOCK=1
 endif
+# Interrupt-shape levers: RXPOLL removes every DMA interrupt (the RX thread
+# polls), RXBH splits the handler so the ISR only signals.
+ifneq ($(RXPOLL),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_POLL=1
+endif
+ifneq ($(RXBH),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BH=1
+endif
 
 BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
