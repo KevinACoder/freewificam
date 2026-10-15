@@ -136,13 +136,48 @@ endif
 ifneq ($(TX_NONBLOCK),)
 LEVER_CFLAGS += -DCONFIG_GMAC_TX_NONBLOCK=1
 endif
-# Interrupt-shape levers: RXPOLL removes every DMA interrupt (the RX thread
-# polls), RXBH splits the handler so the ISR only signals.
+# Interrupt-shape levers. RXPOLL removes every DMA interrupt (the RX thread
+# polls). The bottom-half split (ISR signals, the RX thread sweeps) is the
+# DEFAULT since 2026-10-17; RXBH=0 is the reverse lever back to the
+# interrupt-context sweep. NAPI is the bottom half plus the RI mask and the
+# frame budget; RXPRIO lifts the RX thread above the TCP/IP thread.
 ifneq ($(RXPOLL),)
 LEVER_CFLAGS += -DCONFIG_GMAC_RX_POLL=1
 endif
 ifneq ($(RXBH),)
-LEVER_CFLAGS += -DCONFIG_GMAC_RX_BH=1
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_BH=$(RXBH)
+endif
+ifneq ($(NAPI),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_NAPI=1
+endif
+ifneq ($(RXPRIO),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_PRIO_HI=1
+endif
+# lwIP input path: CORELOCKIN=1 runs the stack's input on the caller's (RX)
+# thread under the core lock instead of one mailbox post per frame. The option
+# has an #ifndef wrapper in ports/lwip/include/lwipopts.h so a -D can win.
+ifneq ($(CORELOCKIN),)
+LEVER_CFLAGS += -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+endif
+# RX completion-sweep shape. The DEFAULT is the whole-ring scan (every
+# measurement this line has is taken with it). SCAN=2 selects the bounded walk,
+# which is FALSIFIED (2026-10-17: downlink 481 -> 2.0-2.6 Mbit/s, ovf=173, with
+# stale=0) and kept only as a lever for the tail-semantics question.
+ifneq ($(SCAN),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_SCAN=$(SCAN)
+endif
+# Sweep probe shape: SWEEPWIDE=1 pulls every descriptor's status word in one
+# store-free pass before processing, so the non-cacheable loads pipeline
+# instead of serialising behind the arming writes. Semantics unchanged.
+ifneq ($(SWEEPWIDE),)
+LEVER_CFLAGS += -DCONFIG_GMAC_SWEEP_WIDE=1
+endif
+# RX ring depth: the sweep is O(depth) per interrupt and only ~1 frame completes
+# per sweep at line rate, so depth is the probes-per-frame multiplier (128 ->
+# 66.4 probes/frame measured). Shallow rings trade burst tolerance for a
+# proportional cut in the dominant per-frame cost.
+ifneq ($(RX_RING),)
+LEVER_CFLAGS += -DCONFIG_GMAC_RX_RING=$(RX_RING)
 endif
 
 OPT ?= -Og

@@ -47,13 +47,26 @@
 /* Two GMACs on this SoC. */
 #define DWC_EQOS_PORT_COUNT	2
 
-/* Descriptor ring sizes and frame geometry. RX went 64 -> 128 (N7 R2): the
- * ring IS the receive burst buffer now (completed frames are left in place
- * until software reads them, no intermediate stage copy), so its depth sets
- * how long a burst survives a slow reader. The ring is indexed with a wrap
- * at the end, so both counts must match the hardware's ring-length register
- * (count - 1). */
-#define DWC_EQOS_RX_DESC_COUNT	128
+/* RX ring depth. 128 is the shipped value (N7 R2: the ring IS the receive
+ * burst buffer now, so its depth sets how long a burst survives a slow
+ * reader). The ring is indexed with a wrap at the end, so the count must match
+ * the hardware's ring-length register (count - 1), which is programmed from
+ * this same macro.
+ *
+ * IT IS ALSO THE SWEEP COST MULTIPLIER (measured 2026-10-17): the completion
+ * sweep is O(depth) - every descriptor is probed because this controller
+ * exposes no completion boundary (CUR_RX_DESC turns out to be a fetch pointer
+ * that does not move while the channel is parked, runs/20261017-scan3) - while
+ * the work between two sweeps is O(frames), and at line rate only ~1-1.5
+ * frames complete per sweep. So probes per frame is depth / frames-per-sweep:
+ * 66.4 measured at depth 128, i.e. 17.6 us of every frame. Halving the depth
+ * halves that; the ladder sweeps it. Shallower ring = less burst tolerance and
+ * fewer DMA buffers (each slot is a 2 KiB stride), and the re-arm budget is
+ * the ring itself, so the floor is set by "can the reader keep up". */
+#ifndef CONFIG_GMAC_RX_RING
+#define CONFIG_GMAC_RX_RING	128
+#endif
+#define DWC_EQOS_RX_DESC_COUNT	CONFIG_GMAC_RX_RING
 /* TX ring depth. 64 is the board-verified depth; the TX ladder sweeps it
  * (the Phytium fgmac lwIP port runs 128). The copy path needs exactly the
  * ring depth in buffers, so this multiplies the whole TX buffer block - a
@@ -275,6 +288,14 @@
  * clock ticks; expiry asserts RI even with every descriptor IOC off. */
 #define DWC_EQOS_DMA_CH0_RX_WATCHDOG         0x1138
 
+/* Where the RX DMA says it is. Channel + 0x4c / + 0x5c (Linux
+ * dwmac4_dma.h DMA_CHAN_CUR_RX_DESC / DMA_CHAN_CUR_RX_BUF_ADDR; note the
+ * +0x58 word next door is the high half of the buffer address). One read of
+ * CUR_RX_DESC is what turns the completion sweep from a 128-slot blind probe
+ * into a bounded walk. */
+#define DWC_EQOS_DMA_CH0_CUR_RX_DESC         0x114C
+#define DWC_EQOS_DMA_CH0_CUR_RX_BUF_ADDR     0x115C
+
 #define DWC_EQOS_DMA_CH0_INTR_ENABLE         0x1134
 /* On this silicon NIE/AIE sit at 15/14 (the dwmac4.10a layout); bit 16 is not
  * writable. Enabling bit 16 instead looks harmless and leaves every interrupt
@@ -390,6 +411,17 @@ void dwc_eqos_irq(void *arg);
  * event_rx_frame, reduced to the one event the bridge consumes). */
 void dwc_eqos_set_rx_notify(void (*fn)(unsigned int index));
 
+/* NAPI-shaped RX drain (CONFIG_GMAC_RX_NAPI, 2026-10-17): the ISR masks the RX
+ * interrupt and signals, the RX thread calls this under a frame budget, and the
+ * interrupt comes back only when a sweep finds the ring empty. Shaped after the
+ * Linux driver's stmmac_napi_poll_rx (budget = NAPI_POLL_WEIGHT, RI masked at
+ * schedule time, re-enabled only when work_done < budget). Returns the frames
+ * delivered; 0 means the ring was empty. Thread context only. */
+#ifndef CONFIG_GMAC_RX_BUDGET
+#define CONFIG_GMAC_RX_BUDGET	64
+#endif
+int dwc_eqos_rx_poll(unsigned int index, int budget);
+
 /* Runtime RX-watchdog (coalescing batch size) knob: the register value, so a
  * measurement round sweeps RIWT inside one boot. */
 void dwc_eqos_set_rx_riwt(unsigned int index, uint32_t riwt);
@@ -459,6 +491,51 @@ struct dwc_eqos_diag {
 
 void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag);
 
+/* RX ring-state snapshot (2026-10-17). The tail pointer's landing point and
+ * the fetch-window semantics were argued from two contradictory comments for
+ * two rounds, and two cursor walks failed on them (2026-10-16): one version
+ * of this file says RX_END is "written once and left alone", the sweep writes
+ * it every call. This reads the facts instead of the prose - where the DMA
+ * says it is, where the window ends, and which side still owns each slot.
+ * Console context only; walks the ring under the port-line lock. */
+struct dwc_eqos_ring {
+	uint32_t rx_end;	/* DMA_CH0_RX_END_ADDR: the fetch-window tail */
+	uint32_t rx_base;	/* DMA_CH0_RX_BASE_ADDR_LO */
+	uint32_t rx_ring_len;	/* DMA_CH0_RX_RING_LEN (count - 1) */
+	uint32_t cur_rx_desc;	/* DMA_CH0_CUR_RX_DESC: the DMA's position */
+	uint32_t cur_rx_buf;	/* DMA_CH0_CUR_RX_BUF_ADDR */
+	uint32_t rx_control;	/* RX_CONTROL; SR (bit 0) = channel running */
+	uint32_t ch0_status;	/* live status word at call time */
+	int32_t  cur_desc_slot;	/* cur_rx_desc as a slot index, -1 = outside */
+	int32_t  end_slot;	/* rx_end as a slot index, -1 = outside */
+	int32_t  rx_scan;	/* software sweep cursor (first slot to probe) */
+	int32_t  last_armed;	/* last slot the sweep re-armed */
+	uint32_t ring_armed;	/* slots currently handed to the DMA */
+	uint32_t own_clear;	/* descriptors the DMA has written back */
+	uint32_t walk_run;	/* OWN-clear run from the cursor, to the first
+				 * descriptor the DMA still owns */
+	uint32_t stale_slots;	/* OWN-clear slots OUTSIDE that run: non-zero
+				 * means the bounded walk would leak a slot */
+	uint32_t in_flight_mask[4];	/* rx_in_flight[i] == 1, bit i = slot i */
+	uint32_t dma_owned_mask[4];	/* descriptor still OWN, bit i = slot i */
+	/* Sticky sweep telemetry: what the LAST sweep saw, recorded while it
+	 * happened (the phase-boundary snapshot only ever sees a drained ring). */
+	uint32_t sw_sweeps;		/* sweeps that have run */
+	uint32_t sw_clear_seen;		/* OWN-clear slots the last sweep saw */
+	uint32_t sw_max_clear;		/* worst case of the above */
+	uint32_t sw_span;		/* slots the SCAN=3 walk covered */
+	int32_t  sw_curdesc;		/* CUR_RX_DESC slot read at sweep entry */
+	int32_t  sw_last_armed;		/* the same sweep's last re-armed slot */
+	/* How far the published tail sits BEHIND the DMA's own position, in
+	 * slots, at sample time. 1 is the healthy at-rest geometry (DMA parked
+	 * on the descriptor just past the tail); a larger value means the tail
+	 * is retracted behind the channel, which is the 2026-10-17 stall. -1
+	 * when either address is outside the ring. */
+	int32_t  end_gap;
+};
+
+int dwc_eqos_get_ring(unsigned int index, struct dwc_eqos_ring *ring);
+
 /* Per-phase service-time profile. The wired ladder is down to "where does the
  * single core's time go", and only an exclusive-time split can answer it: the
  * counters below are read from the system counter (24 MHz, 41.7 ns) at the
@@ -471,7 +548,15 @@ void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag);
  * Nested, in order of containment:
  *   irq_ticks > irq_odd_ticks | irq_rx_sweep_ticks | irq_tx_done_ticks
  *   irq_rx_sweep_ticks > irq_rx_cache_ticks | irq_rx_copy_ticks
+ *   rx_walk_ticks > irq_rx_cache_ticks | irq_rx_copy_ticks
  *   tx_total_ticks > tx_memcpy_ticks | tx_flush_ticks
+ *
+ * rx_walk_ticks is the sweep in WHICHEVER context ran it. irq_rx_sweep_ticks
+ * only sees interrupt context, so it reads ~0 once the sweep moves to the RX
+ * thread (RXBH/RXPOLL) - which is exactly when the sweep's cost still has to
+ * be visible. rx_walk_slots counts the descriptor probes, the direct
+ * discriminator between the blind whole-ring scan (128 per sweep) and the
+ * bounded walk (one or two).
  */
 struct dwc_eqos_prof {
 	uint64_t irq_ticks;		/* whole ISR, entry to exit */
@@ -480,6 +565,8 @@ struct dwc_eqos_prof {
 	uint64_t irq_rx_cache_ticks;	/* cache maintenance inside the sweep */
 	uint64_t irq_rx_copy_ticks;	/* the ISR staging copy */
 	uint64_t irq_tx_done_ticks;	/* the completion reclaim */
+	uint64_t rx_walk_ticks;		/* the sweep loop, any context */
+	uint64_t rx_walk_slots;		/* descriptor probes in the sweep */
 	uint64_t tx_total_ticks;	/* send_frame, whole */
 	uint64_t tx_memcpy_ticks;	/* send_frame's copy into the DMA buffer */
 	uint64_t tx_flush_ticks;	/* send_frame's cache flush */

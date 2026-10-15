@@ -74,6 +74,33 @@ static void rx_notify(unsigned int index)
 	(void)osSemaphoreRelease(g_rx_sem);
 }
 
+/* RX sweep context, mirroring the driver's DWC_EQOS_RX_BH: default = the bottom
+ * half (the ISR signals, this thread sweeps); -DCONFIG_GMAC_RX_BH=0 restores
+ * the interrupt-context sweep. CONFIG_GMAC_RX_NAPI implies the bottom half and
+ * adds the budget + interrupt mask. */
+#if !defined(CONFIG_GMAC_RX_BH)
+#define GMAC_RX_BH	1
+#else
+#define GMAC_RX_BH	CONFIG_GMAC_RX_BH
+#endif
+#if defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
+#undef GMAC_RX_BH
+#define GMAC_RX_BH	1
+#endif
+
+/* RX thread priority. The default is Normal(24), BELOW the TCP/IP thread's
+ * osPriorityHigh(40) (lwipopts.h:100): every mailbox post preempts this thread,
+ * and the ACK path starves behind the send loop that runs on the stack thread.
+ * CONFIG_GMAC_RX_PRIO_HI puts this thread above the stack instead - the Linux
+ * shape, where RX runs in softirq above process context. The core lock is a
+ * prio-inherit mutex (ports/lwip/sys_arch.c), so a preemption while the stack
+ * holds it cannot invert. */
+#if defined(CONFIG_GMAC_RX_PRIO_HI) && CONFIG_GMAC_RX_PRIO_HI
+#define GMAC_RX_THREAD_PRIO	osPriorityRealtime
+#else
+#define GMAC_RX_THREAD_PRIO	osPriorityNormal
+#endif
+
 /* RX thread: drain the staging ring into the TCP/IP thread's mailbox. */
 static void thr_rx(void *arg)
 {
@@ -84,7 +111,14 @@ static void thr_rx(void *arg)
 		dwc_eqos_watchdog(g_port);
 		(void)ethnetif_poll(&g_netif);
 		(void)osThreadYield();
-#elif defined(CONFIG_GMAC_RX_BH) && CONFIG_GMAC_RX_BH
+#elif defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
+		/* NAPI shape: the ISR masked the RX interrupt and signalled. Drain
+		 * under a frame budget; the driver hands the interrupt back when a
+		 * sweep finds the ring empty. */
+		(void)osSemaphoreAcquire(g_rx_sem, osWaitForever);
+		(void)dwc_eqos_rx_poll(g_port, CONFIG_GMAC_RX_BUDGET);
+		(void)ethnetif_poll(&g_netif);
+#elif GMAC_RX_BH
 		/* Bottom half: the ISR signalled; run the sweep here. */
 		(void)osSemaphoreAcquire(g_rx_sem, osWaitForever);
 		dwc_eqos_watchdog(g_port);
@@ -228,7 +262,7 @@ static int gmac_line_up(void)
 	dwc_eqos_set_rx_notify(rx_notify);
 	if (osThreadNew(thr_rx, NULL,
 			&(osThreadAttr_t){ .name = "gmacrx",
-					   .priority = osPriorityNormal }) == NULL) {
+					   .priority = GMAC_RX_THREAD_PRIO }) == NULL) {
 		LOG_ERROR("lan: rx thread FAIL\n");
 		return -1;
 	}
@@ -373,6 +407,7 @@ static int cmd_gmac(int argc, char **argv)
 		dwc_eqos_get_prof(g_port, &p);
 		csh_printf(csh, "gmac%u: prof irq=%u odd=%u rxsweep=%u rxcache=%u "
 			   "rxcopy=%u txdone=%u txtot=%u txcopy=%u txflush=%u "
+			   "rxwalk=%u walkslots=%llu "
 			   "irqn=%u rx=%u tx=%u\n",
 			   g_port,
 			   (unsigned)(p.irq_ticks / 24u), (unsigned)(p.irq_odd_ticks / 24u),
@@ -383,8 +418,56 @@ static int cmd_gmac(int argc, char **argv)
 			   (unsigned)(p.tx_total_ticks / 24u),
 			   (unsigned)(p.tx_memcpy_ticks / 24u),
 			   (unsigned)(p.tx_flush_ticks / 24u),
+			   (unsigned)(p.rx_walk_ticks / 24u),
+			   (unsigned long long)p.rx_walk_slots,
 			   (unsigned)p.irq_entries, (unsigned)p.rx_frames,
 			   (unsigned)p.tx_frames);
+		return 0;
+	}
+
+	/* `gmac ring`: the RX ring's producer/consumer boundary as the hardware
+	 * reports it, next to what software believes (struct dwc_eqos_ring). The
+	 * tail pointer's landing point is the thing two cursor walks died on, so
+	 * this prints where the DMA says it is (CUR_RX_DESC / CUR_RX_BUF_ADDR),
+	 * where the window ends (RX_END), and who owns which slot. Sample it
+	 * before and after a phase: `stale` non-zero means the bounded walk is
+	 * leaking slots, `run` is what it covers. */
+	if (argc >= 2 && strcmp(argv[1], "ring") == 0) {
+		struct dwc_eqos_ring r;
+
+		if (dwc_eqos_get_ring(g_port, &r) != EQOS_OK) {
+			csh_printf(csh, "gmac%u: ring unavailable\n", g_port);
+			return 1;
+		}
+		csh_printf(csh, "gmac%u: ring base=%08x end=%08x ends=%d rlen=%u "
+			   "curdesc=%08x curs=%d curbuf=%08x rxctl=%08x sr=%u "
+			   "st=%08x\n",
+			   g_port, (unsigned)r.rx_base, (unsigned)r.rx_end,
+			   (int)r.end_slot, (unsigned)r.rx_ring_len,
+			   (unsigned)r.cur_rx_desc, (int)r.cur_desc_slot,
+			   (unsigned)r.cur_rx_buf, (unsigned)r.rx_control,
+			   (unsigned)(r.rx_control & 1u), (unsigned)r.ch0_status);
+		csh_printf(csh, "gmac%u: ring scan=%d lastarmed=%d armed=%u "
+			   "ownclear=%u run=%u stale=%u\n",
+			   g_port, (int)r.rx_scan, (int)r.last_armed,
+			   (unsigned)r.ring_armed, (unsigned)r.own_clear,
+			   (unsigned)r.walk_run, (unsigned)r.stale_slots);
+		csh_printf(csh, "gmac%u: ring inflight=%08x %08x %08x %08x "
+			   "dmaown=%08x %08x %08x %08x\n",
+			   g_port,
+			   (unsigned)r.in_flight_mask[0], (unsigned)r.in_flight_mask[1],
+			   (unsigned)r.in_flight_mask[2], (unsigned)r.in_flight_mask[3],
+			   (unsigned)r.dma_owned_mask[0], (unsigned)r.dma_owned_mask[1],
+			   (unsigned)r.dma_owned_mask[2], (unsigned)r.dma_owned_mask[3]);
+		/* What the LAST sweep saw, recorded mid-traffic: the phase-boundary
+		 * snapshot can only ever see a drained ring, so a collapse has to be
+		 * explained from these. `clear` far above `walkrun` means clear slots
+		 * sat outside the walked range; `maxclear` is the worst such case. */
+		csh_printf(csh, "gmac%u: ring sweeps=%u clear=%u maxclear=%u span=%u "
+			   "swcur=%d swarmed=%d endgap=%d\n",
+			   g_port, (unsigned)r.sw_sweeps, (unsigned)r.sw_clear_seen,
+			   (unsigned)r.sw_max_clear, (unsigned)r.sw_span,
+			   (int)r.sw_curdesc, (int)r.sw_last_armed, (int)r.end_gap);
 		return 0;
 	}
 	if ((argc >= 3) && (strcmp(argv[1], "riwt") == 0)) {

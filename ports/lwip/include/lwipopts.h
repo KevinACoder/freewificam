@@ -109,9 +109,19 @@
 
 /* --- core locking ----------------------------------------------------------- */
 
+/* The #ifndef wrappers are what make these two overridable from a build: every
+ * other option in this file is a hard #define, so a -D would lose to it. */
+#ifndef LWIP_TCPIP_CORE_LOCKING
 #define LWIP_TCPIP_CORE_LOCKING         1
-/* LWIP_TCPIP_CORE_LOCKING_INPUT stays at its default (off): input runs on
- * the TCP/IP thread, fed through the mailbox by the driver. */
+#endif
+/* Input on the CALLER's thread under the core lock (2026-10-17 lever): the
+ * driver's RX thread runs the stack's input path itself instead of posting one
+ * mailbox message per frame and switching to the TCP/IP thread. Off by default:
+ * it moves which thread executes the input path, so it is measured, not
+ * assumed. */
+#ifndef LWIP_TCPIP_CORE_LOCKING_INPUT
+#define LWIP_TCPIP_CORE_LOCKING_INPUT   0
+#endif
 
 /* --- loopback --------------------------------------------------------------- */
 
