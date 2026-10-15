@@ -113,6 +113,7 @@ ANCHORS = {
         r"wlan8189: uplink standby",
         r"perf census: A ",
         r"perf census: A card ",
+        r"perf census: C netif ",
         r"perf census: D semwake_sem ",
         r"wlan8189: rate ",
         r"wlan8189: pump ",
@@ -193,6 +194,7 @@ BASE_TRANSCRIPT = (
     "[  54.320] wlan8189: iperf window 20 s\r\n"
     "[  74.000] wlan8189: iperf window done\r\n"
     "[  74.050] wlan8189: udp sink pkts=0 bytes=0\r\n"
+    "[  74.060] perf census: C netif rx=1200 bytes=18446720 eapol=2 foreign=0 nonetif=0 infail=0 tx=21 fail=0 tx_bytes=1950\r\n"
     "[  74.100] perf census: A cmd52 n=3\r\n"
     "[  74.140] perf census: D semwake_sem n=2 spent_us=4 sites=[a0c1234:2:4]\r\n"
     "[  74.150] perf census: A card full_drop=+0 hisr=0x00 rxerr=0 rxfovw=0 agg=0x010f (base=0x00)\r\n"
@@ -203,13 +205,19 @@ BASE_TRANSCRIPT = (
     "[  74.500] wlan8189: phase 1 done\r\n"
     "[  74.600] wlan8189: phase 2 ready lever=3 arm=B pump=adaptive poll_us=100 data_us=100 agg=0x200f yield=0 lps=2\r\n"
     "[  74.610] wlan8189: iperf server ready port=5001\r\n"
-    "[  94.000] wlan8189: phase 2 done\r\n"
+    "[  94.000] wlan8189: udp sink pkts=0 bytes=0\r\n"
+    "[  94.010] perf census: C netif rx=2400 bytes=37723008 eapol=2 foreign=0 nonetif=0 infail=0 tx=21 fail=0 tx_bytes=1950\r\n"
+    "[  94.100] wlan8189: phase 2 done\r\n"
     "[  94.100] wlan8189: phase 3 ready lever=3 arm=A pump=adaptive poll_us=100 data_us=100 agg=0x010f yield=0 lps=2\r\n"
     "[  94.110] wlan8189: iperf server ready port=5001\r\n"
-    "[ 114.000] wlan8189: phase 3 done\r\n"
+    "[ 114.000] wlan8189: udp sink pkts=0 bytes=0\r\n"
+    "[ 114.010] perf census: C netif rx=3600 bytes=56500096 eapol=2 foreign=0 nonetif=0 infail=0 tx=21 fail=0 tx_bytes=1950\r\n"
+    "[ 114.100] wlan8189: phase 3 done\r\n"
     "[ 114.100] wlan8189: phase 4 ready lever=3 arm=B pump=adaptive poll_us=100 data_us=100 agg=0x200f yield=0 lps=2\r\n"
     "[ 114.110] wlan8189: iperf server ready port=5001\r\n"
-    "[ 134.000] wlan8189: phase 4 done\r\n"
+    "[ 134.000] wlan8189: udp sink pkts=0 bytes=0\r\n"
+    "[ 134.010] perf census: C netif rx=4800 bytes=75281280 eapol=2 foreign=0 nonetif=0 infail=0 tx=21 fail=0 tx_bytes=1950\r\n"
+    "[ 134.100] wlan8189: phase 4 done\r\n"
     "[ 134.100] wlan8189: uplink standby (configure with 'wlan8189 uplink "
     "<peer-ip>')\r\n"
     "[ 134.200] wlan8189: uplink phase 1 ready lever=3 arm=A pump=adaptive "
@@ -354,6 +362,16 @@ MUTATIONS = [
         "wlan8189-dataplane,wlan8189-ap",
         "list=shell-up,wlan8189-probe"), 1),
     ("empty selection", EMPTY_SELECTION_TRANSCRIPT, 2),
+    # The shape a boot takes when the host client never ran: the four windows
+    # still open and close, and the counters advance only by what the idle link
+    # delivers on its own. The four values are the ones measured on such a boot
+    # (about 100 KB per 20 s window of beacons and broadcast), so the mutation
+    # reproduces the real failure rather than a zeroed imitation of it.
+    ("downlink moved nothing", BASE_TRANSCRIPT
+     .replace("bytes=18446720", "bytes=173504")
+     .replace("bytes=37723008", "bytes=274756")
+     .replace("bytes=56500096", "bytes=376106")
+     .replace("bytes=75281280", "bytes=474510"), 1),
 ]
 
 #: The probe backstop: a PASS must have named a hardware address that is not all
@@ -377,6 +395,21 @@ PING_RECV_RE = re.compile(r"ping: recv")
 
 #: the arm a measurement phase ran under (see the phase ready line)
 PHASE_ARM_RE = re.compile(r"wlan8189: phase \d+ ready lever=\d+ arm=([AB])")
+
+#: The downlink sheet's traffic evidence. A phase window is the round's
+#: measurement, so a window that moved no client traffic measured nothing - the
+#: rule the uplink sheet already carries, applied to the direction where the
+#: windows are driven from outside the board. The two counters are the board's
+#: own: the netif received bytes (cumulative, so the window's share is the
+#: delta against the previous snapshot) and the per-phase UDP sink. The floor
+#: sits far above what an idle link delivers on its own - about 100 KB per 20 s
+#: window of beacons and broadcast, measured on a boot whose host client never
+#: ran - and far below any window a client actually drove.
+PHASE_READY_NUM_RE = re.compile(r"wlan8189: phase (\d+) ready")
+PHASE_DONE_NUM_RE = re.compile(r"wlan8189: phase (\d+) done")
+NETIF_CENSUS_RE = re.compile(r"perf census: C netif rx=\d+ bytes=(\d+)")
+UDP_SINK_BYTES_RE = re.compile(r"wlan8189: udp sink pkts=\d+ bytes=(\d+)")
+DOWNLINK_MOVED_FLOOR_BYTES = 512 * 1024
 
 #: The uplink sheet's lines (the same phase machinery, the reverse direction):
 #: the ready line names the arm a window ran under, the result line carries what
@@ -533,6 +566,41 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         if arms and arms != {"A", "B"}:
             errors.append("wlan8189-dataplane: the phase sheet printed only arm(s) %s"
                           % ",".join(sorted(arms)))
+        # each downlink window must show client traffic: a window that moved
+        # nothing is not a measurement, and it is the shape a host driver that
+        # never ran leaves behind (the windows still open and close). The
+        # evidence is the board's own counters, grouped by the phase boundaries.
+        phase_netif: dict[int, int] = {}
+        phase_sink: dict[int, int] = {}
+        current = None
+        for line in transcript.lines:
+            m = PHASE_READY_NUM_RE.search(line)
+            if m:
+                current = int(m.group(1))
+                continue
+            if PHASE_DONE_NUM_RE.search(line):
+                current = None
+                continue
+            if current is None:
+                continue
+            m = NETIF_CENSUS_RE.search(line)
+            if m:
+                phase_netif[current] = int(m.group(1))
+                continue
+            m = UDP_SINK_BYTES_RE.search(line)
+            if m:
+                phase_sink[current] = int(m.group(1))
+        base = 0
+        for n in sorted(phase_netif):
+            moved = phase_netif[n] - base
+            base = phase_netif[n]
+            if moved < DOWNLINK_MOVED_FLOOR_BYTES and phase_sink.get(n, 0) == 0:
+                errors.append(
+                    "wlan8189-dataplane: downlink phase %d moved %d bytes "
+                    "(< %d) with no udp" % (n, moved, DOWNLINK_MOVED_FLOOR_BYTES))
+        if not phase_netif:
+            errors.append("wlan8189-dataplane: no phase window carried a netif "
+                          "census line, so no window shows traffic")
         # the uplink sheet's backstop: the stage either ran (four ready/result
         # pairs, both arms, every result carrying bytes - a window that moved
         # nothing is not a measurement) or said why it did not; the one thing it
