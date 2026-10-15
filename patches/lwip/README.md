@@ -8,8 +8,8 @@ applied at build time by `tools/patches/replay.sh`.
 |---|---|
 | Upstream | https://github.com/lwip-tcpip/lwip.git |
 | Base (= pin) | `77dcd25a72509eb83f72b033d219b1d40cd8eb95` (tag `STABLE-2_2_1_RELEASE`) |
-| Patch list | `0001-lwiperf-boundary.patch`, `0002-tcp-probe-hook.patch`, `0003-tcp-ack-delay-watermark.patch` |
-| Submission status | `0001` not yet submitted: it is written to be sent as-is (one concern, `git format-patch` form, `Signed-off-by`, no local knowledge) and is waiting on the board acceptance run that measures the modes it unblocks. `0002` not submitted: it is a neutral extension point (upstream-able as-is) that the local build points at its own timing hook; no upstream consumer yet, so it stays local until someone needs the same taps. `0003` not submitted: a build-time option (default keeps upstream behaviour), upstream-able as-is if the maintainers want the watermark tunable |
+| Patch list | `0001-lwiperf-boundary.patch`, `0002-tcp-probe-hook.patch`, `0003-tcp-ack-delay-watermark.patch`, `0004-tcp-unsent-tail-cache.patch` |
+| Submission status | `0001` not yet submitted: it is written to be sent as-is (one concern, `git format-patch` form, `Signed-off-by`, no local knowledge) and is waiting on the board acceptance run that measures the modes it unblocks. `0002` not submitted: it is a neutral extension point (upstream-able as-is) that the local build points at its own timing hook; no upstream consumer yet, so it stays local until someone needs the same taps. `0003` not submitted: a build-time option (default keeps upstream behaviour), upstream-able as-is if the maintainers want the watermark tunable. `0004` not submitted: implements the source's own @todo (cache the unsent tail), default behaviour is unchanged for small queues; upstream-able once board-proven |
 
 ## 0001 - lwiperf: take plain payload at the 128 KiB boundary as data
 
@@ -55,6 +55,22 @@ field; the count restarts whenever `TF_ACK_DELAY` is set anew, so paths that
 clear the flag elsewhere (data segment carrying the ACK, `tcp_fasttmr` flush)
 need no extra bookkeeping. Local use: the downlink's per-frame cost is about
 half ACK send, so a measurement build can halve the ACK count.
+
+## 0004 - tcp: cache the unsent queue's tail in the pcb
+
+`tcp_write()` appends to the unsent queue by walking head-to-tail on every
+call; the source itself carries an `@todo` for the fix. On a 1 Gbit/s line the
+walk's cost grows with `TCP_SND_BUF` and becomes the dominant term of the
+per-ACK write path (measured on our board: 14.6 us per callback at 512 KB
+against 9.7 us at 128 KB, with throughput up 90% when the buffer was cut).
+The patch keeps the tail in
+`pcb->last_unsent`, maintained at every mutator of the queue (append,
+dequeue, mid-queue insert, RTO concatenation, prefix/total free), so the
+append no longer depends on queue length and the buffer can be sized purely
+for bandwidth-delay product.
+
+Acceptance: board run with the patch at a 128 KB+ send buffer must match the
+walk-free (small-buffer) throughput without regressions; Gate1 green.
 
 Rules (project patch policy):
 
