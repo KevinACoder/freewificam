@@ -15,11 +15,18 @@ weak, and what is not started. Nothing here should be read as a promise.
 - **Throughput.** Every line is below the same card under Linux. The RTOS
   figure is roughly a tenth of the Linux figure on the 8188EUS line, about
   1/1.7 (down) and 1/1.9 (up) on the SDIO line after two adopted levers, and
-  roughly a hundred-and-seventieth on the 8851BU line. The SDIO line's earlier
-  nine-fold collapse has not recurred since the receive-aggregation work, but
-  its access-point-mode reverse direction is variable across boots (14-18
-  Mbit/s in three of four, one abort). The numbers are recorded, not gated;
-  the project does not yet claim a target.
+  roughly a hundred-and-seventieth on the 8851BU line. On the project's
+  controlled bench (its own Raspberry Pi access point) the SDIO downlink
+  measures 29-30 Mbit/s against 43.8 for the same card under Linux; the
+  remaining gap there was located in the card's delivery cadence - about eight
+  frames every 2.9 ms, interlocked with the peer's 16-frame block-ack window.
+  Two stack-shape levers were measured on that bench and rejected: running the
+  stack's input on the caller's thread roughly halved the throughput, and a
+  smaller card-side aggregation length threshold cost 32%. The SDIO line's
+  earlier nine-fold collapse has not recurred since the receive-aggregation
+  work, but its access-point-mode reverse direction is variable across boots
+  (14-18 Mbit/s in three of four, one abort). The numbers are recorded, not
+  gated; the project does not yet claim a target.
 - **Long-run stability.** A long, unattended streaming run (the project's core
   goal) has not been demonstrated. The 8851BU line in particular is not stable
   enough for it.

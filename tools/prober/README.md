@@ -117,8 +117,15 @@ prober.py run ... --phase-actions "tcp,tcp-w256K,udp,tcp-w256K" \
 ```
 
 A phase beyond the spec keeps the run-level defaults, and a token is `tcp`,
-`udp` or `tcp-w<size>` - a window on a UDP phase is a usage error rather than a
-silently ignored flag.
+`udp`, `tcp-w<size>` or `udp-b<rate>` - each pin belongs to its own transport
+(the sender's window to TCP, the offered rate to UDP), and a pin on the wrong
+one is a usage error rather than a silently ignored flag. The rate pin is what
+a receive-capacity ladder is built from - several constant loads inside one
+boot, with no acknowledgement clock in the way:
+
+```
+prober.py run ... --phase-actions "udp-b35M,udp-b40M,udp-b45M,udp-b50M"
+```
 
 The reverse direction needs no extra flag: when the board's console announces
 its uplink stage, `run` brings up an iperf2 server on this host, tells the board
@@ -128,6 +135,10 @@ result lines per window. The server's log is kept with the products
 (`uplink-server.log`) and its per-test rows are the receiver-side figures the
 uplink numbers are quoted from. A board boot that was not given a peer skips the
 stage and says so on its console; `run` reports that as a skip, not a failure.
+A round that plans no uplink windows (`--uplink-phases 0`) hands the board no
+peer at all - the host server is not started and the address is not sent - so
+the board's stage times out into its own skip line while the downlink sheet
+carries the round by itself.
 
 Analysis, either on a capture just taken or on an older file:
 

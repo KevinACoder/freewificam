@@ -87,9 +87,17 @@ wireless lines. Its reverse direction was measured for the first time on the sam
 (board as the iperf client), so the "not measured" cells above are per-line
 facts, not a blanket one. Its access point mode, brought up later, measures
 19.8-20.2 Mbit/s down and 18.3 Mbit/s up with a station associated to the board
-itself. The other lines' gaps are as recorded: one tenth (8188EUS), one
-eighteenth (8821CU), one hundred-and-seventieth (8851BU), one
-seven-hundredth (7260).
+itself. A later round moved to a controlled bench of the project's own - a
+Raspberry Pi access point, so the peer's behaviour is ours to pin - where the
+downlink measures 29-30 Mbit/s against 43.8 for the same card under Linux
+(0.67x). That bench also located the remaining wall: the card's delivery
+cadence, about eight frames every 2.9 ms, interlocked with the access point's
+16-frame block-ack window - the air was never the constraint (MCS7 150 Mbit/s,
+zero retries). Two stack-shape levers were measured on it and rejected with
+board evidence (running the stack's input on the caller's thread, and a
+smaller card-side aggregation length threshold). The other lines' gaps are as
+recorded: one tenth (8188EUS), one eighteenth (8821CU),
+one hundred-and-seventieth (8851BU), one seven-hundredth (7260).
 
 The gap to Linux is still large on most lines, and it is the current open
 problem. It is stated here rather than hidden: the value of the port so far is
@@ -119,8 +127,8 @@ overall. And the C library now comes from the toolchain's newlib instead of
 the image's own copy of it - the hand-written 1514-byte memcpy moved one
 8-byte word per loop iteration and cost 1.5 us per frame, about 13% of the
 single core at line rate, where newlib's size-branched LDP/STP implementation
-moves 16 bytes per instruction. The same swap is still to be applied to the
-other board images.
+moves 16 bytes per instruction. The swap now covers every board image: the
+image-local C library unit was retired tree-wide.
 
 ### The camera line
 

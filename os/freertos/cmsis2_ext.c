@@ -55,3 +55,21 @@ void osMemoryFree( void * ptr )
 {
     vPortFree( ptr );
 }
+
+/*
+ * The execution-profile query with no profile: the Execution Profile Kit is a
+ * ThreadX-side facility, and the extension header's contract is that every
+ * other backend answers with an empty profile so callers need no per-kernel
+ * switch (see os/cmsis2/cmsis_os2_ext.h). The board port carries the same
+ * answer; both were missing it and the shared wired case failed to link on
+ * the FreeRTOS images until it was added.
+ */
+size_t osExecProfileGet( os_exec_profile_entry_t *entries, size_t max,
+                         uint64_t *isr_ticks, uint64_t *idle_ticks )
+{
+    ( void ) entries;
+    ( void ) max;
+    *isr_ticks = 0u;
+    *idle_ticks = 0u;
+    return 0u;
+}
