@@ -609,37 +609,52 @@ void wlan8189_dataplane_chain( void )
 	 * cost sample: no iperf client is running yet, so each echo's round trip
 	 * is one request frame and one reply frame with nothing queued behind
 	 * them, and the floor it shows is what a single frame pays on this path.
-	 * The window runs twice - at the adopted aggregation timeout and at the
-	 * driver's stock value - each bracketed by the census, so the floor the
-	 * timeout imposes is read in the same boot that carries its throughput
-	 * and the two are comparable. The judge counts the echo replies and wants
-	 * the done anchor present; both passes satisfy both.
+	 * The window is split in half and the aggregation timeout moves between
+	 * the halves - the adopted value, then the driver's stock value - each
+	 * half bracketed by the census, so the floor the timeout imposes is read
+	 * in the same boot that carries its throughput.
+	 *
+	 * One ping thread spans both halves on purpose: lwIP's ping_stop() only
+	 * clears the target, it does not join the thread, so a second ping_init
+	 * leaves the first thread running and both then answer the same sequence
+	 * (the first build of this window did exactly that - 27 sends for 18
+	 * expected - and its round trips pair against the wrong send). The thread
+	 * is started once and the register is flipped under it.
 	 */
 	{
-		static const unsigned int ping_agg_to[2] = {
-			WLAN8189_AGG_TIMEOUT_BASE, WLAN8189_AGG_TIMEOUT_TREAT
-		};
 		unsigned int pass;
 
+		wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
+		wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_BASE );
+		LOG_INFO( "wlan8189: ping gw window=%u s halves agg=0x%02x%02x "
+		    "then 0x%02x%02x\n",
+		    (unsigned)( WLAN8189_PING_WAIT_MS / 1000 ),
+		    (unsigned)( WLAN8189_AGG_TIMEOUT_BASE & 0xffU ),
+		    (unsigned)( WLAN8189_AGG_STOCK_KB & 0xffU ),
+		    (unsigned)( WLAN8189_AGG_TIMEOUT_TREAT & 0xffU ),
+		    (unsigned)( WLAN8189_AGG_STOCK_KB & 0xffU ) );
+		ping_init( &g_netif.gw );
 		for( pass = 0U; pass < 2U; pass++ ) {
-			LOG_INFO( "wlan8189: ping gw window=%u s pass=%u "
-			    "agg=0x%02x%02x\n",
-			    (unsigned)( WLAN8189_PING_WAIT_MS / 1000 ), pass + 1U,
-			    (unsigned)( ping_agg_to[pass] & 0xffU ),
+			if( pass == 1U ) {
+				wlan8189_agg_timeout_set(
+				    WLAN8189_AGG_TIMEOUT_TREAT );
+			}
+			LOG_INFO( "wlan8189: ping pass=%u agg=0x%02x%02x\n",
+			    pass + 1U,
+			    (unsigned)( ( ( pass == 0U ) ?
+			    WLAN8189_AGG_TIMEOUT_BASE :
+			    WLAN8189_AGG_TIMEOUT_TREAT ) & 0xffU ),
 			    (unsigned)( WLAN8189_AGG_STOCK_KB & 0xffU ) );
-			wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
-			wlan8189_agg_timeout_set( ping_agg_to[pass] );
 			wlan8189_census_reset();
-			ping_init( &g_netif.gw );
 			for( waited = 0; waited < WLAN8189_PING_WAIT_MS;
 			    waited += 100U ) {
 				(void)osDelay( 100U );
 			}
-			ping_stop();
 			LOG_ANCHOR( "wlan8189: ping window done\n" );
 			wlan8189_census_print();
 			census_print_lwip();
 		}
+		ping_stop();
 	}
 
 	/* the adapter's own accounting, printed once so a failure that got this
