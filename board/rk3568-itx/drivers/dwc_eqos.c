@@ -825,7 +825,13 @@ static void eqos_frame_copy_wide(uint8_t *dst, const uint8_t *src, unsigned int 
 #if defined(CONFIG_GMAC_WIDE_COPY) && CONFIG_GMAC_WIDE_COPY
 static uint8_t s_wide_copy = 3u;	/* both sites; bit0 = RX, bit1 = TX */
 #else
-static uint8_t s_wide_copy = 0u;
+/* Shipped default: the TX frame copy only. Board-measured 2026-10-20 (same
+ * boot, double-anchored): the TX site alone gives +5.6% uplink (799.9 ->
+ * 843.2) with no downlink cost and txcopy 1.54 -> 1.05 us per frame; the RX
+ * staging site showed no uplink effect and its downlink reading sat inside
+ * the boot's own anchor band, so its gain stays unproven (the RXDIRECT
+ * lesson). The WIDECOPY lever widens both sites for that experiment. */
+static uint8_t s_wide_copy = 2u;
 #endif
 
 /* Per-site selector: a lost downlink byte-trail with the wide copies on made
