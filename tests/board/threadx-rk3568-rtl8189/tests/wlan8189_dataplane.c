@@ -604,16 +604,43 @@ void wlan8189_dataplane_chain( void )
 		return;
 	}
 
-	/* the gateway reachability: the contrib ping (socket mode, its own
-	 * thread); the judge counts the echo replies from its console lines */
-	LOG_INFO( "wlan8189: ping gw window=%u s\n",
-	    (unsigned)( WLAN8189_PING_WAIT_MS / 1000 ) );
-	ping_init( &g_netif.gw );
-	for( waited = 0; waited < WLAN8189_PING_WAIT_MS; waited += 100U ) {
-		(void)osDelay( 100U );
+	/*
+	 * The gateway reachability window doubles as the round's clean per-frame
+	 * cost sample: no iperf client is running yet, so each echo's round trip
+	 * is one request frame and one reply frame with nothing queued behind
+	 * them, and the floor it shows is what a single frame pays on this path.
+	 * The window runs twice - at the adopted aggregation timeout and at the
+	 * driver's stock value - each bracketed by the census, so the floor the
+	 * timeout imposes is read in the same boot that carries its throughput
+	 * and the two are comparable. The judge counts the echo replies and wants
+	 * the done anchor present; both passes satisfy both.
+	 */
+	{
+		static const unsigned int ping_agg_to[2] = {
+			WLAN8189_AGG_TIMEOUT_BASE, WLAN8189_AGG_TIMEOUT_TREAT
+		};
+		unsigned int pass;
+
+		for( pass = 0U; pass < 2U; pass++ ) {
+			LOG_INFO( "wlan8189: ping gw window=%u s pass=%u "
+			    "agg=0x%02x%02x\n",
+			    (unsigned)( WLAN8189_PING_WAIT_MS / 1000 ), pass + 1U,
+			    (unsigned)( ping_agg_to[pass] & 0xffU ),
+			    (unsigned)( WLAN8189_AGG_STOCK_KB & 0xffU ) );
+			wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
+			wlan8189_agg_timeout_set( ping_agg_to[pass] );
+			wlan8189_census_reset();
+			ping_init( &g_netif.gw );
+			for( waited = 0; waited < WLAN8189_PING_WAIT_MS;
+			    waited += 100U ) {
+				(void)osDelay( 100U );
+			}
+			ping_stop();
+			LOG_ANCHOR( "wlan8189: ping window done\n" );
+			wlan8189_census_print();
+			census_print_lwip();
+		}
 	}
-	ping_stop();
-	LOG_ANCHOR( "wlan8189: ping window done\n" );
 
 	/* the adapter's own accounting, printed once so a failure that got this
 	 * far localizes: rx_frames/rx_eapol are what the driver handed over,
