@@ -795,29 +795,27 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 
 /* --- completion paths ----------------------------------------------------- */
 
-/* The image's memcpy is the generic scalar loop - 8 bytes per iteration,
- * measured at 1.5 us for a 1514-byte frame (13% of one core's uplink budget
- * at line rate). The two per-frame copies in this driver (ring->staging on
- * RX, pbuf->TX buffer on send) both move whole frames, so give them wide
- * chunks: __builtin_memcpy with a constant size makes the compiler emit
- * LDP/STP pairs, which A55 sustains at ~4x the scalar rate. The head/tail
- * loops keep every length and alignment legal; semantics are a plain copy.
- * The WIDECOPY build lever picks the default; the runtime seam (gmac wcopy)
- * flips it so one boot carries the A/B - a load and a branch per frame
- * against a 1.5 us loop. */
+/* The image's memcpy (os/baremetal/memops.c) moves one byte-aligned u64 per
+ * iteration: -mstrict-align forbids the compiler from assuming anything
+ * wider, and the census priced it at 1.5 us for a 1514-byte frame. The two
+ * per-frame copies in this driver (ring->staging on RX, pbuf->TX buffer on
+ * send) both move whole frames between Normal memory, so give them the arch
+ * layer's LDP/STP blocks instead - the one place wide unaligned accesses are
+ * spelled (arch_asm.h). The WIDECOPY build lever picks the default; the
+ * runtime seam (gmac wcopy) flips it so one boot carries the A/B. */
 static void eqos_frame_copy_wide(uint8_t *dst, const uint8_t *src, unsigned int len)
 {
 	while (len >= 64u) {
-		__builtin_memcpy(dst, src, 64);
+		ARCH_COPY_64(dst, src);
 		dst += 64;
 		src += 64;
 		len -= 64u;
 	}
-	while (len >= 16u) {
-		__builtin_memcpy(dst, src, 16);
-		dst += 16;
-		src += 16;
-		len -= 16u;
+	while (len >= 8u) {
+		ARCH_COPY_8(dst, src);
+		dst += 8;
+		src += 8;
+		len -= 8u;
 	}
 	while (len-- != 0u) {
 		*dst++ = *src++;
