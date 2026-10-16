@@ -187,6 +187,14 @@ wlan8189_pump_show(void)
 	}
 }
 
+const char *
+wlan8189_pump_policy_get(void)
+{
+
+	return (lkpi_sdio_pump_mode_get() == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ?
+	    "adaptive" : "fixed";
+}
+
 int
 wlan8189_pump_set(const char *policy)
 {
@@ -288,6 +296,89 @@ wlan8189_irq_get(void)
 {
 
 	return lkpi_sdio_pump_irq_get() ? 1 : 0;
+}
+
+/* --- the runtime phase plan ----------------------------------------------- */
+
+/*
+ * One runtime-set single-variable comparison for the four-phase sheet (see
+ * wlan8189_census.h). The sheet's phase routine re-asserts its full baseline at
+ * every phase boundary, so a console command issued between phases would be
+ * overwritten before the window; this plan is applied by that same routine, so
+ * the command's value reaches the window through the one boundary the sheet
+ * already has. Everything else in the routine stays baseline, so the plan is a
+ * single-variable comparison exactly like a compiled lever.
+ */
+static struct {
+	int		key;
+	unsigned int	base;
+	unsigned int	treat;
+} wlan8189_plan;
+
+int
+wlan8189_plan_set(int key, unsigned int base, unsigned int treat)
+{
+
+	switch (key) {
+	case WLAN8189_PLAN_AGG_TIMEOUT:
+	case WLAN8189_PLAN_AGG_LEN:
+	case WLAN8189_PLAN_POLL_US:
+	case WLAN8189_PLAN_DATA_US:
+		break;
+	case WLAN8189_PLAN_PUMP:
+	case WLAN8189_PLAN_YIELD:
+	case WLAN8189_PLAN_PRIO:
+		/* boolean-shaped keys: reject a value that is not 0/1 */
+		if (base > 1u || treat > 1u)
+			return -1;
+		break;
+	default:
+		return -1;
+	}
+	wlan8189_plan.key = key;
+	wlan8189_plan.base = base;
+	wlan8189_plan.treat = treat;
+	return 0;
+}
+
+void
+wlan8189_plan_clear(void)
+{
+
+	wlan8189_plan.key = 0;
+}
+
+int
+wlan8189_plan_apply(int treatment)
+{
+	unsigned int v = treatment ? wlan8189_plan.treat : wlan8189_plan.base;
+
+	switch (wlan8189_plan.key) {
+	case WLAN8189_PLAN_AGG_TIMEOUT:
+		wlan8189_agg_timeout_set(v);
+		break;
+	case WLAN8189_PLAN_AGG_LEN:
+		wlan8189_agg_set(v);
+		break;
+	case WLAN8189_PLAN_POLL_US:
+		(void)wlan8189_dwc_poll_set(v);
+		break;
+	case WLAN8189_PLAN_DATA_US:
+		(void)wlan8189_dwc_data_set(v);
+		break;
+	case WLAN8189_PLAN_PUMP:
+		(void)wlan8189_pump_set(v ? "adaptive" : "fixed");
+		break;
+	case WLAN8189_PLAN_YIELD:
+		wlan8189_pump_yield_set((int)v);
+		break;
+	case WLAN8189_PLAN_PRIO:
+		(void)wlan8189_pump_prio_set((int)v);
+		break;
+	default:
+		return 0;
+	}
+	return wlan8189_plan.key;
 }
 
 /* --- the card-side receiver account --------------------------------------- */

@@ -375,6 +375,7 @@ struct wlan8189_phase_ident {
 	int		irq;
 	int		prio;
 	int		drain;
+	int		plan;	/* 1: a runtime plan (not the compiled lever) ran */
 };
 
 /*
@@ -384,6 +385,12 @@ struct wlan8189_phase_ident {
  * measure. Both sheets call this, so a phase is exactly the lever's setting and
  * nothing carried over, and the arm definition cannot drift between the two
  * directions.
+ *
+ * A runtime plan (set from the console before the phases, see the census
+ * header) takes the place of the compiled lever at this same boundary: the
+ * command's value would otherwise be overwritten by the baseline re-assertion
+ * one line above. Everything else stays baseline, so the comparison keeps its
+ * single-variable property; without a plan the compiled lever runs unchanged.
  */
 static void
 phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
@@ -398,6 +405,18 @@ phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
 	(void)wlan8189_pump_drain_set( WLAN8189_PUMP_DRAIN );
 	id->poll_us = wlan8189_dwc_poll_set( WLAN8189_DWC_POLL_STOCK_US );
 	id->data_us = wlan8189_dwc_data_set( WLAN8189_DWC_DATA_BASE_US );
+
+	if( wlan8189_plan_apply( treatment ) != 0 ) {
+		/* the plan carries one variable; the rest of the phase's arm is
+		 * the adopted measurement baseline, which - like every compiled
+		 * lever - runs the pump adaptive. Without this the plan path
+		 * would silently measure a fixed-pump phase against the
+		 * compiled rounds' adaptive ones. */
+		id->plan = 1;
+		id->pump = "adaptive";
+		(void)wlan8189_pump_set( id->pump );
+	} else {
+		id->plan = 0;
 
 #if WLAN8189_LEVER == WLAN8189_LEVER_PUMP
 	id->pump = treatment ? "adaptive" : "fixed";
@@ -448,6 +467,7 @@ phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
 #else
 #error "WLAN8189_LEVER is not a known lever"
 #endif
+	}
 	id->agg = wlan8189_agg_get();
 	id->yield = wlan8189_pump_yield_get();
 	id->irq = wlan8189_irq_get();
@@ -456,8 +476,10 @@ phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
 }
 
 /* The ready line: one shape for both sheets. The downlink's stays the original
- * line byte for byte (the judge anchors and the round's ledgers read it); the
- * uplink's carries its sheet name after the suite prefix. */
+ * line prefix byte for byte (the judge anchors and the round's ledgers read it);
+ * the uplink's carries its sheet name after the suite prefix. `plan=` at the
+ * end names whether the arm was the compiled lever (0) or a runtime plan (1) -
+ * appended so every earlier reader, which matches on the prefix, is unaffected. */
 static void
 phase_print_ready( const char *sheet, unsigned int phase, int treatment,
     const struct wlan8189_phase_ident *id )
@@ -465,10 +487,10 @@ phase_print_ready( const char *sheet, unsigned int phase, int treatment,
 
 	LOG_ANCHOR( "wlan8189: %sphase %u ready lever=%u arm=%c pump=%s "
 	    "poll_us=%u data_us=%u agg=0x%04x yield=%d lps=%d irq=%d prio=%d "
-	    "drain=%d\n",
+	    "drain=%d plan=%d\n",
 	    sheet, phase, (unsigned)WLAN8189_LEVER, treatment ? 'B' : 'A',
 	    id->pump, id->poll_us, id->data_us, id->agg, id->yield,
-	    wlan8189_ps_get(), id->irq, id->prio, id->drain );
+	    wlan8189_ps_get(), id->irq, id->prio, id->drain, id->plan );
 }
 
 /* ------------------------------------------------------------------ */
