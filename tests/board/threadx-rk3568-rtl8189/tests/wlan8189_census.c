@@ -167,9 +167,11 @@ wlan8189_pump_show(void)
 	_adapter *adapter = census_adapter();
 
 	lkpi_sdio_bus_info_get(&bus);
-	printk("wlan8189: pump policy=%s period_ms=%u yield=%u clk_khz=%u bus=%u blk=%u\n",
+	printk("wlan8189: pump policy=%s period_ms=%u yield=%u prio=%s drain=%u clk_khz=%u bus=%u blk=%u\n",
 	    (mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ? "adaptive" : "fixed",
 	    lkpi_sdio_pump_period_get(), lkpi_sdio_pump_yield_get() ? 1u : 0u,
+	    lkpi_sdio_pump_prio_get() ? "normal" : "below",
+	    lkpi_sdio_pump_drain_get() ? 1u : 0u,
 	    bus.clock_hz / 1000u, bus.bus_width, bus.blk_size);
 	/*
 	 * The counting semaphores' addresses, so the wake-latency table keyed by
@@ -197,6 +199,14 @@ wlan8189_pump_set(const char *policy)
 		lkpi_sdio_pump_yield_set(true);
 	else if (strcmp(policy, "noyield") == 0)
 		lkpi_sdio_pump_yield_set(false);
+	else if (strcmp(policy, "prio-normal") == 0)
+		lkpi_sdio_pump_prio_set(true);
+	else if (strcmp(policy, "prio-below") == 0)
+		lkpi_sdio_pump_prio_set(false);
+	else if (strcmp(policy, "drain") == 0)
+		lkpi_sdio_pump_drain_set(true);
+	else if (strcmp(policy, "nodrain") == 0)
+		lkpi_sdio_pump_drain_set(false);
 	else
 		return -1;
 	return (int)lkpi_sdio_pump_mode_get();
@@ -214,6 +224,70 @@ wlan8189_pump_yield_get(void)
 {
 
 	return lkpi_sdio_pump_yield_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_prio_set(int normal)
+{
+
+	lkpi_sdio_pump_prio_set(normal != 0);
+	return lkpi_sdio_pump_prio_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_prio_get(void)
+{
+
+	return lkpi_sdio_pump_prio_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_drain_set(int on)
+{
+
+	lkpi_sdio_pump_drain_set(on != 0);
+	return lkpi_sdio_pump_drain_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_drain_get(void)
+{
+
+	return lkpi_sdio_pump_drain_get() ? 1 : 0;
+}
+
+/* --- the card-interrupt mode (the align round's lever) -------------------- */
+
+/*
+ * The engine's card-interrupt switch, read back the way the cadence is: the
+ * mode a phase ran under is part of the measurement's identity. The evidence
+ * that the mechanism actually ran lives in the census (D pumpirq notify/wake,
+ * A dwc_cardirq ent/spur), so this line stays the policy statement.
+ */
+void
+wlan8189_irq_show(void)
+{
+
+	printk("wlan8189: irq mode=%s\n", lkpi_sdio_pump_irq_get() ? "on" : "off");
+}
+
+int
+wlan8189_irq_set(int on)
+{
+	int st = lkpi_sdio_pump_irq_set(on != 0);
+
+	if (st != 0) {
+		printk("wlan8189: irq set failed (%d)\n", st);
+		return st;
+	}
+	return lkpi_sdio_pump_irq_get() ? 1 : 0;
+}
+
+int
+wlan8189_irq_get(void)
+{
+
+	return lkpi_sdio_pump_irq_get() ? 1 : 0;
 }
 
 /* --- the card-side receiver account --------------------------------------- */
@@ -475,6 +549,28 @@ wlan8189_census_print(void)
 	    (unsigned long long)(dwc.data_wait_max_ns / 1000u),
 	    dwc.idmac_polls, (unsigned long long)(dwc.idmac_wait_ns / 1000u),
 	    (unsigned long long)(dwc.idmac_wait_max_ns / 1000u));
+	/* the controller's card-interrupt witness: entries that carried DAT1
+	 * versus entries that carried nothing this driver owns (spurious). Zero
+	 * entries on an irq-on phase means the line never reached the CPU - the
+	 * number the mechanism's self-test reads. */
+	printk("perf census: A dwc_cardirq ent=%u spur=%u\n",
+	    dwc.card_irq_entries, dwc.card_irq_spurious);
+
+	/* The suspend-guard probe (the wedge issue's ask, printed with every
+	 * phase snapshot): the skb pools' occupancy and high-water, so a hang
+	 * leaves the accumulation visible in the phase it started in, and the
+	 * pool's own damage counters (double free / stray / use-after-free /
+	 * fence) name a geometry problem instead of leaving it to be inferred. */
+	{
+		struct lkpi_skb_pool_stats skb;
+
+		lkpi_skb_pool_stats(&skb);
+		printk("perf census: D skb used=%u high=%u data_used=%u data_high=%u dyalloc=%u ovf=%u+%u fail=%u dfree=%u stray=%u uaf=%u fence=%u\n",
+		    skb.skb_used, skb.skb_high, skb.data_used, skb.data_high,
+		    skb.dyalloc_live, skb.slot_overflow, skb.data_overflow,
+		    skb.alloc_fail, skb.double_free, skb.stray_free,
+		    skb.uaf_write, skb.fence_bad);
+	}
 
 	/* the driver's own progress account: what it dropped, reordered or forced
 	 * out of its reorder window */

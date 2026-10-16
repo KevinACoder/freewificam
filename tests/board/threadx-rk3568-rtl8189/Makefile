@@ -123,6 +123,12 @@ endif
 ifneq ($(DWC_DATA_BASE_US),)
 LEVER_CFLAGS += -DWLAN8189_DWC_DATA_BASE_US=$(DWC_DATA_BASE_US)
 endif
+# The align round's pump drain-to-empty: a constant of the boot it is enabled
+# in (the aggregation operating-point arm runs with it on), not a phase lever -
+# its own account travels in the census counters (perf rxrel drain=). 
+ifneq ($(DRAIN),)
+LEVER_CFLAGS += -DWLAN8189_PUMP_DRAIN=1
+endif
 # The throughput census is this image's: the instrumented layers (linuxkpi
 # core/SDIO engine/osdep, the SDIO port, the controller driver, the netif
 # adapter, the console sink) carry their counters behind this key, and every

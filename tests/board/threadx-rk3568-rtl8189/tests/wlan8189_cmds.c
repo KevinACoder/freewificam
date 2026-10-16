@@ -137,6 +137,12 @@ cmd_wlan8189(int argc, char **argv)
 		wlan8189_dwc_show();
 		return 0;
 	}
+	if (strcmp(argv[1], "irq") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "show") != 0)
+			(void)wlan8189_irq_set(strcmp(argv[2], "on") == 0);
+		wlan8189_irq_show();
+		return 0;
+	}
 	if (strcmp(argv[1], "uplink") == 0) {
 		unsigned int peer = 0U;
 
@@ -175,13 +181,14 @@ cmd_wlan8189(int argc, char **argv)
 		   "ps [show|lps-mode]|ps ips <mode>|rate|"
 		   "pump [show|fixed|adaptive|yield|noyield]|"
 		   "agg [show|<size-kb>|timeout <units>]|"
-		   "dwc [show|<poll-us>|data <us>]|uplink <a.b.c.d>|"
+		   "dwc [show|<poll-us>|data <us>]|irq [show|on|off]|"
+		   "uplink <a.b.c.d>|"
 		   "ap start <ssid> [ch]|ap stop]\n");
 	return 0;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
-			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc|uplink|ap]",
+			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc|irq|uplink|ap]",
 			  "wlan8189 status - whether the driver attached and how many BSS rows are held;\n"
 			  "wlan8189 probe - bring the bus and the card up and run the driver's probe;\n"
 			  "wlan8189 scan - ask the driver for a scan and print the table it reports\n"
@@ -192,6 +199,7 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
 			  "wlan8189 pump [show|fixed|adaptive|yield|noyield] - SDIO pump cadence and fairness\n"
 			  "wlan8189 agg [show|<size-kb>|timeout <units>] - card RX aggregation length/timeout\n"
 			  "wlan8189 dwc [show|<poll-us>|data <us>] - host controller command/data poll step\n"
+			  "wlan8189 irq [show|on|off] - card interrupt (DAT1) event mode vs the polling pump\n"
 			  "wlan8189 uplink <a.b.c.d> - the peer the uplink stage's iperf client sends to\n"
 			  "wlan8189 ap start <ssid> [ch] - run the interface as an open access point\n"
 			  "wlan8189 ap stop - leave access-point mode\n")

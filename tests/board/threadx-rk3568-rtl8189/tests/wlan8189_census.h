@@ -60,6 +60,23 @@ int	wlan8189_pump_set(const char *policy);
 void	wlan8189_pump_yield_set(int on);
 int	wlan8189_pump_yield_get(void);
 
+/* the wake-chain knobs (the align round's second arm): prio moves the pump
+ * into or out of the driver threads' normal band; drain keeps a cycle
+ * dispatching while the card still reports pending work */
+int	wlan8189_pump_prio_set(int normal);
+int	wlan8189_pump_prio_get(void);
+int	wlan8189_pump_drain_set(int on);
+int	wlan8189_pump_drain_get(void);
+
+/* the card-interrupt mode (the align round's lever): on means the card's own
+ * DAT1 events wake the pump and the period is a backstop; off is the polling
+ * cadence. set returns the effective state, or a negative seam error when the
+ * backend carries no card-interrupt path; the notify/wake counters print in
+ * the census (D pumpirq) and the controller's entry counters in A dwc_cardirq */
+int	wlan8189_irq_set(int on);
+int	wlan8189_irq_get(void);
+void	wlan8189_irq_show(void);
+
 /* the console sink's line accounting (counted in main.c, read by the census) */
 void	wlan8189_census_log_get(unsigned long *in_lines, unsigned long *in_bytes,
 	    unsigned long *out_lines, unsigned long *out_bytes);

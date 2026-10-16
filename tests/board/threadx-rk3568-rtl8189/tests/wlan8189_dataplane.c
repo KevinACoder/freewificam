@@ -95,9 +95,19 @@ struct wiphy *lkpicfg_wiphy(void);
 #define WLAN8189_LEVER_AGG	3	/* the card's RX aggregation timeout byte */
 #define WLAN8189_LEVER_YIELD	4	/* the pump's fairness yield */
 #define WLAN8189_LEVER_DWCDATA	5	/* the controller's data-wait step */
+#define WLAN8189_LEVER_IRQ	6	/* the card interrupt (DAT1) vs the polling pump */
+#define WLAN8189_LEVER_WAKE	7	/* the pump's band: below-normal vs normal */
 
 #ifndef WLAN8189_LEVER
 #define WLAN8189_LEVER	WLAN8189_LEVER_AGG
+#endif
+
+/* The align round's drain-to-empty: applied as a constant of whichever boot
+ * enables it (the aggregation arm's four phases all run with it), so the
+ * aggregation operating point stays the sheet's single variable and drain's
+ * own account comes from the census counters (perf rxrel drain=). */
+#ifndef WLAN8189_PUMP_DRAIN
+#define WLAN8189_PUMP_DRAIN	0
 #endif
 
 /* which arm leads: 0 = control on the odd phases (default), 1 = treatment */
@@ -326,6 +336,9 @@ struct wlan8189_phase_ident {
 	unsigned int	data_us;
 	unsigned int	agg;
 	int		yield;
+	int		irq;
+	int		prio;
+	int		drain;
 };
 
 /*
@@ -344,6 +357,9 @@ phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
 	wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
 	wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_BASE );
 	wlan8189_pump_yield_set( 0 );
+	(void)wlan8189_irq_set( 0 );
+	(void)wlan8189_pump_prio_set( 0 );
+	(void)wlan8189_pump_drain_set( WLAN8189_PUMP_DRAIN );
 	id->poll_us = wlan8189_dwc_poll_set( WLAN8189_DWC_POLL_STOCK_US );
 	id->data_us = wlan8189_dwc_data_set( WLAN8189_DWC_DATA_BASE_US );
 
@@ -374,11 +390,33 @@ phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
 		id->data_us = wlan8189_dwc_data_set(
 		    WLAN8189_DWC_DATA_TREAT_US );
 	}
+#elif WLAN8189_LEVER == WLAN8189_LEVER_IRQ
+	/* the card interrupt replaces the poll's discovery role; the cadence
+	 * stays on the same adaptive baseline the other levers run under (in
+	 * interrupt mode the period degrades to the lost-line backstop) */
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	if( treatment ) {
+		(void)wlan8189_irq_set( 1 );
+	}
+#elif WLAN8189_LEVER == WLAN8189_LEVER_WAKE
+	/* the wake chain without the card interrupt: the pump moves into the
+	 * driver threads' band, so an AVAL/OQT wake-up does not wait behind
+	 * them. Independent of the IRQ lever by construction (it never touches
+	 * the interrupt line). */
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	if( treatment ) {
+		(void)wlan8189_pump_prio_set( 1 );
+	}
 #else
 #error "WLAN8189_LEVER is not a known lever"
 #endif
 	id->agg = wlan8189_agg_get();
 	id->yield = wlan8189_pump_yield_get();
+	id->irq = wlan8189_irq_get();
+	id->prio = wlan8189_pump_prio_get();
+	id->drain = wlan8189_pump_drain_get();
 }
 
 /* The ready line: one shape for both sheets. The downlink's stays the original
@@ -390,10 +428,11 @@ phase_print_ready( const char *sheet, unsigned int phase, int treatment,
 {
 
 	LOG_ANCHOR( "wlan8189: %sphase %u ready lever=%u arm=%c pump=%s "
-	    "poll_us=%u data_us=%u agg=0x%04x yield=%d lps=%d\n",
+	    "poll_us=%u data_us=%u agg=0x%04x yield=%d lps=%d irq=%d prio=%d "
+	    "drain=%d\n",
 	    sheet, phase, (unsigned)WLAN8189_LEVER, treatment ? 'B' : 'A',
 	    id->pump, id->poll_us, id->data_us, id->agg, id->yield,
-	    wlan8189_ps_get() );
+	    wlan8189_ps_get(), id->irq, id->prio, id->drain );
 }
 
 /* ------------------------------------------------------------------ */
