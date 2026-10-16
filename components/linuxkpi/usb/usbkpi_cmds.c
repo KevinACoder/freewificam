@@ -73,8 +73,8 @@ usbkpi_arg(const char *s, unsigned int def, unsigned int max)
 	return v != 0 ? v : def;
 }
 
-/* minilibc has no strtoul: a 1/8-digit hex parser for the forensics
- * commands (peek/find) */
+/* a 1/8-digit hex parser for the forensics commands (peek/find), kept local
+ * rather than reaching across the libc seam for strtoul */
 static unsigned long
 usbkpi_hex(const char *s, unsigned long def)
 {

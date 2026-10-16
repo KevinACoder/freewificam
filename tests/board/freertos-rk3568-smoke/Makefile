@@ -10,8 +10,9 @@
 # Product: build/freertos.bin - the flat raw binary loaded with
 # `tftp 0xa000000 freertos.bin` and entered with `go 0xa000000`.
 #
-# The image is freestanding (-nostdlib): the C library surface it links
-# against is os/baremetal (memops + the printf integer subset).
+# The C library surface comes from the toolchain's newlib (-lc -lgcc -lnosys);
+# the image's own printf component is bound to the libc names through
+# os/baremetal/printf_bind.c.
 #
 # `make check` runs the build-side gates: the board configuration must carry
 # no host-only key, the arch/board layers must include no kernel header, the
@@ -64,7 +65,8 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
 	-Wl,--gc-sections \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
 
 APP_SRCS := \
 	$(CURDIR)/main.c \
@@ -76,8 +78,8 @@ APP_SRCS := \
 	$(ROOT)/arch/aarch64/mmu.c \
 	$(ROOT)/arch/aarch64/cache.c \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c
 
 KERNEL_SRCS := \
 	$(KERNEL)/tasks.c \
@@ -89,8 +91,8 @@ KERNEL_SRCS := \
 
 ALL_SRCS := $(APP_SRCS) $(KERNEL_SRCS)
 # The vendored formatter engine (components/printf, mpaland): the freestanding
-# image formats only through this engine, bound in os/threadx... os/baremetal/
-# minilibc.c. Float and exponential rendering are compiled out - the build is
+# image formats only through this engine, bound to the C library's printf names
+# by os/baremetal/printf_bind.c. Float rendering is compiled out - the build
 # -mgeneral-regs-only and has no FP state.
 PRINTF_SRCS := $(ROOT)/components/printf/printf.c
 PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL

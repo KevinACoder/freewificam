@@ -5,9 +5,10 @@
  * The SDIO engine (linuxkpi_sdio.c) speaks Linux semantics to its callers and
  * reaches the card through this narrow interface only: bring the card up and
  * report what it is, tear it down, one direct register transfer, one extended
- * transfer, one block-size configuration, and one look at the pending-interrupt
- * word. The seam carries no register, ring, DMA or command-number vocabulary -
- * a backend is anything that can enumerate a card and move bytes to and from it.
+ * transfer, one block-size configuration, one look at the pending-interrupt
+ * word, and one card-interrupt mode switch. The seam carries no register,
+ * ring, DMA or command-number vocabulary - a backend is anything that can
+ * enumerate a card and move bytes to and from it.
  *
  * Implementations:
  *   - the host mock suite plugs in a synthetic card model (the Gate 1 shape:
@@ -104,6 +105,13 @@ struct lkpi_sdio_be_ops {
 	int	(*set_block_size)(void *ctx, unsigned int func, unsigned int size);
 	/* Report which I/O functions have a pending interrupt. */
 	int	(*irq_pending)(void *ctx, u8 *pending);
+	/* Switch the card-interrupt line on or off. The backend must have wired
+	 * the card's upcall to the engine's lkpi_sdio_pump_notify() at bring-up
+	 * (its own choice of mechanism); this entry arms or masks the line, and
+	 * the engine calls it with enable=1 again after each pump cycle as the
+	 * re-arm. A backend without a card-interrupt path leaves this NULL, and
+	 * the engine's requests are then refused with -LKPI_SDIO_BE_ERR_HOST. */
+	int	(*card_irq_mode)(void *ctx, unsigned int enable);
 };
 
 /* install the backend (the host mock harness and the target bring-up call this
@@ -123,5 +131,6 @@ int	lkpi_sdio_be_io_extended(unsigned int func, unsigned int addr, void *buf,
 	    unsigned int count, unsigned int flags);
 int	lkpi_sdio_be_set_block_size(unsigned int func, unsigned int size);
 int	lkpi_sdio_be_irq_pending(u8 *pending);
+int	lkpi_sdio_be_card_irq_mode(unsigned int enable);
 
 #endif /* LKPI_SDIO_BACKEND_H */

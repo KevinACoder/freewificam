@@ -137,6 +137,59 @@ cmd_wlan8189(int argc, char **argv)
 		wlan8189_dwc_show();
 		return 0;
 	}
+	if (strcmp(argv[1], "irq") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "show") != 0)
+			(void)wlan8189_irq_set(strcmp(argv[2], "on") == 0);
+		wlan8189_irq_show();
+		return 0;
+	}
+	if (strcmp(argv[1], "plan") == 0) {
+		/* the runtime single-variable comparison (see the header): set
+		 * before the sheet reaches its phases, cleared by `plan clear` */
+		static const struct {
+			const char	*name;
+			int		key;
+		} keys[] = {
+			{ "agg_timeout", WLAN8189_PLAN_AGG_TIMEOUT },
+			{ "agg_len", WLAN8189_PLAN_AGG_LEN },
+			{ "poll_us", WLAN8189_PLAN_POLL_US },
+			{ "data_us", WLAN8189_PLAN_DATA_US },
+			{ "pump", WLAN8189_PLAN_PUMP },
+			{ "yield", WLAN8189_PLAN_YIELD },
+			{ "prio", WLAN8189_PLAN_PRIO },
+		};
+		unsigned int i;
+
+		if (argc >= 3 && strcmp(argv[2], "clear") == 0) {
+			wlan8189_plan_clear();
+			csh_printf(csh, "wlan8189: plan cleared\n");
+			return 0;
+		}
+		if (argc >= 5) {
+			for (i = 0U; i < sizeof(keys) / sizeof(keys[0]); i++) {
+				if (strcmp(argv[2], keys[i].name) == 0) {
+					int rc = wlan8189_plan_set(keys[i].key,
+					    (unsigned int)strtoul(argv[3], NULL, 0),
+					    (unsigned int)strtoul(argv[4], NULL, 0));
+
+					if (rc == 0)
+						csh_printf(csh, "wlan8189: plan %s "
+						    "base=%u treat=%u\n", argv[2],
+						    (unsigned int)strtoul(argv[3], NULL, 0),
+						    (unsigned int)strtoul(argv[4], NULL, 0));
+					else
+						csh_printf(csh, "wlan8189: plan %s "
+						    "rejected\n", argv[2]);
+					return 0;
+				}
+			}
+			csh_printf(csh, "wlan8189: plan: unknown key %s\n", argv[2]);
+			return 0;
+		}
+		csh_printf(csh, "usage: wlan8189 plan <key> <base> <treat> | plan clear\n"
+		    "  keys: agg_timeout agg_len poll_us data_us pump yield prio\n");
+		return 0;
+	}
 	if (strcmp(argv[1], "uplink") == 0) {
 		unsigned int peer = 0U;
 
@@ -175,13 +228,15 @@ cmd_wlan8189(int argc, char **argv)
 		   "ps [show|lps-mode]|ps ips <mode>|rate|"
 		   "pump [show|fixed|adaptive|yield|noyield]|"
 		   "agg [show|<size-kb>|timeout <units>]|"
-		   "dwc [show|<poll-us>|data <us>]|uplink <a.b.c.d>|"
+		   "dwc [show|<poll-us>|data <us>]|irq [show|on|off]|"
+		   "plan <key> <base> <treat>|plan clear|"
+		   "uplink <a.b.c.d>|"
 		   "ap start <ssid> [ch]|ap stop]\n");
 	return 0;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
-			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc|uplink|ap]",
+			  "wlan8189 [status|probe|scan|census|ps|rate|pump|agg|dwc|irq|plan|uplink|ap]",
 			  "wlan8189 status - whether the driver attached and how many BSS rows are held;\n"
 			  "wlan8189 probe - bring the bus and the card up and run the driver's probe;\n"
 			  "wlan8189 scan - ask the driver for a scan and print the table it reports\n"
@@ -192,6 +247,7 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan8189, wlan8189,
 			  "wlan8189 pump [show|fixed|adaptive|yield|noyield] - SDIO pump cadence and fairness\n"
 			  "wlan8189 agg [show|<size-kb>|timeout <units>] - card RX aggregation length/timeout\n"
 			  "wlan8189 dwc [show|<poll-us>|data <us>] - host controller command/data poll step\n"
+			  "wlan8189 irq [show|on|off] - card interrupt (DAT1) event mode vs the polling pump\n"
 			  "wlan8189 uplink <a.b.c.d> - the peer the uplink stage's iperf client sends to\n"
 			  "wlan8189 ap start <ssid> [ch] - run the interface as an open access point\n"
 			  "wlan8189 ap stop - leave access-point mode\n")

@@ -105,7 +105,8 @@ ifeq ($(WLAN_SINGLE),1)
 BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
 endif
 
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h \
+CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1 \
 	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0
 ASM_CFLAGS := $(BASE_CFLAGS)
 
@@ -194,7 +195,8 @@ WLAN_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-I$(ROOT) -I$(LKPI) -I$(LKPI)/include -I$(DRV) \
 	-I$(CMSIS)/CMSIS/RTOS2/Include -Wno-unused-parameter \
 	-Wno-address-of-packed-member \
-	-include $(ROOT)/os/baremetal/minilibc.h
+	-include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1
 
 # --- WPA domain flag sets ----------------------------------------------------
 #
@@ -218,7 +220,7 @@ WPA_CFG := -include stdarg.h -include $(WPA_PORT)/wpa_port_config.h \
 
 # the imported supplicant compiles as vendored (frozen import, its own -w);
 # the port layer and the command compile warning-honest on top of the WLAN
-# key set (target branches of osal, minilibc prelude)
+# key set (target branches of osal, the libc prelude)
 WPA_VENDOR_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -w \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
 	$(WPA_CFG) $(WPA_INC)
@@ -264,7 +266,8 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-u,wlan_seam_adapter_init \
 	-Wl,-u,wlan_wpa_vendor_init \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
 
 # --- compile set -------------------------------------------------------------
 
@@ -277,8 +280,8 @@ BASE_SRCS := \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
 	$(ROOT)/board/rk3568-itx/reset.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
@@ -607,9 +610,7 @@ $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-# the freestanding libc completion block (abs and friends) is part of this
 # image's C surface: the driver and stack reference the symbols
-$(eval $(call COMPILE_RULE,$(ROOT)/os/baremetal/minilibc.c,-DCONFIG_LIBC_COMPLETION))
 $(foreach s,$(USB_BOARD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(USB_STACK_SRCS),$(eval $(call COMPILE_RULE,$(s),$(USB_INCLUDES))))
 $(foreach s,$(NET80211_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WLAN_BSD_CFLAGS))))

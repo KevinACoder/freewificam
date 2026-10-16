@@ -61,7 +61,7 @@
 #include "os/cmsis2/cmsis2.h"
 #include "gicv3.h"
 #include "log.h"
-#include "minilibc.h"
+#include <string.h>
 
 #include "board_conf.h"
 #include "mmio.h"

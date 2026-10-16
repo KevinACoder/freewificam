@@ -54,14 +54,59 @@ unsigned int	wlan8189_dwc_data_set(unsigned int us);
  * show prints the effective policy and the controller's current period */
 void	wlan8189_pump_show(void);
 int	wlan8189_pump_set(const char *policy);
+const char *wlan8189_pump_policy_get(void);
 
 /* the pump's fairness yield (see lkpi_sdio.h): when on, a pump cycle stands
  * aside for a driver thread already parked on the bus claim */
 void	wlan8189_pump_yield_set(int on);
 int	wlan8189_pump_yield_get(void);
 
+/* the wake-chain knobs (the align round's second arm): prio moves the pump
+ * into or out of the driver threads' normal band; drain keeps a cycle
+ * dispatching while the card still reports pending work */
+int	wlan8189_pump_prio_set(int normal);
+int	wlan8189_pump_prio_get(void);
+int	wlan8189_pump_drain_set(int on);
+int	wlan8189_pump_drain_get(void);
+
+/* the card-interrupt mode (the align round's lever): on means the card's own
+ * DAT1 events wake the pump and the period is a backstop; off is the polling
+ * cadence. set returns the effective state, or a negative seam error when the
+ * backend carries no card-interrupt path; the notify/wake counters print in
+ * the census (D pumpirq) and the controller's entry counters in A dwc_cardirq */
+int	wlan8189_irq_set(int on);
+int	wlan8189_irq_get(void);
+void	wlan8189_irq_show(void);
+
 /* the console sink's line accounting (counted in main.c, read by the census) */
 void	wlan8189_census_log_get(unsigned long *in_lines, unsigned long *in_bytes,
 	    unsigned long *out_lines, unsigned long *out_bytes);
+
+/* The phase plan: one runtime-set single-variable comparison the four-phase
+ * sheet runs instead of its compiled-in lever. The sheet's phase routine
+ * re-asserts the full baseline every phase, so a bare runtime command would be
+ * overwritten before the measurement window - the plan is applied by the same
+ * routine, at the same boundary, and read back in the same phase line. A boot
+ * without a plan behaves exactly as the compiled lever says; the plan exists so
+ * one boot can sweep a knob the compile-time levers never carried.
+ *
+ * key: plan_agg_timeout / plan_agg_len / plan_poll_us / plan_data_us /
+ *      plan_pump (0 = fixed, 1 = adaptive) / plan_yield / plan_prio.
+ * set(key, base, treat): the base value is what the control phases run, the
+ * treatment value what the treatment phases run (the sheet picks which phases
+ * those are, exactly as for a compiled lever). Returns 0 on acceptance. */
+#define	WLAN8189_PLAN_AGG_TIMEOUT	1
+#define	WLAN8189_PLAN_AGG_LEN		2
+#define	WLAN8189_PLAN_POLL_US		3
+#define	WLAN8189_PLAN_DATA_US		4
+#define	WLAN8189_PLAN_PUMP		5
+#define	WLAN8189_PLAN_YIELD		6
+#define	WLAN8189_PLAN_PRIO		7
+int	wlan8189_plan_set(int key, unsigned int base, unsigned int treat);
+void	wlan8189_plan_clear(void);
+/* the per-phase application: treatment != 0 applies the plan's treatment
+ * value, otherwise its base. Returns the plan key actually applied, or 0 when
+ * no plan is set (the caller then uses its compiled lever). */
+int	wlan8189_plan_apply(int treatment);
 
 #endif /* WLAN8189_CENSUS_H */

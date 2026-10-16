@@ -123,6 +123,52 @@ endif
 ifneq ($(DWC_DATA_BASE_US),)
 LEVER_CFLAGS += -DWLAN8189_DWC_DATA_BASE_US=$(DWC_DATA_BASE_US)
 endif
+# The align round's pump drain-to-empty: a constant of the boot it is enabled
+# in (the aggregation operating-point arm runs with it on), not a phase lever -
+# its own account travels in the census counters (perf rxrel drain=). 
+ifneq ($(DRAIN),)
+LEVER_CFLAGS += -DWLAN8189_PUMP_DRAIN=1
+endif
+# The stack-side levers below ride the guarded options in
+# ports/lwip/include/lwipopts.h (every one is #ifndef-wrapped, so a -D wins)
+# and patch 0003's watermark. They are whole-boot constants like DRAIN - the
+# receive service question is about the stack's shape, not about a per-phase
+# SDIO register - so each boot carries one and the phases stay A/B/A/B over
+# the sheet's own lever.
+#
+# Input on the caller's thread under the core lock (CORELOCKIN=1), instead of
+# one mailbox post per frame plus a thread switch. This project's wired line
+# measured it at +13% up and +22% down with zero loss; the SDIO driver's
+# receive indication runs on the linuxkpi workqueue thread (not under the
+# bus claim - the claim contract forbids handlers claiming), so the flip has
+# no claim-recursion shape here.
+ifneq ($(CORELOCKIN),)
+LEVER_CFLAGS += -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+endif
+# Delayed-ACK watermark (ACKDELAY=N; patch 0003, default 2 = upstream). The
+# per-frame ACK cost is the downlink's largest single term in the wired
+# measurements; on this line the ACK stream is also what paces the peer, so a
+# higher watermark trades feedback latency for fewer ACK frames - measured,
+# not assumed.
+ifneq ($(ACKDELAY),)
+LEVER_CFLAGS += -DLWIP_TCP_ACK_DELAY_SEGMENTS=$(ACKDELAY)
+endif
+# Receive-window lever (WND=<bytes>). The window must fit the receive path's
+# buffer depth: a window larger than the driver's RX ring lets the peer put
+# more frames in flight than the DMA can hold (wire-measured on this line:
+# 512 KiB across a 128-slot ring overflowed the card's FIFO and collapsed the
+# downlink once the ACK stream stopped pacing the peer). The default stays
+# 524288; a treatment value below it is the safe direction on this line.
+ifneq ($(WND),)
+LEVER_CFLAGS += -DTCP_WND=$(WND)
+endif
+# TCP send-buffer lever (SNDBUF=<bytes>), with the queue length following the
+# 4*SND_BUF/MSS floor. Uplink-side lever, kept here so both directions can be
+# re-measured from one image build.
+ifneq ($(SNDBUF),)
+LEVER_CFLAGS += -DTCP_SND_BUF=$(SNDBUF) \
+	-DTCP_SND_QUEUELEN=$(shell echo $$(( $(SNDBUF) / 365 + 2 )))
+endif
 # The throughput census is this image's: the instrumented layers (linuxkpi
 # core/SDIO engine/osdep, the SDIO port, the controller driver, the netif
 # adapter, the console sink) carry their counters behind this key, and every
@@ -138,7 +184,14 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DCMSIS2_BACKEND_THREADX \
 	-DSHELL_PORT_HOST='"rk3568"'
 
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
+# The C library surface comes from the toolchain's newlib now, so the
+# force-include names its standard headers: the vendored shell core calls
+# strnlen without a prototype of its own, the console command builds lines
+# with snprintf, and every translation unit may use the string/memory
+# primitives without carrying an include. Assembly files do not take the C
+# headers.
+CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
+	-include stdlib.h -D_DEFAULT_SOURCE=1
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream
@@ -249,7 +302,8 @@ DRV_CFLAGS := -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector \
 	-I$(LKPI) -I$(LKPI)/include -I$(DRV) -I$(DRV)/include -I$(DRV)/platform \
 	-I$(DRV)/hal/phydm -I$(DRV)/hal/btc \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
-	-include $(ROOT)/os/baremetal/minilibc.h
+	-include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1
 
 # --- linuxkpi runtime face ---------------------------------------------------
 #
@@ -359,7 +413,14 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-u,lkpi_sdio_be_card_init \
 	-Wl,-u,lkpi_module_init_run \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
+
+# The C library comes from the toolchain's newlib now: the string and memory
+# families come from libc.a (its memcpy is the wide LDP/STP implementation,
+# size-branched) and libnosys.a carries the syscall stubs nothing here calls.
+# The image's own printf stack (components/printf) stays bound through
+# os/baremetal/printf_bind.c - the log surface's anchors are its contract.
 
 # --- compile set -------------------------------------------------------------
 
@@ -372,8 +433,8 @@ BASE_SRCS := \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
 	$(ROOT)/board/rk3568-itx/reset.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
@@ -669,9 +730,7 @@ $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 endef
 
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
-# minilibc.c carries its own rule below (the completion block); leaving it out
-# of this loop keeps make from warning about a second recipe for its object.
-$(foreach s,$(filter-out $(ROOT)/os/baremetal/minilibc.c,$(BASE_SRCS)),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(filter-out $(WLAN8189_CASE_SRCS),$(SHELL_SRCS) $(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),)))
@@ -683,9 +742,6 @@ $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_dataplane.c,$(WLAN8189_DATAP
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_ap.c,$(WLAN8189_AP_CFLAGS)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-# the freestanding libc completion block (abs and friends) is part of this
-# image's C surface: the imported units and the driver reference the symbols
-$(eval $(call COMPILE_RULE,$(ROOT)/os/baremetal/minilibc.c,-DCONFIG_LIBC_COMPLETION))
 $(foreach s,$(SDIO_VENDOR_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SDIO_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(LKPI_RT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LKPI_RT_CFLAGS))))

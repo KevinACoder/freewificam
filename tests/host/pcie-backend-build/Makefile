@@ -24,7 +24,7 @@
 #              arch ITS/MSI units, the board PCIe/NVMe drivers and their headers,
 #              and the contract unit) carries exactly one SPDX form
 #              (BSD-3-Clause) and no license text has been copied from elsewhere.
-#              The pre-existing port TUs (gicv3.c, cache.c, log.c, minilibc.c) are
+#              The pre-existing port TUs (gicv3.c, cache.c, log.c, printf_bind.c) are
 #              repository files with their own provenance and are not scanned.
 #   gates      the kernel-isolation gates over the built objects and the
 #              author-side sources, with their canary proofs.
@@ -32,7 +32,7 @@
 # The "port TUs" are the base-layer translation units this line's headers bridge
 # onto: arch/aarch64/gicv3.c (the IRQ registry behind the CMSIS IRQ_* bridge),
 # cache.c (the cache maintenance the NVMe driver calls) and
-# os/baremetal/{log,minilibc}.c (the console sink and the formatter).
+# os/baremetal/{log,printf_bind}.c (the console sink and the formatter binding).
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 ROOT  := $(abspath $(MAKEFILE_DIR)/../../..)
@@ -67,7 +67,7 @@ PORT_SRCS := \
 	$(ARCH)/gicv3.c \
 	$(ARCH)/cache.c \
 	$(OSBM)/log.c \
-	$(OSBM)/minilibc.c
+	$(OSBM)/printf_bind.c
 
 SRCS := $(LINE_SRCS) $(PORT_SRCS)
 

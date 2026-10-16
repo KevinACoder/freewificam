@@ -46,6 +46,8 @@
 #include "lwip/sys.h"
 #include "lwip/err.h"
 
+#include "sys_mbox_seam.h"
+
 #include "os/cmsis2/cmsis2.h"
 
 /* --- time ------------------------------------------------------------------- */
@@ -177,6 +179,23 @@ void sys_sem_free(sys_sem_t *sem)
 
 /* --- mailboxes (queues of one pointer) ---------------------------------------- */
 
+/*
+ * The mailbox traffic account (see sys_mbox_seam.h): the per-frame handoff
+ * question - was this frame posted to the TCP/IP thread or run in place - is
+ * answered by how many posts happen, and no lwIP stock counter records that
+ * (the memp figure is a pool gauge from the caller's alloc, and the sys-stats
+ * mbox fields were never wired). Counted at the mailbox entry points so every
+ * caller is covered.
+ */
+static struct sys_mbox_seam sys_mbox_seam_state;
+
+void
+sys_mbox_seam_get(struct sys_mbox_seam *out)
+{
+
+	*out = sys_mbox_seam_state;
+}
+
 err_t sys_mbox_new(sys_mbox_t *mbox, int size)
 {
 	if (size <= 0) {
@@ -198,8 +217,12 @@ void sys_mbox_post(sys_mbox_t *mbox, void *msg)
 
 err_t sys_mbox_trypost(sys_mbox_t *mbox, void *msg)
 {
-	return (osMessageQueuePut(mbox->mbx, &msg, 0u, 0u) == osOK)
-	       ? ERR_OK : ERR_MEM;
+	if (osMessageQueuePut(mbox->mbx, &msg, 0u, 0u) == osOK) {
+		sys_mbox_seam_state.post_ok++;
+		return ERR_OK;
+	}
+	sys_mbox_seam_state.post_full++;
+	return ERR_MEM;
 }
 
 err_t sys_mbox_trypost_fromisr(sys_mbox_t *mbox, void *msg)
@@ -222,6 +245,9 @@ u32_t sys_arch_mbox_fetch(sys_mbox_t *mbox, void **msg, u32_t timeout)
 	if (st != osOK) {
 		return SYS_ARCH_TIMEOUT;
 	}
+	sys_mbox_seam_state.fetch_ok++;
+	sys_mbox_seam_state.fetch_wait_ms +=
+	    (unsigned long long)sys_arch_ticks_to_ms(osKernelGetTickCount() - start);
 	if (msg != NULL) {
 		*msg = got;
 	}
@@ -235,8 +261,10 @@ u32_t sys_arch_mbox_tryfetch(sys_mbox_t *mbox, void **msg)
 	/* Genuinely non-blocking: a nonzero timeout here would sleep the tcpip
 	 * thread on every poll. */
 	if (osMessageQueueGet(mbox->mbx, &got, NULL, 0u) != osOK) {
+		sys_mbox_seam_state.fetch_empty++;
 		return SYS_MBOX_EMPTY;
 	}
+	sys_mbox_seam_state.fetch_ok++;
 	if (msg != NULL) {
 		*msg = got;
 	}

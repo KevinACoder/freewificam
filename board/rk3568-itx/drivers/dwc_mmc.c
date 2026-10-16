@@ -23,8 +23,13 @@
 #include "log.h"
 
 #include "arch_asm.h"
+/* the board's IRQ-priority policy sits one level up; the relative form keeps
+ * the host build-shape suites (which compile this driver without the board
+ * directory on their include path) working off the same header */
+#include "../board_conf.h"
 #include "cache.h"
 #include "generic_timer.h"
+#include "gicv3.h"
 #include "mmio.h"
 
 #include "dwc_mmc.h"
@@ -319,7 +324,7 @@ static void dwc_mmc_reprogram(struct dwc_mmc *hc)
 	uintptr_t base = hc->cfg.base;
 
 	mmio_wr32(base + DWC_MMC_CTRL, DWC_MMC_CTRL_INT_ENABLE | DWC_MMC_CTRL_USE_IDMAC);
-	mmio_wr32(base + DWC_MMC_RINTSTS, DWC_MMC_INT_ALL);
+	mmio_wr32(base + DWC_MMC_RINTSTS, DWC_MMC_INT_ALL_BUT_SDIO);
 	mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
 	mmio_wr32(base + DWC_MMC_FIFOTH,
 		  DWC_MMC_FIFOTH_MSIZE(6) | DWC_MMC_FIFOTH_RX_WMARK(0x7fu) |
@@ -440,7 +445,7 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 		dwc_mmc_udelay(dwc_mmc_poll_us);
 	}
 
-	mmio_wr32(base + DWC_MMC_RINTSTS, DWC_MMC_INT_ALL);
+	mmio_wr32(base + DWC_MMC_RINTSTS, DWC_MMC_INT_ALL_BUT_SDIO);
 	mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
 
 	mmio_wr32(base + DWC_MMC_CMDARG, cmd->arg);
@@ -470,18 +475,18 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	if (loop == 0U) {
 		LOG_ERROR("dwc_mmc: CMD%u timed out (rintsts=0x%x)\n", cmd->index, mask);
 		dwc_mmc_dump_state(hc);
-		mmio_wr32(base + DWC_MMC_RINTSTS, mask);
+		mmio_wr32(base + DWC_MMC_RINTSTS, mask & ~(uint32_t)DWC_MMC_INT_SDIO);
 		return DWC_MMC_ERR_TIMEOUT;
 	}
 
 	if ((mask & DWC_MMC_INT_RTO) != 0U) {
-		mmio_wr32(base + DWC_MMC_RINTSTS, mask);
+		mmio_wr32(base + DWC_MMC_RINTSTS, mask & ~(uint32_t)DWC_MMC_INT_SDIO);
 		return DWC_MMC_ERR_TIMEOUT;
 	}
 
 	if ((mask & DWC_MMC_INT_RE) != 0U) {
 		LOG_ERROR("dwc_mmc: CMD%u response error (rintsts=0x%x)\n", cmd->index, mask);
-		mmio_wr32(base + DWC_MMC_RINTSTS, mask);
+		mmio_wr32(base + DWC_MMC_RINTSTS, mask & ~(uint32_t)DWC_MMC_INT_SDIO);
 		return DWC_MMC_ERR_CMD;
 	}
 
@@ -716,7 +721,7 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 			LOG_ERROR("dwc_mmc: CMD%u data error (rintsts=0x%x r5=0x%x)\n",
 				  cmd->index, mask, cmd->response[0]);
 			dwc_mmc_dump_state(hc);
-			mmio_wr32(base + DWC_MMC_RINTSTS, mask);
+			mmio_wr32(base + DWC_MMC_RINTSTS, mask & ~(uint32_t)DWC_MMC_INT_SDIO);
 			mmio_wr32(base + DWC_MMC_IDSTS, DWC_MMC_INT_ALL);
 			return DWC_MMC_ERR_DATA;
 		}
@@ -753,11 +758,11 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 		LOG_ERROR("dwc_mmc: CMD%u data timeout (rintsts=0x%x r5=0x%x)\n",
 			  cmd->index, mask, cmd->response[0]);
 		dwc_mmc_dump_state(hc);
-		mmio_wr32(base + DWC_MMC_RINTSTS, mask);
+		mmio_wr32(base + DWC_MMC_RINTSTS, mask & ~(uint32_t)DWC_MMC_INT_SDIO);
 		return DWC_MMC_ERR_TIMEOUT;
 	}
 
-	mmio_wr32(base + DWC_MMC_RINTSTS, mask);
+	mmio_wr32(base + DWC_MMC_RINTSTS, mask & ~(uint32_t)DWC_MMC_INT_SDIO);
 
 	if (!cmd->data->write) {
 		int ret = dwc_mmc_wait_idmac_rx(hc);
@@ -885,6 +890,12 @@ void dwc_mmc_deinit(struct dwc_mmc *hc)
 {
 	if (hc == NULL) {
 		return;
+	}
+
+	/* the card interrupt goes first: mask it at the controller and drop the
+	 * GIC line, so the handler cannot run against a torn-down instance */
+	if (hc->card_irq_registered) {
+		dwc_mmc_card_irq_enable(hc, false);
 	}
 
 	if (hc->ready) {
@@ -1031,4 +1042,132 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	}
 
 	return ret;
+}
+
+/* --- card interrupt (DAT1) ------------------------------------------------ */
+
+/*
+ * The path: the card pulls DAT1 low while its own interrupt status is
+ * non-zero (its CCCR interrupt-enable master and function bits are written by
+ * sdio_claim_irq); the controller samples that line in the interrupt periods
+ * the TRM lists (card idle, non-data commands, between data blocks) and
+ * reflects it as RINTSTS[24]; with the mask bit set the GIC line asserts.
+ *
+ * The ISR's whole job is "something happened, wake the pump". The card
+ * releases DAT1 only when its interrupt status is read and cleared over the
+ * bus - transfers, and therefore a thread. So the ISR masks the controller
+ * bit first (a level-held line would otherwise storm the GIC while the
+ * consumer works), clears the raw status bit, and calls the consumer's
+ * callback; the consumer re-enables the mask through
+ * dwc_mmc_card_irq_enable() once the card has been serviced.
+ *
+ * The ISR touches nothing else. The IDMAC completion bits (IDSTS) belong to
+ * the polling data path - clearing them from here would steal a completion
+ * its wait loops are about to read, and the prior line's interrupt round
+ * measured exactly that failure (armed card interrupt, every CMD53 timed
+ * out). But those bits share this interrupt line and are not gated by the
+ * controller's mask register: the first board round with this path armed
+ * counted ~5.2e5 entries without the card bit in one 20 s phase (~173 per
+ * receive transfer - the whole polled window). So a status word without the
+ * card bit stands the line down (mask + GIC disable) and the pump's next
+ * re-arm brings it back; the census counts both classes.
+ */
+static void dwc_mmc_card_isr(void *arg)
+{
+	struct dwc_mmc *hc = (struct dwc_mmc *)arg;
+	uintptr_t base = hc->cfg.base;
+	uint32_t status = mmio_rd32(base + DWC_MMC_RINTSTS);
+
+	if ((status & DWC_MMC_INT_SDIO) == 0U) {
+		/*
+		 * Not ours. The IDMAC's completion bits share this interrupt line
+		 * and are not gated by the controller's mask register, so a data
+		 * transfer in flight asserts it while the polled wait is about to
+		 * read IDSTS. Standing the line down here - and letting the pump's
+		 * next cycle re-arm it - costs nothing: the RX wait keeps its own
+		 * IDSTS read, and a card event that arrived in this window (the
+		 * controller does not even sample DAT1 during a data transfer)
+		 * is found by the pump's pending-word read either way.
+		 */
+#ifdef CONFIG_LKPI_CENSUS
+		dwc_mmc_census_state.card_irq_spurious++;
+#endif
+		hc->card_irq_armed = false;
+		mmio_wr32(base + DWC_MMC_INTMASK,
+			  mmio_rd32(base + DWC_MMC_INTMASK) &
+				  ~(uint32_t)DWC_MMC_INT_SDIO);
+		if (hc->card_irq_registered) {
+			(void)irq_disable((uint32_t)hc->cfg.intid);
+		}
+		return;
+	}
+
+#ifdef CONFIG_LKPI_CENSUS
+	dwc_mmc_census_state.card_irq_entries++;
+#endif
+
+	hc->card_irq_armed = false;
+	mmio_wr32(base + DWC_MMC_INTMASK,
+		  mmio_rd32(base + DWC_MMC_INTMASK) & ~(uint32_t)DWC_MMC_INT_SDIO);
+	mmio_wr32(base + DWC_MMC_RINTSTS, DWC_MMC_INT_SDIO);
+
+	if (hc->card_irq_cb != NULL) {
+		hc->card_irq_cb(hc->card_irq_arg);
+	}
+}
+
+int dwc_mmc_card_irq_arm(struct dwc_mmc *hc, void (*cb)(void *), void *arg)
+{
+	if ((hc == NULL) || (cb == NULL)) {
+		return DWC_MMC_ERR_ARG;
+	}
+	if (!hc->ready) {
+		return DWC_MMC_ERR_NOT_READY;
+	}
+
+	hc->card_irq_cb = cb;
+	hc->card_irq_arg = arg;
+
+	if (!hc->card_irq_registered) {
+		if (irq_register((uint32_t)hc->cfg.intid, dwc_mmc_card_isr, hc) != 0) {
+			LOG_ERROR("dwc_mmc: the GIC refused INTID %d\n", hc->cfg.intid);
+			hc->card_irq_cb = NULL;
+			hc->card_irq_arg = NULL;
+			return DWC_MMC_ERR_NOT_READY;
+		}
+		(void)irq_set_mode_level((uint32_t)hc->cfg.intid);
+		/* the callback wakes a thread, so the line sits at the port's
+		 * API-call ceiling - the same seam the GMAC and USB lines use */
+		(void)irq_set_priority((uint32_t)hc->cfg.intid,
+				       BOARD_IRQ_PRIORITY_API_CALL_RAW);
+		hc->card_irq_registered = true;
+	}
+
+	return DWC_MMC_OK;
+}
+
+void dwc_mmc_card_irq_enable(struct dwc_mmc *hc, bool enable)
+{
+	uintptr_t base;
+	uint32_t mask;
+
+	if ((hc == NULL) || (!hc->ready)) {
+		return;
+	}
+
+	base = hc->cfg.base;
+	mask = mmio_rd32(base + DWC_MMC_INTMASK);
+	if (enable) {
+		mmio_wr32(base + DWC_MMC_INTMASK, mask | DWC_MMC_INT_SDIO);
+		if (hc->card_irq_registered) {
+			(void)irq_enable((uint32_t)hc->cfg.intid);
+		}
+		hc->card_irq_armed = true;
+	} else {
+		mmio_wr32(base + DWC_MMC_INTMASK, mask & ~(uint32_t)DWC_MMC_INT_SDIO);
+		if (hc->card_irq_registered) {
+			(void)irq_disable((uint32_t)hc->cfg.intid);
+		}
+		hc->card_irq_armed = false;
+	}
 }

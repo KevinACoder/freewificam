@@ -72,7 +72,8 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
 	-Wl,--gc-sections \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
 
 # The port's fp_enable/fp_disable .c files are NOT built (no FP state exists
 # under -mgeneral-regs-only); the wildcard keeps them out by construction.
@@ -92,8 +93,8 @@ BASE_SRCS := \
 	$(ROOT)/arch/aarch64/cache.c \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
@@ -104,8 +105,8 @@ ALL_SRCS := $(TX_SRCS) $(BASE_SRCS)
 # Object names mirror the path below ROOT: the kernel and the port share flat
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide (198-TU precedent).
 # The vendored formatter engine (components/printf, mpaland): the freestanding
-# image formats only through this engine, bound in os/threadx... os/baremetal/
-# minilibc.c. Float and exponential rendering are compiled out - the build is
+# image formats only through this engine, bound to the C library's printf names
+# by os/baremetal/printf_bind.c. Float rendering is compiled out - the build
 # -mgeneral-regs-only and has no FP state.
 PRINTF_SRCS := $(ROOT)/components/printf/printf.c
 PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL

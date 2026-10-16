@@ -90,3 +90,12 @@ lkpi_sdio_be_irq_pending(u8 *pending)
 		return -LKPI_SDIO_BE_ERR_NOCARD;
 	return lkpi_sdio_be_ops->irq_pending(lkpi_sdio_be_ctx, pending);
 }
+
+int
+lkpi_sdio_be_card_irq_mode(unsigned int enable)
+{
+
+	if (lkpi_sdio_be_ops == NULL || lkpi_sdio_be_ops->card_irq_mode == NULL)
+		return -LKPI_SDIO_BE_ERR_HOST;
+	return lkpi_sdio_be_ops->card_irq_mode(lkpi_sdio_be_ctx, enable);
+}

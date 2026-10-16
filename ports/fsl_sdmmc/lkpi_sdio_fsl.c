@@ -1,6 +1,6 @@
 /*
  * @file   lkpi_sdio_fsl.c
- * @brief  The SDIO layer's backend over the imported SDIO stack: the six seam
+ * @brief  The SDIO layer's backend over the imported SDIO stack: the seven seam
  *         operations mapped onto the card service, with the host's length
  *         discipline absorbed here.
  *
@@ -45,6 +45,10 @@
  * each, and the imported units do not use any of the three in the first place.
  */
 #include "lkpi_sdio_backend.h"
+/* the engine's public face: the card-interrupt callback below wakes the pump
+ * through it (the port calling the component's own API is this stack's normal
+ * direction of dependency) */
+#include "linuxkpi_sdio.h"
 
 #include "fsl_common.h"
 #include "fsl_sdmmc.h"
@@ -149,6 +153,9 @@ lkpi_fsl_census_print(void)
 
 /* --- card bring-up -------------------------------------------------------- */
 
+/* Defined in the interrupts section below; registered with the card here. */
+static void lkpi_sdio_fsl_card_irq(void *arg);
+
 static int lkpi_sdio_fsl_card_init(void *ctx, struct lkpi_sdio_be_card_info *info)
 {
 	sdio_card_t *card;
@@ -162,6 +169,13 @@ static int lkpi_sdio_fsl_card_init(void *ctx, struct lkpi_sdio_be_card_info *inf
 	}
 
 	(void)memset(info, 0, sizeof(*info));
+
+	/* Register the card-interrupt upcall before the bring-up runs: the
+	 * stack reads the card's user parameter during SDIO_HostInit and hands
+	 * the record to the host. The line itself stays masked until the
+	 * engine asks for it through card_irq_mode - a boot that never asks is
+	 * the polling boot, bit for bit. */
+	sdmmc_card_int_set(lkpi_sdio_fsl_card_irq, NULL);
 
 	st = sdmmc_card_start();
 	if (st != kStatus_Success) {
@@ -207,8 +221,15 @@ static int lkpi_sdio_fsl_card_init(void *ctx, struct lkpi_sdio_be_card_info *inf
 
 static void lkpi_sdio_fsl_card_deinit(void *ctx)
 {
+	sdio_card_t *card = sdmmc_card();
+
 	(void)ctx;
 
+	/* the interrupt line comes down before the card does, so the ISR
+	 * cannot run against a card being torn down */
+	if (card != NULL) {
+		FDWMMCHOST_CardIntEnable(card->host, false);
+	}
 	sdmmc_card_stop();
 }
 
@@ -434,11 +455,42 @@ static int lkpi_sdio_fsl_irq_pending(void *ctx, u8 *pending)
 		return -LKPI_SDIO_BE_ERR_INVAL;
 	}
 
-	/* The card's own pending word, read over a direct transfer: this port polls,
-	 * so there is no interrupt line to wait on. */
+	/* The card's own pending word, read over a direct transfer: the card
+	 * interrupt only says "look", the word says which function wants what,
+	 * and this read happens under the pump's claim either way. */
 	st = SDIO_GetPendingInterrupt(card, pending);
 
 	return sdmmc_fsl_err(st);
+}
+
+/*
+ * The card interrupt (DAT1), interrupt context: the controller's ISR reaches
+ * this through the host glue and the stack's card-interrupt record, and its
+ * whole contract is "wake the engine's pump". The pump then reads the pending
+ * word above and runs the driver's handler under the claim; after the handler
+ * has cleared the card's interrupt status (which is what releases DAT1), the
+ * pump re-arms the line through the card_irq_mode op below.
+ */
+static void lkpi_sdio_fsl_card_irq(void *arg)
+{
+	(void)arg;
+
+	lkpi_sdio_pump_notify();
+}
+
+static int lkpi_sdio_fsl_card_irq_mode(void *ctx, unsigned int enable)
+{
+	sdio_card_t *card = sdmmc_card();
+
+	(void)ctx;
+
+	if (card == NULL) {
+		return -LKPI_SDIO_BE_ERR_NOCARD;
+	}
+
+	FDWMMCHOST_CardIntEnable(card->host, enable != 0U);
+
+	return 0;
 }
 
 /* --- installation --------------------------------------------------------- */
@@ -450,6 +502,7 @@ static const struct lkpi_sdio_be_ops lkpi_sdio_fsl_ops = {
 	.io_extended = lkpi_sdio_fsl_io_extended,
 	.set_block_size = lkpi_sdio_fsl_set_block_size,
 	.irq_pending = lkpi_sdio_fsl_irq_pending,
+	.card_irq_mode = lkpi_sdio_fsl_card_irq_mode,
 };
 
 void lkpi_sdio_fsl_install(void)

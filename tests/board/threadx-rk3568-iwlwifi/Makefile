@@ -108,7 +108,8 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DCMSIS2_BACKEND_THREADX \
 	-DSHELL_PORT_HOST='"rk3568"'
 
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h \
+CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1 \
 	-DLOG_CMD_WPA_KEY=2
 ASM_CFLAGS := $(BASE_CFLAGS)
 
@@ -222,7 +223,8 @@ DRV_CFLAGS := -std=gnu11 -O2 -ffreestanding -fno-builtin -fno-stack-protector \
 	-DLKPI_ABS_PLATFORM_PROVIDED $(SKB_POOL_CFLAGS) \
 	-I$(ROOT) -I$(LKPI) -I$(LKPI)/include -I$(DRV) \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
-	-include $(ROOT)/os/baremetal/minilibc.h
+	-include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1
 
 # --- WPA domain flag sets ----------------------------------------------------
 #
@@ -296,7 +298,7 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-u,lwip_stack_up \
 	-Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
-	-lgcc
+	-lc -lgcc -lnosys
 
 # --- compile set -------------------------------------------------------------
 
@@ -309,8 +311,8 @@ BASE_SRCS := \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
 	$(ROOT)/board/rk3568-itx/reset.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
@@ -624,9 +626,7 @@ $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 endef
 
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
-# minilibc.c carries its own rule below (the completion block); leaving it out
-# of this loop keeps make from warning about a second recipe for its object.
-$(foreach s,$(filter-out $(ROOT)/os/baremetal/minilibc.c,$(BASE_SRCS)),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ARCH_PCIE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(PCIE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(PCIE_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
@@ -647,9 +647,7 @@ $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-# the freestanding libc completion block (abs and friends) is part of this
 # image's C surface: the driver and stack reference the symbols
-$(eval $(call COMPILE_RULE,$(ROOT)/os/baremetal/minilibc.c,-DCONFIG_LIBC_COMPLETION))
 $(foreach s,$(NET80211_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WLAN_BSD_CFLAGS))))
 $(foreach s,$(NET80211_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WLAN_BSD_CFLAGS))))
 $(foreach s,$(BRIDGE_BSD_SRCS),$(eval $(call COMPILE_RULE,$(s),$(WLAN_BSD_CFLAGS))))

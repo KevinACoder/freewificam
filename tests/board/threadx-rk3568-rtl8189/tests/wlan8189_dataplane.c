@@ -46,6 +46,7 @@
 #include "board_suite.h"
 #include "wlan8189_cases.h"
 #include "wlan8189_census.h"
+#include "sys_mbox_seam.h"
 #include "lkpinetif.h"
 #include "lwip_stack.h"
 #include "wlan8189_wpa_obs.h"
@@ -77,6 +78,28 @@ struct wiphy *lkpicfg_wiphy(void);
 #define WLAN8189_IPERF_WINDOW_MS	20000U
 #define WLAN8189_IPERF_PHASES		4U
 
+/* The loaded-interval detector: the phase window is an orchestration envelope
+ * (the host client connects into it on its own schedule), while the numbers a
+ * reader wants describe the interval that actually carried traffic. The census
+ * bracket is therefore re-armed at the first 200 ms step whose received bytes
+ * exceed this threshold - two orders of magnitude above keepalive noise and
+ * far below one step of any real client (a 29 Mbit/s stream moves ~725 KB in
+ * one step) - and the phase's own `traffic start` line carries the offset. A
+ * phase whose client never came keeps the full-window bracket and simply
+ * prints no start line.
+ *
+ * The end is detected the same way, from the other side: after the client
+ * stops, the step's bytes fall back to keepalive scale, and three consecutive
+ * quiet steps (never before the minimum, so a mid-transfer stall does not end
+ * the window under a running client) close the envelope. The phase's bracket
+ * then covers the loaded interval and a sub-second tail instead of the whole
+ * orchestration envelope - the difference between a read geometry that means
+ * something and one averaged with ten seconds of idle. */
+#define WLAN8189_TRAFFIC_ONSET_BYTES	8192UL
+#define WLAN8189_TRAFFIC_END_BYTES	2048UL
+#define WLAN8189_TRAFFIC_END_STEPS	3U
+#define WLAN8189_TRAFFIC_MIN_MS		5000U
+
 /* The uplink sheet's own shape: the same phase count and arm order as the
  * downlink sheet, but the window is the library's - lwiperf's client hard-codes
  * its test duration (10 s: settings.amount = -1000 ten-ms units) - so an uplink
@@ -95,9 +118,19 @@ struct wiphy *lkpicfg_wiphy(void);
 #define WLAN8189_LEVER_AGG	3	/* the card's RX aggregation timeout byte */
 #define WLAN8189_LEVER_YIELD	4	/* the pump's fairness yield */
 #define WLAN8189_LEVER_DWCDATA	5	/* the controller's data-wait step */
+#define WLAN8189_LEVER_IRQ	6	/* the card interrupt (DAT1) vs the polling pump */
+#define WLAN8189_LEVER_WAKE	7	/* the pump's band: below-normal vs normal */
 
 #ifndef WLAN8189_LEVER
 #define WLAN8189_LEVER	WLAN8189_LEVER_AGG
+#endif
+
+/* The align round's drain-to-empty: applied as a constant of whichever boot
+ * enables it (the aggregation arm's four phases all run with it), so the
+ * aggregation operating point stays the sheet's single variable and drain's
+ * own account comes from the census counters (perf rxrel drain=). */
+#ifndef WLAN8189_PUMP_DRAIN
+#define WLAN8189_PUMP_DRAIN	0
 #endif
 
 /* which arm leads: 0 = control on the odd phases (default), 1 = treatment */
@@ -301,7 +334,10 @@ census_print_lwip(void)
 	    (unsigned)lwip_stats.tcp.drop, (unsigned)lwip_stats.tcp.chkerr,
 	    (unsigned)lwip_stats.tcp.memerr, (unsigned)lwip_stats.tcp.err);
 #endif
-#if LWIP_STATS && MEMP_STATS
+#if LWIP_STATS && MEMP_STATS && !LWIP_TCPIP_CORE_LOCKING_INPUT
+	/* the per-frame input pool exists only in mailbox-input mode
+	 * (memp_std.h guards its LWIP_MEMPOOL on exactly this macro), so a
+	 * direct-input build has no pool here to read - and none to report */
 	LOG_ANCHOR("perf census: C lwip_msg err=%u max=%u\n",
 	    (unsigned)lwip_stats.memp[MEMP_TCPIP_MSG_INPKT]->err,
 	    (unsigned)lwip_stats.memp[MEMP_TCPIP_MSG_INPKT]->max);
@@ -311,6 +347,19 @@ census_print_lwip(void)
 	    (unsigned)lwip_stats.sys.mbox.used, (unsigned)lwip_stats.sys.mbox.max,
 	    (unsigned)lwip_stats.sys.mbox.err);
 #endif
+	/* the mailbox's own traffic (see sys_mbox_seam.h): the stock sys-stats
+	 * fields above are never incremented by this port, so the real per-frame
+	 * post count lives here - a mode that runs the input in place must show
+	 * post_ok collapsing while fetch counts follow the traffic */
+	{
+		struct sys_mbox_seam m;
+
+		sys_mbox_seam_get(&m);
+		LOG_ANCHOR("perf census: C mbox post_ok=%lu post_full=%lu "
+		    "fetch_ok=%lu fetch_empty=%lu fetch_wait_ms=%llu\n",
+		    m.post_ok, m.post_full, m.fetch_ok, m.fetch_empty,
+		    m.fetch_wait_ms);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -326,6 +375,10 @@ struct wlan8189_phase_ident {
 	unsigned int	data_us;
 	unsigned int	agg;
 	int		yield;
+	int		irq;
+	int		prio;
+	int		drain;
+	int		plan;	/* 1: a runtime plan (not the compiled lever) ran */
 };
 
 /*
@@ -335,6 +388,12 @@ struct wlan8189_phase_ident {
  * measure. Both sheets call this, so a phase is exactly the lever's setting and
  * nothing carried over, and the arm definition cannot drift between the two
  * directions.
+ *
+ * A runtime plan (set from the console before the phases, see the census
+ * header) takes the place of the compiled lever at this same boundary: the
+ * command's value would otherwise be overwritten by the baseline re-assertion
+ * one line above. Everything else stays baseline, so the comparison keeps its
+ * single-variable property; without a plan the compiled lever runs unchanged.
  */
 static void
 phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
@@ -344,8 +403,23 @@ phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
 	wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
 	wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_BASE );
 	wlan8189_pump_yield_set( 0 );
+	(void)wlan8189_irq_set( 0 );
+	(void)wlan8189_pump_prio_set( 0 );
+	(void)wlan8189_pump_drain_set( WLAN8189_PUMP_DRAIN );
 	id->poll_us = wlan8189_dwc_poll_set( WLAN8189_DWC_POLL_STOCK_US );
 	id->data_us = wlan8189_dwc_data_set( WLAN8189_DWC_DATA_BASE_US );
+
+	if( wlan8189_plan_apply( treatment ) != 0 ) {
+		/* the plan carries one variable; the rest of the phase's arm is
+		 * the adopted measurement baseline, which - like every compiled
+		 * lever - runs the pump adaptive. Without this the plan path
+		 * would silently measure a fixed-pump phase against the
+		 * compiled rounds' adaptive ones. */
+		id->plan = 1;
+		id->pump = "adaptive";
+		(void)wlan8189_pump_set( id->pump );
+	} else {
+		id->plan = 0;
 
 #if WLAN8189_LEVER == WLAN8189_LEVER_PUMP
 	id->pump = treatment ? "adaptive" : "fixed";
@@ -374,26 +448,52 @@ phase_apply_levers( int treatment, struct wlan8189_phase_ident *id )
 		id->data_us = wlan8189_dwc_data_set(
 		    WLAN8189_DWC_DATA_TREAT_US );
 	}
+#elif WLAN8189_LEVER == WLAN8189_LEVER_IRQ
+	/* the card interrupt replaces the poll's discovery role; the cadence
+	 * stays on the same adaptive baseline the other levers run under (in
+	 * interrupt mode the period degrades to the lost-line backstop) */
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	if( treatment ) {
+		(void)wlan8189_irq_set( 1 );
+	}
+#elif WLAN8189_LEVER == WLAN8189_LEVER_WAKE
+	/* the wake chain without the card interrupt: the pump moves into the
+	 * driver threads' band, so an AVAL/OQT wake-up does not wait behind
+	 * them. Independent of the IRQ lever by construction (it never touches
+	 * the interrupt line). */
+	id->pump = "adaptive";
+	(void)wlan8189_pump_set( id->pump );
+	if( treatment ) {
+		(void)wlan8189_pump_prio_set( 1 );
+	}
 #else
 #error "WLAN8189_LEVER is not a known lever"
 #endif
+	}
 	id->agg = wlan8189_agg_get();
 	id->yield = wlan8189_pump_yield_get();
+	id->irq = wlan8189_irq_get();
+	id->prio = wlan8189_pump_prio_get();
+	id->drain = wlan8189_pump_drain_get();
 }
 
 /* The ready line: one shape for both sheets. The downlink's stays the original
- * line byte for byte (the judge anchors and the round's ledgers read it); the
- * uplink's carries its sheet name after the suite prefix. */
+ * line prefix byte for byte (the judge anchors and the round's ledgers read it);
+ * the uplink's carries its sheet name after the suite prefix. `plan=` at the
+ * end names whether the arm was the compiled lever (0) or a runtime plan (1) -
+ * appended so every earlier reader, which matches on the prefix, is unaffected. */
 static void
 phase_print_ready( const char *sheet, unsigned int phase, int treatment,
     const struct wlan8189_phase_ident *id )
 {
 
 	LOG_ANCHOR( "wlan8189: %sphase %u ready lever=%u arm=%c pump=%s "
-	    "poll_us=%u data_us=%u agg=0x%04x yield=%d lps=%d\n",
+	    "poll_us=%u data_us=%u agg=0x%04x yield=%d lps=%d irq=%d prio=%d "
+	    "drain=%d plan=%d\n",
 	    sheet, phase, (unsigned)WLAN8189_LEVER, treatment ? 'B' : 'A',
 	    id->pump, id->poll_us, id->data_us, id->agg, id->yield,
-	    wlan8189_ps_get() );
+	    wlan8189_ps_get(), id->irq, id->prio, id->drain, id->plan );
 }
 
 /* ------------------------------------------------------------------ */
@@ -565,16 +665,58 @@ void wlan8189_dataplane_chain( void )
 		return;
 	}
 
-	/* the gateway reachability: the contrib ping (socket mode, its own
-	 * thread); the judge counts the echo replies from its console lines */
-	LOG_INFO( "wlan8189: ping gw window=%u s\n",
-	    (unsigned)( WLAN8189_PING_WAIT_MS / 1000 ) );
-	ping_init( &g_netif.gw );
-	for( waited = 0; waited < WLAN8189_PING_WAIT_MS; waited += 100U ) {
-		(void)osDelay( 100U );
+	/*
+	 * The gateway reachability window doubles as the round's clean per-frame
+	 * cost sample: no iperf client is running yet, so each echo's round trip
+	 * is one request frame and one reply frame with nothing queued behind
+	 * them, and the floor it shows is what a single frame pays on this path.
+	 * The window is split in half and the aggregation timeout moves between
+	 * the halves - the adopted value, then the driver's stock value - each
+	 * half bracketed by the census, so the floor the timeout imposes is read
+	 * in the same boot that carries its throughput.
+	 *
+	 * One ping thread spans both halves on purpose: lwIP's ping_stop() only
+	 * clears the target, it does not join the thread, so a second ping_init
+	 * leaves the first thread running and both then answer the same sequence
+	 * (the first build of this window did exactly that - 27 sends for 18
+	 * expected - and its round trips pair against the wrong send). The thread
+	 * is started once and the register is flipped under it.
+	 */
+	{
+		unsigned int pass;
+
+		wlan8189_agg_set( WLAN8189_AGG_STOCK_KB );
+		wlan8189_agg_timeout_set( WLAN8189_AGG_TIMEOUT_BASE );
+		LOG_INFO( "wlan8189: ping gw window=%u s halves agg=0x%02x%02x "
+		    "then 0x%02x%02x\n",
+		    (unsigned)( WLAN8189_PING_WAIT_MS / 1000 ),
+		    (unsigned)( WLAN8189_AGG_TIMEOUT_BASE & 0xffU ),
+		    (unsigned)( WLAN8189_AGG_STOCK_KB & 0xffU ),
+		    (unsigned)( WLAN8189_AGG_TIMEOUT_TREAT & 0xffU ),
+		    (unsigned)( WLAN8189_AGG_STOCK_KB & 0xffU ) );
+		ping_init( &g_netif.gw );
+		for( pass = 0U; pass < 2U; pass++ ) {
+			if( pass == 1U ) {
+				wlan8189_agg_timeout_set(
+				    WLAN8189_AGG_TIMEOUT_TREAT );
+			}
+			LOG_INFO( "wlan8189: ping pass=%u agg=0x%02x%02x\n",
+			    pass + 1U,
+			    (unsigned)( ( ( pass == 0U ) ?
+			    WLAN8189_AGG_TIMEOUT_BASE :
+			    WLAN8189_AGG_TIMEOUT_TREAT ) & 0xffU ),
+			    (unsigned)( WLAN8189_AGG_STOCK_KB & 0xffU ) );
+			wlan8189_census_reset();
+			for( waited = 0; waited < WLAN8189_PING_WAIT_MS;
+			    waited += 100U ) {
+				(void)osDelay( 100U );
+			}
+			LOG_ANCHOR( "wlan8189: ping window done\n" );
+			wlan8189_census_print();
+			census_print_lwip();
+		}
+		ping_stop();
 	}
-	ping_stop();
-	LOG_ANCHOR( "wlan8189: ping window done\n" );
 
 	/* the adapter's own accounting, printed once so a failure that got this
 	 * far localizes: rx_frames/rx_eapol are what the driver handed over,
@@ -654,8 +796,60 @@ void wlan8189_dataplane_chain( void )
 			    LWIPERF_TCP_PORT_DEFAULT );
 			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
 			    (unsigned)( WLAN8189_IPERF_WINDOW_MS / 1000U ) );
-			for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS; waited += 200U ) {
-				(void)osDelay( 200U );
+
+			/*
+			 * The envelope wait with the loaded-interval detector (see the
+			 * defines above): watch the received-byte total per 200 ms step,
+			 * re-arm the census bracket at the onset step so the phase's
+			 * counters describe the loaded interval, and close the envelope
+			 * once the client has demonstrably stopped. The step's own totals
+			 * are printed at both boundaries so the bracket can be
+			 * reconciled against the peer's capture byte for byte.
+			 */
+			{
+				struct lkpinetif_diag d;
+				unsigned long prev;
+				unsigned int elapsed = 0U;
+				unsigned int onset_ms = 0U;
+				unsigned int idle_steps = 0U;
+
+				lkpinetif_get_diag( &d );
+				prev = d.rx_bytes;
+				for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS;
+				    waited += 200U ) {
+					(void)osDelay( 200U );
+					elapsed = waited + 200U;
+					lkpinetif_get_diag( &d );
+					if( onset_ms == 0U ) {
+						if( d.rx_bytes - prev >=
+						    WLAN8189_TRAFFIC_ONSET_BYTES ) {
+							onset_ms = elapsed;
+							/* the bracket starts where the
+							 * traffic does */
+							wlan8189_census_reset();
+							LOG_ANCHOR( "wlan8189: phase %u "
+							    "traffic start t_ms=%u "
+							    "rx=%lu\n", phase, onset_ms,
+							    d.rx_bytes );
+						}
+					} else if( d.rx_bytes - prev <
+					    WLAN8189_TRAFFIC_END_BYTES ) {
+						idle_steps++;
+						if( idle_steps >=
+						    WLAN8189_TRAFFIC_END_STEPS &&
+						    elapsed >=
+						    WLAN8189_TRAFFIC_MIN_MS ) {
+							LOG_ANCHOR( "wlan8189: phase "
+							    "%u traffic end t_ms=%u "
+							    "rx=%lu\n", phase, elapsed,
+							    d.rx_bytes );
+							break;
+						}
+					} else {
+						idle_steps = 0U;
+					}
+					prev = d.rx_bytes;
+				}
 			}
 			LOG_ANCHOR( "wlan8189: iperf window done\n" );
 			LOG_ANCHOR( "wlan8189: udp sink pkts=%u bytes=%lu\n",

@@ -29,7 +29,8 @@
 
 /*
  * abs(): the driver calls it (the CFO and gain paths). A platform whose own C
- * surface already declares abs - the board's freestanding minilibc - defines
+ * surface already declares abs - the board images force-include newlib's
+ * stdlib.h - defines
  * LKPI_ABS_PLATFORM_PROVIDED and the definition here retires, because a static
  * definition after the platform's declaration is not legal C. Both bodies are
  * the same function.

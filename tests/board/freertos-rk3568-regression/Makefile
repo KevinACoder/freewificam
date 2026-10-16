@@ -166,7 +166,8 @@ BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 	-DUSB_BOARD_IRQ_PRIORITY_RAW=0xd0u \
 	-DEQOS_BOARD_IRQ_PRIORITY_RAW=0xd0u
 
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
+CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1
 ASM_CFLAGS := $(BASE_CFLAGS)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 
@@ -179,7 +180,8 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-u,usb_board_reg_base \
 	-Wl,-u,usbh_initialize \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
 
 # --- compile set -----------------------------------------------------------
 
@@ -191,8 +193,8 @@ BASE_SRCS := \
 	$(ROOT)/arch/aarch64/cache.c \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
@@ -357,8 +359,8 @@ VENDORED_WARNED_SRCS = $(VENDORED_SRCS) $(USB_STACK_SRCS) $(LWIP_STACK_SRCS)
 # Object names mirror the path below ROOT (the kernel and the port share flat
 # basenames, so $(notdir) would collide).
 # The vendored formatter engine (components/printf, mpaland): the freestanding
-# image formats only through this engine, bound in os/threadx... os/baremetal/
-# minilibc.c. Float and exponential rendering are compiled out - the build is
+# image formats only through this engine, bound to the C library's printf names
+# by os/baremetal/printf_bind.c. Float rendering is compiled out - the build
 # -mgeneral-regs-only and has no FP state.
 PRINTF_SRCS := $(ROOT)/components/printf/printf.c
 PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL

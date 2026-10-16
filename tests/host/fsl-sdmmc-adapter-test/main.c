@@ -99,16 +99,23 @@ static void case_card_init(void)
 {
 	struct lkpi_sdio_be_card_info info;
 	const struct fsl_stub_call *c;
+	const struct fsl_stub_call *ci;
 	int st;
 
 	(void)memset(&info, 0, sizeof(info));
 	begin();
 
 	st = lkpi_sdio_be_card_init(&info);
-	c = fsl_stub_call(0U);
+	ci = fsl_stub_call(0U);
+	c = fsl_stub_call(1U);
 
+	/* two calls, in order: the bring-up registers the card-interrupt upcall
+	 * (non-NULL callback) before it starts the card, so the stack can hand
+	 * the record to the host during SDIO_HostInit */
 	check("card-init",
-	      (st == 0) && (fsl_stub_count() == 1U) &&
+	      (st == 0) && (fsl_stub_count() == 2U) &&
+		      (ci != NULL) && (ci->op == FSL_STUB_OP_CARD_INT_SET) &&
+		      (ci->flags == 1U) &&
 		      (c != NULL) && (c->op == FSL_STUB_OP_CARD_START) &&
 		      (info.vendor == 0x024cU) && (info.device == 0xf179U) &&
 		      (info.func_count == 1U) && (info.cccr_version == 2U) &&
@@ -452,16 +459,46 @@ static void case_error_mapping(void)
 static void case_card_deinit(void)
 {
 	const struct fsl_stub_call *c0;
+	const struct fsl_stub_call *c1;
 
 	begin();
 
 	lkpi_sdio_be_card_deinit();
 	c0 = fsl_stub_call(0U);
+	c1 = fsl_stub_call(1U);
 
+	/* the interrupt line comes down before the card does */
 	check("card-deinit",
-	      (fsl_stub_count() == 1U) && (c0 != NULL) &&
-		      (c0->op == FSL_STUB_OP_CARD_STOP),
+	      (fsl_stub_count() == 2U) &&
+		      (c0 != NULL) && (c0->op == FSL_STUB_OP_CARD_INT_ENABLE) &&
+		      (c0->count == 0U) &&
+		      (c1 != NULL) && (c1->op == FSL_STUB_OP_CARD_STOP),
 	      "calls=%u", fsl_stub_count());
+}
+
+/* The card-interrupt mode seam: on asks the host glue to arm the line, off
+ * asks it to mask; the backend maps 1:1. */
+static void case_card_irq_mode(void)
+{
+	const struct fsl_stub_call *c0;
+	const struct fsl_stub_call *c1;
+	int st_on;
+	int st_off;
+
+	begin();
+
+	st_on = lkpi_sdio_be_card_irq_mode(1U);
+	st_off = lkpi_sdio_be_card_irq_mode(0U);
+	c0 = fsl_stub_call(0U);
+	c1 = fsl_stub_call(1U);
+
+	check("card-irq-mode",
+	      (st_on == 0) && (st_off == 0) && (fsl_stub_count() == 2U) &&
+		      (c0 != NULL) && (c0->op == FSL_STUB_OP_CARD_INT_ENABLE) &&
+		      (c0->count == 1U) &&
+		      (c1 != NULL) && (c1->op == FSL_STUB_OP_CARD_INT_ENABLE) &&
+		      (c1->count == 0U),
+	      "st=%d/%d calls=%u", st_on, st_off, fsl_stub_count());
 }
 
 int main(int argc, char **argv)
@@ -495,6 +532,7 @@ int main(int argc, char **argv)
 	case_set_block_size();
 	case_set_block_size_rejects();
 	case_irq_pending();
+	case_card_irq_mode();
 	case_error_mapping();
 	case_card_deinit();
 

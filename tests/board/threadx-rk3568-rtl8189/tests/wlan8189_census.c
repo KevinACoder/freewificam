@@ -167,9 +167,11 @@ wlan8189_pump_show(void)
 	_adapter *adapter = census_adapter();
 
 	lkpi_sdio_bus_info_get(&bus);
-	printk("wlan8189: pump policy=%s period_ms=%u yield=%u clk_khz=%u bus=%u blk=%u\n",
+	printk("wlan8189: pump policy=%s period_ms=%u yield=%u prio=%s drain=%u clk_khz=%u bus=%u blk=%u\n",
 	    (mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ? "adaptive" : "fixed",
 	    lkpi_sdio_pump_period_get(), lkpi_sdio_pump_yield_get() ? 1u : 0u,
+	    lkpi_sdio_pump_prio_get() ? "normal" : "below",
+	    lkpi_sdio_pump_drain_get() ? 1u : 0u,
 	    bus.clock_hz / 1000u, bus.bus_width, bus.blk_size);
 	/*
 	 * The counting semaphores' addresses, so the wake-latency table keyed by
@@ -185,6 +187,14 @@ wlan8189_pump_show(void)
 	}
 }
 
+const char *
+wlan8189_pump_policy_get(void)
+{
+
+	return (lkpi_sdio_pump_mode_get() == LKPI_SDIO_PUMP_MODE_ADAPTIVE) ?
+	    "adaptive" : "fixed";
+}
+
 int
 wlan8189_pump_set(const char *policy)
 {
@@ -197,6 +207,14 @@ wlan8189_pump_set(const char *policy)
 		lkpi_sdio_pump_yield_set(true);
 	else if (strcmp(policy, "noyield") == 0)
 		lkpi_sdio_pump_yield_set(false);
+	else if (strcmp(policy, "prio-normal") == 0)
+		lkpi_sdio_pump_prio_set(true);
+	else if (strcmp(policy, "prio-below") == 0)
+		lkpi_sdio_pump_prio_set(false);
+	else if (strcmp(policy, "drain") == 0)
+		lkpi_sdio_pump_drain_set(true);
+	else if (strcmp(policy, "nodrain") == 0)
+		lkpi_sdio_pump_drain_set(false);
 	else
 		return -1;
 	return (int)lkpi_sdio_pump_mode_get();
@@ -214,6 +232,153 @@ wlan8189_pump_yield_get(void)
 {
 
 	return lkpi_sdio_pump_yield_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_prio_set(int normal)
+{
+
+	lkpi_sdio_pump_prio_set(normal != 0);
+	return lkpi_sdio_pump_prio_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_prio_get(void)
+{
+
+	return lkpi_sdio_pump_prio_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_drain_set(int on)
+{
+
+	lkpi_sdio_pump_drain_set(on != 0);
+	return lkpi_sdio_pump_drain_get() ? 1 : 0;
+}
+
+int
+wlan8189_pump_drain_get(void)
+{
+
+	return lkpi_sdio_pump_drain_get() ? 1 : 0;
+}
+
+/* --- the card-interrupt mode (the align round's lever) -------------------- */
+
+/*
+ * The engine's card-interrupt switch, read back the way the cadence is: the
+ * mode a phase ran under is part of the measurement's identity. The evidence
+ * that the mechanism actually ran lives in the census (D pumpirq notify/wake,
+ * A dwc_cardirq ent/spur), so this line stays the policy statement.
+ */
+void
+wlan8189_irq_show(void)
+{
+
+	printk("wlan8189: irq mode=%s\n", lkpi_sdio_pump_irq_get() ? "on" : "off");
+}
+
+int
+wlan8189_irq_set(int on)
+{
+	int st = lkpi_sdio_pump_irq_set(on != 0);
+
+	if (st != 0) {
+		printk("wlan8189: irq set failed (%d)\n", st);
+		return st;
+	}
+	return lkpi_sdio_pump_irq_get() ? 1 : 0;
+}
+
+int
+wlan8189_irq_get(void)
+{
+
+	return lkpi_sdio_pump_irq_get() ? 1 : 0;
+}
+
+/* --- the runtime phase plan ----------------------------------------------- */
+
+/*
+ * One runtime-set single-variable comparison for the four-phase sheet (see
+ * wlan8189_census.h). The sheet's phase routine re-asserts its full baseline at
+ * every phase boundary, so a console command issued between phases would be
+ * overwritten before the window; this plan is applied by that same routine, so
+ * the command's value reaches the window through the one boundary the sheet
+ * already has. Everything else in the routine stays baseline, so the plan is a
+ * single-variable comparison exactly like a compiled lever.
+ */
+static struct {
+	int		key;
+	unsigned int	base;
+	unsigned int	treat;
+} wlan8189_plan;
+
+int
+wlan8189_plan_set(int key, unsigned int base, unsigned int treat)
+{
+
+	switch (key) {
+	case WLAN8189_PLAN_AGG_TIMEOUT:
+	case WLAN8189_PLAN_AGG_LEN:
+	case WLAN8189_PLAN_POLL_US:
+	case WLAN8189_PLAN_DATA_US:
+		break;
+	case WLAN8189_PLAN_PUMP:
+	case WLAN8189_PLAN_YIELD:
+	case WLAN8189_PLAN_PRIO:
+		/* boolean-shaped keys: reject a value that is not 0/1 */
+		if (base > 1u || treat > 1u)
+			return -1;
+		break;
+	default:
+		return -1;
+	}
+	wlan8189_plan.key = key;
+	wlan8189_plan.base = base;
+	wlan8189_plan.treat = treat;
+	return 0;
+}
+
+void
+wlan8189_plan_clear(void)
+{
+
+	wlan8189_plan.key = 0;
+}
+
+int
+wlan8189_plan_apply(int treatment)
+{
+	unsigned int v = treatment ? wlan8189_plan.treat : wlan8189_plan.base;
+
+	switch (wlan8189_plan.key) {
+	case WLAN8189_PLAN_AGG_TIMEOUT:
+		wlan8189_agg_timeout_set(v);
+		break;
+	case WLAN8189_PLAN_AGG_LEN:
+		wlan8189_agg_set(v);
+		break;
+	case WLAN8189_PLAN_POLL_US:
+		(void)wlan8189_dwc_poll_set(v);
+		break;
+	case WLAN8189_PLAN_DATA_US:
+		(void)wlan8189_dwc_data_set(v);
+		break;
+	case WLAN8189_PLAN_PUMP:
+		(void)wlan8189_pump_set(v ? "adaptive" : "fixed");
+		break;
+	case WLAN8189_PLAN_YIELD:
+		wlan8189_pump_yield_set((int)v);
+		break;
+	case WLAN8189_PLAN_PRIO:
+		(void)wlan8189_pump_prio_set((int)v);
+		break;
+	default:
+		return 0;
+	}
+	return wlan8189_plan.key;
 }
 
 /* --- the card-side receiver account --------------------------------------- */
@@ -450,6 +615,75 @@ wlan8189_census_reset(void)
 	card_free_n = 0u;
 }
 
+/*
+ * The delta epoch of the cumulative groups: the driver's own counters (B) and
+ * the netif handoff (C) are lifetime totals no reset touches, so a per-phase
+ * value is this snapshot minus the previous one. The absolute lines above stay
+ * byte-for-byte; these Bd/Cd lines carry the difference a per-phase account
+ * needs, and the epoch marker reports when the chain restarted (the first
+ * snapshot of a boot has no predecessor). Only monotone counters are
+ * subtracted - summed latencies yes, the max fields no (a lifetime maximum
+ * minus a lifetime maximum is not an interval maximum).
+ */
+struct wlan8189_delta_epoch {
+	unsigned long long b_rx_pkts, b_rx_drop, b_rx_core, b_rx_ampdu_drop,
+	    b_rx_forced, b_rx_loss, b_rx_shift;
+	unsigned long long b_tx_pkts, b_tx_drop;
+	struct lkpinetif_diag c;
+	int valid;
+};
+
+static struct wlan8189_delta_epoch delta_epoch;
+
+static void
+census_print_deltas( _adapter *adapter, const struct lkpinetif_diag *d )
+{
+
+	if( delta_epoch.valid ) {
+		if( adapter != NULL ) {
+			printk("perf census: Bd rx pkt=%llu drop=%llu core=%llu ampdu_drop=%llu forced=%llu loss=%llu shift=%llu\n",
+			    (unsigned long long)adapter->recvpriv.rx_pkts - delta_epoch.b_rx_pkts,
+			    (unsigned long long)adapter->recvpriv.rx_drop - delta_epoch.b_rx_drop,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_drop_count - delta_epoch.b_rx_core,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_drop_count - delta_epoch.b_rx_ampdu_drop,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_forced_indicate_count - delta_epoch.b_rx_forced,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_loss_count - delta_epoch.b_rx_loss,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_window_shift_cnt - delta_epoch.b_rx_shift);
+			printk("perf census: Bd tx pkt=%llu drop=%llu\n",
+			    (unsigned long long)adapter->xmitpriv.tx_pkts - delta_epoch.b_tx_pkts,
+			    (unsigned long long)adapter->xmitpriv.tx_drop - delta_epoch.b_tx_drop);
+		}
+		printk("perf census: Cd netif rx=%lu bytes=%lu eapol=%lu foreign=%lu nonetif=%lu infail=%lu tx=%lu fail=%lu tx_bytes=%lu\n",
+		    d->rx_frames - delta_epoch.c.rx_frames,
+		    d->rx_bytes - delta_epoch.c.rx_bytes,
+		    d->rx_eapol - delta_epoch.c.rx_eapol,
+		    d->rx_foreign - delta_epoch.c.rx_foreign,
+		    d->rx_no_netif - delta_epoch.c.rx_no_netif,
+		    d->rx_input_fail - delta_epoch.c.rx_input_fail,
+		    d->tx_frames - delta_epoch.c.tx_frames,
+		    d->tx_fail - delta_epoch.c.tx_fail,
+		    d->tx_bytes - delta_epoch.c.tx_bytes);
+		printk("perf census: Cd netif_lat rx_deliver_us=%llu tx_ndo_us=%llu\n",
+		    (unsigned long long)(( d->rx_deliver_ns - delta_epoch.c.rx_deliver_ns ) / 1000u),
+		    (unsigned long long)(( d->tx_ndo_ns - delta_epoch.c.tx_ndo_ns ) / 1000u));
+	} else {
+		printk("perf census: Bd epoch=first (no predecessor: deltas start at the next snapshot)\n");
+	}
+	if( adapter != NULL ) {
+		delta_epoch.b_rx_pkts = adapter->recvpriv.rx_pkts;
+		delta_epoch.b_rx_drop = adapter->recvpriv.rx_drop;
+		delta_epoch.b_rx_core = adapter->recvpriv.dbg_rx_drop_count;
+		delta_epoch.b_rx_ampdu_drop = adapter->recvpriv.dbg_rx_ampdu_drop_count;
+		delta_epoch.b_rx_forced = adapter->recvpriv.dbg_rx_ampdu_forced_indicate_count;
+		delta_epoch.b_rx_loss = adapter->recvpriv.dbg_rx_ampdu_loss_count;
+		delta_epoch.b_rx_shift = adapter->recvpriv.dbg_rx_ampdu_window_shift_cnt;
+		delta_epoch.b_tx_pkts = adapter->xmitpriv.tx_pkts;
+		delta_epoch.b_tx_drop = adapter->xmitpriv.tx_drop;
+	}
+	delta_epoch.c = *d;
+	delta_epoch.valid = 1;
+}
+
 void
 wlan8189_census_print(void)
 {
@@ -475,6 +709,28 @@ wlan8189_census_print(void)
 	    (unsigned long long)(dwc.data_wait_max_ns / 1000u),
 	    dwc.idmac_polls, (unsigned long long)(dwc.idmac_wait_ns / 1000u),
 	    (unsigned long long)(dwc.idmac_wait_max_ns / 1000u));
+	/* the controller's card-interrupt witness: entries that carried DAT1
+	 * versus entries that carried nothing this driver owns (spurious). Zero
+	 * entries on an irq-on phase means the line never reached the CPU - the
+	 * number the mechanism's self-test reads. */
+	printk("perf census: A dwc_cardirq ent=%u spur=%u\n",
+	    dwc.card_irq_entries, dwc.card_irq_spurious);
+
+	/* The suspend-guard probe (the wedge issue's ask, printed with every
+	 * phase snapshot): the skb pools' occupancy and high-water, so a hang
+	 * leaves the accumulation visible in the phase it started in, and the
+	 * pool's own damage counters (double free / stray / use-after-free /
+	 * fence) name a geometry problem instead of leaving it to be inferred. */
+	{
+		struct lkpi_skb_pool_stats skb;
+
+		lkpi_skb_pool_stats(&skb);
+		printk("perf census: D skb used=%u high=%u data_used=%u data_high=%u dyalloc=%u ovf=%u+%u fail=%u dfree=%u stray=%u uaf=%u fence=%u\n",
+		    skb.skb_used, skb.skb_high, skb.data_used, skb.data_high,
+		    skb.dyalloc_live, skb.slot_overflow, skb.data_overflow,
+		    skb.alloc_fail, skb.double_free, skb.stray_free,
+		    skb.uaf_write, skb.fence_bad);
+	}
 
 	/* the driver's own progress account: what it dropped, reordered or forced
 	 * out of its reorder window */
@@ -504,6 +760,10 @@ wlan8189_census_print(void)
 	    (unsigned long long)(d.rx_deliver_max_ns / 1000u),
 	    (unsigned long long)(d.tx_ndo_ns / 1000u),
 	    (unsigned long long)(d.tx_ndo_max_ns / 1000u));
+	/* the per-snapshot movement of the cumulative groups (B, C): the
+	 * absolute lines above are the endpoints, these are the difference a
+	 * per-phase account reads */
+	census_print_deltas(adapter, &d);
 
 	wlan8189_census_log_get(&log_in_lines, &log_in_bytes, &log_out_lines,
 	    &log_out_bytes);

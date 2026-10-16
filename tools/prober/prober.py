@@ -33,6 +33,8 @@ Usage:
                 [--width HT20] [--wpa-conf <file>] [--peer <addr>]
                 [--udp] [--window <size>] [--phase-actions <spec>]
                 [--ping-during] [--ss-during] [--host user@addr]
+    --phase-actions tokens: tcp | tcp-w<size> | udp | udp-b<rate>, one per
+    phase (e.g. 'udp-b35M,udp-b40M,udp-b45M,udp-b50M' is a rate ladder)
   prober.py analyze <pcap> [--sta <mac>] [--out <json>] [--host user@addr]
   prober.py selftest
 
@@ -1071,18 +1073,33 @@ def uplink_server_start(r: Runner, work: str) -> bool:
     number, so its output is kept and fetched with the round's products.
 
     `work` is the capture's own path (the same value dumpcap is pointed at), so
-    the log goes beside it - in the working directory the tool created."""
+    the log goes beside it - in the working directory the tool created.
+
+    The restart waits the previous server out instead of sleeping a fixed
+    moment: pkill's SIGTERM is asynchronous, and a fixed 0.3 s was measured
+    losing the race on the Raspberry Pi (the new iperf died with "Address
+    already in use" and the round then found no listener at all). Both waits
+    are bounded; the check reads the process name AND the listening port, so
+    a stale server cannot mask a failed start."""
 
     log = "%s/uplink-server.log" % os.path.dirname(work)
-    cmd = ("sh -c 'pkill -x iperf 2>/dev/null; sleep 0.3; "
-           "nohup iperf -s -p 5001 > %s 2>&1 & sleep 1; pgrep -x iperf'"
+    cmd = ("sh -c 'pkill -x iperf 2>/dev/null; "
+           "i=0; while [ $i -lt 40 ]; do "
+           "pgrep -x iperf >/dev/null 2>&1 || ss -ltn 2>/dev/null | grep -q :5001 || break; "
+           "sleep 0.25; i=$((i+1)); done; "
+           "nohup iperf -s -p 5001 > %s 2>&1 & "
+           "i=0; while [ $i -lt 20 ]; do "
+           "pgrep -x iperf >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q :5001 && break; "
+           "sleep 0.25; i=$((i+1)); done; "
+           "pgrep -x iperf >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q :5001 "
+           "&& echo uplink-server-listening'"
            % shlex.quote(log))
     try:
         _, text = r.run(cmd)
     except RuntimeError as e:
         warn("uplink server did not start: %s", e)
         return False
-    if "iperf" not in text:
+    if "uplink-server-listening" not in text:
         warn("uplink server not visible after start")
         return False
     info("uplink server listening on 5001 (log kept with the products)")
@@ -1228,6 +1245,16 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
     peer = peer_opt
     phases: dict[int, dict] = {}
     pending: dict[int, str] = {}
+
+    # The uplink server is brought up NOW, not when the stage announces itself:
+    # the board's first uplink window opens ~2 s after the standby line, and a
+    # server started at that moment was measured losing that window (the board
+    # connected into a port with no listener and its first window counted
+    # 0.6 s). One server serves the whole round - it is idle until the board
+    # connects - and the standby line only re-checks it.
+    uplink_server_up = False
+    if uplink_phases_want > 0 and work:
+        uplink_server_up = uplink_server_start(r, work)
     # the join's own state: the command is sent when the board says it is
     # waiting, and retried on a period until the board reports the association
     # (or the first phase opens). Two failure modes make the retry load-bearing:
@@ -1302,8 +1329,12 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
             # The uplink stage's handover: once the board has announced the
             # stage and its own address is known (the lease above, or --peer),
             # this host's reachable address goes to the board's console and the
-            # board's own client drives the windows from there.
-            if uplink_seen and peer and not uplink_peer_tried:
+            # board's own client drives the windows from there. A round with
+            # --uplink-phases 0 hands over nothing: the board's stage then
+            # times its peer wait out and says its skip reason, which keeps
+            # the boot's shape (a downlink-only sheet) explicit in the log.
+            if (uplink_phases_want > 0 and uplink_seen and peer
+                    and not uplink_peer_tried):
                 uplink_peer_tried = True
                 addr = local_addr_for(r, peer)
                 if addr and hub.send("wlan8189 uplink %s" % addr):
@@ -1320,9 +1351,15 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
 
             if UPLINK_STANDBY_RE.search(line):
                 uplink_seen = True
-                info("run uplink stage standby: bringing the host server up")
-                if work:
-                    uplink_server_start(r, work)
+                if uplink_phases_want <= 0:
+                    info("run uplink stage standby: the sheet is not in this "
+                         "round's plan (--uplink-phases 0); leaving the stage "
+                         "to its own peer wait")
+                elif work and not uplink_server_up:
+                    info("run uplink stage standby: bringing the host server up")
+                    uplink_server_up = uplink_server_start(r, work)
+                elif uplink_server_up:
+                    info("run uplink stage standby: the host server is already up")
                 else:
                     warn("uplink stage seen but no work directory; the server "
                          "was not started")
@@ -1343,6 +1380,7 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
                        if phase_actions and n <= len(phase_actions)
                        else {"udp": udp, "window": window})
                 res = measure_phase(r, outdir, n, peer, seconds, act["udp"],
+                                    udp_bw=(act.get("bw") or "60M"),
                                     ping_during=ping_during,
                                     window=act.get("window"),
                                     ss_during=ss_during)
@@ -1467,25 +1505,38 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
     return 0 if ok else 1
 
 
-PHASE_ACTION_RE = re.compile(r"^(tcp|udp)(?:-w(\d+[KMkm]?))?$")
+PHASE_ACTION_RE = re.compile(r"^(tcp|udp)(?:-([wb])(\d+[KMkm]?))?$")
 
 
 def parse_phase_actions(spec: str) -> list[dict]:
     """Per-phase client actions, one token per phase, left to right.
 
-    A token is `tcp` or `udp`, and a TCP token may pin the socket buffer it
-    asks the sender for (`tcp-w256K`). That pin exists because the sender's own
-    window is one of the limits a bulk transfer runs into, and the run-level
-    flags cannot vary it inside one boot - an A/B/A/B needs the variation per
-    phase. Phases beyond the spec keep the run-level defaults."""
+    A token is `tcp` or `udp`, and it may pin the one number its transport
+    trades on: a TCP token pins the socket buffer it asks the sender for
+    (`tcp-w256K`) because the sender's own window is one of the limits a bulk
+    transfer runs into, and a UDP token pins the offered rate (`udp-b45M`)
+    because a rate ladder - the receive path asked at several constant loads -
+    is how a capacity question is answered without the TCP feedback clock in
+    the way. The run-level flags cannot vary either inside one boot; an
+    in-boot ladder needs the variation per phase. Phases beyond the spec keep
+    the run-level defaults."""
 
     acts = []
     for tok in [t.strip() for t in spec.split(",") if t.strip()]:
         m = PHASE_ACTION_RE.match(tok)
         if not m:
-            raise ValueError("bad phase action %r (want tcp, udp or tcp-w<size>)"
-                             % tok)
-        acts.append({"udp": m.group(1) == "udp", "window": m.group(2)})
+            raise ValueError("bad phase action %r (want tcp, tcp-w<size>, udp "
+                             "or udp-b<rate>)" % tok)
+        kind, knob, value = m.group(1), m.group(2), m.group(3)
+        if knob == "w" and kind != "tcp":
+            raise ValueError("bad phase action %r: -w pins the TCP sender's "
+                             "window" % tok)
+        if knob == "b" and kind != "udp":
+            raise ValueError("bad phase action %r: -b pins the UDP offered "
+                             "rate" % tok)
+        acts.append({"udp": kind == "udp",
+                     "window": value if knob == "w" else None,
+                     "bw": value if knob == "b" else None})
     return acts
 
 
@@ -1980,25 +2031,32 @@ def selftest() -> int:
     check("iperf-parse-empty", parse_iperf("no summary here")["mbit"] is None)
 
     # per-phase actions: the token grammar both ways, and the command each
-    # token builds - the window pin is the point of the whole flag
-    pa = parse_phase_actions("tcp,tcp-w256K,udp")
+    # token builds - the window pin and the offered-rate pin are the point of
+    # the whole flag (a rate ladder asks the receive path at several constant
+    # loads in one boot)
+    pa = parse_phase_actions("tcp,tcp-w256K,udp,udp-b45M")
     check("phase-actions-parse",
-          [a["udp"] for a in pa] == [False, False, True]
-          and pa[1]["window"] == "256K" and pa[0]["window"] is None)
+          [a["udp"] for a in pa] == [False, False, True, True]
+          and pa[1]["window"] == "256K" and pa[0]["window"] is None
+          and pa[3]["bw"] == "45M" and pa[2]["bw"] is None)
     check("phase-actions-empty", parse_phase_actions("") == [])
     bad = 0
-    for spec in ("bogus", "tcp-w2X5", "udp-w", "tcp,tcp-w"):
+    for spec in ("bogus", "tcp-w2X5", "udp-w", "tcp,tcp-w", "udp-b",
+                 "tcp-b45M"):
         try:
             parse_phase_actions(spec)
         except ValueError:
             bad += 1
-    check("phase-actions-rejects-bad", bad == 4)
+    check("phase-actions-rejects-bad", bad == 6)
     check("phase-cmd-window",
           phase_client_cmd("10.0.0.5", 8, False, 5002, "60M", "256K")
           == "iperf -c 10.0.0.5 -p 5001 -t 8 -i 2 -w 256K")
     check("phase-cmd-udp-no-window",
           phase_client_cmd("10.0.0.5", 8, True, 5002, "60M", "256K")
           == "iperf -c 10.0.0.5 -p 5002 -t 8 -i 2 -u -b 60M")
+    check("phase-cmd-udp-rate-pin",
+          phase_client_cmd("10.0.0.5", 8, True, 5002, "45M", None)
+          == "iperf -c 10.0.0.5 -p 5002 -t 8 -i 2 -u -b 45M")
     check("phase-cmd-default-no-window",
           phase_client_cmd("10.0.0.5", 8, False, 5002, "60M", None)
           == "iperf -c 10.0.0.5 -p 5001 -t 8 -i 2")

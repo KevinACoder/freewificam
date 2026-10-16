@@ -66,10 +66,10 @@ void get_random_bytes(void *buf, size_t len);
 #endif
 typedef unsigned long	kernel_ulong_t;
 
-/* the image's own libc: printf lives in minilibc (routed through the
- * locked console sink by the BSD world), vsnprintf in the vendored
- * mpaland/printf.  Declared here so the driver world never pulls the
- * host <stdio.h>. */
+/* The image's own printf surface: the vendored mpaland/printf component,
+ * bound to the C library names by os/baremetal/printf_bind.c; the console's
+ * locked sink is the BSD world's printf. Declared here so the driver world
+ * never pulls the host <stdio.h>. */
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);
 
