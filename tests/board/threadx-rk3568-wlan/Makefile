@@ -107,7 +107,8 @@ endif
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
 	-D_DEFAULT_SOURCE=1 \
-	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0
+	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0 \
+	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=65536
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream
@@ -252,7 +253,9 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/wlan_join_raw.c \
 	$(CURDIR)/tests/wlan_join.c \
 	$(CURDIR)/tests/wlan_dataplane.c \
-	$(CURDIR)/tests/wlan_cmds.c
+	$(CURDIR)/tests/wlan_cmds.c \
+	$(COMMON)/udisk/lkpi_udisk_core.c \
+	$(CURDIR)/tests/wlan_udisk.c
 
 # the image's own non-case TUs: the radio's dwell pump, the supplicant's
 # message observer, and the TCP/IP stack's bring-up helper (the regression
@@ -293,7 +296,8 @@ USB_INCLUDES := \
 	-I$(CHERRYUSB)/core \
 	-I$(CHERRYUSB)/class/hub \
 	-I$(CHERRYUSB)/port/ehci \
-	-I$(CHERRYUSB)/port/xhci
+	-I$(CHERRYUSB)/port/xhci \
+	-I$(COMMON)/udisk
 
 # --- net80211 domain (imported stack + its port layer) -----------------------
 

@@ -38,6 +38,7 @@ CASES = [
     "wlan-join-raw",
     "wlan-join",
     "wlan-dataplane",
+    "wlan-udisk",
 ]
 
 #: Anchors a passing case must have left behind (regex, matched on the
@@ -67,6 +68,12 @@ ANCHORS = {
     "wlan-join": [
         r"wlan: join waiting for the supplicant",
         r"wlan: join-ok bssid=",
+    ],
+    "wlan-udisk": [
+        r"wlan: udisk claimed",
+        r"lkpi_udisk: bw read \d+ MiB in \d+ ms = [\d.]+ MB/s",
+        r"lkpi_udisk: bw write \d+ MiB in \d+ ms = [\d.]+ MB/s",
+        r"wlan: udisk bw done",
     ],
     "wlan-dataplane": [
         r"wlan: dataplane up, dhcp started",
@@ -101,17 +108,17 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[ 114.800] BOARD-SUITE threadx-rk3568-wlan "
-    "result=pass cases=6 ok=6 exit=0\r\n"
+    "[ 123.400] BOARD-SUITE threadx-rk3568-wlan "
+    "result=pass cases=7 ok=7 exit=0\r\n"
 )
 
 BASE_TRANSCRIPT = (
     "threadx-rk3568-wlan bring-up selftest-tag\r\n"
     "[   0.000] wlan: chain wired (backend + registry + firmware + bridge)\r\n"
     "[   5.000] BOARD-SUITE threadx-rk3568-wlan select window_ms=5000\r\n"
-    "[  10.000] BOARD-SUITE threadx-rk3568-wlan start cases=6 sel=all "
+    "[  10.000] BOARD-SUITE threadx-rk3568-wlan start cases=7 sel=all "
     "list=shell-up,wlan-probe,wlan-scan,wlan-join-raw,wlan-join,"
-    "wlan-dataplane\r\n"
+    "wlan-dataplane,wlan-udisk\r\n"
     + PROMPT
     + "[  10.010] CASE threadx-rk3568-wlan/shell-up PASS\r\n"
     "[  10.020] wlan: usb bus=1 hcd=ehci base=0xfd880000 started\r\n"
@@ -164,6 +171,13 @@ BASE_TRANSCRIPT = (
     "[ 114.510] wlan: udp sink pkts=15103 bytes=21920300\r\n"
     "[ 114.600] wlan: uplink skipped reason=no-peer\r\n"
     "[ 114.700] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
+    "[ 115.000] wlan: udisk core init bus=3 base=0xfd000000\r\n"
+    "[ 116.200] wlan: udisk claimed\r\n"
+    "[ 118.500] lkpi_udisk: READ CAPACITY blocks=61079552 block_size=512 (29824 MiB)\r\n"
+    "[ 120.000] lkpi_udisk: bw read 32 MiB in 1388 ms = 23.05 MB/s\r\n"
+    "[ 123.100] lkpi_udisk: bw write 16 MiB in 1518 ms = 10.54 MB/s\r\n"
+    "[ 123.200] wlan: udisk bw done\r\n"
+    "[ 123.300] CASE threadx-rk3568-wlan/wlan-udisk PASS\r\n"
     + SENTINEL_LINE
     + PROMPT + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -193,7 +207,7 @@ MUTATIONS = [
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-wlan/wlan-scan PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
-        "cases=6 ok=6 exit=0", "cases=6 ok=5 exit=0"), 1),
+        "cases=7 ok=7 exit=0", "cases=7 ok=6 exit=0"), 1),
     ("sentinel deleted", BASE_TRANSCRIPT.replace(SENTINEL_LINE, ""), 1),
     ("foreign case injected", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-wlan/wlan-scan PASS",
@@ -207,6 +221,8 @@ MUTATIONS = [
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
     ("downlink phase dropped", BASE_TRANSCRIPT.replace(
         "wlan: downlink phase 4 done\r\n", ""), 1),
+    ("udisk bw dropped", BASE_TRANSCRIPT.replace(
+        "lkpi_udisk: bw read 32 MiB in 1388 ms = 23.05 MB/s\r\n", ""), 1),
     ("udp sink ready dropped", BASE_TRANSCRIPT.replace(
         "wlan: udp sink ready port=5002\r\n", ""), 1),
     ("udp sink counts dropped", BASE_TRANSCRIPT
