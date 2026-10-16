@@ -99,6 +99,29 @@ setting、payload 头判界装配帧、帧池——不在开源层里）。详�
 [patches/cherryusb/](patches/cherryusb/README.md)，以及
 [docs/known-limitations.md](docs/known-limitations.md) 记的「测了什么、没测什么」。
 
+## 怎么搭起来的
+
+```
+  app/                    各 OS 与形态的入口
+  os/                     RTOS 端口与 CMSIS-RTOS2 抽象
+  arch/  board/           CPU 层与逐板 BSP
+  components/             驱动与协议栈
+    net80211/             802.11 核心（vendored）
+    linuxkpi/             面向 Linux 驱动的接口层
+    skbuff/  tlsf/  ...   支撑单元
+  ports/                  导入单元的首方黏合
+    net80211/             osal / bus / net 端口 + 驱动桥
+    cherryusb/  fsl_sdmmc/   总线后端（USB 主机、SDIO 主机）
+    lwip/                 网络栈后端
+  third-party/            钉住版本的上游树（Linux 驱动、RTOS 内核）
+  patches/                构建期重放到 vendored 树上的补丁
+  tests/host/  tests/board/   两层测试
+```
+
+**核心是权威，驱动向核心对齐。** 桥呈现的是 Linux 驱动写作时所对着的契约；它不会为迁就
+某颗芯片而放宽。芯片需要接口通常提供的状态时，就把该状态给足驱动，由芯片自己的逻辑完成
+其余。见 [docs/net80211.md](docs/net80211.md)。
+
 ## 怎么构建与测试
 
 从仓库根目录驱动：
