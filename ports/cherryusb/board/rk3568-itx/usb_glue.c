@@ -62,7 +62,8 @@
 #include "board_conf.h"
 #include "gicv3.h"
 #include "log.h"
-#include "minilibc.h"
+#include <stdio.h>
+#include <string.h>
 
 #include "usb_domain.h"
 #include "usb_dwc3.h"

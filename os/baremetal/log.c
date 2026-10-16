@@ -38,7 +38,8 @@
 #ifdef ULOG_ENABLED
 #include "log_anchors.h"
 #endif
-#include "minilibc.h"
+#include <stdio.h>
+#include <string.h>
 #include "arch_asm.h"
 #include "generic_timer.h"
 #include "tick.h"

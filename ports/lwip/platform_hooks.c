@@ -34,7 +34,8 @@
 #include <stdarg.h>
 
 #include "log.h"
-#include "minilibc.h"
+#include <stdio.h>
+#include <string.h>
 #include "arch/aarch64/arch_asm.h"
 
 #define LWIP_HOOKS_LINE_MAX 256u

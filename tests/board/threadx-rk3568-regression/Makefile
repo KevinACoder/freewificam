@@ -215,16 +215,6 @@ endif
 ifneq ($(RXDIRECT),)
 LEVER_CFLAGS += -DCONFIG_GMAC_RX_DIRECT=1
 endif
-# Wide per-frame copies (WIDECOPY=1, 2026-10-20): the image's libc memcpy is
-# the generic scalar loop (disassembly: 8 bytes per iteration; measured
-# 1.5 us/frame at 1514 bytes = ~13% of one core's uplink budget at line
-# rate). The driver's two whole-frame copies (ring->staging on RX, pbuf->TX
-# buffer on send) switch to 64/16-byte __builtin_memcpy chunks so the
-# compiler emits LDP/STP pairs. Semantics identical to memcpy; measurement
-# lever, default off.
-ifneq ($(WIDECOPY),)
-LEVER_CFLAGS += -DCONFIG_GMAC_WIDE_COPY=1
-endif
 # Fine TCP-path probe (2026-10-19 round 3): patch 0002's LWIP_HOOK_TCP_PROBE
 # is pointed at the bridge's site-pair accumulator, so one tcp_input entry's
 # cost splits into segment processing / sent callback / queue walk / wire
@@ -300,10 +290,14 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	$(LEVER_CFLAGS) \
 	-DSHELL_PORT_HOST='"rk3568"'
 
-# The freestanding libc surface is declared everywhere it is used: the vendored
-# shell core calls strnlen without a prototype of its own, and the runner builds
-# its start line with snprintf. Assembly files do not take the C header.
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h \
+# The C library surface comes from the toolchain's newlib now, so the
+# force-include names its standard headers: the vendored shell core calls
+# strnlen without a prototype of its own, the runner builds its start line
+# with snprintf, and every translation unit may use the string/memory
+# primitives without carrying an include. Assembly files do not take the C
+# header.
+CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
+	-include stdlib.h -D_DEFAULT_SOURCE=1 \
 	-DLOG_CMD_USB_KEY=0
 ASM_CFLAGS := $(BASE_CFLAGS)
 
@@ -336,7 +330,9 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
 
-# The string and memory primitives come from the toolchain's newlib now
+# The C library comes from the toolchain's newlib now (string, memory and
+# printf families; libnosys.a carries the syscall stubs nothing here calls).
+# The string and memory primitives were the hand-written memops.c/minilibc.c
 # (libc.a's memcpy is the wide LDP/STP implementation, size-branched; the
 # hand-written memops.c loop moved one u64 per iteration and the census
 # priced it at 1.5 us per 1514-byte frame). libnosys.a carries the syscall
@@ -356,7 +352,7 @@ BASE_SRCS := \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
 	$(ROOT)/board/rk3568-itx/reset.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c

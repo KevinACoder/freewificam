@@ -28,7 +28,7 @@
 
 #include "cmsis2_support.h"
 #include "log.h"
-#include "minilibc.h"
+#include <stdio.h>
 
 /* The backend's deferred-create replay: threads and other objects claimed
  * before the kernel start call are created there, in the only window ThreadX
