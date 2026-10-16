@@ -823,14 +823,19 @@ static void eqos_frame_copy_wide(uint8_t *dst, const uint8_t *src, unsigned int 
 }
 
 #if defined(CONFIG_GMAC_WIDE_COPY) && CONFIG_GMAC_WIDE_COPY
-static uint8_t s_wide_copy = 1u;
+static uint8_t s_wide_copy = 3u;	/* both sites; bit0 = RX, bit1 = TX */
 #else
 static uint8_t s_wide_copy = 0u;
 #endif
 
-static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len)
+/* Per-site selector: a lost downlink byte-trail with the wide copies on made
+ * the RX staging site a suspect, and the uplink win sits on the TX site, so
+ * the seam splits by side (gmac wcopysel <mask>, bit0 = the RX staging copy,
+ * bit1 = the TX frame copy). One boot then prices each side alone. */
+static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len,
+			    uint8_t wide)
 {
-	if (s_wide_copy != 0u) {
+	if (wide != 0u) {
 		eqos_frame_copy_wide(dst, src, len);
 		return;
 	}
@@ -851,7 +856,7 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 
 	stage = &dev->rx_stage[dev->rx_stage_head];
 	stage->len = (uint16_t)len;
-	eqos_frame_copy(stage->data, buf, len);
+	eqos_frame_copy(stage->data, buf, len, (uint8_t)(s_wide_copy & 1u));
 	dev->rx_stage_head = next;
 	dev->stats.rx_frames++;
 
@@ -1409,14 +1414,28 @@ unsigned int dwc_eqos_get_tx_ioc_div(unsigned int index)
 
 /* Wide-copy seam: global, not per-port - this image has one live port and the
  * copy helper is context-free (the RX-notify hook next door has the same
- * shape). See the eqos_frame_copy block for the contract. */
+ * shape). See the eqos_frame_copy block for the contract. `on` is the coarse
+ * both-sites knob; the selector takes the per-site mask (bit0 = RX staging,
+ * bit1 = TX frame). */
 void dwc_eqos_set_wide_copy(unsigned int index, unsigned int on)
 {
 	(void)index;
-	s_wide_copy = (on != 0u) ? 1u : 0u;
+	s_wide_copy = (on != 0u) ? 3u : 0u;
 }
 
 unsigned int dwc_eqos_get_wide_copy(unsigned int index)
+{
+	(void)index;
+	return (unsigned int)s_wide_copy;
+}
+
+void dwc_eqos_set_wide_copy_sel(unsigned int index, unsigned int mask)
+{
+	(void)index;
+	s_wide_copy = (uint8_t)(mask & 3u);
+}
+
+unsigned int dwc_eqos_get_wide_copy_sel(unsigned int index)
 {
 	(void)index;
 	return (unsigned int)s_wide_copy;
@@ -2135,7 +2154,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		if (next != dev->tx_tail) {
 			buf = tx_buffers[index][cur];
 			t_copy = eqos_prof_t0();
-			eqos_frame_copy(buf, frame, len);
+			eqos_frame_copy(buf, frame, len,
+					(uint8_t)((s_wide_copy >> 1) & 1u));
 			eqos_prof[index].tx_memcpy_ticks += eqos_prof_t0() - t_copy;
 
 			/* Ethernet requires 60 bytes before the FCS: a
