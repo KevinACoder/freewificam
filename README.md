@@ -39,8 +39,9 @@ link on both, and a gate rejects a foreign kernel call in a component.
 
 ## What runs today
 
-Three USB WiFi lines, one SDIO line and one PCIe line are brought up on the
-reference board, and the USB camera line streams frames on the same board.
+Three USB WiFi lines, one SDIO line, one PCIe line and the board's own
+gigabit Ethernet are brought up on the reference board, and the USB camera
+line streams frames on the same board.
 "Full chain" means the card is enumerated, its firmware loaded, it scans, it
 joins a WPA2 network, it gets an address over DHCP, it answers ping, and TCP
 data flows. It does not mean the throughput is good.
@@ -52,6 +53,7 @@ data flows. It does not mean the throughput is good.
 | `rtw89` | RTL8851BU | **Experimental**: full chain reached, join intermittent, link poor. |
 | SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. **It also runs as an open access point**: a station associates to the board, and both directions measure (see [Throughput](#throughput)). |
 | `iwlwifi` | Intel Wireless-AC 7260 | Full chain, over PCIe message interrupts (GICv3 ITS): the driver routes station management and data frames through its transmit queues, and the port owns the two delivery contexts a threaded interrupt needs. |
+| GMAC (wired) | RK3568 MAC + RTL8211F PHY | Full chain: DHCP, ping and a single TCP stream in both directions against a Raspberry Pi peer over the on-board RJ45 - the closest line to Linux on this board (see [Throughput](#throughput)). |
 | UVC | Logitech Pro 9000 | Camera enumerated, opened and streaming MJPEG 640x480 over its isochronous endpoint (see [The camera line](#the-camera-line)). |
 
 The board, the connectors and pin/PHY multiplexing behind these lines, and which
@@ -81,7 +83,7 @@ worked on: its receive path was measured first and two levers were found and
 adopted - a pump cadence that keeps serving a busy card (+45%) and the card's
 own receive-aggregation timeout byte (+42% at HT20) - which moved it from one
 fourth of Linux to **about 1/1.7 (down) and 1/1.9 (up)**, the closest of the
-lines. Its reverse direction was measured for the first time on the same rig
+wireless lines. Its reverse direction was measured for the first time on the same rig
 (board as the iperf client), so the "not measured" cells above are per-line
 facts, not a blanket one. Its access point mode, brought up later, measures
 19.8-20.2 Mbit/s down and 18.3 Mbit/s up with a station associated to the board
@@ -93,6 +95,32 @@ The gap to Linux is still large on most lines, and it is the current open
 problem. It is stated here rather than hidden: the value of the port so far is
 in the structure, not in the numbers. See
 [docs/known-limitations.md](docs/known-limitations.md).
+
+### Wired Ethernet (GMAC)
+
+The board's own gigabit MAC (the RK3568 GMAC behind an RTL8211F PHY), measured
+as a single TCP stream between the board and a Raspberry Pi peer over the
+on-board RJ45. Same board under Linux, same peer: **940 Mbit/s up / 941 Mbit/s
+down**. UDP through the same driver measures 955 down / 957 up, which is what
+the wire path itself carries at this frame size.
+
+| Direction | RTOS, four sheets in one boot (2026-10-20) | Linux, same board and peer |
+|---|---|---|
+| Up (board to peer) | **894.5 - 919.2, median 900.0 Mbit/s** | 940 Mbit/s |
+| Down (peer to board) | 684.0 - 760.6, median 742.4 Mbit/s | 941 Mbit/s |
+
+The uplink sits at 95.7% of the Linux build and is the first figure on this
+board at or above the line's own 900 Mbit/s acceptance bar; the downlink is at
+79% and is the open half. Two changes carried it here. An interrupt census
+classified every interrupt entry by its raw status word and retired a wrong
+hypothesis with it: the "odd" interrupt family that timing had charged 5% of
+the core measured 0.1-0.2%, while the entry cost that matters is 1.9 us
+overall. And the C library now comes from the toolchain's newlib instead of
+the image's own copy of it - the hand-written 1514-byte memcpy moved one
+8-byte word per loop iteration and cost 1.5 us per frame, about 13% of the
+single core at line rate, where newlib's size-branched LDP/STP implementation
+moves 16 bytes per instruction. The same swap is still to be applied to the
+other board images.
 
 ### The camera line
 
