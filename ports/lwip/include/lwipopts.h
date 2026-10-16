@@ -168,7 +168,16 @@
  * arithmetic at ~40-58 Mbit/s, above the target. */
 #define LWIP_WND_SCALE                  1
 #define TCP_RCV_SCALE                   4
+/* Guarded so a WND= make lever can win: the receive window must be sized
+ * against the RECEIVE RING, not only the RTT - a window larger than the
+ * driver's ring depth lets the peer put more frames in flight than the
+ * DMA can hold, and the ring then overflows at the MAC (wire-measured
+ * 2026-10-19: 512 KB = 358 frames against a 128-slot ring, MMC FIFO
+ * overflow 2.1k, retransmit-filled holes, downlink collapsed to 30-90
+ * Mbit/s once the ACK stream stopped pacing the peer). */
+#ifndef TCP_WND
 #define TCP_WND                         524288
+#endif
 /* Guarded so the SNDBUF= make lever can win (the queue-walk experiment);
  * unset = the converged default. TCP_SND_QUEUELEN's floor is
  * 4 * TCP_SND_BUF / TCP_MSS. */

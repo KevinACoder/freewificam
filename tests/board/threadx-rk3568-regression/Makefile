@@ -241,6 +241,14 @@ ifneq ($(SNDBUF),)
 LEVER_CFLAGS += -DTCP_SND_BUF=$(SNDBUF) \
 	-DTCP_SND_QUEUELEN=$(shell echo $$(( $(SNDBUF) / 365 + 2 )))
 endif
+# TCP receive-window lever (WND=<bytes>). The receive window must fit the
+# driver's RX ring: a window larger than the ring depth (128 slots) lets the
+# peer put more frames in flight than the DMA can hold, and the ring
+# overflows at the MAC. 131072 = 90 frames, safely inside the ring; the
+# default 524288 (chosen for the SDIO line's long loaded RTT) is 358.
+ifneq ($(WND),)
+LEVER_CFLAGS += -DTCP_WND=$(WND)
+endif
 # Delayed-ACK watermark lever (ACKDELAY=N; patch 0003, default 2). N=4 holds
 # the ACK across four in-order data segments - the downlink's per-frame cost
 # is half ACK send (B1: ctrl+dack ~= 3.45 us/frame); halving the ACK count
