@@ -175,9 +175,12 @@ int sscanf(const char *str, const char *fmt, ...)
 }
 
 /* The name the supplicant build's token rename maps its own calls onto
- * (sscanf=wpa_port_sscanf); the same body, one implementation. */
+ * (sscanf=wpa_port_sscanf); the same body, one implementation. The format
+ * and nonnull attributes match what the host build's libc declares for
+ * sscanf - an alias may not carry less restrictive attributes than its
+ * target. */
 int wpa_port_sscanf(const char *str, const char *fmt, ...)
-	__attribute__((alias("sscanf")));
+	__attribute__((alias("sscanf"), format(scanf, 2, 3), nonnull(1, 2)));
 
 /* strdup is heap-backed, so it lives in the wpa port layer rather than the
  * base C library (newlib's strdup would pull the heap the baremetal configs

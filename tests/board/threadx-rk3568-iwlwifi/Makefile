@@ -299,7 +299,6 @@ LDFLAGS := -nostdlib -static \
 	-Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
-	-lgcc
 
 # --- compile set -------------------------------------------------------------
 
