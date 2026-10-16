@@ -46,6 +46,7 @@
 #include "board_suite.h"
 #include "wlan8189_cases.h"
 #include "wlan8189_census.h"
+#include "sys_mbox_seam.h"
 #include "lkpinetif.h"
 #include "lwip_stack.h"
 #include "wlan8189_wpa_obs.h"
@@ -76,6 +77,28 @@ struct wiphy *lkpicfg_wiphy(void);
  * the round's whole discipline. */
 #define WLAN8189_IPERF_WINDOW_MS	20000U
 #define WLAN8189_IPERF_PHASES		4U
+
+/* The loaded-interval detector: the phase window is an orchestration envelope
+ * (the host client connects into it on its own schedule), while the numbers a
+ * reader wants describe the interval that actually carried traffic. The census
+ * bracket is therefore re-armed at the first 200 ms step whose received bytes
+ * exceed this threshold - two orders of magnitude above keepalive noise and
+ * far below one step of any real client (a 29 Mbit/s stream moves ~725 KB in
+ * one step) - and the phase's own `traffic start` line carries the offset. A
+ * phase whose client never came keeps the full-window bracket and simply
+ * prints no start line.
+ *
+ * The end is detected the same way, from the other side: after the client
+ * stops, the step's bytes fall back to keepalive scale, and three consecutive
+ * quiet steps (never before the minimum, so a mid-transfer stall does not end
+ * the window under a running client) close the envelope. The phase's bracket
+ * then covers the loaded interval and a sub-second tail instead of the whole
+ * orchestration envelope - the difference between a read geometry that means
+ * something and one averaged with ten seconds of idle. */
+#define WLAN8189_TRAFFIC_ONSET_BYTES	8192UL
+#define WLAN8189_TRAFFIC_END_BYTES	2048UL
+#define WLAN8189_TRAFFIC_END_STEPS	3U
+#define WLAN8189_TRAFFIC_MIN_MS		5000U
 
 /* The uplink sheet's own shape: the same phase count and arm order as the
  * downlink sheet, but the window is the library's - lwiperf's client hard-codes
@@ -321,6 +344,19 @@ census_print_lwip(void)
 	    (unsigned)lwip_stats.sys.mbox.used, (unsigned)lwip_stats.sys.mbox.max,
 	    (unsigned)lwip_stats.sys.mbox.err);
 #endif
+	/* the mailbox's own traffic (see sys_mbox_seam.h): the stock sys-stats
+	 * fields above are never incremented by this port, so the real per-frame
+	 * post count lives here - a mode that runs the input in place must show
+	 * post_ok collapsing while fetch counts follow the traffic */
+	{
+		struct sys_mbox_seam m;
+
+		sys_mbox_seam_get(&m);
+		LOG_ANCHOR("perf census: C mbox post_ok=%lu post_full=%lu "
+		    "fetch_ok=%lu fetch_empty=%lu fetch_wait_ms=%llu\n",
+		    m.post_ok, m.post_full, m.fetch_ok, m.fetch_empty,
+		    m.fetch_wait_ms);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -735,8 +771,60 @@ void wlan8189_dataplane_chain( void )
 			    LWIPERF_TCP_PORT_DEFAULT );
 			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
 			    (unsigned)( WLAN8189_IPERF_WINDOW_MS / 1000U ) );
-			for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS; waited += 200U ) {
-				(void)osDelay( 200U );
+
+			/*
+			 * The envelope wait with the loaded-interval detector (see the
+			 * defines above): watch the received-byte total per 200 ms step,
+			 * re-arm the census bracket at the onset step so the phase's
+			 * counters describe the loaded interval, and close the envelope
+			 * once the client has demonstrably stopped. The step's own totals
+			 * are printed at both boundaries so the bracket can be
+			 * reconciled against the peer's capture byte for byte.
+			 */
+			{
+				struct lkpinetif_diag d;
+				unsigned long prev;
+				unsigned int elapsed = 0U;
+				unsigned int onset_ms = 0U;
+				unsigned int idle_steps = 0U;
+
+				lkpinetif_get_diag( &d );
+				prev = d.rx_bytes;
+				for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS;
+				    waited += 200U ) {
+					(void)osDelay( 200U );
+					elapsed = waited + 200U;
+					lkpinetif_get_diag( &d );
+					if( onset_ms == 0U ) {
+						if( d.rx_bytes - prev >=
+						    WLAN8189_TRAFFIC_ONSET_BYTES ) {
+							onset_ms = elapsed;
+							/* the bracket starts where the
+							 * traffic does */
+							wlan8189_census_reset();
+							LOG_ANCHOR( "wlan8189: phase %u "
+							    "traffic start t_ms=%u "
+							    "rx=%lu\n", phase, onset_ms,
+							    d.rx_bytes );
+						}
+					} else if( d.rx_bytes - prev <
+					    WLAN8189_TRAFFIC_END_BYTES ) {
+						idle_steps++;
+						if( idle_steps >=
+						    WLAN8189_TRAFFIC_END_STEPS &&
+						    elapsed >=
+						    WLAN8189_TRAFFIC_MIN_MS ) {
+							LOG_ANCHOR( "wlan8189: phase "
+							    "%u traffic end t_ms=%u "
+							    "rx=%lu\n", phase, elapsed,
+							    d.rx_bytes );
+							break;
+						}
+					} else {
+						idle_steps = 0U;
+					}
+					prev = d.rx_bytes;
+				}
 			}
 			LOG_ANCHOR( "wlan8189: iperf window done\n" );
 			LOG_ANCHOR( "wlan8189: udp sink pkts=%u bytes=%lu\n",

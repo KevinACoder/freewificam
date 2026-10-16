@@ -129,6 +129,46 @@ endif
 ifneq ($(DRAIN),)
 LEVER_CFLAGS += -DWLAN8189_PUMP_DRAIN=1
 endif
+# The stack-side levers below ride the guarded options in
+# ports/lwip/include/lwipopts.h (every one is #ifndef-wrapped, so a -D wins)
+# and patch 0003's watermark. They are whole-boot constants like DRAIN - the
+# receive service question is about the stack's shape, not about a per-phase
+# SDIO register - so each boot carries one and the phases stay A/B/A/B over
+# the sheet's own lever.
+#
+# Input on the caller's thread under the core lock (CORELOCKIN=1), instead of
+# one mailbox post per frame plus a thread switch. This project's wired line
+# measured it at +13% up and +22% down with zero loss; the SDIO driver's
+# receive indication runs on the linuxkpi workqueue thread (not under the
+# bus claim - the claim contract forbids handlers claiming), so the flip has
+# no claim-recursion shape here.
+ifneq ($(CORELOCKIN),)
+LEVER_CFLAGS += -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+endif
+# Delayed-ACK watermark (ACKDELAY=N; patch 0003, default 2 = upstream). The
+# per-frame ACK cost is the downlink's largest single term in the wired
+# measurements; on this line the ACK stream is also what paces the peer, so a
+# higher watermark trades feedback latency for fewer ACK frames - measured,
+# not assumed.
+ifneq ($(ACKDELAY),)
+LEVER_CFLAGS += -DLWIP_TCP_ACK_DELAY_SEGMENTS=$(ACKDELAY)
+endif
+# Receive-window lever (WND=<bytes>). The window must fit the receive path's
+# buffer depth: a window larger than the driver's RX ring lets the peer put
+# more frames in flight than the DMA can hold (wire-measured on this line:
+# 512 KiB across a 128-slot ring overflowed the card's FIFO and collapsed the
+# downlink once the ACK stream stopped pacing the peer). The default stays
+# 524288; a treatment value below it is the safe direction on this line.
+ifneq ($(WND),)
+LEVER_CFLAGS += -DTCP_WND=$(WND)
+endif
+# TCP send-buffer lever (SNDBUF=<bytes>), with the queue length following the
+# 4*SND_BUF/MSS floor. Uplink-side lever, kept here so both directions can be
+# re-measured from one image build.
+ifneq ($(SNDBUF),)
+LEVER_CFLAGS += -DTCP_SND_BUF=$(SNDBUF) \
+	-DTCP_SND_QUEUELEN=$(shell echo $$(( $(SNDBUF) / 365 + 2 )))
+endif
 # The throughput census is this image's: the instrumented layers (linuxkpi
 # core/SDIO engine/osdep, the SDIO port, the controller driver, the netif
 # adapter, the console sink) carry their counters behind this key, and every

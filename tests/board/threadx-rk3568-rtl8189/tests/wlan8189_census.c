@@ -524,6 +524,75 @@ wlan8189_census_reset(void)
 	card_free_n = 0u;
 }
 
+/*
+ * The delta epoch of the cumulative groups: the driver's own counters (B) and
+ * the netif handoff (C) are lifetime totals no reset touches, so a per-phase
+ * value is this snapshot minus the previous one. The absolute lines above stay
+ * byte-for-byte; these Bd/Cd lines carry the difference a per-phase account
+ * needs, and the epoch marker reports when the chain restarted (the first
+ * snapshot of a boot has no predecessor). Only monotone counters are
+ * subtracted - summed latencies yes, the max fields no (a lifetime maximum
+ * minus a lifetime maximum is not an interval maximum).
+ */
+struct wlan8189_delta_epoch {
+	unsigned long long b_rx_pkts, b_rx_drop, b_rx_core, b_rx_ampdu_drop,
+	    b_rx_forced, b_rx_loss, b_rx_shift;
+	unsigned long long b_tx_pkts, b_tx_drop;
+	struct lkpinetif_diag c;
+	int valid;
+};
+
+static struct wlan8189_delta_epoch delta_epoch;
+
+static void
+census_print_deltas( _adapter *adapter, const struct lkpinetif_diag *d )
+{
+
+	if( delta_epoch.valid ) {
+		if( adapter != NULL ) {
+			printk("perf census: Bd rx pkt=%llu drop=%llu core=%llu ampdu_drop=%llu forced=%llu loss=%llu shift=%llu\n",
+			    (unsigned long long)adapter->recvpriv.rx_pkts - delta_epoch.b_rx_pkts,
+			    (unsigned long long)adapter->recvpriv.rx_drop - delta_epoch.b_rx_drop,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_drop_count - delta_epoch.b_rx_core,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_drop_count - delta_epoch.b_rx_ampdu_drop,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_forced_indicate_count - delta_epoch.b_rx_forced,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_loss_count - delta_epoch.b_rx_loss,
+			    (unsigned long long)adapter->recvpriv.dbg_rx_ampdu_window_shift_cnt - delta_epoch.b_rx_shift);
+			printk("perf census: Bd tx pkt=%llu drop=%llu\n",
+			    (unsigned long long)adapter->xmitpriv.tx_pkts - delta_epoch.b_tx_pkts,
+			    (unsigned long long)adapter->xmitpriv.tx_drop - delta_epoch.b_tx_drop);
+		}
+		printk("perf census: Cd netif rx=%lu bytes=%lu eapol=%lu foreign=%lu nonetif=%lu infail=%lu tx=%lu fail=%lu tx_bytes=%lu\n",
+		    d->rx_frames - delta_epoch.c.rx_frames,
+		    d->rx_bytes - delta_epoch.c.rx_bytes,
+		    d->rx_eapol - delta_epoch.c.rx_eapol,
+		    d->rx_foreign - delta_epoch.c.rx_foreign,
+		    d->rx_no_netif - delta_epoch.c.rx_no_netif,
+		    d->rx_input_fail - delta_epoch.c.rx_input_fail,
+		    d->tx_frames - delta_epoch.c.tx_frames,
+		    d->tx_fail - delta_epoch.c.tx_fail,
+		    d->tx_bytes - delta_epoch.c.tx_bytes);
+		printk("perf census: Cd netif_lat rx_deliver_us=%llu tx_ndo_us=%llu\n",
+		    (unsigned long long)(( d->rx_deliver_ns - delta_epoch.c.rx_deliver_ns ) / 1000u),
+		    (unsigned long long)(( d->tx_ndo_ns - delta_epoch.c.tx_ndo_ns ) / 1000u));
+	} else {
+		printk("perf census: Bd epoch=first (no predecessor: deltas start at the next snapshot)\n");
+	}
+	if( adapter != NULL ) {
+		delta_epoch.b_rx_pkts = adapter->recvpriv.rx_pkts;
+		delta_epoch.b_rx_drop = adapter->recvpriv.rx_drop;
+		delta_epoch.b_rx_core = adapter->recvpriv.dbg_rx_drop_count;
+		delta_epoch.b_rx_ampdu_drop = adapter->recvpriv.dbg_rx_ampdu_drop_count;
+		delta_epoch.b_rx_forced = adapter->recvpriv.dbg_rx_ampdu_forced_indicate_count;
+		delta_epoch.b_rx_loss = adapter->recvpriv.dbg_rx_ampdu_loss_count;
+		delta_epoch.b_rx_shift = adapter->recvpriv.dbg_rx_ampdu_window_shift_cnt;
+		delta_epoch.b_tx_pkts = adapter->xmitpriv.tx_pkts;
+		delta_epoch.b_tx_drop = adapter->xmitpriv.tx_drop;
+	}
+	delta_epoch.c = *d;
+	delta_epoch.valid = 1;
+}
+
 void
 wlan8189_census_print(void)
 {
@@ -600,6 +669,10 @@ wlan8189_census_print(void)
 	    (unsigned long long)(d.rx_deliver_max_ns / 1000u),
 	    (unsigned long long)(d.tx_ndo_ns / 1000u),
 	    (unsigned long long)(d.tx_ndo_max_ns / 1000u));
+	/* the per-snapshot movement of the cumulative groups (B, C): the
+	 * absolute lines above are the endpoints, these are the difference a
+	 * per-phase account reads */
+	census_print_deltas(adapter, &d);
 
 	wlan8189_census_log_get(&log_in_lines, &log_in_bytes, &log_out_lines,
 	    &log_out_bytes);
