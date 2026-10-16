@@ -1065,8 +1065,12 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
  * the polling data path - clearing them from here would steal a completion
  * its wait loops are about to read, and the prior line's interrupt round
  * measured exactly that failure (armed card interrupt, every CMD53 timed
- * out). A status word without the card bit is counted as spurious and left
- * alone; the census prints both counts.
+ * out). But those bits share this interrupt line and are not gated by the
+ * controller's mask register: the first board round with this path armed
+ * counted ~5.2e5 entries without the card bit in one 20 s phase (~173 per
+ * receive transfer - the whole polled window). So a status word without the
+ * card bit stands the line down (mask + GIC disable) and the pump's next
+ * re-arm brings it back; the census counts both classes.
  */
 static void dwc_mmc_card_isr(void *arg)
 {
@@ -1075,9 +1079,26 @@ static void dwc_mmc_card_isr(void *arg)
 	uint32_t status = mmio_rd32(base + DWC_MMC_RINTSTS);
 
 	if ((status & DWC_MMC_INT_SDIO) == 0U) {
+		/*
+		 * Not ours. The IDMAC's completion bits share this interrupt line
+		 * and are not gated by the controller's mask register, so a data
+		 * transfer in flight asserts it while the polled wait is about to
+		 * read IDSTS. Standing the line down here - and letting the pump's
+		 * next cycle re-arm it - costs nothing: the RX wait keeps its own
+		 * IDSTS read, and a card event that arrived in this window (the
+		 * controller does not even sample DAT1 during a data transfer)
+		 * is found by the pump's pending-word read either way.
+		 */
 #ifdef CONFIG_LKPI_CENSUS
 		dwc_mmc_census_state.card_irq_spurious++;
 #endif
+		hc->card_irq_armed = false;
+		mmio_wr32(base + DWC_MMC_INTMASK,
+			  mmio_rd32(base + DWC_MMC_INTMASK) &
+				  ~(uint32_t)DWC_MMC_INT_SDIO);
+		if (hc->card_irq_registered) {
+			(void)irq_disable((uint32_t)hc->cfg.intid);
+		}
 		return;
 	}
 
