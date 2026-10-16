@@ -989,20 +989,24 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	 * the last slot re-armed. See the tail rule below. */
 	i = (int)dev->rx_scan;
 	left = DWC_EQOS_RX_DESC_COUNT;
+#elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 6)
+	/* ARRIVAL-ORDERED FULL PASS (2026-10-19 round 4). The default walk
+	 * starts at slot 0 every pass, so a pending set straddling the ring
+	 * wrap ([old high..127] + [young 0..k]) is processed young-first: the
+	 * stack sees a hole it never lost, emits duplicate ACKs and the peer's
+	 * fast retransmits collapse the downlink (wire-measured 2026-10-19:
+	 * 15-57% duplicate ACKs, 13.9k spurious retransmits, 556 stalls
+	 * resolved with no retransmit - delivery-order inversion). Starting
+	 * the same FULL pass at the persistent cursor instead delivers in
+	 * arrival order, wrap included, while keeping the exact probe pattern
+	 * of the default (all COUNT slots per pass) - the early-stop variants
+	 * (SCAN=2/4/5) all parked this DMA (MMC FIFO overflow, frames lost to
+	 * retransmit-filled holes), so the full pass is the part proven safe.
+	 * The publish keeps the default's value class: the highest index
+	 * processed (max_armed). */
+	i = (int)dev->rx_scan;
+	left = DWC_EQOS_RX_DESC_COUNT;
 #elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 5)
-	/* ARRIVAL-ORDERED CURSOR WALK (2026-10-19, the wrap-interleave fix):
-	 * start at the oldest not-yet-processed slot and stop at the first
-	 * still-owned one. The DMA fills slots in ring order and laps
-	 * continuously, so "from the cursor, stop at the first OWN=1" visits
-	 * exactly the written slots IN ARRIVAL ORDER - including across a ring
-	 * wrap, where 125..127 (older) are staged before 0..7 (younger). The
-	 * whole-ring scan (the default) walks 0..127 every pass, so a wrap
-	 * interleave delivers young frames BEFORE old ones: the stack sees a
-	 * hole it never lost, emits duplicate ACKs, the peer fast-retransmits
-	 * and halving cwnd throttles the downlink. The tail publish stays the
-	 * address-MAXIMUM processed (below) - the bounded walks 2/4 failed
-	 * precisely because they published the young low slot after a wrap,
-	 * which retracts the DMA's fetch grant. */
 	i = (int)dev->rx_scan;
 	left = DWC_EQOS_RX_DESC_COUNT;
 #elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 2)
@@ -1174,19 +1178,16 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	 *
 	 * The whole-ring scan keeps its last-re-armed landing point: that is
 	 * what every working measurement was taken with. */
-#if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 5)
+#if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 6)
+	if (max_armed >= 0) {
+		/* Same value class as the default's last_armed (the highest
+		 * index processed in an index-ordered full pass): the cursor
+		 * changes the ORDER of processing, not the publish. */
+		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
+			(uint32_t)(uintptr_t)&dev->rx_ring[max_armed]);
+	}
+#elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 5)
 	if (delivered > 0) {
-		/* Publish the constant address-maximum (ring[127]). The tail
-		 * semantics measured on this core (TRM 20.6.10.4 + the whole
-		 * scan-2/4/5 history): the DMA only resumes when the written
-		 * value is at or beyond its current fetch position; a publish
-		 * that lands behind it retracts the grant and parks the
-		 * channel until the 100 ms watchdog pokes ring[127] - that is
-		 * exactly the 35 Mbit/s SCAN=5 collapse (max_armed was a mid-
-		 * range value on most passes). Ordering is carried by the
-		 * cursor walk (arrival order); the publish value only grants
-		 * room, so it is kept at the one value no position can
-		 * outrun. */
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
 			(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
 	}
