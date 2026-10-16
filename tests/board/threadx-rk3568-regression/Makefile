@@ -333,7 +333,17 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-u,usb_board_reg_base \
 	-Wl,-u,usbh_initialize \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
+
+# The string and memory primitives come from the toolchain's newlib now
+# (libc.a's memcpy is the wide LDP/STP implementation, size-branched; the
+# hand-written memops.c loop moved one u64 per iteration and the census
+# priced it at 1.5 us per 1514-byte frame). libnosys.a carries the syscall
+# stubs nothing here calls; -lgcc keeps the compiler helpers. The suite's
+# own printf stack (components/printf + minilibc's thin binding) stays.
+# The change is per suite: the other board suites still link memops.c until
+# they each get their own measurement round.
 
 # --- compile set (six domains) ---------------------------------------------
 
@@ -346,7 +356,6 @@ BASE_SRCS := \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
 	$(ROOT)/board/rk3568-itx/reset.c \
-	$(ROOT)/os/baremetal/memops.c \
 	$(ROOT)/os/baremetal/minilibc.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
