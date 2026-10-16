@@ -1175,15 +1175,20 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	 * The whole-ring scan keeps its last-re-armed landing point: that is
 	 * what every working measurement was taken with. */
 #if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 5)
-	if (max_armed >= 0) {
-		/* Publish the address-MAXIMUM slot processed this pass. In a
-		 * wrapped pass that is an old high slot (e.g. 127), whose
-		 * address is ahead of the DMA's current position - the same
-		 * value class every working measurement published. Publishing
-		 * the last-PROCESSED slot instead (the young low one after a
-		 * wrap) is exactly what wedged the bounded walks 2/4. */
+	if (delivered > 0) {
+		/* Publish the constant address-maximum (ring[127]). The tail
+		 * semantics measured on this core (TRM 20.6.10.4 + the whole
+		 * scan-2/4/5 history): the DMA only resumes when the written
+		 * value is at or beyond its current fetch position; a publish
+		 * that lands behind it retracts the grant and parks the
+		 * channel until the 100 ms watchdog pokes ring[127] - that is
+		 * exactly the 35 Mbit/s SCAN=5 collapse (max_armed was a mid-
+		 * range value on most passes). Ordering is carried by the
+		 * cursor walk (arrival order); the publish value only grants
+		 * room, so it is kept at the one value no position can
+		 * outrun. */
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
-			(uint32_t)(uintptr_t)&dev->rx_ring[max_armed]);
+			(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
 	}
 #elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 4)
 	if (stop_slot >= 0) {
