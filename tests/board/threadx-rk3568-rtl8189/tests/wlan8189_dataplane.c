@@ -334,7 +334,10 @@ census_print_lwip(void)
 	    (unsigned)lwip_stats.tcp.drop, (unsigned)lwip_stats.tcp.chkerr,
 	    (unsigned)lwip_stats.tcp.memerr, (unsigned)lwip_stats.tcp.err);
 #endif
-#if LWIP_STATS && MEMP_STATS
+#if LWIP_STATS && MEMP_STATS && !LWIP_TCPIP_CORE_LOCKING_INPUT
+	/* the per-frame input pool exists only in mailbox-input mode
+	 * (memp_std.h guards its LWIP_MEMPOOL on exactly this macro), so a
+	 * direct-input build has no pool here to read - and none to report */
 	LOG_ANCHOR("perf census: C lwip_msg err=%u max=%u\n",
 	    (unsigned)lwip_stats.memp[MEMP_TCPIP_MSG_INPKT]->err,
 	    (unsigned)lwip_stats.memp[MEMP_TCPIP_MSG_INPKT]->max);
