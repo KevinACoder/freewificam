@@ -73,11 +73,14 @@ ANCHORS = {
         r"wlan: dhcp bound ip=\d+\.\d+\.\d+\.\d+/",
         r"wlan: ping window done",
         r"wlan: iperf server ready port=5001",
-        # the bounded window the round's traffic peer drives the server
-        # through; without it the runner powers off before the peer's
-        # client can be measured against the server
-        r"wlan: measure window=\d+ s",
-        r"wlan: measure window done",
+        # the phased measurement arm: the first window announces itself before
+        # it opens (which is what the peer waits for) and the last one closes,
+        # so a sheet that lost a phase - or never opened the arm - is visible
+        r"wlan: downlink phase 1 ready window=\d+ s",
+        r"wlan: downlink phase 4 done",
+        # the reverse direction: either this image's client ran against the
+        # named peer, or the stage says why it did not
+        r"wlan: uplink (phase \d+ ready peer=|skipped reason=no-peer)",
     ],
 }
 
@@ -94,7 +97,7 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[  79.400] BOARD-SUITE threadx-rk3568-wlan "
+    "[ 114.800] BOARD-SUITE threadx-rk3568-wlan "
     "result=pass cases=6 ok=6 exit=0\r\n"
 )
 
@@ -142,9 +145,16 @@ BASE_TRANSCRIPT = (
     "[  29.000] ping: recv 192.168.0.1 1 ms\r\n"
     "[  34.000] wlan: ping window done\r\n"
     "[  34.100] wlan: iperf server ready port=5001\r\n"
-    "[  34.200] wlan: measure window=45 s\r\n"
-    "[  79.200] wlan: measure window done\r\n"
-    "[  79.300] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
+    "[  34.200] wlan: downlink phase 1 ready window=20 s\r\n"
+    "[  54.200] wlan: downlink phase 1 done\r\n"
+    "[  54.300] wlan: downlink phase 2 ready window=20 s\r\n"
+    "[  74.300] wlan: downlink phase 2 done\r\n"
+    "[  74.400] wlan: downlink phase 3 ready window=20 s\r\n"
+    "[  94.400] wlan: downlink phase 3 done\r\n"
+    "[  94.500] wlan: downlink phase 4 ready window=20 s\r\n"
+    "[ 114.500] wlan: downlink phase 4 done\r\n"
+    "[ 114.600] wlan: uplink skipped reason=no-peer\r\n"
+    "[ 114.700] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
     + SENTINEL_LINE
     + PROMPT + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -186,8 +196,8 @@ MUTATIONS = [
         "wlan: scan done rows=2 chans=12\r\n", ""), 1),
     ("gt match dropped", BASE_TRANSCRIPT.replace(
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
-    ("measure window dropped", BASE_TRANSCRIPT.replace(
-        "wlan: measure window done\r\n", ""), 1),
+    ("downlink phase dropped", BASE_TRANSCRIPT.replace(
+        "wlan: downlink phase 4 done\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,wlan-probe,wlan-scan,wlan-join-raw,wlan-join,"

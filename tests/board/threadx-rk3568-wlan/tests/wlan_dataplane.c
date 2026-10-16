@@ -53,13 +53,28 @@ void	wlan_wpa_vendor_events_arm(void);
 
 #define WLAN_DHCP_WAIT_MS	45000U
 #define WLAN_PING_WAIT_MS	9000U
-/* The window the round's traffic peer drives the server through.  The runner
- * powers the board off once the suite reports its result, so a server that is
- * merely up is not measurable: the case has to hold the image alive for the
- * bounded window the peer's client needs.  The peer starts its client when
- * this window opens (it watches for the ready line on the console), so the
- * window only has to cover the traffic, not the boot. */
-#define WLAN_MEASURE_WAIT_MS	45000U
+
+/*
+ * The measurement arm: equal windows in one boot, the shape the SDIO line's
+ * sheet uses (tests/board/threadx-rk3568-rtl8189/tests/wlan8189_dataplane.c).
+ * The runner powers the board off once the suite reports its result, so a
+ * server that is merely up is not measurable - the case has to hold the image
+ * alive for the windows the peer drives.  Each phase announces itself on the
+ * console before it opens, which is what the peer waits for; a client that
+ * arrives late then costs one phase instead of the boot, and the four numbers
+ * of one boot are comparable to each other.
+ *
+ * Downlink: the peer's client drives this image's lwiperf server.
+ * Uplink: this image's client drives the peer's server, so the peer must be
+ * named first (`wlan uplink <a.b.c.d>`, sent by the runner's extra steps);
+ * with none the stage says so and leaves the verdict the downlink half earned.
+ */
+#define WLAN_IPERF_WINDOW_MS	20000U
+#define WLAN_IPERF_PHASES	4U
+#define WLAN_UPLINK_PHASES	4U
+/* the lwIP client's own 10 s plus the connect and the report's delivery; a
+ * ceiling, the report ends the wait */
+#define WLAN_UPLINK_REPORT_WAIT_MS	20000U
 
 static struct netif g_netif;
 
@@ -166,9 +181,123 @@ dataplane_up(void)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* the uplink sheet                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The reverse direction: this image runs the iperf *client* (the runner's host
+ * is the server), because the lwIP stack's client is the end that can drive a
+ * send test.  The far end's address arrives from the console
+ * (`wlan uplink <a.b.c.d>`, sent by the runner's extra steps).
+ */
+static volatile unsigned int g_uplink_peer;	/* host order; 0 = unset */
+
+void
+wlan_uplink_peer_set(unsigned int peer)
+{
+
+	g_uplink_peer = peer;
+}
+
+int
+wlan_uplink_peer_get(unsigned int *out)
+{
+
+	if (g_uplink_peer == 0U || out == NULL)
+		return -1;
+	*out = g_uplink_peer;
+	return 0;
+}
+
+/* the client test's report (fires in the TCP/IP thread; the stage polls the
+ * latch, so the two never share a payload struct) */
+static volatile unsigned int g_uplink_report_seen;
+static volatile unsigned int g_uplink_report_type;
+static volatile unsigned long g_uplink_bytes;
+static volatile unsigned long g_uplink_ms;
+static volatile unsigned long g_uplink_kbit;
+
+static void
+uplink_report(void *arg, enum lwiperf_report_type report_type,
+    const ip_addr_t *local_addr, u16_t local_port,
+    const ip_addr_t *remote_addr, u16_t remote_port,
+    u32_t bytes_transferred, u32_t ms_duration, u32_t bandwidth_kbitpsec)
+{
+
+	(void)arg;
+	(void)local_addr;
+	(void)local_port;
+	(void)remote_addr;
+	(void)remote_port;
+	g_uplink_report_type = (unsigned int)report_type;
+	g_uplink_bytes = (unsigned long)bytes_transferred;
+	g_uplink_ms = (unsigned long)ms_duration;
+	g_uplink_kbit = (unsigned long)bandwidth_kbitpsec;
+	g_uplink_report_seen = 1U;
+}
+
+/*
+ * One uplink window: run the client to its own end and record the far end's
+ * own account of what arrived.  The peer is in host order; its octets are
+ * split out here, so no byte-order assumption sits between the console command
+ * and lwIP's address type.
+ */
+static int
+uplink_phase_run(unsigned int phase, unsigned int peer)
+{
+	ip_addr_t remote;
+	void *session;
+	unsigned int waited;
+
+	IP_ADDR4(&remote, (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
+	    (peer >> 8) & 0xffU, peer & 0xffU);
+
+	g_uplink_report_seen = 0U;
+	g_uplink_report_type = 0U;
+	g_uplink_bytes = 0UL;
+	g_uplink_ms = 0UL;
+	g_uplink_kbit = 0UL;
+
+	LOG_ANCHOR("wlan: uplink phase %u ready peer=%u.%u.%u.%u\n", phase,
+	    (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
+	    (peer >> 8) & 0xffU, peer & 0xffU);
+
+	LOCK_TCPIP_CORE();
+	session = lwiperf_start_tcp_client(&remote, LWIPERF_TCP_PORT_DEFAULT,
+	    LWIPERF_CLIENT, uplink_report, NULL);
+	UNLOCK_TCPIP_CORE();
+	if (session == NULL) {
+		board_case_fail("the uplink iperf client did not start");
+		return -1;
+	}
+
+	/* the client's own duration plus the connect and the report's delivery;
+	 * the wait is a ceiling, the report ends it */
+	for (waited = 0; waited < WLAN_UPLINK_REPORT_WAIT_MS; waited += 100U) {
+		if (g_uplink_report_seen)
+			break;
+		(void)osDelay(100U);
+	}
+	if (!g_uplink_report_seen) {
+		LOCK_TCPIP_CORE();
+		lwiperf_abort(session);
+		UNLOCK_TCPIP_CORE();
+		board_case_fail("the uplink window ended without a report from "
+		    "the far end (is the runner's iperf server up?)");
+		return -1;
+	}
+	LOG_ANCHOR("wlan: uplink phase %u result bytes=%lu ms=%lu kbit=%lu "
+	    "type=%u\n", phase, g_uplink_bytes, g_uplink_ms, g_uplink_kbit,
+	    g_uplink_report_type);
+	return 0;
+}
+
 void wlan_dataplane_chain(void)
 {
 	unsigned int waited;
+	unsigned int phase;
+	unsigned int peer;
 
 	if (dataplane_up() != 0) {
 		return;
@@ -195,15 +324,33 @@ void wlan_dataplane_chain(void)
 		return;
 	}
 	UNLOCK_TCPIP_CORE();
-	LOG_INFO("wlan: iperf server ready port=%u\n", LWIPERF_TCP_PORT_DEFAULT);
+	LOG_ANCHOR("wlan: iperf server ready port=%u\n",
+	    LWIPERF_TCP_PORT_DEFAULT);
 
-	/* hold the measurement window open for the peer */
-	LOG_INFO("wlan: measure window=%u s\n",
-	    (unsigned)(WLAN_MEASURE_WAIT_MS / 1000));
-	for (waited = 0; waited < WLAN_MEASURE_WAIT_MS; waited += 100U) {
-		osDelay(100U);
+	/* the downlink phases: the peer's client drives each window, and the
+	 * ready line above is what it waits for before it starts */
+	for (phase = 1U; phase <= WLAN_IPERF_PHASES; phase++) {
+		LOG_ANCHOR("wlan: downlink phase %u ready window=%u s\n",
+		    phase, (unsigned)(WLAN_IPERF_WINDOW_MS / 1000));
+		for (waited = 0; waited < WLAN_IPERF_WINDOW_MS;
+		    waited += 100U) {
+			(void)osDelay(100U);
+		}
+		LOG_ANCHOR("wlan: downlink phase %u done\n", phase);
 	}
-	LOG_ANCHOR("wlan: measure window done\n");
+
+	/* the uplink phases: this image is the client and the peer is the
+	 * server.  With no peer named the stage says why and leaves the verdict
+	 * the downlink half earned - a regression boot configures none - while a
+	 * configured window that moved no bytes is a failure. */
+	if (wlan_uplink_peer_get(&peer) != 0) {
+		LOG_ANCHOR("wlan: uplink skipped reason=no-peer\n");
+	} else {
+		for (phase = 1U; phase <= WLAN_UPLINK_PHASES; phase++) {
+			if (uplink_phase_run(phase, peer) != 0)
+				return;
+		}
+	}
 }
 
 BOARD_TEST("wlan-dataplane", wlan_dataplane_chain);

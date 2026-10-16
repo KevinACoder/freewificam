@@ -11,6 +11,7 @@
  *          path for the same chain the cases exercise.
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "csh.h"
@@ -35,6 +36,26 @@ void wlan_dataplane_chain(void);
 
 /* the dataplane case's server session (started by the case, re-driven here) */
 void wlan_dataplane_iperf_cmd(chry_shell_t *csh, int argc, char **argv);
+
+/* the dataplane case's uplink peer: the reverse direction's far end, named
+ * here and read by the case when its uplink phases run */
+void wlan_uplink_peer_set(unsigned int peer);
+
+/* `a.b.c.d` into the host-order word the case splits back into an lwIP
+ * address: parsed here and handed over as a plain number, so the one place an
+ * lwIP address is built stays in the case that uses it */
+static int
+parse_ipv4(const char *s, unsigned int *out)
+{
+	unsigned int b[4];
+
+	if (sscanf(s, "%u.%u.%u.%u", &b[0], &b[1], &b[2], &b[3]) != 4)
+		return -1;
+	if (b[0] > 255U || b[1] > 255U || b[2] > 255U || b[3] > 255U)
+		return -1;
+	*out = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
+	return 0;
+}
 
 static int
 cmd_wlan(int argc, char **argv)
@@ -76,15 +97,30 @@ cmd_wlan(int argc, char **argv)
 		wlan_dataplane_iperf_cmd(csh, argc - 1, argv + 1);
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan [status|probe|scan|dump|join|dataplane|iperf <ip>|server|stop]\n");
+	if (strcmp(argv[1], "uplink") == 0) {
+		unsigned int peer;
+
+		if (argc < 3 || parse_ipv4(argv[2], &peer) != 0) {
+			csh_printf(csh, "usage: wlan uplink <a.b.c.d>\n");
+			return 0;
+		}
+		wlan_uplink_peer_set(peer);
+		csh_printf(csh, "wlan: uplink peer=%u.%u.%u.%u configured\n",
+		    (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
+		    (peer >> 8) & 0xffU, peer & 0xffU);
+		return 0;
+	}
+	csh_printf(csh, "usage: wlan [status|probe|scan|dump|join|dataplane|"
+	    "iperf <ip>|server|stop|uplink <ip>]\n");
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan, "wlan [status|probe|scan|dump|join|dataplane|iperf]",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan, "wlan [status|probe|scan|dump|join|dataplane|iperf|uplink]",
 			  "wlan status - bridge counters and state;\n"
 			  "wlan probe - bring up the USB chain and wait for the driver;\n"
 			  "wlan scan - sweep the channels and compare with the ground truth;\n"
 			  "wlan dump - print the scan table as found;\n"
 			  "wlan join - wait for the supplicant's WPA2 association;\n"
-			  "wlan dataplane - netif + DHCP + ping + iperf server;\n"
-			  "wlan iperf <ip>|server|stop - the TCP measurement session\n")
+			  "wlan dataplane - netif + DHCP + ping + iperf server + the phases;\n"
+			  "wlan iperf <ip>|server|stop - the TCP measurement session;\n"
+			  "wlan uplink <ip> - name the far end for the uplink phases\n")

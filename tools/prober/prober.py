@@ -114,11 +114,17 @@ FIELD_CANDIDATES = {
     "rssi": ("radiotap.dbm_antsignal",),
 }
 
+# The board suites' console lines carry the suite's own prefix - the SDIO line
+# prints "wlan8189:", the USB line "wlan:" - and the USB sheet names its
+# downlink windows explicitly.  One prober drives either sheet, so the prefix
+# and the qualifier are matched here rather than baked into each pattern.
+_PFX = r"wlan(?:8189)?"
+
 # The board's measurement phases, as the board image prints them. The parser
 # keeps every field verbatim because the phase line is the measurement's
 # identity: two windows whose lines differ are not comparable.
 PHASE_READY_RE = re.compile(
-    r"wlan8189: phase (?P<phase>\d+) ready"
+    _PFX + r": (?:downlink )?phase (?P<phase>\d+) ready"
     r"(?: lever=(?P<lever>\d+)"
     r" arm=(?P<arm>[AB])"
     r" pump=(?P<pump>\w+)"
@@ -128,12 +134,12 @@ PHASE_READY_RE = re.compile(
     r" yield=(?P<yield>\d+)"
     r" lps=(?P<lps>-?\d+))?"
 )
-PHASE_DONE_RE = re.compile(r"wlan8189: phase (?P<phase>\d+) done")
+PHASE_DONE_RE = re.compile(_PFX + r": (?:downlink )?phase (?P<phase>\d+) done")
 DHCP_BOUND_RE = re.compile(
-    r"wlan8189: dhcp bound ip=(?P<ip>\d+\.\d+\.\d+\.\d+)/"
+    _PFX + r": dhcp bound ip=(?P<ip>\d+\.\d+\.\d+\.\d+)/"
 )
-JOIN_WAIT_RE = re.compile(r"wlan8189: join waiting for the supplicant")
-JOIN_OK_RE = re.compile(r"wlan8189: join-ok bssid=|Key negotiation completed")
+JOIN_WAIT_RE = re.compile(_PFX + r": join waiting for the supplicant")
+JOIN_OK_RE = re.compile(_PFX + r": join-ok bssid=|Key negotiation completed")
 CENSUS_RE = re.compile(r"perf census: ")
 BW_MODE_RE = re.compile(r"RTW: bw_mode : (?P<bw>\S+), ra_bw_mode : (?P<ra>\S+)")
 
@@ -142,14 +148,15 @@ BW_MODE_RE = re.compile(r"RTW: bw_mode : (?P<bw>\S+), ra_bw_mode : (?P<ra>\S+)")
 # server up and hand the board this host's address. The lines are the stage's
 # own; the skip line is the stage saying why it did not run (no peer configured
 # - a boot that did not ask for the measurement is not a failure).
-UPLINK_STANDBY_RE = re.compile(r"wlan8189: uplink standby")
+UPLINK_STANDBY_RE = re.compile(_PFX + r": uplink standby")
 UPLINK_READY_RE = re.compile(
-    r"wlan8189: uplink phase (?P<phase>\d+) ready .*?arm=(?P<arm>[AB])")
+    _PFX + r": uplink phase (?P<phase>\d+) ready"
+    r"(?: .*?arm=(?P<arm>[AB]))?")
 UPLINK_RESULT_RE = re.compile(
-    r"wlan8189: uplink phase (?P<phase>\d+) result bytes=(?P<bytes>\d+) "
+    _PFX + r": uplink phase (?P<phase>\d+) result bytes=(?P<bytes>\d+) "
     r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)")
-UPLINK_DONE_RE = re.compile(r"wlan8189: uplink phase (?P<phase>\d+) done")
-UPLINK_SKIP_RE = re.compile(r"wlan8189: uplink skipped reason=(?P<reason>\S+)")
+UPLINK_DONE_RE = re.compile(_PFX + r": uplink phase (?P<phase>\d+) done")
+UPLINK_SKIP_RE = re.compile(_PFX + r": uplink skipped reason=(?P<reason>\S+)")
 
 # The host server's own per-test summary (the receiver-side number the uplink
 # figures are quoted from): iperf2 prints one line per completed connection.
@@ -2000,6 +2007,24 @@ def selftest() -> int:
     check("uplink-server-row", len(rows) == 1 and rows[0]["kbit"] == 15100
           and rows[0]["bytes"] == 19900000)
     check("uplink-server-empty", uplink_server_totals("no rows") == [])
+
+    # the USB sheet's prefix and its named downlink windows parse the same way
+    # (one prober drives either sheet)
+    check("usb-sheet-parse",
+          PHASE_READY_RE.search(
+              "[  34.200] wlan: downlink phase 2 ready window=20 s") is not None
+          and PHASE_DONE_RE.search(
+              "[  54.200] wlan: downlink phase 4 done") is not None
+          and DHCP_BOUND_RE.search(
+              "wlan: dhcp bound ip=192.168.99.31/24 gw=192.168.99.1")
+          is not None
+          and UPLINK_READY_RE.search(
+              "wlan: uplink phase 1 ready peer=192.168.99.1") is not None
+          and UPLINK_RESULT_RE.search(
+              "wlan: uplink phase 1 result bytes=20830574 ms=10234 "
+              "kbit=16280 type=1") is not None
+          and UPLINK_SKIP_RE.search(
+              "wlan: uplink skipped reason=no-peer") is not None)
 
     # the join's completion latch: the board's own line and the supplicant's
     # handshake line both count, and the wait line must not read as completion
