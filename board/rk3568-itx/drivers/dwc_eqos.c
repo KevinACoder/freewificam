@@ -912,8 +912,11 @@ static int eqos_ring_slot(const struct dwc_eqos_dev *dev, uint32_t addr);
 static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 {
 	unsigned int port = dev->plat->index;
-	int delivered = 0;
+		int delivered = 0;
 	int last_armed = -1;
+	int max_armed = -1;	/* highest index re-armed this pass: the tail
+				   publish value (SCAN=5); in a wrap pass it is an
+				   old high slot, NOT the last processed young one */
 	int stop_slot = -1;	/* first descriptor still owned when a walk breaks */
 	int i;
 	int left;
@@ -965,6 +968,22 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	 * the last slot re-armed. See the tail rule below. */
 	i = (int)dev->rx_scan;
 	left = DWC_EQOS_RX_DESC_COUNT;
+#elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 5)
+	/* ARRIVAL-ORDERED CURSOR WALK (2026-10-19, the wrap-interleave fix):
+	 * start at the oldest not-yet-processed slot and stop at the first
+	 * still-owned one. The DMA fills slots in ring order and laps
+	 * continuously, so "from the cursor, stop at the first OWN=1" visits
+	 * exactly the written slots IN ARRIVAL ORDER - including across a ring
+	 * wrap, where 125..127 (older) are staged before 0..7 (younger). The
+	 * whole-ring scan (the default) walks 0..127 every pass, so a wrap
+	 * interleave delivers young frames BEFORE old ones: the stack sees a
+	 * hole it never lost, emits duplicate ACKs, the peer fast-retransmits
+	 * and halving cwnd throttles the downlink. The tail publish stays the
+	 * address-MAXIMUM processed (below) - the bounded walks 2/4 failed
+	 * precisely because they published the young low slot after a wrap,
+	 * which retracts the DMA's fetch grant. */
+	i = (int)dev->rx_scan;
+	left = DWC_EQOS_RX_DESC_COUNT;
 #elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 2)
 	i = (int)dev->rx_scan;
 	left = DWC_EQOS_RX_DESC_COUNT;
@@ -1007,7 +1026,7 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		d3 = desc->des3;
 #endif
 		if (d3 & DWC_EQOS_DESC_OWN) {
-#if defined(CONFIG_GMAC_RX_SCAN) && ((CONFIG_GMAC_RX_SCAN == 2) || (CONFIG_GMAC_RX_SCAN == 4))
+#if defined(CONFIG_GMAC_RX_SCAN) && ((CONFIG_GMAC_RX_SCAN == 2) || (CONFIG_GMAC_RX_SCAN == 4) || (CONFIG_GMAC_RX_SCAN == 5))
 			/* Still the DMA's: not written back yet, and it writes
 			 * back in ring order, so nothing past here is complete
 			 * either. Sweep done. */
@@ -1091,6 +1110,9 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 		dev->rx_in_flight[i] = 1;
 		eqos_prof[port].rx_frames++;
 		last_armed = i;
+		if (i > max_armed) {
+			max_armed = i;
+		}
 	}
 	eqos_prof[port].rx_walk_ticks += eqos_prof_t0() - t_walk;
 
@@ -1131,7 +1153,18 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	 *
 	 * The whole-ring scan keeps its last-re-armed landing point: that is
 	 * what every working measurement was taken with. */
-#if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 4)
+#if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 5)
+	if (max_armed >= 0) {
+		/* Publish the address-MAXIMUM slot processed this pass. In a
+		 * wrapped pass that is an old high slot (e.g. 127), whose
+		 * address is ahead of the DMA's current position - the same
+		 * value class every working measurement published. Publishing
+		 * the last-PROCESSED slot instead (the young low one after a
+		 * wrap) is exactly what wedged the bounded walks 2/4. */
+		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
+			(uint32_t)(uintptr_t)&dev->rx_ring[max_armed]);
+	}
+#elif defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 4)
 	if (stop_slot >= 0) {
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
 			(uint32_t)(uintptr_t)&dev->rx_ring[stop_slot]);
