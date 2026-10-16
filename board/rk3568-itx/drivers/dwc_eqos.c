@@ -158,6 +158,13 @@ struct dwc_eqos_dev {
 	/* NAPI shape: 1 while the RX interrupt is masked and the RX thread owns
 	 * the drain (dwc_eqos_rx_poll). */
 	uint8_t   rx_masked;
+	/* Interrupt-shape runtime state (2026-10-19 census round; the setters
+	 * carry the contract). rx_ioc_off stops arming IOC on re-armed RX
+	 * descriptors, irq_oddmode picks the TBU/ETI treatment, tx_ioc_div is
+	 * the TX completion interval. Defaults come from the build macros. */
+	uint8_t   irq_oddmode;
+	uint8_t   rx_ioc_off;
+	unsigned int tx_ioc_div;
 	/* One-sweep-at-a-time guard (LDREX/STREX): the RX thread and the
 	 * service thread's watchdog both call eqos_rx_complete, and eqos_lock
 	 * does not stop a thread switch, so without this the two sweeps
@@ -505,12 +512,14 @@ static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx,
 	cache_dcache_flush((uintptr_t)buf, DWC_EQOS_RX_BUF_SIZE);
 	cache_dcache_invalidate((uintptr_t)buf, DWC_EQOS_RX_BUF_SIZE);
 
-#if defined(CONFIG_GMAC_RX_COALESCE) && CONFIG_GMAC_RX_COALESCE
-	/* IOC off: RI is asserted on RX watchdog expiry instead of per frame
-	 * (N7 R3 coalescing; the watchdog is programmed in eqos_hw_start). */
-#else
-	ctrl |= DWC_EQOS_DESC_RX_IOC;
-#endif
+	/* IOC arming: build-defaulted (CONFIG_GMAC_RX_COALESCE turns per-frame
+	 * RI off and leaves the RX watchdog as the only RX source - N7 R3), but
+	 * runtime-flippable through dwc_eqos_set_rx_coalesce so a measurement
+	 * boot sweeps coalescing without a rebuild. The flip lands as the RX
+	 * thread re-arms descriptors, one ring turnover. */
+	if (!dev->rx_ioc_off) {
+		ctrl |= DWC_EQOS_DESC_RX_IOC;
+	}
 
 	desc->des0 = (uint32_t)(uintptr_t)buf;
 	desc->des1 = 0;
@@ -786,6 +795,59 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 
 /* --- completion paths ----------------------------------------------------- */
 
+/* The image's memcpy (os/baremetal/memops.c) moves one byte-aligned u64 per
+ * iteration: -mstrict-align forbids the compiler from assuming anything
+ * wider, and the census priced it at 1.5 us for a 1514-byte frame. The two
+ * per-frame copies in this driver (ring->staging on RX, pbuf->TX buffer on
+ * send) both move whole frames between Normal memory, so give them the arch
+ * layer's LDP/STP blocks instead - the one place wide unaligned accesses are
+ * spelled (arch_asm.h). The WIDECOPY build lever picks the default; the
+ * runtime seam (gmac wcopy) flips it so one boot carries the A/B. */
+static void eqos_frame_copy_wide(uint8_t *dst, const uint8_t *src, unsigned int len)
+{
+	while (len >= 64u) {
+		ARCH_COPY_64(dst, src);
+		dst += 64;
+		src += 64;
+		len -= 64u;
+	}
+	while (len >= 8u) {
+		ARCH_COPY_8(dst, src);
+		dst += 8;
+		src += 8;
+		len -= 8u;
+	}
+	while (len-- != 0u) {
+		*dst++ = *src++;
+	}
+}
+
+#if defined(CONFIG_GMAC_WIDE_COPY) && CONFIG_GMAC_WIDE_COPY
+static uint8_t s_wide_copy = 3u;	/* both sites; bit0 = RX, bit1 = TX */
+#else
+/* Shipped default: the TX frame copy only. Board-measured 2026-10-20 (same
+ * boot, double-anchored): the TX site alone gives +5.6% uplink (799.9 ->
+ * 843.2) with no downlink cost and txcopy 1.54 -> 1.05 us per frame; the RX
+ * staging site showed no uplink effect and its downlink reading sat inside
+ * the boot's own anchor band, so its gain stays unproven (the RXDIRECT
+ * lesson). The WIDECOPY lever widens both sites for that experiment. */
+static uint8_t s_wide_copy = 2u;
+#endif
+
+/* Per-site selector: a lost downlink byte-trail with the wide copies on made
+ * the RX staging site a suspect, and the uplink win sits on the TX site, so
+ * the seam splits by side (gmac wcopysel <mask>, bit0 = the RX staging copy,
+ * bit1 = the TX frame copy). One boot then prices each side alone. */
+static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len,
+			    uint8_t wide)
+{
+	if (wide != 0u) {
+		eqos_frame_copy_wide(dst, src, len);
+		return;
+	}
+	memcpy(dst, src, len);
+}
+
 static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned int len)
 {
 	unsigned int next = (dev->rx_stage_head + 1) % dev->rx_stage_count;
@@ -800,7 +862,7 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 
 	stage = &dev->rx_stage[dev->rx_stage_head];
 	stage->len = (uint16_t)len;
-	memcpy(stage->data, buf, len);
+	eqos_frame_copy(stage->data, buf, len, (uint8_t)(s_wide_copy & 1u));
 	dev->rx_stage_head = next;
 	dev->stats.rx_frames++;
 
@@ -1299,6 +1361,92 @@ uint32_t dwc_eqos_get_rx_riwt(unsigned int index)
 	return eqos_rd(&devs[index], DWC_EQOS_DMA_CH0_RX_WATCHDOG);
 }
 
+/* Interrupt-shape runtime seams (2026-10-19 census round; the header carries
+ * the contract). The short settling note for all three: the RX IOC flip and
+ * the TX completion interval are arming choices taken per descriptor, so a
+ * change lands over one ring turnover of traffic rather than instantly. */
+void dwc_eqos_set_irq_oddmode(unsigned int index, unsigned int mode)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	if (!devs[index].powered) {
+		return;
+	}
+	devs[index].irq_oddmode = (mode != 0u) ? 1u : 0u;
+}
+
+unsigned int dwc_eqos_get_irq_oddmode(unsigned int index)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return 0u;
+	}
+	return (unsigned int)devs[index].irq_oddmode;
+}
+
+void dwc_eqos_set_rx_coalesce(unsigned int index, uint32_t riwt)
+{
+	struct dwc_eqos_dev *dev;
+
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	dev = &devs[index];
+	if (!dev->powered) {
+		return;
+	}
+	dev->rx_ioc_off = (riwt != 0u) ? 1u : 0u;
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_WATCHDOG, riwt);
+}
+
+void dwc_eqos_set_tx_ioc_div(unsigned int index, unsigned int div)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return;
+	}
+	if (!devs[index].powered) {
+		return;
+	}
+	devs[index].tx_ioc_div = (div != 0u) ? div : 1u;
+}
+
+unsigned int dwc_eqos_get_tx_ioc_div(unsigned int index)
+{
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return 0u;
+	}
+	return devs[index].tx_ioc_div;
+}
+
+/* Wide-copy seam: global, not per-port - this image has one live port and the
+ * copy helper is context-free (the RX-notify hook next door has the same
+ * shape). See the eqos_frame_copy block for the contract. `on` is the coarse
+ * both-sites knob; the selector takes the per-site mask (bit0 = RX staging,
+ * bit1 = TX frame). */
+void dwc_eqos_set_wide_copy(unsigned int index, unsigned int on)
+{
+	(void)index;
+	s_wide_copy = (on != 0u) ? 3u : 0u;
+}
+
+unsigned int dwc_eqos_get_wide_copy(unsigned int index)
+{
+	(void)index;
+	return (unsigned int)s_wide_copy;
+}
+
+void dwc_eqos_set_wide_copy_sel(unsigned int index, unsigned int mask)
+{
+	(void)index;
+	s_wide_copy = (uint8_t)(mask & 3u);
+}
+
+unsigned int dwc_eqos_get_wide_copy_sel(unsigned int index)
+{
+	(void)index;
+	return (unsigned int)s_wide_copy;
+}
+
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
 void dwc_eqos_set_rx_zc(dwc_eqos_rx_wrap_fn fn)
 {
@@ -1446,6 +1594,10 @@ void dwc_eqos_irq(void *arg)
 	struct dwc_eqos_dev *dev = &devs[(unsigned int)(uintptr_t)arg];
 	unsigned int port = dev->plat->index;
 	uint64_t t_irq = eqos_prof_t0();
+	unsigned int cls = 0u;	/* entry class, from the first non-zero word:
+				 * 0 none, 1 rx (RI|RWT), 2 tx (TI), 3 odd
+				 * (no serviced bit), 4 fatal bus error. The
+				 * census splits the whole-ISR bucket on it. */
 	int pass;
 
 	dev->irq_n++;
@@ -1453,17 +1605,20 @@ void dwc_eqos_irq(void *arg)
 	for (pass = 0; pass < 8; pass++) {
 		uint32_t status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
 
+		eqos_prof[port].irq_passes++;
 		if (status == 0) {
 			/* Line-source defense (N7-stab): a latch in the MAC/MMC
 			 * blocks holds this shared level line with a clean DMA
 			 * status word - the 2026-10-02 freeze, where the handler
 			 * re-entered on an all-zero status forever. Reading
-			 * GMAC_INT_STATUS clears its latch (read-clear); doing it
-			 * on the empty-pass exit bounds any future unserviced
-			 * source to one spurious entry per real interrupt instead
-			 * of a deadlock. The known MMC source is masked at init;
-			 * this is the belt for the next one. */
+		 * GMAC_INT_STATUS clears its latch (read-clear); doing it
+		 * on the empty-pass exit bounds any future unserviced
+		 * source to one spurious entry per real interrupt instead
+		 * of a deadlock. The known MMC source is masked at init;
+		 * this is the belt for the next one. */
+			eqos_prof[port].irq_pass_zero++;
 			if (eqos_rd(dev, DWC_EQOS_MAC_INTERRUPT_STATUS) != 0u) {
+				eqos_prof[port].irq_pass_mac++;
 				dev->irq_odd++;
 			}
 			break;
@@ -1476,17 +1631,37 @@ void dwc_eqos_irq(void *arg)
 		if (!(status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_RWT
 				| DWC_EQOS_CH0_STATUS_TI
 				| DWC_EQOS_CH0_STATUS_FB))) {
-			/* N7-stab: an "odd pass" - the status word carried only
-			 * bits this driver does not service (e.g. TBU/RBU under
-			 * the abnormal summary). The embox era on this same IP
-			 * died exactly this way: a re-latching unserviced bit is
-			 * a level-line interrupt storm, and while it storms,
-			 * nothing at or below GMAC priority (tick included) ever
-			 * runs again. Count it, print the first occurrence (the
-			 * lock-free emergency outlet - a storm must not die
-			 * silently), and bound the damage with a burst gate. */
-			uint32_t now;
+			/* An "odd pass": the status word carried only bits this
+			 * driver does not service. Two very different animals
+			 * live here:
+			 *  - TBU/ETI-only words are ordinary traffic
+			 *    conditions (TBU re-latches whenever the TX ring is
+			 *    drained - it is what the W1C-plus-reread of this
+			 *    very loop keeps meeting). Linux consumes the same
+			 *    word as service hints (dwmac4_lib.c), and at the
+			 *    measured ~1.9 us per entry this pass is pure
+			 *    overhead on every IRQ. irq_oddmode=1 retires it to
+			 *    a benign counter.
+			 *  - anything else (unnamed bits, summary bits with no
+			 *    cause) is the N7-stab signature: the embox era on
+			 *    this same IP died this way - a re-latching
+			 *    unserviced bit is a level-line interrupt storm, and
+			 *    while it storms, nothing at or below GMAC priority
+			 *    (tick included) ever runs again. Count it, print
+			 *    the first occurrence (the lock-free emergency
+			 *    outlet - a storm must not die silently), and bound
+			 *    the damage with a burst gate. */
+			if ((dev->irq_oddmode != 0u) &&
+			    ((status & ~DWC_EQOS_CH0_STATUS_KNOWN_ODD) == 0u)) {
+				eqos_prof[port].irq_benign++;
+				if (cls == 0u) {
+					cls = 3u;
+				}
+				break;
+			}
 			uint64_t t_odd = eqos_prof_t0();
+
+			eqos_prof[port].irq_pass_odd++;
 
 			dev->irq_odd++;
 			if ((dev->irq_odd == 1u) ||
@@ -1506,7 +1681,8 @@ void dwc_eqos_irq(void *arg)
 			 * RI/RWT/TI/FBE stay armed (the RX watchdog sweep in the
 			 * boot loop still drains RX if RWT turns out to ride
 			 * AIE on this core). One-way, announced. */
-			now = osKernelGetTickCount();
+			uint32_t now = osKernelGetTickCount();
+
 			if ((uint32_t)(now - dev->irq_odd_t0) > 100u) {
 				dev->irq_odd_t0 = now;
 				dev->irq_odd_win = 0u;
@@ -1530,6 +1706,9 @@ void dwc_eqos_irq(void *arg)
 						~DWC_EQOS_CH0_INTR_AIE));
 			}
 #endif
+			if (cls == 0u) {
+				cls = 3u;
+			}
 			eqos_prof[port].irq_odd_ticks += eqos_prof_t0() - t_odd;
 			break;
 		}
@@ -1541,12 +1720,17 @@ void dwc_eqos_irq(void *arg)
 			LOG_INFO("%s: dma fatal bus error, channel stopped\n",
 				  eqos_dev_name(dev));
 			eqos_hw_stop(dev);
-			eqos_prof[port].irq_ticks += eqos_prof_t0() - t_irq;
-			return;
+			cls = 4u;
+			break;
 		}
 
 		if (status & (DWC_EQOS_CH0_STATUS_RI | DWC_EQOS_CH0_STATUS_RWT)) {
 			uint64_t t_rx = eqos_prof_t0();
+
+			eqos_prof[port].irq_pass_rx++;
+			if (cls == 0u) {
+				cls = 1u;
+			}
 
 			/* RWT (watchdog expiry) is the coalesced RI: with the
 			 * RX descriptor IOC off it is the only RX interrupt
@@ -1589,12 +1773,49 @@ void dwc_eqos_irq(void *arg)
 		if (status & DWC_EQOS_CH0_STATUS_TI) {
 			uint64_t t_tx = eqos_prof_t0();
 
+			eqos_prof[port].irq_pass_tx++;
+			if (cls == 0u) {
+				cls = 2u;
+			}
 			(void)eqos_tx_complete(dev);
 			eqos_prof[port].irq_tx_done_ticks += eqos_prof_t0() - t_tx;
 		}
 	}
 
-	eqos_prof[port].irq_ticks += eqos_prof_t0() - t_irq;
+	{
+		uint64_t dt = eqos_prof_t0() - t_irq;
+
+		eqos_prof[port].irq_ticks += dt;
+		if (dt > eqos_prof[port].irq_max_ticks) {
+			eqos_prof[port].irq_max_ticks = dt;
+		}
+		/* The census: the entry's FULL cost charged to the class its
+		 * first non-zero status word named (0 = empty word all the way
+		 * out), so the odd class carries its own GIC entry and status
+		 * reads instead of only the bracket inside the branch. */
+		switch (cls) {
+		case 1u:
+			eqos_prof[port].irq_ent_rx++;
+			eqos_prof[port].irq_ent_rx_ticks += dt;
+			break;
+		case 2u:
+			eqos_prof[port].irq_ent_tx++;
+			eqos_prof[port].irq_ent_tx_ticks += dt;
+			break;
+		case 3u:
+			eqos_prof[port].irq_ent_odd++;
+			eqos_prof[port].irq_ent_odd_ticks += dt;
+			break;
+		case 4u:
+			eqos_prof[port].irq_ent_fb++;
+			eqos_prof[port].irq_ent_fb_ticks += dt;
+			break;
+		default:
+			eqos_prof[port].irq_ent_none++;
+			eqos_prof[port].irq_ent_none_ticks += dt;
+			break;
+		}
+	}
 }
 
 /* --- driver entry points --------------------------------------------------- */
@@ -1621,6 +1842,12 @@ int32_t dwc_eqos_initialize(unsigned int index, const struct dwc_eqos_plat *plat
 	memcpy(dev->macaddr, plat->mac_addr, DWC_EQOS_MAC_ADDR_LEN);
 	dev->rx_ring = rx_rings[index];
 	dev->tx_ring = tx_rings[index];
+	/* Interrupt-shape defaults from the build macros; the runtime seams
+	 * (gmac oddmode/rxcoal/txdiv) move them without a rebuild. */
+	dev->tx_ioc_div = DWC_EQOS_TX_IOC_DIV;
+#if defined(CONFIG_GMAC_RX_COALESCE) && CONFIG_GMAC_RX_COALESCE
+	dev->rx_ioc_off = 1u;
+#endif
 
 	/* TX ring-full wait (N7 R1): created here because initialize runs in
 	 * task context (the app bring-up thread); a NULL semaphore downgrades
@@ -1933,7 +2160,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		if (next != dev->tx_tail) {
 			buf = tx_buffers[index][cur];
 			t_copy = eqos_prof_t0();
-			memcpy(buf, frame, len);
+			eqos_frame_copy(buf, frame, len,
+					(uint8_t)((s_wide_copy >> 1) & 1u));
 			eqos_prof[index].tx_memcpy_ticks += eqos_prof_t0() - t_copy;
 
 			/* Ethernet requires 60 bytes before the FCS: a
@@ -1951,8 +2179,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			 * line must never wait on the counter for its
 			 * completion, a burst must not pay one IRQ per
 			 * frame (N7 R2). */
-			ioc = ((dev->tx_ioc_seq++ % DWC_EQOS_TX_IOC_DIV)
-			       == (DWC_EQOS_TX_IOC_DIV - 1u)) ||
+			ioc = ((dev->tx_ioc_seq++ % dev->tx_ioc_div)
+			       == (dev->tx_ioc_div - 1u)) ||
 			      (cur == dev->tx_tail);
 
 			desc = &dev->tx_ring[cur];

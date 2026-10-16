@@ -215,6 +215,16 @@ endif
 ifneq ($(RXDIRECT),)
 LEVER_CFLAGS += -DCONFIG_GMAC_RX_DIRECT=1
 endif
+# Wide per-frame copies (WIDECOPY=1, 2026-10-20): the image's libc memcpy is
+# the generic scalar loop (disassembly: 8 bytes per iteration; measured
+# 1.5 us/frame at 1514 bytes = ~13% of one core's uplink budget at line
+# rate). The driver's two whole-frame copies (ring->staging on RX, pbuf->TX
+# buffer on send) switch to 64/16-byte __builtin_memcpy chunks so the
+# compiler emits LDP/STP pairs. Semantics identical to memcpy; measurement
+# lever, default off.
+ifneq ($(WIDECOPY),)
+LEVER_CFLAGS += -DCONFIG_GMAC_WIDE_COPY=1
+endif
 # Fine TCP-path probe (2026-10-19 round 3): patch 0002's LWIP_HOOK_TCP_PROBE
 # is pointed at the bridge's site-pair accumulator, so one tcp_input entry's
 # cost splits into segment processing / sent callback / queue walk / wire
