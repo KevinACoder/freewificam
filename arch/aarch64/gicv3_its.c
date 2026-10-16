@@ -175,8 +175,8 @@ static uint8_t its_lpi_pend[ITS_PEND_SIZE] __attribute__((aligned(0x10000)));
 
 /* --- diagnostics ----------------------------------------------------------- */
 
-/* The freestanding toolchain has the prototype in libc headers we do not
- * link; minilibc.c provides the definition. */
+/* The toolchain's newlib carries the definition (every image links -lc); the
+ * prototype is declared here because this file takes no stdio include. */
 extern int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 
 void its_log(const char *fmt, ...)

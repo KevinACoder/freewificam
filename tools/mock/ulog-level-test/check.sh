@@ -95,7 +95,7 @@ mut=$log_dir/mutated-nofamily
 rm -rf "$mut"
 mkdir -p "$mut"
 cp "$root/os/baremetal/log.c" "$root/os/baremetal/log.h" \
-   "$root/os/baremetal/log_anchors.h" "$root/os/baremetal/minilibc.h" \
+   "$root/os/baremetal/log_anchors.h" \
    "$root/os/baremetal/tick.h" "$mut/"
 sed 's/i < log_anchor_family_count/i < 0u/' "$mut/log.c" > "$mut/log.mut.c"
 if grep -q 'i < 0u;' "$mut/log.mut.c" &&
@@ -126,7 +126,7 @@ mut=$log_dir/mutated-nofold
 rm -rf "$mut"
 mkdir -p "$mut"
 cp "$root/os/baremetal/log.c" "$root/os/baremetal/log.h" \
-   "$root/os/baremetal/log_anchors.h" "$root/os/baremetal/minilibc.h" \
+   "$root/os/baremetal/log_anchors.h" \
    "$root/os/baremetal/tick.h" "$mut/"
 sed 's/repeat_n != 0u/repeat_n != 0u \&\& 0/' "$mut/log.c" > "$mut/log.mut.c"
 if grep -q 'repeat_n != 0u && 0' "$mut/log.mut.c" &&

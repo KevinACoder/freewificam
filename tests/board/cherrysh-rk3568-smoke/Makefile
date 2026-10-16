@@ -75,7 +75,8 @@ BASE_CFLAGS := -Og -g3 -std=c11 -Wall -Wextra \
 # The freestanding libc surface is declared everywhere it is used: the vendored
 # shell core calls strnlen without a prototype of its own, and this image's
 # libc is os/baremetal. Assembly files do not take the C header.
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
+CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The vendored shell core is byte-identical upstream and cannot be edited, and
@@ -95,7 +96,8 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(ROOT)/arch/aarch64/baremetal.ld \
 	-Wl,--gc-sections \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
 
 APP_SRCS := \
 	$(CURDIR)/main.c \
@@ -107,8 +109,8 @@ APP_SRCS := \
 	$(ROOT)/arch/aarch64/mmu.c \
 	$(ROOT)/arch/aarch64/cache.c \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(PORT)/shell_port.c \
 	$(PORT)/console_board.c \
 	$(CHERRYSH)/chry_shell.c \
@@ -131,8 +133,8 @@ KERNEL_SRCS := \
 
 ALL_SRCS := $(APP_SRCS) $(KERNEL_SRCS)
 # The vendored formatter engine (components/printf, mpaland): the freestanding
-# image formats only through this engine, bound in os/threadx... os/baremetal/
-# minilibc.c. Float and exponential rendering are compiled out - the build is
+# image formats only through this engine, bound to the C library's printf names
+# by os/baremetal/printf_bind.c. Float rendering is compiled out - the build
 # -mgeneral-regs-only and has no FP state.
 PRINTF_SRCS := $(ROOT)/components/printf/printf.c
 PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL

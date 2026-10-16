@@ -9,7 +9,7 @@
 | Fetched | 2026-10-08, from the frozen read-only copy of the prior carrier tree (kept outside this repository) |
 | Local differences | none (zero patch): no file was edited |
 | Compiled set | one translation unit: `printf.c`, compiled into the board images with `PRINTF_DISABLE_SUPPORT_FLOAT` and `PRINTF_DISABLE_SUPPORT_EXPONENTIAL` |
-| Consumers | `os/baremetal/minilibc.c` - the `vsnprintf`/`snprintf` wrappers the whole image formats through (board log, shell, heap failure path) |
+| Consumers | `os/baremetal/printf_bind.c` - the `vsnprintf`/`snprintf`/`sprintf` wrappers the whole image formats through (board log, shell, heap failure path); before the libc switch the same wrappers lived in `minilibc.c` |
 | Reason | The first-party formatter was a deliberate subset (no precision, no `*` width) and bit two callers before; lwIP's own diagnostics and the ICMP ping app format through widths and length modifiers the subset degraded (a `%hu` literal in the ping output was the visible symptom). One auditable full-C99 integer engine replaces piecemeal extension |
 
 ## Notes
@@ -20,8 +20,8 @@
   had. Long-long and pointer paths stay on (pure integer code).
 * Binding, not aliasing: `printf.h` is deliberately NOT included by its consumer. Its
   standard-name `#define` aliases (`printf` -> `printf_`, ...) would collide with the
-  standard-named wrappers `os/baremetal/minilibc.c` defines and the rest of the image
-  links against. That file declares the underscore realization (`vsnprintf_`) directly.
+  standard-named wrappers `os/baremetal/printf_bind.c` defines and the rest of the
+  image links against. That file declares the underscore realization (`vsnprintf_`) directly.
 * `printf_`/`sprintf_`/`fctprintf` are not referenced by this project: their sections
   are dropped by `--gc-sections`, which is also why the unbound `_putchar` sink is
   not a link error. A future caller that wants them provides the sink.

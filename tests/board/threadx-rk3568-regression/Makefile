@@ -337,9 +337,10 @@ LDFLAGS := -nostdlib -static \
 # hand-written memops.c loop moved one u64 per iteration and the census
 # priced it at 1.5 us per 1514-byte frame). libnosys.a carries the syscall
 # stubs nothing here calls; -lgcc keeps the compiler helpers. The suite's
-# own printf stack (components/printf + minilibc's thin binding) stays.
-# The change is per suite: the other board suites still link memops.c until
-# they each get their own measurement round.
+# own printf stack (components/printf, bound via os/baremetal/printf_bind.c)
+# stays.
+# Every board suite carries this library now; the hand-written
+# memops.c/minilibc.c pair has left the tree.
 
 # --- compile set (six domains) ---------------------------------------------
 
@@ -353,6 +354,7 @@ BASE_SRCS := \
 	$(ROOT)/board/rk3568-itx/param.c \
 	$(ROOT)/board/rk3568-itx/reset.c \
 	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
@@ -514,8 +516,8 @@ ALL_SRCS := $(BASE_SRCS) $(TX_SRCS) $(COMMON_SRCS) $(SHELL_SRCS) $(TESTS_SRCS) $
 # Object names mirror the path below ROOT: the kernel and the port share flat
 # tx_*.c / tx_*.S basenames, so $(notdir) would collide.
 # The vendored formatter engine (components/printf, mpaland): the freestanding
-# image formats only through this engine, bound in os/threadx... os/baremetal/
-# minilibc.c. Float and exponential rendering are compiled out - the build is
+# image formats only through this engine, bound to the C library's printf names
+# by os/baremetal/printf_bind.c. Float rendering is compiled out - the build
 # -mgeneral-regs-only and has no FP state.
 PRINTF_SRCS := $(ROOT)/components/printf/printf.c
 PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL

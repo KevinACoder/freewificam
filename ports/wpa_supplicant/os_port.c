@@ -27,12 +27,17 @@
 
 #include "wpa_port_api.h"
 
-/* A scanf subset for the wpa world: the compiled files only reach it
- * through a config path this image does not run (sched_scan_plans), but
- * the symbol must resolve. Handles %d/%i/%u/%x/%s plus literals, spaces
- * and %%; anything else stops the parse. The build renames the token
- * (sscanf=wpa_port_sscanf) so the libc/minilibc sscanf stays the only
- * plain one in combined images. */
+/* A scanf subset for this image: the supplicant's compiled files only reach
+ * their sscanf through a config path this image does not run
+ * (sched_scan_plans), but the symbol must resolve - and the vendor driver's
+ * translation units call plain sscanf (the linuxkpi face declares it), so
+ * this ONE implementation answers both names: the plain one (the #undef
+ * undoes the supplicant build's token rename) and wpa_port_sscanf, which is
+ * what that rename turns the supplicant's own calls into. Handles
+ * %d/%i/%u/%x/%s plus literals, spaces and %%; anything else stops the
+ * parse. Keeping both names on one body is also what keeps newlib's scanf
+ * family (and the heap it reaches for) out of the image. */
+#undef sscanf
 static int wpa_port_hexval(int c)
 {
 	if (c >= '0' && c <= '9') {
@@ -169,8 +174,14 @@ int sscanf(const char *str, const char *fmt, ...)
 	return assigned;
 }
 
+/* The name the supplicant build's token rename maps its own calls onto
+ * (sscanf=wpa_port_sscanf); the same body, one implementation. */
+int wpa_port_sscanf(const char *str, const char *fmt, ...)
+	__attribute__((alias("sscanf")));
+
 /* strdup is heap-backed, so it lives in the wpa port layer rather than the
- * base minilibc (which must stay linkable in heap-less baremetal configs);
+ * base C library (newlib's strdup would pull the heap the baremetal configs
+ * do not have);
  * utils/os.h maps os_strdup onto this. */
 extern void *malloc(size_t size);
 

@@ -29,7 +29,6 @@
 
 #include "heap.h"
 #include "log.h"
-#include "minilibc.h"
 
 void *malloc(size_t size)
 {

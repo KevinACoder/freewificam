@@ -34,14 +34,16 @@
 #ifdef WLAN_PORT_TARGET
 /*
  * Target build: no C library behind this port. The display functions format
- * into a bounded buffer (the freestanding minilibc surface) and hand the line
+ * into a bounded buffer (the image's printf component, bound to the C
+ * library's names) and hand the line
  * to the board's own log sink - the same one-line idiom the USB glue's
  * console sink uses - and the panic exit prints through the lock-free fault
  * sink and parks: a failed assertion that speaks is findable, a silent one
  * is not. The host build keeps the C library's vfprintf and abort().
  */
+#include <stdio.h>
+
 #include "log.h"
-#include "minilibc.h"
 #include "arch_asm.h"
 #else
 #include <stdio.h>

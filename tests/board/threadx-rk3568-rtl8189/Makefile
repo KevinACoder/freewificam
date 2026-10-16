@@ -144,7 +144,14 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DCMSIS2_BACKEND_THREADX \
 	-DSHELL_PORT_HOST='"rk3568"'
 
-CFLAGS := $(BASE_CFLAGS) -include $(ROOT)/os/baremetal/minilibc.h
+# The C library surface comes from the toolchain's newlib now, so the
+# force-include names its standard headers: the vendored shell core calls
+# strnlen without a prototype of its own, the console command builds lines
+# with snprintf, and every translation unit may use the string/memory
+# primitives without carrying an include. Assembly files do not take the C
+# headers.
+CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
+	-include stdlib.h -D_DEFAULT_SOURCE=1
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream
@@ -255,7 +262,8 @@ DRV_CFLAGS := -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector \
 	-I$(LKPI) -I$(LKPI)/include -I$(DRV) -I$(DRV)/include -I$(DRV)/platform \
 	-I$(DRV)/hal/phydm -I$(DRV)/hal/btc \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
-	-include $(ROOT)/os/baremetal/minilibc.h
+	-include stdio.h -include string.h -include strings.h -include stdlib.h \
+	-D_DEFAULT_SOURCE=1
 
 # --- linuxkpi runtime face ---------------------------------------------------
 #
@@ -365,7 +373,16 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-u,lkpi_sdio_be_card_init \
 	-Wl,-u,lkpi_module_init_run \
 	-Wl,--build-id=none \
-	-Wl,-Map,$(TARGET).map
+	-Wl,-Map,$(TARGET).map \
+	-lc -lgcc -lnosys
+
+# The C library comes from the toolchain's newlib now (string, memory and the
+# printf family; libnosys.a carries the syscall stubs nothing here calls).
+# This replaces the hand-written memops.c/minilibc.c: libc.a's memcpy is the
+# wide LDP/STP implementation, size-branched, against a loop that moved one
+# u64 per iteration (the wired line priced that at ~1.5 us per frame). The
+# image's own printf stack (components/printf) stays bound through
+# os/baremetal/printf_bind.c - the log surface's anchors are its contract.
 
 # --- compile set -------------------------------------------------------------
 
@@ -378,8 +395,8 @@ BASE_SRCS := \
 	$(ROOT)/board/rk3568-itx/drivers/uart.c \
 	$(ROOT)/board/rk3568-itx/param.c \
 	$(ROOT)/board/rk3568-itx/reset.c \
-	$(ROOT)/os/baremetal/memops.c \
-	$(ROOT)/os/baremetal/minilibc.c \
+	$(ROOT)/os/baremetal/printf_bind.c \
+	$(ROOT)/os/baremetal/libc_stubs.c \
 	$(ROOT)/os/baremetal/log.c \
 	$(ROOT)/components/ulog/src/ulog.c \
 	$(ROOT)/os/baremetal/tick.c
@@ -675,9 +692,7 @@ $(BUILD)/obj/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP)
 endef
 
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_RULE,$(s),$(PRINTF_CFLAGS))))
-# minilibc.c carries its own rule below (the completion block); leaving it out
-# of this loop keeps make from warning about a second recipe for its object.
-$(foreach s,$(filter-out $(ROOT)/os/baremetal/minilibc.c,$(BASE_SRCS)),$(eval $(call COMPILE_RULE,$(s),)))
+$(foreach s,$(BASE_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(TX_SRCS),$(eval $(call COMPILE_RULE,$(s),$(TX_CFLAGS))))
 $(foreach s,$(COMMON_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(filter-out $(WLAN8189_CASE_SRCS),$(SHELL_SRCS) $(TESTS_SRCS)),$(eval $(call COMPILE_RULE,$(s),)))
@@ -689,9 +704,6 @@ $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_dataplane.c,$(WLAN8189_DATAP
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan8189_ap.c,$(WLAN8189_AP_CFLAGS)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(ALLOC_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
-# the freestanding libc completion block (abs and friends) is part of this
-# image's C surface: the imported units and the driver reference the symbols
-$(eval $(call COMPILE_RULE,$(ROOT)/os/baremetal/minilibc.c,-DCONFIG_LIBC_COMPLETION))
 $(foreach s,$(SDIO_VENDOR_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(SDIO_PORT_SRCS),$(eval $(call COMPILE_RULE,$(s),)))
 $(foreach s,$(LKPI_RT_SRCS),$(eval $(call COMPILE_RULE,$(s),$(LKPI_RT_CFLAGS))))
