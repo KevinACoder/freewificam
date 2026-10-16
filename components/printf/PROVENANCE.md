@@ -9,7 +9,7 @@
 | Fetched | 2026-10-08, from the frozen read-only copy of the prior carrier tree (kept outside this repository) |
 | Local differences | none (zero patch): no file was edited |
 | Compiled set | one translation unit: `printf.c`, compiled into the board images with `PRINTF_DISABLE_SUPPORT_FLOAT` and `PRINTF_DISABLE_SUPPORT_EXPONENTIAL` |
-| Consumers | `os/baremetal/printf_bind.c` - the `vsnprintf`/`snprintf`/`sprintf` wrappers the whole image formats through (board log, shell, heap failure path); before the libc switch the same wrappers lived in `minilibc.c` |
+| Consumers | `os/baremetal/printf_bind.c` - the `vsnprintf`/`snprintf`/`sprintf` wrappers the whole image formats through (board log, shell, heap failure path) |
 | Reason | The first-party formatter was a deliberate subset (no precision, no `*` width) and bit two callers before; lwIP's own diagnostics and the ICMP ping app format through widths and length modifiers the subset degraded (a `%hu` literal in the ping output was the visible symptom). One auditable full-C99 integer engine replaces piecemeal extension |
 
 ## Notes

@@ -376,12 +376,10 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
 
-# The C library comes from the toolchain's newlib now (string, memory and the
-# printf family; libnosys.a carries the syscall stubs nothing here calls).
-# This replaces the hand-written memops.c/minilibc.c: libc.a's memcpy is the
-# wide LDP/STP implementation, size-branched, against a loop that moved one
-# u64 per iteration (the wired line priced that at ~1.5 us per frame). The
-# image's own printf stack (components/printf) stays bound through
+# The C library comes from the toolchain's newlib now: the string and memory
+# families come from libc.a (its memcpy is the wide LDP/STP implementation,
+# size-branched) and libnosys.a carries the syscall stubs nothing here calls.
+# The image's own printf stack (components/printf) stays bound through
 # os/baremetal/printf_bind.c - the log surface's anchors are its contract.
 
 # --- compile set -------------------------------------------------------------

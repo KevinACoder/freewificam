@@ -330,17 +330,12 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
 
-# The C library comes from the toolchain's newlib now (string, memory and
-# printf families; libnosys.a carries the syscall stubs nothing here calls).
-# The string and memory primitives were the hand-written memops.c/minilibc.c
-# (libc.a's memcpy is the wide LDP/STP implementation, size-branched; the
-# hand-written memops.c loop moved one u64 per iteration and the census
-# priced it at 1.5 us per 1514-byte frame). libnosys.a carries the syscall
-# stubs nothing here calls; -lgcc keeps the compiler helpers. The suite's
-# own printf stack (components/printf, bound via os/baremetal/printf_bind.c)
-# stays.
-# Every board suite carries this library now; the hand-written
-# memops.c/minilibc.c pair has left the tree.
+# The C library comes from the toolchain's newlib now: the string and memory
+# families come from libc.a (its memcpy is the wide LDP/STP implementation,
+# size-branched) and libnosys.a carries the syscall stubs nothing here calls;
+# -lgcc keeps the compiler helpers. The suite's own printf stack
+# (components/printf, bound via os/baremetal/printf_bind.c) stays. Every
+# board suite carries this library.
 
 # --- compile set (six domains) ---------------------------------------------
 
