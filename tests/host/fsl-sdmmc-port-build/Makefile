@@ -14,7 +14,7 @@
 #              driver's interface compile as one translation unit on their own,
 #              so the faces cannot hide behind the bytes that consume them
 #   spdx       the license split is mechanical: the imported files carry exactly
-#              one SPDX form (BSD-3-Clause, NXP's and Phytium's copyrights), this
+#              one SPDX form (BSD-3-Clause, the upstream authors' copyrights), this
 #              project's files carry the project's own, and no license text has
 #              been copied between them
 #   gates      the kernel-isolation gates over the objects and the author-side

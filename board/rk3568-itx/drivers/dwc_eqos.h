@@ -69,7 +69,7 @@
 #endif
 #define DWC_EQOS_RX_DESC_COUNT	CONFIG_GMAC_RX_RING
 /* TX ring depth. 64 is the board-verified depth; the TX ladder sweeps it
- * (the Phytium fgmac lwIP port runs 128). The copy path needs exactly the
+ * (a reference lwIP Ethernet port runs 128). The copy path needs exactly the
  * ring depth in buffers, so this multiplies the whole TX buffer block - a
  * 128-deep ring costs another 256 KiB of .bss. */
 #ifndef CONFIG_GMAC_TX_RING

@@ -2195,8 +2195,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 #if defined(CONFIG_GMAC_TX_NONBLOCK) && CONFIG_GMAC_TX_NONBLOCK
 		/* TX-ladder lever: hand the full ring straight back to the
 		 * caller instead of parking the tcpip thread on the completion
-		 * semaphore. lwIP retries the segment - the non-blocking shape
-		 * the Phytium fgmac port uses. */
+		 * semaphore. lwIP retries the segment - the shape reference
+		 * lwIP Ethernet ports use. */
 		break;
 #else
 		{
