@@ -795,59 +795,6 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 
 /* --- completion paths ----------------------------------------------------- */
 
-/* The image's memcpy (os/baremetal/memops.c) moves one byte-aligned u64 per
- * iteration: -mstrict-align forbids the compiler from assuming anything
- * wider, and the census priced it at 1.5 us for a 1514-byte frame. The two
- * per-frame copies in this driver (ring->staging on RX, pbuf->TX buffer on
- * send) both move whole frames between Normal memory, so give them the arch
- * layer's LDP/STP blocks instead - the one place wide unaligned accesses are
- * spelled (arch_asm.h). The WIDECOPY build lever picks the default; the
- * runtime seam (gmac wcopy) flips it so one boot carries the A/B. */
-static void eqos_frame_copy_wide(uint8_t *dst, const uint8_t *src, unsigned int len)
-{
-	while (len >= 64u) {
-		ARCH_COPY_64(dst, src);
-		dst += 64;
-		src += 64;
-		len -= 64u;
-	}
-	while (len >= 8u) {
-		ARCH_COPY_8(dst, src);
-		dst += 8;
-		src += 8;
-		len -= 8u;
-	}
-	while (len-- != 0u) {
-		*dst++ = *src++;
-	}
-}
-
-#if defined(CONFIG_GMAC_WIDE_COPY) && CONFIG_GMAC_WIDE_COPY
-static uint8_t s_wide_copy = 3u;	/* both sites; bit0 = RX, bit1 = TX */
-#else
-/* Shipped default: the TX frame copy only. Board-measured 2026-10-20 (same
- * boot, double-anchored): the TX site alone gives +5.6% uplink (799.9 ->
- * 843.2) with no downlink cost and txcopy 1.54 -> 1.05 us per frame; the RX
- * staging site showed no uplink effect and its downlink reading sat inside
- * the boot's own anchor band, so its gain stays unproven (the RXDIRECT
- * lesson). The WIDECOPY lever widens both sites for that experiment. */
-static uint8_t s_wide_copy = 2u;
-#endif
-
-/* Per-site selector: a lost downlink byte-trail with the wide copies on made
- * the RX staging site a suspect, and the uplink win sits on the TX site, so
- * the seam splits by side (gmac wcopysel <mask>, bit0 = the RX staging copy,
- * bit1 = the TX frame copy). One boot then prices each side alone. */
-static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len,
-			    uint8_t wide)
-{
-	if (wide != 0u) {
-		eqos_frame_copy_wide(dst, src, len);
-		return;
-	}
-	memcpy(dst, src, len);
-}
-
 static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned int len)
 {
 	unsigned int next = (dev->rx_stage_head + 1) % dev->rx_stage_count;
@@ -862,7 +809,7 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 
 	stage = &dev->rx_stage[dev->rx_stage_head];
 	stage->len = (uint16_t)len;
-	eqos_frame_copy(stage->data, buf, len, (uint8_t)(s_wide_copy & 1u));
+	memcpy(stage->data, buf, len);
 	dev->rx_stage_head = next;
 	dev->stats.rx_frames++;
 
@@ -1416,35 +1363,6 @@ unsigned int dwc_eqos_get_tx_ioc_div(unsigned int index)
 		return 0u;
 	}
 	return devs[index].tx_ioc_div;
-}
-
-/* Wide-copy seam: global, not per-port - this image has one live port and the
- * copy helper is context-free (the RX-notify hook next door has the same
- * shape). See the eqos_frame_copy block for the contract. `on` is the coarse
- * both-sites knob; the selector takes the per-site mask (bit0 = RX staging,
- * bit1 = TX frame). */
-void dwc_eqos_set_wide_copy(unsigned int index, unsigned int on)
-{
-	(void)index;
-	s_wide_copy = (on != 0u) ? 3u : 0u;
-}
-
-unsigned int dwc_eqos_get_wide_copy(unsigned int index)
-{
-	(void)index;
-	return (unsigned int)s_wide_copy;
-}
-
-void dwc_eqos_set_wide_copy_sel(unsigned int index, unsigned int mask)
-{
-	(void)index;
-	s_wide_copy = (uint8_t)(mask & 3u);
-}
-
-unsigned int dwc_eqos_get_wide_copy_sel(unsigned int index)
-{
-	(void)index;
-	return (unsigned int)s_wide_copy;
 }
 
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
@@ -2160,8 +2078,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		if (next != dev->tx_tail) {
 			buf = tx_buffers[index][cur];
 			t_copy = eqos_prof_t0();
-			eqos_frame_copy(buf, frame, len,
-					(uint8_t)((s_wide_copy >> 1) & 1u));
+			memcpy(buf, frame, len);
 			eqos_prof[index].tx_memcpy_ticks += eqos_prof_t0() - t_copy;
 
 			/* Ethernet requires 60 bytes before the FCS: a

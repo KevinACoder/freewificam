@@ -49,34 +49,4 @@
 #define ARCH_MSR(_reg, _val)	\
 	__asm__ __volatile__("msr " #_reg ", %0" :: "r"(_val) : "memory")
 
-/* --- wide block copy ------------------------------------------------------ */
-/* 64 bytes per expansion through four LDP/STP pairs, plus an 8-byte chunk.
- * Both pointers may be unaligned: Normal memory tolerates unaligned pair
- * accesses (SCTLR.A stays 0 on this image - start.S clears SCTLR_EL1 and
- * mmu.c only sets M/C/I), which is the whole point. The compiler's own copy
- * loop moves one byte-aligned u64 per iteration because -mstrict-align
- * forbids it from assuming anything wider; the census priced the image's
- * memcpy at 1.5 us for a 1514-byte frame, and most of that is the serial
- * loop rather than the memory system. Device memory must NOT use these
- * (unaligned accesses to Device memory fault); callers copy between Normal
- * regions. */
-#define ARCH_COPY_64(_dst, _src)					\
-	__asm__ __volatile__(						\
-		"ldp x4, x5, [%1]\n\t"					\
-		"ldp x6, x7, [%1, #16]\n\t"				\
-		"ldp x8, x9, [%1, #32]\n\t"				\
-		"ldp x10, x11, [%1, #48]\n\t"				\
-		"stp x4, x5, [%0]\n\t"					\
-		"stp x6, x7, [%0, #16]\n\t"				\
-		"stp x8, x9, [%0, #32]\n\t"				\
-		"stp x10, x11, [%0, #48]\n\t"				\
-		: : "r"(_dst), "r"(_src)				\
-		: "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "memory")
-
-#define ARCH_COPY_8(_dst, _src)						\
-	__asm__ __volatile__(						\
-		"ldr x4, [%1]\n\t"					\
-		"str x4, [%0]\n\t"					\
-		: : "r"(_dst), "r"(_src) : "x4", "memory")
-
 #endif /* ARCH_AARCH64_ARCH_ASM_H */

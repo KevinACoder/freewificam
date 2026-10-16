@@ -34,6 +34,10 @@
 
 #include <stdint.h>
 #include <limits.h>
+/* lwIP's contract when LWIP_TIMEVAL_PRIVATE is 0 (lwipopts.h): the system
+ * provides struct timeval, so name the header here. Header-only on the
+ * board - the struct definition needs no libc link. */
+#include <sys/time.h>
 
 #include "arch/aarch64/generic_timer.h"
 

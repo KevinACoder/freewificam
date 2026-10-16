@@ -35,7 +35,8 @@
 #include "arch_asm.h"
 #include "heap.h"
 #include "log.h"
-#include "minilibc.h"
+#include <stdio.h>
+#include <string.h>
 
 /* Linker symbols of the reserved window (NOLOAD: zero image cost). */
 extern unsigned char __heap_start[];
