@@ -795,15 +795,17 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 
 /* --- completion paths ----------------------------------------------------- */
 
-#if defined(CONFIG_GMAC_WIDE_COPY) && CONFIG_GMAC_WIDE_COPY
 /* The image's memcpy is the generic scalar loop - 8 bytes per iteration,
  * measured at 1.5 us for a 1514-byte frame (13% of one core's uplink budget
  * at line rate). The two per-frame copies in this driver (ring->staging on
  * RX, pbuf->TX buffer on send) both move whole frames, so give them wide
  * chunks: __builtin_memcpy with a constant size makes the compiler emit
  * LDP/STP pairs, which A55 sustains at ~4x the scalar rate. The head/tail
- * loops keep every length and alignment legal; semantics are a plain copy. */
-static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len)
+ * loops keep every length and alignment legal; semantics are a plain copy.
+ * The WIDECOPY build lever picks the default; the runtime seam (gmac wcopy)
+ * flips it so one boot carries the A/B - a load and a branch per frame
+ * against a 1.5 us loop. */
+static void eqos_frame_copy_wide(uint8_t *dst, const uint8_t *src, unsigned int len)
 {
 	while (len >= 64u) {
 		__builtin_memcpy(dst, src, 64);
@@ -821,9 +823,21 @@ static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len)
 		*dst++ = *src++;
 	}
 }
+
+#if defined(CONFIG_GMAC_WIDE_COPY) && CONFIG_GMAC_WIDE_COPY
+static uint8_t s_wide_copy = 1u;
 #else
-#define eqos_frame_copy(dst, src, len) memcpy((dst), (src), (len))
+static uint8_t s_wide_copy = 0u;
 #endif
+
+static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len)
+{
+	if (s_wide_copy != 0u) {
+		eqos_frame_copy_wide(dst, src, len);
+		return;
+	}
+	memcpy(dst, src, len);
+}
 
 static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned int len)
 {
@@ -1393,6 +1407,21 @@ unsigned int dwc_eqos_get_tx_ioc_div(unsigned int index)
 		return 0u;
 	}
 	return devs[index].tx_ioc_div;
+}
+
+/* Wide-copy seam: global, not per-port - this image has one live port and the
+ * copy helper is context-free (the RX-notify hook next door has the same
+ * shape). See the eqos_frame_copy block for the contract. */
+void dwc_eqos_set_wide_copy(unsigned int index, unsigned int on)
+{
+	(void)index;
+	s_wide_copy = (on != 0u) ? 1u : 0u;
+}
+
+unsigned int dwc_eqos_get_wide_copy(unsigned int index)
+{
+	(void)index;
+	return (unsigned int)s_wide_copy;
 }
 
 #if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC

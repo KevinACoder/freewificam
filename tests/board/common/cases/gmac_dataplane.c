@@ -611,6 +611,13 @@ static int cmd_gmac(int argc, char **argv)
 		csh_printf(csh, "gmac: txdiv %u\n", dwc_eqos_get_tx_ioc_div(g_port));
 		return 0;
 	}
+	if ((argc >= 3) && (strcmp(argv[1], "wcopy") == 0)) {
+		unsigned long v = strtoul(argv[2], NULL, 0);
+
+		dwc_eqos_set_wide_copy(g_port, (unsigned int)v);
+		csh_printf(csh, "gmac: wcopy %u\n", dwc_eqos_get_wide_copy(g_port));
+		return 0;
+	}
 	if ((argc >= 3) && (strcmp(argv[1], "hb") == 0)) {
 		g_hb_on = (strcmp(argv[2], "on") == 0);
 		csh_printf(csh, "gmac: heartbeat %s\n", g_hb_on ? "on" : "off");
@@ -1088,7 +1095,7 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac split | gmac tcpfine | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n> | gmac oddmode <0|1> | gmac rxcoal <0|riwt> | gmac txdiv <n>",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac split | gmac tcpfine | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n> | gmac oddmode <0|1> | gmac rxcoal <0|riwt> | gmac txdiv <n> | gmac wcopy <0|1>",
 			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
 			  "gmac prof [reset] - service-time profile in us (cumulative; diff it);\n"
 			  "gmac ring - RX ring snapshot (tail/DMA position/ownership);\n"
@@ -1109,7 +1116,9 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | g
 			  "                    traffic conditions (Linux shape) not as odd passes;\n"
 			  "gmac rxcoal <0|riwt> - stop/start per-frame RX IOC arming and set the\n"
 			  "                    RX watchdog (0 = back to per-frame RI);\n"
-			  "gmac txdiv <n> - arm the TX completion interrupt every n-th descriptor\n")
+			  "gmac txdiv <n> - arm the TX completion interrupt every n-th descriptor\n"
+			  "gmac wcopy <0|1> - 1 switches the two whole-frame copies to the LDP/STP\n"
+			  "                    chunk loop instead of the scalar memcpy\n")
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_ping, ping, "ping <ip> | ping stop",
 			  "ping <ip> - ICMP echo via the lwIP socket API\n")
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_iperf, iperf, "iperf <ip> | iperf server | iperf stop",

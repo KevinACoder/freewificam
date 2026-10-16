@@ -484,6 +484,15 @@ void dwc_eqos_set_rx_coalesce(unsigned int index, uint32_t riwt);
 void dwc_eqos_set_tx_ioc_div(unsigned int index, unsigned int div);
 unsigned int dwc_eqos_get_tx_ioc_div(unsigned int index);
 
+/* Wide per-frame copy seam (2026-10-20): the two whole-frame copies (ring->
+ * staging on RX, pbuf->TX buffer on send) switch between the image's scalar
+ * memcpy and the LDP/STP chunk loop. The WIDECOPY build lever picks the
+ * default, this flips it so one boot carries the A/B; the census priced the
+ * copy at 1.5 us per 1514-byte frame (the txcopy bucket). Global, not
+ * per-port - one live port in this image (the RX-notify hook's shape). */
+void dwc_eqos_set_wide_copy(unsigned int index, unsigned int on);
+unsigned int dwc_eqos_get_wide_copy(unsigned int index);
+
 /* Zero-copy RX (CONFIG_GMAC_RX_ZC, N7 R4): the driver lends completed
  * frames out instead of copying them into the staging ring.
  *
