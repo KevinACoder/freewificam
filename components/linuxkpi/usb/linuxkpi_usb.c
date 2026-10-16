@@ -190,10 +190,11 @@ lkpi_usb_debug_level(void)
 /* FreeBSD-shape port of linux_usb.c @d5c09e32c (BSD-2): every async   */
 /* endpoint owns ONE backend transfer (the seam's lkpi_usb_be_urb, the */
 /* FreeBSD usb_xfer analogue) plus a FIFO of Linux URBs; the           */
-/* completion claims the in-flight urb and defers it to the drain      */
-/* thread, which publishes the result, runs the driver callback and    */
-/* immediately re-arms the next queued urb (the source's               */
-/* non_isoc_callback SETUP->TRANSFERRED fall-through).  usb_free_urb   */
+/* completion claims the in-flight urb and re-arms the next queued urb */
+/* BEFORE the driver callback runs (this port's one deliberate         */
+/* divergence from the source's callback-then-rearm order - see        */
+/* DIVERGENCES-USB.md), then defers it to the drain thread, which      */
+/* publishes the result and runs the driver callback.  usb_free_urb    */
 /* kills first (source :1214-1228) - a freed urb can no longer have a  */
 /* completion in flight, which is the structural fix for the freed-urb */
 /* zero-write family.  Function-level lineage and the adaptation log   */
@@ -536,6 +537,20 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 		urb->actual_length = urb->transfer_buffer_length;
 	}
 
+	/* Pipeline the endpoint one deep: hand the next queued urb to the HC
+	 * BEFORE the driver callback runs, so the device keeps receiving while
+	 * this completion is being processed.  The endpoint is otherwise left
+	 * unarmed for the whole callback (parse, bridge, crypto, lwIP), which
+	 * is the interval a bulk-in stream spends waiting for the host to come
+	 * back rather than for the device to have data.
+	 *
+	 * The urb that goes in flight now is a different one, and this urb's
+	 * result is already snapshotted into done_status/done_len above; arming
+	 * refills ep->be, which nothing on this urb's path reads again.  Exactly
+	 * one physical transfer is in flight either way, so the endpoint's data
+	 * toggle and its ordering are unchanged (see DIVERGENCES-USB.md). */
+	lkpi_usb_kick(ep);
+
 	lkpi_usb_deliver(urb);
 
 	/* if the callback resubmitted this urb it is QUEUED again and now
@@ -550,10 +565,11 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	 * of rtw88 and rtw89 TX) */
 	usb_free_urb(urb);
 
-	/* the endpoint's backend is free again: hand the next queued urb
-	 * to the HC - strictly AFTER the driver callback returned, which
-	 * is why this is the last statement (the source's fall-through
-	 * SETUP, :1556-1636) */
+	/* second pass: when the queue was empty at the kick above there was
+	 * nothing to pipeline, and this is what starts a urb the callback just
+	 * resubmitted.  It refuses while a completion is already pending
+	 * (done_urb != NULL) and while one is in flight, so the common path is
+	 * a no-op. */
 	lkpi_usb_kick(ep);
 }
 
