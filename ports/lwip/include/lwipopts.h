@@ -269,4 +269,9 @@ void ethnetif_tcp_fine_mark(unsigned int site);
 #define LWIP_HOOK_TCP_PROBE(site) ethnetif_tcp_fine_mark((unsigned int)(site))
 #endif
 
+/* The toolchain's libc provides struct timeval (<sys/time.h>, included from
+ * arch/cc.h); lwIP's private copy collided with newlib's the moment the
+ * image linked libc.a. lwIP's own knob for exactly this. */
+#define LWIP_TIMEVAL_PRIVATE            0
+
 #endif /* FREEWEB_LWIPOPTS_H */
