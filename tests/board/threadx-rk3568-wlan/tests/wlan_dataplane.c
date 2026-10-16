@@ -30,6 +30,7 @@
 #include "lwip/ip4_addr.h"
 #include "lwip/dhcp.h"
 #include "lwip/apps/lwiperf.h"
+#include "lwip/udp.h"
 
 #include "ping.h"
 
@@ -75,6 +76,16 @@ void	wlan_wpa_vendor_events_arm(void);
 /* the lwIP client's own 10 s plus the connect and the report's delivery; a
  * ceiling, the report ends the wait */
 #define WLAN_UPLINK_REPORT_WAIT_MS	20000U
+
+/* The UDP receive sink: a datagram socket that only counts what arrives.  A
+ * UDP blast has no acknowledgement clock - the sender never waits for this
+ * end - so the sink's byte count is the receive path's own ceiling, and the
+ * difference to the TCP number is what the acknowledgement path costs.  Every
+ * throughput round reads both (the peer's phase actions alternate tcp/udp),
+ * because a TCP number alone cannot say whether the wall is the link or the
+ * feedback.  The counters reset per phase, so a phase's sink is that phase's
+ * burst; the port matches the peer's convention. */
+#define WLAN_UDP_SINK_PORT	5002U
 
 static struct netif g_netif;
 
@@ -293,6 +304,37 @@ uplink_phase_run(unsigned int phase, unsigned int peer)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* the UDP receive sink                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The bisection's other half: the peer blasts datagrams at this sink, which
+ * only counts them.  With no acknowledgement clock in the way the number is
+ * the receive path's own ceiling, so comparing it with the TCP window of the
+ * same boot says whether the wall is the link or the feedback path - and if
+ * the two agree, the wall is not the feedback path at all.
+ */
+static struct udp_pcb *g_udp_pcb;
+static volatile unsigned int g_udp_pkts;
+static volatile unsigned long g_udp_bytes;
+
+static void
+udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+    const ip_addr_t *addr, u16_t port)
+{
+
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p != NULL) {
+		g_udp_bytes += (unsigned long)p->tot_len;
+		g_udp_pkts++;
+		pbuf_free(p);
+	}
+}
+
 void wlan_dataplane_chain(void)
 {
 	unsigned int waited;
@@ -327,9 +369,26 @@ void wlan_dataplane_chain(void)
 	LOG_ANCHOR("wlan: iperf server ready port=%u\n",
 	    LWIPERF_TCP_PORT_DEFAULT);
 
+	/* the UDP ceiling probe's sink (the peer blasts datagrams at it; the
+	 * receive path drains them with no acknowledgement clock in the way) */
+	LOCK_TCPIP_CORE();
+	g_udp_pcb = udp_new();
+	if (g_udp_pcb == NULL ||
+	    udp_bind(g_udp_pcb, IP_ANY_TYPE, WLAN_UDP_SINK_PORT) != ERR_OK) {
+		UNLOCK_TCPIP_CORE();
+		board_case_fail("the UDP sink did not bind");
+		return;
+	}
+	udp_recv(g_udp_pcb, udp_sink_recv, NULL);
+	UNLOCK_TCPIP_CORE();
+	LOG_ANCHOR("wlan: udp sink ready port=%u\n", WLAN_UDP_SINK_PORT);
+
 	/* the downlink phases: the peer's client drives each window, and the
-	 * ready line above is what it waits for before it starts */
+	 * ready line above is what it waits for before it starts.  The sink's
+	 * counters reset with the phase, so a UDP phase's burst is its own. */
 	for (phase = 1U; phase <= WLAN_IPERF_PHASES; phase++) {
+		g_udp_pkts = 0U;
+		g_udp_bytes = 0UL;
 		LOG_ANCHOR("wlan: downlink phase %u ready window=%u s\n",
 		    phase, (unsigned)(WLAN_IPERF_WINDOW_MS / 1000));
 		for (waited = 0; waited < WLAN_IPERF_WINDOW_MS;
@@ -337,6 +396,8 @@ void wlan_dataplane_chain(void)
 			(void)osDelay(100U);
 		}
 		LOG_ANCHOR("wlan: downlink phase %u done\n", phase);
+		LOG_ANCHOR("wlan: udp sink pkts=%u bytes=%lu\n", g_udp_pkts,
+		    g_udp_bytes);
 	}
 
 	/* the uplink phases: this image is the client and the peer is the

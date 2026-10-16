@@ -73,6 +73,10 @@ ANCHORS = {
         r"wlan: dhcp bound ip=\d+\.\d+\.\d+\.\d+/",
         r"wlan: ping window done",
         r"wlan: iperf server ready port=5001",
+        # the bisection's other half: the datagram sink the peer blasts at,
+        # and its per-phase count
+        r"wlan: udp sink ready port=\d+",
+        r"wlan: udp sink pkts=\d+ bytes=\d+",
         # the phased measurement arm: the first window announces itself before
         # it opens (which is what the peer waits for) and the last one closes,
         # so a sheet that lost a phase - or never opened the arm - is visible
@@ -145,14 +149,19 @@ BASE_TRANSCRIPT = (
     "[  29.000] ping: recv 192.168.0.1 1 ms\r\n"
     "[  34.000] wlan: ping window done\r\n"
     "[  34.100] wlan: iperf server ready port=5001\r\n"
+    "[  34.150] wlan: udp sink ready port=5002\r\n"
     "[  34.200] wlan: downlink phase 1 ready window=20 s\r\n"
     "[  54.200] wlan: downlink phase 1 done\r\n"
+    "[  54.210] wlan: udp sink pkts=0 bytes=0\r\n"
     "[  54.300] wlan: downlink phase 2 ready window=20 s\r\n"
     "[  74.300] wlan: downlink phase 2 done\r\n"
+    "[  74.310] wlan: udp sink pkts=14820 bytes=21516000\r\n"
     "[  74.400] wlan: downlink phase 3 ready window=20 s\r\n"
     "[  94.400] wlan: downlink phase 3 done\r\n"
+    "[  94.410] wlan: udp sink pkts=0 bytes=0\r\n"
     "[  94.500] wlan: downlink phase 4 ready window=20 s\r\n"
     "[ 114.500] wlan: downlink phase 4 done\r\n"
+    "[ 114.510] wlan: udp sink pkts=15103 bytes=21920300\r\n"
     "[ 114.600] wlan: uplink skipped reason=no-peer\r\n"
     "[ 114.700] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
     + SENTINEL_LINE
@@ -198,6 +207,12 @@ MUTATIONS = [
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
     ("downlink phase dropped", BASE_TRANSCRIPT.replace(
         "wlan: downlink phase 4 done\r\n", ""), 1),
+    ("udp sink ready dropped", BASE_TRANSCRIPT.replace(
+        "wlan: udp sink ready port=5002\r\n", ""), 1),
+    ("udp sink counts dropped", BASE_TRANSCRIPT
+     .replace("wlan: udp sink pkts=0 bytes=0\r\n", "")
+     .replace("wlan: udp sink pkts=14820 bytes=21516000\r\n", "")
+     .replace("wlan: udp sink pkts=15103 bytes=21920300\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,wlan-probe,wlan-scan,wlan-join-raw,wlan-join,"
