@@ -73,6 +73,11 @@ ANCHORS = {
         r"wlan: dhcp bound ip=\d+\.\d+\.\d+\.\d+/",
         r"wlan: ping window done",
         r"wlan: iperf server ready port=5001",
+        # the bounded window the round's traffic peer drives the server
+        # through; without it the runner powers off before the peer's
+        # client can be measured against the server
+        r"wlan: measure window=\d+ s",
+        r"wlan: measure window done",
     ],
 }
 
@@ -89,7 +94,7 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
 
 SENTINEL_LINE = (
-    "[  40.360] BOARD-SUITE threadx-rk3568-wlan "
+    "[  79.400] BOARD-SUITE threadx-rk3568-wlan "
     "result=pass cases=6 ok=6 exit=0\r\n"
 )
 
@@ -137,7 +142,9 @@ BASE_TRANSCRIPT = (
     "[  29.000] ping: recv 192.168.0.1 1 ms\r\n"
     "[  34.000] wlan: ping window done\r\n"
     "[  34.100] wlan: iperf server ready port=5001\r\n"
-    "[  34.200] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
+    "[  34.200] wlan: measure window=45 s\r\n"
+    "[  79.200] wlan: measure window done\r\n"
+    "[  79.300] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
     + SENTINEL_LINE
     + PROMPT + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -179,6 +186,8 @@ MUTATIONS = [
         "wlan: scan done rows=2 chans=12\r\n", ""), 1),
     ("gt match dropped", BASE_TRANSCRIPT.replace(
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
+    ("measure window dropped", BASE_TRANSCRIPT.replace(
+        "wlan: measure window done\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(
         "list=shell-up,wlan-probe,wlan-scan,wlan-join-raw,wlan-join,"

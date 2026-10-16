@@ -53,6 +53,13 @@ void	wlan_wpa_vendor_events_arm(void);
 
 #define WLAN_DHCP_WAIT_MS	45000U
 #define WLAN_PING_WAIT_MS	9000U
+/* The window the round's traffic peer drives the server through.  The runner
+ * powers the board off once the suite reports its result, so a server that is
+ * merely up is not measurable: the case has to hold the image alive for the
+ * bounded window the peer's client needs.  The peer starts its client when
+ * this window opens (it watches for the ready line on the console), so the
+ * window only has to cover the traffic, not the boot. */
+#define WLAN_MEASURE_WAIT_MS	45000U
 
 static struct netif g_netif;
 
@@ -189,6 +196,14 @@ void wlan_dataplane_chain(void)
 	}
 	UNLOCK_TCPIP_CORE();
 	LOG_INFO("wlan: iperf server ready port=%u\n", LWIPERF_TCP_PORT_DEFAULT);
+
+	/* hold the measurement window open for the peer */
+	LOG_INFO("wlan: measure window=%u s\n",
+	    (unsigned)(WLAN_MEASURE_WAIT_MS / 1000));
+	for (waited = 0; waited < WLAN_MEASURE_WAIT_MS; waited += 100U) {
+		osDelay(100U);
+	}
+	LOG_ANCHOR("wlan: measure window done\n");
 }
 
 BOARD_TEST("wlan-dataplane", wlan_dataplane_chain);
