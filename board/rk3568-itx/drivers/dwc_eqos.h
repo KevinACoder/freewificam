@@ -332,6 +332,21 @@
 							 * source) */
 #define  DWC_EQOS_CH0_STATUS_RI              (1u << 6)
 #define  DWC_EQOS_CH0_STATUS_TI              (1u << 0)
+/* Two further causes this driver has always seen but never named: they have
+ * no independent enable bits in INTR_ENABLE (checked: Linux's dwmac4_dma.h
+ * layouts have none either), so they latch into the status word and ride the
+ * normal/abnormal summaries. TBU is a LIVE condition - the DMA met an
+ * unowned descriptor, which is what a drained TX ring looks like - so it
+ * re-latches on the next status read after the W1C; ETI reports the TX FIFO
+ * crossing its early threshold. Linux consumes the same word as service
+ * hints, not as faults (dwmac4_lib.c: TBU -> handle_tx, ETI -> counter). */
+#define  DWC_EQOS_CH0_STATUS_TBU             (1u << 2)	/* transmit buffer
+							 * unavailable (live) */
+#define  DWC_EQOS_CH0_STATUS_ETI             (1u << 10)	/* early transmit
+							 * interrupt */
+#define  DWC_EQOS_CH0_STATUS_KNOWN_ODD \
+	(DWC_EQOS_CH0_STATUS_TBU | DWC_EQOS_CH0_STATUS_ETI \
+	 | DWC_EQOS_CH0_STATUS_NIS | DWC_EQOS_CH0_STATUS_AIS)
 
 /* --- descriptor ----------------------------------------------------------- */
 
@@ -452,6 +467,22 @@ int dwc_eqos_rx_poll(unsigned int index, int budget);
  * measurement round sweeps RIWT inside one boot. */
 void dwc_eqos_set_rx_riwt(unsigned int index, uint32_t riwt);
 uint32_t dwc_eqos_get_rx_riwt(unsigned int index);
+
+/* Interrupt-shape runtime seams (2026-10-19 census round), so one boot carries
+ * the whole A/B instead of one boot per build:
+ *  - oddmode 0 keeps the N7-stab treatment of unserviced status words (count,
+ *    first power-of-two prints, burst breaker); oddmode 1 handles TBU/ETI-only
+ *    words as the ordinary traffic conditions they are (see the TBU/ETI note
+ *    above) - they stop feeding the odd net, the unknown-bit net stays.
+ *  - rxcoal programs the RX watchdog AND stops arming the per-frame IOC bit on
+ *    future descriptors (the arming change lands as the RX thread re-arms the
+ *    ring, one turnover); riwt 0 restores per-frame RI.
+ *  - txdiv is the TX completion interval (descriptors between TI arms). */
+void dwc_eqos_set_irq_oddmode(unsigned int index, unsigned int mode);
+unsigned int dwc_eqos_get_irq_oddmode(unsigned int index);
+void dwc_eqos_set_rx_coalesce(unsigned int index, uint32_t riwt);
+void dwc_eqos_set_tx_ioc_div(unsigned int index, unsigned int div);
+unsigned int dwc_eqos_get_tx_ioc_div(unsigned int index);
 
 /* Zero-copy RX (CONFIG_GMAC_RX_ZC, N7 R4): the driver lends completed
  * frames out instead of copying them into the staging ring.
@@ -677,6 +708,26 @@ struct dwc_eqos_prof {
 					 * reader: near 0 means the RX thread keeps
 					 * up with the DMA; near the ring depth means
 					 * the reader is the lagging consumer */
+
+	/* Interrupt-shape census (2026-10-19). The
+	 * whole-ISR bucket above says HOW MUCH the interrupt line costs; these
+	 * split it so the avoidable class is identifiable. Entries are
+	 * classified by the FIRST non-zero status word they saw; the *_ticks
+	 * cells carry that entry's FULL entry-to-return cost, so an odd entry's
+	 * GIC entry, prologue and status read sit inside its own bucket - the
+	 * older irq_odd_ticks bucket starts after them and stays
+	 * for continuity only. Passes count every loop iteration (the
+	 * per-entry round-trip gauge); irq_pass_mac is the empty-word exits
+	 * that had to clear a MAC-level latch (the N7-stab defense) and
+	 * irq_benign is TBU/ETI-only passes served as traffic conditions under
+	 * irq_oddmode=1. irq_max_ticks is the worst single entry. */
+	uint64_t irq_ent_rx, irq_ent_tx, irq_ent_odd, irq_ent_fb, irq_ent_none;
+	uint64_t irq_ent_rx_ticks, irq_ent_tx_ticks, irq_ent_odd_ticks,
+		 irq_ent_fb_ticks, irq_ent_none_ticks;
+	uint64_t irq_max_ticks;
+	uint64_t irq_passes, irq_pass_rx, irq_pass_tx, irq_pass_odd,
+		 irq_pass_mac, irq_pass_zero;
+	uint64_t irq_benign;
 };
 
 void dwc_eqos_get_prof(unsigned int index, struct dwc_eqos_prof *prof);

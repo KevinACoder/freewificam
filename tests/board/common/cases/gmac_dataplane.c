@@ -491,7 +491,10 @@ static int cmd_gmac(int argc, char **argv)
 			   "rxcopy=%u txdone=%u txtot=%u txcopy=%u txflush=%u "
 			   "rxwalk=%u walkslots=%llu sweeps=%llu "
 			   "bridgeprep=%u bridgeinput=%u bridgecalls=%lu "
-			   "irqn=%u rx=%u tx=%u\n",
+			   "irqn=%u rx=%u tx=%u "
+			   "ent rx=%llu/%llu tx=%llu/%llu odd=%llu/%llu fb=%llu/%llu "
+			   "none=%llu/%llu irqmax=%llu passes=%llu "
+			   "prx=%llu ptx=%llu podd=%llu pmac=%llu pz=%llu benign=%llu\n",
 			   g_port,
 			   (unsigned)(p.irq_ticks / 24u), (unsigned)(p.irq_odd_ticks / 24u),
 			   (unsigned)(p.irq_rx_sweep_ticks / 24u),
@@ -507,7 +510,27 @@ static int cmd_gmac(int argc, char **argv)
 			   (unsigned)(prep_ticks / 24u),
 			   (unsigned)(input_ticks / 24u), input_calls,
 			   (unsigned)p.irq_entries, (unsigned)p.rx_frames,
-			   (unsigned)p.tx_frames);
+			   (unsigned)p.tx_frames,
+			   /* The census: entry count / full entry cost in us per
+			    * class (first non-zero status word decides the class). */
+			   (unsigned long long)p.irq_ent_rx,
+			   (unsigned long long)(p.irq_ent_rx_ticks / 24u),
+			   (unsigned long long)p.irq_ent_tx,
+			   (unsigned long long)(p.irq_ent_tx_ticks / 24u),
+			   (unsigned long long)p.irq_ent_odd,
+			   (unsigned long long)(p.irq_ent_odd_ticks / 24u),
+			   (unsigned long long)p.irq_ent_fb,
+			   (unsigned long long)(p.irq_ent_fb_ticks / 24u),
+			   (unsigned long long)p.irq_ent_none,
+			   (unsigned long long)(p.irq_ent_none_ticks / 24u),
+			   (unsigned long long)(p.irq_max_ticks / 24u),
+			   (unsigned long long)p.irq_passes,
+			   (unsigned long long)p.irq_pass_rx,
+			   (unsigned long long)p.irq_pass_tx,
+			   (unsigned long long)p.irq_pass_odd,
+			   (unsigned long long)p.irq_pass_mac,
+			   (unsigned long long)p.irq_pass_zero,
+			   (unsigned long long)p.irq_benign);
 		return 0;
 	}
 
@@ -562,6 +585,30 @@ static int cmd_gmac(int argc, char **argv)
 		dwc_eqos_set_rx_riwt(g_port, (uint32_t)v);
 		csh_printf(csh, "gmac: riwt %lu readback %lu\n", v,
 			   (unsigned long)dwc_eqos_get_rx_riwt(g_port));
+		return 0;
+	}
+	/* The interrupt-shape seams (2026-10-19 census round): each one is device
+	 * state, echoed back so the harness's per-sheet script can confirm the arm
+	 * actually took. See dwc_eqos.h for the semantics. */
+	if ((argc >= 3) && (strcmp(argv[1], "oddmode") == 0)) {
+		dwc_eqos_set_irq_oddmode(g_port, (unsigned int)strtoul(argv[2], NULL, 0));
+		csh_printf(csh, "gmac: oddmode %u\n",
+			   dwc_eqos_get_irq_oddmode(g_port));
+		return 0;
+	}
+	if ((argc >= 3) && (strcmp(argv[1], "rxcoal") == 0)) {
+		unsigned long v = strtoul(argv[2], NULL, 0);
+
+		dwc_eqos_set_rx_coalesce(g_port, (uint32_t)v);
+		csh_printf(csh, "gmac: rxcoal %lu readback %lu\n", v,
+			   (unsigned long)dwc_eqos_get_rx_riwt(g_port));
+		return 0;
+	}
+	if ((argc >= 3) && (strcmp(argv[1], "txdiv") == 0)) {
+		unsigned long v = strtoul(argv[2], NULL, 0);
+
+		dwc_eqos_set_tx_ioc_div(g_port, (unsigned int)v);
+		csh_printf(csh, "gmac: txdiv %u\n", dwc_eqos_get_tx_ioc_div(g_port));
 		return 0;
 	}
 	if ((argc >= 3) && (strcmp(argv[1], "hb") == 0)) {
@@ -1041,7 +1088,7 @@ static int cmd_iperf(int argc, char **argv)
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac split | gmac tcpfine | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n>",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | gmac ring | gmac regs | gmac net | gmac tcp | gmac gap | gmac idle | gmac shape | gmac split | gmac tcpfine | gmac etime | gmac udpstat | gmac udpsend | gmac hb on|off | gmac riwt <n> | gmac oddmode <0|1> | gmac rxcoal <0|riwt> | gmac txdiv <n>",
 			  "gmac stat - driver counters; gmac diag - ring/status black box;\n"
 			  "gmac prof [reset] - service-time profile in us (cumulative; diff it);\n"
 			  "gmac ring - RX ring snapshot (tail/DMA position/ownership);\n"
@@ -1057,7 +1104,12 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_gmac, gmac, "gmac stat | gmac diag | gmac prof | g
 			  "gmac udpstat [reset] - UDP sink counters (burst rate board-side);\n"
 			  "gmac udpsend <ip> [ms] - raw-API UDP send loop (default 5000 ms);\n"
 			  "gmac hb on|off - quiet the 1 Hz heartbeat for a measurement round;\n"
-			  "gmac riwt <n> - set the RX watchdog (coalescing batch size, 256-tick units)\n")
+			  "gmac riwt <n> - set the RX watchdog register only (256-tick units);\n"
+			  "gmac oddmode <0|1> - 1 serves TBU/ETI-only status words as ordinary\n"
+			  "                    traffic conditions (Linux shape) not as odd passes;\n"
+			  "gmac rxcoal <0|riwt> - stop/start per-frame RX IOC arming and set the\n"
+			  "                    RX watchdog (0 = back to per-frame RI);\n"
+			  "gmac txdiv <n> - arm the TX completion interrupt every n-th descriptor\n")
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_ping, ping, "ping <ip> | ping stop",
 			  "ping <ip> - ICMP echo via the lwIP socket API\n")
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_iperf, iperf, "iperf <ip> | iperf server | iperf stop",
