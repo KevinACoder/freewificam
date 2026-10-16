@@ -1071,18 +1071,33 @@ def uplink_server_start(r: Runner, work: str) -> bool:
     number, so its output is kept and fetched with the round's products.
 
     `work` is the capture's own path (the same value dumpcap is pointed at), so
-    the log goes beside it - in the working directory the tool created."""
+    the log goes beside it - in the working directory the tool created.
+
+    The restart waits the previous server out instead of sleeping a fixed
+    moment: pkill's SIGTERM is asynchronous, and a fixed 0.3 s was measured
+    losing the race on the Raspberry Pi (the new iperf died with "Address
+    already in use" and the round then found no listener at all). Both waits
+    are bounded; the check reads the process name AND the listening port, so
+    a stale server cannot mask a failed start."""
 
     log = "%s/uplink-server.log" % os.path.dirname(work)
-    cmd = ("sh -c 'pkill -x iperf 2>/dev/null; sleep 0.3; "
-           "nohup iperf -s -p 5001 > %s 2>&1 & sleep 1; pgrep -x iperf'"
+    cmd = ("sh -c 'pkill -x iperf 2>/dev/null; "
+           "i=0; while [ $i -lt 40 ]; do "
+           "pgrep -x iperf >/dev/null 2>&1 || ss -ltn 2>/dev/null | grep -q :5001 || break; "
+           "sleep 0.25; i=$((i+1)); done; "
+           "nohup iperf -s -p 5001 > %s 2>&1 & "
+           "i=0; while [ $i -lt 20 ]; do "
+           "pgrep -x iperf >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q :5001 && break; "
+           "sleep 0.25; i=$((i+1)); done; "
+           "pgrep -x iperf >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q :5001 "
+           "&& echo uplink-server-listening'"
            % shlex.quote(log))
     try:
         _, text = r.run(cmd)
     except RuntimeError as e:
         warn("uplink server did not start: %s", e)
         return False
-    if "iperf" not in text:
+    if "uplink-server-listening" not in text:
         warn("uplink server not visible after start")
         return False
     info("uplink server listening on 5001 (log kept with the products)")
