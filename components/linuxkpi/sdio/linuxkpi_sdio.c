@@ -97,6 +97,10 @@
 /* the longest a pump_kick() waits for its cycle to finish */
 #define	LKPI_SDIO_KICK_TIMEOUT_MS	200u
 
+/* The drain-to-empty loop's bound: rounds one claim may serve before yielding
+ * the bus back, so a card that never stops reporting cannot hold it. */
+#define	LKPI_SDIO_DRAIN_MAX_ROUNDS	16u
+
 /*
  * The pump's cadence modes (LKPI_SDIO_PUMP_MODE_*, linuxkpi_sdio.h). FIXED
  * spaces every cycle by the idle period above - the shape a polled host has
@@ -139,6 +143,20 @@ struct lkpi_sdio_card {
 	 * adaptive controller's state (milliseconds, idle period when fixed) */
 	unsigned int			pump_mode;
 	unsigned int			pump_period_ms;
+	/* the card-interrupt mode: when on, the wait is a backstop and the card's
+	 * own events (through lkpi_sdio_pump_notify) carry discovery; when off,
+	 * the period is the discovery mechanism, as it always was */
+	bool				pump_irq;
+	/* set by the notify path (interrupt context) just before it releases the
+	 * wait, so the pump can classify its own wake */
+	volatile bool			irq_wake;
+	/* the wake-chain knobs (the align round's second arm): a pump raised to
+	 * the normal band competes with the driver threads instead of yielding to
+	 * them; drain-to-empty keeps dispatching inside one cycle while the card
+	 * still reports pending work. Both default to the shapes every earlier
+	 * measurement ran. */
+	bool				pump_prio_normal;
+	bool				pump_drain;
 	/* when the last cycle that moved bytes finished (the hot hold's stamp) */
 	uint64_t			pump_hot_ns;
 	/* always-on accounting of the bytes the splitter moved, by direction.
@@ -201,6 +219,17 @@ struct lkpi_sdio_census {
 	uint32_t	wake_kick;
 	uint32_t	wake_timeout;
 	uint32_t	wake_hot;
+	/* the card interrupt: notify calls (ISR side) and the pump's wakes
+	 * classified as interrupt-sourced; both zero on a polling boot */
+	uint32_t	irq_notify;
+	uint32_t	wake_irq;
+	/* drain-to-empty: rounds dispatched beyond the first inside one cycle */
+	uint32_t	drain_extra;
+	/* the event-to-service latency of the interrupt path: the ISR stamps the
+	 * moment, the pump takes it when it starts the cycle that answers it */
+	uint64_t	irq_stamp_ns;
+	struct lkpi_census_histo	irq_lat;
+	uint32_t	disp;	/* handler dispatches (functions served) */
 	uint32_t	cycles;
 	uint32_t	cycles_busy;
 	uint32_t	cycles_empty;
@@ -320,6 +349,55 @@ lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 		lkpi_sdio_census_state.wake_timeout++;
 }
 
+/* interrupt context */
+static void
+lkpi_sdio_census_note_irq_notify(void)
+{
+
+	lkpi_sdio_census_state.irq_notify++;
+}
+
+static void
+lkpi_sdio_census_note_wake_irq(void)
+{
+
+	lkpi_sdio_census_state.wake_irq++;
+}
+
+/* interrupt context: stamp the moment the card event arrived */
+static void
+lkpi_sdio_census_note_irq_stamp(uint64_t t)
+{
+
+	lkpi_sdio_census_state.irq_stamp_ns = t;
+}
+
+/* the pump takes the stamp when it starts the cycle that answers it */
+static void
+lkpi_sdio_census_note_irq_lat(uint64_t t)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+
+	if (c->irq_stamp_ns != 0u && t > c->irq_stamp_ns) {
+		lkpi_census_histo_add(&c->irq_lat, t - c->irq_stamp_ns);
+		c->irq_stamp_ns = 0u;
+	}
+}
+
+static void
+lkpi_sdio_census_note_dispatch(void)
+{
+
+	lkpi_sdio_census_state.disp++;
+}
+
+static void
+lkpi_sdio_census_note_drain(uint32_t extra)
+{
+
+	lkpi_sdio_census_state.drain_extra += extra;
+}
+
 static void
 lkpi_sdio_census_note_yield(void)
 {
@@ -405,6 +483,27 @@ lkpi_sdio_census_print(void)
 	lkpi_census_histo_print("perf census: D pump_handler", &c->cyc_handler);
 	lkpi_census_histo_print("perf census: D pump_gap", &c->busy_gap);
 	lkpi_census_histo_print("perf census: D pump_byt", &c->busy_bytes);
+	/* the card-interrupt line, its own shape so no earlier anchor moves */
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: D pumpirq on=%u notify=%u wake=%u prio=%s drain=%u\n",
+	    lkpi_sdio_card_state.pump_irq ? 1u : 0u, c->irq_notify, c->wake_irq,
+	    lkpi_sdio_card_state.pump_prio_normal ? "normal" : "below",
+	    lkpi_sdio_card_state.pump_drain ? 1u : 0u);
+	/* the round's timeline and receive-release shapes: the four boundaries a
+	 * frame crosses (the stack's handoff notes, the bus claim, the wire write,
+	 * the handler dispatch) and the receive side's read account. The middle
+	 * split - assembly inside the vendored driver - has no host-side boundary
+	 * to stand on (zero-patch), so the write-age histogram above is its
+	 * evidence instead. */
+	lkpi_census_histo_print("perf tl: irq_wake", &c->irq_lat);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf tl: ndo=%u claim=%u wire=%u wbytes=%llu disp=%u\n",
+	    c->tx_age_n, c->claim_calls, c->cmd53_w,
+	    (unsigned long long)c->cmd53_w_bytes, c->disp);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf rxrel: reads=%u rbytes=%llu busy_cyc=%u disp=%u drain=%u\n",
+	    c->cmd53_r, (unsigned long long)c->cmd53_r_bytes, c->cycles_busy,
+	    c->disp, c->drain_extra);
 	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D txage n=%u\n", c->tx_age_n);
 	lkpi_census_histo_print("perf census: D txage", &c->tx_age);
 }
@@ -466,6 +565,42 @@ lkpi_sdio_census_note_wake(bool kicked, unsigned int wait_ms)
 
 	(void)kicked;
 	(void)wait_ms;
+}
+
+static void
+lkpi_sdio_census_note_irq_notify(void)
+{
+}
+
+static void
+lkpi_sdio_census_note_wake_irq(void)
+{
+}
+
+static void
+lkpi_sdio_census_note_irq_stamp(uint64_t t)
+{
+
+	(void)t;
+}
+
+static void
+lkpi_sdio_census_note_irq_lat(uint64_t t)
+{
+
+	(void)t;
+}
+
+static void
+lkpi_sdio_census_note_dispatch(void)
+{
+}
+
+static void
+lkpi_sdio_census_note_drain(uint32_t extra)
+{
+
+	(void)extra;
 }
 
 static void
@@ -1115,6 +1250,9 @@ lkpi_sdio_pump_cycle(void)
 	unsigned int i;
 	uint64_t t0, t1, t2;
 	uint64_t moved0 = c->rx_bytes + c->tx_bytes;
+	bool busy = false;
+	bool err = false;
+	unsigned int rounds = 0u;
 
 	lkpi_sdio_census_note_pump();
 	t0 = lkpi_sdio_census_now();
@@ -1124,15 +1262,29 @@ lkpi_sdio_pump_cycle(void)
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
 
-	lkpi_sdio_stats.pump_polls++;
-	if (lkpi_sdio_be_irq_pending(&pending) == 0) {
-		bool busy = false;
-
+	/*
+	 * One round dispatches the functions the card reports pending. With
+	 * drain-to-empty on, a round that saw work is followed by another look
+	 * while the card still reports some - the claim is held across the
+	 * rounds, so the extra look costs one pending read instead of a
+	 * claim/unclaim pair; the loop is bounded (LKPI_SDIO_DRAIN_MAX_ROUNDS)
+	 * so a card that never stops reporting cannot hold the bus.
+	 */
+	for (;;) {
+		lkpi_sdio_stats.pump_polls++;
+		if (lkpi_sdio_be_irq_pending(&pending) != 0) {
+			lkpi_sdio_stats.errors++;
+			err = true;
+			break;
+		}
+		if (pending == 0u)
+			break;
 		for (i = 1u; i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; i++) {
 			if ((pending & (1u << i)) == 0)
 				continue;
 			if (c->func[i].irq_handler != NULL) {
 				lkpi_sdio_stats.callbacks++;
+				lkpi_sdio_census_note_dispatch();
 				busy = true;
 				c->func[i].irq_handler(&c->func[i]);
 			} else {
@@ -1141,14 +1293,16 @@ lkpi_sdio_pump_cycle(void)
 				    i);
 			}
 		}
-		t2 = lkpi_sdio_census_now();
-		lkpi_sdio_census_note_cycle(t0, t1, t2, busy, false,
-		    (c->rx_bytes + c->tx_bytes) - moved0);
-	} else {
-		lkpi_sdio_stats.errors++;
-		t2 = lkpi_sdio_census_now();
-		lkpi_sdio_census_note_cycle(t0, t1, t2, false, true, 0u);
+		rounds++;
+		if ((!c->pump_drain) || (rounds >= LKPI_SDIO_DRAIN_MAX_ROUNDS))
+			break;
 	}
+	if (rounds > 1u)
+		lkpi_sdio_census_note_drain(rounds - 1u);
+
+	t2 = lkpi_sdio_census_now();
+	lkpi_sdio_census_note_cycle(t0, t1, t2, busy, err,
+	    (c->rx_bytes + c->tx_bytes) - moved0);
 
 	c->host.claimed = false;
 	c->claim_owner = NULL;
@@ -1166,10 +1320,26 @@ lkpi_sdio_pump_entry(void *arg)
 	for (;;) {
 		bool requested;
 		bool progress = false;
+		unsigned int wait_ms;
 
-		requested = osSemaphoreAcquire(c->pump_req,
-		    c->pump_period_ms) == osOK;
-		lkpi_sdio_census_note_wake(requested, c->pump_period_ms);
+		/*
+		 * Interrupt mode turns the wait into a backstop: the card's events
+		 * arrive through lkpi_sdio_pump_notify, and the timeout only covers a
+		 * lost line (a lost interrupt must not lose an event - the interface's
+		 * rule). Out of interrupt mode the timeout IS the discovery mechanism,
+		 * as it always was.
+		 */
+		wait_ms = c->pump_irq ? LKPI_SDIO_PUMP_IDLE_MS : c->pump_period_ms;
+		requested = osSemaphoreAcquire(c->pump_req, wait_ms) == osOK;
+		if (c->irq_wake) {
+			c->irq_wake = false;
+			lkpi_sdio_census_note_wake_irq();
+		} else {
+			lkpi_sdio_census_note_wake(requested, wait_ms);
+		}
+		/* the event-to-service latency: how long the card's interrupt waited
+		 * for this pump cycle to begin (interrupt-mode phases only) */
+		lkpi_sdio_census_note_irq_lat(lkpi_sdio_census_now());
 		/*
 		 * The fairness yield: a driver thread parked on the claim is waiting for
 		 * the bus the pump is about to take again. When the knob is on, the pump
@@ -1177,17 +1347,29 @@ lkpi_sdio_pump_entry(void *arg)
 		 * cycle and comes back after a tick, which is enough for the parked
 		 * contend for the now-free claim. Off (the default), the pump's own
 		 * cadence owns the bus, which is the shape every earlier measurement ran
-		 * under.
+		 * under. Interrupt mode does not yield: the wait there is a backstop, so
+		 * a skipped cycle would strand the waking event for a full idle period.
 		 */
-		if (c->pump_yield && c->claim_waiters != 0u) {
+		if (c->pump_yield && !c->pump_irq && c->claim_waiters != 0u) {
 			lkpi_sdio_census_note_yield();
 			(void)osDelay(1);
 			if (requested)
 				(void)osSemaphoreRelease(c->pump_done);
 			continue;
 		}
-		if (lkpi_sdio_has_handler())
+		/* Interrupt mode runs the cycle even before a driver has claimed a
+		 * handler: the re-arm below follows the cycle, and a masked line that
+		 * nobody re-arms would strand the card's events. */
+		if (lkpi_sdio_has_handler() || c->pump_irq)
 			progress = lkpi_sdio_pump_cycle();
+		/*
+		 * The card-interrupt re-arm: the ISR masked the line when it fired, and
+		 * the handler that just ran cleared the card's own interrupt status -
+		 * which is what released DAT1. Re-enabling here is what makes a
+		 * still-pending event (or a new one) reach the GIC again.
+		 */
+		if (c->pump_irq)
+			(void)lkpi_sdio_be_card_irq_mode(1u);
 		if (requested)
 			(void)osSemaphoreRelease(c->pump_done);
 		if (c->pump_mode == LKPI_SDIO_PUMP_MODE_ADAPTIVE) {
@@ -1218,6 +1400,101 @@ lkpi_sdio_pump_kick(void)
 		return;
 	(void)osSemaphoreRelease(c->pump_req);
 	(void)osSemaphoreAcquire(c->pump_done, LKPI_SDIO_KICK_TIMEOUT_MS);
+}
+
+/*
+ * The card-interrupt notify: called from interrupt context (the controller's
+ * ISR, through the backend's card-interrupt upcall). It must only poke the
+ * pump - the card's pending word is read and the driver's handler runs on the
+ * pump thread, under the claim, exactly as in the polling shape. The release
+ * is the backend's ISR-safe primitive (CMSIS-RTOS2 semaphores are).
+ */
+void
+lkpi_sdio_pump_notify(void)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+
+	if (!c->pump_running)
+		return;
+	c->irq_wake = true;
+	lkpi_sdio_census_note_irq_notify();
+	lkpi_sdio_census_note_irq_stamp(lkpi_sdio_census_now());
+	(void)osSemaphoreRelease(c->pump_req);
+}
+
+/*
+ * The card-interrupt mode: on arms the backend's line (and the pump's backstop
+ * wait), off puts the boot back on the polling cadence. The switch is refused
+ * when the backend carries no card-interrupt path, so a caller can always tell
+ * whether the mechanism exists rather than believing a knob.
+ */
+int
+lkpi_sdio_pump_irq_set(bool on)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+	int st;
+
+	if (!c->present)
+		return -LKPI_SDIO_BE_ERR_NOCARD;
+	if (c->pump_irq == on)
+		return 0;
+
+	st = lkpi_sdio_be_card_irq_mode(on ? 1u : 0u);
+	if (st != 0)
+		return st;
+
+	c->pump_irq = on;
+	if (!on)
+		c->irq_wake = false;
+	return 0;
+}
+
+bool
+lkpi_sdio_pump_irq_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_irq;
+}
+
+/*
+ * The wake-chain knobs (the align round's second arm). prio_set moves the pump
+ * between the below-normal band it has always run at and the normal band the
+ * driver's own threads sit on - at the normal band the pump competes for the
+ * bus instead of yielding to the consumer threads, which is a trade this knob
+ * exists to measure, not to assume. drain_set keeps a cycle dispatching while
+ * the card still reports pending work (bounded; see LKPI_SDIO_DRAIN_MAX_ROUNDS).
+ */
+void
+lkpi_sdio_pump_prio_set(bool normal)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+
+	c->pump_prio_normal = normal;
+	if (c->pump != NULL) {
+		(void)osThreadSetPriority(c->pump,
+		    normal ? osPriorityNormal : osPriorityBelowNormal);
+	}
+}
+
+bool
+lkpi_sdio_pump_prio_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_prio_normal;
+}
+
+void
+lkpi_sdio_pump_drain_set(bool on)
+{
+
+	lkpi_sdio_card_state.pump_drain = on;
+}
+
+bool
+lkpi_sdio_pump_drain_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_drain;
 }
 
 void
@@ -1576,9 +1853,13 @@ lkpi_sdio_pump_start(void)
 	 * normal, the consumers (bottom half, stack, transmit thread) always
 	 * preempt the producer, and the claim's priority inheritance still lets a
 	 * drain finish promptly when a higher thread wants the bus. The port that
-	 * has a time slice may run the pump at the normal band instead.
+	 * has a time slice may run the pump at the normal band instead - and the
+	 * round that measures that trade does it through pump_prio_set, which
+	 * moves the thread at runtime and keeps this default the shape every
+	 * earlier measurement ran.
 	 */
-	attr.priority = osPriorityBelowNormal;
+	attr.priority = c->pump_prio_normal ? osPriorityNormal :
+					      osPriorityBelowNormal;
 	c->pump = osThreadNew(lkpi_sdio_pump_entry, c, &attr);
 	if (c->pump == NULL) {
 		lkpi_printf(ULOG_ERROR_LEVEL, "sdiokpi: cannot start the pump thread\n");

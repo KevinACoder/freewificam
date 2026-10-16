@@ -17,11 +17,13 @@
  *
  * @design adapter - ref upstream:third-party/fsl_sdmmc host/fdwmmc/
  *         fsl_hc_fdwmmc.c (the ops table, the controller bring-up and the SD
- *         configuration function, one per card type) with two deliberate
+ *         configuration function, one per card type) with three deliberate
  *         differences: the bus-width mapping is present (see
- *         fdwmmchost_card_set_bus_width), and only the polling transfer is
- *         carried, because this port's configuration brings the card up without
- *         a card interrupt line.
+ *         fdwmmchost_card_set_bus_width), only the polling TRANSFER path is
+ *         carried (this port polls command/data completion by design), and the
+ *         card-interrupt pair (cardIntInit/cardEnableInt) is implemented
+ *         because the SDIO engine drives the card's DAT1 line through it (see
+ *         the card-interrupt section below).
  */
 
 #include "fsl_common.h"
@@ -33,6 +35,9 @@
 /* The glue's per-host state. One controller, one card. */
 struct sdmmc_host_dev {
 	struct dwc_mmc hc;
+	/* the stack's card-interrupt record (sdio_card_int_t), as handed over by
+	 * SDMMCHOST_CardIntInit; read from interrupt context */
+	void *card_int_rec;
 };
 
 /* --- ops: lifecycle ------------------------------------------------------- */
@@ -168,6 +173,59 @@ static uint32_t fdwmmchost_signal_line_status(sdmmchost_t *host, uint32_t signal
 	return 1U;
 }
 
+/* --- ops: the card interrupt (DAT1) --------------------------------------- */
+
+/*
+ * The shape is the imported tree's own (host/fdwmmc's SDIO arm): the host is
+ * given the stack's card-interrupt record, and when the controller raises the
+ * card interrupt the host calls the record's callback. In that tree the
+ * callback lands in a driver that runs an RTOS task; here it lands in the SDIO
+ * engine's pump wake. Either way it is interrupt context: wake a thread and
+ * nothing else, and never touch the bus - the card's own interrupt status is
+ * read and cleared by the pump while it holds the claim.
+ */
+static void fdwmmchost_card_irq_cb(void *arg)
+{
+	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)arg;
+	sdio_card_int_t *rec = (sdio_card_int_t *)dev->card_int_rec;
+
+	if ((rec != NULL) && (rec->cardInterrupt != NULL)) {
+		rec->cardInterrupt(rec->userData);
+	}
+}
+
+static status_t fdwmmchost_card_int_init(sdmmchost_t *host, void *sdioInt)
+{
+	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
+
+	dev->card_int_rec = sdioInt;
+	host->cardInt = sdioInt;
+
+	/* This registers the handler and nothing more: the line stays masked
+	 * until the engine enables it, so a boot that never does is bit for bit
+	 * the polling boot this port always ran. */
+	return (dwc_mmc_card_irq_arm(&dev->hc, fdwmmchost_card_irq_cb, dev) ==
+		DWC_MMC_OK) ? kStatus_Success : kStatus_Fail;
+}
+
+static void fdwmmchost_card_enable_int(sdmmchost_t *host, bool enable)
+{
+	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
+
+	if (dev != NULL) {
+		dwc_mmc_card_irq_enable(&dev->hc, enable);
+	}
+}
+
+void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable)
+{
+	if (host == NULL) {
+		return;
+	}
+
+	fdwmmchost_card_enable_int(host, enable);
+}
+
 /* --- ops: not carried ----------------------------------------------------- */
 
 /*
@@ -178,8 +236,7 @@ static uint32_t fdwmmchost_signal_line_status(sdmmchost_t *host, uint32_t signal
  *   - tuning, DDR, HS400, strobe DLL: UHS-I and MMC features, and this socket
  *     is 3.3 V SDR only;
  *   - switchToVoltage: the 1.8 V rail the switch would drive does not exist;
- *   - forceClockOn: this controller has no clock-gating handshake to force;
- *   - cardEnableInt/cardIntInit: the card interrupt line is not wired.
+ *   - forceClockOn: this controller has no clock-gating handshake to force.
  */
 
 /* --- the transfer path ---------------------------------------------------- */
@@ -279,8 +336,8 @@ static const sdmmchost_ops_t fdwmmchost_ops = {
 	.cardDetectInit = fdwmmchost_card_detect_init,
 	.cardSetPower = fdwmmchost_card_set_power,
 	.cardForceClockOn = NULL,
-	.cardEnableInt = NULL,
-	.cardIntInit = NULL,
+	.cardEnableInt = fdwmmchost_card_enable_int,
+	.cardIntInit = fdwmmchost_card_int_init,
 	.cardSetBusWidth = fdwmmchost_card_set_bus_width,
 	.cardPollingDetectStatus = fdwmmchost_card_polling_detect_status,
 	.cardDetectStatus = fdwmmchost_card_detect_status,

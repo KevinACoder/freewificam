@@ -136,6 +136,20 @@ void sdmmc_card_stop(void)
 	(void)record(FSL_STUB_OP_CARD_STOP, 0U, 0U, 0U, 0U, false);
 }
 
+void sdmmc_card_int_set(void (*cb)(void *), void *arg)
+{
+	(void)record(FSL_STUB_OP_CARD_INT_SET, 0U, 0U, 0U,
+		     (cb != NULL) ? 1U : 0U, false);
+	(void)arg;
+}
+
+void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable)
+{
+	(void)record(FSL_STUB_OP_CARD_INT_ENABLE, 0U, 0U,
+		     enable ? 1U : 0U, 0U, false);
+	(void)host;
+}
+
 status_t SDIO_IO_Read_Direct(sdio_card_t *card, sdio_func_num_t func,
 			     uint32_t regAddr, uint8_t *data)
 {

@@ -69,6 +69,33 @@ bool	lkpi_sdio_claim_held_by_current(void);
 void	lkpi_sdio_pump_kick(void);
 
 /*
+ * The card interrupt (DAT1). The backend wires the card's own upcall to
+ * lkpi_sdio_pump_notify(); that entry runs in interrupt context and only
+ * wakes the pump - the pending word is read and the driver's handler runs on
+ * the pump thread, under the claim, exactly as in the polling shape.
+ *
+ * lkpi_sdio_pump_irq_set()/get() are the runtime switch: on means card events
+ * wake the pump (the wait becomes a backstop against a lost line), off is the
+ * polling cadence this line always ran. Refused with the seam's error when the
+ * installed backend carries no card-interrupt path.
+ */
+void	lkpi_sdio_pump_notify(void);
+int	lkpi_sdio_pump_irq_set(bool on);
+bool	lkpi_sdio_pump_irq_get(void);
+
+/*
+ * The wake-chain knobs (the align round's second arm, independent of the card
+ * interrupt). prio: false (the default) leaves the pump below the normal band,
+ * where the consumer threads always preempt it; true moves it up to compete for
+ * the bus. drain: false (the default) dispatches once per cycle; true keeps
+ * dispatching inside one claim while the card still reports pending work.
+ */
+void	lkpi_sdio_pump_prio_set(bool normal);
+bool	lkpi_sdio_pump_prio_get(void);
+void	lkpi_sdio_pump_drain_set(bool on);
+bool	lkpi_sdio_pump_drain_get(void);
+
+/*
  * The pump's cadence: FIXED holds the idle period between cycles (the polled
  * host's shape); ADAPTIVE shortens the period after a cycle that moved bytes
  * and lengthens it again after one that moved none, the shape Linux' polled-host

@@ -78,6 +78,16 @@ struct dwc_mmc {
 	uint32_t	last_cmd;	/* the command word last written, for a dump */
 	unsigned int	width;		/* data lines last programmed */
 	bool		ready;
+
+	/* The card interrupt (DAT1). registered means the GIC handler is
+	 * installed; armed means the controller's mask bit is set and the GIC
+	 * line is enabled - the pair the runtime toggle moves. The callback
+	 * runs in interrupt context and may only wake a thread. The counters
+	 * that make the mechanism self-witnessing live in the census. */
+	bool		card_irq_registered;
+	bool		card_irq_armed;
+	void		(*card_irq_cb)(void *);
+	void		*card_irq_arg;
 };
 
 /* Bring the controller up: CRU gate/reset/source, soft reset, FIFO threshold,
@@ -130,6 +140,21 @@ uint32_t dwc_mmc_get_data_poll_us(void);
  * return when it completed (DWC_MMC_OK) or why it did not. */
 int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd);
 
+/* Arm the card-interrupt path: install the GIC handler for this controller's
+ * INTID and remember the callback (interrupt context - wake a thread and
+ * nothing else). No interrupt reaches the GIC until dwc_mmc_card_irq_enable
+ * sets the controller's mask bit; the pair is the runtime toggle, and the
+ * default state (armed handler, disabled line) is bit-for-bit the behaviour
+ * this driver had before the interrupt path existed. */
+int dwc_mmc_card_irq_arm(struct dwc_mmc *hc, void (*cb)(void *), void *arg);
+
+/* Set/clear the controller's card-interrupt mask bit and follow the GIC line
+ * with it. Enable after servicing the card (this is also the pump's re-arm
+ * after a cycle); disable when the card interrupt is not wanted. The ISR
+ * clears the bit first thing when the card raises the line, so a level-held
+ * DAT1 cannot storm the GIC while the consumer works. */
+void dwc_mmc_card_irq_enable(struct dwc_mmc *hc, bool enable);
+
 #ifdef CONFIG_LKPI_CENSUS
 /* The controller's census: transfers and bytes by direction, plus the polled
  * waits' iteration counts and wall time - the number that says how much of a
@@ -150,6 +175,8 @@ struct dwc_mmc_census {
 	uint32_t	idmac_polls;	/* poll iterations of the IDMAC drain wait */
 	uint64_t	idmac_wait_ns;
 	uint64_t	idmac_wait_max_ns;
+	uint32_t	card_irq_entries;	/* ISR entries that carried the card interrupt */
+	uint32_t	card_irq_spurious;	/* ISR entries that carried nothing this driver owns */
 };
 
 void dwc_mmc_census_get(struct dwc_mmc_census *out);

@@ -485,6 +485,31 @@ osStatus_t osThreadYield( void )
     return osOK;
 }
 
+osStatus_t osThreadSetPriority( osThreadId_t thread_id, osPriority_t priority )
+{
+    thread_slot_t * slot = ( thread_slot_t * ) thread_id;
+    UINT            prio;
+    UINT            old;
+
+    if( slot == NULL || slot->state != SLOT_LIVE )
+    {
+        return osErrorParameter;
+    }
+    /* the same legal band osThreadNew checks: 1..osPriorityISR */
+    if( priority <= osPriorityNone || priority > osPriorityISR )
+    {
+        return osErrorParameter;
+    }
+
+    prio = ( UINT ) map_priority( priority );
+    if( tx_thread_priority_change( &slot->thread, prio, &old ) != TX_SUCCESS )
+    {
+        return osErrorResource;
+    }
+    slot->tx_prio = prio;
+    return osOK;
+}
+
 /* --- thread flags ---------------------------------------------------------------- */
 
 static TX_EVENT_FLAGS_GROUP * flags_of( osThreadId_t thread_id )

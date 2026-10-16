@@ -23,3 +23,14 @@ void log_emit(ulog_level_t severity, const char *fmt, ...)
 	(void)vfprintf(stderr, fmt, ap);
 	va_end(ap);
 }
+
+/*
+ * The engine's card-interrupt notify: the adapter's card-interrupt upcall
+ * reaches it on a real board (interrupt context, wakes the pump). This host
+ * test never runs the ISR, so the symbol exists to satisfy the link and
+ * records nothing - the wiring it stands for is asserted through the stub's
+ * own call records (FSL_STUB_OP_CARD_INT_SET / ..._INT_ENABLE).
+ */
+void lkpi_sdio_pump_notify(void)
+{
+}

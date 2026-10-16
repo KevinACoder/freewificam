@@ -153,7 +153,22 @@
 #define DWC_MMC_INT_SBE				(1u << 13)	/* start bit error */
 #define DWC_MMC_INT_ACD				(1u << 14)	/* auto command done */
 #define DWC_MMC_INT_EBE				(1u << 15)	/* end bit error */
-#define DWC_MMC_INT_SDIO			(1u << 16)	/* sdio interrupt */
+/*
+ * The card interrupt (the SDIO device's DAT1 line) is bit 24 on this
+ * integration, not bit 16. Two witnesses: the TRM's RINTSTS table names bit 24
+ * `sdio_interrupt` ("Raw SDIO interrupt status"), and the kernel's
+ * dw_mmc-rockchip driver says the same from its side ("SDIO irq is the 8th on
+ * Rockchip SoCs" - dw_mmc.h defines SDMMC_INT_SDIO(n) as BIT(16 + n), so
+ * n = 8 lands on bit 24). Bit 16 is a different source here
+ * (`data_nobusy_int_status`), left masked. In the mask register the bit
+ * keeps the mask register's usual polarity - write 1 to let the interrupt
+ * through; the TRM's one-line note on this bit reads inverted, but the kernel
+ * writes it this way and the MINTSTS description agrees ("the masked status
+ * appears when sdio_int_mask is set"). Either way the level of the raw bit
+ * survives the mask: it is the card's line, not a latched pulse.
+ */
+#define DWC_MMC_INT_SDIO			(1u << 24)	/* card interrupt (DAT1) */
+#define DWC_MMC_INT_DATA_NOBUSY			(1u << 16)	/* another source; stays masked */
 
 #define DWC_MMC_INT_DATA_ERR \
 	(DWC_MMC_INT_EBE | DWC_MMC_INT_SBE | DWC_MMC_INT_HLE | \
@@ -161,6 +176,17 @@
 #define DWC_MMC_INT_DATA_TOUT		(DWC_MMC_INT_HTO | DWC_MMC_INT_DRTO)
 #define DWC_MMC_INT_CMD_ERR		(DWC_MMC_INT_RTO | DWC_MMC_INT_RE)
 #define DWC_MMC_INT_ALL				0xffffffffU
+
+/*
+ * Every "clear the raw status" write leaves the card interrupt bit alone. The
+ * bit reflects the card's DAT1 level, and a pending card interrupt must survive
+ * the pre-command and post-transfer clears: were it dropped between frames,
+ * the level would go unnoticed until the card re-raised it. The card releases
+ * the line only when its own interrupt status is read over the bus - that
+ * belongs to the pump, never to these polled paths.
+ */
+#define DWC_MMC_INT_ALL_BUT_SDIO \
+	(DWC_MMC_INT_ALL & ~(uint32_t)DWC_MMC_INT_SDIO)
 
 /* --- STATUS --------------------------------------------------------------- */
 

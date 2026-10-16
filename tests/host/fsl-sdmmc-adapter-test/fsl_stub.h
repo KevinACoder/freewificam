@@ -30,6 +30,11 @@ enum fsl_stub_op {
 	FSL_STUB_OP_EXTENDED,
 	FSL_STUB_OP_SET_BLOCK_SIZE,
 	FSL_STUB_OP_IRQ_PENDING,
+	/* the card-interrupt wiring: the upcall registration (recorded with
+	 * flags != 0 when the callback was non-NULL) and the host-glue enable
+	 * (recorded with count = 1/0 for enable/disable) */
+	FSL_STUB_OP_CARD_INT_SET,
+	FSL_STUB_OP_CARD_INT_ENABLE,
 };
 
 #define FSL_STUB_MAX_CALLS	64

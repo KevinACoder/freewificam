@@ -58,6 +58,21 @@ void sdmmc_card_stop(void);
  * before that call. Its fields are the imported stack's, read-only to callers. */
 sdio_card_t *sdmmc_card(void);
 
+/* Register the card-interrupt upcall before sdmmc_card_start(): when one is
+ * set, the card's user parameters carry an sdio_card_int_t, the imported stack
+ * hands it to the host (SDIO_HostInit -> SDMMCHOST_CardIntInit), and the host
+ * glue calls it from its controller ISR. That context wakes a thread and
+ * nothing else. Without a upcall the bring-up runs the polling path it always
+ * ran, bit for bit; NULL clears the request. */
+void sdmmc_card_int_set(void (*cb)(void *), void *arg);
+
+/* Turn the card interrupt on or off at the host: set/clear the controller's
+ * mask bit and follow the GIC line with it. Enable after the card has been
+ * serviced - the SDIO engine's pump calls this as its re-arm after a cycle;
+ * disable to fall back to the polling pump. A no-op for a host that was never
+ * given a card-interrupt upcall. */
+void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable);
+
 /* The SDIO half of the host glue: capability flags, the card's user parameters
  * and the source clock. The upstream tree carries this for its FSDIF controller
  * only; this port supplies the equivalent for the DesignWare MMC controller.
@@ -65,7 +80,7 @@ sdio_card_t *sdmmc_card(void);
 status_t FDWMMCHOST_SDIOConfig(sdmmc_sdio_t *sdmmc, sdmmchost_config_t *config);
 
 /* Install this port as the SDIO layer's backend: the seam implementation in
- * lkpi_sdio_fsl.c maps the six seam operations onto the card service above and
+ * lkpi_sdio_fsl.c maps the seven seam operations onto the card service above and
  * absorbs the host's length discipline. Call once, before the first
  * lkpi_sdio_be_card_init(). */
 void lkpi_sdio_fsl_install(void);

@@ -31,6 +31,20 @@
 static sdmmc_sdio_t sdmmc_card_dev;
 static bool sdmmc_card_up;
 
+/* The card-interrupt record the stack hands to the host: SDIO_HostInit reads
+ * card->usrParam.sdioInt and calls SDMMCHOST_CardIntInit with it. Kept out of
+ * the device struct because sdmmc_card_start() zeroes that struct, and the
+ * request arrives before the bring-up runs. */
+static sdio_card_int_t sdmmc_card_int_rec;
+static bool sdmmc_card_int_requested;
+
+void sdmmc_card_int_set(void (*cb)(void *), void *arg)
+{
+    sdmmc_card_int_rec.cardInterrupt = cb;
+    sdmmc_card_int_rec.userData = arg;
+    sdmmc_card_int_requested = (cb != NULL);
+}
+
 status_t SDIO_CfgInitialize(sdmmc_sdio_t *sdmmc, sdmmchost_config_t *config)
 {
     assert(sdmmc != NULL);
@@ -104,14 +118,23 @@ status_t sdmmc_card_start(void)
 
     (void)memset(&sdmmc_card_dev, 0, sizeof(sdmmc_card_dev));
 
+    /* A requested card interrupt travels as the card's user parameter: the
+     * stack hands it to the host during SDIO_HostInit, and the host glue is
+     * the party that knows how to hear DAT1 on this controller. */
+    if (sdmmc_card_int_requested)
+    {
+        sdmmc_card_dev.card.usrParam.sdioInt = &sdmmc_card_int_rec;
+    }
+
     /*
      * The instance's configuration. Two values carry a decision:
      *
-     *  - enableIrq stays false. The card's interrupt line is not wired on this
-     *    board and the design brings the card up by polling; a transfer
-     *    therefore runs on the polling path of the host glue, and the seam's
-     *    irq_pending() reads the card's own pending word over a direct
-     *    transfer rather than waiting for a line.
+     *  - enableIrq stays false: this flag asks for interrupt-driven
+     *    TRANSFERS (completion interrupts), and this port polls for those by
+     *    design. The card's own interrupt line (DAT1) is a separate path and
+     *    travels as the user parameter above when one was registered; the
+     *    seam's irq_pending() keeps reading the card's pending word over a
+     *    direct transfer either way.
      *  - maxTransSize is the staging buffer's size, and the imported stack also
      *    derives the host's maximum block count from it (maxTransSize /
      *    defBlockSize), so the two stay consistent: the largest block transfer
