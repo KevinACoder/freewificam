@@ -1243,6 +1243,16 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
     peer = peer_opt
     phases: dict[int, dict] = {}
     pending: dict[int, str] = {}
+
+    # The uplink server is brought up NOW, not when the stage announces itself:
+    # the board's first uplink window opens ~2 s after the standby line, and a
+    # server started at that moment was measured losing that window (the board
+    # connected into a port with no listener and its first window counted
+    # 0.6 s). One server serves the whole round - it is idle until the board
+    # connects - and the standby line only re-checks it.
+    uplink_server_up = False
+    if uplink_phases_want > 0 and work:
+        uplink_server_up = uplink_server_start(r, work)
     # the join's own state: the command is sent when the board says it is
     # waiting, and retried on a period until the board reports the association
     # (or the first phase opens). Two failure modes make the retry load-bearing:
@@ -1335,9 +1345,11 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
 
             if UPLINK_STANDBY_RE.search(line):
                 uplink_seen = True
-                info("run uplink stage standby: bringing the host server up")
-                if work:
-                    uplink_server_start(r, work)
+                if work and not uplink_server_up:
+                    info("run uplink stage standby: bringing the host server up")
+                    uplink_server_up = uplink_server_start(r, work)
+                elif uplink_server_up:
+                    info("run uplink stage standby: the host server is already up")
                 else:
                     warn("uplink stage seen but no work directory; the server "
                          "was not started")
