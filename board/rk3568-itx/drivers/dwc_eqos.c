@@ -158,6 +158,11 @@ struct dwc_eqos_dev {
 	/* NAPI shape: 1 while the RX interrupt is masked and the RX thread owns
 	 * the drain (dwc_eqos_rx_poll). */
 	uint8_t   rx_masked;
+	/* One-sweep-at-a-time guard (LDREX/STREX): the RX thread and the
+	 * service thread's watchdog both call eqos_rx_complete, and eqos_lock
+	 * does not stop a thread switch, so without this the two sweeps
+	 * interleave and corrupt the shared cursor and tail publish. */
+	uint8_t   rx_sweep_busy;
 	/* Next slot the reader consumes from; the DMA writes back in ring
 	 * order, so staged slots always run consecutively from here. */
 	unsigned int rx_read_tail;
@@ -912,7 +917,7 @@ static int eqos_ring_slot(const struct dwc_eqos_dev *dev, uint32_t addr);
 static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 {
 	unsigned int port = dev->plat->index;
-		int delivered = 0;
+	int delivered = 0;
 	int last_armed = -1;
 	int max_armed = -1;	/* highest index re-armed this pass: the tail
 				   publish value (SCAN=5); in a wrap pass it is an
@@ -921,6 +926,22 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	int i;
 	int left;
 	uint64_t t_walk = eqos_prof_t0();
+
+	/* ONE SWEEP AT A TIME (2026-10-19). Two contexts call this: the RX
+	 * thread (signalled per interrupt) and the service thread's 100 ms
+	 * watchdog. eqos_lock only masks interrupts - it does NOT stop a
+	 * thread switch, so the two sweeps interleave on this single core and
+	 * corrupt the shared cursor, the last-armed bookmark and the tail
+	 * publish (codex round-2 named the watchdog's unconditional RX_END
+	 * poke as a second writer). The loser of the race returns 0: it has
+	 * no work that the winner is not already doing, and the next
+	 * interrupt or watchdog tick calls again. LDREX/STREX on A55 makes
+	 * the test-and-set a single indivisible step. */
+#if defined(__aarch64__)
+	if (__atomic_test_and_set(&dev->rx_sweep_busy, __ATOMIC_ACQUIRE)) {
+		return 0;
+	}
+#endif
 
 	eqos_prof[port].rx_sweeps++;
 #if defined(CONFIG_GMAC_SWEEP_WIDE) && CONFIG_GMAC_SWEEP_WIDE
@@ -1179,6 +1200,9 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	}
 #endif
 
+#if defined(__aarch64__)
+	__atomic_clear(&dev->rx_sweep_busy, __ATOMIC_RELEASE);
+#endif
 	return delivered;
 }
 
