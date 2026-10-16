@@ -795,6 +795,36 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 
 /* --- completion paths ----------------------------------------------------- */
 
+#if defined(CONFIG_GMAC_WIDE_COPY) && CONFIG_GMAC_WIDE_COPY
+/* The image's memcpy is the generic scalar loop - 8 bytes per iteration,
+ * measured at 1.5 us for a 1514-byte frame (13% of one core's uplink budget
+ * at line rate). The two per-frame copies in this driver (ring->staging on
+ * RX, pbuf->TX buffer on send) both move whole frames, so give them wide
+ * chunks: __builtin_memcpy with a constant size makes the compiler emit
+ * LDP/STP pairs, which A55 sustains at ~4x the scalar rate. The head/tail
+ * loops keep every length and alignment legal; semantics are a plain copy. */
+static void eqos_frame_copy(uint8_t *dst, const uint8_t *src, unsigned int len)
+{
+	while (len >= 64u) {
+		__builtin_memcpy(dst, src, 64);
+		dst += 64;
+		src += 64;
+		len -= 64u;
+	}
+	while (len >= 16u) {
+		__builtin_memcpy(dst, src, 16);
+		dst += 16;
+		src += 16;
+		len -= 16u;
+	}
+	while (len-- != 0u) {
+		*dst++ = *src++;
+	}
+}
+#else
+#define eqos_frame_copy(dst, src, len) memcpy((dst), (src), (len))
+#endif
+
 static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned int len)
 {
 	unsigned int next = (dev->rx_stage_head + 1) % dev->rx_stage_count;
@@ -809,7 +839,7 @@ static int eqos_stage_put(struct dwc_eqos_dev *dev, const uint8_t *buf, unsigned
 
 	stage = &dev->rx_stage[dev->rx_stage_head];
 	stage->len = (uint16_t)len;
-	memcpy(stage->data, buf, len);
+	eqos_frame_copy(stage->data, buf, len);
 	dev->rx_stage_head = next;
 	dev->stats.rx_frames++;
 
@@ -2078,7 +2108,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		if (next != dev->tx_tail) {
 			buf = tx_buffers[index][cur];
 			t_copy = eqos_prof_t0();
-			memcpy(buf, frame, len);
+			eqos_frame_copy(buf, frame, len);
 			eqos_prof[index].tx_memcpy_ticks += eqos_prof_t0() - t_copy;
 
 			/* Ethernet requires 60 bytes before the FCS: a
