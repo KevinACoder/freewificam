@@ -140,6 +140,37 @@ STEPS_PATH = os.path.join(HERE, "steps.tsv")
 VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 
 # --------------------------------------------------------------------------
+# the measurement arm's traffic floor
+# --------------------------------------------------------------------------
+# The four downlink windows exist to be measured from outside the board, so a
+# window that moved nothing is not a measurement - it is the shape left behind
+# by a broken data path or by a station that left the bus mid-boot.  The rule
+# the SDIO suite already carries (rtl8189 judge, DOWNLINK_MOVED_FLOOR_BYTES)
+# applies here unchanged; the floor sits far above what an idle link delivers
+# on its own and far below any window a client actually drove.
+PHASE_READY_RE = re.compile(r"wlan: downlink phase (\d+) ready")
+PHASE_DONE_RE = re.compile(r"wlan: downlink phase (\d+) done")
+UDP_SINK_BYTES_RE = re.compile(r"wlan: udp sink pkts=\d+ bytes=(\d+)")
+LINK_RX_RE = re.compile(r"wlan: link rx data=(\d+) retry=\d+")
+DOWNLINK_MOVED_FLOOR_BYTES = 512 * 1024
+#: the board's own iperf client: bytes moved is the sender's account of the
+#: window. `type` is lwiperf's report enum; 1 is LWIPERF_TCP_DONE, anything
+#: else is the client's own failure (2 = aborted locally), which is why a
+#: type=2 row did not measure the reverse direction at all.
+UPLINK_READY_RE = re.compile(r"wlan: uplink phase \d+ ready peer=")
+UPLINK_RESULT_RE = re.compile(
+    r"wlan: uplink phase (\d+) result bytes=(\d+) ms=\d+ kbit=\d+ type=(\d+)")
+UPLINK_SKIP_RE = re.compile(r"wlan: uplink skipped reason=(\S+)")
+UPLINK_CONFIGURED_RE = re.compile(r"wlan: uplink peer=\d+\.\d+\.\d+\.\d+ configured")
+#: the bus leaving mid-boot (measured 2026-10-17: b7 printed this at 71.064 s,
+#: inside its second window, and every later window measured an empty channel).
+#: Only the bridge's own line is matched: "Port N enumerate fail" also appears
+#: at boot and during the udisk case for ports that hold nothing, so it is not
+#: by itself evidence that the WLAN station left.
+DETACH_RE = re.compile(r"wlan: bridge detached")
+
+
+# --------------------------------------------------------------------------
 # selftest fixture: one legal transcript plus the mutations that must go red.
 # --------------------------------------------------------------------------
 
@@ -296,7 +327,48 @@ EMPTY_SELECTION_TRANSCRIPT = (
     "[  10.020] BOARD-SUITE threadx-rk3568-wlan result=pass cases=0 ok=0 exit=0\r\n"
 )
 
+# The measurement boot names an uplink peer (the round's extra steps do that),
+# which is what switches the traffic floor on; the regression boot names none.
+UPLINK_MEASURED = (
+    "[ 114.600] wlan: uplink peer=192.168.0.17 configured\r\n"
+    "[ 114.610] wlan: uplink phase 1 ready peer=192.168.0.17\r\n"
+    "[ 124.700] wlan: uplink phase 1 result bytes=9986424 ms=10000 kbit=7984 type=1\r\n"
+    "[ 124.710] wlan: uplink phase 2 ready peer=192.168.0.17\r\n"
+    "[ 134.800] wlan: uplink phase 2 result bytes=9672524 ms=10008 kbit=7728 type=1\r\n"
+    "[ 134.810] wlan: uplink phase 3 ready peer=192.168.0.17\r\n"
+    "[ 144.900] wlan: uplink phase 3 result bytes=8425684 ms=10002 kbit=6736 type=1\r\n"
+    "[ 144.910] wlan: uplink phase 4 ready peer=192.168.0.17\r\n"
+    "[ 155.000] wlan: uplink phase 4 result bytes=11094564 ms=10000 kbit=8872 type=1\r\n"
+)
+MEASURE_TRANSCRIPT = BASE_TRANSCRIPT.replace(
+    "[ 114.600] wlan: uplink skipped reason=no-peer\r\n", UPLINK_MEASURED)
+
 MUTATIONS = [
+    # the positive control for the measurement floor: a boot that names an
+    # uplink peer and moved traffic in every window must still pass, so the
+    # three red cases below cannot be satisfied by a judge that always fails
+    ("clean measurement boot", MEASURE_TRANSCRIPT, 0),
+    # the windows still open and close, but one of them saw no data at all -
+    # the shape a station that left the bus mid-boot leaves behind (b7)
+    ("measurement window moved nothing", MEASURE_TRANSCRIPT
+     .replace("wlan: udp sink pkts=14820 bytes=21516000",
+              "wlan: udp sink pkts=0 bytes=0")
+     .replace("wlan: link rx data=14820 retry=0 fcs=0\r\n"
+              "wlan: link rxrate enc=0 idx=11 bw=0 n=14820 retry=0\r\n"
+              "[  74.400]",
+              "wlan: link rx data=0 retry=0 fcs=0\r\n"
+              "wlan: link rxrate enc=0 idx=11 bw=0 n=0 retry=0\r\n"
+              "[  74.400]"), 1),
+    # lwiperf's own failure report (2 = LWIPERF_TCP_ABORTED_LOCAL): the byte
+    # count in such a row is the client's scratch buffer, not delivered data
+    ("uplink reported a failure type", MEASURE_TRANSCRIPT.replace(
+        "uplink phase 2 result bytes=9672524 ms=10008 kbit=7728 type=1",
+        "uplink phase 2 result bytes=9672524 ms=10008 kbit=7728 type=2"), 1),
+    ("station left the bus mid-boot", MEASURE_TRANSCRIPT.replace(
+        "[ 114.600] wlan: uplink peer=",
+        "[  71.064] wlan: bridge detached\r\n"
+        "[  71.065] lkpi: lkpi80211: hw unregistered\r\n"
+        "[ 114.600] wlan: uplink peer="), 1),
     ("drop a CASE line", BASE_TRANSCRIPT.replace(
         "CASE threadx-rk3568-wlan/wlan-scan PASS\r\n", ""), 1),
     ("sentinel counts disagree", BASE_TRANSCRIPT.replace(
@@ -544,6 +616,68 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         replies = sum(1 for line in transcript.lines if PING_RECV_RE.search(line))
         if replies < 4:
             errors.append("wlan-dataplane: %d echo replies (< 4)" % replies)
+
+    # The measurement arm's floor. A boot that names an uplink peer is the
+    # round's measurement boot (the regression boot names none), and on such a
+    # boot every window must show traffic in the direction it claims to measure.
+    # Two failures are being excluded here, both measured:
+    #   - a window whose client never arrived (or whose station left the bus)
+    #     reads as a clean 0 while every anchor line still prints;
+    #   - the board's own uplink client returns lwiperf's type=2
+    #     (LWIPERF_TCP_ABORTED_LOCAL) when it could not run, and the byte count
+    #     it reports in that case is its own scratch buffer, not delivered data.
+    measuring = any(UPLINK_CONFIGURED_RE.search(line) for line in transcript.lines)
+    if measuring:
+        detach = next((line for line in transcript.lines if DETACH_RE.search(line)), None)
+        if detach is not None:
+            errors.append("wlan-dataplane: the station left the bus mid-boot (%s)"
+                          % DETACH_RE.search(detach).group(0))
+        phase_rx: dict[int, int] = {}
+        phase_sink: dict[int, int] = {}
+        current = None
+        for line in transcript.lines:
+            m = PHASE_READY_RE.search(line)
+            if m:
+                current = int(m.group(1))
+                continue
+            m = PHASE_DONE_RE.search(line)
+            if m:
+                current = int(m.group(1))
+                continue
+            if current is None:
+                continue
+            m = UDP_SINK_BYTES_RE.search(line)
+            if m:
+                phase_sink[current] = int(m.group(1))
+                continue
+            m = LINK_RX_RE.search(line)
+            if m:
+                phase_rx[current] = int(m.group(1))
+        if len(phase_rx) != 4:
+            errors.append("wlan-dataplane: %d of 4 downlink windows carried a "
+                          "link rx line" % len(phase_rx))
+        for n in sorted(phase_rx):
+            if phase_rx[n] == 0 and phase_sink.get(n, 0) == 0:
+                errors.append("wlan-dataplane: downlink phase %d received no "
+                              "data frames and its source sink is empty" % n)
+        results = [m for line in transcript.lines
+                   for m in [UPLINK_RESULT_RE.search(line)] if m]
+        ready = sum(1 for line in transcript.lines if UPLINK_READY_RE.search(line))
+        if not ready and not results:
+            errors.append("wlan-dataplane: an uplink peer was configured but the "
+                          "reverse stage neither ran nor said why")
+        else:
+            if ready != len(results):
+                errors.append("wlan-dataplane: %d uplink ready lines but %d "
+                              "results" % (ready, len(results)))
+            zero = [m.group(1) for m in results if int(m.group(2)) == 0]
+            if zero:
+                errors.append("wlan-dataplane: uplink phase(s) %s moved zero bytes"
+                              % ",".join(zero))
+            aborted = [m.group(1) for m in results if int(m.group(3)) != 1]
+            if aborted:
+                errors.append("wlan-dataplane: uplink phase(s) %s reported a "
+                              "failure type, not completion" % ",".join(aborted))
 
     shell_selected = expected is None or "shell-up" in expected
     if steps_path and os.path.exists(steps_path):

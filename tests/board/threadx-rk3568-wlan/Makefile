@@ -59,7 +59,8 @@ READELF := $(CROSS_COMPILE)readelf
 SIZE := $(CROSS_COMPILE)size
 HOSTCC ?= cc
 
-BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
+# BUILD_TAG is formed below, once the diagnostic switches have been declared:
+# the arm's name is part of the tag.
 
 BUILD := build
 TARGET := $(BUILD)/$(SUITE_NAME)
@@ -88,22 +89,11 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 	-DCONFIG_TX_TICKS_PER_SECOND=1000 -DCONFIG_TX_TIMER_STACK=4096
 
 OPT ?= -Og
-BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
-	-ffreestanding -fno-builtin -fno-stack-protector \
-	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
-	-ffunction-sections -fdata-sections \
-	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
-	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
-	-DCMSIS2_BACKEND_THREADX \
-	-DSHELL_PORT_HOST='"rk3568"'
 
 # Diagnostic build switch (default off): WLAN_SINGLE=1 invents channel 1
 # only, so the whole image sweeps and joins without one channel switch -
 # the on-board discriminator for "transmit wedges after channel switching".
 WLAN_SINGLE ?= 0
-ifeq ($(WLAN_SINGLE),1)
-BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
-endif
 
 # Diagnostic build switch (default off): WLAN_BW40=1 advertises 20/40 MHz in
 # the association request's HT Capabilities and configures the seam's channel
@@ -114,8 +104,45 @@ endif
 # the width must come from the AP's HT Information element, not from a build
 # constant, before this can ship.
 WLAN_BW40 ?= 0
+
+# Diagnostic build switch (default off): WLAN_NO_HT=1 removes the HT
+# Capabilities element from the association and clears IEEE80211_F_WME, so the
+# station joins as a plain 802.11g peer and the seam configures a no-HT 20 MHz
+# channel.  It exists for matched-link measurement: a cross-stack throughput
+# or per-frame comparison is only valid when both stations negotiated the same
+# link version, and this is the lowest one both stacks can hold.  Mutually
+# exclusive with WLAN_BW40.
+WLAN_NO_HT ?= 0
+ifeq ($(WLAN_NO_HT),1)
+ifeq ($(WLAN_BW40),1)
+$(error WLAN_NO_HT and WLAN_BW40 are mutually exclusive)
+endif
+endif
+
+# The arm's name rides in the build tag.  The previous round's BW40 arm was
+# claimed from the run ledger alone - nothing in the image itself said which
+# arm the board ran - and a switch that changes no source file would otherwise
+# produce a fingerprint identical to the default build.
+ARM_TAG := $(if $(filter 1,$(WLAN_NO_HT)),+noht)$(if $(filter 1,$(WLAN_BW40)),+bw40)
+BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)$(ARM_TAG)
+
+BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
+	-ffreestanding -fno-builtin -fno-stack-protector \
+	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
+	-ffunction-sections -fdata-sections \
+	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
+	-DBOARD_SUITE_NAME='"$(SUITE_NAME)"' \
+	-DCMSIS2_BACKEND_THREADX \
+	-DSHELL_PORT_HOST='"rk3568"'
+
+ifeq ($(WLAN_SINGLE),1)
+BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
+endif
 ifeq ($(WLAN_BW40),1)
 BASE_CFLAGS += -DWLAN_SEAM_BW40=1
+endif
+ifeq ($(WLAN_NO_HT),1)
+BASE_CFLAGS += -DWLAN_NO_HT=1
 endif
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \

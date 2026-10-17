@@ -1707,10 +1707,20 @@ wlan_bridge_set_wpa(int on)
  * aggregation: the seam configures the radio at 20 MHz
  * (NL80211_CHAN_WIDTH_20) and the receive path has no block-ack session, so
  * advertising either would invite frames this port cannot take.
+ *
+ * The second diagnostic build switch, WLAN_NO_HT, removes the element
+ * entirely: the station then associates as a plain 802.11g peer.  It exists
+ * so a cross-stack measurement can be taken at a matched link fingerprint
+ * (legacy 54, 20 MHz, no HT, no WMM) instead of comparing an HT station to a
+ * legacy one; the switch also clears IEEE80211_F_WME in the join below.
  */
 #ifndef WLAN_SEAM_BW40
 #define WLAN_SEAM_BW40 0
 #endif
+#ifndef WLAN_NO_HT
+#define WLAN_NO_HT 0
+#endif
+#if !WLAN_NO_HT
 static const uint8_t bridge_htcap_ie[28] = {
 	45, 26,				/* element id, length */
 	0x20 | (WLAN_SEAM_BW40 ? 0x02 : 0x00), 0x00,
@@ -1728,6 +1738,15 @@ static const uint8_t bridge_htcap_ie[28] = {
 	0x00, 0x00, 0x00, 0x00,		/* TX beamforming */
 	0x00				/* ASEL */
 };
+#define BRIDGE_HTCAP_IE_LEN sizeof(bridge_htcap_ie)
+#else
+/*
+ * The element is not compiled in at all, so the append site below has nothing
+ * to copy; a zero-length macro keeps that site branch-free.
+ */
+#define bridge_htcap_ie NULL
+#define BRIDGE_HTCAP_IE_LEN 0
+#endif
 
 /*
  * The join the supplicant decided on. Everything here is the stack's own
@@ -1753,6 +1772,7 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	struct ieee80211_node *ni = NULL;
 	uint8_t *ie_copy = NULL;
 	size_t ie_copy_len = 0;
+	size_t ht_len = BRIDGE_HTCAP_IE_LEN;
 	int ret = 0;
 
 	if (!bridge.attached || ic == NULL)
@@ -1762,19 +1782,23 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	if (ie_len != 0 && (wpa_ie == NULL || ie_len > 256))
 		return -EINVAL;
 	/*
-	 * One allocation carries the supplicant's element block and the HT
-	 * Capabilities element this port declares (see bridge_htcap_ie).  It
-	 * is built before the serializer is taken, and it is built as one
-	 * block rather than grown afterwards: the board's heap is busy enough
-	 * at join time that a second, larger allocation is not free.
+	 * One allocation carries the supplicant's element block and, unless the
+	 * no-HT arm asked for a legacy association, the HT Capabilities element
+	 * this port declares (see bridge_htcap_ie).  It is built before the
+	 * serializer is taken, and it is built as one block rather than grown
+	 * afterwards: the board's heap is busy enough at join time that a second,
+	 * larger allocation is not free.
 	 */
-	ie_copy = wlan_osal_alloc(ie_len + sizeof(bridge_htcap_ie));
-	if (ie_copy == NULL)
-		return -ENOMEM;
-	if (ie_len != 0)
-		memcpy(ie_copy, wpa_ie, ie_len);
-	memcpy(ie_copy + ie_len, bridge_htcap_ie, sizeof(bridge_htcap_ie));
-	ie_copy_len = ie_len + sizeof(bridge_htcap_ie);
+	if (ie_len + ht_len != 0) {
+		ie_copy = wlan_osal_alloc(ie_len + ht_len);
+		if (ie_copy == NULL)
+			return -ENOMEM;
+		if (ie_len != 0)
+			memcpy(ie_copy, wpa_ie, ie_len);
+		if (ht_len != 0)
+			memcpy(ie_copy + ie_len, bridge_htcap_ie, ht_len);
+	}
+	ie_copy_len = ie_len + ht_len;
 
 	wlan_port_serializer_lock();
 	if (bssid != NULL)
@@ -1812,6 +1836,16 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	} else {
 		ic->ic_flags &= ~(unsigned int)IEEE80211_F_PRIVACY;
 	}
+#if WLAN_NO_HT
+	/*
+	 * The no-HT arm removes both advertisements together, so the station
+	 * enters the matched-link baseline as a plain 802.11g peer (no HT, no
+	 * WMM).  The flag is cleared rather than left alone because the join
+	 * path can run again in one boot (a reconnect after the first
+	 * association would otherwise inherit the earlier value).
+	 */
+	ic->ic_flags &= ~(unsigned int)IEEE80211_F_WME;
+#else
 	/*
 	 * WMM travels with HT: hostapd clears a station's HT flag when the
 	 * association request carries no valid WMM element, so an HT-only
@@ -1822,6 +1856,7 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	 * and the AP's beacon carried one.
 	 */
 	ic->ic_flags |= IEEE80211_F_WME;
+#endif
 
 	if (ic->ic_opt_ie != NULL) {
 		wlan_osal_free(ic->ic_opt_ie);

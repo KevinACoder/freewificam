@@ -56,12 +56,32 @@
  * build switch because the bridge has no HT Information parser yet - it
  * cannot read the AP's secondary-channel offset, so it must not guess 40 in
  * a shipping build.
+ *
+ * A WLAN_NO_HT build asks for the no-HT 20 MHz width instead (see below): the
+ * association then carries no HT element and no WMM flag, so the link is
+ * 802.11g and the driver's channel configuration says so as well.
  */
 #ifndef WLAN_SEAM_BW40
 #define WLAN_SEAM_BW40 0
 #endif
+/*
+ * The matched-link diagnostic switch: a WLAN_NO_HT build presents a plain
+ * 20 MHz no-HT channel.  It wins over WLAN_BW40 (the two cannot be combined -
+ * a no-HT station has no business being configured for 40 MHz), and the
+ * bridge clears the WMM flag in the same build, so the association and the
+ * radio agree on legacy.
+ */
+#ifndef WLAN_NO_HT
+#define WLAN_NO_HT 0
+#endif
+#if WLAN_NO_HT && WLAN_SEAM_BW40
+#error "WLAN_NO_HT and WLAN_SEAM_BW40 are mutually exclusive"
+#endif
 #define SEAM_CHAN_WIDTH \
-	(WLAN_SEAM_BW40 ? NL80211_CHAN_WIDTH_40 : NL80211_CHAN_WIDTH_20)
+	(WLAN_NO_HT ? NL80211_CHAN_WIDTH_20_NOHT : \
+	    (WLAN_SEAM_BW40 ? NL80211_CHAN_WIDTH_40 : NL80211_CHAN_WIDTH_20))
+#define SEAM_CENTER_FREQ1(freq) \
+	(WLAN_NO_HT ? 0 : (WLAN_SEAM_BW40 ? (freq) + 10 : 0))
 
 /* ------------------------------------------------------------------ */
 /* state                                                               */
@@ -168,8 +188,7 @@ seam_config(struct wlan_seam_drv *drv, uint32_t changed, uint32_t freq)
 	adapter.tuned_freq = freq;
 	adapter.tuned_hw_value = hw_value;
 	return lkpi80211_drv_config_channel(adapter.hw, freq, hw_value,
-	    NL80211_BAND_2GHZ, SEAM_CHAN_WIDTH,
-	    WLAN_SEAM_BW40 ? freq + 10 : 0);
+	    NL80211_BAND_2GHZ, SEAM_CHAN_WIDTH, SEAM_CENTER_FREQ1(freq));
 }
 
 static int
