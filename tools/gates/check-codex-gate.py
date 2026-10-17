@@ -76,10 +76,20 @@ def sections(text: str) -> dict[str, str]:
     return out
 
 
-def check(record: Path, repo: Path) -> list[str]:
-    errors: list[str] = []
+def check(record: Path, repo: Path) -> tuple[list[str], list[str]]:
+    """Return (malformed, not_approved).
+
+    The two are different answers.  "Malformed" means the record cannot be
+    trusted as evidence of anything: a gate is missing, a cited file is absent or
+    its hash moved, the pre-registration was edited after it was frozen.
+    "Not approved" means the record is complete and honest and says the advisor
+    did not accept this round - a legitimate outcome (the round must not run, or
+    must not claim direction), not a defect in the record.
+    """
+    malformed: list[str] = []
+    not_approved: list[str] = []
     if not record.is_file():
-        return ["record missing: %s" % record]
+        return ["record missing: %s" % record], []
     text = record.read_text(encoding="utf-8", errors="replace")
     secs = sections(text)
 
@@ -90,42 +100,45 @@ def check(record: Path, repo: Path) -> list[str]:
                 found[gate] = body
     for gate in GATES:
         if gate not in found:
-            errors.append("gate section %s missing" % gate)
-    if errors:
-        return errors
+            malformed.append("gate section %s missing" % gate)
+    if malformed:
+        return malformed, not_approved
 
     # every gate carries a verdict; G-A and G-B must be a passing verdict
     verdicts = {}
     for gate in GATES:
         m = VERDICT_RE.search(found[gate])
         if not m:
-            errors.append("%s: no 判词 line" % gate)
+            malformed.append("%s: no 判词 line" % gate)
             continue
         verdicts[gate] = m.group(1)
     if "G-A" in verdicts and not verdicts["G-A"].startswith("ACCEPTED"):
-        errors.append("G-A: the method was not registered as accepted (%s)" % verdicts["G-A"])
+        not_approved.append("G-A: the method was not registered as accepted (%s)" % verdicts["G-A"])
     if "G-B" in verdicts and not verdicts["G-B"].startswith("ACCEPTED"):
-        errors.append("G-B: the data was not accepted (%s)" % verdicts["G-B"])
+        if verdicts["G-B"].startswith(("未跑", "SKIPPED")):
+            not_approved.append("G-B: not run (%s)" % verdicts["G-B"])
+        else:
+            not_approved.append("G-B: the data was not accepted (%s)" % verdicts["G-B"])
 
     # the frozen pre-registration block must still be the one that was approved
     m = PLAN_RE.search(text)
     if not m:
-        errors.append("no 方案（冻结对象） line")
+        malformed.append("no 方案（冻结对象） line")
     else:
         plan = (repo / m.group(1)).resolve()
         if not plan.is_file():
-            errors.append("plan file missing: %s" % m.group(1))
+            malformed.append("plan file missing: %s" % m.group(1))
         else:
             block = prereg_block(plan)
             if block is None:
-                errors.append("plan has no 预注册 section to freeze: %s" % m.group(1))
+                malformed.append("plan has no 预注册 section to freeze: %s" % m.group(1))
             else:
                 want = hashlib.sha256(block.encode("utf-8")).hexdigest()
                 fz = FROZEN_RE.search(text)
                 if not fz:
-                    errors.append("no GATE_A_FROZEN line")
+                    malformed.append("no GATE_A_FROZEN line")
                 elif fz.group(1) != want:
-                    errors.append(
+                    malformed.append(
                         "GATE_A_FROZEN does not match the plan's pre-registration block "
                         "(recorded %s, current %s) - a criterion was edited after it was frozen"
                         % (fz.group(1), want)
@@ -136,15 +149,15 @@ def check(record: Path, repo: Path) -> list[str]:
         for kind, path_s, claimed in FILE_RE.findall(found[gate]):
             p = (repo / path_s).resolve()
             if not p.is_file():
-                errors.append("%s: %s file missing: %s" % (gate, kind, path_s))
+                malformed.append("%s: %s file missing: %s" % (gate, kind, path_s))
                 continue
             actual = sha256_file(p)
             if actual != claimed:
-                errors.append(
+                malformed.append(
                     "%s: %s %s hash mismatch (recorded %s, actual %s)"
                     % (gate, kind, path_s, claimed[:12], actual[:12])
                 )
-    return errors
+    return malformed, not_approved
 
 
 SELFTEST_PLAN = """# RUN: selftest
@@ -231,9 +244,9 @@ def selftest() -> int:
     record.write_text(SELFTEST_RECORD.format(**fields), encoding="utf-8")
 
     failures = 0
-    errs = check(record, tmp)
-    if errs:
-        print("selftest: base record judged FAIL, expected pass: %s" % errs[0])
+    errs, notok = check(record, tmp)
+    if errs or notok:
+        print("selftest: base record judged FAIL, expected pass: %s" % (errs or notok)[0])
         failures += 1
     else:
         print("selftest: base record judged pass")
@@ -242,7 +255,8 @@ def selftest() -> int:
         nonlocal failures
         p = tmp / ("m-" + name.replace(" ", "-") + ".md")
         p.write_text(text, encoding="utf-8")
-        got = check(p, tmp)
+        errs2, notok2 = check(p, tmp)
+        got = errs2 + notok2
         ok = any(want in e for e in got)
         print("selftest: %-34s %s" % (name, "ok" if ok else "MISMATCH got=%s" % got[:1]))
         if not ok:
@@ -281,16 +295,22 @@ def main(argv: list[str]) -> int:
     record = Path(args.record)
     repo = Path(args.repo).resolve()
     try:
-        errors = check(record, repo)
+        malformed, not_approved = check(record, repo)
     except OSError as exc:
         print("check-codex-gate: cannot read: %s" % exc)
         return 2
 
-    if errors:
-        print("check-codex-gate: FAIL")
-        for e in errors:
+    if malformed:
+        print("check-codex-gate: FAIL (the record cannot be trusted)")
+        for e in malformed:
             print("  - %s" % e)
         return 1
+    if not_approved:
+        print("check-codex-gate: NOT APPROVED (the record is complete and honest; "
+              "the advisor did not accept this round)")
+        for e in not_approved:
+            print("  - %s" % e)
+        return 3
     print("check-codex-gate: PASS (three gates, verdicts in place, pre-registration frozen, "
           "cited files match their hashes)")
     return 0
