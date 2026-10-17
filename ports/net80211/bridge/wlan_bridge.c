@@ -1698,6 +1698,31 @@ wlan_bridge_set_wpa(int on)
 }
 
 /*
+ * The HT Capabilities element this port declares, appended to the
+ * supplicant's element block in the association request (and the probe
+ * request, which appends the same block).  The imported stack has no 11n
+ * state of its own, so the capability is stated here rather than derived.
+ *
+ * One spatial stream, MCS 0-7, 20 MHz only, short GI for 20 MHz, and no
+ * aggregation: the seam configures the radio at 20 MHz
+ * (NL80211_CHAN_WIDTH_20) and the receive path has no block-ack session, so
+ * advertising either would invite frames this port cannot take.
+ */
+static const uint8_t bridge_htcap_ie[28] = {
+	45, 26,				/* element id, length */
+	0x20, 0x00,			/* HT cap: SGI-20 only */
+	0x00,				/* A-MPDU: 8 KiB, no min spacing */
+	0xff, 0x00, 0x00, 0x00,		/* MCS 0-7 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00,			/* rx_highest */
+	0x01,				/* tx_params: TX set defined */
+	0x00, 0x00, 0x00,		/* reserved */
+	0x00, 0x00,			/* HT extended capabilities */
+	0x00, 0x00, 0x00, 0x00,		/* TX beamforming */
+	0x00				/* ASEL */
+};
+
+/*
  * The join the supplicant decided on. Everything here is the stack's own
  * documented policy surface (the prior carrier's board-proven associate
  * shape): which candidate, which security state, and then sta_join - the
@@ -1720,20 +1745,29 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	struct ieee80211com *ic = bridge.ic;
 	struct ieee80211_node *ni = NULL;
 	uint8_t *ie_copy = NULL;
+	size_t ie_copy_len = 0;
 	int ret = 0;
 
 	if (!bridge.attached || ic == NULL)
 		return -ENODEV;
 	if (ssid == NULL || len == 0 || len > IEEE80211_NWID_LEN)
 		return -EINVAL;
-	if (ie_len != 0) {
-		if (wpa_ie == NULL || ie_len > 256)
-			return -EINVAL;
-		ie_copy = wlan_osal_alloc(ie_len);
-		if (ie_copy == NULL)
-			return -ENOMEM;
+	if (ie_len != 0 && (wpa_ie == NULL || ie_len > 256))
+		return -EINVAL;
+	/*
+	 * One allocation carries the supplicant's element block and the HT
+	 * Capabilities element this port declares (see bridge_htcap_ie).  It
+	 * is built before the serializer is taken, and it is built as one
+	 * block rather than grown afterwards: the board's heap is busy enough
+	 * at join time that a second, larger allocation is not free.
+	 */
+	ie_copy = wlan_osal_alloc(ie_len + sizeof(bridge_htcap_ie));
+	if (ie_copy == NULL)
+		return -ENOMEM;
+	if (ie_len != 0)
 		memcpy(ie_copy, wpa_ie, ie_len);
-	}
+	memcpy(ie_copy + ie_len, bridge_htcap_ie, sizeof(bridge_htcap_ie));
+	ie_copy_len = ie_len + sizeof(bridge_htcap_ie);
 
 	wlan_port_serializer_lock();
 	if (bssid != NULL)
@@ -1771,55 +1805,26 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	} else {
 		ic->ic_flags &= ~(unsigned int)IEEE80211_F_PRIVACY;
 	}
+	/*
+	 * WMM travels with HT: hostapd clears a station's HT flag when the
+	 * association request carries no valid WMM element, so an HT-only
+	 * request leaves the AP transmitting legacy frames (measured: the AP's
+	 * response grew to ten elements and its MCS set to 0xffff, while every
+	 * delivered data frame stayed legacy 20 MHz).  The element itself is
+	 * net80211's own - the association builder appends it when F_WME is set
+	 * and the AP's beacon carried one.
+	 */
+	ic->ic_flags |= IEEE80211_F_WME;
 
 	if (ic->ic_opt_ie != NULL) {
 		wlan_osal_free(ic->ic_opt_ie);
 	}
-	/*
-	 * The HT Capabilities element rides the same verbatim-IE channel the
-	 * supplicant's RSN element uses (ieee80211_output.c appends
-	 * ic_opt_ie byte-for-byte to the association request, and its frame
-	 * reservation already counts ic_opt_ie_len).  The imported stack has
-	 * no 11n state of its own, so the capability is declared here.
-	 *
-	 * One spatial stream, MCS 0-7, 20 MHz only, short GI for 20 MHz, and no
-	 * aggregation: the seam configures the radio at 20 MHz
-	 * (NL80211_CHAN_WIDTH_20), and the receive path has no block-ack
-	 * session, so advertising either would invite frames this port cannot
-	 * take.  The AP's rate control then has a decodable HT ladder instead
-	 * of probing rates the station cannot hear.
-	 */
-	static const uint8_t htcap_ie[28] = {
-		45, 26,			/* element id, length */
-		0x20, 0x00,		/* HT cap: SGI-20 only */
-		0x00,			/* A-MPDU: 8 KiB, no min spacing */
-		0xff, 0x00, 0x00, 0x00,	/* MCS 0-7 */
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00,			/* rx_highest */
-		0x01,				/* tx_params: TX set defined */
-		0x00, 0x00, 0x00,		/* reserved */
-		0x00, 0x00,			/* HT extended capabilities */
-		0x00, 0x00, 0x00, 0x00,		/* TX beamforming */
-		0x00				/* ASEL */
-	};
-	{
-		uint16_t total = (uint16_t)(ie_len + sizeof(htcap_ie));
-		uint8_t *blob = wlan_osal_alloc(total);
-
-		if (blob != NULL) {
-			if (ie_copy != NULL) {
-				memcpy(blob, ie_copy, ie_len);
-				wlan_osal_free(ie_copy);
-				ie_copy = NULL;
-			}
-			memcpy(blob + ie_len, htcap_ie, sizeof(htcap_ie));
-			ic->ic_opt_ie = blob;
-			ic->ic_opt_ie_len = total;
-		} else {
-			ic->ic_opt_ie = ie_copy;
-			ic->ic_opt_ie_len = (u_int16_t)ie_len;
-		}
-	}
+	ic->ic_opt_ie = ie_copy;
+	ic->ic_opt_ie_len = (u_int16_t)ie_copy_len;
+	wlan_osal_log("wlan: join opt ie=%u len=%u\n", (unsigned)ie_len,
+	    (unsigned)ic->ic_opt_ie_len);
+	wlan_osal_log("wlan: join opt ie=%u len=%u\n", (unsigned)ie_len,
+	    (unsigned)ic->ic_opt_ie_len);
 
 	if (ni->ni_chan != NULL)
 		ic->ic_curchan = ni->ni_chan;
