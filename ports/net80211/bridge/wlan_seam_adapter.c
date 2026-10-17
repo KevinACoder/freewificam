@@ -76,6 +76,7 @@ static struct {
 	 */
 	unsigned int rx_data;
 	unsigned int rx_retry;
+	unsigned int rx_fcs;
 	unsigned int rx_hist_n;
 	struct {
 		uint8_t enc;		/* mac80211_rx_encoding */
@@ -670,6 +671,15 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 		adapter.rx_data++;
 		if (retry != 0u)
 			adapter.rx_retry++;
+		/*
+		 * The other half of a retry: a frame the chip received with a bad
+		 * CRC.  The driver sets this flag and still delivers the frame
+		 * (core.c:6409), so it is a direct PHY-error count - and the
+		 * discriminator between "the air corrupted it" and "the peer
+		 * simply did not hear our ACK".
+		 */
+		if (rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0)
+			adapter.rx_fcs++;
 		for (i = 0; i < adapter.rx_hist_n; i++)
 			if (adapter.rx_hist[i].enc == enc &&
 			    adapter.rx_hist[i].idx == idx &&
@@ -825,8 +835,8 @@ wlan_bridge_link_dump(void)
 	else
 		wlan_osal_log("wlan: link peer supp=0x%08x ht=0 mcs=0x%08x "
 		    "nss=0 wme=0\n", 0u, 0u);
-	wlan_osal_log("wlan: link rx data=%u retry=%u\n", adapter.rx_data,
-	    adapter.rx_retry);
+	wlan_osal_log("wlan: link rx data=%u retry=%u fcs=%u\n", adapter.rx_data,
+	    adapter.rx_retry, adapter.rx_fcs);
 	for (i = 0; i < adapter.rx_hist_n; i++)
 		wlan_osal_log("wlan: link rxrate enc=%u idx=%u bw=%u n=%u "
 		    "retry=%u\n", (unsigned)adapter.rx_hist[i].enc,
@@ -843,6 +853,7 @@ wlan_bridge_link_reset(void)
 	adapter.rx_hist_n = 0;
 	adapter.rx_data = 0;
 	adapter.rx_retry = 0;
+	adapter.rx_fcs = 0;
 }
 
 /* ------------------------------------------------------------------ */

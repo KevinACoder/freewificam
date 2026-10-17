@@ -352,14 +352,15 @@ bridge_ie_report(const char *dir, const uint8_t *frame, size_t len)
 			break;
 		case 45:
 			htcap = 1;
-			if (elen >= 2) {
+			if (elen >= 2)
 				hcap = (uint16_t)(el[0] | (el[1] << 8));
-				if (elen >= 6)
-					mcs0 = (uint32_t)el[2] |
-					    ((uint32_t)el[3] << 8) |
-					    ((uint32_t)el[4] << 16) |
-					    ((uint32_t)el[5] << 24);
-			}
+			/* HT Capabilities: info(2) then A-MPDU parameters(1),
+			 * so the Supported MCS Set starts at el[3] */
+			if (elen >= 7)
+				mcs0 = (uint32_t)el[3] |
+				    ((uint32_t)el[4] << 8) |
+				    ((uint32_t)el[5] << 16) |
+				    ((uint32_t)el[6] << 24);
 			break;
 		case 61:
 			htinfo = 1;

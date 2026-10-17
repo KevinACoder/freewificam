@@ -130,7 +130,7 @@ ANCHORS = {
         # the air's own account of it - the reading the air audit otherwise
         # needs a second radio for.
         r"wlan: link peer supp=0x[0-9a-f]{8} ht=\d+",
-        r"wlan: link rx data=\d+ retry=\d+",
+        r"wlan: link rx data=\d+ retry=\d+ fcs=\d+",
         r"wlan: link rxrate enc=\d+ idx=\d+ bw=\d+ n=\d+ retry=\d+",
     ],
 }
@@ -170,7 +170,7 @@ CENSUS_BLOCK = (
 LINK_BLOCK = (
     "wlan: link hw=1 vif=1 sta=1 tx=2311\r\n"
     "wlan: link peer supp=0x00000fff ht=0 mcs=0x00000000 nss=1 wme=0\r\n"
-    "wlan: link rx data=14820 retry=0\r\n"
+    "wlan: link rx data=14820 retry=0 fcs=0\r\n"
     "wlan: link rxrate enc=0 idx=11 bw=0 n=14820 retry=0\r\n"
 )
 
@@ -362,7 +362,7 @@ MUTATIONS = [
     # the link face: one block per closed phase, so each mutation removes every
     # instance of the line it targets
     ("link rx dropped", BASE_TRANSCRIPT.replace(
-        "wlan: link rx data=14820 retry=0\r\n", ""), 1),
+        "wlan: link rx data=14820 retry=0 fcs=0\r\n", ""), 1),
     ("link rxrate dropped", BASE_TRANSCRIPT.replace(
         "wlan: link rxrate enc=0 idx=11 bw=0 n=14820 retry=0\r\n", ""), 1),
     ("link peer dropped", BASE_TRANSCRIPT.replace(
