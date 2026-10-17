@@ -103,6 +103,8 @@ void	lkpi_fsl_census_reset(void);
 void	lkpi_fsl_census_print(void);
 void	lkpi_usb_census_reset(void);
 void	lkpi_usb_census_print(void);
+void	lkpi_usb_cherryusb_census_reset(void);
+void	lkpi_usb_cherryusb_census_print(void);
 void	lkpi_80211_census_reset(void);
 void	lkpi_80211_census_print(void);
 

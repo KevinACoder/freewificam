@@ -301,6 +301,12 @@ static struct {
 static u32 lkpi_usb_starved;
 static u32 lkpi_usb_urb_done, lkpi_usb_urb_bytes, lkpi_usb_urb_short,
 	  lkpi_usb_urb_err;
+/* the feed's own depth: how many URBs the driver had queued behind the one in
+ * flight at the moment a completion was claimed.  A minimum of zero with the
+ * starved histogram flat is the healthy shape; a minimum that sits at zero
+ * while starved climbs means the driver is not refilling, which is a different
+ * finding from the device being slow. */
+static u32 lkpi_usb_qlen_min, lkpi_usb_qlen_sum, lkpi_usb_qlen_n;
 
 /* record what a completion leaves behind: the service time it closed, and the
  * gap its endpoint is about to spend (armed again by whoever re-arms it). */
@@ -325,6 +331,10 @@ lkpi_usb_census_completed(struct lkpi_usb_ep *ep, u32 len, int status,
 		lkpi_usb_urb_short++;
 	if (status != 0)
 		lkpi_usb_urb_err++;
+	if (lkpi_usb_qlen_n == 0u || ep->qlen < lkpi_usb_qlen_min)
+		lkpi_usb_qlen_min = ep->qlen;
+	lkpi_usb_qlen_sum += ep->qlen;
+	lkpi_usb_qlen_n++;
 }
 
 /* record the arm that closes a gap: called wherever a transfer actually goes
@@ -364,6 +374,9 @@ lkpi_usb_census_reset(void)
 	lkpi_usb_urb_bytes = 0u;
 	lkpi_usb_urb_short = 0u;
 	lkpi_usb_urb_err = 0u;
+	lkpi_usb_qlen_min = 0u;
+	lkpi_usb_qlen_sum = 0u;
+	lkpi_usb_qlen_n = 0u;
 }
 
 void
@@ -382,6 +395,10 @@ lkpi_usb_census_print(void)
 	    "err=%u starved=%u\n", lkpi_usb_urb_done, lkpi_usb_urb_bytes,
 	    lkpi_usb_urb_done != 0u ? lkpi_usb_urb_bytes / lkpi_usb_urb_done : 0u,
 	    lkpi_usb_urb_short, lkpi_usb_urb_err, lkpi_usb_starved);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A usb qlen min=%u mean=%u n=%u\n", lkpi_usb_qlen_min,
+	    lkpi_usb_qlen_n != 0u ? lkpi_usb_qlen_sum / lkpi_usb_qlen_n : 0u,
+	    lkpi_usb_qlen_n);
 	/* the endpoint ledger: which endpoint carried the phase, and how much -
 	 * the receive bulk-in is otherwise one row among twelve */
 	for (i = 0u; i < (unsigned int)LKPI_EP_N; i++) {

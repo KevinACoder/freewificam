@@ -110,6 +110,11 @@ ANCHORS = {
         r"perf census: A usb gap n=\d+",
         r"perf census: A usb starved n=\d+",
         r"perf census: A usb urbs done=\d+",
+        # the feed's depth and the backend's own refusals: a phase whose rate fell
+        # while these climbed is a resource shortage, not a device with nothing
+        # to give, and the two read identically in every timing bucket
+        r"perf census: A usb qlen min=\d+ mean=\d+ n=\d+",
+        r"perf census: A chusb submits=\d+ done=\d+",
         r"perf census: A 80211 stack n=\d+",
     ],
 }
@@ -137,6 +142,8 @@ CENSUS_BLOCK = (
     "lkpi: perf census: A usb cb n=12480 avg_us=41 max_us=610 hot=[e15:12001 e16:479] over=0\r\n"
     "lkpi: perf census: A usb starved n=4610 avg_us=2104 max_us=180000 hot=[e20:2201 e21:2409] over=3\r\n"
     "lkpi: perf census: A usb urbs done=12480 bytes=28704000 mean_len=2300 short=12480 err=0 starved=0\r\n"
+    "lkpi: perf census: A usb qlen min=27 mean=30 n=12480\r\n"
+    "lkpi: perf census: A chusb submits=12480 done=12480 pass=12480 staged=0 slots_x=0 stage_x=0 stage_ovf=0 refused=0\r\n"
     "lkpi: perf census: A usb ep129 enq=12512 done=12480 kicks=12481 err=0 lastlen=2300\r\n"
     "lkpi: perf census: A 80211 stack n=12104 avg_us=52 max_us=880 hot=[e15:11890 e16:214] over=0\r\n"
 )
@@ -314,6 +321,11 @@ MUTATIONS = [
     ("census stack dropped", BASE_TRANSCRIPT.replace(
         "lkpi: perf census: A 80211 stack n=12104 avg_us=52 max_us=880 "
         "hot=[e15:11890 e16:214] over=0\r\n", ""), 1),
+    ("census qlen dropped", BASE_TRANSCRIPT.replace(
+        "lkpi: perf census: A usb qlen min=27 mean=30 n=12480\r\n", ""), 1),
+    ("census chusb dropped", BASE_TRANSCRIPT.replace(
+        "lkpi: perf census: A chusb submits=12480 done=12480 pass=12480 staged=0 "
+        "slots_x=0 stage_x=0 stage_ovf=0 refused=0\r\n", ""), 1),
     ("udp sink counts dropped", BASE_TRANSCRIPT
      .replace("wlan: udp sink pkts=0 bytes=0\r\n", "")
      .replace("wlan: udp sink pkts=14820 bytes=21516000\r\n", "")

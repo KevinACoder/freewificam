@@ -71,6 +71,7 @@
  * this file uses neither.
  */
 #include "components/linuxkpi/usb/lkpi_usb_backend.h"
+#include "components/linuxkpi/lkpi_census.h"
 #include "ports/cherryusb/lkpi_usb_cherryusb.h"
 
 #undef DIV_ROUND_CLOSEST
@@ -109,6 +110,36 @@ lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out)
 	chu_stats.stage_slots = CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS;
 	*out = chu_stats;
 }
+
+#ifdef CONFIG_LKPI_CENSUS
+/*
+ * The seam's own census face.  The counters below are the answer to "did the
+ * backend ever refuse work?" - a phase whose throughput fell while
+ * slots_exhausted or stage_exhausted climbed is a resource shortage, not a
+ * device that had nothing to give, and the two read identically in every
+ * timing bucket.  The geometry fields are re-derived by the getter, so zeroing
+ * the struct costs nothing.
+ */
+void
+lkpi_usb_cherryusb_census_reset(void)
+{
+
+	(void)memset(&chu_stats, 0, sizeof(chu_stats));
+}
+
+void
+lkpi_usb_cherryusb_census_print(void)
+{
+	struct lkpi_usb_chusb_stats s;
+
+	lkpi_usb_cherryusb_stats(&s);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A chusb submits=%u done=%u pass=%u staged=%u "
+	    "slots_x=%u stage_x=%u stage_ovf=%u refused=%u\n",
+	    s.submits, s.completed, s.stage_passthrough, s.stage_staged,
+	    s.slots_exhausted, s.stage_exhausted, s.stage_overflow, s.refused);
+}
+#endif /* CONFIG_LKPI_CENSUS */
 
 /*
  * A request larger than a stage slot is refused every time it is retried, so the
