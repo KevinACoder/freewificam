@@ -22,6 +22,9 @@
 /* net80211 world: the bridge's scalar face */
 #include "wlan_bridge.h"
 
+/* the image's census snapshot (the same call the dataplane case makes) */
+#include "wlan_census.h"
+
 /* lwIP's surface for the measurement commands (the same lwiperf engine the
  * wired line's image drives, tests/board/threadx-rk3568-regression/tests/
  * gmac_dataplane.c:385-441) */
@@ -85,6 +88,13 @@ cmd_wlan(int argc, char **argv)
 		wlan_port_scan_dump();
 		return 0;
 	}
+	if (strcmp(argv[1], "census") == 0) {
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0)
+			wlan_census_reset();
+		else
+			wlan_census_print();
+		return 0;
+	}
 	if (strcmp(argv[1], "join") == 0) {
 		wlan_join_chain();
 		return 0;
@@ -110,16 +120,17 @@ cmd_wlan(int argc, char **argv)
 		    (peer >> 8) & 0xffU, peer & 0xffU);
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan [status|probe|scan|dump|join|dataplane|"
-	    "iperf <ip>|server|stop|uplink <ip>]\n");
+	csh_printf(csh, "usage: wlan [status|probe|scan|dump|census [reset]|join|"
+	    "dataplane|iperf <ip>|server|stop|uplink <ip>]\n");
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan, "wlan [status|probe|scan|dump|join|dataplane|iperf|uplink]",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan, "wlan [status|probe|scan|dump|census|join|dataplane|iperf|uplink]",
 			  "wlan status - bridge counters and state;\n"
 			  "wlan probe - bring up the USB chain and wait for the driver;\n"
 			  "wlan scan - sweep the channels and compare with the ground truth;\n"
 			  "wlan dump - print the scan table as found;\n"
+			  "wlan census [reset] - print (or zero) the throughput census snapshot;\n"
 			  "wlan join - wait for the supplicant's WPA2 association;\n"
 			  "wlan dataplane - netif + DHCP + ping + iperf server + the phases;\n"
 			  "wlan iperf <ip>|server|stop - the TCP measurement session;\n"

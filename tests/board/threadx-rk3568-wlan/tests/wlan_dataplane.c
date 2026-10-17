@@ -40,6 +40,9 @@
 #include "wlan_wpa_obs.h"
 /* the lease-hunt pulse reads the bridge's data counters */
 #include "wlan_bridge.h"
+/* the per-phase snapshot: the USB endpoint's time partition and the stack's
+ * per-frame share (see wlan_census.h) */
+#include "wlan_census.h"
 
 /* the lwIP address helpers the console command needs */
 #include "lwip/ip_addr.h"
@@ -385,10 +388,17 @@ void wlan_dataplane_chain(void)
 
 	/* the downlink phases: the peer's client drives each window, and the
 	 * ready line above is what it waits for before it starts.  The sink's
-	 * counters reset with the phase, so a UDP phase's burst is its own. */
+	 * counters reset with the phase, so a UDP phase's burst is its own.
+	 *
+	 * The census resets with the phase too and prints when it closes: one
+	 * phase's `svc` (armed: the device's share of the transfer path) and
+	 * `gap` (idle with work queued: the host's share) partition that phase,
+	 * so a downlink number comes with its own attribution instead of only a
+	 * total.  Both lines are per phase, never per frame. */
 	for (phase = 1U; phase <= WLAN_IPERF_PHASES; phase++) {
 		g_udp_pkts = 0U;
 		g_udp_bytes = 0UL;
+		wlan_census_reset();
 		LOG_ANCHOR("wlan: downlink phase %u ready window=%u s\n",
 		    phase, (unsigned)(WLAN_IPERF_WINDOW_MS / 1000));
 		for (waited = 0; waited < WLAN_IPERF_WINDOW_MS;
@@ -398,6 +408,7 @@ void wlan_dataplane_chain(void)
 		LOG_ANCHOR("wlan: downlink phase %u done\n", phase);
 		LOG_ANCHOR("wlan: udp sink pkts=%u bytes=%lu\n", g_udp_pkts,
 		    g_udp_bytes);
+		wlan_census_print();
 	}
 
 	/* the uplink phases: this image is the client and the peer is the
@@ -408,8 +419,10 @@ void wlan_dataplane_chain(void)
 		LOG_ANCHOR("wlan: uplink skipped reason=no-peer\n");
 	} else {
 		for (phase = 1U; phase <= WLAN_UPLINK_PHASES; phase++) {
+			wlan_census_reset();
 			if (uplink_phase_run(phase, peer) != 0)
 				return;
+			wlan_census_print();
 		}
 	}
 }

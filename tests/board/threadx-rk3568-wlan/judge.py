@@ -59,6 +59,11 @@ ANCHORS = {
         r"wlan: scan start ssid=",
         r"wlan: scan done rows=",
         r"wlan: gt-check matched=[1-9]\d*/",
+        # the dwell pump's per-dwell evidence (tests/wlan_radio.c): the frequency
+        # the bridge last handed the driver, the data frames that dwell heard and
+        # the distinct transmitters it recorded - the line that separates "the
+        # sweep never went there" from "it went there and heard nothing"
+        r"wlan: dwell tuned=\d+ rx=\d+ bss=\d+",
     ],
     # the case's own verdict line, printed only when the driver's open-auth
     # exchange completed within the prompt ceiling (wlan_join_raw.c)
@@ -73,6 +78,10 @@ ANCHORS = {
         r"wlan: udisk claimed",
         r"lkpi_udisk: bw read \d+ MiB in \d+ ms = [\d.]+ MB/s",
         r"lkpi_udisk: bw write \d+ MiB in \d+ ms = [\d.]+ MB/s",
+        # the command-size sweep, one line per size: the curve that separates a
+        # stack's per-transfer fixed cost from its per-byte cost
+        r"lkpi_udisk: sweep read chunk=\d+ KiB \d+ MiB in \d+ ms = [\d.]+ MB/s per_cmd_us=\d+",
+        r"lkpi_udisk: sweep write chunk=\d+ KiB \d+ MiB in \d+ ms = [\d.]+ MB/s per_cmd_us=\d+",
         r"wlan: udisk bw done",
     ],
     "wlan-dataplane": [
@@ -92,6 +101,15 @@ ANCHORS = {
         # the reverse direction: either this image's client ran against the
         # named peer, or the stage says why it did not
         r"wlan: uplink (phase \d+ ready peer=|skipped reason=no-peer)",
+        # the per-phase census snapshot (wlan_census_print -> the linuxkpi
+        # layers' `perf census:` lines, routed through the image's lkpi sink).
+        # `svc` and `gap` are the USB endpoint's time partition - armed (the
+        # device's share) and idle-with-work-queued (the host's share) - so a
+        # phase's throughput comes with its own attribution
+        r"perf census: A usb svc n=\d+",
+        r"perf census: A usb gap n=\d+",
+        r"perf census: A usb urbs done=\d+",
+        r"perf census: A 80211 stack n=\d+",
     ],
 }
 
@@ -106,6 +124,20 @@ VECTORS_PATH = os.path.join(HERE, "..", "common", "select-vectors.tsv")
 # The console paints its prompt, so every prompt occurrence carries escape
 # sequences (a plain "user@rk3568:/$" never appears on the wire).
 PROMPT = "\x1b[1;32muser\x1b[m@\x1b[1;32mrk3568\x1b[m:\x1b[1;34m/\x1b[m$ \x1b[m"
+
+# The per-phase census snapshot: wlan_census_print emits the instrumented
+# layers' own lines, and every lkpi_printf lands on the image's lkpi sink,
+# which prefixes "lkpi: ". One block per closed phase.
+CENSUS_BLOCK = (
+    "lkpi: perf census: A usb svc n=12480 avg_us=331 max_us=4180 hot=[e18:9102 e19:3378] over=0\r\n"
+    "lkpi: perf census: A usb gap n=12480 avg_us=1268 max_us=90210 hot=[e19:4002 e20:8478] over=0\r\n"
+    "lkpi: perf census: A usb wake n=12480 avg_us=1180 max_us=89900 hot=[e19:3120 e20:9360] over=0\r\n"
+    "lkpi: perf census: A usb kick n=12480 avg_us=88 max_us=1400 hot=[e16:12044 e17:436] over=0\r\n"
+    "lkpi: perf census: A usb cb n=12480 avg_us=41 max_us=610 hot=[e15:12001 e16:479] over=0\r\n"
+    "lkpi: perf census: A usb urbs done=12480 bytes=28704000 mean_len=2300 short=12480 err=0 starved=0\r\n"
+    "lkpi: perf census: A usb ep129 enq=12512 done=12480 kicks=12481 err=0 lastlen=2300\r\n"
+    "lkpi: perf census: A 80211 stack n=12104 avg_us=52 max_us=880 hot=[e15:11890 e16:214] over=0\r\n"
+)
 
 SENTINEL_LINE = (
     "[ 123.400] BOARD-SUITE threadx-rk3568-wlan "
@@ -128,6 +160,8 @@ BASE_TRANSCRIPT = (
     "[  12.020] wlan: scan start ssid=QiQiJia\r\n"
     "[  15.000] wlan: bss 14:a3:2f:18:07:2c ssid=QiQiJia freq=2412 rssi=-53\r\n"
     "[  15.010] wlan: bss 14:a3:2f:18:07:31 ssid=QiQiJia-2 freq=2412 rssi=-57\r\n"
+    "[  15.015] wlan: dwell tuned=2412 rx=41 bss=2\r\n"
+    "[  15.018] wlan: dwell tuned=2417 rx=0 bss=0\r\n"
     "[  15.020] wlan: gt-match idx=0 bssid=14:a3:2f:18:07:2c freq=2412 seen=1\r\n"
     "[  15.030] wlan: scan done rows=2 chans=12\r\n"
     "[  15.040] wlan: gt-check matched=1/3 rows=2\r\n"
@@ -160,24 +194,41 @@ BASE_TRANSCRIPT = (
     "[  34.200] wlan: downlink phase 1 ready window=20 s\r\n"
     "[  54.200] wlan: downlink phase 1 done\r\n"
     "[  54.210] wlan: udp sink pkts=0 bytes=0\r\n"
-    "[  54.300] wlan: downlink phase 2 ready window=20 s\r\n"
+    + CENSUS_BLOCK
+    + "[  54.300] wlan: downlink phase 2 ready window=20 s\r\n"
     "[  74.300] wlan: downlink phase 2 done\r\n"
     "[  74.310] wlan: udp sink pkts=14820 bytes=21516000\r\n"
-    "[  74.400] wlan: downlink phase 3 ready window=20 s\r\n"
+    + CENSUS_BLOCK
+    + "[  74.400] wlan: downlink phase 3 ready window=20 s\r\n"
     "[  94.400] wlan: downlink phase 3 done\r\n"
     "[  94.410] wlan: udp sink pkts=0 bytes=0\r\n"
-    "[  94.500] wlan: downlink phase 4 ready window=20 s\r\n"
+    + CENSUS_BLOCK
+    + "[  94.500] wlan: downlink phase 4 ready window=20 s\r\n"
     "[ 114.500] wlan: downlink phase 4 done\r\n"
     "[ 114.510] wlan: udp sink pkts=15103 bytes=21920300\r\n"
-    "[ 114.600] wlan: uplink skipped reason=no-peer\r\n"
+    + CENSUS_BLOCK
+    + "[ 114.600] wlan: uplink skipped reason=no-peer\r\n"
     "[ 114.700] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
-    "[ 115.000] wlan: udisk core init bus=3 base=0xfd000000\r\n"
+    "[ 115.000] wlan: udisk core init bus=3 hcd=xhci base=0xfd000000\r\n"
     "[ 116.200] wlan: udisk claimed\r\n"
     "[ 118.500] lkpi_udisk: READ CAPACITY blocks=61079552 block_size=512 (29824 MiB)\r\n"
     "[ 120.000] lkpi_udisk: bw read 32 MiB in 1388 ms = 23.05 MB/s\r\n"
     "[ 123.100] lkpi_udisk: bw write 16 MiB in 1518 ms = 10.54 MB/s\r\n"
-    "[ 123.200] wlan: udisk bw done\r\n"
-    "[ 123.300] CASE threadx-rk3568-wlan/wlan-udisk PASS\r\n"
+    "[ 124.000] lkpi_udisk: sweep read chunk=8 KiB 2 MiB in 402 ms = 4.97 MB/s per_cmd_us=1570\r\n"
+    "[ 124.900] lkpi_udisk: sweep read chunk=128 KiB 32 MiB in 1502 ms = 21.30 MB/s per_cmd_us=5867\r\n"
+    "[ 125.800] lkpi_udisk: sweep write chunk=8 KiB 2 MiB in 511 ms = 3.91 MB/s per_cmd_us=1996\r\n"
+    "[ 126.700] lkpi_udisk: sweep write chunk=128 KiB 32 MiB in 1610 ms = 19.87 MB/s per_cmd_us=6289\r\n"
+    "[ 126.800] wlan: udisk bw done bus=3\r\n"
+    "[ 127.000] wlan: udisk core init bus=1 hcd=ehci base=0xfd880000\r\n"
+    "[ 128.200] wlan: udisk claimed\r\n"
+    "[ 131.000] lkpi_udisk: bw read 32 MiB in 1604 ms = 19.95 MB/s\r\n"
+    "[ 134.000] lkpi_udisk: bw write 16 MiB in 1702 ms = 9.40 MB/s\r\n"
+    "[ 135.000] lkpi_udisk: sweep read chunk=8 KiB 2 MiB in 610 ms = 3.27 MB/s per_cmd_us=2382\r\n"
+    "[ 136.000] lkpi_udisk: sweep read chunk=128 KiB 32 MiB in 1804 ms = 17.73 MB/s per_cmd_us=7046\r\n"
+    "[ 137.000] lkpi_udisk: sweep write chunk=8 KiB 2 MiB in 702 ms = 2.84 MB/s per_cmd_us=2742\r\n"
+    "[ 138.000] lkpi_udisk: sweep write chunk=128 KiB 32 MiB in 1906 ms = 16.79 MB/s per_cmd_us=7445\r\n"
+    "[ 138.100] wlan: udisk bw done bus=1\r\n"
+    "[ 138.300] CASE threadx-rk3568-wlan/wlan-udisk PASS\r\n"
     + SENTINEL_LINE
     + PROMPT + "==> help\r\n"
     + PROMPT + "help\x1b[0J\r\n"
@@ -221,10 +272,43 @@ MUTATIONS = [
         "wlan: gt-check matched=1/3 rows=2\r\n", ""), 1),
     ("downlink phase dropped", BASE_TRANSCRIPT.replace(
         "wlan: downlink phase 4 done\r\n", ""), 1),
-    ("udisk bw dropped", BASE_TRANSCRIPT.replace(
-        "lkpi_udisk: bw read 32 MiB in 1388 ms = 23.05 MB/s\r\n", ""), 1),
+    # both halves of the udisk case emit these, so a mutation only bites when it
+    # removes every instance
+    ("udisk bw dropped", BASE_TRANSCRIPT
+     .replace("lkpi_udisk: bw read 32 MiB in 1388 ms = 23.05 MB/s\r\n", "")
+     .replace("lkpi_udisk: bw write 16 MiB in 1518 ms = 10.54 MB/s\r\n", "")
+     .replace("lkpi_udisk: bw read 32 MiB in 1604 ms = 19.95 MB/s\r\n", "")
+     .replace("lkpi_udisk: bw write 16 MiB in 1702 ms = 9.40 MB/s\r\n", ""), 1),
+    ("udisk sweep dropped", BASE_TRANSCRIPT
+     .replace("lkpi_udisk: sweep read chunk=8 KiB 2 MiB in 402 ms = 4.97 MB/s "
+              "per_cmd_us=1570\r\n", "")
+     .replace("lkpi_udisk: sweep read chunk=128 KiB 32 MiB in 1502 ms = 21.30 MB/s "
+              "per_cmd_us=5867\r\n", "")
+     .replace("lkpi_udisk: sweep read chunk=8 KiB 2 MiB in 610 ms = 3.27 MB/s "
+              "per_cmd_us=2382\r\n", "")
+     .replace("lkpi_udisk: sweep read chunk=128 KiB 32 MiB in 1804 ms = 17.73 MB/s "
+              "per_cmd_us=7046\r\n", ""), 1),
     ("udp sink ready dropped", BASE_TRANSCRIPT.replace(
         "wlan: udp sink ready port=5002\r\n", ""), 1),
+    # the dwell pump's evidence: two dwell lines are in the fixture, so a
+    # mutation only bites when it removes both
+    ("dwell evidence dropped", BASE_TRANSCRIPT.replace(
+        "wlan: dwell tuned=2412 rx=41 bss=2\r\n", "").replace(
+        "wlan: dwell tuned=2417 rx=0 bss=0\r\n", ""), 1),
+    # the per-phase census: one block per closed phase, so each mutation
+    # removes every instance of the line it targets
+    ("census svc dropped", BASE_TRANSCRIPT.replace(
+        "lkpi: perf census: A usb svc n=12480 avg_us=331 max_us=4180 "
+        "hot=[e18:9102 e19:3378] over=0\r\n", ""), 1),
+    ("census gap dropped", BASE_TRANSCRIPT.replace(
+        "lkpi: perf census: A usb gap n=12480 avg_us=1268 max_us=90210 "
+        "hot=[e19:4002 e20:8478] over=0\r\n", ""), 1),
+    ("census urbs dropped", BASE_TRANSCRIPT.replace(
+        "lkpi: perf census: A usb urbs done=12480 bytes=28704000 mean_len=2300 "
+        "short=12480 err=0 starved=0\r\n", ""), 1),
+    ("census stack dropped", BASE_TRANSCRIPT.replace(
+        "lkpi: perf census: A 80211 stack n=12104 avg_us=52 max_us=880 "
+        "hot=[e15:11890 e16:214] over=0\r\n", ""), 1),
     ("udp sink counts dropped", BASE_TRANSCRIPT
      .replace("wlan: udp sink pkts=0 bytes=0\r\n", "")
      .replace("wlan: udp sink pkts=14820 bytes=21516000\r\n", "")

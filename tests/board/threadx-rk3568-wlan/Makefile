@@ -108,7 +108,10 @@ endif
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
 	-D_DEFAULT_SOURCE=1 \
 	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0 \
-	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=65536
+	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=131072 \
+	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=8 \
+	-DCONFIG_LKPI_USB_COHERENT_POOL=262144 \
+	-DCONFIG_LKPI_CENSUS
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream
@@ -258,10 +261,12 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/wlan_udisk.c
 
 # the image's own non-case TUs: the radio's dwell pump, the supplicant's
-# message observer, and the TCP/IP stack's bring-up helper (the regression
-# image's helper verbatim through its own compile set)
+# message observer, the census clock the linuxkpi layers timestamp through, and
+# the TCP/IP stack's bring-up helper (the regression image's helper verbatim
+# through its own compile set)
 WLAN_HELPER_SRCS := \
 	$(CURDIR)/tests/wlan_radio.c \
+	$(CURDIR)/tests/wlan_census.c \
 	$(CURDIR)/tests/wlan_wpa_obs.c \
 	$(COMMON)/lwip_stack.c
 
@@ -330,6 +335,7 @@ NET80211_PORT_SRCS := \
 
 LKPI_SRCS := \
 	$(LKPI)/linuxkpi_core.c \
+	$(LKPI)/lkpi_census.c \
 	$(LKPI)/linuxkpi_platform_target.c \
 	$(LKPI)/linuxkpi_80211.c \
 	$(LKPI)/linuxkpi_80211_helpers.c \
@@ -526,6 +532,7 @@ $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_join.c,$(WPA_PORT_CFLAGS) -I$(NP
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_dataplane.c,$(LWIP_INCLUDES) $(WLAN_KPI_CFLAGS) -I$(PORT)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_cmds.c,$(WPA_CMD_CFLAGS) $(LWIP_INCLUDES) -I$(NPORT)/bridge $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_radio.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_census.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$(CURDIR)/tests $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))

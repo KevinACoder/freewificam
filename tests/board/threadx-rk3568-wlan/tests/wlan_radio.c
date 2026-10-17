@@ -33,6 +33,36 @@
  * card's rates (the sweep the board-passed case uses) */
 #define WLAN_RADIO_DWELL_MS	200U
 
+/*
+ * Per-dwell evidence for the channel-coverage question.  Three states look
+ * identical in a scan table but are three different faults, and this line
+ * separates them:
+ *
+ *   tuned=<f> never takes the value under test -> the sweep never went there
+ *   tuned=<f> rx=0                            -> it went there and heard
+ *                                                nothing (RF/PHY, not the host)
+ *   tuned=<f> rx>0 bss=0                      -> frames arrived and the scan
+ *                                                table refused them (element
+ *                                                parse, or the channel check
+ *                                                applied at processing time)
+ *
+ * `tuned` is the frequency the bridge last handed the driver, `rx` the data
+ * frames the stack saw during the dwell, and `bss` the distinct transmitters
+ * the sweep recorded.  One line per dwell, never per frame.
+ */
+static void
+wlan_radio_dwell_report(void)
+{
+	static struct wlan_bridge_counters prev;
+	struct wlan_bridge_counters now;
+
+	wlan_bridge_stats(&now);
+	LOG_ANCHOR("wlan: dwell tuned=%u rx=%u bss=%u\n", now.tuned_freq,
+	    now.rx_data - prev.rx_data,
+	    now.scan_bss_seen - prev.scan_bss_seen);
+	prev = now;
+}
+
 static void
 wlan_radio_task(void *arg)
 {
@@ -43,6 +73,9 @@ wlan_radio_task(void *arg)
 		if (wlan_bridge_scan_pending()) {
 			osDelay(WLAN_RADIO_DWELL_MS);
 			tick_accum += WLAN_RADIO_DWELL_MS;
+			/* what the dwell that just elapsed heard, before the next
+			 * transition retunes the radio */
+			wlan_radio_dwell_report();
 			/* pending, not active: the stack may have left S_SCAN
 			 * inside the delay (a join cancelled the sweep), and
 			 * the dwell's entry check is what closes that sweep's
