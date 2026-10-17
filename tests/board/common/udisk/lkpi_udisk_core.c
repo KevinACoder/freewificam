@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * lkpi_udisk_core.c - the clean-room BOT acceptance driver (SPEC
- * S6/linuxkpi §3.7, R7).  First-party acceptance carrier, NOT a product
+ * S6/linuxkpi sec. 3.7, R7).  First-party acceptance carrier, NOT a product
  * piece: it exists to drive the linuxkpi surface through the exact
  * consumption shapes the gap list calls out, on both targets.
  *
@@ -28,7 +28,7 @@
  * target (real kernel headers) and on the freewebcam linuxkpi target; the
  * #ifdef count is zero and must stay zero.  Both shells only register and
  * trigger; every transfer here goes fill_urb + submit + completion-wait
- * + timeout-kill, and the control requests are the §3.6-1 control-URB
+ * + timeout-kill, and the control requests are the sec. 3.6-1 control-URB
  * consumers (usb_control_msg is deliberately not used).
  */
 
@@ -74,12 +74,14 @@ struct usb_driver lkpi_udisk_driver;
 
 #define UD_SECTOR_DEF	512u
 #define UD_TEST_SECTORS	8u
-/* 128 KiB per command - the vendored msc adapter's chunk (its 37.3/24.2
- * MB/s P5-e baseline amortizes the BOT turnaround at exactly this size;
- * the kpi target's chunk was 32 KiB until the P6-c form round and paid
- * 4x the CBW/CSW round trips for it) */
+/* The bandwidth runs' command size: 64 KiB - the chunk the native row uses, so
+ * the two stacks are read at one workload.  (The vendored msc adapter's earlier
+ * baseline amortized the BOT turnaround at 128 KiB; the kpi target paid 4x the
+ * CBW/CSW round trips at 32 KiB, which is why both rows moved here.) */
 #define UD_BW_SECTORS	128u
-#define UD_BUF_SECTORS	UD_BW_SECTORS
+/* The largest command the sweep below issues - the data buffer must hold it. */
+#define UD_SWEEP_SECTORS_MAX	256u
+#define UD_BUF_SECTORS	UD_SWEEP_SECTORS_MAX
 
 struct ud_cbw {
 	u32	signature;
@@ -138,6 +140,7 @@ struct ud_ctx {
 	struct ud_cbw		*cbw;
 	struct ud_csw		*csw;
 	u8			*data;
+	dma_addr_t		data_dma;
 	char			inq[36];
 	bool			alive;
 };
@@ -260,7 +263,7 @@ ud_transport(struct ud_ctx *ctx, const u8 *cdb, u8 cdb_len, u8 dir,
 }
 
 /* ------------------------------------------------------------------ */
-/* control requests (the §3.6-1 consumers: fill_control_urb + submit)   */
+/* control requests (the sec. 3.6-1 consumers: fill_control_urb + submit)   */
 /* ------------------------------------------------------------------ */
 
 static int
@@ -369,6 +372,28 @@ ud_rw10(struct ud_ctx *ctx, bool write, u32 lba, u16 nsectors, void *data)
 	    write ? UD_DIR_OUT : UD_DIR_IN, data, len);
 }
 
+/* The bandwidth entries do LBA arithmetic, so the geometry has to be real
+ * before they start: with ctx->blocks at zero every wrap below resets to the
+ * first window, so a run would measure one region over and over (and a write
+ * run would walk the front of the device instead of its tail).  A card reader
+ * additionally needs the standard wake-up - TEST UNIT READY until the medium
+ * answers, then READ CAPACITY - which is the same sequence a real driver runs
+ * at probe.  TUR's own retry loop reports its failure; it is not fatal here
+ * because a device that answers READ CAPACITY directly is also fine. */
+static int
+ud_ensure_geometry(struct ud_ctx *ctx)
+{
+
+	if (ctx->block_size == 0)
+		ctx->block_size = UD_SECTOR_DEF;
+	if (ctx->blocks != 0)
+		return 0;
+	(void)ud_test_unit_ready(ctx);
+	if (ud_read_capacity(ctx) != 0)
+		return -EIO;
+	return ctx->blocks != 0 ? 0 : -EIO;
+}
+
 /* ------------------------------------------------------------------ */
 /* probe / disconnect                                                  */
 /* ------------------------------------------------------------------ */
@@ -433,7 +458,8 @@ ud_disconnect(struct usb_interface *intf)
 	usb_free_urb(ctx->urb);
 	kfree(ctx->cbw);
 	kfree(ctx->csw);
-	kfree(ctx->data);
+	usb_free_coherent(ctx->udev, (size_t)UD_BUF_SECTORS * UD_SECTOR_DEF,
+	    ctx->data, ctx->data_dma);
 	kfree(ctx);
 	pr_info("lkpi_udisk: disconnected\n");
 }
@@ -533,8 +559,8 @@ lkpi_udisk_bw(struct usb_interface *intf, u32 mib, bool write)
 
 	if (ctx == NULL || !ctx->alive)
 		return -ENODEV;
-	if (ctx->block_size == 0)
-		ctx->block_size = UD_SECTOR_DEF;
+	if (ud_ensure_geometry(ctx) != 0)
+		return -EIO;
 	lba = ctx->blocks > 4096 ? ctx->blocks - 4096 : 1024;
 	memset(ctx->data, (int)(write ? 0xA5 : 0x5A),
 	    (int)(sectors_per_chunk * ctx->block_size));
@@ -547,7 +573,12 @@ lkpi_udisk_bw(struct usb_interface *intf, u32 mib, bool write)
 			return ret;
 		}
 		done += (u64)sectors_per_chunk * ctx->block_size;
-		if (++lba + sectors_per_chunk > ctx->blocks)
+		/* advance by the whole command, not by one sector: advancing by
+		 * one makes every read overlap the previous one by all but a
+		 * sector, so the run measures a few-hundred-KiB window over and
+		 * over instead of the sequential walk it claims */
+		lba += sectors_per_chunk;
+		if (lba + sectors_per_chunk > ctx->blocks)
 			lba = 1024;
 	}
 	t1 = jiffies;
@@ -556,7 +587,7 @@ lkpi_udisk_bw(struct usb_interface *intf, u32 mib, bool write)
 		u64 mb = done >> 20;
 
 		/* MB/s = MiB transferred * 1000 / elapsed ms; integer +
-		 * hundredths, recorded not gated (spec 判据 P6-c-2) */
+		 * hundredths, recorded not gated (spec criterion P6-c-2) */
 		pr_info("lkpi_udisk: bw %s %llu MiB in %llu ms = %llu.%02llu "
 		    "MB/s\n", write ? "write" : "read", mb, ms,
 		    ms != 0 ? (mb * 1000ULL) / ms : 0,
@@ -565,8 +596,91 @@ lkpi_udisk_bw(struct usb_interface *intf, u32 mib, bool write)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* the chunk-size sweep                                                */
+/* ------------------------------------------------------------------ */
+
+/* The same read (or write) workload at several BOT command sizes.  One BOT
+ * command is three bulk transfers - CBW 31 B / data / CSW 13 B - so its cost
+ * is a fixed part (the turnaround, plus whatever the stack between the driver
+ * and the controller does per transfer) plus the data leg's own wire time.
+ * Running the same command COUNT at several sizes separates the two: the fit
+ * of 1/rate against 1/chunk gives the fixed cost as its slope and the
+ * asymptotic per-byte rate as its intercept, which is what says whether a
+ * stack's gap is per-transfer overhead or per-byte work.
+ *
+ * The clock is the whole run's wall clock (jiffies) - no per-transfer timing
+ * anywhere - and the command count is fixed, so every size is measured with
+ * the same sample count and the same clock resolution.  Recorded, not gated:
+ * the acceptance criterion lives in the run's ledger, not in the image. */
+#define UD_SWEEP_CMDS	256u
+static const u16 ud_sweep_sectors[] = { 16u, 32u, 64u, 128u, 256u };
+#define UD_SWEEP_N	(sizeof(ud_sweep_sectors) / sizeof(ud_sweep_sectors[0]))
+
+int
+lkpi_udisk_sweep(struct usb_interface *intf, bool write)
+{
+	struct ud_ctx *ctx = usb_get_intfdata(intf);
+	/* every size walks the same window, and the window is the disk's tail:
+	 * the largest run is span sectors, so a write sweep can never reach the
+	 * front of the device (a prior line learned the bootloader repairs a
+	 * partition table it finds written over) */
+	u32 span = (u32)UD_SWEEP_SECTORS_MAX * UD_SWEEP_CMDS;
+	u32 base;
+	unsigned int i;
+
+	if (ctx == NULL || !ctx->alive)
+		return -ENODEV;
+	if (ud_ensure_geometry(ctx) != 0)
+		return -EIO;
+	/* a write sweep walks five windows' worth of the device; refuse rather
+	 * than wrap into the front of a disk too small to hold them at the tail */
+	if (write && ctx->blocks < span * UD_SWEEP_N + 4096u) {
+		pr_info("lkpi_udisk: sweep write skipped (device holds %u "
+		    "blocks, %u needed)\n", ctx->blocks, span * UD_SWEEP_N + 4096u);
+		return 0;
+	}
+	base = ctx->blocks > span + 4096u ? ctx->blocks - span - 4096u : 1024u;
+
+	for (i = 0; i < UD_SWEEP_N; i++) {
+		u16 sectors = ud_sweep_sectors[i];
+		u32 chunk = (u32)sectors * ctx->block_size;
+		u64 bytes = (u64)chunk * UD_SWEEP_CMDS;
+		u64 t0, t1, ms, rate100;
+		u32 lba = base;
+		u32 n;
+
+		memset(ctx->data, (int)(write ? 0xA5 : 0x5A), (int)chunk);
+		t0 = jiffies;
+		for (n = 0; n < UD_SWEEP_CMDS; n++) {
+			int ret = ud_rw10(ctx, write, lba, sectors, ctx->data);
+
+			if (ret != 0) {
+				pr_err("lkpi_udisk: sweep %s chunk=%u KiB "
+				    "failed %d\n", write ? "write" : "read",
+				    chunk >> 10, ret);
+				return ret;
+			}
+			lba += sectors;
+			if (lba + sectors > base + span)
+				lba = base;
+		}
+		t1 = jiffies;
+		ms = (u64)jiffies_to_msecs((unsigned long)(t1 - t0));
+		/* hundredths of MiB/s: the sizes differ 16x, so the small end's
+		 * integer part alone would lose most of the curve */
+		rate100 = ms != 0 ? (bytes * 100000ULL) / (ms * 1048576ULL) : 0;
+		pr_info("lkpi_udisk: sweep %s chunk=%u KiB %llu MiB in %llu ms "
+		    "= %llu.%02llu MB/s per_cmd_us=%llu\n",
+		    write ? "write" : "read", chunk >> 10, bytes >> 20, ms,
+		    rate100 / 100ULL, rate100 % 100ULL,
+		    ms != 0 ? ms * 1000ULL / UD_SWEEP_CMDS : 0);
+	}
+	return 0;
+}
+
 /* Bulk-Only Mass Storage Reset (class OUT on ep0, spec BOT 5.1): the
- * control-side companion to the data plane - P6-b 判据 4's second leg */
+ * control-side companion to the data plane - P6-b criterion 4's second leg */
 int
 lkpi_udisk_reset(struct usb_interface *intf)
 {
@@ -588,7 +702,7 @@ lkpi_udisk_reset(struct usb_interface *intf)
 
 /* the soak: alternating 128 KiB write/read/verify rounds over a rolling
  * LBA window until the deadline - the 600s stability gate (spec P6-c
- * 判据 3).  Errors are counted, not retried: any nonzero error count
+ * criterion 3).  Errors are counted, not retried: any nonzero error count
  * fails the gate. */
 int
 lkpi_udisk_soak(struct usb_interface *intf, u32 seconds)
@@ -661,7 +775,7 @@ lkpi_udisk_soak(struct usb_interface *intf, u32 seconds)
 /* the full self-test: TUR + INQUIRY + READ CAPACITY + the four-pattern
  * write/read walk (both targets run exactly this: same disk, same CDB
  * set, same LBA and pattern set - the dual-target comparison key, spec
- * §3.7-6) */
+ * sec. 3.7-6) */
 int
 lkpi_udisk_test(struct usb_interface *intf, u32 lba)
 {
@@ -725,8 +839,15 @@ ud_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	init_completion(&ctx->done);
 	ctx->cbw = kzalloc(UD_CBW_LEN, GFP_KERNEL);
 	ctx->csw = kzalloc(UD_CSW_LEN, GFP_KERNEL);
-	ctx->data = kzalloc((size_t)UD_BUF_SECTORS * UD_SECTOR_DEF,
-	    GFP_KERNEL);
+	/* the data buffer is this driver's DMA buffer, and it is allocated the
+	 * way usb-storage allocates its iobuf ([LNX] drivers/usb/storage/
+	 * usb.c:462): coherent, because the controller reads and writes it and
+	 * the driver must not have to maintain the cache around every transfer.
+	 * On a target with a non-cacheable DMA window that also means the buffer
+	 * needs no staging between the driver and the controller. */
+	ctx->data = usb_alloc_coherent(udev,
+	    (size_t)UD_BUF_SECTORS * UD_SECTOR_DEF, GFP_KERNEL,
+	    &ctx->data_dma);
 	ctx->urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (ctx->cbw == NULL || ctx->csw == NULL || ctx->data == NULL ||
 	    ctx->urb == NULL) {
@@ -755,13 +876,14 @@ fail:
 		usb_free_urb(ctx->urb);
 	kfree(ctx->cbw);
 	kfree(ctx->csw);
-	kfree(ctx->data);
+	usb_free_coherent(ctx->udev, (size_t)UD_BUF_SECTORS * UD_SECTOR_DEF,
+	    ctx->data, ctx->data_dma);
 	kfree(ctx);
 	return ret;
 }
 
 /* the class identity: Mass Storage / SCSI transparent / Bulk-Only (spec
- * 开放问题 9 - the real-Linux macro for a pure class match is
+ * open question 9 - the real-Linux macro for a pure class match is
  * USB_INTERFACE_INFO; the negative table lives in the claim hook,
  * 0bda:1a2b) */
 static const struct usb_device_id ud_id_table[] = {

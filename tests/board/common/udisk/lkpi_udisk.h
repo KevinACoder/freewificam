@@ -17,6 +17,7 @@ extern struct usb_driver lkpi_udisk_driver;
 int lkpi_udisk_test(struct usb_interface *intf, u32 lba);
 int lkpi_udisk_pattern(struct usb_interface *intf, u32 lba, u8 pattern);
 int lkpi_udisk_bw(struct usb_interface *intf, u32 mib, bool write);
+int lkpi_udisk_sweep(struct usb_interface *intf, bool write);
 int lkpi_udisk_inq(struct usb_interface *intf);
 int lkpi_udisk_cap(struct usb_interface *intf);
 int lkpi_udisk_reset(struct usb_interface *intf);

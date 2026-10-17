@@ -73,12 +73,18 @@ ANCHORS = {
         r"usbh: class msc claimed lun=0",
         r"usbh: msc read blk0=0x",
         r"usbh: msc write/read roundtrip ok",
+        # the command-size sweep, one line per size: the curve that separates a
+        # stack's per-transfer fixed cost from its per-byte cost
+        r"usbh: msc sweep read chunk=\d+ KiB",
+        r"usbh: msc sweep write chunk=\d+ KiB",
     ],
     "usb-ehci": [
         r"usbh: core init bus=1 hcd=ehci",
         r"usbh: class msc claimed lun=0",
         r"usbh: msc read blk0=0x",
         r"usbh: msc write/read roundtrip ok",
+        r"usbh: msc sweep read chunk=\d+ KiB",
+        r"usbh: msc sweep write chunk=\d+ KiB",
     ],
     "lwip-loopback": [
         r"net: READY tcpip=up lwip=\d+\.\d+\.\d+",
@@ -152,11 +158,15 @@ BASE_TRANSCRIPT = (
     "[  12.170] usbh: class msc claimed lun=0\r\n"
     "[  12.180] usbh: msc read blk0=0x00000000 ok\r\n"
     "[  12.190] usbh: msc write/read roundtrip ok at lba=1\r\n"
+    "[  12.195] usbh: msc sweep read chunk=8 KiB 2 MiB in 400 ms = 5.00 MB/s per_cmd_us=1562\r\n"
+    "[  12.196] usbh: msc sweep write chunk=8 KiB 2 MiB in 500 ms = 4.00 MB/s per_cmd_us=1953\r\n"
     "[  12.200] CASE threadx-rk3568-regression/usb-xhci PASS\r\n"
     "[  12.210] usbh: core init bus=1 hcd=ehci base=0xfd880000\r\n"
     "[  12.220] usbh: class msc claimed lun=0\r\n"
     "[  12.230] usbh: msc read blk0=0x00000000 ok\r\n"
     "[  12.240] usbh: msc write/read roundtrip ok at lba=1\r\n"
+    "[  12.245] usbh: msc sweep read chunk=8 KiB 2 MiB in 600 ms = 3.33 MB/s per_cmd_us=2343\r\n"
+    "[  12.246] usbh: msc sweep write chunk=8 KiB 2 MiB in 700 ms = 2.86 MB/s per_cmd_us=2734\r\n"
     "[  12.250] CASE threadx-rk3568-regression/usb-ehci PASS\r\n"
     "[  12.255] net: READY tcpip=up lwip=2.2.1\r\n"
     "[  12.258] net: loopback echo ok port=7777 sent=32 got=32\r\n"
@@ -212,6 +222,11 @@ MUTATIONS = [
         "net: READY tcpip=up lwip=2.2.1\r\n", ""), 1),
     ("anchor dropped (link up)", BASE_TRANSCRIPT.replace(
         "phy1: link up, 1000 Mbps full duplex\r\n", ""), 1),
+    ("msc sweep dropped", BASE_TRANSCRIPT
+     .replace("usbh: msc sweep read chunk=8 KiB 2 MiB in 400 ms = 5.00 MB/s "
+              "per_cmd_us=1562\r\n", "")
+     .replace("usbh: msc sweep read chunk=8 KiB 2 MiB in 600 ms = 3.33 MB/s "
+              "per_cmd_us=2343\r\n", ""), 1),
     ("ladder beat dropped", BASE_TRANSCRIPT.replace("tick: t=12000\r\n", ""), 1),
     ("step response dropped", BASE_TRANSCRIPT.replace("total variable 2\r\n", ""), 1),
     ("start list disagrees", BASE_TRANSCRIPT.replace(

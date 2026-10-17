@@ -46,10 +46,15 @@
 #define MSC_SCRATCH_SECTORS (MSC_WRITE_SECTORS + MSC_CHUNK_SECTORS + MSC_TAIL_SECTORS)
 #define MSC_WAIT_SPINS    600U          /* 100 ms per spin -> 60 s */
 
+/* The chunk sweep's geometry (see msc_sweep): one command count per size, and
+ * the largest command it issues sizes the transfer buffers below. */
+#define MSC_SWEEP_CMDS    256U
+#define MSC_SWEEP_SECTORS 256U          /* 128 KiB - the sweep's largest chunk */
+
 /* The stack asserts DMA buffers are 64-byte aligned (CONFIG_USB_ALIGN_SIZE),
  * so the transfer buffers carry the alignment explicitly. */
-static uint8_t msc_buf[MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES] __attribute__((aligned(64)));
-static uint8_t msc_ref[MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES] __attribute__((aligned(64)));
+static uint8_t msc_buf[MSC_SWEEP_SECTORS * MSC_BLOCK_BYTES] __attribute__((aligned(64)));
+static uint8_t msc_ref[MSC_SWEEP_SECTORS * MSC_BLOCK_BYTES] __attribute__((aligned(64)));
 
 static struct usbh_msc *msc_wait(void)
 {
@@ -64,11 +69,81 @@ static struct usbh_msc *msc_wait(void)
 	return 0;
 }
 
-static void msc_pattern(uint8_t *buf, unsigned seed)
+/* The buffers are sized for the sweep's largest chunk, so every fill and every
+ * compare names its own length rather than the array's - a compare over the
+ * whole array would cover bytes this workload never transferred. */
+static void msc_pattern(uint8_t *buf, size_t len, unsigned seed)
 {
-	for (unsigned i = 0; i < sizeof(msc_buf); i++) {
+	for (size_t i = 0; i < len; i++) {
 		buf[i] = (uint8_t)(i * 31U + seed);
 	}
+}
+
+/*
+ * The chunk sweep: the same read (or write) workload at several command sizes,
+ * so the per-command fixed cost separates from the per-byte cost.  It is the
+ * native twin of the linuxkpi row's sweep (tests/board/common/udisk/
+ * lkpi_udisk_core.c) - the same command count, the same sizes, and the same
+ * whole-run wall clock - so the two stacks' curves are directly comparable and
+ * the difference between their fixed costs is the stack's own per-transfer
+ * cost.  A BOT command is three bulk transfers (CBW 31 B / data / CSW 13 B),
+ * so the fit of 1/rate against 1/chunk gives the fixed cost as its slope.
+ *
+ * Reads and writes both walk the disk's tail window (the largest run is
+ * MSC_SWEEP_SECTORS * MSC_SWEEP_CMDS sectors), so nothing near the front of the
+ * device is touched: a prior line learned the bootloader repairs a partition
+ * table it finds written over.
+ */
+static const uint16_t msc_sweep_sectors[] = { 16U, 32U, 64U, 128U, 256U };
+#define MSC_SWEEP_N (sizeof(msc_sweep_sectors) / sizeof(msc_sweep_sectors[0]))
+
+static int msc_sweep(struct usbh_msc *msc, int write)
+{
+	uint32_t span = (uint32_t)MSC_SWEEP_SECTORS * MSC_SWEEP_CMDS;
+	uint32_t base = msc->blocknum > span + 4096U ? msc->blocknum - span - 4096U : 2048U;
+
+	for (unsigned i = 0; i < MSC_SWEEP_N; i++) {
+		uint16_t sectors = msc_sweep_sectors[i];
+		uint32_t chunk = (uint32_t)sectors * MSC_BLOCK_BYTES;
+		uint64_t bytes = (uint64_t)chunk * MSC_SWEEP_CMDS;
+		uint32_t lba = base;
+		uint32_t start_ms;
+		uint32_t elapsed_ms;
+		uint64_t rate100;
+
+		msc_pattern(msc_buf, (size_t)sectors * MSC_BLOCK_BYTES,
+			    write ? 0xA5U : 0x5AU);
+		start_ms = osKernelGetTickCount();
+		for (unsigned n = 0; n < MSC_SWEEP_CMDS; n++) {
+			int ret = write
+			    ? usbh_msc_scsi_write10(msc, lba, msc_buf, sectors)
+			    : usbh_msc_scsi_read10(msc, lba, msc_buf, sectors);
+
+			if (ret != 0) {
+				LOG_ERROR("usbh: msc sweep %s chunk=%u KiB failed\n",
+					  write ? "write" : "read", chunk >> 10);
+				return ret;
+			}
+			lba += sectors;
+			if (lba + sectors > base + span) {
+				lba = base;
+			}
+		}
+		elapsed_ms = osKernelGetTickCount() - start_ms;
+		/* hundredths of MiB/s: the sizes differ 16x, so the small end's
+		 * integer part alone would lose most of the curve */
+		rate100 = elapsed_ms != 0
+		    ? (bytes * 100000ULL) / ((uint64_t)elapsed_ms * 1048576ULL) : 0;
+		LOG_ANCHOR("usbh: msc sweep %s chunk=%u KiB %u MiB in %u ms "
+			   "= %llu.%02llu MB/s per_cmd_us=%u\n",
+			   write ? "write" : "read", chunk >> 10,
+			   (unsigned)(bytes >> 20), (unsigned)elapsed_ms,
+			   rate100 / 100ULL, rate100 % 100ULL,
+			   elapsed_ms != 0
+			   ? (unsigned)((uint64_t)elapsed_ms * 1000ULL / MSC_SWEEP_CMDS)
+			   : 0U);
+	}
+	return 0;
 }
 
 void usb_msc_case(unsigned busid, const char *hcd)
@@ -108,7 +183,7 @@ void usb_msc_case(unsigned busid, const char *hcd)
 	/* Inside the device, outside any partition table or filesystem. */
 	scratch = msc->blocknum - MSC_SCRATCH_SECTORS;
 
-	msc_pattern(msc_ref, 0x5AU);
+	msc_pattern(msc_ref, MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES, 0x5AU);
 	if (usbh_msc_scsi_write10(msc, scratch, msc_ref, MSC_CHUNK_SECTORS) != 0) {
 		board_case_fail("scratch write failed");
 		return;
@@ -117,7 +192,7 @@ void usb_msc_case(unsigned busid, const char *hcd)
 		board_case_fail("scratch read-back failed");
 		return;
 	}
-	for (unsigned i = 0; i < sizeof(msc_buf); i++) {
+	for (unsigned i = 0; i < MSC_CHUNK_SECTORS * MSC_BLOCK_BYTES; i++) {
 		if (msc_buf[i] != msc_ref[i]) {
 			board_case_fail("scratch read-back differs from the pattern");
 			return;
@@ -146,6 +221,17 @@ void usb_msc_case(unsigned busid, const char *hcd)
 	elapsed_ms = osKernelGetTickCount() - start_ms;
 	LOG_INFO("usbh: msc write %u MiB in %u ms\n", (unsigned)(MSC_WRITE_SECTORS * MSC_BLOCK_BYTES >> 20),
 		  (unsigned)elapsed_ms);
+
+	/* the size sweep the linuxkpi row also runs: its curve is what says how
+	 * much of a stack's cost is per transfer rather than per byte */
+	if (msc_sweep(msc, 0) != 0) {
+		board_case_fail("the read chunk sweep failed");
+		return;
+	}
+	if (msc_sweep(msc, 1) != 0) {
+		board_case_fail("the write chunk sweep failed");
+		return;
+	}
 	return 0;
 }
 
