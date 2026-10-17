@@ -47,6 +47,52 @@
 
 #include "components/linuxkpi/linuxkpi_80211.h"
 #include "components/linuxkpi/fw_registry.h"
+#ifdef CONFIG_LKPI_CENSUS
+#include "components/linuxkpi/lkpi_census.h"
+#endif
+#include "components/linuxkpi/lkpi_tcp_trace.h"
+
+#ifdef CONFIG_LKPI_CENSUS
+/* the transmit handoff's own histogram (see seam_tx): one sample per frame
+ * handed to the driver.  It has to be file scope rather than a block static so
+ * the image's census snapshot can reset and print it alongside the others. */
+static struct lkpi_census_histo seam_tx_cost;
+#endif
+
+/*
+ * The channel width the seam presents to the driver. 20 MHz unless the
+ * WLAN_BW40 diagnostic build asks for 40: the association then advertises
+ * 20/40 in its HT Capabilities (wlan_bridge.c's element) and the radio is
+ * configured with the HT40+ centre, so the two halves agree. The width is a
+ * build switch because the bridge has no HT Information parser yet - it
+ * cannot read the AP's secondary-channel offset, so it must not guess 40 in
+ * a shipping build.
+ *
+ * A WLAN_NO_HT build asks for the no-HT 20 MHz width instead (see below): the
+ * association then carries no HT element and no WMM flag, so the link is
+ * 802.11g and the driver's channel configuration says so as well.
+ */
+#ifndef WLAN_SEAM_BW40
+#define WLAN_SEAM_BW40 0
+#endif
+/*
+ * The matched-link diagnostic switch: a WLAN_NO_HT build presents a plain
+ * 20 MHz no-HT channel.  It wins over WLAN_BW40 (the two cannot be combined -
+ * a no-HT station has no business being configured for 40 MHz), and the
+ * bridge clears the WMM flag in the same build, so the association and the
+ * radio agree on legacy.
+ */
+#ifndef WLAN_NO_HT
+#define WLAN_NO_HT 0
+#endif
+#if WLAN_NO_HT && WLAN_SEAM_BW40
+#error "WLAN_NO_HT and WLAN_SEAM_BW40 are mutually exclusive"
+#endif
+#define SEAM_CHAN_WIDTH \
+	(WLAN_NO_HT ? NL80211_CHAN_WIDTH_20_NOHT : \
+	    (WLAN_SEAM_BW40 ? NL80211_CHAN_WIDTH_40 : NL80211_CHAN_WIDTH_20))
+#define SEAM_CENTER_FREQ1(freq) \
+	(WLAN_NO_HT ? 0 : (WLAN_SEAM_BW40 ? (freq) + 10 : 0))
 
 /* ------------------------------------------------------------------ */
 /* state                                                               */
@@ -68,6 +114,23 @@ static struct {
 	unsigned int filter_calls;
 	unsigned int tx_calls;
 	unsigned int key_calls;
+	/*
+	 * The link face: what the driver's own receive descriptors said about
+	 * the data frames that actually arrived.  Counted, never printed per
+	 * frame - a beacon's period would flood the console - and read back by
+	 * `wlan link`.  Read-only: nothing here feeds the receive path.
+	 */
+	unsigned int rx_data;
+	unsigned int rx_retry;
+	unsigned int rx_fcs;
+	unsigned int rx_hist_n;
+	struct {
+		uint8_t enc;		/* mac80211_rx_encoding */
+		uint8_t idx;		/* legacy rate index or MCS */
+		uint8_t bw;		/* channel width code */
+		uint32_t n;
+		uint32_t retry;
+	} rx_hist[24];
 } adapter;
 
 /* ------------------------------------------------------------------ */
@@ -136,7 +199,7 @@ seam_config(struct wlan_seam_drv *drv, uint32_t changed, uint32_t freq)
 	adapter.tuned_freq = freq;
 	adapter.tuned_hw_value = hw_value;
 	return lkpi80211_drv_config_channel(adapter.hw, freq, hw_value,
-	    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20, 0);
+	    NL80211_BAND_2GHZ, SEAM_CHAN_WIDTH, SEAM_CENTER_FREQ1(freq));
 }
 
 static int
@@ -221,6 +284,23 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	(void)drv;
 	if (adapter.hw == NULL || frame == NULL || len == 0)
 		return -1;
+	/* the transmit path's third milestone: the frame reached the driver seam.
+	 * Only a data frame may close the armed segment's span: the bridge drains
+	 * its management queue first, and a management frame passing here must
+	 * not be mistaken for the segment the netif handed down. */
+	if (!is_mgmt)
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_SEAM);
+#ifdef CONFIG_LKPI_CENSUS
+	/* The transmit side's share of a frame: this function's body from the
+	 * skb allocation through the driver's own transmit entry returning.
+	 * Without it the ledger only ever had the receive handoff's cost
+	 * (`perf census: A 80211 stack`, which brackets bridge_ops->rx), and a
+	 * frame's transmit cost was never measured at all - reading the receive
+	 * number as if it covered transmit is what made the ledger's
+	 * "stack + usb svc = frame interval" arithmetic look like a
+	 * decomposition.  Both directions now have their own number. */
+	u64 tx_t0 = lkpi_census_now_ns();
+#endif
 	/*
 	 * The driver's tx path expects a socket buffer whose control block it
 	 * fills (the rate keys, the AC, the key) and whose headroom has room for
@@ -286,10 +366,29 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	 * with no TID queue: "Invalid TXQ id", mvm/tx.c:1157).
 	 */
 	lkpi80211_tx(adapter.hw, adapter.vif, adapter.sta, skb);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_census_histo_add(&seam_tx_cost, lkpi_census_now_ns() - tx_t0);
+#endif
 	/* the driver owns the skb from here (its completion path releases it
 	 * through the substitute's tx-status entry) */
 	return (int)len;
 }
+
+#ifdef CONFIG_LKPI_CENSUS
+void
+wlan_seam_tx_census_reset(void)
+{
+
+	lkpi_census_histo_reset(&seam_tx_cost);
+}
+
+void
+wlan_seam_tx_census_print(void)
+{
+
+	lkpi_census_histo_print("perf census: A tx seam", &seam_tx_cost);
+}
+#endif
 
 static int
 seam_set_key(struct wlan_seam_drv *drv, int pairwise, int key_idx, int cipher,
@@ -547,7 +646,7 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	if (adapter.tuned_freq != 0) {
 		int cr = lkpi80211_drv_chanctx_use(adapter.hw, adapter.vif,
 		    adapter.tuned_freq, adapter.tuned_hw_value,
-		    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20);
+		    NL80211_BAND_2GHZ, SEAM_CHAN_WIDTH);
 
 		if (cr != 0)
 			return cr;
@@ -635,6 +734,56 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 	(void)hw;
 	if (skb == NULL)
 		return;
+	/* the acknowledgement path's fourth boundary: the frame has left the
+	 * linuxkpi queue and is about to enter net80211's input path */
+	lkpi_tcp_trace_mark(LKPI_TCP_B_BRIDGE);
+	/*
+	 * The link face's per-frame reading, counted rather than printed: the
+	 * driver's receive descriptor carries the encoding, the rate index (an
+	 * MCS for HT) and the channel width of every frame it delivered, and
+	 * the frame's own Retry bit says whether the peer had already sent it
+	 * once.  Together they answer "at what rate, after how many retries,
+	 * did the data actually arrive" from inside the image - the two
+	 * numbers an air audit otherwise needs a monitor card for.
+	 */
+	if (skb->len >= 24 && (skb->data[0] & 0x0c) == 0x08) {
+		uint8_t enc = rs != NULL ? (uint8_t)rs->encoding : 0u;
+		uint8_t idx = rs != NULL ? rs->rate_idx : 0u;
+		uint8_t bw = rs != NULL ? (uint8_t)rs->bw : 0u;
+		unsigned int retry = (skb->data[1] & 0x08) != 0 ? 1u : 0u;
+		unsigned int i;
+
+		adapter.rx_data++;
+		if (retry != 0u)
+			adapter.rx_retry++;
+		/*
+		 * The other half of a retry: a frame the chip received with a bad
+		 * CRC.  The driver sets this flag and still delivers the frame
+		 * (core.c:6409), so it is a direct PHY-error count - and the
+		 * discriminator between "the air corrupted it" and "the peer
+		 * simply did not hear our ACK".
+		 */
+		if (rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0)
+			adapter.rx_fcs++;
+		for (i = 0; i < adapter.rx_hist_n; i++)
+			if (adapter.rx_hist[i].enc == enc &&
+			    adapter.rx_hist[i].idx == idx &&
+			    adapter.rx_hist[i].bw == bw)
+				break;
+		if (i == adapter.rx_hist_n && i < 24u) {
+			adapter.rx_hist[i].enc = enc;
+			adapter.rx_hist[i].idx = idx;
+			adapter.rx_hist[i].bw = bw;
+			adapter.rx_hist[i].n = 0u;
+			adapter.rx_hist[i].retry = 0u;
+			adapter.rx_hist_n++;
+		}
+		if (i < adapter.rx_hist_n) {
+			adapter.rx_hist[i].n++;
+			if (retry != 0u)
+				adapter.rx_hist[i].retry++;
+		}
+	}
 	/*
 	 * The driver boundary's own reading, for the first few beacons/probe
 	 * responses: the receive status the driver filled in.  `freq` is the field
@@ -735,6 +884,61 @@ wlan_bridge_fw_lookup(const char *name, const uint8_t **data, size_t *size)
 	*data = e->data;
 	*size = e->size;
 	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* link face: the rate/retry picture the receive path actually saw      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * `wlan link` reads this.  It answers the two questions the air audit used to
+ * need a second radio for: at which PHY rate did the data frames arrive, and
+ * what fraction of them the peer had already sent once (the frame's own Retry
+ * bit).  `idx` is a legacy rate index when `enc` is RX_ENC_LEGACY (0) and an
+ * MCS index when it is RX_ENC_HT (1); `bw` is mac80211's width code (0 = 20
+ * MHz, 1 = 40 MHz).
+ *
+ * The peer block prints what the driver's station object believes, which is
+ * the other half of a capability mismatch: a `ht=0` here means the driver was
+ * never told the link is HT, whatever the air was doing.
+ */
+void
+wlan_bridge_link_dump(void)
+{
+	const struct ieee80211_sta *sta = adapter.sta;
+	unsigned int i;
+
+	wlan_osal_log("wlan: link hw=%d vif=%d sta=%d tx=%u\n",
+	    adapter.hw != NULL ? 1 : 0, adapter.vif != NULL ? 1 : 0,
+	    sta != NULL ? 1 : 0, adapter.tx_calls);
+	if (sta != NULL)
+		wlan_osal_log("wlan: link peer supp=0x%08x ht=%u mcs=0x%08x "
+		    "nss=%u wme=%u\n", (unsigned)sta->deflink.supp_rates[0],
+		    sta->deflink.ht_cap.ht_supported ? 1u : 0u,
+		    (unsigned)sta->deflink.ht_cap.mcs.rx_mask[0],
+		    (unsigned)sta->deflink.rx_nss, sta->wme ? 1u : 0u);
+	else
+		wlan_osal_log("wlan: link peer supp=0x%08x ht=0 mcs=0x%08x "
+		    "nss=0 wme=0\n", 0u, 0u);
+	wlan_osal_log("wlan: link rx data=%u retry=%u fcs=%u\n", adapter.rx_data,
+	    adapter.rx_retry, adapter.rx_fcs);
+	for (i = 0; i < adapter.rx_hist_n; i++)
+		wlan_osal_log("wlan: link rxrate enc=%u idx=%u bw=%u n=%u "
+		    "retry=%u\n", (unsigned)adapter.rx_hist[i].enc,
+		    (unsigned)adapter.rx_hist[i].idx,
+		    (unsigned)adapter.rx_hist[i].bw, adapter.rx_hist[i].n,
+		    adapter.rx_hist[i].retry);
+}
+
+void
+wlan_bridge_link_reset(void)
+{
+
+	memset(adapter.rx_hist, 0, sizeof(adapter.rx_hist));
+	adapter.rx_hist_n = 0;
+	adapter.rx_data = 0;
+	adapter.rx_retry = 0;
+	adapter.rx_fcs = 0;
 }
 
 /* ------------------------------------------------------------------ */

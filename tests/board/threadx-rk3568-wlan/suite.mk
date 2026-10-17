@@ -15,7 +15,7 @@ SUITE_SUCCESS_PATTERN := BOARD-SUITE threadx-rk3568-wlan start
 SUITE_SELECT_PATTERN  := BOARD-SUITE threadx-rk3568-wlan select
 SUITE_END_PATTERN     := BOARD-SUITE threadx-rk3568-wlan result=
 SUITE_SUMMARY_PATTERN := BOARD-SUITE threadx-rk3568-wlan result=pass cases=([0-9]+) ok=([0-9]+) exit=([0-9]+)
-SUITE_CASE_NAMES      := shell-up wlan-probe wlan-scan wlan-join-raw wlan-join wlan-dataplane
+SUITE_CASE_NAMES      := shell-up wlan-probe wlan-scan wlan-join-raw wlan-join wlan-dataplane wlan-udisk
 SUITE_STEPS_FILE      := steps.tsv
 SUITE_JUDGE           := python3 tests/board/threadx-rk3568-wlan/judge.py
 SUITE_TIMEOUT         := 480

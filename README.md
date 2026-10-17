@@ -62,19 +62,34 @@ port each line is wired to, are documented per board under
 
 ### Throughput
 
-Single TCP stream, measured at the receiver, against the same access point
-(channel 1). The Linux column is the same card under Linux on the same board,
-from a clean upstream build. Channel width drifts across boots on this access
-point, so the figures below name the width they were taken at, and the RTOS and
-Linux cells of a row are the same width.
+Single TCP stream, measured at the receiver, against the same access point.
+Throughput baselines use an **open (unencrypted) access point**: the software
+cipher's per-frame cost is then out of the measurement. The keyed L0 arm is run
+separately when that cost is the subject, and the two are not mixed. Channel
+width drifts across boots on this access point, so the figures below name the
+width they were taken at, and the RTOS and Linux cells of a row are the same
+width.
 
 | Line | RTOS, down (host to board) | RTOS, up (board to host) | Linux, same card, same channel |
 |---|---|---|---|
-| RTL8188EUS | 4.00 / 4.66 Mbit/s (HT40) | not measured | **42.6 / 43.9 / 45.3 Mbit/s** |
+| RTL8188EUS | 9.17 (open) / 9.19 (CCMP) Mbit/s | **9.08-10.17 (open) / 5.6-7.7 (CCMP)** Mbit/s | **9.12 down / 10.48 up** Mbit/s |
 | RTL8821CU | 3.65 Mbit/s | not measured | **63.7 / 66.0 / 68.2 Mbit/s** |
 | RTL8851BU | 136 / 173 Kbit/s | not measured | **23.9 / 25.3 / 26.5 Mbit/s** |
 | RTL8189FTV (SDIO) | **18.1 (HT20) / 20.5 (HT40)** Mbit/s | **15.1-16.8 (HT20)** Mbit/s | **31.4 down / 30.7 up (HT20)**, 44.2 / 50.5 (HT40) |
 | Intel Wireless-AC 7260 (PCIe) | 0.24 Mbit/s | not measured | **167 Mbit/s** |
+
+The RTL8188EUS uplink is the clearest result of the controlled-variable method
+so far. On the keyed L0 link the board's software CCMP costs **464-480 us per
+transmitted 1460-byte segment**, measured with an identity-matched per-segment
+account (sequence number and payload length; 100% match, zero misses); every
+other transmit stage - 802.11 encapsulation, the driver seam, the USB submit -
+stays below the 16 us bucket. Running the same image and sheet against an open
+access point removes the cipher: the per-segment handoff falls to below 16 us
+and the uplink rises from 5.6-7.7 to **9.08-10.17 Mbit/s** across two boots (per-window 8.18-11.13).
+The software cipher is therefore a measured, attributable cost rather than an
+unexplained gap. Closing it - a faster AES backend, the card's hardware crypto,
+or an optimised build - is open work; the `-O2` build tried so far does not pass
+the board suite's join guard and is not adopted.
 
 All lines are measured against the same access point, BSSID
 `14:a3:2f:18:07:2c`. Each Linux cell is min/avg/max over three 30 s runs (the
@@ -96,8 +111,9 @@ cadence, about eight frames every 2.9 ms, interlocked with the access point's
 zero retries). Two stack-shape levers were measured on it and rejected with
 board evidence (running the stack's input on the caller's thread, and a
 smaller card-side aggregation length threshold). The other lines' gaps are as
-recorded: one tenth (8188EUS), one eighteenth (8821CU),
-one hundred-and-seventieth (8851BU), one seven-hundredth (7260).
+recorded: one eighteenth (8821CU), one hundred-and-seventieth (8851BU), one
+seven-hundredth (7260); the 8188EUS line is about 1/1.03-1/1.15 on the open baseline
+and 1/1.4-1/1.9 on the keyed arm, the difference being the cipher cost above.
 
 The gap to Linux is still large on most lines, and it is the current open
 problem. It is stated here rather than hidden: the value of the port so far is

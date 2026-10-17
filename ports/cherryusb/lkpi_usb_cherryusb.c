@@ -71,6 +71,7 @@
  * this file uses neither.
  */
 #include "components/linuxkpi/usb/lkpi_usb_backend.h"
+#include "components/linuxkpi/lkpi_census.h"
 #include "ports/cherryusb/lkpi_usb_cherryusb.h"
 
 #undef DIV_ROUND_CLOSEST
@@ -109,6 +110,36 @@ lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out)
 	chu_stats.stage_slots = CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS;
 	*out = chu_stats;
 }
+
+#ifdef CONFIG_LKPI_CENSUS
+/*
+ * The seam's own census face.  The counters below are the answer to "did the
+ * backend ever refuse work?" - a phase whose throughput fell while
+ * slots_exhausted or stage_exhausted climbed is a resource shortage, not a
+ * device that had nothing to give, and the two read identically in every
+ * timing bucket.  The geometry fields are re-derived by the getter, so zeroing
+ * the struct costs nothing.
+ */
+void
+lkpi_usb_cherryusb_census_reset(void)
+{
+
+	(void)memset(&chu_stats, 0, sizeof(chu_stats));
+}
+
+void
+lkpi_usb_cherryusb_census_print(void)
+{
+	struct lkpi_usb_chusb_stats s;
+
+	lkpi_usb_cherryusb_stats(&s);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A chusb submits=%u done=%u pass=%u staged=%u "
+	    "slots_x=%u stage_x=%u stage_ovf=%u refused=%u\n",
+	    s.submits, s.completed, s.stage_passthrough, s.stage_staged,
+	    s.slots_exhausted, s.stage_exhausted, s.stage_overflow, s.refused);
+}
+#endif /* CONFIG_LKPI_CENSUS */
 
 /*
  * A request larger than a stage slot is refused every time it is retried, so the
@@ -179,6 +210,8 @@ chu_in_window(const void *buf)
 struct lkpi_chu_slot {
 	struct usbh_urb		urb;		/* handed to the stack */
 	struct lkpi_usb_be_urb	*be;		/* the seam's transfer */
+	unsigned int		idx;		/* this slot's index (the setup
+						 * stage is indexed by it) */
 	unsigned char		*stage;		/* the staged buffer, NULL when
 						 * the caller's buffer passed through */
 	unsigned char		*user_buf;	/* the caller's buffer, staged only */
@@ -190,6 +223,19 @@ struct lkpi_chu_slot {
 };
 
 static struct lkpi_chu_slot chu_slots[CONFIG_LKPI_USB_CHERRYUSB_SLOTS];
+
+/*
+ * The setup packet is a DMA buffer the controller reads, and the controller
+ * asserts it is cache-line aligned.  The seam's contract deliberately lets the
+ * caller hand an unaligned 8-byte line (the engine's arm comment says so: "an
+ * adapter that needs it staged aligned does that behind the seam"), so the
+ * adapter stages it here exactly as it stages a data buffer - otherwise any
+ * consumer that fills its own setup packet (the BOT driver does) trips the
+ * controller's assertion.  It stays in cached memory: the controller's submit
+ * path cleans it, the same way it cleans the data stage's pass-through.
+ */
+static unsigned char chu_setup[CONFIG_LKPI_USB_CHERRYUSB_SLOTS][LKPI_CHU_CACHE_LINE]
+    __attribute__((aligned(LKPI_CHU_CACHE_LINE)));
 
 /*
  * The transfer stage: static, cache-line aligned, in the non-cacheable window.
@@ -219,6 +265,7 @@ chu_slot_get(void)
 			slot->is_in = 0;
 			slot->delivered = 0;
 			slot->kill_in_flight = 0;
+			slot->idx = i;
 			slot->in_use = 1;
 			break;
 		}
@@ -474,8 +521,12 @@ chu_seam_submit(void *ctx, struct lkpi_usb_be_urb *be)
 
 	switch (type) {
 	case USB_ENDPOINT_TYPE_CONTROL:
+		/* the setup packet is staged, not passed through: the controller
+		 * asserts its alignment and the caller's line is 8 bytes long */
+		memcpy(chu_setup[slot->idx], be->setup,
+		    sizeof(struct usb_setup_packet));
 		usbh_control_urb_fill(&slot->urb, hport,
-		    (struct usb_setup_packet *)be->setup,
+		    (struct usb_setup_packet *)chu_setup[slot->idx],
 		    slot->urb.transfer_buffer, be->transfer_buffer_length,
 		    mode_timeout, mode_timeout == 0 ? chu_complete : NULL, slot);
 		break;

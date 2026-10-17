@@ -30,6 +30,7 @@
 #include "lwip/ip4_addr.h"
 #include "lwip/dhcp.h"
 #include "lwip/apps/lwiperf.h"
+#include "lwip/udp.h"
 
 #include "ping.h"
 
@@ -39,6 +40,9 @@
 #include "wlan_wpa_obs.h"
 /* the lease-hunt pulse reads the bridge's data counters */
 #include "wlan_bridge.h"
+/* the per-phase snapshot: the USB endpoint's time partition and the stack's
+ * per-frame share (see wlan_census.h) */
+#include "wlan_census.h"
 
 /* the lwIP address helpers the console command needs */
 #include "lwip/ip_addr.h"
@@ -53,6 +57,38 @@ void	wlan_wpa_vendor_events_arm(void);
 
 #define WLAN_DHCP_WAIT_MS	45000U
 #define WLAN_PING_WAIT_MS	9000U
+
+/*
+ * The measurement arm: equal windows in one boot, the shape the SDIO line's
+ * sheet uses (tests/board/threadx-rk3568-rtl8189/tests/wlan8189_dataplane.c).
+ * The runner powers the board off once the suite reports its result, so a
+ * server that is merely up is not measurable - the case has to hold the image
+ * alive for the windows the peer drives.  Each phase announces itself on the
+ * console before it opens, which is what the peer waits for; a client that
+ * arrives late then costs one phase instead of the boot, and the four numbers
+ * of one boot are comparable to each other.
+ *
+ * Downlink: the peer's client drives this image's lwiperf server.
+ * Uplink: this image's client drives the peer's server, so the peer must be
+ * named first (`wlan uplink <a.b.c.d>`, sent by the runner's extra steps);
+ * with none the stage says so and leaves the verdict the downlink half earned.
+ */
+#define WLAN_IPERF_WINDOW_MS	20000U
+#define WLAN_IPERF_PHASES	4U
+#define WLAN_UPLINK_PHASES	4U
+/* the lwIP client's own 10 s plus the connect and the report's delivery; a
+ * ceiling, the report ends the wait */
+#define WLAN_UPLINK_REPORT_WAIT_MS	20000U
+
+/* The UDP receive sink: a datagram socket that only counts what arrives.  A
+ * UDP blast has no acknowledgement clock - the sender never waits for this
+ * end - so the sink's byte count is the receive path's own ceiling, and the
+ * difference to the TCP number is what the acknowledgement path costs.  Every
+ * throughput round reads both (the peer's phase actions alternate tcp/udp),
+ * because a TCP number alone cannot say whether the wall is the link or the
+ * feedback.  The counters reset per phase, so a phase's sink is that phase's
+ * burst; the port matches the peer's convention. */
+#define WLAN_UDP_SINK_PORT	5002U
 
 static struct netif g_netif;
 
@@ -159,9 +195,154 @@ dataplane_up(void)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* the uplink sheet                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The reverse direction: this image runs the iperf *client* (the runner's host
+ * is the server), because the lwIP stack's client is the end that can drive a
+ * send test.  The far end's address arrives from the console
+ * (`wlan uplink <a.b.c.d>`, sent by the runner's extra steps).
+ */
+static volatile unsigned int g_uplink_peer;	/* host order; 0 = unset */
+
+void
+wlan_uplink_peer_set(unsigned int peer)
+{
+
+	g_uplink_peer = peer;
+}
+
+int
+wlan_uplink_peer_get(unsigned int *out)
+{
+
+	if (g_uplink_peer == 0U || out == NULL)
+		return -1;
+	*out = g_uplink_peer;
+	return 0;
+}
+
+/* the client test's report (fires in the TCP/IP thread; the stage polls the
+ * latch, so the two never share a payload struct) */
+static volatile unsigned int g_uplink_report_seen;
+static volatile unsigned int g_uplink_report_type;
+static volatile unsigned long g_uplink_bytes;
+static volatile unsigned long g_uplink_ms;
+static volatile unsigned long g_uplink_kbit;
+
+static void
+uplink_report(void *arg, enum lwiperf_report_type report_type,
+    const ip_addr_t *local_addr, u16_t local_port,
+    const ip_addr_t *remote_addr, u16_t remote_port,
+    u32_t bytes_transferred, u32_t ms_duration, u32_t bandwidth_kbitpsec)
+{
+
+	(void)arg;
+	(void)local_addr;
+	(void)local_port;
+	(void)remote_addr;
+	(void)remote_port;
+	g_uplink_report_type = (unsigned int)report_type;
+	g_uplink_bytes = (unsigned long)bytes_transferred;
+	g_uplink_ms = (unsigned long)ms_duration;
+	g_uplink_kbit = (unsigned long)bandwidth_kbitpsec;
+	g_uplink_report_seen = 1U;
+}
+
+/*
+ * One uplink window: run the client to its own end and record the far end's
+ * own account of what arrived.  The peer is in host order; its octets are
+ * split out here, so no byte-order assumption sits between the console command
+ * and lwIP's address type.
+ */
+static int
+uplink_phase_run(unsigned int phase, unsigned int peer)
+{
+	ip_addr_t remote;
+	void *session;
+	unsigned int waited;
+
+	IP_ADDR4(&remote, (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
+	    (peer >> 8) & 0xffU, peer & 0xffU);
+
+	g_uplink_report_seen = 0U;
+	g_uplink_report_type = 0U;
+	g_uplink_bytes = 0UL;
+	g_uplink_ms = 0UL;
+	g_uplink_kbit = 0UL;
+
+	LOG_ANCHOR("wlan: uplink phase %u ready peer=%u.%u.%u.%u\n", phase,
+	    (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
+	    (peer >> 8) & 0xffU, peer & 0xffU);
+
+	LOCK_TCPIP_CORE();
+	session = lwiperf_start_tcp_client(&remote, LWIPERF_TCP_PORT_DEFAULT,
+	    LWIPERF_CLIENT, uplink_report, NULL);
+	UNLOCK_TCPIP_CORE();
+	if (session == NULL) {
+		board_case_fail("the uplink iperf client did not start");
+		return -1;
+	}
+
+	/* the client's own duration plus the connect and the report's delivery;
+	 * the wait is a ceiling, the report ends it */
+	for (waited = 0; waited < WLAN_UPLINK_REPORT_WAIT_MS; waited += 100U) {
+		if (g_uplink_report_seen)
+			break;
+		(void)osDelay(100U);
+	}
+	if (!g_uplink_report_seen) {
+		LOCK_TCPIP_CORE();
+		lwiperf_abort(session);
+		UNLOCK_TCPIP_CORE();
+		board_case_fail("the uplink window ended without a report from "
+		    "the far end (is the runner's iperf server up?)");
+		return -1;
+	}
+	LOG_ANCHOR("wlan: uplink phase %u result bytes=%lu ms=%lu kbit=%lu "
+	    "type=%u\n", phase, g_uplink_bytes, g_uplink_ms, g_uplink_kbit,
+	    g_uplink_report_type);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* the UDP receive sink                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The bisection's other half: the peer blasts datagrams at this sink, which
+ * only counts them.  With no acknowledgement clock in the way the number is
+ * the receive path's own ceiling, so comparing it with the TCP window of the
+ * same boot says whether the wall is the link or the feedback path - and if
+ * the two agree, the wall is not the feedback path at all.
+ */
+static struct udp_pcb *g_udp_pcb;
+static volatile unsigned int g_udp_pkts;
+static volatile unsigned long g_udp_bytes;
+
+static void
+udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+    const ip_addr_t *addr, u16_t port)
+{
+
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p != NULL) {
+		g_udp_bytes += (unsigned long)p->tot_len;
+		g_udp_pkts++;
+		pbuf_free(p);
+	}
+}
+
 void wlan_dataplane_chain(void)
 {
 	unsigned int waited;
+	unsigned int phase;
+	unsigned int peer;
 
 	if (dataplane_up() != 0) {
 		return;
@@ -188,7 +369,66 @@ void wlan_dataplane_chain(void)
 		return;
 	}
 	UNLOCK_TCPIP_CORE();
-	LOG_INFO("wlan: iperf server ready port=%u\n", LWIPERF_TCP_PORT_DEFAULT);
+	LOG_ANCHOR("wlan: iperf server ready port=%u\n",
+	    LWIPERF_TCP_PORT_DEFAULT);
+
+	/* the UDP ceiling probe's sink (the peer blasts datagrams at it; the
+	 * receive path drains them with no acknowledgement clock in the way) */
+	LOCK_TCPIP_CORE();
+	g_udp_pcb = udp_new();
+	if (g_udp_pcb == NULL ||
+	    udp_bind(g_udp_pcb, IP_ANY_TYPE, WLAN_UDP_SINK_PORT) != ERR_OK) {
+		UNLOCK_TCPIP_CORE();
+		board_case_fail("the UDP sink did not bind");
+		return;
+	}
+	udp_recv(g_udp_pcb, udp_sink_recv, NULL);
+	UNLOCK_TCPIP_CORE();
+	LOG_ANCHOR("wlan: udp sink ready port=%u\n", WLAN_UDP_SINK_PORT);
+
+	/* the downlink phases: the peer's client drives each window, and the
+	 * ready line above is what it waits for before it starts.  The sink's
+	 * counters reset with the phase, so a UDP phase's burst is its own.
+	 *
+	 * The census resets with the phase too and prints when it closes: one
+	 * phase's `svc` (armed: the device's share of the transfer path) and
+	 * `gap` (idle with work queued: the host's share) partition that phase,
+	 * so a downlink number comes with its own attribution instead of only a
+	 * total.  Both lines are per phase, never per frame. */
+	for (phase = 1U; phase <= WLAN_IPERF_PHASES; phase++) {
+		g_udp_pkts = 0U;
+		g_udp_bytes = 0UL;
+		wlan_census_reset();
+		wlan_bridge_link_reset();
+		LOG_ANCHOR("wlan: downlink phase %u ready window=%u s\n",
+		    phase, (unsigned)(WLAN_IPERF_WINDOW_MS / 1000));
+		for (waited = 0; waited < WLAN_IPERF_WINDOW_MS;
+		    waited += 100U) {
+			(void)osDelay(100U);
+		}
+		LOG_ANCHOR("wlan: downlink phase %u done\n", phase);
+		LOG_ANCHOR("wlan: udp sink pkts=%u bytes=%lu\n", g_udp_pkts,
+		    g_udp_bytes);
+		wlan_census_print();
+		wlan_bridge_link_dump();
+	}
+
+	/* the uplink phases: this image is the client and the peer is the
+	 * server.  With no peer named the stage says why and leaves the verdict
+	 * the downlink half earned - a regression boot configures none - while a
+	 * configured window that moved no bytes is a failure. */
+	if (wlan_uplink_peer_get(&peer) != 0) {
+		LOG_ANCHOR("wlan: uplink skipped reason=no-peer\n");
+	} else {
+		for (phase = 1U; phase <= WLAN_UPLINK_PHASES; phase++) {
+			wlan_census_reset();
+			wlan_bridge_link_reset();
+			if (uplink_phase_run(phase, peer) != 0)
+				return;
+			wlan_census_print();
+			wlan_bridge_link_dump();
+		}
+	}
 }
 
 BOARD_TEST("wlan-dataplane", wlan_dataplane_chain);

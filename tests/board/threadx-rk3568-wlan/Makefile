@@ -59,7 +59,8 @@ READELF := $(CROSS_COMPILE)readelf
 SIZE := $(CROSS_COMPILE)size
 HOSTCC ?= cc
 
-BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
+# BUILD_TAG is formed below, once the diagnostic switches have been declared:
+# the arm's name is part of the tag.
 
 BUILD := build
 TARGET := $(BUILD)/$(SUITE_NAME)
@@ -88,6 +89,43 @@ TX_CFLAGS := -I$(BOARD_CMSIS2) \
 	-DCONFIG_TX_TICKS_PER_SECOND=1000 -DCONFIG_TX_TIMER_STACK=4096
 
 OPT ?= -Og
+
+# Diagnostic build switch (default off): WLAN_SINGLE=1 invents channel 1
+# only, so the whole image sweeps and joins without one channel switch -
+# the on-board discriminator for "transmit wedges after channel switching".
+WLAN_SINGLE ?= 0
+
+# Diagnostic build switch (default off): WLAN_BW40=1 advertises 20/40 MHz in
+# the association request's HT Capabilities and configures the seam's channel
+# (and channel context) as 40 MHz with the HT40+ centre. The bench AP is HT40+
+# and sends 40 MHz to an HT station that asks for it; the Linux station on the
+# same AP reads back 150 Mbit/s MCS7 40 MHz while this line reads back legacy
+# 54 at 20 MHz, so the width is one half of the measured gap. Off by default:
+# the width must come from the AP's HT Information element, not from a build
+# constant, before this can ship.
+WLAN_BW40 ?= 0
+
+# Diagnostic build switch (default off): WLAN_NO_HT=1 removes the HT
+# Capabilities element from the association and clears IEEE80211_F_WME, so the
+# station joins as a plain 802.11g peer and the seam configures a no-HT 20 MHz
+# channel.  It exists for matched-link measurement: a cross-stack throughput
+# or per-frame comparison is only valid when both stations negotiated the same
+# link version, and this is the lowest one both stacks can hold.  Mutually
+# exclusive with WLAN_BW40.
+WLAN_NO_HT ?= 0
+ifeq ($(WLAN_NO_HT),1)
+ifeq ($(WLAN_BW40),1)
+$(error WLAN_NO_HT and WLAN_BW40 are mutually exclusive)
+endif
+endif
+
+# The arm's name rides in the build tag.  The previous round's BW40 arm was
+# claimed from the run ledger alone - nothing in the image itself said which
+# arm the board ran - and a switch that changes no source file would otherwise
+# produce a fingerprint identical to the default build.
+ARM_TAG := $(if $(filter 1,$(WLAN_NO_HT)),+noht)$(if $(filter 1,$(WLAN_BW40)),+bw40)
+BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)$(ARM_TAG)
+
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
@@ -97,17 +135,23 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DCMSIS2_BACKEND_THREADX \
 	-DSHELL_PORT_HOST='"rk3568"'
 
-# Diagnostic build switch (default off): WLAN_SINGLE=1 invents channel 1
-# only, so the whole image sweeps and joins without one channel switch -
-# the on-board discriminator for "transmit wedges after channel switching".
-WLAN_SINGLE ?= 0
 ifeq ($(WLAN_SINGLE),1)
 BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
+endif
+ifeq ($(WLAN_BW40),1)
+BASE_CFLAGS += -DWLAN_SEAM_BW40=1
+endif
+ifeq ($(WLAN_NO_HT),1)
+BASE_CFLAGS += -DWLAN_NO_HT=1
 endif
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
 	-D_DEFAULT_SOURCE=1 \
-	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0
+	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0 \
+	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=131072 \
+	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=8 \
+	-DCONFIG_LKPI_USB_COHERENT_POOL=262144 \
+	-DCONFIG_LKPI_CENSUS -DCONFIG_WLAN_TCP_TRACE
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream
@@ -125,7 +169,7 @@ VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 WLAN_BSD_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-D_KERNEL -DWLAN_PORT_TARGET -Wno-unused-function -Wno-pointer-sign \
 	-include $(NPORT)/compat/prelude.h \
-	-I$(NPORT)/compat -I$(NET)/compat/netbsd -I$(NET) -I$(NPORT)
+	-I$(NPORT)/compat -I$(NET)/compat/netbsd -I$(NET) -I$(NPORT) -I$(ROOT)
 
 WLAN_KPI_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
@@ -184,6 +228,7 @@ LWIP_INCLUDES := \
 	-I$(LWIP)/src/include \
 	-I$(LWIP)/contrib/apps/ping \
 	-I$(NET) \
+	-I$(ROOT) \
 	-I$(ROOT)/os/cmsis2
 
 # --gc-sections drops everything nothing references. The pins below are the
@@ -252,13 +297,17 @@ TESTS_SRCS := \
 	$(CURDIR)/tests/wlan_join_raw.c \
 	$(CURDIR)/tests/wlan_join.c \
 	$(CURDIR)/tests/wlan_dataplane.c \
-	$(CURDIR)/tests/wlan_cmds.c
+	$(CURDIR)/tests/wlan_cmds.c \
+	$(COMMON)/udisk/lkpi_udisk_core.c \
+	$(CURDIR)/tests/wlan_udisk.c
 
 # the image's own non-case TUs: the radio's dwell pump, the supplicant's
-# message observer, and the TCP/IP stack's bring-up helper (the regression
-# image's helper verbatim through its own compile set)
+# message observer, the census clock the linuxkpi layers timestamp through, and
+# the TCP/IP stack's bring-up helper (the regression image's helper verbatim
+# through its own compile set)
 WLAN_HELPER_SRCS := \
 	$(CURDIR)/tests/wlan_radio.c \
+	$(CURDIR)/tests/wlan_census.c \
 	$(CURDIR)/tests/wlan_wpa_obs.c \
 	$(COMMON)/lwip_stack.c
 
@@ -293,7 +342,8 @@ USB_INCLUDES := \
 	-I$(CHERRYUSB)/core \
 	-I$(CHERRYUSB)/class/hub \
 	-I$(CHERRYUSB)/port/ehci \
-	-I$(CHERRYUSB)/port/xhci
+	-I$(CHERRYUSB)/port/xhci \
+	-I$(COMMON)/udisk
 
 # --- net80211 domain (imported stack + its port layer) -----------------------
 
@@ -326,6 +376,8 @@ NET80211_PORT_SRCS := \
 
 LKPI_SRCS := \
 	$(LKPI)/linuxkpi_core.c \
+	$(LKPI)/lkpi_census.c \
+	$(LKPI)/lkpi_tcp_trace.c \
 	$(LKPI)/linuxkpi_platform_target.c \
 	$(LKPI)/linuxkpi_80211.c \
 	$(LKPI)/linuxkpi_80211_helpers.c \
@@ -417,7 +469,8 @@ WPA_CMD_SRCS := $(WPA_PORT)/wpa_cmd.c
 LWIP_PORT_SRCS := \
 	$(LWIP_PORT)/sys_arch.c \
 	$(LWIP_PORT)/platform_hooks.c \
-	$(LWIP_PORT)/wlannetif.c
+	$(LWIP_PORT)/wlannetif.c \
+	$(LWIP_PORT)/wlan_tcp_trace.c
 
 LWIP_STACK_SRCS := \
 	$(LWIP)/src/core/init.c \
@@ -522,6 +575,7 @@ $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_join.c,$(WPA_PORT_CFLAGS) -I$(NP
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_dataplane.c,$(LWIP_INCLUDES) $(WLAN_KPI_CFLAGS) -I$(PORT)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_cmds.c,$(WPA_CMD_CFLAGS) $(LWIP_INCLUDES) -I$(NPORT)/bridge $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_radio.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
+$(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_census.c,$(WLAN_KPI_CFLAGS) $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(CURDIR)/tests/wlan_wpa_obs.c,$(WPA_PORT_CFLAGS) -I$(CURDIR)/tests $(USB_INCLUDES)))
 $(eval $(call COMPILE_RULE,$(COMMON)/lwip_stack.c,$(LWIP_INCLUDES)))
 $(foreach s,$(VENDORED_SRCS),$(eval $(call COMPILE_RULE,$(s),)))

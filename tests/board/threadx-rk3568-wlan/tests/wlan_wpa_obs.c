@@ -66,6 +66,12 @@ wlan_wpa_obs_msg(void *ctx, int level, enum wpa_msg_type type,
 		obs_negotiation = 1;
 	}
 	if (obs_contains(txt, len, "CTRL-EVENT-CONNECTED")) {
+		/* An open network installs no key, so the PTK line above never
+		 * appears and a case that waits for it would reject a link that
+		 * is already usable.  The connected event is the point at which
+		 * the supplicant reports the association complete for both the
+		 * keyed and the open case. */
+		obs_negotiation = 1;
 		/* "... completed [id=0 id_str=]" or the older "completed" form:
 		 * the BSSID sits right after "Connection to " when present */
 		const char *p = txt;

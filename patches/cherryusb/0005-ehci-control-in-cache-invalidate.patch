@@ -1,58 +1,23 @@
 From 0d956dd2a267367b5dfffded5fad94443e811087 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu2023@gmail.com>
 Date: Wed, 14 Oct 2026 08:38:40 +0800
-Subject: [PATCH] class/video: add the UVC host streaming engine
+Subject: [PATCH] fix(port/ehci): invalidate control-IN buffers from the setup
+ direction
 
-The host-UVC demos this tree carries call usbh_video_stream_create/start/
-stop/dequeue/enqueue and include usbh_uvc_stream.h, but neither the header
-nor an implementation exists here - the running stream is the commercial
-tier's, as docs/en/demo/usbh_video.rst says.  This adds the streaming half
-next to the enumeration half (class/video/usbh_video.c), as new files.
+The completion path decides whether a transfer's buffer was written by the
+device with `urb->ep->bEndpointAddress & 0x80`.  Endpoint zero's address is
+0x00 by definition, so for every control pipe that test is false and the
+invalidate never runs: a control-IN read can be served from a stale cache
+line in place of the bytes the transfer just delivered, which on a board
+shows up as an occasionally all-zero device descriptor.
 
-Design:
-
-  - the alternate setting is chosen from the device's answer: after the
-    probe exchange the device reports the bandwidth the configuration needs
-    (bytes per USB frame, dwMaxPayloadTransferSize); the smallest alternate
-    setting whose endpoint carries at least that many bytes per frame
-    (wMaxPacketSize times the high-bandwidth transaction multiplier) is
-    selected, and an ask beyond the ladder is refused;
-  - a ring of isochronous urbs runs on the video-streaming endpoint, each
-    spanning CONFIG_UVC_STREAM_PACKETS micro-frames; completed urbs are
-    consumed in frame order and resubmitted, so the schedule stays covered
-    (the port's submit path tiles the frames, and two urbs of one endpoint
-    cannot share a micro-frame);
-  - the completion callback runs in interrupt context and does nothing but
-    mark its slot and give a semaphore; a pump thread parses the packets,
-    assembles frames and resubmits - no payload parsing in interrupt
-    context;
-  - frame boundaries follow the UVC payload header: the frame-id bit
-    flipping ends the previous frame and opens the next, the end-of-frame
-    bit ends the current one, and a packet after a completed frame always
-    opens a new one - the channel that keeps cameras which never flip the
-    frame id working, while cameras which never set end-of-frame are
-    covered by the flip itself; either channel alone suffices;
-  - the error bit (and a transport error) drops the frame being assembled;
-    a frame that overflows its buffer or finds no free pool buffer is
-    dropped whole; every class of drop is counted;
-  - the frame pool is the caller's (usbh_videoframe[] with frame_buf and
-    frame_bufsize filled in): dequeue hands finished frames to the
-    application, enqueue returns them, and a dry pool drops frames instead
-    of stalling the stream.
-
-The configuration keys (urb count, packets per urb, pump stack and
-priority) keep defaults and can be pinned by a board configuration like the
-rest of the stack's keys.
+The direction of a control transfer's data stage lives in the setup packet
+(bmRequestType bit 7), the same test the submit path already uses to choose
+clean versus invalidate.  Key the completion-side invalidate on it for
+control pipes, and keep the endpoint descriptor as the source for every
+other transfer type.
 
 Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
-
-The start path also carries the ownership policy the board camera forced:
-stop hands an engine-opened camera back with a close, but a camera the
-caller opened is left open and in its streaming setting, so a later start
-issues no VS requests at all.  Leaving this camera (Logitech Pro 9000) out
-of a streaming setting can put it in a state where it stops answering the
-VS probe for the rest of the boot; driving it from Linux does not provoke
-that, and the host side is where the difference is owned.
 ---
  port/ehci/usb_hc_ehci.c | 13 ++++++++++++-
  1 file changed, 12 insertions(+), 1 deletion(-)

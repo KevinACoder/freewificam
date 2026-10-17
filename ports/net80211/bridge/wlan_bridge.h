@@ -360,10 +360,29 @@ int	wlan_bridge_fw_lookup(const char *name, const uint8_t **data,
 	    size_t *size);
 
 /*
+ * The link face, implemented by the driver half (the receive descriptor and
+ * the driver's station object live on the linuxkpi side). `dump` logs one
+ * `wlan: link ...` line per bucket; `reset` zeroes the counters so a phase can
+ * be measured on its own.
+ */
+void	wlan_bridge_link_dump(void);
+void	wlan_bridge_link_reset(void);
+
+/*
  * The driver half's entry point: installs the linuxkpi-side bridge and the
  * seam's driver handle. Called at start-up by whoever owns the driver (the
  * board's WLAN bring-up, or a host harness). Returns 0 or a negative error.
  */
 int	wlan_seam_adapter_init(void);
+
+/*
+ * The transmit handoff's cost, one sample per frame the seam hands to the
+ * driver. The receive side already had a histogram (`80211 stack`); this is
+ * its transmit counterpart, and without both a frame's transmit cost cannot be
+ * told apart from a boot's receive cost. Compiled in only with the census
+ * (CONFIG_LKPI_CENSUS), like every other instrument here.
+ */
+void	wlan_seam_tx_census_reset(void);
+void	wlan_seam_tx_census_print(void);
 
 #endif /* WLAN_BRIDGE_H */

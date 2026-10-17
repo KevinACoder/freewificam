@@ -46,4 +46,18 @@ void	wlannetif_note_disassoc(struct netif *netif);
 void	wlannetif_get_diag(unsigned long *rx_frames, unsigned long *rx_input_fail,
 	    unsigned long *tx_frames, unsigned long *tx_fail);
 
+/* The receive path's failures split by cause: the pbuf pool, the copy into it,
+ * and the stack's input call (the TCP/IP mailbox). A single total cannot say
+ * which of the three refused a frame, and they lead to different fixes. */
+void	wlannetif_get_rx_diag(unsigned long *rx_frames, unsigned long *alloc_fail,
+	    unsigned long *take_fail, unsigned long *input_fail);
+
+/* The lwIP-side counters this image never read: the TCP/IP message pool's
+ * exhaustion count, MIB2's TCP segment/error/retransmit counts, and the
+ * stack's own drop counter. Absolute values; the reader differences them
+ * across a phase. */
+void	wlan_lwip_diag(unsigned long *inpkt_err, unsigned long *tcpin,
+	    unsigned long *tcpinerr, unsigned long *tcpretrans,
+	    unsigned long *tcpdrop);
+
 #endif /* WLANNETIF_H */

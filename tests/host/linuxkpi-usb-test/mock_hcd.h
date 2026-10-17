@@ -112,4 +112,9 @@ void mock_hcd_counters(const struct mock_backend *b,
  * it needs the completion to happen while it is not blocked) */
 void mock_backend_pump(struct mock_backend *b);
 
+/* how many transfers the controller is holding right now (queued, not yet
+ * run).  With the worker held, this is what a driver callback can read to
+ * tell whether the engine armed the endpoint's next urb before entering it */
+unsigned int mock_hcd_pending(const struct mock_backend *b);
+
 #endif /* MOCK_HCD_H */

@@ -70,6 +70,7 @@
 
 #include "osal/wlan_osal.h"
 #include "wlan_bridge.h"
+#include "components/linuxkpi/lkpi_tcp_trace.h"
 
 /* the 2.4 GHz channel set this chip family covers (channels 1..13) */
 #define WLAN_BRIDGE_CHAN_MIN	1
@@ -278,6 +279,110 @@ bridge_elem_walk_report(const uint8_t *frame, size_t len)
 	    (unsigned)len, (unsigned)off);
 }
 
+/*
+ * The negotiation face: one line per association-family frame, naming the
+ * elements it carries and decoding the four that decide what the link can do -
+ * Supported Rates, Extended Supported Rates, HT Capabilities (45), WMM (vendor
+ * 221, OUI 00:50:f2) and RSN (48).  A capability mismatch is invisible in
+ * every counter the stack keeps and in every derived flag the AP reports
+ * (`iw station dump` prints `WMM/WME: no` and a last-used rate, not the
+ * negotiated IEs); it is visible here, in the bytes the two sides exchanged.
+ *
+ * `dir` is "tx", "rx" or "scan"; the fixed-field length differs per subtype, so
+ * the subtype decides where the element stream starts.
+ */
+static void
+bridge_ie_report(const char *dir, const uint8_t *frame, size_t len)
+{
+	unsigned int sub = (unsigned)(frame[0] & 0xf0);
+	size_t off;
+	unsigned int n = 0, ssid = 0, rates = 0, xrates = 0, rsn = 0;
+	unsigned int htcap = 0, htinfo = 0, wme = 0;
+	uint32_t mcs0 = 0;
+	uint16_t hcap = 0;
+	int status = -1;
+
+	if (len < 24)
+		return;
+	switch (sub) {
+	case 0x00:		/* association request */
+		off = 24 + 4;
+		break;
+	case 0x20:		/* reassociation request */
+		off = 24 + 10;
+		break;
+	case 0x10:		/* association response */
+	case 0x30:		/* reassociation response */
+		off = 24 + 6;
+		status = len >= 28 ? (int)(frame[26] | (frame[27] << 8)) : -1;
+		break;
+	case 0xb0:		/* authentication */
+		off = 24 + 6;
+		status = len >= 30 ? (int)(frame[28] | (frame[29] << 8)) : -1;
+		break;
+	case 0x80:		/* beacon */
+	case 0x50:		/* probe response */
+		off = 24 + 12;
+		break;
+	default:
+		off = 24;
+		break;
+	}
+	if (off > len)
+		return;
+	while (off + 1 < len) {
+		unsigned int id = frame[off];
+		unsigned int elen = frame[off + 1];
+		const uint8_t *el = &frame[off + 2];
+
+		if (len - off < elen + 2u)
+			break;
+		n++;
+		switch (id) {
+		case 0:
+			ssid = elen;
+			break;
+		case 1:
+			rates = elen;
+			break;
+		case 50:
+			xrates = elen;
+			break;
+		case 48:
+			rsn = elen;
+			break;
+		case 45:
+			htcap = 1;
+			if (elen >= 2)
+				hcap = (uint16_t)(el[0] | (el[1] << 8));
+			/* HT Capabilities: info(2) then A-MPDU parameters(1),
+			 * so the Supported MCS Set starts at el[3] */
+			if (elen >= 7)
+				mcs0 = (uint32_t)el[3] |
+				    ((uint32_t)el[4] << 8) |
+				    ((uint32_t)el[5] << 16) |
+				    ((uint32_t)el[6] << 24);
+			break;
+		case 61:
+			htinfo = 1;
+			break;
+		case 221:
+			if (elen >= 4 && el[0] == 0x00 && el[1] == 0x50 &&
+			    el[2] == 0xf2 && (el[3] == 0 || el[3] == 2))
+				wme = 1;
+			break;
+		default:
+			break;
+		}
+		off += elen + 2u;
+	}
+	wlan_osal_log("wlan: ie dir=%s sub=%02x len=%u status=%d n=%u "
+	    "ssid=%u rates=%u xrates=%u rsn=%u htcap=%u hcap=0x%04x "
+	    "mcs0=0x%08x htinfo=%u wme=%u\n", dir, sub, (unsigned)len, status,
+	    n, ssid, rates, xrates, rsn, htcap, (unsigned)hcap,
+	    (unsigned)mcs0, htinfo, wme);
+}
+
 static void
 bridge_oerror(struct ieee80211com *ic)
 {
@@ -310,6 +415,13 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 			break;
 		if ((mtod(m, const uint8_t *)[0] & 0xf0) != 0x40) {
 			const uint8_t *fc = mtod(m, const uint8_t *);
+
+			/* every association-family frame we send, decoded:
+			 * this is the transmitting half of the negotiation
+			 * record (the receiving half logs in wlan_bridge_input) */
+			if ((fc[0] & 0xf0) == 0x00 || (fc[0] & 0xf0) == 0x20 ||
+			    (fc[0] & 0xf0) == 0xb0)
+				bridge_ie_report("tx", fc, (size_t)m->m_len);
 			/* the first association-family frame and the first
 			 * probe request go out as one hex line each: the air
 			 * audit's raw material (a frame that the chip never
@@ -417,12 +529,14 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			if_statinc(ifp, if_oerrors);
 			continue;
 		}
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_ENCAP_IN);
 		enc = ieee80211_encap(ic, m, ni);
 		if (enc == NULL) {
 			bridge.tx_noencap++;
 			if_statinc(ifp, if_oerrors);	/* encap consumed it */
 			continue;
 		}
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_ENCAP_DONE);
 		wh = mtod(enc, struct ieee80211_frame *);
 		if ((wh->i_fc[1] & IEEE80211_FC1_WEP) != 0) {
 			/*
@@ -445,6 +559,7 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		} else {
 			bridge.data_tx_plain++;
 		}
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_CRYPTO_DONE);
 		/* the one-shot first-data-frame dump: the key id the frame
 		 * carries is what the peer indexes its decrypt with, so a
 		 * group-addressed frame sealed with the pairwise key (key id 0)
@@ -894,10 +1009,15 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 			if (bridge.elem_walk_logged < 3) {
 				bridge.elem_walk_logged++;
 				bridge_elem_walk_report(frame, len);
+				/* what the AP advertises, decoded - the other
+				 * end of a capability mismatch */
+				bridge_ie_report("scan", frame, len);
 			}
 		} else if (sub == 0x50) {
 			bridge.rx_probersp++;
 			bridge_bss_seen_note(frame);
+			if (bridge.rx_probersp < 4)
+				bridge_ie_report("scan", frame, len);
 		}
 		/* The association-exchange family always logs (rare, and the
 		 * evidence a join judgment stands on), now with the FCS
@@ -910,6 +1030,9 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 		    sub == 0x00 || sub == 0x10 /* assoc req/resp */)) {
 			static unsigned int dumped;
 
+			/* the receiving half of the negotiation record: the
+			 * AP's answer with every element it carries */
+			bridge_ie_report("rx", frame, len);
 			wlan_osal_log("wlan: rx mgt fc=%02x fcs=%d retry=%u sc=%04x "
 			    "a1=%02x:%02x:%02x:%02x:%02x:%02x "
 			    "a2=%02x:%02x:%02x:%02x:%02x:%02x len=%u\n", fc0,
@@ -1579,6 +1702,57 @@ wlan_bridge_set_wpa(int on)
 }
 
 /*
+ * The HT Capabilities element this port declares, appended to the
+ * supplicant's element block in the association request (and the probe
+ * request, which appends the same block).  The imported stack has no 11n
+ * state of its own, so the capability is stated here rather than derived.
+ *
+ * One spatial stream, MCS 0-7, 20 MHz only, short GI for 20 MHz, and no
+ * aggregation: the seam configures the radio at 20 MHz
+ * (NL80211_CHAN_WIDTH_20) and the receive path has no block-ack session, so
+ * advertising either would invite frames this port cannot take.
+ *
+ * The second diagnostic build switch, WLAN_NO_HT, removes the element
+ * entirely: the station then associates as a plain 802.11g peer.  It exists
+ * so a cross-stack measurement can be taken at a matched link fingerprint
+ * (legacy 54, 20 MHz, no HT, no WMM) instead of comparing an HT station to a
+ * legacy one; the switch also clears IEEE80211_F_WME in the join below.
+ */
+#ifndef WLAN_SEAM_BW40
+#define WLAN_SEAM_BW40 0
+#endif
+#ifndef WLAN_NO_HT
+#define WLAN_NO_HT 0
+#endif
+#if !WLAN_NO_HT
+static const uint8_t bridge_htcap_ie[28] = {
+	45, 26,				/* element id, length */
+	0x20 | (WLAN_SEAM_BW40 ? 0x02 : 0x00), 0x00,
+					/* HT cap: SGI-20; bit 1 is
+					 * Supported Channel Width, which the
+					 * WLAN_BW40 build switch sets so the
+					 * association asks for 20/40 MHz */
+	0x00,				/* A-MPDU: 8 KiB, no min spacing */
+	0xff, 0x00, 0x00, 0x00,		/* MCS 0-7 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00,			/* rx_highest */
+	0x01,				/* tx_params: TX set defined */
+	0x00, 0x00, 0x00,		/* reserved */
+	0x00, 0x00,			/* HT extended capabilities */
+	0x00, 0x00, 0x00, 0x00,		/* TX beamforming */
+	0x00				/* ASEL */
+};
+#define BRIDGE_HTCAP_IE_LEN sizeof(bridge_htcap_ie)
+#else
+/*
+ * The element is not compiled in at all, so the append site below has nothing
+ * to copy; a zero-length macro keeps that site branch-free.
+ */
+#define bridge_htcap_ie NULL
+#define BRIDGE_HTCAP_IE_LEN 0
+#endif
+
+/*
  * The join the supplicant decided on. Everything here is the stack's own
  * documented policy surface (the prior carrier's board-proven associate
  * shape): which candidate, which security state, and then sta_join - the
@@ -1601,20 +1775,34 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	struct ieee80211com *ic = bridge.ic;
 	struct ieee80211_node *ni = NULL;
 	uint8_t *ie_copy = NULL;
+	size_t ie_copy_len = 0;
+	size_t ht_len = BRIDGE_HTCAP_IE_LEN;
 	int ret = 0;
 
 	if (!bridge.attached || ic == NULL)
 		return -ENODEV;
 	if (ssid == NULL || len == 0 || len > IEEE80211_NWID_LEN)
 		return -EINVAL;
-	if (ie_len != 0) {
-		if (wpa_ie == NULL || ie_len > 256)
-			return -EINVAL;
-		ie_copy = wlan_osal_alloc(ie_len);
+	if (ie_len != 0 && (wpa_ie == NULL || ie_len > 256))
+		return -EINVAL;
+	/*
+	 * One allocation carries the supplicant's element block and, unless the
+	 * no-HT arm asked for a legacy association, the HT Capabilities element
+	 * this port declares (see bridge_htcap_ie).  It is built before the
+	 * serializer is taken, and it is built as one block rather than grown
+	 * afterwards: the board's heap is busy enough at join time that a second,
+	 * larger allocation is not free.
+	 */
+	if (ie_len + ht_len != 0) {
+		ie_copy = wlan_osal_alloc(ie_len + ht_len);
 		if (ie_copy == NULL)
 			return -ENOMEM;
-		memcpy(ie_copy, wpa_ie, ie_len);
+		if (ie_len != 0)
+			memcpy(ie_copy, wpa_ie, ie_len);
+		if (ht_len != 0)
+			memcpy(ie_copy + ie_len, bridge_htcap_ie, ht_len);
 	}
+	ie_copy_len = ie_len + ht_len;
 
 	wlan_port_serializer_lock();
 	if (bssid != NULL)
@@ -1652,12 +1840,37 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	} else {
 		ic->ic_flags &= ~(unsigned int)IEEE80211_F_PRIVACY;
 	}
+#if WLAN_NO_HT
+	/*
+	 * The no-HT arm removes both advertisements together, so the station
+	 * enters the matched-link baseline as a plain 802.11g peer (no HT, no
+	 * WMM).  The flag is cleared rather than left alone because the join
+	 * path can run again in one boot (a reconnect after the first
+	 * association would otherwise inherit the earlier value).
+	 */
+	ic->ic_flags &= ~(unsigned int)IEEE80211_F_WME;
+#else
+	/*
+	 * WMM travels with HT: hostapd clears a station's HT flag when the
+	 * association request carries no valid WMM element, so an HT-only
+	 * request leaves the AP transmitting legacy frames (measured: the AP's
+	 * response grew to ten elements and its MCS set to 0xffff, while every
+	 * delivered data frame stayed legacy 20 MHz).  The element itself is
+	 * net80211's own - the association builder appends it when F_WME is set
+	 * and the AP's beacon carried one.
+	 */
+	ic->ic_flags |= IEEE80211_F_WME;
+#endif
 
 	if (ic->ic_opt_ie != NULL) {
 		wlan_osal_free(ic->ic_opt_ie);
 	}
 	ic->ic_opt_ie = ie_copy;
-	ic->ic_opt_ie_len = (u_int16_t)ie_len;
+	ic->ic_opt_ie_len = (u_int16_t)ie_copy_len;
+	wlan_osal_log("wlan: join opt ie=%u len=%u\n", (unsigned)ie_len,
+	    (unsigned)ic->ic_opt_ie_len);
+	wlan_osal_log("wlan: join opt ie=%u len=%u\n", (unsigned)ie_len,
+	    (unsigned)ic->ic_opt_ie_len);
 
 	if (ni->ni_chan != NULL)
 		ic->ic_curchan = ni->ni_chan;
@@ -2044,6 +2257,8 @@ wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 	ifp = bridge.ic->ic_ifp;
 	if (ifp == NULL)
 		return -ENODEV;
+	/* the transmit path's second milestone: the frame reached the bridge */
+	lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_BRIDGE);
 	/*
 	 * A frame from the presentation layer (already an ethernet frame) enters
 	 * the stack through the interface's send queue: net80211's if_start then

@@ -49,6 +49,8 @@
 
 #include "linuxkpi_80211.h"
 #include "linuxkpi_txq.h"
+#include "lkpi_census.h"
+#include "lkpi_tcp_trace.h"
 
 /* ------------------------------------------------------------------ */
 /* compile-time contracts                                              */
@@ -677,6 +679,53 @@ lkpi80211_rx_linearize(struct ieee80211_hw *hw, struct sk_buff *skb)
  * is also the context that completes host commands - a delivery running inline
  * there can deadlock a command whose completion it is itself carrying.
  */
+#ifdef CONFIG_LKPI_CENSUS
+/*
+ * What one frame costs between this port's queue and the stack's handoff: the
+ * call below runs the bridge, net80211's input and the presentation layer's
+ * delivery, so this histogram is the shared stack's share of a frame - the
+ * other end of the question the USB face's `cb` histogram opens (that one is
+ * the driver's own parse and enqueue).
+ */
+static struct lkpi_census_histo lkpi_80211_stack;
+
+/* The context whose receive queue the snapshot reports.  The census face is
+ * called without a handle (the image's print takes no arguments), so it keeps
+ * the last context this module was given; a port runs one wireless hardware
+ * instance per boot, and the alternative - passing a handle down the whole
+ * census chain - would change the other modules' faces too. */
+static struct lkpi80211_hw_ctx *lkpi_80211_ctx;
+
+void
+lkpi_80211_census_reset(void)
+{
+
+	lkpi_census_histo_reset(&lkpi_80211_stack);
+	/* the drops counter belongs to the phase too: a drop before this phase's
+	 * reset must not be charged to it (and the driver's own counters above
+	 * already carry the connection's lifetime total) */
+	if (lkpi_80211_ctx != NULL)
+		lkpi_80211_ctx->rxq_drops = 0;
+}
+
+void
+lkpi_80211_census_print(void)
+{
+
+	lkpi_census_histo_print("perf census: A 80211 stack", &lkpi_80211_stack);
+	/* The receive queue's overflow count.  This is the one loss in the
+	 * receive chain that leaves no other trace: the queue's contract drops the
+	 * OLDEST frame when it is full (see ieee80211_rx_irqsafe below), so a
+	 * frame the driver delivered - an ACK among them - can vanish with the
+	 * driver reporting success.  It was counted and never reported, which is
+	 * the same as not having the counter at all. */
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A 80211 rxq drops=%lu depth=%u\n",
+	    lkpi_80211_ctx != NULL ? lkpi_80211_ctx->rxq_drops : 0u,
+	    (unsigned)CONFIG_LKPI80211_RXQ_DEPTH);
+}
+#endif /* CONFIG_LKPI_CENSUS */
+
 static void
 lkpi80211_rx_work(struct work_struct *w)
 {
@@ -696,11 +745,36 @@ lkpi80211_rx_work(struct work_struct *w)
 
 		rs = (struct ieee80211_rx_status *)skb->cb;
 		ctx->rx_frames++;
-		if (bridge_ops != NULL && bridge_ops->rx != NULL)
+#if LKPI_TCP_TRACE_ENABLED
+		/*
+		 * The acknowledgement path's second and third boundaries: the
+		 * driver stamped the irqsafe entry into the buffer's hardware
+		 * timestamp slot, and this worker is where the frame leaves the
+		 * queue for the bridge. The record stays open across the bridge
+		 * call, because the netif input runs inside it and fills in the
+		 * rest.
+		 */
+		lkpi_tcp_trace_frame_begin(
+		    (uint64_t)skb_hwtstamps(skb)->hwtstamp,
+		    lkpi_census_now_ns());
+#endif
+		if (bridge_ops != NULL && bridge_ops->rx != NULL) {
+#ifdef CONFIG_LKPI_CENSUS
+			u64 t0 = lkpi_census_now_ns();
+
 			bridge_ops->rx(&ctx->hw, rs, skb);
-		else
+			lkpi_census_histo_add(&lkpi_80211_stack,
+			    lkpi_census_now_ns() - t0);
+#else
+			bridge_ops->rx(&ctx->hw, rs, skb);
+#endif
+		} else {
 			lkpi_printf(ULOG_ERROR_LEVEL,
 			    "lkpi80211: rx with no bridge; frame dropped\n");
+		}
+#if LKPI_TCP_TRACE_ENABLED
+		lkpi_tcp_trace_frame_end();
+#endif
 		memset(skb->cb, 0, sizeof(skb->cb));
 		lkpi_skb_free(skb);
 	}
@@ -716,6 +790,28 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	skb = lkpi80211_rx_linearize(hw, skb);
 	if (skb == NULL)
 		return;		/* refused, freed, and it said so */
+#if LKPI_TCP_TRACE_ENABLED
+	{
+		uint64_t t_now = lkpi_census_now_ns();
+
+		/*
+		 * The driver's share of the path is settled here, on the thread
+		 * that ran it: the receive worker runs later, and by then the next
+		 * completion's stamp may have replaced this one. Data frames only -
+		 * in the uplink phase the peer's acknowledgements are the only data
+		 * frames the board receives.
+		 */
+		if (skb->len >= 24u && (skb->data[0] & 0x0cu) == 0x08u)
+			lkpi_tcp_trace_usb_to_rxq(t_now);
+		/*
+		 * The receive boundary's own stamp, carried on the buffer itself:
+		 * the queue between here and the worker is the one hop that would
+		 * otherwise lose a per-frame record, and this field exists for
+		 * exactly this kind of timestamp.
+		 */
+		skb_hwtstamps(skb)->hwtstamp = (ktime_t)t_now;
+	}
+#endif
 	/*
 	 * A driver that leaves the FCS on the frames it hands up says so once, at
 	 * probe (IEEE80211_HW_RX_INCLUDES_FCS), and those four octets come off
@@ -730,6 +826,9 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (ieee80211_hw_check(hw, RX_INCLUDES_FCS) && skb->len > ETH_FCS_LEN)
 		skb_trim(skb, skb->len - ETH_FCS_LEN);
 	ctx = LKPI80211_CTX(hw);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_80211_ctx = ctx;
+#endif
 	/*
 	 * Irqsafe means enqueue-and-return: the caller is a driver receive
 	 * context (an interrupt thread, a bus worker) and must not run the

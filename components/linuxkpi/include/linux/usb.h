@@ -537,6 +537,12 @@ void usb_init_urb(struct urb *urb);
 
 int usb_reset_device(struct usb_device *dev);
 
+/* The engine owns the coherent pair's bodies (components/linuxkpi/usb/
+ * linuxkpi_usb.h declares the same two, and this header cannot include it);
+ * the inlines below are the Linux face's entry points. */
+void	*lkpi_usb_alloc_coherent(size_t size, unsigned int mem_flags);
+void	lkpi_usb_free_coherent(void *p, size_t size);
+
 static __always_inline __unused void *
 usb_alloc_coherent(struct usb_device *dev, size_t size, gfp_t mem_flags,
     dma_addr_t *dma)
@@ -544,7 +550,11 @@ usb_alloc_coherent(struct usb_device *dev, size_t size, gfp_t mem_flags,
 
 	(void)dev;
 	(void)dma;
-	return kzalloc(size, mem_flags);
+	/* The Linux face's coherent pair: memory a driver may hand the
+	 * controller with no cache maintenance.  The body belongs to the engine
+	 * (it owns the target's DMA window); a target without one allocates from
+	 * the general heap, and every transfer of such a buffer is staged. */
+	return lkpi_usb_alloc_coherent(size, mem_flags);
 }
 
 static __always_inline __unused void
@@ -554,8 +564,7 @@ usb_free_coherent(struct usb_device *dev, size_t size, void *addr,
 
 	(void)dev;
 	(void)dma;
-	kfree(addr);
-	(void)size;
+	lkpi_usb_free_coherent(addr, size);
 }
 
 /* ------------------------------------------------------------------ */

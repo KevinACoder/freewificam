@@ -33,11 +33,14 @@
 #include "lwip/etharp.h"
 #include "lwip/tcpip.h"
 #include "lwip/dhcp.h"
+#include "lwip/stats.h"
+#include "lwip/memp.h"
 #include "netif/ethernet.h"
 
 #include <port/port.h>
 
 #include "wlannetif.h"
+#include "components/linuxkpi/lkpi_tcp_trace.h"
 
 /* The bridge's own declarations: this file must not include the net80211
  * world's headers (it is an lwIP-port translation unit), and the bridge's
@@ -53,8 +56,13 @@ int	wlan_bridge_hwaddr(uint8_t addr[6]);
 static uint8_t tx_linear[WLANNETIF_FRAME_MAX] __attribute__((aligned(8)));
 
 /* loss counters, so a receive loss localizes to the pool, the input call or the
- * bridge without a debugger (the GMAC bridge's heartbeat shape) */
+ * bridge without a debugger (the GMAC bridge's heartbeat shape). The receive
+ * side is split by cause because the three are different findings: the pbuf
+ * pool refused the frame, the copy failed, or the stack's input call refused it
+ * - and that last one is the TCP/IP mailbox, whose refusal is silent in lwIP. */
 static unsigned long g_rx_frames;
+static unsigned long g_rx_alloc_fail;
+static unsigned long g_rx_take_fail;
 static unsigned long g_rx_input_fail;
 static unsigned long g_tx_frames;
 static unsigned long g_tx_fail;
@@ -65,9 +73,56 @@ wlannetif_get_diag(unsigned long *rx_frames, unsigned long *rx_input_fail,
 {
 
 	*rx_frames = g_rx_frames;
-	*rx_input_fail = g_rx_input_fail;
+	*rx_input_fail = g_rx_alloc_fail + g_rx_take_fail + g_rx_input_fail;
 	*tx_frames = g_tx_frames;
 	*tx_fail = g_tx_fail;
+}
+
+void
+wlannetif_get_rx_diag(unsigned long *rx_frames, unsigned long *alloc_fail,
+    unsigned long *take_fail, unsigned long *input_fail)
+{
+
+	*rx_frames = g_rx_frames;
+	*alloc_fail = g_rx_alloc_fail;
+	*take_fail = g_rx_take_fail;
+	*input_fail = g_rx_input_fail;
+}
+
+/*
+ * The lwIP-side loss and segment counters that had no reader in this image:
+ * the TCP/IP message pool, MIB2's TCP segment/error/retransmit counts, and the
+ * stack's own drop counter. They are read as absolute values at a phase
+ * boundary and differenced by the reader.
+ */
+void
+wlan_lwip_diag(unsigned long *inpkt_err, unsigned long *tcpin,
+    unsigned long *tcpinerr, unsigned long *tcpretrans, unsigned long *tcpdrop)
+{
+	*inpkt_err = 0ul;
+	*tcpin = 0ul;
+	*tcpinerr = 0ul;
+	*tcpretrans = 0ul;
+	*tcpdrop = 0ul;
+	/*
+	 * The stack's counter block only exists where lwIP's core is linked. The
+	 * host suites compile this file against a stubbed lwIP surface, so the
+	 * reads ride the same lever as the rest of the instrument rather than
+	 * forcing every suite to link stats.c.
+	 */
+#if defined(CONFIG_WLAN_TCP_TRACE)
+#if LWIP_STATS && MEMP_STATS
+	*inpkt_err = (unsigned long)lwip_stats.memp[MEMP_TCPIP_MSG_INPKT]->err;
+#endif
+#if LWIP_STATS
+	*tcpdrop = (unsigned long)lwip_stats.tcp.drop;
+#endif
+#if MIB2_STATS
+	*tcpin = (unsigned long)lwip_stats.mib2.tcpinsegs;
+	*tcpinerr = (unsigned long)lwip_stats.mib2.tcpinerrs;
+	*tcpretrans = (unsigned long)lwip_stats.mib2.tcpretranssegs;
+#endif
+#endif /* CONFIG_WLAN_TCP_TRACE */
 }
 
 /* ------------------------------------------------------------------ */
@@ -89,6 +144,9 @@ wlan_linkoutput(struct netif *netif, struct pbuf *p)
 		memcpy(&tx_linear[len], q->payload, q->len);
 		len += q->len;
 	}
+	/* the transmit path's first milestone, matched to the segment by the
+	 * sequence number in the frame it is about to carry */
+	lkpi_tcp_trace_tx_frame(tx_linear, len);
 	if (wlan_bridge_tx_raw(tx_linear, len) < 0) {
 		g_tx_fail++;
 		return ERR_IF;
@@ -110,14 +168,21 @@ wlan_data_rx(const uint8_t *frame, size_t len, void *arg)
 	g_rx_frames++;
 	if (netif == NULL || frame == NULL || len == 0)
 		return;
+	/*
+	 * The acknowledgement path's fifth boundary, and the last point where the
+	 * frame is still one contiguous buffer: the classifier reads the IP and
+	 * TCP headers here, because the mailbox hop that follows loses the frame's
+	 * identity and the TCP/IP thread can only match it by sequence number.
+	 */
+	lkpi_tcp_trace_classify(frame, len);
 	p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_POOL);
 	if (p == NULL) {
-		g_rx_input_fail++;
+		g_rx_alloc_fail++;
 		return;
 	}
 	if (pbuf_take(p, frame, (u16_t)len) != ERR_OK) {
 		pbuf_free(p);
-		g_rx_input_fail++;
+		g_rx_take_fail++;
 		return;
 	}
 	/* the core-locked stack: tcpip_input hands the frame to the TCP/IP

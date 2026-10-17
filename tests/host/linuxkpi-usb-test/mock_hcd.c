@@ -528,6 +528,13 @@ mock_backend_pump(struct mock_backend *b)
 	run_one(b->hcd);
 }
 
+unsigned int
+mock_hcd_pending(const struct mock_backend *b)
+{
+
+	return b->hcd->q_n;
+}
+
 static void
 worker_entry(void *arg)
 {

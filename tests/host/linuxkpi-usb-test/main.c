@@ -201,6 +201,12 @@ static volatile int a3_status = 1;
 static volatile unsigned int order_n;
 static volatile int order[8];
 
+/* the endpoint-pipeline case's observables: what the controller held at the
+ * moment the completed urb's driver callback ran */
+static struct mock_backend *g_bk;
+static volatile unsigned int pipe_pending;
+static volatile int pipe1_done, pipe2_done;
+
 static void
 cb_a1(struct urb *urb)
 {
@@ -226,6 +232,26 @@ cb_a3(struct urb *urb)
 	order[order_n++] = 3;
 	a3_status = urb->status;
 	a3_done = 1;
+}
+
+/* the pipeline probe: read what the controller holds while this callback is
+ * running.  The worker is held during the case, so a transfer in the queue
+ * can only be one the engine armed on the way in here. */
+static void
+cb_pipe1(struct urb *urb)
+{
+
+	(void)urb;
+	pipe_pending = mock_hcd_pending(g_bk);
+	pipe1_done = 1;
+}
+
+static void
+cb_pipe2(struct urb *urb)
+{
+
+	(void)urb;
+	pipe2_done = 1;
 }
 
 static int
@@ -314,6 +340,7 @@ run_scenario(void)
 		return;
 	}
 	lkpi_usb_be_register(mock_backend_ops(), b);
+	g_bk = b;
 	/* the class reset stall is armed for the single-LUN shape */
 	mock_hcd_script(b, MOCK_SCRIPT_MAX_LUN_STALL, 1);
 
@@ -683,6 +710,46 @@ run_scenario(void)
 		}
 		mock_hcd_hold_set(b, 0);
 		usb_free_urb(u3);
+
+		/* S2b: the endpoint pipeline.  The completed urb's driver
+		 * callback must run with the endpoint's next urb already
+		 * armed: that is what keeps a bulk-in stream receiving while
+		 * the callback works (parse, bridge, crypto, lwIP), instead of
+		 * leaving the device with nothing to send into.  The worker is
+		 * held for the whole case, so anything the controller holds at
+		 * callback time was armed on the way in; the callback reads
+		 * exactly that. */
+		{
+			struct urb *u4 = usb_alloc_urb(0, GFP_KERNEL);
+			struct urb *u5 = usb_alloc_urb(0, GFP_KERNEL);
+			static u8 x4[8], x5[8];
+
+			pipe_pending = 0;
+			pipe1_done = 0;
+			pipe2_done = 0;
+			usb_fill_bulk_urb(u4, &g_dev, usb_rcvbulkpipe(&g_dev, 1),
+			    x4, 8, cb_pipe1, NULL);
+			usb_fill_bulk_urb(u5, &g_dev, usb_rcvbulkpipe(&g_dev, 1),
+			    x5, 8, cb_pipe2, NULL);
+			mock_hcd_hold_set(b, 1);
+			if (usb_submit_urb(u4, GFP_KERNEL) == 0 &&
+			    usb_submit_urb(u5, GFP_KERNEL) == 0) {
+				mock_backend_pump(b);	/* run u4 only */
+				if (wait_done(&pipe1_done, 2000) == 0 &&
+				    pipe_pending == 1)
+					anchor("endpoint armed before callback", 1);
+				else
+					anchor("endpoint armed before callback", 0);
+			} else {
+				anchor("endpoint armed before callback", 0);
+			}
+			mock_hcd_hold_set(b, 0);
+			mock_backend_pump(b);	/* drain u5 */
+			(void)wait_done(&pipe2_done, 2000);
+			usb_free_urb(u4);
+			usb_free_urb(u5);
+		}
+
 		lkpi_usb_force_sync_set(true);
 	}
 
