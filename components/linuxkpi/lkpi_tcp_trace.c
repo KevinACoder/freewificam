@@ -110,6 +110,38 @@ static uint32_t			g_pend_miss;
 static uint64_t	g_last_tcpin_ns;
 static uint32_t	g_last_tcpin_ackno;
 static uint64_t	g_tx_origin_ns;
+/* The same moment kept for the identity-matched path: tx_submit clears
+ * g_tx_origin_ns after the first transfer of an acknowledgement, but a second
+ * segment released by that acknowledgement still needs its origin. */
+static uint64_t	g_ack_adv_ns;
+
+/*
+ * The segment in transit. tcp_output_segment announces the segment it is about
+ * to hand to ip_output; the netif's linkoutput reads the sequence number out of
+ * the frame and claims the announcement, and the bridge, the seam and the USB
+ * engine then belong to that same segment. The whole chain runs on the TCP/IP
+ * thread - ip_output calls linkoutput, the bridge calls its if_start, and the
+ * driver's wake_tx_queue drains in the same call - so one record is exact
+ * rather than a race.
+ */
+static struct {
+	uint32_t	seqno;
+	uint32_t	len;		/* the announced TCP payload length */
+	uint64_t	t_seg_tx;	/* tcp_output_segment announced it */
+	uint64_t	t_ack_adv;	/* the acknowledgement that released it */
+	uint64_t	t_linkout;
+	uint64_t	t_last;		/* the previous milestone of this segment */
+	unsigned int	armed;
+	unsigned int	seam_seen;	/* the driver seam was reached */
+} g_seg;
+static uint32_t	g_seg_pend_seqno;	/* announced, not yet matched */
+static uint32_t	g_seg_pend_len;
+static uint64_t	g_seg_pend_ns;
+static unsigned int	g_seg_pend_valid;
+static uint32_t	g_ident_hit;		/* TCP frames whose announcement matched */
+static uint32_t	g_ident_miss;		/* TCP frames with no announcement */
+static uint32_t	g_ident_orphan;		/* a new announcement before the last submit */
+static uint32_t	g_ident_stray;		/* submits with no segment armed */
 
 /*
  * The first retransmission of a phase is kept whole: it is the moment the
@@ -306,7 +338,7 @@ parse_pure_ack(const uint8_t *f, size_t len, uint32_t *ackno, uint32_t *seqno)
 void
 lkpi_tcp_trace_classify(const uint8_t *frame, size_t len)
 {
-	uint32_t	ackno, seqno, i, w;
+	uint32_t	ackno, seqno, w;
 
 	if (g_cur.active == 0u)
 		return;
@@ -376,6 +408,7 @@ lkpi_tcp_trace_ack_adv(uint32_t ackno, uint32_t acked)
 		dhist_add(&g_d[LKPI_TCP_D_TCPIN_ADV], now - g_last_tcpin_ns);
 	/* the segment this acknowledgement unblocks is submitted from here */
 	g_tx_origin_ns = now;
+	g_ack_adv_ns = now;
 }
 
 /*
@@ -415,9 +448,16 @@ lkpi_tcp_trace_seg_tx(uint32_t seqno, uint32_t len)
 {
 	uint64_t	now = lkpi_census_now_ns();
 
-	(void)seqno;
-	(void)len;
 	(void)__atomic_fetch_add(&g_seg_tx, 1u, __ATOMIC_RELAXED);
+	if (len == 0u) {
+		/* a pure acknowledgement: it carries no sequence space of its own
+		 * and must not claim the next data frame */
+		return;
+	}
+	g_seg_pend_seqno = seqno;
+	g_seg_pend_len = len;
+	g_seg_pend_ns = now;
+	g_seg_pend_valid = 1u;
 	if (g_tx_origin_ns == 0u || now < g_tx_origin_ns ||
 	    now - g_tx_origin_ns >= 5000000ULL)
 		return;
@@ -428,15 +468,95 @@ lkpi_tcp_trace_seg_tx(uint32_t seqno, uint32_t len)
 }
 
 /*
- * The transmit side's far end. Everything between tcp_output_segment and this
- * call - etharp, the bridge's encap and crypto, the driver's descriptor build
- * and the engine's queue - is what the netif-to-engine number covers; the
- * previous round measured only the seam inside it (15-17 us), which left the
- * driver and the engine unaccounted.
+ * The netif is about to hand a frame down. Its TCP sequence number is what
+ * makes the following milestones belong to this segment rather than to the last
+ * acknowledgement: the announcement tcp_output_segment made is claimed here, and
+ * a frame whose number does not match it is counted, never guessed at.
+ *
+ * A frame that is not IPv4/TCP (ARP, ICMP, a management frame) is not part of
+ * the population and is left alone.
+ */
+void
+lkpi_tcp_trace_tx_frame(const uint8_t *frame, size_t len)
+{
+	uint32_t	seqno, payload, ip_len, thl;
+	uint64_t	now = lkpi_census_now_ns();
+	const uint8_t	*ip;
+	size_t		ihl;
+
+	if (frame == NULL || len < 14u + 20u + 20u)
+		return;
+	if ((((uint32_t)frame[12] << 8) | frame[13]) != 0x0800u)
+		return;
+	ip = frame + 14;
+	if ((ip[0] >> 4) != 4u || ip[9] != 6u)
+		return;
+	ihl = (size_t)(ip[0] & 0x0fu) * 4u;
+	if (ihl < 20u || len < 14u + ihl + 20u)
+		return;
+	ip_len = ((uint32_t)ip[2] << 8) | (uint32_t)ip[3];
+	thl = (uint32_t)(ip[ihl + 12] >> 4) * 4u;
+	if (ip_len < ihl + thl)
+		return;
+	/* A pure acknowledgement carries no sequence space and is not part of the
+	 * population; only a data frame can match an announcement. */
+	payload = ip_len - (uint32_t)ihl - thl;
+	if (payload == 0u)
+		return;
+	seqno = ((uint32_t)ip[ihl + 4] << 24) | ((uint32_t)ip[ihl + 5] << 16) |
+	    ((uint32_t)ip[ihl + 6] << 8) | (uint32_t)ip[ihl + 7];
+	/* Sequence number and payload length together: a retransmission carries
+	 * both unchanged, while a different segment or a different flow does not. */
+	if (!g_seg_pend_valid || g_seg_pend_seqno != seqno ||
+	    g_seg_pend_len != payload ||
+	    now < g_seg_pend_ns || now - g_seg_pend_ns > 5000000ULL) {
+		/* announced but never reached the netif, or a frame this
+		 * instrument cannot attribute: both are misses of the join */
+		g_ident_miss++;
+		g_seg_pend_valid = 0u;
+		return;
+	}
+	if (g_seg.armed)
+		g_ident_orphan++;
+	g_seg.seqno = seqno;
+	g_seg.len = payload;
+	g_seg.t_seg_tx = g_seg_pend_ns;
+	g_seg.t_ack_adv = g_ack_adv_ns;
+	g_seg.t_linkout = now;
+	g_seg.t_last = now;
+	g_seg.armed = 1u;
+	g_seg.seam_seen = 0u;
+	g_seg_pend_valid = 0u;
+	dhist_add(&g_d[LKPI_TCP_D_SEG_LINKOUT], now - g_seg.t_seg_tx);
+	if (g_seg.t_ack_adv != 0u && now >= g_seg.t_ack_adv &&
+	    now - g_seg.t_ack_adv <= 5000000ULL)
+		dhist_add(&g_d[LKPI_TCP_D_ADV_LINKOUT],
+		    now - g_seg.t_ack_adv);
+}
+
+/*
+ * The transmit side's far end. Everything between the netif's linkoutput and
+ * this call - the bridge's encap and crypto, the driver's descriptor build and
+ * the engine's queue - is what this interval covers.
  */
 void
 lkpi_tcp_trace_tx_submit(uint64_t t_ns)
 {
+	if (!g_seg.armed || !g_seg.seam_seen) {
+		/* a bulk-out transfer that no data segment announced, or one that
+		 * was submitted between this segment's linkoutput and its seam
+		 * (a management frame drained first): neither may consume the
+		 * record, or the interval would belong to the wrong frame. */
+		g_ident_stray++;
+		goto legacy;
+	}
+	if (t_ns >= g_seg.t_last)
+		dhist_add(&g_d[LKPI_TCP_D_SEG_SUBMIT], t_ns - g_seg.t_last);
+	if (t_ns >= g_seg.t_seg_tx)
+		dhist_add(&g_d[LKPI_TCP_D_SEG_TOTAL], t_ns - g_seg.t_seg_tx);
+	g_ident_hit++;
+	g_seg.armed = 0u;
+legacy:
 	if (g_tx_origin_ns == 0u || t_ns < g_tx_origin_ns ||
 	    t_ns - g_tx_origin_ns > 5000000ULL)
 		return;
@@ -445,11 +565,8 @@ lkpi_tcp_trace_tx_submit(uint64_t t_ns)
 }
 
 /*
- * The transmit path's intermediate points. All of them are measured from the
- * same acknowledgement advance, so the four numbers - linkout, bridge, seam,
- * submit - are cumulative milestones of one segment's journey, and the gaps
- * between consecutive milestones are the costs of etharp, the memcpy into the
- * bridge, the encapsulation and crypto, and the driver plus engine.
+ * The transmit path's intermediate points, each measured from the previous
+ * milestone of the same segment.
  */
 void
 lkpi_tcp_trace_tx_mark(unsigned int boundary)
@@ -457,23 +574,30 @@ lkpi_tcp_trace_tx_mark(unsigned int boundary)
 	uint64_t	t_ns = lkpi_census_now_ns();
 	unsigned int	d;
 
-	if (g_tx_origin_ns == 0u || t_ns < g_tx_origin_ns ||
-	    t_ns - g_tx_origin_ns > 5000000ULL)
+	if (!g_seg.armed || t_ns < g_seg.t_last)
 		return;
 	switch (boundary) {
-	case LKPI_TCP_TX_LINKOUT:
-		d = LKPI_TCP_D_TX_LINKOUT;
-		break;
 	case LKPI_TCP_TX_BRIDGE:
-		d = LKPI_TCP_D_TX_BRIDGE;
+		d = LKPI_TCP_D_SEG_BRIDGE;
+		break;
+	case LKPI_TCP_TX_ENCAP_IN:
+		d = LKPI_TCP_D_SEG_ENCAP_IN;
+		break;
+	case LKPI_TCP_TX_ENCAP_DONE:
+		d = LKPI_TCP_D_SEG_ENCAP;
+		break;
+	case LKPI_TCP_TX_CRYPTO_DONE:
+		d = LKPI_TCP_D_SEG_CRYPTO;
 		break;
 	case LKPI_TCP_TX_SEAM:
-		d = LKPI_TCP_D_TX_SEAM;
+		d = LKPI_TCP_D_SEG_SEAM;
+		g_seg.seam_seen = 1u;
 		break;
 	default:
 		return;
 	}
-	dhist_add(&g_d[d], t_ns - g_tx_origin_ns);
+	dhist_add(&g_d[d], t_ns - g_seg.t_last);
+	g_seg.t_last = t_ns;
 }
 
 void
@@ -542,6 +666,16 @@ lkpi_tcp_trace_reset(void)
 	g_last_tcpin_ns = 0u;
 	g_last_tcpin_ackno = 0u;
 	g_tx_origin_ns = 0u;
+	g_ack_adv_ns = 0u;
+	memset(&g_seg, 0, sizeof(g_seg));
+	g_seg_pend_seqno = 0u;
+	g_seg_pend_len = 0u;
+	g_seg_pend_ns = 0u;
+	g_seg_pend_valid = 0u;
+	g_ident_hit = 0u;
+	g_ident_miss = 0u;
+	g_ident_orphan = 0u;
+	g_ident_stray = 0u;
 }
 
 void
@@ -574,20 +708,44 @@ lkpi_tcp_trace_print(void)
 	    g_d[LKPI_TCP_D_NETIF_TCPIN].over + g_d[LKPI_TCP_D_TCPIN_ADV].over +
 	    g_d[LKPI_TCP_D_ADV_TX].over + g_d[LKPI_TCP_D_ADV_SUBMIT].over));
 	lkpi_printf(ULOG_INFO_LEVEL,
-	    "perf census: C tx path linkout=%u/%u bridge=%u/%u seam=%u/%u "
-	    "submit=%u/%u n=%u over=%u\n",
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_TX_LINKOUT], 50),
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_TX_LINKOUT], 90),
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_TX_BRIDGE], 50),
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_TX_BRIDGE], 90),
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_TX_SEAM], 50),
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_TX_SEAM], 90),
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_ADV_SUBMIT], 50),
-	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_ADV_SUBMIT], 90),
-	    (unsigned int)g_d[LKPI_TCP_D_TX_LINKOUT].n,
-	    (unsigned int)(g_d[LKPI_TCP_D_TX_LINKOUT].over +
-	    g_d[LKPI_TCP_D_TX_BRIDGE].over + g_d[LKPI_TCP_D_TX_SEAM].over +
-	    g_d[LKPI_TCP_D_ADV_SUBMIT].over));
+	    "perf census: C tx path linkout=%u/%u bridge=%u/%u encap=%u/%u "
+	    "crypto=%u/%u seam=%u/%u submit=%u/%u n=%u over=%u\n",
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_LINKOUT], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_LINKOUT], 90),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_BRIDGE], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_BRIDGE], 90),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_ENCAP], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_ENCAP], 90),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_CRYPTO], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_CRYPTO], 90),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_SEAM], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_SEAM], 90),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_SUBMIT], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_SUBMIT], 90),
+	    (unsigned int)g_ident_hit,
+	    (unsigned int)(g_d[LKPI_TCP_D_SEG_LINKOUT].over +
+	    g_d[LKPI_TCP_D_SEG_BRIDGE].over +
+	    g_d[LKPI_TCP_D_SEG_ENCAP_IN].over +
+	    g_d[LKPI_TCP_D_SEG_ENCAP].over + g_d[LKPI_TCP_D_SEG_CRYPTO].over +
+	    g_d[LKPI_TCP_D_SEG_SEAM].over + g_d[LKPI_TCP_D_SEG_SUBMIT].over));
+	/*
+	 * The join's own denominator. `hit` counts TCP data frames whose sequence
+	 * number matched the announcement tcp_output_segment made; `miss` counts
+	 * the ones it could not match. A p50 over the matched population is only
+	 * readable next to the fraction it came from - and a low fraction means
+	 * the transmit split cannot be claimed at all.
+	 */
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: C tx ident hit=%u miss=%u orphan=%u stray=%u pct=%u "
+	    "total=%u/%u adv=%u/%u\n",
+	    (unsigned int)g_ident_hit, (unsigned int)g_ident_miss,
+	    (unsigned int)g_ident_orphan, (unsigned int)g_ident_stray,
+	    (unsigned int)((g_ident_hit + g_ident_miss) != 0u ?
+	    (g_ident_hit * 100u) / (g_ident_hit + g_ident_miss) : 0u),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_TOTAL], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_SEG_TOTAL], 90),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_ADV_LINKOUT], 50),
+	    (unsigned int)dhist_pct(&g_d[LKPI_TCP_D_ADV_LINKOUT], 90));
 	/*
 	 * The per-boundary sample counts. Without them a p50 of 0 is ambiguous:
 	 * it reads the same for "no sample matched" and for "every sample landed

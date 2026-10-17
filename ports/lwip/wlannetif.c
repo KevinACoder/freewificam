@@ -136,8 +136,6 @@ wlan_linkoutput(struct netif *netif, struct pbuf *p)
 	struct pbuf *q;
 
 	(void)netif;
-	/* the transmit path's first milestone: the segment left the IP layer */
-	lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_LINKOUT);
 	if (p->tot_len > WLANNETIF_FRAME_MAX)
 		return ERR_BUF;
 	/* linearize the chain: the bridge (and net80211 behind it) takes one
@@ -146,6 +144,9 @@ wlan_linkoutput(struct netif *netif, struct pbuf *p)
 		memcpy(&tx_linear[len], q->payload, q->len);
 		len += q->len;
 	}
+	/* the transmit path's first milestone, matched to the segment by the
+	 * sequence number in the frame it is about to carry */
+	lkpi_tcp_trace_tx_frame(tx_linear, len);
 	if (wlan_bridge_tx_raw(tx_linear, len) < 0) {
 		g_tx_fail++;
 		return ERR_IF;

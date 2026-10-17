@@ -284,8 +284,12 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	(void)drv;
 	if (adapter.hw == NULL || frame == NULL || len == 0)
 		return -1;
-	/* the transmit path's third milestone: the frame reached the driver seam */
-	lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_SEAM);
+	/* the transmit path's third milestone: the frame reached the driver seam.
+	 * Only a data frame may close the armed segment's span: the bridge drains
+	 * its management queue first, and a management frame passing here must
+	 * not be mistaken for the segment the netif handed down. */
+	if (!is_mgmt)
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_SEAM);
 #ifdef CONFIG_LKPI_CENSUS
 	/* The transmit side's share of a frame: this function's body from the
 	 * skb allocation through the driver's own transmit entry returning.

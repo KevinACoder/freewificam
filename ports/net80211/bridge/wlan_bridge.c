@@ -529,12 +529,14 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			if_statinc(ifp, if_oerrors);
 			continue;
 		}
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_ENCAP_IN);
 		enc = ieee80211_encap(ic, m, ni);
 		if (enc == NULL) {
 			bridge.tx_noencap++;
 			if_statinc(ifp, if_oerrors);	/* encap consumed it */
 			continue;
 		}
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_ENCAP_DONE);
 		wh = mtod(enc, struct ieee80211_frame *);
 		if ((wh->i_fc[1] & IEEE80211_FC1_WEP) != 0) {
 			/*
@@ -557,6 +559,7 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		} else {
 			bridge.data_tx_plain++;
 		}
+		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_CRYPTO_DONE);
 		/* the one-shot first-data-frame dump: the key id the frame
 		 * carries is what the peer indexes its decrypt with, so a
 		 * group-addressed frame sealed with the pairwise key (key id 0)

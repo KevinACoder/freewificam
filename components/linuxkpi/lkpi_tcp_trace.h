@@ -57,17 +57,36 @@ enum {
 	LKPI_TCP_D_TCPIN_ADV,	/* tcp_input -> lastack moved */
 	LKPI_TCP_D_ADV_TX,	/* lastack moved -> segment handed to netif */
 	LKPI_TCP_D_ADV_SUBMIT,	/* lastack moved -> the transfer submitted */
-	LKPI_TCP_D_TX_LINKOUT,	/* ... -> the netif's linkoutput */
+	LKPI_TCP_D_TX_LINKOUT,	/* ... -> the netif's linkoutput (event rate) */
 	LKPI_TCP_D_TX_BRIDGE,	/* ... -> the bridge's raw transmit entry */
 	LKPI_TCP_D_TX_SEAM,	/* ... -> the seam handing it to the driver */
+	/*
+	 * The identity-matched transmit intervals. The four above measure from
+	 * the acknowledgement that last advanced the window, so when one
+	 * acknowledgement releases several segments they all report the same
+	 * origin and the result is an event rate, not a per-segment cost. These
+	 * follow one segment by its TCP sequence number instead: each is the gap
+	 * to the previous milestone of that same frame.
+	 */
+	LKPI_TCP_D_SEG_LINKOUT,	/* tcp_output_segment -> the netif's linkoutput */
+	LKPI_TCP_D_SEG_BRIDGE,	/* linkoutput -> the bridge's raw transmit entry */
+	LKPI_TCP_D_SEG_ENCAP_IN,/* the bridge entry -> the encap call */
+	LKPI_TCP_D_SEG_ENCAP,	/* ieee80211_encap */
+	LKPI_TCP_D_SEG_CRYPTO,	/* ieee80211_crypto_encap (software CCMP) */
+	LKPI_TCP_D_SEG_SEAM,	/* the crypto step -> the seam handing it to the driver */
+	LKPI_TCP_D_SEG_SUBMIT,	/* the seam -> the transfer submitted */
+	LKPI_TCP_D_SEG_TOTAL,	/* tcp_output_segment -> the transfer submitted */
+	LKPI_TCP_D_ADV_LINKOUT,	/* the releasing acknowledgement -> linkoutput */
 	LKPI_TCP_D_N
 };
 
-/* the transmit path's intermediate boundaries, measured from the same origin
- * as LKPI_TCP_D_ADV_* */
+/* the transmit path's intermediate boundaries */
 enum {
 	LKPI_TCP_TX_LINKOUT = 0,
 	LKPI_TCP_TX_BRIDGE,
+	LKPI_TCP_TX_ENCAP_IN,	/* about to call ieee80211_encap */
+	LKPI_TCP_TX_ENCAP_DONE,	/* ieee80211_encap returned */
+	LKPI_TCP_TX_CRYPTO_DONE,/* ieee80211_crypto_encap returned (or skipped) */
 	LKPI_TCP_TX_SEAM,
 	LKPI_TCP_TX_N
 };
@@ -104,9 +123,15 @@ void		lkpi_tcp_trace_sent(uint32_t ackno, uint32_t cwnd,
 		    uint32_t unacked, uint32_t unsent, uint32_t snd_wnd,
 		    uint32_t snd_buf, int32_t rto_ticks);
 void		lkpi_tcp_trace_seg_tx(uint32_t seqno, uint32_t len);
+/*
+ * The frame the netif is about to hand down, matched to the segment
+ * tcp_output_segment announced. The caller passes the linearized ethernet
+ * frame; the TCP sequence number is read from it, so every later milestone
+ * belongs to that segment instead of to whichever acknowledgement last ran.
+ */
+void		lkpi_tcp_trace_tx_frame(const uint8_t *frame, size_t len);
 void		lkpi_tcp_trace_tx_submit(uint64_t t_ns);
-/* one intermediate point of the transmit path, measured from the same
- * acknowledgement advance that produced the segment */
+/* one intermediate point of the transmit path of the segment matched above */
 void		lkpi_tcp_trace_tx_mark(unsigned int boundary);
 void		lkpi_tcp_trace_rto(uint32_t lastack, uint32_t snd_nxt,
 		    uint32_t cwnd, uint32_t ssthresh, uint32_t mss,
@@ -132,6 +157,7 @@ void		lkpi_tcp_trace_print(void);
 	((void)(a), (void)(c), (void)(s), (void)(m), (void)(n), (void)(u), \
 	 (void)(q), (void)(w), (void)(b), (void)(r))
 #define lkpi_tcp_trace_seg_tx(s, l)		((void)(s), (void)(l))
+#define lkpi_tcp_trace_tx_frame(f, l)		((void)(f), (void)(l))
 #define lkpi_tcp_trace_tx_submit(t)		((void)(t))
 #define lkpi_tcp_trace_tx_mark(b)		((void)(b))
 #define lkpi_tcp_trace_rto(a, s, c, t, m, n, u, q, r) \
