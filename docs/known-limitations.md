@@ -7,13 +7,14 @@ weak, and what is not started. Nothing here should be read as a promise.
 
 | Line | State |
 |---|---|
-| RTL8188EUS (`rtl8xxxu`) | Full chain works on hardware: probe, scan, WPA2, DHCP, ping, TCP data. Throughput is well below the Linux same-card figure. |
+| RTL8188EUS (`rtl8xxxu`) | Full chain works on hardware: probe, scan, WPA2, DHCP, ping, TCP data. Uplink measures 9.08-10.17 Mbit/s on the open baseline against 10.48 for Linux; on the keyed L0 arm the software CCMP adds 464-480 us per transmitted segment and the uplink falls to 5.6-7.7 Mbit/s. The cipher cost is a measured, known issue (see below). |
 | RTL8821CU (`rtw88`) | Full chain works on hardware, including a CD-ROM to WLAN mode switch at boot. Throughput is well below Linux. |
 | RTL8851BU (`rtw89`) | **Experimental.** The full chain has been reached on hardware, but join is intermittent and the link is poor. Not on the mainline branch; published as experimental. |
 | RTL8189FTV (SDIO) | Full chain works on hardware: probe, scan, WPA2, DHCP, ping, TCP data. The vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. Throughput is the closest to Linux of the lines, and its reverse direction is measured; it also runs as an open access point a station can associate to. Its access-point-mode reverse direction is still variable run to run. |
 
 - **Throughput.** Every line is below the same card under Linux. The RTOS
-  figure is roughly a tenth of the Linux figure on the 8188EUS line, about
+  figure is about 1/1.03-1/1.15 on the 8188EUS line's open baseline (9.08-10.17 vs 10.48)
+  and 1/1.4-1/1.9 on its keyed arm, about
   1/1.7 (down) and 1/1.9 (up) on the SDIO line after two adopted levers, and
   roughly a hundred-and-seventieth on the 8851BU line. On the project's
   controlled bench (its own Raspberry Pi access point) the SDIO downlink
@@ -27,6 +28,18 @@ weak, and what is not started. Nothing here should be read as a promise.
   work, but its access-point-mode reverse direction is variable across boots
   (14-18 Mbit/s in three of four, one abort). The numbers are recorded, not
   gated; the project does not yet claim a target.
+- **Software CCMP on the transmit path (8188EUS).** The board's software cipher
+  costs 464-480 us per transmitted 1460-byte segment, measured with an
+  identity-matched per-segment account (TCP sequence number and payload length,
+  100% match, zero misses); every other transmit stage stays below the 16 us
+  bucket. Running the same image and sheet against an open access point removes
+  the cipher: the per-segment handoff falls below 16 us and the uplink rises
+  from 5.6-7.7 to 9.08-10.17 Mbit/s. The cost is therefore attributable rather than
+  unexplained; reducing it (a faster AES backend, the card's hardware crypto,
+  or an optimised build) is open work. The `-O2` build tried so far does not
+  pass the board suite's join guard. Throughput baselines now default to the
+  open access point; the keyed L0 arm is run separately when the cipher cost is
+  the subject.
 - **Long-run stability.** A long, unattended streaming run (the project's core
   goal) has not been demonstrated. The 8851BU line in particular is not stable
   enough for it.
