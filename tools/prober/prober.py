@@ -1165,6 +1165,17 @@ def cmd_run(argv: list[str], r: Runner) -> int:
     if not (hub_url and outdir):
         return die("run needs --serial-hub <url> and --out <dir>")
 
+    # Every product of a run - the transcript mirror, the per-phase files, the
+    # result - is written into --out as it is produced, and the transcript
+    # mirror starts at the board's boot rather than at the first phase.  So the
+    # directory has to exist before the reader opens its first line: nothing
+    # later creates it, and a run whose --out does not exist yet dies on its
+    # first write with every phase still unwritten.
+    if r.dry_run:
+        info("dry-run: mkdir -p %s", outdir)
+    else:
+        os.makedirs(outdir, exist_ok=True)
+
     phases_want = int(arg_value(argv, "--phases", "4"))
     uplink_phases_want = int(arg_value(argv, "--uplink-phases", "4"))
     seconds = int(arg_value(argv, "--seconds", "8"))
