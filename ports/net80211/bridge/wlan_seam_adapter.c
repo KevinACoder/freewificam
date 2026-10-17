@@ -68,6 +68,22 @@ static struct {
 	unsigned int filter_calls;
 	unsigned int tx_calls;
 	unsigned int key_calls;
+	/*
+	 * The link face: what the driver's own receive descriptors said about
+	 * the data frames that actually arrived.  Counted, never printed per
+	 * frame - a beacon's period would flood the console - and read back by
+	 * `wlan link`.  Read-only: nothing here feeds the receive path.
+	 */
+	unsigned int rx_data;
+	unsigned int rx_retry;
+	unsigned int rx_hist_n;
+	struct {
+		uint8_t enc;		/* mac80211_rx_encoding */
+		uint8_t idx;		/* legacy rate index or MCS */
+		uint8_t bw;		/* channel width code */
+		uint32_t n;
+		uint32_t retry;
+	} rx_hist[24];
 } adapter;
 
 /* ------------------------------------------------------------------ */
@@ -636,6 +652,44 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 	if (skb == NULL)
 		return;
 	/*
+	 * The link face's per-frame reading, counted rather than printed: the
+	 * driver's receive descriptor carries the encoding, the rate index (an
+	 * MCS for HT) and the channel width of every frame it delivered, and
+	 * the frame's own Retry bit says whether the peer had already sent it
+	 * once.  Together they answer "at what rate, after how many retries,
+	 * did the data actually arrive" from inside the image - the two
+	 * numbers an air audit otherwise needs a monitor card for.
+	 */
+	if (skb->len >= 24 && (skb->data[0] & 0x0c) == 0x08) {
+		uint8_t enc = rs != NULL ? (uint8_t)rs->encoding : 0u;
+		uint8_t idx = rs != NULL ? rs->rate_idx : 0u;
+		uint8_t bw = rs != NULL ? (uint8_t)rs->bw : 0u;
+		unsigned int retry = (skb->data[1] & 0x08) != 0 ? 1u : 0u;
+		unsigned int i;
+
+		adapter.rx_data++;
+		if (retry != 0u)
+			adapter.rx_retry++;
+		for (i = 0; i < adapter.rx_hist_n; i++)
+			if (adapter.rx_hist[i].enc == enc &&
+			    adapter.rx_hist[i].idx == idx &&
+			    adapter.rx_hist[i].bw == bw)
+				break;
+		if (i == adapter.rx_hist_n && i < 24u) {
+			adapter.rx_hist[i].enc = enc;
+			adapter.rx_hist[i].idx = idx;
+			adapter.rx_hist[i].bw = bw;
+			adapter.rx_hist[i].n = 0u;
+			adapter.rx_hist[i].retry = 0u;
+			adapter.rx_hist_n++;
+		}
+		if (i < adapter.rx_hist_n) {
+			adapter.rx_hist[i].n++;
+			if (retry != 0u)
+				adapter.rx_hist[i].retry++;
+		}
+	}
+	/*
 	 * The driver boundary's own reading, for the first few beacons/probe
 	 * responses: the receive status the driver filled in.  `freq` is the field
 	 * the bridge now carries across to net80211 (the parser's off-channel
@@ -735,6 +789,60 @@ wlan_bridge_fw_lookup(const char *name, const uint8_t **data, size_t *size)
 	*data = e->data;
 	*size = e->size;
 	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* link face: the rate/retry picture the receive path actually saw      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * `wlan link` reads this.  It answers the two questions the air audit used to
+ * need a second radio for: at which PHY rate did the data frames arrive, and
+ * what fraction of them the peer had already sent once (the frame's own Retry
+ * bit).  `idx` is a legacy rate index when `enc` is RX_ENC_LEGACY (0) and an
+ * MCS index when it is RX_ENC_HT (1); `bw` is mac80211's width code (0 = 20
+ * MHz, 1 = 40 MHz).
+ *
+ * The peer block prints what the driver's station object believes, which is
+ * the other half of a capability mismatch: a `ht=0` here means the driver was
+ * never told the link is HT, whatever the air was doing.
+ */
+void
+wlan_bridge_link_dump(void)
+{
+	const struct ieee80211_sta *sta = adapter.sta;
+	unsigned int i;
+
+	wlan_osal_log("wlan: link hw=%d vif=%d sta=%d tx=%u\n",
+	    adapter.hw != NULL ? 1 : 0, adapter.vif != NULL ? 1 : 0,
+	    sta != NULL ? 1 : 0, adapter.tx_calls);
+	if (sta != NULL)
+		wlan_osal_log("wlan: link peer supp=0x%08x ht=%u mcs=0x%08x "
+		    "nss=%u wme=%u\n", (unsigned)sta->deflink.supp_rates[0],
+		    sta->deflink.ht_cap.ht_supported ? 1u : 0u,
+		    (unsigned)sta->deflink.ht_cap.mcs.rx_mask[0],
+		    (unsigned)sta->deflink.rx_nss, sta->wme ? 1u : 0u);
+	else
+		wlan_osal_log("wlan: link peer supp=0x%08x ht=0 mcs=0x%08x "
+		    "nss=0 wme=0\n", 0u, 0u);
+	wlan_osal_log("wlan: link rx data=%u retry=%u\n", adapter.rx_data,
+	    adapter.rx_retry);
+	for (i = 0; i < adapter.rx_hist_n; i++)
+		wlan_osal_log("wlan: link rxrate enc=%u idx=%u bw=%u n=%u "
+		    "retry=%u\n", (unsigned)adapter.rx_hist[i].enc,
+		    (unsigned)adapter.rx_hist[i].idx,
+		    (unsigned)adapter.rx_hist[i].bw, adapter.rx_hist[i].n,
+		    adapter.rx_hist[i].retry);
+}
+
+void
+wlan_bridge_link_reset(void)
+{
+
+	memset(adapter.rx_hist, 0, sizeof(adapter.rx_hist));
+	adapter.rx_hist_n = 0;
+	adapter.rx_data = 0;
+	adapter.rx_retry = 0;
 }
 
 /* ------------------------------------------------------------------ */

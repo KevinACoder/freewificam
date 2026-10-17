@@ -399,6 +399,7 @@ void wlan_dataplane_chain(void)
 		g_udp_pkts = 0U;
 		g_udp_bytes = 0UL;
 		wlan_census_reset();
+		wlan_bridge_link_reset();
 		LOG_ANCHOR("wlan: downlink phase %u ready window=%u s\n",
 		    phase, (unsigned)(WLAN_IPERF_WINDOW_MS / 1000));
 		for (waited = 0; waited < WLAN_IPERF_WINDOW_MS;
@@ -409,6 +410,7 @@ void wlan_dataplane_chain(void)
 		LOG_ANCHOR("wlan: udp sink pkts=%u bytes=%lu\n", g_udp_pkts,
 		    g_udp_bytes);
 		wlan_census_print();
+		wlan_bridge_link_dump();
 	}
 
 	/* the uplink phases: this image is the client and the peer is the
@@ -420,9 +422,11 @@ void wlan_dataplane_chain(void)
 	} else {
 		for (phase = 1U; phase <= WLAN_UPLINK_PHASES; phase++) {
 			wlan_census_reset();
+			wlan_bridge_link_reset();
 			if (uplink_phase_run(phase, peer) != 0)
 				return;
 			wlan_census_print();
+			wlan_bridge_link_dump();
 		}
 	}
 }

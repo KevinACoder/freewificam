@@ -360,6 +360,15 @@ int	wlan_bridge_fw_lookup(const char *name, const uint8_t **data,
 	    size_t *size);
 
 /*
+ * The link face, implemented by the driver half (the receive descriptor and
+ * the driver's station object live on the linuxkpi side). `dump` logs one
+ * `wlan: link ...` line per bucket; `reset` zeroes the counters so a phase can
+ * be measured on its own.
+ */
+void	wlan_bridge_link_dump(void);
+void	wlan_bridge_link_reset(void);
+
+/*
  * The driver half's entry point: installs the linuxkpi-side bridge and the
  * seam's driver handle. Called at start-up by whoever owns the driver (the
  * board's WLAN bring-up, or a host harness). Returns 0 or a negative error.

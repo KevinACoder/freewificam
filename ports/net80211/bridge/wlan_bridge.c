@@ -278,6 +278,109 @@ bridge_elem_walk_report(const uint8_t *frame, size_t len)
 	    (unsigned)len, (unsigned)off);
 }
 
+/*
+ * The negotiation face: one line per association-family frame, naming the
+ * elements it carries and decoding the four that decide what the link can do -
+ * Supported Rates, Extended Supported Rates, HT Capabilities (45), WMM (vendor
+ * 221, OUI 00:50:f2) and RSN (48).  A capability mismatch is invisible in
+ * every counter the stack keeps and in every derived flag the AP reports
+ * (`iw station dump` prints `WMM/WME: no` and a last-used rate, not the
+ * negotiated IEs); it is visible here, in the bytes the two sides exchanged.
+ *
+ * `dir` is "tx", "rx" or "scan"; the fixed-field length differs per subtype, so
+ * the subtype decides where the element stream starts.
+ */
+static void
+bridge_ie_report(const char *dir, const uint8_t *frame, size_t len)
+{
+	unsigned int sub = (unsigned)(frame[0] & 0xf0);
+	size_t off;
+	unsigned int n = 0, ssid = 0, rates = 0, xrates = 0, rsn = 0;
+	unsigned int htcap = 0, htinfo = 0, wme = 0;
+	uint32_t mcs0 = 0;
+	uint16_t hcap = 0;
+	int status = -1;
+
+	if (len < 24)
+		return;
+	switch (sub) {
+	case 0x00:		/* association request */
+		off = 24 + 4;
+		break;
+	case 0x20:		/* reassociation request */
+		off = 24 + 10;
+		break;
+	case 0x10:		/* association response */
+	case 0x30:		/* reassociation response */
+		off = 24 + 6;
+		status = len >= 28 ? (int)(frame[26] | (frame[27] << 8)) : -1;
+		break;
+	case 0xb0:		/* authentication */
+		off = 24 + 6;
+		status = len >= 30 ? (int)(frame[28] | (frame[29] << 8)) : -1;
+		break;
+	case 0x80:		/* beacon */
+	case 0x50:		/* probe response */
+		off = 24 + 12;
+		break;
+	default:
+		off = 24;
+		break;
+	}
+	if (off > len)
+		return;
+	while (off + 1 < len) {
+		unsigned int id = frame[off];
+		unsigned int elen = frame[off + 1];
+		const uint8_t *el = &frame[off + 2];
+
+		if (len - off < elen + 2u)
+			break;
+		n++;
+		switch (id) {
+		case 0:
+			ssid = elen;
+			break;
+		case 1:
+			rates = elen;
+			break;
+		case 50:
+			xrates = elen;
+			break;
+		case 48:
+			rsn = elen;
+			break;
+		case 45:
+			htcap = 1;
+			if (elen >= 2) {
+				hcap = (uint16_t)(el[0] | (el[1] << 8));
+				if (elen >= 6)
+					mcs0 = (uint32_t)el[2] |
+					    ((uint32_t)el[3] << 8) |
+					    ((uint32_t)el[4] << 16) |
+					    ((uint32_t)el[5] << 24);
+			}
+			break;
+		case 61:
+			htinfo = 1;
+			break;
+		case 221:
+			if (elen >= 4 && el[0] == 0x00 && el[1] == 0x50 &&
+			    el[2] == 0xf2 && (el[3] == 0 || el[3] == 2))
+				wme = 1;
+			break;
+		default:
+			break;
+		}
+		off += elen + 2u;
+	}
+	wlan_osal_log("wlan: ie dir=%s sub=%02x len=%u status=%d n=%u "
+	    "ssid=%u rates=%u xrates=%u rsn=%u htcap=%u hcap=0x%04x "
+	    "mcs0=0x%08x htinfo=%u wme=%u\n", dir, sub, (unsigned)len, status,
+	    n, ssid, rates, xrates, rsn, htcap, (unsigned)hcap,
+	    (unsigned)mcs0, htinfo, wme);
+}
+
 static void
 bridge_oerror(struct ieee80211com *ic)
 {
@@ -310,6 +413,13 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 			break;
 		if ((mtod(m, const uint8_t *)[0] & 0xf0) != 0x40) {
 			const uint8_t *fc = mtod(m, const uint8_t *);
+
+			/* every association-family frame we send, decoded:
+			 * this is the transmitting half of the negotiation
+			 * record (the receiving half logs in wlan_bridge_input) */
+			if ((fc[0] & 0xf0) == 0x00 || (fc[0] & 0xf0) == 0x20 ||
+			    (fc[0] & 0xf0) == 0xb0)
+				bridge_ie_report("tx", fc, (size_t)m->m_len);
 			/* the first association-family frame and the first
 			 * probe request go out as one hex line each: the air
 			 * audit's raw material (a frame that the chip never
@@ -894,10 +1004,15 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 			if (bridge.elem_walk_logged < 3) {
 				bridge.elem_walk_logged++;
 				bridge_elem_walk_report(frame, len);
+				/* what the AP advertises, decoded - the other
+				 * end of a capability mismatch */
+				bridge_ie_report("scan", frame, len);
 			}
 		} else if (sub == 0x50) {
 			bridge.rx_probersp++;
 			bridge_bss_seen_note(frame);
+			if (bridge.rx_probersp < 4)
+				bridge_ie_report("scan", frame, len);
 		}
 		/* The association-exchange family always logs (rare, and the
 		 * evidence a join judgment stands on), now with the FCS
@@ -910,6 +1025,9 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 		    sub == 0x00 || sub == 0x10 /* assoc req/resp */)) {
 			static unsigned int dumped;
 
+			/* the receiving half of the negotiation record: the
+			 * AP's answer with every element it carries */
+			bridge_ie_report("rx", frame, len);
 			wlan_osal_log("wlan: rx mgt fc=%02x fcs=%d retry=%u sc=%04x "
 			    "a1=%02x:%02x:%02x:%02x:%02x:%02x "
 			    "a2=%02x:%02x:%02x:%02x:%02x:%02x len=%u\n", fc0,

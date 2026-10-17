@@ -64,6 +64,9 @@ ANCHORS = {
         # the distinct transmitters it recorded - the line that separates "the
         # sweep never went there" from "it went there and heard nothing"
         r"wlan: dwell tuned=\d+ rx=\d+ bss=\d+",
+        # what the AP advertises, decoded: the advertisement half of a
+        # capability mismatch (the association exchange carries the other)
+        r"wlan: ie dir=scan sub=80 ",
     ],
     # the case's own verdict line, printed only when the driver's open-auth
     # exchange completed within the prompt ceiling (wlan_join_raw.c)
@@ -73,6 +76,11 @@ ANCHORS = {
     "wlan-join": [
         r"wlan: join waiting for the supplicant",
         r"wlan: join-ok bssid=",
+        # the negotiation record, both directions: what we asked for and what
+        # the AP answered. A capability mismatch is invisible everywhere else
+        # (the AP's own station dump prints derived flags, not these bytes).
+        r"wlan: ie dir=tx sub=00 ",
+        r"wlan: ie dir=rx sub=10 ",
     ],
     "wlan-udisk": [
         r"wlan: udisk claimed",
@@ -116,6 +124,14 @@ ANCHORS = {
         r"perf census: A usb qlen min=\d+ mean=\d+ n=\d+",
         r"perf census: A chusb submits=\d+ done=\d+",
         r"perf census: A 80211 stack n=\d+",
+        # the link face: at which PHY rate the data arrived and how much of it
+        # the peer had already sent once. Both come from the receive descriptor
+        # and the frame's own Retry bit, so a phase's throughput arrives with
+        # the air's own account of it - the reading the air audit otherwise
+        # needs a second radio for.
+        r"wlan: link peer supp=0x[0-9a-f]{8} ht=\d+",
+        r"wlan: link rx data=\d+ retry=\d+",
+        r"wlan: link rxrate enc=\d+ idx=\d+ bw=\d+ n=\d+ retry=\d+",
     ],
 }
 
@@ -148,6 +164,16 @@ CENSUS_BLOCK = (
     "lkpi: perf census: A 80211 stack n=12104 avg_us=52 max_us=880 hot=[e15:11890 e16:214] over=0\r\n"
 )
 
+# The link face: what the receive descriptor and the frame's own Retry bit said
+# about the phase that just closed. Emitted after the census block, once per
+# phase. `idx` is a legacy rate index at enc=0 and an MCS at enc=1.
+LINK_BLOCK = (
+    "wlan: link hw=1 vif=1 sta=1 tx=2311\r\n"
+    "wlan: link peer supp=0x00000fff ht=0 mcs=0x00000000 nss=1 wme=0\r\n"
+    "wlan: link rx data=14820 retry=0\r\n"
+    "wlan: link rxrate enc=0 idx=11 bw=0 n=14820 retry=0\r\n"
+)
+
 SENTINEL_LINE = (
     "[ 123.400] BOARD-SUITE threadx-rk3568-wlan "
     "result=pass cases=7 ok=7 exit=0\r\n"
@@ -170,6 +196,9 @@ BASE_TRANSCRIPT = (
     "[  15.000] wlan: bss 14:a3:2f:18:07:2c ssid=QiQiJia freq=2412 rssi=-53\r\n"
     "[  15.010] wlan: bss 14:a3:2f:18:07:31 ssid=QiQiJia-2 freq=2412 rssi=-57\r\n"
     "[  15.015] wlan: dwell tuned=2412 rx=41 bss=2\r\n"
+    "[  15.016] wlan: ie dir=scan sub=80 len=310 status=-1 n=9 ssid=7 "
+    "rates=8 xrates=4 rsn=20 htcap=1 hcap=0x016e mcs0=0x000000ff htinfo=1 "
+    "wme=1\r\n"
     "[  15.018] wlan: dwell tuned=2417 rx=0 bss=0\r\n"
     "[  15.020] wlan: gt-match idx=0 bssid=14:a3:2f:18:07:2c freq=2412 seen=1\r\n"
     "[  15.030] wlan: scan done rows=2 chans=12\r\n"
@@ -189,6 +218,10 @@ BASE_TRANSCRIPT = (
     "14:a3:2f:18:07:2c [PTK=CCMP GTK=CCMP]\r\n"
     "[  22.100] wlan: join-ok bssid=14:a3:2f:18:07:2c state=RUN mgt_tx=15 "
     "data_tx=2 rx=90\r\n"
+    "[  22.110] wlan: ie dir=tx sub=00 len=75 status=-1 n=4 ssid=7 rates=8 "
+    "xrates=4 rsn=22 htcap=0 hcap=0x0000 mcs0=0x00000000 htinfo=0 wme=0\r\n"
+    "[  22.120] wlan: ie dir=rx sub=10 len=134 status=0 n=5 ssid=0 rates=8 "
+    "xrates=4 rsn=26 htcap=1 hcap=0x016e mcs0=0x000000ff htinfo=1 wme=1\r\n"
     "[  22.200] CASE threadx-rk3568-wlan/wlan-join PASS\r\n"
     "[  23.000] wlan: dataplane up, dhcp started\r\n"
     "[  25.000] wlan: dhcp bound ip=192.168.0.211/24 gw=192.168.0.1\r\n"
@@ -203,19 +236,19 @@ BASE_TRANSCRIPT = (
     "[  34.200] wlan: downlink phase 1 ready window=20 s\r\n"
     "[  54.200] wlan: downlink phase 1 done\r\n"
     "[  54.210] wlan: udp sink pkts=0 bytes=0\r\n"
-    + CENSUS_BLOCK
+    + CENSUS_BLOCK + LINK_BLOCK
     + "[  54.300] wlan: downlink phase 2 ready window=20 s\r\n"
     "[  74.300] wlan: downlink phase 2 done\r\n"
     "[  74.310] wlan: udp sink pkts=14820 bytes=21516000\r\n"
-    + CENSUS_BLOCK
+    + CENSUS_BLOCK + LINK_BLOCK
     + "[  74.400] wlan: downlink phase 3 ready window=20 s\r\n"
     "[  94.400] wlan: downlink phase 3 done\r\n"
     "[  94.410] wlan: udp sink pkts=0 bytes=0\r\n"
-    + CENSUS_BLOCK
+    + CENSUS_BLOCK + LINK_BLOCK
     + "[  94.500] wlan: downlink phase 4 ready window=20 s\r\n"
     "[ 114.500] wlan: downlink phase 4 done\r\n"
     "[ 114.510] wlan: udp sink pkts=15103 bytes=21920300\r\n"
-    + CENSUS_BLOCK
+    + CENSUS_BLOCK + LINK_BLOCK
     + "[ 114.600] wlan: uplink skipped reason=no-peer\r\n"
     "[ 114.700] CASE threadx-rk3568-wlan/wlan-dataplane PASS\r\n"
     "[ 115.000] wlan: udisk core init bus=3 hcd=xhci base=0xfd000000\r\n"
@@ -326,6 +359,27 @@ MUTATIONS = [
     ("census chusb dropped", BASE_TRANSCRIPT.replace(
         "lkpi: perf census: A chusb submits=12480 done=12480 pass=12480 staged=0 "
         "slots_x=0 stage_x=0 stage_ovf=0 refused=0\r\n", ""), 1),
+    # the link face: one block per closed phase, so each mutation removes every
+    # instance of the line it targets
+    ("link rx dropped", BASE_TRANSCRIPT.replace(
+        "wlan: link rx data=14820 retry=0\r\n", ""), 1),
+    ("link rxrate dropped", BASE_TRANSCRIPT.replace(
+        "wlan: link rxrate enc=0 idx=11 bw=0 n=14820 retry=0\r\n", ""), 1),
+    ("link peer dropped", BASE_TRANSCRIPT.replace(
+        "wlan: link peer supp=0x00000fff ht=0 mcs=0x00000000 nss=1 wme=0\r\n", ""), 1),
+    # the negotiation record: both directions, and the AP's own advertisement
+    ("assoc request record dropped", BASE_TRANSCRIPT.replace(
+        "wlan: ie dir=tx sub=00 len=75 status=-1 n=4 ssid=7 rates=8 "
+        "xrates=4 rsn=22 htcap=0 hcap=0x0000 mcs0=0x00000000 htinfo=0 wme=0\r\n",
+        ""), 1),
+    ("assoc answer record dropped", BASE_TRANSCRIPT.replace(
+        "wlan: ie dir=rx sub=10 len=134 status=0 n=5 ssid=0 rates=8 "
+        "xrates=4 rsn=26 htcap=1 hcap=0x016e mcs0=0x000000ff htinfo=1 wme=1\r\n",
+        ""), 1),
+    ("scan advertisement record dropped", BASE_TRANSCRIPT.replace(
+        "wlan: ie dir=scan sub=80 len=310 status=-1 n=9 ssid=7 rates=8 "
+        "xrates=4 rsn=20 htcap=1 hcap=0x016e mcs0=0x000000ff htinfo=1 wme=1\r\n",
+        ""), 1),
     ("udp sink counts dropped", BASE_TRANSCRIPT
      .replace("wlan: udp sink pkts=0 bytes=0\r\n", "")
      .replace("wlan: udp sink pkts=14820 bytes=21516000\r\n", "")
