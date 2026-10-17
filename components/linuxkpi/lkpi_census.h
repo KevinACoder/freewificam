@@ -19,8 +19,15 @@
  *         the portable layers themselves carry no aarch64 register access.
  *
  *         The whole census compiles only under CONFIG_LKPI_CENSUS, which the
- *         rtl8189 image defines; every other image and every host suite links
- *         none of it.
+ *         rtl8189 and wlan images define; every other image and every host
+ *         suite links none of it.
+ *
+ *         The USB face (lkpi_usb_census_*) is the endpoint's time partition:
+ *         one async endpoint carries exactly one backend transfer in flight, so
+ *         at any instant it is either armed (the device holds it) or idle with
+ *         work queued behind it (the host has not re-armed it) - the two
+ *         histograms' totals sum to the measured window, and which of them
+ *         holds the time is the whole question a receive-wall round asks.
  * @date    14.10.2026
  */
 
@@ -94,6 +101,10 @@ void	lkpi_osdep_census_reset(void);
 void	lkpi_osdep_census_print(void);
 void	lkpi_fsl_census_reset(void);
 void	lkpi_fsl_census_print(void);
+void	lkpi_usb_census_reset(void);
+void	lkpi_usb_census_print(void);
+void	lkpi_80211_census_reset(void);
+void	lkpi_80211_census_print(void);
 
 /* the transmit-request stamp: where the stack hands a frame to the driver's
  * transmit entry, a note records when; the transfer path that finally writes it

@@ -39,6 +39,7 @@
 #include "lkpi_usb_backend.h"
 #include "linuxkpi_usb.h"
 #include "lkpi_rxtrace.h"
+#include "lkpi_census.h"
 
 /* ------------------------------------------------------------------ */
 /* DMA staging hook (passthrough)                                      */
@@ -245,10 +246,144 @@ struct lkpi_usb_ep {
 	 * driver's dispatcher will take */
 	u32			last_in_words[6];
 	u32			last_in_len;
+#ifdef CONFIG_LKPI_CENSUS
+	/* the endpoint's time partition (see the census block below): when the
+	 * in-flight urb was armed, when it completed, and whether work was
+	 * queued behind that completion.  Written by the completion context and
+	 * read by the drain thread; a torn read is a lost sample, never a
+	 * correctness fault - this is an instrument. */
+	u64			census_arm_ns;
+	u64			census_done_ns;
+	bool			census_gap_live;
+#endif
 };
 
 static struct lkpi_usb_ep lkpi_eps[LKPI_EP_N];
 static u32 lkpi_alloc_seq;		/* urb alloc identity source */
+
+#ifdef CONFIG_LKPI_CENSUS
+/* ------------------------------------------------------------------ */
+/* the endpoint's time partition                                       */
+/* ------------------------------------------------------------------ */
+/*
+ * One async endpoint carries exactly one backend transfer in flight, so at any
+ * instant it is in one of two states: armed (the device holds the transfer) or
+ * idle with work queued behind it (the host has not re-armed it).  The two
+ * histograms below are those states' durations, so their totals partition the
+ * measured window and the split itself answers the receive-wall question:
+ *
+ *   svc  arm -> HCD completion     the device/HCD service time
+ *   gap  completion -> next arm    the endpoint idle with work behind it
+ *
+ * and three finer histograms subdivide the host's side of a gap:
+ *
+ *   wake  completion -> drain entry        the drain thread's wake latency
+ *   kick  drain entry -> arm returned      publish + arm + submit
+ *   cb    deliver -> driver callback return
+ *
+ * A completion with nothing queued behind it is not a gap: the endpoint is
+ * idle because the driver owes it a buffer, and that is a different finding
+ * (counted as `starved`, kept out of the gap histogram).  The byte ledger is
+ * what says whether the device hands over one frame per transfer or an
+ * aggregate: the mean completion length times the completion rate is the
+ * device's delivered byte rate.
+ */
+static struct {
+	struct lkpi_census_histo	svc;	/* arm -> completion */
+	struct lkpi_census_histo	gap;	/* completion -> next arm */
+	struct lkpi_census_histo	wake;	/* completion -> drain entry */
+	struct lkpi_census_histo	kick;	/* drain entry -> arm returned */
+	struct lkpi_census_histo	cb;	/* deliver -> callback return */
+} lkpi_usb_census;
+static u32 lkpi_usb_starved;
+static u32 lkpi_usb_urb_done, lkpi_usb_urb_bytes, lkpi_usb_urb_short,
+	  lkpi_usb_urb_err;
+
+/* record what a completion leaves behind: the service time it closed, and the
+ * gap its endpoint is about to spend (armed again by whoever re-arms it). */
+static void
+lkpi_usb_census_completed(struct lkpi_usb_ep *ep, u32 len, int status,
+    u32 buf_len)
+{
+	u64 now = lkpi_census_now_ns();
+
+	if (ep->census_arm_ns != 0u) {
+		lkpi_census_histo_add(&lkpi_usb_census.svc,
+		    now - ep->census_arm_ns);
+		ep->census_arm_ns = 0u;
+	}
+	ep->census_done_ns = now;
+	ep->census_gap_live = (ep->qlen != 0u);
+	if (!ep->census_gap_live)
+		lkpi_usb_starved++;
+	lkpi_usb_urb_done++;
+	lkpi_usb_urb_bytes += len;
+	if (len < buf_len)
+		lkpi_usb_urb_short++;
+	if (status != 0)
+		lkpi_usb_urb_err++;
+}
+
+/* record the arm that closes a gap: called wherever a transfer actually goes
+ * in flight (the drain thread's pipeline kick and the retry pass). */
+static void
+lkpi_usb_census_armed(struct lkpi_usb_ep *ep)
+{
+	u64 now = lkpi_census_now_ns();
+
+	ep->census_arm_ns = now;
+	if (ep->census_gap_live) {
+		lkpi_census_histo_add(&lkpi_usb_census.gap,
+		    now - ep->census_done_ns);
+		ep->census_gap_live = false;
+	}
+}
+
+void
+lkpi_usb_census_reset(void)
+{
+
+	lkpi_census_histo_reset(&lkpi_usb_census.svc);
+	lkpi_census_histo_reset(&lkpi_usb_census.gap);
+	lkpi_census_histo_reset(&lkpi_usb_census.wake);
+	lkpi_census_histo_reset(&lkpi_usb_census.kick);
+	lkpi_census_histo_reset(&lkpi_usb_census.cb);
+	lkpi_usb_starved = 0u;
+	lkpi_usb_urb_done = 0u;
+	lkpi_usb_urb_bytes = 0u;
+	lkpi_usb_urb_short = 0u;
+	lkpi_usb_urb_err = 0u;
+}
+
+void
+lkpi_usb_census_print(void)
+{
+	unsigned int i;
+
+	lkpi_census_histo_print("perf census: A usb svc", &lkpi_usb_census.svc);
+	lkpi_census_histo_print("perf census: A usb gap", &lkpi_usb_census.gap);
+	lkpi_census_histo_print("perf census: A usb wake", &lkpi_usb_census.wake);
+	lkpi_census_histo_print("perf census: A usb kick", &lkpi_usb_census.kick);
+	lkpi_census_histo_print("perf census: A usb cb", &lkpi_usb_census.cb);
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A usb urbs done=%u bytes=%u mean_len=%u short=%u "
+	    "err=%u starved=%u\n", lkpi_usb_urb_done, lkpi_usb_urb_bytes,
+	    lkpi_usb_urb_done != 0u ? lkpi_usb_urb_bytes / lkpi_usb_urb_done : 0u,
+	    lkpi_usb_urb_short, lkpi_usb_urb_err, lkpi_usb_starved);
+	/* the endpoint ledger: which endpoint carried the phase, and how much -
+	 * the receive bulk-in is otherwise one row among twelve */
+	for (i = 0u; i < (unsigned int)LKPI_EP_N; i++) {
+		const struct lkpi_usb_ep *ep = &lkpi_eps[i];
+
+		if (ep->key == NULL || ep->enqueued == 0u)
+			continue;
+		lkpi_printf(ULOG_INFO_LEVEL,
+		    "perf census: A usb ep%u enq=%u done=%u kicks=%u err=%u "
+		    "lastlen=%u\n", ep->ep_addr, ep->enqueued, ep->completions,
+		    ep->kicks, ep->errors, ep->last_in_len);
+	}
+}
+#endif /* CONFIG_LKPI_CENSUS */
 
 /* first-violation latches: the FIRST hit prints one compact evidence
  * line and every hit counts */
@@ -441,6 +576,10 @@ lkpi_usb_be_complete(void *arg, int nbytes)
 	ep->done_urb = urb;
 	ep->done_status = st;
 	ep->done_len = nbytes > 0 ? (u32)nbytes : ep->be.actual_length;
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_usb_census_completed(ep, ep->done_len, st,
+	    urb->transfer_buffer_length);
+#endif
 	spin_unlock_irqrestore(&ep->lock, flags);
 
 	/* done list (interrupt-guarded): append the ENDPOINT, wake the drain */
@@ -486,6 +625,9 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	int st;
 	u32 len;
 	unsigned long flags;
+#ifdef CONFIG_LKPI_CENSUS
+	u64 t_drain = lkpi_census_now_ns();
+#endif
 
 	spin_lock_irqsave(&ep->lock, flags);
 	urb = ep->done_urb;
@@ -504,6 +646,12 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	len = ep->done_len;
 	urb->_qstate = LKPI_Q_CALLBACK;
 	spin_unlock_irqrestore(&ep->lock, flags);
+#ifdef CONFIG_LKPI_CENSUS
+	/* how long the completion sat on the done list before this thread came
+	 * for it: the wake latency, and the drain thread being busy with an
+	 * earlier endpoint's callback shows up here too */
+	lkpi_census_histo_add(&lkpi_usb_census.wake, t_drain - ep->census_done_ns);
+#endif
 
 	/* publish the captured result into the driver-visible fields; the
 	 * received bytes are already in the caller's buffer (the seam moves
@@ -550,8 +698,23 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	 * one physical transfer is in flight either way, so the endpoint's data
 	 * toggle and its ordering are unchanged (see DIVERGENCES-USB.md). */
 	lkpi_usb_kick(ep);
+#ifdef CONFIG_LKPI_CENSUS
+	/* drain entry -> the next transfer in flight: the publish above plus the
+	 * arm and the submit, which is what the host spends before the device can
+	 * be handed work again */
+	lkpi_census_histo_add(&lkpi_usb_census.kick, lkpi_census_now_ns() - t_drain);
+#endif
 
+#ifdef CONFIG_LKPI_CENSUS
+	{
+		u64 t_cb = lkpi_census_now_ns();
+
+		lkpi_usb_deliver(urb);
+		lkpi_census_histo_add(&lkpi_usb_census.cb, lkpi_census_now_ns() - t_cb);
+	}
+#else
 	lkpi_usb_deliver(urb);
+#endif
 
 	/* if the callback resubmitted this urb it is QUEUED again and now
 	 * belongs to the queue; otherwise it goes idle */
@@ -748,6 +911,9 @@ lkpi_usb_kick(struct lkpi_usb_ep *ep)
 		if (ret == 0)
 			ret = lkpi_usb_be_submit_urb(&ep->be);
 		if (ret == 0) {
+#ifdef CONFIG_LKPI_CENSUS
+			lkpi_usb_census_armed(ep);
+#endif
 			lkpi_usb_park_clear(ep);
 			return;		/* in flight; the completion claim ends it */
 		}
@@ -782,6 +948,10 @@ lkpi_usb_kick(struct lkpi_usb_ep *ep)
 			ep->done_urb = urb;
 			ep->done_status = lkpi_usb_errno(ret);
 			ep->done_len = 0;
+#ifdef CONFIG_LKPI_CENSUS
+			lkpi_usb_census_completed(ep, 0u, ep->done_status,
+			    urb->transfer_buffer_length);
+#endif
 			spin_unlock_irqrestore(&ep->lock, flags);
 			{
 				os_critical_state_t csr;
@@ -1125,11 +1295,101 @@ lkpi_usb_freed_clear(const struct urb *urb)
 	}
 }
 
+/*
+ * The coherent allocation the Linux face declares ([LNX] include/linux/usb.h:
+ * usb_alloc_coherent - memory a driver may hand the controller with no cache
+ * maintenance).  On a target whose DMA window is mapped non-cacheable that
+ * window *is* coherent memory, so this is a first-fit allocator over a static
+ * pool placed in the same section the adapter's stage buffers live in.  Two
+ * consequences, both intended: the face tells the truth about what it returns,
+ * and the adapter's own pass-through (a buffer already inside the window is not
+ * staged) becomes reachable for a driver that uses this API - which is what a
+ * Linux driver with a DMA buffer does (usb-storage allocates its iobuf this way,
+ * [LNX] drivers/usb/storage/usb.c:462).
+ *
+ * An image that reserves no pool keeps the general heap: the face stays a valid
+ * allocator, and every transfer of such a buffer is staged.  The pool's size is
+ * a per-image budget decision, because the window is capped - the linker script
+ * asserts it still fits the one 2M block that maps it.
+ */
+#ifndef CONFIG_LKPI_USB_COHERENT_POOL
+#define CONFIG_LKPI_USB_COHERENT_POOL 0
+#endif
+
+#if CONFIG_LKPI_USB_COHERENT_POOL > 0
+#define LKPI_COHERENT_GRANULE	64u
+#define LKPI_COHERENT_GRANULES	\
+	(CONFIG_LKPI_USB_COHERENT_POOL / LKPI_COHERENT_GRANULE)
+
+static unsigned char lkpi_coherent_pool[CONFIG_LKPI_USB_COHERENT_POOL]
+	__attribute__((aligned(LKPI_COHERENT_GRANULE),
+	    section(".noncacheable")));
+static unsigned char lkpi_coherent_used[(LKPI_COHERENT_GRANULES + 7u) / 8u];
+
+static void *
+lkpi_coherent_alloc(size_t size)
+{
+	unsigned int need = (unsigned int)((size + LKPI_COHERENT_GRANULE - 1u) /
+	    LKPI_COHERENT_GRANULE);
+	unsigned int i, run = 0, start = 0;
+
+	for (i = 0; i < LKPI_COHERENT_GRANULES; i++) {
+		if (lkpi_coherent_used[i / 8u] & (1u << (i % 8u))) {
+			run = 0;
+			continue;
+		}
+		if (run == 0)
+			start = i;
+		if (++run == need) {
+			unsigned int j;
+
+			for (j = start; j < start + need; j++)
+				lkpi_coherent_used[j / 8u] |= (unsigned char)
+				    (1u << (j % 8u));
+			return &lkpi_coherent_pool[start * LKPI_COHERENT_GRANULE];
+		}
+	}
+	return NULL;
+}
+
+static int
+lkpi_coherent_in_pool(const void *p)
+{
+	unsigned long a = (unsigned long)p;
+	unsigned long lo = (unsigned long)lkpi_coherent_pool;
+
+	return a >= lo && a < lo + sizeof(lkpi_coherent_pool);
+}
+
+static void
+lkpi_coherent_free(void *p, size_t size)
+{
+	unsigned int need = (unsigned int)((size + LKPI_COHERENT_GRANULE - 1u) /
+	    LKPI_COHERENT_GRANULE);
+	unsigned int start = (unsigned int)(((unsigned long)p -
+	    (unsigned long)lkpi_coherent_pool) / LKPI_COHERENT_GRANULE);
+	unsigned int i;
+
+	for (i = start; i < start + need && i < LKPI_COHERENT_GRANULES; i++)
+		lkpi_coherent_used[i / 8u] &= (unsigned char)~(1u << (i % 8u));
+}
+#endif /* CONFIG_LKPI_USB_COHERENT_POOL */
+
 void *
 lkpi_usb_alloc_coherent(size_t size, unsigned int mem_flags)
 {
-	void *p = kzalloc(size, mem_flags);
+	void *p;
 
+#if CONFIG_LKPI_USB_COHERENT_POOL > 0
+	(void)mem_flags;
+	p = lkpi_coherent_alloc(size);
+	/* the heap path below zeroes (kzalloc) and its consumers rely on that;
+	 * keep the face's behaviour the same either way */
+	if (p != NULL)
+		memset(p, 0, size);
+#else
+	p = kzalloc(size, mem_flags);
+#endif
 	if (p == NULL)
 		lkpi_usb_mem.alloc_fail++;
 	else
@@ -1141,9 +1401,15 @@ void
 lkpi_usb_free_coherent(void *p, size_t size)
 {
 
-	(void)size;
 	if (p == NULL)
 		return;
+#if CONFIG_LKPI_USB_COHERENT_POOL > 0
+	if (lkpi_coherent_in_pool(p)) {
+		lkpi_coherent_free(p, size);
+		lkpi_usb_mem.n_coherent_free++;
+		return;
+	}
+#endif
 	lkpi_usb_mem.n_coherent_free++;
 	kfree(p);
 }

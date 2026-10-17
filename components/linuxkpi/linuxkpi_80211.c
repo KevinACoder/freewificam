@@ -49,6 +49,7 @@
 
 #include "linuxkpi_80211.h"
 #include "linuxkpi_txq.h"
+#include "lkpi_census.h"
 
 /* ------------------------------------------------------------------ */
 /* compile-time contracts                                              */
@@ -677,6 +678,31 @@ lkpi80211_rx_linearize(struct ieee80211_hw *hw, struct sk_buff *skb)
  * is also the context that completes host commands - a delivery running inline
  * there can deadlock a command whose completion it is itself carrying.
  */
+#ifdef CONFIG_LKPI_CENSUS
+/*
+ * What one frame costs between this port's queue and the stack's handoff: the
+ * call below runs the bridge, net80211's input and the presentation layer's
+ * delivery, so this histogram is the shared stack's share of a frame - the
+ * other end of the question the USB face's `cb` histogram opens (that one is
+ * the driver's own parse and enqueue).
+ */
+static struct lkpi_census_histo lkpi_80211_stack;
+
+void
+lkpi_80211_census_reset(void)
+{
+
+	lkpi_census_histo_reset(&lkpi_80211_stack);
+}
+
+void
+lkpi_80211_census_print(void)
+{
+
+	lkpi_census_histo_print("perf census: A 80211 stack", &lkpi_80211_stack);
+}
+#endif /* CONFIG_LKPI_CENSUS */
+
 static void
 lkpi80211_rx_work(struct work_struct *w)
 {
@@ -696,11 +722,20 @@ lkpi80211_rx_work(struct work_struct *w)
 
 		rs = (struct ieee80211_rx_status *)skb->cb;
 		ctx->rx_frames++;
-		if (bridge_ops != NULL && bridge_ops->rx != NULL)
+		if (bridge_ops != NULL && bridge_ops->rx != NULL) {
+#ifdef CONFIG_LKPI_CENSUS
+			u64 t0 = lkpi_census_now_ns();
+
 			bridge_ops->rx(&ctx->hw, rs, skb);
-		else
+			lkpi_census_histo_add(&lkpi_80211_stack,
+			    lkpi_census_now_ns() - t0);
+#else
+			bridge_ops->rx(&ctx->hw, rs, skb);
+#endif
+		} else {
 			lkpi_printf(ULOG_ERROR_LEVEL,
 			    "lkpi80211: rx with no bridge; frame dropped\n");
+		}
 		memset(skb->cb, 0, sizeof(skb->cb));
 		lkpi_skb_free(skb);
 	}
