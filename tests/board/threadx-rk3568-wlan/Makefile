@@ -105,6 +105,19 @@ ifeq ($(WLAN_SINGLE),1)
 BASE_CFLAGS += -DWLAN_BRIDGE_SINGLE_CHANNEL
 endif
 
+# Diagnostic build switch (default off): WLAN_BW40=1 advertises 20/40 MHz in
+# the association request's HT Capabilities and configures the seam's channel
+# (and channel context) as 40 MHz with the HT40+ centre. The bench AP is HT40+
+# and sends 40 MHz to an HT station that asks for it; the Linux station on the
+# same AP reads back 150 Mbit/s MCS7 40 MHz while this line reads back legacy
+# 54 at 20 MHz, so the width is one half of the measured gap. Off by default:
+# the width must come from the AP's HT Information element, not from a build
+# constant, before this can ship.
+WLAN_BW40 ?= 0
+ifeq ($(WLAN_BW40),1)
+BASE_CFLAGS += -DWLAN_SEAM_BW40=1
+endif
+
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
 	-D_DEFAULT_SOURCE=1 \
 	-DLOG_CMD_WPA_KEY=2 -DLOG_CMD_USB_KEY=0 \

@@ -48,6 +48,21 @@
 #include "components/linuxkpi/linuxkpi_80211.h"
 #include "components/linuxkpi/fw_registry.h"
 
+/*
+ * The channel width the seam presents to the driver. 20 MHz unless the
+ * WLAN_BW40 diagnostic build asks for 40: the association then advertises
+ * 20/40 in its HT Capabilities (wlan_bridge.c's element) and the radio is
+ * configured with the HT40+ centre, so the two halves agree. The width is a
+ * build switch because the bridge has no HT Information parser yet - it
+ * cannot read the AP's secondary-channel offset, so it must not guess 40 in
+ * a shipping build.
+ */
+#ifndef WLAN_SEAM_BW40
+#define WLAN_SEAM_BW40 0
+#endif
+#define SEAM_CHAN_WIDTH \
+	(WLAN_SEAM_BW40 ? NL80211_CHAN_WIDTH_40 : NL80211_CHAN_WIDTH_20)
+
 /* ------------------------------------------------------------------ */
 /* state                                                               */
 /* ------------------------------------------------------------------ */
@@ -153,7 +168,8 @@ seam_config(struct wlan_seam_drv *drv, uint32_t changed, uint32_t freq)
 	adapter.tuned_freq = freq;
 	adapter.tuned_hw_value = hw_value;
 	return lkpi80211_drv_config_channel(adapter.hw, freq, hw_value,
-	    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20, 0);
+	    NL80211_BAND_2GHZ, SEAM_CHAN_WIDTH,
+	    WLAN_SEAM_BW40 ? freq + 10 : 0);
 }
 
 static int
@@ -564,7 +580,7 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	if (adapter.tuned_freq != 0) {
 		int cr = lkpi80211_drv_chanctx_use(adapter.hw, adapter.vif,
 		    adapter.tuned_freq, adapter.tuned_hw_value,
-		    NL80211_BAND_2GHZ, NL80211_CHAN_WIDTH_20);
+		    NL80211_BAND_2GHZ, SEAM_CHAN_WIDTH);
 
 		if (cr != 0)
 			return cr;

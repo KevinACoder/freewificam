@@ -1708,9 +1708,16 @@ wlan_bridge_set_wpa(int on)
  * (NL80211_CHAN_WIDTH_20) and the receive path has no block-ack session, so
  * advertising either would invite frames this port cannot take.
  */
+#ifndef WLAN_SEAM_BW40
+#define WLAN_SEAM_BW40 0
+#endif
 static const uint8_t bridge_htcap_ie[28] = {
 	45, 26,				/* element id, length */
-	0x20, 0x00,			/* HT cap: SGI-20 only */
+	0x20 | (WLAN_SEAM_BW40 ? 0x02 : 0x00), 0x00,
+					/* HT cap: SGI-20; bit 1 is
+					 * Supported Channel Width, which the
+					 * WLAN_BW40 build switch sets so the
+					 * association asks for 20/40 MHz */
 	0x00,				/* A-MPDU: 8 KiB, no min spacing */
 	0xff, 0x00, 0x00, 0x00,		/* MCS 0-7 */
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
