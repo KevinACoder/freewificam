@@ -92,11 +92,18 @@ void
 wlan_wpa_obs_init(void)
 {
 
+	wlan_wpa_obs_reset();
+	wpa_msg_register_cb(wlan_wpa_obs_msg);
+}
+
+void
+wlan_wpa_obs_reset(void)
+{
+
 	obs_negotiation = 0;
 	obs_connected = 0;
 	obs_assoc = 0;
 	obs_bssid[0] = '\0';
-	wpa_msg_register_cb(wlan_wpa_obs_msg);
 }
 
 int

@@ -11,6 +11,10 @@
 /* register on the supplicant's message callback (once, before any connect) */
 void	wlan_wpa_obs_init(void);
 
+/* clear the latched anchors without touching the callback registration: a
+ * case that waits for a fresh connect must not inherit the previous one's */
+void	wlan_wpa_obs_reset(void);
+
 /* latched anchors */
 int	wlan_wpa_obs_negotiation_completed(void);
 int	wlan_wpa_obs_connected(void);

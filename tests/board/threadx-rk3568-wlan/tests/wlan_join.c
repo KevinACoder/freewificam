@@ -40,6 +40,10 @@
  * 4-way needs a few round trips - 120 s is a generous ceiling, not a budget */
 #define WLAN_JOIN_WAIT_MS	120000U
 #define WLAN_JOIN_POLL_MS	200U
+/* the supplicant's CONNECTED and the stack's RUN come from two state
+ * machines; the message can land first on a fast build.  Poll this long
+ * before calling the disagreement a failure. */
+#define WLAN_JOIN_SETTLE_MS	2000U
 
 static const char *join_state_txt(int state)
 {
@@ -73,6 +77,18 @@ void wlan_join_chain(void)
 		    "probed driver (run wlan-probe first)");
 		return;
 	}
+
+	/* The observer latches are process-wide and the supplicant auto-connects
+	 * during the earlier cases.  A join case that trusts them can start and
+	 * finish without ever waiting for the console's connect: the clean -O2
+	 * boot (b8) did exactly that, failing one millisecond after this anchor
+	 * with the stack left in INIT by join-raw.  Clear them so the wait below
+	 * belongs to this case's connect. */
+	LOG_INFO("wlan: join case start latches connect=%u negotiation=%u "
+	    "state=%s\n", wlan_wpa_obs_connected(),
+	    wlan_wpa_obs_negotiation_completed(),
+	    join_state_txt(wlan_bridge_state()));
+	wlan_wpa_obs_reset();
 
 	LOG_ANCHOR("wlan: join waiting for the supplicant (send 'wpa connect "
 	    "<ssid> <psk>' on the console)\n");
@@ -131,7 +147,19 @@ void wlan_join_chain(void)
 	}
 
 	/* the stack's own state machine must agree: the association the
-	 * supplicant reported is the one net80211 reached RUN on */
+	 * supplicant reported is the one net80211 reached RUN on.  Give it a
+	 * short settle window first: the message and the state transition are
+	 * produced by different threads. */
+	{
+		unsigned int settle;
+
+		for (settle = 0; settle < WLAN_JOIN_SETTLE_MS;
+		    settle += WLAN_JOIN_POLL_MS) {
+			if (wlan_bridge_state() == 4 /* RUN */)
+				break;
+			osDelay(WLAN_JOIN_POLL_MS);
+		}
+	}
 	wlan_bridge_stats(&c);
 	if (wlan_bridge_state() != 4 /* RUN */) {
 		static char reason[96];
