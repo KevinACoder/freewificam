@@ -108,6 +108,7 @@ ANCHORS = {
         # phase's throughput comes with its own attribution
         r"perf census: A usb svc n=\d+",
         r"perf census: A usb gap n=\d+",
+        r"perf census: A usb starved n=\d+",
         r"perf census: A usb urbs done=\d+",
         r"perf census: A 80211 stack n=\d+",
     ],
@@ -134,6 +135,7 @@ CENSUS_BLOCK = (
     "lkpi: perf census: A usb wake n=12480 avg_us=1180 max_us=89900 hot=[e19:3120 e20:9360] over=0\r\n"
     "lkpi: perf census: A usb kick n=12480 avg_us=88 max_us=1400 hot=[e16:12044 e17:436] over=0\r\n"
     "lkpi: perf census: A usb cb n=12480 avg_us=41 max_us=610 hot=[e15:12001 e16:479] over=0\r\n"
+    "lkpi: perf census: A usb starved n=4610 avg_us=2104 max_us=180000 hot=[e20:2201 e21:2409] over=3\r\n"
     "lkpi: perf census: A usb urbs done=12480 bytes=28704000 mean_len=2300 short=12480 err=0 starved=0\r\n"
     "lkpi: perf census: A usb ep129 enq=12512 done=12480 kicks=12481 err=0 lastlen=2300\r\n"
     "lkpi: perf census: A 80211 stack n=12104 avg_us=52 max_us=880 hot=[e15:11890 e16:214] over=0\r\n"
@@ -303,6 +305,9 @@ MUTATIONS = [
     ("census gap dropped", BASE_TRANSCRIPT.replace(
         "lkpi: perf census: A usb gap n=12480 avg_us=1268 max_us=90210 "
         "hot=[e19:4002 e20:8478] over=0\r\n", ""), 1),
+    ("census starved dropped", BASE_TRANSCRIPT.replace(
+        "lkpi: perf census: A usb starved n=4610 avg_us=2104 max_us=180000 "
+        "hot=[e20:2201 e21:2409] over=3\r\n", ""), 1),
     ("census urbs dropped", BASE_TRANSCRIPT.replace(
         "lkpi: perf census: A usb urbs done=12480 bytes=28704000 mean_len=2300 "
         "short=12480 err=0 starved=0\r\n", ""), 1),

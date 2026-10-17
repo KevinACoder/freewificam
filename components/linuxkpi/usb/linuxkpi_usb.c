@@ -282,10 +282,12 @@ static u32 lkpi_alloc_seq;		/* urb alloc identity source */
  *   cb    deliver -> driver callback return
  *
  * A completion with nothing queued behind it is not a gap: the endpoint is
- * idle because the driver owes it a buffer, and that is a different finding
- * (counted as `starved`, kept out of the gap histogram).  The byte ledger is
- * what says whether the device hands over one frame per transfer or an
- * aggregate: the mean completion length times the completion rate is the
+ * idle because the driver owes it a buffer.  That time is not in the gap
+ * histogram (there was nothing to re-arm, so no arm closes it) and it is a
+ * finding in its own right - an unarmed endpoint cannot receive, whatever the
+ * device has ready - so it is measured separately as `starved`.  The byte
+ * ledger is what says whether the device hands over one frame per transfer or
+ * an aggregate: the mean completion length times the completion rate is the
  * device's delivered byte rate.
  */
 static struct {
@@ -294,6 +296,7 @@ static struct {
 	struct lkpi_census_histo	wake;	/* completion -> drain entry */
 	struct lkpi_census_histo	kick;	/* drain entry -> arm returned */
 	struct lkpi_census_histo	cb;	/* deliver -> callback return */
+	struct lkpi_census_histo	starved;	/* completion -> next arm, nothing queued */
 } lkpi_usb_census;
 static u32 lkpi_usb_starved;
 static u32 lkpi_usb_urb_done, lkpi_usb_urb_bytes, lkpi_usb_urb_short,
@@ -325,18 +328,25 @@ lkpi_usb_census_completed(struct lkpi_usb_ep *ep, u32 len, int status,
 }
 
 /* record the arm that closes a gap: called wherever a transfer actually goes
- * in flight (the drain thread's pipeline kick and the retry pass). */
+ * in flight (the drain thread's pipeline kick and the retry pass).  When the
+ * completion found nothing queued, the arm that finally comes is not a re-arm
+ * but a restart, and the interval it closes is the starved one. */
 static void
 lkpi_usb_census_armed(struct lkpi_usb_ep *ep)
 {
 	u64 now = lkpi_census_now_ns();
 
-	ep->census_arm_ns = now;
-	if (ep->census_gap_live) {
-		lkpi_census_histo_add(&lkpi_usb_census.gap,
-		    now - ep->census_done_ns);
+	if (ep->census_done_ns != 0u) {
+		if (ep->census_gap_live)
+			lkpi_census_histo_add(&lkpi_usb_census.gap,
+			    now - ep->census_done_ns);
+		else
+			lkpi_census_histo_add(&lkpi_usb_census.starved,
+			    now - ep->census_done_ns);
 		ep->census_gap_live = false;
+		ep->census_done_ns = 0u;
 	}
+	ep->census_arm_ns = now;
 }
 
 void
@@ -348,6 +358,7 @@ lkpi_usb_census_reset(void)
 	lkpi_census_histo_reset(&lkpi_usb_census.wake);
 	lkpi_census_histo_reset(&lkpi_usb_census.kick);
 	lkpi_census_histo_reset(&lkpi_usb_census.cb);
+	lkpi_census_histo_reset(&lkpi_usb_census.starved);
 	lkpi_usb_starved = 0u;
 	lkpi_usb_urb_done = 0u;
 	lkpi_usb_urb_bytes = 0u;
@@ -365,6 +376,7 @@ lkpi_usb_census_print(void)
 	lkpi_census_histo_print("perf census: A usb wake", &lkpi_usb_census.wake);
 	lkpi_census_histo_print("perf census: A usb kick", &lkpi_usb_census.kick);
 	lkpi_census_histo_print("perf census: A usb cb", &lkpi_usb_census.cb);
+	lkpi_census_histo_print("perf census: A usb starved", &lkpi_usb_census.starved);
 	lkpi_printf(ULOG_INFO_LEVEL,
 	    "perf census: A usb urbs done=%u bytes=%u mean_len=%u short=%u "
 	    "err=%u starved=%u\n", lkpi_usb_urb_done, lkpi_usb_urb_bytes,
