@@ -47,6 +47,16 @@
 
 #include "components/linuxkpi/linuxkpi_80211.h"
 #include "components/linuxkpi/fw_registry.h"
+#ifdef CONFIG_LKPI_CENSUS
+#include "components/linuxkpi/lkpi_census.h"
+#endif
+
+#ifdef CONFIG_LKPI_CENSUS
+/* the transmit handoff's own histogram (see seam_tx): one sample per frame
+ * handed to the driver.  It has to be file scope rather than a block static so
+ * the image's census snapshot can reset and print it alongside the others. */
+static struct lkpi_census_histo seam_tx_cost;
+#endif
 
 /*
  * The channel width the seam presents to the driver. 20 MHz unless the
@@ -273,6 +283,17 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	(void)drv;
 	if (adapter.hw == NULL || frame == NULL || len == 0)
 		return -1;
+#ifdef CONFIG_LKPI_CENSUS
+	/* The transmit side's share of a frame: this function's body from the
+	 * skb allocation through the driver's own transmit entry returning.
+	 * Without it the ledger only ever had the receive handoff's cost
+	 * (`perf census: A 80211 stack`, which brackets bridge_ops->rx), and a
+	 * frame's transmit cost was never measured at all - reading the receive
+	 * number as if it covered transmit is what made the ledger's
+	 * "stack + usb svc = frame interval" arithmetic look like a
+	 * decomposition.  Both directions now have their own number. */
+	u64 tx_t0 = lkpi_census_now_ns();
+#endif
 	/*
 	 * The driver's tx path expects a socket buffer whose control block it
 	 * fills (the rate keys, the AC, the key) and whose headroom has room for
@@ -338,10 +359,29 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	 * with no TID queue: "Invalid TXQ id", mvm/tx.c:1157).
 	 */
 	lkpi80211_tx(adapter.hw, adapter.vif, adapter.sta, skb);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_census_histo_add(&seam_tx_cost, lkpi_census_now_ns() - tx_t0);
+#endif
 	/* the driver owns the skb from here (its completion path releases it
 	 * through the substitute's tx-status entry) */
 	return (int)len;
 }
+
+#ifdef CONFIG_LKPI_CENSUS
+void
+wlan_seam_tx_census_reset(void)
+{
+
+	lkpi_census_histo_reset(&seam_tx_cost);
+}
+
+void
+wlan_seam_tx_census_print(void)
+{
+
+	lkpi_census_histo_print("perf census: A tx seam", &seam_tx_cost);
+}
+#endif
 
 static int
 seam_set_key(struct wlan_seam_drv *drv, int pairwise, int key_idx, int cipher,

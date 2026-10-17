@@ -50,6 +50,7 @@ wlan_census_reset(void)
 	lkpi_usb_census_reset();
 	lkpi_usb_cherryusb_census_reset();
 	lkpi_80211_census_reset();
+	wlan_seam_tx_census_reset();
 #endif
 }
 
@@ -60,5 +61,6 @@ wlan_census_print(void)
 	lkpi_usb_census_print();
 	lkpi_usb_cherryusb_census_print();
 	lkpi_80211_census_print();
+	wlan_seam_tx_census_print();
 #endif
 }

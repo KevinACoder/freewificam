@@ -375,4 +375,14 @@ void	wlan_bridge_link_reset(void);
  */
 int	wlan_seam_adapter_init(void);
 
+/*
+ * The transmit handoff's cost, one sample per frame the seam hands to the
+ * driver. The receive side already had a histogram (`80211 stack`); this is
+ * its transmit counterpart, and without both a frame's transmit cost cannot be
+ * told apart from a boot's receive cost. Compiled in only with the census
+ * (CONFIG_LKPI_CENSUS), like every other instrument here.
+ */
+void	wlan_seam_tx_census_reset(void);
+void	wlan_seam_tx_census_print(void);
+
 #endif /* WLAN_BRIDGE_H */

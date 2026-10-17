@@ -255,6 +255,15 @@ struct lkpi_usb_ep {
 	u64			census_arm_ns;
 	u64			census_done_ns;
 	bool			census_gap_live;
+	/* The same three states summed per endpoint.  The block below keeps one
+	 * histogram for the whole engine, which cannot answer "which endpoint is
+	 * the wall": a bulk-in carrying 60-byte reports and a bulk-out carrying
+	 * 1.5 KB frames share that mean, so a slow OUT endpoint and an idle one
+	 * look alike.  These counters are what separate them - count and total
+	 * nanoseconds per state, accumulated where the global histogram is added
+	 * so the two never disagree on what a sample is. */
+	u32			census_svc_n, census_gap_n, census_starved_n;
+	u64			census_svc_ns, census_gap_ns, census_starved_ns;
 #endif
 };
 
@@ -317,8 +326,11 @@ lkpi_usb_census_completed(struct lkpi_usb_ep *ep, u32 len, int status,
 	u64 now = lkpi_census_now_ns();
 
 	if (ep->census_arm_ns != 0u) {
-		lkpi_census_histo_add(&lkpi_usb_census.svc,
-		    now - ep->census_arm_ns);
+		u64 d = now - ep->census_arm_ns;
+
+		lkpi_census_histo_add(&lkpi_usb_census.svc, d);
+		ep->census_svc_n++;
+		ep->census_svc_ns += d;
 		ep->census_arm_ns = 0u;
 	}
 	ep->census_done_ns = now;
@@ -347,12 +359,17 @@ lkpi_usb_census_armed(struct lkpi_usb_ep *ep)
 	u64 now = lkpi_census_now_ns();
 
 	if (ep->census_done_ns != 0u) {
-		if (ep->census_gap_live)
-			lkpi_census_histo_add(&lkpi_usb_census.gap,
-			    now - ep->census_done_ns);
-		else
-			lkpi_census_histo_add(&lkpi_usb_census.starved,
-			    now - ep->census_done_ns);
+		u64 d = now - ep->census_done_ns;
+
+		if (ep->census_gap_live) {
+			lkpi_census_histo_add(&lkpi_usb_census.gap, d);
+			ep->census_gap_n++;
+			ep->census_gap_ns += d;
+		} else {
+			lkpi_census_histo_add(&lkpi_usb_census.starved, d);
+			ep->census_starved_n++;
+			ep->census_starved_ns += d;
+		}
 		ep->census_gap_live = false;
 		ep->census_done_ns = 0u;
 	}
@@ -362,6 +379,7 @@ lkpi_usb_census_armed(struct lkpi_usb_ep *ep)
 void
 lkpi_usb_census_reset(void)
 {
+	unsigned int i;
 
 	lkpi_census_histo_reset(&lkpi_usb_census.svc);
 	lkpi_census_histo_reset(&lkpi_usb_census.gap);
@@ -377,6 +395,21 @@ lkpi_usb_census_reset(void)
 	lkpi_usb_qlen_min = 0u;
 	lkpi_usb_qlen_sum = 0u;
 	lkpi_usb_qlen_n = 0u;
+	/* the per-endpoint partition resets with the global histograms above:
+	 * a phase's endpoint row must cover that phase only */
+	for (i = 0u; i < (unsigned int)LKPI_EP_N; i++) {
+		struct lkpi_usb_ep *ep = &lkpi_eps[i];
+
+		ep->census_svc_n = 0u;
+		ep->census_gap_n = 0u;
+		ep->census_starved_n = 0u;
+		ep->census_svc_ns = 0u;
+		ep->census_gap_ns = 0u;
+		ep->census_starved_ns = 0u;
+		ep->census_arm_ns = 0u;
+		ep->census_done_ns = 0u;
+		ep->census_gap_live = false;
+	}
 }
 
 void
@@ -400,7 +433,14 @@ lkpi_usb_census_print(void)
 	    lkpi_usb_qlen_n != 0u ? lkpi_usb_qlen_sum / lkpi_usb_qlen_n : 0u,
 	    lkpi_usb_qlen_n);
 	/* the endpoint ledger: which endpoint carried the phase, and how much -
-	 * the receive bulk-in is otherwise one row among twelve */
+	 * the receive bulk-in is otherwise one row among twelve.  The second
+	 * line is the same endpoint's time partition (count/total-ns per state,
+	 * see the block's comment): with one transfer in flight per endpoint the
+	 * three states partition that endpoint's window, so `svc 900/12345`
+	 * reads as "900 completions, 12.345 ms in service in total" and a
+	 * starved-dominant row is the endpoint waiting for the driver to hand it
+	 * a buffer.  The global histograms above stay in place so a boot stays
+	 * comparable with the ones already on the ledger. */
 	for (i = 0u; i < (unsigned int)LKPI_EP_N; i++) {
 		const struct lkpi_usb_ep *ep = &lkpi_eps[i];
 
@@ -410,6 +450,12 @@ lkpi_usb_census_print(void)
 		    "perf census: A usb ep%u enq=%u done=%u kicks=%u err=%u "
 		    "lastlen=%u\n", ep->ep_addr, ep->enqueued, ep->completions,
 		    ep->kicks, ep->errors, ep->last_in_len);
+		lkpi_printf(ULOG_INFO_LEVEL,
+		    "perf census: A usb ep%u part svc=%u/%u gap=%u/%u "
+		    "starved=%u/%u\n", ep->ep_addr,
+		    ep->census_svc_n, (u32)(ep->census_svc_ns / 1000u),
+		    ep->census_gap_n, (u32)(ep->census_gap_ns / 1000u),
+		    ep->census_starved_n, (u32)(ep->census_starved_ns / 1000u));
 	}
 }
 #endif /* CONFIG_LKPI_CENSUS */
@@ -471,6 +517,43 @@ static struct lkpi_usb_ep *lkpi_usb_done_tail;
 static osSemaphoreId_t lkpi_usb_done_sem;
 static bool lkpi_usb_done_ready;
 static osThreadId_t lkpi_usb_drain_thread;
+
+/*
+ * The drain thread's priority, as a run-time knob.  The thread runs every
+ * driver completion callback (receive parse, transmit status, the driver's
+ * re-arm), so where it sits relative to the context that feeds the endpoint
+ * decides whether a completion waits for that feeder to yield.  The default is
+ * the value this engine has always used; the knob exists so a measurement can
+ * move it without a rebuild and compare the two in one boot.
+ *
+ * The unit is the same band lwIP's threads are configured in: band*8 is the
+ * CMSIS priority value (ports/lwip/sys_arch.c's sys_arch_prio_to_cmsis does the
+ * same mapping), so band 3 is osPriorityNormal and band 5 is where the TCP/IP
+ * thread runs.
+ */
+static unsigned int lkpi_usb_drain_band = 3u;
+
+void
+lkpi_usb_drain_prio_band_set(unsigned int band)
+{
+
+	if (band < 1u)
+		band = 1u;
+	if (band > 7u)
+		band = 7u;
+	lkpi_usb_drain_band = band;
+	if (lkpi_usb_drain_thread != NULL)
+		(void)osThreadSetPriority(lkpi_usb_drain_thread,
+		    (osPriority_t)(band * 8u));
+}
+
+unsigned int
+lkpi_usb_drain_prio_band_get(void)
+{
+
+	return lkpi_usb_drain_band;
+}
+
 /* bring-up trace: every transfer crossed, caller-gated */
 static bool lkpi_usb_trace;
 static unsigned int lkpi_usb_trace_n;
@@ -2356,7 +2439,7 @@ lkpi_usb_start(void)
 	 * this thread. */
 	attr.name = "lkpi_usb_drain";
 	attr.stack_size = 32768u;
-	attr.priority = osPriorityNormal;
+	attr.priority = (osPriority_t)(lkpi_usb_drain_band * 8u);
 	lkpi_usb_drain_thread = osThreadNew(lkpi_usb_drain_thread_entry, NULL,
 	    &attr);
 	if (lkpi_usb_drain_thread == NULL) {

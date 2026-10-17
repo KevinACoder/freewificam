@@ -12,12 +12,20 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "csh.h"
 
 #include "os/cmsis2/cmsis2.h"
 #include "log.h"
+
+/* the USB engine's run-time policy knobs (drain thread priority). Declared
+ * here rather than through linuxkpi_usb.h: that header pulls in the whole
+ * linuxkpi core, whose include spelling belongs to the linuxkpi build domain,
+ * and this command layer only needs the two band entry points. */
+void lkpi_usb_drain_prio_band_set(unsigned int band);
+unsigned int lkpi_usb_drain_prio_band_get(void);
 
 /* net80211 world: the bridge's scalar face */
 #include "wlan_bridge.h"
@@ -95,6 +103,31 @@ cmd_wlan(int argc, char **argv)
 			wlan_census_print();
 		return 0;
 	}
+	if (strcmp(argv[1], "usbprio") == 0) {
+		/*
+		 * The drain thread's band, in the same units lwIP's own threads use
+		 * (sys_arch.c's sys_arch_prio_to_cmsis maps an lwIP priority to
+		 * band*8), so "band 5" here means the same band the TCP/IP thread
+		 * runs at. Without an argument it prints the current band and the
+		 * bands of the neighbours this knob trades against.
+		 */
+		int band;
+
+		if (argc < 3) {
+			csh_printf(csh, "usbkpi: drain band=%u "
+			    "(lwip tcpip band=%d)\n",
+			    lkpi_usb_drain_prio_band_get(), TCPIP_THREAD_PRIO);
+			return 0;
+		}
+		band = atoi(argv[2]);
+		if (band < 1 || band > 7) {
+			csh_printf(csh, "usage: wlan usbprio <1..7>\n");
+			return 0;
+		}
+		lkpi_usb_drain_prio_band_set((unsigned int)band);
+		csh_printf(csh, "usbkpi: drain band set=%d\n", band);
+		return 0;
+	}
 	if (strcmp(argv[1], "link") == 0) {
 		/*
 		 * The link face: the rate/retry picture the receive path
@@ -134,17 +167,18 @@ cmd_wlan(int argc, char **argv)
 		return 0;
 	}
 	csh_printf(csh, "usage: wlan [status|probe|scan|dump|census [reset]|link "
-	    "[reset]|join|dataplane|iperf <ip>|server|stop|uplink <ip>]\n");
+	    "[reset]|usbprio [band]|join|dataplane|iperf <ip>|server|stop|uplink <ip>]\n");
 	return 0;
 }
 
-CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan, "wlan [status|probe|scan|dump|census|link|join|dataplane|iperf|uplink]",
+CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan, "wlan [status|probe|scan|dump|census|link|usbprio|join|dataplane|iperf|uplink]",
 			  "wlan status - bridge counters and state;\n"
 			  "wlan probe - bring up the USB chain and wait for the driver;\n"
 			  "wlan scan - sweep the channels and compare with the ground truth;\n"
 			  "wlan dump - print the scan table as found;\n"
 			  "wlan census [reset] - print (or zero) the throughput census snapshot;\n"
 			  "wlan link [reset] - print (or zero) the receive rate/retry face;\n"
+			  "wlan usbprio [band] - print or set the USB drain thread's band (1..7);\n"
 			  "wlan join - wait for the supplicant's WPA2 association;\n"
 			  "wlan dataplane - netif + DHCP + ping + iperf server + the phases;\n"
 			  "wlan iperf <ip>|server|stop - the TCP measurement session;\n"

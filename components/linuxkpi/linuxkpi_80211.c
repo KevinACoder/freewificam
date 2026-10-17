@@ -688,11 +688,23 @@ lkpi80211_rx_linearize(struct ieee80211_hw *hw, struct sk_buff *skb)
  */
 static struct lkpi_census_histo lkpi_80211_stack;
 
+/* The context whose receive queue the snapshot reports.  The census face is
+ * called without a handle (the image's print takes no arguments), so it keeps
+ * the last context this module was given; a port runs one wireless hardware
+ * instance per boot, and the alternative - passing a handle down the whole
+ * census chain - would change the other modules' faces too. */
+static struct lkpi80211_hw_ctx *lkpi_80211_ctx;
+
 void
 lkpi_80211_census_reset(void)
 {
 
 	lkpi_census_histo_reset(&lkpi_80211_stack);
+	/* the drops counter belongs to the phase too: a drop before this phase's
+	 * reset must not be charged to it (and the driver's own counters above
+	 * already carry the connection's lifetime total) */
+	if (lkpi_80211_ctx != NULL)
+		lkpi_80211_ctx->rxq_drops = 0;
 }
 
 void
@@ -700,6 +712,16 @@ lkpi_80211_census_print(void)
 {
 
 	lkpi_census_histo_print("perf census: A 80211 stack", &lkpi_80211_stack);
+	/* The receive queue's overflow count.  This is the one loss in the
+	 * receive chain that leaves no other trace: the queue's contract drops the
+	 * OLDEST frame when it is full (see ieee80211_rx_irqsafe below), so a
+	 * frame the driver delivered - an ACK among them - can vanish with the
+	 * driver reporting success.  It was counted and never reported, which is
+	 * the same as not having the counter at all. */
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: A 80211 rxq drops=%lu depth=%u\n",
+	    lkpi_80211_ctx != NULL ? lkpi_80211_ctx->rxq_drops : 0u,
+	    (unsigned)CONFIG_LKPI80211_RXQ_DEPTH);
 }
 #endif /* CONFIG_LKPI_CENSUS */
 
@@ -765,6 +787,9 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (ieee80211_hw_check(hw, RX_INCLUDES_FCS) && skb->len > ETH_FCS_LEN)
 		skb_trim(skb, skb->len - ETH_FCS_LEN);
 	ctx = LKPI80211_CTX(hw);
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_80211_ctx = ctx;
+#endif
 	/*
 	 * Irqsafe means enqueue-and-return: the caller is a driver receive
 	 * context (an interrupt thread, a bus worker) and must not run the

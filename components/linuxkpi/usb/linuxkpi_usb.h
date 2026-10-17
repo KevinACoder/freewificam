@@ -20,6 +20,20 @@ void		lkpi_usb_start(void);
 void		lkpi_usb_trace_set(bool on);
 void		lkpi_usb_force_sync_set(bool on);
 
+/*
+ * The drain thread's priority, as a band (1..7) rather than a CMSIS enum: this
+ * header is included from build domains that do not carry the RTOS header, and
+ * a band is also the unit lwIP's own threads are configured in
+ * (ports/lwip/sys_arch.c maps an lwIP priority to band*8).  That thread runs
+ * every driver completion callback and re-arms the endpoint, so its band
+ * relative to the thread feeding the endpoint decides whether a completion
+ * waits for that feeder to yield.  Band 3 is osPriorityNormal, the band this
+ * engine has always used; call before lkpi_usb_start() to choose the starting
+ * band, or after it to move the running thread.
+ */
+void		lkpi_usb_drain_prio_band_set(unsigned int band);
+unsigned int	lkpi_usb_drain_prio_band_get(void);
+
 /* claim-time plumbing (called by the bring-up that claims an interface) */
 struct usb_device;
 struct usb_interface;
