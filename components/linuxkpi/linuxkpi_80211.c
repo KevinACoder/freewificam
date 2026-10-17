@@ -50,6 +50,7 @@
 #include "linuxkpi_80211.h"
 #include "linuxkpi_txq.h"
 #include "lkpi_census.h"
+#include "lkpi_tcp_trace.h"
 
 /* ------------------------------------------------------------------ */
 /* compile-time contracts                                              */
@@ -744,6 +745,19 @@ lkpi80211_rx_work(struct work_struct *w)
 
 		rs = (struct ieee80211_rx_status *)skb->cb;
 		ctx->rx_frames++;
+#if LKPI_TCP_TRACE_ENABLED
+		/*
+		 * The acknowledgement path's second and third boundaries: the
+		 * driver stamped the irqsafe entry into the buffer's hardware
+		 * timestamp slot, and this worker is where the frame leaves the
+		 * queue for the bridge. The record stays open across the bridge
+		 * call, because the netif input runs inside it and fills in the
+		 * rest.
+		 */
+		lkpi_tcp_trace_frame_begin(
+		    (uint64_t)skb_hwtstamps(skb)->hwtstamp,
+		    lkpi_census_now_ns());
+#endif
 		if (bridge_ops != NULL && bridge_ops->rx != NULL) {
 #ifdef CONFIG_LKPI_CENSUS
 			u64 t0 = lkpi_census_now_ns();
@@ -758,6 +772,9 @@ lkpi80211_rx_work(struct work_struct *w)
 			lkpi_printf(ULOG_ERROR_LEVEL,
 			    "lkpi80211: rx with no bridge; frame dropped\n");
 		}
+#if LKPI_TCP_TRACE_ENABLED
+		lkpi_tcp_trace_frame_end();
+#endif
 		memset(skb->cb, 0, sizeof(skb->cb));
 		lkpi_skb_free(skb);
 	}
@@ -773,6 +790,28 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	skb = lkpi80211_rx_linearize(hw, skb);
 	if (skb == NULL)
 		return;		/* refused, freed, and it said so */
+#if LKPI_TCP_TRACE_ENABLED
+	{
+		uint64_t t_now = lkpi_census_now_ns();
+
+		/*
+		 * The driver's share of the path is settled here, on the thread
+		 * that ran it: the receive worker runs later, and by then the next
+		 * completion's stamp may have replaced this one. Data frames only -
+		 * in the uplink phase the peer's acknowledgements are the only data
+		 * frames the board receives.
+		 */
+		if (skb->len >= 24u && (skb->data[0] & 0x0cu) == 0x08u)
+			lkpi_tcp_trace_usb_to_rxq(t_now);
+		/*
+		 * The receive boundary's own stamp, carried on the buffer itself:
+		 * the queue between here and the worker is the one hop that would
+		 * otherwise lose a per-frame record, and this field exists for
+		 * exactly this kind of timestamp.
+		 */
+		skb_hwtstamps(skb)->hwtstamp = (ktime_t)t_now;
+	}
+#endif
 	/*
 	 * A driver that leaves the FCS on the frames it hands up says so once, at
 	 * probe (IEEE80211_HW_RX_INCLUDES_FCS), and those four octets come off

@@ -70,6 +70,7 @@
 
 #include "osal/wlan_osal.h"
 #include "wlan_bridge.h"
+#include "components/linuxkpi/lkpi_tcp_trace.h"
 
 /* the 2.4 GHz channel set this chip family covers (channels 1..13) */
 #define WLAN_BRIDGE_CHAN_MIN	1
@@ -2253,6 +2254,8 @@ wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 	ifp = bridge.ic->ic_ifp;
 	if (ifp == NULL)
 		return -ENODEV;
+	/* the transmit path's second milestone: the frame reached the bridge */
+	lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_BRIDGE);
 	/*
 	 * A frame from the presentation layer (already an ethernet frame) enters
 	 * the stack through the interface's send queue: net80211's if_start then

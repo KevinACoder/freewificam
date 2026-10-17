@@ -50,6 +50,7 @@
 #ifdef CONFIG_LKPI_CENSUS
 #include "components/linuxkpi/lkpi_census.h"
 #endif
+#include "components/linuxkpi/lkpi_tcp_trace.h"
 
 #ifdef CONFIG_LKPI_CENSUS
 /* the transmit handoff's own histogram (see seam_tx): one sample per frame
@@ -283,6 +284,8 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	(void)drv;
 	if (adapter.hw == NULL || frame == NULL || len == 0)
 		return -1;
+	/* the transmit path's third milestone: the frame reached the driver seam */
+	lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_SEAM);
 #ifdef CONFIG_LKPI_CENSUS
 	/* The transmit side's share of a frame: this function's body from the
 	 * skb allocation through the driver's own transmit entry returning.
@@ -727,6 +730,9 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 	(void)hw;
 	if (skb == NULL)
 		return;
+	/* the acknowledgement path's fourth boundary: the frame has left the
+	 * linuxkpi queue and is about to enter net80211's input path */
+	lkpi_tcp_trace_mark(LKPI_TCP_B_BRIDGE);
 	/*
 	 * The link face's per-frame reading, counted rather than printed: the
 	 * driver's receive descriptor carries the encoding, the rate index (an

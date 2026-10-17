@@ -151,7 +151,7 @@ CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -
 	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=131072 \
 	-DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=8 \
 	-DCONFIG_LKPI_USB_COHERENT_POOL=262144 \
-	-DCONFIG_LKPI_CENSUS
+	-DCONFIG_LKPI_CENSUS -DCONFIG_WLAN_TCP_TRACE
 ASM_CFLAGS := $(BASE_CFLAGS)
 
 # The imported stacks' sources compile at the -Wall level the upstream
@@ -169,7 +169,7 @@ VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 WLAN_BSD_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-D_KERNEL -DWLAN_PORT_TARGET -Wno-unused-function -Wno-pointer-sign \
 	-include $(NPORT)/compat/prelude.h \
-	-I$(NPORT)/compat -I$(NET)/compat/netbsd -I$(NET) -I$(NPORT)
+	-I$(NPORT)/compat -I$(NET)/compat/netbsd -I$(NET) -I$(NPORT) -I$(ROOT)
 
 WLAN_KPI_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
@@ -228,6 +228,7 @@ LWIP_INCLUDES := \
 	-I$(LWIP)/src/include \
 	-I$(LWIP)/contrib/apps/ping \
 	-I$(NET) \
+	-I$(ROOT) \
 	-I$(ROOT)/os/cmsis2
 
 # --gc-sections drops everything nothing references. The pins below are the
@@ -376,6 +377,7 @@ NET80211_PORT_SRCS := \
 LKPI_SRCS := \
 	$(LKPI)/linuxkpi_core.c \
 	$(LKPI)/lkpi_census.c \
+	$(LKPI)/lkpi_tcp_trace.c \
 	$(LKPI)/linuxkpi_platform_target.c \
 	$(LKPI)/linuxkpi_80211.c \
 	$(LKPI)/linuxkpi_80211_helpers.c \
@@ -467,7 +469,8 @@ WPA_CMD_SRCS := $(WPA_PORT)/wpa_cmd.c
 LWIP_PORT_SRCS := \
 	$(LWIP_PORT)/sys_arch.c \
 	$(LWIP_PORT)/platform_hooks.c \
-	$(LWIP_PORT)/wlannetif.c
+	$(LWIP_PORT)/wlannetif.c \
+	$(LWIP_PORT)/wlan_tcp_trace.c
 
 LWIP_STACK_SRCS := \
 	$(LWIP)/src/core/init.c \

@@ -1,0 +1,126 @@
+From 3f9a1c4e5b7d2068ac11e9d4b3f07c5a8e6d2190 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 17 Oct 2026 22:40:00 +0800
+Subject: [PATCH] tcp: add an optional per-segment event hook
+
+TCP's congestion state is only observable from the outside as a
+throughput, so a stall that comes from a lost acknowledgement, from a
+delayed input, or from the retransmission timer looks the same in a
+profile. Add LWIP_HOOK_TCP_EVENT(site, pcb, ackno, seqno, len): a
+build-time hook (default: does nothing) that TCP calls at the points
+where that state moves -
+
+  0 a received segment was matched to a pcb
+  1 the segment acknowledged new data (pcb->lastack moved)
+  2 the sent callback is about to run
+  3 tcp_output ran for the pcb
+  4 one data segment was handed to the netif
+  5 the retransmission timer fired and collapsed the window
+
+The pcb and the segment's numbers travel with the call, so a build
+option can key a record by the acknowledged sequence and follow the
+same segment from its arrival to the next output, which a timing-only
+site cannot do. The hook must not change state; with no hook defined
+the calls compile to nothing.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ src/include/lwip/priv/tcp_priv.h  | 24 ++++++++++++++++++++
+ src/core/tcp_in.c                 | 3 +++
+ src/core/tcp_out.c                | 4 ++++
+ src/core/tcp.c                    | 2 ++
+ 4 files changed, 33 insertions(+)
+
+--- a/src/include/lwip/priv/tcp_priv.h
++++ b/src/include/lwip/priv/tcp_priv.h
+@@ -114,6 +114,30 @@
+ #define LWIP_HOOK_TCP_PROBE(site)
+ #endif
+ 
++/* A per-segment tap on the states the congestion controller moves through,
++   for diagnostics that must attribute a stall to a boundary rather than to
++   "TCP".  Unlike LWIP_HOOK_TCP_PROBE, which only carries a timing site, this
++   one carries the pcb and the segment's numbers, so a build option can key a
++   record by the acknowledged sequence and follow the same segment from its
++   arrival to the next output.  Sites:
++     0 a received segment was matched to a pcb
++     1 the segment acknowledged new data (pcb->lastack moved)
++     2 the sent callback is about to run
++     3 tcp_output ran for the pcb
++     4 one data segment was handed to the netif
++     5 the retransmission timer fired (the congestion window collapsed)
++   It runs on the TCP/IP context and must not change any state; with no hook
++   defined the calls compile to nothing. */
++#ifndef LWIP_HOOK_TCP_EVENT
++#define LWIP_HOOK_TCP_EVENT(site, pcb, ackno, seqno, len)
++#endif
++#define LWIP_TCP_EV_INPUT    0
++#define LWIP_TCP_EV_ACK_ADV  1
++#define LWIP_TCP_EV_SENT     2
++#define LWIP_TCP_EV_OUTPUT   3
++#define LWIP_TCP_EV_SEG_TX   4
++#define LWIP_TCP_EV_RTO      5
++
+ 
+ #define TCP_SEQ_LT(a,b)     (((u32_t)((u32_t)(a) - (u32_t)(b)) & 0x80000000u) != 0)
+ #define TCP_SEQ_LEQ(a,b)    (!(TCP_SEQ_LT(b,a)))
+--- a/src/core/tcp_in.c
++++ b/src/core/tcp_in.c
+@@ -436,6 +436,7 @@
+         goto aborted;
+       }
+     }
++    LWIP_HOOK_TCP_EVENT(LWIP_TCP_EV_INPUT, pcb, ackno, seqno, tcplen);
+     tcp_input_pcb = pcb;
+     err = tcp_process(pcb);
+     /* A return value of ERR_ABRT means that tcp_abort() was called
+@@ -455,6 +456,7 @@
+            called when new send buffer space is available, we call it
+            now. */
+         LWIP_HOOK_TCP_PROBE(1);
++        LWIP_HOOK_TCP_EVENT(LWIP_TCP_EV_SENT, pcb, ackno, seqno, recv_acked);
+         if (recv_acked > 0) {
+           u16_t acked16;
+ #if LWIP_WND_SCALE
+@@ -1264,6 +1266,7 @@
+       /* Reset the fast retransmit variables. */
+       pcb->dupacks = 0;
+       pcb->lastack = ackno;
++      LWIP_HOOK_TCP_EVENT(LWIP_TCP_EV_ACK_ADV, pcb, ackno, seqno, acked);
+ 
+       /* Update the congestion control variables (cwnd and
+          ssthresh). */
+--- a/src/core/tcp_out.c
++++ b/src/core/tcp_out.c
+@@ -1275,6 +1275,8 @@
+     return ERR_OK;
+   }
+ 
++  LWIP_HOOK_TCP_EVENT(LWIP_TCP_EV_OUTPUT, pcb, pcb->lastack, pcb->snd_nxt, 0);
++
+   LWIP_HOOK_TCP_PROBE(4);
+ 
+   wnd = LWIP_MIN(pcb->snd_wnd, pcb->cwnd);
+@@ -1626,6 +1628,8 @@
+ #endif /* CHECKSUM_GEN_TCP */
+   TCP_STATS_INC(tcp.xmit);
+ 
++  LWIP_HOOK_TCP_EVENT(LWIP_TCP_EV_SEG_TX, pcb, pcb->lastack,
++                      lwip_ntohl(seg->tcphdr->seqno), seg->len);
+   NETIF_SET_HINTS(netif, &(pcb->netif_hints));
+   err = ip_output_if(seg->p, &pcb->local_ip, &pcb->remote_ip, pcb->ttl,
+                      pcb->tos, IP_PROTO_TCP, netif);
+--- a/src/core/tcp.c
++++ b/src/core/tcp.c
+@@ -1303,6 +1303,8 @@
+               pcb->ssthresh = (tcpwnd_size_t)(pcb->mss << 1);
+             }
+             pcb->cwnd = pcb->mss;
++            LWIP_HOOK_TCP_EVENT(LWIP_TCP_EV_RTO, pcb, pcb->lastack,
++                                pcb->snd_nxt, pcb->nrtx);
+             LWIP_DEBUGF(TCP_CWND_DEBUG, ("tcp_slowtmr: cwnd %"TCPWNDSIZE_F
+                                          " ssthresh %"TCPWNDSIZE_F"\n",
+                                          pcb->cwnd, pcb->ssthresh));
+-- 
+2.30.0
+

@@ -32,6 +32,7 @@ unsigned int lkpi_usb_drain_prio_band_get(void);
 
 /* the image's census snapshot (the same call the dataplane case makes) */
 #include "wlan_census.h"
+#include "components/linuxkpi/lkpi_tcp_trace.h"
 
 /* lwIP's surface for the measurement commands (the same lwiperf engine the
  * wired line's image drives, tests/board/threadx-rk3568-regression/tests/
@@ -103,6 +104,18 @@ cmd_wlan(int argc, char **argv)
 			wlan_census_print();
 		return 0;
 	}
+	if (strcmp(argv[1], "tcptrace") == 0) {
+		/*
+		 * The acknowledgement path's account on its own: `census` prints it
+		 * with the rest at a phase boundary, this lets a console session
+		 * reset or read it while traffic is flowing.
+		 */
+		if (argc >= 3 && strcmp(argv[2], "reset") == 0)
+			lkpi_tcp_trace_reset();
+		else
+			lkpi_tcp_trace_print();
+		return 0;
+	}
 	if (strcmp(argv[1], "usbprio") == 0) {
 		/*
 		 * The drain thread's band, in the same units lwIP's own threads use
@@ -166,8 +179,9 @@ cmd_wlan(int argc, char **argv)
 		    (peer >> 8) & 0xffU, peer & 0xffU);
 		return 0;
 	}
-	csh_printf(csh, "usage: wlan [status|probe|scan|dump|census [reset]|link "
-	    "[reset]|usbprio [band]|join|dataplane|iperf <ip>|server|stop|uplink <ip>]\n");
+	csh_printf(csh, "usage: wlan [status|probe|scan|dump|census [reset]|tcptrace "
+	    "[reset]|link [reset]|usbprio [band]|join|dataplane|iperf <ip>|server|"
+	    "stop|uplink <ip>]\n");
 	return 0;
 }
 
@@ -177,6 +191,7 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_wlan, wlan, "wlan [status|probe|scan|dump|census|l
 			  "wlan scan - sweep the channels and compare with the ground truth;\n"
 			  "wlan dump - print the scan table as found;\n"
 			  "wlan census [reset] - print (or zero) the throughput census snapshot;\n"
+			  "wlan tcptrace [reset] - print (or zero) the acknowledgement-path account;\n"
 			  "wlan link [reset] - print (or zero) the receive rate/retry face;\n"
 			  "wlan usbprio [band] - print or set the USB drain thread's band (1..7);\n"
 			  "wlan join - wait for the supplicant's WPA2 association;\n"

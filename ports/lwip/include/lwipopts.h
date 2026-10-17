@@ -269,6 +269,26 @@ void ethnetif_tcp_fine_mark(unsigned int site);
 #define LWIP_HOOK_TCP_PROBE(site) ethnetif_tcp_fine_mark((unsigned int)(site))
 #endif
 
+/* The acknowledgement-path account (WLAN image only). patches/lwip/0005 adds
+ * LWIP_HOOK_TCP_EVENT at the points where the congestion state moves; here it
+ * is pointed at ports/lwip/wlan_tcp_trace.c, which turns the pcb into plain
+ * numbers for components/linuxkpi/lkpi_tcp_trace.c. The prototype names no
+ * lwIP type because this header is read before they exist. Every other image
+ * leaves the lever undefined, and tcp_priv.h's default macro expands the calls
+ * to nothing. */
+#if defined(CONFIG_WLAN_TCP_TRACE) && defined(CONFIG_LKPI_CENSUS)
+/* The account reads MIB2's TCP segment/error/retransmit counters, which are
+ * off by default, and it differences them across a phase: u32 counters keep a
+ * wrapped difference from reading as a small positive one. */
+#define MIB2_STATS                      1
+#define LWIP_STATS_LARGE                1
+void wlan_tcp_event(unsigned int site, void *pcb, unsigned long ackno,
+    unsigned long seqno, unsigned long len);
+#define LWIP_HOOK_TCP_EVENT(site, pcb, ackno, seqno, len) \
+	wlan_tcp_event((unsigned int)(site), (void *)(pcb), \
+	    (unsigned long)(ackno), (unsigned long)(seqno), (unsigned long)(len))
+#endif
+
 /* The toolchain's libc provides struct timeval (<sys/time.h>, included from
  * arch/cc.h); lwIP's private copy collided with newlib's the moment the
  * image linked libc.a. lwIP's own knob for exactly this. */

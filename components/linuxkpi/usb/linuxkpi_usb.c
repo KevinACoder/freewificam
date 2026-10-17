@@ -40,6 +40,7 @@
 #include "linuxkpi_usb.h"
 #include "lkpi_rxtrace.h"
 #include "lkpi_census.h"
+#include "lkpi_tcp_trace.h"
 
 /* ------------------------------------------------------------------ */
 /* DMA staging hook (passthrough)                                      */
@@ -397,18 +398,35 @@ lkpi_usb_census_reset(void)
 	lkpi_usb_qlen_n = 0u;
 	/* the per-endpoint partition resets with the global histograms above:
 	 * a phase's endpoint row must cover that phase only */
-	for (i = 0u; i < (unsigned int)LKPI_EP_N; i++) {
-		struct lkpi_usb_ep *ep = &lkpi_eps[i];
+	{
+		u64 now = lkpi_census_now_ns();
 
-		ep->census_svc_n = 0u;
-		ep->census_gap_n = 0u;
-		ep->census_starved_n = 0u;
-		ep->census_svc_ns = 0u;
-		ep->census_gap_ns = 0u;
-		ep->census_starved_ns = 0u;
-		ep->census_arm_ns = 0u;
-		ep->census_done_ns = 0u;
-		ep->census_gap_live = false;
+		for (i = 0u; i < (unsigned int)LKPI_EP_N; i++) {
+			struct lkpi_usb_ep *ep = &lkpi_eps[i];
+
+			ep->census_svc_n = 0u;
+			ep->census_gap_n = 0u;
+			ep->census_starved_n = 0u;
+			ep->census_svc_ns = 0u;
+			ep->census_gap_ns = 0u;
+			ep->census_starved_ns = 0u;
+			/*
+			 * The phase's clock starts at this reset, not at the
+			 * endpoint's next completion. Zeroing the previous
+			 * completion time made the first arm skip the interval
+			 * between the two, and on an endpoint that sits idle
+			 * that interval is the whole idle period: the two
+			 * endpoints then stopped tiling the same window
+			 * (measured 10.6% apart, transmit side, on an idle
+			 * phase). A transfer already in flight is re-stamped
+			 * here for the same reason - the phase is charged only
+			 * for the part of it that falls inside.
+			 */
+			if (ep->census_arm_ns != 0u)
+				ep->census_arm_ns = now;
+			ep->census_done_ns = now;
+			ep->census_gap_live = (ep->qlen != 0u);
+		}
 	}
 }
 
@@ -815,6 +833,18 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	 * arm and the submit, which is what the host spends before the device can
 	 * be handed work again */
 	lkpi_census_histo_add(&lkpi_usb_census.kick, lkpi_census_now_ns() - t_drain);
+#endif
+
+#if LKPI_TCP_TRACE_ENABLED
+	/*
+	 * The acknowledgement path's first boundary: the transport says the
+	 * transfer is complete now, and the driver's receive callback runs under
+	 * this stamp. Receive completions only - the transmit endpoint completes
+	 * through the same drain and would overwrite it before the callback reads
+	 * it.
+	 */
+	if (ep->ep_addr != 0 && usb_pipein(urb->pipe))
+		lkpi_tcp_trace_usb_done(lkpi_census_now_ns());
 #endif
 
 #ifdef CONFIG_LKPI_CENSUS
@@ -1814,6 +1844,16 @@ usb_submit_urb(struct urb *urb, gfp_t mem_flags)
 			    __builtin_return_address(0));
 		return -ENODEV;
 	}
+#if LKPI_TCP_TRACE_ENABLED
+	/*
+	 * The transmit handoff's far end: a bulk-out transfer reaching the engine
+	 * has crossed etharp, the bridge's encap and crypto, the driver's
+	 * descriptor build and this queue. The previous round measured only the
+	 * seam inside that span.
+	 */
+	if (type == USB_ENDPOINT_XFER_BULK && usb_pipeout(urb->pipe))
+		lkpi_tcp_trace_tx_submit(lkpi_census_now_ns());
+#endif
 	if (!async) {
 		/* the sync lane: the backend's blocking shape.  The transfer
 		 * took and released backend resources (the controller's pools

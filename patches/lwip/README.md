@@ -8,8 +8,8 @@ applied at build time by `tools/patches/replay.sh`.
 |---|---|
 | Upstream | https://github.com/lwip-tcpip/lwip.git |
 | Base (= pin) | `77dcd25a72509eb83f72b033d219b1d40cd8eb95` (tag `STABLE-2_2_1_RELEASE`) |
-| Patch list | `0001-lwiperf-boundary.patch`, `0002-tcp-probe-hook.patch`, `0003-tcp-ack-delay-watermark.patch`, `0004-tcp-unsent-tail-cache.patch` |
-| Submission status | `0001` not yet submitted: it is written to be sent as-is (one concern, `git format-patch` form, `Signed-off-by`, no local knowledge) and is waiting on the board acceptance run that measures the modes it unblocks. `0002` not submitted: it is a neutral extension point (upstream-able as-is) that the local build points at its own timing hook; no upstream consumer yet, so it stays local until someone needs the same taps. `0003` not submitted: a build-time option (default keeps upstream behaviour), upstream-able as-is if the maintainers want the watermark tunable. `0004` not submitted: implements the source's own @todo (cache the unsent tail), default behaviour is unchanged for small queues; upstream-able once board-proven |
+| Patch list | `0001-lwiperf-boundary.patch`, `0002-tcp-probe-hook.patch`, `0003-tcp-ack-delay-watermark.patch`, `0004-tcp-unsent-tail-cache.patch`, `0005-tcp-event-hook.patch` |
+| Submission status | `0001` not yet submitted: it is written to be sent as-is (one concern, `git format-patch` form, `Signed-off-by`, no local knowledge) and is waiting on the board acceptance run that measures the modes it unblocks. `0002` not submitted: it is a neutral extension point (upstream-able as-is) that the local build points at its own timing hook; no upstream consumer yet, so it stays local until someone needs the same taps. `0003` not submitted: a build-time option (default keeps upstream behaviour), upstream-able as-is if the maintainers want the watermark tunable. `0004` not submitted: implements the source's own @todo (cache the unsent tail), default behaviour is unchanged for small queues; upstream-able once board-proven. `0005` not submitted: a neutral extension point like `0002`, carrying the pcb and the segment's numbers instead of only a timing site; no upstream consumer yet |
 
 ## 0001 - lwiperf: take plain payload at the 128 KiB boundary as data
 
@@ -71,6 +71,24 @@ for bandwidth-delay product.
 
 Acceptance: board run with the patch at a 128 KB+ send buffer must match the
 walk-free (small-buffer) throughput without regressions; Gate1 green.
+
+## 0005 - tcp: add an optional per-segment event hook
+
+The congestion state is only observable from outside as a throughput, so a
+stall caused by a lost acknowledgement, by a delayed input, or by the
+retransmission timer looks the same in a profile. The patch adds
+`LWIP_HOOK_TCP_EVENT(site, pcb, ackno, seqno, len)` (default: does nothing) at
+the points where that state moves: a received segment matched to a pcb, the
+segment acknowledging new data (`pcb->lastack` moved), the sent callback, the
+`tcp_output` entry, one data segment handed to the netif, and the
+retransmission timer collapsing the window.
+
+Unlike `0002`, which carries only a timing site, this one carries the pcb and
+the segment's numbers, so a build option can key a record by the acknowledged
+sequence and follow the same segment from its arrival to the next output. The
+hook must not change state; with no hook defined the calls compile to nothing.
+Local use: the WLAN image points it at `ports/lwip/wlan_tcp_trace.c`, which
+feeds the per-boundary account in `components/linuxkpi/lkpi_tcp_trace.c`.
 
 Rules (project patch policy):
 
