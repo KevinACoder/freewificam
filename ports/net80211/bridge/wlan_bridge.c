@@ -1723,6 +1723,19 @@ static const uint8_t bridge_htcap_ie[28] = {
 };
 
 /*
+ * The WMM Information element, byte-for-byte what ieee80211_add_wme_info
+ * builds (ieee80211_output.c:1259).
+ */
+static const uint8_t bridge_wmm_ie[9] = {
+	221, 7,				/* vendor element, length */
+	0x00, 0x50, 0xf2,		/* OUI */
+	2,				/* OUI type: WMM */
+	0,				/* OUI subtype: information */
+	1,				/* version */
+	0				/* QoS info */
+};
+
+/*
  * The join the supplicant decided on. Everything here is the stack's own
  * documented policy surface (the prior carrier's board-proven associate
  * shape): which candidate, which security state, and then sta_join - the
@@ -1761,7 +1774,8 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	 * block rather than grown afterwards: the board's heap is busy enough
 	 * at join time that a second, larger allocation is not free.
 	 */
-	ie_copy = wlan_osal_alloc(ie_len + sizeof(bridge_htcap_ie));
+	ie_copy = wlan_osal_alloc(ie_len + sizeof(bridge_htcap_ie) +
+	    sizeof(bridge_wmm_ie));
 	if (ie_copy == NULL)
 		return -ENOMEM;
 	if (ie_len != 0)
@@ -1818,6 +1832,21 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 
 	if (ic->ic_opt_ie != NULL) {
 		wlan_osal_free(ic->ic_opt_ie);
+	}
+	/*
+	 * The WMM Information element goes in only when the AP advertised WMM
+	 * in its own frames.  net80211 would add it itself when F_WME is set,
+	 * but its condition is `ic_bss->ni_wme_ie != NULL`, and copy_bss does
+	 * not carry that pointer from the scan node - so the branch never
+	 * fires.  The imported tree is not touched; the element is appended
+	 * here from the same bytes ieee80211_add_wme_info builds
+	 * (ieee80211_output.c:1259): vendor id, OUI 00:50:f2, type 2,
+	 * subtype 0 (information), version 1, QoS info 0.
+	 */
+	if (ni->ni_wme_ie != NULL) {
+		memcpy(ie_copy + ie_copy_len, bridge_wmm_ie,
+		    sizeof(bridge_wmm_ie));
+		ie_copy_len += sizeof(bridge_wmm_ie);
 	}
 	ic->ic_opt_ie = ie_copy;
 	ic->ic_opt_ie_len = (u_int16_t)ie_copy_len;
