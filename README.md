@@ -72,7 +72,7 @@ width.
 
 | Line | RTOS, down (host to board) | RTOS, up (board to host) | Linux, same card, same channel |
 |---|---|---|---|
-| RTL8188EUS | 9.17 (open) / 9.19 (CCMP) Mbit/s | **9.08-10.17 (open) / 5.6-7.7 (CCMP)** Mbit/s | **9.12 down / 10.48 up** Mbit/s |
+| RTL8188EUS | 9.17 (open) / 9.19 (soft CCMP) Mbit/s | **9.08-10.17 (open) / 5.6-7.7 (soft CCMP) / 8.26-9.22 (hardware CCMP, default off)** Mbit/s | **9.12 down / 10.48 up** Mbit/s |
 | RTL8821CU | 3.65 Mbit/s | not measured | **63.7 / 66.0 / 68.2 Mbit/s** |
 | RTL8851BU | 136 / 173 Kbit/s | not measured | **23.9 / 25.3 / 26.5 Mbit/s** |
 | RTL8189FTV (SDIO) | **18.1 (HT20) / 20.5 (HT40)** Mbit/s | **15.1-16.8 (HT20)** Mbit/s | **31.4 down / 30.7 up (HT20)**, 44.2 / 50.5 (HT40) |

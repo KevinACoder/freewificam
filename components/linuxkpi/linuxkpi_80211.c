@@ -338,9 +338,9 @@ lkpi80211_key_release(struct lkpi80211_key_entry *e)
 /*
  * Take a stable copy of `key`, record it, and return the record (whose ->conf
  * is the object the driver is to be handed).  Returns NULL if the table is full
- * or the copy cannot be made; the caller then falls back to the bridge's own
- * key_conf, so a full table degrades to "not tracked" rather than a failed
- * set_key.
+ * or the copy cannot be made; the caller must then fail the set_key - a driver
+ * that wrote a CAM entry the transmit path cannot name is worse than a key the
+ * stack reports as not installed.
  */
 static struct lkpi80211_key_entry *
 lkpi80211_key_install(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
@@ -383,6 +383,23 @@ lkpi80211_key_install(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	e->icverrors = 0;
 	e->replays = 0;
 	return e;
+}
+
+/*
+ * The stable object for a key identity, or NULL when the table has no record.
+ * The transmit path caches this pointer and hands it to the driver as
+ * info->control.hw_key; the caller must not free it (the table owns it).
+ */
+struct ieee80211_key_conf *
+lkpi80211_key_conf_get(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta, int keyidx, int pairwise)
+{
+	struct lkpi80211_key_entry *e;
+
+	if (hw == NULL || vif == NULL)
+		return NULL;
+	e = lkpi80211_key_find_id(hw, vif, sta, (s8)keyidx, pairwise != 0);
+	return e != NULL ? e->conf : NULL;
 }
 
 static void
@@ -1998,8 +2015,8 @@ lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
     struct ieee80211_vif *vif, struct ieee80211_sta *sta,
     struct ieee80211_key_conf *key)
 {
-	struct ieee80211_key_conf *fwd = key;
-	struct lkpi80211_key_entry *e = NULL;
+	struct ieee80211_key_conf *fwd;
+	struct lkpi80211_key_entry *e;
 	int ret;
 
 	if (hw == NULL || vif == NULL || key == NULL)
@@ -2007,25 +2024,47 @@ lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	if (LKPI80211_CTX(hw)->ops->set_key == NULL)
 		return -EOPNOTSUPP;
 	/*
-	 * A key this port installs is recorded first, and the driver is handed
-	 * the record's own stable copy (see the key table above): the bridge's
-	 * caller frees its key_conf as soon as this returns, so handing that
-	 * pointer on would leave a driver that keeps it - the AC 7260 keeps the
-	 * beacon-protection keys - holding freed memory.  The copy is only taken
-	 * when the driver is about to take the key; a DISABLE_KEY names the key
-	 * by identity and gets the caller's own sparse key_conf.
+	 * Both commands name the same stable object.  SET_KEY records a copy and
+	 * hands that copy to the driver; DISABLE_KEY resolves the record (by
+	 * pointer first, then by identity) and hands the same copy back, because
+	 * the caller's key_conf is short-lived and, for a clear, sparse - its
+	 * hw_key_idx is zero, which would clear CAM slot 0 instead of the key's.
+	 * A clear with no record is refused here rather than forwarded: there is
+	 * no slot number to name.
 	 */
 	if (cmd == SET_KEY) {
 		e = lkpi80211_key_install(hw, vif, sta, key);
-		if (e != NULL)
-			fwd = e->conf;
+		if (e == NULL)
+			return -ENOMEM;
+		fwd = e->conf;
+	} else {
+		e = lkpi80211_key_find_conf(key);
+		if (e == NULL)
+			e = lkpi80211_key_find_id(hw, vif, sta, key->keyidx,
+			    (key->flags & IEEE80211_KEY_FLAG_PAIRWISE) != 0);
+		if (e == NULL) {
+			lkpi_printf(ULOG_WARNING_LEVEL,
+			    "lkpi80211: no tracked key for DISABLE_KEY %d\n",
+			    key->keyidx);
+			return -ENOENT;
+		}
+		fwd = e->conf;
 	}
 	ret = LKPI80211_CTX(hw)->ops->set_key(hw, cmd, vif, sta, fwd);
 	if (cmd == SET_KEY) {
-		if (ret != 0 && e != NULL)
+		if (ret != 0)
 			lkpi80211_key_release(e);	/* the driver refused it */
+	} else if (ret == 0) {
+		lkpi80211_key_release(e);
 	} else {
-		lkpi80211_key_drop(hw, vif, sta, key);
+		/*
+		 * Keep the record on a refused clear: the driver may still have
+		 * the CAM entry, and the record is the only thing that can name
+		 * its slot for a retry.
+		 */
+		lkpi_printf(ULOG_WARNING_LEVEL,
+		    "lkpi80211: DISABLE_KEY %d refused (%d); record kept\n",
+		    key->keyidx, ret);
 	}
 	return ret;
 }

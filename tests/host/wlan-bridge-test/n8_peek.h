@@ -40,7 +40,12 @@ int	n8_peek_authmode_8021x(void);
 /* the stack-side half of a key install: is the slot live, which index is the
  * default transmit key, and did the pairwise install authorize the node */
 int	n8_peek_key_defined(int pairwise, int key_idx);
+int	n8_peek_key_swcrypt(int pairwise, int key_idx);
 int	n8_peek_def_txkey(void);
+/* the interface's hardware-CCMP capability, and a runtime override so the
+ * software-crypto cases keep their meaning in a hardware build */
+int	n8_peek_hw_crypto(void);
+void	n8_peek_hw_crypto_force(int on);
 int	n8_peek_node_authorized(void);
 
 /* the number of candidates in the scan table */
@@ -60,6 +65,7 @@ size_t	n8_peek_chan_active_freqs(uint32_t *freqs, size_t max);
  * seal one AP-to-station frame with it (the peer's crypto), and read the named
  * MIC failure counter. */
 int	n8_peek_install_ccmp_key(const uint8_t *key, size_t len);
+void	n8_peek_set_privacy(void);
 void	n8_peek_clear_privacy(void);
 int	n8_peek_seal_from_ap(const uint8_t *payload, size_t len, uint16_t seq,
 	    uint8_t *out, size_t *out_len);

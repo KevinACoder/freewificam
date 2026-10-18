@@ -98,6 +98,9 @@ static struct lkpi_census_histo seam_tx_cost;
 /* state                                                               */
 /* ------------------------------------------------------------------ */
 
+/* the CAM slots the driver accepts (rtl8xxxu rejects keyidx > 3) */
+#define WLAN_SEAM_KEY_SLOTS 4
+
 static struct {
 	struct ieee80211_hw *hw;
 	struct ieee80211_vif *vif;
@@ -114,6 +117,15 @@ static struct {
 	unsigned int filter_calls;
 	unsigned int tx_calls;
 	unsigned int key_calls;
+	/*
+	 * The driver-facing key objects, indexed [pairwise][key_idx]. The
+	 * shim owns them; the transmit path hands the matching one to the
+	 * driver exactly as mac80211 does with info->control.hw_key. A slot
+	 * is cleared before its object is replaced or the hardware stops.
+	 */
+	struct ieee80211_key_conf *hw_keys[2][WLAN_SEAM_KEY_SLOTS];
+	unsigned int tx_hw_key;
+	unsigned int tx_hw_key_miss;
 	/*
 	 * The link face: what the driver's own receive descriptors said about
 	 * the data frames that actually arrived.  Counted, never printed per
@@ -144,6 +156,7 @@ seam_start(struct wlan_seam_drv *drv)
 	(void)drv;
 	if (adapter.hw == NULL)
 		return -1;
+	memset(adapter.hw_keys, 0, sizeof(adapter.hw_keys));
 	return lkpi80211_drv_start(adapter.hw);
 }
 
@@ -154,6 +167,8 @@ seam_stop(struct wlan_seam_drv *drv)
 	(void)drv;
 	if (adapter.hw == NULL)
 		return -1;
+	/* the shim frees the objects on stop; drop the pointers first */
+	memset(adapter.hw_keys, 0, sizeof(adapter.hw_keys));
 	lkpi80211_drv_stop(adapter.hw, false);
 	return 0;
 }
@@ -274,7 +289,7 @@ seam_hw_scan_cancel(struct wlan_seam_drv *drv)
 
 static int
 seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
-    int is_mgmt)
+    int is_mgmt, int hw_crypto, int pairwise, int key_idx)
 {
 	struct sk_buff *skb;
 	unsigned char *p;
@@ -346,6 +361,32 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 		info->control.rates[0].idx = 0;
 		info->control.rates[0].count = 1;
 	}
+	if (hw_crypto) {
+		struct ieee80211_key_conf *kc;
+
+		if (key_idx < 0 || key_idx >= WLAN_SEAM_KEY_SLOTS)
+			kc = NULL;
+		else
+			kc = adapter.hw_keys[pairwise ? 1 : 0][key_idx];
+		if (kc == NULL) {
+			/*
+			 * The stack believes a hardware key is in place but the
+			 * driver never registered one. Dropping is the only
+			 * safe answer: sending plaintext would leak, and
+			 * encrypting here would double-seal once the CAM entry
+			 * appears.
+			 */
+			adapter.tx_hw_key_miss++;
+			if (adapter.tx_hw_key_miss == 1)
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "wlans: tx with no hardware key "
+				    "(pair=%d idx=%d)\n", pairwise, key_idx);
+			lkpi_skb_free(skb);
+			return -1;
+		}
+		info->control.hw_key = kc;
+		adapter.tx_hw_key++;
+	}
 	adapter.tx_calls++;
 	/*
 	 * Every 802.11 frame takes the interface's own transmit handoff, whose
@@ -394,13 +435,39 @@ static int
 seam_set_key(struct wlan_seam_drv *drv, int pairwise, int key_idx, int cipher,
     const uint8_t *key, size_t key_len)
 {
-	struct ieee80211_key_conf *kc;
+	struct ieee80211_key_conf *kc, *old, *conf;
 	uint32_t mac_cipher;
 	int ret;
 
 	(void)drv;
 	if (adapter.hw == NULL || adapter.vif == NULL)
 		return -1;
+	if (key_idx < 0 || key_idx >= WLAN_SEAM_KEY_SLOTS)
+		return -1;
+	if (pairwise && adapter.sta == NULL) {
+		/*
+		 * mac80211 registers the peer at AUTH, before the 4-way
+		 * handshake; this bridge's joined notification arrives at RUN,
+		 * after it. The supplicant installs the PTK inside the
+		 * handshake, so the driver's station has to exist by then:
+		 * register it now from the BSSID the join already handed down
+		 * (the driver's pairwise key path reads sta->addr). The RUN
+		 * notification then completes the association step on the same
+		 * object.
+		 */
+		if (adapter.bssid_store[0] | adapter.bssid_store[1] |
+		    adapter.bssid_store[2] | adapter.bssid_store[3] |
+		    adapter.bssid_store[4] | adapter.bssid_store[5]) {
+			adapter.sta = lkpi80211_drv_sta_add(adapter.hw,
+			    adapter.vif, adapter.bssid_store, 0);
+		}
+		if (adapter.sta == NULL) {
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "wlans: pairwise key before the peer is known\n");
+			return -1;
+		}
+		adapter.sta_preauth = 1;
+	}
 	/*
 	 * The key object the driver's set_key reads: cipher, index, length and
 	 * the material (core.c:7063). One object per call, released after the
@@ -420,6 +487,28 @@ seam_set_key(struct wlan_seam_drv *drv, int pairwise, int key_idx, int cipher,
 	default:
 		return -1;
 	}
+	/*
+	 * A re-install (rekey) writes the same slot again. Clear the old CAM
+	 * entry first: the driver allocates a fresh hw_key_idx on every
+	 * SET_KEY, so skipping this would leak a slot per rekey and leave the
+	 * old entry matching the same peer. The cached object is the one the
+	 * shim tracks; DISABLE_KEY matches it by pointer.
+	 */
+	old = adapter.hw_keys[pairwise ? 1 : 0][key_idx];
+	if (old != NULL) {
+		/* Keep the object until the driver has accepted the clear: it is
+		 * the only handle that names the old CAM slot. A failed clear
+		 * aborts the rekey instead of leaking the entry. */
+		ret = lkpi80211_drv_key(adapter.hw, DISABLE_KEY, adapter.vif,
+		    adapter.sta, old);
+		if (ret != 0) {
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "wlans: old CAM clear failed (%d); rekey refused\n",
+			    ret);
+			return ret;
+		}
+		adapter.hw_keys[pairwise ? 1 : 0][key_idx] = NULL;
+	}
 	kc = kzalloc(sizeof(*kc) + key_len, GFP_KERNEL);
 	if (kc == NULL)
 		return -1;
@@ -433,6 +522,26 @@ seam_set_key(struct wlan_seam_drv *drv, int pairwise, int key_idx, int cipher,
 	adapter.key_calls++;
 	ret = lkpi80211_drv_key(adapter.hw, SET_KEY, adapter.vif, adapter.sta,
 	    kc);
+	if (ret == 0) {
+		conf = lkpi80211_key_conf_get(adapter.hw, adapter.vif,
+		    adapter.sta, key_idx, pairwise);
+		if (conf == NULL) {
+			/*
+			 * The driver wrote a CAM entry but the transmit path
+			 * cannot name its object. Undo the entry rather than
+			 * leave a key the seam can never select.
+			 */
+			(void)lkpi80211_drv_key(adapter.hw, DISABLE_KEY,
+			    adapter.vif, adapter.sta, kc);
+			ret = -1;
+		} else {
+			adapter.hw_keys[pairwise ? 1 : 0][key_idx] = conf;
+			lkpi_printf(ULOG_INFO_LEVEL,
+			    "wlans: key %s idx %d hw cam=%d\n",
+			    pairwise ? "pair" : "group", key_idx,
+			    (int)conf->hw_key_idx);
+		}
+	}
 	kfree(kc);
 	return ret;
 }
@@ -440,19 +549,37 @@ seam_set_key(struct wlan_seam_drv *drv, int pairwise, int key_idx, int cipher,
 static int
 seam_clear_key(struct wlan_seam_drv *drv, int pairwise, int key_idx)
 {
+	struct ieee80211_key_conf *conf;
 	struct ieee80211_key_conf kc;
 	int ret;
 
 	(void)drv;
 	if (adapter.hw == NULL || adapter.vif == NULL)
 		return -1;
+	if (key_idx < 0 || key_idx >= WLAN_SEAM_KEY_SLOTS)
+		return -1;
+	adapter.key_calls++;
+	/*
+	 * Prefer the cached object: it still names the CAM slot even after the
+	 * peer went away, and the shim matches it by pointer. Without it the
+	 * shim can only try the identity, and a miss must not fall through to
+	 * the driver - a sparse key carries hw_key_idx 0 and would clear CAM
+	 * slot 0.
+	 */
+	conf = adapter.hw_keys[pairwise ? 1 : 0][key_idx];
+	if (conf != NULL) {
+		ret = lkpi80211_drv_key(adapter.hw, DISABLE_KEY, adapter.vif,
+		    adapter.sta, conf);
+		if (ret == 0)
+			adapter.hw_keys[pairwise ? 1 : 0][key_idx] = NULL;
+		return ret;
+	}
 	memset(&kc, 0, sizeof(kc));
 	if (pairwise)
 		kc.flags |= IEEE80211_KEY_FLAG_PAIRWISE;
 	kc.keyidx = (s8)key_idx;
-	adapter.key_calls++;
-	ret = lkpi80211_drv_key(adapter.hw, DISABLE_KEY, adapter.vif, adapter.sta,
-	    &kc);
+	ret = lkpi80211_drv_key(adapter.hw, DISABLE_KEY, adapter.vif,
+	    adapter.sta, &kc);
 	return ret;
 }
 

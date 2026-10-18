@@ -100,9 +100,12 @@ static void stub_scan_complete(struct wlan_seam_drv *drv)
 }
 
 static int stub_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
-    int is_mgmt)
+    int is_mgmt, int hw_crypto, int pairwise, int key_idx)
 {
 	(void) drv;
+	(void) hw_crypto;
+	(void) pairwise;
+	(void) key_idx;
 	if (len > sizeof(counters.last_tx)) {
 		len = sizeof(counters.last_tx);
 	}
@@ -184,7 +187,7 @@ void wlan_seam_stub_run(void)
 	(void) stub_ops.sw_scan_start(drv);
 	stub_ops.sw_scan_complete(drv);
 	(void) stub_ops.filter(drv, WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
-	(void) stub_ops.tx(drv, frame, sizeof(frame), 1);
+	(void) stub_ops.tx(drv, frame, sizeof(frame), 1, 0, 0, 0);
 	(void) stub_ops.set_key(drv, 1, 0, WLAN_SEAM_CIPHER_CCMP, key,
 	    sizeof(key));
 	stub_ops.bss_info(drv, 1, bssid, 2412, 1,

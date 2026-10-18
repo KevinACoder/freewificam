@@ -690,6 +690,93 @@ static void check_ccmp(void)
 	    mic_ok, (unsigned) vwifi.last_data_rx.len);
 }
 
+/*
+ * The hardware-decrypt receive leg: with AES-CCM advertised the stack marks the
+ * key hardware-offloaded, the chip decrypts and keeps the CCMP header and MIC,
+ * and ccmp_decap must only check the packet number and strip both. A frame that
+ * arrives that way is delivered whole; the same packet number again is a replay.
+ */
+static void check_hw_ccmp(void)
+{
+	static const uint8_t test_key[16] = {
+		0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+		0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+	};
+	static const uint8_t payload[16] = {
+		'h', 'w', '-', 'c', 'c', 'm', 'p', '-', 'p', 'l', 'a', 'y',
+		'l', 'o', 'a', 'd'
+	};
+	uint8_t buf[VWIFI_FRAME_MAX], expect[VWIFI_FRAME_MAX];
+	struct ieee80211_key *k = &ic->ic_bss->ni_ucastkey;
+	size_t flen, elen;
+	unsigned before, before_replay;
+	int ok, rx_ok, replay_ok;
+
+	ieee80211_key_update_begin(ic);
+	(void)ieee80211_crypto_delkey(ic, k);
+	ic->ic_caps |= IEEE80211_C_AES_CCM;
+	if (!ieee80211_crypto_newkey(ic, IEEE80211_CIPHER_AES_CCM,
+	    IEEE80211_KEY_XMIT | IEEE80211_KEY_RECV, k)) {
+		ieee80211_key_update_end(ic);
+		ic->ic_caps &= ~IEEE80211_C_AES_CCM;
+		anchor("S3.HWCCMP", 0, "newkey failed");
+		return;
+	}
+	k->wk_keylen = sizeof(test_key);
+	memcpy(k->wk_key, test_key, sizeof(test_key));
+	if (!ieee80211_crypto_setkey(ic, k, ic->ic_bss->ni_macaddr)) {
+		ieee80211_key_update_end(ic);
+		ic->ic_caps &= ~IEEE80211_C_AES_CCM;
+		anchor("S3.HWCCMP", 0, "setkey failed");
+		return;
+	}
+	ieee80211_key_update_end(ic);
+	if ((k->wk_flags & IEEE80211_KEY_SWCRYPT) != 0) {
+		anchor("S3.HWCCMP", 0, "the key stayed software-crypto");
+		goto out;
+	}
+	ic->ic_flags |= IEEE80211_F_PRIVACY;
+
+	/* the AP-to-station frame as the chip delivers it: header, CCMP header
+	 * (PN 1), plaintext body, MIC */
+	flen = vwifi_build_data_from_ap(buf, sta_mac, ap_mac, ETHERTYPE_IP,
+	    payload, sizeof(payload), 6, 0, 0);
+	buf[1] |= IEEE80211_FC1_WEP;
+	memmove(buf + 24 + 8, buf + 24, flen - 24);
+	memset(buf + 24, 0, 8);
+	buf[24 + 3] = IEEE80211_WEP_EXTIV;	/* ExtIV, key id 0 */
+	buf[24] = 1;				/* PN = 1, little endian */
+	memset(buf + flen + 8, 0xa5, 8);	/* the chip keeps the MIC */
+	flen += 16;
+
+	elen = eth_build(expect, sta_mac, ap_mac, ETHERTYPE_IP, payload,
+	    sizeof(payload));
+	before = vwifi.stats.data_rx_frames;
+	vwifi_inject(&vwifi, buf, flen);
+	rx_ok = vwifi.stats.data_rx_frames == before + 1 &&
+	    vwifi.last_data_rx.len == elen &&
+	    memcmp(vwifi.last_data_rx.data, expect, elen) == 0 &&
+	    k->wk_keyrsc == 1;
+
+	before = vwifi.stats.data_rx_frames;
+	before_replay = ic->ic_stats.is_rx_ccmpreplay;
+	vwifi_inject(&vwifi, buf, flen);
+	replay_ok = vwifi.stats.data_rx_frames == before &&
+	    ic->ic_stats.is_rx_ccmpreplay == before_replay + 1;
+
+	ok = rx_ok && replay_ok;
+	ic->ic_flags &= ~IEEE80211_F_PRIVACY;
+	anchor("S3.HWCCMP", ok, "rx=%d rsc=%llu replay=%d deliv=%u",
+	    rx_ok, (unsigned long long)k->wk_keyrsc, replay_ok,
+	    (unsigned)vwifi.last_data_rx.len);
+
+out:
+	ieee80211_key_update_begin(ic);
+	(void)ieee80211_crypto_delkey(ic, k);
+	ic->ic_caps &= ~IEEE80211_C_AES_CCM;
+	ieee80211_key_update_end(ic);
+}
+
 /* P11: the inactivity timeout and the watchdog entry.
  *
  * In station mode the node table that carries the access point is the scan
@@ -834,6 +921,7 @@ static void suite_run(void *argument)
 	check_defrag();
 	check_mgmt_negatives();
 	check_ccmp();
+	check_hw_ccmp();
 	check_watchdog();
 	check_memory(blocks0, bytes0);
 	check_seam_misuse();

@@ -113,6 +113,13 @@ WLAN_BW40 ?= 0
 # link version, and this is the lowest one both stacks can hold.  Mutually
 # exclusive with WLAN_BW40.
 WLAN_NO_HT ?= 0
+
+# Diagnostic build switch (default off): WLAN_HW_CRYPTO=1 advertises the
+# chip's CCMP engine to the stack.  With it the stack marks keys as hardware
+# keys, writes only the CCMP header on transmit, and expects the chip to
+# decrypt on receive; the port hands the driver the stable key object.  Off by
+# default until the board evidence for this path is green.
+WLAN_HW_CRYPTO ?= 0
 ifeq ($(WLAN_NO_HT),1)
 ifeq ($(WLAN_BW40),1)
 $(error WLAN_NO_HT and WLAN_BW40 are mutually exclusive)
@@ -123,7 +130,7 @@ endif
 # claimed from the run ledger alone - nothing in the image itself said which
 # arm the board ran - and a switch that changes no source file would otherwise
 # produce a fingerprint identical to the default build.
-ARM_TAG := $(if $(filter 1,$(WLAN_NO_HT)),+noht)$(if $(filter 1,$(WLAN_BW40)),+bw40)
+ARM_TAG := $(if $(filter 1,$(WLAN_NO_HT)),+noht)$(if $(filter 1,$(WLAN_BW40)),+bw40)$(if $(filter 1,$(WLAN_HW_CRYPTO)),+hwcrypto)
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)$(ARM_TAG)
 
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
@@ -143,6 +150,9 @@ BASE_CFLAGS += -DWLAN_SEAM_BW40=1
 endif
 ifeq ($(WLAN_NO_HT),1)
 BASE_CFLAGS += -DWLAN_NO_HT=1
+endif
+ifeq ($(WLAN_HW_CRYPTO),1)
+BASE_CFLAGS += -DWLAN_HW_CRYPTO=1
 endif
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h \
