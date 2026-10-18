@@ -209,6 +209,11 @@ void wlan8189_ap_chain( void )
 	} else {
 		unsigned int peer = 0U;
 		unsigned int peer_waited;
+		const unsigned int ap_addr =
+		    ((unsigned)WLAN8189_AP_ADDR_0 << 24) |
+		    ((unsigned)WLAN8189_AP_ADDR_1 << 16) |
+		    ((unsigned)WLAN8189_AP_ADDR_2 << 8) |
+		    (unsigned)WLAN8189_AP_ADDR_3;
 
 		LOG_ANCHOR( "wlan8189: ap window %u s\n",
 		    (unsigned)( WLAN8189_AP_WINDOW_MS / 1000U ) );
@@ -217,7 +222,13 @@ void wlan8189_ap_chain( void )
 		 * (the same parameter the dataplane sheet's uplink phases read), and
 		 * the board's own iperf client runs one window toward it - the
 		 * receive direction of this access point is what the peer measures
-		 * with its own client, the transmit direction is this one */
+		 * with its own client, the transmit direction is this one.
+		 *
+		 * The peer is the dataplane sheet's (the Pi's AP address) in a boot
+		 * that also ran the STA sheet; that address is this AP's own static
+		 * address, so a reverse window toward it would loop back. Skip it
+		 * with a named line instead, and leave the receive window (the
+		 * peer's client) as the measurement. */
 		for( peer_waited = 0; peer_waited < WLAN8189_AP_PEER_WAIT_MS;
 		    peer_waited += 200U ) {
 			if( wlan8189_uplink_peer_get( &peer ) == 0 ) {
@@ -225,7 +236,7 @@ void wlan8189_ap_chain( void )
 			}
 			(void)osDelay( 200U );
 		}
-		if( wlan8189_uplink_peer_get( &peer ) == 0 ) {
+		if( wlan8189_uplink_peer_get( &peer ) == 0 && peer != ap_addr ) {
 			LOG_ANCHOR( "wlan8189: ap peer=%u.%u.%u.%u uplink window\n",
 			    (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
 			    (peer >> 8) & 0xffU, peer & 0xffU );
@@ -234,9 +245,19 @@ void wlan8189_ap_chain( void )
 			LOG_ANCHOR( "wlan8189: ap no peer for the uplink window\n" );
 		}
 
+		/* The receive window is this case's own measurement: reset the
+		 * census after the reverse window so the totals describe the
+		 * peer's client traffic, and arm the stall recorder with the
+		 * downlink direction (RX). The peer's client is what the round
+		 * wants to observe with the roles swapped. */
+		wlan8189_census_reset();
+		wlan8189_census_stall_arm( 1, 1, 0, wlan8189_agg_get(), 0 );
+		LOG_ANCHOR( "wlan8189: ap rx window %u s\n",
+		    (unsigned)( WLAN8189_AP_WINDOW_MS / 1000U ) );
 		for( waited = 0; waited < WLAN8189_AP_WINDOW_MS; waited += 200U ) {
 			(void)osDelay( 200U );
 		}
+		wlan8189_census_stall_arm( 0, 1, 0, wlan8189_agg_get(), 0 );
 		LOG_ANCHOR( "wlan8189: ap window done joined=%u left=%u\n",
 		    g_ap_sta_joined, g_ap_sta_left );
 		wlan8189_census_print();
