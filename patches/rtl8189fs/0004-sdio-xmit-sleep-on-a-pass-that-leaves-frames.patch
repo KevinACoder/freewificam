@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu@users.noreply.github.com>
+Date: Sat, 18 Oct 2026 00:00:00 +0000
+Subject: [PATCH 4/4] sdio: (xmit) Sleep one tick on a pass that leaves frames
+ behind
+
+The transmit handler retries in two places: when a pass reports a missing
+buffer or an open aggregation window, and when exactly one frame is still
+pending afterwards.  Both retried with rtw_yield_os(), and the second path
+with no wait at all.  On an RTOS port the completion and receive path that
+returns the missing buffer or closes the window runs at a lower priority
+than this thread, so a yield - which only rotates the threads at this
+priority - never lets it run.  The handler then spins forever, starving
+the receive path it is waiting for.
+
+Sleep one tick in both retry paths.  Neither is the steady-state drain: the
+first waits for the rest of the system by definition, and the second has one
+frame left.
+
+Signed-off-by: zhugengyu <zhugengyu@users.noreply.github.com>
+---
+ hal/rtl8188f/sdio/rtl8189fs_xmit.c | 26 +++++++++++++++-----------
+ 1 file changed, 16 insertions(+), 10 deletions(-)
+
+--- a/hal/rtl8188f/sdio/rtl8189fs_xmit.c
++++ b/hal/rtl8188f/sdio/rtl8189fs_xmit.c
+@@ -570,15 +570,16 @@
+ 		}
+ 		#endif
+ 
+-		if (padapter->registrypriv.wifi_spec)
+-			rtw_msleep_os(1);
+-		else {
+-			#ifdef CONFIG_REDUCE_TX_CPU_LOADING
+-			rtw_msleep_os(1);
+-			#else
+-			rtw_yield_os();
+-			#endif
+-		}
++		/*
++		 * This pass left frames behind: whatever it waits for (a buffer, a
++		 * frame, or the end of an aggregation window) is returned by the
++		 * receive/completion path, and on this port that path runs below
++		 * this thread.  A plain yield only rotates the threads at this
++		 * priority, so the lower-priority path never runs and the wait
++		 * never ends; sleep one tick instead.  This is a retry pass, not
++		 * the steady-state drain.
++		 */
++		rtw_msleep_os(1);
+ 		goto next;
+ 	}
+ 
+@@ -586,9 +587,13 @@
+ 	ret = rtw_txframes_pending(padapter);
+ 	_exit_critical_bh(&pxmitpriv->lock, &irql);
+ 	if (ret == 1) {
+-#ifdef CONFIG_REDUCE_TX_CPU_LOADING
++		/*
++		 * One frame left: give the rest of the system its turn before the
++		 * next pass.  Without this the handler is a tight loop that starves
++		 * every equal- and lower-priority thread whenever the last frame
++		 * cannot go out at once.
++		 */
+ 		rtw_msleep_os(1);
+-#endif
+ 		goto next;
+ 	}
+ 
