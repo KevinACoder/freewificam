@@ -299,8 +299,9 @@ DRV_WARN := -Wall -Wno-address-of-packed-member -Wno-maybe-uninitialized \
 DRV_CFLAGS := -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections $(DRV_WARN) $(DRV_CONFIG) \
+	-DCONFIG_LKPI_CENSUS \
 	-DLKPI_ABS_PLATFORM_PROVIDED $(SKB_POOL_CFLAGS) \
-	-I$(LKPI) -I$(LKPI)/include -I$(DRV) -I$(DRV)/include -I$(DRV)/platform \
+	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(DRV) -I$(DRV)/include -I$(DRV)/platform \
 	-I$(DRV)/hal/phydm -I$(DRV)/hal/btc \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
 	-include stdio.h -include string.h -include strings.h -include stdlib.h \

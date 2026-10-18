@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu@users.noreply.github.com>
+Date: Sat, 18 Oct 2026 00:00:00 +0000
+Subject: [PATCH 5/6] sdio: (recv) Publish the receive presentation for the
+ census
+
+The receive path is the only place that sees the card's own answer to
+"how much is pending" (SDIO_REG_RX0_REQ_LEN) and the read that answers
+it.  A stall that leaves the pump running and the receive buffers
+healthy therefore has no reading that says whether the card stopped
+offering work or the host stopped asking.
+
+Publish the three events the driver alone can see - the offer, the read
+completion, and the interrupt status about to be dispatched - through
+the observation seam the image provides.  No control flow changes; the
+calls are no-ops in an image built without the census.
+
+Signed-off-by: zhugengyu <zhugengyu@users.noreply.github.com>
+---
+ hal/rtl8188f/sdio/sdio_ops.c | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+--- a/hal/rtl8188f/sdio/sdio_ops.c
++++ b/hal/rtl8188f/sdio/sdio_ops.c
+@@ -16,6 +16,8 @@
+ 
+ #include <rtl8188f_hal.h>
+ 
++#include "lkpi_sdio_rx_probe.h"
++
+ /* #define SDIO_DEBUG_IO 1 */
+ #define CONFIG_RTW_SDIO_REG_FORCE_CMD52 0
+ 
+@@ -1530,13 +1532,22 @@
+ 			#endif
+ 		}
+ 
++		/* the card's own answer, published before the read it drives */
++		lkpi_sdio_rx_note_offer(phal->SdioRxFIFOSize);
++
+ 		if (phal->SdioRxFIFOSize != 0) {
+ 			u32 ret;
+ 
+ 			#ifdef CONFIG_MAC_LOOPBACK_DRIVER
+ 			sd_recv_loopback(padapter, phal->SdioRxFIFOSize);
+ 			#else
+-			ret = sd_recv_rxfifo(padapter, phal->SdioRxFIFOSize, &precvbuf);
++			{
++				u32 rx_want = phal->SdioRxFIFOSize;
++
++				ret = sd_recv_rxfifo(padapter, rx_want, &precvbuf);
++				lkpi_sdio_rx_note_read(rx_want,
++				    precvbuf ? rx_want : 0u, precvbuf ? 1 : 0);
++			}
+ 			if (precvbuf) {
+ 				sd_rxhandler(padapter, precvbuf);
+ 				phal->SdioRxFIFOSize = 0;
+@@ -1573,6 +1584,9 @@
+ 	dvobj = adapter_to_dvobj(padapter);
+ 	pwrctl = dvobj_to_pwrctl(dvobj);
+ 
++	/* the status about to be dispatched, for the receive-presentation census */
++	lkpi_sdio_rx_note_hisr(phal->sdio_hisr);
++
+ #ifdef CONFIG_SDIO_TX_ENABLE_AVAL_INT
+ 	if (phal->sdio_hisr & SDIO_HISR_AVAL) {
+ 		u8 freepage[8];

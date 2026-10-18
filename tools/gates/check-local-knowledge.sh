@@ -123,6 +123,7 @@ components/linuxkpi/skbuff/PROVENANCE.md
 components/linuxkpi/skbuff/DIVERGENCES.md
 components/linuxkpi/sdio/lkpi_sdio_backend.h
 components/linuxkpi/sdio/lkpi_sdio_be.c
+components/linuxkpi/sdio/lkpi_sdio_rx_probe.h
 components/linuxkpi/sdio/linuxkpi_sdio.c
 components/linuxkpi/sdio/linuxkpi_sdio.h
 components/linuxkpi/usb/linuxkpi_usb.c

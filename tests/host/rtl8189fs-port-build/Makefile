@@ -109,7 +109,8 @@ ARCH   := -mcpu=cortex-a55 -mgeneral-regs-only -mstrict-align -mno-outline-atomi
 COMMON := -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fms-extensions \
     -g3 -O2 -ffunction-sections -fdata-sections -fno-strict-aliasing
 INC    := -I$(FACE) -I$(DRV) -I$(DRV)/include -I$(DRV)/platform -I$(DRV)/hal/phydm \
-    -I$(DRV)/hal/btc -I$(ROOT)/components/ulog/src
+    -I$(DRV)/hal/btc -I$(ROOT)/components/linuxkpi/sdio \
+    -I$(ROOT)/components/ulog/src
 
 # The configuration the driver's own build resolves to for CONFIG_RTL8188F + CONFIG_SDIO_HCI
 # (transcribed from the lab build's .o.cmd, see the header comment). One switch differs from

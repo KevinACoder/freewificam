@@ -50,6 +50,7 @@
 
 #ifdef CONFIG_LKPI_CENSUS
 #include "lkpi_census.h"
+#include "lkpi_sdio_rx_probe.h"
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -136,6 +137,7 @@ struct lkpi_sdio_card {
 	osMutexId_t			claim;
 	osThreadId_t			pump;
 	osThreadId_t			claim_owner;
+	uint64_t			claim_since_ns;
 	osSemaphoreId_t			pump_req;
 	osSemaphoreId_t			pump_done;
 	bool				pump_running;
@@ -252,6 +254,28 @@ struct lkpi_sdio_census {
 	 * discussion turns on. */
 	uint32_t	tx_age_n;
 	struct lkpi_census_histo	tx_age;
+	/*
+	 * The receive presentation: the card's own answer to "how much is
+	 * pending" (SDIO_REG_RX0_REQ_LEN), the read issued for it, and the
+	 * interrupt bits that announced it. This is the layer the throughput
+	 * rounds had no reading for: a stall that leaves the pump running and
+	 * the pool healthy is either the card not offering work or the host
+	 * not asking, and these counters separate the two.
+	 */
+	uint32_t	rx_offer_reads;	/* polls of the request length */
+	uint32_t	rx_offer_zero;	/* ... answered with zero */
+	uint64_t	rx_offer_bytes;	/* sum of the non-zero answers */
+	struct lkpi_census_histo	rx_offer_len;	/* non-zero answer, bytes */
+	uint64_t	rx_offer_stamp_ns;	/* the offer waiting for its read */
+	struct lkpi_census_histo	rx_offer_wait;	/* offer -> read completion */
+	uint32_t	rx_read_ok;	/* reads that filled a receive buffer */
+	uint32_t	rx_read_short;	/* reads that completed with fewer bytes */
+	uint32_t	rx_read_fail;	/* reads that returned no buffer */
+	uint32_t	hisr_rxreq;	/* HISR bit 0: the card has data */
+	uint32_t	hisr_aval;	/* HISR bit 1: transmit pages freed */
+	uint32_t	hisr_rxerr;	/* HISR bit 3 */
+	uint32_t	hisr_rxfovw;	/* HISR bit 5 */
+	uint64_t	rx_last_ok_ns;	/* completion of the last successful read */
 };
 
 static struct lkpi_sdio_census lkpi_sdio_census_state;
@@ -446,6 +470,92 @@ lkpi_sdio_census_reset(void)
 	(void)memset(&lkpi_sdio_census_state, 0, sizeof(lkpi_sdio_census_state));
 }
 
+/*
+ * The receive-presentation events (see lkpi_sdio_rx_probe.h). The bits are the
+ * vendor's HISR layout (third-party/rtl8189fs/include/hal_com_reg.h:1725-1730);
+ * the engine does not include the driver's headers, so they are named here.
+ */
+#define	LKPI_SDIO_HISR_RX_REQUEST	(1u << 0)
+#define	LKPI_SDIO_HISR_AVAL		(1u << 1)
+#define	LKPI_SDIO_HISR_RXERR		(1u << 3)
+#define	LKPI_SDIO_HISR_RXFOVW		(1u << 5)
+
+void
+lkpi_sdio_rx_note_offer(unsigned int req_len)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+
+	c->rx_offer_reads++;
+	if (req_len == 0u) {
+		c->rx_offer_zero++;
+		return;
+	}
+	c->rx_offer_bytes += req_len;
+	/* a byte count, not a duration: the bucket index is its floor(log2) */
+	lkpi_census_histo_add(&c->rx_offer_len, req_len);
+	/* the oldest offer still waiting for its read is the one that ages */
+	if (c->rx_offer_stamp_ns == 0u)
+		c->rx_offer_stamp_ns = lkpi_sdio_census_now();
+}
+
+void
+lkpi_sdio_rx_note_read(unsigned int want, unsigned int got, int ok)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+	uint64_t now = lkpi_sdio_census_now();
+
+	if (c->rx_offer_stamp_ns != 0u) {
+		lkpi_census_histo_add(&c->rx_offer_wait,
+		    now - c->rx_offer_stamp_ns);
+		c->rx_offer_stamp_ns = 0u;
+	}
+	if (!ok) {
+		c->rx_read_fail++;
+		return;
+	}
+	if (got < want)
+		c->rx_read_short++;
+	else
+		c->rx_read_ok++;
+	c->rx_last_ok_ns = now;
+}
+
+void
+lkpi_sdio_rx_note_hisr(unsigned int hisr)
+{
+	struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+
+	if (hisr & LKPI_SDIO_HISR_RX_REQUEST)
+		c->hisr_rxreq++;
+	if (hisr & LKPI_SDIO_HISR_AVAL)
+		c->hisr_aval++;
+	if (hisr & LKPI_SDIO_HISR_RXERR)
+		c->hisr_rxerr++;
+	if (hisr & LKPI_SDIO_HISR_RXFOVW)
+		c->hisr_rxfovw++;
+}
+
+void
+lkpi_sdio_rx_stats_get(struct lkpi_sdio_rx_stats *out)
+{
+	const struct lkpi_sdio_census *c = &lkpi_sdio_census_state;
+
+	if (out == NULL)
+		return;
+	out->offer_reads = c->rx_offer_reads;
+	out->offer_zero = c->rx_offer_zero;
+	out->offer_bytes = c->rx_offer_bytes;
+	out->read_ok = c->rx_read_ok;
+	out->read_short = c->rx_read_short;
+	out->read_fail = c->rx_read_fail;
+	out->hisr_rxreq = c->hisr_rxreq;
+	out->hisr_aval = c->hisr_aval;
+	out->hisr_rxerr = c->hisr_rxerr;
+	out->hisr_rxfovw = c->hisr_rxfovw;
+	out->last_ok_ns = c->rx_last_ok_ns;
+	out->now_ns = lkpi_sdio_census_now();
+}
+
 void
 lkpi_sdio_census_print(void)
 {
@@ -504,6 +614,23 @@ lkpi_sdio_census_print(void)
 	    "perf rxrel: reads=%u rbytes=%llu busy_cyc=%u disp=%u drain=%u\n",
 	    c->cmd53_r, (unsigned long long)c->cmd53_r_bytes, c->cycles_busy,
 	    c->disp, c->drain_extra);
+	/*
+	 * The receive presentation: the card's offer, the read issued for it, and
+	 * the interrupt bits. `last_ok_age_ms` is how long ago the last successful
+	 * receive read completed - the number a phase-average stall hides.
+	 */
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "perf census: R offer=%u zero=%u bytes=%llu read_ok=%u short=%u "
+	    "fail=%u hisr_rxreq=%u aval=%u rxerr=%u rxfovw=%u last_ok_age_ms=%llu\n",
+	    c->rx_offer_reads, c->rx_offer_zero,
+	    (unsigned long long)c->rx_offer_bytes, c->rx_read_ok,
+	    c->rx_read_short, c->rx_read_fail, c->hisr_rxreq, c->hisr_aval,
+	    c->hisr_rxerr, c->hisr_rxfovw,
+	    (c->rx_last_ok_ns != 0u) ?
+	    (unsigned long long)((lkpi_sdio_census_now() - c->rx_last_ok_ns) /
+	    1000000u) : 0ULL);
+	lkpi_census_histo_print("perf census: R offer_len", &c->rx_offer_len);
+	lkpi_census_histo_print("perf census: R offer_wait", &c->rx_offer_wait);
 	lkpi_printf(ULOG_INFO_LEVEL, "perf census: D txage n=%u\n", c->tx_age_n);
 	lkpi_census_histo_print("perf census: D txage", &c->tx_age);
 }
@@ -693,6 +820,7 @@ sdio_claim_host(struct sdio_func *func)
 	lkpi_sdio_census_note_claim_wait(t0, lkpi_sdio_census_now());
 	lkpi_sdio_census_note_claim_hold(lkpi_sdio_census_now());
 	c->claim_owner = osThreadGetId();
+	c->claim_since_ns = lkpi_sdio_census_now();
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
 }
@@ -706,6 +834,7 @@ sdio_release_host(struct sdio_func *func)
 		return;
 	c->host.claimed = false;
 	c->claim_owner = NULL;
+	c->claim_since_ns = 0u;
 	lkpi_sdio_stats.releases++;
 	lkpi_sdio_census_note_claim_release(lkpi_sdio_census_now());
 	(void)osMutexRelease(c->claim);
@@ -717,6 +846,37 @@ lkpi_sdio_claim_held_by_current(void)
 
 	return lkpi_sdio_card_state.host.claimed &&
 	    lkpi_sdio_card_state.claim_owner == osThreadGetId();
+}
+
+/*
+ * Who holds the bus claim and for how long - the reading an episode needs when
+ * the pump is running but nothing moves. The name comes from the RTOS thread
+ * table; a thread that carries none reports "?".
+ */
+const char *
+lkpi_sdio_claim_owner(void)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+	const char *name;
+
+	if (!c->host.claimed || c->claim_owner == NULL)
+		return "-";
+	name = osThreadGetName(c->claim_owner);
+	return (name != NULL) ? name : "?";
+}
+
+unsigned int
+lkpi_sdio_claim_held_ms(void)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+	uint64_t now;
+
+	if (!c->host.claimed || c->claim_since_ns == 0u)
+		return 0u;
+	now = lkpi_sdio_census_now();
+	if (now <= c->claim_since_ns)
+		return 0u;
+	return (unsigned int)((now - c->claim_since_ns) / 1000000u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1259,6 +1419,7 @@ lkpi_sdio_pump_cycle(void)
 	(void)osMutexAcquire(c->claim, osWaitForever);
 	t1 = lkpi_sdio_census_now();
 	c->claim_owner = osThreadGetId();
+	c->claim_since_ns = t1;
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
 
@@ -1306,6 +1467,7 @@ lkpi_sdio_pump_cycle(void)
 
 	c->host.claimed = false;
 	c->claim_owner = NULL;
+	c->claim_since_ns = 0u;
 	lkpi_sdio_stats.releases++;
 	(void)osMutexRelease(c->claim);
 	return (c->rx_bytes + c->tx_bytes) != moved0;
