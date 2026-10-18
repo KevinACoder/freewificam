@@ -117,6 +117,16 @@ struct fake_driver_state {
 	int last_key_idx;
 	int last_key_cipher;
 	unsigned int last_key_len;
+	/* the hardware-key face: the driver assigns hw_key_idx on SET (the CAM
+	 * slot), reads it back on DISABLE, and the transmit path records the
+	 * key object the frame carried */
+	unsigned int cam_next;
+	int last_set_hw_idx;
+	int last_clear_hw_idx;
+	struct ieee80211_key_conf *last_tx_hw_key;
+	uint32_t last_tx_hw_cipher;
+	int last_tx_hw_keyidx;
+	unsigned int tx_hw_key_calls;
 
 	uint8_t tx_frames[FAKE_DRIVER_TX_MAX][FAKE_DRIVER_FRAME_MAX];
 	unsigned int tx_lens[FAKE_DRIVER_TX_MAX];

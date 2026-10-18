@@ -83,6 +83,13 @@ cmd_wlan(int argc, char **argv)
 		    wlan_bridge_state(), c.mgt_tx, c.data_tx, c.rx_frames,
 		    c.tx_completes, c.scan_starts, c.scan_completes,
 		    c.filter_sets, c.filter_clears);
+		csh_printf(csh, "wlan: data tx enc=%u plain=%u noenc=%u err=%u "
+		    "| rx data=%u enc=%u hwdec=%u/%u | crypto wepfail=%u "
+		    "ccmpfmt=%u replay=%u mic=%u nodefkey=%u\n",
+		    c.data_tx_enc, c.data_tx_plain, c.tx_noencap, c.tx_errors,
+		    c.rx_data, c.rx_data_enc, c.rx_data_hwdec_prot,
+		    c.rx_data_hwdec, c.rx_wepfail, c.rx_ccmpformat,
+		    c.rx_ccmpreplay, c.rx_ccmpmic, c.tx_nodefkey);
 		return 0;
 	}
 	if (strcmp(argv[1], "probe") == 0) {

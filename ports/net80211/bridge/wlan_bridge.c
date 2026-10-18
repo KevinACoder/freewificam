@@ -481,7 +481,7 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 			}
 		}
 		rc = bridge.ops->tx(bridge.drv, mtod(m, const uint8_t *),
-		    (size_t)m->m_len, 1);
+		    (size_t)m->m_len, 1, 0, 0, 0);
 		if (rc < 0)		/* the seam answers the frame's own length
 					 * on success and a negative error
 					 * otherwise (wlan_seam_adapter.c
@@ -519,6 +519,8 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		struct mbuf *enc;
 		struct ieee80211_node *ni;
 		struct ieee80211_frame *wh;
+		struct ieee80211_key *k = NULL;
+		int hw_crypto = 0, pairwise = 0, key_idx = 0;
 
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == NULL)
@@ -549,12 +551,23 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			 * place. The tested carrier uses the call the same way
 			 * (frame-test main.c:630-641).
 			 */
-			if (ieee80211_crypto_encap(ic, ni, enc) == NULL) {
+			k = ieee80211_crypto_encap(ic, ni, enc);
+			if (k == NULL) {
 				bridge.tx_noencap++;
 				m_freem(enc);
 				if_statinc(ifp, if_oerrors);
 				continue;
 			}
+			/*
+			 * Hand the driver the identity of the key the stack
+			 * just used: the hardware path needs the stable driver
+			 * object, not the stack's key. A key the stack marked
+			 * software-crypto stays on the stack (the chip is not
+			 * asked to decrypt it), so it never crosses the seam.
+			 */
+			hw_crypto = (k->wk_flags & IEEE80211_KEY_SWCRYPT) == 0;
+			pairwise = (k == &ni->ni_ucastkey);
+			key_idx = (int)k->wk_keyix;
 			bridge.data_tx_enc++;
 		} else {
 			bridge.data_tx_plain++;
@@ -585,7 +598,8 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			    (unsigned)enc->m_pkthdr.len);
 		}
 		if (bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
-		    (size_t)enc->m_pkthdr.len, 0) < 0)
+		    (size_t)enc->m_pkthdr.len, 0, hw_crypto, pairwise,
+		    key_idx) < 0)
 			if_statinc(ifp, if_oerrors);	/* same return contract as
 							 * the management drain: a
 							 * negative answer is the
@@ -818,6 +832,14 @@ wlan_bridge_attach(struct wlan_seam_drv *drv,
 	ieee80211_crypto_register(&ieee80211_cipher_ccmp);
 
 	ieee80211_ifattach(ic);
+#if WLAN_HW_CRYPTO
+	/*
+	 * Advertise the chip's CCMP engine to the stack.  This must happen
+	 * after the interface exists (the capability word is the interface's)
+	 * and before any key is installed; media init does not read it.
+	 */
+	ic->ic_caps |= IEEE80211_C_AES_CCM;
+#endif
 	ieee80211_media_init(ic, ieee80211_media_change,
 	    ieee80211_media_status);
 	ifp->if_percpuq = if_percpuq_create(ifp);
@@ -1724,6 +1746,18 @@ wlan_bridge_set_wpa(int on)
 #ifndef WLAN_NO_HT
 #define WLAN_NO_HT 0
 #endif
+/*
+ * The hardware-CCMP build switch.  The imported stack already carries the
+ * whole hardware path: with IEEE80211_C_AES_CCM in ic_caps a key is not
+ * marked software-crypto, ccmp_encap only writes the header and the packet
+ * number, and ccmp_decap only checks the replay window and strips the
+ * header.  The chip keeps both the header and the MIC (partial offload),
+ * which is what that receive path expects.  Off by default: the software
+ * path is the one the tree ships today.
+ */
+#ifndef WLAN_HW_CRYPTO
+#define WLAN_HW_CRYPTO 0
+#endif
 #if !WLAN_NO_HT
 static const uint8_t bridge_htcap_ie[28] = {
 	45, 26,				/* element id, length */
@@ -2086,6 +2120,17 @@ wlan_bridge_key_install(int pairwise, int key_idx, int set_tx, int cipher,
 	    WLAN_SEAM_CIPHER_CCMP, key, key_len);
 	wlan_osal_log("wlan: key %s idx %d len %u set_tx %d -> %d\n",
 	    pairwise ? "pair" : "group", key_idx, (unsigned)key_len, set_tx, rc);
+	if (rc != 0) {
+		/*
+		 * The stack accepted the key but the chip did not. Leaving the
+		 * stack key defined would make the transmit path believe a
+		 * hardware key exists and hand the seam an identity the driver
+		 * never registered, so roll the stack back to no key at all.
+		 */
+		wlan_port_serializer_lock();
+		(void)ieee80211_crypto_delkey(ic, wk);
+		wlan_port_serializer_unlock();
+	}
 	return rc;
 }
 
@@ -2231,18 +2276,43 @@ wlan_bridge_key_set(int pairwise, int key_idx, int cipher, const uint8_t *key,
 int
 wlan_bridge_key_clear(int pairwise, int key_idx)
 {
+	struct ieee80211com *ic = bridge.ic;
+	struct ieee80211_key *wk;
+	int hw, rc = 0;
+
+	if (!bridge.attached || ic == NULL || ic->ic_bss == NULL)
+		return -ENODEV;
+	if (!pairwise && (key_idx < 0 || key_idx >= IEEE80211_WEP_NKID))
+		return -EINVAL;
+
+	wlan_port_serializer_lock();
+	wk = pairwise ? &ic->ic_bss->ni_ucastkey : &ic->ic_nw_keys[key_idx];
+	if (IEEE80211_KEY_UNDEFINED(*wk)) {
+		wlan_port_serializer_unlock();
+		return 0;
+	}
+	hw = (wk->wk_flags & IEEE80211_KEY_SWCRYPT) == 0;
+	wlan_port_serializer_unlock();
 
 	/*
-	 * Nothing to clear on the driver side: a software-crypto key never
-	 * reaches the chip's key table (see wlan_bridge_key_install), and the
-	 * driver's own clear path re-enables its receive decryption engine on
-	 * the way past - the same trap, just without a key to decrypt with.
+	 * Only a hardware key has a driver-side entry to clear. The driver leg
+	 * runs outside the serializer, mirroring the install path; the stack
+	 * key is deleted afterwards either way. A software key never reached
+	 * the chip (see wlan_bridge_key_install), so asking the driver to
+	 * clear it would only re-enable its receive decryption engine.
 	 */
-	if (!bridge.attached || bridge.ops->clear_key == NULL)
-		return -ENODEV;
-	(void)pairwise;
-	(void)key_idx;
-	return 0;
+	if (hw && bridge.ops->clear_key != NULL) {
+		rc = bridge.ops->clear_key(bridge.drv, pairwise ? 1 : 0,
+		    key_idx);
+		if (rc != 0)
+			wlan_osal_log("wlan: key %s idx %d clear -> %d\n",
+			    pairwise ? "pair" : "group", key_idx, rc);
+	}
+
+	wlan_port_serializer_lock();
+	(void)ieee80211_crypto_delkey(ic, wk);
+	wlan_port_serializer_unlock();
+	return rc;
 }
 
 int

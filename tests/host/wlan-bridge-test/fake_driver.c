@@ -406,6 +406,17 @@ fake_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 	if (skb->len >= 1 &&
 	    (skb->data[0] & IEEE80211_FCTL_FTYPE) == IEEE80211_FTYPE_MGMT)
 		fake.tx_mgmt_calls++;
+	{
+		struct ieee80211_tx_info *info =
+		    (struct ieee80211_tx_info *)skb->cb;
+
+		fake.last_tx_hw_key = info->control.hw_key;
+		if (info->control.hw_key != NULL) {
+			fake.last_tx_hw_cipher = info->control.hw_key->cipher;
+			fake.last_tx_hw_keyidx = info->control.hw_key->keyidx;
+			fake.tx_hw_key_calls++;
+		}
+	}
 	record_tx(skb, skb->len >= 1 &&
 	    (skb->data[0] & IEEE80211_FCTL_FTYPE) == IEEE80211_FTYPE_MGMT);
 	order_add(FAKE_CALL_TX);
@@ -453,12 +464,17 @@ fake_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 		fake.last_key_idx = key->keyidx;
 		fake.last_key_cipher = (int)key->cipher;
 		fake.last_key_len = key->keylen;
+		/* the CAM slot the driver picks: the hardware path needs the
+		 * same number on the clear and on the frame */
+		key->hw_key_idx = (u8)(4 + (fake.cam_next++ % 28));
+		fake.last_set_hw_idx = key->hw_key_idx;
 		order_add(FAKE_CALL_SET_KEY);
 	} else {
 		fake.clear_key_calls++;
 		fake.last_key_pairwise =
 		    (key->flags & IEEE80211_KEY_FLAG_PAIRWISE) != 0;
 		fake.last_key_idx = key->keyidx;
+		fake.last_clear_hw_idx = key->hw_key_idx;
 		order_add(FAKE_CALL_CLEAR_KEY);
 	}
 	return 0;

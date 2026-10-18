@@ -34,6 +34,12 @@
  *     path. The vtable is extended at the same point as the scan pair where the
  *     ordering applies (see WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC). Consumers
  *     implement the new slot before the scan flow runs.
+ *   - v3 (hardware-CCMP round): the `tx` callback carries the key identity
+ *     the stack selected (`hw_crypto`, `pairwise`, `key_idx`). A driver that
+ *     offloads CCMP must put the stable driver-side key object matching that
+ *     identity into the transmit descriptor; the stack's own key is not that
+ *     object. The vtable still carries scalars only - the object stays on the
+ *     driver side of the seam.
  */
 
 #ifndef _WLAN_NET80211_SEAM_H_
@@ -118,9 +124,12 @@ struct wlan_seam_drv_ops {
 	void (*hw_scan_cancel)(struct wlan_seam_drv *drv);
 
 	/* Transmit one 802.11 frame. is_mgmt separates management frames (the
-	 * driver may need to wait for them) from data frames. */
+	 * driver may need to wait for them) from data frames. hw_crypto means
+	 * the stack key is hardware-offloaded (the stack wrote the CCMP header
+	 * but not the payload); pairwise/key_idx name that key so the driver
+	 * can select the same entry it wrote at set_key. */
 	int (*tx)(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
-	    int is_mgmt);
+	    int is_mgmt, int hw_crypto, int pairwise, int key_idx);
 
 	/* Key management: key material is a byte array, everything else is a
 	 * scalar (pairwise/group key, index, cipher). */

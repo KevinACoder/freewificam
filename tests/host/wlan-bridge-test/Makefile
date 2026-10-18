@@ -37,6 +37,11 @@ TX    := $(ROOT)/third-party/threadx
 BUILD_DIR ?= $(MAKEFILE_DIR)/build
 BIN := $(BUILD_DIR)/wlan-bridge-test
 
+# the hardware-CCMP build switch (the board suite carries the same one); the
+# suite forces the capability at runtime too, so the wiring is covered in both
+# arms, but the attach path itself only advertises it when this is 1
+WLAN_HW_CRYPTO ?= 0
+
 CC ?= cc
 
 # ---- the BSD-world flags the port layer's own suite uses ---------------------
@@ -63,6 +68,10 @@ KPI_CFLAGS := -std=gnu11 -Wall -Wextra -DCMSIS2_BACKEND_THREADX \
 # plus the vendor contract; the registration TU is the port layer's own
 WPAV_PORT := $(ROOT)/ports/wpa_supplicant
 KPI_CFLAGS += -I$(WPAV_PORT)
+ifeq ($(WLAN_HW_CRYPTO),1)
+BSD_CFLAGS += -DWLAN_HW_CRYPTO=1
+KPI_CFLAGS += -DWLAN_HW_CRYPTO=1
+endif
 WPAV_CFLAGS := -std=gnu11 -g3 -O0 -Wall -Wextra -Werror \
     -I$(ROOT) -I$(PORT) -I$(PORT)/bridge -I$(WPAV_PORT) -I$(MAKEFILE_DIR) \
     -I$(ROOT)/os/cmsis2 -I$(CMM)/CMSIS/RTOS2/Include -DCMSIS2_BACKEND_THREADX
