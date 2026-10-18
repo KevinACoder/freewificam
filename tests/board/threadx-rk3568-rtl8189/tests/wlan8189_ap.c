@@ -63,8 +63,12 @@ int lkpicfg_ap_stop(struct wiphy *wiphy);
  * for the peer to associate by hand or under the runner's control */
 #define WLAN8189_AP_JOIN_WAIT_MS	60000U
 
-/* the window a peer gets to ping and measure in, once it is associated */
-#define WLAN8189_AP_WINDOW_MS		40000U
+/* the receive window a peer gets, once it is associated: four phases of the
+ * same length the STA sheet uses, so the role-reversed boot can run the same
+ * every-boundary rewrite schedule */
+#define WLAN8189_AP_PHASES		4U
+#define WLAN8189_AP_PHASE_MS		20000U
+#define WLAN8189_AP_WINDOW_MS		(WLAN8189_AP_PHASES * WLAN8189_AP_PHASE_MS)
 
 /* how long the case waits, inside the window, for the runner to name the far
  * end of the reverse direction (the same console parameter the dataplane
@@ -261,17 +265,52 @@ void wlan8189_ap_chain( void )
 			UNLOCK_TCPIP_CORE();
 			LOG_ANCHOR( "wlan8189: ap iperf server 5003 ready\n" );
 		}
-		wlan8189_census_reset();
-		wlan8189_census_stall_arm( 1, 1, 0, wlan8189_agg_get(), 0 );
-		LOG_ANCHOR( "wlan8189: ap rx window %u s\n",
-		    (unsigned)( WLAN8189_AP_WINDOW_MS / 1000U ) );
-		for( waited = 0; waited < WLAN8189_AP_WINDOW_MS; waited += 200U ) {
-			(void)osDelay( 200U );
+		/* Four receive phases with the same every-boundary rewrite
+		 * schedule the STA sheet runs. The AP case's own role is the
+		 * variable; the action table comes from the console (`wlan8189
+		 * sched ...`), and a boot without one runs the direct write at
+		 * every boundary. */
+		{
+			unsigned int phase;
+			const unsigned int agg_value = 0x200fu;
+			struct wlan8189_agg_op op;
+
+			for( phase = 1U; phase <= WLAN8189_AP_PHASES; phase++ ) {
+				int action = wlan8189_sched_action( phase );
+
+				if( action == WLAN8189_SCHED_NONE )
+					action = WLAN8189_SCHED_DIRECT;
+				wlan8189_agg_apply( phase, action, agg_value,
+				    &op );
+				LOG_ANCHOR( "wlan8189: ap aggop phase=%u act=%s "
+				    "old=0x%04x/0x%04x new=0x%04x/0x%04x "
+				    "reads=%u writes=%u r1w1_us=%u w1r2_us=%u "
+				    "r2w2_us=%u w1w2_us=%u t_ms=%llu\n", phase,
+				    (action == WLAN8189_SCHED_RMW) ? "rmw" : "direct",
+				    op.old1, op.old2, op.new1, op.new2, op.reads,
+				    op.writes, op.r1w1_us, op.w1r2_us,
+				    op.r2w2_us, op.w1w2_us, op.t_ms );
+				wlan8189_census_reset();
+				wlan8189_census_stall_arm( 1, phase, 0,
+				    wlan8189_agg_get(), 0 );
+				LOG_ANCHOR( "wlan8189: ap phase %u ready act=%s "
+				    "agg=0x%04x t_ms=%llu\n", phase,
+				    (action == WLAN8189_SCHED_RMW) ? "rmw" : "direct",
+				    wlan8189_agg_get(),
+				    (unsigned long long)osKernelGetTickCount() );
+				for( waited = 0; waited < WLAN8189_AP_PHASE_MS;
+				    waited += 200U ) {
+					(void)osDelay( 200U );
+				}
+				wlan8189_census_stall_arm( 0, phase, 0,
+				    wlan8189_agg_get(), 0 );
+				LOG_ANCHOR( "wlan8189: ap phase %u done\n",
+				    phase );
+				wlan8189_census_print();
+			}
 		}
-		wlan8189_census_stall_arm( 0, 1, 0, wlan8189_agg_get(), 0 );
 		LOG_ANCHOR( "wlan8189: ap window done joined=%u left=%u\n",
 		    g_ap_sta_joined, g_ap_sta_left );
-		wlan8189_census_print();
 	}
 
 	rc = wlan8189_ap_stop();
