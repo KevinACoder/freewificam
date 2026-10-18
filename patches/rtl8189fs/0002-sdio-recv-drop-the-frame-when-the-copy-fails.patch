@@ -1,17 +1,15 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu@users.noreply.github.com>
 Date: Sat, 18 Oct 2026 00:00:00 +0000
-Subject: [PATCH 2/3] sdio: (recv) Drop the frame when the RX copy allocation
+Subject: [PATCH 2/4] sdio: (recv) Drop the frame when the RX copy allocation
  fails
 
 When the per-frame copy cannot be allocated, the SDIO receive path falls
 back to cloning the receive buffer's skb.  Under CONFIG_SDIO_RX_COPY that
 clone cannot represent the frame: its data pointer addresses the start of
-the whole read buffer rather than this frame's pdata, its length is the
-whole read, and the receive handler returns the buffer to the free queue
-as soon as it has walked it, so the bytes keep changing under the clone.
-The indication path then hands the read buffer to the stack as one
-oversized ethernet frame.
+the whole read buffer rather than this frame's pdata, and its length is the
+whole read.  The indication path then hands the read buffer to the stack as
+one oversized ethernet frame instead of the frame that arrived.
 
 There is nothing to deliver when the copy fails.  Drop the frame and let
 the transport retransmit it.
@@ -19,11 +17,11 @@ the transport retransmit it.
 Signed-off-by: zhugengyu <zhugengyu@users.noreply.github.com>
 ---
  os_dep/linux/recv_linux.c | 29 ++++++++++++-----------------
- 1 file changed, 12 insertions(+), 17 deletions(-)
+ 1 file changed, 11 insertions(+), 18 deletions(-)
 
 --- a/os_dep/linux/recv_linux.c
 +++ b/os_dep/linux/recv_linux.c
-@@ -125,29 +125,20 @@
+@@ -125,29 +125,18 @@
  
  		res = _FAIL;
  #else
@@ -52,14 +50,12 @@ Signed-off-by: zhugengyu <zhugengyu@users.noreply.github.com>
 -		}
 +		/*
 +		 * The copy failed, so there is no frame to hand upward.  Do not
-+		 * fall back to cloning the receive buffer: under
-+		 * CONFIG_SDIO_RX_COPY that buffer is recycled as soon as the read
-+		 * has been walked (rtl8189fs_recv.c), and a clone's data pointer
++		 * fall back to cloning the receive buffer: a clone's data pointer
 +		 * addresses the start of the whole read buffer rather than this
-+		 * frame, so the stack would receive the read buffer as one
-+		 * oversized ethernet frame and watch its bytes change underneath.
-+		 * Dropping the frame costs a retransmission; the clone costs the
-+		 * integrity of every frame around it.
++		 * frame's pdata, and its length is the whole read, so the stack
++		 * would receive the read buffer as one oversized ethernet frame.
++		 * Dropping the frame costs a retransmission; the clone delivers a
++		 * frame that was never received.
 +		 */
 +		RTW_INFO("%s: alloc_skb fail, drop frame\n", __FUNCTION__);
 +		precvframe->u.hdr.pkt = NULL;

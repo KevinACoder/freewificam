@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: zhugengyu <zhugengyu@users.noreply.github.com>
 Date: Sat, 18 Oct 2026 00:00:00 +0000
-Subject: [PATCH 3/3] sdio: (recv) Bound the receive retry loop that holds the
+Subject: [PATCH 3/4] sdio: (recv) Bound the receive retry loop that holds the
  host claim
 
 sd_recv() retries a failed receive every 10 ms, and only leaves the loop
