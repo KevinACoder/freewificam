@@ -43,8 +43,9 @@ LKPI := $(ROOT)/components/linuxkpi
 BOARD_DRV := $(ROOT)/board/rk3568-itx/drivers
 
 # The driver domain: the vendored Realtek SDIO vendor driver (a pinned
-# submodule, compiled here as its own translation units, byte-identical).
-DRV := $(ROOT)/third-party/rtl8189fs
+# submodule, compiled here as its own translation units through the patch
+# channel - the replay prints the pin unchanged when no patch is declared).
+DRV := $(shell sh $(ROOT)/tools/patches/replay.sh rtl8189fs)
 
 # WPA domain: the vendored supplicant (through the patch channel) and its port
 # layer; the TCP/IP domain rides the lwIP port's own source groups.
