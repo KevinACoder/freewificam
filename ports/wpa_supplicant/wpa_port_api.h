@@ -26,6 +26,11 @@ int wpa_port_connect_bssid(const char *ssid, const char *psk,
 int wpa_port_disconnect(void);
 int wpa_port_status(void);
 
+/* Whether the last console request asked for an open network (no PSK).  The
+ * join case uses it to accept an association that legitimately has no 4-way
+ * handshake; it never turns a keyed request into an open one. */
+int wpa_port_open_configured(void);
+
 /* bring the wlan interface up on the calling thread (never the
  * supplicant thread: the chip init can block on the USB workers).
  * With no vendor backend registered this is a no-op success, which

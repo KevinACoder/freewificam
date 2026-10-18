@@ -35,6 +35,7 @@
 #include "board_suite.h"
 #include "wlan8189_cases.h"
 #include "wlan8189_wpa_obs.h"
+#include "wpa_port_api.h"
 #include "backend_cfg80211.h"
 #include "lkpinetif_seam.h"
 
@@ -63,8 +64,13 @@ void wlan8189_join_chain( void )
 	    "<ssid> <psk>' on the console)\n" );
 
 	while( waited < WLAN8189_JOIN_WAIT_MS ) {
+		/* An open network has no 4-way handshake to complete. The console
+		 * request itself says which kind it was (a `wpa connect` without
+		 * a PSK), so "connected" is the whole join there - and only
+		 * there: a keyed request still requires the handshake. */
 		if( wlan8189_wpa_obs_connected() &&
-		    wlan8189_wpa_obs_negotiation_completed() ) {
+		    ( wlan8189_wpa_obs_negotiation_completed() ||
+		      wpa_port_open_configured() ) ) {
 			break;
 		}
 		(void)osDelay( WLAN8189_JOIN_POLL_MS );
@@ -86,14 +92,16 @@ void wlan8189_join_chain( void )
 	}
 
 	if( !wlan8189_wpa_obs_connected() ||
-	    !wlan8189_wpa_obs_negotiation_completed() ) {
+	    ( !wlan8189_wpa_obs_negotiation_completed() &&
+	      !wpa_port_open_configured() ) ) {
 		static char reason[160];
 
 		(void)snprintf( reason, sizeof( reason ), "no completed WPA2 "
-		    "association within %u s (connect=%u negotiation=%u) - was "
-		    "'wpa connect' sent?", (unsigned)( WLAN8189_JOIN_WAIT_MS / 1000 ),
+		    "association within %u s (connect=%u negotiation=%u open=%u) - "
+		    "was 'wpa connect' sent?", (unsigned)( WLAN8189_JOIN_WAIT_MS / 1000 ),
 		    wlan8189_wpa_obs_connected(),
-		    wlan8189_wpa_obs_negotiation_completed() );
+		    wlan8189_wpa_obs_negotiation_completed(),
+		    wpa_port_open_configured() );
 		board_case_fail( reason );
 		return;
 	}
