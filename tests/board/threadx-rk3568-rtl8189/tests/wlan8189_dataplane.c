@@ -637,6 +637,7 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer,
 				break;
 			}
 			(void)osDelay( 100U );
+			wlan8189_census_hb();
 			if( ( ( waited + 100U ) % WLAN8189_POOL_SAMPLE_MS ) == 0U ) {
 				wlan8189_census_pool_line();
 			}
@@ -712,6 +713,10 @@ void wlan8189_dataplane_chain( void )
 	if( dataplane_up() != 0 ) {
 		return;
 	}
+
+	/* from here on a freeze must name its own side: the watchdog sits above
+	 * every data-path thread and prints when the sheet stops stepping */
+	wlan8189_census_watchdog_start();
 
 	/*
 	 * The gateway reachability window doubles as the round's clean per-frame
@@ -866,6 +871,7 @@ void wlan8189_dataplane_chain( void )
 				for( waited = 0; waited < WLAN8189_IPERF_WINDOW_MS;
 				    waited += 200U ) {
 					(void)osDelay( 200U );
+					wlan8189_census_hb();
 					elapsed = waited + 200U;
 					lkpinetif_get_diag( &d );
 					if( onset_ms == 0U ) {
@@ -934,6 +940,7 @@ void wlan8189_dataplane_chain( void )
 				break;
 			}
 			(void)osDelay( 100U );
+			wlan8189_census_hb();
 		}
 		if( wlan8189_uplink_peer_get( &uplink_peer ) != 0 ) {
 			LOG_ANCHOR( "wlan8189: uplink skipped reason=no-peer\n" );

@@ -27,6 +27,7 @@
 #include <stdint.h>
 
 #include "generic_timer.h"
+#include "log.h"
 
 #include "drv_types.h"
 #include "hal/hal_dm.h"
@@ -35,6 +36,8 @@
 #include "lkpinetif_seam.h"
 #include "lkpi_census.h"
 #include "linuxkpi_sdio.h"
+
+#include "os/cmsis2/cmsis2.h"
 
 #include "wlan8189_census.h"
 
@@ -792,4 +795,98 @@ wlan8189_census_print(void)
 	wlan8189_rate_show();
 	wlan8189_ps_show();
 	wlan8189_pump_show();
+}
+
+/* --- the stall watchdog ---------------------------------------------------- */
+
+/*
+ * The 8189 rounds' intermittent freeze leaves a transcript that simply stops:
+ * the shell does not answer and no line says which side stopped. This thread
+ * sits above every data-path thread (the TCP/IP thread is High, the driver
+ * threads Normal, the SDIO pump BelowNormal) and prints one line when nothing
+ * it can see has moved for three seconds. It never takes a data-path lock and
+ * never touches the bus, so it can still speak while the path that froze holds
+ * whatever it holds.
+ *
+ * The heartbeat is the sheet's own progress (one per window step); the counters
+ * around it separate "the stack stopped" from "the driver stopped" from "the
+ * scheduler stopped".
+ */
+static volatile unsigned long census_hb;
+static volatile unsigned long census_stalls;
+
+void
+wlan8189_census_hb(void)
+{
+	census_hb++;
+}
+
+unsigned long
+wlan8189_census_stall_count(void)
+{
+	return census_stalls;
+}
+
+static void
+wlan8189_watchdog(void *arg)
+{
+	unsigned long last_hb = 0UL, last_alloc = 0UL;
+	unsigned long last_rx = 0UL, last_tx = 0UL;
+	struct lkpi_skb_pool_stats skb;
+	struct lkpinetif_diag d;
+	unsigned int quiet = 0U;
+
+	(void)arg;
+	for (;;) {
+		(void)osDelay(1000U);
+		lkpi_skb_pool_stats(&skb);
+		lkpinetif_get_diag(&d);
+		if (census_hb != last_hb || skb.n_alloc != last_alloc ||
+		    d.rx_bytes != last_rx || d.tx_bytes != last_tx) {
+			last_hb = census_hb;
+			last_alloc = skb.n_alloc;
+			last_rx = d.rx_bytes;
+			last_tx = d.tx_bytes;
+			quiet = 0U;
+			continue;
+		}
+		quiet++;
+		if (quiet < 3U || (quiet > 3U && (quiet % 10U) != 0U)) {
+			continue;
+		}
+		{
+			_adapter *adapter = census_adapter();
+
+			LOG_ANCHOR("wlan8189: watchdog stall quiet=%u hb=%lu "
+			    "alloc=%lu free=%lu skb_used=%u data=%u fail=%u "
+			    "rx=%lu tx=%lu tx_fail=%lu drv_tx=%llu drv_drop=%llu "
+			    "drv_rx=%llu tcpip_hb=%lu\n", quiet, census_hb,
+			    (unsigned long)skb.n_alloc, (unsigned long)skb.n_free,
+			    skb.skb_used, skb.data_used, skb.alloc_fail,
+			    d.rx_bytes, d.tx_bytes, d.tx_fail,
+			    (unsigned long long)((adapter != NULL) ?
+			    adapter->xmitpriv.tx_pkts : 0ULL),
+			    (unsigned long long)((adapter != NULL) ?
+			    adapter->xmitpriv.tx_drop : 0ULL),
+			    (unsigned long long)((adapter != NULL) ?
+			    adapter->recvpriv.rx_pkts : 0ULL),
+			    lkpinetif_tcpip_heartbeat());
+		}
+		census_stalls++;
+	}
+}
+
+void
+wlan8189_census_watchdog_start(void)
+{
+	static osThreadId_t id;
+	static const osThreadAttr_t attr = {
+		.name = "wlan8189-wd",
+		.stack_size = 4096U,
+		.priority = osPriorityRealtime,
+	};
+
+	if (id == NULL) {
+		id = osThreadNew(wlan8189_watchdog, NULL, &attr);
+	}
 }

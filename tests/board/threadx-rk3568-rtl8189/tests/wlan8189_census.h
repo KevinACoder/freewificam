@@ -20,6 +20,15 @@ void	wlan8189_census_print(void);
  * pool while it runs (a wedge inside a phase otherwise leaves no pool state) */
 void	wlan8189_census_pool_line(void);
 
+/* The stall watchdog: start it once at the top of the dataplane case, then bump
+ * the heartbeat on every window step. When nothing the watchdog can see has
+ * moved for three seconds it prints one state line (which counters advanced and
+ * which did not), so an intermittent freeze names its own side instead of
+ * leaving a transcript that just stops. */
+void	wlan8189_census_watchdog_start(void);
+void	wlan8189_census_hb(void);
+unsigned long	wlan8189_census_stall_count(void);
+
 /* the power policy (the driver's own setters; mode 0 = PS_MODE_ACTIVE leaves
  * power save, 2 = PS_MODE_MAX is the built-in default) */
 int	wlan8189_ps_get(void);
