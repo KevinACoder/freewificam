@@ -21,13 +21,28 @@ void	wlan8189_census_print(void);
 void	wlan8189_census_pool_line(void);
 
 /* The stall watchdog: start it once at the top of the dataplane case, then bump
- * the heartbeat on every window step. When nothing the watchdog can see has
- * moved for three seconds it prints one state line (which counters advanced and
- * which did not), so an intermittent freeze names its own side instead of
- * leaving a transcript that just stops. */
+ * the heartbeat on every window step. When neither the heartbeat nor any
+ * data-path counter has moved for three seconds it prints one state line (which
+ * counters advanced and which did not), so an intermittent freeze names its own
+ * side instead of leaving a transcript that just stops. */
 void	wlan8189_census_watchdog_start(void);
 void	wlan8189_census_hb(void);
 unsigned long	wlan8189_census_stall_count(void);
+
+/*
+ * The receive-stall episode recorder, driven by the same thread. Arm it at the
+ * start of a traffic window (the phase and its aggregate readback travel with
+ * it) and disarm it at the end. A second without data-path progress opens an
+ * episode: `rxstall begin` prints the three layers (what the card offered, what
+ * the host read, what the stack saw), `hold` repeats every two seconds and
+ * `end` closes it. `progress` excludes the pump's poll count and the sheet
+ * heartbeat, so a pump spinning over an empty card is a stall, not progress.
+ */
+void	wlan8189_census_stall_arm(int on, unsigned int phase, int treatment,
+	    unsigned int agg);
+unsigned long	wlan8189_census_rxstall_count(void);
+unsigned long	wlan8189_census_rxstall_ms_total(void);
+unsigned long	wlan8189_census_rxstall_ms_max(void);
 
 /* the power policy (the driver's own setters; mode 0 = PS_MODE_ACTIVE leaves
  * power save, 2 = PS_MODE_MAX is the built-in default) */
@@ -52,6 +67,10 @@ void	wlan8189_card_stats_show(void);
 #define	WLAN8189_AGG_TIMEOUT_STOCK	1u
 void	wlan8189_agg_set(unsigned int size_kb);
 void	wlan8189_agg_timeout_set(unsigned int timeout_units);
+/* one direct 16-bit write of the whole register, the driver's own shape
+ * (HalRxAggr8188FSdio): no read, no read-modify-write. The B/C arms use it to
+ * separate the RMW read and the two-write sequence from the write event. */
+void	wlan8189_agg_write(unsigned int value);
 unsigned int	wlan8189_agg_get(void);
 
 /* the host controller's completion-poll step, in microseconds (0 leaves it

@@ -518,37 +518,48 @@ wlan8189_cardq_show(void)
  * releases a burst when either the accumulated length crosses the threshold or
  * the timeout expires; the driver writes the register once at init, and this
  * runtime knob re-writes either byte per phase so one boot can compare release
- * policies against the throughput (the byte it is not setting, and every other
- * bit, are preserved by the read-modify-write).
+ * policies against the throughput.
+ *
+ * Every write here is a DIRECT 16-bit write, the driver's own shape
+ * (HalRxAggr8188FSdio issues one rtw_write16). The byte the caller is not
+ * setting comes from a shadow copy, never from reading 0x0280: the 2026-10-19
+ * write-shape round observed the phase-4 receive-presentation collapse in the
+ * every-phase read-modify-write arms (A: two 16-bit RMWs, p4 0.05), while the
+ * direct-write arms were healthy (B: one write, p4 15.19; C: two writes, p4
+ * 14.68). That makes the read-before-write pair the leading candidate
+ * association, not a proven cause; width, write count and value are disfavored
+ * as sole factors, not excluded. The phase-end agg_get read stays: it runs
+ * after the write, and B/C were healthy with it.
  *
  * The measured card releases ~4 KB per burst against a 15 KB length threshold,
  * i.e. the timeout, not the length, is what ends most bursts. The timeout byte
  * is therefore its own lever, and it is the one this knob's second form moves.
  */
+/* the harness baseline (timeout 0x20, length 15 KB); the setup write seeds it */
+static u16 wlan8189_agg_shadow = (u16)((0x20u << 8) | WLAN8189_AGG_STOCK_KB);
+
 void
 wlan8189_agg_set(unsigned int size_kb)
 {
 	_adapter *adapter = census_adapter();
-	u32 v;
 
 	if (adapter == NULL)
 		return;
-	v = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH);
-	v = (v & ~0xffu) | (size_kb & 0xffu);
-	rtw_write32(adapter, REG_RXDMA_AGG_PG_TH, v);
+	wlan8189_agg_shadow = (u16)((wlan8189_agg_shadow & ~0xffu) |
+	    (size_kb & 0xffu));
+	rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, wlan8189_agg_shadow);
 }
 
 void
 wlan8189_agg_timeout_set(unsigned int timeout_units)
 {
 	_adapter *adapter = census_adapter();
-	u32 v;
 
 	if (adapter == NULL)
 		return;
-	v = rtw_read32(adapter, REG_RXDMA_AGG_PG_TH);
-	v = (v & ~0xff00u) | ((timeout_units & 0xffu) << 8);
-	rtw_write32(adapter, REG_RXDMA_AGG_PG_TH, v);
+	wlan8189_agg_shadow = (u16)((wlan8189_agg_shadow & ~0xff00u) |
+	    ((timeout_units & 0xffu) << 8));
+	rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, wlan8189_agg_shadow);
 }
 
 unsigned int
@@ -558,7 +569,25 @@ wlan8189_agg_get(void)
 
 	if (adapter == NULL)
 		return 0u;
-	return rtw_read32(adapter, REG_RXDMA_AGG_PG_TH) & 0xffffu;
+	return (unsigned int)rtw_read16(adapter, REG_RXDMA_AGG_PG_TH);
+}
+
+/*
+ * One direct 16-bit write of the whole register - the driver's own shape
+ * (HalRxAggr8188FSdio). No read, no read-modify-write: the B arm uses it to
+ * ask whether a single boundary write is safe, the C arm calls it twice to ask
+ * whether the second write (rather than the RMW read) is what the card minds.
+ * It also seeds the shadow the single-byte levers build on.
+ */
+void
+wlan8189_agg_write(unsigned int value)
+{
+	_adapter *adapter = census_adapter();
+
+	if (adapter == NULL)
+		return;
+	wlan8189_agg_shadow = (u16)(value & 0xffffu);
+	rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, wlan8189_agg_shadow);
 }
 
 /* --- the host controller's completion-poll step --------------------------- */
@@ -707,6 +736,9 @@ wlan8189_census_pool_line(void)
 	    skb.uaf_write, skb.fence_bad);
 }
 
+/* the episode totals, printed at the phase boundary (defined with the recorder) */
+static void	wlan8189_census_rxstall_line(void);
+
 void
 wlan8189_census_print(void)
 {
@@ -790,6 +822,10 @@ wlan8189_census_print(void)
 	 * readout below, not an 802.11 input count */
 	printk("perf census: N net80211 linked=0 frames=0 (FullMAC line: the data path never crosses net80211)\n");
 
+	/* The episode totals survive a serial ring that drops the begin/end
+	 * lines: one line per phase carries the whole phase's stall account. */
+	wlan8189_census_rxstall_line();
+
 	wlan8189_card_stats_show();
 	wlan8189_cardq_show();
 	wlan8189_rate_show();
@@ -797,20 +833,27 @@ wlan8189_census_print(void)
 	wlan8189_pump_show();
 }
 
-/* --- the stall watchdog ---------------------------------------------------- */
+/* --- the stall watchdog and the receive-stall episode recorder ------------- */
 
 /*
- * The 8189 rounds' intermittent freeze leaves a transcript that simply stops:
- * the shell does not answer and no line says which side stopped. This thread
- * sits above every data-path thread (the TCP/IP thread is High, the driver
- * threads Normal, the SDIO pump BelowNormal) and prints one line when nothing
- * it can see has moved for three seconds. It never takes a data-path lock and
- * never touches the bus, so it can still speak while the path that froze holds
- * whatever it holds.
+ * Two readers, one clock:
  *
- * The heartbeat is the sheet's own progress (one per window step); the counters
- * around it separate "the stack stopped" from "the driver stopped" from "the
- * scheduler stopped".
+ * - The watchdog is the total-freeze backstop. When neither the sheet's own
+ *   heartbeat nor any data-path counter has moved for three seconds, the whole
+ *   machine (or the path the shell shares) has stopped, and one line says so.
+ *   It never takes a data-path lock and never touches the bus.
+ *
+ * - The episode recorder is the receive-stall instrument. While a traffic
+ *   window is armed, a second without data-path progress opens an episode and
+ *   prints what the three layers said at that moment - what the card offered,
+ *   what the host read, what the stack saw - repeats while the episode lasts,
+ *   and closes it when progress resumes. A phase average hides a five-second
+ *   stall; these lines do not.
+ *
+ * Progress deliberately excludes the pump's own poll count and the sheet
+ * heartbeat: a pump spinning over an empty card is exactly the shape a stall
+ * has, and counting its cycles would mask the stall (the 2026-10-18 rounds'
+ * `watchdog_stalls=0` beside multi-second client windows).
  */
 static volatile unsigned long census_hb;
 static volatile unsigned long census_stalls;
@@ -827,36 +870,308 @@ wlan8189_census_stall_count(void)
 	return census_stalls;
 }
 
+/* one progress snapshot: everything the recorder subtracts to describe a stall */
+struct wlan8189_stall_base {
+	unsigned long long	progress;
+	uint64_t		t_ns;
+	unsigned int		pump_polls;
+	unsigned int		offer_reads;
+	unsigned int		offer_zero;
+	unsigned int		read_ok;
+	unsigned int		read_fail;
+	unsigned int		hisr_rxreq;
+	unsigned int		hisr_aval;
+	unsigned int		hisr_rxerr;
+	unsigned int		hisr_rxfovw;
+	unsigned long		netif_rx;
+	unsigned long		netif_tx;
+	unsigned long long	drv_rx;
+	unsigned long long	drv_tx;
+};
+
+static volatile int stall_armed;
+static volatile unsigned int stall_phase;
+static volatile char stall_arm;
+static volatile unsigned int stall_agg;
+static int stall_started;	/* the phase moved data at least once */
+static int stall_active;
+static uint64_t stall_open_ns;
+static uint64_t stall_last_print_ns;
+static struct wlan8189_stall_base stall_base;
+static unsigned long stall_episodes;
+static unsigned long stall_ms_total;
+static unsigned long stall_ms_max;
+
+/*
+ * The rate-collapse floor, bytes per second of netif receive. The silence
+ * detector (no data-plane progress at all) misses a stall that trickles: the
+ * 2026-10-19 constA-w phase 4 moved 16-30 KB/s for its whole window, never
+ * silent for a full second, and read as `episodes=0`. Two consecutive seconds
+ * below this floor open a `slow` episode with the same three-layer deltas.
+ */
+#define	WLAN8189_STALL_RATE_FLOOR	100000UL
+static unsigned int stall_slow_ticks;
+static unsigned long stall_last_rx;
+static uint64_t stall_last_rx_ns;
+
+static unsigned long long
+stall_progress(void)
+{
+	struct lkpinetif_diag d;
+	struct lkpi_sdio_rx_stats rx;
+	_adapter *adapter = census_adapter();
+	unsigned long long p = 0ULL;
+
+	lkpinetif_get_diag(&d);
+	lkpi_sdio_rx_stats_get(&rx);
+	p += (unsigned long long)d.rx_bytes + (unsigned long long)d.tx_bytes;
+	p += (unsigned long long)rx.read_ok;
+	if (adapter != NULL) {
+		p += (unsigned long long)adapter->recvpriv.rx_pkts;
+		p += (unsigned long long)adapter->xmitpriv.tx_pkts;
+	}
+	return p;
+}
+
+static void
+stall_snapshot(struct wlan8189_stall_base *b)
+{
+	struct lkpinetif_diag d;
+	struct lkpi_sdio_rx_stats rx;
+	struct lkpi_sdio_stats st;
+	_adapter *adapter = census_adapter();
+
+	lkpinetif_get_diag(&d);
+	lkpi_sdio_rx_stats_get(&rx);
+	lkpi_sdio_stats_get(&st);
+	b->progress = stall_progress();
+	b->t_ns = lkpi_census_now_ns();
+	b->pump_polls = st.pump_polls;
+	b->offer_reads = rx.offer_reads;
+	b->offer_zero = rx.offer_zero;
+	b->read_ok = rx.read_ok;
+	b->read_fail = rx.read_fail;
+	b->hisr_rxreq = rx.hisr_rxreq;
+	b->hisr_aval = rx.hisr_aval;
+	b->hisr_rxerr = rx.hisr_rxerr;
+	b->hisr_rxfovw = rx.hisr_rxfovw;
+	b->netif_rx = d.rx_bytes;
+	b->netif_tx = d.tx_bytes;
+	b->drv_rx = (adapter != NULL) ? adapter->recvpriv.rx_pkts : 0ULL;
+	b->drv_tx = (adapter != NULL) ? adapter->xmitpriv.tx_pkts : 0ULL;
+}
+
+/* the episode's line: one shape for begin, hold and end, all deltas against
+ * the snapshot taken at the last progress point. No bus access here - the
+ * recorder must be able to speak while the pump is the thing that stopped. */
+static void
+stall_print(const char *what, unsigned int quiet_ms)
+{
+	struct lkpinetif_diag d;
+	struct lkpi_sdio_rx_stats rx;
+	struct lkpi_sdio_stats st;
+	struct lkpi_skb_pool_stats skb;
+	_adapter *adapter = census_adapter();
+	uint64_t now = lkpi_census_now_ns();
+
+	lkpinetif_get_diag(&d);
+	lkpi_sdio_rx_stats_get(&rx);
+	lkpi_sdio_stats_get(&st);
+	lkpi_skb_pool_stats(&skb);
+	LOG_ANCHOR("wlan8189: rxstall %s t_ms=%llu phase=%u arm=%c agg=0x%04x "
+	    "quiet_ms=%u pump=%u offer=%u zero=%u read_ok=%u fail=%u "
+	    "hisr=%u/%u netif_rx=%lu drv_rx=%llu claim=%s/%u core=%s/%lu "
+	    "skb=%u/%u\n", what, (unsigned long long)(now / 1000000ULL),
+	    stall_phase, stall_arm, stall_agg, quiet_ms,
+	    st.pump_polls - stall_base.pump_polls,
+	    rx.offer_reads - stall_base.offer_reads,
+	    rx.offer_zero - stall_base.offer_zero,
+	    rx.read_ok - stall_base.read_ok,
+	    rx.read_fail - stall_base.read_fail,
+	    rx.hisr_rxreq - stall_base.hisr_rxreq,
+	    rx.hisr_aval - stall_base.hisr_aval,
+	    (unsigned long)(d.rx_bytes - stall_base.netif_rx),
+	    (unsigned long long)(((adapter != NULL) ?
+	    adapter->recvpriv.rx_pkts : 0ULL) - stall_base.drv_rx),
+	    lkpi_sdio_claim_owner(), lkpi_sdio_claim_held_ms(),
+	    lkpinetif_core_lock_owner(), lkpinetif_core_lock_held_ms(),
+	    skb.skb_used, skb.data_used);
+}
+
+/* arm at the traffic bracket's start, disarm at its end. The aggregate value is
+ * the phase's own readback, so the line carries the arm without touching the
+ * card from this thread. */
+void
+wlan8189_census_stall_arm(int on, unsigned int phase, int treatment,
+    unsigned int agg)
+{
+	if (on) {
+		struct lkpinetif_diag d;
+
+		stall_phase = phase;
+		stall_arm = treatment ? 'B' : 'A';
+		stall_agg = agg;
+		stall_started = 0;
+		stall_active = 0;
+		stall_slow_ticks = 0U;
+		stall_snapshot(&stall_base);
+		lkpinetif_get_diag(&d);
+		stall_last_rx = d.rx_bytes;
+		stall_last_rx_ns = lkpi_census_now_ns();
+		stall_armed = 1;
+	} else {
+		if (stall_active) {
+			uint64_t now = lkpi_census_now_ns();
+			unsigned long dur = (unsigned long)((now - stall_open_ns) /
+			    1000000ULL);
+
+			stall_print("end", (unsigned int)dur);
+			stall_ms_total += dur;
+			if (dur > stall_ms_max)
+				stall_ms_max = dur;
+			stall_active = 0;
+		}
+		stall_armed = 0;
+		stall_started = 0;
+	}
+}
+
+unsigned long
+wlan8189_census_rxstall_count(void)
+{
+	return stall_episodes;
+}
+
+unsigned long
+wlan8189_census_rxstall_ms_total(void)
+{
+	return stall_ms_total;
+}
+
+unsigned long
+wlan8189_census_rxstall_ms_max(void)
+{
+	return stall_ms_max;
+}
+
+static void
+wlan8189_census_rxstall_line(void)
+{
+
+	printk("perf census: X rxstall episodes=%lu ms_total=%lu ms_max=%lu "
+	    "armed=%d\n", stall_episodes, stall_ms_total, stall_ms_max,
+	    stall_armed ? 1 : 0);
+}
+
+/* one second of the recorder, called from the watchdog thread */
+static void
+stall_tick(void)
+{
+	uint64_t t;
+	unsigned long long p;
+	struct lkpinetif_diag d;
+	int stalled;
+
+	if (!stall_armed)
+		return;
+	t = lkpi_census_now_ns();
+	p = stall_progress();
+	if (!stall_started) {
+		/* the phase's first movement starts the clock: a window that never
+		 * carried traffic is not a stall */
+		if (p != stall_base.progress) {
+			stall_started = 1;
+			stall_snapshot(&stall_base);
+		}
+		return;
+	}
+	/* the rate-collapse signal: the last full second's netif receive bytes */
+	lkpinetif_get_diag(&d);
+	if ((t - stall_last_rx_ns) >= 1000000000ULL) {
+		unsigned long rate = (unsigned long)
+		    (((d.rx_bytes - stall_last_rx) * 1000000000ULL) /
+		    (t - stall_last_rx_ns));
+
+		stall_last_rx = d.rx_bytes;
+		stall_last_rx_ns = t;
+		if (rate < WLAN8189_STALL_RATE_FLOOR) {
+			if (stall_slow_ticks < 100U)
+				stall_slow_ticks++;
+		} else {
+			stall_slow_ticks = 0U;
+		}
+	}
+	/* one episode state machine for both signatures: no progress at all
+	 * (silence) or two seconds below the rate floor (trickle) */
+	stalled = (p == stall_base.progress) || (stall_slow_ticks >= 2U);
+	if (stalled && !stall_active) {
+		stall_active = 1;
+		stall_open_ns = t;
+		stall_last_print_ns = t;
+		stall_episodes++;
+		stall_print((stall_slow_ticks >= 2U) ? "slow" : "begin",
+		    (unsigned int)((t - stall_base.t_ns) / 1000000ULL));
+	} else if (!stalled && stall_active) {
+		unsigned long dur = (unsigned long)((t - stall_open_ns) /
+		    1000000ULL);
+
+		stall_print("end", (unsigned int)dur);
+		stall_ms_total += dur;
+		if (dur > stall_ms_max)
+			stall_ms_max = dur;
+		stall_active = 0;
+	} else if (stall_active &&
+	    (t - stall_last_print_ns) >= 1000000000ULL) {
+		stall_last_print_ns = t;
+		stall_print("hold", (unsigned int)((t - stall_open_ns) /
+		    1000000ULL));
+	}
+	if (p != stall_base.progress)
+		stall_snapshot(&stall_base);
+}
+
 static void
 wlan8189_watchdog(void *arg)
 {
-	unsigned long last_hb = 0UL, last_alloc = 0UL;
-	unsigned long last_rx = 0UL, last_tx = 0UL;
-	struct lkpi_skb_pool_stats skb;
-	struct lkpinetif_diag d;
+	unsigned long last_hb = 0UL;
+	unsigned long long last_progress = 0ULL;
 	unsigned int quiet = 0U;
 
 	(void)arg;
 	for (;;) {
+		unsigned long long progress;
+
 		(void)osDelay(1000U);
-		lkpi_skb_pool_stats(&skb);
-		lkpinetif_get_diag(&d);
-		if (census_hb != last_hb || skb.n_alloc != last_alloc ||
-		    d.rx_bytes != last_rx || d.tx_bytes != last_tx) {
+		stall_tick();
+		/*
+		 * The freeze backstop only speaks while a traffic window is armed.
+		 * Outside one (the AP case's station wait, the gap between sheets)
+		 * no data-plane progress is normal, and the old line fired there -
+		 * a false positive that would invalidate a perfectly good boot.
+		 */
+		if (!stall_armed || !stall_started) {
 			last_hb = census_hb;
-			last_alloc = skb.n_alloc;
-			last_rx = d.rx_bytes;
-			last_tx = d.tx_bytes;
+			last_progress = stall_progress();
+			quiet = 0U;
+			continue;
+		}
+		progress = stall_progress();
+		if (census_hb != last_hb || progress != last_progress) {
+			last_hb = census_hb;
+			last_progress = progress;
 			quiet = 0U;
 			continue;
 		}
 		quiet++;
-		if (quiet < 3U || (quiet > 3U && (quiet % 10U) != 0U)) {
+		if (quiet < 3U || (quiet > 3U && (quiet % 10U) != 0U))
 			continue;
-		}
 		{
 			_adapter *adapter = census_adapter();
+			struct lkpi_skb_pool_stats skb;
+			struct lkpinetif_diag d;
 
+			lkpi_skb_pool_stats(&skb);
+			lkpinetif_get_diag(&d);
 			LOG_ANCHOR("wlan8189: watchdog stall quiet=%u hb=%lu "
 			    "alloc=%lu free=%lu skb_used=%u data=%u fail=%u "
 			    "rx=%lu tx=%lu tx_fail=%lu drv_tx=%llu drv_drop=%llu "

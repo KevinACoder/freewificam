@@ -109,6 +109,12 @@ endif
 ifeq ($(ARM_B_FIRST),1)
 LEVER_CFLAGS += -DWLAN8189_ARM_B_FIRST=1
 endif
+# the constant-arm control: 0 = alternating rewrite (default), 1 = constant A
+# with no boundary writes, 2 = constant B, 3 = constant A with same-value
+# rewrites. 1 vs 3 separates the boundary write from the value it writes.
+ifneq ($(ARM_CONST),)
+LEVER_CFLAGS += -DWLAN8189_ARM_CONST=$(ARM_CONST)
+endif
 ifneq ($(AGG_TIMEOUT),)
 LEVER_CFLAGS += -DWLAN8189_AGG_TIMEOUT_TREAT=$(AGG_TIMEOUT)
 endif

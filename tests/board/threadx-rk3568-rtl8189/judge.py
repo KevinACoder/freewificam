@@ -395,6 +395,10 @@ PING_RECV_RE = re.compile(r"ping: recv")
 
 #: the arm a measurement phase ran under (see the phase ready line)
 PHASE_ARM_RE = re.compile(r"wlan8189: phase \d+ ready lever=\d+ arm=([AB])")
+#: the constant-arm mode: non-zero means the boot pinned one arm for every
+#: phase, so "both arms appeared" is the wrong sheet invariant (the trigger
+#: round runs one arm per boot on purpose)
+CONST_MODE_RE = re.compile(r"\bconst=(\d+)")
 
 #: The downlink sheet's traffic evidence. A phase window is the round's
 #: measurement, so a window that moved no client traffic measured nothing - the
@@ -559,13 +563,20 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         # arms of one lever, so a run that never printed both arms measured
         # nothing to compare (each phase's arm travels on its ready line)
         arms = set()
+        const_mode = False
         for line in transcript.lines:
+            m = CONST_MODE_RE.search(line)
+            if m and int(m.group(1)) != 0:
+                const_mode = True
             m = PHASE_ARM_RE.search(line)
             if m:
                 arms.add(m.group(1))
-        if arms and arms != {"A", "B"}:
+        if arms and not const_mode and arms != {"A", "B"}:
             errors.append("wlan8189-dataplane: the phase sheet printed only arm(s) %s"
                           % ",".join(sorted(arms)))
+        if const_mode and len(arms) != 1:
+            errors.append("wlan8189-dataplane: constant-arm sheet printed %d arms"
+                          % len(arms))
         # each downlink window must show client traffic: a window that moved
         # nothing is not a measurement, and it is the shape a host driver that
         # never ran leaves behind (the windows still open and close). The
@@ -617,9 +628,12 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
             if len(up_arms) != len(up_results):
                 errors.append("wlan8189-dataplane: %d uplink ready lines but "
                               "%d results" % (len(up_arms), len(up_results)))
-            if set(up_arms) != {"A", "B"}:
+            if not const_mode and set(up_arms) != {"A", "B"}:
                 errors.append("wlan8189-dataplane: the uplink sheet printed "
                               "only arm(s) %s" % ",".join(sorted(set(up_arms))))
+            if const_mode and len(set(up_arms)) != 1:
+                errors.append("wlan8189-dataplane: constant-arm uplink sheet "
+                              "printed %d arms" % len(set(up_arms)))
             zero = [m.group(1) for m in up_results if int(m.group(2)) == 0]
             if zero:
                 errors.append("wlan8189-dataplane: uplink phase(s) %s moved "
