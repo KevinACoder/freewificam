@@ -35,6 +35,7 @@
 #include "lwip/netif.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/dhcp.h"
+#include "lwip/apps/lwiperf.h"
 
 #include "board_suite.h"
 #include "wlan8189_cases.h"
@@ -245,11 +246,21 @@ void wlan8189_ap_chain( void )
 			LOG_ANCHOR( "wlan8189: ap no peer for the uplink window\n" );
 		}
 
-		/* The receive window is this case's own measurement: reset the
-		 * census after the reverse window so the totals describe the
-		 * peer's client traffic, and arm the stall recorder with the
-		 * downlink direction (RX). The peer's client is what the round
-		 * wants to observe with the roles swapped. */
+		/* The receive window is this case's own measurement: the peer's
+		 * client is what the round wants to observe with the roles
+		 * swapped. The dataplane sheet's server was started against the
+		 * station address; after the AP address change it may no longer
+		 * answer on this interface, so start a second server on its own
+		 * port and let the peer's client target that. */
+		LOCK_TCPIP_CORE();
+		if (lwiperf_start_tcp_server(IP_ADDR_ANY, 5003, NULL, NULL) ==
+		    NULL) {
+			UNLOCK_TCPIP_CORE();
+			LOG_ANCHOR( "wlan8189: ap iperf server 5003 failed\n" );
+		} else {
+			UNLOCK_TCPIP_CORE();
+			LOG_ANCHOR( "wlan8189: ap iperf server 5003 ready\n" );
+		}
 		wlan8189_census_reset();
 		wlan8189_census_stall_arm( 1, 1, 0, wlan8189_agg_get(), 0 );
 		LOG_ANCHOR( "wlan8189: ap rx window %u s\n",
