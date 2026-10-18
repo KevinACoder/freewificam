@@ -590,6 +590,160 @@ wlan8189_agg_write(unsigned int value)
 	rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, wlan8189_agg_shadow);
 }
 
+/*
+ * The per-phase aggregation-access schedule (the counterbalanced round).
+ *
+ * The compiled arms answer "does a boundary write collapse the receive
+ * presentation" but not "is it the read-before-write pair, and is that pair's
+ * effect a function of the phase position". A runtime table of one action per
+ * downlink phase lets one boot run the full counterbalanced schedule - two RMW
+ * boundaries and two direct-write boundaries in a fixed order - and the reverse
+ * boot runs the mirror order. The two actions write the same value the same
+ * number of times (twice); only the reads differ, so the contrast isolates the
+ * pair rather than the write count.
+ *
+ * The schedule is set from the console before the sheet reaches its phases
+ * (the runner's extra steps land at the join wait, ahead of the dataplane
+ * case). With no schedule the compiled lever runs unchanged.
+ */
+static char	wlan8189_sched_spec[32];
+static int	wlan8189_sched_actions[WLAN8189_SCHED_PHASES];
+
+const char *
+wlan8189_sched_get(void)
+{
+
+	return (wlan8189_sched_spec[0] != '\0') ? wlan8189_sched_spec : "none";
+}
+
+int
+wlan8189_sched_action(unsigned int phase)
+{
+
+	if (wlan8189_sched_spec[0] == '\0' ||
+	    phase < 1U || phase > WLAN8189_SCHED_PHASES)
+		return WLAN8189_SCHED_NONE;
+	return wlan8189_sched_actions[phase - 1U];
+}
+
+void
+wlan8189_sched_clear(void)
+{
+
+	wlan8189_sched_spec[0] = '\0';
+}
+
+int
+wlan8189_sched_set(const char *spec)
+{
+	char canon[32];
+	const char *p = spec;
+	unsigned int len = 0U;
+	unsigned int i = 0U;
+
+	if (spec == NULL)
+		return -1;
+	while (i < WLAN8189_SCHED_PHASES) {
+		int action;
+		unsigned int tok_len;
+
+		if (strncmp(p, "rmw", 3) == 0 &&
+		    (p[3] == ',' || p[3] == '\0')) {
+			action = WLAN8189_SCHED_RMW;
+			tok_len = 3U;
+		} else if (strncmp(p, "direct", 6) == 0 &&
+		    (p[6] == ',' || p[6] == '\0')) {
+			action = WLAN8189_SCHED_DIRECT;
+			tok_len = 6U;
+		} else {
+			return -1;
+		}
+		if (len + tok_len + 2U >= sizeof(canon))
+			return -1;
+		if (i != 0U)
+			canon[len++] = ',';
+		memcpy(canon + len, p, tok_len);
+		len += tok_len;
+		canon[len] = '\0';
+		wlan8189_sched_actions[i++] = action;
+		p += tok_len;
+		if (*p == ',')
+			p++;
+		else if (*p != '\0')
+			return -1;
+	}
+	if (*p != '\0' || i != WLAN8189_SCHED_PHASES)
+		return -1;
+	strcpy(wlan8189_sched_spec, canon);
+	return 0;
+}
+
+static unsigned int
+agg_op_us(uint64_t from, uint64_t to)
+{
+
+	return (unsigned int)((to - from) / 1000ULL);
+}
+
+/*
+ * Apply one phase's boundary action and record its access order and timing.
+ * `value` is the full 16-bit register value the phase wants (0x200f on the
+ * adopted baseline). The RMW form preserves the byte it is not setting from
+ * the value it just read, exactly as the pre-fix single-byte levers did; the
+ * direct form writes the whole word twice, exactly as the C arm did.
+ */
+void
+wlan8189_agg_apply(unsigned int phase, int action, unsigned int value,
+    struct wlan8189_agg_op *op)
+{
+	_adapter *adapter = census_adapter();
+	uint64_t t2, t3, t4, t5;
+	u16 v1, v2, w1, w2;
+
+	(void)phase;
+	if (op != NULL)
+		memset(op, 0, sizeof(*op));
+	if (adapter == NULL)
+		return;
+	if (action == WLAN8189_SCHED_RMW) {
+		v1 = rtw_read16(adapter, REG_RXDMA_AGG_PG_TH);
+		t2 = lkpi_census_now_ns();
+		w1 = (u16)((v1 & ~0xffu) | (value & 0xffu));
+		rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, w1);
+		t3 = lkpi_census_now_ns();
+		v2 = rtw_read16(adapter, REG_RXDMA_AGG_PG_TH);
+		t4 = lkpi_census_now_ns();
+		w2 = (u16)((v2 & ~0xff00u) | (value & 0xff00u));
+		rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, w2);
+		t5 = lkpi_census_now_ns();
+		if (op != NULL) {
+			op->old1 = v1;
+			op->new1 = w1;
+			op->old2 = v2;
+			op->new2 = w2;
+			op->reads = 2U;
+			op->writes = 2U;
+			op->r1w1_us = agg_op_us(t2, t3);
+			op->w1r2_us = agg_op_us(t3, t4);
+			op->r2w2_us = agg_op_us(t4, t5);
+			op->t_ms = t5 / 1000000ULL;
+		}
+	} else {
+		rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, (u16)value);
+		t2 = lkpi_census_now_ns();
+		rtw_write16(adapter, REG_RXDMA_AGG_PG_TH, (u16)value);
+		t3 = lkpi_census_now_ns();
+		if (op != NULL) {
+			op->new1 = value & 0xffffu;
+			op->new2 = value & 0xffffu;
+			op->writes = 2U;
+			op->w1w2_us = agg_op_us(t2, t3);
+			op->t_ms = t3 / 1000000ULL;
+		}
+	}
+	wlan8189_agg_shadow = (u16)(value & 0xffffu);
+}
+
 /* --- the host controller's completion-poll step --------------------------- */
 
 /*
@@ -893,6 +1047,7 @@ static volatile int stall_armed;
 static volatile unsigned int stall_phase;
 static volatile char stall_arm;
 static volatile unsigned int stall_agg;
+static volatile int stall_dir;	/* 0 = downlink (RX), 1 = uplink (TX) */
 static int stall_started;	/* the phase moved data at least once */
 static int stall_active;
 static uint64_t stall_open_ns;
@@ -903,16 +1058,45 @@ static unsigned long stall_ms_total;
 static unsigned long stall_ms_max;
 
 /*
- * The rate-collapse floor, bytes per second of netif receive. The silence
- * detector (no data-plane progress at all) misses a stall that trickles: the
- * 2026-10-19 constA-w phase 4 moved 16-30 KB/s for its whole window, never
- * silent for a full second, and read as `episodes=0`. Two consecutive seconds
- * below this floor open a `slow` episode with the same three-layer deltas.
+ * The rate-collapse floor, bytes per second of the window's own direction. The
+ * silence detector (no data-plane progress at all) misses a stall that
+ * trickles: the 2026-10-19 constA-w phase 4 moved 16-30 KB/s for its whole
+ * window, never silent for a full second, and read as `episodes=0`. Two
+ * consecutive seconds below this floor open a `slow` episode with the same
+ * three-layer deltas. The floor reads the direction's own byte counter: the
+ * uplink sheet's RX carries only ACKs, so an RX floor there reported every
+ * healthy uplink phase as slow.
  */
 #define	WLAN8189_STALL_RATE_FLOOR	100000UL
 static unsigned int stall_slow_ticks;
 static unsigned long stall_last_rx;
+static unsigned long stall_last_tx;
 static uint64_t stall_last_rx_ns;
+
+/*
+ * The per-second progress series: the offer/read/byte deltas of the window,
+ * sampled by the same thread. One line per field at the window's end (the
+ * serial ring can lose a line but not four whole fields), so a completed
+ * phase shows whether the collapse started at the boundary or later.
+ */
+#define	WLAN8189_SERIES_MAX	32
+static uint32_t	series_offer[WLAN8189_SERIES_MAX];
+static uint32_t	series_read[WLAN8189_SERIES_MAX];
+static uint32_t	series_rx_kb[WLAN8189_SERIES_MAX];
+static uint32_t	series_tx_kb[WLAN8189_SERIES_MAX];
+static volatile unsigned int series_n;
+static unsigned int series_last_offer;
+static unsigned int series_last_read;
+static unsigned long series_last_rx;
+static unsigned long series_last_tx;
+static uint64_t series_last_ns;
+
+static const char *
+stall_dir_name(void)
+{
+
+	return (stall_dir == 0) ? "dl" : "ul";
+}
 
 static unsigned long long
 stall_progress(void)
@@ -981,7 +1165,7 @@ stall_print(const char *what, unsigned int quiet_ms)
 	LOG_ANCHOR("wlan8189: rxstall %s t_ms=%llu phase=%u arm=%c agg=0x%04x "
 	    "quiet_ms=%u pump=%u offer=%u zero=%u read_ok=%u fail=%u "
 	    "hisr=%u/%u netif_rx=%lu drv_rx=%llu claim=%s/%u core=%s/%lu "
-	    "skb=%u/%u\n", what, (unsigned long long)(now / 1000000ULL),
+	    "skb=%u/%u dir=%s\n", what, (unsigned long long)(now / 1000000ULL),
 	    stall_phase, stall_arm, stall_agg, quiet_ms,
 	    st.pump_polls - stall_base.pump_polls,
 	    rx.offer_reads - stall_base.offer_reads,
@@ -995,15 +1179,89 @@ stall_print(const char *what, unsigned int quiet_ms)
 	    adapter->recvpriv.rx_pkts : 0ULL) - stall_base.drv_rx),
 	    lkpi_sdio_claim_owner(), lkpi_sdio_claim_held_ms(),
 	    lkpinetif_core_lock_owner(), lkpinetif_core_lock_held_ms(),
-	    skb.skb_used, skb.data_used);
+	    skb.skb_used, skb.data_used, stall_dir_name());
+}
+
+static void
+stall_series_reset(void)
+{
+	struct lkpinetif_diag d;
+	struct lkpi_sdio_rx_stats rx;
+
+	lkpinetif_get_diag(&d);
+	lkpi_sdio_rx_stats_get(&rx);
+	series_n = 0U;
+	series_last_offer = rx.offer_reads;
+	series_last_read = rx.read_ok;
+	series_last_rx = d.rx_bytes;
+	series_last_tx = d.tx_bytes;
+	series_last_ns = lkpi_census_now_ns();
+}
+
+/* one sample per second, from the watchdog thread's own tick */
+static void
+stall_series_sample(uint64_t t)
+{
+	struct lkpinetif_diag d;
+	struct lkpi_sdio_rx_stats rx;
+	unsigned int n = series_n;
+
+	if ((t - series_last_ns) < 1000000000ULL || n >= WLAN8189_SERIES_MAX)
+		return;
+	lkpinetif_get_diag(&d);
+	lkpi_sdio_rx_stats_get(&rx);
+	series_offer[n] = rx.offer_reads - series_last_offer;
+	series_read[n] = rx.read_ok - series_last_read;
+	series_rx_kb[n] = (uint32_t)((d.rx_bytes - series_last_rx) / 1024UL);
+	series_tx_kb[n] = (uint32_t)((d.tx_bytes - series_last_tx) / 1024UL);
+	series_last_offer = rx.offer_reads;
+	series_last_read = rx.read_ok;
+	series_last_rx = d.rx_bytes;
+	series_last_tx = d.tx_bytes;
+	series_last_ns = t;
+	series_n = n + 1U;
+}
+
+static void
+stall_series_field(const char *name, const uint32_t *v)
+{
+	char buf[256];
+	unsigned int i;
+	int len;
+
+	len = snprintf(buf, sizeof(buf), "wlan8189: series phase=%u dir=%s "
+	    "n=%u %s=", stall_phase, stall_dir_name(), series_n, name);
+	if (len < 0)
+		return;
+	for (i = 0U; i < series_n && len < (int)sizeof(buf) - 8; i++)
+		len += snprintf(buf + len, sizeof(buf) - (size_t)len, "%s%u",
+		    (i != 0U) ? "," : "", (unsigned int)v[i]);
+	if (len >= (int)sizeof(buf) - 2)
+		len = (int)sizeof(buf) - 2;
+	buf[len++] = '\n';
+	buf[len] = '\0';
+	printk("%s", buf);
+}
+
+static void
+stall_series_print(void)
+{
+
+	if (series_n == 0U)
+		return;
+	stall_series_field("offer", series_offer);
+	stall_series_field("read", series_read);
+	stall_series_field("rx_kb", series_rx_kb);
+	stall_series_field("tx_kb", series_tx_kb);
 }
 
 /* arm at the traffic bracket's start, disarm at its end. The aggregate value is
  * the phase's own readback, so the line carries the arm without touching the
- * card from this thread. */
+ * card from this thread. `dir` selects the rate signal's byte counter: the
+ * downlink window moves netif RX, the uplink window moves netif TX. */
 void
 wlan8189_census_stall_arm(int on, unsigned int phase, int treatment,
-    unsigned int agg)
+    unsigned int agg, int dir)
 {
 	if (on) {
 		struct lkpinetif_diag d;
@@ -1011,13 +1269,16 @@ wlan8189_census_stall_arm(int on, unsigned int phase, int treatment,
 		stall_phase = phase;
 		stall_arm = treatment ? 'B' : 'A';
 		stall_agg = agg;
+		stall_dir = dir ? 1 : 0;
 		stall_started = 0;
 		stall_active = 0;
 		stall_slow_ticks = 0U;
 		stall_snapshot(&stall_base);
 		lkpinetif_get_diag(&d);
 		stall_last_rx = d.rx_bytes;
+		stall_last_tx = d.tx_bytes;
 		stall_last_rx_ns = lkpi_census_now_ns();
+		stall_series_reset();
 		stall_armed = 1;
 	} else {
 		if (stall_active) {
@@ -1033,6 +1294,7 @@ wlan8189_census_stall_arm(int on, unsigned int phase, int treatment,
 		}
 		stall_armed = 0;
 		stall_started = 0;
+		stall_series_print();
 	}
 }
 
@@ -1085,14 +1347,17 @@ stall_tick(void)
 		}
 		return;
 	}
-	/* the rate-collapse signal: the last full second's netif receive bytes */
+	/* the rate-collapse signal: the last full second's bytes in the window's
+	 * own direction (RX downlink, TX uplink) */
 	lkpinetif_get_diag(&d);
 	if ((t - stall_last_rx_ns) >= 1000000000ULL) {
+		unsigned long moved = (stall_dir == 0) ?
+		    (d.rx_bytes - stall_last_rx) : (d.tx_bytes - stall_last_tx);
 		unsigned long rate = (unsigned long)
-		    (((d.rx_bytes - stall_last_rx) * 1000000000ULL) /
-		    (t - stall_last_rx_ns));
+		    ((moved * 1000000000ULL) / (t - stall_last_rx_ns));
 
 		stall_last_rx = d.rx_bytes;
+		stall_last_tx = d.tx_bytes;
 		stall_last_rx_ns = t;
 		if (rate < WLAN8189_STALL_RATE_FLOOR) {
 			if (stall_slow_ticks < 100U)
@@ -1101,6 +1366,7 @@ stall_tick(void)
 			stall_slow_ticks = 0U;
 		}
 	}
+	stall_series_sample(t);
 	/* one episode state machine for both signatures: no progress at all
 	 * (silence) or two seconds below the rate floor (trickle) */
 	stalled = (p == stall_base.progress) || (stall_slow_ticks >= 2U);

@@ -39,7 +39,7 @@ unsigned long	wlan8189_census_stall_count(void);
  * heartbeat, so a pump spinning over an empty card is a stall, not progress.
  */
 void	wlan8189_census_stall_arm(int on, unsigned int phase, int treatment,
-	    unsigned int agg);
+	    unsigned int agg, int dir);
 unsigned long	wlan8189_census_rxstall_count(void);
 unsigned long	wlan8189_census_rxstall_ms_total(void);
 unsigned long	wlan8189_census_rxstall_ms_max(void);
@@ -72,6 +72,32 @@ void	wlan8189_agg_timeout_set(unsigned int timeout_units);
  * separate the RMW read and the two-write sequence from the write event. */
 void	wlan8189_agg_write(unsigned int value);
 unsigned int	wlan8189_agg_get(void);
+
+/*
+ * The per-phase aggregation-access schedule (the counterbalanced round). One
+ * action per downlink phase, set from the console before the sheet starts:
+ * `rmw` is the pre-fix shape (read16, write16, twice), `direct` the C shape
+ * (two direct writes). Both write the same value twice, so the contrast
+ * isolates the reads. With no schedule the compiled lever runs unchanged.
+ */
+#define	WLAN8189_SCHED_PHASES	4
+#define	WLAN8189_SCHED_NONE	(-1)
+#define	WLAN8189_SCHED_DIRECT	0
+#define	WLAN8189_SCHED_RMW	1
+
+struct wlan8189_agg_op {
+	unsigned int	old1, new1, old2, new2;
+	unsigned int	reads, writes;
+	unsigned int	r1w1_us, w1r2_us, r2w2_us, w1w2_us;
+	unsigned long long t_ms;
+};
+
+int	wlan8189_sched_set(const char *spec);
+void	wlan8189_sched_clear(void);
+const char *wlan8189_sched_get(void);
+int	wlan8189_sched_action(unsigned int phase);
+void	wlan8189_agg_apply(unsigned int phase, int action, unsigned int value,
+	    struct wlan8189_agg_op *op);
 
 /* the host controller's completion-poll step, in microseconds (0 leaves it
  * alone); show prints the step in effect. The data step is the same knob

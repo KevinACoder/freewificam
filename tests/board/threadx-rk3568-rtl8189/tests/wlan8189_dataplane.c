@@ -409,6 +409,13 @@ census_print_lwip(void)
 static int
 phase_treatment( unsigned int phase )
 {
+	/* a runtime schedule pins one arm for the whole boot (the schedule, not
+	 * the A/B lever, is the variable); the judge's single-arm mode covers
+	 * this sheet the same way it covers the constant-arm modes */
+	if( wlan8189_sched_action( 1U ) != WLAN8189_SCHED_NONE ) {
+		(void)phase;
+		return 0;
+	}
 #if (WLAN8189_ARM_CONST == 1) || (WLAN8189_ARM_CONST == 3) || \
     (WLAN8189_ARM_CONST == 4) || (WLAN8189_ARM_CONST == 5) || \
     (WLAN8189_ARM_CONST == 6) || (WLAN8189_ARM_CONST == 7)
@@ -471,6 +478,7 @@ struct wlan8189_phase_ident {
 	int		prio;
 	int		drain;
 	int		plan;	/* 1: a runtime plan (not the compiled lever) ran */
+	const char	*act;	/* the boundary action: rmw / direct / baseline */
 };
 
 /*
@@ -488,12 +496,34 @@ struct wlan8189_phase_ident {
  * single-variable property; without a plan the compiled lever runs unchanged.
  */
 static void
-phase_apply_levers( unsigned int phase, int treatment,
+phase_apply_levers( unsigned int phase, int treatment, int use_sched,
     struct wlan8189_phase_ident *id )
 {
+	const unsigned int agg_value = (WLAN8189_AGG_TIMEOUT_BASE << 8) |
+	    WLAN8189_AGG_STOCK_KB;
+	const int sched_action = use_sched ?
+	    wlan8189_sched_action( phase ) : WLAN8189_SCHED_NONE;
 	int write_agg = 1;
 
 	(void)wlan8189_pump_set( "fixed" );
+	id->act = "baseline";
+	if( sched_action != WLAN8189_SCHED_NONE ) {
+		/* The counterbalanced round's per-phase action: the schedule
+		 * names it, and this boundary is where it runs. The two shapes
+		 * write the same value twice; only the RMW form reads first. */
+		struct wlan8189_agg_op op;
+
+		wlan8189_agg_apply( phase, sched_action, agg_value, &op );
+		LOG_ANCHOR( "wlan8189: aggop phase=%u act=%s old=0x%04x/0x%04x "
+		    "new=0x%04x/0x%04x reads=%u writes=%u r1w1_us=%u "
+		    "w1r2_us=%u r2w2_us=%u w1w2_us=%u t_ms=%llu\n", phase,
+		    (sched_action == WLAN8189_SCHED_RMW) ? "rmw" : "direct",
+		    op.old1, op.old2, op.new1, op.new2, op.reads, op.writes,
+		    op.r1w1_us, op.w1r2_us, op.r2w2_us, op.w1w2_us, op.t_ms );
+		id->act = (sched_action == WLAN8189_SCHED_RMW) ?
+		    "rmw" : "direct";
+		write_agg = 0;
+	}
 #if (WLAN8189_ARM_CONST == 1) || (WLAN8189_ARM_CONST == 2)
 	/* constant arm: the register was written once before the sheet; a
 	 * boundary write here would fold "the write happened" into the arm */
@@ -511,23 +541,24 @@ phase_apply_levers( unsigned int phase, int treatment,
 	/* C: two direct 16-bit writes per boundary (no RMW reads) */
 	write_agg = 0;
 #endif
+	if( sched_action != WLAN8189_SCHED_NONE ) {
+		write_agg = 0;
+	}
 	if( write_agg != 0 ) {
 		/* one direct 16-bit write, the driver's shape (HalRxAggr8188FSdio):
 		 * the 2026-10-19 round observed the collapse with the RMW's
 		 * read-before-write pair; the pair is the leading candidate, not
 		 * a proven cause */
-		wlan8189_agg_write( (WLAN8189_AGG_TIMEOUT_BASE << 8) |
-		    WLAN8189_AGG_STOCK_KB );
+		wlan8189_agg_write( agg_value );
 	}
+	if( sched_action == WLAN8189_SCHED_NONE ) {
 #if WLAN8189_ARM_CONST == 6
-	wlan8189_agg_write( (WLAN8189_AGG_TIMEOUT_BASE << 8) |
-	    WLAN8189_AGG_STOCK_KB );
+	wlan8189_agg_write( agg_value );
 #elif WLAN8189_ARM_CONST == 7
-	wlan8189_agg_write( (WLAN8189_AGG_TIMEOUT_BASE << 8) |
-	    WLAN8189_AGG_STOCK_KB );
-	wlan8189_agg_write( (WLAN8189_AGG_TIMEOUT_BASE << 8) |
-	    WLAN8189_AGG_STOCK_KB );
+	wlan8189_agg_write( agg_value );
+	wlan8189_agg_write( agg_value );
 #endif
+	}
 	wlan8189_pump_yield_set( 0 );
 	(void)wlan8189_irq_set( 0 );
 	(void)wlan8189_pump_prio_set( 0 );
@@ -616,11 +647,12 @@ phase_print_ready( const char *sheet, unsigned int phase, int treatment,
 
 	LOG_ANCHOR( "wlan8189: %sphase %u ready lever=%u arm=%c pump=%s "
 	    "poll_us=%u data_us=%u agg=0x%04x yield=%d lps=%d irq=%d prio=%d "
-	    "drain=%d plan=%d const=%d t_ms=%llu\n",
+	    "drain=%d plan=%d const=%d t_ms=%llu act=%s\n",
 	    sheet, phase, (unsigned)WLAN8189_LEVER, treatment ? 'B' : 'A',
 	    id->pump, id->poll_us, id->data_us, id->agg, id->yield,
 	    wlan8189_ps_get(), id->irq, id->prio, id->drain, id->plan,
-	    WLAN8189_ARM_CONST, (unsigned long long)osKernelGetTickCount() );
+	    WLAN8189_ARM_CONST, (unsigned long long)osKernelGetTickCount(),
+	    (id->act != NULL) ? id->act : "baseline" );
 }
 
 /* ------------------------------------------------------------------ */
@@ -707,7 +739,7 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer,
 	void *session;
 	unsigned int waited;
 
-	phase_apply_levers( phase, treatment, &id );
+	phase_apply_levers( phase, treatment, 0, &id );
 	wlan8189_census_reset();
 	phase_print_ready( sheet, phase, treatment, &id );
 
@@ -742,7 +774,7 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer,
 		board_case_fail( "the uplink iperf client did not start" );
 		return -1;
 	}
-	wlan8189_census_stall_arm( 1, phase, treatment, id.agg );
+	wlan8189_census_stall_arm( 1, phase, treatment, id.agg, 1 );
 
 	/* the client's own duration (10 s) plus the connect and the report's
 	 * delivery; the wait is a ceiling, the report ends it. The pool is
@@ -763,7 +795,7 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer,
 			}
 		}
 		if( !g_uplink_report_seen ) {
-			wlan8189_census_stall_arm( 0, phase, treatment, id.agg );
+			wlan8189_census_stall_arm( 0, phase, treatment, id.agg, 1 );
 			/* printed before touching the lock: this line must exist
 			 * even when the take below is what is blocked */
 			LOG_ANCHOR( "wlan8189: %sphase %u no report in %u ms "
@@ -794,7 +826,7 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer,
 	 * through phase_print_ready): the dataplane's uplink phases print as
 	 * `wlan8189: uplink phase N ...`, the AP case's window as
 	 * `wlan8189: ap uplink phase N ...`, and neither doubles a word */
-	wlan8189_census_stall_arm( 0, phase, treatment, id.agg );
+	wlan8189_census_stall_arm( 0, phase, treatment, id.agg, 1 );
 	LOG_ANCHOR( "wlan8189: %sphase %u result bytes=%lu ms=%lu "
 	    "kbit=%lu type=%u\n", sheet, phase, g_uplink_bytes, g_uplink_ms,
 	    g_uplink_kbit, g_uplink_report_type );
@@ -950,6 +982,10 @@ void wlan8189_dataplane_chain( void )
 		unsigned int phase;
 
 		arm_const_apply_once();
+		LOG_ANCHOR( "wlan8189: sched %s source=%s\n",
+		    wlan8189_sched_get(),
+		    ( wlan8189_sched_action( 1U ) != WLAN8189_SCHED_NONE ) ?
+		    "console" : "none" );
 		for( phase = 1U; phase <= WLAN8189_IPERF_PHASES; phase++ ) {
 			/* which arm a phase runs is a build choice: the default puts the
 			 * control first (arm A on the odd phases), and the confirmatory
@@ -958,7 +994,7 @@ void wlan8189_dataplane_chain( void )
 			const int treatment = phase_treatment( phase );
 			struct wlan8189_phase_ident id;
 
-			phase_apply_levers( phase, treatment, &id );
+			phase_apply_levers( phase, treatment, 1, &id );
 
 			g_udp_pkts = 0U;
 			g_udp_bytes = 0UL;
@@ -967,7 +1003,7 @@ void wlan8189_dataplane_chain( void )
 			/* the episode recorder runs for the whole window: it starts its
 			 * clock at the first data movement, so the client's connect wait
 			 * is not a stall */
-			wlan8189_census_stall_arm( 1, phase, treatment, id.agg );
+			wlan8189_census_stall_arm( 1, phase, treatment, id.agg, 0 );
 			LOG_ANCHOR( "wlan8189: iperf server ready port=%u\n",
 			    LWIPERF_TCP_PORT_DEFAULT );
 			LOG_ANCHOR( "wlan8189: iperf window %u s\n",
@@ -1039,7 +1075,7 @@ void wlan8189_dataplane_chain( void )
 			    g_udp_pkts, g_udp_bytes );
 			wlan8189_census_print();
 			census_print_lwip();
-			wlan8189_census_stall_arm( 0, phase, treatment, id.agg );
+			wlan8189_census_stall_arm( 0, phase, treatment, id.agg, 0 );
 			LOG_ANCHOR( "wlan8189: phase %u done\n", phase );
 		}
 	}
