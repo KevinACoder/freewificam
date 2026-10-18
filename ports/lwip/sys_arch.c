@@ -45,10 +45,16 @@
 #include "lwip/opt.h"
 #include "lwip/sys.h"
 #include "lwip/err.h"
+#include "lwip/tcpip.h"
 
 #include "sys_mbox_seam.h"
 
 #include "os/cmsis2/cmsis2.h"
+
+/* The ThreadX backend answers with the name record it already keeps; a backend
+ * that keeps none (the FreeRTOS host) simply does not define it, and the hang
+ * report then says "?" rather than failing to link. */
+extern const char *osThreadGetName(void *thread_id) __attribute__((weak));
 
 /* --- time ------------------------------------------------------------------- */
 
@@ -122,13 +128,68 @@ err_t sys_mutex_new(sys_mutex_t *mutex)
 	return (mutex->mut != NULL) ? ERR_OK : ERR_MEM;
 }
 
+/*
+ * Core-lock accounting, for the measurement paths: LOCK_TCPIP_CORE() waits
+ * forever and a wait that never ends prints nothing, so in a transcript a
+ * wedged stack and a slow one look identical. Every take and release of the
+ * stack's own lock records its holder here, and the bounded acquire below lets
+ * a caller give up and say who it was. Diagnostic only: a racy read is
+ * acceptable, and the owner is cleared before the release.
+ */
+static volatile unsigned long sys_core_lock_owner;
+static volatile unsigned long sys_core_lock_since;
+
+static void sys_core_lock_taken(sys_mutex_t *mutex)
+{
+	if (mutex == &lock_tcpip_core) {
+		sys_core_lock_since = (unsigned long)sys_now();
+		sys_core_lock_owner = (unsigned long)(uintptr_t)osThreadGetId();
+	}
+}
+
+static void sys_core_lock_released(sys_mutex_t *mutex)
+{
+	if (mutex == &lock_tcpip_core) {
+		sys_core_lock_owner = 0ul;
+	}
+}
+
+const char *sys_arch_core_lock_owner(void)
+{
+	unsigned long owner = sys_core_lock_owner;
+
+	if (owner == 0ul) {
+		return "-";
+	}
+	if (osThreadGetName != NULL) {
+		const char *name = osThreadGetName((void *)(uintptr_t)owner);
+
+		if (name != NULL) {
+			return name;
+		}
+	}
+	return "?";
+}
+
+unsigned long sys_arch_core_lock_held_ms(void)
+{
+	unsigned long owner = sys_core_lock_owner;
+
+	if (owner == 0ul) {
+		return 0ul;
+	}
+	return (unsigned long)sys_now() - sys_core_lock_since;
+}
+
 void sys_mutex_lock(sys_mutex_t *mutex)
 {
 	(void)osMutexAcquire(mutex->mut, osWaitForever);
+	sys_core_lock_taken(mutex);
 }
 
 void sys_mutex_unlock(sys_mutex_t *mutex)
 {
+	sys_core_lock_released(mutex);
 	(void)osMutexRelease(mutex->mut);
 }
 
@@ -136,6 +197,24 @@ void sys_mutex_free(sys_mutex_t *mutex)
 {
 	(void)osMutexDelete(mutex->mut);
 	mutex->mut = NULL;
+}
+
+/*
+ * A bounded acquire, for the measurement paths only: a hang report needs the
+ * wait to end so it can say who held the lock, and a stack-wide
+ * LOCK_TCPIP_CORE() that never returns produces no line at all. Not part of
+ * lwIP's sys.h contract; declared in arch/sys_arch.h.
+ */
+int sys_mutex_lock_timeout(sys_mutex_t *mutex, u32_t timeout_ms)
+{
+	if (mutex == NULL || mutex->mut == NULL) {
+		return -1;
+	}
+	if (osMutexAcquire(mutex->mut, timeout_ms) != osOK) {
+		return -1;
+	}
+	sys_core_lock_taken(mutex);
+	return 0;
 }
 
 #endif /* !LWIP_COMPAT_MUTEX */
@@ -233,6 +312,20 @@ err_t sys_mbox_trypost_fromisr(sys_mbox_t *mbox, void *msg)
 	return sys_mbox_trypost(mbox, msg);
 }
 
+/*
+ * Liveness of the threads that wait on a mailbox - the TCP/IP thread above all.
+ * A hang report reads it twice: an advancing count says the stack's own loop is
+ * still turning, a frozen one says the thread that holds the core lock is
+ * stuck inside it. Not part of lwIP's sys.h contract; declared in
+ * arch/sys_arch.h.
+ */
+static volatile unsigned long sys_mbox_fetch_count;
+
+unsigned long sys_arch_mbox_fetch_count(void)
+{
+	return sys_mbox_fetch_count;
+}
+
 u32_t sys_arch_mbox_fetch(sys_mbox_t *mbox, void **msg, u32_t timeout)
 {
 	uint32_t start = osKernelGetTickCount();
@@ -245,6 +338,7 @@ u32_t sys_arch_mbox_fetch(sys_mbox_t *mbox, void **msg, u32_t timeout)
 	if (st != osOK) {
 		return SYS_ARCH_TIMEOUT;
 	}
+	sys_mbox_fetch_count++;
 	sys_mbox_seam_state.fetch_ok++;
 	sys_mbox_seam_state.fetch_wait_ms +=
 	    (unsigned long long)sys_arch_ticks_to_ms(osKernelGetTickCount() - start);

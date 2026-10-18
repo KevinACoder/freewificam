@@ -110,6 +110,14 @@ struct wiphy *lkpicfg_wiphy(void);
 #define WLAN8189_UPLINK_PHASES		4U
 #define WLAN8189_UPLINK_PEER_WAIT_MS	15000U
 #define WLAN8189_UPLINK_REPORT_WAIT_MS	25000U
+/* A core-lock take that never returns used to print nothing at all: the phase
+ * line said "ready" and the transcript ended there. Two seconds is longer than
+ * any legitimate hand-off (the lock is only held for stack bookkeeping) and
+ * short enough that the phase still fails by name. */
+#define WLAN8189_CORE_LOCK_WAIT_MS	2000U
+/* the pool is sampled while a window runs, not only when it ends: a wedge
+ * inside a phase otherwise leaves no occupancy reading for that phase */
+#define WLAN8189_POOL_SAMPLE_MS		2000U
 
 /* the levers this sheet can carry. The census and the engine read the
  * treatments back per phase, so a phase's own line says which one it ran. */
@@ -593,31 +601,71 @@ uplink_phase_run( unsigned int phase, int treatment, unsigned int peer,
 	g_uplink_ms = 0UL;
 	g_uplink_kbit = 0UL;
 
-	LOCK_TCPIP_CORE();
+	/*
+	 * The stack's own lock, with a ceiling. The ready line above is printed
+	 * before this take, so an unbounded wait here leaves a transcript that
+	 * ends at "ready" with no reason: name the holder instead, and fail the
+	 * phase rather than hanging the boot.
+	 */
+	if( lkpinetif_core_lock_timeout( WLAN8189_CORE_LOCK_WAIT_MS ) != 0 ) {
+		LOG_ANCHOR( "wlan8189: %sphase %u core lock busy owner=%s "
+		    "held=%lu ms tcpip_hb=%lu\n", sheet, phase,
+		    lkpinetif_core_lock_owner(), lkpinetif_core_lock_held_ms(),
+		    lkpinetif_tcpip_heartbeat() );
+		board_case_fail( "the stack core lock was still held when the "
+		    "uplink window started" );
+		return -1;
+	}
 	session = lwiperf_start_tcp_client( &remote, LWIPERF_TCP_PORT_DEFAULT,
 	    LWIPERF_CLIENT, uplink_report, NULL );
-	UNLOCK_TCPIP_CORE();
+	lkpinetif_core_unlock();
 	if( session == NULL ) {
 		board_case_fail( "the uplink iperf client did not start" );
 		return -1;
 	}
 
 	/* the client's own duration (10 s) plus the connect and the report's
-	 * delivery; the wait is a ceiling, the report ends it */
-	for( waited = 0; waited < WLAN8189_UPLINK_REPORT_WAIT_MS;
-	    waited += 100U ) {
-		if( g_uplink_report_seen ) {
-			break;
+	 * delivery; the wait is a ceiling, the report ends it. The pool is
+	 * sampled across the wait so a window that never reports still leaves
+	 * its occupancy trajectory behind. */
+	{
+		unsigned long hb0 = lkpinetif_tcpip_heartbeat();
+
+		for( waited = 0; waited < WLAN8189_UPLINK_REPORT_WAIT_MS;
+		    waited += 100U ) {
+			if( g_uplink_report_seen ) {
+				break;
+			}
+			(void)osDelay( 100U );
+			if( ( ( waited + 100U ) % WLAN8189_POOL_SAMPLE_MS ) == 0U ) {
+				wlan8189_census_pool_line();
+			}
 		}
-		(void)osDelay( 100U );
-	}
-	if( !g_uplink_report_seen ) {
-		LOCK_TCPIP_CORE();
-		lwiperf_abort( session );
-		UNLOCK_TCPIP_CORE();
-		board_case_fail( "the uplink window ended without a report "
-		    "from the far end (is the runner's iperf server up?)" );
-		return -1;
+		if( !g_uplink_report_seen ) {
+			/* printed before touching the lock: this line must exist
+			 * even when the take below is what is blocked */
+			LOG_ANCHOR( "wlan8189: %sphase %u no report in %u ms "
+			    "tcpip_hb=%lu (+%lu)\n", sheet, phase,
+			    (unsigned)WLAN8189_UPLINK_REPORT_WAIT_MS,
+			    lkpinetif_tcpip_heartbeat(),
+			    lkpinetif_tcpip_heartbeat() - hb0 );
+			if( lkpinetif_core_lock_timeout(
+			    WLAN8189_CORE_LOCK_WAIT_MS ) != 0 ) {
+				LOG_ANCHOR( "wlan8189: %sphase %u core lock busy "
+				    "owner=%s held=%lu ms tcpip_hb=%lu\n", sheet,
+				    phase, lkpinetif_core_lock_owner(),
+				    lkpinetif_core_lock_held_ms(),
+				    lkpinetif_tcpip_heartbeat() );
+				board_case_fail( "the uplink window ended without "
+				    "a report and the stack core lock is held" );
+				return -1;
+			}
+			lwiperf_abort( session );
+			lkpinetif_core_unlock();
+			board_case_fail( "the uplink window ended without a report "
+			    "from the far end (is the runner's iperf server up?)" );
+			return -1;
+		}
 	}
 
 	/* the sheet name is the whole prefix (the ready line uses the same one
@@ -847,6 +895,12 @@ void wlan8189_dataplane_chain( void )
 						}
 					} else {
 						idle_steps = 0U;
+					}
+					/* the pool while the window runs: a wedge
+					 * inside the phase otherwise leaves no
+					 * occupancy reading for it */
+					if( ( elapsed % WLAN8189_POOL_SAMPLE_MS ) == 0U ) {
+						wlan8189_census_pool_line();
 					}
 					prev = d.rx_bytes;
 				}

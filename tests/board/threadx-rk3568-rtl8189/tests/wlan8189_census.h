@@ -16,6 +16,10 @@
 void	wlan8189_census_reset(void);
 void	wlan8189_census_print(void);
 
+/* just the skb pool's occupancy line, so a measurement window can sample the
+ * pool while it runs (a wedge inside a phase otherwise leaves no pool state) */
+void	wlan8189_census_pool_line(void);
+
 /* the power policy (the driver's own setters; mode 0 = PS_MODE_ACTIVE leaves
  * power save, 2 = PS_MODE_MAX is the built-in default) */
 int	wlan8189_ps_get(void);

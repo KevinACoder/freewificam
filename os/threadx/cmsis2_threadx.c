@@ -424,6 +424,30 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
     return ( osThreadId_t ) slot;
 }
 
+/* The name record the slot already holds, reached from the CMSIS id. A hang
+ * report needs to name the thread that did not come back; CMSIS-RTOS2 offers no
+ * query, so this answers from the same record osThreadNew() filled in. */
+const char * osThreadGetName( void * thread_id )
+{
+    thread_slot_t * slot = ( thread_slot_t * ) thread_id;
+    size_t i;
+
+    if( slot == NULL )
+    {
+        return NULL;
+    }
+
+    for( i = 0; i < CMSIS2_MAX_THREADS; i++ )
+    {
+        if( &slots[ i ] == slot )
+        {
+            return ( slots[ i ].state == SLOT_FREE ) ? NULL : slots[ i ].name;
+        }
+    }
+
+    return NULL;
+}
+
 /* Create everything that was registered before the kernel started. Called from
  * tx_application_define(), the first moment the kernel allows creation. */
 void cmsis2_tx_application_define( void )

@@ -32,6 +32,7 @@
 #include "lwip/tcpip.h"
 #include "lwip/dhcp.h"
 #include "netif/ethernet.h"
+#include "arch/sys_arch.h"
 
 #include "lkpinetif.h"
 
@@ -68,6 +69,49 @@ lkpinetif_deliver(const uint8_t *frame, size_t len)
 		return -2;
 	}
 	return 0;
+}
+
+/* --- the core lock, with a ceiling ---------------------------------------- */
+
+/*
+ * LOCK_TCPIP_CORE() waits forever, and a wait that never ends prints nothing:
+ * a wedged stack is indistinguishable from a slow one in the transcript. The
+ * measurement paths take the lock through this pair instead, so a timeout can
+ * name the holder (the owner record lives in sys_arch.c, where every take and
+ * release of this lock is seen) and report the stack's own liveness.
+ */
+int
+lkpinetif_core_lock_timeout(unsigned int ms)
+{
+	if (ms == 0u) {
+		LOCK_TCPIP_CORE();
+		return 0;
+	}
+	return sys_mutex_lock_timeout(&lock_tcpip_core, (u32_t)ms);
+}
+
+void
+lkpinetif_core_unlock(void)
+{
+	UNLOCK_TCPIP_CORE();
+}
+
+const char *
+lkpinetif_core_lock_owner(void)
+{
+	return sys_arch_core_lock_owner();
+}
+
+unsigned long
+lkpinetif_core_lock_held_ms(void)
+{
+	return sys_arch_core_lock_held_ms();
+}
+
+unsigned long
+lkpinetif_tcpip_heartbeat(void)
+{
+	return sys_arch_mbox_fetch_count();
 }
 
 static err_t

@@ -88,4 +88,17 @@ typedef struct {
 size_t osExecProfileGet(os_exec_profile_entry_t *entries, size_t max,
 			uint64_t *isr_ticks, uint64_t *idle_ticks);
 
+/**
+ * @brief   The name a thread was created with, or NULL when unknown.
+ *
+ * A hang report is only useful if it can name the thread that did not come
+ * back. CMSIS-RTOS2 has no name query (the attribute is write-only), so the
+ * backend answers from the record it already keeps. `thread_id` is the value
+ * osThreadGetId()/osThreadNew() returned; any other value yields NULL. The
+ * returned pointer is the backend's own storage and stays valid for the
+ * thread's lifetime. Backends that keep no names may answer NULL - callers
+ * must treat the name as optional.
+ */
+const char * osThreadGetName( void * thread_id );
+
 #endif /* CMSIS_OS2_EXT_H */

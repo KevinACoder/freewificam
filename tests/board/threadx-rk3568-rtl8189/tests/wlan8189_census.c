@@ -684,6 +684,26 @@ census_print_deltas( _adapter *adapter, const struct lkpinetif_diag *d )
 	delta_epoch.valid = 1;
 }
 
+/*
+ * The skb pool's occupancy and high-water, on its own so a measurement window
+ * can sample it while it runs and not only at its end: a wedge inside a phase
+ * used to leave no pool state at all, which is exactly the state a leak is
+ * read from. The damage counters (double free / stray / use-after-free /
+ * fence) name a geometry problem instead of leaving it to be inferred.
+ */
+void
+wlan8189_census_pool_line(void)
+{
+	struct lkpi_skb_pool_stats skb;
+
+	lkpi_skb_pool_stats(&skb);
+	printk("perf census: D skb used=%u high=%u data_used=%u data_high=%u dyalloc=%u ovf=%u+%u fail=%u dfree=%u stray=%u uaf=%u fence=%u\n",
+	    skb.skb_used, skb.skb_high, skb.data_used, skb.data_high,
+	    skb.dyalloc_live, skb.slot_overflow, skb.data_overflow,
+	    skb.alloc_fail, skb.double_free, skb.stray_free,
+	    skb.uaf_write, skb.fence_bad);
+}
+
 void
 wlan8189_census_print(void)
 {
@@ -721,16 +741,7 @@ wlan8189_census_print(void)
 	 * leaves the accumulation visible in the phase it started in, and the
 	 * pool's own damage counters (double free / stray / use-after-free /
 	 * fence) name a geometry problem instead of leaving it to be inferred. */
-	{
-		struct lkpi_skb_pool_stats skb;
-
-		lkpi_skb_pool_stats(&skb);
-		printk("perf census: D skb used=%u high=%u data_used=%u data_high=%u dyalloc=%u ovf=%u+%u fail=%u dfree=%u stray=%u uaf=%u fence=%u\n",
-		    skb.skb_used, skb.skb_high, skb.data_used, skb.data_high,
-		    skb.dyalloc_live, skb.slot_overflow, skb.data_overflow,
-		    skb.alloc_fail, skb.double_free, skb.stray_free,
-		    skb.uaf_write, skb.fence_bad);
-	}
+	wlan8189_census_pool_line();
 
 	/* the driver's own progress account: what it dropped, reordered or forced
 	 * out of its reorder window */

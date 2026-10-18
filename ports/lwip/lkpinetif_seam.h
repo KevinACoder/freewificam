@@ -81,4 +81,20 @@ struct lkpinetif_diag {
 
 void	lkpinetif_get_diag(struct lkpinetif_diag *out);
 
+/* --- the core lock, with a ceiling ---------------------------------------- */
+
+/* Acquire the stack's core lock with a bound.  Returns 0 when acquired, -1 when
+ * the lock was still held when `ms` expired; ms == 0 waits forever (the plain
+ * LOCK_TCPIP_CORE semantics).  While a bounded acquire is waiting, the holder's
+ * name and how long it has held the lock are readable, so a timeout can say who
+ * it was instead of leaving a silent transcript. */
+int		lkpinetif_core_lock_timeout(unsigned int ms);
+void		lkpinetif_core_unlock(void);
+const char *	lkpinetif_core_lock_owner(void);	/* "-" free, "?" unknown */
+unsigned long	lkpinetif_core_lock_held_ms(void);
+
+/* The stack's own liveness: mailboxes fetched since boot. Two reads around a
+ * wait say whether the TCP/IP thread is still turning. */
+unsigned long	lkpinetif_tcpip_heartbeat(void);
+
 #endif /* LKPINETIF_SEAM_H */
