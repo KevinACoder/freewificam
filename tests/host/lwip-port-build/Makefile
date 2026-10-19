@@ -186,7 +186,7 @@ symbols: $(PORT_THX)
 	done; \
 	echo "symbols: all $(words $(SYS_ARCH_ENTRIES)) function entries defined (T) and all $(words $(SYS_ARCH_MACROS)) macro probes defined"; \
 	undef=$$($(NM) -u $(PORT_THX) | sed -n 's/^ \{1,\}U //p' | sort -u); \
-	foreign=$$(printf '%s\n' "$$undef" | grep -Ev '^(os[A-Z][A-Za-z0-9_]*|sys_[a-z_]+|board_log[A-Za-z_]*|lwip_[a-z_]+|pbuf_[a-z_]+|netif_[a-z_]+|etharp_output|tcpip_input|dhcp_[a-z_]+|wlan_(bridge|port)_[a-z_]+|vsnprintf|memcpy|memset|memmove|memchr|memcmp|strcmp|strncmp|strlen|strnlen|strncpy|strchr|strrchr|strstr|atoi|strtol|strtoul)$$' || true); \
+	foreign=$$(printf '%s\n' "$$undef" | grep -Ev '^(os[A-Z][A-Za-z0-9_]*|sys_[a-z_]+|board_log[A-Za-z_]*|lwip_[a-z_]+|pbuf_[a-z_]+|netif_[a-z_]+|etharp_output|tcpip_input|lock_tcpip_core|dhcp_[a-z_]+|wlan_(bridge|port)_[a-z_]+|vsnprintf|memcpy|memset|memmove|memchr|memcmp|strcmp|strncmp|strlen|strnlen|strncpy|strchr|strrchr|strstr|atoi|strtol|strtoul)$$' || true); \
 	if [ -n "$$foreign" ]; then \
 	    echo "FAIL: unexpected undefined symbols in the port objects:"; \
 	    printf '%s\n' "$$foreign"; exit 1; \
