@@ -159,10 +159,20 @@ ap_set_static_addr(void)
 	dhcp_stop(n);
 	netif_set_addr(n, &ip, &mask, &gw);
 	netif_set_up(n);
+	/* The access point has no association to raise this interface's link: the
+	 * presentation's link callbacks are bound to the supplicant's connection
+	 * events, which an AP never sees. lwIP's route lookup requires the link
+	 * flag as well as up (third-party/lwip/src/core/ipv4/ip4.c:172), so
+	 * without it the stack receives a SYN on its listening socket and cannot
+	 * send the SYN-ACK - while ICMP, which replies on the interface the
+	 * request arrived on, works normally. Measured 2026-10-19: 67 SYNs
+	 * counted by lwIP's tcp.recv with tcp.xmit at 0 for the whole window. */
+	netif_set_link_up(n);
 	UNLOCK_TCPIP_CORE();
-	LOG_ANCHOR("wlan8189: ap addr ip=%u.%u.%u.%u/24\n",
+	LOG_ANCHOR("wlan8189: ap addr ip=%u.%u.%u.%u/24 link=%s\n",
 	    WLAN8189_AP_ADDR_0, WLAN8189_AP_ADDR_1, WLAN8189_AP_ADDR_2,
-	    WLAN8189_AP_ADDR_3);
+	    WLAN8189_AP_ADDR_3,
+	    netif_is_link_up(n) ? "up" : "down");
 }
 
 void wlan8189_ap_chain( void )
