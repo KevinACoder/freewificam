@@ -35,6 +35,7 @@
 #include "lwip/netif.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/dhcp.h"
+#include "lwip/apps/lwiperf.h"
 
 #include "board_suite.h"
 #include "wlan8189_cases.h"
@@ -62,8 +63,12 @@ int lkpicfg_ap_stop(struct wiphy *wiphy);
  * for the peer to associate by hand or under the runner's control */
 #define WLAN8189_AP_JOIN_WAIT_MS	60000U
 
-/* the window a peer gets to ping and measure in, once it is associated */
-#define WLAN8189_AP_WINDOW_MS		40000U
+/* the receive window a peer gets, once it is associated: four phases of the
+ * same length the STA sheet uses, so the role-reversed boot can run the same
+ * every-boundary rewrite schedule */
+#define WLAN8189_AP_PHASES		4U
+#define WLAN8189_AP_PHASE_MS		20000U
+#define WLAN8189_AP_WINDOW_MS		(WLAN8189_AP_PHASES * WLAN8189_AP_PHASE_MS)
 
 /* how long the case waits, inside the window, for the runner to name the far
  * end of the reverse direction (the same console parameter the dataplane
@@ -154,10 +159,20 @@ ap_set_static_addr(void)
 	dhcp_stop(n);
 	netif_set_addr(n, &ip, &mask, &gw);
 	netif_set_up(n);
+	/* The access point has no association to raise this interface's link: the
+	 * presentation's link callbacks are bound to the supplicant's connection
+	 * events, which an AP never sees. lwIP's route lookup requires the link
+	 * flag as well as up (third-party/lwip/src/core/ipv4/ip4.c:172), so
+	 * without it the stack receives a SYN on its listening socket and cannot
+	 * send the SYN-ACK - while ICMP, which replies on the interface the
+	 * request arrived on, works normally. Measured 2026-10-19: 67 SYNs
+	 * counted by lwIP's tcp.recv with tcp.xmit at 0 for the whole window. */
+	netif_set_link_up(n);
 	UNLOCK_TCPIP_CORE();
-	LOG_ANCHOR("wlan8189: ap addr ip=%u.%u.%u.%u/24\n",
+	LOG_ANCHOR("wlan8189: ap addr ip=%u.%u.%u.%u/24 link=%s\n",
 	    WLAN8189_AP_ADDR_0, WLAN8189_AP_ADDR_1, WLAN8189_AP_ADDR_2,
-	    WLAN8189_AP_ADDR_3);
+	    WLAN8189_AP_ADDR_3,
+	    netif_is_link_up(n) ? "up" : "down");
 }
 
 void wlan8189_ap_chain( void )
@@ -209,6 +224,11 @@ void wlan8189_ap_chain( void )
 	} else {
 		unsigned int peer = 0U;
 		unsigned int peer_waited;
+		const unsigned int ap_addr =
+		    ((unsigned)WLAN8189_AP_ADDR_0 << 24) |
+		    ((unsigned)WLAN8189_AP_ADDR_1 << 16) |
+		    ((unsigned)WLAN8189_AP_ADDR_2 << 8) |
+		    (unsigned)WLAN8189_AP_ADDR_3;
 
 		LOG_ANCHOR( "wlan8189: ap window %u s\n",
 		    (unsigned)( WLAN8189_AP_WINDOW_MS / 1000U ) );
@@ -217,7 +237,13 @@ void wlan8189_ap_chain( void )
 		 * (the same parameter the dataplane sheet's uplink phases read), and
 		 * the board's own iperf client runs one window toward it - the
 		 * receive direction of this access point is what the peer measures
-		 * with its own client, the transmit direction is this one */
+		 * with its own client, the transmit direction is this one.
+		 *
+		 * The peer is the dataplane sheet's (the Pi's AP address) in a boot
+		 * that also ran the STA sheet; that address is this AP's own static
+		 * address, so a reverse window toward it would loop back. Skip it
+		 * with a named line instead, and leave the receive window (the
+		 * peer's client) as the measurement. */
 		for( peer_waited = 0; peer_waited < WLAN8189_AP_PEER_WAIT_MS;
 		    peer_waited += 200U ) {
 			if( wlan8189_uplink_peer_get( &peer ) == 0 ) {
@@ -225,7 +251,7 @@ void wlan8189_ap_chain( void )
 			}
 			(void)osDelay( 200U );
 		}
-		if( wlan8189_uplink_peer_get( &peer ) == 0 ) {
+		if( wlan8189_uplink_peer_get( &peer ) == 0 && peer != ap_addr ) {
 			LOG_ANCHOR( "wlan8189: ap peer=%u.%u.%u.%u uplink window\n",
 			    (peer >> 24) & 0xffU, (peer >> 16) & 0xffU,
 			    (peer >> 8) & 0xffU, peer & 0xffU );
@@ -234,12 +260,77 @@ void wlan8189_ap_chain( void )
 			LOG_ANCHOR( "wlan8189: ap no peer for the uplink window\n" );
 		}
 
-		for( waited = 0; waited < WLAN8189_AP_WINDOW_MS; waited += 200U ) {
-			(void)osDelay( 200U );
+		/* The receive window is this case's own measurement: the peer's
+		 * client is what the round wants to observe with the roles
+		 * swapped. The dataplane sheet's server was started against the
+		 * station address; after the AP address change it may no longer
+		 * answer on this interface, so start a second server on its own
+		 * port and let the peer's client target that. */
+		LOCK_TCPIP_CORE();
+		if (lwiperf_start_tcp_server(IP_ADDR_ANY, 5003, NULL, NULL) ==
+		    NULL) {
+			UNLOCK_TCPIP_CORE();
+			LOG_ANCHOR( "wlan8189: ap iperf server 5003 failed\n" );
+		} else {
+			UNLOCK_TCPIP_CORE();
+			LOG_ANCHOR( "wlan8189: ap iperf server 5003 ready\n" );
+		}
+		/* The dataplane sheet leaves the pump in the last phase's
+		 * mode. This case measures the AP's receive path, so put it on
+		 * the adopted adaptive baseline (the STA sheet's healthy phases)
+		 * explicitly: the fixed 10 ms cadence was the AP window's
+		 * read-rate limit (3 Mbit/s against the adaptive sheet's 15-17). */
+		(void)wlan8189_pump_set( "adaptive" );
+		wlan8189_pump_yield_set( 0 );
+		(void)wlan8189_irq_set( 0 );
+		(void)wlan8189_pump_prio_set( 0 );
+
+		/* Four receive phases with the same every-boundary rewrite
+		 * schedule the STA sheet runs. The AP case's own role is the
+		 * variable; the action table comes from the console (`wlan8189
+		 * sched ...`), and a boot without one runs the direct write at
+		 * every boundary. */
+		{
+			unsigned int phase;
+			const unsigned int agg_value = 0x200fu;
+			struct wlan8189_agg_op op;
+
+			for( phase = 1U; phase <= WLAN8189_AP_PHASES; phase++ ) {
+				int action = wlan8189_sched_action( phase );
+
+				if( action == WLAN8189_SCHED_NONE )
+					action = WLAN8189_SCHED_DIRECT;
+				wlan8189_agg_apply( phase, action, agg_value,
+				    &op );
+				LOG_ANCHOR( "wlan8189: ap aggop phase=%u act=%s "
+				    "old=0x%04x/0x%04x new=0x%04x/0x%04x "
+				    "reads=%u writes=%u r1w1_us=%u w1r2_us=%u "
+				    "r2w2_us=%u w1w2_us=%u t_ms=%llu\n", phase,
+				    (action == WLAN8189_SCHED_RMW) ? "rmw" : "direct",
+				    op.old1, op.old2, op.new1, op.new2, op.reads,
+				    op.writes, op.r1w1_us, op.w1r2_us,
+				    op.r2w2_us, op.w1w2_us, op.t_ms );
+				wlan8189_census_reset();
+				wlan8189_census_stall_arm( 1, phase, 0,
+				    wlan8189_agg_get(), 0 );
+				LOG_ANCHOR( "wlan8189: ap phase %u ready act=%s "
+				    "agg=0x%04x t_ms=%llu\n", phase,
+				    (action == WLAN8189_SCHED_RMW) ? "rmw" : "direct",
+				    wlan8189_agg_get(),
+				    (unsigned long long)osKernelGetTickCount() );
+				for( waited = 0; waited < WLAN8189_AP_PHASE_MS;
+				    waited += 200U ) {
+					(void)osDelay( 200U );
+				}
+				wlan8189_census_stall_arm( 0, phase, 0,
+				    wlan8189_agg_get(), 0 );
+				LOG_ANCHOR( "wlan8189: ap phase %u done\n",
+				    phase );
+				wlan8189_census_print();
+			}
 		}
 		LOG_ANCHOR( "wlan8189: ap window done joined=%u left=%u\n",
 		    g_ap_sta_joined, g_ap_sta_left );
-		wlan8189_census_print();
 	}
 
 	rc = wlan8189_ap_stop();

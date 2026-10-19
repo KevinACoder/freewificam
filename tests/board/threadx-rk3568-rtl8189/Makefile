@@ -43,8 +43,9 @@ LKPI := $(ROOT)/components/linuxkpi
 BOARD_DRV := $(ROOT)/board/rk3568-itx/drivers
 
 # The driver domain: the vendored Realtek SDIO vendor driver (a pinned
-# submodule, compiled here as its own translation units, byte-identical).
-DRV := $(ROOT)/third-party/rtl8189fs
+# submodule, compiled here as its own translation units through the patch
+# channel - the replay prints the pin unchanged when no patch is declared).
+DRV := $(shell sh $(ROOT)/tools/patches/replay.sh rtl8189fs)
 
 # WPA domain: the vendored supplicant (through the patch channel) and its port
 # layer; the TCP/IP domain rides the lwIP port's own source groups.
@@ -107,6 +108,12 @@ LEVER_CFLAGS += -DWLAN8189_LEVER=$(LEVER)
 endif
 ifeq ($(ARM_B_FIRST),1)
 LEVER_CFLAGS += -DWLAN8189_ARM_B_FIRST=1
+endif
+# the constant-arm control: 0 = alternating rewrite (default), 1 = constant A
+# with no boundary writes, 2 = constant B, 3 = constant A with same-value
+# rewrites. 1 vs 3 separates the boundary write from the value it writes.
+ifneq ($(ARM_CONST),)
+LEVER_CFLAGS += -DWLAN8189_ARM_CONST=$(ARM_CONST)
 endif
 ifneq ($(AGG_TIMEOUT),)
 LEVER_CFLAGS += -DWLAN8189_AGG_TIMEOUT_TREAT=$(AGG_TIMEOUT)
@@ -298,8 +305,9 @@ DRV_WARN := -Wall -Wno-address-of-packed-member -Wno-maybe-uninitialized \
 DRV_CFLAGS := -std=c11 -O2 -ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections $(DRV_WARN) $(DRV_CONFIG) \
+	-DCONFIG_LKPI_CENSUS \
 	-DLKPI_ABS_PLATFORM_PROVIDED $(SKB_POOL_CFLAGS) \
-	-I$(LKPI) -I$(LKPI)/include -I$(DRV) -I$(DRV)/include -I$(DRV)/platform \
+	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(DRV) -I$(DRV)/include -I$(DRV)/platform \
 	-I$(DRV)/hal/phydm -I$(DRV)/hal/btc \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
 	-include stdio.h -include string.h -include strings.h -include stdlib.h \

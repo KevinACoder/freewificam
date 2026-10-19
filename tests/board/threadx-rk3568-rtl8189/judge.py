@@ -395,6 +395,14 @@ PING_RECV_RE = re.compile(r"ping: recv")
 
 #: the arm a measurement phase ran under (see the phase ready line)
 PHASE_ARM_RE = re.compile(r"wlan8189: phase \d+ ready lever=\d+ arm=([AB])")
+#: the constant-arm mode: non-zero means the boot pinned one arm for every
+#: phase, so "both arms appeared" is the wrong sheet invariant (the trigger
+#: round runs one arm per boot on purpose)
+CONST_MODE_RE = re.compile(r"\bconst=(\d+)")
+#: the runtime per-phase schedule: a non-"none" spec pins one arm for the
+#: whole boot, like the constant-arm modes, and names each downlink phase\'s
+#: boundary action on the ready line (`act=`)
+SCHED_LINE_RE = re.compile(r"wlan8189: sched (\S+)")
 
 #: The downlink sheet's traffic evidence. A phase window is the round's
 #: measurement, so a window that moved no client traffic measured nothing - the
@@ -415,7 +423,7 @@ DOWNLINK_MOVED_FLOOR_BYTES = 512 * 1024
 #: the ready line names the arm a window ran under, the result line carries what
 #: the board's own iperf client moved, and the skip line is the stage's only
 #: legal way of not running at all - a silent omission must fail the judge.
-UPLINK_READY_RE = re.compile(r"wlan8189: uplink phase \d+ ready lever=\d+ arm=([AB])")
+UPLINK_READY_RE = re.compile(r"wlan8189: uplink phase (\d+) ready lever=\d+ arm=([AB])")
 UPLINK_RESULT_RE = re.compile(r"wlan8189: uplink phase (\d+) result bytes=(\d+) ms=\d+ kbit=\d+")
 UPLINK_SKIP_RE = re.compile(r"wlan8189: uplink skipped reason=(\S+)")
 
@@ -559,13 +567,25 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         # arms of one lever, so a run that never printed both arms measured
         # nothing to compare (each phase's arm travels on its ready line)
         arms = set()
+        const_mode = False
+        sched_mode = False
         for line in transcript.lines:
+            m = CONST_MODE_RE.search(line)
+            if m and int(m.group(1)) != 0:
+                const_mode = True
+            m = SCHED_LINE_RE.search(line)
+            if m and m.group(1) != "none":
+                sched_mode = True
             m = PHASE_ARM_RE.search(line)
             if m:
                 arms.add(m.group(1))
-        if arms and arms != {"A", "B"}:
+        single_arm = const_mode or sched_mode
+        if arms and not single_arm and arms != {"A", "B"}:
             errors.append("wlan8189-dataplane: the phase sheet printed only arm(s) %s"
                           % ",".join(sorted(arms)))
+        if single_arm and len(arms) != 1:
+            errors.append("wlan8189-dataplane: single-arm sheet printed %d arms"
+                          % len(arms))
         # each downlink window must show client traffic: a window that moved
         # nothing is not a measurement, and it is the shape a host driver that
         # never ran leaves behind (the windows still open and close). The
@@ -605,22 +625,44 @@ def judge_text(text: str, steps_path: str | None = None) -> tuple[int, str]:
         # pairs, both arms, every result carrying bytes - a window that moved
         # nothing is not a measurement) or said why it did not; the one thing it
         # may not do is vanish silently
-        up_arms = [m.group(1) for line in transcript.lines
-                   for m in [UPLINK_READY_RE.search(line)] if m]
-        up_results = [m for line in transcript.lines
-                      for m in [UPLINK_RESULT_RE.search(line)] if m]
+        up_ready = {}
+        for line in transcript.lines:
+            m = UPLINK_READY_RE.search(line)
+            if m:
+                up_ready[int(m.group(1))] = m.group(2)
+        up_results = {}
+        for line in transcript.lines:
+            m = UPLINK_RESULT_RE.search(line)
+            if m:
+                up_results[int(m.group(1))] = m
         up_skip = any(UPLINK_SKIP_RE.search(line) for line in transcript.lines)
-        if not up_arms and not up_results and not up_skip:
+        if not up_ready and not up_results and not up_skip:
             errors.append("wlan8189-dataplane: the uplink stage neither ran "
                           "nor said why")
-        elif up_arms or up_results:
-            if len(up_arms) != len(up_results):
-                errors.append("wlan8189-dataplane: %d uplink ready lines but "
-                              "%d results" % (len(up_arms), len(up_results)))
-            if set(up_arms) != {"A", "B"}:
+        elif up_ready or up_results:
+            # Reconcile by phase, not by count: a serial ring that drops one
+            # ready line must not fail a window whose result line is present
+            # and moved bytes (the 2026-10-19 a3 boot). A ready line without a
+            # result is still a window that opened and never closed, and a
+            # zero-byte result is still not a measurement.
+            missing_result = sorted(set(up_ready) - set(up_results))
+            if missing_result:
+                errors.append("wlan8189-dataplane: uplink ready line(s) %s "
+                              "without a result"
+                              % ",".join(str(n) for n in missing_result))
+            for n in sorted(set(up_results) - set(up_ready)):
+                if not single_arm or int(up_results[n].group(2)) == 0:
+                    errors.append("wlan8189-dataplane: uplink phase %d has a "
+                                  "result but no ready line" % n)
+            if not single_arm and set(up_ready.values()) != {"A", "B"}:
                 errors.append("wlan8189-dataplane: the uplink sheet printed "
-                              "only arm(s) %s" % ",".join(sorted(set(up_arms))))
-            zero = [m.group(1) for m in up_results if int(m.group(2)) == 0]
+                              "only arm(s) %s"
+                              % ",".join(sorted(set(up_ready.values()))))
+            if single_arm and len(set(up_ready.values())) != 1:
+                errors.append("wlan8189-dataplane: single-arm uplink sheet "
+                              "printed %d arms"
+                              % len(set(up_ready.values())))
+            zero = [str(n) for n, m in up_results.items() if int(m.group(2)) == 0]
             if zero:
                 errors.append("wlan8189-dataplane: uplink phase(s) %s moved "
                               "zero bytes" % ",".join(zero))

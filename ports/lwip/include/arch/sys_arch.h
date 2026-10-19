@@ -44,6 +44,14 @@ typedef struct _sys_mut sys_mutex_t;
 #define sys_mutex_valid_val(mutex)   ((mutex).mut != NULL)
 #define sys_mutex_valid(mutex)       (((mutex) != NULL) && sys_mutex_valid_val(*(mutex)))
 #define sys_mutex_set_invalid(mutex) ((mutex)->mut = NULL)
+
+/* Bounded acquire and stack liveness, for the measurement paths that must turn
+ * a hang into a line: a plain LOCK_TCPIP_CORE() that never returns prints
+ * nothing at all. Both are port extensions, not part of lwIP's sys.h. */
+int sys_mutex_lock_timeout(sys_mutex_t *mutex, u32_t timeout_ms);
+unsigned long sys_arch_mbox_fetch_count(void);
+const char *sys_arch_core_lock_owner(void);
+unsigned long sys_arch_core_lock_held_ms(void);
 #endif /* !LWIP_COMPAT_MUTEX */
 
 struct _sys_sem {

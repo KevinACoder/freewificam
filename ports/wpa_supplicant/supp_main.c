@@ -411,6 +411,15 @@ static void wpa_do_status(void *arg) {
 /* ------------------------------------------------------------------ */
 /* public API (any thread) */
 
+/* what the last console request asked for: 1 = open network (no PSK). The
+ * join case reads it so an open association is judged as a join, not as a
+ * missing handshake; it is set only by the request, never inferred. */
+static volatile int wpa_open_requested;
+
+int wpa_port_open_configured(void) {
+	return wpa_open_requested;
+}
+
 int wpa_port_connect(const char *ssid, const char *psk) {
 	return wpa_port_connect_bssid(ssid, psk, NULL);
 }
@@ -431,6 +440,8 @@ int wpa_port_connect_bssid(const char *ssid, const char *psk,
 	if (psk != NULL) {
 		os_strlcpy(req.psk, psk, sizeof(req.psk));
 	}
+	/* recorded only after the request passed validation */
+	wpa_open_requested = (psk == NULL || psk[0] == '\0') ? 1 : 0;
 	if (bssid != NULL) {
 		os_memcpy(req.bssid, bssid, 6);
 		req.bssid_set = 1;

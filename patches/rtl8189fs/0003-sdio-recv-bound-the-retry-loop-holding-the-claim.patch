@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu@users.noreply.github.com>
+Date: Sat, 18 Oct 2026 00:00:00 +0000
+Subject: [PATCH 3/4] sdio: (recv) Bound the receive retry loop that holds the
+ host claim
+
+sd_recv() retries a failed receive every 10 ms, and only leaves the loop
+after ten failures when at least one read succeeded (rx_cnt != 0).  A
+buffer or packet shortage before the first successful read therefore
+loops forever - while the caller holds the host claim.  The transmit
+thread that would free the buffer or packet the retry is waiting for
+needs that claim, so the shortage can never clear.
+
+Give up after ten attempts regardless of rx_cnt.  The request length is
+left in place, so the next pump cycle re-reads the card's own request
+length and retries from a released claim.
+
+Signed-off-by: zhugengyu <zhugengyu@users.noreply.github.com>
+---
+ hal/rtl8188f/sdio/sdio_ops.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+--- a/hal/rtl8188f/sdio/sdio_ops.c
++++ b/hal/rtl8188f/sdio/sdio_ops.c
+@@ -1549,8 +1549,19 @@
+ 					RTW_INFO("%s: recv fail!(time=%d)\n", __func__, alloc_fail_time);
+ 					phal->SdioRxFIFOSize = 0;
+ 				}
+-				if (alloc_fail_time >= 10 && rx_cnt != 0)
++				/*
++				 * This loop runs with the host claim held, so an
++				 * unbounded retry here also blocks the transmit
++				 * thread that would free the very buffer or packet
++				 * the retry is waiting for.  Bound it: the next pump
++				 * cycle re-reads the card's request length and tries
++				 * again from a released claim.
++				 */
++				if (alloc_fail_time >= 10) {
++					RTW_INFO("%s: give up after %d tries, rx_cnt:%u ret:%u\n",
++					    __func__, alloc_fail_time, rx_cnt, ret);
+ 					break;
++				}
+ 			}
+ 			#endif
+ 		} else

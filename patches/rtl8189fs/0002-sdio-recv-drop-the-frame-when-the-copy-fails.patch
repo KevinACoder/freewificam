@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu@users.noreply.github.com>
+Date: Sat, 18 Oct 2026 00:00:00 +0000
+Subject: [PATCH 2/4] sdio: (recv) Drop the frame when the RX copy allocation
+ fails
+
+When the per-frame copy cannot be allocated, the SDIO receive path falls
+back to cloning the receive buffer's skb.  Under CONFIG_SDIO_RX_COPY that
+clone cannot represent the frame: its data pointer addresses the start of
+the whole read buffer rather than this frame's pdata, and its length is the
+whole read.  The indication path then hands the read buffer to the stack as
+one oversized ethernet frame instead of the frame that arrived.
+
+There is nothing to deliver when the copy fails.  Drop the frame and let
+the transport retransmit it.
+
+Signed-off-by: zhugengyu <zhugengyu@users.noreply.github.com>
+---
+ os_dep/linux/recv_linux.c | 29 ++++++++++++-----------------
+ 1 file changed, 11 insertions(+), 18 deletions(-)
+
+--- a/os_dep/linux/recv_linux.c
++++ b/os_dep/linux/recv_linux.c
+@@ -125,29 +125,18 @@
+ 
+ 		res = _FAIL;
+ #else
+-		if ((pattrib->mfrag == 1) && (pattrib->frag_num == 0)) {
+-			RTW_INFO("%s: alloc_skb fail , drop frag frame\n", __FUNCTION__);
+-			/* rtw_free_recvframe(precvframe, pfree_recv_queue); */
+-			res = _FAIL;
+-			goto exit_rtw_os_recv_resource_alloc;
+-		}
+-
+-		if (pskb == NULL) {
+-			res = _FAIL;
+-			goto exit_rtw_os_recv_resource_alloc;
+-		}
+-
+-		precvframe->u.hdr.pkt = rtw_skb_clone(pskb);
+-		if (precvframe->u.hdr.pkt) {
+-			precvframe->u.hdr.pkt->dev = padapter->pnetdev;
+-			precvframe->u.hdr.rx_head = precvframe->u.hdr.rx_data = precvframe->u.hdr.rx_tail = pdata;
+-			precvframe->u.hdr.rx_end =  pdata + alloc_sz;
+-		} else {
+-			RTW_INFO("%s: rtw_skb_clone fail\n", __FUNCTION__);
+-			/* rtw_free_recvframe(precvframe, pfree_recv_queue); */
+-			/*exit_rtw_os_recv_resource_alloc;*/
+-			res = _FAIL;
+-		}
++		/*
++		 * The copy failed, so there is no frame to hand upward.  Do not
++		 * fall back to cloning the receive buffer: a clone's data pointer
++		 * addresses the start of the whole read buffer rather than this
++		 * frame's pdata, and its length is the whole read, so the stack
++		 * would receive the read buffer as one oversized ethernet frame.
++		 * Dropping the frame costs a retransmission; the clone delivers a
++		 * frame that was never received.
++		 */
++		RTW_INFO("%s: alloc_skb fail, drop frame\n", __FUNCTION__);
++		precvframe->u.hdr.pkt = NULL;
++		res = _FAIL;
+ #endif
+ 	}
+ 

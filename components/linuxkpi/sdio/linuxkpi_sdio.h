@@ -64,6 +64,12 @@ struct sdio_func	*lkpi_sdio_func0(void);
  * when it touches the card without claiming. */
 bool	lkpi_sdio_claim_held_by_current(void);
 
+/* who holds the bus claim right now, and for how long. "-" when free; the
+ * episode recorder uses these to separate "nobody is reading" from "the card
+ * has nothing to give". */
+const char	*lkpi_sdio_claim_owner(void);
+unsigned int	lkpi_sdio_claim_held_ms(void);
+
 /* run one interrupt-poll cycle and return once it finished. The pump thread
  * does this on its own timer; this entry makes a test's cycle deterministic. */
 void	lkpi_sdio_pump_kick(void);
@@ -140,5 +146,31 @@ struct lkpi_sdio_bus_info {
 void	lkpi_sdio_bus_info_get(struct lkpi_sdio_bus_info *out);
 
 void	lkpi_sdio_stats_get(struct lkpi_sdio_stats *out);
+
+#ifdef CONFIG_LKPI_CENSUS
+/*
+ * The receive presentation as the engine saw it: the card's offer (the
+ * SDIO_REG_RX0_REQ_LEN answer), the read issued for it, and the interrupt bits.
+ * A stall that leaves the pump running and the pool healthy is either the card
+ * not offering work (`offer_zero` growing) or the host not asking
+ * (`offer_reads` flat); these counters are what separates the two.
+ */
+struct lkpi_sdio_rx_stats {
+	uint32_t	offer_reads;
+	uint32_t	offer_zero;
+	uint64_t	offer_bytes;
+	uint32_t	read_ok;
+	uint32_t	read_short;
+	uint32_t	read_fail;
+	uint32_t	hisr_rxreq;
+	uint32_t	hisr_aval;
+	uint32_t	hisr_rxerr;
+	uint32_t	hisr_rxfovw;
+	uint64_t	last_ok_ns;	/* completion of the last successful read */
+	uint64_t	now_ns;		/* the clock the two above are on */
+};
+
+void	lkpi_sdio_rx_stats_get(struct lkpi_sdio_rx_stats *out);
+#endif
 
 #endif /* LKPI_SDIO_H */

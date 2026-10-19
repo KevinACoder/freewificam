@@ -190,6 +190,31 @@ cmd_wlan8189(int argc, char **argv)
 		    "  keys: agg_timeout agg_len poll_us data_us pump yield prio\n");
 		return 0;
 	}
+	if (strcmp(argv[1], "sched") == 0) {
+		/* the counterbalanced round's per-phase action table: four
+		 * comma-separated tokens, each rmw or direct, applied at the
+		 * downlink boundaries before the sheet reaches its phases */
+		if (argc >= 3 && strcmp(argv[2], "show") == 0) {
+			csh_printf(csh, "wlan8189: sched %s\n",
+			    wlan8189_sched_get());
+			return 0;
+		}
+		if (argc >= 3 && strcmp(argv[2], "clear") == 0) {
+			wlan8189_sched_clear();
+			csh_printf(csh, "wlan8189: sched cleared\n");
+			return 0;
+		}
+		if (argc >= 3 && wlan8189_sched_set(argv[2]) == 0) {
+			csh_printf(csh, "wlan8189: sched %s phases=%u\n",
+			    wlan8189_sched_get(),
+			    (unsigned int)WLAN8189_SCHED_PHASES);
+		} else {
+			csh_printf(csh, "usage: wlan8189 sched "
+			    "<rmw|direct>,<rmw|direct>,<rmw|direct>,"
+			    "<rmw|direct> | sched show | sched clear\n");
+		}
+		return 0;
+	}
 	if (strcmp(argv[1], "uplink") == 0) {
 		unsigned int peer = 0U;
 
@@ -230,6 +255,7 @@ cmd_wlan8189(int argc, char **argv)
 		   "agg [show|<size-kb>|timeout <units>]|"
 		   "dwc [show|<poll-us>|data <us>]|irq [show|on|off]|"
 		   "plan <key> <base> <treat>|plan clear|"
+		   "sched <rmw|direct>,... |sched show|sched clear|"
 		   "uplink <a.b.c.d>|"
 		   "ap start <ssid> [ch]|ap stop]\n");
 	return 0;

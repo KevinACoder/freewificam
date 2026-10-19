@@ -30,8 +30,10 @@
 #include "lwip/pbuf.h"
 #include "lwip/etharp.h"
 #include "lwip/tcpip.h"
+#include "lwip/stats.h"
 #include "lwip/dhcp.h"
 #include "netif/ethernet.h"
+#include "arch/sys_arch.h"
 
 #include "lkpinetif.h"
 
@@ -68,6 +70,49 @@ lkpinetif_deliver(const uint8_t *frame, size_t len)
 		return -2;
 	}
 	return 0;
+}
+
+/* --- the core lock, with a ceiling ---------------------------------------- */
+
+/*
+ * LOCK_TCPIP_CORE() waits forever, and a wait that never ends prints nothing:
+ * a wedged stack is indistinguishable from a slow one in the transcript. The
+ * measurement paths take the lock through this pair instead, so a timeout can
+ * name the holder (the owner record lives in sys_arch.c, where every take and
+ * release of this lock is seen) and report the stack's own liveness.
+ */
+int
+lkpinetif_core_lock_timeout(unsigned int ms)
+{
+	if (ms == 0u) {
+		LOCK_TCPIP_CORE();
+		return 0;
+	}
+	return sys_mutex_lock_timeout(&lock_tcpip_core, (u32_t)ms);
+}
+
+void
+lkpinetif_core_unlock(void)
+{
+	UNLOCK_TCPIP_CORE();
+}
+
+const char *
+lkpinetif_core_lock_owner(void)
+{
+	return sys_arch_core_lock_owner();
+}
+
+unsigned long
+lkpinetif_core_lock_held_ms(void)
+{
+	return sys_arch_core_lock_held_ms();
+}
+
+unsigned long
+lkpinetif_tcpip_heartbeat(void)
+{
+	return sys_arch_mbox_fetch_count();
 }
 
 static err_t
@@ -178,4 +223,45 @@ lkpinetif_note_link(struct netif *netif, int up)
 		netif_set_link_up(netif);
 	else
 		netif_set_link_down(netif);
+}
+
+/*
+ * The stack's counters, as scalars (lkpinetif_seam.h owns the shape and the
+ * reason). lwIP's `memp` table holds pointers under this configuration, so the
+ * pool's own figures are read through them.
+ */
+void
+lkpinetif_get_stack_diag(struct lkpinetif_stack_diag *out)
+{
+	struct netif *n;
+	unsigned int i = 0U;
+
+	if (out == NULL)
+		return;
+	memset(out, 0, sizeof(*out));
+	out->tcp_recv = lwip_stats.tcp.recv;
+	out->tcp_xmit = lwip_stats.tcp.xmit;
+	out->tcp_drop = lwip_stats.tcp.drop;
+	out->tcp_memerr = lwip_stats.tcp.memerr;
+	out->tcp_chkerr = lwip_stats.tcp.chkerr;
+	out->tcp_lenerr = lwip_stats.tcp.lenerr;
+	out->tcp_opterr = lwip_stats.tcp.opterr;
+	out->tcp_err = lwip_stats.tcp.err;
+	out->tcp_rterr = lwip_stats.tcp.rterr;
+	if (lwip_stats.memp[MEMP_TCP_PCB] != NULL) {
+		out->pcb_avail = (unsigned long)lwip_stats.memp[MEMP_TCP_PCB]->avail;
+		out->pcb_err = lwip_stats.memp[MEMP_TCP_PCB]->err;
+	}
+	out->ip_drop = lwip_stats.ip.drop;
+	out->ip_chkerr = lwip_stats.ip.chkerr;
+	out->link_drop = lwip_stats.link.drop;
+	for (n = netif_list; n != NULL && i < 3U; n = n->next, i++) {
+		out->netif_up[i] = (n->flags & NETIF_FLAG_UP) ? 1UL : 0UL;
+		out->netif_link[i] = (n->flags & NETIF_FLAG_LINK_UP) ? 1UL : 0UL;
+		out->netif_ip[i] = (unsigned long)ip4_addr_get_u32(&n->ip_addr);
+		out->netif_name[i][0] = n->name[0];
+		out->netif_name[i][1] = n->name[1];
+		out->netif_num[i] = (unsigned long)n->num;
+	}
+	out->netif_n = i;
 }

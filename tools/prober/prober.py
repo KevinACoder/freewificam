@@ -1090,11 +1090,17 @@ def uplink_server_start(r: Runner, work: str) -> bool:
     a stale server cannot mask a failed start."""
 
     log = "%s/uplink-server.log" % os.path.dirname(work)
+    # `setsid` is load-bearing: the ssh channel that starts the server closes
+    # as soon as this command returns, and a plain `nohup` child was measured
+    # being reaped with the session on the Pi - the server answered the start
+    # check, then the board's first uplink window connected to a closed port
+    # (`type=5`, bytes=0, 223 ms). The Linux lane already detaches its server
+    # the same way.
     cmd = ("sh -c 'pkill -x iperf 2>/dev/null; "
            "i=0; while [ $i -lt 40 ]; do "
            "pgrep -x iperf >/dev/null 2>&1 || ss -ltn 2>/dev/null | grep -q :5001 || break; "
            "sleep 0.25; i=$((i+1)); done; "
-           "nohup iperf -s -p 5001 > %s 2>&1 & "
+           "setsid nohup iperf -s -p 5001 > %s 2>&1 < /dev/null & "
            "i=0; while [ $i -lt 20 ]; do "
            "pgrep -x iperf >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q :5001 && break; "
            "sleep 0.25; i=$((i+1)); done; "
@@ -1111,6 +1117,23 @@ def uplink_server_start(r: Runner, work: str) -> bool:
         return False
     info("uplink server listening on 5001 (log kept with the products)")
     return True
+
+
+def uplink_server_probe(r: Runner) -> bool:
+    """Is the host-side uplink server still listening?
+
+    The server is started minutes before the uplink sheet (the downlink windows
+    run first). A start check is not enough: the process can be reaped with the
+    ssh session that started it, and the board then connects into a closed port
+    (`type=5`). The standby line re-checks with this probe and restarts on a
+    miss."""
+
+    try:
+        _, text = r.run("pgrep -x iperf >/dev/null 2>&1 && "
+                        "ss -ltn 2>/dev/null | grep -q :5001 && echo up || echo down")
+    except RuntimeError:
+        return False
+    return "up" in text
 
 
 def uplink_server_fetch(r: Runner, work: str, outdir: str) -> str:
@@ -1377,7 +1400,12 @@ def _run_phases(r: Runner, hub: SerialHub, outdir: str, phases_want: int,
                     info("run uplink stage standby: bringing the host server up")
                     uplink_server_up = uplink_server_start(r, work)
                 elif uplink_server_up:
-                    info("run uplink stage standby: the host server is already up")
+                    if uplink_server_probe(r):
+                        info("run uplink stage standby: the host server is already up")
+                    else:
+                        info("run uplink stage standby: the host server vanished; "
+                             "restarting it")
+                        uplink_server_up = uplink_server_start(r, work)
                 else:
                     warn("uplink stage seen but no work directory; the server "
                          "was not started")

@@ -39,7 +39,10 @@
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 ROOT  := $(abspath $(MAKEFILE_DIR)/../../..)
-DRV   := $(ROOT)/third-party/rtl8189fs
+DRV   := $(shell sh $(ROOT)/tools/patches/replay.sh rtl8189fs)
+# The license ledger describes the pin, not the patched build input: the replay
+# copy has no .git, so the scan reads the submodule itself.
+VENDOR := $(ROOT)/third-party/rtl8189fs
 FACE  := $(ROOT)/components/linuxkpi/include
 BUILD := $(MAKEFILE_DIR)/build
 
@@ -106,7 +109,8 @@ ARCH   := -mcpu=cortex-a55 -mgeneral-regs-only -mstrict-align -mno-outline-atomi
 COMMON := -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fms-extensions \
     -g3 -O2 -ffunction-sections -fdata-sections -fno-strict-aliasing
 INC    := -I$(FACE) -I$(DRV) -I$(DRV)/include -I$(DRV)/platform -I$(DRV)/hal/phydm \
-    -I$(DRV)/hal/btc -I$(ROOT)/components/ulog/src
+    -I$(DRV)/hal/btc -I$(ROOT)/components/linuxkpi/sdio \
+    -I$(ROOT)/components/ulog/src
 
 # The configuration the driver's own build resolves to for CONFIG_RTL8188F + CONFIG_SDIO_HCI
 # (transcribed from the lab build's .o.cmd, see the header comment). One switch differs from
@@ -245,7 +249,7 @@ closure: $(OBJS)
 
 spdx:
 	@set -e; \
-	cd "$(DRV)"; \
+	cd "$(VENDOR)"; \
 	total=$$(git ls-files -z | tr '\0' '\n' | wc -l); \
 	realtek=$$(git ls-files -z | xargs -0 grep -al 'version 2 of the GNU General Public License' 2>/dev/null | wc -l); \
 	if [ "$$realtek" != "518" ]; then echo "FAIL: files carrying the Realtek GPL-2.0 block: $$realtek of $$total (expected 518)"; exit 1; fi; \

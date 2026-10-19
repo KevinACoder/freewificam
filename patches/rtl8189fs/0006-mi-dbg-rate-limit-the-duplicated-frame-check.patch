@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu@users.noreply.github.com>
+Date: Sat, 18 Oct 2026 00:00:00 +0000
+Subject: [PATCH 6/6] mi: (dbg) Rate-limit the duplicated-frame data check
+
+_rtw_mi_buddy_clone_bcmc_packet() compares every duplicated broadcast or
+multicast frame against its copy, and a mismatch prints one warning per
+frame.  Under a load that duplicates continuously this diagnostic
+outruns the console: on the SDIO line it pushed the receive census and
+the stall recorder's own lines out of the serial ring, so the round lost
+the evidence it was collecting.
+
+Keep the first few and every thousandth mismatch.  The path stays
+visible (the counter is in the line) and the log stays usable.
+
+Signed-off-by: zhugengyu <zhugengyu@users.noreply.github.com>
+---
+ core/rtw_mi.c | 17 ++++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletion(-)
+
+--- a/core/rtw_mi.c
++++ b/core/rtw_mi.c
+@@ -1353,8 +1353,21 @@
+ 	if (_rtw_memcmp(&precvframe->u.hdr.attrib, &pcloneframe->u.hdr.attrib, sizeof(struct rx_pkt_attrib)) == _FALSE)
+ 		RTW_INFO("%s [WARN]  recv_frame attrib compare failed\n", __func__);
+ 
+-	if (_rtw_memcmp(precvframe->u.hdr.rx_data, pcloneframe->u.hdr.rx_data, precvframe->u.hdr.len) == _FALSE)
+-		RTW_INFO("%s [WARN]  recv_frame rx_data compare failed\n", __func__);
++	if (_rtw_memcmp(precvframe->u.hdr.rx_data, pcloneframe->u.hdr.rx_data, precvframe->u.hdr.len) == _FALSE) {
++		/*
++		 * This diagnostic fires once per duplicated frame. Under load it can
++		 * outrun the console and push the census lines out of the serial
++		 * ring, which is how a stall round loses its own evidence. Keep the
++		 * first few and every thousandth: the path is still visible, the
++		 * log is not drowned.
++		 */
++		static u32 dbg_fail_cnt;
++
++		if (dbg_fail_cnt < 5 || (dbg_fail_cnt % 1000) == 0)
++			RTW_INFO("%s [WARN]  recv_frame rx_data compare failed (n=%u)\n",
++			    __func__, dbg_fail_cnt);
++		dbg_fail_cnt++;
++	}
+ 
+ }
+ #endif
