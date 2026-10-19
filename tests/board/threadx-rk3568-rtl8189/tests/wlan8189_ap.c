@@ -265,6 +265,16 @@ void wlan8189_ap_chain( void )
 			UNLOCK_TCPIP_CORE();
 			LOG_ANCHOR( "wlan8189: ap iperf server 5003 ready\n" );
 		}
+		/* The dataplane sheet leaves the pump in the last phase's
+		 * mode. This case measures the AP's receive path, so put it on
+		 * the adopted adaptive baseline (the STA sheet's healthy phases)
+		 * explicitly: the fixed 10 ms cadence was the AP window's
+		 * read-rate limit (3 Mbit/s against the adaptive sheet's 15-17). */
+		(void)wlan8189_pump_set( "adaptive" );
+		wlan8189_pump_yield_set( 0 );
+		(void)wlan8189_irq_set( 0 );
+		(void)wlan8189_pump_prio_set( 0 );
+
 		/* Four receive phases with the same every-boundary rewrite
 		 * schedule the STA sheet runs. The AP case's own role is the
 		 * variable; the action table comes from the console (`wlan8189
