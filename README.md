@@ -51,7 +51,7 @@ data flows. It does not mean the throughput is good.
 | `rtl8xxxu` | RTL8188EUS | Full chain. |
 | `rtw88` | RTL8821CU | Full chain, including a boot-time CD-ROM to WLAN mode switch. |
 | `rtw89` | RTL8851BU | **Experimental**: full chain reached, join intermittent, link poor. |
-| SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. **It also runs as an open access point**: a station associates to the board, and both directions measure (see [Throughput](#throughput)). |
+| SDIO | RTL8189FTV | Full chain, over the SDIO bus rather than USB: the vendor driver carries its own MLME and talks to the port's cfg80211 and netdev faces. **It also runs as an open access point**: a station associates to the board, and both directions measure (see [Throughput](#throughput)); the access point receives a station's TCP at 21-24 Mbit/s, with the interface's link state raised when the access point is addressed - without that the stack answers ICMP but cannot emit a TCP reply at all. |
 | `iwlwifi` | Intel Wireless-AC 7260 | Full chain, over PCIe message interrupts (GICv3 ITS): the driver routes station management and data frames through its transmit queues, and the port owns the two delivery contexts a threaded interrupt needs. |
 | GMAC (wired) | RK3568 MAC + RTL8211F PHY | Full chain: DHCP, ping and a single TCP stream in both directions against a Raspberry Pi peer over the on-board RJ45 - the closest line to Linux on this board (see [Throughput](#throughput)). |
 | UVC | Logitech Pro 9000 | Camera enumerated, opened and streaming MJPEG 640x480 over its isochronous endpoint (see [The camera line](#the-camera-line)). |
