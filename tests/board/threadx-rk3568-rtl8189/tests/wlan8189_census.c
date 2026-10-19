@@ -955,6 +955,37 @@ wlan8189_census_print(void)
 	printk("perf census: C netif rx=%lu bytes=%lu eapol=%lu foreign=%lu nonetif=%lu infail=%lu tx=%lu fail=%lu tx_bytes=%lu\n",
 	    d.rx_frames, d.rx_bytes, d.rx_eapol, d.rx_foreign, d.rx_no_netif,
 	    d.rx_input_fail, d.tx_frames, d.tx_fail, d.tx_bytes);
+	/* The stack's own account of what it did with the frames the netif
+	 * handed it. The AP-role arm's open question is a silent one: a SYN
+	 * reaches lwIP on a listening port and no SYN-ACK leaves while ICMP is
+	 * answered - so the discriminator cannot be the driver's counters (its
+	 * own `B rx` line shows the frames arriving). `memerr` climbing is PCB
+	 * exhaustion; `opterr`/`lenerr` name a malformed segment; an all-zero
+	 * line with no reply means no reply was ever emitted. The netif list
+	 * beside it says whether this build carries a second interface the
+	 * stack could route the reply out of. */
+	{
+		struct lkpinetif_stack_diag sd;
+		unsigned int idx;
+
+		lkpinetif_get_stack_diag(&sd);
+		printk("perf census: L tcp recv=%lu xmit=%lu drop=%lu memerr=%lu chkerr=%lu lenerr=%lu opterr=%lu err=%lu rterr=%lu pcb_avail=%lu pcb_err=%lu ip_drop=%lu ip_chkerr=%lu link_drop=%lu\n",
+		    sd.tcp_recv, sd.tcp_xmit, sd.tcp_drop, sd.tcp_memerr,
+		    sd.tcp_chkerr, sd.tcp_lenerr, sd.tcp_opterr, sd.tcp_err,
+		    sd.tcp_rterr, sd.pcb_avail, sd.pcb_err, sd.ip_drop,
+		    sd.ip_chkerr, sd.link_drop);
+		for (idx = 0U; idx < sd.netif_n; idx++) {
+			printk("perf census: N netif%u name=%c%c%lu up=%lu link=%lu ip=%lu.%lu.%lu.%lu\n",
+			    idx, sd.netif_name[idx][0], sd.netif_name[idx][1],
+			    sd.netif_num[idx], sd.netif_up[idx],
+			    sd.netif_link[idx],
+			    (sd.netif_ip[idx] >> 24) & 0xffUL,
+			    (sd.netif_ip[idx] >> 16) & 0xffUL,
+			    (sd.netif_ip[idx] >> 8) & 0xffUL,
+			    sd.netif_ip[idx] & 0xffUL);
+		}
+		printk("perf census: N netif n=%lu\n", sd.netif_n);
+	}
 	printk("perf census: C netif_lat rx_deliver_us=%llu rx_max_us=%llu tx_ndo_us=%llu tx_max_us=%llu\n",
 	    (unsigned long long)(d.rx_deliver_ns / 1000u),
 	    (unsigned long long)(d.rx_deliver_max_ns / 1000u),
