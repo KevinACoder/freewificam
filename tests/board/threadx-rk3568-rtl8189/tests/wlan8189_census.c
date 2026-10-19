@@ -979,10 +979,12 @@ wlan8189_census_print(void)
 			    idx, sd.netif_name[idx][0], sd.netif_name[idx][1],
 			    sd.netif_num[idx], sd.netif_up[idx],
 			    sd.netif_link[idx],
-			    (sd.netif_ip[idx] >> 24) & 0xffUL,
-			    (sd.netif_ip[idx] >> 16) & 0xffUL,
+			    /* lwIP keeps the address in network order, so the
+			     * first octet of the dotted form is the low byte */
+			    sd.netif_ip[idx] & 0xffUL,
 			    (sd.netif_ip[idx] >> 8) & 0xffUL,
-			    sd.netif_ip[idx] & 0xffUL);
+			    (sd.netif_ip[idx] >> 16) & 0xffUL,
+			    (sd.netif_ip[idx] >> 24) & 0xffUL);
 		}
 		printk("perf census: N netif n=%lu\n", sd.netif_n);
 	}
