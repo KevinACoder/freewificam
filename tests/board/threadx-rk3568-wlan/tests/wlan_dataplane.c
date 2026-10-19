@@ -107,6 +107,34 @@ netif_on_disassoc(void *netif)
 	wlannetif_note_disassoc((struct netif *)netif);
 }
 
+/*
+ * The bridge counters in one line.  Two callers: the lease-hunt pulse (with a
+ * `t=<s>` prefix, every 10 s) and the end of the case (once, no prefix).  The
+ * line is the validity source for the hardware-crypto ratio - a lease that
+ * arrives before the first pulse would otherwise leave no receive counters at
+ * all - and the wait form keeps its historical shape for the fault diagnosis.
+ */
+static void
+dataplane_stats_print(const char *tag, unsigned int waited)
+{
+	struct wlan_bridge_counters c;
+	char head[48];
+
+	wlan_bridge_stats(&c);
+	if (waited != 0U)
+		snprintf(head, sizeof(head), "%s t=%us", tag, waited / 1000U);
+	else
+		snprintf(head, sizeof(head), "%s", tag);
+	LOG_INFO("wlan: %s data_tx=%u(enc=%u plain=%u noenc=%u) "
+	    "rx=%u(data=%u enc=%u hwdec=%u/%u) crypto(rx_wepfail=%u "
+	    "ccmpfmt=%u replay=%u mic=%u nodefkey=%u) tx_err=%u link=%u\n",
+	    head, c.data_tx, c.data_tx_enc, c.data_tx_plain, c.tx_noencap,
+	    c.rx_frames, c.rx_data, c.rx_data_enc, c.rx_data_hwdec_prot,
+	    c.rx_data_hwdec, c.rx_wepfail, c.rx_ccmpformat, c.rx_ccmpreplay,
+	    c.rx_ccmpmic, c.tx_nodefkey, c.tx_errors,
+	    netif_is_link_up(&g_netif));
+}
+
 static int
 dataplane_up(void)
 {
@@ -160,22 +188,8 @@ dataplane_up(void)
 		 * or the air); the protection split and the receive pair then
 		 * say which half of that path, and the crypto counters catch
 		 * the answer that arrived but did not decrypt */
-		if ((waited % 10000U) == 0U) {
-			struct wlan_bridge_counters c;
-
-			wlan_bridge_stats(&c);
-			LOG_INFO("wlan: dhcp wait t=%us data_tx=%u(enc=%u "
-			    "plain=%u noenc=%u) rx=%u(data=%u enc=%u hwdec=%u/%u) "
-			    "crypto(rx_wepfail=%u ccmpfmt=%u replay=%u "
-			    "mic=%u nodefkey=%u) tx_err=%u link=%u\n",
-			    waited / 1000U, c.data_tx, c.data_tx_enc,
-			    c.data_tx_plain, c.tx_noencap, c.rx_frames,
-			    c.rx_data, c.rx_data_enc, c.rx_data_hwdec_prot,
-			    c.rx_data_hwdec,
-			    c.rx_wepfail, c.rx_ccmpformat, c.rx_ccmpreplay,
-			    c.rx_ccmpmic, c.tx_nodefkey, c.tx_errors,
-			    netif_is_link_up(&g_netif));
-		}
+		if ((waited % 10000U) == 0U)
+			dataplane_stats_print("dhcp wait", waited);
 	}
 	if (ip4_addr_isany_val(g_netif.ip_addr)) {
 		static char reason[160];
@@ -429,6 +443,9 @@ void wlan_dataplane_chain(void)
 			wlan_bridge_link_dump();
 		}
 	}
+	/* the boot's cumulative bridge counters: the hardware-decrypt ratio and
+	 * the MIC/replay negatives are read from this line */
+	dataplane_stats_print("dataplane stats", 0U);
 }
 
 BOARD_TEST("wlan-dataplane", wlan_dataplane_chain);

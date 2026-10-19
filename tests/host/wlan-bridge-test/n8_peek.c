@@ -203,6 +203,47 @@ n8_peek_key_defined(int pairwise, int key_idx)
 	return !IEEE80211_KEY_UNDEFINED(*wk);
 }
 
+/* whether the stack marked the slot software-crypto */
+int
+n8_peek_key_swcrypt(int pairwise, int key_idx)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+	const struct ieee80211_key *wk;
+
+	if (ic == NULL || ic->ic_bss == NULL)
+		return -1;
+	if (pairwise) {
+		wk = &ic->ic_bss->ni_ucastkey;
+	} else {
+		if (key_idx < 0 || key_idx >= IEEE80211_WEP_NKID)
+			return -1;
+		wk = &ic->ic_nw_keys[key_idx];
+	}
+	return (wk->wk_flags & IEEE80211_KEY_SWCRYPT) != 0;
+}
+
+/* the interface's hardware-CCMP capability (the build switch's runtime face) */
+int
+n8_peek_hw_crypto(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	return ic != NULL && (ic->ic_caps & IEEE80211_C_AES_CCM) != 0;
+}
+
+void
+n8_peek_hw_crypto_force(int on)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	if (ic == NULL)
+		return;
+	if (on)
+		ic->ic_caps |= IEEE80211_C_AES_CCM;
+	else
+		ic->ic_caps &= ~IEEE80211_C_AES_CCM;
+}
+
 /* the default transmit key index (a group install with set_tx moves it) */
 int
 n8_peek_def_txkey(void)
@@ -308,6 +349,15 @@ n8_peek_install_ccmp_key(const uint8_t *key, size_t len)
 	ieee80211_key_update_end(ic);
 	ic->ic_flags |= IEEE80211_F_PRIVACY;
 	return 0;
+}
+
+void
+n8_peek_set_privacy(void)
+{
+	struct ieee80211com *ic = (struct ieee80211com *)wlan_bridge_ic();
+
+	if (ic != NULL)
+		ic->ic_flags |= IEEE80211_F_PRIVACY;
 }
 
 void

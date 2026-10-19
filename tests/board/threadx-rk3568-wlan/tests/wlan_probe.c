@@ -84,6 +84,19 @@ void wlan_probe_chain(void)
 {
 	struct wlan_bridge_counters c;
 
+#if WLAN_HW_CRYPTO
+	/*
+	 * The hardware-CCMP arm's receive security needs the chip's power-on
+	 * settle. The U-Boot's `usb start` powers the port early; when the
+	 * driver probes at ~8 s the RX CAM stays ineffective (measured:
+	 * hwdec=0), while the boots whose enumeration took ~60 s got
+	 * hwdec=100%. Wait the measured boundary before the controller init.
+	 * Hardware arm only - the default arm's timing is unchanged.
+	 */
+	osDelay(60000U);
+	LOG_ANCHOR("wlan: hardware-ccmp arm: 60 s power-on settle done\n");
+#endif
+
 	/* The card's port is the user's to choose (the GT round used the panel
 	 * hub under EHCI); the case takes whichever root answers, EHCI first
 	 * because that is the port the ground-truth capture came from. */

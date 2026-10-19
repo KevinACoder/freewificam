@@ -35,8 +35,8 @@ case_line() {
 
 if timeout 180 "$bin" > "$log_dir/stream.log" 2>&1; then
     pass=$(grep -c '^WLANBRIDGE: B[0-9]* PASS' "$log_dir/stream.log" || true)
-    if [ "$pass" = 23 ] &&
-        grep -q '^WLANBRIDGE: SUITE PASS cases=23$' "$log_dir/stream.log" &&
+    if [ "$pass" = 24 ] &&
+        grep -q '^WLANBRIDGE: SUITE PASS cases=24$' "$log_dir/stream.log" &&
         ! grep -q '^WLANBRIDGE: B[0-9]* FAIL' "$log_dir/stream.log"; then
         case_line attach-chain PASS
         case_line scan-order-and-walk PASS

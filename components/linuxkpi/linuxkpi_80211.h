@@ -143,6 +143,13 @@ int	lkpi80211_drv_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	    struct ieee80211_vif *vif, struct ieee80211_sta *sta,
 	    struct ieee80211_key_conf *key);
 
+/* the stable key object the driver was handed, or NULL when not tracked; the
+ * caller must not free it (the key table owns it) */
+struct ieee80211_key_conf *
+	lkpi80211_key_conf_get(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_sta *sta,
+	    int keyidx, int pairwise);
+
 /* ops->tx(hw, control, skb): the bridge's outgoing frame (its own management
  * transmission rides this after the net80211 framing is done) */
 void	lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,

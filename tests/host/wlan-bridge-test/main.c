@@ -589,8 +589,12 @@ case_b7(void)
 {
 	const struct fake_driver_state *st = fake_driver_state();
 	uint8_t key[16];
+	int hw_saved = n8_peek_hw_crypto();
 	int ret;
 
+	/* this case is the software-crypto guard: keep it meaningful in a
+	 * hardware build by pinning the capability off for its duration */
+	n8_peek_hw_crypto_force(0);
 	memset(key, 0, sizeof(key));
 	ret = wlan_bridge_key_set(1, 0, SEAM_CIPHER_CCMP, key, sizeof(key));
 	if (ret != 0 || st->set_key_calls < 1) {
@@ -716,6 +720,7 @@ case_b7(void)
 		}
 	}
 	n8_peek_clear_privacy();
+	n8_peek_hw_crypto_force(hw_saved);
 	case_line("B7", 1, "CCMP key to both sides; tx sealed (24+8+8+%u+8); "
 	    "rx plaintext; broken MIC named", (unsigned)16);
 	return 0;
@@ -1032,8 +1037,12 @@ case_b11(void)
 	uint8_t own[6];
 	uint8_t eapol[20];
 	unsigned int guard, set_key_before, clear_key_before;
+	int hw_saved = n8_peek_hw_crypto();
 	int rc;
 
+	/* the guard below asserts the driver leg is ABSENT; pin the capability
+	 * off so that assertion keeps its meaning in a hardware build */
+	n8_peek_hw_crypto_force(0);
 	if (wlan_wpa_vendor_init() != 0) {
 		case_line("B11", 0, "the backend did not register");
 		return -1;
@@ -1267,6 +1276,7 @@ case_b11(void)
 		return -1;
 	}
 
+	n8_peek_hw_crypto_force(hw_saved);
 	case_line("B11", 1, "backend ops verified: MANUAL sweep + pull table, "
 	    "RSN join + 802.1X gate, CCMP install stack-side only (the chip is "
 	    "not asked to decrypt), 0x888E "
@@ -1326,6 +1336,230 @@ run_one_sweep(void)
  * the supplicant's scans kept "completing" over a stale table while no probe
  * left the radio).
  */
+/*
+ * The hardware-key handoff: with the interface advertising AES-CCM the stack
+ * marks the key hardware-offloaded, the driver assigns a CAM slot, and the
+ * transmit path must hand that same stable object to the driver. The case
+ * also proves a re-install clears the old slot first (a rekey must not leak
+ * CAM entries) and that the clear path names the slot the set path used.
+ */
+static int
+case_b24(void)
+{
+	const struct wpa_vendor_port *vp = wpa_vendor_backend();
+	const struct fake_driver_state *st;
+	struct wpa_vendor_key key;
+	uint8_t tk[16];
+	uint8_t frame[14 + 16];
+	unsigned int guard, set_before, clear_before, tx_before;
+	unsigned int first_cam, second_cam;
+	int hw_saved = n8_peek_hw_crypto();
+	int rc;
+
+	if (vp == NULL || vp->set_key == NULL) {
+		case_line("B24", 0, "the vendor backend is not registered");
+		goto fail;
+	}
+#if WLAN_HW_CRYPTO
+	if (!hw_saved) {
+		case_line("B24", 0, "the build switch did not advertise "
+		    "IEEE80211_C_AES_CCM");
+		goto fail;
+	}
+#endif
+	n8_peek_hw_crypto_force(1);
+
+	/* B11 left the stack disconnected; re-establish the association the key
+	 * installs need (the fake AP answers the sweep and the join) */
+	if (wlan_bridge_scan_start() != 0) {
+		case_line("B24", 0, "the pre-key sweep did not start");
+		goto fail;
+	}
+	/* pump the whole walk: one dwell call advances one channel, and a
+	 * sweep left standing would hold scan_start at -EBUSY for the next
+	 * case (the sweep's bookkeeping is what that guard reads) */
+	while (wlan_bridge_scan_pending()) {
+		if (wlan_bridge_scan_dwell() <= 0)
+			break;
+		answer_new_tx_from_ap();
+	}
+	answer_new_tx_from_ap();
+	if (wlan_bridge_join((const uint8_t *)AP_SSID, AP_SSID_LEN, ap_bssid,
+	    NULL, 0) != 0) {
+		case_line("B24", 0, "the pre-key join was refused");
+		goto fail;
+	}
+	for (guard = 0; guard < 64; guard++) {
+		if (n8_peek_state() == n8_peek_run_state())
+			break;
+		answer_new_tx_from_ap();
+	}
+	if (n8_peek_state() != n8_peek_run_state()) {
+		case_line("B24", 0, "the pre-key join did not reach RUN");
+		goto fail;
+	}
+
+	n8_peek_set_privacy();
+	st = fake_driver_state();
+	set_before = st->set_key_calls;
+	clear_before = st->clear_key_calls;
+	memset(tk, 0, sizeof(tk));
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 0;
+	key.addr = ap_bssid;		/* unicast: pairwise */
+	key.set_tx = 1;
+	key.key = tk;
+	key.key_len = sizeof(tk);
+	rc = vp->set_key(&key);
+	st = fake_driver_state();
+	if (rc != 0 || n8_peek_key_defined(1, 0) != 1 ||
+	    n8_peek_key_swcrypt(1, 0) != 0) {
+		case_line("B24", 0, "the hardware pairwise install did not land "
+		    "(rc=%d defined=%d swcrypt=%d)", rc,
+		    n8_peek_key_defined(1, 0), n8_peek_key_swcrypt(1, 0));
+		goto fail;
+	}
+	if (st->set_key_calls != set_before + 1 || st->last_set_hw_idx < 4) {
+		case_line("B24", 0, "the driver did not see one hardware key "
+		    "install (calls=%u cam=%d)", st->set_key_calls - set_before,
+		    st->last_set_hw_idx);
+		goto fail;
+	}
+	first_cam = (unsigned int)st->last_set_hw_idx;
+
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 1;
+	key.addr = bcast_addr;		/* multicast bit: group key */
+	key.set_tx = 1;
+	key.key = tk;
+	key.key_len = sizeof(tk);
+	rc = vp->set_key(&key);
+	st = fake_driver_state();
+	if (rc != 0 || n8_peek_key_defined(0, 1) != 1 ||
+	    n8_peek_key_swcrypt(0, 1) != 0 || n8_peek_def_txkey() != 1) {
+		case_line("B24", 0, "the hardware group install did not land "
+		    "(rc=%d defined=%d swcrypt=%d def_tx=%d)", rc,
+		    n8_peek_key_defined(0, 1), n8_peek_key_swcrypt(0, 1),
+		    n8_peek_def_txkey());
+		goto fail;
+	}
+
+	/* a unicast data frame: the transmit path must carry the pairwise key */
+	memset(frame, 0, sizeof(frame));
+	memcpy(frame, ap_bssid, 6);
+	memcpy(frame + 6, sta_mac, 6);
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	memset(frame + 14, 0x5a, 16);
+	tx_before = fake_driver_state()->tx_count;
+	if (wlan_bridge_tx_raw(frame, sizeof(frame)) < 0) {
+		case_line("B24", 0, "the hardware-key transmit was refused");
+		goto fail;
+	}
+	st = fake_driver_state();
+	if (st->tx_count == tx_before || st->last_tx_hw_key == NULL ||
+	    st->last_tx_hw_cipher != WLAN_CIPHER_SUITE_CCMP ||
+	    st->last_tx_hw_keyidx != 0) {
+		case_line("B24", 0, "the frame did not carry the pairwise key "
+		    "(tx=%u key=%p cipher=%#x idx=%d)",
+		    st->tx_count - tx_before, (void *)st->last_tx_hw_key,
+		    st->last_tx_hw_cipher, st->last_tx_hw_keyidx);
+		goto fail;
+	}
+
+	/* a group-addressed frame: net80211 seals a station's uplink multicast
+	 * with the pairwise key too (B15's own finding), so the object is the
+	 * same; the group key is installed and the default transmit key for the
+	 * receive side, not for this transmit */
+	memset(frame, 0, sizeof(frame));
+	memset(frame, 0xff, 6);
+	memcpy(frame + 6, sta_mac, 6);
+	frame[12] = 0x08;
+	frame[13] = 0x00;
+	memset(frame + 14, 0xa5, 16);
+	tx_before = fake_driver_state()->tx_count;
+	if (wlan_bridge_tx_raw(frame, sizeof(frame)) < 0) {
+		case_line("B24", 0, "the group-key transmit was refused");
+		goto fail;
+	}
+	st = fake_driver_state();
+	if (st->tx_count == tx_before || st->last_tx_hw_key == NULL ||
+	    st->last_tx_hw_keyidx != 0) {
+		case_line("B24", 0, "the multicast frame did not carry the "
+		    "pairwise key (tx=%u key=%p idx=%d)",
+		    st->tx_count - tx_before, (void *)st->last_tx_hw_key,
+		    st->last_tx_hw_keyidx);
+		goto fail;
+	}
+
+	/* re-install the pairwise key: the adapter must clear the old CAM slot
+	 * before the driver allocates a new one */
+	set_before = st->set_key_calls;
+	clear_before = st->clear_key_calls;
+	memset(&key, 0, sizeof(key));
+	key.alg = WPA_VENDOR_ALG_CCMP;
+	key.key_idx = 0;
+	key.addr = ap_bssid;
+	key.set_tx = 1;
+	key.key = tk;
+	key.key_len = sizeof(tk);
+	rc = vp->set_key(&key);
+	st = fake_driver_state();
+	if (rc != 0 || st->set_key_calls != set_before + 1 ||
+	    st->clear_key_calls != clear_before + 1) {
+		case_line("B24", 0, "the rekey did not replace the CAM entry "
+		    "(rc=%d set=%u clear=%u)", rc,
+		    st->set_key_calls - set_before,
+		    st->clear_key_calls - clear_before);
+		goto fail;
+	}
+	second_cam = (unsigned int)st->last_set_hw_idx;
+	if (second_cam == first_cam) {
+		case_line("B24", 0, "the rekey reused the old CAM slot (%u)",
+		    first_cam);
+		goto fail;
+	}
+
+	/* clear: the driver must see the slot the last set used */
+	clear_before = st->clear_key_calls;
+	rc = wlan_bridge_key_clear(1, 0);
+	st = fake_driver_state();
+	if (rc != 0 || st->clear_key_calls != clear_before + 1 ||
+	    st->last_clear_hw_idx != (int)second_cam) {
+		case_line("B24", 0, "the pairwise clear did not name the CAM "
+		    "slot (rc=%d clear=%u cam=%d want=%u)", rc,
+		    st->clear_key_calls - clear_before, st->last_clear_hw_idx,
+		    second_cam);
+		goto fail;
+	}
+	if (n8_peek_key_defined(1, 0) != 0) {
+		case_line("B24", 0, "the pairwise stack slot did not clear");
+		goto fail;
+	}
+	rc = wlan_bridge_key_clear(0, 1);
+	if (rc != 0 || n8_peek_key_defined(0, 1) != 0) {
+		case_line("B24", 0, "the group clear did not land (rc=%d "
+		    "defined=%d)", rc, n8_peek_key_defined(0, 1));
+		goto fail;
+	}
+
+	n8_peek_clear_privacy();
+	vp->disconnect(3);
+	n8_peek_hw_crypto_force(hw_saved);
+	case_line("B24", 1, "hardware key: driver CAM=%u, tx carried the "
+	    "pairwise and group objects, rekey replaced CAM %u, clear named it",
+	    first_cam, second_cam);
+	return 0;
+
+fail:
+	n8_peek_clear_privacy();
+	vp->disconnect(3);
+	n8_peek_hw_crypto_force(hw_saved);
+	return -1;
+}
+
 static int
 case_b12(void)
 {
@@ -1585,8 +1819,12 @@ case_b15(void)
 	struct wlan_bridge_counters before, after;
 	uint8_t frame[64];
 	unsigned int tx_before, i;
+	int hw_saved = n8_peek_hw_crypto();
 	int sealed = 0, keyid_seen = -1;
 
+	/* the case reads the stack's own seal: pin the capability off so the
+	 * key it installs stays software-crypto in a hardware build */
+	n8_peek_hw_crypto_force(0);
 	vp = wpa_vendor_backend();
 	if (vp == NULL || vp->set_key == NULL) {
 		case_line("B15", 0, "the supplicant backend is not up");
@@ -1720,6 +1958,7 @@ case_b15(void)
 		    "(+%u)", after.data_tx_enc - before.data_tx_enc);
 		return -1;
 	}
+	n8_peek_hw_crypto_force(hw_saved);
 	case_line("B15", 1, "a group-addressed uplink frame is sealed with the "
 	    "pairwise key (Address 1 = AP, key id 0) while the group key is the "
 	    "default transmit key");
@@ -2511,6 +2750,7 @@ run_suite(void)
 	(void)case_b9();
 	(void)case_b10();
 	(void)case_b11();
+	(void)case_b24();
 	(void)case_b12();
 	(void)case_b13();
 	(void)case_b14();
@@ -2527,7 +2767,7 @@ run_suite(void)
 	(void)case_b23();
 
 	if (failures == 0)
-		printf("WLANBRIDGE: SUITE PASS cases=23\n");
+		printf("WLANBRIDGE: SUITE PASS cases=24\n");
 	else
 		printf("WLANBRIDGE: SUITE FAIL failures=%d\n", failures);
 	fflush(stdout);
