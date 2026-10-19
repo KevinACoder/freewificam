@@ -81,6 +81,29 @@ struct lkpinetif_diag {
 
 void	lkpinetif_get_diag(struct lkpinetif_diag *out);
 
+/*
+ * The stack's own account of what it did with the frames the adapter handed it.
+ *
+ * The role-reversed arm's open question is a silent one: a SYN reaches lwIP on a
+ * listening port and no SYN-ACK leaves, while ICMP on the same netif is answered
+ * normally - so the driver's counters (which show the frames arriving) cannot
+ * answer it. These are lwIP's protocol-block counters for TCP and IP plus the
+ * TCP PCB pool's occupancy, and the interface list the stack would route a reply
+ * out of. Plain C types only, per this header's own rule: the driver-world
+ * callers must not see lwIP's types.
+ */
+struct lkpinetif_stack_diag {
+	unsigned long	tcp_recv, tcp_xmit, tcp_drop, tcp_memerr, tcp_chkerr;
+	unsigned long	tcp_lenerr, tcp_opterr, tcp_err, tcp_rterr;
+	unsigned long	pcb_avail, pcb_err;
+	unsigned long	ip_drop, ip_chkerr, link_drop;
+	unsigned long	netif_n;
+	unsigned long	netif_up[3], netif_link[3], netif_ip[3], netif_num[3];
+	char		netif_name[3][2];
+};
+
+void	lkpinetif_get_stack_diag(struct lkpinetif_stack_diag *out);
+
 /* --- the core lock, with a ceiling ---------------------------------------- */
 
 /* Acquire the stack's core lock with a bound.  Returns 0 when acquired, -1 when
