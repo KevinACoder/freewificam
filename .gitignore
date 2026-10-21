@@ -5,3 +5,5 @@ out/
 *.mod
 *.mod.c
 *.cmd
+__pycache__/
+*.pyc
