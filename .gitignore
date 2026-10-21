@@ -1,0 +1,7 @@
+build/
+out/
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
