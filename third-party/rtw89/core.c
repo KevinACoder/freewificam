@@ -1147,13 +1147,6 @@ rtw89_core_tx_update_data_info(struct rtw89_dev *rtwdev,
 
 	/* enable wd_info for AMPDU */
 	desc_info->en_wd_info = true;
-	/* net80211 has no mac80211 rate control; seed the station's data
-	 * rate/aggregation so the firmware gets a valid WD info. */
-	desc_info->use_rate = false;
-	desc_info->data_rate = 8;
-	desc_info->ampdu_num = 0x1f;
-	desc_info->agg_en = true;
-
 	if (IEEE80211_SKB_CB(skb)->control.hw_key)
 		rtw89_core_tx_update_sec_key(rtwdev, tx_req);
 
