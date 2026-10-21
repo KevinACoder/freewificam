@@ -897,7 +897,8 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 		 */
 		vif->cfg.ps = false;
 		changed = BSS_CHANGED_ASSOC | BSS_CHANGED_BSSID |
-		    BSS_CHANGED_BASIC_RATES | BSS_CHANGED_PS;
+		    BSS_CHANGED_BASIC_RATES | BSS_CHANGED_PS |
+		    BSS_CHANGED_ERP_SLOT;
 	} else {
 		vif->cfg.assoc = false;
 		vif->cfg.aid = 0;

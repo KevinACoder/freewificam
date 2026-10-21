@@ -1893,6 +1893,17 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 		wlan_osal_log("wlan: join: no scan candidate for the ssid\n");
 		return -ENOENT;
 	}
+	/* WMM seed: the assoc builder appends WMM only when ni_wme_ie is
+	 * non-NULL.  Seed one element; do not append a second one to ic_opt_ie. */
+	if (ni->ni_wme_ie == NULL) {
+		ni->ni_wme_ie = malloc(9, M_DEVBUF, M_NOWAIT);
+		if (ni->ni_wme_ie != NULL) {
+			static const uint8_t wmm[9] = {
+				221, 7, 0x00, 0x50, 0xf2, 0x02, 0x01, 0x01, 0x00
+			};
+			memcpy(ni->ni_wme_ie, wmm, sizeof(wmm));
+		}
+	}
 
 	ic->ic_des_esslen = (int)len;
 	memset(ic->ic_des_essid, 0, sizeof(ic->ic_des_essid));

@@ -711,6 +711,12 @@ static void rtw89_ops_vif_cfg_changed(struct ieee80211_hw *hw,
 			rtw89_station_mode_sta_assoc(rtwdev, vif);
 			__rtw89_ops_bss_assoc(rtwdev, vif);
 
+			/* The net80211 join leaves R_AX_CTN_TXEN=0x700
+			 * (BE0 data queue disabled); mac80211's own assoc/TXEN
+			 * sequence normally opens the data queues. */
+			if (rtw89_mac_resume_sch_tx(rtwdev, 0, 0xffff))
+				rtw89_err(rtwdev, "failed to enable data TXEN\n");
+
 			rtw89_queue_chanctx_work(rtwdev);
 		} else {
 			/* Abort ongoing scan if cancel_scan isn't issued
