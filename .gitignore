@@ -7,3 +7,10 @@ out/
 *.cmd
 __pycache__/
 *.pyc
+
+# Imported kernelmod build outputs.
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
