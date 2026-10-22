@@ -181,12 +181,38 @@ static int wlan_ctl_join(const char *ssid_arg)
 	pr_info("wlan_ko: join rc=%d state=%d\n", rc, wlan_bridge_state());
 	for (i = 0; i < WLAN_CTL_JOIN_MAX; i++) {
 		msleep(100);
+		/* the auth retry runs at poll cadence (see the header) */
+		wlan_bridge_mgmt_tick();
 		/* one watchdog per second, not per poll: see wlan_ctl_scan */
 		if ((i % 10) == 9) {
 			wlan_bridge_watchdog();
 		}
 		if (wlan_bridge_state() == 4) {
 			break;
+		}
+	}
+	if (wlan_bridge_state() != 4) {
+		/*
+		 * Second line of defence: the auth retry (wlan_bridge_mgmt_tick)
+		 * is the fast path, but a join can still fail if three auth
+		 * requests went unanswered. One bounded re-join costs the 5 s
+		 * window again and has been measured to succeed immediately on
+		 * this line; more than one would turn a flaky AP into a busy
+		 * loop. Callers see one extra join's worth of latency at worst.
+		 */
+		pr_info("wlan_ko: join retry after %ums (state=%d)\n", i * 100,
+		    wlan_bridge_state());
+		rc = wlan_bridge_join((const uint8_t *)ssid_arg,
+		    strlen(ssid_arg), wlan_ctl_bssid, NULL, 0);
+		for (i = 0; i < WLAN_CTL_JOIN_MAX; i++) {
+			msleep(100);
+			wlan_bridge_mgmt_tick();
+			if ((i % 10) == 9) {
+				wlan_bridge_watchdog();
+			}
+			if (wlan_bridge_state() == 4) {
+				break;
+			}
 		}
 	}
 	pr_info("wlan_ko: join done state=%d waited=%ums bad_auth=%u\n",
@@ -271,9 +297,10 @@ static int wlan_stats_get(char *buffer, const struct kernel_param *kp)
 	memset(&c, 0, sizeof(c));
 	wlan_bridge_stats(&c);
 	return scnprintf(buffer, PAGE_SIZE,
-	    "attached=%d mgt_tx=%u data_tx=%u rx=%u tx_done=%u scan=%u/%u\n",
+	    "attached=%d mgt_tx=%u data_tx=%u rx=%u tx_done=%u scan=%u/%u "
+	    "auth_retry=%u auth_ans=%u\n",
 	    c.attached, c.mgt_tx, c.data_tx, c.rx_frames, c.tx_completes,
-	    c.scan_starts, c.scan_completes);
+	    c.scan_starts, c.scan_completes, c.auth_retries, c.auth_answers);
 }
 
 static const struct kernel_param_ops wlan_stats_ops = {

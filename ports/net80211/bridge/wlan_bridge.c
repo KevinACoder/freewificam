@@ -54,6 +54,7 @@
 #include <sys/param.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
+#include <sys/kernel.h>
 #include <sys/endian.h>
 
 #include <net/if.h>
@@ -143,6 +144,25 @@ static struct {
 	unsigned int scan_close;	/* how the last sweep ended */
 	unsigned int tune_calls;	/* diagnostic: channel-program attempts */
 	unsigned int tune_fails;	/* diagnostic: ... that came back nonzero */
+	/*
+	 * Management-frame retry (auth). net80211 has exactly one management
+	 * transaction timer - IEEE80211_TRANS_WAIT, 5 s - and no auth-level
+	 * retry: when an auth request is silently dropped, the stack sits in
+	 * S_AUTH until that timer expires and then restarts the scan, which on
+	 * this line costs ~5.3 s and one failed join. mac80211 instead retries
+	 * the auth request itself at 100/200 ms, up to three tries
+	 * (mlme.c:36-40), which turns the same dropped frame into ~200 ms.
+	 * These fields carry that discipline: armed when an auth request
+	 * leaves, cleared by the auth response or by leaving S_AUTH, and
+	 * advanced by wlan_bridge_mgmt_tick() at the caller's poll cadence
+	 * (the port has no callout thread, the same reason
+	 * wlan_bridge_watchdog() is called from the poll loop).
+	 */
+	int		auth_pending;	/* an auth request is waiting for its answer */
+	ticks_t		auth_sent;	/* ... and when it left */
+	unsigned int	auth_tries;	/* retries sent for the current request */
+	unsigned int	auth_retries;	/* diagnostic: retries this attach */
+	unsigned int	auth_answers;	/* diagnostic: auth responses seen */
 	/* The data-plane discriminator family: a data frame's protection state
 	 * on the way out and on the way in. "Left encrypted" vs "left in the
 	 * clear" separates a key-selection fault (the frame goes out with the
@@ -506,6 +526,23 @@ bridge_drain_mgtq(struct ieee80211com *ic)
 				    freq, trc);
 				if (trc == 0)
 					bridge.tuned_freq = freq;
+			}
+		}
+		{
+			const uint8_t *fc0 = mtod(m, const uint8_t *);
+
+			/* Arm the auth retry on every auth request that leaves
+			 * (the first one and the stack's own re-sends alike):
+			 * the deadline is per frame, not per join. */
+			if ((fc0[0] & 0x0c) == 0x00 &&
+			    (fc0[0] & 0xf0) == 0xb0) {
+				/* a fresh request arms the counter; our own
+				 * re-send must not reset it, or the retry
+				 * budget would never run out */
+				if (!bridge.auth_pending)
+					bridge.auth_tries = 0;
+				bridge.auth_pending = 1;
+				bridge.auth_sent = getticks();
 			}
 		}
 		rc = bridge.ops->tx(bridge.drv, mtod(m, const uint8_t *),
@@ -1057,6 +1094,12 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 		 * responses during sweeps says the probes stopped being
 		 * answered.
 		 */
+		if (sub == 0xb0) {
+			/* the answer the retry waits for */
+			bridge.auth_answers++;
+			bridge.auth_pending = 0;
+			bridge.auth_tries = 0;
+		}
 		if (sub == 0x80) {
 			bridge.rx_beacon++;
 			if (bridge.bssid_last_set &&
@@ -1712,6 +1755,65 @@ wlan_bridge_watchdog(void)
 	ieee80211_watchdog(bridge.ic);
 	wlan_port_serializer_unlock();
 }
+
+/*
+ * The auth retry tick. Called at the caller's poll cadence (the control plane
+ * polls the join every 100 ms), so the granularity is the poll period rather
+ * than a timer this port does not have. Two rules keep it honest:
+ *   - it only acts while the stack is still in S_AUTH (an answer moved it on,
+ *     or the 5 s timer moved it back to SCAN);
+ *   - it preserves ic_mgt_timer across the re-send, so three retries do not
+ *     buy three fresh 5 s windows - the stack's own fallback keeps its
+ *     original deadline.
+ */
+void
+wlan_bridge_mgmt_tick(void)
+{
+	ticks_t now;
+	ticks_t period;
+	int saved_timer;
+
+	if (!bridge.attached || bridge.ic == NULL || !bridge.auth_pending)
+		return;
+	if (bridge.ic->ic_state != IEEE80211_S_AUTH) {
+		bridge.auth_pending = 0;
+		bridge.auth_tries = 0;
+		return;
+	}
+	period = (ticks_t)((WLAN_BRIDGE_AUTH_RETRY_MS * hz) / 1000);
+	now = getticks();
+	if (now - bridge.auth_sent < period)
+		return;
+	if (bridge.auth_tries >= WLAN_BRIDGE_AUTH_MAX_TRIES) {
+		wlan_osal_log("wlan: auth unanswered after %u tries; "
+		    "leaving the %u s timer to restart the scan\n",
+		    bridge.auth_tries + 1,
+		    (unsigned)IEEE80211_TRANS_WAIT);
+		bridge.auth_pending = 0;
+		return;
+	}
+	bridge.auth_tries++;
+	bridge.auth_retries++;
+	bridge.auth_sent = now;
+	wlan_osal_log("wlan: auth retry %u/%u (no answer in %u ms)\n",
+	    bridge.auth_tries, WLAN_BRIDGE_AUTH_MAX_TRIES,
+	    (unsigned)WLAN_BRIDGE_AUTH_RETRY_MS);
+	wlan_port_serializer_lock();
+	saved_timer = bridge.ic->ic_mgt_timer;
+	/*
+	 * Re-send the request, not the stack's "retry" transition. net80211's
+	 * S_AUTH -> S_AUTH path passes argument 2 (ieee80211_proto.c:1032),
+	 * and that argument is written into the frame as the authentication
+	 * transaction sequence number (ieee80211_output.c:1577) - 2 is the
+	 * *response* number, so an AP ignores it. Measured on the board: the
+	 * retries left the radio and were never answered. A fresh request is
+	 * sequence 1, which is what the first send used.
+	 */
+	(void)ieee80211_send_mgmt(bridge.ic, bridge.ic->ic_bss,
+	    IEEE80211_FC0_SUBTYPE_AUTH, 1);
+	bridge.ic->ic_mgt_timer = saved_timer;
+	wlan_port_serializer_unlock();
+}
 /*
  * Set the interface's desired SSID: what a joiner configures before a sweep,
  * and what the stack's own match then requires a candidate to carry. The
@@ -2292,6 +2394,8 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 			    IF_STATGET(bridge.ic->ic_ifp, if_oerrors);
 	}
 	out->tuned_freq = bridge.tuned_freq;
+	out->auth_retries = bridge.auth_retries;
+	out->auth_answers = bridge.auth_answers;
 	out->attached = bridge.attached;
 }
 

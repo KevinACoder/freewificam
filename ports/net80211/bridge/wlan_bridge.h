@@ -55,6 +55,17 @@ struct wlan_port_ifops;
 #define WLAN_BRIDGE_FIRMWARE_NAME	"rtlwifi/rtl8188eufw.bin"
 #endif
 
+/*
+ * The auth retry discipline (see wlan_bridge_mgmt_tick): how long to wait for
+ * an auth response before re-sending, and how many re-sends to allow - the
+ * same shape mac80211 uses (mlme.c:36-40, IEEE80211_AUTH_MAX_TRIES = 3 sends).
+ * A port that never retries pays the stack's whole 5 s transaction timer for
+ * one dropped frame; this is the difference between a ~200 ms hiccup and a
+ * failed join.
+ */
+#define WLAN_BRIDGE_AUTH_RETRY_MS	200
+#define WLAN_BRIDGE_AUTH_MAX_TRIES	2	/* 1 first send + 2 retries */
+
 /* how the last sweep ended (see struct wlan_bridge_counters.scan_close) */
 #define WLAN_BRIDGE_SCAN_CLOSE_NONE	0	/* no sweep has run yet */
 #define WLAN_BRIDGE_SCAN_CLOSE_STATE	1	/* the stack left S_SCAN */
@@ -72,6 +83,12 @@ struct wlan_bridge_counters {
 	unsigned int	scan_completes;
 	unsigned int	filter_sets;
 	unsigned int	filter_clears;
+	/* the management retry family: how many auth requests this attach had to
+	 * re-send, and how many answers came back. A join that fails with
+	 * auth_retries > 0 and no answer is the "AP heard us and stayed silent"
+	 * shape; one with auth_retries == 0 never got a frame out. */
+	unsigned int	auth_retries;
+	unsigned int	auth_answers;
 	/* the discriminator family: which management answers actually cross
 	 * the radio, split by kind and by "from the BSSID this join targets",
 	 * plus the frames the chip flagged as FCS-failed (the wrong-channel
@@ -298,6 +315,10 @@ int	wlan_bridge_key_install(int pairwise, int key_idx, int set_tx,
 
 /* Walk the scan table, one callback per candidate, scalars only (the caller may
  * live in the other world). Returns the number of candidates seen. */
+/* The auth retry tick: call from the same place the 1 Hz watchdog is driven
+ * from, at a finer cadence (>= 100 ms) - see wlan_bridge_mgmt_tick. */
+void wlan_bridge_mgmt_tick(void);
+
 unsigned int wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6],
 	    const uint8_t *ssid, size_t ssid_len, uint32_t freq, int rssi,
 	    void *arg), void *arg);
