@@ -39,15 +39,7 @@
 #include <wlan_bridge.h>
 
 #include "wlan_linux.h"
-
-#define WLAN_NETDEV_TX_MAX	256
-
-struct wlan_netdev {
-	struct net_device	*dev;
-	struct sk_buff_head	txq;
-	spinlock_t		tx_lock;
-	struct work_struct	tx_work;
-};
+#include "wlan_netdev.h"
 
 static void wlan_netdev_tx_work(struct work_struct *work)
 {
@@ -161,6 +153,11 @@ int wlan_netdev_create(struct ieee80211_hw *hw)
 	dev->netdev_ops = &wlan_netdev_ops;
 	strscpy(dev->name, "wlan%d", sizeof(dev->name));
 	SET_NETDEV_DEV(dev, hw->wiphy->dev.parent);
+	/* cfg80211's WEXT face hangs off the wiphy (see wlan_wext.c) */
+	wn->wdev.wiphy = hw->wiphy;
+	wn->wdev.iftype = NL80211_IFTYPE_STATION;
+	wn->wdev.netdev = dev;
+	dev->ieee80211_ptr = &wn->wdev;
 
 	if (wlan_bridge_hwaddr(mac) == 0) {
 		eth_hw_addr_set(dev, mac);
@@ -172,6 +169,7 @@ int wlan_netdev_create(struct ieee80211_hw *hw)
 		return rc;
 	}
 	wlan_bridge_set_data_rx(wlan_netdev_rx, dev);
+	(void)wlan_wext_attach(dev);
 	wlan_netdev = dev;
 	netdev_info(dev, "kernelmod line data plane up, addr %pM\n", dev->dev_addr);
 	return 0;
@@ -187,6 +185,7 @@ void wlan_netdev_destroy(void)
 		return;
 	}
 	wlan_netdev = NULL;
+	wlan_wext_detach(dev);
 	wlan_bridge_set_data_rx(NULL, NULL);
 	wn = netdev_priv(dev);
 	unregister_netdev(dev);
