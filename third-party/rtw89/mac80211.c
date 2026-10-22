@@ -708,8 +708,21 @@ static void rtw89_ops_vif_cfg_changed(struct ieee80211_hw *hw,
 
 	if (changed & BSS_CHANGED_ASSOC) {
 		if (vif->cfg.assoc) {
+			struct rtw89_bb_ctx *bb;
+
 			rtw89_station_mode_sta_assoc(rtwdev, vif);
 			__rtw89_ops_bss_assoc(rtwdev, vif);
+
+			/*
+			 * TRM rtl8851bu 05 JOIN.DIG.ENABLE: the sweep suspends DIG
+			 * and its completion resumes it with en_dig decided by
+			 * total_sta_assoc, which is zero at scan end - so DIG is
+			 * left off, RX stays deaf, and the auth response never
+			 * reaches the stack.  Nothing else turns it back on, so
+			 * association has to: the station count is non-zero here.
+			 */
+			rtw89_for_each_active_bb(rtwdev, bb)
+				rtw89_phy_dig_resume(rtwdev, false);
 
 			/* The net80211 join leaves R_AX_CTN_TXEN=0x700
 			 * (BE0 data queue disabled); mac80211's own assoc/TXEN
