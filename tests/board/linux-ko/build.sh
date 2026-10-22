@@ -116,9 +116,18 @@ ${f#$REPO/}"
 		# /lib/firmware file. The 8188 build keeps firmware_class.
 		DRIVER_CFLAGS="$DRIVER_CFLAGS -DCONFIG_WLAN_KO_FW_EMBED=1 \
 -DCONFIG_WLAN_KO_FW_RTW8821C=1"
+		# The 8821C blob is an image fact and is not vendored in this
+		# repository.  The protocol-stage arm generates it outside the
+		# tree and names it with RTW88_FW_BLOB; a build without it (or
+		# FW_EMBED=0) falls back to request_firmware().
 		FW_SRCS="
-components/linuxkpi/fw_registry.c
-components/linuxkpi/fw/rtw8821c_fw_blob.c"
+components/linuxkpi/fw_registry.c"
+		if [ -n "${RTW88_FW_BLOB:-}" ] && [ -f "$REPO/${RTW88_FW_BLOB#/}" ]; then
+			FW_SRCS="$FW_SRCS
+$RTW88_FW_BLOB"
+		else
+			DRIVER_CFLAGS="$DRIVER_CFLAGS -UCONFIG_WLAN_KO_FW_EMBED"
+		fi
 		;;
 	rtw89)
 		# The set the kernel builds for CONFIG_RTW89_8851BU: the core

@@ -14,3 +14,4 @@ __pycache__/
 *.mod
 *.mod.c
 *.cmd
+components/linuxkpi/fw/
