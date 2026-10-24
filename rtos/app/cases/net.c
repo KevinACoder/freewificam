@@ -69,6 +69,7 @@ static ip_addr_t peer;
 static struct raw_pcb *ping_pcb;
 static volatile unsigned ping_tx;
 static volatile unsigned ping_rx;
+static volatile unsigned ping_seen;	/* every ICMP packet the pcb was handed */
 static int net_up;
 
 /* iperf sessions: the board serves the downlink and initiates the uplink. */
@@ -122,7 +123,21 @@ static void net_rx_thread(void *arg)
 
 	for (;;) {
 		(void)osSemaphoreAcquire(rx_sem, osWaitForever);
+		/* The ISR hands the sweep to this thread: the watchdog re-arms
+		 * the ring and re-pokes the line before the drain.  Skipping it
+		 * leaves the first interrupt's work done but the ring disarmed. */
+		dwc_eqos_watchdog(NET_PORT);
 		(void)ethnetif_poll(&netif);
+	}
+}
+
+static void net_service_thread(void *arg)
+{
+	(void)arg;
+
+	for (;;) {
+		(void)osDelay(100u);
+		dwc_eqos_watchdog(NET_PORT);
 	}
 }
 
@@ -151,19 +166,34 @@ static int stack_up(void)
 
 /* --- ping ------------------------------------------------------------------- */
 
+/* A raw pcb is handed the packet from its IP header on (lwIP's raw_input
+ * reads the protocol out of that header and passes the same pbuf through), so
+ * the ICMP header starts after the IP header the sender wrote. */
 static u8_t ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 		      const ip_addr_t *addr)
 {
+	struct ip_hdr *iphdr;
 	struct icmp_echo_hdr *iecho;
+	u16_t hlen;
 
 	(void)arg;
 	(void)pcb;
 	(void)addr;
 
-	if (p->len < sizeof(struct icmp_echo_hdr)) {
+	if (p->len < sizeof(struct ip_hdr)) {
 		return 0;
 	}
-	iecho = (struct icmp_echo_hdr *)p->payload;
+	iphdr = (struct ip_hdr *)p->payload;
+	if (IPH_V(iphdr) != 4u) {
+		return 0;
+	}
+	hlen = IPH_HL_BYTES(iphdr);
+	if (p->len < (u16_t)(hlen + sizeof(struct icmp_echo_hdr))) {
+		return 0;
+	}
+
+	ping_seen++;
+	iecho = (struct icmp_echo_hdr *)((u8_t *)p->payload + hlen);
 
 	if ((ICMPH_TYPE(iecho) == ICMP_ER) &&
 	    (iecho->id == PP_HTONS(PING_ID))) {
@@ -210,6 +240,8 @@ static void ping_send(u16_t seq)
 }
 
 /* --- bring-up --------------------------------------------------------------- */
+
+static int arp_lookup(uint8_t mac[6]);
 
 static int gmac_up(void)
 {
@@ -282,6 +314,14 @@ static int line_up(void)
 							 .stack_size = 4096U });
 	if (rx_thread == NULL) {
 		CASE_ANCHOR("net: FAIL rx thread\n");
+		return -1;
+	}
+
+	if (osThreadNew(net_service_thread, NULL,
+			&(const osThreadAttr_t){ .name = "gmac-svc",
+						 .priority = osPriorityLow,
+						 .stack_size = 2048U }) == NULL) {
+		CASE_ANCHOR("net: FAIL service thread\n");
 		return -1;
 	}
 
@@ -383,19 +423,32 @@ int case_net_run(void)
 	}
 	raw_recv(ping_pcb, ping_recv, NULL);
 
+	/* Warm-up: one throwaway echo forces the ARP resolution, and the first
+	 * counted packets are not sent into an unresolved entry (lwIP drops
+	 * them without a queue). */
 	ping_tx = 0u;
 	ping_rx = 0u;
+	ping_seen = 0u;
+	ping_send(0u);
+	for (waited = 0u; (waited < 2000u) && (arp_lookup(mac) != 0); waited += 20u) {
+		(void)osDelay(20u);
+	}
+
+	ping_tx = 0u;
+	ping_rx = 0u;
+	ping_seen = 0u;
 	for (i = 1u; i <= PING_COUNT; i++) {
+		unsigned before = ping_rx;
+
 		ping_send((u16_t)i);
-		(void)osDelay(PING_INTERVAL_MS / 10u);
+		for (waited = 0u; (waited < 300u) && (ping_rx == before);
+		     waited += 10u) {
+			(void)osDelay(10u);
+		}
 	}
 
-	/* Give the last reply a bounded moment to arrive. */
-	for (waited = 0u; (waited < 1000u) && (ping_rx < PING_COUNT); waited += 20u) {
-		(void)osDelay(2u);
-	}
-
-	CASE_ANCHOR("net: ping tx=%u rx=%u of=%u\n", ping_tx, ping_rx, PING_COUNT);
+	CASE_ANCHOR("net: ping tx=%u rx=%u of=%u seen=%u\n",
+		    ping_tx, ping_rx, PING_COUNT, ping_seen);
 
 	if (ping_rx != PING_COUNT) {
 		ok = 0;
@@ -411,7 +464,7 @@ int case_net_run(void)
 				    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 			break;
 		}
-		(void)osDelay(2u);
+		(void)osDelay(20u);
 	}
 	if (arp_waited >= 500u) {
 		CASE_ANCHOR("net: FAIL arp entry missing\n");
@@ -424,7 +477,7 @@ int case_net_run(void)
 	CASE_ANCHOR("net: iperf ready port=5001 window_ms=%u\n",
 		    (unsigned)IPERF_DOWN_WINDOW_MS);
 
-	for (waited = 0u; waited < IPERF_DOWN_WINDOW_MS; waited += 500u) {
+	for (waited = 0u; waited < IPERF_DOWN_WINDOW_MS; waited += 50u) {
 		(void)osDelay(50u);
 		if (down_done != 0) {
 			break;
@@ -451,8 +504,8 @@ int case_net_run(void)
 	}
 
 	for (waited = 0u; (waited < IPERF_UP_WAIT_MS) && (up_done == 0);
-	     waited += 200u) {
-		(void)osDelay(20u);
+	     waited += 100u) {
+		(void)osDelay(100u);
 	}
 
 	CASE_ANCHOR("net: iperf up done=%d bytes=%u ms=%u kbit=%u\n",
