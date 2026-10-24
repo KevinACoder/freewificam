@@ -174,7 +174,7 @@ components/linuxkpi/fw/rtw8851b_fw_blob.c"
 		DRIVER_CFLAGS="-DCONFIG_IWLWIFI -DCONFIG_IWLMVM \
 -DCONFIG_IWLWIFI_OPMODE_MODULAR -DCONFIG_WLAN_KO_DRIVER_IWLWIFI"
 		IWL_TUS="iwl-io.c iwl-drv.c iwl-debug.c iwl-nvm-utils.c iwl-utils.c
-iwl-phy-db.c iwl-nvm-parse.c iwl-dbg-tlv.c iwl-trans.c
+iwl-phy-db.c iwl-nvm-parse.c iwl-dbg-tlv.c iwl-trans.c iwl-devtrace.c
 pcie/ctxt-info.c pcie/ctxt-info-v2.c pcie/drv.c pcie/utils.c
 pcie/gen1_2/rx.c pcie/gen1_2/tx.c pcie/gen1_2/trans.c
 pcie/gen1_2/trans-gen2.c pcie/gen1_2/tx-gen2.c
