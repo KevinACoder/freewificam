@@ -78,11 +78,12 @@ tests/board/linux-ko/main.c"
 # mac80211 substitute and the seam adapter exist (K2): its undefined
 # ieee80211_* face is exactly what those two files provide.
 #
-# DRIVER selects the one driver the module carries. Both are byte-faithful
-# imports; the kernelmod line loads one at a time because the two USB drivers
-# would otherwise claim the same dongles.
+# DRIVER selects the one driver the module carries. Each is a byte-faithful
+# import; the kernelmod line loads one at a time because the USB drivers would
+# otherwise claim the same dongles. The default is the repository's primary
+# line (rtw89); the rtl8xxxu arm passes DRIVER=rtl8xxxu.
 WITH_DRIVER=${WITH_DRIVER:-1}
-DRIVER=${DRIVER:-rtl8xxxu}
+DRIVER=${DRIVER:-rtw89}
 DRIVER_SRCS=""
 DRIVER_CFLAGS=""
 FW_SRCS=""

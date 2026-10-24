@@ -46,8 +46,8 @@ docs/                commit convention
 ```
 
 Build (firmware file mode, no blob).  `DRIVER` selects the one driver the
-module carries; `rtw88` and `rtl8xxxu` are the other byte-faithful arms.  The
-8188 arm keeps `request_firmware()` and reads
+module carries; `rtw89` is the default, `rtw88` and `rtl8xxxu` are the other
+byte-faithful arms.  The 8188 arm keeps `request_firmware()` and reads
 `/lib/firmware/rtlwifi/rtl8188eufw.bin` from the image.
 
 ```sh
