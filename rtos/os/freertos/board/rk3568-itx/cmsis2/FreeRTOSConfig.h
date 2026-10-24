@@ -38,7 +38,11 @@
 #define configMAX_PRIORITIES                     56
 #define configMINIMAL_STACK_SIZE                 256
 #define configMAX_TASK_NAME_LEN                  16
-#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 64 * 1024 ) )
+/* 256 KiB: this image carries lwIP's threads and the storage stack, and the
+ * kernel heap is where the facade's allocator pair sends their control blocks
+ * and buffers.  The 64 KiB the bring-up image used ran out on the first
+ * storage allocation (measured on the board, 2026-10-24). */
+#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 256 * 1024 ) )
 
 /* --- memory --------------------------------------------------------------- */
 
