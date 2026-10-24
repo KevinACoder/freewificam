@@ -122,12 +122,19 @@ def ssh(command: str, timeout: int = 60) -> str:
 
 def peer_start_server() -> str:
     # `pkill -f 'iperf -s'` would match this very command line and kill the
-    # shell running it; the exact-name form does not.
+    # shell running it; the exact-name form does not.  The start is confirmed
+    # by the listening socket, not by the process existing: iperf2 exits on a
+    # bind failure (a port still in use by the previous round), and a process
+    # that died after `pgrep` would make the board's client see a reset.
     return ssh(
         "pkill -x iperf >/dev/null 2>&1 || true; "
-        "sleep 0.3; "
+        "i=0; while [ $i -lt 20 ] && ss -ltn 2>/dev/null | grep -q ':5001 '; "
+        "do i=$((i+1)); sleep 0.25; done; "
         "(setsid iperf -s -p 5001 > /tmp/iperf2-server.log 2>&1 </dev/null &); "
-        "sleep 1; pgrep -x iperf >/dev/null && echo server-started || echo server-missing"
+        "i=0; while [ $i -lt 20 ]; do "
+        "if ss -ltn 2>/dev/null | grep -q ':5001 '; then echo server-listening; exit 0; fi; "
+        "i=$((i+1)); sleep 0.25; done; "
+        "echo server-missing; tail -3 /tmp/iperf2-server.log"
     )
 
 
