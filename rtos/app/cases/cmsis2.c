@@ -45,6 +45,11 @@
 #define PRIO_HI		osPriorityHigh
 #define PRIO_MID	osPriorityNormal
 #define PRIO_LO		osPriorityLow
+/* The spin owner of the inheritance test sits BELOW the runner: a same-priority
+ * busy thread monopolises a kernel without time slicing (ThreadX's backend
+ * creates threads with TX_NO_TIME_SLICE), and the runner would never create
+ * the high waiter - the contention the test needs would not exist. */
+#define PRIO_SPIN	osPriorityBelowNormal
 
 static unsigned checks;
 static unsigned failures;
@@ -259,7 +264,7 @@ static void group_sem_mutex(void)
 
 	mid = osThreadNew(pip_mid, NULL,
 			  &(const osThreadAttr_t){ .name = "pip-mid",
-						   .priority = PRIO_MID,
+						   .priority = PRIO_SPIN,
 						   .stack_size = 2048U });
 	check(mid != NULL, "pip mid thread");
 	(void)osDelay(5u);
