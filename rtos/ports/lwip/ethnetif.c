@@ -479,9 +479,17 @@ void ethnetif_add(struct netif *netif, unsigned int port,
 	 * build flag or frames leave with either no checksum or a double one:
 	 * same lockstep discipline as the RX IPC pair (lwipopts.h). ICMP is NOT
 	 * offloaded - no pseudo-header in the protocol - so its GEN bit stays
-	 * on, and its CHECK bit too (the RX IPC block does not cover ICMP). */
+	 * on, and its CHECK bit too (the RX IPC block does not cover ICMP).
+	 *
+	 * GEN_IP stays on as well, and that one is not decoration: the MAC's
+	 * CIC=3 covers the IPv4 header for the frames it tags, but an ICMP frame
+	 * is never tagged, so with GEN_IP off it left with a zero IP checksum and
+	 * every echo died on the peer (board-measured 2026-10-25, ping 0/10 with
+	 * all TCP/UDP traffic healthy - the failure only showed in ICMP). */
 	NETIF_SET_CHECKSUM_CTRL(netif,
-				NETIF_CHECKSUM_GEN_ICMP | NETIF_CHECKSUM_CHECK_ICMP
+				NETIF_CHECKSUM_GEN_IP
+				| NETIF_CHECKSUM_GEN_ICMP
+				| NETIF_CHECKSUM_CHECK_ICMP
 				| NETIF_CHECKSUM_CHECK_IP
 				| NETIF_CHECKSUM_CHECK_TCP
 				| NETIF_CHECKSUM_CHECK_UDP

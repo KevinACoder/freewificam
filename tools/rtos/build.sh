@@ -29,7 +29,8 @@ make -C "$build" "$target"
 case "$target" in
 all|image|check|"")
 	printf '\n== fingerprints ==\n'
-	printf 'opt: %s\n' "${OPT:--Og (default)}"
+	printf 'opt: %s\n' "${OPT:--O2 (default)}"
+	printf 'profile: %s\n' "${PROFILE:-perf (default)}"
 	printf 'levers: %s\n' "${LEVERS:-(none)}"
 	for image in "$build"/build/rtos-*.bin; do
 		[ -e "$image" ] || continue

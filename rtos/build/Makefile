@@ -53,7 +53,21 @@ LWIP    := $(ROOT)/third-party/lwip
 
 BUILD := $(CURDIR)/build
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
-OPT ?= -Og
+# Optimisation level. -O2 is the adopted default since the performance round
+# (decisions/2026-10-25-rtos-bin-perf-profile.md): +17% uplink, -73% ping RTT,
+# +16% board-local loopback, no change on the storage path and no suite
+# regression. `OPT=-Og` builds the pre-round image for debug work.
+OPT ?= -O2
+
+# The adopted performance profile: the two switches that measured net-positive
+# on both kernels. `PROFILE=base` builds the pre-round configuration, which is
+# what an A/B re-run of the round's arms needs.
+PROFILE ?= perf
+ifeq ($(PROFILE),perf)
+PROFILE_DEFS := -DCONFIG_GMAC_TX_CSUM=1 -DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+else
+PROFILE_DEFS :=
+endif
 
 # Lever channel (performance rounds): a build-time -D that has to reach both the
 # project's own units and the vendored trees. It exists because the stack's
@@ -301,7 +315,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
 	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
-	$(CASE_DEFS) $(EXTRA_DEFS) $(LEVERS) $(BACKEND_DEFS) \
+	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(LEVERS) $(BACKEND_DEFS) \
 	$(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
@@ -467,7 +481,7 @@ gates: $(TARGET).elf
 	[ -z "$$undef" ] || { echo "FAIL: undefined symbols:"; echo "$$undef"; exit 1; }; \
 	echo "PASS: _start=0x$$start vectors=0x$$vec backend=$(BACKEND) 0 undefined"
 	@$(SIZE) $(TARGET).elf
-	@printf 'opt: %s\nlevers: %s\n' '$(OPT)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
+	@printf 'opt: %s\nprofile: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1
 	@printf 'size: '; stat -c '%s' $(TARGET).bin
