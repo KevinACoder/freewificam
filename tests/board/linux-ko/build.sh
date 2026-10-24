@@ -248,6 +248,20 @@ if [ "${DIAG:-0}" = 1 ]; then
 	done
 fi
 
+# LAB_TRACE=1 adds the observation-only payload hex dump to the driver's
+# tracepoints (patches/lab/iwl-trace-payload).  Same rule as DIAG: the mirrored
+# symlinks are replaced by a real copy so the repository's verbatim driver tree
+# is never edited.  It changes trace output only - no driver behaviour - but the
+# module is an instrumented artifact with its own hash, and its results are
+# labelled instrumented.
+if [ "${LAB_TRACE:-0}" = 1 ]; then
+	rm -rf "$TREE/third-party/iwlwifi"
+	cp -a "$REPO/third-party/iwlwifi" "$TREE/third-party/iwlwifi"
+	patch -p6 -d "$TREE/third-party/iwlwifi" \
+	    < "$REPO/../patches/lab/iwl-trace-payload/0001-iwlwifi-trace-payload-hex.patch"
+	echo "build.sh: LAB_TRACE payload hex enabled"
+fi
+
 stack_objs=""
 for src in $STACK_SRCS; do
 	stack_objs="$stack_objs tree/${src%.c}.o"
