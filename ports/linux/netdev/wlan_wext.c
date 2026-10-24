@@ -11,9 +11,12 @@
  * would use - so the EAPOL frames themselves ride the ordinary netdev data
  * path (0x888e ethernet frames to the supplicant's packet socket).
  *
- * Event layout: the point events (essid/encode/genie) carry the extra data at
- * the end of the struct iw_event and the range reports we_version_compiled 18,
- * so the supplicant's classic (WE-18) scan parser is the one that reads them.
+ * Event layout: the range reports we_version_compiled 18, so iwlist reads the
+ * scan stream with its WE<=18 parser: a 4-byte len/cmd header, then either the
+ * fixed payload or - for the point events (essid/encode/genie) - eight bytes
+ * without the pointer, length/flags at offset 12 and the payload at 16.  The
+ * struct-shaped layout put the payload where that parser looks for the pointer
+ * and every cell printed "ESSID:off/any/hidden".
  *
  * Threading: the ioctl handlers run on the caller's thread and take the state
  * mutex; the port's event callback may run in the driver/USB worker and only
@@ -97,13 +100,70 @@ static int wext_put(char **pos, char *end, unsigned int cmd,
 }
 
 /*
+ * Point events (ESSID, GENIE, ENCODE) do not carry the iw_point pointer in
+ * the stream: the kernel's iwe_stream_add_point() copies only length/flags
+ * after IW_EV_LCP_LEN and puts the payload at IW_EV_POINT_LEN.  On 64-bit
+ * IW_EV_POINT_LEN (16) is smaller than sizeof(struct iw_event) (24), so the
+ * fixed-event helper above writes the payload 8 bytes too far and iwlist
+ * reads the padding as the ESSID ("off/any/hidden").  Fixed-size events
+ * (AP/MODE/FREQ/QUAL) keep using wext_put().
+ */
+static int wext_put_point(char **pos, char *end, unsigned int cmd,
+    const union iwreq_data *u, const void *extra, size_t extra_len)
+{
+	const size_t total = IW_EV_POINT_LEN + extra_len;
+	struct iw_event *e;
+
+	if ((size_t)(end - *pos) < total)
+		return -E2BIG;
+	e = (struct iw_event *)*pos;
+	memset(e, 0, IW_EV_POINT_LEN);
+	e->len = total;
+	e->cmd = cmd;
+	if (u != NULL) {
+		memcpy((char *)e + IW_EV_LCP_LEN,
+		    (const char *)u + IW_EV_POINT_OFF, 4);
+	}
+	if (extra_len > 0)
+		memcpy((char *)e + IW_EV_POINT_LEN, extra, extra_len);
+	*pos += total;
+	return 0;
+}
+
+/*
  * SIOCGIWRATE is special: the supplicant reads a list of iw_param records
  * starting right after the length/command word, so the event is
  * IW_EV_LCP_LEN + sizeof(iw_param) bytes and only the max rate matters.
  */
 static int wext_put_rate(char **pos, char *end, u16 rate_500k)
 {
-	const size_t total = IW_EV_LCP_LEN + sizeof(struct iw_param);
+	const size_t total = IW_EV_LCP_PK_LEN + sizeof(struct iw_param);
+	struct iw_param p = {};
+
+	if ((size_t)(end - *pos) < total)
+		return -E2BIG;
+	p.value = (__s32)rate_500k * 500000;
+	p.fixed = 1;
+	((struct iw_event *)*pos)->len = total;
+	((struct iw_event *)*pos)->cmd = SIOCGIWRATE;
+	memcpy(*pos + IW_EV_LCP_PK_LEN, &p, sizeof(p));
+	*pos += total;
+	return 0;
+}
+
+/*
+ * WE<=18 wire format for scan events (the range reports we_version_compiled
+ * 18): a 4-byte len/cmd header, then the fixed payload or - for point events -
+ * eight bytes without the pointer, length/flags at offset 12 and the payload
+ * at offset 16.  iwlist's iw_extract_event_stream() reads exactly this layout
+ * for we_version <= 18; the struct-shaped events used before put the payload
+ * where the parser looks for the pointer, which is why every ESSID printed as
+ * "off/any/hidden".
+ */
+static int wext_scan_fixed(char **pos, char *end, unsigned int cmd,
+    const void *data, size_t len)
+{
+	const size_t total = IW_EV_LCP_PK_LEN + len;
 	struct iw_event *e;
 
 	if ((size_t)(end - *pos) < total)
@@ -111,9 +171,31 @@ static int wext_put_rate(char **pos, char *end, u16 rate_500k)
 	e = (struct iw_event *)*pos;
 	memset(e, 0, total);
 	e->len = total;
-	e->cmd = SIOCGIWRATE;
-	e->u.bitrate.value = (__s32)rate_500k * 500000;
-	e->u.bitrate.fixed = 1;
+	e->cmd = cmd;
+	if (data != NULL && len != 0)
+		memcpy(*pos + IW_EV_LCP_PK_LEN, data, len);
+	*pos += total;
+	return 0;
+}
+
+static int wext_scan_point(char **pos, char *end, unsigned int cmd,
+    const union iwreq_data *u, const void *extra, size_t extra_len)
+{
+	const size_t total = 16 + extra_len;
+	struct iw_event *e;
+
+	if ((size_t)(end - *pos) < total)
+		return -E2BIG;
+	e = (struct iw_event *)*pos;
+	memset(e, 0, 16);
+	e->len = total;
+	e->cmd = cmd;
+	if (u != NULL) {
+		memcpy(*pos + 12, &u->data.length, 2);
+		memcpy(*pos + 14, &u->data.flags, 2);
+	}
+	if (extra_len > 0)
+		memcpy(*pos + 16, extra, extra_len);
 	*pos += total;
 	return 0;
 }
@@ -149,19 +231,14 @@ static int wext_scan_one(char **pos, char *end,
 	memset(&u, 0, sizeof(u));
 	u.ap_addr.sa_family = ARPHRD_ETHER;
 	memcpy(u.ap_addr.sa_data, r->bssid, 6);
-	if ((rc = wext_put(pos, end, SIOCGIWAP, &u, NULL, 0)) < 0)
+	if ((rc = wext_scan_fixed(pos, end, SIOCGIWAP, &u.ap_addr,
+	    sizeof(u.ap_addr))) < 0)
 		return rc;
 
 	memset(&u, 0, sizeof(u));
 	u.mode = IW_MODE_INFRA;
-	if ((rc = wext_put(pos, end, SIOCGIWMODE, &u, NULL, 0)) < 0)
-		return rc;
-
-	memset(&u, 0, sizeof(u));
-	u.essid.length = (__u16)r->ssid_len;
-	u.essid.flags = 1;
-	if ((rc = wext_put(pos, end, SIOCGIWESSID, &u, r->ssid,
-	    r->ssid_len)) < 0)
+	if ((rc = wext_scan_fixed(pos, end, SIOCGIWMODE, &u.mode,
+	    sizeof(u.mode))) < 0)
 		return rc;
 
 	/*
@@ -174,20 +251,29 @@ static int wext_scan_one(char **pos, char *end,
 	memset(&u, 0, sizeof(u));
 	u.freq.m = (__s32)r->freq;
 	u.freq.e = 6;
-	if ((rc = wext_put(pos, end, SIOCGIWFREQ, &u, NULL, 0)) < 0)
+	if ((rc = wext_scan_fixed(pos, end, SIOCGIWFREQ, &u.freq,
+	    sizeof(u.freq))) < 0)
 		return rc;
 
 	memset(&u, 0, sizeof(u));
 	u.qual.level = (__u8)r->level;
 	u.qual.updated = IW_QUAL_LEVEL_UPDATED | IW_QUAL_DBM;
-	if ((rc = wext_put(pos, end, IWEVQUAL, &u, NULL, 0)) < 0)
+	if ((rc = wext_scan_fixed(pos, end, IWEVQUAL, &u.qual,
+	    sizeof(u.qual))) < 0)
 		return rc;
 
 	memset(&u, 0, sizeof(u));
 	u.data.length = 0;
 	u.data.flags = (r->caps & WEXT_CAP_PRIVACY) != 0 ? 0 :
 	    IW_ENCODE_DISABLED;
-	if ((rc = wext_put(pos, end, SIOCGIWENCODE, &u, NULL, 0)) < 0)
+	if ((rc = wext_scan_point(pos, end, SIOCGIWENCODE, &u, NULL, 0)) < 0)
+		return rc;
+
+	memset(&u, 0, sizeof(u));
+	u.essid.length = (__u16)r->ssid_len;
+	u.essid.flags = 1;
+	if ((rc = wext_scan_point(pos, end, SIOCGIWESSID, &u, r->ssid,
+	    r->ssid_len)) < 0)
 		return rc;
 
 	if ((rc = wext_put_rate(pos, end, wext_max_rate(r->ies,
@@ -198,7 +284,7 @@ static int wext_scan_one(char **pos, char *end,
 		memset(&u, 0, sizeof(u));
 		u.data.length = (__u16)r->ies_len;
 		u.data.flags = 0;
-		if ((rc = wext_put(pos, end, IWEVGENIE, &u, r->ies,
+		if ((rc = wext_scan_point(pos, end, IWEVGENIE, &u, r->ies,
 		    r->ies_len)) < 0)
 			return rc;
 	}
@@ -385,6 +471,16 @@ static int wlan_wext_giwscan(struct net_device *dev,
 
 	if (extra == NULL || wrqu->data.length < sizeof(struct iw_event))
 		return -EINVAL;
+	/*
+	 * A hardware scan returns from SIOCSIWSCAN as soon as the request is
+	 * in the firmware; the table fills later (the completion arrives as a
+	 * notification).  cfg80211 answers -EAGAIN while a sweep is running and
+	 * iwlist/supplicant retry on it (iwlist.c:829), so report the same
+	 * thing here - otherwise the caller reads a half-filled table and joins
+	 * against no candidate.
+	 */
+	if (wlan_bridge_scan_pending())
+		return -EAGAIN;
 	end = extra + wrqu->data.length;
 	for (idx = 0; ; idx++) {
 		struct wlan_bridge_scan_res r;
@@ -669,11 +765,20 @@ static int wlan_wext_giwrange(struct net_device *dev,
 	r->num_bitrates = ARRAY_SIZE(rates);
 	for (i = 0; i < ARRAY_SIZE(rates); i++)
 		r->bitrate[i] = rates[i];
-	r->num_frequency = 13;
+	/*
+	 * iw_freq_t is (m * 10^e) Hz.  The channel list must use the same
+	 * encoding as the scan's SIOCGIWFREQ event (MHz with e=6): iwlist's
+	 * iw_freq_to_channel() compares the two floats, so a channel index in
+	 * m (the previous shape) never matches and every cell printed
+	 * "Channel:0".
+	 */
+	r->num_frequency = 14;
 	for (i = 0; i < 13; i++) {
-		r->freq[i].m = (__s32)(i + 1);
-		r->freq[i].e = (__s16)((2407 + 5 * (i + 1)) * 10);
+		r->freq[i].m = (__s32)(2412 + 5 * i);
+		r->freq[i].e = 6;
 	}
+	r->freq[13].m = 2484;
+	r->freq[13].e = 6;
 	r->enc_capa = IW_ENC_CAPA_WPA | IW_ENC_CAPA_WPA2 |
 	    IW_ENC_CAPA_CIPHER_TKIP | IW_ENC_CAPA_CIPHER_CCMP;
 	wrqu->data.length = sizeof(*r);

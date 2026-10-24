@@ -163,8 +163,46 @@ components/linuxkpi/fw_registry.c
 components/linuxkpi/fw/rtw8851b_fw_blob.c"
 		fi
 		;;
+	iwlwifi)
+		# The 7260 (mvm) set: core + PCIe gen1/2 transport + the cfg
+		# families the IWLMVM id table names + fw/* + all mvm units,
+		# plus the units the ko kernel's config enables (ACPI, EFI,
+		# DEBUGFS, LEDS, PM_SLEEP, DEVICE_TRACING).  DVM/MLD/MEI/tests
+		# are vendored but not compiled.  Re-derived from the driver's
+		# Makefile/mvm/Makefile + the ko .config; the RTOS 72-TU list is
+		# only a seed.
+		DRIVER_CFLAGS="-DCONFIG_IWLWIFI -DCONFIG_IWLMVM \
+-DCONFIG_IWLWIFI_OPMODE_MODULAR -DCONFIG_WLAN_KO_DRIVER_IWLWIFI"
+		IWL_TUS="iwl-io.c iwl-drv.c iwl-debug.c iwl-nvm-utils.c iwl-utils.c
+iwl-phy-db.c iwl-nvm-parse.c iwl-dbg-tlv.c iwl-trans.c
+pcie/ctxt-info.c pcie/ctxt-info-v2.c pcie/drv.c pcie/utils.c
+pcie/gen1_2/rx.c pcie/gen1_2/tx.c pcie/gen1_2/trans.c
+pcie/gen1_2/trans-gen2.c pcie/gen1_2/tx-gen2.c
+cfg/7000.c cfg/8000.c cfg/9000.c cfg/22000.c cfg/ax210.c cfg/bz.c cfg/sc.c
+cfg/rf-jf.c cfg/rf-hr.c cfg/rf-gf.c
+fw/img.c fw/notif-wait.c fw/rs.c fw/dbg.c fw/dbg-old.c fw/pnvm.c fw/dump.c
+fw/regulatory.c fw/paging.c fw/smem.c fw/init.c fw/acpi.c fw/uefi.c
+mvm/fw.c mvm/mac80211.c mvm/nvm.c mvm/ops.c mvm/phy-ctxt.c mvm/mac-ctxt.c
+mvm/utils.c mvm/rx.c mvm/rxmq.c mvm/tx.c mvm/binding.c mvm/quota.c mvm/sta.c
+mvm/sf.c mvm/scan.c mvm/time-event.c mvm/rs.c mvm/rs-fw.c mvm/power.c
+mvm/coex.c mvm/tt.c mvm/offloading.c mvm/tdls.c mvm/ftm-responder.c
+mvm/ftm-initiator.c mvm/rfi.c mvm/mld-key.c mvm/mld-mac.c mvm/link.c
+mvm/mld-sta.c mvm/mld-mac80211.c mvm/ptp.c mvm/time-sync.c
+mvm/led.c mvm/d3.c"
+		for f in $IWL_TUS; do
+			[ -f "$REPO/third-party/iwlwifi/$f" ] || {
+				echo "build.sh: missing iwlwifi TU $f" >&2
+				exit 2
+			}
+			DRIVER_SRCS="$DRIVER_SRCS
+third-party/iwlwifi/$f"
+		done
+		# No blob: iwlwifi asks firmware_class for the name in its cfg
+		# table; the board image supplies /lib/firmware/iwlwifi-7260-17.ucode.
+		FW_SRCS=""
+		;;
 	*)
-		echo "build.sh: unknown DRIVER=$DRIVER (want rtl8xxxu|rtw88|rtw89)" >&2
+		echo "build.sh: unknown DRIVER=$DRIVER (want rtl8xxxu|rtw88|rtw89|iwlwifi)" >&2
 		exit 2
 		;;
 	esac
@@ -187,7 +225,7 @@ mkdir -p "$TREE"
 for root in "$REPO/components/net80211" "$REPO/components/linuxkpi" \
 	    "$REPO/ports/net80211" "$REPO/ports/linux" \
 	    "$REPO/third-party/rtl8xxxu" "$REPO/third-party/rtw88" \
-	    "$REPO/third-party/rtw89" \
+	    "$REPO/third-party/rtw89" "$REPO/third-party/iwlwifi" \
 	    "$REPO/tests/board/linux-ko"; do
 	[ -d "$root" ] || continue
 	find "$root" -type f | while read -r f; do
@@ -243,6 +281,7 @@ done
 	echo "  -I\$(TREE)/ports/net80211/bridge \\"
 	echo "  -I\$(TREE)/ports/linux/mac80211 \\"
 	echo "  -I\$(TREE)/components/linuxkpi \\"
+	echo "  -I\$(TREE)/third-party/iwlwifi \\"
 	echo "  -I\$(TREE) \\"
 	echo "  -DCONFIG_WLAN_KO=1 \\"
 	echo "  -mno-outline-atomics"

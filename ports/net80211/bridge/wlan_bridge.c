@@ -692,7 +692,16 @@ bridge_start(struct ifnet *ifp)
 		return;
 	/* management first: auth/assoc must not queue behind data */
 	bridge_drain_mgtq(ic);
-	bridge_drain_if_snd(ic);
+	/*
+	 * Data only in RUN.  The netdev is up during the join too, and the
+	 * kernel's IPv6 link-local traffic (NS/DAD) would otherwise be
+	 * encapsulated and sent right after the auth response, before the
+	 * association completes; the AP answers that class 3 frame with a
+	 * disassoc reason 7 and the join never settles.
+	 */
+	if (ic->ic_state == IEEE80211_S_RUN) {
+		bridge_drain_if_snd(ic);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -792,6 +801,10 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	rc = bridge_orig_newstate(ic, nstate, arg);
 
 	if (nstate == IEEE80211_S_RUN && ostate != IEEE80211_S_RUN) {
+		/* the data queued during the join goes out now */
+		if (ic->ic_ifp != NULL) {
+			bridge_start(ic->ic_ifp);
+		}
 		if (bridge.ops != NULL && bridge.ops->bss_info != NULL) {
 			struct ieee80211_node *bss = ic->ic_bss;
 

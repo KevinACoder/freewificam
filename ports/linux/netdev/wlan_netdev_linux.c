@@ -175,6 +175,11 @@ int wlan_netdev_create(struct ieee80211_hw *hw)
 	return 0;
 }
 
+struct net_device *wlan_netdev_get(void)
+{
+	return wlan_netdev;
+}
+
 void wlan_netdev_destroy(void)
 {
 	struct net_device *dev = wlan_netdev;

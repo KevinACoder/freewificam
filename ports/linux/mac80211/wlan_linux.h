@@ -57,6 +57,11 @@ struct wlan_linux_hw {
 	 */
 	struct ieee80211_channel chan;
 
+	/* the cfg80211 wdev a vif is embedded in, for ieee80211_vif_to_wdev */
+	struct wireless_dev wdev;
+	bool wiphy_registered;
+	bool sta_auth_sent;
+
 	/*
 	 * The connection's channel context. A driver that declares the channel
 	 * context ops (rtw89 does) keeps per-context state in ctx->drv_priv and
@@ -112,17 +117,20 @@ struct wlan_linux_hw {
 	struct workqueue_struct *hw_wq;
 };
 
-static inline struct wlan_linux_hw *wlan_hw_of(struct ieee80211_hw *hw)
-{
-	return container_of(hw, struct wlan_linux_hw, hw);
-}
-
 /* the driver-half seam vtable (ports/linux/adapter/wlan_seam_adapter_linux.c) */
 extern const struct wlan_seam_drv_ops wlan_seam_ops;
 
 /* the substitute's registration path: build the bridge around this hw */
 int wlan_adapter_attach(struct ieee80211_hw *hw);
+
+/* the one hw this module hosts (the bridge is a singleton too) */
+struct wlan_linux_hw *wlan_hw_of(struct ieee80211_hw *hw);
+struct wlan_linux_hw *wlan_hw_from_vif(struct ieee80211_vif *vif);
 void wlan_adapter_detach(struct ieee80211_hw *hw);
+
+/* TXQ engine (ports/linux/mac80211/mac80211_txq.c) */
+int wlan_txq_enqueue(struct ieee80211_txq *txq, struct sk_buff *skb);
+unsigned long wlan_txq_len(struct ieee80211_txq *txq);
 
 /* a received frame, from ieee80211_rx_irqsafe() to the net80211 bridge */
 void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb);
@@ -142,6 +150,7 @@ void wlan_control_exit(void);
 
 /* the kernelmod line data plane (ports/linux/netdev/wlan_netdev_linux.c) */
 int wlan_netdev_create(struct ieee80211_hw *hw);
+struct net_device *wlan_netdev_get(void);
 void wlan_netdev_destroy(void);
 
 #endif /* _WLAN_LINUX_WLAN_H_ */

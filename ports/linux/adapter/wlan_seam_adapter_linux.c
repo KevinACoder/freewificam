@@ -26,6 +26,7 @@
 #include <wlan_bridge.h>
 
 #include "wlan_linux.h"
+#include "../netdev/wlan_netdev.h"
 
 /*
  * Transmit diagnosis for the 8851BU data-plane round: the same frame, in the
@@ -306,16 +307,33 @@ static int seam_add_interface(struct wlan_seam_drv *drv, const uint8_t mac[6],
 		}
 	}
 	vif->txq = w->vif_txq;
-	w->vif = vif;
+	if (vif->txq_mgmt == NULL) {
+		vif->txq_mgmt = wlan_txq_alloc(w, vif, NULL,
+		    IEEE80211_NUM_TIDS, (u8)IEEE80211_AC_VO);
+		if (vif->txq_mgmt == NULL) {
+			kfree(vif);
+			return -ENOMEM;
+		}
+	}
 	if (w->ops->add_interface == NULL) {
+		w->vif = vif;
 		return 0;
 	}
+	/*
+	 * The vif must not be visible to the driver's iterators until
+	 * add_interface returns: iwl_mvm_mac_ctxt_add() walks the active
+	 * interfaces to assign a MAC id, and with this vif already in the
+	 * list it takes the resume path and returns before initialising
+	 * time_event_data.id (TE_MAX).  The first mgd_prepare_tx then trips
+	 * iwl_mvm_time_event_send_add's WARN and the session protection is
+	 * never installed.
+	 */
 	rc = w->ops->add_interface(&w->hw, vif);
 	if (rc != 0) {
 		kfree(vif);
-		w->vif = NULL;
 		return rc;
 	}
+	w->vif = vif;
 	return 0;
 }
 
@@ -365,9 +383,20 @@ static int seam_filter(struct wlan_seam_drv *drv, uint32_t changed,
 {
 	struct wlan_linux_hw *w = ctx_hw(drv);
 	unsigned int total_flags = total;
+	struct net_device *dev = wlan_netdev_get();
+	u64 mc = 0;
 
+	/*
+	 * mac80211 builds the driver's multicast command through
+	 * prepare_multicast() and hands the cookie to configure_filter();
+	 * iwl_mvm stores it and later WARNs from recalc_multicast if it is
+	 * NULL.  The single netdev's dev->mc is the list mac80211 would walk.
+	 */
+	if (w->ops->prepare_multicast != NULL && dev != NULL) {
+		mc = w->ops->prepare_multicast(&w->hw, &dev->mc);
+	}
 	if (w->ops->configure_filter != NULL) {
-		w->ops->configure_filter(&w->hw, changed, &total_flags, 0);
+		w->ops->configure_filter(&w->hw, changed, &total_flags, mc);
 	}
 	return 0;
 }
@@ -524,10 +553,26 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 	 * is moved out.
 	 */
 	if (is_mgmt && w->vif != NULL && w->ops->mgd_prepare_tx != NULL) {
-		struct ieee80211_prep_tx_info info = {};
+		const struct ieee80211_hdr *hdr = (const struct ieee80211_hdr *)frame;
+		__le16 fc = hdr->frame_control;
 
-		info.link_id = 0;
-		w->ops->mgd_prepare_tx(hw, w->vif, &info);
+		/*
+		 * mac80211 calls mgd_prepare_tx for the frames that need the
+		 * session protected: auth, assoc and reassoc.  Probe requests
+		 * are sent during a scan, where a time event is already
+		 * active; preparing a second one trips iwl_mvm's
+		 * te_data->id != TE_MAX WARN.  Deauth/disassoc use
+		 * mgd_complete_tx's was_assoc path instead.
+		 */
+		if (ieee80211_is_auth(fc) || ieee80211_is_assoc_req(fc) ||
+		    ieee80211_is_reassoc_req(fc)) {
+			struct ieee80211_prep_tx_info info = {
+				.subtype = (u16)(fc & IEEE80211_FCTL_STYPE),
+				.link_id = 0,
+			};
+
+			w->ops->mgd_prepare_tx(hw, w->vif, &info);
+		}
 	}
 	skb = dev_alloc_skb(len + hw->extra_tx_headroom);
 	if (skb == NULL) {
@@ -603,6 +648,34 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 		    w->hw.conf.chandef.chan != NULL ?
 			w->hw.conf.chandef.chan->center_freq : 0);
 	}
+	/*
+	 * Drivers with wake_tx_queue (iwlwifi) take every frame through a
+	 * TXQ: the queue is allocated by the first wake, and a direct .tx
+	 * leaves mvm's mgmt TID queue invalid ("Invalid TXQ id").  The other
+	 * lines keep the direct shape they were measured with.
+	 */
+	if (w->ops->wake_tx_queue != NULL && w->vif != NULL) {
+		struct ieee80211_txq *txq = NULL;
+
+		if (is_mgmt && w->sta != NULL) {
+			txq = w->sta->txq[IEEE80211_NUM_TIDS];
+		} else if (is_mgmt) {
+			txq = w->vif->txq_mgmt != NULL ?
+			    w->vif->txq_mgmt : w->vif->txq;
+		} else if (w->sta != NULL) {
+			u8 tid = skb->priority & 0xf;
+
+			txq = w->sta->txq[tid] != NULL ?
+			    w->sta->txq[tid] : w->vif->txq;
+		} else {
+			txq = w->vif->txq;
+		}
+		if (txq != NULL && wlan_txq_enqueue(txq, skb) == 0) {
+			ieee80211_schedule_txq(hw, txq);
+			w->ops->wake_tx_queue(hw, txq);
+			return 0;
+		}
+	}
 	w->ops->tx(hw, &control, skb);
 	return 0;
 }
@@ -662,6 +735,19 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	 */
 	sta->deflink.rx_nss = 1;
 	/*
+	 * mac80211 leaves SMPS in OFF for an associated station; mvm's
+	 * sta_send_to_fw switch WARNs on AUTOMATIC/NUM_MODES (mvm/sta.c:195).
+	 */
+	sta->deflink.smps_mode = IEEE80211_SMPS_OFF;
+	/*
+	 * mac80211 gives every station a current-link aggregation record and
+	 * points sta->cur at it; iwl_mvm's rate init reads
+	 * sta->cur->max_amsdu_len unconditionally (mvm/rs.c:2948).  Without
+	 * it the first sta_state upload from the join path NULL-derefs.
+	 */
+	sta->deflink.agg.max_amsdu_len = 3839;
+	sta->cur = &sta->deflink.agg;
+	/*
 	 * The station's per-TID queues, before the driver hears about the
 	 * station: its station setup walks them to initialise the
 	 * driver-private queue state (rtw89 mac80211.c:516-517).
@@ -705,6 +791,7 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	}
 	w->sta = sta;
 	w->sta_joined = 0;
+	w->sta_auth_sent = 0;
 	return sta;
 
 err_free:
@@ -799,7 +886,7 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 		vif->cfg.assoc = true;
 		vif->cfg.aid = aid;
 		sta = seam_sta_upload(w, vif->bss_conf.bssid);
-		if (sta != NULL) {
+		if (sta != NULL && !w->sta_joined) {
 			sta->aid = aid;
 			if (rates != NULL && rates_len != 0) {
 				sta->deflink.supp_rates[NL80211_BAND_2GHZ] =
@@ -837,6 +924,18 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 				    IEEE80211_RC_BW_CHANGED |
 				    IEEE80211_RC_NSS_CHANGED);
 			}
+			/*
+			 * The association notify: mac80211 sends this mask once
+			 * the peer is in ASSOC (util.c:2138).  ASSOC is what
+			 * makes mvm reset the beacon counters, add the
+			 * interface's quota and stop the session protection;
+			 * BEACON_INFO is what it uses to cancel that protection
+			 * when the first beacon arrives.  Without the mask the
+			 * firmware keeps counting missed beacons from the scan.
+			 */
+			wlan_bss_changed(w, BSS_CHANGED_ASSOC |
+			    BSS_CHANGED_ARP_FILTER | BSS_CHANGED_PS |
+			    BSS_CHANGED_BEACON_INFO | BSS_CHANGED_IDLE);
 			w->sta_joined = 1;
 		}
 		/*
@@ -921,6 +1020,7 @@ static int seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 {
 	struct wlan_linux_hw *w = ctx_hw(drv);
 	struct ieee80211_vif *vif = w->vif;
+	struct ieee80211_sta *sta;
 
 	if (vif == NULL) {
 		return -EINVAL;
@@ -951,8 +1051,22 @@ static int seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 			return cr;
 		}
 	}
-	(void)seam_sta_upload(w, w->bssid);
-	wlan_bss_changed(w, BSS_CHANGED_BSSID);
+	sta = seam_sta_upload(w, w->bssid);
+	if (sta != NULL && !w->sta_auth_sent && w->ops->sta_state != NULL) {
+		int rc = w->ops->sta_state(&w->hw, vif, sta,
+		    IEEE80211_STA_NONE, IEEE80211_STA_AUTH);
+
+		w->sta_auth_sent = 1;
+		pr_info("wlan: station auth-state %pM rc=%d\n", w->bssid, rc);
+	}
+	/*
+	 * mac80211's pre-association notify for a station vif: the BSSID, the
+	 * basic rates it just derived and the beacon interval (mlme.c:9779).
+	 * The interval is what the firmware's beacon tracker is armed with -
+	 * sending only BSSID leaves it counting at the wrong cadence.
+	 */
+	wlan_bss_changed(w, BSS_CHANGED_BSSID | BSS_CHANGED_BASIC_RATES |
+	    BSS_CHANGED_BEACON_INT);
 	return 0;
 }
 

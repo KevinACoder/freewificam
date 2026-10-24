@@ -46,6 +46,28 @@ static const struct cfg80211_ops wlan_cfg80211_ops;
  */
 static struct ieee80211_hw *wlan_single_hw;
 
+struct wlan_linux_hw *wlan_hw_of(struct ieee80211_hw *hw)
+{
+	if (hw == NULL) {
+		return NULL;
+	}
+	return container_of(hw, struct wlan_linux_hw, hw);
+}
+
+struct wlan_linux_hw *wlan_hw_from_vif(struct ieee80211_vif *vif)
+{
+	struct wlan_linux_hw *w;
+
+	if (wlan_single_hw == NULL) {
+		return NULL;
+	}
+	w = wlan_hw_of(wlan_single_hw);
+	if (w == NULL || w->vif != vif) {
+		return NULL;
+	}
+	return w;
+}
+
 static void wlan_rx_work(struct work_struct *work);
 static void wlan_tx_work(struct work_struct *work);
 static void wlan_scan_work(struct work_struct *work);
@@ -76,6 +98,8 @@ struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
 	}
 	w->ops = ops;
 	w->hw.wiphy = wiphy;
+	w->wdev.wiphy = wiphy;
+	w->wdev.iftype = NL80211_IFTYPE_STATION;
 	w->hw.priv = (void *)(w + 1);
 	w->hw.queues = 4;
 	*(struct ieee80211_hw **)wiphy_priv(wiphy) = &w->hw;
@@ -144,6 +168,13 @@ int ieee80211_register_hw(struct ieee80211_hw *hw)
 	 * regulatory.regd) would otherwise read an empty record while it
 	 * finishes its own registration.
 	 */
+	rc = wiphy_register(hw->wiphy);
+	if (rc != 0) {
+		pr_err("wlan: wiphy_register failed rc=%d\n", rc);
+		return rc;
+	}
+	w->wiphy_registered = true;
+
 	if (hw->wiphy->reg_notifier != NULL) {
 		struct regulatory_request request;
 
@@ -175,6 +206,10 @@ void ieee80211_unregister_hw(struct ieee80211_hw *hw)
 	cancel_work_sync(&w->tx_work);
 	cancel_work_sync(&w->scan_work);
 	wlan_adapter_detach(hw);
+	if (w->wiphy_registered) {
+		wiphy_unregister(hw->wiphy);
+		w->wiphy_registered = false;
+	}
 }
 
 void ieee80211_free_hw(struct ieee80211_hw *hw)
@@ -577,48 +612,11 @@ struct sk_buff *ieee80211_proberesp_get(struct ieee80211_hw *hw,
 /* Link closure: no station scan/join path calls these                 */
 /* ------------------------------------------------------------------ */
 
-void ieee80211_wake_queues(struct ieee80211_hw *hw)
-{
-	(void)hw;
-}
-
-void ieee80211_stop_queues(struct ieee80211_hw *hw)
-{
-	(void)hw;
-}
-
-void ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
-    struct ieee80211_txq *txq)
-{
-	(void)hw;
-	(void)txq;
-}
-
 /*
  * The TXQ path is the data plane's; this line's management frames reach the
  * driver through the bridge's .tx seam, not through a mac80211 TXQ. A data
  * round that wants the queue path fills these in with the port's txq object.
  */
-struct sk_buff *ieee80211_tx_dequeue(struct ieee80211_hw *hw,
-    struct ieee80211_txq *txq)
-{
-	(void)hw;
-	(void)txq;
-	return NULL;
-}
-
-void ieee80211_txq_get_depth(struct ieee80211_txq *txq,
-    unsigned long *frame_cnt, unsigned long *byte_cnt)
-{
-	(void)txq;
-	if (frame_cnt != NULL) {
-		*frame_cnt = 0;
-	}
-	if (byte_cnt != NULL) {
-		*byte_cnt = 0;
-	}
-}
-
 int ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, u16 tid,
     u16 timeout)
 {
@@ -798,35 +796,6 @@ const char *__ieee80211_get_assoc_led_name(struct ieee80211_hw *hw)
 {
 	(void)hw;
 	return "wlan_ko_assoc";
-}
-
-/*
- * The TXQ engine. The kernelmod line's data plane builds the 802.11 frame in
- * net80211 and hands it to the driver's .tx (the shape the 8821CU round
- * measured), so no queue is ever scheduled, dequeued or returned: rtw89 only
- * reaches these entries if its wake_tx_queue path runs, and mac80211 - not this
- * substitute - is what would call that. The bodies are the honest answer for a
- * queue that does not exist, not a silent reimplementation.
- */
-void __ieee80211_schedule_txq(struct ieee80211_hw *hw,
-    struct ieee80211_txq *txq, bool force)
-{
-	(void)hw;
-	(void)txq;
-	(void)force;
-}
-
-struct ieee80211_txq *ieee80211_next_txq(struct ieee80211_hw *hw, u8 ac)
-{
-	(void)hw;
-	(void)ac;
-	return NULL;
-}
-
-void ieee80211_txq_schedule_start(struct ieee80211_hw *hw, u8 ac)
-{
-	(void)hw;
-	(void)ac;
 }
 
 /*
