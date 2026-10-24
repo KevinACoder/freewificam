@@ -1,4 +1,8 @@
 build/
+# The RTOS build entry lives in a directory that is otherwise build output.
+!rtos/build/
+rtos/build/*
+!rtos/build/Makefile
 out/
 *.o
 *.ko
