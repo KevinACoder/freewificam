@@ -11,12 +11,17 @@
  * would use - so the EAPOL frames themselves ride the ordinary netdev data
  * path (0x888e ethernet frames to the supplicant's packet socket).
  *
- * Event layout: the range reports we_version_compiled 18, so iwlist reads the
- * scan stream with its WE<=18 parser: a 4-byte len/cmd header, then either the
- * fixed payload or - for the point events (essid/encode/genie) - eight bytes
- * without the pointer, length/flags at offset 12 and the payload at 16.  The
- * struct-shaped layout put the payload where that parser looks for the pointer
- * and every cell printed "ESSID:off/any/hidden".
+ * Event layout: the stream is the struct layout of a 64-bit build, which is
+ * what cfg80211 also produces here: an 8-byte len/cmd header (the iw_event
+ * union is 8-byte aligned, so four bytes of padding follow the pair) and, for
+ * the point events (essid/encode/genie), length/flags at offset 12 and the
+ * payload at 16.  The range therefore reports we_version_compiled 21: back
+ * when it reported 18 the fixed events were written with the 4-byte packed
+ * header while the point events stayed in the struct layout, iwlist coped and
+ * wpa_supplicant's length walk did not - it parsed a whole 4470-byte table as
+ * one BSS and then never found the WPA2 network.  The pure packed layout was
+ * rejected earlier for the same class of reason ("ESSID:off/any/hidden" on
+ * every cell).
  *
  * Threading: the ioctl handlers run on the caller's thread and take the state
  * mutex; the port's event callback may run in the driver/USB worker and only
@@ -37,6 +42,18 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/wireless.h>
+/*
+ * Event header size.  The packed (WE<=18) layout puts the payload right after
+ * the 4-byte len/cmd pair; on a 64-bit build the iw_event union is 8-byte
+ * aligned, so the struct layout cfg80211 uses has four bytes of padding there
+ * (IW_EV_LCP_LEN == 8).  This face encodes the point events in that struct
+ * layout (16 bytes before the data), so the fixed events have to use the same
+ * header - a mixed stream parses under iwlib but derails wpa_supplicant's
+ * length walk after the first point event (measured: "1 BSSes" out of a 4470
+ * byte table, then "No suitable network found").
+ */
+#define WEXT_EV_HDR	8
+
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
 #include <linux/etherdevice.h>
@@ -137,7 +154,7 @@ static int wext_put_point(char **pos, char *end, unsigned int cmd,
  */
 static int wext_put_rate(char **pos, char *end, u16 rate_500k)
 {
-	const size_t total = IW_EV_LCP_PK_LEN + sizeof(struct iw_param);
+	const size_t total = WEXT_EV_HDR + sizeof(struct iw_param);
 	struct iw_param p = {};
 
 	if ((size_t)(end - *pos) < total)
@@ -146,7 +163,7 @@ static int wext_put_rate(char **pos, char *end, u16 rate_500k)
 	p.fixed = 1;
 	((struct iw_event *)*pos)->len = total;
 	((struct iw_event *)*pos)->cmd = SIOCGIWRATE;
-	memcpy(*pos + IW_EV_LCP_PK_LEN, &p, sizeof(p));
+	memcpy(*pos + WEXT_EV_HDR, &p, sizeof(p));
 	*pos += total;
 	return 0;
 }
@@ -163,7 +180,7 @@ static int wext_put_rate(char **pos, char *end, u16 rate_500k)
 static int wext_scan_fixed(char **pos, char *end, unsigned int cmd,
     const void *data, size_t len)
 {
-	const size_t total = IW_EV_LCP_PK_LEN + len;
+	const size_t total = WEXT_EV_HDR + len;
 	struct iw_event *e;
 
 	if ((size_t)(end - *pos) < total)
@@ -173,7 +190,7 @@ static int wext_scan_fixed(char **pos, char *end, unsigned int cmd,
 	e->len = total;
 	e->cmd = cmd;
 	if (data != NULL && len != 0)
-		memcpy(*pos + IW_EV_LCP_PK_LEN, data, len);
+		memcpy(*pos + WEXT_EV_HDR, data, len);
 	*pos += total;
 	return 0;
 }
@@ -756,8 +773,15 @@ static int wlan_wext_giwrange(struct net_device *dev,
 	if (extra == NULL)
 		return -EINVAL;
 	memset(r, 0, sizeof(*r));
-	r->we_version_compiled = 18;
-	r->we_version_source = 18;
+	/*
+	 * 21, not 18: the event stream below is the struct layout (8-byte
+	 * header for fixed events, 16 for point events), which is what
+	 * cfg80211 reports and produces on this kernel.  The packed WE-18
+	 * layout would need an 8-byte point header and a 4-byte fixed header;
+	 * mixing the two is what broke the supplicant's scan parse.
+	 */
+	r->we_version_compiled = 21;
+	r->we_version_source = 21;
 	r->scan_capa = IW_SCAN_CAPA_ESSID;
 	r->max_qual.qual = 100;
 	r->max_qual.level = 255;
