@@ -55,6 +55,18 @@ BUILD := $(CURDIR)/build
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
 OPT ?= -Og
 
+# Lever channel (performance rounds): a build-time -D that has to reach both the
+# project's own units and the vendored trees. It exists because the stack's
+# switches live in an #ifndef-guarded option table (ports/lwip/include/
+# lwipopts.h) and the driver's in CONFIG_GMAC_*: a switch only exists for a
+# translation unit compiled with the define. LEVERS is part of BASE_CFLAGS,
+# hence of the flag stamp, so a changed lever always forces a rebuild - a lever
+# can never be certified against an object built with a different set.
+#
+#   OPT=-O2 tools/rtos/build.sh
+#   LEVERS="-DTCP_WND=131072 -DCONFIG_GMAC_RX_SCAN=5" tools/rtos/build.sh
+LEVERS ?=
+
 # Case selection: the source set and the runner's table are trimmed together,
 # so a short arm builds a short image (`CASES=tick,cmsis2`).
 CASES ?= tick cmsis2 net emmc
@@ -289,7 +301,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
 	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
-	$(CASE_DEFS) $(BACKEND_DEFS) $(EXTRA_DEFS) \
+	$(CASE_DEFS) $(EXTRA_DEFS) $(LEVERS) $(BACKEND_DEFS) \
 	$(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
@@ -455,6 +467,7 @@ gates: $(TARGET).elf
 	[ -z "$$undef" ] || { echo "FAIL: undefined symbols:"; echo "$$undef"; exit 1; }; \
 	echo "PASS: _start=0x$$start vectors=0x$$vec backend=$(BACKEND) 0 undefined"
 	@$(SIZE) $(TARGET).elf
+	@printf 'opt: %s\nlevers: %s\n' '$(OPT)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1
 	@printf 'size: '; stat -c '%s' $(TARGET).bin

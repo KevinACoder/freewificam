@@ -52,6 +52,24 @@ PATTERNS = {
     "emmc_loop": re.compile(r"emmc: loop n=(?P<n>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
     "emmc_badlba": re.compile(r"emmc: badlba lba=\d+ write_rc=(?P<w>-?\d+) read_rc=(?P<r>-?\d+) nohang=(?P<nohang>\w+)", re.MULTILINE),
     "emmc_pass": re.compile(r"emmc: PASS", re.MULTILINE),
+    # Throughput-round instruments (measurement only: they are read out for the
+    # ledger, they never turn a pass into a fail).
+    "net_rtt": re.compile(r"net: rtt n=(?P<n>\d+) min_us=(?P<min>\d+) avg_us=(?P<avg>\d+) max_us=(?P<max>\d+)", re.MULTILINE),
+    "emmc_clk": re.compile(r"emmc: clk asked=(?P<asked>\d+)Hz achieved=(?P<achieved>\d+)Hz src_sel=(?P<sel>\d+) clk_ctrl=0x(?P<clk_ctrl>[0-9a-f]+) host_ctrl1=0x(?P<host_ctrl1>[0-9a-f]+) lines=(?P<lines>\d+) extcsd_bus=(?P<bus>\d+)", re.MULTILINE),
+    "emmc_census": re.compile(r"emmc: census (?P<tag>\S+) transfers=(?P<transfers>\d+) blocks=(?P<blocks>\d+) boundaries=(?P<boundaries>\d+) data_polls=(?P<polls>\d+) cmd_us=(?P<cmd_us>\d+) data_us=(?P<data_us>\d+)", re.MULTILINE),
+}
+
+# The anchors that repeat once per phase / per sweep size: collected as lists so
+# a phase's absence stays visible as an absence and a second run does not hide
+# the first.
+LIST_PATTERNS = {
+    "net_phase_begin": re.compile(r"net: phase (?P<n>\d+) begin proto=(?P<proto>\S+) role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) name=(?P<name>\S+)", re.MULTILINE),
+    "net_phase_done": re.compile(r"net: phase (?P<n>\d+) done name=(?P<name>\S+) ok=(?P<ok>\d+)", re.MULTILINE),
+    "net_census": re.compile(r"net: census .*", re.MULTILINE),
+    "net_loopback": re.compile(r"net: loopback proto=(?P<proto>\S+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) done=(?P<done>\d+)", re.MULTILINE),
+    "net_udp_sink": re.compile(r"net: udp sink port=(?P<port>\d+) pkts=(?P<pkts>\d+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
+    "net_udp_blast": re.compile(r"net: udp blast port=(?P<port>\d+) sent=(?P<sent>\d+) pkts=(?P<pkts>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
+    "emmc_sweep": re.compile(r"emmc: sweep (?P<dir>read|write) chunk=(?P<kib>\d+) KiB xfers=(?P<xfers>\d+) bytes=(?P<bytes>\d+) us=(?P<us>\d+) kibs=(?P<kibs>\d+)", re.MULTILINE),
 }
 
 
@@ -61,6 +79,8 @@ def parse(text: str) -> dict:
     for name, pattern in PATTERNS.items():
         match = pattern.search(text)
         found[name] = match.groupdict() if match else None
+    for name, pattern in LIST_PATTERNS.items():
+        found[name] = [m.groupdict() for m in pattern.finditer(text)]
     found["case_verdicts"] = {
         case: re.findall(rf"rtos: case {case} (PASS|FAIL)", text)
         for case in CASES
@@ -133,6 +153,30 @@ def judge(text: str, expect: dict | None = None) -> dict:
             else:
                 notes.append(f"{direction}: {int(row['kbit'])} kbit/s over {row['ms']} ms")
 
+        # The phase machine: every phase that is not the attribution-only
+        # loopback has to have reported ok=1, and a phase that never closed is
+        # a phase that never ran to its end.
+        begun = {row["name"]: row for row in found["net_phase_begin"]}
+        done = {row["name"]: row for row in found["net_phase_done"]}
+        for name in begun:
+            if name not in done:
+                errors.append(f"net: phase {name} never closed")
+            elif done[name]["ok"] != "1" and name != "loopback":
+                errors.append(f"net: phase {name} reported ok=0")
+        if begun:
+            notes.append("net: phases " + " ".join(begun))
+        if found["net_rtt"]:
+            notes.append(
+                f"net: rtt {found['net_rtt']['min']}/{found['net_rtt']['avg']}/"
+                f"{found['net_rtt']['max']} us (min/avg/max, n={found['net_rtt']['n']})"
+            )
+        for row in found["net_loopback"]:
+            notes.append(f"net: loopback {int(row['kbit'])} kbit/s (attribution only)")
+        for row in found["net_udp_sink"]:
+            notes.append(f"net: udp in {row['pkts']} pkts {row['bytes']} B in {row['ms']} ms")
+        for row in found["net_udp_blast"]:
+            notes.append(f"net: udp out {row['sent']} B offered in {row['ms']} ms (peer is the witness)")
+
     if cases.get("emmc", {}).get("verdict") == "pass":
         rw = found["emmc_rw"]
         if not rw or rw["verify"] != "ok":
@@ -148,6 +192,15 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 errors.append(f"{key}: no identity line")
             else:
                 notes.append(f"{key}: {found[key]}")
+        if found["emmc_clk"]:
+            row = found["emmc_clk"]
+            notes.append(
+                f"emmc: clk asked={row['asked']} achieved={row['achieved']} "
+                f"sel={row['sel']} clk_ctrl=0x{row['clk_ctrl']} "
+                f"host_ctrl1=0x{row['host_ctrl1']} lines={row['lines']}"
+            )
+        if found["emmc_sweep"]:
+            notes.append(f"emmc: sweep {len(found['emmc_sweep'])} points")
         if "emmc_product" in expect and found["emmc_cid"]:
             if found["emmc_cid"]["product"] != expect["emmc_product"]:
                 errors.append("emmc: product name differs from the Linux readback")

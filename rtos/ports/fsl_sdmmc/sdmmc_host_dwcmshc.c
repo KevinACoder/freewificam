@@ -46,6 +46,15 @@ struct sdmmc_host_dev {
  * having to hold the stack's host structure open. */
 static struct sdmmc_host_dev *sdmmc_host_dev_current;
 
+/* Per-command trace (see sdmmc_mmc_trace_set). On by default so the delivery
+ * image prints what it always printed; a bandwidth window turns it off. */
+static int sdmmc_host_trace = 1;
+
+void sdmmc_mmc_trace_set(int on)
+{
+	sdmmc_host_trace = (on != 0) ? 1 : 0;
+}
+
 int sdmmc_mmc_host_state_get(struct sdmmc_mmc_host_state *out)
 {
 	struct sdmmc_host_dev *dev = sdmmc_host_dev_current;
@@ -60,6 +69,18 @@ int sdmmc_mmc_host_state_get(struct sdmmc_mmc_host_state *out)
 	out->cclk_sel = dev->hc.cclk_sel;
 	out->width = dev->hc.width;
 	out->present_bit = dwc_mshc_card_present(&dev->hc);
+	dwc_mshc_regs_get(&dev->hc, &out->clk_ctrl, &out->host_ctrl1);
+
+	{
+		struct dwc_mshc_census census;
+
+		dwc_mshc_census_get(&census);
+		out->transfers = census.transfers;
+		out->boundary_events = census.boundary_events;
+		out->data_polls = census.data_polls;
+		out->cmd_us = census.cmd_us;
+		out->data_us = census.data_us;
+	}
 
 	return 0;
 }
@@ -249,10 +270,14 @@ static void fdwmshchost_convert_cmd(const sdmmchost_transfer_t *content,
 	data->len = data->blksz * data->blkcnt;
 
 	/* A per-transfer trace: a storage round moves tens of thousands of
-	 * blocks, so it stays at the debug level. */
-	LOG_DEBUG("emmc: data cmd=%u arg=0x%x blksz=%u blkcnt=%u len=%u %s\n",
-		  cmd->index, cmd->arg, data->blksz, data->blkcnt, data->len,
-		  data->write ? "write" : "read");
+	 * blocks, so it stays at the debug level AND behind the trace switch -
+	 * the anchor table promotes every "emmc: " line to the unfiltered level,
+	 * which makes one line of this ~6 ms of 115200-baud console. */
+	if (sdmmc_host_trace != 0) {
+		LOG_DEBUG("emmc: data cmd=%u arg=0x%x blksz=%u blkcnt=%u len=%u %s\n",
+			  cmd->index, cmd->arg, data->blksz, data->blkcnt,
+			  data->len, data->write ? "write" : "read");
+	}
 
 	cmd->data = data;
 }

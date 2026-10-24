@@ -744,8 +744,10 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 	uint32_t stat;
 	uint32_t err;
 	uint32_t boundaries = 0U;
+	uint32_t polls = 0U;
 
 	do {
+		polls++;
 		stat = mmio_rd16(base + DWC_MSHC_NORMAL_INT_STAT);
 		err = mmio_rd16(base + DWC_MSHC_ERROR_INT_STAT);
 
@@ -757,6 +759,7 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 				  mmio_rd16(base + DWC_MSHC_BLOCK_COUNT),
 				  mmio_rd32(base + DWC_MSHC_SDMA_ADDR),
 				  (unsigned)boundaries);
+			dwc_mshc_census_state.data_polls += polls;
 			dwc_mshc_int_status_clear(hc);
 			return DWC_MSHC_ERR_DATA;
 		}
@@ -769,6 +772,7 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 				cache_dcache_invalidate((uintptr_t)cmd->data->buf,
 							(unsigned long)cmd->data->len);
 			}
+			dwc_mshc_census_state.data_polls += polls;
 			return DWC_MSHC_OK;
 		}
 
@@ -790,6 +794,7 @@ static int dwc_mshc_wait_data(struct dwc_mshc *hc, const struct dwc_mshc_cmd *cm
 
 	LOG_ERROR("dwc_mshc: CMD%u data timeout (nint=0x%x eint=0x%x pstate=0x%x)\n",
 		  cmd->index, stat, err, mmio_rd32(base + DWC_MSHC_PRESENT_STATE));
+	dwc_mshc_census_state.data_polls += polls;
 	dwc_mshc_int_status_clear(hc);
 
 	return DWC_MSHC_ERR_TIMEOUT;
@@ -809,15 +814,36 @@ int dwc_mshc_transfer(struct dwc_mshc *hc, struct dwc_mshc_cmd *cmd)
 	}
 
 	if (cmd->data == NULL) {
+		uint64_t t0 = gtimer_count_get();
+
 		ret = dwc_mshc_send_command(hc, cmd);
+		dwc_mshc_census_state.cmd_us +=
+			(gtimer_count_get() - t0) / 24u;
 	} else {
 		dwc_mshc_census_state.with_data++;
-		ret = dwc_mshc_prepare_dma(hc, cmd);
-		if (ret == DWC_MSHC_OK) {
-			ret = dwc_mshc_send_command(hc, cmd);
+		{
+			/* The data circuit's reset and the DMA programming are a
+			 * per-transfer fixed cost that no bus figure shows, so
+			 * they are priced with the data stage. */
+			uint64_t t0 = gtimer_count_get();
+
+			ret = dwc_mshc_prepare_dma(hc, cmd);
+			dwc_mshc_census_state.data_us +=
+				(gtimer_count_get() - t0) / 24u;
 		}
 		if (ret == DWC_MSHC_OK) {
+			uint64_t t0 = gtimer_count_get();
+
+			ret = dwc_mshc_send_command(hc, cmd);
+			dwc_mshc_census_state.cmd_us +=
+				(gtimer_count_get() - t0) / 24u;
+		}
+		if (ret == DWC_MSHC_OK) {
+			uint64_t t0 = gtimer_count_get();
+
 			ret = dwc_mshc_wait_data(hc, cmd);
+			dwc_mshc_census_state.data_us +=
+				(gtimer_count_get() - t0) / 24u;
 		}
 		if (ret != DWC_MSHC_OK) {
 			/* reset the data circuit so a stuck data path cannot
@@ -851,4 +877,21 @@ void dwc_mshc_census_get(struct dwc_mshc_census *out)
 void dwc_mshc_census_reset(void)
 {
 	(void)memset(&dwc_mshc_census_state, 0, sizeof(dwc_mshc_census_state));
+}
+
+void dwc_mshc_regs_get(const struct dwc_mshc *hc, uint32_t *clk_ctrl,
+		       uint32_t *host_ctrl1)
+{
+	uintptr_t base;
+
+	if (hc == NULL) {
+		return;
+	}
+	base = hc->cfg.base;
+	if (clk_ctrl != NULL) {
+		*clk_ctrl = (uint32_t)mmio_rd16(base + DWC_MSHC_CLOCK_CTRL);
+	}
+	if (host_ctrl1 != NULL) {
+		*host_ctrl1 = (uint32_t)mmio_rd8(base + DWC_MSHC_HOST_CTRL1);
+	}
 }

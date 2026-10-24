@@ -60,11 +60,36 @@ struct sdmmc_mmc_host_state {
 	uint32_t	cclk_sel;	/* the CRU CCLK_EMMC selector in effect */
 	unsigned int	width;		/* data lines last programmed */
 	bool		present_bit;	/* the controller's own presence bit */
+	/* Register readbacks (throughput rounds): what the controller holds, as
+	 * opposed to what the two fields above compute it should hold. The clock
+	 * field's divider is the rate's real determinant and the width bits are
+	 * the line count's, so a figure derived from the request cannot catch a
+	 * programming error - these two can. */
+	uint32_t	clk_ctrl;	/* CLOCK_CONTROL, divider field included */
+	uint32_t	host_ctrl1;	/* HOST_CONTROL1: bit 5 = 8 lines, bit 1 = 4 */
+	/* The controller's own census since boot: transfer count, SDMA boundary
+	 * stops, the data wait's poll count and the two wait spans. A bandwidth
+	 * round differences these across a window to price the fixed cost per
+	 * command and the wait step separately from the bus time. */
+	uint32_t	transfers;
+	uint32_t	boundary_events;
+	uint64_t	data_polls;
+	uint64_t	cmd_us;
+	uint64_t	data_us;
 };
 
 /* Fill `out` from the live controller. Returns 0, or a negative value when the
  * controller is not up. */
 int sdmmc_mmc_host_state_get(struct sdmmc_mmc_host_state *out);
+
+/* Per-command trace switch. The port prints one line per data command at the
+ * debug level, and the anchor table promotes every "emmc: " line to the
+ * unfiltered level - so during a bandwidth window those lines are not a log
+ * level but a 115200-baud stall of about 6 ms each. A measurement turns it off
+ * around the window and back on for the probe section. Default: on (the
+ * delivery image's behaviour is unchanged).
+ */
+void sdmmc_mmc_trace_set(int on);
 
 /* Read/write `blocks` 512-byte blocks starting at `lba`. The caller owns the
  * buffer. Returns 0, or a negative value when the transfer failed. */

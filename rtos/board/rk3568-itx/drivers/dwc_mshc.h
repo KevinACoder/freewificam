@@ -98,6 +98,15 @@ struct dwc_mshc_census {
 	uint32_t	boundary_events;
 	uint64_t	rx_bytes;
 	uint64_t	tx_bytes;
+	/* Wait accounting (throughput rounds). This port polls, so the wall time a
+	 * transfer spends inside a wait loop is a software property that has to be
+	 * visible separately from the bus time: a 100 us command step next to a
+	 * 4 us data step is a difference no throughput number can show.
+	 * cmd_us/data_us accumulate the spans; data_polls counts the data loop's
+	 * iterations, so data_us/data_polls is the step actually observed. */
+	uint64_t	cmd_us;
+	uint64_t	data_us;
+	uint64_t	data_polls;
 };
 
 /* Bring the controller up: CRU gates/reset/clock mux, the eMMC pin group, the
@@ -138,5 +147,13 @@ int dwc_mshc_transfer(struct dwc_mshc *hc, struct dwc_mshc_cmd *cmd);
 
 void dwc_mshc_census_get(struct dwc_mshc_census *out);
 void dwc_mshc_census_reset(void);
+
+/* The two registers whose programming decides the bus rate: CLOCK_CONTROL
+ * carries the divider field the controller is actually running with (0 is the
+ * undivided source), HOST_CONTROL1 carries the data-line count (bit 5 = eight
+ * lines, bit 1 = four). Both are read back so an evidence line can state what
+ * the controller holds instead of what the stack asked for. */
+void dwc_mshc_regs_get(const struct dwc_mshc *hc, uint32_t *clk_ctrl,
+		       uint32_t *host_ctrl1);
 
 #endif /* FREEWIFICAM_DWC_MSHC_H */

@@ -19,9 +19,18 @@ Evidence layout, one directory per boot:
         judge.json         the verdict
         RESULT.md          the same verdict, readable
 
+The peer is driven by the board's own phase anchors: the image prints
+`net: phase <n> begin ... name=<name>` before it waits, and this tool answers
+with the peer command that phase names (PEER_ACTIONS).  `--plan 1` is the
+throughput round's seven-phase schedule; `--plan 0` (the default) is the
+delivery image's two sessions.  Nothing is fired on a sleep, so a phase that
+never starts cannot be mistaken for one that did.
+
 Usage:
     tools/rtos/board-round.py --backend freertos \
         --out runs/L3-rtos/2026-10-24-rtos-bin --boot boot1 --peer
+    tools/rtos/board-round.py --backend freertos --plan 1 \
+        --out runs/L3-rtos/2026-10-25-rtos-bin-perf --boot b1 --peer --timeout 420
 
     tools/rtos/judge.py runs/.../boot1/serial.log      # re-judge a capture
 """
@@ -31,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,7 +61,13 @@ IMAGES = REPO / "rtos" / "build" / "build"
 PEER = "pi@192.168.0.17"
 BOARD_IP = "192.168.0.200"
 FINAL_ANCHOR = "rtos: result"
+# The delivery plan's downlink phase still announces itself this way; the
+# phase anchors above are the general form.
 READY_ANCHOR = "net: iperf ready"
+
+# The board announces each phase before it waits; the number and the name are
+# the only things this side needs to know about the schedule.
+PHASE_RE = re.compile(r"net: phase (\d+) begin .*name=(\S+)")
 
 
 class Session:
@@ -138,13 +154,69 @@ def peer_start_server() -> str:
     )
 
 
+def peer_ping() -> str:
+    return ssh(
+        "rm -f /tmp/icmp.txt; "
+        "(sudo -n timeout 8 tcpdump -i eth0 -nn icmp > /tmp/icmp.txt 2>&1 &); "
+        "sleep 0.4; "
+        f"ping -c 10 -i 0.2 -W 1 {BOARD_IP}; "
+        "sleep 0.6; "
+        "echo '--- icmp on the wire ---'; cat /tmp/icmp.txt",
+        timeout=40,
+    )
+
+
+def peer_tcp_down(seconds: int, window_kib: int = 0) -> str:
+    window = f"-w {window_kib}K " if window_kib else ""
+    return ssh(f"iperf -c {BOARD_IP} -p 5001 {window}-t {seconds}", timeout=seconds + 40)
+
+
+def peer_udp_down(seconds: int) -> str:
+    # The board counts on its own sink (port 5002); iperf2's client report is
+    # the second witness for the same window - offered vs received.
+    return ssh(f"iperf -c {BOARD_IP} -p 5002 -u -b 900M -t {seconds}", timeout=seconds + 40)
+
+
+def peer_udp_up(seconds: int) -> str:
+    # The board blasts; the peer's server report is this direction's only
+    # independent number, so its log is the evidence and is printed here.
+    return ssh(
+        "pkill -x iperf >/dev/null 2>&1 || true; sleep 0.3; "
+        "(setsid iperf -s -u -i 1 -p 5001 > /tmp/iperf-udp-up.log 2>&1 </dev/null &); "
+        "i=0; while [ $i -lt 20 ]; do "
+        "if ss -lun 2>/dev/null | grep -q ':5001 '; then break; fi; "
+        "i=$((i+1)); sleep 0.25; done; "
+        f"sleep {seconds}; "
+        "pkill -x iperf >/dev/null 2>&1 || true; "
+        "echo '--- peer udp server report ---'; tail -20 /tmp/iperf-udp-up.log",
+        timeout=seconds + 40,
+    )
+
+
+# Phase name -> the peer's action. The names come from the image, so the two
+# sides agree on the schedule without the schedule being written down twice.
+PEER_ACTIONS = {
+    "loopback": None,           # board-local: no wire traffic at all
+    "down": lambda: peer_tcp_down(10),
+    "tcpdn16k": lambda: peer_tcp_down(10),
+    "tcpdn256k": lambda: peer_tcp_down(15, 256),
+    "udpdn": lambda: peer_udp_down(15),
+    "udpdn2": lambda: peer_udp_down(15),
+    "up": None,                 # the board initiates; its server is already up
+    "tcpup": None,
+    "udpup": lambda: peer_udp_up(14),
+}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--backend", required=True, choices=["freertos", "threadx"])
     ap.add_argument("--out", required=True, type=Path, help="run directory")
     ap.add_argument("--boot", required=True, help="boot name, e.g. boot1")
     ap.add_argument("--peer", action="store_true", help="drive the Raspberry Pi peer")
-    ap.add_argument("--timeout", type=int, default=300, help="capture window, seconds")
+    ap.add_argument("--plan", type=int, default=0, choices=[0, 1],
+                    help="the image's phase plan (0 delivery, 1 throughput round)")
+    ap.add_argument("--timeout", type=int, default=420, help="capture window, seconds")
     ap.add_argument("--no-power-off", action="store_true")
     args = ap.parse_args()
 
@@ -170,6 +242,10 @@ def main() -> int:
         f"sha256 {host_sha}",
         f"crc32 {host_crc:08x}",
     ]
+
+    build_info = IMAGES / f"build-info-{args.backend}.txt"
+    if build_info.exists():
+        fingerprint.extend(build_info.read_text().splitlines())
 
     stage_dir = out / "stage"
     stage_dir.mkdir(exist_ok=True)
@@ -210,6 +286,8 @@ def main() -> int:
         started = time.time()
         final_seen = None
         peer_done = False
+        ping_done = False
+        fired: set[str] = set()
         lines: list[str] = []
         with log_path.open("w") as log:
             while True:
@@ -222,23 +300,28 @@ def main() -> int:
                 lines.extend(line.get("text", "") for line in new)
 
                 text = "\n".join(lines)
-                if args.peer and not peer_done and READY_ANCHOR in text:
-                    peer_done = True
-                    (out / "peer-ping.log").write_text(
-                        ssh(
-                            "rm -f /tmp/icmp.txt; "
-                            "(sudo -n timeout 8 tcpdump -i eth0 -nn icmp > /tmp/icmp.txt 2>&1 &); "
-                            "sleep 0.4; "
-                            f"ping -c 10 -i 0.2 -W 1 {BOARD_IP}; "
-                            "sleep 0.6; "
-                            "echo '--- icmp on the wire ---'; cat /tmp/icmp.txt",
-                            timeout=40,
+                if args.peer:
+                    pending = None
+                    for match in PHASE_RE.finditer(text):
+                        number = int(match.group(1))
+                        name = match.group(2)
+                        if name in fired:
+                            continue
+                        fired.add(name)
+                        action = PEER_ACTIONS.get(name)
+                        if action is None:
+                            continue
+                        pending = (number, name, action)
+                        break
+                    if pending is not None:
+                        number, name, action = pending
+                        if not ping_done:
+                            ping_done = True
+                            (out / "peer-ping.log").write_text(peer_ping() + "\n")
+                        (out / f"peer-{number}-{name}.log").write_text(action() + "\n")
+                        (out / "peer.log").write_text(
+                            "peer phases fired: " + " ".join(sorted(fired)) + "\n"
                         )
-                    )
-                    (out / "peer-iperf-down.log").write_text(
-                        ssh(f"iperf -c {BOARD_IP} -p 5001 -t 10", timeout=60)
-                    )
-                    (out / "peer.log").write_text("peer steps done\n")
 
                 if final_seen is None and FINAL_ANCHOR in text:
                     final_seen = time.time()
