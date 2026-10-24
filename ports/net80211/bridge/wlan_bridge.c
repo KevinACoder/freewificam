@@ -180,6 +180,21 @@ static struct {
 	int rx_data_logged;	/* ... and the receive-side one */
 	uint8_t bssid_last[6];	/* the join target the filter must match */
 	int bssid_last_set;
+	int beacon_info_sent;	/* BSS_CHANGED_BEACON_INFO sent for this join */
+	/*
+	 * The last timing bytes heard from each BSS (beacon or probe response):
+	 * the scan-time half of the TBTT anchor, which the join seeds the driver
+	 * from (mac80211 caches bss->device_ts_beacon the same way).
+	 */
+	struct {
+		uint8_t bssid[6];
+		uint64_t tsf;
+		uint32_t device_ts;
+		uint8_t dtim_count;
+		int used;
+	} beacon_cache[32];
+	unsigned int beacon_cache_next;
+	uint32_t last_beacon_dev_ts;	/* device clock of the last parsed beacon */
 	unsigned int tx_completes;
 } bridge;
 
@@ -796,6 +811,7 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 		 * seam's leave path documents).
 		 */
 		bridge.bssid_last_set = 0;
+		bridge.beacon_info_sent = 0;
 		(void)bridge.ops->bssid(bridge.drv, NULL, 0, 0);
 	}
 	rc = bridge_orig_newstate(ic, nstate, arg);
@@ -1030,6 +1046,144 @@ bridge_chan_for_freq(struct ieee80211com *ic, uint32_t freq)
 }
 
 /*
+ * The TBTT anchor the driver uploads with its MAC context. mac80211 keeps three
+ * values for it (IEEE80211_HW_TIMING_BEACON_ONLY): the AP's TSF from the
+ * beacon's timestamp field, the device clock at that reception, and the TIM
+ * element's DTIM countdown. mvm assembles them into dtim_tsf/dtim_time/
+ * assoc_beacon_arrive_time (mvm/mac-ctxt.c iwl_mvm_set_fw_dtim_tbtt); with all
+ * three zero the firmware has no anchor and reports every beacon as missed,
+ * which is the flood this port measured on the board.
+ *
+ * The values are refreshed on every beacon from the join target, but the notify
+ * goes out once per association, on the first one - mac80211's
+ * `if (!link->u.mgd.have_beacon)` branch (net/mac80211/mlme.c:8368), which is
+ * also what keeps a driver from rebuilding its MAC context ten times a second.
+ */
+/*
+ * The timing bytes of a beacon/probe response: the AP's TSF at transmission
+ * and, when present, the TIM element's DTIM countdown.
+ */
+static int
+bridge_beacon_timing(const uint8_t *frame, size_t len, uint64_t *tsf,
+    uint8_t *dtim_count)
+{
+	size_t off;
+
+	*tsf = 0;
+	*dtim_count = 0;
+	/* header (24) + timestamp/intervals/capability (12) */
+	if (len < 36)
+		return -1;
+	*tsf = (uint64_t)frame[24] | ((uint64_t)frame[25] << 8) |
+	    ((uint64_t)frame[26] << 16) | ((uint64_t)frame[27] << 24) |
+	    ((uint64_t)frame[28] << 32) | ((uint64_t)frame[29] << 40) |
+	    ((uint64_t)frame[30] << 48) | ((uint64_t)frame[31] << 56);
+	/* the TIM element (id 5) carries the countdown in its third byte */
+	for (off = 36; off + 2 <= len; ) {
+		uint8_t id = frame[off];
+		uint8_t elen = frame[off + 1];
+
+		if (off + 2 + elen > len)
+			break;
+		if (id == 5 && elen >= 4) {
+			*dtim_count = frame[off + 2];
+			break;
+		}
+		if (id == 0)
+			break;
+		off += 2 + elen;
+	}
+	return 0;
+}
+
+/*
+ * The scan-time half of the anchor.  mac80211 keeps the device timestamp of
+ * the beacon each BSS was last heard on (bss->device_ts_beacon) and seeds
+ * bss_conf->sync_* from that cached BSS at ieee80211_prep_connection
+ * (net/mac80211/mlme.c:9716).  This port needs the same cache because the
+ * firmware stops passing beacons to the host once the association completes
+ * (the MAC context clears MAC_FILTER_IN_BEACON and the beacon filter starts
+ * dropping them), so a "wait for the first post-association beacon" would never
+ * fire - measured on the board: no beacon reaches the bridge after RUN, the
+ * MAC context keeps sync_* = 0, and the firmware counts every beacon as missed.
+ */
+#define BRIDGE_BEACON_CACHE 32
+
+static void
+bridge_beacon_cache_put(const uint8_t *bssid, uint64_t tsf, uint32_t device_ts,
+    uint8_t dtim_count)
+{
+	unsigned int i;
+
+	for (i = 0; i < BRIDGE_BEACON_CACHE; i++) {
+		if (bridge.beacon_cache[i].used != 0 &&
+		    memcmp(bridge.beacon_cache[i].bssid, bssid, 6) == 0)
+			break;
+	}
+	if (i == BRIDGE_BEACON_CACHE) {
+		i = bridge.beacon_cache_next;
+		bridge.beacon_cache_next = (bridge.beacon_cache_next + 1) %
+		    BRIDGE_BEACON_CACHE;
+	}
+	bridge.beacon_cache[i].used = 1;
+	memcpy(bridge.beacon_cache[i].bssid, bssid, 6);
+	bridge.beacon_cache[i].tsf = tsf;
+	bridge.beacon_cache[i].device_ts = device_ts;
+	bridge.beacon_cache[i].dtim_count = dtim_count;
+}
+
+static int
+bridge_beacon_cache_get(const uint8_t *bssid, uint64_t *tsf,
+    uint32_t *device_ts, uint8_t *dtim_count)
+{
+	unsigned int i;
+
+	for (i = 0; i < BRIDGE_BEACON_CACHE; i++) {
+		if (bridge.beacon_cache[i].used != 0 &&
+		    memcmp(bridge.beacon_cache[i].bssid, bssid, 6) == 0) {
+			*tsf = bridge.beacon_cache[i].tsf;
+			*device_ts = bridge.beacon_cache[i].device_ts;
+			*dtim_count = bridge.beacon_cache[i].dtim_count;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+/*
+ * The TBTT anchor the driver uploads with its MAC context.  mac80211 keeps
+ * three values for it (IEEE80211_HW_TIMING_BEACON_ONLY): the AP's TSF from the
+ * beacon's timestamp field, the device clock at that reception, and the TIM
+ * element's DTIM countdown.  mvm assembles them into dtim_tsf / dtim_time /
+ * assoc_beacon_arrive_time (mvm/mac-ctxt.c iwl_mvm_set_fw_dtim_tbtt); with all
+ * three zero the firmware has no anchor and reports every beacon as missed,
+ * which is the flood this port measured on the board.
+ *
+ * A beacon from the join target refreshes the values; the notify goes out once
+ * per association - mac80211's `if (!link->u.mgd.have_beacon)` branch
+ * (net/mac80211/mlme.c:8368), which also keeps a driver from rebuilding its
+ * MAC context ten times a second.
+ */
+static void
+bridge_beacon_sync(const uint8_t *frame, size_t len, uint32_t device_ts)
+{
+	uint64_t tsf;
+	uint8_t dtim_count = 0;
+	int notify;
+
+	if (bridge.ops == NULL || bridge.ops->beacon_sync == NULL)
+		return;
+	if (bridge_beacon_timing(frame, len, &tsf, &dtim_count) != 0)
+		return;
+	notify = bridge.ic != NULL && bridge.ic->ic_state == IEEE80211_S_RUN &&
+	    !bridge.beacon_info_sent;
+	if (notify)
+		bridge.beacon_info_sent = 1;
+	(void)bridge.ops->beacon_sync(bridge.drv, frame + 16, tsf, device_ts,
+	    dtim_count, notify);
+}
+
+/*
  * Receive: the driver's frames reach the stack. The frame arrives without FCS;
  * the bridge copies it into the stack's own buffer, so the caller keeps its
  * buffer. The node reference find_rxnode returns is released after input, as
@@ -1037,7 +1191,7 @@ bridge_chan_for_freq(struct ieee80211com *ic, uint32_t freq)
  */
 int
 wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
-    int hw_dec, uint32_t rx_freq)
+    int hw_dec, uint32_t rx_freq, uint32_t device_ts)
 {
 	struct ieee80211com *ic = bridge.ic;
 	struct ieee80211_node *ni;
@@ -1114,10 +1268,25 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 			bridge.auth_tries = 0;
 		}
 		if (sub == 0x80) {
+			uint64_t btsf;
+			uint8_t bdc = 0;
+
 			bridge.rx_beacon++;
+			/* every beacon's timing goes into the cache: the join
+			 * target may be heard before bssid_last is armed */
+			if (bridge_beacon_timing(frame, len, &btsf, &bdc) == 0) {
+				bridge_beacon_cache_put(frame + 16, btsf,
+				    device_ts, bdc);
+				bridge.last_beacon_dev_ts = device_ts;
+			}
 			if (bridge.bssid_last_set &&
-			    memcmp(&frame[16], bridge.bssid_last, 6) == 0)
+			    memcmp(&frame[16], bridge.bssid_last, 6) == 0) {
 				bridge.rx_beacon_tgt++;
+				/* the TBTT anchor the driver's MAC context needs;
+				 * only the join target's beacons count, and the
+				 * notify fires once per association */
+				bridge_beacon_sync(frame, len, device_ts);
+			}
 			bridge_bss_seen_note(frame);
 			if (bridge.elem_walk_logged < 3) {
 				bridge.elem_walk_logged++;
@@ -1127,7 +1296,16 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 				bridge_ie_report("scan", frame, len);
 			}
 		} else if (sub == 0x50) {
+			uint64_t btsf;
+			uint8_t bdc = 0;
+
 			bridge.rx_probersp++;
+			/* the fallback anchor: mac80211 seeds from the probe
+			 * response with sync_dtim_count = 0 when no beacon IEs
+			 * are cached for the BSS */
+			if (bridge_beacon_timing(frame, len, &btsf, &bdc) == 0)
+				bridge_beacon_cache_put(frame + 16, btsf,
+				    device_ts, 0);
 			bridge_bss_seen_note(frame);
 			if (bridge.rx_probersp < 4)
 				bridge_ie_report("scan", frame, len);
@@ -2023,6 +2201,8 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	ic->ic_des_esslen = (int)len;
 	memset(ic->ic_des_essid, 0, sizeof(ic->ic_des_essid));
 	memcpy(ic->ic_des_essid, ssid, len);
+	/* a new association gets its own one-shot beacon-info notify */
+	bridge.beacon_info_sent = 0;
 	ic->ic_flags &= ~(unsigned int)(IEEE80211_F_WPA1 | IEEE80211_F_WPA2 |
 	    IEEE80211_F_DROPUNENC);
 	if (ie_len != 0) {
@@ -2073,6 +2253,44 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 		ic->ic_bss->ni_authmode = ie_len != 0 ?
 		    IEEE80211_AUTH_8021X : IEEE80211_AUTH_OPEN;
 	}
+	/*
+	 * Seed the TBTT anchor before the state machine uploads the association:
+	 * mac80211 does the same at ieee80211_prep_connection from the cached
+	 * BSS (sync_tsf/sync_device_ts/sync_dtim_count), and mvm turns them into
+	 * the MAC context's dtim_tsf.  Without the seed the firmware gets three
+	 * zeros, has no TBTT phase, and reports every beacon as missed - the
+	 * flood measured on the board.
+	 */
+	if (bridge.ops != NULL && bridge.ops->beacon_sync != NULL) {
+		uint64_t stsf = 0;
+		uint32_t sdev = 0;
+		uint8_t sdc = 0;
+		int have = bridge_beacon_cache_get(ni->ni_bssid, &stsf, &sdev,
+		    &sdc) == 0;
+
+		if (!have && ni->ni_tstamp.tsf != 0) {
+			/* the stack keeps the last beacon's TSF on the node; the
+			 * device half is the newest beacon reception we saw */
+			stsf = ni->ni_tstamp.tsf;
+			sdev = bridge.last_beacon_dev_ts;
+			sdc = 0;
+			have = 1;
+			wlan_osal_log("wlan: tbtt seed from node tsf=%llu "
+			    "dev_ts=%u\n", (unsigned long long)stsf, sdev);
+		}
+		if (have) {
+			(void)bridge.ops->beacon_sync(bridge.drv,
+			    ni->ni_bssid, stsf, sdev, sdc, 0);
+			wlan_osal_log("wlan: tbtt seed tsf=%llu dev_ts=%u "
+			    "dtim_count=%u\n", (unsigned long long)stsf,
+			    sdev, sdc);
+		} else {
+			wlan_osal_log("wlan: tbtt seed: no beacon timing for "
+			    "%02x:%02x:%02x:%02x:%02x:%02x\n",
+			    ni->ni_bssid[0], ni->ni_bssid[1], ni->ni_bssid[2],
+			    ni->ni_bssid[3], ni->ni_bssid[4], ni->ni_bssid[5]);
+		}
+	}
 
 	/*
 	 * sta_join stays inside the serializer: its new_state(S_AUTH) retunes
@@ -2109,16 +2327,6 @@ wlan_bridge_disconnect(int reason)
 	wlan_port_serializer_unlock();
 }
 
-/*
- * Pull one scan-table row. The iterator runs inside the serializer; the IE
- * buffer is file-scope because the caller consumes the assembled bytes after
- * the lock is released (a stack-frame buffer would be read as garbage - a
- * failure this line measured once).
- */
-static struct {
-	uint8_t iebuf[320];
-} bridge_fetch;
-
 struct bridge_fetch_ctx {
 	int idx;
 	int found;
@@ -2130,7 +2338,13 @@ bridge_fetch_node(void *arg, struct ieee80211_node *ni)
 {
 	struct bridge_fetch_ctx *fc = arg;
 	struct wlan_bridge_scan_res *o = fc->out;
-	uint8_t *ie = bridge_fetch.iebuf;
+	/*
+	 * The bytes are copied into the CALLER's structure: the caller encodes
+	 * them after this function returns and the serializer has been
+	 * released, so a pointer into the node (or into a file-scope buffer
+	 * that a second fetch would overwrite) is not safe to hand out.
+	 */
+	uint8_t *ie = o->ie_store;
 
 	/* the iterator walks the whole table: once the wanted row is copied,
 	 * later nodes must not overwrite it */
@@ -2163,16 +2377,14 @@ bridge_fetch_node(void *arg, struct ieee80211_node *ni)
 	if (ni->ni_wpa_ie != NULL) {
 		size_t n = 2 + ni->ni_wpa_ie[1];
 
-		if ((size_t)(ie - bridge_fetch.iebuf) + n >
-		    sizeof(bridge_fetch.iebuf)) {
-			n = sizeof(bridge_fetch.iebuf) -
-			    (size_t)(ie - bridge_fetch.iebuf);
+		if ((size_t)(ie - o->ie_store) + n > sizeof(o->ie_store)) {
+			n = sizeof(o->ie_store) - (size_t)(ie - o->ie_store);
 		}
 		memcpy(ie, ni->ni_wpa_ie, n);
 		ie += n;
 	}
-	o->ies = bridge_fetch.iebuf;
-	o->ies_len = (size_t)(ie - bridge_fetch.iebuf);
+	o->ies = o->ie_store;
+	o->ies_len = (size_t)(ie - o->ie_store);
 }
 
 int

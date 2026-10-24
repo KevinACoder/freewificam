@@ -961,7 +961,8 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 	    rs != NULL ? (int)rs->signal : 0,
 	    rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0,
 	    rs != NULL && (rs->flag & RX_FLAG_DECRYPTED) != 0,
-	    rs != NULL ? rs->freq : 0);
+	    rs != NULL ? rs->freq : 0,
+	    rs != NULL ? rs->device_timestamp : 0);
 }
 
 static void

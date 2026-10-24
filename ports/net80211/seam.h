@@ -163,6 +163,26 @@ struct wlan_seam_drv_ops {
 	 * leaving). NULL clears it. */
 	int (*bssid)(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	    uint16_t beacon_int, uint8_t dtim_period);
+
+	/*
+	 * Beacon timing for the driver's TBTT bookkeeping.  mac80211 updates
+	 * these three values on every beacon (it sets
+	 * IEEE80211_HW_TIMING_BEACON_ONLY, which mvm relies on) and notifies
+	 * BSS_CHANGED_BEACON_INFO for the first beacon after the association;
+	 * mvm turns them into the MAC context's dtim_tsf / dtim_time /
+	 * assoc_beacon_arrive_time (mvm/mac-ctxt.c iwl_mvm_set_fw_dtim_tbtt).
+	 * Without them the firmware has no TBTT anchor and counts every beacon
+	 * as missed.
+	 *
+	 * `tsf` is the beacon's own timestamp field (the AP's TSF at
+	 * transmission), `device_ts` the device clock at reception, and
+	 * `dtim_count` the TIM element's countdown.  `notify` is non-zero only
+	 * on the first beacon of an association, the one that makes the driver
+	 * re-send its MAC context.  Optional: a port whose driver keeps no
+	 * such bookkeeping leaves it NULL.
+	 */
+	int (*beacon_sync)(struct wlan_seam_drv *drv, const uint8_t bssid[6],
+	    uint64_t tsf, uint32_t device_ts, uint8_t dtim_count, int notify);
 };
 
 #endif /* _WLAN_NET80211_SEAM_H_ */

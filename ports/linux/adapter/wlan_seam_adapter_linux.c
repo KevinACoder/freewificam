@@ -926,16 +926,24 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 			}
 			/*
 			 * The association notify: mac80211 sends this mask once
-			 * the peer is in ASSOC (util.c:2138).  ASSOC is what
-			 * makes mvm reset the beacon counters, add the
-			 * interface's quota and stop the session protection;
-			 * BEACON_INFO is what it uses to cancel that protection
-			 * when the first beacon arrives.  Without the mask the
-			 * firmware keeps counting missed beacons from the scan.
+			 * the peer is in ASSOC (net/mac80211/util.c:2138), and
+			 * it adds BSS_CHANGED_BEACON_INFO *only when a beacon
+			 * was already heard* (util.c:2143).  The difference is
+			 * load-bearing on this driver: BEACON_INFO makes mvm
+			 * enable the firmware's beacon filter
+			 * (mvm/mac80211.c:2679), and an enabled filter stops
+			 * passing beacons to the host - so sending it at
+			 * association means the first beacon never arrives, the
+			 * TBTT anchor stays at the scan value, and the firmware
+			 * reports every beacon as missed (the flood this port
+			 * measured).  The port therefore sends the same mask
+			 * mac80211 sends (without BEACON_INFO) and lets the
+			 * first real beacon produce that notify through the
+			 * bridge's beacon_sync.
 			 */
 			wlan_bss_changed(w, BSS_CHANGED_ASSOC |
 			    BSS_CHANGED_ARP_FILTER | BSS_CHANGED_PS |
-			    BSS_CHANGED_BEACON_INFO | BSS_CHANGED_IDLE);
+			    BSS_CHANGED_IDLE);
 			w->sta_joined = 1;
 		}
 		/*
@@ -1035,6 +1043,13 @@ static int seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	vif->bss_conf.bssid = w->bssid;
 	vif->bss_conf.beacon_int = beacon_int;
 	vif->bss_conf.dtim_period = dtim_period != 0 ? dtim_period : 1;
+	/* the two numbers mvm's MAC context copies into bi/dtim_interval, and
+	 * the listen interval it copies from the running config - logged
+	 * together because a zero in any of them shows up as "every beacon is
+	 * missed" rather than as a command failure */
+	pr_info("wlan: bssid %pM beacon_int=%u dtim=%u listen=%u\n", w->bssid,
+	    vif->bss_conf.beacon_int, vif->bss_conf.dtim_period,
+	    w->hw.conf.listen_interval);
 	/*
 	 * The channel context first, then the peer: mac80211 reserves the
 	 * connection's channel before it uploads the AP's station, and a driver
@@ -1070,6 +1085,36 @@ static int seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	return 0;
 }
 
+/*
+ * The TBTT anchor, as mac80211 keeps it for a driver with
+ * IEEE80211_HW_TIMING_BEACON_ONLY (which mvm sets): the AP's beacon timestamp,
+ * the device clock at that reception, and the TIM countdown.  mvm folds the
+ * three into the MAC context (iwl_mvm_set_fw_dtim_tbtt); all-zero leaves the
+ * firmware without a TBTT and it reports every beacon as missed.  The notify
+ * is the first beacon of the association only - mac80211's have_beacon branch -
+ * and it is what makes the driver rebuild that context.
+ */
+static int seam_beacon_sync(struct wlan_seam_drv *drv, const uint8_t bssid[6],
+    uint64_t tsf, uint32_t device_ts, uint8_t dtim_count, int notify)
+{
+	struct wlan_linux_hw *w = ctx_hw(drv);
+	struct ieee80211_vif *vif = w->vif;
+
+	(void)bssid;
+	if (vif == NULL) {
+		return -EINVAL;
+	}
+	vif->bss_conf.sync_tsf = tsf;
+	vif->bss_conf.sync_device_ts = device_ts;
+	vif->bss_conf.sync_dtim_count = dtim_count;
+	if (notify) {
+		pr_info("wlan: beacon sync tsf=%llu dev_ts=%u dtim_count=%u\n",
+		    (unsigned long long)tsf, device_ts, dtim_count);
+		wlan_bss_changed(w, BSS_CHANGED_BEACON_INFO);
+	}
+	return 0;
+}
+
 const struct wlan_seam_drv_ops wlan_seam_ops = {
 	.start = seam_start,
 	.stop = seam_stop,
@@ -1086,6 +1131,7 @@ const struct wlan_seam_drv_ops wlan_seam_ops = {
 	.clear_key = seam_clear_key,
 	.bss_info = seam_bss_info,
 	.bssid = seam_bssid,
+	.beacon_sync = seam_beacon_sync,
 };
 
 int wlan_adapter_attach(struct ieee80211_hw *hw)
@@ -1213,8 +1259,12 @@ void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	int hw_dec = (status->flag & RX_FLAG_DECRYPTED) != 0;
 
 	wlan_rx_freq_correct(skb, status);
+	/* the device clock travels with the frame: the TBTT anchor pairs the
+	 * AP's beacon timestamp with the device time of that same reception
+	 * (mac80211's sync_device_ts <- bss->device_ts_beacon, which iwlwifi
+	 * fills from phy_info->system_timestamp in mvm/rx.c) */
 	wlan_bridge_input(skb->data, skb->len, status->signal, fcs_bad, hw_dec,
-	    status->freq);
+	    status->freq, status->device_timestamp);
 	dev_kfree_skb_any(skb);
 }
 

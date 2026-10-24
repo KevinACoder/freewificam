@@ -213,9 +213,15 @@ void	wlan_bridge_detach(void);
  * a dwell may have moved the current channel before the frame is processed, so
  * the frame's own channel has to travel with it or every frame delivered across
  * a channel change is discarded as off-channel and the scan table stays empty.
+ *
+ * `device_ts` is the device's own clock at reception (microseconds; 0 when the
+ * driver reports none).  It travels with the frame because the TBTT anchor a
+ * driver uploads with its MAC context pairs the AP's beacon timestamp with the
+ * device clock of that same reception (mac80211's bss->device_ts_beacon ->
+ * bss_conf->sync_device_ts; iwlwifi's phy_info->system_timestamp).
  */
 int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi,
-	    int fcs_bad, int hw_dec, uint32_t rx_freq);
+	    int fcs_bad, int hw_dec, uint32_t rx_freq, uint32_t device_ts);
 
 /* A transmitted frame completed (the driver half's tx-status callback). */
 void	wlan_bridge_tx_complete(void);
@@ -297,7 +303,18 @@ struct wlan_bridge_scan_res {
 	uint16_t beacon_int;
 	uint16_t caps;			/* 802.11 capability info */
 	int	level;			/* RSSI, driver units */
-	const uint8_t *ies;		/* borrowed until the next fetch */
+	/*
+	 * The elements are COPIED into the caller's own structure, not borrowed
+	 * from the node: the fetch releases the port serializer before it
+	 * returns, and a scan that completes or restarts frees the nodes the
+	 * pointers would have named.  Measured on the board: reading the
+	 * borrowed view while the table churned produced an event stream whose
+	 * first entry carried a garbage length - iwlist still coped, the
+	 * supplicant parsed the whole buffer as one BSS ("1 BSSes" out of
+	 * 4470 bytes) and then never found the WPA2 network.
+	 */
+	uint8_t	ie_store[512];
+	const uint8_t *ies;		/* == ie_store (kept for the readers) */
 	size_t	ies_len;
 };
 int	wlan_bridge_scan_fetch(int idx, struct wlan_bridge_scan_res *out);

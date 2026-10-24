@@ -102,6 +102,18 @@ struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
 	w->wdev.iftype = NL80211_IFTYPE_STATION;
 	w->hw.priv = (void *)(w + 1);
 	w->hw.queues = 4;
+	/*
+	 * mac80211's listen-interval defaults (net/mac80211/main.c:1537): a
+	 * driver that declares no maximum gets 5, and the running config starts
+	 * at that maximum.  mvm copies hw->conf.listen_interval straight into
+	 * the MAC context's listen_interval (mvm/mac-ctxt.c cmd_sta), and zero
+	 * there leaves the firmware's beacon tracker with no listen schedule:
+	 * it counts every beacon as missed while data still flows - the
+	 * missed-beacons flood measured on the board.
+	 */
+	if (w->hw.max_listen_interval == 0)
+		w->hw.max_listen_interval = 5;
+	w->hw.conf.listen_interval = w->hw.max_listen_interval;
 	*(struct ieee80211_hw **)wiphy_priv(wiphy) = &w->hw;
 	wlan_single_hw = &w->hw;
 	skb_queue_head_init(&w->rx_q);
