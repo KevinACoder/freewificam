@@ -46,13 +46,15 @@ def collect(paths: list[Path]) -> dict[str, list[dict]]:
             us = int(match.group("us"))
             if xfers <= 0 or us <= 0:
                 continue
+            total = int(match.group("bytes"))   # the line carries the window total
             points[match.group("dir")][kib] = {
                 "chunk_kib": kib,
                 "xfers": xfers,
                 "bytes": int(match.group("bytes")),
                 "us": us,
                 "per_cmd_us": us / xfers,
-                "rate_kibs": (int(match.group("bytes")) * xfers) / us * 1000.0,
+                "rate_kibs": total * 1e6 / us / 1024.0,
+                "rate_mibs": total * 1e6 / us / (1024.0 * 1024.0),
             }
     return {key: [row for _, row in sorted(value.items())] for key, value in points.items()}
 
@@ -61,8 +63,8 @@ def fit(rows: list[dict]) -> dict | None:
     """Least squares of 1/rate (us per byte) against 1/size (per byte)."""
     if len(rows) < 3:
         return None
-    xs = [1.0 / (row["chunk_kib"] * 1024.0) for row in rows]
-    ys = [1.0 / (row["rate_kibs"] * 1024.0) * 1e6 for row in rows]  # us per byte
+    xs = [1.0 / (row["chunk_kib"] * 1024.0) for row in rows]	# per byte
+    ys = [row["us"] / row["bytes"] for row in rows]			# us per byte
     n = len(xs)
     mean_x = sum(xs) / n
     mean_y = sum(ys) / n
@@ -77,7 +79,7 @@ def fit(rows: list[dict]) -> dict | None:
     r2 = 1.0 - ss_res / ss_tot if ss_tot else 1.0
     return {
         "fixed_cost_us": slope,
-        "bandwidth_mibs": 1e6 / intercept / (1024.0 * 1024.0) if intercept else math.inf,
+        "bandwidth_mibs": (1.0 / intercept) * 1e6 / (1024.0 * 1024.0) if intercept else math.inf,
         "r2": r2,
         "points": n,
     }
@@ -105,7 +107,7 @@ def main() -> int:
             print(
                 f"{row['chunk_kib']:>7} K {row['xfers']:>6} "
                 f"{row['per_cmd_us']:>9.1f} {row['rate_kibs']:>9.0f} "
-                f"{row['rate_kibs'] / 1024.0:>7.2f}"
+                f"{row['rate_mibs']:>7.2f}"
             )
         if result:
             print(

@@ -166,15 +166,26 @@ def peer_ping() -> str:
     )
 
 
-def peer_tcp_down(seconds: int, window_kib: int = 0) -> str:
+def peer_tcp_down(seconds: int, window_kib: int = 0, streams: int = 1) -> str:
     window = f"-w {window_kib}K " if window_kib else ""
-    return ssh(f"iperf -c {BOARD_IP} -p 5001 {window}-t {seconds}", timeout=seconds + 40)
+    parallel = f"-P {streams} " if streams > 1 else ""
+    return ssh(
+        f"iperf -c {BOARD_IP} -p 5001 {window}{parallel}-t {seconds}",
+        timeout=seconds + 40,
+    )
 
 
-def peer_udp_down(seconds: int) -> str:
+def peer_udp_down(seconds: int, streams: int = 1, window: str = "4M") -> str:
     # The board counts on its own sink (port 5002); iperf2's client report is
-    # the second witness for the same window - offered vs received.
-    return ssh(f"iperf -c {BOARD_IP} -p 5002 -u -b 900M -t {seconds}", timeout=seconds + 40)
+    # the second witness for the same window - offered vs received.  The large
+    # socket window and the stream count exist because a single iperf2 UDP
+    # stream on the peer tops out near 8.3k datagrams/s whatever -b asks for,
+    # which is indistinguishable from a receive wall without them.
+    return ssh(
+        f"iperf -c {BOARD_IP} -p 5002 -u -b 900M -w {window} -P {streams} "
+        f"-i 1 -t {seconds}",
+        timeout=seconds + 60,
+    )
 
 
 def peer_udp_up(seconds: int) -> str:
@@ -199,9 +210,9 @@ PEER_ACTIONS = {
     "loopback": None,           # board-local: no wire traffic at all
     "down": lambda: peer_tcp_down(10),
     "tcpdn16k": lambda: peer_tcp_down(10),
-    "tcpdn256k": lambda: peer_tcp_down(15, 256),
-    "udpdn": lambda: peer_udp_down(15),
-    "udpdn2": lambda: peer_udp_down(15),
+    "tcpdn256k": lambda: peer_tcp_down(15, 1024, streams=2),
+    "udpdn": lambda: peer_udp_down(15, streams=1),
+    "udpdn2": lambda: peer_udp_down(15, streams=4),
     "up": None,                 # the board initiates; its server is already up
     "tcpup": None,
     "udpup": lambda: peer_udp_up(14),

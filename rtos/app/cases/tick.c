@@ -18,6 +18,22 @@
 #define LADDER_BEATS		3u
 #define LADDER_TOLERANCE_MS	20
 
+/* Platform capacity (throughput rounds). Every rate this platform reports is a
+ * per-frame cost divided by a clock, and a ceiling is only interpretable next to
+ * what one core does on this boot. Two shapes, both on a 32 KiB buffer that
+ * stays in L1/L2, so the result is the core's byte rate and not memory
+ * bandwidth:
+ *   copy  - memcpy() source to destination;
+ *   fill  - memset() over the same buffer.
+ * 8 MiB per shape keeps the window in the milliseconds, which the microsecond
+ * clock resolves well. The figure is published as KiB/s and is compared across
+ * boots (the same image class), never against another platform. */
+#define TICK_CPU_BUF		32768u
+#define TICK_CPU_ROUNDS		256u
+
+static uint8_t tick_cpu_src[TICK_CPU_BUF] __attribute__((aligned(64)));
+static uint8_t tick_cpu_dst[TICK_CPU_BUF] __attribute__((aligned(64)));
+
 static volatile uint32_t tick_lo_beats;
 
 static void tick_lo(void *arg)
@@ -107,6 +123,44 @@ int case_tick_run(void)
 		CASE_ANCHOR("tick: FAIL lo thread beats=%u\n",
 			    (unsigned)tick_lo_beats);
 		ok = 0;
+	}
+
+	/* Platform capacity: what one core moves per second on this boot. A
+	 * network ceiling quoted without it cannot be attributed between the CPU
+	 * and the stack. */
+	{
+		uint64_t t0us;
+		uint64_t us;
+		unsigned r;
+
+		(void)memset(tick_cpu_src, 0xa5, sizeof(tick_cpu_src));
+		t0us = rtos_clock_us();
+		for (r = 0u; r < TICK_CPU_ROUNDS; r++) {
+			(void)memcpy(tick_cpu_dst, tick_cpu_src,
+				     sizeof(tick_cpu_src));
+		}
+		us = rtos_clock_us() - t0us;
+		CASE_ANCHOR("tick: cpu copy_kib_s=%lu bytes=%lu us=%lu\n",
+			    (unsigned long)((us != 0u) ?
+				(((uint64_t)TICK_CPU_BUF * TICK_CPU_ROUNDS *
+				  1000u) / us) : 0u),
+			    (unsigned long)((uint64_t)TICK_CPU_BUF *
+					    TICK_CPU_ROUNDS),
+			    (unsigned long)us);
+
+		t0us = rtos_clock_us();
+		for (r = 0u; r < TICK_CPU_ROUNDS; r++) {
+			(void)memset(tick_cpu_dst, (int)(r & 0xffu),
+				     sizeof(tick_cpu_dst));
+		}
+		us = rtos_clock_us() - t0us;
+		CASE_ANCHOR("tick: cpu fill_kib_s=%lu bytes=%lu us=%lu\n",
+			    (unsigned long)((us != 0u) ?
+				(((uint64_t)TICK_CPU_BUF * TICK_CPU_ROUNDS *
+				  1000u) / us) : 0u),
+			    (unsigned long)((uint64_t)TICK_CPU_BUF *
+					    TICK_CPU_ROUNDS),
+			    (unsigned long)us);
 	}
 
 	CASE_ANCHOR("tick: %s\n", ok ? "PASS" : "FAIL");

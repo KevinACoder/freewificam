@@ -323,6 +323,8 @@ struct net_snap {
 	uint64_t shape_dup;
 	uint64_t ovf;
 	uint64_t crc;
+	uint64_t mac_pkts;
+	uint64_t mac_octets;
 	uint64_t csum_drop;
 	uint64_t csum_frames;
 	uint64_t tx_waits;
@@ -386,6 +388,8 @@ static void net_snap_take(struct net_snap *s)
 	s->shape_dup = rx.ack_dup;
 	s->ovf = mmc.rx_fifo_overflow;
 	s->crc = mmc.rx_crc_error;
+	s->mac_pkts = mmc.rx_pkts_gb;
+	s->mac_octets = mmc.rx_octets_gb;
 	s->csum_drop = stats.rx_csum_drops;
 	s->csum_frames = stats.tx_csum_frames;
 	s->tx_waits = diag.tx_waits;
@@ -441,6 +445,15 @@ static void net_census_report(const char *tag, const struct net_snap *a,
 		    (unsigned long)(b->gap_samples - a->gap_samples),
 		    (unsigned long)(b->gap_fast - a->gap_fast),
 		    (unsigned long)(b->gap_slow - a->gap_slow));
+
+	/* The MAC's own view: how many frames the wire actually handed it, next to
+	 * how many the ring delivered. A gap between the two is a drop inside the
+	 * MAC (its FIFO overflowed); no gap means the traffic never arrived and the
+	 * ceiling upstream of this port is someone else's. */
+	CASE_ANCHOR("net: census %s mac_pkts=%lu mac_octets=%lu\n",
+		    tag,
+		    (unsigned long)(b->mac_pkts - a->mac_pkts),
+		    (unsigned long)(b->mac_octets - a->mac_octets));
 }
 
 /* --- ping ------------------------------------------------------------------- */

@@ -79,9 +79,25 @@
  * the 1us tick counter and the MDIO divider (see DWC_EQOS_MDIO_CR). */
 #define DWC_EQOS_PCLK_HZ	100000000u
 
-/* Programmable burst lengths, as in the verified configuration. */
+/* Programmable burst lengths, as in the verified configuration. With PBLx8
+ * programmed (eqos_hw_start) the field means bursts of PBL * 8 beats, so the
+ * receive side moves 256 bytes per burst and the transmit side 1024. The two
+ * sides are not symmetric here, and the receive one is the only register
+ * difference from the kernel driver on this board (whose register dump carries
+ * 32/32) - so the receive value is a build lever for the throughput round:
+ *   LEVERS=-DCONFIG_GMAC_RXPBL=32
+ * A burst costs a fixed arbitration/FIFO turnaround, so a 1600-byte frame's
+ * burst count is what a rate is divided by. */
+#ifndef CONFIG_GMAC_TXPBL
 #define DWC_EQOS_TXPBL		32u
+#else
+#define DWC_EQOS_TXPBL		((uint32_t)CONFIG_GMAC_TXPBL)
+#endif
+#ifndef CONFIG_GMAC_RXPBL
 #define DWC_EQOS_RXPBL		8u
+#else
+#define DWC_EQOS_RXPBL		((uint32_t)CONFIG_GMAC_RXPBL)
+#endif
 
 /* How long SendFrame waits for a descriptor before reporting busy. At line
  * rate a full 64-slot ring drains in under a millisecond, so a couple of
