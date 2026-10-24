@@ -211,8 +211,11 @@ PEER_ACTIONS = {
     "down": lambda: peer_tcp_down(10),
     "tcpdn16k": lambda: peer_tcp_down(10),
     "tcpdn256k": lambda: peer_tcp_down(15, 1024, streams=2),
-    "udpdn": lambda: peer_udp_down(15, streams=1),
-    "udpdn2": lambda: peer_udp_down(15, streams=4),
+    # The board's UDP phase window is 20 s and it counts over the whole window, so
+    # the peer has to fill it: a 15 s burst read against 20 s understates the rate
+    # by 1.33x (caught in the 2026-10-25 round, b12).
+    "udpdn": lambda: peer_udp_down(20, streams=1),
+    "udpdn2": lambda: peer_udp_down(20, streams=4),
     "up": None,                 # the board initiates; its server is already up
     "tcpup": None,
     "udpup": lambda: peer_udp_up(14),

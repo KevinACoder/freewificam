@@ -65,10 +65,9 @@
 #define MEM_ALIGNMENT                   8
 /* 448 buffers: the RX ring depth (128) plus an in-flight TCP burst must fit
  * without pool exhaustion - a 40-deep pool dropped 13.5% of ACKs in the
- * earlier gigabit baseline. Raised from 256 with the 512 KB window below,
- * because the pool has to be able to hold a whole window of received data
- * (512 KB / 1600 = 328 buffers) on top of the ring and the burst: a pool that
- * cannot hold the window makes the stack advertise one it cannot back. */
+ * earlier gigabit baseline - and the pool must be able to hold a whole
+ * advertised window (128 KB / 1600 = 82 buffers) on top of the ring and the
+ * burst, or the stack advertises a window it cannot back. */
 #define PBUF_POOL_SIZE                  448
 /* One full 1518-byte frame plus headroom in a single pool buffer, so a
  * maximum-frame receive never needs a chain. */
@@ -152,49 +151,43 @@
 
 #if LWIP_PERF_TIER
 #define TCP_MSS                         1460
-/* Window scaling: announced window = TCP_WND >> TCP_RCV_SCALE = 32768,
- * which fits the 16-bit header field; the receive window itself is 512 KB.
- * The scale moved from 3 to 4 with the window, so the announced field stays
- * at 32768: lwIP refuses a TCP_WND above 0xFFFF << TCP_RCV_SCALE, and 512 KB
- * is just past what scale 3 allows (524280).
+/* Window and send buffer: 128 KB, not 512 KB, and the number is measured
+ * twice over.
  *
- * The window is sized against the RTT measured while the link is loaded, not
- * the idle one. The loaded RTT is ~70-100 ms (the sender's smoothed round trip
- * and the ping running alongside a bulk window agree), because the card holds
- * received frames to aggregate them, and at that RTT a 256 KB window caps a
- * single stream at ~20 Mbit/s - which is where the port sat: a UDP blast
- * reached 63 Mbit/s on the same boot and channel while TCP held 18.4, so the
- * ceiling was the window and not the receive path. 512 KB puts the same
- * arithmetic at ~40-58 Mbit/s, above the target. */
+ * The 512 KB values this file used to carry were sized against a loaded-path
+ * RTT and they are wrong for this port in both directions:
+ *  - RECEIVE: 512 KB of advertised window is 358 frames against a 128-slot RX
+ *    ring, so the peer's whole window can burst past what the DMA can hold and
+ *    the MAC's FIFO overflows (2026-10-25: 422k drops in one 20 s UDP-ish
+ *    window; the wired line on this same board measured the same pathology);
+ *    128 KB is 90 frames, which fits the ring.
+ *  - SEND: the earlier wired line measured 512 KB -> 128 KB as its single
+ *    largest arm: uplink 381 -> 726 Mbit/s (+90%, peer-witnessed 724/720). This
+ *    port reproduced it: 342 -> 632 Mbit/s in one boot, and the board-local
+ *    loopback went 176 -> 546 Mbit/s in the same change, which is what a send
+ *    window that is too large does to a single-threaded TCP/IP stack.
+ * Both are #ifndef-guarded so a build lever can still move them.
+ */
 #define LWIP_WND_SCALE                  1
 #define TCP_RCV_SCALE                   4
-/* Guarded so a WND= make lever can win: the receive window must be sized
- * against the RECEIVE RING, not only the RTT - a window larger than the
- * driver's ring depth lets the peer put more frames in flight than the
- * DMA can hold, and the ring then overflows at the MAC (wire-measured
- * 2026-10-19: 512 KB = 358 frames against a 128-slot ring, MMC FIFO
- * overflow 2.1k, retransmit-filled holes, downlink collapsed to 30-90
- * Mbit/s once the ACK stream stopped pacing the peer). */
 #ifndef TCP_WND
-#define TCP_WND                         524288
+#define TCP_WND                         131072
 #endif
-/* Guarded so the SNDBUF= make lever can win (the queue-walk experiment);
- * unset = the converged default. TCP_SND_QUEUELEN's floor is
- * 4 * TCP_SND_BUF / TCP_MSS. */
 #ifndef TCP_SND_BUF
-#define TCP_SND_BUF                     524288
+#define TCP_SND_BUF                     131072
 #endif
-/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 1436 at the default size. */
+/* Floor is 4 * TCP_SND_BUF / TCP_MSS = 359 at this size; 1536 keeps a whole
+ * window of segments queueable with room for the retransmit list. */
 #ifndef TCP_SND_QUEUELEN
 #define TCP_SND_QUEUELEN                1536
 #endif
-/* The opt.h default (TCP_SND_BUF / 2) trips the u16 guard sanity check;
- * 32 KB keeps the writer awake far from it. */
+/* A quarter of the send buffer: the writer is woken while it still has 96 KB
+ * of room, far from the u16 guard sanity check. */
 #define TCP_SNDLOWAT                    32768
 #define TCP_QUEUE_OOSEQ                 1
 #define MEMP_NUM_TCP_SEG                1536
-/* Matches TCPIP_MBOX_SIZE: an mbox slot without its msg-pool element drops
- * the frame anyway, so sizing only the mbox is dead weight. */
+/* Matches TCPIP_MBOX_SIZE: an mbox slot without its msg-pool element drops the
+ * frame anyway, so sizing only the mbox is dead weight. */
 #define MEMP_NUM_TCPIP_MSG_INPKT        128
 #endif /* LWIP_PERF_TIER */
 

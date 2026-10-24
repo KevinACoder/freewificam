@@ -939,6 +939,44 @@ static int eqos_ring_slot(const struct dwc_eqos_dev *dev, uint32_t addr);
  * probes per sweep measured 101 probes per interrupt and 17.6 us per delivered
  * frame (walkslots/rxwalk, crc 23b5b7f8) - 1.4 s of every wall-clock second at
  * 940 Mbit/s, i.e. the whole gap to the Linux lane. */
+
+#if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
+/*
+ * The IPC block's receive verdict, applied only where it means something.
+ *
+ * The MAC validates the L3/L4 checksum of IP frames, but only for the protocols
+ * it was told about: TCP and UDP carry a pseudo-header and are what this port
+ * asks it to verify, while ICMP has no pseudo-header and the block reports its
+ * payload check as an error. Dropping on that verdict alone cost a whole arm
+ * (2026-10-25: every echo reply died in the driver, ping 0/10, while TCP and UDP
+ * were healthy). So:
+ *   - no RDES1_VALID  -> not an IP frame, pass;
+ *   - IP header error  -> a real error whatever the protocol, drop;
+ *   - payload error, TCP/UDP -> drop (that is the check we asked for);
+ *   - payload error, anything else -> no verdict was taken, pass.
+ * The protocol byte lives in the buffer, so the frame's first cache line has to
+ * be invalidated before it is read; that is one extra op on the error path only.
+ */
+static int eqos_rx_ipc_ok(const struct dwc_eqos_desc *desc, uint32_t d3,
+			  uint8_t *buf)
+{
+	uint8_t proto;
+
+	if ((d3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0u) {
+		return 1;
+	}
+	if ((desc->des1 & DWC_EQOS_RDES1_IP_HDR_ERR) != 0u) {
+		return 0;
+	}
+	if ((desc->des1 & DWC_EQOS_RDES1_IP_PAYLOAD_ERR) == 0u) {
+		return 1;
+	}
+	cache_dcache_invalidate((uintptr_t)buf, 64u);
+	proto = buf[14u + 9u];
+	return ((proto != 6u) && (proto != 17u)) ? 1 : 0;
+}
+#endif
+
 static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 {
 	unsigned int port = dev->plat->index;
@@ -1108,13 +1146,10 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 					dev->stats.rx_errors++;
 				} else if (
 #if defined(CONFIG_GMAC_RX_HWCSUM) && CONFIG_GMAC_RX_HWCSUM
-					   /* IPC verdict first (descriptor reads only - a
-					    * dropped frame costs no cache maintenance).
-					    * RDES1_VALID is set for IP frames only, so
-					    * ARP & friends pass this gate untouched. */
-					   ((d3 & DWC_EQOS_DESC_RX_RDES1_VALID) == 0) ||
-					   ((desc->des1 & (DWC_EQOS_RDES1_IP_HDR_ERR |
-							   DWC_EQOS_RDES1_IP_PAYLOAD_ERR)) == 0)
+					   /* IPC verdict first (descriptor reads plus, on
+					    * the error path only, one cache line for the
+					    * protocol byte). See eqos_rx_ipc_ok. */
+					   eqos_rx_ipc_ok(desc, d3, buf)
 #else
 					   1
 #endif
