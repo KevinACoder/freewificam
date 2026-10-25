@@ -55,20 +55,20 @@ components/net80211/crypto/aes/aes_ct_dec.c
 components/net80211/crypto/aes/aes_ccm.c
 components/net80211/crypto/aes/aes_ccm_mbuf.c
 components/net80211/port/aes_impl_compat.c
-ports/net80211/net/mbuf.c
-ports/net80211/net/ifnet.c
-ports/net80211/osal/cmsis2/osal_cmsis2.c
-ports/net80211/bridge/wlan_bridge.c
+components/net80211/ports/net/mbuf.c
+components/net80211/ports/net/ifnet.c
+components/net80211/ports/osal/cmsis2/osal_cmsis2.c
+components/net80211/ports/bridge/wlan_bridge.c
 "
 # The kernel world: the Linux OS services, the mac80211 substitute, the seam
 # adapter, and the module entry. No BSD headers here.
 LINUX_SRCS="
-ports/linux/osal/cmsis2_linux.c
-ports/linux/osal/osal_memory_linux.c
-ports/linux/osal/osal_abort_linux.c
+tests/board/linux-ko/ports/osal/cmsis2_linux.c
+tests/board/linux-ko/ports/osal/osal_memory_linux.c
+tests/board/linux-ko/ports/osal/osal_abort_linux.c
 "
-for f in "$REPO"/ports/linux/mac80211/*.c "$REPO"/ports/linux/adapter/*.c \
-	 "$REPO"/ports/linux/control/*.c "$REPO"/ports/linux/netdev/*.c; do
+for f in "$REPO"/tests/board/linux-ko/ports/mac80211/*.c "$REPO"/tests/board/linux-ko/ports/adapter/*.c \
+	 "$REPO"/tests/board/linux-ko/ports/control/*.c "$REPO"/tests/board/linux-ko/ports/netdev/*.c; do
 	[ -f "$f" ] && LINUX_SRCS="$LINUX_SRCS
 ${f#$REPO/}"
 done
@@ -90,7 +90,7 @@ FW_SRCS=""
 if [ "$WITH_DRIVER" = 1 ]; then
 	case "$DRIVER" in
 	rtl8xxxu)
-		for f in "$REPO"/third-party/rtl8xxxu/*.c; do
+		for f in "$REPO"/wireless-drivers/rtl8xxxu/*.c; do
 			[ -f "$f" ] && DRIVER_SRCS="$DRIVER_SRCS
 ${f#$REPO/}"
 		done
@@ -101,7 +101,7 @@ ${f#$REPO/}"
 		# in (the driver's own Makefile adds them the same way).
 		DRIVER_CFLAGS="-DCONFIG_RTW88_CORE -DCONFIG_RTW88_8821C \
 -DCONFIG_RTW88_USB -DCONFIG_RTW88_8821CU"
-		for f in "$REPO"/third-party/rtw88/*.c; do
+		for f in "$REPO"/wireless-drivers/rtw88/*.c; do
 			[ -f "$f" ] || continue
 			case "$(basename "$f")" in
 			main.c|mac80211.c|util.c|debug.c|tx.c|rx.c|mac.c|\
@@ -138,7 +138,7 @@ $RTW88_FW_BLOB"
 		# four 8851B chip units, the 8851BU USB unit and the USB bus.
 		DRIVER_CFLAGS="-DCONFIG_RTW89_CORE -DCONFIG_RTW89_USB \
 -DCONFIG_RTW89_8851B -DCONFIG_RTW89_8851BU"
-		for f in "$REPO"/third-party/rtw89/*.c; do
+		for f in "$REPO"/wireless-drivers/rtw89/*.c; do
 			[ -f "$f" ] || continue
 			case "$(basename "$f")" in
 			core.c|mac80211.c|mac.c|mac_be.c|phy.c|phy_be.c|fw.c|cam.c|efuse.c|efuse_be.c|regd.c|sar.c|coex.c|ps.c|chan.c|ser.c|acpi.c|util.c|wow.c|debug.c|led.c|led_mc.c|rtw8851b.c|rtw8851b_table.c|rtw8851b_rfk.c|rtw8851b_rfk_table.c|rtw8851bu.c|usb.c)
@@ -190,13 +190,17 @@ mvm/ftm-initiator.c mvm/rfi.c mvm/mld-key.c mvm/mld-mac.c mvm/link.c
 mvm/mld-sta.c mvm/mld-mac80211.c mvm/ptp.c mvm/time-sync.c
 mvm/led.c mvm/d3.c"
 		for f in $IWL_TUS; do
-			[ -f "$REPO/third-party/iwlwifi/$f" ] || {
+			[ -f "$REPO/wireless-drivers/iwlwifi/$f" ] || {
 				echo "build.sh: missing iwlwifi TU $f" >&2
 				exit 2
 			}
 			DRIVER_SRCS="$DRIVER_SRCS
-third-party/iwlwifi/$f"
+wireless-drivers/iwlwifi/$f"
 		done
+		# The driver-specific Linux port lives with the driver tree.
+		LINUX_SRCS="$LINUX_SRCS
+wireless-drivers/iwlwifi/ports/wlan_iwl_linux.c
+wireless-drivers/iwlwifi/ports/mac80211_iwl_closure.c"
 		# No blob: iwlwifi asks firmware_class for the name in its cfg
 		# table; the board image supplies /lib/firmware/iwlwifi-7260-17.ucode.
 		FW_SRCS=""
@@ -223,9 +227,8 @@ TREE=$MOD/tree
 rm -rf "$MOD"
 mkdir -p "$TREE"
 for root in "$REPO/components/net80211" "$REPO/components/linuxkpi" \
-	    "$REPO/ports/net80211" "$REPO/ports/linux" \
-	    "$REPO/third-party/rtl8xxxu" "$REPO/third-party/rtw88" \
-	    "$REPO/third-party/rtw89" "$REPO/third-party/iwlwifi" \
+	    "$REPO/wireless-drivers/rtl8xxxu" "$REPO/wireless-drivers/rtw88" \
+	    "$REPO/wireless-drivers/rtw89" "$REPO/wireless-drivers/iwlwifi" \
 	    "$REPO/tests/board/linux-ko"; do
 	[ -d "$root" ] || continue
 	find "$root" -type f | while read -r f; do
@@ -240,11 +243,11 @@ done
 # apply the patches there.  The delivered build leaves DIAG unset, so the
 # verbatim tree is what gets compiled and the manifest still describes it.
 if [ "${DIAG:-0}" = 1 ]; then
-	rm -rf "$TREE/third-party/rtw89"
-	cp -a "$REPO/third-party/rtw89" "$TREE/third-party/rtw89"
+	rm -rf "$TREE/wireless-drivers/rtw89"
+	cp -a "$REPO/wireless-drivers/rtw89" "$TREE/wireless-drivers/rtw89"
 	for p in "$REPO"/patches/diag/0*.patch; do
 		echo "build.sh: diag $(basename "$p")"
-		(cd "$TREE/third-party/rtw89" && patch -p1 --no-backup-if-mismatch < "$p")
+		(cd "$TREE/wireless-drivers/rtw89" && patch -p1 --no-backup-if-mismatch < "$p")
 	done
 fi
 
@@ -255,9 +258,9 @@ fi
 # module is an instrumented artifact with its own hash, and its results are
 # labelled instrumented.
 if [ "${LAB_TRACE:-0}" = 1 ]; then
-	rm -rf "$TREE/third-party/iwlwifi"
-	cp -a "$REPO/third-party/iwlwifi" "$TREE/third-party/iwlwifi"
-	patch -p6 -d "$TREE/third-party/iwlwifi" \
+	rm -rf "$TREE/wireless-drivers/iwlwifi"
+	cp -a "$REPO/wireless-drivers/iwlwifi" "$TREE/wireless-drivers/iwlwifi"
+	patch -p6 -d "$TREE/wireless-drivers/iwlwifi" \
 	    < "$REPO/../patches/lab/iwl-trace-payload/0001-iwlwifi-trace-payload-hex.patch"
 	echo "build.sh: LAB_TRACE payload hex enabled"
 fi
@@ -287,15 +290,15 @@ done
 	echo "TREE := $TREE"
 	echo
 	echo "ccflags-y := \\"
-	echo "  -I\$(TREE)/ports/net80211/compat \\"
-	echo "  -I\$(TREE)/ports/linux/include \\"
+	echo "  -I\$(TREE)/components/net80211/ports/compat \\"
+	echo "  -I\$(TREE)/tests/board/linux-ko/ports/include \\"
 	echo "  -I\$(TREE)/components/net80211/compat/netbsd \\"
 	echo "  -I\$(TREE)/components/net80211 \\"
-	echo "  -I\$(TREE)/ports/net80211 \\"
-	echo "  -I\$(TREE)/ports/net80211/bridge \\"
-	echo "  -I\$(TREE)/ports/linux/mac80211 \\"
+	echo "  -I\$(TREE)/components/net80211/ports \\"
+	echo "  -I\$(TREE)/components/net80211/ports/bridge \\"
+	echo "  -I\$(TREE)/tests/board/linux-ko/ports/mac80211 \\"
 	echo "  -I\$(TREE)/components/linuxkpi \\"
-	echo "  -I\$(TREE)/third-party/iwlwifi \\"
+	echo "  -I\$(TREE)/wireless-drivers/iwlwifi \\"
 	echo "  -I\$(TREE) \\"
 	echo "  -DCONFIG_WLAN_KO=1 \\"
 	echo "  -mno-outline-atomics"
@@ -306,7 +309,7 @@ done
 		echo "ccflags-y += $DRIVER_CFLAGS"
 	fi
 	echo
-	echo "STACK_CFLAGS := -include \$(TREE)/ports/linux/stack_prelude.h \\"
+	echo "STACK_CFLAGS := -include \$(TREE)/tests/board/linux-ko/ports/stack_prelude.h \\"
 	echo "  -D_KERNEL -DWLAN_PORT_LINUX -D_ROUTE_H -std=gnu11 \\"
 	echo "  -Wno-unused-function -Wno-pointer-sign -Wno-unused-parameter \\"
 	echo "  -Wno-address-of-packed-member -Wno-missing-braces"
@@ -315,11 +318,11 @@ done
 	done
 	if [ "$WITH_DRIVER" = 1 ]; then
 		for src in $DRIVER_SRCS; do
-			echo "CFLAGS_tree/${src%.c}.o += -include \$(TREE)/ports/linux/driver_glue.h"
+			echo "CFLAGS_tree/${src%.c}.o += -include \$(TREE)/tests/board/linux-ko/ports/driver_glue.h"
 		done
 	fi
 	for src in $FW_SRCS; do
-		echo "CFLAGS_tree/${src%.c}.o += -include \$(TREE)/ports/linux/fw_embed_prelude.h"
+		echo "CFLAGS_tree/${src%.c}.o += -include \$(TREE)/tests/board/linux-ko/ports/fw_embed_prelude.h"
 	done
 } > "$MOD/Makefile"
 

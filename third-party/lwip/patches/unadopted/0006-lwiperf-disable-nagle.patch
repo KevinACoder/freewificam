@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RTOS wireless port <dev@example.invalid>
+Date: Sun, 19 Oct 2026 16:48:00 +0800
+Subject: [PATCH] lwiperf: disable Nagle on the TCP client
+
+The client writes one MSS per tcp_sent callback; with Nagle on and a peer
+that delayed-ACKs, that paces the whole measurement at one segment per RTT
+(measured: 0.4 Mbit/s on a link whose TX queue was empty 20 s out of 20).
+Nagle has no place in a throughput measurement client.
+
+Signed-off-by: RTOS wireless port <dev@example.invalid>
+---
+diff --git a/src/apps/lwiperf/lwiperf.c b/src/apps/lwiperf/lwiperf.c
+index 144c8bd2..65ff7978 100644
+--- a/src/apps/lwiperf/lwiperf.c
++++ b/src/apps/lwiperf/lwiperf.c
+@@ -378,6 +378,10 @@ lwiperf_tcp_client_connected(void *arg, struct tcp_pcb *tpcb, err_t err)
+   }
+   conn->poll_count = 0;
+   conn->time_started = sys_now();
++  /* A measurement client must not let Nagle + the peer's delayed ACK pace
++   * one segment per RTT: the board's uplink measured 0.4 Mbit/s with the
++   * socket starved, and the driver's TX queue was empty 20 s out of 20. */
++  tcp_nagle_disable(tpcb);
+   return lwiperf_tcp_client_send_more(conn);
+ }
+ 

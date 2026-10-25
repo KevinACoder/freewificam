@@ -1,0 +1,481 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * @file    linux/skbuff.h
+ * @brief   The socket-buffer allocation spelling Linux network drivers use that the
+ *          contract header does not carry.
+ *
+ * @design declaration-only compatibility face; `struct sk_buff` and the queue/geometry
+ *         operations already live in the contract header (components/linuxkpi/
+ *         linuxkpi_core.h, whose sk_buff section is the single definition) and the pool
+ *         API face is components/linuxkpi/skbuff/skbuff_pool.h. This header carries what
+ *         those do not, in the interface's own grouping:
+ *
+ *           - the netdev-flavoured allocation entry point, whose callers here pass no
+ *             net_device. It is declared as the interface declares it
+ *             (include/linux/skbuff.h) so driver code reads unchanged; the body belongs
+ *             to the same allocation seam as the rest of the sk_buff surface - no
+ *             second pool.
+ *           - the checksum-computation states a buffer's `ip_summed` carries, with the
+ *             interface's values (they are contract with the receive path that sets
+ *             them and the transmit path that tests them).
+ *           - the buffer-geometry helpers (skb_end_pointer, skb_tail_pointer,
+ *             skb_set_tail_pointer, skb_is_nonlinear, skb_cloned) and the
+ *             shared-information record reached through skb_shinfo(), each with the
+ *             port's real answer stated at its site: the pool hands out one linear
+ *             payload per buffer with no trailing block, so the fragment-list and
+ *             segmentation fields are the values a linear buffer has, and the one field
+ *             the interface lets a caller write (frag_list) is written only from a
+ *             branch that a false fragment-list test never enters.
+ *           - the entry points whose bodies belong to the sk_buff seam rather than to a
+ *             header (skb_copy_bits, skb_add_rx_frag, kfree_skb_list), declared as the
+ *             interface declares them.
+ *
+ *         Reference for the face shape: components/linuxkpi/include/linux/usb.h:1-20.
+ * @date    09.10.2026
+ */
+
+#ifndef _LINUXKPI_LINUX_SKBUFF_H_
+#define _LINUXKPI_LINUX_SKBUFF_H_
+
+#include "../../linuxkpi_core.h"
+
+/* [LNX] include/linux/skbuff.h:28 includes <linux/dma-mapping.h>; the face keeps
+ * the interface's own include, which is how the DMA direction and mapping API
+ * reaches a unit that takes this header. */
+#include <linux/dma-mapping.h>
+
+/* [LNX] include/linux/skbuff.h:31 includes <linux/in6.h>; the face keeps the
+ * interface's own include, which is how the IPv6 address record reaches a unit
+ * that takes this header. */
+#include <linux/in6.h>
+
+/* [LNX] include/linux/skbuff.h: the interface reaches the page record and
+ * page_address() through <linux/mm.h>; the fragment views below are stated over
+ * that call. */
+#include <linux/mm.h>
+
+/* [LNX] include/linux/skbuff.h:23 includes <linux/atomic.h>; the face keeps the
+ * interface's own include, which is how the atomic API reaches a unit that takes this
+ * header. */
+#include <linux/atomic.h>
+/* [LNX] include/linux/skbuff.h:32 includes <linux/if_packet.h>; the receive
+ * classification a driver stamps onto the buffer reaches a unit through it. */
+#include <linux/if_packet.h>
+
+/* [LNX] include/linux/skbuff.h:26 includes <net/checksum.h>; the face keeps the
+ * interface's own include, which is how the checksum primitive the receive path's
+ * post-push update is built over reaches a unit that takes this header. */
+#include <net/checksum.h>
+
+struct net_device;
+
+/* [LNX] include/linux/skbuff.h:248-251: the checksum-computation states a buffer's
+ * `ip_summed` carries. The values are contract with every path that tests them (the
+ * receive path writes one, the transmit path and the GRO path compare against them), so
+ * they are stated with the interface's values. */
+#define	CHECKSUM_NONE		0
+#define	CHECKSUM_UNNECESSARY	1
+#define	CHECKSUM_COMPLETE	2
+#define	CHECKSUM_PARTIAL	3
+
+/*
+ * Allocate a socket buffer with `length` bytes of payload space and `NET_SKB_PAD`
+ * headroom. `dev` may be NULL: nothing in this project charges the allocation to a
+ * net device. Returns NULL when the pool is exhausted.
+ */
+struct sk_buff *__netdev_alloc_skb(struct net_device *dev, unsigned int length,
+				   gfp_t gfp_mask);
+
+/*
+ * Clone a socket buffer: a second descriptor over the same payload, with its own head
+ * and control block. Returns NULL when the descriptor pool is exhausted.
+ */
+struct sk_buff *skb_clone(const struct sk_buff *skb, gfp_t gfp_mask);
+
+static inline struct sk_buff *netdev_alloc_skb(struct net_device *dev,
+					       unsigned int length)
+{
+	return __netdev_alloc_skb(dev, length, GFP_ATOMIC);
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:1717-1745: the offset-layout triple. The interface has
+ * two builds of these, selected on NET_SKBUFF_DATA_USES_OFFSET; this port's sk_buff
+ * keeps tail/end as offsets (components/linuxkpi/skbuff/skbuff_pool.h), so the offset
+ * build is the one transcribed. skb_end_pointer() is the address the interface's
+ * shared-information block would begin at; the vendored receive path stores it as the
+ * upper bound of a frame's payload, which is what the offset means here.
+ */
+static __always_inline __unused unsigned char *
+skb_end_pointer(const struct sk_buff *skb)
+{
+	return skb->head + skb->end;
+}
+
+/* [LNX] include/linux/skbuff.h:2725-2728 (offset build) */
+static __always_inline __unused unsigned char *
+skb_tail_pointer(const struct sk_buff *skb)
+{
+	return skb->head + skb->tail;
+}
+
+/* [LNX] include/linux/skbuff.h:2726-2730 (offset build). The offset is relative to
+ * the data pointer: the interface moves the tail to the payload's start first
+ * (skb_reset_tail_pointer, the contract header's), so skb_tail_pointer() answers
+ * data + offset whatever headroom the buffer carries. Getting this wrong is not a
+ * cosmetic slip - a buffer with headroom then reports a tail short by exactly that
+ * headroom, and a driver that bounds a frame against the tail (the vendored SDIO
+ * receive path does, hal/rtl8188f/sdio/sdio_ops.c:1367-1381) rejects frames that
+ * reach the end of their buffer.
+ *
+ * The payload length follows here, where the interface leaves it alone: this port's
+ * pool enforces "the tail covers headroom plus payload" on every geometry operation
+ * (skbuff_pool.c:234-249), and a helper that legally desyncs the two in Linux would
+ * make that check refuse the driver's next skb_put. */
+static __always_inline __unused void
+skb_set_tail_pointer(struct sk_buff *skb, const int offset)
+{
+	skb_reset_tail_pointer(skb);
+	skb->tail += (unsigned int)offset;
+	skb->len = skb->tail - (unsigned int)(skb->data - skb->head);
+}
+
+/*
+ * [LNX] include/linux/skbuff.h: the paged-fragment record and the fragment views a
+ * transmit path names. The interface spells the record as its block-vector type
+ * (page, length, offset); this face states that shape directly, because no compiled
+ * unit reaches the vector type by name. Buffers can carry fragments: the vendored
+ * receive path attaches the part of a frame that does not fit the linear area as a
+ * page fragment (skb_add_rx_frag), and the substitute's common receive entry
+ * linearizes the frame before the stack sees it (linuxkpi_80211.c,
+ * ieee80211_rx_irqsafe). The DMA view reuses the one streaming map this face already
+ * has rather than adding a second mapping mechanism.
+ */
+struct device;
+
+typedef struct skb_frag {
+	struct page	*bv_page;
+	unsigned int	bv_len;
+	unsigned int	bv_offset;
+} skb_frag_t;
+
+/* [LNX] include/linux/skbuff.h:354: the fragment capacity of the shared record. */
+#define	MAX_SKB_FRAGS	17
+
+static __always_inline __unused unsigned int
+skb_frag_size(const skb_frag_t *frag)
+{
+	return frag->bv_len;
+}
+
+static __always_inline __unused struct page *
+skb_frag_page(const skb_frag_t *frag)
+{
+	return frag->bv_page;
+}
+
+/* [LNX] include/linux/skbuff.h:3766-3771 */
+static __always_inline __unused void *
+skb_frag_address(const skb_frag_t *frag)
+{
+	return (void *)((char *)page_address(frag->bv_page) + frag->bv_offset);
+}
+
+/* [LNX] include/linux/skbuff.h: skb_frag_dma_map() maps the fragment for a device.
+ * This face has one streaming map (dma_map_single), so the fragment view is that
+ * call over the fragment's address. */
+static __always_inline __unused dma_addr_t
+skb_frag_dma_map(struct device *dev, const skb_frag_t *frag, size_t offset,
+		 size_t size, enum dma_data_direction dir)
+{
+	return dma_map_single(dev, (void *)((char *)skb_frag_address(frag) + offset),
+			      size, dir);
+}
+
+/*
+ * [LNX] include/linux/skbuff.h (struct skb_shared_info): the per-buffer record carrying
+ * the fragment list, the segmentation parameters and the destructor argument. The
+ * members carried here are the ones the compiled set names, in the interface's order
+ * (flags, meta_len, nr_frags, tx_flags, gso_size, gso_segs, frag_list, frags) so their
+ * relative offsets are the interface's; everything from the timestamp union on is not
+ * carried - no compiled unit names it, and the types it drags (ubuf_info, the
+ * hardware-timestamp records) have no counterpart on this port. The fragment array is
+ * live storage: the receive path fills entries through skb_add_rx_frag, and a compiled
+ * transmit loop indexes it under the record's own nr_frags.
+ */
+/* [LNX] include/linux/skbuff.h:462-468: the hardware-timestamp record. The
+ * interface unions the timestamp with a net-device cookie; the timestamp member is
+ * the one the compiled set names. */
+struct skb_shared_hwtstamps {
+	ktime_t		hwtstamp;
+};
+
+struct skb_shared_info {
+	__u8		flags;
+	__u8		meta_len;
+	__u8		nr_frags;
+	__u8		tx_flags;
+	unsigned short	gso_size;
+	unsigned short	gso_segs;
+	struct sk_buff	*frag_list;
+	skb_frag_t	frags[MAX_SKB_FRAGS];
+	/* [LNX] include/linux/skbuff.h:603: the hardware-timestamp record the receive
+	 * path stamps a buffer with. */
+	struct skb_shared_hwtstamps hwtstamps;
+};
+
+/*
+ * [LNX] include/linux/skbuff.h:1784: `#define skb_shinfo(SKB) ((struct skb_shared_info
+ * *)(skb_end_pointer(SKB)))`.
+ *
+ * The record lives in the buffer's own trailing block, and the buffer carries it: the
+ * pool reserves sizeof(struct skb_shared_info) past the payload a slot serves (the
+ * data-slot stride) and past the requested size of a heap-backed buffer
+ * (skbuff_pool.c), sets `end` to the payload alone, and zeroes the record at every
+ * allocation. A field read here is therefore this buffer's own answer, and the writes
+ * the compiled set performs (frag_list's cleanup, the receive path's fragment
+ * entries) land in this buffer's storage rather than in shared scratch. The linear
+ * area ends at `end` - the pool's geometry guards hold the tail there - so no payload
+ * write can reach the record.
+ *
+ * The one deviation from the interface's own macro: `head + end` is where the record
+ * begins only when the request happens to be a multiple of the record's alignment.
+ * This port's `end` is the request's exact size (the geometry the host suites record),
+ * so the record starts at the first 8-byte boundary at or after the payload. A few
+ * bytes of unreached padding separate the two addresses, the pool budgets for that
+ * gap, and every user goes through this macro - UBSan named the misaligned member
+ * access the direct address form produced.
+ */
+static __always_inline __unused struct skb_shared_info *
+lkpi_skb_shinfo_at(const struct sk_buff *skb)
+{
+	uintptr_t at = ((uintptr_t)skb->head + (uintptr_t)skb->end + 7u) &
+	    ~(uintptr_t)7u;
+
+	return (struct skb_shared_info *)at;
+}
+
+#define	skb_shinfo(SKB)	lkpi_skb_shinfo_at(SKB)
+
+/* [LNX] include/linux/skbuff.h:1786-1789: the hardware-timestamp record of a
+ * buffer. This port reaches it through the same shared record as everything else
+ * (see skb_shinfo above), so the accessor is that record's member. */
+static __always_inline __unused struct skb_shared_hwtstamps *
+skb_hwtstamps(struct sk_buff *skb)
+{
+	return &skb_shinfo(skb)->hwtstamps;
+}
+
+/* [LNX] include/linux/skbuff.h:2527-2530 */
+static __always_inline __unused bool
+skb_is_nonlinear(const struct sk_buff *skb)
+{
+	return skb->data_len;
+}
+
+/* [LNX] include/linux/skbuff.h:4234-4237: the fragment-list test, in the interface's own
+ * shape. frag_list chains whole skbs, and nothing in this port builds one - the receive
+ * path's extra data rides the frags array (see skb_shinfo above), not a chain - so the
+ * answer stays false, which is the branch the vendored transmit path's cleanup expects. */
+static __always_inline __unused bool
+skb_has_frag_list(const struct sk_buff *skb)
+{
+	return skb_shinfo(skb)->frag_list != NULL;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:2029-2033: `static inline int skb_cloned(const struct
+ * sk_buff *skb)`, whose interface body tests the header's `cloned` flag together with
+ * the shared record's dataref. This port's sk_buff has no `cloned` flag and the pool
+ * tracks payload sharing in its own data record (not visible from a descriptor), so the
+ * descriptor cannot prove a payload private. The answer is therefore the shared one:
+ * the pool's clone is a second descriptor over a reference-counted payload, and a
+ * buffer that reached the receive path through that clone must not be handed to a path
+ * that writes it. A buffer that took a private copy is also told "shared", which at
+ * worst costs it a fast path - never its data.
+ */
+static __always_inline __unused int
+skb_cloned(const struct sk_buff *skb)
+{
+	(void)skb;
+	return 1;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:4286: `int skb_copy_bits(const struct sk_buff *skb, int
+ * offset, void *to, int len)`. Declared, not defined: the body lives with the sk_buff
+ * seam the pool owns, next to the other copy operations there, and it walks the same
+ * two parts the interface does - the linear area, then the buffer's fragment array.
+ */
+int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len);
+
+/*
+ * [LNX] include/linux/skbuff.h:1341-1344: `static inline void kfree_skb_list(struct
+ * sk_buff *segs)`, which frees every buffer of a `->next` chain. The interface's own
+ * linear body (the "copy from skbuff.c" shape the vendored tree carries for kernels
+ * older than 3.10) is exactly this walk, and on this port the chain is the only
+ * structure a list has - so the walk is the body, and it reuses kfree_skb() (the
+ * contract header's single release call) rather than adding a second release path.
+ */
+static __always_inline __unused void
+kfree_skb_list(struct sk_buff *segs)
+{
+	while (segs != NULL) {
+		struct sk_buff *next = segs->next;
+
+		kfree_skb(segs);
+		segs = next;
+	}
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:3865-3869: `static inline struct sk_buff *pskb_copy(
+ * struct sk_buff *skb, gfp_t gfp_mask)` copies the buffer so that its data is private.
+ * On the interface the distinction from skb_copy() is the fragment list; this port's
+ * copy is the contract header's linear one, taken by the callers that copy linear
+ * buffers (transmit templates), and a fragmented source would need the substitute's
+ * frame rebuild instead - no compiled caller hands it one, and the boundary is named
+ * here rather than answered silently.
+ */
+static __always_inline __unused struct sk_buff *
+pskb_copy(struct sk_buff *skb, gfp_t gfp_mask)
+{
+	return skb_copy(skb, gfp_mask);
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:4040-4043: `static inline int skb_linearize(struct
+ * sk_buff *skb) { return skb_is_nonlinear(skb) ? __skb_linearize(skb) : 0; }`.
+ * The same fixed-head boundary as __skb_linearize above: an already linear buffer
+ * answers 0, a fragmented one cannot be pulled in here and gets the interface's
+ * "does not fit" answer.
+ */
+static __always_inline __unused int
+skb_linearize(struct sk_buff *skb)
+{
+	return skb_is_nonlinear(skb) ? -ENOMEM : 0;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:4244-4245: `#define skb_walk_frags(skb, iter) for (iter =
+ * skb_shinfo(skb)->frag_list; iter; iter = iter->next)`. The walk visits the fragment
+ * *list*, which chains whole skbs and is never built here - the receive path's extra
+ * data rides the frags array (skb_add_rx_frag), not a chain - so the range stays empty;
+ * stated as the interface's loop shape so the call site's body stays a loop body, with
+ * the empty range being the port's real answer rather than a silent skip.
+ */
+#define	skb_walk_frags(skb, iter)					\
+	for ((iter) = NULL; (iter) != NULL; (iter) = (iter)->next)
+
+/*
+ * [LNX] include/linux/skbuff.h:3120-3123: `static inline unsigned char
+ * *skb_mac_header(const struct sk_buff *skb) { return skb->head + skb->mac_header; }`.
+ *
+ * This port's sk_buff carries no mac_header offset: the 802.11 header is the
+ * buffer's data, built there by the bridge (see the contract header's sk_buff and
+ * the ip_hdr() derivation in components/linuxkpi/include/linux/ip.h, which opens
+ * the payload at the header's own length). The accessor therefore answers the
+ * buffer's data pointer, which is the port's real mac header, and the setter has
+ * no offset to store - the header is where the caller put it.
+ */
+static __always_inline __unused unsigned char *
+skb_mac_header(const struct sk_buff *skb)
+{
+	return skb->data;
+}
+
+static __always_inline __unused void
+skb_set_mac_header(struct sk_buff *skb, int offset)
+{
+	(void)skb;
+	(void)offset;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:4253-4256: the buffer-list walk a transmit path
+ * uses to step a segmented list. Same empty range as skb_walk_frags above, stated
+ * as the interface's loop shape so the call site's body stays a loop body.
+ */
+#define	skb_list_walk_safe(first, skb, next_skb)			\
+	for ((skb) = (first), (next_skb) = (skb) ? (skb)->next : NULL;	\
+	     (skb) != NULL;						\
+	     (skb) = (next_skb), (next_skb) = (skb) ? (skb)->next : NULL)
+
+/* [LNX] include/linux/skbuff.h:1789-1792 */
+static __always_inline __unused void
+skb_mark_not_on_list(struct sk_buff *skb)
+{
+	skb->next = NULL;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:4028-4031: `static inline int __skb_linearize(
+ * struct sk_buff *skb) { return __pskb_pull_tail(skb, skb->data_len) ? 0 :
+ * -ENOMEM; }`. The interface pulls the paged tail into the linear head, which
+ * fails only when the data does not fit. This port's heads are fixed by the
+ * allocation and there is no reallocation here, so a fragmented buffer cannot be
+ * pulled in: the honest answer is the interface's "does not fit" (-ENOMEM)
+ * rather than success on a buffer that still holds fragments. The PCIe transmit
+ * path (pcie/gen1_2/tx.c:2140, tx-gen2.c:737) guards the call behind
+ * skb_is_nonlinear() and this port hands it linear frames, so its "already
+ * linear" branch is the one taken; the linear path is the substitute's own
+ * receive entry (linuxkpi_80211.c), which rebuilds a full frame instead.
+ */
+static __always_inline __unused int
+__skb_linearize(struct sk_buff *skb)
+{
+	return skb_is_nonlinear(skb) ? -ENOMEM : 0;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:3473-3478: `static inline void __skb_queue_purge(
+ * struct sk_buff_head *list)`, which walks the list with the raw (caller-locks)
+ * dequeue and releases each buffer. The interface's `__` forms are the
+ * caller-owns-the-queue contract; the port's raw dequeue (the contract header's
+ * __skb_dequeue -> lkpi_skb_do_dequeue) is the same walk, and the release is the
+ * one kfree_skb the contract header maps. Transcribed as the interface's inline
+ * so a call site that holds the queue lock keeps Linux's semantics.
+ */
+static __always_inline __unused void
+__skb_queue_purge(struct sk_buff_head *list)
+{
+	struct sk_buff *skb;
+
+	while ((skb = __skb_dequeue(list)) != NULL)
+		kfree_skb(skb);
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:4105-4128: the receive-checksum update after a
+ * push. The interface's four-argument __skb_postpush_rcsum() folds the pushed
+ * bytes' partial sum into the running one's-complement sum with csum_block_add(),
+ * and skb_postpush_rcsum() calls it with offset 0. At offset 0 the block rotation
+ * inside csum_block_add() is the identity, so the effect is a plain add of the two
+ * sums; csum_add()/csum_block_add() are not part of this face's checksum
+ * vocabulary (net/checksum.h carries csum_partial() alone), so that identity is
+ * stated directly rather than restating those helpers here. The one caller on this
+ * port is the MQ receive path (mvm/rxmq.c:176), which the AC 7260 (non-MQ) does
+ * not run, but the update is the interface's and costs nothing to carry whole.
+ */
+static __always_inline __unused void
+skb_postpush_rcsum(struct sk_buff *skb, const void *start, unsigned int len)
+{
+	if (skb->ip_summed == CHECKSUM_COMPLETE)
+		skb->csum = (__wsum)((u32)skb->csum +
+		    (u32)csum_partial(start, (int)len, 0));
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:2702-2708: `static inline void skb_add_rx_frag(
+ * struct sk_buff *skb, int i, struct page *page, int off, int size, unsigned int
+ * truesize)`. Declared, not defined here: the interface attaches the page as a
+ * fragment of the buffer's shared record, and this port's sk_buff has no fragment
+ * storage (the face's shared record is the linear one), so the body that
+ * materializes the fragment into the linear payload belongs with the pool that
+ * owns the buffer geometry (skbuff_pool.c), next to the other receive-side skb
+ * operations there, rather than being a second fragment mechanism stated here.
+ */
+void skb_add_rx_frag(struct sk_buff *skb, int i, struct page *page, int off,
+		     int size, unsigned int truesize);
+
+#endif /* _LINUXKPI_LINUX_SKBUFF_H_ */
