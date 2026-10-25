@@ -195,11 +195,25 @@ int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
 	}
 	raw_recv(pcb, wlan_ping_recv, NULL);
 
-	/* One throwaway echo forces the neighbour resolution; lwIP drops a
-	 * request sent into an unresolved entry without queueing it. */
+	/* One throwaway echo forces the neighbour resolution and proves the
+	 * echo path before counting; lwIP drops a request sent into an
+	 * unresolved entry without queueing it.  Wait for its reply as well,
+	 * so the first counted echo does not price the join/settling window. */
+	wlan_ping_rx = 0u;
 	wlan_ping_send(pcb, &peer, 0u);
-	(void)osDelay(WLAN_PING_WAIT_MS);
+	{
+		unsigned int waited = 0u;
+
+		while ((wlan_ping_rx == 0u) && (waited < 2000u)) {
+			(void)osDelay(10u);
+			waited += 10u;
+		}
+	}
 	(void)wlan_arp_wait((const ip4_addr_t *)&peer, 2000u);
+	/* Give the join's TX/EDCA state one settle window before the first
+	 * counted echo; the P3 device round measured the first packet lost
+	 * when the counted run started immediately after the ARP entry. */
+	(void)osDelay(WLAN_PING_WAIT_MS);
 
 	wlan_ping_rx = 0u;
 	for (i = 1u; i <= count; i++) {
