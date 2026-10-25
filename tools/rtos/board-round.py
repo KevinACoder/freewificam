@@ -228,6 +228,8 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path, help="run directory")
     ap.add_argument("--boot", required=True, help="boot name, e.g. boot1")
     ap.add_argument("--peer", action="store_true", help="drive the Raspberry Pi peer")
+    ap.add_argument("--cases", default="tick,cmsis2,net,emmc",
+                    help="case names the image carries (judge's expected set)")
     ap.add_argument("--plan", type=int, default=0, choices=[0, 1],
                     help="the image's phase plan (0 delivery, 1 throughput round)")
     ap.add_argument("--timeout", type=int, default=420, help="capture window, seconds")
@@ -278,8 +280,13 @@ def main() -> int:
         staged_reply = session.call("tftp_stage", paths=[str(staged)])
         (out / "staged.json").write_text(json.dumps(staged_reply, indent=2) + "\n")
         staged_crc = None
-        for item in staged_reply.get("files", []):
-            if str(item.get("name", "")).endswith("rtos.bin"):
+        # The lab's tftp_stage answer names the copied files under "staged";
+        # older servers used "files".  Accept both shapes, and match on the
+        # deploy name the rtos profile boots.
+        staged_items = staged_reply.get("staged") or staged_reply.get("files") or []
+        for item in staged_items:
+            name = str(item.get("name") or item.get("path") or "")
+            if name.endswith("rtos.bin"):
                 staged_crc = item.get("crc32")
         fingerprint.append(f"staged_crc32 {staged_crc}")
         if staged_crc and staged_crc.lower() != f"{host_crc:08x}":
@@ -363,8 +370,15 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import judge as judge_mod
 
-    expect = {"backend": args.backend}
+    expect = {"backend": args.backend, "cases": args.cases.split(",")}
     text = log_path.read_text(errors="replace")
+
+    # The board-side crc32 is the deployment check: U-Boot prints it between
+    # the tftp and the go.  Record it next to the host/staged digests.
+    board_crc = re.search(r"crc32 for 0a000000 .*?==> ([0-9a-fA-F]{8})", text)
+    if board_crc:
+        fingerprint.append(f"board_crc32 {board_crc.group(1).lower()}")
+        (out / "fingerprint.txt").write_text("\n".join(fingerprint) + "\n")
     verdict = judge_mod.judge(text, expect)
     (out / "judge.json").write_text(json.dumps(verdict, indent=2) + "\n")
     (out / "RESULT.md").write_text(judge_mod.render(verdict, f"{args.boot} {args.backend}"))

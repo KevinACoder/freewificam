@@ -18,6 +18,7 @@
 #include "arch_asm.h"
 #include "uart.h"
 
+#include "cases.h"
 #include "clock.h"
 #include "runner.h"
 
@@ -60,6 +61,13 @@ int main(void)
 	if (osKernelInitialize() != osOK) {
 		fatal("kernel init failed");
 	}
+
+#if defined(RTOS_CASE_WLAN)
+	/* The vendor stack's linuxkpi services, created before the scheduler just
+	 * as in the reference image; the case itself runs the module_init and the
+	 * SDIO bring-up once the runner is scheduled. */
+	case_wlan_prepare();
+#endif
 
 	uart_early_puts("rtos: kernel ready tick=");
 	{

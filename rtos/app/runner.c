@@ -45,6 +45,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_EMMC)
 	{ "emmc", case_emmc_run },
 #endif
+#if defined(RTOS_CASE_WLAN)
+	{ "wlan", case_wlan_run },
+#endif
 };
 
 static const osThreadAttr_t runner_attr = {
@@ -52,8 +55,15 @@ static const osThreadAttr_t runner_attr = {
 	.priority = osPriorityNormal,
 	/* The network case's bring-up and the eMMC round trip both hold frame
 	 * space on this thread; the stack's own threads run at their own
-	 * priorities above it. */
+	 * priorities above it.  The 8189FTV case runs the vendor probe on this
+	 * thread too: the SDIO service, the host glue and the controller each hold
+	 * a frame, and the driver's power/firmware/HAL chain sits on top, so that
+	 * image gets the reference image's 16 KiB runner stack. */
+#if defined(RTOS_CASE_WLAN)
+	.stack_size = 16384U,
+#else
 	.stack_size = 8192U,
+#endif
 };
 
 static void runner(void *arg)

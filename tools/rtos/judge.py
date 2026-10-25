@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-CASES = ("tick", "cmsis2", "net", "emmc")
+CASES = ("tick", "cmsis2", "net", "emmc", "wlan")
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
 FLAGS = re.MULTILINE
@@ -52,6 +52,15 @@ PATTERNS = {
     "emmc_loop": re.compile(r"emmc: loop n=(?P<n>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
     "emmc_badlba": re.compile(r"emmc: badlba lba=\d+ write_rc=(?P<w>-?\d+) read_rc=(?P<r>-?\d+) nohang=(?P<nohang>\w+)", re.MULTILINE),
     "emmc_pass": re.compile(r"emmc: PASS", re.MULTILINE),
+    # 8189FTV vendor-stack case: the SDIO identity, the driver's netdev, and the
+    # hardware address the driver read from the chip.
+    "wlan_sdio": re.compile(r"wlan: sdio up card=(?P<vendor>[0-9a-fA-F]{4}):(?P<device>[0-9a-fA-F]{4}) funcs=(?P<funcs>\d+) cccr=(?P<cccr>\d+) clock=(?P<clock>\d+) width=(?P<width>\d+) hs=(?P<hs>\d+)", re.MULTILINE),
+    "wlan_netdev_up": re.compile(r"wlan: netdev up rc=(?P<rc>-?\d+)", re.MULTILINE),
+    "wlan_attach": re.compile(r"wlan: attach mac=(?P<mac>[0-9a-fA-F:]+)", re.MULTILINE),
+    "wlan_netdev_addr": re.compile(r"wlan: netdev addr=(?P<mac>[0-9a-fA-F:]+)", re.MULTILINE),
+    "wlan_stats": re.compile(r"wlan: sdio stats cards=(?P<cards>\d+) drivers=(?P<drivers>\d+) probes=(?P<probes>\d+) io_direct=(?P<direct>\d+) io_ext=(?P<ext>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "wlan_pass": re.compile(r"wlan: PASS", re.MULTILINE),
+    "wlan_fail": re.compile(r"wlan: FAIL (?P<reason>.+)$", re.MULTILINE),
     # Throughput-round instruments (measurement only: they are read out for the
     # ledger, they never turn a pass into a fail).
     "net_rtt": re.compile(r"net: rtt n=(?P<n>\d+) min_us=(?P<min>\d+) avg_us=(?P<avg>\d+) max_us=(?P<max>\d+)", re.MULTILINE),
@@ -176,6 +185,41 @@ def judge(text: str, expect: dict | None = None) -> dict:
             notes.append(f"net: udp in {row['pkts']} pkts {row['bytes']} B in {row['ms']} ms")
         for row in found["net_udp_blast"]:
             notes.append(f"net: udp out {row['sent']} B offered in {row['ms']} ms (peer is the witness)")
+
+    if cases.get("wlan", {}).get("verdict") == "pass":
+        sdio = found["wlan_sdio"]
+        if not sdio:
+            errors.append("wlan: PASS without an sdio-up line")
+        elif (sdio["vendor"].lower(), sdio["device"].lower()) != ("024c", "f179"):
+            errors.append(
+                f"wlan: card {sdio['vendor']}:{sdio['device']} != 024c:f179"
+            )
+        else:
+            notes.append(
+                f"wlan: card {sdio['vendor']}:{sdio['device']} "
+                f"funcs={sdio['funcs']} cccr={sdio['cccr']} "
+                f"clock={sdio['clock']} width={sdio['width']}"
+            )
+        up = found["wlan_netdev_up"]
+        if not up:
+            errors.append("wlan: PASS without a netdev-up line")
+        elif int(up["rc"]) != 0:
+            errors.append(f"wlan: netdev up rc={up['rc']}")
+        attach = found["wlan_attach"]
+        if not attach:
+            errors.append("wlan: PASS without an attach line")
+        else:
+            mac = attach["mac"].lower()
+            if mac in ("00:00:00:00:00:00", "0:0:0:0:0:0"):
+                errors.append("wlan: hardware address is all zero")
+            else:
+                notes.append(f"wlan: attach mac={mac}")
+        stats = found["wlan_stats"]
+        if stats and int(stats["errors"]) != 0:
+            errors.append(f"wlan: sdio errors={stats['errors']}")
+        fail = found["wlan_fail"]
+        if fail:
+            errors.append(f"wlan: {fail['reason']}")
 
     if cases.get("emmc", {}).get("verdict") == "pass":
         rw = found["emmc_rw"]

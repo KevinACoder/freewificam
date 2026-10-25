@@ -41,8 +41,14 @@
 /* 256 KiB: this image carries lwIP's threads and the storage stack, and the
  * kernel heap is where the facade's allocator pair sends their control blocks
  * and buffers.  The 64 KiB the bring-up image used ran out on the first
- * storage allocation (measured on the board, 2026-10-24). */
-#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 256 * 1024 ) )
+ * storage allocation (measured on the board, 2026-10-24).  The 8189FTV image
+ * overrides the size at build time: the vendor stack's skb/control-block
+ * demand is far above the storage image's, and the number is measured from the
+ * heap high-water, not guessed here. */
+#ifndef CONFIG_FREERTOS_HEAP_SIZE
+#define CONFIG_FREERTOS_HEAP_SIZE		( 256U * 1024U )
+#endif
+#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( CONFIG_FREERTOS_HEAP_SIZE ) )
 
 /* --- memory --------------------------------------------------------------- */
 

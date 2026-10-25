@@ -44,5 +44,9 @@ int case_net_run(void);
 #if defined(RTOS_CASE_EMMC)
 int case_emmc_run(void);
 #endif
+#if defined(RTOS_CASE_WLAN)
+int case_wlan_run(void);
+void case_wlan_prepare(void);
+#endif
 
 #endif /* RTOS_APP_CASES_H */

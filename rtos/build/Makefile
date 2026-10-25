@@ -66,6 +66,9 @@ BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || ech
 # (down 480.9 vs 483.2, up 690.7 vs 687.3), so there is nothing to re-certify
 # for. `OPT=-Og` builds the pre-round image for debug work.
 OPT ?= -O2
+# ThreadX's kernel heap (linker symbol).  The storage/network images use the
+# default 4M; the 8189FTV vendor stack starts at the reference image's 16M.
+HEAP_SIZE ?= 4M
 
 # The adopted performance profile: the switches that measured net-positive on
 # both kernels, plus the delayed-ACK watermark (patch 0003 carries the option).
@@ -117,12 +120,21 @@ PROFILE_CFLAGS ?=
 # so a short arm builds a short image (`CASES=tick,cmsis2`).
 CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
-CASE_SRCS := $(foreach c,$(CASES),$(RTOS)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan,$(CASES)),$(RTOS)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
 ifneq ($(filter emmc,$(CASES)),)
 EXTRA_DEFS := -DCONFIG_FSL_SDMMC_ENABLE_MMC=1
+endif
+
+# The 8189FTV image carries the SDIO card type, the vendor stack's thread/timer
+# demand and (on FreeRTOS) its larger heap.  The card type keys are exclusive:
+# do not select emmc and wlan in one image.
+ifneq ($(filter wlan,$(CASES)),)
+EXTRA_DEFS += -DCONFIG_FSL_SDMMC_ENABLE_SDIO=1 \
+	-DCMSIS2_MAX_THREADS=24 -DCMSIS2_MAX_TIMERS=128 \
+	-DCONFIG_FREERTOS_HEAP_SIZE=8388608u
 endif
 
 .DEFAULT_GOAL := all
@@ -300,7 +312,7 @@ BACKEND_INCLUDES := \
 	-I$(RTOS)/os/threadx/board/rk3568-itx/cmsis2 \
 	-I$(RTOS)/os/threadx \
 	-I$(TX)/common/inc -I$(TX_PORT)/inc
-BACKEND_LDFLAGS := -Wl,--defsym=HEAP_SIZE=4M \
+BACKEND_LDFLAGS := -Wl,--defsym=HEAP_SIZE=$(HEAP_SIZE) \
 	-Wl,-u,osCriticalEnter -Wl,-u,osCriticalExit
 BACKEND_VECTOR := _threadx_vector_table
 BACKEND_SYMBOLS := _tx_initialize_kernel_enter _tx_thread_schedule _tx_timer_interrupt __top_of_ram
@@ -359,6 +371,9 @@ CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
 ASM_CFLAGS := $(BASE_CFLAGS)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL
+
+# The 8189FTV vendor-stack world (empty unless the wlan case is selected).
+include $(CURDIR)/wlan.mk
 
 BASE_SRCS := \
 	$(RTOS)/arch/aarch64/start.S \
@@ -441,11 +456,12 @@ FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS)
-OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
+OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
+	$(WLAN_OBJS)
 
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(RTOS)/arch/aarch64/baremetal.ld \
-	$(BACKEND_LDFLAGS) \
+	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
@@ -475,7 +491,14 @@ $(TAG_STAMP): FORCE
 # the compiled bytes and nothing that does not: the flags, and the patch set the
 # trees were replayed with (a patch edits headers, so a patch-only change must
 # rebuild the world exactly like a flag change does).
-$(FLAG_STAMP): FORCE
+ifneq ($(WLAN_STAMP),)
+$(WLAN_STAMP): FORCE
+	@mkdir -p $(BUILD)
+	@$(file >$@.tmp,$(WLAN_FLAGS_STAMP))
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+endif
+
+$(FLAG_STAMP): FORCE $(WLAN_STAMP)
 	@mkdir -p $(BUILD)
 	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
@@ -485,6 +508,11 @@ $(foreach s,$(filter %.S,$(FIRST_SRCS)),$(eval $(call COMPILE_S,$(s))))
 $(foreach s,$(filter-out %.S,$(VENDOR_SRCS)),$(eval $(call COMPILE_C,$(s),$(VENDORED_CFLAGS))))
 $(foreach s,$(filter %.S,$(VENDOR_SRCS)),$(eval $(call COMPILE_S,$(s))))
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_C,$(s),$(VENDORED_CFLAGS) $(PRINTF_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WLAN_APP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_APP_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WLAN_SDIO_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_SDIO_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WLAN_LKPI_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_LKPI_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WLAN_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_DRV_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WLAN_LWIP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_SDIO_CFLAGS))))
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
