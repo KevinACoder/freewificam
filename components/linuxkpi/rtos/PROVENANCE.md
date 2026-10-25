@@ -88,3 +88,23 @@ place, and that entry records it.
   `DIVERGENCES.md` - both project-authored English - are their record. Translating
   the comments is a consumer-round change and would be a ledger entry, not a
   rewrite inside the import.
+
+## 2026-10-25 wireless import (L3 B3)
+
+Imported from the reference RTOS tree `~/workspace/project_rtos_webcam/freewificam`
+(documented only; working tree at `19c5736` on `feat-rtw88-l0-baseline`, with a
+local edit in `linuxkpi_80211.c` that the reference iwlwifi image was built
+with; the import keeps those working-tree bytes rather than the HEAD blob, so
+the B3 build is the pinned artifact). Paths under `components/linuxkpi/`:
+
+| File(s) | License | Note |
+|---|---|---|
+| `linuxkpi_80211.c/h`, `linuxkpi_80211_helpers.c`, `linuxkpi_compat.c`, `linuxkpi_txq.c/h`, `linuxkpi_wiphy_work.c/h` | BSD-3-Clause | the mac80211/cfg80211 substitute and its queues |
+| `pci/linuxkpi_pci.c/h`, `pci/lkpi_pcie_backend.h` | BSD-3-Clause | PCI engine over the board backend |
+| `lkpi_rxtrace.c/h`, `lkpi_tcp_trace.c/h` | BSD-3-Clause | trace hooks the bridge calls |
+| `fw_registry_rtos.c` | BSD-3-Clause | registry-only build of `fw_registry.c`; the kernelmod build keeps the VFS-loading version |
+| `fw/iwl7260fw_blob.c`, `fw/iwl7260_fw.LICENCE.txt` | Intel firmware licence (see LICENCE) | 6.3 MB blob, **gitignored** (`components/linuxkpi/fw/`), not committed |
+
+The top-level `linuxkpi_*.h`/`lkpi_census.h` in `components/linuxkpi/` are
+compatibility shims (`#include "rtos/…"`), needed because the net80211 bridge
+includes `components/linuxkpi/…` by path. They are not a second implementation.

@@ -1,0 +1,160 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * @file    fw_registry.c
+ * @brief   The compiled-in firmware registry and the two calls the Linux face exposes
+ *          over it.
+ *
+ * @design registry with a fixed table; the entries are borrowed pointers, so a lookup
+ *         copies nothing and releasing a description frees nothing. Reference for the
+ *         shape: components/linuxkpi/include/linux/usb.h:1-20 (declaration face) and
+ *         fw_registry.h in this directory (the contract implemented here).
+ * @date    08.10.2026
+ */
+
+#include "fw_registry.h"
+#include <linux/firmware.h>
+
+/*
+ * Slots: every blob this project compiles in needs one, and the table is deliberately
+ * small - it is filled at start-up and a full table is a programming error, not a
+ * runtime condition to grow around.
+ */
+#define	LKPI_FW_SLOTS	8
+
+static struct lkpi_fw_entry lkpi_fw_table[LKPI_FW_SLOTS];
+
+int lkpi_fw_register(const char *name, const uint8_t *data, size_t size)
+{
+	int i;
+
+	if (name == NULL || data == NULL || size == 0)
+		return -EINVAL;
+
+	for (i = 0; i < LKPI_FW_SLOTS; i++) {
+		if (lkpi_fw_table[i].name == NULL) {
+			lkpi_fw_table[i].name = name;
+			lkpi_fw_table[i].data = data;
+			lkpi_fw_table[i].size = size;
+			return 0;
+		}
+		if (lkpi_fw_table[i].name == name ||
+		    (lkpi_fw_table[i].data == data)) {
+			/* Already registered (the same blob or the same name):
+			 * idempotent, so a start-up path can call it twice. */
+			return 0;
+		}
+	}
+	return -ENOSPC;
+}
+
+const struct lkpi_fw_entry *lkpi_fw_registry_find(const char *name)
+{
+	int i;
+
+	if (name == NULL)
+		return NULL;
+
+	for (i = 0; i < LKPI_FW_SLOTS; i++) {
+		if (lkpi_fw_table[i].name == NULL)
+			continue;
+		if (strcmp(lkpi_fw_table[i].name, name) == 0)
+			return &lkpi_fw_table[i];
+	}
+	return NULL;
+}
+
+/*
+ * The Linux face. The description is allocated (as the interface's loader does) and
+ * points at the table's bytes, which are borrowed: the caller may read `size` and
+ * `data` and must hand the description back through release_firmware().
+ */
+int request_firmware(const struct firmware **firmware_p, const char *name,
+		     struct device *device)
+{
+	const struct lkpi_fw_entry *entry;
+	struct firmware *view;
+
+	(void)device;
+
+	if (firmware_p == NULL || name == NULL)
+		return -EINVAL;
+
+	entry = lkpi_fw_registry_find(name);
+	if (entry == NULL)
+		return -ENOENT;
+
+	view = kmalloc(sizeof(*view), GFP_KERNEL);
+	if (view == NULL)
+		return -ENOMEM;
+
+	view->size = entry->size;
+	view->data = entry->data;
+	view->priv = (void *)entry;
+	*firmware_p = view;
+
+	return 0;
+}
+
+void release_firmware(const struct firmware *firmware)
+{
+	/* The bytes belong to the table; only the description is ours to free. */
+	kfree((void *)firmware);
+}
+
+/*
+ * [LNX] include/linux/firmware.h: `firmware_request_nowarn()` is the interface's
+ * spelling for "load this, and do not print a message when it is absent" - the
+ * optional-firmware path (iwlwifi asks for the PNVM this way). The registry is the
+ * only loader and it is silent already, so the difference from request_firmware()
+ * is exactly nothing here; the entry point exists so the caller compiles and reads
+ * unchanged, and the name says which of the two contracts it is under.
+ */
+int firmware_request_nowarn(const struct firmware **fw, const char *name,
+			    struct device *device)
+{
+	return request_firmware(fw, name, device);
+}
+
+/*
+ * The asynchronous spelling. The interface's contract is that the caller is not
+ * blocked and the continuation runs with the result; this project's registry is
+ * a synchronous lookup with no filesystem or userland helper behind it, so the
+ * call is served by completing through the caller's continuation rather than by
+ * deferring it. The continuation therefore runs before this call returns, which
+ * is the same observable order the caller sees (it waits on its own completion
+ * afterwards); a lookup miss still runs the continuation, with no firmware, as
+ * the interface's async spelling does.
+ */
+int request_firmware_nowait(struct module *module, bool uevent, const char *name,
+			    struct device *device, gfp_t gfp, void *context,
+			    void (*cont)(const struct firmware *fw, void *context))
+{
+	const struct lkpi_fw_entry *entry;
+	struct firmware *view;
+
+	(void)module;
+	(void)uevent;
+	(void)device;
+	(void)gfp;
+
+	if (name == NULL || cont == NULL)
+		return -EINVAL;
+
+	entry = lkpi_fw_registry_find(name);
+	if (entry == NULL) {
+		cont(NULL, context);
+		return 0;
+	}
+
+	view = kmalloc(sizeof(*view), GFP_KERNEL);
+	if (view == NULL)
+		return -ENOMEM;
+
+	view->size = entry->size;
+	view->data = entry->data;
+	view->priv = (void *)entry;
+
+	cont(view, context);
+
+	return 0;
+}

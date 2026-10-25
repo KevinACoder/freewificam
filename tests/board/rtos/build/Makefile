@@ -142,7 +142,7 @@ PROFILE_CFLAGS ?=
 # so a short arm builds a short image (`CASES=tick,cmsis2`).
 CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
-CASE_SRCS := $(foreach c,$(filter-out wlan,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
@@ -157,6 +157,12 @@ ifneq ($(filter wlan,$(CASES)),)
 EXTRA_DEFS += -DCONFIG_FSL_SDMMC_ENABLE_SDIO=1 \
 	-DCMSIS2_MAX_THREADS=24 -DCMSIS2_MAX_TIMERS=128 \
 	-DCONFIG_FREERTOS_HEAP_SIZE=8388608u
+endif
+
+# The wireless image's heap is a config value: the mvm firmware download and
+# its command/RX pools need more than the default 256 KiB on FreeRTOS.
+ifneq ($(CONFIG_FREERTOS_HEAP_SIZE),)
+EXTRA_DEFS += -DCONFIG_FREERTOS_HEAP_SIZE=$(CONFIG_FREERTOS_HEAP_SIZE)
 endif
 
 .DEFAULT_GOAL := all
@@ -374,6 +380,8 @@ INCLUDES := \
 	-I$(PLATFORM)/arch/aarch64 \
 	-I$(PLATFORM)/board/rk3568-itx \
 	-I$(PLATFORM)/board/rk3568-itx/drivers \
+	-I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
+	-I$(PLATFORM)/board/rk3568-itx/drivers/nvme \
 	-I$(PLATFORM)/os/baremetal \
 	-I$(THIRD_PARTY)/ulog/src \
 	-I$(THIRD_PARTY)/tlsf \
@@ -408,6 +416,11 @@ PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONEN
 
 # The 8189FTV vendor-stack world (empty unless the wlan case is selected).
 include $(CURDIR)/wlan.mk
+
+# The B3 wireless world (empty unless the iwlwifi case is selected).
+ifneq ($(filter iwl7260,$(CASES)),)
+include $(CURDIR)/iwlwifi.mk
+endif
 
 BASE_SRCS := \
 	$(PLATFORM)/arch/aarch64/start.S \
@@ -483,13 +496,36 @@ MMC_PORT_SRCS :=
 MMC_VENDOR_SRCS :=
 endif
 
+# The PCIe domain: the GICv3 ITS / MSI bridge, the DesignWare root complex,
+# MSI/MSI-X programming and the NVMe block driver.  The case group is selected
+# by `pcie`; the benchmark (`pcie_bench`) and the endpoint case (`pcie_7260`)
+# reuse the same bring-up from pcie.c.
+ifneq ($(filter pcie,$(CASES)),)
+ARCH_PCIE_SRCS := \
+	$(PLATFORM)/arch/aarch64/gicv3_its.c \
+	$(PLATFORM)/arch/aarch64/gicv3_msi.c \
+	$(PLATFORM)/arch/aarch64/irq_ctrl.c
+PCIE_BOARD_SRCS := \
+	$(PLATFORM)/board/rk3568-itx/drivers/pcie/pcie_dw.c \
+	$(PLATFORM)/board/rk3568-itx/drivers/pcie/dwc_msix.c \
+	$(PLATFORM)/board/rk3568-itx/drivers/pcie/dwc_msi.c \
+	$(PLATFORM)/board/rk3568-itx/drivers/pcie/dwc_pcie.c
+NVME_BOARD_SRCS := \
+	$(PLATFORM)/board/rk3568-itx/drivers/nvme/dwc_nvme.c
+else
+ARCH_PCIE_SRCS :=
+PCIE_BOARD_SRCS :=
+NVME_BOARD_SRCS :=
+endif
+
 PRINTF_SRCS := $(THIRD_PARTY)/printf/printf.c
 
 FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
-	$(MMC_PORT_SRCS) $(BACKEND_FIRST_SRCS)
+	$(MMC_PORT_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_BOARD_SRCS) $(NVME_BOARD_SRCS) \
+	$(BACKEND_FIRST_SRCS)
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
-ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS)
+ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
 
@@ -549,6 +585,14 @@ $(foreach s,$(filter-out %.S,$(WLAN_LKPI_SRCS)),$(eval $(call COMPILE_C,$(s),$(W
 $(foreach s,$(filter-out %.S,$(WLAN_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WLAN_OBS_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WLAN_LWIP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_LWIP_CFLAGS))))
+
+ifneq ($(filter iwl7260,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(IWL_NET80211_SRCS) $(IWL_NPORT_SRCS) $(IWL_BRIDGE_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_BSD_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(IWL_LKPI_SRCS) $(IWL_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_KPI_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(IWL_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_DRV_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(IWL_PCIE_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_PCIE_PORT_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(IWL_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_KPI_CFLAGS))))
+endif
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@

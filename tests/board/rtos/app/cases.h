@@ -44,6 +44,22 @@ int case_net_run(void);
 #if defined(RTOS_CASE_EMMC)
 int case_emmc_run(void);
 #endif
+#if defined(RTOS_CASE_PCIE)
+int case_pcie_run(void);
+#endif
+
+#if defined(RTOS_CASE_PCIE_BENCH)
+int case_pcie_bench_run(void);
+#endif
+
+#if defined(RTOS_CASE_PCIE_7260)
+int case_pcie_7260_run(void);
+#endif
+
+#if defined(RTOS_CASE_IWL7260)
+int case_iwl7260_run(void);
+#endif
+
 #if defined(RTOS_CASE_WLAN)
 int case_wlan_run(void);
 void case_wlan_prepare(void);

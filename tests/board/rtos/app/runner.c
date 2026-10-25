@@ -45,6 +45,18 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_EMMC)
 	{ "emmc", case_emmc_run },
 #endif
+#if defined(RTOS_CASE_PCIE)
+	{ "pcie", case_pcie_run },
+#endif
+#if defined(RTOS_CASE_PCIE_BENCH)
+	{ "pcie_bench", case_pcie_bench_run },
+#endif
+#if defined(RTOS_CASE_PCIE_7260)
+	{ "pcie_7260", case_pcie_7260_run },
+#endif
+#if defined(RTOS_CASE_IWL7260)
+	{ "iwl7260", case_iwl7260_run },
+#endif
 #if defined(RTOS_CASE_WLAN)
 	{ "wlan", case_wlan_run },
 #endif

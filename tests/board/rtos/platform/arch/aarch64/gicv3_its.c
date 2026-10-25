@@ -25,7 +25,8 @@
  * through a kernel IRQ window, and gic_lpi_set_state takes the INTID
  * directly - the hook is wired in gicv3.c's IRQ_Enable/IRQ_Disable.
  *
- * The LPI priority byte is BOARD_IRQ_PRIORITY_API_CALL_RAW (0xb0). The level
+ * The LPI priority byte is BOARD_IRQ_PRIORITY_API_CALL_RAW (0xb0 on ThreadX,
+ * 0xd0 on FreeRTOS, whose syscall ceiling is lower). The level
  * decides whether a delivery handler may call a FromISR API, and 0xa0 sits
  * *above* the API-call level (smaller is more urgent in GIC terms), so the
  * PCIe MSI handlers - which wake a waiter through an event flag - would trip

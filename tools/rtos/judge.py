@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-CASES = ("tick", "cmsis2", "net", "emmc", "wlan")
+CASES = ("tick", "cmsis2", "net", "emmc", "wlan", "pcie", "pcie_bench", "pcie_7260", "iwl7260")
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
 FLAGS = re.MULTILINE
@@ -64,6 +64,25 @@ PATTERNS = {
     "wlan_ping": re.compile(r"wlan: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+)", re.MULTILINE),
     "wlan_pass": re.compile(r"wlan: PASS", re.MULTILINE),
     "wlan_fail": re.compile(r"wlan: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # PCIe/NVMe ladder (B0/B1): the root complex, the endpoint list, the
+    # namespace geometry and the message-interrupt delivery.  A completion
+    # without a delivery is not a PASS: the CQE is written either way.
+    "pcie_ctrl": re.compile(
+        r"pcie: ctrl (?P<n>\d+) link up, downstream bus (?P<bus>\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_nvme": re.compile(
+        r"nvme0: (?P<vid>[0-9a-fA-F]{4}):(?P<did>[0-9a-fA-F]{4}) at 0x(?P<bar>[0-9a-fA-F]+), "
+        r"ns1: (?P<blocks>\d+) blocks of (?P<sector>\d+) bytes",
+        re.MULTILINE,
+    ),
+    "pcie_irq": re.compile(
+        r"nvme0: message interrupts delivered \(intid (?P<intid>\d+), (?P<so_far>\d+) so far\)",
+        re.MULTILINE,
+    ),
+    "pcie_delta": re.compile(r"pcie: irqs=(?P<before>\d+)->(?P<after>\d+) completions=(?P<completions>\d+)", re.MULTILINE),
+    "pcie_platform": re.compile(r"pcie: platform-inactive (?P<reason>.+)$", re.MULTILINE),
+    "pcie_bench_platform": re.compile(r"pcie-bench: platform-inactive (?P<reason>.+)$", re.MULTILINE),
     # Throughput-round instruments (measurement only: they are read out for the
     # ledger, they never turn a pass into a fail).
     "net_rtt": re.compile(r"net: rtt n=(?P<n>\d+) min_us=(?P<min>\d+) avg_us=(?P<avg>\d+) max_us=(?P<max>\d+)", re.MULTILINE),
@@ -83,6 +102,52 @@ LIST_PATTERNS = {
     "net_udp_blast": re.compile(r"net: udp blast port=(?P<port>\d+) sent=(?P<sent>\d+) pkts=(?P<pkts>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
     "emmc_sweep": re.compile(r"emmc: sweep (?P<dir>read|write) chunk=(?P<kib>\d+) KiB xfers=(?P<xfers>\d+) bytes=(?P<bytes>\d+) us=(?P<us>\d+) kibs=(?P<kibs>\d+)", re.MULTILINE),
     # Observation-image evidence: read out for the ledger, never a pass gate.
+    "pcie_bench_median": re.compile(
+        r"pcie-bench: median bs=(?P<bs>\d+) cmd_bytes=(?P<cmd_bytes>\d+) "
+        r"qd=(?P<qd>\d+) dir=(?P<dir>\S+) mib_s=(?P<mib_s>\d+) us=(?P<us>\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_dev": re.compile(
+        r"pcie-7260: dev (?P<bdf>[0-9a-fA-F:.]+) 8086:08b1 class 0280 rev 0x(?P<rev>[0-9a-fA-F]+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_bar": re.compile(
+        r"pcie-7260: bar0=0x(?P<bar>[0-9a-fA-F]+) hw_rev=0x(?P<rev>[0-9a-fA-F]+) "
+        r"type=0x(?P<type>[0-9a-fA-F]+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_vec": re.compile(
+        r"pcie-7260: (?P<kind>msix|msi) vectors=(?P<n>\d+) intid=(?P<intid>\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_lnk": re.compile(
+        r"pcie-7260: lnksta speed=(?P<speed>\d+) width=(?P<width>\d+) "
+        r"lnkctl=0x(?P<ctl>[0-9a-fA-F]+) aspm=(?P<aspm>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_attach": re.compile(r"iwl7260: attach ok after (?P<ms>\d+) ms", re.MULTILINE),
+    "iwl7260_start": re.compile(
+        r"iwl7260: start ok attached=(?P<attached>\d+) rx=(?P<rx>\d+)", re.MULTILINE
+    ),
+    "iwl7260_alive": re.compile(
+        r"loaded firmware version (?P<version>\S+)", re.MULTILINE
+    ),
+    "iwl7260_platform": re.compile(
+        r"iwl7260: platform-inactive (?P<reason>.+)$", re.MULTILINE
+    ),
+    "pcie_7260_platform": re.compile(
+        r"pcie-7260: platform-inactive (?P<reason>.+)$", re.MULTILINE
+    ),
+    "pcie_bench_fit": re.compile(
+        r"pcie-bench: fit qd=(?P<qd>\d+) dir=(?P<dir>\S+) c_us=(?P<c_us>-?\d+) "
+        r"bw_mib_s=(?P<bw_mib_s>-?\d+) r2_permille=(?P<r2>-?\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_dev": re.compile(
+        r"pcie: dev (?P<bdf>[0-9a-fA-F:.]+) (?P<vid>[0-9a-fA-F]{4}):(?P<did>[0-9a-fA-F]{4}) "
+        r"class (?P<cc>[0-9a-fA-F]{4})",
+        re.MULTILINE,
+    ),
     "wlan_obs": re.compile(r"wlan: obs .*", re.MULTILINE),
     "wlan_udp": re.compile(r"wlan: udp .*", re.MULTILINE),
     "wlan_ping_seq": re.compile(r"wlan: ping (?:tx|rx) seq=\d+", re.MULTILINE),
@@ -258,6 +323,134 @@ def judge(text: str, expect: dict | None = None) -> dict:
         fail = found["wlan_fail"]
         if fail:
             errors.append(f"wlan: {fail['reason']}")
+
+    if cases.get("iwl7260", {}).get("verdict") == "pass":
+        if found["iwl7260_platform"]:
+            cases["iwl7260"]["platform_inactive"] = found["iwl7260_platform"]["reason"]
+            errors.append(
+                f"iwl7260: platform-inactive ({found['iwl7260_platform']['reason']})"
+            )
+        attach = (found["iwl7260_attach"] or [None])[0]
+        start = (found["iwl7260_start"] or [None])[0]
+        alive = (found["iwl7260_alive"] or [None])[0]
+        if not attach:
+            errors.append("iwl7260: PASS without an attach line")
+        else:
+            notes.append(f"iwl7260: attach after {attach['ms']} ms")
+        if not start:
+            errors.append("iwl7260: PASS without a start line")
+        elif int(start["attached"]) == 0:
+            errors.append("iwl7260: start returned but not attached")
+        else:
+            notes.append(f"iwl7260: start attached={start['attached']} rx={start['rx']}")
+        if not alive:
+            errors.append("iwl7260: no firmware ALIVE evidence (loaded firmware version)")
+        else:
+            notes.append(f"iwl7260: firmware {alive['version']}")
+
+    if cases.get("pcie_7260", {}).get("verdict") == "pass":
+        if found["pcie_7260_platform"]:
+            cases["pcie_7260"]["platform_inactive"] = found["pcie_7260_platform"]["reason"]
+            errors.append(
+                f"pcie_7260: platform-inactive ({found['pcie_7260_platform']['reason']})"
+            )
+        dev = (found["pcie_7260_dev"] or [None])[0]
+        bar = (found["pcie_7260_bar"] or [None])[0]
+        vec = (found["pcie_7260_vec"] or [None])[0]
+        lnk = (found["pcie_7260_lnk"] or [None])[0]
+        if not dev:
+            errors.append("pcie_7260: PASS without a 8086:08b1 device line")
+        else:
+            notes.append(f"pcie_7260: dev {dev['bdf']} rev={dev['rev']}")
+        if not bar:
+            errors.append("pcie_7260: PASS without a BAR/HW_REV line")
+        elif bar["type"].lower() != "14":
+            errors.append(f"pcie_7260: hw_rev type=0x{bar['type']} != 0x14")
+        else:
+            notes.append(
+                f"pcie_7260: bar0=0x{bar['bar']} hw_rev=0x{bar['rev']}"
+            )
+        if not vec:
+            errors.append("pcie_7260: PASS without a message-vector line")
+        elif int(vec["intid"]) < 8192:
+            errors.append(f"pcie_7260: intid={vec['intid']} is not an LPI")
+        else:
+            notes.append(
+                f"pcie_7260: {vec['kind']} vectors={vec['n']} intid={vec['intid']}"
+            )
+        if not lnk:
+            errors.append("pcie_7260: PASS without a link-status line")
+        else:
+            notes.append(
+                f"pcie_7260: lnksta speed={lnk['speed']} width={lnk['width']} "
+                f"aspm={lnk['aspm']}"
+            )
+
+    if cases.get("pcie_bench", {}).get("verdict") == "pass":
+        if found["pcie_bench_platform"]:
+            cases["pcie_bench"]["platform_inactive"] = found["pcie_bench_platform"]["reason"]
+            errors.append(
+                f"pcie_bench: platform-inactive ({found['pcie_bench_platform']['reason']})"
+            )
+        medians = found["pcie_bench_median"]
+        if len(medians) < 12:
+            errors.append(f"pcie_bench: {len(medians)}/12 cell medians")
+        bad = [m for m in medians if int(m["mib_s"]) == 0]
+        if bad:
+            errors.append(f"pcie_bench: {len(bad)} cells with zero bandwidth")
+        for m in medians:
+            notes.append(
+                f"pcie_bench: bs={m['bs']} cmd={m['cmd_bytes']} qd={m['qd']} "
+                f"{m['dir']} {m['mib_s']} MiB/s"
+            )
+        if found["pcie_bench_fit"]:
+            notes.append(f"pcie_bench: {len(found['pcie_bench_fit'])} fit rows")
+
+    if cases.get("pcie", {}).get("verdict") == "pass":
+        if found["pcie_platform"]:
+            # A platform verdict is not a code pass; keep it visible so the
+            # round can exclude the boot from the denominator.
+            cases["pcie"]["platform_inactive"] = found["pcie_platform"]["reason"]
+            errors.append(f"pcie: platform-inactive ({found['pcie_platform']['reason']})")
+        ctrl = found["pcie_ctrl"]
+        if not ctrl:
+            errors.append("pcie: PASS without a controller link line")
+        else:
+            notes.append(f"pcie: ctrl={ctrl['n']} bus={ctrl['bus']}")
+        nvme = found["pcie_nvme"]
+        if not nvme:
+            errors.append("pcie: PASS without an nvme geometry line")
+        elif int(nvme["blocks"]) == 0 or int(nvme["sector"]) == 0:
+            errors.append("pcie: namespace geometry is empty")
+        else:
+            notes.append(
+                f"pcie: nvme {nvme['vid']}:{nvme['did']} at 0x{nvme['bar']} "
+                f"{nvme['blocks']}x{nvme['sector']}B"
+            )
+        irq = found["pcie_irq"]
+        delta = found["pcie_delta"]
+        if not irq:
+            errors.append("pcie: PASS without a message-interrupt line")
+        elif int(irq["so_far"]) == 0:
+            errors.append("pcie: no message interrupt delivered")
+        else:
+            notes.append(f"pcie: irq intid={irq['intid']} so_far={irq['so_far']}")
+        if not delta:
+            errors.append("pcie: PASS without an irq delta line")
+        elif int(delta["after"]) <= int(delta["before"]):
+            errors.append(
+                f"pcie: irqs {delta['before']}->{delta['after']} (no delivery)"
+            )
+        else:
+            notes.append(
+                f"pcie: irqs {delta['before']}->{delta['after']} "
+                f"completions={delta['completions']}"
+            )
+        devices = found["pcie_dev"]
+        if not any(row["cc"].lower() == "0108" for row in devices):
+            errors.append("pcie: no NVMe class function in the device list")
+        else:
+            notes.append(f"pcie: devices={len(devices)}")
 
     if cases.get("emmc", {}).get("verdict") == "pass":
         rw = found["emmc_rw"]
