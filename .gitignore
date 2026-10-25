@@ -3,6 +3,7 @@ build/
 !rtos/build/
 rtos/build/*
 !rtos/build/Makefile
+!rtos/build/*.mk
 out/
 *.o
 *.ko

@@ -23,7 +23,7 @@ progress, so only committed bytes were imported).
 | `app/` | new | the case runner, the four platform cases (tick, cmsis2, net, emmc) and the 8189FTV `wlan` case, written for this repository |
 | `tests/cmsis2-host/` | new | the host tier's entry point (the same conformance case, the kernels' own host ports underneath) |
 | `build/Makefile` | new (shape derived from the reference board Makefiles) | the two board images, the host tier, and the `wlan.mk` vendor-stack world |
-| `components/linuxkpi/` | `components/linuxkpi/` | byte-identical runtime subset for the 8189FTV port: core, census, platform target, cfg80211/netdev/osdep, SDIO engine/seam, skbuff pool and the `include/` Linux face.  The USB, PCIe, mac80211, tracing and firmware-blob units are not carried. |
+| `components/linuxkpi/` | `components/linuxkpi/` | runtime subset for the 8189FTV port: core, census, platform target, cfg80211/netdev/osdep, SDIO engine/seam, skbuff pool and the `include/` Linux face.  Byte-identical except the cfg80211 one-channel scan addition (item 4).  The USB, PCIe, mac80211, tracing and firmware-blob units are not carried. |
 
 ## Additions to imported files
 
@@ -45,6 +45,14 @@ imported tree:
    now honours a build-time `CONFIG_FREERTOS_HEAP_SIZE` (default unchanged at
    256 KiB).  The 8189FTV image needs a much larger heap than the storage image;
    the number is the vendor stack's measured high-water, not a new default.
+4. `components/linuxkpi/linuxkpi_cfg80211.c` and `.h`: one **additive** entry,
+   `lkpicfg_scan_start_channel()`, and the one-channel branch in the existing
+   scan-request builder.  Measured 2026-10-25: the vendor driver/firmware path
+   surveys only the first channel of a 14-channel request (the board's table was
+   a ch1-only 39 rows, and the ch5 monitor saw no board probe requests); a
+   targeted ch5 request surveys ch5 and returns the lab AP.  The existing
+   `lkpicfg_scan_start()` is unchanged for multi-channel callers.  This is the
+   working shape until the channel-list path is explained in the TRM (99 #25).
 
 The FreeRTOS board's heap face (`os/freertos/board/rk3568-itx/cmsis2_memory_board.c`)
 is also new: the reference board images never linked the storage stack on the
@@ -67,7 +75,7 @@ tree), on the branch `feat-rtos-8189ftv`:
 
 | Path | Origin | State |
 |---|---|---|
-| `components/linuxkpi/` | `components/linuxkpi/` | runtime subset listed above; byte-identical |
+| `components/linuxkpi/` | `components/linuxkpi/` | runtime subset listed above; byte-identical except the cfg80211 scan addition (item 4) |
 | `board/rk3568-itx/drivers/dwc_mmc.{c,h,regs.h}` | same path | byte-identical |
 | `ports/fsl_sdmmc/sdmmc_card.c`, `sdmmc_host_dwmmc.c`, `lkpi_sdio_fsl.c` | same paths | byte-identical |
 | `ports/lwip/lkpinetif*.{c,h}`, `lkpinetif_seam.h` | same paths | byte-identical |

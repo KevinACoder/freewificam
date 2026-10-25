@@ -59,6 +59,9 @@ PATTERNS = {
     "wlan_attach": re.compile(r"wlan: attach mac=(?P<mac>[0-9a-fA-F:]+)", re.MULTILINE),
     "wlan_netdev_addr": re.compile(r"wlan: netdev addr=(?P<mac>[0-9a-fA-F:]+)", re.MULTILINE),
     "wlan_stats": re.compile(r"wlan: sdio stats cards=(?P<cards>\d+) drivers=(?P<drivers>\d+) probes=(?P<probes>\d+) io_direct=(?P<direct>\d+) io_ext=(?P<ext>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "wlan_scan": re.compile(r"wlan: scan rows=(?P<rows>\d+) ssid=(?P<ssid>\S*) bssid=(?P<bssid>[0-9a-fA-F:]+) freq=(?P<freq>\d+) signal=(?P<signal>-?\d+)", re.MULTILINE),
+    "wlan_join": re.compile(r"wlan: join state=(?P<state>\d+) bssid=(?P<bssid>[0-9a-fA-F:]+) status=(?P<status>\d+)", re.MULTILINE),
+    "wlan_ping": re.compile(r"wlan: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+)", re.MULTILINE),
     "wlan_pass": re.compile(r"wlan: PASS", re.MULTILINE),
     "wlan_fail": re.compile(r"wlan: FAIL (?P<reason>.+)$", re.MULTILINE),
     # Throughput-round instruments (measurement only: they are read out for the
@@ -217,6 +220,37 @@ def judge(text: str, expect: dict | None = None) -> dict:
         stats = found["wlan_stats"]
         if stats and int(stats["errors"]) != 0:
             errors.append(f"wlan: sdio errors={stats['errors']}")
+        scan = found["wlan_scan"]
+        if not scan:
+            errors.append("wlan: PASS without a scan line")
+        elif (int(scan["rows"]) < 1) or (scan["ssid"] != "lab8189b") or \
+             (scan["bssid"].lower() == "00:00:00:00:00:00"):
+            errors.append(
+                f"wlan: scan rows={scan['rows']} ssid={scan['ssid']} "
+                f"bssid={scan['bssid']}"
+            )
+        else:
+            notes.append(
+                f"wlan: scan rows={scan['rows']} ssid={scan['ssid']} "
+                f"bssid={scan['bssid']} freq={scan['freq']} "
+                f"signal={scan['signal']}"
+            )
+        join = found["wlan_join"]
+        if not join:
+            errors.append("wlan: PASS without a join line")
+        elif (int(join["state"]) != 4) or (int(join["status"]) != 0):
+            errors.append(
+                f"wlan: join state={join['state']} status={join['status']}"
+            )
+        else:
+            notes.append(f"wlan: join bssid={join['bssid']}")
+        ping = found["wlan_ping"]
+        if not ping:
+            errors.append("wlan: PASS without a ping line")
+        elif (int(ping["tx"]) != 10) or (int(ping["rx"]) != int(ping["tx"])):
+            errors.append(f"wlan: ping {ping['rx']}/{ping['tx']}")
+        else:
+            notes.append(f"wlan: ping {ping['rx']}/{ping['tx']}")
         fail = found["wlan_fail"]
         if fail:
             errors.append(f"wlan: {fail['reason']}")

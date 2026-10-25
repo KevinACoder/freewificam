@@ -512,7 +512,7 @@ $(foreach s,$(filter-out %.S,$(WLAN_APP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL
 $(foreach s,$(filter-out %.S,$(WLAN_SDIO_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WLAN_LKPI_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_LKPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WLAN_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_DRV_CFLAGS))))
-$(foreach s,$(filter-out %.S,$(WLAN_LWIP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_SDIO_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WLAN_LWIP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_LWIP_CFLAGS))))
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@

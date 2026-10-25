@@ -587,8 +587,8 @@ lkpicfg_wiphy(void)
 	return NULL;
 }
 
-int
-lkpicfg_scan_start(struct wiphy *wiphy)
+static int
+lkpicfg_scan_start_on(struct wiphy *wiphy, int hw_value)
 {
 	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
 	struct cfg80211_scan_request *req;
@@ -637,14 +637,43 @@ lkpicfg_scan_start(struct wiphy *wiphy)
 		n = (unsigned int)band->n_channels;
 		if (n > CONFIG_LKPICFG_MAX_SCAN_CHANNELS)
 			n = CONFIG_LKPICFG_MAX_SCAN_CHANNELS;
-		for (i = 0; i < n; i++)
-			req->channels[i] = &band->channels[i];
-		req->n_channels = n;
+		if (hw_value > 0) {
+			/* The vendor driver/firmware path used here only surveys the
+			 * first channel of a multi-channel request (measured
+			 * 2026-10-25: a 14-channel request produced a ch1-only table
+			 * and no ch5 probes).  A one-channel request is the working
+			 * shape until the channel-list path is explained in the TRM. */
+			for (i = 0; i < n; i++) {
+				if ((int)band->channels[i].hw_value == hw_value) {
+					req->channels[0] = &band->channels[i];
+					req->n_channels = 1;
+					break;
+				}
+			}
+		} else {
+			for (i = 0; i < n; i++)
+				req->channels[i] = &band->channels[i];
+			req->n_channels = n;
+		}
 	}
 
-	lkpi_printf(ULOG_INFO_LEVEL, "lkpicfg: scan start channels=%u\n",
-	    (unsigned)req->n_channels);
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpicfg: scan start channels=%u hw=%d\n",
+	    (unsigned)req->n_channels, hw_value);
 	return ctx->ops->scan(wiphy, req);
+}
+
+int
+lkpicfg_scan_start(struct wiphy *wiphy)
+{
+	return lkpicfg_scan_start_on(wiphy, 0);
+}
+
+int
+lkpicfg_scan_start_channel(struct wiphy *wiphy, unsigned int hw_value)
+{
+	if (hw_value == 0u || hw_value > 255u)
+		return -EINVAL;
+	return lkpicfg_scan_start_on(wiphy, (int)hw_value);
 }
 
 unsigned int

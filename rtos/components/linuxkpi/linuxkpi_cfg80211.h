@@ -95,6 +95,12 @@ struct wiphy *lkpicfg_wiphy(void);
  * the request, a negative error otherwise. */
 int	lkpicfg_scan_start(struct wiphy *wiphy);
 
+/* The one-channel form: the vendor driver's multi-channel survey request
+ * currently surveys only its first channel (measured 2026-10-25), so a caller
+ * that needs a specific channel asks for it directly.  Returns the driver's
+ * scan result. */
+int	lkpicfg_scan_start_channel(struct wiphy *wiphy, unsigned int hw_value);
+
 /* The table the substitute collected from the driver's own reports. */
 unsigned int	lkpicfg_bss_count(struct wiphy *wiphy);
 int	lkpicfg_bss_at(struct wiphy *wiphy, unsigned int idx,
