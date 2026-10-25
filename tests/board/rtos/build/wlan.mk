@@ -21,6 +21,14 @@ ifeq ($(strip $(VENDOR_8189FS)),)
 $(error the wlan case needs VENDOR_8189FS=<rtl8189fs tree at pin 13bbdbc>)
 endif
 
+# Scan diagnostic arms: WLAN_SCAN_DIAG=1 runs the four request shapes before the
+# production full scan; WLAN_SCAN_BATCH=0 is the production one-shot 14-channel
+# request (the shape the clean P3 boots measured).  WLAN_SCAN_BATCH=1 keeps the
+# <=4-channel fallback for a bench where the one-shot dwell proves marginal.
+# Both are build-time so one boot is one arm.
+WLAN_SCAN_DIAG ?= 0
+WLAN_SCAN_BATCH ?= 0
+
 LKPI := $(COMPONENTS)/linuxkpi/rtos
 
 WLAN_SKB_CFLAGS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
@@ -128,6 +136,7 @@ WLAN_LKPI_CFLAGS := $(filter-out -Wextra -DCMSIS_device_header=%,$(CFLAGS)) \
 WLAN_APP_CFLAGS := $(filter-out -Wextra -DCMSIS_device_header=%,$(CFLAGS)) \
 	-std=gnu11 -DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
+	-DWLAN_SCAN_DIAG=$(WLAN_SCAN_DIAG) -DWLAN_SCAN_BATCH=$(WLAN_SCAN_BATCH) \
 	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio \
 	-I$(THIRD_PARTY)/fsl_sdmmc/sdio
 

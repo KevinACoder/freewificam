@@ -509,7 +509,8 @@ endif
 
 $(FLAG_STAMP): FORCE $(WLAN_STAMP)
 	@mkdir -p $(BUILD)
-	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
+	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'wlan: $(WLAN_FLAGS_STAMP)' \
+		'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 
 $(foreach s,$(filter-out %.S,$(FIRST_SRCS)),$(eval $(call COMPILE_C,$(s),$(CFLAGS))))

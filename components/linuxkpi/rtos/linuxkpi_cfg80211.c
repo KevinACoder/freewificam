@@ -587,17 +587,23 @@ lkpicfg_wiphy(void)
 	return NULL;
 }
 
-static int
-lkpicfg_scan_start_on(struct wiphy *wiphy, int hw_value)
+int
+lkpicfg_scan_start_list(struct wiphy *wiphy, const unsigned int *hw_values,
+    unsigned int n)
 {
 	struct lkpicfg_wiphy_ctx *ctx = lkpicfg_ctx_of(wiphy);
 	struct cfg80211_scan_request *req;
 	struct ieee80211_supported_band *band;
 	struct net_device *dev;
-	unsigned int n, i;
+	unsigned int count = 0u;
+	unsigned int i;
 
 	if (ctx == NULL || ctx->ops == NULL || ctx->ops->scan == NULL)
 		return -EOPNOTSUPP;
+	if (n > CONFIG_LKPICFG_MAX_SCAN_CHANNELS)
+		return -EINVAL;
+	if (n != 0u && hw_values == NULL)
+		return -EINVAL;
 	/*
 	 * The scan is driven through the interface the driver registered: the
 	 * scan op reads request->wdev and finds its adapter from
@@ -627,39 +633,53 @@ lkpicfg_scan_start_on(struct wiphy *wiphy, int hw_value)
 	req->ie = NULL;
 	req->ie_len = 0;
 
-	/*
-	 * The channels the device advertises: the 2.4 GHz band the driver
-	 * filled in before registering. A band with no channels still produces
-	 * a valid (empty) request the driver walks its own way.
-	 */
 	band = wiphy->bands[NL80211_BAND_2GHZ];
-	if (band != NULL) {
-		n = (unsigned int)band->n_channels;
-		if (n > CONFIG_LKPICFG_MAX_SCAN_CHANNELS)
-			n = CONFIG_LKPICFG_MAX_SCAN_CHANNELS;
-		if (hw_value > 0) {
-			/* The vendor driver/firmware path used here only surveys the
-			 * first channel of a multi-channel request (measured
-			 * 2026-10-25: a 14-channel request produced a ch1-only table
-			 * and no ch5 probes).  A one-channel request is the working
-			 * shape until the channel-list path is explained in the TRM. */
-			for (i = 0; i < n; i++) {
-				if ((int)band->channels[i].hw_value == hw_value) {
-					req->channels[0] = &band->channels[i];
-					req->n_channels = 1;
+	if (n == 0u) {
+		/* the full band, in the order the driver advertised it */
+		if (band != NULL) {
+			unsigned int band_n = (unsigned int)band->n_channels;
+
+			if (band_n > CONFIG_LKPICFG_MAX_SCAN_CHANNELS)
+				band_n = CONFIG_LKPICFG_MAX_SCAN_CHANNELS;
+			for (i = 0u; i < band_n; i++)
+				req->channels[count++] = &band->channels[i];
+		}
+	} else {
+		if (band == NULL)
+			return -EINVAL;
+		for (i = 0u; i < n; i++) {
+			unsigned int j;
+			int found = 0;
+
+			for (j = 0u; j < (unsigned int)band->n_channels; j++) {
+				if ((unsigned int)band->channels[j].hw_value ==
+				    hw_values[i]) {
+					req->channels[count++] = &band->channels[j];
+					found = 1;
 					break;
 				}
 			}
-		} else {
-			for (i = 0; i < n; i++)
-				req->channels[i] = &band->channels[i];
-			req->n_channels = n;
+			if (found == 0)
+				return -EINVAL;
 		}
 	}
+	req->n_channels = count;
 
-	lkpi_printf(ULOG_INFO_LEVEL, "lkpicfg: scan start channels=%u hw=%d\n",
-	    (unsigned)req->n_channels, hw_value);
+	lkpi_printf(ULOG_INFO_LEVEL, "lkpicfg: scan start channels=%u\n",
+	    (unsigned)req->n_channels);
 	return ctx->ops->scan(wiphy, req);
+}
+
+static int
+lkpicfg_scan_start_on(struct wiphy *wiphy, int hw_value)
+{
+	unsigned int channel;
+
+	if (hw_value > 0) {
+		channel = (unsigned int)hw_value;
+		return lkpicfg_scan_start_list(wiphy, &channel, 1u);
+	}
+	return lkpicfg_scan_start_list(wiphy, NULL, 0u);
 }
 
 int

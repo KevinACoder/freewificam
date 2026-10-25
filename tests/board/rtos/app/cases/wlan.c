@@ -25,6 +25,7 @@
 #include "cases.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "os/cmsis2/cmsis2.h"
@@ -56,6 +57,13 @@
 #define WLAN_POLL_MS		100u
 #define WLAN_PING_COUNT		10u
 
+#ifndef WLAN_SCAN_DIAG
+#define WLAN_SCAN_DIAG		0
+#endif
+#ifndef WLAN_SCAN_BATCH
+#define WLAN_SCAN_BATCH		1
+#endif
+
 static int wlan_prepared;
 
 /* The cfg80211 substitute's upward notifications.  The scan table and the
@@ -72,6 +80,7 @@ static uint8_t wlan_bss_ssid[33];
 static uint32_t wlan_bss_freq;
 static int wlan_bss_signal;
 static unsigned int wlan_bss_dump;
+static unsigned int wlan_bss_ch_hist[16];
 
 static void wlan_on_attached(struct wiphy *wiphy)
 {
@@ -91,6 +100,17 @@ static void wlan_on_bss(struct wiphy *wiphy, const struct lkpicfg_bss *bss)
 		return;
 	}
 	wlan_bss_rows++;
+	{
+		unsigned int ch = 0u;
+		uint32_t freq = bss->freq;
+
+		if (freq == 2484u)
+			ch = 14u;
+		else if ((freq >= 2412u) && (freq <= 2472u))
+			ch = (freq - 2407u) / 5u;
+		if (ch < 16u)
+			wlan_bss_ch_hist[ch]++;
+	}
 	if (wlan_bss_dump < 10u) {
 		char ssid[33];
 		unsigned int n = bss->ssid_len;
@@ -145,6 +165,138 @@ static void wlan_on_sta_left(struct wiphy *wiphy, const u8 mac[6])
 {
 	(void)wiphy;
 	(void)mac;
+}
+
+
+/* --- scan shapes and the production full scan ---------------------------- */
+
+static void
+wlan_scan_reset(int all)
+{
+	wlan_scan_done = 0;
+	if (all) {
+		wlan_bss_rows = 0u;
+		wlan_bss_dump = 0u;
+		wlan_bss_found = 0;
+		wlan_bss_freq = 0u;
+		wlan_bss_signal = 0;
+		memset(wlan_bss_bssid, 0, sizeof(wlan_bss_bssid));
+		memset(wlan_bss_ssid, 0, sizeof(wlan_bss_ssid));
+		memset(wlan_bss_ch_hist, 0, sizeof(wlan_bss_ch_hist));
+	}
+}
+
+static int
+wlan_scan_wait(void)
+{
+	unsigned int waited = 0u;
+
+	while ((wlan_scan_done == 0) && (waited < WLAN_SCAN_WAIT_MS)) {
+		(void)osDelay(WLAN_POLL_MS);
+		waited += WLAN_POLL_MS;
+	}
+	return (wlan_scan_done != 0) ? 0 : -1;
+}
+
+static void
+wlan_scan_hist(char *buf, size_t len)
+{
+	unsigned int ch;
+	int off = 0;
+
+	buf[0] = '\0';
+	for (ch = 1u; ch <= 14u; ch++) {
+		if (wlan_bss_ch_hist[ch] == 0u)
+			continue;
+		if (off >= (int)len)
+			break;
+		off += snprintf(buf + off, len - (size_t)off, "%s%u:%u",
+		    (off == 0) ? "" : ",", ch, wlan_bss_ch_hist[ch]);
+	}
+	if (off == 0)
+		(void)snprintf(buf, len, "-");
+}
+
+static int
+wlan_scan_shape(struct wiphy *wiphy, const unsigned int *chans,
+		unsigned int n, const char *name)
+{
+	char hist[128];
+	int st;
+
+	wlan_scan_reset(1);
+	st = lkpicfg_scan_start_list(wiphy, chans, n);
+	if (st != 0) {
+		CASE_ANCHOR("wlan: diag scan shape=%s start rc=%d\n", name, st);
+		return st;
+	}
+	if (wlan_scan_wait() != 0) {
+		CASE_ANCHOR("wlan: diag scan shape=%s timeout rows=%u\n",
+		    name, wlan_bss_rows);
+		return -1;
+	}
+	wlan_scan_hist(hist, sizeof(hist));
+	CASE_ANCHOR("wlan: diag scan shape=%s rows=%u found=%d ch=%s\n",
+	    name, wlan_bss_rows, wlan_bss_found, hist);
+	return 0;
+}
+
+static int
+wlan_scan_production(struct wiphy *wiphy)
+{
+	int st;
+
+	wlan_scan_reset(1);
+#if WLAN_SCAN_BATCH
+	{
+		unsigned int base;
+
+		for (base = 1u; base <= 14u; base += 4u) {
+			unsigned int chans[4];
+			unsigned int n = 0u;
+			unsigned int ch;
+
+			for (ch = base; (ch < base + 4u) && (ch <= 14u); ch++)
+				chans[n++] = ch;
+			wlan_scan_reset(0);
+			st = lkpicfg_scan_start_list(wiphy, chans, n);
+			if (st != 0) {
+				CASE_ANCHOR("wlan: FAIL scan batch base=%u rc=%d\n",
+				    base, st);
+				return -1;
+			}
+			if (wlan_scan_wait() != 0) {
+				CASE_ANCHOR("wlan: FAIL scan batch timeout base=%u\n",
+				    base);
+				return -1;
+			}
+		}
+	}
+#else
+	st = lkpicfg_scan_start(wiphy);
+	if (st != 0) {
+		CASE_ANCHOR("wlan: FAIL scan start rc=%d\n", st);
+		return -1;
+	}
+	if (wlan_scan_wait() != 0) {
+		CASE_ANCHOR("wlan: FAIL scan timeout rows=%u\n", wlan_bss_rows);
+		return -1;
+	}
+#endif
+
+	CASE_ANCHOR("wlan: scan rows=%u ssid=%s bssid=%02x:%02x:%02x:%02x:%02x:%02x "
+		    "freq=%u signal=%d\n",
+		    wlan_bss_rows,
+		    wlan_bss_found ? (const char *)wlan_bss_ssid : "-",
+		    wlan_bss_bssid[0], wlan_bss_bssid[1], wlan_bss_bssid[2],
+		    wlan_bss_bssid[3], wlan_bss_bssid[4], wlan_bss_bssid[5],
+		    (unsigned)wlan_bss_freq, wlan_bss_signal);
+	if (wlan_bss_found == 0) {
+		CASE_ANCHOR("wlan: FAIL ssid=%s not in the scan table\n",
+		    WLAN_SSID);
+		return -1;
+	}
+	return 0;
 }
 
 static const struct lkpicfg_consumer_ops wlan_consumer = {
@@ -295,36 +447,26 @@ int case_wlan_run(void)
 		return -1;
 	}
 
-	wlan_scan_done = 0;
-	wlan_bss_rows = 0u;
-	wlan_bss_dump = 0u;
-	wlan_bss_found = 0;
-	st = lkpicfg_scan_start_channel(wiphy, 5u);
-	if (st != 0) {
-		CASE_ANCHOR("wlan: FAIL scan start rc=%d\n", st);
+#if WLAN_SCAN_DIAG
+	{
+		static const unsigned int full[14] = {
+			1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u, 14u
+		};
+		static const unsigned int pair_1_5[2] = { 1u, 5u };
+		static const unsigned int pair_5_1[2] = { 5u, 1u };
+		static const unsigned int single_5[1] = { 5u };
+
+		CASE_ANCHOR("wlan: diag begin\n");
+		(void)wlan_scan_shape(wiphy, full, 14u, "full");
+		(void)wlan_scan_shape(wiphy, pair_1_5, 2u, "pair-1-5");
+		(void)wlan_scan_shape(wiphy, pair_5_1, 2u, "pair-5-1");
+		(void)wlan_scan_shape(wiphy, single_5, 1u, "single-5");
+		CASE_ANCHOR("wlan: diag end\n");
+	}
+#endif
+	st = wlan_scan_production(wiphy);
+	if (st != 0)
 		return -1;
-	}
-	waited = 0u;
-	while ((wlan_scan_done == 0) && (waited < WLAN_SCAN_WAIT_MS)) {
-		(void)osDelay(WLAN_POLL_MS);
-		waited += WLAN_POLL_MS;
-	}
-	if (wlan_scan_done == 0) {
-		CASE_ANCHOR("wlan: FAIL scan timeout rows=%u\n", wlan_bss_rows);
-		return -1;
-	}
-	CASE_ANCHOR("wlan: scan rows=%u ssid=%s bssid=%02x:%02x:%02x:%02x:%02x:%02x "
-		    "freq=%u signal=%d\n",
-		    wlan_bss_rows,
-		    wlan_bss_found ? (const char *)wlan_bss_ssid : "-",
-		    wlan_bss_bssid[0], wlan_bss_bssid[1], wlan_bss_bssid[2],
-		    wlan_bss_bssid[3], wlan_bss_bssid[4], wlan_bss_bssid[5],
-		    (unsigned)wlan_bss_freq, wlan_bss_signal);
-	if (wlan_bss_found == 0) {
-		CASE_ANCHOR("wlan: FAIL ssid=%s not in the scan table\n",
-			    WLAN_SSID);
-		return -1;
-	}
 
 	wlan_connected = 0;
 	wlan_conn_status = 0xffffu;

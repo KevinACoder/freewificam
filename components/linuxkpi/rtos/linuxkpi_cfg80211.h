@@ -95,10 +95,14 @@ struct wiphy *lkpicfg_wiphy(void);
  * the request, a negative error otherwise. */
 int	lkpicfg_scan_start(struct wiphy *wiphy);
 
-/* The one-channel form: the vendor driver's multi-channel survey request
- * currently surveys only its first channel (measured 2026-10-25), so a caller
- * that needs a specific channel asks for it directly.  Returns the driver's
- * scan result. */
+/* Build a scan request over an explicit channel list (hw_value order kept).
+ * A NULL/zero list means the full 2.4 GHz band.  The list is bounded by
+ * CONFIG_LKPICFG_MAX_SCAN_CHANNELS.  Returns the driver's scan result. */
+int	lkpicfg_scan_start_list(struct wiphy *wiphy,
+	    const unsigned int *hw_values, unsigned int n);
+
+/* The one-channel debug entry.  The production path uses the full-band
+ * request; this form is kept for diagnostics (TRM 99 #25). */
 int	lkpicfg_scan_start_channel(struct wiphy *wiphy, unsigned int hw_value);
 
 /* The table the substitute collected from the driver's own reports. */
