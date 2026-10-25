@@ -215,19 +215,6 @@ int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
 	 * when the counted run started immediately after the ARP entry. */
 	(void)osDelay(WLAN_PING_WAIT_MS);
 
-	/* The settle window may let the driver enter its idle power state; one
-	 * more throwaway immediately before counting proves the path is awake. */
-	wlan_ping_rx = 0u;
-	wlan_ping_send(pcb, &peer, 0u);
-	{
-		unsigned int waited = 0u;
-
-		while ((wlan_ping_rx == 0u) && (waited < WLAN_PING_WAIT_MS)) {
-			(void)osDelay(10u);
-			waited += 10u;
-		}
-	}
-
 	wlan_ping_rx = 0u;
 	for (i = 1u; i <= count; i++) {
 		unsigned int before = wlan_ping_rx;
