@@ -210,10 +210,10 @@ int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
 		}
 	}
 	(void)wlan_arp_wait((const ip4_addr_t *)&peer, 2000u);
-	/* Give the join's TX/EDCA state one settle window before the first
-	 * counted echo; the P3 device round measured the first packet lost
-	 * when the counted run started immediately after the ARP entry. */
-	(void)osDelay(WLAN_PING_WAIT_MS);
+	/* Give the join's TX/EDCA and the AP's station entry a settle window
+	 * before the first counted echo; the short 500 ms shape still lost the
+	 * first packet on alternating boots. */
+	(void)osDelay(2000u);
 
 	wlan_ping_rx = 0u;
 	for (i = 1u; i <= count; i++) {
@@ -226,6 +226,8 @@ int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
 			(void)osDelay(10u);
 			waited += 10u;
 		}
+		if (wlan_ping_rx == before)
+			CASE_ANCHOR("wlan: ping lost seq=%u\n", i);
 	}
 
 	raw_remove(pcb);
