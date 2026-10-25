@@ -32,6 +32,7 @@
 
 #include "os/cmsis2/cmsis2.h"
 #include "fsl_sdmmc_osa.h"
+#include "sdmmc_lock_diag.h"
 
 #if defined(__aarch64__)
 #include "generic_timer.h"
@@ -282,6 +283,66 @@ status_t SDMMC_OSAMutexCreate(void *mutexHandle)
     return kStatus_Success;
 }
 
+/* --- observation: who holds which OSA mutex, and for how long ------------ */
+#define SDMMC_LOCK_SLOTS 4
+struct sdmmc_lock_slot {
+	void		*handle;
+	void		*owner;
+	uint32_t	since;
+	uint32_t	waiters;
+};
+static struct sdmmc_lock_slot sdmmc_lock_slots[SDMMC_LOCK_SLOTS];
+
+static struct sdmmc_lock_slot *sdmmc_lock_slot(void *handle)
+{
+	unsigned int i;
+	struct sdmmc_lock_slot *free_slot = NULL;
+
+	for (i = 0; i < SDMMC_LOCK_SLOTS; i++) {
+		if (sdmmc_lock_slots[i].handle == handle)
+			return &sdmmc_lock_slots[i];
+		if (sdmmc_lock_slots[i].handle == NULL && free_slot == NULL)
+			free_slot = &sdmmc_lock_slots[i];
+	}
+	if (free_slot != NULL)
+		free_slot->handle = handle;
+	return free_slot;
+}
+
+void sdmmc_osa_lock_diag_get(struct sdmmc_lock_diag *out)
+{
+	unsigned int i;
+	struct sdmmc_lock_slot *best = NULL;
+	uint32_t now;
+
+	if (out == NULL)
+		return;
+	out->owner = "-";
+	out->held_ms = 0u;
+	out->waiters = 0u;
+	out->valid = 0u;
+	now = osKernelGetTickCount();
+	for (i = 0; i < SDMMC_LOCK_SLOTS; i++) {
+		struct sdmmc_lock_slot *s = &sdmmc_lock_slots[i];
+
+		if (s->handle == NULL)
+			continue;
+		if (s->owner != NULL) {
+			if (best == NULL || s->owner != NULL)
+				best = s;
+		}
+		if (s->waiters != 0u)
+			out->waiters += s->waiters;
+	}
+	if (best != NULL && best->owner != NULL) {
+		const char *name = osThreadGetName((osThreadId_t)best->owner);
+
+		out->owner = (name != NULL) ? name : "?";
+		out->held_ms = (uint32_t)(now - best->since);
+		out->valid = 1u;
+	}
+}
+
 status_t SDMMC_OSAMutexLock(void *mutexHandle, uint32_t millisec)
 {
     sdmmc_osa_mutex_t *mutex = (sdmmc_osa_mutex_t *)mutexHandle;
@@ -291,9 +352,23 @@ status_t SDMMC_OSAMutexLock(void *mutexHandle, uint32_t millisec)
         return kStatus_InvalidArgument;
     }
 
-    if (osMutexAcquire((osMutexId_t)mutex->handle[0], sdmmc_osa_ms_to_ticks(millisec)) != osOK)
     {
-        return kStatus_Timeout;
+        struct sdmmc_lock_slot *slot = sdmmc_lock_slot(mutexHandle);
+
+        if (slot != NULL)
+            slot->waiters++;
+        if (osMutexAcquire((osMutexId_t)mutex->handle[0], sdmmc_osa_ms_to_ticks(millisec)) != osOK)
+        {
+            if (slot != NULL && slot->waiters != 0u)
+                slot->waiters--;
+            return kStatus_Timeout;
+        }
+        if (slot != NULL) {
+            if (slot->waiters != 0u)
+                slot->waiters--;
+            slot->owner = osThreadGetId();
+            slot->since = osKernelGetTickCount();
+        }
     }
 
     return kStatus_Success;
@@ -308,7 +383,17 @@ status_t SDMMC_OSAMutexUnlock(void *mutexHandle)
         return kStatus_InvalidArgument;
     }
 
-    return (osMutexRelease((osMutexId_t)mutex->handle[0]) == osOK) ? kStatus_Success : kStatus_Fail;
+    {
+        struct sdmmc_lock_slot *slot = sdmmc_lock_slot(mutexHandle);
+        uint32_t rc = (osMutexRelease((osMutexId_t)mutex->handle[0]) == osOK) ?
+            (uint32_t)kStatus_Success : (uint32_t)kStatus_Fail;
+
+        if (slot != NULL && slot->owner == osThreadGetId()) {
+            slot->owner = NULL;
+            slot->since = 0u;
+        }
+        return (status_t)rc;
+    }
 }
 
 status_t SDMMC_OSAMutexDestroy(void *mutexHandle)

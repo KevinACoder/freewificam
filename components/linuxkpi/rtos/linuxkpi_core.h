@@ -2814,6 +2814,25 @@ void lkpi_work_flush(struct work_struct *);
 struct workqueue_struct *lkpi_alloc_workqueue(const char *fmt, int flags,
     int max_active);
 void		*lkpi_worker_thread_id(void);
+
+/*
+ * Deferred-work service account (observation image). A tasklet whose arm is
+ * refused because the worker queue is full is run inline by the interface's
+ * no-loss rule; a growing direct count beside a full queue is the signature of
+ * the receive bottom half executing in the pump's context instead of the
+ * worker's. The gauges are plain counters; the queue depth is read from the
+ * backend at snapshot time.
+ */
+struct lkpi_wq_stats {
+	uint32_t	queue_depth;
+	uint32_t	queue_max;
+	uint32_t	runs;
+	uint32_t	direct;
+	uint32_t	full;
+};
+
+void	lkpi_wq_stats_get(struct lkpi_wq_stats *out);
+const char	*lkpi_wq_state(void);
 void lkpi_destroy_workqueue(struct workqueue_struct *);
 
 extern struct workqueue_struct *lkpi_system_wq;

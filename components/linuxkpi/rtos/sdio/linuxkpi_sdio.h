@@ -70,6 +70,18 @@ bool	lkpi_sdio_claim_held_by_current(void);
 const char	*lkpi_sdio_claim_owner(void);
 unsigned int	lkpi_sdio_claim_held_ms(void);
 
+/* The pump's current stage: "-" idle, "claim", "pending", "handler",
+ * "release". A claim held with stage "handler" is a driver handler that did
+ * not return; "pending" is a card-status read that did not complete. */
+const char	*lkpi_sdio_pump_stage(void);
+
+/* The transfer the claim holder is inside: "-", "c52r", "c52w", "ext-r",
+ * "ext-w", "done". A holder stuck in one of these names the bus operation. */
+const char	*lkpi_sdio_claim_op(void);
+
+/* The pump thread's CMSIS-RTOS2 state: running/ready/blocked/terminated/error. */
+const char	*lkpi_sdio_pump_state(void);
+
 /* run one interrupt-poll cycle and return once it finished. The pump thread
  * does this on its own timer; this entry makes a test's cycle deterministic. */
 void	lkpi_sdio_pump_kick(void);
@@ -98,6 +110,10 @@ bool	lkpi_sdio_pump_irq_get(void);
  */
 void	lkpi_sdio_pump_prio_set(bool normal);
 bool	lkpi_sdio_pump_prio_get(void);
+/* 0 = below normal, 1 = normal, 2 = above normal; the observation round's
+ * starvation arm uses 2 without changing the default. */
+void	lkpi_sdio_pump_prio_level_set(unsigned int level);
+unsigned int	lkpi_sdio_pump_prio_level_get(void);
 void	lkpi_sdio_pump_drain_set(bool on);
 bool	lkpi_sdio_pump_drain_get(void);
 

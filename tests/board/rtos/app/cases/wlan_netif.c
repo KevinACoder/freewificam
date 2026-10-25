@@ -23,8 +23,10 @@
 #include "lwip/inet_chksum.h"
 #include "lwip/etharp.h"
 #include "lwip/tcp.h"
+#include "lwip/udp.h"
 
 #include "lkpinetif.h"
+#include "wlan_netif.h"
 
 #include <string.h>
 
@@ -38,6 +40,18 @@
 #define WLAN_PING_WAIT_MS	500u
 #define WLAN_TCP_PORT		5001u
 #define WLAN_TCP_CONNECT_WAIT_MS 60000u
+#ifndef WLAN_UDP_PORT
+#define WLAN_UDP_PORT		5002u
+#endif
+#ifndef WLAN_UDP_SINK_SECONDS
+#define WLAN_UDP_SINK_SECONDS	30u
+#endif
+#ifndef WLAN_PING_INTERVAL_MS
+#define WLAN_PING_INTERVAL_MS	500u
+#endif
+#ifndef WLAN_PING_TRACE
+#define WLAN_PING_TRACE		0
+#endif
 
 static struct netif wlan_netif;
 static osSemaphoreId_t wlan_stack_ready;
@@ -108,6 +122,81 @@ struct wlan_tcp_sink_state {
 };
 
 static struct wlan_tcp_sink_state wlan_tcp_sink;
+
+static void (*wlan_obs_hook)(unsigned int sec,
+			     const struct wlan_netif_obs *obs);
+
+void wlan_netif_set_obs_hook(void (*fn)(unsigned int sec,
+			     const struct wlan_netif_obs *obs))
+{
+	wlan_obs_hook = fn;
+}
+
+/*
+ * The stack half's snapshot. It is deliberately taken after the per-second
+ * counters have been read and outside the console: the PCB fields are copied
+ * under a bounded core-lock take, then the hook prints. A lock that cannot be
+ * taken inside 50 ms is itself evidence (the stack is wedged or a holder is
+ * slow), so the snapshot reports the owner and leaves the PCB fields zero.
+ */
+static void wlan_netif_emit_obs(unsigned int sec)
+{
+	struct lkpinetif_diag d;
+	struct lkpinetif_stack_diag s;
+	struct wlan_netif_obs o;
+	struct tcp_pcb *pcb;
+
+	if (wlan_obs_hook == NULL)
+		return;
+	memset(&o, 0, sizeof(o));
+	memset(&d, 0, sizeof(d));
+	memset(&s, 0, sizeof(s));
+	lkpinetif_get_diag(&d);
+	lkpinetif_get_stack_diag(&s);
+
+	o.rx_frames = d.rx_frames;
+	o.rx_bytes = d.rx_bytes;
+	o.rx_alloc_fail = d.rx_alloc_fail;
+	o.rx_post_fail = d.rx_post_fail;
+	o.rx_input_fail = d.rx_input_fail;
+	o.tx_frames = d.tx_frames;
+	o.tx_bytes = d.tx_bytes;
+	o.tx_fail = d.tx_fail;
+	o.tcp_recv = s.tcp_recv;
+	o.tcp_xmit = s.tcp_xmit;
+	o.tcp_drop = s.tcp_drop;
+	o.tcp_memerr = s.tcp_memerr;
+	o.tcp_err = s.tcp_err;
+	o.pcb_avail = s.pcb_avail;
+	o.pcb_err = s.pcb_err;
+	o.pbuf_avail = s.pbuf_avail;
+	o.pbuf_err = s.pbuf_err;
+	o.tcpseg_avail = s.tcpseg_avail;
+	o.tcpseg_err = s.tcpseg_err;
+	o.inpkt_avail = s.inpkt_avail;
+	o.inpkt_err = s.inpkt_err;
+	o.mbox_post_full = s.mbox_post_full;
+	o.mbox_fetch_ok = s.mbox_fetch_ok;
+	o.mbox_fetch_empty = s.mbox_fetch_empty;
+	o.heartbeat = lkpinetif_tcpip_heartbeat();
+	o.lock_owner = lkpinetif_core_lock_owner();
+	o.lock_held_ms = lkpinetif_core_lock_held_ms();
+
+	pcb = wlan_tcp_sink.conn;
+	if (pcb != NULL && lkpinetif_core_lock_timeout(50u) == 0) {
+		o.pcb_valid = 1u;
+		o.tcp_state = (unsigned int)pcb->state;
+		o.rcv_wnd = (unsigned int)pcb->rcv_wnd;
+		o.snd_wnd = (unsigned int)pcb->snd_wnd;
+		o.snd_queuelen = (unsigned int)pcb->snd_queuelen;
+		o.unacked = (pcb->unacked != NULL) ? 1u : 0u;
+		o.mss = (unsigned int)pcb->mss;
+		o.nrtx = (unsigned int)pcb->nrtx;
+		lkpinetif_core_unlock();
+	}
+	wlan_obs_hook(sec, &o);
+}
+
 
 static err_t
 wlan_tcp_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)
@@ -192,6 +281,7 @@ wlan_netif_tcp_sink(unsigned int seconds)
 	uint32_t last_segments = 0u;
 	unsigned int waited;
 	unsigned int i;
+	unsigned int stalls = 0u;
 	err_t err;
 
 	if (seconds == 0u)
@@ -257,20 +347,124 @@ wlan_netif_tcp_sink(unsigned int seconds)
 			    i, (unsigned)total, (unsigned)delta,
 			    (unsigned)segs, (unsigned)seg_delta,
 			    wlan_tcp_sink.connected ? "up" : "closed");
-		if ((delta == 0u) && (wlan_tcp_sink.connected != 0))
+		if ((delta == 0u) && (wlan_tcp_sink.connected != 0)) {
+			stalls++;
 			CASE_ANCHOR("wlan: tcp stall t=%u idle=1s\n", i);
+		}
+#if WLAN_OBS
+		wlan_netif_emit_obs(i);
+#endif
 	}
 
-	CASE_ANCHOR("wlan: tcp summary seconds=%u rx=%u seg=%u error=%d\n",
+	CASE_ANCHOR("wlan: tcp summary seconds=%u rx=%u seg=%u stalls=%u error=%d\n",
 		    seconds, (unsigned)wlan_tcp_sink.rx_bytes,
-		    (unsigned)wlan_tcp_sink.segments, wlan_tcp_sink.error);
+		    (unsigned)wlan_tcp_sink.segments, stalls, wlan_tcp_sink.error);
 	wlan_tcp_sink_close();
-	return (wlan_tcp_sink.rx_bytes != 0u) ? 0 : -1;
+	return (wlan_tcp_sink.rx_bytes != 0u && stalls == 0u) ? 0 : -1;
+}
+
+/* --- UDP downlink sink ----------------------------------------------------- */
+/*
+ * The fixed-rate receive witness: UDP has no TCP window or ACK feedback, so a
+ * zero-byte second here means the receive path itself stopped, not that the
+ * peer is waiting for an ACK. The caller's sender offers a known rate; the
+ * board counts delivered datagrams and bytes.
+ */
+struct wlan_udp_sink_state {
+	struct udp_pcb *pcb;
+	volatile uint32_t rx_bytes;
+	volatile uint32_t datagrams;
+};
+
+static struct wlan_udp_sink_state wlan_udp_sink;
+
+static void
+wlan_udp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+	      const ip_addr_t *addr, u16_t port)
+{
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p == NULL)
+		return;
+	wlan_udp_sink.rx_bytes += (uint32_t)p->tot_len;
+	wlan_udp_sink.datagrams++;
+	pbuf_free(p);
+}
+
+int
+wlan_netif_udp_sink(unsigned int seconds)
+{
+	struct udp_pcb *pcb;
+	uint32_t last_bytes = 0u;
+	uint32_t last_dgrams = 0u;
+	unsigned int stalls = 0u;
+	unsigned int i;
+
+	if (seconds == 0u)
+		seconds = WLAN_UDP_SINK_SECONDS;
+	memset(&wlan_udp_sink, 0, sizeof(wlan_udp_sink));
+
+	LOCK_TCPIP_CORE();
+	pcb = udp_new();
+	if (pcb == NULL) {
+		UNLOCK_TCPIP_CORE();
+		CASE_ANCHOR("wlan: FAIL udp pcb\n");
+		return -1;
+	}
+	if (udp_bind(pcb, IP_ADDR_ANY, WLAN_UDP_PORT) != ERR_OK) {
+		udp_remove(pcb);
+		UNLOCK_TCPIP_CORE();
+		CASE_ANCHOR("wlan: FAIL udp bind\n");
+		return -1;
+	}
+	udp_recv(pcb, wlan_udp_recv, NULL);
+	wlan_udp_sink.pcb = pcb;
+	UNLOCK_TCPIP_CORE();
+
+	CASE_ANCHOR("wlan: udp sink ready port=%u seconds=%u\n",
+		    (unsigned)WLAN_UDP_PORT, seconds);
+	for (i = 1u; i <= seconds; i++) {
+		uint32_t total;
+		uint32_t dgrams;
+		uint32_t delta;
+		uint32_t ddelta;
+
+		(void)osDelay(1000u);
+		total = wlan_udp_sink.rx_bytes;
+		dgrams = wlan_udp_sink.datagrams;
+		delta = total - last_bytes;
+		ddelta = dgrams - last_dgrams;
+		last_bytes = total;
+		last_dgrams = dgrams;
+		CASE_ANCHOR("wlan: udp t=%u rx=%u delta=%u dgram=%u ddelta=%u\n",
+			    i, (unsigned)total, (unsigned)delta,
+			    (unsigned)dgrams, (unsigned)ddelta);
+		if (delta == 0u) {
+			stalls++;
+			CASE_ANCHOR("wlan: udp stall t=%u idle=1s\n", i);
+		}
+#if WLAN_OBS
+		wlan_netif_emit_obs(i);
+#endif
+	}
+	CASE_ANCHOR("wlan: udp summary seconds=%u rx=%u dgram=%u stalls=%u\n",
+		    seconds, (unsigned)wlan_udp_sink.rx_bytes,
+		    (unsigned)wlan_udp_sink.datagrams, stalls);
+	LOCK_TCPIP_CORE();
+	if (wlan_udp_sink.pcb != NULL) {
+		udp_remove(wlan_udp_sink.pcb);
+		wlan_udp_sink.pcb = NULL;
+	}
+	UNLOCK_TCPIP_CORE();
+	return (wlan_udp_sink.rx_bytes != 0u && stalls == 0u) ? 0 : -1;
 }
 
 /* --- ICMP echo ------------------------------------------------------------- */
 
 static volatile unsigned int wlan_ping_rx;
+static volatile unsigned int wlan_ping_last_seq;
 
 static u8_t wlan_ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 			   const ip_addr_t *addr)
@@ -297,6 +491,7 @@ static u8_t wlan_ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 	iecho = (struct icmp_echo_hdr *)((u8_t *)p->payload + hlen);
 	if ((ICMPH_TYPE(iecho) == ICMP_ER) &&
 	    (iecho->id == PP_HTONS(WLAN_PING_ID))) {
+		wlan_ping_last_seq = (unsigned int)lwip_ntohs(iecho->seqno);
 		wlan_ping_rx++;
 		pbuf_free(p);
 		return 1;
@@ -357,15 +552,22 @@ static void wlan_ping_send(struct raw_pcb *pcb, const ip_addr_t *peer,
 	pbuf_free(p);
 }
 
-int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
+int wlan_netif_ping_ex(const char *peer_ip, unsigned int count,
+		       unsigned int interval_ms, unsigned int *rx)
 {
 	ip_addr_t peer;
 	struct raw_pcb *pcb;
 	unsigned int i;
+	unsigned int wait_ms;
 
 	if ((peer_ip == NULL) || (count == 0u)) {
 		return -1;
 	}
+	if (interval_ms == 0u)
+		interval_ms = WLAN_PING_INTERVAL_MS;
+	wait_ms = interval_ms + 100u;
+	if (wait_ms < 200u)
+		wait_ms = 200u;
 	if (!ip4addr_aton(peer_ip, (ip4_addr_t *)&peer)) {
 		CASE_ANCHOR("wlan: FAIL bad peer address %s\n", peer_ip);
 		return -1;
@@ -399,18 +601,28 @@ int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
 	(void)osDelay(2000u);
 
 	wlan_ping_rx = 0u;
+	wlan_ping_last_seq = 0u;
 	for (i = 1u; i <= count; i++) {
 		unsigned int before = wlan_ping_rx;
 		unsigned int waited = 0u;
 
 		wlan_ping_send(pcb, &peer, (u16_t)i);
-		while ((waited < WLAN_PING_WAIT_MS) &&
-		       (wlan_ping_rx == before)) {
+#if WLAN_PING_TRACE
+		CASE_ANCHOR("wlan: ping tx seq=%u\n", i);
+#endif
+		while ((waited < wait_ms) && (wlan_ping_rx == before)) {
 			(void)osDelay(10u);
 			waited += 10u;
 		}
-		if (wlan_ping_rx == before)
+		if (wlan_ping_rx == before) {
 			CASE_ANCHOR("wlan: ping lost seq=%u\n", i);
+		} else {
+#if WLAN_PING_TRACE
+			CASE_ANCHOR("wlan: ping rx seq=%u\n",
+				    wlan_ping_last_seq);
+#endif
+		}
+		(void)osDelay(interval_ms);
 	}
 
 	raw_remove(pcb);
@@ -419,4 +631,9 @@ int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
 	}
 	CASE_ANCHOR("wlan: ping tx=%u rx=%u\n", count, wlan_ping_rx);
 	return (wlan_ping_rx != 0u) ? 0 : -1;
+}
+
+int wlan_netif_ping(const char *peer_ip, unsigned int count, unsigned int *rx)
+{
+	return wlan_netif_ping_ex(peer_ip, count, WLAN_PING_INTERVAL_MS, rx);
 }

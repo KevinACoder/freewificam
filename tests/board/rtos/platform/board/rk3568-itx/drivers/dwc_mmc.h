@@ -177,6 +177,14 @@ struct dwc_mmc_census {
 	uint64_t	idmac_wait_max_ns;
 	uint32_t	card_irq_entries;	/* ISR entries that carried the card interrupt */
 	uint32_t	card_irq_spurious;	/* ISR entries that carried nothing this driver owns */
+	/* the transfer in flight or the last one that returned: the command,
+	 * its byte count and the controller's status at the end. `pending` is 1
+	 * while a transfer has started and not returned. */
+	uint32_t	last_cmd;
+	uint32_t	last_len;
+	uint32_t	last_error;
+	uint32_t	last_status;
+	uint32_t	pending;
 };
 
 void dwc_mmc_census_get(struct dwc_mmc_census *out);

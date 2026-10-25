@@ -181,6 +181,8 @@ struct lkpi_sdio_card {
 static struct lkpi_sdio_card lkpi_sdio_card_state;
 static struct lkpi_sdio_stats lkpi_sdio_stats;
 static bool lkpi_sdio_started;
+static const char *lkpi_sdio_pump_stage_state = "-";
+static const char *lkpi_sdio_claim_op_state = "-";
 
 /*
  * The census this engine contributes: the physical transfers the splitter
@@ -279,6 +281,65 @@ struct lkpi_sdio_census {
 };
 
 static struct lkpi_sdio_census lkpi_sdio_census_state;
+
+/*
+ * Address-filtered observation of the vendor's SDIO local registers. The
+ * driver reads RX0_REQ_LEN and HISR through CMD52 byte reads, one byte at a
+ * time; these bytes assemble the value the driver saw without touching a
+ * vendor line. The addresses are build configuration (wlan.mk), so the engine
+ * remains register-agnostic in every other image.
+ */
+#if defined(CONFIG_LKPI_CENSUS) && defined(LKPI_SDIO_OBS_RX_REQ_ADDR)
+static u8		lkpi_sdio_obs_rx_lo;
+static bool		lkpi_sdio_obs_rx_have;
+static u8		lkpi_sdio_obs_hisr[4];
+static unsigned int	lkpi_sdio_obs_hisr_n;
+static bool		lkpi_sdio_obs_hisr_have;
+
+static void
+lkpi_sdio_obs_direct(unsigned int func, unsigned int addr, u8 value)
+{
+#ifdef LKPI_SDIO_OBS_HISR_ADDR
+	if (func == 1u) {
+		if (addr == (unsigned int)LKPI_SDIO_OBS_HISR_ADDR) {
+			lkpi_sdio_obs_hisr_n = 0u;
+			lkpi_sdio_obs_hisr_have = true;
+		}
+		if (lkpi_sdio_obs_hisr_have &&
+		    addr >= (unsigned int)LKPI_SDIO_OBS_HISR_ADDR &&
+		    addr < (unsigned int)LKPI_SDIO_OBS_HISR_ADDR + 4u) {
+			lkpi_sdio_obs_hisr[addr - LKPI_SDIO_OBS_HISR_ADDR] = value;
+			lkpi_sdio_obs_hisr_n = addr - LKPI_SDIO_OBS_HISR_ADDR + 1u;
+			if (lkpi_sdio_obs_hisr_n == 4u) {
+				uint32_t hisr = (uint32_t)lkpi_sdio_obs_hisr[0] |
+				    ((uint32_t)lkpi_sdio_obs_hisr[1] << 8) |
+				    ((uint32_t)lkpi_sdio_obs_hisr[2] << 16) |
+				    ((uint32_t)lkpi_sdio_obs_hisr[3] << 24);
+
+				lkpi_sdio_rx_note_hisr(hisr);
+				lkpi_sdio_obs_hisr_have = false;
+			}
+			return;
+		}
+	}
+#endif
+	if (func != 1u)
+		return;
+	if (addr == (unsigned int)LKPI_SDIO_OBS_RX_REQ_ADDR) {
+		lkpi_sdio_obs_rx_lo = value;
+		lkpi_sdio_obs_rx_have = true;
+		return;
+	}
+	if (lkpi_sdio_obs_rx_have &&
+	    addr == (unsigned int)LKPI_SDIO_OBS_RX_REQ_ADDR + 1u) {
+		unsigned int req = (unsigned int)lkpi_sdio_obs_rx_lo |
+		    ((unsigned int)value << 8);
+
+		lkpi_sdio_rx_note_offer(req);
+		lkpi_sdio_obs_rx_have = false;
+	}
+}
+#endif
 
 static uint64_t
 lkpi_sdio_census_now(void)
@@ -854,6 +915,44 @@ lkpi_sdio_claim_held_by_current(void)
  * table; a thread that carries none reports "?".
  */
 const char *
+lkpi_sdio_pump_stage(void)
+{
+
+	return lkpi_sdio_pump_stage_state;
+}
+
+const char *
+lkpi_sdio_claim_op(void)
+{
+
+	return lkpi_sdio_claim_op_state;
+}
+
+const char *
+lkpi_sdio_pump_state(void)
+{
+	osThreadState_t state;
+
+	if (lkpi_sdio_card_state.pump == NULL)
+		return "-";
+	state = osThreadGetState(lkpi_sdio_card_state.pump);
+	switch (state) {
+	case osThreadRunning:
+		return "run";
+	case osThreadReady:
+		return "ready";
+	case osThreadBlocked:
+		return "block";
+	case osThreadTerminated:
+		return "term";
+	case osThreadInactive:
+		return "inactive";
+	default:
+		return "err";
+	}
+}
+
+const char *
 lkpi_sdio_claim_owner(void)
 {
 	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
@@ -890,11 +989,18 @@ lkpi_sdio_direct(unsigned int func, unsigned int addr, bool write, u8 *value)
 	uint64_t t0;
 
 	t0 = lkpi_sdio_census_now();
+	lkpi_sdio_claim_op_state = write ? "c52w" : "c52r";
 	st = lkpi_sdio_be_io_direct(func, addr, write, value);
+	lkpi_sdio_claim_op_state = "done";
 	lkpi_sdio_census_note_direct(t0, lkpi_sdio_census_now());
 	lkpi_sdio_stats.io_direct++;
-	if (st != 0)
+	if (st != 0) {
 		lkpi_sdio_stats.errors++;
+	} else if (!write && value != NULL) {
+#if defined(CONFIG_LKPI_CENSUS) && defined(LKPI_SDIO_OBS_RX_REQ_ADDR)
+		lkpi_sdio_obs_direct(func, addr, *value);
+#endif
+	}
 	return st;
 }
 
@@ -1049,8 +1155,10 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 				blocks = max_blocks;
 			bytes = blocks * func->cur_blksize;
 			t0 = lkpi_sdio_census_now();
+			lkpi_sdio_claim_op_state = write ? "ext-w" : "ext-r";
 			st = lkpi_sdio_be_io_extended(func->num, addr, buf, blocks,
 			    base | LKPI_SDIO_BE_F_BLOCK);
+			lkpi_sdio_claim_op_state = "done";
 			lkpi_sdio_census_note_ext(write, true, bytes, t0,
 			    lkpi_sdio_census_now());
 			lkpi_sdio_stats.io_extended++;
@@ -1076,7 +1184,9 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 		if (n > remainder)
 			n = remainder;
 		t0 = lkpi_sdio_census_now();
+		lkpi_sdio_claim_op_state = write ? "ext-w" : "ext-r";
 		st = lkpi_sdio_be_io_extended(func->num, addr, buf, n, base);
+		lkpi_sdio_claim_op_state = "done";
 		lkpi_sdio_census_note_ext(write, false, n, t0,
 		    lkpi_sdio_census_now());
 		lkpi_sdio_stats.io_extended++;
@@ -1416,8 +1526,10 @@ lkpi_sdio_pump_cycle(void)
 
 	lkpi_sdio_census_note_pump();
 	t0 = lkpi_sdio_census_now();
+	lkpi_sdio_pump_stage_state = "claim";
 	(void)osMutexAcquire(c->claim, osWaitForever);
 	t1 = lkpi_sdio_census_now();
+	lkpi_sdio_pump_stage_state = "pending";
 	c->claim_owner = osThreadGetId();
 	c->claim_since_ns = t1;
 	c->host.claimed = true;
@@ -1447,7 +1559,9 @@ lkpi_sdio_pump_cycle(void)
 				lkpi_sdio_stats.callbacks++;
 				lkpi_sdio_census_note_dispatch();
 				busy = true;
+				lkpi_sdio_pump_stage_state = "handler";
 				c->func[i].irq_handler(&c->func[i]);
+				lkpi_sdio_pump_stage_state = "pending";
 			} else {
 				lkpi_printf(ULOG_WARNING_LEVEL,
 				    "sdiokpi: pending IRQ on function %u with no handler\n",
@@ -1465,11 +1579,13 @@ lkpi_sdio_pump_cycle(void)
 	lkpi_sdio_census_note_cycle(t0, t1, t2, busy, err,
 	    (c->rx_bytes + c->tx_bytes) - moved0);
 
+	lkpi_sdio_pump_stage_state = "release";
 	c->host.claimed = false;
 	c->claim_owner = NULL;
 	c->claim_since_ns = 0u;
 	lkpi_sdio_stats.releases++;
 	(void)osMutexRelease(c->claim);
+	lkpi_sdio_pump_stage_state = "-";
 	return (c->rx_bytes + c->tx_bytes) != moved0;
 }
 
@@ -1524,6 +1640,8 @@ lkpi_sdio_pump_entry(void *arg)
 		 * nobody re-arms would strand the card's events. */
 		if (lkpi_sdio_has_handler() || c->pump_irq)
 			progress = lkpi_sdio_pump_cycle();
+		else
+			lkpi_sdio_pump_stage_state = "-";
 		/*
 		 * The card-interrupt re-arm: the ISR masked the line when it fired, and
 		 * the handler that just ran cleared the card's own interrupt status -
@@ -1629,13 +1747,32 @@ lkpi_sdio_pump_irq_get(void)
 void
 lkpi_sdio_pump_prio_set(bool normal)
 {
-	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
 
-	c->pump_prio_normal = normal;
-	if (c->pump != NULL) {
-		(void)osThreadSetPriority(c->pump,
-		    normal ? osPriorityNormal : osPriorityBelowNormal);
-	}
+	lkpi_sdio_pump_prio_level_set(normal ? 1u : 0u);
+}
+
+void
+lkpi_sdio_pump_prio_level_set(unsigned int level)
+{
+	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
+	osPriority_t prio;
+
+	c->pump_prio_normal = (level != 0u) ? true : false;
+	if (level >= 2u)
+		prio = osPriorityAboveNormal;
+	else if (level == 1u)
+		prio = osPriorityNormal;
+	else
+		prio = osPriorityBelowNormal;
+	if (c->pump != NULL)
+		(void)osThreadSetPriority(c->pump, prio);
+}
+
+unsigned int
+lkpi_sdio_pump_prio_level_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_prio_normal ? 1u : 0u;
 }
 
 bool

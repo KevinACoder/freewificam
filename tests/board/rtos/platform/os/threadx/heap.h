@@ -21,3 +21,8 @@ void * pvPortMalloc( size_t size );
 void vPortFree( void * ptr );
 
 #endif /* OS_THREADX_HEAP_H */
+
+/* Heap gauges for the observation image. A backend without a gauge returns
+ * zeros; the allocation-failure count is always truthful for that backend. */
+void heap_get_usage( size_t * used, size_t * peak, size_t * total,
+                     unsigned int * fail );

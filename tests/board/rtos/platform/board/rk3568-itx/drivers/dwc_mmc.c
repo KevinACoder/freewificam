@@ -1006,6 +1006,11 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 		return DWC_MMC_ERR_NO_CARD;
 	}
 
+#ifdef CONFIG_LKPI_CENSUS
+	dwc_mmc_census_state.pending = 1u;
+	dwc_mmc_census_state.last_cmd = cmd->index;
+	dwc_mmc_census_state.last_len = (cmd->data != NULL) ? cmd->data->len : 0u;
+#endif
 	if (cmd->data != NULL) {
 		ret = dwc_mmc_transfer_data(hc, cmd);
 	} else {
@@ -1013,6 +1018,10 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	}
 
 #ifdef CONFIG_LKPI_CENSUS
+	dwc_mmc_census_state.pending = 0u;
+	dwc_mmc_census_state.last_error = (uint32_t)ret;
+	dwc_mmc_census_state.last_status =
+	    mmio_rd32(hc->cfg.base + DWC_MMC_RINTSTS);
 	dwc_mmc_census_state.transfers++;
 	if (ret == DWC_MMC_OK && cmd->data != NULL) {
 		/* only a transfer that actually completed moved the bytes it asked

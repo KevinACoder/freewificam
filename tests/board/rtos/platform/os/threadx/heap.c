@@ -25,3 +25,12 @@ void vPortFree( void * ptr )
 {
     free( ptr );
 }
+
+void heap_get_usage( size_t * used, size_t * peak, size_t * total,
+                     unsigned int * fail )
+{
+    if ( used != 0 ) *used = 0u;
+    if ( peak != 0 ) *peak = 0u;
+    if ( total != 0 ) *total = 0u;
+    if ( fail != 0 ) *fail = 0u;
+}

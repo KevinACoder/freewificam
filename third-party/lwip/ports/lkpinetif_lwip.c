@@ -36,6 +36,7 @@
 #include "arch/sys_arch.h"
 
 #include "lkpinetif.h"
+#include "sys_mbox_seam.h"
 
 #define LKPINETIF_MTU		1500u
 #define LKPINETIF_FRAME_MAX	1600u	/* ethernet frame + margin */
@@ -55,7 +56,7 @@ lkpinetif_deliver(const uint8_t *frame, size_t len)
 	if (g_netif == NULL)
 		return -1;
 	if (frame == NULL || len == 0)
-		return -2;
+		return -4;
 	p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_POOL);
 	if (p == NULL)
 		return -2;
@@ -67,7 +68,7 @@ lkpinetif_deliver(const uint8_t *frame, size_t len)
 	 * mailbox when the stack is up, and drops it when not */
 	if (g_netif->input(p, g_netif) != ERR_OK) {
 		pbuf_free(p);
-		return -2;
+		return -3;
 	}
 	return 0;
 }
@@ -251,6 +252,28 @@ lkpinetif_get_stack_diag(struct lkpinetif_stack_diag *out)
 	if (lwip_stats.memp[MEMP_TCP_PCB] != NULL) {
 		out->pcb_avail = (unsigned long)lwip_stats.memp[MEMP_TCP_PCB]->avail;
 		out->pcb_err = lwip_stats.memp[MEMP_TCP_PCB]->err;
+	}
+	if (lwip_stats.memp[MEMP_PBUF_POOL] != NULL) {
+		out->pbuf_avail = (unsigned long)lwip_stats.memp[MEMP_PBUF_POOL]->avail;
+		out->pbuf_err = lwip_stats.memp[MEMP_PBUF_POOL]->err;
+	}
+	if (lwip_stats.memp[MEMP_TCP_SEG] != NULL) {
+		out->tcpseg_avail = (unsigned long)lwip_stats.memp[MEMP_TCP_SEG]->avail;
+		out->tcpseg_err = lwip_stats.memp[MEMP_TCP_SEG]->err;
+	}
+	if (lwip_stats.memp[MEMP_TCPIP_MSG_API] != NULL) {
+		out->inpkt_avail = (unsigned long)lwip_stats.memp[MEMP_TCPIP_MSG_API]->avail;
+		out->inpkt_err = lwip_stats.memp[MEMP_TCPIP_MSG_API]->err;
+	}
+	{
+		struct sys_mbox_seam mbox;
+
+		sys_mbox_seam_get(&mbox);
+		out->mbox_post_ok = mbox.post_ok;
+		out->mbox_post_full = mbox.post_full;
+		out->mbox_fetch_ok = mbox.fetch_ok;
+		out->mbox_fetch_empty = mbox.fetch_empty;
+		out->mbox_fetch_wait_ms = mbox.fetch_wait_ms;
 	}
 	out->ip_drop = lwip_stats.ip.drop;
 	out->ip_chkerr = lwip_stats.ip.chkerr;

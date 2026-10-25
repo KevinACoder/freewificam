@@ -73,8 +73,35 @@ those spellings resolve inside the line without editing imported lines.
 
 ## 8189FTV vendor-stack port
 
-The vendor driver is **not** in this repository. It is `rtl8189fs` at pin
-`13bbdbc` (GPL-2.0, 131 translation units, embedded 20,306-byte firmware
-array), consumed byte-identically from the external tree named by the build's
-`VENDOR_8189FS`. The pin, licence and external-path note live in
-`wireless-drivers/rtl8189fs/`; the vendor bytes are not edited.
+The vendor driver is `rtl8189fs` at pin `13bbdbc` (GPL-2.0, 131 translation
+units, embedded 20,306-byte firmware array), vendored under
+`wireless-drivers/rtl8189fs/src/`. The build defaults to that directory;
+`VENDOR_8189FS` is only an optional override. The pin and licence live beside
+`src/`; the vendor bytes are not edited.
+
+## Observation image (`WLAN_OBS=1`)
+
+The stability rounds use a measurement-only image built with
+`WLAN_OBS=1`. It turns on the linuxkpi census and the 1 Hz layer snapshots;
+the default image links none of the reporting paths. The additions:
+
+- `wlan.mk`: `WLAN_OBS`, `WLAN_PING_TRACE`, `WLAN_UDP_SINK`, `WLAN_PUMP_PRIO`,
+  `WLAN_PUMP_DRAIN`; the census and the two SDIO local-register observation
+  addresses (`RX0_REQ_LEN=0x1c`, `HISR=0x18`) are build configuration, never a
+  vendor edit.
+- `components/linuxkpi/rtos/sdio/linuxkpi_sdio.c`: address-filtered direct-read
+  observation (offer/HISR), claim owner/stage/operation, pump thread state.
+- `linuxkpi_core.c`: deferred-work queue/runs/direct/full gauges and worker state.
+- `wireless-drivers/rtl8189fs/ports/rtos/{diag.h,obs.c}`: read-only snapshot of
+  the vendor driver's queue gauges, reached through the function's drvdata.
+- `third-party/fsl_sdmmc/ports/sdmmc_lock_diag.h` and `fsl_sdmmc_osa.c`: the
+  fsl card-mutex owner/held/waiters snapshot.
+- `wlan.c` / `wlan_netif.c`: one-second `wlan: obs` lines, UDP sink, sequence
+  ping trace; TCP/UDP sinks now fail on an observed zero second, not merely on
+  zero total bytes.
+- FreeRTOS board `FreeRTOSConfig.h`: the timer service stack was raised from 256
+  to 512 words after the observation image hit `Tmr Svc` overflows during scan;
+  this is a platform fix, not a stall fix.
+
+The observation image is not a delivery image and its throughput numbers are
+not acceptance numbers.

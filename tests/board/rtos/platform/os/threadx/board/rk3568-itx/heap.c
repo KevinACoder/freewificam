@@ -44,12 +44,18 @@ extern unsigned char __heap_end[];
 
 static tlsf_t heap_tlsf;
 static int heap_state;	/* 0 = cold, 1 = ready, -1 = failed */
+static size_t heap_total;
+static size_t heap_used;
+static size_t heap_peak;
+static unsigned int heap_fail;
 
 static int heap_init(void)
 {
 	unsigned char *base = __heap_start;
 	size_t size = (size_t)(__heap_end - __heap_start);
 	unsigned int i;
+
+	heap_total = size;
 
 	/* RAM write/read probe at four points of the arena: an MMU mapping
 	 * mistake surfaces as one boot-time line instead of silent corruption. */
@@ -91,6 +97,15 @@ void *pvPortMalloc(size_t size)
 
 	posture = tx_interrupt_control(TX_INT_DISABLE);
 	p = tlsf_malloc(heap_tlsf, size);
+	if (p != NULL) {
+		size_t got = tlsf_block_size(p);
+
+		heap_used += got;
+		if (heap_used > heap_peak)
+			heap_peak = heap_used;
+	} else {
+		heap_fail++;
+	}
 	(void)tx_interrupt_control(posture);
 
 	if (p == NULL) {
@@ -108,7 +123,15 @@ void vPortFree(void *ptr)
 	}
 
 	posture = tx_interrupt_control(TX_INT_DISABLE);
-	tlsf_free(heap_tlsf, ptr);
+	{
+		size_t got = tlsf_block_size(ptr);
+
+		if (got <= heap_used)
+			heap_used -= got;
+		else
+			heap_used = 0u;
+		tlsf_free(heap_tlsf, ptr);
+	}
 	(void)tx_interrupt_control(posture);
 }
 
@@ -147,4 +170,17 @@ void __assert_func(const char *file, int line, const char *func,
 	for (;;) {
 		ARCH_WFE();
 	}
+}
+
+
+void heap_get_usage(size_t *used, size_t *peak, size_t *total, unsigned int *fail)
+{
+	if (used != NULL)
+		*used = heap_used;
+	if (peak != NULL)
+		*peak = heap_peak;
+	if (total != NULL)
+		*total = heap_total;
+	if (fail != NULL)
+		*fail = heap_fail;
 }

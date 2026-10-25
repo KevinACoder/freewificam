@@ -35,12 +35,18 @@
 #include "linuxkpi_cfg80211.h"
 #include "lkpi_sdio_backend.h"
 #include "linuxkpi_sdio.h"
+#include "dwc_mmc.h"
+#include "skbuff_pool.h"
+#include "lkpi_census.h"
+#include "diag.h"
+#include "generic_timer.h"
 
 #include "lkpinetif_seam.h"
 #include "wlan_netif.h"
 
 #include "fsl_sdio.h"
 #include "sdmmc_port.h"
+#include "sdmmc_lock_diag.h"
 
 #include <linux/netdevice.h>
 
@@ -55,13 +61,33 @@
 #define WLAN_SCAN_WAIT_MS	20000u
 #define WLAN_JOIN_WAIT_MS	20000u
 #define WLAN_POLL_MS		100u
-#define WLAN_PING_COUNT		10u
 
 #ifndef WLAN_SCAN_DIAG
 #define WLAN_SCAN_DIAG		0
 #endif
 #ifndef WLAN_SCAN_BATCH
 #define WLAN_SCAN_BATCH		1
+#endif
+#ifndef WLAN_PING_COUNT
+#define WLAN_PING_COUNT		10u
+#endif
+#ifndef WLAN_PING_INTERVAL_MS
+#define WLAN_PING_INTERVAL_MS	500u
+#endif
+#ifndef WLAN_OBS
+#define WLAN_OBS		0
+#endif
+#ifndef WLAN_PUMP_PRIO_LEVEL
+#define WLAN_PUMP_PRIO_LEVEL	0
+#endif
+#ifndef WLAN_PUMP_DRAIN
+#define WLAN_PUMP_DRAIN		0
+#endif
+#ifndef WLAN_UDP_SINK
+#define WLAN_UDP_SINK		0
+#endif
+#ifndef WLAN_UDP_SINK_SECONDS
+#define WLAN_UDP_SINK_SECONDS	30u
 #endif
 
 static int wlan_prepared;
@@ -345,6 +371,115 @@ void case_wlan_prepare(void)
 	wlan_prepared = 1;
 }
 
+#if WLAN_OBS && defined(CONFIG_LKPI_CENSUS)
+static unsigned int wlan_obs_recv_min = ~0u;
+
+uint64_t
+lkpi_census_now_ns(void)
+{
+	uint32_t freq = gtimer_freq_get();
+	uint64_t count = gtimer_count_get();
+
+	if (freq == 0u)
+		return 0u;
+	return (count / freq) * 1000000000ULL +
+	    ((count % freq) * 1000000000ULL) / freq;
+}
+
+void
+lkpi_census_pump_probe(void)
+{
+	struct rtl8189f_diag d;
+
+	rtl8189f_diag_get(&d);
+	if (d.valid != 0u && d.recv_free < wlan_obs_recv_min)
+		wlan_obs_recv_min = d.recv_free;
+}
+
+static void
+wlan_obs_tick(unsigned int sec, const struct wlan_netif_obs *obs)
+{
+	struct lkpi_sdio_stats sdio;
+	struct lkpi_sdio_rx_stats rx;
+	struct lkpi_sdio_bus_info bus;
+	struct lkpi_wq_stats wq;
+	struct dwc_mmc_census mmc;
+	struct rtl8189f_diag drv;
+	struct lkpi_skb_pool_stats skb;
+	struct osMemoryStats mem;
+	struct sdmmc_lock_diag osa_lock;
+	unsigned int age_ms = 0u;
+
+	lkpi_sdio_stats_get(&sdio);
+	lkpi_sdio_rx_stats_get(&rx);
+	lkpi_sdio_bus_info_get(&bus);
+	lkpi_wq_stats_get(&wq);
+	dwc_mmc_census_get(&mmc);
+	rtl8189f_diag_get(&drv);
+	lkpi_skb_pool_stats(&skb);
+	osMemoryGetStats(&mem);
+	sdmmc_osa_lock_diag_get(&osa_lock);
+	if (rx.last_ok_ns != 0u && rx.now_ns > rx.last_ok_ns)
+		age_ms = (unsigned int)((rx.now_ns - rx.last_ok_ns) / 1000000u);
+
+	CASE_ANCHOR("wlan: obs t=%u sdio clk=%u w=%u blk=%u io=%u/%u err=%u "
+		    "claim=%s/%u/%s/%s osa=%s/%u/%u pump=%s irq=%u period=%u "
+		    "busy=%u empty=%u\n",
+		    sec, (unsigned)bus.clock_hz, (unsigned)bus.bus_width,
+		    (unsigned)bus.blk_size, (unsigned)sdio.io_direct,
+		    (unsigned)sdio.io_extended, (unsigned)sdio.errors,
+		    lkpi_sdio_claim_owner(), lkpi_sdio_claim_held_ms(),
+		    lkpi_sdio_pump_stage(), lkpi_sdio_claim_op(),
+		    osa_lock.owner, osa_lock.held_ms, osa_lock.waiters,
+		    lkpi_sdio_pump_state(),
+		    (unsigned)(lkpi_sdio_pump_irq_get() ? 1u : 0u),
+		    lkpi_sdio_pump_period_get(), (unsigned)wq.runs,
+		    (unsigned)wq.queue_depth);
+	CASE_ANCHOR("wlan: obs t=%u card offer=%u zero=%u bytes=%llu "
+		    "read=%u/%u/%u hisr=%u/%u/%u/%u last=%u\n",
+		    sec, (unsigned)rx.offer_reads, (unsigned)rx.offer_zero,
+		    (unsigned long long)rx.offer_bytes, (unsigned)rx.read_ok,
+		    (unsigned)rx.read_short, (unsigned)rx.read_fail,
+		    (unsigned)rx.hisr_rxreq, (unsigned)rx.hisr_aval,
+		    (unsigned)rx.hisr_rxerr, (unsigned)rx.hisr_rxfovw, age_ms);
+	CASE_ANCHOR("wlan: obs t=%u drv recv=%u rxbuf=%u min=%u rx_fifo=%u "
+		    "txbuf=%u/%u oqt=%u pg=%u/%u/%u/%u cmd=%u/%u\n",
+		    sec, (unsigned)drv.recv_free, (unsigned)drv.recvbuf_free,
+		    wlan_obs_recv_min, (unsigned)drv.rx_fifo,
+		    (unsigned)drv.txbuf_free,
+		    (unsigned)drv.txframe_free, (unsigned)drv.tx_oqt_free,
+		    (unsigned)drv.tx_pg_hi, (unsigned)drv.tx_pg_mid,
+		    (unsigned)drv.tx_pg_lo, (unsigned)drv.tx_pg_pub,
+		    (unsigned)drv.cmd_issued, (unsigned)drv.cmd_done);
+	CASE_ANCHOR("wlan: obs t=%u stack rx=%lu/%lu af=%lu pf=%lu if=%lu "
+		    "tx=%lu/%lu tf=%lu tcp=%lu/%lu/%lu/%lu pcb=%lu/%lu "
+		    "pbuf=%lu/%lu seg=%lu/%lu inp=%lu/%lu mboxf=%lu hb=%lu "
+		    "lock=%s/%lu\n",
+		    sec, obs->rx_frames, obs->rx_bytes, obs->rx_alloc_fail,
+		    obs->rx_post_fail, obs->rx_input_fail, obs->tx_frames,
+		    obs->tx_bytes, obs->tx_fail, obs->tcp_recv, obs->tcp_xmit,
+		    obs->tcp_drop, obs->tcp_memerr, obs->pcb_avail, obs->pcb_err,
+		    obs->pbuf_avail, obs->pbuf_err, obs->tcpseg_avail,
+		    obs->tcpseg_err, obs->inpkt_avail, obs->inpkt_err,
+		    obs->mbox_post_full, obs->heartbeat, obs->lock_owner,
+		    obs->lock_held_ms);
+	CASE_ANCHOR("wlan: obs t=%u tcp st=%u rcv=%u snd=%u q=%u una=%u "
+		    "mss=%u nrtx=%u heap=%lu/%lu/%lu fail=%u "
+		    "skb=%u/%u wq=%s/%u/%u/%u/%u bus=%llu dwc=%u/%u/%u/%u/%x irq=%u/%u\n",
+		    sec, obs->tcp_state, obs->rcv_wnd, obs->snd_wnd,
+		    obs->snd_queuelen, obs->unacked, obs->mss, obs->nrtx,
+		    (unsigned long)mem.free_bytes, (unsigned long)mem.min_free_bytes,
+		    (unsigned long)mem.total_bytes, (unsigned)mem.alloc_fail,
+		    (unsigned)skb.skb_used, (unsigned)skb.data_used,
+		    lkpi_wq_state(), (unsigned)wq.queue_depth, (unsigned)wq.queue_max,
+		    (unsigned)wq.full, (unsigned)wq.direct,
+		    (unsigned long long)mmc.data_wait_ns, (unsigned)mmc.pending,
+		    (unsigned)mmc.last_cmd, (unsigned)mmc.last_len,
+		    (unsigned)mmc.last_error, (unsigned)mmc.last_status,
+		    (unsigned)mmc.card_irq_entries, (unsigned)mmc.card_irq_spurious);
+}
+#endif
+
 int case_wlan_run(void)
 {
 	struct lkpi_sdio_be_card_info info;
@@ -387,6 +522,10 @@ int case_wlan_run(void)
 	/* --- P2: driver registration, probe, firmware, MAC ---------------- */
 	lkpi_module_init_run();
 	lkpi_sdio_start();
+#if WLAN_OBS
+	lkpi_sdio_pump_prio_level_set(WLAN_PUMP_PRIO_LEVEL);
+	lkpi_sdio_pump_drain_set(WLAN_PUMP_DRAIN != 0);
+#endif
 
 	wiphy = lkpicfg_wiphy();
 	waited = 0u;
@@ -438,6 +577,9 @@ int case_wlan_run(void)
 		CASE_ANCHOR("wlan: FAIL netif bind\n");
 		return -1;
 	}
+#if WLAN_OBS && defined(CONFIG_LKPI_CENSUS)
+	wlan_netif_set_obs_hook(wlan_obs_tick);
+#endif
 	if (wlan_netif_start() != 0) {
 		CASE_ANCHOR("wlan: FAIL netif start\n");
 		return -1;
@@ -497,7 +639,8 @@ int case_wlan_run(void)
 	{
 		unsigned int ping_rx = 0u;
 
-		st = wlan_netif_ping("192.168.99.1", WLAN_PING_COUNT, &ping_rx);
+		st = wlan_netif_ping_ex("192.168.99.1", WLAN_PING_COUNT,
+				     WLAN_PING_INTERVAL_MS, &ping_rx);
 		if ((st != 0) || (ping_rx != WLAN_PING_COUNT)) {
 #if WLAN_TCP_SINK
 			CASE_ANCHOR("wlan: WARN ping %u/%u; continuing to tcp sink\n",
@@ -521,6 +664,13 @@ int case_wlan_run(void)
 		return -1;
 	}
 #endif
+#if WLAN_UDP_SINK
+	st = wlan_netif_udp_sink(WLAN_UDP_SINK_SECONDS);
+	if (st != 0) {
+		CASE_ANCHOR("wlan: FAIL udp sink\n");
+		return -1;
+	}
+#endif
 
 	memset(&stats, 0, sizeof(stats));
 	lkpi_sdio_stats_get(&stats);
@@ -535,6 +685,9 @@ int case_wlan_run(void)
 		return -1;
 	}
 
+#if WLAN_OBS && defined(CONFIG_LKPI_CENSUS)
+	lkpi_sdio_census_print();
+#endif
 	CASE_ANCHOR("wlan: PASS\n");
 	return 0;
 }

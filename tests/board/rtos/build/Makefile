@@ -37,6 +37,28 @@ COMPONENTS := $(ROOT)/components
 LKPI := $(COMPONENTS)/linuxkpi/rtos
 THIRD_PARTY := $(ROOT)/third-party
 
+# The single build configuration. It is deliberately included before every
+# default below, so a value in config.mk wins over the Makefile's fallback.
+include $(LINE)/config.mk
+BACKEND := $(CONFIG_BACKEND)
+CASES := $(CONFIG_CASES)
+OPT := $(CONFIG_OPT)
+PROFILE := $(CONFIG_PROFILE)
+HEAP_SIZE := $(CONFIG_HEAP_SIZE)
+WLAN_OBS := $(CONFIG_WLAN_OBS)
+WLAN_TCP_SINK := $(CONFIG_WLAN_TCP_SINK)
+WLAN_TCP_SINK_SECONDS := $(CONFIG_WLAN_TCP_SINK_SECONDS)
+WLAN_UDP_SINK := $(CONFIG_WLAN_UDP_SINK)
+WLAN_UDP_SINK_SECONDS := $(CONFIG_WLAN_UDP_SINK_SECONDS)
+WLAN_UDP_PORT := $(CONFIG_WLAN_UDP_PORT)
+WLAN_PING_COUNT := $(CONFIG_WLAN_PING_COUNT)
+WLAN_PING_INTERVAL_MS := $(CONFIG_WLAN_PING_INTERVAL_MS)
+WLAN_PING_TRACE := $(CONFIG_WLAN_PING_TRACE)
+WLAN_SCAN_DIAG := $(CONFIG_WLAN_SCAN_DIAG)
+WLAN_SCAN_BATCH := $(CONFIG_WLAN_SCAN_BATCH)
+WLAN_PUMP_PRIO := $(CONFIG_WLAN_PUMP_PRIO)
+WLAN_PUMP_DRAIN := $(CONFIG_WLAN_PUMP_DRAIN)
+
 AARCH64_CROSS_PATH ?= $(HOME)/workspace/env/src/xpack-aarch64-none-elf-gcc-13.2.1-1.1
 CROSS_COMPILE ?= $(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-
 CC := $(CROSS_COMPILE)gcc
@@ -139,15 +161,18 @@ endif
 
 .DEFAULT_GOAL := all
 
-.PHONY: all images check image host host-test digest clean FORCE
+.PHONY: all images check image print-config host host-test digest clean FORCE
 
 # A rebuild must follow a flag change: the objs depend on a stamp whose
 # content is the flag set (a stale object built with other defines is the
 # classic way to certify the wrong bytes).
 FORCE:
 
-all: images
-check: images
+all: image
+check: image
+
+print-config:
+	@printf '%s\n' '$(BACKEND)'
 
 images:
 	@$(MAKE) --no-print-directory image BACKEND=freertos
@@ -522,6 +547,7 @@ $(foreach s,$(filter-out %.S,$(WLAN_APP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL
 $(foreach s,$(filter-out %.S,$(WLAN_SDIO_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WLAN_LKPI_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_LKPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WLAN_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_DRV_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WLAN_OBS_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WLAN_LWIP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WLAN_LWIP_CFLAGS))))
 
 $(TARGET).elf: $(OBJS)

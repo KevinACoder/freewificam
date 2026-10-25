@@ -69,6 +69,8 @@ struct lkpinetif_diag {
 	unsigned long	rx_eapol;	/* handed to the EAPOL sink */
 	unsigned long	rx_no_netif;	/* arrived before the netif was added */
 	unsigned long	rx_input_fail;	/* the stack refused them */
+	unsigned long	rx_alloc_fail;	/* no pbuf for the handoff */
+	unsigned long	rx_post_fail;	/* tcpip_input refused the frame */
 	unsigned long	tx_frames;	/* frames handed to the transmit entry */
 	unsigned long	tx_fail;	/* no interface or no buffer */
 	unsigned long	rx_bytes;	/* frame bytes delivered to the stack */
@@ -96,6 +98,12 @@ struct lkpinetif_stack_diag {
 	unsigned long	tcp_recv, tcp_xmit, tcp_drop, tcp_memerr, tcp_chkerr;
 	unsigned long	tcp_lenerr, tcp_opterr, tcp_err, tcp_rterr;
 	unsigned long	pcb_avail, pcb_err;
+	unsigned long	pbuf_avail, pbuf_err;
+	unsigned long	tcpseg_avail, tcpseg_err;
+	unsigned long	inpkt_avail, inpkt_err;
+	unsigned long	mbox_post_ok, mbox_post_full;
+	unsigned long	mbox_fetch_ok, mbox_fetch_empty;
+	unsigned long long mbox_fetch_wait_ms;
 	unsigned long	ip_drop, ip_chkerr, link_drop;
 	unsigned long	netif_n;
 	unsigned long	netif_up[3], netif_link[3], netif_ip[3], netif_num[3];

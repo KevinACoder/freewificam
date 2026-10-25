@@ -58,6 +58,24 @@ void * osMemoryAlloc( size_t size );
 void   osMemoryFree( void * ptr );
 
 /**
+ * @brief   Heap gauges for the observation image.
+ *
+ * The allocator answers "how much is left" and "how low has it been" without
+ * naming a kernel. FreeRTOS answers from heap_4; ThreadX from the board TLSF
+ * pool. A backend without a gauge returns zeros and alloc_fail remains the
+ * only truthful field. The values are gauges, not invariants: a concurrent
+ * allocation may move them between the read and the print.
+ */
+struct osMemoryStats {
+    size_t   free_bytes;
+    size_t   min_free_bytes;   /* lowest seen since boot; 0 when unknown */
+    size_t   total_bytes;      /* arena size; 0 when unknown */
+    uint32_t alloc_fail;       /* failed allocation calls */
+};
+
+void osMemoryGetStats( struct osMemoryStats * out );
+
+/**
  * @brief   Per-thread execution-time profile (measurement builds only).
  *
  * The wired-throughput rounds need "which thread eats the single core" as a

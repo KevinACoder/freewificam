@@ -207,6 +207,10 @@ lkpi_netdev_rx(struct sk_buff *skb)
 	t1 = LKPINETIF_NOW_NS();
 	if (ret == -1) {
 		g_diag.rx_no_netif++;
+	} else if (ret == -2) {
+		g_diag.rx_alloc_fail++;
+	} else if (ret == -3) {
+		g_diag.rx_post_fail++;
 	} else if (ret != 0) {
 		g_diag.rx_input_fail++;
 	} else {

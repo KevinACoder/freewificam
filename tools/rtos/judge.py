@@ -82,6 +82,10 @@ LIST_PATTERNS = {
     "net_udp_sink": re.compile(r"net: udp sink port=(?P<port>\d+) pkts=(?P<pkts>\d+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
     "net_udp_blast": re.compile(r"net: udp blast port=(?P<port>\d+) sent=(?P<sent>\d+) pkts=(?P<pkts>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
     "emmc_sweep": re.compile(r"emmc: sweep (?P<dir>read|write) chunk=(?P<kib>\d+) KiB xfers=(?P<xfers>\d+) bytes=(?P<bytes>\d+) us=(?P<us>\d+) kibs=(?P<kibs>\d+)", re.MULTILINE),
+    # Observation-image evidence: read out for the ledger, never a pass gate.
+    "wlan_obs": re.compile(r"wlan: obs .*", re.MULTILINE),
+    "wlan_udp": re.compile(r"wlan: udp .*", re.MULTILINE),
+    "wlan_ping_seq": re.compile(r"wlan: ping (?:tx|rx) seq=\d+", re.MULTILINE),
 }
 
 

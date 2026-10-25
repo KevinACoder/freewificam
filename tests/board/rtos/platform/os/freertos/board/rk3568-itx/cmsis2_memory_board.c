@@ -29,3 +29,13 @@ void osMemoryFree( void * ptr )
 {
     vPortFree( ptr );
 }
+void osMemoryGetStats( struct osMemoryStats * out )
+{
+    if ( out == 0 ) {
+        return;
+    }
+    out->free_bytes = xPortGetFreeHeapSize();
+    out->min_free_bytes = xPortGetMinimumEverFreeHeapSize();
+    out->total_bytes = ( size_t ) configTOTAL_HEAP_SIZE;
+    out->alloc_fail = 0u;
+}

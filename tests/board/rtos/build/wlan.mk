@@ -1,12 +1,9 @@
 # @file    wlan.mk
 # @brief   The 8189FTV vendor-stack port's source set and flag worlds.
 #
-# The vendor driver is consumed byte-identically from an external tree (GPL-2.0,
-# embedded firmware array): the release repository does not carry it.  A build
-# that selects the wlan case must name the tree:
-#
-#   CASES="tick cmsis2 wlan" VENDOR_8189FS=<rtl8189fs tree> \
-#       HEAP_SIZE=16M tools/rtos/build.sh
+# The vendor driver is vendored at its pin under
+# wireless-drivers/rtl8189fs/src (GPL-2.0, embedded firmware array). The build
+# uses that local copy; VENDOR_8189FS is only an override for a different tree.
 #
 # Three worlds meet here and are kept apart by their include sets:
 #   - the vendor driver (its own config/warning set, linuxkpi headers only);
@@ -17,8 +14,11 @@
 
 ifneq ($(filter wlan,$(CASES)),)
 
+# The vendor tree is vendored at the pin (wireless-drivers/rtl8189fs/src).
+# VENDOR_8189FS remains an override for an external checkout, but the default
+# build needs no path outside the repository.
 ifeq ($(strip $(VENDOR_8189FS)),)
-$(error the wlan case needs VENDOR_8189FS=<rtl8189fs tree at pin 13bbdbc>)
+VENDOR_8189FS := $(ROOT)/wireless-drivers/rtl8189fs/src
 endif
 
 # Scan diagnostic arms: WLAN_SCAN_DIAG=1 runs the four request shapes before the
@@ -31,6 +31,26 @@ WLAN_SCAN_DIAG ?= 0
 WLAN_SCAN_BATCH ?= 1
 WLAN_TCP_SINK ?= 0
 WLAN_TCP_SINK_SECONDS ?= 30
+# Observation build. WLAN_OBS=1 turns on the linuxkpi census (the SDIO offer /
+# read / pump / claim counters), the 1 Hz layer snapshots, the per-sequence ping
+# trace and the UDP sink. It is a measurement image: the default build stays
+# byte-for-byte the delivery image.
+WLAN_OBS ?= 0
+WLAN_PING_TRACE ?= 0
+WLAN_PING_COUNT ?= 10
+WLAN_PING_INTERVAL_MS ?= 500
+WLAN_UDP_SINK ?= 0
+WLAN_UDP_SINK_SECONDS ?= 30
+WLAN_UDP_PORT ?= 5002
+WLAN_PUMP_PRIO ?= below
+WLAN_PUMP_DRAIN ?= 0
+ifeq ($(WLAN_PUMP_PRIO),normal)
+WLAN_PUMP_PRIO_LEVEL := 1
+else ifeq ($(WLAN_PUMP_PRIO),above)
+WLAN_PUMP_PRIO_LEVEL := 2
+else
+WLAN_PUMP_PRIO_LEVEL := 0
+endif
 
 LKPI := $(COMPONENTS)/linuxkpi/rtos
 
@@ -116,38 +136,60 @@ WLAN_DRV_SRCS := $(addprefix $(VENDOR_8189FS)/,\
 
 WLAN_LWIP_SRCS := 	$(THIRD_PARTY)/lwip/ports/sys_arch.c 	$(THIRD_PARTY)/lwip/ports/platform_hooks.c 	$(THIRD_PARTY)/lwip/ports/lkpinetif_lwip.c 	$(LINE)/app/cases/wlan_netif.c 	$(LWIP)/src/core/init.c $(LWIP)/src/core/def.c $(LWIP)/src/core/dns.c 	$(LWIP)/src/core/inet_chksum.c $(LWIP)/src/core/ip.c 	$(LWIP)/src/core/mem.c $(LWIP)/src/core/memp.c 	$(LWIP)/src/core/netif.c $(LWIP)/src/core/pbuf.c 	$(LWIP)/src/core/raw.c $(LWIP)/src/core/stats.c $(LWIP)/src/core/sys.c 	$(LWIP)/src/core/altcp.c $(LWIP)/src/core/altcp_alloc.c 	$(LWIP)/src/core/altcp_tcp.c $(LWIP)/src/core/tcp.c 	$(LWIP)/src/core/tcp_in.c $(LWIP)/src/core/tcp_out.c 	$(LWIP)/src/core/timeouts.c $(LWIP)/src/core/udp.c 	$(LWIP)/src/core/ipv4/acd.c $(LWIP)/src/core/ipv4/autoip.c 	$(LWIP)/src/core/ipv4/dhcp.c $(LWIP)/src/core/ipv4/etharp.c 	$(LWIP)/src/core/ipv4/icmp.c $(LWIP)/src/core/ipv4/igmp.c 	$(LWIP)/src/core/ipv4/ip4_frag.c $(LWIP)/src/core/ipv4/ip4.c 	$(LWIP)/src/core/ipv4/ip4_addr.c 	$(LWIP)/src/api/api_lib.c $(LWIP)/src/api/api_msg.c 	$(LWIP)/src/api/err.c $(LWIP)/src/api/if_api.c 	$(LWIP)/src/api/netbuf.c $(LWIP)/src/api/netdb.c 	$(LWIP)/src/api/netifapi.c $(LWIP)/src/api/sockets.c 	$(LWIP)/src/api/tcpip.c 	$(LWIP)/src/netif/ethernet.c
 
+WLAN_OBS_SRCS := $(if $(filter 1,$(WLAN_OBS)),$(ROOT)/wireless-drivers/rtl8189fs/ports/rtos/obs.c)
 WLAN_ALL_SRCS := $(WLAN_APP_SRCS) $(WLAN_SDIO_SRCS) $(WLAN_LKPI_SRCS) \
-	$(WLAN_DRV_SRCS) $(WLAN_LWIP_SRCS)
+	$(WLAN_DRV_SRCS) $(WLAN_LWIP_SRCS) $(WLAN_OBS_SRCS)
 WLAN_OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(WLAN_ALL_SRCS))))
 
 # --- flag worlds -------------------------------------------------------------
 
+# The observation world, shared by every WLAN translation unit that carries a
+# counter face. The engine's own RX-presentation probe is address-filtered: the
+# configured addresses are the vendor's SDIO local registers (RX0_REQ_LEN=0x1C,
+# HISR=0x18), so no vendor byte is edited and the engine stays register-agnostic
+# in every other image.
+ifeq ($(WLAN_OBS),1)
+WLAN_OBS_CFLAGS := -DCONFIG_LKPI_CENSUS=1 -DWLAN_OBS=1 \
+	-DLKPI_SDIO_OBS_RX_REQ_ADDR=0x001c -DLKPI_SDIO_OBS_HISR_ADDR=0x0018
+else
+WLAN_OBS_CFLAGS :=
+endif
+
 # The SDIO port and the case live in the platform's world; they need the
 # imported stack's SDIO directory and the linuxkpi seam headers.
-WLAN_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
-	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio \
-	-I$(THIRD_PARTY)/fsl_sdmmc/sdio
+WLAN_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) $(WLAN_OBS_CFLAGS) -std=gnu11 \
+	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(LKPI)/skbuff \
+	-I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/sdio
 
 # The linuxkpi face compiles against the CMSIS-RTOS2 facade with the Linux
 # headers it carries; the board's device header is replaced by cmsis_os2.h,
 # exactly as the reference image compiles it.
 WLAN_LKPI_CFLAGS := $(filter-out -Wextra -DCMSIS_device_header=%,$(CFLAGS)) \
-	-std=gnu11 -DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
+	$(WLAN_OBS_CFLAGS) -std=gnu11 -DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-I$(ROOT) -I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(LKPI)/skbuff
 
 WLAN_APP_CFLAGS := $(filter-out -Wextra -DCMSIS_device_header=%,$(CFLAGS)) \
-	-std=gnu11 -DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
+	$(WLAN_OBS_CFLAGS) -std=gnu11 -DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-DWLAN_SCAN_DIAG=$(WLAN_SCAN_DIAG) -DWLAN_SCAN_BATCH=$(WLAN_SCAN_BATCH) \
 	-DWLAN_TCP_SINK=$(WLAN_TCP_SINK) -DWLAN_TCP_SINK_SECONDS=$(WLAN_TCP_SINK_SECONDS) \
-	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio \
-	-I$(THIRD_PARTY)/fsl_sdmmc/sdio
+	-DWLAN_PING_COUNT=$(WLAN_PING_COUNT) \
+	-DWLAN_PING_INTERVAL_MS=$(WLAN_PING_INTERVAL_MS) \
+	-DWLAN_PING_TRACE=$(WLAN_PING_TRACE) \
+	-DWLAN_UDP_SINK=$(WLAN_UDP_SINK) \
+	-DWLAN_UDP_SINK_SECONDS=$(WLAN_UDP_SINK_SECONDS) \
+	-DWLAN_UDP_PORT=$(WLAN_UDP_PORT) \
+	-DWLAN_PUMP_PRIO_LEVEL=$(WLAN_PUMP_PRIO_LEVEL) \
+	-DWLAN_PUMP_DRAIN=$(WLAN_PUMP_DRAIN) \
+	-I$(ROOT)/wireless-drivers/rtl8189fs/ports/rtos \
+	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(LKPI)/skbuff \
+	-I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/sdio
 
 # The lwIP half keeps the platform's CMSIS/board flags (the same set the net
 # case compiles with): lkPInetif's stack side, sys_arch and the stack must not
 # see the linuxkpi device-header substitution.
-WLAN_LWIP_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11
+WLAN_LWIP_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) $(WLAN_OBS_CFLAGS) -std=gnu11
 
 # The driver's build configuration is the reference image's resolved set
 # (transcribed from the driver's own build), with the log level lowered for
@@ -180,6 +222,7 @@ WLAN_DRV_CFLAGS := -std=c11 -O2 -g3 -ffreestanding -fno-builtin \
 	-DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
 	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio \
 	-I$(THIRD_PARTY)/ulog/src \
+	-I$(ROOT)/wireless-drivers/rtl8189fs/ports/rtos \
 	-I$(VENDOR_8189FS) -I$(VENDOR_8189FS)/include -I$(VENDOR_8189FS)/platform \
 	-I$(VENDOR_8189FS)/hal/phydm -I$(VENDOR_8189FS)/hal/btc \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
@@ -187,7 +230,7 @@ WLAN_DRV_CFLAGS := -std=c11 -O2 -g3 -ffreestanding -fno-builtin \
 	-D_DEFAULT_SOURCE=1
 
 WLAN_FLAGS_STAMP := $(WLAN_APP_CFLAGS) | $(WLAN_SDIO_CFLAGS) | \
-	$(WLAN_LKPI_CFLAGS) | $(WLAN_DRV_CFLAGS) | $(VENDOR_8189FS)
+	$(WLAN_LKPI_CFLAGS) | $(WLAN_DRV_CFLAGS) | $(VENDOR_8189FS) | $(WLAN_OBS_SRCS)
 WLAN_STAMP := $(BUILD)/wlan-flags-$(BACKEND).stamp
 WLAN_LDFLAGS := -Wl,-u,lkpi_module_init_run \
 	-Wl,-u,lkpi_sdio_fsl_install -Wl,-u,lkpi_sdio_be_card_init

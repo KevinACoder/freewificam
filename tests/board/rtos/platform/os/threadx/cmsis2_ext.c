@@ -91,3 +91,18 @@ size_t osExecProfileGet(os_exec_profile_entry_t *entries, size_t max,
     return 0u;
 }
 #endif
+
+void osMemoryGetStats( struct osMemoryStats * out )
+{
+    size_t used = 0u, peak = 0u, total = 0u;
+    unsigned int fail = 0u;
+
+    if ( out == 0 ) {
+        return;
+    }
+    heap_get_usage( &used, &peak, &total, &fail );
+    out->free_bytes = ( total > used ) ? ( total - used ) : 0u;
+    out->min_free_bytes = ( total > peak ) ? ( total - peak ) : 0u;
+    out->total_bytes = total;
+    out->alloc_fail = fail;
+}

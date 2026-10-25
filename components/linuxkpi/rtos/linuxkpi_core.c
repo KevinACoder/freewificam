@@ -999,6 +999,8 @@ struct lkpi_wq_impl {
 
 struct workqueue_struct *lkpi_system_wq;
 
+static struct lkpi_wq_stats lkpi_wq_stats_state;
+
 #define	LKPI_WQ_DEPTH		32
 #define	LKPI_WQ_STACK_SIZE	8192
 
@@ -1046,6 +1048,10 @@ static void lkpi_worker_entry(void *arg)
 		if (w->func != NULL)
 			w->func(w);
 		w->wk_running = 0;
+		lkpi_wq_stats_state.runs++;
+		if (impl->mq != NULL)
+			lkpi_wq_stats_state.queue_depth =
+			    (uint32_t)osMessageQueueGetCount(impl->mq);
 	}
 }
 
@@ -1142,10 +1148,18 @@ bool lkpi_queue_work(struct workqueue_struct *wq, struct work_struct *w)
 	/* The queueing itself is outside the section: a full queue with no wait is
 	 * a refusal, and the flag goes back so the caller may retry. */
 	if (osMessageQueuePut(impl->mq, &w, 0u, 0u) != osOK) {
+		lkpi_wq_stats_state.full++;
 		state = osCriticalEnter();
 		w->wk_queued = 0;
 		osCriticalExit(state);
 		return false;
+	}
+	{
+		uint32_t depth = (uint32_t)osMessageQueueGetCount(impl->mq);
+
+		lkpi_wq_stats_state.queue_depth = depth;
+		if (depth > lkpi_wq_stats_state.queue_max)
+			lkpi_wq_stats_state.queue_max = depth;
 	}
 	return true;
 }
@@ -1240,6 +1254,41 @@ bool lkpi_cancel_delayed_work_sync(struct delayed_work *dw)
 	return was;
 }
 
+void
+lkpi_wq_stats_get(struct lkpi_wq_stats *out)
+{
+
+	if (out == NULL)
+		return;
+	*out = lkpi_wq_stats_state;
+}
+
+const char *
+lkpi_wq_state(void)
+{
+	struct lkpi_wq_impl *impl;
+
+	if (lkpi_system_wq == NULL)
+		return "-";
+	impl = lkpi_wq_of(lkpi_system_wq);
+	if (impl == NULL || impl->thread == NULL)
+		return "-";
+	switch (osThreadGetState(impl->thread)) {
+	case osThreadRunning:
+		return "run";
+	case osThreadReady:
+		return "ready";
+	case osThreadBlocked:
+		return "block";
+	case osThreadTerminated:
+		return "term";
+	case osThreadInactive:
+		return "inactive";
+	default:
+		return "err";
+	}
+}
+
 void *lkpi_worker_thread_id(void)
 {
 	if (lkpi_system_wq == NULL)
@@ -1290,6 +1339,7 @@ void lkpi_tasklet_schedule(struct tasklet_struct *t)
 	 */
 	if (t->work.wk_queued != 0)
 		return;
+	lkpi_wq_stats_state.direct++;
 	lkpi_tasklet_run(&t->work);
 }
 

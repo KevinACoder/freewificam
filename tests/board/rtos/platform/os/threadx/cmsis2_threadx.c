@@ -427,6 +427,40 @@ osThreadId_t osThreadNew( osThreadFunc_t func, void * argument, const osThreadAt
 /* The name record the slot already holds, reached from the CMSIS id. A hang
  * report needs to name the thread that did not come back; CMSIS-RTOS2 offers no
  * query, so this answers from the same record osThreadNew() filled in. */
+osThreadState_t osThreadGetState( osThreadId_t thread_id )
+{
+    thread_slot_t * slot = ( thread_slot_t * ) thread_id;
+
+    if( slot == NULL || slot->state != SLOT_LIVE )
+    {
+        return osThreadInactive;
+    }
+
+    switch( slot->thread.tx_thread_state )
+    {
+        case TX_READY:
+            return osThreadReady;
+        case TX_TERMINATED:
+        case TX_COMPLETED:
+            return osThreadTerminated;
+        case TX_SUSPENDED:
+        case TX_SLEEP:
+        case TX_QUEUE_SUSP:
+        case TX_SEMAPHORE_SUSP:
+        case TX_EVENT_FLAG:
+        case TX_BLOCK_MEMORY:
+        case TX_BYTE_MEMORY:
+        case TX_IO_DRIVER:
+        case TX_FILE:
+        case TX_TCP_IP:
+        case TX_MUTEX_SUSP:
+        case TX_PRIORITY_CHANGE:
+            return osThreadBlocked;
+        default:
+            return osThreadError;
+    }
+}
+
 const char * osThreadGetName( void * thread_id )
 {
     thread_slot_t * slot = ( thread_slot_t * ) thread_id;
