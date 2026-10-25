@@ -71,7 +71,11 @@ OPT ?= -O2
 # both kernels, plus the delayed-ACK watermark (patch 0003 carries the option).
 # The watermark is the one lever of the 2026-10-25 lwIP round that moved the
 # downlink: 483.2 -> 531.2 Mbit/s (+9.9%) in the delivery schedule, with the
-# uplink inside its own boot-to-boot band (658.6 against 651.8-690.7).
+# uplink inside its own boot-to-boot band (658.6 against 651.8-690.7). The
+# one-lock-per-drain shape (CONFIG_GMAC_RX_BATCH) adds a smaller, real step
+# (540.0/700.8 against 531.2/658.6) and is one -D away; it is not in the
+# profile yet because the bytes that measured it are not the bytes this
+# makefile produces, and shipping bytes have to be the measured bytes.
 # `PROFILE=base` builds the pre-round configuration, which is what an A/B
 # re-run of the round's arms needs.
 PROFILE ?= perf
