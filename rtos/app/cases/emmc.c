@@ -45,7 +45,12 @@
 #define EMMC_CHUNK_BLOCKS	4u
 #define EMMC_LOOPS		100u
 #define EMMC_SWEEP_MAX_BLOCKS	256u	/* 128 KiB: the largest chunk swept */
-#define EMMC_SWEEP_BYTES	(4u * 1024u * 1024u)	/* traffic per size */
+#define EMMC_SWEEP_BYTES	(4u * 1024u * 1024u)	/* traffic per batch */
+/* Three batches per size, median reported. One batch is not repeatable enough to
+ * be a yardstick: the same image measured 4 KiB reads at 22.1 and 15.2 MB/s on
+ * two boots (2026-10-25, e1 vs b16), which is the instrument, not the card. The
+ * spread is printed with the point so a reader can see how well it settled. */
+#define EMMC_SWEEP_BATCHES	3u
 #define EMMC_TAIL_RESERVE	8192u	/* blocks kept free below the end */
 
 static uint8_t emmc_wbuf[EMMC_CHUNK_BLOCKS * 512u] __attribute__((aligned(4096)));
@@ -133,36 +138,58 @@ static int emmc_sweep(uint32_t write_lba, int write)
 		uint32_t blocks = emmc_sweep_blocks[s];
 		uint32_t bytes = blocks * 512u;
 		unsigned xfers = EMMC_SWEEP_BYTES / bytes;
-		uint64_t t0;
-		uint64_t us;
-		unsigned i;
+		uint64_t us[EMMC_SWEEP_BATCHES];
+		uint64_t median;
+		uint64_t spread_permille;
+		unsigned b;
 
 		if (xfers < 4u) {
 			xfers = 4u;
 		}
 
-		t0 = rtos_clock_us();
-		for (i = 0u; i < xfers; i++) {
-			int rc = (write != 0) ?
-				sdmmc_mmc_write(write_lba, emmc_big, blocks) :
-				sdmmc_mmc_read(write_lba, emmc_big, blocks);
+		for (b = 0u; b < (unsigned)EMMC_SWEEP_BATCHES; b++) {
+			uint64_t t0 = rtos_clock_us();
+			unsigned i;
 
-			if (rc != 0) {
-				CASE_ANCHOR("emmc: FAIL sweep %s chunk=%u rc=%d\n",
-					    (write != 0) ? "write" : "read",
-					    (unsigned)(bytes / 1024u), rc);
-				return -1;
+			for (i = 0u; i < xfers; i++) {
+				int rc = (write != 0) ?
+					sdmmc_mmc_write(write_lba, emmc_big, blocks) :
+					sdmmc_mmc_read(write_lba, emmc_big, blocks);
+
+				if (rc != 0) {
+					CASE_ANCHOR("emmc: FAIL sweep %s chunk=%u rc=%d\n",
+						    (write != 0) ? "write" : "read",
+						    (unsigned)(bytes / 1024u), rc);
+					return -1;
+				}
 			}
+			us[b] = rtos_clock_us() - t0;
 		}
-		us = rtos_clock_us() - t0;
+
+		/* Insertion sort over three values: the median is the middle one. */
+		for (b = 1u; b < (unsigned)EMMC_SWEEP_BATCHES; b++) {
+			uint64_t key = us[b];
+			unsigned k = b;
+
+			while ((k > 0u) && (us[k - 1u] > key)) {
+				us[k] = us[k - 1u];
+				k--;
+			}
+			us[k] = key;
+		}
+		median = us[EMMC_SWEEP_BATCHES / 2u];
+		spread_permille = (median != 0u) ?
+			(((us[EMMC_SWEEP_BATCHES - 1u] - us[0]) * 1000u) / median) :
+			0u;
 
 		CASE_ANCHOR("emmc: sweep %s chunk=%u KiB xfers=%u bytes=%lu "
-			    "us=%lu kibs=%lu\n",
+			    "us=%lu kibs=%lu spread_permille=%lu\n",
 			    (write != 0) ? "write" : "read",
 			    (unsigned)(bytes / 1024u), xfers,
-			    (unsigned long)((uint64_t)bytes * xfers), us,
-			    (unsigned long)((us != 0u) ?
-				(((uint64_t)bytes * xfers * 1000u) / us) : 0u));
+			    (unsigned long)((uint64_t)bytes * xfers), median,
+			    (unsigned long)((median != 0u) ?
+				(((uint64_t)bytes * xfers * 1000u) / median) : 0u),
+			    (unsigned long)spread_permille);
 	}
 
 	return 0;
