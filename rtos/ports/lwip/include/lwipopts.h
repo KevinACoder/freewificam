@@ -67,8 +67,15 @@
  * without pool exhaustion - a 40-deep pool dropped 13.5% of ACKs in the
  * earlier gigabit baseline - and the pool must be able to hold a whole
  * advertised window (128 KB / 1600 = 82 buffers) on top of the ring and the
- * burst, or the stack advertises a window it cannot back. */
+ * burst, or the stack advertises a window it cannot back.
+ *
+ * Guarded because it is one third of a bundle: the ring, the advertised
+ * window and this pool are sized together (a 512 KiB window is 359 frames, so
+ * the ring has to hold them and the pool has to back a whole window plus the
+ * burst). A lever moves the three; nothing else in this file can. */
+#ifndef PBUF_POOL_SIZE
 #define PBUF_POOL_SIZE                  448
+#endif
 /* One full 1518-byte frame plus headroom in a single pool buffer, so a
  * maximum-frame receive never needs a chain. */
 #define PBUF_POOL_BUFSIZE               1600

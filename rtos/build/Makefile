@@ -62,16 +62,22 @@ BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || ech
 # Optimisation level. -O2 is the adopted default since the performance round
 # (decisions/2026-10-25-rtos-bin-perf-profile.md): +17% uplink, -73% ping RTT,
 # +16% board-local loopback, no change on the storage path and no suite
-# regression. `OPT=-Og` builds the pre-round image for debug work.
+# regression. The 2026-10-25 lwIP round measured -O3 neutral on both legs
+# (down 480.9 vs 483.2, up 690.7 vs 687.3), so there is nothing to re-certify
+# for. `OPT=-Og` builds the pre-round image for debug work.
 OPT ?= -O2
 
-# The adopted performance profile: the two switches that measured net-positive
-# on both kernels. `PROFILE=base` builds the pre-round configuration, which is
-# what an A/B re-run of the round's arms needs.
+# The adopted performance profile: the switches that measured net-positive on
+# both kernels, plus the delayed-ACK watermark (patch 0003 carries the option).
+# The watermark is the one lever of the 2026-10-25 lwIP round that moved the
+# downlink: 483.2 -> 531.2 Mbit/s (+9.9%) in the delivery schedule, with the
+# uplink inside its own boot-to-boot band (658.6 against 651.8-690.7).
+# `PROFILE=base` builds the pre-round configuration, which is what an A/B
+# re-run of the round's arms needs.
 PROFILE ?= perf
 ifeq ($(PROFILE),perf)
 PROFILE_DEFS := -DCONFIG_GMAC_TX_CSUM=1 -DCONFIG_GMAC_RX_HWCSUM=1 \
-	-DLWIP_TCPIP_CORE_LOCKING_INPUT=1
+	-DLWIP_TCPIP_CORE_LOCKING_INPUT=1 -DLWIP_TCP_ACK_DELAY_SEGMENTS=4
 else
 PROFILE_DEFS :=
 endif
@@ -96,6 +102,11 @@ LEVERS ?=
 # code generator back, exactly as `PROFILE=base` does for the switches.
 #
 #   PROFILE_CFLAGS="-mcpu=cortex-a55 -mno-strict-align" tools/rtos/build.sh
+#
+# It has to sit AFTER the base -m flags: gcc takes the last of a conflicting
+# pair, so a -mno-strict-align placed before -mstrict-align is silently
+# overridden - which is exactly how the first compiler arm of the 2026-10-25
+# round came to measure only -O3.
 PROFILE_CFLAGS ?=
 
 # Case selection: the source set and the runner's table are trimmed together,
@@ -329,8 +340,8 @@ INCLUDES := \
 
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
-	$(PROFILE_CFLAGS) \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
+	$(PROFILE_CFLAGS) \
 	-ffunction-sections -fdata-sections \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \

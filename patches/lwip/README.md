@@ -10,25 +10,26 @@ back, so the shipped image keeps the pin's semantics byte-for-byte.
 |---|---|
 | Upstream | https://github.com/lwip-tcpip/lwip.git |
 | Base (= pin) | `77dcd25a72509eb83f72b033d219b1d40cd8eb95` (tag `STABLE-2_2_1_RELEASE`) |
-| Patch list | none carried; four parked under `unadopted/` (see below) |
-| Replay | `tools/patches/replay.sh lwip` prints the vendored tree while this directory holds no `*.patch`; dropping one back in is the whole switch |
+| Patch list | `0003-tcp-ack-delay-watermark.patch` carried (the profile sets the watermark to 4); `0001`/`0004`/`0006` parked under `unadopted/` |
+| Replay | `tools/patches/replay.sh lwip` copies the vendored tree and applies what is here; dropping a file in or out is the whole switch |
 
-## Why nothing is carried (2026-10-25 round, `runs/L3-rtos/2026-10-25-gmac-parity`)
+## What is carried, and what is parked (2026-10-25 round, `runs/L3-rtos/2026-10-25-gmac-parity`)
 
-Measured on the board with the series applied (the three below plus 0006):
+`0003` is carried: the profile sets `LWIP_TCP_ACK_DELAY_SEGMENTS=4`, and in the
+delivery schedule that is the only lever of the round that moved the downlink -
+**483.2 -> 531.2 Mbit/s (+9.9%)**, uplink 658.6 inside its 651.8-690.7 band,
+4/4 and ping 10/10. The shipped FreeRTOS image is byte-identical to that arm
+(`70f75a23...`), so the bytes measured are the bytes shipped.
 
-- downlink 484.4 -> 473.3 Mbit/s (neutral within boot-to-boot noise),
-- uplink 651.8 -> 605.8 Mbit/s (first boot) and 548.9 (a later one), with
-  `ovf` (MAC FIFO overflow) 0 -> 18,792 .. 316,170 in the uplink phase,
-- per-ACK input cost 28.67 -> 25.57 us, i.e. the patch did make the path cheaper,
-  and the throughput still fell: the limit is the ACK burst against a 128-slot
-  receive ring, not the cost of handling one ACK.
-
-That is the shape of a trade this board does not want: the patches lower the
-per-frame price and the receive path turns it into loss. The next round's target
-is the receive path (ring depth / moderation), after which these become worth
-re-measuring together - which is why they are parked with their rationales intact
-rather than deleted.
+The other three stay parked. The whole series measured *cheaper per frame and
+lower throughput* (downlink 484.4 -> 473.3, uplink 651.8 -> 605.8, and the
+`ovf` counter climbing into the tens of thousands), because the uplink is
+limited by ACK bursts against a 128-slot ring rather than by the cost of
+handling one ACK. Two corrections belong with that note: the uplink numbers in
+the seven-phase schedule were contaminated by the peer's UDP blast bleeding into
+the next phase (the delivery schedule shows no such overflow at all), and the
+receive-ring / moderation fix is the next round's target, after which these
+become worth re-measuring together.
 
 ## 0001 - lwiperf: take plain payload at the 128 KiB boundary as data
 
