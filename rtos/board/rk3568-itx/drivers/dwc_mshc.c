@@ -44,7 +44,27 @@
  * the older BSP driver's (1 s for a command, 3 s for a data stage, 50 ms for a
  * self-clearing reset step).
  */
-#define DWC_MSHC_POLL_US		100U
+/* Poll steps, and they are a throughput knob, not a detail.
+ *
+ * The command step is the largest single term of the per-command fixed cost the
+ * chunk sweep prices: at 100 us the fixed cost was 223-257 us, of which 103 us
+ * was this step alone, and the 4 KiB point of the sweep fell to 11 MB/s while
+ * the same card under Linux (same 52 MHz HS, 8-bit, ADMA) did 19. At 10 us the
+ * step measures 13 us, the fixed cost lands at 36-81 us, and every point of the
+ * sweep is now above Linux's:
+ *
+ *   chunk   Linux read/write    this port read/write   (MB/s, 50 MHz HS 8-bit)
+ *   4 KiB   19.0 / 19.0         22.1 / 29.8
+ *   8 KiB   25.0 / 23.7         34.8 / 33.9
+ *   16 KiB  27.4 / 28.0         39.2 / 38.7
+ *   64 KiB  33.2 / 31.7         42.1 / 41.9
+ *
+ * The step is a build lever so an A/B can move it without touching the tree. */
+#ifndef CONFIG_MSHC_POLL_US
+#define DWC_MSHC_POLL_US		10U
+#else
+#define DWC_MSHC_POLL_US		((uint32_t)CONFIG_MSHC_POLL_US)
+#endif
 #define DWC_MSHC_CMD_BUDGET_US		1000000U
 #define DWC_MSHC_DATA_BUDGET_US		3000000U
 #define DWC_MSHC_RESET_BUDGET_US	50000U
@@ -59,7 +79,11 @@
  * of a continuation that arrived too late. A few microseconds keeps the
  * continuation ahead of the FIFO without spinning a core for the whole budget.
  */
+#ifndef CONFIG_MSHC_DATA_POLL_US
 #define DWC_MSHC_DATA_POLL_US		4U
+#else
+#define DWC_MSHC_DATA_POLL_US		((uint32_t)CONFIG_MSHC_DATA_POLL_US)
+#endif
 
 /* How long the card is given after a clock change before the next command. */
 #define DWC_MSHC_CLOCK_SETTLE_US	1000U

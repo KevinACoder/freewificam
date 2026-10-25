@@ -34,6 +34,39 @@ LINE = re.compile(
     r"kibs=(?P<kibs>\d+)"
 )
 
+# The Linux leg (gt/linux-truth.py) writes one file per size, named after it:
+#   09-emmc-read-4k.log  holding  "4194304 bytes (4.0MB) copied, 0.21 seconds, 19.0MB/s"
+# The chunk size comes from the name, so no parsing of busybox's prose is needed
+# beyond bytes and seconds.
+GT_NAME = re.compile(r"-emmc-(?P<dir>read|write)-(?P<kib>\d+)k\.log$")
+DD = re.compile(r"(?P<bytes>\d+) bytes .*? (?P<secs>[\d.]+) seconds")
+
+
+def collect_gt(directory: Path) -> dict[str, list[dict]]:
+    """Linux-side points: same (chunk, bytes, us) shape, from dd's own report."""
+    points: dict[str, dict[int, dict]] = {"read": {}, "write": {}}
+    for path in sorted(directory.glob("*.log")):
+        name = GT_NAME.search(path.name)
+        if not name:
+            continue
+        match = DD.search(path.read_text(errors="replace"))
+        if not match:
+            continue
+        kib = int(name.group("kib"))
+        total = int(match.group("bytes"))
+        us = int(float(match.group("secs")) * 1e6)
+        xfers = max(total // (kib * 1024), 1)
+        points[name.group("dir")][kib] = {
+            "chunk_kib": kib,
+            "xfers": xfers,
+            "bytes": total,
+            "us": us,
+            "per_cmd_us": us / xfers,
+            "rate_kibs": total * 1e6 / us / 1024.0,
+            "rate_mibs": total * 1e6 / us / (1024.0 * 1024.0),
+        }
+    return {key: [row for _, row in sorted(value.items())] for key, value in points.items()}
+
 
 def collect(paths: list[Path]) -> dict[str, list[dict]]:
     """Group the sweep points by direction; a repeated size keeps the last."""
@@ -87,11 +120,20 @@ def fit(rows: list[dict]) -> dict | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("logs", nargs="+", type=Path)
+    ap.add_argument("logs", nargs="*", type=Path)
+    ap.add_argument("--gt-dir", type=Path, default=None,
+                    help="a linux-truth evidence directory (dd lines, one per size)")
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args()
 
-    points = collect(args.logs)
+    if not args.logs and args.gt_dir is None:
+        ap.error("give a serial.log, or --gt-dir")
+    points = collect(args.logs or [])
+    if args.gt_dir is not None:
+        for direction, rows in collect_gt(args.gt_dir).items():
+            for row in rows:
+                points[direction].append(row)
+        points = {k: sorted(v, key=lambda r: r["chunk_kib"]) for k, v in points.items()}
     report: dict = {"sources": [str(path) for path in args.logs], "directions": {}}
 
     for direction in ("read", "write"):
