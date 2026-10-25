@@ -238,6 +238,16 @@ struct tcp_pcb_listen {
 };
 
 
+/* The delayed-ACK watermark: how many in-order data segments to let pass
+   before acknowledging. 2 is the historical lwIP behaviour and matches
+   RFC 1122 4.2.3.2's "SHOULD send for every second full-sized segment";
+   1 acknowledges every segment immediately (trading ACK traffic for
+   feedback latency); larger values trade feedback latency for fewer ACKs.
+   Build-time only; measurement builds override it, the default is 2. */
+#ifndef LWIP_TCP_ACK_DELAY_SEGMENTS
+#define LWIP_TCP_ACK_DELAY_SEGMENTS 2
+#endif
+
 /** the TCP protocol control block */
 struct tcp_pcb {
 /** common PCB members */
@@ -284,6 +294,13 @@ struct tcp_pcb {
   tcpwnd_size_t rcv_wnd;   /* receiver window available */
   tcpwnd_size_t rcv_ann_wnd; /* receiver window to announce */
   u32_t rcv_ann_right_edge; /* announced right edge of window */
+#if LWIP_TCP_ACK_DELAY_SEGMENTS != 2
+  u8_t ack_delay_cnt; /* in-order segments passed since the last ACK;
+                         only in non-default-watermark builds. Any code that
+                         clears TF_ACK_DELAY without it (a data segment
+                         carrying the ACK, tcp_fasttmr) just restarts the
+                         count on the next segment - see tcp_ack(). */
+#endif
 
 #if LWIP_TCP_SACK_OUT
   /* SACK ranges to include in ACK packets (entry is invalid if left==right) */

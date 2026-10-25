@@ -56,7 +56,7 @@ REPO = Path(__file__).resolve().parents[2]
 # repository carries no local lab paths.
 SESSION = Path(os.environ["OSLAB_SESSION"]).expanduser() if os.environ.get("OSLAB_SESSION") else None
 LAB_PYTHON = Path(os.environ["OSLAB_PYTHON"]).expanduser() if os.environ.get("OSLAB_PYTHON") else None
-IMAGES = REPO / "rtos" / "build" / "build"
+IMAGES = REPO / "tests" / "board" / "rtos" / "build" / "build"
 
 PEER = "pi@192.168.0.17"
 BOARD_IP = "192.168.0.200"
@@ -238,7 +238,7 @@ def main() -> int:
 
     image = IMAGES / f"rtos-{args.backend}.bin"
     if not image.exists():
-        raise SystemExit(f"board-round: no image at {image} (run make -C rtos/build)")
+        raise SystemExit(f"board-round: no image at {image} (run make -C tests/board/rtos/build)")
 
     out = args.out.resolve() / args.boot
     out.mkdir(parents=True, exist_ok=True)

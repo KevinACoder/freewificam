@@ -5,7 +5,7 @@ Three entries, one per job:
 ```sh
 tools/rtos/build.sh                # both board images, their gates, the digests
 tools/rtos/build.sh host-test      # the conformance case on the host tier (both kernels)
-tools/rtos/build.sh digest         # third-party manifests only
+tools/rtos/build.sh digest         # component patch records (third-party + wireless-drivers + net80211)
 
 # one board boot, full evidence, judged at the end
 OSLAB_SESSION=<lab>/oslab-session.py OSLAB_PYTHON=<lab>/.venv/bin/python \
@@ -20,7 +20,7 @@ tools/rtos/judge.py <run-dir>/boot1/serial.log --json /tmp/judge.json
 
 | entry | what it owns |
 |---|---|
-| `build.sh` | the environment and the fingerprint printout (size, sha256, the banner's build tag) around `make -C rtos/build` |
+| `build.sh` | the environment and the fingerprint printout (size, sha256, the banner's build tag) around `make -C tests/board/rtos/build` |
 | `board-round.py` | one boot: stage under the deploy name the lab's `rtos` profile expects, boot with a power cycle, capture the serial log, drive the peer when the image says its network case is ready, power off, judge |
 | `judge.py` | the anchor language of the image, per-case verdicts, and the evidence checks that must accompany a `PASS` |
 

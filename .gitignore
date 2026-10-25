@@ -1,9 +1,9 @@
 build/
 # The RTOS build entry lives in a directory that is otherwise build output.
-!rtos/build/
-rtos/build/*
-!rtos/build/Makefile
-!rtos/build/*.mk
+!tests/board/rtos/build/
+tests/board/rtos/build/*
+!tests/board/rtos/build/Makefile
+!tests/board/rtos/build/*.mk
 out/
 *.o
 *.ko

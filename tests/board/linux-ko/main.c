@@ -10,7 +10,7 @@
  *    kernel" anchor.
  *  - WITH_DRIVER=1 (K2+): the module also carries the verbatim rtl8xxxu driver
  *    and the mac80211 substitute; the entry registers the USB driver through
- *    the glue in ports/linux/driver_glue.h. The bridge attach then happens from
+ *    the glue in tests/board/linux-ko/ports/driver_glue.h. The bridge attach then happens from
  *    the driver's probe path (ieee80211_register_hw), so the dummy self-test is
  *    compiled out - the bridge is a single-adapter singleton.
  */

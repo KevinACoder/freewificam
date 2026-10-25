@@ -1217,7 +1217,7 @@ static void TimerCallback (TimerHandle_t hTimer) {
   callb = (TimerCallback_t *)pvTimerGetTimerID (hTimer);
 
   /* Remove dynamic allocation flag */
-  callb = (TimerCallback_t *)((uint32_t)callb & ~1U);
+  callb = (TimerCallback_t *)((uintptr_t)callb & ~(uintptr_t)1U);
 
   if (callb != NULL) {
     callb->func (callb->arg);
@@ -1246,7 +1246,7 @@ osTimerId_t osTimerNew (osTimerFunc_t func, osTimerType_t type, void *argument, 
       /* is provided and if it also contains space for callback and its argument  */
       if ((attr != NULL) && (attr->cb_mem != NULL)) {
         if (attr->cb_size >= (sizeof(StaticTimer_t) + sizeof(TimerCallback_t))) {
-          callb = (TimerCallback_t *)((uint32_t)attr->cb_mem + sizeof(StaticTimer_t));
+          callb = (TimerCallback_t *)((uintptr_t)attr->cb_mem + sizeof(StaticTimer_t));
         }
       }
     #endif
@@ -1296,7 +1296,7 @@ osTimerId_t osTimerNew (osTimerFunc_t func, osTimerType_t type, void *argument, 
         mem = 0;
       }
       /* Store callback memory dynamic allocation flag */
-      callb = (TimerCallback_t *)((uint32_t)callb | callb_dyn);
+      callb = (TimerCallback_t *)((uintptr_t)callb | (uintptr_t)callb_dyn);
       /*
         TimerCallback function is always provided as a callback and is used to call application
         specified function with its argument both stored in structure callb.
@@ -1317,7 +1317,7 @@ osTimerId_t osTimerNew (osTimerFunc_t func, osTimerType_t type, void *argument, 
       #if (configSUPPORT_DYNAMIC_ALLOCATION == 1)
       if ((hTimer == NULL) && (callb != NULL) && (callb_dyn == 1U)) {
         /* Failed to create a timer, release allocated resources */
-        callb = (TimerCallback_t *)((uint32_t)callb & ~1U);
+        callb = (TimerCallback_t *)((uintptr_t)callb & ~(uintptr_t)1U);
 
         vPortFree (callb);
       }
@@ -1449,9 +1449,9 @@ osStatus_t osTimerDelete (osTimerId_t timer_id) {
 
     if (xTimerDelete (hTimer, 0) == pdPASS) {
       #if (configSUPPORT_DYNAMIC_ALLOCATION == 1)
-        if ((uint32_t)callb & 1U) {
+        if ((uintptr_t)callb & 1U) {
           /* Callback memory was allocated from dynamic pool, clear flag */
-          callb = (TimerCallback_t *)((uint32_t)callb & ~1U);
+          callb = (TimerCallback_t *)((uintptr_t)callb & ~(uintptr_t)1U);
 
           /* Return allocated memory to dynamic pool */
           vPortFree (callb);
@@ -1807,7 +1807,7 @@ osMutexId_t osMutexNew (const osMutexAttr_t *attr) {
 
       if ((hMutex != NULL) && (rmtx != 0U)) {
         /* Set LSB as 'recursive mutex flag' */
-        hMutex = (SemaphoreHandle_t)((uint32_t)hMutex | 1U);
+        hMutex = (SemaphoreHandle_t)((uintptr_t)hMutex | (uintptr_t)1U);
       }
     }
   }
@@ -1824,10 +1824,10 @@ osStatus_t osMutexAcquire (osMutexId_t mutex_id, uint32_t timeout) {
   osStatus_t stat;
   uint32_t rmtx;
 
-  hMutex = (SemaphoreHandle_t)((uint32_t)mutex_id & ~1U);
+  hMutex = (SemaphoreHandle_t)((uintptr_t)mutex_id & ~(uintptr_t)1U);
 
   /* Extract recursive mutex flag */
-  rmtx = (uint32_t)mutex_id & 1U;
+  rmtx = (uint32_t)((uintptr_t)mutex_id & 1U);
 
   stat = osOK;
 
@@ -1872,10 +1872,10 @@ osStatus_t osMutexRelease (osMutexId_t mutex_id) {
   osStatus_t stat;
   uint32_t rmtx;
 
-  hMutex = (SemaphoreHandle_t)((uint32_t)mutex_id & ~1U);
+  hMutex = (SemaphoreHandle_t)((uintptr_t)mutex_id & ~(uintptr_t)1U);
 
   /* Extract recursive mutex flag */
-  rmtx = (uint32_t)mutex_id & 1U;
+  rmtx = (uint32_t)((uintptr_t)mutex_id & 1U);
 
   stat = osOK;
 
@@ -1911,7 +1911,7 @@ osThreadId_t osMutexGetOwner (osMutexId_t mutex_id) {
   SemaphoreHandle_t hMutex;
   osThreadId_t owner;
 
-  hMutex = (SemaphoreHandle_t)((uint32_t)mutex_id & ~1U);
+  hMutex = (SemaphoreHandle_t)((uintptr_t)mutex_id & ~(uintptr_t)1U);
 
   if ((IRQ_Context() != 0U) || (hMutex == NULL)) {
     owner = NULL;
@@ -1932,7 +1932,7 @@ osStatus_t osMutexDelete (osMutexId_t mutex_id) {
 #ifndef USE_FreeRTOS_HEAP_1
   SemaphoreHandle_t hMutex;
 
-  hMutex = (SemaphoreHandle_t)((uint32_t)mutex_id & ~1U);
+  hMutex = (SemaphoreHandle_t)((uintptr_t)mutex_id & ~(uintptr_t)1U);
 
   if (IRQ_Context() != 0U) {
     stat = osErrorISR;
@@ -2509,7 +2509,7 @@ osMemoryPoolId_t osMemoryPoolNew (uint32_t block_count, uint32_t block_size, con
       else {
         if (attr->mp_mem != NULL) {
           /* Check if array is 4-byte aligned */
-          if (((uint32_t)attr->mp_mem & 3U) == 0U) {
+          if (((uintptr_t)attr->mp_mem & 3U) == 0U) {
             /* Check if array big enough */
             if (attr->mp_size >= sz) {
               /* Static memory pool array is provided */

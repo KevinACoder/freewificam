@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Judge one RTOS board boot from its serial log.
 
-The image prints a fixed anchor language (see rtos/app/cases.h and the case
+The image prints a fixed anchor language (see tests/board/rtos/app/cases.h and the case
 files); this module turns that text into per-case verdicts.  It reads nothing
 but the log, so the same judge runs on a captured file, on the host tier's
 stdout, and on a live capture.

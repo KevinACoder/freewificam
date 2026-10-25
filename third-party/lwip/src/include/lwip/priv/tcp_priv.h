@@ -442,6 +442,8 @@ void tcp_segs_free(struct tcp_seg *seg);
 void tcp_seg_free(struct tcp_seg *seg);
 struct tcp_seg *tcp_seg_copy(struct tcp_seg *seg);
 
+#if LWIP_TCP_ACK_DELAY_SEGMENTS == 2
+/* The default watermark: acknowledge every second segment (RFC 1122). */
 #define tcp_ack(pcb)                               \
   do {                                             \
     if((pcb)->flags & TF_ACK_DELAY) {              \
@@ -452,6 +454,30 @@ struct tcp_seg *tcp_seg_copy(struct tcp_seg *seg);
       tcp_set_flags(pcb, TF_ACK_DELAY);            \
     }                                              \
   } while (0)
+#elif LWIP_TCP_ACK_DELAY_SEGMENTS == 1
+/* Every segment acknowledged now. */
+#define tcp_ack(pcb)  tcp_ack_now(pcb)
+#else
+/* A custom watermark: count in-order segments while the ACK is held back.
+   The counter restarts whenever TF_ACK_DELAY is set anew, so the paths
+   that clear the flag elsewhere (data segment carrying the ACK, timer
+   flush, RST) need no bookkeeping of their own. */
+#define tcp_ack(pcb)                                         \
+  do {                                                       \
+    if((pcb)->flags & TF_ACK_DELAY) {                        \
+      (pcb)->ack_delay_cnt++;                                \
+      if((pcb)->ack_delay_cnt >= (LWIP_TCP_ACK_DELAY_SEGMENTS - 1)) { \
+        (pcb)->ack_delay_cnt = 0;                            \
+        tcp_clear_flags(pcb, TF_ACK_DELAY);                  \
+        tcp_ack_now(pcb);                                    \
+      }                                                      \
+    }                                                        \
+    else {                                                   \
+      tcp_set_flags(pcb, TF_ACK_DELAY);                      \
+      (pcb)->ack_delay_cnt = 0;                              \
+    }                                                        \
+  } while (0)
+#endif
 
 #define tcp_ack_now(pcb)                           \
   tcp_set_flags(pcb, TF_ACK_NOW)

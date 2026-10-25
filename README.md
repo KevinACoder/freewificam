@@ -1,22 +1,37 @@
 # freewificam - dev_v2
 
-Final target: the **L2 linuxko line** - the rtw89 driver together with the
-net80211 stack inside one Linux kernel module, then the L3 RTOS re-host.  This
-is the same shape as the previous `dev` line's kernelmod work
-(`components/net80211/` + `ports/linux/` + `ports/net80211/`).
+Final target: the **L2 linux-ko line** - the rtw89 driver together with the
+net80211 stack inside one Linux kernel module - then the L3 RTOS re-host.  This
+is the same shape as the previous `dev` line's kernelmod work.
 
 This is the public release repository.  It contains the final L2/L3 code and
 the tests, tools and docs that belong to it.  L1 measurement probes, the
 firmware TRM, specs, issues and run evidence live in the workspace and never
 land here.
 
-The framework is imported from `dev@31adcfe`:
-`components/net80211/`, `components/linuxkpi/`, `ports/linux/`,
-`ports/net80211/`, `tests/board/linux-ko/`, together with the verbatim
-`third-party/rtw89/`, `third-party/rtw88/` and `third-party/rtl8xxxu/` trees.
-The firmware blobs are deliberately absent; an image supplies them at
-`/lib/firmware/` (`rtw89/rtw8851b_fw-1.bin`, `rtw88/rtw8821c_fw.bin`,
-`rtlwifi/rtl8188eufw.bin`).
+The two lines have the same shape: **source + ports + patches** per imported
+component, and one build/entry directory per line.  Patches are applied in the
+imported tree by default; `patches/` is the record (patch file, README,
+manifest), not a build-time replay (see `docs/PATCH-POLICY.md`).
+
+Layout:
+
+```
+components/                     first-party components
+  linuxkpi/                     Linux compatibility layer: fw registry + RTOS runtime
+  net80211/                     imported net80211 core: source + ports/ + patches/
+wireless-drivers/               pinned wireless drivers (source + ports/ + patches/)
+  iwlwifi/ rtl8xxxu/ rtw88/ rtw89/
+  rtl8189fs/                    external vendor pin: provenance + ports/ + patches/ record
+third-party/                    RTOS ported components only (source + ports/ + patches/)
+  CMSIS_6/ CMSIS-FreeRTOS/ FreeRTOS-Kernel/ threadx/
+  lwip/ fsl_sdmmc/ printf/ tlsf/ ulog/
+tests/board/
+  linux-ko/                     linux-ko line: build/entry + ports/
+  rtos/                         RTOS line: app/, build/, platform/, tests/
+tools/                          gates and helpers
+docs/                           commit convention and patch policy
+```
 
 Rules:
 
@@ -29,33 +44,27 @@ Rules:
 - No local paths, lab identifiers, knowledge-base references or run evidence.
 - Commit format: `docs/COMMIT-CONVENTION.md`; gate: `tools/check-commit-msg.sh`.
 
-Layout:
-
-```
-components/net80211/ the imported net80211 stack
-components/linuxkpi/ firmware registry (no blobs)
-ports/linux/         Linux port, mac80211 substitute and the driver glue
-ports/net80211/      the net80211 port and bridge
-third-party/rtw89/   verbatim rtw89 import (provenance beside it)
-third-party/rtw88/   verbatim rtw88 import
-third-party/rtl8xxxu/ verbatim rtl8xxxu import (provenance beside it)
-patches/rtl8xxxu/    the byte manifest of the rtl8xxxu import
-tests/board/linux-ko/ the kernelmod build and entry
-tools/               gates and helpers
-docs/                commit convention
-```
-
-Build (firmware file mode, no blob).  `DRIVER` selects the one driver the
-module carries; `rtw89` is the default, `rtw88` and `rtl8xxxu` are the other
-byte-faithful arms.  The 8188 arm keeps `request_firmware()` and reads
-`/lib/firmware/rtlwifi/rtl8188eufw.bin` from the image.
+Build (linux-ko, firmware file mode, no blob).  `DRIVER` selects the one driver
+the module carries; `rtw89` is the default, `rtw88`, `rtl8xxxu` and `iwlwifi`
+are the other byte-faithful arms.  The 8188 arm keeps `request_firmware()` and
+reads `/lib/firmware/rtlwifi/rtl8188eufw.bin` from the image.
 
 ```sh
 BUILD=/path/to/linux-ko KSRC=/path/to/kernel/src KOBJ=/path/to/kernel/obj \
   KREL=7.3.0-rc2 DRIVER=rtw89 FW_EMBED=0 tests/board/linux-ko/build.sh
+```
 
-BUILD=/path/to/linux-ko KSRC=/path/to/kernel/src KOBJ=/path/to/kernel/obj \
-  KREL=7.3.0-rc2 DRIVER=rtl8xxxu tests/board/linux-ko/build.sh
+RTOS build/entry:
+
+```sh
+CASES="tick cmsis2 net emmc" tools/rtos/build.sh
+```
+
+The `wlan` case additionally needs the external vendor tree:
+
+```sh
+CASES="tick cmsis2 wlan" VENDOR_8189FS=<rtl8189fs at 13bbdbc> \
+  HEAP_SIZE=16M tools/rtos/build.sh
 ```
 
 The L1 probe is not part of this repository; it stays in the workspace.
