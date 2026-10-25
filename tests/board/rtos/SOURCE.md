@@ -52,12 +52,14 @@ Recorded because they change bytes of the imported tree:
    unchanged at 256 KiB); the 8189FTV image needs the measured high-water.
 4. `components/linuxkpi/rtos/linuxkpi_cfg80211.c` and `.h`: the explicit
    channel-list scan entry and the one-channel debug entry. The production
-   `wlan` case issues one full 14-channel request per boot; the clean P3 round
-   measured it on both backends 2/2. The one-channel entry is retained for
-   diagnostics, not as the production workaround. The scan diagnostic showed
-   that several requests in one boot can return empty (scan-state settling),
-   so production issues one scan, not a sequence. See the scan RUN for the
-   measured result.
+   `wlan` case covers the band with four <=4-channel requests, which the vendor
+   duplicates 3x (300 ms per channel); a one-shot 14-channel request (100 ms
+   per channel) missed the 100 ms-beacon AP on some clean boots. The
+   one-channel entry is retained for diagnostics, not as the production
+   workaround. The scan diagnostic showed that several arbitrary requests in
+   one boot can return empty (scan-state settling), so production uses the
+   fixed four-batch sequence and validates the AP in the final table. See the
+   scan RUN for the measured result.
 5. `platform/os/freertos/board/rk3568-itx/cmsis2_memory_board.c` (new): the
    FreeRTOS board's heap face; the reference board images never linked the
    storage stack on the FreeRTOS backend.

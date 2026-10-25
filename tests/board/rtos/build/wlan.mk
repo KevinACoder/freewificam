@@ -22,12 +22,13 @@ $(error the wlan case needs VENDOR_8189FS=<rtl8189fs tree at pin 13bbdbc>)
 endif
 
 # Scan diagnostic arms: WLAN_SCAN_DIAG=1 runs the four request shapes before the
-# production full scan; WLAN_SCAN_BATCH=0 is the production one-shot 14-channel
-# request (the shape the clean P3 boots measured).  WLAN_SCAN_BATCH=1 keeps the
-# <=4-channel fallback for a bench where the one-shot dwell proves marginal.
-# Both are build-time so one boot is one arm.
+# production full scan.  WLAN_SCAN_BATCH=1 is the production shape: the band is
+# covered by four <=4-channel requests, which the vendor duplicates 3x (300 ms
+# per channel) so the 100 ms beacon is not missed; the one-shot 14-channel
+# request is the diagnostic/fallback shape.  Both are build-time so one boot is
+# one arm.
 WLAN_SCAN_DIAG ?= 0
-WLAN_SCAN_BATCH ?= 0
+WLAN_SCAN_BATCH ?= 1
 
 LKPI := $(COMPONENTS)/linuxkpi/rtos
 
