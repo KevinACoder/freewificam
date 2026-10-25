@@ -110,6 +110,32 @@
 #define NET_PHASE_PLAN 0
 #endif
 
+/* Whether the RX thread re-arms the ring on every notification, before it
+ * drains.
+ *
+ * The re-arm is what puts the ring back in front of the DMA after a sweep, so
+ * it is NOT optional for the full-ring sweep: with it off the ring stays
+ * disarmed until the 100 ms service thread pokes it, and the link degrades to
+ * one 100 ms burst at a time. Measured 2026-10-25 on the first arm of this
+ * round: ICMP RTT went 0.2 ms -> 89 ms and a 128 KiB-window TCP stream fell to
+ * 1.4 Mbit/s (peer-side report), which is RTT-bound behaviour, not loss
+ * behaviour. So the default is ON and the lever exists for one purpose only.
+ *
+ * That purpose is the early-stop sweep (CONFIG_GMAC_RX_SCAN=5): an unconditional
+ * re-arm publishes the ring's tail, which overwrites the arrive-ordered cursor's
+ * landing point, and the DMA then runs into slots nobody re-armed (the 2026-10-25
+ * b13 arm measured -25% that way). Turning the re-arm off is therefore only
+ * coherent together with the early-stop scan - and even then the 100 ms service
+ * thread is the only thing that re-arms, so that arm is registered as a
+ * mechanism test, not as a candidate default. */
+#ifndef CONFIG_GMAC_WATCHDOG_ON_NOTIFY
+#if defined(CONFIG_GMAC_RX_SCAN) && (CONFIG_GMAC_RX_SCAN == 5)
+#define CONFIG_GMAC_WATCHDOG_ON_NOTIFY 0
+#else
+#define CONFIG_GMAC_WATCHDOG_ON_NOTIFY 1
+#endif
+#endif
+
 enum net_phase_kind {
 	PH_DOWN_TCP,
 	PH_UP_TCP,
@@ -248,10 +274,15 @@ static void net_rx_thread(void *arg)
 
 	for (;;) {
 		(void)osSemaphoreAcquire(rx_sem, osWaitForever);
+#if CONFIG_GMAC_WATCHDOG_ON_NOTIFY
 		/* The ISR hands the sweep to this thread: the watchdog re-arms
 		 * the ring and re-pokes the line before the drain.  Skipping it
-		 * leaves the first interrupt's work done but the ring disarmed. */
+		 * leaves the first interrupt's work done but the ring disarmed.
+		 * Off by default - the 100 ms service thread below re-arms the
+		 * ring, and doing it here costs an early-stop sweep its landing
+		 * point (see CONFIG_GMAC_WATCHDOG_ON_NOTIFY). */
 		dwc_eqos_watchdog(NET_PORT);
+#endif
 		(void)ethnetif_poll(&netif);
 	}
 }
@@ -329,6 +360,19 @@ struct net_snap {
 	uint64_t csum_frames;
 	uint64_t tx_waits;
 	uint64_t tx_wait_ticks;
+	/* Driver-side receive losses and the zero-copy spare pool. The first is
+	 * the guard for every receive arm ("the MAC handed us N frames, did the
+	 * ring deliver N?"); the second only moves in ZC builds and answers
+	 * "did the stack hold frames longer than the spare pool could cover". */
+	uint64_t rx_dropped;
+	uint64_t rx_free;
+	/* Input-call split by frame class (INPUTSPLIT builds): wall time blocked
+	 * on the core lock versus the ethernet_input body. Indexed with the
+	 * ethnetif class ids; only DATA and ACK are reported, the rest are not
+	 * what the round is about. */
+	uint64_t split_wait[ETHNETIF_CLASSES];
+	uint64_t split_proc[ETHNETIF_CLASSES];
+	uint64_t split_calls[ETHNETIF_CLASSES];
 };
 
 static void net_snap_take(struct net_snap *s)
@@ -394,6 +438,20 @@ static void net_snap_take(struct net_snap *s)
 	s->csum_frames = stats.tx_csum_frames;
 	s->tx_waits = diag.tx_waits;
 	s->tx_wait_ticks = diag.tx_wait_ticks;
+	s->rx_dropped = stats.rx_dropped;
+	s->rx_free = diag.rx_free_count;
+	{
+		uint64_t split_wait[ETHNETIF_CLASSES];
+		uint64_t split_proc[ETHNETIF_CLASSES];
+		unsigned long split_calls[ETHNETIF_CLASSES];
+
+		ethnetif_get_input_split(split_wait, split_proc, split_calls);
+		for (b = 0u; b < (unsigned)ETHNETIF_CLASSES; b++) {
+			s->split_wait[b] = split_wait[b];
+			s->split_proc[b] = split_proc[b];
+			s->split_calls[b] = split_calls[b];
+		}
+	}
 }
 
 static void net_census_report(const char *tag, const struct net_snap *a,
@@ -454,6 +512,39 @@ static void net_census_report(const char *tag, const struct net_snap *a,
 		    tag,
 		    (unsigned long)(b->mac_pkts - a->mac_pkts),
 		    (unsigned long)(b->mac_octets - a->mac_octets));
+
+	/* Receive losses and the zero-copy spare pool. The first is the guard
+	 * every receive arm is judged on: the MAC's own count and the ring's
+	 * deliveries must add up, so a drop is attributed to the driver rather
+	 * than to the wire. The second only moves in zero-copy builds and
+	 * answers "did the stack hold frames longer than the pool could cover"
+	 * (a shrinking pool with rising rx_dropped is that, exactly). */
+	CASE_ANCHOR("net: census %s rx_dropped=%lu rx_free=%lu\n",
+		    tag,
+		    (unsigned long)(b->rx_dropped - a->rx_dropped),
+		    (unsigned long)b->rx_free);
+
+	/* The input call torn in two for the two classes the round is aimed at
+	 * (INPUTSPLIT builds; zeros otherwise): what the drain spent blocked on
+	 * the core lock, and what the stack's own ethernet entry then took. The
+	 * uplink's per-ACK cost and the downlink's per-segment cost are the same
+	 * measurement on different frame classes. */
+	CASE_ANCHOR("net: census %s split data_wait_us=%lu data_proc_us=%lu "
+		    "data_calls=%lu ack_wait_us=%lu ack_proc_us=%lu "
+		    "ack_calls=%lu\n",
+		    tag,
+		    (unsigned long)((b->split_wait[ETHNETIF_CLASS_DATA] -
+				     a->split_wait[ETHNETIF_CLASS_DATA]) / 24u),
+		    (unsigned long)((b->split_proc[ETHNETIF_CLASS_DATA] -
+				     a->split_proc[ETHNETIF_CLASS_DATA]) / 24u),
+		    (unsigned long)(b->split_calls[ETHNETIF_CLASS_DATA] -
+				    a->split_calls[ETHNETIF_CLASS_DATA]),
+		    (unsigned long)((b->split_wait[ETHNETIF_CLASS_ACK] -
+				     a->split_wait[ETHNETIF_CLASS_ACK]) / 24u),
+		    (unsigned long)((b->split_proc[ETHNETIF_CLASS_ACK] -
+				     a->split_proc[ETHNETIF_CLASS_ACK]) / 24u),
+		    (unsigned long)(b->split_calls[ETHNETIF_CLASS_ACK] -
+				    a->split_calls[ETHNETIF_CLASS_ACK]));
 }
 
 /* --- ping ------------------------------------------------------------------- */
@@ -821,6 +912,12 @@ static int gmac_up(void)
 		CASE_ANCHOR("net: FAIL gmac initialize\n");
 		return -1;
 	}
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	/* Arm zero copy before the receiver exists: the driver drops a frame that
+	 * completes with no lend-out hook installed, so arming after the first
+	 * interrupt would show up as receive loss, not as a hang. */
+	ethnetif_zc_arm();
+#endif
 	if (dwc_eqos_power_control(NET_PORT, EQOS_POWER_FULL) != EQOS_OK) {
 		CASE_ANCHOR("net: FAIL gmac power\n");
 		return -1;

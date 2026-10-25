@@ -49,7 +49,13 @@ TX      := $(ROOT)/third-party/threadx
 TX_PORT := $(TX)/ports/cortex_a55/gnu
 TX_HOST := $(TX)/ports/linux/gnu
 CMSIS   := $(ROOT)/third-party/CMSIS_6
-LWIP    := $(ROOT)/third-party/lwip
+# The stack to compile from, same rule as the adapter: the vendored pin, or the
+# replayed copy when patches/lwip carries any. The receive path's per-frame cost
+# is not something the port's own option table can move (it is a call into
+# tcp_in.c per segment), so the stack became a patched input too.
+LWIP    := $(shell sh $(ROOT)/tools/patches/replay.sh lwip 2>/dev/null)
+PATCHES := $(notdir $(wildcard $(ROOT)/patches/lwip/*.patch))
+ADAPTER_PATCHES := $(notdir $(wildcard $(ROOT)/patches/CMSIS-FreeRTOS/*.patch))
 
 BUILD := $(CURDIR)/build
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
@@ -81,6 +87,16 @@ endif
 #   OPT=-O2 tools/rtos/build.sh
 #   LEVERS="-DTCP_WND=131072 -DCONFIG_GMAC_RX_SCAN=5" tools/rtos/build.sh
 LEVERS ?=
+
+# Compiler channel, the same idea one level down: the flags an arm changes in
+# the code generator rather than in the preprocessor (the core to schedule for,
+# whether unaligned accesses may be emitted). Kept apart from LEVERS because a
+# -D and a -m are different kinds of claim, and because these belong to the
+# profile rather than to a single option: `PROFILE_CFLAGS=` gets the pre-round
+# code generator back, exactly as `PROFILE=base` does for the switches.
+#
+#   PROFILE_CFLAGS="-mcpu=cortex-a55 -mno-strict-align" tools/rtos/build.sh
+PROFILE_CFLAGS ?=
 
 # Case selection: the source set and the runner's table are trimmed together,
 # so a short arm builds a short image (`CASES=tick,cmsis2`).
@@ -226,6 +242,9 @@ ifneq ($(BACKEND),)
 ifeq ($(ADAPTER),)
 $(error tools/patches/replay.sh returned no source root for CMSIS-FreeRTOS)
 endif
+ifeq ($(LWIP),)
+$(error tools/patches/replay.sh returned no source root for lwip)
+endif
 
 TARGET := $(BUILD)/rtos-$(BACKEND)
 OBJDIR := $(BUILD)/obj/$(BACKEND)
@@ -310,6 +329,7 @@ INCLUDES := \
 
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
+	$(PROFILE_CFLAGS) \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
@@ -436,9 +456,13 @@ $(TAG_STAMP): FORCE
 	@mkdir -p $(BUILD)
 	@printf '%s' '$(BUILD_TAG)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(BUILD_TAG)' > $@
 
+# The stamp is what forces a rebuild, so it has to carry everything that changes
+# the compiled bytes and nothing that does not: the flags, and the patch set the
+# trees were replayed with (a patch edits headers, so a patch-only change must
+# rebuild the world exactly like a flag change does).
 $(FLAG_STAMP): FORCE
 	@mkdir -p $(BUILD)
-	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' > $@.tmp
+	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 
 $(foreach s,$(filter-out %.S,$(FIRST_SRCS)),$(eval $(call COMPILE_C,$(s),$(CFLAGS))))
@@ -483,6 +507,7 @@ gates: $(TARGET).elf
 	echo "PASS: _start=0x$$start vectors=0x$$vec backend=$(BACKEND) 0 undefined"
 	@$(SIZE) $(TARGET).elf
 	@printf 'opt: %s\nprofile: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
+	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip $(PROFILE_CFLAGS)),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1
 	@printf 'size: '; stat -c '%s' $(TARGET).bin

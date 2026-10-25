@@ -21,9 +21,19 @@ void ethnetif_add(struct netif *netif, unsigned int port,
 		  const ip4_addr_t *ip, const ip4_addr_t *mask,
 		  const ip4_addr_t *gw);
 
-/* Driver-side receive seam: drain the driver's staged frames into the stack
- * (netif->input = tcpip_input). Returns the number of frames handed over. */
+/* Driver-side receive seam: drain the received frames into the stack
+ * (netif->input = tcpip_input, or ethernet_input under the batch lever).
+ * Returns the number of frames handed over. */
 unsigned int ethnetif_poll(struct netif *netif);
+
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+/* Arm the zero-copy receive path: installs the driver's lend-out hook, after
+ * which completed frames are wrapped in custom pbufs over the driver's own
+ * buffers instead of being copied. Must run BEFORE the receiver is started -
+ * frames that complete with no hook are dropped by the driver, by design, so
+ * arming late shows up as receive loss rather than as a hang. Idempotent. */
+void ethnetif_zc_arm(void);
+#endif
 
 /* Loss counters for the heartbeat: poll calls, pbuf-pool failures, input
  * failures, frames fed in total. */

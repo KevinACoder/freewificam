@@ -221,6 +221,19 @@
 #define LWIP_CHECKSUM_CTRL_PER_NETIF    1
 #endif
 
+/* --- zero-copy receive (flips with the driver, never alone) ------------------
+ *
+ * With CONFIG_GMAC_RX_ZC the driver lends its receive buffer to the stack and
+ * the bridge wraps it in a custom pbuf whose free returns the slot
+ * (ports/lwip/ethnetif.c ethnetif_zc_wrap), so the frame is never copied. The
+ * stack side then needs the custom-pbuf interface: pbuf_alloced_custom plus a
+ * pbuf type that never routes through the heap. Off by default, and off means
+ * the structure does not exist at all, which is why this flips with the driver
+ * switch rather than sitting in the measurement tier. */
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+#define LWIP_SUPPORT_CUSTOM_PBUF        1
+#endif
+
 /* --- debugging -------------------------------------------------------------- */
 
 /* Stays off: every diagnostic line would go out the 115200 console, which

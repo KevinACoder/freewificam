@@ -45,6 +45,71 @@
 static uint8_t out_linear[ETHNETIF_LINEAR_BUF] __attribute__((aligned(8)));
 static uint8_t in_linear[ETHNETIF_LINEAR_BUF] __attribute__((aligned(8)));
 
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+/* Zero-copy receive (2026-10-25): the driver already lends its DMA buffer out
+ * and re-arms the descriptor from a spare slot (dwc_eqos.c eqos_zc_handoff),
+ * and refuses the handoff - dropping the frame - when the spares run out. What
+ * was missing is the consumer: a pbuf whose payload IS the driver's buffer and
+ * whose free returns the slot to the pool.
+ *
+ * One wrapper per (port, slot) is enough because a slot is in exactly one of
+ * three states at any time: being filled by the DMA, in the ready ring, or in
+ * the stack. A wrapper is therefore never shared by two live frames, and it
+ * needs no lock of its own: release goes back through the driver, which takes
+ * the port's line mask like every other ring writer.
+ *
+ * The price of the shape is lifetime: the stack may keep a frame as long as it
+ * likes (out-of-order queue, a slow consumer), so the driver carries twice the
+ * ring depth in slots and a frame that finds no spare is dropped rather than
+ * parked, which keeps the DMA moving.
+ *
+ * The alternative arm this replaces is CONFIG_GMAC_RX_DIRECT (one copy less
+ * than the staged path, still one copy); both exist because "how many copies"
+ * and "who owns the buffer" are separate questions. */
+struct ethnetif_zc {
+	struct pbuf_custom pc;	/* stays first: pbuf_alloced_custom hands the
+				 * stack this very address */
+	uint8_t *buf;
+	unsigned int len;
+	unsigned int port;
+	unsigned int slot;
+};
+
+static struct ethnetif_zc g_zc[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_SLOT_COUNT];
+
+static void ethnetif_zc_free(struct pbuf *p)
+{
+	struct ethnetif_zc *z = (struct ethnetif_zc *)p;
+
+	dwc_eqos_rx_release(z->port, z->slot);
+}
+
+/* The driver's lend-out hook. Returning NULL means "I cannot take this frame",
+ * and the driver re-arms the descriptor with the frame's own buffer (the frame
+ * is lost, the ring never stalls). */
+static void *ethnetif_zc_wrap(unsigned int index, unsigned int slot,
+			      uint8_t *buf, unsigned int len)
+{
+	struct ethnetif_zc *z;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (slot >= DWC_EQOS_RX_SLOT_COUNT)) {
+		return NULL;
+	}
+	z = &g_zc[index][slot];
+	z->pc.custom_free_function = ethnetif_zc_free;
+	z->buf = buf;
+	z->len = len;
+	z->port = index;
+	z->slot = slot;
+	return z;
+}
+
+void ethnetif_zc_arm(void)
+{
+	dwc_eqos_set_rx_zc(ethnetif_zc_wrap);
+}
+#endif /* CONFIG_GMAC_RX_ZC */
+
 /* Loss counters for the heartbeat: they localize a receive loss to the
  * pool, the input call or the driver without a debugger. */
 static unsigned long g_poll_calls;
@@ -501,8 +566,68 @@ void ethnetif_add(struct netif *netif, unsigned int port,
 	netif_set_up(netif);
 }
 
-/* The driver-side seam: drain the staged frames into the stack. Returns the
- * number of frames handed to netif->input (the heartbeat's "fed" counter).
+/* Hand one assembled frame to the stack and charge the input bucket. The three
+ * dispatch shapes are the input lever family (BATCH, INPUTSPLIT) and live in
+ * one place so the zero-copy and the copying receive paths cannot drift apart
+ * in how they account for the same call. `t1` is the tick the frame's
+ * preparation ended on. */
+static err_t ethnetif_deliver(struct netif *netif, struct pbuf *p,
+			      unsigned int cls, uint64_t t1)
+{
+	err_t rv;
+
+#if defined(CONFIG_GMAC_RX_BATCH) && CONFIG_GMAC_RX_BATCH \
+	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
+	/* Already under the core lock (ethnetif_poll took it once for the whole
+	 * drain): hand the frame straight to the stack's ethernet entry, the
+	 * same function the locking tcpip_input would call after re-locking. */
+	(void)cls;
+	rv = ethernet_input(p, netif);
+#elif defined(CONFIG_GMAC_INPUT_SPLIT) && CONFIG_GMAC_INPUT_SPLIT \
+	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
+	/* The input bucket, torn in two (2026-10-19 round 2): the lock
+	 * acquisition is timed on its own, then the ethernet_input body. This is
+	 * the exact sequence tcpip_inpkt runs under CORE_LOCKING_INPUT
+	 * (tcpip.c:254-262) - LOCK, input_fn, UNLOCK - so the only cost added is
+	 * two counter reads per frame. Not combinable with BATCH (the batch
+	 * already holds the lock; it is not recursive). */
+	{
+		uint64_t w0, w1, p1;
+
+		w0 = gtimer_count_get();
+		LOCK_TCPIP_CORE();
+		w1 = gtimer_count_get();
+		rv = ethernet_input(p, netif);
+		p1 = gtimer_count_get();
+		UNLOCK_TCPIP_CORE();
+		g_split_wait[cls] += w1 - w0;
+		g_split_proc[cls] += p1 - w1;
+		g_split_calls[cls]++;
+	}
+#else
+	(void)cls;
+	rv = netif->input(p, netif);
+#endif
+	if (rv != ERR_OK) {
+		pbuf_free(p);
+		g_input_fail++;
+		g_input_ticks += gtimer_count_get() - t1;
+		return rv;
+	}
+	g_input_ticks += gtimer_count_get() - t1;
+	g_input_calls++;
+	return rv;
+}
+
+/* The driver-side seam: drain the received frames into the stack. Returns the
+ * number of frames handed to the stack (the heartbeat's "fed" counter).
+ *
+ * Two receive shapes, one clock:
+ *  - copying (default): ask the driver for the next staged frame, allocate a
+ *    pool pbuf, copy. One frame lives in the driver's stage ring at a time.
+ *  - zero copy (CONFIG_GMAC_RX_ZC): the driver's ready ring is the queue and
+ *    its buffers are the payloads; nothing is copied, and the pbuf's free is
+ *    what returns the slot (see ethnetif_zc_wrap above).
  *
  * CONFIG_GMAC_RX_BATCH: take the core lock ONCE for the whole drain instead
  * of letting each tcpip_input take and release it. Both shapes end in the
@@ -523,10 +648,50 @@ unsigned int ethnetif_poll(struct netif *netif)
 	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
 	LOCK_TCPIP_CORE();
 #endif
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	while (1) {
+		void *handle = NULL;
+		struct ethnetif_zc *z;
+		struct pbuf *p;
+		unsigned int cls;
+		uint64_t t0;
+		uint64_t t1;
+
+		/* The ready ring holds frames the MAC already validated and the
+		 * driver already cache-invalidated, so the stack may read the
+		 * buffer as soon as it is dequeued. */
+		if (dwc_eqos_rx_dequeue(port, &handle) <= 0) {
+			break;
+		}
+		z = (struct ethnetif_zc *)handle;
+		if (z == NULL) {
+			break;
+		}
+		t0 = gtimer_count_get();
+		p = pbuf_alloced_custom(PBUF_RAW, (u16_t)z->len, PBUF_RAM,
+					&z->pc, z->buf, (u16_t)z->len);
+		if (p == NULL) {
+			/* A static wrapper cannot fail, but a silent loss here
+			 * would read as a MAC drop; keep the frame's slot on
+			 * the free list the way any other refusal does. */
+			dwc_eqos_rx_release(port, z->slot);
+			g_pool_fail++;
+			continue;
+		}
+		cls = ethnetif_classify(z->buf, z->len, &g_rx_shape, 1);
+		t1 = gtimer_count_get();
+		g_prep_ticks += t1 - t0;
+		if (ethnetif_deliver(netif, p, cls, t1) == ERR_OK) {
+			fed++;
+			g_fed_total++;
+		}
+	}
+#else
 	while (1) {
 		int len;
 		struct pbuf *p;
 		uint64_t t0;
+		uint64_t t1;
 		unsigned int cls = ETHNETIF_CLASS_OTHER;
 
 		len = (int)dwc_eqos_get_rx_frame_size(port);
@@ -554,10 +719,8 @@ unsigned int ethnetif_poll(struct netif *netif)
 		}
 		cls = ethnetif_classify((const uint8_t *)p->payload,
 					(unsigned int)len, &g_rx_shape, 1);
-		{
-			uint64_t t1 = gtimer_count_get();
-
-			g_prep_ticks += t1 - t0;
+		t1 = gtimer_count_get();
+		g_prep_ticks += t1 - t0;
 #else
 		len = dwc_eqos_read_frame(port, in_linear, sizeof(in_linear));
 		if (len <= 0) {
@@ -578,59 +741,15 @@ unsigned int ethnetif_poll(struct netif *netif)
 			g_pool_fail++;
 			continue;
 		}
-		{
-			uint64_t t1 = gtimer_count_get();
-
-			g_prep_ticks += t1 - t0;
+		t1 = gtimer_count_get();
+		g_prep_ticks += t1 - t0;
 #endif
-#if defined(CONFIG_GMAC_RX_BATCH) && CONFIG_GMAC_RX_BATCH \
-	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
-			/* Already under the core lock: hand the frame straight
-			 * to the stack's ethernet entry, the same function the
-			 * locking tcpip_input would call after re-locking. */
-			err_t rv = ethernet_input(p, netif);
-#elif defined(CONFIG_GMAC_INPUT_SPLIT) && CONFIG_GMAC_INPUT_SPLIT \
-	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
-			/* The input bucket, torn in two (2026-10-19 round 2):
-			 * the lock acquisition is timed on its own, then the
-			 * ethernet_input body. This is the exact sequence
-			 * tcpip_inpkt runs under LWIP_TCPIP_CORE_LOCKING_INPUT
-			 * (tcpip.c:254-262) - LOCK, input_fn, UNLOCK - so the
-			 * only cost added is two counter reads per frame. Not
-			 * combinable with BATCH (the batch already holds the
-			 * lock; it is not recursive). */
-			err_t rv;
-			{
-				uint64_t w0, w1, p1;
-
-				w0 = gtimer_count_get();
-				LOCK_TCPIP_CORE();
-				w1 = gtimer_count_get();
-				rv = ethernet_input(p, netif);
-				p1 = gtimer_count_get();
-				UNLOCK_TCPIP_CORE();
-				g_split_wait[cls] += w1 - w0;
-				g_split_proc[cls] += p1 - w1;
-				g_split_calls[cls]++;
-			}
-#else
-			err_t rv = netif->input(p, netif);
-#endif
-			if (rv != ERR_OK) {
-				pbuf_free(p);
-				g_input_fail++;
-				g_input_ticks += gtimer_count_get() - t1;
-				continue;
-			}
-			g_input_ticks += gtimer_count_get() - t1;
-			g_input_calls++;
+		if (ethnetif_deliver(netif, p, cls, t1) == ERR_OK) {
+			fed++;
+			g_fed_total++;
 		}
-		/* The class is consumed by the INPUTSPLIT arrays inside the branch
-		 * above; in every other build it is benignly dropped here. */
-		(void)cls;
-		fed++;
-		g_fed_total++;
 	}
+#endif /* CONFIG_GMAC_RX_ZC */
 #if defined(CONFIG_GMAC_RX_BATCH) && CONFIG_GMAC_RX_BATCH \
 	&& LWIP_TCPIP_CORE_LOCKING && LWIP_TCPIP_CORE_LOCKING_INPUT
 	UNLOCK_TCPIP_CORE();
