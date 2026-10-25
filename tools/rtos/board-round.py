@@ -64,6 +64,7 @@ FINAL_ANCHOR = "rtos: result"
 # The delivery plan's downlink phase still announces itself this way; the
 # phase anchors above are the general form.
 READY_ANCHOR = "net: iperf ready"
+TCP_READY_ANCHOR = "wlan: tcp sink ready"
 
 # The board announces each phase before it waits; the number and the name are
 # the only things this side needs to know about the schedule.
@@ -166,6 +167,21 @@ def peer_ping() -> str:
     )
 
 
+def peer_tcp_raw(seconds: int) -> str:
+    """Raw TCP sender for the 8189FTV lwIP sink (no iperf3 protocol)."""
+    script = REPO / "tools" / "rtos" / "tcp-sender.py"
+    cmd = [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", PEER,
+        f"python3 -u - --host 192.168.99.2 --port 5001 --seconds {seconds}",
+    ]
+    with script.open("rb") as stdin:
+        result = subprocess.run(
+            cmd, stdin=stdin, capture_output=True, text=True,
+            timeout=seconds + 90,
+        )
+    return (result.stdout or "") + (result.stderr or "")
+
+
 def peer_tcp_down(seconds: int, window_kib: int = 0, streams: int = 1) -> str:
     window = f"-w {window_kib}K " if window_kib else ""
     parallel = f"-P {streams} " if streams > 1 else ""
@@ -228,6 +244,10 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path, help="run directory")
     ap.add_argument("--boot", required=True, help="boot name, e.g. boot1")
     ap.add_argument("--peer", action="store_true", help="drive the Raspberry Pi peer")
+    ap.add_argument("--tcp-peer", action="store_true",
+                    help="run the raw TCP sender when the 8189FTV sink is ready")
+    ap.add_argument("--tcp-seconds", type=int, default=30,
+                    help="raw TCP sender window, seconds")
     ap.add_argument("--cases", default="tick,cmsis2,net,emmc",
                     help="case names the image carries (judge's expected set)")
     ap.add_argument("--plan", type=int, default=0, choices=[0, 1],
@@ -308,6 +328,7 @@ def main() -> int:
         final_seen = None
         peer_done = False
         ping_done = False
+        tcp_peer_done = False
         fired: set[str] = set()
         lines: list[str] = []
         with log_path.open("w") as log:
@@ -343,6 +364,13 @@ def main() -> int:
                         (out / "peer.log").write_text(
                             "peer phases fired: " + " ".join(sorted(fired)) + "\n"
                         )
+
+                if (args.tcp_peer and not tcp_peer_done and
+                        TCP_READY_ANCHOR in text):
+                    tcp_peer_done = True
+                    (out / "peer-tcp.log").write_text(
+                        peer_tcp_raw(args.tcp_seconds)
+                    )
 
                 if final_seen is None and FINAL_ANCHOR in text:
                     final_seen = time.time()

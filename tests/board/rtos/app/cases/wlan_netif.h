@@ -25,4 +25,9 @@ void wlan_netif_link(int up);
 int wlan_netif_ping(const char *peer_ip, unsigned int count,
 		    unsigned int *rx);
 
+/* TCP downlink sink on port 5001: listen, accept one connection, run for
+ * `seconds` one-second windows and print bytes/segments per window.  Returns
+ * 0 when at least one byte arrived. */
+int wlan_netif_tcp_sink(unsigned int seconds);
+
 #endif /* RTOS_APP_WLAN_NETIF_H */

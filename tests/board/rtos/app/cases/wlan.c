@@ -499,11 +499,28 @@ int case_wlan_run(void)
 
 		st = wlan_netif_ping("192.168.99.1", WLAN_PING_COUNT, &ping_rx);
 		if ((st != 0) || (ping_rx != WLAN_PING_COUNT)) {
+#if WLAN_TCP_SINK
+			CASE_ANCHOR("wlan: WARN ping %u/%u; continuing to tcp sink\n",
+				    ping_rx, WLAN_PING_COUNT);
+			if (ping_rx == 0u) {
+				CASE_ANCHOR("wlan: FAIL no ping reply\n");
+				return -1;
+			}
+#else
 			CASE_ANCHOR("wlan: FAIL ping %u/%u\n", ping_rx,
 				    WLAN_PING_COUNT);
 			return -1;
+#endif
 		}
 	}
+
+#if WLAN_TCP_SINK
+	st = wlan_netif_tcp_sink(WLAN_TCP_SINK_SECONDS);
+	if (st != 0) {
+		CASE_ANCHOR("wlan: FAIL tcp sink\n");
+		return -1;
+	}
+#endif
 
 	memset(&stats, 0, sizeof(stats));
 	lkpi_sdio_stats_get(&stats);

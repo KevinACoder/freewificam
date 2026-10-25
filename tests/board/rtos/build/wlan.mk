@@ -29,6 +29,8 @@ endif
 # one arm.
 WLAN_SCAN_DIAG ?= 0
 WLAN_SCAN_BATCH ?= 1
+WLAN_TCP_SINK ?= 0
+WLAN_TCP_SINK_SECONDS ?= 30
 
 LKPI := $(COMPONENTS)/linuxkpi/rtos
 
@@ -138,6 +140,7 @@ WLAN_APP_CFLAGS := $(filter-out -Wextra -DCMSIS_device_header=%,$(CFLAGS)) \
 	-std=gnu11 -DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-DWLAN_SCAN_DIAG=$(WLAN_SCAN_DIAG) -DWLAN_SCAN_BATCH=$(WLAN_SCAN_BATCH) \
+	-DWLAN_TCP_SINK=$(WLAN_TCP_SINK) -DWLAN_TCP_SINK_SECONDS=$(WLAN_TCP_SINK_SECONDS) \
 	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio \
 	-I$(THIRD_PARTY)/fsl_sdmmc/sdio
 
