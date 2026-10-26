@@ -109,4 +109,24 @@ int case_rtw89_join_run(void);
 int case_rtw89_dataplane_run(void);
 #endif
 
+#if defined(RTOS_CASE_RTL8XXXU)
+int case_rtl8xxxu_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTL8XXXU_SCAN)
+int case_rtl8xxxu_scan_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTL8XXXU_JOIN)
+int case_rtl8xxxu_join_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTL8XXXU_DATAPLANE)
+int case_rtl8xxxu_dataplane_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTL8XXXU_NET)
+int case_rtl8xxxu_net_run(void);
+#endif
+
 #endif /* RTOS_APP_CASES_H */
