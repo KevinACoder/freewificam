@@ -25,7 +25,15 @@ build=$root/tests/board/rtos/build
 target=${1:-all}
 jobs=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
 
+# The dev-loop budget: one profile's incremental build is seconds, and a
+# minute is a regression worth noticing (AGENTS 1.3).  The elapsed time is
+# printed on every run so the number is in the round's record, not in memory.
+started=$(date +%s)
+
 make -C "$build" -j"$jobs" "$target"
+
+elapsed=$(( $(date +%s) - started ))
+printf 'elapsed: %ss (%s, jobs=%s)\n' "$elapsed" "$target" "$jobs"
 
 case "$target" in
 all|image|check|"")

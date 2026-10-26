@@ -40,6 +40,11 @@ CASES = (
     "rtw89_scan",
     "rtw89_join",
     "rtw89_dataplane",
+    "rtl8xxxu",
+    "rtl8xxxu_scan",
+    "rtl8xxxu_join",
+    "rtl8xxxu_dataplane",
+    "rtl8xxxu_net",
 )
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
@@ -229,6 +234,145 @@ PATTERNS = {
     ),
     "rtw89_data_fail": re.compile(
         r"rtw89: data FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # --- RTL8188EUS (rtl8xxxu) ladder -------------------------------------
+    # The bring-up: the controller list, the class hook's claim line (echoed,
+    # not required), the firmware revision, the MAC and the start state.
+    "rtl8xxxu_buses": re.compile(r"rtl8xxxu: usb buses=(?P<buses>\S+)", re.MULTILINE),
+    "rtl8xxxu_bus_started": re.compile(
+        r"rtl8xxxu: usb bus=(?P<bus>\d+) hcd=(?P<hcd>\w+) "
+        r"base=0x(?P<base>[0-9a-f]+) started",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_claim": re.compile(
+        r"rtl8xxxu: claim .*0bda:8179", re.MULTILINE
+    ),
+    # The driver's device-name prefix is whatever the linuxkpi printk's %s
+    # carries (it can be empty on this port), so the anchor is matched from
+    # "Firmware revision" and not from a fixed prefix.
+    "rtl8xxxu_fw": re.compile(
+        r"rtl8xxxu: fw .*Firmware revision "
+        r"(?P<version>\d+\.\d+) \(signature 0x(?P<sig>[0-9a-fA-F]+)\)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_fw_image": re.compile(
+        r"rtl8xxxu: fw image .*Loading firmware (?P<name>\S+)", re.MULTILINE
+    ),
+    "rtl8xxxu_attach": re.compile(
+        r"rtl8xxxu: attach ok after (?P<ms>\d+) ms mac=(?P<mac>[0-9a-f:]+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_start": re.compile(
+        r"rtl8xxxu: start ok attached=(?P<attached>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_usb_stats": re.compile(
+        r"rtl8xxxu: usb submits=(?P<submits>\d+) completes=(?P<completes>\d+) "
+        r"refused=(?P<refused>\d+) stage_overflow=(?P<stage_overflow>\d+) "
+        r"slots_exhausted=(?P<slots_exhausted>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_fail": re.compile(r"rtl8xxxu: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # scan: the software sweep's window and its table
+    "rtl8xxxu_scan_start": re.compile(
+        r"rtl8xxxu: scan start state=(?P<state>-?\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_scan_done": re.compile(
+        r"rtl8xxxu: scan done rows=(?P<rows>\d+) bcn=(?P<bcn>\d+) "
+        r"bcnT=(?P<bcnT>\d+) prsp=(?P<prsp>\d+) fcs=(?P<fcs>\d+) "
+        r"scan=(?P<starts>\d+)/(?P<completes>\d+) state=(?P<state>-?\d+) "
+        r"entered=(?P<entered>\d+) close=(?P<close>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_scan_hit": re.compile(
+        r"rtl8xxxu: scan hit bssid=(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"ssid=(?P<ssid>\S*) freq=(?P<freq>\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_scan_lkpi": re.compile(
+        r"rtl8xxxu: scan lkpi completions=(?P<completions>\d+) "
+        r"tx=(?P<tx>\d+) wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_scan_fail": re.compile(
+        r"rtl8xxxu: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # join: the scan-table lookup, the exchange and its completion
+    "rtl8xxxu_join_bssid": re.compile(
+        r"rtl8xxxu: join bssid=(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"ssid=(?P<ssid>\S+) freq=(?P<freq>-?\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_join_start": re.compile(
+        r"rtl8xxxu: join start ssid=(?P<ssid>\S+) "
+        r"bssid=(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"state=(?P<state>-?\d+) rc=(?P<rc>-?\d+) attempt=(?P<attempt>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_join_lkpi": re.compile(
+        r"rtl8xxxu: join lkpi tx=(?P<tx>\d+) scan=(?P<scan>\d+) "
+        r"wq=(?P<wq>\d+) rx_in=(?P<rx_in>\d+) rx_ref=(?P<rx_ref>\d+) "
+        r"rx_drop=(?P<rx_drop>\d+) rx_frames=(?P<rx_frames>\d+) "
+        r"rx_q=(?P<rx_q>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_join_ok": re.compile(
+        r"rtl8xxxu: join ok state=(?P<state>\d+) mgt_tx=(?P<mgt_tx>\d+) "
+        r"txc=(?P<txc>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_join_fail": re.compile(
+        r"rtl8xxxu: join FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # the raw-L2 data plane: one ARP exchange and the echo series
+    "rtl8xxxu_data_arp": re.compile(
+        r"rtl8xxxu: data arp reply src=(?P<src>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"tx=(?P<tx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_data_ping": re.compile(
+        r"rtl8xxxu: data ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min_ms>\d+) max_ms=(?P<max_ms>\d+) lost=(?P<lost>\S*)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_data_counters": re.compile(
+        r"rtl8xxxu: data counters data_tx=(?P<data_tx>\d+) "
+        r"tx_done=(?P<tx_done>\d+) rx=(?P<rx>\d+) rx_data=(?P<rx_data>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_data_fail": re.compile(
+        r"rtl8xxxu: data FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # the IP presentation layer: netif up, ICMP, one TCP session each way
+    "rtl8xxxu_net_up": re.compile(
+        r"rtl8xxxu: net up ip=(?P<ip>\d+\.\d+\.\d+\.\d+/\d+) "
+        r"mac=(?P<mac>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) mtu=(?P<mtu>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_net_ping": re.compile(
+        r"rtl8xxxu: net ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min_ms>\d+) max_ms=(?P<max_ms>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_net_down": re.compile(
+        r"rtl8xxxu: net iperf down done=(?P<done>\d+) bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_net_up_done": re.compile(
+        r"rtl8xxxu: net iperf up done=(?P<done>\d+) bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_net_counters": re.compile(
+        r"rtl8xxxu: net counters tx=(?P<tx>\d+) txb=(?P<txb>\d+) "
+        r"txfail=(?P<txfail>\d+) rx=(?P<rx>\d+) rxr=(?P<rxr>\d+) "
+        r"rxfail=(?P<rxfail>\d+) bridge_tx=(?P<bridge_tx>\d+) "
+        r"bridge_done=(?P<bridge_done>\d+) bridge_rx=(?P<bridge_rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_net_fail": re.compile(
+        r"rtl8xxxu: net FAIL (?P<reason>.+)$", re.MULTILINE
     ),
 }
 
@@ -1127,6 +1271,123 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append(
                 f"rtw89_dataplane: data_tx={ctr['data_tx']} rx_data={ctr['rx_data']}"
             )
+
+    if cases.get("rtl8xxxu", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu: {fail['reason']}")
+        attach = found["rtl8xxxu_attach"]
+        if not attach:
+            errors.append("rtl8xxxu: PASS without an attach line")
+        else:
+            mac = attach["mac"].lower()
+            if mac in ("00:00:00:00:00:00", "0:0:0:0:0:0"):
+                errors.append("rtl8xxxu: hardware address is all zero")
+            else:
+                notes.append(f"rtl8xxxu: attach after {attach['ms']} ms mac={mac}")
+        fw = found["rtl8xxxu_fw"]
+        if not fw:
+            errors.append("rtl8xxxu: no firmware revision line "
+                          "(the probe did not reach the firmware report)")
+        else:
+            notes.append(f"rtl8xxxu: firmware {fw['version']} sig=0x{fw['sig']}")
+        start = found["rtl8xxxu_start"]
+        if not start:
+            errors.append("rtl8xxxu: PASS without a start line")
+        elif int(start["attached"]) == 0:
+            errors.append("rtl8xxxu: start returned but not attached")
+        else:
+            notes.append(f"rtl8xxxu: start attached={start['attached']} "
+                         f"rx={start['rx']}")
+        if not found["rtl8xxxu_bus_started"]:
+            errors.append("rtl8xxxu: no controller start line")
+
+    if cases.get("rtl8xxxu_scan", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_scan_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_scan: {fail['reason']}")
+        done = found["rtl8xxxu_scan_done"]
+        hit = found["rtl8xxxu_scan_hit"]
+        if not done:
+            errors.append("rtl8xxxu_scan: PASS without a scan-done line")
+        else:
+            if int(done["rows"]) == 0:
+                errors.append("rtl8xxxu_scan: empty scan table")
+            if int(done["starts"]) < 1:
+                errors.append("rtl8xxxu_scan: the sweep never started")
+            if int(done["rx"]) == 0:
+                errors.append("rtl8xxxu_scan: no frame reached the stack")
+            notes.append(f"rtl8xxxu_scan: rows={done['rows']} bcn={done['bcn']} "
+                         f"prsp={done['prsp']} close={done['close']} "
+                         f"rx={done['rx']}")
+        if not hit:
+            errors.append("rtl8xxxu_scan: PASS without a bench-AP hit line")
+        else:
+            notes.append(f"rtl8xxxu_scan: hit {hit['bssid']} {hit['ssid']} "
+                         f"{hit['freq']} MHz {hit['rssi']} dBm")
+
+    if cases.get("rtl8xxxu_join", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_join_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_join: {fail['reason']}")
+        ok = found["rtl8xxxu_join_ok"]
+        if not ok:
+            errors.append("rtl8xxxu_join: PASS without a join-ok line")
+        else:
+            if int(ok["state"]) != 4:
+                errors.append(f"rtl8xxxu_join: state={ok['state']} (want RUN=4)")
+            if int(ok["mgt_tx"]) == 0:
+                errors.append("rtl8xxxu_join: no management frame reached the driver")
+            if int(ok["txc"]) == 0:
+                errors.append("rtl8xxxu_join: no transmit completion")
+            notes.append(f"rtl8xxxu_join: state={ok['state']} "
+                         f"mgt_tx={ok['mgt_tx']} txc={ok['txc']} rx={ok['rx']}")
+        if not found["rtl8xxxu_join_bssid"]:
+            errors.append("rtl8xxxu_join: no scan-table BSSID line")
+
+    if cases.get("rtl8xxxu_dataplane", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_data_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_dataplane: {fail['reason']}")
+        arp = found["rtl8xxxu_data_arp"]
+        ping = found["rtl8xxxu_data_ping"]
+        if not arp:
+            errors.append("rtl8xxxu_dataplane: PASS without an ARP reply")
+        else:
+            notes.append(f"rtl8xxxu_dataplane: arp src={arp['src']} "
+                         f"tx={arp['tx']}")
+        if not ping:
+            errors.append("rtl8xxxu_dataplane: PASS without a ping line")
+        elif int(ping["tx"]) < 20 or int(ping["rx"]) < 19:
+            errors.append(f"rtl8xxxu_dataplane: echo {ping['rx']}/{ping['tx']} "
+                          f"(want 19 of 20)")
+        else:
+            notes.append(f"rtl8xxxu_dataplane: ping {ping['rx']}/{ping['tx']} "
+                         f"{ping['min_ms']}-{ping['max_ms']} ms lost={ping['lost']}")
+
+    if cases.get("rtl8xxxu_net", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_net_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_net: {fail['reason']}")
+        up = found["rtl8xxxu_net_up"]
+        if not up:
+            errors.append("rtl8xxxu_net: PASS without a netif-up line")
+        ping = found["rtl8xxxu_net_ping"]
+        if not ping:
+            errors.append("rtl8xxxu_net: PASS without a ping line")
+        elif int(ping["rx"]) < 9:
+            errors.append(f"rtl8xxxu_net: ping {ping['rx']}/{ping['tx']}")
+        else:
+            notes.append(f"rtl8xxxu_net: ping {ping['rx']}/{ping['tx']} "
+                         f"{ping['min_ms']}-{ping['max_ms']} ms")
+        for direction, name in (("down", "rtl8xxxu_net_down"),
+                                ("up", "rtl8xxxu_net_up_done")):
+            row = found[name]
+            if not row or int(row["bytes"]) == 0:
+                errors.append(f"rtl8xxxu_net: {direction} carried nothing")
+            else:
+                notes.append(f"rtl8xxxu_net: {direction} {row['kbit']} kbit/s "
+                             f"over {row['ms']} ms ({row['bytes']} bytes)")
 
     result = found["result"]
     if not result:
