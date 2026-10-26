@@ -309,12 +309,28 @@ static void slot_entry( ULONG input )
     }
 }
 
+/*
+ * CMSIS-RTOS2's priority model has equal-priority threads round-robin; the
+ * FreeRTOS backend gets that from configUSE_TIME_SLICING=1, while ThreadX needs
+ * a non-zero time slice to do the same.  With TX_NO_TIME_SLICE two threads at
+ * the same band only switch when one blocks, so a thread that stays runnable
+ * (the USB hub/drain threads share band 3 with the application runner) starves
+ * every other thread at its band for as long as it runs.  The L3-08 run caught
+ * exactly that: the runner stayed READY for 100+ s while a band-3 USB thread
+ * held the CPU (hb/tx-hb-4, the heartbeat at a higher band kept printing), and
+ * the same image on FreeRTOS passed.  Ten ticks (10 ms at 1000 Hz) is one
+ * FreeRTOS time slice.
+ */
+#ifndef CMSIS2_THREAD_TIME_SLICE
+#define CMSIS2_THREAD_TIME_SLICE 10
+#endif
+
 static UINT slot_tx_create( thread_slot_t * slot )
 {
     return tx_thread_create( &slot->thread, slot->name, slot_entry,
                              ( ULONG ) ( slot - slots ), slot->stack,
                              slot->stack_size, slot->tx_prio,
-                             slot->tx_prio, TX_NO_TIME_SLICE,
+                             slot->tx_prio, CMSIS2_THREAD_TIME_SLICE,
                              TX_AUTO_START );
 }
 

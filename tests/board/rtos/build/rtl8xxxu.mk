@@ -110,7 +110,15 @@ RTL8XXXU_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-include stdio.h -include string.h -include strings.h -include stdlib.h \
 	-D_DEFAULT_SOURCE=1
 
-RTL8XXXU_CASE_CFLAGS := $(RTL8XXXU_KPI_CFLAGS) $(RTL8XXXU_BUS_DEFS)
+# Diagnostic only: a high-priority thread that reports bridge/workqueue
+# counters through the polled UART while the bring-up waits for attach.  Used
+# to separate "the kernel/console is dead" from "the runner thread is blocked".
+ifneq ($(CONFIG_RTL8XXXU_HB),)
+RTL8XXXU_HB_DEFS := -DRTL8XXXU_HB=$(CONFIG_RTL8XXXU_HB)
+endif
+
+RTL8XXXU_CASE_CFLAGS := $(RTL8XXXU_KPI_CFLAGS) $(RTL8XXXU_BUS_DEFS) \
+	$(RTL8XXXU_HB_DEFS)
 
 RTL8XXXU_NET80211_SRCS := \
 	$(RTL8XXXU_NET)/net80211/ieee80211.c \

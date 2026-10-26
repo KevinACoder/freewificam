@@ -58,6 +58,54 @@
 #include "usb_glue.h"
 #include "usb_domain.h"
 
+#if defined(RTL8XXXU_HB)
+#include "uart.h"
+/*
+ * A heartbeat for the ThreadX hang: after the claim the runner sometimes never
+ * prints again, and the question is whether the whole kernel/console is dead
+ * or only this thread.  The heartbeat writes through the *polled* early UART,
+ * so it bypasses the log lock and the OS locks entirely, and it reports the
+ * bridge and workqueue counters from a higher-priority thread.  Diagnostic
+ * only (RTL8XXXU_HB), never in a delivery profile.
+ */
+static volatile unsigned int rtl8xxxu_hb_stop;
+static osThreadId_t rtl8xxxu_hb_runner;
+
+static void
+rtl8xxxu_hb_thread(void *arg)
+{
+	unsigned int n = 0;
+
+	(void)arg;
+	while (rtl8xxxu_hb_stop == 0u) {
+		struct wlan_bridge_counters c;
+		struct lkpi_wq_stats wq;
+		char buf[96];
+		int len;
+
+		wlan_bridge_stats(&c);
+		lkpi_wq_stats_get(&wq);
+		len = snprintf(buf, sizeof(buf),
+		    "\nHB %u attached=%u rx=%u wq=%u st=%d\n", n,
+		    (unsigned)c.attached, c.rx_frames, (unsigned)wq.runs,
+		    (int)osThreadGetState(rtl8xxxu_hb_runner));
+		if (len > 0 && (size_t)len < sizeof(buf))
+			uart_early_puts(buf);
+		/*
+		 * The second half of the discriminator: the same heartbeat
+		 * through the *log* path.  If the raw line above appears and this
+		 * one does not, the console/log lock is held by somebody; if this
+		 * line appears too, the log is fine and the runner is blocked on
+		 * something else.
+		 */
+		CASE_INFO("hb-log %u\n", n);
+		n++;
+		osDelay(1000u);
+	}
+	rtl8xxxu_hb_stop = 2u;
+}
+#endif
+
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void lkpi_usb_init(void);
@@ -230,10 +278,32 @@ case_rtl8xxxu_run(void)
 		return 1;
 	}
 
+#if defined(RTL8XXXU_HB)
+	{
+		static const osThreadAttr_t hb_attr = {
+			.name = "eu-hb",
+			.priority = osPriorityHigh,
+			.stack_size = 4096U,
+		};
+
+		rtl8xxxu_hb_stop = 0u;
+		rtl8xxxu_hb_runner = osThreadGetId();
+		if (osThreadNew(rtl8xxxu_hb_thread, NULL, &hb_attr) == NULL)
+			uart_early_puts("\nHB thread creation failed\n");
+	}
+#endif
 	while (waited < RTL8XXXU_WAIT_MS && !rtl8xxxu_attached()) {
 		osDelay(RTL8XXXU_POLL_MS);
 		waited += RTL8XXXU_POLL_MS;
 	}
+#if defined(RTL8XXXU_HB)
+	rtl8xxxu_hb_stop = 1u;
+	for (unsigned int hb_wait = 0; hb_wait < 300u; hb_wait++) {
+		if (rtl8xxxu_hb_stop == 2u)
+			break;
+		osDelay(10u);
+	}
+#endif
 	if (!rtl8xxxu_attached()) {
 		CASE_ANCHOR("rtl8xxxu: FAIL attach timeout after %u ms "
 		    "(no dongle claimed, or probe failed - see the lines above)\n",
