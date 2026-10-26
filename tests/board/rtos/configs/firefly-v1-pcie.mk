@@ -10,7 +10,7 @@
 # --- image -----------------------------------------------------------------
 CONFIG_BOARD := firefly-v1
 CONFIG_BACKEND := threadx
-CONFIG_CASES := tick cmsis2 pcie nvme net_e1000e 
+CONFIG_CASES := tick cmsis2 pcie nvme net_e1000e net_gmac
 CONFIG_OPT := -O2
 CONFIG_PROFILE := perf
 CONFIG_HEAP_SIZE := 16M
