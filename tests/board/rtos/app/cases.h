@@ -72,6 +72,10 @@ int case_iwl7260_join_run(void);
 int case_iwl7260_dataplane_run(void);
 #endif
 
+#if defined(RTOS_CASE_IWL7260_NET)
+int case_iwl7260_net_run(void);
+#endif
+
 #if defined(RTOS_CASE_WLAN)
 int case_wlan_run(void);
 void case_wlan_prepare(void);

@@ -142,7 +142,9 @@ PROFILE_CFLAGS ?=
 # so a short arm builds a short image (`CASES=tick,cmsis2`).
 CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260,$(CASES)),$(LINE)/app/cases/$(c).c)
+# The wireless cases are compiled in their own flag worlds (wlan.mk /
+# iwlwifi.mk), so they are excluded here.
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
@@ -415,6 +417,31 @@ VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL
 
 # The 8189FTV vendor-stack world (empty unless the wlan case is selected).
+# The lwIP core/protocol set: one list, because two images now carry the
+# stack (the GMAC net case and the 7260 net case over the bridge).  Only
+# the port glue and the presentation layer differ per image.
+LWIP_STACK_SRCS :=	$(LWIP)/src/core/init.c $(LWIP)/src/core/def.c $(LWIP)/src/core/dns.c \
+	$(LWIP)/src/core/inet_chksum.c $(LWIP)/src/core/ip.c \
+	$(LWIP)/src/core/mem.c $(LWIP)/src/core/memp.c \
+	$(LWIP)/src/core/netif.c $(LWIP)/src/core/pbuf.c \
+	$(LWIP)/src/core/raw.c $(LWIP)/src/core/stats.c $(LWIP)/src/core/sys.c \
+	$(LWIP)/src/core/altcp.c $(LWIP)/src/core/altcp_alloc.c \
+	$(LWIP)/src/core/altcp_tcp.c $(LWIP)/src/core/tcp.c \
+	$(LWIP)/src/core/tcp_in.c $(LWIP)/src/core/tcp_out.c \
+	$(LWIP)/src/core/timeouts.c $(LWIP)/src/core/udp.c \
+	$(LWIP)/src/core/ipv4/acd.c $(LWIP)/src/core/ipv4/autoip.c \
+	$(LWIP)/src/core/ipv4/dhcp.c $(LWIP)/src/core/ipv4/etharp.c \
+	$(LWIP)/src/core/ipv4/icmp.c $(LWIP)/src/core/ipv4/igmp.c \
+	$(LWIP)/src/core/ipv4/ip4_frag.c $(LWIP)/src/core/ipv4/ip4.c \
+	$(LWIP)/src/core/ipv4/ip4_addr.c \
+	$(LWIP)/src/api/api_lib.c $(LWIP)/src/api/api_msg.c \
+	$(LWIP)/src/api/err.c $(LWIP)/src/api/if_api.c \
+	$(LWIP)/src/api/netbuf.c $(LWIP)/src/api/netdb.c \
+	$(LWIP)/src/api/netifapi.c $(LWIP)/src/api/sockets.c \
+	$(LWIP)/src/api/tcpip.c \
+	$(LWIP)/src/netif/ethernet.c \
+	$(LWIP)/src/apps/lwiperf/lwiperf.c
+
 include $(CURDIR)/wlan.mk
 
 # The B3 wireless world (empty unless the iwlwifi case is selected).
@@ -450,28 +477,7 @@ NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
 	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
 	$(THIRD_PARTY)/lwip/ports/ethnetif.c
-NET_STACK_SRCS := \
-	$(LWIP)/src/core/init.c $(LWIP)/src/core/def.c $(LWIP)/src/core/dns.c \
-	$(LWIP)/src/core/inet_chksum.c $(LWIP)/src/core/ip.c \
-	$(LWIP)/src/core/mem.c $(LWIP)/src/core/memp.c \
-	$(LWIP)/src/core/netif.c $(LWIP)/src/core/pbuf.c \
-	$(LWIP)/src/core/raw.c $(LWIP)/src/core/stats.c $(LWIP)/src/core/sys.c \
-	$(LWIP)/src/core/altcp.c $(LWIP)/src/core/altcp_alloc.c \
-	$(LWIP)/src/core/altcp_tcp.c $(LWIP)/src/core/tcp.c \
-	$(LWIP)/src/core/tcp_in.c $(LWIP)/src/core/tcp_out.c \
-	$(LWIP)/src/core/timeouts.c $(LWIP)/src/core/udp.c \
-	$(LWIP)/src/core/ipv4/acd.c $(LWIP)/src/core/ipv4/autoip.c \
-	$(LWIP)/src/core/ipv4/dhcp.c $(LWIP)/src/core/ipv4/etharp.c \
-	$(LWIP)/src/core/ipv4/icmp.c $(LWIP)/src/core/ipv4/igmp.c \
-	$(LWIP)/src/core/ipv4/ip4_frag.c $(LWIP)/src/core/ipv4/ip4.c \
-	$(LWIP)/src/core/ipv4/ip4_addr.c \
-	$(LWIP)/src/api/api_lib.c $(LWIP)/src/api/api_msg.c \
-	$(LWIP)/src/api/err.c $(LWIP)/src/api/if_api.c \
-	$(LWIP)/src/api/netbuf.c $(LWIP)/src/api/netdb.c \
-	$(LWIP)/src/api/netifapi.c $(LWIP)/src/api/sockets.c \
-	$(LWIP)/src/api/tcpip.c \
-	$(LWIP)/src/netif/ethernet.c \
-	$(LWIP)/src/apps/lwiperf/lwiperf.c
+NET_STACK_SRCS := $(LWIP_STACK_SRCS)
 EQOS_SRCS := \
 	$(PLATFORM)/board/rk3568-itx/drivers/dwc_eqos.c \
 	$(PLATFORM)/board/rk3568-itx/drivers/eqos_rk3568.c \
@@ -525,7 +531,8 @@ FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 	$(BACKEND_FIRST_SRCS)
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
-ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS)
+ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
+	$(IWL_NET_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
 
@@ -592,6 +599,10 @@ $(foreach s,$(filter-out %.S,$(IWL_LKPI_SRCS) $(IWL_FW_SRCS)),$(eval $(call COMP
 $(foreach s,$(filter-out %.S,$(IWL_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(IWL_PCIE_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_PCIE_PORT_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(IWL_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_KPI_CFLAGS))))
+endif
+
+ifneq ($(filter iwl7260_net,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(IWL_NET_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_NET_CFLAGS))))
 endif
 
 $(TARGET).elf: $(OBJS)

@@ -33,6 +33,7 @@ CASES = (
     "iwl7260_scan",
     "iwl7260_join",
     "iwl7260_dataplane",
+    "iwl7260_net",
 )
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
@@ -217,6 +218,39 @@ LIST_PATTERNS = {
     ),
     "iwl7260_data_fail": re.compile(
         r"iwl7260: data FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # the IP presentation layer over the bridge: lwIP up, ICMP, and one TCP
+    # session in each direction against the bench's iperf peer.
+    "iwl7260_net_up": re.compile(
+        r"iwl7260: net up ip=(?P<ip>\d+\.\d+\.\d+\.\d+/\d+) "
+        r"mac=(?P<mac>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) mtu=(?P<mtu>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_ping": re.compile(
+        r"iwl7260: net ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min_ms>\d+) max_ms=(?P<max_ms>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_down": re.compile(
+        r"iwl7260: net iperf down done=(?P<done>\d+) bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_up_done": re.compile(
+        r"iwl7260: net iperf up done=(?P<done>\d+) bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_counters": re.compile(
+        r"iwl7260: net counters tx=(?P<tx>\d+) txb=(?P<txb>\d+) "
+        r"txfail=(?P<txfail>\d+) rx=(?P<rx>\d+) rxr=(?P<rxr>\d+) "
+        r"rxfail=(?P<rxfail>\d+) bridge_tx=(?P<bridge_tx>\d+) "
+        r"bridge_done=(?P<bridge_done>\d+) bridge_rx=(?P<bridge_rx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_pass": re.compile(r"iwl7260: net PASS", re.MULTILINE),
+    "iwl7260_net_fail": re.compile(
+        r"iwl7260: net FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "pcie_7260_platform": re.compile(
         r"pcie-7260: platform-inactive (?P<reason>.+)$", re.MULTILINE
@@ -558,6 +592,64 @@ def judge(text: str, expect: dict | None = None) -> dict:
             notes.append(
                 f"iwl7260_dataplane: data_tx={cnt['data_tx']} "
                 f"rx_data={cnt['rx_data']}"
+            )
+
+    if cases.get("iwl7260_net", {}).get("verdict") == "pass":
+        up = (found["iwl7260_net_up"] or [None])[0]
+        ping = (found["iwl7260_net_ping"] or [None])[0]
+        down = (found["iwl7260_net_down"] or [None])[0]
+        up_done = (found["iwl7260_net_up_done"] or [None])[0]
+        cnt = (found["iwl7260_net_counters"] or [None])[0]
+        fail = (found["iwl7260_net_fail"] or [None])[0]
+        if fail:
+            errors.append(f"iwl7260_net: {fail['reason']}")
+        if not up:
+            errors.append("iwl7260_net: PASS without the netif line")
+        elif up["ip"] != "192.168.99.2/24":
+            errors.append(f"iwl7260_net: address {up['ip']} is not the bench net")
+        else:
+            notes.append(f"iwl7260_net: up {up['ip']} mac={up['mac']}")
+        if not ping:
+            errors.append("iwl7260_net: PASS without a ping line")
+        elif int(ping["rx"]) < 9:
+            errors.append(f"iwl7260_net: ping {ping['rx']}/{ping['tx']}")
+        else:
+            notes.append(
+                f"iwl7260_net: ping {ping['rx']}/{ping['tx']} "
+                f"rtt={ping['min_ms']}-{ping['max_ms']} ms"
+            )
+        if not down:
+            errors.append("iwl7260_net: PASS without a downlink line")
+        elif int(down["done"]) != 1 or int(down["bytes"]) == 0:
+            errors.append(
+                f"iwl7260_net: downlink carried {down['bytes']} bytes "
+                f"(done={down['done']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_net: down {down['bytes']} bytes in {down['ms']} ms "
+                f"= {down['kbit']} kbit/s"
+            )
+        if not up_done:
+            errors.append("iwl7260_net: PASS without an uplink line")
+        elif int(up_done["done"]) != 1 or int(up_done["bytes"]) == 0:
+            errors.append(
+                f"iwl7260_net: uplink carried {up_done['bytes']} bytes "
+                f"(done={up_done['done']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_net: up {up_done['bytes']} bytes in "
+                f"{up_done['ms']} ms = {up_done['kbit']} kbit/s"
+            )
+        if not cnt:
+            errors.append("iwl7260_net: PASS without the counter line")
+        elif int(cnt["tx"]) == 0 or int(cnt["rx"]) == 0:
+            errors.append("iwl7260_net: netif counters are zero")
+        else:
+            notes.append(
+                f"iwl7260_net: netif tx={cnt['tx']} rx={cnt['rx']} "
+                f"txfail={cnt['txfail']} rxfail={cnt['rxfail']}"
             )
 
     if cases.get("pcie_7260", {}).get("verdict") == "pass":

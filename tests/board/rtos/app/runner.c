@@ -66,6 +66,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_IWL7260_DATAPLANE)
 	{ "iwl7260_dataplane", case_iwl7260_dataplane_run },
 #endif
+#if defined(RTOS_CASE_IWL7260_NET)
+	{ "iwl7260_net", case_iwl7260_net_run },
+#endif
 #if defined(RTOS_CASE_WLAN)
 	{ "wlan", case_wlan_run },
 #endif

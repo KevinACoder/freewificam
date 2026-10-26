@@ -138,6 +138,24 @@ IWL_CASE_SRCS := $(LINE)/app/cases/iwl7260.c
 IWL_ALL_SRCS := $(IWL_NET80211_SRCS) $(IWL_CASE_SRCS) $(IWL_NPORT_SRCS) $(IWL_BRIDGE_SRCS) \
 	$(IWL_LKPI_SRCS) $(IWL_DRV_SRCS) $(IWL_FW_SRCS) $(IWL_PCIE_PORT_SRCS)
 
+# The lwIP-over-bridge image (case iwl7260_net): the stack's port glue and the
+# lwIP core in the platform's flag world, plus the case itself.  This must stay
+# out of the driver world: lwIP's headers and the driver's headers own the same
+# names, and the case is the only file that sees the bridge's scalar face
+# (wlan_bridge.h -> seam.h).  The flags are taken from BASE_CFLAGS *before* the
+# Linux face below is appended, so the lwIP units never compile against
+# <net/mac80211.h>; deriving them from BASE_CFLAGS also keeps them inside the
+# existing flag stamp.
+ifneq ($(filter iwl7260_net,$(CASES)),)
+IWL_NET_SRCS := \
+	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
+	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
+	$(LWIP_STACK_SRCS) \
+	$(LINE)/app/cases/iwl7260_net.c
+IWL_NET_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
+	-I$(IWL_NPORT)/bridge
+endif
+
 # The image's own C surface (the iwl7260 case, the pcie case and the board
 # drivers) needs the same Linux face the linuxkpi units compile against: the
 # case includes linuxkpi_core.h/wlan_bridge.h and the driver's public headers.

@@ -22,6 +22,7 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 
 #include "cases.h"
 #include "os/cmsis2/cmsis2.h"
@@ -39,8 +40,30 @@ void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_module_init_run(void);
 int lkpi_fw_iwl7260_fw_register(void);
 
+/*
+ * The console is part of the measurement path: at 115200 baud a line costs
+ * about a millisecond, and once the station is associated this firmware image
+ * prints two lines per beacon interval (the beacon tracking of the ko line's
+ * issue #17 is not advancing).  Left unfiltered, that flood both swamps the
+ * ring the judged anchors travel through and inflates every receive-side
+ * latency the cases measure.  The pair is counted and summarised instead; the
+ * first few lines still appear, so the shape stays in the record.
+ */
+static unsigned int iwl7260_beacon_noise;
+
 static void iwl7260_sink(ulog_level_t level, const char *line)
 {
+	(void)level;
+	if ((strstr(line, "missed_beacons") != NULL) ||
+	    (strstr(line, "missed beacons exceeds threshold") != NULL)) {
+		iwl7260_beacon_noise++;
+		if (iwl7260_beacon_noise <= 4u)
+			CASE_INFO("lkpi: %s\n", line);
+		else if ((iwl7260_beacon_noise % 200u) == 0u)
+			CASE_INFO("lkpi: beacon-noise %u lines suppressed\n",
+			    iwl7260_beacon_noise - 4u);
+		return;
+	}
 	CASE_INFO("lkpi: %s\n", line);
 }
 
