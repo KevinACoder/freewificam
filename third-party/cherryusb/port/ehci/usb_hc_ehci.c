@@ -440,6 +440,22 @@ static struct ehci_qh_hw *ehci_control_urb_init(struct usbh_bus *bus, struct usb
     return qh;
 }
 
+/*
+ * One qTD covers at most five 4 KiB pages (the BPL array's size).  The fixed
+ * 0x4000 (16 KiB) split is safe for every buffer offset but splits the rtw89
+ * driver's 20 KiB receive URB into a 16 KiB + 4 KiB chain; that chain's
+ * asynchronous completion never reached the driver (the port's recorded
+ * >16 KiB bulk defect).  Take the largest chunk that still fits the five
+ * pages from this exact address: a page-aligned 20 KiB URB becomes one qTD,
+ * an unaligned buffer still splits at its own five-page boundary.
+ */
+static uint32_t ehci_qtd_max_chunk(uintptr_t bufaddr, uint32_t buflen)
+{
+    uint32_t max = 0x5000u - (uint32_t)(bufaddr & 0xfffu);
+
+    return buflen < max ? buflen : max;
+}
+
 static struct ehci_qh_hw *ehci_bulk_urb_init(struct usbh_bus *bus, struct usbh_urb *urb, uint8_t *buffer, uint32_t buflen)
 {
     struct ehci_qh_hw *qh = NULL;
@@ -470,13 +486,8 @@ static struct ehci_qh_hw *ehci_bulk_urb_init(struct usbh_bus *bus, struct usbh_u
         qtd = ehci_qtd_alloc(bus);
         USB_ASSERT_MSG(qtd, "bulk qtd alloc failed");
 
-        if (buflen > 0x4000) {
-            xfer_len = 0x4000;
-            buflen -= 0x4000;
-        } else {
-            xfer_len = buflen;
-            buflen = 0;
-        }
+        xfer_len = ehci_qtd_max_chunk((uintptr_t)buffer, buflen);
+        buflen -= xfer_len;
 
         if (urb->ep->bEndpointAddress & 0x80) {
             token = QTD_TOKEN_PID_IN;
@@ -566,13 +577,8 @@ static struct ehci_qh_hw *ehci_intr_urb_init(struct usbh_bus *bus, struct usbh_u
         qtd = ehci_qtd_alloc(bus);
         USB_ASSERT_MSG(qtd, "intr qtd alloc failed");
 
-        if (buflen > 0x4000) {
-            xfer_len = 0x4000;
-            buflen -= 0x4000;
-        } else {
-            xfer_len = buflen;
-            buflen = 0;
-        }
+        xfer_len = ehci_qtd_max_chunk((uintptr_t)buffer, buflen);
+        buflen -= xfer_len;
 
         if (urb->ep->bEndpointAddress & 0x80) {
             token = QTD_TOKEN_PID_IN;
