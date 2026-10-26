@@ -2832,6 +2832,13 @@ struct lkpi_wq_stats {
 };
 
 void	lkpi_wq_stats_get(struct lkpi_wq_stats *out);
+/*
+ * The body a worker is running right now (its function pointer), or NULL when
+ * every worker is idle.  Diagnostic: a stall that holds a driver mutex is
+ * placed on the executing work item, not on the thread name.  With the
+ * LKPI_JOIN_TRACE lever off this always answers NULL.
+ */
+void	*lkpi_wq_current_work_func(void);
 const char	*lkpi_wq_state(void);
 void lkpi_destroy_workqueue(struct workqueue_struct *);
 

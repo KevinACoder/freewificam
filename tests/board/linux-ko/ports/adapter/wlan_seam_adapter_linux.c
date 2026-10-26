@@ -595,6 +595,24 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 	}
 
 	/*
+	 * The transmit rate for a data frame.  mac80211's rate control fills
+	 * rates[0] before the frame reaches the driver, and mvm builds the
+	 * TX_CMD's rate from it; this seam has no rate-control instance, so
+	 * without the fallback the count stays 0 and the descriptor carries no
+	 * rate - the frame is handed to the driver and never transmitted.
+	 * Measured on the board: the 4-way handshake's M2/M4 never reached the
+	 * AP (it retransmitted M1 until its timer deauthenticated us with
+	 * reason 15) while the association's management frames, which do not
+	 * read rates[0], completed; with the injected diagnostic (tx_diag=1)
+	 * the same path pinged 20/20.  idx 0 is the driver's first supported
+	 * rate, count 1 is one try - the shape the RTOS seam has shipped.
+	 */
+	if (!is_mgmt) {
+		info->control.rates[0].idx = 0;
+		info->control.rates[0].count = 1;
+	}
+
+	/*
 	 * The queue-selection byte. The bridge's frames come from a L2 world
 	 * with no per-socket priority, so the production shape always asks for
 	 * best effort; the diagnostic shape can name another TID/AC.

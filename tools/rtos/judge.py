@@ -20,7 +20,21 @@ import re
 import sys
 from pathlib import Path
 
-CASES = ("tick", "cmsis2", "net", "emmc", "wlan")
+CASES = (
+    "tick",
+    "cmsis2",
+    "net",
+    "emmc",
+    "wlan",
+    "pcie",
+    "pcie_bench",
+    "pcie_7260",
+    "iwl7260",
+    "iwl7260_scan",
+    "iwl7260_join",
+    "iwl7260_dataplane",
+    "iwl7260_net",
+)
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
 FLAGS = re.MULTILINE
@@ -64,11 +78,49 @@ PATTERNS = {
     "wlan_ping": re.compile(r"wlan: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+)", re.MULTILINE),
     "wlan_pass": re.compile(r"wlan: PASS", re.MULTILINE),
     "wlan_fail": re.compile(r"wlan: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # PCIe/NVMe ladder (B0/B1): the root complex, the endpoint list, the
+    # namespace geometry and the message-interrupt delivery.  A completion
+    # without a delivery is not a PASS: the CQE is written either way.
+    "pcie_ctrl": re.compile(
+        r"pcie: ctrl (?P<n>\d+) link up, downstream bus (?P<bus>\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_nvme": re.compile(
+        r"nvme0: (?P<vid>[0-9a-fA-F]{4}):(?P<did>[0-9a-fA-F]{4}) at 0x(?P<bar>[0-9a-fA-F]+), "
+        r"ns1: (?P<blocks>\d+) blocks of (?P<sector>\d+) bytes",
+        re.MULTILINE,
+    ),
+    "pcie_irq": re.compile(
+        r"nvme0: message interrupts delivered \(intid (?P<intid>\d+), (?P<so_far>\d+) so far\)",
+        re.MULTILINE,
+    ),
+    "pcie_delta": re.compile(r"pcie: irqs=(?P<before>\d+)->(?P<after>\d+) completions=(?P<completions>\d+)", re.MULTILINE),
+    "pcie_platform": re.compile(r"pcie: platform-inactive (?P<reason>.+)$", re.MULTILINE),
+    "pcie_bench_platform": re.compile(r"pcie-bench: platform-inactive (?P<reason>.+)$", re.MULTILINE),
     # Throughput-round instruments (measurement only: they are read out for the
     # ledger, they never turn a pass into a fail).
     "net_rtt": re.compile(r"net: rtt n=(?P<n>\d+) min_us=(?P<min>\d+) avg_us=(?P<avg>\d+) max_us=(?P<max>\d+)", re.MULTILINE),
     "emmc_clk": re.compile(r"emmc: clk asked=(?P<asked>\d+)Hz achieved=(?P<achieved>\d+)Hz src_sel=(?P<sel>\d+) clk_ctrl=0x(?P<clk_ctrl>[0-9a-f]+) host_ctrl1=0x(?P<host_ctrl1>[0-9a-f]+) lines=(?P<lines>\d+) extcsd_bus=(?P<bus>\d+)", re.MULTILINE),
     "emmc_census": re.compile(r"emmc: census (?P<tag>\S+) transfers=(?P<transfers>\d+) blocks=(?P<blocks>\d+) boundaries=(?P<boundaries>\d+) data_polls=(?P<polls>\d+) cmd_us=(?P<cmd_us>\d+) data_us=(?P<data_us>\d+)", re.MULTILINE),
+    # The wireless ladder's own instruments, once per boot.  `wq=-` is a
+    # system workqueue that was never created, i.e. every schedule_work() in
+    # the driver silently dropped; the two lkpi lines are the driver's half of
+    # the completion paths whose bridge half is in the scan-done / join-ok
+    # lines.
+    "iwl7260_core": re.compile(
+        r"iwl7260: core wq=(?P<wq>\S+) runs=(?P<runs>\d+) "
+        r"full=(?P<full>\d+) max=(?P<max>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_scan_lkpi": re.compile(
+        r"iwl7260: scan lkpi completions=(?P<completions>\d+) "
+        r"tx=(?P<tx>\d+) wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_join_lkpi": re.compile(
+        r"iwl7260: join lkpi tx=(?P<tx>\d+) scan=(?P<scan>\d+) wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
@@ -83,6 +135,136 @@ LIST_PATTERNS = {
     "net_udp_blast": re.compile(r"net: udp blast port=(?P<port>\d+) sent=(?P<sent>\d+) pkts=(?P<pkts>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
     "emmc_sweep": re.compile(r"emmc: sweep (?P<dir>read|write) chunk=(?P<kib>\d+) KiB xfers=(?P<xfers>\d+) bytes=(?P<bytes>\d+) us=(?P<us>\d+) kibs=(?P<kibs>\d+)", re.MULTILINE),
     # Observation-image evidence: read out for the ledger, never a pass gate.
+    "pcie_bench_median": re.compile(
+        r"pcie-bench: median bs=(?P<bs>\d+) cmd_bytes=(?P<cmd_bytes>\d+) "
+        r"qd=(?P<qd>\d+) dir=(?P<dir>\S+) mib_s=(?P<mib_s>\d+) us=(?P<us>\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_dev": re.compile(
+        r"pcie-7260: dev (?P<bdf>[0-9a-fA-F:.]+) 8086:08b1 class 0280 rev 0x(?P<rev>[0-9a-fA-F]+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_bar": re.compile(
+        r"pcie-7260: bar0=0x(?P<bar>[0-9a-fA-F]+) hw_rev=0x(?P<rev>[0-9a-fA-F]+) "
+        r"type=0x(?P<type>[0-9a-fA-F]+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_vec": re.compile(
+        r"pcie-7260: (?P<kind>msix|msi) vectors=(?P<n>\d+) intid=(?P<intid>\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_7260_lnk": re.compile(
+        r"pcie-7260: lnksta speed=(?P<speed>\d+) width=(?P<width>\d+) "
+        r"lnkctl=0x(?P<ctl>[0-9a-fA-F]+) aspm=(?P<aspm>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_attach": re.compile(r"iwl7260: attach ok after (?P<ms>\d+) ms", re.MULTILINE),
+    "iwl7260_start": re.compile(
+        r"iwl7260: start ok attached=(?P<attached>\d+) rx=(?P<rx>\d+)", re.MULTILINE
+    ),
+    "iwl7260_alive": re.compile(
+        r"loaded firmware version (?P<version>\S+)", re.MULTILINE
+    ),
+    "iwl7260_platform": re.compile(
+        r"iwl7260: platform-inactive (?P<reason>.+)$", re.MULTILINE
+    ),
+    # the ladder cases: scan -> open join -> raw-L2 dataplane
+    "iwl7260_scan_start": re.compile(
+        r"iwl7260: scan start state=-?\d+", re.MULTILINE
+    ),
+    "iwl7260_scan_done": re.compile(
+        r"iwl7260: scan done rows=(?P<rows>\d+) bcn=(?P<bcn>\d+) "
+        r"bcnT=(?P<bcnT>\d+) prsp=(?P<prsp>\d+) fcs=(?P<fcs>\d+) "
+        r"scan=(?P<starts>\d+)/(?P<completes>\d+) state=-?\d+ "
+        r"entered=(?P<entered>\d+) close=(?P<close>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_scan_hit": re.compile(
+        r"iwl7260: scan hit bssid=(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"ssid=(?P<ssid>\S*) freq=(?P<freq>\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_scan_fail": re.compile(
+        r"iwl7260: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_join_start": re.compile(
+        r"iwl7260: join start ssid=(?P<ssid>\S+) "
+        r"bssid=(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"state=-?\d+ rc=(?P<rc>-?\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_join_ok": re.compile(
+        r"iwl7260: join ok state=(?P<state>\d+) mgt_tx=(?P<mgt_tx>\d+) "
+        r"txc=(?P<txc>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_join_fail": re.compile(
+        r"iwl7260: join FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_data_arp": re.compile(
+        r"iwl7260: data arp reply src=(?P<src>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"tx=(?P<tx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_data_ping": re.compile(
+        r"iwl7260: data ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min_ms>\d+) max_ms=(?P<max_ms>\d+) lost=(?P<lost>\S*)",
+        re.MULTILINE,
+    ),
+    "iwl7260_data_counters": re.compile(
+        r"iwl7260: data counters data_tx=(?P<data_tx>\d+) "
+        r"tx_done=(?P<tx_done>\d+) rx=(?P<rx>\d+) rx_data=(?P<rx_data>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_data_fail": re.compile(
+        r"iwl7260: data FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # the IP presentation layer over the bridge: lwIP up, ICMP, and one TCP
+    # session in each direction against the bench's iperf peer.
+    "iwl7260_net_up": re.compile(
+        r"iwl7260: net up ip=(?P<ip>\d+\.\d+\.\d+\.\d+/\d+) "
+        r"mac=(?P<mac>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) mtu=(?P<mtu>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_ping": re.compile(
+        r"iwl7260: net ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min_ms>\d+) max_ms=(?P<max_ms>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_down": re.compile(
+        r"iwl7260: net iperf down done=(?P<done>\d+) bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_up_done": re.compile(
+        r"iwl7260: net iperf up done=(?P<done>\d+) bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_counters": re.compile(
+        r"iwl7260: net counters tx=(?P<tx>\d+) txb=(?P<txb>\d+) "
+        r"txfail=(?P<txfail>\d+) rx=(?P<rx>\d+) rxr=(?P<rxr>\d+) "
+        r"rxfail=(?P<rxfail>\d+) bridge_tx=(?P<bridge_tx>\d+) "
+        r"bridge_done=(?P<bridge_done>\d+) bridge_rx=(?P<bridge_rx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_net_pass": re.compile(r"iwl7260: net PASS", re.MULTILINE),
+    "iwl7260_net_fail": re.compile(
+        r"iwl7260: net FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "pcie_7260_platform": re.compile(
+        r"pcie-7260: platform-inactive (?P<reason>.+)$", re.MULTILINE
+    ),
+    "pcie_bench_fit": re.compile(
+        r"pcie-bench: fit qd=(?P<qd>\d+) dir=(?P<dir>\S+) c_us=(?P<c_us>-?\d+) "
+        r"bw_mib_s=(?P<bw_mib_s>-?\d+) r2_permille=(?P<r2>-?\d+)",
+        re.MULTILINE,
+    ),
+    "pcie_dev": re.compile(
+        r"pcie: dev (?P<bdf>[0-9a-fA-F:.]+) (?P<vid>[0-9a-fA-F]{4}):(?P<did>[0-9a-fA-F]{4}) "
+        r"class (?P<cc>[0-9a-fA-F]{4})",
+        re.MULTILINE,
+    ),
     "wlan_obs": re.compile(r"wlan: obs .*", re.MULTILINE),
     "wlan_udp": re.compile(r"wlan: udp .*", re.MULTILINE),
     "wlan_ping_seq": re.compile(r"wlan: ping (?:tx|rx) seq=\d+", re.MULTILINE),
@@ -258,6 +440,321 @@ def judge(text: str, expect: dict | None = None) -> dict:
         fail = found["wlan_fail"]
         if fail:
             errors.append(f"wlan: {fail['reason']}")
+
+    if cases.get("iwl7260", {}).get("verdict") == "pass":
+        if found["iwl7260_platform"]:
+            cases["iwl7260"]["platform_inactive"] = found["iwl7260_platform"]["reason"]
+            errors.append(
+                f"iwl7260: platform-inactive ({found['iwl7260_platform']['reason']})"
+            )
+        attach = (found["iwl7260_attach"] or [None])[0]
+        start = (found["iwl7260_start"] or [None])[0]
+        alive = (found["iwl7260_alive"] or [None])[0]
+        if not attach:
+            errors.append("iwl7260: PASS without an attach line")
+        else:
+            notes.append(f"iwl7260: attach after {attach['ms']} ms")
+        if not start:
+            errors.append("iwl7260: PASS without a start line")
+        elif int(start["attached"]) == 0:
+            errors.append("iwl7260: start returned but not attached")
+        else:
+            notes.append(f"iwl7260: start attached={start['attached']} rx={start['rx']}")
+        if not alive:
+            errors.append("iwl7260: no firmware ALIVE evidence (loaded firmware version)")
+        else:
+            notes.append(f"iwl7260: firmware {alive['version']}")
+        core = found["iwl7260_core"]
+        if not core:
+            errors.append("iwl7260: PASS without the core-services line")
+        elif core["wq"] == "-":
+            errors.append(
+                "iwl7260: the linuxkpi system workqueue was never created "
+                "(wq=-): every schedule_work() in the driver was dropped"
+            )
+        else:
+            notes.append(
+                f"iwl7260: core wq={core['wq']} runs={core['runs']} "
+                f"max={core['max']}"
+            )
+
+    if cases.get("iwl7260_scan", {}).get("verdict") == "pass":
+        done = (found["iwl7260_scan_done"] or [None])[0]
+        hit = (found["iwl7260_scan_hit"] or [None])[0]
+        fail = (found["iwl7260_scan_fail"] or [None])[0]
+        if fail:
+            errors.append(f"iwl7260_scan: {fail['reason']}")
+        if not done:
+            errors.append("iwl7260_scan: PASS without a scan-done line")
+        else:
+            if int(done["rows"]) == 0:
+                errors.append("iwl7260_scan: empty scan table")
+            if int(done["starts"]) < 1 or int(done["completes"]) < 1:
+                errors.append("iwl7260_scan: the sweep never completed")
+            if int(done["rx"]) == 0:
+                errors.append("iwl7260_scan: no frame reached the stack")
+            notes.append(
+                f"iwl7260_scan: rows={done['rows']} bcn={done['bcn']} "
+                f"prsp={done['prsp']} close={done['close']} rx={done['rx']}"
+            )
+        if not hit:
+            errors.append("iwl7260_scan: target AP not in the table")
+        elif (
+            hit["bssid"].lower() != "d8:3a:dd:26:91:1e"
+            or hit["ssid"] != "labwifi-brmc"
+        ):
+            errors.append(
+                f"iwl7260_scan: hit {hit['bssid']}/{hit['ssid']} is not the bench AP"
+            )
+        else:
+            notes.append(
+                f"iwl7260_scan: hit {hit['ssid']} freq={hit['freq']} "
+                f"rssi={hit['rssi']}"
+            )
+        lkpi = found["iwl7260_scan_lkpi"]
+        if not lkpi:
+            errors.append("iwl7260_scan: PASS without the driver-completion line")
+        elif int(lkpi["completions"]) < 1:
+            errors.append(
+                "iwl7260_scan: the driver never completed the sweep "
+                f"(lkpi=0 wq={lkpi['wq']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_scan: driver completions={lkpi['completions']} "
+                f"tx={lkpi['tx']} wq={lkpi['wq']}"
+            )
+
+    if cases.get("iwl7260_join", {}).get("verdict") == "pass":
+        start = (found["iwl7260_join_start"] or [None])[0]
+        ok = (found["iwl7260_join_ok"] or [None])[0]
+        fail = (found["iwl7260_join_fail"] or [None])[0]
+        if not start:
+            errors.append("iwl7260_join: PASS without a join start line")
+        elif int(start["rc"]) != 0:
+            errors.append(f"iwl7260_join: start rc={start['rc']}")
+        if fail:
+            errors.append(f"iwl7260_join: {fail['reason']}")
+        if not ok:
+            errors.append("iwl7260_join: PASS without a join-ok line")
+        elif int(ok["state"]) != 4:
+            errors.append(f"iwl7260_join: state={ok['state']} is not RUN")
+        elif int(ok["mgt_tx"]) == 0:
+            errors.append("iwl7260_join: RUN with no management frame")
+        elif int(ok["txc"]) == 0:
+            errors.append("iwl7260_join: no transmit completion")
+        else:
+            notes.append(
+                f"iwl7260_join: RUN mgt_tx={ok['mgt_tx']} txc={ok['txc']} "
+                f"rx={ok['rx']}"
+            )
+        lkpi = found["iwl7260_join_lkpi"]
+        if not lkpi:
+            errors.append("iwl7260_join: PASS without the driver-completion line")
+        elif int(lkpi["tx"]) < 1:
+            errors.append(
+                "iwl7260_join: no completion reached the substitute "
+                f"(tx=0 wq={lkpi['wq']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_join: driver tx={lkpi['tx']} scan={lkpi['scan']} "
+                f"wq={lkpi['wq']}"
+            )
+
+    if cases.get("iwl7260_dataplane", {}).get("verdict") == "pass":
+        arp = (found["iwl7260_data_arp"] or [None])[0]
+        ping = (found["iwl7260_data_ping"] or [None])[0]
+        cnt = (found["iwl7260_data_counters"] or [None])[0]
+        fail = (found["iwl7260_data_fail"] or [None])[0]
+        if fail:
+            errors.append(f"iwl7260_dataplane: {fail['reason']}")
+        if not arp:
+            errors.append("iwl7260_dataplane: PASS without an arp reply")
+        else:
+            notes.append(f"iwl7260_dataplane: arp from {arp['src']}")
+        if not ping:
+            errors.append("iwl7260_dataplane: PASS without a ping line")
+        elif int(ping["tx"]) != 10:
+            errors.append(f"iwl7260_dataplane: ping tx={ping['tx']}")
+        elif int(ping["rx"]) < 9:
+            errors.append(f"iwl7260_dataplane: ping {ping['rx']}/{ping['tx']}")
+        else:
+            notes.append(
+                f"iwl7260_dataplane: ping {ping['rx']}/{ping['tx']} "
+                f"rtt={ping['min_ms']}-{ping['max_ms']} ms"
+            )
+        if not cnt:
+            errors.append("iwl7260_dataplane: PASS without the counter line")
+        elif int(cnt["data_tx"]) == 0 or int(cnt["rx_data"]) == 0:
+            errors.append("iwl7260_dataplane: data counters are zero")
+        else:
+            notes.append(
+                f"iwl7260_dataplane: data_tx={cnt['data_tx']} "
+                f"rx_data={cnt['rx_data']}"
+            )
+
+    if cases.get("iwl7260_net", {}).get("verdict") == "pass":
+        up = (found["iwl7260_net_up"] or [None])[0]
+        ping = (found["iwl7260_net_ping"] or [None])[0]
+        down = (found["iwl7260_net_down"] or [None])[0]
+        up_done = (found["iwl7260_net_up_done"] or [None])[0]
+        cnt = (found["iwl7260_net_counters"] or [None])[0]
+        fail = (found["iwl7260_net_fail"] or [None])[0]
+        if fail:
+            errors.append(f"iwl7260_net: {fail['reason']}")
+        if not up:
+            errors.append("iwl7260_net: PASS without the netif line")
+        elif up["ip"] != "192.168.99.2/24":
+            errors.append(f"iwl7260_net: address {up['ip']} is not the bench net")
+        else:
+            notes.append(f"iwl7260_net: up {up['ip']} mac={up['mac']}")
+        if not ping:
+            errors.append("iwl7260_net: PASS without a ping line")
+        elif int(ping["rx"]) < 9:
+            errors.append(f"iwl7260_net: ping {ping['rx']}/{ping['tx']}")
+        else:
+            notes.append(
+                f"iwl7260_net: ping {ping['rx']}/{ping['tx']} "
+                f"rtt={ping['min_ms']}-{ping['max_ms']} ms"
+            )
+        if not down:
+            errors.append("iwl7260_net: PASS without a downlink line")
+        elif int(down["done"]) != 1 or int(down["bytes"]) == 0:
+            errors.append(
+                f"iwl7260_net: downlink carried {down['bytes']} bytes "
+                f"(done={down['done']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_net: down {down['bytes']} bytes in {down['ms']} ms "
+                f"= {down['kbit']} kbit/s"
+            )
+        if not up_done:
+            errors.append("iwl7260_net: PASS without an uplink line")
+        elif int(up_done["done"]) != 1 or int(up_done["bytes"]) == 0:
+            errors.append(
+                f"iwl7260_net: uplink carried {up_done['bytes']} bytes "
+                f"(done={up_done['done']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_net: up {up_done['bytes']} bytes in "
+                f"{up_done['ms']} ms = {up_done['kbit']} kbit/s"
+            )
+        if not cnt:
+            errors.append("iwl7260_net: PASS without the counter line")
+        elif int(cnt["tx"]) == 0 or int(cnt["rx"]) == 0:
+            errors.append("iwl7260_net: netif counters are zero")
+        else:
+            notes.append(
+                f"iwl7260_net: netif tx={cnt['tx']} rx={cnt['rx']} "
+                f"txfail={cnt['txfail']} rxfail={cnt['rxfail']}"
+            )
+
+    if cases.get("pcie_7260", {}).get("verdict") == "pass":
+        if found["pcie_7260_platform"]:
+            cases["pcie_7260"]["platform_inactive"] = found["pcie_7260_platform"]["reason"]
+            errors.append(
+                f"pcie_7260: platform-inactive ({found['pcie_7260_platform']['reason']})"
+            )
+        dev = (found["pcie_7260_dev"] or [None])[0]
+        bar = (found["pcie_7260_bar"] or [None])[0]
+        vec = (found["pcie_7260_vec"] or [None])[0]
+        lnk = (found["pcie_7260_lnk"] or [None])[0]
+        if not dev:
+            errors.append("pcie_7260: PASS without a 8086:08b1 device line")
+        else:
+            notes.append(f"pcie_7260: dev {dev['bdf']} rev={dev['rev']}")
+        if not bar:
+            errors.append("pcie_7260: PASS without a BAR/HW_REV line")
+        elif bar["type"].lower() != "14":
+            errors.append(f"pcie_7260: hw_rev type=0x{bar['type']} != 0x14")
+        else:
+            notes.append(
+                f"pcie_7260: bar0=0x{bar['bar']} hw_rev=0x{bar['rev']}"
+            )
+        if not vec:
+            errors.append("pcie_7260: PASS without a message-vector line")
+        elif int(vec["intid"]) < 8192:
+            errors.append(f"pcie_7260: intid={vec['intid']} is not an LPI")
+        else:
+            notes.append(
+                f"pcie_7260: {vec['kind']} vectors={vec['n']} intid={vec['intid']}"
+            )
+        if not lnk:
+            errors.append("pcie_7260: PASS without a link-status line")
+        else:
+            notes.append(
+                f"pcie_7260: lnksta speed={lnk['speed']} width={lnk['width']} "
+                f"aspm={lnk['aspm']}"
+            )
+
+    if cases.get("pcie_bench", {}).get("verdict") == "pass":
+        if found["pcie_bench_platform"]:
+            cases["pcie_bench"]["platform_inactive"] = found["pcie_bench_platform"]["reason"]
+            errors.append(
+                f"pcie_bench: platform-inactive ({found['pcie_bench_platform']['reason']})"
+            )
+        medians = found["pcie_bench_median"]
+        if len(medians) < 12:
+            errors.append(f"pcie_bench: {len(medians)}/12 cell medians")
+        bad = [m for m in medians if int(m["mib_s"]) == 0]
+        if bad:
+            errors.append(f"pcie_bench: {len(bad)} cells with zero bandwidth")
+        for m in medians:
+            notes.append(
+                f"pcie_bench: bs={m['bs']} cmd={m['cmd_bytes']} qd={m['qd']} "
+                f"{m['dir']} {m['mib_s']} MiB/s"
+            )
+        if found["pcie_bench_fit"]:
+            notes.append(f"pcie_bench: {len(found['pcie_bench_fit'])} fit rows")
+
+    if cases.get("pcie", {}).get("verdict") == "pass":
+        if found["pcie_platform"]:
+            # A platform verdict is not a code pass; keep it visible so the
+            # round can exclude the boot from the denominator.
+            cases["pcie"]["platform_inactive"] = found["pcie_platform"]["reason"]
+            errors.append(f"pcie: platform-inactive ({found['pcie_platform']['reason']})")
+        ctrl = found["pcie_ctrl"]
+        if not ctrl:
+            errors.append("pcie: PASS without a controller link line")
+        else:
+            notes.append(f"pcie: ctrl={ctrl['n']} bus={ctrl['bus']}")
+        nvme = found["pcie_nvme"]
+        if not nvme:
+            errors.append("pcie: PASS without an nvme geometry line")
+        elif int(nvme["blocks"]) == 0 or int(nvme["sector"]) == 0:
+            errors.append("pcie: namespace geometry is empty")
+        else:
+            notes.append(
+                f"pcie: nvme {nvme['vid']}:{nvme['did']} at 0x{nvme['bar']} "
+                f"{nvme['blocks']}x{nvme['sector']}B"
+            )
+        irq = found["pcie_irq"]
+        delta = found["pcie_delta"]
+        if not irq:
+            errors.append("pcie: PASS without a message-interrupt line")
+        elif int(irq["so_far"]) == 0:
+            errors.append("pcie: no message interrupt delivered")
+        else:
+            notes.append(f"pcie: irq intid={irq['intid']} so_far={irq['so_far']}")
+        if not delta:
+            errors.append("pcie: PASS without an irq delta line")
+        elif int(delta["after"]) <= int(delta["before"]):
+            errors.append(
+                f"pcie: irqs {delta['before']}->{delta['after']} (no delivery)"
+            )
+        else:
+            notes.append(
+                f"pcie: irqs {delta['before']}->{delta['after']} "
+                f"completions={delta['completions']}"
+            )
+        devices = found["pcie_dev"]
+        if not any(row["cc"].lower() == "0108" for row in devices):
+            errors.append("pcie: no NVMe class function in the device list")
+        else:
+            notes.append(f"pcie: devices={len(devices)}")
 
     if cases.get("emmc", {}).get("verdict") == "pass":
         rw = found["emmc_rw"]

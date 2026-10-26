@@ -157,6 +157,14 @@ def peer_start_server() -> str:
 
 
 def peer_ping() -> str:
+    # The wifi bench's peer address is the AP interface's address, on its own
+    # net (the AP is 192.168.99.1 on wlan0), so the wired bench's eth0 tcpdump
+    # would watch the wrong interface and the wrong net.
+    if BOARD_IP.startswith("192.168.99."):
+        return ssh(
+            f"ping -c 10 -i 0.2 -W 1 -I 192.168.99.1 {BOARD_IP}",
+            timeout=40,
+        )
     return ssh(
         "rm -f /tmp/icmp.txt; "
         "(sudo -n timeout 8 tcpdump -i eth0 -nn icmp > /tmp/icmp.txt 2>&1 &); "
@@ -257,6 +265,7 @@ PEER_ACTIONS = {
 
 
 def main() -> int:
+    global BOARD_IP
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--backend", required=True, choices=["freertos", "threadx"])
     ap.add_argument("--out", required=True, type=Path, help="run directory")
@@ -278,9 +287,15 @@ def main() -> int:
                     help="case names the image carries (judge's expected set)")
     ap.add_argument("--plan", type=int, default=0, choices=[0, 1],
                     help="the image's phase plan (0 delivery, 1 throughput round)")
+    ap.add_argument("--board-ip", default=BOARD_IP,
+                    help="the board address the peer drives (the wifi arms use 192.168.99.2)")
     ap.add_argument("--timeout", type=int, default=420, help="capture window, seconds")
     ap.add_argument("--no-power-off", action="store_true")
     args = ap.parse_args()
+
+    # The peer-facing helpers address the board by this name; the wifi arms run
+    # on the AP's own net (192.168.99.2), the wired arms on the lab's (192.168.0.200).
+    BOARD_IP = args.board_ip
 
     image = IMAGES / f"rtos-{args.backend}.bin"
     if not image.exists():

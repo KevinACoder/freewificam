@@ -10,12 +10,12 @@ follows the repository's source + ports + patches shape (see
 | Directory | Origin (reference path) | State |
 |---|---|---|
 | `platform/arch/aarch64/` | `arch/aarch64/` | byte-identical subset (17 files) |
-| `platform/board/rk3568-itx/` | `board/rk3568-itx/` | byte-identical subset: console, MMIO, reset, clock parameters, the eMMC (dwcmshc), the SDIO (dwmmc) and GMAC (dwceqos + RK3568 glue + RTL8211F) drivers. The PCIe, NVMe, USB and CherryUSB board files are not carried. |
+| `platform/board/rk3568-itx/` | `board/rk3568-itx/` | byte-identical subset: console, MMIO, reset, clock parameters, the eMMC (dwcmshc), the SDIO (dwmmc), GMAC (dwceqos + RK3568 glue + RTL8211F), and the PCIe root complex + NVMe (SYSMEM/BAR/ITS-MSI plus the block driver). The USB and CherryUSB board files are not carried. |
 | `platform/os/baremetal/` | `os/baremetal/` | byte-identical |
 | `platform/os/cmsis2/` | `os/cmsis2/` | byte-identical (facade plus the host and board stand-ins for the CMSIS Core headers) |
 | `platform/os/freertos/` | `os/freertos/` | byte-identical except the board's USB configuration variant, plus the heap-size knob noted below |
 | `platform/os/threadx/` | `os/threadx/` | byte-identical plus `cmsis2_event.c` (new, see below) |
-| `app/` | new | the case runner and the `tick`, `cmsis2`, `net`, `emmc`, `wlan` cases |
+| `app/` | new | the case runner and the `tick`, `cmsis2`, `net`, `emmc`, `wlan`, `pcie`, `pcie_bench`, `pcie_7260`, `iwl7260`, `iwl7260_scan`, `iwl7260_join`, `iwl7260_dataplane` and `iwl7260_net` cases |
 | `tests/cmsis2-host/` | new | the host tier's entry point |
 | `build/` | new (shape derived from the reference board Makefiles) | the two board images, the host tier and `wlan.mk` |
 
@@ -26,10 +26,10 @@ working copy is not used.
 
 | Path | Origin | State |
 |---|---|---|
-| `components/linuxkpi/rtos/` | `components/linuxkpi/` | runtime subset: core, census, platform target, cfg80211/netdev/osdep, SDIO engine/seam, skbuff pool, `include/` Linux face. Byte-identical except the recorded divergences; the USB/PCIe/mac80211/tracing/blob units are not carried. |
-| `third-party/lwip/ports/` | `ports/lwip/` | the CMSIS-RTOS2 `sys_arch`, platform hooks, GMAC netif and the 8189FTV `lkpinetif*`; the import is already patched by `third-party/lwip/patches/` |
+| `components/linuxkpi/rtos/` | `components/linuxkpi/` | runtime subset: core, census, platform target, cfg80211/netdev/osdep, SDIO engine/seam, skbuff pool, the mac80211 substitute (80211/helpers/txq/wiphy_work), the PCI engine and the RSSI/TCP-trace units, `include/` Linux face, the firmware registry and the compiled-in iwl7260 blob. Byte-identical except the recorded divergences; the USB units are not carried here. |
+| `third-party/lwip/ports/` | `ports/lwip/` | the CMSIS-RTOS2 `sys_arch`, platform hooks, GMAC netif and the 8189FTV `lkpinetif*`; the import is already patched by `third-party/lwip/patches/`. The 7260 image's netif is a case (`app/cases/iwl7260_net.c`) because this port has no net_device per interface for lkpinetif to bind. |
 | `third-party/fsl_sdmmc/ports/` | `ports/fsl_sdmmc/` | OS abstraction, MMC card service, dwcmshc host glue, shadows, and the 8189FTV SDIO card/host/seam units |
-| `components/net80211/ports/` | `ports/net80211/` | the net80211 port/bridge for the linux-ko line; the RTOS line does not use net80211 |
+| `components/net80211/ports/` | `ports/net80211/` | the net80211 port/bridge, shared by the linux-ko line and the RTOS iwl7260 image (the bridge's two worlds talk through `seam.h`, which carries scalars only) |
 
 The components themselves live under `third-party/` (RTOS components) or
 `wireless-drivers/` (drivers); `components/linuxkpi` and `components/net80211`

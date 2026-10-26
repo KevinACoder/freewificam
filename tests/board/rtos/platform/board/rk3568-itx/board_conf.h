@@ -68,7 +68,19 @@
  * at the SPI default (0xa0) sits ABOVE this ceiling and a handler that wakes a
  * waiter trips the port's own priority assertion. The PCIe completion handlers
  * (LPI property bytes) use this level. */
+/*
+ * The LPI priority an interrupt handler may use when it calls a CMSIS-RTOS2
+ * API from interrupt context.  The ceiling is the backend's, not the board's:
+ * FreeRTOS masks syscalls at configMAX_API_CALL_INTERRUPT_PRIORITY (13, shifted
+ * to 0xd0 on this port), so an LPI at 0xb0 would trip the port's own priority
+ * assert the first time the handler entered a critical section.  ThreadX's
+ * threshold is above 0xb0, which is where that value came from.
+ */
+#if defined(CMSIS2_BACKEND_FREERTOS)
+#define BOARD_IRQ_PRIORITY_API_CALL_RAW	0xd0u
+#else
 #define BOARD_IRQ_PRIORITY_API_CALL_RAW	0xb0u
+#endif
 
 /* --- GICv3 ITS (message interrupts for PCIe endpoints) --------------------- */
 

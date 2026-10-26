@@ -258,10 +258,16 @@ fi
 # module is an instrumented artifact with its own hash, and its results are
 # labelled instrumented.
 if [ "${LAB_TRACE:-0}" = 1 ]; then
+	# LAB_PATCHES: the lab patch series lives in the project checkout, which is
+	# not always this repository's parent (the release repo is checked out on
+	# its own here).  Default keeps the historical layout.
+	LAB_PATCHES=${LAB_PATCHES:-$REPO/../patches/lab}
+	patch_file=$LAB_PATCHES/iwl-trace-payload/0001-iwlwifi-trace-payload-hex.patch
+	[ -f "$patch_file" ] ||
+		{ echo "build.sh: LAB_TRACE patch not found: $patch_file" >&2; exit 2; }
 	rm -rf "$TREE/wireless-drivers/iwlwifi"
 	cp -a "$REPO/wireless-drivers/iwlwifi" "$TREE/wireless-drivers/iwlwifi"
-	patch -p6 -d "$TREE/wireless-drivers/iwlwifi" \
-	    < "$REPO/../patches/lab/iwl-trace-payload/0001-iwlwifi-trace-payload-hex.patch"
+	patch -p6 -d "$TREE/wireless-drivers/iwlwifi" < "$patch_file"
 	echo "build.sh: LAB_TRACE payload hex enabled"
 fi
 

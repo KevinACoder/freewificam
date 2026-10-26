@@ -45,6 +45,30 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_EMMC)
 	{ "emmc", case_emmc_run },
 #endif
+#if defined(RTOS_CASE_PCIE)
+	{ "pcie", case_pcie_run },
+#endif
+#if defined(RTOS_CASE_PCIE_BENCH)
+	{ "pcie_bench", case_pcie_bench_run },
+#endif
+#if defined(RTOS_CASE_PCIE_7260)
+	{ "pcie_7260", case_pcie_7260_run },
+#endif
+#if defined(RTOS_CASE_IWL7260)
+	{ "iwl7260", case_iwl7260_run },
+#endif
+#if defined(RTOS_CASE_IWL7260_SCAN)
+	{ "iwl7260_scan", case_iwl7260_scan_run },
+#endif
+#if defined(RTOS_CASE_IWL7260_JOIN)
+	{ "iwl7260_join", case_iwl7260_join_run },
+#endif
+#if defined(RTOS_CASE_IWL7260_DATAPLANE)
+	{ "iwl7260_dataplane", case_iwl7260_dataplane_run },
+#endif
+#if defined(RTOS_CASE_IWL7260_NET)
+	{ "iwl7260_net", case_iwl7260_net_run },
+#endif
 #if defined(RTOS_CASE_WLAN)
 	{ "wlan", case_wlan_run },
 #endif
@@ -59,7 +83,8 @@ static const osThreadAttr_t runner_attr = {
 	 * thread too: the SDIO service, the host glue and the controller each hold
 	 * a frame, and the driver's power/firmware/HAL chain sits on top, so that
 	 * image gets the reference image's 16 KiB runner stack. */
-#if defined(RTOS_CASE_WLAN)
+#if defined(RTOS_CASE_WLAN) || defined(RTOS_CASE_IWL7260_SCAN) || \
+    defined(RTOS_CASE_IWL7260_JOIN) || defined(RTOS_CASE_IWL7260_DATAPLANE)
 	.stack_size = 16384U,
 #else
 	.stack_size = 8192U,
