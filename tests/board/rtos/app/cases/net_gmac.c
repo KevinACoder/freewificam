@@ -35,8 +35,10 @@
 #include "gmac_netif.h"
 
 /* The bench line: static address in the lab's wired network, the iperf peer
- * is the bench host at .30. */
-#define NET_IP3			12
+ * is the bench host at .30. This NIC takes its own bench address (.11) - a
+ * boot may run both wired-NIC cases, and two netifs answering for one
+ * address would fight over the host's ARP entry. */
+#define NET_IP3			11
 #define NET_GW3			1
 #define PEER_IP3		30
 
@@ -58,30 +60,6 @@ static int g_up;
 static volatile uint32_t g_client_kbps;
 static volatile unsigned g_client_done;
 static void * volatile g_client_session;
-
-static void stack_done(void *arg)
-{
-	(void)arg;
-	CASE_ANCHOR("net-gmac: stack ready lwip=%s\n", LWIP_VERSION_STRING);
-	(void)osSemaphoreRelease(*(osSemaphoreId_t *)arg);
-}
-
-static int stack_up(void)
-{
-	static osSemaphoreId_t ready;
-
-	ready = osSemaphoreNew(1u, 0u, NULL);
-	if (ready == NULL) {
-		return -1;
-	}
-
-	tcpip_init(stack_done, &ready);
-
-	if (osSemaphoreAcquire(ready, 5000u) != osOK) {
-		return -1;
-	}
-	return 0;
-}
 
 static void thr_rx(void *arg)
 {
@@ -162,9 +140,9 @@ static int nic_line_up(void)
 		return -1;
 	}
 
-	/* The stack first: nothing here needs it, but the order keeps the
-	 * wired line's two NIC cases identical. */
-	if (stack_up() != 0) {
+	/* The shared one-shot stack bring-up (once per boot even when both
+	 * wired-NIC cases run). */
+	if (case_net_stack_up() != 0) {
 		LOG_ERROR("net-gmac: stack bring-up failed\n");
 		return -1;
 	}
@@ -192,12 +170,8 @@ static int nic_line_up(void)
 	LOCK_TCPIP_CORE();
 	gmac_netif_add(&g_netif, &g_nic, &ip, &mask, &gw);
 	netif_set_link_up(&g_netif);
-	if (lwiperf_start_tcp_server_default(iperf_report, NULL) != NULL) {
-		LOG_INFO("net-gmac: lwiperf server on :5201\n");
-	} else {
-		LOG_ERROR("net-gmac: lwiperf server start FAILED\n");
-	}
 	UNLOCK_TCPIP_CORE();
+	case_net_lwiperf_server_start();
 
 	CASE_ANCHOR("net-gmac: netif ip=192.168.4.%u/24 "
 		    "mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -215,6 +189,41 @@ static int nic_line_up(void)
 
 	g_up = 1;
 	return 0;
+}
+
+/* The failure-path frame watch: receive-all for a bounded window, print
+ * every arriving frame's header line (destination, source, ethertype,
+ * length). Answers, from the wire itself, the question the counters
+ * cannot: whether the peer's IP frames ever reach this port. */
+static void frame_watch(unsigned seconds)
+{
+	static uint8_t buf[BOARD_GMAC_BUF_BYTES];
+	unsigned printed = 0u;
+
+	gmac_set_promisc(&g_nic, 1);
+	CASE_ANCHOR("net-gmac: frame watch %us (promiscuous)\n", seconds);
+	for (unsigned s = 0u; s < seconds; s++) {
+		for (unsigned i = 0u; i < 50u; i++) {
+			int len = gmac_rx_frame(&g_nic, buf, sizeof(buf));
+
+			if (len <= 0) {
+				break;
+			}
+			if (printed++ < 60u) {
+				CASE_ANCHOR("net-gmac: frame dst=%02x:%02x:%02x:"
+					    "%02x:%02x:%02x src=%02x:%02x:%02x:"
+					    "%02x:%02x:%02x type=%02x%02x "
+					    "len=%d\n",
+					    buf[0], buf[1], buf[2], buf[3],
+					    buf[4], buf[5], buf[6], buf[7],
+					    buf[8], buf[9], buf[10], buf[11],
+					    buf[12], buf[13], len);
+			}
+		}
+		(void)osDelay(1000u);
+	}
+	gmac_set_promisc(&g_nic, 0);
+	CASE_ANCHOR("net-gmac: frame watch done (%u frames)\n", printed);
 }
 
 int case_net_gmac_run(void)
@@ -242,14 +251,16 @@ int case_net_gmac_run(void)
 	}
 	g_client_session = client;
 	(void)osDelay(NET_IPERF_CLIENT_MS);
+	/* Take the session under the core lock and clear the slot first: the
+	 * report callback runs on the same thread we lock out, so the abort
+	 * cannot race a teardown that frees the session underneath it. */
+	LOCK_TCPIP_CORE();
 	client = g_client_session;
+	g_client_session = NULL;
 	if (client != NULL) {
-		LOCK_TCPIP_CORE();
-		if (g_client_session != NULL) {
-			lwiperf_abort(g_client_session);
-		}
-		UNLOCK_TCPIP_CORE();
+		lwiperf_abort(client);
 	}
+	UNLOCK_TCPIP_CORE();
 
 	for (unsigned i = 0u; i < 100u && !g_client_done; i++) {
 		(void)osDelay(10u);

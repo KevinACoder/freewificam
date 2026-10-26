@@ -117,30 +117,6 @@ static void net_diag_dump(void)
 #endif
 }
 
-static void stack_done(void *arg)
-{
-	(void)arg;
-	CASE_ANCHOR("net-e1000e: stack ready lwip=%s\n", LWIP_VERSION_STRING);
-	(void)osSemaphoreRelease(*(osSemaphoreId_t *)arg);
-}
-
-static int stack_up(void)
-{
-	static osSemaphoreId_t ready;
-
-	ready = osSemaphoreNew(1u, 0u, NULL);
-	if (ready == NULL) {
-		return -1;
-	}
-
-	tcpip_init(stack_done, &ready);
-
-	if (osSemaphoreAcquire(ready, 5000u) != osOK) {
-		return -1;
-	}
-	return 0;
-}
-
 static void thr_rx(void *arg)
 {
 	(void)arg;
@@ -215,8 +191,9 @@ static int nic_line_up(void)
 		    f->bus, f->dev, f->fn, (unsigned long)bar0);
 
 	/* The stack first: the driver arms its RX ring from the lwIP pool,
-	 * which exists only after tcpip_init. */
-	if (stack_up() != 0) {
+	 * which exists only after tcpip_init (once per boot - the shared
+	 * wrapper guards against a second NIC case re-running it). */
+	if (case_net_stack_up() != 0) {
 		LOG_ERROR("net-e1000e: stack bring-up failed\n");
 		return -1;
 	}
@@ -253,13 +230,8 @@ static int nic_line_up(void)
 	if (g_nic.link.up) {
 		netif_set_link_up(&g_netif);
 	}
-	if (lwiperf_start_tcp_server_default(iperf_report, NULL) != NULL) {
-		LOG_INFO("net-e1000e: lwiperf server on :%u\n",
-			 NET_IPERF_PORT);
-	} else {
-		LOG_ERROR("net-e1000e: lwiperf server start FAILED\n");
-	}
 	UNLOCK_TCPIP_CORE();
+	case_net_lwiperf_server_start();
 
 	CASE_ANCHOR("net-e1000e: netif ip=192.168.4.%u/24 "
 		    "mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -282,6 +254,27 @@ static int nic_line_up(void)
 
 	g_up = 1;
 	return 0;
+}
+
+/* The failure-path receive watch: one heartbeat line every few seconds
+ * pairing the driver's receive count (frames the NIC handed over, before
+ * any stack decision) with the stack's ARP/IP receive counters. With the
+ * bench host pinging through the window, a flat driver count means the
+ * peer's frames never reach this port; a growing driver count with a flat
+ * IP count means they arrive and die inside. */
+static void rx_watch(unsigned seconds)
+{
+	struct e1000e_stats st;
+
+	for (unsigned s = 0u; s < seconds; s += 5u) {
+		e1000e_get_stats(&g_nic, &st);
+		CASE_ANCHOR("net-e1000e: watch rx=%u tx=%u "
+			    "etharp_rx=%u ip_rx=%u\n",
+			    (unsigned)st.rx_frames, (unsigned)st.tx_frames,
+			    (unsigned)lwip_stats.etharp.recv,
+			    (unsigned)lwip_stats.ip.recv);
+		(void)osDelay(5000u);
+	}
 }
 
 int case_net_e1000e_run(void)
@@ -312,14 +305,16 @@ int case_net_e1000e_run(void)
 	}
 	g_client_session = client;
 	(void)osDelay(NET_IPERF_CLIENT_MS);
+	/* Take the session under the core lock and clear the slot first: the
+	 * report callback runs on the same thread we lock out, so the abort
+	 * cannot race a teardown that frees the session underneath it. */
+	LOCK_TCPIP_CORE();
 	client = g_client_session;
+	g_client_session = NULL;
 	if (client != NULL) {
-		LOCK_TCPIP_CORE();
-		if (g_client_session != NULL) {
-			lwiperf_abort(g_client_session);
-		}
-		UNLOCK_TCPIP_CORE();
+		lwiperf_abort(client);
 	}
+	UNLOCK_TCPIP_CORE();
 
 	/* The report rides the TCP/IP thread; give it a scheduling round. */
 	for (unsigned i = 0u; i < 100u && !g_client_done; i++) {

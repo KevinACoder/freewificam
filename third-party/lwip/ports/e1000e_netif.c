@@ -53,6 +53,12 @@ static err_t e1000e_netif_init(struct netif *netif)
 	 * rx=0, zero replies ever sent). The upstream ethernetif skeleton
 	 * sets these in low_level_init; so does the GMAC bridge's eth_init. */
 	netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
+	/* This driver computes no checksums in hardware; the netif must say
+	 * so explicitly when the build runs the per-netif checksum control
+	 * (a zero-initialised netif leaves every checksum disabled - frames
+	 * leave with a zero TCP checksum and the peer drops them silently;
+	 * ARP has no L4 checksum, which is why ARP kept working). */
+	NETIF_SET_CHECKSUM_CTRL(netif, NETIF_CHECKSUM_ENABLE_ALL);
 	netif->output = etharp_output;
 	netif->linkoutput = e1000e_netif_linkoutput;
 

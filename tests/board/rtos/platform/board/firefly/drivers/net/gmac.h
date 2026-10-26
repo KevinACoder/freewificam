@@ -98,4 +98,7 @@ void gmac_link_poll(struct gmac *m);
 /* One line of counters (deltas between calls give a phase's numbers). */
 void gmac_get_stats(const struct gmac *m, struct gmac_stats *out);
 
+/* Receive-all (promiscuous) mode - a bench diagnostic for frame watching. */
+void gmac_set_promisc(struct gmac *m, int on);
+
 #endif /* FREEWIFICAM_BOARD_FIREFLY_GMAC_H */

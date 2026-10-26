@@ -806,6 +806,18 @@ void gmac_link_poll(struct gmac *m)
 	}
 }
 
+/* Receive-all mode (the frame-filter register's RA bit): a diagnostic for
+ * the bench, so a watching case can see what actually arrives on the wire
+ * regardless of addressing. */
+void gmac_set_promisc(struct gmac *m, int on)
+{
+	if (on) {
+		gmac_set(m->base, GMAC_FRAME_FILTER, GMAC_FF_RA);
+	} else {
+		gmac_clr(m->base, GMAC_FRAME_FILTER, GMAC_FF_RA);
+	}
+}
+
 void gmac_get_stats(const struct gmac *m, struct gmac_stats *out)
 {
 	*out = m->stats;

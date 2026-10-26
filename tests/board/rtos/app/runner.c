@@ -54,11 +54,11 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_NVME)
 	{ "nvme", case_nvme_run },
 #endif
-#if defined(RTOS_CASE_NET_E1000E)
-	{ "net-e1000e", case_net_e1000e_run },
-#endif
 #if defined(RTOS_CASE_NET_GMAC)
 	{ "net-gmac", case_net_gmac_run },
+#endif
+#if defined(RTOS_CASE_NET_E1000E)
+	{ "net-e1000e", case_net_e1000e_run },
 #endif
 };
 
@@ -114,11 +114,14 @@ static void runner(void *arg)
 #if defined(RTOS_BOARD_AUTO_RESET)
 	/* The lab loop's close-out: reset the board once the verdict line is
 	 * out, so the next round's boot-loader prompt is already waiting
-	 * (RTOS_BOARD_AUTO_RESET builds only). The delay lets the console
-	 * drain before the reset. */
+	 * (RTOS_BOARD_AUTO_RESET builds only). A passing round resets after a
+	 * console-drain beat; a failing one dwells first - the failure window
+	 * is exactly when the bench host wants to probe the still-running
+	 * image (ping, iperf against the listening server, ARP inspection).
+	 */
 #include "reset.h"
 	CASE_ANCHOR("rtos: resetting board\n");
-	(void)osDelay(200u);
+	(void)osDelay((ok == total) ? 200u : 45000u);
 	board_system_reset();
 #endif
 

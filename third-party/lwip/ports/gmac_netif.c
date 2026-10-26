@@ -44,6 +44,12 @@ static err_t gmac_netif_init(struct netif *netif)
 	 * the payload still at the ethernet header (the wired line's board
 	 * evidence on the same stack). */
 	netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
+	/* This driver computes no checksums in hardware; the netif must say
+	 * so explicitly when the build runs the per-netif checksum control
+	 * (a zero-initialised netif leaves every checksum disabled - frames
+	 * leave with a zero TCP checksum and the peer drops them silently;
+	 * ARP has no L4 checksum, which is why ARP kept working). */
+	NETIF_SET_CHECKSUM_CTRL(netif, NETIF_CHECKSUM_ENABLE_ALL);
 	netif->output = etharp_output;
 	netif->linkoutput = gmac_netif_linkoutput;
 

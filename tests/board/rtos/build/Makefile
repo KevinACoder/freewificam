@@ -522,6 +522,11 @@ endif
 # The per-NIC groups: the rk3568 net case keeps its GMAC line byte-identical;
 # the firefly cases bring their board driver and netif bridge.
 NET_IF_SRCS :=
+ifneq ($(filter $(LWIP_CASES),$(CASES)),)
+# The wired cases share one one-shot stack bring-up unit (a boot may run two
+# NIC cases; tcpip_init is once per boot by contract).
+NET_PORT_SRCS += $(LINE)/app/cases/net_stack.c
+endif
 ifneq ($(filter net,$(CASES)),)
 NET_IF_SRCS += \
 	$(THIRD_PARTY)/lwip/ports/ethnetif.c \
