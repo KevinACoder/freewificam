@@ -13,9 +13,12 @@
  *
  * Event layout: the stream is the struct layout of a 64-bit build, which is
  * what cfg80211 also produces here: an 8-byte len/cmd header (the iw_event
- * union is 8-byte aligned, so four bytes of padding follow the pair) and, for
- * the point events (essid/encode/genie), length/flags at offset 12 and the
- * payload at 16.  The range therefore reports we_version_compiled 21: back
+ * union is 8-byte aligned, so four bytes of padding follow the pair).  Point
+ * events (essid/encode/genie) carry length and flags where struct iw_point
+ * has them - at IW_EV_LCP_LEN and IW_EV_LCP_LEN + 2 - and the payload at
+ * IW_EV_POINT_LEN (16), exactly the bytes the kernel's
+ * iwe_stream_add_point() writes (wext-core.c:1172-1192).  The range therefore
+ * reports we_version_compiled 21: back
  * when it reported 18 the fixed events were written with the 4-byte packed
  * header while the point events stayed in the struct layout, iwlist coped and
  * wpa_supplicant's length walk did not - it parsed a whole 4470-byte table as
@@ -169,13 +172,15 @@ static int wext_put_rate(char **pos, char *end, u16 rate_500k)
 }
 
 /*
- * WE<=18 wire format for scan events (the range reports we_version_compiled
- * 18): a 4-byte len/cmd header, then the fixed payload or - for point events -
- * eight bytes without the pointer, length/flags at offset 12 and the payload
- * at offset 16.  iwlist's iw_extract_event_stream() reads exactly this layout
- * for we_version <= 18; the struct-shaped events used before put the payload
- * where the parser looks for the pointer, which is why every ESSID printed as
- * "off/any/hidden".
+ * The two scan-event shapes.  Fixed events carry their payload right after the
+ * 8-byte len/cmd header (WEXT_EV_HDR == IW_EV_LCP_LEN).  Point events carry
+ * only length/flags after that header - at IW_EV_LCP_LEN and +2 - and their
+ * payload at IW_EV_POINT_LEN, with the four bytes in between left as padding.
+ * That is the kernel's own native stream (iwe_stream_add_event/_point in
+ * wext-core.c), the layout cfg80211 produces for a 64-bit iwlist and for
+ * wpa_supplicant; the packed (WE<=18) form, where a point payload follows the
+ * len/cmd pair directly, is what only a compat 32-bit caller sees and must not
+ * be mixed into this stream.
  */
 static int wext_scan_fixed(char **pos, char *end, unsigned int cmd,
     const void *data, size_t len)
@@ -198,21 +203,27 @@ static int wext_scan_fixed(char **pos, char *end, unsigned int cmd,
 static int wext_scan_point(char **pos, char *end, unsigned int cmd,
     const union iwreq_data *u, const void *extra, size_t extra_len)
 {
-	const size_t total = 16 + extra_len;
+	const size_t total = IW_EV_POINT_LEN + extra_len;
 	struct iw_event *e;
 
 	if ((size_t)(end - *pos) < total)
 		return -E2BIG;
 	e = (struct iw_event *)*pos;
-	memset(e, 0, 16);
+	memset(e, 0, IW_EV_POINT_LEN);
 	e->len = total;
 	e->cmd = cmd;
 	if (u != NULL) {
-		memcpy(*pos + 12, &u->data.length, 2);
-		memcpy(*pos + 14, &u->data.flags, 2);
+		/*
+		 * length and flags sit where struct iw_point has them, without
+		 * the pointer; the kernel copies the same four bytes from the
+		 * same place (wext-core.c:1183-1185), and wext_put_point()
+		 * above already does it this way for the non-scan events.
+		 */
+		memcpy((char *)e + IW_EV_LCP_LEN,
+		    (const char *)u + IW_EV_POINT_OFF, 4);
 	}
 	if (extra_len > 0)
-		memcpy(*pos + 16, extra, extra_len);
+		memcpy((char *)e + IW_EV_POINT_LEN, extra, extra_len);
 	*pos += total;
 	return 0;
 }
@@ -473,6 +484,17 @@ static int wlan_wext_siwscan(struct net_device *dev,
 			(void)wlan_bridge_set_ssid(req->essid,
 			    req->essid_len);
 	}
+	/*
+	 * The supplicant owns the MLME decision, so the stack must not make
+	 * one of its own when the sweep ends.  In AUTO roaming (the attach
+	 * default) ieee80211_end_scan selects a candidate and enters
+	 * sta_join itself; on this port that path resets the BSS/scan table
+	 * on its way back to INIT, so the supplicant's own join then finds no
+	 * candidate - measured on the board as repeated "no scan candidate for
+	 * the ssid" (rc=-2) after every clean sweep, with the scan table full
+	 * of 39 BSSes during the result fetch.
+	 */
+	wlan_bridge_set_manual(1);
 	rc = wlan_bridge_scan_start();
 	if (rc == -EBUSY)
 		return -EAGAIN;
@@ -538,8 +560,20 @@ static int wlan_wext_siwessid(struct net_device *dev,
 	if (len == 0 || extra == NULL) {
 		w->ssid_len = 0;
 		mutex_unlock(&w->lock);
-		/* IEEE80211_REASON_ASSOC_LEAVE: the supplicant cleared the SSID */
-		if (len == 0)
+		/*
+		 * A clear on an idle stack is the supplicant's own "reset the
+		 * current SSID" step, not a user disconnect: wpa_driver_wext_
+		 * associate sends SIOCSIWESSID with zero length and then the
+		 * target ESSID in the same associate sequence.  Disconnecting
+		 * here would take the stack through INIT, and net80211's INIT
+		 * resets the scan tables - so the candidate the join is about
+		 * to use disappears (measured: the 16-byte zero-length ESSID
+		 * event immediately before the 27-byte set, then "no scan
+		 * candidate for the ssid", rc=-2, on every sweep).  cfg80211's
+		 * wext compat only disconnects an interface that is actually
+		 * connecting/connected; keep the same rule.
+		 */
+		if (len == 0 && wlan_bridge_state() >= 2)
 			wlan_bridge_disconnect(3);
 		return 0;
 	}
