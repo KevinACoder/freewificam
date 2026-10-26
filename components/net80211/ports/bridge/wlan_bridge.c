@@ -1850,8 +1850,21 @@ wlan_bridge_tune_current(void)
 	if (chan->ic_freq == bridge.tuned_freq)
 		return 0;
 	bridge.tune_calls++;
+#if defined(LKPI_JOIN_TRACE)
+	/* the retune runs inside the stack's own state change, with the port
+	 * serializer held: a driver call that waits for a host command here has
+	 * only the receive context to release it, so the entry and the return
+	 * are the two lines a silent board is read from */
+	wlan_osal_log("wlan: tune begin %u MHz (tuned=%u calls=%u)\n",
+	    (unsigned)chan->ic_freq, (unsigned)bridge.tuned_freq,
+	    bridge.tune_calls);
+#endif
 	rc = bridge.ops->config(bridge.drv, WLAN_SEAM_CONFIG_CHANNEL,
 	    chan->ic_freq);
+#if defined(LKPI_JOIN_TRACE)
+	wlan_osal_log("wlan: tune done %u MHz rc=%d\n",
+	    (unsigned)chan->ic_freq, rc);
+#endif
 	if (rc == 0) {
 		bridge.tuned_freq = chan->ic_freq;
 	} else {

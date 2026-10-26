@@ -92,6 +92,10 @@ _Static_assert(sizeof(struct ieee80211_rx_status) <=
  * allocator arms it before any driver can hand a frame up */
 static void lkpi80211_rx_work(struct work_struct *w);
 
+/* the scan completion's deferred forward to the bridge (body beside
+ * ieee80211_scan_completed, which queues it) */
+static void lkpi80211_scan_complete_work(struct work_struct *w);
+
 /*
  * The hw context this file owns. `hw` is first so a pointer to the context and
  * a pointer to the public descriptor are the same address (the driver only ever
@@ -156,6 +160,24 @@ struct lkpi80211_hw_ctx {
 	struct work_struct	rx_work;
 	struct workqueue_struct *rx_wq;
 	unsigned long		rxq_drops;
+	/*
+	 * The scan completion's own work (mac80211's local->scan_work): the
+	 * driver's completion notification is delivered by the interface as an
+	 * async handler that runs with the driver's mutex held
+	 * (mvm/ops.c:iwl_mvm_async_handlers_by_context locks mvm->mutex around
+	 * each ASYNC_LOCKED handler), while the MLME that consumes the
+	 * completion walks back into the driver - the AC 7260's scan end
+	 * changes the receive filter, which is iwl_mvm_configure_filter taking
+	 * the same mvm->mutex again.  On Linux that cannot happen because
+	 * ieee80211_scan_completed() only queues the scan work; forwarding to
+	 * the bridge inline here makes the re-entry a self-deadlock on this
+	 * port's non-recursive mutex (measured on the board 2026-10-26: the
+	 * join stopped at add_chanctx, the async worker owned mvm->mutex and
+	 * waited on it from configure_filter).  So the forward is a work on the
+	 * system queue, which is one thread: it runs after the handler that
+	 * queued it has returned and dropped the mutex.
+	 */
+	struct work_struct	scan_complete_work;
 	struct ieee80211_scan_request *hw_scan_req;
 	unsigned int		have_chanctx:1;
 	/*
@@ -183,6 +205,22 @@ struct lkpi80211_hw_ctx {
 
 static const struct lkpi80211_bridge_ops *bridge_ops;
 static void *bridge_arg;
+
+/*
+ * How often the driver reached the substitute's two completion entries.  A
+ * sweep that never closes or a frame that never completes has two very
+ * different shapes here: the driver never called (a deferred handler with no
+ * executor, a TXQ that was never configured) or it called and the bridge did
+ * not see it (the seam forward).  The bridge's own counters answer the
+ * downstream half; these answer the driver's half, which no counter on the
+ * bridge can.
+ *
+ * They are file-scope for the same reason lkpi80211_rx_counters' are
+ * (linuxkpi_80211_helpers.c): this port runs one hw, and the board case that
+ * reads them holds no hw pointer.
+ */
+static u32 lkpi80211_scan_completions;
+static u32 lkpi80211_tx_completions;
 
 /*
  * The vif-to-hw backlink. The Linux struct ieee80211_vif carries no hw
@@ -484,6 +522,9 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 		kfree(ctx);
 		return NULL;
 	}
+	/* the scan completion's forward to the bridge, deferred for the reason
+	 * its field states in the context above */
+	INIT_WORK(&ctx->scan_complete_work, lkpi80211_scan_complete_work);
 	/* the queue count the driver reads back (core.c:7891 sets 4; the
 	 * engine's own default matches so a driver that does not set it still
 	 * gets a workable value) */
@@ -906,6 +947,7 @@ lkpi80211_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 		return;
 	ctx = LKPI80211_CTX(hw);
 	ctx->tx_completions++;
+	lkpi80211_tx_completions++;
 	/*
 	 * The completion callback a driver may have registered on this frame
 	 * (mac80211 calls it before releasing the skb; the driver's tx path
@@ -1537,7 +1579,18 @@ lkpi80211_drv_config_channel(struct ieee80211_hw *hw, u32 freq, u8 hw_value,
 	ctx->hw.conf.chandef.center_freq1 = center_freq1;
 	if (ctx->ops->config == NULL)
 		return 0;
+#if defined(LKPI_JOIN_TRACE)
+	lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: config begin %u MHz\n",
+	    (unsigned)freq);
+	{
+		int rc = ctx->ops->config(hw, 0, IEEE80211_CONF_CHANGE_CHANNEL);
+
+		lkpi_printf(ULOG_ERROR_LEVEL, "lkpi80211: config rc=%d\n", rc);
+		return rc;
+	}
+#else
 	return ctx->ops->config(hw, 0, IEEE80211_CONF_CHANGE_CHANNEL);
+#endif
 }
 
 /*
@@ -1582,7 +1635,16 @@ lkpi80211_drv_chanctx_use(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 
 	if (!ctx->have_chanctx) {
 		if (ctx->ops->add_chanctx != NULL) {
+#if defined(LKPI_JOIN_TRACE)
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: add_chanctx begin %u MHz\n",
+			    (unsigned)freq);
+#endif
 			ret = ctx->ops->add_chanctx(hw, &ctx->chanctx);
+#if defined(LKPI_JOIN_TRACE)
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: add_chanctx rc=%d\n", ret);
+#endif
 			if (ret != 0) {
 				lkpi_printf(ULOG_ERROR_LEVEL,
 				    "lkpi80211: add_chanctx refused (%d)\n", ret);
@@ -1591,8 +1653,16 @@ lkpi80211_drv_chanctx_use(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		}
 		ctx->have_chanctx = 1;
 		if (ctx->ops->assign_vif_chanctx != NULL) {
+#if defined(LKPI_JOIN_TRACE)
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: assign_vif_chanctx begin\n");
+#endif
 			ret = ctx->ops->assign_vif_chanctx(hw, vif,
 			    &vif->bss_conf, &ctx->chanctx);
+#if defined(LKPI_JOIN_TRACE)
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: assign_vif_chanctx rc=%d\n", ret);
+#endif
 			if (ret != 0) {
 				lkpi_printf(ULOG_ERROR_LEVEL,
 				    "lkpi80211: assign_vif_chanctx refused (%d)\n",
@@ -1786,6 +1856,24 @@ lkpi80211_drv_hw_scan_cancel(struct ieee80211_hw *hw)
 	}
 }
 
+/*
+ * The deferred forward of a firmware scan's completion to the bridge.  It runs
+ * on the system queue, one thread, so it is reached only after the async
+ * handler that queued it returned and released the driver's mutex - which is
+ * the whole point: the bridge's scan end walks back into the driver (the
+ * receive filter), and that driver call takes the same mutex again.  Linux gets
+ * the same property from ieee80211_queue_work(&local->hw, &local->scan_work).
+ */
+static void
+lkpi80211_scan_complete_work(struct work_struct *w)
+{
+	struct lkpi80211_hw_ctx *ctx =
+	    container_of(w, struct lkpi80211_hw_ctx, scan_complete_work);
+
+	if (bridge_ops != NULL && bridge_ops->scan_complete != NULL)
+		bridge_ops->scan_complete(&ctx->hw);
+}
+
 void
 ieee80211_scan_completed(struct ieee80211_hw *hw, struct cfg80211_scan_info *info)
 {
@@ -1816,13 +1904,46 @@ ieee80211_scan_completed(struct ieee80211_hw *hw, struct cfg80211_scan_info *inf
 	ctx->scanning = 0;
 	ctx->hw_scanning = 0;
 	ctx->scan_completions++;
+	lkpi80211_scan_completions++;
 	if (ctx->hw_scan_req != NULL) {
 		kfree(ctx->hw_scan_req);
 		ctx->hw_scan_req = NULL;
 	}
 	(void)info;
-	if (was_hw && bridge_ops != NULL && bridge_ops->scan_complete != NULL)
+	if (!was_hw || bridge_ops == NULL || bridge_ops->scan_complete == NULL)
+		return;
+	/*
+	 * The forward is a work, never a call: this function runs inside the
+	 * driver's async handler with the driver's mutex held, and the MLME
+	 * that consumes the completion re-enters the driver (the scan end
+	 * changes the receive filter -> iwl_mvm_configure_filter takes
+	 * mvm->mutex).  Calling the bridge here therefore deadlocks the
+	 * non-recursive mutex against itself - measured on the board
+	 * 2026-10-26: the join stopped at add_chanctx while the async worker
+	 * owned mvm->mutex and waited on it from its own scan end.
+	 * linuxkpi_core_init()'s queue is the executor; an image without one
+	 * (no wireless world started) keeps the old inline shape.
+	 */
+	if (lkpi_system_wq == NULL ||
+	    !lkpi_queue_work(lkpi_system_wq, &ctx->scan_complete_work))
 		bridge_ops->scan_complete(hw);
+}
+
+/*
+ * The driver's half of the two completion paths, for the board cases.  Read
+ * beside the bridge's own counters they name the broken side without a
+ * diagnostic boot: `completions=0` with a filled scan table is a completion
+ * that never ran (a deferred handler without an executor), while
+ * `completions>0` beside `scan=../0` is a forward the bridge did not take.
+ */
+void
+lkpi80211_completion_counters(u32 *scan, u32 *tx)
+{
+
+	if (scan != NULL)
+		*scan = lkpi80211_scan_completions;
+	if (tx != NULL)
+		*tx = lkpi80211_tx_completions;
 }
 
 int

@@ -187,10 +187,30 @@ lkpi_pci_irq_trampoline(void *arg)
 		/* A vector can only be armed after the executor exists (irq_setup
 		 * creates it), so the shared queue is a fallback that should never
 		 * be taken; running the half at all beats losing the interrupt. */
+		bool queued;
+
 		if (lkpi_pci_irq_wq != NULL)
-			(void)queue_work(lkpi_pci_irq_wq, &slot->thread_work);
+			queued = queue_work(lkpi_pci_irq_wq, &slot->thread_work);
 		else
-			schedule_work(&slot->thread_work);
+			queued = schedule_work(&slot->thread_work);
+#if defined(LKPI_JOIN_TRACE)
+		/* A refused queue is a *dropped interrupt*: the command the
+		 * threaded half would have completed is then never completed,
+		 * and the board goes quiet with no other witness. */
+		if (!queued) {
+			static unsigned int said;
+
+			if (said < 8u) {
+				said++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "pcie: irq thread half dropped intid=%d "
+				    "thread=%p\n", slot->intid,
+				    (void *)osThreadGetId());
+			}
+		}
+#else
+		(void)queued;
+#endif
 	}
 }
 

@@ -760,6 +760,11 @@ void lkpi_mutex_destroy(struct mutex *m)
 	s->locked = 0;
 }
 
+#if defined(LKPI_JOIN_TRACE)
+/* defined with the workqueues below; the stuck-lock print names it */
+static struct work_struct *lkpi_wq_current_work;
+#endif
+
 void lkpi_mutex_lock(struct mutex *m)
 {
 	struct lkpi_mutex_shell *s = lkpi_mutex_of(m);
@@ -770,7 +775,40 @@ void lkpi_mutex_lock(struct mutex *m)
 		s->id = osMutexNew(NULL);
 		s->inited = (s->id != NULL) ? 1u : 0u;
 	}
+#if defined(LKPI_JOIN_TRACE)
+	{
+		/*
+		 * A driver mutex is held across host commands, and every command's
+		 * completion runs on the receive context.  A hold that does not
+		 * clear is therefore the one shape a wait-for-completion inside it
+		 * cannot escape, so the *stuck* acquire is what has to speak - a
+		 * print after the acquire would never run.  The owner and the
+		 * waiter name the two contexts trading the lock.
+		 */
+		static unsigned int said;
+
+		if (osMutexAcquire(s->id, 1000u) != osOK) {
+			if (said < 8u) {
+				osThreadId_t owner = osMutexGetOwner(s->id);
+
+				said++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "lkpi: mutex stuck lock=%p owner=%p (%s) "
+				    "waiter=%p ra=%p work=%p fn=%p\n", (void *)m,
+				    (void *)owner,
+				    owner != NULL ? osThreadGetName(owner) : "-",
+				    (void *)osThreadGetId(),
+				    __builtin_return_address(0),
+				    (void *)lkpi_wq_current_work,
+				    lkpi_wq_current_work != NULL ?
+				    (void *)lkpi_wq_current_work->func : NULL);
+			}
+			(void)osMutexAcquire(s->id, osWaitForever);
+		}
+	}
+#else
 	(void)osMutexAcquire(s->id, osWaitForever);
+#endif
 	s->locked = 1;
 }
 
@@ -953,7 +991,30 @@ void lkpi_wait_for_completion(struct completion *c)
 	for (;;) {
 		if (lkpi_completion_consume(c))
 			return;
+#if defined(LKPI_JOIN_TRACE)
+		{
+			/*
+			 * The wait is unbounded by design (a host command's completion
+			 * is the only release), so a lost completion is a silent hang.
+			 * The bounded probe keeps the semantics - it re-arms the same
+			 * wait - and makes a stuck one speak once.
+			 */
+			static unsigned int said;
+
+			if (osSemaphoreAcquire(cv->sem, 2000u) != osOK) {
+				if (said < 8u) {
+					said++;
+					lkpi_printf(ULOG_ERROR_LEVEL,
+					    "lkpi: completion wait >2000 ms c=%p "
+					    "thread=%p\n", (void *)c,
+					    (void *)osThreadGetId());
+				}
+				continue;
+			}
+		}
+#else
 		(void)osSemaphoreAcquire(cv->sem, osWaitForever);
+#endif
 	}
 }
 
@@ -1009,6 +1070,15 @@ static struct lkpi_wq_impl *lkpi_wq_of(struct workqueue_struct *wq)
 	return (struct lkpi_wq_impl *)wq->_wq;
 }
 
+#if defined(LKPI_JOIN_TRACE)
+/*
+ * The body a worker thread is running right now.  A worker that deadlocks
+ * holding a driver mutex is otherwise anonymous - the stuck-lock print names
+ * the thread, and this names what it was executing.
+ */
+static struct work_struct *lkpi_wq_current_work;
+#endif
+
 void lkpi_work_init(struct work_struct *w, void (*func)(struct work_struct *))
 {
 	memset(w, 0, sizeof(*w));
@@ -1045,8 +1115,14 @@ static void lkpi_worker_entry(void *arg)
 		w->wk_running = 1;
 		osCriticalExit(state);
 
+#if defined(LKPI_JOIN_TRACE)
+		lkpi_wq_current_work = w;
+#endif
 		if (w->func != NULL)
 			w->func(w);
+#if defined(LKPI_JOIN_TRACE)
+		lkpi_wq_current_work = NULL;
+#endif
 		w->wk_running = 0;
 		lkpi_wq_stats_state.runs++;
 		if (impl->mq != NULL)
@@ -1128,8 +1204,23 @@ bool lkpi_queue_work(struct workqueue_struct *wq, struct work_struct *w)
 	os_critical_state_t state;
 	int queued = 0;
 
-	if (wq == NULL || w == NULL)
+	if (wq == NULL || w == NULL) {
+#if defined(LKPI_JOIN_TRACE)
+		/* A dropped schedule_work() is silent by the interface's own
+		 * contract, and it is the defect class this image was built to
+		 * find: say it once per site. */
+		static unsigned int said;
+
+		if (said < 8u) {
+			said++;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi: work dropped w=%p fn=%p (no queue) thread=%p\n",
+			    (void *)w, w != NULL ? (void *)w->func : NULL,
+			    (void *)osThreadGetId());
+		}
+#endif
 		return false;
+	}
 	impl = lkpi_wq_of(wq);
 	if (impl == NULL)
 		return false;
@@ -1149,6 +1240,19 @@ bool lkpi_queue_work(struct workqueue_struct *wq, struct work_struct *w)
 	 * a refusal, and the flag goes back so the caller may retry. */
 	if (osMessageQueuePut(impl->mq, &w, 0u, 0u) != osOK) {
 		lkpi_wq_stats_state.full++;
+#if defined(LKPI_JOIN_TRACE)
+		{
+			static unsigned int said;
+
+			if (said < 8u) {
+				said++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "lkpi: work dropped w=%p fn=%p (queue full) "
+				    "thread=%p\n", (void *)w, (void *)w->func,
+				    (void *)osThreadGetId());
+			}
+		}
+#endif
 		state = osCriticalEnter();
 		w->wk_queued = 0;
 		osCriticalExit(state);
@@ -1236,8 +1340,36 @@ void lkpi_work_flush(struct work_struct *w)
 	/* The worker clears wk_queued before running the body and wk_running after
 	 * it, so both clear means "not pending and not executing". Polling the tick
 	 * is enough here and keeps the queue free of a second wake-up path. */
+#if defined(LKPI_JOIN_TRACE)
+	{
+		/*
+		 * A flush that cannot clear is a work either stuck or asked to
+		 * wait on itself (the same thread running the body then calling
+		 * flush on it) - both end the board's log, and the body's address
+		 * is what names which work it was.
+		 */
+		static unsigned int said;
+		uint32_t t0 = osKernelGetTickCount();
+
+		while (w->wk_queued != 0 || w->wk_running != 0) {
+			(void)osDelay(1);
+			if (said < 8u &&
+			    (uint32_t)(osKernelGetTickCount() - t0) >= 2000u) {
+				said++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "lkpi: flush stuck w=%p fn=%p queued=%u "
+				    "running=%u thread=%p\n", (void *)w,
+				    (void *)w->func, (unsigned)w->wk_queued,
+				    (unsigned)w->wk_running,
+				    (void *)osThreadGetId());
+				t0 = osKernelGetTickCount();
+			}
+		}
+	}
+#else
 	while (w->wk_queued != 0 || w->wk_running != 0)
 		(void)osDelay(1);
+#endif
 }
 
 void lkpi_flush_delayed_work(struct delayed_work *dw)

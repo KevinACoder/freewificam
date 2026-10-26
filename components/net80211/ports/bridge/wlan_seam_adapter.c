@@ -771,9 +771,18 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	 * AP's.
 	 */
 	if (adapter.tuned_freq != 0) {
-		int cr = lkpi80211_drv_chanctx_use(adapter.hw, adapter.vif,
+		int cr;
+
+#if defined(LKPI_JOIN_TRACE)
+		wlan_osal_log("wlan: seam bssid chanctx %u begin\n",
+		    (unsigned)adapter.tuned_freq);
+#endif
+		cr = lkpi80211_drv_chanctx_use(adapter.hw, adapter.vif,
 		    adapter.tuned_freq, adapter.tuned_hw_value,
 		    NL80211_BAND_2GHZ, SEAM_CHAN_WIDTH);
+#if defined(LKPI_JOIN_TRACE)
+		wlan_osal_log("wlan: seam bssid chanctx rc=%d\n", cr);
+#endif
 
 		if (cr != 0)
 			return cr;
@@ -788,13 +797,23 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	 * otherwise) needs the station here, not at the association.
 	 */
 	if (adapter.sta == NULL) {
+#if defined(LKPI_JOIN_TRACE)
+		wlan_osal_log("wlan: seam bssid sta add begin\n");
+#endif
 		adapter.sta = lkpi80211_drv_sta_add(adapter.hw, adapter.vif,
 		    bssid, 0);
 		if (adapter.sta != NULL)
 			adapter.sta_preauth = 1;
+#if defined(LKPI_JOIN_TRACE)
+		wlan_osal_log("wlan: seam bssid sta add %s\n",
+		    adapter.sta != NULL ? "ok" : "refused");
+#endif
 	}
 	lkpi80211_drv_bss_changed(adapter.hw, adapter.vif,
 	    BSS_CHANGED_BSSID);
+#if defined(LKPI_JOIN_TRACE)
+	wlan_osal_log("wlan: seam bssid done\n");
+#endif
 	return 0;
 }
 

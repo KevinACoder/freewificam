@@ -215,4 +215,14 @@ void	*lkpi80211_hw_priv(struct ieee80211_hw *hw);
  */
 void	lkpi80211_rx_counters(u32 *frames, u32 *first_fc, int *fc_seen);
 
+/*
+ * The completion entries' counters: how often the driver reached
+ * ieee80211_scan_completed() and the transmit-completion body.  They are the
+ * driver's half of the two paths the bridge counters already account for
+ * (scan_completes / tx_completes), so a sweep that never closes or a frame
+ * that never completes can be placed on the driver's side or the seam's
+ * without a diagnostic boot.
+ */
+void	lkpi80211_completion_counters(u32 *scan, u32 *tx);
+
 #endif /* LINUXKPI_80211_H */
