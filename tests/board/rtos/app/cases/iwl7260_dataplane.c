@@ -88,13 +88,22 @@ iwl_data_csum(const uint8_t *p, size_t n)
 {
 	uint32_t sum = 0;
 
+	/*
+	 * The one's-complement sum over 16-bit words **in network order**: the
+	 * IPv4 and ICMP headers are big-endian, so p[0] is the high byte.  The
+	 * little-endian reading this helper started with produced byte-swapped
+	 * checksums, and the board said so in the only way it could: the
+	 * checksum-free ARP exchange went through both ways while every echo
+	 * request was silently dropped by the AP's IP stack (0/10, with the AP's
+	 * own station dump counting the frames as received).
+	 */
 	while (n > 1u) {
-		sum += (uint32_t)(p[0] | ((uint16_t)p[1] << 8));
+		sum += (uint32_t)(((uint16_t)p[0] << 8) | p[1]);
 		p += 2;
 		n -= 2;
 	}
 	if (n != 0u)
-		sum += p[0];
+		sum += (uint32_t)p[0] << 8;
 	while ((sum >> 16) != 0u)
 		sum = (sum & 0xffffu) + (sum >> 16);
 	return (uint16_t)~sum;

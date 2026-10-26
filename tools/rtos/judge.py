@@ -101,6 +101,25 @@ PATTERNS = {
     "net_rtt": re.compile(r"net: rtt n=(?P<n>\d+) min_us=(?P<min>\d+) avg_us=(?P<avg>\d+) max_us=(?P<max>\d+)", re.MULTILINE),
     "emmc_clk": re.compile(r"emmc: clk asked=(?P<asked>\d+)Hz achieved=(?P<achieved>\d+)Hz src_sel=(?P<sel>\d+) clk_ctrl=0x(?P<clk_ctrl>[0-9a-f]+) host_ctrl1=0x(?P<host_ctrl1>[0-9a-f]+) lines=(?P<lines>\d+) extcsd_bus=(?P<bus>\d+)", re.MULTILINE),
     "emmc_census": re.compile(r"emmc: census (?P<tag>\S+) transfers=(?P<transfers>\d+) blocks=(?P<blocks>\d+) boundaries=(?P<boundaries>\d+) data_polls=(?P<polls>\d+) cmd_us=(?P<cmd_us>\d+) data_us=(?P<data_us>\d+)", re.MULTILINE),
+    # The wireless ladder's own instruments, once per boot.  `wq=-` is a
+    # system workqueue that was never created, i.e. every schedule_work() in
+    # the driver silently dropped; the two lkpi lines are the driver's half of
+    # the completion paths whose bridge half is in the scan-done / join-ok
+    # lines.
+    "iwl7260_core": re.compile(
+        r"iwl7260: core wq=(?P<wq>\S+) runs=(?P<runs>\d+) "
+        r"full=(?P<full>\d+) max=(?P<max>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_scan_lkpi": re.compile(
+        r"iwl7260: scan lkpi completions=(?P<completions>\d+) "
+        r"tx=(?P<tx>\d+) wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_join_lkpi": re.compile(
+        r"iwl7260: join lkpi tx=(?P<tx>\d+) scan=(?P<scan>\d+) wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
@@ -411,11 +430,24 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("iwl7260: no firmware ALIVE evidence (loaded firmware version)")
         else:
             notes.append(f"iwl7260: firmware {alive['version']}")
+        core = found["iwl7260_core"]
+        if not core:
+            errors.append("iwl7260: PASS without the core-services line")
+        elif core["wq"] == "-":
+            errors.append(
+                "iwl7260: the linuxkpi system workqueue was never created "
+                "(wq=-): every schedule_work() in the driver was dropped"
+            )
+        else:
+            notes.append(
+                f"iwl7260: core wq={core['wq']} runs={core['runs']} "
+                f"max={core['max']}"
+            )
 
     if cases.get("iwl7260_scan", {}).get("verdict") == "pass":
-        done = found["iwl7260_scan_done"]
-        hit = found["iwl7260_scan_hit"]
-        fail = found["iwl7260_scan_fail"]
+        done = (found["iwl7260_scan_done"] or [None])[0]
+        hit = (found["iwl7260_scan_hit"] or [None])[0]
+        fail = (found["iwl7260_scan_fail"] or [None])[0]
         if fail:
             errors.append(f"iwl7260_scan: {fail['reason']}")
         if not done:
@@ -435,7 +467,7 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("iwl7260_scan: target AP not in the table")
         elif (
             hit["bssid"].lower() != "d8:3a:dd:26:91:1e"
-            or hit["ssid"] != "lab8189b"
+            or hit["ssid"] != "labwifi-brmc"
         ):
             errors.append(
                 f"iwl7260_scan: hit {hit['bssid']}/{hit['ssid']} is not the bench AP"
@@ -445,11 +477,24 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"iwl7260_scan: hit {hit['ssid']} freq={hit['freq']} "
                 f"rssi={hit['rssi']}"
             )
+        lkpi = found["iwl7260_scan_lkpi"]
+        if not lkpi:
+            errors.append("iwl7260_scan: PASS without the driver-completion line")
+        elif int(lkpi["completions"]) < 1:
+            errors.append(
+                "iwl7260_scan: the driver never completed the sweep "
+                f"(lkpi=0 wq={lkpi['wq']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_scan: driver completions={lkpi['completions']} "
+                f"tx={lkpi['tx']} wq={lkpi['wq']}"
+            )
 
     if cases.get("iwl7260_join", {}).get("verdict") == "pass":
-        start = found["iwl7260_join_start"]
-        ok = found["iwl7260_join_ok"]
-        fail = found["iwl7260_join_fail"]
+        start = (found["iwl7260_join_start"] or [None])[0]
+        ok = (found["iwl7260_join_ok"] or [None])[0]
+        fail = (found["iwl7260_join_fail"] or [None])[0]
         if not start:
             errors.append("iwl7260_join: PASS without a join start line")
         elif int(start["rc"]) != 0:
@@ -469,12 +514,25 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"iwl7260_join: RUN mgt_tx={ok['mgt_tx']} txc={ok['txc']} "
                 f"rx={ok['rx']}"
             )
+        lkpi = found["iwl7260_join_lkpi"]
+        if not lkpi:
+            errors.append("iwl7260_join: PASS without the driver-completion line")
+        elif int(lkpi["tx"]) < 1:
+            errors.append(
+                "iwl7260_join: no completion reached the substitute "
+                f"(tx=0 wq={lkpi['wq']})"
+            )
+        else:
+            notes.append(
+                f"iwl7260_join: driver tx={lkpi['tx']} scan={lkpi['scan']} "
+                f"wq={lkpi['wq']}"
+            )
 
     if cases.get("iwl7260_dataplane", {}).get("verdict") == "pass":
-        arp = found["iwl7260_data_arp"]
-        ping = found["iwl7260_data_ping"]
-        cnt = found["iwl7260_data_counters"]
-        fail = found["iwl7260_data_fail"]
+        arp = (found["iwl7260_data_arp"] or [None])[0]
+        ping = (found["iwl7260_data_ping"] or [None])[0]
+        cnt = (found["iwl7260_data_counters"] or [None])[0]
+        fail = (found["iwl7260_data_fail"] or [None])[0]
         if fail:
             errors.append(f"iwl7260_dataplane: {fail['reason']}")
         if not arp:

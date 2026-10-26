@@ -15,9 +15,10 @@
  * the association's identity is the BSSID the exchange completed with.
  *
  * Anchors:
- *   iwl7260: join start ssid=lab8189b bssid=... state=<n> rc=<n>
+ *   iwl7260: join start ssid=labwifi-brmc bssid=... state=<n> rc=<n>
  *   iwl7260: join wait t=<s> state=<n> mgt_tx=<n> txc=<n> rx=<n> bcnT=<n> bad_auth=<n>
  *   iwl7260: join ok state=4 mgt_tx=<n> txc=<n> rx=<n>
+ *   iwl7260: join lkpi tx=<n> scan=<n> wq=<n>
  *   iwl7260: join PASS
  *
  * A timeout is `iwl7260: join FAIL <reason>` with the same discriminators, so
@@ -31,14 +32,20 @@
 #include "cases.h"
 #include "os/cmsis2/cmsis2.h"
 
+#include "linuxkpi_core.h"
 #include "wlan_bridge.h"
+
+/* The substitute's completion counters: only scalars cross the call, so the
+ * signature is repeated rather than pulling the driver's mac80211 header world
+ * into a net80211 case (see the scan case's note). */
+void lkpi80211_completion_counters(uint32_t *scan, uint32_t *tx);
 
 #define IWL_JOIN_TIMEOUT_MS	30000u
 #define IWL_JOIN_POLL_MS	200u
 #define IWL_JOIN_PULSE_MS	2000u
 
-#define IWL_JOIN_SSID		"lab8189b"
-#define IWL_JOIN_SSID_LEN	8u
+#define IWL_JOIN_SSID		"labwifi-brmc"
+#define IWL_JOIN_SSID_LEN	12u
 #define IWL_JOIN_RUN		4
 
 /* the bench AP (brcmfmac wlan0, open, ch5) */
@@ -74,6 +81,9 @@ case_iwl7260_join_run(void)
 	unsigned int waited = 0;
 	unsigned int tick = 0;
 	unsigned int pulse = 0;
+	u32 lkpi_scan = 0u;
+	u32 lkpi_tx = 0u;
+	u32 lkpi_wq = 0u;
 	int rc;
 
 	wlan_bridge_stats(&c);
@@ -115,6 +125,26 @@ case_iwl7260_join_run(void)
 	}
 
 	wlan_bridge_stats(&c);
+	/*
+	 * The driver's half, beside the bridge's.  `tx` counts the frames the
+	 * driver reported complete into the substitute and `txc` above the ones
+	 * the bridge then accounted for; a join that stays in AUTH with
+	 * `mgt_tx>0` is therefore placed on the driver/queue side (`tx=0`, the
+	 * frame was never read out or never completed) or on the seam side
+	 * (`tx>0 txc=0`, the forward did not happen) on the spot.  `wq` is the
+	 * deferred-work executor's run count, which is what allocates the
+	 * station's queue in the first place (mvm/sta.c's add_stream_wk).
+	 */
+	lkpi80211_completion_counters(&lkpi_scan, &lkpi_tx);
+	{
+		struct lkpi_wq_stats wq;
+
+		lkpi_wq_stats_get(&wq);
+		lkpi_wq = (u32)wq.runs;
+	}
+	CASE_ANCHOR("iwl7260: join lkpi tx=%u scan=%u wq=%u\n",
+	    (unsigned)lkpi_tx, (unsigned)lkpi_scan, (unsigned)lkpi_wq);
+
 	if (wlan_bridge_state() != IWL_JOIN_RUN) {
 		CASE_ANCHOR("iwl7260: join FAIL timeout state=%s mgt_tx=%u "
 		    "txc=%u rx=%u bcnT=%u bad_auth=%u auth_retries=%u\n",
@@ -134,8 +164,9 @@ case_iwl7260_join_run(void)
 		return 1;
 	}
 	if (c.tx_completes == 0u) {
-		CASE_ANCHOR("iwl7260: join FAIL no transmit completion (driver "
-		    "refused or never reported)\n");
+		CASE_ANCHOR("iwl7260: join FAIL no transmit completion (lkpi=%u "
+		    "wq=%u mgt_tx=%u)\n", (unsigned)lkpi_tx, (unsigned)lkpi_wq,
+		    c.mgt_tx);
 		return 1;
 	}
 	CASE_ANCHOR("iwl7260: join PASS\n");

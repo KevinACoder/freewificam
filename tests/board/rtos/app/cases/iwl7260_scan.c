@@ -21,7 +21,8 @@
  *   iwl7260: scan bss <bssid> ssid=<s> freq=<f> rssi=<r>
  *   iwl7260: scan done rows=<n> bcn=<n> bcnT=<n> prsp=<n> fcs=<n>
  *               scan=<n>/<n> state=<n> entered=<n> close=<n> rx=<n>
- *   iwl7260: scan hit bssid=d8:3a:dd:26:91:1e ssid=lab8189b freq=2432 rssi=<r>
+ *   iwl7260: scan hit bssid=d8:3a:dd:26:91:1e ssid=labwifi-brmc freq=2432 rssi=<r>
+ *   iwl7260: scan lkpi completions=<n> tx=<n> wq=<n>
  *   iwl7260: scan PASS
  *
  * A missing attach, a refused start, an empty table or a table without the
@@ -35,14 +36,21 @@
 #include "cases.h"
 #include "os/cmsis2/cmsis2.h"
 
+#include "linuxkpi_core.h"
 #include "wlan_bridge.h"
+
+/* The substitute's completion counters.  Its own header carries the driver's
+ * mac80211 world into a net80211 case - the include mixture the seam exists to
+ * keep apart - and only scalars cross this call, so the signature is repeated
+ * here (the same reason the dataplane case repeats the port's receive seam). */
+void lkpi80211_completion_counters(uint32_t *scan, uint32_t *tx);
 
 #define IWL_SCAN_TIMEOUT_MS	60000u
 #define IWL_SCAN_POLL_MS	200u
 #define IWL_SCAN_NWID_LEN	32u
 
-#define IWL_SCAN_SSID		"lab8189b"
-#define IWL_SCAN_SSID_LEN	8u
+#define IWL_SCAN_SSID		"labwifi-brmc"
+#define IWL_SCAN_SSID_LEN	12u
 #define IWL_SCAN_FREQ		2432u
 
 /* the bench AP (brcmfmac wlan0, open, ch5) */
@@ -104,6 +112,9 @@ case_iwl7260_scan_run(void)
 	struct iwl_scan_rec rec = { 0 };
 	unsigned int waited = 0;
 	unsigned int tick = 0;
+	u32 lkpi_completions = 0u;
+	u32 lkpi_tx = 0u;
+	u32 lkpi_wq = 0u;
 	int rc;
 
 	wlan_bridge_stats(&c);
@@ -167,6 +178,25 @@ case_iwl7260_scan_run(void)
 	    c.scan_starts, c.scan_completes, wlan_bridge_state(),
 	    c.scan_entered, c.scan_close, c.rx_frames);
 
+	/*
+	 * The driver's half of the completion, beside the bridge's.  The sweep's
+	 * own line above says the window closed; this one says whether the
+	 * driver's completion ran at all (`completions`, the driver's own
+	 * ieee80211_scan_completed()) and whether the deferred-work executor
+	 * that carries it exists (`wq`, the system queue's runs - `0` beside a
+	 * filled table is a completion with no executor).
+	 */
+	lkpi80211_completion_counters(&lkpi_completions, &lkpi_tx);
+	{
+		struct lkpi_wq_stats wq;
+
+		lkpi_wq_stats_get(&wq);
+		lkpi_wq = (u32)wq.runs;
+	}
+	CASE_ANCHOR("iwl7260: scan lkpi completions=%u tx=%u wq=%u\n",
+	    (unsigned)lkpi_completions, (unsigned)lkpi_tx,
+	    (unsigned)lkpi_wq);
+
 	if (rec.rows == 0u) {
 		CASE_ANCHOR("iwl7260: scan FAIL empty table (state=%d entered=%u "
 		    "close=%u rx=%u)\n", wlan_bridge_state(), c.scan_entered,
@@ -181,6 +211,15 @@ case_iwl7260_scan_run(void)
 	if (wlan_bridge_scan_active()) {
 		CASE_ANCHOR("iwl7260: scan FAIL window still open (state=%d)\n",
 		    wlan_bridge_state());
+		return 1;
+	}
+	if (lkpi_completions == 0u) {
+		/* the window is closed, but not by the driver's completion: the
+		 * bridge's own watchdog is the only other closer */
+		CASE_ANCHOR("iwl7260: scan FAIL closed without the driver "
+		    "completion (lkpi=0 bridge=%u/%u wq=%u)\n",
+		    (unsigned)c.scan_starts, (unsigned)c.scan_completes,
+		    (unsigned)lkpi_wq);
 		return 1;
 	}
 	CASE_ANCHOR("iwl7260: scan PASS\n");
