@@ -134,9 +134,11 @@ rtw89_usb_stats_anchor(void)
 
 	lkpi_usb_cherryusb_stats(&st);
 	CASE_ANCHOR("rtw89: usb submits=%u completes=%u refused=%u "
-	    "stage_overflow=%u slots_exhausted=%u stage_size=%u slots=%u\n",
+	    "stage_overflow=%u slots_exhausted=%u stage_size=%u slots=%u "
+	    "rx=%u rx_err=%u rx_last=%u\n",
 	    st.submits, st.completed, st.refused, st.stage_overflow,
-	    st.slots_exhausted, st.stage_size, st.stage_slots);
+	    st.slots_exhausted, st.stage_size, st.stage_slots,
+	    st.rx_completes, st.rx_errors, st.rx_last_len);
 }
 
 int

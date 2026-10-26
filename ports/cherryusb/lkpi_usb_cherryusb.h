@@ -62,6 +62,12 @@ struct lkpi_usb_chusb_stats {
 	 * whose answer never left the DMA buffer. */
 	unsigned int	last_in_stage_word;
 	unsigned int	last_in_stage_len;
+	/* bulk-IN (receive) completions: the diagnostic that separates "the
+	 * controller stopped completing the receive URBs" from "the driver's
+	 * workqueue stopped consuming them" when a receive count freezes. */
+	unsigned int	rx_completes;
+	unsigned int	rx_errors;
+	unsigned int	rx_last_len;
 };
 
 void lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out);

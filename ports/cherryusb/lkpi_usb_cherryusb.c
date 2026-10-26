@@ -439,6 +439,16 @@ chu_complete(void *arg, int nbytes)
 	 * EHCI usb_hc_ehci.c:512,608,724; Linux USB hcd.c:2002. */
 	if (be->ep != &be->hport->ep0)
 		be->ep->data_toggle = slot->urb.data_toggle;
+	if (be->ep != &be->hport->ep0 && slot->urb.ep != NULL &&
+	    (slot->urb.ep->bEndpointAddress & USB_EP_DIR_IN) != 0U &&
+	    USB_GET_ENDPOINT_TYPE(slot->urb.ep->bmAttributes) ==
+	    USB_ENDPOINT_TYPE_BULK) {
+		chu_stats.rx_completes++;
+		chu_stats.rx_last_len = err == 0 ? (unsigned int)nbytes :
+		    slot->urb.actual_length;
+		if (err != 0)
+			chu_stats.rx_errors++;
+	}
 	be->actual_length = err == 0 ? (uint32_t)nbytes : slot->urb.actual_length;
 	be->errorcode = err;
 	chu_slot_finish(slot, err);

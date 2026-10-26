@@ -89,8 +89,9 @@ rtw89_usb_stats_anchor(const char *where)
 
 	lkpi_usb_cherryusb_stats(&st);
 	CASE_ANCHOR("rtw89: join usb %s submits=%u completes=%u refused=%u "
-	    "stage_overflow=%u slots_exhausted=%u\n", where, st.submits,
-	    st.completed, st.refused, st.stage_overflow, st.slots_exhausted);
+	    "stage_overflow=%u slots_exhausted=%u rx=%u rx_err=%u rx_last=%u\n",
+	    where, st.submits, st.completed, st.refused, st.stage_overflow,
+	    st.slots_exhausted, st.rx_completes, st.rx_errors, st.rx_last_len);
 }
 
 int
