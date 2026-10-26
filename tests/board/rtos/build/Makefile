@@ -103,6 +103,7 @@ BOARD_TX_DIR := rk3568-itx
 BOARD_TX_EXTRA_SRCS :=
 BOARD_LINKSCRIPT := $(PLATFORM)/arch/aarch64/baremetal.ld
 BOARD_LOAD_BASE := 0xa000000
+BOARD_DEFS :=
 else ifeq ($(BOARD),firefly-v1)
 BOARD_INCLUDES := \
 	-I$(PLATFORM)/board/firefly/v1 \
@@ -122,6 +123,10 @@ BOARD_TX_EXTRA_SRCS := $(PLATFORM)/os/threadx/board/firefly/libc_bindings.c
 # DEFINED() reads them (command-line defsym does not satisfy DEFINED()).
 BOARD_LINKSCRIPT := $(PLATFORM)/board/firefly/v1/link.ld
 BOARD_LOAD_BASE := 0x90000000
+# The lab loop's close-out ruling: this board's images reset themselves (PSCI)
+# once the case table's verdict line is out, and a failed assertion resets
+# instead of parking - the bench never needs a manual power cycle.
+BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=1
 else
 $(error unknown BOARD '$(BOARD)': use rk3568-itx or firefly-v1)
 endif
@@ -448,6 +453,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
 	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
 	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(LEVERS) $(BACKEND_DEFS) \
+	$(BOARD_DEFS) \
 	$(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \

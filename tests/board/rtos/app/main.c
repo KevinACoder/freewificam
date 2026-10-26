@@ -18,6 +18,10 @@
 #include "arch_asm.h"
 #include "uart.h"
 
+#if defined(RTOS_BOARD_AUTO_RESET)
+#include "reset.h"
+#endif
+
 #include "cases.h"
 #include "clock.h"
 #include "runner.h"
@@ -34,13 +38,18 @@
 #define RTOS_KERNEL_NAME "unknown"
 #endif
 
-/* Unrecoverable bring-up failure: report and park.  A failure that cannot
- * speak is indistinguishable from a dead board. */
+/* Unrecoverable bring-up failure: report and recover.  A failure that cannot
+ * speak is indistinguishable from a dead board; a spoken one resets the
+ * bench (RTOS_BOARD_AUTO_RESET builds) or parks for the power button. */
 static void fatal(const char *what)
 {
 	uart_early_puts("rtos: fatal ");
 	uart_early_puts(what);
 	uart_early_puts("\n");
+#if defined(RTOS_BOARD_AUTO_RESET)
+	uart_early_puts("rtos: resetting board\n");
+	board_system_reset();
+#endif
 	uart_early_puts("rtos: parked; power-cycle to recover\n");
 
 	ARCH_DAIF_SET(0xf);

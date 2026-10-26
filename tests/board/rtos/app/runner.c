@@ -111,6 +111,17 @@ static void runner(void *arg)
 		    (ok == total) ? "pass" : "fail", ok, total,
 		    RTOS_BACKEND_NAME);
 
+#if defined(RTOS_BOARD_AUTO_RESET)
+	/* The lab loop's close-out: reset the board once the verdict line is
+	 * out, so the next round's boot-loader prompt is already waiting
+	 * (RTOS_BOARD_AUTO_RESET builds only). The delay lets the console
+	 * drain before the reset. */
+#include "reset.h"
+	CASE_ANCHOR("rtos: resetting board\n");
+	(void)osDelay(200u);
+	board_system_reset();
+#endif
+
 #if defined(RTOS_HOST_TIER)
 	/* Leave the kernel so the host process can return; the board images stay
 	 * resident and the round ends through the lab's power procedure. */
