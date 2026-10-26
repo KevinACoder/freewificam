@@ -5,7 +5,7 @@
 | Upstream | https://github.com/FreeRTOS/FreeRTOS-Kernel.git |
 | Pin | tag `V11.3.1`, commit `3a22924e0a9ddbbc8b0758881c33b3422a5cc20d` |
 | License | MIT (`LICENSE.md` at the tree root) |
-| Vendoring | **sparse flat import** (not a submodule): the kernel sources, the public headers, the two ports this project compiles and `heap_4.c`, byte-identical to the pin. `third-party/FreeRTOS-Kernel/patches/MANIFEST.sha256` lists every carried file. Not carried: every other `portable/` target, the kernel's own test trees, the CMake and IDE project files, the pack metadata. |
+| Vendoring | **full flat import** (not a submodule) of the upstream working tree at the pin (2026-10-26): every file the pin carries (891 files, including every `portable/` target, the test trees and the project files). `third-party/FreeRTOS-Kernel/patches/MANIFEST.sha256` lists every carried file. The image compiles the kernel sources, the public headers, the two ports this project uses and `heap_4.c`; the rest is present as upstream reference, per `AGENTS.md` §1.3. |
 | Fetched | 2026-10-24, from the pinned checkout recorded by the RTOS reference tree (commit `19c5736`); the pin above was verified at import. |
 | Local differences | none (zero patch); both builds adapt through configuration under `tests/board/rtos/platform/os/`, never by editing this tree. |
 | Compiled set | board image: `tasks.c`, `list.c`, `queue.c`, `portable/MemMang/heap_4.c`, `portable/GCC/ARM_AARCH64_SRE/port.c` and `portASM.S`. Host tier: `tasks.c`, `list.c`, `queue.c`, `event_groups.c`, `stream_buffer.c`, `timers.c`, `croutine.c`, `portable/MemMang/heap_4.c`, `portable/ThirdParty/GCC/Posix/port.c` and `portable/ThirdParty/GCC/Posix/utils/wait_for_event.c`. |

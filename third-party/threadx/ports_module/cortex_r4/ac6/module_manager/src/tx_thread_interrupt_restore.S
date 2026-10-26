@@ -1,0 +1,84 @@
+/***************************************************************************
+ * Copyright (c) 2024 Microsoft Corporation
+ * Copyright (c) 2026-present Eclipse ThreadX contributors
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available at
+ * https://opensource.org/licenses/MIT.
+ *
+ * SPDX-License-Identifier: MIT
+ **************************************************************************/
+
+
+/**************************************************************************/
+/**************************************************************************/
+/**                                                                       */
+/** ThreadX Component                                                     */
+/**                                                                       */
+/**   Thread                                                              */
+/**                                                                       */
+/**************************************************************************/
+/**************************************************************************/
+
+/* #define TX_SOURCE_CODE  */
+
+
+/* Include necessary system files.  */
+
+/* #include "tx_api.h" */
+/* #include "tx_thread.h" */
+
+
+#ifdef TX_THUMB_MODE
+    .thumb
+#else
+    .arm
+#endif
+    .text
+    .eabi_attribute Tag_ABI_align_preserved, 1
+/**************************************************************************/
+/*                                                                        */
+/*  FUNCTION                                               RELEASE        */
+/*                                                                        */
+/*    _tx_thread_interrupt_restore                      Cortex-R4/AC6     */
+/*                                                           6.1          */
+/*  AUTHOR                                                                */
+/*                                                                        */
+/*    William E. Lamie, Microsoft Corporation                             */
+/*                                                                        */
+/*  DESCRIPTION                                                           */
+/*                                                                        */
+/*    This function is responsible for restoring interrupts to the state  */
+/*    returned by a previous _tx_thread_interrupt_disable call.           */
+/*                                                                        */
+/*  INPUT                                                                 */
+/*                                                                        */
+/*    old_posture                           Old interrupt lockout posture */
+/*                                                                        */
+/*  OUTPUT                                                                */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  CALLS                                                                 */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  CALLED BY                                                             */
+/*                                                                        */
+/*    Application Code                                                    */
+/*                                                                        */
+/**************************************************************************/
+/* UINT   _tx_thread_interrupt_restore(UINT old_posture) */
+/* { */
+    .global _tx_thread_interrupt_restore
+    .type   _tx_thread_interrupt_restore, "function"
+_tx_thread_interrupt_restore:
+
+    /* Apply the new interrupt posture.  */
+
+    MSR     CPSR_c, r0                          // Setup new CPSR
+    BX      lr                                  // Return to caller
+/* } */
+
+
+

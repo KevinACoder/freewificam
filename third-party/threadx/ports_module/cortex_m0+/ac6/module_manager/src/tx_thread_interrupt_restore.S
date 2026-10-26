@@ -1,0 +1,66 @@
+/***************************************************************************
+ * Copyright (c) 2024 Microsoft Corporation
+ * Copyright (c) 2026-present Eclipse ThreadX contributors
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available at
+ * https://opensource.org/licenses/MIT.
+ *
+ * SPDX-License-Identifier: MIT
+ **************************************************************************/
+
+
+/**************************************************************************/
+/**************************************************************************/
+/**                                                                       */
+/** ThreadX Component                                                     */
+/**                                                                       */
+/**   Thread                                                              */
+/**                                                                       */
+/**************************************************************************/
+/**************************************************************************/
+
+    .text 32
+    .align 4
+    .syntax unified
+/**************************************************************************/
+/*                                                                        */
+/*  FUNCTION                                               RELEASE        */
+/*                                                                        */
+/*    _tx_thread_interrupt_restore                     Cortex-M0+/AC6     */
+/*                                                           6.1.10       */
+/*  AUTHOR                                                                */
+/*                                                                        */
+/*    Scott Larson, Microsoft Corporation                                 */
+/*                                                                        */
+/*  DESCRIPTION                                                           */
+/*                                                                        */
+/*    This function is responsible for restoring the previous             */
+/*    interrupt lockout posture.                                          */
+/*                                                                        */
+/*  INPUT                                                                 */
+/*                                                                        */
+/*    previous_posture                      Previous interrupt posture    */
+/*                                                                        */
+/*  OUTPUT                                                                */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  CALLS                                                                 */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  CALLED BY                                                             */
+/*                                                                        */
+/*    Application Code                                                    */
+/*                                                                        */
+/**************************************************************************/
+// VOID   _tx_thread_interrupt_restore(UINT previous_posture)
+// {
+    .global  _tx_thread_interrupt_restore
+    .thumb_func
+_tx_thread_interrupt_restore:
+    /* Restore previous interrupt lockout posture.  */
+    MSR     PRIMASK, r0
+    BX      lr
+// }

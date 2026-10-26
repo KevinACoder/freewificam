@@ -1,0 +1,115 @@
+From 484ea5bfdc2a4ca9387008ac7754d67559c81f9d Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 9 Oct 2026 14:46:30 +0800
+Subject: [PATCH] fix(port/ehci): keep the iaad flag consistent with the qh
+ slot lifecycle
+
+The kill handshake leaves remove_in_iaad set on a slot that is then
+freed: ehci_urb_waitup() returns from its killed == 1 branch after
+killed = 2 without clearing the flag, and ehci_qh_free() does not
+clear it either.  The iaad pool walk only tests the flag, so every
+later iaad replays ehci_urb_waitup() on that slot.  For a slot that
+has been rebound to a new transfer the replay steals the completion
+path (an extra semaphore give, a control transfer reported finished
+while still armed); for a freed slot it dereferences stale state and
+gives a semaphore whose handle is whatever the slot memory now holds,
+which faults in the osal's semaphore give.  The value is
+deterministic because the slot reuse history is, so the same fault
+address shows up across builds.
+
+Fix the lifecycle on all four sides:
+
+ - ehci_qh_alloc(): clear remove_in_iaad and killed inside the claim
+   critical section, so the walk can never observe an in-use slot
+   carrying residue from its previous tenant.  killed was never
+   cleared at all, and a residual 1 also swallowed the new tenant's
+   first completion, which the submitter then reported as a timeout;
+
+ - ehci_urb_waitup(): clear remove_in_iaad in the killed == 1 branch
+   before handing the slot back to the killer;
+
+ - usbh_kill_urb(): on handshake spin timeout, do not abandon the
+   slot.  If the slot still belongs to this urb the kill owns the
+   completion and takes the normal path (free plus callback, the same
+   as the interrupt path); if a concurrent completion already
+   finished the urb, return without touching the slot again;
+
+ - the iaad pool walk: only a live, armed transfer may carry the
+   flag, so require inuse and urb before replaying the completion.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ port/ehci/usb_hc_ehci.c | 27 ++++++++++++++++++++++++---
+ 1 file changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/port/ehci/usb_hc_ehci.c b/port/ehci/usb_hc_ehci.c
+index 2ba1183..32fdddb 100644
+--- a/port/ehci/usb_hc_ehci.c
++++ b/port/ehci/usb_hc_ehci.c
+@@ -88,6 +88,11 @@ static struct ehci_qh_hw *ehci_qh_alloc(struct usbh_bus *bus)
+         qh = &ehci_qh_pool[bus->hcd.hcd_id][i];
+         if (!qh->inuse) {
+             qh->inuse = true;
++            /* Clear the completion flags together with the slot claim, so
++             * the iaad walk can never observe an in-use slot carrying
++             * residue from its previous tenant. */
++            qh->remove_in_iaad = 0;
++            qh->killed = 0;
+             usb_osal_leave_critical_section(flags);
+ 
+             memset(&qh->hw, 0, sizeof(struct ehci_qh));
+@@ -96,7 +101,6 @@ static struct ehci_qh_hw *ehci_qh_alloc(struct usbh_bus *bus)
+             qh->hw.overlay.alt_next_qtd = QTD_LIST_END;
+             qh->urb = NULL;
+             qh->first_qtd = QTD_LIST_END;
+-            qh->remove_in_iaad = 0;
+ 
+             return qh;
+         }
+@@ -635,6 +639,10 @@ static void ehci_urb_waitup(struct usbh_bus *bus, struct usbh_urb *urb)
+     qh = (struct ehci_qh_hw *)urb->hcpriv;
+ 
+     if (qh->killed == 1U) {
++        /* Kill handshake: hand the slot back to the killer. The iaad flag
++         * must go with it, or the slot stays flagged after it is freed and
++         * every later iaad replays waitup on dead or rebound state. */
++        qh->remove_in_iaad = 0;
+         qh->killed = 2U;
+         return;
+     }
+@@ -1403,9 +1411,20 @@ int usbh_kill_urb(struct usbh_urb *urb)
+         while (qh->killed != 2) {
+             timeout++;
+             if (timeout > 200000U) {
++                /* The iaad was consumed before killed went to 1, so no
++                 * interrupt will ever finish the handshake. If the slot
++                 * still belongs to this urb the kill owns the completion;
++                 * if a concurrent completion already finished the urb,
++                 * touching the slot again would double-free it. */
++                flags = usb_osal_enter_critical_section();
++                bool orphan = (qh->inuse && qh->urb == urb && urb->hcpriv == qh);
+                 qh->remove_in_iaad = 0;
+                 qh->killed = 0;
+-                return -USB_ERR_TIMEOUT;
++                usb_osal_leave_critical_section(flags);
++                if (!orphan) {
++                    return -USB_ERR_TIMEOUT;
++                }
++                break;
+             }
+         }
+     } else {
+@@ -1505,7 +1524,9 @@ void USBH_IRQHandler(uint8_t busid)
+     if (usbsts & EHCI_USBSTS_IAA) {
+         for (uint8_t index = 0; index < CONFIG_USB_EHCI_QH_NUM; index++) {
+             struct ehci_qh_hw *qh = &ehci_qh_pool[bus->hcd.hcd_id][index];
+-            if (qh->remove_in_iaad) {
++            /* Only a live, armed transfer may carry the iaad flag; skip
++             * anything else instead of replaying waitup on it. */
++            if (qh->remove_in_iaad && qh->inuse && qh->urb) {
+                 ehci_urb_waitup(bus, qh->urb);
+             }
+         }
+-- 
+2.43.0
+

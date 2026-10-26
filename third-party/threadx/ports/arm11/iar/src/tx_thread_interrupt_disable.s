@@ -1,0 +1,94 @@
+;/***************************************************************************
+; * Copyright (c) 2024 Microsoft Corporation
+; *
+; * This program and the accompanying materials are made available under the
+; * terms of the MIT License which is available at
+; * https://opensource.org/licenses/MIT.
+; *
+; * SPDX-License-Identifier: MIT
+; **************************************************************************/
+;
+;
+;/**************************************************************************/
+;/**************************************************************************/
+;/**                                                                       */
+;/** ThreadX Component                                                     */
+;/**                                                                       */
+;/**   Thread                                                              */
+;/**                                                                       */
+;/**************************************************************************/
+;/**************************************************************************/
+;
+;#define TX_SOURCE_CODE
+;
+;
+;/* Include necessary system files.  */
+;
+;#include "tx_api.h"
+;#include "tx_thread.h"
+;
+;
+#ifdef TX_ENABLE_FIQ_SUPPORT
+DISABLE_INTS    DEFINE      0xC0                ; IRQ & FIQ interrupts disabled
+#else
+DISABLE_INTS    DEFINE      0x80                ; IRQ interrupts disabled
+#endif
+;
+;
+;
+;/**************************************************************************/
+;/*                                                                        */
+;/*  FUNCTION                                               RELEASE        */
+;/*                                                                        */
+;/*    _tx_thread_interrupt_disable                        ARM11/IAR       */
+;/*                                                            6.1         */
+;/*  AUTHOR                                                                */
+;/*                                                                        */
+;/*    William E. Lamie, Microsoft Corporation                             */
+;/*                                                                        */
+;/*  DESCRIPTION                                                           */
+;/*                                                                        */
+;/*    This function is responsible for disabling interrupts               */
+;/*                                                                        */
+;/*  INPUT                                                                 */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  OUTPUT                                                                */
+;/*                                                                        */
+;/*    old_posture                           Old interrupt lockout posture */
+;/*                                                                        */
+;/*  CALLS                                                                 */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  CALLED BY                                                             */
+;/*                                                                        */
+;/*    Application Code                                                    */
+;/*                                                                        */
+;/**************************************************************************/
+;UINT   _tx_thread_interrupt_disable(VOID)
+;{
+    RSEG    .text:CODE:NOROOT(2)
+    PUBLIC _tx_thread_interrupt_disable
+    CODE32
+_tx_thread_interrupt_disable??rA
+_tx_thread_interrupt_disable
+;
+;    /* Pickup current interrupt lockout posture.  */
+;
+    MRS     r0, CPSR                            ; Pickup current CPSR
+;
+;    /* Mask interrupts.  */
+;
+    ORR     r1, r0, #DISABLE_INTS               ; Mask interrupts
+    MSR     CPSR_cxsf, r1                       ; Setup new CPSR
+#ifdef TX_THUMB
+    BX      lr                                  ; Return to caller
+#else
+    MOV     pc, lr                              ; Return to caller
+#endif
+;}
+;
+;
+    END

@@ -1,0 +1,25 @@
+# Ignored documentation outputs
+Documentation/Doxygen/*.dxy
+Documentation/Doxygen/src/history.txt
+Documentation/html
+
+# Ignored IDE and cbuild outputs
+**/_*
+**/out
+**/tmp
+**.cbuild*.yml
+**.clangd
+
+# Ignored gen_pack outputs
+build
+output
+**/linkchecker-out.csv
+
+# Ignored libraries
+**.a
+**.lib
+
+# Other files and directories
+**.bak
+**.DS_STORE
+**.tar.bz2

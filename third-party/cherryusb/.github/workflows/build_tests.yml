@@ -1,0 +1,179 @@
+name: Build Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build_hpmicro:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Download hpm_sdk
+        run: |
+          cd ~
+          git clone https://github.com/hpmicro/hpm_sdk.git
+
+      - name: Download RISC-V toolchain
+        run: |
+          cd ~
+          wget https://github.com/hpmicro/riscv-gnu-toolchain/releases/download/2023.10.18/rv32imac_zicsr_zifencei_multilib_b_ext-linux.tar.gz
+          tar -xzf rv32imac_zicsr_zifencei_multilib_b_ext-linux.tar.gz
+
+      - name: Build hpm demo
+        run: |
+          export HPM_SDK_BASE=~/hpm_sdk
+          export GNURISCV_TOOLCHAIN_PATH=~/rv32imac_zicsr_zifencei_multilib_b_ext-linux
+          export HPM_SDK_TOOLCHAIN_VARIANT=
+          cd tests/hpmicro
+          cmake -S . -B build -GNinja -DBOARD=hpm6800evk -DHPM_BUILD_TYPE=flash_sdram_xip -DCMAKE_BUILD_TYPE=debug -DEXTRA_C_FLAGS="-Werror";cmake --build build
+
+  build_bouffalolab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake make
+
+      - name: Download bouffalo_sdk
+        run: |
+          cd ~
+          git clone https://github.com/bouffalolab/bouffalo_sdk.git
+
+      - name: Download RISC-V toolchain
+        run: |
+          cd ~
+          git clone https://github.com/bouffalolab/toolchain_gcc_t-head_linux.git
+
+      - name: Build bouffalo demo
+        run: |
+          export BL_SDK_BASE=~/bouffalo_sdk
+          export PATH=~/toolchain_gcc_t-head_linux/bin:$PATH
+          cd tests/bouffalolab
+          make CHIP=bl616 BOARD=bl616dk -j12
+
+  build_espressif:
+    strategy:
+      matrix:
+        idf_ver: ["latest"]
+    runs-on: ubuntu-latest
+    container: espressif/idf:${{ matrix.idf_ver }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Build espressif demo
+        shell: bash
+        run: |
+          . ${IDF_PATH}/export.sh
+          pip install idf-component-manager ruamel.yaml idf-build-apps --upgrade
+          idf-build-apps build -p ./tests/espressif --recursive --target esp32s3
+
+  build_rtthread:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@main
+        with:
+          python-version: 3.8
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          wget https://raw.githubusercontent.com/RT-Thread/env/master/install_ubuntu.sh
+          chmod 777 install_ubuntu.sh
+          ./install_ubuntu.sh
+
+      - name: Download sdk-bsp-stm32h7r-realthread-artpi2
+        run: |
+          cd ~
+          git clone https://github.com/sakumisu/sdk-bsp-stm32h7r-realthread-artpi2.git
+
+      - name: Download ARM toolchain
+        run: |
+          cd ~
+          wget -c https://github.com/RT-Thread/toolchains-ci/releases/download/v1.8/arm-gnu-toolchain-13.2.rel1-x86_64-arm-none-eabi.tar.xz
+          sudo tar -xf arm-gnu-toolchain-13.2.rel1-x86_64-arm-none-eabi.tar.xz -C /opt
+          /opt/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-gcc --version
+
+      - name: Build rtthread demo
+        run: |
+          rm -rf ~/sdk-bsp-stm32h7r-realthread-artpi2/projects/art_pi2_cherryusb_usbhost/packages/CherryUSB-latest
+          cp ../CherryUSB ~/sdk-bsp-stm32h7r-realthread-artpi2/projects/art_pi2_cherryusb_usbhost/packages/CherryUSB-latest -r
+          rm -rf ~/sdk-bsp-stm32h7r-realthread-artpi2/projects/art_pi2_cherryusb_usbdev_cdc_acm/packages/CherryUSB-latest
+          cp ../CherryUSB ~/sdk-bsp-stm32h7r-realthread-artpi2/projects/art_pi2_cherryusb_usbdev_cdc_acm/packages/CherryUSB-latest -r
+          cd ~/sdk-bsp-stm32h7r-realthread-artpi2
+          source ~/.env/env.sh
+          export RTT_ROOT=~/sdk-bsp-stm32h7r-realthread-artpi2/rt-thread
+          export RTT_CC=gcc
+          export RTT_EXEC_PATH=/opt/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin
+          cd ~/sdk-bsp-stm32h7r-realthread-artpi2/projects/art_pi2_cherryusb_usbdev_cdc_acm
+          scons -j8
+          cd ~/sdk-bsp-stm32h7r-realthread-artpi2/projects/art_pi2_cherryusb_usbhost
+          scons -j8
+
+  build_wch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y make
+
+      - name: Download wch demo repo
+        run: |
+          cd ~
+          git clone https://github.com/CherryUSB/wch-support-cherryusb.git --recursive
+      - name: Download RISC-V toolchain
+        run: |
+          cd ~
+          wget https://github.com/CherryUSB/wch-support-cherryusb/releases/download/v1.0/MRS_Toolchain_Linux_X64_V240.tar.xz
+          tar -xJf MRS_Toolchain_Linux_X64_V240.tar.xz
+
+      - name: Build wch demo
+        run: |
+          rm -rf ~/wch-support-cherryusb/CherryUSB
+          cp ../CherryUSB ~/wch-support-cherryusb/CherryUSB -r
+          export PATH=~/Toolchain/riscv32-wch-elf-gcc/bin:$PATH
+          cd ~/wch-support-cherryusb
+          make all -j8 CHIP=ch32h417qeu6 IP=usbfs
+          make clear
+          make all -j8 CHIP=ch32h417qeu6 IP=usbhs
+
+  build_sifli:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: sudo apt-get install git wget flex bison gperf cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
+      - name: Download sifli_sdk
+        run: |
+          cd ~
+          git clone https://github.com/OpenSiFli/SiFli-SDK --recursive -b release/v2.5
+
+      - name: Build sifli demo
+        run: |
+          rm -rf ~/SiFli-SDK/external/cherryusb
+          cp ../CherryUSB ~/SiFli-SDK/external/cherryusb -r
+          cd ~/SiFli-SDK
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          ./install.sh
+          . export.sh
+          cd ~/SiFli-SDK/example/cherryusb/device/cdc_hid_msc/project
+          scons --board=sf32lb52-lcd_n16r8 -j8
+          cd ~/SiFli-SDK/example/cherryusb/host/msc_host/project
+          scons --board=sf32lb52-lcd_n16r8 -j8

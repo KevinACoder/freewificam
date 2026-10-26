@@ -1,0 +1,74 @@
+/***************************************************************************
+ * Copyright (c) 2024 Microsoft Corporation
+ * Copyright (c) 2026-present Eclipse ThreadX contributors
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available at
+ * https://opensource.org/licenses/MIT.
+ *
+ * SPDX-License-Identifier: MIT
+ **************************************************************************/
+
+
+/**************************************************************************/
+/**************************************************************************/
+/**                                                                       */
+/** ThreadX Component                                                     */
+/**                                                                       */
+/**   Module                                                              */
+/**                                                                       */
+/**************************************************************************/
+/**************************************************************************/
+
+#define TXM_MODULE
+#include "txm_module.h"
+#ifndef TXM_EVENT_FLAGS_CREATE_CALL_NOT_USED
+/**************************************************************************/
+/*                                                                        */
+/*  FUNCTION                                               RELEASE        */
+/*                                                                        */
+/*    _txe_event_flags_create                             PORTABLE C      */
+/*                                                           6.1.10       */
+/*  AUTHOR                                                                */
+/*                                                                        */
+/*    Scott Larson, Microsoft Corporation                                 */
+/*                                                                        */
+/*  DESCRIPTION                                                           */
+/*                                                                        */
+/*    This function checks for errors in the event flag creation function */
+/*    call.                                                               */
+/*                                                                        */
+/*  INPUT                                                                 */
+/*                                                                        */
+/*    group_ptr                         Pointer to event flags group      */
+/*                                        control block                   */
+/*    name_ptr                          Pointer to event flags name       */
+/*    event_control_block_size          Size of event flags control block */
+/*                                                                        */
+/*  OUTPUT                                                                */
+/*                                                                        */
+/*    TX_GROUP_ERROR                    Invalid event flag group pointer  */
+/*    TX_CALLER_ERROR                   Invalid calling function          */
+/*    status                            Actual completion status          */
+/*                                                                        */
+/*  CALLS                                                                 */
+/*                                                                        */
+/*    _txm_module_kernel_call_dispatcher                                  */
+/*                                                                        */
+/*  CALLED BY                                                             */
+/*                                                                        */
+/*    Module application code                                             */
+/*                                                                        */
+/**************************************************************************/
+UINT _txe_event_flags_create(TX_EVENT_FLAGS_GROUP *group_ptr, CHAR *name_ptr, UINT event_control_block_size)
+{
+
+UINT return_value;
+
+    /* Call module manager dispatcher.  */
+    return_value = (UINT) (_txm_module_kernel_call_dispatcher)(TXM_EVENT_FLAGS_CREATE_CALL, (ALIGN_TYPE) group_ptr, (ALIGN_TYPE) name_ptr, (ALIGN_TYPE) event_control_block_size);
+
+    /* Return value to the caller.  */
+    return(return_value);
+}
+#endif

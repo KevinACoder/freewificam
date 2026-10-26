@@ -1,0 +1,33 @@
+project:
+
+  processor:
+    trustzone: secure
+
+  packs:
+    - pack: ARM::CMSIS-FreeRTOS
+
+  components:
+    - component: RTOS&FreeRTOS:TrustZone
+
+  groups:
+    - group: Documentation
+      files:
+        - file: ../README.md
+
+    - group: Secure Code
+      files:
+        - file: app_main_s.c
+
+    - group: Secure Library
+      files:
+        - file: library_nsc.c
+
+  layers:
+    - layer: $Board-Layer$
+
+  # List executable file formats to be generated.
+  output:
+    type:
+      - elf
+      - hex
+      - map

@@ -1,0 +1,82 @@
+/***************************************************************************
+ * Copyright (c) 2024 Microsoft Corporation
+ * Copyright (c) 2026-present Eclipse ThreadX contributors
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available at
+ * https://opensource.org/licenses/MIT.
+ *
+ * SPDX-License-Identifier: MIT
+ **************************************************************************/
+
+
+/**************************************************************************/
+/**************************************************************************/
+/**                                                                       */
+/** ThreadX Component                                                     */
+/**                                                                       */
+/**   Thread                                                              */
+/**                                                                       */
+/**************************************************************************/
+/**************************************************************************/
+
+
+    RETURN_MASK =   0x0001
+    SET_SR_MASK_U = 0xFFFF
+    SET_SR_MASK_L = 0xFFFE
+
+    .text
+    .set    noreorder
+/**************************************************************************/
+/*                                                                        */
+/*  FUNCTION                                               RELEASE        */
+/*                                                                        */
+/*    _tx_thread_interrupt_control                  MIPS32_interAptiv/GNU */
+/*                                                           6.2.1        */
+/*  AUTHOR                                                                */
+/*                                                                        */
+/*    Scott Larson, Microsoft Corporation                                 */
+/*                                                                        */
+/*  DESCRIPTION                                                           */
+/*                                                                        */
+/*    This function is responsible for changing the interrupt lockout     */
+/*    posture of the system.                                              */
+/*                                                                        */
+/*  INPUT                                                                 */
+/*                                                                        */
+/*    new_posture                           New interrupt lockout posture */
+/*                                                                        */
+/*  OUTPUT                                                                */
+/*                                                                        */
+/*    old_posture                           Old interrupt lockout posture */
+/*                                                                        */
+/*  CALLS                                                                 */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  CALLED BY                                                             */
+/*                                                                        */
+/*    Application Code                                                    */
+/*                                                                        */
+/**************************************************************************/
+/* UINT   _tx_thread_interrupt_control(UINT new_posture)
+{  */
+    .globl  _tx_thread_interrupt_control
+_tx_thread_interrupt_control:
+
+    /* Pickup current interrupt lockout posture.  */
+
+    mfc0    $8, $12                         # Pickup current SR
+    andi    $2, $8, RETURN_MASK             # Return value back to caller
+
+    /* Apply the new interrupt posture.  */
+
+    lui     $9, SET_SR_MASK_U               # Build set SR mask
+    ori     $9, $9, SET_SR_MASK_L           #
+    and     $8, $8, $9                      # Isolate interrupt lockout bits
+    or      $8, $8, $4                      # Put new lockout bits in
+    mtc0    $8, $12                         # Set new interrupt lockout
+    jr.hb   $31                             # Return to caller
+    nop                                     # Delay slot
+/* }  */
+

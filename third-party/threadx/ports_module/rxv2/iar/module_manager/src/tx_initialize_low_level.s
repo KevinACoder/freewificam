@@ -1,0 +1,94 @@
+/***************************************************************************
+ * Copyright (c) 2024 Microsoft Corporation
+ * Copyright (c) 2026-present Eclipse ThreadX contributors
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available at
+ * https://opensource.org/licenses/MIT.
+ *
+ * SPDX-License-Identifier: MIT
+ **************************************************************************/
+
+
+/**************************************************************************/
+/**************************************************************************/
+/**                                                                       */
+/** ThreadX Component                                                     */
+/**                                                                       */
+/**   Initialize                                                          */
+/**                                                                       */
+/**************************************************************************/
+/**************************************************************************/
+
+    extern __tx_initialize_unused_memory
+
+    section .text:CODE:ROOT
+
+/**************************************************************************/
+/*                                                                        */
+/*  FUNCTION                                               RELEASE        */
+/*                                                                        */
+/*    _tx_initialize_low_level                             RXv2/IAR       */
+/*                                                           6.1.10       */
+/*  AUTHOR                                                                */
+/*                                                                        */
+/*    William E. Lamie, Microsoft Corporation                             */
+/*                                                                        */
+/*  DESCRIPTION                                                           */
+/*                                                                        */
+/*    This function is responsible for any low-level processor            */
+/*    initialization, including setting up interrupt vectors, setting     */
+/*    up a periodic timer interrupt source, saving the system stack       */
+/*    pointer for use in ISR processing later, and finding the first      */
+/*    available RAM memory address for tx_application_define.             */
+/*                                                                        */
+/*  INPUT                                                                 */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  OUTPUT                                                                */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  CALLS                                                                 */
+/*                                                                        */
+/*    None                                                                */
+/*                                                                        */
+/*  CALLED BY                                                             */
+/*                                                                        */
+/*    _tx_initialize_kernel_enter           ThreadX entry function        */
+/**************************************************************************/
+    public __tx_initialize_low_level
+
+__tx_initialize_low_level:
+
+    /* Save the first available memory address.  */
+    // _tx_initialize_unused_memory =  (VOID_PTR) &free_mem_start;
+
+    MOV.L    #__tx_free_memory_start, R1        // Pick up unused memory address
+    MOV.L    #__tx_initialize_unused_memory,R2
+    MOV.L    R1,[R2]                            // Save first free memory address
+
+    /* Set priority of SWINT to 1. */
+    MOV.L    #0x87303, r1
+    MOV.L    #1, r2
+    MOV.B    r2, [r1]
+
+    /* Enable SWINT. */
+    MOV.L    #0x87203, r1
+    MOV.B    [r1], r2
+    OR       #(1 << 3), r2
+    MOV.B    r2, [r1]
+
+    /* Enable SWINT2. */
+    OR       #(1 << 2), r2
+    MOV.B    r2, [r1]
+
+    RTS
+
+    section FREEMEM:DATA
+    public __tx_free_memory_start
+__tx_free_memory_start
+    DS32    4
+
+    END
