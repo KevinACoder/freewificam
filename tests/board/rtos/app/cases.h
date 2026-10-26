@@ -60,6 +60,18 @@ int case_pcie_7260_run(void);
 int case_iwl7260_run(void);
 #endif
 
+#if defined(RTOS_CASE_IWL7260_SCAN)
+int case_iwl7260_scan_run(void);
+#endif
+
+#if defined(RTOS_CASE_IWL7260_JOIN)
+int case_iwl7260_join_run(void);
+#endif
+
+#if defined(RTOS_CASE_IWL7260_DATAPLANE)
+int case_iwl7260_dataplane_run(void);
+#endif
+
 #if defined(RTOS_CASE_WLAN)
 int case_wlan_run(void);
 void case_wlan_prepare(void);

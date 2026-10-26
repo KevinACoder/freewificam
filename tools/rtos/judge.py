@@ -20,7 +20,20 @@ import re
 import sys
 from pathlib import Path
 
-CASES = ("tick", "cmsis2", "net", "emmc", "wlan", "pcie", "pcie_bench", "pcie_7260", "iwl7260")
+CASES = (
+    "tick",
+    "cmsis2",
+    "net",
+    "emmc",
+    "wlan",
+    "pcie",
+    "pcie_bench",
+    "pcie_7260",
+    "iwl7260",
+    "iwl7260_scan",
+    "iwl7260_join",
+    "iwl7260_dataplane",
+)
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
 FLAGS = re.MULTILINE
@@ -134,6 +147,57 @@ LIST_PATTERNS = {
     ),
     "iwl7260_platform": re.compile(
         r"iwl7260: platform-inactive (?P<reason>.+)$", re.MULTILINE
+    ),
+    # the ladder cases: scan -> open join -> raw-L2 dataplane
+    "iwl7260_scan_start": re.compile(
+        r"iwl7260: scan start state=-?\d+", re.MULTILINE
+    ),
+    "iwl7260_scan_done": re.compile(
+        r"iwl7260: scan done rows=(?P<rows>\d+) bcn=(?P<bcn>\d+) "
+        r"bcnT=(?P<bcnT>\d+) prsp=(?P<prsp>\d+) fcs=(?P<fcs>\d+) "
+        r"scan=(?P<starts>\d+)/(?P<completes>\d+) state=-?\d+ "
+        r"entered=(?P<entered>\d+) close=(?P<close>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_scan_hit": re.compile(
+        r"iwl7260: scan hit bssid=(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"ssid=(?P<ssid>\S*) freq=(?P<freq>\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_scan_fail": re.compile(
+        r"iwl7260: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_join_start": re.compile(
+        r"iwl7260: join start ssid=(?P<ssid>\S+) "
+        r"bssid=(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"state=-?\d+ rc=(?P<rc>-?\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_join_ok": re.compile(
+        r"iwl7260: join ok state=(?P<state>\d+) mgt_tx=(?P<mgt_tx>\d+) "
+        r"txc=(?P<txc>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_join_fail": re.compile(
+        r"iwl7260: join FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_data_arp": re.compile(
+        r"iwl7260: data arp reply src=(?P<src>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}) "
+        r"tx=(?P<tx>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_data_ping": re.compile(
+        r"iwl7260: data ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min_ms>\d+) max_ms=(?P<max_ms>\d+) lost=(?P<lost>\S*)",
+        re.MULTILINE,
+    ),
+    "iwl7260_data_counters": re.compile(
+        r"iwl7260: data counters data_tx=(?P<data_tx>\d+) "
+        r"tx_done=(?P<tx_done>\d+) rx=(?P<rx>\d+) rx_data=(?P<rx_data>\d+)",
+        re.MULTILINE,
+    ),
+    "iwl7260_data_fail": re.compile(
+        r"iwl7260: data FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "pcie_7260_platform": re.compile(
         r"pcie-7260: platform-inactive (?P<reason>.+)$", re.MULTILINE
@@ -347,6 +411,96 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("iwl7260: no firmware ALIVE evidence (loaded firmware version)")
         else:
             notes.append(f"iwl7260: firmware {alive['version']}")
+
+    if cases.get("iwl7260_scan", {}).get("verdict") == "pass":
+        done = found["iwl7260_scan_done"]
+        hit = found["iwl7260_scan_hit"]
+        fail = found["iwl7260_scan_fail"]
+        if fail:
+            errors.append(f"iwl7260_scan: {fail['reason']}")
+        if not done:
+            errors.append("iwl7260_scan: PASS without a scan-done line")
+        else:
+            if int(done["rows"]) == 0:
+                errors.append("iwl7260_scan: empty scan table")
+            if int(done["starts"]) < 1 or int(done["completes"]) < 1:
+                errors.append("iwl7260_scan: the sweep never completed")
+            if int(done["rx"]) == 0:
+                errors.append("iwl7260_scan: no frame reached the stack")
+            notes.append(
+                f"iwl7260_scan: rows={done['rows']} bcn={done['bcn']} "
+                f"prsp={done['prsp']} close={done['close']} rx={done['rx']}"
+            )
+        if not hit:
+            errors.append("iwl7260_scan: target AP not in the table")
+        elif (
+            hit["bssid"].lower() != "d8:3a:dd:26:91:1e"
+            or hit["ssid"] != "lab8189b"
+        ):
+            errors.append(
+                f"iwl7260_scan: hit {hit['bssid']}/{hit['ssid']} is not the bench AP"
+            )
+        else:
+            notes.append(
+                f"iwl7260_scan: hit {hit['ssid']} freq={hit['freq']} "
+                f"rssi={hit['rssi']}"
+            )
+
+    if cases.get("iwl7260_join", {}).get("verdict") == "pass":
+        start = found["iwl7260_join_start"]
+        ok = found["iwl7260_join_ok"]
+        fail = found["iwl7260_join_fail"]
+        if not start:
+            errors.append("iwl7260_join: PASS without a join start line")
+        elif int(start["rc"]) != 0:
+            errors.append(f"iwl7260_join: start rc={start['rc']}")
+        if fail:
+            errors.append(f"iwl7260_join: {fail['reason']}")
+        if not ok:
+            errors.append("iwl7260_join: PASS without a join-ok line")
+        elif int(ok["state"]) != 4:
+            errors.append(f"iwl7260_join: state={ok['state']} is not RUN")
+        elif int(ok["mgt_tx"]) == 0:
+            errors.append("iwl7260_join: RUN with no management frame")
+        elif int(ok["txc"]) == 0:
+            errors.append("iwl7260_join: no transmit completion")
+        else:
+            notes.append(
+                f"iwl7260_join: RUN mgt_tx={ok['mgt_tx']} txc={ok['txc']} "
+                f"rx={ok['rx']}"
+            )
+
+    if cases.get("iwl7260_dataplane", {}).get("verdict") == "pass":
+        arp = found["iwl7260_data_arp"]
+        ping = found["iwl7260_data_ping"]
+        cnt = found["iwl7260_data_counters"]
+        fail = found["iwl7260_data_fail"]
+        if fail:
+            errors.append(f"iwl7260_dataplane: {fail['reason']}")
+        if not arp:
+            errors.append("iwl7260_dataplane: PASS without an arp reply")
+        else:
+            notes.append(f"iwl7260_dataplane: arp from {arp['src']}")
+        if not ping:
+            errors.append("iwl7260_dataplane: PASS without a ping line")
+        elif int(ping["tx"]) != 10:
+            errors.append(f"iwl7260_dataplane: ping tx={ping['tx']}")
+        elif int(ping["rx"]) < 9:
+            errors.append(f"iwl7260_dataplane: ping {ping['rx']}/{ping['tx']}")
+        else:
+            notes.append(
+                f"iwl7260_dataplane: ping {ping['rx']}/{ping['tx']} "
+                f"rtt={ping['min_ms']}-{ping['max_ms']} ms"
+            )
+        if not cnt:
+            errors.append("iwl7260_dataplane: PASS without the counter line")
+        elif int(cnt["data_tx"]) == 0 or int(cnt["rx_data"]) == 0:
+            errors.append("iwl7260_dataplane: data counters are zero")
+        else:
+            notes.append(
+                f"iwl7260_dataplane: data_tx={cnt['data_tx']} "
+                f"rx_data={cnt['rx_data']}"
+            )
 
     if cases.get("pcie_7260", {}).get("verdict") == "pass":
         if found["pcie_7260_platform"]:
