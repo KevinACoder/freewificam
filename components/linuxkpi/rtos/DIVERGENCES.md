@@ -45,3 +45,14 @@ not rediscovered later):
 
 Rules: prefer an upstreamable patch over an in-tree edit; keep every edit minimal
 and register it here with file, reason and round.
+
+## 2026-10-26 USB engine import (L3-04) - ledger note
+
+`usb/linuxkpi_usb.c` and its companions were imported this round from the
+carrier's **board-line** tree, byte-identical to the blobs in `PROVENANCE.md`.
+Rows 1-14 above are the history of the host-tier copy (the backend seam, the
+allocation registry, the stripped board diagnostics); the board version already
+carries that shape and its own diagnostics. This round changes none of its
+bytes. The one path edit this import needed is outside this component
+(`ports/cherryusb/lkpi_usb_cherryusb.c`'s seam include), recorded with that
+port's provenance.

@@ -1,0 +1,38 @@
+From 6f0c2f5b9c1e4c3a8d7b2e1f0a9c8d7e6f5a4b3c Mon Sep 17 00:00:00 2001
+From: freewificam L3 line <l3@freewificam.invalid>
+Date: Sun, 26 Oct 2026 18:40:00 +0800
+Subject: [PATCH] rtw89: usb: cap the receive buffer at 8 KiB on the EHCI line
+
+The RTOS EHCI path (CherryUSB host port behind the linuxkpi USB engine)
+completes an asynchronous bulk IN of 20 KiB nowhere: the receive URBs never
+report data, so a scan table stays empty (rx=0) while the probe requests do
+leave the device.  The same driver with an 8 KiB receive buffer receives
+beacons and scan results normally, and the platform's native bulk path (the
+MSC class, 64 KiB commands) has no such limit - the cut is in the linuxkpi
+adapter's asynchronous multi-qTD completion, not in the driver.
+
+This is a platform workaround, not a driver fix: it is applied on the EHCI
+line to keep the receive path alive while the adapter/HCD defect is tracked.
+A 20 KiB receive buffer remains the upstream value and should be restored when
+that defect is fixed.  Frame payloads on the bench (beacons, probe responses,
+ARP, ICMP, the raw-L2 data gate) are far below 8 KiB; an A-MSDU larger than the
+buffer is dropped in aggregation, not corrupted.
+
+Signed-off-by: freewificam L3 line <l3@freewificam.invalid>
+---
+ usb.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/usb.h b/usb.h
+index 3d1a2b4..9c8e7f1 100644
+--- a/usb.h
++++ b/usb.h
+@@ -11,7 +11,7 @@
+ #define RTW89_USB_VENQT_READ		0xc0
+ #define RTW89_USB_VENQT_WRITE		0x40
+ 
+-#define RTW89_USB_RECVBUF_SZ		20480
++#define RTW89_USB_RECVBUF_SZ		8192
+ #define RTW89_USB_RXCB_NUM		8
+ #define RTW89_USB_RX_SKB_NUM		16
+ #define RTW89_USB_MAX_RXQ_LEN		512

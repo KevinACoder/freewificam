@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include <cmsis_os2.h>
+#include <cmsis_os2_ext.h>
 
 #include "../wlan_osal.h"
 
