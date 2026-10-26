@@ -2391,7 +2391,14 @@ bridge_fetch_node(void *arg, struct ieee80211_node *ni)
 	o->freq = ni->ni_chan != NULL ? ni->ni_chan->ic_freq : 0;
 	o->beacon_int = (uint16_t)ni->ni_intval;
 	o->caps = (uint16_t)ni->ni_capinfo;
-	o->level = (int)ni->ni_rssi;
+	/*
+	 * ni_rssi is NetBSD's u_int8_t "recv ssi" slot: the drivers store a
+	 * signed dBm value in it (two's complement), and the stack's own ioctl
+	 * path reads it back through int8_t.  Reading the byte unsigned turned
+	 * the 8188's -47 dBm into 209 dBm in the scan table (L3-08, frt-scan-1),
+	 * so the presentation layer does what the stack does.
+	 */
+	o->level = (int)(int8_t)ni->ni_rssi;
 	if (ni->ni_rates.rs_nrates != 0) {
 		size_t rn = ni->ni_rates.rs_nrates > 16 ?
 		    16 : (size_t)ni->ni_rates.rs_nrates;
@@ -2552,7 +2559,7 @@ wlan_bridge_scan_walk(void (*cb)(const uint8_t bssid[6], const uint8_t *ssid,
 	TAILQ_FOREACH(ni, &ic->ic_scan.nt_node, ni_list) {
 		cb(ni->ni_bssid, ni->ni_essid, ni->ni_esslen,
 		    ni->ni_chan != NULL ? ni->ni_chan->ic_freq : 0,
-		    (int)ni->ni_rssi, arg);
+		    (int)(int8_t)ni->ni_rssi, arg);
 		n++;
 	}
 	return n;
