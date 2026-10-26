@@ -48,5 +48,17 @@ int case_emmc_run(void);
 int case_wlan_run(void);
 void case_wlan_prepare(void);
 #endif
+#if defined(RTOS_CASE_PCIE)
+int case_pcie_run(void);
+#endif
+#if defined(RTOS_CASE_NVME)
+int case_nvme_run(void);
+#endif
+#if defined(RTOS_CASE_NET_E1000E)
+int case_net_e1000e_run(void);
+#endif
+#if defined(RTOS_CASE_NET_GMAC)
+int case_net_gmac_run(void);
+#endif
 
 #endif /* RTOS_APP_CASES_H */

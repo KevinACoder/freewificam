@@ -48,6 +48,18 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_WLAN)
 	{ "wlan", case_wlan_run },
 #endif
+#if defined(RTOS_CASE_PCIE)
+	{ "pcie", case_pcie_run },
+#endif
+#if defined(RTOS_CASE_NVME)
+	{ "nvme", case_nvme_run },
+#endif
+#if defined(RTOS_CASE_NET_E1000E)
+	{ "net-e1000e", case_net_e1000e_run },
+#endif
+#if defined(RTOS_CASE_NET_GMAC)
+	{ "net-gmac", case_net_gmac_run },
+#endif
 };
 
 static const osThreadAttr_t runner_attr = {
@@ -60,6 +72,11 @@ static const osThreadAttr_t runner_attr = {
 	 * a frame, and the driver's power/firmware/HAL chain sits on top, so that
 	 * image gets the reference image's 16 KiB runner stack. */
 #if defined(RTOS_CASE_WLAN)
+	.stack_size = 16384U,
+#elif defined(RTOS_CASE_NVME) || defined(RTOS_CASE_NET_E1000E) || \
+	defined(RTOS_CASE_NET_GMAC)
+	/* The storage round trip and the wired-NIC bring-up (PHY negotiation
+	 * loop, lwIP bring-up) run on this thread. */
 	.stack_size = 16384U,
 #else
 	.stack_size = 8192U,

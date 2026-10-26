@@ -99,8 +99,11 @@ static uint64_t l2_top[512]  __attribute__((aligned(PAGE_GRANULE)));
  * frames sit in this otherwise-unmapped 1GiB region. Only the frames' own
  * 2MiB blocks are filled in as Device; every other entry stays zero, so an
  * access anywhere else in the region raises a translation fault rather than
- * reaching a peripheral by accident. */
+ * reaching a peripheral by accident. Board hook: only boards that define a
+ * selective above-4GiB window (RK3568's DBI frames) compile this table. */
+#if defined(BOARD_MMU_PCIE_DBI0_BASE)
 static uint64_t l2_pcie[512] __attribute__((aligned(PAGE_GRANULE)));
+#endif
 
 /* Page table refining ONE 2MiB block of the image's RAM into 4KiB pages, so
  * the non-cacheable DMA window inside it can carry a different attribute
@@ -143,7 +146,9 @@ static uint64_t device_block_desc(uint64_t base)
  * window's base, so a caller only hands over the window's own extent. The PCIe
  * DBI frames are the only windows mapped this way: their region is above 4GiB,
  * where the flat L1 map stops, and an unmapped entry there faults instead of
- * reaching the frame. */
+ * reaching the frame. Board hook: only boards that define a selective
+ * above-4GiB window (RK3568's DBI frames) compile or call this. */
+#if defined(BOARD_MMU_PCIE_DBI0_BASE)
 static void mmu_map_device_window(uint64_t *l2, uint64_t start, uint64_t end)
 {
 	uint64_t base = start & ~(L1_BLOCK_SIZE - 1ULL);
@@ -157,6 +162,7 @@ static void mmu_map_device_window(uint64_t *l2, uint64_t start, uint64_t end)
 		}
 	}
 }
+#endif
 
 /* Refine the 2MiB block holding the non-cacheable DMA window into 4KiB
  * pages: the window's pages take the non-cacheable attribute, every other
@@ -233,6 +239,7 @@ void mmu_enable(void)
 	 * only mapped part of that region, each a 4MiB Device window. Everything
 	 * else in the table is left zero (unmapped, so it faults). The
 	 * APB/CFG/MEM windows all sit in L1[3] above and need nothing here. */
+#if defined(BOARD_MMU_PCIE_DBI0_BASE)
 	for (i = 0; i < 512U; i++) {
 		l2_pcie[i] = 0;
 	}
@@ -240,6 +247,7 @@ void mmu_enable(void)
 			      BOARD_MMU_PCIE_DBI0_END);
 	mmu_map_device_window(l2_pcie, BOARD_MMU_PCIE_DBI1_BASE,
 			      BOARD_MMU_PCIE_DBI1_END);
+#endif
 
 	/* L1 covering the low 4GiB. */
 	for (i = 0; i < 512U; i++) {
@@ -253,8 +261,33 @@ void mmu_enable(void)
 	l1_table[3] = DESC_TABLE | (uint64_t)(uintptr_t)l2_top;
 	/* The PCIe DBI frames above 4GiB: L1[15] is the 1GiB region
 	 * 0x3c0000000-0x3ffffffff, mapped only where the frames are. */
+#if defined(BOARD_MMU_PCIE_DBI0_BASE)
 	l1_table[BOARD_MMU_PCIE_DBI0_BASE / L1_BLOCK_SIZE] =
 		DESC_TABLE | (uint64_t)(uintptr_t)l2_pcie;
+#endif
+
+	/* Board hook: whole 1GiB Device blocks inside the low 4GiB, replacing
+	 * the Normal default. The firefly v1 board maps L1[1]
+	 * (0x40000000-0x7fffffff) this way - the ECAM config window and the
+	 * IO/MEM32 windows, all MMIO, no DRAM there. Boards without the macro
+	 * keep the Normal blocks above. */
+#ifdef BOARD_MMU_L1_DEVICE_LO
+	for (i = BOARD_MMU_L1_DEVICE_LO; i <= BOARD_MMU_L1_DEVICE_HI; i++) {
+		l1_table[i] = device_block_desc(L1_BLOCK_SIZE * (uint64_t)i);
+	}
+#endif
+
+	/* Board hook: whole 1GiB Device blocks at or above 4GiB, where the
+	 * per-board fill above stops. The firefly v1 board maps indices 64..71 -
+	 * the MEM64 window the firmware may have placed 64-bit endpoint BARs
+	 * into; leaving it unmapped would fault the first probe-only BAR read
+	 * that lands there. */
+#ifdef BOARD_MMU_L1_DEVICE_HI4G_FIRST
+	for (i = BOARD_MMU_L1_DEVICE_HI4G_FIRST;
+	     i <= BOARD_MMU_L1_DEVICE_HI4G_LAST && i < 512U; i++) {
+		l1_table[i] = device_block_desc(L1_BLOCK_SIZE * (uint64_t)i);
+	}
+#endif
 
 	/* L0: where the walk actually starts for a 48-bit VA. Only table
 	 * descriptors are valid at this level. */
@@ -291,6 +324,15 @@ void mmu_enable(void)
 	 * caches come on. */
 	cache_init();
 
+	__asm__ __volatile__("dsb sy" ::: "memory");
+	__asm__ __volatile__("isb" ::: "memory");
+
+	/* Invalidate the whole TLB before the enable store: a write to
+	 * SCTLR_EL1 makes any stale TLB entries UNPREDICTABLE, and on this
+	 * silicon (firefly v1 / this SoC) that manifested as the regime's next
+	 * fetch dying with an EC=0 abort (bring-up rounds 1-5, 2026-10-16).
+	 * The same discipline Linux's primary switch applies. */
+	__asm__ __volatile__("tlbi vmalle1" ::: "memory");
 	__asm__ __volatile__("dsb sy" ::: "memory");
 	__asm__ __volatile__("isb" ::: "memory");
 

@@ -22,8 +22,13 @@
 
 ENTRY(_start)
 
-RAM_BASE = 0x0a000000;
-RAM_TOP  = 0x10000000;
+/* Board override hooks: an image for another load window passes
+ * --defsym=board_ram_base/-top on the link line and wins; the RK3568 numbers
+ * stay the default so every existing build is byte-identical. The firefly v1
+ * image links at 0x90000000 with its top at 0xc0000000, the
+ * window the lab profile loads the flat binary into. */
+RAM_BASE = DEFINED(board_ram_base) ? board_ram_base : 0x0a000000;
+RAM_TOP  = DEFINED(board_ram_top)  ? board_ram_top  : 0x10000000;
 
 /* Two load segments, flags stated explicitly: code+rodata read/execute,
  * data+bss read/write. Without this the linker folds the script's sections

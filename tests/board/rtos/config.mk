@@ -1,4 +1,4 @@
 # The active RTOS build profile. Pick exactly one file from configs/; no
 # per-build command-line switches.
-CONFIG := wlan-obs
+CONFIG := firefly-v1-pcie
 include $(LINE)/configs/$(CONFIG).mk
