@@ -144,8 +144,13 @@ def peer_start_server() -> str:
     # by the listening socket, not by the process existing: iperf2 exits on a
     # bind failure (a port still in use by the previous round), and a process
     # that died after `pgrep` would make the board's client see a reset.
+    # The port, not the process, is the resource: an arm boundary that only
+    # kills the process can leave a listener behind (measured 2026-10-26: two
+    # net arms' new servers died on "Address already in use" and the board's
+    # uplink saw ABORTED_REMOTE).  fuser releases the listener; the wait then
+    # proves the port is free before the new server is started.
     return ssh(
-        "pkill -x iperf >/dev/null 2>&1 || true; "
+        "sudo -n fuser -k 5001/tcp >/dev/null 2>&1 || pkill -x iperf >/dev/null 2>&1 || true; "
         "i=0; while [ $i -lt 20 ] && ss -ltn 2>/dev/null | grep -q ':5001 '; "
         "do i=$((i+1)); sleep 0.25; done; "
         "(setsid iperf -s -p 5001 > /tmp/iperf2-server.log 2>&1 </dev/null &); "
@@ -153,6 +158,24 @@ def peer_start_server() -> str:
         "if ss -ltn 2>/dev/null | grep -q ':5001 '; then echo server-listening; exit 0; fi; "
         "i=$((i+1)); sleep 0.25; done; "
         "echo server-missing; tail -3 /tmp/iperf2-server.log"
+    )
+
+
+def peer_stop_server() -> str:
+    """Stop the iperf2 server and collect its log (the board's uplink witness).
+
+    Each arm starts its own server (peer_start_server) and each arm clears it
+    here, so a rate read in the next arm cannot be the previous arm's server
+    answering with its own counters.  The stop is by exact name: `pkill -f`
+    would match the shell running the command.
+    """
+    return ssh(
+        "sudo -n fuser -k 5001/tcp >/dev/null 2>&1 || pkill -x iperf >/dev/null 2>&1 || true; "
+        "sleep 0.3; "
+        "if ss -ltn 2>/dev/null | grep -q ':5001 '; then "
+        "echo port-5001-still-listening; else echo port-5001-free; fi; "
+        "echo '--- iperf2 server log ---'; tail -20 /tmp/iperf2-server.log 2>/dev/null",
+        timeout=30,
     )
 
 
@@ -434,6 +457,9 @@ def main() -> int:
                 time.sleep(0.5)
     finally:
         session.close()
+        if args.peer:
+            (out / "peer-iperf2-server.log").write_text(
+                peer_stop_server() + "\n")
         if not args.no_power_off:
             end = Session()
             try:

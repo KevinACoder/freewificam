@@ -90,6 +90,21 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTW89_DATAPLANE)
 	{ "rtw89_dataplane", case_rtw89_dataplane_run },
 #endif
+#if defined(RTOS_CASE_RTL8XXXU)
+	{ "rtl8xxxu", case_rtl8xxxu_run },
+#endif
+#if defined(RTOS_CASE_RTL8XXXU_SCAN)
+	{ "rtl8xxxu_scan", case_rtl8xxxu_scan_run },
+#endif
+#if defined(RTOS_CASE_RTL8XXXU_JOIN)
+	{ "rtl8xxxu_join", case_rtl8xxxu_join_run },
+#endif
+#if defined(RTOS_CASE_RTL8XXXU_DATAPLANE)
+	{ "rtl8xxxu_dataplane", case_rtl8xxxu_dataplane_run },
+#endif
+#if defined(RTOS_CASE_RTL8XXXU_NET)
+	{ "rtl8xxxu_net", case_rtl8xxxu_net_run },
+#endif
 };
 
 static const osThreadAttr_t runner_attr = {
@@ -104,7 +119,9 @@ static const osThreadAttr_t runner_attr = {
 #if defined(RTOS_CASE_WLAN) || defined(RTOS_CASE_IWL7260_SCAN) || \
     defined(RTOS_CASE_IWL7260_JOIN) || defined(RTOS_CASE_IWL7260_DATAPLANE) || \
     defined(RTOS_CASE_RTW89) || defined(RTOS_CASE_RTW89_SCAN) || \
-    defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE)
+    defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE) || \
+    defined(RTOS_CASE_RTL8XXXU) || defined(RTOS_CASE_RTL8XXXU_SCAN) || \
+    defined(RTOS_CASE_RTL8XXXU_JOIN) || defined(RTOS_CASE_RTL8XXXU_DATAPLANE)
 	.stack_size = 16384U,
 #else
 	.stack_size = 8192U,

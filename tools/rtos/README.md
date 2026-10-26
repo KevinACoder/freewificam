@@ -20,7 +20,8 @@ tools/rtos/judge.py <run-dir>/boot1/serial.log --json /tmp/judge.json
 
 | entry | what it owns |
 |---|---|
-| `build.sh` | the environment and the fingerprint printout (size, sha256, the banner's build tag) around `make -C tests/board/rtos/build` |
+| `build.sh` | the environment, the elapsed-time line (the dev-loop budget is one profile under a minute) and the fingerprint printout (size, sha256, the banner's build tag) around `make -C tests/board/rtos/build` |
+| `fw-blob.py` | generates/verifies a compiled-in firmware blob (`--in`, `--name`, `--symbol`, `--out`; `--check` re-extracts and compares). The blobs themselves are gitignored; `docs/FIRMWARE-NOTICES.md` carries the digests, the source path and the redistribution terms |
 | `board-round.py` | one boot: stage under the deploy name the lab's `rtos` profile expects, boot with a power cycle, capture the serial log, drive the peer when the image says its network case is ready, power off, judge |
 | `judge.py` | the anchor language of the image, per-case verdicts, and the evidence checks that must accompany a `PASS` |
 

@@ -144,7 +144,7 @@ CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
@@ -452,13 +452,18 @@ endif
 # The USB host domain (empty unless a USB consumer is selected).  It must be
 # included before rtw89.mk: the wireless world's linuxkpi USB engine compiles
 # against the same CherryUSB include roots and stage geometry.
-ifneq ($(filter usb_xhci usb_ehci rtw89,$(CASES)),)
+ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu,$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
 
 # The RTL8851BU wireless world (empty unless the rtw89 case is selected).
 ifneq ($(filter rtw89,$(CASES)),)
 include $(CURDIR)/rtw89.mk
+endif
+
+# The RTL8188EUS wireless world (empty unless the rtl8xxxu case is selected).
+ifneq ($(filter rtl8xxxu,$(CASES)),)
+include $(CURDIR)/rtl8xxxu.mk
 endif
 
 BASE_SRCS := \
@@ -544,13 +549,14 @@ FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
-	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(RTW89_ALL_SRCS)
+	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(RTW89_ALL_SRCS) \
+	$(RTL8XXXU_ALL_SRCS) $(RTL8XXXU_NET_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
 
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(PLATFORM)/arch/aarch64/baremetal.ld \
-	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) $(RTW89_LDFLAGS) \
+	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) $(RTW89_LDFLAGS) $(RTL8XXXU_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
@@ -593,6 +599,11 @@ $(FLAG_STAMP): FORCE $(WLAN_STAMP)
 		'usb: $(USB_CFLAGS)' 'rtw89-net80211: $(RTW89_BSD_CFLAGS)' \
 		'rtw89-kpi: $(RTW89_KPI_CFLAGS)' 'rtw89-drv: $(RTW89_DRV_CFLAGS)' \
 		'rtw89-case: $(RTW89_CASE_CFLAGS)' \
+		'rtl8xxxu-net80211: $(RTL8XXXU_BSD_CFLAGS)' \
+		'rtl8xxxu-kpi: $(RTL8XXXU_KPI_CFLAGS)' \
+		'rtl8xxxu-drv: $(RTL8XXXU_DRV_CFLAGS)' \
+		'rtl8xxxu-case: $(RTL8XXXU_CASE_CFLAGS)' \
+		'rtl8xxxu-net: $(RTL8XXXU_NET_CFLAGS)' \
 		'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 
@@ -629,6 +640,17 @@ $(foreach s,$(filter-out %.S,$(RTW89_NET80211_SRCS) $(RTW89_NPORT_SRCS) $(RTW89_
 $(foreach s,$(filter-out %.S,$(RTW89_LKPI_SRCS) $(RTW89_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW89_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW89_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CASE_CFLAGS))))
+endif
+
+ifneq ($(filter rtl8xxxu,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTL8XXXU_NET80211_SRCS) $(RTL8XXXU_NPORT_SRCS) $(RTL8XXXU_BRIDGE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_BSD_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTL8XXXU_LKPI_SRCS) $(RTL8XXXU_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_KPI_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTL8XXXU_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_DRV_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTL8XXXU_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_CASE_CFLAGS))))
+endif
+
+ifneq ($(filter rtl8xxxu_net,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTL8XXXU_NET_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_NET_CFLAGS))))
 endif
 
 $(TARGET).elf: $(OBJS)
@@ -682,6 +704,20 @@ ifneq ($(filter rtw89,$(CASES)),)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx __lkpi_module_rtw_8851bu_driver || \
 		{ echo "FAIL: rtw_8851bu_driver not in .lkpi_module (registry walk would see no driver)"; exit 1; }; \
 	echo "PASS: usb stage=$(RTW89_GATE_STAGE)<=$(USB_STAGE_SIZE) driver registered"
+endif
+ifneq ($(filter rtl8xxxu,$(CASES)),)
+	@set -e; \
+	[ -n "$(RTL8XXXU_GATE_STAGE)" ] || \
+		{ echo "FAIL: RTL8XXXU_STAGE is empty"; exit 1; }; \
+	[ "$(RTL8XXXU_GATE_STAGE)" -ge "$(RTL8XXXU_STAGE_MIN)" ] || \
+		{ echo "FAIL: stage $(RTL8XXXU_GATE_STAGE) < RX URB $(RTL8XXXU_STAGE_MIN): every receive URB would be refused"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_wlan_class_info || \
+		{ echo "FAIL: lkpi_wlan_class_info not in the image (no vendor class hook)"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx __lkpi_module_rtl8xxxu_driver || \
+		{ echo "FAIL: rtl8xxxu_driver not in .lkpi_module (registry walk would see no driver)"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_fw_rtl8188eufw_register || \
+		{ echo "FAIL: the firmware blob unit was garbage-collected"; exit 1; }; \
+	echo "PASS: stage=$(RTL8XXXU_GATE_STAGE)>=rx=$(RTL8XXXU_STAGE_MIN) driver+firmware registered"
 endif
 	@$(SIZE) $(TARGET).elf
 	@printf 'opt: %s\nprofile: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
