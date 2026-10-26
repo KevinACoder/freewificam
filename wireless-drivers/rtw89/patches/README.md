@@ -8,7 +8,7 @@ replay directory.
 |---|---|
 | Upstream | mainline Linux `drivers/net/wireless/realtek/rtw89/` |
 | Pin | `79e12cc959d80b20f9b8499f885faf62cee1ade1` (the orphan branch tip; source matches 7.3.0-rc2) |
-| Patch list | `0001-usb-rx-buffer-8k-for-ehci.patch` (platform workaround: the linuxkpi/EHCI asynchronous bulk path does not complete a 20 KiB receive URB; 8 KiB receives normally) |
+| Patch list | none (zero patch) |
 | Manifest | `MANIFEST.sha256` - the digest of the imported tree, excluding this directory |
 | Verify | `cd wireless-drivers/rtw89 && sha256sum -c patches/MANIFEST.sha256` |
 

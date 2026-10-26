@@ -1398,7 +1398,12 @@ static int xhci_queue_normal(struct xhci_hcd *hcd, struct xhci_dev *dev,
 		}
 		ntrbs += zlp;
 	}
-	if (ntrbs > 8U) {
+	/* A TD may chain more than eight normal TRBs on this controller; the
+	 * old eight-TRB bound capped one command at 512 KiB and refused the
+	 * 1 MiB arm (submit ret=-2) before the device saw it.  Sixteen TRBs =
+	 * 1 MiB of 64 KiB chunks, which is the largest MSC command this line
+	 * issues; the stack array below sizes to the same bound. */
+	if (ntrbs > 16U) {
 		return -USB_ERR_INVAL; /* TD bound */
 	}
 	/* space is xhci_ring_put's verdict (exact need, link crossing
@@ -1409,7 +1414,7 @@ static int xhci_queue_normal(struct xhci_hcd *hcd, struct xhci_dev *dev,
 	}
 
 	{
-		struct xhci_trb trbs[8];
+		struct xhci_trb trbs[16];
 		uintptr_t a = (uintptr_t)buf;
 		uint32_t r = len;
 		uint32_t i = 0U;

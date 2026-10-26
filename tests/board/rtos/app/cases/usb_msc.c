@@ -86,10 +86,10 @@ static uint8_t msc_buf[MSC_BUF_BYTES] __attribute__((aligned(65536)));
 static uint8_t msc_ref[MSC_BUF_BYTES] __attribute__((aligned(65536)));
 static uint8_t msc_blk0[MSC_BLOCK_BYTES] __attribute__((aligned(64)));
 
-/* xHCI's bulk TD is capped at eight 64 KiB TRBs, so a single command larger
- * than 512 KiB is refused by the port (USB_ERR_INVAL) before the device sees
- * it; EHCI chains up to 1 MiB.  The arm list follows the controller. */
-static const uint16_t msc_arm_xhci_kib[] = { 4U, 64U, 512U };
+/* Both controllers carry a 1 MiB single command after the port patches: the
+ * xHCI TD chains sixteen 64 KiB TRBs, the EHCI qTD chain takes the same span
+ * in 20 KiB pieces.  The 1 MiB arm needs the buffers 64 KiB aligned (below). */
+static const uint16_t msc_arm_xhci_kib[] = { 4U, 64U, 1024U };
 static const uint16_t msc_arm_ehci_kib[] = { 4U, 64U, 1024U };
 static const uint16_t msc_sweep_sectors[] = { 16U, 32U, 64U, 128U, 256U };
 

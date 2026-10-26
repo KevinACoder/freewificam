@@ -1,0 +1,43 @@
+From 8e2f5d3b0c1a7e9d4b6f2a3c5e7d9b0a1c2e3f4d Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Sun, 26 Oct 2026 21:10:00 +0800
+Subject: [PATCH] fix(port/xhci): allow a sixteen-TRB TD
+
+The port refused any bulk TD over eight normal TRBs ("submit ret=-2")
+before the controller saw it, so the largest single command was 512 KiB.
+The xHCI transfer ring accepts a chained TD of any legal length and the
+ring-space check below already sizes the exact need; the eight-TRB bound
+was the software's, not the controller's.  Sixteen 64 KiB TRBs cover the
+1 MiB mass-storage arm this line measures against the Linux ground truth,
+and the on-stack TRB array grows to the same bound.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ port/xhci/usb_hc_xhci.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+--- a/port/xhci/usb_hc_xhci.c
++++ b/port/xhci/usb_hc_xhci.c
+@@ -1398,7 +1398,12 @@
+ 		}
+ 		ntrbs += zlp;
+ 	}
+-	if (ntrbs > 8U) {
++	/* A TD may chain more than eight normal TRBs on this controller; the
++	 * old eight-TRB bound capped one command at 512 KiB and refused the
++	 * 1 MiB arm (submit ret=-2) before the device saw it.  Sixteen TRBs =
++	 * 1 MiB of 64 KiB chunks, which is the largest MSC command this line
++	 * issues; the stack array below sizes to the same bound. */
++	if (ntrbs > 16U) {
+ 		return -USB_ERR_INVAL; /* TD bound */
+ 	}
+ 	/* space is xhci_ring_put's verdict (exact need, link crossing
+@@ -1409,7 +1414,7 @@
+ 	}
+ 
+ 	{
+-		struct xhci_trb trbs[8];
++		struct xhci_trb trbs[16];
+ 		uintptr_t a = (uintptr_t)buf;
+ 		uint32_t r = len;
+ 		uint32_t i = 0U;

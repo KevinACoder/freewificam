@@ -1,0 +1,83 @@
+From 7d1e4c2a9b6f8e3d5c0a1b2f4e6d8c9a0b1c2d3e Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Sun, 26 Oct 2026 20:40:00 +0800
+Subject: [PATCH] fix(port/ehci): size a qTD by its five-page span, not 16 KiB
+
+A qTD carries five BPL page addresses and the EHCI spec allows it to move
+up to five 4 KiB pages.  The port instead split every URB at a fixed
+0x4000 (16 KiB), which is safe for any buffer offset but splits the rtw89
+driver's 20 KiB receive URB into a 16 KiB + 4 KiB chain.  On this board
+that chain's asynchronous completion never reached the driver: the receive
+URBs stayed empty, the scan table stayed empty (rx=0), while probe requests
+left normally.  The same driver with an 8 KiB buffer - one qTD - receives
+fine, and the synchronous MSC path (64 KiB, four qTDs) also works, so the
+fault is the chained asynchronous completion, not the driver.
+
+Take the largest chunk that fits the five pages from the buffer's own
+address: page aligned (the linuxkpi stage and the MSC buffers are), a
+20 KiB URB is exactly one qTD; an unaligned buffer splits at its own
+five-page boundary, which is still a legal qTD.  This removes the need for
+any driver-side receive-buffer workaround.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ port/ehci/usb_hc_ehci.c | 30 ++++++++++++++----------------
+ 1 file changed, 14 insertions(+), 16 deletions(-)
+
+--- a/port/ehci/usb_hc_ehci.c
++++ b/port/ehci/usb_hc_ehci.c
+@@ -440,6 +440,22 @@
+     return qh;
+ }
+ 
++/*
++ * One qTD covers at most five 4 KiB pages (the BPL array's size).  The fixed
++ * 0x4000 (16 KiB) split is safe for every buffer offset but splits the rtw89
++ * driver's 20 KiB receive URB into a 16 KiB + 4 KiB chain; that chain's
++ * asynchronous completion never reached the driver (the port's recorded
++ * >16 KiB bulk defect).  Take the largest chunk that still fits the five
++ * pages from this exact address: a page-aligned 20 KiB URB becomes one qTD,
++ * an unaligned buffer still splits at its own five-page boundary.
++ */
++static uint32_t ehci_qtd_max_chunk(uintptr_t bufaddr, uint32_t buflen)
++{
++    uint32_t max = 0x5000u - (uint32_t)(bufaddr & 0xfffu);
++
++    return buflen < max ? buflen : max;
++}
++
+ static struct ehci_qh_hw *ehci_bulk_urb_init(struct usbh_bus *bus, struct usbh_urb *urb, uint8_t *buffer, uint32_t buflen)
+ {
+     struct ehci_qh_hw *qh = NULL;
+@@ -470,13 +486,8 @@
+         qtd = ehci_qtd_alloc(bus);
+         USB_ASSERT_MSG(qtd, "bulk qtd alloc failed");
+ 
+-        if (buflen > 0x4000) {
+-            xfer_len = 0x4000;
+-            buflen -= 0x4000;
+-        } else {
+-            xfer_len = buflen;
+-            buflen = 0;
+-        }
++        xfer_len = ehci_qtd_max_chunk((uintptr_t)buffer, buflen);
++        buflen -= xfer_len;
+ 
+         if (urb->ep->bEndpointAddress & 0x80) {
+             token = QTD_TOKEN_PID_IN;
+@@ -566,13 +577,8 @@
+         qtd = ehci_qtd_alloc(bus);
+         USB_ASSERT_MSG(qtd, "intr qtd alloc failed");
+ 
+-        if (buflen > 0x4000) {
+-            xfer_len = 0x4000;
+-            buflen -= 0x4000;
+-        } else {
+-            xfer_len = buflen;
+-            buflen = 0;
+-        }
++        xfer_len = ehci_qtd_max_chunk((uintptr_t)buffer, buflen);
++        buflen -= xfer_len;
+ 
+         if (urb->ep->bEndpointAddress & 0x80) {
+             token = QTD_TOKEN_PID_IN;
