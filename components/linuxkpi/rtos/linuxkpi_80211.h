@@ -224,6 +224,8 @@ void	lkpi80211_rx_counters(u32 *frames, u32 *first_fc, int *fc_seen);
  * without a diagnostic boot.
  */
 void	lkpi80211_completion_counters(u32 *scan, u32 *tx);
+void	lkpi80211_rx_boundary_counters(u32 *in, u32 *refused, u32 *drops,
+    u32 *frames, u32 *qlen);
 
 /*
  * How many of the transmit completions above carried no ACK

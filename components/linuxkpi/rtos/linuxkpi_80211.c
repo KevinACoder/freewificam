@@ -157,6 +157,11 @@ struct lkpi80211_hw_ctx {
 	 */
 	struct sk_buff		*rxq[CONFIG_LKPI80211_RXQ_DEPTH];
 	unsigned int		rxq_head, rxq_tail, rxq_len;
+	/* the receive path's own boundary counters (driver handed up / linearize
+	 * refused / delivered to the bridge), the discriminator a stalled
+	 * receive count needs above the USB layer */
+	unsigned int		rx_in;
+	unsigned int		rx_lin_refused;
 	struct work_struct	rx_work;
 	struct workqueue_struct *rx_wq;
 	unsigned long		rxq_drops;
@@ -745,6 +750,10 @@ lkpi80211_rx_linearize(struct ieee80211_hw *hw, struct sk_buff *skb)
  * is also the context that completes host commands - a delivery running inline
  * there can deadlock a command whose completion it is itself carrying.
  */
+/* The context whose boundary counters the always-built accessor reports (the
+ * census pointer below exists only in census images). */
+static struct lkpi80211_hw_ctx *lkpi_rx_ctx;
+
 #ifdef CONFIG_LKPI_CENSUS
 /*
  * What one frame costs between this port's queue and the stack's handoff: the
@@ -853,9 +862,14 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	if (hw == NULL || skb == NULL)
 		return;
+	ctx = LKPI80211_CTX(hw);
+	lkpi_rx_ctx = ctx;
+	ctx->rx_in++;
 	skb = lkpi80211_rx_linearize(hw, skb);
-	if (skb == NULL)
+	if (skb == NULL) {
+		ctx->rx_lin_refused++;
 		return;		/* refused, freed, and it said so */
+	}
 #if LKPI_TCP_TRACE_ENABLED
 	{
 		uint64_t t_now = lkpi_census_now_ns();
@@ -1981,6 +1995,45 @@ lkpi80211_completion_counters(u32 *scan, u32 *tx)
 		*scan = lkpi80211_scan_completions;
 	if (tx != NULL)
 		*tx = lkpi80211_tx_completions;
+}
+
+/*
+ * The receive path's boundary counters, for a boot whose bridge receive count
+ * freezes.  in = frames the driver handed to ieee80211_rx_irqsafe; refused =
+ * linearize refused them; frames = the receive worker delivered them to the
+ * bridge; qlen = frames still queued.  Read beside the adapter's rx counter
+ * (bulk-IN completions) they name the segment that stopped: adapter -> driver
+ * (rx frozen), driver -> interface (in frozen while rx grows), or interface ->
+ * bridge (in grows, frames frozen).
+ */
+void
+lkpi80211_rx_boundary_counters(u32 *in, u32 *refused, u32 *drops, u32 *frames, u32 *qlen)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi_rx_ctx;
+
+	if (ctx == NULL) {
+		if (in != NULL)
+			*in = 0;
+		if (refused != NULL)
+			*refused = 0;
+		if (drops != NULL)
+			*drops = 0;
+		if (frames != NULL)
+			*frames = 0;
+		if (qlen != NULL)
+			*qlen = 0;
+		return;
+	}
+	if (in != NULL)
+		*in = ctx->rx_in;
+	if (refused != NULL)
+		*refused = ctx->rx_lin_refused;
+	if (drops != NULL)
+		*drops = (u32)ctx->rxq_drops;
+	if (frames != NULL)
+		*frames = ctx->rx_frames;
+	if (qlen != NULL)
+		*qlen = ctx->rxq_len;
 }
 
 /*
