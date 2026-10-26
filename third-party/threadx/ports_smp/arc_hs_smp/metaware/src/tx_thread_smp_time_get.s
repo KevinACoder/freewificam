@@ -1,0 +1,73 @@
+;/***************************************************************************
+; * Copyright (c) 2024 Microsoft Corporation
+; *
+; * This program and the accompanying materials are made available under the
+; * terms of the MIT License which is available at
+; * https://opensource.org/licenses/MIT.
+; *
+; * SPDX-License-Identifier: MIT
+; **************************************************************************/
+;
+;
+;/**************************************************************************/
+;/**************************************************************************/
+;/**                                                                       */
+;/** ThreadX Component                                                     */
+;/**                                                                       */
+;/**   Thread - Low Level SMP Support                                      */
+;/**                                                                       */
+;/**************************************************************************/
+;/**************************************************************************/
+;
+;
+;#define TX_SOURCE_CODE
+;#define TX_THREAD_SMP_SOURCE_CODE
+;
+;/* Include necessary system files.  */
+;
+;#include "tx_api.h"
+;#include "tx_thread.h"
+;#include "tx_timer.h"  */
+;
+;
+;/**************************************************************************/
+;/*                                                                        */
+;/*  FUNCTION                                               RELEASE        */
+;/*                                                                        */
+;/*    _tx_thread_smp_time_get                         SMP/ARC_HS/MetaWare */
+;/*                                                            6.1         */
+;/*  AUTHOR                                                                */
+;/*                                                                        */
+;/*    William E. Lamie, Microsoft Corporation                             */
+;/*                                                                        */
+;/*  DESCRIPTION                                                           */
+;/*                                                                        */
+;/*    This function gets the global time value that is used for debug     */
+;/*    information and event tracing.                                      */
+;/*                                                                        */
+;/*  INPUT                                                                 */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  OUTPUT                                                                */
+;/*                                                                        */
+;/*    32-bit time stamp                                                   */
+;/*                                                                        */
+;/*  CALLS                                                                 */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  CALLED BY                                                             */
+;/*                                                                        */
+;/*    ThreadX Source                                                      */
+;/*                                                                        */
+;/**************************************************************************/
+    .global _tx_thread_smp_time_get
+    .type   _tx_thread_smp_time_get, @function
+_tx_thread_smp_time_get:
+
+    j_s.d   [blink]                                     ; Return to caller with delay slot
+    lr      r0, [COUNT0]                                ; Return count 0 value
+
+    .end
+

@@ -1,0 +1,74 @@
+name: regression_test
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+# events but only for the master branch
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  tx:
+    permissions:
+      contents: read
+      issues: read
+      checks: write
+      pull-requests: write
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/regression_template.yml
+    with:
+      build_script: ./scripts/build_tx.sh
+      test_script: ./scripts/test_tx.sh
+      cmake_path: ./test/tx/cmake
+      result_affix: ThreadX
+      skip_deploy: true
+  smp:
+    permissions:
+      contents: read
+      issues: read
+      checks: write
+      pull-requests: write
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/regression_template.yml
+    with:
+      build_script: ./scripts/build_smp.sh
+      test_script: ./scripts/test_smp.sh
+      cmake_path: ./test/smp/cmake
+      result_affix: SMP
+      skip_deploy: true
+  # riscv: disabled — re-enable when RISC-V CI is ready
+  # riscv:
+  #   permissions:
+  #     contents: read
+  #     issues: read
+  #     checks: write
+  #     pull-requests: write
+  #     pages: write
+  #     id-token: write
+  #   uses: ./.github/workflows/regression_template.yml
+  #   with:
+  #     install_script: ./scripts/install_riscv.sh
+  #     build_script: ./scripts/build_tx_riscv.sh
+  #     test_script: ./scripts/test_tx_riscv.sh
+  #     cmake_path: ./test/tx/cmake/riscv
+  #     result_affix: RISC-V
+  #     skip_deploy: true
+  #     skip_coverage: true
+  deploy:
+    permissions:
+      contents: read
+      issues: read
+      checks: write
+      pull-requests: write
+      pages: write
+      id-token: write
+    needs: [tx, smp]
+    uses: ./.github/workflows/regression_template.yml
+    with:
+      skip_test: true
+      deploy_list: "ThreadX SMP"

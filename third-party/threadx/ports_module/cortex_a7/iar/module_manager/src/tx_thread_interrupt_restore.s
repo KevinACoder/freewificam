@@ -1,0 +1,88 @@
+;/***************************************************************************
+; * Copyright (c) 2024 Microsoft Corporation
+; *
+; * This program and the accompanying materials are made available under the
+; * terms of the MIT License which is available at
+; * https://opensource.org/licenses/MIT.
+; *
+; * SPDX-License-Identifier: MIT
+; **************************************************************************/
+;
+;
+;/**************************************************************************/
+;/**************************************************************************/
+;/**                                                                       */
+;/** ThreadX Component                                                     */
+;/**                                                                       */
+;/**   Thread                                                              */
+;/**                                                                       */
+;/**************************************************************************/
+;/**************************************************************************/
+
+INT_MASK        EQU         0xC0                ; Interrupt bit mask
+IRQ_MASK        EQU         0x80                ; Interrupt bit mask
+#ifdef TX_ENABLE_FIQ_SUPPORT
+FIQ_MASK        EQU         0x40                ; Interrupt bit mask
+#endif
+
+;/**************************************************************************/
+;/*                                                                        */
+;/*  FUNCTION                                               RELEASE        */
+;/*                                                                        */
+;/*    _tx_thread_interrupt_restore                       Cortex-A7/IAR    */
+;/*                                                           6.3.0        */
+;/*  AUTHOR                                                                */
+;/*                                                                        */
+;/*    William E. Lamie, Microsoft Corporation                             */
+;/*                                                                        */
+;/*  DESCRIPTION                                                           */
+;/*                                                                        */
+;/*    This function is responsible for restoring interrupts to the state  */
+;/*    returned by a previous _tx_thread_interrupt_disable call.           */
+;/*                                                                        */
+;/*  INPUT                                                                 */
+;/*                                                                        */
+;/*    old_posture                           Old interrupt lockout posture */
+;/*                                                                        */
+;/*  OUTPUT                                                                */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  CALLS                                                                 */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  CALLED BY                                                             */
+;/*                                                                        */
+;/*    Application Code                                                    */
+;/*                                                                        */
+;/**************************************************************************/
+;void   _tx_thread_interrupt_restore(UINT old_posture)
+;{
+    RSEG    .text:CODE:NOROOT(2)
+    PUBLIC  _tx_thread_interrupt_restore
+#ifdef THUMB_MODE
+    THUMB
+#else
+    ARM
+#endif
+_tx_thread_interrupt_restore
+
+;   /* Apply the new interrupt posture.  */
+
+    TST     r0, #IRQ_MASK
+    BNE     no_irq
+    CPSIE   i
+no_irq:
+#ifdef TX_ENABLE_FIQ_SUPPORT
+    TST     r0, #FIQ_MASK
+    BNE     no_fiq
+    CPSIE   f
+no_fiq:
+#endif
+
+    BX      lr                                  ; Return to caller
+;}
+;
+    END
+

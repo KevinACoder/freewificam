@@ -1562,13 +1562,27 @@ wlan_bridge_scan_start(void)
 			 */
 			bridge.scan_hw = 0;
 		} else if (hw_rc != 0) {
-			wlan_osal_log("wlan: hw scan refused (freqs=%u)\n",
-			    (unsigned)n_freqs);
-			bridge.scan_hw = 0;
-			(void)bridge.ops->filter(bridge.drv,
-			    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
-			bridge.filter_clears++;
-			return -EIO;
+			wlan_osal_log("wlan: hw scan refused (freqs=%u rc=%d)\n",
+			    (unsigned)n_freqs, hw_rc);
+			if (bridge.ops->sw_scan_start != NULL) {
+				/* The driver registers both routes but its
+				 * offload probe-request path answers an error
+				 * on this port (the adapter builds no scan
+				 * request IE).  mac80211 falls back only on
+				 * the driver's "not supported" answer (1);
+				 * treat any refusal the same way here so the
+				 * software sweep - the live configuration -
+				 * still runs.  The filter is left for the
+				 * software route to set. */
+				wlan_osal_log("wlan: hw scan failed, software sweep\n");
+				bridge.scan_hw = 0;
+			} else {
+				bridge.scan_hw = 0;
+				(void)bridge.ops->filter(bridge.drv,
+				    WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC, 0);
+				bridge.filter_clears++;
+				return -EIO;
+			}
 		}
 	}
 	if (!bridge.scan_hw && bridge.ops->sw_scan_start != NULL &&

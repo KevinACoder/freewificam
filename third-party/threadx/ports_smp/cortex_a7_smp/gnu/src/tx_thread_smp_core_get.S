@@ -1,0 +1,79 @@
+@/***************************************************************************
+@ * Copyright (c) 2024 Microsoft Corporation
+@ *
+@ * This program and the accompanying materials are made available under the
+@ * terms of the MIT License which is available at
+@ * https://opensource.org/licenses/MIT.
+@ *
+@ * SPDX-License-Identifier: MIT
+@ **************************************************************************/
+@
+@
+@/**************************************************************************/
+@/**************************************************************************/
+@/**                                                                       */
+@/** ThreadX Component                                                     */
+@/**                                                                       */
+@/**   Thread - Low Level SMP Support                                      */
+@/**                                                                       */
+@/**************************************************************************/
+@/**************************************************************************/
+@
+@
+@#define TX_SOURCE_CODE
+@#define TX_THREAD_SMP_SOURCE_CODE
+@
+@/* Include necessary system files.  */
+@
+@#include "tx_api.h"
+@#include "tx_thread.h"
+@#include "tx_timer.h"  */
+@
+@
+    .arm
+    .text
+    .align 2
+@/**************************************************************************/
+@/*                                                                        */
+@/*  FUNCTION                                               RELEASE        */
+@/*                                                                        */
+@/*    _tx_thread_smp_core_get                         SMP/Cortex-A7/GNU   */
+@/*                                                            6.1         */
+@/*  AUTHOR                                                                */
+@/*                                                                        */
+@/*    William E. Lamie, Microsoft Corporation                             */
+@/*                                                                        */
+@/*  DESCRIPTION                                                           */
+@/*                                                                        */
+@/*    This function gets the currently running core number and returns it.*/
+@/*                                                                        */
+@/*  INPUT                                                                 */
+@/*                                                                        */
+@/*    None                                                                */
+@/*                                                                        */
+@/*  OUTPUT                                                                */
+@/*                                                                        */
+@/*    Core ID                                                             */
+@/*                                                                        */
+@/*  CALLS                                                                 */
+@/*                                                                        */
+@/*    None                                                                */
+@/*                                                                        */
+@/*  CALLED BY                                                             */
+@/*                                                                        */
+@/*    ThreadX Source                                                      */
+@/*                                                                        */
+@/**************************************************************************/
+    .global _tx_thread_smp_core_get
+    .type   _tx_thread_smp_core_get,function
+_tx_thread_smp_core_get:
+    MRC     p15, 0, r0, c0, c0, 5               @ Read CPU ID register
+    AND     r0, r0, #0x03                       @ Mask off, leaving the CPU ID field
+
+#ifdef __THUMB_INTERWORK
+    BX      lr                                  @ Return to caller
+#else
+    MOV     pc, lr                              @ Return to caller
+#endif
+
+

@@ -1,0 +1,74 @@
+/***************************************************************************
+ * Copyright (c) 2024 Microsoft Corporation
+ * Copyright (c) 2026-present Eclipse ThreadX contributors
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available at
+ * https://opensource.org/licenses/MIT.
+ *
+ * SPDX-License-Identifier: MIT
+ **************************************************************************/
+
+
+/**************************************************************************/
+/**************************************************************************/
+/**                                                                       */
+/** ThreadX Component                                                     */
+/**                                                                       */
+/**   Module                                                              */
+/**                                                                       */
+/**************************************************************************/
+/**************************************************************************/
+
+#define TXM_MODULE
+#include "txm_module.h"
+#ifndef TXM_TIMER_CHANGE_CALL_NOT_USED
+/**************************************************************************/
+/*                                                                        */
+/*  FUNCTION                                               RELEASE        */
+/*                                                                        */
+/*    _txe_timer_change                                   PORTABLE C      */
+/*                                                           6.1.10       */
+/*  AUTHOR                                                                */
+/*                                                                        */
+/*    Scott Larson, Microsoft Corporation                                 */
+/*                                                                        */
+/*  DESCRIPTION                                                           */
+/*                                                                        */
+/*    This function checks for errors in the application timer change     */
+/*    function call.                                                      */
+/*                                                                        */
+/*  INPUT                                                                 */
+/*                                                                        */
+/*    timer_ptr                         Pointer to timer control block    */
+/*    initial_ticks                     Initial expiration ticks          */
+/*    reschedule_ticks                  Reschedule ticks                  */
+/*                                                                        */
+/*  OUTPUT                                                                */
+/*                                                                        */
+/*    TX_TIMER_ERROR                    Invalid application timer pointer */
+/*    TX_TICK_ERROR                     Invalid initial tick value of 0   */
+/*    TX_CALLER_ERROR                   Invalid caller of this function   */
+/*    status                            Actual completion status          */
+/*                                                                        */
+/*  CALLS                                                                 */
+/*                                                                        */
+/*    _txm_module_kernel_call_dispatcher                                  */
+/*                                                                        */
+/*  CALLED BY                                                             */
+/*                                                                        */
+/*    Module application code                                             */
+/*                                                                        */
+/**************************************************************************/
+UINT _txe_timer_change(TX_TIMER *timer_ptr, ULONG initial_ticks, ULONG reschedule_ticks)
+{
+
+UINT return_value;
+
+    /* Call module manager dispatcher.  */
+    return_value = (UINT) (_txm_module_kernel_call_dispatcher)(TXM_TIMER_CHANGE_CALL, (ALIGN_TYPE) timer_ptr, (ALIGN_TYPE) initial_ticks, (ALIGN_TYPE) reschedule_ticks);
+
+    /* Return value to the caller.  */
+    return(return_value);
+}
+#endif

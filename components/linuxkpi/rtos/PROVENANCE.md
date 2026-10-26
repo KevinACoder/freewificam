@@ -108,3 +108,27 @@ the B3 build is the pinned artifact). Paths under `components/linuxkpi/`:
 The top-level `linuxkpi_*.h`/`lkpi_census.h` in `components/linuxkpi/` are
 compatibility shims (`#include "rtos/…"`), needed because the net80211 bridge
 includes `components/linuxkpi/…` by path. They are not a second implementation.
+
+## 2026-10-26 USB engine import (L3-04)
+
+Imported the **board-line** USB engine (not the earlier host-test copy) from the
+same reference tree (`~/workspace/project_rtos_webcam/freewificam@19c5736`),
+byte-identical to the committed blobs there:
+
+| File(s) | Blob | License | Note |
+|---|---|---|---|
+| `usb/linuxkpi_usb.c` | `21deb1d769ab` | BSD-3-Clause | the URB engine over the backend seam (2496 lines; the board version) |
+| `usb/lkpi_usb_backend.h` | - | BSD-3-Clause | the three-call seam the CherryUSB adapter implements |
+| `usb/linuxkpi_usb.h` | - | BSD-3-Clause | engine entry points and the allocation-seam counters |
+| `usb/lkpi_usbh_class.c/.h` | `2bfb78aa4000` (`.c`) | BSD-3-Clause | the CherryUSB class hooks that build the Linux view and run the driver's id_table |
+| `usb/lkpi_usbh_modeswitch.c/.h` | - | BSD-3-Clause | the CD-ROM-persona hook (no device in this line matches; carried for the hook set's completeness) |
+
+Not imported this round: `usb/usbkpi_cmds.c` (console diagnostics; this image
+has no shell) and `usb/tests/**` (GPL-2.0, never moved into this line).
+
+The earlier `DIVERGENCES.md` rows 1-14 describe the host-test copy of the engine
+(2241 lines). They are **not** a description of these bytes: this import is the
+board version, whose source already contains the changes those rows record
+(the backend seam, the allocation registry, the re-arm-before-callback order).
+Its only local difference is the include path in `ports/cherryusb/lkpi_usb_cherryusb.c`
+(recorded in `ports/cherryusb/README.md`).

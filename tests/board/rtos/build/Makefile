@@ -144,7 +144,7 @@ CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
@@ -188,7 +188,7 @@ images:
 
 digest:
 	@set -e; for t in CMSIS_6 CMSIS-FreeRTOS FreeRTOS-Kernel lwip threadx \
-		fsl_sdmmc printf tlsf ulog; do \
+		cherryusb fsl_sdmmc printf tlsf ulog; do \
 		( cd $(ROOT)/third-party/$$t && \
 		  sha256sum -c --quiet patches/MANIFEST.sha256 ); \
 		echo "digest: $$t ok ($$(wc -l < $(ROOT)/third-party/$$t/patches/MANIFEST.sha256) files)"; \
@@ -449,6 +449,18 @@ ifneq ($(filter iwl7260,$(CASES)),)
 include $(CURDIR)/iwlwifi.mk
 endif
 
+# The USB host domain (empty unless a USB consumer is selected).  It must be
+# included before rtw89.mk: the wireless world's linuxkpi USB engine compiles
+# against the same CherryUSB include roots and stage geometry.
+ifneq ($(filter usb_xhci usb_ehci rtw89,$(CASES)),)
+include $(CURDIR)/usb.mk
+endif
+
+# The RTL8851BU wireless world (empty unless the rtw89 case is selected).
+ifneq ($(filter rtw89,$(CASES)),)
+include $(CURDIR)/rtw89.mk
+endif
+
 BASE_SRCS := \
 	$(PLATFORM)/arch/aarch64/start.S \
 	$(PLATFORM)/arch/aarch64/gicv3.c \
@@ -532,13 +544,13 @@ FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
-	$(IWL_NET_SRCS)
+	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(RTW89_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
 
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(PLATFORM)/arch/aarch64/baremetal.ld \
-	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) \
+	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) $(RTW89_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
@@ -578,6 +590,9 @@ endif
 $(FLAG_STAMP): FORCE $(WLAN_STAMP)
 	@mkdir -p $(BUILD)
 	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'wlan: $(WLAN_FLAGS_STAMP)' \
+		'usb: $(USB_CFLAGS)' 'rtw89-net80211: $(RTW89_BSD_CFLAGS)' \
+		'rtw89-kpi: $(RTW89_KPI_CFLAGS)' 'rtw89-drv: $(RTW89_DRV_CFLAGS)' \
+		'rtw89-case: $(RTW89_CASE_CFLAGS)' \
 		'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 
@@ -603,6 +618,17 @@ endif
 
 ifneq ($(filter iwl7260_net,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(IWL_NET_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_NET_CFLAGS))))
+endif
+
+ifneq ($(filter usb_xhci usb_ehci rtw89,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
+endif
+
+ifneq ($(filter rtw89,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTW89_NET80211_SRCS) $(RTW89_NPORT_SRCS) $(RTW89_BRIDGE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_BSD_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW89_LKPI_SRCS) $(RTW89_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_KPI_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW89_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_DRV_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW89_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CASE_CFLAGS))))
 endif
 
 $(TARGET).elf: $(OBJS)
@@ -639,6 +665,24 @@ gates: $(TARGET).elf
 	undef=$$($(NM) -u $(TARGET).elf); \
 	[ -z "$$undef" ] || { echo "FAIL: undefined symbols:"; echo "$$undef"; exit 1; }; \
 	echo "PASS: _start=0x$$start vectors=0x$$vec backend=$(BACKEND) 0 undefined"
+ifneq ($(filter usb_xhci usb_ehci,$(CASES)),)
+	@set -e; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx msc_class_info || \
+		{ echo "FAIL: msc_class_info not in the image (the class table would claim nothing)"; exit 1; }; \
+	echo "PASS: usb msc class table present"
+endif
+ifneq ($(filter rtw89,$(CASES)),)
+	@set -e; \
+	[ -n "$(RTW89_GATE_STAGE)" ] || \
+		{ echo "FAIL: RTW89_USB_RECVBUF_SZ not found in $(RTW89_DRV)/usb.h"; exit 1; }; \
+	[ "$(RTW89_GATE_STAGE)" -le "$(USB_STAGE_SIZE)" ] || \
+		{ echo "FAIL: rtw89 RX $(RTW89_GATE_STAGE) > stage $(USB_STAGE_SIZE): every RX URB would be refused for good"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_wlan_class_info || \
+		{ echo "FAIL: lkpi_wlan_class_info not in the image (no vendor class hook)"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx __lkpi_module_rtw_8851bu_driver || \
+		{ echo "FAIL: rtw_8851bu_driver not in .lkpi_module (registry walk would see no driver)"; exit 1; }; \
+	echo "PASS: usb stage=$(RTW89_GATE_STAGE)<=$(USB_STAGE_SIZE) driver registered"
+endif
 	@$(SIZE) $(TARGET).elf
 	@printf 'opt: %s\nprofile: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip $(PROFILE_CFLAGS)),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt

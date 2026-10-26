@@ -34,6 +34,12 @@ CASES = (
     "iwl7260_join",
     "iwl7260_dataplane",
     "iwl7260_net",
+    "usb_xhci",
+    "usb_ehci",
+    "rtw89",
+    "rtw89_scan",
+    "rtw89_join",
+    "rtw89_dataplane",
 )
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
@@ -120,6 +126,109 @@ PATTERNS = {
     "iwl7260_join_lkpi": re.compile(
         r"iwl7260: join lkpi tx=(?P<tx>\d+) scan=(?P<scan>\d+) wq=(?P<wq>\d+)",
         re.MULTILINE,
+    ),
+    # USB mass-storage rows (A stage) and the RTL8851BU ladder (B stage).
+    "usb_msc_dev": re.compile(
+        r"usbh: msc bus=(?P<bus>\d+) hcd=(?P<hcd>\w+) vid=(?P<vid>[0-9a-f]{4}) "
+        r"pid=(?P<pid>[0-9a-f]{4}) speed=(?P<speed>\d+) blocks=(?P<blocks>\d+) "
+        r"bsize=(?P<bsize>\d+) serial=(?P<serial>\S*)",
+        re.MULTILINE,
+    ),
+    "usb_msc_ep": re.compile(
+        r"usbh: msc ep in=(?P<in_ep>0x[0-9a-f]{2}) type=(?P<in_type>\w+) "
+        r"maxp=(?P<in_mps>\d+) out=(?P<out_ep>0x[0-9a-f]{2}) "
+        r"type=(?P<out_type>\w+) maxp=(?P<out_mps>\d+)",
+        re.MULTILINE,
+    ),
+    "usb_msc_blk0": re.compile(r"usbh: msc blk0 ok", re.MULTILINE),
+    "usb_msc_roundtrip": re.compile(
+        r"usbh: msc roundtrip ok lba=(?P<lba>\d+) len=(?P<len>\d+)",
+        re.MULTILINE,
+    ),
+    "usb_msc_pass": re.compile(r"usbh: msc PASS", re.MULTILINE),
+    "usb_msc_fail": re.compile(r"usbh: msc FAIL (?P<reason>.+)$", re.MULTILINE),
+    "rtw89_buses": re.compile(r"rtw89: usb buses=(?P<buses>\S+)", re.MULTILINE),
+    "rtw89_claim": re.compile(
+        r"lkpi: .*lkpi claim attempt (?P<vid>[0-9a-f]{4}):(?P<pid>[0-9a-f]{4})",
+        re.MULTILINE,
+    ),
+    # the driver's own sink prefix ("lkpiu: ") rides between the case tag and
+    # the firmware line; accept it with or without.
+    "rtw89_fw": re.compile(
+        r"rtw89: fw (?:lkpiu: )?Firmware version (?P<version>\S+)",
+        re.MULTILINE,
+    ),
+    "rtw89_attach": re.compile(
+        r"rtw89: attach ok after (?P<ms>\d+) ms mac=(?P<mac>[0-9a-f:]+)",
+        re.MULTILINE,
+    ),
+    "rtw89_start": re.compile(
+        r"rtw89: start ok attached=(?P<attached>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_usb_stats": re.compile(
+        r"rtw89: usb submits=(?P<submits>\d+) completes=(?P<completes>\d+) "
+        r"refused=(?P<refused>\d+) stage_overflow=(?P<stage_overflow>\d+) "
+        r"slots_exhausted=(?P<slots_exhausted>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_fail": re.compile(r"rtw89: FAIL (?P<reason>.+)$", re.MULTILINE),
+    "rtw89_scan_start": re.compile(
+        r"rtw89: scan start state=(?P<state>-?\d+)", re.MULTILINE
+    ),
+    "rtw89_scan_done": re.compile(
+        r"rtw89: scan done rows=(?P<rows>\d+) bcn=(?P<bcn>\d+) "
+        r"bcnT=(?P<bcnT>\d+) prsp=(?P<prsp>\d+) fcs=(?P<fcs>\d+) "
+        r"scan=(?P<starts>\d+)/(?P<completes>\d+) state=(?P<state>-?\d+) "
+        r"entered=(?P<entered>\d+) close=(?P<close>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_scan_hit": re.compile(
+        r"rtw89: scan hit bssid=(?P<bssid>[0-9a-f:]+) ssid=(?P<ssid>\S+) "
+        r"freq=(?P<freq>\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_scan_lkpi": re.compile(
+        r"rtw89: scan lkpi completions=(?P<completions>\d+) tx=(?P<tx>\d+) "
+        r"wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_scan_fail": re.compile(
+        r"rtw89: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw89_join_start": re.compile(
+        r"rtw89: join start ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"state=(?P<state>-?\d+) rc=(?P<rc>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_join_ok": re.compile(
+        r"rtw89: join ok state=(?P<state>\d+) mgt_tx=(?P<mgt_tx>\d+) "
+        r"txc=(?P<txc>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_join_fail": re.compile(
+        r"rtw89: join FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw89_join_lkpi": re.compile(
+        r"rtw89: join lkpi tx=(?P<tx>\d+) scan=(?P<scan>\d+) wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_arp": re.compile(
+        r"rtw89: data arp reply src=(?P<src>[0-9a-f:]+) tx=(?P<tx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_ping": re.compile(
+        r"rtw89: data ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min>-?\d+) max_ms=(?P<max>-?\d+) lost=(?P<lost>\S*)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_counters": re.compile(
+        r"rtw89: data counters data_tx=(?P<data_tx>\d+) "
+        r"tx_done=(?P<tx_done>\d+) rx=(?P<rx>\d+) rx_data=(?P<rx_data>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_fail": re.compile(
+        r"rtw89: data FAIL (?P<reason>.+)$", re.MULTILINE
     ),
 }
 
@@ -268,6 +377,18 @@ LIST_PATTERNS = {
     "wlan_obs": re.compile(r"wlan: obs .*", re.MULTILINE),
     "wlan_udp": re.compile(r"wlan: udp .*", re.MULTILINE),
     "wlan_ping_seq": re.compile(r"wlan: ping (?:tx|rx) seq=\d+", re.MULTILINE),
+    "usb_msc_io": re.compile(
+        r"usbh: msc io (?P<op>read|write) size_kib=(?P<kib>\d+) "
+        r"runs=(?P<runs>\d+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) "
+        r"rate=(?P<rate>\d+\.\d+) mib_s per_cmd_us=(?P<per_cmd>\d+)",
+        re.MULTILINE,
+    ),
+    "usb_msc_sweep": re.compile(
+        r"usbh: msc sweep (?P<op>read|write) chunk=(?P<kib>\d+) KiB "
+        r"(?P<mib>\d+) MiB in (?P<ms>\d+) ms = (?P<rate>\d+\.\d+) MiB/s "
+        r"per_cmd_us=(?P<per_cmd>\d+)",
+        re.MULTILINE,
+    ),
 }
 
 
@@ -783,6 +904,229 @@ def judge(text: str, expect: dict | None = None) -> dict:
         if "emmc_product" in expect and found["emmc_cid"]:
             if found["emmc_cid"]["product"] != expect["emmc_product"]:
                 errors.append("emmc: product name differs from the Linux readback")
+
+    for case in ("usb_xhci", "usb_ehci"):
+        if cases.get(case, {}).get("verdict") != "pass":
+            continue
+        fail = found["usb_msc_fail"]
+        # a pattern without named groups matches to an empty dict, which is
+        # falsy: absence is None, not falsiness, for these two anchors.
+        if fail and found["usb_msc_pass"] is None:
+            errors.append(f"{case}: {fail['reason']}")
+        dev = found["usb_msc_dev"]
+        if not dev:
+            errors.append(f"{case}: PASS without the device identity line")
+        else:
+            if dev["vid"] == "0000" or dev["pid"] == "0000":
+                errors.append(f"{case}: device id is 0000:0000")
+            if int(dev["blocks"]) == 0:
+                errors.append(f"{case}: disk geometry has zero blocks")
+            if int(dev["bsize"]) != 512:
+                errors.append(f"{case}: block size {dev['bsize']} != 512")
+            notes.append(
+                f"{case}: bus={dev['bus']} {dev['vid']}:{dev['pid']} "
+                f"speed={dev['speed']} blocks={dev['blocks']}"
+            )
+        ep = found["usb_msc_ep"]
+        if not ep:
+            errors.append(f"{case}: PASS without the endpoint line")
+        elif ep["in_type"] != "bulk" or ep["out_type"] != "bulk":
+            # the P5-e root cause: a bulk endpoint programmed as interrupt
+            # pins the rate to one packet per micro-frame
+            errors.append(
+                f"{case}: endpoint types in={ep['in_type']} out={ep['out_type']} "
+                "(want bulk)"
+            )
+        else:
+            notes.append(
+                f"{case}: ep in={ep['in_ep']} out={ep['out_ep']} bulk"
+            )
+        if found["usb_msc_blk0"] is None:
+            errors.append(f"{case}: block zero was never read")
+        rt = found["usb_msc_roundtrip"]
+        if not rt:
+            errors.append(f"{case}: no verified write/read round trip")
+        else:
+            notes.append(
+                f"{case}: roundtrip lba={rt['lba']} len={rt['len']}"
+            )
+        io = found["usb_msc_io"]
+        ops = {row["op"] for row in io}
+        for need in ("read", "write"):
+            if need not in ops:
+                errors.append(f"{case}: no {need} throughput arm")
+        for row in io:
+            if int(row["bytes"]) == 0:
+                errors.append(f"{case}: {row['op']} {row['kib']} KiB moved 0 bytes")
+            notes.append(
+                f"{case}: {row['op']} {row['kib']} KiB {row['rate']} MiB/s "
+                f"({row['per_cmd']} us/cmd)"
+            )
+        if len(found["usb_msc_sweep"]) < 4:
+            errors.append(
+                f"{case}: {len(found['usb_msc_sweep'])} sweep points"
+            )
+        else:
+            notes.append(f"{case}: sweep {len(found['usb_msc_sweep'])} points")
+
+    if cases.get("rtw89", {}).get("verdict") == "pass":
+        if found["rtw89_fail"]:
+            errors.append(f"rtw89: {found['rtw89_fail']['reason']}")
+        claim = found["rtw89_claim"]
+        if claim:
+            if (claim["vid"].lower(), claim["pid"].lower()) != ("0bda", "b851"):
+                errors.append(
+                    f"rtw89: claimed {claim['vid']}:{claim['pid']} != 0bda:b851"
+                )
+            else:
+                notes.append("rtw89: claimed 0bda:b851")
+        else:
+            errors.append("rtw89: no class-hook claim line")
+        attach = found["rtw89_attach"]
+        if not attach:
+            errors.append("rtw89: PASS without an attach line")
+        else:
+            notes.append(
+                f"rtw89: attach after {attach['ms']} ms mac={attach['mac']}"
+            )
+        fw = found["rtw89_fw"]
+        if not fw:
+            errors.append("rtw89: PASS without a firmware version line")
+        else:
+            notes.append(f"rtw89: firmware {fw['version']}")
+        start = found["rtw89_start"]
+        if not start:
+            errors.append("rtw89: PASS without a start line")
+        elif int(start["attached"]) == 0:
+            errors.append("rtw89: start returned but not attached")
+        else:
+            notes.append(f"rtw89: start attached=1 rx={start['rx']}")
+        stats = found["rtw89_usb_stats"]
+        if not stats:
+            errors.append("rtw89: PASS without the USB ledger line")
+        else:
+            if int(stats["refused"]) != 0:
+                errors.append(f"rtw89: {stats['refused']} USB submits refused")
+            if int(stats["stage_overflow"]) != 0:
+                errors.append(
+                    f"rtw89: {stats['stage_overflow']} transfers larger than the stage"
+                )
+            notes.append(
+                f"rtw89: usb submits={stats['submits']} completes={stats['completes']} "
+                f"stage_overflow={stats['stage_overflow']} "
+                f"slots_exhausted={stats['slots_exhausted']}"
+            )
+
+    if cases.get("rtw89_scan", {}).get("verdict") == "pass":
+        fail = found["rtw89_scan_fail"]
+        if fail:
+            errors.append(f"rtw89_scan: {fail['reason']}")
+        done = found["rtw89_scan_done"]
+        if not done:
+            errors.append("rtw89_scan: PASS without a scan-done line")
+        else:
+            if int(done["rows"]) == 0:
+                errors.append("rtw89_scan: empty scan table")
+            if int(done["entered"]) < 1:
+                errors.append("rtw89_scan: the stack never entered S_SCAN")
+            if int(done["rx"]) == 0:
+                errors.append("rtw89_scan: no frame reached the stack")
+            if int(done["close"]) == 0:
+                errors.append("rtw89_scan: the window never closed")
+            notes.append(
+                f"rtw89_scan: rows={done['rows']} bcn={done['bcn']} "
+                f"prsp={done['prsp']} close={done['close']} rx={done['rx']}"
+            )
+        hit = found["rtw89_scan_hit"]
+        if not hit:
+            errors.append("rtw89_scan: target AP not in the table")
+        elif (
+            hit["bssid"].lower() != "d8:3a:dd:26:91:1e"
+            or hit["ssid"] != "labwifi-brmc"
+        ):
+            errors.append(
+                f"rtw89_scan: hit {hit['bssid']}/{hit['ssid']} is not the bench AP"
+            )
+        else:
+            notes.append(
+                f"rtw89_scan: hit {hit['ssid']} freq={hit['freq']} "
+                f"rssi={hit['rssi']}"
+            )
+        lkpi = found["rtw89_scan_lkpi"]
+        if not lkpi:
+            errors.append("rtw89_scan: PASS without the driver-completion line")
+        elif int(lkpi["completions"]) < 1:
+            if not done or int(done["close"]) != 2:
+                errors.append(
+                    "rtw89_scan: neither the driver nor the walk closed the "
+                    f"sweep (lkpi=0 close={done['close'] if done else '?'})"
+                )
+            else:
+                notes.append("rtw89_scan: closed by the software walk")
+        else:
+            notes.append(
+                f"rtw89_scan: driver completions={lkpi['completions']} "
+                f"wq={lkpi['wq']}"
+            )
+
+    if cases.get("rtw89_join", {}).get("verdict") == "pass":
+        start = found["rtw89_join_start"]
+        if not start:
+            errors.append("rtw89_join: PASS without a join start line")
+        elif int(start["rc"]) != 0:
+            errors.append(f"rtw89_join: start rc={start['rc']}")
+        fail = found["rtw89_join_fail"]
+        if fail:
+            errors.append(f"rtw89_join: {fail['reason']}")
+        ok = found["rtw89_join_ok"]
+        if not ok:
+            errors.append("rtw89_join: PASS without a join-ok line")
+        elif int(ok["state"]) != 4:
+            errors.append(f"rtw89_join: state={ok['state']} is not RUN")
+        elif int(ok["mgt_tx"]) == 0:
+            errors.append("rtw89_join: RUN with no management frame")
+        elif int(ok["txc"]) == 0:
+            errors.append("rtw89_join: no transmit completion")
+        else:
+            notes.append(
+                f"rtw89_join: RUN mgt_tx={ok['mgt_tx']} txc={ok['txc']} "
+                f"rx={ok['rx']}"
+            )
+        lkpi = found["rtw89_join_lkpi"]
+        if not lkpi:
+            errors.append("rtw89_join: PASS without the driver-completion line")
+        elif int(lkpi["tx"]) < 1:
+            errors.append(
+                f"rtw89_join: no completion reached the substitute "
+                f"(tx=0 wq={lkpi['wq']})"
+            )
+
+    if cases.get("rtw89_dataplane", {}).get("verdict") == "pass":
+        fail = found["rtw89_data_fail"]
+        if fail:
+            errors.append(f"rtw89_dataplane: {fail['reason']}")
+        arp = found["rtw89_data_arp"]
+        if not arp:
+            errors.append("rtw89_dataplane: no ARP reply")
+        else:
+            notes.append(f"rtw89_dataplane: arp reply src={arp['src']} tx={arp['tx']}")
+        ping = found["rtw89_data_ping"]
+        if not ping:
+            errors.append("rtw89_dataplane: no ping line")
+        elif int(ping["tx"]) != 10 or int(ping["rx"]) < 9:
+            errors.append(f"rtw89_dataplane: ping {ping['rx']}/{ping['tx']}")
+        else:
+            notes.append(
+                f"rtw89_dataplane: ping {ping['rx']}/10 rtt {ping['min']}-"
+                f"{ping['max']} ms lost={ping['lost']}"
+            )
+        ctr = found["rtw89_data_counters"]
+        if not ctr:
+            errors.append("rtw89_dataplane: no data counter line")
+        elif int(ctr["data_tx"]) == 0 or int(ctr["rx_data"]) == 0:
+            errors.append(
+                f"rtw89_dataplane: data_tx={ctr['data_tx']} rx_data={ctr['rx_data']}"
+            )
 
     result = found["result"]
     if not result:

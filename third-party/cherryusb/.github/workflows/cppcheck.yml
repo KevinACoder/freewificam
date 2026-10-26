@@ -1,0 +1,24 @@
+name: Cppcheck action
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: cppcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: cppcheck
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo apt install cppcheck
+          cppcheck --enable=warning,portability,performance --language=c --platform=unix32 --std=c99 --quiet --force . -i third_party/ -i class/template -i port/template/ -i tests/ --include=tests/hpmicro/inc/usb_config.h 2>&1 | tee cppcheck.log
+      - name: Upload cppcheck log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-log
+          path: cppcheck.log

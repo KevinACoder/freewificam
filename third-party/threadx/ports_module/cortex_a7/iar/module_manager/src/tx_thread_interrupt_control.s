@@ -1,0 +1,98 @@
+;/***************************************************************************
+; * Copyright (c) 2024 Microsoft Corporation
+; *
+; * This program and the accompanying materials are made available under the
+; * terms of the MIT License which is available at
+; * https://opensource.org/licenses/MIT.
+; *
+; * SPDX-License-Identifier: MIT
+; **************************************************************************/
+;
+;
+;/**************************************************************************/
+;/**************************************************************************/
+;/**                                                                       */
+;/** ThreadX Component                                                     */
+;/**                                                                       */
+;/**   Thread                                                              */
+;/**                                                                       */
+;/**************************************************************************/
+;/**************************************************************************/
+;
+
+INT_MASK        EQU         0xC0                ; Interrupt bit mask
+IRQ_MASK        EQU         0x80                ; Interrupt bit mask
+#ifdef TX_ENABLE_FIQ_SUPPORT
+FIQ_MASK        EQU         0x40                ; Interrupt bit mask
+#endif
+;
+;
+
+;/**************************************************************************/
+;/*                                                                        */
+;/*  FUNCTION                                               RELEASE        */
+;/*                                                                        */
+;/*    _tx_thread_interrupt_control                       Cortex-A7/IAR    */
+;/*                                                           6.3.0        */
+;/*  AUTHOR                                                                */
+;/*                                                                        */
+;/*    William E. Lamie, Microsoft Corporation                             */
+;/*                                                                        */
+;/*  DESCRIPTION                                                           */
+;/*                                                                        */
+;/*    This function is responsible for changing the interrupt lockout     */
+;/*    posture of the system.                                              */
+;/*                                                                        */
+;/*  INPUT                                                                 */
+;/*                                                                        */
+;/*    new_posture                           New interrupt lockout posture */
+;/*                                                                        */
+;/*  OUTPUT                                                                */
+;/*                                                                        */
+;/*    old_posture                           Old interrupt lockout posture */
+;/*                                                                        */
+;/*  CALLS                                                                 */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  CALLED BY                                                             */
+;/*                                                                        */
+;/*    Application Code                                                    */
+;/*                                                                        */
+;/**************************************************************************/
+;UINT   _tx_thread_interrupt_control(UINT new_posture)
+;{
+    RSEG    .text:CODE:NOROOT(2)
+    PUBLIC  _tx_thread_interrupt_control
+#ifdef THUMB_MODE
+    THUMB
+#else
+    ARM
+#endif
+_tx_thread_interrupt_control
+    MRS     r1, CPSR                            ; Pickup current CPSR
+
+#ifdef TX_ENABLE_FIQ_SUPPORT
+    CPSID   if                                  ; Disable IRQ and FIQ
+#else
+    CPSID   i                                   ; Disable IRQ
+#endif
+
+    TST     r0, #IRQ_MASK
+    BNE     no_irq
+    CPSIE   i
+no_irq:
+#ifdef TX_ENABLE_FIQ_SUPPORT
+    TST     r0, #FIQ_MASK
+    BNE     no_fiq
+    CPSIE   f
+no_fiq:
+#endif
+
+    AND     r0, r1, #INT_MASK
+    BX      lr
+;
+;}
+;
+    END
+

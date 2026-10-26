@@ -1,0 +1,91 @@
+;/***************************************************************************
+; * Copyright (c) 2024 Microsoft Corporation
+; *
+; * This program and the accompanying materials are made available under the
+; * terms of the MIT License which is available at
+; * https://opensource.org/licenses/MIT.
+; *
+; * SPDX-License-Identifier: MIT
+; **************************************************************************/
+;
+;
+;/**************************************************************************/
+;/**************************************************************************/
+;/**                                                                       */
+;/** ThreadX Component                                                     */
+;/**                                                                       */
+;/**   Thread                                                              */
+;/**                                                                       */
+;/**************************************************************************/
+;/**************************************************************************/
+;
+;#define TX_SOURCE_CODE
+;
+;
+;/* Include necessary system files.  */
+;
+;#include "tx_api.h"
+;#include "tx_thread.h"  */
+;
+
+INT_MASK        =   0x03F
+
+;/**************************************************************************/
+;/*                                                                        */
+;/*  FUNCTION                                               RELEASE        */
+;/*                                                                        */
+;/*    _tx_thread_interrupt_control                      Cortex-A15/IAR    */
+;/*                                                           6.1          */
+;/*  AUTHOR                                                                */
+;/*                                                                        */
+;/*    William E. Lamie, Microsoft Corporation                             */
+;/*                                                                        */
+;/*  DESCRIPTION                                                           */
+;/*                                                                        */
+;/*    This function is responsible for changing the interrupt lockout     */
+;/*    posture of the system.                                              */
+;/*                                                                        */
+;/*  INPUT                                                                 */
+;/*                                                                        */
+;/*    new_posture                           New interrupt lockout posture */
+;/*                                                                        */
+;/*  OUTPUT                                                                */
+;/*                                                                        */
+;/*    old_posture                           Old interrupt lockout posture */
+;/*                                                                        */
+;/*  CALLS                                                                 */
+;/*                                                                        */
+;/*    None                                                                */
+;/*                                                                        */
+;/*  CALLED BY                                                             */
+;/*                                                                        */
+;/*    Application Code                                                    */
+;/*                                                                        */
+;/**************************************************************************/
+;UINT   _tx_thread_interrupt_control(UINT new_posture)
+;{
+    RSEG    .text:CODE:NOROOT(2)
+    PUBLIC  _tx_thread_interrupt_control
+    CODE32
+_tx_thread_interrupt_control
+;
+;    /* Pickup current interrupt lockout posture.  */
+;
+    MRS     r3, CPSR                    ; Pickup current CPSR
+    MOV     r2, #INT_MASK               ; Build interrupt mask
+    AND     r1, r3, r2                  ; Clear interrupt lockout bits
+    ORR     r1, r1, r0                  ; Or-in new interrupt lockout bits
+;
+;    /* Apply the new interrupt posture.  */
+;
+    MSR     CPSR_c, r1                  ; Setup new CPSR
+    BIC     r0, r3, r2                  ; Return previous interrupt mask
+#ifdef TX_THUMB
+    BX      lr                          ; Return to caller
+#else
+    MOV     pc, lr                      ; Return to caller
+#endif
+;}
+
+    END
+

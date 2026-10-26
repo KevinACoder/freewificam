@@ -81,4 +81,32 @@ int case_wlan_run(void);
 void case_wlan_prepare(void);
 #endif
 
+#if defined(RTOS_CASE_USB_XHCI) || defined(RTOS_CASE_USB_EHCI)
+int usb_msc_case(unsigned int busid, const char *hcd);
+#endif
+
+#if defined(RTOS_CASE_USB_XHCI)
+int case_usb_xhci_run(void);
+#endif
+
+#if defined(RTOS_CASE_USB_EHCI)
+int case_usb_ehci_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTW89)
+int case_rtw89_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTW89_SCAN)
+int case_rtw89_scan_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTW89_JOIN)
+int case_rtw89_join_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTW89_DATAPLANE)
+int case_rtw89_dataplane_run(void);
+#endif
+
 #endif /* RTOS_APP_CASES_H */

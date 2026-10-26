@@ -72,6 +72,24 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_WLAN)
 	{ "wlan", case_wlan_run },
 #endif
+#if defined(RTOS_CASE_USB_XHCI)
+	{ "usb_xhci", case_usb_xhci_run },
+#endif
+#if defined(RTOS_CASE_USB_EHCI)
+	{ "usb_ehci", case_usb_ehci_run },
+#endif
+#if defined(RTOS_CASE_RTW89)
+	{ "rtw89", case_rtw89_run },
+#endif
+#if defined(RTOS_CASE_RTW89_SCAN)
+	{ "rtw89_scan", case_rtw89_scan_run },
+#endif
+#if defined(RTOS_CASE_RTW89_JOIN)
+	{ "rtw89_join", case_rtw89_join_run },
+#endif
+#if defined(RTOS_CASE_RTW89_DATAPLANE)
+	{ "rtw89_dataplane", case_rtw89_dataplane_run },
+#endif
 };
 
 static const osThreadAttr_t runner_attr = {
@@ -84,7 +102,9 @@ static const osThreadAttr_t runner_attr = {
 	 * a frame, and the driver's power/firmware/HAL chain sits on top, so that
 	 * image gets the reference image's 16 KiB runner stack. */
 #if defined(RTOS_CASE_WLAN) || defined(RTOS_CASE_IWL7260_SCAN) || \
-    defined(RTOS_CASE_IWL7260_JOIN) || defined(RTOS_CASE_IWL7260_DATAPLANE)
+    defined(RTOS_CASE_IWL7260_JOIN) || defined(RTOS_CASE_IWL7260_DATAPLANE) || \
+    defined(RTOS_CASE_RTW89) || defined(RTOS_CASE_RTW89_SCAN) || \
+    defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE)
 	.stack_size = 16384U,
 #else
 	.stack_size = 8192U,

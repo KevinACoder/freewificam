@@ -1,0 +1,84 @@
+From 3c1f9a4d2b7e5081a6c4f0d9e3b275aa41c8f6d2 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 17 Oct 2026 04:40:00 +0800
+Subject: [PATCH] fix(port/ehci): poll for the iaa handshake instead of spinning
+ on it
+
+usbh_kill_urb() waits for the IAA interrupt to finish its handshake by
+spinning on qh->killed with a bound counted in loop iterations (200000 of
+them).  Two things are wrong with that: the wait burns the core for its
+whole duration although the killer is a thread that could sleep, and the
+bound is not a time - how long 200000 iterations take is whatever the
+compiler and the clock made of the loop, so the timeout this path
+documents is not the timeout it has.
+
+Spin for the first rounds (the controller raises the IAA as soon as it has
+retired the descriptor, so the common case leaves the loop at once) and
+then sleep one tick between checks.  The budget becomes rounds plus naps,
+which is a real time bound, and a handshake that never completes no longer
+costs a core.
+
+The wait stays in thread context: every caller of usbh_kill_urb() is a
+class driver's teardown or a host controller kill, never an interrupt
+handler.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ port/ehci/usb_hc_ehci.c | 44 files changed, 28 insertions(+), 16 deletions(-)
+--- a/port/ehci/usb_hc_ehci.c	2026-10-17 04:37:38.598413365 +0800
++++ b/port/ehci/usb_hc_ehci.c	2026-10-17 04:37:38.601085214 +0800
+@@ -1423,24 +1423,36 @@
+         EHCI_HCOR->usbcmd |= EHCI_USBCMD_IAAD;
+         usb_osal_leave_critical_section(flags);
+ 
+-        volatile uint32_t timeout = 0;
++        /*
++         * Wait for the IAA to finish the handshake.  The interrupt is
++         * normally imminent - the controller raises it as soon as it has
++         * retired the descriptor - so spin for the first rounds; once it
++         * has still not arrived, stop burning the core and poll at the OS
++         * tick instead.  The budget is rounds plus naps, a real time
++         * bound, rather than an iteration count whose duration is whatever
++         * the compiler made of the loop.
++         */
++        volatile uint32_t spins = 0;
++        volatile uint32_t naps = 0;
+         while (qh->killed != 2) {
+-            timeout++;
+-            if (timeout > 200000U) {
+-                /* The iaad was consumed before killed went to 1, so no
+-                 * interrupt will ever finish the handshake. If the slot
+-                 * still belongs to this urb the kill owns the completion;
+-                 * if a concurrent completion already finished the urb,
+-                 * touching the slot again would double-free it. */
+-                flags = usb_osal_enter_critical_section();
+-                bool orphan = (qh->inuse && qh->urb == urb && urb->hcpriv == qh);
+-                qh->remove_in_iaad = 0;
+-                qh->killed = 0;
+-                usb_osal_leave_critical_section(flags);
+-                if (!orphan) {
+-                    return -USB_ERR_TIMEOUT;
++            if (++spins > 1000U) {
++                if (++naps > 200U) {
++                    /* The iaad was consumed before killed went to 1, so no
++                     * interrupt will ever finish the handshake. If the slot
++                     * still belongs to this urb the kill owns the completion;
++                     * if a concurrent completion already finished the urb,
++                     * touching the slot again would double-free it. */
++                    flags = usb_osal_enter_critical_section();
++                    bool orphan = (qh->inuse && qh->urb == urb && urb->hcpriv == qh);
++                    qh->remove_in_iaad = 0;
++                    qh->killed = 0;
++                    usb_osal_leave_critical_section(flags);
++                    if (!orphan) {
++                        return -USB_ERR_TIMEOUT;
++                    }
++                    break;
+                 }
+-                break;
++                usb_osal_msleep(1);
+             }
+         }
+     } else {
+-- 
+2.43.0
