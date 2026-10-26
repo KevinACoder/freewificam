@@ -47,6 +47,10 @@
  * into a net80211 case. */
 void lkpi80211_completion_counters(uint32_t *scan, uint32_t *tx);
 uint32_t lkpi80211_tx_failures(void);
+/* the receive path's boundaries: handed up by the driver, refused by
+ * linearize, dropped at the queue, delivered to the bridge, still queued */
+void lkpi80211_rx_boundary_counters(uint32_t *in, uint32_t *refused,
+    uint32_t *drops, uint32_t *frames, uint32_t *qlen);
 
 #define RTW89_JOIN_TIMEOUT_MS	30000u
 #define RTW89_JOIN_POLL_MS	200u
@@ -200,8 +204,18 @@ case_rtw89_join_run(void)
 		lkpi_wq_stats_get(&wq);
 		lkpi_wq = (u32)wq.runs;
 	}
-	CASE_ANCHOR("rtw89: join lkpi tx=%u scan=%u wq=%u\n", (unsigned)lkpi_tx,
-	    (unsigned)lkpi_scan, (unsigned)lkpi_wq);
+	{
+		uint32_t rx_in = 0, rx_ref = 0, rx_drop = 0, rx_frames = 0;
+		uint32_t rx_q = 0;
+
+		lkpi80211_rx_boundary_counters(&rx_in, &rx_ref, &rx_drop,
+		    &rx_frames, &rx_q);
+		CASE_ANCHOR("rtw89: join lkpi tx=%u scan=%u wq=%u rx_in=%u "
+		    "rx_ref=%u rx_drop=%u rx_frames=%u rx_q=%u\n",
+		    (unsigned)lkpi_tx, (unsigned)lkpi_scan, (unsigned)lkpi_wq,
+		    (unsigned)rx_in, (unsigned)rx_ref, (unsigned)rx_drop,
+		    (unsigned)rx_frames, (unsigned)rx_q);
+	}
 	rtw89_usb_stats_anchor("final");
 
 	if (wlan_bridge_state() != RTW89_JOIN_RUN) {
