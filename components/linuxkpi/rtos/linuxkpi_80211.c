@@ -221,6 +221,14 @@ static void *bridge_arg;
  */
 static u32 lkpi80211_scan_completions;
 static u32 lkpi80211_tx_completions;
+/*
+ * Completions whose frame was not acknowledged (IEEE80211_TX_STAT_ACK clear).
+ * The bridge counter `tx_completes` cannot separate "the driver reported the
+ * frame done" from "the air acknowledged it": mvm reports both, and a join that
+ * stays in AUTH while the AP never logs the authentication needs that split
+ * (the L3-07 f4 face: one completion but no AP-side authentication line).
+ */
+static u32 lkpi80211_tx_unacked;
 
 /*
  * The vif-to-hw backlink. The Linux struct ieee80211_vif carries no hw
@@ -957,12 +965,41 @@ lkpi80211_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 	{
 		struct ieee80211_tx_info *info = (struct ieee80211_tx_info *)skb->cb;
 		void (*fn)(void *) = (void (*)(void *))info->status.status_driver_data[0];
+		u16 fc = 0u;
+		int ack = !!(info->flags & IEEE80211_TX_STAT_ACK);
 
 		if (info->status.rates[0].idx >= 0) {
 			/* the driver marked a completion callback in slot 0's
 			 * data convention used by this project's shim */
 		}
 		(void)fn;
+		if (skb->data != NULL && skb->len >= 2u)
+			fc = (u16)(skb->data[0] | ((u16)skb->data[1] << 8));
+		/*
+		 * The air's half of the completion: mvm sets
+		 * IEEE80211_TX_STAT_ACK from REPLY_TX's status
+		 * (mvm/tx.c:1605), so a frame reported done without the flag
+		 * was retried to the limit or refused.  Counting the failures
+		 * beside the completions is what lets a join say "the frame was
+		 * handed to the device but never acknowledged" instead of only
+		 * "one completion arrived".
+		 */
+		if (!ack)
+			lkpi80211_tx_unacked++;
+#if defined(LKPI_JOIN_TRACE)
+		{
+			static unsigned int said;
+
+			if (said < 16u) {
+				said++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "lkpi80211: tx done #%u fc=%04x ack=%d len=%u\n",
+				    said, fc, ack, (unsigned)skb->len);
+			}
+		}
+#else
+		(void)fc;
+#endif
 	}
 	if (bridge_ops != NULL && bridge_ops->tx_complete != NULL)
 		bridge_ops->tx_complete(hw, skb);
@@ -1944,6 +1981,19 @@ lkpi80211_completion_counters(u32 *scan, u32 *tx)
 		*scan = lkpi80211_scan_completions;
 	if (tx != NULL)
 		*tx = lkpi80211_tx_completions;
+}
+
+/*
+ * The unacknowledged share of the completions above (IEEE80211_TX_STAT_ACK
+ * clear).  A caller that reads it beside the total can tell a management frame
+ * the air acknowledged from one the device gave up on: the first says the AP
+ * owes an answer, the second says the frame never made it.
+ */
+u32
+lkpi80211_tx_failures(void)
+{
+
+	return lkpi80211_tx_unacked;
 }
 
 int

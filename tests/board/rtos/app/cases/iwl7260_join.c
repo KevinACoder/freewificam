@@ -16,7 +16,8 @@
  *
  * Anchors:
  *   iwl7260: join start ssid=labwifi-brmc bssid=... state=<n> rc=<n>
- *   iwl7260: join wait t=<s> state=<n> mgt_tx=<n> txc=<n> rx=<n> bcnT=<n> bad_auth=<n>
+ *   iwl7260: join wait t=<s> state=<n> mgt_tx=<n> txc=<n> txfail=<n> rx=<n>
+ *            rx_age=<ms> irq=<n> irqth=<n> wq=<ptr> bad_auth=<n>
  *   iwl7260: join ok state=4 mgt_tx=<n> txc=<n> rx=<n>
  *   iwl7260: join lkpi tx=<n> scan=<n> wq=<n>
  *   iwl7260: join PASS
@@ -24,7 +25,14 @@
  * A timeout is `iwl7260: join FAIL <reason>` with the same discriminators, so
  * "no frame left the bridge" (mgt_tx=0), "the driver refused the frame"
  * (mgt_tx>0, txc=0), "the AP is not on this channel" (bcnT=0) and "the answer
- * arrived in the wrong state" (bad_auth>0) are told apart on the spot.
+ * arrived in the wrong state" (bad_auth>0) are told apart on the spot.  The
+ * second line of defence is the driver's own account: `txfail` counts
+ * completions without an ACK (the frame was given up on, not merely late),
+ * `irq`/`irqth` are the PCIe engine's hard/threaded interrupt counts, and
+ * `wq` is the body the deferred-work executor is inside when the line prints.
+ * A receive path that stops delivering shows up as a growing `rx_age`; the
+ * interrupt pair then says whether the device still raises interrupts and
+ * whether their bottom halves still run.
  */
 
 #include <stdint.h>
@@ -37,8 +45,13 @@
 
 /* The substitute's completion counters: only scalars cross the call, so the
  * signature is repeated rather than pulling the driver's mac80211 header world
- * into a net80211 case (see the scan case's note). */
+ * into a net80211 case (see the scan case's note).  The failure split and the
+ * engine's interrupt pair are declared the same way: including
+ * linuxkpi_80211.h or linuxkpi_pci.h here would drag <net/mac80211.h> or the
+ * Linux device model into the net80211 world. */
 void lkpi80211_completion_counters(uint32_t *scan, uint32_t *tx);
+uint32_t lkpi80211_tx_failures(void);
+void lkpi_pci_irq_counters(unsigned int *hard, unsigned int *thread);
 
 #define IWL_JOIN_TIMEOUT_MS	30000u
 #define IWL_JOIN_POLL_MS	200u
@@ -81,9 +94,15 @@ case_iwl7260_join_run(void)
 	unsigned int waited = 0;
 	unsigned int tick = 0;
 	unsigned int pulse = 0;
+	unsigned int last_rx = 0;
+	unsigned int last_rx_ms = 0;
+	unsigned int irq_hard = 0;
+	unsigned int irq_thread = 0;
 	u32 lkpi_scan = 0u;
 	u32 lkpi_tx = 0u;
 	u32 lkpi_wq = 0u;
+	u32 lkpi_txfail = 0u;
+	void *wq_now = NULL;
 	int rc;
 
 	wlan_bridge_stats(&c);
@@ -116,11 +135,31 @@ case_iwl7260_join_run(void)
 		if (pulse >= IWL_JOIN_PULSE_MS) {
 			pulse = 0u;
 			wlan_bridge_stats(&c);
+			/*
+			 * `rx_age` is how long the bridge's receive count has
+			 * been standing still: a receive path that stops
+			 * delivering (the L3-06 f4 signature) dates itself
+			 * against the join's own clock without a new
+			 * instrument.  `irq`/`irqth` are the PCIe engine's two
+			 * interrupt counters and `wq` the body the deferred-work
+			 * executor is inside right now: together they separate
+			 * "no interrupt", "interrupt but no bottom half" and
+			 * "the executor is stuck in one work item".
+			 */
+			if (c.rx_frames != last_rx) {
+				last_rx = c.rx_frames;
+				last_rx_ms = waited;
+			}
+			lkpi_pci_irq_counters(&irq_hard, &irq_thread);
+			lkpi_txfail = lkpi80211_tx_failures();
+			wq_now = lkpi_wq_current_work_func();
 			CASE_INFO("iwl7260: join wait t=%us state=%s mgt_tx=%u "
-			    "txc=%u rx=%u bcnT=%u bad_auth=%u\n",
+			    "txc=%u txfail=%u rx=%u rx_age=%ums irq=%u irqth=%u "
+			    "wq=%p bad_auth=%u\n",
 			    waited / 1000u, iwl_join_state_txt(wlan_bridge_state()),
-			    c.mgt_tx, c.tx_completes, c.rx_frames,
-			    c.rx_beacon_tgt, wlan_bridge_stat_bad_auth());
+			    c.mgt_tx, c.tx_completes, (unsigned)lkpi_txfail,
+			    c.rx_frames, waited - last_rx_ms, irq_hard, irq_thread,
+			    wq_now, wlan_bridge_stat_bad_auth());
 		}
 	}
 
@@ -146,11 +185,16 @@ case_iwl7260_join_run(void)
 	    (unsigned)lkpi_tx, (unsigned)lkpi_scan, (unsigned)lkpi_wq);
 
 	if (wlan_bridge_state() != IWL_JOIN_RUN) {
+		lkpi_pci_irq_counters(&irq_hard, &irq_thread);
+		lkpi_txfail = lkpi80211_tx_failures();
+		wq_now = lkpi_wq_current_work_func();
 		CASE_ANCHOR("iwl7260: join FAIL timeout state=%s mgt_tx=%u "
-		    "txc=%u rx=%u bcnT=%u bad_auth=%u auth_retries=%u\n",
+		    "txc=%u txfail=%u rx=%u bcnT=%u bad_auth=%u auth_retries=%u "
+		    "irq=%u irqth=%u wq=%p\n",
 		    iwl_join_state_txt(wlan_bridge_state()), c.mgt_tx,
-		    c.tx_completes, c.rx_frames, c.rx_beacon_tgt,
-		    wlan_bridge_stat_bad_auth(), c.auth_retries);
+		    c.tx_completes, (unsigned)lkpi_txfail, c.rx_frames,
+		    c.rx_beacon_tgt, wlan_bridge_stat_bad_auth(),
+		    c.auth_retries, irq_hard, irq_thread, wq_now);
 		return 1;
 	}
 

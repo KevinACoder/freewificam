@@ -141,6 +141,7 @@ lkpi_pci_irq_thread_work(struct work_struct *w)
 	struct lkpi_pci_irq_slot *slot =
 	    container_of(w, struct lkpi_pci_irq_slot, thread_work);
 
+	lkpi_pci_stats.irq_threads++;
 	if (slot->thread_fn != NULL)
 		(void)slot->thread_fn(slot->intid, slot->dev);
 }
@@ -1112,6 +1113,16 @@ lkpi_pci_stats_get(void)
 {
 
 	return &lkpi_pci_stats;
+}
+
+void
+lkpi_pci_irq_counters(unsigned int *hard, unsigned int *thread)
+{
+
+	if (hard != NULL)
+		*hard = lkpi_pci_stats.irqs;
+	if (thread != NULL)
+		*thread = lkpi_pci_stats.irq_threads;
 }
 
 const char *

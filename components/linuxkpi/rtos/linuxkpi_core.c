@@ -789,7 +789,14 @@ void lkpi_mutex_lock(struct mutex *m)
 
 		if (osMutexAcquire(s->id, 1000u) != osOK) {
 			if (said < 8u) {
+#if defined(CMSIS2_BACKEND_FREERTOS)
 				osThreadId_t owner = osMutexGetOwner(s->id);
+#else
+				/* the ThreadX CMSIS facade does not carry the
+				 * owner query; the waiter and the work body still
+				 * name the two contexts. */
+				osThreadId_t owner = NULL;
+#endif
 
 				said++;
 				lkpi_printf(ULOG_ERROR_LEVEL,
@@ -1083,6 +1090,24 @@ void lkpi_work_init(struct work_struct *w, void (*func)(struct work_struct *))
 {
 	memset(w, 0, sizeof(*w));
 	w->func = func;
+}
+
+/*
+ * What a worker thread is executing right now, as an opaque pointer to the
+ * function, or NULL when the executor is idle.  A join that stalls while a
+ * driver mutex is held is otherwise anonymous: the stuck-lock print names the
+ * owner, and this names the body the owner is inside (the L3-06 d3 arm read
+ * the self-lock's second caller this way).  The accessor exists unconditionally
+ * so a case can read it in any image; without the trace build it answers NULL.
+ */
+void *lkpi_wq_current_work_func(void)
+{
+#if defined(LKPI_JOIN_TRACE)
+	return lkpi_wq_current_work != NULL ?
+	    (void *)lkpi_wq_current_work->func : NULL;
+#else
+	return NULL;
+#endif
 }
 
 void lkpi_delayed_work_init(struct delayed_work *dw,

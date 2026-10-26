@@ -225,4 +225,12 @@ void	lkpi80211_rx_counters(u32 *frames, u32 *first_fc, int *fc_seen);
  */
 void	lkpi80211_completion_counters(u32 *scan, u32 *tx);
 
+/*
+ * How many of the transmit completions above carried no ACK
+ * (IEEE80211_TX_STAT_ACK clear).  The total alone cannot tell a management
+ * frame the air acknowledged from one the device gave up on; beside the AP's
+ * own log, this is what places a stuck authentication.
+ */
+u32	lkpi80211_tx_failures(void);
+
 #endif /* LINUXKPI_80211_H */

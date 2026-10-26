@@ -46,11 +46,22 @@ struct lkpi_pci_stats {
 	unsigned int	probes;		/* successful driver probes */
 	unsigned int	probe_errors;	/* probes that ran and failed */
 	unsigned int	irqs;		/* interrupts delivered to a handler */
+	unsigned int	irq_threads;	/* threaded halves actually run */
 	unsigned int	msi;		/* MSI vectors allocated */
 	unsigned int	dma_maps;	/* streaming maps */
 	unsigned int	errors;		/* seam calls that returned an error */
 };
 
 const struct lkpi_pci_stats *lkpi_pci_stats_get(void);
+
+/*
+ * The two interrupt counters the join case reads (scalars only, so a net80211
+ * case never has to include the Linux device model).  `hard` is how many times
+ * the delivery path reached the driver's hard handler; `thread` is how many
+ * threaded halves actually ran.  A frozen receive path with `hard` still rising
+ * is a bottom-half problem; with `hard` frozen it is an interrupt (or device)
+ * problem - the distinction the L3-07 round needs.
+ */
+void	lkpi_pci_irq_counters(unsigned int *hard, unsigned int *thread);
 
 #endif /* LINUXKPI_PCI_H */
