@@ -17,7 +17,7 @@
  * Disk safety: the only read below sector 0 is the block-zero read; every
  * write lives in the disk's last 32 MiB window, 1 MiB aligned.  The same
  * window formula is used by the Linux ground-truth arm
- * (`probes/driver/usb/fio-udisk.sh`), so the two legs transfer the same bytes.
+ * (`tools/usb/fio-udisk.sh`), so the two legs transfer the same bytes.
  *
  * Anchors (tools/rtos/judge.py matches these):
  *   usbh: msc bus=N hcd=... vid=... pid=... speed=N blocks=N bsize=N serial=...

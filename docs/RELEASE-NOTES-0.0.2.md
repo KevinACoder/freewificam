@@ -110,7 +110,8 @@ not understood well enough to trust it (see the camera entries in
 
 The numbers above were measured on images built from commit `ef4f77d` (the
 code commit of this release) on a clean tree. The tag `v0.0.2` adds the
-documentation commits that follow it - no code, no test and no build change:
+documentation and layout commits that follow it; nothing that compiles into the
+images changed, so rebuilding the tag reproduces them apart from the banner:
 
 | Kernel | Size | sha256 |
 |---|---|---|

@@ -31,7 +31,7 @@ third-party/                    ported components (source + ports/ + patches/)
 tests/board/
   linux-ko/                     the Linux kernel-module line: build/entry + ports/
   rtos/                         the RTOS line: app/, build/, platform/, configs/, tests/
-tools/                          build entries, board round, judge, gates
+tools/                          build entries, board round, judge, gates, board-side scripts
 docs/                           commit convention, patch policy, firmware notices,
                                 release procedure, release notes, migration record
 known_issues/                   the open issues of each release, tracked per version
