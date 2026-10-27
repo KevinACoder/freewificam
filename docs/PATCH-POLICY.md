@@ -42,14 +42,16 @@ wireless drivers that carry a manifest.
 | `wireless-drivers/rtl8xxxu` | `e63969708249` | none |
 | `wireless-drivers/rtw88` | `e71d9a28760f` | none |
 | `wireless-drivers/rtw89` | `79e12cc9` | none |
-| `wireless-drivers/rtl8189fs` | external `13bbdbc` | none; the vendor bytes are not vendored |
+| `wireless-drivers/rtl8189fs` | `13bbdbc` | none; the vendor bytes are vendored unmodified |
 
 Patch form and lifecycle: one concern per patch, `git format-patch` form, English,
 `Signed-off-by`, no local knowledge; written so it could be sent upstream as-is.
 When upstream accepts a patch, remove it from `patches/`, move the pin forward,
 regenerate the manifest, and record both in the component's provenance file.
 
-The `wireless-drivers/rtl8189fs` tree is the one exception: its GPL-2.0 bytes and
-embedded firmware are not carried in this repository. Its `patches/` would record
-a vendor fix; the build applies it to a build-local copy of the external
-`VENDOR_8189FS` tree only when such a fix is adopted.
+The `wireless-drivers/rtl8189fs` tree is GPL-2.0 and is vendored unmodified at
+its pin (`src/`), with its licence in `LICENSE` and its record in
+`PROVENANCE.md`. Its `patches/` records a vendor fix when one is adopted; the
+build then applies it to a build-local copy, so the vendored bytes stay at the
+pin. `VENDOR_8189FS` names an alternative checkout for a deliberate comparison
+build, not the normal path.
