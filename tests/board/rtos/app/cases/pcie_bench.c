@@ -101,7 +101,7 @@ static uint32_t bench_median(uint32_t a, uint32_t b, uint32_t c)
 	return b;
 }
 
-/* One cell: reps × 64 MiB through the asynchronous pair.  Returns 0 on
+/* One cell: reps x 64 MiB through the asynchronous pair.  Returns 0 on
  * success; a timeout or a failed command is reported and aborts the case. */
 static int bench_run_cell(struct bench_cell *cell, uint64_t lba_start,
 			  uint32_t slice_blocks, uint32_t sector,
@@ -219,7 +219,7 @@ static int bench_run_cell(struct bench_cell *cell, uint64_t lba_start,
 /* Least squares over the three block sizes for one (qd, direction):
  *   us_per_command = C + bs / BW
  * in integer arithmetic (no FP state on this image).  y is scaled by 1000 so
- * the slope keeps sub-µs precision; r2 is per-mille. */
+ * the slope keeps sub-us precision; r2 is per-mille. */
 static void bench_fit(const struct bench_cell *cells, uint32_t count,
 		      uint32_t qd, uint8_t write)
 {
@@ -230,8 +230,8 @@ static void bench_fit(const struct bench_cell *cells, uint32_t count,
 	int64_t sum_xx = 0;
 	int64_t sum_xy = 0;
 	int64_t den;
-	int64_t slope;	/* 1000 * µs per byte */
-	int64_t intercept;	/* 1000 * µs per command */
+	int64_t slope;	/* 1000 * us per byte */
+	int64_t intercept;	/* 1000 * us per command */
 	int64_t ss_tot = 0;
 	int64_t ss_res = 0;
 	int64_t y_mean;
@@ -248,7 +248,7 @@ static void bench_fit(const struct bench_cell *cells, uint32_t count,
 			continue;
 		}
 		x[n] = (int64_t)cell->cmd_bytes;
-		/* µs per command, scaled by 1000 */
+		/* us per command, scaled by 1000 */
 		y[n] = (int64_t)cell->median_us * 1000 /
 		       (int64_t)(BENCH_BYTES / cell->cmd_bytes);
 		sum_x += x[n];
@@ -284,7 +284,7 @@ static void bench_fit(const struct bench_cell *cells, uint32_t count,
 	}
 
 	c_us = intercept / 1000;
-	/* slope is 1000*µs/byte -> bytes/µs = 1000/slope; MiB/s = bytes/µs *
+	/* slope is 1000*us/byte -> bytes/us = 1000/slope; MiB/s = bytes/us *
 	 * 1e6 / 1048576. */
 	bw_mib_s = (slope > 0) ? (int64_t)((1000LL * 1000000LL) /
 					   (slope * 1048576LL)) : 0;

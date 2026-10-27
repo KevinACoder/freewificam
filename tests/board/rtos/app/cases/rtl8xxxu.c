@@ -7,7 +7,7 @@
  *         USB engine, downloads its firmware and registers its hw; the bridge
  *         then runs the driver's start chain.
  *
- * This is the L3-08 bring-up gate.  The chain is the carrier image's, in the
+ * This is the 8188EUS bring-up gate.  The chain is the reference image's, in the
  * order that matters:
  *
  *   1. the linuxkpi core services (the system workqueue every deferred driver
@@ -140,7 +140,7 @@ static const uint8_t rtl8xxxu_expect_mac[6] = RTL8XXXU_EXPECT_MAC;
 /*
  * The profile's controller list.  Both parts are USB2 devices, but the bench
  * puts them on different roots: the 8188 line measured an xHCI root at 480 M
- * (and a clean GT boot on an OHCI root at 12 M, which this image cannot drive
+ * (and a clean Linux boot on an OHCI root at 12 M, which this image cannot drive
  * - the RTOS USB domain carries EHCI and xHCI only), while the 8723BU sits on
  * an EHCI root behind the bench's 4-port hub.  The list is therefore a bench
  * fact, not a driver fact: the discovery profile starts all four roots once,

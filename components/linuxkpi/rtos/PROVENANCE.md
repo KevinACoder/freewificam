@@ -89,13 +89,13 @@ place, and that entry records it.
   the comments is a consumer-round change and would be a ledger entry, not a
   rewrite inside the import.
 
-## 2026-10-25 wireless import (L3 B3)
+## 2026-10-25 wireless import
 
-Imported from the reference RTOS tree `~/workspace/project_rtos_webcam/freewificam`
-(documented only; working tree at `19c5736` on `feat-rtw88-l0-baseline`, with a
-local edit in `linuxkpi_80211.c` that the reference iwlwifi image was built
-with; the import keeps those working-tree bytes rather than the HEAD blob, so
-the B3 build is the pinned artifact). Paths under `components/linuxkpi/`:
+Imported from the reference RTOS tree at commit `19c5736` (documented only;
+the reference checkout's working tree on its iwlwifi baseline carried a local
+edit in `linuxkpi_80211.c` that its iwlwifi image was built with; the import
+keeps those working-tree bytes rather than the committed blob, so that build is
+the pinned artifact). Paths under `components/linuxkpi/`:
 
 | File(s) | License | Note |
 |---|---|---|
@@ -106,14 +106,14 @@ the B3 build is the pinned artifact). Paths under `components/linuxkpi/`:
 | `fw/iwl7260fw_blob.c`, `fw/iwl7260_fw.LICENCE.txt` | Intel firmware licence (see LICENCE) | 6.3 MB blob, **gitignored** (`components/linuxkpi/fw/`), not committed |
 
 The top-level `linuxkpi_*.h`/`lkpi_census.h` in `components/linuxkpi/` are
-compatibility shims (`#include "rtos/…"`), needed because the net80211 bridge
-includes `components/linuxkpi/…` by path. They are not a second implementation.
+compatibility shims (`#include "rtos/..."`), needed because the net80211 bridge
+includes `components/linuxkpi/...` by path. They are not a second implementation.
 
-## 2026-10-26 USB engine import (L3-04)
+## 2026-10-26 USB engine import
 
 Imported the **board-line** USB engine (not the earlier host-test copy) from the
-same reference tree (`~/workspace/project_rtos_webcam/freewificam@19c5736`),
-byte-identical to the committed blobs there:
+same reference tree at commit `19c5736`, byte-identical to the committed blobs
+there:
 
 | File(s) | Blob | License | Note |
 |---|---|---|---|

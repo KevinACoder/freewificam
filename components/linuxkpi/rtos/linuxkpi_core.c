@@ -1096,8 +1096,8 @@ void lkpi_work_init(struct work_struct *w, void (*func)(struct work_struct *))
  * What a worker thread is executing right now, as an opaque pointer to the
  * function, or NULL when the executor is idle.  A join that stalls while a
  * driver mutex is held is otherwise anonymous: the stuck-lock print names the
- * owner, and this names the body the owner is inside (the L3-06 d3 arm read
- * the self-lock's second caller this way).  The accessor exists unconditionally
+ * owner, and this names the body the owner is inside (that is how a
+ * self-lock's second caller was identified).  The accessor exists unconditionally
  * so a case can read it in any image; without the trace build it answers NULL.
  */
 void *lkpi_wq_current_work_func(void)

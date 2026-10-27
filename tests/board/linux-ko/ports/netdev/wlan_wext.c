@@ -273,8 +273,8 @@ static int wext_scan_one(char **pos, char *end,
 	 * The frequency in the canonical WEXT encoding: MHz with an exponent of
 	 * 6 (cfg80211_wext_giwfreq does exactly this).  The earlier form here
 	 * multiplied the MHz value into the exponent, which the supplicant
-	 * rejects outright ("Invalid freq in scan results ... m=0 e=24620",
-	 * runs/2026-10-22-wpa2) and then leaves every BSS at freq 0.
+	 * rejects outright ("Invalid freq in scan results ... m=0 e=24620"),
+	 * and then leaves every BSS at freq 0.
 	 */
 	memset(&u, 0, sizeof(u));
 	u.freq.m = (__s32)r->freq;
@@ -742,7 +742,7 @@ static int wlan_wext_siwmlme(struct net_device *dev,
  * "key_idx + 1" (driver_wext.c), so the flag value minus one is the stack's
  * zero-based slot. Values past the fourth slot are not a malformed request:
  * at startup the supplicant walks every slot it knows and clears it (0..5 on
- * the bench, see runs/2026-10-22-wpa2), and clearing a slot the stack does not
+ * this bench), and clearing a slot the stack does not
  * have is a no-op, not an error. Failing there makes the supplicant print
  * "Driver did not support SIOCSIWENCODEEXT" and count the call as failed.
  *

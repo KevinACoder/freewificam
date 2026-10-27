@@ -1,6 +1,7 @@
-# L3-10 stage 5: the ladder plus the lwIP netif and the two iperf phases
+# 8723BU ladder, stage 5: the ladder plus the lwIP netif and the two iperf phases
 # (downlink server, uplink client).  The peer is the bench AP host's iperf2;
-# the GT arm for this line must use the same instrument, not the L1-11 iperf3
+# the Linux reference arm for this line must use the same instrument, not the
+# 8723B Linux round's iperf3
 # numbers.
 CONFIG_BACKEND := freertos
 CONFIG_CASES := tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net

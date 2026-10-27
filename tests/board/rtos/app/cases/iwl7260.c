@@ -92,10 +92,10 @@ int case_iwl7260_run(void)
 	 *    (mvm/ops.c:366-369, which reaches :1775's
 	 *    schedule_work(&mvm->async_handlers_wk)), so without the queue the
 	 *    sweep fills the table and the window is never closed - the board
-	 *    showed `scan=1/0 close=0` on two boots (L3-05 f1/f1b);
+	 *    showed `scan=1/0 close=0` on two clean boots;
 	 *  - a station's per-TID TXQ is allocated lazily by add_stream_wk
-	 *    (mvm/mac80211.c:928-950, mvm/sta.c:1518+, which is the TRM's own
-	 *    verified row, fw-trm/iwl7260/05-sequences.md 5.6 row 1), so without
+	 *    (mvm/mac80211.c:928-950, mvm/sta.c:1518+, a verified row in the
+	 *    firmware reference notes), so without
 	 *    the queue the first management frame is queued and never read out -
 	 *    `mgt_tx=2 txc=0` with no authentication frame on the air.
 	 *

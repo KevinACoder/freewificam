@@ -627,7 +627,7 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			 * caveat - but the frame just came out of encap, which
 			 * reserved the crypto header room for exactly this call
 			 * (output.c:440-445), so the header is prepended in
-			 * place. The tested carrier uses the call the same way
+			 * place. The tested reference implementation uses the call the same way
 			 * (frame-test main.c:630-641).
 			 */
 			k = ieee80211_crypto_encap(ic, ni, enc);
@@ -2143,7 +2143,7 @@ static const uint8_t bridge_htcap_ie[28] = {
 
 /*
  * The join the supplicant decided on. Everything here is the stack's own
- * documented policy surface (the prior carrier's board-proven associate
+ * documented policy surface (the prior reference line's board-proven associate
  * shape): which candidate, which security state, and then sta_join - the
  * stack's state machine runs auth/assoc from there exactly as it does on the
  * automatic path.
@@ -2395,7 +2395,7 @@ bridge_fetch_node(void *arg, struct ieee80211_node *ni)
 	 * ni_rssi is NetBSD's u_int8_t "recv ssi" slot: the drivers store a
 	 * signed dBm value in it (two's complement), and the stack's own ioctl
 	 * path reads it back through int8_t.  Reading the byte unsigned turned
-	 * the 8188's -47 dBm into 209 dBm in the scan table (L3-08, frt-scan-1),
+	 * the 8188's -47 dBm into 209 dBm in the scan table 
 	 * so the presentation layer does what the stack does.
 	 */
 	o->level = (int)(int8_t)ni->ni_rssi;

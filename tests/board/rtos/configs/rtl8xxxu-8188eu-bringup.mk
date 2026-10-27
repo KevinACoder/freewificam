@@ -1,4 +1,4 @@
-# L3-08 stage 1: the RTL8188EUS (0bda:8179) on a USB2 controller, bring-up
+# 8188EUS ladder, stage 1: the RTL8188EUS (0bda:8179) on a USB2 controller, bring-up
 # only.  The bus family is the lab's 480 M path (both xHCI roots); the one
 # discovery boot uses `-bringup-all` instead and pins whichever bus claims the
 # dongle.  Backend: FreeRTOS first (the ladder's reference arm).

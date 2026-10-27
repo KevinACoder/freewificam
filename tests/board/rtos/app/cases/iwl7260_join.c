@@ -138,7 +138,7 @@ case_iwl7260_join_run(void)
 			/*
 			 * `rx_age` is how long the bridge's receive count has
 			 * been standing still: a receive path that stops
-			 * delivering (the L3-06 f4 signature) dates itself
+			 * delivering (the signature seen when the device stops) dates itself
 			 * against the join's own clock without a new
 			 * instrument.  `irq`/`irqth` are the PCIe engine's two
 			 * interrupt counters and `wq` the body the deferred-work

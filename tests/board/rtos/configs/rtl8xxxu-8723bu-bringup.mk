@@ -1,4 +1,4 @@
-# L3-10 stage 1: the RTL8723BU (0bda:b720) on the bench's USB2 roots
+# 8723BU ladder, stage 1: the RTL8723BU (0bda:b720) on the bench's USB2 roots
 # (EHCI bus 1/0), bring-up only.  The dongle is a three-interface part: two
 # Bluetooth interfaces (class e0/01/01, no host stack here) and the
 # vendor-specific WiFi one the driver's id table claims.

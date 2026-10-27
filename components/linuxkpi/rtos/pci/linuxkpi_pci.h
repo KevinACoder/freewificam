@@ -60,7 +60,7 @@ const struct lkpi_pci_stats *lkpi_pci_stats_get(void);
  * the delivery path reached the driver's hard handler; `thread` is how many
  * threaded halves actually ran.  A frozen receive path with `hard` still rising
  * is a bottom-half problem; with `hard` frozen it is an interrupt (or device)
- * problem - the distinction the L3-07 round needs.
+ * problem - the distinction the join investigation needs.
  */
 void	lkpi_pci_irq_counters(unsigned int *hard, unsigned int *thread);
 

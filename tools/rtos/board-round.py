@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """One board round for the RTOS bin platform: stage, boot, capture, judge.
 
-The entry is one command per boot.  It holds one oslab MCP session open for
-the whole round (the lab's one-shot client loses the serial cursor between
-calls), stages the image under the deploy name the lab's `rtos` profile
-expects, boots it with a power cycle, captures the full serial log, optionally
-drives the peer (the Raspberry Pi) at the moment the image's network case says
-it is ready, and ends by judging the log and leaving the board powered off.
+The entry is one command per boot.  It holds one board session open for the
+whole round (the one-shot client loses the serial cursor between calls), stages
+the image under the deploy name the board's `rtos` boot profile expects, boots
+it with a power cycle, captures the full serial log, optionally drives a peer
+host at the moment the image's network case says it is ready, and ends by
+judging the log and leaving the board powered off.
+
+The board session client and its interpreter are environment, not repository:
+`BOARD_SESSION` names the line-protocol client and `BOARD_PYTHON` the
+interpreter that runs it.  The peer side is `BOARD_PEER` (an ssh target) and
+`BOARD_IP` (the address the peer drives); both can also be passed per run.
 
 Evidence layout, one directory per boot:
 
@@ -28,11 +33,12 @@ never starts cannot be mistaken for one that did.
 
 Usage:
     tools/rtos/board-round.py --backend freertos \
-        --out runs/L3-rtos/2026-10-24-rtos-bin --boot boot1 --peer
-    tools/rtos/board-round.py --backend freertos --plan 1 \
-        --out runs/L3-rtos/2026-10-25-rtos-bin-perf --boot b1 --peer --timeout 420
+        --out <evidence-dir> --boot boot1 --cases tick,cmsis2,net,emmc
+    tools/rtos/board-round.py --backend threadx --plan 1 --peer \
+        --peer-host bench@host --board-ip 192.168.99.2 \
+        --out <evidence-dir> --boot b1 --timeout 420
 
-    tools/rtos/judge.py runs/.../boot1/serial.log      # re-judge a capture
+    tools/rtos/judge.py <evidence-dir>/boot1/serial.log    # re-judge a capture
 """
 
 from __future__ import annotations
@@ -50,16 +56,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-# The lab's MCP entry is environment, not repository: OSLAB_SESSION names the
-# line-protocol client (the lab ships one), OSLAB_PYTHON the interpreter that
-# has the `mcp` package.  Keeping them out of the tree is deliberate - this
-# repository carries no local lab paths.
-SESSION = Path(os.environ["OSLAB_SESSION"]).expanduser() if os.environ.get("OSLAB_SESSION") else None
-LAB_PYTHON = Path(os.environ["OSLAB_PYTHON"]).expanduser() if os.environ.get("OSLAB_PYTHON") else None
+# The board session client is environment, not repository: BOARD_SESSION names
+# the line-protocol client, BOARD_PYTHON the interpreter that has the `mcp`
+# package.  Keeping them out of the tree is deliberate - this repository carries
+# no machine layout.
+SESSION = Path(os.environ["BOARD_SESSION"]).expanduser() if os.environ.get("BOARD_SESSION") else None
+LAB_PYTHON = Path(os.environ["BOARD_PYTHON"]).expanduser() if os.environ.get("BOARD_PYTHON") else None
 IMAGES = REPO / "tests" / "board" / "rtos" / "build" / "build"
 
-PEER = "pi@192.168.0.17"
-BOARD_IP = "192.168.0.200"
+PEER = os.environ.get("BOARD_PEER") or None
+BOARD_IP = os.environ.get("BOARD_IP") or ""
 FINAL_ANCHOR = "rtos: result"
 # The delivery plan's downlink phase still announces itself this way; the
 # phase anchors above are the general form.
@@ -73,15 +79,15 @@ PHASE_RE = re.compile(r"net: phase (\d+) begin .*name=(\S+)")
 
 
 class Session:
-    """One persistent oslab MCP session over the lab's line protocol."""
+    """One persistent board session over the client's line protocol."""
 
     def __init__(self) -> None:
         if SESSION is None or not SESSION.exists():
             raise SystemExit(
-                "board-round: set OSLAB_SESSION to the lab's oslab-session.py"
+                "board-round: set BOARD_SESSION to the board session client"
             )
         if LAB_PYTHON is None or not LAB_PYTHON.exists():
-            raise SystemExit("board-round: set OSLAB_PYTHON to the lab interpreter")
+            raise SystemExit("board-round: set BOARD_PYTHON to its interpreter")
         self.proc = subprocess.Popen(
             [str(LAB_PYTHON), str(SESSION)],
             stdin=subprocess.PIPE,
@@ -129,6 +135,8 @@ def crc32_file(path: Path) -> int:
 
 
 def ssh(command: str, timeout: int = 60) -> str:
+    if not PEER:
+        raise SystemExit("board-round: set BOARD_PEER (an ssh target) or pass --peer-host")
     result = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", PEER, command],
         capture_output=True,
@@ -202,9 +210,11 @@ def peer_ping() -> str:
 def peer_tcp_raw(seconds: int, rate_mbps: float = 0.0) -> str:
     """Raw TCP sender for the 8189FTV lwIP sink (no iperf3 protocol)."""
     script = REPO / "tools" / "rtos" / "tcp-sender.py"
+    if not PEER or not BOARD_IP:
+        raise SystemExit("board-round: the raw TCP peer needs BOARD_PEER and --board-ip")
     cmd = [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", PEER,
-        f"python3 -u - --host 192.168.99.2 --port 5001 --seconds {seconds} "
+        f"python3 -u - --host {BOARD_IP} --port 5001 --seconds {seconds} "
         f"--rate-mbps {rate_mbps}",
     ]
     with script.open("rb") as stdin:
@@ -218,9 +228,11 @@ def peer_tcp_raw(seconds: int, rate_mbps: float = 0.0) -> str:
 def peer_udp_raw(seconds: int, mbps: float) -> str:
     """Raw UDP sender for the 8189FTV lwIP sink (fixed rate, no ACKs)."""
     script = REPO / "tools" / "rtos" / "udp-sender.py"
+    if not PEER or not BOARD_IP:
+        raise SystemExit("board-round: the raw UDP peer needs BOARD_PEER and --board-ip")
     cmd = [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", PEER,
-        f"python3 -u - --host 192.168.99.2 --port 5002 --seconds {seconds} "
+        f"python3 -u - --host {BOARD_IP} --port 5002 --seconds {seconds} "
         f"--mbps {mbps}",
     ]
     with script.open("rb") as stdin:
@@ -288,7 +300,7 @@ PEER_ACTIONS = {
 
 
 def main() -> int:
-    global BOARD_IP
+    global BOARD_IP, PEER
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--backend", required=True, choices=["freertos", "threadx"])
     ap.add_argument("--out", required=True, type=Path, help="run directory")
@@ -310,15 +322,21 @@ def main() -> int:
                     help="case names the image carries (judge's expected set)")
     ap.add_argument("--plan", type=int, default=0, choices=[0, 1],
                     help="the image's phase plan (0 delivery, 1 throughput round)")
+    ap.add_argument("--peer-host", default=PEER,
+                    help="ssh target of the peer host (default: BOARD_PEER)")
     ap.add_argument("--board-ip", default=BOARD_IP,
-                    help="the board address the peer drives (the wifi arms use 192.168.99.2)")
+                    help="the board address the peer drives (default: BOARD_IP)")
     ap.add_argument("--timeout", type=int, default=420, help="capture window, seconds")
     ap.add_argument("--no-power-off", action="store_true")
     args = ap.parse_args()
 
-    # The peer-facing helpers address the board by this name; the wifi arms run
-    # on the AP's own net (192.168.99.2), the wired arms on the lab's (192.168.0.200).
+    # The peer-facing helpers address the board by this name.  The caller owns
+    # both ends: the wired arms and the access point's own net are different
+    # addresses, and neither is assumed here.
     BOARD_IP = args.board_ip
+    PEER = args.peer_host or None
+    if args.peer and not PEER:
+        raise SystemExit("board-round: --peer needs --peer-host or BOARD_PEER")
 
     image = IMAGES / f"rtos-{args.backend}.bin"
     if not image.exists():

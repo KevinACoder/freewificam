@@ -282,7 +282,7 @@ int usb_osal_mq_recv(usb_osal_mq_t mq, uintptr_t *addr, uint32_t timeout)
  * is an ordinary thread, so it can. A full queue drops one expiry - the timer
  * re-arms and the next expiry retries - so the trampoline never blocks.
  *
- * Shape and rationale from the carrier's port of the same stack
+ * Shape and rationale from the reference port of the same stack
  * (its usb_osal_threadx.c deferral, which records the measured symptom: a
  * Configure Endpoint command that "timed out" in milliseconds with the
  * kernel's wait-error status). */

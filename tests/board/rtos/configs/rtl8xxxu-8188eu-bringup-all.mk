@@ -1,4 +1,4 @@
-# L3-08 discovery arm: one boot that starts all four controllers (xHCI 3/2 and
+# 8188EUS discovery arm: one boot that starts all four controllers (xHCI 3/2 and
 # EHCI 1/0) and reports which one claims the dongle.  The answer pins the bus
 # in the other profiles; this file is not a delivery profile.
 CONFIG_BACKEND := freertos

@@ -59,8 +59,14 @@ WLAN_SCAN_BATCH := $(CONFIG_WLAN_SCAN_BATCH)
 WLAN_PUMP_PRIO := $(CONFIG_WLAN_PUMP_PRIO)
 WLAN_PUMP_DRAIN := $(CONFIG_WLAN_PUMP_DRAIN)
 
-AARCH64_CROSS_PATH ?= $(HOME)/workspace/env/src/xpack-aarch64-none-elf-gcc-13.2.1-1.1
+# The cross toolchain: put an `aarch64-none-elf-` toolchain on PATH, or name
+# its prefix directory in AARCH64_CROSS_PATH, or name the whole prefix in
+# CROSS_COMPILE.  No machine layout is assumed here.
+ifneq ($(strip $(AARCH64_CROSS_PATH)),)
 CROSS_COMPILE ?= $(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-
+else
+CROSS_COMPILE ?= aarch64-none-elf-
+endif
 CC := $(CROSS_COMPILE)gcc
 OBJCOPY := $(CROSS_COMPILE)objcopy
 NM := $(CROSS_COMPILE)nm
@@ -82,7 +88,7 @@ ADAPTER_PATCHES := $(notdir $(wildcard $(ROOT)/third-party/CMSIS-FreeRTOS/patche
 BUILD := $(CURDIR)/build
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
 # Optimisation level. -O2 is the adopted default since the performance round
-# (decisions/2026-10-25-rtos-bin-perf-profile.md): +17% uplink, -73% ping RTT,
+# (the performance round's profile decision): +17% uplink, -73% ping RTT,
 # +16% board-local loopback, no change on the storage path and no suite
 # regression. The 2026-10-25 lwIP round measured -O3 neutral on both legs
 # (down 480.9 vs 483.2, up 690.7 vs 687.3), so there is nothing to re-certify

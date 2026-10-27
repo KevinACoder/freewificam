@@ -6,7 +6,7 @@
  *
  * rtl8xxxu has no hardware scan: its ops table carries `.sw_scan_start` /
  * `.sw_scan_complete` and no `.hw_scan`, which is the 8051-class division of
- * labour - scan runs in the host driver, not in the firmware (TRM `01`).
+ * labour - scan runs in the host driver, not in the firmware.
  * The bridge therefore walks the channel list itself: the case pumps the dwell
  * entry (which tunes the next channel through the driver's `.config`) and the
  * stack's 1 Hz tick (the node timers), and the window closes when the walk runs

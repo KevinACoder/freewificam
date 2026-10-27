@@ -315,7 +315,7 @@ static void slot_entry( ULONG input )
  * a non-zero time slice to do the same.  With TX_NO_TIME_SLICE two threads at
  * the same band only switch when one blocks, so a thread that stays runnable
  * (the USB hub/drain threads share band 3 with the application runner) starves
- * every other thread at its band for as long as it runs.  The L3-08 run caught
+ * every other thread at its band for as long as it runs.  The 8188EUS round caught
  * exactly that: the runner stayed READY for 100+ s while a band-3 USB thread
  * held the CPU (hb/tx-hb-4, the heartbeat at a higher band kept printing), and
  * the same image on FreeRTOS passed.  Ten ticks (10 ms at 1000 Hz) is one

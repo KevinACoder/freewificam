@@ -119,7 +119,7 @@ RTL8XXXU_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	$(RTL8XXXU_KPI_INCLUDES)
 
-# The driver's own flag world: the freestanding set the carrier image compiled
+# The driver's own flag world: the freestanding set the reference image compiled
 # these nine units with (and the linux-ko arm builds them with the kernel's
 # equivalent).  No Kconfig define: the chip table selects the fileops.
 RTL8XXXU_DRV_CFLAGS := -std=c11 -O2 -Wall \

@@ -1,4 +1,4 @@
-# L3-08 stage 2: bring-up + scan.  The 8188 has no hardware scan op: the
+# 8188EUS ladder, stage 2: bring-up + scan.  The 8188 has no hardware scan op: the
 # net80211 bridge walks the 2.4 GHz channels through the driver's
 # .sw_scan_start, so the case pumps the dwell entry and the stack's 1 Hz tick.
 CONFIG_BACKEND := freertos

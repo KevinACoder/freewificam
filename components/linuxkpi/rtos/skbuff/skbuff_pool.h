@@ -3,8 +3,8 @@
  *
  * Dual static pool for struct sk_buff headers and their linear data
  * buffers, descended from the Realtek/TizenRT pool (rtl8720e osdep
- * freertos_skbuff.c, Apache-2.0; snapshot runs/20261006-lkpi-stabilize/
- * refs/tizenrt-skbuff/).  Function-level lineage in skbuff/PROVENANCE.md,
+ * freertos_skbuff.c, Apache-2.0; the consulted snapshot is recorded in
+ * skbuff/PROVENANCE.md).  Function-level lineage in skbuff/PROVENANCE.md,
  * deviations in skbuff/DIVERGENCES.md.
  *
  * The struct sk_buff definition lives HERE (moved from linuxkpi_core.h)

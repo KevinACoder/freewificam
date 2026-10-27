@@ -1,5 +1,6 @@
-# L3-10 discovery arm: one boot that starts all four controllers (xHCI 3/2 and
-# EHCI 1/0) and reports which one claims the dongle.  The GT already says the
+# 8723BU discovery arm: one boot that starts all four controllers (xHCI 3/2 and
+# EHCI 1/0) and reports which one claims the dongle.  The Linux reference build
+# already says the
 # 8723BU is behind the 4-port hub on an EHCI root, but the bus id moves with
 # the probe order, so this arm measures instead of trusting the note.
 # Not a delivery profile.

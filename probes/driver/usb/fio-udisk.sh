@@ -1,10 +1,12 @@
 #!/bin/sh
-# Linux ground truth for the L3-04 U-disk ladder: same disk, same window, same
+# Linux ground truth for the U-disk ladder: same disk, same window, same
 # command sizes as the RTOS `usb_msc` case.
 #
-# Run on the board after booting the GT kernel + mfs (the board's NFS share is
-# mounted at /mnt/nfs):
-#   DEV=/dev/sda sh /mnt/nfs/root/fio-udisk.sh /mnt/nfs/root/linux-gt
+# Run on the board after booting the Linux reference kernel and the ramdisk.
+# The script takes its output directory as the first argument and its block
+# device from DEV; both are the caller's, so the same script runs from a
+# network share, a USB stick or the ramdisk itself:
+#   DEV=/dev/sda sh fio-udisk.sh ./linux-gt
 #
 # Window (identical to usb_msc.c): the disk's last 32 MiB, aligned down to
 # 1 MiB.  Every arm stays inside it; the first 1 MiB (partition table) is never
@@ -18,7 +20,7 @@
 # max_sectors_kb splits large requests and hides the real command count.
 set -u
 
-OUT=${1:-/mnt/nfs/root/linux-gt}
+OUT=${1:-./linux-gt}
 DEV=${DEV:-/dev/sda}
 MIB=1048576
 WINDOW_BYTES=$((32 * 1024 * 1024))

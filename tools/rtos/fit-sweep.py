@@ -13,7 +13,7 @@ intercept 1/BW.  One number per size cannot separate the two; a curve can.
 
 Usage:
     tools/rtos/fit-sweep.py <serial.log> [<serial.log> ...]
-    tools/rtos/fit-sweep.py --json fit.json runs/.../b1/serial.log
+    tools/rtos/fit-sweep.py --json fit.json <run-dir>/b1/serial.log
 
 This is a measurement aid, not a gate: it prints the fit and the per-size table
 and leaves the verdict to the ledger.

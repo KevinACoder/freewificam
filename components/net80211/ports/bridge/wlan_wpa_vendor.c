@@ -8,7 +8,8 @@
  * @design adapter / anticorruption layer, bridge-side instance (the contract
  *         header states the rule: no hostap type and no net80211 type crosses
  *         it; this file owns the translation in both directions). The shape
- *         follows the carrier whose board runs proved it (the prior line's
+ *         follows the reference implementation whose board runs proved it
+ *         (the prior line's
  *         rtw88 vendor instance): MANUAL roaming so the supplicant's join
  *         decision does not race the stack's own matcher, the pull-model scan
  *         table, the PAE-branch EAPOL seam, and the event pump fed from the

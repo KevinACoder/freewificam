@@ -6,7 +6,7 @@
  * @design  template method - the imported class driver owns matching and the
  *          transport (class/msc/usbh_msc.c) and calls the weak run/stop hooks;
  *          this file is the integrator's half, the same split the prior
- *          carrier used (its usbh_msc.c's run hook).
+ *          reference image used (its usbh_msc.c's run hook).
  *
  * On connect the library has already built the device context; the run hook
  * performs the SCSI identity handshake (ready -> inquiry -> capacity) and only

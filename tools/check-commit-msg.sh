@@ -62,7 +62,7 @@ fi
 
 # Documented vocabularies; unknown ones warn, do not fail.
 areas='repo|docs|tools|wlan|netdev|bridge|board|lab|kernelmod|linuxnative|rtos|trm|proxy|contract|catalog|model|conformance'
-labels='bootstrap|convention|plan|migration|gates|hooks|import|provenance|kernelmod|linuxnative|rtos|trm|proxy|contract|catalog|model|conformance|fix|docs|linux-ko'
+labels='bootstrap|convention|plan|migration|gates|hooks|import|provenance|kernelmod|linuxnative|rtos|trm|proxy|contract|catalog|model|conformance|fix|docs|linux-ko|release|issues'
 
 if [[ "$subject" =~ ^([a-z][a-z0-9-]*):\ \(([a-z][a-z0-9.-]*)\) ]]; then
 	area="${BASH_REMATCH[1]}"

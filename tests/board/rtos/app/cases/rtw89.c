@@ -6,7 +6,7 @@
  *         USB engine, downloads its firmware and registers its hw; the bridge
  *         then runs the driver's start chain.
  *
- * This is the B gate.  The chain is the carrier image's, in the order that
+ * This is the B gate.  The chain is the reference image's, in the order that
  * order matters:
  *
  *   1. the linuxkpi core services (the system workqueue every deferred driver

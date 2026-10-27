@@ -1,4 +1,4 @@
-# L3-10 stage 3: bring-up + scan + open join against the bench AP (MTK,
+# 8723BU ladder, stage 3: bring-up + scan + open join against the bench AP (MTK,
 # labwifi-mtk24, ch5, open).  The join is the bridge's own station MLME; no
 # key exchange.
 CONFIG_BACKEND := freertos

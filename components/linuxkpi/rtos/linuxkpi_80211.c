@@ -230,8 +230,8 @@ static u32 lkpi80211_tx_completions;
  * Completions whose frame was not acknowledged (IEEE80211_TX_STAT_ACK clear).
  * The bridge counter `tx_completes` cannot separate "the driver reported the
  * frame done" from "the air acknowledged it": mvm reports both, and a join that
- * stays in AUTH while the AP never logs the authentication needs that split
- * (the L3-07 f4 face: one completion but no AP-side authentication line).
+ * stays in AUTH while the AP never logs the authentication needs that split:
+ * one completion but no AP-side authentication line.
  */
 static u32 lkpi80211_tx_unacked;
 

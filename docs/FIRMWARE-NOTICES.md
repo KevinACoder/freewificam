@@ -2,8 +2,8 @@
 
 The RTOS bin platform has no filesystem, so a driver's `request_firmware()` is
 served by `components/linuxkpi/rtos/fw_registry_rtos.c` from a table filled at
-start-up. The table's data is a C array generated from the firmware file the
-Linux lane ships for the same chip.
+start-up. The table's data is a C array generated from the vendor's firmware
+file for the same chip.
 
 Two rules keep this honest:
 
@@ -18,20 +18,27 @@ Two rules keep this honest:
 
 ## The blobs
 
-| chip | request name | bytes | sha256 | source of the bytes | licence |
-|---|---|---|---|---|---|
-| RTL8188EUS | `rtlwifi/rtl8188eufw.bin` | 15,262 | `2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4` | `linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8188eufw.bin` (the GT image's file; also in the mfs rootfs via `build-mfs-rootfs.sh`'s `FIRMWARE_FILES`) | Realtek binary redistribution, below |
-| RTL8723BU | `rtlwifi/rtl8723bu_nic.bin` | 32,108 | `a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969` | `linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8723bu_nic.bin` (the L1-11 GT image's file; also in the mfs rootfs via `FIRMWARE_FILES`) | Realtek binary redistribution, below |
-| RTL8851BU | `rtw89/rtw8851b_fw-1.bin` | 1,408,706 | `1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7` | the GT image's `rtw89/rtw8851b_fw-1.bin` | Realtek binary redistribution |
+The source file is the one the Linux kernel loads for the same chip; it is
+published by the Linux firmware package (`linux-firmware`, paths
+the `rtlwifi/` and `rtw89/` directories). The digest identifies the exact bytes this
+repository's images were built with.
 
-(An image may also carry the AC 7260 blob; its own header records the digest,
-the same way.)
+| chip | request name | bytes | sha256 | source file | licence |
+|---|---|---|---|---|---|
+| RTL8188EUS | `rtlwifi/rtl8188eufw.bin` | 15,262 | `2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4` | `rtlwifi/rtl8188eufw.bin` from the Linux firmware package | Realtek binary redistribution, below |
+| RTL8723BU | `rtlwifi/rtl8723bu_nic.bin` | 32,108 | `a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969` | `rtlwifi/rtl8723bu_nic.bin` from the Linux firmware package | Realtek binary redistribution, below |
+| RTL8851BU | `rtw89/rtw8851b_fw-1.bin` | 1,408,706 | `1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7` | `rtw89/rtw8851b_fw-1.bin` from the Linux firmware package | Realtek binary redistribution, below |
+
+An image may also carry the Intel AC 7260 blob (`iwlwifi-7260-17.ucode`); its
+own header records the digest, the same way, and its notice is the Intel
+`LICENCE.iwlwifi_firmware` terms kept next to the generated blob.
 
 ## Generating the 8188EU blob
 
 ```sh
+# FIRMWARE_DIR is a checkout of the Linux firmware package.
 tools/rtos/fw-blob.py \
-    --in ../linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8188eufw.bin \
+    --in "$FIRMWARE_DIR"/rtlwifi/rtl8188eufw.bin \
     --name rtlwifi/rtl8188eufw.bin --symbol rtl8188eufw \
     --sha256 2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4 \
     --size 15262 \
@@ -39,19 +46,19 @@ tools/rtos/fw-blob.py \
 
 # verify a generated blob against the source file
 tools/rtos/fw-blob.py --check components/linuxkpi/fw/rtl8188eufw_blob.c \
-    --in ../linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8188eufw.bin \
+    --in "$FIRMWARE_DIR"/rtlwifi/rtl8188eufw.bin \
     --name rtlwifi/rtl8188eufw.bin
 ```
 
 The generated unit registers itself as `lkpi_fw_rtl8188eufw_register()`; the
 image's linker line carries `-Wl,-u,lkpi_fw_rtl8188eufw_register` so
-`--gc-sections` cannot drop it, and `make gates` checks the symbol is present.
+`--gc-sections` cannot drop it, and the image gate checks the symbol is present.
 
 ## Generating the 8723BU blob
 
 ```sh
 tools/rtos/fw-blob.py \
-    --in ../linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8723bu_nic.bin \
+    --in "$FIRMWARE_DIR"/rtlwifi/rtl8723bu_nic.bin \
     --name rtlwifi/rtl8723bu_nic.bin --symbol rtl8723bu \
     --sha256 a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969 \
     --size 32108 \
@@ -59,12 +66,12 @@ tools/rtos/fw-blob.py \
 
 # verify a generated blob against the source file
 tools/rtos/fw-blob.py --check components/linuxkpi/fw/rtl8723bu_fw_blob.c \
-    --in ../linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8723bu_nic.bin \
+    --in "$FIRMWARE_DIR"/rtlwifi/rtl8723bu_nic.bin \
     --name rtlwifi/rtl8723bu_nic.bin
 ```
 
 It registers as `lkpi_fw_rtl8723bu_register()` and the profile's chip selects
-that symbol for both the linker's `-u` and the `make gates` check
+that symbol for both the linker's `-u` and the image gate
 (`CONFIG_RTL8XXXU_CHIP := 8723bu` in `configs/rtl8xxxu-8723bu-*.mk`).
 
 ## Realtek binary redistribution terms (RTL8188EU firmware)
@@ -117,9 +124,8 @@ reason as the bytes).
 
 ## Why the blobs are not committed
 
-Same ruling as `decisions/2026-10-25-pcie-rtos-ladder.md`: the repository imports
-source, and source-only trees are reproducible; a binary blob's home is the
-vendor's redistribution terms plus the pinned Linux firmware file, not the
-repository. The price is one build input outside git, and the generator plus the
-digest check is how that price is kept visible rather than becoming a mystery
-missing file.
+The repository imports source, and source-only trees are reproducible; a binary
+blob's home is the vendor's redistribution terms plus the published firmware
+file, not the repository. The price is one build input outside git, and the
+generator plus the digest check is how that price is kept visible rather than
+becoming a mystery missing file.

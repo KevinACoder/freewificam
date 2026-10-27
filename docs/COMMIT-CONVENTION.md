@@ -1,8 +1,7 @@
 # COMMIT-CONVENTION - commit messages for dev_v2
 
-Adapted from `wcam@2c0d375:docs/COMMIT-CONVENTION.md` for this repository's
-areas and the L1 firmware-contract scope. The checker is
-`tools/check-commit-msg.sh`; install it with `tools/install-hooks.sh`.
+This repository's commit format. The checker is `tools/check-commit-msg.sh`;
+install it with `tools/install-hooks.sh`.
 
 ## 1. Subject
 
@@ -16,7 +15,7 @@ areas and the L1 firmware-contract scope. The checker is
 - `label` is the line, phase or topic, lowercase: `bootstrap`, `convention`,
   `plan`, `migration`, `gates`, `hooks`, `import`, `provenance`, `kernelmod`,
   `linuxnative`, `rtos`, `trm`, `proxy`, `contract`, `catalog`, `model`,
-  `conformance`, `fix`, `docs`, `linux-ko`.
+  `conformance`, `fix`, `docs`, `linux-ko`, `release`, `issues`.
 - `summary` is ASCII, lowercase imperative, at most 72 characters, no
   trailing period.
 
@@ -40,7 +39,8 @@ Recommended sections, as needed:
 
 ```
 Why: ...
-Evidence: runs/<date>-<topic>/... (command, sha256, boot_id)
+Evidence: <what was measured, on which board, when> (the measurement records
+  themselves stay outside this repository)
 Provenance: <repo>@<sha>:<path> (license, byte-identical or divergences)
 Workaround: <what> / owner <x> / hides <mismatch> / remove when <y>
 Doc-sweep: <files updated>
@@ -48,6 +48,10 @@ Doc-sweep: <files updated>
 
 - Imports must carry `Provenance:` with the source commit or tag, path,
   license and whether the file is byte-identical.
+- `Evidence:` is a description, not a pointer: name the board, the scenario
+  and the date, and quote the numbers the message's claim rests on. A path
+  into a private measurement tree is meaningless to a reader of this
+  repository, so it is not written.
 - A workaround is recorded with its layer, owner, hidden mismatch and removal
   condition; an unrecorded workaround does not count as working.
 - Documentation changes that belong to the same behaviour land in the same
@@ -56,8 +60,8 @@ Doc-sweep: <files updated>
 ## 3. Atomicity and buildability
 
 - One commit, one change; every commit must build (bisectable).
-- During bring-up, keep debugging changes in the workspace and land a clean
-  series after the verdict. No `WIP`, `backup`, `fixup` or `tmp` commits.
+- During bring-up, keep debugging changes out of the series and land the
+  clean diff after the verdict. No `WIP`, `backup`, `fixup` or `tmp` commits.
 - Do not write local paths, lab identifiers or knowledge-base references into
   this repository.
 

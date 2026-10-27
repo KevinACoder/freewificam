@@ -16,7 +16,7 @@ Usage:
 
     # generate (the output path is gitignored on purpose)
     tools/rtos/fw-blob.py \
-        --in linux-upstream/build/.../lib/firmware/rtlwifi/rtl8188eufw.bin \
+        --in "$FIRMWARE_DIR"/rtlwifi/rtl8188eufw.bin \
         --name rtlwifi/rtl8188eufw.bin --symbol rtl8188eufw \
         --licence "Realtek binary redistribution terms, docs/FIRMWARE-NOTICES.md" \
         --out components/linuxkpi/fw/rtl8188eufw_blob.c

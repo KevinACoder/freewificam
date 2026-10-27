@@ -1,4 +1,4 @@
-# L3-08 stage 4: the full ladder through the raw-L2 data plane (ARP + ICMP),
+# 8188EUS ladder, stage 4: the full ladder through the raw-L2 data plane (ARP + ICMP),
 # with no IP stack in the image.
 CONFIG_BACKEND := freertos
 CONFIG_CASES := tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane

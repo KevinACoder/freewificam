@@ -173,8 +173,8 @@ case_rtl8xxxu_join_run(void)
 
 	/*
 	 * Two attempts.  The bench AP occasionally does not answer the first
-	 * auth after a fresh association (L1-07 measured the same first-join
-	 * fallback on this chip, TRM `99` #07).  A second join is the same
+	 * auth after a fresh association (the 8188EUS Linux round measured the same
+	 * first-join fallback on this chip).  A second join is the same
 	 * exchange from a clean state; the intermediate timeout is an INFO
 	 * line, never the case's FAIL anchor, so a passing retry is not later
 	 * read as a failure.

@@ -1,4 +1,4 @@
-# L3-10 stage 2: bring-up + scan.  The 8723B has no hardware scan op either:
+# 8723BU ladder, stage 2: bring-up + scan.  The 8723B has no hardware scan op either:
 # the net80211 bridge walks the 2.4 GHz channels through the driver's
 # .sw_scan_start, so the case pumps the dwell entry and the stack's 1 Hz tick.
 CONFIG_BACKEND := freertos

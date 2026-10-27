@@ -1,4 +1,4 @@
-# L3-08 diagnostic arm: the bring-up plus the high-priority heartbeat that
+# 8188EUS diagnostic arm: the bring-up plus the high-priority heartbeat that
 # reports through the polled UART.  Used to tell a dead kernel/console from a
 # blocked runner after the ThreadX claim hang; not a delivery profile.
 CONFIG_BACKEND := threadx

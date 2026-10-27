@@ -26,7 +26,7 @@ RTW89_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtw89"' \
 
 # The skb pool geometry the receive path needs: sixteen 20 KiB receive buffers
 # are alive for the driver's lifetime and the transmit path allocates one per
-# transfer, so the carrier's smaller defaults run dry before the firmware
+# transfer, so the reference image's smaller defaults run dry before the firmware
 # download finishes.  2048-byte data slots stay 2048: this driver's buffers are
 # larger than that and are served from the heap, which is where the window goes.
 RTW89_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
@@ -133,7 +133,7 @@ RTW89_LKPI_SRCS := \
 	$(RTW89_NPORT)/bridge/wlan_seam_adapter.c \
 	$(USB_PORT)/lkpi_usb_cherryusb.c
 
-# The 8851BU translation units: the same 21 the carrier's board-proven image
+# The 8851BU translation units: the same 21 the reference board-proven image
 # compiled (core, chip, and the two bus units).  The Wi-Fi 7 `*_be` units are
 # not in this set; the linker's zero-undefined gate is the check that the chip
 # selection does not reach them.

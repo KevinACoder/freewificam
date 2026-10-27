@@ -1,4 +1,4 @@
-# L3-08 stage 3: bring-up + scan + open join against the bench AP (MTK, ch5,
+# 8188EUS ladder, stage 3: bring-up + scan + open join against the bench AP (MTK, ch5,
 # open).  The join is the bridge's own station MLME; no key exchange.
 CONFIG_BACKEND := freertos
 CONFIG_CASES := tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join

@@ -102,7 +102,7 @@ int	lkpicfg_scan_start_list(struct wiphy *wiphy,
 	    const unsigned int *hw_values, unsigned int n);
 
 /* The one-channel debug entry.  The production path uses the full-band
- * request; this form is kept for diagnostics (TRM 99 #25). */
+ * request; this form is kept for diagnostics. */
 int	lkpicfg_scan_start_channel(struct wiphy *wiphy, unsigned int hw_value);
 
 /* The table the substitute collected from the driver's own reports. */
