@@ -108,8 +108,9 @@ not understood well enough to trust it (see the camera entries in
 
 ## Certified images
 
-The numbers above were measured on images built from commit `ef4f77d` on a
-clean tree, tag `v0.0.2` on top of it:
+The numbers above were measured on images built from commit `ef4f77d` (the
+code commit of this release) on a clean tree. The tag `v0.0.2` adds the
+documentation commits that follow it - no code, no test and no build change:
 
 | Kernel | Size | sha256 |
 |---|---|---|
