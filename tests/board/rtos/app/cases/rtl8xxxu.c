@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file   rtl8xxxu.c
- * @brief  Case rtl8xxxu: the RTL8188EUS (0bda:8179) enumerates on a USB host
+ * @brief  Case rtl8xxxu: the profile's Realtek USB part (RTL8188EUS
+ *         `0bda:8179` or RTL8723BU `0bda:b720`) enumerates on a USB host
  *         controller, the vendored rtl8xxxu driver probes it over the linuxkpi
  *         USB engine, downloads its firmware and registers its hw; the bridge
  *         then runs the driver's start chain.
@@ -20,7 +21,8 @@
  *      rtl8xxxu resubmits its 32 receive urbs from their completion callbacks,
  *      so with the blocking lane the chip receives nothing;
  *   5. the firmware blob, registered under the name the driver asks for
- *      (`rtlwifi/rtl8188eufw.bin`);
+ *      (the profile's chip: `rtlwifi/rtl8188eufw.bin` or
+ *      `rtlwifi/rtl8723bu_nic.bin`);
  *   6. the board USB domain and the controller start (one `usbh_initialize`
  *      per controller in the profile's list; the attach wait is shared);
  *   7. the driver's own start (`wlan_bridge_up()`), which is what submits the
@@ -29,8 +31,9 @@
  * Anchors:
  *   rtl8xxxu: usb buses=3,2
  *   rtl8xxxu: usb bus=3 hcd=xhci base=0x... started
- *   rtl8xxxu: claim 0bda:8179                (the class hook's line, echoed)
- *   rtl8xxxu: fw Firmware revision 28.0 (signature 0x88e1)
+ *   rtl8xxxu: claim 0bda:8179|0bda:b720       (the profile's id, echoed)
+ *   rtl8xxxu: fw Firmware revision 28.0 (signature 0x88e1)  [8188]
+ *   rtl8xxxu: fw Firmware revision 35.0 (signature 0x5301)  [8723BU]
  *   rtl8xxxu: attach ok after <ms> ms mac=...
  *   rtl8xxxu: start ok attached=1 rx=<n>
  *   rtl8xxxu: usb submits=... completes=... refused=... stage_overflow=...
@@ -110,27 +113,38 @@ void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void lkpi_usb_init(void);
 void lkpi_usb_force_sync_set(bool on);
-int lkpi_fw_rtl8188eufw_register(void);
+
+/* The chip's identity, from the profile.  The defaults are the 8188 line's so
+ * its profiles keep their meaning; the 8723BU profile names its own register
+ * function and id line. */
+#ifndef RTL8XXXU_FW_REGISTER
+#define RTL8XXXU_FW_REGISTER lkpi_fw_rtl8188eufw_register
+#endif
+#ifndef RTL8XXXU_CLAIM_ID
+#define RTL8XXXU_CLAIM_ID "0bda:8179"
+#endif
+int RTL8XXXU_FW_REGISTER(void);
 
 #define RTL8XXXU_WAIT_MS	60000U
 #define RTL8XXXU_POLL_MS	100U
 
-/* The dongle this image is for (the profile's arm fact).  The bench carries a
- * second rtl8xxxu device (an RTL8723BU on the USB2 root); if the profile ever
- * starts that root, "attached" would be true for the wrong chip.  The address
- * is the identity check board-test-ops asks for. */
+/* The dongle this image is for (the profile's arm fact).  The bench carries
+ * more than one rtl8xxxu device; if the profile ever starts a root the other
+ * one sits on, "attached" would be true for the wrong chip.  The address is
+ * the identity check board-test-ops asks for. */
 #ifndef RTL8XXXU_EXPECT_MAC
 #define RTL8XXXU_EXPECT_MAC { 0x20, 0xf4, 0x1b, 0x52, 0x8f, 0x01 }
 #endif
 static const uint8_t rtl8xxxu_expect_mac[6] = RTL8XXXU_EXPECT_MAC;
 
 /*
- * The profile's controller list.  The dongle is a USB2 device: on this bench it
- * has been seen on an xHCI root at 480 M (the lab arm) and on an OHCI root at
- * 12 M (the clean GT arm, which this image cannot drive - the RTOS USB domain
- * carries EHCI and xHCI only).  The list is therefore a bench fact, not a
- * driver fact: the discovery profile starts all four roots once, then the bus
- * that claimed the dongle is pinned here.
+ * The profile's controller list.  Both parts are USB2 devices, but the bench
+ * puts them on different roots: the 8188 line measured an xHCI root at 480 M
+ * (and a clean GT boot on an OHCI root at 12 M, which this image cannot drive
+ * - the RTOS USB domain carries EHCI and xHCI only), while the 8723BU sits on
+ * an EHCI root behind the bench's 4-port hub.  The list is therefore a bench
+ * fact, not a driver fact: the discovery profile starts all four roots once,
+ * then the bus that claimed the dongle is pinned here.
  */
 #if RTL8XXXU_USB_BUS == 1
 static const unsigned int rtl8xxxu_buses[] = { 1U, 0U };
@@ -160,7 +174,7 @@ rtl8xxxu_sink(ulog_level_t level, const char *line)
 {
 	(void)level;
 
-	if (strstr(line, "0bda:8179") != NULL) {
+	if (strstr(line, RTL8XXXU_CLAIM_ID) != NULL) {
 		rtl8xxxu_claim_seen++;
 		CASE_ANCHOR("rtl8xxxu: claim %s\n", line);
 		return;
@@ -247,7 +261,7 @@ case_rtl8xxxu_run(void)
 	lkpi_usb_cherryusb_init();
 	lkpi_usb_init();
 	lkpi_usb_force_sync_set(false);
-	if (lkpi_fw_rtl8188eufw_register() != 0) {
+	if (RTL8XXXU_FW_REGISTER() != 0) {
 		CASE_ANCHOR("rtl8xxxu: FAIL firmware blob registration\n");
 		return 1;
 	}

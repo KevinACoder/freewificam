@@ -21,6 +21,7 @@ Two rules keep this honest:
 | chip | request name | bytes | sha256 | source of the bytes | licence |
 |---|---|---|---|---|---|
 | RTL8188EUS | `rtlwifi/rtl8188eufw.bin` | 15,262 | `2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4` | `linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8188eufw.bin` (the GT image's file; also in the mfs rootfs via `build-mfs-rootfs.sh`'s `FIRMWARE_FILES`) | Realtek binary redistribution, below |
+| RTL8723BU | `rtlwifi/rtl8723bu_nic.bin` | 32,108 | `a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969` | `linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8723bu_nic.bin` (the L1-11 GT image's file; also in the mfs rootfs via `FIRMWARE_FILES`) | Realtek binary redistribution, below |
 | RTL8851BU | `rtw89/rtw8851b_fw-1.bin` | 1,408,706 | `1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7` | the GT image's `rtw89/rtw8851b_fw-1.bin` | Realtek binary redistribution |
 
 (An image may also carry the AC 7260 blob; its own header records the digest,
@@ -45,6 +46,26 @@ tools/rtos/fw-blob.py --check components/linuxkpi/fw/rtl8188eufw_blob.c \
 The generated unit registers itself as `lkpi_fw_rtl8188eufw_register()`; the
 image's linker line carries `-Wl,-u,lkpi_fw_rtl8188eufw_register` so
 `--gc-sections` cannot drop it, and `make gates` checks the symbol is present.
+
+## Generating the 8723BU blob
+
+```sh
+tools/rtos/fw-blob.py \
+    --in ../linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8723bu_nic.bin \
+    --name rtlwifi/rtl8723bu_nic.bin --symbol rtl8723bu \
+    --sha256 a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969 \
+    --size 32108 \
+    --out components/linuxkpi/fw/rtl8723bu_fw_blob.c
+
+# verify a generated blob against the source file
+tools/rtos/fw-blob.py --check components/linuxkpi/fw/rtl8723bu_fw_blob.c \
+    --in ../linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8723bu_nic.bin \
+    --name rtlwifi/rtl8723bu_nic.bin
+```
+
+It registers as `lkpi_fw_rtl8723bu_register()` and the profile's chip selects
+that symbol for both the linker's `-u` and the `make gates` check
+(`CONFIG_RTL8XXXU_CHIP := 8723bu` in `configs/rtl8xxxu-8723bu-*.mk`).
 
 ## Realtek binary redistribution terms (RTL8188EU firmware)
 
