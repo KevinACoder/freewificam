@@ -33,7 +33,8 @@ tests/board/
   rtos/                         the RTOS line: app/, build/, platform/, configs/, tests/
 tools/                          build entries, board round, judge, gates, board-side scripts
 docs/                           commit convention, patch policy, firmware notices,
-                                release procedure, release notes, migration record
+                                release procedure, release notes, migration record,
+                                the reference board (docs/boards/)
 known_issues/                   the open issues of each release, tracked per version
 ```
 
@@ -107,6 +108,14 @@ tools/check-release-docs.sh         # reader-facing docs carry no private refere
 
 Firmware blobs are not committed; `docs/FIRMWARE-NOTICES.md` carries their
 digests, the source files and the redistribution terms.
+
+## The reference board
+
+Every hardware result is from one RK3568 ITX board (RK3568-E4AP5G1-ITX). The
+console, the 1 GbE management link, the SDIO socket, the USB roots, the PCIe
+slots, the boot window and the reset lines are described in
+[docs/boards/rk3568-itx.md](docs/boards/rk3568-itx.md), together with which
+connector each line uses and which code owns it.
 
 ## Version, releases and known issues
 

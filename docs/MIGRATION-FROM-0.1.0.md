@@ -126,7 +126,7 @@ The camera suite's ten files map as follows:
 | Reference path | Decision | Here |
 |---|---|---|
 | `docs/RELEASE-NOTES-0.1.md`, `docs/known-limitations.md`, `docs/README.md`, `docs/net80211.md`, `docs/bus-and-threading.md`, `docs/memory-model.md` | rewritten | `docs/RELEASE-NOTES-0.0.2.md`, `known_issues/`, and the source maps under `tests/board/rtos/` and the component `PROVENANCE` files |
-| `docs/boards/rk3568-e4ap5g1-itx*` (including three images) | **skipped** | vendor manual material with no recorded redistribution grant |
+| `docs/boards/rk3568-e4ap5g1-itx*` | rewritten | carried as `docs/boards/rk3568-itx.md`: the board facts, the PHY and pin muxing and the connector-to-code map, in this repository's words. The vendor manual's photographs and block diagram are not carried - no redistribution grant is recorded for them |
 | `README.md`, `README_zh.md`, `CONTRIBUTING.md`, `Makefile`, `.gitmodules` | rewritten or dropped | `README.md` written for this repository; no submodules and no top-level makefile here |
 | `CHANGELOG.md`, `LICENSE`, `LICENSES.md`, `VERSION` | rewritten | this release's versions of them |
 
