@@ -38,6 +38,13 @@
 #include <string.h>
 #include "arch/aarch64/arch_asm.h"
 
+#if defined(RTOS_BOARD_AUTO_RESET)
+/* The board's PSCI reset face. Gated: only images whose lab loop wants a
+ * self-recovering bench reset on a failed assertion (RTOS_BOARD_AUTO_RESET,
+ * set by the board's build block). */
+#include "reset.h"
+#endif
+
 #define LWIP_HOOKS_LINE_MAX 256u
 
 void lwip_platform_diag(const char *fmt, ...)
@@ -62,6 +69,19 @@ void lwip_platform_diag(const char *fmt, ...)
 void lwip_platform_assert(const char *message, const char *file, int line)
 {
 	board_log_emergency("lwip: assert '%s' at %s:%d", message, file, line);
+#if defined(RTOS_BOARD_AUTO_RESET)
+	/* A wedged image recovers itself into the boot loader (the lab loop's
+	 * close-out ruling): the emergency line is the report, the reset is
+	 * the recovery. The dwell first matches the runner's failure window -
+	 * the assert window is exactly when the bench host wants to probe the
+	 * still-listening image. The park loop below stays as the fallback a
+	 * reset that returns falls into. */
+#include "os/cmsis2/cmsis2.h"
+#include "reset.h"
+	board_log_emergency("lwip: resetting board");
+	(void)osDelay(45000u);
+	board_system_reset();
+#endif
 	for (;;) {
 		ARCH_WFE();
 	}

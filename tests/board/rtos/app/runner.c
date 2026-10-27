@@ -78,6 +78,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_USB_EHCI)
 	{ "usb_ehci", case_usb_ehci_run },
 #endif
+#if defined(RTOS_CASE_NVME)
+	{ "nvme", case_nvme_run },
+#endif
+#if defined(RTOS_CASE_PCIE_ECAM)
+	{ "pcie_ecam", case_pcie_ecam_run },
+#endif
 #if defined(RTOS_CASE_RTW89)
 	{ "rtw89", case_rtw89_run },
 #endif

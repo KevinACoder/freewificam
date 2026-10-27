@@ -831,10 +831,30 @@ lwiperf_abort(void *lwiperf_session)
 
   for (i = lwiperf_all_connections; i != NULL; ) {
     if ((i == lwiperf_session) || (i->related_master_state == lwiperf_session)) {
+      lwiperf_state_tcp_t *conn = (lwiperf_state_tcp_t *)i;
+
       dealloc = i;
       i = i->next;
       if (last != NULL) {
         last->next = i;
+      }
+      /* Detach the protocol control blocks before the session memory
+       * goes: leaving their callbacks pointing at the freed session made
+       * the next timer poll assert on the stale pcb and the SYN-timeout
+       * error path free the session a second time (both seen on an
+       * aborted client whose SYN never got answered). */
+      if (conn->conn_pcb != NULL) {
+        tcp_arg(conn->conn_pcb, NULL);
+        tcp_poll(conn->conn_pcb, NULL, 0);
+        tcp_sent(conn->conn_pcb, NULL);
+        tcp_recv(conn->conn_pcb, NULL);
+        tcp_err(conn->conn_pcb, NULL);
+        tcp_abort(conn->conn_pcb);
+        conn->conn_pcb = NULL;
+      }
+      if (conn->server_pcb != NULL) {
+        tcp_close(conn->server_pcb);
+        conn->server_pcb = NULL;
       }
       LWIPERF_FREE(lwiperf_state_tcp_t, dealloc); /* @todo: type? */
     } else {

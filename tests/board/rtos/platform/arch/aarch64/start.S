@@ -13,28 +13,48 @@
  * U-Boot's `go` hands over at EL2 (non-secure) on this board; EL3 and EL1
  * paths exist as defensive convergences.
  *
- * Two board facts drive the EL2 sequence:
+ * Three board facts drive the EL2 sequence (firefly v1 / this SoC evidence,
+ * 2026-10-16; the RK3568 carrier's simpler order survived there by luck,
+ * not by architecture):
  *
- *  - The loader arrives with the EL2 MMU and caches possibly still enabled.
- *    SCTLR_EL2 is CLEARED (not bit-edited) before anything else so
- *    subsequent table walks and cache operations behave predictably.
+ *  - The loader received our image through DMA writes that landed in ITS
+ *    D-cache. Disabling the D-cache without first cleaning it orphans those
+ *    dirty lines - DRAM keeps the stale bytes and the fetch after the
+ *    SCTLR change executes garbage (two board rounds died with an EC=0
+ *    abort on the isb right after `msr sctlr_el2`, with both a full-zero
+ *    and an M/C/I read-modify-write). So: flush the whole data cache
+ *    BEFORE touching SCTLR_EL2.
+ *
+ *  - SCTLR_EL2 is cleared with a read-modify-write of the M/C/I bits only:
+ *    a full-register zero also clears RES1 bits, which is UNPREDICTABLE.
  *
  *  - CNTHCTL_EL2.EL1PCEN / EL1PCTEN must be set (bits 0 and 1) or EL1 cannot
  *    reach the counters and every access traps into the old EL2 vector
- *    table. The tick uses the virtual timer CNTV, but the bits are set so
- *    counter reads behave from EL1 either way.
+ *    table.
  *
  * CurrentEL encodes the level as 0x4 / 0x8 / 0xC (not 1 / 2 / 3) - a classic
  * source of misrouted boot paths.
  *
  * .S files run the preprocessor, so board_conf.h (data-only #defines) is
  * includable directly.
+ *
+ * Bring-up breadcrumbs: every stage prints one short line through the
+ * console UART the loader left live (a raw PL011 poll-write; the image's
+ * own uart_early_init later re-programs the same part). A boot that dies
+ * now says WHERE on the serial line instead of nothing.
  */
 
 #include "board_conf.h"
 
 	.arch	armv8-a
 	.section .text.boot, "ax"
+
+/* Breadcrumb emitter (definition before first use: gas macros must be).
+ * The function body lives with the other pre-MMU helpers below. */
+.macro	EARLY_PUTS msg
+	ldr	x0, =\msg
+	bl	early_puts_raw
+.endm
 
 	.globl	_start
 	.type	_start, %function
@@ -44,10 +64,10 @@ _start:
 
 	/* This path is boot-core-only. A secondary running here would clear
 	 * the BSS under the running image and re-derive state that must only
-	 * exist once. The other three cores are held by BL31/OP-TEE; if one
-	 * lands here anyway, park it where it cannot do harm. The logical
-	 * core number comes from BOARD_MPIDR_CORE_SHIFT (Aff1 on RK3568,
-	 * measured MPIDR = 0x8100_0N00). */
+	 * exist once. The other cores are held by the firmware; if one lands
+	 * here anyway, park it where it cannot do harm. The logical core
+	 * number comes from BOARD_MPIDR_CORE_SHIFT (Aff0 on firefly v1 per
+	 * the DTS cpu reg numbering; Aff1 on RK3568 - a per-SoC fact). */
 	mrs	x1, mpidr_el1
 	lsr	x1, x1, #BOARD_MPIDR_CORE_SHIFT
 	and	x1, x1, #0xff
@@ -79,42 +99,96 @@ from_el3:
 	eret
 
 from_el2:
-	/* Stack: EL2 has its own SP_EL2; set it before anything else. */
+	/* VERBATIM VENDOR SEQUENCE (user directive, 2026-10-16): this block
+	 * replicates the reference standalone SDK's fboot.S El2Entry instruction
+	 * for instruction - order AND values - because that is the one
+	 * sequence proven on this silicon from this loader. Notable vendor
+	 * values: cptr_el2 = 0x33ff (NOT a plain zero), hcr_el2 = RW only,
+	 * both SCTLR levels cleared through the same M/C/I read-modify-write,
+	 * cnthctl = 3, spsr = EL1h|DAIF. The breadcrumbs between steps are
+	 * the only addition (they print through the loader's live UART and
+	 * have been proven harmless). Reference source of truth: the vendor
+	 * SDK's arch/armv8/aarch64/gcc/fboot.S + fboot.h
+	 * (disable_mmu / dcache macros). */
 	ldr	x0, =__stack_top
 	mov	sp, x0
+	EARLY_PUTS	msg_el2
 
-	/* The loader may leave the EL2 MMU and caches on; turn them off
-	 * before touching memory that was mapped behind our back. Full
-	 * clear, not a bit-edit: the loader's residue is unknown. */
-	dsb	sy
-	msr	sctlr_el2, xzr
+	/* dcache cisw: clean + invalidate every level, set by set, way by way
+	 * (the architecture's CLIDR/CCSIDR walk - flush_dcache_all below). */
+	bl	flush_dcache_all
+	EARLY_PUTS	msg_dcache
+
+	/* disable_mmu sctlr_el2, x9 */
+	mrs	x9, sctlr_el2
+	bic	x9, x9, #(1 << 0)
+	bic	x9, x9, #(1 << 2)
+	bic	x9, x9, #(1 << 12)
+	msr	sctlr_el2, x9
 	isb
+	EARLY_PUTS	msg_el2mmu
+	ic	iallu
+	dsb	nsh
+	isb
+	EARLY_PUTS	msg_ic
 
-	/* Let EL1 run AArch64, reach the counters, and take no traps. */
-	mov	x0, #0x80000000			/* HCR_EL2.RW = 1 */
-	msr	hcr_el2, x0
-	mrs	x0, cnthctl_el2
-	orr	x0, x0, #3			/* EL1PCTEN | EL1PCEN */
-	msr	cnthctl_el2, x0
-	msr	cptr_el2, xzr			/* no FP/SIMD trapping */
+	/* hcr_el2 = RW (AArch64 EL1); cptr_el2 = 0x33ff (vendor value); hstr
+	 * and vttbr cleared. */
+	mov	x9, #(1 << 31)
+	msr	hcr_el2, x9
+	mov	x9, #0x33ff
+	msr	cptr_el2, x9
 	msr	hstr_el2, xzr
 	msr	vttbr_el2, xzr
 
+	/* disable_mmu sctlr_el1, x9 (from EL2, before the first EL1 fetch) */
+	mrs	x9, sctlr_el1
+	bic	x9, x9, #(1 << 0)
+	bic	x9, x9, #(1 << 2)
+	bic	x9, x9, #(1 << 12)
+	msr	sctlr_el1, x9
+	isb
+
+	/* spsr_el2 = EL1h with DAIF masked; CNTHCTL_EL2 = 3 (EL1 timer
+	 * access). */
+	mov	x9, #0x3c5
+	msr	spsr_el2, x9
+	mov	x0, #0x3
+	msr	cnthctl_el2, x0
+
+	EARLY_PUTS	msg_eret
 	adr	x1, el1_entry
 	msr	elr_el2, x1
-	mov	x0, #0x3c5			/* SPSR_EL2: EL1h, DAIF masked
-						 * - masking rides ERET into
-						 * EL1, no re-mask needed */
-	msr	spsr_el2, x0
-	isb
 	eret
 
 el1_entry:
-	/* Use SP_EL1 (the loader may hand over with SPSEL=0) and clear SCTLR
-	 * so MMU and caches are off regardless of what the loader left. */
+	/* FIRST instruction prints: this breadcrumb is the proof the ERET
+	 * landed here at all (round 5 died between "eret to el1" and this
+	 * line - the EL2-side SCTLR_EL1 store had poisoned the EL1 regime;
+	 * that store is gone now). */
+	EARLY_PUTS	msg_el1
 	msr	spsel, #1
-	msr	sctlr_el1, xzr
-	ic	iallu
+	/* SCTLR_EL1 probe: the raw value goes out, and the M/C/I bits are
+	 * cleared ONLY if one of them is actually set - each store is
+	 * followed by a full TLB invalidate, because on this silicon a
+	 * SCTLR store without one makes the regime's next fetch
+	 * UNPREDICTABLE (the round 1-5 evidence; the reset value normally
+	 * has all three clear, so the common path writes nothing). */
+	mrs	x0, sctlr_el1
+	bl	early_puthex32
+	EARLY_PUTS	msg_sctlr1
+	tbnz	x0, #0, 6f
+	tbnz	x0, #2, 6f
+	tbnz	x0, #12, 6f
+	b	7f
+6:	bic	x0, x0, #1
+	bic	x0, x0, #4
+	bic	x0, x0, #0x1000
+	msr	sctlr_el1, x0
+	tlbi	vmalle1
+	dsb	sy
+	isb
+7:	ic	iallu
 	dsb	sy
 	isb
 
@@ -144,28 +218,133 @@ el1_entry:
 	b	1b
 2:
 
-	/* Observe, do not depend: what `go` passed in x0 (SPEC open question
-	 * 2 - semantics unproven, logged for evidence only). */
+	/* Observe, do not depend: what `go` passed in x0 (logged for evidence
+	 * only). */
 	ldr	x1, =boot_arg_x0
 	str	x0, [x1]
 
 	/* Identity-mapped MMU with caches on. Needed before C code runs:
 	 * unaligned Normal access must work, and the cache-maintenance
 	 * discipline requires a real data cache. */
+	EARLY_PUTS	msg_mmu
 	bl	mmu_enable
-
+	EARLY_PUTS	msg_main
 	bl	main
 
 3:	wfe
 	b	3b
 	.size	_start, . - _start
 
+/* --- bring-up helpers (pre-MMU, same section) ----------------------------- */
+
+/* One breadcrumb line through the console UART the loader left live.
+ * Raw PL011 semantics: FR at +0x18 (TXFF = bit 5), DR at +0. The image's
+ * own uart_early_init re-programs the part later; until then this just
+ * borrows the loader's configuration. */
+early_puts_raw:					/* x0: NUL-terminated string */
+1:	ldrb	w1, [x0], #1
+	cbz	w1, 2f
+	ldr	x2, =BOARD_UART_BASE
+3:	ldr	w3, [x2, #0x18]
+	tbnz	w3, #5, 3b			/* wait for TX FIFO room */
+	str	w1, [x2]
+	b	1b
+2:	ret
+
+/* One 32-bit hex word (no prefix/newline) through the live loader UART -
+ * the probe channel for register values during bring-up. */
+early_puthex32:				/* x0: value */
+	ldr	x2, =BOARD_UART_BASE
+	mov	x3, #28
+1:	lsr	w1, w0, w3
+	and	w1, w1, #0xf
+	cmp	w1, #9
+	b.hi	2f
+	add	w1, w1, #'0'
+	b	3f
+2:	add	w1, w1, #('a' - 10)
+3:	ldr	w4, [x2, #0x18]
+	tbnz	w4, #5, 3b			/* wait for TX FIFO room */
+	str	w1, [x2]
+	sub	w3, w3, #4
+	b.ge	1b
+	ret
+
+/* Clean + invalidate the whole data cache, level by level, set by set,
+ * way by way - the architecture's CLIDR/CCSIDR maintenance walk (every
+ * OS port carries this recipe; the labels and comments are this file's).
+ * MUST run before the caches are disabled: dirty lines orphaned by a
+ * cache disable leave stale DRAM behind, and the loader's DMA writes put
+ * our image's bytes in exactly those lines (board-fact block above). */
+flush_dcache_all:
+	dsb	sy
+	mrs	x0, clidr_el1
+	and	x3, x0, #0x7000000		/* cache levels present */
+	lsr	x3, x3, #23
+	cbz	x3, 5f				/* none: nothing to flush */
+	mov	x10, #0				/* current cache level */
+1:	add	x2, x10, x10, lsr #1		/* 3-bit Ctype stride = level*1.5 */
+	lsr	x1, x0, x2
+	and	x1, x1, #7			/* this level's cache type */
+	cmp	x1, #2				/* < 2: no D/unified cache here */
+	b.lt	4f
+	msr	csselr_el1, x10
+	isb
+	mrs	x1, ccsidr_el1			/* the level's geometry */
+	and	x2, x1, #7			/* line-size field */
+	add	x2, x2, #4			/* set-field shift */
+	mov	x4, #0x3ff
+	and	x4, x4, x1, lsr #3		/* associativity - 1 */
+	clz	w5, w4				/* way field's bit position */
+	mov	x7, #0x7fff
+	and	x7, x7, x1, lsr #13		/* number of sets - 1 */
+2:	mov	x9, x4				/* ways countdown */
+3:	lsl	x6, x9, x5			/* way into its field */
+	orr	x11, x10, x6
+	lsl	x6, x7, x2			/* set into its field */
+	orr	x11, x11, x6
+	dc	cisw, x11
+	subs	x9, x9, #1
+	b.ge	3b
+	subs	x7, x7, #1
+	b.ge	2b
+4:	add	x10, x10, #2			/* next level's Ctype slot */
+	cmp	x10, x3
+	b.lt	1b
+5:	dsb	sy
+	isb
+	ret
+
 	.section .bss, "aw", %nobits
 	.align 3
-	.globl	boot_arg_x0
-	.type	boot_arg_x0, %object
+	.globl boot_arg_x0
+	.type boot_arg_x0, %object
 boot_arg_x0:
 	.skip 8
+
+	.section .rodata, "a"
+msg_el2:	.asciz	"boot: el2 entry\n"
+msg_dcache:	.asciz	"boot: dcache flushed\n"
+msg_el2mmu:	.asciz	"boot: el2 mmu off\n"
+msg_ic:		.asciz	"boot: ic iallu\n"
+msg_eret:	.asciz	"boot: eret to el1\n"
+msg_el1:	.asciz	"boot: el1\n"
+msg_sctlr1:	.asciz	" boot: sctlr_el1 above\n"
+msg_mmu:	.asciz	"boot: mmu_enable\n"
+msg_main:	.asciz	"boot: main\n"
+	.globl	msg_sync
+msg_sync:	.asciz	"fatal: synchronous exception\n"
+	.globl	msg_irq
+msg_irq:	.asciz	"fatal: IRQ before scheduler\n"
+	.globl	msg_fiq
+msg_fiq:	.asciz	"fatal: FIQ\n"
+	.globl	msg_serr
+msg_serr:	.asciz	"fatal: SError\n"
+msg_esr:	.asciz	"fatal: ESR_EL1="
+msg_far:	.asciz	" FAR_EL1="
+msg_elr:	.asciz	" ELR_EL1="
+msg_newline:	.asciz	"\n"
+msg_parked:	.asciz	"fatal: parked; power-cycle to recover\n"
 
 /*
  * Boot vector table. Present so a fault taken before any handler exists
@@ -176,7 +355,7 @@ boot_arg_x0:
  */
 	.section .vectors, "ax"
 	.align	11
-	.globl	boot_vectors
+	.globl boot_vectors
 boot_vectors:
 	/* Current EL with SP_EL0 */
 	.p2align 7
@@ -266,18 +445,3 @@ boot_fault_common:
 	bl	uart_early_puts
 1:	wfe
 	b	1b
-
-	.section .rodata, "a"
-	.globl	msg_sync
-msg_sync:	.asciz	"fatal: synchronous exception\n"
-	.globl	msg_irq
-msg_irq:	.asciz	"fatal: IRQ before scheduler\n"
-	.globl	msg_fiq
-msg_fiq:	.asciz	"fatal: FIQ\n"
-	.globl	msg_serr
-msg_serr:	.asciz	"fatal: SError\n"
-msg_esr:	.asciz	"fatal: ESR_EL1="
-msg_far:	.asciz	" FAR_EL1="
-msg_elr:	.asciz	" ELR_EL1="
-msg_newline:	.asciz	"\n"
-msg_parked:	.asciz	"fatal: parked; power-cycle to recover\n"

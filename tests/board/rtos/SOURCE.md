@@ -9,8 +9,11 @@ follows the repository's source + ports + patches shape (see
 
 | Directory | Origin (reference path) | State |
 |---|---|---|
-| `platform/arch/aarch64/` | `arch/aarch64/` | byte-identical subset (17 files) |
+| `platform/arch/aarch64/` | `arch/aarch64/` | byte-identical subset (17 files); the firefly round's board-neutral hooks are carried in `start.S`, `mmu.c` and `baremetal.ld` (`board_ram_base`/`board_ram_top` overrides, board MMU windows) |
 | `platform/board/rk3568-itx/` | `board/rk3568-itx/` | byte-identical subset: console, MMIO, reset, clock parameters, the eMMC (dwcmshc), the SDIO (dwmmc), GMAC (dwceqos + RK3568 glue + RTL8211F), the PCIe root complex + NVMe (SYSMEM/BAR/ITS-MSI plus the block driver) and, since the USB round, the USB power/PHY/reset domain (`usb/usb_domain.c`, `usb/usb_dwc3.h`). |
+| `platform/board/firefly/`, `platform/os/threadx/board/firefly/` | `board/firefly/` and `os/threadx/board/firefly/` from the reference tree's `firefly` branch tip | carried from the firefly branch: the v1 board configuration and link window, PL011 console, tick, PSCI reset, ECAM+MSI-X, the NVMe block driver, the e1000e NIC and the ThreadX board glue. **Not wired into a profile yet**: the branch's board-select build file was superseded by the main line's newer build during the merge, so nothing compiles or links these units today. |
+| `third-party/lwip/ports/e1000e_netif.{c,h}`, `gmac_netif.{c,h}` | firefly branch / new | carried with the firefly platform, not wired (same reason). |
+| `platform/board/firefly/drivers/net/gmac.{c,h}` | firefly branch (logic base: the reference standalone SDK's DWC GMAC driver, BSD-3-Clause) | carried with the firefly platform, not wired (same reason). |
 | `platform/os/baremetal/` | `os/baremetal/` | byte-identical |
 | `platform/os/cmsis2/` | `os/cmsis2/` | byte-identical (facade plus the host and board stand-ins for the CMSIS Core headers) |
 | `platform/os/freertos/` | `os/freertos/` | byte-identical except the board's USB configuration variant, plus the heap-size knob noted below |

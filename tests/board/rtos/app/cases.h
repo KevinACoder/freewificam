@@ -44,10 +44,6 @@ int case_net_run(void);
 #if defined(RTOS_CASE_EMMC)
 int case_emmc_run(void);
 #endif
-#if defined(RTOS_CASE_PCIE)
-int case_pcie_run(void);
-#endif
-
 #if defined(RTOS_CASE_PCIE_BENCH)
 int case_pcie_bench_run(void);
 #endif
@@ -79,6 +75,25 @@ int case_iwl7260_net_run(void);
 #if defined(RTOS_CASE_WLAN)
 int case_wlan_run(void);
 void case_wlan_prepare(void);
+#endif
+#if defined(RTOS_CASE_NVME)
+int case_nvme_run(void);
+#endif
+#if defined(RTOS_CASE_PCIE_ECAM)
+int case_pcie_ecam_run(void);
+#endif
+#if defined(RTOS_CASE_NET_E1000E)
+int case_net_e1000e_run(void);
+#endif
+#if defined(RTOS_CASE_NET_GMAC)
+int case_net_gmac_run(void);
+#endif
+#if defined(RTOS_CASE_NET_E1000E) || defined(RTOS_CASE_NET_GMAC)
+/* The shared one-shot lwIP stack bring-up (a boot may run both NIC cases;
+ * tcpip_init is once-per-boot by contract), and the boot's one lwiperf TCP
+ * server (only one listener can own the port). */
+int case_net_stack_up(void);
+void case_net_lwiperf_server_start(void);
 #endif
 
 #if defined(RTOS_CASE_USB_XHCI) || defined(RTOS_CASE_USB_EHCI)
