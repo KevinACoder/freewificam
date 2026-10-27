@@ -144,7 +144,7 @@ CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
@@ -452,8 +452,14 @@ endif
 # The USB host domain (empty unless a USB consumer is selected).  It must be
 # included before rtw89.mk: the wireless world's linuxkpi USB engine compiles
 # against the same CherryUSB include roots and stage geometry.
-ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu,$(CASES)),)
+ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
 include $(CURDIR)/usb.mk
+endif
+
+# The camera image (empty unless a camera case is selected): the video class,
+# its running-stream half and the EHCI isochronous engine, on top of usb.mk.
+ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
+include $(CURDIR)/uvc.mk
 endif
 
 # The RTL8851BU wireless world (empty unless the rtw89 case is selected).
@@ -549,7 +555,7 @@ FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
-	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(RTW89_ALL_SRCS) \
+	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(UVC_ALL_SRCS) $(RTW89_ALL_SRCS) \
 	$(RTL8XXXU_ALL_SRCS) $(RTL8XXXU_NET_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
@@ -596,7 +602,8 @@ endif
 $(FLAG_STAMP): FORCE $(WLAN_STAMP)
 	@mkdir -p $(BUILD)
 	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'wlan: $(WLAN_FLAGS_STAMP)' \
-		'usb: $(USB_CFLAGS)' 'rtw89-net80211: $(RTW89_BSD_CFLAGS)' \
+		'usb: $(USB_CFLAGS)' 'uvc: $(UVC_CFLAGS)' \
+		'rtw89-net80211: $(RTW89_BSD_CFLAGS)' \
 		'rtw89-kpi: $(RTW89_KPI_CFLAGS)' 'rtw89-drv: $(RTW89_DRV_CFLAGS)' \
 		'rtw89-case: $(RTW89_CASE_CFLAGS)' \
 		'rtl8xxxu-net80211: $(RTL8XXXU_BSD_CFLAGS)' \
@@ -637,6 +644,10 @@ endif
 # profile left in the shared build tree.
 ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
+endif
+
+ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(UVC_ALL_SRCS)),$(eval $(call COMPILE_C,$(s),$(UVC_CFLAGS))))
 endif
 
 ifneq ($(filter rtw89,$(CASES)),)
@@ -722,6 +733,14 @@ ifneq ($(filter rtl8xxxu,$(CASES)),)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx $(RTL8XXXU_FW_REGISTER) || \
 		{ echo "FAIL: the firmware blob unit was garbage-collected"; exit 1; }; \
 	echo "PASS: stage=$(RTL8XXXU_GATE_STAGE)>=rx=$(RTL8XXXU_STAGE_MIN) driver+firmware registered"
+endif
+ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
+	@set -e; \
+	for s in $(UVC_GATE_SYMBOLS); do \
+		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" || \
+			{ echo "FAIL: $$s not in the image"; exit 1; }; \
+	done; \
+	echo "PASS: uvc engine, stream engine and video class table present"
 endif
 	@$(SIZE) $(TARGET).elf
 	@printf 'opt: %s\nprofile: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt

@@ -105,6 +105,18 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTL8XXXU_NET)
 	{ "rtl8xxxu_net", case_rtl8xxxu_net_run },
 #endif
+#if defined(RTOS_CASE_UVC_DETECT)
+	{ "uvc_detect", case_uvc_detect_run },
+#endif
+#if defined(RTOS_CASE_UVC_OPEN)
+	{ "uvc_open", case_uvc_open_run },
+#endif
+#if defined(RTOS_CASE_UVC_ISO_SMOKE)
+	{ "uvc_iso_smoke", case_uvc_iso_smoke_run },
+#endif
+#if defined(RTOS_CASE_UVC_STREAM)
+	{ "uvc_stream", case_uvc_stream_run },
+#endif
 };
 
 static const osThreadAttr_t runner_attr = {

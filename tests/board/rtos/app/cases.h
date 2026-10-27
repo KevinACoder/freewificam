@@ -129,4 +129,23 @@ int case_rtl8xxxu_dataplane_run(void);
 int case_rtl8xxxu_net_run(void);
 #endif
 
+/* The camera image's four cases, in run order: the controller and the camera,
+ * the negotiated open, the raw isochronous transport, then the stream engine.
+ * They share the application half's state (`ports/cherryusb/class/uvc_app.h`). */
+#if defined(RTOS_CASE_UVC_DETECT)
+int case_uvc_detect_run(void);
+#endif
+
+#if defined(RTOS_CASE_UVC_OPEN)
+int case_uvc_open_run(void);
+#endif
+
+#if defined(RTOS_CASE_UVC_ISO_SMOKE)
+int case_uvc_iso_smoke_run(void);
+#endif
+
+#if defined(RTOS_CASE_UVC_STREAM)
+int case_uvc_stream_run(void);
+#endif
+
 #endif /* RTOS_APP_CASES_H */

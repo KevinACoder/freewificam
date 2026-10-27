@@ -198,12 +198,12 @@ void usbh_console_printf(const char *fmt, ...);
  * (unimplemented here) companion controllers. */
 #define CONFIG_USB_EHCI_CONFIGFLAG	1
 
-/* Isochronous transfers are not built in this line. The EHCI port compiles
- * its three engine calls under `#ifdef CONFIG_USB_EHCI_ISO`, so the key must
- * stay **undefined** here - a defined 0 would still compile the calls and then
- * fail to link against patch 0003's engine, which this tree does not carry.
- * The camera line adds that patch and defines the key in its own board
- * configuration. */
+/* The isochronous engine is per image, not per board. The EHCI port compiles
+ * its three engine calls under `#ifdef CONFIG_USB_EHCI_ISO`, so the key stays
+ * **undefined** here: the camera image defines it and compiles the engine
+ * (`tests/board/rtos/build/uvc.mk`), and every other image neither links the
+ * engine nor pays for its per-bus state. A defined 0 would be wrong - `#ifdef`
+ * would still compile the calls. */
 
 /* Isochronous transaction descriptors, per bus. One descriptor covers eight
  * micro-frames (a whole USB frame at high speed); the stream engine lays a
