@@ -35,7 +35,10 @@ skip='docs/COMMIT-CONVENTION.md'
 if [ "$#" -gt 0 ]; then
 	files="$*"
 else
-	files=$(git ls-files -- README.md CHANGELOG.md VERSION LICENSE LICENSES.md \
+	# --others includes files that exist but are not staged yet: a release
+	# document is checked before it is committed, not after.
+	files=$(git ls-files --cached --others --exclude-standard -- \
+		README.md CHANGELOG.md VERSION LICENSE LICENSES.md \
 		'docs/*.md' 'known_issues/*.md' 2>/dev/null)
 fi
 
