@@ -1329,7 +1329,9 @@ int usbh_submit_urb(struct usbh_urb *urb)
             break;
         case USB_ENDPOINT_TYPE_ISOCHRONOUS:
 #ifdef CONFIG_USB_EHCI_ISO
-            ret = ehci_iso_urb_init(bus, urb);
+            /* the iso engine owns its completion wait; the qh wait below has
+             * no queue head to hang on */
+            return ehci_iso_urb_init(bus, urb);
 #endif
             break;
         default:
@@ -1409,6 +1411,9 @@ int usbh_kill_urb(struct usbh_urb *urb)
         ehci_kill_iso_urb(bus, urb);
         EHCI_HCOR->usbcmd |= (EHCI_USBCMD_PSEN | EHCI_USBCMD_ASEN);
         usb_osal_leave_critical_section(flags);
+        if (urb->complete) {
+            urb->complete(urb->arg, urb->errorcode);
+        }
         return 0;
 #endif
     }

@@ -84,6 +84,8 @@ struct ehci_iso_hw {
 
 struct ehci_hcd {
     bool ehci_iso_used[CONFIG_USB_EHCI_ISO_NUM];
+    uint16_t iso_frame_next; /* first unreserved frame of the isochronous tiling */
+    uint16_t iso_frame_base; /* the free frame the reservation was taken at */
     bool ppc;      /* Port Power Control */
     bool has_tt;   /* if use tt instead of Companion Controller */
     uint8_t n_cc;  /* Number of Companion Controller */

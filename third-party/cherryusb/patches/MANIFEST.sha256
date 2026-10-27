@@ -100,6 +100,8 @@ c4baac36b87bcd0d7e4d2e1b7c8b05f04b70403297a365613c0083e7b222cde3  ./class/vendor
 97668b7c724c1fef69907937c1e3680aee17ebba11ab3125f6da4beb64c81836  ./class/video/usb_video.h
 85583e5959db82f0be04073ee0f02c6ea8f7a4a8f00be2336cec15e9e5a056e8  ./class/video/usbd_video.c
 14ef5a3af50be9ac81ae55e096e469086d03519050d349638ad1b76713795e2a  ./class/video/usbd_video.h
+572fe54eec2cd14976a5e0e69799ee69b811b55356139ec082dba7a4b10a8bf7  ./class/video/usbh_uvc_stream.c
+6df5b9f224ff6e87f7f98b9a8d545bcb8811cd4596fc2bf486b7974f7a18dcf2  ./class/video/usbh_uvc_stream.h
 a7f08ceb29ce127c117160ec306088496aab6da48fb34f8cd322f963035c9e73  ./class/video/usbh_video.c
 df1b93ee1e37939bfc4d90dff57833eceae19467d6628ff4205c793f3fc7db9e  ./class/video/usbh_video.h
 a8a22ab34d8eb4432e2cf97cbd013d271d3bb9f689f7876f2f1b1c5afbf7cda6  ./class/wireless/ndis.h
@@ -626,8 +628,9 @@ d3cd15213899f0bf4517cf3a1d06416980ff6bf7f637e24479a1c5f2fdf36732  ./port/dwc2/us
 a68206cfffe66555c2ff938b84a13313bc30373b82d1bcf3440b57a1477244e0  ./port/ehci/README.md
 f20f043d98deb3a131325a1a32a0ca238482797bfde06f7ffb367388a57bfc4b  ./port/ehci/usb_ehci_reg.h
 bbc2993ce2d16f7ba2b245ae91cfcb294e709d8b02d3d830278a56976d0901c3  ./port/ehci/usb_glue_t113.c
-7c7781b430d6f33a840fd7d936da886ae6357adedaf5252ccba8a5b5a30f9447  ./port/ehci/usb_hc_ehci.c
-94d58e1cfbe3bf9078e110fa6f4db13687b9b3904360aa079ae044fb9d985ce2  ./port/ehci/usb_hc_ehci.h
+3a2f7290bb2d192569431161320762624996fd86b1dadf2675dd60dbca78f284  ./port/ehci/usb_hc_ehci.c
+387cba564ac93a51994a5854065485d600d49f78aaabd8c4738a19f901af77fa  ./port/ehci/usb_hc_ehci.h
+36d138b4ce70f03cb61367c6ab2919a82c6d4c864857d7fb1721d38bbdf08c38  ./port/ehci/usb_hc_ehci_iso.c
 4cc7295c31821f2b5f857d361aded50bd746259c34c7fd495f450f54c988ee3a  ./port/fsdev/README.md
 fd91049968a264aa1c5413da1173b9bb374ee97e783e06d3f09cf7466af4ba6c  ./port/fsdev/usb_dc_fsdev.c
 50b4db4e93400e30262bff45dc4b03532e59caf273f469857d0eae34a250ae04  ./port/fsdev/usb_fsdev_reg.h
