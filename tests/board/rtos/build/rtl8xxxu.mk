@@ -1,7 +1,8 @@
 # @file    rtl8xxxu.mk
-# @brief   The RTL8188EUS wireless world: the vendored rtl8xxxu driver over the
-#          linuxkpi USB engine and CherryUSB, the NetBSD net80211 stack and its
-#          bridge, and the compiled-in firmware blob.
+# @brief   The Realtek USB wireless world (RTL8188EUS, RTL8723BU): the vendored
+#          rtl8xxxu driver over the linuxkpi USB engine and CherryUSB, the
+#          NetBSD net80211 stack and its bridge, and the compiled-in firmware
+#          blob.
 #
 # Composition mirrors `rtw89.mk` (net80211 is the MLME, linuxkpi supplies the
 # Linux face) with the same bus layer: the linuxkpi USB engine over CherryUSB
@@ -30,11 +31,28 @@ RTL8XXXU_NET := $(ROOT)/components/net80211
 RTL8XXXU_NPORT := $(RTL8XXXU_NET)/ports
 RTL8XXXU_LKPI := $(ROOT)/components/linuxkpi/rtos
 
+# The chip this image is for.  The driver is one module whose fileops table
+# names every chip, so the image's identity - the firmware blob, the name the
+# bridge reports, and the id line the case promotes - is a profile fact, not a
+# driver one.  8188eu is the default, so the earlier line's numbers stand.
+RTL8XXXU_CHIP := $(if $(CONFIG_RTL8XXXU_CHIP),$(CONFIG_RTL8XXXU_CHIP),8188eu)
+ifeq ($(RTL8XXXU_CHIP),8723bu)
+RTL8XXXU_FW_NAME := rtlwifi/rtl8723bu_nic.bin
+RTL8XXXU_FW_BLOB := $(ROOT)/components/linuxkpi/fw/rtl8723bu_fw_blob.c
+RTL8XXXU_FW_REGISTER := lkpi_fw_rtl8723bu_register
+RTL8XXXU_CLAIM_ID := 0bda:b720
+else
+RTL8XXXU_FW_NAME := rtlwifi/rtl8188eufw.bin
+RTL8XXXU_FW_BLOB := $(ROOT)/components/linuxkpi/fw/rtl8188eufw_blob.c
+RTL8XXXU_FW_REGISTER := lkpi_fw_rtl8188eufw_register
+RTL8XXXU_CLAIM_ID := 0bda:8179
+endif
+
 # The image's own names for the bridge.  The bridge's defaults are already this
 # line's (`wlan_bridge.h`), and naming them here is the guard: a changed default
 # must not silently point this image at another driver's identity.
 RTL8XXXU_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtl8xxxu"' \
-	-DWLAN_BRIDGE_FIRMWARE_NAME='"rtlwifi/rtl8188eufw.bin"'
+	-DWLAN_BRIDGE_FIRMWARE_NAME='"$(RTL8XXXU_FW_NAME)"'
 
 # Where the bench AP is: the caller passes `CONFIG_RTL8XXXU_AP_SSID` and
 # `CONFIG_RTL8XXXU_AP_FREQ` through the profile, so the case joins the network
@@ -58,11 +76,13 @@ RTL8XXXU_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
 	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=64 \
 	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=64
 
-# The adapter's geometry.  The stage is the widest single transfer (the 8188
-# line's value, and the adapter header's default); the slots are the engine's
-# concurrency, unchanged from the rtw89 image.
+# The adapter's geometry.  The stage is the widest single transfer: the 8188
+# line's 2328-byte receive URB here, and 8723BU's 4096-byte firmware page is
+# written as 1024-byte control blocks (`writeN_block_size`), so 4096 covers
+# both with room to spare.  The slots are the engine's concurrency, unchanged
+# from the rtw89 image.
 RTL8XXXU_STAGE ?= 4096
-RTL8XXXU_STAGE_MIN := 2328	# IEEE80211_MAX_FRAME_LEN (2304) + rxdesc16 (24)
+RTL8XXXU_STAGE_MIN := 2328	# IEEE80211_MAX_FRAME_LEN (2304) + rxdesc16/24 (24)
 RTL8XXXU_USB_DEFS := -DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$(RTL8XXXU_STAGE) \
 	-DCONFIG_LKPI_USB_CHERRYUSB_SLOTS=16
 
@@ -72,6 +92,11 @@ RTL8XXXU_USB_DEFS := -DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$(RTL8XXXU_STAGE) \
 # prints the list and then the bus that actually attached.
 RTL8XXXU_BUS := $(if $(CONFIG_RTL8XXXU_USB_BUS),$(CONFIG_RTL8XXXU_USB_BUS),3)
 RTL8XXXU_BUS_DEFS := -DRTL8XXXU_USB_BUS=$(RTL8XXXU_BUS)
+
+# The chip's identity, handed to the case: which id line is the claim anchor
+# and which register function belongs to the blob this image carries.
+RTL8XXXU_ID_DEFS := -DRTL8XXXU_FW_REGISTER=$(RTL8XXXU_FW_REGISTER) \
+	-DRTL8XXXU_CLAIM_ID='"$(RTL8XXXU_CLAIM_ID)"'
 
 RTL8XXXU_BSD_INCLUDES := -I$(ROOT) -I$(RTL8XXXU_NPORT)/compat \
 	-I$(RTL8XXXU_NET)/compat/netbsd -I$(RTL8XXXU_NET) -I$(RTL8XXXU_NPORT)
@@ -118,7 +143,7 @@ RTL8XXXU_HB_DEFS := -DRTL8XXXU_HB=$(CONFIG_RTL8XXXU_HB)
 endif
 
 RTL8XXXU_CASE_CFLAGS := $(RTL8XXXU_KPI_CFLAGS) $(RTL8XXXU_BUS_DEFS) \
-	$(RTL8XXXU_HB_DEFS)
+	$(RTL8XXXU_ID_DEFS) $(RTL8XXXU_HB_DEFS)
 
 RTL8XXXU_NET80211_SRCS := \
 	$(RTL8XXXU_NET)/net80211/ieee80211.c \
@@ -181,7 +206,7 @@ RTL8XXXU_DRV_SRCS := \
 	$(RTL8XXXU_DRV)/8723a.c \
 	$(RTL8XXXU_DRV)/8723b.c
 
-RTL8XXXU_FW_SRCS := $(ROOT)/components/linuxkpi/fw/rtl8188eufw_blob.c
+RTL8XXXU_FW_SRCS := $(RTL8XXXU_FW_BLOB)
 
 RTL8XXXU_CASE_SRCS := \
 	$(LINE)/app/cases/rtl8xxxu.c \
@@ -224,7 +249,7 @@ RTL8XXXU_LDFLAGS := \
 	-Wl,-u,usb_board_init \
 	-Wl,-u,lkpi_usb_init \
 	-Wl,-u,lkpi_usb_cherryusb_init \
-	-Wl,-u,lkpi_fw_rtl8188eufw_register \
+	-Wl,-u,$(RTL8XXXU_FW_REGISTER) \
 	-Wl,-u,wlan_seam_adapter_init
 
 # The driver's widest receive transfer must fit the adapter's stage, and the

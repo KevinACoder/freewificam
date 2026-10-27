@@ -715,7 +715,7 @@ ifneq ($(filter rtl8xxxu,$(CASES)),)
 		{ echo "FAIL: lkpi_wlan_class_info not in the image (no vendor class hook)"; exit 1; }; \
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx __lkpi_module_rtl8xxxu_driver || \
 		{ echo "FAIL: rtl8xxxu_driver not in .lkpi_module (registry walk would see no driver)"; exit 1; }; \
-	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_fw_rtl8188eufw_register || \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx $(RTL8XXXU_FW_REGISTER) || \
 		{ echo "FAIL: the firmware blob unit was garbage-collected"; exit 1; }; \
 	echo "PASS: stage=$(RTL8XXXU_GATE_STAGE)>=rx=$(RTL8XXXU_STAGE_MIN) driver+firmware registered"
 endif
