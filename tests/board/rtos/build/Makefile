@@ -631,7 +631,11 @@ ifneq ($(filter iwl7260_net,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(IWL_NET_SRCS)),$(eval $(call COMPILE_C,$(s),$(IWL_NET_CFLAGS))))
 endif
 
-ifneq ($(filter usb_xhci usb_ehci rtw89,$(CASES)),)
+# The stack, the board glue and the OSAL are compiled here for every image
+# that links them: the wireless images ride the same controllers, and an image
+# whose USB objects have no rule would silently reuse whatever object the last
+# profile left in the shared build tree.
+ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
 endif
 
