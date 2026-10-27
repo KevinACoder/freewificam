@@ -143,6 +143,59 @@ void usb_osal_thread_schedule_other(void)
 /* Semaphores                                                          */
 /* ------------------------------------------------------------------ */
 
+/* Binary semaphores for callers that create one inside a critical section.
+ *
+ * The imported isochronous engine creates its per-slot semaphores while it
+ * holds the port's critical section, i.e. with interrupts masked. The
+ * CMSIS-RTOS2 facade refuses object creation in that context - the FreeRTOS
+ * adapter treats a masked interrupt as an interrupt context and returns NULL,
+ * which the engine reports as "no memory". Kernel objects cannot be created
+ * with interrupts masked on every backend, so this port keeps a small pool
+ * that is filled once, in thread context, before any controller starts; a
+ * masked caller takes an entry instead of creating one. The engine never
+ * deletes its semaphores, and a caller that does delete one returns it here.
+ */
+#define USB_OSAL_SEM_POOL 24
+
+static osSemaphoreId_t usb_osal_sem_pool[USB_OSAL_SEM_POOL];
+static int usb_osal_sem_pool_used[USB_OSAL_SEM_POOL];
+
+static int usb_osal_irq_masked(void)
+{
+#if defined(__aarch64__)
+	uint64_t daif;
+
+	__asm__ volatile("mrs %0, daif" : "=r"(daif));
+	return (daif & (1u << 7)) != 0u;	/* DAIF.I */
+#else
+	return 0;
+#endif
+}
+
+void usb_osal_sem_pool_init(void)
+{
+	unsigned i;
+
+	for (i = 0; i < USB_OSAL_SEM_POOL; i++) {
+		if (usb_osal_sem_pool[i] == NULL) {
+			usb_osal_sem_pool[i] = osSemaphoreNew(1u, 0u, NULL);
+		}
+	}
+}
+
+static osSemaphoreId_t usb_osal_sem_pool_take(void)
+{
+	unsigned i;
+
+	for (i = 0; i < USB_OSAL_SEM_POOL; i++) {
+		if (usb_osal_sem_pool[i] != NULL && usb_osal_sem_pool_used[i] == 0) {
+			usb_osal_sem_pool_used[i] = 1;
+			return usb_osal_sem_pool[i];
+		}
+	}
+	return NULL;
+}
+
 usb_osal_sem_t usb_osal_sem_create(uint32_t initial_count)
 {
 	/* Counting semaphore capped at one, the reference's shape. A larger initial
@@ -151,19 +204,44 @@ usb_osal_sem_t usb_osal_sem_create(uint32_t initial_count)
 	if (initial_count > 1u) {
 		initial_count = 1u;
 	}
+	if (usb_osal_irq_masked() != 0) {
+		/* creation is refused in this context; take one of the reserved
+		 * tokens instead. Only the empty state is representable here - no
+		 * caller asks for a full semaphore from a critical section. */
+		return (initial_count == 0u) ?
+			(usb_osal_sem_t) usb_osal_sem_pool_take() : NULL;
+	}
 	return (usb_osal_sem_t) osSemaphoreNew(1u, initial_count, NULL);
 }
 
 usb_osal_sem_t usb_osal_sem_create_counting(uint32_t max_count)
 {
+	if (usb_osal_irq_masked() != 0) {
+		/* a counting semaphore cannot be taken from the binary pool, and a
+		 * masked context may not create one; the callers that need this
+		 * create it from their thread (the stream engine does). */
+		return NULL;
+	}
 	return (usb_osal_sem_t) osSemaphoreNew(max_count, 0u, NULL);
 }
 
 void usb_osal_sem_delete(usb_osal_sem_t sem)
 {
-	if (sem != NULL) {
-		(void) osSemaphoreDelete((osSemaphoreId_t) sem);
+	unsigned i;
+
+	if (sem == NULL) {
+		return;
 	}
+	for (i = 0; i < USB_OSAL_SEM_POOL; i++) {
+		if (usb_osal_sem_pool[i] == (osSemaphoreId_t) sem) {
+			/* back to the pool: it must be empty when handed out again */
+			while (osSemaphoreAcquire(usb_osal_sem_pool[i], 0u) == osOK) {
+			}
+			usb_osal_sem_pool_used[i] = 0;
+			return;
+		}
+	}
+	(void) osSemaphoreDelete((osSemaphoreId_t) sem);
 }
 
 int usb_osal_sem_take(usb_osal_sem_t sem, uint32_t timeout)

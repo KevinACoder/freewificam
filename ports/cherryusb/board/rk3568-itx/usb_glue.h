@@ -38,6 +38,12 @@ int usb_board_init(unsigned busid);
  * that context may not do), so expiries are queued to this thread. Idempotent. */
 void usb_osal_timer_service_start(void);
 
+/* Fill the osal's reserved-semaphore pool, in thread context, before any
+ * controller starts. The imported isochronous engine creates semaphores with
+ * interrupts masked, a context the kernel's object creation refuses; the pool
+ * lets that path take a reserved token instead. Idempotent. */
+void usb_osal_sem_pool_init(void);
+
 /* The stack's enumeration event sink: every milestone (init, configured,
  * interface start/unsupported, disconnect) becomes one anchor line. Pass it to
  * usbh_initialize(); without a handler the core installs a silent dummy and a

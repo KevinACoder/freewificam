@@ -195,6 +195,10 @@ int usb_board_init(unsigned busid)
 	 * timer arms. */
 	usb_osal_timer_service_start();
 
+	/* The semaphores the stack creates later from a critical section are
+	 * reserved here, while object creation is still allowed. */
+	usb_osal_sem_pool_init();
+
 	if (usb_board_bus_is_xhci(busid)) {
 		usbh_register_hc_driver(busid, &xhci_hc_driver);
 	} else {
