@@ -204,8 +204,15 @@ lkpi_msc_connect(struct usbh_hubport *hport, uint8_t intf)
 		return lkpi_modeswitch_connect(hport, intf);
 	}
 
-	lkpi_printf(ULOG_INFO_LEVEL, "usbh: lkpi claim attempt %04x:%04x\n",
-	    hport->device_desc.idVendor, hport->device_desc.idProduct);
+	/* The id alone does not say which root/port carried the device, and
+	 * the bench has several Realtek dongles: name the controller, the hub
+	 * and the port in the same line so a board log answers "which bus
+	 * claimed it" without a second discovery run. */
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "usbh: lkpi claim attempt %04x:%04x bus=%u hub=%u port=%u intf=%u spd=%u\n",
+	    hport->device_desc.idVendor, hport->device_desc.idProduct,
+	    (unsigned)hport->bus->busid, (unsigned)hport->parent->index,
+	    (unsigned)hport->port, (unsigned)intf, (unsigned)hport->speed);
 
 	dev = lkpi_usbh_build_device(hport, intf, &intfp);
 	if (dev == NULL)
