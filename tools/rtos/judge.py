@@ -45,6 +45,10 @@ CASES = (
     "rtl8xxxu_join",
     "rtl8xxxu_dataplane",
     "rtl8xxxu_net",
+    "uvc_detect",
+    "uvc_open",
+    "uvc_iso_smoke",
+    "uvc_stream",
 )
 
 # Every anchor is one line of a long capture: the patterns are line-oriented.
@@ -373,6 +377,44 @@ PATTERNS = {
     ),
     "rtl8xxxu_net_fail": re.compile(
         r"rtl8xxxu: net FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # the camera image: bring-up, the negotiated open, the raw transport and
+    # the stream window.  One anchor per case, plus the case's own verdict
+    # line, so a PASS without its numbers is refused.
+    "uvc_host": re.compile(
+        r"uvc: host up bus=(?P<bus>\d+) hcd=(?P<hcd>\w+) base=(?P<base>0x[0-9a-f]+)",
+        re.MULTILINE,
+    ),
+    "uvc_connect": re.compile(
+        r"uvc: connect vid=(?P<vid>[0-9a-f]{4}) pid=(?P<pid>[0-9a-f]{4}) "
+        r"bus=(?P<bus>\d+) dev=(?P<dev>\d+) minor=(?P<minor>\d+) "
+        r"formats=(?P<formats>\d+) alts=(?P<alts>\d+)",
+        re.MULTILINE,
+    ),
+    "uvc_open": re.compile(
+        r"uvc: open mjpeg (?P<width>\d+)x(?P<height>\d+) alt=(?P<alt>\d+) "
+        r"fmt=(?P<fmt>\d+) frm=(?P<frm>\d+) mps=(?P<mps>\d+) "
+        r"dmp=(?P<dmp>\d+) ival=(?P<ival>\d+)",
+        re.MULTILINE,
+    ),
+    "uvc_iso_smoke": re.compile(
+        r"uvc: iso smoke urbs=(?P<urbs>\d+) done=(?P<done>\d+) "
+        r"err_urbs=(?P<err_urbs>\d+) err_pkts=(?P<err_pkts>\d+) "
+        r"bytes=(?P<bytes>\d+) max=(?P<max>\d+)",
+        re.MULTILINE,
+    ),
+    "uvc_stream": re.compile(
+        r"uvc: stream frames=(?P<frames>\d+) bytes=(?P<bytes>\d+) "
+        r"avg=(?P<avg>\d+) ms=(?P<ms>\d+) fps=(?P<fps>\d+\.\d+) "
+        r"kbit=(?P<kbit>\d+) dropped=(?P<dropped>\d+) "
+        r"invalid=(?P<invalid>\d+) err=(?P<err>\d+) max=(?P<max>\d+)",
+        re.MULTILINE,
+    ),
+    "uvc_stream_first": re.compile(
+        r"uvc: stream first frame size=(?P<size>\d+)", re.MULTILINE
+    ),
+    "uvc_fail": re.compile(
+        r"uvc: (?P<case>[a-z_ ]+) FAIL (?P<reason>.+)$", re.MULTILINE
     ),
 }
 
@@ -1388,6 +1430,109 @@ def judge(text: str, expect: dict | None = None) -> dict:
             else:
                 notes.append(f"rtl8xxxu_net: {direction} {row['kbit']} kbit/s "
                              f"over {row['ms']} ms ({row['bytes']} bytes)")
+
+    # The camera image.  The four cases share one application half; the checks
+    # below hold each case to its own numbers, so a PASS cannot outrun its
+    # evidence.
+    fail = found["uvc_fail"]
+    if fail:
+        errors.append(f"uvc: {fail['reason']}")
+
+    if cases.get("uvc_detect", {}).get("verdict") == "pass":
+        host = found["uvc_host"]
+        connect = found["uvc_connect"]
+        if not host:
+            errors.append("uvc_detect: PASS without the controller line")
+        if not connect:
+            errors.append("uvc_detect: PASS without the connect line")
+        else:
+            if connect["vid"] != "046d" or connect["pid"] != "0990":
+                errors.append(
+                    f"uvc_detect: camera {connect['vid']}:{connect['pid']} "
+                    f"is not the bench camera 046d:0990"
+                )
+            if host and connect["bus"] != host["bus"]:
+                errors.append(
+                    f"uvc_detect: camera on bus {connect['bus']}, "
+                    f"controller on bus {host['bus']}"
+                )
+            notes.append(
+                f"uvc_detect: camera {connect['vid']}:{connect['pid']} "
+                f"bus={connect['bus']} formats={connect['formats']} "
+                f"alts={connect['alts']}"
+            )
+
+    if cases.get("uvc_open", {}).get("verdict") == "pass":
+        opened = found["uvc_open"]
+        if not opened:
+            errors.append("uvc_open: PASS without the open line")
+        else:
+            mps = int(opened["mps"])
+            dmp = int(opened["dmp"])
+            if mps <= 0 or dmp <= 0:
+                errors.append("uvc_open: the negotiation returned an empty payload bound")
+            elif dmp > mps:
+                # the device's committed payload cannot exceed the endpoint's
+                # bound; the other direction is legal (an IN endpoint may
+                # answer with less than the host scheduled)
+                errors.append(
+                    f"uvc_open: device payload {dmp} above the endpoint bound {mps}"
+                )
+            if int(opened["alt"]) < 1:
+                errors.append("uvc_open: opened on alternate setting 0 (no bandwidth)")
+            if not (1 <= int(opened["ival"]) <= 4):
+                errors.append(
+                    f"uvc_open: interval {opened['ival']} outside the engine's table"
+                )
+            notes.append(
+                f"uvc_open: {opened['width']}x{opened['height']} alt={opened['alt']} "
+                f"mps={mps} dmp={dmp} ival={opened['ival']}"
+            )
+
+    if cases.get("uvc_iso_smoke", {}).get("verdict") == "pass":
+        smoke = found["uvc_iso_smoke"]
+        if not smoke:
+            errors.append("uvc_iso_smoke: PASS without the transport line")
+        else:
+            urbs = int(smoke["urbs"])
+            done = int(smoke["done"])
+            if int(smoke["err_urbs"]) != 0:
+                errors.append(f"uvc_iso_smoke: {smoke['err_urbs']} urbs failed")
+            if done < urbs * 3 // 4:
+                errors.append(f"uvc_iso_smoke: {done}/{urbs} urbs completed")
+            if int(smoke["bytes"]) == 0:
+                errors.append("uvc_iso_smoke: no bytes arrived")
+            notes.append(
+                f"uvc_iso_smoke: {done}/{urbs} urbs {smoke['bytes']} bytes "
+                f"max={smoke['max']} errpkt={smoke['err_pkts']}"
+            )
+
+    if cases.get("uvc_stream", {}).get("verdict") == "pass":
+        stream = found["uvc_stream"]
+        if not stream:
+            errors.append("uvc_stream: PASS without the window line")
+        else:
+            frames = int(stream["frames"])
+            ms = int(stream["ms"])
+            dropped = int(stream["dropped"])
+            if not (15000 <= ms <= 30000):
+                errors.append(f"uvc_stream: window {ms} ms is not the 20 s window")
+            if frames < 130:
+                errors.append(
+                    f"uvc_stream: {frames} frames in {ms} ms "
+                    f"(the release floor is 130)"
+                )
+            if int(stream["err"]) != 0:
+                errors.append(f"uvc_stream: {stream['err']} packet errors")
+            if dropped > max(1, frames // 20):
+                errors.append(f"uvc_stream: {dropped} frames dropped")
+            if int(stream["max"]) > 48 * 1024:
+                errors.append(f"uvc_stream: frame of {stream['max']} bytes exceeds the pool")
+            notes.append(
+                f"uvc_stream: {frames} frames, {stream['bytes']} bytes, "
+                f"{stream['fps']} fps, {stream['kbit']} kbit/s, "
+                f"avg={stream['avg']} max={stream['max']}"
+            )
 
     result = found["result"]
     if not result:
