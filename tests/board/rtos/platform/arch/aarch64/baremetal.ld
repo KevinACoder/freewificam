@@ -48,6 +48,7 @@ SECTIONS
 		KEEP(*(.text.boot))
 		KEEP(*(.vectors))
 		KEEP(*(.freertos_vectors))
+		KEEP(*(.metal_vectors))
 		*(.text .text.*)
 	} :text
 

@@ -12,7 +12,9 @@
  *   CMSIS2_BACKEND_FREERTOS - FreeRTOS kernel, served by the upstream CMSIS-FreeRTOS
  *                             adapter compiled into the target build;
  *   CMSIS2_BACKEND_THREADX  - ThreadX kernel, served by the backend compiled from
- *                             os/threadx/.
+ *                             os/threadx/;
+ *   CMSIS2_BACKEND_BAREMETAL - cooperative kernel with no tick and no
+ *                             preemption, compiled from os/baremetal/metal_*.c.
  */
 
 #ifndef CMSIS2_H
@@ -24,8 +26,10 @@
 #include "cmsis_os2.h"
 #elif defined( CMSIS2_BACKEND_THREADX )
 #include "cmsis_os2.h"
+#elif defined( CMSIS2_BACKEND_BAREMETAL )
+#include "cmsis_os2.h"
 #else
-#error "no CMSIS2 backend selected: define CMSIS2_BACKEND_FREERTOS or CMSIS2_BACKEND_THREADX"
+#error "no CMSIS2 backend selected: define CMSIS2_BACKEND_FREERTOS, CMSIS2_BACKEND_THREADX or CMSIS2_BACKEND_BAREMETAL"
 #endif
 
 /* The critical-section extension lives beside the facade so that application and

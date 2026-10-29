@@ -37,15 +37,10 @@
 #include "os/cmsis2/cmsis2.h"
 
 /*
- * The project's allocation seam: the board heap provides pvPortMalloc/vPortFree on the
- * ThreadX line (os/threadx/heap.h) and the kernel's own heap on the FreeRTOS line.
- * usb_osal_malloc/free are the imported stack's only allocation point, so the
- * memory-subsystem milestone replaces the allocator behind this seam and nothing here
- * moves. Declared locally because the FreeRTOS-side declaration lives in a kernel
- * header this file may not include.
+ * The allocation seam is the CMSIS2 facade's heap (osMemoryAlloc/osMemoryFree), not a
+ * kernel-specific allocator: the FreeRTOS, ThreadX and baremetal backends each supply
+ * it, so this file stays free of kernel headers and links on all three.
  */
-void *pvPortMalloc(size_t size);
-void vPortFree(void *ptr);
 
 /* ------------------------------------------------------------------ */
 /* Unit conversions                                                    */
@@ -435,7 +430,7 @@ struct usb_osal_timer *usb_osal_timer_create(const char *name, uint32_t timeout_
 	osTimerId_t id;
 
 	(void) name; /* the CMSIS timer needs no name; the interface still passes one */
-	timer = (struct usb_osal_timer *) pvPortMalloc(sizeof(struct usb_osal_timer));
+	timer = (struct usb_osal_timer *) osMemoryAlloc(sizeof(struct usb_osal_timer));
 	if (timer == NULL) {
 		return NULL;
 	}
@@ -449,7 +444,7 @@ struct usb_osal_timer *usb_osal_timer_create(const char *name, uint32_t timeout_
 			is_period ? osTimerPeriodic : osTimerOnce,
 			timer, NULL);
 	if (id == NULL) {
-		vPortFree(timer);
+		osMemoryFree(timer);
 		return NULL;
 	}
 	timer->timer = (void *) id;
@@ -465,7 +460,7 @@ void usb_osal_timer_delete(struct usb_osal_timer *timer)
 		(void) osTimerStop((osTimerId_t) timer->timer);
 		(void) osTimerDelete((osTimerId_t) timer->timer);
 	}
-	vPortFree(timer);
+	osMemoryFree(timer);
 }
 
 void usb_osal_timer_start(struct usb_osal_timer *timer)
@@ -511,10 +506,10 @@ void usb_osal_msleep(uint32_t delay)
 
 void *usb_osal_malloc(size_t size)
 {
-	return pvPortMalloc(size);
+	return osMemoryAlloc(size);
 }
 
 void usb_osal_free(void *ptr)
 {
-	vPortFree(ptr);
+	osMemoryFree(ptr);
 }
