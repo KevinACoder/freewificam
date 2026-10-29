@@ -220,18 +220,14 @@ uintptr_t usb_board_reg_base(unsigned busid)
 void usb_hc_low_level_init(struct usbh_bus *bus)
 {
 	if (usb_board_bus_is_xhci(bus->busid)) {
-		extern void uart_early_puts(const char *);
-		uart_early_puts("usbh: ll enter\r\n");
 		/* The USB3 domain first (idempotent), then this core: close
 		 * the soft reset, open the PHYs, force the host role. The core
 		 * ID read back through the board layer is the anchor that says
 		 * the aperture is alive - a core still in soft reset reads
 		 * zero there. */
 		usb_usb3_domain_init();
-		uart_early_puts("usbh: ll domain done\r\n");
 
 		usb_xhci_dwc3_host_init(bus->hcd.reg_base);
-		uart_early_puts("usbh: ll dwc3 done\r\n");
 
 		LOG_DEBUG("usbh: bus%u gsnpsid=%08x\n", (unsigned)bus->busid,
 			  usb_xhci_core_id(bus->hcd.reg_base));

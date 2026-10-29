@@ -278,7 +278,6 @@ void usb_domain_up(void)
 
 void usb_xhci_dwc3_host_init(uintptr_t base)
 {
-	extern void uart_early_puts(const char *);
 	volatile uint32_t *dwc3 = (volatile uint32_t *)base;
 	uint32_t gctl;
 	uint32_t g2phy;
@@ -293,13 +292,10 @@ void usb_xhci_dwc3_host_init(uintptr_t base)
 	dwc3[DWC3_GCTL / 4U] |= DWC3_GCTL_CORESOFTRESET;
 	dwc3[DWC3_GUSB3PIPECTL / 4U] |= DWC3_GUSB3PIPECTL_PHYSOFTRST;
 	dwc3[DWC3_GUSB2PHYCFG / 4U] |= DWC3_GUSB2PHYCFG_PHYSOFTRST;
-	uart_early_puts("dwc3: reset asserted\r\n");
 	usb_udelay(100000U);
-	uart_early_puts("dwc3: 100ms 1\r\n");
 	dwc3[DWC3_GUSB3PIPECTL / 4U] &= ~DWC3_GUSB3PIPECTL_PHYSOFTRST;
 	dwc3[DWC3_GUSB2PHYCFG / 4U] &= ~DWC3_GUSB2PHYCFG_PHYSOFTRST;
 	usb_udelay(100000U);
-	uart_early_puts("dwc3: 100ms 2\r\n");
 
 	/* Close the soft reset. Skipping this clear leaves the whole register
 	 * aperture (xHCI and core globals alike) reading zero, and the

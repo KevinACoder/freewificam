@@ -376,23 +376,8 @@ BACKEND_VENDOR_SRCS := \
 	$(wildcard $(TX)/common/src/*.c) \
 	$(wildcard $(TX_PORT)/src/*.S) \
 	$(THIRD_PARTY)/tlsf/tlsf.c
-else ifeq ($(BACKEND),metal)
-KERNEL_NAME := metal cooperative kernel
-BACKEND_DEFS := -DCMSIS2_BACKEND_BAREMETAL \
-	-DCMSIS2_MAX_THREADS=24 -DCMSIS2_MAX_TIMERS=128
-BACKEND_INCLUDES :=
-BACKEND_LDFLAGS := -Wl,-u,osCriticalEnter -Wl,-u,osCriticalExit
-BACKEND_VECTOR := metal_vector_table
-BACKEND_SYMBOLS := metal_switch metal_task_entry metal_irq_handler
-BACKEND_FIRST_SRCS := \
-	$(PLATFORM)/os/baremetal/metal_port.S
-BACKEND_VENDOR_SRCS := \
-	$(PLATFORM)/os/baremetal/metal_kernel.c \
-	$(PLATFORM)/os/baremetal/metal_cmsis2.c \
-	$(PLATFORM)/os/baremetal/metal_memory.c \
-	$(THIRD_PARTY)/tlsf/tlsf.c
 else
-$(error unknown BACKEND '$(BACKEND)': use freertos, threadx or metal)
+$(error unknown BACKEND '$(BACKEND)': use freertos or threadx)
 endif
 
 INCLUDES := \
