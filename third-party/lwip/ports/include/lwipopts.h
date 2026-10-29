@@ -45,6 +45,12 @@
  * receive timeout. */
 #define LWIP_RAW                        1
 #define LWIP_SO_RCVTIMEO                1
+/* FIONREAD has to answer "is a datagram already queued?" for the cost
+ * instrument's application bucket. The stock implementation answers from
+ * recv_avail, which UDP never maintains; LINUXMODE takes the datagram into
+ * the socket's cached netbuf instead, which is what the instrument needs and
+ * what a caller expects from FIONREAD on a datagram socket. */
+#define LWIP_FIONREAD_LINUXMODE         1
 #define MEMP_NUM_NETCONN                10
 /* The errno constants are the stack's own; the variable is defined once in
  * ports/lwip/platform_hooks.c. */
@@ -120,6 +126,19 @@
  * thread's first echo request. */
 #define DEFAULT_THREAD_STACKSIZE        8192
 #define DEFAULT_THREAD_PRIO             3
+/* The receive mailbox of a UDP socket. lwIP's own default is 0 (opt.h:1940),
+ * which is fine only while nothing arrives in bulk: a datagram landing while
+ * the reader is not parked in recv() finds the mailbox full, sys_mbox_trypost
+ * fails, recv_udp frees the netbuf and the datagram is gone with no error
+ * anywhere - the peer counts it as sent, the reader counts nothing. Found on
+ * the netio UDP arm (2026-10-29): lwip_stats showed udp_recv climbing while
+ * the receiver's own count stayed at 0 for the whole C2S window.
+ *
+ * 16 slots matches MEMP_NUM_NETBUF (a mailbox slot without its netbuf element
+ * is dead weight - same rule as MEMP_NUM_TCPIP_MSG_INPKT below) and covers a
+ * batch drain handing several datagrams to a reader that was asleep. */
+#define DEFAULT_UDP_RECVMBOX_SIZE       16
+#define MEMP_NUM_NETBUF                 16
 
 /* --- core locking ----------------------------------------------------------- */
 

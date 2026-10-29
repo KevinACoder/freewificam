@@ -106,7 +106,15 @@
  * context) and pays one linear copy into this ring as the price. Depth
  * sets the burst budget: 8 overflowed under the iperf downlink (N7 R0
  * dropped 13.5%); 128 = the descriptor ring depth it serves. */
+/* The staging ring sits between the descriptor ring and the bridge. It was a
+ * hard 128 while the descriptor ring was configurable, which is a trap: a
+ * deeper desc ring only lets the sweep complete bigger bursts, and every
+ * frame of the burst that does not fit here is dropped in eqos_stage_put -
+ * the loss just moves out of the MAC FIFO counter into rx_dropped. Made
+ * overridable so an arm can balance the two depths (and measure it). */
+#ifndef DWC_EQOS_RX_STAGE_COUNT
 #define DWC_EQOS_RX_STAGE_COUNT	128
+#endif
 
 /* One TX completion interrupt per this many frames (the last frame of a
  * burst always interrupts, so a quiet line never waits on the counter).
@@ -323,6 +331,7 @@
 						| DWC_EQOS_CH0_INTR_TIE)
 
 #define DWC_EQOS_DMA_CH0_STATUS              0x1160
+#define  DWC_EQOS_CH0_STATUS_RU              (1u << 7)
 #define  DWC_EQOS_CH0_STATUS_NIS             (1u << 15)
 #define  DWC_EQOS_CH0_STATUS_AIS             (1u << 14)
 #define  DWC_EQOS_CH0_STATUS_FB              (1u << 12)
@@ -515,6 +524,14 @@ struct dwc_eqos_stats {
 	uint32_t rx_irqs;	/* interrupt passes that ran the RX sweep
 				 * (the coalescing gauge: compare against
 				 * rx_frames per heartbeat) */
+	uint32_t rx_buf_unavail;	/* RU latch in the DMA status word: a frame
+					 * arrived with no descriptor armed for
+					 * it. This is the desc-ring-full drop -
+					 * the one MMC rx_fifo_overflow cannot
+					 * see, because the frame already left
+					 * the MTL FIFO. Without it the layer
+					 * ledger has a hole exactly where the
+					 * ring depth decides the loss. */
 	uint32_t rx_csum_drops;	/* RDES1-flagged bad-checksum frames (IPC) */
 	uint32_t tx_csum_frames;	/* frames sent with CIC=3 (the MAC inserts
 					 * the IPv4/TCP or IPv4/UDP checksums) */

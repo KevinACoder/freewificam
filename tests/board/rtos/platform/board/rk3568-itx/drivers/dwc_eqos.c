@@ -1592,6 +1592,15 @@ void dwc_eqos_irq(void *arg)
 			}
 			break;
 		}
+		/* Count the ring-full drop before clearing the latch: RU says
+		 * the DMA had a frame and no owned descriptor to put it in, so
+		 * the frame is gone and no MMC counter recorded it (it never
+		 * sat in the MTL FIFO). This is the number that makes a deep
+		 * ring look good while it is really moving the loss to a path
+		 * the ledger could not see. */
+		if (status & DWC_EQOS_CH0_STATUS_RU) {
+			dev->stats.rx_buf_unavail++;
+		}
 		/* Write-one-to-clear everything latched: leaving e.g. the
 		 * abnormal summary set keeps the line asserted forever. */
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_STATUS, status);

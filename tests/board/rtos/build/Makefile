@@ -501,11 +501,17 @@ APP_SRCS := \
 
 # The net case brings the lwIP port and the GMAC drivers; the eMMC case brings
 # the storage stack and the eMMC controller.
-ifneq ($(filter net,$(CASES)),)
+ifneq ($(filter net net_mdk_netio,$(CASES)),)
+# lwIP wants a MAC layer and a service thread for every wired NIC case; the
+# wireless arms bring lwIP up through the net80211 bridge and keep their own
+# receive pump, so a goal that would only serve them is not part of this block.
 NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
 	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
-	$(THIRD_PARTY)/lwip/ports/ethnetif.c
+	$(THIRD_PARTY)/lwip/ports/ethnetif.c \
+	$(LINE)/app/cases/net_stack.c \
+	$(LINE)/app/net_prof.c \
+	$(LINE)/app/net_prof_gmac.c
 NET_STACK_SRCS := $(LWIP_STACK_SRCS)
 EQOS_SRCS := \
 	$(PLATFORM)/board/rk3568-itx/drivers/dwc_eqos.c \
