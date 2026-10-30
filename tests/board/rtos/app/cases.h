@@ -85,10 +85,14 @@ int case_pcie_ecam_run(void);
 #if defined(RTOS_CASE_NET_E1000E)
 int case_net_e1000e_run(void);
 #endif
+#if defined(RTOS_CASE_NET_XMAC)
+int case_net_xmac_run(void);
+#endif
 #if defined(RTOS_CASE_NET_GMAC)
 int case_net_gmac_run(void);
 #endif
-#if defined(RTOS_CASE_NET_E1000E) || defined(RTOS_CASE_NET_GMAC)
+#if defined(RTOS_CASE_NET_E1000E) || defined(RTOS_CASE_NET_GMAC) || \
+    defined(RTOS_CASE_NET_XMAC)
 /* The shared one-shot lwIP stack bring-up (a boot may run both NIC cases;
  * tcpip_init is once-per-boot by contract), and the boot's one lwiperf TCP
  * server (only one listener can own the port). */
