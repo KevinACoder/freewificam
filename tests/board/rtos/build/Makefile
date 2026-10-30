@@ -41,10 +41,18 @@ THIRD_PARTY := $(ROOT)/third-party
 # default below, so a value in config.mk wins over the Makefile's fallback.
 include $(LINE)/config.mk
 BACKEND := $(CONFIG_BACKEND)
+# The board the image targets (rk3568-itx keeps every default; a firefly
+# config.mk selects the firefly platform below).
+CONFIG_BOARD ?= rk3568-itx
+BOARD := $(CONFIG_BOARD)
 CASES := $(CONFIG_CASES)
 OPT := $(CONFIG_OPT)
 PROFILE := $(CONFIG_PROFILE)
 HEAP_SIZE := $(CONFIG_HEAP_SIZE)
+# Compile-time levers a profile may carry with it. The command line still
+# wins (`LEVERS=... tools/rtos/build.sh`), so a profile's own set is the
+# default an image is reproduced from, not a lock.
+LEVERS ?= $(CONFIG_LEVERS)
 WLAN_OBS := $(CONFIG_WLAN_OBS)
 WLAN_TCP_SINK := $(CONFIG_WLAN_TCP_SINK)
 WLAN_TCP_SINK_SECONDS := $(CONFIG_WLAN_TCP_SINK_SECONDS)
@@ -81,12 +89,82 @@ TX      := $(ROOT)/third-party/threadx
 TX_PORT := $(TX)/ports/cortex_a55/gnu
 TX_HOST := $(TX)/ports/linux/gnu
 CMSIS   := $(ROOT)/third-party/CMSIS_6
-LWIP    := $(ROOT)/third-party/lwip
+# The stack core is selectable so a version question can be answered by a
+# one-line rebuild instead of an argument: LWIP_DIR names the tree, and the
+# default is the tree this repo carries. Set LWIP_DIR to a checkout of a
+# different lwIP when isolating a stack behaviour from a driver behaviour.
+LWIP_DIR ?= $(ROOT)/third-party/lwip
+LWIP    := $(LWIP_DIR)
 PATCHES := $(notdir $(wildcard $(ROOT)/third-party/lwip/patches/*.patch))
 ADAPTER_PATCHES := $(notdir $(wildcard $(ROOT)/third-party/CMSIS-FreeRTOS/patches/*.patch))
 
 BUILD := $(CURDIR)/build
 BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || echo unknown)
+
+# --- board selection ---------------------------------------------------------
+# One board per image. rk3568-itx keeps every number the pre-board-makefile
+# build had; a firefly config swaps the platform sources, the include
+# flavours (the version directory leads, so board_conf.h resolves to
+# board/firefly/<version>), the ThreadX board glue directory, the link window
+# and the entry-address gate.
+ifeq ($(BOARD),rk3568-itx)
+BOARD_INCLUDES := \
+	-I$(PLATFORM)/board/rk3568-itx \
+	-I$(PLATFORM)/board/rk3568-itx/drivers
+BOARD_BASE_SRCS := \
+	$(PLATFORM)/board/rk3568-itx/drivers/uart.c \
+	$(PLATFORM)/board/rk3568-itx/param.c \
+	$(PLATFORM)/board/rk3568-itx/reset.c
+BOARD_TX_DIR := rk3568-itx
+BOARD_TX_EXTRA_SRCS :=
+BOARD_LINKSCRIPT := $(PLATFORM)/arch/aarch64/baremetal.ld
+BOARD_LOAD_BASE := 0xa000000
+BOARD_DEFS :=
+else ifeq ($(BOARD),firefly-v1)
+BOARD_INCLUDES := \
+	-I$(PLATFORM)/board/firefly/v1 \
+	-I$(PLATFORM)/board/firefly \
+	-I$(PLATFORM)/board/firefly/drivers \
+	-I$(PLATFORM)/board/firefly/drivers/net \
+	-I$(PLATFORM)/board/firefly/drivers/nvme
+BOARD_BASE_SRCS := \
+	$(PLATFORM)/board/firefly/drivers/uart.c \
+	$(PLATFORM)/board/firefly/param.c \
+	$(PLATFORM)/board/firefly/reset.c
+BOARD_TX_DIR := firefly
+# The firefly board image's imported world (NVMe, lwIP) calls the C library
+# names; the rk3568 images answer them only when the wlan case pulls them in.
+BOARD_TX_EXTRA_SRCS := $(PLATFORM)/os/threadx/board/firefly/libc_bindings.c
+# The board's wrapper script assigns board_ram_base/board_ram_top before
+# DEFINED() reads them (command-line defsym does not satisfy DEFINED()).
+BOARD_LINKSCRIPT := $(PLATFORM)/board/firefly/v1/link.ld
+BOARD_LOAD_BASE := 0x90000000
+# This board's images reset themselves (PSCI) once the case table's verdict
+# line is out, and a failed assertion resets instead of parking - the bench
+# never needs a manual power cycle.
+BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=1
+else ifeq ($(BOARD),firefly-v2)
+# Same family sources as v1; only the version directory (register map) and
+# the two hardware facts v2 changed - the console clock and the Ethernet
+# block - differ, and both live in v2's board_conf.h.
+BOARD_INCLUDES := \
+	-I$(PLATFORM)/board/firefly/v2 \
+	-I$(PLATFORM)/board/firefly \
+	-I$(PLATFORM)/board/firefly/drivers \
+	-I$(PLATFORM)/board/firefly/drivers/net \
+	-I$(PLATFORM)/board/firefly/drivers/nvme
+BOARD_BASE_SRCS := \
+	$(PLATFORM)/board/firefly/drivers/uart.c \
+	$(PLATFORM)/board/firefly/param.c \
+	$(PLATFORM)/board/firefly/reset.c
+BOARD_TX_DIR := firefly
+BOARD_TX_EXTRA_SRCS := $(PLATFORM)/os/threadx/board/firefly/libc_bindings.c
+BOARD_LINKSCRIPT := $(PLATFORM)/board/firefly/v2/link.ld
+BOARD_LOAD_BASE := 0x90000000
+BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=1
+else
+$(error unknown BOARD '$(BOARD)': use rk3568-itx, firefly-v1 or firefly-v2)
+endif
 # Optimisation level. -O2 is the adopted default since the performance round
 # (the performance round's profile decision): +17% uplink, -73% ping RTT,
 # +16% board-local loopback, no change on the storage path and no suite
@@ -127,7 +205,6 @@ endif
 #
 #   OPT=-O2 tools/rtos/build.sh
 #   LEVERS="-DTCP_WND=131072 -DCONFIG_GMAC_RX_SCAN=5" tools/rtos/build.sh
-LEVERS ?=
 
 # Compiler channel, the same idea one level down: the flags an arm changes in
 # the code generator rather than in the preprocessor (the core to schedule for,
@@ -357,7 +434,7 @@ BACKEND_DEFS := -DEL1=1 -DTX_INCLUDE_USER_DEFINE_FILE \
 	-DCONFIG_TX_TICKS_PER_SECOND=1000 -DCONFIG_TX_TIMER_STACK=4096 \
 	-DCMSIS2_BACKEND_THREADX
 BACKEND_INCLUDES := \
-	-I$(PLATFORM)/os/threadx/board/rk3568-itx/cmsis2 \
+	-I$(PLATFORM)/os/threadx/board/$(BOARD_TX_DIR)/cmsis2 \
 	-I$(PLATFORM)/os/threadx \
 	-I$(TX)/common/inc -I$(TX_PORT)/inc
 BACKEND_LDFLAGS := -Wl,--defsym=HEAP_SIZE=$(HEAP_SIZE) \
@@ -365,10 +442,11 @@ BACKEND_LDFLAGS := -Wl,--defsym=HEAP_SIZE=$(HEAP_SIZE) \
 BACKEND_VECTOR := _threadx_vector_table
 BACKEND_SYMBOLS := _tx_initialize_kernel_enter _tx_thread_schedule _tx_timer_interrupt __top_of_ram
 BACKEND_FIRST_SRCS := \
-	$(PLATFORM)/os/threadx/board/rk3568-itx/tx_glue.c \
-	$(PLATFORM)/os/threadx/board/rk3568-itx/tx_vectors.S \
-	$(PLATFORM)/os/threadx/board/rk3568-itx/heap.c \
-	$(PLATFORM)/os/threadx/board/rk3568-itx/cmsis2/cmsis2_board.c \
+	$(PLATFORM)/os/threadx/board/$(BOARD_TX_DIR)/tx_glue.c \
+	$(PLATFORM)/os/threadx/board/$(BOARD_TX_DIR)/tx_vectors.S \
+	$(PLATFORM)/os/threadx/board/$(BOARD_TX_DIR)/heap.c \
+	$(PLATFORM)/os/threadx/board/$(BOARD_TX_DIR)/cmsis2/cmsis2_board.c \
+	$(BOARD_TX_EXTRA_SRCS) \
 	$(PLATFORM)/os/threadx/cmsis2_threadx.c \
 	$(PLATFORM)/os/threadx/cmsis2_event.c \
 	$(PLATFORM)/os/threadx/cmsis2_ext.c
@@ -386,10 +464,7 @@ INCLUDES := \
 	-I$(PLATFORM)/os/cmsis2 \
 	-I$(PLATFORM)/os/cmsis2/board-compat \
 	-I$(PLATFORM)/arch/aarch64 \
-	-I$(PLATFORM)/board/rk3568-itx \
-	-I$(PLATFORM)/board/rk3568-itx/drivers \
-	-I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
-	-I$(PLATFORM)/board/rk3568-itx/drivers/nvme \
+	$(BOARD_INCLUDES) \
 	-I$(PLATFORM)/os/baremetal \
 	-I$(THIRD_PARTY)/ulog/src \
 	-I$(THIRD_PARTY)/tlsf \
@@ -414,7 +489,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
 	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
 	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(LEVERS) $(BACKEND_DEFS) \
-	$(INCLUDES)
+	$(BOARD_DEFS) $(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
 	-include stdlib.h -D_DEFAULT_SOURCE=1
@@ -484,9 +559,7 @@ BASE_SRCS := \
 	$(PLATFORM)/arch/aarch64/generic_timer.c \
 	$(PLATFORM)/arch/aarch64/mmu.c \
 	$(PLATFORM)/arch/aarch64/cache.c \
-	$(PLATFORM)/board/rk3568-itx/drivers/uart.c \
-	$(PLATFORM)/board/rk3568-itx/param.c \
-	$(PLATFORM)/board/rk3568-itx/reset.c \
+	$(BOARD_BASE_SRCS) \
 	$(PLATFORM)/os/baremetal/printf_bind.c \
 	$(PLATFORM)/os/baremetal/libc_stubs.c \
 	$(PLATFORM)/os/baremetal/log.c \
@@ -499,28 +572,42 @@ APP_SRCS := \
 	$(LINE)/app/port/clock_board.c \
 	$(CASE_SRCS)
 
-# The net case brings the lwIP port and the GMAC drivers; the eMMC case brings
-# the storage stack and the eMMC controller.
-ifneq ($(filter net net_mdk_netio net_loop,$(CASES)),)
-# lwIP wants a MAC layer and a service thread for every wired NIC case; the
-# wireless arms bring lwIP up through the net80211 bridge and keep their own
-# receive pump, so a goal that would only serve them is not part of this block.
+# The wired-network cases each bring the lwIP port face and the stack core;
+# the per-case group below adds that NIC's own netif bridge and driver. A boot
+# may carry more than one (they share one stack bring-up).
+LWIP_CASES := net net_xmac net_mdk_netio net_loop
+ifneq ($(filter $(LWIP_CASES),$(CASES)),)
 NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
 	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
-	$(THIRD_PARTY)/lwip/ports/ethnetif.c \
-	$(LINE)/app/cases/net_stack.c \
-	$(LINE)/app/net_prof.c \
-	$(LINE)/app/net_prof_gmac.c
+	$(LINE)/app/cases/net_stack.c
 NET_STACK_SRCS := $(LWIP_STACK_SRCS)
-EQOS_SRCS := \
-	$(PLATFORM)/board/rk3568-itx/drivers/dwc_eqos.c \
-	$(PLATFORM)/board/rk3568-itx/drivers/eqos_rk3568.c \
-	$(PLATFORM)/board/rk3568-itx/drivers/rtl8211f.c
 else
 NET_APP_SRCS :=
 NET_STACK_SRCS :=
+endif
+
+# The per-NIC groups: the rk3568 wired cases keep the eqos line; the firefly v2
+# case brings its own board driver and netif bridge. The per-frame cost
+# instrument rides with the netio arm only - it is a measurement aid, not part
+# of the driver, and a plain `net` arm must not pay for it.
 EQOS_SRCS :=
+ifneq ($(filter net net_mdk_netio,$(CASES)),)
+NET_APP_SRCS += $(THIRD_PARTY)/lwip/ports/ethnetif.c
+EQOS_SRCS += \
+	$(PLATFORM)/board/rk3568-itx/drivers/dwc_eqos.c \
+	$(PLATFORM)/board/rk3568-itx/drivers/eqos_rk3568.c \
+	$(PLATFORM)/board/rk3568-itx/drivers/rtl8211f.c
+endif
+ifneq ($(filter net_mdk_netio,$(CASES)),)
+NET_APP_SRCS += \
+	$(LINE)/app/net_prof.c \
+	$(LINE)/app/net_prof_gmac.c
+endif
+XMAC_SRCS :=
+ifneq ($(filter net_xmac,$(CASES)),)
+NET_APP_SRCS += $(THIRD_PARTY)/lwip/ports/xmac_netif.c
+XMAC_SRCS += $(PLATFORM)/board/firefly/drivers/net/xmac.c
 endif
 
 ifneq ($(filter emmc,$(CASES)),)
@@ -562,6 +649,7 @@ endif
 PRINTF_SRCS := $(THIRD_PARTY)/printf/printf.c
 
 FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
+	$(XMAC_SRCS) \
 	$(MMC_PORT_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_BOARD_SRCS) $(NVME_BOARD_SRCS) \
 	$(BACKEND_FIRST_SRCS)
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
@@ -573,7 +661,7 @@ OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)
 	$(WLAN_OBJS)
 
 LDFLAGS := -nostdlib -static \
-	-Wl,-T,$(PLATFORM)/arch/aarch64/baremetal.ld \
+	-Wl,-T,$(BOARD_LINKSCRIPT) \
 	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) $(RTW89_LDFLAGS) $(RTL8XXXU_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
@@ -701,8 +789,8 @@ gates: $(TARGET).elf
 		echo "FAIL: a kernel header leaked into arch/ or board/"; exit 1; fi; \
 	start=$$($(NM) $(TARGET).elf | awk '$$3=="_start"{print $$1}'); \
 	[ -n "$$start" ] || { echo "FAIL: _start not found"; exit 1; }; \
-	[ $$(( 0x$$start )) -eq $$(( 0xa000000 )) ] || \
-		{ echo "FAIL: _start=0x$$start (want 0xa000000)"; exit 1; }; \
+	[ $$(( 0x$$start )) -eq $$(( $(BOARD_LOAD_BASE) )) ] || \
+		{ echo "FAIL: _start=0x$$start (want $(BOARD_LOAD_BASE))"; exit 1; }; \
 	vec=$$($(NM) $(TARGET).elf | awk '$$3=="$(BACKEND_VECTOR)"{print $$1}'); \
 	[ -n "$$vec" ] || { echo "FAIL: $(BACKEND_VECTOR) not found"; exit 1; }; \
 	[ $$(( 0x$$vec % 2048 )) -eq 0 ] || \
@@ -755,7 +843,7 @@ ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
 	echo "PASS: uvc engine, stream engine and video class table present"
 endif
 	@$(SIZE) $(TARGET).elf
-	@printf 'opt: %s\nprofile: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
+	@printf 'opt: %s\nprofile: %s\nlwip: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(LWIP)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip $(PROFILE_CFLAGS)),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1

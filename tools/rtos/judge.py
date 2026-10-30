@@ -24,6 +24,7 @@ CASES = (
     "tick",
     "cmsis2",
     "net",
+    "net_xmac",
     "emmc",
     "wlan",
     "pcie",
@@ -51,6 +52,10 @@ CASES = (
     "uvc_stream",
 )
 
+# The bench line for a gigabit port: a leg that reports less than this still
+# produced evidence, but it is not a line-rate pass.
+NIC_KBIT_MIN = 900000
+
 # Every anchor is one line of a long capture: the patterns are line-oriented.
 FLAGS = re.MULTILINE
 
@@ -73,6 +78,12 @@ PATTERNS = {
     "net_down": re.compile(r"net: iperf down done=(?P<done>\d+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
     "net_up": re.compile(r"net: iperf up done=(?P<done>\d+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)", re.MULTILINE),
     "net_pass": re.compile(r"net: PASS", re.MULTILINE),
+    "net_xmac_link": re.compile(r"net-xmac: phy link up speed=(?P<speed>\d+) duplex=(?P<duplex>\w+)", re.MULTILINE),
+    "net_xmac_addr": re.compile(r"net-xmac: netif ip=(?P<addr>[\d.]+/\d+) mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE),
+    "net_xmac_irq": re.compile(r"net-xmac: rx irq=(?P<irq>\d+) armed", re.MULTILINE),
+    "net_xmac_tx": re.compile(r"net-xmac: iperf tx (?P<kbit>\d+) kbit/s -> (?P<peer>[\d.]+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) frames=(?P<frames>\d+)", re.MULTILINE),
+    "net_xmac_rx": re.compile(r"net-xmac: iperf rx (?P<kbit>\d+) kbit/s <- (?P<peer>[\d.]+) bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) frames=(?P<frames>\d+)", re.MULTILINE),
+    "net_xmac_closed": re.compile(r"net-xmac: server window closed", re.MULTILINE),
     "emmc_cid": re.compile(r"emmc: cid manufacturer=(?P<manufacturer>\S+) oem=(?P<oem>\S+) product=(?P<product>\S*) rev=(?P<rev>\S+) serial=(?P<serial>\S+) date=(?P<date>\S+)", re.MULTILINE),
     "emmc_csd": re.compile(r"emmc: csd structure=(?P<structure>\d+) spec=(?P<spec>\d+) size=(?P<size>\d+) read_bl_len=(?P<rbl>\d+)", re.MULTILINE),
     "emmc_extcsd": re.compile(r"emmc: extcsd sectors=(?P<sectors>\d+) rev=(?P<rev>\d+) structure=(?P<structure>\d+) type=(?P<type>\S+) bus_width=(?P<bus>\d+) hs_timing=(?P<hs>\d+)", re.MULTILINE),
@@ -640,6 +651,39 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append(f"cmsis2: {checks['failures']} failed checks")
         else:
             notes.append(f"cmsis2: {checks['checks']} checks")
+
+    if cases.get("net_xmac", {}).get("verdict") == "pass":
+        link = found["net_xmac_link"]
+        if not link:
+            errors.append("net_xmac: PASS without a link line")
+        elif int(link["speed"]) != 1000 or link["duplex"] != "full":
+            errors.append(f"net_xmac: link came up {link['speed']} / {link['duplex']}")
+        else:
+            notes.append(f"net_xmac: link {link['speed']} {link['duplex']}")
+
+        if found["net_xmac_addr"] is None:
+            errors.append("net_xmac: no address line")
+        if found["net_xmac_irq"] is None:
+            errors.append("net_xmac: receive interrupt was never armed")
+
+        # Both legs are measured on the board from the driver's own counters,
+        # so a verdict needs both of them and both of them moving bytes. The
+        # bench threshold for a gigabit port is 900 Mbit/s; below that the leg
+        # is reported but the case does not pass for throughput reasons, which
+        # is what NIC_KBIT_MIN records.
+        for key, label in (("net_xmac_tx", "tx"), ("net_xmac_rx", "rx")):
+            row = found[key]
+            if not row:
+                errors.append(f"net_xmac: no {label} line")
+            elif int(row["bytes"]) == 0 or int(row["frames"]) == 0:
+                errors.append(f"net_xmac: {label} moved nothing")
+            else:
+                notes.append(f"net_xmac {label}: {int(row['kbit'])} kbit/s over {row['ms']} ms")
+                if int(row["kbit"]) < NIC_KBIT_MIN:
+                    notes.append(f"net_xmac {label}: below the {NIC_KBIT_MIN} kbit/s bench line")
+
+        if found["net_xmac_closed"] is None:
+            errors.append("net_xmac: server window never closed")
 
     if cases.get("net", {}).get("verdict") == "pass":
         ping = found["net_ping"]

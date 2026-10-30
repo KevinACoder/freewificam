@@ -71,6 +71,10 @@ void case_net_lwiperf_server_start(void)
 	lwiperf_server_state =
 		lwiperf_start_tcp_server_default(NULL, NULL) != NULL ? 1 : -1;
 	UNLOCK_TCPIP_CORE();
-	CASE_INFO("net: lwiperf server %s on :5201\n",
-		  lwiperf_server_state == 1 ? "listening" : "FAILED");
+	/* The port is the library's default (5001); naming it explicitly here
+	 * keeps the console line and the bench command from drifting apart -
+	 * the line said 5201 while the listener was on 5001. */
+	CASE_INFO("net: lwiperf server %s on :%u\n",
+		  lwiperf_server_state == 1 ? "listening" : "FAILED",
+		  (unsigned)LWIPERF_TCP_PORT_DEFAULT);
 }

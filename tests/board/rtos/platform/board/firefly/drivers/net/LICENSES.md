@@ -20,3 +20,30 @@ SPDX-License-Identifier: BSD-3-Clause
 
 First-party (this repository's own work, re-imported from the reference
 `firefly` branch byte-identical; see `tests/board/rtos/SOURCE.md`).
+
+## `xmac.{c,h}` - firefly v2 on-SoC Cadence GEM-class MAC driver
+
+SPDX-License-Identifier: BSD-3-Clause
+
+First-party (this repository's own work). The register map, the descriptor
+layout and the SerDes clock-select programming are hardware facts: the offsets
+and bit positions were read from the SoC parameter map and cross-checked
+against the board's working mainline driver for the same port, which runs it at
+line rate. No source file was copied or translated - the ring ownership
+discipline, the polled copy data path, the clause-22 PHY handling and the
+diagnostic surface are written here, in this family's own shape (the sibling
+`gmac.{c,h}` next to this file).
+
+Two behaviours in `xmac.c` were settled by reading how the port is driven in
+the reference standalone SDK's lwIP port (BSD-3-Clause, Copyright (C) 2022,
+Phytium Technology Co., Ltd.; the same tree and notice the `gmac` entry above
+records). They are silicon facts about the controller, re-expressed in this
+file's own words rather than copied:
+
+- Transmit is kicked by setting STARTTX in the network control register after
+  the descriptors are handed over; there is no doorbell register in the legacy
+  set.
+- The transmit queue base is programmed once, before the transmitter starts,
+  and is not written again while it runs. Re-pointing it mid-stream
+  desynchronises the DMA from the software cursor and wedges the transmitter
+  on the used-bit-read error.
