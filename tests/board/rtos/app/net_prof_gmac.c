@@ -98,6 +98,16 @@ void net_prof_take(struct net_prof_snap *s)
 	s->rx_dropped = stats.rx_dropped;
 	s->stage_high_water = prof.rx_stage_high_water;
 
+	/* Transmit leg: straight copy, no nesting to undo. tx_total_ticks is
+	 * send_frame entry to exit (including the ring-full park), and the
+	 * memcpy/flush buckets are subsets of it, so a reader can see how much
+	 * of one send is the driver's own buffer work. */
+	s->tx_frames = prof.tx_frames;
+	s->tx_ticks = prof.tx_total_ticks;
+	s->tx_memcpy = prof.tx_memcpy_ticks;
+	s->tx_flush = prof.tx_flush_ticks;
+	s->irq_tx = prof.irq_ent_tx;
+
 	/* frames is the caller's to set: only it knows how many datagrams the
 	 * application actually consumed, and that - not the driver's count -
 	 * is the denominator the decomposition is per. */

@@ -118,4 +118,111 @@ void net_prof_report(const char *tag, const struct net_prof_snap *a,
 		 (unsigned long)(b->rx_dropped - a->rx_dropped),
 		 (unsigned long)b->stage_high_water,
 		 (unsigned long)(b->app_empty - a->app_empty));
+
+	/* The transmit leg gets its own line for the same reason the layer
+	 * counters do: one line per leg is short enough to survive the log
+	 * message limit (ULOG_MAX_MESSAGE_LENGTH=256) instead of being cut at
+	 * the tail, where the interesting number would sit. The denominator is
+	 * the frames the driver accepted, not the ones the app asked for -
+	 * a send that never reached send_frame must not dilute its cost. */
+	{
+		uint64_t txf = b->tx_frames - a->tx_frames;
+
+		log_emit(ULOG_ALWAYS_LEVEL,
+			 "netio: proftx tag=%s tx_frames=%lu tx_x10=%lu "
+			 "tx_memcpy_x10=%lu tx_flush_x10=%lu irq_tx=%lu\n",
+			 tag, (unsigned long)txf,
+			 per_frame_x10(b->tx_ticks - a->tx_ticks, txf),
+			 per_frame_x10(b->tx_memcpy - a->tx_memcpy, txf),
+			 per_frame_x10(b->tx_flush - a->tx_flush, txf),
+			 (unsigned long)(b->irq_tx - a->irq_tx));
+	}
+}
+
+/* --- measurement clock: PMCCNTR_EL0 ---------------------------------------
+ *
+ * See net_prof.h for why a cell carries cycles as well as microseconds. The
+ * probe is deliberately small and self-checking: enable the cycle counter,
+ * read PMCR back, and only claim success when the enable bit stuck. A core
+ * whose EL2 traps PMU accesses (HCR_EL2.TPM) faults here instead of returning
+ * a wrong number, which is why the case prints its own anchor immediately
+ * before calling this and why CONFIG_CPU_PROBE exists as the off switch. */
+#if defined(__aarch64__) && (!defined(CONFIG_CPU_PROBE) || CONFIG_CPU_PROBE)
+#define NET_PROF_CPU_PROBE 1
+#else
+#define NET_PROF_CPU_PROBE 0
+#endif
+
+static int g_cpu_probe_ok;
+
+#if NET_PROF_CPU_PROBE
+static inline uint64_t read_pmcr(void)
+{
+	uint64_t v;
+
+	__asm__ volatile("mrs %0, pmcr_el0" : "=r"(v));
+	return v;
+}
+
+static inline uint64_t read_pmccntr(void)
+{
+	uint64_t v;
+
+	__asm__ volatile("mrs %0, pmccntr_el0" : "=r"(v));
+	return v;
+}
+#endif
+
+int net_prof_cpu_probe_init(void)
+{
+#if NET_PROF_CPU_PROBE
+	uint64_t v = read_pmcr();
+
+	/* E: enable the counters; C: reset the cycle counter so the first
+	 * cell does not inherit the boot's count; LC: ask for the 64-bit
+	 * cycle counter (RAO on a core that has no 32-bit option). */
+	v |= (1ull << 0) | (1ull << 2) | (1ull << 6);
+	__asm__ volatile("msr pmcr_el0, %0" : : "r"(v));
+	/* PMCNTENSET_EL0 bit 31 = cycle counter enable. */
+	__asm__ volatile("msr pmcntenset_el0, %0" : : "r"(1ull << 31));
+	__asm__ volatile("isb");
+
+	g_cpu_probe_ok = ((read_pmcr() & 1ull) != 0ull) ? 1 : 0;
+	return g_cpu_probe_ok ? 0 : -1;
+#else
+	g_cpu_probe_ok = 0;
+	return -1;
+#endif
+}
+
+uint64_t net_prof_cpu_cycles(void)
+{
+#if NET_PROF_CPU_PROBE
+	if (!g_cpu_probe_ok)
+		return 0u;
+	return read_pmccntr();
+#else
+	return 0u;
+#endif
+}
+
+int net_prof_cpu_probe_ok(void)
+{
+	return g_cpu_probe_ok;
+}
+
+void net_prof_cpu_cell(const char *tag, uint64_t cycles, uint64_t ticks,
+		       uint64_t frames)
+{
+	unsigned long cyc_per_frame = frames ? (unsigned long)(cycles / frames) : 0ul;
+	/* The gtimer runs at 24 MHz, so MHz = cycles / (ticks / 24), in
+	 * hundredths: cycles * 24 * 100 / ticks. The intermediate is bounded
+	 * by ~2.9e13 for a 6 s cell at 2 GHz - inside uint64_t. */
+	unsigned long mhz_x100 = ticks ? (unsigned long)((cycles * 24ull * 100ull) / ticks) : 0ul;
+
+	log_emit(ULOG_ALWAYS_LEVEL,
+		 "netio: cpu tag=%s cycles=%lu cyc_per_frame=%lu mhz_x100=%lu "
+		 "frames=%lu\n",
+		 tag, (unsigned long)cycles, cyc_per_frame, mhz_x100,
+		 (unsigned long)frames);
 }

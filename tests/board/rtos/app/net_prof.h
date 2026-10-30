@@ -70,6 +70,20 @@ struct net_prof_snap {
 	uint64_t rx_staged;	/* frames the driver staged */
 	uint64_t rx_dropped;	/* frames the driver dropped (ring full) */
 	uint64_t stage_high_water; /* peak staged frames waiting for a reader */
+
+	/* The transmit leg (K2-06). The receive decomposition above says
+	 * nothing about the direction that has to reach the same 12.8 us/frame
+	 * budget, so the same cell carries the sender's own numbers: how many
+	 * frames the driver took, what one send_frame costs, how much of that
+	 * is the DMA-buffer copy and the cache flush, and how often the
+	 * completion interrupt had to wake a ring-full sender. All of these
+	 * are accumulated unconditionally (the tick buckets fold to zero under
+	 * CONFIG_GMAC_PROF=0, the counts do not). */
+	uint64_t tx_frames;	/* frames the driver accepted */
+	uint64_t tx_ticks;	/* send_frame, whole */
+	uint64_t tx_memcpy;	/* send_frame's copy into the DMA buffer */
+	uint64_t tx_flush;	/* send_frame's cache flush */
+	uint64_t irq_tx;	/* ISR entries whose first status word was TI */
 };
 
 /* Bind the provider to one port instance (the wired arms bind GMAC 1). A
@@ -88,14 +102,48 @@ void net_prof_app_charge(uint64_t ticks);
 uint64_t net_prof_app_ticks(void);
 void net_prof_app_reset(void);
 
-/* Report the cell (b - a) normalised per frame. Emits two anchors:
+/* Report the cell (b - a) normalised per frame. Emits three anchors:
  *
  *   netio: prof  tag=<t> frames=<n> wall_x10=<tenths of a us per frame> ...
  *   netio: profx tag=<t> irqs= sweeps= walk_slots= polls= staged= rx_drop= ...
+ *   netio: proftx tag=<t> tx_frames= tx_x10= tx_memcpy_x10= tx_flush_x10= ...
  *
  * `wall_us` is the cell's wall duration in microseconds, from the same clock
  * the buckets use (rtos_clock_us() on the board tier). */
 void net_prof_report(const char *tag, const struct net_prof_snap *a,
 		     const struct net_prof_snap *b, uint64_t wall_us);
+
+/* --- measurement clock: the CPU's own cycle counter -----------------------
+ *
+ * Every cost above is wall time on a 24 MHz counter, which is the right unit
+ * for "how many microseconds does this frame cost" but the wrong one for
+ * "how many instructions does this frame cost": a CPU running at a lower OPP
+ * spends the same cycles and shows a longer wall. Since the whole campaign's
+ * target (12.8 us/frame) is only reachable if the RTOS and the Linux
+ * reference run at the same clock, the cell also needs the CPU's own count.
+ *
+ * The probe is optional and reported, never assumed: CONFIG_CPU_PROBE=0
+ * compiles it out, and a board that cannot access PMCCNTR says so once at
+ * boot instead of silently reporting zero cycles.
+ *
+ * net_prof_cpu_probe_init() returns 0 when the counter is live, a negative
+ * value when PMCR_EL0 does not come back with the enable bit set.
+ * net_prof_cpu_cycles() returns 0 in that case, so callers can print
+ * "cycles unknown" rather than a fabricated number.
+ */
+int net_prof_cpu_probe_init(void);
+uint64_t net_prof_cpu_cycles(void);
+int net_prof_cpu_probe_ok(void);
+
+/* Report one cell's CPU clock facts from two reads of the same clocks:
+ * `cycles` = net_prof_cpu_cycles() deltas, `ticks` = gtimer_count_get()
+ * deltas (24 MHz), `frames` = frames the cell consumed. Emits
+ *
+ *   netio: cpu tag=<t> cycles=<n> cyc_per_frame=<n> mhz_x100=<n> frames=<n>
+ *
+ * mhz_x100 is the effective CPU frequency in hundredths of a MHz - one
+ * integer division, no FPU (this image builds with -mgeneral-regs-only). */
+void net_prof_cpu_cell(const char *tag, uint64_t cycles, uint64_t ticks,
+		       uint64_t frames);
 
 #endif /* RTOS_APP_NET_PROF_H */
