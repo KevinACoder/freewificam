@@ -767,12 +767,22 @@ void dwc_eqos_irq_dump(unsigned int index);
 
 /* MAC MMC hardware counters (read-clear-nothing; base 0x700 region). The
  * RX FIFO overflow counter counts frames dropped INSIDE the MAC/MTL before
- * any descriptor is involved - invisible to rx_dropped/rx_errors above. */
+ * any descriptor is involved - invisible to rx_dropped/rx_errors above.
+ *
+ * The two TX counters answer a question the software counters cannot: how
+ * many frames the MAC itself transmitted (good and bad) against the frames
+ * the driver handed it, and whether the MTL reported an underflow while
+ * fetching a descriptor. A transmit leg that accepts N frames, sees the MAC
+ * transmit N/3 and reports underflows is starving the MTL, not losing at the
+ * bridge - the same discrimination mmc_ovf gives the receive leg. */
 struct dwc_eqos_mmc_stats {
 	uint32_t rx_pkts_gb;	/* 0x780 */
 	uint32_t rx_octets_gb;	/* 0x784 */
 	uint32_t rx_fifo_overflow;	/* 0x7d4 */
 	uint32_t rx_crc_error;	/* 0x794 */
+	uint32_t tx_pkts_gb;	/* 0x718 MMC_TX_FRAMECOUNT_GB */
+	uint32_t tx_octets_gb;	/* 0x714 MMC_TX_OCTETCOUNT_GB */
+	uint32_t tx_underflow;	/* 0x748 MMC_TX_UNDERFLOW_ERROR */
 };
 
 void dwc_eqos_get_mmc_stats(unsigned int index, struct dwc_eqos_mmc_stats *stats);

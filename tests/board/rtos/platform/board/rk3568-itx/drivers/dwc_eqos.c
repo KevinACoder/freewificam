@@ -739,6 +739,19 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 		& DWC_EQOS_MTL_RXQ0_OP_RQS_MASK;
 	eqos_wr(dev, DWC_EQOS_MTL_RXQ0_OPERATION_MODE, reg);
 
+	/* K2-07: the TX wire duty (75.2k of 84.6k frames/s at a full ring) says
+	 * the DMA idles ~1.5 us between frames. Before touching the descriptors,
+	 * record what the queue was actually programmed with: TQS is derived
+	 * from HW_FEATURE1 (fifo = 128 << TXFIFOSZ), and a FIFO of one frame or
+	 * less with store-and-forward is the first thing a per-frame gap
+	 * implicates. */
+	LOG_INFO("%s: mtl txq0=%08x rxq0=%08x hwfeat1=%08x txpbl=%u rxbufsz=%u\n",
+		 eqos_dev_name(dev),
+		 eqos_rd(dev, DWC_EQOS_MTL_TXQ0_OPERATION_MODE),
+		 eqos_rd(dev, DWC_EQOS_MTL_RXQ0_OPERATION_MODE),
+		 eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE1),
+		 (unsigned int)DWC_EQOS_TXPBL, (unsigned int)DWC_EQOS_RX_BUF_SIZE);
+
 	/* All traffic to RX queue 0, multicast/broadcast to queue 0. */
 	eqos_wr(dev, DWC_EQOS_MAC_RXQ_CTRL0, DWC_EQOS_RXQ_CTRL0_RXQ0EN_DCB);
 	reg = eqos_rd(dev, DWC_EQOS_MAC_RXQ_CTRL1);
@@ -2409,6 +2422,12 @@ void dwc_eqos_get_mmc_stats(unsigned int index, struct dwc_eqos_mmc_stats *stats
 	stats->rx_octets_gb = mmio_rd32(mmc + 0x84u);
 	stats->rx_crc_error = mmio_rd32(mmc + 0x94u);
 	stats->rx_fifo_overflow = mmio_rd32(mmc + 0xd4u);
+	/* Transmit leg: what the MAC actually put on the wire, and whether the
+	 * MTL starved while fetching a descriptor (offset names follow
+	 * Linux's mmc_core.c, relative to the 0x700 MMC base). */
+	stats->tx_octets_gb = mmio_rd32(mmc + 0x14u);
+	stats->tx_pkts_gb = mmio_rd32(mmc + 0x18u);
+	stats->tx_underflow = mmio_rd32(mmc + 0x48u);
 }
 
 void dwc_eqos_irq_dump(unsigned int index)
