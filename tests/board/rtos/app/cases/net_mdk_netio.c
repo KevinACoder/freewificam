@@ -46,6 +46,8 @@
 #include "lwip/netif.h"
 #include "lwip/sockets.h"
 #include "lwip/tcpip.h"
+#include "lwip/udp.h"
+#include "lwip/pbuf.h"
 
 #include "log.h"
 
@@ -169,27 +171,63 @@ static void emit_layer_counters(const char *tag)
 	tcp_retrans = (unsigned long)lwip_stats.mib2.tcpretranssegs;
 #endif
 
-	MDK_ANCHOR("netio: layers tag=%s mmc_ovf=%lu mmc_crc=%lu rx_ru=%lu rx_frames=%lu rx_drop=%lu "
-		   "rx_irq=%lu csum_drop=%lu rx_err=%lu dma_err=%lu tx_frames=%lu "
-		   "tx_drop=%lu ring_ready=%lu ring_free=%lu bridge_poll=%lu fed=%lu "
-		   "pool_fail=%lu input_fail=%lu mem_err=%lu pbuf_err=%lu "
-		   "udp_in=%lu udp_inerr=%lu ip_drop=%lu tcp_retrans=%lu\n",
+	MDK_ANCHOR("netio: layers tag=%s mmc_ovf=%lu mmc_crc=%lu rx_frames=%lu rx_drop=%lu "
+		   "rx_ru=%lu csum_drop=%lu rx_err=%lu dma_err=%lu bridge_poll=%lu fed=%lu "
+		   "pool_fail=%lu input_fail=%lu mem_err=%lu pbuf_err=%lu\n",
 		   tag,
 		   (unsigned long)mmc.rx_fifo_overflow,
 		   (unsigned long)mmc.rx_crc_error,
-		   (unsigned long)ds.rx_buf_unavail,
+		   /* Order must match the labels: staged frames, staging-ring
+		    * drops, ring-buffer-unavailable. The K2-06 first pass had
+		    * rx_buf_unavail in the rx_frames slot, which printed the
+		    * staged count as "rx_drop" and made a clean receive path
+		    * look like a 135k-frame loss; a reader must be able to
+		    * trust a field name without re-deriving the arg list. */
 		   (unsigned long)ds.rx_frames,
 		   (unsigned long)ds.rx_dropped,
-		   (unsigned long)ds.rx_irqs,
+		   (unsigned long)ds.rx_buf_unavail,
 		   (unsigned long)ds.rx_csum_drops,
 		   (unsigned long)ds.rx_errors,
 		   (unsigned long)ds.dma_errors,
-		   (unsigned long)ds.tx_frames,
-		   (unsigned long)ds.tx_dropped,
-		   (unsigned long)dg.rx_ready_count,
-		   (unsigned long)dg.rx_free_count,
 		   polls, fed, pool_fail, input_fail,
-		   mem_err, pbuf_err, udp_in, udp_inerr, ip_drop, tcp_retrans);
+		   mem_err, pbuf_err);
+
+	/* The transmit leg, on its own line: one line per leg survives the
+	 * 256-char message limit, and these are the numbers that decide between
+	 * "the ring's completion signal is under-counted" (tx_waits high,
+	 * tx_sem drained to 0), "one send is too expensive" (tx_occ_max small,
+	 * no waits) and "the DMA never retires" (tx_waits high, irq low). */
+	{
+		struct net_prof_snap pc;
+
+		memset(&pc, 0, sizeof(pc));
+		net_prof_take(&pc);
+		/* mac_tx/mac_uf are the MAC's own count of frames transmitted
+		 * and of MTL underflows: mac_tx well below tx_frames with mac_uf
+		 * climbing means the transmit leg is starving the MTL, not
+		 * dropping at the bridge (tx_drop) - the two failure modes have
+		 * opposite fixes. */
+		MDK_ANCHOR("netio: tx tag=%s tx_frames=%lu tx_drop=%lu mac_tx=%lu "
+			   "mac_tx_oct=%lu mac_uf=%lu rx_irq=%lu "
+			   "tx_waits=%lu tx_wait_ticks=%lu tx_occ_max=%lu tx_sem=%lu "
+			   "irq=%lu irq_tx=%lu\n",
+			   tag,
+			   (unsigned long)ds.tx_frames,
+			   (unsigned long)ds.tx_dropped,
+			   (unsigned long)mmc.tx_pkts_gb,
+			   (unsigned long)mmc.tx_octets_gb,
+			   (unsigned long)mmc.tx_underflow,
+			   (unsigned long)ds.rx_irqs,
+			   (unsigned long)dg.tx_waits,
+			   (unsigned long)dg.tx_wait_ticks,
+			   (unsigned long)dg.tx_occ_max,
+			   (unsigned long)dg.tx_sem_count,
+			   (unsigned long)dg.irq_n,
+			   (unsigned long)pc.irq_tx);
+	}
+
+	MDK_ANCHOR("netio: mib tag=%s udp_in=%lu udp_inerr=%lu ip_drop=%lu tcp_retrans=%lu\n",
+		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans);
 }
 
 static void init_buffer(uint8_t *buf, int32_t size)
@@ -259,10 +297,15 @@ static void thread_exit(int32_t line, int32_t bsd_error)
 #ifndef MN_RX_PRIO
 #define MN_RX_PRIO osPriorityNormal
 #endif
+/* Consumer priority (K2-03 H2): one lever down from the producer to see how
+ * much of the feed bucket is the consumer preempting the drain thread. */
+#ifndef UDP_RX_PRIO
+#define UDP_RX_PRIO osPriorityAboveNormal
+#endif
 
 static const osThreadAttr_t udp_rx_attr = {
 	.name = "netio-udp-rx",
-	.priority = osPriorityAboveNormal,
+	.priority = UDP_RX_PRIO,
 	.stack_size = 4096U,
 };
 
@@ -288,6 +331,142 @@ static uint32_t io_empty_polls;
 #define APP_SAMPLE_PERIOD 4096u
 static uint32_t io_app_blocked;
 static uint32_t io_app_charged;
+
+/* ---------------------------------------------------------------------------
+ * K2-07 raw-API receive path (CONFIG_NETIO_RAW_UDP).
+ *
+ * The socket data plane is udp_input -> recv_udp() -> recvmbox (16 deep) ->
+ * a second thread's recvfrom() -> a 1440-byte copy. The middle is an
+ * invisible loss point: recv_udp()'s mbox-full branch frees the pbuf and
+ * returns WITHOUT touching any lwIP counter (api_msg.c, both refusal
+ * branches), so a socket-side drop cannot be seen in the ledger at all -
+ * exactly the hole the 2026-10-30 prio arm fell into (498k frames fed,
+ * zero counters moved, app saw 0). The raw path removes the whole middle:
+ * the PCB's recv callback runs on the RX thread's input call and only
+ * counts, remembers the peer and frees the pbuf. Nothing queues, nothing
+ * copies.
+ * ------------------------------------------------------------------------- */
+#if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
+static struct udp_pcb *g_raw_pcb;
+static volatile int g_raw_in_window;
+static ip_addr_t g_raw_peer;
+static uint16_t g_raw_peer_port;
+static int g_raw_peer_valid;
+
+static void raw_udp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+			 const ip_addr_t *addr, u16_t port)
+{
+	(void)arg;
+	(void)pcb;
+
+	if (p == NULL) {
+		return;
+	}
+	if (g_raw_in_window) {
+		io.pkt_count++;
+		io.rx_bytes += p->tot_len;
+		io_rx_total++;
+		if (!g_raw_peer_valid && addr != NULL) {
+			ip_addr_copy(g_raw_peer, *addr);
+			g_raw_peer_port = port;
+			g_raw_peer_valid = 1;
+		}
+	}
+	pbuf_free(p);
+}
+
+/* One S2C datagram out of the raw PCB: allocate, copy, send, free. */
+static int32_t raw_udp_send(const void *buf, uint32_t len)
+{
+	struct pbuf *p;
+	ip_addr_t dst;
+	err_t err;
+
+	p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)len, PBUF_RAM);
+	if (p == NULL) {
+		return -1;
+	}
+	if (pbuf_take(p, buf, (u16_t)len) != ERR_OK) {
+		pbuf_free(p);
+		return -1;
+	}
+	ip_addr_set_ip4_u32(&dst, io.client->sin_addr.s_addr);
+	err = udp_sendto(g_raw_pcb, p, &dst, NETIO_AUXPORT);
+	pbuf_free(p);
+	return (err == ERR_OK) ? (int32_t)len : -1;
+}
+#endif /* CONFIG_NETIO_RAW_UDP */
+
+/* ---------------------------------------------------------------------------
+ * K2-07 receive window: every counter that can swallow a frame, diffed over
+ * the C2S cell so boot, ARP and the control plane cannot leak into the ledger.
+ * `drops` is the strong verdict: a clean receive window has it at zero.
+ * ------------------------------------------------------------------------- */
+struct rx_win {
+	unsigned long mmc_ovf;
+	unsigned long rx_ru;
+	unsigned long rx_dropped;
+	unsigned long rx_frames;
+	unsigned long fed;
+	unsigned long udp_drop;
+	unsigned long ip_drop;
+	unsigned long link_drop;
+	unsigned long mem_err;
+	unsigned long pbuf_err;
+};
+
+static struct rx_win g_win_a;
+
+static void rx_win_take(struct rx_win *w)
+{
+	struct dwc_eqos_stats ds;
+	struct dwc_eqos_mmc_stats mmc;
+	unsigned long polls = 0, pool_fail = 0, input_fail = 0, fed = 0;
+
+	memset(w, 0, sizeof(*w));
+	memset(&ds, 0, sizeof(ds));
+	memset(&mmc, 0, sizeof(mmc));
+	dwc_eqos_get_stats(MN_GMAC, &ds);
+	dwc_eqos_get_mmc_stats(MN_GMAC, &mmc);
+	ethnetif_get_diag(&polls, &pool_fail, &input_fail, &fed);
+
+	w->mmc_ovf = (unsigned long)mmc.rx_fifo_overflow;
+	w->rx_ru = (unsigned long)ds.rx_buf_unavail;
+	w->rx_dropped = (unsigned long)ds.rx_dropped;
+	w->rx_frames = (unsigned long)ds.rx_frames;
+	w->fed = fed;
+#if LWIP_STATS
+	w->udp_drop = (unsigned long)lwip_stats.udp.drop;
+	w->ip_drop = (unsigned long)lwip_stats.ip.drop;
+	w->link_drop = (unsigned long)lwip_stats.link.drop;
+	w->mem_err = (unsigned long)lwip_stats.mem.err;
+#endif
+#if LWIP_STATS && MEMP_STATS
+	if (lwip_stats.memp[MEMP_PBUF] != NULL) {
+		w->pbuf_err = (unsigned long)lwip_stats.memp[MEMP_PBUF]->err;
+	}
+#endif
+}
+
+static void rx_win_report(const char *tag, const struct rx_win *a,
+			  const struct rx_win *b)
+{
+	unsigned long drops;
+
+	drops = (b->mmc_ovf - a->mmc_ovf) + (b->rx_ru - a->rx_ru) +
+		(b->rx_dropped - a->rx_dropped) + (b->udp_drop - a->udp_drop) +
+		(b->ip_drop - a->ip_drop) + (b->link_drop - a->link_drop) +
+		(b->mem_err - a->mem_err) + (b->pbuf_err - a->pbuf_err);
+	MDK_ANCHOR("netio: win tag=%s pkts=%lu rx_frames=%lu fed=%lu drops=%lu "
+		   "mmc_ovf=%lu rx_ru=%lu rx_dropped=%lu udp_drop=%lu ip_drop=%lu "
+		   "link_drop=%lu mem_err=%lu pbuf_err=%lu\n",
+		   tag, (unsigned long)io.pkt_count,
+		   b->rx_frames - a->rx_frames, b->fed - a->fed, drops,
+		   b->mmc_ovf - a->mmc_ovf, b->rx_ru - a->rx_ru,
+		   b->rx_dropped - a->rx_dropped, b->udp_drop - a->udp_drop,
+		   b->ip_drop - a->ip_drop, b->link_drop - a->link_drop,
+		   b->mem_err - a->mem_err, b->pbuf_err - a->pbuf_err);
+}
 
 static void UDP_Receiver(void *arg)
 {
@@ -388,6 +567,9 @@ static void udp_rx_quiesce(void)
  * frames. */
 static struct net_prof_snap prof_a;
 static uint64_t prof_t0;
+/* The same cell's CPU cycle count at the open, so the report can say how many
+ * cycles one frame cost and what the core's effective clock was (P0.2). */
+static uint64_t prof_c0;
 
 static void UDP_Server(void *arg)
 {
@@ -456,6 +638,7 @@ static void UDP_Server(void *arg)
 				if ((int32_t)io.pkt_size > (int32_t)io.buf_size)
 					__THREAD_EXIT(BSD_EMSGSIZE);
 
+#if !(defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP)
 				rc = socket(PF_INET, SOCK_DGRAM, 0);
 				if (rc < 0)
 					__THREAD_EXIT(rc);
@@ -483,6 +666,9 @@ static void UDP_Server(void *arg)
 							 SO_RCVTIMEO, &rtv,
 							 sizeof(rtv));
 				}
+#else
+				io.udp_sock = -1;
+#endif
 
 				/* Cell opens here. The application bucket is
 				 * zeroed first so the snapshot that starts
@@ -495,11 +681,20 @@ static void UDP_Server(void *arg)
 				prof_a.app_empty = io_empty_polls + io_app_blocked;
 				prof_a.app_charged = io_app_charged;
 				prof_t0 = gtimer_count_get();
+				prof_c0 = net_prof_cpu_cycles();
+				rx_win_take(&g_win_a);
 
+#if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
+				/* The window opens with the cell: from here the
+				 * input-path callback counts, and RES closes it. */
+				g_raw_peer_valid = 0;
+				g_raw_in_window = 1;
+#else
 				io_rx_stop = 0;
 				if (osThreadNew(UDP_Receiver, NULL,
 						&udp_rx_attr) == NULL)
 					__THREAD_EXIT(BSD_ERROR);
+#endif
 
 				/* The RES the client waits for: Arm sends the echoed
 				 * control block back after the receiver is up. */
@@ -510,10 +705,21 @@ static void UDP_Server(void *arg)
 				struct net_prof_snap prof_b;
 				uint64_t wall_ticks;
 
+#if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
+				g_raw_in_window = 0;
+#else
 				udp_rx_quiesce();
+#endif
 				MDK_ANCHOR("netio: udp rx done pkts=%lu bytes=%lu\n",
 					   (unsigned long)io.pkt_count,
 					   (unsigned long)io.rx_bytes);
+				{
+					struct rx_win win_b;
+
+					rx_win_take(&win_b);
+					rx_win_report("udp-c2s", &g_win_a,
+						      &win_b);
+				}
 
 				/* Cell closes here, after the receiver is out of
 				 * its receive call, so no bucket is read
@@ -525,13 +731,25 @@ static void UDP_Server(void *arg)
 				prof_b.app_charged = io_app_charged;
 				net_prof_report("udp-c2s", &prof_a, &prof_b,
 						wall_ticks / 24u);
+				/* The same cell on the CPU's own clock: cycles/frame
+				 * and the effective MHz, so a wall-time gap can be
+				 * separated from a clock gap (P0.2). */
+				if (net_prof_cpu_probe_ok())
+					net_prof_cpu_cell("udp-c2s",
+							  net_prof_cpu_cycles() - prof_c0,
+							  wall_ticks,
+							  io.pkt_count);
 				ctl.cmd = htonl(CMD_RES);
 				ctl.data = htonl(io.pkt_count);
 				rc = send_data(csock, (char *)&ctl, sizeof(ctl));
 				if (rc < 0)
 					__THREAD_EXIT(rc);
 			} else if (io.command == CMD_S2C) {
+#if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
+				g_raw_in_window = 0;
+#else
 				udp_rx_quiesce();
+#endif
 				io.pkt_size = ntohl(ctl.data);
 				io.tx_bytes = 0;
 				io.pkt_count = 0;
@@ -550,25 +768,76 @@ static void UDP_Server(void *arg)
 					osTimerStart(io.timer, 6000U);
 
 				io.buf[0] = 0;
-				while (!io.timeover) {
-					for (nb = 0; nb < (int32_t)io.pkt_size;) {
-						rc = sendto(io.udp_sock,
-							    (char *)&io.buf[nb],
-							    io.pkt_size - nb, 0,
-							    (struct sockaddr *)io.client,
-							    sizeof(*io.client));
-						if (rc < 0) {
-							while (!io.timeover)
-								osDelay(2);
-							goto done_send;
+				{
+					/* The transmit cell opens here, after the
+					 * buffer and timer are armed, so the cell
+					 * covers the send loop only - not the 5 ms
+					 * quiesce and not the abort's wait-out. */
+					struct net_prof_snap prof_a;
+					struct net_prof_snap prof_b;
+					uint64_t s2c_t0 = gtimer_count_get();
+					uint64_t s2c_c0 = net_prof_cpu_cycles();
+					int s2c_reported = 0;
+
+					net_prof_take(&prof_a);
+
+					while (!io.timeover) {
+						for (nb = 0; nb < (int32_t)io.pkt_size;) {
+#if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
+							rc = raw_udp_send(&io.buf[nb],
+									  io.pkt_size - nb);
+#else
+							rc = sendto(io.udp_sock,
+								    (char *)&io.buf[nb],
+								    io.pkt_size - nb, 0,
+								    (struct sockaddr *)io.client,
+								    sizeof(*io.client));
+#endif
+							if (rc < 0) {
+								/* Close the cell at
+								 * the abort, not after
+								 * the wait-out: the
+								 * idle delay would turn
+								 * "cost per frame" into
+								 * "idle cycles per
+								 * second". */
+								if (!s2c_reported) {
+									uint64_t ticks = gtimer_count_get() - s2c_t0;
+
+									net_prof_take(&prof_b);
+									net_prof_report("udp-s2c", &prof_a,
+											&prof_b, ticks / 24u);
+									if (net_prof_cpu_probe_ok())
+										net_prof_cpu_cell("udp-s2c",
+												  net_prof_cpu_cycles() - s2c_c0,
+												  ticks, io.pkt_count);
+								}
+								s2c_reported = 1;
+								while (!io.timeover)
+									osDelay(2);
+								goto done_send;
+							}
+							nb += rc;
 						}
-						nb += rc;
+						io.tx_bytes += io.pkt_size;
+						io.pkt_count++;
 					}
-					io.tx_bytes += io.pkt_size;
-					io.pkt_count++;
+					if (!s2c_reported) {
+						uint64_t ticks = gtimer_count_get() - s2c_t0;
+
+						net_prof_take(&prof_b);
+						net_prof_report("udp-s2c", &prof_a, &prof_b,
+								ticks / 24u);
+						if (net_prof_cpu_probe_ok())
+							net_prof_cpu_cell("udp-s2c",
+									  net_prof_cpu_cycles() - s2c_c0,
+									  ticks, io.pkt_count);
+					}
 				}
 done_send:
+#if !(defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP)
 				lwip_close(io.udp_sock);
+#endif
 				MDK_ANCHOR("netio: udp tx done pkts=%lu bytes=%lu\n",
 					   (unsigned long)io.pkt_count,
 					   (unsigned long)io.tx_bytes);
@@ -655,22 +924,32 @@ static void TCP_Server(void *arg)
 				if ((int32_t)io.pkt_size > (int32_t)io.buf_size)
 					__THREAD_EXIT(BSD_EMSGSIZE);
 
-				do {
-					for (nb = 0; nb < (int32_t)io.pkt_size;) {
-						rc = recv(csock,
-							  (char *)&io.buf[nb],
-							  io.pkt_size - nb, 0);
-						if (rc < 0)
-							break;
-						nb += rc;
-					}
-					io.rx_bytes += io.pkt_size;
-					io.pkt_count++;
-				} while (io.buf[0] == 0 && rc > 0);
+				{
+					uint64_t c2s_t0 = gtimer_count_get();
+					uint64_t c2s_c0 = net_prof_cpu_cycles();
 
-				MDK_ANCHOR("netio: tcp rx done pkts=%lu bytes=%lu\n",
-					   (unsigned long)io.pkt_count,
-					   (unsigned long)io.rx_bytes);
+					do {
+						for (nb = 0; nb < (int32_t)io.pkt_size;) {
+							rc = recv(csock,
+								  (char *)&io.buf[nb],
+								  io.pkt_size - nb, 0);
+							if (rc < 0)
+								break;
+							nb += rc;
+						}
+						io.rx_bytes += io.pkt_size;
+						io.pkt_count++;
+					} while (io.buf[0] == 0 && rc > 0);
+
+					MDK_ANCHOR("netio: tcp rx done pkts=%lu bytes=%lu\n",
+						   (unsigned long)io.pkt_count,
+						   (unsigned long)io.rx_bytes);
+					if (net_prof_cpu_probe_ok())
+						net_prof_cpu_cell("tcp-c2s",
+								  net_prof_cpu_cycles() - c2s_c0,
+								  gtimer_count_get() - c2s_t0,
+								  io.pkt_count);
+				}
 			} else if (io.command == CMD_S2C) {
 				io.pkt_size = ntohl(ctl.data);
 				io.pkt_count = 0;
@@ -686,17 +965,27 @@ static void TCP_Server(void *arg)
 					osTimerStart(io.timer, 6000U);
 
 				io.buf[0] = 0;
-				while (!io.timeover) {
-					for (nb = 0; nb < (int32_t)io.pkt_size;) {
-						rc = send(csock,
-							  (char *)&io.buf[nb],
-							  io.pkt_size - nb, 0);
-						if (rc < 0)
-							break;
-						nb += rc;
+				{
+					uint64_t s2c_t0 = gtimer_count_get();
+					uint64_t s2c_c0 = net_prof_cpu_cycles();
+
+					while (!io.timeover) {
+						for (nb = 0; nb < (int32_t)io.pkt_size;) {
+							rc = send(csock,
+								  (char *)&io.buf[nb],
+								  io.pkt_size - nb, 0);
+							if (rc < 0)
+								break;
+							nb += rc;
+						}
+						io.tx_bytes += io.pkt_size;
+						io.pkt_count++;
 					}
-					io.tx_bytes += io.pkt_size;
-					io.pkt_count++;
+					if (net_prof_cpu_probe_ok())
+						net_prof_cpu_cell("tcp-s2c",
+								  net_prof_cpu_cycles() - s2c_c0,
+								  gtimer_count_get() - s2c_t0,
+								  io.pkt_count);
 				}
 				io.buf[0] = 1;
 				rc = send_data(csock, io.buf, io.pkt_size);
@@ -769,6 +1058,15 @@ static int line_up(void)
 		CASE_ANCHOR("net: netio FAIL eqos init\n");
 		return -1;
 	}
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	/* Arm zero copy before the port powers on: a frame that completes with
+	 * no lend-out hook installed is refused and dropped by the driver, so
+	 * arming late turns the first burst into receive loss. (net.c has done
+	 * this since 2026-10-25; the netio case did not, which made the first
+	 * ZC boot here look like "no route to host" - the board dropped every
+	 * ARP request.) */
+	ethnetif_zc_arm();
+#endif
 	if (dwc_eqos_power_control(MN_GMAC, EQOS_POWER_FULL) != EQOS_OK) {
 		CASE_ANCHOR("net: netio FAIL gmac power\n");
 		return -1;
@@ -849,6 +1147,27 @@ static int line_up(void)
 	ethnetif_add(&g_netif, MN_GMAC, &ip, &mask, &gw);
 	UNLOCK_TCPIP_CORE();
 
+#if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
+	/* K2-07: the data plane is a raw PCB, not a socket. The UDP control
+	 * connection is TCP on the same port number (different protocol
+	 * space), so this cannot collide with it. */
+	LOCK_TCPIP_CORE();
+	g_raw_pcb = udp_new();
+	if (g_raw_pcb != NULL) {
+		if (udp_bind(g_raw_pcb, IP_ADDR_ANY, NETIO_AUXPORT) != ERR_OK) {
+			udp_remove(g_raw_pcb);
+			g_raw_pcb = NULL;
+		} else {
+			udp_recv(g_raw_pcb, raw_udp_recv, NULL);
+		}
+	}
+	UNLOCK_TCPIP_CORE();
+	if (g_raw_pcb == NULL) {
+		CASE_ANCHOR("net: netio FAIL raw pcb\n");
+		return -1;
+	}
+#endif
+
 	(void)dwc_eqos_get_mac_address(MN_GMAC, mac);
 	CASE_ANCHOR("net: netio addr 192.168.0.%u/24 "
 		    "mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -881,6 +1200,35 @@ int case_net_mdk_netio_run(void)
 	if (line_up() != 0) {
 		CASE_ANCHOR("net: netio FAIL line-up\n");
 		return 1;
+	}
+
+	/* P0.2: a self-checking CPU clock probe, run first and printed before
+	 * anything else can fault. If the PMU is trapped by the hypervisor, the
+	 * last line on the console is "cpu probe begin" and the board needs a
+	 * manual power cycle (AGENTS §6.1: after an exception, send nothing).
+	 * The probe is on by default; CONFIG_CPU_PROBE=0 compiles it out. The
+	 * sample is a 1 ms busy spin, not an idle delay, so the reported MHz is
+	 * the frequency the core actually runs at (WFI would under-report). */
+	{
+		uint32_t pt0;
+		uint32_t pt1;
+		uint64_t pc0;
+		uint64_t pc1;
+
+		CASE_ANCHOR("netio: cpu probe begin\n");
+		if (net_prof_cpu_probe_init() == 0) {
+			pt0 = gtimer_count_get();
+			pc0 = net_prof_cpu_cycles();
+			do {
+				pt1 = gtimer_count_get();
+			} while ((uint32_t)(pt1 - pt0) < (24u * 1000u));
+			pc1 = net_prof_cpu_cycles();
+			CASE_ANCHOR("netio: cpu probe ok=1\n");
+			net_prof_cpu_cell("spin", pc1 - pc0,
+					  (uint32_t)(pt1 - pt0), 0);
+		} else {
+			CASE_ANCHOR("netio: cpu probe ok=0 (PMU not accessible)\n");
+		}
 	}
 
 	io.buf = &g_io_buf[0];
