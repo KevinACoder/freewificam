@@ -53,6 +53,13 @@ HEAP_SIZE := $(CONFIG_HEAP_SIZE)
 # wins (`LEVERS=... tools/rtos/build.sh`), so a profile's own set is the
 # default an image is reproduced from, not a lock.
 LEVERS ?= $(CONFIG_LEVERS)
+# Per-frame service-time instrumentation (dwc_eqos prof counters and the
+# netio application bucket). Default on so a measurement boot is the same
+# image as before; a cost A/B builds with CONFIG_GMAC_PROF=0 and then the
+# 24 MHz counter is never read. It is not a tuning knob and it is not part
+# of CONFIG_PROFILE - the instrument's own cost has to be measurable on
+# every arm, including the ones that carry it.
+CONFIG_GMAC_PROF ?= 1
 WLAN_OBS := $(CONFIG_WLAN_OBS)
 WLAN_TCP_SINK := $(CONFIG_WLAN_TCP_SINK)
 WLAN_TCP_SINK_SECONDS := $(CONFIG_WLAN_TCP_SINK_SECONDS)
@@ -488,6 +495,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
 	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
+	-DCONFIG_GMAC_PROF=$(CONFIG_GMAC_PROF) \
 	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(LEVERS) $(BACKEND_DEFS) \
 	$(BOARD_DEFS) $(INCLUDES)
 
@@ -843,7 +851,7 @@ ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
 	echo "PASS: uvc engine, stream engine and video class table present"
 endif
 	@$(SIZE) $(TARGET).elf
-	@printf 'opt: %s\nprofile: %s\nlwip: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(LWIP)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
+	@printf 'opt: %s\nprofile: %s\nlwip: %s\nlevers: %s\nprof: %s\n' '$(OPT)' '$(PROFILE)' '$(LWIP)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' '$(CONFIG_GMAC_PROF)' | tee $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip $(PROFILE_CFLAGS)),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1

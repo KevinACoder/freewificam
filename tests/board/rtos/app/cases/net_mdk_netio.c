@@ -297,7 +297,9 @@ static void UDP_Receiver(void *arg)
 	MDK_ANCHOR("netio: udp recv start\n");
 
 	while (!io_rx_stop) {
+#if defined(CONFIG_GMAC_PROF) && CONFIG_GMAC_PROF
 		uint64_t t_recv = gtimer_count_get();
+#endif
 
 		/* Two-step receive, and the reason matters more than the code.
 		 *
@@ -311,6 +313,7 @@ static void UDP_Receiver(void *arg)
 		 * If yes, the receive cannot block and is charged. If not,
 		 * block exactly as the original code did - that call is
 		 * counted but charged zero, because its duration is the wait. */
+#if defined(CONFIG_GMAC_PROF) && CONFIG_GMAC_PROF
 		{
 			int avail = 0;
 
@@ -341,6 +344,13 @@ static void UDP_Receiver(void *arg)
 				}
 			}
 		}
+#else
+		/* Instrument compiled out: the receive is the plain one.
+		 * There is nothing to charge, and the FIONREAD step exists
+		 * only to tell work from waiting, so the A/B compares two
+		 * systems that differ in the instrument alone. */
+		rc = recv(io.udp_sock, (char *)io.buf, io.pkt_size, 0);
+#endif
 		if (rc <= 0)
 			continue;
 		io.rx_bytes += (uint32_t)rc;

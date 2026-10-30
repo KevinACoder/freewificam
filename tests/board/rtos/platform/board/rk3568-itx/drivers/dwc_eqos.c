@@ -270,9 +270,19 @@ static struct dwc_eqos_dev devs[DWC_EQOS_PORT_COUNT];
  * sit at operation boundaries (per interrupt, per frame), not inside loops. */
 static struct dwc_eqos_prof eqos_prof[DWC_EQOS_PORT_COUNT];
 
+/* The switch that decides whether a measurement boot carries the cost
+ * instrument at all. Set CONFIG_GMAC_PROF=0 and the 24 MHz counter is never
+ * read: every t0()/accumulate pair folds to zero and the compiler drops the
+ * stores with it. The instrument is otherwise always on, because a number
+ * whose own cost is unknown is not a measurement (AGENTS 1.2: an instrument's
+ * overhead has to be part of its acceptance, not a footnote). */
 static inline uint64_t eqos_prof_t0(void)
 {
+#if defined(CONFIG_GMAC_PROF) && CONFIG_GMAC_PROF
 	return gtimer_count_get();
+#else
+	return 0u;
+#endif
 }
 
 #define NOC_SECTION \
