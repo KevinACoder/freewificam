@@ -33,3 +33,14 @@ CONFIG_LEVERS := -DLWIP_TCPIP_CORE_LOCKING_INPUT=1 -DCONFIG_GMAC_RX_BATCH=1 \
 	-DCONFIG_GMAC_RX_HWCSUM=1
 CONFIG_HEAP_SIZE := 16M
 CONFIG_FREERTOS_HEAP_SIZE := 16777216u
+
+# Measurement boots run with the per-frame instrument off. The A6 arm above
+# pays 11.3% for the five tick buckets (K2-05), and a baseline that carries the
+# instrument is not the number the final 12.8 us/frame budget is against. The
+# census counters the transmit ladder needs - tx_waits, tx_wait_ticks,
+# tx_occ_max, tx_sem_count, irq_n, irq_tx - accumulate unconditionally
+# (CONFIG_GMAC_PROF only folds the tick buckets to zero), so this switch
+# silences the prof/proftx tick columns, not the TX evidence. An attribution
+# boot that needs the five segments sets CONFIG_GMAC_PROF=1 on the command
+# line and is labelled instrumented, never baseline.
+CONFIG_GMAC_PROF := 0
