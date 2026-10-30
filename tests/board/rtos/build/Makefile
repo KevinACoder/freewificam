@@ -501,7 +501,7 @@ APP_SRCS := \
 
 # The net case brings the lwIP port and the GMAC drivers; the eMMC case brings
 # the storage stack and the eMMC controller.
-ifneq ($(filter net net_mdk_netio,$(CASES)),)
+ifneq ($(filter net net_mdk_netio net_loop,$(CASES)),)
 # lwIP wants a MAC layer and a service thread for every wired NIC case; the
 # wireless arms bring lwIP up through the net80211 bridge and keep their own
 # receive pump, so a goal that would only serve them is not part of this block.

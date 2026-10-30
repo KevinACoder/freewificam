@@ -45,6 +45,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_NET_MDK_NETIO)
 	{ "net_mdk_netio", case_net_mdk_netio_run },
 #endif
+#if defined(RTOS_CASE_NET_LOOP)
+	{ "net_loop", case_net_loop_run },
+#endif
 #if defined(RTOS_CASE_EMMC)
 	{ "emmc", case_emmc_run },
 #endif
