@@ -1328,11 +1328,15 @@ static int eqos_tx_complete(struct dwc_eqos_dev *dev)
 	}
 
 	/* N7 R1: wake a ring-full sender immediately instead of letting it
-	 * poll a 1 ms tick. One release per freed slot (the semaphore is
-	 * counting); osSemaphoreRelease is ISR-safe, and this runs in the
-	 * interrupt on the hot path. */
+	 * poll a 1 ms tick. One release per freed slot: the semaphore is
+	 * counting, and a burst of 8 frees must be able to satisfy the sender
+	 * that has just parked on it (one release per interrupt let the count
+	 * lag the ring and extended the park). osSemaphoreRelease is ISR-safe,
+	 * and this runs in the interrupt on the hot path. */
 	if ((freed > 0) && (dev->tx_sem != NULL)) {
-		(void)osSemaphoreRelease(dev->tx_sem);
+		for (cnt = 0; cnt < freed; cnt++) {
+			(void)osSemaphoreRelease(dev->tx_sem);
+		}
 	}
 
 	return freed;
@@ -2178,10 +2182,20 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			 * means this is the only in-flight frame): a quiet
 			 * line must never wait on the counter for its
 			 * completion, a burst must not pay one IRQ per
-			 * frame (N7 R2). */
+			 * frame (N7 R2).
+			 *
+			 * The descriptor that FILLS the ring (next == tx_tail
+			 * after this enqueue) also carries IOC: the next
+			 * sender finds the ring full and parks on the
+			 * completion semaphore, and a run of <IOC_DIV frames
+			 * after the last IOC would otherwise complete without
+			 * an interrupt - the ring then stays full for the whole
+			 * park timeout (K2-06: mac_tx == tx_frames, no
+			 * underflow, one 20 ms park, then a dropped frame). */
 			ioc = ((dev->tx_ioc_seq++ % dev->tx_ioc_div)
 			       == (dev->tx_ioc_div - 1u)) ||
-			      (cur == dev->tx_tail);
+			      (cur == dev->tx_tail) ||
+			      (next == dev->tx_tail);
 
 			desc = &dev->tx_ring[cur];
 			desc->des0 = (uint32_t)(uintptr_t)buf;
@@ -2282,6 +2296,25 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		 * lwIP Ethernet ports use. */
 		break;
 #else
+		{
+			/* Reclaim in this context before parking. A completion
+			 * between the last IOC-tagged descriptor and the ring
+			 * becoming full is delivered without an interrupt, and
+			 * on that run the semaphore has nothing to give the
+			 * sender: the park then lasts the whole timeout and the
+			 * frame is dropped although the ring is already free.
+			 * The sweep is cheap (walks from the tail) and runs only
+			 * on the full path. eqos_lock masks the port interrupt,
+			 * so this cannot race the ISR's own sweep. */
+			int freed;
+
+			eqos_lock(dev);
+			freed = eqos_tx_complete(dev);
+			eqos_unlock(dev);
+			if (freed > 0) {
+				continue;
+			}
+		}
 		{
 			uint32_t wait_t0 = osKernelGetTickCount();
 
