@@ -1284,8 +1284,18 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	}
 #else
 	if (last_armed >= 0) {
+		/* The tail is open-ended: a tail of descriptor N grants the
+		 * DMA 0..N-1, so the descriptor just armed is granted by
+		 * publishing one PAST it. Publishing last_armed itself left the
+		 * DMA one descriptor short on every pass, and a later pass that
+		 * stopped earlier could move the grant backwards. Measured on
+		 * the rk3568 netio arm (2026-10-31): with the one-past tail the
+		 * receive-underflow latch stays at zero and the unbounded 1440
+		 * run loses none (0.01-0.07% before, 2/2 clean after). */
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
-			(uint32_t)(uintptr_t)&dev->rx_ring[last_armed]);
+			(uint32_t)((uintptr_t)dev->rx_ring +
+				   ((uintptr_t)last_armed + 1u) *
+					   sizeof(struct dwc_eqos_desc)));
 	}
 #endif
 
@@ -1513,8 +1523,13 @@ void dwc_eqos_watchdog(unsigned int index)
 	eqos_lock(dev);
 	rx_frames = eqos_rx_complete(dev);
 	(void)eqos_tx_complete(dev);
+	/* Keep the watchdog's grant on the same side of the TRM as the
+	 * sweep's: one past the ring end is "the whole ring is owned",
+	 * while the last descriptor itself grants only 0..N-2. */
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
-		(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
+		(uint32_t)((uintptr_t)dev->rx_ring +
+			   (uintptr_t)DWC_EQOS_RX_DESC_COUNT *
+				   sizeof(struct dwc_eqos_desc)));
 #if defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
 	/* Liveness heal: never leave the RX interrupt masked across a watchdog
 	 * tick. Under saturation the drain re-masks it immediately, so the cost
