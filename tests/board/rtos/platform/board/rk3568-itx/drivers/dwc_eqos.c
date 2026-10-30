@@ -270,9 +270,19 @@ static struct dwc_eqos_dev devs[DWC_EQOS_PORT_COUNT];
  * sit at operation boundaries (per interrupt, per frame), not inside loops. */
 static struct dwc_eqos_prof eqos_prof[DWC_EQOS_PORT_COUNT];
 
+/* The switch that decides whether a measurement boot carries the cost
+ * instrument at all. Set CONFIG_GMAC_PROF=0 and the 24 MHz counter is never
+ * read: every t0()/accumulate pair folds to zero and the compiler drops the
+ * stores with it. The instrument is otherwise always on, because a number
+ * whose own cost is unknown is not a measurement (AGENTS 1.2: an instrument's
+ * overhead has to be part of its acceptance, not a footnote). */
 static inline uint64_t eqos_prof_t0(void)
 {
+#if defined(CONFIG_GMAC_PROF) && CONFIG_GMAC_PROF
 	return gtimer_count_get();
+#else
+	return 0u;
+#endif
 }
 
 #define NOC_SECTION \
@@ -728,6 +738,19 @@ static int eqos_hw_init(struct dwc_eqos_dev *dev)
 		<< DWC_EQOS_MTL_RXQ0_OP_RQS_SHIFT)
 		& DWC_EQOS_MTL_RXQ0_OP_RQS_MASK;
 	eqos_wr(dev, DWC_EQOS_MTL_RXQ0_OPERATION_MODE, reg);
+
+	/* K2-07: the TX wire duty (75.2k of 84.6k frames/s at a full ring) says
+	 * the DMA idles ~1.5 us between frames. Before touching the descriptors,
+	 * record what the queue was actually programmed with: TQS is derived
+	 * from HW_FEATURE1 (fifo = 128 << TXFIFOSZ), and a FIFO of one frame or
+	 * less with store-and-forward is the first thing a per-frame gap
+	 * implicates. */
+	LOG_INFO("%s: mtl txq0=%08x rxq0=%08x hwfeat1=%08x txpbl=%u rxbufsz=%u\n",
+		 eqos_dev_name(dev),
+		 eqos_rd(dev, DWC_EQOS_MTL_TXQ0_OPERATION_MODE),
+		 eqos_rd(dev, DWC_EQOS_MTL_RXQ0_OPERATION_MODE),
+		 eqos_rd(dev, DWC_EQOS_MAC_HW_FEATURE1),
+		 (unsigned int)DWC_EQOS_TXPBL, (unsigned int)DWC_EQOS_RX_BUF_SIZE);
 
 	/* All traffic to RX queue 0, multicast/broadcast to queue 0. */
 	eqos_wr(dev, DWC_EQOS_MAC_RXQ_CTRL0, DWC_EQOS_RXQ_CTRL0_RXQ0EN_DCB);
@@ -1261,8 +1284,18 @@ static int eqos_rx_complete(struct dwc_eqos_dev *dev)
 	}
 #else
 	if (last_armed >= 0) {
+		/* The tail is open-ended: a tail of descriptor N grants the
+		 * DMA 0..N-1, so the descriptor just armed is granted by
+		 * publishing one PAST it. Publishing last_armed itself left the
+		 * DMA one descriptor short on every pass, and a later pass that
+		 * stopped earlier could move the grant backwards. Measured on
+		 * the rk3568 netio arm (2026-10-31): with the one-past tail the
+		 * receive-underflow latch stays at zero and the unbounded 1440
+		 * run loses none (0.01-0.07% before, 2/2 clean after). */
 		eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
-			(uint32_t)(uintptr_t)&dev->rx_ring[last_armed]);
+			(uint32_t)((uintptr_t)dev->rx_ring +
+				   ((uintptr_t)last_armed + 1u) *
+					   sizeof(struct dwc_eqos_desc)));
 	}
 #endif
 
@@ -1305,11 +1338,15 @@ static int eqos_tx_complete(struct dwc_eqos_dev *dev)
 	}
 
 	/* N7 R1: wake a ring-full sender immediately instead of letting it
-	 * poll a 1 ms tick. One release per freed slot (the semaphore is
-	 * counting); osSemaphoreRelease is ISR-safe, and this runs in the
-	 * interrupt on the hot path. */
+	 * poll a 1 ms tick. One release per freed slot: the semaphore is
+	 * counting, and a burst of 8 frees must be able to satisfy the sender
+	 * that has just parked on it (one release per interrupt let the count
+	 * lag the ring and extended the park). osSemaphoreRelease is ISR-safe,
+	 * and this runs in the interrupt on the hot path. */
 	if ((freed > 0) && (dev->tx_sem != NULL)) {
-		(void)osSemaphoreRelease(dev->tx_sem);
+		for (cnt = 0; cnt < freed; cnt++) {
+			(void)osSemaphoreRelease(dev->tx_sem);
+		}
 	}
 
 	return freed;
@@ -1486,8 +1523,13 @@ void dwc_eqos_watchdog(unsigned int index)
 	eqos_lock(dev);
 	rx_frames = eqos_rx_complete(dev);
 	(void)eqos_tx_complete(dev);
+	/* Keep the watchdog's grant on the same side of the TRM as the
+	 * sweep's: one past the ring end is "the whole ring is owned",
+	 * while the last descriptor itself grants only 0..N-2. */
 	eqos_wr(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR,
-		(uint32_t)(uintptr_t)&dev->rx_ring[DWC_EQOS_RX_DESC_COUNT - 1]);
+		(uint32_t)((uintptr_t)dev->rx_ring +
+			   (uintptr_t)DWC_EQOS_RX_DESC_COUNT *
+				   sizeof(struct dwc_eqos_desc)));
 #if defined(CONFIG_GMAC_RX_NAPI) && CONFIG_GMAC_RX_NAPI
 	/* Liveness heal: never leave the RX interrupt masked across a watchdog
 	 * tick. Under saturation the drain re-masks it immediately, so the cost
@@ -1591,6 +1633,15 @@ void dwc_eqos_irq(void *arg)
 				dev->irq_odd++;
 			}
 			break;
+		}
+		/* Count the ring-full drop before clearing the latch: RU says
+		 * the DMA had a frame and no owned descriptor to put it in, so
+		 * the frame is gone and no MMC counter recorded it (it never
+		 * sat in the MTL FIFO). This is the number that makes a deep
+		 * ring look good while it is really moving the loss to a path
+		 * the ledger could not see. */
+		if (status & DWC_EQOS_CH0_STATUS_RU) {
+			dev->stats.rx_buf_unavail++;
 		}
 		/* Write-one-to-clear everything latched: leaving e.g. the
 		 * abnormal summary set keeps the line asserted forever. */
@@ -2146,10 +2197,20 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			 * means this is the only in-flight frame): a quiet
 			 * line must never wait on the counter for its
 			 * completion, a burst must not pay one IRQ per
-			 * frame (N7 R2). */
+			 * frame (N7 R2).
+			 *
+			 * The descriptor that FILLS the ring (next == tx_tail
+			 * after this enqueue) also carries IOC: the next
+			 * sender finds the ring full and parks on the
+			 * completion semaphore, and a run of <IOC_DIV frames
+			 * after the last IOC would otherwise complete without
+			 * an interrupt - the ring then stays full for the whole
+			 * park timeout (K2-06: mac_tx == tx_frames, no
+			 * underflow, one 20 ms park, then a dropped frame). */
 			ioc = ((dev->tx_ioc_seq++ % dev->tx_ioc_div)
 			       == (dev->tx_ioc_div - 1u)) ||
-			      (cur == dev->tx_tail);
+			      (cur == dev->tx_tail) ||
+			      (next == dev->tx_tail);
 
 			desc = &dev->tx_ring[cur];
 			desc->des0 = (uint32_t)(uintptr_t)buf;
@@ -2250,6 +2311,25 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		 * lwIP Ethernet ports use. */
 		break;
 #else
+		{
+			/* Reclaim in this context before parking. A completion
+			 * between the last IOC-tagged descriptor and the ring
+			 * becoming full is delivered without an interrupt, and
+			 * on that run the semaphore has nothing to give the
+			 * sender: the park then lasts the whole timeout and the
+			 * frame is dropped although the ring is already free.
+			 * The sweep is cheap (walks from the tail) and runs only
+			 * on the full path. eqos_lock masks the port interrupt,
+			 * so this cannot race the ISR's own sweep. */
+			int freed;
+
+			eqos_lock(dev);
+			freed = eqos_tx_complete(dev);
+			eqos_unlock(dev);
+			if (freed > 0) {
+				continue;
+			}
+		}
 		{
 			uint32_t wait_t0 = osKernelGetTickCount();
 
@@ -2390,6 +2470,12 @@ void dwc_eqos_get_mmc_stats(unsigned int index, struct dwc_eqos_mmc_stats *stats
 	stats->rx_octets_gb = mmio_rd32(mmc + 0x84u);
 	stats->rx_crc_error = mmio_rd32(mmc + 0x94u);
 	stats->rx_fifo_overflow = mmio_rd32(mmc + 0xd4u);
+	/* Transmit leg: what the MAC actually put on the wire, and whether the
+	 * MTL starved while fetching a descriptor (offset names follow
+	 * Linux's mmc_core.c, relative to the 0x700 MMC base). */
+	stats->tx_octets_gb = mmio_rd32(mmc + 0x14u);
+	stats->tx_pkts_gb = mmio_rd32(mmc + 0x18u);
+	stats->tx_underflow = mmio_rd32(mmc + 0x48u);
 }
 
 void dwc_eqos_irq_dump(unsigned int index)

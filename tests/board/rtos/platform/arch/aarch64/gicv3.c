@@ -148,16 +148,84 @@ static void gicd_write(uint32_t off, uint32_t v)
 	reg_wr32((uintptr_t)gicd + off, v);
 }
 
-#define GICR_BASE ((uintptr_t)BOARD_GICR_BASE)
+/* The frame this core owns. BOARD_GICR_BASE names the first frame of the
+ * bank; a core whose MPIDR affinity differs (a boot loader may hand over on
+ * any of them) would otherwise arm its timer PPI in a redistributor that is
+ * not its own - the line pends in someone else's frame and the interrupt is
+ * never delivered, with every readback in the frame we wrote looking
+ * correct. Resolved once from MPIDR by redistributor_select(). */
+static uintptr_t gicr_base;
 
 static uint32_t gicr_read(uint32_t off)
 {
-	return reg_rd32(GICR_BASE + off);
+	return reg_rd32(gicr_base + off);
 }
 
 static void gicr_write(uint32_t off, uint32_t v)
 {
-	reg_wr32(GICR_BASE + off, v);
+	reg_wr32(gicr_base + off, v);
+}
+
+/* GICR_TYPER: the affinity value occupies bits 63:32, and bit 4 marks the
+ * LAST frame in the bank - the walk stops there, so a core that is somehow
+ * not represented falls back to the first frame instead of reading past the
+ * bank. */
+#define GICR_TYPER		0x0008
+#define GICR_TYPER_LAST		(1ULL << 4)
+
+static uint64_t mpidr_affinity(void)
+{
+	uint64_t mpidr;
+
+	__asm__ __volatile__("mrs %0, mpidr_el1" : "=r"(mpidr));
+	return mpidr & 0xff00ffffffULL;
+}
+
+/* Where an SPI is routed. The IROUTER encoding is Aff3.Aff2.Aff1.Aff0 in the
+ * low 32 bits (bit 31 is the "IRM" any-core flag). The redistributor match
+ * above needs the MT (multithreading) bit masked out, the router does not, so
+ * the two use different views of the same register.
+ *
+ * A board that supplies BOARD_GIC_SPI_TARGET_AFFINITY names the core that runs
+ * its images; otherwise the running core's own affinity is the safe answer. The
+ * failing case this replaced was a hard 0: the line went to a core the firmware
+ * never handed control to, stayed asserted unacknowledged, and showed up as a
+ * fault at a PC in the firmware's own address space. */
+static uint64_t spi_target_affinity(void)
+{
+#if defined(BOARD_GIC_SPI_TARGET_AFFINITY)
+	return (uint64_t)BOARD_GIC_SPI_TARGET_AFFINITY;
+#else
+	uint64_t mpidr;
+
+	__asm__ __volatile__("mrs %0, mpidr_el1" : "=r"(mpidr));
+	return mpidr & 0xffff00ffffffULL;
+#endif
+}
+
+static void redistributor_select(void)
+{
+	uint64_t want = mpidr_affinity();
+	uintptr_t frame = (uintptr_t)BOARD_GICR_BASE;
+
+	for (;;) {
+		uint64_t typer = reg_rd64(frame + GICR_TYPER);
+
+		if ((typer >> 32) == want) {
+			break;
+		}
+		if ((typer & GICR_TYPER_LAST) != 0ULL) {
+			/* Not found: keep the first frame. */
+			frame = (uintptr_t)BOARD_GICR_BASE;
+			break;
+		}
+		frame += (uintptr_t)BOARD_GICR_STRIDE;
+	}
+
+	gicr_base = frame;
+	uart_early_puts("gicv3: rd frame off=");
+	uart_early_put_hex32((uint32_t)(frame - (uintptr_t)BOARD_GICR_BASE));
+	uart_early_puts("\n");
 }
 
 static void gicd_wait_rwp(void)
@@ -246,7 +314,13 @@ static void distributor_init(void)
 			   gicd_read(GICD_ICFGR(i / 16u)) &
 			   ~(3u << (2u * (i % 16u))));
 
-		reg_wr64((uintptr_t)gicd + GICD_IROUTER(i), 0u);
+		/* Route to a core that actually runs this image. Routing to 0
+		 * sent every SPI to a core the firmware never handed control to:
+		 * the line was asserted, nobody acknowledged it, and the failure
+		 * surfaced as a fault at a PC in the firmware's own address
+		 * space. The board names its target when it has one, otherwise
+		 * the running core's own affinity is the safe answer. */
+		reg_wr64((uintptr_t)gicd + GICD_IROUTER(i), spi_target_affinity());
 	}
 	gicd_wait_rwp();
 
@@ -310,6 +384,7 @@ void gicv3_init(void)
 	}
 
 	gicd = (volatile uint32_t *)(uintptr_t)BOARD_GICD_BASE;
+	redistributor_select();
 
 	/* Order matters: SRE first, then distributor, then redistributor +
 	 * CPU interface (system-register access must exist before any ICC_*
@@ -422,7 +497,7 @@ int32_t irq_set_priority(uint32_t intid, uint8_t raw_priority)
 	}
 
 	if (intid <= IRQ_INTID_SGI_PPI_MAX) {
-		reg_wr8(GICR_BASE + GICR_IPRIORITYR0 + intid, raw_priority);
+		reg_wr8(gicr_base + GICR_IPRIORITYR0 + intid, raw_priority);
 	} else {
 		reg_wr8((uintptr_t)gicd + GICD_IPRIORITYR(intid),
 			raw_priority);

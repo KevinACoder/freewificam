@@ -45,6 +45,12 @@
  * receive timeout. */
 #define LWIP_RAW                        1
 #define LWIP_SO_RCVTIMEO                1
+/* FIONREAD has to answer "is a datagram already queued?" for the cost
+ * instrument's application bucket. The stock implementation answers from
+ * recv_avail, which UDP never maintains; LINUXMODE takes the datagram into
+ * the socket's cached netbuf instead, which is what the instrument needs and
+ * what a caller expects from FIONREAD on a datagram socket. */
+#define LWIP_FIONREAD_LINUXMODE         1
 #define MEMP_NUM_NETCONN                10
 /* The errno constants are the stack's own; the variable is defined once in
  * ports/lwip/platform_hooks.c. */
@@ -111,8 +117,12 @@
 #define TCPIP_THREAD_STACKSIZE          8192
 /* Priority band 5 of 7 (sys_arch maps bands onto the CMSIS-RTOS2 priority
  * ladder): the TCP/IP thread outranks its feeders, nothing starves it. */
+#ifndef TCPIP_THREAD_PRIO
 #define TCPIP_THREAD_PRIO               5
+#endif
+#ifndef TCPIP_MBOX_SIZE
 #define TCPIP_MBOX_SIZE                 128
+#endif
 /* Any other lwIP thread (the contrib apps ask for this constant). It has to
  * carry the same transmit chain the TCP/IP thread does - raw API down through
  * the netif, the bridge's encapsulation and CCMP, and the USB submit - so it
@@ -120,6 +130,19 @@
  * thread's first echo request. */
 #define DEFAULT_THREAD_STACKSIZE        8192
 #define DEFAULT_THREAD_PRIO             3
+/* The receive mailbox of a UDP socket. lwIP's own default is 0 (opt.h:1940),
+ * which is fine only while nothing arrives in bulk: a datagram landing while
+ * the reader is not parked in recv() finds the mailbox full, sys_mbox_trypost
+ * fails, recv_udp frees the netbuf and the datagram is gone with no error
+ * anywhere - the peer counts it as sent, the reader counts nothing. Found on
+ * the netio UDP arm (2026-10-29): lwip_stats showed udp_recv climbing while
+ * the receiver's own count stayed at 0 for the whole C2S window.
+ *
+ * 16 slots matches MEMP_NUM_NETBUF (a mailbox slot without its netbuf element
+ * is dead weight - same rule as MEMP_NUM_TCPIP_MSG_INPKT below) and covers a
+ * batch drain handing several datagrams to a reader that was asleep. */
+#define DEFAULT_UDP_RECVMBOX_SIZE       16
+#define MEMP_NUM_NETBUF                 16
 
 /* --- core locking ----------------------------------------------------------- */
 
@@ -176,7 +199,9 @@
  * Both are #ifndef-guarded so a build lever can still move them.
  */
 #define LWIP_WND_SCALE                  1
+#ifndef TCP_RCV_SCALE
 #define TCP_RCV_SCALE                   4
+#endif
 #ifndef TCP_WND
 #define TCP_WND                         131072
 #endif
@@ -195,7 +220,9 @@
 #define MEMP_NUM_TCP_SEG                1536
 /* Matches TCPIP_MBOX_SIZE: an mbox slot without its msg-pool element drops the
  * frame anyway, so sizing only the mbox is dead weight. */
+#ifndef MEMP_NUM_TCPIP_MSG_INPKT
 #define MEMP_NUM_TCPIP_MSG_INPKT        128
+#endif
 #endif /* LWIP_PERF_TIER */
 
 /* --- RX checksum offload (flips with the driver, never alone) ----------------
@@ -261,12 +288,19 @@
  * TCPPROBE=1). A full RTO retransmit is NOT in MIB2; it rides the probe
  * counter in third-party/lwip/patches.
  *
- * LWIP_STATS_LARGE is load-bearing with it: the default STAT_COUNTER is u16,
- * and at 500 Mbit/s the segment counters wrap several times inside one 10 s
- * phase - a wrapped differential is silently wrong (it reads as a small
- * positive delta). u32 counters make the phase diffs honest. */
+ * 32-bit counters, always - see the block below. */
 #if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
 #define MIB2_STATS                      1
+#endif
+
+/* STAT_COUNTER is u16 by default, and at line rate that is not a
+ * large-number concern but a correctness one: one 10 s phase at 1 Gbit/s
+ * moves far more than 65535 frames, so every frame counter wraps repeatedly
+ * and reads back as a plausible small number. Chasing a receive shortfall
+ * that did not exist cost a boot here - 119400 frames reported as 53864,
+ * which is exactly 119400 - 65536. Instrument width is not a tuning knob: a
+ * counter that lies is worse than no counter at all. */
+#ifndef LWIP_STATS_LARGE
 #define LWIP_STATS_LARGE                1
 #endif
 

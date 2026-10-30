@@ -125,6 +125,12 @@ static unsigned long g_fed_total;
  * (trivial for UDP, the whole TCP state machine for TCP). Ticks are the
  * 24 MHz system counter, so /24 gives microseconds; two reads per frame. */
 static uint64_t g_prep_ticks;
+/* The pbuf-copy half of prep, timed on its own (K2-02 per-frame cost
+ * instrument): pbuf_alloc/classify is bookkeeping, pbuf_take is a memcpy of
+ * the whole frame, and a decomposition that lumps them cannot say whether an
+ * arm moved the copy or the bookkeeping. Same two-reads-per-frame budget as
+ * the bucket it splits. */
+static uint64_t g_prep_copy_ticks;
 static uint64_t g_input_ticks;
 static unsigned long g_input_calls;
 
@@ -449,6 +455,13 @@ void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
 	*input_calls = g_input_calls;
 }
 
+/* The pbuf-copy half of prep_ticks (subset, not an addition). Zero until the
+ * first frame is assembled, and always <= the prep bucket it splits. */
+uint64_t ethnetif_get_prep_copy_ticks(void)
+{
+	return g_prep_copy_ticks;
+}
+
 void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 		       unsigned long *input_fail, unsigned long *fed_total)
 {
@@ -692,6 +705,7 @@ unsigned int ethnetif_poll(struct netif *netif)
 		struct pbuf *p;
 		uint64_t t0;
 		uint64_t t1;
+		uint64_t t_copy = 0u;
 		unsigned int cls = ETHNETIF_CLASS_OTHER;
 
 		len = (int)dwc_eqos_get_rx_frame_size(port);
@@ -712,15 +726,24 @@ unsigned int ethnetif_poll(struct netif *netif)
 			(void)dwc_eqos_read_frame(port, in_linear, sizeof(in_linear));
 			continue;
 		}
-		if (dwc_eqos_read_frame(port, (uint8_t *)p->payload, p->len) != len) {
-			pbuf_free(p);
-			g_pool_fail++;
-			continue;
+		{
+			/* In this shape the frame copy IS read_frame (straight
+			 * into the pbuf), so it is the copy bucket's share. */
+			uint64_t tc = gtimer_count_get();
+
+			if (dwc_eqos_read_frame(port, (uint8_t *)p->payload,
+						p->len) != len) {
+				pbuf_free(p);
+				g_pool_fail++;
+				continue;
+			}
+			t_copy = gtimer_count_get() - tc;
 		}
 		cls = ethnetif_classify((const uint8_t *)p->payload,
 					(unsigned int)len, &g_rx_shape, 1);
 		t1 = gtimer_count_get();
 		g_prep_ticks += t1 - t0;
+		g_prep_copy_ticks += t_copy;
 #else
 		len = dwc_eqos_read_frame(port, in_linear, sizeof(in_linear));
 		if (len <= 0) {
@@ -736,13 +759,19 @@ unsigned int ethnetif_poll(struct netif *netif)
 			g_pool_fail++;
 			continue;
 		}
-		if (pbuf_take(p, in_linear, (u16_t)len) != ERR_OK) {
-			pbuf_free(p);
-			g_pool_fail++;
-			continue;
+		{
+			uint64_t tc = gtimer_count_get();
+
+			if (pbuf_take(p, in_linear, (u16_t)len) != ERR_OK) {
+				pbuf_free(p);
+				g_pool_fail++;
+				continue;
+			}
+			t_copy = gtimer_count_get() - tc;
 		}
 		t1 = gtimer_count_get();
 		g_prep_ticks += t1 - t0;
+		g_prep_copy_ticks += t_copy;
 #endif
 		if (ethnetif_deliver(netif, p, cls, t1) == ERR_OK) {
 			fed++;

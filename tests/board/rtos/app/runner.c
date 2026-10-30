@@ -19,6 +19,10 @@
 #include "uart.h"
 #endif
 
+#if defined(RTOS_BOARD_AUTO_RESET)
+#include "reset.h"
+#endif
+
 #ifndef FW_BUILD_TAG
 #define FW_BUILD_TAG "local"
 #endif
@@ -41,6 +45,12 @@ static const struct rtos_case cases[] = {
 #endif
 #if defined(RTOS_CASE_NET)
 	{ "net", case_net_run },
+#endif
+#if defined(RTOS_CASE_NET_MDK_NETIO)
+	{ "net_mdk_netio", case_net_mdk_netio_run },
+#endif
+#if defined(RTOS_CASE_NET_LOOP)
+	{ "net_loop", case_net_loop_run },
 #endif
 #if defined(RTOS_CASE_EMMC)
 	{ "emmc", case_emmc_run },
@@ -83,6 +93,9 @@ static const struct rtos_case cases[] = {
 #endif
 #if defined(RTOS_CASE_PCIE_ECAM)
 	{ "pcie_ecam", case_pcie_ecam_run },
+#endif
+#if defined(RTOS_CASE_NET_XMAC)
+	{ "net_xmac", case_net_xmac_run },
 #endif
 #if defined(RTOS_CASE_RTW89)
 	{ "rtw89", case_rtw89_run },
@@ -139,7 +152,10 @@ static const osThreadAttr_t runner_attr = {
     defined(RTOS_CASE_RTW89) || defined(RTOS_CASE_RTW89_SCAN) || \
     defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE) || \
     defined(RTOS_CASE_RTL8XXXU) || defined(RTOS_CASE_RTL8XXXU_SCAN) || \
-    defined(RTOS_CASE_RTL8XXXU_JOIN) || defined(RTOS_CASE_RTL8XXXU_DATAPLANE)
+    defined(RTOS_CASE_RTL8XXXU_JOIN) || defined(RTOS_CASE_RTL8XXXU_DATAPLANE) || \
+    defined(RTOS_CASE_NET_MDK_NETIO)
+	/* The netio server is brought up from this thread (its socket workers get
+	 * their own heap-backed stacks); give the bring-up frame room. */
 	.stack_size = 16384U,
 #else
 	.stack_size = 8192U,
@@ -173,6 +189,17 @@ static void runner(void *arg)
 	CASE_ANCHOR("rtos: result %s cases=%u/%u backend=%s\n",
 		    (ok == total) ? "pass" : "fail", ok, total,
 		    RTOS_BACKEND_NAME);
+
+#if defined(RTOS_BOARD_AUTO_RESET)
+	/* The lab loop's close-out: reset once the verdict line is out, so the
+	 * next round's boot-loader prompt is already waiting instead of a board
+	 * that parked on its last osDelay. The delay lets the console drain
+	 * before the reset. Gated like every other self-recovery here
+	 * (RTOS_BOARD_AUTO_RESET builds only - the firefly block sets it). */
+	CASE_ANCHOR("rtos: resetting board\n");
+	(void)osDelay(200u);
+	board_system_reset();
+#endif
 
 #if defined(RTOS_HOST_TIER)
 	/* Leave the kernel so the host process can return; the board images stay

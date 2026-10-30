@@ -48,6 +48,12 @@ void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
 			     unsigned long *input_calls);
 
+/* The pbuf-copy share of prep_ticks (subset, not an addition): pbuf_take in
+ * the copying shapes, the driver's staged->pbuf read in the DIRECT shape. It
+ * exists so a cost decomposition can name the copy instead of hiding it in
+ * "prep". */
+uint64_t ethnetif_get_prep_copy_ticks(void);
+
 /* Traffic-shape classification (2026-10-19): every IP/TCP frame crossing the
  * bridge, split by what it is. The TCP-gap round needs the shape mix - is the
  * flow data segments with a few ACKs, or a wall of tiny pure ACKs? - because
