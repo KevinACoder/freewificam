@@ -117,6 +117,7 @@ tools/rtos/board-round.py --help    # one board boot: stage, boot, capture, judg
 tools/rtos/judge.py <serial.log>    # re-judge a capture
 tools/check-commit-msg.sh <msg>     # the commit format
 tools/check-release-docs.sh         # reader-facing docs carry no private references
+tools/netio/build.sh                # the pinned NETIO peer (the Linux host / Pi client)
 ```
 
 Firmware blobs are not committed; `docs/FIRMWARE-NOTICES.md` carries their
