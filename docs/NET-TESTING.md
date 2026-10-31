@@ -91,10 +91,14 @@ Record the measured MHz in every result; `C0` uses it.
 
 ### 6.2 Sender
 
-A UDP generator that can hold the requested rate for 10 s: two threads,
-non-blocking sockets, no sleeping pacer, 256-frame batches.  A sleeping pacer
-changes loss at the same mean rate (measured: 5.9% vs 0.001% at 190k pps), so
-the sender shape is part of the test definition.
+`tools/netio/ppsgen.c` is the sender: target-scheduled pacing on two busy
+threads, non-blocking sockets, 256-frame batches, an optional TCP control
+channel.  A sleeping pacer changes loss at the same mean rate (measured: 5.9%
+vs 0.001% at 190k pps), so the sender shape is part of the test definition:
+
+```sh
+build/netio/ppsgen -d <board-ip> -p 18768 -r 260000 -t 10 -T 2 -k 0 -B 256
+```
 
 ### 6.3 Gates
 
@@ -103,12 +107,16 @@ window from the sender's own duration; closure within 0.1%.
 
 ### 6.4 Procedure
 
-1. Set the frequency.
+1. Set the frequency (`freq 1992000` on the console) and record the measured
+   actual MHz.
 2. If RX coalescing is used, enable it at runtime **after** the frequency
    change (`riwt 160`), not at boot.
-3. Open the receive window on the board.
-4. Start the sender.
-5. Stop the window when the sender ends.
+3. Open the receive window on the board (`go cell`).
+4. Start the sender (command in 6.2).
+5. Stop the window when the sender ends (`stop cell`).
+6. Summarize the cell: `tools/netio/pps-report.py --serial console.log
+   --sender sender.log --tag cell`.  It computes offered/delivered, `c0`, `C0`
+   and the validity gates.
 
 ### 6.5 `T0`
 
@@ -153,5 +161,5 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
   assumed to be free.
 - The sender tops out near 350-375k pps on this bench; numbers above that are
   lower bounds, not platform limits.
-- The 64 B pps sender is not part of this repository yet; `tools/netio` carries
-  the NETIO peer only.  Adding the pps sender as a tool is open.
+- `tools/netio/ppsgen.c` and `tools/netio/pps-report.py` are the pps tools; the
+  batch/window/turnover interaction is described in 6.2-6.5.
