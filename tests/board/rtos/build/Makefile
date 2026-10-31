@@ -120,6 +120,7 @@ BOARD_INCLUDES := \
 	-I$(PLATFORM)/board/rk3568-itx/drivers
 BOARD_BASE_SRCS := \
 	$(PLATFORM)/board/rk3568-itx/drivers/uart.c \
+	$(PLATFORM)/board/rk3568-itx/drivers/cpu_freq.c \
 	$(PLATFORM)/board/rk3568-itx/param.c \
 	$(PLATFORM)/board/rk3568-itx/reset.c
 BOARD_TX_DIR := rk3568-itx
@@ -583,7 +584,7 @@ APP_SRCS := \
 # The wired-network cases each bring the lwIP port face and the stack core;
 # the per-case group below adds that NIC's own netif bridge and driver. A boot
 # may carry more than one (they share one stack bring-up).
-LWIP_CASES := net net_xmac net_mdk_netio net_loop
+LWIP_CASES := net net_xmac net_mdk_netio net_loop net_pps
 ifneq ($(filter $(LWIP_CASES),$(CASES)),)
 NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
@@ -600,14 +601,14 @@ endif
 # instrument rides with the netio arm only - it is a measurement aid, not part
 # of the driver, and a plain `net` arm must not pay for it.
 EQOS_SRCS :=
-ifneq ($(filter net net_mdk_netio,$(CASES)),)
+ifneq ($(filter net net_mdk_netio net_pps,$(CASES)),)
 NET_APP_SRCS += $(THIRD_PARTY)/lwip/ports/ethnetif.c
 EQOS_SRCS += \
 	$(PLATFORM)/board/rk3568-itx/drivers/dwc_eqos.c \
 	$(PLATFORM)/board/rk3568-itx/drivers/eqos_rk3568.c \
 	$(PLATFORM)/board/rk3568-itx/drivers/rtl8211f.c
 endif
-ifneq ($(filter net_mdk_netio,$(CASES)),)
+ifneq ($(filter net_mdk_netio net_pps,$(CASES)),)
 NET_APP_SRCS += \
 	$(LINE)/app/net_prof.c \
 	$(LINE)/app/net_prof_gmac.c

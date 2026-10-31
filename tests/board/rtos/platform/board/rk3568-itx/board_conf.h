@@ -139,6 +139,19 @@
  * extraction makes every core believe it is core 0. */
 #define BOARD_MPIDR_CORE_SHIFT	8
 
+/* --- SCMI clock transport (CPU frequency) ---------------------------------- */
+
+/* The board's firmware (TF-A) exposes its clock protocol over the SCMI SMC
+ * transport declared in the board DTB: arm,scmi-smc with smc-id 0x82000010 and
+ * a shared-memory window at 0x10f000 (reserved-memory, no-map, size 0x100).
+ * The window sits below BOARD_MMU_IMAGE_RAM_BASE, so the identity map already
+ * covers it as Device-nGnRE: every access must be 32-bit and ordered with a
+ * DSB. These are DATA values only; the protocol framing lives in
+ * drivers/cpu_freq.c. */
+#define BOARD_SCMI_SMC_ID	0x82000010UL
+#define BOARD_SCMI_SHMEM_BASE	0x0010f000UL
+#define BOARD_SCMI_SHMEM_SIZE	0x100UL
+
 /* --- MMU layout (consumed by arch/aarch64/mmu.c) ----------------------------- */
 
 /* Image RAM base: below this is firmware (ATF/OP-TEE) and must stay Device

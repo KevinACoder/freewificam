@@ -94,12 +94,15 @@ int case_net_gmac_run(void);
 #if defined(RTOS_CASE_NET_MDK_NETIO)
 int case_net_mdk_netio_run(void);
 #endif
+#if defined(RTOS_CASE_NET_PPS)
+int case_net_pps_run(void);
+#endif
 #if defined(RTOS_CASE_NET_LOOP)
 int case_net_loop_run(void);
 #endif
 #if defined(RTOS_CASE_NET_E1000E) || defined(RTOS_CASE_NET_GMAC) || \
-	defined(RTOS_CASE_NET_MDK_NETIO) || defined(RTOS_CASE_NET_LOOP) || \
-	defined(RTOS_CASE_NET_XMAC)
+	defined(RTOS_CASE_NET_MDK_NETIO) || defined(RTOS_CASE_NET_PPS) || \
+	defined(RTOS_CASE_NET_LOOP) || defined(RTOS_CASE_NET_XMAC)
 /* The shared one-shot lwIP stack bring-up (a boot may run both NIC cases;
  * tcpip_init is once-per-boot by contract), and the boot's one lwiperf TCP
  * server (only one listener can own the port). */
