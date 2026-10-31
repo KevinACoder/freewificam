@@ -6,7 +6,7 @@
 # the upstream pin because it is the one component shared by every arm.
 #
 #   tools/netio/build.sh
-#   tools/netio/build.sh --stage pi@192.168.0.17:/tmp/netio
+#   tools/netio/build.sh --stage pi@192.168.0.17:/home/pi/netio-src
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -42,7 +42,7 @@ echo "       ppsgen -d <board-ip> -p 18768 ...     # 64 B pps sender"
 if [ -n "$stage" ]; then
     host=${stage%%:*}
     path=${stage#*:}
-    [ "$path" = "$stage" ] && path=/tmp/netio
+    [ "$path" = "$stage" ] && path=/home/pi/netio-src
     scp -q "$netio" "$ppsgen" "$host:$path"
     echo "netio: staged netio and ppsgen to $host:$path"
 fi
