@@ -19,6 +19,8 @@
  *                  rate, and print one PASS/FAIL line
  *   go <tag>       snapshot the counters, arm the collection window
  *   stop <tag>     snapshot again and print the window
+ *   riwt [n]       set the RX coalescing watchdog (n*256 DMA cycles, IOC off
+ *                  on future descriptors); no argument prints the register
  *   halt           stop the case (the runner prints the image verdict)
  *
  * The window's duration is the sender's, not the board's: the host reads
@@ -29,13 +31,19 @@
  *
  * Accounting (all deltas over the window):
  *
- *   offered   = rx_frames + mmc_rx_fifo_overflow        (frames the MAC saw)
+ *   offered   = rx_frames + mmc_rx_fifo_overflow + rx_ru
  *   delivered = lwip_stats.udp.recv                     (UDP input calls)
- *   lost_mac  = mmc_rx_fifo_overflow                    (receive FIFO overrun)
+ *   lost_fifo = mmc_rx_fifo_overflow                    (receive FIFO overrun)
+ *   lost_ru   = rx_ru                                   (DMA had no own desc)
  *   lost_drv  = rx_dropped                              (driver staging)
  *   lost_brg  = pool_fail + input_fail                  (bridge)
  *   lost_stk  = udp.drop + ip.drop + link.drop + mem.err + pbuf.err
  *   closure   = |delivered + all losses - offered| / offered
+ *
+ * `rx_ru` is the one loss the old ledger could not see: those frames are
+ * neither completed by the DMA (`rx_frames`) nor counted by the MMC FIFO
+ * counter, so leaving RU out of `offered` made closure read zero while frames
+ * were disappearing. It stays in `offered` from now on.
  *
  * `callbacks` is a second source for `delivered` (the PCB callback), and
  * `udp_in` (MIB2 udpindatagrams) is a third. The strong verdict is closure:
@@ -279,6 +287,8 @@ struct pps_snap {
 	uint32_t rx_dropped;
 	uint32_t rx_ru;
 	uint32_t rx_irqs;
+	uint32_t rx_sweeps;
+	uint32_t rx_pkts;
 	uint32_t ovf;
 	uint32_t crc;
 	unsigned long polls;
@@ -306,18 +316,23 @@ static void snap_take(struct pps_snap *s)
 {
 	struct dwc_eqos_stats ds;
 	struct dwc_eqos_mmc_stats mmc;
+	struct dwc_eqos_prof prof;
 
 	memset(s, 0, sizeof(*s));
 	memset(&ds, 0, sizeof(ds));
 	memset(&mmc, 0, sizeof(mmc));
+	memset(&prof, 0, sizeof(prof));
 	dwc_eqos_get_stats(PPS_GMAC, &ds);
 	dwc_eqos_get_mmc_stats(PPS_GMAC, &mmc);
+	dwc_eqos_get_prof(PPS_GMAC, &prof);
 	ethnetif_get_diag(&s->polls, &s->pool_fail, &s->input_fail, &s->fed);
 
 	s->rx_frames = ds.rx_frames;
 	s->rx_dropped = ds.rx_dropped;
 	s->rx_ru = ds.rx_buf_unavail;
 	s->rx_irqs = ds.rx_irqs;
+	s->rx_sweeps = (uint32_t)prof.rx_sweeps;
+	s->rx_pkts = mmc.rx_pkts_gb;
 	s->ovf = mmc.rx_fifo_overflow;
 	s->crc = mmc.rx_crc_error;
 
@@ -367,15 +382,20 @@ static uint32_t pps_ratio_ppm(uint32_t part, uint32_t whole)
 static void win_report(const char *tag)
 {
 	struct pps_snap b;
-	uint32_t frames, ovf, delivered, lost_drv, lost_brg, lost_stk;
+	uint32_t frames, ovf, ru, delivered, lost_drv, lost_brg, lost_stk;
 	uint32_t offered, callbacks, udp_in_delta, ip_in_delta, ip_disc;
-	uint32_t closure_ppm, loss_ppm, mhz;
+	uint32_t irqs, sweeps, pkts;
+	uint32_t closure_ppm, loss_ppm, ru_ppm, ovf_ppm, mhz;
 	uint64_t cycles, ticks;
 
 	snap_take(&b);
 
 	frames = b.rx_frames - g_a.rx_frames;
 	ovf = b.ovf - g_a.ovf;
+	ru = b.rx_ru - g_a.rx_ru;
+	irqs = b.rx_irqs - g_a.rx_irqs;
+	sweeps = b.rx_sweeps - g_a.rx_sweeps;
+	pkts = b.rx_pkts - g_a.rx_pkts;
 	delivered = b.udp_recv - g_a.udp_recv;
 	lost_drv = b.rx_dropped - g_a.rx_dropped;
 	lost_brg = (uint32_t)((b.pool_fail - g_a.pool_fail) +
@@ -383,7 +403,11 @@ static void win_report(const char *tag)
 	lost_stk = (b.udp_drop - g_a.udp_drop) + (b.ip_drop - g_a.ip_drop) +
 		   (b.link_drop - g_a.link_drop) + (b.mem_err - g_a.mem_err) +
 		   (b.pbuf_err - g_a.pbuf_err);
-	offered = frames + ovf;
+	/* RU is a MAC-seen frame the DMA could not write: it is neither in
+	 * rx_frames nor in the MMC FIFO-overflow count, so leaving it out of
+	 * `offered` hides it completely (closure stays 0). It must be in both
+	 * the denominator and the loss numerator. */
+	offered = frames + ovf + ru;
 	callbacks = b.callbacks - g_a.callbacks;
 	udp_in_delta = b.udp_in - g_a.udp_in;
 	ip_in_delta = b.ip_in - g_a.ip_in;
@@ -393,13 +417,16 @@ static void win_report(const char *tag)
 	mhz = mhz_x100_from(cycles, ticks);
 
 	{
-		uint32_t accounted = delivered + ovf + lost_drv + lost_brg + lost_stk;
+		uint32_t accounted = delivered + ovf + ru + lost_drv + lost_brg +
+				     lost_stk;
 		uint32_t diff = (accounted > offered) ? (accounted - offered) :
 							(offered - accounted);
 
 		closure_ppm = pps_ratio_ppm(diff, offered);
 	}
 	loss_ppm = (offered > delivered) ? pps_ratio_ppm(offered - delivered, offered) : 0u;
+	ru_ppm = pps_ratio_ppm(ru, offered);
+	ovf_ppm = pps_ratio_ppm(ovf, offered);
 
 	CASE_ANCHOR("pps: win tag=%s offered=%lu delivered=%lu loss_ppm=%lu "
 		    "closure_ppm=%lu frames=%lu\n",
@@ -408,7 +435,8 @@ static void win_report(const char *tag)
 		    (unsigned long)frames);
 	CASE_ANCHOR("pps: win2 tag=%s ovf=%lu rx_dropped=%lu pool_fail=%lu "
 		    "input_fail=%lu udp_drop=%lu ip_drop=%lu link_drop=%lu "
-		    "mem_err=%lu pbuf_err=%lu\n",
+		    "mem_err=%lu pbuf_err=%lu ru=%lu irqs=%lu sweeps=%lu "
+		    "pkts=%lu ru_ppm=%lu ovf_ppm=%lu\n",
 		    tag, (unsigned long)ovf, (unsigned long)lost_drv,
 		    (unsigned long)(b.pool_fail - g_a.pool_fail),
 		    (unsigned long)(b.input_fail - g_a.input_fail),
@@ -416,7 +444,10 @@ static void win_report(const char *tag)
 		    (unsigned long)(b.ip_drop - g_a.ip_drop),
 		    (unsigned long)(b.link_drop - g_a.link_drop),
 		    (unsigned long)(b.mem_err - g_a.mem_err),
-		    (unsigned long)(b.pbuf_err - g_a.pbuf_err));
+		    (unsigned long)(b.pbuf_err - g_a.pbuf_err),
+		    (unsigned long)ru, (unsigned long)irqs,
+		    (unsigned long)sweeps, (unsigned long)pkts,
+		    (unsigned long)ru_ppm, (unsigned long)ovf_ppm);
 	CASE_ANCHOR("pps: win3 tag=%s udp_in=%lu ip_in=%lu ip_disc=%lu callbacks=%lu "
 		    "cores=%lu,%lu,%lu,%lu cycles=%llu mhz_x100=%lu\n",
 		    tag, (unsigned long)udp_in_delta, (unsigned long)ip_in_delta,
@@ -552,10 +583,34 @@ static void cmd_freqtest(void)
 	}
 }
 
+/* RX interrupt coalescing: RIWT != 0 also stops arming the per-frame IOC bit,
+ * and the flip lands as the RX thread re-arms the ring (one turnover). riwt 0
+ * restores the per-frame baseline. */
+static void cmd_riwt(const char *arg)
+{
+	uint32_t n;
+	uint32_t reg;
+
+	if (arg == NULL || *arg == '\0') {
+		reg = dwc_eqos_get_rx_riwt(PPS_GMAC);
+		CASE_ANCHOR("pps: riwt reg=%lu\n", (unsigned long)reg);
+		return;
+	}
+	/* RIWT is an 8-bit field: 0x140 would silently become 0x40. Reject
+	 * anything above 255 instead of reporting a misleading request. */
+	if (!parse_u32(arg, &n) || n > 0xFFu) {
+		CASE_ANCHOR("pps: cmd err=riwt-usage\n");
+		return;
+	}
+	dwc_eqos_set_rx_coalesce(PPS_GMAC, n);
+	reg = dwc_eqos_get_rx_riwt(PPS_GMAC);
+	CASE_ANCHOR("pps: riwt req=%lu reg=%lu ioc_off=%u\n",
+		    (unsigned long)n, (unsigned long)reg, n != 0u ? 1u : 0u);
+}
+
 /* ---------------------------------------------------------------------------
  * Command loop.
  * ------------------------------------------------------------------------- */
-
 static char g_cmd[PPS_CMD_MAX];
 static uint32_t g_cmd_len;
 static char g_tag[PPS_TAG_MAX];
@@ -637,6 +692,8 @@ static void cmd_dispatch(char *line)
 		cmd_freq(arg);
 	} else if (strcmp(line, "freqtest") == 0) {
 		cmd_freqtest();
+	} else if (strcmp(line, "riwt") == 0) {
+		cmd_riwt(arg);
 	} else if (strcmp(line, "halt") == 0) {
 		cmd_halt();
 	} else {
@@ -677,6 +734,7 @@ int case_net_pps_run(void)
 
 	if (line_up() != 0)
 		return 1;
+
 
 	/* CPU clock first: the boot rate is part of the evidence, and a firmware
 	 * that refuses rate control must be reported before any traffic. */
