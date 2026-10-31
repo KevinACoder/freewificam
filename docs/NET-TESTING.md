@@ -26,6 +26,10 @@ reference runs on the same board, the same link and the same sender.  Never
 compare against a userspace receive loop: a userspace receiver spends work per
 packet and turns an application limit into a fake platform wall.
 
+The peer client is the pinned NETIO tree (`third-party/netio`), built by
+`tools/netio/build.sh`.  Keep it unmodified: it is the one component shared by
+every arm.
+
 ## 3. Build and boot
 
 The profile is selected in `tests/board/rtos/config.mk`:
@@ -69,8 +73,8 @@ Rules:
 
 ## 5. UDP 1440 B test
 
-- Board runs the netio raw server; the host runs the netio client, 10 s per
-  direction, 2/2.
+- Board runs the netio raw server; the host runs the pinned NETIO client
+  (`netio -u -b 1440 <board-ip>`, or `-t` for TCP), 10 s per direction, 2/2.
 - Accept only zero loss: FIFO overflow 0, ring-full 0, stack counters 0,
   closure within 0.1%, ping clean.
 - Record MiB/s and Mbit/s.  `1 MiB/s = 1.048576 MB/s = 8.388608 Mbit/s`.
@@ -149,3 +153,5 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
   assumed to be free.
 - The sender tops out near 350-375k pps on this bench; numbers above that are
   lower bounds, not platform limits.
+- The 64 B pps sender is not part of this repository yet; `tools/netio` carries
+  the NETIO peer only.  Adding the pps sender as a tool is open.
