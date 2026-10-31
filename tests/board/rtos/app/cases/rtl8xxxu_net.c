@@ -53,6 +53,7 @@
 #include "os/cmsis2/cmsis2.h"
 
 #include "wlan_bridge.h"
+#include "rtl8xxxu_net.h"
 
 /* The port's serializer (declared by the component's port.h; repeated here so
  * this lwIP translation unit stays free of the net80211 world's headers).  The
@@ -116,6 +117,13 @@ static volatile unsigned eu_tx_fail;
 static volatile unsigned eu_rx_frames;
 static volatile unsigned eu_rx_bytes;
 static volatile unsigned eu_rx_fail;
+
+/* Once-per-boot presentation layer state, shared with the NETIO case:
+ * `eu_net_up` says the stack/node/seam are in place, `eu_net_ping_ok` keeps
+ * the AP gate's verdict so a second caller sees the same answer instead of
+ * re-running (and re-adding) the netif. */
+static int eu_net_up;
+static int eu_net_ping_ok;
 
 /* --- ping ---------------------------------------------------------------- */
 
@@ -468,32 +476,38 @@ eu_net_counters_line(void)
 	    eu_rx_bytes, eu_rx_fail, c.data_tx, c.tx_completes, c.rx_frames);
 }
 
+/* The one bring-up shared with the NETIO case (rtl8xxxu_net.h).  It is
+ * idempotent: the first caller does the work and records the AP gate's
+ * verdict; a later caller (a different case in the same boot, or the NETIO
+ * server re-entering line_up) gets the same answer without re-adding the
+ * netif or re-initialising the stack. */
 int
-case_rtl8xxxu_net_run(void)
+rtl8xxxu_net_bringup(void)
 {
 	ip4_addr_t ip, mask, gw;
 	struct wlan_bridge_counters c;
 	int ping_ok;
-	int down_ok;
-	int up_ok;
+
+	if (eu_net_up != 0)
+		return eu_net_ping_ok != 0 ? 0 : -1;
 
 	wlan_bridge_stats(&c);
 	if (c.attached == 0u) {
 		CASE_ANCHOR("rtl8xxxu: net FAIL not attached\n");
-		return 1;
+		return -1;
 	}
 	if (wlan_bridge_state() != EU_NET_RUN_STATE) {
 		CASE_ANCHOR("rtl8xxxu: net FAIL not associated (state=%d)\n",
 		    wlan_bridge_state());
-		return 1;
+		return -1;
 	}
 	if (wlan_bridge_hwaddr(eu_net_mac) != 0) {
 		CASE_ANCHOR("rtl8xxxu: net FAIL no hardware address\n");
-		return 1;
+		return -1;
 	}
 	if (eu_net_stack_start() != 0) {
 		CASE_ANCHOR("rtl8xxxu: net FAIL tcpip init\n");
-		return 1;
+		return -1;
 	}
 
 	IP4_ADDR(&ip, EU_NET_IP_A, EU_NET_IP_B, EU_NET_IP_C, EU_NET_IP_US);
@@ -506,7 +520,7 @@ case_rtl8xxxu_net_run(void)
 	    tcpip_input) == NULL) {
 		UNLOCK_TCPIP_CORE();
 		CASE_ANCHOR("rtl8xxxu: net FAIL netif add\n");
-		return 1;
+		return -1;
 	}
 	netif_set_default(&eu_netif);
 	netif_set_up(&eu_netif);
@@ -520,13 +534,14 @@ case_rtl8xxxu_net_run(void)
 	    "%02x:%02x mtu=%u\n", EU_NET_IP_A, EU_NET_IP_B, EU_NET_IP_C,
 	    EU_NET_IP_US, eu_net_mac[0], eu_net_mac[1], eu_net_mac[2],
 	    eu_net_mac[3], eu_net_mac[4], eu_net_mac[5], EU_NET_MTU);
+	eu_net_up = 1;
 
 	/* The AP's ARP entry must exist before the first counted echo: lwIP
 	 * drops an unresolved-ARP packet without queueing it. */
 	eu_ping_pcb = raw_new(IP_PROTO_ICMP);
 	if (eu_ping_pcb == NULL) {
 		CASE_ANCHOR("rtl8xxxu: net FAIL raw pcb\n");
-		return 1;
+		return -1;
 	}
 	raw_recv(eu_ping_pcb, eu_net_ping_recv, NULL);
 	eu_net_ping_send(0u);
@@ -541,14 +556,35 @@ case_rtl8xxxu_net_run(void)
 	CASE_ANCHOR("rtl8xxxu: net ping tx=%u rx=%u min_ms=%u max_ms=%u\n",
 	    eu_ping_tx, eu_ping_rx, eu_ping_rtt_min_us / 1000u,
 	    eu_ping_rtt_max_us / 1000u);
+	eu_net_ping_ok = (ping_ok == 0) ? 1 : 0;
+	return eu_net_ping_ok != 0 ? 0 : -1;
+}
+
+uint32_t
+rtl8xxxu_net_ip4(void)
+{
+	return eu_netif.ip_addr.addr;
+}
+
+int
+case_rtl8xxxu_net_run(void)
+{
+	int down_ok;
+	int up_ok;
+
+	if (rtl8xxxu_net_bringup() != 0) {
+		eu_net_counters_line();
+		CASE_ANCHOR("rtl8xxxu: net FAIL bringup\n");
+		return 1;
+	}
 
 	down_ok = eu_net_iperf_down();
 	up_ok = eu_net_iperf_up();
 
 	eu_net_counters_line();
-	if ((ping_ok != 0) || (down_ok != 0) || (up_ok != 0)) {
-		CASE_ANCHOR("rtl8xxxu: net FAIL ping=%d down=%d up=%d\n",
-		    ping_ok, down_ok, up_ok);
+	if ((down_ok != 0) || (up_ok != 0)) {
+		CASE_ANCHOR("rtl8xxxu: net FAIL down=%d up=%d\n",
+		    down_ok, up_ok);
 		return 1;
 	}
 	CASE_ANCHOR("rtl8xxxu: net PASS\n");

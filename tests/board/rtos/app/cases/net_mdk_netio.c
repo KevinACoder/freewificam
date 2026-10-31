@@ -51,17 +51,37 @@
 
 #include "log.h"
 
-#include "dwc_eqos.h"
-#include "eqos_types.h"
-#include "eqos_rk3568.h"
-#include "rtl8211f.h"
-#include "ethnetif.h"
-
 #include "lwip/stats.h"
 #include "lwip/memp.h"
 
 #include "generic_timer.h"
 #include "net_prof.h"
+#include "cpu_freq.h"
+
+/* Two backends share this file: the GMAC one (the wired ruler) and the WLAN
+ * one (rtl8xxxu_net's presentation layer over the net80211 bridge).  They
+ * share the wire protocol and the accounting seams, not the line: the case
+ * symbol selects the backend and an image never contains both.  Keeping the
+ * GMAC path byte-for-byte where it was is what makes the wired regression
+ * meaningful after this change. */
+#if defined(RTOS_CASE_NET_MDK_NETIO)
+#define NETIO_GMAC	1
+#elif defined(RTOS_CASE_RTL8XXXU_NETIO)
+#define NETIO_GMAC	0
+#else
+#error "net_mdk_netio.c needs RTOS_CASE_NET_MDK_NETIO or RTOS_CASE_RTL8XXXU_NETIO"
+#endif
+
+#if NETIO_GMAC
+#include "dwc_eqos.h"
+#include "eqos_types.h"
+#include "eqos_rk3568.h"
+#include "rtl8211f.h"
+#include "ethnetif.h"
+#else
+#include "wlan_bridge.h"
+#include "rtl8xxxu_net.h"
+#endif
 
 /* ---------------------------------------------------------------------------
  * The ported file (Arm's netio.c, with the MDK seams filled by lwIP).
@@ -72,10 +92,12 @@
 #define NETIO_PORT      18767
 #define NETIO_AUXPORT   18768
 
+#if NETIO_GMAC
 /* The bench's wired port: gmac1 (fe010000). gmac0 has no cable on this board. */
 #define MN_GMAC		1u
 #define MN_IP3		200u
 #define MN_GW3		1u
+#endif
 
 #define CMD_QUIT        0
 #define CMD_C2S         1
@@ -142,6 +164,7 @@ static uint32_t rand32(void)
  * ------------------------------------------------------------------------- */
 static void emit_layer_counters(const char *tag)
 {
+#if NETIO_GMAC
 	struct dwc_eqos_stats ds;
 	struct dwc_eqos_mmc_stats mmc;
 	struct dwc_eqos_diag dg;
@@ -228,6 +251,48 @@ static void emit_layer_counters(const char *tag)
 
 	MDK_ANCHOR("netio: mib tag=%s udp_in=%lu udp_inerr=%lu ip_drop=%lu tcp_retrans=%lu\n",
 		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans);
+#else /* WLAN backend */
+	unsigned long pbuf_err = 0, mem_err = 0, udp_in = 0, udp_inerr = 0;
+	unsigned long ip_drop = 0, tcp_retrans = 0;
+	struct wlan_bridge_counters wc;
+
+	/* The WLAN receive path's ledger is the bridge's, not the MAC's: the
+	 * net80211 port owns the driver's descriptor/MAC counters and does not
+	 * export them through this seam.  A lost frame therefore has to show up
+	 * in bridge_rx vs bridge_rxdata, in the stack's own mib, or on the AP
+	 * (the pcap / station dump are the independent witness).  The transmit
+	 * leg is data_tx vs tx_completes (the completion gap is a stall, not a
+	 * drop) plus the AP's receive side. */
+	wlan_bridge_stats(&wc);
+#if LWIP_STATS
+	mem_err = (unsigned long)lwip_stats.mem.err;
+#endif
+#if LWIP_STATS && MEMP_STATS
+	if (lwip_stats.memp[MEMP_PBUF] != NULL)
+		pbuf_err = (unsigned long)lwip_stats.memp[MEMP_PBUF]->err;
+#endif
+#if MIB2_STATS
+	udp_in = (unsigned long)lwip_stats.mib2.udpindatagrams;
+	udp_inerr = (unsigned long)lwip_stats.mib2.udpinerrors;
+	ip_drop = (unsigned long)lwip_stats.mib2.ipindiscards;
+	tcp_retrans = (unsigned long)lwip_stats.mib2.tcpretranssegs;
+#endif
+
+	MDK_ANCHOR("netio: layers tag=%s wlan_tx=%u wlan_done=%u wlan_rx=%u "
+		   "wlan_rxdata=%u wlan_rxenc=%u wlan_txplain=%u wlan_txerr=%u "
+		   "wlan_attach=%d wlan_freq=%u mem_err=%lu pbuf_err=%lu\n",
+		   tag, wc.data_tx, wc.tx_completes, wc.rx_frames, wc.rx_data,
+		   wc.rx_data_enc, wc.data_tx_plain, wc.tx_errors, wc.attached,
+		   (unsigned)wc.tuned_freq, mem_err, pbuf_err);
+	/* The bridge's own receive decode: per-rate frames, retries and FCS
+	 * failures since the last dump.  On the air this is the rate/retry
+	 * fingerprint the AP's station dump cannot give (the dump reports the
+	 * rates the AP chose, not what was received). */
+	wlan_bridge_link_dump();
+	MDK_ANCHOR("netio: mib tag=%s udp_in=%lu udp_inerr=%lu ip_drop=%lu "
+		   "tcp_retrans=%lu\n",
+		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans);
+#endif
 }
 
 static void init_buffer(uint8_t *buf, int32_t size)
@@ -397,6 +462,7 @@ static int32_t raw_udp_send(const void *buf, uint32_t len)
 }
 #endif /* CONFIG_NETIO_RAW_UDP */
 
+#if NETIO_GMAC
 /* ---------------------------------------------------------------------------
  * K2-07 receive window: every counter that can swallow a frame, diffed over
  * the C2S cell so boot, ARP and the control plane cannot leak into the ledger.
@@ -467,6 +533,7 @@ static void rx_win_report(const char *tag, const struct rx_win *a,
 		   b->ip_drop - a->ip_drop, b->link_drop - a->link_drop,
 		   b->mem_err - a->mem_err, b->pbuf_err - a->pbuf_err);
 }
+#endif /* NETIO_GMAC */
 
 static void UDP_Receiver(void *arg)
 {
@@ -565,7 +632,9 @@ static void udp_rx_quiesce(void)
  * created and closes when the client's RES arrives (after the receiver has
  * been quiesced), so the wall clock and every bucket cover exactly the same
  * frames. */
+#if NETIO_GMAC
 static struct net_prof_snap prof_a;
+#endif
 static uint64_t prof_t0;
 /* The same cell's CPU cycle count at the open, so the report can say how many
  * cycles one frame cost and what the core's effective clock was (P0.2). */
@@ -614,7 +683,7 @@ static void UDP_Server(void *arg)
 		if ((rc == 0) || (FD_ISSET(sock, &fds) == 0))
 			continue;
 
-			sa_len = sizeof(*io.client);
+		sa_len = sizeof(*io.client);
 		csock = accept(sock, (struct sockaddr *)io.client, &sa_len);
 		if (csock < 0)
 			continue;
@@ -674,15 +743,22 @@ static void UDP_Server(void *arg)
 				 * zeroed first so the snapshot that starts
 				 * the cell carries a zero for it and the delta
 				 * at the far end is the cell's own cost. */
+#if NETIO_GMAC
 				net_prof_bind(MN_GMAC);
 				net_prof_app_reset();
 				net_prof_take(&prof_a);
 				prof_a.frames = io_rx_total;
 				prof_a.app_empty = io_empty_polls + io_app_blocked;
 				prof_a.app_charged = io_app_charged;
+				rx_win_take(&g_win_a);
+#endif
 				prof_t0 = gtimer_count_get();
 				prof_c0 = net_prof_cpu_cycles();
-				rx_win_take(&g_win_a);
+				/* The begin/end pair brackets the cell on the
+				 * board side; the analyzer diffs it, so the
+				 * boot, the ARP and the previous cell cannot
+				 * leak into this one's layer ledger. */
+				emit_layer_counters("begin");
 
 #if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
 				/* The window opens with the cell: from here the
@@ -702,7 +778,9 @@ static void UDP_Server(void *arg)
 				if (rc < 0)
 					__THREAD_EXIT(rc);
 			} else if (io.command == CMD_RES) {
+#if NETIO_GMAC
 				struct net_prof_snap prof_b;
+#endif
 				uint64_t wall_ticks;
 
 #if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
@@ -713,6 +791,7 @@ static void UDP_Server(void *arg)
 				MDK_ANCHOR("netio: udp rx done pkts=%lu bytes=%lu\n",
 					   (unsigned long)io.pkt_count,
 					   (unsigned long)io.rx_bytes);
+#if NETIO_GMAC
 				{
 					struct rx_win win_b;
 
@@ -720,17 +799,20 @@ static void UDP_Server(void *arg)
 					rx_win_report("udp-c2s", &g_win_a,
 						      &win_b);
 				}
+#endif
 
 				/* Cell closes here, after the receiver is out of
 				 * its receive call, so no bucket is read
 				 * mid-flight. */
 				wall_ticks = gtimer_count_get() - prof_t0;
+#if NETIO_GMAC
 				net_prof_take(&prof_b);
 				prof_b.frames = io_rx_total;
 				prof_b.app_empty = io_empty_polls + io_app_blocked;
 				prof_b.app_charged = io_app_charged;
 				net_prof_report("udp-c2s", &prof_a, &prof_b,
 						wall_ticks / 24u);
+#endif
 				/* The same cell on the CPU's own clock: cycles/frame
 				 * and the effective MHz, so a wall-time gap can be
 				 * separated from a clock gap (P0.2). */
@@ -773,13 +855,17 @@ static void UDP_Server(void *arg)
 					 * buffer and timer are armed, so the cell
 					 * covers the send loop only - not the 5 ms
 					 * quiesce and not the abort's wait-out. */
+#if NETIO_GMAC
 					struct net_prof_snap prof_a;
 					struct net_prof_snap prof_b;
+#endif
 					uint64_t s2c_t0 = gtimer_count_get();
 					uint64_t s2c_c0 = net_prof_cpu_cycles();
 					int s2c_reported = 0;
 
+#if NETIO_GMAC
 					net_prof_take(&prof_a);
+#endif
 
 					while (!io.timeover) {
 						for (nb = 0; nb < (int32_t)io.pkt_size;) {
@@ -804,9 +890,11 @@ static void UDP_Server(void *arg)
 								if (!s2c_reported) {
 									uint64_t ticks = gtimer_count_get() - s2c_t0;
 
+#if NETIO_GMAC
 									net_prof_take(&prof_b);
 									net_prof_report("udp-s2c", &prof_a,
 											&prof_b, ticks / 24u);
+#endif
 									if (net_prof_cpu_probe_ok())
 										net_prof_cpu_cell("udp-s2c",
 												  net_prof_cpu_cycles() - s2c_c0,
@@ -825,9 +913,11 @@ static void UDP_Server(void *arg)
 					if (!s2c_reported) {
 						uint64_t ticks = gtimer_count_get() - s2c_t0;
 
+#if NETIO_GMAC
 						net_prof_take(&prof_b);
 						net_prof_report("udp-s2c", &prof_a, &prof_b,
 								ticks / 24u);
+#endif
 						if (net_prof_cpu_probe_ok())
 							net_prof_cpu_cell("udp-s2c",
 									  net_prof_cpu_cycles() - s2c_c0,
@@ -924,6 +1014,8 @@ static void TCP_Server(void *arg)
 				if ((int32_t)io.pkt_size > (int32_t)io.buf_size)
 					__THREAD_EXIT(BSD_EMSGSIZE);
 
+				emit_layer_counters("begin");
+
 				{
 					uint64_t c2s_t0 = gtimer_count_get();
 					uint64_t c2s_c0 = net_prof_cpu_cycles();
@@ -1009,9 +1101,11 @@ static void TCP_Server(void *arg)
  * Board glue: the GMAC line and the lwIP stack, the same sequence net.c runs.
  * ------------------------------------------------------------------------- */
 
+static int g_line_up;
+
+#if NETIO_GMAC
 static struct netif g_netif;
 static osSemaphoreId_t g_rx_sem;
-static int g_line_up;
 
 static void rx_notify(unsigned int index)
 {
@@ -1175,6 +1269,21 @@ static int line_up(void)
 	g_line_up = 1;
 	return 0;
 }
+#else /* WLAN backend */
+static int line_up(void)
+{
+	if (g_line_up)
+		return 0;
+	if (rtl8xxxu_net_bringup() != 0) {
+		CASE_ANCHOR("net: netio FAIL wlan bringup\n");
+		return -1;
+	}
+	g_local_ip = rtl8xxxu_net_ip4();
+	CASE_ANCHOR("net: netio addr 192.168.99.2/24\n");
+	g_line_up = 1;
+	return 0;
+}
+#endif
 
 /* Arm's app_main_thread: static buffer, one-shot timer, then one control
  * thread per protocol. */
@@ -1193,15 +1302,34 @@ static const osThreadAttr_t udp_srv_attr = {
 	.stack_size = 4096U,
 };
 
-int case_net_mdk_netio_run(void)
+/* The frequency is part of the ruler, not a tuning knob: the RTOS can run the
+ * same core at a different OPP than the Linux arms, and a throughput or
+ * cycles-per-frame comparison across arms is only meaningful at a known
+ * actual clock.  The SCMI readback is what the firmware says; the PMCCNTR
+ * spin below is what the core actually did.  Both are recorded; the spin is
+ * the number the analysis uses. */
+static void emit_cpu_freq_line(void)
 {
-	CASE_ANCHOR("rtos: case net_mdk_netio start\n");
+	int rc;
+	int src = -100;
+	uint32_t rb = 0;
 
-	if (line_up() != 0) {
-		CASE_ANCHOR("net: netio FAIL line-up\n");
-		return 1;
+	rc = cpu_freq_probe();
+	if ((rc == 0) && cpu_freq_supported()) {
+		/* Hz, not kHz: 1.992 GHz is an OPP, 1.992 MHz is not.  The first
+		 * W1-01 boot asked for 1992000 (Hz) and set_ret=-1 left the CPU
+		 * at the boot OPP (396 MHz actual), which made the C2S look
+		 * CPU-bound; the readback (816 MHz) and the PMCCNTR (396 MHz)
+		 * disagreeing is what caught it. */
+		src = cpu_freq_set_hz(1992000000u);
+		rb = cpu_freq_get_hz();
 	}
+	CASE_ANCHOR("netio: cpu req_khz=1992000 readback_khz=%lu ret=%d "
+		    "set_ret=%d\n", (unsigned long)(rb / 1000u), rc, src);
+}
 
+static int netio_case_run(void)
+{
 	/* P0.2: a self-checking CPU clock probe, run first and printed before
 	 * anything else can fault. If the PMU is trapped by the hypervisor, the
 	 * last line on the console is "cpu probe begin" and the board needs a
@@ -1209,6 +1337,7 @@ int case_net_mdk_netio_run(void)
 	 * The probe is on by default; CONFIG_CPU_PROBE=0 compiles it out. The
 	 * sample is a 1 ms busy spin, not an idle delay, so the reported MHz is
 	 * the frequency the core actually runs at (WFI would under-report). */
+	emit_cpu_freq_line();
 	{
 		uint32_t pt0;
 		uint32_t pt1;
@@ -1262,3 +1391,25 @@ int case_net_mdk_netio_run(void)
 		osDelay(1000u);
 	return 0;
 }
+
+#if NETIO_GMAC
+int case_net_mdk_netio_run(void)
+{
+	CASE_ANCHOR("rtos: case net_mdk_netio start\n");
+	if (line_up() != 0) {
+		CASE_ANCHOR("net: netio FAIL line-up\n");
+		return 1;
+	}
+	return netio_case_run();
+}
+#else
+int case_rtl8xxxu_netio_run(void)
+{
+	CASE_ANCHOR("rtos: case rtl8xxxu_netio start\n");
+	if (line_up() != 0) {
+		CASE_ANCHOR("net: netio FAIL line-up\n");
+		return 1;
+	}
+	return netio_case_run();
+}
+#endif

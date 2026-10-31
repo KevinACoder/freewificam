@@ -158,6 +158,10 @@ int case_rtl8xxxu_dataplane_run(void);
 int case_rtl8xxxu_net_run(void);
 #endif
 
+#if defined(RTOS_CASE_RTL8XXXU_NETIO)
+int case_rtl8xxxu_netio_run(void);
+#endif
+
 /* The camera image's four cases, in run order: the controller and the camera,
  * the negotiated open, the raw isochronous transport, then the stream engine.
  * They share the application half's state (`ports/cherryusb/class/uvc_app.h`). */

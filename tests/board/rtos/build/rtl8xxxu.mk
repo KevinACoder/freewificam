@@ -242,6 +242,26 @@ else
 RTL8XXXU_NET_SRCS :=
 endif
 
+# The WLAN NETIO image (case rtl8xxxu_netio): the same lwIP stack and
+# presentation layer as rtl8xxxu_net, plus the shared netio server.  The server
+# is compiled against the WLAN case symbol (RTOS_CASE_RTL8XXXU_NETIO), which
+# selects its bridge-backed line-up and layer snapshot instead of the GMAC
+# ones; the wired net_mdk_netio case is a different image and is untouched.
+ifneq ($(filter rtl8xxxu_netio,$(CASES)),)
+RTL8XXXU_NETIO_SRCS := \
+	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
+	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
+	$(LWIP_STACK_SRCS) \
+	$(LINE)/app/cases/rtl8xxxu_net.c \
+	$(LINE)/app/cases/net_mdk_netio.c \
+	$(LINE)/app/net_prof.c
+RTL8XXXU_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
+	-DLWIPERF_TCP_MAX_IDLE_SEC=60 \
+	$(RTL8XXXU_AP_DEFS) -I$(RTL8XXXU_NPORT)/bridge
+else
+RTL8XXXU_NETIO_SRCS :=
+endif
+
 # The symbols only the case reaches: with --gc-sections the walkers, the
 # backend registration, the firmware registration and the bridge install have
 # no other reference.
