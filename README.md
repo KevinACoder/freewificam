@@ -54,6 +54,20 @@ the build compiles (`docs/PATCH-POLICY.md`).  Patches are applied in the tree;
 | vendor `rtl8189fs` / RTL8189FTV | SDIO | the vendor driver with its own MLME, over the SDIO host stack |
 | USB camera (UVC) | USB2 | the CherryUSB host stack, the video class and an isochronous stream engine |
 
+## Board and firmware sources
+
+The reference board is the RK3568-E4AP5G1-ITX; its hardware, peripheral map and
+boot path are in [`docs/boards/rk3568-itx.md`](docs/boards/rk3568-itx.md).
+
+Both firmware trees live on GitHub and are not vendored here:
+
+- Boot firmware: <https://github.com/KevinACoder/u-boot-rockchip>, branch
+  `next-dev`, board defconfig `rk3568-e4ap5g1-itx_defconfig`, board DTS
+  `arch/arm/dts/rk3568-e4ap5g1-itx.dts`.
+- Reference Linux kernel: <https://github.com/KevinACoder/linux>, branch
+  `v7.3-rc2-firefly`; the measured reference image is commit `e71d9a28760f`
+  (`7.3.0-rc2-ge71d9a28760f`).
+
 ## Building the Linux kernel module
 
 `DRIVER` selects the one driver the module carries; `rtw89` is the default,
