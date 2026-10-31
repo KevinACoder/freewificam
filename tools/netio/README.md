@@ -26,7 +26,38 @@ The board-side server is `tests/board/rtos/app/cases/net_mdk_netio.c`; the wire
 protocol (TCP 18767 control, UDP 18768 data) is recorded in
 `third-party/netio/netio.provenance.md`.
 
-The 64 B pps arm needs a sender that can hold a requested rate for 10 s (two
-busy threads, 256-frame batches, no sleeping pacer).  That sender is not part of
-this repository yet; `docs/NET-TESTING.md` describes the required properties and
-the validity gates.
+## ppsgen - the 64 B pps sender
+
+`tools/netio/ppsgen.c` is the sender (and counting receiver) for the pps test.
+It paces against an absolute schedule on two busy threads, carries a sequence
+number, and can wait for a TCP `GO` so the board's counter window and the sender
+start together.
+
+```sh
+build/netio/ppsgen -d <board-ip> -p 18768 -r 260000 -t 10 -T 2 -k 0 -B 256
+```
+
+The board side is the `net_pps` case (`configs/net-pps.mk`), driven over the
+serial console:
+
+```
+freq 1992000      # request; record the measured actual MHz
+riwt 160          # runtime RX coalescing, after the frequency change
+go cell
+# host: build/netio/ppsgen -d <board-ip> -p 18768 -r 260000 -t 10 -T 2 -k 0 -B 256
+stop cell
+```
+
+## pps-report.py - one result line per cell
+
+`tools/netio/pps-report.py` joins the console log and the sender log, computes
+offered/delivered pps, `c0`, `C0`, ring-full and FIFO shares, and applies the
+validity gates (sender within 2%, sender count vs offered within 1%, window
+10.00 +- 0.05 s, closure within 0.1%):
+
+```sh
+tools/netio/pps-report.py --serial console.log --sender sender.log --tag cell
+```
+
+`T0` is the highest offered rate with zero loss, repeated 2/2; see
+`docs/NET-TESTING.md` for the full procedure.
