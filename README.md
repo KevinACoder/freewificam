@@ -95,6 +95,19 @@ The RTL8189FTV profiles additionally need the external vendor tree:
 VENDOR_8189FS=/path/to/rtl8189fs tools/rtos/build.sh
 ```
 
+## Performance
+
+Wired 1 GbE, zero loss, 10 s runs, 2/2; the Linux reference runs on the same
+board, the same link and the same sender.  Full method, counters and limits:
+[docs/NET-TESTING.md](docs/NET-TESTING.md).
+
+| Test | freewificam | Linux reference |
+|---|---|---|
+| UDP 1440 B receive | 114.00 MiB/s (956 Mbit/s) | 113.13 MiB/s |
+| UDP 1440 B send | 108.09 MiB/s (907 Mbit/s) | 113.61 MiB/s |
+| 64 B zero-loss pps (T0), ~1.69 GHz | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
+| 64 B T0, 816 MHz | 197.5k | 100k (reference only) |
+
 ## Gates and tools
 
 ```sh
