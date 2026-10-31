@@ -28,4 +28,11 @@ struct wlan_netdev {
 	struct wlan_wext	wext;
 };
 
+/*
+ * Called from the port's deferred queue wake (process context): the driver
+ * refilled its tx-urb pool, so reopen the device queue and pull the next
+ * frames through the bridge.  No-op before the device exists.
+ */
+void wlan_netdev_tx_kick(void);
+
 #endif /* WLAN_NETDEV_H */

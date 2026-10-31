@@ -817,6 +817,31 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	return 0;
 }
 
+/*
+ * The seam's backpressure question (wlan_seam_drv_ops.queue_ready): the
+ * driver stops its transmit queues when its tx-urb pool crosses the low water
+ * (rtl8xxxu core.c:5119) and its wake reopens them (core.c:5139).  The bridge
+ * asks this before dequeuing another frame; the frame stays in the interface
+ * queue and seam_tx_wake drains it when the driver has room again.
+ */
+static int
+seam_queue_ready(struct wlan_seam_drv *drv)
+{
+	(void)drv;
+	return adapter.hw != NULL && !lkpi80211_tx_queue_stopped(adapter.hw);
+}
+
+/*
+ * The port's wake, delivered from the substitute's deferred work (a completion
+ * context must not enter the bridge).  The bridge takes its own serializer.
+ */
+static void
+seam_tx_wake(void *arg)
+{
+	(void)arg;
+	wlan_bridge_tx_wake();
+}
+
 static const struct wlan_seam_drv_ops seam_ops = {
 	.start = seam_start,
 	.stop = seam_stop,
@@ -833,6 +858,7 @@ static const struct wlan_seam_drv_ops seam_ops = {
 	.clear_key = seam_clear_key,
 	.bss_info = seam_bss_info,
 	.bssid = seam_bssid,
+	.queue_ready = seam_queue_ready,
 };
 
 /* ------------------------------------------------------------------ */
@@ -844,6 +870,7 @@ up_attach(struct ieee80211_hw *hw)
 {
 	uint8_t mac[6];
 	unsigned int i;
+	int rc;
 
 	adapter.hw = hw;
 	/*
@@ -853,8 +880,19 @@ up_attach(struct ieee80211_hw *hw)
 	 */
 	for (i = 0; i < 6; i++)
 		mac[i] = hw->wiphy->perm_addr[i];
-	return wlan_bridge_attach((struct wlan_seam_drv *)&adapter, &seam_ops,
+	rc = wlan_bridge_attach((struct wlan_seam_drv *)&adapter, &seam_ops,
 	    mac);
+	if (rc != 0)
+		return rc;
+	/*
+	 * The driver's queue wake, registered only once the bridge is attached:
+	 * a wake that arrives during attach would find no interface to drain
+	 * (the bridge ignores it until attached, so this is ordering hygiene,
+	 * not a race the log can lose).
+	 */
+	lkpi80211_set_tx_wake_cb(hw, seam_tx_wake, NULL);
+	wlan_osal_log("wlan: seam tx wake registered\n");
+	return 0;
 }
 
 static void

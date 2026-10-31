@@ -183,6 +183,21 @@ struct wlan_seam_drv_ops {
 	 */
 	int (*beacon_sync)(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	    uint64_t tsf, uint32_t device_ts, uint8_t dtim_count, int notify);
+
+	/*
+	 * Transmit backpressure: the driver's own queue state, asked before
+	 * the bridge hands over another frame.  0 means the driver has stopped
+	 * its transmit queues and does not want another frame until it wakes
+	 * (rtl8xxxu stops them when its tx-urb pool crosses the low water and
+	 * wakes them above the high water, core.c:5119/:5139).  Without this
+	 * question the bridge keeps feeding a driver that has already said
+	 * "full"; the driver's only remaining option is to drop the frame,
+	 * which is what the board measured as "Unable to allocate tx urb".
+	 *
+	 * NULL = the port has no such state and is always ready (the other
+	 * arms keep the old behavior).
+	 */
+	int (*queue_ready)(struct wlan_seam_drv *drv);
 };
 
 #endif /* _WLAN_NET80211_SEAM_H_ */

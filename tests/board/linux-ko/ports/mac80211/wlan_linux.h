@@ -115,6 +115,20 @@ struct wlan_linux_hw {
 	 * reason.
 	 */
 	struct workqueue_struct *hw_wq;
+
+	/*
+	 * The driver's transmit-queue state and the port's wake.  rtl8xxxu
+	 * stops its queues when the tx-urb pool crosses the low water and
+	 * wakes them above the high water; the substitute carries that pair
+	 * to the bridge (which asks `queue_stopped` before a frame and drains
+	 * on the wake) instead of forwarding the wake from the completion
+	 * context into the serializer.
+	 */
+	int			queue_stopped;
+	struct work_struct	tx_wake_work;
+	void			(*tx_wake_cb)(void *arg);
+	void			*tx_wake_arg;
+	unsigned int		tx_wakes;
 };
 
 /* the driver-half seam vtable (tests/board/linux-ko/ports/adapter/wlan_seam_adapter_linux.c) */
@@ -131,6 +145,13 @@ void wlan_adapter_detach(struct ieee80211_hw *hw);
 /* TXQ engine (tests/board/linux-ko/ports/mac80211/mac80211_txq.c) */
 int wlan_txq_enqueue(struct ieee80211_txq *txq, struct sk_buff *skb);
 unsigned long wlan_txq_len(struct ieee80211_txq *txq);
+
+/* the driver's queue state (its stop/wake pair) and the port's arm of the
+ * wake work: the allocator arms the work, the adapter registers the delivery */
+void wlan_tx_wake_init(struct wlan_linux_hw *w);
+void wlan_tx_wake_set_cb(struct ieee80211_hw *hw, void (*cb)(void *arg),
+    void *arg);
+int wlan_tx_queue_stopped(struct ieee80211_hw *hw);
 
 /* a received frame, from ieee80211_rx_irqsafe() to the net80211 bridge */
 void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb);

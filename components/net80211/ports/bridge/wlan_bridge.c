@@ -118,6 +118,12 @@ static struct {
 	unsigned int filter_clears;
 	unsigned int mgt_tx;
 	unsigned int data_tx;
+	/* The driver's backpressure, as the bridge saw it: drains refused
+	 * because the driver had stopped its queue, and the driver's wakes
+	 * that re-armed a drain.  The pair tells a working pair from a
+	 * driver that stopped and never recovered. */
+	unsigned int tx_gated;
+	unsigned int tx_wakes;
 	unsigned int rx_frames;
 	unsigned int rx_mgmt;	/* diagnostic: mgmt frames seen in input */
 	unsigned int rx_beacon;	/* diagnostic: beacons seen in input */
@@ -601,6 +607,21 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		struct ieee80211_key *k = NULL;
 		int hw_crypto = 0, pairwise = 0, key_idx = 0;
 
+		/*
+		 * The driver's own queue state, asked before every frame: a
+		 * driver that has stopped its transmit queues (rtl8xxxu stops
+		 * them when its tx-urb pool crosses the low water) does not
+		 * want another frame; the frame stays in the interface queue
+		 * and the driver's wake drains it (wlan_bridge_tx_wake).  The
+		 * driver's alternative is to drop the skb on the floor, which
+		 * is exactly the "Unable to allocate tx urb" the board
+		 * measured.
+		 */
+		if (bridge.ops->queue_ready != NULL &&
+		    !bridge.ops->queue_ready(bridge.drv)) {
+			bridge.tx_gated++;
+			break;
+		}
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == NULL)
 			break;
@@ -704,6 +725,14 @@ bridge_start(struct ifnet *ifp)
 	struct ieee80211com *ic = (struct ieee80211com *)ifp->if_softc;
 
 	if (!bridge.attached || ic == NULL || bridge.ops == NULL)
+		return;
+	/*
+	 * One gate for both queues: the driver's stopped state covers every
+	 * frame it would have to allocate a tx urb for, management included.
+	 * The driver's wake re-enters here (management first, as always).
+	 */
+	if (bridge.ops->queue_ready != NULL &&
+	    !bridge.ops->queue_ready(bridge.drv))
 		return;
 	/* management first: auth/assoc must not queue behind data */
 	bridge_drain_mgtq(ic);
@@ -2655,6 +2684,8 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->tuned_freq = bridge.tuned_freq;
 	out->auth_retries = bridge.auth_retries;
 	out->auth_answers = bridge.auth_answers;
+	out->tx_gated = bridge.tx_gated;
+	out->tx_wakes = bridge.tx_wakes;
 	out->attached = bridge.attached;
 }
 
@@ -2731,6 +2762,17 @@ wlan_bridge_set_data_rx(wlan_bridge_data_rx_fn fn, void *arg)
 	wlan_port_set_data_rx((wlan_data_rx_fn)fn, arg);
 }
 
+/*
+ * The bridge's send queue is the only buffer between the presentation layer
+ * and the driver.  A producer that outruns a stopped driver must be told to
+ * wait rather than buffered without bound: the queue is capped here and the
+ * caller gets -ENOBUFS (lwIP holds a TCP segment; a UDP sender retries).  The
+ * cap is far above what a running driver accumulates (the queue drains as
+ * fast as the driver takes frames) and well inside the mbuf pool a bring-up
+ * boot carries.
+ */
+#define WLAN_BRIDGE_TXQ_CAP	64
+
 int
 wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 {
@@ -2743,6 +2785,10 @@ wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 	ifp = bridge.ic->ic_ifp;
 	if (ifp == NULL)
 		return -ENODEV;
+	/* the driver's backpressure reaches the producer here: a full send
+	 * queue is a "wait", not a "drop" */
+	if (ifp->if_snd.ifq_len >= WLAN_BRIDGE_TXQ_CAP)
+		return -ENOBUFS;
 	/* the transmit path's second milestone: the frame reached the bridge */
 	lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_BRIDGE);
 	/*
@@ -2761,6 +2807,27 @@ wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 	}
 	bridge_start(ifp);
 	return (int)len;
+}
+
+void
+wlan_bridge_tx_wake(void)
+{
+	struct ifnet *ifp;
+
+	/*
+	 * The driver's wake runs on a work context - the RTOS lkpi wake work,
+	 * the ko module's workqueue - because the USB completion that triggers
+	 * it must not reach the bridge serializer itself.  The serializer is
+	 * this port's recursive mutex, so a wake raised from a context that
+	 * already owns it still works.
+	 */
+	wlan_port_serializer_lock();
+	ifp = (bridge.attached && bridge.ic != NULL) ? bridge.ic->ic_ifp : NULL;
+	if (ifp != NULL) {
+		bridge.tx_wakes++;
+		bridge_start(ifp);
+	}
+	wlan_port_serializer_unlock();
 }
 
 int

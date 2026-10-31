@@ -179,6 +179,18 @@ void	lkpi80211_drv_chanctx_release(struct ieee80211_hw *hw,
 void	lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    struct ieee80211_sta *sta, struct sk_buff *skb);
 
+/*
+ * The driver's transmit-queue state and the port's wake.  A driver stops its
+ * queues when it has no room (rtl8xxxu: the tx-urb pool crossed the low water)
+ * and wakes them when room returns; the substitute counts the pair and defers
+ * the wake to a work (the completion context must not enter the bridge).  The
+ * bridge asks `stopped` before handing another frame down and registers its
+ * wake with `set_tx_wake_cb` at attach.
+ */
+int	lkpi80211_tx_queue_stopped(struct ieee80211_hw *hw);
+void	lkpi80211_set_tx_wake_cb(struct ieee80211_hw *hw, void (*cb)(void *),
+	    void *arg);
+
 /* Sta lifetime (call ops->sta_add / sta_remove; the sta carries
  * sta_data_size bytes of zeroed driver-private area).  The ladder is split the
  * way the association splits: drv_sta_add uploads the peer (the moment mac80211

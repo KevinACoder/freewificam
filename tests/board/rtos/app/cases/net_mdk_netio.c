@@ -280,10 +280,12 @@ static void emit_layer_counters(const char *tag)
 
 	MDK_ANCHOR("netio: layers tag=%s wlan_tx=%u wlan_done=%u wlan_rx=%u "
 		   "wlan_rxdata=%u wlan_rxenc=%u wlan_txplain=%u wlan_txerr=%u "
-		   "wlan_attach=%d wlan_freq=%u mem_err=%lu pbuf_err=%lu\n",
+		   "wlan_attach=%d wlan_freq=%u wlan_gated=%u wlan_wakes=%u "
+		   "mem_err=%lu pbuf_err=%lu\n",
 		   tag, wc.data_tx, wc.tx_completes, wc.rx_frames, wc.rx_data,
 		   wc.rx_data_enc, wc.data_tx_plain, wc.tx_errors, wc.attached,
-		   (unsigned)wc.tuned_freq, mem_err, pbuf_err);
+		   (unsigned)wc.tuned_freq, wc.tx_gated, wc.tx_wakes, mem_err,
+		   pbuf_err);
 	/* The bridge's own receive decode: per-rate frames, retries and FCS
 	 * failures since the last dump.  On the air this is the rate/retry
 	 * fingerprint the AP's station dump cannot give (the dump reports the
@@ -1387,8 +1389,9 @@ static int netio_case_run(void)
 	CASE_ANCHOR("net: netio ready port=%d aux=%d buf=%u\n",
 		    NETIO_PORT, NETIO_AUXPORT, (unsigned)BUF_SIZE);
 
-	for (;;)
+	for (;;) {
 		osDelay(1000u);
+	}
 	return 0;
 }
 

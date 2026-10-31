@@ -1133,6 +1133,37 @@ static int seam_beacon_sync(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	return 0;
 }
 
+/*
+ * The seam's backpressure question (wlan_seam_drv_ops.queue_ready): nonzero
+ * only while the driver's transmit queue is open.  rtl8xxxu stops it when its
+ * tx-urb pool crosses the low water and wakes it above the high water; the
+ * bridge refuses to dequeue while stopped and drains on the wake below.
+ */
+static int seam_queue_ready(struct wlan_seam_drv *drv)
+{
+	struct wlan_linux_hw *w = ctx_hw(drv);
+
+	return w != NULL && !wlan_tx_queue_stopped(&w->hw);
+}
+
+/*
+ * The port's wake, delivered from the substitute's deferred work: the module's
+ * workqueue context may take the bridge serializer, the driver's completion
+ * that raised it must not.
+ */
+static void seam_tx_wake(void *arg)
+{
+	(void)arg;
+	wlan_bridge_tx_wake();
+	/*
+	 * The bridge's own if_snd drain is not enough on this arm: the frame
+	 * enters through the netdev queue (start_xmit stops it at the cap and
+	 * only a wake reopens it), so the driver's refill has to poke the
+	 * device queue too.
+	 */
+	wlan_netdev_tx_kick();
+}
+
 const struct wlan_seam_drv_ops wlan_seam_ops = {
 	.start = seam_start,
 	.stop = seam_stop,
@@ -1150,23 +1181,30 @@ const struct wlan_seam_drv_ops wlan_seam_ops = {
 	.bss_info = seam_bss_info,
 	.bssid = seam_bssid,
 	.beacon_sync = seam_beacon_sync,
+	.queue_ready = seam_queue_ready,
 };
 
 int wlan_adapter_attach(struct ieee80211_hw *hw)
 {
 	struct wlan_linux_hw *w = wlan_hw_of(hw);
 	uint8_t *mac = hw->wiphy->perm_addr;
+	int rc;
 
 	if (w->vif != NULL) {
 		return -EBUSY;
 	}
-	int rc;
 
 	rc = wlan_bridge_attach((struct wlan_seam_drv *)hw, &wlan_seam_ops,
 	    mac);
 	if (rc != 0) {
 		return rc;
 	}
+	/*
+	 * The driver's queue wake, registered once the bridge exists: a wake is
+	 * a bridge drain cue and has nothing to drain before the attach.
+	 */
+	wlan_tx_wake_set_cb(hw, seam_tx_wake, NULL);
+	pr_info("wlan: seam tx wake registered\n");
 	rc = wlan_netdev_create(hw);
 	if (rc != 0) {
 		wlan_bridge_detach();

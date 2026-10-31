@@ -77,6 +77,13 @@ struct wlan_port_ifops;
 struct wlan_bridge_counters {
 	unsigned int	mgt_tx;
 	unsigned int	data_tx;
+	/* The driver's backpressure as the bridge saw it: how often a drain was
+	 * refused because the driver had stopped its queue (tx_gated), and how
+	 * often the driver's wake brought the bridge back (tx_wakes).  A gated
+	 * count rising with no wakes is a driver that never recovers; gates
+	 * with wakes are the designed pair working. */
+	unsigned int	tx_gated;
+	unsigned int	tx_wakes;
 	unsigned int	rx_frames;
 	unsigned int	tx_completes;
 	unsigned int	scan_starts;
@@ -365,6 +372,14 @@ uint32_t wlan_bridge_stat_bad_auth(void);
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);
+
+/*
+ * The driver's wake notification: its transmit queues have room again, so the
+ * bridge may drain what the queue gate held back.  Runs in a work context (a
+ * USB completion's work, not the completion itself), takes the port serializer
+ * itself, and is a no-op unless the interface is attached and RUN.
+ */
+void	wlan_bridge_tx_wake(void);
 
 /*
  * The receive half of the data plane: a complete ethernet frame leaves the

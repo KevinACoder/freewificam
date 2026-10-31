@@ -121,6 +121,8 @@ struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
 	INIT_WORK(&w->rx_work, wlan_rx_work);
 	INIT_WORK(&w->tx_work, wlan_tx_work);
 	INIT_WORK(&w->scan_work, wlan_scan_work);
+	/* the driver's queue wake: the work that delivers it to the bridge */
+	wlan_tx_wake_init(w);
 	/*
 	 * Two queues, deliberately: the receive/transmit-completion handoff
 	 * enters the net80211 serializer, and a driver work item (watchdog,

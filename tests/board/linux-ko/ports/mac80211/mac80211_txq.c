@@ -18,11 +18,59 @@
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
+#include <linux/workqueue.h>
 #include <net/mac80211.h>
 
 #include "wlan_linux.h"
 
 #define WLAN_TXQ_SLOTS 64
+
+/*
+ * The transmit-queue stop/wake pair.  mac80211's real ieee80211_stop_queues /
+ * ieee80211_wake_queues drive the driver's queue state and, on the wake, the
+ * reason to schedule transmission again.  rtl8xxxu uses the pair as its
+ * backpressure: it stops when the tx-urb pool crosses the low water
+ * (core.c:5119) and wakes above the high water (core.c:5139).  The empty
+ * stubs this replaces swallowed both halves, so the driver's own protection
+ * never reached the producer and the pool ran dry ("Unable to allocate tx
+ * urb", measured on the board 2026-10-31 in both the ko and the RTOS arms).
+ */
+static void
+wlan_tx_wake_work(struct work_struct *work)
+{
+	struct wlan_linux_hw *w =
+	    container_of(work, struct wlan_linux_hw, tx_wake_work);
+
+	w->tx_wakes++;
+	if (w->tx_wake_cb != NULL)
+		w->tx_wake_cb(w->tx_wake_arg);
+}
+
+void
+wlan_tx_wake_init(struct wlan_linux_hw *w)
+{
+
+	INIT_WORK(&w->tx_wake_work, wlan_tx_wake_work);
+}
+
+void
+wlan_tx_wake_set_cb(struct ieee80211_hw *hw, void (*cb)(void *arg), void *arg)
+{
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+
+	if (w == NULL)
+		return;
+	w->tx_wake_cb = cb;
+	w->tx_wake_arg = arg;
+}
+
+int
+wlan_tx_queue_stopped(struct ieee80211_hw *hw)
+{
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+
+	return w != NULL && w->queue_stopped;
+}
 
 struct wlan_txq_slot {
 	struct ieee80211_txq *txq;
@@ -167,18 +215,40 @@ void ieee80211_txq_schedule_start(struct ieee80211_hw *hw, u8 ac)
 
 void ieee80211_wake_queues(struct ieee80211_hw *hw)
 {
-	(void)hw;
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+
+	if (w == NULL)
+		return;
+	/*
+	 * Clearing the stop is only half of the pair: the frames the stop held
+	 * back are the bridge's, and the bridge must be told to drain.  The
+	 * driver calls this from its transmit completion (under priv->tx_urb_lock,
+	 * a spinlock), where the bridge serializer cannot be taken - defer the
+	 * delivery to the module workqueue, the same rule the receive path uses.
+	 * The work's pending flag coalesces repeated wakes.
+	 */
+	w->queue_stopped = 0;
+	schedule_work(&w->tx_wake_work);
 }
 
 void ieee80211_stop_queues(struct ieee80211_hw *hw)
 {
-	(void)hw;
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+
+	if (w != NULL)
+		w->queue_stopped = 1;
 }
 
 /*
  * mac80211's helper for drivers that do not implement wake_tx_queue: drain
  * the txq and call .tx.  iwlwifi implements wake_tx_queue and calls
  * ieee80211_tx_dequeue itself; this is here for the other arms / closure.
+ *
+ * The queue-stop gate: this entry is the substitute's enqueue path, not the
+ * driver's queue wake.  A stopped queue keeps the frame in its txq until the
+ * driver's own wake (ieee80211_wake_queues above) re-enters; draining it now
+ * would hand the driver another frame while it has no room - the exact
+ * defect the board measured.
  */
 void ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
     struct ieee80211_txq *txq)
@@ -189,7 +259,10 @@ void ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
 	if (w == NULL || w->ops == NULL || w->ops->tx == NULL) {
 		return;
 	}
-	while ((skb = ieee80211_tx_dequeue(hw, txq)) != NULL) {
+	if (w->queue_stopped)
+		return;
+	while (!w->queue_stopped &&
+	    (skb = ieee80211_tx_dequeue(hw, txq)) != NULL) {
 		struct ieee80211_tx_control control = {
 			.sta = txq->sta,
 		};

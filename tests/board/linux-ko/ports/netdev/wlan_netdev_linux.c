@@ -38,8 +38,17 @@
 
 #include <wlan_bridge.h>
 
+#include <port/port.h>
+
 #include "wlan_linux.h"
 #include "wlan_netdev.h"
+
+/*
+ * The high-water mark: at the cap the device stops its queue and tells the
+ * stack to come back (NETDEV_TX_BUSY) instead of dropping frames on the floor.
+ * The low-water wake is what reopens it once the work has caught up.
+ */
+#define WLAN_NETDEV_TX_LOW	(WLAN_NETDEV_TX_MAX - 64)
 
 static void wlan_netdev_tx_work(struct work_struct *work)
 {
@@ -48,17 +57,34 @@ static void wlan_netdev_tx_work(struct work_struct *work)
 	struct sk_buff *skb;
 	int rc;
 
+	/*
+	 * The bridge takes its serializer around every driver entry; this work
+	 * is one of them (the RTOS netif's link_output takes it the same way).
+	 * It also keeps the drain from racing the driver's queue wake, which
+	 * arrives as a second drain path on its own work.
+	 */
+	wlan_port_serializer_lock();
 	while ((skb = skb_dequeue(&wn->txq)) != NULL) {
 		rc = wlan_bridge_tx_raw(skb->data, skb->len);
 		if (rc < 0) {
-			dev->stats.tx_errors++;
-		} else {
-			dev->stats.tx_packets++;
-			dev->stats.tx_bytes += skb->len;
+			/*
+			 * Not a drop: the bridge's send queue is full, so the
+			 * frame goes back to the head and the device queue stays
+			 * stopped until the wake.  The stack already has the
+			 * NETDEV_TX_BUSY contract; this is the same answer one
+			 * layer up.
+			 */
+			skb_queue_head(&wn->txq, skb);
+			break;
 		}
+		dev->stats.tx_packets++;
+		dev->stats.tx_bytes += skb->len;
 		dev_kfree_skb(skb);
 	}
-	netif_wake_queue(dev);
+	wlan_port_serializer_unlock();
+	if (skb_queue_len(&wn->txq) < WLAN_NETDEV_TX_LOW ||
+	    skb_queue_empty(&wn->txq))
+		netif_wake_queue(dev);
 }
 
 static netdev_tx_t wlan_netdev_start_xmit(struct sk_buff *skb,
@@ -75,9 +101,13 @@ static netdev_tx_t wlan_netdev_start_xmit(struct sk_buff *skb,
 	spin_lock_irqsave(&wn->tx_lock, flags);
 	if (skb_queue_len(&wn->txq) >= WLAN_NETDEV_TX_MAX) {
 		spin_unlock_irqrestore(&wn->tx_lock, flags);
-		dev->stats.tx_dropped++;
-		dev_kfree_skb(skb);
-		return NETDEV_TX_OK;
+		/*
+		 * Backpressure, not a drop: stop the queue and let the kernel
+		 * requeue the frame (dev_queue_xmit handles NETDEV_TX_BUSY by
+		 * stopping the queue it found busy and retrying later).
+		 */
+		netif_stop_queue(dev);
+		return NETDEV_TX_BUSY;
 	}
 	skb_queue_tail(&wn->txq, skb);
 	spin_unlock_irqrestore(&wn->tx_lock, flags);
@@ -178,6 +208,17 @@ int wlan_netdev_create(struct ieee80211_hw *hw)
 struct net_device *wlan_netdev_get(void)
 {
 	return wlan_netdev;
+}
+
+void wlan_netdev_tx_kick(void)
+{
+	struct net_device *dev = wlan_netdev;
+	struct wlan_netdev *wn;
+
+	if (dev == NULL)
+		return;
+	wn = netdev_priv(dev);
+	schedule_work(&wn->tx_work);
 }
 
 void wlan_netdev_destroy(void)
