@@ -155,17 +155,25 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
 - Setting coalescing at boot does not reproduce the runtime result (0.35-7.5%
   loss at the 350k arm with the boot-time setting vs 0.001% at runtime); the
   mechanism is unresolved.  Use the runtime sequence.
-- TCP is not accepted yet.  First measurements (2026-11-01, netio `-t -b 1440`,
-  same client): wired board-to-peer 33.51 MB/s on the RTOS arm against
-  94.21 MB/s on Linux, while the peer-to-board direction ran at 41 KB/s on the
-  RTOS arm (Linux: 111.91 MB/s).  The board's own log separates the two: the
-  c2s phase ended after 256 packets (`netio: tcp rx done pkts=256`) and the
-  s2c phase then ran 252,972 packets in 6 s (31.5 MB/s), so **the board's TX is
-  healthy in this cell** - the client was throttled while sending.  This is not
-  the K2-15 high-OPP TX stall (that one ends in `tx_drop`/`EQOS_ERROR_BUSY`
-  with TX stopping); it is the TCP receive side or the netio c2s phase
-  boundary.  Reproduced 2/2.  Next: log `recv()` return values and the lwIP
-  window during c2s, and cross-check with an independent TCP instrument.
+- TCP is still not accepted, but the receive-direction collapse now has a
+  mechanism and a measured fix that is blocked on a different defect.  The
+  peer-to-board direction ran at 33 kB/s while the board's window stayed wide
+  open (`wnd=131072`); the stack refused segments (`tcp.drop` /
+  `mib2.tcpinerrs`) and only re-offered them from the 250 ms fast timer,
+  because the whole receive burst runs inside the driver's RX thread
+  (`LWIP_TCPIP_CORE_LOCKING_INPUT`) and the socket reader cannot drain until
+  it ends - the socket's receive mailbox is one slot (lwIP's default is 0 and
+  this port rounds up).  Mailbox depth only scales the trickle (16 slots
+  163 kB/s, 64 slots 511 kB/s).  Putting input back on the tcpip thread
+  measured **40.7/40.8 MB/s in two boots with the UDP cells unchanged**
+  (114.0 MB/s, 0% loss), but at that rate the zero-copy receive bridge trips
+  lwIP's `pbuf_free: p->ref > 0` assert within tens of milliseconds; the
+  copying bridge is stable at 36 MB/s and costs the UDP direction 26% loss.
+  Until the zero-copy slot lifecycle is fixed the default arm keeps the old
+  shape; the arms are `configs/net-netio-raw-tx256-tcp-input.mk` and
+  `...-tcp-nozc.mk`.
+- The board-to-peer TCP direction is unchanged by that work and still runs
+  behind the UDP numbers (35-45 MB/s against 105 MB/s UDP).
 - The RX ring is 128 descriptors; a deeper ring is untested for pps.  A
   256-descriptor ring measured -3% in the 1440 B path earlier, so it is not
   assumed to be free.
