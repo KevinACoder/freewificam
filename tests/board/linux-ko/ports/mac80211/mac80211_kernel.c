@@ -25,12 +25,14 @@
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/skbuff.h>
+#include <linux/ktime.h>
 #include <linux/etherdevice.h>
 #include <linux/workqueue.h>
 #include <net/mac80211.h>
 #include <net/cfg80211.h>
 
 #include "wlan_linux.h"
+#include "wlan_ko_prof.h"
 
 /*
  * wiphy_new_nm() wants a cfg80211_ops table. The kernelmod line never registers with
@@ -265,7 +267,19 @@ static void wlan_rx_work(struct work_struct *work)
 	struct sk_buff *skb;
 
 	while ((skb = skb_dequeue(&w->rx_q)) != NULL) {
+		u64 prof_t0 = wlan_ko_prof_begin();
+
+#ifdef CONFIG_WLAN_KO_PROF
+		if (ktime_to_ns(skb->tstamp) != 0) {
+			wlan_ko_prof_value(WLAN_KO_PROF_RX_DEFER,
+			    ktime_get_ns() - ktime_to_ns(skb->tstamp));
+			skb->tstamp = 0;
+		}
+#endif
 		wlan_adapter_rx(&w->hw, skb);
+		wlan_ko_prof_depth(WLAN_KO_PROF_Q_RX, -1);
+		wlan_ko_prof_event(WLAN_KO_PROF_EVT_RX_WORK);
+		wlan_ko_prof_end(WLAN_KO_PROF_RX_WORK, prof_t0);
 	}
 }
 
@@ -275,8 +289,12 @@ static void wlan_tx_work(struct work_struct *work)
 	struct sk_buff *skb;
 
 	while ((skb = skb_dequeue(&w->tx_q)) != NULL) {
+		u64 prof_t0 = wlan_ko_prof_begin();
+
 		wlan_adapter_tx_complete(&w->hw, skb);
 		dev_kfree_skb_any(skb);
+		wlan_ko_prof_depth(WLAN_KO_PROF_Q_TX_STATUS, -1);
+		wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS_WORK, prof_t0);
 	}
 }
 
@@ -290,6 +308,7 @@ static void wlan_scan_work(struct work_struct *work)
 void ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct wlan_linux_hw *w = wlan_hw_of(hw);
+	u64 prof_t0 = wlan_ko_prof_begin();
 
 	/*
 	 * The driver that declares RX_INCLUDES_FCS hands up the four FCS bytes
@@ -300,11 +319,20 @@ void ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (test_bit(IEEE80211_HW_RX_INCLUDES_FCS, hw->flags)) {
 		if (skb->len < 4) {
 			dev_kfree_skb_any(skb);
+			wlan_ko_prof_event(WLAN_KO_PROF_EVT_RX_DROP);
+			wlan_ko_prof_end(WLAN_KO_PROF_RX_IRQ, prof_t0);
 			return;
 		}
 		skb_trim(skb, skb->len - 4);
 	}
+#ifdef CONFIG_WLAN_KO_PROF
+	if (prof_t0)
+		skb->tstamp = ns_to_ktime(prof_t0);
+#endif
 	skb_queue_tail(&w->rx_q, skb);
+	wlan_ko_prof_depth(WLAN_KO_PROF_Q_RX, 1);
+	wlan_ko_prof_event(WLAN_KO_PROF_EVT_RX_FRAME);
+	wlan_ko_prof_end(WLAN_KO_PROF_RX_IRQ, prof_t0);
 	queue_work(w->wq, &w->rx_work);
 }
 
@@ -331,8 +359,12 @@ void ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
 void ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct wlan_linux_hw *w = wlan_hw_of(hw);
+	u64 prof_t0 = wlan_ko_prof_begin();
 
 	skb_queue_tail(&w->tx_q, skb);
+	wlan_ko_prof_depth(WLAN_KO_PROF_Q_TX_STATUS, 1);
+	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_STATUS);
+	wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS, prof_t0);
 	queue_work(w->wq, &w->tx_work);
 }
 

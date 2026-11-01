@@ -27,6 +27,7 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
+#include <linux/ktime.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
 #include <linux/if_ether.h>
@@ -42,6 +43,7 @@
 
 #include "wlan_linux.h"
 #include "wlan_netdev.h"
+#include "wlan_ko_prof.h"
 
 /*
  * The high-water mark: at the cap the device stops its queue and tells the
@@ -65,6 +67,15 @@ static void wlan_netdev_tx_work(struct work_struct *work)
 	 */
 	wlan_port_serializer_lock();
 	while ((skb = skb_dequeue(&wn->txq)) != NULL) {
+		u64 prof_t0 = wlan_ko_prof_begin();
+
+#ifdef CONFIG_WLAN_KO_PROF
+		if (ktime_to_ns(skb->tstamp) != 0) {
+			wlan_ko_prof_value(WLAN_KO_PROF_TX_DEFER,
+			    ktime_get_ns() - ktime_to_ns(skb->tstamp));
+			skb->tstamp = 0;
+		}
+#endif
 		rc = wlan_bridge_tx_raw(skb->data, skb->len);
 		if (rc < 0) {
 			/*
@@ -75,8 +86,13 @@ static void wlan_netdev_tx_work(struct work_struct *work)
 			 * layer up.
 			 */
 			skb_queue_head(&wn->txq, skb);
+			wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_BRIDGE_FULL);
+			wlan_ko_prof_end(WLAN_KO_PROF_TX_WORK, prof_t0);
 			break;
 		}
+		wlan_ko_prof_depth(WLAN_KO_PROF_Q_NETDEV_TX, -1);
+		wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_WORK);
+		wlan_ko_prof_end(WLAN_KO_PROF_TX_WORK, prof_t0);
 		dev->stats.tx_packets++;
 		dev->stats.tx_bytes += skb->len;
 		dev_kfree_skb(skb);
@@ -91,11 +107,14 @@ static netdev_tx_t wlan_netdev_start_xmit(struct sk_buff *skb,
     struct net_device *dev)
 {
 	struct wlan_netdev *wn = netdev_priv(dev);
+	u64 prof_t0 = wlan_ko_prof_begin();
 	unsigned long flags;
 
 	if (skb->len > 1600) {
 		dev->stats.tx_dropped++;
 		dev_kfree_skb(skb);
+		wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_LEN_DROP);
+		wlan_ko_prof_end(WLAN_KO_PROF_TX_XMIT, prof_t0);
 		return NETDEV_TX_OK;
 	}
 	spin_lock_irqsave(&wn->tx_lock, flags);
@@ -107,10 +126,19 @@ static netdev_tx_t wlan_netdev_start_xmit(struct sk_buff *skb,
 		 * stopping the queue it found busy and retrying later).
 		 */
 		netif_stop_queue(dev);
+		wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_BUSY);
+		wlan_ko_prof_end(WLAN_KO_PROF_TX_XMIT, prof_t0);
 		return NETDEV_TX_BUSY;
 	}
 	skb_queue_tail(&wn->txq, skb);
 	spin_unlock_irqrestore(&wn->tx_lock, flags);
+#ifdef CONFIG_WLAN_KO_PROF
+	if (prof_t0)
+		skb->tstamp = ns_to_ktime(prof_t0);
+#endif
+	wlan_ko_prof_depth(WLAN_KO_PROF_Q_NETDEV_TX, 1);
+	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_ENQ);
+	wlan_ko_prof_end(WLAN_KO_PROF_TX_XMIT, prof_t0);
 	schedule_work(&wn->tx_work);
 	return NETDEV_TX_OK;
 }
@@ -119,10 +147,13 @@ static void wlan_netdev_rx(const uint8_t *frame, size_t len, void *arg)
 {
 	struct net_device *dev = arg;
 	struct sk_buff *skb;
+	u64 prof_t0 = wlan_ko_prof_begin();
 
 	skb = dev_alloc_skb(len + 2);
 	if (skb == NULL) {
 		dev->stats.rx_dropped++;
+		wlan_ko_prof_event(WLAN_KO_PROF_EVT_RX_DROP);
+		wlan_ko_prof_end(WLAN_KO_PROF_RX_NETDEV, prof_t0);
 		return;
 	}
 	skb_reserve(skb, 2);
@@ -132,6 +163,7 @@ static void wlan_netdev_rx(const uint8_t *frame, size_t len, void *arg)
 	dev->stats.rx_packets++;
 	dev->stats.rx_bytes += len;
 	netif_rx(skb);
+	wlan_ko_prof_end(WLAN_KO_PROF_RX_NETDEV, prof_t0);
 }
 
 static int wlan_netdev_open(struct net_device *dev)

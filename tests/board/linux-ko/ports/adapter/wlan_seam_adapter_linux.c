@@ -27,6 +27,18 @@
 
 #include "wlan_linux.h"
 #include "../netdev/wlan_netdev.h"
+#include "wlan_ko_prof.h"
+
+/*
+ * LAB PROBE (W3-01 D3): the substitute stack uploads the station with legacy
+ * rates only; mac80211 fills ht_cap from the association response and the
+ * driver derives its rate mask from it.  With force_ht=1 the upload advertises
+ * HT20 1SS MCS0-7 + SGI to the driver, so the chip's rate control may leave
+ * legacy 24 Mbit/s.  One variable, load-time, default off.
+ */
+static bool force_ht;
+module_param_named(force_ht, force_ht, bool, 0644);
+MODULE_PARM_DESC(force_ht, "1 = advertise HT20 1SS MCS0-7 to the driver (lab probe)");
 
 /*
  * Transmit diagnosis for the 8851BU data-plane round: the same frame, in the
@@ -536,11 +548,13 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 	struct ieee80211_tx_control control = {};
 	struct ieee80211_tx_info *info;
 	struct sk_buff *skb;
+	u64 prof_t0 = wlan_ko_prof_begin();
 
 	(void)hw_crypto;
 	(void)pairwise;
 	(void)key_idx;
 	if (w->ops->tx == NULL || frame == NULL || len == 0) {
+		wlan_ko_prof_end(WLAN_KO_PROF_TX_SEAM, prof_t0);
 		return -EINVAL;
 	}
 	/*
@@ -576,6 +590,7 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 	}
 	skb = dev_alloc_skb(len + hw->extra_tx_headroom);
 	if (skb == NULL) {
+		wlan_ko_prof_end(WLAN_KO_PROF_TX_SEAM, prof_t0);
 		return -ENOMEM;
 	}
 	skb_reserve(skb, hw->extra_tx_headroom);
@@ -691,10 +706,14 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 		if (txq != NULL && wlan_txq_enqueue(txq, skb) == 0) {
 			ieee80211_schedule_txq(hw, txq);
 			w->ops->wake_tx_queue(hw, txq);
+			wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_SEAM);
+			wlan_ko_prof_end(WLAN_KO_PROF_TX_SEAM, prof_t0);
 			return 0;
 		}
 	}
 	w->ops->tx(hw, &control, skb);
+	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_SEAM);
+	wlan_ko_prof_end(WLAN_KO_PROF_TX_SEAM, prof_t0);
 	return 0;
 }
 
@@ -752,6 +771,14 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	 * setup would turn it into a 3-bit 7).
 	 */
 	sta->deflink.rx_nss = 1;
+	if (force_ht) {
+		sta->deflink.ht_cap.ht_supported = true;
+		sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20;
+		sta->deflink.ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
+		sta->deflink.ht_cap.ampdu_density = IEEE80211_HT_MPDU_DENSITY_NONE;
+		sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
+		sta->deflink.ht_cap.mcs.rx_highest = cpu_to_le16(72);
+	}
 	/*
 	 * mac80211 leaves SMPS in OFF for an associated station; mvm's
 	 * sta_send_to_fw switch WARNs on AUTOMATIC/NUM_MODES (mvm/sta.c:195).
