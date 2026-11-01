@@ -162,6 +162,40 @@ static uint32_t rand32(void)
  *
  * Nothing here sits on the data path: it is called at cell boundaries only.
  * ------------------------------------------------------------------------- */
+/* K2-14: a spot sample of the CPU clock, taken from inside the same window
+ * the cell ratio (`netio: cpu ... mhz_x100`) is drawn from.
+ *
+ * The per-cell ratio is cycles over wall time, so it is only a frequency if
+ * the counter advances with the core clock and the wall clock runs at 24 MHz
+ * throughout.  The busy-spin probe at case start (`netio: cpu tag=spin`) says
+ * the 1.992 GHz request lands at 1.689 GHz, while the uplink cell ratio of the
+ * same boot reads 2.09-2.39 GHz - two numbers for one fixed OPP, which is the
+ * question this line exists to settle: a spot sample taken *inside* the burst
+ * says whether the core really ran faster there, or whether the ratio is an
+ * accounting artifact.  The sample is a 1 ms busy spin, never an idle delay,
+ * so a stopped counter cannot hide in it. */
+static void emit_cpu_spot(const char *tag)
+{
+	uint32_t t0;
+	uint32_t t1;
+	uint64_t c0;
+	uint64_t c1;
+
+	if (!net_prof_cpu_probe_ok())
+		return;
+	t0 = (uint32_t)gtimer_count_get();
+	c0 = net_prof_cpu_cycles();
+	do {
+		t1 = (uint32_t)gtimer_count_get();
+	} while ((uint32_t)(t1 - t0) < (24u * 1000u));
+	c1 = net_prof_cpu_cycles();
+	MDK_ANCHOR("netio: cpuspot tag=%s mhz_x100=%lu ticks=%lu cycles=%lu\n",
+		   tag,
+		   (unsigned long)(((c1 - c0) * 24ull * 100ull) /
+				   (uint32_t)(t1 - t0)),
+		   (unsigned long)(t1 - t0), (unsigned long)(c1 - c0));
+}
+
 static void emit_layer_counters(const char *tag)
 {
 #if NETIO_GMAC
@@ -333,6 +367,7 @@ static void emit_layer_counters(const char *tag)
 		   "tcp_retrans=%lu\n",
 		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans);
 #endif
+	emit_cpu_spot(tag);
 }
 
 static void init_buffer(uint8_t *buf, int32_t size)
@@ -1432,6 +1467,80 @@ static int netio_case_run(void)
 		} else {
 			CASE_ANCHOR("netio: cpu probe ok=0 (PMU not accessible)\n");
 		}
+	}
+
+	/* K2-14, PMU question: does the cycle counter keep counting while the
+	 * core sits in WFI?  Everything the case reports about "effective MHz"
+	 * is cycles over wall time, so a counter that runs through a clock-gated
+	 * sleep inflates every window that contains idle time - and the uplink
+	 * cell is exactly such a window once its transmit ring stalls.
+	 *
+	 * Two windows of the same wall length, one variable: `busy` spins for
+	 * the whole 100 ms, `sleepy` spins for the first and last 10 ms and
+	 * sleeps 90 ms in between (osDelay blocks, so the idle task runs and the
+	 * core enters WFI).  A cycle counter tied to the core clock gives
+	 * sleepy = busy * 20/110; a counter that runs while the core is gated
+	 * gives sleepy = busy; a counter faster than the core gives more. */
+	if (net_prof_cpu_probe_ok()) {
+		uint32_t t0;
+		uint32_t t1;
+		uint64_t c0;
+		uint64_t c1;
+
+		t0 = (uint32_t)gtimer_count_get();
+		c0 = net_prof_cpu_cycles();
+		do {
+			t1 = (uint32_t)gtimer_count_get();
+		} while ((uint32_t)(t1 - t0) < (24u * 100000u));
+		c1 = net_prof_cpu_cycles();
+		MDK_ANCHOR("netio: cpumix tag=busy mhz_x100=%lu ticks=%lu "
+			   "cycles=%lu\n",
+			   (unsigned long)(((c1 - c0) * 24ull * 100ull) /
+					   (uint32_t)(t1 - t0)),
+			   (unsigned long)(t1 - t0), (unsigned long)(c1 - c0));
+
+		t0 = (uint32_t)gtimer_count_get();
+		c0 = net_prof_cpu_cycles();
+		do {
+			t1 = (uint32_t)gtimer_count_get();
+		} while ((uint32_t)(t1 - t0) < (24u * 10000u));
+		osDelay(90u);
+		{
+			uint32_t t2 = (uint32_t)gtimer_count_get();
+
+			do {
+				t1 = (uint32_t)gtimer_count_get();
+			} while ((uint32_t)(t1 - t2) < (24u * 10000u));
+		}
+		c1 = net_prof_cpu_cycles();
+		MDK_ANCHOR("netio: cpumix tag=sleepy mhz_x100=%lu ticks=%lu "
+			   "cycles=%lu\n",
+			   (unsigned long)(((c1 - c0) * 24ull * 100ull) /
+					   (uint32_t)(t1 - t0)),
+			   (unsigned long)(t1 - t0), (unsigned long)(c1 - c0));
+
+		/* The same question asked with an instruction instead of a
+		 * scheduler call: 100 WFI executions, woken by the 1 ms tick.
+		 * If the cycle counter is tied to the core's gated clock this
+		 * window accumulates almost nothing; if it is in an always-on
+		 * domain it accumulates the full wall time, and then every
+		 * "effective MHz" drawn from a window that contains idle time
+		 * is a wall-clock ratio wearing a frequency's clothes. */
+		t0 = (uint32_t)gtimer_count_get();
+		c0 = net_prof_cpu_cycles();
+		{
+			uint32_t i;
+
+			for (i = 0u; i < 100u; i++)
+				__asm__ volatile("wfi");
+		}
+		c1 = net_prof_cpu_cycles();
+		t1 = (uint32_t)gtimer_count_get();
+		MDK_ANCHOR("netio: cpumix tag=wfi mhz_x100=%lu ticks=%lu "
+			   "cycles=%lu\n",
+			   (unsigned long)(((c1 - c0) * 24ull * 100ull) /
+					   (uint32_t)(t1 - t0)),
+			   (unsigned long)(t1 - t0), (unsigned long)(c1 - c0));
 	}
 
 	io.buf = &g_io_buf[0];
