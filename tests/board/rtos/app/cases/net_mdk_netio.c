@@ -1449,6 +1449,7 @@ static int netio_case_run(void)
 	 * sample is a 1 ms busy spin, not an idle delay, so the reported MHz is
 	 * the frequency the core actually runs at (WFI would under-report). */
 	emit_cpu_freq_line();
+#if NET_PROF_CPU_PROBE
 	{
 		uint32_t pt0;
 		uint32_t pt1;
@@ -1470,6 +1471,7 @@ static int netio_case_run(void)
 			CASE_ANCHOR("netio: cpu probe ok=0 (PMU not accessible)\n");
 		}
 	}
+#endif /* NET_PROF_CPU_PROBE */
 
 	/* K2-14, PMU question: does the cycle counter keep counting while the
 	 * core sits in WFI?  Everything the case reports about "effective MHz"

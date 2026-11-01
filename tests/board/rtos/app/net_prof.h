@@ -122,7 +122,7 @@ void net_prof_report(const char *tag, const struct net_prof_snap *a,
  * target (12.8 us/frame) is only reachable if the RTOS and the Linux
  * reference run at the same clock, the cell also needs the CPU's own count.
  *
- * The probe is optional and reported, never assumed: CONFIG_CPU_PROBE=0
+ * The probe is optional, reported, and **off by default**: CONFIG_CPU_PROBE=1
  * compiles it out, and a board that cannot access PMCCNTR says so once at
  * boot instead of silently reporting zero cycles.
  *
@@ -131,6 +131,15 @@ void net_prof_report(const char *tag, const struct net_prof_snap *a,
  * net_prof_cpu_cycles() returns 0 in that case, so callers can print
  * "cycles unknown" rather than a fabricated number.
  */
+/* Compile-time availability of the probe (off unless CONFIG_CPU_PROBE=1).
+ * The case uses it to leave the whole block out of a default build instead of
+ * printing "PMU not accessible" on every boot for a counter nobody wants. */
+#if defined(__aarch64__) && defined(CONFIG_CPU_PROBE) && CONFIG_CPU_PROBE
+#define NET_PROF_CPU_PROBE 1
+#else
+#define NET_PROF_CPU_PROBE 0
+#endif
+
 int net_prof_cpu_probe_init(void);
 uint64_t net_prof_cpu_cycles(void);
 int net_prof_cpu_probe_ok(void);

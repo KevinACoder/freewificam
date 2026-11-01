@@ -139,20 +139,18 @@ void net_prof_report(const char *tag, const struct net_prof_snap *a,
 	}
 }
 
-/* --- measurement clock: PMCCNTR_EL0 ---------------------------------------
+/* --- measurement clock: PMCCNTR_EL0 (off unless an arm asks) --------------
  *
- * See net_prof.h for why a cell carries cycles as well as microseconds. The
- * probe is deliberately small and self-checking: enable the cycle counter,
- * read PMCR back, and only claim success when the enable bit stuck. A core
- * whose EL2 traps PMU accesses (HCR_EL2.TPM) faults here instead of returning
- * a wrong number, which is why the case prints its own anchor immediately
- * before calling this and why CONFIG_CPU_PROBE exists as the off switch. */
-#if defined(__aarch64__) && (!defined(CONFIG_CPU_PROBE) || CONFIG_CPU_PROBE)
-#define NET_PROF_CPU_PROBE 1
-#else
-#define NET_PROF_CPU_PROBE 0
-#endif
-
+ * PMCCNTR is tied to the core clock, so it is the wrong ruler for this bench
+ * (user ruling, 2026-11-01): the core's clock is not the number anyone states
+ * it is (a 1.992 GHz request is delivered as 1.689 GHz, the boot OPP is
+ * 816 MHz), and the counter does not advance while the core sits in a
+ * clock-gated sleep - measured on this board as 71,275 cycles for 100 WFI
+ * across 100.0 ms of wall time against 81,600,027 for the same window
+ * spinning.  A cycle count is still a legitimate raw number for a pure spin
+ * window, so the code stays for the arms that deliberately ask for it; the
+ * default is now off, and no cell derives a frequency from it any more.
+ * CONFIG_CPU_PROBE=1 turns it back on. */
 static int g_cpu_probe_ok;
 
 #if NET_PROF_CPU_PROBE
