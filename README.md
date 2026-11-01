@@ -122,6 +122,19 @@ board, the same link and the same sender.  Full method, counters and limits:
 | 64 B zero-loss pps (T0), ~1.69 GHz | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
 | 64 B T0, 816 MHz | 197.5k | 100k (reference only) |
 
+Wireless 8188EU (2.4 GHz, UDP 1440 downlink, zero loss; same board, same card,
+AR9271 AP; see [docs/WIFI-BENCH.md](docs/WIFI-BENCH.md)):
+
+| Test | freewificam | Linux reference |
+|---|---|---|
+| 802.11g legacy, 54 Mbit/s | 18.62 / 18.72 / 18.98 Mbit/s | 18.05 / 18.06 / 18.19 Mbit/s |
+| HT20, 72.2 Mbit/s MCS7 short GI | 21.50 / 20.03 Mbit/s | 49.83 / 51.67 / 51.92 Mbit/s |
+
+At the lowest protocol the two stacks are equal (per-frame data 238 us against
+239 us, control 28 us against 28 us): the shim carries no per-frame tax. The
+HT gap is a missing feature - no block-ack session, so no A-MPDU (0 BlockAcks
+and one ACK per frame against 3,523 BlockAcks on the reference).
+
 ## Wireless bench
 
 A wireless number is only as good as the access point under it.  Before taking

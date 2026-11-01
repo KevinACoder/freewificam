@@ -140,3 +140,37 @@ This is the environment gate in front of everything else: an unproven bench
 makes every later column - airtime, retries, gap, throughput - unattributable.
 It pairs with `docs/NET-TESTING.md` for the wired port (same "prove the bench
 first" idea).
+
+## 5. Wireless numbers on this bench (8188EU, 2.4 GHz, UDP 1440 downlink)
+
+Measured with the bench above (AR9271 as AP, MT7921AU as monitor, channel 5,
+1440 B UDP, zero loss in every cell). "Linux reference" is the same board and
+the same card running the in-tree realtek driver on mac80211; "linuxko" is the
+same driver on the net80211 shim.
+
+| PHY mode | Linux reference | linuxko | ratio |
+|---|---|---|---|
+| 802.11g legacy, 54 Mbit/s | 18.05 / 18.06 / 18.19 Mbit/s | 18.62 / 18.72 / 18.98 Mbit/s | 1.04x |
+| HT20, 72.2 Mbit/s MCS7 short GI | 49.83 / 51.67 / 51.92 Mbit/s | 21.50 / 20.03 Mbit/s | 2.46x |
+
+The legacy row is the important one: **at the lowest protocol the two stacks are
+equal**. Per frame the accounts overlap column by column: data 239.1-239.8 us
+against 238.1-238.5 us (0.7% apart), control 28.0 us against 28.0 us, gap of the
+same order. That is what "aligned baseline" means here, and it says the
+net80211 shim is not intrinsically slower than mac80211 - a shim that pays a
+per-frame tax could not land within 1% of the reference.
+
+The HT row is where the difference lives, and it is a missing feature rather
+than a stack tax. Per frame the reference spends data 194 us + control 2 us +
+gap 0-79 us; linuxko spends data 202 us + control 28 us + gap 289-309 us. On
+the air the same cells show the reference with 3,523 BlockAcks and 37,620
+frames carrying radiotap A-MPDU marks, while linuxko shows 0 and 0 with 18,475
+plain ACKs: the shim never establishes a block-ack session, so every frame is
+sent alone and waits for its own ACK.
+
+Consequence for the work list: the fix is to implement the block-ack path in
+the shim (ADDBA request/response and a reorder buffer on receive, the transmit
+side for the uplink), not to tune the stack or the AP. The acceptance
+fingerprints are on the air, not in a log: BlockAck count greater than zero,
+A-MPDU marked frames greater than zero, control time at or below 3 us per
+frame, gap at or below 80 us.
