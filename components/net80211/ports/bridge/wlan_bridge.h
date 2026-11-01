@@ -186,6 +186,15 @@ struct wlan_bridge_counters {
 	unsigned int	rx_ccmpmic;	/* stack: CCMP MIC mismatch */
 	unsigned int	tx_nodefkey;	/* stack: no transmit key to seal with */
 	unsigned int	tx_errors;	/* interface output errors */
+	/* The interface transmit queue's depth and the driver's backpressure
+	 * answer at snapshot time (wlan_bridge_stats only; not accumulated):
+	 * `txq_len` is how many frames are waiting for the driver, and
+	 * `tx_stopped` is non-zero when the driver's queue is stopped, i.e. the
+	 * wake (ieee80211_wake_queues -> seam wake -> wlan_bridge_tx_wake) has
+	 * not arrived yet.  A rising txq_len with tx_stopped set and tx_wakes
+	 * frozen is the "driver stopped its queue and nothing woke it" shape. */
+	unsigned int	txq_len;
+	unsigned int	tx_stopped;
 	uint32_t	tuned_freq;
 	int		attached;
 };
@@ -404,6 +413,34 @@ void	wlan_bridge_down(void);
 int	wlan_bridge_hwaddr(uint8_t addr[6]);
 void	*wlan_bridge_ic(void);
 void	wlan_bridge_stats(struct wlan_bridge_counters *out);
+
+/*
+ * The port's observation snapshot (see struct wlan_seam_port_obs): what the
+ * adapter's transport layer is doing, for a watchdog on the lwIP side.  The
+ * bridge only forwards; with a port whose seam has no port_obs, or before
+ * attach, the snapshot comes back zeroed.  Safe from any thread, no locks.
+ */
+struct wlan_seam_port_obs;
+void	wlan_bridge_port_obs(struct wlan_seam_port_obs *out);
+unsigned int wlan_bridge_port_probe(unsigned int which);
+void	wlan_bridge_port_stall_dump(void);
+void	wlan_bridge_port_poll(void);
+
+/*
+ * The port serializer's state at snapshot time (the splnet() replacement every
+ * stack entry takes).  `depth` is the current owner's hold count (0 = free),
+ * `owner` the holder's thread name (NULL when free or unnamed) and `held_ms`
+ * how long the outermost take has been held.  A frozen data path with depth
+ * != 0 names the layer that is stuck; one with depth == 0 puts the fault
+ * somewhere that is not waiting on this lock.  Available only when the port
+ * was built with CONFIG_NET_WATCH.
+ */
+struct wlan_bridge_lock_obs {
+	unsigned int	depth;
+	const char	*owner;
+	unsigned int	held_ms;
+};
+void	wlan_bridge_lock_obs(struct wlan_bridge_lock_obs *out);
 
 /*
  * The presentation layer's up/down notification (port.h's wlan_port_ifops):

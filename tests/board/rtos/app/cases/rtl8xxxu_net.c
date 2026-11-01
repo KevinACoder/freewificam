@@ -212,21 +212,47 @@ eu_net_if_init(struct netif *netif)
  * TCP/IP thread (core-locked input is deferred in this build), and nothing here
  * takes the bridge's serializer or transmits.
  */
+#ifdef NET_WATCH
+/*
+ * The wedge ledger's view of this seam (net_watch.c reads both).  A frame that
+ * enters here and never leaves is the driver's receive callback being stuck in
+ * the stack side, which the ledger then blames on the bridge or on lwIP rather
+ * than on the transport; a seam that is never entered while the transport is
+ * completing transfers blames the driver's own receive path.  Both are plain
+ * stores on a path that already copies the frame, and only this image has them.
+ */
+volatile unsigned int eu_net_rx_calls;	/* frames handed over, all of them */
+volatile unsigned int eu_net_rx_stage;	/* 0 idle, 1 alloc, 2 copy, 3 input */
+#endif
+
 static void
 eu_net_rx(const uint8_t *frame, size_t len, void *arg)
 {
 	struct netif *netif = arg;
 	struct pbuf *p;
 
+#ifdef NET_WATCH
+	eu_net_rx_calls++;
+	eu_net_rx_stage = 1;
+#endif
 	if (netif == NULL || frame == NULL || len == 0u) {
 		eu_rx_fail++;
+#ifdef NET_WATCH
+		eu_net_rx_stage = 0;
+#endif
 		return;
 	}
 	p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_POOL);
 	if (p == NULL) {
 		eu_rx_fail++;
+#ifdef NET_WATCH
+		eu_net_rx_stage = 0;
+#endif
 		return;
 	}
+#ifdef NET_WATCH
+	eu_net_rx_stage = 2;
+#endif
 #if defined(EU_NET_TRACE)
 	CASE_ANCHOR("rtl8xxxu: net rx pbuf=%p ref=%u len=%u type=%02x%02x\n",
 	    (void *)p, (unsigned)p->ref, (unsigned)len,
@@ -241,7 +267,11 @@ eu_net_rx(const uint8_t *frame, size_t len, void *arg)
 		return;
 	}
 	{
-		err_t rc = netif->input(p, netif);
+		err_t rc;
+#ifdef NET_WATCH
+		eu_net_rx_stage = 3;	/* inside the stack's input call */
+#endif
+		rc = netif->input(p, netif);
 
 #if defined(EU_NET_TRACE)
 		CASE_ANCHOR("rtl8xxxu: net rx input rc=%d pbuf=%p ref=%u\n", (int)rc,
@@ -255,6 +285,9 @@ eu_net_rx(const uint8_t *frame, size_t len, void *arg)
 	}
 	eu_rx_frames++;
 	eu_rx_bytes += (unsigned)len;
+#ifdef NET_WATCH
+	eu_net_rx_stage = 0;
+#endif
 }
 
 /* --- ICMP ---------------------------------------------------------------- */

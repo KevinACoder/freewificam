@@ -57,6 +57,9 @@
 #include "generic_timer.h"
 #include "net_prof.h"
 #include "cpu_freq.h"
+#ifdef NET_WATCH
+#include "net_watch.h"
+#endif
 
 /* Two backends share this file: the GMAC one (the wired ruler) and the WLAN
  * one (rtl8xxxu_net's presentation layer over the net80211 bridge).  They
@@ -1086,6 +1089,11 @@ static void TCP_Server(void *arg)
 			continue;
 
 		MDK_ANCHOR("netio: tcp client connected\n");
+#ifdef NET_WATCH
+		/* the watchdog only calls a frozen counter set a stall while a
+		 * cell is in flight (a quiet link has quiet counters) */
+		net_watch_session(1);
+#endif
 
 		for (;;) {
 			rc = recv_data(csock, &ctl, sizeof(ctl));
@@ -1179,6 +1187,9 @@ static void TCP_Server(void *arg)
 			}
 		}
 		emit_layer_counters("tcp-end");
+#ifdef NET_WATCH
+		net_watch_session(0);
+#endif
 		lwip_close(csock);
 	}
 	lwip_close(sock);
@@ -1572,6 +1583,12 @@ static int netio_case_run(void)
 		return 1;
 	}
 
+#ifdef NET_WATCH
+	/* start the ledger before the ready line, so the run's timeline from
+	 * "ready" onward is sampled: the wedge lands one to five seconds into
+	 * the first cell, and the samples on both sides of it are the evidence */
+	net_watch_start();
+#endif
 	emit_layer_counters("boot");
 	CASE_ANCHOR("net: netio ready port=%d aux=%d buf=%u\n",
 		    NETIO_PORT, NETIO_AUXPORT, (unsigned)BUF_SIZE);

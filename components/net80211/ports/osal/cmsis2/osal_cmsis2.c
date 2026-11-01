@@ -347,15 +347,61 @@ void wlan_cv_destroy(kcondvar_t *cv)
 static kmutex_t serializer;
 static unsigned int serializer_suspended_depth;
 
+#ifdef CONFIG_NET_WATCH
+/*
+ * Observation only: when the outermost take happened, so the watchdog can say
+ * how long the stack's one serialization point has been held while the data
+ * path is frozen.  Two stores per outermost take, none per nested one.
+ */
+static volatile uint32_t serializer_held_since_ms;	/* 0 = free/unknown */
+
+static uint32_t
+osal_now_ms(void)
+{
+	uint32_t hz = (uint32_t)osKernelGetTickFreq();
+	uint64_t ticks = (uint64_t)osKernelGetTickCount();
+
+	return hz != 0u ? (uint32_t)((ticks * 1000u) / hz) : (uint32_t)ticks;
+}
+#endif
+
 void wlan_port_serializer_lock(void)
 {
+#ifdef CONFIG_NET_WATCH
+	if ((uintptr_t) MP_DEPTH(&serializer) == 0)
+		serializer_held_since_ms = osal_now_ms() | 1u;
+#endif
 	wlan_mutex_enter(&serializer);
 }
 
 void wlan_port_serializer_unlock(void)
 {
 	wlan_mutex_exit(&serializer);
+#ifdef CONFIG_NET_WATCH
+	if ((uintptr_t) MP_DEPTH(&serializer) == 0)
+		serializer_held_since_ms = 0;
+#endif
 }
+
+#ifdef CONFIG_NET_WATCH
+void
+wlan_port_serializer_state(struct wlan_port_lock_state *out)
+{
+	uint32_t since;
+
+	if (out == NULL)
+		return;
+	memset(out, 0, sizeof(*out));
+	out->depth = (unsigned int) (uintptr_t) MP_DEPTH(&serializer);
+	out->owner = out->depth != 0u ? osThreadGetName(MP_OWNER(&serializer)) : NULL;
+	since = serializer_held_since_ms;
+	if (since != 0u) {
+		uint32_t now = osal_now_ms();
+
+		out->held_ms = now >= (since & ~1u) ? now - (since & ~1u) : 0u;
+	}
+}
+#endif
 
 /* Release the serializer completely around a blocking wait and take it back
  * afterwards (the imported code assumes splnet() stays "held" across its

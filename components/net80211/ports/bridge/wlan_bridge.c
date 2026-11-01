@@ -2640,6 +2640,17 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->rx_probersp = bridge.rx_probersp;
 	out->rx_fcs_bad = bridge.rx_fcs_bad;
 	out->oversize_drops = bridge.oversize_drops;
+	/* the transmit path's live gauges: how much is waiting for the driver
+	 * and whether the driver has said "full" and not woken us yet */
+	if (bridge.ifp != NULL)
+		out->txq_len = (unsigned int)bridge.ifp->if_snd.ifq_len;
+	else
+		out->txq_len = 0;
+	if (bridge.ops != NULL && bridge.ops->queue_ready != NULL &&
+	    !bridge.ops->queue_ready(bridge.drv))
+		out->tx_stopped = 1;
+	else
+		out->tx_stopped = 0;
 	/* the stack's own discard reasons, read from the stack's counters */
 	if (bridge.ic != NULL) {
 		out->rx_chanmismatch = bridge.ic->ic_stats.is_rx_chanmismatch;
@@ -2687,6 +2698,72 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->tx_gated = bridge.tx_gated;
 	out->tx_wakes = bridge.tx_wakes;
 	out->attached = bridge.attached;
+}
+
+/*
+ * The port's observation snapshot: forwarded straight to the driver half's
+ * seam op, zeroed when the seam has no such op.  The bridge owns no state here
+ * - it is a pass-through so a watchdog on the stack side needs one header.
+ */
+#ifdef CONFIG_NET_WATCH
+/*
+ * The serializer's state, forwarded from the port layer.  The struct is
+ * restated here so the case world does not have to include the OSAL header
+ * (one more world it has no business in).
+ */
+void
+wlan_bridge_lock_obs(struct wlan_bridge_lock_obs *out)
+{
+	struct wlan_port_lock_state ls;
+
+	if (out == NULL)
+		return;
+	wlan_port_serializer_state(&ls);
+	out->depth = ls.depth;
+	out->owner = ls.owner;
+	out->held_ms = ls.held_ms;
+}
+#endif /* CONFIG_NET_WATCH */
+
+void
+wlan_bridge_port_obs(struct wlan_seam_port_obs *out)
+{
+
+	if (out == NULL)
+		return;
+	if (bridge.ops != NULL && bridge.ops->port_obs != NULL)
+		bridge.ops->port_obs(bridge.drv, out);
+	else
+		memset(out, 0, sizeof(*out));
+}
+
+/* The post-stall probe's one register read. Not for a periodic sampler: a
+ * controller that stopped answering can hold this call forever. */
+unsigned int
+wlan_bridge_port_probe(unsigned int which)
+{
+
+	if (bridge.ops != NULL && bridge.ops->port_probe != NULL)
+		return bridge.ops->port_probe(bridge.drv, which);
+	return 0;
+}
+
+/* The polled drain: run the completion path once from this thread. */
+void
+wlan_bridge_port_poll(void)
+{
+
+	if (bridge.ops != NULL && bridge.ops->port_poll != NULL)
+		bridge.ops->port_poll(bridge.drv);
+}
+
+/* The controller stack's own stall report (see wlan_seam_drv_ops). */
+void
+wlan_bridge_port_stall_dump(void)
+{
+
+	if (bridge.ops != NULL && bridge.ops->port_stall_dump != NULL)
+		bridge.ops->port_stall_dump(bridge.drv);
 }
 
 /* ------------------------------------------------------------------ */

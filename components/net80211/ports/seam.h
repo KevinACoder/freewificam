@@ -76,6 +76,97 @@ enum wlan_seam_iftype {
  * net80211 flag. */
 #define WLAN_SEAM_FIF_BCN_PRBRESP_PROMISC	0x00000010u
 
+/*
+ * The port's observation snapshot (wlan_seam_drv_ops.port_obs): what the
+ * adapter's own layers below the seam are doing, as scalars, so a watchdog on
+ * the stack side can put a frozen data path on the right layer without linking
+ * against the driver's world.  Every field is a gauge or a counter sampled at
+ * snapshot time; nothing here is written by the stack.  A stall is localized
+ * by which of these stops advancing and which keeps going:
+ *
+ *   usb_drain_done flat, rx_ep_qlen flat, tx_ep_* flat
+ *	-> nothing is being completed: the transport stopped, not the stack
+ *   usb_drain_phase stuck at 3 (and usb_drain_done flat)
+ *	-> the drain thread is inside a driver completion callback
+ *   rx_ep_completions rising, rx_ep_enqueued flat
+ *	-> the driver's re-arm stopped (the transfer was completed but no
+ *	   substitute for it was submitted back)
+ *   wq_full rising
+ *	-> the deferred-work queue refused the driver's receive work
+ *   skb_alloc_fail rising
+ *	-> the driver's own buffer pool refused a receive buffer
+ */
+struct wlan_seam_port_obs {
+	/* the transport's completion engine */
+	unsigned int	usb_drain_phase;	/* 1 idle, 2 arm, 3 callback, 4 free */
+	unsigned int	usb_drain_state;	/* 0 none, 1 run, 2 ready, 3 block, 4 term */
+	unsigned int	usb_drain_done;		/* completions carried so far */
+	unsigned int	usb_polls;		/* lost-interrupt polls run */
+	unsigned int	usb_poll_drained;	/* completions they recovered */
+	unsigned int	usb_kicks;
+	unsigned int	usb_completions;
+	unsigned int	usb_kills;		/* urbs the driver cancelled */
+	unsigned int	usb_parks;
+	unsigned int	usb_parked_now;
+	unsigned int	usb_errors;
+	/* the bulk-in endpoint: the receive stream */
+	unsigned int	rx_ep_addr;
+	unsigned int	rx_ep_qlen;		/* urbs queued behind the armed one */
+	unsigned int	rx_ep_in_flight;
+	unsigned int	rx_ep_enqueued;		/* submits accepted (driver arms) */
+	unsigned int	rx_ep_completions;
+	/* the bulk-out endpoint: the transmit stream */
+	unsigned int	tx_ep_addr;
+	unsigned int	tx_ep_qlen;
+	unsigned int	tx_ep_in_flight;
+	unsigned int	tx_ep_enqueued;
+	unsigned int	tx_ep_completions;
+	/* the deferred-work pump the driver's receive re-arm rides */
+	unsigned int	wq_depth;
+	unsigned int	wq_max;
+	unsigned int	wq_runs;
+	unsigned int	wq_direct;		/* ran inline: the queue was full */
+	unsigned int	wq_full;		/* submissions refused: work lost */
+	unsigned int	wq_state;		/* the worker thread: 1 run, 2 ready,
+						 * 3 block, 4 term, 5 other, 0 none */
+	/* the driver's own buffer pool (skb stand-in) */
+	unsigned int	skb_used;
+	unsigned int	skb_high;
+	unsigned int	skb_alloc_fail;
+	/*
+	 * The controller's health, read straight out of the host controller's
+	 * registers rather than inferred from the transfers.  When a transfer
+	 * never completes, these separate "the controller is still running and
+	 * the completion was lost" from "the controller stopped" and from "the
+	 * root port went away":
+	 *   usb_irqN      the controller's interrupt line was serviced N times
+	 *   ehciN_frame   FRINDEX of USB2 root N: it advances once per 125 us
+	 *                 while the controller's frame list runs
+	 *   ehciN_status  USBSTS of root N: bit 0 USBINT, bit 2 PCD (port
+	 *                 change), bit 12 HCHalted, bit 14 HSE
+	 *   ehciN_portsc  root N's PORTSC0: bit 0 CCS (connect), bit 2 PED
+	 *                 (enabled), bit 3 PEDC, bit 7 PS (suspend)
+	 */
+	unsigned int	usb_irq0;
+	unsigned int	usb_irq1;
+	unsigned int	usb_irq2;
+	unsigned int	usb_irq3;
+	unsigned int	ehci0_frame;
+	unsigned int	ehci0_status;
+	unsigned int	ehci0_portsc;
+	unsigned int	ehci1_frame;
+	unsigned int	ehci1_status;
+	unsigned int	ehci1_portsc;
+	/* the xHCI (bus 3, the one the radio sits on) has no frame index:
+	 * its liveness is the status word, the command ring and the port. */
+	/* the SoC side of the same bus: the CRU gates and soft-reset bits the
+	 * board bring-up released. These blocks answer while a controller is
+	 * wedged, so they are safe to sample from the ledger. */
+	unsigned int	soc_cru_gate;	/* CRU_CLKGATE_CON10 (USB3OTG clocks) */
+	unsigned int	soc_cru_rst;	/* CRU_SOFTRST_CON9 (USB3OTG resets) */
+	unsigned int	soc_pmucru_gate;/* PMUCRU_CLKGATE_CON2 (PHY ref gates) */
+};
+
 struct wlan_seam_drv_ops {
 	/* Bring the chip up/down. Called from the port worker with the
 	 * serializer held; must not sleep on driver-internal waits that need
@@ -198,6 +289,46 @@ struct wlan_seam_drv_ops {
 	 * arms keep the old behavior).
 	 */
 	int (*queue_ready)(struct wlan_seam_drv *drv);
+
+	/*
+	 * Observation snapshot (struct wlan_seam_port_obs): scalars only, no
+	 * state change, safe to call from a watchdog thread while the port is
+	 * running.  NULL = the port has no such state (the other arms), and a
+	 * caller must then leave the snapshot zeroed rather than guess.
+	 */
+	void (*port_obs)(struct wlan_seam_drv *drv,
+	    struct wlan_seam_port_obs *out);
+
+	/*
+	 * One controller register, for a probe that runs only after a stall:
+	 * which 0=command, 1=status, 2=command ring, 3=event ring dequeue,
+	 * 4=port 1, 5=port 2 on the radio's bus.  This read is NOT safe from
+	 * a periodic sampler - a controller that has stopped answering can
+	 * hold the read forever - so the ledger never calls it; a probe
+	 * thread prints a marker before the call, and the marker without a
+	 * value is the answer.  Returns 0 when the port has no such surface.
+	 */
+	unsigned int (*port_probe)(struct wlan_seam_drv *drv,
+	    unsigned int which);
+
+	/*
+	 * The controller driver's own view of a stalled port, printed by the
+	 * stack it belongs to: the event ring's consumer position and cycle,
+	 * the interrupt/todo/transfer-event counters, and for every device
+	 * the endpoint rings with a transfer outstanding.  Called once by a
+	 * probe thread after a stall was declared; it must stay read-only.
+	 */
+	void (*port_stall_dump)(struct wlan_seam_drv *drv);
+
+	/*
+	 * Run the controller's completion path once from the caller's thread:
+	 * the same drain the interrupt performs.  This exists because the
+	 * controller (or the line to the CPU) can drop an event interrupt and
+	 * leave the ring undrained forever - the drain is idempotent and
+	 * guarded against re-entry by the port, so a thread may run it when
+	 * no interrupt has arrived for a while.
+	 */
+	void (*port_poll)(struct wlan_seam_drv *drv);
 };
 
 #endif /* _WLAN_NET80211_SEAM_H_ */

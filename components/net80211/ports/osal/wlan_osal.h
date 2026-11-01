@@ -28,6 +28,22 @@ void wlan_osal_init(void);
 void wlan_port_serializer_suspend(void);
 void wlan_port_serializer_resume(void);
 
+/*
+ * Observation only (built when CONFIG_NET_WATCH is set): who holds the port
+ * serializer right now and for how long.  The serializer is the splnet()
+ * replacement every stack entry takes, so "the data path froze while someone
+ * held it" and "the data path froze and the serializer is free" are different
+ * faults.  The time is the outermost take, so a recursive holder is timed from
+ * its first enter; 0 when free or when the clock is unknown.
+ */
+struct wlan_port_lock_state {
+	unsigned int	depth;		/* holds by the current owner; 0 = free */
+	const char	*owner;		/* thread name, NULL when free/unnamed */
+	unsigned int	held_ms;	/* since the outermost take */
+};
+
+void wlan_port_serializer_state(struct wlan_port_lock_state *out);
+
 /* ------------------------------------------------------------------ */
 /* Allocation seam                                                     */
 /* ------------------------------------------------------------------ */

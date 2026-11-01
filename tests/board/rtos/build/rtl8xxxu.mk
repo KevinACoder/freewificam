@@ -258,6 +258,13 @@ RTL8XXXU_NETIO_SRCS := \
 RTL8XXXU_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	-DLWIPERF_TCP_MAX_IDLE_SEC=60 \
 	$(RTL8XXXU_AP_DEFS) -I$(RTL8XXXU_NPORT)/bridge
+# The wedge ledger (net_watch.c) rides only in the observation arm
+# (CONFIG_NET_WATCH), so a clean arm's sources and flags are untouched.  The
+# counters it reads live in the layers themselves and are compiled behind the
+# same lever (see configs/rtl8xxxu-8188eu-netio-watch.mk).
+ifneq ($(strip $(CONFIG_NET_WATCH)),)
+RTL8XXXU_NETIO_SRCS += $(LINE)/app/cases/net_watch.c
+endif
 else
 RTL8XXXU_NETIO_SRCS :=
 endif
