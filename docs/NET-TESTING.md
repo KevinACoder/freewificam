@@ -157,9 +157,15 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
   mechanism is unresolved.  Use the runtime sequence.
 - TCP is not accepted yet.  First measurements (2026-11-01, netio `-t -b 1440`,
   same client): wired board-to-peer 33.51 MB/s on the RTOS arm against
-  94.21 MB/s on Linux, but the peer-to-board direction stalled at 33 KB/s on
-  the RTOS arm (Linux: 111.91 MB/s).  The asymmetry says the RTOS TCP receive
-  path, not the air or the driver, is what to fix before this row counts.
+  94.21 MB/s on Linux, while the peer-to-board direction ran at 41 KB/s on the
+  RTOS arm (Linux: 111.91 MB/s).  The board's own log separates the two: the
+  c2s phase ended after 256 packets (`netio: tcp rx done pkts=256`) and the
+  s2c phase then ran 252,972 packets in 6 s (31.5 MB/s), so **the board's TX is
+  healthy in this cell** - the client was throttled while sending.  This is not
+  the K2-15 high-OPP TX stall (that one ends in `tx_drop`/`EQOS_ERROR_BUSY`
+  with TX stopping); it is the TCP receive side or the netio c2s phase
+  boundary.  Reproduced 2/2.  Next: log `recv()` return values and the lwIP
+  window during c2s, and cross-check with an independent TCP instrument.
 - The RX ring is 128 descriptors; a deeper ring is untested for pps.  A
   256-descriptor ring measured -3% in the 1440 B path earlier, so it is not
   assumed to be free.

@@ -125,17 +125,19 @@ A dash means that arm was not measured on this bench.  Methods and counters:
 | Wired 1 GbE | 64 B zero-loss pps (T0), ~1.69 GHz | - | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
 | Wired 1 GbE | 64 B T0, 816 MHz | - | 197.5k | 100k (reference only) |
 | Wired 1 GbE | TCP 1440 B, board to peer | - | 33.51 MB/s | 94.21 MB/s |
-| Wired 1 GbE | TCP 1440 B, peer to board | - | 0.03 MB/s (stalled) | 111.91 MB/s |
+| Wired 1 GbE | TCP 1440 B, peer to board | - | 0.04 MB/s (c2s phase ends early) | 111.91 MB/s |
 | Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
 | Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
 | Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 21.50 / 20.03 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
 | Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
 
 TCP rows are first measurements, one session each: TCP is not part of the
-accepted set in [docs/NET-TESTING.md](docs/NET-TESTING.md) yet, and the wired
-RTOS arm's peer-to-board direction stalled at 33 KB/s while the board-to-peer
-direction ran at 33.5 MB/s - that asymmetry is the next thing to look at, not a
-throughput number.
+accepted set in [docs/NET-TESTING.md](docs/NET-TESTING.md) yet.  The wired RTOS
+arm is one-directional for now: board-to-peer runs 33.5 MB/s, but in the
+peer-to-board cell the board logs 256 packets received for the whole c2s phase
+and then sends 252,972 packets in 6 s, so its TX is fine and the throttle sits
+on the receive side.  That is the next thing to look at, not a throughput
+number.
 
 The two Wi-Fi modes tell different stories.  At the lowest protocol the shim
 and mac80211 are equal: per frame data 238 us against 239 us and control 28 us
