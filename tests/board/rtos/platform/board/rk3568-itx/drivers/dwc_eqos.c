@@ -2813,6 +2813,212 @@ int dwc_eqos_get_ring(unsigned int index, struct dwc_eqos_ring *ring)
 	return EQOS_OK;
 }
 
+#if (defined(CONFIG_GMAC_STALL_PROBE) && CONFIG_GMAC_STALL_PROBE) || \
+	(defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE)
+/* --- K2-16 transmit-stall probe ------------------------------------------
+ *
+ * The high-OPP uplink stalls with a full ring and no completion. The single
+ * give-up snapshot (tx_full_last_*, emitted by the case) shows the state but
+ * cannot say which engine stopped moving; these readers are the timeline's
+ * sampling surface. Contract: every register read here is a STATUS register
+ * (not read-clear). DMA_CH0_STATUS and MTL_INT_STATUS are deliberately NOT
+ * read - they clear on read, and an observer that eats an interrupt changes
+ * the system it is observing (AGENTS §11, 2026-10-30 sampling-death row).
+ */
+
+int dwc_eqos_tx_sample(unsigned int index, struct dwc_eqos_tx_sample *s)
+{
+	struct dwc_eqos_dev *dev;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (s == NULL)) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	dev = &devs[index];
+	if ((dev->plat == NULL) || (dev->tx_ring == NULL)) {
+		return EQOS_ERROR;
+	}
+
+	memset(s, 0, sizeof(*s));
+	s->tick = (uint32_t)gtimer_count_get();
+
+	eqos_lock(dev);
+	s->head = (uint32_t)dev->tx_head;
+	s->tail = (uint32_t)dev->tx_tail;
+	eqos_unlock(dev);
+
+	s->cur_tx_desc = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_TX_DESC);
+	s->tx_end = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR);
+	s->mtl_txq_dbg = eqos_rd(dev, DWC_EQOS_MTL_TXQ0_DEBUG);
+	s->mtl_txq_undr = eqos_rd(dev, DWC_EQOS_MTL_TXQ0_UNDRFLOW);
+	s->tx_ring_len = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_RING_LEN);
+	s->tx_ctrl = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_CONTROL);
+
+	s->irq_n = dev->irq_n;
+	s->tx_waits = dev->tx_waits;
+	s->spins = dev->tx_full_spins;
+	s->zero = dev->tx_full_zero;
+	s->freed = dev->tx_full_freed;
+	s->giveups = dev->tx_full_giveups;
+	s->irq_tx = (uint32_t)eqos_prof[index].irq_ent_tx;
+
+	return EQOS_OK;
+}
+
+int dwc_eqos_tx_scan_own(unsigned int index, uint32_t *words,
+			 unsigned int nwords)
+{
+	struct dwc_eqos_dev *dev;
+	unsigned int need;
+	unsigned int w;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (words == NULL)) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	dev = &devs[index];
+	if ((dev->plat == NULL) || (dev->tx_ring == NULL)) {
+		return EQOS_ERROR;
+	}
+
+	need = (DWC_EQOS_TX_DESC_COUNT + 31u) / 32u;
+	if (nwords < need) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	memset(words, 0, nwords * sizeof(uint32_t));
+
+	/* One word at a time: a word is 32 non-cacheable descriptor reads, so
+	 * the port line is masked for at most that long per chunk instead of
+	 * across the whole 256-slot walk. */
+	for (w = 0; w < need; w++) {
+		unsigned int n;
+		uint32_t bits = 0;
+
+		eqos_lock(dev);
+		for (n = 0; n < 32u; n++) {
+			unsigned int slot = w * 32u + n;
+
+			if (slot >= DWC_EQOS_TX_DESC_COUNT) {
+				break;
+			}
+			if (dev->tx_ring[slot].des3 & DWC_EQOS_DESC_OWN) {
+				bits |= 1u << n;
+			}
+		}
+		eqos_unlock(dev);
+		words[w] = bits;
+	}
+
+	return (int)need;
+}
+
+uint32_t dwc_eqos_tx_tail_kick(unsigned int index)
+{
+	struct dwc_eqos_dev *dev;
+	uint32_t head;
+
+	if (index >= DWC_EQOS_PORT_COUNT) {
+		return 0u;
+	}
+	dev = &devs[index];
+	if ((dev->plat == NULL) || (dev->tx_ring == NULL)) {
+		return 0u;
+	}
+
+	eqos_lock(dev);
+	head = (uint32_t)dev->tx_head;
+	eqos_wr(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR,
+		(uint32_t)(uintptr_t)&dev->tx_ring[head]);
+	eqos_unlock(dev);
+
+	return eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR);
+}
+
+int dwc_eqos_mmc_raw(unsigned int index, uint32_t first_off, uint32_t *words,
+		     unsigned int nwords)
+{
+	struct dwc_eqos_dev *dev;
+	unsigned int n;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (words == NULL)) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	dev = &devs[index];
+	if (dev->plat == NULL) {
+		return EQOS_ERROR;
+	}
+
+	for (n = 0; n < nwords; n++) {
+		words[n] = eqos_rd(dev, first_off + 4u * n);
+	}
+	return (int)nwords;
+}
+
+/* Same snapshot as dwc_eqos_get_ring(), but without the two read-clear status
+ * reads (DMA_CH0_STATUS). A periodic sampler uses this one; the one-shot
+ * console snapshot keeps using dwc_eqos_get_ring(). Body duplicated on
+ * purpose: adding a shared helper would change the default image's code
+ * layout, and the default image is the one every throughput number was taken
+ * on. */
+int dwc_eqos_get_ring_quiet(unsigned int index, struct dwc_eqos_ring *ring)
+{
+	struct dwc_eqos_dev *dev;
+	int n;
+
+	if ((index >= DWC_EQOS_PORT_COUNT) || (ring == NULL)) {
+		return EQOS_ERROR_PARAMETER;
+	}
+	dev = &devs[index];
+	if ((dev->plat == NULL) || (dev->rx_ring == NULL)) {
+		return EQOS_ERROR;
+	}
+
+	memset(ring, 0, sizeof(*ring));
+
+	eqos_lock(dev);
+	ring->rx_base = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_BASE_ADDR_LO);
+	ring->rx_end = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_END_ADDR);
+	ring->rx_ring_len = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_RING_LEN);
+	ring->cur_rx_desc = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_RX_DESC);
+	ring->cur_rx_buf = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_RX_BUF_ADDR);
+	ring->rx_control = eqos_rd(dev, DWC_EQOS_DMA_CH0_RX_CONTROL);
+	ring->rx_scan = (int32_t)dev->rx_scan;
+	ring->last_armed = (int32_t)dev->rx_last_armed;
+	ring->cur_desc_slot = eqos_ring_slot(dev, ring->cur_rx_desc);
+	ring->end_slot = eqos_ring_slot(dev, ring->rx_end);
+	if ((ring->cur_desc_slot >= 0) && (ring->end_slot >= 0)) {
+		ring->end_gap = (int32_t)(((unsigned int)ring->cur_desc_slot
+					   - (unsigned int)ring->end_slot
+					   + DWC_EQOS_RX_DESC_COUNT)
+					  % DWC_EQOS_RX_DESC_COUNT);
+	} else {
+		ring->end_gap = -1;
+	}
+	ring->sw_sweeps = dev->sw_sweeps;
+	ring->sw_clear_seen = dev->sw_clear_seen;
+	ring->sw_max_clear = dev->sw_max_clear;
+	ring->sw_span = dev->sw_span;
+	ring->sw_curdesc = dev->sw_curdesc;
+	ring->sw_last_armed = dev->sw_last_armed;
+
+	for (n = 0; n < DWC_EQOS_RX_DESC_COUNT; n++) {
+		int word = n / 32;
+		uint32_t bit = 1u << (n % 32);
+
+		if (dev->rx_in_flight[n] == 1) {
+			ring->in_flight_mask[word] |= bit;
+			ring->ring_armed++;
+		}
+		if (dev->rx_ring[n].des3 & DWC_EQOS_DESC_OWN) {
+			ring->dma_owned_mask[word] |= bit;
+		} else {
+			ring->own_clear++;
+		}
+	}
+	eqos_unlock(dev);
+
+	return EQOS_OK;
+}
+#endif /* CONFIG_GMAC_STALL_PROBE || CONFIG_GMAC_TCP_PROBE */
+
 /* The register snapshot the Linux-parity round diffs against the Linux lane's
  * own dump of the same offsets. Nothing here is written; this is the "what
  * did the hardware actually get told" half of every register-difference

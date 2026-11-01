@@ -258,6 +258,23 @@
 #define  DWC_EQOS_MTL_TXQ0_OP_TXQEN_EN       (2u << 2)
 #define  DWC_EQOS_MTL_TXQ0_OP_TSF            (1u << 1)
 
+/* MTL transmit-queue status (K2-16 stall probe). MTL_TXQ0_DEBUG is the queue's
+ * own view: TXQSTS says the queue still holds a frame, TXQLEVEL is the fill
+ * level in 64-byte units. It is a status word, not read-clear, so a periodic
+ * sampler may read it without eating an interrupt. MTL_TXQ0_UNDRFLOW is the
+ * queue's underflow counter (same: status, not read-clear).
+ *
+ * The field positions follow the DWC_ether_qos register map this driver's
+ * other MTL offsets already follow (0xD00 queue-mode, 0xD30 RX queue-mode).
+ * They are NOT taken on faith: the probe's healthy-cell calibration prints
+ * this word with a known-full ring and with an idle ring, and until that
+ * calibration reads back as expected the word is "unknown", not evidence. */
+#define DWC_EQOS_MTL_TXQ0_DEBUG              0xD08
+#define  DWC_EQOS_MTL_TXQ0_DEBUG_STS         (1u << 0)  /* queue not empty */
+#define  DWC_EQOS_MTL_TXQ0_DEBUG_LEVEL_SHIFT 16
+#define  DWC_EQOS_MTL_TXQ0_DEBUG_LEVEL_MASK  (0x3fu << 16)
+#define DWC_EQOS_MTL_TXQ0_UNDRFLOW           0xD0C
+
 #define DWC_EQOS_MTL_RXQ0_OPERATION_MODE     0xD30
 #define  DWC_EQOS_MTL_RXQ0_OP_RQS_SHIFT      20
 #define  DWC_EQOS_MTL_RXQ0_OP_RQS_MASK       (0x3ffu << 20)
@@ -664,6 +681,83 @@ struct dwc_eqos_ring {
 };
 
 int dwc_eqos_get_ring(unsigned int index, struct dwc_eqos_ring *ring);
+
+/* --- transmit-stall probe (K2-16) ------------------------------------------
+ *
+ * The high-OPP uplink stops with a full ring, and the four explanations that
+ * survive the K2-14/K2-15 evidence - the DMA stopped fetching, the MAC stopped
+ * draining, the completion write-back is being lost, or a register write never
+ * landed - have to be separated by watching the same engine over time rather
+ * than by another single snapshot at give-up.
+ *
+ * Everything here is READ-ONLY with respect to the channel: it reads the
+ * ring indices (software), CUR_TX_DESC / TX_END / the MTL queue's status word
+ * (status registers, not read-clear) and the software counters. It never
+ * reads DMA_CH0_STATUS or MTL_INT_STATUS, because those are read-clear and a
+ * periodic sampler that eats an interrupt is an observer that changes the
+ * observed system (K2-16 plan, and the 2026-10-30 sampling-death lesson).
+ *
+ * Compiled only under CONFIG_GMAC_STALL_PROBE (and, for the quiet ring
+ * reader alone, under CONFIG_GMAC_TCP_PROBE): the default image stays the
+ * image its throughput numbers were taken on. */
+#if (defined(CONFIG_GMAC_STALL_PROBE) && CONFIG_GMAC_STALL_PROBE) || \
+	(defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE)
+
+struct dwc_eqos_tx_sample {
+	uint32_t tick;		/* gtimer (24 MHz), so samples are a timeline */
+	uint32_t head;		/* software producer index */
+	uint32_t tail;		/* software completion index */
+	uint32_t cur_tx_desc;	/* DMA_CH0_CUR_TX_DESC (0x1144) */
+	uint32_t tx_end;	/* DMA_CH0_TX_END_ADDR (0x1120), as the DMA sees it */
+	uint32_t mtl_txq_dbg;	/* MTL_TXQ0_DEBUG (0xD08) */
+	uint32_t mtl_txq_undr;	/* MTL_TXQ0_UNDRFLOW (0xD0C) */
+	uint32_t tx_ring_len;	/* DMA_CH0_TX_RING_LEN (0x112C) */
+	uint32_t tx_ctrl;	/* DMA_CH0_TX_CONTROL: ST bit 0 */
+	uint32_t irq_n;		/* handler entries */
+	uint32_t irq_tx;	/* entries whose pass saw TI */
+	uint32_t tx_waits;	/* senders that met a full ring */
+	uint32_t spins;		/* completion sweeps on the full path */
+	uint32_t zero;		/* ... that reclaimed nothing */
+	uint32_t freed;		/* slots those sweeps reclaimed */
+	uint32_t giveups;	/* waits that dropped a frame */
+};
+
+int dwc_eqos_tx_sample(unsigned int index, struct dwc_eqos_tx_sample *s);
+
+/* Per-slot OWN bits of the TX ring, one bit per descriptor, LSB = slot 0 of
+ * whatever word. Returns the number of words written. A slot still OWN=1
+ * below the producer means the DMA never finished it; a slot OWN=0 at or
+ * above the tail means the write-back happened but software did not advance.
+ * Walks the ring without holding the line lock across the whole walk (a
+ * 256-slot non-cacheable read is ~tens of microseconds, and the stall has
+ * already stopped the engine). */
+int dwc_eqos_tx_scan_own(unsigned int index, uint32_t *words,
+			 unsigned int nwords);
+
+/* One explicit TX tail-pointer write, the same register and value the send
+ * path uses (`&ring[head]`, Linux stmmac_main.c:4385 writes cur_tx the same
+ * way). Returns the register readback. Exists to test "the write does not
+ * reach the channel" against "the write reaches it and the channel does not
+ * move": the healthy path already rewrites this pointer on every enqueue and
+ * on every full-ring sweep (dwc_eqos.c tx_complete), so a new kick alone is
+ * NOT a new mechanism - the readback is. */
+uint32_t dwc_eqos_tx_tail_kick(unsigned int index);
+
+/* Raw MMC block at `first_off`, 32-bit words. Only for the stall snapshot:
+ * the driver's own MMC table is known to be off for TX underflow
+ * (dwc_eqos.h:748 is carrier error, not underflow), so the raw block is what
+ * identifies the real offset on this IP. Read at give-up only - these
+ * counters are read-clear on some revisions, so a sampler must not touch
+ * them. */
+int dwc_eqos_mmc_raw(unsigned int index, uint32_t first_off, uint32_t *words,
+		     unsigned int nwords);
+
+/* The quiet RX snapshot: everything dwc_eqos_get_ring() reports except the
+ * read-clear channel status word, so a periodic sampler can run it without
+ * eating RX interrupt causes. Same struct, same slot arithmetic. */
+int dwc_eqos_get_ring_quiet(unsigned int index, struct dwc_eqos_ring *ring);
+
+#endif /* CONFIG_GMAC_STALL_PROBE || CONFIG_GMAC_TCP_PROBE */
 
 /* Live MAC/DMA register snapshot (2026-10-18). The Linux lane answers the
  * same question by reading these offsets out of its own driver (devmem /
