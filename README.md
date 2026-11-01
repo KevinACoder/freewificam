@@ -122,9 +122,20 @@ board, the same link and the same sender.  Full method, counters and limits:
 | 64 B zero-loss pps (T0), ~1.69 GHz | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
 | 64 B T0, 816 MHz | 197.5k | 100k (reference only) |
 
+## Wireless bench
+
+A wireless number is only as good as the access point under it.  Before taking
+any, prove the bench with `tools/bench/stability.sh` (fixed-rate stream, four
+PASS/FAIL criteria on the AP's own counters) and rule the channel out with
+`tools/bench/channel-busy.sh` (airtime-based occupancy per channel).  Method,
+role assignment and the failure modes seen in the lab:
+[docs/WIFI-BENCH.md](docs/WIFI-BENCH.md).
+
 ## Gates and tools
 
 ```sh
+tools/bench/stability.sh --ap-if wlan2 --sta-ip 192.168.99.2 --secs 240
+tools/bench/channel-busy.sh --mon-if wlan1 --channels "1 3 6 9 11 13"
 tools/rtos/build.sh host-test       # the conformance case on the host, both kernels
 tools/rtos/build.sh digest          # every imported tree's digest record
 tools/rtos/board-round.py --help    # one board boot: stage, boot, capture, judge
