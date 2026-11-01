@@ -1,4 +1,4 @@
-# K2-16 A/B counter-arm: input on the receive thread (the pre-fix shape).
+# K2-16 A/B counter-arm: input on the receive thread (the shipped shape).
 #
 # The wired netio arm now leaves lwIP's input path on the tcpip thread. This
 # arm puts it back on the driver's RX thread (with the one-lock-per-burst
