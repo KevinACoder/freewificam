@@ -19,3 +19,11 @@ CONFIG_RTL8XXXU_EXPECT_MAC := 20:f4:1b:52:8f:01
 # `TRM-GAP: AP visibility` instead of guessing.
 CONFIG_RTL8XXXU_AP_SSID := labwifi-brmc
 CONFIG_RTL8XXXU_AP_FREQ := 2432
+# The CPU OPP is part of this arm's ruler (K2-12/K2-13 compare across stacks at
+# one actual clock), and the netio case no longer pins it by default: K2-14
+# measured that requesting 1.992 GHz here collapses the *wired* uplink of the
+# same tree from 956 to 62-125 Mbit/s, so a measurement arm that does not ask
+# for a clock is measuring whatever the boot happened to leave behind.  The
+# 8188EU uplink does not traverse the GMAC, but the number is only comparable
+# to the earlier WLAN rounds at the same OPP.
+CONFIG_LEVERS += -DCONFIG_NETIO_CPU_KHZ=1992000

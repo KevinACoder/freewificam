@@ -249,6 +249,44 @@ static void emit_layer_counters(const char *tag)
 			   (unsigned long)pc.irq_tx);
 	}
 
+	/* K2-14: split "waited a few dozen polls and a slot came free" (healthy -
+	 * 287k of those in the K2-07 run) from "gave up because the completion
+	 * never came back" (the 475-frame abort). Both used to be one tx_waits
+	 * tick. This line is what the 475-frame verdict rests on, so it prints
+	 * whenever anyone had to wait at all. */
+	if (dg.tx_full_episodes > 0u) {
+		MDK_ANCHOR("netio: txfull tag=%s episodes=%lu spins=%lu zero=%lu "
+			   "freed=%lu giveups=%lu wait24=%lu head=%lu tail=%lu "
+			   "mac_tx=%lu ch0=%08lx curtx=%08lx base=%08lx mtl=%08lx\n",
+			   tag,
+			   (unsigned long)dg.tx_full_episodes,
+			   (unsigned long)dg.tx_full_spins,
+			   (unsigned long)dg.tx_full_zero,
+			   (unsigned long)dg.tx_full_freed,
+			   (unsigned long)dg.tx_full_giveups,
+			   (unsigned long)dg.tx_full_last_wait24,
+			   (unsigned long)dg.tx_full_last_head,
+			   (unsigned long)dg.tx_full_last_tail,
+			   (unsigned long)dg.tx_full_last_mac_tx,
+			   (unsigned long)dg.tx_full_last_ch0_status,
+			   (unsigned long)dg.tx_full_last_cur_tx_desc,
+			   (unsigned long)dg.tx_full_last_tx_base,
+			   (unsigned long)dg.tx_full_last_mtl_int);
+		/* Separate line: the enable bits that would explain a stalled
+		 * ring without a code defect (TE bit 1 of MAC_CONFIGURATION,
+		 * TXQEN bits 3:2 of the MTL queue mode, ST bit 0 of the DMA TX
+		 * control) plus RFE, which decides whether a received PAUSE
+		 * frame can stop transmission at all. */
+		MDK_ANCHOR("netio: txstall tag=%s maccfg=%08lx rxfc=%08lx "
+			   "txqom=%08lx txctrl=%08lx intren=%08lx\n",
+			   tag,
+			   (unsigned long)dg.tx_full_last_mac_conf,
+			   (unsigned long)dg.tx_full_last_rx_fc,
+			   (unsigned long)dg.tx_full_last_txq_mode,
+			   (unsigned long)dg.tx_full_last_tx_ctrl,
+			   (unsigned long)dg.tx_full_last_intr_en);
+	}
+
 	MDK_ANCHOR("netio: mib tag=%s udp_in=%lu udp_inerr=%lu ip_drop=%lu tcp_retrans=%lu\n",
 		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans);
 #else /* WLAN backend */
@@ -903,6 +941,16 @@ static void UDP_Server(void *arg)
 												  ticks, io.pkt_count);
 								}
 								s2c_reported = 1;
+								/* K2-14: the ledger has to be on the
+								 * console at the moment of the abort.
+								 * The cell then idles out its window
+								 * and the udp-end report only follows
+								 * when the client closes the control
+								 * socket - a client left waiting for a
+								 * receive stream that never comes does
+								 * not close it, and the numbers are
+								 * lost exactly when they matter. */
+								emit_layer_counters("udp-s2c-abort");
 								while (!io.timeover)
 									osDelay(2);
 								goto done_send;
@@ -1309,25 +1357,49 @@ static const osThreadAttr_t udp_srv_attr = {
  * cycles-per-frame comparison across arms is only meaningful at a known
  * actual clock.  The SCMI readback is what the firmware says; the PMCCNTR
  * spin below is what the core actually did.  Both are recorded; the spin is
- * the number the analysis uses. */
+ * the number the analysis uses.
+ *
+ * It is also a build-time lever (K2-14), because the OPP turned out to decide
+ * whether a defect shows up: the 475-frame uplink abort only appears once the
+ * sender outruns the wire. CONFIG_NETIO_CPU_KHZ=0 keeps the boot OPP and
+ * still prints the probe and the readback, so the two arms differ in exactly
+ * one bit of the ruler and nothing else.
+ *
+ * DEFAULT 0 (K2-14, 2026-11-01): a measurement arm must not silently change
+ * the machine it measures. Requesting 1.992 GHz here cost the wired uplink
+ * cell a factor of twenty in frame rate and ended it in dropped frames, with
+ * the same tree, the same client and the downlink cell of the same boot
+ * unaffected (runs/plat-01/K2-14/A7 against A5/A6). An arm that wants a known
+ * clock asks for it in its own configs/*.mk; the wired netio arms leave the
+ * boot OPP alone, which is also the clock the K2-07 reference was taken at. */
+#ifndef CONFIG_NETIO_CPU_KHZ
+#define CONFIG_NETIO_CPU_KHZ 0
+#endif
+
 static void emit_cpu_freq_line(void)
 {
 	int rc;
 	int src = -100;
 	uint32_t rb = 0;
+	unsigned long req_khz = (unsigned long)CONFIG_NETIO_CPU_KHZ;
 
 	rc = cpu_freq_probe();
 	if ((rc == 0) && cpu_freq_supported()) {
-		/* Hz, not kHz: 1.992 GHz is an OPP, 1.992 MHz is not.  The first
-		 * W1-01 boot asked for 1992000 (Hz) and set_ret=-1 left the CPU
-		 * at the boot OPP (396 MHz actual), which made the C2S look
-		 * CPU-bound; the readback (816 MHz) and the PMCCNTR (396 MHz)
-		 * disagreeing is what caught it. */
-		src = cpu_freq_set_hz(1992000000u);
+		if (req_khz == 0ul) {
+			/* Ruler-off arm: leave the OPP the bootloader chose. */
+			src = 0;
+		} else {
+			/* Hz, not kHz: 1.992 GHz is an OPP, 1.992 MHz is not.  The first
+			 * W1-01 boot asked for 1992000 (Hz) and set_ret=-1 left the CPU
+			 * at the boot OPP (396 MHz actual), which made the C2S look
+			 * CPU-bound; the readback (816 MHz) and the PMCCNTR (396 MHz)
+			 * disagreeing is what caught it. */
+			src = cpu_freq_set_hz((uint32_t)(req_khz * 1000ul));
+		}
 		rb = cpu_freq_get_hz();
 	}
-	CASE_ANCHOR("netio: cpu req_khz=1992000 readback_khz=%lu ret=%d "
-		    "set_ret=%d\n", (unsigned long)(rb / 1000u), rc, src);
+	CASE_ANCHOR("netio: cpu req_khz=%lu readback_khz=%lu ret=%d "
+		    "set_ret=%d\n", req_khz, (unsigned long)(rb / 1000u), rc, src);
 }
 
 static int netio_case_run(void)
