@@ -150,9 +150,9 @@ against 49.8-51.9 Mbit/s, with BlockAcks, radiotap A-MPDU marks, control
 stack: before this work the reference negotiated block-ack (3,523 BlockAcks,
 37,620 A-MPDU-marked frames) while the shim had no session at all (0 BlockAcks,
 0 marks, one plain ACK per frame).  At HT40 the shim associates at 40 MHz and
-negotiates block-ack (AP station 135/150 Mbit/s MCS7 40MHz short GI, about
-2,400 BlockAcks per cell), but reaches 46.2 Mbit/s against the reference's
-62.3, so the 40 MHz path is functional and not yet at parity; that gap is not
+negotiates block-ack (AP station 135-150 Mbit/s 40MHz, MCS6/7, about 2,400
+BlockAcks per cell), but reaches 46.2 Mbit/s against the reference's 62.3, so
+the 40 MHz path is functional and not yet at parity; that gap is not
 attributed.
 
 ## Wireless bench

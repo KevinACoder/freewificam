@@ -172,7 +172,7 @@ the cell), while the shim had no block-ack session at all (0 BlockAcks, one
 plain ACK per frame).  After adding the RX ADDBA response, a 64-slot reorder
 buffer, TX BA and the 40 MHz path, HT20 is aligned: 52.1-53.0 Mbit/s against
 49.8-51.9, with BA and A-MPDU marks present and gap near zero.  HT40 now
-associates and aggregates too (AP station 135/150 MCS7 40MHz short GI, about
+associates and aggregates too (AP station 135-150 Mbit/s 40MHz, MCS6/7, about
 2,400 BlockAcks per cell), but reaches 46.2 Mbit/s against 62.3, so the 40 MHz
 path is functional and not yet at parity; the gap is not attributed.  The TCP
 HT20 row above is pre-BA and is kept only as history.
