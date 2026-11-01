@@ -80,6 +80,10 @@ struct wlan_linux_hw {
 	 */
 	uint32_t		tuned_freq;
 	uint8_t			tuned_hw_value;
+	/* the association's width and centre, set by the bridge's config_ht()
+	 * before sta_join and preserved by the per-dwell config() calls */
+	uint32_t		tuned_width;
+	uint32_t		tuned_center_freq1;
 
 	/*
 	 * The queue objects the driver initialises at add time through
@@ -140,6 +144,7 @@ int wlan_adapter_attach(struct ieee80211_hw *hw);
 /* the one hw this module hosts (the bridge is a singleton too) */
 struct wlan_linux_hw *wlan_hw_of(struct ieee80211_hw *hw);
 struct wlan_linux_hw *wlan_hw_from_vif(struct ieee80211_vif *vif);
+struct wlan_linux_hw *wlan_hw_single(void);
 void wlan_adapter_detach(struct ieee80211_hw *hw);
 
 /* TXQ engine (tests/board/linux-ko/ports/mac80211/mac80211_txq.c) */
@@ -155,6 +160,9 @@ int wlan_tx_queue_stopped(struct ieee80211_hw *hw);
 
 /* a received frame, from ieee80211_rx_irqsafe() to the net80211 bridge */
 void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb);
+/* hand one 802.11 frame (no FCS) to the net80211 bridge; the caller keeps
+ * ownership of skb and frees it afterwards */
+void wlan_adapter_deliver(struct ieee80211_hw *hw, struct sk_buff *skb);
 
 /* a transmitted frame completed (ieee80211_tx_status_irqsafe) */
 void wlan_adapter_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb);

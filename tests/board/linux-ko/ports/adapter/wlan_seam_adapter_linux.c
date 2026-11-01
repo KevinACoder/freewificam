@@ -26,6 +26,7 @@
 #include <wlan_bridge.h>
 
 #include "wlan_linux.h"
+#include "../mac80211/mac80211_ba.h"
 #include "../netdev/wlan_netdev.h"
 #include "wlan_ko_prof.h"
 
@@ -159,8 +160,11 @@ static int wlan_chanctx_use(struct wlan_linux_hw *w, uint32_t freq)
 		return -ENOMEM;
 	}
 	ctx->def.chan = chan;
-	ctx->def.width = NL80211_CHAN_WIDTH_20;
-	ctx->def.center_freq1 = freq;
+	ctx->def.width = (w->tuned_freq == freq &&
+	    w->tuned_width == WLAN_SEAM_CHAN_WIDTH_40) ?
+	    NL80211_CHAN_WIDTH_40 : NL80211_CHAN_WIDTH_20;
+	ctx->def.center_freq1 = ctx->def.width == NL80211_CHAN_WIDTH_40 ?
+	    w->tuned_center_freq1 : freq;
 	ctx->def.center_freq2 = 0;
 	ctx->min_def = ctx->def;
 	if (w->ops->add_chanctx != NULL) {
@@ -357,6 +361,8 @@ static int seam_config(struct wlan_seam_drv *drv, uint32_t changed,
 	struct ieee80211_supported_band *sband;
 	struct cfg80211_chan_def *chandef = &hw->conf.chandef;
 	int i;
+	uint32_t width = WLAN_SEAM_CHAN_WIDTH_20;
+	uint32_t center = freq;
 
 	if ((changed & WLAN_SEAM_CONFIG_CHANNEL) == 0 || freq == 0) {
 		return 0;
@@ -374,8 +380,21 @@ static int seam_config(struct wlan_seam_drv *drv, uint32_t changed,
 	if (chandef->chan == NULL) {
 		return -EINVAL;
 	}
-	chandef->width = NL80211_CHAN_WIDTH_20;
-	chandef->center_freq1 = freq;
+	/*
+	 * The association's width is chosen by the bridge before sta_join()
+	 * (config_ht); every other config() call - the scan's per-dwell tuning
+	 * above all - stays 20 MHz.  The width is only applied while we are on
+	 * the frequency the bridge picked, so a dwell on channel 1 cannot run
+	 * 40 MHz with channel 5's centre.
+	 */
+	if (w->tuned_freq == freq && w->tuned_width == WLAN_SEAM_CHAN_WIDTH_40 &&
+	    w->tuned_center_freq1 != 0) {
+		width = WLAN_SEAM_CHAN_WIDTH_40;
+		center = w->tuned_center_freq1;
+	}
+	chandef->width = width == WLAN_SEAM_CHAN_WIDTH_40 ?
+	    NL80211_CHAN_WIDTH_40 : NL80211_CHAN_WIDTH_20;
+	chandef->center_freq1 = center;
 	chandef->center_freq2 = 0;
 	/*
 	 * The channel the join will bind its context to. A scan's per-dwell
@@ -388,6 +407,50 @@ static int seam_config(struct wlan_seam_drv *drv, uint32_t changed,
 		return w->ops->config(hw, 0, IEEE80211_CONF_CHANGE_CHANNEL);
 	}
 	return 0;
+}
+
+/*
+ * The bridge's 40 MHz request, made before sta_join().  It records the
+ * association width/centre and lets seam_config() program the driver with the
+ * same values the join's own config call will use.
+ */
+static int seam_config_ht(struct wlan_seam_drv *drv, uint32_t freq,
+    uint32_t width, uint32_t center_freq1)
+{
+	struct wlan_linux_hw *w = ctx_hw(drv);
+
+	if (freq == 0)
+		return -EINVAL;
+	if (width != WLAN_SEAM_CHAN_WIDTH_20 &&
+	    width != WLAN_SEAM_CHAN_WIDTH_40)
+		return -EINVAL;
+	w->tuned_width = width;
+	w->tuned_center_freq1 = width == WLAN_SEAM_CHAN_WIDTH_40 ?
+	    center_freq1 : freq;
+	w->tuned_freq = freq;
+	/*
+	 * The peer is uploaded at BSSID time, before this join decides 20/40.
+	 * Refresh the capability the driver's rate selection reads, otherwise a
+	 * 40 MHz association keeps deriving MCS rates from the 20 MHz peer.
+	 */
+	if (force_ht && w->sta != NULL) {
+		bool ht40 = width == WLAN_SEAM_CHAN_WIDTH_40;
+
+		w->sta->deflink.ht_cap.ht_supported = true;
+		w->sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20 |
+		    (ht40 ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+			IEEE80211_HT_CAP_SGI_40) : 0);
+		w->sta->deflink.ht_cap.ampdu_factor =
+		    IEEE80211_HT_MAX_AMPDU_64K;
+		w->sta->deflink.ht_cap.ampdu_density =
+		    IEEE80211_HT_MPDU_DENSITY_NONE;
+		w->sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
+		w->sta->deflink.ht_cap.mcs.rx_highest =
+		    cpu_to_le16(ht40 ? 150 : 72);
+		w->sta->deflink.bandwidth = ht40 ?
+		    IEEE80211_STA_RX_BW_40 : IEEE80211_STA_RX_BW_20;
+	}
+	return seam_config(drv, WLAN_SEAM_CONFIG_CHANNEL, freq);
 }
 
 static int seam_filter(struct wlan_seam_drv *drv, uint32_t changed,
@@ -772,13 +835,21 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	 */
 	sta->deflink.rx_nss = 1;
 	if (force_ht) {
+		bool ht40 = w->tuned_width == WLAN_SEAM_CHAN_WIDTH_40;
+
 		sta->deflink.ht_cap.ht_supported = true;
-		sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20;
+		sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20 |
+		    (ht40 ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+			IEEE80211_HT_CAP_SGI_40) : 0);
 		sta->deflink.ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
 		sta->deflink.ht_cap.ampdu_density = IEEE80211_HT_MPDU_DENSITY_NONE;
 		sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
-		sta->deflink.ht_cap.mcs.rx_highest = cpu_to_le16(72);
+		sta->deflink.ht_cap.mcs.rx_highest =
+		    cpu_to_le16(ht40 ? 150 : 72);
+		sta->deflink.bandwidth = ht40 ?
+		    IEEE80211_STA_RX_BW_40 : IEEE80211_STA_RX_BW_20;
 	}
+	sta->max_rx_aggregation_subframes = 64;
 	/*
 	 * mac80211 leaves SMPS in OFF for an associated station; mvm's
 	 * sta_send_to_fw switch WARNs on AUTOMATIC/NUM_MODES (mvm/sta.c:195).
@@ -1196,6 +1267,7 @@ const struct wlan_seam_drv_ops wlan_seam_ops = {
 	.stop = seam_stop,
 	.add_interface = seam_add_interface,
 	.config = seam_config,
+	.config_ht = seam_config_ht,
 	.filter = seam_filter,
 	.sw_scan_start = seam_scan_start,
 	.sw_scan_complete = seam_scan_complete,
@@ -1227,6 +1299,14 @@ int wlan_adapter_attach(struct ieee80211_hw *hw)
 		return rc;
 	}
 	/*
+	 * The reorder/aggregation limits the driver and the AP read.  The
+	 * mac80211 substitute is the only BA state machine on this side, so its
+	 * 64-frame window is also the advertisement.
+	 */
+	hw->max_rx_aggregation_subframes = 64;
+	hw->max_tx_aggregation_subframes = 64;
+	(void)wlan_ba_init(hw);
+	/*
 	 * The driver's queue wake, registered once the bridge exists: a wake is
 	 * a bridge drain cue and has nothing to drain before the attach.
 	 */
@@ -1234,6 +1314,7 @@ int wlan_adapter_attach(struct ieee80211_hw *hw)
 	pr_info("wlan: seam tx wake registered\n");
 	rc = wlan_netdev_create(hw);
 	if (rc != 0) {
+		wlan_ba_detach(hw);
 		wlan_bridge_detach();
 		return rc;
 	}
@@ -1249,6 +1330,7 @@ void wlan_adapter_detach(struct ieee80211_hw *hw)
 	 * first, then the interface, and only then the bridge's stop. This is
 	 * the order mac80211 uses when the last interface goes away.
 	 */
+	wlan_ba_detach(hw);
 	seam_sta_drop(w);
 	wlan_chanctx_release(w);
 	wlan_netdev_destroy();
@@ -1335,19 +1417,41 @@ static void wlan_rx_freq_correct(struct sk_buff *skb,
 	}
 }
 
-void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb)
+void wlan_adapter_deliver(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct ieee80211_rx_status *status = IEEE80211_SKB_RXCB(skb);
 	int fcs_bad = (status->flag & RX_FLAG_FAILED_FCS_CRC) != 0;
 	int hw_dec = (status->flag & RX_FLAG_DECRYPTED) != 0;
 
-	wlan_rx_freq_correct(skb, status);
 	/* the device clock travels with the frame: the TBTT anchor pairs the
 	 * AP's beacon timestamp with the device time of that same reception
 	 * (mac80211's sync_device_ts <- bss->device_ts_beacon, which iwlwifi
 	 * fills from phy_info->system_timestamp in mvm/rx.c) */
 	wlan_bridge_input(skb->data, skb->len, status->signal, fcs_bad, hw_dec,
 	    status->freq, status->device_timestamp);
+}
+
+void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb)
+{
+	struct ieee80211_rx_status *status = IEEE80211_SKB_RXCB(skb);
+	int rc;
+
+	wlan_rx_freq_correct(skb, status);
+	/*
+	 * The block-ack state machine sees the frame first: the AP's ADDBA
+	 * Request/Response/DELBA and the reorderable QoS run must not reach the
+	 * imported stack, which has no action handler and no HT state.
+	 * Return 2 means the reorder window kept the skb and will free it
+	 * later; return 1 means it consumed the frame and we free it now.
+	 */
+	rc = wlan_ba_rx(hw, skb);
+	if (rc == 2)
+		return;
+	if (rc) {
+		dev_kfree_skb_any(skb);
+		return;
+	}
+	wlan_adapter_deliver(hw, skb);
 	dev_kfree_skb_any(skb);
 }
 

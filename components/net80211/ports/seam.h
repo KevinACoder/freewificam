@@ -67,6 +67,12 @@ enum wlan_seam_iftype {
  * state machine needs today; the bitmask leaves room without changing the ABI. */
 #define WLAN_SEAM_CONFIG_CHANNEL 0x00000001u
 
+/* Channel widths the optional config_ht() call uses (MHz).  A port that
+ * cannot run 40 MHz leaves config_ht NULL and the bridge keeps the
+ * association at 20 MHz. */
+#define WLAN_SEAM_CHAN_WIDTH_20	20u
+#define WLAN_SEAM_CHAN_WIDTH_40	40u
+
 /* Receive-filter bits passed to filter(): the chip's receive filter is a
  * hardware fact the stack cannot see, and the beacon/probe-response
  * promiscuous bit is the one a software scan depends on - without it a chip
@@ -329,6 +335,20 @@ struct wlan_seam_drv_ops {
 	 * no interrupt has arrived for a while.
 	 */
 	void (*port_poll)(struct wlan_seam_drv *drv);
+
+	/*
+	 * Optional 40 MHz programming for the association the bridge is about
+	 * to start.  The imported net80211 stack has no HT state, so the bridge
+	 * is the only half that can read the AP's HT Operation element and pick
+	 * the secondary channel; this call tells the driver half the width and
+	 * centre the association will run on.  It is invoked before
+	 * ieee80211_sta_join(), while the radio is already tuned to `freq`.
+	 * Return 0 when the device accepted the width; a negative answer makes
+	 * the bridge fall back to 20 MHz and keep the association at HT20.
+	 * NULL = the port has no 40 MHz support.
+	 */
+	int (*config_ht)(struct wlan_seam_drv *drv, uint32_t freq,
+	    uint32_t width, uint32_t center_freq1);
 };
 
 #endif /* _WLAN_NET80211_SEAM_H_ */

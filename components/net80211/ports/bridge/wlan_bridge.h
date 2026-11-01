@@ -195,6 +195,19 @@ struct wlan_bridge_counters {
 	 * frozen is the "driver stopped its queue and nothing woke it" shape. */
 	unsigned int	txq_len;
 	unsigned int	tx_stopped;
+	/* The block-ack transport the HT/BA round added: the action frames
+	 * this bridge sent (ADDBA request/response, DELBA) and the BA/HT
+	 * fingerprints a judgment reads.  A downlink that stays at plain ACKs
+	 * has mgmt_action_tx == 0 or ba_rx_start == 0; one that negotiated BA
+	 * has both rising. */
+	unsigned int	mgmt_action_tx;
+	unsigned int	ba_rx_start;
+	unsigned int	ba_tx_start;
+	unsigned int	ba_tx_operational;
+	unsigned int	ba_stop;
+	unsigned int	ht40_joins;
+	unsigned int	ht40_fallbacks;
+	unsigned int	reorder_drops;
 	uint32_t	tuned_freq;
 	int		attached;
 };
@@ -381,6 +394,35 @@ uint32_t wlan_bridge_stat_bad_auth(void);
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);
+
+/*
+ * Send one raw 802.11 management/action frame (header + body, no FCS) through
+ * the same ic_mgtq drain the stack's own management frames use.  This is the
+ * transport the block-ack state machine needs: ADDBA Request/Response and
+ * DELBA are action frames the imported net80211 stack neither builds nor
+ * understands, so the mac80211 substitute hands the finished frame here.
+ * Returns the frame length, or a negative error.  Takes the serializer
+ * itself; must be called from a sleepable context.
+ */
+int	wlan_bridge_mgmt_tx(const uint8_t *frame, size_t len);
+
+/*
+ * The last 802.11 sequence number the bridge handed the driver for this TID
+ * (0 when none was sent).  The block-ack state machine uses last + 1 as the
+ * ADDBA start sequence number, which is what mac80211's
+ * ieee80211_tx_ba_session_handle_start() does from sta->tid_seq[tid].
+ */
+uint16_t wlan_bridge_last_tx_seq(int tid);
+
+/* Block-ack fingerprint counters, incremented by the mac80211 substitute
+ * when a session changes state.  The numbers are read back by
+ * wlan_bridge_stats(); they are the host-side half of the on-air BA count. */
+#define WLAN_BRIDGE_BA_RX_START		0
+#define WLAN_BRIDGE_BA_TX_START		1
+#define WLAN_BRIDGE_BA_TX_OPERATIONAL	2
+#define WLAN_BRIDGE_BA_STOP		3
+#define WLAN_BRIDGE_BA_REORDER_DROP	4
+void	wlan_bridge_ba_note(int evt);
 
 /*
  * The driver's wake notification: its transmit queues have room again, so the

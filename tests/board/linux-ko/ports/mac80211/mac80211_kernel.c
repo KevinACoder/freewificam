@@ -32,6 +32,7 @@
 #include <net/cfg80211.h>
 
 #include "wlan_linux.h"
+#include "mac80211_ba.h"
 #include "wlan_ko_prof.h"
 
 /*
@@ -68,6 +69,11 @@ struct wlan_linux_hw *wlan_hw_from_vif(struct ieee80211_vif *vif)
 		return NULL;
 	}
 	return w;
+}
+
+struct wlan_linux_hw *wlan_hw_single(void)
+{
+	return wlan_single_hw != NULL ? wlan_hw_of(wlan_single_hw) : NULL;
 }
 
 static void wlan_rx_work(struct work_struct *work);
@@ -666,10 +672,7 @@ struct sk_buff *ieee80211_proberesp_get(struct ieee80211_hw *hw,
 int ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, u16 tid,
     u16 timeout)
 {
-	(void)sta;
-	(void)tid;
-	(void)timeout;
-	return 0;
+	return wlan_ba_start_tx(sta, tid, timeout);
 }
 
 void ieee80211_stop_tx_ba_cb_irqsafe(struct ieee80211_vif *vif, const u8 *ra,
@@ -850,9 +853,7 @@ const char *__ieee80211_get_assoc_led_name(struct ieee80211_hw *hw)
  */
 int ieee80211_stop_tx_ba_session(struct ieee80211_sta *sta, u16 tid)
 {
-	(void)sta;
-	(void)tid;
-	return 0;
+	return wlan_ba_stop_tx(sta, tid);
 }
 
 /*
