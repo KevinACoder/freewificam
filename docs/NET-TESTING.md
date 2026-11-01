@@ -155,25 +155,35 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
 - Setting coalescing at boot does not reproduce the runtime result (0.35-7.5%
   loss at the 350k arm with the boot-time setting vs 0.001% at runtime); the
   mechanism is unresolved.  Use the runtime sequence.
-- TCP is still not accepted, but the receive-direction collapse now has a
-  mechanism and a measured fix that is blocked on a different defect.  The
-  peer-to-board direction ran at 33 kB/s while the board's window stayed wide
-  open (`wnd=131072`); the stack refused segments (`tcp.drop` /
-  `mib2.tcpinerrs`) and only re-offered them from the 250 ms fast timer,
-  because the whole receive burst runs inside the driver's RX thread
-  (`LWIP_TCPIP_CORE_LOCKING_INPUT`) and the socket reader cannot drain until
-  it ends - the socket's receive mailbox is one slot (lwIP's default is 0 and
-  this port rounds up).  Mailbox depth only scales the trickle (16 slots
-  163 kB/s, 64 slots 511 kB/s).  Putting input back on the tcpip thread
-  measured **40.7/40.8 MB/s in two boots with the UDP cells unchanged**
-  (114.0 MB/s, 0% loss), but at that rate the zero-copy receive bridge trips
-  lwIP's `pbuf_free: p->ref > 0` assert within tens of milliseconds; the
-  copying bridge is stable at 36 MB/s and costs the UDP direction 26% loss.
-  Until the zero-copy slot lifecycle is fixed the default arm keeps the old
-  shape; the arms are `configs/net-netio-raw-tx256-tcp-input.mk` and
-  `...-tcp-nozc.mk`.
-- The board-to-peer TCP direction is unchanged by that work and still runs
-  behind the UDP numbers (35-45 MB/s against 105 MB/s UDP).
+- TCP is accepted since 2026-11-02, after two defects that turned out to be
+  independent.  (1) Input path: the peer-to-board direction ran at 33 kB/s
+  while the board's window stayed wide open (`wnd=131072`); with
+  `LWIP_TCPIP_CORE_LOCKING_INPUT=1` the whole receive burst runs inside the
+  driver's RX thread and the socket reader cannot drain until it ends - the
+  socket's receive mailbox is one slot (lwIP's default is 0 and this port
+  rounds up) - so the stack refused segments (`tcp.drop` / `mib2.tcpinerrs`)
+  and only re-offered them from the 250 ms fast timer.  Input now runs on the
+  tcpip thread (the upstream shape).  (2) Zero-copy slot table: at a real TCP
+  rate lwIP died on `pbuf_free: p->ref > 0`; the free list and the ready ring
+  were updated from three threads under a lock that only masks the port line,
+  so a lost half of head/count eventually handed a slot out again while its
+  pbuf was still in the stack - two pbufs over one custom wrapper.  Those
+  updates now run in a masked-IRQ critical section (`ARCH_DAIF_GET` +
+  `ARCH_IRQ_MASK`), and three lifetime counters (`netio: zc wrap_live/
+  free_dead/dead_handle`) are printed at every layer tag and from the assert
+  itself; they stay at zero across the runs below.
+  Measured on the default image (TCP and UDP, 1440 B, 2/2): peer-to-board TCP
+  **43.4 / 45.0 MB/s** (`tcp_retrans=0`), board-to-peer 49.8 / 49.9 MB/s, and
+  the UDP cells **113.99/107.35 and 113.99/107.41 MB/s at 0% loss both
+  directions** - the fix does not touch UDP.  At the 1.689 GHz OPP the same
+  arm runs TCP 77.8 MB/s receive / 118.9 MB/s transmit with `tx_drop=0`.
+- With the input fix in, `CONFIG_GMAC_RX_BATCH` no longer exists: it folded
+  the per-frame core-lock acquisitions of the in-RX-thread shape.
+- The `net-pps` arm is pinned to the old input shape
+  (`-DLWIP_TCPIP_CORE_LOCKING_INPUT=1`) so the K2-12/13 `T0` numbers stay
+  reproducible; the 64 B pps effect of the new shape is not measured.
+- The board-to-peer TCP direction is still below the UDP numbers (50 vs
+  107 MB/s) but no longer stalled, and the 1440 B UDP cells are unchanged.
 - The RX ring is 128 descriptors; a deeper ring is untested for pps.  A
   256-descriptor ring measured -3% in the 1440 B path earlier, so it is not
   assumed to be free.

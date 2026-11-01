@@ -235,6 +235,18 @@ static void emit_layer_counters(const char *tag)
 	tcp_retrans = (unsigned long)lwip_stats.mib2.tcpretranssegs;
 #endif
 
+	{
+		uint32_t zc_wrap = 0u, zc_free = 0u, zc_dead = 0u;
+
+		/* Zero-copy lifetime audit (K2-16 B): all three zero on a
+		 * correct run; a non-zero count names the owner that lost
+		 * track before lwIP's pbuf ref assert fires. */
+		ethnetif_zc_audit(&zc_wrap, &zc_free, &zc_dead);
+		MDK_ANCHOR("netio: zc tag=%s wrap_live=%lu free_dead=%lu "
+			   "dead_handle=%lu\n",
+			   tag, (unsigned long)zc_wrap, (unsigned long)zc_free,
+			   (unsigned long)zc_dead);
+	}
 	MDK_ANCHOR("netio: layers tag=%s mmc_ovf=%lu mmc_crc=%lu rx_frames=%lu rx_drop=%lu "
 		   "rx_ru=%lu csum_drop=%lu rx_err=%lu dma_err=%lu bridge_poll=%lu fed=%lu "
 		   "pool_fail=%lu input_fail=%lu mem_err=%lu pbuf_err=%lu\n",
@@ -1277,6 +1289,9 @@ struct tcp_probe_sample {
 	uint32_t own_clear;
 	uint32_t cur_rx_desc;
 	uint32_t rx_end;
+	uint32_t zc_wrap_live;
+	uint32_t zc_free_dead;
+	uint32_t zc_dead_handle;
 };
 
 static struct tcp_probe_sample tcp_probe[TCP_PROBE_SAMPLES];
@@ -1348,6 +1363,8 @@ static void tcp_probe_take(void)
 	s->rx_buf_unavail = ds.rx_buf_unavail;
 	s->rx_irqs = ds.rx_irqs;
 
+	ethnetif_zc_audit(&s->zc_wrap_live, &s->zc_free_dead, &s->zc_dead_handle);
+
 	memset(&ring, 0, sizeof(ring));
 	if (dwc_eqos_get_ring_quiet(MN_GMAC, &ring) == 0) {
 		s->ring_armed = ring.ring_armed;
@@ -1403,6 +1420,12 @@ static void tcp_probe_dump(void)
 			   (unsigned long)s->own_clear,
 			   (unsigned long)s->cur_rx_desc,
 			   (unsigned long)s->rx_end);
+		MDK_ANCHOR("netio: zca t=%lu wrap_live=%lu free_dead=%lu "
+			   "dead_handle=%lu\n",
+			   (unsigned long)s->t_ms,
+			   (unsigned long)s->zc_wrap_live,
+			   (unsigned long)s->zc_free_dead,
+			   (unsigned long)s->zc_dead_handle);
 	}
 }
 

@@ -78,14 +78,44 @@ struct ethnetif_zc {
 	unsigned int len;
 	unsigned int port;
 	unsigned int slot;
+	uint8_t live;		/* 1 from the lend-out until the stack frees */
 };
 
 static struct ethnetif_zc g_zc[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_SLOT_COUNT];
+
+/* Lifetime auditor (2026-11-02, K2-16 B): the wrapper is per (port, slot),
+ * so a slot lent out while its previous frame is still in the stack would
+ * hand two live pbufs the same struct - a double free inside lwIP. These
+ * three counters say which of the three owners lost track: the driver (wrap
+ * over a live wrapper), the stack (free of a wrapper not live), or the ready
+ * ring (a handle dequeued that is not live). Zero on a correct run. */
+static uint32_t g_zc_wrap_live;
+static uint32_t g_zc_free_dead;
+static uint32_t g_zc_dead_handle;
+
+void ethnetif_zc_audit(uint32_t *wrap_live, uint32_t *free_dead,
+		       uint32_t *dead_handle)
+{
+	if (wrap_live != NULL) {
+		*wrap_live = g_zc_wrap_live;
+	}
+	if (free_dead != NULL) {
+		*free_dead = g_zc_free_dead;
+	}
+	if (dead_handle != NULL) {
+		*dead_handle = g_zc_dead_handle;
+	}
+}
 
 static void ethnetif_zc_free(struct pbuf *p)
 {
 	struct ethnetif_zc *z = (struct ethnetif_zc *)p;
 
+	if (z->live == 0u) {
+		g_zc_free_dead++;
+	} else {
+		z->live = 0u;
+	}
 	dwc_eqos_rx_release(z->port, z->slot);
 }
 
@@ -101,6 +131,10 @@ static void *ethnetif_zc_wrap(unsigned int index, unsigned int slot,
 		return NULL;
 	}
 	z = &g_zc[index][slot];
+	if (z->live != 0u) {
+		g_zc_wrap_live++;
+	}
+	z->live = 1u;
 	z->pc.custom_free_function = ethnetif_zc_free;
 	z->buf = buf;
 	z->len = len;
@@ -112,6 +146,20 @@ static void *ethnetif_zc_wrap(unsigned int index, unsigned int slot,
 void ethnetif_zc_arm(void)
 {
 	dwc_eqos_set_rx_zc(ethnetif_zc_wrap);
+}
+#else /* CONFIG_GMAC_RX_ZC */
+void ethnetif_zc_audit(uint32_t *wrap_live, uint32_t *free_dead,
+		       uint32_t *dead_handle)
+{
+	if (wrap_live != NULL) {
+		*wrap_live = 0u;
+	}
+	if (free_dead != NULL) {
+		*free_dead = 0u;
+	}
+	if (dead_handle != NULL) {
+		*dead_handle = 0u;
+	}
 }
 #endif /* CONFIG_GMAC_RX_ZC */
 
@@ -730,6 +778,9 @@ unsigned int ethnetif_poll(struct netif *netif)
 		z = (struct ethnetif_zc *)handle;
 		if (z == NULL) {
 			break;
+		}
+		if (z->live == 0u) {
+			g_zc_dead_handle++;
 		}
 		t0 = gtimer_count_get();
 		p = pbuf_alloced_custom(PBUF_RAW, (u16_t)z->len, PBUF_RAM,

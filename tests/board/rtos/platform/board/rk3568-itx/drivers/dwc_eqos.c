@@ -404,6 +404,30 @@ static void eqos_unlock(struct dwc_eqos_dev *dev)
 	(void)irq_enable(dev->plat->irq_num);
 }
 
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+/* A real critical section for the zero-copy lists (K2-16 B, 2026-11-02).
+ * eqos_lock masks this port's line only: a tick between the load and the
+ * store of a free-list counter still switches the thread away, and the other
+ * thread's update is then lost - the same shape that walked the transmit tail
+ * backwards (see eqos_tx_complete). The zero-copy free list is pushed by the
+ * stack's free callback (thread) and popped by the sweep (thread or ISR), and
+ * the ready ring is pushed by the sweep and popped by the drain thread, so
+ * both need exclusion that stops the scheduler, not just the port line.
+ * Masking IRQs stops the tick as well; on this single-core image that is the
+ * whole exclusion. The caller's DAIF is restored exactly, so an ISR caller
+ * stays masked. */
+static void eqos_zc_crit_take(uint64_t *saved)
+{
+	ARCH_DAIF_GET(*saved);
+	ARCH_IRQ_MASK();
+}
+
+static void eqos_zc_crit_give(uint64_t saved)
+{
+	ARCH_DAIF_PUT(saved);
+}
+#endif
+
 /* --- MDIO ----------------------------------------------------------------- */
 
 /* Read a PHY register. The management interface is also how the PHY driver
@@ -628,24 +652,38 @@ static void eqos_setup_rx_desc(struct dwc_eqos_dev *dev, int idx,
  * from the sweep itself. */
 static int eqos_slot_pop(struct dwc_eqos_dev *dev, unsigned int *slot)
 {
+	uint64_t saved;
+	int got;
+
+	/* head and count move together: a lost half hands a live slot out
+	 * again and two pbufs end up over one wrapper (the 'p->ref' assert). */
+	eqos_zc_crit_take(&saved);
 	if (dev->rx_free_count == 0u) {
-		return 0;
+		got = 0;
+	} else {
+		*slot = dev->rx_free_slots[dev->rx_free_head];
+		dev->rx_free_head = (uint16_t)((dev->rx_free_head + 1u)
+					       % DWC_EQOS_RX_SLOT_COUNT);
+		dev->rx_free_count--;
+		got = 1;
 	}
-	*slot = dev->rx_free_slots[dev->rx_free_head];
-	dev->rx_free_head = (uint16_t)((dev->rx_free_head + 1u)
-				       % DWC_EQOS_RX_SLOT_COUNT);
-	dev->rx_free_count--;
-	return 1;
+	eqos_zc_crit_give(saved);
+	return got;
 }
 
 static void eqos_slot_push(struct dwc_eqos_dev *dev, unsigned int slot)
 {
+	uint64_t saved;
+
+	eqos_zc_crit_take(&saved);
 	if (dev->rx_free_count >= DWC_EQOS_RX_SLOT_COUNT) {
+		eqos_zc_crit_give(saved);
 		return;	/* double release: better leaked than wrapped */
 	}
 	dev->rx_free_slots[(dev->rx_free_head + dev->rx_free_count)
 			   % DWC_EQOS_RX_SLOT_COUNT] = (uint8_t)slot;
 	dev->rx_free_count++;
+	eqos_zc_crit_give(saved);
 }
 #endif
 
@@ -967,6 +1005,7 @@ static unsigned int eqos_zc_handoff(struct dwc_eqos_dev *dev, unsigned int own,
 {
 	unsigned int spare;
 	void *h;
+	uint64_t daif;
 
 	*handed = 0;
 	if ((s_rx_zc == NULL) || !eqos_slot_pop(dev, &spare)) {
@@ -979,8 +1018,10 @@ static unsigned int eqos_zc_handoff(struct dwc_eqos_dev *dev, unsigned int own,
 		dev->stats.rx_dropped++;
 		return own;
 	}
+	eqos_zc_crit_take(&daif);
 	if (dev->rx_ready_count >= DWC_EQOS_RX_SLOT_COUNT) {
 		/* Consumer wedged (drain stopped): refuse, recycle. */
+		eqos_zc_crit_give(daif);
 		eqos_slot_push(dev, spare);
 		dev->stats.rx_dropped++;
 		return own;
@@ -988,6 +1029,7 @@ static unsigned int eqos_zc_handoff(struct dwc_eqos_dev *dev, unsigned int own,
 	dev->rx_ready[(dev->rx_ready_head + dev->rx_ready_count)
 		      % DWC_EQOS_RX_SLOT_COUNT] = h;
 	dev->rx_ready_count++;
+	eqos_zc_crit_give(daif);
 	dev->stats.rx_frames++;
 	*handed = 1;
 	return spare;
@@ -1567,19 +1609,21 @@ int dwc_eqos_rx_dequeue(unsigned int index, void **handle)
 		return 0;
 	}
 
-	/* The ready ring's producer is the ISR; the port-line mask is the
-	 * whole mutual exclusion on this single-core image (same contract as
-	 * every other ring in this driver). */
-	eqos_lock(dev);
+	uint64_t saved;
+
+	/* The producer is the sweep (thread in the batch shape, the ISR
+	 * otherwise), so the port's line mask does not exclude it: mask IRQs,
+	 * which also stops the tick from switching the sweep in mid-update. */
+	eqos_zc_crit_take(&saved);
 	if (dev->rx_ready_count == 0u) {
-		eqos_unlock(dev);
+		eqos_zc_crit_give(saved);
 		return 0;
 	}
 	*handle = dev->rx_ready[dev->rx_ready_head];
 	dev->rx_ready_head = (uint16_t)((dev->rx_ready_head + 1u)
 					% DWC_EQOS_RX_SLOT_COUNT);
 	dev->rx_ready_count--;
-	eqos_unlock(dev);
+	eqos_zc_crit_give(saved);
 	return 1;
 }
 
@@ -1595,11 +1639,9 @@ void dwc_eqos_rx_release(unsigned int index, unsigned int slot)
 		return;
 	}
 
-	/* Thread context (the consumer's pbuf-free callback); the lock keeps
-	 * the push atomic against the ISR sweep's pops. */
-	eqos_lock(dev);
+	/* Thread context (the consumer's pbuf-free callback); eqos_slot_push
+	 * masks IRQs itself, so the sweep cannot interleave half an update. */
 	eqos_slot_push(dev, slot);
-	eqos_unlock(dev);
 }
 #endif
 

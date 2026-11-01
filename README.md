@@ -124,21 +124,24 @@ A dash means that arm was not measured on this bench.  Methods and counters:
 | Wired 1 GbE | UDP 1440 B send | - | 108.09 MiB/s (907 Mbit/s) | 113.61 MiB/s |
 | Wired 1 GbE | 64 B zero-loss pps (T0), ~1.69 GHz | - | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
 | Wired 1 GbE | 64 B T0, 816 MHz | - | 197.5k | 100k (reference only) |
-| Wired 1 GbE | TCP 1440 B, board to peer | - | 33.51 MB/s | 94.21 MB/s |
-| Wired 1 GbE | TCP 1440 B, peer to board | - | 0.04 MB/s (c2s phase ends early) | 111.91 MB/s |
+| Wired 1 GbE | TCP 1440 B, board to peer | - | 49.8 / 49.9 MB/s (2/2) | 94.21 MB/s |
+| Wired 1 GbE | TCP 1440 B, peer to board | - | 43.4 / 45.0 MB/s (2/2) | 111.91 MB/s |
 | Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
 | Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
 | Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
 | Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
 | Wi-Fi 8188EU, HT40 (150 Mbit/s MCS7 40MHz SGI) | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | - | 57.77–64.60 Mbit/s |
 
-TCP rows are first measurements, one session each: TCP is not part of the
-accepted set in [docs/NET-TESTING.md](docs/NET-TESTING.md) yet.  The wired RTOS
-arm is one-directional for now: board-to-peer runs 33.5 MB/s, but in the
-peer-to-board cell the board logs 256 packets received for the whole c2s phase
-and then sends 252,972 packets in 6 s, so its TX is fine and the throttle sits
-on the receive side.  That is the next thing to look at, not a throughput
-number.
+The wired TCP rows are the 2026-11-02 default (TCP and UDP cells 2/2 each,
+`tcp_retrans=0`, zero loss).  The peer-to-board direction used to crawl at
+40 kB/s: input ran inside the driver's receive thread, so the socket reader
+could not drain and lwIP re-offered refused segments only from its 250 ms fast
+timer.  Input now runs on the tcpip thread; a second, independent defect in the
+zero-copy receive slot table (a lost half of a counter pair handed a live slot
+out again) surfaced at the new rate and is fixed with masked-IRQ critical
+sections.  The UDP cells did not move (113.99/107.4 MB/s, 0% loss both
+directions), and three lifetime counters stay at zero; see
+[docs/NET-TESTING.md](docs/NET-TESTING.md) section 8.
 
 The three Wi-Fi modes tell different stories.  At the lowest protocol the shim
 and mac80211 are equal: per frame data 238 us against 239 us and control 28 us

@@ -18,32 +18,34 @@ CONFIG_CASES := net_mdk_netio
 CONFIG_OPT := -O2
 CONFIG_PROFILE := base
 
-# The receive path defaults are the K2-03 A6 set, moved from a one-off command
-# line into the arm so every future measurement starts from the best known
+# The receive path defaults are the K2-03 A6 set plus the K2-16 input-path
+# correction, so every future measurement starts from the best known
 # configuration instead of re-deriving it:
-#   - LWIP_TCPIP_CORE_LOCKING_INPUT: the driver's RX thread runs the stack's
-#     input path itself; without it every frame pays a mailbox post and two
-#     thread switches before anything looks at the headers.
-#   - CONFIG_GMAC_RX_BATCH: the poll drains a burst through one core-lock
-#     acquisition instead of one per frame.
+#   - LWIP_TCPIP_CORE_LOCKING_INPUT=0: input runs on the tcpip thread, the
+#     shape upstream lwIP ships. The A6 choice (=1, the RX thread runs the
+#     whole stack input itself) saved a mailbox post per frame at 70 MB/s on
+#     a UDP flood, but it starves the socket reader: the receive burst holds
+#     the core lock, the socket's one-slot receive mailbox overruns, lwIP
+#     refuses the rest (tcp.drop / mib2.tcpinerrs) and re-offers it only on
+#     the 250 ms fast timer - measured on the peer-to-board TCP cell as
+#     33.0 kB/s with a wide-open window. With input on the tcpip thread the
+#     same cell runs 43.4 / 45.0 MB/s and the UDP cells do not move
+#     (113.99 MB/s, 0% both directions, 2/2, 2026-11-02).
 #   - CONFIG_GMAC_RX_HWCSUM: the MAC validates the IP/L4 checksum; the stack's
 #     software pass over every frame was measured at ~18% of the feed segment.
-# Measured together on 2026-10-30: 51.6 -> 70.0 MB/s, feed 19.3 -> 11.4 us.
 #
-# K2-16 (2026-11-02): this shape is also why the peer-to-board TCP direction
-# crawls. The whole receive burst runs in the RX thread, so the socket reader
-# cannot take the core lock until it ends; the socket's receive mailbox (one
-# slot) overruns, lwIP refuses the rest (tcp.drop / mib2.tcpinerrs) and only
-# re-offers them on the 250 ms fast timer. Moving input back to the tcpip
-# thread measured 33.0 kB/s -> 40.8 MB/s on the same arm with the UDP cells
-# unchanged (114.0 MB/s, 0% loss), but that arm then trips lwIP's
-# 'pbuf_free: p->ref > 0' assert through the zero-copy receive bridge within
-# tens of milliseconds of a real TCP rate, and the copying bridge (no ZC)
-# costs the UDP direction 114 -> 84 MB/s at 26% loss. Not shipped as the
-# default until the ZC slot lifecycle is fixed; see
-# configs/net-netio-raw-tx256-tcp-input.mk and ...-tcp-nozc.mk.
-CONFIG_LEVERS := -DLWIP_TCPIP_CORE_LOCKING_INPUT=1 -DCONFIG_GMAC_RX_BATCH=1 \
-	-DCONFIG_GMAC_RX_HWCSUM=1
+# CONFIG_GMAC_RX_BATCH is gone with the input lever: it folded the per-frame
+# core-lock acquisitions of the in-RX-thread shape, and that shape no longer
+# exists (the tcpip thread takes one lock over its whole mailbox batch).
+#
+# The zero-copy receive bridge needed its own fix for this: its free list and
+# ready ring are updated from three threads and were guarded by the port-line
+# mask, which does not stop the tick - a lost half of head/count handed a live
+# slot out again, two pbufs ended up over one custom wrapper, and lwIP died on
+# 'pbuf_free: p->ref > 0' within seconds of a real TCP rate (audited: six
+# wrap-over-live events before the assert). Now masked-IRQ critical sections;
+# the lifetime counters (netio: zc) stay at zero across TCP and UDP 2/2.
+CONFIG_LEVERS := -DLWIP_TCPIP_CORE_LOCKING_INPUT=0 -DCONFIG_GMAC_RX_HWCSUM=1
 CONFIG_HEAP_SIZE := 16M
 CONFIG_FREERTOS_HEAP_SIZE := 16777216u
 

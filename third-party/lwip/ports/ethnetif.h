@@ -35,6 +35,12 @@ unsigned int ethnetif_poll(struct netif *netif);
 void ethnetif_zc_arm(void);
 #endif
 
+/* Lifetime auditor of the zero-copy hand-off (K2-16 B): wrap-over-live,
+ * free-of-dead, and dead-handle counts. All three are zero on a correct run;
+ * they name which owner lost track when lwIP's pbuf ref assert fires. */
+void ethnetif_zc_audit(uint32_t *wrap_live, uint32_t *free_dead,
+		       uint32_t *dead_handle);
+
 /* Loss counters for the heartbeat: poll calls, pbuf-pool failures, input
  * failures, frames fed in total. */
 void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
