@@ -176,6 +176,7 @@ static uint32_t rand32(void)
  * so a stopped counter cannot hide in it. */
 static void emit_cpu_spot(const char *tag)
 {
+#if defined(CONFIG_NETIO_CPU_CALIB) && CONFIG_NETIO_CPU_CALIB
 	uint32_t t0;
 	uint32_t t1;
 	uint64_t c0;
@@ -194,6 +195,9 @@ static void emit_cpu_spot(const char *tag)
 		   (unsigned long)(((c1 - c0) * 24ull * 100ull) /
 				   (uint32_t)(t1 - t0)),
 		   (unsigned long)(t1 - t0), (unsigned long)(c1 - c0));
+#else
+	(void)tag;
+#endif
 }
 
 static void emit_layer_counters(const char *tag)
@@ -888,14 +892,16 @@ static void UDP_Server(void *arg)
 				net_prof_report("udp-c2s", &prof_a, &prof_b,
 						wall_ticks / 24u);
 #endif
-				/* The same cell on the CPU's own clock: cycles/frame
-				 * and the effective MHz, so a wall-time gap can be
-				 * separated from a clock gap (P0.2). */
-				if (net_prof_cpu_probe_ok())
-					net_prof_cpu_cell("udp-c2s",
-							  net_prof_cpu_cycles() - prof_c0,
-							  wall_ticks,
-							  io.pkt_count);
+				/* The same cell on the wall clock: microseconds
+				 * per frame (gtimer, 24 MHz) is the ruler; the cycle
+				 * count is reported beside it as a raw number, not
+				 * as a frequency (K2-14: the cycle counter stops in
+				 * WFI and the requested OPP is not the delivered
+				 * one, so a cycles-over-wall ratio is not a clock). */
+				net_prof_cpu_cell("udp-c2s",
+				                   net_prof_cpu_cycles() - prof_c0,
+				                   wall_ticks,
+				                   io.pkt_count);
 				ctl.cmd = htonl(CMD_RES);
 				ctl.data = htonl(io.pkt_count);
 				rc = send_data(csock, (char *)&ctl, sizeof(ctl));
@@ -970,10 +976,9 @@ static void UDP_Server(void *arg)
 									net_prof_report("udp-s2c", &prof_a,
 											&prof_b, ticks / 24u);
 #endif
-									if (net_prof_cpu_probe_ok())
-										net_prof_cpu_cell("udp-s2c",
-												  net_prof_cpu_cycles() - s2c_c0,
-												  ticks, io.pkt_count);
+									net_prof_cpu_cell("udp-s2c",
+									                   net_prof_cpu_cycles() - s2c_c0,
+									                   ticks, io.pkt_count);
 								}
 								s2c_reported = 1;
 								/* K2-14: the ledger has to be on the
@@ -1003,10 +1008,9 @@ static void UDP_Server(void *arg)
 						net_prof_report("udp-s2c", &prof_a, &prof_b,
 								ticks / 24u);
 #endif
-						if (net_prof_cpu_probe_ok())
-							net_prof_cpu_cell("udp-s2c",
-									  net_prof_cpu_cycles() - s2c_c0,
-									  ticks, io.pkt_count);
+						net_prof_cpu_cell("udp-s2c",
+						                   net_prof_cpu_cycles() - s2c_c0,
+						                   ticks, io.pkt_count);
 					}
 				}
 done_send:
@@ -1121,11 +1125,10 @@ static void TCP_Server(void *arg)
 					MDK_ANCHOR("netio: tcp rx done pkts=%lu bytes=%lu\n",
 						   (unsigned long)io.pkt_count,
 						   (unsigned long)io.rx_bytes);
-					if (net_prof_cpu_probe_ok())
-						net_prof_cpu_cell("tcp-c2s",
-								  net_prof_cpu_cycles() - c2s_c0,
-								  gtimer_count_get() - c2s_t0,
-								  io.pkt_count);
+					net_prof_cpu_cell("tcp-c2s",
+					                   net_prof_cpu_cycles() - c2s_c0,
+					                   gtimer_count_get() - c2s_t0,
+					                   io.pkt_count);
 				}
 			} else if (io.command == CMD_S2C) {
 				io.pkt_size = ntohl(ctl.data);
@@ -1158,11 +1161,10 @@ static void TCP_Server(void *arg)
 						io.tx_bytes += io.pkt_size;
 						io.pkt_count++;
 					}
-					if (net_prof_cpu_probe_ok())
-						net_prof_cpu_cell("tcp-s2c",
-								  net_prof_cpu_cycles() - s2c_c0,
-								  gtimer_count_get() - s2c_t0,
-								  io.pkt_count);
+					net_prof_cpu_cell("tcp-s2c",
+					                   net_prof_cpu_cycles() - s2c_c0,
+					                   gtimer_count_get() - s2c_t0,
+					                   io.pkt_count);
 				}
 				io.buf[0] = 1;
 				rc = send_data(csock, io.buf, io.pkt_size);
@@ -1463,7 +1465,7 @@ static int netio_case_run(void)
 			pc1 = net_prof_cpu_cycles();
 			CASE_ANCHOR("netio: cpu probe ok=1\n");
 			net_prof_cpu_cell("spin", pc1 - pc0,
-					  (uint32_t)(pt1 - pt0), 0);
+			                  (uint32_t)(pt1 - pt0), 0);
 		} else {
 			CASE_ANCHOR("netio: cpu probe ok=0 (PMU not accessible)\n");
 		}
@@ -1481,6 +1483,7 @@ static int netio_case_run(void)
 	 * core enters WFI).  A cycle counter tied to the core clock gives
 	 * sleepy = busy * 20/110; a counter that runs while the core is gated
 	 * gives sleepy = busy; a counter faster than the core gives more. */
+#if defined(CONFIG_NETIO_CPU_CALIB) && CONFIG_NETIO_CPU_CALIB
 	if (net_prof_cpu_probe_ok()) {
 		uint32_t t0;
 		uint32_t t1;
@@ -1542,6 +1545,7 @@ static int netio_case_run(void)
 					   (uint32_t)(t1 - t0)),
 			   (unsigned long)(t1 - t0), (unsigned long)(c1 - c0));
 	}
+#endif /* CONFIG_NETIO_CPU_CALIB */
 
 	io.buf = &g_io_buf[0];
 	io.buf_size = sizeof(g_io_buf);

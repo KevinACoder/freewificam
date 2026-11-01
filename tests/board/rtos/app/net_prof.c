@@ -214,15 +214,26 @@ int net_prof_cpu_probe_ok(void)
 void net_prof_cpu_cell(const char *tag, uint64_t cycles, uint64_t ticks,
 		       uint64_t frames)
 {
+	/* Wall time is the ruler (K2-14).  A cycle count is only a frequency
+	 * once you divide by a clock you actually know, and this board proved
+	 * it does not hand one over for free: a 1.992 GHz request lands at
+	 * 1.689 GHz, the boot OPP is 816 MHz, and PMCCNTR stops entirely while
+	 * the core is in WFI (100 WFI over 100 ms accumulate 71k cycles against
+	 * 81.6M for the same wall time spinning).  The generic timer has none of
+	 * those problems, so report the wall cost of a frame and keep the cycle
+	 * count beside it as a raw number that adds no claim of its own.
+	 *
+	 * us_x10_per_frame = ticks / 24 (us) / frames * 10, in integers:
+	 * ticks * 10 / (24 * frames).  The intermediate is bounded by ~6e7 for
+	 * a 6 s cell - inside uint64_t, and inside the 32-bit unsigned long the
+	 * result is printed as. */
+	unsigned long us_x10 = frames ? (unsigned long)((ticks * 10ull) /
+						       (24ull * frames)) : 0ul;
 	unsigned long cyc_per_frame = frames ? (unsigned long)(cycles / frames) : 0ul;
-	/* The gtimer runs at 24 MHz, so MHz = cycles / (ticks / 24), in
-	 * hundredths: cycles * 24 * 100 / ticks. The intermediate is bounded
-	 * by ~2.9e13 for a 6 s cell at 2 GHz - inside uint64_t. */
-	unsigned long mhz_x100 = ticks ? (unsigned long)((cycles * 24ull * 100ull) / ticks) : 0ul;
 
 	log_emit(ULOG_ALWAYS_LEVEL,
-		 "netio: cpu tag=%s cycles=%lu cyc_per_frame=%lu mhz_x100=%lu "
-		 "frames=%lu\n",
-		 tag, (unsigned long)cycles, cyc_per_frame, mhz_x100,
-		 (unsigned long)frames);
+		 "netio: cpu tag=%s frames=%lu ticks=%lu us_x10_per_frame=%lu "
+		 "cyc_per_frame=%lu\n",
+		 tag, (unsigned long)frames, (unsigned long)ticks, us_x10,
+		 cyc_per_frame);
 }

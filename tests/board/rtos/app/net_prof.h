@@ -135,14 +135,18 @@ int net_prof_cpu_probe_init(void);
 uint64_t net_prof_cpu_cycles(void);
 int net_prof_cpu_probe_ok(void);
 
-/* Report one cell's CPU clock facts from two reads of the same clocks:
- * `cycles` = net_prof_cpu_cycles() deltas, `ticks` = gtimer_count_get()
- * deltas (24 MHz), `frames` = frames the cell consumed. Emits
+/* Report one cell's cost from two reads of the same clocks: `ticks` =
+ * gtimer_count_get() deltas (24 MHz, the ruler), `frames` = frames the cell
+ * consumed, `cycles` = net_prof_cpu_cycles() deltas (raw, no claim).  Emits
  *
- *   netio: cpu tag=<t> cycles=<n> cyc_per_frame=<n> mhz_x100=<n> frames=<n>
+ *   netio: cpu tag=<t> frames=<n> ticks=<n> us_x10_per_frame=<n> cyc_per_frame=<n>
  *
- * mhz_x100 is the effective CPU frequency in hundredths of a MHz - one
- * integer division, no FPU (this image builds with -mgeneral-regs-only). */
+ * us_x10_per_frame is tenths of a microsecond of wall time per frame, in
+ * integer arithmetic (this image builds with -mgeneral-regs-only).  There is
+ * deliberately no MHz field: see the note in net_prof.c - the cycle counter
+ * stops in WFI and the requested OPP is not the delivered one, so a
+ * cycles-over-wall ratio is not a frequency and must not be read as one.
+ */
 void net_prof_cpu_cell(const char *tag, uint64_t cycles, uint64_t ticks,
 		       uint64_t frames);
 
