@@ -141,36 +141,35 @@ makes every later column - airtime, retries, gap, throughput - unattributable.
 It pairs with `docs/NET-TESTING.md` for the wired port (same "prove the bench
 first" idea).
 
-## 5. Wireless numbers on this bench (8188EU, 2.4 GHz, UDP 1440 downlink)
+## 5. Wireless numbers on this bench (8188EU, 2.4 GHz)
 
 Measured with the bench above (AR9271 as AP, MT7921AU as monitor, channel 5,
-1440 B UDP, zero loss in every cell). "Linux reference" is the same board and
-the same card running the in-tree realtek driver on mac80211; "linuxko" is the
-same driver on the net80211 shim.
+1440 B payload, zero loss in every cell). "Linux reference" is the same board
+and the same card running the in-tree driver on mac80211; "ko" is the linux-ko
+shim (net80211 replacing mac80211); a dash means that arm was not measured on
+this bench.
 
-| PHY mode | Linux reference | linuxko | ratio |
-|---|---|---|---|
-| 802.11g legacy, 54 Mbit/s | 18.05 / 18.06 / 18.19 Mbit/s | 18.62 / 18.72 / 18.98 Mbit/s | 1.04x |
-| HT20, 72.2 Mbit/s MCS7 short GI | 49.83 / 51.67 / 51.92 Mbit/s | 21.50 / 20.03 Mbit/s | 2.46x |
+| PHY mode | Test | freewificam (ko) | freewificam (rtos) | Linux reference |
+|---|---|---|---|---|
+| 802.11g legacy, 54 Mbit/s | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
+| 802.11g legacy, 54 Mbit/s | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
+| HT20, 72.2 Mbit/s MCS7 short GI | UDP 1440 B downlink | 21.50 / 20.03 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
+| HT20, 72.2 Mbit/s MCS7 short GI | TCP downlink | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
 
 The legacy row is the important one: **at the lowest protocol the two stacks are
 equal**. Per frame the accounts overlap column by column: data 239.1-239.8 us
 against 238.1-238.5 us (0.7% apart), control 28.0 us against 28.0 us, gap of the
 same order. That is what "aligned baseline" means here, and it says the
 net80211 shim is not intrinsically slower than mac80211 - a shim that pays a
-per-frame tax could not land within 1% of the reference.
+per-frame tax could not land within 1% of the reference. TCP agrees within 13%
+in the shim's favour (19.6 against 17.5 Mbit/s).
 
-The HT row is where the difference lives, and it is a missing feature rather
-than a stack tax. Per frame the reference spends data 194 us + control 2 us +
-gap 0-79 us; linuxko spends data 202 us + control 28 us + gap 289-309 us. On
-the air the same cells show the reference with 3,523 BlockAcks and 37,620
-frames carrying radiotap A-MPDU marks, while linuxko shows 0 and 0 with 18,475
-plain ACKs: the shim never establishes a block-ack session, so every frame is
-sent alone and waits for its own ACK.
+The HT row is where the difference lives, and it is a missing feature, not a
+slow stack: the reference negotiates block-ack and sends A-MPDUs (3,523
+BlockAcks and 37,620 frames carrying radiotap A-MPDU marks in the cell), while
+the shim has no block-ack session at all (0 BlockAcks, one plain ACK per
+frame). One aggregated block pays one preamble, one ACK and one backoff instead
+of N; the shim pays them per frame. TCP shows the same gap for the same reason
+(18.8-19.4 against 37.9-38.1 Mbit/s), and there it also caps the window: more
+frames in flight than the airtime can retire.
 
-Consequence for the work list: the fix is to implement the block-ack path in
-the shim (ADDBA request/response and a reorder buffer on receive, the transmit
-side for the uplink), not to tune the stack or the AP. The acceptance
-fingerprints are on the air, not in a log: BlockAck count greater than zero,
-A-MPDU marked frames greater than zero, control time at or below 3 us per
-frame, gap at or below 80 us.

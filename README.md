@@ -111,25 +111,31 @@ VENDOR_8189FS=/path/to/rtl8189fs tools/rtos/build.sh
 
 ## Performance
 
-Zero loss in every row; the Linux reference runs on the same board, the same
-link and the same sender.  Methods and counters: [docs/NET-TESTING.md](docs/NET-TESTING.md)
-for the wired port, [docs/WIFI-BENCH.md](docs/WIFI-BENCH.md) for 2.4 GHz Wi-Fi.
+Zero loss in every row. Three arms on one board: `ko` is the linux-ko shim
+(net80211 replacing mac80211, in-tree driver, kernel USB), `rtos` is the bare
+metal stack, `Linux` is the same board running the in-tree driver on mac80211.
+A dash means that arm was not measured on this bench.  Methods and counters:
+[docs/NET-TESTING.md](docs/NET-TESTING.md) for the wired port,
+[docs/WIFI-BENCH.md](docs/WIFI-BENCH.md) for 2.4 GHz Wi-Fi.
 
-| Link | Test | freewificam | Linux reference |
-|---|---|---|---|
-| Wired 1 GbE | UDP 1440 B receive | 114.00 MiB/s (956 Mbit/s) | 113.13 MiB/s |
-| Wired 1 GbE | UDP 1440 B send | 108.09 MiB/s (907 Mbit/s) | 113.61 MiB/s |
-| Wired 1 GbE | 64 B zero-loss pps (T0), ~1.69 GHz | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
-| Wired 1 GbE | 64 B T0, 816 MHz | 197.5k | 100k (reference only) |
-| Wi-Fi 2.4G, 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | 18.05 / 18.06 / 18.19 Mbit/s |
-| Wi-Fi 2.4G, 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 21.50 / 20.03 Mbit/s | 49.83 / 51.67 / 51.92 Mbit/s |
+| Link | Test | freewificam (ko) | freewificam (rtos) | Linux reference |
+|---|---|---|---|---|
+| Wired 1 GbE | UDP 1440 B receive | - | 114.00 MiB/s (956 Mbit/s) | 113.13 MiB/s |
+| Wired 1 GbE | UDP 1440 B send | - | 108.09 MiB/s (907 Mbit/s) | 113.61 MiB/s |
+| Wired 1 GbE | 64 B zero-loss pps (T0), ~1.69 GHz | - | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
+| Wired 1 GbE | 64 B T0, 816 MHz | - | 197.5k | 100k (reference only) |
+| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
+| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 21.50 / 20.03 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
 
-The two Wi-Fi rows are the interesting pair.  At the lowest protocol the two
-stacks are equal: per frame data 238 us against 239 us and control 28 us against
-28 us, so the net80211 shim carries no per-frame tax.  The HT row differs by
-2.46x, and the air says why: the reference negotiates block-ack and sends
-A-MPDUs (3,523 BlockAcks, 37,620 frames with radiotap A-MPDU marks), while the
-shim has no block-ack session at all (0 BlockAcks, one plain ACK per frame).
+The two Wi-Fi modes tell different stories.  At the lowest protocol the shim
+and mac80211 are equal: per frame data 238 us against 239 us and control 28 us
+against 28 us, so the net80211 shim carries no per-frame tax, and TCP lands
+within 13% of the reference (19.6 against 17.5 Mbit/s).  At HT the reference
+negotiates block-ack and sends A-MPDUs (3,523 BlockAcks, 37,620 frames with
+radiotap A-MPDU marks), while the shim has no block-ack session at all (0
+BlockAcks, one plain ACK per frame), and that is the whole gap.
 
 ## Wireless bench
 
