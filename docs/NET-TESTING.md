@@ -155,7 +155,11 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
 - Setting coalescing at boot does not reproduce the runtime result (0.35-7.5%
   loss at the 350k arm with the boot-time setting vs 0.001% at runtime); the
   mechanism is unresolved.  Use the runtime sequence.
-- TCP is not accepted yet.
+- TCP is not accepted yet.  First measurements (2026-11-01, netio `-t -b 1440`,
+  same client): wired board-to-peer 33.51 MB/s on the RTOS arm against
+  94.21 MB/s on Linux, but the peer-to-board direction stalled at 33 KB/s on
+  the RTOS arm (Linux: 111.91 MB/s).  The asymmetry says the RTOS TCP receive
+  path, not the air or the driver, is what to fix before this row counts.
 - The RX ring is 128 descriptors; a deeper ring is untested for pps.  A
   256-descriptor ring measured -3% in the 1440 B path earlier, so it is not
   assumed to be free.
