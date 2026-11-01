@@ -271,8 +271,13 @@ static void emit_layer_counters(const char *tag)
 		 * climbing means the transmit leg is starving the MTL, not
 		 * dropping at the bridge (tx_drop) - the two failure modes have
 		 * opposite fixes. */
+		/* mac_uf is gone from this line on purpose: dwc_eqos.h records
+		 * the TX MMC offset as wrong on this IP (0x748 is carrier
+		 * error), so a zero there is not "no underflow". txsweephits
+		 * counts transmit reclaims that found another context inside
+		 * the walk - the race the guard serialises. */
 		MDK_ANCHOR("netio: tx tag=%s tx_frames=%lu tx_drop=%lu mac_tx=%lu "
-			   "mac_tx_oct=%lu mac_uf=%lu rx_irq=%lu "
+			   "mac_tx_oct=%lu txsweephits=%lu rx_irq=%lu "
 			   "tx_waits=%lu tx_wait_ticks=%lu tx_occ_max=%lu tx_sem=%lu "
 			   "irq=%lu irq_tx=%lu\n",
 			   tag,
@@ -280,7 +285,7 @@ static void emit_layer_counters(const char *tag)
 			   (unsigned long)ds.tx_dropped,
 			   (unsigned long)mmc.tx_pkts_gb,
 			   (unsigned long)mmc.tx_octets_gb,
-			   (unsigned long)mmc.tx_underflow,
+			   (unsigned long)dg.tx_sweep_busy_hits,
 			   (unsigned long)ds.rx_irqs,
 			   (unsigned long)dg.tx_waits,
 			   (unsigned long)dg.tx_wait_ticks,

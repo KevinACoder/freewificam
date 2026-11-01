@@ -203,6 +203,18 @@ struct dwc_eqos_dev {
 	 * does not stop a thread switch, so without this the two sweeps
 	 * interleave and corrupt the shared cursor and tail publish. */
 	uint8_t   rx_sweep_busy;
+	/* The same guard for the transmit reclaim (K2-16). eqos_tx_complete is
+	 * called from the interrupt, from the sender's full-ring spin and from
+	 * the service thread's watchdog. eqos_lock masks the port line, not the
+	 * tick, so a thread inside the walk can be preempted by the service
+	 * thread and both then read-modify-write tx_tail - the loser's stale
+	 * value moves the tail backwards, the software's ring bookkeeping then
+	 * disagrees with the channel's own position, and the sender and the DMA
+	 * deadlock at a full ring with nothing in flight. */
+	uint8_t   tx_sweep_busy;
+	/* How often a second context found the transmit reclaim already in
+	 * progress (K2-16): the race is only real if this moves. */
+	uint32_t  tx_sweep_busy_hits;
 	/* Next slot the reader consumes from; the DMA writes back in ring
 	 * order, so staged slots always run consecutively from here. */
 	unsigned int rx_read_tail;
@@ -1363,6 +1375,21 @@ static int eqos_tx_complete(struct dwc_eqos_dev *dev)
 	int freed = 0;
 	int cnt;
 
+	/* One reclaim at a time (K2-16): the interrupt, the sender's full-ring
+	 * spin and the 100 ms watchdog all enter here, and eqos_lock only masks
+	 * the port line - a thread in the walk can be preempted by the tick and
+	 * the other thread's advance of tx_tail is then overwritten by the
+	 * preempted one's stale value. A tail that moves backwards leaves the
+	 * software believing descriptors are in flight that the channel has
+	 * already passed, and the pair deadlocks at a full ring. The loser of
+	 * the race simply runs again (its completion is still there to take). */
+#if defined(__aarch64__)
+	if (__atomic_test_and_set(&dev->tx_sweep_busy, __ATOMIC_ACQUIRE)) {
+		dev->tx_sweep_busy_hits++;
+		return 0;
+	}
+#endif
+
 	for (cnt = 0; cnt < DWC_EQOS_TX_DESC_COUNT; cnt++) {
 		struct dwc_eqos_desc *desc;
 
@@ -1383,10 +1410,28 @@ static int eqos_tx_complete(struct dwc_eqos_dev *dev)
 
 	if (dev->tx_tail != dev->tx_head) {
 		/* The DMA stops when it runs out of owned descriptors; point
-		 * the end past the newest one so it resumes. */
-		eqos_wr(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR,
-			(uint32_t)(uintptr_t)&dev->tx_ring[dev->tx_head]);
+		 * the end past the newest one so it resumes.
+		 *
+		 * CONFIG_GMAC_TX_TAIL_IDLE (K2-16): on the full-ring path the
+		 * sender calls this sweep once per spin, so the register is
+		 * rewritten thousands of times per frame while nothing has
+		 * been freed - the value never changes. This lever writes it
+		 * only when the sweep actually reclaimed something, so the
+		 * channel sees the pointer move rather than being re-poked
+		 * from a tight loop. It is the discriminating arm for "the
+		 * repeated tail write confuses the channel's fetch state". */
+#if defined(CONFIG_GMAC_TX_TAIL_IDLE) && CONFIG_GMAC_TX_TAIL_IDLE
+		if (freed > 0)
+#endif
+		{
+			eqos_wr(dev, DWC_EQOS_DMA_CH0_TX_END_ADDR,
+				(uint32_t)(uintptr_t)&dev->tx_ring[dev->tx_head]);
+		}
 	}
+
+#if defined(__aarch64__)
+	__atomic_clear(&dev->tx_sweep_busy, __ATOMIC_RELEASE);
+#endif
 
 	/* N7 R1: wake a ring-full sender immediately instead of letting it
 	 * poll a 1 ms tick. One release per freed slot: the semaphore is
@@ -2701,6 +2746,7 @@ void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)
 	diag->tx_full_last_tx_ctrl = dev->tx_full_last_tx_ctrl;
 	diag->tx_full_last_intr_en = dev->tx_full_last_intr_en;
 	diag->tx_full_last_mac_tx = dev->tx_full_last_mac_tx;
+	diag->tx_sweep_busy_hits = dev->tx_sweep_busy_hits;
 	diag->irq_n = dev->irq_n;
 	diag->irq_odd = dev->irq_odd;
 	diag->last_status = dev->last_status;

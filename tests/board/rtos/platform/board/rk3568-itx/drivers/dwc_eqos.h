@@ -633,6 +633,9 @@ struct dwc_eqos_diag {
 					 * frozen across the wait with
 					 * head != tail means the DMA
 					 * stopped, not that it was slow. */
+	/* K2-16: transmit reclaims that found another context inside the walk
+	 * (counted only when CONFIG_GMAC_TX_SWEEP_GUARD is built). */
+	uint32_t tx_sweep_busy_hits;
 };
 
 void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag);
