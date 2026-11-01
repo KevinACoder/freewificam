@@ -38,6 +38,11 @@
 
 #include "ethnetif.h"
 
+#if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
+/* tcp_active_pcbs lives in lwIP's private header; only the probe reads it. */
+#include "lwip/priv/tcp_priv.h"
+#endif
+
 /* One frame, linearized. Matches the driver's own frame ceiling. */
 #define ETHNETIF_MTU		1500u
 #define ETHNETIF_LINEAR_BUF	DWC_EQOS_RX_BUF_SIZE
@@ -470,6 +475,52 @@ void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 	*input_fail = g_input_fail;
 	*fed_total = g_fed_total;
 }
+
+#if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
+/* The TCP control block's window state (K2-16, receive-direction defect).
+ *
+ * lwIP's socket layer gives the application data and errors, not windows; on
+ * a receive-side stall the question "is the peer throttled by a zero window
+ * we advertised, or is the window open and we are not consuming?" has no
+ * answer from the socket API. tcp_active_pcbs is the stack's own list, and
+ * tcp_priv.h is where lwIP keeps it. Read under the core lock: this runs in
+ * a sampler thread, never in an ISR, and it only reads.
+ *
+ * Returns the number of matching PCBs written (0 when the connection is not
+ * in the active list, e.g. before accept or after close). */
+int ethnetif_tcp_state(u16_t local_port, struct ethnetif_tcp_state *out,
+		       int max)
+{
+	struct tcp_pcb *pcb;
+	int n = 0;
+
+	if ((out == NULL) || (max <= 0)) {
+		return 0;
+	}
+
+	LOCK_TCPIP_CORE();
+	for (pcb = tcp_active_pcbs; (pcb != NULL) && (n < max);
+	     pcb = pcb->next) {
+		if (pcb->local_port != local_port) {
+			continue;
+		}
+		out[n].local_port = pcb->local_port;
+		out[n].remote_port = pcb->remote_port;
+		out[n].state = (u8_t)pcb->state;
+		out[n].flags = (u8_t)pcb->flags;
+		out[n].rcv_wnd = (u32_t)pcb->rcv_wnd;
+		out[n].rcv_ann_wnd = (u32_t)pcb->rcv_ann_wnd;
+		out[n].snd_wnd = (u32_t)pcb->snd_wnd;
+		out[n].rcv_nxt = pcb->rcv_nxt;
+		out[n].snd_nxt = pcb->snd_nxt;
+		out[n].snd_queuelen = (u32_t)pcb->snd_queuelen;
+		n++;
+	}
+	UNLOCK_TCPIP_CORE();
+
+	return n;
+}
+#endif /* CONFIG_GMAC_TCP_PROBE */
 
 /* netif->state carries the driver port index (the only per-netif fact the
  * bridge needs - the MAC address comes from the driver). */

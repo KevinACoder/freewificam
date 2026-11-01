@@ -722,6 +722,153 @@ static uint64_t prof_t0;
  * cycles one frame cost and what the core's effective clock was (P0.2). */
 static uint64_t prof_c0;
 
+/* --- K2-16 transmit-stall probe -------------------------------------------
+ *
+ * The high-OPP uplink stops with a full ring and no completion. A single
+ * give-up snapshot cannot say whether the DMA stopped fetching, the MAC
+ * stopped draining, the write-back is being lost, or a write never landed;
+ * that needs the same registers over time. The console cannot carry a 1 ms
+ * stream (115200 baud is ~11.5 kB/s, one 80-byte line is 7 ms), so samples
+ * land in RAM and are dumped after the failure, while the cell waits out its
+ * window.
+ *
+ * Two windows, because the stall happens inside the driver's full-ring wait:
+ *  - pre: sampled at frame boundaries from the send loop, at most one per ms,
+ *    so the last ~128 ms of healthy traffic before the ring filled is kept;
+ *  - post: sampled here in the abort path (the sender is idle, so a real
+ *    1 ms cadence), which is the window where "does it ever recover" is
+ *    answered - including one explicit tail-pointer write.
+ *
+ * Tax: one 24 MHz counter read per sent frame (the gate) plus one sample per
+ * ms (~10 register reads). Label the arm instrumented; its throughput is
+ * not the acceptance number. */
+#if NETIO_GMAC && defined(CONFIG_NETIO_TX_STALL_PROBE) && CONFIG_NETIO_TX_STALL_PROBE
+#define STALL_PRE_SAMPLES	128
+#define STALL_POST_SAMPLES	96
+#define STALL_GATE_TICKS	24000u	/* 1 ms at 24 MHz */
+
+static struct dwc_eqos_tx_sample stall_pre[STALL_PRE_SAMPLES];
+static struct dwc_eqos_tx_sample stall_post[STALL_POST_SAMPLES];
+static unsigned stall_pre_head;
+static unsigned stall_pre_count;
+static volatile int stall_armed;
+static volatile int stall_frozen;
+static uint32_t stall_last_gt;
+
+static void stall_begin(void)
+{
+	stall_pre_head = 0u;
+	stall_pre_count = 0u;
+	stall_frozen = 0;
+	stall_last_gt = (uint32_t)gtimer_count_get() - STALL_GATE_TICKS;
+	stall_armed = 1;
+}
+
+static void stall_end(void)
+{
+	stall_armed = 0;
+}
+
+static void stall_tick(void)
+{
+	uint32_t now;
+
+	if ((stall_armed == 0) || (stall_frozen != 0)) {
+		return;
+	}
+	now = (uint32_t)gtimer_count_get();
+	if ((uint32_t)(now - stall_last_gt) < STALL_GATE_TICKS) {
+		return;
+	}
+	stall_last_gt = now;
+	if (dwc_eqos_tx_sample(MN_GMAC, &stall_pre[stall_pre_head]) != 0) {
+		return;
+	}
+	stall_pre_head = (stall_pre_head + 1u) % STALL_PRE_SAMPLES;
+	if (stall_pre_count < STALL_PRE_SAMPLES) {
+		stall_pre_count++;
+	}
+}
+
+static void stall_print(const char *tag, const struct dwc_eqos_tx_sample *s)
+{
+	MDK_ANCHOR("netio: txp %s t=%lu head=%lu tail=%lu cur=%08lx end=%08lx "
+		   "mtl=%08lx irq=%lu irqtx=%lu spins=%lu zero=%lu freed=%lu\n",
+		   tag, (unsigned long)s->tick, (unsigned long)s->head,
+		   (unsigned long)s->tail, (unsigned long)s->cur_tx_desc,
+		   (unsigned long)s->tx_end, (unsigned long)s->mtl_txq_dbg,
+		   (unsigned long)s->irq_n, (unsigned long)s->irq_tx,
+		   (unsigned long)s->spins, (unsigned long)s->zero,
+		   (unsigned long)s->freed);
+}
+
+/* The abort path. Order matters: freeze the pre-ring, snapshot ownership,
+ * kick once, then watch the channel for ~96 ms before dumping everything. */
+static void stall_capture(void)
+{
+	uint32_t own[8];
+	uint32_t mmc[24];
+	uint32_t kick;
+	unsigned i;
+
+	stall_frozen = 1;
+
+	memset(own, 0, sizeof(own));
+	memset(mmc, 0, sizeof(mmc));
+	(void)dwc_eqos_tx_scan_own(MN_GMAC, own, 8);
+	(void)dwc_eqos_mmc_raw(MN_GMAC, 0x700u, mmc, 24);
+
+	kick = dwc_eqos_tx_tail_kick(MN_GMAC);
+
+	for (i = 0u; i < STALL_POST_SAMPLES; i++) {
+		if (dwc_eqos_tx_sample(MN_GMAC, &stall_post[i]) != 0) {
+			break;
+		}
+		osDelay(1u);
+	}
+
+	MDK_ANCHOR("netio: txown n=%u own=%08lx.%08lx.%08lx.%08lx"
+		   ".%08lx.%08lx.%08lx.%08lx kick=%08lx pre=%u post=%u\n",
+		   (unsigned)((DWC_EQOS_TX_DESC_COUNT + 31u) / 32u),
+		   (unsigned long)own[0], (unsigned long)own[1],
+		   (unsigned long)own[2], (unsigned long)own[3],
+		   (unsigned long)own[4], (unsigned long)own[5],
+		   (unsigned long)own[6], (unsigned long)own[7],
+		   (unsigned long)kick, stall_pre_count, i);
+	MDK_ANCHOR("netio: txmmc base=700 %08lx %08lx %08lx %08lx %08lx %08lx "
+		   "%08lx %08lx %08lx %08lx %08lx %08lx\n",
+		   (unsigned long)mmc[0], (unsigned long)mmc[1],
+		   (unsigned long)mmc[2], (unsigned long)mmc[3],
+		   (unsigned long)mmc[4], (unsigned long)mmc[5],
+		   (unsigned long)mmc[6], (unsigned long)mmc[7],
+		   (unsigned long)mmc[8], (unsigned long)mmc[9],
+		   (unsigned long)mmc[10], (unsigned long)mmc[11]);
+	MDK_ANCHOR("netio: txmmc base=730 %08lx %08lx %08lx %08lx %08lx %08lx "
+		   "%08lx %08lx %08lx %08lx %08lx %08lx\n",
+		   (unsigned long)mmc[12], (unsigned long)mmc[13],
+		   (unsigned long)mmc[14], (unsigned long)mmc[15],
+		   (unsigned long)mmc[16], (unsigned long)mmc[17],
+		   (unsigned long)mmc[18], (unsigned long)mmc[19],
+		   (unsigned long)mmc[20], (unsigned long)mmc[21],
+		   (unsigned long)mmc[22], (unsigned long)mmc[23]);
+
+	for (i = 0u; i < stall_pre_count; i++) {
+		unsigned idx = (stall_pre_head + STALL_PRE_SAMPLES -
+				stall_pre_count + i) % STALL_PRE_SAMPLES;
+
+		stall_print("pre", &stall_pre[idx]);
+	}
+	for (i = 0u; i < STALL_POST_SAMPLES; i++) {
+		stall_print("post", &stall_post[i]);
+	}
+}
+#else
+#define stall_begin()		do { } while (0)
+#define stall_end()		do { } while (0)
+#define stall_tick()		do { } while (0)
+#define stall_capture()		do { } while (0)
+#endif /* CONFIG_NETIO_TX_STALL_PROBE */
+
 static void UDP_Server(void *arg)
 {
 	struct sockaddr_in sa;
@@ -950,6 +1097,7 @@ static void UDP_Server(void *arg)
 #if NETIO_GMAC
 					net_prof_take(&prof_a);
 #endif
+					stall_begin();
 
 					while (!io.timeover) {
 						for (nb = 0; nb < (int32_t)io.pkt_size;) {
@@ -992,13 +1140,29 @@ static void UDP_Server(void *arg)
 								 * socket - a client left waiting for a
 								 * receive stream that never comes does
 								 * not close it, and the numbers are
-								 * lost exactly when they matter. */
+								 * lost exactly when they matter.
+								 *
+								 * The ledger comes BEFORE the stall
+								 * probe: the probe reads the raw MMC
+								 * block, and on a revision whose MMC
+								 * counters are read-clear that read
+								 * would zero the numbers this line is
+								 * about to report. */
 								emit_layer_counters("udp-s2c-abort");
+								/* K2-16: after the ledger, in the idle
+								 * window this branch waits out. The
+								 * probe freezes its pre-trigger ring,
+								 * scans the TX descriptors, kicks the
+								 * tail pointer once, samples the
+								 * channel for ~96 ms and dumps. */
+								stall_capture();
+								stall_end();
 								while (!io.timeover)
 									osDelay(2);
 								goto done_send;
 							}
 							nb += rc;
+							stall_tick();
 						}
 						io.tx_bytes += io.pkt_size;
 						io.pkt_count++;
@@ -1017,6 +1181,7 @@ static void UDP_Server(void *arg)
 					}
 				}
 done_send:
+				stall_end();
 #if !(defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP)
 				lwip_close(io.udp_sock);
 #endif
@@ -1039,6 +1204,240 @@ done_send:
 	}
 	lwip_close(sock);
 }
+
+/* --- K2-16 TCP receive-direction probe -------------------------------------
+ *
+ * The peer-to-board TCP direction collapses (K2-16 defect B: 41 kB/s, the
+ * c2s phase ends after ~256 packets). Which layer it collapses in - the
+ * driver's receive ring, the bridge, the stack's input, the socket wake, or
+ * the window the peer is throttled by - cannot be told from the socket API,
+ * and the console cannot carry a timeline. So: a low-priority sampler every
+ * 250 ms into RAM, dumped after the phase.
+ *
+ * What it reads, and why:
+ *  - the PCB's windows (ethnetif_tcp_state): a zero advertised window is the
+ *    peer being throttled by us; an open window with no data arrival is the
+ *    input path;
+ *  - the socket read-path histogram (updated by the c2s loop itself): calls,
+ *    full reads, short reads, zero reads, errors;
+ *  - lwIP's tcp and MIB2 counters (retransmits are the direct read on
+ *    "were segments lost or just late");
+ *  - the driver's software counters and the quiet ring snapshot (no
+ *    read-clear status read: an observer that eats an RX interrupt would
+ *    reproduce the symptom it is looking for).
+ *
+ * Requires -DCONFIG_GMAC_TCP_PROBE=1 (turns MIB2_STATS on in lwipopts.h).
+ * Instrumented arm: its throughput is not the acceptance number. */
+
+/* Socket read-path counters. Compiled in every build: the c2s loop updates
+ * them unconditionally (five increments per read, noise) and the probe is the
+ * only reader, so the default image's network path is unchanged. */
+static uint32_t tcp_recv_calls;
+static uint32_t tcp_recv_full;
+static uint32_t tcp_recv_short;
+static uint32_t tcp_recv_zero;
+static uint32_t tcp_recv_err;
+
+#if NETIO_GMAC && defined(CONFIG_NETIO_TCP_PROBE) && CONFIG_NETIO_TCP_PROBE
+#define TCP_PROBE_SAMPLES	64
+#define TCP_PROBE_PERIOD_MS	250u
+
+struct tcp_probe_sample {
+	uint32_t t_ms;
+	uint32_t rcv_wnd;
+	uint32_t rcv_ann_wnd;
+	uint32_t snd_wnd;
+	uint32_t snd_queuelen;
+	uint32_t state;
+	uint32_t flags;
+	uint32_t recv_calls;
+	uint32_t recv_full;
+	uint32_t recv_short;
+	uint32_t recv_zero;
+	uint32_t recv_err;
+	uint32_t tp_xmit;
+	uint32_t tp_recv;
+	uint32_t tp_drop;
+	uint32_t tp_chkerr;
+	uint32_t tp_memerr;
+	uint32_t mib_in;
+	uint32_t mib_out;
+	uint32_t mib_retrans;
+	uint32_t mib_inerrs;
+	uint32_t rx_frames;
+	uint32_t rx_dropped;
+	uint32_t rx_buf_unavail;
+	uint32_t rx_irqs;
+	uint32_t ring_armed;
+	uint32_t own_clear;
+	uint32_t cur_rx_desc;
+	uint32_t rx_end;
+};
+
+static struct tcp_probe_sample tcp_probe[TCP_PROBE_SAMPLES];
+static unsigned tcp_probe_count;
+static uint64_t tcp_probe_t0;
+static volatile int tcp_probe_on;
+
+/* The socket read path, updated by the c2s loop (single writer). */
+static void tcp_probe_begin(void)
+{
+	tcp_probe_count = 0u;
+	tcp_recv_calls = 0u;
+	tcp_recv_full = 0u;
+	tcp_recv_short = 0u;
+	tcp_recv_zero = 0u;
+	tcp_recv_err = 0u;
+	tcp_probe_t0 = gtimer_count_get();
+	tcp_probe_on = 1;
+}
+
+static void tcp_probe_take(void)
+{
+	struct tcp_probe_sample *s;
+	struct ethnetif_tcp_state st;
+	struct dwc_eqos_stats ds;
+	struct dwc_eqos_ring ring;
+
+	if ((tcp_probe_on == 0) || (tcp_probe_count >= TCP_PROBE_SAMPLES)) {
+		return;
+	}
+	s = &tcp_probe[tcp_probe_count];
+	memset(s, 0, sizeof(*s));
+	s->t_ms = (uint32_t)(((uint64_t)(gtimer_count_get() - tcp_probe_t0) *
+			      1000u) / 24000000u);
+
+	if (ethnetif_tcp_state(NETIO_PORT, &st, 1) > 0) {
+		s->rcv_wnd = st.rcv_wnd;
+		s->rcv_ann_wnd = st.rcv_ann_wnd;
+		s->snd_wnd = st.snd_wnd;
+		s->snd_queuelen = st.snd_queuelen;
+		s->state = st.state;
+		s->flags = st.flags;
+	}
+
+	s->recv_calls = tcp_recv_calls;
+	s->recv_full = tcp_recv_full;
+	s->recv_short = tcp_recv_short;
+	s->recv_zero = tcp_recv_zero;
+	s->recv_err = tcp_recv_err;
+
+#if LWIP_STATS
+	s->tp_xmit = (uint32_t)lwip_stats.tcp.xmit;
+	s->tp_recv = (uint32_t)lwip_stats.tcp.recv;
+	s->tp_drop = (uint32_t)lwip_stats.tcp.drop;
+	s->tp_chkerr = (uint32_t)lwip_stats.tcp.chkerr;
+	s->tp_memerr = (uint32_t)lwip_stats.tcp.memerr;
+#endif
+#if MIB2_STATS
+	s->mib_in = (uint32_t)lwip_stats.mib2.tcpinsegs;
+	s->mib_out = (uint32_t)lwip_stats.mib2.tcpoutsegs;
+	s->mib_retrans = (uint32_t)lwip_stats.mib2.tcpretranssegs;
+	s->mib_inerrs = (uint32_t)lwip_stats.mib2.tcpinerrs;
+#endif
+
+	memset(&ds, 0, sizeof(ds));
+	dwc_eqos_get_stats(MN_GMAC, &ds);
+	s->rx_frames = ds.rx_frames;
+	s->rx_dropped = ds.rx_dropped;
+	s->rx_buf_unavail = ds.rx_buf_unavail;
+	s->rx_irqs = ds.rx_irqs;
+
+	memset(&ring, 0, sizeof(ring));
+	if (dwc_eqos_get_ring_quiet(MN_GMAC, &ring) == 0) {
+		s->ring_armed = ring.ring_armed;
+		s->own_clear = ring.own_clear;
+		s->cur_rx_desc = ring.cur_rx_desc;
+		s->rx_end = ring.rx_end;
+	}
+
+	tcp_probe_count++;
+}
+
+static void tcp_probe_dump(void)
+{
+	unsigned i;
+
+	MDK_ANCHOR("netio: tcpprobe n=%u period_ms=%u\n", tcp_probe_count,
+		   (unsigned)TCP_PROBE_PERIOD_MS);
+	for (i = 0u; i < tcp_probe_count; i++) {
+		const struct tcp_probe_sample *s = &tcp_probe[i];
+
+		/* Two lines per sample: the console's line buffer is 256 bytes
+		 * and one line with every field would sit on that ceiling. */
+		MDK_ANCHOR("netio: tcp t=%lu wnd=%lu/%lu/%lu q=%lu st=%lu fl=%02lx "
+			   "recv=%lu/%lu/%lu/%lu/%lu\n",
+			   (unsigned long)s->t_ms,
+			   (unsigned long)s->rcv_wnd,
+			   (unsigned long)s->rcv_ann_wnd,
+			   (unsigned long)s->snd_wnd,
+			   (unsigned long)s->snd_queuelen,
+			   (unsigned long)s->state,
+			   (unsigned long)s->flags,
+			   (unsigned long)s->recv_calls,
+			   (unsigned long)s->recv_full,
+			   (unsigned long)s->recv_short,
+			   (unsigned long)s->recv_zero,
+			   (unsigned long)s->recv_err);
+		MDK_ANCHOR("netio: tcpc t=%lu seg=%lu/%lu/%lu/%lu tp=%lu/%lu/%lu/%lu "
+			   "drv=%lu/%lu/%lu/%lu ring=%lu/%lu/%08lx/%08lx\n",
+			   (unsigned long)s->t_ms,
+			   (unsigned long)s->mib_in,
+			   (unsigned long)s->mib_out,
+			   (unsigned long)s->mib_retrans,
+			   (unsigned long)s->mib_inerrs,
+			   (unsigned long)s->tp_xmit,
+			   (unsigned long)s->tp_recv,
+			   (unsigned long)s->tp_drop,
+			   (unsigned long)s->tp_chkerr,
+			   (unsigned long)s->rx_frames,
+			   (unsigned long)s->rx_dropped,
+			   (unsigned long)s->rx_buf_unavail,
+			   (unsigned long)s->rx_irqs,
+			   (unsigned long)s->ring_armed,
+			   (unsigned long)s->own_clear,
+			   (unsigned long)s->cur_rx_desc,
+			   (unsigned long)s->rx_end);
+	}
+}
+
+static void tcp_probe_end(void)
+{
+	tcp_probe_on = 0;
+	tcp_probe_dump();
+}
+
+static void tcp_probe_thread(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		if (tcp_probe_on != 0) {
+			tcp_probe_take();
+			osDelay(TCP_PROBE_PERIOD_MS);
+		} else {
+			osDelay(20u);
+		}
+	}
+}
+
+static const osThreadAttr_t tcp_probe_attr = {
+	.name = "netio-tcp-probe",
+	.priority = osPriorityLow,
+	.stack_size = 2048U,
+};
+#else
+/* Probe off: the read-path counters still reset per phase (they are printed
+ * by the "tcp rx done" line), nothing is sampled and nothing is dumped. */
+#define tcp_probe_begin()						\
+	do {								\
+		tcp_recv_calls = 0u;					\
+		tcp_recv_full = 0u;					\
+		tcp_recv_short = 0u;					\
+		tcp_recv_zero = 0u;					\
+		tcp_recv_err = 0u;					\
+	} while (0)
+#define tcp_probe_end()		do { } while (0)
+#endif /* CONFIG_NETIO_TCP_PROBE */
 
 static void TCP_Server(void *arg)
 {
@@ -1116,23 +1515,65 @@ static void TCP_Server(void *arg)
 				{
 					uint64_t c2s_t0 = gtimer_count_get();
 					uint64_t c2s_c0 = net_prof_cpu_cycles();
+					uint32_t partial = 0u;
 
+					tcp_probe_begin();
+
+					/* K2-16: the accounting is per byte actually
+					 * read, and a packet counts only when the whole
+					 * pkt_size arrived. The previous shape added
+					 * pkt_size even after a short read and could
+					 * spin forever on a zero read (peer close
+					 * mid-packet): both make a stalled receive
+					 * look like a clean one in the one number this
+					 * defect is reported by. The loop still ends on
+					 * the peer's end marker (buf[0] != 0). */
 					do {
 						for (nb = 0; nb < (int32_t)io.pkt_size;) {
 							rc = recv(csock,
 								  (char *)&io.buf[nb],
 								  io.pkt_size - nb, 0);
-							if (rc < 0)
+							tcp_recv_calls++;
+							if (rc < 0) {
+								tcp_recv_err++;
 								break;
+							}
+							if (rc == 0) {
+								tcp_recv_zero++;
+								break;
+							}
+							if (rc < ((int32_t)io.pkt_size - nb)) {
+								tcp_recv_short++;
+							} else {
+								tcp_recv_full++;
+							}
 							nb += rc;
 						}
-						io.rx_bytes += io.pkt_size;
-						io.pkt_count++;
+						io.rx_bytes += (uint32_t)nb;
+						if (nb == (int32_t)io.pkt_size) {
+							io.pkt_count++;
+						} else {
+							partial++;
+							break;
+						}
 					} while (io.buf[0] == 0 && rc > 0);
 
-					MDK_ANCHOR("netio: tcp rx done pkts=%lu bytes=%lu\n",
+					tcp_probe_end();
+
+					MDK_ANCHOR("netio: tcp rx done pkts=%lu bytes=%lu "
+						   "partial=%lu recv_calls=%lu err=%lu "
+						   "zero=%lu short=%lu\n",
 						   (unsigned long)io.pkt_count,
-						   (unsigned long)io.rx_bytes);
+						   (unsigned long)io.rx_bytes,
+						   (unsigned long)partial,
+						   (unsigned long)tcp_recv_calls,
+						   (unsigned long)tcp_recv_err,
+						   (unsigned long)tcp_recv_zero,
+						   (unsigned long)tcp_recv_short);
+					/* Exact c2s window for the layer ledger: the
+					 * "tcp-end" snapshot would also carry the s2c
+					 * phase, which is the direction that works. */
+					emit_layer_counters("tcp-c2s-end");
 					net_prof_cpu_cell("tcp-c2s",
 					                   net_prof_cpu_cycles() - c2s_c0,
 					                   gtimer_count_get() - c2s_t0,
@@ -1450,6 +1891,31 @@ static void emit_cpu_freq_line(void)
 		    "set_ret=%d\n", req_khz, (unsigned long)(rb / 1000u), rc, src);
 }
 
+/* K2-16: a second, late frequency request, applied after the line is up and
+ * before the ready line. It exists to separate "the higher clock breaks the
+ * transmit path" from "the OPP *procedure* leaves the machine in a state that
+ * breaks it": set 1992 kHz here, then immediately set 816 and run the cell at
+ * the boot clock. If that arm still stalls, the value was never the variable.
+ * 0 (the default) is a no-op and costs one branch. */
+#ifndef CONFIG_NETIO_CPU_KHZ_LATE
+#define CONFIG_NETIO_CPU_KHZ_LATE 0
+#endif
+
+static void emit_cpu_late_line(void)
+{
+	unsigned long req_khz = (unsigned long)CONFIG_NETIO_CPU_KHZ_LATE;
+	int rc;
+	uint32_t rb;
+
+	if (req_khz == 0ul) {
+		return;
+	}
+	rc = cpu_freq_set_hz((uint32_t)(req_khz * 1000ul));
+	rb = cpu_freq_get_hz();
+	CASE_ANCHOR("netio: cpu late req_khz=%lu readback_khz=%lu set_ret=%d\n",
+		    req_khz, (unsigned long)(rb / 1000u), rc);
+}
+
 static int netio_case_run(void)
 {
 	/* P0.2: a self-checking CPU clock probe, run first and printed before
@@ -1460,6 +1926,7 @@ static int netio_case_run(void)
 	 * sample is a 1 ms busy spin, not an idle delay, so the reported MHz is
 	 * the frequency the core actually runs at (WFI would under-report). */
 	emit_cpu_freq_line();
+	emit_cpu_late_line();
 #if NET_PROF_CPU_PROBE
 	{
 		uint32_t pt0;
@@ -1582,6 +2049,15 @@ static int netio_case_run(void)
 		CASE_ANCHOR("net: netio FAIL udp thread\n");
 		return 1;
 	}
+
+#if NETIO_GMAC && defined(CONFIG_NETIO_TCP_PROBE) && CONFIG_NETIO_TCP_PROBE
+	/* Sleeps until a c2s phase arms it (tcp_probe_begin), so its presence
+	 * costs one idle thread in every other phase. */
+	if (osThreadNew(tcp_probe_thread, NULL, &tcp_probe_attr) == NULL) {
+		CASE_ANCHOR("net: netio FAIL tcp probe thread\n");
+		return 1;
+	}
+#endif
 
 #ifdef NET_WATCH
 	/* start the ledger before the ready line, so the run's timeline from
