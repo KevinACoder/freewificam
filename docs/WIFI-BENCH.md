@@ -153,8 +153,9 @@ this bench.
 |---|---|---|---|---|
 | 802.11g legacy, 54 Mbit/s | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
 | 802.11g legacy, 54 Mbit/s | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
-| HT20, 72.2 Mbit/s MCS7 short GI | UDP 1440 B downlink | 21.50 / 20.03 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
-| HT20, 72.2 Mbit/s MCS7 short GI | TCP downlink | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
+| HT20, 72.2 Mbit/s MCS7 short GI | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
+| HT20, 72.2 Mbit/s MCS7 short GI | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
+| HT40, 150 Mbit/s MCS7 40MHz short GI | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | - | 57.77–64.60 Mbit/s |
 
 The legacy row is the important one: **at the lowest protocol the two stacks are
 equal**. Per frame the accounts overlap column by column: data 239.1-239.8 us
@@ -164,12 +165,15 @@ net80211 shim is not intrinsically slower than mac80211 - a shim that pays a
 per-frame tax could not land within 1% of the reference. TCP agrees within 13%
 in the shim's favour (19.6 against 17.5 Mbit/s).
 
-The HT row is where the difference lives, and it is a missing feature, not a
-slow stack: the reference negotiates block-ack and sends A-MPDUs (3,523
-BlockAcks and 37,620 frames carrying radiotap A-MPDU marks in the cell), while
-the shim has no block-ack session at all (0 BlockAcks, one plain ACK per
-frame). One aggregated block pays one preamble, one ACK and one backoff instead
-of N; the shim pays them per frame. TCP shows the same gap for the same reason
-(18.8-19.4 against 37.9-38.1 Mbit/s), and there it also caps the window: more
-frames in flight than the airtime can retire.
+The HT20 row is where the old difference lived, and it was a missing feature,
+not a slow stack: before this work the reference negotiated block-ack and sent
+A-MPDUs (3,523 BlockAcks and 37,620 frames carrying radiotap A-MPDU marks in
+the cell), while the shim had no block-ack session at all (0 BlockAcks, one
+plain ACK per frame).  After adding the RX ADDBA response, a 64-slot reorder
+buffer, TX BA and the 40 MHz path, HT20 is aligned: 52.1-53.0 Mbit/s against
+49.8-51.9, with BA and A-MPDU marks present and gap near zero.  HT40 now
+associates and aggregates too (AP station 135/150 MCS7 40MHz short GI, about
+2,400 BlockAcks per cell), but reaches 46.2 Mbit/s against 62.3, so the 40 MHz
+path is functional and not yet at parity; the gap is not attributed.  The TCP
+HT20 row above is pre-BA and is kept only as history.
 

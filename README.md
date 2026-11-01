@@ -128,8 +128,9 @@ A dash means that arm was not measured on this bench.  Methods and counters:
 | Wired 1 GbE | TCP 1440 B, peer to board | - | 0.04 MB/s (c2s phase ends early) | 111.91 MB/s |
 | Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
 | Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
-| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 21.50 / 20.03 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
-| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
+| Wi-Fi 8188EU, HT40 (150 Mbit/s MCS7 40MHz SGI) | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | - | 57.77–64.60 Mbit/s |
 
 TCP rows are first measurements, one session each: TCP is not part of the
 accepted set in [docs/NET-TESTING.md](docs/NET-TESTING.md) yet.  The wired RTOS
@@ -139,13 +140,20 @@ and then sends 252,972 packets in 6 s, so its TX is fine and the throttle sits
 on the receive side.  That is the next thing to look at, not a throughput
 number.
 
-The two Wi-Fi modes tell different stories.  At the lowest protocol the shim
+The three Wi-Fi modes tell different stories.  At the lowest protocol the shim
 and mac80211 are equal: per frame data 238 us against 239 us and control 28 us
 against 28 us, so the net80211 shim carries no per-frame tax, and TCP lands
-within 13% of the reference (19.6 against 17.5 Mbit/s).  At HT the reference
-negotiates block-ack and sends A-MPDUs (3,523 BlockAcks, 37,620 frames with
-radiotap A-MPDU marks), while the shim has no block-ack session at all (0
-BlockAcks, one plain ACK per frame), and that is the whole gap.
+within 13% of the reference (19.6 against 17.5 Mbit/s).  At HT20 the shim now
+matches the reference after adding block-ack and A-MPDU support: 52.1-53.0
+against 49.8-51.9 Mbit/s, with BlockAcks, radiotap A-MPDU marks, control
+2.7-2.8 us per frame and gap 0.  The old gap was a missing feature, not a slow
+stack: before this work the reference negotiated block-ack (3,523 BlockAcks,
+37,620 A-MPDU-marked frames) while the shim had no session at all (0 BlockAcks,
+0 marks, one plain ACK per frame).  At HT40 the shim associates at 40 MHz and
+negotiates block-ack (AP station 135/150 Mbit/s MCS7 40MHz short GI, about
+2,400 BlockAcks per cell), but reaches 46.2 Mbit/s against the reference's
+62.3, so the 40 MHz path is functional and not yet at parity; that gap is not
+attributed.
 
 ## Wireless bench
 
