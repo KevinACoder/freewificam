@@ -18,19 +18,24 @@ CONFIG_CASES := net_mdk_netio
 CONFIG_OPT := -O2
 CONFIG_PROFILE := base
 
-# The receive path defaults are the K2-03 A6 set, moved from a one-off command
-# line into the arm so every future measurement starts from the best known
-# configuration instead of re-deriving it:
-#   - LWIP_TCPIP_CORE_LOCKING_INPUT: the driver's RX thread runs the stack's
-#     input path itself; without it every frame pays a mailbox post and two
-#     thread switches before anything looks at the headers.
-#   - CONFIG_GMAC_RX_BATCH: the poll drains a burst through one core-lock
-#     acquisition instead of one per frame.
+# The receive path defaults, moved from one-off command lines into the arm so
+# every future measurement starts from the best known configuration:
 #   - CONFIG_GMAC_RX_HWCSUM: the MAC validates the IP/L4 checksum; the stack's
 #     software pass over every frame was measured at ~18% of the feed segment.
-# Measured together on 2026-10-30: 51.6 -> 70.0 MB/s, feed 19.3 -> 11.4 us.
-CONFIG_LEVERS := -DLWIP_TCPIP_CORE_LOCKING_INPUT=1 -DCONFIG_GMAC_RX_BATCH=1 \
-	-DCONFIG_GMAC_RX_HWCSUM=1
+#
+# LWIP_TCPIP_CORE_LOCKING_INPUT=0 (with CONFIG_GMAC_RX_BATCH therefore inert):
+# the 2026-10-30 A6 set ran the whole receive burst inside the driver's RX
+# thread to save a mailbox post per frame (51.6 -> 70.0 MB/s then). It also
+# means the socket reader cannot take the core lock until the burst ends, so
+# a TCP burst larger than the socket's receive mailbox is refused by the
+# stack (tcp.drop / mib2.tcpinerrs) and re-offered only by the 250 ms fast
+# timer. Measured on this arm (2026-11-02): TCP peer-to-board 33.0 kB/s with
+# input on the RX thread, 40.8 MB/s with input on the tcpip thread, while the
+# UDP receive cell stayed at 114.0 MB/s / 0% loss and the UDP and TCP
+# transmit directions were unchanged (105.5 and 45.2 MB/s). The lever bought
+# nothing this tree still needs and cost the receive direction three orders
+# of magnitude.
+CONFIG_LEVERS := -DCONFIG_GMAC_RX_HWCSUM=1
 CONFIG_HEAP_SIZE := 16M
 CONFIG_FREERTOS_HEAP_SIZE := 16777216u
 
