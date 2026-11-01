@@ -99,10 +99,27 @@
 #define DWC_EQOS_RXPBL		((uint32_t)CONFIG_GMAC_RXPBL)
 #endif
 
-/* How long SendFrame waits for a descriptor before reporting busy. At line
- * rate a full 64-slot ring drains in under a millisecond, so a couple of
- * milliseconds is generous; longer than that means the link is not moving. */
-#define DWC_EQOS_TX_WAIT_MS	4u
+/* How long SendFrame waits for a descriptor before reporting busy (K2-14,
+ * 2026-11-01).
+ *
+ * The wait is a property of the WIRE, not of the loop: the DMA clears the
+ * tail descriptor only after the MAC has put that frame on the line, so a
+ * sender that finds the ring full has to cover one frame time - 12.2 us at
+ * 1 Gbit, 122 us at 100 Mbit. The first version of this wait counted five
+ * loop iterations, which is 1-2 us on this core: it only worked because the
+ * CPU at the old OPP was itself slower than the wire (821 MHz measured
+ * 12.57 us per frame, so the tail was always already retired). Raising the
+ * clock to ~1.69 GHz made the sender ~2x faster than the wire and the first
+ * genuine full ring aborted the run at 475 frames with tx_wait_ticks=0.
+ *
+ * SPINS: consecutive completion sweeps that reclaim nothing before the ring
+ * is declared stuck. One sweep is a few hundred ns, so 4096 covers ~1 ms -
+ * two orders of magnitude over one line-rate frame time.
+ * PARK: after that, sleep one tick at a time (1 ms on this port) instead of
+ * burning the tcpip thread; 20 of them is the same ~20 ms the original
+ * comment claimed, now actually measured in wall-clock ticks. */
+#define DWC_EQOS_TX_FULL_SPINS	4096u
+#define DWC_EQOS_TX_FULL_PARK	20u
 
 /* RX sweep context. Default (2026-10-17) = the BOTTOM HALF: the ISR signals and
  * the RX thread runs the sweep, because holding the interrupt across an
@@ -241,6 +258,40 @@ struct dwc_eqos_dev {
 	uint32_t tx_waits;	/* sends that found the ring full */
 	uint32_t tx_wait_ticks;	/* kernel ticks spent parked on tx_sem */
 	uint32_t tx_occ_max;	/* peak descriptors in flight */
+
+	/* TX full-ring episodes (K2-14, 2026-11-01). tx_waits alone cannot tell
+	 * "the sender polled a few dozen times and a slot came free" (healthy,
+	 * 287k occurrences in the K2-07 run) from "the sender gave up because
+	 * the completion never came back" (the 475-frame abort) - both count
+	 * once per send. These split the episode: how many consecutive sweeps
+	 * found nothing, how much progress a sweep bought, and what the ring
+	 * looked like when the wait ran out. */
+	uint32_t tx_full_episodes;	/* sends that had to wait at all */
+	uint32_t tx_full_spins;		/* completion sweeps on a full ring */
+	uint32_t tx_full_zero;		/* ... of which reclaimed nothing */
+	uint32_t tx_full_freed;		/* descriptors those sweeps reclaimed */
+	uint32_t tx_full_giveups;	/* waits that ended in a dropped frame */
+	uint32_t tx_full_last_head;	/* ring indices at the last give-up */
+	uint32_t tx_full_last_tail;
+	uint32_t tx_full_last_wait24;	/* how long the last give-up waited, in
+					 * 24 MHz ticks (41.7 ns): the width of
+					 * the window that was not enough. */
+	uint32_t tx_full_last_ch0_status;	/* DMA_CH0_STATUS at give-up */
+	uint32_t tx_full_last_cur_tx_desc;	/* DMA_CH0_CUR_TX_DESC */
+	uint32_t tx_full_last_tx_base;	/* DMA_CH0_TX_BASE_ADDR_LO */
+	uint32_t tx_full_last_mtl_int;	/* MTL_INT_STATUS at give-up */
+	/* Is the MAC/MTL/DMA still *allowed* to transmit? A stalled ring that
+	 * still has TE, TXQEN, ST and RFE=0 set cannot be explained by a
+	 * disabled block, and rules the whole family out at once. */
+	uint32_t tx_full_last_mac_conf;	/* MAC_CONFIGURATION (TE bit 1) */
+	uint32_t tx_full_last_rx_fc;	/* MAC_RX_FLOW_CTRL (RFE bit 0) */
+	uint32_t tx_full_last_txq_mode;	/* MTL_TXQ0_OPERATION_MODE (TXQEN) */
+	uint32_t tx_full_last_tx_ctrl;	/* DMA_CH0_TX_CONTROL (ST bit 0) */
+	uint32_t tx_full_last_intr_en;	/* DMA_CH0_INTR_ENABLE (TIE bit 0) */
+	uint32_t tx_full_last_mac_tx;	/* MMC tx packets at the last give-up:
+					 * if this stops advancing across the
+					 * wait while head != tail, the DMA is
+					 * stuck, not merely slow. */
 
 	/* CONFIG_GMAC_TX_CSUM capability, latched at hw_start: the CIC tagging
 	 * only happens when the core actually has the inserter (HW_FEATURE1
@@ -2150,6 +2201,8 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 {
 	struct dwc_eqos_dev *dev;
 	unsigned int tries;
+	int entered = 0;
+	uint64_t t_ep = 0;
 	uint64_t t_tx;
 
 	if (index >= DWC_EQOS_PORT_COUNT) {
@@ -2164,7 +2217,7 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 	}
 	t_tx = eqos_prof_t0();
 
-	for (tries = 0; tries <= DWC_EQOS_TX_WAIT_MS; tries++) {
+	for (tries = 0; ; ) {
 		struct dwc_eqos_desc *desc;
 		unsigned int tx_len;
 		unsigned int ioc;
@@ -2298,11 +2351,20 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 		}
 		eqos_unlock(dev);
 
-		/* Ring full. The completion sweep signals the semaphore as it
-		 * frees slots, so the wait ends the moment space exists; the
-		 * timeout is only the belt-and-braces against a lost signal
-		 * (and bounds the tcpip thread's stall while the ring drains
-		 * at line rate). */
+		/* Ring full. Bounded by CONSECUTIVE zero-progress sweeps, not by
+		 * iterations of anything: every slot a sweep reclaims is progress
+		 * and restarts the count, so the bound can only expire on a ring
+		 * nobody is draining. (K2-14: the previous bound counted five
+		 * loop passes - 1-2 us - and dropped the frame while the MAC was
+		 * still sending the descriptor it was waiting for.) */
+		if (!entered) {
+			entered = 1;
+			/* gtimer, not eqos_prof_t0: prof is off on the
+			 * acceptance boots and the width of this wait is the
+			 * measurement. */
+			t_ep = gtimer_count_get();
+			dev->tx_full_episodes++;
+		}
 		dev->tx_waits++;
 #if defined(CONFIG_GMAC_TX_NONBLOCK) && CONFIG_GMAC_TX_NONBLOCK
 		/* TX-ladder lever: hand the full ring straight back to the
@@ -2323,23 +2385,77 @@ int32_t dwc_eqos_send_frame(unsigned int index, const uint8_t *frame, uint32_t l
 			 * so this cannot race the ISR's own sweep. */
 			int freed;
 
+			dev->tx_full_spins++;
 			eqos_lock(dev);
 			freed = eqos_tx_complete(dev);
 			eqos_unlock(dev);
 			if (freed > 0) {
+				dev->tx_full_freed += (uint32_t)freed;
+				tries = 0;
 				continue;
 			}
+			dev->tx_full_zero++;
+			tries++;
+		}
+		if (tries <= DWC_EQOS_TX_FULL_SPINS) {
+			/* Nothing retired yet: the DMA holds the tail descriptor
+			 * until the MAC has sent the frame (12.2 us at 1 Gbit is
+			 * ~30 of these rounds). Poll. A yield on every round
+			 * measured ~3% off the 816 MHz uplink (K2-14 A5/A6
+			 * 104.5 MiB/s against K2-07's 108.09) - it buys nothing,
+			 * the completion interrupt preempts this thread anyway -
+			 * so it stays as a once-per-64 courtesy bound on how long
+			 * a lower-priority task can be kept off the core. */
+			if ((tries & 63u) == 0u) {
+				(void)osThreadYield();
+			}
+			continue;
+		}
+		if (tries > (DWC_EQOS_TX_FULL_SPINS + DWC_EQOS_TX_FULL_PARK)) {
+			break;
 		}
 		{
+			/* Past the spin budget: something is wrong (the ISR lost a
+			 * completion, the DMA is stuck). Sleep a tick at a time so
+			 * the tcpip thread does not burn the core, and give the
+			 * completion path a chance to catch up. */
 			uint32_t wait_t0 = osKernelGetTickCount();
 
 			if ((dev->tx_sem == NULL) ||
-				(osSemaphoreAcquire(dev->tx_sem, DWC_EQOS_TX_WAIT_MS) != osOK)) {
+				(osSemaphoreAcquire(dev->tx_sem, 1) != osOK)) {
 				(void)osThreadYield();
 			}
 			dev->tx_wait_ticks += osKernelGetTickCount() - wait_t0;
 		}
 #endif
+	}
+
+	{
+		struct dwc_eqos_mmc_stats mmc;
+
+		/* Forensics for the give-up: whether the MAC kept transmitting
+		 * through the wait separates "the CPU never gave the wire time"
+		 * from "the DMA stopped handing back descriptors". The MMC
+		 * counters are free-running and not read-clear. */
+		dev->tx_full_giveups++;
+		dev->tx_full_last_head = (uint32_t)dev->tx_head;
+		dev->tx_full_last_tail = (uint32_t)dev->tx_tail;
+		dev->tx_full_last_wait24 = (uint32_t)(gtimer_count_get() - t_ep);
+		/* Where the DMA says it is and whether it has an excuse. STATUS
+		 * is read-clear for the normal interrupt bits; taken here, on
+		 * the give-up path, the frame is being dropped anyway and this
+		 * same context sweeps the ring on its next pass. */
+		dev->tx_full_last_ch0_status = eqos_rd(dev, DWC_EQOS_DMA_CH0_STATUS);
+		dev->tx_full_last_cur_tx_desc = eqos_rd(dev, DWC_EQOS_DMA_CH0_CUR_TX_DESC);
+		dev->tx_full_last_tx_base = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_BASE_ADDR_LO);
+		dev->tx_full_last_mtl_int = eqos_rd(dev, DWC_EQOS_MTL_INT_STATUS);
+		dev->tx_full_last_mac_conf = eqos_rd(dev, DWC_EQOS_MAC_CONFIGURATION);
+		dev->tx_full_last_rx_fc = eqos_rd(dev, DWC_EQOS_MAC_RX_FLOW_CTRL);
+		dev->tx_full_last_txq_mode = eqos_rd(dev, DWC_EQOS_MTL_TXQ0_OPERATION_MODE);
+		dev->tx_full_last_tx_ctrl = eqos_rd(dev, DWC_EQOS_DMA_CH0_TX_CONTROL);
+		dev->tx_full_last_intr_en = eqos_rd(dev, DWC_EQOS_DMA_CH0_INTR_ENABLE);
+		dwc_eqos_get_mmc_stats(index, &mmc);
+		dev->tx_full_last_mac_tx = mmc.tx_pkts_gb;
 	}
 
 	dev->stats.tx_dropped++;
@@ -2567,6 +2683,24 @@ void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag)
 	diag->tx_waits = dev->tx_waits;
 	diag->tx_wait_ticks = dev->tx_wait_ticks;
 	diag->tx_occ_max = dev->tx_occ_max;
+	diag->tx_full_episodes = dev->tx_full_episodes;
+	diag->tx_full_spins = dev->tx_full_spins;
+	diag->tx_full_zero = dev->tx_full_zero;
+	diag->tx_full_freed = dev->tx_full_freed;
+	diag->tx_full_giveups = dev->tx_full_giveups;
+	diag->tx_full_last_head = dev->tx_full_last_head;
+	diag->tx_full_last_tail = dev->tx_full_last_tail;
+	diag->tx_full_last_wait24 = dev->tx_full_last_wait24;
+	diag->tx_full_last_ch0_status = dev->tx_full_last_ch0_status;
+	diag->tx_full_last_cur_tx_desc = dev->tx_full_last_cur_tx_desc;
+	diag->tx_full_last_tx_base = dev->tx_full_last_tx_base;
+	diag->tx_full_last_mtl_int = dev->tx_full_last_mtl_int;
+	diag->tx_full_last_mac_conf = dev->tx_full_last_mac_conf;
+	diag->tx_full_last_rx_fc = dev->tx_full_last_rx_fc;
+	diag->tx_full_last_txq_mode = dev->tx_full_last_txq_mode;
+	diag->tx_full_last_tx_ctrl = dev->tx_full_last_tx_ctrl;
+	diag->tx_full_last_intr_en = dev->tx_full_last_intr_en;
+	diag->tx_full_last_mac_tx = dev->tx_full_last_mac_tx;
 	diag->irq_n = dev->irq_n;
 	diag->irq_odd = dev->irq_odd;
 	diag->last_status = dev->last_status;

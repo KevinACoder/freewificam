@@ -315,6 +315,12 @@
 #define DWC_EQOS_DMA_CH0_CUR_RX_DESC         0x114C
 #define DWC_EQOS_DMA_CH0_CUR_RX_BUF_ADDR     0x115C
 
+/* Where the TX DMA says it is: channel + 0x44 (Linux dwmac4_dma.h
+ * DMA_CHAN_CUR_TX_DESC, same layout family as the +0x4c RX pointer above).
+ * Read only in the tx-full give-up forensics, and checked against the ring
+ * base the DMA itself reports before the slot index is trusted. */
+#define DWC_EQOS_DMA_CH0_CUR_TX_DESC         0x1144
+
 #define DWC_EQOS_DMA_CH0_INTR_ENABLE         0x1134
 /* On this silicon NIE/AIE sit at 15/14 (the dwmac4.10a layout); bit 16 is not
  * writable. Enabling bit 16 instead looks harmless and leaves every interrupt
@@ -568,6 +574,48 @@ struct dwc_eqos_diag {
 	uint32_t intr_enable;	/* live read at call time */
 	int32_t  gic_pending;	/* pending bit of this port's GIC line */
 	uint32_t irq_breaker;	/* 1 once the breaker fired (see dwc_eqos.c) */
+	/* TX full-ring episodes (K2-14, 2026-11-01). tx_waits counts every send
+	 * that met a full ring - healthy in the thousands (the K2-07 run had
+	 * 287k) - so it cannot separate "polled a few times, a slot came free"
+	 * from "gave up because the completion never came back", which is what
+	 * aborted the uplink run at 475 frames with tx_wait_ticks=0. These
+	 * split the episode: how many consecutive sweeps reclaimed nothing, how
+	 * much progress they bought, and the ring state when the wait expired. */
+	uint32_t tx_full_episodes;	/* sends that had to wait at all */
+	uint32_t tx_full_spins;	/* completion sweeps on a full ring */
+	uint32_t tx_full_zero;	/* ... of which reclaimed nothing */
+	uint32_t tx_full_freed;	/* descriptors those sweeps reclaimed */
+	uint32_t tx_full_giveups;	/* waits that ended in a dropped frame */
+	uint32_t tx_full_last_head;	/* ring indices at the last give-up */
+	uint32_t tx_full_last_tail;
+	uint32_t tx_full_last_wait24;	/* width of the wait that turned out
+					 * not to be enough, in 24 MHz ticks
+					 * (41.7 ns each): comparing it with
+					 * the 12.2 us wire frame time says
+					 * whether the window was short or
+					 * the completion had really
+					 * stopped. */
+	uint32_t tx_full_last_ch0_status;	/* DMA_CH0_STATUS at the give-up */
+	uint32_t tx_full_last_cur_tx_desc;	/* DMA_CH0_CUR_TX_DESC */
+	uint32_t tx_full_last_tx_base;	/* DMA_CH0_TX_BASE_ADDR_LO: the ring
+					 * base the DMA was programmed with,
+					 * so the two above can be turned
+					 * into slot indices without
+					 * trusting a host-side constant */
+	uint32_t tx_full_last_mtl_int;	/* MTL_INT_STATUS: a TX FIFO overflow
+					 * lives here, a descriptor stall
+					 * does not */
+	/* Is the MAC/MTL/DMA still allowed to transmit? A stalled ring with TE,
+	 * TXQEN and ST all still set cannot be explained by a disabled block. */
+	uint32_t tx_full_last_mac_conf;	/* MAC_CONFIGURATION (TE bit 1) */
+	uint32_t tx_full_last_rx_fc;	/* MAC_RX_FLOW_CTRL (RFE bit 0) */
+	uint32_t tx_full_last_txq_mode;	/* MTL_TXQ0_OPERATION_MODE (TXQEN) */
+	uint32_t tx_full_last_tx_ctrl;	/* DMA_CH0_TX_CONTROL (ST bit 0) */
+	uint32_t tx_full_last_intr_en;	/* DMA_CH0_INTR_ENABLE (TIE bit 0) */
+	uint32_t tx_full_last_mac_tx;	/* MMC tx packets at the last give-up:
+					 * frozen across the wait with
+					 * head != tail means the DMA
+					 * stopped, not that it was slow. */
 };
 
 void dwc_eqos_get_diag(unsigned int index, struct dwc_eqos_diag *diag);
