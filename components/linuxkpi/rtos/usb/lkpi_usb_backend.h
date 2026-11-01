@@ -121,6 +121,17 @@ struct lkpi_usb_be_ops {
 	int	(*kill_urb)(void *ctx, struct lkpi_usb_be_urb *urb);
 	int	(*control_transfer)(void *ctx, struct lkpi_usb_be_hubport *port,
 		    const struct lkpi_usb_setup_packet *setup, void *buffer);
+	/*
+	 * Optional: run the controller's completion path once from the
+	 * caller's thread.  The engine calls it from its drain thread when a
+	 * transfer has been outstanding for LKPI_USB_POLL_MS with no
+	 * completion - the compensation for a host controller that can leave
+	 * an event interrupt undelivered while the event sits in its ring
+	 * (measured on this board's DWC3, see DIVERGENCES-USB.md).  It must be
+	 * cheap when there is nothing to do, safe to call at any time, and
+	 * must not block.  NULL = the backend's interrupt is trusted.
+	 */
+	void	(*poll)(void *ctx);
 };
 
 /* install the backend (the host mock harness and the target bring-up call

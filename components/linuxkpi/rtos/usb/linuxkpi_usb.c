@@ -271,6 +271,15 @@ struct lkpi_usb_ep {
 static struct lkpi_usb_ep lkpi_eps[LKPI_EP_N];
 static u32 lkpi_alloc_seq;		/* urb alloc identity source */
 
+/* the backend seam's storage and the lost-interrupt compensation's counters:
+ * the drain thread (above the seam's own section) reads all five */
+static const struct lkpi_usb_be_ops *lkpi_usb_be_ops;
+static void *lkpi_usb_be_ctx;
+static volatile unsigned int lkpi_usb_poll_runs;
+static volatile unsigned int lkpi_usb_poll_drained;
+static volatile int lkpi_usb_poll_fresh;
+void lkpi_usb_poll_now(void);
+
 #ifdef CONFIG_LKPI_CENSUS
 /* ------------------------------------------------------------------ */
 /* the endpoint's time partition                                       */
@@ -537,6 +546,64 @@ static bool lkpi_usb_done_ready;
 static osThreadId_t lkpi_usb_drain_thread;
 
 /*
+ * Observation only (CONFIG_LKPI_USB_OBS, the net_watch image): which stage of
+ * the drain loop is running right now, and how many completions it has
+ * carried.  A stall that leaves every layer above this one frozen is either
+ * "the drain thread is parked on the semaphore" (phase 1: nothing is being
+ * completed at all) or "this thread is inside the driver's callback" (phase 3,
+ * the thread is holding whatever the callback holds while the rest of the
+ * machine waits).  The two have different causes, so the ledger must be able
+ * to tell them apart.  With the lever off both stores are compiled out and the
+ * accessors answer zero.
+ */
+static volatile unsigned int lkpi_usb_obs_phase;	/* 1 idle, 2 arm, 3 callback, 4 free */
+static volatile unsigned int lkpi_usb_obs_done;
+
+#ifdef CONFIG_LKPI_USB_OBS
+#define LKPI_USB_OBS_PHASE(p)	(lkpi_usb_obs_phase = (p))
+#define LKPI_USB_OBS_BUMP()	(lkpi_usb_obs_done++)
+#else
+#define LKPI_USB_OBS_PHASE(p)	do { } while (0)
+#define LKPI_USB_OBS_BUMP()	do { } while (0)
+#endif
+
+/* the drain thread's scheduler state, coded for the ledger: 0 = none,
+ * 1 running, 2 ready, 3 blocked, 4 terminated, 5 other */
+unsigned int
+lkpi_usb_drain_state(void)
+{
+	if (lkpi_usb_drain_thread == NULL)
+		return 0;
+	switch (osThreadGetState(lkpi_usb_drain_thread)) {
+	case osThreadRunning:
+		return 1;
+	case osThreadReady:
+		return 2;
+	case osThreadBlocked:
+		return 3;
+	case osThreadTerminated:
+		return 4;
+	default:
+		return 5;
+	}
+}
+
+/* the drain loop's state, for the net_watch ledger */
+unsigned int
+lkpi_usb_drain_phase(void)
+{
+
+	return lkpi_usb_obs_phase;
+}
+
+unsigned int
+lkpi_usb_drain_done_count(void)
+{
+
+	return lkpi_usb_obs_done;
+}
+
+/*
  * The drain thread's priority, as a run-time knob.  The thread runs every
  * driver completion callback (receive parse, transmit status, the driver's
  * re-arm), so where it sits relative to the context that feeds the endpoint
@@ -776,6 +843,7 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	len = ep->done_len;
 	urb->_qstate = LKPI_Q_CALLBACK;
 	spin_unlock_irqrestore(&ep->lock, flags);
+	LKPI_USB_OBS_PHASE(2);	/* publish/arm the next transfer */
 #ifdef CONFIG_LKPI_CENSUS
 	/* how long the completion sat on the done list before this thread came
 	 * for it: the wake latency, and the drain thread being busy with an
@@ -847,6 +915,13 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 		lkpi_tcp_trace_usb_done(lkpi_census_now_ns());
 #endif
 
+	if (lkpi_usb_poll_fresh) {
+		/* this completion came out of the polled drain: the interrupt
+		 * for it never arrived */
+		lkpi_usb_poll_fresh = 0;
+		lkpi_usb_poll_drained++;
+	}
+	LKPI_USB_OBS_PHASE(3);	/* inside the driver's completion callback */
 #ifdef CONFIG_LKPI_CENSUS
 	{
 		u64 t_cb = lkpi_census_now_ns();
@@ -869,6 +944,8 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 	 * already dropped its own reference (the submit-then-free pattern
 	 * of rtw88 and rtw89 TX) */
 	usb_free_urb(urb);
+	LKPI_USB_OBS_PHASE(4);	/* freeing the transfer */
+	LKPI_USB_OBS_BUMP();
 
 	/* second pass: when the queue was empty at the kick above there was
 	 * nothing to pipeline, and this is what starts a urb the callback just
@@ -880,6 +957,57 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 
 static void lkpi_usb_drain_thread_entry(void *arg);
 
+/* ------------------------------------------------------------------ */
+/* the lost-interrupt compensation                                    */
+/* ------------------------------------------------------------------ */
+/*
+ * The DWC3 host controllers on this board were measured leaving a transfer
+ * event in the event ring with EINT asserted, INTE set and the interrupt line
+ * never reaching the CPU: usbsts=EINT, usbcmd=RS|INTE, iman IP clear, the
+ * consumer entry fresh, the IRQ count frozen - and every endpoint on that bus
+ * stalled from that instant (runs/wireless/2026-11-01-W2-01-wedge, four boots,
+ * a thread-context drain then recovered the cell).  Nothing in the engine can
+ * see a controller, so the wait below is bounded while a transfer is actually
+ * outstanding and the backend gets a chance to run its own drain; an idle port
+ * keeps the infinite wait, and the fallback costs one poll period when the
+ * line really is lost.
+ */
+#ifndef LKPI_USB_POLL_MS
+#define LKPI_USB_POLL_MS	20u
+#endif
+
+/* any endpoint with a transfer in flight: the only state in which a lost
+ * completion is possible, and the only state that needs the bounded wait */
+static bool
+lkpi_usb_any_armed(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < LKPI_EP_N; i++) {
+		if (lkpi_eps[i].cur != NULL)
+			return true;
+	}
+	return false;
+}
+
+void
+lkpi_usb_poll_now(void)
+{
+
+	if (lkpi_usb_be_ops == NULL || lkpi_usb_be_ops->poll == NULL)
+		return;
+	lkpi_usb_poll_runs++;
+	lkpi_usb_poll_fresh = 1;
+	lkpi_usb_be_ops->poll(lkpi_usb_be_ctx);
+}
+
+static void
+lkpi_usb_poll_backend(void)
+{
+
+	lkpi_usb_poll_now();
+}
+
 static void
 lkpi_usb_drain_thread_entry(void *arg)
 {
@@ -887,7 +1015,20 @@ lkpi_usb_drain_thread_entry(void *arg)
 
 	(void)arg;
 	for (;;) {
-		(void)osSemaphoreAcquire(lkpi_usb_done_sem, osWaitForever);
+		osStatus_t st;
+		u32 wait = osWaitForever;
+
+		LKPI_USB_OBS_PHASE(1);	/* parked on the done semaphore */
+		if (LKPI_USB_POLL_MS > 0u && lkpi_usb_any_armed())
+			wait = LKPI_USB_POLL_MS;
+		st = osSemaphoreAcquire(lkpi_usb_done_sem, wait);
+		if (st == osErrorTimeout) {
+			/* no completion for one poll period while a transfer
+			 * is in flight: let the backend look at its own
+			 * controller (a lost event interrupt shows up here) */
+			lkpi_usb_poll_backend();
+			continue;
+		}
 		for (;;) {
 			os_critical_state_t csr;
 
@@ -1243,6 +1384,8 @@ lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
 		out->in_flight += s.in_flight;
 		out->qlen += s.qlen;
 	}
+	out->polls = lkpi_usb_poll_runs;
+	out->poll_drained = lkpi_usb_poll_drained;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2416,9 +2559,6 @@ lkpi_usb_trace_set(bool on)
 /* ------------------------------------------------------------------ */
 /* the backend seam: registration and the three dispatchers            */
 /* ------------------------------------------------------------------ */
-
-static const struct lkpi_usb_be_ops *lkpi_usb_be_ops;
-static void *lkpi_usb_be_ctx;
 
 void
 lkpi_usb_be_register(const struct lkpi_usb_be_ops *ops, void *ctx)
