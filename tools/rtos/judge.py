@@ -105,6 +105,9 @@ PATTERNS = {
     "sdio_mci_gt_cmd53": re.compile(r"mci: gt cmd53 st=0x(?P<st>[0-9a-f]+) data=(?P<data>[0-9a-f]{8})", re.MULTILINE),
     "sdio_mci_diff": re.compile(r"mci: diff clkdiv=(?P<clkdiv>[0-9a-f]+) gt=(?P<gt_clkdiv>[0-9a-f]+) (?P<clkdiv_same>same|DIFF)", re.MULTILINE),
     "sdio_mci_ctrl": re.compile(r"mci: sd CMD(?P<cmd>\d+) rc=(?P<rc>-?\d+)", re.MULTILINE),
+    # The mmc0 control's completion, quoted with the data it read: the point
+    # of the control is that bytes crossed, not merely that a command returned.
+    "sdio_mci_ctrl_read": re.compile(r"mci: sd CMD17 rc=(?P<rc>-?\d+) resp0=(?P<resp0>[0-9a-f]+) data=(?P<data>[0-9a-f]{8})", re.MULTILINE),
     "sdio_mci_counters": re.compile(r"mci: counters transfers=(?P<transfers>\d+) cmd52=(?P<cmd52>\d+) cmd53=(?P<cmd53>\d+) .*errors=(?P<errors>\d+)", re.MULTILINE),
     # 8189FTV vendor-stack case: the SDIO identity, the driver's netdev, and the
     # hardware address the driver read from the chip.
@@ -1616,11 +1619,11 @@ def judge(text: str, expect: dict | None = None) -> dict:
             row = found[key]
             if row is not None and int(row["errors"]) != 0:
                 errors.append(f"sdio_mci: {label} errors={row['errors']}")
-        control = found["sdio_mci_ctrl"]
-        if not control or control["cmd"] != "17" or control["rc"] != "0":
+        control = found["sdio_mci_ctrl_read"]
+        if not control or control["rc"] != "0" or control["data"] == "00000000":
             errors.append("sdio_mci: the mmc0 control read did not complete")
         else:
-            notes.append("sdio_mci: mmc0 CMD17 rc=0")
+            notes.append(f"sdio_mci: mmc0 CMD17 rc=0 data={control['data']}")
 
     result = found["result"]
     if not result:
