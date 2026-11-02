@@ -77,6 +77,13 @@ struct wlan_port_ifops;
 struct wlan_bridge_counters {
 	unsigned int	mgt_tx;
 	unsigned int	data_tx;
+	/* The driver's backpressure as the bridge saw it: how often a drain was
+	 * refused because the driver had stopped its queue (tx_gated), and how
+	 * often the driver's wake brought the bridge back (tx_wakes).  A gated
+	 * count rising with no wakes is a driver that never recovers; gates
+	 * with wakes are the designed pair working. */
+	unsigned int	tx_gated;
+	unsigned int	tx_wakes;
 	unsigned int	rx_frames;
 	unsigned int	tx_completes;
 	unsigned int	scan_starts;
@@ -179,6 +186,28 @@ struct wlan_bridge_counters {
 	unsigned int	rx_ccmpmic;	/* stack: CCMP MIC mismatch */
 	unsigned int	tx_nodefkey;	/* stack: no transmit key to seal with */
 	unsigned int	tx_errors;	/* interface output errors */
+	/* The interface transmit queue's depth and the driver's backpressure
+	 * answer at snapshot time (wlan_bridge_stats only; not accumulated):
+	 * `txq_len` is how many frames are waiting for the driver, and
+	 * `tx_stopped` is non-zero when the driver's queue is stopped, i.e. the
+	 * wake (ieee80211_wake_queues -> seam wake -> wlan_bridge_tx_wake) has
+	 * not arrived yet.  A rising txq_len with tx_stopped set and tx_wakes
+	 * frozen is the "driver stopped its queue and nothing woke it" shape. */
+	unsigned int	txq_len;
+	unsigned int	tx_stopped;
+	/* The block-ack transport the HT/BA round added: the action frames
+	 * this bridge sent (ADDBA request/response, DELBA) and the BA/HT
+	 * fingerprints a judgment reads.  A downlink that stays at plain ACKs
+	 * has mgmt_action_tx == 0 or ba_rx_start == 0; one that negotiated BA
+	 * has both rising. */
+	unsigned int	mgmt_action_tx;
+	unsigned int	ba_rx_start;
+	unsigned int	ba_tx_start;
+	unsigned int	ba_tx_operational;
+	unsigned int	ba_stop;
+	unsigned int	ht40_joins;
+	unsigned int	ht40_fallbacks;
+	unsigned int	reorder_drops;
 	uint32_t	tuned_freq;
 	int		attached;
 };
@@ -367,6 +396,43 @@ uint32_t wlan_bridge_stat_bad_auth(void);
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);
 
 /*
+ * Send one raw 802.11 management/action frame (header + body, no FCS) through
+ * the same ic_mgtq drain the stack's own management frames use.  This is the
+ * transport the block-ack state machine needs: ADDBA Request/Response and
+ * DELBA are action frames the imported net80211 stack neither builds nor
+ * understands, so the mac80211 substitute hands the finished frame here.
+ * Returns the frame length, or a negative error.  Takes the serializer
+ * itself; must be called from a sleepable context.
+ */
+int	wlan_bridge_mgmt_tx(const uint8_t *frame, size_t len);
+
+/*
+ * The last 802.11 sequence number the bridge handed the driver for this TID
+ * (0 when none was sent).  The block-ack state machine uses last + 1 as the
+ * ADDBA start sequence number, which is what mac80211's
+ * ieee80211_tx_ba_session_handle_start() does from sta->tid_seq[tid].
+ */
+uint16_t wlan_bridge_last_tx_seq(int tid);
+
+/* Block-ack fingerprint counters, incremented by the mac80211 substitute
+ * when a session changes state.  The numbers are read back by
+ * wlan_bridge_stats(); they are the host-side half of the on-air BA count. */
+#define WLAN_BRIDGE_BA_RX_START		0
+#define WLAN_BRIDGE_BA_TX_START		1
+#define WLAN_BRIDGE_BA_TX_OPERATIONAL	2
+#define WLAN_BRIDGE_BA_STOP		3
+#define WLAN_BRIDGE_BA_REORDER_DROP	4
+void	wlan_bridge_ba_note(int evt);
+
+/*
+ * The driver's wake notification: its transmit queues have room again, so the
+ * bridge may drain what the queue gate held back.  Runs in a work context (a
+ * USB completion's work, not the completion itself), takes the port serializer
+ * itself, and is a no-op unless the interface is attached and RUN.
+ */
+void	wlan_bridge_tx_wake(void);
+
+/*
  * The receive half of the data plane: a complete ethernet frame leaves the
  * stack and is handed to the presentation layer. This is the scalar spelling
  * of the port's wlan_port_set_data_rx() so a kernel-world netdev can register
@@ -389,6 +455,34 @@ void	wlan_bridge_down(void);
 int	wlan_bridge_hwaddr(uint8_t addr[6]);
 void	*wlan_bridge_ic(void);
 void	wlan_bridge_stats(struct wlan_bridge_counters *out);
+
+/*
+ * The port's observation snapshot (see struct wlan_seam_port_obs): what the
+ * adapter's transport layer is doing, for a watchdog on the lwIP side.  The
+ * bridge only forwards; with a port whose seam has no port_obs, or before
+ * attach, the snapshot comes back zeroed.  Safe from any thread, no locks.
+ */
+struct wlan_seam_port_obs;
+void	wlan_bridge_port_obs(struct wlan_seam_port_obs *out);
+unsigned int wlan_bridge_port_probe(unsigned int which);
+void	wlan_bridge_port_stall_dump(void);
+void	wlan_bridge_port_poll(void);
+
+/*
+ * The port serializer's state at snapshot time (the splnet() replacement every
+ * stack entry takes).  `depth` is the current owner's hold count (0 = free),
+ * `owner` the holder's thread name (NULL when free or unnamed) and `held_ms`
+ * how long the outermost take has been held.  A frozen data path with depth
+ * != 0 names the layer that is stuck; one with depth == 0 puts the fault
+ * somewhere that is not waiting on this lock.  Available only when the port
+ * was built with CONFIG_NET_WATCH.
+ */
+struct wlan_bridge_lock_obs {
+	unsigned int	depth;
+	const char	*owner;
+	unsigned int	held_ms;
+};
+void	wlan_bridge_lock_obs(struct wlan_bridge_lock_obs *out);
 
 /*
  * The presentation layer's up/down notification (port.h's wlan_port_ifops):

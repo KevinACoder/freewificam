@@ -33,6 +33,7 @@
 
 #include <stdarg.h>
 
+#include "ethnetif.h"
 #include "log.h"
 #include <stdio.h>
 #include <string.h>
@@ -69,6 +70,20 @@ void lwip_platform_diag(const char *fmt, ...)
 void lwip_platform_assert(const char *message, const char *file, int line)
 {
 	board_log_emergency("lwip: assert '%s' at %s:%d", message, file, line);
+#if defined(CONFIG_GMAC_RX_ZC) && CONFIG_GMAC_RX_ZC
+	{
+		uint32_t wrap_live = 0u, free_dead = 0u, dead_handle = 0u;
+
+		/* Which of the three zero-copy owners lost track (see
+		 * ethnetif_zc_audit): a wrong pbuf ref is a lifetime fault, and
+		 * the counters name the side that broke the invariant. */
+		ethnetif_zc_audit(&wrap_live, &free_dead, &dead_handle);
+		board_log_emergency("lwip: zc wrap_live=%lu free_dead=%lu dead_handle=%lu",
+				    (unsigned long)wrap_live,
+				    (unsigned long)free_dead,
+				    (unsigned long)dead_handle);
+	}
+#endif
 #if defined(RTOS_BOARD_AUTO_RESET)
 	/* A wedged image recovers itself into the boot loader (the lab loop's
 	 * close-out ruling): the emergency line is the report, the reset is

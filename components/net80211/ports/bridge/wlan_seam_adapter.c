@@ -47,6 +47,15 @@
 
 #include "components/linuxkpi/linuxkpi_80211.h"
 #include "components/linuxkpi/fw_registry.h"
+#include "components/linuxkpi/rtos/usb/linuxkpi_usb.h"
+
+/* The controller's own registers, for the observation snapshot below: the
+ * board layer owns every USB register window, so the reads go through its
+ * accessors rather than a raw pointer here. */
+#include "usb_glue.h"
+#include "usb/usb_domain.h"
+#include "usbh_core.h"
+#include "usb_hc_xhci.h"
 #ifdef CONFIG_LKPI_CENSUS
 #include "components/linuxkpi/lkpi_census.h"
 #endif
@@ -817,6 +826,254 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	return 0;
 }
 
+/*
+ * The seam's backpressure question (wlan_seam_drv_ops.queue_ready): the
+ * driver stops its transmit queues when its tx-urb pool crosses the low water
+ * (rtl8xxxu core.c:5119) and its wake reopens them (core.c:5139).  The bridge
+ * asks this before dequeuing another frame; the frame stays in the interface
+ * queue and seam_tx_wake drains it when the driver has room again.
+ */
+static int
+seam_queue_ready(struct wlan_seam_drv *drv)
+{
+	(void)drv;
+	return adapter.hw != NULL && !lkpi80211_tx_queue_stopped(adapter.hw);
+}
+
+/*
+ * The port's wake, delivered from the substitute's deferred work (a completion
+ * context must not enter the bridge).  The bridge takes its own serializer.
+ */
+static void
+seam_tx_wake(void *arg)
+{
+	(void)arg;
+	wlan_bridge_tx_wake();
+}
+
+/*
+ * The seam's observation snapshot (wlan_seam_drv_ops.port_obs).  Scalars only:
+ * the transport engine's completion counters and drain phase, the two bulk
+ * endpoints' queue state, the deferred-work pump and the driver's buffer pool.
+ * A watchdog reads this from another thread; every source is a plain counter
+ * or gauge, so a torn snapshot is at worst one sample stale, never a
+ * dereference of something being freed.
+ */
+/* EHCI operational-register offsets (EHCI 1.0 section 2.3): the frame index and
+ * the status word sit at fixed offsets from the operational base the board
+ * layer computes. */
+#define SEAM_EHCI_USBSTS_OFF	0x04u
+#define SEAM_EHCI_FRINDEX_OFF	0x0Cu
+
+/* xHCI (bus 3) register offsets, from the operational base: the host status
+ * word is the liveness probe (a halted controller drops HCH=0 -> 1 and sets
+ * HSE/HCE), and the command ring's CRR says whether the ring still runs. */
+#define SEAM_XHCI_USBCMD	0x00u
+#define SEAM_XHCI_USBSTS	0x04u
+#define SEAM_XHCI_CRCR_LO	0x18u
+#define SEAM_XHCI_PORTSC1	0x400u	/* one-based port 1 */
+#define SEAM_XHCI_PORTSC2	0x410u	/* one-based port 2 */
+
+static uintptr_t
+seam_xhci_op(unsigned int busid)
+{
+	uintptr_t base = usb_board_reg_base(busid);
+	unsigned int caplen;
+
+	if (base == 0)
+		return 0;
+	caplen = (unsigned int)*(volatile const uint8_t *)base;
+	return base + caplen;
+}
+
+static unsigned int
+seam_xhci_reg(unsigned int busid, unsigned int off)
+{
+	uintptr_t op = seam_xhci_op(busid);
+
+	if (op == 0)
+		return 0;
+	return *(volatile const uint32_t *)(op + off);
+}
+
+/* The SoC-side blocks that clock and reset the USB cores: the CRU and the
+ * PMUCRU answer even while a controller is wedged, so they are the one part
+ * of this surface a periodic sampler may touch. */
+#define SEAM_SOC_CRU		0u
+#define SEAM_SOC_PMUCRU		1u
+
+static unsigned int
+seam_soc_reg(unsigned int which, unsigned int off)
+{
+	uintptr_t base = which == SEAM_SOC_PMUCRU ? USB_BOARD_PMUCRU_BASE :
+	    USB_BOARD_CRU_BASE;
+
+	return *(volatile const uint32_t *)(base + off);
+}
+
+/* The controller stack's own stall report: the event ring's position and
+ * cycle, its interrupt counters and the endpoints still waiting.  Printed by
+ * the xHCI port itself, which owns that state. */
+static void
+seam_port_stall_dump(struct wlan_seam_drv *drv)
+{
+	(void)drv;
+	usbh_xhci_stall_dump(&g_usbhost_bus[3]);
+}
+
+/* The polled drain (wlan_seam_drv_ops.port_poll): the interrupt handler's own
+ * entry point, run from a thread.  The board's dispatch does this inside the
+ * stack's critical section, so the poll does too - the completion path and a
+ * submitting thread share state the section protects. */
+static void
+seam_port_poll(struct wlan_seam_drv *drv)
+{
+	size_t flags;
+
+	(void)drv;
+	flags = usb_osal_enter_critical_section();
+	usbh_xhci_irq_handler(3);
+	usb_osal_leave_critical_section(flags);
+}
+
+/* The post-stall probe (wlan_seam_drv_ops.port_probe): one controller read
+ * on the radio's bus, on request of a probe thread that prints a marker
+ * first. */
+static unsigned int
+seam_port_probe(struct wlan_seam_drv *drv, unsigned int which)
+{
+	static const unsigned int offs[] = {
+		SEAM_XHCI_USBCMD, SEAM_XHCI_USBSTS, SEAM_XHCI_CRCR_LO,
+		0x38u, SEAM_XHCI_PORTSC1, SEAM_XHCI_PORTSC2,
+	};
+
+	(void)drv;
+	if (which >= (sizeof(offs) / sizeof(offs[0])))
+		return 0;
+	return seam_xhci_reg(3, offs[which]);
+}
+
+static unsigned int
+seam_ehci_reg(unsigned int busid, unsigned int off)
+{
+	uintptr_t base = usb_board_reg_base(busid);
+	uintptr_t op;
+
+	if (base == 0)
+		return 0;
+	op = usb_ehci_op_base(base);
+	return *(volatile const uint32_t *)(op + off);
+}
+
+static void
+seam_port_obs(struct wlan_seam_drv *drv, struct wlan_seam_port_obs *out)
+{
+	struct lkpi_usb_engine_stats es;
+	struct lkpi_usb_ep_stats ep;
+	struct lkpi_wq_stats wq;
+	struct lkpi_skb_pool_stats pool;
+	unsigned int i, n;
+
+	(void)drv;
+	if (out == NULL)
+		return;
+	memset(out, 0, sizeof(*out));
+
+	out->usb_drain_phase = lkpi_usb_drain_phase();
+	out->usb_drain_state = lkpi_usb_drain_state();
+	out->usb_drain_done = lkpi_usb_drain_done_count();
+	lkpi_usb_engine_stats_get(&es);
+	out->usb_polls = es.polls;
+	out->usb_poll_drained = es.poll_drained;
+	out->usb_kicks = es.kicks;
+	out->usb_completions = es.completions;
+	out->usb_kills = es.kills;
+	out->usb_parks = es.parks;
+	out->usb_parked_now = es.parked_now;
+	out->usb_errors = es.errors;
+
+	n = lkpi_usb_ep_count();
+	for (i = 0; i < n; i++) {
+		if (lkpi_usb_ep_stats_get(i, &ep) != 0)
+			continue;
+		if (ep.ep_addr == 0)
+			continue;	/* the control endpoint is not the stream */
+		if ((ep.ep_addr & 0x80u) != 0 && out->rx_ep_addr == 0) {
+			out->rx_ep_addr = ep.ep_addr;
+			out->rx_ep_qlen = ep.qlen;
+			out->rx_ep_in_flight = ep.in_flight;
+			out->rx_ep_enqueued = ep.enqueued;
+			out->rx_ep_completions = ep.completions;
+		} else if ((ep.ep_addr & 0x80u) == 0 && out->tx_ep_addr == 0) {
+			out->tx_ep_addr = ep.ep_addr;
+			out->tx_ep_qlen = ep.qlen;
+			out->tx_ep_in_flight = ep.in_flight;
+			out->tx_ep_enqueued = ep.enqueued;
+			out->tx_ep_completions = ep.completions;
+		}
+	}
+
+	lkpi_wq_stats_get(&wq);
+	out->wq_depth = wq.queue_depth;
+	out->wq_max = wq.queue_max;
+	out->wq_runs = wq.runs;
+	out->wq_direct = wq.direct;
+	out->wq_full = wq.full;
+	{
+		/* the worker's scheduler state, coded (the kernel answers a
+		 * string; the ledger wants one number) */
+		const char *st = lkpi_wq_state();
+
+		out->wq_state = 5u;
+		if (st != NULL) {
+			switch (st[0]) {
+			case 'r':
+				out->wq_state = st[1] == 'u' ? 1u : 2u;
+				break;
+			case 'b':
+				out->wq_state = 3u;
+				break;
+			case 't':
+				out->wq_state = 4u;
+				break;
+			case '-':
+				out->wq_state = 0u;
+				break;
+			default:
+				break;
+			}
+		}
+	}
+
+	lkpi_skb_pool_stats(&pool);
+	out->skb_used = pool.skb_used;
+	out->skb_high = pool.skb_high;
+	out->skb_alloc_fail = pool.alloc_fail;
+
+	/* the controller's health: one interrupt counter per wired bus, and the
+	 * two USB2 roots' frame/status/port words (the radio is on one of them) */
+	out->usb_irq0 = usb_board_irq_count(0);
+	out->usb_irq1 = usb_board_irq_count(1);
+	out->usb_irq2 = usb_board_irq_count(2);
+	out->usb_irq3 = usb_board_irq_count(3);
+	out->ehci0_frame = seam_ehci_reg(0, SEAM_EHCI_FRINDEX_OFF);
+	out->ehci0_status = seam_ehci_reg(0, SEAM_EHCI_USBSTS_OFF);
+	out->ehci0_portsc = usb_ehci_port_status(
+	    usb_ehci_op_base(usb_board_reg_base(0)), 0);
+	out->ehci1_frame = seam_ehci_reg(1, SEAM_EHCI_FRINDEX_OFF);
+	out->ehci1_status = seam_ehci_reg(1, SEAM_EHCI_USBSTS_OFF);
+	out->ehci1_portsc = usb_ehci_port_status(
+	    usb_ehci_op_base(usb_board_reg_base(1)), 0);
+	/* The controller's own registers are deliberately NOT read here: a
+	 * controller that stopped answering holds the read forever, and the
+	 * ledger sample would die with it (measured: one sample after the
+	 * wedge the console went silent). The SoC-side blocks below answer
+	 * regardless, so the ledger keeps a clock across the stall. */
+	out->soc_cru_gate = seam_soc_reg(SEAM_SOC_CRU, 0x328u);
+	out->soc_cru_rst = seam_soc_reg(SEAM_SOC_CRU, 0x424u);
+	out->soc_pmucru_gate = seam_soc_reg(SEAM_SOC_PMUCRU, 0x188u);
+}
+
 static const struct wlan_seam_drv_ops seam_ops = {
 	.start = seam_start,
 	.stop = seam_stop,
@@ -833,6 +1090,11 @@ static const struct wlan_seam_drv_ops seam_ops = {
 	.clear_key = seam_clear_key,
 	.bss_info = seam_bss_info,
 	.bssid = seam_bssid,
+	.queue_ready = seam_queue_ready,
+	.port_obs = seam_port_obs,
+	.port_probe = seam_port_probe,
+	.port_stall_dump = seam_port_stall_dump,
+	.port_poll = seam_port_poll,
 };
 
 /* ------------------------------------------------------------------ */
@@ -844,6 +1106,7 @@ up_attach(struct ieee80211_hw *hw)
 {
 	uint8_t mac[6];
 	unsigned int i;
+	int rc;
 
 	adapter.hw = hw;
 	/*
@@ -853,8 +1116,19 @@ up_attach(struct ieee80211_hw *hw)
 	 */
 	for (i = 0; i < 6; i++)
 		mac[i] = hw->wiphy->perm_addr[i];
-	return wlan_bridge_attach((struct wlan_seam_drv *)&adapter, &seam_ops,
+	rc = wlan_bridge_attach((struct wlan_seam_drv *)&adapter, &seam_ops,
 	    mac);
+	if (rc != 0)
+		return rc;
+	/*
+	 * The driver's queue wake, registered only once the bridge is attached:
+	 * a wake that arrives during attach would find no interface to drain
+	 * (the bridge ignores it until attached, so this is ordering hygiene,
+	 * not a race the log can lose).
+	 */
+	lkpi80211_set_tx_wake_cb(hw, seam_tx_wake, NULL);
+	wlan_osal_log("wlan: seam tx wake registered\n");
+	return 0;
 }
 
 static void

@@ -73,6 +73,22 @@
 #include "wlan_bridge.h"
 #include "components/linuxkpi/lkpi_tcp_trace.h"
 
+/*
+ * HT build switches.  WLAN_SEAM_BW40 is the no-AP-information test override
+ * (keep the old forced-40 behaviour for a bench whose beacon parser is being
+ * brought up); the shipping path decides from the AP's HT Operation element
+ * cached in bridge_ht_info.  WLAN_NO_HT removes HT and WMM together.
+ */
+#ifndef WLAN_SEAM_BW40
+#define WLAN_SEAM_BW40 0
+#endif
+#ifndef WLAN_NO_HT
+#define WLAN_NO_HT 0
+#endif
+#ifndef WLAN_HW_CRYPTO
+#define WLAN_HW_CRYPTO 0
+#endif
+
 /* the 2.4 GHz channel set this chip family covers (channels 1..13) */
 #define WLAN_BRIDGE_CHAN_MIN	1
 #define WLAN_BRIDGE_CHAN_MAX	13
@@ -86,6 +102,26 @@
 /* ------------------------------------------------------------------ */
 /* state                                                               */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The AP's HT capability and HT operation, as heard in its beacons/probe
+ * responses.  The imported net80211 stack keeps only the 11g view of a
+ * candidate, so this cache is the bridge's own 11n memory: the join needs it
+ * to decide whether the association may ask for 40 MHz (HT Operation's
+ * secondary-channel offset and STA channel width) and to build an HT
+ * Capabilities element that matches the AP.  Eight entries cover the scan
+ * table of this bench; the oldest is replaced.
+ */
+#define WLAN_BRIDGE_HT_MAX	8
+struct bridge_ht_info {
+	uint8_t		bssid[6];
+	uint16_t	cap;		/* HT Capabilities Info, little endian */
+	uint8_t		ampdu;		/* A-MPDU parameters */
+	uint32_t	mcs0;		/* first four Supported MCS bytes */
+	uint32_t	primary;	/* HT Operation primary, MHz */
+	uint8_t		htparam;	/* HT Operation HT parameter byte */
+	uint8_t		valid;
+};
 
 /*
  * One bridge per driver instance. This port carries a single adapter, so the
@@ -118,6 +154,12 @@ static struct {
 	unsigned int filter_clears;
 	unsigned int mgt_tx;
 	unsigned int data_tx;
+	/* The driver's backpressure, as the bridge saw it: drains refused
+	 * because the driver had stopped its queue, and the driver's wakes
+	 * that re-armed a drain.  The pair tells a working pair from a
+	 * driver that stopped and never recovered. */
+	unsigned int tx_gated;
+	unsigned int tx_wakes;
 	unsigned int rx_frames;
 	unsigned int rx_mgmt;	/* diagnostic: mgmt frames seen in input */
 	unsigned int rx_beacon;	/* diagnostic: beacons seen in input */
@@ -196,6 +238,22 @@ static struct {
 	unsigned int beacon_cache_next;
 	uint32_t last_beacon_dev_ts;	/* device clock of the last parsed beacon */
 	unsigned int tx_completes;
+	/* the bridge's own 11n memory (see struct bridge_ht_info) */
+	struct bridge_ht_info	ht[WLAN_BRIDGE_HT_MAX];
+	unsigned int		ht_next;
+	/* the last sequence number handed to the driver per TID; the TX BA
+	 * request starts at last + 1 (mac80211 reads sta->tid_seq[tid]) */
+	uint16_t		last_tx_seq[16];
+	uint16_t		mgmt_seq;	/* sequence for raw action frames */
+	/* the block-ack and HT fingerprints (also exported in the counters) */
+	unsigned int		mgmt_action_tx;
+	unsigned int		ba_rx_start;
+	unsigned int		ba_tx_start;
+	unsigned int		ba_tx_operational;
+	unsigned int		ba_stop;
+	unsigned int		ht40_joins;
+	unsigned int		ht40_fallbacks;
+	unsigned int		reorder_drops;
 } bridge;
 
 /* ------------------------------------------------------------------ */
@@ -418,6 +476,131 @@ bridge_ie_report(const char *dir, const uint8_t *frame, size_t len)
 	    (unsigned)mcs0, htinfo, wme);
 }
 
+/* HT Operation carries a channel number; the channel definition consumes MHz. */
+static uint32_t
+bridge_ht_chan_mhz(unsigned int ch)
+{
+	if (ch == 14)
+		return 2484;
+	if (ch >= 1 && ch <= 13)
+		return 2407u + 5u * ch;
+	if (ch >= 32)
+		return 5000u + 5u * ch;
+	return 0;
+}
+
+/*
+ * The bridge's 11n memory.  The imported stack parses only the 11g view of a
+ * candidate, so the HT Capabilities (45) and HT Operation (61) elements are
+ * collected here from every beacon/probe response.  The join uses this cache
+ * to decide whether the AP's HT Operation allows a 40 MHz association and
+ * which secondary channel to name; without it the association is HT20 even on
+ * a 40 MHz AP.
+ */
+static struct bridge_ht_info *
+bridge_ht_lookup(const uint8_t bssid[6])
+{
+	unsigned int i;
+
+	for (i = 0; i < WLAN_BRIDGE_HT_MAX; i++) {
+		if (bridge.ht[i].valid != 0 &&
+		    memcmp(bridge.ht[i].bssid, bssid, 6) == 0)
+			return &bridge.ht[i];
+	}
+	return NULL;
+}
+
+static void
+bridge_ht_update(const uint8_t *frame, size_t len)
+{
+	unsigned int sub = (unsigned)(frame[0] & 0xf0);
+	struct bridge_ht_info *h;
+	const uint8_t *bssid;
+	size_t off;
+
+	if (sub != 0x80 && sub != 0x50)
+		return;
+	if (len < 24 + 12)
+		return;
+	bssid = frame + 16;
+	h = bridge_ht_lookup(bssid);
+	if (h == NULL) {
+		h = &bridge.ht[bridge.ht_next % WLAN_BRIDGE_HT_MAX];
+		bridge.ht_next++;
+		memset(h, 0, sizeof(*h));
+		memcpy(h->bssid, bssid, 6);
+	}
+	off = 24 + 12;
+	while (off + 1 < len) {
+		unsigned int id = frame[off];
+		unsigned int elen = frame[off + 1];
+		const uint8_t *el = &frame[off + 2];
+
+		if (len - off < elen + 2u)
+			break;
+		if (id == 45 && elen >= 7) {
+			h->cap = (uint16_t)(el[0] | (el[1] << 8));
+			h->ampdu = el[2];
+			h->mcs0 = (uint32_t)el[3] | ((uint32_t)el[4] << 8) |
+			    ((uint32_t)el[5] << 16) |
+			    ((uint32_t)el[6] << 24);
+			h->valid |= 1;
+		} else if (id == 61 && elen >= 3) {
+			uint32_t primary_mhz = bridge_ht_chan_mhz(el[0]);
+
+			if (primary_mhz != 0) {
+				h->primary = primary_mhz;
+				h->htparam = el[1];
+				h->valid |= 2;
+			}
+		}
+		off += elen + 2u;
+	}
+}
+
+/*
+ * Build the association's HT Capabilities element and choose the width.  A
+ * 40 MHz association needs the AP to advertise Supported Channel Width in its
+ * HT Capabilities, its HT Operation to say the STA channel width is 40 MHz and
+ * to name a secondary channel above or below the primary.  Anything less is
+ * HT20.  WLAN_SEAM_BW40 is the explicit bench override (it is not used when
+ * the AP's own elements were heard).
+ */
+static size_t
+bridge_ht_cap_build(const uint8_t bssid[6], uint32_t freq, uint8_t out[28],
+    int *width, uint32_t *center)
+{
+	struct bridge_ht_info *h = bridge_ht_lookup(bssid);
+	int w = 20;
+	uint32_t c = freq;
+
+	if (h != NULL && (h->valid & 3) == 3 &&
+	    (h->cap & 0x0002) != 0 && (h->htparam & 0x04) != 0) {
+		unsigned int sec = h->htparam & 0x03;
+
+		if (sec == 1 || sec == 3) {
+			w = 40;
+			c = h->primary + (sec == 1 ? 10u : (uint32_t)-10);
+		}
+	} else if (WLAN_SEAM_BW40) {
+		w = 40;
+		c = freq + 10;
+	}
+	memset(out, 0, 28);
+	out[0] = 45;
+	out[1] = 26;
+	out[2] = (uint8_t)(0x20 | (w == 40 ? 0x42 : 0x00));
+	out[3] = 0;
+	out[4] = 0x03;			/* 64 KiB A-MPDU, no density */
+	out[5] = 0xff;			/* MCS 0-7 */
+	out[15] = (uint8_t)(w == 40 ? 0x96 : 0x48);	/* rx_highest */
+	out[16] = 0;
+	out[17] = 0x01;			/* TX MCS set defined */
+	*width = w;
+	*center = c;
+	return 28;
+}
+
 static void
 bridge_oerror(struct ieee80211com *ic)
 {
@@ -601,6 +784,21 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		struct ieee80211_key *k = NULL;
 		int hw_crypto = 0, pairwise = 0, key_idx = 0;
 
+		/*
+		 * The driver's own queue state, asked before every frame: a
+		 * driver that has stopped its transmit queues (rtl8xxxu stops
+		 * them when its tx-urb pool crosses the low water) does not
+		 * want another frame; the frame stays in the interface queue
+		 * and the driver's wake drains it (wlan_bridge_tx_wake).  The
+		 * driver's alternative is to drop the skb on the floor, which
+		 * is exactly the "Unable to allocate tx urb" the board
+		 * measured.
+		 */
+		if (bridge.ops->queue_ready != NULL &&
+		    !bridge.ops->queue_ready(bridge.drv)) {
+			bridge.tx_gated++;
+			break;
+		}
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == NULL)
 			break;
@@ -619,6 +817,21 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		}
 		lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_ENCAP_DONE);
 		wh = mtod(enc, struct ieee80211_frame *);
+		/* The last sequence handed to the driver per TID.  The net80211
+		 * encapsulation assigned it; the ADDBA request's start sequence
+		 * is the next one (mac80211 uses sta->tid_seq[tid] the same way).
+		 * Only QoS data carries a TID; management frames have their own
+		 * sequence space. */
+		if ((wh->i_fc[0] & 0x0c) == 0x08 && (wh->i_fc[0] & 0x80) != 0) {
+			const struct ieee80211_qosframe *qwh =
+			    (const struct ieee80211_qosframe *)wh;
+			unsigned int tid = qwh->i_qos[0] & 0x0f;
+			uint16_t seq = (uint16_t)(wh->i_seq[0] |
+			    (wh->i_seq[1] << 8));
+
+			if (tid < 16)
+				bridge.last_tx_seq[tid] = (uint16_t)(seq >> 4);
+		}
 		if ((wh->i_fc[1] & IEEE80211_FC1_WEP) != 0) {
 			/*
 			 * The call seals in place and returns the key (NULL on
@@ -705,6 +918,14 @@ bridge_start(struct ifnet *ifp)
 
 	if (!bridge.attached || ic == NULL || bridge.ops == NULL)
 		return;
+	/*
+	 * One gate for both queues: the driver's stopped state covers every
+	 * frame it would have to allocate a tx urb for, management included.
+	 * The driver's wake re-enters here (management first, as always).
+	 */
+	if (bridge.ops->queue_ready != NULL &&
+	    !bridge.ops->queue_ready(bridge.drv))
+		return;
 	/* management first: auth/assoc must not queue behind data */
 	bridge_drain_mgtq(ic);
 	/*
@@ -788,6 +1009,25 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 
 		if (bridge.ops != NULL && bridge.ops->bssid != NULL &&
 		    bss != NULL) {
+			/*
+			 * The peer upload happens inside bssid(), before the join
+			 * config; program the width here so the driver's station
+			 * capability already knows 40 MHz when it is uploaded.
+			 */
+			if (bridge.ops->config_ht != NULL &&
+			    bss->ni_chan != NULL) {
+				uint8_t pre_htcap[28];
+				uint32_t pre_center = 0;
+				int pre_width = 20;
+
+				(void)bridge_ht_cap_build(bss->ni_bssid,
+				    bss->ni_chan->ic_freq, pre_htcap,
+				    &pre_width, &pre_center);
+				if (pre_width == 40)
+					(void)bridge.ops->config_ht(
+					    bridge.drv, bss->ni_chan->ic_freq,
+					    40, pre_center);
+			}
 			memcpy(bridge.bssid_last, bss->ni_bssid, 6);
 			bridge.bssid_last_set = 1;
 			/* the AP's own timing travels with the target: the
@@ -1272,6 +1512,7 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 			uint8_t bdc = 0;
 
 			bridge.rx_beacon++;
+			bridge_ht_update(frame, len);
 			/* every beacon's timing goes into the cache: the join
 			 * target may be heard before bssid_last is armed */
 			if (bridge_beacon_timing(frame, len, &btsf, &bdc) == 0) {
@@ -1300,6 +1541,7 @@ wlan_bridge_input(const uint8_t *frame, size_t len, int rssi, int fcs_bad,
 			uint8_t bdc = 0;
 
 			bridge.rx_probersp++;
+			bridge_ht_update(frame, len);
 			/* the fallback anchor: mac80211 seeds from the probe
 			 * response with sync_dtim_count = 0 when no beacon IEs
 			 * are cached for the BSS */
@@ -2113,33 +2355,7 @@ wlan_bridge_set_wpa(int on)
 #ifndef WLAN_HW_CRYPTO
 #define WLAN_HW_CRYPTO 0
 #endif
-#if !WLAN_NO_HT
-static const uint8_t bridge_htcap_ie[28] = {
-	45, 26,				/* element id, length */
-	0x20 | (WLAN_SEAM_BW40 ? 0x02 : 0x00), 0x00,
-					/* HT cap: SGI-20; bit 1 is
-					 * Supported Channel Width, which the
-					 * WLAN_BW40 build switch sets so the
-					 * association asks for 20/40 MHz */
-	0x00,				/* A-MPDU: 8 KiB, no min spacing */
-	0xff, 0x00, 0x00, 0x00,		/* MCS 0-7 */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00,			/* rx_highest */
-	0x01,				/* tx_params: TX set defined */
-	0x00, 0x00, 0x00,		/* reserved */
-	0x00, 0x00,			/* HT extended capabilities */
-	0x00, 0x00, 0x00, 0x00,		/* TX beamforming */
-	0x00				/* ASEL */
-};
-#define BRIDGE_HTCAP_IE_LEN sizeof(bridge_htcap_ie)
-#else
-/*
- * The element is not compiled in at all, so the append site below has nothing
- * to copy; a zero-length macro keeps that site branch-free.
- */
-#define bridge_htcap_ie NULL
-#define BRIDGE_HTCAP_IE_LEN 0
-#endif
+
 
 /*
  * The join the supplicant decided on. Everything here is the stack's own
@@ -2165,7 +2381,11 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 	struct ieee80211_node *ni = NULL;
 	uint8_t *ie_copy = NULL;
 	size_t ie_copy_len = 0;
-	size_t ht_len = BRIDGE_HTCAP_IE_LEN;
+	uint8_t htcap[28];
+	size_t ht_len = 0;
+	int ht_width = 20;
+	uint32_t ht_center = 0;
+	uint32_t ht_freq = 0;
 	int ret = 0;
 
 	if (!bridge.attached || ic == NULL)
@@ -2174,24 +2394,6 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 		return -EINVAL;
 	if (ie_len != 0 && (wpa_ie == NULL || ie_len > 256))
 		return -EINVAL;
-	/*
-	 * One allocation carries the supplicant's element block and, unless the
-	 * no-HT arm asked for a legacy association, the HT Capabilities element
-	 * this port declares (see bridge_htcap_ie).  It is built before the
-	 * serializer is taken, and it is built as one block rather than grown
-	 * afterwards: the board's heap is busy enough at join time that a second,
-	 * larger allocation is not free.
-	 */
-	if (ie_len + ht_len != 0) {
-		ie_copy = wlan_osal_alloc(ie_len + ht_len);
-		if (ie_copy == NULL)
-			return -ENOMEM;
-		if (ie_len != 0)
-			memcpy(ie_copy, wpa_ie, ie_len);
-		if (ht_len != 0)
-			memcpy(ie_copy + ie_len, bridge_htcap_ie, ht_len);
-	}
-	ie_copy_len = ie_len + ht_len;
 
 	wlan_port_serializer_lock();
 	if (bssid != NULL)
@@ -2213,6 +2415,58 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 		wlan_osal_log("wlan: join: no scan candidate for the ssid\n");
 		return -ENOENT;
 	}
+#if !WLAN_NO_HT
+	/*
+	 * The association's 11n declaration.  The imported stack has no HT
+	 * state, so the width comes from the AP's cached HT Operation element
+	 * and the driver half is told before sta_join() uploads the
+	 * association.  A driver without config_ht (the RTOS arm today) keeps
+	 * the association at HT20.
+	 */
+	ht_freq = ni->ni_chan != NULL ? ni->ni_chan->ic_freq :
+	    (ic->ic_curchan != NULL ? ic->ic_curchan->ic_freq : 2432);
+	ht_len = bridge_ht_cap_build(ni->ni_bssid, ht_freq, htcap,
+	    &ht_width, &ht_center);
+	if (ht_width == 40 && bridge.ops != NULL &&
+	    bridge.ops->config_ht != NULL) {
+		if (bridge.ops->config_ht(bridge.drv, ht_freq, 40,
+		    ht_center) == 0) {
+			bridge.ht40_joins++;
+			wlan_osal_log("wlan: join ht40 freq=%u center=%u\n",
+			    ht_freq, ht_center);
+		} else {
+			ht_width = 20;
+			ht_center = ht_freq;
+			htcap[2] = 0x20;
+			htcap[15] = 0x48;
+			htcap[16] = 0;
+			(void)bridge.ops->config_ht(bridge.drv, ht_freq, 20,
+			    ht_freq);
+			bridge.ht40_fallbacks++;
+			wlan_osal_log("wlan: join ht40 refused; ht20\n");
+		}
+	} else if (ht_width == 40) {
+		ht_width = 20;
+		ht_center = ht_freq;
+		htcap[2] = 0x20;
+		htcap[15] = 0x48;
+		htcap[16] = 0;
+		bridge.ht40_fallbacks++;
+	}
+#endif
+	if (ie_len + ht_len != 0) {
+		ie_copy = wlan_osal_alloc(ie_len + ht_len);
+		if (ie_copy == NULL) {
+			wlan_port_serializer_unlock();
+			ieee80211_free_node(ni);
+			return -ENOMEM;
+		}
+		if (ie_len != 0)
+			memcpy(ie_copy, wpa_ie, ie_len);
+		if (ht_len != 0)
+			memcpy(ie_copy + ie_len, htcap, ht_len);
+	}
+	ie_copy_len = ie_len + ht_len;
 	/* WMM seed: the assoc builder appends WMM only when ni_wme_ie is
 	 * non-NULL.  Seed one element; do not append a second one to ic_opt_ie. */
 	if (ni->ni_wme_ie == NULL) {
@@ -2602,6 +2856,14 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->data_tx = bridge.data_tx;
 	out->rx_frames = bridge.rx_frames;
 	out->tx_completes = bridge.tx_completes;
+	out->mgmt_action_tx = bridge.mgmt_action_tx;
+	out->ba_rx_start = bridge.ba_rx_start;
+	out->ba_tx_start = bridge.ba_tx_start;
+	out->ba_tx_operational = bridge.ba_tx_operational;
+	out->ba_stop = bridge.ba_stop;
+	out->ht40_joins = bridge.ht40_joins;
+	out->ht40_fallbacks = bridge.ht40_fallbacks;
+	out->reorder_drops = bridge.reorder_drops;
 	out->scan_starts = bridge.scan_starts;
 	out->scan_completes = bridge.scan_completes;
 	out->filter_sets = bridge.filter_sets;
@@ -2611,6 +2873,17 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->rx_probersp = bridge.rx_probersp;
 	out->rx_fcs_bad = bridge.rx_fcs_bad;
 	out->oversize_drops = bridge.oversize_drops;
+	/* the transmit path's live gauges: how much is waiting for the driver
+	 * and whether the driver has said "full" and not woken us yet */
+	if (bridge.ifp != NULL)
+		out->txq_len = (unsigned int)bridge.ifp->if_snd.ifq_len;
+	else
+		out->txq_len = 0;
+	if (bridge.ops != NULL && bridge.ops->queue_ready != NULL &&
+	    !bridge.ops->queue_ready(bridge.drv))
+		out->tx_stopped = 1;
+	else
+		out->tx_stopped = 0;
 	/* the stack's own discard reasons, read from the stack's counters */
 	if (bridge.ic != NULL) {
 		out->rx_chanmismatch = bridge.ic->ic_stats.is_rx_chanmismatch;
@@ -2655,7 +2928,75 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->tuned_freq = bridge.tuned_freq;
 	out->auth_retries = bridge.auth_retries;
 	out->auth_answers = bridge.auth_answers;
+	out->tx_gated = bridge.tx_gated;
+	out->tx_wakes = bridge.tx_wakes;
 	out->attached = bridge.attached;
+}
+
+/*
+ * The port's observation snapshot: forwarded straight to the driver half's
+ * seam op, zeroed when the seam has no such op.  The bridge owns no state here
+ * - it is a pass-through so a watchdog on the stack side needs one header.
+ */
+#ifdef CONFIG_NET_WATCH
+/*
+ * The serializer's state, forwarded from the port layer.  The struct is
+ * restated here so the case world does not have to include the OSAL header
+ * (one more world it has no business in).
+ */
+void
+wlan_bridge_lock_obs(struct wlan_bridge_lock_obs *out)
+{
+	struct wlan_port_lock_state ls;
+
+	if (out == NULL)
+		return;
+	wlan_port_serializer_state(&ls);
+	out->depth = ls.depth;
+	out->owner = ls.owner;
+	out->held_ms = ls.held_ms;
+}
+#endif /* CONFIG_NET_WATCH */
+
+void
+wlan_bridge_port_obs(struct wlan_seam_port_obs *out)
+{
+
+	if (out == NULL)
+		return;
+	if (bridge.ops != NULL && bridge.ops->port_obs != NULL)
+		bridge.ops->port_obs(bridge.drv, out);
+	else
+		memset(out, 0, sizeof(*out));
+}
+
+/* The post-stall probe's one register read. Not for a periodic sampler: a
+ * controller that stopped answering can hold this call forever. */
+unsigned int
+wlan_bridge_port_probe(unsigned int which)
+{
+
+	if (bridge.ops != NULL && bridge.ops->port_probe != NULL)
+		return bridge.ops->port_probe(bridge.drv, which);
+	return 0;
+}
+
+/* The polled drain: run the completion path once from this thread. */
+void
+wlan_bridge_port_poll(void)
+{
+
+	if (bridge.ops != NULL && bridge.ops->port_poll != NULL)
+		bridge.ops->port_poll(bridge.drv);
+}
+
+/* The controller stack's own stall report (see wlan_seam_drv_ops). */
+void
+wlan_bridge_port_stall_dump(void)
+{
+
+	if (bridge.ops != NULL && bridge.ops->port_stall_dump != NULL)
+		bridge.ops->port_stall_dump(bridge.drv);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2731,6 +3072,17 @@ wlan_bridge_set_data_rx(wlan_bridge_data_rx_fn fn, void *arg)
 	wlan_port_set_data_rx((wlan_data_rx_fn)fn, arg);
 }
 
+/*
+ * The bridge's send queue is the only buffer between the presentation layer
+ * and the driver.  A producer that outruns a stopped driver must be told to
+ * wait rather than buffered without bound: the queue is capped here and the
+ * caller gets -ENOBUFS (lwIP holds a TCP segment; a UDP sender retries).  The
+ * cap is far above what a running driver accumulates (the queue drains as
+ * fast as the driver takes frames) and well inside the mbuf pool a bring-up
+ * boot carries.
+ */
+#define WLAN_BRIDGE_TXQ_CAP	64
+
 int
 wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 {
@@ -2743,6 +3095,10 @@ wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 	ifp = bridge.ic->ic_ifp;
 	if (ifp == NULL)
 		return -ENODEV;
+	/* the driver's backpressure reaches the producer here: a full send
+	 * queue is a "wait", not a "drop" */
+	if (ifp->if_snd.ifq_len >= WLAN_BRIDGE_TXQ_CAP)
+		return -ENOBUFS;
 	/* the transmit path's second milestone: the frame reached the bridge */
 	lkpi_tcp_trace_tx_mark(LKPI_TCP_TX_BRIDGE);
 	/*
@@ -2761,6 +3117,95 @@ wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 	}
 	bridge_start(ifp);
 	return (int)len;
+}
+
+/*
+ * Send one raw management/action frame.  The block-ack state machine needs
+ * ADDBA Request/Response and DELBA, none of which the imported net80211 stack
+ * builds; it hands the finished 802.11 frame here and the normal ic_mgtq drain
+ * carries it to the driver.  The sequence number is assigned here (the frame's
+ * body is the caller's; the header is the caller's too, so only the sequence
+ * control bytes are touched).
+ */
+int
+wlan_bridge_mgmt_tx(const uint8_t *frame, size_t len)
+{
+	struct ieee80211com *ic = bridge.ic;
+	struct mbuf *m;
+	uint8_t *p;
+
+	if (!bridge.attached || ic == NULL || frame == NULL || len < 24)
+		return -ENODEV;
+	m = bridge_mbuf_alloc(frame, len);
+	if (m == NULL)
+		return -ENOMEM;
+	p = mtod(m, uint8_t *);
+	p[22] = (uint8_t)(bridge.mgmt_seq & 0xff);
+	p[23] = (uint8_t)((bridge.mgmt_seq >> 8) & 0x0f);
+	bridge.mgmt_seq = (uint16_t)((bridge.mgmt_seq + 1) & 0x0fff);
+	M_SETCTX(m, NULL);
+	wlan_port_serializer_lock();
+	IF_ENQUEUE(&ic->ic_mgtq, m);
+	if ((frame[0] & 0xf0) == 0xd0)
+		bridge.mgmt_action_tx++;
+	bridge_start(ic->ic_ifp);
+	wlan_port_serializer_unlock();
+	return (int)len;
+}
+
+uint16_t
+wlan_bridge_last_tx_seq(int tid)
+{
+
+	if (tid < 0 || tid >= 16)
+		return 0;
+	return bridge.last_tx_seq[tid];
+}
+
+void
+wlan_bridge_ba_note(int evt)
+{
+
+	switch (evt) {
+	case WLAN_BRIDGE_BA_RX_START:
+		bridge.ba_rx_start++;
+		break;
+	case WLAN_BRIDGE_BA_TX_START:
+		bridge.ba_tx_start++;
+		break;
+	case WLAN_BRIDGE_BA_TX_OPERATIONAL:
+		bridge.ba_tx_operational++;
+		break;
+	case WLAN_BRIDGE_BA_STOP:
+		bridge.ba_stop++;
+		break;
+	case WLAN_BRIDGE_BA_REORDER_DROP:
+		bridge.reorder_drops++;
+		break;
+	default:
+		break;
+	}
+}
+
+void
+wlan_bridge_tx_wake(void)
+{
+	struct ifnet *ifp;
+
+	/*
+	 * The driver's wake runs on a work context - the RTOS lkpi wake work,
+	 * the ko module's workqueue - because the USB completion that triggers
+	 * it must not reach the bridge serializer itself.  The serializer is
+	 * this port's recursive mutex, so a wake raised from a context that
+	 * already owns it still works.
+	 */
+	wlan_port_serializer_lock();
+	ifp = (bridge.attached && bridge.ic != NULL) ? bridge.ic->ic_ifp : NULL;
+	if (ifp != NULL) {
+		bridge.tx_wakes++;
+		bridge_start(ifp);
+	}
+	wlan_port_serializer_unlock();
 }
 
 int

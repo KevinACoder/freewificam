@@ -90,6 +90,10 @@
 #define PING_TRACK		32u
 #define IPERF_DOWN_WINDOW_MS	40000u
 #define IPERF_UP_WAIT_MS	15000u
+/* K2-16 NET_PHASE_PLAN=2: one long serve window. Sized so a driver boot plus
+ * an iperf2 `-t 10` (twice, for a repeat) fit comfortably inside it; the
+ * phase ends on the report, not on the window, when the client finishes. */
+#define NET_IPERF_SERVE_MS	120000u
 #define LINK_WAIT_MS		10000u
 #define PING_ID			0x5a5au
 
@@ -169,6 +173,16 @@ static const struct net_phase net_plan[] = {
 	{ "tcpup",     "tcp", "client", PH_UP_TCP,    5001u, IPERF_UP_WAIT_MS },
 	{ "udpup",     "udp", "client", PH_UP_UDP,    NET_UDP_BLAST_PORT,
 	  12000u },
+};
+#elif NET_PHASE_PLAN == 2
+/* The serve-only plan (K2-16 E1): one long downlink window on the lwiperf
+ * server so a second, independent TCP instrument (iperf2 `-c <board> -t N`)
+ * can drive the board's receive direction. There is no board-initiated
+ * session and no UDP phase: the point is a TCP client that does not speak
+ * netio, against the same stack and the same driver. */
+static const struct net_phase net_plan[] = {
+	{ "iperfserve", "tcp", "server", PH_DOWN_TCP, 5001u,
+	  NET_IPERF_SERVE_MS },
 };
 #else
 /* The delivery profile: exactly the two sessions every earlier boot was judged

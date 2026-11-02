@@ -96,6 +96,10 @@ static void lkpi80211_rx_work(struct work_struct *w);
  * ieee80211_scan_completed, which queues it) */
 static void lkpi80211_scan_complete_work(struct work_struct *w);
 
+/* the queue wake's deferred delivery to the port (body in the queue family;
+ * ieee80211_wake_queues queues it) */
+static void lkpi80211_tx_wake_work(struct work_struct *w);
+
 /*
  * The hw context this file owns. `hw` is first so a pointer to the context and
  * a pointer to the public descriptor are the same address (the driver only ever
@@ -204,6 +208,19 @@ struct lkpi80211_hw_ctx {
 	unsigned int		rx_frames;
 	unsigned int		tx_completions;
 	unsigned int		scan_completions;
+	/*
+	 * The queue wake's deferred half.  The driver's ieee80211_wake_queues
+	 * arrives from its transmit completion (the USB drain thread), which
+	 * holds the driver's own lock and must not take the port serializer;
+	 * this work carries the wake to a context that can, and `tx_wake_cb`
+	 * (registered by the adapter at attach) is the bridge's drain cue.
+	 * `tx_wakes` counts the deliveries, so a gate that never reopens is
+	 * visible in the counters rather than inferred.
+	 */
+	struct work_struct	tx_wake_work;
+	void			(*tx_wake_cb)(void *arg);
+	void			*tx_wake_arg;
+	u32			tx_wakes;
 };
 
 #define LKPI80211_CTX(_hw)	((struct lkpi80211_hw_ctx *)(_hw))
@@ -538,6 +555,9 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	/* the scan completion's forward to the bridge, deferred for the reason
 	 * its field states in the context above */
 	INIT_WORK(&ctx->scan_complete_work, lkpi80211_scan_complete_work);
+	/* the queue wake's deferred forward: the driver raises it from its
+	 * transmit completion, which must not enter the bridge */
+	INIT_WORK(&ctx->tx_wake_work, lkpi80211_tx_wake_work);
 	/* the queue count the driver reads back (core.c:7891 sets 4; the
 	 * engine's own default matches so a driver that does not set it still
 	 * gets a workable value) */
@@ -1337,8 +1357,25 @@ ieee80211_rate_control_unregister(const struct rate_control_ops *ops)
 }
 
 /* ------------------------------------------------------------------ */
-/* queue family (driver: core.c:5143 wake / :7888 stop)                 */
+/* queue family (driver: core.c:5119 stop / :5139 wake)                 */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The deferred delivery of the driver's wake.  It runs on the system work
+ * queue, i.e. in a thread context that may take the port serializer and the
+ * bridge's locks; the wake itself (ieee80211_wake_queues) runs in the driver's
+ * transmit completion and only schedules this.
+ */
+static void
+lkpi80211_tx_wake_work(struct work_struct *w)
+{
+	struct lkpi80211_hw_ctx *ctx =
+	    container_of(w, struct lkpi80211_hw_ctx, tx_wake_work);
+
+	ctx->tx_wakes++;
+	if (ctx->tx_wake_cb != NULL)
+		ctx->tx_wake_cb(ctx->tx_wake_arg);
+}
 
 void
 ieee80211_stop_queues(struct ieee80211_hw *hw)
@@ -1358,14 +1395,17 @@ ieee80211_wake_queues(struct ieee80211_hw *hw)
 	ctx = LKPI80211_CTX(hw);
 	/*
 	 * The driver's own "is the tx path open" switch is this queue state
-	 * (_tx_stopped rides the pair in rtl8xxxu).  Upstream's substance for
-	 * this call is the same: clearing the stop reasons, and nothing else
-	 * (util.c:ieee80211_wake_queues -> ieee80211_wake_queues_by_reason).
-	 * A driver's wake_tx_queue op is called when the stack has frames for a
-	 * txq - this port's enqueue side - not from here, so the pair stays a
-	 * pair and no driver is woken by a queue state change.
+	 * (_tx_stopped rides the pair in rtl8xxxu).  Clearing it is only half
+	 * of the pair: the frames the stop held back are the bridge's, so the
+	 * port's registered wake has to reach them, and it cannot run here -
+	 * this call comes from the driver's transmit completion (the USB drain
+	 * thread), which holds the driver's lock and must not enter the bridge.
+	 * Deferring it to the system queue is the same shape the receive path
+	 * uses for its own completion; a wake raised while that work is still
+	 * queued is coalesced by the work's pending flag.
 	 */
 	ctx->queue_stopped = 0;
+	(void)lkpi_queue_work(lkpi_system_wq, &ctx->tx_wake_work);
 }
 
 void
@@ -1380,7 +1420,18 @@ ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
 	if (hw == NULL || txq == NULL)
 		return;
 	ctx = LKPI80211_CTX(hw);
-	ctx->queue_stopped = 0;
+	/*
+	 * This is the driver's wake_tx_queue op, reached from this port's own
+	 * enqueue path (lkpi80211_tx), NOT from the driver's queue wake.  The
+	 * pre-fix code cleared the stop here; that reopened a queue the driver
+	 * had just closed - rtl8xxxu had stopped at its tx-urb low water, the
+	 * next frame went down anyway and the pool ran dry (the board's
+	 * "Unable to allocate tx urb").  A stopped queue stays stopped until
+	 * the driver clears it in ieee80211_wake_queues above; the frame that
+	 * was enqueued waits in its txq for that wake.
+	 */
+	if (ctx->queue_stopped != 0)
+		return;
 	if (ctx->ops->tx == NULL)
 		return;
 	/*
@@ -1396,11 +1447,43 @@ ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
 	ieee80211_schedule_txq(hw, txq);
 	while ((txq = ieee80211_next_txq(hw, ac)) != NULL) {
 		control.sta = txq->sta;
-		while ((skb = ieee80211_tx_dequeue(hw, txq)) != NULL)
+		/* a stop raised by the frame just handed down leaves the rest
+		 * of the queue where it is; the driver's wake re-enters here */
+		while (ctx->queue_stopped == 0 &&
+		    (skb = ieee80211_tx_dequeue(hw, txq)) != NULL)
 			ctx->ops->tx(hw, &control, skb);
 		ieee80211_return_txq(hw, txq, false);
 	}
 	ieee80211_txq_schedule_end(hw, ac);
+}
+
+/*
+ * The bridge asks this before it hands the driver another frame (the seam's
+ * queue_ready): nonzero means the driver's transmit queue is stopped and the
+ * bridge must keep the frame in its own send queue until the wake above.
+ */
+int
+lkpi80211_tx_queue_stopped(struct ieee80211_hw *hw)
+{
+
+	return hw != NULL && LKPI80211_CTX(hw)->queue_stopped != 0;
+}
+
+/*
+ * The port's wake registration: the adapter's bridge wake is delivered from
+ * lkpi80211_tx_wake_work, i.e. in a context the bridge serializer can be taken
+ * from.  A port that never registers one leaves the wake as a counter only.
+ */
+void
+lkpi80211_set_tx_wake_cb(struct ieee80211_hw *hw, void (*cb)(void *), void *arg)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	ctx->tx_wake_cb = cb;
+	ctx->tx_wake_arg = arg;
 }
 
 /* ------------------------------------------------------------------ */

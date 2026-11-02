@@ -78,6 +78,9 @@
 
 #include "usbh_core.h"
 #include "usb_errno.h"
+#include "usb_hc_xhci.h"
+#include "usb_domain.h"
+#include "usb_osal.h"
 
 /* ------------------------------------------------------------------ */
 /* geometry                                                            */
@@ -683,10 +686,43 @@ chu_seam_control(void *ctx, struct lkpi_usb_be_hubport *port,
 	return ret < 0 ? ret : 0;
 }
 
+/*
+ * The polled drain (lkpi_usb_be_ops.poll): the controller's own completion path
+ * run from the engine's drain thread.  The xHCI cores on this board were
+ * measured leaving an event interrupt undelivered with the event in the ring
+ * (runs/wireless/2026-11-01-W2-01-wedge: usbsts=EINT, usbcmd=RS|INTE, iman IP
+ * clear, evt_ep fresh, IRQ count frozen, every endpoint stalled; a
+ * thread-context drain run by hand recovered the cell).  The handler's first
+ * act is the controller status read, so calling it costs two register reads
+ * when the interrupt was not lost.  Only the xHCI buses are polled: the radio
+ * and the stack's other high-throughput devices live there, and the EHCI port
+ * has its own frame-index driven recovery.
+ */
+static void
+chu_seam_poll(void *ctx)
+{
+	uint8_t busid;
+
+	(void)ctx;
+	for (busid = 0; busid < USB_BOARD_BUS_COUNT; busid++) {
+		size_t flags;
+
+		if (!usbh_xhci_bus_ready(busid))
+			continue;
+		/* the board's interrupt dispatch runs the handler inside the
+		 * stack's critical section; the completion path and a
+		 * submitting thread share that protected state */
+		flags = usb_osal_enter_critical_section();
+		USBH_IRQHandler(busid);
+		usb_osal_leave_critical_section(flags);
+	}
+}
+
 static const struct lkpi_usb_be_ops chu_ops = {
 	.submit_urb = chu_seam_submit,
 	.kill_urb = chu_seam_kill,
 	.control_transfer = chu_seam_control,
+	.poll = chu_seam_poll,
 };
 
 /*

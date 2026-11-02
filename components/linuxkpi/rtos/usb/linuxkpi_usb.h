@@ -105,6 +105,11 @@ struct lkpi_usb_engine_stats {
 	unsigned int	in_flight;	/* endpoints with a transfer in flight */
 	unsigned int	qlen;		/* urbs queued behind the in-flight one */
 	unsigned int	errors;		/* error completions, summed */
+	/* the lost-interrupt compensation: polls run because a transfer sat
+	 * in flight for one poll period, and completions that came out of
+	 * one (a nonzero poll_drained means the interrupt was lost) */
+	unsigned int	polls;
+	unsigned int	poll_drained;
 };
 
 struct lkpi_usb_ep_stats {
@@ -130,10 +135,28 @@ struct lkpi_usb_ep_stats {
 	unsigned int	last_in_len;
 };
 
+/*
+ * The drain loop's state (observation only, CONFIG_LKPI_USB_OBS fills it):
+ * `lkpi_usb_drain_phase` is 1 while the drain thread is parked waiting for a
+ * completion, 2 while it arms the next transfer, 3 while it is inside a
+ * driver completion callback and 4 while it frees one; 0 = not started or
+ * answer compiled out.  `lkpi_usb_drain_done_count` counts the completions the
+ * drain thread has carried.  A frozen data path with a rising phase-1 count is
+ * "nothing is being completed"; one stuck in phase 3 is "the callback has not
+ * returned".
+ */
+unsigned int	lkpi_usb_drain_phase(void);
+unsigned int	lkpi_usb_drain_state(void);
+unsigned int	lkpi_usb_drain_done_count(void);
 unsigned int	lkpi_usb_ep_count(void);
 /* copy endpoint `index`'s bookkeeping; non-zero when the index is out of range */
 int		lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out);
 void		lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out);
+
+/* Run the backend's completion path once from the caller's thread.  The engine
+ * does this itself when a completion is overdue (LKPI_USB_POLL_MS); a
+ * diagnostic case may also request it directly. */
+void		lkpi_usb_poll_now(void);
 
 /*
  * The last few control transfers that carried data, newest first: the register

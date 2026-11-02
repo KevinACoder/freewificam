@@ -38,6 +38,11 @@
 
 #include "ethnetif.h"
 
+#if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
+/* tcp_active_pcbs lives in lwIP's private header; only the probe reads it. */
+#include "lwip/priv/tcp_priv.h"
+#endif
+
 /* One frame, linearized. Matches the driver's own frame ceiling. */
 #define ETHNETIF_MTU		1500u
 #define ETHNETIF_LINEAR_BUF	DWC_EQOS_RX_BUF_SIZE
@@ -73,14 +78,44 @@ struct ethnetif_zc {
 	unsigned int len;
 	unsigned int port;
 	unsigned int slot;
+	uint8_t live;		/* 1 from the lend-out until the stack frees */
 };
 
 static struct ethnetif_zc g_zc[DWC_EQOS_PORT_COUNT][DWC_EQOS_RX_SLOT_COUNT];
+
+/* Lifetime auditor (2026-11-02, K2-16 B): the wrapper is per (port, slot),
+ * so a slot lent out while its previous frame is still in the stack would
+ * hand two live pbufs the same struct - a double free inside lwIP. These
+ * three counters say which of the three owners lost track: the driver (wrap
+ * over a live wrapper), the stack (free of a wrapper not live), or the ready
+ * ring (a handle dequeued that is not live). Zero on a correct run. */
+static uint32_t g_zc_wrap_live;
+static uint32_t g_zc_free_dead;
+static uint32_t g_zc_dead_handle;
+
+void ethnetif_zc_audit(uint32_t *wrap_live, uint32_t *free_dead,
+		       uint32_t *dead_handle)
+{
+	if (wrap_live != NULL) {
+		*wrap_live = g_zc_wrap_live;
+	}
+	if (free_dead != NULL) {
+		*free_dead = g_zc_free_dead;
+	}
+	if (dead_handle != NULL) {
+		*dead_handle = g_zc_dead_handle;
+	}
+}
 
 static void ethnetif_zc_free(struct pbuf *p)
 {
 	struct ethnetif_zc *z = (struct ethnetif_zc *)p;
 
+	if (z->live == 0u) {
+		g_zc_free_dead++;
+	} else {
+		z->live = 0u;
+	}
 	dwc_eqos_rx_release(z->port, z->slot);
 }
 
@@ -96,6 +131,10 @@ static void *ethnetif_zc_wrap(unsigned int index, unsigned int slot,
 		return NULL;
 	}
 	z = &g_zc[index][slot];
+	if (z->live != 0u) {
+		g_zc_wrap_live++;
+	}
+	z->live = 1u;
 	z->pc.custom_free_function = ethnetif_zc_free;
 	z->buf = buf;
 	z->len = len;
@@ -107,6 +146,20 @@ static void *ethnetif_zc_wrap(unsigned int index, unsigned int slot,
 void ethnetif_zc_arm(void)
 {
 	dwc_eqos_set_rx_zc(ethnetif_zc_wrap);
+}
+#else /* CONFIG_GMAC_RX_ZC */
+void ethnetif_zc_audit(uint32_t *wrap_live, uint32_t *free_dead,
+		       uint32_t *dead_handle)
+{
+	if (wrap_live != NULL) {
+		*wrap_live = 0u;
+	}
+	if (free_dead != NULL) {
+		*free_dead = 0u;
+	}
+	if (dead_handle != NULL) {
+		*dead_handle = 0u;
+	}
 }
 #endif /* CONFIG_GMAC_RX_ZC */
 
@@ -125,6 +178,12 @@ static unsigned long g_fed_total;
  * (trivial for UDP, the whole TCP state machine for TCP). Ticks are the
  * 24 MHz system counter, so /24 gives microseconds; two reads per frame. */
 static uint64_t g_prep_ticks;
+/* The pbuf-copy half of prep, timed on its own (K2-02 per-frame cost
+ * instrument): pbuf_alloc/classify is bookkeeping, pbuf_take is a memcpy of
+ * the whole frame, and a decomposition that lumps them cannot say whether an
+ * arm moved the copy or the bookkeeping. Same two-reads-per-frame budget as
+ * the bucket it splits. */
+static uint64_t g_prep_copy_ticks;
 static uint64_t g_input_ticks;
 static unsigned long g_input_calls;
 
@@ -449,6 +508,13 @@ void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
 	*input_calls = g_input_calls;
 }
 
+/* The pbuf-copy half of prep_ticks (subset, not an addition). Zero until the
+ * first frame is assembled, and always <= the prep bucket it splits. */
+uint64_t ethnetif_get_prep_copy_ticks(void)
+{
+	return g_prep_copy_ticks;
+}
+
 void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 		       unsigned long *input_fail, unsigned long *fed_total)
 {
@@ -457,6 +523,52 @@ void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
 	*input_fail = g_input_fail;
 	*fed_total = g_fed_total;
 }
+
+#if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
+/* The TCP control block's window state (K2-16, receive-direction defect).
+ *
+ * lwIP's socket layer gives the application data and errors, not windows; on
+ * a receive-side stall the question "is the peer throttled by a zero window
+ * we advertised, or is the window open and we are not consuming?" has no
+ * answer from the socket API. tcp_active_pcbs is the stack's own list, and
+ * tcp_priv.h is where lwIP keeps it. Read under the core lock: this runs in
+ * a sampler thread, never in an ISR, and it only reads.
+ *
+ * Returns the number of matching PCBs written (0 when the connection is not
+ * in the active list, e.g. before accept or after close). */
+int ethnetif_tcp_state(u16_t local_port, struct ethnetif_tcp_state *out,
+		       int max)
+{
+	struct tcp_pcb *pcb;
+	int n = 0;
+
+	if ((out == NULL) || (max <= 0)) {
+		return 0;
+	}
+
+	LOCK_TCPIP_CORE();
+	for (pcb = tcp_active_pcbs; (pcb != NULL) && (n < max);
+	     pcb = pcb->next) {
+		if (pcb->local_port != local_port) {
+			continue;
+		}
+		out[n].local_port = pcb->local_port;
+		out[n].remote_port = pcb->remote_port;
+		out[n].state = (u8_t)pcb->state;
+		out[n].flags = (u8_t)pcb->flags;
+		out[n].rcv_wnd = (u32_t)pcb->rcv_wnd;
+		out[n].rcv_ann_wnd = (u32_t)pcb->rcv_ann_wnd;
+		out[n].snd_wnd = (u32_t)pcb->snd_wnd;
+		out[n].rcv_nxt = pcb->rcv_nxt;
+		out[n].snd_nxt = pcb->snd_nxt;
+		out[n].snd_queuelen = (u32_t)pcb->snd_queuelen;
+		n++;
+	}
+	UNLOCK_TCPIP_CORE();
+
+	return n;
+}
+#endif /* CONFIG_GMAC_TCP_PROBE */
 
 /* netif->state carries the driver port index (the only per-netif fact the
  * bridge needs - the MAC address comes from the driver). */
@@ -667,6 +779,9 @@ unsigned int ethnetif_poll(struct netif *netif)
 		if (z == NULL) {
 			break;
 		}
+		if (z->live == 0u) {
+			g_zc_dead_handle++;
+		}
 		t0 = gtimer_count_get();
 		p = pbuf_alloced_custom(PBUF_RAW, (u16_t)z->len, PBUF_RAM,
 					&z->pc, z->buf, (u16_t)z->len);
@@ -692,6 +807,7 @@ unsigned int ethnetif_poll(struct netif *netif)
 		struct pbuf *p;
 		uint64_t t0;
 		uint64_t t1;
+		uint64_t t_copy = 0u;
 		unsigned int cls = ETHNETIF_CLASS_OTHER;
 
 		len = (int)dwc_eqos_get_rx_frame_size(port);
@@ -712,15 +828,24 @@ unsigned int ethnetif_poll(struct netif *netif)
 			(void)dwc_eqos_read_frame(port, in_linear, sizeof(in_linear));
 			continue;
 		}
-		if (dwc_eqos_read_frame(port, (uint8_t *)p->payload, p->len) != len) {
-			pbuf_free(p);
-			g_pool_fail++;
-			continue;
+		{
+			/* In this shape the frame copy IS read_frame (straight
+			 * into the pbuf), so it is the copy bucket's share. */
+			uint64_t tc = gtimer_count_get();
+
+			if (dwc_eqos_read_frame(port, (uint8_t *)p->payload,
+						p->len) != len) {
+				pbuf_free(p);
+				g_pool_fail++;
+				continue;
+			}
+			t_copy = gtimer_count_get() - tc;
 		}
 		cls = ethnetif_classify((const uint8_t *)p->payload,
 					(unsigned int)len, &g_rx_shape, 1);
 		t1 = gtimer_count_get();
 		g_prep_ticks += t1 - t0;
+		g_prep_copy_ticks += t_copy;
 #else
 		len = dwc_eqos_read_frame(port, in_linear, sizeof(in_linear));
 		if (len <= 0) {
@@ -736,13 +861,19 @@ unsigned int ethnetif_poll(struct netif *netif)
 			g_pool_fail++;
 			continue;
 		}
-		if (pbuf_take(p, in_linear, (u16_t)len) != ERR_OK) {
-			pbuf_free(p);
-			g_pool_fail++;
-			continue;
+		{
+			uint64_t tc = gtimer_count_get();
+
+			if (pbuf_take(p, in_linear, (u16_t)len) != ERR_OK) {
+				pbuf_free(p);
+				g_pool_fail++;
+				continue;
+			}
+			t_copy = gtimer_count_get() - tc;
 		}
 		t1 = gtimer_count_get();
 		g_prep_ticks += t1 - t0;
+		g_prep_copy_ticks += t_copy;
 #endif
 		if (ethnetif_deliver(netif, p, cls, t1) == ERR_OK) {
 			fed++;

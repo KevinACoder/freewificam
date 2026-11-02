@@ -53,6 +53,13 @@ HEAP_SIZE := $(CONFIG_HEAP_SIZE)
 # wins (`LEVERS=... tools/rtos/build.sh`), so a profile's own set is the
 # default an image is reproduced from, not a lock.
 LEVERS ?= $(CONFIG_LEVERS)
+# Per-frame service-time instrumentation (dwc_eqos prof counters and the
+# netio application bucket). Default on so a measurement boot is the same
+# image as before; a cost A/B builds with CONFIG_GMAC_PROF=0 and then the
+# 24 MHz counter is never read. It is not a tuning knob and it is not part
+# of CONFIG_PROFILE - the instrument's own cost has to be measurable on
+# every arm, including the ones that carry it.
+CONFIG_GMAC_PROF ?= 1
 WLAN_OBS := $(CONFIG_WLAN_OBS)
 WLAN_TCP_SINK := $(CONFIG_WLAN_TCP_SINK)
 WLAN_TCP_SINK_SECONDS := $(CONFIG_WLAN_TCP_SINK_SECONDS)
@@ -113,6 +120,7 @@ BOARD_INCLUDES := \
 	-I$(PLATFORM)/board/rk3568-itx/drivers
 BOARD_BASE_SRCS := \
 	$(PLATFORM)/board/rk3568-itx/drivers/uart.c \
+	$(PLATFORM)/board/rk3568-itx/drivers/cpu_freq.c \
 	$(PLATFORM)/board/rk3568-itx/param.c \
 	$(PLATFORM)/board/rk3568-itx/reset.c
 BOARD_TX_DIR := rk3568-itx
@@ -227,7 +235,7 @@ CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
@@ -488,6 +496,7 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
 	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
+	-DCONFIG_GMAC_PROF=$(CONFIG_GMAC_PROF) \
 	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(LEVERS) $(BACKEND_DEFS) \
 	$(BOARD_DEFS) $(INCLUDES)
 
@@ -581,7 +590,7 @@ APP_SRCS := \
 # The wired-network cases each bring the lwIP port face and the stack core;
 # the per-case group below adds that NIC's own netif bridge and driver. A boot
 # may carry more than one (they share one stack bring-up).
-LWIP_CASES := net net_xmac
+LWIP_CASES := net net_xmac net_mdk_netio net_loop net_pps
 ifneq ($(filter $(LWIP_CASES),$(CASES)),)
 NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
@@ -593,15 +602,22 @@ NET_APP_SRCS :=
 NET_STACK_SRCS :=
 endif
 
-# The per-NIC groups: the rk3568 net case keeps its eqos line; the firefly v2
-# case brings its own board driver and netif bridge.
+# The per-NIC groups: the rk3568 wired cases keep the eqos line; the firefly v2
+# case brings its own board driver and netif bridge. The per-frame cost
+# instrument rides with the netio arm only - it is a measurement aid, not part
+# of the driver, and a plain `net` arm must not pay for it.
 EQOS_SRCS :=
-ifneq ($(filter net,$(CASES)),)
+ifneq ($(filter net net_mdk_netio net_pps,$(CASES)),)
 NET_APP_SRCS += $(THIRD_PARTY)/lwip/ports/ethnetif.c
 EQOS_SRCS += \
 	$(PLATFORM)/board/rk3568-itx/drivers/dwc_eqos.c \
 	$(PLATFORM)/board/rk3568-itx/drivers/eqos_rk3568.c \
 	$(PLATFORM)/board/rk3568-itx/drivers/rtl8211f.c
+endif
+ifneq ($(filter net_mdk_netio net_pps,$(CASES)),)
+NET_APP_SRCS += \
+	$(LINE)/app/net_prof.c \
+	$(LINE)/app/net_prof_gmac.c
 endif
 XMAC_SRCS :=
 ifneq ($(filter net_xmac,$(CASES)),)
@@ -655,7 +671,8 @@ VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
 	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(UVC_ALL_SRCS) $(RTW89_ALL_SRCS) \
-	$(RTL8XXXU_ALL_SRCS) $(RTL8XXXU_NET_SRCS) $(SDIO_MCI_ALL_SRCS)
+	$(RTL8XXXU_ALL_SRCS) $(RTL8XXXU_NET_SRCS) $(RTL8XXXU_NETIO_SRCS) \
+	$(SDIO_MCI_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
 
@@ -778,6 +795,10 @@ $(SDIO_MCI_STAMP): FORCE
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 endif
 
+ifneq ($(filter rtl8xxxu_netio,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTL8XXXU_NETIO_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_NETIO_CFLAGS))))
+endif
+
 $(TARGET).elf: $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@
 
@@ -853,7 +874,7 @@ ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
 	echo "PASS: uvc engine, stream engine and video class table present"
 endif
 	@$(SIZE) $(TARGET).elf
-	@printf 'opt: %s\nprofile: %s\nlwip: %s\nlevers: %s\n' '$(OPT)' '$(PROFILE)' '$(LWIP)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' | tee $(BUILD)/build-info-$(BACKEND).txt
+	@printf 'opt: %s\nprofile: %s\nlwip: %s\nlevers: %s\nprof: %s\n' '$(OPT)' '$(PROFILE)' '$(LWIP)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' '$(CONFIG_GMAC_PROF)' | tee $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip $(PROFILE_CFLAGS)),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1

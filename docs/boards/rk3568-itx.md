@@ -97,6 +97,21 @@ The two 2.5 GbE ports, the HDMI/DP outputs, the I2C monitor and the RTC are
 not driven by any code in this tree. The SPI-NOR flash only ever appears as
 boot media, configured by the firmware.
 
+## Firmware sources
+
+Both firmware trees live on GitHub; this repository does not vendor them.
+
+| Component | Repository | Branch | Board inputs |
+|---|---|---|---|
+| Boot firmware | <https://github.com/KevinACoder/u-boot-rockchip> | `next-dev` | `rk3568-e4ap5g1-itx_defconfig`, `arch/arm/dts/rk3568-e4ap5g1-itx.dts`; `scripts/build-fit.sh` packages the SD boot FIT (`u-boot.itb`) |
+| Reference Linux kernel | <https://github.com/KevinACoder/linux> | `v7.3-rc2-firefly` | `arch/arm64/boot/dts/rockchip/rk3568-e4ap5g1-itx.dts`; the measured reference image is commit `e71d9a28760f` (`7.3.0-rc2-ge71d9a28760f`) |
+
+The boot chain is the vendor SPL, then ATF/OP-TEE, then U-Boot proper;
+`scripts/build-fit.sh` builds U-Boot proper and packages the FIT from a
+verified base FIT.  The Linux tree is the one the linuxnative reference runs
+on: build `Image` and `rk3568-e4ap5g1-itx.dtb`, boot with an initramfs, and use
+the method in [`../NET-TESTING.md`](../NET-TESTING.md) for the numbers.
+
 ## Boot path and memory
 
 The RTOS images are flat raw binaries, not ELF files booted by the firmware:

@@ -8,5 +8,7 @@ CONFIG_HEAP_SIZE := 16M
 CONFIG_FREERTOS_HEAP_SIZE := 16777216u
 CONFIG_RTL8XXXU_USB_BUS := 3
 CONFIG_RTL8XXXU_EXPECT_MAC := 20:f4:1b:52:8f:01
-CONFIG_RTL8XXXU_AP_SSID := labwifi-brmc
+# 2026-10-28 PLAT-01: the bench AP is the MT7921AU hostapd (labwifi-mtk24, ch5/2432,
+# HT20, open); labwifi-brmc is historical.  Keep freq 2432.
+CONFIG_RTL8XXXU_AP_SSID := labwifi-mtk24
 CONFIG_RTL8XXXU_AP_FREQ := 2432

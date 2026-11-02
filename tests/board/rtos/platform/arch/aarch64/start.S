@@ -174,17 +174,18 @@ el1_entry:
 	 * SCTLR store without one makes the regime's next fetch
 	 * UNPREDICTABLE (the round 1-5 evidence; the reset value normally
 	 * has all three clear, so the common path writes nothing). */
-	mrs	x0, sctlr_el1
+	mrs	x19, sctlr_el1
+	mov	x0, x19
 	bl	early_puthex32
 	EARLY_PUTS	msg_sctlr1
-	tbnz	x0, #0, 6f
-	tbnz	x0, #2, 6f
-	tbnz	x0, #12, 6f
+	tbnz	x19, #0, 6f
+	tbnz	x19, #2, 6f
+	tbnz	x19, #12, 6f
 	b	7f
-6:	bic	x0, x0, #1
-	bic	x0, x0, #4
-	bic	x0, x0, #0x1000
-	msr	sctlr_el1, x0
+6:	bic	x19, x19, #1
+	bic	x19, x19, #4
+	bic	x19, x19, #0x1000
+	msr	sctlr_el1, x19
 	tlbi	vmalle1
 	dsb	sy
 	isb
@@ -207,6 +208,7 @@ el1_entry:
 
 	ldr	x0, =__stack_top
 	mov	sp, x0
+	EARLY_PUTS	msg_prebss
 
 	/* Clear BSS: the C runtime relies on zero-initialised statics. Plain
 	 * 8-byte stores - no library calls that might use dc zva. */
@@ -222,6 +224,7 @@ el1_entry:
 	 * only). */
 	ldr	x1, =boot_arg_x0
 	str	x0, [x1]
+	EARLY_PUTS	msg_postbss
 
 	/* Identity-mapped MMU with caches on. Needed before C code runs:
 	 * unaligned Normal access must work, and the cache-maintenance
@@ -238,15 +241,19 @@ el1_entry:
 /* --- bring-up helpers (pre-MMU, same section) ----------------------------- */
 
 /* One breadcrumb line through the console UART the loader left live.
- * Raw PL011 semantics: FR at +0x18 (TXFF = bit 5), DR at +0. The image's
- * own uart_early_init re-programs the part later; until then this just
+ * The part is a DW-APB 16550 (reg-shift 2): LSR at byte offset 0x14 with
+ * THR_EMPTY = bit 5, THR at +0, 32-bit accesses. Reading +0x18 as if it
+ * were a PL011 FR is the exact failure the board uart.c documents: the
+ * FIFO absorbs the first burst, the first write that has to wait sees a
+ * wrong register, and the breadcrumb dies mid-line. The image's own
+ * uart_early_init re-programs the part later; until then this just
  * borrows the loader's configuration. */
 early_puts_raw:					/* x0: NUL-terminated string */
 1:	ldrb	w1, [x0], #1
 	cbz	w1, 2f
 	ldr	x2, =BOARD_UART_BASE
-3:	ldr	w3, [x2, #0x18]
-	tbnz	w3, #5, 3b			/* wait for TX FIFO room */
+3:	ldr	w3, [x2, #0x14]			/* LSR */
+	tbz	w3, #5, 3b			/* wait for THR_EMPTY */
 	str	w1, [x2]
 	b	1b
 2:	ret
@@ -263,10 +270,10 @@ early_puthex32:				/* x0: value */
 	add	w1, w1, #'0'
 	b	3f
 2:	add	w1, w1, #('a' - 10)
-3:	ldr	w4, [x2, #0x18]
-	tbnz	w4, #5, 3b			/* wait for TX FIFO room */
+3:	ldr	w4, [x2, #0x14]			/* LSR */
+	tbz	w4, #5, 3b			/* wait for THR_EMPTY */
 	str	w1, [x2]
-	sub	w3, w3, #4
+	subs	w3, w3, #4
 	b.ge	1b
 	ret
 
@@ -330,6 +337,8 @@ msg_ic:		.asciz	"boot: ic iallu\n"
 msg_eret:	.asciz	"boot: eret to el1\n"
 msg_el1:	.asciz	"boot: el1\n"
 msg_sctlr1:	.asciz	" boot: sctlr_el1 above\n"
+msg_prebss:	.asciz	"boot: pre-bss\n"
+msg_postbss:	.asciz	"boot: post-bss\n"
 msg_mmu:	.asciz	"boot: mmu_enable\n"
 msg_main:	.asciz	"boot: main\n"
 	.globl	msg_sync

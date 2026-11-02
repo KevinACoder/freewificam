@@ -54,6 +54,20 @@ the build compiles (`docs/PATCH-POLICY.md`).  Patches are applied in the tree;
 | vendor `rtl8189fs` / RTL8189FTV | SDIO | the vendor driver with its own MLME, over the SDIO host stack |
 | USB camera (UVC) | USB2 | the CherryUSB host stack, the video class and an isochronous stream engine |
 
+## Board and firmware sources
+
+The reference board is the RK3568-E4AP5G1-ITX; its hardware, peripheral map and
+boot path are in [`docs/boards/rk3568-itx.md`](docs/boards/rk3568-itx.md).
+
+Both firmware trees live on GitHub and are not vendored here:
+
+- Boot firmware: <https://github.com/KevinACoder/u-boot-rockchip>, branch
+  `next-dev`, board defconfig `rk3568-e4ap5g1-itx_defconfig`, board DTS
+  `arch/arm/dts/rk3568-e4ap5g1-itx.dts`.
+- Reference Linux kernel: <https://github.com/KevinACoder/linux>, branch
+  `v7.3-rc2-firefly`; the measured reference image is commit `e71d9a28760f`
+  (`7.3.0-rc2-ge71d9a28760f`).
+
 ## Building the Linux kernel module
 
 `DRIVER` selects the one driver the module carries; `rtw89` is the default,
@@ -95,15 +109,76 @@ The RTL8189FTV profiles additionally need the external vendor tree:
 VENDOR_8189FS=/path/to/rtl8189fs tools/rtos/build.sh
 ```
 
+## Performance
+
+Zero loss in every row. Three arms on one board: `ko` is the linux-ko shim
+(net80211 replacing mac80211, in-tree driver, kernel USB), `rtos` is the bare
+metal stack, `Linux` is the same board running the in-tree driver on mac80211.
+A dash means that arm was not measured on this bench.  Methods and counters:
+[docs/NET-TESTING.md](docs/NET-TESTING.md) for the wired port,
+[docs/WIFI-BENCH.md](docs/WIFI-BENCH.md) for 2.4 GHz Wi-Fi.
+
+| Link | Test | freewificam (ko) | freewificam (rtos) | Linux reference |
+|---|---|---|---|---|
+| Wired 1 GbE | UDP 1440 B receive | - | 114.00 MiB/s (956 Mbit/s) | 113.13 MiB/s |
+| Wired 1 GbE | UDP 1440 B send | - | 108.09 MiB/s (907 Mbit/s) | 113.61 MiB/s |
+| Wired 1 GbE | 64 B zero-loss pps (T0), ~1.69 GHz | - | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
+| Wired 1 GbE | 64 B T0, 816 MHz | - | 197.5k | 100k (reference only) |
+| Wired 1 GbE | TCP 1440 B, board to peer | - | 49.8 / 49.9 MB/s (2/2) | 94.21 MB/s |
+| Wired 1 GbE | TCP 1440 B, peer to board | - | 43.4 / 45.0 MB/s (2/2) | 111.91 MB/s |
+| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
+| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
+| Wi-Fi 8188EU, HT40 (150 Mbit/s MCS7 40MHz SGI) | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | - | 57.77–64.60 Mbit/s |
+
+The wired TCP rows are the 2026-11-02 default (TCP and UDP cells 2/2 each,
+`tcp_retrans=0`, zero loss).  The peer-to-board direction used to crawl at
+40 kB/s: input ran inside the driver's receive thread, so the socket reader
+could not drain and lwIP re-offered refused segments only from its 250 ms fast
+timer.  Input now runs on the tcpip thread; a second, independent defect in the
+zero-copy receive slot table (a lost half of a counter pair handed a live slot
+out again) surfaced at the new rate and is fixed with masked-IRQ critical
+sections.  The UDP cells did not move (113.99/107.4 MB/s, 0% loss both
+directions), and three lifetime counters stay at zero; see
+[docs/NET-TESTING.md](docs/NET-TESTING.md) section 8.
+
+The three Wi-Fi modes tell different stories.  At the lowest protocol the shim
+and mac80211 are equal: per frame data 238 us against 239 us and control 28 us
+against 28 us, so the net80211 shim carries no per-frame tax, and TCP lands
+within 13% of the reference (19.6 against 17.5 Mbit/s).  At HT20 the shim now
+matches the reference after adding block-ack and A-MPDU support: 52.1-53.0
+against 49.8-51.9 Mbit/s, with BlockAcks, radiotap A-MPDU marks, control
+2.7-2.8 us per frame and gap 0.  The old gap was a missing feature, not a slow
+stack: before this work the reference negotiated block-ack (3,523 BlockAcks,
+37,620 A-MPDU-marked frames) while the shim had no session at all (0 BlockAcks,
+0 marks, one plain ACK per frame).  At HT40 the shim associates at 40 MHz and
+negotiates block-ack (AP station 135-150 Mbit/s 40MHz, MCS6/7, about 2,400
+BlockAcks per cell), but reaches 46.2 Mbit/s against the reference's 62.3, so
+the 40 MHz path is functional and not yet at parity; that gap is not
+attributed.
+
+## Wireless bench
+
+A wireless number is only as good as the access point under it.  Before taking
+any, prove the bench with `tools/bench/stability.sh` (fixed-rate stream, four
+PASS/FAIL criteria on the AP's own counters) and rule the channel out with
+`tools/bench/channel-busy.sh` (airtime-based occupancy per channel).  Method,
+role assignment and the failure modes seen in the lab:
+[docs/WIFI-BENCH.md](docs/WIFI-BENCH.md).
+
 ## Gates and tools
 
 ```sh
+tools/bench/stability.sh --ap-if wlan2 --sta-ip 192.168.99.2 --secs 240
+tools/bench/channel-busy.sh --mon-if wlan1 --channels "1 3 6 9 11 13"
 tools/rtos/build.sh host-test       # the conformance case on the host, both kernels
 tools/rtos/build.sh digest          # every imported tree's digest record
 tools/rtos/board-round.py --help    # one board boot: stage, boot, capture, judge
 tools/rtos/judge.py <serial.log>    # re-judge a capture
 tools/check-commit-msg.sh <msg>     # the commit format
 tools/check-release-docs.sh         # reader-facing docs carry no private references
+tools/netio/build.sh                # the pinned NETIO peer (the Linux host / Pi client)
 ```
 
 Firmware blobs are not committed; `docs/FIRMWARE-NOTICES.md` carries their

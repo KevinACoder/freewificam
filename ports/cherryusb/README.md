@@ -61,7 +61,15 @@ camera cases follow that image's four steps, with the same blob lineage:
    - `CONFIG_USB_EHCI_ISO` is left undefined here: the camera image defines it
      and compiles the isochronous engine (`build/uvc.mk`), so the other images
      neither link the engine nor pay for its per-bus state;
-3. The board glue's interrupt priority is supplied by the build
+3. `lkpi_usb_cherryusb.c`: the backend seam gains a `poll` hook
+   (`chu_seam_poll()`) that runs `USBH_IRQHandler(busid)` for every started
+   xHCI bus inside `usb_osal_enter_critical_section()`, installed as
+   `.poll` in `chu_ops`. It exists because the 2026-11-01 8188EU round
+   measured the event interrupt of this controller being lost while
+   `usbsts.EINT` stayed pending (`runs/wireless/2026-11-01-W2-01-wedge/`);
+   the engine calls it only when a transfer is overdue, so the interrupt
+   stays the fast path and this is its fallback.
+4. The board glue's interrupt priority is supplied by the build
    (`-DUSB_BOARD_IRQ_PRIORITY_RAW=BOARD_IRQ_PRIORITY_API_CALL_RAW`) rather than
    left at the SPI default: the completion path gives a semaphore from the
    handler, and a kernel whose port forbids API calls above a threshold needs

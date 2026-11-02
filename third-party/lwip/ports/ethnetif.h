@@ -35,6 +35,12 @@ unsigned int ethnetif_poll(struct netif *netif);
 void ethnetif_zc_arm(void);
 #endif
 
+/* Lifetime auditor of the zero-copy hand-off (K2-16 B): wrap-over-live,
+ * free-of-dead, and dead-handle counts. All three are zero on a correct run;
+ * they name which owner lost track when lwIP's pbuf ref assert fires. */
+void ethnetif_zc_audit(uint32_t *wrap_live, uint32_t *free_dead,
+		       uint32_t *dead_handle);
+
 /* Loss counters for the heartbeat: poll calls, pbuf-pool failures, input
  * failures, frames fed in total. */
 void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
@@ -47,6 +53,12 @@ void ethnetif_get_diag(unsigned long *poll_calls, unsigned long *pool_fail,
  * protocol-dependent cost sits in. */
 void ethnetif_get_stack_prof(uint64_t *prep_ticks, uint64_t *input_ticks,
 			     unsigned long *input_calls);
+
+/* The pbuf-copy share of prep_ticks (subset, not an addition): pbuf_take in
+ * the copying shapes, the driver's staged->pbuf read in the DIRECT shape. It
+ * exists so a cost decomposition can name the copy instead of hiding it in
+ * "prep". */
+uint64_t ethnetif_get_prep_copy_ticks(void);
 
 /* Traffic-shape classification (2026-10-19): every IP/TCP frame crossing the
  * bridge, split by what it is. The TCP-gap round needs the shape mix - is the
@@ -133,5 +145,31 @@ void ethnetif_get_tcp_fine(uint64_t *pair_ticks, unsigned long *pair_calls,
 			   unsigned long *data_handoffs,
 			   unsigned long *ctrl_handoffs);
 void ethnetif_reset_tcp_fine(void);
+
+#if defined(CONFIG_GMAC_TCP_PROBE) && CONFIG_GMAC_TCP_PROBE
+/* TCP control-block state for one local port (K2-16). A receive-direction
+ * stall is either "the peer is throttled by a window we advertised" or "the
+ * window is open and we are not consuming"; the socket API cannot tell the
+ * two, the PCB can. `rcv_wnd` is what is left of the receive window,
+ * `rcv_ann_wnd` the part already announced to the peer, `snd_wnd` the peer's
+ * window (ACK direction), `snd_queuelen` what is queued but unsent.
+ * Thread context only (takes the core lock); returns the number of PCBs
+ * written. */
+struct ethnetif_tcp_state {
+	u16_t local_port;
+	u16_t remote_port;
+	u8_t  state;		/* enum tcp_state */
+	u8_t  flags;		/* TF_* bits */
+	u32_t rcv_wnd;
+	u32_t rcv_ann_wnd;
+	u32_t snd_wnd;
+	u32_t rcv_nxt;
+	u32_t snd_nxt;
+	u32_t snd_queuelen;
+};
+
+int ethnetif_tcp_state(u16_t local_port, struct ethnetif_tcp_state *out,
+		       int max);
+#endif /* CONFIG_GMAC_TCP_PROBE */
 
 #endif /* FREEWEB_LWIP_ETHNETIF_H */

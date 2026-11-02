@@ -49,6 +49,15 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_NET)
 	{ "net", case_net_run },
 #endif
+#if defined(RTOS_CASE_NET_MDK_NETIO)
+	{ "net_mdk_netio", case_net_mdk_netio_run },
+#endif
+#if defined(RTOS_CASE_NET_PPS)
+	{ "net_pps", case_net_pps_run },
+#endif
+#if defined(RTOS_CASE_NET_LOOP)
+	{ "net_loop", case_net_loop_run },
+#endif
 #if defined(RTOS_CASE_EMMC)
 	{ "emmc", case_emmc_run },
 #endif
@@ -121,6 +130,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTL8XXXU_NET)
 	{ "rtl8xxxu_net", case_rtl8xxxu_net_run },
 #endif
+#if defined(RTOS_CASE_RTL8XXXU_NETIO)
+	{ "rtl8xxxu_netio", case_rtl8xxxu_netio_run },
+#endif
 #if defined(RTOS_CASE_UVC_DETECT)
 	{ "uvc_detect", case_uvc_detect_run },
 #endif
@@ -149,7 +161,10 @@ static const osThreadAttr_t runner_attr = {
     defined(RTOS_CASE_RTW89) || defined(RTOS_CASE_RTW89_SCAN) || \
     defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE) || \
     defined(RTOS_CASE_RTL8XXXU) || defined(RTOS_CASE_RTL8XXXU_SCAN) || \
-    defined(RTOS_CASE_RTL8XXXU_JOIN) || defined(RTOS_CASE_RTL8XXXU_DATAPLANE)
+    defined(RTOS_CASE_RTL8XXXU_JOIN) || defined(RTOS_CASE_RTL8XXXU_DATAPLANE) || \
+    defined(RTOS_CASE_RTL8XXXU_NETIO) || defined(RTOS_CASE_NET_MDK_NETIO)
+	/* The netio server is brought up from this thread (its socket workers get
+	 * their own heap-backed stacks); give the bring-up frame room. */
 	.stack_size = 16384U,
 #else
 	.stack_size = 8192U,

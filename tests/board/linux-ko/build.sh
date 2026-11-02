@@ -16,6 +16,9 @@
 #   DEBUGFS 1 = build the rtw89 driver with its debugfs support
 #   DIAG    1 = apply patches/diag to a copy of the driver tree in the mirror
 #           (diagnostics only; never part of a delivered build)
+#   PROF    1 = build the per-frame profiler (prof_enable/prof_dump module
+#           params). The module is then an instrumented artifact: its hash and
+#           its rates never serve as a baseline.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -33,6 +36,7 @@ KREL=${KREL:-7.3.0-rc2-ge71d9a28760f}
 MOD=$BUILD/wlan-ko
 CROSS=${CROSS_COMPILE:-aarch64-linux-gnu-}
 JOBS=${JOBS:-$(nproc)}
+PROF=${PROF:-0}
 
 # ---- source lists -----------------------------------------------------------
 # The net80211 world: imported stack + its port layer + the bridge. These
@@ -72,6 +76,10 @@ for f in "$REPO"/tests/board/linux-ko/ports/mac80211/*.c "$REPO"/tests/board/lin
 	[ -f "$f" ] && LINUX_SRCS="$LINUX_SRCS
 ${f#$REPO/}"
 done
+if [ "$PROF" = 1 ]; then
+	LINUX_SRCS="$LINUX_SRCS
+tests/board/linux-ko/ports/prof/wlan_ko_prof.c"
+fi
 LINUX_SRCS="$LINUX_SRCS
 tests/board/linux-ko/main.c"
 # The verbatim driver: compiled only against kernel headers. Off until the
@@ -313,6 +321,9 @@ done
 	fi
 	if [ -n "$DRIVER_CFLAGS" ]; then
 		echo "ccflags-y += $DRIVER_CFLAGS"
+	fi
+	if [ "$PROF" = 1 ]; then
+		echo "ccflags-y += -DCONFIG_WLAN_KO_PROF=1"
 	fi
 	echo
 	echo "STACK_CFLAGS := -include \$(TREE)/tests/board/linux-ko/ports/stack_prelude.h \\"

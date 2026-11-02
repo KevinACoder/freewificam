@@ -25,12 +25,15 @@
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/skbuff.h>
+#include <linux/ktime.h>
 #include <linux/etherdevice.h>
 #include <linux/workqueue.h>
 #include <net/mac80211.h>
 #include <net/cfg80211.h>
 
 #include "wlan_linux.h"
+#include "mac80211_ba.h"
+#include "wlan_ko_prof.h"
 
 /*
  * wiphy_new_nm() wants a cfg80211_ops table. The kernelmod line never registers with
@@ -66,6 +69,11 @@ struct wlan_linux_hw *wlan_hw_from_vif(struct ieee80211_vif *vif)
 		return NULL;
 	}
 	return w;
+}
+
+struct wlan_linux_hw *wlan_hw_single(void)
+{
+	return wlan_single_hw != NULL ? wlan_hw_of(wlan_single_hw) : NULL;
 }
 
 static void wlan_rx_work(struct work_struct *work);
@@ -121,6 +129,8 @@ struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
 	INIT_WORK(&w->rx_work, wlan_rx_work);
 	INIT_WORK(&w->tx_work, wlan_tx_work);
 	INIT_WORK(&w->scan_work, wlan_scan_work);
+	/* the driver's queue wake: the work that delivers it to the bridge */
+	wlan_tx_wake_init(w);
 	/*
 	 * Two queues, deliberately: the receive/transmit-completion handoff
 	 * enters the net80211 serializer, and a driver work item (watchdog,
@@ -263,7 +273,19 @@ static void wlan_rx_work(struct work_struct *work)
 	struct sk_buff *skb;
 
 	while ((skb = skb_dequeue(&w->rx_q)) != NULL) {
+		u64 prof_t0 = wlan_ko_prof_begin();
+
+#ifdef CONFIG_WLAN_KO_PROF
+		if (ktime_to_ns(skb->tstamp) != 0) {
+			wlan_ko_prof_value(WLAN_KO_PROF_RX_DEFER,
+			    ktime_get_ns() - ktime_to_ns(skb->tstamp));
+			skb->tstamp = 0;
+		}
+#endif
 		wlan_adapter_rx(&w->hw, skb);
+		wlan_ko_prof_depth(WLAN_KO_PROF_Q_RX, -1);
+		wlan_ko_prof_event(WLAN_KO_PROF_EVT_RX_WORK);
+		wlan_ko_prof_end(WLAN_KO_PROF_RX_WORK, prof_t0);
 	}
 }
 
@@ -273,8 +295,12 @@ static void wlan_tx_work(struct work_struct *work)
 	struct sk_buff *skb;
 
 	while ((skb = skb_dequeue(&w->tx_q)) != NULL) {
+		u64 prof_t0 = wlan_ko_prof_begin();
+
 		wlan_adapter_tx_complete(&w->hw, skb);
 		dev_kfree_skb_any(skb);
+		wlan_ko_prof_depth(WLAN_KO_PROF_Q_TX_STATUS, -1);
+		wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS_WORK, prof_t0);
 	}
 }
 
@@ -288,6 +314,7 @@ static void wlan_scan_work(struct work_struct *work)
 void ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct wlan_linux_hw *w = wlan_hw_of(hw);
+	u64 prof_t0 = wlan_ko_prof_begin();
 
 	/*
 	 * The driver that declares RX_INCLUDES_FCS hands up the four FCS bytes
@@ -298,11 +325,20 @@ void ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	if (test_bit(IEEE80211_HW_RX_INCLUDES_FCS, hw->flags)) {
 		if (skb->len < 4) {
 			dev_kfree_skb_any(skb);
+			wlan_ko_prof_event(WLAN_KO_PROF_EVT_RX_DROP);
+			wlan_ko_prof_end(WLAN_KO_PROF_RX_IRQ, prof_t0);
 			return;
 		}
 		skb_trim(skb, skb->len - 4);
 	}
+#ifdef CONFIG_WLAN_KO_PROF
+	if (prof_t0)
+		skb->tstamp = ns_to_ktime(prof_t0);
+#endif
 	skb_queue_tail(&w->rx_q, skb);
+	wlan_ko_prof_depth(WLAN_KO_PROF_Q_RX, 1);
+	wlan_ko_prof_event(WLAN_KO_PROF_EVT_RX_FRAME);
+	wlan_ko_prof_end(WLAN_KO_PROF_RX_IRQ, prof_t0);
 	queue_work(w->wq, &w->rx_work);
 }
 
@@ -329,8 +365,12 @@ void ieee80211_rx_napi(struct ieee80211_hw *hw, struct ieee80211_sta *sta,
 void ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct wlan_linux_hw *w = wlan_hw_of(hw);
+	u64 prof_t0 = wlan_ko_prof_begin();
 
 	skb_queue_tail(&w->tx_q, skb);
+	wlan_ko_prof_depth(WLAN_KO_PROF_Q_TX_STATUS, 1);
+	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_STATUS);
+	wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS, prof_t0);
 	queue_work(w->wq, &w->tx_work);
 }
 
@@ -632,10 +672,7 @@ struct sk_buff *ieee80211_proberesp_get(struct ieee80211_hw *hw,
 int ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, u16 tid,
     u16 timeout)
 {
-	(void)sta;
-	(void)tid;
-	(void)timeout;
-	return 0;
+	return wlan_ba_start_tx(sta, tid, timeout);
 }
 
 void ieee80211_stop_tx_ba_cb_irqsafe(struct ieee80211_vif *vif, const u8 *ra,
@@ -816,9 +853,7 @@ const char *__ieee80211_get_assoc_led_name(struct ieee80211_hw *hw)
  */
 int ieee80211_stop_tx_ba_session(struct ieee80211_sta *sta, u16 tid)
 {
-	(void)sta;
-	(void)tid;
-	return 0;
+	return wlan_ba_stop_tx(sta, tid);
 }
 
 /*
