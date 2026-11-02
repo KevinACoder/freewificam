@@ -191,3 +191,69 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
   lower bounds, not platform limits.
 - `tools/netio/ppsgen.c` and `tools/netio/pps-report.py` are the pps tools; the
   batch/window/turnover interaction is described in 6.2-6.5.
+
+## 9. The two RTOS-side instruments beyond the wired netio arm
+
+Both are built from `tests/board/rtos/config.mk`, one profile per image; neither
+shares an image with the wired netio case.
+
+### 9.1 Mass storage (U-disk) ladder - `usb-xhci` / `usb-ehci`
+
+```
+CONFIG := usb-xhci      # one controller per boot; the first ready disk wins
+tools/rtos/build.sh
+BOARD_SESSION=<client> BOARD_PYTHON=<python> \
+  tools/rtos/board-round.py --backend freertos --out <run> --boot boot1 \
+    --cases tick,usb_xhci
+```
+
+The case reads and writes the disk's last 32 MiB, 1 MiB aligned, at 4/64/512 KiB
+(1 MiB on EHCI) plus an 8..128 KiB sweep, and prints
+`usbh: msc io read|write size_kib=N runs=3 ... rate=R mib_s per_cmd_us=N` and
+`usbh: msc sweep ...`.  The Linux ground truth is the same window and the same
+command sizes: `DEV=/dev/sda sh tools/usb/fio-udisk.sh <out>` (fio is in the mfs
+package set; psync + direct, three runs per arm, rotating offsets).
+
+The arm needs a real USB mass-storage disk.  A Realtek "DISK" (`0bda:1a2b`) is
+the wifi dongle's CD-ROM persona: it enumerates with `bInterfaceClass=8`, but
+`usb-storage` ignores it by quirk and no `sdX` appears - check `lsblk`, not
+`lsusb`.
+
+### 9.2 WLAN netio server - `rtl8xxxu-8188eu-netio-ar-g` / `-ar-ht20`
+
+```
+CONFIG := rtl8xxxu-8188eu-netio-ar-g     # legacy 11g AP (labwifi-ar-g)
+tools/rtos/build.sh
+# stage build/build/rtos-freertos.bin as rtos.bin, boot it, wait for:
+#   net: netio ready port=18767 aux=18768 buf=16384
+/home/pi/netio-src/netio -u -b 1440 <board-ip>     # one call = Tx (down) + Rx (up)
+```
+
+The server runs inside the image; there is no shell on the board.  Its ports are
+fixed (18767 control, 18768 data), so the client must not pass `-p`.  The UDP
+transmit cell is a non-blocking blast over the WLAN netif: the bridge gates the
+driver queue and wakes it on the next completion, so `sendto` returns `-1`
+between wakes.  The server waits `S2C_REFUSAL_MAX` (200 ms) of consecutive
+refusals before it treats the cell as an aborted one, which is what makes the
+uplink measurable at all (before that, the first WLAN cell aborted after 104
+frames on a healthy link).  The wired arm is compiled without the retry.
+
+Per-cell evidence: the client's `Packet size ... Tx, ... Rx` line is the number;
+the board prints `netio: udp c2s/rx done/s2c/tx done`, the bridge ledger
+(`netio: layers ... wlan_tx/wlan_done/wlan_rx/wlan_gated/wlan_wakes`), a
+per-frame cost (`netio: cpu tag=<phase> frames=N us_x10_per_frame=M`, i.e.
+M/10 microseconds per frame), and the rate fingerprint (`wlan: link ...`).
+Take the console slice per cell by byte window: the hub keeps one serial buffer
+across boots, so a tail slice carries the previous cell's anchors.
+
+Measured 2026-11-02 on the reference board (1440 B UDP, legacy 11g / HT20-SGI
+AP, 0% loss, 2 boots x 3 cells, cpu at the pinned ~1.69 GHz):
+
+| arm | legacy down | legacy up | HT20 down | HT20 up |
+|---|---|---|---|---|
+| freewificam RTOS | 19.0-19.4 Mbit/s | 31.7-32.5 | 20.0-20.5 | 31.3-31.6 |
+| Linux ko, same AP | 18.9-19.4 | 34.7-35.3 | 49.3-52.3 | 34.4-34.8 |
+
+The per-frame receive cost is the gap: 610-621 us/frame on legacy and
+578-590 us/frame on HT20, against 12.2 us/frame for the same lwIP stack on the
+wired port.  The HT20 PHY upgrade therefore buys ~5% throughput, not ~2x.
