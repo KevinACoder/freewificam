@@ -68,6 +68,15 @@ struct lkpi_usb_chusb_stats {
 	unsigned int	rx_completes;
 	unsigned int	rx_errors;
 	unsigned int	rx_last_len;
+	/* The split a stalled receive needs: was the completion short (one MPDU
+	 * per transfer, the shape the driver's 2328-byte URB expects) or did it
+	 * fill the whole buffer (an aggregate bigger than the URB, or a transfer
+	 * the controller cut at the buffer's end)?  Filled only under
+	 * CONFIG_LKPI_USB_OBS, so a clean image carries no extra work. */
+	unsigned int	rx_full;		/* completions that filled the URB */
+	unsigned int	rx_max_len;		/* largest bulk-IN completion */
+	unsigned int	rx_len_hist[6];		/* <256 <512 <1024 <1600 <2328 >=2328 */
+	int		rx_last_err;		/* last non-zero completion code */
 };
 
 void lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out);

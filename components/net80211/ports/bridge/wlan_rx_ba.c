@@ -42,11 +42,11 @@
 #if defined(CONFIG_WLAN_RX_BA) && CONFIG_WLAN_RX_BA
 
 #define BA_TIDS		16
-#define BA_SLOTS	32
+#define BA_SLOTS	128
 #define BA_FRAME_MAX	1600
 #define BA_FLUSH_MS	50
 
-#define BA_WIN		32	/* how far ahead of `head` a frame may sit */
+#define BA_WIN		128	/* how far ahead of `head` a frame may sit */
 
 struct ba_slot {
 	int	used;
@@ -77,6 +77,11 @@ static struct {
 	unsigned int		held;
 	unsigned int		flushed;
 	unsigned int		dup;
+	unsigned int		dup_behind;	/* SN the head already passed */
+	unsigned int		dup_far;	/* ahead, but outside the window */
+	unsigned int		dup_slot;	/* the same SN already held */
+	unsigned int		drop_window;	/* window full even after a flush */
+	unsigned int		behind_hist[6];	/* how far behind, in SNs */
 	unsigned int		hole;
 	unsigned int		dropped;
 	unsigned int		frames;
@@ -353,6 +358,7 @@ ba_qos_data(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 		s = ba_slot_find(tid, sn);
 		if (s != NULL) {
 			ba.dup++;		/* the same SN already held */
+			ba.dup_slot++;
 		} else {
 			s = ba_slot_free();
 			if (s == NULL) {
@@ -363,6 +369,7 @@ ba_qos_data(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 			}
 			if (s == NULL) {
 				ba.dropped++;
+				ba.drop_window++;
 			} else {
 				s->used = 1;
 				s->tid = tid;
@@ -375,8 +382,30 @@ ba_qos_data(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 				    msecs_to_jiffies(BA_FLUSH_MS));
 			}
 		}
+	} else if (!ba_after(sn, ba.tids[tid].head)) {
+		/* Behind the head: a retry we already passed.  How far behind
+		 * says whether it is a copy of a frame just delivered or a
+		 * frame from an older wrap of the 12-bit SN space. */
+		unsigned int d = ba_dist(ba.tids[tid].head, sn);
+
+		ba.dup++;
+		ba.dup_behind++;
+		if (d <= 2)
+			ba.behind_hist[0]++;
+		else if (d <= 4)
+			ba.behind_hist[1]++;
+		else if (d <= 8)
+			ba.behind_hist[2]++;
+		else if (d <= 32)
+			ba.behind_hist[3]++;
+		else if (d <= 512)
+			ba.behind_hist[4]++;
+		else
+			ba.behind_hist[5]++;
 	} else {
-		ba.dup++;	/* behind the head: a retry we already saw */
+		/* Ahead of the head, past the window: nothing can hold it. */
+		ba.dup++;
+		ba.dup_far++;
 	}
 	mutex_unlock(&ba.lock);
 	return 1;
@@ -447,6 +476,17 @@ wlan_rx_ba_dump(void)
 	    "flushed=%u dup=%u hole=%u dropped=%u frames=%u\n",
 	    ba.addba_req, ba.addba_rsp, ba.delba, ba.held, ba.flushed,
 	    ba.dup, ba.hole, ba.dropped, ba.frames);
+	/* The reorder verdict, split by reason: a duplicate copy the head has
+	 * already passed (behind), a copy of a frame still held (slot), a frame
+	 * ahead of the window (far), or a window that stayed full after a
+	 * flush.  `behind` buckets the distance in SNs: <=2, <=4, <=8, <=32,
+	 * <=512, larger.  `head` is what the next expected SN was. */
+	wlan_osal_log("wlan: ba reorder head=%u deliv=%u dupslot=%u "
+	    "dupbehind=%u dupfar=%u dropwin=%u behind=%u/%u/%u/%u/%u/%u\n",
+	    ba.tids[0].head, ba.frames, ba.dup_slot, ba.dup_behind,
+	    ba.dup_far, ba.drop_window, ba.behind_hist[0], ba.behind_hist[1],
+	    ba.behind_hist[2], ba.behind_hist[3], ba.behind_hist[4],
+	    ba.behind_hist[5]);
 }
 
 #endif /* CONFIG_WLAN_RX_BA */

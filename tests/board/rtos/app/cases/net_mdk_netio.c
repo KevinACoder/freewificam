@@ -84,6 +84,18 @@
 #else
 #include "wlan_bridge.h"
 #include "rtl8xxxu_net.h"
+/* The receive-path split (RTOS-03): the transfer layer's completion census and
+ * the interface layer's queue counters, so one anchor names the leg that ate
+ * the A-MPDUs instead of inferring it from the bridge's totals. */
+#include "linuxkpi_usb.h"
+#include "lkpi_usb_cherryusb.h"
+
+/* Same seam rtl8xxxu_join.c uses: the counters are exported unconditionally,
+ * but their header lives in the mac80211 substitute's world, which this file
+ * does not otherwise include. */
+void lkpi80211_rx_boundary_counters(uint32_t *in, uint32_t *refused,
+				    uint32_t *drops, uint32_t *frames,
+				    uint32_t *qlen);
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -202,6 +214,92 @@ static void emit_cpu_spot(const char *tag)
 	(void)tag;
 #endif
 }
+
+#if !NETIO_GMAC
+/*
+ * The receive-path ledger for the WLAN arm.  Four layers, one line each, so a
+ * frozen receive names its leg:
+ *
+ *   usb_*  the controller/backend: completions, errors, and the length shape
+ *	 (a full-buffer completion says the transfer outgrew the URB or was cut
+ *	 at its end; a short one says the chip delivered less than it asked for)
+ *   ep_*   the endpoint engine and the driver's re-arm: qlen + in_flight is
+ *	 the driver's RX URB pool (32 at boot); a shrinking pool is the driver
+ *	 retiring buffers on error completions
+ *   rx_*   the interface layer: frames handed to ieee80211_rx_irqsafe, ones
+ *	 the linearizer refused, ones the queue dropped, and ones the worker
+ *	 finally delivered to the bridge
+ *   desc   the first 16 bytes of the last successful bulk-IN transfer, i.e.
+ *	 the receive descriptor the driver will parse (pktlen/drvinfo/shift)
+ *
+ * It deliberately does not sample the controller's registers: AGENTS.md's
+ * rule is that only a one-shot probe may touch them (a periodic sampler read
+ * the xHCI into silence once), and everything above comes from counters.
+ */
+static void emit_rxpath(const char *tag)
+{
+#if defined(CONFIG_NETIO_RXPATH) && CONFIG_NETIO_RXPATH
+	struct lkpi_usb_chusb_stats cs;
+	struct lkpi_usb_engine_stats es;
+	struct lkpi_usb_ep_stats ep;
+	uint32_t rx_in = 0, rx_ref = 0, rx_drop = 0, rx_frames = 0, rx_q = 0;
+	unsigned int i, best_comp = 0;
+	bool have_ep = false;
+
+	memset(&cs, 0, sizeof(cs));
+	memset(&es, 0, sizeof(es));
+	memset(&ep, 0, sizeof(ep));
+	lkpi_usb_cherryusb_stats(&cs);
+	lkpi_usb_engine_stats_get(&es);
+	lkpi80211_rx_boundary_counters(&rx_in, &rx_ref, &rx_drop, &rx_frames,
+					&rx_q);
+
+	/* The receive endpoint is the IN endpoint that moved the most frames;
+	 * an OUT endpoint and an idle extra IN endpoint must not shadow it. */
+	for (i = 0; i < lkpi_usb_ep_count(); i++) {
+		struct lkpi_usb_ep_stats cand;
+
+		if (lkpi_usb_ep_stats_get(i, &cand) != 0)
+			continue;
+		if ((cand.ep_addr & 0x80u) == 0u || cand.enqueued == 0u)
+			continue;
+		if (!have_ep || cand.completions >= best_comp) {
+			ep = cand;
+			best_comp = cand.completions;
+			have_ep = true;
+		}
+	}
+
+	/* ULOG caps one message at 256 bytes, so the ledger is three lines:
+	 * the transfer census, the endpoint/interface split, and the descriptor
+	 * the driver will parse. */
+	MDK_ANCHOR("netio: rxpath tag=%s usb_rx=%u usb_err=%u usb_last=%u "
+		   "usb_lasterr=%d usb_full=%u usb_max=%u "
+		   "usb_hist=%u/%u/%u/%u/%u/%u\n",
+		   tag, cs.rx_completes, cs.rx_errors, cs.rx_last_len,
+		   cs.rx_last_err, cs.rx_full, cs.rx_max_len,
+		   cs.rx_len_hist[0], cs.rx_len_hist[1], cs.rx_len_hist[2],
+		   cs.rx_len_hist[3], cs.rx_len_hist[4], cs.rx_len_hist[5]);
+	MDK_ANCHOR("netio: rxconn tag=%s rx_in=%lu rx_ref=%lu rx_drop=%lu "
+		   "rx_frames=%lu rx_q=%lu ep=%02x ep_q=%u ep_inf=%u "
+		   "ep_enq=%u ep_comp=%u ep_err=%u ep_last=%u\n",
+		   tag, (unsigned long)rx_in, (unsigned long)rx_ref,
+		   (unsigned long)rx_drop, (unsigned long)rx_frames,
+		   (unsigned long)rx_q,
+		   have_ep ? ep.ep_addr : 0u, ep.qlen, ep.in_flight,
+		   ep.enqueued, ep.completions, ep.errors, ep.last_in_len);
+	MDK_ANCHOR("netio: rxdesc tag=%s w=%08x,%08x,%08x,%08x\n",
+		   tag, ep.last_in_words[0], ep.last_in_words[1],
+		   ep.last_in_words[2], ep.last_in_words[3]);
+	MDK_ANCHOR("netio: usbeng tag=%s polls=%u pdrain=%u kicks=%u "
+		   "eng_comp=%u eng_err=%u parked=%u parked_now=%u\n",
+		   tag, es.polls, es.poll_drained, es.kicks, es.completions,
+		   es.errors, es.parked_now, es.in_flight);
+#else
+	(void)tag;
+#endif
+}
+#endif /* !NETIO_GMAC */
 
 static void emit_layer_counters(const char *tag)
 {
@@ -730,6 +828,41 @@ static void UDP_Receiver(void *arg)
 }
 
 /* Ask the receiver to stop and let it leave lwip_recv on its own. */
+#if !NETIO_GMAC
+/* The in-cell sampler.  The BA-broken receive path backs the AP's queue up far
+ * enough that the Pi client blocks in sendmmsg and never sends CMD_RES, so the
+ * cell never closes and a begin/end pair would only ever show its begin half.
+ * A 2 s timer samples the same ledger while the window is open; it reads the
+ * substitute's counters only (no controller registers), so sampling cannot
+ * disturb the thing it watches. */
+static osTimerId_t rxpath_timer;
+
+static void rxpath_tick(void *arg)
+{
+	(void)arg;
+	emit_rxpath("cell");
+}
+
+static void rxpath_window(int open)
+{
+#if defined(CONFIG_NETIO_RXPATH) && CONFIG_NETIO_RXPATH
+	if (rxpath_timer == NULL)
+		rxpath_timer = osTimerNew(rxpath_tick, osTimerPeriodic, NULL,
+					  NULL);
+	if (rxpath_timer == NULL)
+		return;
+	if (open)
+		osTimerStart(rxpath_timer, 2000u);
+	else
+		osTimerStop(rxpath_timer);
+#else
+	(void)open;
+#endif
+}
+#else
+#define rxpath_window(open)	do { (void)(open); } while (0)
+#endif
+
 static void udp_rx_quiesce(void)
 {
 	io_rx_stop = 1;
@@ -948,10 +1081,22 @@ static void UDP_Server(void *arg)
 
 		for (;;) {
 			rc = recv_data(csock, &ctl, sizeof(ctl));
-			if (rc < 0)
+			if (rc < 0) {
+#if defined(CONFIG_NETIO_RXPATH) && CONFIG_NETIO_RXPATH
+				MDK_ANCHOR("netio: ctl recv rc=%d\n", (int)rc);
+#endif
 				__THREAD_EXIT(rc);
+			}
 
 			io.command = ntohl(ctl.cmd);
+#if defined(CONFIG_NETIO_RXPATH) && CONFIG_NETIO_RXPATH
+			/* Control-plane ledger: the cell's close is a TCP command,
+			 * and a receive path that blocks the client can make the
+			 * thread look dead when the command never arrived. */
+			MDK_ANCHOR("netio: ctl cmd=%08lx data=%lu\n",
+				   (unsigned long)io.command,
+				   (unsigned long)ntohl(ctl.data));
+#endif
 
 			if (io.command == CMD_C2S) {
 				io.pkt_size = ntohl(ctl.data);
@@ -1015,6 +1160,10 @@ static void UDP_Server(void *arg)
 				 * boot, the ARP and the previous cell cannot
 				 * leak into this one's layer ledger. */
 				emit_layer_counters("begin");
+#if !NETIO_GMAC
+				emit_rxpath("begin");
+				rxpath_window(1);
+#endif
 
 #if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
 				/* The window opens with the cell: from here the
@@ -1034,6 +1183,9 @@ static void UDP_Server(void *arg)
 				if (rc < 0)
 					__THREAD_EXIT(rc);
 			} else if (io.command == CMD_RES) {
+#if defined(CONFIG_NETIO_RXPATH) && CONFIG_NETIO_RXPATH
+				MDK_ANCHOR("netio: ctl res start\n");
+#endif
 #if NETIO_GMAC
 				struct net_prof_snap prof_b;
 #endif
@@ -1047,6 +1199,16 @@ static void UDP_Server(void *arg)
 				MDK_ANCHOR("netio: udp rx done pkts=%lu bytes=%lu\n",
 					   (unsigned long)io.pkt_count,
 					   (unsigned long)io.rx_bytes);
+#if !NETIO_GMAC
+				/* The cell's far end: until RTOS-03 the WLAN C2S
+				 * cell closed without a single board snapshot,
+				 * so a "post-cell" claim could only quote the
+				 * begin line.  The GMAC backend's output stays
+				 * byte-identical to its measured baseline. */
+				rxpath_window(0);
+				emit_layer_counters("udp-c2s-end");
+				emit_rxpath("udp-c2s-end");
+#endif
 #if NETIO_GMAC
 				{
 					struct rx_win win_b;
@@ -1085,6 +1247,9 @@ static void UDP_Server(void *arg)
 				if (rc < 0)
 					__THREAD_EXIT(rc);
 			} else if (io.command == CMD_S2C) {
+#if !NETIO_GMAC
+				rxpath_window(0);
+#endif
 #if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
 				g_raw_in_window = 0;
 #else

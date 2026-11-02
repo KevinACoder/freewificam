@@ -449,8 +449,34 @@ chu_complete(void *arg, int nbytes)
 		chu_stats.rx_completes++;
 		chu_stats.rx_last_len = err == 0 ? (unsigned int)nbytes :
 		    slot->urb.actual_length;
-		if (err != 0)
+		if (err != 0) {
 			chu_stats.rx_errors++;
+			chu_stats.rx_last_err = err;
+		}
+#ifdef CONFIG_LKPI_USB_OBS
+		{
+			unsigned int len = chu_stats.rx_last_len;
+			unsigned int idx = 5;
+
+			if (len < 256u)
+				idx = 0;
+			else if (len < 512u)
+				idx = 1;
+			else if (len < 1024u)
+				idx = 2;
+			else if (len < 1600u)
+				idx = 3;
+			else if (len < 2328u)
+				idx = 4;
+			chu_stats.rx_len_hist[idx]++;
+			if (len > chu_stats.rx_max_len)
+				chu_stats.rx_max_len = len;
+			if (err == 0 &&
+			    slot->urb.transfer_buffer_length != 0U &&
+			    len >= slot->urb.transfer_buffer_length)
+				chu_stats.rx_full++;
+		}
+#endif
 	}
 	be->actual_length = err == 0 ? (uint32_t)nbytes : slot->urb.actual_length;
 	be->errorcode = err;
