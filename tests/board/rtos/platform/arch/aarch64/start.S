@@ -242,30 +242,41 @@ el1_entry:
 
 /* One breadcrumb line through the console UART the loader left live.
  *
- * The register face is a BOARD FACT, not a shared constant, because the two
- * carriers this image runs on have different parts and the senses are
- * opposite:
+ * The console PART is an either/or board fact and the board_conf.h of every
+ * carrier names it (BOARD_CONSOLE_PART). The two parts have different registers
+ * AND opposite senses, so selecting the wrong one does not garble a line - the
+ * wait never satisfies while DAIF is masked and the image prints nothing at
+ * all, which reads exactly like an image that never started.
  *
- *   PL011 (firefly v1/v2, 0x2800d000):   FR at +0x18, TXFF = bit 5 SET while
- *                                        the FIFO is full  -> wait for clear
- *   DW-APB 16550 (rk3568-itx, 0xfe660000): LSR at +0x14, bit 5 SET while
- *                                        there is room       -> wait for set
+ *   BOARD_CONSOLE_PL011     FR at +0x18, TXFF = bit 5 SET while FULL
+ *                           -> wait while the bit is set
+ *   BOARD_CONSOLE_DW16550   LSR at +0x14, THR_EMPTY = bit 5 SET while ROOM
+ *                           -> wait while the bit is clear
  *
- * Getting this backwards is not a garbled line, it is a boot with NO output:
- * a 16550 read at +0x18 returns a divisor register, a PL011 read at +0x14
- * returns nothing meaningful, and either way the wait never satisfies while
- * DAIF is masked - the breadcrumb spins before printing its first character.
- * So the wait and its sense are selected by BOARD_UART_IS_PL011, and each
- * board's board_conf.h states which part its console is.
- *
- * The image's own uart_early_init re-programs the part later; until then this
- * just borrows the loader's configuration. */
-#if BOARD_UART_IS_PL011
+ * There is no default on purpose: a carrier that forgot to state its part must
+ * fail to assemble here, not borrow the other platform's register map. The
+ * image's own uart_early_init re-programs the part later; until then this just
+ * borrows the loader's configuration. */
+/* The tokens' values live here, with the code that interprets them, so a
+ * board_conf.h only ever has to name one. They must be distinct numbers: cpp
+ * evaluates an undefined identifier as 0, so two bare tokens would compare
+ * equal and silently select the first branch - the same class of silent
+ * cross-platform pick this whole mechanism exists to prevent. */
+#define BOARD_CONSOLE_PL011	1
+#define BOARD_CONSOLE_DW16550	2
+
+#ifndef BOARD_CONSOLE_PART
+#error "BOARD_CONSOLE_PART is not set: the board_conf.h in this image's include path must name its console part (BOARD_CONSOLE_PL011 or BOARD_CONSOLE_DW16550)"
+#endif
+
+#if BOARD_CONSOLE_PART == BOARD_CONSOLE_PL011
 #define UART_FLAG_REG	0x18			/* FR */
 #define UART_WAIT_TBNZ	1			/* TXFF: wait while bit5 set */
-#else
+#elif BOARD_CONSOLE_PART == BOARD_CONSOLE_DW16550
 #define UART_FLAG_REG	0x14			/* LSR */
 #define UART_WAIT_TBNZ	0			/* THR_EMPTY: wait while clear */
+#else
+#error "BOARD_CONSOLE_PART names a console part this file does not know"
 #endif
 
 early_puts_raw:					/* x0: NUL-terminated string */

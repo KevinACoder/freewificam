@@ -30,14 +30,23 @@
  * console's rate, so the baud divisor differs. */
 #define BOARD_UART1_BASE	0x2800d000UL
 #define BOARD_UART_BASE		BOARD_UART1_BASE
-/* The console part's register face, which the pre-MMU breadcrumb has to know
- * before any driver runs: a PL011 puts the flag register at +0x18 with
- * TXFF = bit 5 SET while the FIFO is full, so a writer waits for it to clear.
- * (The RK3568 carrier's console is a DW-APB 16550 instead - LSR at +0x14,
- * bit 5 SET while the FIFO has room. Reading one part's register as the
- * other's is a boot that prints nothing, which is why this is a board fact
- * and not a single shared constant.) */
-#define BOARD_UART_IS_PL011	1
+/* THE CONSOLE PART - an either/or fact, named rather than flagged.
+ *
+ * The pre-MMU breadcrumb has to poll the console before any driver exists, and
+ * the two parts this project's carriers have disagree on both the register and
+ * the sense:
+ *
+ *   BOARD_CONSOLE_PL011     FR at +0x18, TXFF = bit 5 SET while FULL
+ *                           (firefly v1/v2, 0x2800d000)
+ *   BOARD_CONSOLE_DW16550   LSR at +0x14, THR_EMPTY = bit 5 SET while ROOM
+ *                           (rk3568-itx, 0xfe660000)
+ *
+ * Reading one as the other is not a garbled line: the wait never satisfies
+ * with DAIF masked, so the image prints nothing at all and looks like it never
+ * started. That is why the choice is a named token with no sensible default -
+ * arch/aarch64/start.S refuses to assemble without it (#error) instead of
+ * quietly picking a part this board does not have. */
+#define BOARD_CONSOLE_PART	BOARD_CONSOLE_PL011
 #define BOARD_UART_CLOCK_HZ	100000000UL
 #define BOARD_UART_BAUD		115200UL
 

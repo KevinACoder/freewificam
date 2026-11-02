@@ -157,7 +157,12 @@ endif
 
 # The SDIO port and the case live in the platform's world; they need the
 # imported stack's SDIO directory and the linuxkpi seam headers.
+# The controller this image's host glue drives, named explicitly: the imported
+# stack exports the same symbols from every port, so a silent default would link
+# another board's controller code (see sdmmc_port.h). This lane is the rk3568
+# board's DesignWare MMC block.
 WLAN_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) $(WLAN_OBS_CFLAGS) -std=gnu11 \
+	-DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FDWMMC \
 	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(LKPI)/skbuff \
 	-I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/sdio
 

@@ -304,7 +304,12 @@ static struct mci_adma2_64_desc mci_desc_pool[MCI_MAX_BD_NUM]
 	__attribute__((section(".noncacheable"), aligned(64)));
 
 static uint32_t mci_poll_us = MCI_POLL_US_DEFAULT;
-static int mci_trace_on = 1;
+/* The per-command anchor is a diagnostic, not the normal console: a driver's
+ * bring-up issues thousands of commands, and at 115200 baud that trace is what
+ * the console carries instead of the run's own lines. Off by default; a case
+ * opens the window it wants to read through mci_trace_set() around exactly the
+ * transfers it needs. */
+static int mci_trace_on = 0;
 /* Slow-motion probe: see mci_set_poll_probe() in the header. Zero disarmed;
  * a positive count makes the next data transfer print that many poll passes. */
 static uint32_t mci_probe_samples = 0u;

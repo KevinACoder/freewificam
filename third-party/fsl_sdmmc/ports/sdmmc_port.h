@@ -40,8 +40,16 @@
  * carries. A build overrides it with
  * -DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FIREFLY_MCI.
  */
+/*
+ * There is deliberately NO default. Every controller this port has a glue for
+ * exports the same three symbols (SDMMCHOST_Init, FDWMMCHOST_SDIOConfig,
+ * FDWMMCHOST_CardIntEnable), so an image that picks the wrong one does not fail
+ * to link - it links the other platform's controller code and then behaves like
+ * the wrong board. A default here is exactly how that happens silently, so the
+ * build fails instead: the image's build must name the controller it carries.
+ */
 #ifndef SDMMC_PORT_SDIO_HOST_TYPE
-#define SDMMC_PORT_SDIO_HOST_TYPE	kSDMMCHOST_TYPE_FDWMMC
+#error "SDMMC_PORT_SDIO_HOST_TYPE is not set: name the controller this image's host glue drives (kSDMMCHOST_TYPE_FDWMMC, kSDMMCHOST_TYPE_FIREFLY_MCI, ...)"
 #endif
 
 /*

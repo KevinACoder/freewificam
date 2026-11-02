@@ -69,6 +69,13 @@ int wlan_seam_adapter_init(void);
 #define RTW88_ATTACH_WAIT_MS	180000u
 #define RTW88_ATTACH_POLL_MS	100u
 
+/* How long the controller's per-command anchor stays open, and how many block
+ * reads it waits for inside that. Both are the evidence window's bounds, not a
+ * measurement: the transfer shape shows up in a handful of windows. */
+#define RTW88_TRACE_WAIT_MS	3000u
+#define RTW88_TRACE_POLL_MS	100u
+#define RTW88_TRACE_TRANSFERS	24u
+
 /* the card this image is for: the board's mmc1 socket carries this part */
 #define RTW88_VID		0x024cu
 #define RTW88_PID		0xc821u
@@ -130,18 +137,14 @@ rtw88_attached(void)
 }
 
 /*
- * The round's block-read evidence.  It comes from the controller's own failure
- * snapshot plus the engine's transfer account: `cmd53 >= 1` with the transfer
- * error count still zero is the transfer-level fact, and the last command's
- * `data_ev` is what says the data half actually completed (DTO) and the FIFO
- * handed bytes over (RXDR).
- *
- * The distinction matters for the round's verdict: `errors=0` alone would pass
- * a read that was split into byte-mode transfers, so `blkcnt` and the event
- * word are reported beside it and the judge reads all three.
+ * The bus shape, as the engine and the host see it. `max_req` is the host's
+ * per-transfer ceiling and `io_ext` the count of extended (multi-byte)
+ * transfers: a reader that only ever issued byte-mode accesses would still
+ * report zero errors, so the shape is reported beside the error count and the
+ * judge reads all of it.
  */
 static void
-rtw88_sdio_read_anchor(void)
+rtw88_bus_anchor(void)
 {
 	struct lkpi_sdio_bus_info bus;
 	struct lkpi_sdio_stats sdio;
@@ -154,16 +157,111 @@ rtw88_sdio_read_anchor(void)
 	    (unsigned)bus.max_req_size, (unsigned)sdio.io_extended);
 }
 
+/*
+ * The engine's transfer account: how many card accesses were direct register
+ * io and how many were extended transfers, and how many of either failed.
+ *
+ * The distinction matters for the round's verdict: `errors=0` alone would pass
+ * a read that was split into byte-mode transfers, so the caller also reads
+ * `io_ext` above and the controller's own event word below.
+ */
+static unsigned int
+rtw88_sdio_stats_anchor(void)
+{
+	struct lkpi_sdio_stats stats;
+
+	memset(&stats, 0, sizeof(stats));
+	lkpi_sdio_stats_get(&stats);
+	CASE_ANCHOR("rtw88: sdio stats cards=%u drivers=%u probes=%u "
+	    "io_direct=%u io_ext=%u errors=%u\n", (unsigned)stats.cards,
+	    (unsigned)stats.drivers, (unsigned)stats.probes,
+	    (unsigned)stats.io_direct, (unsigned)stats.io_extended,
+	    (unsigned)stats.errors);
+	return stats.errors;
+}
+
+/*
+ * The controller's own snapshot: the command counts and, more to the point,
+ * the event word of the last transfer. DTO (bit 3) says the data half
+ * completed and RXDR (bit 5) that the FIFO handed bytes over; an error there
+ * is a transfer that ended without its data.
+ *
+ * Printed on both paths: a probe that fails after the card came up is
+ * diagnosed from the same line a passing one is recorded with.
+ */
+static void
+rtw88_mci_anchor(const struct mci_host *hc)
+{
+	struct mci_state st;
+
+	if (hc == NULL)
+		return;
+	mci_state_get(hc, &st);
+	CASE_ANCHOR("rtw88: mci transfers=%u errors=%u cmd52=%u cmd53=%u "
+	    "data_stages=%u idmac_stages=%u fifo_stages=%u "
+	    "last_cmd=%u last_err=%d data_ev=%08x cmd_ev=%08x dmac=%08x\n",
+	    (unsigned)st.transfers, (unsigned)st.errors,
+	    (unsigned)st.cmd52, (unsigned)st.cmd53,
+	    (unsigned)st.data_stages, (unsigned)st.idmac_stages,
+	    (unsigned)st.fifo_stages, (unsigned)st.last_cmd,
+	    st.last_err, (unsigned)st.data_ev, (unsigned)st.cmd_ev,
+	    (unsigned)st.dmac);
+}
+
+/* Everything the verdict is written from, on either path. */
+static void
+rtw88_report(const struct mci_host *hc)
+{
+	(void)rtw88_sdio_stats_anchor();
+	rtw88_mci_anchor(hc);
+}
+
+/*
+ * The block-read evidence window.
+ *
+ * The controller's per-command anchor is off by default (it would carry the
+ * console instead of the run), so the round opens it for exactly the slice it
+ * wants to read and closes it again: the receive path is live at this point,
+ * and every window the card offers is one multi-block CMD53 - waiting for a
+ * couple of dozen of them is enough to see the transfer shape, and it keeps
+ * the scan that follows quiet.
+ *
+ * Bounded on both ends: `RTW88_TRACE_WAIT_MS` is the ceiling, and a card that
+ * never offers anything leaves the trace on no longer than that.
+ */
+static void
+rtw88_trace_window(const struct mci_host *hc)
+{
+	struct mci_state st;
+	unsigned int waited = 0u;
+	uint32_t base;
+
+	if (hc == NULL)
+		return;
+	mci_state_get(hc, &st);
+	base = st.cmd53;
+	mci_trace_set(1);
+	while (waited < RTW88_TRACE_WAIT_MS) {
+		osDelay(RTW88_TRACE_POLL_MS);
+		waited += RTW88_TRACE_POLL_MS;
+		mci_state_get(hc, &st);
+		if (st.cmd53 - base >= RTW88_TRACE_TRANSFERS)
+			break;
+	}
+	mci_trace_set(0);
+	CASE_INFO("rtw88: trace window %u ms, %u transfers\n",
+	    (unsigned)waited, (unsigned)(st.cmd53 - base));
+}
+
 int
 case_rtw88_run(void)
 {
 	struct lkpi_sdio_be_card_info info;
-	struct lkpi_sdio_stats stats;
 	struct wlan_bridge_counters counters;
 	struct mci_host *hc;
-	struct mci_state mcist;
 	uint8_t mac[6];
 	unsigned int waited = 0u;
+	unsigned int errors;
 	int st;
 
 	lkpi_log_sink_register(rtw88_sink);
@@ -244,31 +342,12 @@ case_rtw88_run(void)
 	    (unsigned)counters.attached, counters.rx_frames);
 
 	/* --- the round's transfer evidence --------------------------------- */
-	rtw88_sdio_read_anchor();
-
-	if (hc != NULL) {
-		mci_state_get(hc, &mcist);
-		mci_trace_set(1);
-		CASE_ANCHOR("rtw88: mci transfers=%u errors=%u cmd52=%u cmd53=%u "
-		    "data_stages=%u idmac_stages=%u fifo_stages=%u "
-		    "last_cmd=%u last_err=%d data_ev=%08x cmd_ev=%08x dmac=%08x\n",
-		    (unsigned)mcist.transfers, (unsigned)mcist.errors,
-		    (unsigned)mcist.cmd52, (unsigned)mcist.cmd53,
-		    (unsigned)mcist.data_stages, (unsigned)mcist.idmac_stages,
-		    (unsigned)mcist.fifo_stages, (unsigned)mcist.last_cmd,
-		    mcist.last_err, (unsigned)mcist.data_ev,
-		    (unsigned)mcist.cmd_ev, (unsigned)mcist.dmac);
-	}
-
-	memset(&stats, 0, sizeof(stats));
-	lkpi_sdio_stats_get(&stats);
-	CASE_ANCHOR("rtw88: sdio stats cards=%u drivers=%u probes=%u "
-	    "io_direct=%u io_ext=%u errors=%u\n", (unsigned)stats.cards,
-	    (unsigned)stats.drivers, (unsigned)stats.probes,
-	    (unsigned)stats.io_direct, (unsigned)stats.io_extended,
-	    (unsigned)stats.errors);
-	if (stats.errors != 0u) {
-		CASE_ANCHOR("rtw88: FAIL sdio errors=%u\n", (unsigned)stats.errors);
+	rtw88_trace_window(hc);
+	rtw88_bus_anchor();
+	errors = rtw88_sdio_stats_anchor();
+	rtw88_mci_anchor(hc);
+	if (errors != 0u) {
+		CASE_ANCHOR("rtw88: FAIL sdio errors=%u\n", errors);
 		return 1;
 	}
 	{
@@ -287,22 +366,6 @@ case_rtw88_run(void)
 	return 0;
 
 fail_stats:
-	memset(&stats, 0, sizeof(stats));
-	lkpi_sdio_stats_get(&stats);
-	CASE_ANCHOR("rtw88: sdio stats cards=%u drivers=%u probes=%u "
-	    "io_direct=%u io_ext=%u errors=%u\n", (unsigned)stats.cards,
-	    (unsigned)stats.drivers, (unsigned)stats.probes,
-	    (unsigned)stats.io_direct, (unsigned)stats.io_extended,
-	    (unsigned)stats.errors);
-	if (hc != NULL) {
-		mci_state_get(hc, &mcist);
-		CASE_ANCHOR("rtw88: mci transfers=%u errors=%u cmd52=%u cmd53=%u "
-		    "last_cmd=%u last_err=%d data_ev=%08x cmd_ev=%08x dmac=%08x\n",
-		    (unsigned)mcist.transfers, (unsigned)mcist.errors,
-		    (unsigned)mcist.cmd52, (unsigned)mcist.cmd53,
-		    (unsigned)mcist.last_cmd, mcist.last_err,
-		    (unsigned)mcist.data_ev, (unsigned)mcist.cmd_ev,
-		    (unsigned)mcist.dmac);
-	}
+	rtw88_report(hc);
 	return 1;
 }
