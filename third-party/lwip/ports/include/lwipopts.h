@@ -31,6 +31,11 @@
 #ifndef FREEWEB_LWIPOPTS_H
 #define FREEWEB_LWIPOPTS_H
 
+/* Per-image values that are Kconfig symbols (core locking, delayed ACK,
+ * lwiperf idle) are rendered into this generated header; no -D carries
+ * them.  The path is on the build's include list. */
+#include "lwipopts_kconfig.h"
+
 /* --- OS integration --------------------------------------------------------- */
 
 #define NO_SYS                          0
@@ -146,8 +151,8 @@
 
 /* --- core locking ----------------------------------------------------------- */
 
-/* The #ifndef wrappers are what make these two overridable from a build: every
- * other option in this file is a hard #define, so a -D would lose to it. */
+/* The #ifndef wrappers let the generated lwipopts_kconfig.h set these; every
+ * other option in this file is a hard #define, so a build -D would lose to it. */
 #ifndef LWIP_TCPIP_CORE_LOCKING
 #define LWIP_TCPIP_CORE_LOCKING         1
 #endif

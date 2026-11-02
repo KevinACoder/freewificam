@@ -245,7 +245,6 @@ RTL8XXXU_NET_SRCS := \
 # The idle limit is the instrument's, not the link's: give the client room to
 # finish and report DONE_CLIENT.
 RTL8XXXU_NET_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DLWIPERF_TCP_MAX_IDLE_SEC=$(if $(filter 0,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)),60,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)) \
 	$(RTL8XXXU_AP_DEFS) -I$(RTL8XXXU_NPORT)/bridge
 else
 RTL8XXXU_NET_SRCS :=
@@ -265,7 +264,6 @@ RTL8XXXU_NETIO_SRCS := \
 	$(LINE)/app/cases/net_mdk_netio.c \
 	$(LINE)/app/net_prof.c
 RTL8XXXU_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DLWIPERF_TCP_MAX_IDLE_SEC=$(if $(filter 0,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)),60,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)) \
 	$(RTL8XXXU_AP_DEFS) -I$(RTL8XXXU_NPORT)/bridge \
 	-I$(ROOT)/components/linuxkpi -I$(RTL8XXXU_LKPI)/usb \
 	-I$(ROOT)/ports/cherryusb

@@ -185,11 +185,13 @@ config USB_EHCI_ISO_NUM
 
 config LWIP_TCPIP_CORE_LOCKING_INPUT
 	bool "lwIP TCPIP core locking on input"
+	default y if PROFILE_PERF
 	default n
 
 config LWIP_TCP_ACK_DELAY_SEGMENTS
 	int "lwIP delayed-ACK segment watermark"
-	default 0
+	default 4 if PROFILE_PERF
+	default 2
 
 config LWIPERF_TCP_MAX_IDLE_SEC
 	int "lwiperf TCP maximum idle seconds"

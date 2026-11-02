@@ -183,8 +183,8 @@ is 5.128 us (8,687 cycles at 1,694 MHz).
   arm runs TCP 77.8 MB/s receive / 118.9 MB/s transmit with `tx_drop=0`.
 - With the input fix in, `CONFIG_GMAC_RX_BATCH` no longer exists: it folded
   the per-frame core-lock acquisitions of the in-RX-thread shape.
-- The `net-pps` arm is pinned to the old input shape
-  (`-DLWIP_TCPIP_CORE_LOCKING_INPUT=1`) so the K2-12/13 `T0` numbers stay
+- The `net-pps` arm is pinned to the old input shape by its defconfig
+  (`CONFIG_LWIP_TCPIP_CORE_LOCKING_INPUT=y`) so the K2-12/13 `T0` numbers stay
   reproducible; the 64 B pps effect of the new shape is not measured.
 - The board-to-peer TCP direction is still below the UDP numbers (50 vs
   107 MB/s) but no longer stalled, and the 1440 B UDP cells are unchanged.

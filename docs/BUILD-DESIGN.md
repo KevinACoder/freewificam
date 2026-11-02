@@ -134,9 +134,10 @@ into a negotiation.
 $(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(CFG_DEFS) $(LEVERS) ...
 ```
 
-The residual `CONFIG_LEVERS` keeps what Kconfig does not model: `-DLWIP_*`,
-`-DNET_WATCH=1`, `-DCONFIG_NETIO_CPU_KHZ_LATE=...`, `-DLWIPERF_TCP_MAX_IDLE_SEC`
-and any lab-patch define.  The generator refuses a modeled `-DCONFIG_<name>=`
+The residual `CONFIG_LEVERS` keeps what Kconfig does not model:
+`-DNET_WATCH=1`, `-DCONFIG_NETIO_CPU_KHZ_LATE=...` and any lab-patch define.
+lwIP options are no longer allowed here: they live in Kconfig and are rendered
+into `include/generated/lwipopts_kconfig.h`.  The generator refuses a modeled `-DCONFIG_<name>=`
 in `LEVERS` (it would be a hidden second value) and refuses `$`, `#` or a
 newline in generated make values.  `EXTRA_DEFS` and `BUILD_TAG` stay make
 knobs, not Kconfig symbols.
@@ -166,7 +167,9 @@ Per profile the generator writes, under `build/kconfig/<profile>/`:
 |---|---|
 | `.config` | humans and `--check`; full symbol set |
 | `include/generated/autoconf.h` | generated, **not included** in the M1 compile |
-| `generated/config.mk` | the only file the Makefile consumes |
+| `generated/config.mk` | the only make fragment the Makefile consumes |
+| `include/generated/csh_config.h` | the CherrySH core |
+| `include/generated/lwipopts_kconfig.h` | lwIP, included by `ports/include/lwipopts.h` |
 | `manifest.json` | profile, values, `CFG_DEFS`, input hashes; no timestamps |
 
 Nothing generated is committed; `make.rtos check` fails if `git ls-files --
@@ -273,10 +276,13 @@ them as `$(OPT) -g$(CONFIG_DEBUG_LEVEL)`.
 fallback"; the fragments carry the fallback (e.g. iwlwifi 256/64/128,
 rtl8xxxu/rtw89/rtw88/wlan 128/64/64 and CMSIS2 32/16).
 
-**lwIP, ULOG and printf**: `LWIP_TCPIP_CORE_LOCKING_INPUT`,
-`LWIP_TCP_ACK_DELAY_SEGMENTS` (explicit values append raw `-DLWIP_*` tokens
-after `PROFILE_DEFS`, so they override the perf default), `LWIPERF_TCP_MAX_IDLE_SEC` (60),
-`ULOG_ENABLED` (y), `ULOG_MAX_MESSAGE_LENGTH` (256),
+**lwIP, ULOG and printf**: `LWIP_TCPIP_CORE_LOCKING_INPUT` (default y only for
+`PROFILE_PERF`), `LWIP_TCP_ACK_DELAY_SEGMENTS` (2; 4 for `PROFILE_PERF`),
+`LWIPERF_TCP_MAX_IDLE_SEC` (60) are rendered into
+`include/generated/lwipopts_kconfig.h`, which
+`third-party/lwip/ports/include/lwipopts.h` includes.  No compile line carries
+a `-DLWIP_*`; the only consumer is the header.  `ULOG_ENABLED` (y),
+`ULOG_MAX_MESSAGE_LENGTH` (256),
 `PRINTF_DISABLE_FLOAT` (y), `PRINTF_DISABLE_EXPONENTIAL` (y).
 `NETIO_CPU_KHZ_LATE` is emitted as a raw `-DCONFIG_NETIO_CPU_KHZ_LATE=` token
 when set, because `net_mdk_netio.c` reads that macro directly.

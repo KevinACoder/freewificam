@@ -217,8 +217,7 @@ HEAP_SIZE ?= 4M
 # from the defconfig name in PROFILE.
 SWITCH_PROFILE ?= perf
 ifeq ($(SWITCH_PROFILE),perf)
-PROFILE_DEFS := -DCONFIG_GMAC_TX_CSUM=1 -DCONFIG_GMAC_RX_HWCSUM=1 \
-	-DLWIP_TCPIP_CORE_LOCKING_INPUT=1 -DLWIP_TCP_ACK_DELAY_SEGMENTS=4
+PROFILE_DEFS := -DCONFIG_GMAC_TX_CSUM=1 -DCONFIG_GMAC_RX_HWCSUM=1
 else
 PROFILE_DEFS :=
 endif
@@ -502,6 +501,7 @@ INCLUDES := \
 	-I$(THIRD_PARTY)/ulog/src \
 	-I$(THIRD_PARTY)/tlsf \
 	-I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include \
+	-I$(ROOT)/build/kconfig/$(PROFILE)/include/generated \
 	-I$(LWIP)/src/include \
 	-I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow \
 	-I$(THIRD_PARTY)/fsl_sdmmc/common \
