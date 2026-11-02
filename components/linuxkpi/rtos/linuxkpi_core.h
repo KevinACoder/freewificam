@@ -2100,6 +2100,30 @@ struct usb_driver;
 	void *__lkpi_module_##__usb_driver = &(__usb_driver)
 
 /*
+ * module_sdio_driver(drv): the interface's registration macro for an SDIO
+ * function driver (include/linux/mmc/sdio_func.h:124). Its whole body is
+ * `module_driver(__sdio_driver, sdio_register_driver, sdio_unregister_driver)`,
+ * which is "record the driver so the bus can find it".
+ *
+ * The port's shape follows module_usb_driver above rather than module_init: the
+ * interface's macro does not take an entry point, it takes the driver record, and
+ * a vendor tree's record is a `static struct sdio_driver` in the bus file that
+ * nothing else names (rtw88/rtw8821cs.c:26). So the record's address lands in a
+ * section of its own and the engine registers whatever it finds there - the same
+ * division module_usb_driver and lkpi_usb_init() make, and the reason this is not
+ * a third use of .lkpi_init (an initcall takes no argument, so a driver
+ * registered that way would have to expose its record, which would mean editing
+ * the driver's bytes).
+ *
+ * The walk is lkpi_sdio_register_modules() (linuxkpi_sdio.c), called by
+ * lkpi_sdio_start() before the card is brought up.
+ */
+struct sdio_driver;
+#define	module_sdio_driver(__sdio_driver)				\
+	static __used __section(".lkpi_sdio_driver")			\
+	void *__lkpi_sdio_driver_##__sdio_driver = &(__sdio_driver)
+
+/*
  * Run the .lkpi_init entries in section order, once. The image's start-up calls
  * this after the platform and the buses are up, so an entry that registers a
  * driver runs against a live system (the order the kernel's module loader gives

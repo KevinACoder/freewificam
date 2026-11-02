@@ -26,6 +26,7 @@ CASES = (
     "net",
     "net_xmac",
     "emmc",
+    "sdio_mci",
     "wlan",
     "pcie",
     "pcie_bench",
@@ -37,6 +38,8 @@ CASES = (
     "iwl7260_net",
     "usb_xhci",
     "usb_ehci",
+    "rtw88",
+    "rtw88_scan",
     "rtw89",
     "rtw89_scan",
     "rtw89_join",
@@ -92,6 +95,22 @@ PATTERNS = {
     "emmc_loop": re.compile(r"emmc: loop n=(?P<n>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
     "emmc_badlba": re.compile(r"emmc: badlba lba=\d+ write_rc=(?P<w>-?\d+) read_rc=(?P<r>-?\d+) nohang=(?P<nohang>\w+)", re.MULTILINE),
     "emmc_pass": re.compile(r"emmc: PASS", re.MULTILINE),
+    # The SDIO socket: identity, one line per CMD53 shape, and the mmc0
+    # control. The CMD53 shapes carry their own error count, so a PASS with a
+    # non-zero count is a broken image rather than a pass.
+    "sdio_mci_cccr": re.compile(r"mci: enum cccr=0x(?P<cccr>[0-9a-f]+) .*vendor=0x(?P<vendor>[0-9a-f]+) device=0x(?P<device>[0-9a-f]+)", re.MULTILINE),
+    "sdio_mci_cmd52": re.compile(r"mci: cmd52 (?P<dir>read|write) n=(?P<n>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_byte_read": re.compile(r"mci: cmd53 byte read n=(?P<n>\d+) func=(?P<func>\d+) addr=0x(?P<addr>[0-9a-f]+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_byte_write": re.compile(r"mci: cmd53 byte write n=(?P<n>\d+) func=(?P<func>\d+) addr=0x(?P<addr>[0-9a-f]+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_block_read": re.compile(r"mci: cmd53 block read blkcnt=(?P<blkcnt>\d+) .*errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_block_write": re.compile(r"mci: cmd53 block write blkcnt=(?P<blkcnt>\d+) .*errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_gt_cmd53": re.compile(r"mci: gt cmd53 st=0x(?P<st>[0-9a-f]+) data=(?P<data>[0-9a-f]{8})", re.MULTILINE),
+    "sdio_mci_diff": re.compile(r"mci: diff clkdiv=(?P<clkdiv>[0-9a-f]+) gt=(?P<gt_clkdiv>[0-9a-f]+) (?P<clkdiv_same>same|DIFF)", re.MULTILINE),
+    "sdio_mci_ctrl": re.compile(r"mci: sd CMD(?P<cmd>\d+) rc=(?P<rc>-?\d+)", re.MULTILINE),
+    # The mmc0 control's completion, quoted with the data it read: the point
+    # of the control is that bytes crossed, not merely that a command returned.
+    "sdio_mci_ctrl_read": re.compile(r"mci: sd CMD17 rc=(?P<rc>-?\d+) resp0=(?P<resp0>[0-9a-f]+) data=(?P<data>[0-9a-f]{8})", re.MULTILINE),
+    "sdio_mci_counters": re.compile(r"mci: counters transfers=(?P<transfers>\d+) cmd52=(?P<cmd52>\d+) cmd53=(?P<cmd53>\d+) .*errors=(?P<errors>\d+)", re.MULTILINE),
     # 8189FTV vendor-stack case: the SDIO identity, the driver's netdev, and the
     # hardware address the driver read from the chip.
     "wlan_sdio": re.compile(r"wlan: sdio up card=(?P<vendor>[0-9a-fA-F]{4}):(?P<device>[0-9a-fA-F]{4}) funcs=(?P<funcs>\d+) cccr=(?P<cccr>\d+) clock=(?P<clock>\d+) width=(?P<width>\d+) hs=(?P<hs>\d+)", re.MULTILINE),
@@ -193,6 +212,62 @@ PATTERNS = {
         re.MULTILINE,
     ),
     "rtw89_fail": re.compile(r"rtw89: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # --- rtw88 (RTL8821CS over the linuxkpi SDIO engine) -------------------
+    "rtw88_sdio_up": re.compile(
+        r"rtw88: sdio up card=(?P<vid>[0-9a-f]{4}):(?P<pid>[0-9a-f]{4}) "
+        r"funcs=(?P<funcs>\d+) cccr=(?P<cccr>\d+) clock=(?P<clock>\d+) "
+        r"width=(?P<width>\d+) hs=(?P<hs>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_fw": re.compile(
+        r"rtw88: fw .*?Firmware version (?P<version>[\d.]+), H2C version "
+        r"(?P<h2c>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_attach": re.compile(
+        r"rtw88: attach ok after (?P<ms>\d+) ms mac=(?P<mac>[0-9a-f:]+)",
+        re.MULTILINE,
+    ),
+    "rtw88_start": re.compile(
+        r"rtw88: start ok attached=(?P<attached>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_bus": re.compile(
+        r"rtw88: sdio bus clock=(?P<clock>\d+) width=(?P<width>\d+) "
+        r"blk=(?P<blk>\d+)/(?P<blkmax>\d+) max_req=(?P<max_req>\d+) "
+        r"io_ext=(?P<ioext>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_mci": re.compile(
+        r"rtw88: mci transfers=(?P<transfers>\d+) errors=(?P<errors>\d+) "
+        r"cmd52=(?P<cmd52>\d+) cmd53=(?P<cmd53>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_stats": re.compile(
+        r"rtw88: sdio stats cards=(?P<cards>\d+) drivers=(?P<drivers>\d+) "
+        r"probes=(?P<probes>\d+) io_direct=(?P<io_direct>\d+) "
+        r"io_ext=(?P<io_ext>\d+) errors=(?P<errors>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_fail": re.compile(r"rtw88: FAIL (?P<reason>.+)$", re.MULTILINE),
+    "rtw88_scan_start": re.compile(
+        r"rtw88: scan start state=(?P<state>-?\d+)", re.MULTILINE
+    ),
+    "rtw88_scan_bss": re.compile(
+        r"rtw88: scan bss (?P<bssid>[0-9a-f:]+) ssid=(?P<ssid>\S*) "
+        r"freq=(?P<freq>\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_scan_done": re.compile(
+        r"rtw88: scan done rows=(?P<rows>\d+) bcn=(?P<bcn>\d+) "
+        r"prsp=(?P<prsp>\d+) fcs=(?P<fcs>\d+) "
+        r"scan=(?P<starts>\d+)/(?P<completes>\d+) state=(?P<state>-?\d+) "
+        r"entered=(?P<entered>\d+) close=(?P<close>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_scan_fail": re.compile(
+        r"rtw88: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
     "rtw89_scan_start": re.compile(
         r"rtw89: scan start state=(?P<state>-?\d+)", re.MULTILINE
     ),
@@ -1199,6 +1274,100 @@ def judge(text: str, expect: dict | None = None) -> dict:
         else:
             notes.append(f"{case}: sweep {len(found['usb_msc_sweep'])} points")
 
+    # --- rtw88: the RTL8821CS bring-up ------------------------------------
+    if cases.get("rtw88", {}).get("verdict") == "pass":
+        fail = found["rtw88_fail"]
+        if fail:
+            errors.append(f"rtw88: {fail['reason']}")
+        up = found["rtw88_sdio_up"]
+        if not up:
+            errors.append("rtw88: PASS without the SDIO bring-up line")
+        elif (up["vid"], up["pid"]) != ("024c", "c821"):
+            errors.append(
+                f"rtw88: card is {up['vid']}:{up['pid']}, not 024c:c821"
+            )
+        else:
+            notes.append(
+                f"rtw88: card 024c:c821 funcs={up['funcs']} "
+                f"clock={up['clock']} width={up['width']}"
+            )
+        fw = found["rtw88_fw"]
+        if not fw:
+            errors.append("rtw88: PASS without a firmware version line")
+        else:
+            notes.append(f"rtw88: firmware {fw['version']} h2c={fw['h2c']}")
+        attach = found["rtw88_attach"]
+        if not attach:
+            errors.append("rtw88: PASS without an attach line")
+        elif attach["mac"] in ("00:00:00:00:00:00",):
+            errors.append("rtw88: attached with an all-zero MAC")
+        else:
+            notes.append(
+                f"rtw88: attach after {attach['ms']} ms mac={attach['mac']}"
+            )
+        start = found["rtw88_start"]
+        if not start:
+            errors.append("rtw88: PASS without a start line")
+        elif int(start["attached"]) == 0:
+            errors.append("rtw88: start returned but not attached")
+        else:
+            notes.append(f"rtw88: start attached=1 rx={start['rx']}")
+        stats = found["rtw88_stats"]
+        if not stats:
+            errors.append("rtw88: PASS without the SDIO ledger line")
+        elif int(stats["errors"]) != 0:
+            errors.append(f"rtw88: {stats['errors']} SDIO transfers failed")
+        else:
+            notes.append(
+                f"rtw88: sdio direct={stats['io_direct']} "
+                f"ext={stats['io_ext']} probes={stats['probes']}"
+            )
+        mci = found["rtw88_mci"]
+        if mci and int(mci["errors"]) != 0:
+            errors.append(f"rtw88: controller saw {mci['errors']} errors")
+        bus = found["rtw88_bus"]
+        if bus:
+            notes.append(
+                f"rtw88: bus clock={bus['clock']} width={bus['width']} "
+                f"blk={bus['blk']}/{bus['blkmax']} max_req={bus['max_req']} "
+                f"io_ext={bus['ioext']}"
+            )
+            # The two exits are a multi-block CMD53 read and a populated scan.
+            # A driver that only ever issued byte-mode transfers would still
+            # answer "no errors", so the transfer shape is judged, not just the
+            # error count.
+            if int(bus["ioext"]) == 0:
+                errors.append("rtw88: no extended (multi-byte) transfer at all")
+            if int(bus["max_req"]) == 0:
+                errors.append("rtw88: the host reports no per-transfer ceiling")
+
+    # --- rtw88_scan: the sweep -------------------------------------------------
+    if cases.get("rtw88_scan", {}).get("verdict") == "pass":
+        fail = found["rtw88_scan_fail"]
+        if fail:
+            errors.append(f"rtw88_scan: {fail['reason']}")
+        done = found["rtw88_scan_done"]
+        if not done:
+            errors.append("rtw88_scan: PASS without a scan-done line")
+        else:
+            if int(done["rows"]) == 0:
+                errors.append("rtw88_scan: empty scan table")
+            if int(done["entered"]) < 1:
+                errors.append("rtw88_scan: the stack never entered S_SCAN")
+            if int(done["rx"]) == 0:
+                errors.append("rtw88_scan: no frame reached the stack")
+            if int(done["close"]) == 0:
+                errors.append("rtw88_scan: the window never closed")
+            notes.append(
+                f"rtw88_scan: rows={done['rows']} bcn={done['bcn']} "
+                f"prsp={done['prsp']} close={done['close']} rx={done['rx']}"
+            )
+        bss = found["rtw88_scan_bss"]
+        if not bss:
+            errors.append("rtw88_scan: PASS without any BSS row")
+        else:
+            notes.append(f"rtw88_scan: table holds {len(bss)} BSS rows")
+
     if cases.get("rtw89", {}).get("verdict") == "pass":
         if found["rtw89_fail"]:
             errors.append(f"rtw89: {found['rtw89_fail']['reason']}")
@@ -1577,6 +1746,60 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"{stream['fps']} fps, {stream['kbit']} kbit/s, "
                 f"avg={stream['avg']} max={stream['max']}"
             )
+
+    if cases.get("sdio_mci", {}).get("verdict") == "pass":
+        # A PASS has to arrive with the evidence that makes it one: the card's
+        # identity, a clean CMD52 battery, and every CMD53 shape with no error
+        # counted by the stack. The mmc0 control is the one that separates a
+        # controller driver that works from a card that will not answer.
+        if found["sdio_mci_cccr"] is None:
+            errors.append("sdio_mci: no card identity line")
+        for key, label in (("sdio_mci_cmd52", "cmd52"),
+                           ("sdio_mci_byte_read", "cmd53 byte read"),
+                           ("sdio_mci_byte_write", "cmd53 byte write")):
+            row = found[key]
+            if row is None:
+                errors.append(f"sdio_mci: no {label} line")
+            elif int(row["errors"]) != 0:
+                errors.append(f"sdio_mci: {label} errors={row['errors']}")
+            else:
+                notes.append(f"sdio_mci: {label} errors=0")
+        # Block mode is optional: an image may gate it off, and then the
+        # anchor is simply absent.
+        #
+        # The two directions do not carry the same weight, and the difference
+        # is measured rather than assumed (runs/20261030-firefly-v2-sdio-mci-
+        # port/evidence/block-read-gap-20261102.md):
+        #
+        #  - WRITE is a real property. Its shape matches the GT's own block
+        #    write field for field (blkcnt=9, addr=0x840c, errors=0), so a
+        #    non-zero count is a genuine defect.
+        #  - READ is not reachable from a bare SDIO case. The RX FIFO only
+        #    answers once the card's firmware has put a frame in it
+        #    (rtw88 reads REG_SDIO_RX0_REQ_LEN first and only then issues the
+        #    block read, sdio.c:1042-1052); with no firmware there is nothing
+        #    to read, and the command times out at CMD.START. A failure here
+        #    says the premise was absent, not that the driver is wrong, so it
+        #    is reported and not counted against the case.
+        for key, label, blocking in (
+                ("sdio_mci_block_write", "cmd53 block write", True),
+                ("sdio_mci_block_read", "cmd53 block read", False)):
+            row = found[key]
+            if row is None:
+                continue
+            if int(row["errors"]) == 0:
+                notes.append(f"sdio_mci: {label} errors=0")
+            elif blocking:
+                errors.append(f"sdio_mci: {label} errors={row['errors']}")
+            else:
+                notes.append(
+                    f"sdio_mci: {label} errors={row['errors']} "
+                    f"(no RX data without firmware; not counted)")
+        control = found["sdio_mci_ctrl_read"]
+        if not control or control["rc"] != "0" or control["data"] == "00000000":
+            errors.append("sdio_mci: the mmc0 control read did not complete")
+        else:
+            notes.append(f"sdio_mci: mmc0 CMD17 rc=0 data={control['data']}")
 
     result = found["result"]
     if not result:

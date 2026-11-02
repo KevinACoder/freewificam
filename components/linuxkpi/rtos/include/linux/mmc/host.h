@@ -12,6 +12,10 @@
  *         The block limits are the interface's max_blk_size and max_blk_count;
  *         the engine reads them from the host record, and the host record is
  *         filled from what the backend reported about the controller.
+ *         The interface's header includes <linux/sched.h> (include/linux/mmc/
+ *         host.h:10), and a driver reaches `current` through it: rtw88/sdio.c:32
+ *         compares the interrupt thread's task against it without naming sched.h
+ *         itself. The include is carried for that reason, not for this record.
  *         Shape reference for a record-only face:
  *         components/linuxkpi/include/linux/usb.h:1-20.
  * @date    12.10.2026
@@ -22,6 +26,7 @@
 
 #include "../../../linuxkpi_core.h"
 
+#include <linux/sched.h>
 #include <linux/device.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/pm.h>
@@ -90,6 +95,15 @@ struct mmc_host {
 
 	unsigned int		max_blk_size;	/* largest single block */
 	unsigned int		max_blk_count;	/* largest block count in one transfer */
+	/*
+	 * [LNX] include/linux/mmc/host.h:479: the largest single request the
+	 * controller accepts, which the interface's host drivers set from their
+	 * own DMA geometry (firefly-mci.c:1584 writes 512 * 1024). A driver reads
+	 * it as the ceiling of one buffered transfer: rtw88/sdio.c:520 chunks a
+	 * receive window by it (`min_t(size_t, host->max_req_size, count)`), so
+	 * the value decides whether one frame arrives as one command or as two.
+	 */
+	unsigned int		max_req_size;	/* largest single transfer request */
 
 	bool			claimed;	/* exclusively claimed */
 	struct mmc_card		*card;		/* the card attached to this host */
@@ -99,5 +113,24 @@ struct mmc_host {
 };
 
 #define	mmc_hostname(host)	dev_name(&(host)->class_dev)
+
+/*
+ * [LNX] include/linux/mmc/host.h:699: whether the card is running a UHS timing.
+ * A driver asks this to tell the SDIO 3.0 (UHS) bus mode from the high-speed
+ * one; the interface's answer spans the four UHS timings and nothing else.
+ *
+ * The face's card record carries no own timing: the timing lives on the host
+ * (mmc_ios.timing), which is where the interface reads it too
+ * (`card->host->ios.timing`), so the two spell the same question.
+ */
+static inline int
+mmc_card_uhs(struct mmc_card *card)
+{
+
+	if (card == NULL || card->host == NULL)
+		return 0;
+	return card->host->ios.timing >= MMC_TIMING_UHS_SDR12 &&
+	    card->host->ios.timing <= MMC_TIMING_UHS_DDR50;
+}
 
 #endif /* _LINUXKPI_LINUX_MMC_HOST_H_ */

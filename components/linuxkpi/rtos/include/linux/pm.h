@@ -62,4 +62,29 @@ struct dev_pm_ops {
 	int (*runtime_idle)(struct device *dev);
 };
 
+/*
+ * [LNX] include/linux/pm.h:1483 `SIMPLE_DEV_PM_OPS(name, suspend_fn, resume_fn)`:
+ * the shorthand a driver uses when it has exactly the two system-sleep
+ * callbacks and nothing else. It DEFINES the table - the interface's macro
+ * expands to `const struct dev_pm_ops name = { ... }` - so a driver that ends its
+ * suspend section with it owns the object, while its header only declares it.
+ *
+ * That difference is why this macro is not optional: rtw88/sdio.c:1122 defines
+ * `rtw_sdio_pm_ops` this way while sdio.h declares the same object extern and
+ * rtw8821cs.c:33 takes its address for the driver record's `.drv.pm`. Without the
+ * macro the definition is silently absent (the compiler only warns), and the
+ * address becomes an undefined symbol at link time.
+ *
+ * The interface's expansion also wraps the table in `pm_ptr()`, which is the
+ * "make this table disappear when PM is off" annotation. This port has no
+ * CONFIG_PM to switch on and no section for the pointer to land in, so the
+ * table is defined unconditionally - the same object the interface produces
+ * with PM enabled, which is the build these images are.
+ */
+#define	SIMPLE_DEV_PM_OPS(name, suspend_fn, resume_fn)			\
+	const struct dev_pm_ops name = {				\
+		.suspend = suspend_fn,					\
+		.resume = resume_fn,					\
+	}
+
 #endif /* _LINUXKPI_LINUX_PM_H_ */

@@ -241,19 +241,54 @@ el1_entry:
 /* --- bring-up helpers (pre-MMU, same section) ----------------------------- */
 
 /* One breadcrumb line through the console UART the loader left live.
- * The part is a DW-APB 16550 (reg-shift 2): LSR at byte offset 0x14 with
- * THR_EMPTY = bit 5, THR at +0, 32-bit accesses. Reading +0x18 as if it
- * were a PL011 FR is the exact failure the board uart.c documents: the
- * FIFO absorbs the first burst, the first write that has to wait sees a
- * wrong register, and the breadcrumb dies mid-line. The image's own
- * uart_early_init re-programs the part later; until then this just
+ *
+ * The console PART is an either/or board fact and the board_conf.h of every
+ * carrier names it (BOARD_CONSOLE_PART). The two parts have different registers
+ * AND opposite senses, so selecting the wrong one does not garble a line - the
+ * wait never satisfies while DAIF is masked and the image prints nothing at
+ * all, which reads exactly like an image that never started.
+ *
+ *   BOARD_CONSOLE_PL011     FR at +0x18, TXFF = bit 5 SET while FULL
+ *                           -> wait while the bit is set
+ *   BOARD_CONSOLE_DW16550   LSR at +0x14, THR_EMPTY = bit 5 SET while ROOM
+ *                           -> wait while the bit is clear
+ *
+ * There is no default on purpose: a carrier that forgot to state its part must
+ * fail to assemble here, not borrow the other platform's register map. The
+ * image's own uart_early_init re-programs the part later; until then this just
  * borrows the loader's configuration. */
+/* The tokens' values live here, with the code that interprets them, so a
+ * board_conf.h only ever has to name one. They must be distinct numbers: cpp
+ * evaluates an undefined identifier as 0, so two bare tokens would compare
+ * equal and silently select the first branch - the same class of silent
+ * cross-platform pick this whole mechanism exists to prevent. */
+#define BOARD_CONSOLE_PL011	1
+#define BOARD_CONSOLE_DW16550	2
+
+#ifndef BOARD_CONSOLE_PART
+#error "BOARD_CONSOLE_PART is not set: the board_conf.h in this image's include path must name its console part (BOARD_CONSOLE_PL011 or BOARD_CONSOLE_DW16550)"
+#endif
+
+#if BOARD_CONSOLE_PART == BOARD_CONSOLE_PL011
+#define UART_FLAG_REG	0x18			/* FR */
+#define UART_WAIT_TBNZ	1			/* TXFF: wait while bit5 set */
+#elif BOARD_CONSOLE_PART == BOARD_CONSOLE_DW16550
+#define UART_FLAG_REG	0x14			/* LSR */
+#define UART_WAIT_TBNZ	0			/* THR_EMPTY: wait while clear */
+#else
+#error "BOARD_CONSOLE_PART names a console part this file does not know"
+#endif
+
 early_puts_raw:					/* x0: NUL-terminated string */
 1:	ldrb	w1, [x0], #1
 	cbz	w1, 2f
 	ldr	x2, =BOARD_UART_BASE
-3:	ldr	w3, [x2, #0x14]			/* LSR */
-	tbz	w3, #5, 3b			/* wait for THR_EMPTY */
+3:	ldr	w3, [x2, #UART_FLAG_REG]
+#if UART_WAIT_TBNZ
+	tbnz	w3, #5, 3b			/* PL011: while TX FIFO full */
+#else
+	tbz	w3, #5, 3b			/* 16550: while no room */
+#endif
 	str	w1, [x2]
 	b	1b
 2:	ret
@@ -270,8 +305,12 @@ early_puthex32:				/* x0: value */
 	add	w1, w1, #'0'
 	b	3f
 2:	add	w1, w1, #('a' - 10)
-3:	ldr	w4, [x2, #0x14]			/* LSR */
-	tbz	w4, #5, 3b			/* wait for THR_EMPTY */
+3:	ldr	w4, [x2, #UART_FLAG_REG]
+#if UART_WAIT_TBNZ
+	tbnz	w4, #5, 3b			/* PL011: while TX FIFO full */
+#else
+	tbz	w4, #5, 3b			/* 16550: while no room */
+#endif
 	str	w1, [x2]
 	subs	w3, w3, #4
 	b.ge	1b

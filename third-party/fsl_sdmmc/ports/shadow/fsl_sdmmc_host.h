@@ -207,6 +207,10 @@ typedef struct _sdmmchost_config_
 #define kSDMMCHOST_TYPE_FSDIF_V2 3
 #define kSDMMCHOST_TYPE_FDWMMC   4
 #define kSDMMCHOST_TYPE_FDWMSHC  5
+/* The board's Phytium MCI block (mmc0/mmc1 on firefly v2). A value the
+ * upstream enumeration never assigned: the SDK's controller list stops at
+ * FDWMSHC, and this port's host glue is the only implementation of it. */
+#define kSDMMCHOST_TYPE_FIREFLY_MCI 6
     uint32_t cardType;
 #define kSDMMCHOST_CARD_TYPE_STANDARD_SD 1
 #define kSDMMCHOST_CARD_TYPE_MICRO_SD    2

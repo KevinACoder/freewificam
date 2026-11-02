@@ -33,6 +33,10 @@
  * DTS clock-names uartclk). */
 #define BOARD_UART1_BASE	0x28001000UL
 #define BOARD_UART_BASE		BOARD_UART1_BASE
+/* The console part - an either/or fact, named rather than flagged; see the
+ * firefly v2 file and arch/aarch64/start.S. PL011: FR at +0x18, TXFF = bit 5
+ * SET while full. */
+#define BOARD_CONSOLE_PART	BOARD_CONSOLE_PL011
 #define BOARD_UART_CLOCK_HZ	48000000UL
 #define BOARD_UART_BAUD		115200UL
 

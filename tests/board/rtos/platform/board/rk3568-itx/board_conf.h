@@ -24,6 +24,11 @@
 /* Console UART calibration (DW-APB 16550-compatible: 32-bit access, register
  * byte-offset stride 4 - byte accesses read and write garbage). */
 #define BOARD_UART_BASE		BOARD_UART2_BASE
+/* The console part - an either/or fact, named rather than flagged; see
+ * firefly/v2/board_conf.h and arch/aarch64/start.S. DW-APB 16550: LSR at +0x14,
+ * THR_EMPTY = bit 5 SET while there is room (the opposite sense from the
+ * PL011's TXFF). */
+#define BOARD_CONSOLE_PART	BOARD_CONSOLE_DW16550
 #define BOARD_UART_CLOCK_HZ	24000000UL
 #define BOARD_UART_BAUD		115200UL
 

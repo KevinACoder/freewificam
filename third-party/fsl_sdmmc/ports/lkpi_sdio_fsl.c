@@ -204,6 +204,12 @@ static int lkpi_sdio_fsl_card_init(void *ctx, struct lkpi_sdio_be_card_info *inf
 	 * before it reaches this seam. */
 	info->host_max_blk_size = card->host->maxBlockSize;
 	info->host_max_blk_count = card->host->maxBlockCount;
+	/* The controller's largest single request is this stack's staging buffer
+	 * (config.maxTransSize, sdmmc_card.c:164), which is what the host glue
+	 * derived its block count from in the first place. Reading it back from
+	 * the host record would be a second derivation of the same number; the
+	 * card's own figure is the one the stack will actually stage. */
+	info->host_max_req_size = (u32)card->internalBufferSize;
 	info->bus_width = (u8)card->host->currBusWidth;
 	info->memory_present = card->memPresentFlag;
 	info->high_speed = (card->currentTiming == kSD_TimingSDR25HighSpeedMode);

@@ -31,6 +31,40 @@
  * mode an SDIO WiFi part runs at on 3.3 V signalling. */
 #define SDMMC_PORT_CARD_CLOCK_HZ	50000000U
 
+/*
+ * Which controller the SDIO card sits on. An image drives exactly one, and the
+ * two are different beasts: the rk3568 board's DesignWare MMC block (dwmmc)
+ * and the firefly boards' Phytium MCI block (mci). The card bring-up asks
+ * SDIO_CfgInitialize for a host type, and the platform dispatch refuses any
+ * type it does not have a host glue for - so this names the one glue the image
+ * carries. A build overrides it with
+ * -DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FIREFLY_MCI.
+ */
+/*
+ * There is deliberately NO default. Every controller this port has a glue for
+ * exports the same three symbols (SDMMCHOST_Init, FDWMMCHOST_SDIOConfig,
+ * FDWMMCHOST_CardIntEnable), so an image that picks the wrong one does not fail
+ * to link - it links the other platform's controller code and then behaves like
+ * the wrong board. A default here is exactly how that happens silently, so the
+ * build fails instead: the image's build must name the controller it carries.
+ */
+#ifndef SDMMC_PORT_SDIO_HOST_TYPE
+#error "SDMMC_PORT_SDIO_HOST_TYPE is not set: name the controller this image's host glue drives (kSDMMCHOST_TYPE_FDWMMC, kSDMMCHOST_TYPE_FIREFLY_MCI, ...)"
+#endif
+
+/*
+ * Which controller of the family the SDIO card sits on. The board dispatch
+ * takes this as the controller index: on firefly v2 the SDIO part is on the
+ * second MCI instance (mmc1 @0x28001000) while mmc0 is the TF slot, and
+ * pointing the bring-up at the wrong one still answers CMD0 (the slot holds a
+ * card) and then fails CMD5 for the reason the wrong card would - it is not an
+ * SDIO card. An image overrides it with
+ * -DSDMMC_PORT_SDIO_HOST_ID=1.
+ */
+#ifndef SDMMC_PORT_SDIO_HOST_ID
+#define SDMMC_PORT_SDIO_HOST_ID		0U
+#endif
+
 /* The ceiling this port gives the eMMC card: 50 MHz, the CRU's 50 MHz clock
  * slot, which is the rate the card's high-speed timing runs at here. The stack
  * rounds its per-mode targets down to this, which is also what keeps its mode
@@ -72,6 +106,12 @@ void sdmmc_card_int_set(void (*cb)(void *), void *arg);
  * disable to fall back to the polling pump. A no-op for a host that was never
  * given a card-interrupt upcall. */
 void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable);
+
+/* The controller state this port's host glue keeps, or NULL when the card is
+ * not up. Exposed for the board case's evidence lines (the register fields, the
+ * counters and the failure snapshot), not for the stack. */
+struct mci_host;
+struct mci_host *sdmmc_port_mci_host(void);
 
 /* The SDIO half of the host glue: capability flags, the card's user parameters
  * and the source clock. The upstream tree carries this for its FSDIF controller

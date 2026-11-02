@@ -235,7 +235,7 @@ CASES ?= tick cmsis2 net emmc
 CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The storage stack's MMC card type is a compile-time key of the imported
 # component; it rides on the case selection.
@@ -562,6 +562,20 @@ ifneq ($(filter rtl8xxxu,$(CASES)),)
 include $(CURDIR)/rtl8xxxu.mk
 endif
 
+# The board's SDIO socket over the ported Phytium MCI controller (empty unless
+# the sdio_mci case is selected).
+ifneq ($(filter sdio_mci,$(CASES)),)
+include $(CURDIR)/sdio_mci.mk
+endif
+
+# The RTL8821CS wireless world over that same SDIO socket (empty unless the
+# rtw88 case is selected).  It carries its own copy of the stack's port units -
+# one image may compile exactly one SDIO host port - so it is never selected
+# together with a USB wireless world.
+ifneq ($(filter rtw88,$(CASES)),)
+include $(CURDIR)/rtw88_sdio.mk
+endif
+
 BASE_SRCS := \
 	$(PLATFORM)/arch/aarch64/start.S \
 	$(PLATFORM)/arch/aarch64/gicv3.c \
@@ -665,13 +679,15 @@ VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
 	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(UVC_ALL_SRCS) $(RTW89_ALL_SRCS) \
-	$(RTL8XXXU_ALL_SRCS) $(RTL8XXXU_NET_SRCS) $(RTL8XXXU_NETIO_SRCS)
+	$(RTL8XXXU_ALL_SRCS) $(RTL8XXXU_NET_SRCS) $(RTL8XXXU_NETIO_SRCS) \
+	$(SDIO_MCI_ALL_SRCS) $(RTW88_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
 
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(BOARD_LINKSCRIPT) \
 	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) $(RTW89_LDFLAGS) $(RTL8XXXU_LDFLAGS) \
+	$(RTW88_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
@@ -720,6 +736,12 @@ $(FLAG_STAMP): FORCE $(WLAN_STAMP)
 		'rtl8xxxu-drv: $(RTL8XXXU_DRV_CFLAGS)' \
 		'rtl8xxxu-case: $(RTL8XXXU_CASE_CFLAGS)' \
 		'rtl8xxxu-net: $(RTL8XXXU_NET_CFLAGS)' \
+		'sdio-mci: $(SDIO_MCI_FLAGS_STAMP)' \
+		'rtw88-net80211: $(RTW88_BSD_CFLAGS)' \
+		'rtw88-kpi: $(RTW88_KPI_CFLAGS)' \
+		'rtw88-sdio-port: $(RTW88_SDIO_PORT_CFLAGS)' \
+		'rtw88-drv: $(RTW88_DRV_CFLAGS)' \
+		'rtw88-case: $(RTW88_CASE_CFLAGS)' \
 		'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 
@@ -775,6 +797,30 @@ endif
 
 ifneq ($(filter rtl8xxxu_net,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(RTL8XXXU_NET_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_NET_CFLAGS))))
+endif
+
+# The board's SDIO socket (the imported stack over the ported MCI controller).
+ifneq ($(filter sdio_mci,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(SDIO_MCI_APP_SRCS) $(SDIO_MCI_PORT_SRCS) $(SDIO_MCI_BOARD_SRCS)),$(eval $(call COMPILE_C,$(s),$(SDIO_MCI_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(SDIO_MCI_VENDOR_SRCS)),$(eval $(call COMPILE_C,$(s),$(SDIO_MCI_VENDOR_CFLAGS))))
+
+$(SDIO_MCI_STAMP): FORCE
+	@mkdir -p $(BUILD)
+	@printf '%s\n' '$(SDIO_MCI_FLAGS_STAMP)' > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+endif
+
+# The RTL8821CS wireless world over that same SDIO socket: the net80211 half and
+# the bridge, the linuxkpi face plus the firmware blob, the SDIO port and
+# controller, the driver, then the two cases.  The port units are vendored C, so
+# they get their own relaxed flag world.
+ifneq ($(filter rtw88,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTW88_NET80211_SRCS) $(RTW88_NPORT_SRCS) $(RTW88_BRIDGE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_BSD_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW88_LKPI_SRCS) $(RTW88_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_KPI_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW88_SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_SDIO_PORT_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW88_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_DRV_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW88_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CASE_CFLAGS))))
+
 endif
 
 ifneq ($(filter rtl8xxxu_netio,$(CASES)),)
