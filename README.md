@@ -170,8 +170,8 @@ stack (CherryUSB + linuxkpi USB).  Methods: [docs/NET-TESTING.md]
 
 | case | rtos, no BA | rtos, RX-BA | ko | Linux reference |
 |---|---|---|---|---|
-| `W-UDP-D/HT20` | 10.51 / 10.05 Mbit/s | blocked: the receive path cannot consume A-MPDUs on EHCI (see note) | 32.67 / 31.25 | 30.60 / 30.90 |
-| `W-UDP-U/HT20` | 26.8 / 26.9 Mbit/s | blocked | 24.81 / 25.13 | 36.39 / 37.53 |
+| `W-UDP-D/HT20` | 10.51 / 10.05 Mbit/s | **30.6 / 24.1** (boot 1), **30.5 / 21.7** (boot 2) | 32.67 / 31.25 | 30.60 / 30.90 |
+| `W-UDP-U/HT20` | 26.8 / 26.9 Mbit/s | 26.0 / 25.8 (boot 1), 26.9 (boot 2) | 24.81 / 25.13 | 36.39 / 37.53 |
 
 ### Notes
 
@@ -210,17 +210,30 @@ into.
 
 The 8723BU is the same driver on the other USB controller (EHCI, behind the
 hub).  Both kernel arms run it with block-ack: 1,366-1,448 BlockAcks per cell,
-A-MPDU marks, control 2.2-2.3 us/frame, gap 0, MCS6/7, 30.6-32.7 Mbit/s.  The
-bare-metal arm cannot: with the RX-BA module linked the AP aggregates (monitor:
-22,342 data frames to the STA, 21,921 A-MPDU-marked, 1,097 BlockAcks from the
-chip) but the host's bridge sees almost none of them (+3 data frames in a 20 s
-cell, and the netio client has to be killed), while beacons and firmware
-reports keep arriving.  The same chip on kernel USB consumes the same
-aggregates, so the fault is in the bare-metal EHCI receive path, not in the
-chip, the driver or the block-ack code; it is open.  The arm therefore measures
-the aggregation-free configuration: 10.0-10.5 Mbit/s at MCS3 and a 28% retry
-rate, with 0.1-0.3% loss.  The two numbers are not a stack tax measurement -
-one arm aggregates and the other cannot.
+A-MPDU marks, control 2.2-2.3 us/frame, gap 0, MCS6/7, 30.6-32.7 Mbit/s.
+The bare-metal arm used to see almost none of those aggregates: the receive
+side answered ADDBA and the chip acked (1,097 BlockAcks, near-full bitmaps),
+yet 16,383 arrivals reached the bridge's receive entry and only 3,713 were
+delivered.  The drops were not the USB path (one 1,498-byte MPDU per
+completion, no errors, no full buffers, no interface-layer drops) and not the
+reorder algorithm: they were the reorder window.  With 32 slots against an AP
+block-ack buffer of 64, AP retransmissions parked the reorder head on a missing
+sequence number, so 4,268 frames ahead of the window and 3,117 frames from an
+older wrap of the 12-bit sequence space were discarded as duplicates (10 of the
+latter were genuine duplicates).  Pacing the same client to 1,000 pps delivered
+6,016 of 6,016 frames, which separated congestion from an algorithm fault.
+
+The window is now 128 slots, one full AP buffer with slack; nothing else
+changed (no driver, no USB engine).  Clean image, two boots, two cells each:
+30.6 / 24.1 and 30.5 / 21.7 Mbit/s downlink, zero loss in three of four cells,
+uplink 25.8-26.9 Mbit/s.  The fourth cell dropped 11% (21.7 Mbit/s), the
+remaining variance this row does not explain; the xHCI 8188EU arm re-measured
+at 51.7 Mbit/s with zero loss after the change, so the healthy path is not
+taxed.  The next ceiling is the EHCI completion rate itself: about 2,700 bulk
+completions per second (the port hands a transfer back from the
+interrupt-on-async-advance path, ~370 us each) against 4,430/s for the same
+one-transfer-in-flight engine on xHCI.  The aggregation-free arm is not
+re-measured, since it does not link the reorder module.
 
 HT40 is frozen with the protocol upgrade.  The historical numbers are not
 carried here: the shim's so-called HT40 arm associated at 20 MHz (assoc HT

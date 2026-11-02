@@ -270,3 +270,61 @@ legacy, 578-590 on HT20) against 12.2 us/frame for the same lwIP stack on the
 wired port - it tracks the unaggregated medium, not the host.  The RX-BA arm
 turns that into 229 us/frame (gap 0, ctrl 2.1) and 50-51 Mbit/s.
 
+### 9.3 The 8723BU EHCI arm and the receive-side ledger
+
+`rtl8xxxu-8723bu-netio-ar-ht20{,-ba}` are the same server on the EHCI root
+(same AP and client; the module sits behind the board's hub, bus 1).  The
+receive side there is slower than the wire: about 2,700 bulk completions per
+second, because the CherryUSB EHCI port hands a transfer back only from the
+interrupt-on-async-advance path (~370 us per completion), against 4,430/s for
+the same one-transfer-in-flight engine on xHCI.  A downlink that offers more
+than that overflows the chip's receive FIFO, the AP retransmits, and the
+reorder window has to bridge the holes - so the cell tells you about the
+reorder window, not about the host's per-frame cost.
+
+The WLAN arms therefore carry a receive-side ledger of their own, enabled with
+`-DCONFIG_NETIO_RXPATH=1` (the `*-probe` arms do it; the plain arms stay
+byte-clean):
+
+```
+netio: rxpath  tag=... usb_rx=... usb_err=... usb_last=... usb_lasterr=...
+               usb_full=... usb_max=... usb_hist=<256/<512/<1024/<1600/<2328/>=2328
+netio: rxconn  tag=... rx_in=... rx_ref=... rx_drop=... rx_frames=... rx_q=...
+               ep=... ep_q=... ep_inf=... ep_enq=... ep_comp=... ep_err=... ep_last=...
+netio: rxdesc  tag=... w0=... w1=... w2=... w3=...
+netio: usbeng  tag=... polls=... pdrain=... kicks=... eng_comp=... eng_err=...
+               parked=... parked_now=...
+```
+
+`usb_rx`/`usb_err`/`usb_full` are the backend's bulk-IN completions, errors and
+"buffer exactly full" count; `rx_in` is what the driver handed to
+`ieee80211_rx_irqsafe`, `rx_frames` what the receive worker delivered to the
+bridge, `rx_ref`/`rx_drop` the linearize refusals and the queue-full drops;
+`ep_*` is the lkpi endpoint (queued, in flight, enqueued, completed, errors) and
+`w0..w3` are the first four words of the last completed receive descriptor (the
+receive header).  The bridge ledger (`netio: layers`, `wlan: link`,
+`wlan: ba`) closes the last hop.
+
+Three practical points:
+
+- The cell may never close.  If the receive path delivers almost nothing, the
+  client blocks in its transmit loop before it can send `CMD_RES`, so the board
+  never prints `udp rx done`.  The arms now print the counters at the start of
+  the cell (`tag=begin`), at its end (`tag=udp-c2s-end`, after the receive
+  thread is quiesced) and every two seconds in between (`tag=cell`); use the
+  deltas, not the begin line alone.
+- The console truncates a message at 256 bytes, which is why the ledger is four
+  lines; do not re-join them.
+- `NETIO_PPS=<rate>` paces the client's UDP transmit loop without changing its
+  burst shape.  It is the clean lever between congestion and an algorithm
+  fault: the same cell that loses 77% at full rate delivered 6,016/6,016 at
+  1,000 pps.
+
+Measured 2026-11-02 (1440 B UDP, same AP/client, one board): the downlink on
+the fixed image is 21.7-30.6 Mbit/s with zero loss in three of four cells, and
+one cell that dropped 11%.  The unlock was the reorder window: 32 slots against
+an AP block-ack buffer of 64, with the head parked on a missing sequence number
+during AP retransmissions.  A window of 128 delivers 0 loss on the same cells,
+and the xHCI 8188EU arm re-measured at 51.7 Mbit/s afterwards, so the change
+does not tax the healthy path.  The remaining ceiling is the ~2,700
+completions/s above.
