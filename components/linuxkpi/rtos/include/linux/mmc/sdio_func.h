@@ -165,6 +165,14 @@ int	sdio_readsb(struct sdio_func *func, void *dst, unsigned int addr,
 int	sdio_writesb(struct sdio_func *func, unsigned int addr, void *src,
 	    int count);
 
+/*
+ * [LNX] include/linux/mmc/sdio_func.h:142: pad a transfer size to the value the
+ * host and the card can move in one request. A driver asks this before it
+ * allocates the buffer it is about to fill, so the answer decides that
+ * allocation's size (rtw88/sdio.c:648 computes it, :986 allocates with it).
+ */
+unsigned int	sdio_align_size(struct sdio_func *func, unsigned int sz);
+
 /* --- function 0 access ---------------------------------------------------- */
 
 unsigned char	sdio_f0_readb(struct sdio_func *func, unsigned int addr,

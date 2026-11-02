@@ -241,19 +241,43 @@ el1_entry:
 /* --- bring-up helpers (pre-MMU, same section) ----------------------------- */
 
 /* One breadcrumb line through the console UART the loader left live.
- * The part is a DW-APB 16550 (reg-shift 2): LSR at byte offset 0x14 with
- * THR_EMPTY = bit 5, THR at +0, 32-bit accesses. Reading +0x18 as if it
- * were a PL011 FR is the exact failure the board uart.c documents: the
- * FIFO absorbs the first burst, the first write that has to wait sees a
- * wrong register, and the breadcrumb dies mid-line. The image's own
- * uart_early_init re-programs the part later; until then this just
- * borrows the loader's configuration. */
+ *
+ * The register face is a BOARD FACT, not a shared constant, because the two
+ * carriers this image runs on have different parts and the senses are
+ * opposite:
+ *
+ *   PL011 (firefly v1/v2, 0x2800d000):   FR at +0x18, TXFF = bit 5 SET while
+ *                                        the FIFO is full  -> wait for clear
+ *   DW-APB 16550 (rk3568-itx, 0xfe660000): LSR at +0x14, bit 5 SET while
+ *                                        there is room       -> wait for set
+ *
+ * Getting this backwards is not a garbled line, it is a boot with NO output:
+ * a 16550 read at +0x18 returns a divisor register, a PL011 read at +0x14
+ * returns nothing meaningful, and either way the wait never satisfies while
+ * DAIF is masked - the breadcrumb spins before printing its first character.
+ * So the wait and its sense are selected by BOARD_UART_IS_PL011, and each
+ * board's board_conf.h states which part its console is.
+ *
+ * The image's own uart_early_init re-programs the part later; until then this
+ * just borrows the loader's configuration. */
+#if BOARD_UART_IS_PL011
+#define UART_FLAG_REG	0x18			/* FR */
+#define UART_WAIT_TBNZ	1			/* TXFF: wait while bit5 set */
+#else
+#define UART_FLAG_REG	0x14			/* LSR */
+#define UART_WAIT_TBNZ	0			/* THR_EMPTY: wait while clear */
+#endif
+
 early_puts_raw:					/* x0: NUL-terminated string */
 1:	ldrb	w1, [x0], #1
 	cbz	w1, 2f
 	ldr	x2, =BOARD_UART_BASE
-3:	ldr	w3, [x2, #0x14]			/* LSR */
-	tbz	w3, #5, 3b			/* wait for THR_EMPTY */
+3:	ldr	w3, [x2, #UART_FLAG_REG]
+#if UART_WAIT_TBNZ
+	tbnz	w3, #5, 3b			/* PL011: while TX FIFO full */
+#else
+	tbz	w3, #5, 3b			/* 16550: while no room */
+#endif
 	str	w1, [x2]
 	b	1b
 2:	ret
@@ -270,8 +294,12 @@ early_puthex32:				/* x0: value */
 	add	w1, w1, #'0'
 	b	3f
 2:	add	w1, w1, #('a' - 10)
-3:	ldr	w4, [x2, #0x14]			/* LSR */
-	tbz	w4, #5, 3b			/* wait for THR_EMPTY */
+3:	ldr	w4, [x2, #UART_FLAG_REG]
+#if UART_WAIT_TBNZ
+	tbnz	w4, #5, 3b			/* PL011: while TX FIFO full */
+#else
+	tbz	w4, #5, 3b			/* 16550: while no room */
+#endif
 	str	w1, [x2]
 	subs	w3, w3, #4
 	b.ge	1b

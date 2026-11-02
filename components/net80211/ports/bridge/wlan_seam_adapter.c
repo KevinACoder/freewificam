@@ -47,15 +47,29 @@
 
 #include "components/linuxkpi/linuxkpi_80211.h"
 #include "components/linuxkpi/fw_registry.h"
+#if !defined(WLAN_SEAM_NO_USB_OBS)
 #include "components/linuxkpi/rtos/usb/linuxkpi_usb.h"
+#endif
 
-/* The controller's own registers, for the observation snapshot below: the
- * board layer owns every USB register window, so the reads go through its
- * accessors rather than a raw pointer here. */
+/*
+ * The controller's own registers, for the observation snapshot below: the board
+ * layer owns every USB register window, so the reads go through its accessors
+ * rather than a raw pointer here.
+ *
+ * The whole observation surface is USB's - a host controller's status words, the
+ * URB engine's endpoints - and this adapter is shared by every bus a driver line
+ * rides. A line whose transport is not USB (the SDIO socket) has no controller to
+ * read and no URB engine to ask, so the four port_* hooks below are compiled out
+ * and the bridge's already-null-checked dispatch reports the port as having no
+ * such state. The switch is the seam's, not the line's: a USB image keeps the
+ * surface it has always had.
+ */
+#if !defined(WLAN_SEAM_NO_USB_OBS)
 #include "usb_glue.h"
 #include "usb/usb_domain.h"
 #include "usbh_core.h"
 #include "usb_hc_xhci.h"
+#endif
 #ifdef CONFIG_LKPI_CENSUS
 #include "components/linuxkpi/lkpi_census.h"
 #endif
@@ -851,6 +865,7 @@ seam_tx_wake(void *arg)
 	wlan_bridge_tx_wake();
 }
 
+#if !defined(WLAN_SEAM_NO_USB_OBS)
 /*
  * The seam's observation snapshot (wlan_seam_drv_ops.port_obs).  Scalars only:
  * the transport engine's completion counters and drain phase, the two bulk
@@ -1073,6 +1088,7 @@ seam_port_obs(struct wlan_seam_drv *drv, struct wlan_seam_port_obs *out)
 	out->soc_cru_rst = seam_soc_reg(SEAM_SOC_CRU, 0x424u);
 	out->soc_pmucru_gate = seam_soc_reg(SEAM_SOC_PMUCRU, 0x188u);
 }
+#endif	/* !WLAN_SEAM_NO_USB_OBS */
 
 static const struct wlan_seam_drv_ops seam_ops = {
 	.start = seam_start,
@@ -1091,10 +1107,13 @@ static const struct wlan_seam_drv_ops seam_ops = {
 	.bss_info = seam_bss_info,
 	.bssid = seam_bssid,
 	.queue_ready = seam_queue_ready,
+	/* the USB transport's own observation surface (see the block above) */
+#if !defined(WLAN_SEAM_NO_USB_OBS)
 	.port_obs = seam_port_obs,
 	.port_probe = seam_port_probe,
 	.port_stall_dump = seam_port_stall_dump,
 	.port_poll = seam_port_poll,
+#endif
 };
 
 /* ------------------------------------------------------------------ */

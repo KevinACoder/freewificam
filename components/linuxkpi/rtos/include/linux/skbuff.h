@@ -478,4 +478,43 @@ skb_postpush_rcsum(struct sk_buff *skb, const void *start, unsigned int len)
 void skb_add_rx_frag(struct sk_buff *skb, int i, struct page *page, int off,
 		     int size, unsigned int truesize);
 
+/*
+ * [LNX] net/core/skbuff.c:2146: `void skb_copy_header(struct sk_buff *new, const
+ * struct sk_buff *old)`. It copies the HEADER half of one buffer onto another
+ * and leaves the payload alone; the interface's __copy_skb_header
+ * (skbuff.c:1559) is the list of what that means - the device, the control
+ * block, the queue mapping, protocol/csum/priority and the header offsets - and
+ * skb_copy_header adds the GSO fields after it.
+ *
+ * The caller this face was grown for allocates the target for the same frame and
+ * copies the bytes itself (rtw88/sdio.c:1021 allocates one buffer per packet
+ * inside a multi-packet receive window, :1028 copies the header, :1029 the
+ * payload), so the operation is exactly "make this new descriptor describe the
+ * same frame": the payload pointers stay the allocation's, the metadata travels.
+ *
+ * The interface's other members have no counterpart in this record - tstamp,
+ * dst, secpath, nfct, vlan, mark and the xfrm state are not carried by it, so
+ * there is nothing to copy for them; `sk` is deliberately not copied by the
+ * interface either (skbuff.c:1562).
+ */
+static __always_inline __unused void
+skb_copy_header(struct sk_buff *new, const struct sk_buff *old)
+{
+	if (new == NULL || old == NULL)
+		return;
+	new->dev = old->dev;
+	memcpy(new->cb, old->cb, sizeof(old->cb));
+	new->queue_mapping = old->queue_mapping;
+	new->protocol = old->protocol;
+	new->csum = old->csum;
+	new->priority = old->priority;
+	new->pkt_type = old->pkt_type;
+	new->ip_summed = old->ip_summed;
+	/* the interface's GSO triple; this record carries size and segs, and a
+	 * member it does not carry is a fact about the record rather than a field
+	 * to invent here */
+	skb_shinfo(new)->gso_size = skb_shinfo(old)->gso_size;
+	skb_shinfo(new)->gso_segs = skb_shinfo(old)->gso_segs;
+}
+
 #endif /* _LINUXKPI_LINUX_SKBUFF_H_ */

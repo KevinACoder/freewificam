@@ -30,6 +30,14 @@
  * console's rate, so the baud divisor differs. */
 #define BOARD_UART1_BASE	0x2800d000UL
 #define BOARD_UART_BASE		BOARD_UART1_BASE
+/* The console part's register face, which the pre-MMU breadcrumb has to know
+ * before any driver runs: a PL011 puts the flag register at +0x18 with
+ * TXFF = bit 5 SET while the FIFO is full, so a writer waits for it to clear.
+ * (The RK3568 carrier's console is a DW-APB 16550 instead - LSR at +0x14,
+ * bit 5 SET while the FIFO has room. Reading one part's register as the
+ * other's is a boot that prints nothing, which is why this is a board fact
+ * and not a single shared constant.) */
+#define BOARD_UART_IS_PL011	1
 #define BOARD_UART_CLOCK_HZ	100000000UL
 #define BOARD_UART_BAUD		115200UL
 

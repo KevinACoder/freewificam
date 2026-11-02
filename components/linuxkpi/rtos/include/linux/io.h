@@ -22,6 +22,13 @@
 #define _LINUXKPI_LINUX_IO_H_
 
 #include "../../linuxkpi_core.h"
+/*
+ * [LNX] include/linux/io.h:9 includes <linux/sizes.h>.  The interface's io.h is
+ * where a driver that names SZ_* while describing a transfer reaches the
+ * constants without including them itself, and its MMC host header gets here
+ * through iopoll.h - so the line belongs to the face, not to each driver.
+ */
+#include <linux/sizes.h>
 #include <asm/io.h>
 
 #endif /* _LINUXKPI_LINUX_IO_H_ */

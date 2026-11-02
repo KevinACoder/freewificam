@@ -38,6 +38,8 @@ CASES = (
     "iwl7260_net",
     "usb_xhci",
     "usb_ehci",
+    "rtw88",
+    "rtw88_scan",
     "rtw89",
     "rtw89_scan",
     "rtw89_join",
@@ -210,6 +212,62 @@ PATTERNS = {
         re.MULTILINE,
     ),
     "rtw89_fail": re.compile(r"rtw89: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # --- rtw88 (RTL8821CS over the linuxkpi SDIO engine) -------------------
+    "rtw88_sdio_up": re.compile(
+        r"rtw88: sdio up card=(?P<vid>[0-9a-f]{4}):(?P<pid>[0-9a-f]{4}) "
+        r"funcs=(?P<funcs>\d+) cccr=(?P<cccr>\d+) clock=(?P<clock>\d+) "
+        r"width=(?P<width>\d+) hs=(?P<hs>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_fw": re.compile(
+        r"rtw88: fw .*?Firmware version (?P<version>[\d.]+), H2C version "
+        r"(?P<h2c>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_attach": re.compile(
+        r"rtw88: attach ok after (?P<ms>\d+) ms mac=(?P<mac>[0-9a-f:]+)",
+        re.MULTILINE,
+    ),
+    "rtw88_start": re.compile(
+        r"rtw88: start ok attached=(?P<attached>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_bus": re.compile(
+        r"rtw88: sdio bus clock=(?P<clock>\d+) width=(?P<width>\d+) "
+        r"blk=(?P<blk>\d+)/(?P<blkmax>\d+) max_req=(?P<max_req>\d+) "
+        r"io_ext=(?P<ioext>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_mci": re.compile(
+        r"rtw88: mci transfers=(?P<transfers>\d+) errors=(?P<errors>\d+) "
+        r"cmd52=(?P<cmd52>\d+) cmd53=(?P<cmd53>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_stats": re.compile(
+        r"rtw88: sdio stats cards=(?P<cards>\d+) drivers=(?P<drivers>\d+) "
+        r"probes=(?P<probes>\d+) io_direct=(?P<io_direct>\d+) "
+        r"io_ext=(?P<io_ext>\d+) errors=(?P<errors>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_fail": re.compile(r"rtw88: FAIL (?P<reason>.+)$", re.MULTILINE),
+    "rtw88_scan_start": re.compile(
+        r"rtw88: scan start state=(?P<state>-?\d+)", re.MULTILINE
+    ),
+    "rtw88_scan_bss": re.compile(
+        r"rtw88: scan bss (?P<bssid>[0-9a-f:]+) ssid=(?P<ssid>\S*) "
+        r"freq=(?P<freq>\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_scan_done": re.compile(
+        r"rtw88: scan done rows=(?P<rows>\d+) bcn=(?P<bcn>\d+) "
+        r"prsp=(?P<prsp>\d+) fcs=(?P<fcs>\d+) "
+        r"scan=(?P<starts>\d+)/(?P<completes>\d+) state=(?P<state>-?\d+) "
+        r"entered=(?P<entered>\d+) close=(?P<close>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_scan_fail": re.compile(
+        r"rtw88: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
     "rtw89_scan_start": re.compile(
         r"rtw89: scan start state=(?P<state>-?\d+)", re.MULTILINE
     ),
@@ -1215,6 +1273,100 @@ def judge(text: str, expect: dict | None = None) -> dict:
             )
         else:
             notes.append(f"{case}: sweep {len(found['usb_msc_sweep'])} points")
+
+    # --- rtw88: the RTL8821CS bring-up ------------------------------------
+    if cases.get("rtw88", {}).get("verdict") == "pass":
+        fail = found["rtw88_fail"]
+        if fail:
+            errors.append(f"rtw88: {fail['reason']}")
+        up = found["rtw88_sdio_up"]
+        if not up:
+            errors.append("rtw88: PASS without the SDIO bring-up line")
+        elif (up["vid"], up["pid"]) != ("024c", "c821"):
+            errors.append(
+                f"rtw88: card is {up['vid']}:{up['pid']}, not 024c:c821"
+            )
+        else:
+            notes.append(
+                f"rtw88: card 024c:c821 funcs={up['funcs']} "
+                f"clock={up['clock']} width={up['width']}"
+            )
+        fw = found["rtw88_fw"]
+        if not fw:
+            errors.append("rtw88: PASS without a firmware version line")
+        else:
+            notes.append(f"rtw88: firmware {fw['version']} h2c={fw['h2c']}")
+        attach = found["rtw88_attach"]
+        if not attach:
+            errors.append("rtw88: PASS without an attach line")
+        elif attach["mac"] in ("00:00:00:00:00:00",):
+            errors.append("rtw88: attached with an all-zero MAC")
+        else:
+            notes.append(
+                f"rtw88: attach after {attach['ms']} ms mac={attach['mac']}"
+            )
+        start = found["rtw88_start"]
+        if not start:
+            errors.append("rtw88: PASS without a start line")
+        elif int(start["attached"]) == 0:
+            errors.append("rtw88: start returned but not attached")
+        else:
+            notes.append(f"rtw88: start attached=1 rx={start['rx']}")
+        stats = found["rtw88_stats"]
+        if not stats:
+            errors.append("rtw88: PASS without the SDIO ledger line")
+        elif int(stats["errors"]) != 0:
+            errors.append(f"rtw88: {stats['errors']} SDIO transfers failed")
+        else:
+            notes.append(
+                f"rtw88: sdio direct={stats['io_direct']} "
+                f"ext={stats['io_ext']} probes={stats['probes']}"
+            )
+        mci = found["rtw88_mci"]
+        if mci and int(mci["errors"]) != 0:
+            errors.append(f"rtw88: controller saw {mci['errors']} errors")
+        bus = found["rtw88_bus"]
+        if bus:
+            notes.append(
+                f"rtw88: bus clock={bus['clock']} width={bus['width']} "
+                f"blk={bus['blk']}/{bus['blkmax']} max_req={bus['max_req']} "
+                f"io_ext={bus['ioext']}"
+            )
+            # The two exits are a multi-block CMD53 read and a populated scan.
+            # A driver that only ever issued byte-mode transfers would still
+            # answer "no errors", so the transfer shape is judged, not just the
+            # error count.
+            if int(bus["ioext"]) == 0:
+                errors.append("rtw88: no extended (multi-byte) transfer at all")
+            if int(bus["max_req"]) == 0:
+                errors.append("rtw88: the host reports no per-transfer ceiling")
+
+    # --- rtw88_scan: the sweep -------------------------------------------------
+    if cases.get("rtw88_scan", {}).get("verdict") == "pass":
+        fail = found["rtw88_scan_fail"]
+        if fail:
+            errors.append(f"rtw88_scan: {fail['reason']}")
+        done = found["rtw88_scan_done"]
+        if not done:
+            errors.append("rtw88_scan: PASS without a scan-done line")
+        else:
+            if int(done["rows"]) == 0:
+                errors.append("rtw88_scan: empty scan table")
+            if int(done["entered"]) < 1:
+                errors.append("rtw88_scan: the stack never entered S_SCAN")
+            if int(done["rx"]) == 0:
+                errors.append("rtw88_scan: no frame reached the stack")
+            if int(done["close"]) == 0:
+                errors.append("rtw88_scan: the window never closed")
+            notes.append(
+                f"rtw88_scan: rows={done['rows']} bcn={done['bcn']} "
+                f"prsp={done['prsp']} close={done['close']} rx={done['rx']}"
+            )
+        bss = found["rtw88_scan_bss"]
+        if not bss:
+            errors.append("rtw88_scan: PASS without any BSS row")
+        else:
+            notes.append(f"rtw88_scan: table holds {len(bss)} BSS rows")
 
     if cases.get("rtw89", {}).get("verdict") == "pass":
         if found["rtw89_fail"]:

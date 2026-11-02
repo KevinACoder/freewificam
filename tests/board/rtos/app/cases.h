@@ -128,6 +128,14 @@ int case_usb_xhci_run(void);
 int case_usb_ehci_run(void);
 #endif
 
+#if defined(RTOS_CASE_RTW88)
+int case_rtw88_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTW88_SCAN)
+int case_rtw88_scan_run(void);
+#endif
+
 #if defined(RTOS_CASE_RTW89)
 int case_rtw89_run(void);
 #endif

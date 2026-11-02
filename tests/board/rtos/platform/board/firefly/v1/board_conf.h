@@ -33,6 +33,8 @@
  * DTS clock-names uartclk). */
 #define BOARD_UART1_BASE	0x28001000UL
 #define BOARD_UART_BASE		BOARD_UART1_BASE
+/* PL011 console: flag register at +0x18, TXFF = bit 5 set while full. */
+#define BOARD_UART_IS_PL011	1
 #define BOARD_UART_CLOCK_HZ	48000000UL
 #define BOARD_UART_BAUD		115200UL
 

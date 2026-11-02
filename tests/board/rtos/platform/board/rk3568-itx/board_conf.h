@@ -24,6 +24,9 @@
 /* Console UART calibration (DW-APB 16550-compatible: 32-bit access, register
  * byte-offset stride 4 - byte accesses read and write garbage). */
 #define BOARD_UART_BASE		BOARD_UART2_BASE
+/* DW-APB 16550 console: LSR at +0x14, THR_EMPTY = bit 5 set while there is
+ * room (the opposite sense from the PL011's TXFF). */
+#define BOARD_UART_IS_PL011	0
 #define BOARD_UART_CLOCK_HZ	24000000UL
 #define BOARD_UART_BAUD		115200UL
 

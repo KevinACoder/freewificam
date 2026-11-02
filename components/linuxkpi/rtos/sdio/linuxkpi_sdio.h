@@ -156,7 +156,8 @@ struct lkpi_sdio_bus_info {
 	uint32_t	clock_hz;
 	unsigned int	bus_width;	/* data lines */
 	unsigned int	blk_size;	/* function 1's current block size, 0 if none */
-	unsigned int	blk_max;	/* that function's ceiling */
+	unsigned int	blk_max;	/* that function's ceiling, 0 if unset */
+	unsigned int	max_req_size;	/* the largest single transfer the host takes */
 };
 
 void	lkpi_sdio_bus_info_get(struct lkpi_sdio_bus_info *out);

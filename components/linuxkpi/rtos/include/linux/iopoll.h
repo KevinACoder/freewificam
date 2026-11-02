@@ -22,6 +22,15 @@
 
 #include "../../linuxkpi_core.h"
 
+/*
+ * [LNX] include/linux/iopoll.h:14 includes <linux/io.h>, and the interface's
+ * io.h is where <linux/sizes.h> arrives from (io.h:9).  That chain is how a
+ * driver reaches SZ_* through its own `#include <linux/iopoll.h>` rather than
+ * naming sizes.h: rtw88/main.h:14 includes this header, and rtw88/sdio.c:1074
+ * then names SZ_64K with no include of its own.
+ */
+#include <linux/io.h>
+
 /* A relax hint for a spin loop: no architecture instruction, just a compiler
  * barrier, so the loop cannot be hoisted. */
 static inline void cpu_relax(void)

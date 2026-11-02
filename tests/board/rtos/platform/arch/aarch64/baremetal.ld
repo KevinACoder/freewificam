@@ -131,6 +131,20 @@ SECTIONS
 		__lkpi_init_end = .;
 	} :text
 
+	/* SDIO driver registry: `module_sdio_driver()` (the contract header) puts
+	 * each registered struct sdio_driver * here, and the SDIO engine's bring-up
+	 * walks the section between these two symbols and registers them before the
+	 * card comes up - the order the kernel's bus gives a driver that is present
+	 * when its card enumerates. A third section rather than a third reader of
+	 * one of the two above, for the reason those two are separate: each walk
+	 * then steps through its own kind of entry and the byte count stays
+	 * entries x 8, which is what makes the section's size a check. */
+	.lkpi_sdio_driver : ALIGN(8) {
+		__lkpi_sdio_driver_start = .;
+		KEEP(*(.lkpi_sdio_driver))
+		__lkpi_sdio_driver_end = .;
+	} :text
+
 	.data : ALIGN(8) {
 		__data_start = .;
 		*(.data .data.*)

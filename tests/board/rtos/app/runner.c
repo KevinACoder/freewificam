@@ -103,6 +103,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_NET_XMAC)
 	{ "net_xmac", case_net_xmac_run },
 #endif
+#if defined(RTOS_CASE_RTW88)
+	{ "rtw88", case_rtw88_run },
+#endif
+#if defined(RTOS_CASE_RTW88_SCAN)
+	{ "rtw88_scan", case_rtw88_scan_run },
+#endif
 #if defined(RTOS_CASE_RTW89)
 	{ "rtw89", case_rtw89_run },
 #endif
@@ -158,6 +164,7 @@ static const osThreadAttr_t runner_attr = {
 	 * image gets the reference image's 16 KiB runner stack. */
 #if defined(RTOS_CASE_WLAN) || defined(RTOS_CASE_IWL7260_SCAN) || \
     defined(RTOS_CASE_IWL7260_JOIN) || defined(RTOS_CASE_IWL7260_DATAPLANE) || \
+    defined(RTOS_CASE_RTW88) || defined(RTOS_CASE_RTW88_SCAN) || \
     defined(RTOS_CASE_RTW89) || defined(RTOS_CASE_RTW89_SCAN) || \
     defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE) || \
     defined(RTOS_CASE_RTL8XXXU) || defined(RTOS_CASE_RTL8XXXU_SCAN) || \

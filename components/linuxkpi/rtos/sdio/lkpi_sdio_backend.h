@@ -81,6 +81,14 @@ struct lkpi_sdio_be_card_info {
 	u32	clock_hz;			/* the bus clock the card came up at */
 	u32	host_max_blk_size;		/* the host's largest single block */
 	u32	host_max_blk_count;		/* the host's largest block count in one transfer */
+	/*
+	 * The host's largest single request, in bytes. The interface's host
+	 * drivers derive it from their own DMA geometry (firefly-mci.c:1584);
+	 * a backend that does not report its controller's figure leaves it zero
+	 * and the engine then keeps the derivation the interface's core would
+	 * make for the same host, host_max_blk_size x host_max_blk_count.
+	 */
+	u32	host_max_req_size;
 	u8	bus_width;			/* data lines in use (1, 4 or 8) */
 	bool	memory_present;			/* the card also carries memory */
 	bool	high_speed;			/* the bus was switched to high speed */

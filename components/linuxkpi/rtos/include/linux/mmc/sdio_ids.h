@@ -32,4 +32,14 @@
 /* the vendor code of the parts this face was grown for */
 #define	SDIO_VENDOR_ID_REALTEK	0x024c
 
+/*
+ * The part numbers of that vendor's SDIO parts. [LNX] include/linux/mmc/sdio_ids.h:131
+ * carries the whole family; this face grows one entry per driver that registers
+ * an id table, which is what the header's own @design note says it does. The
+ * value is the card's manufacturer information from its CIS, and it is the
+ * second half of the `024c:c821` pair this board's socket enumerates
+ * (rtw88/rtw8821cs.c:15 names it in the driver's id table).
+ */
+#define	SDIO_DEVICE_ID_REALTEK_RTW8821CS	0xc821
+
 #endif /* _LINUXKPI_LINUX_MMC_SDIO_IDS_H_ */

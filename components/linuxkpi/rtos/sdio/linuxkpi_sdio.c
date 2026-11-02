@@ -1338,6 +1338,102 @@ sdio_writesb(struct sdio_func *func, unsigned int addr, void *src, int count)
 	    (unsigned int)count);
 }
 
+/*
+ * [LNX] drivers/mmc/core/sdio_io.c:236 sdio_align_size. The interface's own
+ * words for why it exists: "pads a transfer size to a more optimal value" so
+ * the request needs fewer commands (some controllers drop to PIO, or refuse
+ * outright, on a size that is not a block multiple).
+ *
+ * The algorithm is the interface's, step for step:
+ *   1. give the controller its say first (_sdio_align_size: 32-bit align);
+ *   2. if the result still fits one byte-mode transfer, that is the answer;
+ *   3. with multi-block support, a size already block-aligned stays as it is;
+ *   4. otherwise round UP to whole blocks and re-offer it to the controller -
+ *      that value is only good if it is still one request (the block count has
+ *      to stay inside the host's ceiling);
+ *   5. failing that, at least pad the block-mode remainder properly;
+ *   6. and if the host cannot even move one useful chunk, hand back the size
+ *      it was asked about - the caller then sees the request it made.
+ *
+ * _sdio_align_size() is the interface's FIXME, transcribed: this port has no
+ * controller-bug table either, so the only fixup is the 32-bit alignment.
+ */
+static unsigned int
+lkpi_sdio_align_chunk(unsigned int sz)
+{
+
+	return (sz + 3u) & ~3u;
+}
+
+unsigned int
+sdio_align_size(struct sdio_func *func, unsigned int sz)
+{
+	unsigned int orig_sz;
+	unsigned int blk_sz;
+	unsigned int byte_sz;
+	unsigned int chunk_sz;
+
+	if (func == NULL || func->card == NULL)
+		return sz;
+
+	orig_sz = sz;
+
+	/* first check with the controller, in case it wants to increase the size
+	 * to a point where it might need more than one block */
+	sz = lkpi_sdio_align_chunk(sz);
+
+	/* still one byte-mode transfer: done */
+	if (sz <= sdio_max_byte_size(func))
+		return sz;
+
+	if (func->card->cccr.multi_block) {
+		/* already block aligned */
+		if (func->cur_blksize != 0u &&
+		    (sz % func->cur_blksize) == 0u)
+			return sz;
+
+		/* realign so it can be done in one request, then recheck */
+		if (func->cur_blksize != 0u) {
+			unsigned int max_blocks =
+			    func->card->host->max_blk_count;
+
+			blk_sz = ((sz + func->cur_blksize - 1u) /
+			    func->cur_blksize) * func->cur_blksize;
+			blk_sz = lkpi_sdio_align_chunk(blk_sz);
+
+			/* this value is only good if it is still one request */
+			if ((blk_sz % func->cur_blksize) == 0u) {
+				unsigned int blocks =
+				    blk_sz / func->cur_blksize;
+
+				if (max_blocks == 0u || blocks <= max_blocks)
+					return blk_sz;
+			}
+
+			/* failed to make one request: pad the remainder */
+			byte_sz = lkpi_sdio_align_chunk(sz %
+			    func->cur_blksize);
+			if (byte_sz <= sdio_max_byte_size(func)) {
+				blk_sz = sz / func->cur_blksize;
+				return blk_sz * func->cur_blksize + byte_sz;
+			}
+		}
+	} else {
+		/* multiple requests: first check the controller can handle the
+		 * chunk size */
+		chunk_sz = lkpi_sdio_align_chunk(sdio_max_byte_size(func));
+		if (chunk_sz == sdio_max_byte_size(func)) {
+			byte_sz = orig_sz % chunk_sz;
+			if (byte_sz != 0u)
+				byte_sz = lkpi_sdio_align_chunk(byte_sz);
+			return (orig_sz / chunk_sz) * chunk_sz + byte_sz;
+		}
+	}
+
+	/* the controller cannot move the size we want in a decent manner */
+	return orig_sz;
+}
+
 /* the 2-byte and 4-byte calls ride the buffered path through the function's
  * scratch buffer, in the interface's byte order */
 u16
@@ -1847,6 +1943,11 @@ lkpi_sdio_bus_info_get(struct lkpi_sdio_bus_info *out)
 	(void)memset(out, 0, sizeof(*out));
 	out->clock_hz = c->host.ios.clock;
 	out->bus_width = (c->host.ios.bus_width == MMC_BUS_WIDTH_4) ? 4u : 1u;
+	/* The host's per-transfer ceiling, which is what decides whether a driver's
+	 * buffer read is issued as one transfer or split: it is not the block size
+	 * and not the block count, and reporting either in its place would make a
+	 * split invisible. */
+	out->max_req_size = c->host.max_req_size;
 	/* the data function is the one that carries bulk traffic; the block size it
 	 * settled on is the unit the engine's splitter issues in */
 	for (n = 1u; n <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; n++) {
@@ -2069,6 +2170,20 @@ lkpi_sdio_build_functions(void)
 	c->host.card = &c->card;
 	c->host.max_blk_size = c->info.host_max_blk_size;
 	c->host.max_blk_count = c->info.host_max_blk_count;
+	/*
+	 * The largest single request. A backend that knows its controller's DMA
+	 * geometry reports it (the interface's host drivers each compute one:
+	 * firefly-mci.c:1584 writes 512 KiB from its ADMA table's span); a
+	 * backend that does not says nothing, and the product below is the same
+	 * figure derived from the two limits it did report. On this board the
+	 * product is 4096 x 32 = 16384 bytes, which is also the stack's staging
+	 * buffer - so one request never asks the controller for more than it can
+	 * stage, and rtw88's receive window (whose total is the chip's own
+	 * rxff_size = 16384) arrives as one command instead of two.
+	 */
+	c->host.max_req_size = c->info.host_max_req_size != 0u ?
+	    c->info.host_max_req_size :
+	    c->info.host_max_blk_size * c->info.host_max_blk_count;
 	c->host.ios.clock = c->info.clock_hz;
 	c->host.ios.power_mode = MMC_POWER_ON;
 	c->host.ios.bus_mode = MMC_BUSMODE_PUSHPULL;
@@ -2167,6 +2282,44 @@ lkpi_sdio_pump_start(void)
 	c->pump_running = true;
 }
 
+/*
+ * Register every SDIO driver the image carries. The section is bracketed by the
+ * linker script and filled by module_sdio_driver() (linuxkpi_core.h); an image
+ * that names no driver has an empty section, which is not an error - it is the
+ * shape of a board round that has no function driver yet.
+ *
+ * This runs before the card is brought up, which is the order the interface
+ * gives a driver that is present when its card enumerates: the bus registers the
+ * driver, then probes it. The engine's __sdio_register_driver() also probes a
+ * driver that arrives after the card, so either order works - registering first
+ * keeps the log's story the same as the kernel's.
+ */
+extern void *__lkpi_sdio_driver_start[] __attribute__((weak));
+extern void *__lkpi_sdio_driver_end[] __attribute__((weak));
+
+static void
+lkpi_sdio_register_modules(void)
+{
+	void **it;
+	unsigned int n = 0u;
+
+	if (__lkpi_sdio_driver_start == NULL || __lkpi_sdio_driver_end == NULL ||
+	    (uintptr_t)__lkpi_sdio_driver_end <= (uintptr_t)__lkpi_sdio_driver_start) {
+		return;
+	}
+	for (it = __lkpi_sdio_driver_start; it < __lkpi_sdio_driver_end; it++) {
+		struct sdio_driver *drv;
+
+		if (*it == NULL)
+			continue;
+		drv = (struct sdio_driver *)*it;
+		(void)__sdio_register_driver(drv, NULL);
+		n++;
+	}
+	lkpi_printf(ULOG_INFO_LEVEL, "sdiokpi: %u sdio driver entr%s registered\n",
+	    n, n == 1u ? "y" : "ies");
+}
+
 void
 lkpi_sdio_start(void)
 {
@@ -2183,6 +2336,8 @@ lkpi_sdio_start(void)
 		    "sdiokpi: no backend installed; the card cannot come up\n");
 		return;
 	}
+
+	lkpi_sdio_register_modules();
 
 	(void)memset(&c->info, 0, sizeof(c->info));
 	st = lkpi_sdio_be_card_init(&c->info);
