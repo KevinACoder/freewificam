@@ -37,6 +37,9 @@ struct rtos_case {
 };
 
 static const struct rtos_case cases[] = {
+#if defined(RTOS_CASE_SDIO_MCI)
+	{ "sdio_mci", case_sdio_mci_run },
+#endif
 #if defined(RTOS_CASE_TICK)
 	{ "tick", case_tick_run },
 #endif
