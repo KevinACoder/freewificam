@@ -10,6 +10,7 @@
 #   ./make.rtos list [--current]
 #   ./make.rtos config [PROFILE=<name>]
 #   ./make.rtos image|images|host|host-test|digest|check|dump-vars|clean|distclean
+#   ./make.rtos rk3568_ci|firefly_v1_ci|firefly_v2_ci
 #   PROFILE=<name> ./make.rtos images
 #   ./make.rtos --profile <name> images
 #

@@ -178,8 +178,17 @@ on `-D` flags, which is what makes A1 possible.
 ./make.rtos list [--current]
 ./make.rtos config [PROFILE=<name>]
 ./make.rtos image|images|host|host-test|digest|check|dump-vars|clean|distclean
+./make.rtos rk3568_ci|firefly_v1_ci|firefly_v2_ci
 PROFILE=<name> ./make.rtos images
 ```
+
+The three `*_ci` targets (also `make rk3568_ci` from the repository root) cover
+one board at a time: `check` once, then one clean build per matching defconfig,
+with failures collected and the target nonzero if any profile failed.  The
+board comes from the defconfig; rk3568-itx is the default and is implicit (no
+`CONFIG_BOARD_RK3568_ITX` line), while firefly-v1/v2 write
+`CONFIG_BOARD_FIREFLY_*`.  Counts today: 77 rk3568-itx, 1 firefly-v1,
+3 firefly-v2.  Logs are under `build/ci/<target>/` (git-ignored).
 
 `make.rtos` is POSIX sh; `tools/build/rtos.mk` is the make implementation.
 It selects the profile from `PROFILE`, otherwise from the `CONFIG :=` line in

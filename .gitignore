@@ -9,6 +9,7 @@ tests/board/rtos/build/*
 tools/build/*
 !tools/build/*.py
 !tools/build/*.mk
+!tools/build/*.sh
 out/
 *.o
 *.ko

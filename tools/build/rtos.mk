@@ -17,7 +17,8 @@ PROFILE ?= $(shell sed -n 's/^[[:space:]]*CONFIG[[:space:]]*:=[[:space:]]*//p' \
 DEFCONFIG := $(CONFIGS)/$(PROFILE).defconfig
 GEN_CONFIG := $(ROOT)/build/kconfig/$(PROFILE)/generated/config.mk
 
-.PHONY: help list config image images host host-test digest check dump-vars clean distclean
+.PHONY: help list config image images host host-test digest check dump-vars clean distclean \
+	rk3568_ci firefly_v1_ci firefly_v2_ci
 
 help:
 	@printf '%s\n' \
@@ -29,6 +30,9 @@ help:
 		'  images             both backends' \
 		'  host | host-test   the host conformance tier' \
 		'  digest             third-party and Kconfiglib manifests' \
+		'  rk3568_ci          every rk3568-itx defconfig, clean build each' \
+		'  firefly_v1_ci      every firefly-v1 defconfig, clean build each' \
+		'  firefly_v2_ci      every firefly-v2 defconfig, clean build each' \
 		'  check              every defconfig parses and regenerates identically' \
 		'  dump-vars          the effective make variables of the profile (JSON)' \
 		'  clean | distclean  objects, then generated fragments too' \
@@ -103,3 +107,9 @@ clean:
 
 distclean: clean
 	rm -rf $(ROOT)/build/kconfig
+
+# One-shot board coverage: build every defconfig whose board matches.  The
+# shell script owns the loop so a failure does not abort the remaining
+# profiles; the target is nonzero if any profile failed.
+rk3568_ci firefly_v1_ci firefly_v2_ci:
+	@$(ROOT)/tools/build/ci.sh $@

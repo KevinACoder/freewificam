@@ -90,6 +90,9 @@ kernels of it (ThreadX and FreeRTOS behind one CMSIS-RTOS2 abstraction).
 ./make.rtos image PROFILE=<name>      # one image, the profile's backend
 ./make.rtos images                    # both kernels
 AARCH64_CROSS_PATH=/path/to/aarch64-none-elf ./make.rtos images
+
+make rk3568_ci                        # every rk3568-itx profile, clean build each
+make firefly_v1_ci firefly_v2_ci      # every firefly-v1/v2 profile
 ```
 
 `./make.rtos config` regenerates `build/kconfig/<profile>/generated/config.mk`
