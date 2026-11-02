@@ -1,0 +1,84 @@
+# The wireless bench knobs and the netio instrument levers.
+#
+# The WLAN_* symbols are consumed as make variables by wlan.mk, which turns
+# them into the C -D flags.  The old Makefile pre-defined every WLAN_* with
+# ":=" before including the fragment, so a profile that did not set one
+# produced an empty value and the fragment's "?=" default never fired; the
+# generator reproduces that by emitting a make variable only when the profile
+# set the symbol.
+
+menu "Wireless cases and instrumentation"
+
+config WLAN_OBS
+	bool "linuxkpi observation census"
+
+config WLAN_TCP_SINK
+	bool "TCP sink case"
+
+config WLAN_TCP_SINK_SECONDS
+	int "TCP sink seconds"
+	default 30
+
+config WLAN_UDP_SINK
+	bool "UDP sink case"
+
+config WLAN_UDP_SINK_SECONDS
+	int "UDP sink seconds"
+	default 30
+
+config WLAN_UDP_PORT
+	int "UDP sink port"
+	default 5002
+
+config WLAN_PING_COUNT
+	int "Ping count"
+	default 10
+
+config WLAN_PING_INTERVAL_MS
+	int "Ping interval (ms)"
+	default 100
+
+config WLAN_PING_TRACE
+	bool "Ping trace"
+
+config WLAN_SCAN_DIAG
+	bool "Scan diagnostic shapes"
+
+config WLAN_SCAN_BATCH
+	int "Scan batch"
+	default 1
+
+config WLAN_PUMP_PRIO
+	string "Pump thread priority (below/above/normal)"
+	default ""
+
+config WLAN_PUMP_DRAIN
+	bool "Pump drain"
+
+# netio instrument levers.  The old profiles carried these as CONFIG_LEVERS
+# -D tokens; they are CFG_DEFS-only in the generated fragment.
+config NETIO_CPU_KHZ
+	int "netio CPU kHz (requested OPP)"
+	default 1992000
+
+config NETIO_RAW_UDP
+	bool "netio raw UDP"
+
+config NETIO_RXPATH
+	bool "netio RX path"
+
+config NETIO_TCP_PROBE
+	bool "netio TCP probe"
+
+config NETIO_TX_STALL_PROBE
+	bool "netio TX stall probe"
+
+menu "Cases"
+
+config CASES
+	string "Case groups (space-separated)"
+	default ""
+
+endmenu
+
+endmenu

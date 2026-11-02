@@ -1,0 +1,21 @@
+# freewificam build configuration
+#
+# One tree feeds the RTOS image entry (make.rtos -> tools/build/rtos.mk) and,
+# in a later step, the CMake entry and the linux-ko module list.  A profile is
+# a defconfig under configs/; the generated fragment under
+# build/kconfig/<profile>/generated/ is the only file a build consumes.
+#
+# The symbols here are the ones the pre-Kconfig Makefile consumed as
+# -DCONFIG_... and as CONFIG_... make variables.  The three render channels
+# (make variable, CFG_DEFS, or both) are documented in docs/BUILD-DESIGN.md.
+#
+# rsource is resolved relative to this file; the generator must be run from
+# the repository root so the same paths work from make and CMake.
+
+mainmenu "freewificam build configuration"
+
+rsource "tests/board/rtos/Kconfig"
+rsource "components/linuxkpi/Kconfig"
+rsource "components/net80211/Kconfig"
+rsource "wireless-drivers/Kconfig"
+rsource "third-party/Kconfig"

@@ -1,0 +1,13 @@
+# net80211 component options.
+
+menu "net80211"
+
+config WLAN_RX_BA
+	bool "RX block-ack reorder window"
+	help
+	  Compiles the driver's RX block-ack reorder window (wlan_rx_ba.c) and
+	  emits -DCONFIG_WLAN_RX_BA=1.  The old profiles set the make variable
+	  and the same -D twice (once as an assignment, once inside
+	  CONFIG_LEVERS); after the migration there is one source of truth.
+
+endmenu

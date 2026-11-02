@@ -4,6 +4,11 @@ build/
 tests/board/rtos/build/*
 !tests/board/rtos/build/Makefile
 !tests/board/rtos/build/*.mk
+# The build tooling lives in a directory named build; keep it source.
+!tools/build/
+tools/build/*
+!tools/build/*.py
+!tools/build/*.mk
 out/
 *.o
 *.ko
@@ -20,3 +25,9 @@ __pycache__/
 *.mod.c
 *.cmd
 components/linuxkpi/fw/
+
+# Kconfig-generated fragments (the .config and autoconf.h are build outputs).
+build/kconfig/
+**/autoconf.h
+**/.config
+**/generated/

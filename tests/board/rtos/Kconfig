@@ -1,0 +1,95 @@
+# The RTOS image: kernel, optimisation, heap, case list and the two escapes.
+#
+# These are the symbols the build/Makefile consumed before the Kconfig
+# migration; the names are unchanged apart from the dropped CONFIG_ prefix
+# that Kconfig adds back in the generated fragment.
+
+menu "RTOS image"
+
+choice BACKEND
+	prompt "RTOS kernel"
+	default BACKEND_FREERTOS
+	help
+	  The kernel behind CMSIS-RTOS2.  The application sources are the same;
+	  only the backend source set, the backend defines and the link window
+	  differ.
+
+config BACKEND_FREERTOS
+	bool "FreeRTOS"
+
+config BACKEND_THREADX
+	bool "ThreadX"
+
+endchoice
+
+choice OPT
+	prompt "Optimisation level"
+	default OPT_O2
+
+config OPT_O0
+	bool "-O0"
+
+config OPT_O2
+	bool "-O2"
+
+config OPT_OG
+	bool "-Og"
+
+endchoice
+
+choice PROFILE
+	prompt "Performance profile"
+	default PROFILE_BASE
+	help
+	  base is the pre-round switch set; perf carries the measured net-positive
+	  lwIP/GMAC switches (PROFILE_DEFS in the Makefile).  The choice is called
+	  PROFILE only in this file; the build's PROFILE variable names the
+	  defconfig and is unrelated.
+
+config PROFILE_BASE
+	bool "base"
+
+config PROFILE_PERF
+	bool "perf"
+
+endchoice
+
+config HEAP_SIZE
+	int "ThreadX kernel heap (MiB)"
+	default 4
+	help
+	  Rendered as -Wl,--defsym=HEAP_SIZE=<n>M for the ThreadX link.  The
+	  FreeRTOS image uses FREERTOS_HEAP_SIZE instead; the value is harmless
+	  there but still rendered for byte-for-byte equivalence with the old
+	  profiles.
+
+config FREERTOS_HEAP_SIZE
+	int "FreeRTOS heap (bytes, 0 = omit)"
+	default 0
+	help
+	  Rendered as -DCONFIG_FREERTOS_HEAP_SIZE=<n>u when non-zero.  Zero is
+	  omitted because the old Makefile's ifneq() treated an explicit 0 as a
+	  non-empty value and would have emitted a zero-sized heap.
+
+config LEVERS
+	string "Residual compiler -D levers"
+	default ""
+	help
+	  The escape hatch for a -D that is not a modeled symbol: lwIP options,
+	  a diagnostic, a lab patch.  It is appended after CFG_DEFS, exactly
+	  where the old CONFIG_LEVERS sat, so the compiler's last-wins rule is
+	  unchanged.  It is recorded in manifest.json and every build prints it.
+
+config GMAC_PROF
+	bool "Per-frame GMAC service-time instrument"
+	default y
+	help
+	  The dwc_eqos prof counters and the netio tick buckets.  Default on so
+	  a measurement boot is the same image as before; an A/B arm turns it
+	  off.  The Makefile's old unconditional -DCONFIG_GMAC_PROF= line is
+	  gone; the generator now emits it through CFG_DEFS.
+
+rsource "platform/board/Kconfig"
+rsource "app/Kconfig"
+
+endmenu

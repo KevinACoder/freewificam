@@ -1,0 +1,63 @@
+# Wireless driver options.
+#
+# The driver source lists and the per-driver flag worlds stay in the make
+# fragments (docs/BUILD-DESIGN.md lists the seven classes Kconfig cannot
+# express); this file only owns the values the old profiles carried as
+# CONFIG_... make variables.
+
+menu "Wireless drivers"
+
+choice RTL8XXXU_CHIP
+	prompt "rtl8xxxu chip"
+	default RTL8XXXU_CHIP_8188EU
+	help
+	  The chip the rtl8xxxu image binds.  8188EU is the xHCI arm; 8723BU is
+	  the EHCI arm (and the 1T1R part the BA reorder-window work measured).
+
+config RTL8XXXU_CHIP_8188EU
+	bool "RTL8188EU"
+
+config RTL8XXXU_CHIP_8723BU
+	bool "RTL8723BU"
+
+endchoice
+
+config RTL8XXXU_EXPECT_MAC
+	string "Expected station MAC (identity gate)"
+	default "20:f4:1b:52:8f:01"
+
+config RTL8XXXU_AP_SSID
+	string "Bench AP SSID"
+	default "labwifi-brmc"
+
+config RTL8XXXU_AP_FREQ
+	int "Bench AP frequency (MHz)"
+	default 2432
+
+config RTL8XXXU_HB
+	bool "Heartbeat"
+	help
+	  Rendered as the bare -DRTL8XXXU_HB by the driver fragment; it is a
+	  make variable, not a CFG_DEFS token.
+
+config NET_WATCH
+	bool "net_watch USB/stack observation"
+	help
+	  The rtl8xxxu net_watch counters.  The make variable gates
+	  net_watch.c in the driver fragment; the C side also needs the bare
+	  -DNET_WATCH, which stays in the residual LEVERS of the profile.
+
+config RTL8XXXU_USB_BUS
+	int "rtl8xxxu USB bus id (0/1/3/4)"
+	default 3
+	help
+	  The old profiles used the controller's bus id directly: 3 = xHCI,
+	  1 = both USB2 roots, 4 = all four roots, 0 = the first USB2 root.
+	  The migration keeps the numbers; the transport-choice redesign is a
+	  later step.
+
+config RTW89_USB_BUS
+	int "rtw89 USB bus id"
+	default 3
+
+endmenu

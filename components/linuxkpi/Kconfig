@@ -1,0 +1,17 @@
+# linuxkpi component options.
+#
+# The observation switch is the one linuxkpi-side lever the old profiles
+# carried; it is CFG_DEFS-only (CONFIG_LKPI_USB_OBS) in the generated
+# fragment.  The WLAN_OBS switch that turns on the census lives in the
+# wireless test config.
+
+menu "linuxkpi"
+
+config LKPI_USB_OBS
+	bool "USB observation points"
+	help
+	  The linuxkpi USB submit/complete observation points.  It is a
+	  diagnostic arm: the observation cost is part of the measured image,
+	  so it is a profile decision, not a default.
+
+endmenu
