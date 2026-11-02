@@ -314,6 +314,8 @@ digest:
 		echo "digest: net80211 ok ($$(wc -l < $(ROOT)/components/net80211/patches/MANIFEST.sha256) files)"
 	@set -e; ( cd $(ROOT)/tools/kconfig && sha256sum -c --quiet MANIFEST.sha256 ); \
 		echo "digest: kconfig ok (2 files)"
+	@set -e; ( cd $(ROOT)/third-party/cherrysh && sha256sum -c --quiet MANIFEST.sha256 ); \
+		echo "digest: cherrysh ok (14 files)"
 
 clean:
 	rm -rf $(BUILD)
@@ -518,6 +520,27 @@ INCLUDES += -I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
 endif
 endif
 
+# The CherrySH console layer: vendored core + the board port + the command
+# table.  The generated csh_config.h carries the Kconfig choices; the core has
+# no Kconfig of its own.  Off means no shell sources and no include roots.
+ifneq ($(CONFIG_SHELL),)
+INCLUDES += -I$(THIRD_PARTY)/cherrysh -I$(COMPONENTS)/shell \
+	-I$(ROOT)/build/kconfig/$(PROFILE)/include/generated
+SHELL_APP_SRCS := \
+	$(COMPONENTS)/shell/shell_port.c \
+	$(COMPONENTS)/shell/shell_console.c \
+	$(COMPONENTS)/shell/shell_cmds.c
+CHERRYSH_SRCS := \
+	$(THIRD_PARTY)/cherrysh/chry_shell.c \
+	$(THIRD_PARTY)/cherrysh/cherryrl/chry_readline.c \
+	$(THIRD_PARTY)/cherrysh/builtin/clear.c \
+	$(THIRD_PARTY)/cherrysh/builtin/help.c \
+	$(THIRD_PARTY)/cherrysh/builtin/shsize.c
+else
+SHELL_APP_SRCS :=
+CHERRYSH_SRCS :=
+endif
+
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
@@ -623,6 +646,7 @@ APP_SRCS := \
 	$(LINE)/app/main.c \
 	$(LINE)/app/runner.c \
 	$(LINE)/app/port/clock_board.c \
+	$(SHELL_APP_SRCS) \
 	$(CASE_SRCS)
 
 # The wired-network cases each bring the lwIP port face and the stack core;
@@ -730,7 +754,8 @@ FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 	$(MMC_PORT_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_BOARD_SRCS) $(NVME_BOARD_SRCS) \
 	$(FIREFLY_PCIE_SRCS) $(FIREFLY_NVME_SRCS) \
 	$(BACKEND_FIRST_SRCS)
-VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
+VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS) \
+	$(CHERRYSH_SRCS)
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
 	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(UVC_ALL_SRCS) $(RTW89_ALL_SRCS) \

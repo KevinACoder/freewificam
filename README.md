@@ -86,9 +86,11 @@ select another profile with `PROFILE=<name>`.  `./make.rtos images` builds both
 kernels of it (ThreadX and FreeRTOS behind one CMSIS-RTOS2 abstraction).
 
 ```sh
-./make.rtos list                      # the 81 defconfigs
+./make.rtos list                      # the 82 defconfigs
 ./make.rtos image PROFILE=<name>      # one image, the profile's backend
 ./make.rtos images                    # both kernels
+PROFILE=rtos-shell ./make.rtos image  # the CherrySH console image
+PROFILE=rtos-shell ./make.rtos case-list-check  # image vs defconfig vs judge
 AARCH64_CROSS_PATH=/path/to/aarch64-none-elf ./make.rtos images
 
 make rk3568_ci                        # every rk3568-itx profile, clean build each
@@ -110,6 +112,7 @@ The profiles carried today, by group:
 | AC 7260 | `iwlwifi-7260`, `iwlwifi-7260-sjd` | iwlwifi/mvm over the linuxkpi PCI engine, attach to network |
 | RTL8189FTV | `wlan-delivery`, `wlan-obs`, `wlan-ping` | the vendor SDIO stack; needs the external tree (below) |
 | PCIe | `pcie-nvme`, `pcie-bench`, `pcie-7260` | the PCIe root complex, NVMe and the 7260 endpoint |
+| Shell | `rtos-shell` | the CherrySH console: `case list|run`, the `wifi`/`net`/`usb`/... groups and `board`/`log`/`reboot`; one boot drives every case by name |
 
 The RTL8189FTV profiles additionally need the external vendor tree:
 

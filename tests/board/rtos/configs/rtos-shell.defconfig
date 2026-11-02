@@ -1,0 +1,12 @@
+# CherrySH console image (M6): interactive prompt by default; the case runner
+# is replaced by the shell command layer, and `case run tick` prints the same
+# anchors the static runner did.
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_SHELL=y
+CONFIG_SHELL_AUTORUN=""
+CONFIG_CASES="tick"

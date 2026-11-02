@@ -11,7 +11,10 @@
 
 #include "runner.h"
 
+#include "board_tests.h"
 #include "cases.h"
+
+#include <string.h>
 
 #include "os/cmsis2/cmsis2.h"
 
@@ -31,127 +34,169 @@
 #define RTOS_BACKEND_NAME "unknown"
 #endif
 
-struct rtos_case {
-	const char *name;
-	int (*run)(void);
-};
-
+#if defined(RTOS_HOST_TIER)
+#define CASE_ENTRY(name, fn) { name, fn },
 static const struct rtos_case cases[] = {
+#else
+#define CASE_ENTRY(name, fn) BOARD_TEST(name, fn);
+#endif
 #if defined(RTOS_CASE_SDIO_MCI)
-	{ "sdio_mci", case_sdio_mci_run },
+	CASE_ENTRY("sdio_mci", case_sdio_mci_run)
 #endif
 #if defined(RTOS_CASE_TICK)
-	{ "tick", case_tick_run },
+	CASE_ENTRY("tick", case_tick_run)
 #endif
 #if defined(RTOS_CASE_CMSIS2)
-	{ "cmsis2", case_cmsis2_run },
+	CASE_ENTRY("cmsis2", case_cmsis2_run)
 #endif
 #if defined(RTOS_CASE_NET)
-	{ "net", case_net_run },
+	CASE_ENTRY("net", case_net_run)
 #endif
 #if defined(RTOS_CASE_NET_MDK_NETIO)
-	{ "net_mdk_netio", case_net_mdk_netio_run },
+	CASE_ENTRY("net_mdk_netio", case_net_mdk_netio_run)
 #endif
 #if defined(RTOS_CASE_NET_PPS)
-	{ "net_pps", case_net_pps_run },
+	CASE_ENTRY("net_pps", case_net_pps_run)
 #endif
 #if defined(RTOS_CASE_NET_LOOP)
-	{ "net_loop", case_net_loop_run },
+	CASE_ENTRY("net_loop", case_net_loop_run)
 #endif
 #if defined(RTOS_CASE_EMMC)
-	{ "emmc", case_emmc_run },
+	CASE_ENTRY("emmc", case_emmc_run)
 #endif
 #if defined(RTOS_CASE_PCIE)
-	{ "pcie", case_pcie_run },
+	CASE_ENTRY("pcie", case_pcie_run)
 #endif
 #if defined(RTOS_CASE_PCIE_BENCH)
-	{ "pcie_bench", case_pcie_bench_run },
+	CASE_ENTRY("pcie_bench", case_pcie_bench_run)
 #endif
 #if defined(RTOS_CASE_PCIE_7260)
-	{ "pcie_7260", case_pcie_7260_run },
+	CASE_ENTRY("pcie_7260", case_pcie_7260_run)
 #endif
 #if defined(RTOS_CASE_IWL7260)
-	{ "iwl7260", case_iwl7260_run },
+	CASE_ENTRY("iwl7260", case_iwl7260_run)
 #endif
 #if defined(RTOS_CASE_IWL7260_SCAN)
-	{ "iwl7260_scan", case_iwl7260_scan_run },
+	CASE_ENTRY("iwl7260_scan", case_iwl7260_scan_run)
 #endif
 #if defined(RTOS_CASE_IWL7260_JOIN)
-	{ "iwl7260_join", case_iwl7260_join_run },
+	CASE_ENTRY("iwl7260_join", case_iwl7260_join_run)
 #endif
 #if defined(RTOS_CASE_IWL7260_DATAPLANE)
-	{ "iwl7260_dataplane", case_iwl7260_dataplane_run },
+	CASE_ENTRY("iwl7260_dataplane", case_iwl7260_dataplane_run)
 #endif
 #if defined(RTOS_CASE_IWL7260_NET)
-	{ "iwl7260_net", case_iwl7260_net_run },
+	CASE_ENTRY("iwl7260_net", case_iwl7260_net_run)
 #endif
 #if defined(RTOS_CASE_WLAN)
-	{ "wlan", case_wlan_run },
+	CASE_ENTRY("wlan", case_wlan_run)
 #endif
 #if defined(RTOS_CASE_USB_XHCI)
-	{ "usb_xhci", case_usb_xhci_run },
+	CASE_ENTRY("usb_xhci", case_usb_xhci_run)
 #endif
 #if defined(RTOS_CASE_USB_EHCI)
-	{ "usb_ehci", case_usb_ehci_run },
+	CASE_ENTRY("usb_ehci", case_usb_ehci_run)
 #endif
 #if defined(RTOS_CASE_NVME)
-	{ "nvme", case_nvme_run },
+	CASE_ENTRY("nvme", case_nvme_run)
 #endif
 #if defined(RTOS_CASE_PCIE_ECAM)
-	{ "pcie_ecam", case_pcie_ecam_run },
+	CASE_ENTRY("pcie_ecam", case_pcie_ecam_run)
 #endif
 #if defined(RTOS_CASE_NET_XMAC)
-	{ "net_xmac", case_net_xmac_run },
+	CASE_ENTRY("net_xmac", case_net_xmac_run)
 #endif
 #if defined(RTOS_CASE_RTW88)
-	{ "rtw88", case_rtw88_run },
+	CASE_ENTRY("rtw88", case_rtw88_run)
 #endif
 #if defined(RTOS_CASE_RTW88_SCAN)
-	{ "rtw88_scan", case_rtw88_scan_run },
+	CASE_ENTRY("rtw88_scan", case_rtw88_scan_run)
 #endif
 #if defined(RTOS_CASE_RTW89)
-	{ "rtw89", case_rtw89_run },
+	CASE_ENTRY("rtw89", case_rtw89_run)
 #endif
 #if defined(RTOS_CASE_RTW89_SCAN)
-	{ "rtw89_scan", case_rtw89_scan_run },
+	CASE_ENTRY("rtw89_scan", case_rtw89_scan_run)
 #endif
 #if defined(RTOS_CASE_RTW89_JOIN)
-	{ "rtw89_join", case_rtw89_join_run },
+	CASE_ENTRY("rtw89_join", case_rtw89_join_run)
 #endif
 #if defined(RTOS_CASE_RTW89_DATAPLANE)
-	{ "rtw89_dataplane", case_rtw89_dataplane_run },
+	CASE_ENTRY("rtw89_dataplane", case_rtw89_dataplane_run)
 #endif
 #if defined(RTOS_CASE_RTL8XXXU)
-	{ "rtl8xxxu", case_rtl8xxxu_run },
+	CASE_ENTRY("rtl8xxxu", case_rtl8xxxu_run)
 #endif
 #if defined(RTOS_CASE_RTL8XXXU_SCAN)
-	{ "rtl8xxxu_scan", case_rtl8xxxu_scan_run },
+	CASE_ENTRY("rtl8xxxu_scan", case_rtl8xxxu_scan_run)
 #endif
 #if defined(RTOS_CASE_RTL8XXXU_JOIN)
-	{ "rtl8xxxu_join", case_rtl8xxxu_join_run },
+	CASE_ENTRY("rtl8xxxu_join", case_rtl8xxxu_join_run)
 #endif
 #if defined(RTOS_CASE_RTL8XXXU_DATAPLANE)
-	{ "rtl8xxxu_dataplane", case_rtl8xxxu_dataplane_run },
+	CASE_ENTRY("rtl8xxxu_dataplane", case_rtl8xxxu_dataplane_run)
 #endif
 #if defined(RTOS_CASE_RTL8XXXU_NET)
-	{ "rtl8xxxu_net", case_rtl8xxxu_net_run },
+	CASE_ENTRY("rtl8xxxu_net", case_rtl8xxxu_net_run)
 #endif
 #if defined(RTOS_CASE_RTL8XXXU_NETIO)
-	{ "rtl8xxxu_netio", case_rtl8xxxu_netio_run },
+	CASE_ENTRY("rtl8xxxu_netio", case_rtl8xxxu_netio_run)
 #endif
 #if defined(RTOS_CASE_UVC_DETECT)
-	{ "uvc_detect", case_uvc_detect_run },
+	CASE_ENTRY("uvc_detect", case_uvc_detect_run)
 #endif
 #if defined(RTOS_CASE_UVC_OPEN)
-	{ "uvc_open", case_uvc_open_run },
+	CASE_ENTRY("uvc_open", case_uvc_open_run)
 #endif
 #if defined(RTOS_CASE_UVC_ISO_SMOKE)
-	{ "uvc_iso_smoke", case_uvc_iso_smoke_run },
+	CASE_ENTRY("uvc_iso_smoke", case_uvc_iso_smoke_run)
 #endif
 #if defined(RTOS_CASE_UVC_STREAM)
-	{ "uvc_stream", case_uvc_stream_run },
+	CASE_ENTRY("uvc_stream", case_uvc_stream_run)
 #endif
+#if defined(RTOS_HOST_TIER)
 };
+#endif
+
+#if defined(RTOS_HOST_TIER)
+#define CASE_TABLE cases
+#define CASE_COUNT ((unsigned)(sizeof(cases) / sizeof(cases[0])))
+#else
+extern const struct rtos_case __board_tests_start[];
+extern const struct rtos_case __board_tests_end[];
+#define CASE_TABLE __board_tests_start
+#define CASE_COUNT ((unsigned)(__board_tests_end - __board_tests_start))
+#endif
+
+unsigned rtos_case_count(void)
+{
+	return CASE_COUNT;
+}
+
+const char *rtos_case_name(unsigned index)
+{
+	return (index < rtos_case_count()) ? CASE_TABLE[index].name : NULL;
+}
+
+int rtos_case_find(const char *name)
+{
+	unsigned i;
+
+	if (name == NULL) {
+		return -1;
+	}
+	for (i = 0u; i < rtos_case_count(); i++) {
+		if (strcmp(CASE_TABLE[i].name, name) == 0) {
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+int rtos_case_run(unsigned index)
+{
+	return (index < rtos_case_count()) ? CASE_TABLE[index].run() : -1;
+}
 
 static const osThreadAttr_t runner_attr = {
 	.name = "runner",
@@ -180,7 +225,7 @@ static const osThreadAttr_t runner_attr = {
 
 static void runner(void *arg)
 {
-	const unsigned total = (unsigned)(sizeof(cases) / sizeof(cases[0]));
+	const unsigned total = rtos_case_count();
 	unsigned i;
 	unsigned ok = 0u;
 
@@ -191,14 +236,14 @@ static void runner(void *arg)
 	for (i = 0u; i < total; i++) {
 		int rc;
 
-		CASE_ANCHOR("rtos: case %s start\n", cases[i].name);
-		rc = cases[i].run();
+		CASE_ANCHOR("rtos: case %s start\n", CASE_TABLE[i].name);
+		rc = CASE_TABLE[i].run();
 		if (rc == 0) {
 			ok++;
-			CASE_ANCHOR("rtos: case %s PASS\n", cases[i].name);
+			CASE_ANCHOR("rtos: case %s PASS\n", CASE_TABLE[i].name);
 		} else {
 			CASE_ANCHOR("rtos: case %s FAIL rc=%d\n",
-				    cases[i].name, rc);
+				    CASE_TABLE[i].name, rc);
 		}
 	}
 

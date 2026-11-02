@@ -1,0 +1,56 @@
+# The CherrySH console command layer.
+#
+# The shell core itself is vendored (third-party/cherrysh) and has no Kconfig;
+# these symbols generate the csh_config.h the core includes and select the
+# in-image command layer.  The default is off so every existing profile builds
+# exactly the image it built before this round.
+
+menu "Console shell (CherrySH)"
+
+config SHELL
+	bool "CherrySH console command layer"
+	help
+	  Build the CherrySH REPL, the board console port and the command table.
+	  With this off the image keeps the original static case runner.
+
+config SHELL_AUTORUN
+	string "Cases to run before the prompt"
+	default ""
+	help
+	  Space-separated case names executed once after the shell starts, with
+	  the legacy rtos: case / rtos: result anchors.  Empty means interactive:
+	  only the prompt is printed.
+
+config SHELL_BATCH
+	bool "Batch console mode"
+	default n
+	help
+	  Print one machine-matchable result line per command and no prompt
+	  decoration.  The host driver still writes complete lines.
+
+config CSH_PROMPTEDIT
+	bool "Prompt edit"
+	default n
+	help
+	  ANSI prompt editing (cursor movement, prompt redraw).  Off by default
+	  for the 115200 polled console: the board shell only needs line
+	  editing, and a dumb serial capture must stay readable.
+
+config CSH_HISTORY
+	bool "Command history"
+	default y
+
+config CSH_COMPLETION
+	bool "Command completion"
+	default y
+
+config CSH_MAX_ARG
+	int "Maximum arguments"
+	default 8
+	range 1 32
+
+config CSH_SYMTAB
+	bool "Command symbol table"
+	default y
+
+endmenu

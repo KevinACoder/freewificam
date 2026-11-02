@@ -19,6 +19,7 @@ combined into one image or one module does not relicense them.
 | `CMSIS_6` | `45dab712` (v6.3.0) | Apache-2.0 | `LICENSE` at the tree root |
 | `CMSIS-FreeRTOS` | `4dd00351` (v11.3.0) | Apache-2.0 AND MIT | `LICENSE` at the tree root carries both |
 | `cherryusb` | `51fef88` (v1.6.1-103) | Apache-2.0 | `LICENSE` at the tree root; eight patches applied in the tree, recorded in `patches/` (see below) |
+| `third-party/cherrysh` | `8efe539` (v1.0.1-20-g8efe539) | Apache-2.0 | `LICENSE` at the tree root; 14-file subset with `MANIFEST.sha256`, pins and exclusions in `PROVENANCE.md` |
 | `lwip` | `77dcd25a` (STABLE-2_2_1_RELEASE) | BSD-3-Clause style | `COPYING` at the tree root (Swedish Institute of Computer Science three-clause block) |
 | `fsl_sdmmc` | NXP stack, `MANIFEST.sha256` | BSD-3-Clause | NXP copyright blocks on the vendored files; `COPYING-BSD-3` kept next to the unit |
 | `printf` | per-component pin | MIT | `LICENSE` at the unit root (mpaland/printf) |
@@ -52,6 +53,7 @@ the tree and carry the tree's own SPDX lines; they are recorded in
 |---|---|---|
 | `net80211` | BSD-3-Clause (`net80211/`, per-file NetBSD blocks) and BSD-2-Clause (`port/`, `compat/`, `crypto/`) | per-directory summary in `components/net80211/LICENSES/README.md` |
 | `linuxkpi` | BSD-3-Clause | the Linux kernel API surface and the RTOS runtime, written first-party. The skbuff pool descends from a TizenRT/Realtek unit (Apache-2.0); the lineage and the change ledger are in `components/linuxkpi/rtos/skbuff/` |
+| `shell` | BSD-3-Clause | the board console port (`components/shell/`): `shell_port.c`, `shell_console.c`, `shell_cmds.c`; the vendored CherrySH core is the Apache-2.0 unit above |
 
 ## GPL-2.0 units inside the image
 

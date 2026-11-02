@@ -17,7 +17,7 @@ PROFILE ?= $(shell sed -n 's/^[[:space:]]*CONFIG[[:space:]]*:=[[:space:]]*//p' \
 DEFCONFIG := $(CONFIGS)/$(PROFILE).defconfig
 GEN_CONFIG := $(ROOT)/build/kconfig/$(PROFILE)/generated/config.mk
 
-.PHONY: help list config image images host host-test digest check dump-vars clean distclean \
+.PHONY: help list config image images host host-test digest check case-list-check dump-vars clean distclean \
 	rk3568_ci firefly_v1_ci firefly_v2_ci
 
 help:
@@ -34,6 +34,7 @@ help:
 		'  firefly_v1_ci      every firefly-v1 defconfig, clean build each' \
 		'  firefly_v2_ci      every firefly-v2 defconfig, clean build each' \
 		'  check              every defconfig parses and regenerates identically' \
+		'  case-list-check    image BOARD_TESTS vs CONFIG_CASES vs judge.py (needs image)' \
 		'  dump-vars          the effective make variables of the profile (JSON)' \
 		'  clean | distclean  objects, then generated fragments too' \
 		'' \
@@ -97,6 +98,15 @@ check:
 		git ls-files -- build/kconfig >&2; exit 1; \
 	fi
 	@echo "check: all defconfigs parse and regenerate identically"
+
+CASE_ELF ?= $(BUILD_MK)/build/rtos-freertos.elf
+OBJCOPY ?= $(if $(AARCH64_CROSS_PATH),$(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-objcopy,aarch64-none-elf-objcopy)
+READELF ?= $(if $(AARCH64_CROSS_PATH),$(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-readelf,aarch64-none-elf-readelf)
+
+case-list-check: config
+	@test -f "$(CASE_ELF)" || { echo "case-list-check: no $(CASE_ELF); build $(PROFILE) first" >&2; exit 1; }
+	@mkdir -p $(ROOT)/build/case-list
+	@$(ROOT)/tools/build/check-case-list.sh "$(CASE_ELF)" "$(DEFCONFIG)" "$(ROOT)/tools/rtos/judge.py" "$(OBJCOPY)" "$(READELF)" "$(ROOT)/build/case-list"
 
 dump-vars:
 	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE) >/dev/null

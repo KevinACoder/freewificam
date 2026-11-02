@@ -25,6 +25,9 @@
 #include "cases.h"
 #include "clock.h"
 #include "runner.h"
+#if defined(CONFIG_SHELL)
+#include "shell_port.h"
+#endif
 
 #ifndef FW_BUILD_TAG
 #define FW_BUILD_TAG "local"
@@ -97,9 +100,15 @@ int main(void)
 	}
 	uart_early_puts("Hz\n");
 
+#if defined(CONFIG_SHELL)
+	if (rtos_shell_start() != 0) {
+		fatal("shell thread create failed");
+	}
+#else
 	if (rtos_runner_start() != 0) {
 		fatal("runner thread create failed");
 	}
+#endif
 
 	if (osKernelStart() != osOK) {
 		fatal("scheduler start failed");

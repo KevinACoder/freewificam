@@ -12,4 +12,11 @@
  * Returns 0 when the thread was created. */
 int rtos_runner_start(void);
 
+/* The compiled-in case table, exposed to the shell command layer.  One table:
+ * the runner and the `case` commands walk the same entries. */
+unsigned rtos_case_count(void);
+const char *rtos_case_name(unsigned index);
+int rtos_case_find(const char *name);
+int rtos_case_run(unsigned index);
+
 #endif /* RTOS_APP_RUNNER_H */
