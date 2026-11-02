@@ -21,17 +21,14 @@ RTW89_LKPI := $(ROOT)/components/linuxkpi/rtos
 
 # The image's own names for the bridge.  rtw89 walks its firmware format
 # numbers downwards, so 8851B asks for the -1 form before the bare one.
-RTW89_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtw89"' \
-	-DWLAN_BRIDGE_FIRMWARE_NAME='"rtw89/rtw8851b_fw-1.bin"'
+RTW89_IMAGE_NAMES :=
 
 # The skb pool geometry the receive path needs: sixteen 20 KiB receive buffers
 # are alive for the driver's lifetime and the transmit path allocates one per
 # transfer, so the reference image's smaller defaults run dry before the firmware
 # download finishes.  2048-byte data slots stay 2048: this driver's buffers are
 # larger than that and are served from the heap, which is where the window goes.
-RTW89_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_POOL_NUM)),128,$(CONFIG_LKPI_SKB_POOL_NUM)) \
-	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)),64,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)) \
-	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=$(if $(filter 0,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX)),64,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX))
+RTW89_SKB_DEFS :=
 
 # The linuxkpi USB adapter's stage must cover the driver's single bulk-in
 # transfer (RTW89_USB_RECVBUF_SZ = 20480); a smaller slot refuses every receive
@@ -68,8 +65,7 @@ RTW89_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	$(RTW89_KPI_INCLUDES)
 
 # The chip and bus selection the kernel's Kconfig resolves for the 8851BU.
-RTW89_DRV_CONFIG := -DCONFIG_RTW89_CORE -DCONFIG_RTW89_8851B \
-	-DCONFIG_RTW89_USB -DCONFIG_RTW89_8851BU
+RTW89_DRV_CONFIG :=
 
 RTW89_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-ffreestanding -fno-builtin -fno-stack-protector \
@@ -190,6 +186,3 @@ RTW89_GATE_STAGE := $(shell sed -n 's/^#define[[:space:]]*RTW89_USB_RECVBUF_SZ[[
 # Static object tables: the driver's delayed-work population is larger than
 # the storage line's.  These are global (the CMSIS2 backend's tables are built
 # from them), so they are appended to the global flag set like iwlwifi.mk does.
-BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
-CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
-ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))

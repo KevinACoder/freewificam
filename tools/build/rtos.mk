@@ -16,16 +16,23 @@ PROFILE ?= $(shell sed -n 's/^[[:space:]]*CONFIG[[:space:]]*:=[[:space:]]*//p' \
 	$(ROOT)/tests/board/rtos/config.mk | head -n1)
 DEFCONFIG := $(CONFIGS)/$(PROFILE).defconfig
 GEN_CONFIG := $(ROOT)/build/kconfig/$(PROFILE)/generated/config.mk
+GEN_DIR := $(ROOT)/build/kconfig/$(PROFILE)
+MATRIX_PROFILES ?= net-netio-raw-tx256 rtl8xxxu-8723bu-netio-ar-ht20-ba \
+	rtw89-8851bu-ehci-bringup firefly-v2-sdio-mci pcie-7260 uvc rtos-shell
 
-.PHONY: help list config image images host host-test digest check case-list-check dump-vars clean distclean \
-	rk3568_ci firefly_v1_ci firefly_v2_ci
+.PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images host host-test digest check case-list-check dump-vars clean distclean \
+	check-no-d check-config-header matrix trimcheck rk3568_ci firefly_v1_ci firefly_v2_ci
 
 help:
 	@printf '%s\n' \
 		'usage: ./make.rtos <target> [PROFILE=<defconfig>]' \
 		'' \
 		'  list [--current]   the defconfigs (or the selected one)' \
-		'  config             generate build/kconfig/<profile>/generated/config.mk' \
+		'  defconfig          list the defconfigs (same as list)' \
+		'  config             generate build/kconfig/<profile>/freewificam_config{,.h,.config}' \
+		'  menuconfig         edit this profile (Kconfiglib menuconfig), then save it' \
+		'  olddefconfig       regenerate from build/kconfig/<profile>/.config' \
+		'  savedefconfig      write a minimal configs/<profile>.defconfig from .config' \
 		'  image              one image for the profile backend' \
 		'  images             both backends' \
 		'  host | host-test   the host conformance tier' \
@@ -34,6 +41,10 @@ help:
 		'  firefly_v1_ci      every firefly-v1 defconfig, clean build each' \
 		'  firefly_v2_ci      every firefly-v2 defconfig, clean build each' \
 		'  check              every defconfig parses and regenerates identically' \
+		'  check-no-d         no compile/link command carries a -D (representative set)' \
+		'  check-config-header generated header covers every Kconfig symbol' \
+		'  matrix             clean build a representative profile matrix' \
+		'  trimcheck          tick-only vs full image trim probe' \
 		'  case-list-check    image BOARD_TESTS vs CONFIG_CASES vs judge.py (needs image)' \
 		'  dump-vars          the effective make variables of the profile (JSON)' \
 		'  clean | distclean  objects, then generated fragments too' \
@@ -48,11 +59,48 @@ list:
 		printf '%s\n' "$$p"; \
 	done
 
+defconfig: list
+
 config:
 	@[ -f "$(DEFCONFIG)" ] || { \
 		echo "make.rtos: no $(DEFCONFIG); run ./make.rtos list" >&2; exit 1; }
 	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE)
 	@printf 'config: %s\n' '$(GEN_CONFIG)'
+
+menuconfig: config
+	@KCONFIG_CONFIG=$(GEN_DIR)/.config $(PYTHON) $(ROOT)/tools/kconfig/menuconfig.py $(ROOT)/Kconfig
+	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE) --from-config $(GEN_DIR)/.config
+	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE) --from-config $(GEN_DIR)/.config --savedefconfig $(DEFCONFIG)
+	@printf 'menuconfig: %s saved\n' '$(DEFCONFIG)'
+
+olddefconfig:
+	@if [ -f "$(GEN_DIR)/.config" ]; then \
+		$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE) --from-config $(GEN_DIR)/.config; \
+	else $(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE); fi
+
+savedefconfig:
+	@[ -f "$(GEN_DIR)/.config" ] || { echo "savedefconfig: no $(GEN_DIR)/.config" >&2; exit 1; }
+	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE) --from-config $(GEN_DIR)/.config --savedefconfig $(DEFCONFIG)
+	@printf 'savedefconfig: %s\n' '$(DEFCONFIG)'
+
+check-no-d: config
+	@$(ROOT)/tools/build/check-no-d.sh $(MATRIX_PROFILES)
+
+check-config-header: config
+	@$(PYTHON) $(ROOT)/tools/build/check-config-header.py $(GEN_DIR)/freewificam_config.h
+
+matrix:
+	@set -e; failed=0; mkdir -p $(ROOT)/build/matrix; \
+	for p in $(MATRIX_PROFILES); do \
+		echo "matrix: $$p"; \
+		$(ROOT)/make.rtos clean >/dev/null 2>&1; \
+		if $(ROOT)/make.rtos image PROFILE=$$p >$(ROOT)/build/matrix/$$p.log 2>&1; then \
+			echo "matrix: $$p ok"; \
+		else echo "matrix: $$p FAILED" >&2; failed=1; fi; \
+	done; exit $$failed
+
+trimcheck: config
+	@$(ROOT)/tools/build/check-trim.sh $(PROFILE)
 
 # The build targets print the dev-loop elapsed time (AGENTS 1.3).
 image: config

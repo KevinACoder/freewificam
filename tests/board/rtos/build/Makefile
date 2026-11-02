@@ -41,36 +41,31 @@ THIRD_PARTY := $(ROOT)/third-party
 # include now live in the fragment generated from configs/<name>.defconfig.
 include $(LINE)/config.mk
 PROFILE ?= $(CONFIG)
-GEN_CONFIG := $(ROOT)/build/kconfig/$(PROFILE)/generated/config.mk
-# `make clean` must not need the generated fragment (or Python).  Every other
+CONFIG_FILE := $(ROOT)/build/kconfig/$(PROFILE)/freewificam_config
+# `make clean` must not need the generated config (or Python).  Every other
 # goal includes it; make remakes the included file through the rule below and
 # restarts, so the variables are always available where they are used.
 ifneq ($(filter clean,$(MAKECMDGOALS)),)
 else
--include $(GEN_CONFIG)
+-include $(CONFIG_FILE)
 endif
 
-# A direct make invocation regenerates a missing fragment.  This is a
+# A direct make invocation regenerates a missing config.  This is a
 # target-time prerequisite, not a parse-time $(shell), so `make clean` still
 # works without Python.  make.rtos regenerates before it calls make; this
 # guard covers the compat path (tools/rtos/build.sh) and a hand-run make.
-$(GEN_CONFIG):
+$(CONFIG_FILE):
 	@python3 $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE)
-image images host host-test: $(GEN_CONFIG)
+image images host host-test: $(CONFIG_FILE)
 
-BACKEND := $(CONFIG_BACKEND)
-# The board the image targets (rk3568-itx keeps every default; a firefly
-# config.mk selects the firefly platform below).
-CONFIG_BOARD ?= rk3568-itx
-BOARD := $(CONFIG_BOARD)
-CASES := $(CONFIG_CASES)
-OPT := $(CONFIG_OPT)
-SWITCH_PROFILE := $(CONFIG_PROFILE)
+BACKEND := $(subst ",,$(CONFIG_BACKEND_NAME))
+BOARD := $(subst ",,$(CONFIG_BOARD_NAME))
+CASES := $(subst ",,$(CONFIG_CASES))
+OPT := $(subst ",,$(CONFIG_OPT_FLAGS))
+SWITCH_PROFILE := $(subst ",,$(CONFIG_PROFILE_NAME))
 HEAP_SIZE := $(CONFIG_HEAP_SIZE)
-# Compile-time levers a profile may carry with it. The command line still
-# wins (`LEVERS=... tools/rtos/build.sh`), so a profile's own set is the
-# default an image is reproduced from, not a lock.
-LEVERS ?= $(CONFIG_LEVERS)
+# Configuration is data, not flags: the generated header is force-included and
+# the build lines are empty of -D.
 # Per-frame service-time instrumentation (dwc_eqos prof counters and the
 # netio application bucket). Default on so a measurement boot is the same
 # image as before; a cost A/B builds with CONFIG_GMAC_PROF=0 and then the
@@ -145,7 +140,6 @@ BOARD_TX_DIR := rk3568-itx
 BOARD_TX_EXTRA_SRCS :=
 BOARD_LINKSCRIPT := $(PLATFORM)/arch/aarch64/baremetal.ld
 BOARD_LOAD_BASE := 0xa000000
-BOARD_DEFS :=
 else ifeq ($(BOARD),firefly-v1)
 BOARD_INCLUDES := \
 	-I$(PLATFORM)/board/firefly/v1 \
@@ -168,7 +162,6 @@ BOARD_LOAD_BASE := 0x90000000
 # This board's images reset themselves (PSCI) once the case table's verdict
 # line is out, and a failed assertion resets instead of parking - the bench
 # never needs a manual power cycle.
-BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=$(if $(filter 0,$(CONFIG_BOARD_AUTO_RESET)),0,1)
 else ifeq ($(BOARD),firefly-v2)
 # Same family sources as v1; only the version directory (register map) and
 # the two hardware facts v2 changed - the console clock and the Ethernet
@@ -187,7 +180,6 @@ BOARD_TX_DIR := firefly
 BOARD_TX_EXTRA_SRCS := $(PLATFORM)/os/threadx/board/firefly/libc_bindings.c
 BOARD_LINKSCRIPT := $(PLATFORM)/board/firefly/v2/link.ld
 BOARD_LOAD_BASE := 0x90000000
-BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=$(if $(filter 0,$(CONFIG_BOARD_AUTO_RESET)),0,1)
 else
 $(error unknown BOARD '$(BOARD)': use rk3568-itx, firefly-v1 or firefly-v2)
 endif
@@ -197,41 +189,8 @@ endif
 # regression. The 2026-10-25 lwIP round measured -O3 neutral on both legs
 # (down 480.9 vs 483.2, up 690.7 vs 687.3), so there is nothing to re-certify
 # for. `OPT=-Og` builds the pre-round image for debug work.
-OPT ?= -O2
 # ThreadX's kernel heap (linker symbol).  The storage/network images use the
 # default 4M; the 8189FTV vendor stack starts at the reference image's 16M.
-HEAP_SIZE ?= 4M
-
-# The adopted performance profile: the switches that measured net-positive on
-# both kernels, plus the delayed-ACK watermark (patch 0003 carries the option).
-# The watermark is the one lever of the 2026-10-25 lwIP round that moved the
-# downlink: 483.2 -> 531.2 Mbit/s (+9.9%) in the delivery schedule, with the
-# uplink inside its own boot-to-boot band (658.6 against 651.8-690.7). The
-# one-lock-per-drain shape (CONFIG_GMAC_RX_BATCH) adds a smaller, real step
-# (540.0/700.8 against 531.2/658.6) and is one -D away; it is not in the
-# profile yet because the bytes that measured it are not the bytes this
-# makefile produces, and shipping bytes have to be the measured bytes.
-# `base` builds the pre-round configuration, which is what an A/B re-run of
-# the round's arms needs.  The defconfig's PROFILE choice is the normal route;
-# SWITCH_PROFILE is the old command-line override and keeps its name separate
-# from the defconfig name in PROFILE.
-SWITCH_PROFILE ?= perf
-ifeq ($(SWITCH_PROFILE),perf)
-PROFILE_DEFS := -DCONFIG_GMAC_TX_CSUM=1 -DCONFIG_GMAC_RX_HWCSUM=1
-else
-PROFILE_DEFS :=
-endif
-
-# Lever channel (performance rounds): a build-time -D that has to reach both the
-# project's own units and the vendored trees. It exists because the stack's
-# switches live in an #ifndef-guarded option table (ports/lwip/include/
-# lwipopts.h) and the driver's in CONFIG_GMAC_*: a switch only exists for a
-# translation unit compiled with the define. LEVERS is part of BASE_CFLAGS,
-# hence of the flag stamp, so a changed lever always forces a rebuild - a lever
-# can never be certified against an object built with a different set.
-#
-#   OPT=-O2 tools/rtos/build.sh
-#   LEVERS="-DTCP_WND=131072 -DCONFIG_GMAC_RX_SCAN=5" tools/rtos/build.sh
 
 # Compiler channel, the same idea one level down: the flags an arm changes in
 # the code generator rather than in the preprocessor (the core to schedule for,
@@ -246,37 +205,13 @@ endif
 # pair, so a -mno-strict-align placed before -mstrict-align is silently
 # overridden - which is exactly how the first compiler arm of the 2026-10-25
 # round came to measure only -O3.
-PROFILE_CFLAGS ?=
 
 # Case selection: the source set and the runner's table are trimmed together,
 # so a short arm builds a short image (`CASES=tick,cmsis2`).
 CASES ?= tick cmsis2 net emmc
-CASE_DEFS := $(foreach c,$(CASES),-DRTOS_CASE_$(shell echo $(c) | tr a-z A-Z))
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
 CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
-
-# The storage stack's MMC card type is a compile-time key of the imported
-# component; it rides on the case selection.
-ifneq ($(filter emmc,$(CASES)),)
-EXTRA_DEFS := -DCONFIG_FSL_SDMMC_ENABLE_MMC=1
-endif
-
-# The 8189FTV image carries the SDIO card type, the vendor stack's thread/timer
-# demand and (on FreeRTOS) its larger heap.  The card type keys are exclusive:
-# do not select emmc and wlan in one image.
-ifneq ($(filter wlan,$(CASES)),)
-EXTRA_DEFS += -DCONFIG_FSL_SDMMC_ENABLE_SDIO=1 \
-	-DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),24,$(CONFIG_CMSIS2_MAX_THREADS)) \
-	-DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),128,$(CONFIG_CMSIS2_MAX_TIMERS)) \
-	-DCONFIG_FREERTOS_HEAP_SIZE=8388608u
-endif
-
-# The wireless image's heap is a config value: the mvm firmware download and
-# its command/RX pools need more than the default 256 KiB on FreeRTOS.
-ifneq ($(CONFIG_FREERTOS_HEAP_SIZE),)
-EXTRA_DEFS += -DCONFIG_FREERTOS_HEAP_SIZE=$(CONFIG_FREERTOS_HEAP_SIZE)
-endif
 
 .DEFAULT_GOAL := all
 
@@ -355,28 +290,20 @@ HOST_TX_SRCS := \
 	$(wildcard $(TX)/common/src/*.c)
 
 HOST_COMMON_CFLAGS := -ggdb3 -O1 -std=c11 -Wall -Wextra -ffunction-sections \
-	-fdata-sections -D_GNU_SOURCE -DRTOS_HOST_TIER -DULOG_ENABLED \
-	-DRTOS_CASE_CMSIS2 \
-	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
+	-fdata-sections -include $(PLATFORM)/host_common_defs.h \
 	-I$(PLATFORM) -I$(LINE) -I$(LINE)/app -I$(PLATFORM)/os/cmsis2 \
 	-I$(PLATFORM)/os/cmsis2/host-compat -I$(THIRD_PARTY)/ulog/src \
+	-I$(ROOT)/build/kconfig/$(PROFILE) \
+	-I$(ROOT)/build/kconfig/$(PROFILE)/include/generated \
 	-I$(CMSIS)/CMSIS/RTOS2/Include
 
-HOST_FRTOS_CFLAGS := $(HOST_COMMON_CFLAGS) \
-	-DCMSIS2_BACKEND_FREERTOS -DFREERTOS_HOOKS_TAG='"cmsis2-conformance"' \
-	-DCMSIS_device_header='"cmsis_host_device.h"' \
-	-DRTOS_BACKEND_NAME='"freertos"' \
-	-DRTOS_KERNEL_NAME='"FreeRTOS-Kernel V11.3.1"' \
+HOST_FRTOS_CFLAGS := $(HOST_COMMON_CFLAGS) -include $(PLATFORM)/host_freertos_defs.h \
 	-I$(PLATFORM)/os/freertos -I$(KERNEL)/include \
 	-I$(KERNEL)/portable/ThirdParty/GCC/Posix \
 	-I$(KERNEL)/portable/ThirdParty/GCC/Posix/utils \
 	-I$(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Include
 
-HOST_TX_CFLAGS := $(HOST_COMMON_CFLAGS) \
-	-D_GNU_SOURCE -DTX_LINUX_MULTI_CORE -DTX_INCLUDE_USER_DEFINE_FILE \
-	-DCMSIS2_BACKEND_THREADX -DCMSIS2_MAX_TIMERS=8 \
-	-DRTOS_BACKEND_NAME='"threadx"' \
-	-DRTOS_KERNEL_NAME='"ThreadX 6.5.1.202602a"' \
+HOST_TX_CFLAGS := $(HOST_COMMON_CFLAGS) -include $(PLATFORM)/host_threadx_defs.h \
 	-I$(PLATFORM)/os/threadx -I$(TX)/common/inc -I$(TX_HOST)/inc
 
 HOST_FRTOS_OBJS := $(addprefix $(HOST_BUILD)/freertos/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(HOST_FRTOS_SRCS))))
@@ -437,9 +364,6 @@ FLAG_STAMP := $(BUILD)/flags-$(BACKEND).stamp
 
 ifeq ($(BACKEND),freertos)
 KERNEL_NAME := FreeRTOS-Kernel V11.3.1
-BACKEND_DEFS := -DGUEST -DCMSIS2_BACKEND_FREERTOS \
-	-DCMSIS_device_header='"cmsis_board_device.h"' \
-	-DEQOS_BOARD_IRQ_PRIORITY_RAW=0xd0u
 BACKEND_INCLUDES := \
 	-I$(PLATFORM)/os/freertos/board/rk3568-itx/cmsis2 \
 	-I$(PLATFORM)/os/freertos/board/rk3568-itx \
@@ -462,9 +386,6 @@ BACKEND_VENDOR_SRCS := \
 	$(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c
 else ifeq ($(BACKEND),threadx)
 KERNEL_NAME := ThreadX 6.5.1.202602a
-BACKEND_DEFS := -DEL1=1 -DTX_INCLUDE_USER_DEFINE_FILE \
-	-DCONFIG_TX_TICKS_PER_SECOND=$(if $(filter 0,$(CONFIG_TX_TICKS_PER_SECOND)),1000,$(CONFIG_TX_TICKS_PER_SECOND)) -DCONFIG_TX_TIMER_STACK=$(if $(filter 0,$(CONFIG_TX_TIMER_STACK)),4096,$(CONFIG_TX_TIMER_STACK)) \
-	-DCMSIS2_BACKEND_THREADX
 BACKEND_INCLUDES := \
 	-I$(PLATFORM)/os/threadx/board/$(BOARD_TX_DIR)/cmsis2 \
 	-I$(PLATFORM)/os/threadx \
@@ -501,6 +422,7 @@ INCLUDES := \
 	-I$(THIRD_PARTY)/ulog/src \
 	-I$(THIRD_PARTY)/tlsf \
 	-I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include \
+	-I$(ROOT)/build/kconfig/$(PROFILE) \
 	-I$(ROOT)/build/kconfig/$(PROFILE)/include/generated \
 	-I$(LWIP)/src/include \
 	-I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow \
@@ -524,7 +446,7 @@ endif
 # The CherrySH console layer: vendored core + the board port + the command
 # table.  The generated csh_config.h carries the Kconfig choices; the core has
 # no Kconfig of its own.  Off means no shell sources and no include roots.
-ifneq ($(CONFIG_SHELL),)
+ifneq ($(filter 1,$(CONFIG_SHELL)),)
 INCLUDES += -I$(THIRD_PARTY)/cherrysh -I$(COMPONENTS)/shell \
 	-I$(ROOT)/build/kconfig/$(PROFILE)/include/generated
 SHELL_APP_SRCS := \
@@ -542,35 +464,20 @@ SHELL_APP_SRCS :=
 CHERRYSH_SRCS :=
 endif
 
-# Resource knobs from Kconfig.  The values are generated per profile; the
-# code keeps a default for the two stacks so a profile that predates the
-# symbols still builds.  A profile overrides any value by setting the
-# CONFIG_* symbol in its defconfig.
-RESOURCE_DEFS := \
-	-DCONFIG_SHELL_STACK_KB=$(or $(CONFIG_SHELL_STACK_KB),16) \
-	-DCONFIG_RUNNER_STACK_KB=$(or $(CONFIG_RUNNER_STACK_KB),8) \
-	-DCONFIG_RUNNER_BIG_STACK_KB=$(or $(CONFIG_RUNNER_BIG_STACK_KB),16)
-
-BASE_CFLAGS := $(OPT) -g$(or $(CONFIG_DEBUG_LEVEL),3) -std=c11 -Wall -Wextra \
+BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	$(PROFILE_CFLAGS) \
 	-ffunction-sections -fdata-sections \
-	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
-	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \
-	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
-	$(if $(filter 0,$(CONFIG_ULOG_ENABLED)),,-DULOG_ENABLED) \
-	-DULOG_MAX_MESSAGE_LENGTH=$(or $(CONFIG_ULOG_MAX_MESSAGE_LENGTH),256) \
-	$(RESOURCE_DEFS) \
-	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(CFG_DEFS) $(LEVERS) \
-	$(BACKEND_DEFS) $(BOARD_DEFS) $(INCLUDES)
+	-include $(PLATFORM)/build_defs.h \
+	$(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
-	-include stdlib.h -D_DEFAULT_SOURCE=1
-ASM_CFLAGS := $(BASE_CFLAGS)
+	-include stdlib.h
+ASM_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -march=armv8-a \
+	-mgeneral-regs-only -mstrict-align $(INCLUDES)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
-PRINTF_CFLAGS := $(if $(filter 0,$(CONFIG_PRINTF_DISABLE_FLOAT)),,-DPRINTF_DISABLE_SUPPORT_FLOAT) \
-	$(if $(filter 0,$(CONFIG_PRINTF_DISABLE_EXPONENTIAL)),,-DPRINTF_DISABLE_SUPPORT_EXPONENTIAL)
+PRINTF_CFLAGS :=
 
 # The 8189FTV vendor-stack world (empty unless the wlan case is selected).
 # The lwIP core/protocol set: one list, because two images now carry the
@@ -791,13 +698,13 @@ image: $(TARGET).bin gates
 define COMPILE_C
 $(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)
 	@mkdir -p $$(dir $$@)
-	$(CC) $(2) -MMD -MP -c $$< -o $$@
+	$(CC) $(filter-out -D%,$(2)) -I$(ROOT)/build/kconfig/$(PROFILE) -include $(PLATFORM)/build_defs.h -MMD -MP -c $$< -o $$@
 endef
 
 define COMPILE_S
 $(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)
 	@mkdir -p $$(dir $$@)
-	$(CC) $(ASM_CFLAGS) -c $$< -o $$@
+	$(CC) $(filter-out -D%,$(ASM_CFLAGS)) -c $$< -o $$@
 endef
 
 # Every object depends on the tag stamp: a commit changes the banner and must
@@ -933,14 +840,14 @@ $(TARGET).bin: $(TARGET).elf
 gates: $(TARGET).elf
 	@echo "== gates $(BACKEND) =="
 	@set -e; \
+	grep -q '^#define GUEST 1' $(PLATFORM)/build_defs.h || \
+		{ echo "FAIL: GUEST missing (the port would build for EL3)"; exit 1; }; \
 	case "$(BACKEND)" in \
-	freertos) echo "$(BASE_CFLAGS)" | grep -q -- '-DGUEST' || \
-		{ echo "FAIL: -DGUEST missing (the port would build for EL3)"; exit 1; } ;; \
-	threadx) echo "$(BASE_CFLAGS)" | grep -q -- '-DEL1=1' || \
-		{ echo "FAIL: -DEL1=1 missing (the port would build for EL3)"; exit 1; } ;; \
+	freertos) grep -q '^#define CONFIG_BACKEND_FREERTOS 1' $(ROOT)/build/kconfig/$(PROFILE)/freewificam_config.h || \
+		{ echo "FAIL: FreeRTOS backend not selected"; exit 1; } ;; \
+	threadx) grep -q '^#define CONFIG_BACKEND_THREADX 1' $(ROOT)/build/kconfig/$(PROFILE)/freewificam_config.h || \
+		{ echo "FAIL: ThreadX backend not selected"; exit 1; } ;; \
 	esac; \
-	n=$$(echo "$(BASE_CFLAGS)" | grep -o -- '-DCMSIS2_BACKEND_[A-Z]*' | sort -u | wc -l); \
-	[ "$$n" -eq 1 ] || { echo "FAIL: $$n CMSIS2 backends selected"; exit 1; }; \
 	if grep -rn 'FreeRTOS\.h\|tx_api\.h' $(PLATFORM)/arch $(PLATFORM)/board >/dev/null 2>&1; then \
 		echo "FAIL: a kernel header leaked into arch/ or board/"; exit 1; fi; \
 	start=$$($(NM) $(TARGET).elf | awk '$$3=="_start"{print $$1}'); \

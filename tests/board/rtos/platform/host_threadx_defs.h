@@ -1,0 +1,9 @@
+#ifndef FREEWIFICAM_HOST_THREADX_DEFS_H
+#define FREEWIFICAM_HOST_THREADX_DEFS_H
+#include "host_common_defs.h"
+#define TX_LINUX_MULTI_CORE 1
+#define TX_INCLUDE_USER_DEFINE_FILE 1
+#define CMSIS2_BACKEND_THREADX 1
+#define RTOS_BACKEND_NAME "threadx"
+#define RTOS_KERNEL_NAME "ThreadX 6.5.1.202602a"
+#endif

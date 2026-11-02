@@ -46,11 +46,11 @@ USB_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 # only completes through the port's timeout drain fail fast instead of hiding in
 # a five-second wait, and the xHCI port's own timeout dump is compiled in.  The
 # arm is not a delivery profile; it exists to name the defect.
-ifneq ($(CONFIG_USB_MSC_DIAG),)
+ifneq ($(filter 1,$(CONFIG_USB_MSC_DIAG)),)
 USB_CFLAGS += -DMSC_DIAG=1 -DCONFIG_USBHOST_XHCI_DBG_DUMP=1 \
 	-DCONFIG_USBHOST_MSC_TIMEOUT=$(if $(filter 0,$(CONFIG_USBHOST_MSC_TIMEOUT)),800,$(CONFIG_USBHOST_MSC_TIMEOUT))
 endif
-ifneq ($(CONFIG_USB_MSC_DIAG_FULL),)
+ifneq ($(filter 1,$(CONFIG_USB_MSC_DIAG_FULL)),)
 USB_CFLAGS += -DMSC_DIAG_FULL=1
 endif
 

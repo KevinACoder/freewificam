@@ -51,15 +51,12 @@ endif
 # The image's own names for the bridge.  The bridge's defaults are already this
 # line's (`wlan_bridge.h`), and naming them here is the guard: a changed default
 # must not silently point this image at another driver's identity.
-RTL8XXXU_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtl8xxxu"' \
-	-DWLAN_BRIDGE_FIRMWARE_NAME='"$(RTL8XXXU_FW_NAME)"'
+RTL8XXXU_IMAGE_NAMES :=
 
 # Where the bench AP is: the caller passes `CONFIG_RTL8XXXU_AP_SSID` and
 # `CONFIG_RTL8XXXU_AP_FREQ` through the profile, so the case joins the network
 # the round's gate actually measured instead of a BSSID from an older bench.
-RTL8XXXU_AP_DEFS := \
-	-DRTL8XXXU_AP_SSID='"$(if $(CONFIG_RTL8XXXU_AP_SSID),$(CONFIG_RTL8XXXU_AP_SSID),labwifi-brmc)"' \
-	-DRTL8XXXU_AP_FREQ=$(if $(CONFIG_RTL8XXXU_AP_FREQ),$(CONFIG_RTL8XXXU_AP_FREQ),2432)
+RTL8XXXU_AP_DEFS :=
 
 # The dongle this image is for.  The bench carries more than one rtl8xxxu
 # device (an RTL8723BU sits on the USB2 root), and the driver's id_table claims
@@ -68,13 +65,11 @@ RTL8XXXU_AP_DEFS := \
 # refuses an attach whose address is not this one.
 RTL8XXXU_EXPECT_MAC := $(if $(CONFIG_RTL8XXXU_EXPECT_MAC),$(CONFIG_RTL8XXXU_EXPECT_MAC),20:f4:1b:52:8f:01)
 RTL8XXXU_MAC_BYTES := $(subst :, ,$(RTL8XXXU_EXPECT_MAC))
-RTL8XXXU_MAC_DEFS := -DRTL8XXXU_EXPECT_MAC='{$(foreach b,$(RTL8XXXU_MAC_BYTES),0x$(b)$(comma))}'
+RTL8XXXU_MAC_DEFS :=
 
 # The skb pool geometry the receive path needs: 32 receive buffers are alive
 # for the driver's lifetime, plus one allocation per transmit transfer.
-RTL8XXXU_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_POOL_NUM)),128,$(CONFIG_LKPI_SKB_POOL_NUM)) \
-	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)),64,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)) \
-	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=$(if $(filter 0,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX)),64,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX))
+RTL8XXXU_SKB_DEFS :=
 
 # The adapter's geometry.  The stage is the widest single transfer: the 8188
 # line's 2328-byte receive URB here, and 8723BU's 4096-byte firmware page is
@@ -83,20 +78,18 @@ RTL8XXXU_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SK
 # from the rtw89 image.
 RTL8XXXU_STAGE ?= 4096
 RTL8XXXU_STAGE_MIN := 2328	# IEEE80211_MAX_FRAME_LEN (2304) + rxdesc16/24 (24)
-RTL8XXXU_USB_DEFS := -DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$(RTL8XXXU_STAGE) \
-	-DCONFIG_LKPI_USB_CHERRYUSB_SLOTS=$(CONFIG_LKPI_USB_CHERRYUSB_SLOTS)
+RTL8XXXU_USB_DEFS :=
 
 # The controller list, per arm.  3 = both xHCI roots (the lab's 480 M path),
 # 1 = both USB2 roots (the panel's EHCI path), 4 = all four, for the one
 # discovery boot that answers which controller carries the dongle.  The case
 # prints the list and then the bus that actually attached.
 RTL8XXXU_BUS := $(if $(CONFIG_RTL8XXXU_USB_BUS),$(CONFIG_RTL8XXXU_USB_BUS),3)
-RTL8XXXU_BUS_DEFS := -DRTL8XXXU_USB_BUS=$(RTL8XXXU_BUS)
+RTL8XXXU_BUS_DEFS :=
 
 # The chip's identity, handed to the case: which id line is the claim anchor
 # and which register function belongs to the blob this image carries.
-RTL8XXXU_ID_DEFS := -DRTL8XXXU_FW_REGISTER=$(RTL8XXXU_FW_REGISTER) \
-	-DRTL8XXXU_CLAIM_ID='"$(RTL8XXXU_CLAIM_ID)"'
+RTL8XXXU_ID_DEFS :=
 
 RTL8XXXU_BSD_INCLUDES := -I$(ROOT) -I$(RTL8XXXU_NPORT)/compat \
 	-I$(RTL8XXXU_NET)/compat/netbsd -I$(RTL8XXXU_NET) -I$(RTL8XXXU_NPORT)
@@ -138,8 +131,8 @@ RTL8XXXU_DRV_CFLAGS := -std=c11 -O2 -Wall \
 # Diagnostic only: a high-priority thread that reports bridge/workqueue
 # counters through the polled UART while the bring-up waits for attach.  Used
 # to separate "the kernel/console is dead" from "the runner thread is blocked".
-ifneq ($(CONFIG_RTL8XXXU_HB),)
-RTL8XXXU_HB_DEFS := -DRTL8XXXU_HB=$(CONFIG_RTL8XXXU_HB)
+ifneq ($(filter 1,$(CONFIG_RTL8XXXU_HB)),)
+RTL8XXXU_HB_DEFS :=
 endif
 
 RTL8XXXU_CASE_CFLAGS := $(RTL8XXXU_KPI_CFLAGS) $(RTL8XXXU_BUS_DEFS) \
@@ -197,7 +190,7 @@ RTL8XXXU_LKPI_SRCS := \
 # action handler and no HT/BA code, so the link otherwise stays at one MPDU
 # per TXOP.  A lever rather than a always-on source keeps the pre-BA arm (the
 # RTOS-01 HT20 image) reproducible for the round's A/B.
-ifneq ($(strip $(CONFIG_WLAN_RX_BA)),)
+ifneq ($(filter 1,$(strip $(CONFIG_WLAN_RX_BA))),)
 RTL8XXXU_LKPI_SRCS += $(RTL8XXXU_NPORT)/bridge/wlan_rx_ba.c
 endif
 
@@ -271,7 +264,7 @@ RTL8XXXU_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 # (CONFIG_NET_WATCH), so a clean arm's sources and flags are untouched.  The
 # counters it reads live in the layers themselves and are compiled behind the
 # same lever (see configs/rtl8xxxu-8188eu-netio-watch.mk).
-ifneq ($(strip $(CONFIG_NET_WATCH)),)
+ifneq ($(filter 1,$(strip $(CONFIG_NET_WATCH))),)
 RTL8XXXU_NETIO_SRCS += $(LINE)/app/cases/net_watch.c
 endif
 else
@@ -296,6 +289,3 @@ RTL8XXXU_GATE_STAGE := $(RTL8XXXU_STAGE)
 # Static object tables: the driver's delayed-work population plus the net
 # case's thread.  Global, because the CMSIS2 backend's tables are built from
 # them; appended like rtw89.mk does.
-BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
-CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
-ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))

@@ -81,4 +81,43 @@ config CASES
 
 endmenu
 
+
+# Residual lwIP knobs formerly carried as -DLWIP_*/TCP_* in CONFIG_LEVERS.
+# Every image gets the value from freewificam_config.h; no compile-line -D.
+config LWIP_TCP_WND
+	int "lwIP TCP window (bytes)"
+	default 131072
+
+config LWIP_TCP_SND_BUF
+	int "lwIP TCP send buffer (bytes)"
+	default 131072
+
+config LWIP_TCP_RCV_SCALE
+	int "lwIP TCP receive window scale"
+	default 4
+
+config LWIP_DEFAULT_TCP_RECVMBOX_SIZE
+	int "lwIP TCP receive mailbox size"
+	default 0
+
+config LWIP_MN_RX_PRIO
+	string "netio receive thread CMSIS priority"
+	default "osPriorityNormal"
+
+config LWIP_UDP_RX_PRIO
+	string "netio UDP receive thread CMSIS priority"
+	default "osPriorityAboveNormal"
+
+config NET_PHASE_PLAN
+	int "net case delivery plan"
+	default 0
+
+config WLAN_PUMP_PRIO_LEVEL
+	int "linuxkpi SDIO pump priority level (0=below,1=normal,2=above)"
+	default 0
+
+# One hidden bool per case name.  The generator derives these from CONFIG_CASES;
+# the source lists and the legacy RTOS_CASE_* macros consume them.  They are
+# hidden so menuconfig users still edit the CASES string.
+
 endmenu

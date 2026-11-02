@@ -28,8 +28,7 @@ RTW88_LKPI := $(ROOT)/components/linuxkpi/rtos
 
 # The image's own names for the bridge: the adapter name the driver line
 # reports, and the firmware name the driver asks the registry for.
-RTW88_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtw88"' \
-	-DWLAN_BRIDGE_FIRMWARE_NAME='"rtw88/rtw8821c_fw.bin"'
+RTW88_IMAGE_NAMES :=
 
 # The skb pool geometry the receive path needs: the driver allocates one buffer
 # per received frame (rtw88/sdio.c:986) and its window can carry several frames,
@@ -37,16 +36,14 @@ RTW88_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtw88"' \
 # ceiling has to cover the ones the pool hands out on the heap.  The buffers are
 # 16 KiB-class (the chip's rxff_size is 16384), larger than a pool data slot, so
 # the payloads come from the heap and only the headers are pooled.
-RTW88_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_POOL_NUM)),128,$(CONFIG_LKPI_SKB_POOL_NUM)) \
-	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)),64,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)) \
-	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=$(if $(filter 0,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX)),64,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX))
+RTW88_SKB_DEFS :=
 
 # The net80211 bridge is shared with the USB lines, and its port_* observation
 # hooks read host-controller registers and ask the URB engine.  This line's
 # transport is SDIO: there is no controller to read and no URB engine in the
 # image, so the adapter compiles those four hooks out and the bridge's own
 # null-checked dispatch reports the port as having no such state.
-RTW88_SEAM_DEFS := -DWLAN_SEAM_NO_USB_OBS=1
+RTW88_SEAM_DEFS :=
 
 RTW88_BSD_INCLUDES := -I$(ROOT) -I$(RTW88_NPORT)/compat \
 	-I$(RTW88_NET)/compat/netbsd -I$(RTW88_NET) -I$(RTW88_NPORT)
@@ -77,8 +74,7 @@ RTW88_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 # own headers supply empty stubs, so neither unit is in this source set.
 # CONFIG_RTW88_DEBUGFS is absent for the same reason (debug.c would compile to
 # an empty unit; the header's stub is what main.c calls).
-RTW88_DRV_CONFIG := -DCONFIG_RTW88_CORE -DCONFIG_RTW88_8821C \
-	-DCONFIG_RTW88_SDIO -DCONFIG_RTW88_8821CS
+RTW88_DRV_CONFIG :=
 
 RTW88_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-ffreestanding -fno-builtin -fno-stack-protector \
@@ -221,8 +217,5 @@ RTW88_LDFLAGS := \
 # Static object tables: the driver's delayed-work population is larger than the
 # storage line's.  These are global (the CMSIS2 backend's tables are built from
 # them), so they are appended to the global flag set like rtw89.mk does.
-BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
-CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
-ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
 
 endif # rtw88

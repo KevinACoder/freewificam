@@ -81,31 +81,58 @@ config PROFILE_PERF
 
 endchoice
 
+
+
+# Derived names for make.  The make build consumes these directly; the C side
+# gets the same values from freewificam_config.h.  They are strings/int because
+# make cannot expand a Kconfig choice.
+config BACKEND_NAME
+	string
+	default "freertos" if BACKEND_FREERTOS
+	default "threadx" if BACKEND_THREADX
+
+config BOARD_NAME
+	string
+	default "rk3568-itx" if BOARD_RK3568_ITX
+	default "firefly-v1" if BOARD_FIREFLY_V1
+	default "firefly-v2" if BOARD_FIREFLY_V2
+
+config OPT_FLAGS
+	string
+	default "-O0" if OPT_O0
+	default "-O2" if OPT_O2
+	default "-O3" if OPT_O3
+	default "-Os" if OPT_OS
+	default "-Og" if OPT_OG
+
+config PROFILE_NAME
+	string
+	default "base" if PROFILE_BASE
+	default "perf" if PROFILE_PERF
+
+config DEBUG_LEVEL_VALUE
+	int
+	default 0 if DEBUG_G0
+	default 1 if DEBUG_G1
+	default 2 if DEBUG_G2
+	default 3 if DEBUG_G3
+
 config HEAP_SIZE
 	int "ThreadX kernel heap (MiB)"
 	default 4
 	help
 	  Rendered as -Wl,--defsym=HEAP_SIZE=<n>M for the ThreadX link.  The
 	  FreeRTOS image uses FREERTOS_HEAP_SIZE instead; the value is harmless
-	  there but still rendered for byte-for-byte equivalence with the old
-	  profiles.
+	  there but still part of the profile.
 
 config FREERTOS_HEAP_SIZE
-	int "FreeRTOS heap (bytes, 0 = omit)"
-	default 0
+	int "FreeRTOS heap (bytes)"
+	default 262144
 	help
-	  Rendered as -DCONFIG_FREERTOS_HEAP_SIZE=<n>u when non-zero.  Zero is
-	  omitted because the old Makefile's ifneq() treated an explicit 0 as a
-	  non-empty value and would have emitted a zero-sized heap.
-
-config LEVERS
-	string "Residual compiler -D levers"
-	default ""
-	help
-	  The escape hatch for a -D that is not a modeled symbol: lwIP options,
-	  a diagnostic, a lab patch.  It is appended after CFG_DEFS, exactly
-	  where the old CONFIG_LEVERS sat, so the compiler's last-wins rule is
-	  unchanged.  It is recorded in manifest.json and every build prints it.
+	  Total FreeRTOS heap.  The option used to be omitted entirely when the
+	  profile did not set it, in which case FreeRTOSConfig.h supplied 256
+	  KiB.  That fallback moved here, so the generated header always has one
+	  value and the C side has no #ifndef default.
 
 config GMAC_PROF
 	bool "Per-frame GMAC service-time instrument"
@@ -140,32 +167,32 @@ config RUNNER_BIG_STACK_KB
 	default 16
 
 config CMSIS2_MAX_THREADS
-	int "CMSIS-RTOS2 maximum threads (0 = per-world default)"
-	default 0
+	int "CMSIS-RTOS2 maximum threads"
+	default 16
 
 config CMSIS2_MAX_TIMERS
-	int "CMSIS-RTOS2 maximum timers (0 = per-world default)"
-	default 0
+	int "CMSIS-RTOS2 maximum timers"
+	default 32
 
 config TX_TIMER_STACK
-	int "ThreadX timer thread stack (bytes, 0 = 4096)"
-	default 0
+	int "ThreadX timer thread stack (bytes)"
+	default 4096
 
 config TX_TICKS_PER_SECOND
-	int "ThreadX ticks per second (0 = 1000)"
-	default 0
+	int "ThreadX ticks per second"
+	default 1000
 
 config LKPI_SKB_POOL_NUM
-	int "linuxkpi skb pool entries (0 = per-world default)"
-	default 0
+	int "linuxkpi skb pool entries"
+	default 128
 
 config LKPI_SKB_DATA_POOL_NUM
-	int "linuxkpi skb data pool entries (0 = per-world default)"
-	default 0
+	int "linuxkpi skb data pool entries"
+	default 64
 
 config LKPI_SKB_HEAP_HDR_MAX
-	int "linuxkpi skb inline header bytes (0 = per-world default)"
-	default 0
+	int "linuxkpi skb inline header bytes"
+	default 64
 
 config LKPI_USB_CHERRYUSB_SLOTS
 	int "CherryUSB URB slots"
