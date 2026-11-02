@@ -192,6 +192,15 @@ RTL8XXXU_LKPI_SRCS := \
 	$(RTL8XXXU_NPORT)/bridge/wlan_seam_adapter.c \
 	$(USB_PORT)/lkpi_usb_cherryusb.c
 
+# The downlink block-ack receive side (RTOS-02).  It answers the AP's ADDBA
+# Request and reorders the aggregated MPDUs; the imported net80211 has no
+# action handler and no HT/BA code, so the link otherwise stays at one MPDU
+# per TXOP.  A lever rather than a always-on source keeps the pre-BA arm (the
+# RTOS-01 HT20 image) reproducible for the round's A/B.
+ifneq ($(strip $(CONFIG_WLAN_RX_BA)),)
+RTL8XXXU_LKPI_SRCS += $(RTL8XXXU_NPORT)/bridge/wlan_rx_ba.c
+endif
+
 # The nine translation units the driver's Makefile lists: core plus every
 # chip's fileops (core.c's table references them, so the set is the link
 # closure, not a menu).

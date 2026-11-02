@@ -466,6 +466,16 @@ static void thread_exit(int32_t line, int32_t bsd_error)
 #ifndef UDP_RX_PRIO
 #define UDP_RX_PRIO osPriorityAboveNormal
 #endif
+/* How long a UDP transmit cell waits through WLAN netif backpressure before it
+ * treats the refusal as an abort.  The bridge gates the driver's transmit queue
+ * while it is full and wakes it on the next completion (milliseconds), so a
+ * non-blocking `sendto` blast sees ERR_MEM and must wait for the wake the way
+ * TCP's window would make it wait.  A refusal that outlives this window is the
+ * stall class the cell reports.  The wired arm's 256-slot ring never refuses,
+ * and it is compiled without the retry so its bytes stay the measured bytes. */
+#ifndef S2C_REFUSAL_MAX
+#define S2C_REFUSAL_MAX 200
+#endif
 
 static const osThreadAttr_t udp_rx_attr = {
 	.name = "netio-udp-rx",
@@ -1110,6 +1120,12 @@ static void UDP_Server(void *arg)
 					uint64_t s2c_t0 = gtimer_count_get();
 					uint64_t s2c_c0 = net_prof_cpu_cycles();
 					int s2c_reported = 0;
+#if !NETIO_GMAC
+					/* Consecutive netif backpressure refusals the
+					 * transmit cell has waited through (WLAN only;
+					 * see S2C_REFUSAL_MAX). */
+					int s2c_refusals = 0;
+#endif
 
 #if NETIO_GMAC
 					net_prof_take(&prof_a);
@@ -1127,6 +1143,27 @@ static void UDP_Server(void *arg)
 								    io.pkt_size - nb, 0,
 								    (struct sockaddr *)io.client,
 								    sizeof(*io.client));
+#endif
+#if !NETIO_GMAC
+							/* WLAN netif backpressure is not an
+							 * abort: the bridge gates the driver's
+							 * queue while it is full and wakes it
+							 * on the next completion, so a
+							 * non-blocking blast sees ERR_MEM
+							 * between wakes.  Wait for the wake
+							 * and resend the same frame; a refusal
+							 * that persists past S2C_REFUSAL_MAX
+							 * milliseconds still aborts the cell.
+							 * WLAN-only so the wired arm's bytes
+							 * remain what its numbers were measured
+							 * with (its 256-slot ring never
+							 * refuses). */
+							if (rc < 0 && ++s2c_refusals < S2C_REFUSAL_MAX) {
+								osDelay(1);
+								continue;
+							}
+							if (rc >= 0)
+								s2c_refusals = 0;
 #endif
 							if (rc < 0) {
 								/* Close the cell at

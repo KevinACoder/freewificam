@@ -109,10 +109,13 @@
  * candidate, so this cache is the bridge's own 11n memory: the join needs it
  * to decide whether the association may ask for 40 MHz (HT Operation's
  * secondary-channel offset and STA channel width) and to build an HT
- * Capabilities element that matches the AP.  Eight entries cover the scan
- * table of this bench; the oldest is replaced.
+ * Capabilities element that matches the AP.  W5-03 measured why this must not
+ * be a tiny ring: an 11-channel scan inserts one slot per *new* BSSID (31 of
+ * them in one sweep) and evicts the join target before the association, so
+ * the join silently declared HT20 on a 40 MHz AP.  Keep enough slots for a
+ * dense 2.4 GHz scan and pin the target while its association is in flight.
  */
-#define WLAN_BRIDGE_HT_MAX	8
+#define WLAN_BRIDGE_HT_MAX	64
 struct bridge_ht_info {
 	uint8_t		bssid[6];
 	uint16_t	cap;		/* HT Capabilities Info, little endian */
@@ -253,6 +256,12 @@ static struct {
 	unsigned int		ba_stop;
 	unsigned int		ht40_joins;
 	unsigned int		ht40_fallbacks;
+	unsigned int		ht_updates;	/* beacons/probe-resp fed to the map */
+	unsigned int		ht_inserts;	/* new BSSID slots taken */
+	unsigned int		ht_evictions;	/* slots overwritten while valid */
+	unsigned int		ht_logs;	/* insert-log budget */
+	uint8_t			ht_pin[6];	/* current join target (never evicted) */
+	int			ht_pin_set;
 	unsigned int		reorder_drops;
 } bridge;
 
@@ -523,12 +532,47 @@ bridge_ht_update(const uint8_t *frame, size_t len)
 	if (len < 24 + 12)
 		return;
 	bssid = frame + 16;
+	bridge.ht_updates++;
 	h = bridge_ht_lookup(bssid);
 	if (h == NULL) {
-		h = &bridge.ht[bridge.ht_next % WLAN_BRIDGE_HT_MAX];
-		bridge.ht_next++;
+		unsigned int slot = bridge.ht_next % WLAN_BRIDGE_HT_MAX;
+		unsigned int tries;
+
+		/* the association's target must survive the rest of the scan:
+		 * a later BSSID may otherwise take its slot while the join is
+		 * still waiting for the auth/assoc exchange. */
+		for (tries = 0; tries < WLAN_BRIDGE_HT_MAX; tries++) {
+			unsigned int cand = (slot + tries) % WLAN_BRIDGE_HT_MAX;
+
+			if (!bridge.ht_pin_set ||
+			    memcmp(bridge.ht[cand].bssid, bridge.ht_pin, 6) != 0 ||
+			    memcmp(bridge.ht[cand].bssid, bssid, 6) == 0) {
+				slot = cand;
+				break;
+			}
+		}
+		bridge.ht_next = slot + 1;
+		h = &bridge.ht[slot];
+		if (h->valid != 0) {
+			bridge.ht_evictions++;
+			if (bridge.ht_logs < 32) {
+				bridge.ht_logs++;
+				wlan_osal_log("wlan: ht evict slot=%u valid=%u bssid="
+				    "%02x:%02x:%02x:%02x:%02x:%02x\n", slot,
+				    h->valid, h->bssid[0], h->bssid[1], h->bssid[2],
+				    h->bssid[3], h->bssid[4], h->bssid[5]);
+			}
+		}
 		memset(h, 0, sizeof(*h));
 		memcpy(h->bssid, bssid, 6);
+		bridge.ht_inserts++;
+		if (bridge.ht_logs < 32) {
+			bridge.ht_logs++;
+			wlan_osal_log("wlan: ht insert slot=%u bssid="
+			    "%02x:%02x:%02x:%02x:%02x:%02x\n", slot,
+			    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4],
+			    bssid[5]);
+		}
 	}
 	off = 24 + 12;
 	while (off + 1 < len) {
@@ -586,6 +630,13 @@ bridge_ht_cap_build(const uint8_t bssid[6], uint32_t freq, uint8_t out[28],
 		w = 40;
 		c = freq + 10;
 	}
+	/* The 20 MHz fallback used to be silent, so a 20 MHz association on a
+	 * 40 MHz AP had no observable cause.  One line per build (two per join)
+	 * shows which half of the AP's HT declaration was missing. */
+	wlan_osal_log("wlan: htcap h=%d valid=%u cap=%04x htparam=%02x "
+	    "upd=%u ins=%u ev=%u -> w=%d c=%u\n", h != NULL, h != NULL ? h->valid : 0,
+	    h != NULL ? h->cap : 0, h != NULL ? h->htparam : 0,
+	    bridge.ht_updates, bridge.ht_inserts, bridge.ht_evictions, w, c);
 	memset(out, 0, 28);
 	out[0] = 45;
 	out[1] = 26;
@@ -2415,6 +2466,8 @@ wlan_bridge_join(const uint8_t *ssid, size_t len, const uint8_t *bssid,
 		wlan_osal_log("wlan: join: no scan candidate for the ssid\n");
 		return -ENOENT;
 	}
+	memcpy(bridge.ht_pin, ni->ni_bssid, 6);
+	bridge.ht_pin_set = 1;
 #if !WLAN_NO_HT
 	/*
 	 * The association's 11n declaration.  The imported stack has no HT

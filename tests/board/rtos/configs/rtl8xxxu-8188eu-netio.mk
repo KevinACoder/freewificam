@@ -2,6 +2,13 @@
 # Same bench AP and same presentation layer as rtl8xxxu-8188eu-net; the peer is
 # the bench host's pinned NETIO client instead of iperf2.  The case prints
 # `net: netio ready port=18767 aux=18768 buf=16384` and never returns.
+#
+# HISTORY (2026-11-02): this file pins `labwifi-brmc`, the brcmfmac AP retired
+# from the AP role on 2026-11-01; that SSID is no longer on the bench.  Keep it
+# as the W1-01 arm's reproduction recipe only.  The current APs are the AR9271
+# ones and the measurement arms are the two named files:
+#   rtl8xxxu-8188eu-netio-ar-g.mk     legacy 11g (labwifi-ar-g)
+#   rtl8xxxu-8188eu-netio-ar-ht20.mk  HT20-SGI  (labwifi-ar-ht20s)
 CONFIG_BACKEND := freertos
 CONFIG_CASES := tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_netio
 CONFIG_OPT := -O2
