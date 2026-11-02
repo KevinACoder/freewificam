@@ -155,14 +155,21 @@ else
 WLAN_OBS_CFLAGS :=
 endif
 
+# The controller this image's host glue drives, named explicitly. Every port the
+# imported stack supports exports the same three symbols, so a silent default
+# would link another board's controller code and then drive the wrong hardware
+# (see sdmmc_port.h); the header refuses to compile without a name. This lane is
+# the rk3568 board's DesignWare MMC block.
+#
+# It goes to EVERY unit that reaches the port boundary, the case included: the
+# port header gates its declarations on the selection, so a unit compiled
+# without it gets implicit int declarations and truncates a returned pointer.
+WLAN_SDIO_PORT_DEFS := -DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FDWMMC
+
 # The SDIO port and the case live in the platform's world; they need the
 # imported stack's SDIO directory and the linuxkpi seam headers.
-# The controller this image's host glue drives, named explicitly: the imported
-# stack exports the same symbols from every port, so a silent default would link
-# another board's controller code (see sdmmc_port.h). This lane is the rk3568
-# board's DesignWare MMC block.
 WLAN_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) $(WLAN_OBS_CFLAGS) -std=gnu11 \
-	-DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FDWMMC \
+	$(WLAN_SDIO_PORT_DEFS) \
 	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio -I$(LKPI)/skbuff \
 	-I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/sdio
 
@@ -176,6 +183,7 @@ WLAN_LKPI_CFLAGS := $(filter-out -Wextra -DCMSIS_device_header=%,$(CFLAGS)) \
 
 WLAN_APP_CFLAGS := $(filter-out -Wextra -DCMSIS_device_header=%,$(CFLAGS)) \
 	$(WLAN_OBS_CFLAGS) -std=gnu11 -DLKPI_ABS_PLATFORM_PROVIDED $(WLAN_SKB_CFLAGS) \
+	$(WLAN_SDIO_PORT_DEFS) \
 	-DCMSIS_device_header='"cmsis_os2.h"' \
 	-DWLAN_SCAN_DIAG=$(WLAN_SCAN_DIAG) -DWLAN_SCAN_BATCH=$(WLAN_SCAN_BATCH) \
 	-DWLAN_TCP_SINK=$(WLAN_TCP_SINK) -DWLAN_TCP_SINK_SECONDS=$(WLAN_TCP_SINK_SECONDS) \
