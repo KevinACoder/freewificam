@@ -149,13 +149,10 @@ and the same card running the in-tree driver on mac80211; "ko" is the linux-ko
 shim (net80211 replacing mac80211); a dash means that arm was not measured on
 this bench.
 
-| PHY mode | Test | freewificam (ko) | freewificam (rtos) | Linux reference |
-|---|---|---|---|---|
-| 802.11g legacy, 54 Mbit/s | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
-| 802.11g legacy, 54 Mbit/s | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
-| HT20, 72.2 Mbit/s MCS7 short GI | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
-| HT20, 72.2 Mbit/s MCS7 short GI | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
-| HT40, 150 Mbit/s MCS7 40MHz short GI | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | - | 57.77–64.60 Mbit/s |
+The numbers live in one place: `README.md`, Performance, where they are split
+by module - platform - bus and named by the fixed case registry.  This section
+keeps only the bench-specific reading of them; do not restate the table here,
+or the two copies drift.
 
 The legacy row is the important one: **at the lowest protocol the two stacks are
 equal**. Per frame the accounts overlap column by column: data 239.1-239.8 us

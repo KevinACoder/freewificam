@@ -97,8 +97,8 @@ The profiles carried today, by group:
 | camera | `uvc` (active) | one USB2 root, the video class, the isochronous engine and the four camera cases |
 | USB host | `usb-xhci`, `usb-xhci-diag`, `usb-xhci-diag-full`, `usb-ehci` | the host stack and the mass-storage class on one controller |
 | RTL8851BU | `rtw89-8851bu`, `rtw89-8851bu-bringup`, `rtw89-8851bu-tx`, `rtw89-8851bu-ehci`, `rtw89-8851bu-ehci-bringup`, `rtw89-8851bu-ehci-scan`, `rtw89-8851bu-ehci-join`, `rtw89-8851bu-tx-ehci` | rtw89 over the linuxkpi USB engine, on an xHCI or EHCI root |
-| RTL8188EUS | `rtl8xxxu-8188eu-{bringup,bringup-hb,bringup-all,scan,join,data,net}` | rtl8xxxu over CherryUSB, the bring-up-to-network ladder |
-| RTL8723BU | `rtl8xxxu-8723bu-{bringup,bringup-all,scan,join,data,net}` | the same driver on an EHCI root, including the composite-interface case |
+| RTL8188EUS | `rtl8xxxu-8188eu-{bringup,bringup-hb,bringup-all,scan,join,data,net,netio-ar-g,netio-ar-ht20,netio-ar-ht20-ba}` | rtl8xxxu over CherryUSB, the bring-up-to-network ladder and the netio arms |
+| RTL8723BU | `rtl8xxxu-8723bu-{bringup,bringup-all,scan,join,data,net,netio-ar-ht20,netio-ar-ht20-ba}` | the same driver on an EHCI root, including the composite-interface case and the netio arms |
 | AC 7260 | `iwlwifi-7260`, `iwlwifi-7260-sjd` | iwlwifi/mvm over the linuxkpi PCI engine, attach to network |
 | RTL8189FTV | `wlan-delivery`, `wlan-obs`, `wlan-ping` | the vendor SDIO stack; needs the external tree (below) |
 | PCIe | `pcie-nvme`, `pcie-bench`, `pcie-7260` | the PCIe root complex, NVMe and the 7260 endpoint |
@@ -111,27 +111,69 @@ VENDOR_8189FS=/path/to/rtl8189fs tools/rtos/build.sh
 
 ## Performance
 
-Zero loss in every row. Three arms on one board: `ko` is the linux-ko shim
-(net80211 replacing mac80211, in-tree driver, kernel USB), `rtos` is the bare
-metal stack, `Linux` is the same board running the in-tree driver on mac80211.
-A dash means that arm was not measured on this bench.  Methods and counters:
-[docs/NET-TESTING.md](docs/NET-TESTING.md) for the wired port,
-[docs/WIFI-BENCH.md](docs/WIFI-BENCH.md) for 2.4 GHz Wi-Fi.
+One board, one bench, one client.  The tables are split by module - platform -
+bus, so a new module adds a table instead of a wider row.  Case names are fixed
+(registry below); a table reports the cases it measured, and a new case is
+added to the registry first.
 
-| Link | Test | freewificam (ko) | freewificam (rtos) | Linux reference |
+### Cases
+
+| case | traffic | condition | parameters |
+|---|---|---|---|
+| `E-UDP-RX` | UDP 1440 B, peer to board (board receives) | wired 1 GbE | netio `-u -b 1440`, 6 s cell |
+| `E-UDP-TX` | UDP 1440 B, board to peer | wired 1 GbE | same cell, server phase |
+| `E-TCP-TX` | TCP 1440 B, board to peer | wired 1 GbE | netio `-t -b 1440` |
+| `E-TCP-RX` | TCP 1440 B, peer to board | wired 1 GbE | netio `-t -b 1440` |
+| `E-PPS64` | 64 B UDP zero-loss pps (`T0`) | wired 1 GbE | ppsgen `-T 2 -k 0 -B 256` + kernel sink |
+| `E-MSC` | USB mass storage read/write | USB2/USB3 root | 32 MiB window, fio reference |
+| `W-UDP-D/11g` | UDP 1440 B downlink, 802.11g 54M | 2.4 GHz ch5 | netio `-u -b 1440`, 6 s cell |
+| `W-UDP-U/11g` | UDP 1440 B uplink, 802.11g 54M | 2.4 GHz ch5 | same cell, server phase |
+| `W-TCP-D/11g` | TCP downlink, 802.11g 54M | 2.4 GHz ch5 | netio `-t`, 75 s window |
+| `W-UDP-D/HT20` | UDP 1440 B downlink, HT20 72.2 MCS7 SGI | 2.4 GHz ch5 | netio `-u -b 1440`, 6 s cell |
+| `W-UDP-U/HT20` | UDP 1440 B uplink, HT20 72.2 MCS7 SGI | 2.4 GHz ch5 | same cell, server phase |
+| `W-TCP-D/HT20` | TCP downlink, HT20 72.2 MCS7 SGI | 2.4 GHz ch5 | netio `-t`, 75 s window |
+| `W-UDP-D/HT40` | UDP 1440 B downlink, HT40 150 MCS7 SGI | 2.4 GHz ch5 | frozen: protocol upgrade |
+
+Zero loss in every row unless stated; a Wi-Fi cell that drops more than 1% is
+void.  Wi-Fi numbers come from the same bench AP (AR9271, ch5) and the same
+pinned netio 1.34 client; the Linux column is the same board running the
+in-tree driver on mac80211, the `ko` column is the linux-ko shim (net80211
+replacing mac80211, in-tree driver, kernel USB) and `rtos` is the bare-metal
+stack (CherryUSB + linuxkpi USB).  Methods: [docs/NET-TESTING.md]
+(docs/NET-TESTING.md) for the wired port, [docs/WIFI-BENCH.md]
+(docs/WIFI-BENCH.md) for 2.4 GHz Wi-Fi.
+
+### RK3568 / GMAC (wired 1 GbE)
+
+| case | freewificam (rtos) | Linux reference |
+|---|---|---|
+| `E-UDP-RX` | 114.00 MiB/s (956 Mbit/s) | 113.13 MiB/s |
+| `E-UDP-TX` | 108.09 MiB/s (907 Mbit/s) | 113.61 MiB/s |
+| `E-PPS64`, ~1.69 GHz | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
+| `E-PPS64`, 816 MHz | 197.5k | 100k (reference only) |
+| `E-TCP-TX` | 49.8 / 49.9 MB/s (2/2) | 94.21 MB/s |
+| `E-TCP-RX` | 43.4 / 45.0 MB/s (2/2) | 111.91 MB/s |
+| `E-MSC` | blocked: no disk on the bench | - |
+
+### RK3568 / RTL8188EUS / USB2 xHCI
+
+| case | rtos, pre-BA | rtos, RX-BA | ko | Linux reference |
 |---|---|---|---|---|
-| Wired 1 GbE | UDP 1440 B receive | - | 114.00 MiB/s (956 Mbit/s) | 113.13 MiB/s |
-| Wired 1 GbE | UDP 1440 B send | - | 108.09 MiB/s (907 Mbit/s) | 113.61 MiB/s |
-| Wired 1 GbE | 64 B zero-loss pps (T0), ~1.69 GHz | - | 350k with RX coalescing (260k without) | 195k (230k+ with RPS) |
-| Wired 1 GbE | 64 B T0, 816 MHz | - | 197.5k | 100k (reference only) |
-| Wired 1 GbE | TCP 1440 B, board to peer | - | 49.8 / 49.9 MB/s (2/2) | 94.21 MB/s |
-| Wired 1 GbE | TCP 1440 B, peer to board | - | 43.4 / 45.0 MB/s (2/2) | 111.91 MB/s |
-| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | 19.03 / 19.29 / 19.16 Mbit/s | 18.05 / 18.06 / 18.19 Mbit/s |
-| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | 15.24 / 15.46 / 15.44 Mbit/s | 17.48 / 17.48 Mbit/s |
-| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | 20.0-20.5 before RX-BA, **50.50 / 50.20 / 50.67** (boot 1) and **50.75 / 50.87 / 51.12** (boot 2) after | 49.83 / 51.67 / 51.92 Mbit/s |
-| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B uplink | 34.36 / 34.76 / 34.81 Mbit/s | 31.3 / 30.9 / 31.0 (boot 1), 31.5 / 31.6 / 31.4 (boot 2) | - |
-| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | 15.96 Mbit/s | 38.12 / 37.87 Mbit/s |
-| Wi-Fi 8188EU, HT40 (150 Mbit/s MCS7 40MHz SGI) | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | frozen (protocol upgrade) | 57.77–64.60 Mbit/s |
+| `W-UDP-D/HT20` | 20.0-20.5 Mbit/s | **50.50 / 50.20 / 50.67** (boot 1), **50.75 / 50.87 / 51.12** (boot 2) | 52.07 / 52.34 / 53.01 | 49.83 / 51.67 / 51.92 |
+| `W-UDP-U/HT20` | 31.3-32.5 Mbit/s | 31.3 / 30.9 / 31.0 (boot 1), 31.5 / 31.6 / 31.4 (boot 2) | 34.36 / 34.76 / 34.81 | - |
+| `W-TCP-D/HT20` | 15.96 Mbit/s | - | 18.81 / 19.39 | 38.12 / 37.87 |
+| `W-UDP-D/11g` | 19.03 / 19.29 / 19.16 Mbit/s | - | 18.62 / 18.72 / 18.98 | 18.05 / 18.06 / 18.19 |
+| `W-TCP-D/11g` | 15.24 / 15.46 / 15.44 Mbit/s | - | 19.64 / 19.83 | 17.48 / 17.48 |
+| `W-UDP-D/HT40` | frozen | frozen | frozen | frozen |
+
+### RK3568 / RTL8723BU / USB2 EHCI
+
+| case | rtos, no BA | rtos, RX-BA | ko | Linux reference |
+|---|---|---|---|---|
+| `W-UDP-D/HT20` | 10.51 / 10.05 Mbit/s | blocked: the receive path cannot consume A-MPDUs on EHCI (see note) | 32.67 / 31.25 | 30.60 / 30.90 |
+| `W-UDP-U/HT20` | 26.8 / 26.9 Mbit/s | blocked | 24.81 / 25.13 | 36.39 / 37.53 |
+
+### Notes
 
 The wired TCP rows are the 2026-11-02 default (TCP and UDP cells 2/2 each,
 `tcp_retrans=0`, zero loss).  The peer-to-board direction used to crawl at
@@ -144,10 +186,10 @@ sections.  The UDP cells did not move (113.99/107.4 MB/s, 0% loss both
 directions), and three lifetime counters stay at zero; see
 [docs/NET-TESTING.md](docs/NET-TESTING.md) section 8.
 
-The three Wi-Fi modes tell different stories.  At the lowest protocol the shim
-and mac80211 are equal: per frame data 238 us against 239 us and control 28 us
+The Wi-Fi modes tell different stories.  At the lowest protocol the shim and
+mac80211 are equal: per frame data 238 us against 239 us and control 28 us
 against 28 us, so the net80211 shim carries no per-frame tax, and TCP lands
-within 13% of the reference (19.6 against 17.5 Mbit/s).  At HT20 the shim now
+within 13% of the reference (19.6 against 17.5 Mbit/s).  At HT20 the shim
 matches the reference after adding block-ack and A-MPDU support: 52.1-53.0
 against 49.8-51.9 Mbit/s, with BlockAcks, radiotap A-MPDU marks, control
 2.7-2.8 us per frame and gap 0.  The old gap was a missing feature, not a slow
@@ -164,10 +206,27 @@ gap 0-3.6 us and control 2.1 us per frame: 0.97-0.98x the ko arm on the same
 bench, 2/2 boots, zero loss.  Its uplink is 0.89-0.91x ko (the transmit path
 was not touched, unattributed) and its legacy band is 18.4-18.8 Mbit/s today
 against 19.0-19.4 in the previous round, in an image the BA code is not linked
-into.  At HT40 the shim associates at 40 MHz and negotiates block-ack (AP
-station 135-150 Mbit/s 40MHz, MCS6/7, about 2,400 BlockAcks per cell), but
-reaches 46.2 Mbit/s against the reference's 62.3, so the 40 MHz path is
-functional and not yet at parity; that gap is not attributed.
+into.
+
+The 8723BU is the same driver on the other USB controller (EHCI, behind the
+hub).  Both kernel arms run it with block-ack: 1,366-1,448 BlockAcks per cell,
+A-MPDU marks, control 2.2-2.3 us/frame, gap 0, MCS6/7, 30.6-32.7 Mbit/s.  The
+bare-metal arm cannot: with the RX-BA module linked the AP aggregates (monitor:
+22,342 data frames to the STA, 21,921 A-MPDU-marked, 1,097 BlockAcks from the
+chip) but the host's bridge sees almost none of them (+3 data frames in a 20 s
+cell, and the netio client has to be killed), while beacons and firmware
+reports keep arriving.  The same chip on kernel USB consumes the same
+aggregates, so the fault is in the bare-metal EHCI receive path, not in the
+chip, the driver or the block-ack code; it is open.  The arm therefore measures
+the aggregation-free configuration: 10.0-10.5 Mbit/s at MCS3 and a 28% retry
+rate, with 0.1-0.3% loss.  The two numbers are not a stack tax measurement -
+one arm aggregates and the other cannot.
+
+HT40 is frozen with the protocol upgrade.  The historical numbers are not
+carried here: the shim's so-called HT40 arm associated at 20 MHz (assoc HT
+Capabilities 0x0020), and the reference's downlink at 40 MHz is 84.8-94.0
+Mbit/s against that arm's 46.2, so neither side is a like-for-like row yet.
+The row will be rewritten when the protocol work reopens it.
 
 ## Wireless bench
 
