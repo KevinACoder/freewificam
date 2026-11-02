@@ -126,11 +126,12 @@ A dash means that arm was not measured on this bench.  Methods and counters:
 | Wired 1 GbE | 64 B T0, 816 MHz | - | 197.5k | 100k (reference only) |
 | Wired 1 GbE | TCP 1440 B, board to peer | - | 49.8 / 49.9 MB/s (2/2) | 94.21 MB/s |
 | Wired 1 GbE | TCP 1440 B, peer to board | - | 43.4 / 45.0 MB/s (2/2) | 111.91 MB/s |
-| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | - | 18.05 / 18.06 / 18.19 Mbit/s |
-| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | - | 17.48 / 17.48 Mbit/s |
-| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | - | 49.83 / 51.67 / 51.92 Mbit/s |
-| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | - | 38.12 / 37.87 Mbit/s |
-| Wi-Fi 8188EU, HT40 (150 Mbit/s MCS7 40MHz SGI) | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | - | 57.77–64.60 Mbit/s |
+| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | UDP 1440 B downlink | 18.62 / 18.72 / 18.98 Mbit/s | 19.03 / 19.29 / 19.16 Mbit/s | 18.05 / 18.06 / 18.19 Mbit/s |
+| Wi-Fi 8188EU, 802.11g legacy (54 Mbit/s) | TCP downlink | 19.64 / 19.83 Mbit/s | 15.24 / 15.46 / 15.44 Mbit/s | 17.48 / 17.48 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B downlink | 52.07 / 52.34 / 53.01 Mbit/s | 20.0-20.5 before RX-BA, **50.50 / 50.20 / 50.67** (boot 1) and **50.75 / 50.87 / 51.12** (boot 2) after | 49.83 / 51.67 / 51.92 Mbit/s |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | UDP 1440 B uplink | 34.36 / 34.76 / 34.81 Mbit/s | 31.3 / 30.9 / 31.0 (boot 1), 31.5 / 31.6 / 31.4 (boot 2) | - |
+| Wi-Fi 8188EU, HT20 (72.2 Mbit/s MCS7 SGI) | TCP downlink (pre-BA) | 18.81 / 19.39 Mbit/s | 15.96 Mbit/s | 38.12 / 37.87 Mbit/s |
+| Wi-Fi 8188EU, HT40 (150 Mbit/s MCS7 40MHz SGI) | UDP 1440 B downlink | 45.96 / 46.08 / 46.37 Mbit/s | frozen (protocol upgrade) | 57.77–64.60 Mbit/s |
 
 The wired TCP rows are the 2026-11-02 default (TCP and UDP cells 2/2 each,
 `tcp_retrans=0`, zero loss).  The peer-to-board direction used to crawl at
@@ -152,11 +153,21 @@ against 49.8-51.9 Mbit/s, with BlockAcks, radiotap A-MPDU marks, control
 2.7-2.8 us per frame and gap 0.  The old gap was a missing feature, not a slow
 stack: before this work the reference negotiated block-ack (3,523 BlockAcks,
 37,620 A-MPDU-marked frames) while the shim had no session at all (0 BlockAcks,
-0 marks, one plain ACK per frame).  At HT40 the shim associates at 40 MHz and
-negotiates block-ack (AP station 135-150 Mbit/s 40MHz, MCS6/7, about 2,400
-BlockAcks per cell), but reaches 46.2 Mbit/s against the reference's 62.3, so
-the 40 MHz path is functional and not yet at parity; that gap is not
-attributed.
+0 marks, one plain ACK per frame).  The bare-metal arm was in that same
+pre-block-ack state until 2026-11-02: the imported net80211 dropped the AP's
+ADDBA Requests (five retries, then DELBA), so every downlink MPDU paid a plain
+ACK and 327 us of inter-frame gap out of 618 us per frame - it looked like a
+host per-frame cost but was the unaggregated medium.  Answering ADDBA and
+reordering the receive side (no driver change; the chip itself emits the
+BlockAcks) moved that arm from 19.9 to 50.2-51.1 Mbit/s at 229-234 us/frame,
+gap 0-3.6 us and control 2.1 us per frame: 0.97-0.98x the ko arm on the same
+bench, 2/2 boots, zero loss.  Its uplink is 0.89-0.91x ko (the transmit path
+was not touched, unattributed) and its legacy band is 18.4-18.8 Mbit/s today
+against 19.0-19.4 in the previous round, in an image the BA code is not linked
+into.  At HT40 the shim associates at 40 MHz and negotiates block-ack (AP
+station 135-150 Mbit/s 40MHz, MCS6/7, about 2,400 BlockAcks per cell), but
+reaches 46.2 Mbit/s against the reference's 62.3, so the 40 MHz path is
+functional and not yet at parity; that gap is not attributed.
 
 ## Wireless bench
 
