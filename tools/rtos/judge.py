@@ -26,6 +26,7 @@ CASES = (
     "net",
     "net_xmac",
     "emmc",
+    "sdio_mci",
     "wlan",
     "pcie",
     "pcie_bench",
@@ -92,6 +93,19 @@ PATTERNS = {
     "emmc_loop": re.compile(r"emmc: loop n=(?P<n>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
     "emmc_badlba": re.compile(r"emmc: badlba lba=\d+ write_rc=(?P<w>-?\d+) read_rc=(?P<r>-?\d+) nohang=(?P<nohang>\w+)", re.MULTILINE),
     "emmc_pass": re.compile(r"emmc: PASS", re.MULTILINE),
+    # The SDIO socket: identity, one line per CMD53 shape, and the mmc0
+    # control. The CMD53 shapes carry their own error count, so a PASS with a
+    # non-zero count is a broken image rather than a pass.
+    "sdio_mci_cccr": re.compile(r"mci: enum cccr=0x(?P<cccr>[0-9a-f]+) .*vendor=0x(?P<vendor>[0-9a-f]+) device=0x(?P<device>[0-9a-f]+)", re.MULTILINE),
+    "sdio_mci_cmd52": re.compile(r"mci: cmd52 (?P<dir>read|write) n=(?P<n>\d+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_byte_read": re.compile(r"mci: cmd53 byte read n=(?P<n>\d+) func=(?P<func>\d+) addr=0x(?P<addr>[0-9a-f]+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_byte_write": re.compile(r"mci: cmd53 byte write n=(?P<n>\d+) func=(?P<func>\d+) addr=0x(?P<addr>[0-9a-f]+) errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_block_read": re.compile(r"mci: cmd53 block read blkcnt=(?P<blkcnt>\d+) .*errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_block_write": re.compile(r"mci: cmd53 block write blkcnt=(?P<blkcnt>\d+) .*errors=(?P<errors>\d+)", re.MULTILINE),
+    "sdio_mci_gt_cmd53": re.compile(r"mci: gt cmd53 st=0x(?P<st>[0-9a-f]+) data=(?P<data>[0-9a-f]{8})", re.MULTILINE),
+    "sdio_mci_diff": re.compile(r"mci: diff clkdiv=(?P<clkdiv>[0-9a-f]+) gt=(?P<gt_clkdiv>[0-9a-f]+) (?P<clkdiv_same>same|DIFF)", re.MULTILINE),
+    "sdio_mci_ctrl": re.compile(r"mci: sd CMD(?P<cmd>\d+) rc=(?P<rc>-?\d+)", re.MULTILINE),
+    "sdio_mci_counters": re.compile(r"mci: counters transfers=(?P<transfers>\d+) cmd52=(?P<cmd52>\d+) cmd53=(?P<cmd53>\d+) .*errors=(?P<errors>\d+)", re.MULTILINE),
     # 8189FTV vendor-stack case: the SDIO identity, the driver's netdev, and the
     # hardware address the driver read from the chip.
     "wlan_sdio": re.compile(r"wlan: sdio up card=(?P<vendor>[0-9a-fA-F]{4}):(?P<device>[0-9a-fA-F]{4}) funcs=(?P<funcs>\d+) cccr=(?P<cccr>\d+) clock=(?P<clock>\d+) width=(?P<width>\d+) hs=(?P<hs>\d+)", re.MULTILINE),
@@ -1577,6 +1591,36 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"{stream['fps']} fps, {stream['kbit']} kbit/s, "
                 f"avg={stream['avg']} max={stream['max']}"
             )
+
+    if cases.get("sdio_mci", {}).get("verdict") == "pass":
+        # A PASS has to arrive with the evidence that makes it one: the card's
+        # identity, a clean CMD52 battery, and every CMD53 shape with no error
+        # counted by the stack. The mmc0 control is the one that separates a
+        # controller driver that works from a card that will not answer.
+        if found["sdio_mci_cccr"] is None:
+            errors.append("sdio_mci: no card identity line")
+        for key, label in (("sdio_mci_cmd52", "cmd52"),
+                           ("sdio_mci_byte_read", "cmd53 byte read"),
+                           ("sdio_mci_byte_write", "cmd53 byte write")):
+            row = found[key]
+            if row is None:
+                errors.append(f"sdio_mci: no {label} line")
+            elif int(row["errors"]) != 0:
+                errors.append(f"sdio_mci: {label} errors={row['errors']}")
+            else:
+                notes.append(f"sdio_mci: {label} errors=0")
+        # Block mode is optional: an image may gate it off, and then the
+        # anchor is simply absent. When it is present it must be clean.
+        for key, label in (("sdio_mci_block_read", "cmd53 block read"),
+                           ("sdio_mci_block_write", "cmd53 block write")):
+            row = found[key]
+            if row is not None and int(row["errors"]) != 0:
+                errors.append(f"sdio_mci: {label} errors={row['errors']}")
+        control = found["sdio_mci_ctrl"]
+        if not control or control["cmd"] != "17" or control["rc"] != "0":
+            errors.append("sdio_mci: the mmc0 control read did not complete")
+        else:
+            notes.append("sdio_mci: mmc0 CMD17 rc=0")
 
     result = found["result"]
     if not result:
