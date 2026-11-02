@@ -153,7 +153,9 @@ def legacy_macros(kconf) -> list[str]:
         "/* ---- legacy names consumed by existing sources ---- */",
         "#define FW_BUILD_TAG " + c_string(read_git_tag()),
         "#define RTOS_BACKEND_NAME " + c_string(val("BACKEND_NAME")),
-        "#define RTOS_KERNEL_NAME " + c_string(val("BACKEND_NAME")),
+        "#define RTOS_KERNEL_NAME " + c_string(
+            "FreeRTOS-Kernel V11.3.1" if val("BACKEND_NAME") == "freertos"
+            else "ThreadX 6.5.1.202602a"),
     ]
     lines.append("#ifndef FREEWIFICAM_NO_CASE_MACROS")
     for name in CASES:

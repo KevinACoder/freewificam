@@ -33,10 +33,10 @@
 
 /* CMSIS-RTOS2 backend identity and limits.  The limits come from the image
  * configuration; there is no per-world fallback here. */
-#ifdef CONFIG_BACKEND_FREERTOS
+#if CONFIG_BACKEND_FREERTOS
 #define CMSIS2_BACKEND_FREERTOS 1
 #endif
-#ifdef CONFIG_BACKEND_THREADX
+#if CONFIG_BACKEND_THREADX
 #define CMSIS2_BACKEND_THREADX 1
 #define TX_INCLUDE_USER_DEFINE_FILE 1
 #define TX_LINUX_MULTI_CORE 1
@@ -44,23 +44,23 @@
 
 /* ULOG / printf trimming: Kconfig booleans, mapped to the names the code and
  * the vendor printf use.  False means "not defined", matching the old -D. */
-#ifdef CONFIG_ULOG_ENABLED
+#if CONFIG_ULOG_ENABLED
 #define ULOG_ENABLED 1
 #endif
-#ifdef CONFIG_PRINTF_DISABLE_FLOAT
+#if CONFIG_PRINTF_DISABLE_FLOAT
 #define PRINTF_DISABLE_SUPPORT_FLOAT 1
 #endif
-#ifdef CONFIG_PRINTF_DISABLE_EXPONENTIAL
+#if CONFIG_PRINTF_DISABLE_EXPONENTIAL
 #define PRINTF_DISABLE_SUPPORT_EXPONENTIAL 1
 #endif
 
 /* Board / port constants.  These are properties of the board, not knobs. */
 #define USB_BOARD_IRQ_PRIORITY_RAW BOARD_IRQ_PRIORITY_API_CALL_RAW
 #define EQOS_BOARD_IRQ_PRIORITY_RAW 0xd0u
-#ifdef CONFIG_BOARD_FIREFLY_V1
+#if CONFIG_BOARD_FIREFLY_V1
 #define BOARD_FIREFLY_V1 1
 #endif
-#ifdef CONFIG_BOARD_FIREFLY_V2
+#if CONFIG_BOARD_FIREFLY_V2
 #define BOARD_FIREFLY_V2 1
 #endif
 
@@ -169,7 +169,7 @@
 
 /* WLAN observation is a Kconfig choice, but the seam code uses the older
  * CONFIG_LKPI_CENSUS spelling. */
-#ifdef CONFIG_WLAN_OBS
+#if CONFIG_WLAN_OBS
 #define CONFIG_LKPI_CENSUS 1
 #define LKPI_SDIO_OBS 1
 #define LKPI_SDIO_OBS_HOST_SUBMIT 1
