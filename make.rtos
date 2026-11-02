@@ -1,0 +1,44 @@
+#!/bin/sh
+# make.rtos - the RTOS image and test entry.
+#
+# One Kconfig tree, one generated fragment, one make.  The profile is a
+# defconfig under tests/board/rtos/configs/; `list` prints them, `config`
+# regenerates build/kconfig/<profile>/generated/config.mk, and the build
+# targets run the platform Makefile with that profile.
+#
+# Usage:
+#   ./make.rtos list [--current]
+#   ./make.rtos config [PROFILE=<name>]
+#   ./make.rtos image|images|host|host-test|digest|check|dump-vars|clean|distclean
+#   PROFILE=<name> ./make.rtos images
+#   ./make.rtos --profile <name> images
+#
+# The old tools/rtos/build.sh still works; it is a compatibility path and
+# generates a missing fragment on demand.  New work uses this entry.
+
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+cd "$here"
+
+case "${1:-}" in
+    --profile)
+        shift
+        [ $# -gt 0 ] || { echo "make.rtos: --profile needs a name" >&2; exit 2; }
+        PROFILE=$1
+        export PROFILE
+        shift
+        ;;
+    --profile=*)
+        PROFILE=${1#*=}
+        export PROFILE
+        shift
+        ;;
+esac
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "--current" ]; then
+    shift 2
+    set -- list CURRENT=1 "$@"
+fi
+
+exec make -f tools/build/rtos.mk "$@"

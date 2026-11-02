@@ -80,15 +80,20 @@ BUILD=/path/to/linux-ko KSRC=/path/to/kernel/src KOBJ=/path/to/kernel/obj \
 
 ## Building the RTOS images
 
-The image is a function of one profile file, not of the command line.
-`tests/board/rtos/config.mk` names the active profile from
-`tests/board/rtos/configs/`; `tools/rtos/build.sh images` builds both kernels of
-it (ThreadX and FreeRTOS behind one CMSIS-RTOS2 abstraction).
+The image is a function of one defconfig under `tests/board/rtos/configs/`,
+not of the command line.  `tests/board/rtos/config.mk` only names the default;
+select another profile with `PROFILE=<name>`.  `./make.rtos images` builds both
+kernels of it (ThreadX and FreeRTOS behind one CMSIS-RTOS2 abstraction).
 
 ```sh
-AARCH64_CROSS_PATH=/path/to/aarch64-none-elf \
-  tools/rtos/build.sh images
+./make.rtos list                      # the 81 defconfigs
+./make.rtos image PROFILE=<name>      # one image, the profile's backend
+./make.rtos images                    # both kernels
+AARCH64_CROSS_PATH=/path/to/aarch64-none-elf ./make.rtos images
 ```
+
+`./make.rtos config` regenerates `build/kconfig/<profile>/generated/config.mk`
+from the Kconfig tree; the old `tools/rtos/build.sh` forwards to this entry.
 
 The profiles carried today, by group:
 
@@ -106,7 +111,7 @@ The profiles carried today, by group:
 The RTL8189FTV profiles additionally need the external vendor tree:
 
 ```sh
-VENDOR_8189FS=/path/to/rtl8189fs tools/rtos/build.sh
+VENDOR_8189FS=/path/to/rtl8189fs ./make.rtos images
 ```
 
 ## Performance

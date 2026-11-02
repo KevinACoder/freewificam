@@ -37,9 +37,27 @@ COMPONENTS := $(ROOT)/components
 LKPI := $(COMPONENTS)/linuxkpi/rtos
 THIRD_PARTY := $(ROOT)/third-party
 
-# The single build configuration. It is deliberately included before every
-# default below, so a value in config.mk wins over the Makefile's fallback.
+# The selected defconfig.  config.mk is a selector only; the values it used to
+# include now live in the fragment generated from configs/<name>.defconfig.
 include $(LINE)/config.mk
+PROFILE ?= $(CONFIG)
+GEN_CONFIG := $(ROOT)/build/kconfig/$(PROFILE)/generated/config.mk
+# `make clean` must not need the generated fragment (or Python).  Every other
+# goal includes it; make remakes the included file through the rule below and
+# restarts, so the variables are always available where they are used.
+ifneq ($(filter clean,$(MAKECMDGOALS)),)
+else
+-include $(GEN_CONFIG)
+endif
+
+# A direct make invocation regenerates a missing fragment.  This is a
+# target-time prerequisite, not a parse-time $(shell), so `make clean` still
+# works without Python.  make.rtos regenerates before it calls make; this
+# guard covers the compat path (tools/rtos/build.sh) and a hand-run make.
+$(GEN_CONFIG):
+	@python3 $(ROOT)/tools/build/kconfig-gen.py --profile $(PROFILE)
+image images host host-test: $(GEN_CONFIG)
+
 BACKEND := $(CONFIG_BACKEND)
 # The board the image targets (rk3568-itx keeps every default; a firefly
 # config.mk selects the firefly platform below).
@@ -47,7 +65,7 @@ CONFIG_BOARD ?= rk3568-itx
 BOARD := $(CONFIG_BOARD)
 CASES := $(CONFIG_CASES)
 OPT := $(CONFIG_OPT)
-PROFILE := $(CONFIG_PROFILE)
+SWITCH_PROFILE := $(CONFIG_PROFILE)
 HEAP_SIZE := $(CONFIG_HEAP_SIZE)
 # Compile-time levers a profile may carry with it. The command line still
 # wins (`LEVERS=... tools/rtos/build.sh`), so a profile's own set is the
@@ -193,10 +211,12 @@ HEAP_SIZE ?= 4M
 # (540.0/700.8 against 531.2/658.6) and is one -D away; it is not in the
 # profile yet because the bytes that measured it are not the bytes this
 # makefile produces, and shipping bytes have to be the measured bytes.
-# `PROFILE=base` builds the pre-round configuration, which is what an A/B
-# re-run of the round's arms needs.
-PROFILE ?= perf
-ifeq ($(PROFILE),perf)
+# `base` builds the pre-round configuration, which is what an A/B re-run of
+# the round's arms needs.  The defconfig's PROFILE choice is the normal route;
+# SWITCH_PROFILE is the old command-line override and keeps its name separate
+# from the defconfig name in PROFILE.
+SWITCH_PROFILE ?= perf
+ifeq ($(SWITCH_PROFILE),perf)
 PROFILE_DEFS := -DCONFIG_GMAC_TX_CSUM=1 -DCONFIG_GMAC_RX_HWCSUM=1 \
 	-DLWIP_TCPIP_CORE_LOCKING_INPUT=1 -DLWIP_TCP_ACK_DELAY_SEGMENTS=4
 else
@@ -219,7 +239,7 @@ endif
 # whether unaligned accesses may be emitted). Kept apart from LEVERS because a
 # -D and a -m are different kinds of claim, and because these belong to the
 # profile rather than to a single option: `PROFILE_CFLAGS=` gets the pre-round
-# code generator back, exactly as `PROFILE=base` does for the switches.
+# code generator back, exactly as `SWITCH_PROFILE=base` does for the switches.
 #
 #   PROFILE_CFLAGS="-mcpu=cortex-a55 -mno-strict-align" tools/rtos/build.sh
 #
@@ -292,6 +312,8 @@ digest:
 	@set -e; ( cd $(ROOT)/components/net80211 && \
 		sha256sum -c --quiet patches/MANIFEST.sha256 ); \
 		echo "digest: net80211 ok ($$(wc -l < $(ROOT)/components/net80211/patches/MANIFEST.sha256) files)"
+	@set -e; ( cd $(ROOT)/tools/kconfig && sha256sum -c --quiet MANIFEST.sha256 ); \
+		echo "digest: kconfig ok (2 files)"
 
 clean:
 	rm -rf $(BUILD)
@@ -496,9 +518,8 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
 	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
-	-DCONFIG_GMAC_PROF=$(CONFIG_GMAC_PROF) \
-	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(LEVERS) $(BACKEND_DEFS) \
-	$(BOARD_DEFS) $(INCLUDES)
+	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(CFG_DEFS) $(LEVERS) \
+	$(BACKEND_DEFS) $(BOARD_DEFS) $(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
 	-include stdlib.h -D_DEFAULT_SOURCE=1
@@ -902,7 +923,7 @@ ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
 	echo "PASS: uvc engine, stream engine and video class table present"
 endif
 	@$(SIZE) $(TARGET).elf
-	@printf 'opt: %s\nprofile: %s\nlwip: %s\nlevers: %s\nprof: %s\n' '$(OPT)' '$(PROFILE)' '$(LWIP)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' '$(CONFIG_GMAC_PROF)' | tee $(BUILD)/build-info-$(BACKEND).txt
+	@printf 'opt: %s\ndefconfig: %s\nprofile: %s\nlwip: %s\nlevers: %s\nprof: %s\n' '$(OPT)' '$(PROFILE)' '$(SWITCH_PROFILE)' '$(LWIP)' '$(if $(strip $(LEVERS)),$(LEVERS),(none))' '$(CONFIG_GMAC_PROF)' | tee $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip $(PROFILE_CFLAGS)),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1

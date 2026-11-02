@@ -92,9 +92,10 @@ The RTOS images are a function of one profile file, not of the command line:
 
 1. check out the tag;
 2. put an `aarch64-none-elf` toolchain on `PATH`, or set `AARCH64_CROSS_PATH`;
-3. select the profile in `tests/board/rtos/config.mk` (the release notes name
-   it), optionally with `VENDOR_8189FS` for the vendor SDIO line;
-4. `tools/rtos/build.sh images`.
+3. select the profile with `PROFILE=<name>` (a defconfig under
+   `tests/board/rtos/configs/`; `tests/board/rtos/config.mk` only names the
+   default), optionally with `VENDOR_8189FS` for the vendor SDIO line;
+4. `./make.rtos images`.
 
 The image embeds its build tag (`git describe --always --dirty`) in the banner,
 so the same source built from a different commit or a dirty tree differs in

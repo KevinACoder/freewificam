@@ -32,14 +32,18 @@ every arm.
 
 ## 3. Build and boot
 
-The profile is selected in `tests/board/rtos/config.mk`:
+The profile is a defconfig in `tests/board/rtos/configs/`;
+`tests/board/rtos/config.mk` only names the default.  The two profiles the
+netio rounds use:
 
 | Profile | What it tests |
 |---|---|
 | `net-netio-raw-tx256` | UDP 1440 B throughput; raw UDP consumer, TX ring 256 (the default profile) |
 | `net-pps` | 64 B pps; serial-gated receiver for a zero-loss window |
 
-Build with `tools/rtos/build.sh` (prints size, sha256, build tag, elapsed time).
+Build with `./make.rtos image PROFILE=<name>` (the compatibility
+`tools/rtos/build.sh` forwards); it prints size, sha256, build tag and elapsed
+time.
 Boot the image with `tools/rtos/board-round.py` (stage, boot, capture, judge).
 The console log is the evidence; keep it with the run.
 
@@ -200,8 +204,7 @@ shares an image with the wired netio case.
 ### 9.1 Mass storage (U-disk) ladder - `usb-xhci` / `usb-ehci`
 
 ```
-CONFIG := usb-xhci      # one controller per boot; the first ready disk wins
-tools/rtos/build.sh
+PROFILE=usb-xhci ./make.rtos image   # one controller per boot; the first ready disk wins
 BOARD_SESSION=<client> BOARD_PYTHON=<python> \
   tools/rtos/board-round.py --backend freertos --out <run> --boot boot1 \
     --cases tick,usb_xhci

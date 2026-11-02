@@ -1,7 +1,6 @@
-# The active RTOS build profile. Pick exactly one file from configs/; no
-# per-build command-line switches.
+# The active RTOS build configuration: the defconfig name.  The values live in
+# tests/board/rtos/configs/<name>.defconfig and are rendered into
+# build/kconfig/<name>/generated/config.mk by tools/build/kconfig-gen.py.
+# `./make.rtos list` lists the names; `./make.rtos config` regenerates the
+# fragment.  The defconfig also selects the board (CONFIG_BOARD inside it).
 CONFIG := firefly-v2-rtw88-sdio
-# The active file also selects the board (CONFIG_BOARD inside it): net-netio is
-# the rk3568-itx wired instrument arm, firefly-v2-xmac the firefly v2 NIC arm,
-# firefly-v2-sdio-mci the board's SDIO socket.
-include $(LINE)/configs/$(CONFIG).mk

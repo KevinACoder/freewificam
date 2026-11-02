@@ -1,51 +1,37 @@
 #!/bin/sh
 # @file    build.sh
-# @brief   One entry for the RTOS platform's build: images, host tier, digests.
+# @brief   Compatibility entry for the RTOS build; new work uses ./make.rtos.
 #
-# Usage:
-#   tools/rtos/build.sh              the configured image + gates
-#   tools/rtos/build.sh images       both board images
-#   tools/rtos/build.sh host         the host conformance binaries
-#   tools/rtos/build.sh host-test    build and run them
-#   tools/rtos/build.sh digest       component patch records
+# The image is a function of one defconfig under tests/board/rtos/configs/, and
+# ./make.rtos is the entry that selects it, regenerates the fragment and runs
+# the platform Makefile.  This script remains so the commands in older notes,
+# RELEASE.md and board automation keep working; it forwards and says so once on
+# stderr.  It does not edit tests/board/rtos/config.mk.
 #
-# The image, backend, cases and WLAN switches come from tests/board/rtos/config.mk
-# and the selected file in configs/. There are no per-build CASES/OPT/LEVERS
-# switches in the normal loop.
+#   tools/rtos/build.sh                 one image of the default profile
+#   tools/rtos/build.sh images          both backends of it
+#   PROFILE=<name> tools/rtos/build.sh  one image of <name>
+#   tools/rtos/build.sh host|host-test|digest
 #
-# The fingerprints printed at the end are what a board round's evidence
-# records: size, sha256 and the build tag the banner will carry.
+# Jobs come from JOBS; the toolchain from AARCH64_CROSS_PATH, as before.
 
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-build=$root/tests/board/rtos/build
 
 target=${1:-all}
-jobs=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
-
-# The dev-loop budget: one profile's incremental build is seconds, and a
-# minute is a regression worth noticing (AGENTS 1.3).  The elapsed time is
-# printed on every run so the number is in the round's record, not in memory.
-started=$(date +%s)
-
-make -C "$build" -j"$jobs" "$target"
-
-elapsed=$(( $(date +%s) - started ))
-printf 'elapsed: %ss (%s, jobs=%s)\n' "$elapsed" "$target" "$jobs"
-
 case "$target" in
-all|image|check|"")
-	printf '\n== fingerprint ==\n'
-	printf 'config: tests/board/rtos/config.mk\n'
-	backend=$(make -s -C "$build" print-config)
-	image="$build/build/rtos-$backend.bin"
-	if [ -e "$image" ]; then
-		printf '%s size=%s sha256=%s\n' \
-			"$(basename "$image")" \
-			"$(stat -c '%s' "$image")" \
-			"$(sha256sum "$image" | cut -d' ' -f1)"
-	fi
-	;;
+	all|"")
+		set -- image
+		;;
+	image|images|host|host-test|digest|check|clean|distclean|list|config)
+		;;
+	*)
+		echo "build.sh: unknown target '$target'; use ./make.rtos help" >&2
+		exit 2
+		;;
 esac
+
+echo "build.sh: deprecated; forwarding to ./make.rtos $*" >&2
+exec "$root/make.rtos" "$@"
