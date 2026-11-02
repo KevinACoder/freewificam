@@ -88,7 +88,7 @@ status_t SDIO_CfgInitialize(sdmmc_sdio_t *sdmmc, sdmmchost_config_t *config)
 
     /* This port drives one controller. An unexpected host type is refused (and
      * the buffer released) rather than silently left without a backend. */
-    if (host->config.hostType != (uint32_t)kSDMMCHOST_TYPE_FDWMMC)
+    if (host->config.hostType != (uint32_t)SDMMC_PORT_SDIO_HOST_TYPE)
     {
         SDMMC_OSAMemoryFree(card->internalBuffer);
         card->internalBuffer     = NULL;
@@ -151,8 +151,8 @@ status_t sdmmc_card_start(void)
      *    because its block count comes from the controller, not from a staging
      *    buffer.
      */
-    config.hostId         = 0U;
-    config.hostType       = (uint32_t)kSDMMCHOST_TYPE_FDWMMC;
+    config.hostId         = (uint32_t)SDMMC_PORT_SDIO_HOST_ID;
+    config.hostType       = (uint32_t)SDMMC_PORT_SDIO_HOST_TYPE;
     config.cardType       = (uint32_t)kSDMMCHOST_CARD_TYPE_SDIO;
     config.enableIrq      = false;
     config.enableDMA      = true;

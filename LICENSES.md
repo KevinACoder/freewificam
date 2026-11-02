@@ -47,6 +47,21 @@ the tree and carry the tree's own SPDX lines; they are recorded in
 | `net80211` | BSD-3-Clause (`net80211/`, per-file NetBSD blocks) and BSD-2-Clause (`port/`, `compat/`, `crypto/`) | per-directory summary in `components/net80211/LICENSES/README.md` |
 | `linuxkpi` | BSD-3-Clause | the Linux kernel API surface and the RTOS runtime, written first-party. The skbuff pool descends from a TizenRT/Realtek unit (Apache-2.0); the lineage and the change ledger are in `components/linuxkpi/rtos/skbuff/` |
 
+## GPL-2.0 units inside the image
+
+One unit in the RTOS image is GPL-2.0 rather than the repository's
+BSD-3-Clause, and it is deliberately kept separate so the boundary is
+answerable:
+
+| Unit | Pin | License | Notes |
+|---|---|---|---|
+| `tests/board/rtos/platform/board/firefly/drivers/mci.{c,h}` | derived from `linux-upstream@63a2a8ab9cd3:drivers/mmc/host/firefly-mci.{c,h}` | **GPL-2.0+** | a function-by-function port of Phytium's Linux MCI host driver (the file's own `SPDX-License-Identifier: GPL-2.0+`). It is the only GPL-2.0 first-party-style unit in this repository. It links into the RTOS image and is therefore distributed under GPL-2.0+; nothing else in the tree changes license because of it, and the BSD-3-Clause units it links against stay BSD-3-Clause. |
+
+The glue that calls it (`third-party/fsl_sdmmc/ports/sdmmc_host_firefly_mci.c`)
+is first-party BSD-3-Clause: it implements NXP's `sdmmchost_ops_t` table and
+only includes `mci.h`. If the GPL unit is ever replaced by an independent
+implementation, that glue stays as it is.
+
 ## Firmware blobs
 
 The RTOS images compile in vendor firmware files; the bytes are not committed.
