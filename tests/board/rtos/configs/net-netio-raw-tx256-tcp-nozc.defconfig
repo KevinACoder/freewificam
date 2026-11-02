@@ -1,0 +1,26 @@
+# Converted from configs/net-netio-raw-tx256-tcp-nozc.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 B arm: the receive direction with the copying bridge instead of ZC.
+#
+# With a real TCP receive rate the zero-copy bridge trips lwIP's
+# 'pbuf_free: p->ref > 0' assert within tens of milliseconds: the queued
+# frames hold driver slots, and a slot appears to be released while a pbuf
+# still references it (the driver's own slot_push carries a "better leaked
+# than wrapped" guard, so the shape was known to be fragile). This arm keeps
+# the input-path fix and turns the zero-copy hand-off off, which is the
+# single-variable test of "the crash is the ZC slot lifecycle".
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+# CONFIG_GMAC_RX_ZC is not set
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_mdk_netio"

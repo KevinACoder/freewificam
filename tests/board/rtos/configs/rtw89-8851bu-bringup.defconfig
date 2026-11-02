@@ -1,0 +1,15 @@
+# Converted from configs/rtw89-8851bu-bringup.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B ladder, stage 1: USB bring-up + firmware + attach + start only.  The scan /
+# join / data cases live in the full profile; staging keeps a bring-up failure
+# from being hidden behind a ladder that needs an AP.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtw89"
+CONFIG_RTW89_USB_BUS=3

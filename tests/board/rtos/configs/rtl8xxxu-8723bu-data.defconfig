@@ -1,0 +1,18 @@
+# Converted from configs/rtl8xxxu-8723bu-data.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# 8723BU ladder, stage 4: the full ladder through the raw-L2 data plane (ARP + ICMP),
+# with no IP stack in the image.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane"
+CONFIG_RTL8XXXU_CHIP_8723BU=y
+CONFIG_RTL8XXXU_EXPECT_MAC="88:e6:28:53:10:9c"
+CONFIG_RTL8XXXU_AP_SSID="labwifi-mtk24"
+CONFIG_RTL8XXXU_AP_FREQ=2432
+CONFIG_RTL8XXXU_USB_BUS=1

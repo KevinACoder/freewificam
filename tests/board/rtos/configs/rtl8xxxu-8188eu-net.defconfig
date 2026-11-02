@@ -1,0 +1,17 @@
+# Converted from configs/rtl8xxxu-8188eu-net.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# 8188EUS ladder, stage 5: the ladder plus the lwIP netif and the two iperf phases
+# (downlink server, uplink client).  The peer is the bench AP host's iperf2.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net"
+CONFIG_RTL8XXXU_EXPECT_MAC="20:f4:1b:52:8f:01"
+CONFIG_RTL8XXXU_AP_SSID="labwifi-mtk24"
+CONFIG_RTL8XXXU_AP_FREQ=2432
+CONFIG_RTL8XXXU_USB_BUS=3

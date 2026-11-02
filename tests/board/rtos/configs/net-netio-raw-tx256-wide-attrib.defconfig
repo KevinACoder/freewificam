@@ -1,0 +1,21 @@
+# Converted from configs/net-netio-raw-tx256-wide-attrib.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-07 Z10b: the sweep-wide arm with the five-bucket instrument ON, for
+# attribution only (prof tax ~11-20%). Throughput/loss numbers come from
+# Z10 (net-netio-raw-tx256-wide.mk, prof off).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+CONFIG_GMAC_PROF=y
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_SWEEP_WIDE=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_mdk_netio"

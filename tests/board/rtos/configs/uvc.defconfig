@@ -1,0 +1,19 @@
+# Converted from configs/uvc.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# The USB camera image: one USB2 root, the video class, the isochronous engine
+# and the four camera cases.  No other class is linked (the hub is), so a
+# bring-up failure names the camera rather than a neighbour on the controller.
+#
+# The controller is the first USB2 root; the profile names it because the
+# camera's port is a board fact, not a driver fact - the run record holds the
+# cable position it was measured at.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=4
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_GMAC_PROF=y
+CONFIG_UVC_USB_BUS=0
+CONFIG_CASES="uvc_detect uvc_open uvc_iso_smoke uvc_stream"

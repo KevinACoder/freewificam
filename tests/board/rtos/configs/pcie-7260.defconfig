@@ -1,0 +1,13 @@
+# Converted from configs/pcie-7260.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B2 profile: the bus gate plus the AC 7260 endpoint probe (enumeration, BAR,
+# CSR_HW_REV, one registered message vector).  No wireless driver is carried;
+# that is B3.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick pcie pcie_7260"

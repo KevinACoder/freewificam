@@ -1,0 +1,31 @@
+# Converted from configs/net-netio-raw-tx256-cpu1992-txguard-stall.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 A arm: the high-OPP stall with the transmit reclaim serialised.
+#
+# eqos_tx_complete is entered from the interrupt, from the sender's full-ring
+# spin and from the 100 ms watchdog. eqos_lock masks the port line but not the
+# tick, so a thread inside the reclaim walk can be preempted and the two then
+# read-modify-write tx_tail; the preempted one's stale value moves the tail
+# backwards, the software then believes descriptors are in flight that the
+# channel has already passed, and the two deadlock at a full ring with an
+# empty MTL queue. The receive sweep has carried a test-and-set guard since
+# 2026-10-19 for exactly this reason; the transmit sweep never got one.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_STALL_PROBE=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_GMAC_TX_SWEEP_GUARD=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_NETIO_TX_STALL_PROBE=y
+CONFIG_CASES="net_mdk_netio"

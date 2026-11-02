@@ -1,0 +1,16 @@
+# Converted from configs/usb-xhci-diag.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# Diagnostic arm for the xHCI mass-storage line: eight sequential 4 KiB reads
+# with an 800 ms class timeout and the port's timeout dump compiled in.  Not a
+# delivery profile - it names whether a completion interrupt stopped arriving
+# (irq standing still, ms=800) or the device/stack is merely slow.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=1
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_GMAC_PROF=y
+CONFIG_USB_MSC_DIAG=y
+CONFIG_CASES="tick usb_xhci"

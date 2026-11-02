@@ -1,0 +1,29 @@
+# Converted from configs/net-netio-raw-tx256-cpu1992-tailidle-stall.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 A arm: the high-OPP stall with the tail pointer written only on progress.
+#
+# The full-ring path calls eqos_tx_complete once per spin and that function
+# rewrites DMA_CH0_TX_END_ADDR whenever the ring is non-empty - thousands of
+# identical writes per frame, from a tight loop, while the channel is mid
+# fetch. This arm stops the redundant writes (the register only moves when a
+# descriptor was actually reclaimed), which is the discriminating test for
+# "the repeated tail write leaves the channel believing it is caught up".
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_STALL_PROBE=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_GMAC_TX_TAIL_IDLE=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_NETIO_TX_STALL_PROBE=y
+CONFIG_CASES="net_mdk_netio"

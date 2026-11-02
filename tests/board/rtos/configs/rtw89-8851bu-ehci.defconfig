@@ -1,0 +1,15 @@
+# Converted from configs/rtw89-8851bu-ehci.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B (target path): the 8851BU on the panel's USB2 root.  Same image as
+# rtw89-8851bu.mk except the bus list; the EHCI >=16 KiB bulk question is the
+# one this arm answers.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtw89 rtw89_scan rtw89_join rtw89_dataplane"
+CONFIG_RTW89_USB_BUS=1

@@ -1,0 +1,27 @@
+# Converted from configs/net-pps.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# net_pps arm: the pps-bound receiver (64-byte UDP, serial-gated window).
+#
+# The data path is the K2-07 best-known receive configuration (raw UDP PCB,
+# zero-copy RX, 256-descriptor TX ring); the difference from the netio arm is
+# the case, not the levers - a pps number measured on other levers would not
+# be comparable with the throughput arm's cells.
+#
+# The case list is one case, for the same reason the netio arm has one: a boot
+# that also ran another network case would answer two questions at once.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=1"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_BATCH=y
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_pps"

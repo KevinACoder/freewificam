@@ -1,0 +1,31 @@
+# Converted from configs/net-netio-raw-tx256-tcp-mbox64.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 B arm: the TCP socket receive mailbox sized for a whole window.
+#
+# Same single variable as net-netio-raw-tx256-tcp-mbox16, one step further:
+# lwIP's TCP socket mailbox defaults to 0 (this port rounds that to one slot)
+# and a burst of segments overruns it; every overrun sets the "refused data"
+# state, in which tcp_input drops every further segment (tcp.drop /
+# mib2.tcpinerrs) and the pbuf is only re-offered by the 250 ms fast timer.
+#
+# 16 slots helped (70 -> 163 kB/s) but a slow-start burst is bigger than
+# that: the peer may put a whole TCP_WND (131072 B / 1460 = 90 segments) on
+# the wire before the reader gets a turn, and with core-locking input the
+# reader cannot run while the receive thread is inside the burst at all. 128
+# covers a full window with slack. With CONFIG_GMAC_RX_ZC the queued frames
+# are the driver's own buffers, so depth here does not spend the pbuf pool.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0 -DDEFAULT_TCP_RECVMBOX_SIZE=64"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_mdk_netio"

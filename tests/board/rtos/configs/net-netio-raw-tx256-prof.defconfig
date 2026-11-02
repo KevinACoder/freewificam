@@ -1,0 +1,27 @@
+# Converted from configs/net-netio-raw-tx256-prof.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-14 P1 (2026-11-01): the same arm with the driver's service-time
+# instrument on.
+#
+# The uplink cell costs ~100-230 us per frame today against K2-07's 12.57 us,
+# and the ring-full path is not where it goes (the ring is full on only ~2% of
+# the sends). tx_total_ticks answers "is the time inside dwc_eqos_send_frame
+# at all", and the memcpy/flush pair splits it further; anything left over is
+# outside the driver (lwIP, pbuf, scheduling) and has to be measured there.
+# The instrument's tax is known (11.3% on the A6 arm, AGENTS 1.2), so this
+# arm's numbers are for attribution only - never as a throughput baseline.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+CONFIG_GMAC_PROF=y
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_mdk_netio"

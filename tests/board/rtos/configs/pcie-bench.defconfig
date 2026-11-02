@@ -1,0 +1,12 @@
+# Converted from configs/pcie-bench.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B1 profile: the bus gate plus the throughput matrix (4K/64K/1M x QD1/QD8,
+# read/write, 3 reps).  The raw namespace is used; no filesystem is carried.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick pcie pcie_bench"

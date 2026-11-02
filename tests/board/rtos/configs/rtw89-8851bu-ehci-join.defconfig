@@ -1,0 +1,14 @@
+# Converted from configs/rtw89-8851bu-ehci-join.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B target path, stage 3: bring-up + scan + open join.  The join is the
+# bridge's own station MLME against the bench AP (open, ch5); no key exchange.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtw89 rtw89_scan rtw89_join"
+CONFIG_RTW89_USB_BUS=1

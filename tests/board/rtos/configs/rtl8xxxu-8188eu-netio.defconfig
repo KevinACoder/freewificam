@@ -1,0 +1,27 @@
+# Converted from configs/rtl8xxxu-8188eu-netio.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# 8188EUS ladder, stage 5b: the ladder plus the WLAN NETIO server over lwIP.
+# Same bench AP and same presentation layer as rtl8xxxu-8188eu-net; the peer is
+# the bench host's pinned NETIO client instead of iperf2.  The case prints
+# `net: netio ready port=18767 aux=18768 buf=16384` and never returns.
+#
+# HISTORY (2026-11-02): this file pins `labwifi-brmc`, the brcmfmac AP retired
+# from the AP role on 2026-11-01; that SSID is no longer on the bench.  Keep it
+# as the W1-01 arm's reproduction recipe only.  The current APs are the AR9271
+# ones and the measurement arms are the two named files:
+#   rtl8xxxu-8188eu-netio-ar-g.mk     legacy 11g (labwifi-ar-g)
+#   rtl8xxxu-8188eu-netio-ar-ht20.mk  HT20-SGI  (labwifi-ar-ht20s)
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_CASES="tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_netio"
+CONFIG_RTL8XXXU_EXPECT_MAC="20:f4:1b:52:8f:01"
+CONFIG_RTL8XXXU_AP_SSID="labwifi-brmc"
+CONFIG_RTL8XXXU_AP_FREQ=2432
+CONFIG_RTL8XXXU_USB_BUS=3

@@ -1,0 +1,18 @@
+# Converted from configs/rtl8xxxu-8188eu-bringup-hb.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# 8188EUS diagnostic arm: the bring-up plus the high-priority heartbeat that
+# reports through the polled UART.  Used to tell a dead kernel/console from a
+# blocked runner after the ThreadX claim hang; not a delivery profile.
+
+CONFIG_BACKEND_THREADX=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtl8xxxu"
+CONFIG_RTL8XXXU_AP_SSID="labwifi-brmc"
+CONFIG_RTL8XXXU_AP_FREQ=2432
+CONFIG_RTL8XXXU_HB=y
+CONFIG_RTL8XXXU_USB_BUS=3

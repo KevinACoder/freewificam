@@ -1,0 +1,22 @@
+# Converted from configs/rtl8xxxu-8723bu-bringup-all.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# 8723BU discovery arm: one boot that starts all four controllers (xHCI 3/2 and
+# EHCI 1/0) and reports which one claims the dongle.  The Linux reference build
+# already says the
+# 8723BU is behind the 4-port hub on an EHCI root, but the bus id moves with
+# the probe order, so this arm measures instead of trusting the note.
+# Not a delivery profile.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtl8xxxu"
+CONFIG_RTL8XXXU_CHIP_8723BU=y
+CONFIG_RTL8XXXU_EXPECT_MAC="88:e6:28:53:10:9c"
+CONFIG_RTL8XXXU_AP_SSID="labwifi-mtk24"
+CONFIG_RTL8XXXU_AP_FREQ=2432
+CONFIG_RTL8XXXU_USB_BUS=4

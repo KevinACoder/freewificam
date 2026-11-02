@@ -1,0 +1,12 @@
+# Converted from configs/rtw89-8851bu-tx-ehci.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B (target path) on ThreadX.
+
+CONFIG_BACKEND_THREADX=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtw89 rtw89_scan rtw89_join rtw89_dataplane"
+CONFIG_RTW89_USB_BUS=1

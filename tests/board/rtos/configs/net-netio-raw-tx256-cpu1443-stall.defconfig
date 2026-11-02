@@ -1,0 +1,25 @@
+# Converted from configs/net-netio-raw-tx256-cpu1443-stall.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 A arm: the frequency ladder's middle rung (request 1443 MHz).
+#
+# K2-15 H5 asks whether the stall frame count falls with the clock. Three
+# points, three boots, same image otherwise: 816 (net-netio-raw-tx256-stall),
+# 1443 (this one), 1992 (net-netio-raw-tx256-cpu1992-stall).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_STALL_PROBE=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_CPU_KHZ=1443000000
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_NETIO_TX_STALL_PROBE=y
+CONFIG_CASES="net_mdk_netio"

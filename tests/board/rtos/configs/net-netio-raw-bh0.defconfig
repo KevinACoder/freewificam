@@ -1,0 +1,24 @@
+# Converted from configs/net-netio-raw-bh0.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-07 Z4: Z1 (raw consumer, zero-copy RX, TX ring 256) + RX sweep in the ISR.
+#
+# rx_ru (DMA found no owned descriptor) has held at ~3,880/500k frames across
+# every arm: the DMA outruns the thread-context re-arm when the consumer owns
+# the sweep. With RX_BH=0 the sweep runs inside the interrupt, so the re-arm
+# happens one interrupt earlier; the trade is sweep time in interrupt context.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+# CONFIG_GMAC_PROF is not set
+# CONFIG_GMAC_RX_BH is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_mdk_netio"

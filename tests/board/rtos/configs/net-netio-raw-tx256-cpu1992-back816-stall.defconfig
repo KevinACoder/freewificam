@@ -1,0 +1,32 @@
+# Converted from configs/net-netio-raw-tx256-cpu1992-back816-stall.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 A arm: OPP procedure vs OPP value.
+#
+# K2-14 found the defect appears when the case itself pins the clock to the
+# 1.992 GHz OPP; nobody separated "the higher clock breaks the transmit path"
+# from "the frequency change leaves the machine in a state that breaks it".
+# Here the case asks for 1992 at start-up (as the failing arm does) and then
+# asks for 816 again after the line is up but before the cell. The cell runs
+# at the boot clock.
+#
+# If it still stalls, the value was never the variable and H5's frequency
+# story is wrong; if it runs clean, the damage is in what the procedure does
+# (SCMI/PLL state), not in how fast the core runs.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0 -DCONFIG_NETIO_CPU_KHZ_LATE=816000"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_STALL_PROBE=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_NETIO_TX_STALL_PROBE=y
+CONFIG_CASES="net_mdk_netio"

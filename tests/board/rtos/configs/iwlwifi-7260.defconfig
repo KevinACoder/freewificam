@@ -1,0 +1,14 @@
+# Converted from configs/iwlwifi-7260.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B3 profile: the PCIe bus gate plus the iwlwifi/mvm attach case.  The pcie
+# case group is selected for the arch ITS/MSI bridge and the board root complex;
+# the wireless world is added by build/iwlwifi.mk.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick pcie iwl7260"

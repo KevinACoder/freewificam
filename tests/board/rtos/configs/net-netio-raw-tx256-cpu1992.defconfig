@@ -1,0 +1,25 @@
+# Converted from configs/net-netio-raw-tx256-cpu1992.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-14: the failing arm, kept as a named configuration.
+#
+# The uplink cell only fails when the case pins the CPU to the 1.992 GHz OPP
+# (SCMI readback 1992 MHz, PMCCNTR 1.69 GHz). Same tree, same client, same
+# bootless A/B: this arm aborts with tx_drop>0, the 816 MHz arm of the same
+# tree delivers 104.5 MB/s at zero loss. Keeping the arm here means the
+# comparison is a named pair of files rather than a command-line edit.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_mdk_netio"

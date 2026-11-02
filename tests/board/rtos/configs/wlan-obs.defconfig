@@ -1,0 +1,36 @@
+# Converted from configs/wlan-obs.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# @file    config.mk
+# @brief   The one RTOS build configuration. Edit this file, not the command line.
+#
+# A build is a function of this file alone. The values below select one backend
+# and one image; `make` and `tools/rtos/build.sh` with no target build exactly
+# that image. The delivery gate (`make images`) is the only target that builds
+# both backends.
+#
+# Keep this file stable during a debug round: every changed value enters the
+# flag stamp and intentionally rebuilds the objects it affects. With it
+# unchanged, a source edit is an incremental rebuild.
+
+# --- image -----------------------------------------------------------------
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_PERF=y
+CONFIG_HEAP_SIZE=16
+CONFIG_GMAC_PROF=y
+CONFIG_WLAN_OBS=y
+CONFIG_WLAN_TCP_SINK=y
+CONFIG_WLAN_TCP_SINK_SECONDS=30
+# CONFIG_WLAN_UDP_SINK is not set
+CONFIG_WLAN_UDP_SINK_SECONDS=30
+CONFIG_WLAN_UDP_PORT=5002
+CONFIG_WLAN_PING_COUNT=10
+CONFIG_WLAN_PING_INTERVAL_MS=500
+CONFIG_WLAN_PING_TRACE=y
+# CONFIG_WLAN_SCAN_DIAG is not set
+CONFIG_WLAN_SCAN_BATCH=1
+CONFIG_WLAN_PUMP_PRIO="below"
+# CONFIG_WLAN_PUMP_DRAIN is not set
+CONFIG_CASES="wlan"

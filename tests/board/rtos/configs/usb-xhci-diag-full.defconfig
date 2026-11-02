@@ -1,0 +1,17 @@
+# Converted from configs/usb-xhci-diag-full.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# The full U-disk matrix under the diagnostic settings: short class timeout
+# (800 ms) and the xHCI port's timeout dump.  Runs the same arms as the
+# delivery profile; the short timeout turns a lost completion into a bounded
+# 0.8 s wait plus a dump instead of a five-second one.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=1
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_GMAC_PROF=y
+CONFIG_USB_MSC_DIAG=y
+CONFIG_USB_MSC_DIAG_FULL=y
+CONFIG_CASES="tick usb_xhci"

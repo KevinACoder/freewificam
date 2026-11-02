@@ -1,0 +1,29 @@
+# Converted from configs/net-netio-raw-tx256-tcp-mbox16.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 B arm: the TCP socket receive mailbox, sized.
+#
+# The receive direction collapses while the window stays wide open and the
+# peer retransmits every segment after its ~200 ms RTO: the stack's own
+# counters say the segments are refused (tcp.drop / mib2.tcpinerrs), and the
+# wire says the ACK for each one leaves ~250 ms later - the fast-timer
+# cadence, which is where lwIP re-offers a pbuf the application refused.
+#
+# lwIP's own default for the TCP socket mailbox is 0 and this port rounds that
+# up to a single slot (third-party/lwip/ports/sys_arch.c), so a burst of
+# segments overruns it as soon as the reader is not parked in recv() at that
+# instant. 16 matches the UDP receive mailbox and MEMP_NUM_NETBUF.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0 -DDEFAULT_TCP_RECVMBOX_SIZE=16"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_GMAC_TX_RING=256
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net_mdk_netio"

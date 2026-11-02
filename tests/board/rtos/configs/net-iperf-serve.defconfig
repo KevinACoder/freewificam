@@ -1,0 +1,27 @@
+# Converted from configs/net-iperf-serve.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-16 B arm: the independent TCP instrument (iperf2 client -> lwiperf server).
+#
+# The netio server and its client are one instrument pair, so "the c2s phase
+# stalls" cannot by itself separate a stack/driver defect from the netio
+# protocol or its client. This arm builds the plain `net` case with a single
+# long lwiperf downlink window (NET_PHASE_PLAN=2) and no board-initiated
+# session, so a client that does not speak netio at all - iperf2 `-c <board>
+# -t 10` - drives the same stack and the same driver.
+#
+# The driver/stack levers are the netio arm's (zero-copy RX included), so the
+# two instruments see the same receive path.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0 -DNET_PHASE_PLAN=2"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_NETIO_RAW_UDP=y
+CONFIG_CASES="net"

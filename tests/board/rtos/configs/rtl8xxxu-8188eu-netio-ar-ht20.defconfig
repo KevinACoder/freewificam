@@ -1,0 +1,29 @@
+# Converted from configs/rtl8xxxu-8188eu-netio-ar-ht20.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# 8188EUS NETIO on the AR9271 bench AP, HT20 with short GI (RTOS-01 P4 arm).
+#
+# The sibling of rtl8xxxu-8188eu-netio-ar-g.mk; the only difference is the AP:
+#
+#   /home/pi/labwifi-ar-ht20-sgi.conf  ssid=labwifi-ar-ht20s  hw_mode=g
+#                                      channel=5  ieee80211n=1
+#                                      ht_capab=[SHORT-GI-20]  wmm_enabled=1
+#
+# HT40 is frozen by user ruling (2026-11-02): the AP file carries no 40 MHz
+# capability, so this arm cannot silently become an HT40 cell.  A boot that
+# associates at 40 MHz is a wrong-AP boot and is void.
+#
+# OPP and bus are the same as the legacy arm (see that file for the reasons).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_CASES="tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_netio"
+CONFIG_RTL8XXXU_EXPECT_MAC="20:f4:1b:52:8f:01"
+CONFIG_RTL8XXXU_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTL8XXXU_AP_FREQ=2432
+CONFIG_RTL8XXXU_USB_BUS=3

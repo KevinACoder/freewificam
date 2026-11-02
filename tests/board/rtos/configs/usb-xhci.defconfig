@@ -1,0 +1,15 @@
+# Converted from configs/usb-xhci.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# A1: the U-disk on an xHCI root (USB3 Type-A ports, High-Speed only on this
+# board).  One controller family per image: the mass-storage instance lookup
+# returns the first ready disk, so a second bus in the same image could be
+# measured by mistake.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=1
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick usb_xhci"

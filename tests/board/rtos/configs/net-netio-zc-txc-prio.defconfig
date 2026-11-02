@@ -1,0 +1,20 @@
+# Converted from configs/net-netio-zc-txc-prio.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# K2-06 arm: ZC + TX checksum offload + the K2-03 H2 priority swap.
+# Producer (netio-rx) one step above the UDP consumer (netio-udp-rx): the
+# discriminating arm for "how much of feed is the consumer preempting the
+# drain thread". One axis against net-netio-zc-txc.mk; everything else
+# identical.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LEVERS="-DLWIP_TCPIP_CORE_LOCKING_INPUT=0 -DMN_RX_PRIO=osPriorityAboveNormal -DUDP_RX_PRIO=osPriorityNormal"
+# CONFIG_GMAC_PROF is not set
+CONFIG_GMAC_RX_HWCSUM=y
+CONFIG_GMAC_RX_ZC=y
+CONFIG_GMAC_TX_CSUM=y
+CONFIG_CASES="net_mdk_netio"

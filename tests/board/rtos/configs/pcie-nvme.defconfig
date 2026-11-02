@@ -1,0 +1,13 @@
+# Converted from configs/pcie-nvme.mk on 2026-11-02 (BUILD-01 M1).
+# Edit this file or run ./make.rtos menuconfig, then regenerate.
+
+# B0/B1 profile: one image for the PCIe + NVMe ladder.  The bus case (pcie)
+# brings the root complex up and proves the ITS path with one real read; the
+# benchmark (pcie_bench) is added by the B1 config.  One backend per build.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick pcie"
