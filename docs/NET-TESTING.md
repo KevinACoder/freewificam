@@ -226,7 +226,7 @@ CONFIG := rtl8xxxu-8188eu-netio-ar-g     # legacy 11g AP (labwifi-ar-g)
 tools/rtos/build.sh
 # stage build/build/rtos-freertos.bin as rtos.bin, boot it, wait for:
 #   net: netio ready port=18767 aux=18768 buf=16384
-/home/pi/netio-src/netio -u -b 1440 <board-ip>     # one call = Tx (down) + Rx (up)
+netio -u -b 1440 <board-ip>     # the bench host's pinned NETIO 1.34 client
 ```
 
 The server runs inside the image; there is no shell on the board.  Its ports are
