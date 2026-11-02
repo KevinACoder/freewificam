@@ -168,7 +168,7 @@ BOARD_LOAD_BASE := 0x90000000
 # This board's images reset themselves (PSCI) once the case table's verdict
 # line is out, and a failed assertion resets instead of parking - the bench
 # never needs a manual power cycle.
-BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=1
+BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=$(if $(filter 0,$(CONFIG_BOARD_AUTO_RESET)),0,1)
 else ifeq ($(BOARD),firefly-v2)
 # Same family sources as v1; only the version directory (register map) and
 # the two hardware facts v2 changed - the console clock and the Ethernet
@@ -187,7 +187,7 @@ BOARD_TX_DIR := firefly
 BOARD_TX_EXTRA_SRCS := $(PLATFORM)/os/threadx/board/firefly/libc_bindings.c
 BOARD_LINKSCRIPT := $(PLATFORM)/board/firefly/v2/link.ld
 BOARD_LOAD_BASE := 0x90000000
-BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=1
+BOARD_DEFS := -DRTOS_BOARD_AUTO_RESET=$(if $(filter 0,$(CONFIG_BOARD_AUTO_RESET)),0,1)
 else
 $(error unknown BOARD '$(BOARD)': use rk3568-itx, firefly-v1 or firefly-v2)
 endif
@@ -268,7 +268,8 @@ endif
 # do not select emmc and wlan in one image.
 ifneq ($(filter wlan,$(CASES)),)
 EXTRA_DEFS += -DCONFIG_FSL_SDMMC_ENABLE_SDIO=1 \
-	-DCMSIS2_MAX_THREADS=24 -DCMSIS2_MAX_TIMERS=128 \
+	-DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),24,$(CONFIG_CMSIS2_MAX_THREADS)) \
+	-DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),128,$(CONFIG_CMSIS2_MAX_TIMERS)) \
 	-DCONFIG_FREERTOS_HEAP_SIZE=8388608u
 endif
 
@@ -463,7 +464,7 @@ BACKEND_VENDOR_SRCS := \
 else ifeq ($(BACKEND),threadx)
 KERNEL_NAME := ThreadX 6.5.1.202602a
 BACKEND_DEFS := -DEL1=1 -DTX_INCLUDE_USER_DEFINE_FILE \
-	-DCONFIG_TX_TICKS_PER_SECOND=1000 -DCONFIG_TX_TIMER_STACK=4096 \
+	-DCONFIG_TX_TICKS_PER_SECOND=$(if $(filter 0,$(CONFIG_TX_TICKS_PER_SECOND)),1000,$(CONFIG_TX_TICKS_PER_SECOND)) -DCONFIG_TX_TIMER_STACK=$(if $(filter 0,$(CONFIG_TX_TIMER_STACK)),4096,$(CONFIG_TX_TIMER_STACK)) \
 	-DCMSIS2_BACKEND_THREADX
 BACKEND_INCLUDES := \
 	-I$(PLATFORM)/os/threadx/board/$(BOARD_TX_DIR)/cmsis2 \
@@ -541,7 +542,16 @@ SHELL_APP_SRCS :=
 CHERRYSH_SRCS :=
 endif
 
-BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
+# Resource knobs from Kconfig.  The values are generated per profile; the
+# code keeps a default for the two stacks so a profile that predates the
+# symbols still builds.  A profile overrides any value by setting the
+# CONFIG_* symbol in its defconfig.
+RESOURCE_DEFS := \
+	-DCONFIG_SHELL_STACK_KB=$(or $(CONFIG_SHELL_STACK_KB),16) \
+	-DCONFIG_RUNNER_STACK_KB=$(or $(CONFIG_RUNNER_STACK_KB),8) \
+	-DCONFIG_RUNNER_BIG_STACK_KB=$(or $(CONFIG_RUNNER_BIG_STACK_KB),16)
+
+BASE_CFLAGS := $(OPT) -g$(or $(CONFIG_DEBUG_LEVEL),3) -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	$(PROFILE_CFLAGS) \
@@ -549,7 +559,9 @@ BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-DFW_BUILD_TAG='"$(BUILD_TAG)"' \
 	-DRTOS_BACKEND_NAME='"$(BACKEND)"' \
 	-DRTOS_KERNEL_NAME='"$(KERNEL_NAME)"' \
-	-DULOG_ENABLED -DULOG_MAX_MESSAGE_LENGTH=256 \
+	$(if $(filter 0,$(CONFIG_ULOG_ENABLED)),,-DULOG_ENABLED) \
+	-DULOG_MAX_MESSAGE_LENGTH=$(or $(CONFIG_ULOG_MAX_MESSAGE_LENGTH),256) \
+	$(RESOURCE_DEFS) \
 	$(CASE_DEFS) $(EXTRA_DEFS) $(PROFILE_DEFS) $(CFG_DEFS) $(LEVERS) \
 	$(BACKEND_DEFS) $(BOARD_DEFS) $(INCLUDES)
 
@@ -557,7 +569,8 @@ CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
 	-include stdlib.h -D_DEFAULT_SOURCE=1
 ASM_CFLAGS := $(BASE_CFLAGS)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
-PRINTF_CFLAGS := -DPRINTF_DISABLE_SUPPORT_FLOAT -DPRINTF_DISABLE_SUPPORT_EXPONENTIAL
+PRINTF_CFLAGS := $(if $(filter 0,$(CONFIG_PRINTF_DISABLE_FLOAT)),,-DPRINTF_DISABLE_SUPPORT_FLOAT) \
+	$(if $(filter 0,$(CONFIG_PRINTF_DISABLE_EXPONENTIAL)),,-DPRINTF_DISABLE_SUPPORT_EXPONENTIAL)
 
 # The 8189FTV vendor-stack world (empty unless the wlan case is selected).
 # The lwIP core/protocol set: one list, because two images now carry the

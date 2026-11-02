@@ -54,8 +54,10 @@ The handoff counted 53 names; four are double-accounted and settle to 51:
 | `NET_WATCH` | make-side source gate, `-DCONFIG_NET_WATCH=`, and a bare `-DNET_WATCH=` |
 | `RTL8XXXU_HB` | make-side driver switch and the fragment's `-DRTL8XXXU_HB` |
 
-The authoritative set is the 51 names below (the machine-readable copy is
-`kconfig-gen.py`'s `MODELED`; the split here is for reading):
+The authoritative legacy set is the 51 names below (the machine-readable copy
+is `kconfig-gen.py`'s `MODELED`; the split here is for reading).  §7.2 adds 23
+resource/toolchain symbols on top; those are not legacy profile keys and are
+always emitted, so they are counted separately.
 
 **Image structure (8)**: `BACKEND`, `BOARD`, `CASES`, `HEAP_SIZE`,
 `FREERTOS_HEAP_SIZE`, `LEVERS`, `OPT`, `PROFILE`.
@@ -85,7 +87,7 @@ and netio knobs; `components/net80211/Kconfig` carries `WLAN_RX_BA`;
 carries the wireless group.  The generator refuses an undefined name and
 prints the count, so the 51 is checked on every run.
 
-Types: five choices (`BACKEND`, `BOARD`, `OPT`, `PROFILE`,
+Types: six choices (`BACKEND`, `BOARD`, `OPT`, `DEBUG_LEVEL`, `PROFILE`,
 `RTL8XXXU_CHIP`); strings `CASES`, `LEVERS`, `RTL8XXXU_AP_SSID`,
 `RTL8XXXU_EXPECT_MAC`, `WLAN_PUMP_PRIO`; integers `HEAP_SIZE` (MB),
 `FREERTOS_HEAP_SIZE` (bytes), `RTL8XXXU_AP_FREQ`, `RTL8XXXU_USB_BUS`,
@@ -247,6 +249,70 @@ host-side serial session are still M6 follow-ups; the current console is
 interactive only, and the polled console's raw echo shows readline redraws
 (a terminal erases them with cursor moves).
 
+## 7.2 Resources, toolchain and per-image values
+
+The 51 legacy symbols describe *which* image is built.  Per-image resource and
+toolchain values are separate symbols: they have defaults, they are always
+emitted by the generator, and a defconfig overrides any of them without a
+fragment edit.  They are not legacy profile keys, so they do not change the
+51/53 reconciliation.
+
+**Toolchain**: `OPT` is now a six-member choice (`O0`, `O2`, `O3`, `Os`, `Og`);
+`DEBUG_LEVEL` is a choice (`g0`..`g3`, default `g3`).  The Makefile renders
+them as `$(OPT) -g$(CONFIG_DEBUG_LEVEL)`.
+
+**Stacks and scheduler**: `SHELL_STACK_KB` (16), `RUNNER_STACK_KB` (8),
+`RUNNER_BIG_STACK_KB` (16), `CMSIS2_MAX_THREADS` (0 = fragment fallback),
+`CMSIS2_MAX_TIMERS` (0), `TX_TIMER_STACK` (0), `TX_TICKS_PER_SECOND` (0).
+`HEAP_SIZE` and `FREERTOS_HEAP_SIZE` remain the image heap pair.
+
+**Pools and USB**: `LKPI_SKB_POOL_NUM`, `LKPI_SKB_DATA_POOL_NUM`,
+`LKPI_SKB_HEAP_HDR_MAX`, `LKPI_USB_CHERRYUSB_SLOTS` (16),
+`USB_STAGE_SIZE` (20480), `USBHOST_MSC_TIMEOUT` (800),
+`USB_EHCI_ISO_NUM` (4).  A `0` pool/deadline value means "keep the per-world
+fallback"; the fragments carry the fallback (e.g. iwlwifi 256/64/128,
+rtl8xxxu/rtw89/rtw88/wlan 128/64/64 and CMSIS2 32/16).
+
+**lwIP, ULOG and printf**: `LWIP_TCPIP_CORE_LOCKING_INPUT`,
+`LWIP_TCP_ACK_DELAY_SEGMENTS` (explicit values append raw `-DLWIP_*` tokens
+after `PROFILE_DEFS`, so they override the perf default), `LWIPERF_TCP_MAX_IDLE_SEC` (60),
+`ULOG_ENABLED` (y), `ULOG_MAX_MESSAGE_LENGTH` (256),
+`PRINTF_DISABLE_FLOAT` (y), `PRINTF_DISABLE_EXPONENTIAL` (y).
+`NETIO_CPU_KHZ_LATE` is emitted as a raw `-DCONFIG_NETIO_CPU_KHZ_LATE=` token
+when set, because `net_mdk_netio.c` reads that macro directly.
+
+**Board behaviour**: `BOARD_AUTO_RESET` (y) renders
+`-DRTOS_BOARD_AUTO_RESET=0/1`.
+
+A profile changes them like any other symbol:
+
+```
+CONFIG_OPT_O3=y
+CONFIG_DEBUG_G2=y
+CONFIG_HEAP_SIZE=8
+CONFIG_SHELL_STACK_KB=24
+CONFIG_RUNNER_STACK_KB=12
+CONFIG_LKPI_SKB_POOL_NUM=200
+CONFIG_ULOG_MAX_MESSAGE_LENGTH=512
+CONFIG_BOARD_AUTO_RESET=n
+```
+
+The generated fragment always contains the `CONFIG_*` make variables; only
+the defconfig lines are profile-specific.  `make.rtos check` validates all 82
+defconfigs; a temporary O3/g2/heap-8/24-KiB-shell-stack profile built to
+72,032 bytes, proving the values reached the compiler (it was removed after
+the test).  Existing profiles gain the extra `-DCONFIG_*` flags, so image
+hashes can change; image hash is not the build gate.
+
+**What stays build-owned.**  These are not per-image tunables: backend
+identity (`GUEST`, `EL1`, `CMSIS2_BACKEND_*`), board constants
+(`SDMMC_PORT_*`, `USB_BOARD_IRQ_PRIORITY_RAW`, `EQOS_*`), vendor driver ABI
+(`CONFIG_RTW89_*`, `CONFIG_RTW88_*`, `CONFIG_IWLWIFI*`, the `LTL8188F`
+family), and bridge/firmware names (`WLAN_BRIDGE_*`, `WIFIMAC_PATH`).  They
+select a family/board, not a value within one image; changing them changes
+which source is built.  `CONFIG_LEVERS` remains the explicit escape hatch for
+a one-off experiment, and CI/log review warns when it is used.
+
 ## 8. What Kconfig deliberately does not express
 
 These seven classes stay in the Makefile or the fragments; moving them is
@@ -322,6 +388,11 @@ verdicts are `rtos: result pass cases=2/2`.
   shas and sizes.  The pcie-7260 image was booted on the RK3568 twice: both
   boots print `pcie: dev 03:00.0 8086:08b1`, `pcie-7260: PASS vectors=1
   pend_irqs=0`, and `rtos: result pass cases=3/3 backend=freertos`.
+* Resource/toolchain configurability (the m01699 request): the 23 symbols in
+  §7.2 are per-defconfig; a temporary O3/g2/heap-8/24-KiB-shell-stack profile
+  built to 72,032 B and was removed; `rtos-shell` rebuilt to 68,144 B.  The
+  full three-target CI rebuild after the change is 78 rk3568 + 1 firefly-v1 +
+  3 firefly-v2, 0 failures.
 * `make.rtos digest` still fails on four `third-party/lwip/ports/` hashes
   (`ports/ethnetif.c`, `ports/ethnetif.h`, `ports/include/lwipopts.h`,
   `ports/platform_hooks.c`); the old tree fails identically, so this is
@@ -349,6 +420,12 @@ were read.
   `pcie-7260` boots 2/2 on the RK3568.  The firefly images build but were not
   booted here (no firefly station in this round); the wlan images build but
   run long sink loops, so they are compile/boot-anchor only.
+* Resource and toolchain values are per-image now (§7.2).  Backend identity,
+  board constants and vendor driver ABI macros remain build-owned because
+  they select which source is built, not a value within one image; the
+  boundary is documented in §7.2.  A1-style `-D` equivalence is not expected
+  after the resource flags were added; the contract is the defconfig + the
+  generated fragment, not byte-identical images.
 * The firmware blobs under `components/linuxkpi/fw/` are generated locally and
   git-ignored; a clean checkout must produce them before building any
   firmware-based profile.  This is deliberate (firmware is not redistributed),

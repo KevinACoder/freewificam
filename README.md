@@ -92,6 +92,9 @@ kernels of it (ThreadX and FreeRTOS behind one CMSIS-RTOS2 abstraction).
 PROFILE=rtos-shell ./make.rtos image  # the CherrySH console image
 PROFILE=rtos-shell ./make.rtos case-list-check  # image vs defconfig vs judge
 AARCH64_CROSS_PATH=/path/to/aarch64-none-elf ./make.rtos images
+# per-image resource/toolchain values live in the defconfig: CONFIG_OPT_O3,
+# CONFIG_DEBUG_G2, CONFIG_HEAP_SIZE, CONFIG_SHELL_STACK_KB, ...
+# see docs/BUILD-DESIGN.md §7.2
 
 make rk3568_ci                        # every rk3568-itx profile, clean build each
 make firefly_v1_ci firefly_v2_ci      # every firefly-v1/v2 profile

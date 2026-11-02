@@ -29,16 +29,16 @@ RTW89_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtw89"' \
 # transfer, so the reference image's smaller defaults run dry before the firmware
 # download finishes.  2048-byte data slots stay 2048: this driver's buffers are
 # larger than that and are served from the heap, which is where the window goes.
-RTW89_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
-	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=64 \
-	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=64
+RTW89_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_POOL_NUM)),128,$(CONFIG_LKPI_SKB_POOL_NUM)) \
+	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)),64,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)) \
+	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=$(if $(filter 0,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX)),64,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX))
 
 # The linuxkpi USB adapter's stage must cover the driver's single bulk-in
 # transfer (RTW89_USB_RECVBUF_SZ = 20480); a smaller slot refuses every receive
 # transfer for good and the driver never sees a completion.  The gate below
 # reads the driver's number instead of trusting this comment.
 RTW89_USB_DEFS := -DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$(USB_STAGE_SIZE) \
-	-DCONFIG_LKPI_USB_CHERRYUSB_SLOTS=16
+	-DCONFIG_LKPI_USB_CHERRYUSB_SLOTS=$(CONFIG_LKPI_USB_CHERRYUSB_SLOTS)
 
 # The controller the dongle is on, per arm: the xHCI profile lists both xHCI
 # roots, the EHCI profile both USB2 roots.  The case starts each listed bus and
@@ -190,6 +190,6 @@ RTW89_GATE_STAGE := $(shell sed -n 's/^#define[[:space:]]*RTW89_USB_RECVBUF_SZ[[
 # Static object tables: the driver's delayed-work population is larger than
 # the storage line's.  These are global (the CMSIS2 backend's tables are built
 # from them), so they are appended to the global flag set like iwlwifi.mk does.
-BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
-CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
-ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
+BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
+CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
+ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))

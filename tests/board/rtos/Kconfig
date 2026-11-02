@@ -32,8 +32,35 @@ config OPT_O0
 config OPT_O2
 	bool "-O2"
 
+config OPT_O3
+	bool "-O3"
+
+config OPT_OS
+	bool "-Os"
+
 config OPT_OG
 	bool "-Og"
+
+endchoice
+
+choice DEBUG_LEVEL
+	prompt "Debug information"
+	default DEBUG_G3
+	help
+	  The -g level is part of the build contract: -g3 is the historical
+	  default, -g0 strips the image for a size-sensitive profile.
+
+config DEBUG_G0
+	bool "-g0"
+
+config DEBUG_G1
+	bool "-g1"
+
+config DEBUG_G2
+	bool "-g2"
+
+config DEBUG_G3
+	bool "-g3"
 
 endchoice
 
@@ -88,6 +115,107 @@ config GMAC_PROF
 	  a measurement boot is the same image as before; an A/B arm turns it
 	  off.  The Makefile's old unconditional -DCONFIG_GMAC_PROF= line is
 	  gone; the generator now emits it through CFG_DEFS.
+
+menu "Resources and toolchain"
+
+comment "Every value below is part of the image contract: changing it changes"
+comment "the bytes, so profiles may differ per image.  The generator always"
+comment "emits the CONFIG_* make variables; a value of 0 means 'keep the"
+comment "per-world default' for the pool/deadline knobs."
+
+config BOARD_AUTO_RESET
+	bool "Reset the board after the runner finishes"
+	default y
+
+config SHELL_STACK_KB
+	int "CherrySH task stack (KiB)"
+	default 16
+
+config RUNNER_STACK_KB
+	int "Runner task stack (KiB)"
+	default 8
+
+config RUNNER_BIG_STACK_KB
+	int "Runner stack for netio/wireless cases (KiB)"
+	default 16
+
+config CMSIS2_MAX_THREADS
+	int "CMSIS-RTOS2 maximum threads (0 = per-world default)"
+	default 0
+
+config CMSIS2_MAX_TIMERS
+	int "CMSIS-RTOS2 maximum timers (0 = per-world default)"
+	default 0
+
+config TX_TIMER_STACK
+	int "ThreadX timer thread stack (bytes, 0 = 4096)"
+	default 0
+
+config TX_TICKS_PER_SECOND
+	int "ThreadX ticks per second (0 = 1000)"
+	default 0
+
+config LKPI_SKB_POOL_NUM
+	int "linuxkpi skb pool entries (0 = per-world default)"
+	default 0
+
+config LKPI_SKB_DATA_POOL_NUM
+	int "linuxkpi skb data pool entries (0 = per-world default)"
+	default 0
+
+config LKPI_SKB_HEAP_HDR_MAX
+	int "linuxkpi skb inline header bytes (0 = per-world default)"
+	default 0
+
+config LKPI_USB_CHERRYUSB_SLOTS
+	int "CherryUSB URB slots"
+	default 16
+
+config USB_STAGE_SIZE
+	int "USB transfer stage size (bytes)"
+	default 20480
+
+config USBHOST_MSC_TIMEOUT
+	int "USB mass-storage timeout (ms)"
+	default 800
+
+config USB_EHCI_ISO_NUM
+	int "EHCI isochronous descriptors"
+	default 4
+
+config LWIP_TCPIP_CORE_LOCKING_INPUT
+	bool "lwIP TCPIP core locking on input"
+	default n
+
+config LWIP_TCP_ACK_DELAY_SEGMENTS
+	int "lwIP delayed-ACK segment watermark"
+	default 0
+
+config LWIPERF_TCP_MAX_IDLE_SEC
+	int "lwiperf TCP maximum idle seconds"
+	default 60
+
+config NETIO_CPU_KHZ_LATE
+	int "netio late CPU-kHz sampling override (kHz, 0 = off)"
+	default 0
+
+config ULOG_ENABLED
+	bool "Enable ulog"
+	default y
+
+config ULOG_MAX_MESSAGE_LENGTH
+	int "ulog maximum message length"
+	default 256
+
+config PRINTF_DISABLE_FLOAT
+	bool "Strip printf float support"
+	default y
+
+config PRINTF_DISABLE_EXPONENTIAL
+	bool "Strip printf exponential support"
+	default y
+
+endmenu
 
 rsource "platform/board/Kconfig"
 rsource "app/Kconfig"

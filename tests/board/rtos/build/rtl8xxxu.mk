@@ -72,9 +72,9 @@ RTL8XXXU_MAC_DEFS := -DRTL8XXXU_EXPECT_MAC='{$(foreach b,$(RTL8XXXU_MAC_BYTES),0
 
 # The skb pool geometry the receive path needs: 32 receive buffers are alive
 # for the driver's lifetime, plus one allocation per transmit transfer.
-RTL8XXXU_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
-	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=64 \
-	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=64
+RTL8XXXU_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_POOL_NUM)),128,$(CONFIG_LKPI_SKB_POOL_NUM)) \
+	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)),64,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)) \
+	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=$(if $(filter 0,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX)),64,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX))
 
 # The adapter's geometry.  The stage is the widest single transfer: the 8188
 # line's 2328-byte receive URB here, and 8723BU's 4096-byte firmware page is
@@ -84,7 +84,7 @@ RTL8XXXU_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
 RTL8XXXU_STAGE ?= 4096
 RTL8XXXU_STAGE_MIN := 2328	# IEEE80211_MAX_FRAME_LEN (2304) + rxdesc16/24 (24)
 RTL8XXXU_USB_DEFS := -DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$(RTL8XXXU_STAGE) \
-	-DCONFIG_LKPI_USB_CHERRYUSB_SLOTS=16
+	-DCONFIG_LKPI_USB_CHERRYUSB_SLOTS=$(CONFIG_LKPI_USB_CHERRYUSB_SLOTS)
 
 # The controller list, per arm.  3 = both xHCI roots (the lab's 480 M path),
 # 1 = both USB2 roots (the panel's EHCI path), 4 = all four, for the one
@@ -245,7 +245,7 @@ RTL8XXXU_NET_SRCS := \
 # The idle limit is the instrument's, not the link's: give the client room to
 # finish and report DONE_CLIENT.
 RTL8XXXU_NET_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DLWIPERF_TCP_MAX_IDLE_SEC=60 \
+	-DLWIPERF_TCP_MAX_IDLE_SEC=$(if $(filter 0,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)),60,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)) \
 	$(RTL8XXXU_AP_DEFS) -I$(RTL8XXXU_NPORT)/bridge
 else
 RTL8XXXU_NET_SRCS :=
@@ -265,7 +265,7 @@ RTL8XXXU_NETIO_SRCS := \
 	$(LINE)/app/cases/net_mdk_netio.c \
 	$(LINE)/app/net_prof.c
 RTL8XXXU_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DLWIPERF_TCP_MAX_IDLE_SEC=60 \
+	-DLWIPERF_TCP_MAX_IDLE_SEC=$(if $(filter 0,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)),60,$(CONFIG_LWIPERF_TCP_MAX_IDLE_SEC)) \
 	$(RTL8XXXU_AP_DEFS) -I$(RTL8XXXU_NPORT)/bridge \
 	-I$(ROOT)/components/linuxkpi -I$(RTL8XXXU_LKPI)/usb \
 	-I$(ROOT)/ports/cherryusb
@@ -298,6 +298,6 @@ RTL8XXXU_GATE_STAGE := $(RTL8XXXU_STAGE)
 # Static object tables: the driver's delayed-work population plus the net
 # case's thread.  Global, because the CMSIS2 backend's tables are built from
 # them; appended like rtw89.mk does.
-BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
-CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
-ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
+BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
+CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
+ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))

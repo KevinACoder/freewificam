@@ -40,4 +40,4 @@ UVC_GATE_SYMBOLS := ehci_iso_urb_init usbh_video_stream_start \
 # The iso engine's per-bus state is sized by this key (port header default 4);
 # the camera profile can widen it when a second camera is ever attached.
 CONFIG_USB_EHCI_ISO_NUM ?= 4
-UVC_CFLAGS += -DCONFIG_USB_EHCI_ISO_NUM=$(CONFIG_USB_EHCI_ISO_NUM)
+UVC_CFLAGS += -DCONFIG_USB_EHCI_ISO_NUM=$(if $(filter 0,$(CONFIG_USB_EHCI_ISO_NUM)),4,$(CONFIG_USB_EHCI_ISO_NUM))

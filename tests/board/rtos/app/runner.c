@@ -198,6 +198,13 @@ int rtos_case_run(unsigned index)
 	return (index < rtos_case_count()) ? CASE_TABLE[index].run() : -1;
 }
 
+#ifndef CONFIG_RUNNER_STACK_KB
+#define CONFIG_RUNNER_STACK_KB 8
+#endif
+#ifndef CONFIG_RUNNER_BIG_STACK_KB
+#define CONFIG_RUNNER_BIG_STACK_KB 16
+#endif
+
 static const osThreadAttr_t runner_attr = {
 	.name = "runner",
 	.priority = osPriorityNormal,
@@ -217,9 +224,9 @@ static const osThreadAttr_t runner_attr = {
     defined(RTOS_CASE_RTL8XXXU_NETIO) || defined(RTOS_CASE_NET_MDK_NETIO)
 	/* The netio server is brought up from this thread (its socket workers get
 	 * their own heap-backed stacks); give the bring-up frame room. */
-	.stack_size = 16384U,
+	.stack_size = CONFIG_RUNNER_BIG_STACK_KB * 1024U,
 #else
-	.stack_size = 8192U,
+	.stack_size = CONFIG_RUNNER_STACK_KB * 1024U,
 #endif
 };
 

@@ -37,9 +37,9 @@ RTW88_IMAGE_NAMES := -DWLAN_BRIDGE_ADAPTER_NAME='"rtw88"' \
 # ceiling has to cover the ones the pool hands out on the heap.  The buffers are
 # 16 KiB-class (the chip's rxff_size is 16384), larger than a pool data slot, so
 # the payloads come from the heap and only the headers are pooled.
-RTW88_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=128 \
-	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=64 \
-	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=64
+RTW88_SKB_DEFS := -DCONFIG_LKPI_SKB_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_POOL_NUM)),128,$(CONFIG_LKPI_SKB_POOL_NUM)) \
+	-DCONFIG_LKPI_SKB_DATA_POOL_NUM=$(if $(filter 0,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)),64,$(CONFIG_LKPI_SKB_DATA_POOL_NUM)) \
+	-DCONFIG_LKPI_SKB_HEAP_HDR_MAX=$(if $(filter 0,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX)),64,$(CONFIG_LKPI_SKB_HEAP_HDR_MAX))
 
 # The net80211 bridge is shared with the USB lines, and its port_* observation
 # hooks read host-controller registers and ask the URB engine.  This line's
@@ -221,8 +221,8 @@ RTW88_LDFLAGS := \
 # Static object tables: the driver's delayed-work population is larger than the
 # storage line's.  These are global (the CMSIS2 backend's tables are built from
 # them), so they are appended to the global flag set like rtw89.mk does.
-BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
-CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
-ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=32 -DCMSIS2_MAX_THREADS=16
+BASE_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
+CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
+ASM_CFLAGS += -DCMSIS2_MAX_TIMERS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_TIMERS)),32,$(CONFIG_CMSIS2_MAX_TIMERS)) -DCMSIS2_MAX_THREADS=$(if $(filter 0,$(CONFIG_CMSIS2_MAX_THREADS)),16,$(CONFIG_CMSIS2_MAX_THREADS))
 
 endif # rtw88

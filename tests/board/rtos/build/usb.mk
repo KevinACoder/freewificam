@@ -25,7 +25,7 @@ USB_BOARD := $(PLATFORM)/board/rk3568-itx/usb
 # largest command is 1 MiB and the native MSC path moves the caller's buffer
 # directly, so this value sizes the linuxkpi adapter's pool (used by the
 # wireless image); the gate below keeps it in step with the driver's RX size.
-USB_STAGE_SIZE := 20480
+USB_STAGE_SIZE := $(if $(filter 0,$(CONFIG_USB_STAGE_SIZE)),20480,$(CONFIG_USB_STAGE_SIZE))
 
 USB_INCLUDES := \
 	-I$(USB_PORT)/board/rk3568-itx \
@@ -48,7 +48,7 @@ USB_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 # arm is not a delivery profile; it exists to name the defect.
 ifneq ($(CONFIG_USB_MSC_DIAG),)
 USB_CFLAGS += -DMSC_DIAG=1 -DCONFIG_USBHOST_XHCI_DBG_DUMP=1 \
-	-DCONFIG_USBHOST_MSC_TIMEOUT=800
+	-DCONFIG_USBHOST_MSC_TIMEOUT=$(if $(filter 0,$(CONFIG_USBHOST_MSC_TIMEOUT)),800,$(CONFIG_USBHOST_MSC_TIMEOUT))
 endif
 ifneq ($(CONFIG_USB_MSC_DIAG_FULL),)
 USB_CFLAGS += -DMSC_DIAG_FULL=1
