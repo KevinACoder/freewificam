@@ -51,6 +51,16 @@ ALLOWED = {
         "mmc_command.flags, a host-layer value the controller never sees",
 }
 
+# Cell categories this port is allowed not to have, each with its reason.  A
+# missing cell here is a scope difference, not a defect; everything else that
+# is missing is reported.
+ALLOWED_MISSING = {
+    "cis-walk":
+        "the GT walks every CIS tuple of every function (0x1000-0x110d); this "
+        "port reads the CIS pointer and the two block sizes it needs, so the "
+        "rest of the walk is scope, not behaviour",
+}
+
 # The fields a command line carries.  A field absent from both is not a
 # difference; a field absent from one side is reported as missing.
 CMD_FIELDS = ("raw", "d", "blksz", "blkcnt", "bytcnt", "clkdiv", "ctype",
@@ -62,7 +72,8 @@ DONE_FIELDS = ("ev", "err", "resp0")
 # A capture may prefix every line with a console timestamp or an "RX  [ 1.3]"
 # marker, so the anchor is the tag, not the start of the line.
 _CMD_RE = re.compile(
-    r"(?:ALN|MCI) CMD c=(?P<c>\d+) arg=(?P<arg>[0-9a-fA-F]+) (?P<rest>.*)$")
+    r"(?:ALN|MCI) CMD (?:host=(?P<host>\d+) )?c=(?P<c>\d+) "
+    r"arg=(?P<arg>[0-9a-fA-F]+) (?P<rest>.*)$")
 _DONE_RE = re.compile(
     r"(?:ALN|MCI) DONE c=(?P<c>\d+) ev=(?P<ev>[0-9a-fA-F]+) "
     r"err=(?P<err>-?\d+) resp0=(?P<resp0>[0-9a-fA-F]+)")
@@ -129,6 +140,7 @@ def parse(text: str) -> list[dict]:
                 "c": int(m.group("c")),
                 "arg": m.group("arg"),
                 "arg_int": int(m.group("arg"), 16),
+                "host": m.group("host"),
                 "fields": {k: v for k, v in _FIELD_RE.findall(m.group("rest"))},
                 "done": None,
             }
@@ -225,8 +237,17 @@ def _allowed(field: str) -> bool:
     return field in ALLOWED
 
 
+def _is_cis_walk(cell: dict) -> bool:
+    """A function-0 direct access inside the CIS region."""
+    return (cell["c"] == 52 and ((cell["arg_int"] >> 28) & 0x7) == 0 and
+            0x1000 <= ((cell["arg_int"] >> 9) & 0x1FFFF) <= 0x110D)
+
+
 def summarize(result: dict) -> dict:
     missing = [r for r in result["rows"] if r["status"] == "missing-in-rtos"]
+    cis_missing = [r for r in missing if _is_cis_walk(r["gt"])]
+    allowed_missing = {k: v for k, v in ALLOWED_MISSING.items()} if cis_missing else {}
+    missing = [r for r in missing if not _is_cis_walk(r["gt"])]
     matched = [r for r in result["rows"] if r["status"] == "matched"]
     unexplained = []
     for row in matched:
@@ -240,6 +261,8 @@ def summarize(result: dict) -> dict:
         "extra": len(result["extra_in_rtos"]),
         "unexplained_field_diffs": unexplained,
         "missing_cells": [_cell_name(r["gt"]) for r in missing],
+        "allowed_missing": allowed_missing,
+        "allowed_missing_cells": len(cis_missing),
         "extra_cells": [_cell_name(c) for c in result["extra_in_rtos"]],
         "clean": not missing and not result["extra_in_rtos"] and not unexplained,
     }
@@ -251,6 +274,9 @@ def render_md(summary: dict, result: dict, gt_name: str, rtos_name: str) -> str:
     out.append(f"- RTOS: `{rtos_name}`")
     out.append(f"- matched {summary['matched']}, missing in RTOS "
                f"{summary['missing']}, extra in RTOS {summary['extra']}")
+    if summary.get("allowed_missing_cells"):
+        out.append(f"- allowed scope difference: {summary['allowed_missing_cells']} "
+                   f"CIS-walk cells (see below)")
     out.append("- verdict: **ALIGNED**" if summary["clean"]
                else "- verdict: **DIFFERS**")
     out.append("")
