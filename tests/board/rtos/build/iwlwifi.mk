@@ -38,6 +38,7 @@ IWL_BSD_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 
 IWL_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED $(IWL_SKB_CFLAGS) \
+	-DWLAN_SEAM_NO_USB_OBS=1 \
 	-DCMSIS_device_header='"cmsis_os2.h"' $(IWL_KPI_INCLUDES)
 
 IWL_DRV_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \

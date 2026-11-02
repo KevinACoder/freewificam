@@ -262,15 +262,21 @@ verdicts are `rtos: result pass cases=2/2`.
   `rtw89-8851bu-ehci-bringup` 2/2 valid boots (sha256 `08121f4e…`, crc32
   `43155329`).  Baseline old-tree boots: 8723-boot1 and rtw89-boot1, both
   pass.
-* Pre-existing failures, not migration regressions: `pcie-7260` fails at
-  HEAD too (`runner.c` `case_pcie_run` undeclared; `pcie.c` cannot find
-  `dwc_pcie.h`), and `firefly-v2-rtw88-sdio` fails in the old tree because
-  the ignored `components/linuxkpi/fw/rtw8821c_fw_blob.c` is not generated;
-  in the new tree that blob's registration symbol is
-  `lkpi_fw_rtw8821c_fw_register`, while `rtw88.c` calls
-  `lkpi_fw_rtw8821c_register` — a source/profile mismatch that predates the
-  migration.  The M1 build gate used `firefly-v2-sdio-mci` (ThreadX) and
-  `rtw89` instead and left the stale pair for their own round.
+* The first full 81-profile sweep after M1 found six failures (firefly-v1-pcie;
+  iwlwifi-7260 and iwlwifi-7260-sjd; wlan-delivery, wlan-obs, wlan-ping) plus
+  the two profiles excluded from the M1 gate (pcie-7260 and
+  firefly-v2-rtw88-sdio).  The follow-up fixes are: a `case_pcie_run`
+  prototype in `cases.h`; the rk3568 PCIe/NVMe include roots for the `pcie`
+  case; the `pcie_ecam` + firefly PCIe/NVMe/MSI-X source selection and the
+  `firefly-v1-pcie` case list (`pcie_ecam` instead of `pcie`); the rtw88 blob
+  symbol `lkpi_fw_rtw8821c_fw_register` in the case and its `-Wl,-u` link
+  flag; `-DWLAN_SEAM_NO_USB_OBS=1` for the PCIe iwlwifi bridge; and the
+  parse-time `$(shell mkdir -p $(BUILD))` needed before the WLAN stamp's
+  `$(file ...)` expands.  A clean rebuild sweep of all 81 defconfigs is now
+  81/81 rc=0 (0 failures); the local M1 follow-up ledger records the per-profile
+  shas and sizes.  The pcie-7260 image was booted on the RK3568 twice: both
+  boots print `pcie: dev 03:00.0 8086:08b1`, `pcie-7260: PASS vectors=1
+  pend_irqs=0`, and `rtos: result pass cases=3/3 backend=freertos`.
 * `make.rtos digest` still fails on four `third-party/lwip/ports/` hashes
   (`ports/ethnetif.c`, `ports/ethnetif.h`, `ports/include/lwipopts.h`,
   `ports/platform_hooks.c`); the old tree fails identically, so this is
@@ -294,9 +300,15 @@ were read.
 ## 12. Open items
 
 * The 34/47 tier is a draft; the owner confirms it before CI changes.
-* `pcie-7260` and `firefly-v2-rtw88-sdio` are stale profiles; they are not in
-  the M1 build gate.  The latter needs either a generated blob whose symbol
-  matches `rtw88.c` or a case change; that is a source round, not a build one.
+* The M1 follow-up closed the stale profiles: all 81 defconfigs build, and
+  `pcie-7260` boots 2/2 on the RK3568.  The firefly images build but were not
+  booted here (no firefly station in this round); the wlan images build but
+  run long sink loops, so they are compile/boot-anchor only.
+* The firmware blobs under `components/linuxkpi/fw/` are generated locally and
+  git-ignored; a clean checkout must produce them before building any
+  firmware-based profile.  This is deliberate (firmware is not redistributed),
+  but it means `make.rtos matrix` is not self-contained until the blob
+  generation step is documented.
 * The digest's lwIP manifest drift is pre-existing and needs its own
   provenance decision.
 * Incremental builds across profiles are not trusted until M2 puts the

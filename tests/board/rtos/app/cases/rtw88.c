@@ -63,7 +63,7 @@
 #include "mci.h"
 
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
-int lkpi_fw_rtw8821c_register(void);
+int lkpi_fw_rtw8821c_fw_register(void);
 int wlan_seam_adapter_init(void);
 
 #define RTW88_ATTACH_WAIT_MS	180000u
@@ -267,7 +267,7 @@ case_rtw88_run(void)
 	lkpi_log_sink_register(rtw88_sink);
 	lkpi_core_init();
 	(void)wlan_seam_adapter_init();
-	if (lkpi_fw_rtw8821c_register() != 0) {
+	if (lkpi_fw_rtw8821c_fw_register() != 0) {
 		CASE_ANCHOR("rtw88: FAIL firmware blob registration\n");
 		return 1;
 	}

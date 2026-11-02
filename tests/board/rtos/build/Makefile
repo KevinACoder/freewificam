@@ -509,6 +509,15 @@ INCLUDES := \
 	-I$(CMSIS)/CMSIS/Core/Include/a-profile \
 	$(BACKEND_INCLUDES)
 
+# The PCIe/NVMe cases include the board driver headers directly (they are not
+# reachable through the generic drivers/ include root).
+ifneq ($(filter pcie,$(CASES)),)
+ifeq ($(BOARD),rk3568-itx)
+INCLUDES += -I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
+	-I$(PLATFORM)/board/rk3568-itx/drivers/nvme
+endif
+endif
+
 BASE_CFLAGS := $(OPT) -g3 -std=c11 -Wall -Wextra \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
@@ -690,11 +699,36 @@ PCIE_BOARD_SRCS :=
 NVME_BOARD_SRCS :=
 endif
 
+# The firefly board carries its own ECAM root complex and NVMe driver instead
+# of the RK3568 DesignWare pair.  `pcie_ecam` walks that root complex; `nvme`
+# drives the endpoint through it and needs the MSI-X programmer plus the arch
+# MSI domain.  These never join the `pcie` case, which is the RK3568
+# DesignWare bring-up.
+FIREFLY_PCIE_SRCS :=
+FIREFLY_NVME_SRCS :=
+ifneq ($(filter pcie_ecam nvme,$(CASES)),)
+ifeq ($(BOARD),firefly-v1)
+FIREFLY_PCIE_SRCS := $(PLATFORM)/board/firefly/drivers/pcie_ecam.c
+endif
+endif
+ifneq ($(filter nvme,$(CASES)),)
+ifeq ($(BOARD),firefly-v1)
+ARCH_PCIE_SRCS += \
+	$(PLATFORM)/arch/aarch64/gicv3_its.c \
+	$(PLATFORM)/arch/aarch64/gicv3_msi.c \
+	$(PLATFORM)/arch/aarch64/irq_ctrl.c
+FIREFLY_NVME_SRCS := \
+	$(PLATFORM)/board/firefly/drivers/pcie_msix.c \
+	$(PLATFORM)/board/firefly/drivers/nvme/nvme.c
+endif
+endif
+
 PRINTF_SRCS := $(THIRD_PARTY)/printf/printf.c
 
 FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 	$(XMAC_SRCS) \
 	$(MMC_PORT_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_BOARD_SRCS) $(NVME_BOARD_SRCS) \
+	$(FIREFLY_PCIE_SRCS) $(FIREFLY_NVME_SRCS) \
 	$(BACKEND_FIRST_SRCS)
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
 
@@ -739,6 +773,10 @@ $(TAG_STAMP): FORCE
 # trees were replayed with (a patch edits headers, so a patch-only change must
 # rebuild the world exactly like a flag change does).
 ifneq ($(WLAN_STAMP),)
+# The $(file ...) below is expanded while this makefile is read, before any
+# recipe line runs: the build directory has to exist by then, not after the
+# first recipe's mkdir.
+$(shell mkdir -p $(BUILD))
 $(WLAN_STAMP): FORCE
 	@mkdir -p $(BUILD)
 	@$(file >$@.tmp,$(WLAN_FLAGS_STAMP))

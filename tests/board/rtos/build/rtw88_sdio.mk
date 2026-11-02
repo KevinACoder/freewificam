@@ -214,7 +214,7 @@ RTW88_ALL_SRCS := $(RTW88_NET80211_SRCS) $(RTW88_NPORT_SRCS) \
 # reference, and the SDIO driver registry's section is walked by address so its
 # only entry would otherwise be dropped.
 RTW88_LDFLAGS := \
-	-Wl,-u,lkpi_fw_rtw8821c_register \
+	-Wl,-u,lkpi_fw_rtw8821c_fw_register \
 	-Wl,-u,lkpi_sdio_fsl_install \
 	-Wl,-u,wlan_seam_adapter_init
 
