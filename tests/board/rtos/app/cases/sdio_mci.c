@@ -79,9 +79,25 @@
 
 #define SDIO_MCI_CMD52_READS	64u
 #define SDIO_MCI_CMD52_WRITES	16u
-#define SDIO_MCI_BLOCK_COUNT	2u	/* 1024 bytes: two 512-byte blocks */
 #define SDIO_MCI_BLOCK_SIZE	512u
 #define SDIO_MCI_BYTE_COUNT	4u
+
+/*
+ * The block arms, in the shape the real driver uses - both numbers come from
+ * the driver, not from a round size that looks tidy.
+ *
+ * Write: 9 blocks is what the GT itself sends (aln-mmc1-init.txt:315,
+ * arg=9d081809 -> blkcnt=9 = the 4608-byte TX aggregate rtw88's H2C path
+ * pushes). Reproducing the GT's own transfer is the only way the ALN DONE
+ * lines are comparable field for field.
+ *
+ * Read: 8 blocks is rtw88's receive read. rtw_sdio_read_port() takes
+ * min(host->max_req_size, count) per call (sdio.c:521-523) and the mmc core
+ * sets max_req_size = PAGE_SIZE (core/host.c:571), so a 4 KiB chunk is 8
+ * blocks of 512. That is the chunk size a real RX asks the controller for.
+ */
+#define SDIO_MCI_BLOCK_WR_COUNT	9u	/* GT's blkcnt=9 */
+#define SDIO_MCI_BLOCK_RD_COUNT	8u	/* rtw88 max_req_size/PAGE_SIZE */
 
 /*
  * Where the extended transfers go, taken from the card's own driver rather
@@ -117,10 +133,35 @@
 /* The address the GT's own first CMD53 uses (aln-mmc1-init.txt, arg=16210004). */
 #define SDIO_MCI_FN1_ADDR_GT	0x11080u
 
+/*
+ * Block transfers must not use a byte-mode address, and this is the mistake
+ * that made the block arm look broken.
+ *
+ * CMD53's arg[16:13] is not part of the register offset: it SELECTS A WINDOW
+ * (rtw88 sdio.h:124-131):
+ *
+ *   0 SDIO_REG   0x24 is REG_SDIO_HCPWM1 - a four-byte configuration register
+ *   4 TXFF_HIGH  the GT's own block write targets 0x840c, in this window
+ *   7 RXFF       rtw88 reads its receive FIFO at 0x0e000 | id
+ *
+ * The block arm used to send 1024 bytes to 0x24, which is a four-byte
+ * register. The card cannot supply ten blocks of data for a four-byte
+ * register, so the read timing out was CORRECT CARD BEHAVIOUR, not a driver
+ * defect - and the write that "passed" only proved the card accepts bytes it
+ * then discards. Both arms were asking the wrong question.
+ *
+ * The two addresses below are the window-carrying ones the real driver uses:
+ * the write is the GT's own first block write (aln-mmc1-init.txt:315,
+ * arg=9d081809 -> 0x840c), and the read is rtw88's receive FIFO
+ * (sdio.c:523, RTW_SDIO_ADDR_RX_RX0FF_GEN(0) = 0x0e000).
+ */
+#define SDIO_MCI_BLOCK_WR_ADDR	0x840cu	/* TXFF_HIGH, GT arg=9d081809 */
+#define SDIO_MCI_BLOCK_RD_ADDR	0x0e000u	/* RXFF, rtw88 rx port */
+
 /* Buffers: 4 KiB aligned (the staging path inside the stack copies through a
  * page-aligned buffer, and the IDMAC takes addresses as they come). */
-static uint8_t sdio_mci_rbuf[SDIO_MCI_BLOCK_COUNT * 512u] __attribute__((aligned(4096)));
-static uint8_t sdio_mci_wbuf[SDIO_MCI_BLOCK_COUNT * 512u] __attribute__((aligned(4096)));
+static uint8_t sdio_mci_rbuf[SDIO_MCI_BLOCK_RD_COUNT * 512u] __attribute__((aligned(4096)));
+static uint8_t sdio_mci_wbuf[SDIO_MCI_BLOCK_WR_COUNT * 512u] __attribute__((aligned(4096)));
 
 static int sdio_mci_ok = 1;
 
@@ -148,9 +189,11 @@ static int sdio_mci_sd_read_probe(void)
 {
 	const struct mci_cfg *cfg;
 	struct mci_cmd cmd;
+	struct mci_cmd stop;
 	struct mci_data data;
 	uint32_t rca = 0u;
 	int rc;
+	int rc2 = 0;
 
 	cfg = mci_board_cfg(0u);	/* mmc0: the TF slot */
 	if (cfg == NULL) {
@@ -277,6 +320,47 @@ static int sdio_mci_sd_read_probe(void)
 			    "data=%02x%02x%02x%02x\n", rc, cmd.response[0],
 			    sdio_mci_rbuf[0], sdio_mci_rbuf[1],
 			    sdio_mci_rbuf[2], sdio_mci_rbuf[3]);
+
+		/*
+		 * CMD18: the same socket, the same driver, two blocks.
+		 *
+		 * The single-block read above proves the IDMAC works here at
+		 * all; it does not separate "multi-block" from "SDIO". The
+		 * socket's block read is a two-block CMD53, so without this
+		 * arm a failure there has two candidate causes and no way to
+		 * tell them apart. If this one completes, multi-block is fine
+		 * on this controller and the difference is the SDIO command
+		 * itself; if it fails the same way, the defect is in the
+		 * multi-block path and the card is not implicated at all.
+		 *
+		 * CMD12 ends the transfer: a multi-block read left open keeps
+		 * the card in data state and the next command meets a busy
+		 * card.
+		 */
+		(void)memset(sdio_mci_rbuf, 0, 1024u);
+		(void)memset(&cmd, 0, sizeof(cmd));
+		(void)memset(&data, 0, sizeof(data));
+		data.buf = sdio_mci_rbuf;
+		data.len = 1024u;
+		data.blksz = 512u;
+		data.blkcnt = 2u;
+		data.write = false;
+		cmd.index = 18u;
+		cmd.arg = 0u;
+		cmd.resp_class = MCI_RESP_SHORT_CRC;
+		cmd.data = &data;
+
+		rc2 = mci_transfer(&sd_hc, &cmd);
+		CASE_ANCHOR("mci: sd CMD18 rc=%d resp0=%08x "
+			    "data=%02x%02x%02x%02x\n", rc2, cmd.response[0],
+			    sdio_mci_rbuf[0], sdio_mci_rbuf[1],
+			    sdio_mci_rbuf[2], sdio_mci_rbuf[3]);
+
+		(void)memset(&stop, 0, sizeof(stop));
+		stop.index = 12u;
+		stop.arg = 0u;
+		stop.resp_class = MCI_RESP_SHORT_CRC;
+		(void)mci_transfer(&sd_hc, &stop);
 	}
 
 	return rc;
@@ -752,12 +836,12 @@ static int sdio_mci_cmd53_block_read(sdio_card_t *card)
 	unsigned errors = 0u;
 	unsigned i;
 
-	(void)memset(sdio_mci_rbuf, 0, SDIO_MCI_BLOCK_COUNT * 512u);
+	(void)memset(sdio_mci_rbuf, 0, SDIO_MCI_BLOCK_RD_COUNT * 512u);
 
 	for (i = 0u; i < 2u; i++) {
 		if (SDIO_IO_Read_Extended(card, (sdio_func_num_t)SDIO_MCI_FN1,
-					  SDIO_MCI_FN1_ADDR, sdio_mci_rbuf,
-					  SDIO_MCI_BLOCK_COUNT,
+					  SDIO_MCI_BLOCK_RD_ADDR, sdio_mci_rbuf,
+					  SDIO_MCI_BLOCK_RD_COUNT,
 					  SDIO_EXTEND_CMD_OP_CODE_MASK |
 					  SDIO_EXTEND_CMD_BLOCK_MODE_MASK) !=
 		    kStatus_Success) {
@@ -766,8 +850,9 @@ static int sdio_mci_cmd53_block_read(sdio_card_t *card)
 	}
 
 	CASE_ANCHOR("mci: cmd53 block read blkcnt=%u bytes=%u func=%u "
-		    "errors=%u data=%02x%02x%02x%02x\n", SDIO_MCI_BLOCK_COUNT,
-		    SDIO_MCI_BLOCK_COUNT * 512u, SDIO_MCI_FN1, errors,
+		    "addr=0x%05x errors=%u data=%02x%02x%02x%02x\n",
+		    SDIO_MCI_BLOCK_RD_COUNT, SDIO_MCI_BLOCK_RD_COUNT * 512u,
+		    SDIO_MCI_FN1, SDIO_MCI_BLOCK_RD_ADDR, errors,
 		    sdio_mci_rbuf[0], sdio_mci_rbuf[1], sdio_mci_rbuf[2],
 		    sdio_mci_rbuf[3]);
 
@@ -787,17 +872,18 @@ static int sdio_mci_cmd53_block_write(sdio_card_t *card)
 	}
 
 	if (SDIO_IO_Write_Extended(card, (sdio_func_num_t)SDIO_MCI_FN1,
-				   SDIO_MCI_FN1_ADDR, sdio_mci_wbuf,
-				   SDIO_MCI_BLOCK_COUNT,
+				   SDIO_MCI_BLOCK_WR_ADDR, sdio_mci_wbuf,
+				   SDIO_MCI_BLOCK_WR_COUNT,
 				   SDIO_EXTEND_CMD_OP_CODE_MASK |
 				   SDIO_EXTEND_CMD_BLOCK_MODE_MASK) !=
 	    kStatus_Success) {
 		errors++;
 	}
 
-	CASE_ANCHOR("mci: cmd53 block write blkcnt=%u bytes=%u func=%u errors=%u\n",
-		    SDIO_MCI_BLOCK_COUNT, SDIO_MCI_BLOCK_COUNT * 512u,
-		    SDIO_MCI_FN1, errors);
+	CASE_ANCHOR("mci: cmd53 block write blkcnt=%u bytes=%u func=%u "
+		    "addr=0x%05x errors=%u\n", SDIO_MCI_BLOCK_WR_COUNT,
+		    SDIO_MCI_BLOCK_WR_COUNT * 512u, SDIO_MCI_FN1,
+		    SDIO_MCI_BLOCK_WR_ADDR, errors);
 
 	return (errors == 0u) ? 0 : -1;
 }
@@ -1209,12 +1295,47 @@ int case_sdio_mci_run(void)
 	 * and reads one failure at a time.
 	 */
 #if defined(MCI_SDIO_BLOCK_MODE)
-	if (sdio_mci_cmd53_block_read(card) != 0) {
-		sdio_mci_fail("cmd53 block read", -1);
-	}
+	/*
+	 * Write first, and the order is not cosmetic.
+	 *
+	 * A failed block transfer does not hand the controller back: CMD.START
+	 * stays set and the clock restart spins out, so whatever runs next
+	 * starts against a wedged controller. Measured: with the read first,
+	 * the write that followed produced a command timeout (rawints=1000)
+	 * rather than a data-phase result - it never got a fair test, and the
+	 * one transfer Linux has ground truth for is the write (a blkcnt=9
+	 * CMD53 whose ALN DONE reads ev=00000014). Putting the write first is
+	 * what makes those two comparable.
+	 *
+	 * Each arm's probe covers its first attempt only: one trace, one
+	 * transfer's shape.
+	 */
+	CASE_ANCHOR("mci: q4 probe block write\n");
+	mci_set_poll_probe(24u);
 	if (sdio_mci_cmd53_block_write(card) != 0) {
 		sdio_mci_fail("cmd53 block write", -1);
 	}
+	/*
+	 * The read arm runs LAST and is REPORTED, not asserted.
+	 *
+	 * The RX FIFO is only readable once the card's firmware has put a frame
+	 * in it: rtw88 reads REG_SDIO_RX0_REQ_LEN first and issues the block
+	 * read only when that is non-zero (sdio.c:1042-1052). This case runs no
+	 * firmware, so the FIFO is empty and the card does not answer - measured
+	 * as CMD.START staying set and a command timeout (rawints=00001000).
+	 * That is the premise being absent, not the driver being wrong, so the
+	 * arm still runs (the trace is the evidence) but its outcome does not
+	 * decide the case. Two boots of this shape are recorded in
+	 * runs/20261030-firefly-v2-sdio-mci-port/evidence/block-read-gap-
+	 * 20261102.md.
+	 *
+	 * It goes after the write because a failed block transfer leaves the
+	 * controller wedged (CMD.START set, clock update never completing), and
+	 * the write is the direction the GT actually proves.
+	 */
+	CASE_ANCHOR("mci: q4 probe block read\n");
+	mci_set_poll_probe(24u);
+	(void)sdio_mci_cmd53_block_read(card);
 #else
 	CASE_ANCHOR("mci: block mode gated off (MCI_SDIO_BLOCK_MODE)\n");
 #endif

@@ -207,6 +207,25 @@
 #define MCI_DMAC_AIS		(1u << 9)
 #define MCI_DMAC_ALL		0x1ffu
 
+/*
+ * STATUS_REG (0x90) is two things at once, and the vendor manual says which
+ * bits are which (E2000 software manual V1.3, 5.17.3.33):
+ *
+ *   bit[31:13]  DMAC FSM state   - a state, not a set of flags
+ *   bit[12:10]  EB  exception id
+ *   bit[9]      AIS             bit[8:6] NIS
+ *   bit[5]      CES             bit[4:3] DU
+ *   bit[2]      FBE             bit[1]   RI      bit[0] TI
+ *
+ * The FSM field is the reason this matters: 0x0000a000 is FSM 5 with every
+ * event bit clear, and it shows up in the trace of transfers that complete on
+ * the next poll. Treating the whole word as an error mask turns a normal
+ * in-flight state into a phantom "descriptor rejected".
+ */
+#define MCI_DMAC_EVENT_BITS	0x7ffu	/* AIS..TI, the part that is events */
+#define MCI_DMAC_FSM_SHIFT	13u
+#define MCI_DMAC_FSM_MASK	0x7ffffu
+
 #define MCI_DMAC_ENA_CES	(1u << 5)
 
 /* --- fixed shapes --------------------------------------------------------- */
@@ -293,6 +312,13 @@ static uint32_t mci_probe_samples = 0u;
  * FIFOTH bits applied with them. Both zero in normal operation. */
 static uint32_t mci_cntrl_extra = 0u;
 static uint32_t mci_fifoth_extra = 0u;
+
+/* The bits the CNTRL sweep may set, and whether it ever did. Only these are
+ * cleared on the way back out - everything else in CNTRL belongs to the port. */
+#define MCI_CNTRL_TRIAL_MASK	(MCI_CNTRL_DRV_SHIFT_EN | MCI_CNTRL_DMA_ENABLE | \
+				 MCI_CNTRL_READ_WAIT | MCI_CNTRL_START_BIT_MODE | \
+				 MCI_CNTRL_CRC_SERIAL_DATA)
+static bool mci_cntrl_was_poked;
 /* Preconditions for the same experiment: see mci_set_trial(). */
 static uint32_t mci_trial_flags = 0u;
 
@@ -324,6 +350,30 @@ static inline uint32_t mci_rd(struct mci_host *hc, uint32_t off)
 static inline void mci_wr(struct mci_host *hc, uint32_t off, uint32_t val)
 {
 	*(volatile uint32_t *)(hc->cfg.base + off) = val;
+}
+
+/* A register that reads back all ones is not a register full of events.
+ *
+ * RAW_INTS and DMAC_STATUS are bitfields whose every bit is either an event or
+ * an error; the driver's masks therefore "find" every one of them in
+ * 0xffffffff. That reading is wrong: the value means the peripheral is no
+ * longer answering on the bus (its clock stopped, or it is being held in
+ * reset) and the interconnect returns the floating level. Continuing to poll
+ * turns that into a busy-wait, and continuing to issue commands turns it into
+ * a jump through whatever the next read produced - which is how a failed
+ * block transfer took the image down.
+ *
+ * STATUS is the probe: unlike the event words it is never legitimately all
+ * ones (bit31 DMA_REQ and bit30 DMA_ACK are single bits, and FIFO_COUNT plus
+ * RESPONSE_INDEX do not saturate together). Probing it costs one read on the
+ * failure path only.
+ */
+static bool mci_dead(struct mci_host *hc, uint32_t sample)
+{
+	if (sample != 0xffffffffu) {
+		return false;
+	}
+	return mci_rd(hc, MCI_STATUS) == 0xffffffffu;
 }
 
 static void mci_set_bits(struct mci_host *hc, uint32_t off, uint32_t bits)
@@ -481,24 +531,57 @@ static void mci_restart_clk(struct mci_host *hc)
 {
 	uint32_t clk_div;
 	uint32_t uhs;
+	uint32_t loop;
 
+	/*
+	 * Every wait here is bounded, and that is not decoration.
+	 *
+	 * The Linux original spins without a limit because its mmc core runs a
+	 * request timer that aborts the request and reboots the controller; a
+	 * hung wait there turns into an error a caller can see. This port has
+	 * no such timer, so an unbounded spin on a controller that is already
+	 * wedged is a hang with the prompt gone and nothing to read back.
+	 *
+	 * Reached exactly that way: a failed IDMAC transfer left
+	 * STATUS.DATA_STATE_MC_BUSY set, CMD.START never cleared, and the
+	 * first loop below never returned. The two neighbouring helpers
+	 * (mci_update_external_clk, mci_reset_hw) were already bounded - only
+	 * these three were not.
+	 */
+	loop = mci_polls_for(MCI_RESET_BUDGET_US);
 	while ((mci_rd(hc, MCI_CMD) & MCI_CMD_START) != 0u) {
-		/* wait */
+		if (--loop == 0u) {
+			LOG_ANCHOR("MCI: CMD.START would not clear before "
+				   "restart_clk\n");
+			break;
+		}
+		mci_udelay(1u);
 	}
 	mci_clr_bits(hc, MCI_CLKENA, MCI_CLKENA_CCLK_ENABLE);
 	clk_div = mci_rd(hc, MCI_CLKDIV);
 	uhs = mci_rd(hc, MCI_UHS_REG_EXT);
 	mci_wr(hc, MCI_UHS_REG_EXT, 0u);
 	mci_wr(hc, MCI_UHS_REG_EXT, uhs);
+	loop = mci_polls_for(MCI_RESET_BUDGET_US);
 	while ((mci_rd(hc, MCI_CCLK_RDY) & 0x1u) == 0u) {
-		/* wait */
+		if (--loop == 0u) {
+			LOG_ANCHOR("MCI: CCLK_RDY never set in restart_clk\n");
+			break;
+		}
+		mci_udelay(1u);
 	}
 
 	mci_wr(hc, MCI_CLKDIV, clk_div);
 	mci_set_bits(hc, MCI_CLKENA, MCI_CLKENA_CCLK_ENABLE);
 	mci_wr(hc, MCI_CMD, MCI_CMD_START | MCI_CMD_UPD_CLK);
+	loop = mci_polls_for(MCI_RESET_BUDGET_US);
 	while ((mci_rd(hc, MCI_CMD) & MCI_CMD_START) != 0u) {
-		/* wait */
+		if (--loop == 0u) {
+			LOG_ANCHOR("MCI: clock update command would not "
+				   "complete\n");
+			break;
+		}
+		mci_udelay(1u);
 	}
 }
 
@@ -795,12 +878,47 @@ void mci_set_bus_width(struct mci_host *hc, unsigned int width)
 
 void mci_power(struct mci_host *hc, bool on)
 {
-	if (on) {
-		hc->need_init = true;
-		mci_wr(hc, MCI_PWREN, 1u);
-	} else {
-		mci_wr(hc, MCI_PWREN, 0u);
+	if (hc == NULL) {
+		return;
 	}
+
+	if (!on) {
+		/* mmc_power_off(): power down first, then stop the card clock */
+		mci_wr(hc, MCI_PWREN, 0u);
+		(void)mci_set_clock(hc, 0u);
+		hc->need_init = true;
+		return;
+	}
+
+	/*
+	 * A power CYCLE, not a bare PWREN write - and that is the whole
+	 * difference between needing a person to pull the mains and not.
+	 *
+	 * The board's VCC3V3_SD is always-on (AGENTS.md 6: "vcc3v3_sd 为
+	 * always-on，切不了"), so PWREN is the only thing that can take this
+	 * part down. This port never took it down: mci_init_hw raises PWREN
+	 * once and nothing lowers it again between images, so an image that
+	 * ended with the card wedged handed the same powered, wedged card to
+	 * the next one. Measured exactly that way - the boot after a failed
+	 * IDMAC transfer opened with pren=00000001 already set, the card-reset
+	 * pulse did nothing, and even the CMD52 IO_ABORT write timed out
+	 * (ev=00000100, resp0=0); CMD5 then timed out at every clock. Only a
+	 * real power-off recovered the socket.
+	 *
+	 * Linux never reaches that state because it always cycles:
+	 * mmc_power_off() writes MCI_POWER_OFF and zeroes ios.clock,
+	 * mmc_power_cycle() waits the SD spec's 1 ms, then mmc_power_up()
+	 * writes MCI_POWER_ON and waits ios.power_delay_ms (10, set in
+	 * drivers/mmc/core/host.c) before any clock is allowed back on. Same
+	 * order and same numbers here; the caller's own 400 kHz step follows.
+	 */
+	mci_wr(hc, MCI_PWREN, 0u);
+	(void)mci_set_clock(hc, 0u);
+	mci_udelay(1000u);	/* mmc_power_cycle(): mmc_delay(1) */
+
+	hc->need_init = true;
+	mci_wr(hc, MCI_PWREN, MCI_PWREN_ENABLE);
+	mci_udelay(10000u);	/* mmc_power_up(): ios.power_delay_ms */
 }
 
 bool mci_card_present(const struct mci_host *hc)
@@ -880,6 +998,18 @@ static int mci_wait_cmd(struct mci_host *hc, const struct mci_cmd *cmd)
 	do {
 		rawints = mci_rd(hc, MCI_RAW_INTS);
 
+		/* All ones is the bus floating, not every event firing. Checked
+		 * before the masks below, which would otherwise match it. */
+		if (mci_dead(hc, rawints)) {
+			hc->st.cmd_ev = rawints;
+			hc->st.rawints = rawints;
+			hc->st.status = 0xffffffffu;
+			LOG_ANCHOR("MCI: CMD%u controller stopped answering "
+				   "(rawints all ones)\n",
+				   (unsigned)cmd->index);
+			return MCI_ERR_DEAD;
+		}
+
 		/* CMD is the completion, the same way Linux takes it. A card
 		 * that answers after its response window has both CMD and RTO
 		 * latched, and its R5 is in RESP0 either way. */
@@ -954,13 +1084,44 @@ static int mci_wait_data(struct mci_host *hc, const struct mci_cmd *cmd, bool id
 		rawints = mci_rd(hc, MCI_RAW_INTS);
 		dmac = idmac ? mci_rd(hc, MCI_DMAC_STATUS) : 0u;
 
+		/* See mci_dead(): all ones is a floating bus. Both words are
+		 * checked, because a dead controller answers every offset the
+		 * same way and either read is enough to notice. */
+		if (mci_dead(hc, rawints) || (idmac && mci_dead(hc, dmac))) {
+			hc->st.data_ev = rawints;
+			hc->st.rawints = rawints;
+			hc->st.dmac = dmac;
+			hc->st.status = 0xffffffffu;
+			LOG_ANCHOR("MCI: CMD%u controller stopped answering "
+				   "during the data phase\n",
+				   (unsigned)cmd->index);
+			return MCI_ERR_DEAD;
+		}
+
 		if (probe_left != 0u) {
+			/*
+			 * The two IDMAC cursors are the only registers that
+			 * say whether the engine is reading the chain at all:
+			 * cur_desc walks the descriptor list as it consumes
+			 * entries, cur_buf advances through the payload. A
+			 * transfer that times out with both pinned at their
+			 * initial value never started; one whose cur_desc
+			 * advanced but whose cur_buf did not is stuck inside a
+			 * descriptor. STATUS alone cannot tell those apart -
+			 * both leave DATA_STATE_MC_BUSY set and the FIFO empty.
+			 */
 			LOG_ANCHOR("MCI P%02u raw=%08x st=%08x cmd=%08x dmac=%08x "
-				   "blk=%08x byt=%08x\n",
+				   "blk=%08x byt=%08x desc=%08x buf=%08x "
+				   "bus=%08x dena=%08x cntrl=%08x\n",
 				   (unsigned)probe_index, rawints,
 				   mci_rd(hc, MCI_STATUS), mci_rd(hc, MCI_CMD),
 				   dmac, mci_rd(hc, MCI_BLKSIZ),
-				   mci_rd(hc, MCI_BYTCNT));
+				   mci_rd(hc, MCI_BYTCNT),
+				   mci_rd(hc, MCI_CUR_DESC_ADDRL),
+				   mci_rd(hc, MCI_CUR_BUF_ADDRL),
+				   mci_rd(hc, MCI_BUS_MODE),
+				   mci_rd(hc, MCI_DMAC_INT_ENA),
+				   mci_rd(hc, MCI_CNTRL));
 			probe_index++;
 			probe_left--;
 		}
@@ -1024,9 +1185,18 @@ static int mci_wait_data(struct mci_host *hc, const struct mci_cmd *cmd, bool id
 	mci_snapshot(hc, cmd, rawints, dmac);
 	hc->st.data_ev = rawints;
 
+	/* DMAC_STATUS is mostly a state machine, not a set of error flags: the
+	 * manual's 5.17.3.33 puts the IDMAC FSM in bit[31:13] and leaves only
+	 * AIS(9) NIS(8:6) CES(5) DU(4:3) FBE(2) RI(1) TI(0) as events. Printing
+	 * the whole word invited the reading "0xa000 = RI|AIS, so the
+	 * descriptor was rejected", which is wrong twice over: 0xa000 is FSM 5
+	 * with every event bit clear, and the same value appears in the mmc0
+	 * trace of a transfer that succeeds on the next poll. Split it. */
 	LOG_ANCHOR("MCI: CMD%u data wait timed out rawints=%08x dmac=%08x "
-		   "status=%08x\n", (unsigned)cmd->index, rawints, dmac,
-		   mci_rd(hc, MCI_STATUS));
+		   "(fsm=%u ev=%08x) status=%08x\n", (unsigned)cmd->index,
+		   rawints, dmac,
+		   (unsigned)((dmac >> MCI_DMAC_FSM_SHIFT) & MCI_DMAC_FSM_MASK),
+		   (unsigned)(dmac & MCI_DMAC_EVENT_BITS), mci_rd(hc, MCI_STATUS));
 	mci_wr(hc, MCI_INT_MASK, 0u);
 	mci_wr(hc, MCI_RAW_INTS, rawints & 0xffffeu);
 	if (idmac) {
@@ -1162,7 +1332,25 @@ static int mci_start_data(struct mci_host *hc, struct mci_cmd *cmd,
 	rawcmd = mci_make_raw_cmd(hc, cmd);
 
 	if (type == MCI_ADTC_BLOCK) {
-		uint32_t descs = mci_build_descs(d);
+		uint32_t descs;
+
+		/*
+		 * Linux calls init_adma_table() at the head of EVERY block
+		 * transfer (firefly_mci_data_sg_write_2_admc_table opens with
+		 * it), not once at driver init: the table is zeroed, every
+		 * descriptor's next-pointer is rewritten, and BUS_MODE.SWR is
+		 * pulsed before the new chain is built over it.
+		 *
+		 * This port did that once, in mci_init(). A chain built by
+		 * mci_build_descs() then left the previous transfer's OWN bits
+		 * and next-pointers in the entries past the chain's end, so the
+		 * IDMAC could walk stale descriptors from an earlier transfer.
+		 * The SD traffic tolerated it (single-block reads reuse entry
+		 * 0 and never look further); the socket's two-block CMD53 did
+		 * not - the data phase never produced a single event.
+		 */
+		mci_init_adma_table(hc);
+		descs = mci_build_descs(d);
 
 		if (descs == 0u) {
 			LOG_ANCHOR("MCI: CMD%u descriptor chain empty (len=%u)\n",
@@ -1202,8 +1390,27 @@ static int mci_start_data(struct mci_host *hc, struct mci_cmd *cmd,
 
 	/* experiment knobs: applied on top of the port's own programming, and
 	 * only when armed, so a normal run is bit-for-bit the port */
+	/*
+	 * The experiment knob is a REPLACEMENT, not an addition.
+	 *
+	 * It used to be `if (extra) set_bits(CNTRL, extra)`, which meant every
+	 * swept bit stayed set for the rest of the boot: CNTRL is not cleared
+	 * anywhere between commands, so nine sweep passes left
+	 * DRV_SHIFT_EN|DMA_ENABLE|READ_WAIT|START_BIT_MODE|CRC_SERIAL_DATA all
+	 * latched. Measured on this board: the socket's block transfer ran with
+	 * cntrl=02000678 (bits 3,5,6,9,10,25) while mmc0's clean read - the one
+	 * that works - ran with cntrl=02000010 (bits 4,25). The difference was
+	 * an artefact of the sweep, and it is the reason the block read looked
+	 * like it never started its IDMAC: the engine was being driven through
+	 * five experiment bits left over from byte-mode trials.
+	 *
+	 * Clearing the knob's own mask first makes an unarmed run the port's
+	 * own programming, whatever ran before it.
+	 */
 	if (mci_cntrl_extra != 0u) {
 		mci_set_bits(hc, MCI_CNTRL, mci_cntrl_extra);
+	} else if (mci_cntrl_was_poked) {
+		mci_clr_bits(hc, MCI_CNTRL, MCI_CNTRL_TRIAL_MASK);
 	}
 	if (mci_fifoth_extra != 0u) {
 		mci_wr(hc, MCI_FIFOTH,
@@ -1273,6 +1480,39 @@ static int mci_start_data(struct mci_host *hc, struct mci_cmd *cmd,
 				  hc->st.cmd_ev | hc->st.data_ev,
 				  hc->st.cmd_ev, hc->st.data_ev, ret,
 				  hc->st.resp0);
+
+			/*
+			 * A failed data transfer leaves the controller in a
+			 * state the next command must not inherit.
+			 *
+			 * Clearing INT_MASK and BUS_MODE.DE above stops the
+			 * engines, which is enough when the failure was an
+			 * ordinary timeout. It is not enough when the IDMAC
+			 * stopped mid-descriptor: the data FSM stays busy,
+			 * the FIFO keeps whatever it held, and the next
+			 * command's waits read registers that no longer
+			 * describe a transfer. On this board that ended as a
+			 * second command reading rawints=ffffffff and a jump
+			 * through it.
+			 *
+			 * Linux recovers through the same sequence this port
+			 * already implements for its reset op
+			 * (firefly_mci_data_xfer_done's ESHUTDOWN arm does
+			 * FIFO_RESET, then CONTROLLER_RESET, then
+			 * firefly_mci_restart_clk - see mci_reset()). Running
+			 * it here means one failed transfer costs a
+			 * reprogramming pass instead of the image.
+			 *
+			 * Only when the controller still answers. Reprogramming
+			 * a peripheral that has left the bus does nothing but
+			 * burn the budget, and the caller is about to be told
+			 * the transfer failed either way - the difference is
+			 * whether the next command meets a controller in a
+			 * known state or a wedged one.
+			 */
+			if ((type == MCI_ADTC_BLOCK) && !mci_dead(hc, mci_rd(hc, MCI_STATUS))) {
+				(void)mci_reset(hc);
+			}
 			return ret;
 		}
 
@@ -1530,6 +1770,12 @@ void mci_set_cntrl_extra(uint32_t set_bits, uint32_t extra_fifoth_bits)
 {
 	mci_cntrl_extra = set_bits;
 	mci_fifoth_extra = extra_fifoth_bits;
+
+	/* Once an experiment has touched CNTRL, later runs have to undo it:
+	 * the register keeps whatever the sweep left in it. */
+	if (set_bits != 0u) {
+		mci_cntrl_was_poked = true;
+	}
 }
 
 void mci_set_trial(uint32_t flags)

@@ -43,6 +43,13 @@
 #define MCI_ERR_DATA		(-4)	/* data-phase error */
 #define MCI_ERR_NO_CARD		(-5)
 #define MCI_ERR_NOT_READY	(-6)
+/* The controller stopped answering: a register read back all ones. A bus that
+ * reads 0xffffffff is not reporting "every event happened", which is what the
+ * driver's masks would otherwise conclude - it is reporting nothing at all,
+ * because the peripheral is gone from the bus (clock stopped, controller held
+ * in reset) and the interconnect returns the floating value. Every wait that
+ * sees this must stop rather than interpret it. */
+#define MCI_ERR_DEAD		(-7)
 
 /*
  * The response class, in the vocabulary the command register encodes (the

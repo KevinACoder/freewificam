@@ -1613,12 +1613,36 @@ def judge(text: str, expect: dict | None = None) -> dict:
             else:
                 notes.append(f"sdio_mci: {label} errors=0")
         # Block mode is optional: an image may gate it off, and then the
-        # anchor is simply absent. When it is present it must be clean.
-        for key, label in (("sdio_mci_block_read", "cmd53 block read"),
-                           ("sdio_mci_block_write", "cmd53 block write")):
+        # anchor is simply absent.
+        #
+        # The two directions do not carry the same weight, and the difference
+        # is measured rather than assumed (runs/20261030-firefly-v2-sdio-mci-
+        # port/evidence/block-read-gap-20261102.md):
+        #
+        #  - WRITE is a real property. Its shape matches the GT's own block
+        #    write field for field (blkcnt=9, addr=0x840c, errors=0), so a
+        #    non-zero count is a genuine defect.
+        #  - READ is not reachable from a bare SDIO case. The RX FIFO only
+        #    answers once the card's firmware has put a frame in it
+        #    (rtw88 reads REG_SDIO_RX0_REQ_LEN first and only then issues the
+        #    block read, sdio.c:1042-1052); with no firmware there is nothing
+        #    to read, and the command times out at CMD.START. A failure here
+        #    says the premise was absent, not that the driver is wrong, so it
+        #    is reported and not counted against the case.
+        for key, label, blocking in (
+                ("sdio_mci_block_write", "cmd53 block write", True),
+                ("sdio_mci_block_read", "cmd53 block read", False)):
             row = found[key]
-            if row is not None and int(row["errors"]) != 0:
+            if row is None:
+                continue
+            if int(row["errors"]) == 0:
+                notes.append(f"sdio_mci: {label} errors=0")
+            elif blocking:
                 errors.append(f"sdio_mci: {label} errors={row['errors']}")
+            else:
+                notes.append(
+                    f"sdio_mci: {label} errors={row['errors']} "
+                    f"(no RX data without firmware; not counted)")
         control = found["sdio_mci_ctrl_read"]
         if not control or control["rc"] != "0" or control["data"] == "00000000":
             errors.append("sdio_mci: the mmc0 control read did not complete")
