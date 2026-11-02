@@ -30,6 +30,12 @@ changes to an Apache-2.0 tree. They add files and hunks in the same style as
 the tree and carry the tree's own SPDX lines; they are recorded in
 `third-party/cherryusb/patches/README.md` and anchored by that tree's digest.
 
+## Build tools (`tools/`)
+
+| Unit | Pin | License | Notes |
+|---|---|---|---|
+| `tools/kconfig/kconfiglib.py`, `menuconfig.py` | Zephyr `0534e997eac` (Kconfiglib 14.1.0) | ISC | `tools/kconfig/LICENSE.txt`; provenance in `VENDOR`; the digest checks `MANIFEST.sha256` |
+
 ## Wireless drivers (`wireless-drivers/`)
 
 | Unit | Pin | License | Notes |
