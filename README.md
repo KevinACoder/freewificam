@@ -228,6 +228,52 @@ Capabilities 0x0020), and the reference's downlink at 40 MHz is 84.8-94.0
 Mbit/s against that arm's 46.2, so neither side is a like-for-like row yet.
 The row will be rewritten when the protocol work reopens it.
 
+## What the console shows
+
+The two paths are distinguishable from the first seconds of a boot, without a
+debugger: the bare-metal image brings up its own USB controllers and asks
+linuxkpi to claim the interface, while the linux-ko image is an ordinary module
+on the kernel's usbcore.  These are verbatim excerpts from the bench logs (one
+line may be elided where a calibration warning sat in between; the numbers and
+the MAC are the ones that boot printed).
+
+Bare-metal RTOS, RTL8188EUS on the xHCI root:
+
+```
+[   3.079] rtl8xxxu: usb buses=3,2
+[   3.309] rtl8xxxu: usb bus=3 hcd=xhci base=0xfcc00000 started
+[   4.466] rtl8xxxu: claim usbh: lkpi claim attempt 0bda:8179 bus=3 hub=2 port=4 intf=0 spd=3
+[   5.735] wlan: bridge attached 20:f4:1b:52:8f:01
+[   5.739] wlan: seam tx wake registered
+[   5.749] rtl8xxxu: claim usbkpi: 'rtl8xxxu' claimed 0bda:8179
+[   9.969] wlan: ba addba req tid=0 ssn=1 buf=64
+[   9.973] wlan: ba addba rsp tid=0 buf=64 dialog=1
+[  28.901] net: netio ready port=18767 aux=18768 buf=16384
+```
+
+linux-ko, the same module on the same controller:
+
+```
+[   12.573520] usb 4-1.4: RTL8188EU rev K (TSMC) romver 0, 1T1R, TX queues 2, WiFi=1, BT=0, GPS=0, HI PA=0
+[   12.611851] usb 4-1.4: RTL8188EU MAC: 20:f4:1b:52:8f:01
+[   12.623567] usb 4-1.4: rtl8xxxu: Loading firmware rtlwifi/rtl8188eufw.bin
+[   13.607354] wlan: bridge attached 20:f4:1b:52:8f:01
+[   13.620009] wlan: seam tx wake registered
+[   13.635653] wlan: wext face registered on wlan0
+[   13.657222] rtl8xxxu 4-1.4:1.0 wlan0: kernelmod line data plane up, addr 20:f4:1b:52:8f:01
+```
+
+Read the two blocks against each other.  In the bare-metal image the controller
+is the stack's own (`hcd=xhci base=0xfcc00000`), the chip is identified only by
+vendor:product (`0bda:8179`) in the claim line, and the driver then prints its
+own transfer counters (`stage_size`, `slots`, `rx_err`); in the linux-ko image
+the kernel's usbcore enumerates the device and prints the chip's revision and
+MAC, the driver loads the firmware, and the shim only adds the bridge and the
+wext face on top.  The bus/port path differs because each stack numbers the
+controllers itself.  Both blocks end at the same two anchors - the bridge
+attached to the MAC, and the netio server listening - which is what makes the
+same case runnable on either arm.
+
 ## Wireless bench
 
 A wireless number is only as good as the access point under it.  Before taking
