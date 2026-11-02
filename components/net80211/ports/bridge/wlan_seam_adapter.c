@@ -44,6 +44,7 @@
 #include "../seam.h"
 #include "../osal/wlan_osal.h"
 #include "wlan_bridge.h"
+#include "wlan_rx_ba.h"
 
 #include "components/linuxkpi/linuxkpi_80211.h"
 #include "components/linuxkpi/fw_registry.h"
@@ -1101,6 +1102,22 @@ static const struct wlan_seam_drv_ops seam_ops = {
 /* the substitute's upward bridge hooks                                */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The reorder module's delivery face: everything it delivers - immediately,
+ * in reordered order, or from the flush work - enters the stack through the
+ * same bridge input the ordinary receive path used, carrying the frame's own
+ * receive metadata rather than the radio's current state.
+ */
+static void
+up_ba_deliver(void *arg, const uint8_t *frame, size_t len,
+    const struct wlan_rx_ba_meta *m)
+{
+
+	(void)arg;
+	(void)wlan_bridge_input(frame, len, m->rssi, m->fcs_bad, m->hw_dec,
+	    m->freq, m->device_ts);
+}
+
 static int
 up_attach(struct ieee80211_hw *hw)
 {
@@ -1128,6 +1145,11 @@ up_attach(struct ieee80211_hw *hw)
 	 */
 	lkpi80211_set_tx_wake_cb(hw, seam_tx_wake, NULL);
 	wlan_osal_log("wlan: seam tx wake registered\n");
+	/* The downlink block-ack receive side (RTOS-02).  It is the only
+	 * consumer of the AP's ADDBA Request in this port: the imported
+	 * net80211 drops action frames, so without it the link stays at one
+	 * MPDU per TXOP. */
+	(void)wlan_rx_ba_attach(up_ba_deliver, NULL);
 	return 0;
 }
 
@@ -1136,6 +1158,7 @@ up_detach(struct ieee80211_hw *hw)
 {
 
 	(void)hw;
+	wlan_rx_ba_detach();
 	wlan_bridge_detach();
 	adapter.hw = NULL;
 	adapter.vif = NULL;
@@ -1250,6 +1273,27 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 			    (unsigned)skb->len);
 		}
 	}
+	/*
+	 * The block-ack receive side sees the frame before the stack: the
+	 * AP's ADDBA Request/DELBA must be answered (net80211 has no action
+	 * handler), and a QoS MPDU of an active TID must be delivered in
+	 * sequence.  While a session is active this is the only delivery
+	 * path, which is also what keeps the flush work and this worker from
+	 * entering net80211's input at the same time.
+	 */
+	{
+		struct wlan_rx_ba_meta bam;
+
+		bam.rssi = rs != NULL ? (int)rs->signal : 0;
+		bam.fcs_bad = rs != NULL &&
+		    (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0;
+		bam.hw_dec = rs != NULL &&
+		    (rs->flag & RX_FLAG_DECRYPTED) != 0;
+		bam.freq = rs != NULL ? rs->freq : 0;
+		bam.device_ts = rs != NULL ? rs->device_timestamp : 0;
+		if (wlan_rx_ba_rx(&bam, skb->data, (size_t)skb->len) != 0)
+			return;
+	}
 	(void)wlan_bridge_input(skb->data, (size_t)skb->len,
 	    rs != NULL ? (int)rs->signal : 0,
 	    rs != NULL && (rs->flag & RX_FLAG_FAILED_FCS_CRC) != 0,
@@ -1349,6 +1393,10 @@ wlan_bridge_link_dump(void)
 		    (unsigned)adapter.rx_hist[i].idx,
 		    (unsigned)adapter.rx_hist[i].bw, adapter.rx_hist[i].n,
 		    adapter.rx_hist[i].retry);
+	/* The block-ack receive side's own ledger: the ADDBA exchange and the
+	 * reorder window's work, cumulative since attach (a cell is the
+	 * difference of two dumps). */
+	wlan_rx_ba_dump();
 }
 
 void

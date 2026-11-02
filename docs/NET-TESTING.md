@@ -219,7 +219,7 @@ the wifi dongle's CD-ROM persona: it enumerates with `bInterfaceClass=8`, but
 `usb-storage` ignores it by quirk and no `sdX` appears - check `lsblk`, not
 `lsusb`.
 
-### 9.2 WLAN netio server - `rtl8xxxu-8188eu-netio-ar-g` / `-ar-ht20`
+### 9.2 WLAN netio server - `rtl8xxxu-8188eu-netio-ar-g` / `-ar-ht20` / `-ar-ht20-ba`
 
 ```
 CONFIG := rtl8xxxu-8188eu-netio-ar-g     # legacy 11g AP (labwifi-ar-g)
@@ -228,6 +228,16 @@ tools/rtos/build.sh
 #   net: netio ready port=18767 aux=18768 buf=16384
 netio -u -b 1440 <board-ip>     # the bench host's pinned NETIO 1.34 client
 ```
+
+`-ar-ht20` is the same image on the HT20 AP (`labwifi-ar-ht20s`);
+`-ar-ht20-ba` adds `-DCONFIG_WLAN_RX_BA=1`, which links `wlan_rx_ba.c`: the
+downlink receive side answers the AP's ADDBA Request through the bridge's
+management window and delivers the aggregated MPDUs in sequence.  The imported
+net80211 has no action handler, so without that module the AP asks five times,
+tears the block-ack session down, and the downlink stays at one MPDU per TXOP:
+19.9 Mbit/s, 618 us/frame of which 327 us is inter-frame gap.  With it:
+50-51 Mbit/s (0.97x the Linux ko arm on the same AP), 229 us/frame,
+BlockAck/A-MPDU visible on the air, ctrl 2.1 us/frame, gap 0.
 
 The server runs inside the image; there is no shell on the board.  Its ports are
 fixed (18767 control, 18768 data), so the client must not pass `-p`.  The UDP
@@ -247,13 +257,16 @@ Take the console slice per cell by byte window: the hub keeps one serial buffer
 across boots, so a tail slice carries the previous cell's anchors.
 
 Measured 2026-11-02 on the reference board (1440 B UDP, legacy 11g / HT20-SGI
-AP, 0% loss, 2 boots x 3 cells, cpu at the pinned ~1.69 GHz):
+AP, 2 boots x 3 cells, cpu at the pinned ~1.69 GHz):
 
 | arm | legacy down | legacy up | HT20 down | HT20 up |
 |---|---|---|---|---|
-| freewificam RTOS | 19.0-19.4 Mbit/s | 31.7-32.5 | 20.0-20.5 | 31.3-31.6 |
+| freewificam RTOS, pre-BA | 19.0-19.4 Mbit/s | 31.7-32.5 | 20.0-20.5 | 31.3-31.6 |
+| freewificam RTOS, RX-BA arm | - | - | 50.2-51.1 | 30.9-31.6 |
 | Linux ko, same AP | 18.9-19.4 | 34.7-35.3 | 49.3-52.3 | 34.4-34.8 |
 
-The per-frame receive cost is the gap: 610-621 us/frame on legacy and
-578-590 us/frame on HT20, against 12.2 us/frame for the same lwIP stack on the
-wired port.  The HT20 PHY upgrade therefore buys ~5% throughput, not ~2x.
+The pre-BA per-frame receive cost is inter-frame gap (610-621 us/frame on
+legacy, 578-590 on HT20) against 12.2 us/frame for the same lwIP stack on the
+wired port - it tracks the unaggregated medium, not the host.  The RX-BA arm
+turns that into 229 us/frame (gap 0, ctrl 2.1) and 50-51 Mbit/s.
+
