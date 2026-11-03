@@ -445,3 +445,43 @@ were read.
   A7 is `make.rtos case-list-check` on that image.
 * Incremental builds across profiles are not trusted until M2 puts the
   generated fragment into `FLAG_STAMP`; the M1 builds are clean builds.
+
+## 13. BUILD-02 — the generated-config pair (2026-11-03)
+
+M0+M1 generated `generated/config.mk` and still let the Makefile and fragments
+hand `-D` the configuration.  BUILD-02 removes that second channel:
+
+* `tools/build/kconfig-gen.py` emits one pair for make and C:
+  `build/kconfig/<profile>/freewificam_config` (make-facing; booleans `1/0`)
+  and `freewificam_config.h` (the only generated C header; true booleans are
+  `#define CONFIG_X 1`, false ones are Kconfig comments, integers and strings
+  are always emitted).  The full Kconfig `.config` is written alongside them
+  for `menuconfig`/`savedefconfig`.
+* The platform Makefile includes `freewificam_config`; every C compilation
+  force-includes `tests/board/rtos/platform/build_defs.h`, which includes the
+  generated header and carries only structural facts (board, backend, ABI
+  names, vendor ABI).  `COMPILE_C`/`COMPILE_S` keep a `-D` filter as a guard,
+  but the tree no longer produces one: a `grep -D` over the build fragments
+  finds only the guard and comments.
+* There are no fallback defaults in the build or in C.  `FREERTOS_HEAP_SIZE`,
+  `CMSIS2_MAX_THREADS/TIMERS`, `TX_TIMER_STACK`, lwIP knobs and the driver
+  geometry all have Kconfig defaults; a missing value is a generator error or
+  a compile error, never a silent `$(if ...)` / `#ifndef` default.
+* `test/board/rtos/platform/host_*_defs.h` do the same for the host tier;
+  `tests/board/linux-ko` keeps its own line until M2/M4 migrate it.
+
+Entry points: `./make.rtos config|menuconfig|olddefconfig|savedefconfig|list|
+image|images|matrix|check|check-no-d|check-config-header|trimcheck|libs|sdk`.
+`check-no-d.sh` inspects actual compile/link commands for seven representative
+profiles; `check-config-header.py` proves the header covers every Kconfig
+symbol; `trimcheck` compares the tick-only and full images by symbols and size.
+`libs` archives the existing object groups under `build/lib/<profile>/` and
+`gen_lib_manifest.py` writes their member/size/undefined-symbol manifest; `sdk`
+adds the generated config header and a `.pc`.  The public `include/freewificam/`
+API and consumer link gate are not part of this checkpoint.
+
+Evidence: 82/82 profiles build with no hand `-D` (2026-11-03), the seven-profile
+matrix is green, `host-test` passes FreeRTOS and ThreadX, and `check` parses all
+82 defconfigs.  Behaviour is unchanged by construction for the flag removal
+(the removed flags were already filtered); the A1 macro comparison and the
+no-D sweep are recorded in the private `runs/build/2026-11-03-BUILD-02` ledger.

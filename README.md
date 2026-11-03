@@ -85,9 +85,20 @@ not of the command line.  `tests/board/rtos/config.mk` only names the default;
 select another profile with `PROFILE=<name>`.  `./make.rtos images` builds both
 kernels of it (ThreadX and FreeRTOS behind one CMSIS-RTOS2 abstraction).
 
+The profile is a Kconfig defconfig; the generator writes the make-facing
+`freewificam_config` and the only C config header `freewificam_config.h`.  The
+build does not hand `-D` configuration macros: structural facts live in
+`tests/board/rtos/platform/build_defs.h`, configuration values in the generated
+header, and a missing value fails the build instead of falling back silently.
+
 ```sh
 ./make.rtos list                      # the 82 defconfigs
+./make.rtos config PROFILE=<name>     # write freewificam_config{,.h,.config}
+./make.rtos menuconfig PROFILE=<name> # edit .config, then save the defconfig
 ./make.rtos image PROFILE=<name>      # one image, the profile's backend
+./make.rtos check                     # all defconfigs parse identically
+./make.rtos check-no-d                # no compile/link command carries -D
+./make.rtos matrix                    # seven representative profiles
 ./make.rtos images                    # both kernels
 PROFILE=rtos-shell ./make.rtos image  # the CherrySH console image
 PROFILE=rtos-shell ./make.rtos case-list-check  # image vs defconfig vs judge
