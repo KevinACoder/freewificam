@@ -7,6 +7,77 @@
 
 menu "Wireless drivers"
 
+choice WLAN_LINE
+	prompt "Wireless driver line"
+	default WLAN_LINE_NONE
+	help
+	  The one wireless driver family this image links.  The source lists use
+	  these symbols (and the derived face symbols below) instead of inferring
+	  the line from the case string; the case list still selects the ladder
+	  that runs.  One image links at most one wireless line: the bridges and
+	  the SDIO host glue are not multi-instance.
+
+config WLAN_LINE_NONE
+	bool "none (wired, storage or camera only)"
+
+config WLAN_LINE_RTL8XXXU
+	bool "rtl8xxxu over USB"
+
+config WLAN_LINE_RTW89
+	bool "rtw89 over USB"
+
+config WLAN_LINE_RTW88
+	bool "rtw88 over SDIO"
+
+config WLAN_LINE_IWLWIFI
+	bool "iwlwifi over PCIe"
+
+config WLAN_LINE_RTL8189FS
+	bool "rtl8189fs vendor stack over SDIO"
+
+endchoice
+
+# The faces a line pulls in.  These are visible so the generated make config
+# carries them (kconfiglib writes only symbols with a prompt); their defaults
+# follow the line, and a profile does not name them.  A defconfig that turns
+# one off while its line is selected fails the source-list check, not the
+# compiler.
+config NET80211
+	bool "net80211 MLME stack"
+	default y if WLAN_LINE_RTL8XXXU || WLAN_LINE_RTW89 || WLAN_LINE_RTW88 || WLAN_LINE_IWLWIFI
+	help
+	  The NetBSD net80211 core, its port and the wlan_bridge seam.
+
+config LINUXKPI
+	bool "linuxkpi Linux face"
+	default y if WLAN_LINE_RTL8XXXU || WLAN_LINE_RTW89 || WLAN_LINE_RTW88 || WLAN_LINE_IWLWIFI || WLAN_LINE_RTL8189FS
+	help
+	  The Linux-shaped kernel API the wireless drivers compile against.
+
+config LINUXKPI_NET80211
+	bool "linuxkpi net80211 glue"
+	default y if NET80211
+	help
+	  The linuxkpi-side net80211 glue and the seam adapter that joins the
+	  bridge to the linuxkpi netdev.
+
+config LINUXKPI_USB
+	bool "linuxkpi USB engine"
+	default y if WLAN_LINE_RTL8XXXU || WLAN_LINE_RTW89
+
+config LINUXKPI_PCI
+	bool "linuxkpi PCI engine"
+	default y if WLAN_LINE_IWLWIFI
+
+config LINUXKPI_SDIO
+	bool "linuxkpi SDIO engine"
+	default y if WLAN_LINE_RTW88 || WLAN_LINE_RTL8189FS
+
+config LINUXKPI_CENSUS
+	bool "linuxkpi census"
+	default y if WLAN_LINE_RTL8189FS
+
+
 choice RTL8XXXU_CHIP
 	prompt "rtl8xxxu chip"
 	default RTL8XXXU_CHIP_8188EU

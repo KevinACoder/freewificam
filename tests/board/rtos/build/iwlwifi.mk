@@ -51,87 +51,21 @@ IWL_PCIE_PORT_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	-I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
 	-I$(PLATFORM)/arch/aarch64
 
-IWL_NET80211_SRCS := \
-	$(IWL_NET)/net80211/ieee80211.c \
-	$(IWL_NET)/net80211/ieee80211_proto.c \
-	$(IWL_NET)/net80211/ieee80211_node.c \
-	$(IWL_NET)/net80211/ieee80211_output.c \
-	$(IWL_NET)/net80211/ieee80211_input.c \
-	$(IWL_NET)/net80211/ieee80211_amrr.c \
-	$(IWL_NET)/net80211/ieee80211_netbsd.c \
-	$(IWL_NET)/net80211/ieee80211_crypto.c \
-	$(IWL_NET)/net80211/ieee80211_crypto_none.c \
-	$(IWL_NET)/net80211/ieee80211_crypto_ccmp.c \
-	$(IWL_NET)/crypto/aes/aes_bear.c \
-	$(IWL_NET)/crypto/aes/aes_ct.c \
-	$(IWL_NET)/crypto/aes/aes_ct_enc.c \
-	$(IWL_NET)/crypto/aes/aes_ct_dec.c \
-	$(IWL_NET)/crypto/aes/aes_ccm.c \
-	$(IWL_NET)/crypto/aes/aes_ccm_mbuf.c \
-	$(IWL_NET)/port/aes_impl_compat.c
+IWL_NET80211_SRCS := $(NET80211_CORE_SRCS)
 
-IWL_NPORT_SRCS := \
-	$(IWL_NPORT)/osal/cmsis2/osal_memory_target.c \
-	$(IWL_NPORT)/osal/cmsis2/osal_cmsis2.c \
-	$(IWL_NPORT)/net/mbuf.c \
-	$(IWL_NPORT)/net/ifnet.c
+IWL_NPORT_SRCS := $(NET80211_NPORT_SRCS)
 
-IWL_BRIDGE_SRCS := $(IWL_NPORT)/bridge/wlan_bridge.c
+IWL_BRIDGE_SRCS := $(NET80211_BRIDGE_SRCS)
 
-IWL_LKPI_SRCS := \
-	$(IWL_LKPI)/linuxkpi_core.c \
-	$(IWL_LKPI)/linuxkpi_compat.c \
-	$(IWL_LKPI)/linuxkpi_platform_target.c \
-	$(IWL_LKPI)/linuxkpi_80211.c \
-	$(IWL_LKPI)/linuxkpi_80211_helpers.c \
-	$(IWL_LKPI)/linuxkpi_wiphy_work.c \
-	$(IWL_LKPI)/linuxkpi_txq.c \
-	$(IWL_LKPI)/linuxkpi_netdev.c \
-	$(IWL_LKPI)/linuxkpi_cfg80211.c \
-	$(IWL_LKPI)/linuxkpi_osdep.c \
-	$(IWL_LKPI)/lkpi_tcp_trace.c \
-	$(IWL_LKPI)/fw_registry_rtos.c \
-	$(IWL_LKPI)/skbuff/skbuff_pool.c \
-	$(IWL_LKPI)/pci/linuxkpi_pci.c \
-	$(IWL_NPORT)/bridge/wlan_seam_adapter.c
+IWL_LKPI_SRCS := $(LINUXKPI_SRCS) $(NET80211_KPI_SRCS)
 
-IWL_DRV_SRCS := \
-	$(IWL_DRV)/iwl-drv.c $(IWL_DRV)/iwl-debug.c $(IWL_DRV)/iwl-io.c \
-	$(IWL_DRV)/iwl-nvm-parse.c $(IWL_DRV)/iwl-nvm-utils.c \
-	$(IWL_DRV)/iwl-phy-db.c $(IWL_DRV)/iwl-trans.c $(IWL_DRV)/iwl-utils.c \
-	$(IWL_DRV)/iwl-dbg-tlv.c \
-	$(IWL_DRV)/fw/img.c $(IWL_DRV)/fw/notif-wait.c $(IWL_DRV)/fw/rs.c \
-	$(IWL_DRV)/fw/dbg.c $(IWL_DRV)/fw/dbg-old.c $(IWL_DRV)/fw/pnvm.c \
-	$(IWL_DRV)/fw/dump.c $(IWL_DRV)/fw/regulatory.c $(IWL_DRV)/fw/paging.c \
-	$(IWL_DRV)/fw/smem.c $(IWL_DRV)/fw/init.c \
-	$(IWL_DRV)/pcie/ctxt-info.c $(IWL_DRV)/pcie/ctxt-info-v2.c \
-	$(IWL_DRV)/pcie/drv.c $(IWL_DRV)/pcie/utils.c \
-	$(IWL_DRV)/pcie/gen1_2/rx.c $(IWL_DRV)/pcie/gen1_2/tx.c \
-	$(IWL_DRV)/pcie/gen1_2/trans.c $(IWL_DRV)/pcie/gen1_2/trans-gen2.c \
-	$(IWL_DRV)/pcie/gen1_2/tx-gen2.c \
-	$(IWL_DRV)/cfg/7000.c $(IWL_DRV)/cfg/8000.c $(IWL_DRV)/cfg/9000.c \
-	$(IWL_DRV)/cfg/22000.c $(IWL_DRV)/cfg/ax210.c $(IWL_DRV)/cfg/bz.c \
-	$(IWL_DRV)/cfg/sc.c $(IWL_DRV)/cfg/rf-jf.c $(IWL_DRV)/cfg/rf-hr.c \
-	$(IWL_DRV)/cfg/rf-gf.c \
-	$(IWL_DRV)/mvm/fw.c $(IWL_DRV)/mvm/mac80211.c $(IWL_DRV)/mvm/nvm.c \
-	$(IWL_DRV)/mvm/ops.c $(IWL_DRV)/mvm/phy-ctxt.c \
-	$(IWL_DRV)/mvm/mac-ctxt.c $(IWL_DRV)/mvm/utils.c $(IWL_DRV)/mvm/rx.c \
-	$(IWL_DRV)/mvm/rxmq.c $(IWL_DRV)/mvm/tx.c $(IWL_DRV)/mvm/binding.c \
-	$(IWL_DRV)/mvm/quota.c $(IWL_DRV)/mvm/sta.c $(IWL_DRV)/mvm/sf.c \
-	$(IWL_DRV)/mvm/scan.c $(IWL_DRV)/mvm/time-event.c $(IWL_DRV)/mvm/rs.c \
-	$(IWL_DRV)/mvm/rs-fw.c $(IWL_DRV)/mvm/power.c $(IWL_DRV)/mvm/coex.c \
-	$(IWL_DRV)/mvm/tt.c $(IWL_DRV)/mvm/offloading.c $(IWL_DRV)/mvm/tdls.c \
-	$(IWL_DRV)/mvm/ftm-responder.c $(IWL_DRV)/mvm/ftm-initiator.c \
-	$(IWL_DRV)/mvm/rfi.c $(IWL_DRV)/mvm/mld-key.c $(IWL_DRV)/mvm/mld-mac.c \
-	$(IWL_DRV)/mvm/link.c $(IWL_DRV)/mvm/mld-sta.c \
-	$(IWL_DRV)/mvm/mld-mac80211.c $(IWL_DRV)/mvm/ptp.c \
-	$(IWL_DRV)/mvm/time-sync.c
+IWL_DRV_SRCS := $(IWLWIFI_IMPL_SRCS)
 
-IWL_FW_SRCS := $(ROOT)/components/linuxkpi/fw/iwl7260fw_blob.c
+IWL_FW_SRCS := $(IWLWIFI_BLOB_SRCS)
 
 IWL_PCIE_PORT_SRCS := $(IWL_PCIE_PORT)/lkpi_pcie_port.c
 
-IWL_CASE_SRCS := $(LINE)/app/cases/iwl7260.c
+IWL_CASE_SRCS := $(IWLWIFI_APP_SRCS)
 
 IWL_ALL_SRCS := $(IWL_NET80211_SRCS) $(IWL_CASE_SRCS) $(IWL_NPORT_SRCS) $(IWL_BRIDGE_SRCS) \
 	$(IWL_LKPI_SRCS) $(IWL_DRV_SRCS) $(IWL_FW_SRCS) $(IWL_PCIE_PORT_SRCS)

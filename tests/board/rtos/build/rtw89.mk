@@ -82,91 +82,25 @@ RTW89_DRV_CFLAGS := -std=c11 -O2 -Wall \
 
 RTW89_CASE_CFLAGS := $(RTW89_KPI_CFLAGS) $(RTW89_BUS_DEFS)
 
-RTW89_NET80211_SRCS := \
-	$(RTW89_NET)/net80211/ieee80211.c \
-	$(RTW89_NET)/net80211/ieee80211_proto.c \
-	$(RTW89_NET)/net80211/ieee80211_node.c \
-	$(RTW89_NET)/net80211/ieee80211_output.c \
-	$(RTW89_NET)/net80211/ieee80211_input.c \
-	$(RTW89_NET)/net80211/ieee80211_amrr.c \
-	$(RTW89_NET)/net80211/ieee80211_netbsd.c \
-	$(RTW89_NET)/net80211/ieee80211_crypto.c \
-	$(RTW89_NET)/net80211/ieee80211_crypto_none.c \
-	$(RTW89_NET)/net80211/ieee80211_crypto_ccmp.c \
-	$(RTW89_NET)/crypto/aes/aes_bear.c \
-	$(RTW89_NET)/crypto/aes/aes_ct.c \
-	$(RTW89_NET)/crypto/aes/aes_ct_enc.c \
-	$(RTW89_NET)/crypto/aes/aes_ct_dec.c \
-	$(RTW89_NET)/crypto/aes/aes_ccm.c \
-	$(RTW89_NET)/crypto/aes/aes_ccm_mbuf.c \
-	$(RTW89_NET)/port/aes_impl_compat.c
+RTW89_NET80211_SRCS := $(NET80211_SRCS)
 
-RTW89_NPORT_SRCS := \
-	$(RTW89_NPORT)/osal/cmsis2/osal_memory_target.c \
-	$(RTW89_NPORT)/osal/cmsis2/osal_cmsis2.c \
-	$(RTW89_NPORT)/net/mbuf.c \
-	$(RTW89_NPORT)/net/ifnet.c
 
-RTW89_BRIDGE_SRCS := $(RTW89_NPORT)/bridge/wlan_bridge.c
 
-RTW89_LKPI_SRCS := \
-	$(RTW89_LKPI)/linuxkpi_core.c \
-	$(RTW89_LKPI)/linuxkpi_compat.c \
-	$(RTW89_LKPI)/linuxkpi_platform_target.c \
-	$(RTW89_LKPI)/linuxkpi_80211.c \
-	$(RTW89_LKPI)/linuxkpi_80211_helpers.c \
-	$(RTW89_LKPI)/linuxkpi_wiphy_work.c \
-	$(RTW89_LKPI)/linuxkpi_txq.c \
-	$(RTW89_LKPI)/linuxkpi_netdev.c \
-	$(RTW89_LKPI)/linuxkpi_cfg80211.c \
-	$(RTW89_LKPI)/linuxkpi_osdep.c \
-	$(RTW89_LKPI)/lkpi_tcp_trace.c \
-	$(RTW89_LKPI)/fw_registry_rtos.c \
-	$(RTW89_LKPI)/skbuff/skbuff_pool.c \
-	$(RTW89_LKPI)/usb/linuxkpi_usb.c \
-	$(RTW89_LKPI)/usb/lkpi_usbh_class.c \
-	$(RTW89_LKPI)/usb/lkpi_usbh_modeswitch.c \
-	$(RTW89_NPORT)/bridge/wlan_seam_adapter.c \
-	$(USB_PORT)/lkpi_usb_cherryusb.c
+RTW89_LKPI_SRCS := $(LINUXKPI_SRCS) $(NET80211_KPI_SRCS) \
+	$(LINUXKPI_CHERRY_SRCS)
 
 # The 8851BU translation units: the same 21 the reference board-proven image
 # compiled (core, chip, and the two bus units).  The Wi-Fi 7 `*_be` units are
 # not in this set; the linker's zero-undefined gate is the check that the chip
 # selection does not reach them.
-RTW89_DRV_SRCS := \
-	$(RTW89_DRV)/core.c \
-	$(RTW89_DRV)/mac80211.c \
-	$(RTW89_DRV)/mac.c \
-	$(RTW89_DRV)/phy.c \
-	$(RTW89_DRV)/fw.c \
-	$(RTW89_DRV)/cam.c \
-	$(RTW89_DRV)/efuse.c \
-	$(RTW89_DRV)/regd.c \
-	$(RTW89_DRV)/sar.c \
-	$(RTW89_DRV)/coex.c \
-	$(RTW89_DRV)/ps.c \
-	$(RTW89_DRV)/chan.c \
-	$(RTW89_DRV)/ser.c \
-	$(RTW89_DRV)/acpi.c \
-	$(RTW89_DRV)/util.c \
-	$(RTW89_DRV)/rtw8851b.c \
-	$(RTW89_DRV)/rtw8851b_table.c \
-	$(RTW89_DRV)/rtw8851b_rfk.c \
-	$(RTW89_DRV)/rtw8851b_rfk_table.c \
-	$(RTW89_DRV)/usb.c \
-	$(RTW89_DRV)/rtw8851bu.c
+RTW89_DRV_SRCS := $(RTW89_IMPL_SRCS)
 
-RTW89_FW_SRCS := $(ROOT)/components/linuxkpi/fw/rtw8851b_fw_blob.c
+RTW89_FW_SRCS := $(RTW89_BLOB_SRCS)
 
-RTW89_CASE_SRCS := \
-	$(LINE)/app/cases/rtw89.c \
-	$(LINE)/app/cases/rtw89_scan.c \
-	$(LINE)/app/cases/rtw89_join.c \
-	$(LINE)/app/cases/rtw89_dataplane.c
+RTW89_CASE_SRCS := $(RTW89_APP_SRCS)
 
-RTW89_ALL_SRCS := $(RTW89_NET80211_SRCS) $(RTW89_NPORT_SRCS) \
-	$(RTW89_BRIDGE_SRCS) $(RTW89_LKPI_SRCS) $(RTW89_DRV_SRCS) \
-	$(RTW89_FW_SRCS) $(RTW89_CASE_SRCS)
+RTW89_ALL_SRCS := $(RTW89_NET80211_SRCS) $(RTW89_LKPI_SRCS) \
+	$(RTW89_DRV_SRCS) $(RTW89_FW_SRCS) $(RTW89_CASE_SRCS)
 
 # The symbols only the case reaches: with --gc-sections the walkers, the
 # backend registration, the firmware registration and the bridge install have

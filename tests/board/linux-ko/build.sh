@@ -39,31 +39,15 @@ JOBS=${JOBS:-$(nproc)}
 PROF=${PROF:-0}
 
 # ---- source lists -----------------------------------------------------------
-# The net80211 world: imported stack + its port layer + the bridge. These
-# compile with the port's compatibility headers and the forced prelude.
-STACK_SRCS="
-components/net80211/net80211/ieee80211.c
-components/net80211/net80211/ieee80211_proto.c
-components/net80211/net80211/ieee80211_node.c
-components/net80211/net80211/ieee80211_output.c
-components/net80211/net80211/ieee80211_input.c
-components/net80211/net80211/ieee80211_amrr.c
-components/net80211/net80211/ieee80211_netbsd.c
-components/net80211/net80211/ieee80211_crypto.c
-components/net80211/net80211/ieee80211_crypto_none.c
-components/net80211/net80211/ieee80211_crypto_ccmp.c
-components/net80211/crypto/aes/aes_bear.c
-components/net80211/crypto/aes/aes_ct.c
-components/net80211/crypto/aes/aes_ct_enc.c
-components/net80211/crypto/aes/aes_ct_dec.c
-components/net80211/crypto/aes/aes_ccm.c
-components/net80211/crypto/aes/aes_ccm_mbuf.c
-components/net80211/port/aes_impl_compat.c
-components/net80211/ports/net/mbuf.c
-components/net80211/ports/net/ifnet.c
-components/net80211/ports/osal/cmsis2/osal_cmsis2.c
-components/net80211/ports/bridge/wlan_bridge.c
-"
+# The net80211 world: imported stack + its port layer + the bridge.  The list
+# comes from the same components/net80211/sources.mk the RTOS image uses;
+# query.mk's native mode selects the module subset (no Kconfig/Python here, by
+# design) so there is no second copy to drift.
+STACK_SRCS=$(make -s -f "$REPO/tools/build/query.mk" MODULE=net80211-ko SRCS)
+[ -n "$STACK_SRCS" ] || {
+	echo "build.sh: empty net80211-ko source list" >&2
+	exit 2
+}
 # The kernel world: the Linux OS services, the mac80211 substitute, the seam
 # adapter, and the module entry. No BSD headers here.
 LINUX_SRCS="
@@ -348,3 +332,10 @@ echo "build.sh: kernel     $KOBJ ($KREL)"
 echo "build.sh: driver     $DRIVER debugfs=${DEBUGFS:-0} diag=${DIAG:-0}"
 make -C "$KSRC" O="$KOBJ" ARCH=arm64 CROSS_COMPILE="$CROSS" \
 	KERNELRELEASE="$KREL" M="$MOD" -j"$JOBS" modules
+
+# The closure gate is part of the build, not a separate chore: the module must
+# define every mac80211/ieee80211 symbol the verbatim driver pulls, except the
+# few cfg80211 exports check-closure.sh names.
+if [ -f "$MOD/wlan_ko.ko" ]; then
+	NM="${CROSS}nm" sh "$HERE/check-closure.sh" "$MOD/wlan_ko.ko"
+fi

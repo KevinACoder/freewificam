@@ -113,32 +113,9 @@ RTW88_CASE_CFLAGS := $(RTW88_KPI_CFLAGS) \
 	 \
 	
 
-RTW88_NET80211_SRCS := \
-	$(RTW88_NET)/net80211/ieee80211.c \
-	$(RTW88_NET)/net80211/ieee80211_proto.c \
-	$(RTW88_NET)/net80211/ieee80211_node.c \
-	$(RTW88_NET)/net80211/ieee80211_output.c \
-	$(RTW88_NET)/net80211/ieee80211_input.c \
-	$(RTW88_NET)/net80211/ieee80211_amrr.c \
-	$(RTW88_NET)/net80211/ieee80211_netbsd.c \
-	$(RTW88_NET)/net80211/ieee80211_crypto.c \
-	$(RTW88_NET)/net80211/ieee80211_crypto_none.c \
-	$(RTW88_NET)/net80211/ieee80211_crypto_ccmp.c \
-	$(RTW88_NET)/crypto/aes/aes_bear.c \
-	$(RTW88_NET)/crypto/aes/aes_ct.c \
-	$(RTW88_NET)/crypto/aes/aes_ct_enc.c \
-	$(RTW88_NET)/crypto/aes/aes_ct_dec.c \
-	$(RTW88_NET)/crypto/aes/aes_ccm.c \
-	$(RTW88_NET)/crypto/aes/aes_ccm_mbuf.c \
-	$(RTW88_NET)/port/aes_impl_compat.c
+RTW88_NET80211_SRCS := $(NET80211_SRCS)
 
-RTW88_NPORT_SRCS := \
-	$(RTW88_NPORT)/osal/cmsis2/osal_memory_target.c \
-	$(RTW88_NPORT)/osal/cmsis2/osal_cmsis2.c \
-	$(RTW88_NPORT)/net/mbuf.c \
-	$(RTW88_NPORT)/net/ifnet.c
 
-RTW88_BRIDGE_SRCS := $(RTW88_NPORT)/bridge/wlan_bridge.c
 
 # The SDIO transport: the imported stack's OSAL, card layer, common layer and
 # SDIO card type, this board's MCI glue, the controller driver itself, and the
@@ -152,58 +129,21 @@ RTW88_SDIO_PORT_SRCS := \
 	$(THIRD_PARTY)/fsl_sdmmc/sdio/fsl_sdio.c \
 	$(PLATFORM)/board/firefly/drivers/mci.c
 
-RTW88_LKPI_SRCS := \
-	$(RTW88_LKPI)/linuxkpi_core.c \
-	$(RTW88_LKPI)/linuxkpi_compat.c \
-	$(RTW88_LKPI)/linuxkpi_platform_target.c \
-	$(RTW88_LKPI)/linuxkpi_80211.c \
-	$(RTW88_LKPI)/linuxkpi_80211_helpers.c \
-	$(RTW88_LKPI)/linuxkpi_wiphy_work.c \
-	$(RTW88_LKPI)/linuxkpi_txq.c \
-	$(RTW88_LKPI)/linuxkpi_netdev.c \
-	$(RTW88_LKPI)/linuxkpi_cfg80211.c \
-	$(RTW88_LKPI)/linuxkpi_osdep.c \
-	$(RTW88_LKPI)/lkpi_tcp_trace.c \
-	$(RTW88_LKPI)/fw_registry_rtos.c \
-	$(RTW88_LKPI)/skbuff/skbuff_pool.c \
-	$(RTW88_LKPI)/sdio/linuxkpi_sdio.c \
-	$(RTW88_LKPI)/sdio/lkpi_sdio_be.c \
-	$(RTW88_NPORT)/bridge/wlan_seam_adapter.c
+RTW88_LKPI_SRCS := $(LINUXKPI_SRCS) $(NET80211_KPI_SRCS)
 
 # The 8821CS translation units: the twenty the chip selection resolves.  wow.c
 # (CONFIG_PM), led.c (CONFIG_RTW88_LEDS) and debug.c (CONFIG_RTW88_DEBUGFS) are
 # not among them, for the reason RTW88_DRV_CONFIG states.  The other chips' bus
 # and chip units are not either - the linker's zero-undefined gate is the check.
-RTW88_DRV_SRCS := \
-	$(RTW88_DRV)/main.c \
-	$(RTW88_DRV)/mac80211.c \
-	$(RTW88_DRV)/util.c \
-	$(RTW88_DRV)/tx.c \
-	$(RTW88_DRV)/rx.c \
-	$(RTW88_DRV)/mac.c \
-	$(RTW88_DRV)/phy.c \
-	$(RTW88_DRV)/coex.c \
-	$(RTW88_DRV)/efuse.c \
-	$(RTW88_DRV)/fw.c \
-	$(RTW88_DRV)/ps.c \
-	$(RTW88_DRV)/sec.c \
-	$(RTW88_DRV)/bf.c \
-	$(RTW88_DRV)/sar.c \
-	$(RTW88_DRV)/regd.c \
-	$(RTW88_DRV)/rtw8821c.c \
-	$(RTW88_DRV)/rtw8821c_table.c \
-	$(RTW88_DRV)/sdio.c \
-	$(RTW88_DRV)/rtw8821cs.c
+RTW88_DRV_SRCS := $(RTW88_IMPL_SRCS)
 
-RTW88_FW_SRCS := $(ROOT)/components/linuxkpi/fw/rtw8821c_fw_blob.c
+RTW88_FW_SRCS := $(RTW88_BLOB_SRCS)
 
-RTW88_CASE_SRCS := \
-	$(LINE)/app/cases/rtw88.c \
-	$(LINE)/app/cases/rtw88_scan.c
+RTW88_CASE_SRCS := $(RTW88_APP_SRCS)
 
-RTW88_ALL_SRCS := $(RTW88_NET80211_SRCS) $(RTW88_NPORT_SRCS) \
-	$(RTW88_BRIDGE_SRCS) $(RTW88_LKPI_SRCS) $(RTW88_SDIO_PORT_SRCS) \
-	$(RTW88_DRV_SRCS) $(RTW88_FW_SRCS) $(RTW88_CASE_SRCS)
+RTW88_ALL_SRCS := $(RTW88_NET80211_SRCS) $(RTW88_LKPI_SRCS) \
+	$(RTW88_SDIO_PORT_SRCS) $(RTW88_DRV_SRCS) $(RTW88_FW_SRCS) \
+	$(RTW88_CASE_SRCS)
 
 # The symbols only the case reaches: with --gc-sections the firmware
 # registration, the backend installation and the bridge install have no other
