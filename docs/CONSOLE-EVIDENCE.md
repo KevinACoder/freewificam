@@ -12,8 +12,8 @@ with no error), so the log is the artefact that carries the evidence.  The
 patterns each line's absence would break are named under each transcript.
 
 Reproduce: the profile is named per section; the image is loaded over TFTP and
-entered at its link address, and the console is the board's debug UART at
-115200 8N1.
+entered at its link address (`0x90000000` on the first board, `0xa000000` on the
+second), and the console is the board's debug UART at 115200 8N1.
 
 ## RTL8821CS (SDIO, mainline rtw88 + net80211)
 
@@ -511,9 +511,292 @@ identity, so the switch and the firmware download are visible in the same
 transcript; and the handshake is reported **per message**, so a stolen message
 shows as a missing line rather than as a timeout.
 
+
+## RTL8188EUS (USB2 xHCI, mainline rtl8xxxu + net80211)
+
+Profile `rtl8xxxu-8188eu-netio-ar-ht20-ba` (the ladder `rtl8xxxu`,
+`rtl8xxxu_scan`, `rtl8xxxu_join`, `rtl8xxxu_dataplane`, `rtl8xxxu_netio`).
+Dongle: RTL8188EUS, `0bda:8179`, USB2 on this bench's xHCI, one spatial stream,
+2.4 GHz.  Bench AP: `labwifi-ar-ht20s` on channel 5 (2432 MHz), **open** - the
+MLME is the imported net80211.  The image is entered at `0xa000000`; the
+board's address is `192.168.99.2/24`.
+
+What the transcript proves, in order: the chip reports itself (`RTL8188EU rev
+K`, 1T1R) and the firmware answers (revision 28.0, signature 0x88e1); the
+dongle is claimed by identity, on the xHCI at bus 3 port 4, and the driver
+reads its MAC from it; the pool starts at 25 of 32 slots with `fail=0`;
+a scan returns 18 rows with no FCS errors; the join reaches `state=4` with 15
+management frames sent and 15 completed; the ARP reply arrives and 20 of 20
+pings come back (`max_ms=1`); and the netio server takes a 1440-byte cell in
+both directions with `wlan_txerr=0`, the gate stopping the drain 1958 times and
+the seam refusing nothing at all (`txrefuse noskb=0`).
+
+```
+## Starting application at 0xa000000 ...
+boot: mainrtos: banner backend=freertos kernel=FreeRTOS-Kernel V11.3.1 build=v0.0.2-139-g6c7e2007
+rtos: kernel ready tick=1000Hz
+[   0.000] rtos: runner start cases=6 build=v0.0.2-139-g6c7e2007
+[   0.005] rtos: case tick start
+
+... (the tick case: ladder beats, the copy/fill throughput probes) ...
+
+[   3.043] tick: PASS
+[   3.045] rtos: case tick PASS
+[   3.048] rtos: case rtl8xxxu start
+[   3.915] lkpi: usbh: modeswitch 0bda:1a2b CD-ROM persona, ejecting
+[   4.465] rtl8xxxu: claim usbh: lkpi claim attempt 0bda:8179 bus=3 hub=2 port=4 intf=0 spd=3
+[   4.625] lkpi: ...: RTL8188EU rev K (TSMC) romver 0, 1T1R, TX queues 2, WiFi=1, BT=0, GPS=0, HI PA=0
+[   4.647] rtl8xxxu: fw ...: Firmware revision 28.0 (signature 0x88e1)
+[   5.830] rtl8xxxu: claim usbkpi: 'rtl8xxxu' claimed 0bda:8179
+[   6.023] rtl8xxxu: attach ok after 2100 ms mac=20:f4:1b:52:8f:01
+[   6.033] rtl8xxxu: start ok attached=1 rx=3
+[   6.037] rtl8xxxu: pool skb=25/32 data=0/0 heap_live=25 ovf=0/0 fail=0
+[   6.056] rtl8xxxu: PASS
+[   6.058] rtos: case rtl8xxxu PASS
+[   6.061] rtos: case rtl8xxxu_scan start
+
+... (the scan: one `rx elemwalk` line per beacon, the probe requests) ...
+
+[   9.334] rtl8xxxu: scan done rows=18 bcn=105 bcnT=0 prsp=20 fcs=0 scan=1/1 state=1 entered=1 close=2 rx=171
+[   9.349] rtl8xxxu: scan PASS
+[   9.352] rtos: case rtl8xxxu_scan PASS
+[   9.356] rtos: case rtl8xxxu_join start
+[   9.359] rtl8xxxu: join bssid=24:ec:99:b9:8a:00 ssid=labwifi-ar-ht20s freq=2432 rssi=-61
+
+... (auth and assoc, and their completions) ...
+
+[   9.956] rtl8xxxu: join ok state=4 mgt_tx=15 txc=15 rx=178
+[   9.961] rtl8xxxu: join PASS
+[   9.964] rtos: case rtl8xxxu_join PASS
+[   9.968] rtos: case rtl8xxxu_dataplane start
+
+... (the address, the first ARP, the twenty pings) ...
+
+[  10.016] rtl8xxxu: data arp reply src=24:ec:99:b9:8a:00 tx=1
+[  21.380] rtl8xxxu: data ping tx=20 rx=20 min_ms=0 max_ms=1 lost=-
+[  21.386] rtl8xxxu: data counters data_tx=22 tx_done=38 rx=311 rx_data=63
+[  21.392] rtl8xxxu: data PASS
+[  21.395] rtos: case rtl8xxxu_dataplane PASS
+[  21.399] rtos: case rtl8xxxu_netio start
+[  21.407] rtl8xxxu: net up ip=192.168.99.2/24 mac=20:f4:1b:52:8f:01 mtu=1500
+[  28.279] net: netio addr 192.168.99.2/24
+[  28.292] netio: tcp listening port=18767
+[  28.845] netio: udp listening port=18768
+[  28.916] net: netio ready port=18767 aux=18768 buf=16384
+
+... (the cell: the downlink half, then the upload) ...
+
+[  83.117] netio: udp client connected
+[  83.121] netio: udp c2s pkt=1440
+[  83.224] netio: udp recv start
+[  89.257] netio: udp rx done pkts=27388 bytes=39438720
+[  89.365] netio: cpu tag=udp-c2s frames=27388 ticks=149783438 us_x10_per_frame=2278 cyc_per_frame=0
+[  89.380] netio: udp s2c pkt=1440
+[  95.796] netio: cpu tag=udp-s2c frames=17667 ticks=153791113 us_x10_per_frame=3627 cyc_per_frame=0
+[  95.805] netio: udp tx done pkts=17667 bytes=25440480 refusals=6001
+[  95.843] netio: layers tag=udp-end wlan_tx=17707 wlan_done=17723 wlan_rx=28449 wlan_rxdata=27472 wlan_rxenc=41 wlan_txplain=17707 wlan_txerr=0 wlan_attach=1 wlan_freq=2432 wlan_gated=1958 wlan_wakes=17574 wlan_stash=0 wlan_stashok=0 wlan_xdrop=0 wlan_qhi=64 wlan_p
+[  95.870] wlan: link txrefuse noskb=0 nopeer=0 nokey=0 purged=0
+[  95.883] wlan: link rx data=27767 retry=2983 fcs=0
+```
+
+Two capture artefacts are visible and are not the board's doing: runs of
+identical lines arrive collapsed as `[previous line repeated N times]`, and the
+ledger line is cut at its 320th byte or so (`... wlan_qhi=64 wlan_p`); the
+counters this section uses are all before the cut, and the counts the collapsed
+lines stood for are visible in the `refusals=`/`wlan_gated=` figures instead.
+The `...` inside the two prefix-carrying lines (`lkpi: ...:` and
+`rtl8xxxu: fw ...:`) stands for three unprintable bytes (0x02 0x01 0x18) that
+the console emits where the kernel-log prefix's level belongs; every other byte
+of those lines is as printed.  The cell's 6001 refusals are the application's
+`sendto` being told "not now" and retried (the client reports 0% loss in both
+directions); the seam never saw a full pool on this arm, because the gate stops
+the drain one layer earlier.
+
+## RTL8723BU (USB2 xHCI, mainline rtl8xxxu + net80211)
+
+Profile `rtl8xxxu-8723bu-netio-ar-ht20-ba` (the same ladder, with
+`CONFIG_RTL8XXXU_CHIP_8723BU`).  Dongle: RTL8723BU, `0bda:b720`, USB2 on this
+bench's xHCI, one spatial stream, 2.4 GHz; the Bluetooth half is not claimed by
+this image.  Bench AP: `labwifi-ar-ht20s` on channel 5 (2432 MHz), **open**.
+The image is entered at `0xa000000`; the board's address is `192.168.99.2/24`.
+
+What the transcript proves, in order: the chip reports itself (`RTL8723BU rev
+E`, 1T1R, `BT=1` - the combo's radio is there, this image claims only the Wi-Fi
+interface) and the firmware answers (revision 35.0, signature 0x5301); the
+claim is by identity on the xHCI at bus 1 port 2 and the MAC comes back
+`88:e6:28:53:10:9c`; the pool starts at 29 of 32 slots and the first packets are
+received; a scan returns 35 rows with no FCS errors; the join reaches
+`state=4`; the ARP reply arrives and 20 of 20 pings come back (`max_ms=8`); the
+netio server takes one 1440-byte cell in both directions, with `wlan_txerr=0`
+and the gate stopping the drain 1523 times.
+
+```
+## Starting application at 0xa000000 ...
+boot: mainrtos: banner backend=freertos kernel=FreeRTOS-Kernel V11.3.1 build=v0.0.2-139-g6c7e2007
+rtos: kernel ready tick=1000Hz
+[   0.000] rtos: runner start cases=6 build=v0.0.2-139-g6c7e2007
+[   0.005] rtos: case tick start
+
+... (the tick case) ...
+
+[   3.045] rtos: case tick PASS
+[   3.048] rtos: case rtl8xxxu start
+[   4.686] rtl8xxxu: claim usbh: lkpi claim attempt 0bda:b720 bus=1 hub=2 port=2 intf=2 spd=3
+[   5.072] lkpi: ...: RTL8723BU rev E (SMIC) romver 0, 1T1R, TX queues 3, WiFi=1, BT=1, GPS=0, HI PA=0
+
+... (one debug line that prints a pointer where the MAC belongs) ...
+
+[   5.094] rtl8xxxu: fw ...: Firmware revision 35.0 (signature 0x5301)
+[   6.815] rtl8xxxu: claim usbkpi: 'rtl8xxxu' claimed 0bda:b720
+[   6.905] rtl8xxxu: attach ok after 3200 ms mac=88:e6:28:53:10:9c
+[   6.915] rtl8xxxu: start ok attached=1 rx=0
+[   6.920] rtl8xxxu: pool skb=29/32 data=0/0 heap_live=29 ovf=0/0 fail=0
+[   6.938] rtl8xxxu: PASS
+[   6.941] rtos: case rtl8xxxu PASS
+[   6.944] rtos: case rtl8xxxu_scan start
+
+... (the scan) ...
+
+[  10.624] rtl8xxxu: scan done rows=35 bcn=147 bcnT=0 prsp=35 fcs=0 scan=1/1 state=1 entered=1 close=2 rx=201
+[  10.639] rtl8xxxu: scan PASS
+[  10.642] rtos: case rtl8xxxu_scan PASS
+[  10.646] rtos: case rtl8xxxu_join start
+[  10.649] rtl8xxxu: join bssid=24:ec:99:b9:8a:00 ssid=labwifi-ar-ht20s freq=2432 rssi=-36
+
+... (auth and assoc) ...
+
+[  11.261] rtl8xxxu: join ok state=4 mgt_tx=15 txc=15 rx=206
+[  11.266] rtl8xxxu: join PASS
+[  11.269] rtos: case rtl8xxxu_join PASS
+[  11.273] rtos: case rtl8xxxu_dataplane start
+[  11.322] rtl8xxxu: data arp reply src=24:ec:99:b9:8a:00 tx=1
+[  22.513] rtl8xxxu: data ping tx=20 rx=20 min_ms=0 max_ms=8 lost=-
+[  22.519] rtl8xxxu: data counters data_tx=22 tx_done=38 rx=328 rx_data=35
+[  22.525] rtl8xxxu: data PASS
+[  22.528] rtos: case rtl8xxxu_dataplane PASS
+[  22.532] rtos: case rtl8xxxu_netio start
+[  22.540] rtl8xxxu: net up ip=192.168.99.2/24 mac=88:e6:28:53:10:9c mtu=1500
+[  29.300] net: netio addr 192.168.99.2/24
+[  29.314] netio: tcp listening port=18767
+[  29.852] netio: udp listening port=18768
+[  29.928] net: netio ready port=18767 aux=18768 buf=16384
+
+... (the cell) ...
+
+[  59.931] netio: udp client connected
+[  59.934] netio: udp c2s pkt=1440
+[  66.083] netio: udp rx done pkts=15476 bytes=22285440
+[  66.127] wlan: link rx data=15727 retry=8084 fcs=0
+[  66.196] netio: cpu tag=udp-c2s frames=15476 ticks=150213049 us_x10_per_frame=4044 cyc_per_frame=0
+[  66.213] netio: udp s2c pkt=1440
+[  72.257] netio: cpu tag=udp-s2c frames=13740 ticks=144863159 us_x10_per_frame=4392 cyc_per_frame=0
+[  72.266] netio: udp tx done pkts=13740 bytes=19785600 refusals=6000
+[  72.317] netio: layers tag=udp-end wlan_tx=13779 wlan_done=13795 wlan_rx=16276 wlan_rxdata=15543 wlan_rxenc=13 wlan_txplain=13779 wlan_txerr=0 wlan_attach=1 wlan_freq=2432 wlan_gated=1523 wlan_wakes=13707 wlan_stash=0 wlan_stashok=0 wlan_xdrop=0 wlan_qhi=64 wlan_p
+```
+
+The link's own retry counter is the interesting one in this cell: 8084 retries
+on 15727 received frames, against 2983 on 27767 for the 8188EUS arm - the
+8723BU's receiver is the weaker of the two on this bench, and the per-frame
+costs (404 vs 228 us) say the same thing from the other side.  The join line
+above shows `rssi=-36`, so this is not a distance problem.  As in the 8188EUS
+transcript, the `...` inside `lkpi: ...:` and `rtl8xxxu: fw ...:` is three
+unprintable prefix bytes (0x02 0x01 0x18), not removed text.
+
+## RTL8821CU (USB2 xHCI, mainline rtw88 + net80211)
+
+Profile `rtw88-usb-8821cu-ar-ht20-ba` (the ladder `rtw88_usb`, `rtw88_scan`,
+`rtw88_join`, `rtw88_netio`).  Dongle: RTL8821CU, which arrives as the
+`0bda:1a2b` CD-ROM persona and is switched by the image's own modeswitch hook
+to `0bda:c820`.  Bench AP:
+`labwifi-ar-ht20s` on channel 5 (2432 MHz), **open**.  The image is entered at
+`0xa000000`; the board's address is `192.168.99.2/24`.
+
+What the transcript proves, in order: the modeswitch ejects the CD-ROM
+persona in 31 bytes and the runtime device enumerates on the second controller;
+the firmware answers (`Firmware version 24.11.0, H2C version 12`) and the driver
+attaches `54:c9:e0:00:29:66` with the transmit engine's counters at zero
+refusals; the second dongle on the same board (`0bda:8179`) is passed over with
+`-19`, which is this profile binding by identity, not a fault; a scan returns 32
+rows; the join reaches `state=4`; and the netio server takes one 1440-byte cell
+in both directions with `wlan_txerr=0`, the held-frame counters
+(`wlan_stash=31069`, `wlan_stashok=15205`) and the seam's refusals all accounted
+for (`txrefuse noskb=31069 nopeer=0 nokey=0 purged=0`).
+
+```
+## Starting application at 0xa000000 ...
+boot: mainrtos: banner backend=freertos kernel=FreeRTOS-Kernel V11.3.1 build=v0.0.2-138-gf1c6a775
+rtos: kernel ready tick=1000Hz
+[   0.000] rtos: runner start cases=5 build=v0.0.2-138-gf1c6a775
+[   0.005] rtos: case tick start
+
+... (the tick case) ...
+
+[   3.045] rtos: case tick PASS
+[   3.048] rtos: case rtw88_usb start
+[   3.078] rtw88: usb buses=3,2
+[   3.915] lkpi: usbh: modeswitch 0bda:1a2b CD-ROM persona, ejecting
+[   3.934] rtw88: claim usbh: modeswitch sent, expecting 0bda:c820
+[   4.414] rtw88: claim usbh: lkpi claim attempt 0bda:c820 bus=2 hub=1 port=1 intf=2 spd=3
+[   4.428] rtw88: fw lkpiu: Firmware version 24.11.0, H2C version 12
+[   4.475] rtw88: err usbh: usb_driver probe failed (ret -19) for 0bda:8179
+[   6.822] rtw88: claim usbkpi: 'freewificam' claimed 0bda:c820
+[   6.892] rtw88: attach ok after 3200 ms mac=54:c9:e0:00:29:66
+[   6.898] rtw88: start ok attached=1 rx=0
+[   6.902] rtw88: pool skb=8/10 data=0/2 heap_live=8 ovf=0/0 fail=0
+[   6.908] rtw88: usb submits=73 completes=72 refused=0 stage_overflow=0 slots_exhausted=0 stage_size=32768 slots=16 rx=0 rx_err=0 rx_last=0
+[   6.920] rtw88: PASS
+[   6.922] rtos: case rtw88_usb PASS
+[   6.925] rtos: case rtw88_scan start
+
+... (the scan) ...
+
+[  10.413] rtw88: scan done rows=32 bcn=84 prsp=17 fcs=0 scan=1/1 state=1 entered=1 close=2 rx=106
+[  10.421] rtw88: scan PASS
+[  10.424] rtos: case rtw88_scan PASS
+[  10.427] rtos: case rtw88_join start
+[  10.431] rtw88: join bssid=24:ec:99:b9:8a:00 ssid=labwifi-ar-ht20s freq=2432 rssi=-32 hits=1 rows=32
+
+... (auth, assoc, the beacon count) ...
+
+[  11.334] rtw88: join ok state=4 mgt_tx=15 txc=15 auth=1 bcnT=2
+[  11.340] rtw88: join PASS
+[  11.342] rtos: case rtw88_join PASS
+[  11.346] rtos: case rtw88_netio start
+[  11.353] rtw88: net up mode=static ip=192.168.99.2 mask=255.255.255.0 gw=192.168.99.1 mac=54:c9:e0:00:29:66 mtu=1500
+[  11.364] net: netio addr 192.168.99.2/24
+[  11.377] netio: tcp listening port=18767
+[  11.915] netio: udp listening port=18768
+[  11.965] net: netio ready port=18767 aux=18768 buf=16384
+
+... (the cell) ...
+
+[  84.077] netio: udp c2s pkt=1440
+[  90.198] netio: udp rx done pkts=28288 bytes=40734720
+[  90.230] wlan: link txrefuse noskb=0 nopeer=0 nokey=0 purged=0
+[  90.306] netio: cpu tag=udp-c2s frames=28288 ticks=149421776 us_x10_per_frame=2200 cyc_per_frame=0
+[  90.321] netio: udp s2c pkt=1440
+[  98.966] netio: cpu tag=udp-s2c frames=15772 ticks=207193756 us_x10_per_frame=5473 cyc_per_frame=0
+[  98.975] netio: udp tx done pkts=15772 bytes=22711680 refusals=5907
+[  99.109] netio: layers tag=udp-end wlan_tx=15778 wlan_done=15850 wlan_rx=29783 wlan_rxdata=28302 wlan_rxenc=4 wlan_txplain=15778 wlan_txerr=0 wlan_attach=1 wlan_freq=2432 wlan_gated=0 wlan_wakes=15480 wlan_stash=31069 wlan_stashok=15205 wlan_xdrop=0 wlan_qhi=64 wl
+[  99.137] wlan: link txrefuse noskb=31069 nopeer=0 nokey=0 purged=0
+[  99.150] wlan: link rx data=28670 retry=2205 fcs=0
+```
+
+The pool-full line (`lkpi_skb: alloc refused: header slots full (128) and heap
+headers full (64)`) repeats through the upload half of this cell and is elided
+by the `...`; it is the seam telling the bridge "no header" at 1550 bytes for
+a data frame and 70 for the bare ack, and the `wlan_stash`/`wlan_stashok` pair
+is the bridge holding those frames and delivering them on a later completion
+instead of dropping them.  This is the arm where the seam, not the gate,
+absorbs the back-pressure: `wlan_gated=0` because this driver's USB transmit
+path never calls `ieee80211_stop_queues`, so the only brake is the pool.
+
 ## What is not claimed here
 
-Throughput for either module is not measured yet; these transcripts establish
-reachability and the protocol exchange.  The wired and Wi-Fi performance rows
-live in the top-level README, and a module appears there only after the same
-kind of run.
+Each transcript is one boot and, where a cell is shown, one cell: it establishes
+that the exchange happens and which counters account for it, not that the number
+repeats.  The performance table in the top-level README is where a rate is
+allowed to stand, and a module appears there only after its own repeated runs.
+The three USB modules share a cellular-quality bench AP and a single board;
+their absolute rates are not comparable to the SDIO arm's, which ran on the
+other board with a different AP.
