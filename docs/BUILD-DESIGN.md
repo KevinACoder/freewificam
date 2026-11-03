@@ -415,9 +415,14 @@ M3 adds CMake parity (`cmake/kconfig.cmake`, one build dir per profile,
 list (A5, `check-closure.sh` in the gate); M5 turns the core into static
 libraries with `include/freewificam/` as the only public surface (A9/A10);
 M6 (the cherrysh command layer and the three-source case gate, A6/A7) is done;
-M7 converges `tests/` and the docs last.  The `.mk` retirement stays done;
-the converter and `dump-vars.py` are the frozen record of how the 81 profiles
-were read.
+M7 converges `tests/` and the docs last.  M4 is implemented: every
+first-party component owns one `sources.mk`, `tools/build/query.mk` is the one
+query point, `tools/build/gen_sources.py` renders the CMake fragment, and
+linux-ko consumes the net80211 list and runs `check-closure.sh` in its build.
+The component inventory, the order-preservation evidence and the rtw89/rtw88
+divergence conclusion are in `docs/MODULES.md`.  The `.mk` retirement stays
+done; the converter and `dump-vars.py` are the frozen record of how the 81
+profiles were read.
 
 ## 12. Open items
 
