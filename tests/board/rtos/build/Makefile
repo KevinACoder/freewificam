@@ -131,11 +131,6 @@ ifeq ($(BOARD),rk3568-itx)
 BOARD_INCLUDES := \
 	-I$(PLATFORM)/board/rk3568-itx \
 	-I$(PLATFORM)/board/rk3568-itx/drivers
-BOARD_BASE_SRCS := \
-	$(PLATFORM)/board/rk3568-itx/drivers/uart.c \
-	$(PLATFORM)/board/rk3568-itx/drivers/cpu_freq.c \
-	$(PLATFORM)/board/rk3568-itx/param.c \
-	$(PLATFORM)/board/rk3568-itx/reset.c
 BOARD_TX_DIR := rk3568-itx
 BOARD_TX_EXTRA_SRCS :=
 BOARD_LINKSCRIPT := $(PLATFORM)/arch/aarch64/baremetal.ld
@@ -147,10 +142,6 @@ BOARD_INCLUDES := \
 	-I$(PLATFORM)/board/firefly/drivers \
 	-I$(PLATFORM)/board/firefly/drivers/net \
 	-I$(PLATFORM)/board/firefly/drivers/nvme
-BOARD_BASE_SRCS := \
-	$(PLATFORM)/board/firefly/drivers/uart.c \
-	$(PLATFORM)/board/firefly/param.c \
-	$(PLATFORM)/board/firefly/reset.c
 BOARD_TX_DIR := firefly
 # The firefly board image's imported world (NVMe, lwIP) calls the C library
 # names; the rk3568 images answer them only when the wlan case pulls them in.
@@ -172,10 +163,6 @@ BOARD_INCLUDES := \
 	-I$(PLATFORM)/board/firefly/drivers \
 	-I$(PLATFORM)/board/firefly/drivers/net \
 	-I$(PLATFORM)/board/firefly/drivers/nvme
-BOARD_BASE_SRCS := \
-	$(PLATFORM)/board/firefly/drivers/uart.c \
-	$(PLATFORM)/board/firefly/param.c \
-	$(PLATFORM)/board/firefly/reset.c
 BOARD_TX_DIR := firefly
 BOARD_TX_EXTRA_SRCS := $(PLATFORM)/os/threadx/board/firefly/libc_bindings.c
 BOARD_LINKSCRIPT := $(PLATFORM)/board/firefly/v2/link.ld
@@ -505,6 +492,56 @@ LWIP_STACK_SRCS :=	$(LWIP)/src/core/init.c $(LWIP)/src/core/def.c $(LWIP)/src/co
 	$(LWIP)/src/netif/ethernet.c \
 	$(LWIP)/src/apps/lwiperf/lwiperf.c
 
+# ---------------------------------------------------------------------------
+# Component source lists (BUILD-01 M4).  Each component owns one sources.mk;
+# the helper in tools/build/sources.mk turns its kbuild-style obj- lines into
+# the per-flag-world lists the fragments below consume.  The lists are built
+# from the generated configuration, not from the case string.
+include $(ROOT)/tools/build/sources.mk
+
+$(eval $(call component_sources,$(ROOT)/components/net80211,core,NET80211_CORE))
+$(eval $(call component_sources,$(ROOT)/components/net80211,nport,NET80211_NPORT))
+$(eval $(call component_sources,$(ROOT)/components/net80211,bridge,NET80211_BRIDGE))
+$(eval $(call component_sources,$(ROOT)/components/net80211,kpi,NET80211_KPI))
+$(eval $(call component_sources,$(ROOT)/components/net80211,rxba,NET80211_RXBA))
+NET80211_SRCS := $(NET80211_CORE_SRCS) $(NET80211_NPORT_SRCS) \
+	$(NET80211_BRIDGE_SRCS)
+
+$(eval $(call component_sources,$(COMPONENTS)/linuxkpi,net80211,LINUXKPI))
+$(eval $(call component_sources,$(COMPONENTS)/linuxkpi,cherry,LINUXKPI_CHERRY))
+$(eval $(call component_sources,$(COMPONENTS)/linuxkpi,wlan,LINUXKPI_WLAN))
+
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw89,drv,RTW89_IMPL))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw89,kpi,RTW89_BLOB))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw89,case,RTW89_APP))
+
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8xxxu,drv,RTL8XXXU_IMPL))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8xxxu,kpi,RTL8XXXU_BLOB))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8xxxu,case,RTL8XXXU_APP))
+
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw88,drv,RTW88_IMPL))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw88,kpi,RTW88_BLOB))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw88,case,RTW88_APP))
+
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/iwlwifi,drv,IWLWIFI_IMPL))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/iwlwifi,kpi,IWLWIFI_BLOB))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/iwlwifi,case,IWLWIFI_APP))
+
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8189fs,app,RTL8189FS_APP))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8189fs,sdio,RTL8189FS_SDIO))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8189fs,drv,RTL8189FS_IMPL))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8189fs,lwip,RTL8189FS_LWIP))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8189fs,obs,RTL8189FS_OBS))
+
+$(eval $(call component_sources,$(PLATFORM)/arch,base,ARCH_BASE))
+$(eval $(call component_sources,$(PLATFORM)/arch,pcie,ARCH_PCIE))
+$(eval $(call component_sources,$(PLATFORM)/board,base,BOARD_BASE))
+$(eval $(call component_sources,$(PLATFORM)/board,pcie,BOARD_PCIE))
+$(eval $(call component_sources,$(PLATFORM)/board,nvme,BOARD_NVME))
+$(eval $(call component_sources,$(PLATFORM)/board,fnvme,BOARD_FNVME))
+$(eval $(call component_sources,$(PLATFORM)/board,ecam,BOARD_ECAM))
+$(eval $(call component_sources,$(PLATFORM)/os,baremetal,OS_BASE))
+
 include $(CURDIR)/wlan.mk
 
 # The B3 wireless world (empty unless the iwlwifi case is selected).
@@ -549,17 +586,7 @@ ifneq ($(filter rtw88,$(CASES)),)
 include $(CURDIR)/rtw88_sdio.mk
 endif
 
-BASE_SRCS := \
-	$(PLATFORM)/arch/aarch64/start.S \
-	$(PLATFORM)/arch/aarch64/gicv3.c \
-	$(PLATFORM)/arch/aarch64/generic_timer.c \
-	$(PLATFORM)/arch/aarch64/mmu.c \
-	$(PLATFORM)/arch/aarch64/cache.c \
-	$(BOARD_BASE_SRCS) \
-	$(PLATFORM)/os/baremetal/printf_bind.c \
-	$(PLATFORM)/os/baremetal/libc_stubs.c \
-	$(PLATFORM)/os/baremetal/log.c \
-	$(PLATFORM)/os/baremetal/tick.c \
+BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 	$(THIRD_PARTY)/ulog/src/ulog.c
 
 APP_SRCS := \
@@ -621,51 +648,15 @@ MMC_PORT_SRCS :=
 MMC_VENDOR_SRCS :=
 endif
 
-# The PCIe domain: the GICv3 ITS / MSI bridge, the DesignWare root complex,
-# MSI/MSI-X programming and the NVMe block driver.  The case group is selected
-# by `pcie`; the benchmark (`pcie_bench`) and the endpoint case (`pcie_7260`)
-# reuse the same bring-up from pcie.c.
-ifneq ($(filter pcie,$(CASES)),)
-ARCH_PCIE_SRCS := \
-	$(PLATFORM)/arch/aarch64/gicv3_its.c \
-	$(PLATFORM)/arch/aarch64/gicv3_msi.c \
-	$(PLATFORM)/arch/aarch64/irq_ctrl.c
-PCIE_BOARD_SRCS := \
-	$(PLATFORM)/board/rk3568-itx/drivers/pcie/pcie_dw.c \
-	$(PLATFORM)/board/rk3568-itx/drivers/pcie/dwc_msix.c \
-	$(PLATFORM)/board/rk3568-itx/drivers/pcie/dwc_msi.c \
-	$(PLATFORM)/board/rk3568-itx/drivers/pcie/dwc_pcie.c
-NVME_BOARD_SRCS := \
-	$(PLATFORM)/board/rk3568-itx/drivers/nvme/dwc_nvme.c
-else
-ARCH_PCIE_SRCS :=
-PCIE_BOARD_SRCS :=
-NVME_BOARD_SRCS :=
-endif
+# The PCIe domain's source groups live in platform/{arch,board}/sources.mk;
+# these names are the flag-world handles the link order uses.
+PCIE_BOARD_SRCS := $(BOARD_PCIE_SRCS)
+NVME_BOARD_SRCS := $(BOARD_NVME_SRCS)
 
 # The firefly board carries its own ECAM root complex and NVMe driver instead
-# of the RK3568 DesignWare pair.  `pcie_ecam` walks that root complex; `nvme`
-# drives the endpoint through it and needs the MSI-X programmer plus the arch
-# MSI domain.  These never join the `pcie` case, which is the RK3568
-# DesignWare bring-up.
-FIREFLY_PCIE_SRCS :=
-FIREFLY_NVME_SRCS :=
-ifneq ($(filter pcie_ecam nvme,$(CASES)),)
-ifeq ($(BOARD),firefly-v1)
-FIREFLY_PCIE_SRCS := $(PLATFORM)/board/firefly/drivers/pcie_ecam.c
-endif
-endif
-ifneq ($(filter nvme,$(CASES)),)
-ifeq ($(BOARD),firefly-v1)
-ARCH_PCIE_SRCS += \
-	$(PLATFORM)/arch/aarch64/gicv3_its.c \
-	$(PLATFORM)/arch/aarch64/gicv3_msi.c \
-	$(PLATFORM)/arch/aarch64/irq_ctrl.c
-FIREFLY_NVME_SRCS := \
-	$(PLATFORM)/board/firefly/drivers/pcie_msix.c \
-	$(PLATFORM)/board/firefly/drivers/nvme/nvme.c
-endif
-endif
+# of the RK3568 DesignWare pair; both groups live in platform/board/sources.mk.
+FIREFLY_PCIE_SRCS := $(BOARD_ECAM_SRCS)
+FIREFLY_NVME_SRCS := $(BOARD_FNVME_SRCS)
 
 PRINTF_SRCS := $(THIRD_PARTY)/printf/printf.c
 
@@ -786,14 +777,14 @@ $(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(UVC_ALL_SRCS)
 endif
 
 ifneq ($(filter rtw89,$(CASES)),)
-$(foreach s,$(filter-out %.S,$(RTW89_NET80211_SRCS) $(RTW89_NPORT_SRCS) $(RTW89_BRIDGE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_BSD_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW89_NET80211_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_BSD_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW89_LKPI_SRCS) $(RTW89_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW89_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW89_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CASE_CFLAGS))))
 endif
 
 ifneq ($(filter rtl8xxxu,$(CASES)),)
-$(foreach s,$(filter-out %.S,$(RTL8XXXU_NET80211_SRCS) $(RTL8XXXU_NPORT_SRCS) $(RTL8XXXU_BRIDGE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_BSD_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTL8XXXU_NET80211_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_BSD_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8XXXU_LKPI_SRCS) $(RTL8XXXU_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8XXXU_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8XXXU_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_CASE_CFLAGS))))
@@ -819,7 +810,7 @@ endif
 # controller, the driver, then the two cases.  The port units are vendored C, so
 # they get their own relaxed flag world.
 ifneq ($(filter rtw88,$(CASES)),)
-$(foreach s,$(filter-out %.S,$(RTW88_NET80211_SRCS) $(RTW88_NPORT_SRCS) $(RTW88_BRIDGE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_BSD_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW88_NET80211_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_BSD_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_LKPI_SRCS) $(RTW88_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_SDIO_PORT_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_DRV_CFLAGS))))

@@ -138,87 +138,22 @@ endif
 RTL8XXXU_CASE_CFLAGS := $(RTL8XXXU_KPI_CFLAGS) $(RTL8XXXU_BUS_DEFS) \
 	$(RTL8XXXU_ID_DEFS) $(RTL8XXXU_HB_DEFS)
 
-RTL8XXXU_NET80211_SRCS := \
-	$(RTL8XXXU_NET)/net80211/ieee80211.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_proto.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_node.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_output.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_input.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_amrr.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_netbsd.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_crypto.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_crypto_none.c \
-	$(RTL8XXXU_NET)/net80211/ieee80211_crypto_ccmp.c \
-	$(RTL8XXXU_NET)/crypto/aes/aes_bear.c \
-	$(RTL8XXXU_NET)/crypto/aes/aes_ct.c \
-	$(RTL8XXXU_NET)/crypto/aes/aes_ct_enc.c \
-	$(RTL8XXXU_NET)/crypto/aes/aes_ct_dec.c \
-	$(RTL8XXXU_NET)/crypto/aes/aes_ccm.c \
-	$(RTL8XXXU_NET)/crypto/aes/aes_ccm_mbuf.c \
-	$(RTL8XXXU_NET)/port/aes_impl_compat.c
-
-RTL8XXXU_NPORT_SRCS := \
-	$(RTL8XXXU_NPORT)/osal/cmsis2/osal_memory_target.c \
-	$(RTL8XXXU_NPORT)/osal/cmsis2/osal_cmsis2.c \
-	$(RTL8XXXU_NPORT)/net/mbuf.c \
-	$(RTL8XXXU_NPORT)/net/ifnet.c
-
-RTL8XXXU_BRIDGE_SRCS := $(RTL8XXXU_NPORT)/bridge/wlan_bridge.c
-
-RTL8XXXU_LKPI_SRCS := \
-	$(RTL8XXXU_LKPI)/linuxkpi_core.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_compat.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_platform_target.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_80211.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_80211_helpers.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_wiphy_work.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_txq.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_netdev.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_cfg80211.c \
-	$(RTL8XXXU_LKPI)/linuxkpi_osdep.c \
-	$(RTL8XXXU_LKPI)/lkpi_tcp_trace.c \
-	$(RTL8XXXU_LKPI)/fw_registry_rtos.c \
-	$(RTL8XXXU_LKPI)/skbuff/skbuff_pool.c \
-	$(RTL8XXXU_LKPI)/usb/linuxkpi_usb.c \
-	$(RTL8XXXU_LKPI)/usb/lkpi_usbh_class.c \
-	$(RTL8XXXU_LKPI)/usb/lkpi_usbh_modeswitch.c \
-	$(RTL8XXXU_NPORT)/bridge/wlan_seam_adapter.c \
-	$(USB_PORT)/lkpi_usb_cherryusb.c
-
-# The downlink block-ack receive side (RTOS-02).  It answers the AP's ADDBA
-# Request and reorders the aggregated MPDUs; the imported net80211 has no
-# action handler and no HT/BA code, so the link otherwise stays at one MPDU
-# per TXOP.  A lever rather than a always-on source keeps the pre-BA arm (the
-# RTOS-01 HT20 image) reproducible for the round's A/B.
-ifneq ($(filter 1,$(strip $(CONFIG_WLAN_RX_BA))),)
-RTL8XXXU_LKPI_SRCS += $(RTL8XXXU_NPORT)/bridge/wlan_rx_ba.c
-endif
+RTL8XXXU_NET80211_SRCS := $(NET80211_SRCS)
+RTL8XXXU_LKPI_SRCS := $(LINUXKPI_SRCS) $(NET80211_KPI_SRCS) \
+	$(LINUXKPI_CHERRY_SRCS) $(NET80211_RXBA_SRCS)
 
 # The nine translation units the driver's Makefile lists: core plus every
 # chip's fileops (core.c's table references them, so the set is the link
 # closure, not a menu).
-RTL8XXXU_DRV_SRCS := \
-	$(RTL8XXXU_DRV)/core.c \
-	$(RTL8XXXU_DRV)/8188e.c \
-	$(RTL8XXXU_DRV)/8188f.c \
-	$(RTL8XXXU_DRV)/8192c.c \
-	$(RTL8XXXU_DRV)/8192e.c \
-	$(RTL8XXXU_DRV)/8192f.c \
-	$(RTL8XXXU_DRV)/8710b.c \
-	$(RTL8XXXU_DRV)/8723a.c \
-	$(RTL8XXXU_DRV)/8723b.c
+RTL8XXXU_DRV_SRCS := $(RTL8XXXU_IMPL_SRCS)
 
-RTL8XXXU_FW_SRCS := $(RTL8XXXU_FW_BLOB)
+RTL8XXXU_FW_SRCS := $(RTL8XXXU_BLOB_SRCS)
 
-RTL8XXXU_CASE_SRCS := \
-	$(LINE)/app/cases/rtl8xxxu.c \
-	$(LINE)/app/cases/rtl8xxxu_scan.c \
-	$(LINE)/app/cases/rtl8xxxu_join.c \
-	$(LINE)/app/cases/rtl8xxxu_dataplane.c
+RTL8XXXU_CASE_SRCS := $(RTL8XXXU_APP_SRCS)
 
-RTL8XXXU_ALL_SRCS := $(RTL8XXXU_NET80211_SRCS) $(RTL8XXXU_NPORT_SRCS) \
-	$(RTL8XXXU_BRIDGE_SRCS) $(RTL8XXXU_LKPI_SRCS) $(RTL8XXXU_DRV_SRCS) \
-	$(RTL8XXXU_FW_SRCS) $(RTL8XXXU_CASE_SRCS)
+RTL8XXXU_ALL_SRCS := $(RTL8XXXU_NET80211_SRCS) \
+	$(RTL8XXXU_LKPI_SRCS) $(RTL8XXXU_DRV_SRCS) $(RTL8XXXU_FW_SRCS) \
+	$(RTL8XXXU_CASE_SRCS)
 
 # The lwIP-over-bridge image (case rtl8xxxu_net): the stack's port glue and the
 # lwIP core in the platform's flag world, plus the case itself.  The flags are
