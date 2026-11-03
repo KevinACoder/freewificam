@@ -22,6 +22,7 @@ MON_IF=""
 FREQ="2432"
 STA_IP=""
 DUT_SSH=""
+DUT_MAC=""
 PPS=400
 SIZE=1440
 SECS=240
@@ -45,6 +46,7 @@ Options:
   --secs N         duration, default 240
   --sender PATH    ppsgen binary, default tools/netio/ppsgen
   --out PATH       JSON result, default ./bench-stability.json
+  --dut-mac MAC    sample only this station (the AP may carry other bench cards)
   --dut-ssh TARGET optional, read the DUT's Udp:NoPorts before/after
 EOF
 }
@@ -61,6 +63,7 @@ while [ $# -gt 0 ]; do
 	--secs) SECS="${2:-}"; shift 2 ;;
 	--sender) SENDER="${2:-}"; shift 2 ;;
 	--out) OUT="${2:-}"; shift 2 ;;
+	--dut-mac) DUT_MAC="${2:-}"; shift 2 ;;
 	--dut-ssh) DUT_SSH="${2:-}"; shift 2 ;;
 	-h|--help) usage; exit 0 ;;
 	*) echo "unknown argument: $1" >&2; usage; exit 2 ;;
@@ -81,7 +84,17 @@ else
 	PRIV="sudo -n"
 fi
 
-station() { $PRIV $IW dev "$AP_IF" station dump 2>/dev/null; }
+station() {
+	if [ -n "$DUT_MAC" ]; then
+		$PRIV $IW dev "$AP_IF" station dump 2>/dev/null | \
+			awk -v mac="$DUT_MAC" '
+				/^Station / { p = (index($0, "Station " mac) == 1) }
+				p { print }
+			'
+	else
+		$PRIV $IW dev "$AP_IF" station dump 2>/dev/null
+	fi
+}
 field() { station | awk -v k="$1" '$0 ~ k {gsub(/ /,"",$0); sub("^[^:]*:","",$0); print; exit}'; }
 num() { field "$1" | tr -dc '0-9.-'; }
 
@@ -97,7 +110,7 @@ dut_noport() {
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-echo "== bench stability: AP=$AP_IF mac=$AP_MAC ${FREQ} MHz -> $STA_IP:$PORT, ${PPS} pps x ${SECS}s"
+echo "== bench stability: AP=$AP_IF mac=$AP_MAC ${FREQ} MHz -> $STA_IP:$PORT, ${PPS} pps x ${SECS}s dut=${DUT_MAC:-any}"
 
 NP0=$(dut_noport || true)
 TX0=$(num "tx packets"); FAIL0=$(num "tx failed"); RETRY0=$(num "tx retries")
@@ -107,7 +120,7 @@ TX0=$(num "tx packets"); FAIL0=$(num "tx failed"); RETRY0=$(num "tx retries")
 	: >"$TMP/samples.tsv"
 	i=0
 	while [ $i -lt "$SECS" ]; do
-		s=$($PRIV $IW dev "$AP_IF" station dump 2>/dev/null)
+		s=$(station)
 		if [ -z "$s" ]; then
 			printf '%s\tMISSING\t\t\t\n' "$i" >>"$TMP/samples.tsv"
 		else
@@ -138,13 +151,13 @@ if [ -n "${CHANNEL_LOG:-}" ] && [ -f "$CHANNEL_LOG" ]; then
 	CHANNEL_LOG="$CHANNEL_LOG"
 fi
 
-python3 - "$TMP/samples.tsv" "$OUT" "$AP_IF" "$AP_MAC" "$FREQ" "$PPS" "$SECS" \
+python3 - "$TMP/samples.tsv" "$OUT" "$AP_IF" "$AP_MAC" "$DUT_MAC" "$FREQ" "$PPS" "$SECS" \
 	"${SENT:-0}" "${SECS_ACT:-0}" "${TX0:-0}" "${TX1:-0}" "${FAIL0:-0}" "${FAIL1:-0}" \
 	"${RETRY0:-0}" "${RETRY1:-0}" "${NP0:-}" "${NP1:-}" "$MISSING" \
 	"$DROP_TOL_PPM" "$SIGNAL_SPREAD_DB" <<'PY'
 import json, sys
 (args) = sys.argv[1:]
-(samples, out, ap_if, ap_mac, freq, pps, secs, sent, secs_act,
+(samples, out, ap_if, ap_mac, dut_mac, freq, pps, secs, sent, secs_act,
  tx0, tx1, fail0, fail1, retry0, retry1, np0, np1, missing, drop_tol, spread_dbg) = args
 rows = []
 for line in open(samples):
@@ -175,7 +188,8 @@ checks = {
     "signal_stable": spread is not None and spread <= float(spread_dbg),
 }
 res = {
-    "ap_if": ap_if, "ap_mac": ap_mac, "freq_mhz": int(freq),
+    "ap_if": ap_if, "ap_mac": ap_mac, "dut_mac": dut_mac or None,
+    "freq_mhz": int(freq),
     "pps": int(pps), "secs": float(secs_act or secs), "sent": sent,
     "ap_tx_packets": d_tx, "ap_tx_loss_ppm": loss_ppm,
     "ap_tx_failed_delta": int(fail1) - int(fail0),
