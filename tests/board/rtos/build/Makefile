@@ -63,7 +63,9 @@ BOARD := $(subst ",,$(CONFIG_BOARD_NAME))
 CASES := $(subst ",,$(CONFIG_CASES))
 OPT := $(subst ",,$(CONFIG_OPT_FLAGS))
 SWITCH_PROFILE := $(subst ",,$(CONFIG_PROFILE_NAME))
-HEAP_SIZE := $(CONFIG_HEAP_SIZE)
+HEAP_SIZE := $(CONFIG_HEAP_SIZE)M
+# A literal comma for function arguments whose value contains one (link flags).
+comma := ,
 # Configuration is data, not flags: the generated header is force-included and
 # the build lines are empty of -D.
 # Per-frame service-time instrumentation (dwc_eqos prof counters and the
@@ -702,7 +704,7 @@ LIB_OSAL_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/os/cmsis2/% $(OBJD
 LIB_SUPPORT_OBJS := $(filter $(OBJDIR)/third-party/ulog/% $(OBJDIR)/third-party/printf/%,$(OBJS))
 LIB_NET80211_OBJS := $(filter $(OBJDIR)/components/net80211/%,$(OBJS))
 LIB_LINUXKPI_OBJS := $(filter $(OBJDIR)/components/linuxkpi/%,$(OBJS))
-LIB_DRV_OBJS := $(filter $(OBJDIR)/wireless-drivers/%,$(OBJS))
+LIB_DRV_OBJS := $(filter $(OBJDIR)/wireless-drivers/% $(OBJDIR)/third-party/fsl_sdmmc/%,$(OBJS))
 LIB_USBHOST_OBJS := $(filter $(OBJDIR)/third-party/cherryusb/% $(OBJDIR)/ports/cherryusb/%,$(OBJS))
 LIB_APP_OBJS := $(filter $(OBJDIR)/tests/board/rtos/app/%,$(OBJS))
 
@@ -712,6 +714,12 @@ LIB_APP_OBJS := $(filter $(OBJDIR)/tests/board/rtos/app/%,$(OBJS))
 LIB_LINK_ORDER := fw_app fw_net80211 fw_linuxkpi fw_usbhost fw_drivers \
 	fw_board_$(BOARD) fw_osal_cmsis2 fw_support fw_arch
 SDK_LIBS = $(strip $(foreach l,$(LIB_LINK_ORDER),$(if $(wildcard $(LIB_DIR)/lib$(l).a),-l$(l))))
+# The registration set the image gets from the driver fragments: with
+# --gc-sections these entry points have no other reference.  A consumer that
+# links the archives in an image-shaped link must pass the same set, so it is
+# published next to the .pc instead of being read out of the build fragments.
+SDK_REGISTRATION := $(filter -Wl$(comma)-u$(comma)%,$(WLAN_LDFLAGS) $(RTW89_LDFLAGS) \
+	$(RTL8XXXU_LDFLAGS) $(RTW88_LDFLAGS))
 
 libs: image
 	@mkdir -p $(LIB_DIR)
@@ -756,6 +764,10 @@ sdk: libs
 	@cp $(PLATFORM)/os/cmsis2/cmsis_os2_ext.h \
 		$(SDK_DIR)/include/freewificam/deps/cmsis_os2_ext.h
 	@cp $(ROOT)/docs/PORTING.md $(SDK_DIR)/PORTING.md
+	@printf '%s\n' \
+		'# Symbols the image link forces in; pass them to a consumer link' \
+		'# that is shaped like the image.  One -Wl,-u,<symbol> per line.' \
+		$(SDK_REGISTRATION) > $(SDK_DIR)/freewificam.registration
 	@printf '%s\n' \
 		'prefix=$(SDK_DIR)' \
 		'includedir=$${prefix}/include' \
