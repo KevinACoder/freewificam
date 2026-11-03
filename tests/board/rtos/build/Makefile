@@ -476,7 +476,8 @@ BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra \
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h \
 	-include stdlib.h
 ASM_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -march=armv8-a \
-	-mgeneral-regs-only -mstrict-align $(INCLUDES)
+	-mgeneral-regs-only -mstrict-align \
+	-include $(PLATFORM)/build_defs.h $(INCLUDES)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 PRINTF_CFLAGS :=
 
@@ -787,7 +788,7 @@ endif
 
 $(FLAG_STAMP): FORCE $(WLAN_STAMP) $(CONFIG_FILE)
 	@mkdir -p $(BUILD)
-	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'config: $(shell sha256sum $(CONFIG_FILE) 2>/dev/null | cut -d' ' -f1)' 'wlan: $(WLAN_FLAGS_STAMP)' \
+	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'asm: $(ASM_CFLAGS)' 'config: $(shell sha256sum $(CONFIG_FILE) 2>/dev/null | cut -d' ' -f1)' 'wlan: $(WLAN_FLAGS_STAMP)' \
 		'usb: $(USB_CFLAGS)' 'uvc: $(UVC_CFLAGS)' \
 		'rtw89-net80211: $(RTW89_BSD_CFLAGS)' \
 		'rtw89-kpi: $(RTW89_KPI_CFLAGS)' 'rtw89-drv: $(RTW89_DRV_CFLAGS)' \

@@ -35,7 +35,7 @@ RTL8XXXU_LKPI := $(ROOT)/components/linuxkpi/rtos
 # names every chip, so the image's identity - the firmware blob, the name the
 # bridge reports, and the id line the case promotes - is a profile fact, not a
 # driver one.  8188eu is the default, so the earlier line's numbers stand.
-RTL8XXXU_CHIP := $(CONFIG_RTL8XXXU_CHIP)
+RTL8XXXU_CHIP := $(if $(filter 1,$(CONFIG_RTL8XXXU_CHIP_8723BU)),8723bu,8188eu)
 ifeq ($(RTL8XXXU_CHIP),8723bu)
 RTL8XXXU_FW_NAME := rtlwifi/rtl8723bu_nic.bin
 RTL8XXXU_FW_BLOB := $(ROOT)/components/linuxkpi/fw/rtl8723bu_fw_blob.c

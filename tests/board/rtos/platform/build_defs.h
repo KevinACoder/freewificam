@@ -130,14 +130,14 @@
 
 #if defined(RTOS_CASE_RTL8XXXU)
 #define WLAN_BRIDGE_ADAPTER_NAME "rtl8xxxu"
-#ifdef RTL8XXXU_CHIP_8723BU
+#ifdef CONFIG_RTL8XXXU_CHIP_8723BU
 #define WLAN_BRIDGE_FIRMWARE_NAME "rtl8723bu_fw.bin"
-#define RTL8XXXU_FW_REGISTER lkpi_fw_rtl8723bu_fw_register
-#define RTL8XXXU_CLAIM_ID 0x0003
+#define RTL8XXXU_FW_REGISTER lkpi_fw_rtl8723bu_register
+#define RTL8XXXU_CLAIM_ID "0bda:b720"
 #else
 #define WLAN_BRIDGE_FIRMWARE_NAME "rtl8188eufw.bin"
 #define RTL8XXXU_FW_REGISTER lkpi_fw_rtl8188eufw_register
-#define RTL8XXXU_CLAIM_ID 0x0001
+#define RTL8XXXU_CLAIM_ID "0bda:8179"
 #endif
 #endif
 
