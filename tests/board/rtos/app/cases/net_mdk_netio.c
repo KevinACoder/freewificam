@@ -155,6 +155,11 @@ static struct {
 	int32_t err_bsd;
 } io;
 
+/* Transmit refusals the last S2C cell waited through (WLAN only).  The cell's
+ * done line carries it so the console shows whether the uplink was running
+ * against backpressure or against the wire: the flag W6-03's U1 asks for. */
+static unsigned long netio_s2c_refusals;
+
 static void cb_timer(void *arg) { (void)arg; io.timeover = true; }
 
 static uint32_t rand32(void)
@@ -481,11 +486,14 @@ static void emit_layer_counters(const char *tag)
 	MDK_ANCHOR("netio: layers tag=%s wlan_tx=%u wlan_done=%u wlan_rx=%u "
 		   "wlan_rxdata=%u wlan_rxenc=%u wlan_txplain=%u wlan_txerr=%u "
 		   "wlan_attach=%d wlan_freq=%u wlan_gated=%u wlan_wakes=%u "
+		   "wlan_stash=%u wlan_stashok=%u wlan_xdrop=%u "
+		   "wlan_qhi=%u wlan_pending=%u "
 		   "mem_err=%lu pbuf_err=%lu\n",
 		   tag, wc.data_tx, wc.tx_completes, wc.rx_frames, wc.rx_data,
 		   wc.rx_data_enc, wc.data_tx_plain, wc.tx_errors, wc.attached,
-		   (unsigned)wc.tuned_freq, wc.tx_gated, wc.tx_wakes, mem_err,
-		   pbuf_err);
+		   (unsigned)wc.tuned_freq, wc.tx_gated, wc.tx_wakes,
+		   wc.tx_stash, wc.tx_stash_ok, wc.tx_perm_drop, wc.txq_high,
+		   wc.tx_pending, mem_err, pbuf_err);
 	/* The bridge's own receive decode: per-rate frames, retries and FCS
 	 * failures since the last dump.  On the air this is the rate/retry
 	 * fingerprint the AP's station dump cannot give (the dump reports the
@@ -1264,6 +1272,7 @@ static void UDP_Server(void *arg)
 				io.pkt_size = ntohl(ctl.data);
 				io.tx_bytes = 0;
 				io.pkt_count = 0;
+				netio_s2c_refusals = 0;
 				if ((int32_t)io.pkt_size > (int32_t)io.buf_size)
 					__THREAD_EXIT(BSD_EMSGSIZE);
 
@@ -1330,6 +1339,7 @@ static void UDP_Server(void *arg)
 							 * with (its 256-slot ring never
 							 * refuses). */
 							if (rc < 0 && ++s2c_refusals < S2C_REFUSAL_MAX) {
+								netio_s2c_refusals++;
 								osDelay(1);
 								continue;
 							}
@@ -1410,9 +1420,11 @@ done_send:
 #if !(defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP)
 				lwip_close(io.udp_sock);
 #endif
-				MDK_ANCHOR("netio: udp tx done pkts=%lu bytes=%lu\n",
+				MDK_ANCHOR("netio: udp tx done pkts=%lu bytes=%lu "
+					   "refusals=%lu\n",
 					   (unsigned long)io.pkt_count,
-					   (unsigned long)io.tx_bytes);
+					   (unsigned long)io.tx_bytes,
+					   netio_s2c_refusals);
 
 				io.udp_sock = -1;
 				ctl.cmd = htonl(CMD_RES);
