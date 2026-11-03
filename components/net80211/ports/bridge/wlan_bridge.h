@@ -84,6 +84,19 @@ struct wlan_bridge_counters {
 	 * with wakes are the designed pair working. */
 	unsigned int	tx_gated;
 	unsigned int	tx_wakes;
+	/* The seam's held frame and its accounting.  When the seam refuses a
+	 * data frame for want of a socket buffer the bridge keeps that one
+	 * frame (encapsulated, sealed, in order) instead of freeing it, stops
+	 * draining, and lets the next completion reopen the queue.  tx_stash
+	 * counts the refusals the held frame waited through, tx_stash_ok the
+	 * held frames the seam later took, tx_perm_drop the refusals no wake
+	 * can fix (no peer, no key), tx_pending the frame held right now, and
+	 * txq_high the deepest the interface queue was seen. */
+	unsigned int	tx_stash;
+	unsigned int	tx_stash_ok;
+	unsigned int	tx_perm_drop;
+	unsigned int	tx_pending;
+	unsigned int	txq_high;
 	unsigned int	rx_frames;
 	unsigned int	tx_completes;
 	unsigned int	scan_starts;
@@ -254,6 +267,14 @@ int	wlan_bridge_input(const uint8_t *frame, size_t len, int rssi,
 
 /* A transmitted frame completed (the driver half's tx-status callback). */
 void	wlan_bridge_tx_complete(void);
+
+/*
+ * Whether the transmit path has anything waiting on the driver: a frame the
+ * seam refused and the bridge held, or frames still in the interface queue.
+ * A completion asks this before it asks for a wake, so a completion with an
+ * empty path costs nothing.
+ */
+int	wlan_bridge_tx_waiting(void);
 
 /*
  * The scan group. start programs the receive filter promiscuous first (a chip

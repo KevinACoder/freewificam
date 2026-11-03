@@ -163,6 +163,23 @@ static struct {
 	 * driver that stopped and never recovered. */
 	unsigned int tx_gated;
 	unsigned int tx_wakes;
+	/*
+	 * The seam's one held frame: a data frame the seam refused for want of
+	 * a socket buffer, kept encapsulated and sealed (it was never handed to
+	 * the driver, so nothing consumed its state) and handed down again on
+	 * the next completion.  Holding exactly one frame and stopping the
+	 * drain keeps the transmit order - a later frame overtaking it would
+	 * leave a hole in the CCMP packet number sequence the AP's replay
+	 * window rejects.
+	 */
+	struct mbuf	*pending;
+	int		pending_hw_crypto;	/* the key identity the held frame was sealed with */
+	int		pending_pairwise;
+	int		pending_key_idx;
+	unsigned int	tx_stash;	/* refusals the held frame waited through */
+	unsigned int	tx_stash_ok;	/* held frames the seam later took */
+	unsigned int	tx_perm_drop;	/* refusals no wake can fix */
+	unsigned int	txq_high;	/* interface-queue high-water mark */
 	unsigned int rx_frames;
 	unsigned int rx_mgmt;	/* diagnostic: mgmt frames seen in input */
 	unsigned int rx_beacon;	/* diagnostic: beacons seen in input */
@@ -827,6 +844,13 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 {
 	struct ifnet *ifp = ic->ic_ifp;
 	struct mbuf *m;
+	unsigned int qlen;
+
+	/* what the producer had piled up when the drain began: the one number
+	 * that says whether the backpressure reached the stack */
+	qlen = (unsigned int)ifp->if_snd.ifq_len;
+	if (qlen > bridge.txq_high)
+		bridge.txq_high = qlen;
 
 	for (;;) {
 		struct mbuf *enc;
@@ -834,6 +858,7 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		struct ieee80211_frame *wh;
 		struct ieee80211_key *k = NULL;
 		int hw_crypto = 0, pairwise = 0, key_idx = 0;
+		int rc;
 
 		/*
 		 * The driver's own queue state, asked before every frame: a
@@ -849,6 +874,37 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 		    !bridge.ops->queue_ready(bridge.drv)) {
 			bridge.tx_gated++;
 			break;
+		}
+		/*
+		 * The held frame goes before anything still in the queue: it is
+		 * older, it carries the lower CCMP packet number, and the peer's
+		 * replay window rejects the reverse order. A refusal for want of
+		 * a socket buffer means the seam has nothing to hand a frame
+		 * with right now; keep the frame and stop, the next completion
+		 * reopens the drain. A refusal it can never fix drops the frame
+		 * - that is a lost frame, counted as one.
+		 */
+		if (bridge.pending != NULL) {
+			enc = bridge.pending;
+			rc = bridge.ops->tx(bridge.drv,
+			    mtod(enc, const uint8_t *),
+			    (size_t)enc->m_pkthdr.len, 0,
+			    bridge.pending_hw_crypto, bridge.pending_pairwise,
+			    bridge.pending_key_idx);
+			if (rc == WLAN_SEAM_TX_ERR_NOSKB) {
+				bridge.tx_stash++;
+				break;
+			}
+			bridge.pending = NULL;
+			if (rc < 0) {
+				bridge.tx_perm_drop++;
+				if_statinc(ifp, if_oerrors);
+			} else {
+				bridge.tx_stash_ok++;
+				if_statinc(ifp, if_opackets);
+			}
+			m_freem(enc);
+			continue;
 		}
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == NULL)
@@ -948,16 +1004,31 @@ bridge_drain_if_snd(struct ieee80211com *ic)
 			    (int)((ccmp[3] >> 6) & 0x3) : -1,
 			    (unsigned)enc->m_pkthdr.len);
 		}
-		if (bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
-		    (size_t)enc->m_pkthdr.len, 0, hw_crypto, pairwise,
-		    key_idx) < 0)
-			if_statinc(ifp, if_oerrors);	/* same return contract as
-							 * the management drain: a
-							 * negative answer is the
-							 * error */
-		else
-			if_statinc(ifp, if_opackets);
+		/*
+		 * A frame the stack handed down and the bridge finished
+		 * preparing: counted here, once, whatever the seam answers. The
+		 * answer itself is the seam's refusal cause (seam.h v4): NOSKB
+		 * parks the frame for the next completion, anything else
+		 * negative loses it.
+		 */
 		bridge.data_tx++;
+		rc = bridge.ops->tx(bridge.drv, mtod(enc, const uint8_t *),
+		    (size_t)enc->m_pkthdr.len, 0, hw_crypto, pairwise,
+		    key_idx);
+		if (rc == WLAN_SEAM_TX_ERR_NOSKB) {
+			bridge.pending = enc;
+			bridge.pending_hw_crypto = hw_crypto;
+			bridge.pending_pairwise = pairwise;
+			bridge.pending_key_idx = key_idx;
+			bridge.tx_stash++;
+			break;
+		}
+		if (rc < 0) {		/* no peer, no key, or an unnamed
+					 * refusal: this frame will never go */
+			bridge.tx_perm_drop++;
+			if_statinc(ifp, if_oerrors);
+		} else
+			if_statinc(ifp, if_opackets);
 		m_freem(enc);
 	}
 }
@@ -1297,6 +1368,12 @@ wlan_bridge_detach(void)
 		return;
 	if (bridge.ops->stop != NULL)
 		(void)bridge.ops->stop(bridge.drv);
+	/* the held frame dies with the interface: it was sealed for a peer the
+	 * detach is about to forget */
+	if (bridge.pending != NULL) {
+		m_freem(bridge.pending);
+		bridge.pending = NULL;
+	}
 	ieee80211_ifdetach(bridge.ic);
 	wlan_osal_free(bridge.ifp);
 	wlan_osal_free(bridge.ic);
@@ -1760,6 +1837,22 @@ wlan_bridge_tx_complete(void)
 {
 
 	bridge.tx_completes++;
+}
+
+/*
+ * What the completion needs to know before it asks for a wake: the seam held
+ * a frame, or the interface queue still has some. Both are worked on by
+ * bridge_drain_if_snd under the serializer, so this is a hint, not a lock.
+ */
+int
+wlan_bridge_tx_waiting(void)
+{
+
+	if (!bridge.attached || bridge.ic == NULL || bridge.ic->ic_ifp == NULL)
+		return 0;
+	if (bridge.pending != NULL)
+		return 1;
+	return bridge.ic->ic_ifp->if_snd.ifq_len > 0 ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2983,6 +3076,11 @@ wlan_bridge_stats(struct wlan_bridge_counters *out)
 	out->auth_answers = bridge.auth_answers;
 	out->tx_gated = bridge.tx_gated;
 	out->tx_wakes = bridge.tx_wakes;
+	out->tx_stash = bridge.tx_stash;
+	out->tx_stash_ok = bridge.tx_stash_ok;
+	out->tx_perm_drop = bridge.tx_perm_drop;
+	out->tx_pending = bridge.pending != NULL ? 1u : 0u;
+	out->txq_high = bridge.txq_high;
 	out->attached = bridge.attached;
 }
 
@@ -3287,6 +3385,12 @@ wlan_bridge_down(void)
 		return;
 	(void)bridge.ops->stop(bridge.drv);
 	bridge.up = 0;
+	/* the driver's stop released every frame it held; the one the bridge
+	 * held belongs to the same generation */
+	if (bridge.pending != NULL) {
+		m_freem(bridge.pending);
+		bridge.pending = NULL;
+	}
 }
 
 int
