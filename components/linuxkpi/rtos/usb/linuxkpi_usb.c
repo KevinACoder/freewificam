@@ -612,7 +612,7 @@ lkpi_usb_drain_done_count(void)
  * move it without a rebuild and compare the two in one boot.
  *
  * The unit is the same band lwIP's threads are configured in: band*8 is the
- * CMSIS priority value (ports/lwip/sys_arch.c's sys_arch_prio_to_cmsis does the
+ * CMSIS priority value (third-party/lwip/ports/sys_arch.c's sys_arch_prio_to_cmsis does the
  * same mapping), so band 3 is osPriorityNormal and band 5 is where the TCP/IP
  * thread runs.
  */

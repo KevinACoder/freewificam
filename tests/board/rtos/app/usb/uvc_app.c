@@ -7,7 +7,7 @@
  * @design  template method - the imported class driver owns matching and the
  *          enumeration/opening transport (class/video/usbh_video.c) and calls
  *          the weak run/stop hooks; this file is the integrator's half, the
- *          same split the storage class uses (ports/cherryusb/class/msc_app.c).
+ *          same split the storage class uses (app/usb/msc_app.c).
  *          The strategy the hooks carry belongs to the application: which
  *          controller to bring up, what to wait for, and which format and
  *          resolution to open.

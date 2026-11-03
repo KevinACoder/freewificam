@@ -58,7 +58,7 @@
 #define LWIP_FIONREAD_LINUXMODE         1
 #define MEMP_NUM_NETCONN                10
 /* The errno constants are the stack's own; the variable is defined once in
- * ports/lwip/platform_hooks.c. */
+ * third-party/lwip/ports/platform_hooks.c. */
 #define LWIP_PROVIDE_ERRNO              1
 
 /* --- memory ----------------------------------------------------------------- */
@@ -255,7 +255,7 @@
  * (the GEN switches stop being global and become netif flags), which is why
  * the whole option only exists in builds that also enable the driver side.
  * ICMP keeps its software generation - no pseudo-header in the protocol - so
- * its two bits stay set in the netif flags (ports/lwip/ethnetif.c). */
+ * its two bits stay set in the netif flags (third-party/lwip/ports/ethnetif.c). */
 #if defined(CONFIG_GMAC_TX_CSUM) && CONFIG_GMAC_TX_CSUM
 #define LWIP_CHECKSUM_CTRL_PER_NETIF    1
 #endif
@@ -264,7 +264,7 @@
  *
  * With CONFIG_GMAC_RX_ZC the driver lends its receive buffer to the stack and
  * the bridge wraps it in a custom pbuf whose free returns the slot
- * (ports/lwip/ethnetif.c ethnetif_zc_wrap), so the frame is never copied. The
+ * (third-party/lwip/ports/ethnetif.c ethnetif_zc_wrap), so the frame is never copied. The
  * stack side then needs the custom-pbuf interface: pbuf_alloced_custom plus a
  * pbuf type that never routes through the heap. Off by default, and off means
  * the structure does not exist at all, which is why this flips with the driver
@@ -312,7 +312,7 @@
 /* Fine-grained TCP input-path probe (2026-10-19 round 3, FINE=1 lever):
  * patch 0002 adds LWIP_HOOK_TCP_PROBE at fixed points of tcp_input /
  * tcp_output; here the hook is pointed at the bridge's tick-based pair
- * accumulator (ports/lwip/ethnetif.c), which `gmac tcpfine` reads out. The
+ * accumulator (third-party/lwip/ports/ethnetif.c), which `gmac tcpfine` reads out. The
  * hook adds a counter read and a dispatch per site (~8 sites per input
  * entry, a few hundred ns each) - measurement-only, the default profile
  * never defines it. */
@@ -323,7 +323,7 @@ void ethnetif_tcp_fine_mark(unsigned int site);
 
 /* The acknowledgement-path account (WLAN image only). third-party/lwip/patches/0005 adds
  * LWIP_HOOK_TCP_EVENT at the points where the congestion state moves; here it
- * is pointed at ports/lwip/wlan_tcp_trace.c, which turns the pcb into plain
+ * is pointed at third-party/lwip/ports/wlan_tcp_trace.c, which turns the pcb into plain
  * numbers for components/linuxkpi/lkpi_tcp_trace.c. The prototype names no
  * lwIP type because this header is read before they exist. Every other image
  * leaves the lever undefined, and tcp_priv.h's default macro expands the calls

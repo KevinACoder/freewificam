@@ -12,7 +12,7 @@
  *         classification this file owns is the one thing the netdev face cannot
  *         know: a received frame is either the supplicant's (EAPOL, which the port
  *         installs a sink for) or the stack's, exactly as the net80211 line's
- *         bridge splits them (ports/net80211/bridge/wlan_wpa_vendor.c:51-54 the
+ *         bridge splits them (components/net80211/ports/bridge/wlan_wpa_vendor.c:51-54 the
  *         EAPOL seam it registers).
  *
  * The transmit ownership rule comes from the driver's own entry: it consumes the

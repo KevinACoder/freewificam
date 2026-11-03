@@ -20,7 +20,7 @@
  * by the stack's own dispatcher, which is the honest answer for a mode this
  * board's driver does not drive yet.
  *
- * @design adapter - ref ports/fsl_sdmmc/sdmmc_host_dwmmc.c (the same table for
+ * @design adapter - ref third-party/fsl_sdmmc/ports/sdmmc_host_dwmmc.c (the same table for
  *         the SDIO socket, which this file mirrors) and upstream's
  *         host/fdwmshc/fsl_hc_fdwmshc.c (the MMC configuration function for
  *         this controller in the board lab's tree).

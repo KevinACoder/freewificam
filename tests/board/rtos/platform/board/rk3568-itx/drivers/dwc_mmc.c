@@ -58,7 +58,7 @@ static uint32_t dwc_mmc_poll_us = DWC_MMC_POLL_US_DEFAULT;
  * sits on the critical path of every register access (a coarse step there is a
  * per-command tax), while a data stage pays its step once per transfer, which
  * makes a fine data step cheap in aggregate CPU - the eMMC line's controller
- * port runs exactly this split (ports/fsl_sdmmc/sdmmc_host_dwcmshc.c). */
+ * port runs exactly this split (third-party/fsl_sdmmc/ports/sdmmc_host_dwcmshc.c). */
 static uint32_t dwc_mmc_data_poll_us = DWC_MMC_POLL_US_DEFAULT;
 
 /* The iteration budget that covers a wall-clock budget at the current step. */

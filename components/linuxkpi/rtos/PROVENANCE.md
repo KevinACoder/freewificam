@@ -130,5 +130,5 @@ The earlier `DIVERGENCES.md` rows 1-14 describe the host-test copy of the engine
 (2241 lines). They are **not** a description of these bytes: this import is the
 board version, whose source already contains the changes those rows record
 (the backend seam, the allocation registry, the re-arm-before-callback order).
-Its only local difference is the include path in `ports/cherryusb/lkpi_usb_cherryusb.c`
-(recorded in `ports/cherryusb/README.md`).
+Its only local difference is the include path in `components/linuxkpi/rtos/usb/lkpi_usb_cherryusb.c`
+(recorded in `docs/USB-PORT.md`).

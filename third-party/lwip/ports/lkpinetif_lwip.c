@@ -6,7 +6,7 @@
  *          stack.
  *
  * @design template instantiation of the upstream netif skeleton, the same shape
- *         this directory's WLAN bridge uses (ports/lwip/wlannetif.c:178-227 the
+ *         this directory's WLAN bridge uses (third-party/lwip/ports/wlannetif.c:178-227 the
  *         init/netif_add assembly, :77-98 the linkoutput linearization, :104-129
  *         the receive path into netif->input), with the interface's address and
  *         the transmit door taken from the adapter's other half through the seam

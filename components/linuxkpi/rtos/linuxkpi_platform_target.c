@@ -13,7 +13,7 @@
  *         (tests/host/wlan-bridge-test/lkpi_platform_host.c:93-128), stated
  *         once here for target images. Target-only: host links supply their
  *         own copies, exactly like the USB backend
- *         (ports/cherryusb/lkpi_usb_cherryusb.c).
+ *         (components/linuxkpi/rtos/usb/lkpi_usb_cherryusb.c).
  * @date    08.10.2026
  */
 

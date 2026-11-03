@@ -4,7 +4,7 @@
  *         board (the shadow header the imported headers include).
  *
  * The imported headers include "usb_config.h" themselves, so this file is
- * selected by include path alone (ports/cherryusb/board/rk3568-itx comes
+ * selected by include path alone (tests/board/rtos/platform/board/rk3568-itx/usb comes
  * first for the USB compile domain) and every build key lives here rather
  * than on a compiler command line - one place to read, one place to change.
  *

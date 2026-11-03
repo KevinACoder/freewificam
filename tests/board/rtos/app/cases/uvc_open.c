@@ -2,7 +2,7 @@
  * @file   uvc_open.c
  * @brief  Case uvc_open: negotiate the target configuration on the camera.
  *
- * The open body is the application half's policy call (ports/cherryusb/class/
+ * The open body is the application half's policy call (app/usb/
  * uvc_app.c), which runs the class driver's probe/commit sequence and selects
  * the alternate setting through SET_INTERFACE (class/video/usbh_video.c).  The
  * anchor line carries what the negotiation returned: format/frame indices,

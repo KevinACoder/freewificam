@@ -24,7 +24,7 @@ UVC_ALL_SRCS := \
 	$(USB)/port/ehci/usb_hc_ehci_iso.c \
 	$(USB)/class/video/usbh_video.c \
 	$(USB)/class/video/usbh_uvc_stream.c \
-	$(USB_PORT)/class/uvc_app.c \
+	$(LINE)/app/usb/uvc_app.c \
 	$(foreach c,$(UVC_CASES),$(LINE)/app/cases/$(c).c)
 
 # Symbols the camera image must carry: the isochronous engine (or the port's

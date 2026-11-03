@@ -95,7 +95,7 @@ RTL8XXXU_BSD_INCLUDES := -I$(ROOT) -I$(RTL8XXXU_NPORT)/compat \
 	-I$(RTL8XXXU_NET)/compat/netbsd -I$(RTL8XXXU_NET) -I$(RTL8XXXU_NPORT)
 
 RTL8XXXU_KPI_INCLUDES := -I$(ROOT) -I$(ROOT)/components/linuxkpi \
-	-I$(RTL8XXXU_LKPI) -I$(RTL8XXXU_LKPI)/include -I$(USB_PORT) \
+	-I$(RTL8XXXU_LKPI) -I$(RTL8XXXU_LKPI)/include -I$(ROOT)/components/linuxkpi/rtos/usb \
 	-I$(RTL8XXXU_LKPI)/usb -I$(RTL8XXXU_NET) -I$(RTL8XXXU_NPORT) \
 	-I$(RTL8XXXU_NPORT)/bridge $(USB_INCLUDES)
 
@@ -194,7 +194,7 @@ RTL8XXXU_NETIO_SRCS := \
 RTL8XXXU_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	$(RTL8XXXU_AP_DEFS) -I$(RTL8XXXU_NPORT)/bridge \
 	-I$(ROOT)/components/linuxkpi -I$(RTL8XXXU_LKPI)/usb \
-	-I$(ROOT)/ports/cherryusb
+	-I$(ROOT)/components/linuxkpi/rtos/usb
 # The wedge ledger (net_watch.c) rides only in the observation arm
 # (CONFIG_NET_WATCH), so a clean arm's sources and flags are untouched.  The
 # counters it reads live in the layers themselves and are compiled behind the

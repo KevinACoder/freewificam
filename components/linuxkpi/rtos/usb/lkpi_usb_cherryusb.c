@@ -13,7 +13,7 @@
  *         this project's bulk-transfer loss (an unknowable DMA buffer alignment), and it
  *         keeps every DMA buffer out of the general heap - the lesson the previous
  *         bring-up paid for. Reference for the adapter shape: the sibling in-tree
- *         adapter, ports/cherryusb/board/rk3568-itx/usb_glue.c (the stack-to-board
+ *         adapter, tests/board/rtos/platform/board/rk3568-itx/usb/usb_glue.c (the stack-to-board
  *         glue), and the host mock's seam implementation
  *         (tests/host/linuxkpi-usb-test/mock_hcd.c:550-598) which this file mirrors on
  *         the production stack.
@@ -72,7 +72,7 @@
  */
 #include "components/linuxkpi/rtos/usb/lkpi_usb_backend.h"
 #include "components/linuxkpi/lkpi_census.h"
-#include "ports/cherryusb/lkpi_usb_cherryusb.h"
+#include "components/linuxkpi/rtos/usb/lkpi_usb_cherryusb.h"
 
 #undef DIV_ROUND_CLOSEST
 

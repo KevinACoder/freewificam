@@ -1,25 +1,25 @@
-# ports/cherryusb - the board port of the imported USB host stack
+# The USB port: one port, four module homes
 
-The first-party half of the USB stack: the board glue that binds the imported
-CherryUSB controllers to this board's USB power/PHY/reset domain, the
-CMSIS-RTOS2 OSAL, the mass-storage and camera application halves, and the
-adapter that maps the linuxkpi USB engine's backend seam onto CherryUSB's
-`usbh` transfer calls.
+The first-party half of the USB stack used to sit under a top-level `ports/`
+directory.  It is now filed by module, and this note is the map:
 
-| File | Role |
-|---|---|
-| `board/rk3568-itx/usb_config.h` | the shadow header every imported header includes by name: bus count, static pool sizes, class instances, the DMA coherency contract (`CONFIG_USB_DCACHE_ENABLE`, 64-byte alignment), the hub thread, the xHCI/EHCI pools |
-| `board/rk3568-itx/usb_glue.c/.h` | `usb_board_init(busid)` (domain + controller driver registration + interrupt line), the enumeration event sink, `usb_board_after_start()` (the EHCI connect-change edge a device attached at boot never produces), the register-base query, the DMA-cache primitives and the stack's console sink |
-| `osal/cmsis2/osal_cmsis2.c` | the one CMSIS-RTOS2 backend both kernels use; deferred timer callbacks run on a service thread (`usb_osal_timer_service_start()`), because the hub's expiry callback suspends inside a command submit |
-| `class/msc_app.c/.h` | the application half of the mass-storage class (`usbh_msc_run()` does the SCSI identity handshake and keeps the ready disk in a small table) |
-| `class/uvc_app.c/.h` | the application half of the video class: the class instance the run hook captures, the controller bring-up and wait the camera cases share, and the open policy (640x480 MJPEG, alt4). It never closes the camera - see the file header for why |
-| `lkpi_usb_cherryusb.c/.h` | the linuxkpi USB backend: `submit_urb`/`kill_urb`/control transfer over `usbh`, the 64-byte-aligned stage pool whose slot size must cover the widest single transfer of the image's driver, and the named counters a bring-up reads |
+| Module | Contents | Role |
+|---|---|---|
+| `tests/board/rtos/platform/board/rk3568-itx/usb/` | `usb_config.h`, `usb_glue.c/.h` | the board glue: the shadow header every imported header includes by name (bus count, static pool sizes, class instances, the DMA coherency contract, the hub thread, the xHCI/EHCI pools); `usb_board_init(busid)` (domain + controller driver registration + interrupt line), the enumeration event sink, `usb_board_after_start()` (the EHCI connect-change edge a device attached at boot never produces), the register-base query, the DMA-cache primitives and the stack's console sink.  It sits next to the board's USB power/PHY/reset layer (`usb_domain.c`), which it drives |
+| `third-party/cherryusb/ports/osal/cmsis2/` | `osal_cmsis2.c` | the one CMSIS-RTOS2 backend both kernels use; deferred timer callbacks run on a service thread (`usb_osal_timer_service_start()`), because the hub's expiry callback suspends inside a command submit |
+| `tests/board/rtos/app/usb/` | `msc_app.c/.h`, `uvc_app.c/.h` | the application halves of the mass-storage and video classes (`usbh_msc_run()` does the SCSI identity handshake and keeps the ready disk in a small table; the camera half owns the bring-up, the shared open state and the 640x480 MJPEG alt4 policy, and never closes the camera - see the file header) |
+| `components/linuxkpi/rtos/usb/` | `lkpi_usb_cherryusb.c/.h` | the linuxkpi USB backend: `submit_urb`/`kill_urb`/control transfer over `usbh`, the 64-byte-aligned stage pool whose slot size must cover the widest single transfer of the image's driver, and the named counters a bring-up reads |
+
+No file under `third-party/cherryusb/` itself is first-party except the OSAL in
+its `ports/` directory, matching the other imported trees (`third-party/lwip/ports`,
+`third-party/fsl_sdmmc/ports`, `third-party/threadx/ports`).
 
 ## Provenance
 
 Imported on 2026-10-26 from the project's reference RTOS tree at commit
 `19c5736` (documented only, not this line's verified evidence). Source blob
-ids at that commit:
+ids at that commit (paths are the reference tree's; the current homes are the
+table above):
 
 | File | Blob |
 |---|---|

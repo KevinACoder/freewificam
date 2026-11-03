@@ -9,7 +9,7 @@
 # belongs to the wireless world (`rtw89.mk`), so the storage image never links
 # the URB engine.
 #
-# Board facts live in `ports/cherryusb/board/rk3568-itx/usb_config.h`, selected
+# Board facts live in `platform/board/rk3568-itx/usb/usb_config.h`, selected
 # by putting that directory first on the include path (the imported headers
 # include "usb_config.h" themselves).  The interrupt priority is the one
 # per-image decision: the completion path gives a semaphore from the handler,
@@ -18,7 +18,7 @@
 # 0xb0 on ThreadX, so one define serves both.
 
 USB := $(ROOT)/third-party/cherryusb
-USB_PORT := $(ROOT)/ports/cherryusb
+USB_PORT := $(USB)/ports
 USB_BOARD := $(PLATFORM)/board/rk3568-itx/usb
 
 # The widest single transfer the stage pool must cover.  The storage line's
@@ -28,9 +28,8 @@ USB_BOARD := $(PLATFORM)/board/rk3568-itx/usb
 USB_STAGE_SIZE := $(CONFIG_USB_STAGE_SIZE)
 
 USB_INCLUDES := \
-	-I$(USB_PORT)/board/rk3568-itx \
-	-I$(USB_PORT)/class \
 	-I$(USB_BOARD) \
+	-I$(LINE)/app/usb \
 	-I$(USB)/common \
 	-I$(USB)/core \
 	-I$(USB)/class/hub \
@@ -56,7 +55,7 @@ USB_STACK_SRCS := \
 
 USB_BOARD_SRCS := \
 	$(USB_BOARD)/usb_domain.c \
-	$(USB_PORT)/board/rk3568-itx/usb_glue.c \
+	$(USB_BOARD)/usb_glue.c \
 	$(USB_PORT)/osal/cmsis2/osal_cmsis2.c
 
 USB_MSC_CASES := $(filter usb_xhci usb_ehci,$(CASES))
@@ -67,7 +66,7 @@ USB_CASE_SRCS :=
 else
 USB_CLASS_SRCS := \
 	$(USB)/class/msc/usbh_msc.c \
-	$(USB_PORT)/class/msc_app.c
+	$(LINE)/app/usb/msc_app.c
 USB_CASE_SRCS := \
 	$(LINE)/app/cases/usb_msc.c \
 	$(foreach c,$(USB_MSC_CASES),$(LINE)/app/cases/$(c).c)

@@ -705,7 +705,7 @@ LIB_SUPPORT_OBJS := $(filter $(OBJDIR)/third-party/ulog/% $(OBJDIR)/third-party/
 LIB_NET80211_OBJS := $(filter $(OBJDIR)/components/net80211/%,$(OBJS))
 LIB_LINUXKPI_OBJS := $(filter $(OBJDIR)/components/linuxkpi/%,$(OBJS))
 LIB_DRV_OBJS := $(filter $(OBJDIR)/wireless-drivers/% $(OBJDIR)/third-party/fsl_sdmmc/%,$(OBJS))
-LIB_USBHOST_OBJS := $(filter $(OBJDIR)/third-party/cherryusb/% $(OBJDIR)/ports/cherryusb/%,$(OBJS))
+LIB_USBHOST_OBJS := $(filter $(OBJDIR)/third-party/cherryusb/%,$(OBJS))
 LIB_APP_OBJS := $(filter $(OBJDIR)/tests/board/rtos/app/%,$(OBJS))
 
 # Static archives can be mutually dependent (log needs uart, board log calls

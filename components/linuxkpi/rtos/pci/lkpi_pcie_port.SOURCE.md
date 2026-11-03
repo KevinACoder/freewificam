@@ -1,7 +1,7 @@
-# ports/pcie provenance
+# lkpi_pcie_port provenance
 
 Imported from the reference RTOS tree at commit `19c5736` (documented only),
-path `ports/pcie/`.
+path `ports/pcie/` (now `components/linuxkpi/rtos/pci/`).
 
 Files: `lkpi_pcie_port.c/h`.
 License: BSD-3-Clause (SPDX lines present).

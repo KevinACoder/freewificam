@@ -6,7 +6,7 @@
  * @design ports & adapters, the same shape as the USB layer's backend seam
  *         (usb/lkpi_usb_backend.h): the substitute body (linuxkpi_80211.c) is the
  *         adapter-neutral core that implements the mac80211 face the driver was
- *         written against, and the bridge (ports/net80211/bridge/) is the
+ *         written against, and the bridge (components/net80211/ports/bridge/) is the
  *         adapter that knows both worlds. The seam carries only what those two
  *         must exchange: four upward calls (register/unregister, a received
  *         frame, a transmit completion) and the downward calls that let the

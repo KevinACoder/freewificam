@@ -87,8 +87,8 @@ The remaining multiplexing is ordinary pin muxing:
 | Rear console (uart2) | Board console: the boot firmware's prompt and every captured transcript | `tests/board/rtos/platform/board/rk3568-itx/drivers/uart.c` |
 | Rear 1 GbE port (gmac1) | The management link: image download over TFTP, DHCP, host-to-board traffic | `drivers/dwc_eqos.c`, `drivers/rtl8211f.c` |
 | SD socket (sdmmc0) | The SDIO WiFi part (RTL8189FTV), wired to the module rather than to a removable card | `drivers/dwc_mmc.c`, `third-party/fsl_sdmmc/ports/` |
-| USB 2.0 ports (ehci0/1) | The USB WiFi parts (RTL8188EUS, RTL8723BU, RTL8851BU), the USB camera (UVC), and the USB disk used by the mass-storage case | `ports/cherryusb/`, `third-party/cherryusb/` |
-| PCIe 3.0 x2 slot (pcie3x2) | The Intel AC 7260 card | `drivers/pcie/`, `ports/pcie/` |
+| USB 2.0 ports (ehci0/1) | The USB WiFi parts (RTL8188EUS, RTL8723BU, RTL8851BU), the USB camera (UVC), and the USB disk used by the mass-storage case | `platform/board/rk3568-itx/usb/`, `components/linuxkpi/rtos/usb/`, `third-party/cherryusb/` |
+| PCIe 3.0 x2 slot (pcie3x2) | The Intel AC 7260 card | `drivers/pcie/`, `components/linuxkpi/rtos/pci/` |
 | M.2 slot (pcie2x1) | An NVMe drive | `drivers/pcie/`, `drivers/nvme/` |
 | eMMC module (sdhci) | The block-device case's target | `drivers/dwc_mshc.c` |
 | DC input | Switched by an external, network-controlled socket, so a cold power cycle is part of a round | bench only |

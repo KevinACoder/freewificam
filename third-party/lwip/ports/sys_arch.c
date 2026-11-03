@@ -33,7 +33,7 @@
  * third-party/lwip/contrib/ports/freertos/sys_arch.c:47-607 - the mutex,
  * semaphore and mailbox bodies, the wrapper types' validity probes and the
  * thread naming; the CMSIS mapping follows the board-proven shape of
- * ports/cherryusb/osal/cmsis2/osal_cmsis2.c:41-305 (band priorities, timeout
+ * third-party/cherryusb/ports/osal/cmsis2/osal_cmsis2.c:41-305 (band priorities, timeout
  * conversion, ISR-callable queue put - this project's single-CMSIS precedent).
  * Bytes are ours; the API surface is the one the imported code was written
  * against.

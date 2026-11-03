@@ -13,7 +13,7 @@
  * third-party/lwip/contrib/ports/freertos/include/arch/sys_arch.h:32-95
  * (same struct set, same valid/set_invalid macro pair, same ERR_NEED_SCHED
  * contract); the single-adapter rationale follows
- * ports/net80211/osal/cmsis2/osal_cmsis2.c:1-26. Header bytes are ours; the
+ * components/net80211/ports/osal/cmsis2/osal_cmsis2.c:1-26. Header bytes are ours; the
  * names and shapes are the contract lwIP's sys.h declares.
  */
 
