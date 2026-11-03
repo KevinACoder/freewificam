@@ -476,17 +476,65 @@ hand `-D` the configuration.  BUILD-02 removes that second channel:
   `tests/board/linux-ko` keeps its own line until M2/M4 migrate it.
 
 Entry points: `./make.rtos config|menuconfig|olddefconfig|savedefconfig|list|
-image|images|matrix|check|check-no-d|check-config-header|trimcheck|libs|sdk`.
+image|images|matrix|check|check-no-d|check-config-header|trimcheck|libs|sdk|
+sdk-check`.
 `check-no-d.sh` inspects actual compile/link commands for seven representative
 profiles; `check-config-header.py` proves the header covers every Kconfig
 symbol; `trimcheck` compares the tick-only and full images by symbols and size.
 `libs` archives the existing object groups under `build/lib/<profile>/` and
 `gen_lib_manifest.py` writes their member/size/undefined-symbol manifest; `sdk`
-adds the generated config header and a `.pc`.  The public `include/freewificam/`
-API and consumer link gate are not part of this checkpoint.
+adds the generated config header, the public headers and a `.pc`.  The public
+`include/freewificam/` API and the consumer link gate are the next checkpoint
+(§14).
 
 Evidence: 82/82 profiles build with no hand `-D` (2026-11-03), the seven-profile
 matrix is green, `host-test` passes FreeRTOS and ThreadX, and `check` parses all
 82 defconfigs.  Behaviour is unchanged by construction for the flag removal
 (the removed flags were already filtered); the A1 macro comparison and the
 no-D sweep are recorded in the private `runs/build/2026-11-03-BUILD-02` ledger.
+
+## 14. BUILD-02/M5 — the public API and the consumer gate (2026-11-03)
+
+M5 turns the `libs`/`sdk` delivery shape into a consumer-facing checkpoint
+without changing the image build or the M4 source lists:
+
+* `include/freewificam/` publishes seven wrappers: `fw_config.h` (the generated
+  header, with compile errors for a missing profile/board/backend identity),
+  `fw_log.h`, `fw_osal.h`, `fw_wifi.h`, `fw_netif.h`, and two truthful gap
+  headers, `fw_bus.h` (`FW_BUS_API_READY 0`) and `fw_core.h`
+  (`FW_CORE_API_READY 0`).  The wrappers forward the real component headers;
+  the sdk target installs those exact headers under `freewificam/deps/` so a
+  prototype cannot drift from the archived object.
+* `libs` gained two closure archives that the image used to get for free by
+  linking every object: `libfw_support.a` (uLog + printf, needed by the console
+  object) and `libfw_usbhost.a` (CherryUSB + the RK3568 cherryusb port, needed
+  by a forced Wi-Fi link).  No source list changed; the filters only group
+  existing `$(OBJS)`.
+* `sdk` now installs `include/freewificam/{*.h,deps/*.h}`, the profile's
+  archives, both manifest copies, `PORTING.md`, and a `freewificam.pc` whose
+  prefix is the installed tree, whose version comes from `VERSION`, whose
+  `Libs` wraps the profile's archives in `--start-group`/`--end-group`, and
+  whose `Libs.private` carries `--gc-sections -lc -lgcc -lnosys`.  The previous
+  `.pc` named fixed archives (absent on wired profiles) and the old target
+  overwrote the public `fw_config.h` with the generated header; both are gone.
+* `tests/host/sdk-consumer/check.sh` is the L1 gate: it compiles each header
+  alone with only `dist/<profile>/include`, asserts no `-D` and no internal
+  path in the pkg-config output, cross-compiles and links a log/config consumer
+  with only pkg-config cflags/libs, and requires an empty `nm -u`, the
+  `log_level_get` symbol, an AArch64 image and a manifest profile match.
+  `./make.rtos sdk-check PROFILE=<name>` runs it.
+
+Measured results: `net-netio-raw-tx256` (5 archives) and
+`rtl8xxxu-8723bu-netio-ar-ht20-ba` (9 archives) both pass the gate; the Wi-Fi
+probe leaves only the consumer's CMSIS-RTOS2 implementation and the two
+baremetal linker-script symbols unresolved.  A plain Wi-Fi call links without
+forcing the adapter and would do nothing at run time — that is the link-vs-run
+gap recorded in `docs/PORTING.md` §5.
+
+Not claimed: L2 (Zephyr `native_sim`), L3 (Zephyr/RK3568), L4 (RT-Thread) and
+L5 (image regression) are not part of this checkpoint.  The clean-checkout
+build also needs the generated shell/lwIP headers and the gitignored firmware
+blobs; those prerequisites are documented in `docs/PORTING.md` §1.
+
+Evidence: consumer gate output on both profiles, `freewificam.pc` and manifest
+contents, and the measured unresolved sets are in `docs/PORTING.md` §5–§6.

@@ -690,16 +690,28 @@ image: $(TARGET).bin gates
 
 # M5 library split: archive the object groups that already make up this image.
 # The archives are a delivery shape, not a second build: the image above stays
-# the behavioural reference until the public headers/consumer link land.
+# the behavioural reference.  `libfw_support.a` closes the console closure that
+# the image used to get for free by linking every object: log.c needs uLog and
+# the printf component, and neither was in any archive before.
 LIB_DIR := $(ROOT)/build/lib/$(PROFILE)
 SDK_DIR := $(ROOT)/dist/$(PROFILE)
+SDK_VERSION := $(shell cat $(ROOT)/VERSION)
 LIB_ARCH_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/arch/%,$(OBJS))
 LIB_BOARD_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/board/%,$(OBJS))
 LIB_OSAL_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/os/cmsis2/% $(OBJDIR)/tests/board/rtos/platform/os/baremetal/%,$(OBJS))
+LIB_SUPPORT_OBJS := $(filter $(OBJDIR)/third-party/ulog/% $(OBJDIR)/third-party/printf/%,$(OBJS))
 LIB_NET80211_OBJS := $(filter $(OBJDIR)/components/net80211/%,$(OBJS))
 LIB_LINUXKPI_OBJS := $(filter $(OBJDIR)/components/linuxkpi/%,$(OBJS))
 LIB_DRV_OBJS := $(filter $(OBJDIR)/wireless-drivers/%,$(OBJS))
+LIB_USBHOST_OBJS := $(filter $(OBJDIR)/third-party/cherryusb/% $(OBJDIR)/ports/cherryusb/%,$(OBJS))
 LIB_APP_OBJS := $(filter $(OBJDIR)/tests/board/rtos/app/%,$(OBJS))
+
+# Static archives can be mutually dependent (log needs uart, board log calls
+# need log).  The .pc wraps the group in --start-group/--end-group, so this list
+# is a naming order, not a one-pass link order.
+LIB_LINK_ORDER := fw_app fw_net80211 fw_linuxkpi fw_usbhost fw_drivers \
+	fw_board_$(BOARD) fw_osal_cmsis2 fw_support fw_arch
+SDK_LIBS = $(strip $(foreach l,$(LIB_LINK_ORDER),$(if $(wildcard $(LIB_DIR)/lib$(l).a),-l$(l))))
 
 libs: image
 	@mkdir -p $(LIB_DIR)
@@ -710,10 +722,14 @@ libs: image
 		$(AR) rcs $(LIB_DIR)/libfw_board_$(BOARD).a $(LIB_BOARD_OBJS); fi
 	@if [ -n "$(strip $(LIB_OSAL_OBJS))" ]; then \
 		$(AR) rcs $(LIB_DIR)/libfw_osal_cmsis2.a $(LIB_OSAL_OBJS); fi
+	@if [ -n "$(strip $(LIB_SUPPORT_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_support.a $(LIB_SUPPORT_OBJS); fi
 	@if [ -n "$(strip $(LIB_NET80211_OBJS))" ]; then \
 		$(AR) rcs $(LIB_DIR)/libfw_net80211.a $(LIB_NET80211_OBJS); fi
 	@if [ -n "$(strip $(LIB_LINUXKPI_OBJS))" ]; then \
 		$(AR) rcs $(LIB_DIR)/libfw_linuxkpi.a $(LIB_LINUXKPI_OBJS); fi
+	@if [ -n "$(strip $(LIB_USBHOST_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_usbhost.a $(LIB_USBHOST_OBJS); fi
 	@if [ -n "$(strip $(LIB_DRV_OBJS))" ]; then \
 		$(AR) rcs $(LIB_DIR)/libfw_drivers.a $(LIB_DRV_OBJS); fi
 	@if [ -n "$(strip $(LIB_APP_OBJS))" ]; then \
@@ -723,12 +739,23 @@ libs: image
 
 sdk: libs
 	@rm -rf $(SDK_DIR)
-	@mkdir -p $(SDK_DIR)/lib $(SDK_DIR)/include/freewificam
+	@mkdir -p $(SDK_DIR)/lib $(SDK_DIR)/include/freewificam/deps
 	@cp $(LIB_DIR)/*.a $(LIB_DIR)/manifest.json $(SDK_DIR)/lib/
-	@if [ -d $(ROOT)/include/freewificam ]; then \
-		cp -r $(ROOT)/include/freewificam/. $(SDK_DIR)/include/freewificam/; fi
+	@cp $(LIB_DIR)/manifest.json $(SDK_DIR)/manifest.json
+	@cp $(ROOT)/include/freewificam/*.h $(SDK_DIR)/include/freewificam/
 	@cp $(ROOT)/build/kconfig/$(PROFILE)/freewificam_config.h \
-		$(SDK_DIR)/include/freewificam/fw_config.h
+		$(SDK_DIR)/include/freewificam/freewificam_config.h
+	@if [ -d $(ROOT)/include/freewificam/deps ]; then \
+		cp -r $(ROOT)/include/freewificam/deps/. \
+			$(SDK_DIR)/include/freewificam/deps/; fi
+	@cp $(PLATFORM)/os/baremetal/log.h $(SDK_DIR)/include/freewificam/deps/log.h
+	@cp $(THIRD_PARTY)/ulog/src/ulog.h $(SDK_DIR)/include/freewificam/deps/ulog.h
+	@cp $(COMPONENTS)/net80211/port/port.h $(SDK_DIR)/include/freewificam/deps/port.h
+	@cp $(THIRD_PARTY)/CMSIS_6/CMSIS/RTOS2/Include/cmsis_os2.h \
+		$(SDK_DIR)/include/freewificam/deps/cmsis_os2.h
+	@cp $(PLATFORM)/os/cmsis2/cmsis_os2_ext.h \
+		$(SDK_DIR)/include/freewificam/deps/cmsis_os2_ext.h
+	@cp $(ROOT)/docs/PORTING.md $(SDK_DIR)/PORTING.md
 	@printf '%s\n' \
 		'prefix=$(SDK_DIR)' \
 		'includedir=$${prefix}/include' \
@@ -736,9 +763,10 @@ sdk: libs
 		'' \
 		'Name: freewificam' \
 		'Description: freewificam RTOS wifi core (profile $(PROFILE))' \
-		'Version: 0.0.2' \
+		'Version: $(SDK_VERSION)' \
 		'Cflags: -I$${includedir}' \
-		'Libs: -L$${libdir} -lfw_net80211 -lfw_linuxkpi -lfw_drivers -lfw_osal_cmsis2' \
+		'Libs: -L$${libdir} -Wl,--start-group $(SDK_LIBS) -Wl,--end-group' \
+		'Libs.private: -Wl,--gc-sections -lc -lgcc -lnosys' \
 		> $(SDK_DIR)/freewificam.pc
 	@printf 'sdk: %s\n' '$(SDK_DIR)'
 

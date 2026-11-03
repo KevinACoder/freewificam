@@ -21,7 +21,7 @@ MATRIX_PROFILES ?= net-netio-raw-tx256 rtl8xxxu-8723bu-netio-ar-ht20-ba \
 	rtw89-8851bu-ehci-bringup firefly-v2-sdio-mci pcie-7260 uvc rtos-shell
 
 .PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images libs sdk host host-test digest check case-list-check dump-vars clean distclean \
-	check-no-d check-config-header matrix trimcheck rk3568_ci firefly_v1_ci firefly_v2_ci
+	check-no-d check-config-header matrix trimcheck sdk-check rk3568_ci firefly_v1_ci firefly_v2_ci
 
 help:
 	@printf '%s\n' \
@@ -37,6 +37,7 @@ help:
 		'  images             both backends' \
 		'  libs               archive the image object groups under build/lib/<profile>' \
 		'  sdk                libs + public include + manifest + freewificam.pc under dist/<profile>' \
+		'  sdk-check          sdk + L1 consumer link check (tests/host/sdk-consumer)' \
 		'  host | host-test   the host conformance tier' \
 		'  digest             third-party and Kconfiglib manifests' \
 		'  rk3568_ci          every rk3568-itx defconfig, clean build each' \
@@ -124,6 +125,9 @@ libs: config
 
 sdk: config
 	@$(MAKE) -C $(BUILD_MK) -j$(JOBS) sdk PROFILE=$(PROFILE)
+
+sdk-check: sdk
+	@$(ROOT)/tests/host/sdk-consumer/check.sh $(PROFILE)
 
 host: config
 	@start=$$(date +%s); \
