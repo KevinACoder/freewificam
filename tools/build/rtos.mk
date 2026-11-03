@@ -15,8 +15,8 @@ JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 PROFILE ?= $(shell sed -n 's/^[[:space:]]*CONFIG[[:space:]]*:=[[:space:]]*//p' \
 	$(ROOT)/tests/board/rtos/config.mk | head -n1)
 DEFCONFIG := $(CONFIGS)/$(PROFILE).defconfig
-GEN_CONFIG := $(ROOT)/build/kconfig/$(PROFILE)/generated/config.mk
 GEN_DIR := $(ROOT)/build/kconfig/$(PROFILE)
+GEN_CONFIG := $(GEN_DIR)/freewificam_config
 MATRIX_PROFILES ?= net-netio-raw-tx256 rtl8xxxu-8723bu-netio-ar-ht20-ba \
 	rtw89-8851bu-ehci-bringup firefly-v2-sdio-mci pcie-7260 uvc rtos-shell
 
@@ -159,7 +159,7 @@ check:
 	fi
 	@echo "check: all defconfigs parse and regenerate identically"
 
-CASE_ELF ?= $(BUILD_MK)/build/rtos-freertos.elf
+CASE_ELF ?= $(BUILD_MK)/build/rtos-$(shell sed -n 's/^CONFIG_BACKEND_NAME="\(.*\)"/\1/p' $(GEN_CONFIG)).elf
 OBJCOPY ?= $(if $(AARCH64_CROSS_PATH),$(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-objcopy,aarch64-none-elf-objcopy)
 READELF ?= $(if $(AARCH64_CROSS_PATH),$(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-readelf,aarch64-none-elf-readelf)
 
