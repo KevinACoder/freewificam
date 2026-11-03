@@ -31,7 +31,19 @@ echo "declare : $declared_list"
 echo "judge   : $judge_list"
 
 [ -n "$image_list" ] || { echo "FAIL: the image's test table is empty"; exit 1; }
-[ "$image_list" = "$declared_list" ] || { echo "FAIL: image table and CONFIG_CASES differ"; exit 1; }
+
+# The image table's byte order is the linker's, not a run order (the same
+# objects produce a different BOARD_TESTS sequence when the link line changes),
+# so the two sides are compared as sets.  The run order is the declaration's:
+# the runner walks the table through a permutation built from CONFIG_CASES.
+image_sorted=$(printf '%s\n' $image_list | LC_ALL=C sort | tr '\n' ' ' | sed 's/ *$//')
+declared_sorted=$(printf '%s\n' $declared_list | LC_ALL=C sort | tr '\n' ' ' | sed 's/ *$//')
+[ "$image_sorted" = "$declared_sorted" ] || {
+	echo "FAIL: image table and CONFIG_CASES differ"
+	echo "  image (sorted)   : $image_sorted"
+	echo "  declared (sorted): $declared_sorted"
+	exit 1
+}
 
 for name in $image_list; do
 	case " $judge_list " in
