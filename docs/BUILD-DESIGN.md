@@ -586,8 +586,8 @@ reported for information only and are not a criterion: the three profiles do
 happen to be byte-identical when both sides read the same generated header, but
 that is a consequence of the shared flags, not a gate.
 
-Known gaps: the source lists and flag worlds still come from make (the M4
-`gen_sources.py`/`sources.cmake` work is not done); only the FreeRTOS backend's
+Known gaps: CMake still queries make for the source lists and flag worlds
+rather than consuming `sources.cmake` directly; only the FreeRTOS backend's
 gates are exercised; the CMake path does not cover `libs`, `sdk`, host tests,
 `matrix`, `trimcheck` or the CI board wrappers; presets exist only for the three
 profiles above.
