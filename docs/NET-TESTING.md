@@ -300,15 +300,39 @@ The HT20 downlink gap against GT is the missing ADDBA answer: 11.7-23.1 without
 it, 54.5 with it, legacy unchanged.  The legacy uplink ~8.5 against GT's ~19 is
 a real stack-side gap (0% loss, zero `wlan_txerr`), still to attribute.
 
-**The uplink cells of the non-GT arms do not close**: the board-side server
-queues 440k frames in the six-second window while the air carries ~6k
-(`srv_sent` against `got`), because the netdev TX path returns success while
-the driver's queue is already full - `sendto` never sees `-ENOMEM`, so the
-server's `S2C_REFUSAL_MAX` path is never entered.  On the GT kernel the qdisc
-provides that backpressure and the same server paces itself to the link.  Until
-the bridge returns the refusal (or the server paces itself), an uplink cell on
-these arms measures the instrument, not the link; treat `got/srv_sent` as the
-tell.
+**The uplink cells of the non-GT arms did not close** (2026-11-03 morning):
+the board-side server queued 440k frames in the six-second window while the
+air carried ~6k (`srv_sent` against `got`), because the netdev TX path
+returned success while the driver's queue was already full - `sendto` never
+saw `-ENOMEM`, so the server's `S2C_REFUSAL_MAX` path was never entered.  On
+the GT kernel the qdisc provides that backpressure and the same server paces
+itself to the link.
+
+**The RTOS arm closes now** (2026-11-03 evening).  The seam refuses a data
+frame for want of a socket buffer (`WLAN_SEAM_TX_ERR_NOSKB`), and the bridge
+holds that frame, keeps it in order, and re-offers it on the next transmit
+completion (`wlan_bridge.c` pending frame + `lkpi80211_tx_wake_defer()`), so
+the refusal reaches `sendto` once the 64-frame interface queue is full.
+Three first-cells of three boots:
+
+| cell | client Rx got/srv_sent | Mbit/s | `wlan_txerr` | `wlan_xdrop` | refusals waited |
+|---|---|---|---|---|---|
+| boot 1 | 14653/14806 = 98.97% | 19.3 | 0 | 0 | 5914 |
+| boot 2 | 15476/15585 = 99.30% | 19.7 | 0 | 0 | - |
+| boot 3 | 14498/14574 = 99.48% | 19.3 | 0 | 0 | 5923 |
+
+The residual is air, not the bridge: the AP's own `rx_packets` delta is
+99.35-99.5% of what the board handed to the seam.  The GT arm on the same
+evening measured 10.2 Mbit/s up (5593/5593) - it is retry-bound (62.6% of its
+uplink data frames are retries at MCS4 39 Mbit/s), while the RTOS uplink
+transmits legacy 36 Mbit/s frames (no MCS entries, no TX block-ack) at 347
+us/frame with 11.6% retries.  So the RTOS uplink's ceiling tonight is its
+**rate**, not the air or the bridge; the uplink's HT path is the next piece of
+work.  The ko arm is still unmeasured (its server needs the same pacing).
+
+The `layers` line now carries `wlan_stash/wlan_stashok/wlan_xdrop/wlan_qhi/
+wlan_pending` and the s2c done line carries `refusals=`, so a cell says on its
+own whether it ran against backpressure or against the wire.
 
 ### 9.3 The 8723BU EHCI arm and the receive-side ledger
 

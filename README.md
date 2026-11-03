@@ -49,7 +49,7 @@ the build compiles (`docs/PATCH-POLICY.md`).  Patches are applied in the tree;
 |---|---|---|
 | `rtw89` / RTL8851BU | USB2/USB3 | mainline rtw89 over the linuxkpi USB engine, both as a Linux module and in the RTOS images |
 | `rtl8xxxu` / RTL8188EUS, RTL8723BU | USB2 | mainline rtl8xxxu, same two builds |
-| `rtw88` / RTL8821CU | USB2 | mainline rtw88, Linux module line |
+| `rtw88` / RTL8821CU | USB2 | mainline rtw88 over the linuxkpi USB engine, Linux module and the RTOS netio images |
 | `rtw88` / RTL8821CS | SDIO | mainline rtw88 on the firefly v2 MCI host (SDIO), in the RTOS images |
 | `aic8800` / AIC8800D80 | USB2 | the vendor FullMAC stack (boot, firmware download, WPA2 supplicant, lwIP) over the CherryUSB host stack, firefly v2 |
 | `iwlwifi` / Intel AC 7260 | PCIe | mainline iwlwifi/mvm over the linuxkpi PCI engine |
