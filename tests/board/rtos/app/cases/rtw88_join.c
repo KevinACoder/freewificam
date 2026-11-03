@@ -70,9 +70,14 @@
 
 #if defined(RTOS_CASE_RTW88_JOIN)
 
+/* The bus account below is the SDIO arm's: the USB arm has no MCI host and no
+ * lkpi_sdio counters, so both the includes and the body are closed on the
+ * engine symbol rather than on the case symbol (one case, two worlds). */
+#if defined(CONFIG_LINUXKPI_SDIO)
 #include "linuxkpi_sdio.h"
 #include "sdmmc_port.h"
 #include "mci.h"
+#endif
 
 /* The SSID is a profile fact (the bench changes APs between rounds): it comes
  * from the generated configuration header, CONFIG_RTW88_AP_SSID.  Kconfig always
@@ -164,6 +169,7 @@ rtw88_join_state_txt(int state)
 static void
 rtw88_join_sdio_anchor(const char *where)
 {
+#if defined(CONFIG_LINUXKPI_SDIO)
 	struct lkpi_sdio_stats stats;
 	struct lkpi_sdio_bus_info bus;
 	struct mci_host *hc = sdmmc_port_mci_host();
@@ -190,6 +196,9 @@ rtw88_join_sdio_anchor(const char *where)
 		    (unsigned)st.cmd52, (unsigned)st.cmd53,
 		    (unsigned)st.last_cmd, st.last_err, (unsigned)st.data_ev);
 	}
+#else
+	(void)where;
+#endif
 }
 
 /*

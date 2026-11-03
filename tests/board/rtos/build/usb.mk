@@ -9,7 +9,7 @@
 # belongs to the wireless world (`rtw89.mk`), so the storage image never links
 # the URB engine.
 #
-# Board facts live in `ports/cherryusb/board/rk3568-itx/usb_config.h`, selected
+# Board facts live in `platform/board/rk3568-itx/usb/usb_config.h`, selected
 # by putting that directory first on the include path (the imported headers
 # include "usb_config.h" themselves).  The interrupt priority is the one
 # per-image decision: the completion path gives a semaphore from the handler,
@@ -18,29 +18,25 @@
 # 0xb0 on ThreadX, so one define serves both.
 
 USB := $(ROOT)/third-party/cherryusb
-USB_PORT := $(ROOT)/ports/cherryusb
+USB_PORT := $(USB)/ports
 
 # The board dimension: which controller facts, which glue, which controller
 # ports compile. The Kconfig board choice is the single switch (the generated
-# make config carries it), and the RK3568 path below stays exactly what it was
-# for every non-firefly image.
+# make config carries it); every non-firefly image keeps the RK3568 path.
 #
 # firefly v2: two xHCI instances, no EHCI (the DTS "firefly,usb2" instances
 # are a vendor dual-role IP this project has no source driver for), and no
-# usb_domain.c - the board facts are header-only
-# (platform/board/firefly/v2/usb/usb_domain.h).
+# usb_domain.c - the board facts are header-only in the same directory.
 # The Kconfig fragment carries bools as 1 (not y), the same form
 # platform/board/sources.mk's obj-$(CONFIG_...) consumes.
 ifeq ($(CONFIG_BOARD_FIREFLY_V2),1)
 USB_BOARD := $(PLATFORM)/board/firefly/v2/usb
-USB_BOARD_GLUE_DIR := $(USB_PORT)/board/firefly-v2
 USB_STACK_SRCS := \
 	$(USB)/core/usbh_core.c \
 	$(USB)/class/hub/usbh_hub.c \
 	$(USB)/port/xhci/usb_hc_xhci.c
 else
 USB_BOARD := $(PLATFORM)/board/rk3568-itx/usb
-USB_BOARD_GLUE_DIR := $(USB_PORT)/board/rk3568-itx
 USB_STACK_SRCS := \
 	$(USB)/core/usbh_core.c \
 	$(USB)/class/hub/usbh_hub.c \
@@ -55,9 +51,8 @@ endif
 USB_STAGE_SIZE := $(CONFIG_USB_STAGE_SIZE)
 
 USB_INCLUDES := \
-	-I$(USB_BOARD_GLUE_DIR) \
-	-I$(USB_PORT)/class \
 	-I$(USB_BOARD) \
+	-I$(LINE)/app/usb \
 	-I$(USB)/common \
 	-I$(USB)/core \
 	-I$(USB)/class/hub \
@@ -78,7 +73,7 @@ USB_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 
 USB_BOARD_SRCS := \
 	$(USB_PORT)/osal/cmsis2/osal_cmsis2.c \
-	$(USB_BOARD_GLUE_DIR)/usb_glue.c
+	$(USB_BOARD)/usb_glue.c
 
 ifneq ($(CONFIG_BOARD_FIREFLY_V2),1)
 USB_BOARD_SRCS += $(USB_BOARD)/usb_domain.c
@@ -97,7 +92,7 @@ USB_CASE_SRCS :=
 else
 USB_CLASS_SRCS := \
 	$(USB)/class/msc/usbh_msc.c \
-	$(if $(strip $(USB_MSC_CASES)),$(USB_PORT)/class/msc_app.c)
+	$(if $(strip $(USB_MSC_CASES)),$(LINE)/app/usb/msc_app.c)
 ifneq ($(strip $(USB_MSC_CASES)),)
 USB_CASE_SRCS := \
 	$(LINE)/app/cases/usb_msc.c \

@@ -15,8 +15,8 @@
  *         (lkpinetif.c the netdev half, lkpinetif_lwip.c the stack half).  The
  *         shape follows the net80211 line's split, where the presentation layer
  *         declares the WiFi stack's dotted face rather than including it
- *         (ports/lwip/wlannetif.c:42-46).
- * Reference for the shape: ports/lwip/lkpinetif.h:1-30.
+ *         (third-party/lwip/ports/wlannetif.c:42-46).
+ * Reference for the shape: third-party/lwip/ports/lkpinetif.h:1-30.
  * @date    12.10.2026
  */
 

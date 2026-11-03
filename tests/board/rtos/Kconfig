@@ -198,6 +198,25 @@ config LKPI_USB_CHERRYUSB_SLOTS
 	int "CherryUSB URB slots"
 	default 16
 
+config LKPI_USB_CHERRYUSB_STAGE_SIZE
+	int "linuxkpi USB stage slot size (bytes)"
+	default 4096
+	help
+	  One staged transfer must fit a slot.  rtw88 hands the chip a firmware
+	  packet as a 48-byte TX descriptor followed by up to 4096 bytes of data
+	  in a single bulk transfer (4144 bytes), and its receive urbs are as
+	  large as RTW_USB_MAX_RECVBUF_SZ, so the driver's USB world needs the
+	  stage to carry those transfers.  A transfer larger than the slot is
+	  refused with a named line and the driver fails its probe.
+
+config LKPI_USB_CHERRYUSB_STAGE_SLOTS
+	int "linuxkpi USB stage slots"
+	default 16
+	help
+	  Stage slots are held for the life of an in-flight transfer; rtw88 keeps
+	  its receive urbs submitted permanently, so the slot count has to cover
+	  those plus the transmit side.
+
 config USB_STAGE_SIZE
 	int "USB transfer stage size (bytes)"
 	default 20480

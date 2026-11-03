@@ -13,7 +13,7 @@
 ^(pvPortMalloc|vPortFree)$
 #
 # --- the consumer's C runtime (bare-metal newlib subset) ---------------------
-^(memcpy|memmove|memset|memcmp|strlen|strcmp|strncmp|strcpy|strncpy|strchr|strrchr|strstr|strnlen|snprintf|vsnprintf|printf|puts|putchar|_putchar|abs|atoi|strtol|strtoul|abort)$
+^(memcpy|memmove|memset|memcmp|strlen|strcmp|strncmp|strcpy|strncpy|strchr|strrchr|strstr|strnlen|snprintf|vsnprintf|printf|puts|putchar|_putchar|abs|atoi|strtol|strtoul|strtok_r|abort)$
 #
 # --- the consumer's network stack (lwIP) ------------------------------------
 ^(lwip_|lwiperf_|pbuf_|udp_|tcp_|tcpip_|raw_|sys_|ip_addr_|netif_|dhcp_|etharp_|icmp_|inet_).*$

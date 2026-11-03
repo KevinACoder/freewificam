@@ -30,10 +30,10 @@ AIC8800_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-I$(USB)/core \
 	-I$(USB)/class/hub \
 	-I$(USB)/class/vendor/wifi \
-	-I$(USB_BOARD_GLUE_DIR) \
+	-I$(USB)/class/msc \
 	-I$(USB_BOARD) \
 	-I$(USB)/port/xhci \
-	-I$(USB_PORT)/class
+	-I$(LINE)/app/usb
 
 AIC8800_SRCS := \
 	$(AIC8800_DRV)/aic8800_boot.c \

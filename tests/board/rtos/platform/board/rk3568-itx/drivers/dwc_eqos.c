@@ -2089,7 +2089,7 @@ int32_t dwc_eqos_power_control(unsigned int index, eqos_power_state_t state)
 		 * (FreeRTOS: configMAX_API_CALL_INTERRUPT_PRIORITY) the line
 		 * has to sit at that ceiling - the same seam, and the same
 		 * raw value, as the USB controller line
-		 * (ports/cherryusb/board/rk3568-itx/usb_glue.c:82-83). */
+		 * (platform/board/rk3568-itx/usb/usb_glue.c:82-83). */
 		(void)irq_register(dev->plat->irq_num, dwc_eqos_irq,
 				   (void *)(uintptr_t)index);
 		(void)irq_set_mode_level(dev->plat->irq_num);

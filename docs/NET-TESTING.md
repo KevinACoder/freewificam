@@ -273,6 +273,43 @@ legacy, 578-590 on HT20) against 12.2 us/frame for the same lwIP stack on the
 wired port - it tracks the unaggregated medium, not the host.  The RX-BA arm
 turns that into 229 us/frame (gap 0, ctrl 2.1) and 50-51 Mbit/s.
 
+### 9.4 RTL8821CU USB arm (rtw88) - 2026-11-03
+
+`rtw88-usb-8821cu{,-ar-g,-ar-ht20,-ar-ht20-ba}` are the same server on the
+rtw88 USB arm (linuxkpi USB engine over CherryUSB, `RTWUSB88_BUS=USB`, stage
+32768 because the driver hands the chip one 4144-byte firmware packet and
+32768-byte receive urbs).  The bench AP is the AR9271 one, ch5 2432.
+
+Two build-shape facts the arm needs, both adapter-side, no driver byte:
+
+- `CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768` (default 4096 refuses the
+  firmware packet with `transfer of 4144 bytes refused - a stage slot holds
+  4096 bytes` and the probe then fails `-EBUSY` on `failed to download firmware`).
+- `CONFIG_WLAN_RX_BA` for the HT20 receive side, same as the 8188EU arm.
+
+Measured 2026-11-03 (1440 B UDP, 2 cells unless noted):
+
+| arm | legacy down | legacy up | HT20 down | HT20 up |
+|---|---|---|---|---|
+| Linux GT (rtw88 in-kernel) | 21.4 | 18.3-19.6 | 54.9-55.4 | 10.0-10.8 |
+| linuxko (`wlan_ko.ko`, WEXT join) | 21.4 | invalid | 54.5 (1 cell) | invalid |
+| RTOS, no RX BA | 21.1-21.6 | 8.3-8.9 | 11.7-23.1 | invalid |
+| RTOS, RX-BA arm | - | - | 54.5-54.8 (2 boots) | invalid |
+
+The HT20 downlink gap against GT is the missing ADDBA answer: 11.7-23.1 without
+it, 54.5 with it, legacy unchanged.  The legacy uplink ~8.5 against GT's ~19 is
+a real stack-side gap (0% loss, zero `wlan_txerr`), still to attribute.
+
+**The uplink cells of the non-GT arms do not close**: the board-side server
+queues 440k frames in the six-second window while the air carries ~6k
+(`srv_sent` against `got`), because the netdev TX path returns success while
+the driver's queue is already full - `sendto` never sees `-ENOMEM`, so the
+server's `S2C_REFUSAL_MAX` path is never entered.  On the GT kernel the qdisc
+provides that backpressure and the same server paces itself to the link.  Until
+the bridge returns the refusal (or the server paces itself), an uplink cell on
+these arms measures the instrument, not the link; treat `got/srv_sent` as the
+tell.
+
 ### 9.3 The 8723BU EHCI arm and the receive-side ledger
 
 `rtl8xxxu-8723bu-netio-ar-ht20{,-ba}` are the same server on the EHCI root

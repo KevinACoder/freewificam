@@ -38,11 +38,11 @@ The platform is a **subset** of the reference tree: it carries the drivers the
 profiles use (console, MMIO, reset, clocks, eMMC, SDIO, GMAC, PCIe/NVMe, USB),
 not every board file the reference tree carried.
 
-## Components and ports (`components/`, `ports/`)
+## Components and ports (`components/`, `third-party/*/ports/`)
 
 | Reference path | Files | Decision | Where it is here / why not |
 |---|---|---|---|
-| `components/linuxkpi/` | 208 | imported, re-shaped | `components/linuxkpi/rtos/` (the runtime subset) and `ports/` consumers; the lineage and divergences are in its `PROVENANCE.md` and `DIVERGENCES.md` |
+| `components/linuxkpi/` | 208 | imported, re-shaped | `components/linuxkpi/rtos/` (the runtime subset) and its port units; the lineage and divergences are in its `PROVENANCE.md` and `DIVERGENCES.md` |
 | `components/net80211/` | 64 | imported, re-shaped | `components/net80211/` (core, `port/`, `compat/`, `crypto/`, `ports/`, `patches/`) |
 | `components/skbuff/` | 7 | imported, re-shaped | `components/linuxkpi/rtos/skbuff/` (the pool and its lineage) |
 | `components/printf/`, `tlsf/`, `ulog/` | 6 / 5 / 6 | imported | `third-party/printf/`, `third-party/tlsf/`, `third-party/ulog/` |
@@ -52,8 +52,8 @@ not every board file the reference tree carried.
 | `ports/lwip/` | 15 | imported | `third-party/lwip/ports/` |
 | `ports/net80211/` | 28 | imported | `components/net80211/ports/` |
 | `ports/fsl_sdmmc/` | 12 | imported | `third-party/fsl_sdmmc/ports/` |
-| `ports/cherryusb/` | 8 | imported, re-shaped | `ports/cherryusb/`, plus the linuxkpi USB backend and the camera application half |
-| `ports/pcie/` | 2 | imported | `ports/pcie/` |
+| `ports/cherryusb/` | 8 | imported, re-shaped | split by module: `third-party/cherryusb/ports/osal/cmsis2/` (OSAL), `components/linuxkpi/rtos/usb/` (backend), `tests/board/rtos/platform/board/rk3568-itx/usb/` (board glue), `tests/board/rtos/app/usb/` (class application halves) |
+| `ports/pcie/` | 2 | imported | `components/linuxkpi/rtos/pci/lkpi_pcie_port.c/.h` |
 | `ports/wpa_supplicant/` | 15 | **skipped** | this repository carries no supplicant; the RTOS images are open-network only (a known issue of this release) |
 | `ports/cherrysh/` | 6 | **skipped** | with `components/cherrysh/` |
 | `ports/fatfs/` | 8 | **skipped** | with `components/fatfs/` |
@@ -104,7 +104,7 @@ The camera suite's ten files map as follows:
 
 | Reference file | Here |
 |---|---|
-| `tests/uvc_app.c` | `ports/cherryusb/class/uvc_app.c/.h` (bring-up and open policy added) |
+| `tests/uvc_app.c` | `tests/board/rtos/app/usb/uvc_app.c/.h` (bring-up and open policy added) |
 | `tests/uvc_detect.c` | `tests/board/rtos/app/cases/uvc_detect.c` |
 | `tests/uvc_open.c` | `tests/board/rtos/app/cases/uvc_open.c` |
 | `tests/uvc_iso_smoke.c` | `tests/board/rtos/app/cases/uvc_iso_smoke.c` |

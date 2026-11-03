@@ -130,7 +130,7 @@ uint32_t dwc_mmc_get_poll_us(void);
  * on the critical path of every register access, while a data stage pays it
  * once per transfer - so the data step can be made fine without multiplying the
  * CPU spent in the many small command waits. The sibling controller port in
- * ports/fsl_sdmmc (the eMMC line) runs with its data wait an order of magnitude
+ * third-party/fsl_sdmmc/ports (the eMMC line) runs with its data wait an order of magnitude
  * finer than its command wait; this driver ran both at one step until that
  * comparison was measured. Default: the command step's default. */
 void dwc_mmc_set_data_poll_us(uint32_t us);

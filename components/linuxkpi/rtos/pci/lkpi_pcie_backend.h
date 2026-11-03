@@ -15,7 +15,7 @@
  *     (the Gate 1 shape: a config-space constant table, a BAR memory region and a
  *     scripted doorbell, no hardware);
  *   - the target build maps the same calls onto the board's root-complex driver
- *     and its interrupt domain (ports/pcie/), which is the only party that knows
+ *     and its interrupt domain (components/linuxkpi/rtos/pci/), which is the only party that knows
  *     the controller's registers and windows.
  *
  * Enumeration contract: bus_up fills up to `max` opaque device handles with one

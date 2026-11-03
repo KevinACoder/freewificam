@@ -36,7 +36,7 @@ endif
 ifeq ($(SRC_TAG),cherry)
 # The CherryUSB backend sits after the net80211 seam in the link order, the
 # same position the pre-component lists had.
-obj-$(CONFIG_LINUXKPI_USB) += $(ROOT)/ports/cherryusb/lkpi_usb_cherryusb.c
+obj-$(CONFIG_LINUXKPI_USB) += rtos/usb/lkpi_usb_cherryusb.c
 endif
 
 ifeq ($(SRC_TAG),wlan)

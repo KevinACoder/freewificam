@@ -6,7 +6,7 @@
  *
  * The class itself is the imported CherryUSB one (`class/msc/usbh_msc.c`);
  * this file is test code only and never implements a storage protocol.  The
- * first-party application half (`ports/cherryusb/class/msc_app.c`) performs the
+ * first-party application half (`app/usb/msc_app.c`) performs the
  * SCSI identity handshake and leaves the ready disk in its table, which is
  * what `usb_msc_instance()` answers.
  *

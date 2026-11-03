@@ -60,7 +60,7 @@ KCONFIG_FILES = [
 CASES = """tick cmsis2 net net_loop net_mdk_netio net_pps net_xmac nvme pcie
 pcie_7260 pcie_bench pcie_ecam emmc aic8800 rtl8xxxu rtl8xxxu_dataplane rtl8xxxu_join
 rtl8xxxu_net rtl8xxxu_netio rtl8xxxu_scan rtw88 rtw88_scan rtw88_join
-rtw88_net rtw89
+rtw88_net rtw88_usb rtw88_netio rtw89
 rtw89_dataplane rtw89_join rtw89_scan sdio_mci usb_ehci usb_xhci uvc_detect
 uvc_iso_smoke uvc_open uvc_stream wlan iwl7260 iwl7260_dataplane iwl7260_join
 iwl7260_net iwl7260_scan""".split()
@@ -191,16 +191,19 @@ def legacy_macros(kconf) -> list[str]:
     # Strings that used to come from the fragment's quoting.
     ssid = val("RTL8XXXU_AP_SSID")
     lines.append("#define RTL8XXXU_AP_SSID " + c_string(ssid))
-    mac = val("RTL8XXXU_EXPECT_MAC")
-    parts = mac.replace("-", ":").split(":")
-    if len(parts) != 6:
-        raise GenError(f"RTL8XXXU_EXPECT_MAC is not a MAC address: {mac!r}")
-    try:
-        bytes_ = [int(p, 16) for p in parts]
-    except ValueError as exc:
-        raise GenError(f"RTL8XXXU_EXPECT_MAC is not hex: {mac!r}") from exc
-    lines.append("#define RTL8XXXU_EXPECT_MAC "
-                 + "{ " + ", ".join(f"0x{b:02x}" for b in bytes_) + " }")
+    # MAC-address profile facts: the C side wants six bytes, the defconfig
+    # carries the readable string.
+    for sym_name in ("RTL8XXXU_EXPECT_MAC", "RTW88_EXPECT_MAC"):
+        mac = val(sym_name)
+        parts = mac.replace("-", ":").split(":")
+        if len(parts) != 6:
+            raise GenError(f"{sym_name} is not a MAC address: {mac!r}")
+        try:
+            bytes_ = [int(p, 16) for p in parts]
+        except ValueError as exc:
+            raise GenError(f"{sym_name} is not hex: {mac!r}") from exc
+        lines.append(f"#define {sym_name} "
+                     + "{ " + ", ".join(f"0x{b:02x}" for b in bytes_) + " }")
 
     # Boolean feature names: define only when on, preserving #ifdef semantics.
     for sym_name, macro in [

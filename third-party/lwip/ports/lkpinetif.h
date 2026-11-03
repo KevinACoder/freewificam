@@ -6,7 +6,7 @@
  *          Linux-compatibility face.
  *
  * @design template instantiation of the upstream netif skeleton, the same shape
- *         this directory's WLAN bridge uses (ports/lwip/wlannetif.h:24-47): the
+ *         this directory's WLAN bridge uses (third-party/lwip/ports/wlannetif.h:24-47): the
  *         netif is assembled with netif_add and an init callback, linkoutput is
  *         the transmit path, and the receive path is a call into the stack.  What
  *         differs is the side that owns the seam.  The WLAN bridge is called by
@@ -19,7 +19,7 @@
  * This header is the stack half's face; the calls that cross between the two
  * worlds - and the reason they cross through a header of their own - are in
  * lkpinetif_seam.h.
- * Reference for the shape: ports/lwip/wlannetif.h:1-23.
+ * Reference for the shape: third-party/lwip/ports/wlannetif.h:1-23.
  * @date    12.10.2026
  */
 

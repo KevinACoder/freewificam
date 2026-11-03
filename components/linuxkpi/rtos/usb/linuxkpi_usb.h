@@ -24,7 +24,7 @@ void		lkpi_usb_force_sync_set(bool on);
  * The drain thread's priority, as a band (1..7) rather than a CMSIS enum: this
  * header is included from build domains that do not carry the RTOS header, and
  * a band is also the unit lwIP's own threads are configured in
- * (ports/lwip/sys_arch.c maps an lwIP priority to band*8).  That thread runs
+ * (third-party/lwip/ports/sys_arch.c maps an lwIP priority to band*8).  That thread runs
  * every driver completion callback and re-arms the endpoint, so its band
  * relative to the thread feeding the endpoint decides whether a completion
  * waits for that feeder to yield.  Band 3 is osPriorityNormal, the band this

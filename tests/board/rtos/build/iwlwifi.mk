@@ -16,7 +16,7 @@ IWL_LKPI := $(ROOT)/components/linuxkpi/rtos
 IWL_NET := $(ROOT)/components/net80211
 IWL_NPORT := $(IWL_NET)/ports
 IWL_DRV := $(ROOT)/wireless-drivers/iwlwifi
-IWL_PCIE_PORT := $(ROOT)/ports/pcie
+IWL_PCIE_PORT := $(ROOT)/components/linuxkpi/rtos/pci
 
 IWL_IMAGE_NAMES :=
 

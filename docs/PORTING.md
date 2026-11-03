@@ -186,7 +186,7 @@ archives exist depends on what the profile compiled:
 | `libfw_app.a` | `tests/board/rtos/app/` | yes | yes |
 | `libfw_net80211.a` | `components/net80211/` | no | yes |
 | `libfw_linuxkpi.a` | `components/linuxkpi/` | no | yes |
-| `libfw_usbhost.a` | `third-party/cherryusb/`, `ports/cherryusb/` | no | yes |
+| `libfw_usbhost.a` | `third-party/cherryusb/` (the OSAL), `components/linuxkpi/rtos/usb/` (the linuxkpi backend), `tests/board/rtos/platform/board/rk3568-itx/usb/` and `tests/board/rtos/app/usb/` | no | yes |
 | `libfw_drivers.a` | `wireless-drivers/` | no | yes |
 | `libfw_board_rk3568-itx.a` | `platform/board/` | yes | yes |
 | `libfw_osal_cmsis2.a` | `platform/os/{cmsis2,baremetal}/` | yes | yes |

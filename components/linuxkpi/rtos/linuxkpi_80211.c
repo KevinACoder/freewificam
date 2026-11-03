@@ -326,7 +326,7 @@ lkpi80211_bridge_register(const struct lkpi80211_bridge_ops *ops, void *arg)
  * may keep the pointer (the AC 7260 stores it for the beacon-protection keys -
  * mvm/mac80211.c:4269 rcu_assign_pointer(mvmvif->bcn_prot.keys[..], key)).  The
  * bridge's own set_key caller allocates its key_conf and frees it as soon as the
- * call returns (ports/net80211/bridge/wlan_seam_adapter.c kzalloc/free around
+ * call returns (components/net80211/ports/bridge/wlan_seam_adapter.c kzalloc/free around
  * lkpi80211_drv_key), so the substitute takes a stable copy, records it, and
  * hands THAT to the driver - the same ownership the interface's key_list gives.
  * A key is identified the way the interface identifies it: by (vif, sta, keyidx,

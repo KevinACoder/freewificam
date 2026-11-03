@@ -11,7 +11,7 @@
  * thread hands frames to the TCP/IP thread's mailbox).
  *
  * @design template instantiation of the upstream netif skeleton - the same
- *          shape as this repository's GMAC bridge (ports/lwip/ethnetif.c,
+ *          shape as this repository's GMAC bridge (third-party/lwip/ports/ethnetif.c,
  *          after third-party/lwip/contrib/examples/ethernetif/ethernetif.c:
  *          netif_add assembly at :327-332, the linkoutput pbuf walk at
  *          :137-183), reduced to the e1000e seam: the RX ring is armed with

@@ -1,0 +1,29 @@
+# RK3568 RTL8821CU, HT20 cell with the receive ADDBA supplement.
+#
+# Identical to rtw88-usb-8821cu-ar-ht20 except CONFIG_WLAN_RX_BA: the image
+# then links the net80211 port's wlan_rx_ba.c, which answers the AP's ADDBA
+# request and keeps the block-ack reorder window.  The 8188EU line measured
+# that this is what moves a download from ~20 to ~50 Mbit/s; whether rtw88
+# needs the same lever is this arm's question, not a premise.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_USB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_WLAN_RX_BA=y
+CONFIG_CASES="tick rtw88_usb rtw88_scan rtw88_join rtw88_netio"
+CONFIG_WLAN_LINE_RTW88=y
+CONFIG_RTW88_BUS_USB=y
+CONFIG_RTW88_USB_BUS=3
+CONFIG_RTW88_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTW88_EXPECT_MAC="54:c9:e0:00:29:66"
+CONFIG_RTW88_NET_ADDR_STATIC=y
+CONFIG_RTW88_NET_IP="192.168.99.2"
+CONFIG_RTW88_NET_MASK="255.255.255.0"
+CONFIG_RTW88_NET_GW="192.168.99.1"

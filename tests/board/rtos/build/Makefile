@@ -201,7 +201,7 @@ endif
 CASES ?= tick cmsis2 net emmc
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw88_join rtw88_net rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw88_join rtw88_net rtw88_usb rtw88_netio rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 .DEFAULT_GOAL := all
 
@@ -557,7 +557,8 @@ endif
 # The USB host domain (empty unless a USB consumer is selected).  It must be
 # included before rtw89.mk: the wireless world's linuxkpi USB engine compiles
 # against the same CherryUSB include roots and stage geometry.
-ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
+ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu rtw88_usb aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
+
 include $(CURDIR)/usb.mk
 endif
 
@@ -595,6 +596,14 @@ endif
 # together with a USB wireless world.
 ifneq ($(filter rtw88,$(CASES)),)
 include $(CURDIR)/rtw88_sdio.mk
+endif
+
+# The RTL8821CU wireless world over USB (empty unless the rtw88_usb case is
+# selected).  It shares the driver core and the bridge with the SDIO arm but
+# takes the USB port units and the CherryUSB engine; the two are never in one
+# image.
+ifneq ($(filter rtw88_usb,$(CASES)),)
+include $(CURDIR)/rtw88_usb.mk
 endif
 
 BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
@@ -719,7 +728,7 @@ LIB_SUPPORT_OBJS := $(filter $(OBJDIR)/third-party/ulog/% $(OBJDIR)/third-party/
 LIB_NET80211_OBJS := $(filter $(OBJDIR)/components/net80211/%,$(OBJS))
 LIB_LINUXKPI_OBJS := $(filter $(OBJDIR)/components/linuxkpi/%,$(OBJS))
 LIB_DRV_OBJS := $(filter $(OBJDIR)/wireless-drivers/% $(OBJDIR)/third-party/fsl_sdmmc/%,$(OBJS))
-LIB_USBHOST_OBJS := $(filter $(OBJDIR)/third-party/cherryusb/% $(OBJDIR)/ports/cherryusb/%,$(OBJS))
+LIB_USBHOST_OBJS := $(filter $(OBJDIR)/third-party/cherryusb/%,$(OBJS))
 LIB_APP_OBJS := $(filter $(OBJDIR)/tests/board/rtos/app/%,$(OBJS))
 
 # Static archives can be mutually dependent (log needs uart, board log calls
@@ -880,7 +889,8 @@ endif
 # that links them: the wireless images ride the same controllers, and an image
 # whose USB objects have no rule would silently reuse whatever object the last
 # profile left in the shared build tree.
-ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu aic8800,$(CASES)),)
+ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu rtw88_usb aic8800,$(CASES)),)
+
 $(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
 endif
 
@@ -925,10 +935,11 @@ endif
 # the bridge, the linuxkpi face plus the firmware blob, the SDIO port and
 # controller, the driver, then the two cases.  The port units are vendored C, so
 # they get their own relaxed flag world.
-ifneq ($(filter rtw88,$(CASES)),)
+ifneq ($(filter rtw88 rtw88_usb,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(RTW88_NET80211_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_BSD_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_LKPI_SRCS) $(RTW88_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_SDIO_PORT_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTW88_USB_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CASE_CFLAGS))))
 
@@ -938,6 +949,12 @@ endif
 # core and the case, all in the platform's flag world (no Linux headers).
 ifneq ($(filter rtw88_net,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(RTW88_LWIP_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_LWIP_CFLAGS))))
+endif
+
+# The rtw88 netio arm's lwIP world: the stack's port glue, the lwIP core, the
+# bridge's presentation layer and the shared netio server.
+ifneq ($(filter rtw88_netio,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTW88_NETIO_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_NETIO_CFLAGS))))
 endif
 
 ifneq ($(filter rtl8xxxu_netio,$(CASES)),)
@@ -983,6 +1000,18 @@ ifneq ($(filter usb_xhci usb_ehci,$(CASES)),)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx msc_class_info || \
 		{ echo "FAIL: msc_class_info not in the image (the class table would claim nothing)"; exit 1; }; \
 	echo "PASS: usb msc class table present"
+endif
+ifneq ($(filter rtw88_usb,$(CASES)),)
+	@set -e; \
+	[ -n "$(RTW88_GATE_STAGE)" ] || \
+		{ echo "FAIL: RTW_USB_MAX_RECVBUF_SZ not found in $(RTW88_DRV)/usb.h"; exit 1; }; \
+	[ "$(RTW88_GATE_STAGE)" -le "$(CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE)" ] || \
+		{ echo "FAIL: rtw88 RX $(RTW88_GATE_STAGE) > linuxkpi stage $(CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE): every RX URB would be refused for good"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_wlan_class_info || \
+		{ echo "FAIL: lkpi_wlan_class_info not in the image (no vendor class hook)"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx __lkpi_module_rtw_8821cu_driver || \
+		{ echo "FAIL: rtw_8821cu_driver not in .lkpi_module (registry walk would see no driver)"; exit 1; }; \
+	echo "PASS: usb stage=$(RTW88_GATE_STAGE)<=$(CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE) driver registered"
 endif
 ifneq ($(filter rtw89,$(CASES)),)
 	@set -e; \

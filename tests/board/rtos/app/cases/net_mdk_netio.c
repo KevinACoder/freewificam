@@ -71,8 +71,10 @@
 #define NETIO_GMAC	1
 #elif defined(RTOS_CASE_RTL8XXXU_NETIO)
 #define NETIO_GMAC	0
+#elif defined(RTOS_CASE_RTW88_NETIO)
+#define NETIO_GMAC	0
 #else
-#error "net_mdk_netio.c needs RTOS_CASE_NET_MDK_NETIO or RTOS_CASE_RTL8XXXU_NETIO"
+#error "net_mdk_netio.c needs RTOS_CASE_NET_MDK_NETIO, RTOS_CASE_RTL8XXXU_NETIO or RTOS_CASE_RTW88_NETIO"
 #endif
 
 #if NETIO_GMAC
@@ -83,7 +85,11 @@
 #include "ethnetif.h"
 #else
 #include "wlan_bridge.h"
+#if defined(RTOS_CASE_RTW88_NETIO)
+#include "rtw88_net.h"
+#else
 #include "rtl8xxxu_net.h"
+#endif
 /* The receive-path split (RTOS-03): the transfer layer's completion census and
  * the interface layer's queue counters, so one anchor names the leg that ate
  * the A-MPDUs instead of inferring it from the bridge's totals. */
@@ -2043,11 +2049,19 @@ static int line_up(void)
 {
 	if (g_line_up)
 		return 0;
+#if defined(RTOS_CASE_RTW88_NETIO)
+	if (rtw88_net_bringup() != 0) {
+		CASE_ANCHOR("net: netio FAIL wlan bringup\n");
+		return -1;
+	}
+	g_local_ip = rtw88_net_ip4();
+#else
 	if (rtl8xxxu_net_bringup() != 0) {
 		CASE_ANCHOR("net: netio FAIL wlan bringup\n");
 		return -1;
 	}
 	g_local_ip = rtl8xxxu_net_ip4();
+#endif
 	CASE_ANCHOR("net: netio addr 192.168.99.2/24\n");
 	g_line_up = 1;
 	return 0;
@@ -2315,10 +2329,20 @@ int case_net_mdk_netio_run(void)
 	}
 	return netio_case_run();
 }
-#else
+#elif defined(RTOS_CASE_RTL8XXXU_NETIO)
 int case_rtl8xxxu_netio_run(void)
 {
 	CASE_ANCHOR("rtos: case rtl8xxxu_netio start\n");
+	if (line_up() != 0) {
+		CASE_ANCHOR("net: netio FAIL line-up\n");
+		return 1;
+	}
+	return netio_case_run();
+}
+#else
+int case_rtw88_netio_run(void)
+{
+	CASE_ANCHOR("rtos: case rtw88_netio start\n");
 	if (line_up() != 0) {
 		CASE_ANCHOR("net: netio FAIL line-up\n");
 		return 1;

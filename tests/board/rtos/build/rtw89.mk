@@ -48,7 +48,7 @@ RTW89_BSD_INCLUDES := -I$(ROOT) -I$(RTW89_NPORT)/compat \
 	-I$(RTW89_NET)/compat/netbsd -I$(RTW89_NET) -I$(RTW89_NPORT)
 
 RTW89_KPI_INCLUDES := -I$(ROOT) -I$(ROOT)/components/linuxkpi \
-	-I$(RTW89_LKPI) -I$(RTW89_LKPI)/include -I$(USB_PORT) \
+	-I$(RTW89_LKPI) -I$(RTW89_LKPI)/include -I$(ROOT)/components/linuxkpi/rtos/usb \
 	-I$(RTW89_LKPI)/usb -I$(RTW89_NET) -I$(RTW89_NPORT) \
 	-I$(RTW89_NPORT)/bridge $(USB_INCLUDES)
 

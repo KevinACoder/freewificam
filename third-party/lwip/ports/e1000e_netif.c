@@ -7,7 +7,7 @@
  * @design upstream ethernetif skeleton (see e1000e_netif.h): netif_add with
  *          etharp_output/linkoutput, the driver's own entries in the
  *          low_level slots. Threading follows the GMAC bridge's contract
- *          (ports/lwip/ethnetif.c): the RX poll thread runs the drain and
+ *          (third-party/lwip/ports/ethnetif.c): the RX poll thread runs the drain and
  *          netif->input is tcpip_input; the transmit side runs on the
  *          TCP/IP thread under the core lock.
  */

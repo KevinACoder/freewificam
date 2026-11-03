@@ -145,6 +145,14 @@ int case_rtw88_join_run(void);
 int case_rtw88_net_run(void);
 #endif
 
+#if defined(RTOS_CASE_RTW88_USB)
+int case_rtw88_usb_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTW88_NETIO)
+int case_rtw88_netio_run(void);
+#endif
+
 #if defined(RTOS_CASE_RTW89)
 int case_rtw89_run(void);
 #endif
@@ -191,7 +199,7 @@ int case_rtl8xxxu_netio_run(void);
 
 /* The camera image's four cases, in run order: the controller and the camera,
  * the negotiated open, the raw isochronous transport, then the stream engine.
- * They share the application half's state (`ports/cherryusb/class/uvc_app.h`). */
+ * They share the application half's state (`app/usb/uvc_app.h`). */
 #if defined(RTOS_CASE_UVC_DETECT)
 int case_uvc_detect_run(void);
 #endif

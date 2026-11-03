@@ -33,7 +33,7 @@
  * @design ports & adapters: the adapter side of the seam. The engine is the
  * adapter-neutral core; this file plus the card service under it are the
  * adapter. Shape reference for the layering: the USB line's adapter
- * (ports/cherryusb/lkpi_usb_cherryusb.c) implements its seam the same way -
+ * (components/linuxkpi/rtos/usb/lkpi_usb_cherryusb.c) implements its seam the same way -
  * translation plus the backend's own awkwardness, nothing else.
  */
 

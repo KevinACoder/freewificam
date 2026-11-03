@@ -56,5 +56,5 @@ Rows 1-14 above are the history of the host-tier copy (the backend seam, the
 allocation registry, the stripped board diagnostics); the board version already
 carries that shape and its own diagnostics. This round changes none of its
 bytes. The one path edit this import needed is outside this component
-(`ports/cherryusb/lkpi_usb_cherryusb.c`'s seam include), recorded with that
+(`components/linuxkpi/rtos/usb/lkpi_usb_cherryusb.c`'s seam include), recorded with that
 port's provenance.

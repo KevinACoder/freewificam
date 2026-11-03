@@ -25,7 +25,7 @@
  *    only reader.
  *
  * @design kernel-services shim: the platform stand-in layer of the port,
- * companion of ports/lwip/include/arch/cc.h. Print and park disciplines
+ * companion of third-party/lwip/ports/include/arch/cc.h. Print and park disciplines
  * follow the log contract declared in os/baremetal/log.h:1-43 (fault-path
  * prints never take the console lock) and the existing panic lander shape of
  * os/threadx/board/rk3568-itx/heap.c:135-147 (emergency line, then park).

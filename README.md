@@ -198,6 +198,33 @@ stack (CherryUSB + linuxkpi USB).  Methods: [docs/NET-TESTING.md]
 | `W-UDP-D/HT20` | 10.51 / 10.05 Mbit/s | **30.6 / 24.1** (boot 1), **30.5 / 21.7** (boot 2) | 32.67 / 31.25 | 30.60 / 30.90 |
 | `W-UDP-U/HT20` | 26.8 / 26.9 Mbit/s | 26.0 / 25.8 (boot 1), 26.9 (boot 2) | 24.81 / 25.13 | 36.39 / 37.53 |
 
+### RK3568 / RTL8821CU / USB2 xHCI
+
+The first three-arm run on this chip (2026-11-03).  Same AP, same client, same
+1440 B UDP cells as the tables above; downlink rows are the part that lines up
+today.
+
+| case | rtos, no BA | rtos, RX-BA | ko | Linux reference |
+|---|---|---|---|---|
+| `W-UDP-D/HT20` | 11.67 / 23.10 Mbit/s | **54.50 / 54.79** (2 boots) | 54.48 (1 cell) | 54.92-55.39 (2 boots) |
+| `W-UDP-D/11g` | 21.10 / 21.57 Mbit/s | - | 21.44 | 21.44 |
+| `W-UDP-U/11g` | 8.26 / 8.94 Mbit/s | - | - | 18.27-19.58 |
+| `W-UDP-U/HT20` | invalid | invalid | invalid | 10.04-10.84 |
+
+The HT20 downlink row is the block-ack story again: 11.7-23.1 without
+`CONFIG_WLAN_RX_BA`, 54.5 with it, while the same image's legacy downlink stays
+at 21.1-21.6.
+
+The uplink rows are not comparable yet.  On the ko and bare-metal arms the
+netdev transmit path lets the board's netio server queue 440k frames in the
+six-second window while the air carries ~6k, because the driver's refusal is
+counted as a bridge output error and dropped after `sendto` already returned
+success; the GT kernel's qdisc is what paces the server there.  The legacy
+uplink row above *is* valid (0% loss, zero TX errors) and shows a real roughly
+half rate against the reference, still to be attributed.  The transmit path's
+backpressure and the pacing of the server are the next round's work; the
+protocol evidence is in [docs/NET-TESTING.md](docs/NET-TESTING.md) section 9.4.
+
 ### Notes
 
 The wired TCP rows are the 2026-11-02 default (TCP and UDP cells 2/2 each,
