@@ -22,7 +22,7 @@
  *   rtw89: scan bss <bssid> ssid=<s> freq=<f> rssi=<r>
  *   rtw89: scan done rows=<n> bcn=<n> bcnT=<n> prsp=<n> fcs=<n>
  *               scan=<n>/<n> state=<n> entered=<n> close=<n> rx=<n>
- *   rtw89: scan hit bssid=d8:3a:dd:26:91:1e ssid=labwifi-brmc freq=2432 rssi=<r>
+ *   rtw89: scan hit bssid=<bssid> ssid=<s> freq=<f> rssi=<r>
  *   rtw89: scan lkpi completions=<n> tx=<n> wq=<n>
  *   rtw89: scan PASS
  *
@@ -54,14 +54,23 @@ void lkpi80211_completion_counters(uint32_t *scan, uint32_t *tx);
 #define RTW89_SCAN_POLL_MS	200u
 #define RTW89_SCAN_NWID_LEN	32u
 
-#define RTW89_SCAN_SSID		"labwifi-brmc"
-#define RTW89_SCAN_SSID_LEN	12u
-#define RTW89_SCAN_FREQ		2432u
+/* The AP is a profile fact (the bench changes APs between rounds), closed at
+ * build time: CONFIG_RTW89_AP_SSID names the network, CONFIG_RTW89_AP_FREQ
+ * pins the channel (0 = any).  A profile that selects this case without
+ * naming an AP does not compile. */
+#ifndef CONFIG_RTW89_AP_SSID
+#error "CONFIG_RTW89_AP_SSID must name the AP this image scans for (a profile fact: the bench changes APs between rounds)"
+#endif
+_Static_assert(sizeof(CONFIG_RTW89_AP_SSID) > 1,
+	       "CONFIG_RTW89_AP_SSID is empty: name the AP in the defconfig");
 
-/* the bench AP (brcmfmac wlan0, open, ch5) */
-static const uint8_t rtw89_scan_target[6] = {
-	0xd8, 0x3a, 0xdd, 0x26, 0x91, 0x1e
-};
+#define RTW89_SCAN_SSID		CONFIG_RTW89_AP_SSID
+#define RTW89_SCAN_SSID_LEN	(sizeof(RTW89_SCAN_SSID) - 1u)
+#ifndef CONFIG_RTW89_AP_FREQ
+#define RTW89_SCAN_FREQ		0u
+#else
+#define RTW89_SCAN_FREQ		((uint32_t)CONFIG_RTW89_AP_FREQ)
+#endif
 
 struct rtw89_scan_rec {
 	unsigned int	rows;
@@ -93,9 +102,10 @@ rtw89_scan_row(const uint8_t bssid[6], const uint8_t *ssid, size_t ssid_len,
 	    "freq=%u rssi=%d\n", bssid[0], bssid[1], bssid[2], bssid[3],
 	    bssid[4], bssid[5], name, (unsigned)freq, rssi);
 
-	hit = memcmp(bssid, rtw89_scan_target, sizeof(rtw89_scan_target)) == 0 &&
-	    n == RTW89_SCAN_SSID_LEN &&
+	hit = n == RTW89_SCAN_SSID_LEN &&
 	    memcmp(ssid, RTW89_SCAN_SSID, RTW89_SCAN_SSID_LEN) == 0;
+	if (hit && RTW89_SCAN_FREQ != 0u && freq != RTW89_SCAN_FREQ)
+		hit = 0;
 	if (hit) {
 		rec->hit++;
 		rec->hit_freq = (int)freq;
@@ -103,10 +113,6 @@ rtw89_scan_row(const uint8_t bssid[6], const uint8_t *ssid, size_t ssid_len,
 		CASE_ANCHOR("rtw89: scan hit bssid=%02x:%02x:%02x:%02x:%02x:%02x "
 		    "ssid=%s freq=%u rssi=%d\n", bssid[0], bssid[1], bssid[2],
 		    bssid[3], bssid[4], bssid[5], name, (unsigned)freq, rssi);
-	} else if (memcmp(bssid, rtw89_scan_target, sizeof(rtw89_scan_target)) == 0) {
-		/* the BSSID is the AP but the SSID is not the bench network:
-		 * either another hostapd instance or a malformed SSID element */
-		CASE_INFO("rtw89: scan target bssid ssid mismatch (%s)\n", name);
 	}
 }
 

@@ -139,6 +139,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTW89_DATAPLANE)
 	CASE_ENTRY("rtw89_dataplane", case_rtw89_dataplane_run)
 #endif
+#if defined(RTOS_CASE_RTW89_NETIO)
+	CASE_ENTRY("rtw89_netio", case_rtw89_netio_run)
+#endif
 #if defined(RTOS_CASE_RTL8XXXU)
 	CASE_ENTRY("rtl8xxxu", case_rtl8xxxu_run)
 #endif
@@ -325,6 +328,7 @@ static const osThreadAttr_t runner_attr = {
     defined(RTOS_CASE_RTW88_JOIN) || defined(RTOS_CASE_RTW88_NET) || \
     defined(RTOS_CASE_RTW89) || defined(RTOS_CASE_RTW89_SCAN) || \
     defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE) || \
+    defined(RTOS_CASE_RTW89_NETIO) || \
     defined(RTOS_CASE_RTL8XXXU) || defined(RTOS_CASE_RTL8XXXU_SCAN) || \
     defined(RTOS_CASE_RTL8XXXU_JOIN) || defined(RTOS_CASE_RTL8XXXU_DATAPLANE) || \
     defined(RTOS_CASE_RTL8XXXU_NETIO) || defined(RTOS_CASE_NET_MDK_NETIO)

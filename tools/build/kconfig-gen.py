@@ -60,7 +60,7 @@ KCONFIG_FILES = [
 CASES = """tick cmsis2 net net_loop net_mdk_netio net_pps net_xmac nvme pcie
 pcie_7260 pcie_bench pcie_ecam emmc aic8800 rtl8xxxu rtl8xxxu_dataplane rtl8xxxu_join
 rtl8xxxu_net rtl8xxxu_netio rtl8xxxu_scan rtw88 rtw88_scan rtw88_join
-rtw88_net rtw88_usb rtw88_netio rtw89
+rtw88_net rtw88_usb rtw88_netio rtw89 rtw89_net rtw89_netio
 rtw89_dataplane rtw89_join rtw89_scan sdio_mci usb_ehci usb_xhci uvc_detect
 uvc_iso_smoke uvc_open uvc_stream wlan iwl7260 iwl7260_dataplane iwl7260_join
 iwl7260_net iwl7260_scan""".split()

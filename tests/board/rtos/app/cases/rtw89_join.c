@@ -11,11 +11,16 @@
  * frames; it asks the bridge for the join and pumps the stack's 1 Hz tick
  * (the auth/assoc transaction timers) while it waits.
  *
- * The AP is pinned by BSSID: the bench has more than one AP on the SSID, and
- * the association's identity is the BSSID the exchange completed with.
+ * The AP is a profile fact (the bench changes APs between rounds): the join
+ * walks the sweep's table by SSID (CONFIG_RTW89_AP_SSID), picks the strongest
+ * sighting and hands its BSSID to the bridge.  A pinned BSSID is the old rtw89
+ * image's trap - the owner's AP is not guaranteed to keep its BSSID between
+ * boots.  An empty table (no rtw89_scan in the image, or a failed scan) gets
+ * one bounded sweep, same shape as rtw88_join.
  *
  * Anchors:
- *   rtw89: join start ssid=labwifi-brmc bssid=... state=<n> rc=<n>
+ *   rtw89: join bssid=<bssid> ssid=<s> freq=<f> rssi=<r> hits=<n> rows=<n>
+ *   rtw89: join start ssid=<s> bssid=<bssid> state=<n> rc=<n>
  *   rtw89: join wait t=<s> state=<n> mgt_tx=<n> txc=<n> txfail=<n> rx=<n>
  *           rx_age=<ms> bcnT=<n> bad_auth=<n> wq=<ptr>
  *   rtw89: join lkpi tx=<n> scan=<n> wq=<n>
@@ -33,7 +38,9 @@
  * slots_exhausted) from "the transfer left and nothing came back".
  */
 
+#include <errno.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "cases.h"
 #include "os/cmsis2/cmsis2.h"
@@ -56,14 +63,18 @@ void lkpi80211_rx_boundary_counters(uint32_t *in, uint32_t *refused,
 #define RTW89_JOIN_POLL_MS	200u
 #define RTW89_JOIN_PULSE_MS	2000u
 
-#define RTW89_JOIN_SSID		"labwifi-brmc"
-#define RTW89_JOIN_SSID_LEN	12u
-#define RTW89_JOIN_RUN		4
+/* The AP is a profile fact, closed at build time: an image that selects this
+ * case without naming an AP does not compile. */
+#ifndef CONFIG_RTW89_AP_SSID
+#error "CONFIG_RTW89_AP_SSID must name the AP this image joins (a profile fact: the bench changes APs between rounds)"
+#endif
+_Static_assert(sizeof(CONFIG_RTW89_AP_SSID) > 1,
+	       "CONFIG_RTW89_AP_SSID is empty: name the AP in the defconfig");
 
-/* the bench AP (brcmfmac wlan0, open, ch5) */
-static const uint8_t rtw89_join_target[6] = {
-	0xd8, 0x3a, 0xdd, 0x26, 0x91, 0x1e
-};
+#define RTW89_JOIN_SSID		CONFIG_RTW89_AP_SSID
+#define RTW89_JOIN_SSID_LEN	(sizeof(RTW89_JOIN_SSID) - 1u)
+#define RTW89_JOIN_RUN		4
+#define RTW89_JOIN_SCAN_MS	90000u
 
 static const char *
 rtw89_join_state_txt(int state)
@@ -86,6 +97,74 @@ rtw89_join_state_txt(int state)
 	}
 }
 
+struct rtw89_join_rec {
+	unsigned int	rows;
+	unsigned int	hit;
+	int		freq;
+	uint8_t		bssid[6];
+	int		rssi;
+};
+
+static void
+rtw89_join_row(const uint8_t bssid[6], const uint8_t *ssid, size_t ssid_len,
+    uint32_t freq, int rssi, void *arg)
+{
+	struct rtw89_join_rec *rec = arg;
+
+	rec->rows++;
+	if (ssid == NULL || ssid_len != RTW89_JOIN_SSID_LEN)
+		return;
+	if (memcmp(ssid, RTW89_JOIN_SSID, RTW89_JOIN_SSID_LEN) != 0)
+		return;
+	rec->hit++;
+	/* the strongest sighting: the same SSID can be carried by more than one
+	 * radio, and the RSSI tells which one is here */
+	if (rec->hit == 1u || rssi > rec->rssi) {
+		memcpy(rec->bssid, bssid, 6);
+		rec->freq = (int)freq;
+		rec->rssi = rssi;
+	}
+}
+
+/*
+ * One bounded sweep, used only when the caller's image carries no scan table
+ * (the rtw89_scan case normally owns this and leaves its table behind).  Same
+ * route as that case: the walk advanced by the dwell entry, with the 1 Hz tick
+ * pumped from here.
+ */
+static int
+rtw89_join_sweep(void)
+{
+	unsigned int waited = 0u;
+	unsigned int tick = 0u;
+	int rc;
+
+	while (wlan_bridge_scan_pending() && waited < RTW89_JOIN_SCAN_MS) {
+		(void)osDelay(RTW89_JOIN_POLL_MS);
+		waited += RTW89_JOIN_POLL_MS;
+		(void)wlan_bridge_scan_dwell();
+	}
+	rc = wlan_bridge_scan_start();
+	while (rc == -EBUSY && waited < RTW89_JOIN_SCAN_MS) {
+		(void)osDelay(RTW89_JOIN_POLL_MS);
+		waited += RTW89_JOIN_POLL_MS;
+		rc = wlan_bridge_scan_start();
+	}
+	if (rc != 0)
+		return rc;
+	while (wlan_bridge_scan_active() && waited < RTW89_JOIN_SCAN_MS) {
+		(void)osDelay(RTW89_JOIN_POLL_MS);
+		waited += RTW89_JOIN_POLL_MS;
+		tick += RTW89_JOIN_POLL_MS;
+		(void)wlan_bridge_scan_dwell();
+		if (tick >= 1000u) {
+			tick = 0u;
+			wlan_bridge_watchdog();
+		}
+	}
+	return 0;
+}
+
 static void
 rtw89_usb_stats_anchor(const char *where)
 {
@@ -102,6 +181,7 @@ int
 case_rtw89_join_run(void)
 {
 	struct wlan_bridge_counters c;
+	struct rtw89_join_rec rec = { 0u, 0u, 0, { 0 }, 0 };
 	unsigned int waited = 0;
 	unsigned int tick = 0;
 	unsigned int pulse = 0;
@@ -120,6 +200,31 @@ case_rtw89_join_run(void)
 		return 1;
 	}
 
+	/* the caller's image may still be in AUTO mode; MANUAL keeps the stack
+	 * from joining a candidate on its own, so this case's join is the only
+	 * actor (idempotent with the scan case) */
+	wlan_bridge_set_manual(1);
+
+	(void)wlan_bridge_scan_walk(rtw89_join_row, &rec);
+	if (rec.rows == 0u) {
+		CASE_INFO("rtw89: join scan table empty; one bounded sweep\n");
+		rc = rtw89_join_sweep();
+		if (rc != 0)
+			CASE_INFO("rtw89: join sweep rc=%d\n", rc);
+		rec.rows = 0u;
+		rec.hit = 0u;
+		(void)wlan_bridge_scan_walk(rtw89_join_row, &rec);
+	}
+	if (rec.hit == 0u) {
+		CASE_ANCHOR("rtw89: join FAIL AP not in scan table (ssid=%s "
+		    "rows=%u)\n", RTW89_JOIN_SSID, rec.rows);
+		return 1;
+	}
+	CASE_ANCHOR("rtw89: join bssid=%02x:%02x:%02x:%02x:%02x:%02x ssid=%s "
+	    "freq=%d rssi=%d hits=%u rows=%u\n", rec.bssid[0], rec.bssid[1],
+	    rec.bssid[2], rec.bssid[3], rec.bssid[4], rec.bssid[5],
+	    RTW89_JOIN_SSID, rec.freq, rec.rssi, rec.hit, rec.rows);
+
 	/*
 	 * Two attempts.  The bench AP occasionally does not answer the first
 	 * auth after a fresh association (measured twice: AUTH left, mgt/txc
@@ -135,13 +240,12 @@ case_rtw89_join_run(void)
 		last_rx = 0;
 		last_rx_ms = 0;
 		rc = wlan_bridge_join((const uint8_t *)RTW89_JOIN_SSID,
-		    RTW89_JOIN_SSID_LEN, rtw89_join_target, NULL, 0);
+		    RTW89_JOIN_SSID_LEN, rec.bssid, NULL, 0);
 		CASE_ANCHOR("rtw89: join start ssid=%s "
 		    "bssid=%02x:%02x:%02x:%02x:%02x:%02x state=%d rc=%d "
-		    "attempt=%u\n", RTW89_JOIN_SSID, rtw89_join_target[0],
-		    rtw89_join_target[1], rtw89_join_target[2],
-		    rtw89_join_target[3], rtw89_join_target[4],
-		    rtw89_join_target[5], wlan_bridge_state(), rc, attempt);
+		    "attempt=%u\n", RTW89_JOIN_SSID, rec.bssid[0],
+		    rec.bssid[1], rec.bssid[2], rec.bssid[3], rec.bssid[4],
+		    rec.bssid[5], wlan_bridge_state(), rc, attempt);
 		if (rc != 0) {
 			CASE_INFO("rtw89: join attempt %u call rc=%d state=%s\n",
 			    attempt, rc,

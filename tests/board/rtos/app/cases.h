@@ -173,6 +173,10 @@ int case_rtw89_join_run(void);
 int case_rtw89_dataplane_run(void);
 #endif
 
+#if defined(RTOS_CASE_RTW89_NETIO)
+int case_rtw89_netio_run(void);
+#endif
+
 #if defined(RTOS_CASE_RTL8XXXU)
 int case_rtl8xxxu_run(void);
 #endif

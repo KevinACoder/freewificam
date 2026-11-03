@@ -228,4 +228,38 @@ config RTW88_NET_MASK
 config RTW88_NET_GW
 	string "rtw88 net arm: static gateway"
 
+# The RTL8851BU data-plane case's profile facts.  Same shape as the rtw88
+# line: the AP is a profile fact (the bench changes APs between rounds), and
+# the address mode decides whether the image asks the AP or configures
+# itself.  An image that selects rtw89_scan/rtw89_join/rtw89_netio without
+# them fails at build time.
+config RTW89_AP_SSID
+	string "AP SSID the rtw89 join arm associates with"
+	help
+	  The open AP the join case looks up in the scan table.  It is a string,
+	  not a BSSID: the line must not pin an address the AP is free to
+	  change, so the case picks the strongest row carrying this SSID.
+
+config RTW89_AP_FREQ
+	int "rtw89 scan frequency (MHz, 0 = any)"
+	default 0
+
+config RTW89_NET_ADDR_DHCP
+	bool "rtw89 net arm: address from the AP's DHCP"
+
+config RTW89_NET_ADDR_STATIC
+	bool "rtw89 net arm: static address"
+
+config RTW89_NET_IP
+	string "rtw89 net arm: static address"
+	help
+	  Required by CONFIG_RTW89_NET_ADDR_STATIC only (the build refuses the
+	  arm without it).
+
+config RTW89_NET_MASK
+	string "rtw89 net arm: static netmask"
+
+config RTW89_NET_GW
+	string "rtw89 net arm: static gateway"
+
 endmenu

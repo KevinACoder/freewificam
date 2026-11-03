@@ -1,0 +1,30 @@
+# RK3568 RTL8851BU, HT20 throughput cell with the receive ADDBA supplement.
+#
+# The W7-01 arm: bring-up (USB + firmware + attach + start), scan, open join,
+# then the netio server over the bridge-backed lwIP interface.  The case order
+# is the run order; rtw89 must be first.  CONFIG_WLAN_RX_BA links the net80211
+# port's wlan_rx_ba.c (the AP's ADDBA request); the 8188EU line measured that
+# this is what moves a download from ~20 to ~50 Mbit/s, and the 8821CU netio arm
+# used the same lever.  The AP is a profile fact (the bench changes APs between
+# rounds); the netio address is static by construction.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_USB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_WLAN_RX_BA=y
+CONFIG_CASES="tick rtw89 rtw89_scan rtw89_join rtw89_netio"
+CONFIG_WLAN_LINE_RTW89=y
+CONFIG_RTW89_USB_BUS=1
+CONFIG_RTW89_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTW89_AP_FREQ=2432
+CONFIG_RTW89_NET_ADDR_STATIC=y
+CONFIG_RTW89_NET_IP="192.168.99.2"
+CONFIG_RTW89_NET_MASK="255.255.255.0"
+CONFIG_RTW89_NET_GW="192.168.99.1"

@@ -61,10 +61,10 @@
 #include "net_watch.h"
 #endif
 
-/* Two backends share this file: the GMAC one (the wired ruler) and the WLAN
- * one (rtl8xxxu_net's presentation layer over the net80211 bridge).  They
+/* Three backends share this file: the GMAC one (the wired ruler) and the WLAN
+ * ones (the per-line presentation layers over the net80211 bridge).  They
  * share the wire protocol and the accounting seams, not the line: the case
- * symbol selects the backend and an image never contains both.  Keeping the
+ * symbol selects the backend and an image never contains two.  Keeping the
  * GMAC path byte-for-byte where it was is what makes the wired regression
  * meaningful after this change. */
 #if defined(RTOS_CASE_NET_MDK_NETIO)
@@ -73,8 +73,10 @@
 #define NETIO_GMAC	0
 #elif defined(RTOS_CASE_RTW88_NETIO)
 #define NETIO_GMAC	0
+#elif defined(RTOS_CASE_RTW89_NETIO)
+#define NETIO_GMAC	0
 #else
-#error "net_mdk_netio.c needs RTOS_CASE_NET_MDK_NETIO, RTOS_CASE_RTL8XXXU_NETIO or RTOS_CASE_RTW88_NETIO"
+#error "net_mdk_netio.c needs RTOS_CASE_NET_MDK_NETIO, RTOS_CASE_RTL8XXXU_NETIO, RTOS_CASE_RTW88_NETIO or RTOS_CASE_RTW89_NETIO"
 #endif
 
 #if NETIO_GMAC
@@ -87,6 +89,8 @@
 #include "wlan_bridge.h"
 #if defined(RTOS_CASE_RTW88_NETIO)
 #include "rtw88_net.h"
+#elif defined(RTOS_CASE_RTW89_NETIO)
+#include "rtw89_net.h"
 #else
 #include "rtl8xxxu_net.h"
 #endif
@@ -2067,6 +2071,12 @@ static int line_up(void)
 		return -1;
 	}
 	g_local_ip = rtw88_net_ip4();
+#elif defined(RTOS_CASE_RTW89_NETIO)
+	if (rtw89_net_bringup() != 0) {
+		CASE_ANCHOR("net: netio FAIL wlan bringup\n");
+		return -1;
+	}
+	g_local_ip = rtw89_net_ip4();
 #else
 	if (rtl8xxxu_net_bringup() != 0) {
 		CASE_ANCHOR("net: netio FAIL wlan bringup\n");
@@ -2345,6 +2355,16 @@ int case_net_mdk_netio_run(void)
 int case_rtl8xxxu_netio_run(void)
 {
 	CASE_ANCHOR("rtos: case rtl8xxxu_netio start\n");
+	if (line_up() != 0) {
+		CASE_ANCHOR("net: netio FAIL line-up\n");
+		return 1;
+	}
+	return netio_case_run();
+}
+#elif defined(RTOS_CASE_RTW89_NETIO)
+int case_rtw89_netio_run(void)
+{
+	CASE_ANCHOR("rtos: case rtw89_netio start\n");
 	if (line_up() != 0) {
 		CASE_ANCHOR("net: netio FAIL line-up\n");
 		return 1;

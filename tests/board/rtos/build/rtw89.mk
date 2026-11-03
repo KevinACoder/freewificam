@@ -87,7 +87,7 @@ RTW89_NET80211_SRCS := $(NET80211_SRCS)
 
 
 RTW89_LKPI_SRCS := $(LINUXKPI_SRCS) $(NET80211_KPI_SRCS) \
-	$(LINUXKPI_CHERRY_SRCS)
+	$(LINUXKPI_CHERRY_SRCS) $(NET80211_RXBA_SRCS)
 
 # The 8851BU translation units: the same 21 the reference board-proven image
 # compiled (core, chip, and the two bus units).  The Wi-Fi 7 `*_be` units are
@@ -99,8 +99,47 @@ RTW89_FW_SRCS := $(RTW89_BLOB_SRCS)
 
 RTW89_CASE_SRCS := $(RTW89_APP_SRCS)
 
+# The netio arm (case rtw89_netio): the same lwIP core and per-line presentation
+# layer as rtw89_net, plus the shared netio server.  The server is compiled
+# against the WLAN case symbol (RTOS_CASE_RTW89_NETIO), which selects its
+# bridge-backed line-up and layer snapshot instead of the GMAC ones.
+ifneq ($(filter rtw89_netio,$(CASES)),)
+RTW89_NETIO_SRCS := \
+	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
+	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
+	$(LWIP_STACK_SRCS) \
+	$(LINE)/app/cases/rtw89_net.c \
+	$(LINE)/app/cases/net_mdk_netio.c \
+	$(LINE)/app/net_prof.c
+RTW89_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
+	-I$(RTW89_NPORT)/bridge \
+	-I$(ROOT)/components/linuxkpi -I$(RTW89_LKPI)/usb \
+	-I$(ROOT)/components/linuxkpi/rtos/usb
+else
+RTW89_NETIO_SRCS :=
+endif
+
+# The profile facts the cases cannot default: which AP the scan/join arms look
+# for, and which address the netio arm binds to.  The netio arm is a static
+# address by construction (the bench's server address is the profile's).
+ifneq ($(filter rtw89_scan rtw89_join,$(CASES)),)
+ifeq ($(strip $(CONFIG_RTW89_AP_SSID)),)
+$(error the rtw89_scan/rtw89_join cases need CONFIG_RTW89_AP_SSID in the profile's defconfig)
+endif
+endif
+ifneq ($(filter rtw89_netio,$(CASES)),)
+ifeq ($(strip $(CONFIG_RTW89_NET_ADDR_STATIC)),1)
+else
+$(error the rtw89_netio case needs CONFIG_RTW89_NET_ADDR_STATIC in the profile's defconfig)
+endif
+ifeq ($(strip $(CONFIG_RTW89_NET_IP)),)
+$(error the rtw89_netio case needs CONFIG_RTW89_NET_IP in the profile's defconfig)
+endif
+endif
+
 RTW89_ALL_SRCS := $(RTW89_NET80211_SRCS) $(RTW89_LKPI_SRCS) \
-	$(RTW89_DRV_SRCS) $(RTW89_FW_SRCS) $(RTW89_CASE_SRCS)
+	$(RTW89_DRV_SRCS) $(RTW89_FW_SRCS) $(RTW89_CASE_SRCS) \
+	$(RTW89_NETIO_SRCS)
 
 # The symbols only the case reaches: with --gc-sections the walkers, the
 # backend registration, the firmware registration and the bridge install have

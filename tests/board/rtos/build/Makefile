@@ -201,7 +201,7 @@ endif
 CASES ?= tick cmsis2 net emmc
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw88_join rtw88_net rtw88_usb rtw88_netio rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw88_join rtw88_net rtw88_usb rtw88_netio rtw89 rtw89_scan rtw89_join rtw89_dataplane rtw89_net rtw89_netio rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 .DEFAULT_GOAL := all
 
@@ -903,6 +903,12 @@ $(foreach s,$(filter-out %.S,$(RTW89_NET80211_SRCS)),$(eval $(call COMPILE_C,$(s
 $(foreach s,$(filter-out %.S,$(RTW89_LKPI_SRCS) $(RTW89_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW89_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW89_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CASE_CFLAGS))))
+endif
+
+# The rtw89 netio arm's lwIP world: the stack's port glue, the lwIP core, the
+# bridge's presentation layer and the shared netio server.
+ifneq ($(filter rtw89_netio,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTW89_NETIO_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_NETIO_CFLAGS))))
 endif
 
 ifneq ($(filter rtl8xxxu,$(CASES)),)
