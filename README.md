@@ -74,11 +74,11 @@ hardware, peripheral map and boot path are in
 [`docs/boards/rk3568-itx.md`](docs/boards/rk3568-itx.md).  It carries two EHCI
 roots and two xHCI (DWC3) instances.
 
-The second board is the firefly v2, an aarch64 SoC with two xHCI instances and
-no EHCI - the board the SDIO and vendor-FullMAC lines above run on.  Its image links at `0x90000000` and is
-loaded the same way (`tftpboot 0x90000000`, then `go 0x90000000`); the DDR base
-and the controller register apertures are in
-`tests/board/rtos/platform/board/firefly/v2/`.
+The second board is the firefly v2, an aarch64 carrier with two xHCI instances
+and no EHCI - the board the SDIO and vendor-FullMAC lines above run on.  Its
+image links at `0x90000000` and is loaded the same way (`tftpboot 0x90000000`,
+then `go 0x90000000`); the DDR base and the controller register apertures are
+in `tests/board/rtos/platform/board/firefly/v2/`.
 
 Both firmware trees live on GitHub and are not vendored here:
 
