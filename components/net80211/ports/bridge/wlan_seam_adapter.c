@@ -151,6 +151,15 @@ static struct {
 	unsigned int tx_hw_key;
 	unsigned int tx_hw_key_miss;
 	/*
+	 * The transmit seam's refusals by cause (seam.h's WLAN_SEAM_TX_ERR_*,
+	 * v4): the socket pool was empty, or the frame had no peer to go to.
+	 * The key refusal is counted by tx_hw_key_miss above. A refusal the
+	 * caller cannot name is only counted where it is returned; these two
+	 * are the ones the bridge has to act on differently.
+	 */
+	unsigned int tx_noskb;
+	unsigned int tx_nopeer;
+	/*
 	 * The link face: what the driver's own receive descriptors said about
 	 * the data frames that actually arrived.  Counted, never printed per
 	 * frame - a beacon's period would flood the console - and read back by
@@ -354,8 +363,10 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	 */
 	headroom = adapter.hw->extra_tx_headroom;
 	skb = lkpi_dev_alloc_skb((unsigned int)len + headroom, GFP_ATOMIC);
-	if (skb == NULL)
-		return -1;
+	if (skb == NULL) {
+		adapter.tx_noskb++;
+		return WLAN_SEAM_TX_ERR_NOSKB;
+	}
 	lkpi_skb_reserve(skb, headroom);
 	p = lkpi_skb_put(skb, (unsigned int)len);
 	memcpy(p, frame, len);
@@ -378,9 +389,13 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 		 * than handed to a half-initialised descriptor */
 		info->control.vif = adapter.vif;
 		if (adapter.sta == NULL) {
+			/* counted, printed once: this branch is a per-frame loop
+			 * under load and the console is an instrument here */
+			adapter.tx_nopeer++;
 			lkpi_skb_free(skb);
-			lkpi_printf(ULOG_ERROR_LEVEL, "wlans: tx of a data frame with no peer\n");
-			return -1;
+			if (adapter.tx_nopeer == 1)
+				lkpi_printf(ULOG_ERROR_LEVEL, "wlans: tx of a data frame with no peer\n");
+			return WLAN_SEAM_TX_ERR_NOPEER;
 		}
 		info->control.rates[0].idx = 0;
 		info->control.rates[0].count = 1;
@@ -406,7 +421,7 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 				    "wlans: tx with no hardware key "
 				    "(pair=%d idx=%d)\n", pairwise, key_idx);
 			lkpi_skb_free(skb);
-			return -1;
+			return WLAN_SEAM_TX_ERR_NOKEY;
 		}
 		info->control.hw_key = kc;
 		adapter.tx_hw_key++;
@@ -1395,6 +1410,17 @@ wlan_bridge_link_dump(void)
 	wlan_osal_log("wlan: link hw=%d vif=%d sta=%d tx=%u\n",
 	    adapter.hw != NULL ? 1 : 0, adapter.vif != NULL ? 1 : 0,
 	    sta != NULL ? 1 : 0, adapter.tx_calls);
+	/*
+	 * The transmit seam's refusals by cause, and the frames the driver
+	 * itself purged after taking them. These four numbers are what tells a
+	 * stalled uplink from a refused one: a frame refused for want of a
+	 * socket buffer is still queued in the bridge's sender, one refused for
+	 * want of a peer never had a destination, and a purged frame left the
+	 * seam and never came back.
+	 */
+	wlan_osal_log("wlan: link txrefuse noskb=%u nopeer=%u nokey=%u "
+	    "purged=%u\n", adapter.tx_noskb, adapter.tx_nopeer,
+	    adapter.tx_hw_key_miss, (unsigned)lkpi80211_tx_purges());
 	if (sta != NULL)
 		wlan_osal_log("wlan: link peer supp=0x%08x ht=%u mcs=0x%08x "
 		    "nss=%u wme=%u\n", (unsigned)sta->deflink.supp_rates[0],

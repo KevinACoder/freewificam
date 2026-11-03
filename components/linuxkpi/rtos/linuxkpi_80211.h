@@ -247,4 +247,12 @@ void	lkpi80211_rx_boundary_counters(u32 *in, u32 *refused, u32 *drops,
  */
 u32	lkpi80211_tx_failures(void);
 
+/*
+ * Frames the drivers released through ieee80211_purge_tx_queue() since boot.
+ * A purge happens after the caller has already counted the frame as handed
+ * down (a failed URB submit drops the whole aggregated queue), so this is the
+ * number that separates "the seam refused it" from "the device never saw it".
+ */
+u32	lkpi80211_tx_purges(void);
+
 #endif /* LINUXKPI_80211_H */

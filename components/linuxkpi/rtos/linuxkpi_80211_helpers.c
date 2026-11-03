@@ -78,6 +78,14 @@ static u32 lkpi80211_rx_frames;
 static bool lkpi80211_rx_fc_seen;
 static u8 lkpi80211_rx_first_fc;
 
+/*
+ * Frames the drivers threw away through ieee80211_purge_tx_queue() (below).
+ * A purge is the driver's own answer to its own transmit failure, so the
+ * frame has already been counted by the caller that handed it down; without
+ * this number the only witness left is the air capture.
+ */
+static u32 lkpi80211_tx_purged;
+
 void
 lkpi80211_rx_counters(u32 *frames, u32 *first_fc, int *fc_seen)
 {
@@ -499,8 +507,27 @@ ieee80211_purge_tx_queue(struct ieee80211_hw *hw, struct sk_buff_head *skbs)
 	/* [LNX] net/mac80211/util.c: release everything still queued */
 	if (skbs == NULL)
 		return;
-	while ((skb = skb_dequeue(skbs)) != NULL)
+	while ((skb = skb_dequeue(skbs)) != NULL) {
+		/*
+		 * rtw88 drops a whole aggregated queue when a URB submit fails
+		 * (usb.c:392). The frame was counted as sent by the caller, so
+		 * the purge is what parts "the driver took it" from "the device
+		 * never saw it".
+		 */
+		lkpi80211_tx_purged++;
 		ieee80211_free_txskb(hw, skb);
+	}
+}
+
+/*
+ * Frames the drivers released through ieee80211_purge_tx_queue() since boot,
+ * read beside the bridge's data_tx and completions.
+ */
+u32
+lkpi80211_tx_purges(void)
+{
+
+	return lkpi80211_tx_purged;
 }
 
 bool

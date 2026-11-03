@@ -40,6 +40,13 @@
  *     identity into the transmit descriptor; the stack's own key is not that
  *     object. The vtable still carries scalars only - the object stays on the
  *     driver side of the seam.
+ *   - v4 (uplink round): `tx` tells its refusals apart (WLAN_SEAM_TX_ERR_*).
+ *     The bridge used to read every negative answer as the same error and
+ *     drop the frame; a frame refused because the socket pool was empty is
+ *     still good and can be handed down later, while one refused because the
+ *     peer or the key is not in place can never leave the host. The codes
+ *     are the seam's own (not errno) so both sides name the same three cases
+ *     without agreeing on a C library.
  */
 
 #ifndef _WLAN_NET80211_SEAM_H_
@@ -173,6 +180,25 @@ struct wlan_seam_port_obs {
 	unsigned int	soc_pmucru_gate;/* PMUCRU_CLKGATE_CON2 (PHY ref gates) */
 };
 
+/*
+ * Why `tx` refused a frame (v4). A negative return from the transmit
+ * callback is one of these, or another negative value for a refusal the
+ * caller cannot act on:
+ *
+ *   NOSKB   the seam could not allocate the frame's socket buffer. The frame
+ *           is intact and the condition is transient (the pool drains as the
+ *           device completes), so the caller keeps it and retries.
+ *   NOPEER  a data frame with no station registered. Nothing will deliver it
+ *           until the connection is rebuilt; retrying the same frame is a
+ *           loop, so the caller drops it and counts it.
+ *   NOKEY   hardware crypto was selected but the driver never registered the
+ *           key. Sending it plaintext would leak and encrypting it here would
+ *           double-seal once the CAM entry appears; the frame is dropped.
+ */
+#define WLAN_SEAM_TX_ERR_NOSKB		(-2)
+#define WLAN_SEAM_TX_ERR_NOPEER		(-3)
+#define WLAN_SEAM_TX_ERR_NOKEY		(-4)
+
 struct wlan_seam_drv_ops {
 	/* Bring the chip up/down. Called from the port worker with the
 	 * serializer held; must not sleep on driver-internal waits that need
@@ -224,7 +250,9 @@ struct wlan_seam_drv_ops {
 	 * driver may need to wait for them) from data frames. hw_crypto means
 	 * the stack key is hardware-offloaded (the stack wrote the CCMP header
 	 * but not the payload); pairwise/key_idx name that key so the driver
-	 * can select the same entry it wrote at set_key. */
+	 * can select the same entry it wrote at set_key. Returns the frame
+	 * length when the driver took it, and a WLAN_SEAM_TX_ERR_* code when it
+	 * refused (v4). */
 	int (*tx)(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	    int is_mgmt, int hw_crypto, int pairwise, int key_idx);
 
