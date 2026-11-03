@@ -538,3 +538,56 @@ blobs; those prerequisites are documented in `docs/PORTING.md` §1.
 
 Evidence: consumer gate output on both profiles, `freewificam.pc` and manifest
 contents, and the measured unresolved sets are in `docs/PORTING.md` §5–§6.
+
+## 15. CMake parity path (2026-11-03)
+
+The CMake build is an *equivalence* build for the three representative profiles
+(`net-netio-raw-tx256`, `rtl8xxxu-8723bu-netio-ar-ht20-ba`, `rtos-shell`), not a
+second build system.  The platform Makefile keeps ownership of the source sets,
+the per-driver flag worlds and the link until the per-component `sources.mk`
+migration; CMake asks it for the expanded commands instead of copying them:
+
+* `tools/build/cmake-query.py` runs `make -Bn image` (dry-run, read-only) and
+  records every compile command (source, language, expanded flags) and the link
+  command in `build/cmake/<profile>/build-description.json`.  Each source keeps
+  the flags make gives that object, so the last-rule-wins flag worlds need no
+  duplicate table.  The query refuses to emit a description that contains a
+  `-D` token.
+* `cmake/kconfig.cmake` runs `tools/build/kconfig-gen.py --profile <p>` at
+  configure time (for the query) and as a custom command (`fw_kconfig`) during
+  the build, writing the same pair under `build/kconfig/<p>/` that make reads.
+  Every CMake compile also gets `build/kconfig/<p>` and
+  `build/kconfig/<p>/include/generated` on the include path.
+* `build_defs.h` is force-included for C translation units only.  Assembly must
+  not see it: the FreeRTOS vectors select `spsr_el3`/`elr_el3` versus
+  `spsr_el1`/`elr_el1` from those definitions, and an unconditional `-include`
+  changed the image.
+* `cmake/aarch64-none-elf.cmake` takes `AARCH64_CROSS_PATH` (else
+  `aarch64-none-elf-*` on PATH), disables CMake build-type flags and leaves
+  `OPT` to the profile.  `cmake/check-image.cmake` repeats the make gates
+  (entry equals `_start`, vector 2 KiB aligned, backend symbols present, no
+  undefined symbols).  One build directory per profile:
+  `build/cmake/<profile>/`.
+
+Usage (from the repository root):
+
+```sh
+cmake --preset rtos-shell
+cmake --build build/cmake/rtos-shell
+tools/build/compare-parity.py            # all three profiles, rebuilds both
+tools/build/compare-parity.py --profiles rtos-shell --skip-make-build
+```
+
+`tools/build/compare-parity.py` builds each side and compares the source set,
+the `CONFIG_*` symbol set (a fresh generation from the defconfig versus the
+pair both builds used), and the `nm -g --defined-only` / `nm -u` name sets.  It
+also scans every Make and CMake compile/link command for `-D`.  Image bytes are
+reported for information only and are not a criterion: the three profiles do
+happen to be byte-identical when both sides read the same generated header, but
+that is a consequence of the shared flags, not a gate.
+
+Known gaps: the source lists and flag worlds still come from make (the M4
+`gen_sources.py`/`sources.cmake` work is not done); only the FreeRTOS backend's
+gates are exercised; the CMake path does not cover `libs`, `sdk`, host tests,
+`matrix`, `trimcheck` or the CI board wrappers; presets exist only for the three
+profiles above.

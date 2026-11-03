@@ -1,0 +1,58 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "cmake-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/aarch64-none-elf.cmake",
+      "binaryDir": "${sourceDir}/build/cmake/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+      }
+    },
+    {
+      "name": "net-netio-raw-tx256",
+      "displayName": "net-netio-raw-tx256 (lwIP netio, wired GMAC)",
+      "inherits": "cmake-base",
+      "cacheVariables": {
+        "FW_PROFILE": "net-netio-raw-tx256"
+      }
+    },
+    {
+      "name": "rtl8xxxu-8723bu-netio-ar-ht20-ba",
+      "displayName": "rtl8xxxu-8723bu-netio-ar-ht20-ba (USB wifi)",
+      "inherits": "cmake-base",
+      "cacheVariables": {
+        "FW_PROFILE": "rtl8xxxu-8723bu-netio-ar-ht20-ba"
+      }
+    },
+    {
+      "name": "rtos-shell",
+      "displayName": "rtos-shell (CherrySH command layer)",
+      "inherits": "cmake-base",
+      "cacheVariables": {
+        "FW_PROFILE": "rtos-shell"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "net-netio-raw-tx256",
+      "configurePreset": "net-netio-raw-tx256"
+    },
+    {
+      "name": "rtl8xxxu-8723bu-netio-ar-ht20-ba",
+      "configurePreset": "rtl8xxxu-8723bu-netio-ar-ht20-ba"
+    },
+    {
+      "name": "rtos-shell",
+      "configurePreset": "rtos-shell"
+    }
+  ]
+}
