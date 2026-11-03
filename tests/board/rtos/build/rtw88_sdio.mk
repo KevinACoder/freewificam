@@ -141,9 +141,43 @@ RTW88_FW_SRCS := $(RTW88_BLOB_SRCS)
 
 RTW88_CASE_SRCS := $(RTW88_APP_SRCS)
 
+# The first-packet arm (case rtw88_net) brings the lwIP core and its port glue;
+# the case itself is in the component's lwIP list.  The stack is added here, the
+# same shape rtl8xxxu.mk uses, because it is a third-party tree rather than part
+# of the wireless component.
+ifneq ($(filter rtw88_net,$(CASES)),)
+RTW88_LWIP_SRCS += \
+	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
+	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
+	$(LWIP_STACK_SRCS)
+# Taken from BASE_CFLAGS *before* the Linux face is appended, so the lwIP units
+# never compile against <net/mac80211.h>; the bridge's include root is all this
+# world needs beyond the platform's own headers.
+RTW88_LWIP_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
+	-I$(RTW88_NPORT)/bridge
+else
+RTW88_LWIP_SRCS :=
+endif
+
+# The two profile facts the two cases cannot default: which AP the join arm
+# associates with, and which address the first-packet arm uses.  Both are named
+# in the defconfig; an image that selects the case without them fails here, at
+# build time, instead of on the board (docs/PLATFORM-FACTS.md).
+ifneq ($(filter rtw88_join,$(CASES)),)
+ifeq ($(strip $(CONFIG_RTW88_AP_SSID)),)
+$(error the rtw88_join case needs CONFIG_RTW88_AP_SSID in the profile's defconfig)
+endif
+endif
+ifneq ($(filter rtw88_net,$(CASES)),)
+ifeq ($(words $(filter 1,$(CONFIG_RTW88_NET_ADDR_DHCP) $(CONFIG_RTW88_NET_ADDR_STATIC))),1)
+else
+$(error the rtw88_net case needs exactly one of CONFIG_RTW88_NET_ADDR_DHCP / CONFIG_RTW88_NET_ADDR_STATIC)
+endif
+endif
+
 RTW88_ALL_SRCS := $(RTW88_NET80211_SRCS) $(RTW88_LKPI_SRCS) \
 	$(RTW88_SDIO_PORT_SRCS) $(RTW88_DRV_SRCS) $(RTW88_FW_SRCS) \
-	$(RTW88_CASE_SRCS)
+	$(RTW88_CASE_SRCS) $(RTW88_LWIP_SRCS)
 
 # The symbols only the case reaches: with --gc-sections the firmware
 # registration, the backend installation and the bridge install have no other

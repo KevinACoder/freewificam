@@ -112,6 +112,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTW88_SCAN)
 	CASE_ENTRY("rtw88_scan", case_rtw88_scan_run)
 #endif
+#if defined(RTOS_CASE_RTW88_JOIN)
+	CASE_ENTRY("rtw88_join", case_rtw88_join_run)
+#endif
+#if defined(RTOS_CASE_RTW88_NET)
+	CASE_ENTRY("rtw88_net", case_rtw88_net_run)
+#endif
 #if defined(RTOS_CASE_RTW89)
 	CASE_ENTRY("rtw89", case_rtw89_run)
 #endif
@@ -168,14 +174,97 @@ extern const struct rtos_case __board_tests_end[];
 #define CASE_COUNT ((unsigned)(__board_tests_end - __board_tests_start))
 #endif
 
-unsigned rtos_case_count(void)
+/* The table's byte order is the linker's, not a run order: the same objects
+ * produce a different BOARD_TESTS sequence when the link line changes, so a
+ * ladder whose second case depends on its first (bring-up -> scan -> join ->
+ * data) cannot rely on it.  The profile's CONFIG_CASES declaration is the run
+ * order, and it is the one the three-source case gate reconciles, so the table
+ * is walked through a permutation built from it.  A case the declaration does
+ * not name still runs, after the named ones: silently dropping a case would
+ * hide a drift that the gate reports only at build time. */
+#define CASE_ORDER_MAX 32u
+
+#if !defined(RTOS_HOST_TIER)
+static unsigned char case_order[CASE_ORDER_MAX];
+static unsigned case_order_count;
+static int case_order_ready;
+
+static unsigned raw_case_count(void)
 {
 	return CASE_COUNT;
 }
 
+static const char *raw_case_name(unsigned index)
+{
+	return (index < raw_case_count()) ? CASE_TABLE[index].name : NULL;
+}
+
+static int raw_case_find(const char *name)
+{
+	unsigned i;
+
+	for (i = 0u; i < raw_case_count(); i++) {
+		if (strcmp(CASE_TABLE[i].name, name) == 0) {
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+static void case_order_build(void)
+{
+	unsigned char seen[CASE_ORDER_MAX];
+	char declaration[sizeof(CONFIG_CASES)];
+	char *token;
+	char *save = NULL;
+	unsigned total = raw_case_count();
+	unsigned n = 0u;
+	unsigned i;
+
+	if (case_order_ready) {
+		return;
+	}
+	memset(seen, 0, sizeof(seen));
+	memcpy(declaration, CONFIG_CASES, sizeof(declaration));
+	for (token = strtok_r(declaration, " ", &save); token != NULL;
+	     token = strtok_r(NULL, " ", &save)) {
+		int index = raw_case_find(token);
+
+		if (index < 0 || (unsigned)index >= CASE_ORDER_MAX ||
+		    seen[index] != 0u || n >= CASE_ORDER_MAX) {
+			continue;
+		}
+		seen[index] = 1u;
+		case_order[n++] = (unsigned char)index;
+	}
+	for (i = 0u; i < total && n < CASE_ORDER_MAX; i++) {
+		if (seen[i] == 0u) {
+			case_order[n++] = (unsigned char)i;
+		}
+	}
+	case_order_count = n;
+	case_order_ready = 1;
+}
+#endif /* !RTOS_HOST_TIER */
+
+unsigned rtos_case_count(void)
+{
+#if defined(RTOS_HOST_TIER)
+	return CASE_COUNT;
+#else
+	case_order_build();
+	return case_order_count;
+#endif
+}
+
 const char *rtos_case_name(unsigned index)
 {
+#if defined(RTOS_HOST_TIER)
 	return (index < rtos_case_count()) ? CASE_TABLE[index].name : NULL;
+#else
+	case_order_build();
+	return (index < case_order_count) ? raw_case_name(case_order[index]) : NULL;
+#endif
 }
 
 int rtos_case_find(const char *name)
@@ -186,7 +275,9 @@ int rtos_case_find(const char *name)
 		return -1;
 	}
 	for (i = 0u; i < rtos_case_count(); i++) {
-		if (strcmp(CASE_TABLE[i].name, name) == 0) {
+		const char *candidate = rtos_case_name(i);
+
+		if (candidate != NULL && strcmp(candidate, name) == 0) {
 			return (int)i;
 		}
 	}
@@ -195,7 +286,12 @@ int rtos_case_find(const char *name)
 
 int rtos_case_run(unsigned index)
 {
+#if defined(RTOS_HOST_TIER)
 	return (index < rtos_case_count()) ? CASE_TABLE[index].run() : -1;
+#else
+	case_order_build();
+	return (index < case_order_count) ? CASE_TABLE[case_order[index]].run() : -1;
+#endif
 }
 
 #ifndef CONFIG_RUNNER_STACK_KB
@@ -217,6 +313,7 @@ static const osThreadAttr_t runner_attr = {
 #if defined(RTOS_CASE_WLAN) || defined(RTOS_CASE_IWL7260_SCAN) || \
     defined(RTOS_CASE_IWL7260_JOIN) || defined(RTOS_CASE_IWL7260_DATAPLANE) || \
     defined(RTOS_CASE_RTW88) || defined(RTOS_CASE_RTW88_SCAN) || \
+    defined(RTOS_CASE_RTW88_JOIN) || defined(RTOS_CASE_RTW88_NET) || \
     defined(RTOS_CASE_RTW89) || defined(RTOS_CASE_RTW89_SCAN) || \
     defined(RTOS_CASE_RTW89_JOIN) || defined(RTOS_CASE_RTW89_DATAPLANE) || \
     defined(RTOS_CASE_RTL8XXXU) || defined(RTOS_CASE_RTL8XXXU_SCAN) || \
@@ -241,16 +338,16 @@ static void runner(void *arg)
 	CASE_ANCHOR("rtos: runner start cases=%u build=%s\n", total, FW_BUILD_TAG);
 
 	for (i = 0u; i < total; i++) {
+		const char *name = rtos_case_name(i);
 		int rc;
 
-		CASE_ANCHOR("rtos: case %s start\n", CASE_TABLE[i].name);
-		rc = CASE_TABLE[i].run();
+		CASE_ANCHOR("rtos: case %s start\n", name);
+		rc = rtos_case_run(i);
 		if (rc == 0) {
 			ok++;
-			CASE_ANCHOR("rtos: case %s PASS\n", CASE_TABLE[i].name);
+			CASE_ANCHOR("rtos: case %s PASS\n", name);
 		} else {
-			CASE_ANCHOR("rtos: case %s FAIL rc=%d\n",
-				    CASE_TABLE[i].name, rc);
+			CASE_ANCHOR("rtos: case %s FAIL rc=%d\n", name, rc);
 		}
 	}
 

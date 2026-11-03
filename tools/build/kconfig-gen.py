@@ -59,7 +59,8 @@ KCONFIG_FILES = [
 # not edited by a user.
 CASES = """tick cmsis2 net net_loop net_mdk_netio net_pps net_xmac nvme pcie
 pcie_7260 pcie_bench pcie_ecam emmc rtl8xxxu rtl8xxxu_dataplane rtl8xxxu_join
-rtl8xxxu_net rtl8xxxu_netio rtl8xxxu_scan rtw88 rtw88_scan rtw89
+rtl8xxxu_net rtl8xxxu_netio rtl8xxxu_scan rtw88 rtw88_scan rtw88_join
+rtw88_net rtw89
 rtw89_dataplane rtw89_join rtw89_scan sdio_mci usb_ehci usb_xhci uvc_detect
 uvc_iso_smoke uvc_open uvc_stream wlan iwl7260 iwl7260_dataplane iwl7260_join
 iwl7260_net iwl7260_scan""".split()
@@ -209,6 +210,7 @@ def legacy_macros(kconf) -> list[str]:
         ("PRINTF_DISABLE_FLOAT", "PRINTF_DISABLE_SUPPORT_FLOAT"),
         ("PRINTF_DISABLE_EXPONENTIAL", "PRINTF_DISABLE_SUPPORT_EXPONENTIAL"),
         ("WLAN_OBS", "WLAN_OBS"),
+        ("LKPI_JOIN_TRACE", "LKPI_JOIN_TRACE"),
     ]:
         if flag(sym_name):
             lines.append(f"#define {macro} 1")

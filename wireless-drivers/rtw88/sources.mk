@@ -37,5 +37,15 @@ endif
 ifeq ($(SRC_TAG),case)
 obj-$(CONFIG_WLAN_LINE_RTW88) += \
 	$(LINE)/app/cases/rtw88.c \
-	$(LINE)/app/cases/rtw88_scan.c
+	$(LINE)/app/cases/rtw88_scan.c \
+	$(LINE)/app/cases/rtw88_join.c
+endif
+
+# The first-packet arm's IP presentation layer is an lwIP translation unit: its
+# headers and the driver world's headers own the same names, so it compiles in
+# the lwIP flag world (BASE_CFLAGS plus the bridge's include root) and never
+# beside <linuxkpi_core.h>.
+ifeq ($(SRC_TAG),lwip)
+obj-$(CONFIG_WLAN_LINE_RTW88) += \
+	$(LINE)/app/cases/rtw88_net.c
 endif

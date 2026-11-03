@@ -40,6 +40,8 @@ CASES = (
     "usb_ehci",
     "rtw88",
     "rtw88_scan",
+    "rtw88_join",
+    "rtw88_net",
     "rtw89",
     "rtw89_scan",
     "rtw89_join",
@@ -267,6 +269,131 @@ PATTERNS = {
     ),
     "rtw88_scan_fail": re.compile(
         r"rtw88: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw89_scan_start": re.compile(
+        r"rtw89: scan start state=(?P<state>-?\d+)", re.MULTILINE
+    ),
+    "rtw89_scan_done": re.compile(
+        r"rtw89: scan done rows=(?P<rows>\d+) bcn=(?P<bcn>\d+) "
+        r"bcnT=(?P<bcnT>\d+) prsp=(?P<prsp>\d+) fcs=(?P<fcs>\d+) "
+        r"scan=(?P<starts>\d+)/(?P<completes>\d+) state=(?P<state>-?\d+) "
+        r"entered=(?P<entered>\d+) close=(?P<close>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_scan_hit": re.compile(
+        r"rtw89: scan hit bssid=(?P<bssid>[0-9a-f:]+) ssid=(?P<ssid>\S+) "
+        r"freq=(?P<freq>\d+) rssi=(?P<rssi>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_scan_lkpi": re.compile(
+        r"rtw89: scan lkpi completions=(?P<completions>\d+) tx=(?P<tx>\d+) "
+        r"wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_scan_fail": re.compile(
+        r"rtw89: scan FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw89_join_start": re.compile(
+        r"rtw89: join start ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"state=(?P<state>-?\d+) rc=(?P<rc>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_join_ok": re.compile(
+        r"rtw89: join ok state=(?P<state>\d+) mgt_tx=(?P<mgt_tx>\d+) "
+        r"txc=(?P<txc>\d+) rx=(?P<rx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_join_fail": re.compile(
+        r"rtw89: join FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw89_join_lkpi": re.compile(
+        r"rtw89: join lkpi tx=(?P<tx>\d+) scan=(?P<scan>\d+) wq=(?P<wq>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_arp": re.compile(
+        r"rtw89: data arp reply src=(?P<src>[0-9a-f:]+) tx=(?P<tx>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_ping": re.compile(
+        r"rtw89: data ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"min_ms=(?P<min>-?\d+) max_ms=(?P<max>-?\d+) lost=(?P<lost>\S*)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_counters": re.compile(
+        r"rtw89: data counters data_tx=(?P<data_tx>\d+) "
+        r"tx_done=(?P<tx_done>\d+) rx=(?P<rx>\d+) rx_data=(?P<rx_data>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_data_fail": re.compile(
+        r"rtw89: data FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # --- rtw88_join (the bridge's station MLME) ------------------------------
+    "rtw88_join_bssid": re.compile(
+        r"rtw88: join bssid=(?P<bssid>[0-9a-f:]+) ssid=(?P<ssid>\S*) "
+        r"freq=(?P<freq>-?\d+) rssi=(?P<rssi>-?\d+) hits=(?P<hits>\d+) "
+        r"rows=(?P<rows>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_join_start": re.compile(
+        r"rtw88: join start ssid=(?P<ssid>\S*) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"state=(?P<state>-?\d+) rc=(?P<rc>-?\d+) attempt=(?P<attempt>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_join_counters": re.compile(
+        r"rtw88: join counters state=(?P<state>-?\d+) "
+        r"mgt_tx=(?P<mgt_tx>\d+) txc=(?P<txc>\d+) txfail=(?P<txfail>\d+) "
+        r"rx=(?P<rx>\d+) rx_data=(?P<rx_data>\d+) bcnT=(?P<bcn_tgt>\d+) "
+        r"auth_retries=(?P<auth_retries>\d+) "
+        r"auth_answers=(?P<auth_answers>\d+) bad_auth=(?P<bad_auth>\d+) "
+        r"txq=(?P<txq>\d+) stopped=(?P<stopped>\d+) "
+        r"tune=(?P<tune_calls>\d+)/(?P<tune_fails>\d+) freq=(?P<freq>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_join_ok": re.compile(
+        r"rtw88: join ok state=(?P<state>-?\d+) mgt_tx=(?P<mgt_tx>\d+) "
+        r"txc=(?P<txc>\d+) auth=(?P<auth>\d+) bcnT=(?P<bcn_tgt>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_join_fail": re.compile(
+        r"rtw88: join FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # --- rtw88_net (lwIP on the bridge, first packet) ------------------------
+    "rtw88_net_up_dhcp": re.compile(
+        r"rtw88: net up mode=dhcp mac=(?P<mac>[0-9a-f:]+) mtu=(?P<mtu>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_net_up_static": re.compile(
+        r"rtw88: net up mode=static ip=(?P<ip>[\d.]+) mask=(?P<mask>[\d.]+) "
+        r"gw=(?P<gw>[\d.]+) mac=(?P<mac>[0-9a-f:]+) mtu=(?P<mtu>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_net_dhcp_bound": re.compile(
+        r"rtw88: net dhcp bound ip=(?P<ip>[\d.]+) mask=(?P<mask>[\d.]+) "
+        r"gw=(?P<gw>[\d.]+) lease=(?P<lease>\d+)s",
+        re.MULTILINE,
+    ),
+    "rtw88_net_arp": re.compile(
+        r"rtw88: net arp gw=(?P<gw>[\d.]+) wait_ms=(?P<wait_ms>\d+) "
+        r"seen=(?P<seen>\d+) entry=(?P<entry>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_net_ping": re.compile(
+        r"rtw88: net ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"ok_mask=(?P<mask>[0-9a-f]+) min_ms=(?P<min_ms>\d+) "
+        r"max_ms=(?P<max_ms>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_net_counters": re.compile(
+        r"rtw88: net counters tx=(?P<tx>\d+) txb=(?P<txb>\d+) "
+        r"txfail=(?P<txfail>\d+) rx=(?P<rx>\d+) rxb=(?P<rxb>\d+) "
+        r"rxfail=(?P<rxfail>\d+) bridge_data_tx=(?P<bridge_tx>\d+) "
+        r"bridge_tx_done=(?P<bridge_done>\d+) bridge_rx=(?P<bridge_rx>\d+) "
+        r"bridge_rx_data=(?P<bridge_rx_data>\d+) "
+        r"bridge_tx_err=(?P<bridge_tx_err>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_net_fail": re.compile(
+        r"rtw88: net FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "rtw89_scan_start": re.compile(
         r"rtw89: scan start state=(?P<state>-?\d+)", re.MULTILINE
@@ -1367,6 +1494,131 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("rtw88_scan: PASS without any BSS row")
         else:
             notes.append(f"rtw88_scan: table holds {len(bss)} BSS rows")
+
+    # --- rtw88_join: the association ----------------------------------------
+    if cases.get("rtw88_join", {}).get("verdict") == "pass":
+        fail = found["rtw88_join_fail"]
+        if fail:
+            errors.append(f"rtw88_join: {fail['reason']}")
+        bssid = found["rtw88_join_bssid"]
+        if not bssid:
+            errors.append("rtw88_join: PASS without a scan-table lookup line")
+        else:
+            if int(bssid["hits"]) < 1:
+                errors.append("rtw88_join: the AP was looked up but never hit")
+            notes.append(
+                f"rtw88_join: {bssid['ssid']} {bssid['bssid']} "
+                f"freq={bssid['freq']} rssi={bssid['rssi']} "
+                f"hits={bssid['hits']} of {bssid['rows']} rows"
+            )
+        ok = found["rtw88_join_ok"]
+        counters = found["rtw88_join_counters"]
+        if not ok:
+            errors.append("rtw88_join: PASS without the join-ok line")
+        if not counters:
+            errors.append("rtw88_join: PASS without the counter line")
+        for row, key in ((ok, "join-ok"), (counters, "counters")):
+            if row and int(row["state"]) != 4:
+                errors.append(f"rtw88_join: {key} state={row['state']} != RUN")
+        if counters:
+            # The AP-originated half of the verdict: the stack can only reach
+            # RUN here by receiving an auth response, and the chip only counts
+            # target beacons once the radio is on the AP's channel.
+            if int(counters["mgt_tx"]) < 1:
+                errors.append("rtw88_join: no management frame left the bridge")
+            if int(counters["txc"]) < 1:
+                errors.append("rtw88_join: no transmit completion")
+            if int(counters["auth_answers"]) < 1:
+                errors.append("rtw88_join: the AP never answered the auth")
+            if int(counters["bcn_tgt"]) < 1:
+                errors.append(
+                    "rtw88_join: no beacon from the join target "
+                    "(the radio never sat on the AP channel)"
+                )
+            if int(counters["bad_auth"]) > 0:
+                notes.append(
+                    f"rtw88_join: {counters['bad_auth']} auth answers in the "
+                    "wrong state (a delayed duplicate is harmless)"
+                )
+            if int(counters["tune_fails"]) > 0:
+                notes.append(
+                    f"rtw88_join: tune calls={counters['tune_calls']} "
+                    f"fails={counters['tune_fails']} freq={counters['freq']}"
+                )
+            notes.append(
+                f"rtw88_join: mgt_tx={counters['mgt_tx']} txc={counters['txc']} "
+                f"auth={counters['auth_answers']} bcnT={counters['bcn_tgt']} "
+                f"rx={counters['rx']} bad_auth={counters['bad_auth']}"
+            )
+
+    # --- rtw88_net: the first packet ----------------------------------------
+    if cases.get("rtw88_net", {}).get("verdict") == "pass":
+        fail = found["rtw88_net_fail"]
+        if fail:
+            errors.append(f"rtw88_net: {fail['reason']}")
+        dhcp = found["rtw88_net_up_dhcp"]
+        static = found["rtw88_net_up_static"]
+        if not dhcp and not static:
+            errors.append("rtw88_net: PASS without a netif-up line")
+        elif dhcp:
+            bound = found["rtw88_net_dhcp_bound"]
+            if not bound:
+                errors.append(
+                    "rtw88_net: PASS with no DHCP address (the netif came up "
+                    "but never got a lease)"
+                )
+            else:
+                notes.append(
+                    f"rtw88_net: dhcp ip={bound['ip']} gw={bound['gw']} "
+                    f"lease={bound['lease']}s"
+                )
+        ping = found["rtw88_net_ping"]
+        if not ping:
+            errors.append("rtw88_net: PASS without a ping line")
+        else:
+            tx = int(ping["tx"])
+            rx = int(ping["rx"])
+            # The counted echoes are the gate: the case sends ten, and the
+            # first packet is only proven when every one of them came back.
+            # `tx` is that same ten (an image before the anchor fix also
+            # counted the seq-0 throwaway probe, hence `tx >= rx` rather than
+            # equality).
+            if rx < 10:
+                errors.append(
+                    f"rtw88_net: echo path carried {rx}/{tx} (the first packet "
+                    "is only proven when every echo came back)"
+                )
+            elif tx < rx:
+                errors.append(f"rtw88_net: {rx} replies to {tx} sends")
+            arp = found["rtw88_net_arp"]
+            if not arp:
+                errors.append("rtw88_net: PASS without the ARP line")
+            elif int(arp["seen"]) == 0:
+                notes.append(
+                    f"rtw88_net: the throwaway echo got no answer "
+                    f"(wait_ms={arp['wait_ms']} entry={arp['entry']})"
+                )
+            probe = tx - rx
+            if probe:
+                notes.append(f"rtw88_net: the ping line also counts {probe} probe(s)")
+            notes.append(
+                f"rtw88_net: ping rx={rx} of tx={tx} ok_mask={ping['mask']} "
+                f"rtt={ping['min_ms']}-{ping['max_ms']} ms"
+            )
+        counters = found["rtw88_net_counters"]
+        if not counters:
+            errors.append("rtw88_net: PASS without a counter line")
+        else:
+            if int(counters["tx"]) < 1 or int(counters["rx"]) < 1:
+                errors.append("rtw88_net: the case counters saw no traffic")
+            if int(counters["txfail"]) > 0:
+                notes.append(f"rtw88_net: {counters['txfail']} linkoutput refusals")
+            notes.append(
+                f"rtw88_net: tx={counters['tx']} rx={counters['rx']} "
+                f"bridge_data_tx={counters['bridge_tx']} "
+                f"bridge_tx_done={counters['bridge_done']} "
+                f"bridge_rx_data={counters['bridge_rx_data']}"
+            )
 
     if cases.get("rtw89", {}).get("verdict") == "pass":
         if found["rtw89_fail"]:

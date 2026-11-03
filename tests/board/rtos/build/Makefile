@@ -201,7 +201,7 @@ endif
 CASES ?= tick cmsis2 net emmc
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw88_join rtw88_net rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 .DEFAULT_GOAL := all
 
@@ -526,6 +526,7 @@ $(eval $(call component_sources,$(ROOT)/wireless-drivers/rtl8xxxu,case,RTL8XXXU_
 $(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw88,drv,RTW88_IMPL))
 $(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw88,kpi,RTW88_BLOB))
 $(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw88,case,RTW88_APP))
+$(eval $(call component_sources,$(ROOT)/wireless-drivers/rtw88,lwip,RTW88_LWIP))
 
 $(eval $(call component_sources,$(ROOT)/wireless-drivers/iwlwifi,drv,IWLWIFI_IMPL))
 $(eval $(call component_sources,$(ROOT)/wireless-drivers/iwlwifi,kpi,IWLWIFI_BLOB))
@@ -914,6 +915,12 @@ $(foreach s,$(filter-out %.S,$(RTW88_SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(
 $(foreach s,$(filter-out %.S,$(RTW88_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTW88_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CASE_CFLAGS))))
 
+endif
+
+# The RTL8821CS first-packet arm's lwIP world: the stack's port glue, the lwIP
+# core and the case, all in the platform's flag world (no Linux headers).
+ifneq ($(filter rtw88_net,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(RTW88_LWIP_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_LWIP_CFLAGS))))
 endif
 
 ifneq ($(filter rtl8xxxu_netio,$(CASES)),)
