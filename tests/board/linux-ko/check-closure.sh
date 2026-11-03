@@ -7,6 +7,7 @@
 # mac80211 stack; allowing them keeps the gate honest without reimplementing
 # cfg80211.  Everything else must be local.
 set -eu
+NM=${NM:-nm}
 ko=${1:?usage: check-closure.sh <wlan_ko.ko>}
 cfg80211_provided="
 ieee80211_channel_to_freq_khz
@@ -19,7 +20,7 @@ ieee80211_get_vht_max_nss
 "
 bad=""
 allowed=""
-for sym in $(nm -u "$ko" 2>/dev/null | awk '/ieee80211_/ {print $2}'); do
+for sym in $($NM -u "$ko" 2>/dev/null | awk '/ieee80211_/ {print $2}'); do
 	case "$cfg80211_provided" in
 	*"$sym"*) allowed="$allowed $sym" ;;
 	*) bad="$bad $sym" ;;
@@ -32,4 +33,4 @@ fi
 echo "closure OK: no undefined mac80211 symbols"
 [ -n "$allowed" ] && echo "cfg80211-provided (allowed):$allowed"
 echo "cfg80211 imports (expected from builtin cfg80211):"
-nm -u "$ko" 2>/dev/null | grep -E '\bcfg80211_' || true
+$NM -u "$ko" 2>/dev/null | grep -E '\bcfg80211_' || true
