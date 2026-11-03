@@ -1,0 +1,26 @@
+# Symbols that may stay undefined after all SDK archives are combined.
+#
+# This is the archive-wide companion to the consumer link in check.sh: that
+# link only pulls the objects the consumer uses, so it cannot prove the SDK as
+# a whole is closed.  The gate takes the union of every archive's imports,
+# subtracts every archive's definitions, and fails on anything not named here.
+#
+# Keep the list editorial: a new family needs a sentence saying who provides
+# it.  Extended regular expressions, anchored, one per line.
+#
+# --- the consumer's OS: CMSIS-RTOS2 and the project extensions ---------------
+^os[A-Z].*$
+^(pvPortMalloc|vPortFree)$
+#
+# --- the consumer's C runtime (bare-metal newlib subset) ---------------------
+^(memcpy|memmove|memset|memcmp|strlen|strcmp|strncmp|strcpy|strncpy|strchr|strrchr|strstr|strnlen|snprintf|vsnprintf|printf|puts|putchar|_putchar|abs|atoi|strtol|strtoul|abort)$
+#
+# --- the consumer's network stack (lwIP) ------------------------------------
+^(lwip_|lwiperf_|pbuf_|udp_|tcp_|tcpip_|raw_|sys_|ip_addr_|netif_|dhcp_|etharp_|icmp_|inet_).*$
+^(lock_tcpip_core|unlock_tcpip_core)$
+#
+# --- the lwIP-to-driver glue the consumer supplies with its stack -----------
+^ethnetif_.*$
+#
+# --- linker-script symbols the consumer's script defines --------------------
+^__.*$

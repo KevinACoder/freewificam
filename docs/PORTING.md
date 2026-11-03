@@ -44,6 +44,7 @@ dist/<profile>/
     manifest.json
   manifest.json
   freewificam.pc
+  freewificam.registration        # the profile's -Wl,-u set (see §5)
   PORTING.md
 ```
 
@@ -261,20 +262,23 @@ A **Wi-Fi control consumer** has two extra requirements:
 
 1. the profile's link-forcing symbols.  Static archives only pull what is
    referenced, and the driver adapter, firmware registration and USB bring-up
-   are referenced only by the image's `-Wl,-u` set.  The 8723BU profile uses:
+   are referenced only by the image's `-Wl,-u` set.  The set is generated into
+   `dist/<profile>/freewificam.registration`, one flag per line; pass it to the
+   consumer link verbatim.  For `rtl8xxxu-8723bu-netio-ar-ht20-ba` it is:
 
    ```
-   -Wl,-u,osCriticalEnter -Wl,-u,osCriticalExit
-   -Wl,-u,usb_board_init -Wl,-u,lkpi_usb_init
+   -Wl,-u,usb_board_init
+   -Wl,-u,lkpi_usb_init
    -Wl,-u,lkpi_usb_cherryusb_init
-   -Wl,-u,lkpi_fw_rtl8188eufw_register
+   -Wl,-u,lkpi_fw_rtl8723bu_register
    -Wl,-u,wlan_seam_adapter_init
    ```
 
    Without these flags the link can still succeed, but no adapter registers and
-   `wlan_port_up()` fails at run time.  The SDK does not yet export this set
-   through `freewificam.pc`; add it explicitly from the profile's build
-   fragments until it does.
+   `wlan_port_up()` fails at run time.  The file comes from the same fragment
+   variables the image link uses, so it cannot drift from the build.  The
+   backend's own `-Wl,-u,osCriticalEnter/osCriticalExit` are deliberately not
+   listed: they belong to the image's OS glue, which is the consumer's side.
 
 2. the OS and the linker-script symbols.  With the flags above, the measured
    unresolved set is:
@@ -291,9 +295,12 @@ A **Wi-Fi control consumer** has two extra requirements:
    this checkpoint measured; it is not a promise that every profile's optional
    path is covered.
 
-`nm -u` policy for the gate: the log consumer must have an empty list.  A
-forced Wi-Fi link is allowed to keep exactly the CMSIS-RTOS2 set plus the two
-linker symbols above; any other undefined name is a packaging defect, not a
+`nm -u` policy for the gate: the log consumer must have an empty list.  The
+SDK-wide gate is stronger than a per-consumer link: `sdk-check` takes the union
+of every archive's imports, subtracts every archive's definitions, and fails on
+anything outside `tests/host/sdk-consumer/undefined-allowlist.txt` (the
+consumer-side families: CMSIS-RTOS2, the C library, lwIP and its `ethnetif`
+glue, and linker-script symbols).  Any other name is a packaging defect, not a
 consumer responsibility.
 
 ## 6. The consumer gate
@@ -372,17 +379,21 @@ Aspirational or explicitly out of scope:
 The level names come from the module-build plan.  L1 is this document; the
 others are not started.
 
-**L1 (done, with the gaps above).**  Remaining L1 work before calling the SDK
-"consumer complete":
+**L1 (done, with the gaps above).**  The 2026-11-03 verification round closed
+two of the four remaining items:
 
-* export the per-profile `-Wl,-u` registration set (or an equivalent explicit
-  registration function) so a consumer does not read build fragments;
-* make the `nm -u` allowlist a gate over every archive, not just the two
-  measured consumers;
-* define the linker-script symbol contract (`__noncacheable_*`, cache
-  maintenance) for non-bare-metal consumers;
-* add a hosted-OS libc variant if the SDK is to be used with a normal C
-  runtime.
+* the per-profile `-Wl,-u` registration set is exported as
+  `dist/<profile>/freewificam.registration` (generated from the same fragment
+  variables the image link uses);
+* `sdk-check` now gates every archive: union of imports minus union of
+  definitions against `tests/host/sdk-consumer/undefined-allowlist.txt`.  The
+  gate found and fixed two packaging gaps (`fsl_sdmmc` objects and the lwIP
+  port glue were referenced but not shipped in the first cut).
+
+Still open: define the linker-script symbol contract (`__noncacheable_*`,
+`__heap_*`, `__board_tests_*`, cache maintenance) for non-bare-metal
+consumers; add a hosted-OS libc variant if the SDK is to be used with a normal
+C runtime.
 
 **L2 (native simulation).**  Zephyr `native_sim` with its CMSIS-RTOS2
 implementation, a public `fw_init()`/`fw_port` descriptor, firmware registry and
@@ -391,6 +402,14 @@ run that reaches `fw_init`.  This needs the lifecycle and bus shapes that
 `fw_core.h`/`fw_bus.h` currently refuse to invent, plus an audit of section
 registration (`BOARD_TESTS`/`FSymTab`) and `--whole-archive` behaviour in a
 non-bare-metal link.
+
+Probe result (2026-11-03): the Zephyr tree in this project configures, builds
+and runs `native_sim` with the host toolchain and no west/SDK
+(`cmake -DBOARD=native_sim -DZEPHYR_TOOLCHAIN_VARIANT=host`, hello_world runs).
+So the simulator half is available.  The SDK half is not: today's archives are
+AArch64 bare-metal objects, so L2 additionally needs a host/native build variant
+of the library set and the `fw_init()`/`fw_bus` lifecycle.  That is a milestone,
+not a verification gap.
 
 **L3 (Zephyr on RK3568).**  The same `fw_init` plus scan/join state machine in a
 Zephyr image on the board, still with the bus stub.  Zephyr's RK3568 USB host
@@ -404,6 +423,17 @@ data-plane task; L4 acceptance stops at the bus stub.
 in behaviour: the same boot/scan/join/data cases, per-profile image hashes and
 the two-boot acceptance used by the module-build rounds, plus this SDK gate in
 CI so packaging cannot drift from the image.
+
+Measured (2026-11-03): FreeRTOS A2 2/2 and A6 shell pass on the merged tree;
+the SDK gate now runs at the end of every `*_ci` target.  The ThreadX path had
+never booted: the link passed `--defsym=HEAP_SIZE=<MiB>` without the `M`
+suffix, so the tlsf window was 16 bytes, `osThreadNew()` failed and the image
+reset.  Fixed to `<n>M`; the ThreadX 8851BU image now boots 2/2 with
+`rtw89` PASS.  Two ThreadX findings stay open and are not caused by the build
+refactor: the tick ladder reports 41 ms after the `rtw89` case (a tick-only
+image passes at 11 ms), and the scan/join/dataplane cases are ordered before
+the bring-up case by the `BOARD_TESTS` link order, so they report
+`not attached`.  Neither FreeRTOS nor the image build changed.
 
 Until those exist, "the SDK links" means exactly what §6 measures: a log and
 configuration consumer, and a Wi-Fi control link that still needs the

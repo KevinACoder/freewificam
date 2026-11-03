@@ -72,5 +72,21 @@ for p in $profiles; do
     fi
 done
 
+# L5: the SDK gate on this board's representative profile.  The archives are a
+# delivery shape of the objects the images just built; packaging must not drift
+# from them, so the gate runs here and not only by hand.
+case "$target" in
+    rk3568_ci)     sdk_profile=net-netio-raw-tx256 ;;
+    firefly_v1_ci) sdk_profile=firefly-v1-pcie ;;
+    firefly_v2_ci) sdk_profile=firefly-v2-sdio-mci ;;
+esac
+echo "ci: sdk-check $sdk_profile"
+if ! PROFILE="$sdk_profile" "$root/make.rtos" sdk-check >"$logs/sdk-check.log" 2>&1; then
+    echo "ci: FAIL sdk-check $sdk_profile (log: $logs/sdk-check.log)" >&2
+    failed=$((failed + 1))
+else
+    echo "ci: sdk-check $sdk_profile ok"
+fi
+
 echo "ci: $target: $n profiles, $failed failures"
 [ "$failed" -eq 0 ]

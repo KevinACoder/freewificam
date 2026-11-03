@@ -121,6 +121,32 @@ if "$nm" -u "$work/consumer.elf" | grep -q .; then
 	fail "the linked consumer still has undefined symbols"
 fi
 
+# --- 5. archive-wide undefined gate ---------------------------------------
+# The link above proves the consumer's closure, not the SDK's: it pulls only
+# the objects the consumer references.  Take every archive's imports, subtract
+# every archive's definitions, and require the remainder to be consumer-side.
+allowlist="$here/undefined-allowlist.txt"
+[ -f "$allowlist" ] || fail "missing $allowlist"
+mkdir -p "$work/undef"
+: > "$work/undef/defined"
+: > "$work/undef/undefined"
+for a in "$dist"/lib/*.a; do
+	"$nm" -g --defined-only "$a" | awk 'NF >= 3 { print $NF }' >> "$work/undef/defined"
+	"$nm" -u "$a" | awk 'NF >= 2 && $1 == "U" { print $NF }' >> "$work/undef/undefined"
+done
+sort -u -o "$work/undef/defined" "$work/undef/defined"
+sort -u -o "$work/undef/undefined" "$work/undef/undefined"
+comm -23 "$work/undef/undefined" "$work/undef/defined" > "$work/undef/remaining"
+grep -Ev '^[[:space:]]*(#|$)' "$allowlist" > "$work/undef/patterns"
+unexpected=$(grep -Ev -f "$work/undef/patterns" "$work/undef/remaining" || true)
+if [ -n "$unexpected" ]; then
+	printf '%s\n' "$unexpected" >&2
+	fail "SDK archives import symbols outside the consumer-side allowlist"
+fi
+remaining_count=$(wc -l < "$work/undef/remaining" | tr -d ' ')
+archive_count=$(ls "$dist/lib"/*.a 2>/dev/null | wc -l | tr -d ' ')
+echo "   archives: $archive_count; unresolved after union: $remaining_count (all consumer-side)"
+
 libs_count=$(ls "$dist/lib"/*.a 2>/dev/null | wc -l)
 manifest_profile=$(sed -n 's/.*"profile": "\([^"]*\)".*/\1/p' "$dist/manifest.json" | head -n1)
 [ "$manifest_profile" = "$profile" ] || \
