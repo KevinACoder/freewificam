@@ -77,7 +77,7 @@ tests/board/linux-ko/main.c"
 WITH_DRIVER=${WITH_DRIVER:-1}
 DRIVER=${DRIVER:-rtw89}
 DRIVER_SRCS=""
-DRIVER_CFLAGS=""
+DRIVER_DEFINES=""
 FW_SRCS=""
 if [ "$WITH_DRIVER" = 1 ]; then
 	case "$DRIVER" in
@@ -91,8 +91,8 @@ ${f#$REPO/}"
 		# The set the kernel builds for CONFIG_RTW88_8821CU, plus the
 		# two units the debug kernel's CONFIG_PM/CONFIG_RTW88_LEDS pull
 		# in (the driver's own Makefile adds them the same way).
-		DRIVER_CFLAGS="-DCONFIG_RTW88_CORE -DCONFIG_RTW88_8821C \
--DCONFIG_RTW88_USB -DCONFIG_RTW88_8821CU"
+		DRIVER_DEFINES="CONFIG_RTW88_CORE CONFIG_RTW88_8821C \
+CONFIG_RTW88_USB CONFIG_RTW88_8821CU"
 		for f in "$REPO"/wireless-drivers/rtw88/*.c; do
 			[ -f "$f" ] || continue
 			case "$(basename "$f")" in
@@ -107,8 +107,6 @@ ${f#$REPO/}"
 		# The 8821CU firmware is compiled into the module from the
 		# project's own registry/blob pair, so a cold boot needs no
 		# /lib/firmware file. The 8188 build keeps firmware_class.
-		DRIVER_CFLAGS="$DRIVER_CFLAGS -DCONFIG_WLAN_KO_FW_EMBED=1 \
--DCONFIG_WLAN_KO_FW_RTW8821C=1"
 		# The 8821C blob is an image fact and is not vendored in this
 		# repository.  The protocol-stage arm generates it outside the
 		# tree and names it with RTW88_FW_BLOB; a build without it (or
@@ -118,8 +116,8 @@ components/linuxkpi/fw_registry.c"
 		if [ -n "${RTW88_FW_BLOB:-}" ] && [ -f "$REPO/${RTW88_FW_BLOB#/}" ]; then
 			FW_SRCS="$FW_SRCS
 $RTW88_FW_BLOB"
-		else
-			DRIVER_CFLAGS="$DRIVER_CFLAGS -UCONFIG_WLAN_KO_FW_EMBED"
+			DRIVER_DEFINES="$DRIVER_DEFINES CONFIG_WLAN_KO_FW_EMBED \
+CONFIG_WLAN_KO_FW_RTW8821C"
 		fi
 		;;
 	rtw89)
@@ -128,8 +126,8 @@ $RTW88_FW_BLOB"
 		# does unconditionally), the units the debug kernel's
 		# CONFIG_PM/CONFIG_RTW89_DEBUG/CONFIG_RTW89_LEDS* pull in, the
 		# four 8851B chip units, the 8851BU USB unit and the USB bus.
-		DRIVER_CFLAGS="-DCONFIG_RTW89_CORE -DCONFIG_RTW89_USB \
--DCONFIG_RTW89_8851B -DCONFIG_RTW89_8851BU"
+		DRIVER_DEFINES="CONFIG_RTW89_CORE CONFIG_RTW89_USB \
+CONFIG_RTW89_8851B CONFIG_RTW89_8851BU"
 		for f in "$REPO"/wireless-drivers/rtw89/*.c; do
 			[ -f "$f" ] || continue
 			case "$(basename "$f")" in
@@ -148,8 +146,8 @@ ${f#$REPO/}"
 			# image carries at /lib/firmware/rtw89.
 			FW_SRCS="components/linuxkpi/fw_registry.c"
 		else
-			DRIVER_CFLAGS="$DRIVER_CFLAGS -DCONFIG_WLAN_KO_FW_EMBED=1 \
--DCONFIG_WLAN_KO_FW_RTW8851B=1"
+			DRIVER_DEFINES="$DRIVER_DEFINES CONFIG_WLAN_KO_FW_EMBED \
+CONFIG_WLAN_KO_FW_RTW8851B"
 			FW_SRCS="
 components/linuxkpi/fw_registry.c
 components/linuxkpi/fw/rtw8851b_fw_blob.c"
@@ -163,8 +161,8 @@ components/linuxkpi/fw/rtw8851b_fw_blob.c"
 		# are vendored but not compiled.  Re-derived from the driver's
 		# Makefile/mvm/Makefile + the ko .config; the RTOS 72-TU list is
 		# only a seed.
-		DRIVER_CFLAGS="-DCONFIG_IWLWIFI -DCONFIG_IWLMVM \
--DCONFIG_IWLWIFI_OPMODE_MODULAR -DCONFIG_WLAN_KO_DRIVER_IWLWIFI"
+		DRIVER_DEFINES="CONFIG_IWLWIFI CONFIG_IWLMVM \
+CONFIG_IWLWIFI_OPMODE_MODULAR CONFIG_WLAN_KO_DRIVER_IWLWIFI"
 		IWL_TUS="iwl-io.c iwl-drv.c iwl-debug.c iwl-nvm-utils.c iwl-utils.c
 iwl-phy-db.c iwl-nvm-parse.c iwl-dbg-tlv.c iwl-trans.c iwl-devtrace.c
 pcie/ctxt-info.c pcie/ctxt-info-v2.c pcie/drv.c pcie/utils.c
@@ -207,7 +205,7 @@ fi
 # The debugfs surface (rtw89_debugfs) is compiled out unless the kernel has
 # CONFIG_RTW89_DEBUGFS; this only mirrors that config on the module side.
 if [ "${DEBUGFS:-0}" = 1 ]; then
-	DRIVER_CFLAGS="$DRIVER_CFLAGS -DCONFIG_RTW89_DEBUGFS"
+	DRIVER_DEFINES="$DRIVER_DEFINES CONFIG_RTW89_DEBUGFS"
 fi
 
 # ---- module directory: a mirrored symlink tree -----------------------------
@@ -218,6 +216,25 @@ fi
 TREE=$MOD/tree
 rm -rf "$MOD"
 mkdir -p "$TREE"
+CONFIG_H="$MOD/linuxko_config.h"
+{
+	echo '#ifndef LINUXKO_CONFIG_H'
+	echo '#define LINUXKO_CONFIG_H'
+	echo '#define _KERNEL 1'
+	echo '#define WLAN_PORT_LINUX 1'
+	echo '#define _ROUTE_H 1'
+	echo '#define CONFIG_WLAN_KO 1'
+	if [ "$WITH_DRIVER" = 1 ]; then
+		echo '#define CONFIG_WLAN_KO_DRIVER 1'
+	fi
+	if [ "$PROF" = 1 ]; then
+		echo '#define CONFIG_WLAN_KO_PROF 1'
+	fi
+	for d in $DRIVER_DEFINES; do
+		echo "#define $d 1"
+	done
+	echo '#endif'
+} > "$CONFIG_H"
 for root in "$REPO/components/net80211" "$REPO/components/linuxkpi" \
 	    "$REPO/wireless-drivers/rtl8xxxu" "$REPO/wireless-drivers/rtw88" \
 	    "$REPO/wireless-drivers/rtw89" "$REPO/wireless-drivers/iwlwifi" \
@@ -286,6 +303,7 @@ done
 	echo
 	echo "REPO := $REPO"
 	echo "TREE := $TREE"
+	echo "CONFIG_H := $CONFIG_H"
 	echo
 	echo "ccflags-y := \\"
 	echo "  -I\$(TREE)/components/net80211/ports/compat \\"
@@ -298,20 +316,12 @@ done
 	echo "  -I\$(TREE)/components/linuxkpi \\"
 	echo "  -I\$(TREE)/wireless-drivers/iwlwifi \\"
 	echo "  -I\$(TREE) \\"
-	echo "  -DCONFIG_WLAN_KO=1 \\"
+	echo "  -include \$(CONFIG_H) \\"
 	echo "  -mno-outline-atomics"
-	if [ "$WITH_DRIVER" = 1 ]; then
-		echo "ccflags-y += -DCONFIG_WLAN_KO_DRIVER=1"
-	fi
-	if [ -n "$DRIVER_CFLAGS" ]; then
-		echo "ccflags-y += $DRIVER_CFLAGS"
-	fi
-	if [ "$PROF" = 1 ]; then
-		echo "ccflags-y += -DCONFIG_WLAN_KO_PROF=1"
-	fi
+
 	echo
 	echo "STACK_CFLAGS := -include \$(TREE)/tests/board/linux-ko/ports/stack_prelude.h \\"
-	echo "  -D_KERNEL -DWLAN_PORT_LINUX -D_ROUTE_H -std=gnu11 \\"
+	echo "  -std=gnu11 \\"
 	echo "  -Wno-unused-function -Wno-pointer-sign -Wno-unused-parameter \\"
 	echo "  -Wno-address-of-packed-member -Wno-missing-braces"
 	for src in $STACK_SRCS; do
