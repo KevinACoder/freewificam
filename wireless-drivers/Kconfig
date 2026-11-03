@@ -35,6 +35,14 @@ config WLAN_LINE_IWLWIFI
 config WLAN_LINE_RTL8189FS
 	bool "rtl8189fs vendor stack over SDIO"
 
+config WLAN_LINE_AIC8800
+	bool "aic8800 vendor FullMAC stack over USB"
+	help
+	  The AIC8800D80 USB dongle line: the CherryUSB PR stack (firmware
+	  download, FullMAC, WPA2-PSK, lwIP glue) over the usbh_aic8800
+	  vendor class.  No net80211 and no linuxkpi - the vendor stack
+	  brings its own MLME and netif.
+
 endchoice
 
 # The faces a line pulls in.  These are visible so the generated make config
@@ -158,6 +166,26 @@ config RTW88_NET_IP
 	help
 	  Required by CONFIG_RTW88_NET_ADDR_STATIC only (the build refuses the
 	  arm without it).
+
+# The AIC8800 profile facts.  The vendor stack joins a WPA2-PSK AP (that is
+# the only mode it implements), so the SSID and the PSK are named in the
+# defconfig the same way the rtw88 line names its AP.  An empty SSID builds
+# a bring-up-only image: the case stops after the scan table (B3) and never
+# asks the stack to associate.
+config AIC8800_AP_SSID
+	string "AP SSID the aic8800 arm associates with"
+	default ""
+	help
+	  The WPA2-PSK AP the stack joins after READY.  Empty means
+	  bring-up-only: the case runs the ZeroCD modeswitch, the firmware
+	  download and the scan, then stops.
+
+config AIC8800_AP_PSK
+	string "WPA2-PSK passphrase for AIC8800_AP_SSID"
+	default ""
+	help
+	  The passphrase the stack derives its PMK from (PBKDF2 inside the
+	  vendor stack).  Unused when the SSID is empty.
 
 config RTW88_NET_MASK
 	string "rtw88 net arm: static netmask"

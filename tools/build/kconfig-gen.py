@@ -58,7 +58,7 @@ KCONFIG_FILES = [
 # CASE_<NAME> symbols are derived by this generator from CONFIG_CASES; they are
 # not edited by a user.
 CASES = """tick cmsis2 net net_loop net_mdk_netio net_pps net_xmac nvme pcie
-pcie_7260 pcie_bench pcie_ecam emmc rtl8xxxu rtl8xxxu_dataplane rtl8xxxu_join
+pcie_7260 pcie_bench pcie_ecam emmc aic8800 rtl8xxxu rtl8xxxu_dataplane rtl8xxxu_join
 rtl8xxxu_net rtl8xxxu_netio rtl8xxxu_scan rtw88 rtw88_scan rtw88_join
 rtw88_net rtw89
 rtw89_dataplane rtw89_join rtw89_scan sdio_mci usb_ehci usb_xhci uvc_detect

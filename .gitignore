@@ -27,6 +27,11 @@ __pycache__/
 *.cmd
 components/linuxkpi/fw/
 
+# AIC8800 firmware blobs (regenerate with tools/rtos/aic8800-fw-blobs.py;
+# digests and provenance in docs/FIRMWARE-NOTICES.md).
+wireless-drivers/aic8800/fw/*.bin
+wireless-drivers/aic8800/fw/aic8800_fw_blobs.c
+
 # Kconfig-generated fragments (the .config and autoconf.h are build outputs).
 build/kconfig/
 **/autoconf.h

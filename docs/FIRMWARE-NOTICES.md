@@ -29,6 +29,11 @@ repository's images were built with.
 | RTL8723BU | `rtlwifi/rtl8723bu_nic.bin` | 32,108 | `a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969` | `rtlwifi/rtl8723bu_nic.bin` from the Linux firmware package | Realtek binary redistribution, below |
 | RTL8821CS | `rtw88/rtw8821c_fw.bin` | 139,472 | `2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0` | `rtw88/rtw8821c_fw.bin` from the Linux firmware package | Realtek binary redistribution, below |
 | RTL8851BU | `rtw89/rtw8851b_fw-1.bin` | 1,408,706 | `1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7` | `rtw89/rtw8851b_fw-1.bin` from the Linux firmware package | Realtek binary redistribution, below |
+| AIC8800D80 | `fw_patch_table_8800d80_u02.bin` | 1,384 | `9decb77435b7e9713e33e32da483d683b7329ed93b672b2d1b134031d7da5f67` | `demo/aic8800/fw/` of the CherryUSB PR (`084fb84`, from Radxa `aic8800` `df4c783b`) | GPL-3.0 (`fw/LICENSE.GPL-3.0`), below |
+| AIC8800D80 | `fw_adid_8800d80_u02.bin` | 1,708 | `a526cbd02fcdc495f049f3ad6b5933cb08cd984b16790c716a060d582fee1a56` | same | GPL-3.0, below |
+| AIC8800D80 | `fw_patch_8800d80_u02.bin` | 32,700 | `f0e2f5bbc17bc327ca7f1574ff55370dfd863d931514347bb4abc18a74f6218f` | same | GPL-3.0, below |
+| AIC8800D80 | `fw_patch_8800d80_u02_ext0.bin` | 16,136 | `ca738f5ea5aca6021c4f48b60ff35e835dfdaf072a8490e3ba8ba0a42440e3e5` | same | GPL-3.0, below |
+| AIC8800D80 | `fmacfw_8800d80_u02.bin` | 358,072 | `23f2bed2ac0e8f7bda8f36df7defd30d9b928c97867f6f0f01f28d89dd78d670` | same | GPL-3.0, below |
 
 An image may also carry the Intel AC 7260 blob (`iwlwifi-7260-17.ucode`); its
 own header records the digest, the same way, and its notice is the Intel
@@ -96,6 +101,38 @@ tools/rtos/fw-blob.py --check components/linuxkpi/fw/rtw8821c_fw_blob.c \
     --in "$FIRMWARE_DIR"/rtw88/rtw8821c_fw.bin \
     --name rtw88/rtw8821c_fw.bin
 ```
+
+## Generating the AIC8800D80 blobs
+
+The AIC8800 line does not go through the linuxkpi firmware registry: the
+vendor stack downloads its five images over USB itself
+(`aic8800_fw_blobs_register()`), so the generator is
+`tools/rtos/aic8800-fw-blobs.py` and the output is
+`wireless-drivers/aic8800/fw/aic8800_fw_blobs.c`.
+
+```sh
+# FIRMWARE_DIR is a checkout of the CherryUSB PR fork at 084fb84
+# (qwer-zxcv/CherryUSB, branch pr/aic8800-wifi-demo); the images there
+# come from the Radxa aic8800 vendor tree, commit df4c783b.
+tools/rtos/aic8800-fw-blobs.py \
+    --fw-dir "$FIRMWARE_DIR"/demo/aic8800/fw \
+    --out wireless-drivers/aic8800/fw/aic8800_fw_blobs.c
+
+# verify the generated unit against the source directory
+tools/rtos/aic8800-fw-blobs.py \
+    --check wireless-drivers/aic8800/fw/aic8800_fw_blobs.c \
+    --fw-dir "$FIRMWARE_DIR"/demo/aic8800/fw
+```
+
+The generated unit registers itself as `aic8800_fw_blobs_register()`; the
+image's linker line carries `-Wl,-u,aic8800_fw_blobs_register` so the unit
+cannot be dropped by section GC, and the `aic8800` case calls it first,
+before any USB transfer.
+
+The AIC8800D80 images are published under GPL-3.0
+(`wireless-drivers/aic8800/fw/LICENSE.GPL-3.0`, in git); the bytes stay out
+of git for the same reason as every other blob - a binary's home is the
+vendor's distribution point, and the digest is the anchor.
 
 ## Realtek binary redistribution terms (RTL8188EU firmware)
 

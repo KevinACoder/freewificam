@@ -46,6 +46,10 @@
 #define LWIP_NETCONN                    1
 #define LWIP_SOCKET                     1
 #define LWIP_NETIF_API                  1
+/* The AIC8800 vendor glue registers a netif status callback (its lwIP
+ * netif glue watches the address changes); the hook is inert for every
+ * other image, which registers no callback. */
+#define LWIP_NETIF_STATUS_CALLBACK      1
 /* The raw API carries the ICMP ping tool's socket; SO_RCVTIMEO covers its
  * receive timeout. */
 #define LWIP_RAW                        1

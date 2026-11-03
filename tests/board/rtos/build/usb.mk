@@ -19,7 +19,34 @@
 
 USB := $(ROOT)/third-party/cherryusb
 USB_PORT := $(ROOT)/ports/cherryusb
+
+# The board dimension: which controller facts, which glue, which controller
+# ports compile. The Kconfig board choice is the single switch (the generated
+# make config carries it), and the RK3568 path below stays exactly what it was
+# for every non-firefly image.
+#
+# firefly v2: two xHCI instances, no EHCI (the DTS "firefly,usb2" instances
+# are a vendor dual-role IP this project has no source driver for), and no
+# usb_domain.c - the board facts are header-only
+# (platform/board/firefly/v2/usb/usb_domain.h).
+# The Kconfig fragment carries bools as 1 (not y), the same form
+# platform/board/sources.mk's obj-$(CONFIG_...) consumes.
+ifeq ($(CONFIG_BOARD_FIREFLY_V2),1)
+USB_BOARD := $(PLATFORM)/board/firefly/v2/usb
+USB_BOARD_GLUE_DIR := $(USB_PORT)/board/firefly-v2
+USB_STACK_SRCS := \
+	$(USB)/core/usbh_core.c \
+	$(USB)/class/hub/usbh_hub.c \
+	$(USB)/port/xhci/usb_hc_xhci.c
+else
 USB_BOARD := $(PLATFORM)/board/rk3568-itx/usb
+USB_BOARD_GLUE_DIR := $(USB_PORT)/board/rk3568-itx
+USB_STACK_SRCS := \
+	$(USB)/core/usbh_core.c \
+	$(USB)/class/hub/usbh_hub.c \
+	$(USB)/port/ehci/usb_hc_ehci.c \
+	$(USB)/port/xhci/usb_hc_xhci.c
+endif
 
 # The widest single transfer the stage pool must cover.  The storage line's
 # largest command is 1 MiB and the native MSC path moves the caller's buffer
@@ -28,13 +55,14 @@ USB_BOARD := $(PLATFORM)/board/rk3568-itx/usb
 USB_STAGE_SIZE := $(CONFIG_USB_STAGE_SIZE)
 
 USB_INCLUDES := \
-	-I$(USB_PORT)/board/rk3568-itx \
+	-I$(USB_BOARD_GLUE_DIR) \
 	-I$(USB_PORT)/class \
 	-I$(USB_BOARD) \
 	-I$(USB)/common \
 	-I$(USB)/core \
 	-I$(USB)/class/hub \
 	-I$(USB)/class/msc \
+	-I$(USB)/class/vendor/wifi \
 	-I$(USB)/port/ehci \
 	-I$(USB)/port/xhci
 
@@ -48,29 +76,38 @@ USB_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 # MSC_DIAG / MSC_DIAG_FULL are defined by platform/build_defs.h from the same
 # Kconfig symbols; no per-profile compiler switch is needed here.
 
-USB_STACK_SRCS := \
-	$(USB)/core/usbh_core.c \
-	$(USB)/class/hub/usbh_hub.c \
-	$(USB)/port/ehci/usb_hc_ehci.c \
-	$(USB)/port/xhci/usb_hc_xhci.c
-
 USB_BOARD_SRCS := \
-	$(USB_BOARD)/usb_domain.c \
-	$(USB_PORT)/board/rk3568-itx/usb_glue.c \
-	$(USB_PORT)/osal/cmsis2/osal_cmsis2.c
+	$(USB_PORT)/osal/cmsis2/osal_cmsis2.c \
+	$(USB_BOARD_GLUE_DIR)/usb_glue.c
+
+ifneq ($(CONFIG_BOARD_FIREFLY_V2),1)
+USB_BOARD_SRCS += $(USB_BOARD)/usb_domain.c
+endif
 
 USB_MSC_CASES := $(filter usb_xhci usb_ehci,$(CASES))
 
-ifeq ($(strip $(USB_MSC_CASES)),)
+# The AIC8800 image needs the MSC class for the ZeroCD modeswitch (the switch
+# rides the MSC connect path) but carries neither the first-party MSC app half
+# nor the storage cases, so the class set and the case set split here.
+USB_AIC8800_CASES := $(filter aic8800,$(CASES))
+
+ifeq ($(strip $(USB_MSC_CASES) $(USB_AIC8800_CASES)),)
 USB_CLASS_SRCS :=
 USB_CASE_SRCS :=
 else
 USB_CLASS_SRCS := \
 	$(USB)/class/msc/usbh_msc.c \
-	$(USB_PORT)/class/msc_app.c
+	$(if $(strip $(USB_MSC_CASES)),$(USB_PORT)/class/msc_app.c)
+ifneq ($(strip $(USB_MSC_CASES)),)
 USB_CASE_SRCS := \
 	$(LINE)/app/cases/usb_msc.c \
 	$(foreach c,$(USB_MSC_CASES),$(LINE)/app/cases/$(c).c)
+else
+USB_CASE_SRCS :=
+endif
+ifneq ($(strip $(USB_AIC8800_CASES)),)
+USB_CLASS_SRCS += $(USB)/class/vendor/wifi/usbh_aic8800.c
+endif
 endif
 
 USB_ALL_SRCS := $(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)

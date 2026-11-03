@@ -121,6 +121,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTW89)
 	CASE_ENTRY("rtw89", case_rtw89_run)
 #endif
+#if defined(RTOS_CASE_AIC8800)
+	CASE_ENTRY("aic8800", case_aic8800_run)
+#endif
 #if defined(RTOS_CASE_RTW89_SCAN)
 	CASE_ENTRY("rtw89_scan", case_rtw89_scan_run)
 #endif

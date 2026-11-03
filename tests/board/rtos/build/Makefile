@@ -201,7 +201,7 @@ endif
 CASES ?= tick cmsis2 net emmc
 # The wireless cases are compiled in their own flag worlds (wlan.mk /
 # iwlwifi.mk), so they are excluded here.
-CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw88_join rtw88_net rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out wlan iwl7260 iwl7260_net usb_xhci usb_ehci rtw88 rtw88_scan rtw88_join rtw88_net rtw89 rtw89_scan rtw89_join rtw89_dataplane rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane rtl8xxxu_net rtl8xxxu_netio aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream sdio_mci,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 .DEFAULT_GOAL := all
 
@@ -557,7 +557,7 @@ endif
 # The USB host domain (empty unless a USB consumer is selected).  It must be
 # included before rtw89.mk: the wireless world's linuxkpi USB engine compiles
 # against the same CherryUSB include roots and stage geometry.
-ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
+ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu aic8800 uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
 
@@ -575,6 +575,12 @@ endif
 # The RTL8188EUS wireless world (empty unless the rtl8xxxu case is selected).
 ifneq ($(filter rtl8xxxu,$(CASES)),)
 include $(CURDIR)/rtl8xxxu.mk
+endif
+
+# The AIC8800D80 wireless world (empty unless the aic8800 case is selected):
+# the vendor FullMAC stack over the CherryUSB vendor class, no linuxkpi.
+ifneq ($(filter aic8800,$(CASES)),)
+include $(CURDIR)/aic8800.mk
 endif
 
 # The board's SDIO socket over the ported Phytium MCI controller (empty unless
@@ -610,6 +616,13 @@ NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
 	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
 	$(LINE)/app/cases/net_stack.c
+NET_STACK_SRCS := $(LWIP_STACK_SRCS)
+else ifneq ($(filter aic8800,$(CASES)),)
+# The AIC8800 image carries the stack and the port face but not net_stack.c:
+# the vendor stack's lwIP glue owns its tcpip_init (AIC8800_LWIP_OWN_TCPIP=1).
+NET_APP_SRCS := \
+	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
+	$(THIRD_PARTY)/lwip/ports/platform_hooks.c
 NET_STACK_SRCS := $(LWIP_STACK_SRCS)
 else
 NET_APP_SRCS :=
@@ -676,14 +689,14 @@ VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS) \
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(IWL_ALL_SRCS) \
 	$(IWL_NET_SRCS) $(USB_ALL_SRCS) $(UVC_ALL_SRCS) $(RTW89_ALL_SRCS) \
 	$(RTL8XXXU_ALL_SRCS) $(RTL8XXXU_NET_SRCS) $(RTL8XXXU_NETIO_SRCS) \
-	$(SDIO_MCI_ALL_SRCS) $(RTW88_ALL_SRCS)
+	$(SDIO_MCI_ALL_SRCS) $(RTW88_ALL_SRCS) $(AIC8800_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)))) \
 	$(WLAN_OBJS)
 
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(BOARD_LINKSCRIPT) \
 	$(BACKEND_LDFLAGS) $(WLAN_LDFLAGS) $(RTW89_LDFLAGS) $(RTL8XXXU_LDFLAGS) \
-	$(RTW88_LDFLAGS) \
+	$(RTW88_LDFLAGS) $(AIC8800_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
@@ -720,7 +733,7 @@ SDK_LIBS = $(strip $(foreach l,$(LIB_LINK_ORDER),$(if $(wildcard $(LIB_DIR)/lib$
 # links the archives in an image-shaped link must pass the same set, so it is
 # published next to the .pc instead of being read out of the build fragments.
 SDK_REGISTRATION := $(filter -Wl$(comma)-u$(comma)%,$(WLAN_LDFLAGS) $(RTW89_LDFLAGS) \
-	$(RTL8XXXU_LDFLAGS) $(RTW88_LDFLAGS))
+	$(RTL8XXXU_LDFLAGS) $(RTW88_LDFLAGS) $(AIC8800_LDFLAGS))
 
 libs: image
 	@mkdir -p $(LIB_DIR)
@@ -867,7 +880,7 @@ endif
 # that links them: the wireless images ride the same controllers, and an image
 # whose USB objects have no rule would silently reuse whatever object the last
 # profile left in the shared build tree.
-ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu,$(CASES)),)
+ifneq ($(filter usb_xhci usb_ehci rtw89 rtl8xxxu aic8800,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
 endif
 
@@ -887,6 +900,10 @@ $(foreach s,$(filter-out %.S,$(RTL8XXXU_NET80211_SRCS)),$(eval $(call COMPILE_C,
 $(foreach s,$(filter-out %.S,$(RTL8XXXU_LKPI_SRCS) $(RTL8XXXU_FW_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_KPI_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8XXXU_DRV_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_DRV_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8XXXU_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_CASE_CFLAGS))))
+endif
+
+ifneq ($(filter aic8800,$(CASES)),)
+$(foreach s,$(filter-out %.S,$(AIC8800_ALL_SRCS)),$(eval $(call COMPILE_C,$(s),$(AIC8800_CFLAGS))))
 endif
 
 ifneq ($(filter rtl8xxxu_net,$(CASES)),)
@@ -992,6 +1009,14 @@ ifneq ($(filter rtl8xxxu,$(CASES)),)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx $(RTL8XXXU_FW_REGISTER) || \
 		{ echo "FAIL: the firmware blob unit was garbage-collected"; exit 1; }; \
 	echo "PASS: stage=$(RTL8XXXU_GATE_STAGE)>=rx=$(RTL8XXXU_STAGE_MIN) driver+firmware registered"
+endif
+ifneq ($(filter aic8800,$(CASES)),)
+	@set -e; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx aic8800_class_info || \
+		{ echo "FAIL: aic8800_class_info not in the image (the vendor class would claim nothing)"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx aic8800_fw_blobs_register || \
+		{ echo "FAIL: the firmware blob unit was garbage-collected"; exit 1; }; \
+	echo "PASS: aic8800 vendor class + firmware blobs present"
 endif
 ifneq ($(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
 	@set -e; \

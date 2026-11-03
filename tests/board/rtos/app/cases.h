@@ -149,6 +149,10 @@ int case_rtw88_net_run(void);
 int case_rtw89_run(void);
 #endif
 
+#if defined(RTOS_CASE_AIC8800)
+int case_aic8800_run(void);
+#endif
+
 #if defined(RTOS_CASE_RTW89_SCAN)
 int case_rtw89_scan_run(void);
 #endif

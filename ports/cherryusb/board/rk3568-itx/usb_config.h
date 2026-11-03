@@ -230,6 +230,15 @@ void usbh_console_printf(const char *fmt, ...);
 #define CONFIG_USBHOST_XHCI_TRANSFER_RING_SIZE	256
 #endif
 
+/* This board's DWC3 core is reachable from the xHCI capability base at
+ * +0xC100 (GSNPSID at +0x20 into the core); defining the offset enables the
+ * driver's DWC3 identity/host-mode probes. Boards whose xHCI window has no
+ * DWC3 core behind it (the Phytium FUSB3) leave this undefined and the
+ * probes compile out - touching the offset there terminates the bus. */
+#ifndef CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS
+#define CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS	0xC100U
+#endif
+
 /* Static pool bounds, per bus (no defaults exist upstream - the driver
  * references these directly, so every one has to be defined here):
  *  - MAX_SLOTS caps the device slot/context tables. The deepest tree this

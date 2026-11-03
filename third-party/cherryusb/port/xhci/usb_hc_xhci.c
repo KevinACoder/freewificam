@@ -1183,12 +1183,22 @@ int usb_hc_init(struct usbh_bus *bus)
 	hcd->cmd_waitsem = usb_osal_sem_create(0);
 	USB_ASSERT(hcd->cmd_waitsem != NULL);
 
+	/* Boards whose controller embeds a Synopsys DWC3 core reachable from
+	 * the xHCI capability base define CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS
+	 * (RK3568's DWC3 core sits at xHCI capbase + 0xC100). Boards whose
+	 * xHCI window is standalone - the Phytium FUSB3 exposes the xHCI
+	 * register set at controller + 0x8000 with no DWC3 core behind it -
+	 * define nothing, and these probes compile out: touching a
+	 * vendor-private offset there terminates the bus (observed on
+	 * Phytium-Pi as a synchronous data abort at capbase + 0xC120). */
+#if defined(CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS)
 	/* entry read BEFORE the platform sequence: the diagnostic baseline
 	 * (a dead aperture here is the expected picture until
 	 * usb_hc_low_level_init's domain + DWC3 sequence has run) */
 	usbh_console_printf("xhci: entry bus%u cap0=%08x GSNPSID=%08x\n",
 			    bus->busid, *(volatile uint32_t *)hcd->capbase,
-			    *(volatile uint32_t *)(hcd->capbase + 0xC120U));
+			    *(volatile uint32_t *)(hcd->capbase +
+			    CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS + 0x20U));
 
 	/* the shared platform sequence (domain once-guards make repeats
 	 * free) + the DWC3 core reconfiguration + the IRQ line */
@@ -1197,8 +1207,10 @@ int usb_hc_init(struct usbh_bus *bus)
 	/* post-platform core state check */
 	{
 		volatile uint32_t *dwc3 = (volatile uint32_t *)hcd->capbase;
-		uint32_t revision = dwc3[0xC120U / 4U];
-		uint32_t gctl = dwc3[0xC110U / 4U];
+		uint32_t revision =
+		    dwc3[(CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS + 0x20U) / 4U];
+		uint32_t gctl =
+		    dwc3[(CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS + 0x10U) / 4U];
 
 		if ((revision & 0xFFFF0000U) != 0x55330000U) {
 			usbh_console_printf(
@@ -1213,10 +1225,16 @@ int usb_hc_init(struct usbh_bus *bus)
 					    gctl);
 			return -USB_ERR_INVAL;
 		}
-		if ((dwc3[0] & 0xFFU) == 0U) {
-			usbh_console_printf("xhci: xHCI aperture dead (cap=0)\n");
-			return -USB_ERR_INVAL;
-		}
+	}
+#else
+	usb_hc_low_level_init(bus);
+#endif
+
+	/* The one board-independent aperture check: xHCI capability registers
+	 * answer at capbase + 0 everywhere. */
+	if ((*(volatile uint32_t *)hcd->capbase & 0xFFU) == 0U) {
+		usbh_console_printf("xhci: xHCI aperture dead (cap=0)\n");
+		return -USB_ERR_INVAL;
 	}
 
 	ret = xhci_controller_init(hcd);

@@ -1,0 +1,995 @@
+From: zhugengyu <zhugengyu2023@gmail.com>
+Subject: [PATCH] Port the AIC8800 demo stack from raw FreeRTOS APIs to the
+ CherryUSB OSAL
+
+The reference implementation (qwer-zxcv/CherryUSB pr/aic8800-wifi-demo,
+commit 084fb84) was validated on STM32H7 + FreeRTOS and reaches for
+FreeRTOS primitives directly.  This repository runs the imported stack on
+the first-party CMSIS-RTOS2 OSAL over both kernel backends, so the port
+maps every primitive onto the OSAL face:
+
+- mutex with timeout -> one-token usb_osal_sem (the OSAL mutex take has
+  no timeout argument; the TX path measures its wait);
+- queue-of-slot-indices -> usb_osal_mq (uintptr_t tokens), with a
+  shadow free/pending depth counter where the reference asked
+  uxQueueMessagesWaiting() - the OSAL queue has no count query;
+- task-notification wakeup of the RX loop -> counting usb_osal_sem
+  (given from completion context; the OSAL give is safe from interrupt
+  and thread context alike, so the reference's FromISR split collapses);
+- taskENTER/EXIT_CRITICAL -> usb_osal_enter/leave_critical_section with
+  a per-function saved state (nesting-safe: every nesting level has its
+  own stack slot);
+- thread creation/deletion -> usb_osal_thread_create/delete, stack
+  sizes converted from FreeRTOS words to bytes (768w -> 3072B, 512w ->
+  2048B), priorities onto the OSAL band (smaller = more urgent; the
+  stack's own threads sit at 0: boot 3, FMAC worker 4, data TX 6, ping
+  10);
+- DWT->CYCCNT / xTaskGetTickCount timing -> rtos_clock_us() (the AArch64
+  system counter); every statistic the reference kept in cycles is now
+  microseconds, and the ACK-pace threshold converts from
+  SystemCoreClock/Hz to 1000000/Hz microseconds;
+- __WEAK (cmsis_compiler.h in the reference's STM32 world) -> the GCC
+  weak attribute, stated in aic8800_fw.c and aic8800_lwip.c directly
+  (this port's include paths carry no CMSIS compiler header);
+- the STM32H7 board specifics in log lines (HyperRAM address) and the
+  DWT/CoreDebug enable block are dropped.
+
+Everything else - the FMAC protocol, the WPA2 path, the TX queue
+discipline (ACK hold + priority reserve + global ordering) - is the
+reference's bytes, untouched.
+--- a/aic8800_fw.c
++++ b/aic8800_fw.c
+@@ -16,6 +16,13 @@
+ #undef USB_DBG_TAG
+ #define USB_DBG_TAG "aic8800.fw"
+ #include "usb_log.h"
++/* Port note: the demo's STM32 world got __WEAK from cmsis_compiler.h; this
++ * port's include paths carry no CMSIS compiler header, so the GCC meaning
++ * is stated here (the attribute, nothing else). */
++#ifndef __WEAK
++#define __WEAK __attribute__((weak))
++#endif
++
+ 
+ #define AIC_FW_PACKAGE_HEADER_SIZE 256U
+ #define AIC_FW_PACKAGE_VERSION       1U
+--- a/aic8800_boot.c
++++ b/aic8800_boot.c
+@@ -10,14 +10,15 @@
+ #include <stddef.h>
+ #include <string.h>
+ 
+-#include "FreeRTOS.h"
+-#include "task.h"
++#include "clock.h"
+ #include "usb_config.h"
+ #include "usb_osal.h"
+ #include "usbh_hub.h"
+ 
++/* OSAL port note (freewificam): OSAL priority band, one step above the FMAC
++ * worker (smaller number = more urgent; the stack's own threads sit at 0). */
+ #ifndef AIC8800_BOOT_OSAL_PRIO
+-#define AIC8800_BOOT_OSAL_PRIO ((uint32_t)(configMAX_PRIORITIES - 1U - 2U))
++#define AIC8800_BOOT_OSAL_PRIO 3U
+ #endif
+ 
+ #undef USB_DBG_TAG
+@@ -516,7 +517,7 @@
+     struct aic8800_fw_blob ext0;
+     struct aic8800_fw_blob fmac;
+     struct aic_patch_info info;
+-    TickType_t transfer_started;
++    uint32_t transfer_started;
+     int result;
+ 
+     result = aic8800_fw_get_image(AIC8800_FW_PATCH_TABLE, &table);
+@@ -548,7 +549,7 @@
+                  (unsigned int)info.ext_address);
+     USB_LOG_INFO("firmware upload block size: %u bytes\r\n",
+                  (unsigned int)AIC_BOOT_BLOCK_SIZE);
+-    transfer_started = xTaskGetTickCount();
++    transfer_started = (uint32_t)rtos_clock_us();
+ 
+     result = aic_upload_blob(device, aic8800_fw_image_name(AIC8800_FW_ADID),
+                              adid.data, adid.length, info.adid_address);
+@@ -579,8 +580,8 @@
+     }
+     if (result == 0) {
+         USB_LOG_INFO("firmware upload and patch complete in %u ms\r\n",
+-                     (unsigned int)((xTaskGetTickCount() - transfer_started) *
+-                                    portTICK_PERIOD_MS));
++                     (unsigned int)(((uint32_t)rtos_clock_us() -
++                                     transfer_started) / 1000U));
+     }
+     return result;
+ }
+--- a/aic8800_fmac.c
++++ b/aic8800_fmac.c
+@@ -11,10 +11,7 @@
+ #include <stddef.h>
+ #include <string.h>
+ 
+-#include "FreeRTOS.h"
+-#include "queue.h"
+-#include "semphr.h"
+-#include "task.h"
++#include "clock.h"
+ #include "usb_config.h"
+ #include "usb_errno.h"
+ #include "usb_osal.h"
+@@ -32,8 +29,12 @@
+ #define AIC8800_WIFI_AUTO_CONNECT 1
+ #endif
+ 
++/* OSAL port note (freewificam): this tree runs on the CherryUSB OSAL over
++ * CMSIS-RTOS2, where a smaller thread-priority number is more urgent and the
++ * stack's own threads sit at the top band (the hub thread at 0). The FMAC
++ * worker and the data TX thread run one step below that band. */
+ #ifndef AIC8800_FMAC_OSAL_PRIO
+-#define AIC8800_FMAC_OSAL_PRIO ((uint32_t)(configMAX_PRIORITIES - 1U - 4U))
++#define AIC8800_FMAC_OSAL_PRIO 4U
+ #endif
+ 
+ enum aic_fmac_request {
+@@ -117,8 +118,10 @@
+ #define AIC_FMAC_DATA_TX_TIMEOUT_MS          1000U
+ #define AIC_FMAC_TX_QUEUE_DEPTH                64U
+ #define AIC_FMAC_TX_PRIORITY_RESERVE            4U
+-#define AIC_FMAC_TX_TASK_STACK                768U
+-#define AIC_FMAC_TX_TASK_PRIORITY (tskIDLE_PRIORITY + 5U)
++/* OSAL port note (freewificam): bytes, not FreeRTOS words (768 words = 3072
++ * bytes on the reference board), and the OSAL priority band above. */
++#define AIC_FMAC_TX_TASK_STACK                3072U
++#define AIC_FMAC_TX_TASK_PRIORITY 6U
+ #define AIC_FMAC_USB_SLOW_MS                    10U
+ #define AIC_FMAC_TX_WAIT_MS                     20U
+ #define AIC_FMAC_TCP_ACK_PACE_HZ              1000U
+@@ -126,6 +129,15 @@
+ #define AIC_TCP_SYN                           0x02U
+ #define AIC_TCP_RST                           0x04U
+ 
++/* OSAL port note (freewificam): the reference timed its statistics with the
++ * Cortex-M DWT cycle counter. This platform's monotonic clock is the AArch64
++ * system counter behind rtos_clock_us(); every timing that the reference
++ * expressed in cycles is expressed in microseconds here. */
++static uint32_t aic_now_us(void)
++{
++    return (uint32_t)rtos_clock_us();
++}
++
+ struct aic_fmac_tx_record {
+     uint16_t length;
+     uint8_t frame[AIC_FMAC_ETHERNET_MAX];
+@@ -175,9 +187,13 @@
+ static uint8_t g_aic_snonce[32];
+ static uint8_t g_aic_ptk[64];
+ static volatile bool g_aic_wpa2_connected;
+-static SemaphoreHandle_t g_aic_tx_mutex;
+-static QueueHandle_t g_aic_tx_free_queue;
+-static QueueHandle_t g_aic_tx_pending_queue;
++static usb_osal_sem_t g_aic_tx_mutex;
++static usb_osal_mq_t g_aic_tx_free_queue;
++static usb_osal_mq_t g_aic_tx_pending_queue;
++/* OSAL port note: the OSAL message queue has no count query, so the pending
++ * depth is tracked next to the queue for the high-water statistic. */
++static volatile uint32_t g_aic_tx_pending_count;
++static volatile uint32_t g_aic_tx_free_count;
+ static struct aic_fmac_tx_record g_aic_tx_ack_hold;
+ static volatile bool g_aic_tx_ack_hold_valid;
+ static volatile uint32_t g_aic_tx_ack_flush_cycles;
+@@ -192,7 +208,12 @@
+     uint32_t ready_cycles;
+ };
+ 
+-static TaskHandle_t g_aic_rx_task;
++/* OSAL port note: the reference woke the receive loop with FreeRTOS task
++ * notifications; here a counting semaphore does the waking (given from the
++ * completion callback, ISR or thread context alike - the OSAL give is safe
++ * from both), and g_aic_rx_ready replaces the "task handle exists" guard. */
++static usb_osal_sem_t g_aic_rx_wakeup;
++static volatile bool g_aic_rx_ready;
+ static struct aic8800_usb_device *g_aic_rx_device;
+ static volatile bool g_aic_rx_stop;
+ static volatile uint8_t g_aic_rx_free_mask;
+@@ -857,7 +878,7 @@
+ {
+     uint8_t seed[43];
+     uint8_t digest[20];
+-    uint32_t tick = (uint32_t)xTaskGetTickCount();
++    uint32_t tick = aic_now_us();
+ 
+     memcpy(seed, g_aic_eapol_m1.anonce, 32U);
+     memcpy(seed + 32U, g_aic_station_mac, 6U);
+@@ -1313,55 +1334,52 @@
+ 
+ static void aic_fmac_tx_note_drop(void)
+ {
+-    taskENTER_CRITICAL();
++    size_t flags;
++    flags = usb_osal_enter_critical_section();
+     g_aic_tx_stats.queue_drops++;
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+ }
+ 
+ void aic8800_fmac_get_tx_stats(struct aic8800_fmac_tx_stats *stats)
+ {
+-    uint64_t process_cycles;
+-    uint32_t process_max_cycles;
+-    uint32_t schedule_max_cycles;
+-    uint32_t lwip_lock_max_cycles;
+-    uint32_t rearm_max_cycles;
+-    uint32_t cycles_per_ms;
+-    uint32_t cycles_per_us;
++    uint64_t process_us;
++    uint32_t process_max_us;
++    uint32_t schedule_max_us;
++    uint32_t lwip_lock_max_us;
++    uint32_t rearm_max_us;
++    size_t flags;
+ 
+     if (stats == NULL) {
+         return;
+     }
+-    taskENTER_CRITICAL();
++    flags = usb_osal_enter_critical_section();
+     *stats = g_aic_tx_stats;
+-    process_cycles = g_aic_rx_process_cycles;
+-    process_max_cycles = g_aic_rx_process_max_cycles;
+-    schedule_max_cycles = g_aic_rx_schedule_max_cycles;
+-    lwip_lock_max_cycles = g_aic_rx_lwip_lock_max_cycles;
+-    rearm_max_cycles = g_aic_rx_rearm_max_cycles;
+-    taskEXIT_CRITICAL();
+-    cycles_per_ms = SystemCoreClock / 1000U;
+-    cycles_per_us = SystemCoreClock / 1000000U;
+-    if (cycles_per_ms != 0U) {
+-        stats->rx_process_ms = (uint32_t)(process_cycles / cycles_per_ms);
+-    }
+-    if (cycles_per_us != 0U) {
+-        stats->rx_process_max_us = process_max_cycles / cycles_per_us;
+-        stats->rx_schedule_max_us = schedule_max_cycles / cycles_per_us;
+-        stats->rx_lwip_lock_max_us = lwip_lock_max_cycles / cycles_per_us;
+-        stats->rx_rearm_max_us = rearm_max_cycles / cycles_per_us;
+-    }
++    process_us = g_aic_rx_process_cycles;
++    process_max_us = g_aic_rx_process_max_cycles;
++    schedule_max_us = g_aic_rx_schedule_max_cycles;
++    lwip_lock_max_us = g_aic_rx_lwip_lock_max_cycles;
++    rearm_max_us = g_aic_rx_rearm_max_cycles;
++    usb_osal_leave_critical_section(flags);
++    /* OSAL port note: the accumulators are microseconds on this platform
++     * (aic_now_us), so the reference's clock-rate division disappears. */
++    stats->rx_process_ms = (uint32_t)(process_us / 1000U);
++    stats->rx_process_max_us = process_max_us;
++    stats->rx_schedule_max_us = schedule_max_us;
++    stats->rx_lwip_lock_max_us = lwip_lock_max_us;
++    stats->rx_rearm_max_us = rearm_max_us;
+ }
+ 
+ static void aic_fmac_tx_usb_send(struct aic8800_usb_device *device,
+                                  const uint8_t *frame, uint16_t frame_length)
+ {
++    size_t flags;
+     static uint32_t tx_log_count;
+     uint8_t *descriptor = g_aic_data_tx + 4U;
+     uint32_t payload_length;
+     uint32_t total_length;
+     int result = -USB_ERR_TIMEOUT;
+-    TickType_t started = xTaskGetTickCount();
+-    TickType_t usb_started = started;
++    uint32_t started = aic_now_us();
++    uint32_t usb_started = started;
+     uint32_t mutex_wait_ms = 0U;
+     uint32_t usb_elapsed_ms = 0U;
+     bool mutex_acquired = false;
+@@ -1373,13 +1391,11 @@
+     total_length = 4U + 28U + payload_length;
+ 
+     if (g_aic_data_tx_active && g_aic_wpa2_connected &&
+-        (xSemaphoreTake(g_aic_tx_mutex,
+-                        pdMS_TO_TICKS(AIC_FMAC_DATA_TX_TIMEOUT_MS)) == pdTRUE)) {
++        (usb_osal_sem_take(g_aic_tx_mutex,
++                           AIC_FMAC_DATA_TX_TIMEOUT_MS) == 0)) {
+         mutex_acquired = true;
+-        usb_started = xTaskGetTickCount();
+-        mutex_wait_ms =
+-            (uint32_t)(((usb_started - started) * 1000U) /
+-                       configTICK_RATE_HZ);
++        usb_started = aic_now_us();
++        mutex_wait_ms = (usb_started - started) / 1000U;
+         memset(g_aic_data_tx, 0, 32U);
+         aic_put_le16(g_aic_data_tx, (uint16_t)total_length);
+         g_aic_data_tx[2] = AIC_USB_TYPE_DATA_TX;
+@@ -1394,13 +1410,11 @@
+         memcpy(g_aic_data_tx + 32U, frame + 14U, payload_length);
+         result = aic8800_usb_bulk_send(device, g_aic_data_tx, total_length,
+                                        AIC_FMAC_DATA_TX_TIMEOUT_MS, false);
+-        usb_elapsed_ms =
+-            (uint32_t)(((xTaskGetTickCount() - usb_started) * 1000U) /
+-                       configTICK_RATE_HZ);
+-        xSemaphoreGive(g_aic_tx_mutex);
++        usb_elapsed_ms = (aic_now_us() - usb_started) / 1000U;
++        usb_osal_sem_give(g_aic_tx_mutex);
+     }
+ 
+-    taskENTER_CRITICAL();
++    flags = usb_osal_enter_critical_section();
+     if (!mutex_acquired && g_aic_data_tx_active && g_aic_wpa2_connected) {
+         g_aic_tx_stats.mutex_timeouts++;
+     }
+@@ -1419,7 +1433,7 @@
+     } else if (g_aic_data_tx_active) {
+         g_aic_tx_stats.usb_errors++;
+     }
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+ 
+     if ((result == (int)total_length) && (tx_log_count < 8U)) {
+         USB_LOG_INFO("AIC data TX Ethernet type=0x%02x%02x length=%u\r\n",
+@@ -1430,9 +1444,10 @@
+ 
+ static bool aic_fmac_tx_take_ack_hold(uint8_t *frame, uint16_t *length)
+ {
++    size_t flags;
+     bool have = false;
+ 
+-    taskENTER_CRITICAL();
++    flags = usb_osal_enter_critical_section();
+     if (g_aic_tx_ack_hold_valid) {
+         *length = g_aic_tx_ack_hold.length;
+         if (*length > AIC_FMAC_ETHERNET_MAX) {
+@@ -1442,21 +1457,23 @@
+         g_aic_tx_ack_hold_valid = false;
+         have = true;
+     }
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+     return have;
+ }
+ 
+ static bool aic_fmac_tx_ack_due(void)
+ {
+-    uint32_t now = DWT->CYCCNT;
++    uint32_t now = aic_now_us();
+     uint32_t pace;
+ 
+     if (g_aic_tx_ack_flush_cycles == 0U) {
+         return true;
+     }
+-    pace = SystemCoreClock / AIC_FMAC_TCP_ACK_PACE_HZ;
++    /* OSAL port note: microseconds per flush interval (the reference divided
++     * the Cortex-M core clock by the same rate). */
++    pace = 1000000U / AIC_FMAC_TCP_ACK_PACE_HZ;
+     if (pace == 0U) {
+-        pace = 1200000U;
++        pace = 1200U;
+     }
+     return (uint32_t)(now - g_aic_tx_ack_flush_cycles) >= pace;
+ }
+@@ -1464,20 +1481,25 @@
+ static void aic_fmac_tx_enqueue_ack_hold(void)
+ {
+     struct aic_fmac_tx_record *record;
+-    UBaseType_t queued;
++    uintptr_t value;
++    uint32_t queued;
+     uint8_t index;
++    size_t flags;
+ 
+     if (!g_aic_tx_ack_hold_valid) {
+         return;
+     }
+-    if (xQueueReceive(g_aic_tx_free_queue, &index, 0U) != pdTRUE) {
++    if (usb_osal_mq_recv(g_aic_tx_free_queue, &value, 0U) != 0) {
+         return;
+     }
++    index = (uint8_t)value;
++    g_aic_tx_free_count--;
+     record = &g_aic_tx_records[index];
+-    taskENTER_CRITICAL();
++    flags = usb_osal_enter_critical_section();
+     if (!g_aic_tx_ack_hold_valid) {
+-        taskEXIT_CRITICAL();
+-        (void)xQueueSend(g_aic_tx_free_queue, &index, 0U);
++        usb_osal_leave_critical_section(flags);
++        g_aic_tx_free_count++;
++        (void)usb_osal_mq_send(g_aic_tx_free_queue, index);
+         return;
+     }
+     record->length = g_aic_tx_ack_hold.length;
+@@ -1486,19 +1508,21 @@
+     }
+     memcpy(record->frame, g_aic_tx_ack_hold.frame, record->length);
+     g_aic_tx_ack_hold_valid = false;
+-    taskEXIT_CRITICAL();
+-    if (xQueueSendToBack(g_aic_tx_pending_queue, &index, 0U) != pdTRUE) {
+-        (void)xQueueSend(g_aic_tx_free_queue, &index, 0U);
++    usb_osal_leave_critical_section(flags);
++    if (usb_osal_mq_send(g_aic_tx_pending_queue, index) != 0) {
++        g_aic_tx_free_count++;
++        (void)usb_osal_mq_send(g_aic_tx_free_queue, index);
+         return;
+     }
+-    g_aic_tx_ack_flush_cycles = DWT->CYCCNT;
+-    queued = uxQueueMessagesWaiting(g_aic_tx_pending_queue);
+-    taskENTER_CRITICAL();
++    g_aic_tx_pending_count++;
++    g_aic_tx_ack_flush_cycles = aic_now_us();
++    flags = usb_osal_enter_critical_section();
++    queued = g_aic_tx_pending_count;
+     g_aic_tx_stats.enqueued_frames++;
+     if (queued > g_aic_tx_stats.queue_high_water) {
+         g_aic_tx_stats.queue_high_water = queued;
+     }
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+ }
+ 
+ static void aic_fmac_tx_flush_ack_hold(bool force)
+@@ -1514,6 +1538,7 @@
+ 
+ static void aic_fmac_tx_refresh_ack_hold(void)
+ {
++    size_t flags;
+     struct tcp_pcb *pcb;
+     uint8_t *frame;
+     uint8_t *ip;
+@@ -1562,9 +1587,9 @@
+         return;
+     }
+ 
+-    taskENTER_CRITICAL();
++    flags = usb_osal_enter_critical_section();
+     if (!g_aic_tx_ack_hold_valid || (g_aic_tx_ack_hold.length != hold_length)) {
+-        taskEXIT_CRITICAL();
++        usb_osal_leave_critical_section(flags);
+         return;
+     }
+     /* IP header is unchanged, so leave its checksum alone. Only ACK and
+@@ -1580,7 +1605,7 @@
+     aic_put_be32(tcp + 8U, rcv_nxt);
+     aic_put_be16(tcp + 14U, window);
+     aic_put_be16(tcp + 16U, checksum);
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+ }
+ 
+ static void aic_fmac_data_tx_task(void *parameter)
+@@ -1589,41 +1614,49 @@
+     static uint8_t snapshot[AIC_FMAC_ETHERNET_MAX];
+ 
+     while (!g_aic_data_tx_stop && device->online) {
++        uintptr_t value;
+         uint8_t index;
+         uint16_t hold_length = 0U;
+-        BaseType_t got;
++        int got;
++        size_t flags;
+ 
+-        got = xQueueReceive(g_aic_tx_pending_queue, &index,
+-                            pdMS_TO_TICKS(AIC_FMAC_TX_WAIT_MS));
+-        if (got != pdTRUE) {
++        got = usb_osal_mq_recv(g_aic_tx_pending_queue, &value,
++                               AIC_FMAC_TX_WAIT_MS);
++        if (got != 0) {
+             if (aic_fmac_tx_take_ack_hold(snapshot, &hold_length)) {
+                 aic_fmac_tx_usb_send(device, snapshot, hold_length);
+-                g_aic_tx_ack_flush_cycles = DWT->CYCCNT;
++                g_aic_tx_ack_flush_cycles = aic_now_us();
+             }
+             continue;
+         }
++        g_aic_tx_pending_count--;
++        index = (uint8_t)value;
+         if (index < AIC_FMAC_TX_QUEUE_DEPTH) {
+             struct aic_fmac_tx_record *record = &g_aic_tx_records[index];
+             uint16_t frame_length;
+ 
+-            taskENTER_CRITICAL();
++            flags = usb_osal_enter_critical_section();
+             frame_length = record->length;
+             if (frame_length > AIC_FMAC_ETHERNET_MAX) {
+                 frame_length = AIC_FMAC_ETHERNET_MAX;
+             }
+             memcpy(snapshot, record->frame, frame_length);
+-            taskEXIT_CRITICAL();
+-            (void)xQueueSend(g_aic_tx_free_queue, &index, portMAX_DELAY);
++            usb_osal_leave_critical_section(flags);
++            /* The free queue holds at most AIC_FMAC_TX_QUEUE_DEPTH tokens,
++             * so a non-blocking give-back can never be dropped. */
++            g_aic_tx_free_count++;
++            (void)usb_osal_mq_send(g_aic_tx_free_queue, index);
+             aic_fmac_tx_usb_send(device, snapshot, frame_length);
+         }
+     }
+     g_aic_data_tx_active = false;
+     g_aic_data_tx_task_running = false;
+-    vTaskDelete(NULL);
++    usb_osal_thread_delete(NULL);
+ }
+ 
+ static bool aic_fmac_data_tx_start(struct aic8800_usb_device *device)
+ {
++    uintptr_t discard = 0U;
+     uint8_t index;
+ 
+     if (g_aic_data_tx_task_running) {
+@@ -1632,24 +1665,29 @@
+     }
+     if (g_aic_tx_free_queue == NULL) {
+         g_aic_tx_free_queue =
+-            xQueueCreate(AIC_FMAC_TX_QUEUE_DEPTH, sizeof(uint8_t));
++            usb_osal_mq_create(AIC_FMAC_TX_QUEUE_DEPTH);
+     }
+     if (g_aic_tx_pending_queue == NULL) {
+         g_aic_tx_pending_queue =
+-            xQueueCreate(AIC_FMAC_TX_QUEUE_DEPTH, sizeof(uint8_t));
++            usb_osal_mq_create(AIC_FMAC_TX_QUEUE_DEPTH);
+     }
+     if ((g_aic_tx_free_queue == NULL) || (g_aic_tx_pending_queue == NULL)) {
+         USB_LOG_ERR("failed to create AIC data TX queues\r\n");
+         return false;
+     }
+-    (void)xQueueReset(g_aic_tx_free_queue);
+-    (void)xQueueReset(g_aic_tx_pending_queue);
++    while (usb_osal_mq_recv(g_aic_tx_free_queue, &discard, 0U) == 0) {
++    }
++    while (usb_osal_mq_recv(g_aic_tx_pending_queue, &discard, 0U) == 0) {
++    }
++    g_aic_tx_pending_count = 0U;
++    g_aic_tx_free_count = 0U;
+     for (index = 0U; index < AIC_FMAC_TX_QUEUE_DEPTH; index++) {
+-        if (xQueueSend(g_aic_tx_free_queue, &index, 0U) != pdTRUE) {
++        if (usb_osal_mq_send(g_aic_tx_free_queue, index) != 0) {
+             USB_LOG_ERR("failed to initialize AIC data TX free queue\r\n");
+             return false;
+         }
+     }
++    g_aic_tx_free_count = AIC_FMAC_TX_QUEUE_DEPTH;
+     memset(&g_aic_tx_stats, 0, sizeof(g_aic_tx_stats));
+     g_aic_tx_ack_hold_valid = false;
+     g_aic_tx_ack_flush_cycles = 0U;
+@@ -1661,15 +1699,15 @@
+     g_aic_data_tx_stop = false;
+     g_aic_data_tx_active = true;
+     g_aic_data_tx_task_running = true;
+-    if (xTaskCreate(aic_fmac_data_tx_task, "aic_tx",
+-                    AIC_FMAC_TX_TASK_STACK, device,
+-                    AIC_FMAC_TX_TASK_PRIORITY, NULL) != pdPASS) {
++    if (usb_osal_thread_create("aic_tx", AIC_FMAC_TX_TASK_STACK,
++                               AIC_FMAC_TX_TASK_PRIORITY,
++                               aic_fmac_data_tx_task, device) == NULL) {
+         g_aic_data_tx_active = false;
+         g_aic_data_tx_task_running = false;
+         USB_LOG_ERR("failed to create AIC data TX task\r\n");
+         return false;
+     }
+-    USB_LOG_INFO("AIC data TX queue ready: depth=%u reserve=%u HyperRAM=0x70400000\r\n",
++    USB_LOG_INFO("AIC data TX queue ready: depth=%u reserve=%u\r\n",
+                  AIC_FMAC_TX_QUEUE_DEPTH, AIC_FMAC_TX_PRIORITY_RESERVE);
+     return true;
+ }
+@@ -1682,6 +1720,7 @@
+ 
+ static bool aic_fmac_tx_store_ack_pbuf(const struct pbuf *packet)
+ {
++    size_t flags;
+     uint8_t frame[128];
+     uint16_t length;
+ 
+@@ -1695,19 +1734,21 @@
+     if (!aic_fmac_tx_is_pure_ack(frame, length)) {
+         return false;
+     }
+-    taskENTER_CRITICAL();
++    flags = usb_osal_enter_critical_section();
+     memcpy(g_aic_tx_ack_hold.frame, frame, length);
+     g_aic_tx_ack_hold.length = length;
+     g_aic_tx_ack_hold_valid = true;
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+     return true;
+ }
+ 
+ err_t aic8800_lwip_transmit(const struct pbuf *packet)
+ {
++    size_t flags;
+     struct aic8800_usb_device *device = aic8800_usb_get_device();
+     struct aic_fmac_tx_record *record;
+-    UBaseType_t queued;
++    uintptr_t value;
++    uint32_t queued;
+     uint8_t index;
+     bool priority;
+ 
+@@ -1723,57 +1764,64 @@
+          * preempt 802.11/lwIP parse of the remaining aggregate records. */
+         return ERR_OK;
+     }
+-    if (xQueueReceive(g_aic_tx_free_queue, &index, 0U) != pdTRUE) {
++    if (usb_osal_mq_recv(g_aic_tx_free_queue, &value, 0U) != 0) {
+         aic_fmac_tx_note_drop();
+         return ERR_MEM;
+     }
++    index = (uint8_t)value;
++    g_aic_tx_free_count--;
+     record = &g_aic_tx_records[index];
+     record->length = packet->tot_len;
+     if (pbuf_copy_partial(packet, record->frame, packet->tot_len, 0U) !=
+         packet->tot_len) {
+-        (void)xQueueSend(g_aic_tx_free_queue, &index, 0U);
++        g_aic_tx_free_count++;
++        (void)usb_osal_mq_send(g_aic_tx_free_queue, index);
+         return ERR_BUF;
+     }
+     if (aic_fmac_tx_is_pure_ack(record->frame, record->length)) {
+-        taskENTER_CRITICAL();
++        flags = usb_osal_enter_critical_section();
+         g_aic_tx_ack_hold.length = record->length;
+         memcpy(g_aic_tx_ack_hold.frame, record->frame, record->length);
+         g_aic_tx_ack_hold_valid = true;
+-        taskEXIT_CRITICAL();
+-        (void)xQueueSend(g_aic_tx_free_queue, &index, 0U);
++        usb_osal_leave_critical_section(flags);
++        g_aic_tx_free_count++;
++        (void)usb_osal_mq_send(g_aic_tx_free_queue, index);
+         return ERR_OK;
+     }
+     aic_fmac_tx_flush_ack_hold(true);
+     priority = aic_fmac_tx_is_priority(record->frame, record->length);
+     if (!priority &&
+-        (uxQueueMessagesWaiting(g_aic_tx_free_queue) <
+-         AIC_FMAC_TX_PRIORITY_RESERVE)) {
+-        (void)xQueueSend(g_aic_tx_free_queue, &index, 0U);
++        (g_aic_tx_free_count < AIC_FMAC_TX_PRIORITY_RESERVE)) {
++        g_aic_tx_free_count++;
++        (void)usb_osal_mq_send(g_aic_tx_free_queue, index);
+         aic_fmac_tx_note_drop();
+         return ERR_MEM;
+     }
+     /* Preserve global Ethernet ordering. Priority frames benefit from the
+      * reserved capacity, but must not jump ahead of an older TCP segment. */
+-    if (xQueueSendToBack(g_aic_tx_pending_queue, &index, 0U) != pdTRUE) {
+-        (void)xQueueSend(g_aic_tx_free_queue, &index, 0U);
++    if (usb_osal_mq_send(g_aic_tx_pending_queue, index) != 0) {
++        g_aic_tx_free_count++;
++        (void)usb_osal_mq_send(g_aic_tx_free_queue, index);
+         aic_fmac_tx_note_drop();
+         return ERR_MEM;
+     }
+-    queued = uxQueueMessagesWaiting(g_aic_tx_pending_queue);
+-    taskENTER_CRITICAL();
++    g_aic_tx_pending_count++;
++    queued = g_aic_tx_pending_count;
++    flags = usb_osal_enter_critical_section();
+     g_aic_tx_stats.enqueued_frames++;
+     if (queued > g_aic_tx_stats.queue_high_water) {
+         g_aic_tx_stats.queue_high_water = queued;
+     }
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+     return ERR_OK;
+ }
+ 
+ static void aic_fmac_note_rx_drop(void)
+ {
+-    taskENTER_CRITICAL();
++    size_t flags;
++    flags = usb_osal_enter_critical_section();
+     g_aic_tx_stats.rx_input_drops++;
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+ }
+ 
+ static bool aic_fmac_llc_is_snap(const uint8_t *llc)
+@@ -2031,18 +2079,19 @@
+ static uint32_t aic_fmac_process_rx_buffer(const uint8_t *record,
+                                            uint32_t remaining)
+ {
+-    uint32_t lock_started = DWT->CYCCNT;
++    size_t flags;
++    uint32_t lock_started = aic_now_us();
+     uint32_t lock_cycles;
+     uint32_t data_records = 0U;
+     bool malformed = false;
+ 
+     aic8800_lwip_lock();
+-    lock_cycles = DWT->CYCCNT - lock_started;
+-    taskENTER_CRITICAL();
++    lock_cycles = aic_now_us() - lock_started;
++    flags = usb_osal_enter_critical_section();
+     if (lock_cycles > g_aic_rx_lwip_lock_max_cycles) {
+         g_aic_rx_lwip_lock_max_cycles = lock_cycles;
+     }
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+     while (remaining >= 4U) {
+         uint32_t packet_length = aic_get_le16(record);
+         uint8_t type = record[2] & 0x7fU;
+@@ -2138,6 +2187,7 @@
+ static int aic_fmac_rx_submit_index(struct aic8800_usb_device *device,
+                                     uint8_t index)
+ {
++    size_t flags;
+     int result;
+ 
+     result = aic_fmac_rx_submit(device, index);
+@@ -2158,13 +2208,12 @@
+ static void aic_fmac_rx_complete(void *arg, int nbytes)
+ {
+     uint8_t done_index = (uint8_t)(uintptr_t)arg;
+-    BaseType_t woken = pdFALSE;
+     struct aic8800_usb_device *device = g_aic_rx_device;
+     size_t flags;
+     uint8_t arm_index = 0xffU;
+     uint8_t queued_slot = 0xffU;
+ 
+-    if ((g_aic_rx_task == NULL) || g_aic_rx_stop ||
++    if (!g_aic_rx_ready || g_aic_rx_stop ||
+         (nbytes == -USB_ERR_SHUTDOWN) || (device == NULL) ||
+         (done_index >= AIC_FMAC_RX_PIPE_COUNT)) {
+         return;
+@@ -2177,7 +2226,7 @@
+ 
+         g_aic_rx_q[tail].index = done_index;
+         g_aic_rx_q[tail].nbytes = nbytes;
+-        g_aic_rx_q[tail].ready_cycles = DWT->CYCCNT;
++        g_aic_rx_q[tail].ready_cycles = aic_now_us();
+         queued_slot = tail;
+         g_aic_rx_q_count++;
+         if (nbytes > 0) {
+@@ -2208,11 +2257,11 @@
+     usb_osal_leave_critical_section(flags);
+ 
+     if (arm_index != 0xffU) {
+-        uint32_t rearm_started = DWT->CYCCNT;
++        uint32_t rearm_started = aic_now_us();
+         uint32_t rearm_cycles;
+ 
+         (void)aic_fmac_rx_submit_index(device, arm_index);
+-        rearm_cycles = DWT->CYCCNT - rearm_started;
++        rearm_cycles = aic_now_us() - rearm_started;
+         flags = usb_osal_enter_critical_section();
+         if (rearm_cycles > g_aic_rx_rearm_max_cycles) {
+             g_aic_rx_rearm_max_cycles = rearm_cycles;
+@@ -2221,29 +2270,28 @@
+     }
+     if (queued_slot != 0xffU) {
+         /* Start scheduler-latency timing after ISR-side URB re-submission. */
+-        g_aic_rx_q[queued_slot].ready_cycles = DWT->CYCCNT;
++        g_aic_rx_q[queued_slot].ready_cycles = aic_now_us();
+     }
+ 
+-    if (xPortIsInsideInterrupt() != pdFALSE) {
+-        vTaskNotifyGiveFromISR(g_aic_rx_task, &woken);
+-        portYIELD_FROM_ISR(woken);
+-    } else {
+-        (void)xTaskNotifyGive(g_aic_rx_task);
+-    }
++    /* The OSAL semaphore give is safe from both the completion interrupt
++     * and the submitter's timeout drain, so the reference's ISR split
++     * collapses into one call. */
++    (void)usb_osal_sem_give(g_aic_rx_wakeup);
+ }
+ 
+ static void aic_fmac_rx_reset_pipeline(struct aic8800_usb_device *device)
+ {
++    size_t flags;
+     g_aic_rx_stop = true;
+     aic8800_usb_abort_receive(device);
+-    while (ulTaskNotifyTake(pdTRUE, 0U) != 0U) {
++    while (usb_osal_sem_take(g_aic_rx_wakeup, 0U) == 0) {
+     }
+-    taskENTER_CRITICAL();
++    flags = usb_osal_enter_critical_section();
+     g_aic_rx_q_head = 0U;
+     g_aic_rx_q_count = 0U;
+     g_aic_rx_free_mask = AIC_FMAC_RX_FREE_ALL;
+     g_aic_rx_in_flight = 0xffU;
+-    taskEXIT_CRITICAL();
++    usb_osal_leave_critical_section(flags);
+     g_aic_rx_stop = false;
+ }
+ 
+@@ -2275,13 +2323,17 @@
+ 
+ static void aic_fmac_data_loop(struct aic8800_usb_device *device)
+ {
++    size_t flags;
+     int result;
+ 
+-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+-    DWT->CYCCNT = 0U;
+-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
++    if (g_aic_rx_wakeup == NULL) {
++        g_aic_rx_wakeup = usb_osal_sem_create_counting(AIC_FMAC_RX_PIPE_COUNT);
++    }
++    if (g_aic_rx_wakeup == NULL) {
++        USB_LOG_ERR("failed to create AIC RX wakeup semaphore\r\n");
++        return;
++    }
+     g_aic_rx_device = device;
+-    g_aic_rx_task = xTaskGetCurrentTaskHandle();
+     aic_fmac_rx_reset_pipeline(device);
+ 
+     USB_LOG_INFO("AIC data receive loop started (ISR re-arm %ux%u, single URB)\r\n",
+@@ -2297,17 +2349,17 @@
+     }
+     if (result < 0) {
+         USB_LOG_ERR("AIC RX arm failed: %d\r\n", result);
+-        g_aic_rx_task = NULL;
++        g_aic_rx_ready = false;
+         g_aic_rx_device = NULL;
+         return;
+     }
++    g_aic_rx_ready = true;
+ 
+     while (device->online && g_aic_wpa2_connected) {
+         struct aic_fmac_rx_done done;
+         bool have_done = false;
+ 
+-        if (ulTaskNotifyTake(pdFALSE,
+-                             pdMS_TO_TICKS(AIC_FMAC_TIMEOUT_MS)) == 0U) {
++        if (usb_osal_sem_take(g_aic_rx_wakeup, AIC_FMAC_TIMEOUT_MS) != 0) {
+             aic_fmac_rx_reset_pipeline(device);
+             if (!device->online || !g_aic_wpa2_connected) {
+                 break;
+@@ -2322,7 +2374,7 @@
+                          taken;
+             }
+             if (result < 0) {
+-                vTaskDelay(pdMS_TO_TICKS(1U));
++                usb_osal_msleep(1U);
+             }
+             continue;
+         }
+@@ -2330,7 +2382,7 @@
+             break;
+         }
+ 
+-        taskENTER_CRITICAL();
++        flags = usb_osal_enter_critical_section();
+         if (g_aic_rx_q_count > 0U) {
+             done.index = g_aic_rx_q[g_aic_rx_q_head].index;
+             done.nbytes = g_aic_rx_q[g_aic_rx_q_head].nbytes;
+@@ -2340,18 +2392,18 @@
+             g_aic_rx_q_count--;
+             have_done = true;
+         }
+-        taskEXIT_CRITICAL();
++        usb_osal_leave_critical_section(flags);
+         if (!have_done) {
+             continue;
+         }
+         {
+-            uint32_t schedule_cycles = DWT->CYCCNT - done.ready_cycles;
++            uint32_t schedule_cycles = aic_now_us() - done.ready_cycles;
+ 
+-            taskENTER_CRITICAL();
++            flags = usb_osal_enter_critical_section();
+             if (schedule_cycles > g_aic_rx_schedule_max_cycles) {
+                 g_aic_rx_schedule_max_cycles = schedule_cycles;
+             }
+-            taskEXIT_CRITICAL();
++            usb_osal_leave_critical_section(flags);
+         }
+         if (done.nbytes > 0) {
+             uint32_t nbytes = (uint32_t)done.nbytes;
+@@ -2361,21 +2413,21 @@
+             if (nbytes > AIC_FMAC_RX_SIZE) {
+                 nbytes = AIC_FMAC_RX_SIZE;
+             }
+-            started = DWT->CYCCNT;
++            started = aic_now_us();
+             (void)aic_fmac_process_rx_buffer(g_aic_data_rx[done.index], nbytes);
+-            elapsed = DWT->CYCCNT - started;
+-            taskENTER_CRITICAL();
++            elapsed = aic_now_us() - started;
++            flags = usb_osal_enter_critical_section();
+             g_aic_rx_process_cycles += elapsed;
+             if (elapsed > g_aic_rx_process_max_cycles) {
+                 g_aic_rx_process_max_cycles = elapsed;
+             }
+-            taskEXIT_CRITICAL();
++            usb_osal_leave_critical_section(flags);
+         }
+         aic_fmac_rx_release(device, done.index);
+     }
+ 
+     aic_fmac_rx_reset_pipeline(device);
+-    g_aic_rx_task = NULL;
++    g_aic_rx_ready = false;
+     g_aic_rx_device = NULL;
+ }
+ 
+@@ -2786,7 +2838,10 @@
+     memset(g_aic_snonce, 0, sizeof(g_aic_snonce));
+     memset(g_aic_ptk, 0, sizeof(g_aic_ptk));
+     if (g_aic_tx_mutex == NULL) {
+-        g_aic_tx_mutex = xSemaphoreCreateMutex();
++        /* A one-token semaphore stands in for the reference's mutex: the
++         * OSAL mutex take has no timeout, and the TX path measures its
++         * wait with AIC_FMAC_DATA_TX_TIMEOUT_MS. */
++        g_aic_tx_mutex = usb_osal_sem_create(1U);
+     }
+     if (g_aic_tx_mutex == NULL) {
+         USB_LOG_ERR("failed to create AIC TX mutex\r\n");
+--- a/aic8800_fw.c
++++ b/aic8800_fw.c
+@@ -16,6 +16,13 @@
+ #undef USB_DBG_TAG
+ #define USB_DBG_TAG "aic8800.fw"
+ #include "usb_log.h"
++/* Port note: the demo's STM32 world got __WEAK from cmsis_compiler.h; this
++ * port's include paths carry no CMSIS compiler header, so the GCC meaning
++ * is stated here (the attribute, nothing else). */
++#ifndef __WEAK
++#define __WEAK __attribute__((weak))
++#endif
++
+ 
+ #define AIC_FW_PACKAGE_HEADER_SIZE 256U
+ #define AIC_FW_PACKAGE_VERSION       1U
+--- a/aic8800_lwip.c
++++ b/aic8800_lwip.c
+@@ -17,8 +17,7 @@
+ 
+ #include <string.h>
+ 
+-#include "FreeRTOS.h"
+-#include "task.h"
++#include "usb_osal.h"
+ 
+ #include "lwip/dhcp.h"
+ #include "lwip/etharp.h"
+@@ -33,6 +32,13 @@
+ #include "usb_config.h"
+ #include "usb_osal.h"
+ #include "usb_log.h"
++/* Port note: the demo's STM32 world got __WEAK from cmsis_compiler.h; this
++ * port's include paths carry no CMSIS compiler header, so the GCC meaning
++ * is stated here (the attribute, nothing else). */
++#ifndef __WEAK
++#define __WEAK __attribute__((weak))
++#endif
++
+ 
+ #ifndef AIC8800_LWIP_OWN_TCPIP
+ #define AIC8800_LWIP_OWN_TCPIP 1
+@@ -69,7 +75,7 @@
+     if (socket_fd < 0) {
+         USB_LOG_ERR("AIC ping could not create raw socket\r\n");
+         g_ping_task_running = false;
+-        vTaskDelete(NULL);
++        usb_osal_thread_delete(NULL);
+         return;
+     }
+     USB_LOG_INFO("AIC ping gateway %u.%u.%u.%u, %u packets\r\n",
+@@ -139,13 +145,13 @@
+             USB_LOG_WRN("AIC ping timeout seq=%u\r\n", sequence);
+         }
+         if (sequence < AIC8800_PING_COUNT) {
+-            vTaskDelay(pdMS_TO_TICKS(AIC8800_PING_INTERVAL_MS));
++            usb_osal_msleep(AIC8800_PING_INTERVAL_MS);
+         }
+     }
+     lwip_close(socket_fd);
+     USB_LOG_INFO("AIC gateway ping test finished\r\n");
+     g_ping_task_running = false;
+-    vTaskDelete(NULL);
++    usb_osal_thread_delete(NULL);
+ }
+ 
+ static void aic8800_netif_status(struct netif *netif)
+@@ -269,8 +275,9 @@
+     }
+     g_ping_gateway = *gateway;
+     g_ping_task_running = true;
+-    if (xTaskCreate(aic8800_ping_task, "aic_ping", 512U, NULL,
+-                    tskIDLE_PRIORITY + 2U, NULL) != pdPASS) {
++    /* OSAL port note: stack bytes (the reference passed FreeRTOS words). */
++    if (usb_osal_thread_create("aic_ping", 2048U, 10U,
++                               aic8800_ping_task, NULL) == NULL) {
+         g_ping_task_running = false;
+         USB_LOG_ERR("AIC ping task creation failed\r\n");
+     }
