@@ -472,8 +472,10 @@ hand `-D` the configuration.  BUILD-02 removes that second channel:
   `CMSIS2_MAX_THREADS/TIMERS`, `TX_TIMER_STACK`, lwIP knobs and the driver
   geometry all have Kconfig defaults; a missing value is a generator error or
   a compile error, never a silent `$(if ...)` / `#ifndef` default.
-* `test/board/rtos/platform/host_*_defs.h` do the same for the host tier;
-  `tests/board/linux-ko` keeps its own line until M2/M4 migrate it.
+* `tests/board/rtos/platform/host_*_defs.h` do the same for the host tier;
+  `tests/board/linux-ko/build.sh` now writes `wlan-ko/linuxko_config.h` and
+  passes it with `-include`, so the kernelmod line also has no hand `-D`; its
+  pure-make entry point is still an M2 gap.
 
 Entry points: `./make.rtos config|menuconfig|olddefconfig|savedefconfig|list|
 image|images|matrix|check|check-no-d|check-config-header|trimcheck|libs|sdk|
