@@ -1,6 +1,6 @@
 /*
  * @file   mci.h
- * @brief  Phytium MCI host controller driver for this board's SDIO socket
+ * @brief  MCI host controller driver for this board's SDIO socket
  *         (mmc1 @ 0x28001000), ported from the Linux driver that is proven on
  *         this exact board.
  *

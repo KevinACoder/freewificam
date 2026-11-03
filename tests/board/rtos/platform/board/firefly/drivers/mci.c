@@ -1,8 +1,7 @@
 /*
  * @file   mci.c
- * @brief  Phytium MCI host controller driver (mmc1 = the SDIO socket on
- *         firefly v2), ported from the Linux driver that is proven on this
- *         board.
+ * @brief  MCI host controller driver (mmc1 = the SDIO socket on firefly v2),
+ *         ported from the Linux driver that is proven on this board.
  *
  * Ported from linux-upstream/drivers/mmc/host/firefly-mci.c at the project's
  * GT pin (63a2a8ab9cd3). Every register programme below is that driver's,

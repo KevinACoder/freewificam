@@ -1,6 +1,6 @@
 /*
  * @file   usb_domain.h
- * @brief  firefly v2 (Phytium-Pi, E2000-class SoC) USB controller facts
+ * @brief  firefly v2 USB controller facts
  *         (board interface).
  *
  * Unlike the RK3568 carrier, this board's USB host controllers need no
