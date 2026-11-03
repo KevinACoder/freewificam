@@ -448,13 +448,18 @@ tools/netio/build.sh                # the pinned NETIO peer (the Linux host / Pi
 Firmware blobs are not committed; `docs/FIRMWARE-NOTICES.md` carries their
 digests, the source files and the redistribution terms.
 
-## The reference board
+## The reference boards
 
-Every hardware result is from one RK3568 ITX board (RK3568-E4AP5G1-ITX). The
-console, the 1 GbE management link, the SDIO socket, the USB roots, the PCIe
-slots, the boot window and the reset lines are described in
-[docs/boards/rk3568-itx.md](docs/boards/rk3568-itx.md), together with which
-connector each line uses and which code owns it.
+The hardware results come from two boards.  The RK3568 ITX board
+(RK3568-E4AP5G1-ITX) carries the wired, PCIe, SDIO and USB lines: its console,
+1 GbE management link, USB roots, PCIe slots, boot window and reset lines are
+described in [docs/boards/rk3568-itx.md](docs/boards/rk3568-itx.md), together
+with which connector each line uses and which code owns it.
+
+The firefly v2 carries the SDIO, vendor-FullMAC and storage rows added on this
+page.  It has two xHCI roots and no EHCI, so the RK3568 board is the only place
+the EHCI port runs; the two boards share the host stack and the class code, and
+differ in the board directory and the controller facts it selects.
 
 ## Version, releases and known issues
 
