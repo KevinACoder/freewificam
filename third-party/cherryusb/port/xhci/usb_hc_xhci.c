@@ -2300,20 +2300,6 @@ static void xhci_event_process(struct xhci_hcd *hcd)
 	xhci_dcache_invalidate(hcd->event_trbs,
 			       CONFIG_USBHOST_XHCI_EVENT_RING_SIZE * TRB_SIZE);
 
-	/* W7-02 forensics: the consumer cursor's trajectory - bounded to
-	 * every 64th pass plus the first four, plus a phantom-slot detector
-	 * in the walk below (cycle-valid but type-invalid = stale read). */
-	{
-		static uint32_t s_pass_n;
-
-		s_pass_n++;
-		if ((s_pass_n <= 4U) || ((s_pass_n & 0x3FU) == 0U)) {
-			usbh_console_printf(
-				"xhci: evwalk pass=%u enter ep=%u cs=%u\n",
-				s_pass_n, hcd->event_ep, hcd->event_cs);
-		}
-	}
-
 	for (;;) {
 		struct xhci_trb *ev = &hcd->event_trbs[hcd->event_ep];
 		uint32_t type;
@@ -2322,15 +2308,6 @@ static void xhci_event_process(struct xhci_hcd *hcd)
 			break; /* no fresh event */
 		}
 		type = TRB3_TYPE_GET(ev->dw3);
-
-		if ((type == 0U) || (type > 48U)) {
-			/* cycle-valid but type-invalid: a stale/garbage cell
-			 * the cycle check mistook for a fresh event */
-			usbh_console_printf(
-				"xhci: evwalk phantom ep=%u cs=%u cell=[%08x %08x %08x %08x]\n",
-				hcd->event_ep, hcd->event_cs,
-				ev->dw0, ev->dw1, ev->dw2, ev->dw3);
-		}
 
 		switch (type) {
 		case TRB_TYPE_TRANSFER:

@@ -111,23 +111,6 @@ aic8800_dump_scan(void)
 		CASE_ANCHOR("aic8800: scan[%u] \"%s\" freq=%u band=%u "
 		    "rssi=%d\n", i, ap.ssid, ap.freq_mhz,
 		    (unsigned)ap.band, (int)ap.rssi);
-		/* W7-02 diagnostic: the join target's actual RSN IE bytes
-		 * (mixed-mode WPA/WPA2 and PMKID-list variants differ here
-		 * and the CONNECT_REQ echoes this IE to the firmware). */
-		if (strcmp((const char *)ap.ssid,
-		    (const char *)AIC8800_WIFI_SSID) == 0) {
-			unsigned int j;
-			unsigned int rsn_dump = ap.rsn_len;
-
-			if (rsn_dump > 20u) {
-				rsn_dump = 20u;
-			}
-			CASE_ANCHOR("aic8800: target rsn_len=%u ie=", ap.rsn_len);
-			for (j = 0u; j < rsn_dump; j++) {
-				CASE_ANCHOR("%02x", ap.rsn_ie[j]);
-			}
-			CASE_ANCHOR("\n");
-		}
 	}
 }
 
@@ -220,23 +203,6 @@ case_aic8800_run(void)
 	for (bus = 0u; bus < USB_BOARD_BUS_COUNT; bus++) {
 		CASE_ANCHOR("aic8800: bus%u irqs=%u\n", bus,
 		    usb_board_irq_count(bus));
-	}
-
-	/* W7-02 discriminator: the join wedge always lands right after the
-	 * FIRST-EVER bulk-OUT on the data pipe (EAPOL M2; fw download and
-	 * every command ride the message pipes). Send a benign 1-byte OUT
-	 * on the data pipe NOW, pre-join: if the controller null-ptrs this
-	 * too (watch the xhci lines) or the scan below stops working, the
-	 * wedge is "any data-pipe OUT", not the M2 sequence. */
-	if (device != NULL) {
-		static uint8_t dummy_out[64] __attribute__((aligned(64)));
-		int dr;
-
-		memset(dummy_out, 0, sizeof(dummy_out));
-		dr = usbh_aic8800_bulk_send(device, dummy_out, 1u, 100u,
-		    false);
-		CASE_ANCHOR("aic8800: pre-join data-pipe OUT probe ret=%d\n",
-		    dr);
 	}
 
 	/* B3: the scan table. */

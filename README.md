@@ -50,23 +50,51 @@ the build compiles (`docs/PATCH-POLICY.md`).  Patches are applied in the tree;
 | `rtw89` / RTL8851BU | USB2/USB3 | mainline rtw89 over the linuxkpi USB engine, both as a Linux module and in the RTOS images |
 | `rtl8xxxu` / RTL8188EUS, RTL8723BU | USB2 | mainline rtl8xxxu, same two builds |
 | `rtw88` / RTL8821CU | USB2 | mainline rtw88, Linux module line |
+| `rtw88` / RTL8821CS | SDIO | mainline rtw88 on the firefly v2 MCI host (SDIO), in the RTOS images |
+| `aic8800` / AIC8800D80 | USB2 | the vendor FullMAC stack (boot, firmware download, WPA2 supplicant, lwIP) over the CherryUSB host stack, firefly v2 |
 | `iwlwifi` / Intel AC 7260 | PCIe | mainline iwlwifi/mvm over the linuxkpi PCI engine |
 | vendor `rtl8189fs` / RTL8189FTV | SDIO | the vendor driver with its own MLME, over the SDIO host stack |
 | USB camera (UVC) | USB2 | the CherryUSB host stack, the video class and an isochronous stream engine |
 
+The `aic8800` line is the one line whose 802.11 is not ours: the chip's own
+firmware runs the MLME, so the driver is a message transport and the line is
+kept separate from the SoftMAC arms rather than folded into them.  It is the
+first vendor FullMAC arm here and it exercises the same host stack (CherryUSB,
+the xHCI port) as the SoftMAC arms do.
+
+What a working boot looks like on the console - one verbatim UART transcript per
+module, with the anchors that name each step - is in
+[`docs/CONSOLE-EVIDENCE.md`](docs/CONSOLE-EVIDENCE.md).  It starts with the
+RTL8821CS and the AIC8800D80.
+
 ## Board and firmware sources
 
-The reference board is the RK3568-E4AP5G1-ITX; its hardware, peripheral map and
-boot path are in [`docs/boards/rk3568-itx.md`](docs/boards/rk3568-itx.md).
+Two boards are wired out.  The reference board is the RK3568-E4AP5G1-ITX; its
+hardware, peripheral map and boot path are in
+[`docs/boards/rk3568-itx.md`](docs/boards/rk3568-itx.md).  It carries two EHCI
+roots and two xHCI (DWC3) instances.
+
+The second board is the firefly v2 (Phytium PE2204 / "Phytium-Pi"), an aarch64
+SoC with two xHCI (FUSB3) instances and no EHCI - the board the SDIO and
+vendor-FullMAC lines above run on.  Its image links at `0x90000000` and is
+loaded the same way (`tftpboot 0x90000000`, then `go 0x90000000`); the DDR base
+and the controller register apertures are in
+`tests/board/rtos/platform/board/firefly/v2/`.
 
 Both firmware trees live on GitHub and are not vendored here:
 
 - Boot firmware: <https://github.com/KevinACoder/u-boot-rockchip>, branch
   `next-dev`, board defconfig `rk3568-e4ap5g1-itx_defconfig`, board DTS
   `arch/arm/dts/rk3568-e4ap5g1-itx.dts`.
-- Reference Linux kernel: <https://github.com/KevinACoder/linux>, branch
-  `v7.3-rc2-firefly`; the measured reference image is commit `e71d9a28760f`
-  (`7.3.0-rc2-ge71d9a28760f`).
+- Reference Linux kernel (RK3568): <https://github.com/KevinACoder/linux>,
+  branch `v7.3-rc2-firefly`; the measured reference image is commit
+  `e71d9a28760f` (`7.3.0-rc2-ge71d9a28760f`).
+
+Wi-Fi firmware is not vendored either: the SoftMAC lines load it from the
+board image's `/lib/firmware`, and the `aic8800` line generates its five
+firmware blobs into `wireless-drivers/aic8800/fw/` with
+`tools/rtos/aic8800-fw-blobs.py` (digests and the upstream they came from are
+in [`docs/FIRMWARE-NOTICES.md`](docs/FIRMWARE-NOTICES.md)).
 
 ## Building the Linux kernel module
 
@@ -92,7 +120,7 @@ build does not hand `-D` configuration macros: structural facts live in
 header, and a missing value fails the build instead of falling back silently.
 
 ```sh
-./make.rtos list                      # the 82 defconfigs
+./make.rtos list                      # every defconfig
 ./make.rtos config PROFILE=<name>     # write freewificam_config{,.h,.config}
 ./make.rtos menuconfig PROFILE=<name> # edit .config, then save the defconfig
 ./make.rtos image PROFILE=<name>      # one image, the profile's backend
@@ -120,6 +148,7 @@ The profiles carried today, by group:
 |---|---|---|
 | camera | `uvc` (active) | one USB2 root, the video class, the isochronous engine and the four camera cases |
 | USB host | `usb-xhci`, `usb-xhci-diag`, `usb-xhci-diag-full`, `usb-ehci` | the host stack and the mass-storage class on one controller |
+| USB host (firefly v2) | `firefly-v2-usb-xhci` | the same storage case on the board's `usb3_0` xHCI root |
 | RTL8851BU | `rtw89-8851bu`, `rtw89-8851bu-bringup`, `rtw89-8851bu-tx`, `rtw89-8851bu-ehci`, `rtw89-8851bu-ehci-bringup`, `rtw89-8851bu-ehci-scan`, `rtw89-8851bu-ehci-join`, `rtw89-8851bu-tx-ehci` | rtw89 over the linuxkpi USB engine, on an xHCI or EHCI root |
 | RTL8188EUS | `rtl8xxxu-8188eu-{bringup,bringup-hb,bringup-all,scan,join,data,net,netio-ar-g,netio-ar-ht20,netio-ar-ht20-ba}` | rtl8xxxu over CherryUSB, the bring-up-to-network ladder and the netio arms |
 | RTL8723BU | `rtl8xxxu-8723bu-{bringup,bringup-all,scan,join,data,net,netio-ar-ht20,netio-ar-ht20-ba}` | the same driver on an EHCI root, including the composite-interface case and the netio arms |
@@ -127,6 +156,7 @@ The profiles carried today, by group:
 | RTL8189FTV | `wlan-delivery`, `wlan-obs`, `wlan-ping` | the vendor SDIO stack; needs the external tree (below) |
 | PCIe | `pcie-nvme`, `pcie-bench`, `pcie-7260` | the PCIe root complex, NVMe and the 7260 endpoint |
 | Shell | `rtos-shell` | the CherrySH console: `case list|run`, the `wifi`/`net`/`usb`/... groups and `board`/`log`/`reboot`; one boot drives every case by name |
+| firefly v2 | `firefly-v1-pcie`, `firefly-v2-{rtw88-sdio,rtw88-join,rtw88-net,sdio-mci,xmac,usb-xhci,aic8800-usb}` | the second board: PCIe/ECAM, the rtw88 SDIO line (8821CS), the MCI host alone, the on-board MAC, the storage case and the AIC8800 vendor FullMAC line |
 
 The RTL8189FTV profiles additionally need the external vendor tree:
 
@@ -224,6 +254,50 @@ uplink row above *is* valid (0% loss, zero TX errors) and shows a real roughly
 half rate against the reference, still to be attributed.  The transmit path's
 backpressure and the pacing of the server are the next round's work; the
 protocol evidence is in [docs/NET-TESTING.md](docs/NET-TESTING.md) section 9.4.
+
+### firefly v2 / USB mass storage (USB2 xHCI, `usb3_0`)
+
+The same storage case as the RK3568 rows, moved to the second board.  Read and
+write are the case's own sweep arms (64 KiB commands, disk window), and the
+Linux column is the same board, port and stick under the in-tree driver.
+
+| case | freewificam (rtos) | Linux reference |
+|---|---|---|
+| `E-MSC` read | 21.5 MiB/s (64 KiB cmds), 20.6 (128 KiB) | 20.6 MiB/s |
+| `E-MSC` write | 18.7 MiB/s (64 KiB cmds), 17.8 (128 KiB) | 17.1 MiB/s |
+
+### firefly v2 / RTL8821CS / SDIO
+
+The card runs mainline rtw88 on the board's MCI host.  What is measured today
+is reachability - it associates to the WPA2 bench AP 2/2 boots and passes a
+first packet 2/2 (`ping` 10/10, DHCP lease in `10.227.127.0/24`).  **Throughput
+is not measured yet**; the rows below appear when the 1440 B UDP cells have
+run.
+
+| case | freewificam (rtos) | Linux reference |
+|---|---|---|
+| `W-JOIN` (WPA2 assoc + DHCP + ping) | 2/2 boots | 2/2 |
+| `W-UDP-D` / `W-UDP-U` | not measured | not measured |
+
+### firefly v2 / AIC8800D80 / USB2 xHCI
+
+A vendor FullMAC chip: the firmware runs the MLME and the driver is a message
+transport over the same CherryUSB host stack.  The bring-up ladder is the
+module's own, on one boot: the `1111:1111` ZeroCD mode switch, the four-stage
+firmware download, the `a69c:8d81` runtime composite, the scan table (24 APs
+seen), the WPA2 four-way handshake, DHCP and the stack's own gateway ping.
+
+The handshake is reported per message: M1 received, M2 sent, M3 received with a
+valid MIC, M4 sent - so the PTK is derived on both sides, not merely attempted.
+
+| case | freewificam (rtos) | Linux reference |
+|---|---|---|
+| `W-JOIN` (WPA2 4-way + DHCP + ping) | 2/2 boots (`connected` 3000 ms, ping 4/4, 6-65 ms) | 2/2 |
+| `W-UDP-D` / `W-UDP-U` | not measured | not measured |
+
+The Linux column is the same dongle under the in-tree `aic8800` driver on the
+same board and port; that arm is what separated the host stack from the device
+when this line was being brought up.
 
 ### Notes
 
