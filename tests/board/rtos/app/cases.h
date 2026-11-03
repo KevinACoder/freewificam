@@ -32,7 +32,7 @@
 
 /* Each case is compiled only when its switch is on, so a short arm builds a
  * short image (`make CASES=tick,cmsis2`). */
-/* The SDIO socket over the ported Phytium MCI controller (firefly v2's mmc1):
+/* The SDIO socket over the ported MCI controller (firefly v2's mmc1):
  * CMD52 enumeration and CMD53 data transfers, no rtw88. */
 #if defined(RTOS_CASE_SDIO_MCI)
 int case_sdio_mci_run(void);

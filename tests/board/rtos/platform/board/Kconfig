@@ -14,10 +14,10 @@ config BOARD_RK3568_ITX
 	bool "RK3568 E4AP5G1-ITX"
 
 config BOARD_FIREFLY_V1
-	bool "Firefly v1 (pe2204)"
+	bool "Firefly v1"
 
 config BOARD_FIREFLY_V2
-	bool "Firefly v2 (pe2204)"
+	bool "Firefly v2"
 
 endchoice
 

@@ -2,7 +2,7 @@
 # Edit this file or run ./make.rtos menuconfig, then regenerate.
 
 # @file    firefly-v2-sdio-mci.mk
-# @brief   The firefly v2 SDIO socket image: the ported Phytium MCI controller
+# @brief   The firefly v2 SDIO socket image: the ported MCI controller
 #          driver under the imported fsl_sdmmc stack, proving CMD52 and CMD53
 #          on the board's mmc1 (the socket the WiFi part sits in).
 #

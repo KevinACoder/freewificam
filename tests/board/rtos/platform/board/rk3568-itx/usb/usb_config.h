@@ -233,8 +233,8 @@ void usbh_console_printf(const char *fmt, ...);
 /* This board's DWC3 core is reachable from the xHCI capability base at
  * +0xC100 (GSNPSID at +0x20 into the core); defining the offset enables the
  * driver's DWC3 identity/host-mode probes. Boards whose xHCI window has no
- * DWC3 core behind it (the Phytium FUSB3) leave this undefined and the
- * probes compile out - touching the offset there terminates the bus. */
+ * DWC3 core behind it (the firefly v2) leave this undefined and the probes
+ * compile out - touching the offset there terminates the bus. */
 #ifndef CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS
 #define CONFIG_USBHOST_XHCI_DWC3_CORE_OFFS	0xC100U
 #endif

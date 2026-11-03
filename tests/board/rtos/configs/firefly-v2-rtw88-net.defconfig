@@ -3,7 +3,7 @@
 
 # @file    firefly-v2-rtw88-sdio.mk
 # @brief   The firefly v2 RTL8821CS image: the vendored rtw88 driver over the
-#          linuxkpi SDIO engine and the ported Phytium MCI controller, with the
+#          linuxkpi SDIO engine and the ported MCI controller, with the
 #          net80211 bridge - the W6-01 round's two exits (a multi-block CMD53
 #          read and a scan that lists the surrounding APs).
 #

@@ -1,6 +1,6 @@
 # @file    sdio_mci.mk
 # @brief   The SDIO-socket world: the imported fsl_sdmmc stack driven by this
-#          board's own Phytium MCI controller driver, ported from the Linux
+#          board's own MCI controller driver, ported from the Linux
 #          driver that is proven on this board.
 #
 # One card type (SDIO), one controller (mmc1 @ 0x28001000), polled transfers.

@@ -4,7 +4,7 @@
 #          net80211 stack and its bridge, and the compiled-in firmware blob.
 #
 # Composition mirrors `rtw89.mk` (net80211 is the MLME, linuxkpi supplies the
-# Linux face) with the bus swapped: SDIO over the ported Phytium MCI controller
+# Linux face) with the bus swapped: SDIO over the board's ported MCI controller
 # (`sdio_mci.mk`'s stack, one level up) instead of USB over CherryUSB.  The
 # driver compiles from the pinned tree with the four Kconfig keys the kernel
 # resolves for the 8821CS; its bytes are not edited.

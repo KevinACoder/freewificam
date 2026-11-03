@@ -2,7 +2,7 @@
 /*
  * @file   sdio_mci.c
  * @brief  Case sdio_mci: the SDIO socket on this board (mmc1) driven by the
- *         ported Phytium MCI controller driver - brought up, enumerated by
+ *         ported MCI controller driver - brought up, enumerated by
  *         CMD52, and round-tripped by CMD53.
  *
  * What is claimed as evidence, one anchor family per question:

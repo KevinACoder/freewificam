@@ -207,8 +207,8 @@
 #define MCI_DMAC_ALL		0x1ffu
 
 /*
- * STATUS_REG (0x90) is two things at once, and the vendor manual says which
- * bits are which (E2000 software manual V1.3, 5.17.3.33):
+ * STATUS_REG (0x90) is two things at once, and the manual the port was
+ * written against says which bits are which:
  *
  *   bit[31:13]  DMAC FSM state   - a state, not a set of flags
  *   bit[12:10]  EB  exception id

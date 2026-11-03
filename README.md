@@ -256,14 +256,24 @@ protocol evidence is in [docs/NET-TESTING.md](docs/NET-TESTING.md) section 9.4.
 
 ### firefly v2 / USB mass storage (USB2 xHCI, `usb3_0`)
 
-The same storage case as the RK3568 rows, moved to the second board.  Read and
-write are the case's own sweep arms (64 KiB commands, disk window), and the
-Linux column is the same board, port and stick under the in-tree driver.
+The same storage case as the RK3568 rows, moved to the second board.  It runs
+inside the disk's last 32 MiB, does a 64 KiB write-then-read round trip first,
+then a size sweep and a fixed-command arm at each size; the Linux column is the
+same board, port and stick under the in-tree driver.
 
 | case | freewificam (rtos) | Linux reference |
 |---|---|---|
-| `E-MSC` read | 21.5 MiB/s (64 KiB cmds), 20.6 (128 KiB) | 20.6 MiB/s |
-| `E-MSC` write | 18.7 MiB/s (64 KiB cmds), 17.8 (128 KiB) | 17.1 MiB/s |
+| `E-MSC` read | 21.50 MiB/s (1 MiB cmds, 46.5 us/cmd), 19.54 (64 KiB) | 20.6 MiB/s |
+| `E-MSC` write | 18.69 / 18.83 MiB/s (1 MiB cmds, 2 boots), 15.0 (64 KiB) | 17.1 MiB/s |
+
+Two boots, the disk's last 32 MiB window, a 64 KiB round trip before the
+measured arms.  Both boots also print the size sweep, which is where the
+per-command cost is read off: read goes 10.41 MiB/s at 8 KiB to 20.72 at
+128 KiB, write 8.06 to 17.85, so the fixed cost per command is what the small
+arms pay (0.75 ms against 6.0 ms for a 16x larger command).  Each boot reports
+`csw bStatus 1` / "Device not ready" once, on the capacity command: that is the
+stick's own answer right after the bus resets, and the class retries it - the
+run is clean from the round trip onwards.
 
 ### firefly v2 / RTL8821CS / SDIO
 
