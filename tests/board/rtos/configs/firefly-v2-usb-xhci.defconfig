@@ -1,0 +1,26 @@
+# @file    firefly-v2-usb-xhci.defconfig
+# @brief   The firefly v2 mass-storage image: the CherryUSB MSC class (first-
+#          party app half + the imported usbh_msc) over usb3_0 xHCI at
+#          0x31a08000 - the same root and port the AIC8800 line rode.
+#
+# Purpose (W7-02): the join wedge on this port fires after the first bulk-OUT
+# on the dongle's data pipe; an MSC disk exercises continuous bulk IN+OUT on
+# one endpoint pair through the same port, so it is both the port's storage
+# test and a wedge discriminator with an ordinary device.  The case body is
+# usb_msc.c (block round trip in the disk's last 32 MiB + throughput sweep);
+# only the bus pick is board-specific (usb_xhci.c, busid 0 on firefly v2).
+#
+# Deploy: build/rtos-threadx.bin published as firefly-v2-usb-xhci.bin,
+# `setenv ipaddr 192.168.4.29; tftpboot 0x90000000 firefly-v2-usb-xhci.bin`
+# then `go 0x90000000` (image links at 0x90000000, NOT the SDK's 0x80100000).
+
+# --- image -----------------------------------------------------------------
+
+CONFIG_BACKEND_THREADX=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_GMAC_PROF=y
+CONFIG_BOARD_FIREFLY_V2=y
+CONFIG_CASES="tick usb_xhci"
+CONFIG_WLAN_LINE_NONE=y

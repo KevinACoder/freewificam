@@ -727,7 +727,19 @@ static int xhci_cmd_configure_ep(struct xhci_hcd *hcd, struct xhci_dev *dev,
 	} else if (dev->hport->speed == USB_SPEED_FULL) {
 		speed = SLOT_CTX_SPEED_FS;
 	}
-	slot[0] = SLOT_CTX_DEV_INFO_LAST_CTX(dci) |
+	/* Context Count is monotonic, never shrinks: a Configure Endpoint for
+	 * a lower DCI than one already live must not pull the slot's valid
+	 * range below it.  The Phytium FUSB3 enforces doorbell DCI <= Context
+	 * Count (an out-of-range ring answers with a Transfer Event code 12
+	 * "Endpoint Not Enabled", null TRB pointer - the W7-02 stick wedge:
+	 * descriptor order OUT(dci4) then IN(dci3) left last_ctx=3 and every
+	 * CBW doorbell was refused, while DWC3 ignores the field).  FreeBSD's
+	 * driver keeps the same monotonic context_num (dev/usb/controller/
+	 * xhci.c xhci_configure_mask). */
+	if ((uint32_t)dev->last_ctx_max < dci) {
+		dev->last_ctx_max = (uint8_t)dci;
+	}
+	slot[0] = SLOT_CTX_DEV_INFO_LAST_CTX(dev->last_ctx_max) |
 		  SLOT_CTX_DEV_INFO_SPEED(speed) |
 		  SLOT_CTX_DEV_INFO_ROUTE(0U);
 	slot[1] = SLOT_CTX_DEV_INFO2_PORT(root) |
@@ -916,6 +928,7 @@ static int xhci_setup_slot(struct xhci_hcd *hcd, struct usbh_hubport *hport)
 	dev->slot_id = slot_id;
 	dev->hport = hport;
 	dev->ctxsz = hcd->ctxsz_cache;
+	dev->last_ctx_max = 1U;	/* ep0 context exists from Address Device */
 	dev->input_ctx = s_in_ctx[hcd->bus->busid][slot_id];
 	dev->dev_ctx = s_dev_ctx[hcd->bus->busid][slot_id];
 
@@ -2004,6 +2017,76 @@ static void xhci_complete_td(struct xhci_ring *ring, uint32_t idx,
 	xhci_urb_waitup(ring);
 }
 
+/* W7-02 wedge snapshot: global register set + every endpoint context and
+ * ring head, printed once per call site.  The wedge that fires this is
+ * global - the first data-pipe bulk-OUT breaks every subsequent bulk
+ * doorbell on every endpoint - so single-endpoint dumps miss the point. */
+static void xhci_wedge_snapshot(struct xhci_hcd *hcd, struct xhci_dev *dev)
+{
+	uint8_t d;
+	uint16_t e;
+
+	usbh_console_printf(
+		"xhci: wedge snapshot dcbaap=%08x crcr=%08x usbsts=%08x usbcmd=%08x iman=%08x imod=%08x erdp=%08x\n",
+		xhci_r32(hcd, XHCI_DCBAAP_LO),
+		xhci_r32(hcd, XHCI_CRCR_LO),
+		xhci_r32(hcd, XHCI_USBSTS),
+		xhci_r32(hcd, XHCI_USBCMD),
+		xhci_r32_rts(hcd, XHCI_IMAN(0)),
+		xhci_r32_rts(hcd, XHCI_IMOD(0)),
+		xhci_r32_rts(hcd, XHCI_ERDP_LO(0)));
+	xhci_dcache_invalidate(dev->dev_ctx,
+			       dev->ctxsz * (1U + XHCI_MAX_DCI));
+	/* slot context: LAST_CTX (bits 31:27 of dw0) vs the highest DCI the
+	 * driver ever added is the vendor-driver invariant (FreeBSD keeps a
+	 * monotonic context_num); a LAST_CTX below a live DCI makes strict
+	 * controllers refuse that endpoint's doorbells with code 12. */
+	{
+		const uint32_t *s =
+		    (const uint32_t *)xhci_out_ctx(dev, 0U);
+
+		usbh_console_printf(
+			"xhci: wedge slot ctx=[%08x %08x %08x %08x] last_ctx=%u route=%u\n",
+			s[0], s[1], s[2], s[3], (s[0] >> 27) & 0x1FU,
+			s[0] & 0xFFFFFU);
+	}
+	/* the last 16 consumed event cells: the exact event sequence that
+	 * led into the wedge (Configure EP completions included) */
+	xhci_dcache_invalidate(hcd->event_trbs,
+			       CONFIG_USBHOST_XHCI_EVENT_RING_SIZE *
+			       TRB_SIZE);
+	for (e = 16U; e > 0U; e--) {
+		uint16_t i = (uint16_t)((hcd->event_ep + 256U - e) % 256U);
+		const struct xhci_trb *ev = &hcd->event_trbs[i];
+
+		if ((ev->dw0 == 0U) && (ev->dw1 == 0U) &&
+		    (ev->dw2 == 0U) && (ev->dw3 == 0U)) {
+			continue;
+		}
+		usbh_console_printf(
+			"xhci: wedge ev[%u]=[%08x %08x %08x %08x]\n",
+			i, ev->dw0, ev->dw1, ev->dw2, ev->dw3);
+	}
+	for (d = 1U; d <= 5U; d++) {
+		const uint32_t *c =
+		    (const uint32_t *)xhci_out_ctx(dev, d);
+		struct xhci_ring *r = dev->ep_rings[d];
+
+		if (r == NULL) {
+			continue;
+		}
+		xhci_dcache_invalidate(r->trbs, 3U * TRB_SIZE);
+		usbh_console_printf(
+			"xhci: wedge dci=%u ctx=[%08x %08x %08x %08x %08x] ring=%08x n=%u t0=[%08x %08x %08x %08x] t1=[%08x %08x %08x %08x]\n",
+			d, c[0], c[1], c[2], c[3], c[4],
+			(uint32_t)(uintptr_t)r->trbs, r->num_trbs,
+			r->trbs[0].dw0, r->trbs[0].dw1,
+			r->trbs[0].dw2, r->trbs[0].dw3,
+			r->trbs[1].dw0, r->trbs[1].dw1,
+			r->trbs[1].dw2, r->trbs[1].dw3);
+	}
+}
+
 static void xhci_handle_transfer_event(struct xhci_hcd *hcd, struct xhci_trb *ev)
 {
 	uint32_t dw2 = ev->dw2;
@@ -2049,8 +2132,109 @@ static void xhci_handle_transfer_event(struct xhci_hcd *hcd, struct xhci_trb *ev
 	if (trb_ptr < (uint32_t)(uintptr_t)ring->trbs ||
 	    trb_ptr >= (uint32_t)((uintptr_t)ring->trbs +
 				  ring->num_trbs * TRB_SIZE)) {
-		usbh_console_printf("xhci: xfer evt (bad ptr) slot=%u dci=%u ptr=%08x\n",
-				    slot_id, dci, trb_ptr);
+		/* Controller quirk (board evidence 2026-11-03, firefly v2
+		 * xHCI + AIC8800 data-in): short-packet completions on the
+		 * bulk-IN data endpoint arrive as well-formed transfer
+		 * events whose TRB pointer is NULL (dw0/dw1 = 0, cycle and
+		 * slot/ep/type valid, code=Short, rem=0).  Dropping them
+		 * starves the receive (EAPOL M3 retransmissions were
+		 * dropped one per 3 s arm for the whole 30 s join window).
+		 * With exactly one TD in flight per ring the event can only
+		 * belong to it; complete it with the event's own residual
+		 * (observed 0 = full length - receivers zero their buffers
+		 * and parse by embedded length fields, so an over-long
+		 * actual_length is inert).  Only for the null-pointer
+		 * variant and only for IN transfers: any other wild pointer
+		 * is real corruption and still dropped. */
+		if ((trb_ptr == 0U) &&
+		    ((ring->td.urb->ep->bEndpointAddress & 0x80U) != 0U)) {
+			hcd->dbg_nullptr_cmp++;
+			if ((hcd->dbg_nullptr_cmp <= 4U) ||
+			    ((hcd->dbg_nullptr_cmp & 0x3FU) == 0U)) {
+				uint32_t *octx = xhci_out_ctx(dev, dci);
+
+				xhci_dcache_invalidate(
+					dev->dev_ctx,
+					dev->ctxsz * (1U + XHCI_MAX_DCI));
+				xhci_dcache_invalidate(
+					ring->td.urb->transfer_buffer,
+					USB_ALIGN_UP(64U,
+						     CONFIG_USB_ALIGN_SIZE));
+				{
+					const uint8_t *b =
+						ring->td.urb->transfer_buffer;
+
+					usbh_console_printf(
+						"xhci: xfer evt (null ptr quirk) slot=%u dci=%u code=%u rem=%u n=%u epstate=%u dqlo=%08x dcs=%u td=[%u..%u] buf=%02x%02x%02x%02x%02x%02x%02x%02x %02x%02x%02x%02x%02x%02x%02x%02x\n",
+						slot_id, dci, code, residual,
+						hcd->dbg_nullptr_cmp,
+						octx[0] & 0x7U,
+						octx[2] & ~0xFU,
+						octx[2] & 0x1U,
+						ring->td.first_idx,
+						ring->td.last_idx,
+						b[0], b[1], b[2], b[3],
+						b[4], b[5], b[6], b[7],
+						b[8], b[9], b[10], b[11],
+						b[12], b[13], b[14], b[15],
+						b[16], b[17], b[18], b[19],
+						b[20], b[21], b[22], b[23]);
+				}
+				/* Recovery experiment (W7-02): the controller
+				 * parks this endpoint's fetch (dq frozen,
+				 * buffers empty, one null-ptr event per
+				 * doorbell) after the EAPOL M2 bulk-OUT; the
+				 * kill path's Stop+SetTRDeq does not unwedge
+				 * it.  Reset Endpoint is the one spec recovery
+				 * not yet exercised - fire it on the first
+				 * occurrence, then re-point the dequeue. */
+				if (hcd->dbg_nullptr_cmp == 1U) {
+					struct xhci_trb trb;
+
+					if (hcd->dbg_wedge_snap++ == 0U) {
+						xhci_wedge_snapshot(hcd, dev);
+					}
+					memset(&trb, 0, sizeof(trb));
+					trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_RESET_EP) |
+						  TRB3_EP_ID(dci) |
+						  TRB3_SLOT_ID(slot_id);
+					usbh_console_printf(
+						"xhci: null-ptr recovery: RESET_EP slot=%u dci=%u -> %d\n",
+						slot_id, dci,
+						xhci_do_command(hcd, &trb,
+								100U));
+					memset(&trb, 0, sizeof(trb));
+					trb.dw0 = (uint32_t)(uintptr_t)ring->trbs |
+						  XHCI_CRCR_LO_RCS;
+					trb.dw1 = (uint32_t)((uintptr_t)ring->trbs >> 32);
+					trb.dw3 = TRB3_TYPE_SET(TRB_TYPE_SET_TR_DEQUEUE) |
+						  TRB3_EP_ID(dci) |
+						  TRB3_SLOT_ID(slot_id);
+					usbh_console_printf(
+						"xhci: null-ptr recovery: SET_TR_DEQ -> %d\n",
+						xhci_do_command(hcd, &trb,
+								100U));
+					*(volatile uint32_t *)(hcd->db +
+							      ((uint32_t)slot_id << 2)) =
+						XHCI_DB_TARGET(dci);
+					ring->dbw++;
+				}
+			}
+			/* complete as a short packet: the event's own code
+			 * (observed 12, unnamed in the table) routes into
+			 * complete_td's error branches and would report -IO
+			 * for a transfer whose data DID land - the residual
+			 * (observed 0, full length) plus the receiver's own
+			 * embedded-length parsing is the honest readout */
+			xhci_complete_td(ring, ring->td.last_idx, residual,
+					 TRB_CODE_SHORT_PACKET);
+			return;
+		}
+		if (hcd->dbg_wedge_snap++ == 0U) {
+			xhci_wedge_snapshot(hcd, dev);
+		}
+		usbh_console_printf("xhci: xfer evt (bad ptr) slot=%u dci=%u ptr=%08x code=%u rem=%u\n",
+				    slot_id, dci, trb_ptr, code, residual);
 		return;
 	}
 	idx = (trb_ptr - (uint32_t)(uintptr_t)ring->trbs) / TRB_SIZE;
@@ -2116,6 +2300,20 @@ static void xhci_event_process(struct xhci_hcd *hcd)
 	xhci_dcache_invalidate(hcd->event_trbs,
 			       CONFIG_USBHOST_XHCI_EVENT_RING_SIZE * TRB_SIZE);
 
+	/* W7-02 forensics: the consumer cursor's trajectory - bounded to
+	 * every 64th pass plus the first four, plus a phantom-slot detector
+	 * in the walk below (cycle-valid but type-invalid = stale read). */
+	{
+		static uint32_t s_pass_n;
+
+		s_pass_n++;
+		if ((s_pass_n <= 4U) || ((s_pass_n & 0x3FU) == 0U)) {
+			usbh_console_printf(
+				"xhci: evwalk pass=%u enter ep=%u cs=%u\n",
+				s_pass_n, hcd->event_ep, hcd->event_cs);
+		}
+	}
+
 	for (;;) {
 		struct xhci_trb *ev = &hcd->event_trbs[hcd->event_ep];
 		uint32_t type;
@@ -2124,6 +2322,15 @@ static void xhci_event_process(struct xhci_hcd *hcd)
 			break; /* no fresh event */
 		}
 		type = TRB3_TYPE_GET(ev->dw3);
+
+		if ((type == 0U) || (type > 48U)) {
+			/* cycle-valid but type-invalid: a stale/garbage cell
+			 * the cycle check mistook for a fresh event */
+			usbh_console_printf(
+				"xhci: evwalk phantom ep=%u cs=%u cell=[%08x %08x %08x %08x]\n",
+				hcd->event_ep, hcd->event_cs,
+				ev->dw0, ev->dw1, ev->dw2, ev->dw3);
+		}
 
 		switch (type) {
 		case TRB_TYPE_TRANSFER:

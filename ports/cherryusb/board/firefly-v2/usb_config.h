@@ -28,7 +28,10 @@ void usbh_console_printf(const char *fmt, ...);
 /* Errors only: the stack's per-transfer chatter would flood a polled
  * console during enumeration. */
 #ifndef CONFIG_USB_DBG_LEVEL
-#define CONFIG_USB_DBG_LEVEL	USB_DBG_ERROR
+/* Diagnostic arm (W7-02): INFO during the join-phase evidence round - the
+ * vendor stack's associate/handshake stage lines are INFO. Revert to
+ * USB_DBG_ERROR when the round closes. */
+#define CONFIG_USB_DBG_LEVEL	USB_DBG_INFO
 #endif
 
 /* --- DMA coherency -------------------------------------------------------- */

@@ -314,6 +314,7 @@ struct xhci_dev {
 	struct usbh_hubport *hport;
 	uint16_t ep0_mps_hw;
 	uint32_t ep_configured;	/* dci bitmap with a programmed EP context */
+	uint8_t last_ctx_max;	/* monotonic max DCI (slot ctx Context Count) */
 	struct xhci_ring *ep_rings[32];
 	uint8_t *input_ctx;	/* 64B aligned, (2+31) context slots */
 	uint8_t *dev_ctx;	/* 64B aligned, (1+31) context slots */
@@ -362,6 +363,8 @@ struct xhci_hcd {
 	volatile uint32_t dbg_drop_dev;	/* events with no dev/ring */
 	volatile uint32_t dbg_ring_ev;	/* ring underrun/overrun events */
 	volatile uint32_t dbg_bad_idx;	/* transfer events off the TD's IOC TRB */
+	volatile uint32_t dbg_nullptr_cmp; /* null-TRB-pointer events completed as the in-flight TD (controller quirk) */
+	volatile uint32_t dbg_wedge_snap;	/* wedge-state snapshots printed (one per boot per branch) */
 	uint32_t dbg_ctrl_n;		/* ep0 control submissions */
 	uint32_t dbg_tmo_n;		/* ep0 wait timeouts */
 };

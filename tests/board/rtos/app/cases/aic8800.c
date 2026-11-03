@@ -111,6 +111,23 @@ aic8800_dump_scan(void)
 		CASE_ANCHOR("aic8800: scan[%u] \"%s\" freq=%u band=%u "
 		    "rssi=%d\n", i, ap.ssid, ap.freq_mhz,
 		    (unsigned)ap.band, (int)ap.rssi);
+		/* W7-02 diagnostic: the join target's actual RSN IE bytes
+		 * (mixed-mode WPA/WPA2 and PMKID-list variants differ here
+		 * and the CONNECT_REQ echoes this IE to the firmware). */
+		if (strcmp((const char *)ap.ssid,
+		    (const char *)AIC8800_WIFI_SSID) == 0) {
+			unsigned int j;
+			unsigned int rsn_dump = ap.rsn_len;
+
+			if (rsn_dump > 20u) {
+				rsn_dump = 20u;
+			}
+			CASE_ANCHOR("aic8800: target rsn_len=%u ie=", ap.rsn_len);
+			for (j = 0u; j < rsn_dump; j++) {
+				CASE_ANCHOR("%02x", ap.rsn_ie[j]);
+			}
+			CASE_ANCHOR("\n");
+		}
 	}
 }
 
@@ -205,6 +222,23 @@ case_aic8800_run(void)
 		    usb_board_irq_count(bus));
 	}
 
+	/* W7-02 discriminator: the join wedge always lands right after the
+	 * FIRST-EVER bulk-OUT on the data pipe (EAPOL M2; fw download and
+	 * every command ride the message pipes). Send a benign 1-byte OUT
+	 * on the data pipe NOW, pre-join: if the controller null-ptrs this
+	 * too (watch the xhci lines) or the scan below stops working, the
+	 * wedge is "any data-pipe OUT", not the M2 sequence. */
+	if (device != NULL) {
+		static uint8_t dummy_out[64] __attribute__((aligned(64)));
+		int dr;
+
+		memset(dummy_out, 0, sizeof(dummy_out));
+		dr = usbh_aic8800_bulk_send(device, dummy_out, 1u, 100u,
+		    false);
+		CASE_ANCHOR("aic8800: pre-join data-pipe OUT probe ret=%d\n",
+		    dr);
+	}
+
 	/* B3: the scan table. */
 	result = aic8800_wifi_scan();
 	if (result != 0) {
@@ -214,6 +248,66 @@ case_aic8800_run(void)
 	if (aic8800_wait(1u << AIC8800_WIFI_EVENT_SCAN_DONE,
 			 AIC8800_SCAN_TIMEOUT_MS, &waited) != 0) {
 		CASE_ANCHOR("aic8800: FAIL scan timeout after %u ms\n", waited);
+		/* W7-02: same wedge fingerprint as the join arm - ep0
+		 * liveness, halt-cycle, then a message-pipe rescan. */
+		if (device != NULL && device->hport != NULL) {
+			struct usb_setup_packet probe;
+			static struct usb_setup_packet probe_setup
+			    __attribute__((aligned(64)));
+			static uint8_t desc[64] __attribute__((aligned(64)));
+			static const uint8_t eps[4] = {
+			    0x01u, 0x81u, 0x02u, 0x82u
+			};
+			int pr;
+			unsigned int e;
+
+			memset(&probe, 0, sizeof(probe));
+			probe.bmRequestType = 0x80u;
+			probe.bRequest = 0x06u; /* GET_DESCRIPTOR */
+			probe.wValue = 0x0100u;
+			probe.wIndex = 0u;
+			probe.wLength = 18u;
+			probe_setup = probe;
+			pr = usbh_control_transfer(device->hport,
+			    &probe_setup, desc);
+			CASE_ANCHOR("aic8800: post-wedge ep0 probe=%d "
+				    "vid=%02x%02x\n", pr,
+			    (pr >= 0) ? desc[9] : 0u,
+			    (pr >= 0) ? desc[8] : 0u);
+			for (e = 0u; e < 4u; e++) {
+				static struct usb_setup_packet halt
+				    __attribute__((aligned(64)));
+				int hr;
+
+				memset(&halt, 0, sizeof(halt));
+				halt.bmRequestType = 0x02u; /* EP */
+				halt.bRequest = 0x03u; /* SET_FEATURE */
+				halt.wValue = 0u; /* ENDPOINT_HALT */
+				halt.wIndex = eps[e];
+				hr = usbh_control_transfer(
+				    device->hport, &halt, NULL);
+				halt.bRequest = 0x01u; /* CLEAR_FEATURE */
+				hr = usbh_control_transfer(
+				    device->hport, &halt, NULL);
+				CASE_ANCHOR(
+				    "aic8800: halt-cycle ep=%02x ret=%d\n",
+				    eps[e], hr);
+			}
+			{
+				int sr = aic8800_wifi_scan();
+				int sd = -1;
+				unsigned int sw = 0u;
+
+				if (sr == 0) {
+					sd = aic8800_wait(
+					    1u << AIC8800_WIFI_EVENT_SCAN_DONE,
+					    8000u, &sw);
+				}
+				CASE_ANCHOR("aic8800: post-wedge rescan=%d "
+					    "scan_done=%d count=%u\n", sr, sd,
+				    aic8800_wifi_get_scan_count());
+			}
+		}
 		return 1;
 	}
 	aic8800_dump_scan();
@@ -236,8 +330,84 @@ case_aic8800_run(void)
 	}
 	if (aic8800_wait(1u << AIC8800_WIFI_EVENT_CONNECTED,
 			 AIC8800_JOIN_TIMEOUT_MS, &waited) != 0) {
-		CASE_ANCHOR("aic8800: FAIL associate timeout after %u ms\n",
-		    waited);
+		/* W7-02 diagnostic: is the device's USB stack still alive
+		 * after the join stall? An ep0 GET_DESCRIPTOR answers
+		 * whether only the bulk pipes wedged (app-level) or the
+		 * whole device went silent. */
+		if (device != NULL && device->hport != NULL) {
+			struct usb_setup_packet probe;
+			/* the xHCI port asserts 64-byte alignment on both */
+			static struct usb_setup_packet probe_setup
+			    __attribute__((aligned(64)));
+			static uint8_t desc[64] __attribute__((aligned(64)));
+			int pr;
+
+			memset(&probe, 0, sizeof(probe));
+			probe.bmRequestType = 0x80u;
+			probe.bRequest = 0x06u; /* GET_DESCRIPTOR */
+			probe.wValue = 0x0100u;
+			probe.wIndex = 0u;
+			probe.wLength = 18u;
+			probe_setup = probe;
+			pr = usbh_control_transfer(device->hport,
+			    &probe_setup, desc);
+			CASE_ANCHOR("aic8800: FAIL associate timeout after %u "
+				    "ms (ep0 probe=%d vid=%02x%02x)\n", waited,
+			    pr, (pr >= 0) ? desc[9] : 0u,
+			    (pr >= 0) ? desc[8] : 0u);
+			/* W7-02 diagnostic 2: USB-protocol endpoint
+			 * recovery. The controller-side RESET_EP/SET_TR_DEQ
+			 * route is refused (Context State Error); try the
+			 * device-side halt cycle on all four bulk endpoints
+			 * via the still-working ep0, then the rescan below
+			 * reports whether any pipe came back. */
+			{
+				static const uint8_t eps[4] = {
+				    0x01u, 0x81u, 0x02u, 0x82u
+				};
+				unsigned int e;
+
+				for (e = 0u; e < 4u; e++) {
+					static struct usb_setup_packet halt
+					    __attribute__((aligned(64)));
+					int hr;
+
+					memset(&halt, 0, sizeof(halt));
+					halt.bmRequestType = 0x02u; /* EP */
+					halt.bRequest = 0x03u; /* SET_FEATURE */
+					halt.wValue = 0u; /* ENDPOINT_HALT */
+					halt.wIndex = eps[e];
+					hr = usbh_control_transfer(
+					    device->hport, &halt, NULL);
+					halt.bRequest = 0x01u; /* CLEAR_FEATURE */
+					hr = usbh_control_transfer(
+					    device->hport, &halt, NULL);
+					CASE_ANCHOR(
+					    "aic8800: halt-cycle ep=%02x "
+					    "ret=%d\n", eps[e], hr);
+				}
+			}
+			/* W7-02 diagnostic 3: is the fw's application loop
+			 * still servicing the MESSAGE pipe? A rescan has an
+			 * unambiguous completion event (SCAN_DONE). */
+			{
+				int sr = aic8800_wifi_scan();
+				int sd = -1;
+				unsigned int sw = 0u;
+
+				if (sr == 0) {
+					sd = aic8800_wait(
+					    1u << AIC8800_WIFI_EVENT_SCAN_DONE,
+					    8000u, &sw);
+				}
+				CASE_ANCHOR("aic8800: post-wedge rescan=%d "
+					    "scan_done=%d count=%u\n", sr, sd,
+				    aic8800_wifi_get_scan_count());
+			}
+		} else {
+			CASE_ANCHOR("aic8800: FAIL associate timeout after %u "
+				    "ms (no hport for ep0 probe)\n", waited);
+		}
 		return 1;
 	}
 	CASE_ANCHOR("aic8800: connected \"%s\" after %u ms\n",

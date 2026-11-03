@@ -11,11 +11,11 @@
 # the runtime composite (a69c:8d81, WiFi = interface 2) runs the FullMAC.
 #
 # The aic8800 case is the B0-B4 ladder: both buses started, the modeswitch,
-# the firmware lines, READY, the scan table - and, only when
+# the firmware lines, READY, the scan table - and, when
 # CONFIG_AIC8800_AP_SSID names an AP (WPA2-PSK; the vendor stack implements
-# no other mode), associate + DHCP + the stack's own gateway ping.  This
-# profile ships bring-up-only (empty SSID): the bench's QiQiJia AP is open,
-# and the B4 arm names a WPA2-PSK AP when one exists.
+# no other mode), associate + DHCP + the stack's own gateway ping.
+# The B4 arm's AP: the bench's QiQiJia, switched to WPA2-PSK on 2026-11-03
+# for this arm (it was open through the B0-B3 round).
 #
 # Deploy: build/rtos-threadx.bin published as firefly-v2-aic8800-usb.bin,
 # loaded with `setenv ipaddr 192.168.4.29; tftpboot 0x90000000
@@ -35,8 +35,8 @@ CONFIG_BOARD_FIREFLY_V2=y
 CONFIG_CASES="tick aic8800"
 CONFIG_WLAN_LINE_AIC8800=y
 
-# --- the AP this image would join -------------------------------------------
-# Empty SSID = bring-up-only (B0-B3): modeswitch, firmware, READY, scan table.
-# To build the B4 arm, name a WPA2-PSK AP and its passphrase here.
-CONFIG_AIC8800_AP_SSID=""
-CONFIG_AIC8800_AP_PSK=""
+# --- the AP this image joins -------------------------------------------
+# Empty SSID would rebuild the bring-up-only image (B0-B3: modeswitch,
+# firmware, READY, scan table, stop). This is the B4 arm: QiQiJia, WPA2-PSK.
+CONFIG_AIC8800_AP_SSID="QiQiJia"
+CONFIG_AIC8800_AP_PSK="paopaojie520"
