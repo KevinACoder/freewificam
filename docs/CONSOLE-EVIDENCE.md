@@ -3,7 +3,7 @@
 A module is "brought up" here when one boot reaches the line's own end-to-end
 anchor - association, an address, a passing packet exchange - and says so.  The
 transcripts on this page are the board's UART output, verbatim, from boots that
-reached those anchors.  Elisions are marked `…` and name what was cut; nothing
+reached those anchors.  Elisions are marked `...` and name what was cut; nothing
 else is edited.  Timestamps are the image's own milliseconds since boot.
 
 Why the console and not a test report: the interesting failures on this project
@@ -51,7 +51,7 @@ rtos: kernel ready tick=1000Hz
 [   0.012] tx: unused_mem=0x00000000
 gicv3: rd frame off=00040000
 
-… (gicv3 ready, the tick case) …
+... (gicv3 ready, the tick case) ...
 
 [   3.011] rtos: case rtw88 start
 [   3.012] cmsis2: prio 24 -> tx 19
@@ -69,7 +69,7 @@ gicv3: rd frame off=00040000
 [   3.520] cmsis2: prio 16 -> tx 23
 [   3.521] cmsis2: prio 24 -> tx 19
 
-… (SDIO init, driver probe, firmware download, the rtw88 case) …
+... (SDIO init, driver probe, firmware download, the rtw88 case) ...
 
 [   7.851] MCI DONE c=52 ev=00000004 err=0 resp0=00001000
 [   7.856] rtw88: trace window 2100 ms, 28 transfers
@@ -79,7 +79,7 @@ gicv3: rd frame off=00040000
 [   7.860] rtw88: pool skb=0/1 data=0/1 heap_live=0 ovf=0/0 fail=0
 [   7.861] rtw88: PASS
 
-… (the scan report, one line per AP) …
+... (the scan report, one line per AP) ...
 
 [  10.650] rtw88: scan done rows=20 bcn=62 prsp=23 fcs=0 scan=1/1 state=1 entered=1 close=2 rx=89
 [  10.651] rtw88: scan PASS
@@ -92,7 +92,7 @@ gicv3: rd frame off=00040000
 [  10.658] wlan: join opt ie=0 len=28
 !!! net80211: mutex_owned false lock 0000000090432908 owner 0000000000000000 current 00000000900B9638 magic 000000006D757821 ra 000000009001051C
 
-… (the first auth frame, its retry, and the response; hex dumps elided) …
+... (the first auth frame, its retry, and the response; hex dumps elided) ...
 
 [  10.845] wlan: join QiQiJia bssid=36:ab:a0:b6:1a:b0 open
 [  10.846] rtw88: join start ssid=QiQiJia bssid=36:ab:a0:b6:1a:b0 state=2 rc=0 attempt=1
@@ -106,7 +106,7 @@ gicv3: rd frame off=00040000
 [  11.086] wlan: rx mgt fc=b0 fcs=0 retry=0 sc=1010 a1=f4:3c:3b:f8:74:94 a2=36:ab:a0:b6:1a:b0 len=30
 [  11.087] wlan: rx join-bytes:
 
-… (assoc response processed) …
+... (assoc response processed) ...
 
 [  11.456] rtw88: join mci final transfers=9167 errors=0 cmd52=2447 cmd53=6715 last_cmd=52 last_err=0 data_ev=00000018
 [  11.457] rtw88: join counters state=4 mgt_tx=16 txc=16 txfail=0 rx=97 rx_data=3 bcnT=1 auth_retries=1 auth_answers=1 bad_auth=0 txq=0 stopped=0 tune=15/0 freq=2462
@@ -157,7 +157,7 @@ gicv3: rd frame off=00040000
 Two things in that log are noise, not failure, and are left in on purpose so a
 reader does not think the transcript was groomed: the `!!! net80211:
 mutex_owned false` line is the imported stack's own assertion about a lock
-being probed from the wrong owner (it does not abort the run), and the `0+…`
+being probed from the wrong owner (it does not abort the run), and the `0+...`
 walks on `rxread` lines are the SDIO read-buffer walk, one line per transfer.
 
 ## AIC8800D80 (USB2 xHCI, vendor FullMAC)
@@ -201,7 +201,7 @@ rtos: kernel ready tick=1000Hz
 [   0.012] tx: unused_mem=0x00000000
 gicv3: rd frame off=00040000
 
-… (kernel bring-up: gicv3, tick, the tick and cpu cases) …
+... (kernel bring-up: gicv3, tick, the tick and cpu cases) ...
 
 [   3.011] rtos: case aic8800 start
 [   3.012] [I/aic8800.fw] 
@@ -219,7 +219,7 @@ gicv3: rd frame off=00040000
 [   3.024] xhci: 2 ports, 8 slots, ctxsz=64 pgsz=4096 caplen=128 hcs1=02000110
 [   3.025] aic8800: usb bus=0 hcd=xhci base=0x31a08000 started
 
-… (bus 1 mirrors bus 0; no device on it) …
+... (bus 1 mirrors bus 0; no device on it) ...
 
 [   3.460] [I/usbh_hub] 
 [   3.460] New high-speed device on Bus 0, Hub 1, Port 1 connected
@@ -370,7 +370,7 @@ gicv3: rd frame off=00040000
 [   4.967] Ep=81 Attr=02 Mps=512 Interval=00 Mult=00
 [   4.968] [I/usbh_aic8800] 
 
-… (vendor command probe, RF defaults, LMAC start) …
+... (vendor command probe, RF defaults, LMAC start) ...
 
 [   6.262] [I/aic8800.fmac] 
 [   6.263] LMAC started
@@ -392,7 +392,7 @@ gicv3: rd frame off=00040000
 [   6.451] [I/aic8800.fmac] 
 [   6.452] RX command=0x1004 parameter=223
 
-… (the rest of the scan report, one line per AP) …
+... (the rest of the scan report, one line per AP) ...
 
 [   8.913] [I/aic8800.fmac] 
 [   8.914] 5GHz scan complete
@@ -408,7 +408,7 @@ gicv3: rd frame off=00040000
 [   9.061] aic8800: scan[6] "@TEST_AUTO" freq=2447 band=1 rssi=-57
 [   9.062] aic8800: scan[7] "aaa_a" freq=2457 band=1 rssi=-76
 [   9.063] [I/aic8800.fmac] 
-…
+...
 
 [  11.509] [I/aic8800.wifi] 
 [  11.510] deriving WPA2 PMK from passphrase (PBKDF2 4096)
@@ -466,7 +466,7 @@ gicv3: rd frame off=00040000
 [  11.877] [I/aic8800.fmac] 
 [  11.878] AIC data TX queue ready: depth=64 reserve=4
 
-… (DHCP DISCOVER/REQUEST exchange) …
+... (DHCP DISCOVER/REQUEST exchange) ...
 
 [  18.858] AIC data RX Ethernet type=0x0806 length=42
 [  19.579] [I/USB] 
