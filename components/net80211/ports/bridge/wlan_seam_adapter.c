@@ -1340,9 +1340,17 @@ static void
 up_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 
-	(void)hw;
 	(void)skb;	/* the substitute releases it after this returns */
 	wlan_bridge_tx_complete();
+	/*
+	 * A completion is the only thing that moves on this port: rtw88's USB
+	 * transmit path never stops its queues, so nothing else will drain the
+	 * frame the seam had to refuse.  The bridge knows whether anything is
+	 * waiting; asking the driver for a wake when nothing is costs a work
+	 * item per frame.
+	 */
+	if (wlan_bridge_tx_waiting())
+		lkpi80211_tx_wake_defer(hw);
 }
 
 /*

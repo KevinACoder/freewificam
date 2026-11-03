@@ -1408,6 +1408,33 @@ ieee80211_wake_queues(struct ieee80211_hw *hw)
 	(void)lkpi_queue_work(lkpi_system_wq, &ctx->tx_wake_work);
 }
 
+/*
+ * A wake the transmit completion asks for on its own behalf.  The driver's
+ * transmit path on this port never stops its queues (rtw88's USB path has no
+ * stop/wake pair), so the only thing a completion can reuse is the wake that
+ * already exists: the deferred work above, whose body calls the port's
+ * registered wake.  Queueing it from the completion is what turns a refused
+ * frame back into a sent one; a request raised while the work is already
+ * queued is coalesced by the work's own pending flag, and the worker clears
+ * that flag before it runs, so a request raised during the body is not lost.
+ *
+ * Drivers that never registered a wake have nothing to reopen, and this says
+ * so by doing nothing (the callers hold no lock this could deadlock on: it
+ * only touches the work queue).
+ */
+void
+lkpi80211_tx_wake_defer(struct ieee80211_hw *hw)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	if (ctx->tx_wake_cb == NULL || lkpi_system_wq == NULL)
+		return;
+	(void)lkpi_queue_work(lkpi_system_wq, &ctx->tx_wake_work);
+}
+
 void
 ieee80211_handle_wake_tx_queue(struct ieee80211_hw *hw,
     struct ieee80211_txq *txq)

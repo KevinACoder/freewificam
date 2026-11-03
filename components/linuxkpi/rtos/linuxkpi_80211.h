@@ -191,6 +191,15 @@ int	lkpi80211_tx_queue_stopped(struct ieee80211_hw *hw);
 void	lkpi80211_set_tx_wake_cb(struct ieee80211_hw *hw, void (*cb)(void *),
 	    void *arg);
 
+/*
+ * Ask for the port's wake without the driver having stopped anything.  A
+ * driver whose transmit path never closes its queues (rtw88's USB path has no
+ * stop/wake pair) still has frames the seam refused, and this is how a
+ * completion reopens them: it queues the same deferred work
+ * ieee80211_wake_queues uses, coalesced when one is already pending.
+ */
+void	lkpi80211_tx_wake_defer(struct ieee80211_hw *hw);
+
 /* Sta lifetime (call ops->sta_add / sta_remove; the sta carries
  * sta_data_size bytes of zeroed driver-private area).  The ladder is split the
  * way the association splits: drv_sta_add uploads the peer (the moment mac80211
