@@ -145,6 +145,14 @@ int case_rtw88_join_run(void);
 int case_rtw88_net_run(void);
 #endif
 
+#if defined(RTOS_CASE_RTW88_USB)
+int case_rtw88_usb_run(void);
+#endif
+
+#if defined(RTOS_CASE_RTW88_NETIO)
+int case_rtw88_netio_run(void);
+#endif
+
 #if defined(RTOS_CASE_RTW89)
 int case_rtw89_run(void);
 #endif

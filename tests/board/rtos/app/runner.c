@@ -118,6 +118,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTW88_NET)
 	CASE_ENTRY("rtw88_net", case_rtw88_net_run)
 #endif
+#if defined(RTOS_CASE_RTW88_USB)
+	CASE_ENTRY("rtw88_usb", case_rtw88_usb_run)
+#endif
+#if defined(RTOS_CASE_RTW88_NETIO)
+	CASE_ENTRY("rtw88_netio", case_rtw88_netio_run)
+#endif
 #if defined(RTOS_CASE_RTW89)
 	CASE_ENTRY("rtw89", case_rtw89_run)
 #endif

@@ -1,0 +1,27 @@
+# RK3568 E4AP5G1-ITX, RTL8821CU (0bda:c820) on USB: the B-gate bring-up.
+#
+# The USB sibling of firefly-v2-rtw88-sdio: same driver core, same compiled-in
+# rtw8821c firmware blob and the same net80211 bridge; the bus is the linuxkpi
+# USB engine over CherryUSB.  This profile stops after the ladder that proves
+# the arm can come up (claim, firmware, attach, start, scan, join) - the netio
+# throughput arms are the -ar-* siblings, so a bring-up boot carries no lwIP.
+#
+# Stage: the linuxkpi adapter refuses any receive URB larger than its stage, and
+# rtw88's widest is RTW_USB_MAX_RECVBUF_SZ = 32768 (checked by the build gate).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_USB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_CASES="tick rtw88_usb rtw88_scan rtw88_join"
+CONFIG_WLAN_LINE_RTW88=y
+CONFIG_RTW88_BUS_USB=y
+CONFIG_RTW88_USB_BUS=3
+CONFIG_RTW88_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTW88_EXPECT_MAC="54:c9:e0:00:29:66"

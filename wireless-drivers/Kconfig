@@ -27,13 +27,33 @@ config WLAN_LINE_RTW89
 	bool "rtw89 over USB"
 
 config WLAN_LINE_RTW88
-	bool "rtw88 over SDIO"
+	bool "rtw88 over SDIO or USB"
 
 config WLAN_LINE_IWLWIFI
 	bool "iwlwifi over PCIe"
 
 config WLAN_LINE_RTL8189FS
 	bool "rtl8189fs vendor stack over SDIO"
+
+endchoice
+
+# One rtw88 image links exactly one bus port.  The SDIO arm is the RTL8821CS
+# on the board's mmc1 socket; the USB arm is the RTL8821CU on the RK3568
+# roots.  The driver core, the firmware blob and the net80211 bridge are the
+# same in both; only the port units, the probe and the case ladder differ.
+choice RTW88_BUS
+	prompt "rtw88 bus"
+	default RTW88_BUS_SDIO
+	help
+	  The SDIO arm owns the mmc1 socket and its MCI controller; the USB arm
+	  owns one xHCI/EHCI root pair and the linuxkpi USB engine.  The two do
+	  not share an image: the controller glue and the probe path differ.
+
+config RTW88_BUS_SDIO
+	bool "SDIO (RTL8821CS, mmc1)"
+
+config RTW88_BUS_USB
+	bool "USB (RTL8821CU, xHCI/EHCI roots)"
 
 endchoice
 
@@ -63,7 +83,7 @@ config LINUXKPI_NET80211
 
 config LINUXKPI_USB
 	bool "linuxkpi USB engine"
-	default y if WLAN_LINE_RTL8XXXU || WLAN_LINE_RTW89
+	default y if WLAN_LINE_RTL8XXXU || WLAN_LINE_RTW89 || (WLAN_LINE_RTW88 && RTW88_BUS_USB)
 
 config LINUXKPI_PCI
 	bool "linuxkpi PCI engine"
@@ -71,7 +91,7 @@ config LINUXKPI_PCI
 
 config LINUXKPI_SDIO
 	bool "linuxkpi SDIO engine"
-	default y if WLAN_LINE_RTW88 || WLAN_LINE_RTL8189FS
+	default y if (WLAN_LINE_RTW88 && RTW88_BUS_SDIO) || WLAN_LINE_RTL8189FS
 
 config LINUXKPI_CENSUS
 	bool "linuxkpi census"
@@ -135,6 +155,13 @@ config RTW89_USB_BUS
 	int "rtw89 USB bus id"
 	default 3
 
+config RTW88_USB_BUS
+	int "rtw88 USB bus id (3 = xHCI roots 3,2; 1 = USB2 roots 1,0)"
+	default 3
+	help
+	  The old profiles used the controller's bus id directly: 3 = xHCI,
+	  1 = both USB2 roots.  The migration keeps the numbers.
+
 # The RTL8821CS data-plane cases' profile facts.  Both are named in a defconfig
 # and neither has a default: the bench AP changes between rounds, and the
 # address mode decides whether the image asks the AP or configures itself.  An
@@ -146,6 +173,14 @@ config RTW88_AP_SSID
 	  The open AP the join case looks up in the scan table.  It is a string,
 	  not a BSSID: the driver line must not pin an address the AP is free to
 	  change, so the case picks the strongest row carrying this SSID.
+
+config RTW88_EXPECT_MAC
+	string "Expected station MAC for the rtw88 USB arm (identity gate)"
+	default "54:c9:e0:00:29:66"
+	help
+	  The bench carries several Realtek dongles on the same roots; the USB
+	  bring-up case refuses an attach whose hardware address differs from
+	  this one.  The SDIO arm's identity is its socket, so it ignores it.
 
 config RTW88_NET_ADDR_DHCP
 	bool "rtw88 net arm: address from the AP's DHCP"

@@ -52,7 +52,7 @@
 
 #include "wlan_bridge.h"
 
-#if defined(RTOS_CASE_RTW88_NET)
+#if defined(RTOS_CASE_RTW88_NET) || defined(RTOS_CASE_RTW88_NETIO)
 
 
 /* The port's serializer (declared by the component's port.h; repeated here so
@@ -365,8 +365,8 @@ rtw_net_counters_line(void)
 	    c.tx_errors);
 }
 
-static int
-rtw_net_bringup(void)
+int
+rtw88_net_bringup(void)
 {
 	ip4_addr_t ip;
 	ip4_addr_t mask;
@@ -519,6 +519,14 @@ rtw_net_bringup(void)
 
 	rtw_net_up = 1;
 
+#if !defined(RTOS_CASE_RTW88_NET)
+	/* The netio arm (case rtw88_netio) stops here: it needs a live,
+	 * addressed interface, not this case's ARP/ICMP gate - its own control
+	 * channel is the proof that the line carries.  The state above (netif
+	 * up, address set, receive seam bound) is exactly what the server uses. */
+	return 0;
+#endif
+
 	/* The AP's ARP entry must exist before the first counted echo: lwIP
 	 * drops an unresolved-ARP packet without queueing it.  The throwaway
 	 * echo (seq 0) is what makes the stack resolve the gateway; its answer
@@ -566,11 +574,20 @@ rtw_net_bringup(void)
 	return rtw_net_ping_ok != 0 ? 0 : -1;
 }
 
+/* The address the netio arm binds its sockets to, in network order (the same
+ * shape rtl8xxxu_net_ip4() returns, so the server's line-up code is one line). */
+uint32_t
+rtw88_net_ip4(void)
+{
+	return ip4_addr_get_u32(ip_2_ip4(&rtw_netif.ip_addr));
+}
+
+#if defined(RTOS_CASE_RTW88_NET)
 int
 case_rtw88_net_run(void)
 {
 
-	if (rtw_net_bringup() != 0) {
+	if (rtw88_net_bringup() != 0) {
 		rtw_net_counters_line();
 		CASE_ANCHOR("rtw88: net FAIL bringup\n");
 		return 1;
@@ -579,5 +596,6 @@ case_rtw88_net_run(void)
 	CASE_ANCHOR("rtw88: net PASS\n");
 	return 0;
 }
-
 #endif /* RTOS_CASE_RTW88_NET */
+
+#endif /* RTOS_CASE_RTW88_NET || RTOS_CASE_RTW88_NETIO */

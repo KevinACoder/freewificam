@@ -42,6 +42,8 @@ CASES = (
     "rtw88_scan",
     "rtw88_join",
     "rtw88_net",
+    "rtw88_usb",
+    "rtw88_netio",
     "rtw89",
     "rtw89_scan",
     "rtw89_join",
@@ -214,6 +216,37 @@ PATTERNS = {
         re.MULTILINE,
     ),
     "rtw89_fail": re.compile(r"rtw89: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # --- rtw88 (RTL8821CU over the linuxkpi USB engine) --------------------
+    "rtw88_usb_buses": re.compile(
+        r"rtw88: usb buses=(?P<buses>\S+)", re.MULTILINE
+    ),
+    "rtw88_usb_bus_started": re.compile(
+        r"rtw88: usb bus=(?P<bus>\d+) hcd=(?P<hcd>\w+) "
+        r"base=0x(?P<base>[0-9a-f]+) started",
+        re.MULTILINE,
+    ),
+    "rtw88_usb_claim": re.compile(
+        r"rtw88: claim .*?(?P<vid>[0-9a-f]{4}):(?P<pid>[0-9a-f]{4})",
+        re.MULTILINE,
+    ),
+    "rtw88_usb_stats": re.compile(
+        r"rtw88: usb submits=(?P<submits>\d+) completes=(?P<completes>\d+) "
+        r"refused=(?P<refused>\d+) stage_overflow=(?P<stage_overflow>\d+) "
+        r"slots_exhausted=(?P<slots_exhausted>\d+)",
+        re.MULTILINE,
+    ),
+    # --- the shared netio server's line-up ---------------------------------
+    "net_netio_addr": re.compile(
+        r"net: netio addr (?P<ip>[0-9.]+)/(?P<prefix>\d+)", re.MULTILINE
+    ),
+    "net_netio_ready": re.compile(
+        r"net: netio ready port=(?P<port>\d+) aux=(?P<aux>\d+) "
+        r"buf=(?P<buf>\d+)",
+        re.MULTILINE,
+    ),
+    "net_netio_fail": re.compile(
+        r"net: netio FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
     # --- rtw88 (RTL8821CS over the linuxkpi SDIO engine) -------------------
     "rtw88_sdio_up": re.compile(
         r"rtw88: sdio up card=(?P<vid>[0-9a-f]{4}):(?P<pid>[0-9a-f]{4}) "
@@ -1402,6 +1435,79 @@ def judge(text: str, expect: dict | None = None) -> dict:
             notes.append(f"{case}: sweep {len(found['usb_msc_sweep'])} points")
 
     # --- rtw88: the RTL8821CS bring-up ------------------------------------
+    if cases.get("rtw88_usb", {}).get("verdict") == "pass":
+        fail = found["rtw88_fail"]
+        if fail:
+            errors.append(f"rtw88_usb: {fail['reason']}")
+        claim = found["rtw88_usb_claim"]
+        if not claim:
+            errors.append("rtw88_usb: PASS without a class-hook claim line")
+        elif (claim["vid"].lower(), claim["pid"].lower()) != ("0bda", "c820"):
+            errors.append(
+                f"rtw88_usb: claimed {claim['vid']}:{claim['pid']} != 0bda:c820"
+            )
+        else:
+            notes.append("rtw88_usb: claimed 0bda:c820")
+        fw = found["rtw88_fw"]
+        if not fw:
+            errors.append("rtw88_usb: PASS without a firmware version line")
+        else:
+            notes.append(f"rtw88_usb: firmware {fw['version']} h2c={fw['h2c']}")
+        attach = found["rtw88_attach"]
+        if not attach:
+            errors.append("rtw88_usb: PASS without an attach line")
+        elif attach["mac"] in ("00:00:00:00:00:00",):
+            errors.append("rtw88_usb: attached with an all-zero MAC")
+        else:
+            notes.append(
+                f"rtw88_usb: attach after {attach['ms']} ms mac={attach['mac']}"
+            )
+        start = found["rtw88_start"]
+        if not start:
+            errors.append("rtw88_usb: PASS without a start line")
+        elif int(start["attached"]) == 0:
+            errors.append("rtw88_usb: start returned but not attached")
+        else:
+            notes.append(f"rtw88_usb: start attached=1 rx={start['rx']}")
+        stats = found["rtw88_usb_stats"]
+        if not stats:
+            errors.append("rtw88_usb: PASS without the USB ledger line")
+        else:
+            if int(stats["refused"]) != 0:
+                errors.append(
+                    f"rtw88_usb: {stats['refused']} USB submits refused"
+                )
+            if int(stats["stage_overflow"]) != 0:
+                errors.append(
+                    f"rtw88_usb: {stats['stage_overflow']} transfers larger "
+                    "than the stage"
+                )
+            notes.append(
+                f"rtw88_usb: usb submits={stats['submits']} "
+                f"completes={stats['completes']} "
+                f"stage_overflow={stats['stage_overflow']}"
+            )
+
+    if cases.get("rtw88_netio", {}).get("verdict") == "pass":
+        fail = found["net_netio_fail"]
+        if fail:
+            errors.append(f"rtw88_netio: {fail['reason']}")
+        addr = found["net_netio_addr"]
+        if not addr:
+            errors.append("rtw88_netio: PASS without a line-up address line")
+        elif addr["ip"] != "192.168.99.2":
+            errors.append(f"rtw88_netio: line-up address {addr['ip']} is not the bench's")
+        else:
+            notes.append(f"rtw88_netio: addr {addr['ip']}/{addr['prefix']}")
+        ready = found["net_netio_ready"]
+        if not ready:
+            errors.append("rtw88_netio: PASS without a ready line")
+        else:
+            notes.append(
+                f"rtw88_netio: ready port={ready['port']} aux={ready['aux']} "
+                f"buf={ready['buf']}"
+            )
+
     if cases.get("rtw88", {}).get("verdict") == "pass":
         fail = found["rtw88_fail"]
         if fail:
