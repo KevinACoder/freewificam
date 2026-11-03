@@ -718,8 +718,8 @@ dc637408a01a2cc40acb34b101b6e597e559506c2bd4dd33c76bc00f48ec0e6a  ./port/xhci/ph
 fa0c6548fad55d4cfeeaf999462a7813273af27ff7ab482e3f6a1d592f19b747  ./port/xhci/phytium/rt-thread/usb_config.h
 d30217e7a08c2714a51a709181501891da00c91812616078c33acfc849d92883  ./port/xhci/phytium/rt-thread/usb_glue_phytium.c
 9d797859df37f1c2403c26d6078367c42b1147e565b76a8f69f6a149e3672760  ./port/xhci/phytium/rt-thread/usb_glue_phytium_plat.c
-97451c63e406141ae6207a5db94a523023e88ede1bdcfeb7affb42904c2b2c3b  ./port/xhci/usb_hc_xhci.c
-be9c18904ff2f5edc624b9f602c5d272d081b1fe3687765eb92108f08b570069  ./port/xhci/usb_hc_xhci.h
+067e0666a9b59375e0844a3b2ff8fc229da41b8417007a508960cbfb22d7c640  ./port/xhci/usb_hc_xhci.c
+6ce524df5bf090c35e1749e39044a5b6e296d38b03ba3c191493748f898be60d  ./port/xhci/usb_hc_xhci.h
 c689aa0e8105b1dea3d3c721093e2c6d0b1bef73f4acb4d77426561ae2a360c6  ./tests/bouffalolab/CMakeLists.txt
 685158c117374950a7b8fa82669b4b7e6f72d46fb54ef65363b3e3401e6b9c07  ./tests/bouffalolab/Kconfig
 c66b50a6eb6c91975c61b7e256f619b36205fbd52abc985df67d9c1906404b7e  ./tests/bouffalolab/Makefile
