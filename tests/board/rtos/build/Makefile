@@ -98,6 +98,7 @@ endif
 CC := $(CROSS_COMPILE)gcc
 OBJCOPY := $(CROSS_COMPILE)objcopy
 NM := $(CROSS_COMPILE)nm
+AR := $(CROSS_COMPILE)ar
 SIZE := $(CROSS_COMPILE)size
 HOSTCC ?= cc
 
@@ -694,6 +695,62 @@ LDFLAGS := -nostdlib -static \
 
 .PHONY: image gates FORCE
 image: $(TARGET).bin gates
+
+# M5 library split: archive the object groups that already make up this image.
+# The archives are a delivery shape, not a second build: the image above stays
+# the behavioural reference until the public headers/consumer link land.
+LIB_DIR := $(ROOT)/build/lib/$(PROFILE)
+SDK_DIR := $(ROOT)/dist/$(PROFILE)
+LIB_ARCH_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/arch/%,$(OBJS))
+LIB_BOARD_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/board/%,$(OBJS))
+LIB_OSAL_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/os/cmsis2/% $(OBJDIR)/tests/board/rtos/platform/os/baremetal/%,$(OBJS))
+LIB_NET80211_OBJS := $(filter $(OBJDIR)/components/net80211/%,$(OBJS))
+LIB_LINUXKPI_OBJS := $(filter $(OBJDIR)/components/linuxkpi/%,$(OBJS))
+LIB_DRV_OBJS := $(filter $(OBJDIR)/wireless-drivers/%,$(OBJS))
+LIB_APP_OBJS := $(filter $(OBJDIR)/tests/board/rtos/app/%,$(OBJS))
+
+libs: image
+	@mkdir -p $(LIB_DIR)
+	@rm -f $(LIB_DIR)/*.a
+	@if [ -n "$(strip $(LIB_ARCH_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_arch.a $(LIB_ARCH_OBJS); fi
+	@if [ -n "$(strip $(LIB_BOARD_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_board_$(BOARD).a $(LIB_BOARD_OBJS); fi
+	@if [ -n "$(strip $(LIB_OSAL_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_osal_cmsis2.a $(LIB_OSAL_OBJS); fi
+	@if [ -n "$(strip $(LIB_NET80211_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_net80211.a $(LIB_NET80211_OBJS); fi
+	@if [ -n "$(strip $(LIB_LINUXKPI_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_linuxkpi.a $(LIB_LINUXKPI_OBJS); fi
+	@if [ -n "$(strip $(LIB_DRV_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_drivers.a $(LIB_DRV_OBJS); fi
+	@if [ -n "$(strip $(LIB_APP_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/libfw_app.a $(LIB_APP_OBJS); fi
+	@$(PYTHON) $(ROOT)/tools/build/gen_lib_manifest.py --dir $(LIB_DIR) \
+		--profile $(PROFILE) --nm $(NM) --ar $(AR)
+
+sdk: libs
+	@rm -rf $(SDK_DIR)
+	@mkdir -p $(SDK_DIR)/lib $(SDK_DIR)/include/freewificam
+	@cp $(LIB_DIR)/*.a $(LIB_DIR)/manifest.json $(SDK_DIR)/lib/
+	@if [ -d $(ROOT)/include/freewificam ]; then \
+		cp -r $(ROOT)/include/freewificam/. $(SDK_DIR)/include/freewificam/; fi
+	@cp $(ROOT)/build/kconfig/$(PROFILE)/freewificam_config.h \
+		$(SDK_DIR)/include/freewificam/fw_config.h
+	@printf '%s\n' \
+		'prefix=$(SDK_DIR)' \
+		'includedir=$${prefix}/include' \
+		'libdir=$${prefix}/lib' \
+		'' \
+		'Name: freewificam' \
+		'Description: freewificam RTOS wifi core (profile $(PROFILE))' \
+		'Version: 0.0.2' \
+		'Cflags: -I$${includedir}' \
+		'Libs: -L$${libdir} -lfw_net80211 -lfw_linuxkpi -lfw_drivers -lfw_osal_cmsis2' \
+		> $(SDK_DIR)/freewificam.pc
+	@printf 'sdk: %s\n' '$(SDK_DIR)'
+
+.PHONY: libs sdk
 
 define COMPILE_C
 $(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)

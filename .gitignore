@@ -32,3 +32,6 @@ build/kconfig/
 **/autoconf.h
 **/.config
 **/generated/
+
+# Publication output of `make.rtos sdk`.
+dist/
