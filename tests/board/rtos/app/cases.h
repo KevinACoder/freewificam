@@ -138,6 +138,12 @@ int case_rtw88_run(void);
 #if defined(RTOS_CASE_RTW88_SCAN)
 int case_rtw88_scan_run(void);
 #endif
+#if defined(RTOS_CASE_RTW88_JOIN)
+int case_rtw88_join_run(void);
+#endif
+#if defined(RTOS_CASE_RTW88_NET)
+int case_rtw88_net_run(void);
+#endif
 
 #if defined(RTOS_CASE_RTW89)
 int case_rtw89_run(void);

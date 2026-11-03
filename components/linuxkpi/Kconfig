@@ -14,4 +14,13 @@ config LKPI_USB_OBS
 	  diagnostic arm: the observation cost is part of the measured image,
 	  so it is a profile decision, not a default.
 
+config LKPI_JOIN_TRACE
+	bool "join trace"
+	help
+	  Two lines per channel tune in the linuxkpi face (`wlan: tune begin` and
+	  `wlan: tune done <MHz> rc=`), plus the driver-callback breadcrumbs the
+	  join path runs through.  It answers "did the driver tune to the AP's
+	  channel and with what result" from the console alone; the macro the
+	  sources test is LKPI_JOIN_TRACE.
+
 endmenu

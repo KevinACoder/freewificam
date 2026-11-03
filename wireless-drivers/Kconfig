@@ -135,4 +135,34 @@ config RTW89_USB_BUS
 	int "rtw89 USB bus id"
 	default 3
 
+# The RTL8821CS data-plane cases' profile facts.  Both are named in a defconfig
+# and neither has a default: the bench AP changes between rounds, and the
+# address mode decides whether the image asks the AP or configures itself.  An
+# image that selects the case without them fails at build time (see
+# tests/board/rtos/build/rtw88_sdio.mk and docs/PLATFORM-FACTS.md).
+config RTW88_AP_SSID
+	string "AP SSID the rtw88 join arm associates with"
+	help
+	  The open AP the join case looks up in the scan table.  It is a string,
+	  not a BSSID: the driver line must not pin an address the AP is free to
+	  change, so the case picks the strongest row carrying this SSID.
+
+config RTW88_NET_ADDR_DHCP
+	bool "rtw88 net arm: address from the AP's DHCP"
+
+config RTW88_NET_ADDR_STATIC
+	bool "rtw88 net arm: static address"
+
+config RTW88_NET_IP
+	string "rtw88 net arm: static address"
+	help
+	  Required by CONFIG_RTW88_NET_ADDR_STATIC only (the build refuses the
+	  arm without it).
+
+config RTW88_NET_MASK
+	string "rtw88 net arm: static netmask"
+
+config RTW88_NET_GW
+	string "rtw88 net arm: static gateway"
+
 endmenu

@@ -27,6 +27,7 @@ repository's images were built with.
 |---|---|---|---|---|---|
 | RTL8188EUS | `rtlwifi/rtl8188eufw.bin` | 15,262 | `2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4` | `rtlwifi/rtl8188eufw.bin` from the Linux firmware package | Realtek binary redistribution, below |
 | RTL8723BU | `rtlwifi/rtl8723bu_nic.bin` | 32,108 | `a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969` | `rtlwifi/rtl8723bu_nic.bin` from the Linux firmware package | Realtek binary redistribution, below |
+| RTL8821CS | `rtw88/rtw8821c_fw.bin` | 139,472 | `2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0` | `rtw88/rtw8821c_fw.bin` from the Linux firmware package | Realtek binary redistribution, below |
 | RTL8851BU | `rtw89/rtw8851b_fw-1.bin` | 1,408,706 | `1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7` | `rtw89/rtw8851b_fw-1.bin` from the Linux firmware package | Realtek binary redistribution, below |
 
 An image may also carry the Intel AC 7260 blob (`iwlwifi-7260-17.ucode`); its
@@ -73,6 +74,28 @@ tools/rtos/fw-blob.py --check components/linuxkpi/fw/rtl8723bu_fw_blob.c \
 It registers as `lkpi_fw_rtl8723bu_register()` and the profile's chip selects
 that symbol for both the linker's `-u` and the image gate
 (`CONFIG_RTL8XXXU_CHIP := 8723bu` in `configs/rtl8xxxu-8723bu-*.mk`).
+
+## Generating the 8821C blob
+
+The 8821CS line's symbol stem carries `_fw`: the case calls
+`lkpi_fw_rtw8821c_fw_register()` and `rtw88_sdio.mk` puts the same name on the
+linker's `-u`, so a blob generated with the bare chip name registers a symbol
+nothing references and the image fails to link.
+
+```sh
+# FIRMWARE_DIR is a checkout of the Linux firmware package.
+tools/rtos/fw-blob.py \
+    --in "$FIRMWARE_DIR"/rtw88/rtw8821c_fw.bin \
+    --name rtw88/rtw8821c_fw.bin --symbol rtw8821c_fw \
+    --sha256 2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0 \
+    --size 139472 \
+    --out components/linuxkpi/fw/rtw8821c_fw_blob.c
+
+# verify a generated blob against the source file
+tools/rtos/fw-blob.py --check components/linuxkpi/fw/rtw8821c_fw_blob.c \
+    --in "$FIRMWARE_DIR"/rtw88/rtw8821c_fw.bin \
+    --name rtw88/rtw8821c_fw.bin
+```
 
 ## Realtek binary redistribution terms (RTL8188EU firmware)
 
