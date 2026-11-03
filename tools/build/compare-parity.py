@@ -47,6 +47,7 @@ DEFAULT_PROFILES = [
     "net-netio-raw-tx256",
     "rtl8xxxu-8723bu-netio-ar-ht20-ba",
     "rtos-shell",
+    "rtw89-8851bu-tx-ehci",
 ]
 
 CONFIG_MAKE_RE = re.compile(r"^(CONFIG_[A-Za-z0-9_]+)\s*[:?+]?=")
@@ -151,6 +152,10 @@ def make_query(profile: str, log: Path) -> dict:
 
 
 def build_make(profile: str) -> None:
+    # Start from no objects: the make build directory holds one profile's
+    # objects at a time, and a leftover image from another profile has already
+    # produced a false parity failure once.
+    run(["./make.rtos", "clean"], REPO, EVIDENCE / profile / "make-clean.log")
     # Regenerate first: FW_BUILD_TAG is baked into the header at generation
     # time, and comparing a stale-tag make image with a fresh CMake one would
     # report an image difference that is not a build divergence.
@@ -161,6 +166,11 @@ def build_make(profile: str) -> None:
 
 
 def build_cmake(profile: str) -> None:
+    # One directory per profile, but a stale directory could hold another
+    # profile's cached query or image; configure it from scratch.
+    out = CMAKE_ROOT / profile
+    if out.exists():
+        shutil.rmtree(out)
     run(["cmake", "--preset", profile], REPO, EVIDENCE / profile / "cmake-configure.log")
     run(["cmake", "--build", str(CMAKE_ROOT / profile)], REPO,
         EVIDENCE / profile / "cmake-build.log")

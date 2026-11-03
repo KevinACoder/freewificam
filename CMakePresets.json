@@ -39,6 +39,14 @@
       "cacheVariables": {
         "FW_PROFILE": "rtos-shell"
       }
+    },
+    {
+      "name": "rtw89-8851bu-tx-ehci",
+      "displayName": "rtw89-8851bu-tx-ehci (ThreadX, USB wifi)",
+      "inherits": "cmake-base",
+      "cacheVariables": {
+        "FW_PROFILE": "rtw89-8851bu-tx-ehci"
+      }
     }
   ],
   "buildPresets": [
@@ -53,6 +61,10 @@
     {
       "name": "rtos-shell",
       "configurePreset": "rtos-shell"
+    },
+    {
+      "name": "rtw89-8851bu-tx-ehci",
+      "configurePreset": "rtw89-8851bu-tx-ehci"
     }
   ]
 }

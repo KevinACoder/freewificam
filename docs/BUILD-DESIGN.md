@@ -580,7 +580,11 @@ tools/build/compare-parity.py            # all three profiles, rebuilds both
 tools/build/compare-parity.py --profiles rtos-shell --skip-make-build
 ```
 
-`tools/build/compare-parity.py` builds each side and compares the source set,
+`tools/build/compare-parity.py` covers four profiles, one of them ThreadX
+(`rtw89-8851bu-tx-ehci`), and starts both sides from clean build directories:
+the make build directory holds one profile's objects at a time and a stale
+CMake tree once produced a false failure.  It builds each side and compares the
+source set,
 the `CONFIG_*` symbol set (a fresh generation from the defconfig versus the
 pair both builds used), and the `nm -g --defined-only` / `nm -u` name sets.  It
 also scans every Make and CMake compile/link command for `-D`.  Image bytes are
@@ -589,7 +593,8 @@ happen to be byte-identical when both sides read the same generated header, but
 that is a consequence of the shared flags, not a gate.
 
 Known gaps: CMake still queries make for the source lists and flag worlds
-rather than consuming `sources.cmake` directly; only the FreeRTOS backend's
-gates are exercised; the CMake path does not cover `libs`, `sdk`, host tests,
-`matrix`, `trimcheck` or the CI board wrappers; presets exist only for the three
-profiles above.
+rather than consuming `sources.cmake` directly; the CMake path does not cover
+`libs`, `sdk`, host tests, `matrix`, `trimcheck` or the CI board wrappers;
+presets exist only for the four profiles above.  The ThreadX preset proves the
+backend is covered by the generic query, not that CMake builds a second
+ThreadX-specific configuration.
