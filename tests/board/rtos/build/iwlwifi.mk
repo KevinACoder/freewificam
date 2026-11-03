@@ -29,24 +29,24 @@ IWL_KPI_INCLUDES := -I$(ROOT) -I$(ROOT)/components/linuxkpi -I$(IWL_LKPI) -I$(IW
 	-I$(IWL_LKPI)/pci -I$(IWL_NET) -I$(IWL_NPORT) -I$(IWL_NPORT)/bridge
 
 IWL_BSD_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-D_KERNEL -DWLAN_PORT_TARGET -Wno-unused-function -Wno-pointer-sign \
+	  -Wno-unused-function -Wno-pointer-sign \
 	$(IWL_IMAGE_NAMES) -include $(IWL_NPORT)/compat/prelude.h \
 	$(IWL_BSD_INCLUDES) $(IWL_KPI_INCLUDES)
 
 IWL_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED $(IWL_SKB_CFLAGS) \
-	-DWLAN_SEAM_NO_USB_OBS=1 \
-	-DCMSIS_device_header='"cmsis_os2.h"' $(IWL_KPI_INCLUDES)
+	  $(IWL_SKB_CFLAGS) \
+	 \
+	 $(IWL_KPI_INCLUDES)
 
 IWL_DRV_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DCONFIG_IWLWIFI -DCONFIG_IWLMVM -DCONFIG_IWLWIFI_DEBUG \
-	-DLKPI_ABS_PLATFORM_PROVIDED $(IWL_SKB_CFLAGS) \
+	   \
+	 $(IWL_SKB_CFLAGS) \
 	-I$(IWL_DRV) $(IWL_KPI_INCLUDES) \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
 	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable
 
 IWL_PCIE_PORT_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DLKPI_ABS_PLATFORM_PROVIDED -DCMSIS_device_header='"cmsis_os2.h"' \
+	  \
 	-I$(IWL_LKPI) -I$(IWL_LKPI)/include -I$(IWL_LKPI)/pci \
 	-I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
 	-I$(PLATFORM)/arch/aarch64
@@ -157,7 +157,7 @@ endif
 # The image's own C surface (the iwl7260 case, the pcie case and the board
 # drivers) needs the same Linux face the linuxkpi units compile against: the
 # case includes linuxkpi_core.h/wlan_bridge.h and the driver's public headers.
-IWL_CASE_CFLAGS := -std=gnu11 -DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+IWL_CASE_CFLAGS := -std=gnu11   \
 	$(IWL_KPI_INCLUDES)
 BASE_CFLAGS += $(IWL_CASE_CFLAGS)
 CFLAGS += $(IWL_CASE_CFLAGS)

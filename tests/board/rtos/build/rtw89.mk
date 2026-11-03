@@ -34,15 +34,15 @@ RTW89_SKB_DEFS :=
 # transfer (RTW89_USB_RECVBUF_SZ = 20480); a smaller slot refuses every receive
 # transfer for good and the driver never sees a completion.  The gate below
 # reads the driver's number instead of trusting this comment.
-RTW89_USB_DEFS := -DCONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$(USB_STAGE_SIZE) \
-	-DCONFIG_LKPI_USB_CHERRYUSB_SLOTS=$(CONFIG_LKPI_USB_CHERRYUSB_SLOTS)
+RTW89_USB_DEFS :=  \
+	
 
 # The controller the dongle is on, per arm: the xHCI profile lists both xHCI
 # roots, the EHCI profile both USB2 roots.  The case starts each listed bus and
 # waits once, so a device on the second root does not cost a wrong-controller
 # timeout.
-RTW89_BUS := $(if $(CONFIG_RTW89_USB_BUS),$(CONFIG_RTW89_USB_BUS),3)
-RTW89_BUS_DEFS := -DRTW89_USB_BUS=$(RTW89_BUS)
+RTW89_BUS := $(CONFIG_RTW89_USB_BUS)
+RTW89_BUS_DEFS := 
 
 RTW89_BSD_INCLUDES := -I$(ROOT) -I$(RTW89_NPORT)/compat \
 	-I$(RTW89_NET)/compat/netbsd -I$(RTW89_NET) -I$(RTW89_NPORT)
@@ -53,15 +53,15 @@ RTW89_KPI_INCLUDES := -I$(ROOT) -I$(ROOT)/components/linuxkpi \
 	-I$(RTW89_NPORT)/bridge $(USB_INCLUDES)
 
 RTW89_BSD_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-D_KERNEL -DWLAN_PORT_TARGET -Wno-unused-function -Wno-pointer-sign \
+	  -Wno-unused-function -Wno-pointer-sign \
 	$(RTW89_IMAGE_NAMES) \
 	-include $(RTW89_NPORT)/compat/prelude.h \
 	$(RTW89_BSD_INCLUDES) $(RTW89_KPI_INCLUDES)
 
 RTW89_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+	  \
 	$(RTW89_SKB_DEFS) $(RTW89_USB_DEFS) \
-	-DCMSIS_device_header='"cmsis_os2.h"' \
+	 \
 	$(RTW89_KPI_INCLUDES)
 
 # The chip and bus selection the kernel's Kconfig resolves for the 8851BU.
@@ -72,13 +72,13 @@ RTW89_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	$(RTW89_DRV_CONFIG) $(RTW89_SKB_DEFS) \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+	  \
 	-I$(ROOT) -I$(RTW89_LKPI) -I$(RTW89_LKPI)/include -I$(RTW89_DRV) \
 	-I$(THIRD_PARTY)/ulog/src \
 	-I$(CMSIS)/CMSIS/RTOS2/Include -Wno-unused-parameter \
 	-Wno-address-of-packed-member \
 	-include stdio.h -include string.h -include strings.h -include stdlib.h \
-	-D_DEFAULT_SOURCE=1
+	
 
 RTW89_CASE_CFLAGS := $(RTW89_KPI_CFLAGS) $(RTW89_BUS_DEFS)
 

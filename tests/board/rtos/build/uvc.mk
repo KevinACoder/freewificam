@@ -15,12 +15,8 @@
 # because a second class on the same controller would make a bring-up failure
 # ambiguous (the storage image has the mirror-image rule).
 
-CONFIG_UVC_USB_BUS ?= 0
 
-UVC_CFLAGS := $(USB_CFLAGS) \
-	-I$(USB)/class/video \
-	-DCONFIG_USB_EHCI_ISO=1 \
-	-DUVC_USB_BUS=$(CONFIG_UVC_USB_BUS)
+UVC_CFLAGS := $(USB_CFLAGS) -I$(USB)/class/video
 
 UVC_CASES := $(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES))
 
@@ -39,5 +35,5 @@ UVC_GATE_SYMBOLS := ehci_iso_urb_init usbh_video_stream_start \
 
 # The iso engine's per-bus state is sized by this key (port header default 4);
 # the camera profile can widen it when a second camera is ever attached.
-CONFIG_USB_EHCI_ISO_NUM ?= 4
-UVC_CFLAGS += -DCONFIG_USB_EHCI_ISO_NUM=$(if $(filter 0,$(CONFIG_USB_EHCI_ISO_NUM)),4,$(CONFIG_USB_EHCI_ISO_NUM))
+# CONFIG_USB_EHCI_ISO / CONFIG_USB_EHCI_ISO_NUM come from the generated
+# header via platform/build_defs.h.

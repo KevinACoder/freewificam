@@ -785,9 +785,9 @@ $(WLAN_STAMP): FORCE
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 endif
 
-$(FLAG_STAMP): FORCE $(WLAN_STAMP)
+$(FLAG_STAMP): FORCE $(WLAN_STAMP) $(CONFIG_FILE)
 	@mkdir -p $(BUILD)
-	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'wlan: $(WLAN_FLAGS_STAMP)' \
+	@printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'config: $(shell sha256sum $(CONFIG_FILE) 2>/dev/null | cut -d' ' -f1)' 'wlan: $(WLAN_FLAGS_STAMP)' \
 		'usb: $(USB_CFLAGS)' 'uvc: $(UVC_CFLAGS)' \
 		'rtw89-net80211: $(RTW89_BSD_CFLAGS)' \
 		'rtw89-kpi: $(RTW89_KPI_CFLAGS)' 'rtw89-drv: $(RTW89_DRV_CFLAGS)' \

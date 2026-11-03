@@ -36,9 +36,9 @@ SDIO_MCI_ALL_SRCS := $(SDIO_MCI_APP_SRCS) $(SDIO_MCI_PORT_SRCS) \
 # host-type override names the glue this image carries. A trace build adds
 # MCI_TRACE=1, which is the per-command anchor family the round reads.
 SDIO_MCI_CFLAGS := $(CFLAGS) \
-	-DCONFIG_FSL_SDMMC_ENABLE_SDIO=1 \
-	-DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FIREFLY_MCI \
-	-DSDMMC_PORT_SDIO_HOST_ID=1 \
+	 \
+	 \
+	 \
 	-I$(THIRD_PARTY)/fsl_sdmmc/sdio \
 	-I$(PLATFORM)/board/firefly/drivers
 

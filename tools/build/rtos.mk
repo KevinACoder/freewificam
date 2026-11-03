@@ -169,7 +169,7 @@ dump-vars:
 	@$(PYTHON) $(ROOT)/tools/build/dump-vars.py --profile $(PROFILE)
 
 clean:
-	@$(MAKE) -C $(BUILD_MK) clean
+	@rm -rf $(ROOT)/tests/board/rtos/build/build
 
 distclean: clean
 	rm -rf $(ROOT)/build/kconfig

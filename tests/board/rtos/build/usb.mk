@@ -25,7 +25,7 @@ USB_BOARD := $(PLATFORM)/board/rk3568-itx/usb
 # largest command is 1 MiB and the native MSC path moves the caller's buffer
 # directly, so this value sizes the linuxkpi adapter's pool (used by the
 # wireless image); the gate below keeps it in step with the driver's RX size.
-USB_STAGE_SIZE := $(if $(filter 0,$(CONFIG_USB_STAGE_SIZE)),20480,$(CONFIG_USB_STAGE_SIZE))
+USB_STAGE_SIZE := $(CONFIG_USB_STAGE_SIZE)
 
 USB_INCLUDES := \
 	-I$(USB_PORT)/board/rk3568-itx \
@@ -39,20 +39,14 @@ USB_INCLUDES := \
 	-I$(USB)/port/xhci
 
 USB_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
-	-DUSB_BOARD_IRQ_PRIORITY_RAW=BOARD_IRQ_PRIORITY_API_CALL_RAW \
 	$(USB_INCLUDES)
 
 # Diagnostic arm (CONFIG_USB_MSC_DIAG): a short timeout makes a transfer that
 # only completes through the port's timeout drain fail fast instead of hiding in
 # a five-second wait, and the xHCI port's own timeout dump is compiled in.  The
 # arm is not a delivery profile; it exists to name the defect.
-ifneq ($(filter 1,$(CONFIG_USB_MSC_DIAG)),)
-USB_CFLAGS += -DMSC_DIAG=1 -DCONFIG_USBHOST_XHCI_DBG_DUMP=1 \
-	-DCONFIG_USBHOST_MSC_TIMEOUT=$(if $(filter 0,$(CONFIG_USBHOST_MSC_TIMEOUT)),800,$(CONFIG_USBHOST_MSC_TIMEOUT))
-endif
-ifneq ($(filter 1,$(CONFIG_USB_MSC_DIAG_FULL)),)
-USB_CFLAGS += -DMSC_DIAG_FULL=1
-endif
+# MSC_DIAG / MSC_DIAG_FULL are defined by platform/build_defs.h from the same
+# Kconfig symbols; no per-profile compiler switch is needed here.
 
 USB_STACK_SRCS := \
 	$(USB)/core/usbh_core.c \

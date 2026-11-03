@@ -35,7 +35,7 @@ RTL8XXXU_LKPI := $(ROOT)/components/linuxkpi/rtos
 # names every chip, so the image's identity - the firmware blob, the name the
 # bridge reports, and the id line the case promotes - is a profile fact, not a
 # driver one.  8188eu is the default, so the earlier line's numbers stand.
-RTL8XXXU_CHIP := $(if $(CONFIG_RTL8XXXU_CHIP),$(CONFIG_RTL8XXXU_CHIP),8188eu)
+RTL8XXXU_CHIP := $(CONFIG_RTL8XXXU_CHIP)
 ifeq ($(RTL8XXXU_CHIP),8723bu)
 RTL8XXXU_FW_NAME := rtlwifi/rtl8723bu_nic.bin
 RTL8XXXU_FW_BLOB := $(ROOT)/components/linuxkpi/fw/rtl8723bu_fw_blob.c
@@ -63,7 +63,7 @@ RTL8XXXU_AP_DEFS :=
 # both, so "attached" alone does not say which chip the ladder measured.  The
 # expected MAC is an arm fact, recorded in the profile, and the bring-up case
 # refuses an attach whose address is not this one.
-RTL8XXXU_EXPECT_MAC := $(if $(CONFIG_RTL8XXXU_EXPECT_MAC),$(CONFIG_RTL8XXXU_EXPECT_MAC),20:f4:1b:52:8f:01)
+RTL8XXXU_EXPECT_MAC := $(CONFIG_RTL8XXXU_EXPECT_MAC)
 RTL8XXXU_MAC_BYTES := $(subst :, ,$(RTL8XXXU_EXPECT_MAC))
 RTL8XXXU_MAC_DEFS :=
 
@@ -76,7 +76,7 @@ RTL8XXXU_SKB_DEFS :=
 # written as 1024-byte control blocks (`writeN_block_size`), so 4096 covers
 # both with room to spare.  The slots are the engine's concurrency, unchanged
 # from the rtw89 image.
-RTL8XXXU_STAGE ?= 4096
+RTL8XXXU_STAGE := $(CONFIG_RTL8XXXU_USB_STAGE_SIZE)
 RTL8XXXU_STAGE_MIN := 2328	# IEEE80211_MAX_FRAME_LEN (2304) + rxdesc16/24 (24)
 RTL8XXXU_USB_DEFS :=
 
@@ -84,7 +84,7 @@ RTL8XXXU_USB_DEFS :=
 # 1 = both USB2 roots (the panel's EHCI path), 4 = all four, for the one
 # discovery boot that answers which controller carries the dongle.  The case
 # prints the list and then the bus that actually attached.
-RTL8XXXU_BUS := $(if $(CONFIG_RTL8XXXU_USB_BUS),$(CONFIG_RTL8XXXU_USB_BUS),3)
+RTL8XXXU_BUS := $(CONFIG_RTL8XXXU_USB_BUS)
 RTL8XXXU_BUS_DEFS :=
 
 # The chip's identity, handed to the case: which id line is the claim anchor
@@ -100,16 +100,16 @@ RTL8XXXU_KPI_INCLUDES := -I$(ROOT) -I$(ROOT)/components/linuxkpi \
 	-I$(RTL8XXXU_NPORT)/bridge $(USB_INCLUDES)
 
 RTL8XXXU_BSD_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-D_KERNEL -DWLAN_PORT_TARGET -Wno-unused-function -Wno-pointer-sign \
+	  -Wno-unused-function -Wno-pointer-sign \
 	$(RTL8XXXU_IMAGE_NAMES) $(RTL8XXXU_AP_DEFS) $(RTL8XXXU_MAC_DEFS) \
 	-include $(RTL8XXXU_NPORT)/compat/prelude.h \
 	$(RTL8XXXU_BSD_INCLUDES) $(RTL8XXXU_KPI_INCLUDES)
 
 RTL8XXXU_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+	  \
 	$(RTL8XXXU_SKB_DEFS) $(RTL8XXXU_USB_DEFS) $(RTL8XXXU_AP_DEFS) \
 	$(RTL8XXXU_MAC_DEFS) \
-	-DCMSIS_device_header='"cmsis_os2.h"' \
+	 \
 	$(RTL8XXXU_KPI_INCLUDES)
 
 # The driver's own flag world: the freestanding set the reference image compiled
@@ -120,13 +120,13 @@ RTL8XXXU_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	$(RTL8XXXU_IMAGE_NAMES) $(RTL8XXXU_SKB_DEFS) \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+	  \
 	-I$(ROOT) -I$(RTL8XXXU_LKPI) -I$(RTL8XXXU_LKPI)/include \
 	-I$(RTL8XXXU_DRV) -I$(THIRD_PARTY)/ulog/src \
 	-I$(CMSIS)/CMSIS/RTOS2/Include \
 	-Wno-unused-parameter \
 	-include stdio.h -include string.h -include strings.h -include stdlib.h \
-	-D_DEFAULT_SOURCE=1
+	
 
 # Diagnostic only: a high-priority thread that reports bridge/workqueue
 # counters through the polled UART while the bring-up waits for attach.  Used

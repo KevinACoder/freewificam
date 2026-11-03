@@ -56,6 +56,16 @@
 
 /* Board / port constants.  These are properties of the board, not knobs. */
 #define USB_BOARD_IRQ_PRIORITY_RAW BOARD_IRQ_PRIORITY_API_CALL_RAW
+
+/* The USB mass-storage diagnostic arm used to be three hand flags.  They are a
+ * consequence of the Kconfig symbol, so the fixed header derives them here. */
+#if CONFIG_USB_MSC_DIAG
+#define MSC_DIAG 1
+#define CONFIG_USBHOST_XHCI_DBG_DUMP 1
+#endif
+#if CONFIG_USB_MSC_DIAG_FULL
+#define MSC_DIAG_FULL 1
+#endif
 #define EQOS_BOARD_IRQ_PRIORITY_RAW 0xd0u
 #if CONFIG_BOARD_FIREFLY_V1
 #define BOARD_FIREFLY_V1 1

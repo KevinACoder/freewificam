@@ -56,15 +56,15 @@ RTW88_KPI_INCLUDES := -I$(ROOT) -I$(ROOT)/components/linuxkpi \
 	-I$(PLATFORM)/board/firefly/drivers
 
 RTW88_BSD_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-D_KERNEL -DWLAN_PORT_TARGET -Wno-unused-function -Wno-pointer-sign \
+	  -Wno-unused-function -Wno-pointer-sign \
 	$(RTW88_IMAGE_NAMES) $(RTW88_SEAM_DEFS) \
 	-include $(RTW88_NPORT)/compat/prelude.h \
 	$(RTW88_BSD_INCLUDES) $(RTW88_KPI_INCLUDES)
 
 RTW88_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+	  \
 	$(RTW88_SKB_DEFS) $(RTW88_SEAM_DEFS) \
-	-DCMSIS_device_header='"cmsis_os2.h"' \
+	 \
 	$(RTW88_KPI_INCLUDES)
 
 # The chip and bus selection the kernel's Kconfig resolves for the 8821CS:
@@ -81,25 +81,25 @@ RTW88_DRV_CFLAGS := -std=c11 -O2 -Wall \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	$(RTW88_DRV_CONFIG) $(RTW88_SKB_DEFS) \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
+	  \
 	-I$(ROOT) -I$(RTW88_LKPI) -I$(RTW88_LKPI)/include -I$(RTW88_DRV) \
 	-I$(THIRD_PARTY)/ulog/src \
 	-I$(CMSIS)/CMSIS/RTOS2/Include -Wno-unused-parameter \
 	-Wno-address-of-packed-member \
 	-include stdio.h -include string.h -include strings.h -include stdlib.h \
-	-D_DEFAULT_SOURCE=1
+	
 
 # The SDIO port units (the imported stack plus the seam's fsl adapter) need the
 # stack's SDIO face selected and the board's controller driver on the include
 # path; they are vendored C, so the platform warning set is relaxed for them the
 # same way sdio_mci.mk relaxes it.
 RTW88_SDIO_PORT_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
-	-DWLAN_PORT_TARGET -DLKPI_ABS_PLATFORM_PROVIDED \
-	-DCONFIG_FSL_SDMMC_ENABLE_SDIO=1 \
-	-DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FIREFLY_MCI \
-	-DSDMMC_PORT_SDIO_HOST_ID=1 \
+	  \
+	 \
+	 \
+	 \
 	$(RTW88_SKB_DEFS) $(RTW88_SEAM_DEFS) \
-	-DCMSIS_device_header='"cmsis_os2.h"' \
+	 \
 	$(RTW88_KPI_INCLUDES)
 
 # The cases read the port's own entry points (lkpi_sdio_fsl_install,
@@ -109,9 +109,9 @@ RTW88_SDIO_PORT_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 # implicit int declarations, and a returned pointer is truncated to 32 bits - a
 # fault inside memcpy, far from the call that caused it.
 RTW88_CASE_CFLAGS := $(RTW88_KPI_CFLAGS) \
-	-DCONFIG_FSL_SDMMC_ENABLE_SDIO=1 \
-	-DSDMMC_PORT_SDIO_HOST_TYPE=kSDMMCHOST_TYPE_FIREFLY_MCI \
-	-DSDMMC_PORT_SDIO_HOST_ID=1
+	 \
+	 \
+	
 
 RTW88_NET80211_SRCS := \
 	$(RTW88_NET)/net80211/ieee80211.c \

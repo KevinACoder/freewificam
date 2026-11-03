@@ -15,13 +15,13 @@ size_of() {
 "$root/make.rtos" image PROFILE=$tick >/dev/null
 tick_elf=$root/tests/board/rtos/build/build/rtos-freertos.elf
 tick_size=$(size_of "$tick_elf")
+if ${cross:+$cross/bin/}aarch64-none-elf-nm "$tick_elf" | grep -qE ' (lwip_init|netif_add|tcp_input)$'; then
+	echo "FAIL: $tick carries lwIP/network symbols" >&2; exit 1
+fi
 "$root/make.rtos" clean >/dev/null 2>&1
 "$root/make.rtos" image PROFILE=$full >/dev/null
 full_elf=$root/tests/board/rtos/build/build/rtos-freertos.elf
 full_size=$(size_of "$full_elf")
-if ${cross:+$cross/bin/}aarch64-none-elf-nm "$tick_elf" | grep -qE ' (lwip_init|netif_add|tcp_input)$'; then
-	echo "FAIL: $tick carries lwIP/network symbols" >&2; exit 1
-fi
 if ! ${cross:+$cross/bin/}aarch64-none-elf-nm "$full_elf" | grep -qE ' (lwip_init|netif_add)$'; then
 	echo "FAIL: $full lacks lwIP symbols" >&2; exit 1
 fi
