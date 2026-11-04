@@ -373,6 +373,9 @@ Aspirational or explicitly out of scope:
 * cross-profile or long-term binary ABI stability; the manifest has no
   version/config-hash field yet;
 * Zephyr `native_sim`, Zephyr on RK3568 and RT-Thread Smart (L2–L4).
+  (Zephyr on RK3568 landed 2026-11-05 as an image, with a third kernel
+  backend — see §8 L3.  It is not an SDK-consumer story: the module hosts the
+  image's `main`, not a linked consumer.)
 
 ## 8. What L2–L5 require
 
@@ -414,6 +417,21 @@ not a verification gap.
 **L3 (Zephyr on RK3568).**  The same `fw_init` plus scan/join state machine in a
 Zephyr image on the board, still with the bus stub.  Zephyr's RK3568 USB host
 port is not part of this; the data plane waits for a separate USB-host round.
+
+Status (2026-11-05): reached, and past the bus stub.  The image is built by the
+`freewificam` Zephyr module (`zephyr/module.yml` in the Zephyr tree, which
+compiles this tree in place — no copy, no sparse checkout) on top of a third
+kernel backend, `tests/board/rtos/platform/os/zephyr/`: the CMSIS-RTOS2 names
+are served directly by Zephyr primitives rather than by
+`subsys/portability/cmsis_rtos_v2`, so nothing above the OSABI changed —
+linuxkpi, net80211, the rtl8xxxu driver and CherryUSB are the board-proven
+bytes.  CherryUSB runs on this tree's own CMSIS-RTOS2 osal
+(`third-party/cherryusb/ports/osal/cmsis2/`), not on CherryUSB's Zephyr osal:
+that one services its hub timer from a Zephyr timer callback, where a
+transfer wait cannot suspend.  Boot evidence on the RK3568 bench: an RTL8188EU
+enumerates (3900 ms), scans 31 BSSes, joins the AR9271 access point
+(`state=4`), answers ARP and 20/20 pings, `cases=5/5 backend=zephyr`.
+Throughput on this backend has not been measured.
 
 **L4 (RT-Thread Smart on RK3568).**  The same image-level state machine with an
 RT-Thread CMSIS-RTOS2 shim.  RT-Thread's RK3568 EHCI host is likewise a separate

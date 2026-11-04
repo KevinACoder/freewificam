@@ -57,7 +57,16 @@ CASES_RE = re.compile(r'^CONFIG_CASES="(.*)"$', re.M)
 
 def read(profile: Path) -> dict[str, str]:
     text = profile.read_text()
-    backend = "threadx" if "CONFIG_BACKEND_THREADX=y" in text else "freertos"
+    # One backend per profile, and the Kconfig choice is the only selector:
+    # reading it off the defconfig keeps this map honest as backends are
+    # added (the Zephyr backend landed after this script did, and a default
+    # of "freertos" silently mislabelled it).
+    if "CONFIG_BACKEND_THREADX=y" in text:
+        backend = "threadx"
+    elif "CONFIG_BACKEND_ZEPHYR=y" in text:
+        backend = "zephyr"
+    else:
+        backend = "freertos"
     m = BOARD_RE.search(text)
     board = {
         "RK3568_ITX": "rk3568-itx",
