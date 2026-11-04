@@ -1,0 +1,39 @@
+# RK3568 RTL8821CU, HT20 cell, INSTRUMENTED arm (W7-06).
+#
+# Same as rtw88-usb-8821cu-ar-ht20-ba plus the two observation switches.  The
+# reason this arm exists: after a load-induced stop, the USB completion count
+# keeps climbing while the wlan receive count freezes, and those two readings
+# cannot tell a completion that carried frames from one that came back empty.
+# The bulk-in completion histogram answers exactly that, and the per-cell
+# ledger says whether the counters behind it are still being sampled.
+#
+# Numbers from this arm are instrumented, not baseline.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_USB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_WLAN_RX_BA=y
+CONFIG_CASES="tick rtw88_usb rtw88_scan rtw88_join rtw88_netio"
+CONFIG_WLAN_LINE_RTW88=y
+CONFIG_RTW88_BUS_USB=y
+CONFIG_RTW88_USB_BUS=3
+CONFIG_RTW88_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTW88_EXPECT_MAC="54:c9:e0:00:29:66"
+CONFIG_RTW88_NET_ADDR_STATIC=y
+CONFIG_RTW88_NET_IP="192.168.99.2"
+CONFIG_RTW88_NET_MASK="255.255.255.0"
+CONFIG_RTW88_NET_GW="192.168.99.1"
+
+# The bulk-in completion length histogram: without this the six buckets read
+# 0/0/0/0/0/0, which looks like an empty pipe but only means nobody counted.
+CONFIG_LKPI_USB_OBS=y
+
+# the in-cell sampler: netio: rxpath/layers every 2 s while a cell is open
+CONFIG_NETIO_RXPATH=y

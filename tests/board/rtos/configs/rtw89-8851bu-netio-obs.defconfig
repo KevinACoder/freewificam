@@ -37,3 +37,9 @@ CONFIG_RTW89_NET_GW="192.168.99.1"
 
 # the in-cell sampler: netio: rxpath/layers every 2 s while a cell is open
 CONFIG_NETIO_RXPATH=y
+
+# The bulk-in completion length histogram rides CONFIG_LKPI_USB_OBS (the
+# observation-point arm).  Without it usb_hist reads 0/0/0/0/0/0, which looks
+# like "no frames arrived" but is really "nobody counted them" - and the
+# completion shape is the fingerprint we need to compare against Linux.
+CONFIG_LKPI_USB_OBS=y
