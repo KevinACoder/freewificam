@@ -134,6 +134,18 @@ static struct {
 					 * so it winds down as an unassociated
 					 * station, not through sta_remove */
 	uint8_t bssid_store[6];		/* the pre-assoc BSSID the vif points at */
+	/*
+	 * The peer's 11n declaration as the bridge's beacon cache heard it
+	 * (seam.h's sta_ht).  Held here, not read from the station, because the
+	 * call arrives BEFORE the association notification that completes the
+	 * station: the values are applied by seam_sta_apply_ht() at the moment
+	 * the driver's station object exists, and the association step right
+	 * after sees them.
+	 */
+	int ht_valid;
+	uint16_t ht_cap;
+	uint8_t ht_ampdu;
+	uint32_t ht_mcs0;
 	uint32_t tuned_freq;		/* the channel the radio was last tuned to */
 	uint8_t tuned_hw_value;
 	int vif_added;
@@ -165,6 +177,7 @@ static struct {
 	 * frame - a beacon's period would flood the console - and read back by
 	 * `wlan link`.  Read-only: nothing here feeds the receive path.
 	 */
+	unsigned int ht_applied;	/* stations told the peer is 11n */
 	unsigned int rx_data;
 	unsigned int rx_retry;
 	unsigned int rx_fcs;
@@ -622,6 +635,61 @@ seam_clear_key(struct wlan_seam_drv *drv, int pairwise, int key_idx)
 	return ret;
 }
 
+/*
+ * Apply the peer's 11n declaration to the driver's station object.  Semantics
+ * are mac80211's: sta->deflink.ht_cap carries the PEER's capability (parsed
+ * from the association response), the driver derives its own rate mask and
+ * transmit rates from it, and sta->wme says the peer is QoS-capable.  The RSSI
+ * of the fields matters to the driver, not to the stack: rtw89 reads ht_cap at
+ * its station setup and at every rate update, and a station whose capability
+ * says "legacy only" gets a legacy rate table - which is what the uplink
+ * measured before this call existed.
+ */
+static void
+seam_sta_apply_ht(void)
+{
+	struct ieee80211_sta *sta = adapter.sta;
+	int width40;
+
+	if (sta == NULL || !adapter.ht_valid)
+		return;
+	width40 = (adapter.ht_cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40) != 0;
+	sta->deflink.ht_cap.ht_supported = true;
+	sta->deflink.ht_cap.cap = adapter.ht_cap;
+	sta->deflink.ht_cap.ampdu_factor =
+	    adapter.ht_ampdu & 0x03u;
+	sta->deflink.ht_cap.ampdu_density =
+	    (adapter.ht_ampdu >> 2) & 0x07u;
+	sta->deflink.ht_cap.mcs.rx_mask[0] = (u8)(adapter.ht_mcs0 & 0xffu);
+	sta->deflink.ht_cap.mcs.rx_mask[1] = (u8)((adapter.ht_mcs0 >> 8) & 0xffu);
+	sta->deflink.ht_cap.mcs.rx_mask[2] = (u8)((adapter.ht_mcs0 >> 16) & 0xffu);
+	sta->deflink.ht_cap.mcs.rx_mask[3] = (u8)((adapter.ht_mcs0 >> 24) & 0xffu);
+	sta->deflink.bandwidth = width40 ? IEEE80211_STA_RX_BW_40 :
+	    IEEE80211_STA_RX_BW_20;
+	sta->wme = true;
+	adapter.ht_applied++;
+}
+
+/*
+ * The bridge's pre-association 11n upload (seam.h sta_ht).  It arrives before
+ * the association notification, so the capability is only recorded here when
+ * the driver's station does not exist yet; seam_bss_info applies it as soon as
+ * the station object is there and before its association step.
+ */
+static void
+seam_sta_ht(struct wlan_seam_drv *drv, const uint8_t bssid[6], uint16_t cap,
+    uint8_t ampdu, uint32_t mcs0)
+{
+
+	(void)drv;
+	(void)bssid;
+	adapter.ht_valid = 1;
+	adapter.ht_cap = cap;
+	adapter.ht_ampdu = ampdu;
+	adapter.ht_mcs0 = mcs0;
+	seam_sta_apply_ht();
+}
+
 static void
 seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
     uint32_t freq, uint16_t aid, const uint8_t *rates, size_t rates_len)
@@ -715,6 +783,10 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 			 * its association handler needs this transition to program
 			 * the association.
 			 */
+			/* the peer's 11n declaration first: the driver builds
+			 * the rate table this association step programs, and a
+			 * station still marked legacy yields legacy rates */
+			seam_sta_apply_ht();
 			(void)lkpi80211_drv_sta_assoc(adapter.hw, adapter.vif,
 			    adapter.sta, aid);
 		}
@@ -733,6 +805,7 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 			adapter.sta = NULL;
 		}
 		adapter.sta_preauth = 0;
+		adapter.ht_valid = 0;
 		lkpi80211_drv_chanctx_release(adapter.hw, adapter.vif);
 		/*
 		 * No BSS_CHANGED_BSSID on the leave: mac80211 does not push a
@@ -1121,6 +1194,7 @@ static const struct wlan_seam_drv_ops seam_ops = {
 	.set_key = seam_set_key,
 	.clear_key = seam_clear_key,
 	.bss_info = seam_bss_info,
+	.sta_ht = seam_sta_ht,
 	.bssid = seam_bssid,
 	.queue_ready = seam_queue_ready,
 	/* the USB transport's own observation surface (see the block above) */
@@ -1431,13 +1505,14 @@ wlan_bridge_link_dump(void)
 	    adapter.tx_hw_key_miss, (unsigned)lkpi80211_tx_purges());
 	if (sta != NULL)
 		wlan_osal_log("wlan: link peer supp=0x%08x ht=%u mcs=0x%08x "
-		    "nss=%u wme=%u\n", (unsigned)sta->deflink.supp_rates[0],
+		    "nss=%u wme=%u htup=%u\n", (unsigned)sta->deflink.supp_rates[0],
 		    sta->deflink.ht_cap.ht_supported ? 1u : 0u,
 		    (unsigned)sta->deflink.ht_cap.mcs.rx_mask[0],
-		    (unsigned)sta->deflink.rx_nss, sta->wme ? 1u : 0u);
+		    (unsigned)sta->deflink.rx_nss, sta->wme ? 1u : 0u,
+		    adapter.ht_applied);
 	else
 		wlan_osal_log("wlan: link peer supp=0x%08x ht=0 mcs=0x%08x "
-		    "nss=0 wme=0\n", 0u, 0u);
+		    "nss=0 wme=0 htup=%u\n", 0u, 0u, adapter.ht_applied);
 	wlan_osal_log("wlan: link rx data=%u retry=%u fcs=%u\n", adapter.rx_data,
 	    adapter.rx_retry, adapter.rx_fcs);
 	for (i = 0; i < adapter.rx_hist_n; i++)

@@ -1179,13 +1179,31 @@ bridge_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	rc = bridge_orig_newstate(ic, nstate, arg);
 
 	if (nstate == IEEE80211_S_RUN && ostate != IEEE80211_S_RUN) {
+		struct ieee80211_node *bss = ic->ic_bss;
+
 		/* the data queued during the join goes out now */
 		if (ic->ic_ifp != NULL) {
 			bridge_start(ic->ic_ifp);
 		}
-		if (bridge.ops != NULL && bridge.ops->bss_info != NULL) {
-			struct ieee80211_node *bss = ic->ic_bss;
+		/*
+		 * The peer's 11n declaration goes down before the association
+		 * notification, the order mac80211 uses (it applies the
+		 * association response's HT capability while it inserts the
+		 * station, then reports the association).  A driver builds its
+		 * rate table from the station's capability at that step; told
+		 * afterwards, its rate selection keeps deriving legacy rates -
+		 * the uplink-side half of the same defect the join's HT
+		 * Capabilities element fields on the air side.
+		 */
+		if (bss != NULL && bridge.ops != NULL &&
+		    bridge.ops->sta_ht != NULL) {
+			struct bridge_ht_info *h = bridge_ht_lookup(bss->ni_bssid);
 
+			if (h != NULL && (h->valid & 1) != 0)
+				bridge.ops->sta_ht(bridge.drv, bss->ni_bssid,
+				    h->cap, h->ampdu, h->mcs0);
+		}
+		if (bridge.ops != NULL && bridge.ops->bss_info != NULL) {
 			(void)bridge.ops->bss_info(bridge.drv, 1,
 			    bss != NULL ? bss->ni_bssid : ic->ic_myaddr,
 			    bss != NULL && bss->ni_chan != NULL ?

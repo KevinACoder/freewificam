@@ -273,6 +273,28 @@ struct wlan_seam_drv_ops {
 	    const uint8_t bssid[6], uint32_t freq, uint16_t aid,
 	    const uint8_t *rates, size_t rates_len);
 
+	/*
+	 * The peer's 11n declaration, delivered BEFORE bss_info(joined=1) and
+	 * before the station's association step.  In Linux this is not a seam
+	 * call at all: mac80211 parses the (re)association response's HT
+	 * Capabilities element straight into sta->deflink.ht_cap
+	 * (ieee80211_ht_cap_ie_to_sta_ht_cap), and every driver reads the
+	 * station's capability from there when it builds its rate table and
+	 * picks a transmit rate.  An imported stack with no HT state (this
+	 * net80211) leaves the station looking like a 54 Mbit/s peer: the AP
+	 * grants HT, the driver never hears it, and the uplink stays at legacy
+	 * rates - measured on the board 2026-11-04 (AP `rx bitrate 54.0
+	 * MBit/s`, association response `htcap=1`, driver's station
+	 * `ht_supported = 0`).
+	 *
+	 * cap = HT Capabilities Info, ampdu = the A-MPDU Parameters byte,
+	 * mcs0 = the first four bytes of the Supported MCS Set.  Optional: a
+	 * port whose driver is handed the capability elsewhere leaves it NULL
+	 * and the bridge uploads nothing.
+	 */
+	void (*sta_ht)(struct wlan_seam_drv *drv, const uint8_t bssid[6],
+	    uint16_t cap, uint8_t ampdu, uint32_t mcs0);
+
 	/* BSSID programming for the pre-association exchange, carrying the AP's
 	 * advertised timing as the interface fills it while it prepares the
 	 * connection (ieee80211_prep_connection takes bss_conf->beacon_int from
