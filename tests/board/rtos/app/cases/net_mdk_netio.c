@@ -384,6 +384,22 @@ static void emit_usb(const char *tag)
 				   ep.errors);
 		}
 	}
+	/* The probe's own ledger: whether it ran, and how each of its transfers
+	 * came out.  It rides the heartbeat rather than living only on the
+	 * probe's own lines because a console can drop lines under a pool
+	 * refusal storm, and this count cannot be reconstructed after the fact. */
+	{
+		struct lkpi_usb_chusb_stats cs;
+
+		memset(&cs, 0, sizeof(cs));
+		lkpi_usb_cherryusb_stats(&cs);
+		if (cs.probe_runs != 0)
+			MDK_ANCHOR("netio: usbprobe tag=%s runs=%u desc_ok=%u "
+				   "desc_fail=%u other_ok=%u other_fail=%u\n",
+				   tag, cs.probe_runs, cs.probe_desc_ok,
+				   cs.probe_desc_fail, cs.probe_other_ok,
+				   cs.probe_other_fail);
+	}
 }
 
 /* The socket-buffer supply, on its own so the boot heartbeat can print it
@@ -1016,25 +1032,76 @@ static osTimerId_t hb_timer;
 
 /*
  * The stall experiment.  When the data plane stops moving (the bridge's own
- * receive counter unchanged for two heartbeats) restart the controller's
- * asynchronous schedule once, without touching the queue heads on it:
+ * receive counter unchanged for two heartbeats) ask the one question that the
+ * counters cannot: is the device still answering on its control pipe?  Then
+ * restart the controller's asynchronous schedule once, without touching the
+ * queue heads on it:
  *
- *   completions resume -> the port had stopped retiring finished transfers
- *   nothing moves      -> the transfer is still with the device (it is NAKing)
+ *   EP0 answers, bulk is stuck -> the device's bulk endpoint, nothing host-side
+ *   EP0 dead, sibling device ok -> the device's whole USB interface is gone
+ *   EP0 dead, sibling dead      -> this controller's completion path is gone
+ *   completions resume          -> the port had stopped retiring finished transfers
+ *   nothing moves               -> the transfer is still with the device (it is NAKing)
  *
- * One shot per boot, and the marker is printed before the registers are
- * touched, so a console that dies on the re-arm still says what it was doing.
- * `eng_before/after` are the engine's completion counters on either side.
+ * One shot per boot, and every marker is printed before the action it names, so
+ * a console that dies inside the probe still says which action it died in.  The
+ * probe can block for up to ~1.5 s per transfer (the stack retries three times
+ * at CONFIG_USBHOST_CONTROL_TRANSFER_TIMEOUT), so the next heartbeat arriving
+ * late is expected and is not a symptom.
  */
 static unsigned int hb_last_rx;
 static unsigned int hb_rx_flat;
 static unsigned int hb_rearm_done;
 
+/* The endpoint probe's console face: one line per transfer, because the verdict
+ * is read off which of them answered.  Field names are the ledger's. */
+static void hb_ep0_probe(unsigned int rx_now)
+{
+	struct lkpi_usb_chusb_probe p;
+	int rc;
+
+	memset(&p, 0, sizeof(p));
+	MDK_ANCHOR("netio: probe tag=ep0 begin rx=%u\n", rx_now);
+	rc = lkpi_usb_cherryusb_ep0_probe(&p);
+	if (rc != 0) {
+		MDK_ANCHOR("netio: probe tag=ep0 not-run rc=%d\n", rc);
+		return;
+	}
+	MDK_ANCHOR("netio: probe tag=ep0 present=%d bus=%u addr=%u "
+		   "desc_rc=%d len=%u ms=%u id=%04x:%04x\n",
+		   p.present, (unsigned)p.busid, (unsigned)p.dev_addr,
+		   p.desc_rc, p.desc_len, p.desc_ms,
+		   p.desc_len >= 12u ? (unsigned)(p.desc[8] | (p.desc[9] << 8)) : 0u,
+		   p.desc_len >= 12u ? (unsigned)(p.desc[10] | (p.desc[11] << 8)) : 0u);
+	MDK_ANCHOR("netio: probe tag=ep0 status_rc=%d len=%u ms=%u word=%04x\n",
+		   p.status_rc, p.status_len, p.status_ms, p.status_word);
+	if (p.other_rc == LKPI_USB_PROBE_UNAVAILABLE)
+		MDK_ANCHOR("netio: probe tag=ep0 other devs=%d rc=unavailable\n",
+			   p.other_count);
+	else
+		MDK_ANCHOR("netio: probe tag=ep0 other devs=%d rc=%d len=%u "
+			   "ms=%u id=%04x:%04x\n",
+			   p.other_count, p.other_rc, p.other_len, p.other_ms,
+			   (unsigned)((p.other_id >> 16) & 0xffffu),
+			   (unsigned)(p.other_id & 0xffffu));
+	MDK_ANCHOR("netio: probe tag=ep0 done\n");
+}
+
+/*
+ * A flat receive counter is only a stall if the plane ever moved.  The first
+ * board arm of W7-06 armed the probe on an idle image: no load was running, so
+ * `rx` had been 2 since join, two heartbeats later it was "flat", and the
+ * probe fired before any bulk traffic had ever been submitted.  The threshold
+ * below is what tells "this plane has carried traffic and stopped" from "this
+ * plane has not started yet" - a stall is a transition, not a value.
+ */
+#define HB_STALL_FLOOR_FRAMES	256u
+
 static void hb_rearm_probe(unsigned int rx_now)
 {
 	struct lkpi_usb_engine_stats es;
 
-	if (hb_rearm_done || rx_now == 0)
+	if (hb_rearm_done || rx_now < HB_STALL_FLOOR_FRAMES)
 		return;
 	if (rx_now == hb_last_rx) {
 		hb_rx_flat++;
@@ -1051,6 +1118,7 @@ static void hb_rearm_probe(unsigned int rx_now)
 	MDK_ANCHOR("netio: rearm tag=hb why=rx_flat rx=%u done=%lu in_flight=%u\n",
 		   rx_now, (unsigned long)es.completions, es.in_flight);
 	lkpi_usb_controller_report();
+	hb_ep0_probe(rx_now);
 	{
 		int n = lkpi_usb_controller_rearm();
 

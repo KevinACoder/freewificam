@@ -116,6 +116,126 @@ lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out)
 	*out = chu_stats;
 }
 
+/* ------------------------------------------------------------------ */
+/* the endpoint probe's target                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Which device the last transfer went to.  Only the address is kept, never the
+ * pointer: by the time a stall watchdog asks, the port could have been torn
+ * down and rebuilt, and dereferencing a stale hubport is exactly the kind of
+ * defect this probe is meant to observe, not to commit.  The port is looked up
+ * again through the bus's own root hub when the probe runs.
+ *
+ * Both submission paths record, because the last transfer before a stall is a
+ * bulk one in every stall this project has measured - recording only the
+ * control path would leave the probe with a target from minutes earlier.
+ */
+static struct {
+	int		valid;
+	uint8_t		busid;
+	uint8_t		dev_addr;
+} chu_last_dev;
+
+static void
+chu_note_target(struct usbh_hubport *hport)
+{
+
+	if (hport == NULL || hport->bus == NULL)
+		return;
+	chu_last_dev.valid = 1;
+	chu_last_dev.busid = hport->bus->busid;
+	chu_last_dev.dev_addr = hport->dev_addr;
+}
+
+/*
+ * Find an enumerated port by (bus, address), walking root hub -> hubs -> device.
+ * The bench's deepest chain is root -> on-board hub -> dongle (depth 1 for the
+ * device), so the walk is bounded at three levels and never trusts a hub
+ * pointer that is not connected.
+ */
+#define CHU_PROBE_MAX_DEPTH	3
+
+static struct usbh_hubport *
+chu_hubport_find_in(struct usbh_hub *hub, uint8_t addr, int depth)
+{
+	uint8_t port;
+
+	if (hub == NULL || depth > CHU_PROBE_MAX_DEPTH)
+		return NULL;
+	for (port = 0; port < hub->nports; port++) {
+		struct usbh_hubport *hp = &hub->child[port];
+		struct usbh_hubport *found;
+
+		if (!hp->connected)
+			continue;
+		if (hp->dev_addr == addr)
+			return hp;
+		if (hp->self != NULL) {
+			found = chu_hubport_find_in(hp->self, addr, depth + 1);
+			if (found != NULL)
+				return found;
+		}
+	}
+	return NULL;
+}
+
+static struct usbh_hubport *
+chu_hubport_find(uint8_t busid, uint8_t addr)
+{
+
+	if (busid >= CONFIG_USBHOST_MAX_BUS)
+		return NULL;
+	return chu_hubport_find_in(&g_usbhost_bus[busid].hcd.roothub, addr, 0);
+}
+
+/*
+ * One other device on the same controller, if there is one.  The verdict a
+ * stalled transfer needs is "is it this device, or this controller?", and only
+ * a second device on the same controller can answer it.  `skip_addr` is the
+ * stalled device itself.
+ */
+static struct usbh_hubport *
+chu_hubport_other(uint8_t busid, uint8_t skip_addr, int *count)
+{
+	struct usbh_hub *hub;
+	uint8_t port;
+	struct usbh_hubport *first = NULL;
+
+	*count = 0;
+	if (busid >= CONFIG_USBHOST_MAX_BUS)
+		return NULL;
+	hub = &g_usbhost_bus[busid].hcd.roothub;
+	for (port = 0; port < hub->nports; port++) {
+		struct usbh_hubport *hp = &hub->child[port];
+		struct usbh_hub *child;
+		uint8_t inner;
+
+		if (!hp->connected)
+			continue;
+		if (hp->dev_addr != skip_addr) {
+			(*count)++;
+			if (first == NULL)
+				first = hp;
+			continue;
+		}
+		/* the stalled device may sit behind a hub: count its siblings */
+		child = hp->self;
+		if (child == NULL)
+			continue;
+		for (inner = 0; inner < child->nports; inner++) {
+			struct usbh_hubport *sib = &child->child[inner];
+
+			if (!sib->connected || sib->dev_addr == skip_addr)
+				continue;
+			(*count)++;
+			if (first == NULL)
+				first = sib;
+		}
+	}
+	return first;
+}
+
 #ifdef CONFIG_LKPI_CENSUS
 /*
  * The seam's own census face.  The counters below are the answer to "did the
@@ -516,6 +636,7 @@ chu_seam_submit(void *ctx, struct lkpi_usb_be_urb *be)
 	hport = (struct usbh_hubport *)be->hport->hcpriv;
 	if (hport == NULL)
 		return -LKPI_USB_BE_ERR_NOTCONN;
+	chu_note_target(hport);
 
 	if (be->ep == &be->hport->ep0) {
 		type = USB_ENDPOINT_TYPE_CONTROL;
@@ -663,6 +784,7 @@ chu_seam_control(void *ctx, struct lkpi_usb_be_hubport *port,
 	hport = (struct usbh_hubport *)port->hcpriv;
 	if (hport == NULL)
 		return -LKPI_USB_BE_ERR_NOTCONN;
+	chu_note_target(hport);
 
 	len = setup->wLength;
 	is_in = (setup->bmRequestType & 0x80u) != 0;
@@ -754,6 +876,14 @@ chu_seam_poll(void *ctx)
  * here rather than included: the port is a port, and this file must still
  * build for a bus whose controller has no such census (the weak symbol check
  * is the linker's, not a #ifdef on a MACRO this tree does not own).
+ *
+ * The controller-shape filter is not decoration.  The census reads the EHCI
+ * register block at the bus's base, so pointing it at an xHCI bus reads a
+ * different controller's layout.  The 8851BU image only ever starts the two
+ * EHCI roots, which is why that never showed; the 8821CU image starts only
+ * the xHCI ones, so its first stalled-transfer census would have walked xHCI
+ * registers as if they were EHCI's.  An observer must not die on the
+ * controller it is observing, so the shape check lives at the caller.
  */
 extern void usbh_ehci_async_report(uint8_t busid) __attribute__((weak));
 
@@ -765,6 +895,8 @@ chu_seam_async_report(void)
 	if (usbh_ehci_async_report == NULL)
 		return;
 	for (busid = 0; busid < USB_BOARD_BUS_COUNT; busid++) {
+		if (usb_board_bus_is_xhci(busid))
+			continue;
 		if (!usb_board_bus_ready(busid))
 			continue;
 		usbh_ehci_async_report(busid);
@@ -786,12 +918,165 @@ chu_seam_async_rearm(void)
 	if (usbh_ehci_async_rearm == NULL)
 		return 0;
 	for (busid = 0; busid < USB_BOARD_BUS_COUNT; busid++) {
+		if (usb_board_bus_is_xhci(busid))
+			continue;
 		if (!usb_board_bus_ready(busid))
 			continue;
 		usbh_ehci_async_rearm(busid);
 		n++;
 	}
 	return n;
+}
+
+/* ------------------------------------------------------------------ */
+/* the endpoint probe                                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The device descriptor the probe asks for, read through the stack's own
+ * control path (no direct register access, no private HCD call): the answer
+ * therefore covers the controller, its schedule, the completion path, the
+ * interrupt or the drain's poll fallback, and this adapter's staging - i.e.
+ * everything the bulk path also needs.  A device that answers this is a device
+ * whose host side is alive.
+ *
+ * Every buffer here must satisfy the stack's DMA alignment
+ * (CONFIG_USB_ALIGN_SIZE, 64 on this port): the HCD asserts it, and a
+ * stack-local setup packet takes the console down the moment the probe runs -
+ * which is exactly what the first board arm of W7-06 did.  The probe runs once
+ * per boot, so static buffers cannot race with themselves, and the two
+ * descriptor buffers are separate so the stalled device's bytes survive the
+ * sibling's transfer.
+ */
+static struct usb_setup_packet chu_probe_setup
+	__attribute__((aligned(CONFIG_USB_ALIGN_SIZE)));
+static uint8_t chu_probe_desc[64] __attribute__((aligned(CONFIG_USB_ALIGN_SIZE)));
+static uint8_t chu_probe_sibling[64]
+	__attribute__((aligned(CONFIG_USB_ALIGN_SIZE)));
+static uint8_t chu_probe_status[64]
+	__attribute__((aligned(CONFIG_USB_ALIGN_SIZE)));
+
+static int
+chu_probe_get_device_desc(struct usbh_hubport *hport, uint8_t *buf)
+{
+
+	memset(&chu_probe_setup, 0, sizeof(chu_probe_setup));
+	chu_probe_setup.bmRequestType = USB_REQUEST_DIR_IN |
+	    USB_REQUEST_STANDARD | USB_REQUEST_RECIPIENT_DEVICE;
+	chu_probe_setup.bRequest = USB_REQUEST_GET_DESCRIPTOR;
+	chu_probe_setup.wValue = (uint16_t)(USB_DESCRIPTOR_TYPE_DEVICE << 8);
+	chu_probe_setup.wIndex = 0;
+	chu_probe_setup.wLength = 18;
+	return usbh_control_transfer(hport, &chu_probe_setup, buf);
+}
+
+static int
+chu_probe_get_status(struct usbh_hubport *hport, uint8_t *buf)
+{
+
+	memset(&chu_probe_setup, 0, sizeof(chu_probe_setup));
+	chu_probe_setup.bmRequestType = USB_REQUEST_DIR_IN |
+	    USB_REQUEST_STANDARD | USB_REQUEST_RECIPIENT_DEVICE;
+	chu_probe_setup.bRequest = USB_REQUEST_GET_STATUS;
+	chu_probe_setup.wValue = 0;
+	chu_probe_setup.wIndex = 0;
+	chu_probe_setup.wLength = 2;
+	return usbh_control_transfer(hport, &chu_probe_setup, buf);
+}
+
+/* the two bytes the console reports, without trusting the descriptor's length */
+static unsigned int
+chu_probe_id(const uint8_t *d)
+{
+
+	return ((unsigned int)d[8] | ((unsigned int)d[9] << 8)) << 16 |
+	    (unsigned int)d[10] | ((unsigned int)d[11] << 8);
+}
+
+int
+lkpi_usb_cherryusb_ep0_probe(struct lkpi_usb_chusb_probe *out)
+{
+	struct usbh_hubport *hp, *other;
+	uint32_t t0;
+	int ret;
+
+	if (out == NULL)
+		return -LKPI_USB_BE_ERR_INVAL;
+	memset(out, 0, sizeof(*out));
+	out->desc_rc = LKPI_USB_PROBE_UNAVAILABLE;
+	out->status_rc = LKPI_USB_PROBE_UNAVAILABLE;
+	out->other_rc = LKPI_USB_PROBE_UNAVAILABLE;
+	out->roothub_rc = LKPI_USB_PROBE_UNAVAILABLE;
+	/* the field's meaning is "nothing was asked", so a caller never reads a
+	 * zero here as "the device said no" */
+	out->other_id = 0;
+	out->roothub_status = 0;
+
+	if (chu_stats.probe_runs != 0)
+		return -USB_ERR_BUSY;	/* once per boot: the ledger says so */
+	if (!chu_last_dev.valid)
+		return -USB_ERR_NODEV;
+
+	out->busid = chu_last_dev.busid;
+	out->dev_addr = chu_last_dev.dev_addr;
+	chu_stats.probe_runs++;
+
+	hp = chu_hubport_find(out->busid, out->dev_addr);
+	if (hp == NULL) {
+		/* the port is gone: a re-enumerated or unplugged device.  That is
+		 * a result in itself and is reported as `present=0`. */
+		out->present = 0;
+		chu_stats.probe_desc_fail++;
+		return 0;
+	}
+	out->present = 1;
+
+	/* marker discipline: each transfer is timed on its own so a report that
+	 * stops arriving names which one hung */
+	t0 = osKernelGetTickCount();
+	ret = chu_probe_get_device_desc(hp, chu_probe_desc);
+	out->desc_ms = (unsigned int)(osKernelGetTickCount() - t0);
+	out->desc_rc = ret;
+	out->desc_len = ret > 0 ? (unsigned int)ret : 0u;
+	if (ret > 0) {
+		memcpy(out->desc, chu_probe_desc,
+		    (unsigned int)ret < sizeof(out->desc) ?
+		    (unsigned int)ret : sizeof(out->desc));
+		chu_stats.probe_desc_ok++;
+	} else {
+		chu_stats.probe_desc_fail++;
+	}
+
+	t0 = osKernelGetTickCount();
+	ret = chu_probe_get_status(hp, chu_probe_status);
+	out->status_ms = (unsigned int)(osKernelGetTickCount() - t0);
+	out->status_rc = ret;
+	out->status_len = ret > 0 ? (unsigned int)ret : 0u;
+	out->status_word = ret >= 2 ? ((unsigned int)chu_probe_status[0] |
+	    ((unsigned int)chu_probe_status[1] << 8)) : 0u;
+
+	/* one other device on this controller: the only way to tell "this
+	 * device's USB stopped" from "this controller stopped".  Its descriptor
+	 * lands in a separate buffer - the stalled device's own bytes are the
+	 * verdict's subject and must survive this second transfer. */
+	other = chu_hubport_other(out->busid, out->dev_addr, &out->other_count);
+	if (other == NULL) {
+		out->other_rc = LKPI_USB_PROBE_UNAVAILABLE;
+		out->roothub_rc = LKPI_USB_PROBE_UNAVAILABLE;
+		return 0;
+	}
+	t0 = osKernelGetTickCount();
+	ret = chu_probe_get_device_desc(other, chu_probe_sibling);
+	out->other_ms = (unsigned int)(osKernelGetTickCount() - t0);
+	out->other_rc = ret;
+	out->other_len = ret > 0 ? (unsigned int)ret : 0u;
+	if (ret > 0) {
+		out->other_id = chu_probe_id(chu_probe_sibling);
+		chu_stats.probe_other_ok++;
+	} else {
+		chu_stats.probe_other_fail++;
+	}
+	return 0;
 }
 
 static const struct lkpi_usb_be_ops chu_ops = {

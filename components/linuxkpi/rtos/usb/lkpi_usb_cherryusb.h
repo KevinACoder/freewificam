@@ -77,8 +77,62 @@ struct lkpi_usb_chusb_stats {
 	unsigned int	rx_max_len;		/* largest bulk-IN completion */
 	unsigned int	rx_len_hist[6];		/* <256 <512 <1024 <1600 <2328 >=2328 */
 	int		rx_last_err;		/* last non-zero completion code */
+	/* the endpoint probe's own ledger: how often it ran and how each of its
+	 * four transfers came out.  A stall investigation reads these instead
+	 * of re-deriving them from the console lines, which can be truncated. */
+	unsigned int	probe_runs;
+	unsigned int	probe_desc_ok;
+	unsigned int	probe_desc_fail;
+	unsigned int	probe_other_ok;
+	unsigned int	probe_other_fail;
 };
 
 void lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out);
+
+/*
+ * "Is the device still there on the control pipe?" - asked after a bulk data
+ * plane has stopped, and the one question that separates the three candidates
+ * that look identical from the completion counters alone.
+ *
+ * A GET_DESCRIPTOR(DEVICE) to the device that stopped proves the controller,
+ * its schedule and the whole host completion path still work, so whatever is
+ * stuck is that device's bulk endpoint.  A device that answers its bulk
+ * traffic being the only one on the bus proves nothing either way; the probe
+ * therefore also asks ONE other device on the same controller, which is what
+ * tells "this device's USB died" from "this controller stopped".  When there
+ * is no other device, the field says `-2` (unavailable) rather than inventing
+ * a target - the two cases then cannot be told apart and the verdict says so.
+ *
+ * Cost, and the caller must know it: the stack's control transfer retries
+ * three times at a 500 ms timeout each, so a dead device makes one probe take
+ * up to ~1.5 s.  It runs once per boot, from the stall watchdog.
+ */
+#define LKPI_USB_PROBE_UNAVAILABLE	(-2)	/* nothing to probe / not attempted */
+
+struct lkpi_usb_chusb_probe {
+	int		present;	/* 1 = the stalled device is still enumerated */
+	uint8_t		busid;
+	uint8_t		dev_addr;
+	int		desc_rc;	/* GET_DESCRIPTOR(DEVICE): 0 ok, else stack code */
+	unsigned int	desc_len;	/* bytes the stack reported */
+	unsigned int	desc_ms;	/* wall time of that transfer */
+	uint8_t		desc[18];	/* raw bytes: idVendor/idProduct/bcdUSB */
+	int		status_rc;	/* GET_STATUS(device) */
+	unsigned int	status_len;
+	unsigned int	status_ms;
+	unsigned int	status_word;
+	int		other_count;	/* other enumerated devices on the bus */
+	int		other_rc;	/* GET_DESCRIPTOR on one of them */
+	unsigned int	other_len;
+	unsigned int	other_ms;
+	unsigned int	other_id;	/* (vendor << 16) | product on success */
+	unsigned int	roothub_status;	/* the root hub's port status, if read */
+	int		roothub_rc;
+};
+
+/* Fill `out` by probing the device the last transfer went to.  Returns 0 when
+ * a probe ran (the result is inside `out`), -EBUSY on a second call in the
+ * same boot, -ENODEV when no device has been transferred to yet. */
+int lkpi_usb_cherryusb_ep0_probe(struct lkpi_usb_chusb_probe *out);
 
 #endif /* _LKPI_USB_CHERRYUSB_H */
