@@ -1431,6 +1431,45 @@ void usbh_ehci_async_report(uint8_t busid)
     }
 }
 
+/*
+ * The one experiment that separates "the device is not consuming this transfer"
+ * from "this port stopped executing it": take the asynchronous schedule down and
+ * put it straight back.  The queue heads and their overlay tokens are not
+ * touched, so a qTD that the controller already finished but never retired
+ * turns into a completion (the urb thread wakes up), while a transfer the device
+ * is still NAKing stays active and nothing moves.  Typed from the shell after a
+ * stall; the ledger's `completions` counter says which of the two happened.
+ */
+int usbh_ehci_async_rearm(uint8_t busid)
+{
+    struct usbh_bus *bus = &g_usbhost_bus[busid];
+    uint32_t cmd;
+    unsigned int spin;
+    size_t flags;
+
+    /* Bounded register spins, no sleep: the completion path may be walking the
+     * same structures from the drain thread, so the whole toggle stays inside
+     * the critical section the poll path uses. */
+    flags = usb_osal_enter_critical_section();
+
+    cmd = EHCI_HCOR->usbcmd;
+    EHCI_HCOR->usbcmd = cmd & ~EHCI_USBCMD_ASEN;
+    for (spin = 0; spin < 20000 && (EHCI_HCOR->usbsts & EHCI_USBSTS_ASS); spin++)
+        ;
+
+    EHCI_HCOR->asynclistaddr = EHCI_PTR2ADDR(&g_async_qh_head[bus->hcd.hcd_id]);
+    EHCI_HCOR->usbcmd = cmd | EHCI_USBCMD_ASEN;
+    for (spin = 0; spin < 20000 && !(EHCI_HCOR->usbsts & EHCI_USBSTS_ASS); spin++)
+        ;
+
+    usb_osal_leave_critical_section(flags);
+
+    USB_LOG_RAW("ehci: rearm bus=%u cmd=%08x sts=%08x ass=%u\n", (unsigned)busid,
+                (unsigned)EHCI_HCOR->usbcmd, (unsigned)EHCI_HCOR->usbsts,
+                (unsigned)((EHCI_HCOR->usbsts & EHCI_USBSTS_ASS) ? 1U : 0U));
+    return 0;
+}
+
 int usbh_kill_urb(struct usbh_urb *urb)
 {
     struct ehci_qh_hw *qh;

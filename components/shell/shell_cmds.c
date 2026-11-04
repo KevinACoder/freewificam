@@ -233,25 +233,51 @@ CSH_CMD_EXPORT_ALIAS_FULL(cmd_net, net,
 	"net ping|udp|tcp|netio",
 	"run the wired network case this image carries\r\n");
 
+/*
+ * The two on-demand controller diagnostics.  Weak, because this file is in every
+ * image and not every image carries the linuxkpi USB engine.
+ */
+extern void lkpi_usb_controller_report(void) __attribute__((weak));
+extern int lkpi_usb_controller_rearm(void) __attribute__((weak));
+
 static int cmd_usb(int argc, char **argv)
 {
 	chry_shell_t *csh = cmd_csh(argc, argv);
 	static const char *const usb[] = { "usb_xhci", "usb_ehci" };
 
 	if (argc < 2) {
-		csh_printf(csh, "usage: usb enum|msc\n");
+		csh_printf(csh, "usage: usb enum|msc|census|rearm\n");
+		return 0;
+	}
+	if (strcmp(argv[1], "census") == 0) {
+		if (lkpi_usb_controller_report == NULL) {
+			csh_printf(csh, "usb census: no linuxkpi USB in this image\n");
+			return 0;
+		}
+		lkpi_usb_controller_report();
+		return 0;
+	}
+	if (strcmp(argv[1], "rearm") == 0) {
+		int n;
+
+		if (lkpi_usb_controller_rearm == NULL) {
+			csh_printf(csh, "usb rearm: no linuxkpi USB in this image\n");
+			return 0;
+		}
+		n = lkpi_usb_controller_rearm();
+		csh_printf(csh, "usb rearm: %d controller(s), completions resume?\n", n);
 		return 0;
 	}
 	if (strcmp(argv[1], "enum") == 0 || strcmp(argv[1], "msc") == 0) {
 		return group_run(csh, "usb", argv[1], usb,
 				 sizeof(usb) / sizeof(usb[0]));
 	}
-	csh_printf(csh, "usage: usb enum|msc\n");
+	csh_printf(csh, "usage: usb enum|msc|census|rearm\n");
 	return 0;
 }
 
 CSH_CMD_EXPORT_ALIAS_FULL(cmd_usb, usb,
-	"usb enum|msc",
+	"usb enum|msc|census|rearm",
 	"run the USB host case this image carries\r\n");
 
 static int cmd_sdio(int argc, char **argv)

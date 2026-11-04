@@ -1391,6 +1391,23 @@ lkpi_usb_controller_report(void)
 		chu_seam_async_report();
 }
 
+/*
+ * Restart the backend's asynchronous schedule without touching the queue heads
+ * that are on it.  See usbh_ehci_async_rearm(): a qTD the controller already
+ * finished but never retired retires on this, one the device is still NAKing
+ * does not.  Returns the number of controllers re-armed, 0 when the backend has
+ * no such control.
+ */
+extern int chu_seam_async_rearm(void) __attribute__((weak));
+
+int
+lkpi_usb_controller_rearm(void)
+{
+	if (chu_seam_async_rearm == NULL)
+		return 0;
+	return chu_seam_async_rearm();
+}
+
 void
 lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
 {

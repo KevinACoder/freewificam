@@ -103,6 +103,7 @@ struct usbh_ehci_snapshot {
 
 void usbh_ehci_async_snapshot(uint8_t busid, struct usbh_ehci_snapshot *out);
 void usbh_ehci_async_report(uint8_t busid);
+int usbh_ehci_async_rearm(uint8_t busid);
 
 struct ehci_itd_hw {
     struct ehci_itd hw;

@@ -1014,6 +1014,53 @@ static void rxpath_tick(void *arg)
  */
 static osTimerId_t hb_timer;
 
+/*
+ * The stall experiment.  When the data plane stops moving (the bridge's own
+ * receive counter unchanged for two heartbeats) restart the controller's
+ * asynchronous schedule once, without touching the queue heads on it:
+ *
+ *   completions resume -> the port had stopped retiring finished transfers
+ *   nothing moves      -> the transfer is still with the device (it is NAKing)
+ *
+ * One shot per boot, and the marker is printed before the registers are
+ * touched, so a console that dies on the re-arm still says what it was doing.
+ * `eng_before/after` are the engine's completion counters on either side.
+ */
+static unsigned int hb_last_rx;
+static unsigned int hb_rx_flat;
+static unsigned int hb_rearm_done;
+
+static void hb_rearm_probe(unsigned int rx_now)
+{
+	struct lkpi_usb_engine_stats es;
+
+	if (hb_rearm_done || rx_now == 0)
+		return;
+	if (rx_now == hb_last_rx) {
+		hb_rx_flat++;
+	} else {
+		hb_rx_flat = 0;
+		hb_last_rx = rx_now;
+	}
+	if (hb_rx_flat < 2)
+		return;
+
+	hb_rearm_done = 1;
+	memset(&es, 0, sizeof(es));
+	lkpi_usb_engine_stats_get(&es);
+	MDK_ANCHOR("netio: rearm tag=hb why=rx_flat rx=%u done=%lu in_flight=%u\n",
+		   rx_now, (unsigned long)es.completions, es.in_flight);
+	lkpi_usb_controller_report();
+	{
+		int n = lkpi_usb_controller_rearm();
+
+		memset(&es, 0, sizeof(es));
+		lkpi_usb_engine_stats_get(&es);
+		MDK_ANCHOR("netio: rearm tag=hb rearmed=%d done=%lu\n", n,
+			   (unsigned long)es.completions);
+	}
+}
+
 static void hb_tick(void *arg)
 {
 	(void)arg;
@@ -1034,6 +1081,7 @@ static void hb_tick(void *arg)
 			   "pend=%u q=%u\n",
 			   wc.data_tx, wc.tx_completes, wc.rx_frames,
 			   wc.rx_data, wc.tx_pending, wc.txq_high);
+		hb_rearm_probe(wc.rx_data);
 	}
 }
 

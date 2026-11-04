@@ -771,6 +771,29 @@ chu_seam_async_report(void)
 	}
 }
 
+/*
+ * Same shape as the census above: the port owns the schedule, this file only
+ * owns the bus list.  Returns how many controllers were re-armed.
+ */
+extern int usbh_ehci_async_rearm(uint8_t busid) __attribute__((weak));
+
+int
+chu_seam_async_rearm(void)
+{
+	uint8_t busid;
+	int n = 0;
+
+	if (usbh_ehci_async_rearm == NULL)
+		return 0;
+	for (busid = 0; busid < USB_BOARD_BUS_COUNT; busid++) {
+		if (!usb_board_bus_ready(busid))
+			continue;
+		usbh_ehci_async_rearm(busid);
+		n++;
+	}
+	return n;
+}
+
 static const struct lkpi_usb_be_ops chu_ops = {
 	.submit_urb = chu_seam_submit,
 	.kill_urb = chu_seam_kill,

@@ -155,6 +155,10 @@ void		lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out);
 /* One-shot census of the controller's asynchronous schedule (no-op when the
  * backend has none); prints through the console, for a stalled transfer. */
 void		lkpi_usb_controller_report(void);
+/* Restart the controller's asynchronous schedule without touching the queue
+ * heads on it; returns how many controllers were re-armed (0 = unsupported).
+ * Separates "the device is not consuming" from "the port stopped retiring". */
+int		lkpi_usb_controller_rearm(void);
 
 /* Run the backend's completion path once from the caller's thread.  The engine
  * does this itself when a completion is overdue (LKPI_USB_POLL_MS); a
