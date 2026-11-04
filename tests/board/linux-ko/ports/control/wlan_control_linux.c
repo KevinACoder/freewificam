@@ -298,9 +298,14 @@ static int wlan_stats_get(char *buffer, const struct kernel_param *kp)
 	wlan_bridge_stats(&c);
 	return scnprintf(buffer, PAGE_SIZE,
 	    "attached=%d mgt_tx=%u data_tx=%u rx=%u tx_done=%u scan=%u/%u "
-	    "auth_retry=%u auth_ans=%u\n",
+	    "auth_retry=%u auth_ans=%u rx_data=%u rx_data_enc=%u "
+	    "tx_errors=%u mgmt_action=%u ba_rx=%u ba_tx=%u ba_oper=%u "
+	    "ba_stop=%u txq=%u tx_stopped=%u\n",
 	    c.attached, c.mgt_tx, c.data_tx, c.rx_frames, c.tx_completes,
-	    c.scan_starts, c.scan_completes, c.auth_retries, c.auth_answers);
+	    c.scan_starts, c.scan_completes, c.auth_retries, c.auth_answers,
+	    c.rx_data, c.rx_data_enc, c.tx_errors, c.mgmt_action_tx,
+	    c.ba_rx_start, c.ba_tx_start, c.ba_tx_operational, c.ba_stop,
+	    c.txq_len, c.tx_stopped);
 }
 
 static const struct kernel_param_ops wlan_stats_ops = {

@@ -76,6 +76,8 @@ struct wlan_txq_slot {
 	struct ieee80211_txq *txq;
 	struct sk_buff_head q;
 	bool used;
+	bool scheduled;
+	bool in_service;
 };
 
 static struct wlan_txq_slot wlan_txq_slots[WLAN_TXQ_SLOTS];
@@ -120,6 +122,7 @@ int wlan_txq_enqueue(struct ieee80211_txq *txq, struct sk_buff *skb)
 		return -ENOSPC;
 	}
 	__skb_queue_tail(&slot->q, skb);
+	slot->scheduled = true;
 	spin_unlock_irqrestore(&wlan_txq_lock, flags);
 	return 0;
 }
@@ -191,20 +194,55 @@ void ieee80211_txq_get_depth(struct ieee80211_txq *txq,
 	}
 }
 
-/* The scheduler is a no-op: this module has one vif and one peer. */
+/*
+ * A TXQ is scheduled by enqueue or by ieee80211_schedule_txq(); the driver's
+ * txq work asks next_txq() for one, then returns it through return_txq()
+ * (which maps to __ieee80211_schedule_txq() with force=false).  A driver that
+ * uses the generic rtw89 txq work needs all three to move a frame; the old
+ * NULL/empty stubs left every data frame parked in its slot.
+ */
 void __ieee80211_schedule_txq(struct ieee80211_hw *hw,
     struct ieee80211_txq *txq, bool force)
 {
+	struct wlan_txq_slot *slot;
+	unsigned long flags;
+
 	(void)hw;
-	(void)txq;
-	(void)force;
+	if (txq == NULL) {
+		return;
+	}
+	spin_lock_irqsave(&wlan_txq_lock, flags);
+	slot = wlan_txq_slot(txq, force);
+	if (slot != NULL) {
+		slot->scheduled = force;
+		slot->in_service = false;
+	}
+	spin_unlock_irqrestore(&wlan_txq_lock, flags);
 }
 
 struct ieee80211_txq *ieee80211_next_txq(struct ieee80211_hw *hw, u8 ac)
 {
+	struct ieee80211_txq *txq = NULL;
+	struct wlan_txq_slot *slot;
+	unsigned long flags;
+	int i;
+
 	(void)hw;
-	(void)ac;
-	return NULL;
+	spin_lock_irqsave(&wlan_txq_lock, flags);
+	for (i = 0; i < WLAN_TXQ_SLOTS; i++) {
+		slot = &wlan_txq_slots[i];
+		if (!slot->used || !slot->scheduled || slot->in_service ||
+		    slot->txq == NULL || slot->txq->ac != ac ||
+		    skb_queue_empty(&slot->q)) {
+			continue;
+		}
+		slot->scheduled = false;
+		slot->in_service = true;
+		txq = slot->txq;
+		break;
+	}
+	spin_unlock_irqrestore(&wlan_txq_lock, flags);
+	return txq;
 }
 
 void ieee80211_txq_schedule_start(struct ieee80211_hw *hw, u8 ac)
