@@ -371,11 +371,13 @@ static void emit_usb(const char *tag)
 		 * ends); `stg_exh` is the same for the DMA stage; `refused` is
 		 * the controller rejecting the urb outright. */
 		MDK_ANCHOR("netio: usbc tag=%s sub=%u done=%u slot=%u "
-			   "slot_exh=%u stg_exh=%u stg_ovf=%u refuse=%u\n",
+			   "slot_exh=%u stg_exh=%u stg_ovf=%u refuse=%u "
+			   "zlp=%u hin=%u\n",
 			   tag, cs.submits, cs.completed,
 			   (unsigned)CONFIG_LKPI_USB_CHERRYUSB_SLOTS,
 			   cs.slots_exhausted, cs.stage_exhausted,
-			   cs.stage_overflow, cs.refused);
+			   cs.stage_overflow, cs.refused,
+			   cs.zlp_added, cs.zero_packet_ignored);
 	}
 	/*
 	 * Which endpoints are carrying the transfers, when a stall leaves some

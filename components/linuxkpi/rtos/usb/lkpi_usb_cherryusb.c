@@ -543,6 +543,17 @@ chu_complete(void *arg, int nbytes)
 	 */
 	if (be == NULL || slot->delivered) {
 		chu_stats.complete_dropped++;
+		{
+			static unsigned said;
+
+			if (said < 4) {
+				said++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "usbseam: completion dropped slot=%u be=%p delivered=%d url=%u\n",
+				    slot->idx, (void *)be, slot->delivered,
+				    slot->urb.transfer_buffer_length);
+			}
+		}
 		return;
 	}
 	slot->delivered = 1;
@@ -613,6 +624,16 @@ chu_complete(void *arg, int nbytes)
 		be->complete(be->arg, err == 0 ? (int)be->actual_length : err);
 }
 
+/*
+ * The xHCI port's transfer_flags bit for the zero-length delimiter
+ * (port/xhci/usb_hc_xhci.h, same value and guard).  The seam is backend
+ * agnostic, so the bit travels with the translation instead of pulling the
+ * port's register definitions into this file.
+ */
+#ifndef USBH_URB_ZERO_PACKET
+#define USBH_URB_ZERO_PACKET	(1u << 0)
+#endif
+
 /* ------------------------------------------------------------------ */
 /* the seam operations                                                 */
 /* ------------------------------------------------------------------ */
@@ -626,6 +647,7 @@ chu_seam_submit(void *ctx, struct lkpi_usb_be_urb *be)
 	unsigned int type;
 	int is_in;
 	int ret;
+	int zlp;
 	uint32_t mode_timeout;
 
 	(void)ctx;
@@ -656,8 +678,27 @@ chu_seam_submit(void *ctx, struct lkpi_usb_be_urb *be)
 		is_in = (ep->bEndpointAddress & 0x80u) != 0;
 	}
 
-	if ((be->transfer_flags & LKPI_USB_BE_URB_ZERO_PACKET) != 0)
-		chu_stats.zero_packet_ignored++;
+	/*
+	 * URB_ZERO_PACKET keeps Linux semantics: the delimiter is only added
+	 * when an OUT transfer ends exactly on a maxpacket boundary, because
+	 * that is the case where the device's bulk FIFO holds the last full
+	 * packet waiting for its short-packet terminator. The xHCI port takes
+	 * the flag verbatim and appends a ZLP to every OUT, so the alignment
+	 * test belongs here, not there.
+	 */
+	zlp = 0;
+	if ((be->transfer_flags & LKPI_USB_BE_URB_ZERO_PACKET) != 0) {
+		unsigned int mps = 0U;
+
+		if (ep != NULL)
+			mps = USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize);
+		if (is_in || be->transfer_buffer_length == 0U || mps == 0U)
+			chu_stats.zero_packet_ignored++;
+		else if ((be->transfer_buffer_length % mps) != 0U)
+			chu_stats.zero_packet_ignored++;
+		else
+			zlp = 1;
+	}
 
 	/*
 	 * The submission mode is captured before the transfer is handed over:
@@ -706,6 +747,10 @@ chu_seam_submit(void *ctx, struct lkpi_usb_be_urb *be)
 		break;
 	}
 
+	if (zlp != 0) {
+		slot->urb.transfer_flags |= USBH_URB_ZERO_PACKET;
+		chu_stats.zlp_added++;
+	}
 	if (type != USB_ENDPOINT_TYPE_CONTROL)
 		slot->urb.data_toggle = be->ep->data_toggle;
 	chu_stats.submits++;

@@ -50,7 +50,8 @@ struct lkpi_usb_chusb_stats {
 	unsigned int	completed;		/* completions delivered to the seam */
 	unsigned int	complete_dropped;	/* a second completion for one transfer */
 	unsigned int	kill_translated;	/* HCD shutdown rewritten as cancelled */
-	unsigned int	zero_packet_ignored;	/* the flag the stack has no equivalent for */
+	unsigned int	zero_packet_ignored;	/* ZLP asked for but not required (IN, len 0, aligned to nothing) */
+	unsigned int	zlp_added;		/* OUTs that got the maxpacket-boundary delimiter */
 	unsigned int	refused;		/* malformed requests refused */
 	unsigned int	stage_size;		/* the compiled stage slot size */
 	unsigned int	stage_slots;		/* the compiled stage slot count */

@@ -2662,6 +2662,26 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		return;
 	}
 	lkpi80211_tx_headroom_check(hw, skb);
+	/*
+	 * The queue is where a short-headroom frame gets its first chance to be
+	 * named: once enqueued it belongs to the txq, and the dequeue guard can
+	 * only see that it was too short after the driver's push already ate the
+	 * headroom.  Count and name the first few here, at the only entry the
+	 * port's own framing goes through.
+	 */
+	if (skb_headroom(skb) < hw->extra_tx_headroom) {
+		static unsigned long queued_short;
+		static bool said;
+
+		queued_short++;
+		if (!said) {
+			said = true;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: queued tx frame fc=0x%04x len=%u with %u bytes of headroom (need %u)\n",
+			    (unsigned int)((struct ieee80211_hdr *)skb->data)->frame_control,
+			    skb->len, skb_headroom(skb), hw->extra_tx_headroom);
+		}
+	}
 	if (lkpi_txq_enqueue(txq, skb) != 0) {
 		lkpi_skb_free(skb);
 		return;

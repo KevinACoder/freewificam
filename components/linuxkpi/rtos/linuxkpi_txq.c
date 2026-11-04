@@ -36,6 +36,7 @@
 #include "os/cmsis2/cmsis2.h"
 #include "linuxkpi_core.h"
 #include "linuxkpi_txq.h"
+#include "linuxkpi_80211.h"
 
 #include <net/mac80211.h>
 
@@ -535,7 +536,20 @@ ieee80211_tx_dequeue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 			    (unsigned int)d[0] | ((unsigned int)d[1] << 8), skb->len,
 			    skb_headroom(skb), hw->extra_tx_headroom);
 		}
-		lkpi_skb_free(skb);
+		/*
+		 * Do not free here: a frame at exactly the driver's descriptor
+		 * size of headroom has already been through the driver's push
+		 * (its owner still holds it), and freeing a second queue entry
+		 * of it would hand the pool a live buffer.  Leaking one frame
+		 * is the cheap side of that trade; the count says how often.
+		 *
+		 * Returning NULL ends the driver's dequeue loop, and nothing
+		 * would come back for the frames behind this one: the queue then
+		 * holds them and its pool slots with them (the 2026-11-04 S2C
+		 * stall: txq stuck at 130, OUT endpoint idle).  Ask the port for
+		 * another wake so the drop costs one frame, not the queue.
+		 */
+		lkpi80211_tx_wake_defer(hw);
 		return NULL;
 	}
 	return skb;

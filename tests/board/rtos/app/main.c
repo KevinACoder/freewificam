@@ -63,6 +63,22 @@ static void fatal(const char *what)
 }
 
 #if defined(CONFIG_NETIO_WATCHDOG)
+#include "log.h"
+
+/*
+ * The stack's core-lock witness (third-party/lwip/ports/sys_arch.c records the
+ * owner and the take time): both read the record without taking the lock, so
+ * the watchdog can name a wedged holder while everything that needs the lock
+ * is stopped.
+ */
+extern const char *sys_arch_core_lock_owner(void);
+extern unsigned long sys_arch_core_lock_held_ms(void);
+#if defined(RTOS_CASE_RTW88_NETIO) || defined(RTOS_CASE_RTW89_NETIO)
+void lkpi80211_rx_boundary_counters(uint32_t *in, uint32_t *refused,
+				    uint32_t *drops, uint32_t *frames,
+				    uint32_t *qlen);
+#endif
+
 /*
  * Liveness witness.  Every "the board went silent" report so far had two
  * readings: the work stopped, or the thing that prints stopped.  A thread at
@@ -71,12 +87,27 @@ static void fatal(const char *what)
  * and the console path are alive and only the case's own thread is stuck;
  * when it stops too, the wedge is below the scheduler (interrupts off in a
  * critical section, or a fault).
+ *
+ * The counter line answers the next question without a second boot: whether
+ * the receive boundary kept counting (the frame source is alive), whether its
+ * queue backed up (the delivery worker is the stopped one), and who holds the
+ * stack lock.  Reads only, no lock taken.
  */
 static void watchdog_entry(void *arg)
 {
 	(void)arg;
 	for (;;) {
-		uart_early_puts("WD: alive\n");
+#if defined(RTOS_CASE_RTW88_NETIO) || defined(RTOS_CASE_RTW89_NETIO)
+		uint32_t in = 0, ref = 0, drop = 0, frames = 0, q = 0;
+
+		lkpi80211_rx_boundary_counters(&in, &ref, &drop, &frames, &q);
+		board_log_emergency("WD: alive rx_in=%lu rx_q=%lu lock=%s held=%lums\n",
+		    (unsigned long)in, (unsigned long)q,
+		    sys_arch_core_lock_owner(), sys_arch_core_lock_held_ms());
+#else
+		board_log_emergency("WD: alive lock=%s held=%lums\n",
+		    sys_arch_core_lock_owner(), sys_arch_core_lock_held_ms());
+#endif
 		(void)osDelay(2000u);
 	}
 }
@@ -87,7 +118,9 @@ static int watchdog_start(void)
 
 	memset(&attr, 0, sizeof(attr));
 	attr.name = "wd";
-	attr.stack_size = 1024u;
+	/* 4 KiB: the counter line formats through vsnprintf, and a 1 KiB
+	 * witness stack died on its first formatted line (2026-11-04). */
+	attr.stack_size = 4096u;
 	attr.priority = osPriorityRealtime;
 	return (osThreadNew(watchdog_entry, NULL, &attr) != NULL) ? 0 : -1;
 }
