@@ -163,8 +163,19 @@ struct lkpi80211_hw_ctx {
 	 * SCD_QUEUE_CFG timed out and the driver force-fired an NMI).  Linux's
 	 * irqsafe form exists exactly to break that chain.
 	 */
-	struct sk_buff		*rxq[CONFIG_LKPI80211_RXQ_DEPTH];
-	unsigned int		rxq_head, rxq_tail, rxq_len;
+	/*
+	 * One queue, two threads: the driver's receive context enqueues and the
+	 * executor below dequeues, so every access to the ring goes through the
+	 * queue's own critical section.  It was a bare array of slots with
+	 * head/tail/len counters until 2026-11-04, and the two contexts'
+	 * reads and writes interleaved on the board: one skb freed by the
+	 * producer while the consumer delivered it, a slot consumed twice, and
+	 * a counter update lost per collision.  The board reported it as
+	 * "free of a pointer outside the pool" / "double enqueue refused" /
+	 * "unlink of an skb this queue does not own" right before the heap
+	 * assertion, on every cell that made the queue overflow.
+	 */
+	struct sk_buff_head	rxq;
 	/* the receive path's own boundary counters (driver handed up / linearize
 	 * refused / delivered to the bridge), the discriminator a stalled
 	 * receive count needs above the USB layer */
@@ -173,6 +184,10 @@ struct lkpi80211_hw_ctx {
 	struct work_struct	rx_work;
 	struct workqueue_struct *rx_wq;
 	unsigned long		rxq_drops;
+	/* a frame the driver handed up while it was still owned by a queue: the
+	 * same skb submitted twice, which the ring no longer turns into a
+	 * corrupted slot but must still be counted and named */
+	unsigned long		rxq_owned;
 	/*
 	 * The scan completion's own work (mac80211's local->scan_work): the
 	 * driver's completion notification is delivered by the interface as an
@@ -544,6 +559,13 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	ctx->hw.priv = (u8 *)ctx + sizeof(*ctx);
 	ctx->hw.wiphy = &ctx->wiphy;
 	/*
+	 * The receive queue's lock before anything can enqueue into it.  kzalloc
+	 * leaves the lock all zero, which only works while the spinlock is an
+	 * IRQ-mask word; init it explicitly so the queue owns its lock the way
+	 * the contract header says (spin_lock_init + ring reset).
+	 */
+	lkpi_skb_queue_init(&ctx->rxq);
+	/*
 	 * The deferred-receive executor: the interface's own receive thread.
 	 * One queue, one worker - the receive order is the order the driver
 	 * handed the frames up, which the parser relies on (scan results and
@@ -604,15 +626,10 @@ ieee80211_free_hw(struct ieee80211_hw *hw)
 		lkpi_destroy_workqueue(ctx->rx_wq);
 		ctx->rx_wq = NULL;
 	}
-	while (ctx->rxq_len > 0) {
-		struct sk_buff *skb = ctx->rxq[ctx->rxq_head];
-
-		ctx->rxq[ctx->rxq_head] = NULL;
-		ctx->rxq_head = (ctx->rxq_head + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
-		ctx->rxq_len--;
-		if (skb != NULL)
-			lkpi_skb_free(skb);
-	}
+	/* the queue's own drain: the executor is gone, so each skb that is still
+	 * linked is ours alone to release (the purge dequeues under the queue
+	 * lock, so a late producer cannot splice a new one in behind the walk) */
+	lkpi_skb_queue_purge(&ctx->rxq);
 	kfree(ctx);
 }
 
@@ -819,8 +836,9 @@ lkpi_80211_census_print(void)
 	 * driver reporting success.  It was counted and never reported, which is
 	 * the same as not having the counter at all. */
 	lkpi_printf(ULOG_INFO_LEVEL,
-	    "perf census: A 80211 rxq drops=%lu depth=%u\n",
+	    "perf census: A 80211 rxq drops=%lu owned=%lu depth=%u\n",
 	    lkpi_80211_ctx != NULL ? lkpi_80211_ctx->rxq_drops : 0u,
+	    lkpi_80211_ctx != NULL ? lkpi_80211_ctx->rxq_owned : 0u,
 	    (unsigned)CONFIG_LKPI80211_RXQ_DEPTH);
 }
 #endif /* CONFIG_LKPI_CENSUS */
@@ -835,12 +853,11 @@ lkpi80211_rx_work(struct work_struct *w)
 		struct sk_buff *skb;
 		struct ieee80211_rx_status *rs;
 
-		if (ctx->rxq_len == 0)
+		/* one dequeue per pass: the queue is the only thing the producer
+		 * shares with this thread, and the pop is its critical section */
+		skb = lkpi_skb_dequeue(&ctx->rxq);
+		if (skb == NULL)
 			return;
-		skb = ctx->rxq[ctx->rxq_head];
-		ctx->rxq[ctx->rxq_head] = NULL;
-		ctx->rxq_head = (ctx->rxq_head + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
-		ctx->rxq_len--;
 
 		rs = (struct ieee80211_rx_status *)skb->cb;
 		ctx->rx_frames++;
@@ -941,22 +958,47 @@ ieee80211_rx_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	 * consumer depends on it, because the bridge's input takes the port
 	 * serializer - the same lock a driver call can hold while waiting for a
 	 * host command that only this caller can complete.  A full queue drops
-	 * the oldest frame and counts the loss; the frame's skb is only freed by
-	 * the worker that delivers it.
+	 * the oldest frame and counts the loss; that frame is unlinked first, so
+	 * the enqueueing thread releases it, and the worker releases the one it
+	 * delivered.
 	 */
-	if (ctx->rxq_len >= CONFIG_LKPI80211_RXQ_DEPTH) {
-		struct sk_buff *old = ctx->rxq[ctx->rxq_head];
+	if (skb->list != NULL) {
+		/*
+		 * The driver handed up an skb a queue still owns: the same buffer
+		 * submitted twice.  It used to be enqueued again, which is how the
+		 * ring got a slot that two deliveries owned; now it is refused and
+		 * named, and the reference that is already in flight stays with
+		 * its owner (releasing it here would free a live buffer).
+		 */
+		ctx->rxq_owned++;
+		if (ctx->rxq_owned == 1 || (ctx->rxq_owned % 64) == 0)
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: rx skb already owned by a queue (count=%lu); refused\n",
+			    ctx->rxq_owned);
+	} else {
+		struct sk_buff *old = NULL;
+		unsigned long long flags;
 
-		ctx->rxq[ctx->rxq_head] = NULL;
-		ctx->rxq_head = (ctx->rxq_head + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
-		ctx->rxq_len--;
-		ctx->rxq_drops++;
+		/*
+		 * The dequeue-and-append pair is one critical section: on a
+		 * single core the tick can preempt this thread between the two,
+		 * and the old array lost an update exactly there.  osCriticalEnter
+		 * masks interrupts (the same mechanism the USB engine's rings
+		 * use), and nested sections restore the caller's state.
+		 */
+		flags = lkpi_spin_lock_irqsave(&ctx->rxq.lock);
+		if (skb_queue_len(&ctx->rxq) >= CONFIG_LKPI80211_RXQ_DEPTH) {
+			old = __skb_dequeue(&ctx->rxq);
+			ctx->rxq_drops++;
+		}
+		__skb_queue_tail(&ctx->rxq, skb);
+		lkpi_spin_unlock_irqrestore(&ctx->rxq.lock, flags);
+		/* the dropped frame is unlinked from the queue, so only this
+		 * thread can still reach it; releasing it outside the critical
+		 * section keeps the masked window to the list surgery */
 		if (old != NULL)
 			lkpi_skb_free(old);
 	}
-	ctx->rxq[ctx->rxq_tail] = skb;
-	ctx->rxq_tail = (ctx->rxq_tail + 1) % CONFIG_LKPI80211_RXQ_DEPTH;
-	ctx->rxq_len++;
 	if (ctx->rx_wq != NULL)
 		(void)queue_work(ctx->rx_wq, &ctx->rx_work);
 	else
@@ -2176,7 +2218,10 @@ lkpi80211_rx_boundary_counters(u32 *in, u32 *refused, u32 *drops, u32 *frames, u
 	if (frames != NULL)
 		*frames = ctx->rx_frames;
 	if (qlen != NULL)
-		*qlen = ctx->rxq_len;
+		/* the queue's length is read by the watchdog without the queue
+		 * lock: one word, and a stale sample of a depth is the whole
+		 * point of a liveness witness */
+		*qlen = (u32)skb_queue_len(&ctx->rxq);
 }
 
 /*
