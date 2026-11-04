@@ -1377,6 +1377,20 @@ lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out)
 	return 0;
 }
 
+/*
+ * The controller's schedule, printed on demand.  The backend owns the census
+ * (only a backend that has a schedule to walk can answer) and the symbol is
+ * weak, so a build with another backend simply prints nothing.
+ */
+extern void chu_seam_async_report(void) __attribute__((weak));
+
+void
+lkpi_usb_controller_report(void)
+{
+	if (chu_seam_async_report != NULL)
+		chu_seam_async_report();
+}
+
 void
 lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
 {

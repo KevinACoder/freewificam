@@ -749,6 +749,28 @@ chu_seam_poll(void *ctx)
 	}
 }
 
+/*
+ * The controller's asynchronous schedule, printed once on demand.  Declared
+ * here rather than included: the port is a port, and this file must still
+ * build for a bus whose controller has no such census (the weak symbol check
+ * is the linker's, not a #ifdef on a MACRO this tree does not own).
+ */
+extern void usbh_ehci_async_report(uint8_t busid) __attribute__((weak));
+
+void
+chu_seam_async_report(void)
+{
+	uint8_t busid;
+
+	if (usbh_ehci_async_report == NULL)
+		return;
+	for (busid = 0; busid < USB_BOARD_BUS_COUNT; busid++) {
+		if (!usb_board_bus_ready(busid))
+			continue;
+		usbh_ehci_async_report(busid);
+	}
+}
+
 static const struct lkpi_usb_be_ops chu_ops = {
 	.submit_urb = chu_seam_submit,
 	.kill_urb = chu_seam_kill,

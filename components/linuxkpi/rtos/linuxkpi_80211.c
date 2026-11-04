@@ -88,6 +88,10 @@ _Static_assert(sizeof(struct ieee80211_rx_status) <=
 #define CONFIG_LKPI80211_RXQ_DEPTH	32
 #endif
 
+/* the last interface the transmit path ran on, so the board's ledger can ask
+ * about the transmit gate without carrying the hw pointer through the seam */
+static struct lkpi80211_hw_ctx *lkpi_tx_ctx;
+
 /* the deferred-receive worker (body below ieee80211_rx_irqsafe): the hw
  * allocator arms it before any driver can hand a frame up */
 static void lkpi80211_rx_work(struct work_struct *w);
@@ -2116,6 +2120,35 @@ lkpi80211_completion_counters(u32 *scan, u32 *tx)
  * (rx frozen), driver -> interface (in frozen while rx grows), or interface ->
  * bridge (in grows, frames frozen).
  */
+/*
+ * The transmit gate's state, and the wake that reopens it.  `stopped` is the
+ * driver's own "is the tx path open" switch: when it is nonzero the enqueue
+ * path hands frames to their txq and does not wake the driver, so a stop the
+ * driver never followed with a wake leaves every frame in the engine - the
+ * shape a board shows as "transmit stopped, nothing in flight, pool full".
+ * `wakes` is how many times the deferred wake actually ran, so a stop without
+ * a matching delivery is visible without a scope.
+ */
+void
+lkpi80211_tx_gate_counters(u32 *stopped, u32 *wakes)
+{
+	struct lkpi80211_hw_ctx *ctx = lkpi_rx_ctx;
+
+	if (ctx == NULL)
+		ctx = lkpi_tx_ctx;
+	if (ctx == NULL) {
+		if (stopped != NULL)
+			*stopped = 0xffffffffu;	/* no hw: say unknown */
+		if (wakes != NULL)
+			*wakes = 0;
+		return;
+	}
+	if (stopped != NULL)
+		*stopped = ctx->queue_stopped;
+	if (wakes != NULL)
+		*wakes = ctx->tx_wakes;
+}
+
 void
 lkpi80211_rx_boundary_counters(u32 *in, u32 *refused, u32 *drops, u32 *frames, u32 *qlen)
 {
@@ -2496,6 +2529,7 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (hw == NULL || skb == NULL)
 		return;
 	ctx = LKPI80211_CTX(hw);
+	lkpi_tx_ctx = ctx;
 	hdr = (struct ieee80211_hdr *)skb->data;
 	fc = hdr->frame_control;
 

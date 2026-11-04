@@ -422,6 +422,40 @@ out:
 	return ret;
 }
 
+/*
+ * The engine's own census, for a board whose transmit stops under load.
+ * `queued` is what sits in the per-txq queues right now - frames the stack
+ * handed down that no driver dequeue has taken - which is the one number that
+ * tells "the driver stopped taking frames" from "the frames left and never
+ * came back".  The counters beside it separate the two failure shapes: a
+ * refusal means the slot table was full, an orphan means a dequeue named a
+ * queue the engine does not know, and `handed` is how often a dequeue was
+ * served at all.
+ */
+void
+lkpi_txq_census(unsigned long *queued, unsigned long *handed,
+    unsigned long *orphans, unsigned long *refusals)
+{
+	unsigned long flags;
+	unsigned long q = 0;
+	unsigned int i;
+
+	lkpi_txq_setup();
+	spin_lock_irqsave(&eng.lock, flags);
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++)
+		if (eng.slots[i].txq != NULL)
+			q += eng.slots[i].queue.qlen;
+	spin_unlock_irqrestore(&eng.lock, flags);
+	if (queued != NULL)
+		*queued = q;
+	if (handed != NULL)
+		*handed = eng.handed;
+	if (orphans != NULL)
+		*orphans = eng.orphans;
+	if (refusals != NULL)
+		*refusals = eng.refusals;
+}
+
 void
 ieee80211_txq_get_depth(struct ieee80211_txq *txq, unsigned long *frame_cnt,
     unsigned long *byte_cnt)

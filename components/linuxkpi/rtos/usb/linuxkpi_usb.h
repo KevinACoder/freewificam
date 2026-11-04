@@ -152,6 +152,9 @@ unsigned int	lkpi_usb_ep_count(void);
 /* copy endpoint `index`'s bookkeeping; non-zero when the index is out of range */
 int		lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out);
 void		lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out);
+/* One-shot census of the controller's asynchronous schedule (no-op when the
+ * backend has none); prints through the console, for a stalled transfer. */
+void		lkpi_usb_controller_report(void);
 
 /* Run the backend's completion path once from the caller's thread.  The engine
  * does this itself when a completion is overdue (LKPI_USB_POLL_MS); a

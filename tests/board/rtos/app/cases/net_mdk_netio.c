@@ -108,6 +108,12 @@
 void lkpi80211_rx_boundary_counters(uint32_t *in, uint32_t *refused,
 				    uint32_t *drops, uint32_t *frames,
 				    uint32_t *qlen);
+/* The transmit leg's two supplies, exported by the same substitute: how many
+ * frames its txq engine is still holding, and whether the driver's transmit
+ * gate is closed.  Declared here for the same reason as the pair above. */
+void lkpi_txq_census(unsigned long *queued, unsigned long *handed,
+		     unsigned long *orphans, unsigned long *refusals);
+void lkpi80211_tx_gate_counters(uint32_t *stopped, uint32_t *wakes);
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -318,6 +324,105 @@ static void emit_rxpath(const char *tag)
 }
 #endif /* !NETIO_GMAC */
 
+/*
+ * The transmit leg's census: frames still inside the substitute's txq engine,
+ * the engine's own counters, and the driver's transmit gate.  This is the one
+ * thing the receive-side ledger cannot say - a cell that fills the socket
+ * buffer pool and leaves nothing in flight at the controller has its frames in
+ * `q` (the driver never dequeued them) or the gate is shut (`stopped`), and
+ * those two have different fixes.
+ */
+static void emit_tx_census(const char *tag)
+{
+	unsigned long q = 0, handed = 0, orph = 0, refu = 0;
+	uint32_t stopped = 0, wakes = 0;
+
+	lkpi_txq_census(&q, &handed, &orph, &refu);
+	lkpi80211_tx_gate_counters(&stopped, &wakes);
+	MDK_ANCHOR("netio: tx tag=%s q=%lu handed=%lu orph=%lu refu=%lu "
+		   "stopped=%08x wakes=%u\n",
+		   tag, q, handed, orph, refu, (unsigned)stopped,
+		   (unsigned)wakes);
+}
+
+/* The controller's own view of the transmit leg, on its own for the same
+ * reason: a cell that stalls needs "what is still in flight at the device"
+ * beside "what the stack still holds". */
+static void emit_usb(const char *tag)
+{
+	struct lkpi_usb_engine_stats es;
+
+	memset(&es, 0, sizeof(es));
+	lkpi_usb_engine_stats_get(&es);
+	MDK_ANCHOR("netio: usb tag=%s polls=%u drained=%u completions=%u "
+		   "errors=%u in_flight=%u parked=%u\n",
+		   tag, es.polls, es.poll_drained, es.completions, es.errors,
+		   es.in_flight, es.parked_now);
+	/*
+	 * Which endpoints are carrying the transfers, when a stall leaves some
+	 * of them armed forever.  The address says the direction (0x8x is an IN
+	 * endpoint, the driver's receive; the OUT endpoint is its transmit), and
+	 * `enq` against `comp` separates "the driver stopped submitting" from
+	 * "the controller stopped completing".  Only busy endpoints are listed,
+	 * so a healthy boot prints nothing here.
+	 */
+	{
+		unsigned int i;
+
+		for (i = 0; i < es.eps; i++) {
+			struct lkpi_usb_ep_stats ep;
+
+			memset(&ep, 0, sizeof(ep));
+			if (lkpi_usb_ep_stats_get(i, &ep) != 0)
+				break;
+			if (ep.qlen == 0 && ep.in_flight == 0)
+				continue;
+			MDK_ANCHOR("netio: usbep tag=%s i=%u addr=0x%02x q=%u f=%u "
+				   "enq=%u comp=%u err=%u\n",
+				   tag, ep.index, ep.ep_addr, ep.qlen,
+				   ep.in_flight, ep.enqueued, ep.completions,
+				   ep.errors);
+		}
+	}
+}
+
+/* The socket-buffer supply, on its own so the boot heartbeat can print it
+ * without the rest of the ledger. */
+static int stall_reported;
+
+static void emit_pool(const char *tag)
+{
+	struct lkpi_skb_pool_stats ps;
+
+	memset(&ps, 0, sizeof(ps));
+	lkpi_skb_pool_stats(&ps);
+	/*
+	 * The first refusal is the wedge, and the controller's schedule is what
+	 * decides it: a qTD still marked active on the stalled endpoint says the
+	 * device is not answering, its active bit cleared says this port never
+	 * retired a finished transfer.  One shot, marker first - the read itself
+	 * is the only thing that could hang, and a missing "census done" line
+	 * names it.
+	 */
+	if (ps.alloc_fail != 0 && !stall_reported) {
+		stall_reported = 1;
+		MDK_ANCHOR("netio: stall tag=%s first refusal, controller census follows\n",
+			   tag);
+		lkpi_usb_controller_report();
+		MDK_ANCHOR("netio: stall tag=%s controller census done\n", tag);
+	}
+	MDK_ANCHOR("netio: pool tag=%s used=%lu/%lu high=%lu/%lu "
+		   "heap_live=%lu alloc_fail=%lu n_alloc=%lu n_free=%lu\n",
+		   tag, (unsigned long)ps.skb_used,
+		   (unsigned long)ps.data_used,
+		   (unsigned long)ps.skb_high,
+		   (unsigned long)ps.data_high,
+		   (unsigned long)ps.dyalloc_live,
+		   (unsigned long)ps.alloc_fail,
+		   (unsigned long)ps.n_alloc,
+		   (unsigned long)ps.n_free);
+}
+
 static void emit_layer_counters(const char *tag)
 {
 #if NETIO_GMAC
@@ -492,26 +597,37 @@ static void emit_layer_counters(const char *tag)
 	tcp_retrans = (unsigned long)lwip_stats.mib2.tcpretranssegs;
 #endif
 
+	/* ULOG caps one message at 256 bytes; this ledger used to be a single
+	 * line and the transmit half fell off the end of it under load (the
+	 * 'wlan_pen' truncation), which is exactly the state a stalled cell
+	 * needs read.  Two lines, the receive half and the transmit half. */
 	MDK_ANCHOR("netio: layers tag=%s wlan_tx=%u wlan_done=%u wlan_rx=%u "
 		   "wlan_rxdata=%u wlan_rxenc=%u wlan_txplain=%u wlan_txerr=%u "
-		   "wlan_attach=%d wlan_freq=%u wlan_gated=%u wlan_wakes=%u "
-		   "wlan_stash=%u wlan_stashok=%u wlan_xdrop=%u "
-		   "wlan_qhi=%u wlan_pending=%u "
-		   "mem_err=%lu pbuf_err=%lu\n",
+		   "wlan_attach=%d wlan_freq=%u\n",
 		   tag, wc.data_tx, wc.tx_completes, wc.rx_frames, wc.rx_data,
 		   wc.rx_data_enc, wc.data_tx_plain, wc.tx_errors, wc.attached,
-		   (unsigned)wc.tuned_freq, wc.tx_gated, wc.tx_wakes,
+		   (unsigned)wc.tuned_freq);
+	MDK_ANCHOR("netio: layers tag=%s wlan_gated=%u wlan_wakes=%u "
+		   "wlan_stash=%u wlan_stashok=%u wlan_xdrop=%u "
+		   "wlan_qhi=%u wlan_pending=%u mem_err=%lu pbuf_err=%lu\n",
+		   tag, wc.tx_gated, wc.tx_wakes,
 		   wc.tx_stash, wc.tx_stash_ok, wc.tx_perm_drop, wc.txq_high,
 		   wc.tx_pending, mem_err, pbuf_err);
+	/*
+	 * The transmit handoff's own census, between the socket buffer and the
+	 * controller: `q` is what the txq engine still holds (frames handed down
+	 * that no driver dequeue took), and `stopped` is the driver's transmit
+	 * gate.  A cell whose pool fills and whose USB shows nothing in flight
+	 * has its frames in exactly one of these, and the answer decides the
+	 * fix: a stop without a wake, or a drain the driver never runs.
+	 */
+	emit_tx_census(tag);
 	/* The lost-interrupt fallback's own evidence: `polls` is how often the
 	 * drain ran the controller's completion path because a transfer was
 	 * overdue, `drained` how many completions that path delivered.  A
 	 * nonzero drained on a cell that previously timed out is the direct
 	 * proof the fix recovered a lost EHCI completion. */
-	MDK_ANCHOR("netio: usb tag=%s polls=%u drained=%u completions=%u "
-		   "errors=%u in_flight=%u parked=%u\n",
-		   tag, es.polls, es.poll_drained, es.completions, es.errors,
-		   es.in_flight, es.parked_now);
+	emit_usb(tag);
 	/* The bridge's own receive decode: per-rate frames, retries and FCS
 	 * failures since the last dump.  On the air this is the rate/retry
 	 * fingerprint the AP's station dump cannot give (the dump reports the
@@ -524,22 +640,7 @@ static void emit_layer_counters(const char *tag)
 	 * backpressure, and a live count that only ever climbs is a leak. The
 	 * two are told apart here, at every anchor, because a storm of refusal
 	 * lines is exactly what those anchors exist to avoid. */
-	{
-		struct lkpi_skb_pool_stats ps;
-
-		memset(&ps, 0, sizeof(ps));
-		lkpi_skb_pool_stats(&ps);
-		MDK_ANCHOR("netio: pool tag=%s used=%lu/%lu high=%lu/%lu "
-			   "heap_live=%lu alloc_fail=%lu n_alloc=%lu n_free=%lu\n",
-			   tag, (unsigned long)ps.skb_used,
-			   (unsigned long)ps.data_used,
-			   (unsigned long)ps.skb_high,
-			   (unsigned long)ps.data_high,
-			   (unsigned long)ps.dyalloc_live,
-			   (unsigned long)ps.alloc_fail,
-			   (unsigned long)ps.n_alloc,
-			   (unsigned long)ps.n_free);
-	}
+	emit_pool(tag);
 #endif
 	emit_cpu_spot(tag);
 }
@@ -902,6 +1003,48 @@ static void rxpath_tick(void *arg)
 	emit_layer_counters("cell");
 }
 
+/*
+ * The boot's own heartbeat.  The 2 s cell cadence above only runs while a cell
+ * is open, so the state *after* a cell aborts is exactly the state nobody was
+ * sampling - and that is where the socket-buffer pool stayed full for half a
+ * minute with no further ledger at all.  This samples three lines every 5 s
+ * for the whole boot, starting when the server does: the pool, the txq engine
+ * and the controller.  Short lines only, so it survives a console that is
+ * being flooded.
+ */
+static osTimerId_t hb_timer;
+
+static void hb_tick(void *arg)
+{
+	(void)arg;
+	emit_pool("hb");
+	emit_tx_census("hb");
+	emit_usb("hb");
+	/* The bridge's own four counters, short enough to ride the heartbeat.
+	 * They separate the two directions at the layer that owns both: a
+	 * downlink that arrives but never leaves again shows rx climbing with tx
+	 * flat, and a downlink that never arrives shows rx flat while the
+	 * controller's own URBs keep completing. */
+	{
+		struct wlan_bridge_counters wc;
+
+		memset(&wc, 0, sizeof(wc));
+		wlan_bridge_stats(&wc);
+		MDK_ANCHOR("netio: wlan tag=hb tx=%u done=%u rx=%u rxdata=%u "
+			   "pend=%u q=%u\n",
+			   wc.data_tx, wc.tx_completes, wc.rx_frames,
+			   wc.rx_data, wc.tx_pending, wc.txq_high);
+	}
+}
+
+static void hb_start(void)
+{
+	if (hb_timer == NULL)
+		hb_timer = osTimerNew(hb_tick, osTimerPeriodic, NULL, NULL);
+	if (hb_timer != NULL)
+		osTimerStart(hb_timer, 5000u);
+}
+
 static void rxpath_window(int open)
 {
 #if defined(CONFIG_NETIO_RXPATH) && CONFIG_NETIO_RXPATH
@@ -1118,6 +1261,7 @@ static void UDP_Server(void *arg)
 		__THREAD_EXIT(rc);
 
 	MDK_ANCHOR("netio: udp listening port=%d\n", NETIO_AUXPORT);
+	hb_start();
 
 	for (;;) {
 		FD_ZERO(&fds);

@@ -1356,6 +1356,81 @@ errout_timeout:
     return ret;
 }
 
+/*
+ * Read-only census of the asynchronous schedule, for a stalled transfer.
+ * This walks this port's own descriptors and reads five controller words; it
+ * arms nothing and calls nothing back.  It is a one-shot diagnostic: a periodic
+ * reader here would be sampling the controller that the stall is about, and a
+ * hang on one of these reads would take the caller with it - so the caller
+ * prints its own marker first and treats a missing line as "the read itself
+ * stopped".
+ */
+void usbh_ehci_async_snapshot(uint8_t busid, struct usbh_ehci_snapshot *out)
+{
+    struct usbh_bus *bus;
+    struct ehci_qh_hw *qh;
+    struct ehci_qh_hw *head;
+    unsigned int n = 0;
+
+    if (out == NULL)
+        return;
+    memset(out, 0, sizeof(*out));
+    bus = &g_usbhost_bus[busid];
+    out->usbcmd = EHCI_HCOR->usbcmd;
+    out->usbsts = EHCI_HCOR->usbsts;
+    out->usbintr = EHCI_HCOR->usbintr;
+    out->frindex = EHCI_HCOR->frindex;
+    out->listaddr = EHCI_HCOR->asynclistaddr;
+
+    head = &g_async_qh_head[bus->hcd.hcd_id];
+    qh = EHCI_ADDR2QH(head->hw.hlp);
+    while (qh != NULL && qh != head && n < USBH_EHCI_SNAPSHOT_ROWS) {
+        struct usbh_ehci_qh_row *row = &out->row[n];
+
+        row->epchar = qh->hw.epchar;
+        row->curr_qtd = qh->hw.curr_qtd;
+        row->token = qh->hw.overlay.token;
+        row->qtd_next = qh->hw.overlay.token;
+        row->hlp = qh->hw.hlp;
+        row->urb = qh->urb;
+        row->active = (uint8_t)((qh->hw.overlay.token >> 7) & 1U);
+        row->iaad = qh->remove_in_iaad;
+        row->killed = qh->killed;
+        row->inuse = qh->inuse ? 1U : 0U;
+        n++;
+        qh = EHCI_ADDR2QH(qh->hw.hlp);
+    }
+    out->rows = n;
+}
+
+/*
+ * The printable form, for the board's ledger: one line for the controller and
+ * one per scheduled queue head.  `act` is the overlay's active bit, which is
+ * the whole question - an active qTD that never retires means the endpoint is
+ * NAKing (the transfer is with the device), and a clear one on a head that is
+ * still linked means this port failed to retire a finished transfer.
+ */
+void usbh_ehci_async_report(uint8_t busid)
+{
+    struct usbh_ehci_snapshot snap;
+    unsigned int i;
+
+    usbh_ehci_async_snapshot(busid, &snap);
+    USB_LOG_RAW("ehci: regs bus=%u cmd=%08x sts=%08x intr=%08x fr=%08x list=%08x rows=%u\n",
+                (unsigned)busid, (unsigned)snap.usbcmd, (unsigned)snap.usbsts,
+                (unsigned)snap.usbintr, (unsigned)snap.frindex,
+                (unsigned)snap.listaddr, snap.rows);
+    for (i = 0; i < snap.rows; i++) {
+        const struct usbh_ehci_qh_row *r = &snap.row[i];
+
+        USB_LOG_RAW("ehci: qh%u ep=%08x act=%u iaad=%u k=%u urb=%p tok=%08x cur=%08x hlp=%08x\n",
+                    i, (unsigned)r->epchar, (unsigned)r->active,
+                    (unsigned)r->iaad, (unsigned)r->killed, r->urb,
+                    (unsigned)r->token, (unsigned)r->curr_qtd,
+                    (unsigned)r->hlp);
+    }
+}
+
 int usbh_kill_urb(struct usbh_urb *urb)
 {
     struct ehci_qh_hw *qh;

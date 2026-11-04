@@ -67,6 +67,43 @@ struct ehci_qh_hw {
     volatile uint8_t killed;
 } __attribute__((aligned(CONFIG_USB_EHCI_ALIGN_SIZE)));
 
+/*
+ * One row of the asynchronous schedule, for a board that shows "one transfer
+ * never completes and everything behind it waits".  `token` is the transfer
+ * overlay's token word: bit 7 still set means the controller has not retired
+ * that qTD, i.e. the endpoint answered NAK (or nothing) and the transfer is
+ * with the device, not with this port.  A row whose `active` is clear but which
+ * is still linked says the opposite: the descriptor finished and this port
+ * failed to retire it.
+ */
+struct usbh_ehci_qh_row {
+    uint32_t epchar;
+    uint32_t curr_qtd;
+    uint32_t token;
+    uint32_t qtd_next;
+    uint32_t hlp;
+    void *urb;
+    uint8_t active;
+    uint8_t iaad;
+    uint8_t killed;
+    uint8_t inuse;
+};
+
+#define USBH_EHCI_SNAPSHOT_ROWS 16
+
+struct usbh_ehci_snapshot {
+    uint32_t usbcmd;
+    uint32_t usbsts;
+    uint32_t usbintr;
+    uint32_t frindex;
+    uint32_t listaddr;
+    unsigned int rows;
+    struct usbh_ehci_qh_row row[USBH_EHCI_SNAPSHOT_ROWS];
+};
+
+void usbh_ehci_async_snapshot(uint8_t busid, struct usbh_ehci_snapshot *out);
+void usbh_ehci_async_report(uint8_t busid);
+
 struct ehci_itd_hw {
     struct ehci_itd hw;
     struct usbh_urb *urb;
