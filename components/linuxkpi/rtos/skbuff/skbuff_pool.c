@@ -502,6 +502,25 @@ void lkpi_skb_pool_init(void)
 	    LKPI_SKB_DATA_MAXSZ, 1);
 }
 
+/*
+ * Refusal logging has to be bounded.  A refused allocation is the data path's
+ * backpressure signal, and under load the path retries thousands of times a
+ * second: one unconditional print per refusal turns the console into a storm
+ * that starves every other task (including the one that would report the
+ * pool's state), and the serial buffer keeps only the storm.  The first few
+ * refusals are logged as they come so the signature is visible; after that one
+ * line per 256 refusals keeps a cumulative count without the storm.  The exact
+ * numbers live in the pool's own stats (alloc_fail), which the board's ledger
+ * prints.
+ */
+static uint32_t refuse_n;
+
+static int refuse_log_ok(void)
+{
+	refuse_n++;
+	return refuse_n <= 8u || (refuse_n % 256u) == 0u;
+}
+
 /* ------------------------------------------------------------------ */
 /* allocation                                                          */
 /* ------------------------------------------------------------------ */
@@ -542,23 +561,27 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 	} else if (cfg_heap_fallback) {
 		if (heap_live_n >= (uint32_t)CONFIG_LKPI_SKB_HEAP_HDR_MAX) {
 			stats.alloc_fail++;
-			lkpi_spl_log("alloc refused: header slots full (%u) and "
-			    "heap headers full (%u), size=%u", cfg_n_header,
-			    (unsigned)CONFIG_LKPI_SKB_HEAP_HDR_MAX, size);
+			if (refuse_log_ok())
+				lkpi_spl_log("alloc refused: header slots full "
+				    "(%u) and heap headers full (%u), size=%u",
+				    cfg_n_header,
+				    (unsigned)CONFIG_LKPI_SKB_HEAP_HDR_MAX, size);
 			goto out;
 		}
 		skb = (struct sk_buff *)lkpi_spl_malloc((unsigned int)sizeof(*skb));
 		if (skb == NULL) {
 			stats.alloc_fail++;
-			lkpi_spl_log("alloc refused: no heap for a header, size=%u",
-			    size);
+			if (refuse_log_ok())
+				lkpi_spl_log("alloc refused: no heap for a "
+				    "header, size=%u", size);
 			goto out;
 		}
 		hdr_heap = 1;
 	} else {
 		stats.alloc_fail++;
-		lkpi_spl_log("alloc refused: no free header slot and no heap "
-		    "fallback, size=%u", size);
+		if (refuse_log_ok())
+			lkpi_spl_log("alloc refused: no free header slot and "
+			    "no heap fallback, size=%u", size);
 		goto out;
 	}
 
