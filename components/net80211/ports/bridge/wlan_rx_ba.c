@@ -60,6 +60,8 @@ struct ba_slot {
 struct ba_tid {
 	int	active;
 	uint16_t head;		/* the next SN the stack must see */
+	uint16_t newest;	/* the highest SN the window has seen */
+	int	newest_valid;
 };
 
 static struct {
@@ -85,6 +87,15 @@ static struct {
 	unsigned int		hole;
 	unsigned int		dropped;
 	unsigned int		frames;
+	/* Window recovery: `resync` counts the times the head had to jump to
+	 * the newest frame's window instead of the oldest held one (a gap the
+	 * AP is not going to fill), `arm_fail` the times the flush timer could
+	 * not be armed at all, `armed` the timer's pending state - the timer
+	 * is armed on the first held frame and cleared when it fires, never
+	 * re-armed per arrival. */
+	unsigned int		resync;
+	unsigned int		arm_fail;
+	int			armed;
 } ba;
 
 /* 12-bit serial number comparison (IEEE 802.11's modulo-4096 numbering). */
@@ -179,6 +190,21 @@ ba_flush_locked(void)
 	for (t = 0; t < BA_TIDS; t++) {
 		if (!ba.tids[t].active)
 			continue;
+		/* A gap the AP is not going to fill must not hold the window for
+		 * ever: once the head is more than a window behind the newest frame
+		 * seen, jump it to the oldest SN the window can still admit and count
+		 * the skipped SNs as lost.  Without this, one lost MPDU followed by a
+		 * burst leaves every later frame outside BA_WIN (dup_far) and the
+		 * stack never sees this TID again. */
+		if (ba.tids[t].newest_valid &&
+		    ba_after(ba.tids[t].newest, ba.tids[t].head) &&
+		    ba_dist(ba.tids[t].newest, ba.tids[t].head) > BA_WIN) {
+			ba.hole += (unsigned int)
+			    (ba_dist(ba.tids[t].newest, ba.tids[t].head) - BA_WIN);
+			ba.tids[t].head = (uint16_t)
+			    ((ba.tids[t].newest - BA_WIN + 1) & 0x0fff);
+			ba.resync++;
+		}
 		for (;;) {
 			struct ba_slot *best = NULL;
 			uint16_t bestd = 0;
@@ -219,6 +245,7 @@ ba_flush_work(struct work_struct *w)
 
 	(void)w;
 	mutex_lock(&ba.lock);
+	ba.armed = 0;
 	(void)ba_flush_locked();
 	mutex_unlock(&ba.lock);
 }
@@ -298,6 +325,11 @@ ba_action(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 		ba.tids[tid].active = 1;
 		ba.tids[tid].head = (uint16_t)(((uint16_t)(frame[31] |
 		    (frame[32] << 8))) >> 4);
+		/* The new session's counter is the only SN this TID can trust:
+		 * the window restarts from the request, so the previous session's
+		 * newest SN is stale. */
+		ba.tids[tid].newest = ba.tids[tid].head;
+		ba.tids[tid].newest_valid = 0;
 		mutex_unlock(&ba.lock);
 		wlan_osal_log("wlan: ba addba req tid=%u ssn=%u buf=%u\n",
 		    (unsigned)tid, (unsigned)ba.tids[tid].head,
@@ -349,6 +381,11 @@ ba_qos_data(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 	sn = (uint16_t)(((uint16_t)(frame[22] | (frame[23] << 8))) >> 4);
 
 	mutex_lock(&ba.lock);
+	if (!ba.tids[tid].newest_valid ||
+	    ba_after(sn, ba.tids[tid].newest)) {
+		ba.tids[tid].newest = sn;
+		ba.tids[tid].newest_valid = 1;
+	}
 	if (sn == ba.tids[tid].head) {
 		ba_deliver_locked(frame, len, m);
 		ba.tids[tid].head = (uint16_t)((ba.tids[tid].head + 1) & 0x0fff);
@@ -378,8 +415,19 @@ ba_qos_data(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 				s->meta = *m;
 				memcpy(s->data, frame, len);
 				ba.held++;
-				(void)schedule_delayed_work(&ba.flush_work,
-				    msecs_to_jiffies(BA_FLUSH_MS));
+				/* Arm on the first held frame, not on every arrival:
+				 * schedule_delayed_work() re-arms the timer, so a
+				 * continuous hole stream pushed the flush out for ever
+				 * and the window only drained when its slots filled. */
+				if (!ba.armed) {
+					ba.armed = 1;
+					if (!schedule_delayed_work(&ba.flush_work,
+					    msecs_to_jiffies(BA_FLUSH_MS))) {
+						ba.arm_fail++;
+						ba.armed = 0;
+						(void)ba_flush_locked();
+					}
+				}
 			}
 		}
 	} else if (!ba_after(sn, ba.tids[tid].head)) {
@@ -468,6 +516,18 @@ wlan_rx_ba_rx(const struct wlan_rx_ba_meta *m, const uint8_t *frame,
 	return 1;
 }
 
+static unsigned int
+ba_used_slots(void)
+{
+	int i, n = 0;
+
+	for (i = 0; i < BA_SLOTS; i++) {
+		if (ba.slots[i].used)
+			n++;
+	}
+	return (unsigned int)n;
+}
+
 void
 wlan_rx_ba_dump(void)
 {
@@ -481,10 +541,12 @@ wlan_rx_ba_dump(void)
 	 * ahead of the window (far), or a window that stayed full after a
 	 * flush.  `behind` buckets the distance in SNs: <=2, <=4, <=8, <=32,
 	 * <=512, larger.  `head` is what the next expected SN was. */
-	wlan_osal_log("wlan: ba reorder head=%u deliv=%u dupslot=%u "
-	    "dupbehind=%u dupfar=%u dropwin=%u behind=%u/%u/%u/%u/%u/%u\n",
-	    ba.tids[0].head, ba.frames, ba.dup_slot, ba.dup_behind,
-	    ba.dup_far, ba.drop_window, ba.behind_hist[0], ba.behind_hist[1],
+	wlan_osal_log("wlan: ba reorder head=%u newest=%u heldnow=%u deliv=%u "
+	    "dupslot=%u dupbehind=%u dupfar=%u dropwin=%u resync=%u "
+	    "armfail=%u behind=%u/%u/%u/%u/%u/%u\n",
+	    ba.tids[0].head, ba.tids[0].newest, ba_used_slots(), ba.frames,
+	    ba.dup_slot, ba.dup_behind, ba.dup_far, ba.drop_window, ba.resync,
+	    ba.arm_fail, ba.behind_hist[0], ba.behind_hist[1],
 	    ba.behind_hist[2], ba.behind_hist[3], ba.behind_hist[4],
 	    ba.behind_hist[5]);
 }

@@ -229,6 +229,12 @@ rtw_net_rx(const uint8_t *frame, size_t len, void *arg)
 	rtw_rx_bytes += (unsigned)len;
 }
 
+unsigned int
+rtw88_net_rx_fail(void)
+{
+	return rtw_rx_fail;
+}
+
 /* --- ICMP ---------------------------------------------------------------- */
 
 static struct raw_pcb *rtw_ping_pcb;

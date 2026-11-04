@@ -24,4 +24,10 @@ int rtw88_net_bringup(void);
  * binds its sockets to).  Valid after rtw88_net_bringup() returned 0. */
 uint32_t rtw88_net_ip4(void);
 
+/* Frames the receive seam refused (no pbuf, or the stack's mailbox said no).
+ * Success and failure are counted separately because they mean different
+ * things: a refusal here is a frame the 802.11 side delivered and the lwIP
+ * side never read. */
+unsigned int rtw88_net_rx_fail(void);
+
 #endif /* RTW88_NET_H */

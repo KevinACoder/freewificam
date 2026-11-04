@@ -137,6 +137,25 @@ struct sk_buff *lkpi_dev_alloc_skb(unsigned int size, unsigned int gfp);
 void lkpi_skb_free(struct sk_buff *skb);
 
 void lkpi_skb_pool_stats(struct lkpi_skb_pool_stats *out);
+
+/*
+ * Where the live objects are parked: one row per owning queue (`skb->list`),
+ * largest first.  The pool total says how many are held, never who holds them;
+ * a receive queue that grows without a matching dequeue and a completion queue
+ * that drains are the same number in that total and different rows here.  An
+ * object not on any queue (in flight between alloc and delivery) is not
+ * reported.  Returns the number of rows written.
+ */
+#define LKPI_SKBQ_CENSUS_MAX	8
+struct lkpi_skbq_census {
+	void		*q;		/* owning struct sk_buff_head */
+	uint32_t	items;
+	uint32_t	bytes;		/* sum of skb->len */
+};
+
+unsigned int lkpi_skb_queue_census(struct lkpi_skbq_census *out,
+				   unsigned int max);
+
 /* emergency outlet: called from the heap assert path, where the normal
  * print lock can be held (board_log_emergency semantics) */
 void lkpi_skb_gen_report(void);

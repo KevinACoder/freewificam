@@ -475,6 +475,74 @@ static void emit_pool(const char *tag)
 		   (unsigned long)ps.fail_large,
 		   (unsigned long)ps.n_alloc,
 		   (unsigned long)ps.n_free);
+#if !NETIO_GMAC
+	/*
+	 * Who holds the live objects, and whether the driver's workqueue is
+	 * dropping schedules.  The pool total says how many are held; only the
+	 * owner rows say whether the receive buffer queue or the delivery queue
+	 * is the one growing.  A nonzero `wq_full` beside a growing owner is the
+	 * dropped-schedule signature: the queue_work() the driver never checks.
+	 */
+	{
+		struct lkpi_skbq_census c[LKPI_SKBQ_CENSUS_MAX];
+		struct lkpi_wq_stats wq;
+		unsigned int n, i;
+
+		memset(c, 0, sizeof(c));
+		n = lkpi_skb_queue_census(c, 3u);
+		for (i = 0; i < n; i++) {
+			if (c[i].items == 0u)
+				continue;
+			MDK_ANCHOR("netio: skbq tag=%s q=%lx n=%lu b=%lu\n",
+				   tag, (unsigned long)c[i].q,
+				   (unsigned long)c[i].items,
+				   (unsigned long)c[i].bytes);
+		}
+		memset(&wq, 0, sizeof(wq));
+		lkpi_wq_stats_get(&wq);
+		/*
+		 * Per queue: a driver workqueue whose runs stop growing while
+		 * its refused count stays flat was never asked again - the
+		 * frames behind it are the pool's live objects.  One line: the
+		 * name and the three numbers are the whole account.
+		 */
+		{
+			struct lkpi_wq_census wc[LKPI_WQ_CENSUS_MAX];
+			char line[248];
+			unsigned int nw, k;
+			size_t at;
+
+			memset(wc, 0, sizeof(wc));
+			nw = lkpi_wq_census(wc, LKPI_WQ_CENSUS_MAX);
+			at = (size_t)snprintf(line, sizeof(line),
+					      "netio: wq tag=%s", tag);
+			for (k = 0; k < nw && at < sizeof(line) - 1u; k++) {
+				int wrote = snprintf(line + at, sizeof(line) - at,
+						     " %s=%lu/%lu/%lu",
+						     wc[k].name,
+						     (unsigned long)wc[k].runs,
+						     (unsigned long)wc[k].refused,
+						     (unsigned long)wc[k].depth);
+
+				if (wrote < 0)
+					break;
+				at += (size_t)wrote;
+			}
+			MDK_ANCHOR("%s\n", line);
+		}
+		MDK_ANCHOR("netio: supply tag=%s wq_runs=%lu wq_full=%lu "
+			   "wq_qmax=%lu wq_direct=%lu rxfail=%lu\n",
+			   tag, (unsigned long)wq.runs,
+			   (unsigned long)wq.full,
+			   (unsigned long)wq.queue_max,
+			   (unsigned long)wq.direct,
+#if defined(RTOS_CASE_RTW88_NETIO)
+			   (unsigned long)rtw88_net_rx_fail());
+#else
+			   0ul);
+#endif
+	}
+#endif
 }
 
 static void emit_layer_counters(const char *tag)
@@ -624,6 +692,7 @@ static void emit_layer_counters(const char *tag)
 #else /* WLAN backend */
 	unsigned long pbuf_err = 0, mem_err = 0, udp_in = 0, udp_inerr = 0;
 	unsigned long ip_drop = 0, tcp_retrans = 0;
+	unsigned long ip_in = 0, link_drop = 0;
 	struct wlan_bridge_counters wc;
 	struct lkpi_usb_engine_stats es;
 
@@ -687,9 +756,20 @@ static void emit_layer_counters(const char *tag)
 	 * fingerprint the AP's station dump cannot give (the dump reports the
 	 * rates the AP chose, not what was received). */
 	wlan_bridge_link_dump();
+#if LWIP_STATS
+	/* The two stops between the 802.11 seam and a UDP socket: `ip_in` counts
+	 * frames that reached ip4_input at all (a frame that never did was
+	 * dropped by ethernet_input - wrong destination or ethertype), and
+	 * `link_drop` is the link layer's own refusal count.  Read beside
+	 * `udp_in` they separate "the stack never saw it" from "the stack saw it
+	 * and had no socket". */
+	ip_in = (unsigned long)lwip_stats.ip.recv;
+	link_drop = (unsigned long)lwip_stats.link.drop;
+#endif
 	MDK_ANCHOR("netio: mib tag=%s udp_in=%lu udp_inerr=%lu ip_drop=%lu "
-		   "tcp_retrans=%lu\n",
-		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans);
+		   "tcp_retrans=%lu ip_in=%lu link_drop=%lu\n",
+		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans, ip_in,
+		   link_drop);
 	/* The socket-buffer supply is the data path's real limit: a refusal is
 	 * backpressure, and a live count that only ever climbs is a leak. The
 	 * two are told apart here, at every anchor, because a storm of refusal

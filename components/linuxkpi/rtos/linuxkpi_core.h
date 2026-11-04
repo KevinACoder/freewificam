@@ -2856,6 +2856,23 @@ struct lkpi_wq_stats {
 };
 
 void	lkpi_wq_stats_get(struct lkpi_wq_stats *out);
+
+/*
+ * Per-queue service account.  The aggregate above cannot tell a rx worker that
+ * stopped from a tx worker that never started: the name of the queue whose
+ * `runs` stops growing is the answer, and `refused` is the queue_work() the
+ * driver never checks (the return value is dropped by every caller).
+ */
+#define LKPI_WQ_CENSUS_MAX	8
+struct lkpi_wq_census {
+	char		name[24];
+	uint32_t	runs;		/* bodies executed on this queue */
+	uint32_t	refused;	/* schedules refused (queue full) */
+	uint32_t	depth;		/* messages waiting now */
+};
+
+unsigned int	lkpi_wq_census(struct lkpi_wq_census *out, unsigned int max);
+
 /*
  * The body a worker is running right now (its function pointer), or NULL when
  * every worker is idle.  Diagnostic: a stall that holds a driver mutex is

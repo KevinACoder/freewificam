@@ -1063,7 +1063,14 @@ struct lkpi_wq_impl {
 	osThreadId_t		thread;
 	osMessageQueueId_t	mq;
 	char			name[24];
+	unsigned long		runs;
+	unsigned long		refused;
 };
+
+/* every live queue, for the per-queue service account (creation order) */
+#define	LKPI_WQ_REG_MAX		8
+static struct lkpi_wq_impl *lkpi_wq_reg[LKPI_WQ_REG_MAX];
+static unsigned int lkpi_wq_reg_n;
 
 struct workqueue_struct *lkpi_system_wq;
 
@@ -1149,6 +1156,7 @@ static void lkpi_worker_entry(void *arg)
 		lkpi_wq_current_work = NULL;
 #endif
 		w->wk_running = 0;
+		impl->runs++;
 		lkpi_wq_stats_state.runs++;
 		if (impl->mq != NULL)
 			lkpi_wq_stats_state.queue_depth =
@@ -1203,6 +1211,8 @@ struct workqueue_struct *lkpi_alloc_workqueue(const char *fmt, int flags,
 	}
 
 	wq->_wq = impl;
+	if (lkpi_wq_reg_n < LKPI_WQ_REG_MAX)
+		lkpi_wq_reg[lkpi_wq_reg_n++] = impl;
 	return wq;
 }
 
@@ -1264,6 +1274,7 @@ bool lkpi_queue_work(struct workqueue_struct *wq, struct work_struct *w)
 	/* The queueing itself is outside the section: a full queue with no wait is
 	 * a refusal, and the flag goes back so the caller may retry. */
 	if (osMessageQueuePut(impl->mq, &w, 0u, 0u) != osOK) {
+		impl->refused++;
 		lkpi_wq_stats_state.full++;
 #if defined(LKPI_JOIN_TRACE)
 		{
@@ -1409,6 +1420,34 @@ bool lkpi_cancel_delayed_work_sync(struct delayed_work *dw)
 
 	lkpi_work_flush(&dw->work);
 	return was;
+}
+
+unsigned int
+lkpi_wq_census(struct lkpi_wq_census *out, unsigned int max)
+{
+	unsigned int i;
+
+	if (out == NULL || max == 0u)
+		return 0;
+	if (max > LKPI_WQ_CENSUS_MAX)
+		max = LKPI_WQ_CENSUS_MAX;
+	if (lkpi_wq_reg_n < max)
+		max = lkpi_wq_reg_n;
+	for (i = 0; i < max; i++) {
+		struct lkpi_wq_impl *impl = lkpi_wq_reg[i];
+
+		memset(&out[i], 0, sizeof(out[i]));
+		if (impl == NULL)
+			continue;
+		(void)snprintf(out[i].name, sizeof(out[i].name), "%s",
+			       impl->name);
+		out[i].runs = (uint32_t)impl->runs;
+		out[i].refused = (uint32_t)impl->refused;
+		if (impl->mq != NULL)
+			out[i].depth = (uint32_t)osMessageQueueGetCount(
+			    impl->mq);
+	}
+	return max;
 }
 
 void

@@ -1086,6 +1086,18 @@ lkpi80211_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 	memset(skb->cb, 0, sizeof(skb->cb));
 	/* the substitute owns the release (the caller has stopped caring) */
 	lkpi_skb_free(skb);
+	/*
+	 * A completion is a slot opening on the air: every frame the driver
+	 * left behind (its own tx_queue[ep], the port txq, the seam's backlog)
+	 * is one frame the stack still wants sent.  Linux mac80211 reopens the
+	 * txqs from the status path for the same reason (status.c ->
+	 * ieee80211_tx_status -> __ieee80211_wake_txqs); without this the pump
+	 * only restarts when a *new* frame arrives, so a burst that filled the
+	 * driver's queue and then stopped cannot drain itself - the frames sit
+	 * in the pool holding every header slot until the whole data path,
+	 * receive included, starves (w6-04: tx q=130, heldnow=134, ping dead).
+	 */
+	lkpi80211_tx_wake_defer(hw);
 }
 
 void

@@ -1224,6 +1224,82 @@ void lkpi_skb_pool_stats(struct lkpi_skb_pool_stats *out)
 	lkpi_spl_irqrestore(flags);
 }
 
+/*
+ * Which queue holds the pool's live objects.  The pool total answers "how many",
+ * never "whose": an object waiting on the driver's completion queue and an
+ * object waiting on the 802.11 delivery queue are the same row in the total and
+ * different rows here.  Static slots and heap-backed headers are both walked;
+ * an object whose `list` is NULL is in flight and has no owner to report.
+ */
+unsigned int lkpi_skb_queue_census(struct lkpi_skbq_census *out, unsigned int max)
+{
+	unsigned long flags;
+	unsigned int n = 0;
+	unsigned int i;
+
+	if (out == NULL || max == 0u)
+		return 0;
+	if (max > LKPI_SKBQ_CENSUS_MAX)
+		max = LKPI_SKBQ_CENSUS_MAX;
+	memset(out, 0, sizeof(*out) * max);
+	lkpi_skb_pool_init();
+	flags = lkpi_spl_irqsave();
+
+	for (i = 0; i < cfg_n_header; i++) {
+		struct sk_buff *skb = &skb_slots[i];
+		unsigned int k;
+
+		if (skb->_gen == 0u || skb->_gen == LKPI_SKB_FREED_MAGIC)
+			continue;
+		if (skb->list == NULL)
+			continue;
+		for (k = 0; k < n; k++) {
+			if (out[k].q == (void *)skb->list)
+				break;
+		}
+		if (k == n) {
+			if (n >= max)
+				continue;	/* more owners than rows */
+			out[k].q = (void *)skb->list;
+			n++;
+		}
+		out[k].items++;
+		out[k].bytes += skb->len;
+	}
+	for (i = 0; i < heap_live_n; i++) {
+		struct sk_buff *skb = heap_live[i].p;
+		unsigned int k;
+
+		if (skb == NULL || skb->list == NULL)
+			continue;
+		for (k = 0; k < n; k++) {
+			if (out[k].q == (void *)skb->list)
+				break;
+		}
+		if (k == n) {
+			if (n >= max)
+				continue;
+			out[k].q = (void *)skb->list;
+			n++;
+		}
+		out[k].items++;
+		out[k].bytes += skb->len;
+	}
+	/* largest first: the row that is growing is the one to read */
+	for (i = 1; i < n; i++) {
+		struct lkpi_skbq_census row = out[i];
+		unsigned int k = i;
+
+		while (k > 0u && out[k - 1u].items < row.items) {
+			out[k] = out[k - 1u];
+			k--;
+		}
+		out[k] = row;
+	}
+	lkpi_spl_irqrestore(flags);
+	return n;
+}
+
 void lkpi_skb_diag_dump(void)
 {
 	lkpi_skb_pool_init();
