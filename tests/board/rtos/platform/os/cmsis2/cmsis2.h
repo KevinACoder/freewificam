@@ -12,20 +12,25 @@
  *   CMSIS2_BACKEND_FREERTOS - FreeRTOS kernel, served by the upstream CMSIS-FreeRTOS
  *                             adapter compiled into the target build;
  *   CMSIS2_BACKEND_THREADX  - ThreadX kernel, served by the backend compiled from
- *                             os/threadx/.
+ *                             os/threadx/;
+ *   CMSIS2_BACKEND_ZEPHYR   - Zephyr kernel, served by the backend compiled from
+ *                             os/zephyr/, written directly on Zephyr primitives.
  */
 
 #ifndef CMSIS2_H
 #define CMSIS2_H
 
-#if defined( CMSIS2_BACKEND_FREERTOS ) && defined( CMSIS2_BACKEND_THREADX )
+#if defined( CMSIS2_BACKEND_FREERTOS ) + defined( CMSIS2_BACKEND_THREADX ) + \
+    defined( CMSIS2_BACKEND_ZEPHYR ) > 1
 #error "define exactly one CMSIS2 backend"
 #elif defined( CMSIS2_BACKEND_FREERTOS )
 #include "cmsis_os2.h"
 #elif defined( CMSIS2_BACKEND_THREADX )
 #include "cmsis_os2.h"
+#elif defined( CMSIS2_BACKEND_ZEPHYR )
+#include "cmsis_os2.h"
 #else
-#error "no CMSIS2 backend selected: define CMSIS2_BACKEND_FREERTOS or CMSIS2_BACKEND_THREADX"
+#error "no CMSIS2 backend selected: define CMSIS2_BACKEND_FREERTOS, CMSIS2_BACKEND_THREADX or CMSIS2_BACKEND_ZEPHYR"
 #endif
 
 /* The critical-section extension lives beside the facade so that application and

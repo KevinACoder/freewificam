@@ -2036,7 +2036,16 @@ int net_ratelimit(void);
 static __always_inline __unused const char *
 dev_name(const struct device *dev)
 {
-	return dev == NULL ? "none" : dev->name;
+	/* A device whose name was never assigned is not a NULL name: the
+	 * logging macros pass the result straight to a %s conversion, and a
+	 * C library that does not substitute "(null)" - Zephyr's cbprintf calls
+	 * strlen() on the pointer - faults on it.  The USB device record is
+	 * exactly such a device on this image (lkpi_usbh_build_device() names
+	 * the interface, not the device), so the fallback is the device name
+	 * Linux would have had: none. */
+	if (dev == NULL || dev->name == NULL)
+		return "none";
+	return dev->name;
 }
 
 #define	dev_coredumpv(dev, data, size, gfp) \

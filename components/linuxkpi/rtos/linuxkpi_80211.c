@@ -129,6 +129,19 @@ struct lkpi80211_hw_ctx {
 	 */
 	u8 chanctx_priv[64];
 	struct ieee80211_vif	*vifs[CONFIG_LKPI80211_MAX_VIFS];
+	/*
+	 * The BSSID store a station vif's bss_conf.bssid points at.  mac80211
+	 * makes that field a POINTER into the interface's own managed-mode
+	 * state (net/mac80211/iface.c:1931 `bss_conf.bssid =
+	 * sdata->deflink.u.mgd.bssid`), so a driver may read it through the
+	 * vif before the interface is ever told to connect.  This port kept
+	 * the pointer NULL until the bridge assigned one, which happened to be
+	 * harmless on the board images (VA 0 is device memory there, so the
+	 * driver's ether_addr_equal() read zeros and returned "not this BSS")
+	 * and is a data abort on Zephyr, where VA 0 is unmapped.  One store per
+	 * vif, zero-initialised, is what the interface carries.
+	 */
+	u8			vif_bssid[CONFIG_LKPI80211_MAX_VIFS][ETH_ALEN];
 	struct ieee80211_sta	*stas[CONFIG_LKPI80211_MAX_STAS];
 	/*
 	 * The per-vif wireless_dev the interface embeds in each of its own
@@ -2320,6 +2333,18 @@ lkpi80211_drv_vif_add(struct ieee80211_hw *hw, u8 type, const u8 addr[6])
 	 */
 	memcpy(vif->bss_conf.addr, vif->addr, 6);
 	vif->bss_conf.vif = vif;
+	/*
+	 * The BSSID pointer every interface carries a value for
+	 * (net/mac80211/iface.c:1919-1939).  A station's is the managed-mode
+	 * BSSID, which starts zeroed and is filled in on association; an AP's
+	 * is its own address.  Either way it is a valid pointer from the
+	 * moment the vif exists, because drivers read it from add_interface
+	 * onwards - rtl8xxxu's per-frame RSSI iterator compares it against the
+	 * frame's BSSID on the very first receive.
+	 */
+	vif->bss_conf.bssid = ctx->vif_bssid[i];
+	if (type == NL80211_IFTYPE_AP || type == NL80211_IFTYPE_AP_VLAN)
+		memcpy(ctx->vif_bssid[i], vif->addr, ETH_ALEN);
 	ctx->vifs[i] = vif;
 	vif_hw_bind(vif, hw);
 	/*

@@ -923,8 +923,17 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 		 * a NULL there faults. The local view is cleared (so nothing
 		 * matches the old AP by address), and the register keeps its
 		 * last value until the next join reprograms it.
+		 *
+		 * "Cleared" is a zeroed BSSID the pointer still points at, not
+		 * a NULL pointer: mac80211's bss_conf.bssid is a POINTER into
+		 * the interface's managed-mode state
+		 * (net/mac80211/iface.c:1931), and a station vif carries that
+		 * address for its whole life. The board images tolerated the
+		 * NULL because VA 0 is device memory there and a driver's
+		 * address comparison read zeros; Zephyr leaves VA 0 unmapped,
+		 * so the first receive after a disconnect aborts.
 		 */
-		adapter.vif->bss_conf.bssid = NULL;
+		memset(adapter.bssid_store, 0, sizeof(adapter.bssid_store));
 	}
 	lkpi80211_drv_bss_changed(adapter.hw, adapter.vif, changed);
 }
@@ -944,7 +953,8 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 	if (adapter.hw == NULL || adapter.vif == NULL)
 		return -1;
 	if (bssid == NULL) {
-		adapter.vif->bss_conf.bssid = NULL;
+		/* cleared, not NULLed - see the leave path above */
+		memset(adapter.bssid_store, 0, sizeof(adapter.bssid_store));
 		/*
 		 * The connection attempt ended before the association: the peer
 		 * comes off the driver, the way mac80211 destroys the AP's

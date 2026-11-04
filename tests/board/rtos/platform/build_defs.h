@@ -41,6 +41,9 @@
 #define TX_INCLUDE_USER_DEFINE_FILE 1
 #define TX_LINUX_MULTI_CORE 1
 #endif
+#if CONFIG_BACKEND_ZEPHYR
+#define CMSIS2_BACKEND_ZEPHYR 1
+#endif
 
 /* ULOG / printf trimming: Kconfig booleans, mapped to the names the code and
  * the vendor printf use.  False means "not defined", matching the old -D. */

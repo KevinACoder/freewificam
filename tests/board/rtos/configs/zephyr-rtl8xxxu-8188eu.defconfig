@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# 8188EUS ladder on the Zephyr backend, stage 4: bring-up, scan, join and the
+# raw-L2 data plane - the same four cases the FreeRTOS reference profile runs,
+# with the kernel under them swapped.
+#
+# Difference from configs/rtl8xxxu-8188eu-netio-ar-ht20-ba.defconfig, and
+# nothing else: BACKEND_ZEPHYR instead of BACKEND_FREERTOS, no FreeRTOS heap
+# size (the Zephyr image's heap is CONFIG_HEAP_MEM_POOL_SIZE in the sample), and
+# no netio case yet - the ladder stops at the raw-L2 data plane.  The USB
+# controller list, the expected MAC and the AP identity are the bench facts the
+# boards have been driven with, so both images run the same ladder against the
+# same dongle and the same AP.
+#
+# The AP is the AR9271 bench AP (labwifi-ar-ht20s on channel 5): since
+# 2026-11-01 that is the project's AP role, and the brcmfmac AP the earlier
+# profiles named is retired.
+
+CONFIG_BACKEND_ZEPHYR=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick rtl8xxxu rtl8xxxu_scan rtl8xxxu_join rtl8xxxu_dataplane"
+CONFIG_WLAN_LINE_RTL8XXXU=y
+CONFIG_RTL8XXXU_EXPECT_MAC="20:f4:1b:52:8f:01"
+CONFIG_RTL8XXXU_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTL8XXXU_AP_FREQ=2432
+CONFIG_RTL8XXXU_USB_BUS=3

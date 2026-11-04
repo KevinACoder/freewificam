@@ -20,6 +20,15 @@ config BACKEND_FREERTOS
 config BACKEND_THREADX
 	bool "ThreadX"
 
+config BACKEND_ZEPHYR
+	bool "Zephyr"
+	help
+	  Zephyr owns the kernel and the platform.  The CMSIS-RTOS2 surface is
+	  served by os/zephyr/ on Zephyr's own primitives (k_thread, k_sem,
+	  k_mutex, k_msgq, k_timer, k_malloc) and the board seam (console,
+	  cache, interrupts, delay) by board/zephyr/.  No Zephyr subsystem is
+	  configured from this tree; the Zephyr side is a build front end.
+
 endchoice
 
 choice OPT
@@ -90,6 +99,7 @@ config BACKEND_NAME
 	string
 	default "freertos" if BACKEND_FREERTOS
 	default "threadx" if BACKEND_THREADX
+	default "zephyr" if BACKEND_ZEPHYR
 
 config BOARD_NAME
 	string
