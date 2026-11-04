@@ -464,6 +464,7 @@ static void emit_layer_counters(const char *tag)
 	unsigned long pbuf_err = 0, mem_err = 0, udp_in = 0, udp_inerr = 0;
 	unsigned long ip_drop = 0, tcp_retrans = 0;
 	struct wlan_bridge_counters wc;
+	struct lkpi_usb_engine_stats es;
 
 	/* The WLAN receive path's ledger is the bridge's, not the MAC's: the
 	 * net80211 port owns the driver's descriptor/MAC counters and does not
@@ -473,6 +474,8 @@ static void emit_layer_counters(const char *tag)
 	 * leg is data_tx vs tx_completes (the completion gap is a stall, not a
 	 * drop) plus the AP's receive side. */
 	wlan_bridge_stats(&wc);
+	memset(&es, 0, sizeof(es));
+	lkpi_usb_engine_stats_get(&es);
 #if LWIP_STATS
 	mem_err = (unsigned long)lwip_stats.mem.err;
 #endif
@@ -498,6 +501,15 @@ static void emit_layer_counters(const char *tag)
 		   (unsigned)wc.tuned_freq, wc.tx_gated, wc.tx_wakes,
 		   wc.tx_stash, wc.tx_stash_ok, wc.tx_perm_drop, wc.txq_high,
 		   wc.tx_pending, mem_err, pbuf_err);
+	/* The lost-interrupt fallback's own evidence: `polls` is how often the
+	 * drain ran the controller's completion path because a transfer was
+	 * overdue, `drained` how many completions that path delivered.  A
+	 * nonzero drained on a cell that previously timed out is the direct
+	 * proof the fix recovered a lost EHCI completion. */
+	MDK_ANCHOR("netio: usb tag=%s polls=%u drained=%u completions=%u "
+		   "errors=%u in_flight=%u parked=%u\n",
+		   tag, es.polls, es.poll_drained, es.completions, es.errors,
+		   es.in_flight, es.parked_now);
 	/* The bridge's own receive decode: per-rate frames, retries and FCS
 	 * failures since the last dump.  On the air this is the rate/retry
 	 * fingerprint the AP's station dump cannot give (the dump reports the

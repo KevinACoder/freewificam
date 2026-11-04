@@ -112,6 +112,14 @@ static inline uint32_t usb_board_bus_intid(unsigned busid)
 	}
 }
 
+/* Whether this bus has been started and its completion path may be entered
+ * from another context (the linuxkpi drain's lost-interrupt fallback).  A bus
+ * that was never started, or one already torn down, must not be dispatched:
+ * the handler reads controller state that only exists after usbh_initialize()
+ * and the start hook.  Implemented by the board glue (usb_glue.c), which owns
+ * the start/stop events. */
+int usb_board_bus_ready(unsigned busid);
+
 /* --- board fact: the write-enable register protocol ----------------------- */
 
 /* The SoC's GRF/PMU-style register banks take a "field write enable" in the

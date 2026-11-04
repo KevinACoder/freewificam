@@ -139,10 +139,29 @@ void usbh_console_printf(const char *fmt, ...)
  * drains the event ring and hides the latter). */
 static volatile unsigned int usb_board_irqs[USB_BOARD_BUS_COUNT];
 
+/* Set only between a successful usbh_initialize()/start hook and the
+ * controller's teardown.  The linuxkpi drain's lost-interrupt fallback reads
+ * it before dispatching a bus from thread context, so a bus that never ran
+ * (or is already being torn down) is never handed to USBH_IRQHandler(). */
+static volatile unsigned char usb_board_started[USB_BOARD_BUS_COUNT];
+
 unsigned int
 usb_board_irq_count(unsigned int busid)
 {
 	return busid < USB_BOARD_BUS_COUNT ? usb_board_irqs[busid] : 0U;
+}
+
+int
+usb_board_bus_ready(unsigned int busid)
+{
+	if (busid >= USB_BOARD_BUS_COUNT || !usb_board_started[busid])
+		return 0;
+	/* The xHCI port has its own readiness gate (the controller must have
+	 * left reset and published its rings); keep that check for xHCI and
+	 * treat a started EHCI bus as ready. */
+	if (usb_board_bus_is_xhci(busid))
+		return usbh_xhci_bus_ready((uint8_t)busid) ? 1 : 0;
+	return 1;
 }
 
 static void usb_board_isr(void *arg)
@@ -246,6 +265,11 @@ void usb_hc_low_level_deinit(struct usbh_bus *bus)
 		return;
 	}
 
+	/* Refuse the thread-context completion fallback before the line is
+	 * masked; a dispatch after this point would run the handler against a
+	 * controller already being torn down. */
+	usb_board_started[bus->busid] = 0;
+
 	/* Mask the line. The domain stays powered on purpose: it is shared
 	 * with the other controllers and with the board's VBUS rails, so
 	 * tearing it down here would take unrelated ports down with it. */
@@ -316,6 +340,17 @@ void usb_board_after_start(unsigned busid)
 	struct usbh_bus *bus;
 	struct ehci_hcd *hcd;
 	unsigned port;
+
+	if (busid >= USB_BOARD_BUS_COUNT) {
+		return;
+	}
+
+	/* Publish the bus before the board-specific post-start work: the
+	 * linuxkpi drain may already be running (it is started before the
+	 * controller bring-up) and a completion that lands between init and
+	 * this point must be dispatchable.  xHCI returns below, but it is just
+	 * as started as the EHCI roots. */
+	usb_board_started[busid] = 1;
 
 	if (usb_board_bus_is_xhci(busid)) {
 		return;

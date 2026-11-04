@@ -36,6 +36,9 @@
  *                                         path never sets URB_ZERO_PACKET)
  *   be_urb.interval                       unused here: the stack derives the interval
  *                                         from the endpoint descriptor it is handed
+ *   poll(ctx)                             usb_board_bus_ready() + USBH_IRQHandler()
+ *                                         for every started bus (EHCI included), run
+ *                                         from the engine's drain thread
  *
  * Error codes: the seam's numbering is CherryUSB's (common/usb_errno.h:9-22) over the
  * shared range, so an error travels untranslated except for the one seam-added case -
@@ -78,7 +81,6 @@
 
 #include "usbh_core.h"
 #include "usb_errno.h"
-#include "usb_hc_xhci.h"
 #include "usb_domain.h"
 #include "usb_osal.h"
 
@@ -720,9 +722,12 @@ chu_seam_control(void *ctx, struct lkpi_usb_be_hubport *port,
  * clear, evt_ep fresh, IRQ count frozen, every endpoint stalled; a
  * thread-context drain run by hand recovered the cell).  The handler's first
  * act is the controller status read, so calling it costs two register reads
- * when the interrupt was not lost.  Only the xHCI buses are polled: the radio
- * and the stack's other high-throughput devices live there, and the EHCI port
- * has its own frame-index driven recovery.
+ * when the interrupt was not lost.  Every bus the board has started is polled,
+ * EHCI included: the 8851BU sits on an EHCI root, and a synchronous control
+ * transfer on it was measured waiting out the full 5 s timeout while the
+ * controller's completion was already in its ring - the EHCI frame-index
+ * recovery does not cover the control/qH completion path.  The readiness gate
+ * is the board glue's (usb_board_bus_ready), not an xHCI-only test.
  */
 static void
 chu_seam_poll(void *ctx)
@@ -733,7 +738,7 @@ chu_seam_poll(void *ctx)
 	for (busid = 0; busid < USB_BOARD_BUS_COUNT; busid++) {
 		size_t flags;
 
-		if (!usbh_xhci_bus_ready(busid))
+		if (!usb_board_bus_ready(busid))
 			continue;
 		/* the board's interrupt dispatch runs the handler inside the
 		 * stack's critical section; the completion path and a
