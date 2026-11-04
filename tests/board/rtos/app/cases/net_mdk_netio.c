@@ -99,6 +99,8 @@
  * the A-MPDUs instead of inferring it from the bridge's totals. */
 #include "linuxkpi_usb.h"
 #include "lkpi_usb_cherryusb.h"
+/* the socket-buffer supply, for the pool ledger the anchors print */
+#include "skbuff_pool.h"
 
 /* Same seam rtl8xxxu_join.c uses: the counters are exported unconditionally,
  * but their header lives in the mac80211 substitute's world, which this file
@@ -518,6 +520,26 @@ static void emit_layer_counters(const char *tag)
 	MDK_ANCHOR("netio: mib tag=%s udp_in=%lu udp_inerr=%lu ip_drop=%lu "
 		   "tcp_retrans=%lu\n",
 		   tag, udp_in, udp_inerr, ip_drop, tcp_retrans);
+	/* The socket-buffer supply is the data path's real limit: a refusal is
+	 * backpressure, and a live count that only ever climbs is a leak. The
+	 * two are told apart here, at every anchor, because a storm of refusal
+	 * lines is exactly what those anchors exist to avoid. */
+	{
+		struct lkpi_skb_pool_stats ps;
+
+		memset(&ps, 0, sizeof(ps));
+		lkpi_skb_pool_stats(&ps);
+		MDK_ANCHOR("netio: pool tag=%s used=%lu/%lu high=%lu/%lu "
+			   "heap_live=%lu alloc_fail=%lu n_alloc=%lu n_free=%lu\n",
+			   tag, (unsigned long)ps.skb_used,
+			   (unsigned long)ps.data_used,
+			   (unsigned long)ps.skb_high,
+			   (unsigned long)ps.data_high,
+			   (unsigned long)ps.dyalloc_live,
+			   (unsigned long)ps.alloc_fail,
+			   (unsigned long)ps.n_alloc,
+			   (unsigned long)ps.n_free);
+	}
 #endif
 	emit_cpu_spot(tag);
 }
@@ -871,6 +893,13 @@ static void rxpath_tick(void *arg)
 {
 	(void)arg;
 	emit_rxpath("cell");
+	/* The cell's own timeline.  A stall under load prints nothing (the
+	 * traffic path only speaks on events), so silence cannot tell "the
+	 * system died" from "nothing to report".  This pair is the cadence:
+	 * while it keeps coming the scheduler and this timer are alive, and
+	 * the counters it carries show which side froze first - completions,
+	 * the receive boundary, or the transmit leg. */
+	emit_layer_counters("cell");
 }
 
 static void rxpath_window(int open)

@@ -114,7 +114,8 @@ RTW89_NETIO_SRCS := \
 RTW89_NETIO_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	-I$(RTW89_NPORT)/bridge \
 	-I$(ROOT)/components/linuxkpi -I$(RTW89_LKPI)/usb \
-	-I$(ROOT)/components/linuxkpi/rtos/usb
+	-I$(ROOT)/components/linuxkpi/rtos/usb \
+	-I$(ROOT)/components/linuxkpi/rtos/skbuff
 else
 RTW89_NETIO_SRCS :=
 endif
