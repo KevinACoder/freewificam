@@ -976,13 +976,31 @@ static void lkpi_usb_drain_thread_entry(void *arg);
 #define LKPI_USB_POLL_MS	20u
 #endif
 
-/* any endpoint with a transfer in flight: the only state in which a lost
- * completion is possible, and the only state that needs the bounded wait */
+/*
+ * A synchronous control transfer blocks its caller inside the backend (the
+ * seam's control_transfer runs the whole three-stage transfer and waits for
+ * the completion), so it never appears in lkpi_eps[] - and the drain thread,
+ * whose only wakeup source is that array, used to park on the semaphore with
+ * an infinite wait for the whole duration of one.  A control transfer is
+ * exactly the case the bounded wait exists for: its completion is delivered by
+ * the controller's interrupt (EHCI hands control completions over through the
+ * IAA doorbell), and when that interrupt is lost the caller sits out its whole
+ * timeout - the measured 500 ms - and reports -110.  Counting the outstanding
+ * control transfers here puts them behind the same fallback as the async
+ * endpoints.
+ */
+static volatile unsigned int lkpi_usb_sync_in_flight;
+
+/* any transfer in flight - an async endpoint's urb or a synchronous control
+ * transfer: the only state in which a lost completion is possible, and the
+ * only state that needs the bounded wait */
 static bool
 lkpi_usb_any_armed(void)
 {
 	unsigned int i;
 
+	if (lkpi_usb_sync_in_flight != 0u)
+		return true;
 	for (i = 0; i < LKPI_EP_N; i++) {
 		if (lkpi_eps[i].cur != NULL)
 			return true;
@@ -2341,7 +2359,12 @@ lkpi_usb_control_transfer(struct lkpi_usb_be_hubport *hport,
 {
 	int ret;
 
+	/* from here until the backend returns, the completion can only be
+	 * delivered by the controller's interrupt: keep the drain thread's
+	 * bounded wait armed so a lost one is recovered by polling */
+	lkpi_usb_sync_in_flight++;
 	ret = lkpi_usb_be_control_transfer(hport, setup, buffer);
+	lkpi_usb_sync_in_flight--;
 	lkpi_usb_retry_parked();
 	return ret;
 }
