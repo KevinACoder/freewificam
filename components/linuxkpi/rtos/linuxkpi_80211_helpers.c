@@ -160,7 +160,6 @@ ieee80211_nullfunc_get(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	struct sk_buff *skb;
 	const u8 *bssid;
 
-	(void)hw;
 	(void)qos_ok;
 	/* one link per vif in this port (link.c: the default link is 0) */
 	(void)link_id;
@@ -179,9 +178,25 @@ ieee80211_nullfunc_get(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	 * wherever the QoS one is, so a caller that asked for either gets a
 	 * frame it can send.
 	 */
-	skb = dev_alloc_skb(sizeof(*hdr));
+	/*
+	 * The driver's transmit path pushes its own descriptor onto every frame
+	 * it is handed and declares that much room as hw->extra_tx_headroom
+	 * (rtw88: tx_pkt_desc_sz, 48; rtw_register_hw, main.c:2266).  Frame
+	 * builders upstream reserve exactly that (mac80211's tx.c does it for
+	 * every one of these helpers), because the driver checks the headroom
+	 * itself and refuses a push that does not fit - rtw88's usb.c:590
+	 * pushes and then writes the descriptor without looking at the answer.
+	 * Without this reserve a null-function page reached that path with 32
+	 * bytes of pad only, the push was refused, and the descriptor write
+	 * went to the address the refusal returned (NULL): the frame went out
+	 * without its descriptor and the zeroing landed outside the buffer.
+	 */
+	skb = dev_alloc_skb(hw != NULL ? hw->extra_tx_headroom +
+	    (unsigned int)sizeof(*hdr) : sizeof(*hdr));
 	if (skb == NULL)
 		return NULL;
+	if (hw != NULL && hw->extra_tx_headroom != 0)
+		skb_reserve(skb, hw->extra_tx_headroom);
 	hdr = (struct ieee80211_hdr_3addr *)skb_put(skb, sizeof(*hdr));
 	if (hdr == NULL) {
 		lkpi_skb_free(skb);

@@ -102,6 +102,16 @@ struct lkpi_skb_pool_stats {
 	uint32_t	stray_free;		/* pointer outside the pool */
 	uint32_t	uaf_write;		/* put/push on a freed slot */
 	uint32_t	fence_bad;		/* free-slot integrity scan */
+	/* The supply side, split by what a refusal means: a header refusal is
+	 * "every skb slot and every heap header is held", a small-data
+	 * refusal is "the static data slots are gone" (the request would have
+	 * fit one) and a large-data refusal is "the heap is gone" (the
+	 * request never fit a static slot - the 20 KB URB re-arm is one).
+	 * hdr_total and heap_hdr_cap make the spare count computable at report
+	 * time: spare = (hdr_total - skb_used) + (heap_hdr_cap - heap_hdr_live). */
+	uint32_t	fail_hdr, fail_small, fail_large;
+	uint32_t	heap_hdr_live, heap_hdr_cap;
+	uint32_t	hdr_total, data_total;
 };
 
 /* idempotent; called lazily from the allocator under the pool's

@@ -37,3 +37,10 @@ CONFIG_LKPI_USB_OBS=y
 
 # the in-cell sampler: netio: rxpath/layers every 2 s while a cell is open
 CONFIG_NETIO_RXPATH=y
+
+# The transmit seam keeps this many skb header slots free for the receive
+# path (W6-04: the unbounded tx backlog ate the whole pool, the bulk-in
+# re-arm was refused, and the machine stopped printing).
+CONFIG_WLAN_SEAM_TX_MIN_SPARE=48
+CONFIG_NETIO_WATCHDOG=y
+CONFIG_WLAN_SEAM_TX_BACKLOG_MAX=4

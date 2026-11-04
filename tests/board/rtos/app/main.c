@@ -12,6 +12,7 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 
 #include "os/cmsis2/cmsis2.h"
 
@@ -61,6 +62,37 @@ static void fatal(const char *what)
 	}
 }
 
+#if defined(CONFIG_NETIO_WATCHDOG)
+/*
+ * Liveness witness.  Every "the board went silent" report so far had two
+ * readings: the work stopped, or the thing that prints stopped.  A thread at
+ * the highest priority that writes the polled console on a fixed cadence
+ * separates them: as long as the marker keeps coming, the tick, the scheduler
+ * and the console path are alive and only the case's own thread is stuck;
+ * when it stops too, the wedge is below the scheduler (interrupts off in a
+ * critical section, or a fault).
+ */
+static void watchdog_entry(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		uart_early_puts("WD: alive\n");
+		(void)osDelay(2000u);
+	}
+}
+
+static int watchdog_start(void)
+{
+	osThreadAttr_t attr;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.name = "wd";
+	attr.stack_size = 1024u;
+	attr.priority = osPriorityRealtime;
+	return (osThreadNew(watchdog_entry, NULL, &attr) != NULL) ? 0 : -1;
+}
+#endif
+
 int main(void)
 {
 	uart_early_init();
@@ -99,6 +131,11 @@ int main(void)
 		}
 	}
 	uart_early_puts("Hz\n");
+
+#if defined(CONFIG_NETIO_WATCHDOG)
+	if (watchdog_start() != 0)
+		fatal("watchdog thread create failed");
+#endif
 
 #if defined(CONFIG_SHELL)
 	if (rtos_shell_start() != 0) {

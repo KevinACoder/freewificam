@@ -110,6 +110,16 @@ struct lkpi_usb_engine_stats {
 	 * one (a nonzero poll_drained means the interrupt was lost) */
 	unsigned int	polls;
 	unsigned int	poll_drained;
+	/* The completion handoff, summed over the endpoints: a done slot filled
+	 * but not on the drain's list is a completion that will never be
+	 * delivered; idle_queued counts endpoints that have work queued with
+	 * nothing in flight.  Both are read by the reconcile pass (and by the
+	 * board ledger, which is how a stalled endpoint is told apart from a
+	 * device that is still NAKing). */
+	unsigned int	done_pending;
+	unsigned int	idle_queued;
+	unsigned int	recovered;
+	unsigned int	idle_kicked;
 };
 
 struct lkpi_usb_ep_stats {
@@ -128,6 +138,18 @@ struct lkpi_usb_ep_stats {
 	 * driver's callback may treat as a reason to retire a buffer rather
 	 * than re-arm it */
 	unsigned int	errors;
+	/* The completion handoff's own state, read at report time: a done slot
+	 * that is filled but not on the drain's done list is a completion no
+	 * one will ever deliver (and, because it blocks every later claim on
+	 * this endpoint, a queue that would never move again); done_dup counts
+	 * a second completion offered while this endpoint was still listed.
+	 * recovered/idle_kicked count the reconcile actions that put such a
+	 * stalled endpoint back to work (0 on a build that never needed them). */
+	unsigned int	done_pending;
+	unsigned int	done_listed;
+	unsigned int	done_dup;
+	unsigned int	recovered;
+	unsigned int	idle_kicked;
 	/* the first six words of this endpoint's most recent successful IN
 	 * completion, and its length (0 when none): for a receive endpoint those
 	 * words are the descriptor the driver's dispatcher reads */
@@ -151,6 +173,15 @@ unsigned int	lkpi_usb_drain_done_count(void);
 unsigned int	lkpi_usb_ep_count(void);
 /* copy endpoint `index`'s bookkeeping; non-zero when the index is out of range */
 int		lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out);
+
+/*
+ * How many bulk-OUT transfers the engine is holding for the driver right now
+ * (queued plus in flight).  The seam uses it as a burst gate: the chip's own
+ * transmit queue is finite, and a host that hands it a deep back-to-back
+ * burst can leave one transfer in flight with nothing completing - the state
+ * the 8821CU endpoint sat in for minutes on 2026-11-04.
+ */
+unsigned int	lkpi_usb_tx_backlog(void);
 void		lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out);
 /* One-shot census of the controller's asynchronous schedule (no-op when the
  * backend has none); prints through the console, for a stalled transfer. */

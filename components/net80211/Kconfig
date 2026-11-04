@@ -10,4 +10,38 @@ config WLAN_RX_BA
 	  and the same -D twice (once as an assignment, once inside
 	  CONFIG_LEVERS); after the migration there is one source of truth.
 
+config WLAN_SEAM_TX_BACKLOG_MAX
+	int "seam transmit burst bound (bulk-OUT transfers outstanding, 0 = off)"
+	default 0
+	range 0 64
+	help
+	  Refuse a data frame at the seam while the USB engine already holds
+	  this many bulk-OUT transfers, queue plus in flight.  The chip's own
+	  transmit queue is finite; on 2026-11-04 the 8821CU stopped completing
+	  any bulk-OUT with 22 outstanding and the endpoint never moved again.
+	  The bridge's stash carries the refused frame, so this is backpressure.
+
+config WLAN_SEAM_TX_MIN_SPARE
+	int "skb headers the seam keeps free when it admits a TX frame"
+	default 48
+	range 0 160
+	help
+	  The transmit seam and the receive path draw from one socket-buffer
+	  pool.  A driver whose transmit path accepts work faster than its
+	  transport can carry it (the USB substitute queues every frame the
+	  stack hands down, and the engine has one transfer in flight per
+	  endpoint) grows an unbounded tx backlog, and each queued frame pins
+	  a header slot.  When the pool is empty the receive path can neither
+	  re-arm its bulk-in URBs nor allocate a buffer for the next frame,
+	  and a bulk-in driver that retries by re-queueing its own work turns
+	  the shortage into a CPU livelock - the whole machine stops, console
+	  included.
+
+	  With this set to N, a data frame is admitted only while more than N
+	  header slots (static slots plus heap headers) are free, so the
+	  receive path always has room.  A refused frame takes the existing
+	  seam-noskb route (the bridge's one-frame stash and its deferred
+	  wake), which is backpressure, not a drop.  Management frames are
+	  never gated.  0 disables the gate.
+
 endmenu

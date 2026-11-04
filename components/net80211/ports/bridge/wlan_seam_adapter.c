@@ -76,6 +76,16 @@
 #endif
 #include "components/linuxkpi/lkpi_tcp_trace.h"
 
+/* The pool-spare gate's default matches components/net80211/Kconfig; a build
+ * that does not generate that symbol (a host contract suite) keeps the gate. */
+#ifndef CONFIG_WLAN_SEAM_TX_MIN_SPARE
+#define CONFIG_WLAN_SEAM_TX_MIN_SPARE 48
+#endif
+#ifndef CONFIG_WLAN_SEAM_TX_BACKLOG_MAX
+#define CONFIG_WLAN_SEAM_TX_BACKLOG_MAX 0
+#endif
+
+
 #ifdef CONFIG_LKPI_CENSUS
 /* the transmit handoff's own histogram (see seam_tx): one sample per frame
  * handed to the driver.  It has to be file scope rather than a block static so
@@ -171,6 +181,15 @@ static struct {
 	 */
 	unsigned int tx_noskb;
 	unsigned int tx_nopeer;
+	/* The pool-spare gate's refusals (CONFIG_WLAN_SEAM_TX_MIN_SPARE): the
+	 * frame was admissible on every other axis but the shared pool was
+	 * too close to empty to let the receive path lose its re-arm room.
+	 * Counted apart from tx_noskb because the two refusals have different
+	 * fixes: noskb is "the pool is gone", this one is "the pool is being
+	 * kept". */
+	unsigned int tx_pool_low;
+	/* the burst gate's refusals (CONFIG_WLAN_SEAM_TX_BACKLOG_MAX) */
+	unsigned int tx_backlog_low;
 	/*
 	 * The link face: what the driver's own receive descriptors said about
 	 * the data frames that actually arrived.  Counted, never printed per
@@ -333,6 +352,31 @@ seam_hw_scan_cancel(struct wlan_seam_drv *drv)
 		lkpi80211_drv_hw_scan_cancel(adapter.hw);
 }
 
+/*
+ * How many socket buffers the transmit seam may still hand out before it has
+ * to leave the rest to the receive path.  hdr_total and heap_hdr_cap make the
+ * supply computable without knowing which slots are static: the spare is
+ * (free static slots) + (free heap headers), and a request needs one of them
+ * (plus a data buffer, which the pool also reports - but a header is the
+ * scarce class under load: every queued USB transfer pins one, while the
+ * 64 static data slots are recycled as soon as a frame is copied out).
+ */
+static unsigned int
+seam_pool_spare(void)
+{
+	struct lkpi_skb_pool_stats ps;
+	unsigned int spare;
+
+	memset(&ps, 0, sizeof(ps));
+	lkpi_skb_pool_stats(&ps);
+	if (ps.hdr_total == 0)
+		return 0;	/* the pool has not been configured yet */
+	spare = ps.hdr_total > ps.skb_used ? ps.hdr_total - ps.skb_used : 0;
+	spare += ps.heap_hdr_cap > ps.heap_hdr_live ?
+		 ps.heap_hdr_cap - ps.heap_hdr_live : 0;
+	return spare;
+}
+
 static int
 seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
     int is_mgmt, int hw_crypto, int pairwise, int key_idx)
@@ -374,7 +418,65 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	 * then move the data pointer past it - so the driver's descriptor push
 	 * always fits instead of being refused at the pool's headroom guard.
 	 */
+	/*
+	 * The pool-spare gate: one shared socket-buffer supply feeds both
+	 * directions, and the transport underneath this seam queues whatever
+	 * the driver hands it (one transfer in flight per endpoint).  A frame
+	 * admitted here may sit in that queue for a long time, pinning its
+	 * header slot; enough of them and the receive path cannot re-arm at
+	 * all - measured 2026-11-04: 128/128 static headers plus 64/64 heap
+	 * headers held, the bulk-in re-arm refused (size=20480), and a
+	 * machine that stopped printing entirely.  Refusing the data frame
+	 * while fewer than CONFIG_WLAN_SEAM_TX_MIN_SPARE header slots are free
+	 * keeps the receive path's room; the bridge turns that refusal into
+	 * its one-frame stash plus a deferred wake, so it is backpressure
+	 * rather than a silent drop.  Management frames are never gated: a
+	 * beacon or an EAPOL-Key must not wait for bulk data to drain.
+	 */
+#if CONFIG_WLAN_SEAM_TX_MIN_SPARE > 0
+	if (!is_mgmt && seam_pool_spare() <= (unsigned int)CONFIG_WLAN_SEAM_TX_MIN_SPARE) {
+		adapter.tx_pool_low++;
+		return WLAN_SEAM_TX_ERR_NOSKB;
+	}
+#endif
+#if CONFIG_WLAN_SEAM_TX_BACKLOG_MAX > 0
+	/*
+	 * The chip's transmit queue is finite.  Handing it a deep back-to-back
+	 * burst is not free: on 2026-11-04 the 8821CU stopped completing any
+	 * bulk-OUT transfer with 22 held in the engine and one in flight -
+	 * the endpoint then never moved again, so every later frame sat
+	 * behind it.  Bounding the outstanding count keeps the device on a
+	 * short leash; the bridge's stash carries the refused frame until
+	 * the engine's completion path wakes it.
+	 */
+	if (!is_mgmt &&
+	    lkpi_usb_tx_backlog() >= (unsigned int)CONFIG_WLAN_SEAM_TX_BACKLOG_MAX) {
+		adapter.tx_backlog_low++;
+		return WLAN_SEAM_TX_ERR_NOSKB;
+	}
+#endif
+	{
+		static unsigned bc;
+
+		if (bc < 4) {
+			bc++;
+			wlan_osal_log("BC: seam in len=%d\n", len);
+		}
+	}
 	headroom = adapter.hw->extra_tx_headroom;
+	{
+		/* one-shot: the number the driver declared is what every frame
+		 * from this seam is built with; a zero here makes every frame
+		 * short of the driver's push (see lkpi80211_tx's guard) */
+		static unsigned probe;
+
+		if (probe < 3) {
+			probe++;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "seam: tx frame len=%u hw_extra_tx_headroom=%u\n",
+			    (unsigned int)len, headroom);
+		}
+	}
 	skb = lkpi_dev_alloc_skb((unsigned int)len + headroom, GFP_ATOMIC);
 	if (skb == NULL) {
 		adapter.tx_noskb++;
@@ -458,7 +560,14 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	 * exchange needs (the AC 7260's driver refuses a station data frame
 	 * with no TID queue: "Invalid TXQ id", mvm/tx.c:1157).
 	 */
-	lkpi80211_tx(adapter.hw, adapter.vif, adapter.sta, skb);
+	lkpi80211_tx(adapter.hw, adapter.vif, adapter.sta, skb);	{
+		static unsigned bc2;
+
+		if (bc2 < 4) {
+			bc2++;
+			wlan_osal_log("BC: seam out len=%d\n", len);
+		}
+	}
 #ifdef CONFIG_LKPI_CENSUS
 	lkpi_census_histo_add(&seam_tx_cost, lkpi_census_now_ns() - tx_t0);
 #endif
@@ -1489,9 +1598,10 @@ wlan_bridge_link_dump(void)
 	const struct ieee80211_sta *sta = adapter.sta;
 	unsigned int i;
 
-	wlan_osal_log("wlan: link hw=%d vif=%d sta=%d tx=%u\n",
+	wlan_osal_log("wlan: link hw=%d vif=%d sta=%d tx=%u hr=%u\n",
 	    adapter.hw != NULL ? 1 : 0, adapter.vif != NULL ? 1 : 0,
-	    sta != NULL ? 1 : 0, adapter.tx_calls);
+	    sta != NULL ? 1 : 0, adapter.tx_calls,
+	    adapter.hw != NULL ? adapter.hw->extra_tx_headroom : 0u);
 	/*
 	 * The transmit seam's refusals by cause, and the frames the driver
 	 * itself purged after taking them. These four numbers are what tells a
@@ -1500,9 +1610,10 @@ wlan_bridge_link_dump(void)
 	 * want of a peer never had a destination, and a purged frame left the
 	 * seam and never came back.
 	 */
-	wlan_osal_log("wlan: link txrefuse noskb=%u nopeer=%u nokey=%u "
-	    "purged=%u\n", adapter.tx_noskb, adapter.tx_nopeer,
-	    adapter.tx_hw_key_miss, (unsigned)lkpi80211_tx_purges());
+	wlan_osal_log("wlan: link txrefuse noskb=%u poollow=%u nopeer=%u "
+	    "nokey=%u purged=%u backlog=%u\n", adapter.tx_noskb, adapter.tx_pool_low,
+	    adapter.tx_nopeer, adapter.tx_hw_key_miss,
+	    (unsigned)lkpi80211_tx_purges(), adapter.tx_backlog_low);
 	if (sta != NULL)
 		wlan_osal_log("wlan: link peer supp=0x%08x ht=%u mcs=0x%08x "
 		    "nss=%u wme=%u htup=%u\n", (unsigned)sta->deflink.supp_rates[0],

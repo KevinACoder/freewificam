@@ -227,6 +227,12 @@ struct lkpi_usb_ep {
 	int			done_status;
 	u32			done_len;
 	struct lkpi_usb_ep	*_done_next;	/* done-list linkage */
+	/* true while this endpoint is on the drain's done list.  A done slot
+	 * that is filled without this flag is a completion nothing will
+	 * deliver, and every later claim on the endpoint is refused by the
+	 * done_urb check in lkpi_usb_kick - the queue then stands still with
+	 * in_flight == 0 (see lkpi_usb_reconcile). */
+	bool			done_listed;
 	/* Flow-control parking: the head urb waits for a backend resource the
 	 * controller refused to grant (a transient slot/QH shortage, never a
 	 * device error).  The driver never sees the shortage; a retry pass runs
@@ -239,6 +245,12 @@ struct lkpi_usb_ep {
 	 * path re-posts only on status == 0 - so this count is what separates
 	 * "the endpoint is idle" from "the endpoint is shedding transfers". */
 	u32			errors;
+	/* the completion handoff's reconcile accounting (see the header's
+	 * ep stats): a re-offered completion that was already listed, and the
+	 * two recovery actions the drain's reconcile pass can take */
+	u32			done_dup;
+	u32			recovered;
+	u32			idle_kicked;
 	/* the first six words of the most recent successful IN completion, and its
 	 * length: for a driver that receives reports and frames on one bulk-in
 	 * endpoint those words ARE the receive descriptor (type, length, flags,
@@ -739,6 +751,37 @@ static void lkpi_usb_retry_parked(void);
 static void lkpi_usb_deliver(struct urb *urb);
 void usb_free_urb(struct urb *urb);
 
+/*
+ * Queue the endpoint on the drain's done list and wake it; the caller has
+ * just filled ep->done_urb.  A second offer while the endpoint is still
+ * listed is counted and dropped: one transfer in flight means one pending
+ * result, and a duplicate list entry would make the drain deliver the same
+ * slot twice while the endpoint's next claim is still refused by the
+ * done_urb check in lkpi_usb_kick.
+ */
+static void
+lkpi_usb_done_list_add(struct lkpi_usb_ep *ep)
+{
+	os_critical_state_t csr;
+
+	csr = osCriticalEnter();
+	if (ep->done_urb == NULL || ep->done_listed) {
+		if (ep->done_urb != NULL)
+			ep->done_dup++;
+		osCriticalExit(csr);
+		return;
+	}
+	ep->_done_next = NULL;
+	if (lkpi_usb_done_tail != NULL)
+		lkpi_usb_done_tail->_done_next = ep;
+	else
+		lkpi_usb_done_head = ep;
+	lkpi_usb_done_tail = ep;
+	ep->done_listed = true;
+	osCriticalExit(csr);
+	(void)osSemaphoreRelease(lkpi_usb_done_sem);
+}
+
 static void
 lkpi_usb_be_complete(void *arg, int nbytes)
 {
@@ -780,24 +823,7 @@ lkpi_usb_be_complete(void *arg, int nbytes)
 	spin_unlock_irqrestore(&ep->lock, flags);
 
 	/* done list (interrupt-guarded): append the ENDPOINT, wake the drain */
-	{
-		os_critical_state_t csr;
-
-		csr = osCriticalEnter();
-		if (ep->done_urb == NULL) {
-			osCriticalExit(csr);
-			return;		/* drained already (cannot happen:
-					 * one in flight per ep) */
-		}
-		ep->_done_next = NULL;
-		if (lkpi_usb_done_tail != NULL)
-			lkpi_usb_done_tail->_done_next = ep;
-		else
-			lkpi_usb_done_head = ep;
-		lkpi_usb_done_tail = ep;
-		osCriticalExit(csr);
-	}
-	(void)osSemaphoreRelease(lkpi_usb_done_sem);
+	lkpi_usb_done_list_add(ep);
 }
 
 static void
@@ -828,15 +854,28 @@ lkpi_usb_drain_one(struct lkpi_usb_ep *ep)
 
 	spin_lock_irqsave(&ep->lock, flags);
 	urb = ep->done_urb;
-	if (urb == NULL || urb->_qstate != LKPI_Q_DONE ||
-	    urb->_ep != ep) {
-		u32 bad_id = urb != NULL ? urb->_alloc_id : 0;
-		u8 bad_state = urb != NULL ? urb->_qstate : 0;
-
+	if (urb == NULL) {
 		spin_unlock_irqrestore(&ep->lock, flags);
+		return;
+	}
+	if (urb->_qstate != LKPI_Q_DONE || urb->_ep != ep) {
+		u32 bad_id = urb->_alloc_id;
+		u8 bad_state = urb->_qstate;
+
+		/*
+		 * The slot is filled but its bookkeeping disagrees.  Bailing
+		 * here used to leave the endpoint unable to claim again (the
+		 * claim check refuses a filled done slot) with nobody left to
+		 * clear it - the 2026-11-04 board sat in exactly that state
+		 * with 178 urbs queued.  The slot is ours and holds the one
+		 * result the endpoint is owed; repair the two fields the
+		 * delivery reads and deliver it.
+		 */
 		lkpi_vio_latch(&lkpi_vio_done_state, "drain state",
 		    bad_id, bad_state);
-		return;
+		urb->_qstate = LKPI_Q_DONE;
+		urb->_ep = ep;
+		ep->recovered++;
 	}
 	ep->done_urb = NULL;
 	st = ep->done_status;
@@ -1026,18 +1065,55 @@ lkpi_usb_poll_backend(void)
 	lkpi_usb_poll_now();
 }
 
+/*
+ * Deliver everything the completion path has listed.  The drain thread's
+ * semaphore wake is a hint, not the record: a release that lands while the
+ * thread is between batches can be dropped by a full binary semaphore, and
+ * the endpoint then stays listed with nothing armed - no completion will ever
+ * come to wake the thread again.  The board showed exactly that on
+ * 2026-11-04 (RX endpoint `d=1 l=1 q=3`, engine idle, receive stopped).  The
+ * list is the truth, so every pass - woken or timed out - empties it.
+ */
+static void
+lkpi_usb_deliver_batch(void)
+{
+	for (;;) {
+		struct lkpi_usb_ep *ep;
+		os_critical_state_t csr;
+
+		csr = osCriticalEnter();
+		ep = lkpi_usb_done_head;
+		if (ep != NULL) {
+			lkpi_usb_done_head = ep->_done_next;
+			if (lkpi_usb_done_head == NULL)
+				lkpi_usb_done_tail = NULL;
+			ep->_done_next = NULL;
+			ep->done_listed = false;
+		}
+		osCriticalExit(csr);
+		if (ep == NULL) {
+			/* the delivery batch released every resource the
+			 * completed transfers held: parked endpoints may
+			 * resume now (they have nothing in flight, so no
+			 * completion would arrive on them) */
+			lkpi_usb_retry_parked();
+			return;
+		}
+		lkpi_usb_drain_one(ep);
+	}
+}
+
 static void
 lkpi_usb_drain_thread_entry(void *arg)
 {
-	struct lkpi_usb_ep *ep;
-
 	(void)arg;
 	for (;;) {
 		osStatus_t st;
 		u32 wait = osWaitForever;
 
 		LKPI_USB_OBS_PHASE(1);	/* parked on the done semaphore */
-		if (LKPI_USB_POLL_MS > 0u && lkpi_usb_any_armed())
+		if (LKPI_USB_POLL_MS > 0u &&
+		    (lkpi_usb_any_armed() || lkpi_usb_done_head != NULL))
 			wait = LKPI_USB_POLL_MS;
 		st = osSemaphoreAcquire(lkpi_usb_done_sem, wait);
 		if (st == osErrorTimeout) {
@@ -1045,30 +1121,12 @@ lkpi_usb_drain_thread_entry(void *arg)
 			 * is in flight: let the backend look at its own
 			 * controller (a lost event interrupt shows up here) */
 			lkpi_usb_poll_backend();
+			/* a listed endpoint with no armed transfer has no
+			 * wake of its own left: deliver it here */
+			lkpi_usb_deliver_batch();
 			continue;
 		}
-		for (;;) {
-			os_critical_state_t csr;
-
-			csr = osCriticalEnter();
-			ep = lkpi_usb_done_head;
-			if (ep != NULL) {
-				lkpi_usb_done_head = ep->_done_next;
-				if (lkpi_usb_done_head == NULL)
-					lkpi_usb_done_tail = NULL;
-				ep->_done_next = NULL;
-			}
-			osCriticalExit(csr);
-			if (ep == NULL) {
-				/* the delivery batch released every resource the
-				 * completed transfers held: parked endpoints may
-				 * resume now (they have nothing in flight, so no
-				 * completion would arrive on them) */
-				lkpi_usb_retry_parked();
-				break;
-			}
-			lkpi_usb_drain_one(ep);
-		}
+		lkpi_usb_deliver_batch();
 	}
 }
 
@@ -1201,6 +1259,17 @@ lkpi_usb_kick(struct lkpi_usb_ep *ep)
 		ep->kicks++;
 		spin_unlock_irqrestore(&ep->lock, flags);
 
+		{
+			static unsigned bc;
+
+			if (bc < 6) {
+				bc++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "BC: kick claim addr=0x%02x pipe=0x%08x len=%u\n",
+				    ep->ep_addr, (unsigned)urb->pipe,
+				    (unsigned)urb->transfer_buffer_length);
+			}
+		}
 		ret = lkpi_usb_arm(ep, urb);
 		if (ret == -ENOMEM) {
 			/* the DMA stage pool IS this pipeline's flow
@@ -1211,6 +1280,16 @@ lkpi_usb_kick(struct lkpi_usb_ep *ep)
 		}
 		if (ret == 0)
 			ret = lkpi_usb_be_submit_urb(&ep->be);
+		{
+			static unsigned bc;
+
+			if (bc < 6) {
+				bc++;
+				lkpi_printf(ULOG_ERROR_LEVEL,
+				    "BC: kick submit addr=0x%02x ret=%d\n",
+				    ep->ep_addr, ret);
+			}
+		}
 		if (ret == 0) {
 #ifdef CONFIG_LKPI_CENSUS
 			lkpi_usb_census_armed(ep);
@@ -1254,19 +1333,7 @@ lkpi_usb_kick(struct lkpi_usb_ep *ep)
 			    urb->transfer_buffer_length);
 #endif
 			spin_unlock_irqrestore(&ep->lock, flags);
-			{
-				os_critical_state_t csr;
-
-				csr = osCriticalEnter();
-				ep->_done_next = NULL;
-				if (lkpi_usb_done_tail != NULL)
-					lkpi_usb_done_tail->_done_next = ep;
-				else
-					lkpi_usb_done_head = ep;
-				lkpi_usb_done_tail = ep;
-				osCriticalExit(csr);
-			}
-			(void)osSemaphoreRelease(lkpi_usb_done_sem);
+			lkpi_usb_done_list_add(ep);
 			continue;
 		}
 	}
@@ -1349,6 +1416,28 @@ lkpi_usb_ep_count(void)
 	return LKPI_EP_N;
 }
 
+unsigned int
+lkpi_usb_tx_backlog(void)
+{
+	unsigned int i;
+	unsigned int n = 0;
+
+	for (i = 0; i < LKPI_EP_N; i++) {
+		const struct lkpi_usb_ep *ep = &lkpi_eps[i];
+		unsigned long flags;
+
+		/* bulk OUT endpoints carry the direction bit clear; the
+		 * control endpoint (address 0) is not part of the driver's
+		 * transmit burst */
+		if (ep->ep_addr == 0u || (ep->ep_addr & 0x80u) != 0u)
+			continue;
+		spin_lock_irqsave(&ep->lock, flags);
+		n += ep->qlen + (ep->cur != NULL ? 1u : 0u);
+		spin_unlock_irqrestore(&ep->lock, flags);
+	}
+	return n;
+}
+
 int
 lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out)
 {
@@ -1371,6 +1460,13 @@ lkpi_usb_ep_stats_get(unsigned int index, struct lkpi_usb_ep_stats *out)
 	out->parks = ep->parks;
 	out->resumes = ep->resumes;
 	out->errors = ep->errors;
+	/* a filled done slot that is not on the drain's list is a completion
+	 * no one will deliver (and the endpoint's next claim stays refused) */
+	out->done_pending = ep->done_urb != NULL ? 1u : 0u;
+	out->done_listed = ep->done_listed ? 1u : 0u;
+	out->done_dup = ep->done_dup;
+	out->recovered = ep->recovered;
+	out->idle_kicked = ep->idle_kicked;
 	memcpy(out->last_in_words, ep->last_in_words, sizeof(out->last_in_words));
 	out->last_in_len = ep->last_in_len;
 	spin_unlock_irqrestore(&ep->lock, flags);
@@ -1432,6 +1528,14 @@ lkpi_usb_engine_stats_get(struct lkpi_usb_engine_stats *out)
 		out->parked_now += s.parked;
 		out->in_flight += s.in_flight;
 		out->qlen += s.qlen;
+		out->done_pending += s.done_pending;
+		out->recovered += s.recovered;
+		out->idle_kicked += s.idle_kicked;
+		/* endpoints with work queued and nothing in flight: their queue
+		 * can only move on a kick, so a count that stays nonzero across
+		 * two reports is a queue nothing is waking */
+		if (s.qlen != 0 && s.in_flight == 0)
+			out->idle_queued++;
 	}
 	out->polls = lkpi_usb_poll_runs;
 	out->poll_drained = lkpi_usb_poll_drained;

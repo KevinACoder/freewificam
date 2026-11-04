@@ -2530,8 +2530,46 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		return;
 	ctx = LKPI80211_CTX(hw);
 	lkpi_tx_ctx = ctx;
+	/*
+	 * Every frame that reaches this entry is about to be handed to the
+	 * driver's transmit op, which pushes its own descriptor on and declares
+	 * that much room as hw->extra_tx_headroom.  A frame built outside the
+	 * seam (a helper or the driver's own firmware page) may carry less, and
+	 * the rtw88 USB path does not look at the push's answer: it writes the
+	 * descriptor to the address the refusal returned (usb.c:590) and the
+	 * zeroing lands wherever that is.  The board paid for it on 2026-11-04
+	 * (a heap assertion right after the refusal).  Guard the boundary here
+	 * and name the frame once: the seam is the only builder that reserves
+	 * this room, so a frame that arrives short is a frame built elsewhere.
+	 */
+	if (skb_headroom(skb) < hw->extra_tx_headroom ||
+	    (hw->extra_tx_headroom == 0 && skb_headroom(skb) < 48)) {
+		static unsigned long short_frames;
+		static bool said;
+
+		short_frames++;
+		if (!said) {
+			said = true;
+			hdr = (struct ieee80211_hdr *)skb->data;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: tx frame fc=0x%04x len=%u has %u bytes of headroom, the driver declared %u - dropped\n",
+			    le16_to_cpu(hdr->frame_control), skb->len,
+			    skb_headroom(skb), hw->extra_tx_headroom);
+		}
+		lkpi_skb_free(skb);
+		return;
+	}
 	hdr = (struct ieee80211_hdr *)skb->data;
 	fc = hdr->frame_control;
+	{
+		static unsigned bc;
+
+		if (bc < 4) {
+			bc++;
+			lkpi_printf(ULOG_ERROR_LEVEL, "BC: port tx fc=0x%04x len=%u\n",
+			    le16_to_cpu(fc), skb->len);
+		}
+	}
 
 	/*
 	 * The managed-exchange preparation, before the frame is handed down:
@@ -2627,6 +2665,14 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (lkpi_txq_enqueue(txq, skb) != 0) {
 		lkpi_skb_free(skb);
 		return;
+	}
+	{
+		static unsigned bc;
+
+		if (bc < 4) {
+			bc++;
+			lkpi_printf(ULOG_ERROR_LEVEL, "BC: port queued\n");
+		}
 	}
 	/* schedule_and_wake_txq (tx.c:1650-1661): the queue joins its access
 	 * category's list, then the driver is told to come and drain it */

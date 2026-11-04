@@ -354,17 +354,39 @@ static void emit_usb(const char *tag)
 
 	memset(&es, 0, sizeof(es));
 	lkpi_usb_engine_stats_get(&es);
-	MDK_ANCHOR("netio: usb tag=%s polls=%u drained=%u completions=%u "
-		   "errors=%u in_flight=%u parked=%u\n",
-		   tag, es.polls, es.poll_drained, es.completions, es.errors,
-		   es.in_flight, es.parked_now);
+	{
+		struct lkpi_usb_chusb_stats cs;
+
+		memset(&cs, 0, sizeof(cs));
+		lkpi_usb_cherryusb_stats(&cs);
+		MDK_ANCHOR("netio: usb tag=%s polls=%u drained=%u completions=%u "
+			   "errors=%u in_flight=%u parked=%u dph=%u idleq=%u "
+			   "recov=%u\n",
+			   tag, es.polls, es.poll_drained, es.completions,
+			   es.errors, es.in_flight, es.parked_now,
+			   es.done_pending, es.idle_queued, es.recovered);
+		/* The backend's own supply: `slot_exh` climbing means a submit
+		 * was refused for want of a transfer slot (the engine then
+		 * parks, and a parked endpoint only moves when a drain batch
+		 * ends); `stg_exh` is the same for the DMA stage; `refused` is
+		 * the controller rejecting the urb outright. */
+		MDK_ANCHOR("netio: usbc tag=%s sub=%u done=%u slot=%u "
+			   "slot_exh=%u stg_exh=%u stg_ovf=%u refuse=%u\n",
+			   tag, cs.submits, cs.completed,
+			   (unsigned)CONFIG_LKPI_USB_CHERRYUSB_SLOTS,
+			   cs.slots_exhausted, cs.stage_exhausted,
+			   cs.stage_overflow, cs.refused);
+	}
 	/*
 	 * Which endpoints are carrying the transfers, when a stall leaves some
 	 * of them armed forever.  The address says the direction (0x8x is an IN
 	 * endpoint, the driver's receive; the OUT endpoint is its transmit), and
 	 * `enq` against `comp` separates "the driver stopped submitting" from
 	 * "the controller stopped completing".  Only busy endpoints are listed,
-	 * so a healthy boot prints nothing here.
+	 * so a healthy boot prints nothing here.  `d` is the done handoff's own
+	 * state: 1 with `f == 0` means a completion sits in the slot and no
+	 * later transfer on this endpoint can be claimed (see the header's ep
+	 * stats); `l` says whether the drain has it listed.
 	 */
 	{
 		unsigned int i;
@@ -375,13 +397,17 @@ static void emit_usb(const char *tag)
 			memset(&ep, 0, sizeof(ep));
 			if (lkpi_usb_ep_stats_get(i, &ep) != 0)
 				break;
-			if (ep.qlen == 0 && ep.in_flight == 0)
+			if (ep.qlen == 0 && ep.in_flight == 0 &&
+			    ep.done_pending == 0)
 				continue;
 			MDK_ANCHOR("netio: usbep tag=%s i=%u addr=0x%02x q=%u f=%u "
-				   "enq=%u comp=%u err=%u\n",
+				   "d=%u l=%u enq=%u comp=%u err=%u dup=%u "
+				   "recov=%u idle=%u\n",
 				   tag, ep.index, ep.ep_addr, ep.qlen,
-				   ep.in_flight, ep.enqueued, ep.completions,
-				   ep.errors);
+				   ep.in_flight, ep.done_pending, ep.done_listed,
+				   ep.enqueued, ep.completions,
+				   ep.errors, ep.done_dup, ep.recovered,
+				   ep.idle_kicked);
 		}
 	}
 	/* The probe's own ledger: whether it ran, and how each of its transfers
@@ -426,15 +452,25 @@ static void emit_pool(const char *tag)
 			   tag);
 		lkpi_usb_controller_report();
 		MDK_ANCHOR("netio: stall tag=%s controller census done\n", tag);
+		/* What the bridge had already refused or stashed at the same
+		 * instant: a refusal storm that the bridge absorbed (stash) or
+		 * turned into a permanent drop is a different fix from one it
+		 * never saw. */
+		wlan_bridge_link_dump();
 	}
-	MDK_ANCHOR("netio: pool tag=%s used=%lu/%lu high=%lu/%lu "
-		   "heap_live=%lu alloc_fail=%lu n_alloc=%lu n_free=%lu\n",
+	MDK_ANCHOR("netio: pool tag=%s hdr=%lu/%lu heap_hdr=%lu/%u "
+		   "data=%lu/%lu high=%lu/%lu heap_live=%lu af=%lu "
+		   "af_hdr=%lu af_s=%lu af_l=%lu n_alloc=%lu n_free=%lu\n",
 		   tag, (unsigned long)ps.skb_used,
-		   (unsigned long)ps.data_used,
-		   (unsigned long)ps.skb_high,
-		   (unsigned long)ps.data_high,
+		   (unsigned long)ps.hdr_total,
+		   (unsigned long)ps.heap_hdr_live, ps.heap_hdr_cap,
+		   (unsigned long)ps.data_used, (unsigned long)ps.data_total,
+		   (unsigned long)ps.skb_high, (unsigned long)ps.data_high,
 		   (unsigned long)ps.dyalloc_live,
 		   (unsigned long)ps.alloc_fail,
+		   (unsigned long)ps.fail_hdr,
+		   (unsigned long)ps.fail_small,
+		   (unsigned long)ps.fail_large,
 		   (unsigned long)ps.n_alloc,
 		   (unsigned long)ps.n_free);
 }
@@ -1131,26 +1167,78 @@ static void hb_rearm_probe(unsigned int rx_now)
 
 static void hb_tick(void *arg)
 {
+	uint32_t rx_in = 0, rx_ref = 0, rx_drop = 0, rx_frames = 0, rx_q = 0;
+	struct lkpi_usb_engine_stats es;
+	struct wlan_bridge_counters wc;
+
 	(void)arg;
+	memset(&es, 0, sizeof(es));
+	memset(&wc, 0, sizeof(wc));
+	lkpi_usb_engine_stats_get(&es);
+	lkpi80211_rx_boundary_counters(&rx_in, &rx_ref, &rx_drop, &rx_frames,
+				       &rx_q);
+	wlan_bridge_stats(&wc);
+	/*
+	 * The escape hatch, and the FIRST thing this heartbeat does: written
+	 * straight to the polled UART with interrupts masked, past the log
+	 * ring and its lock.  If the normal lines stop but this one keeps
+	 * coming, the console (or the log path) died and the system did not;
+	 * if it stops too, the timer never ran.  Its position matters: a
+	 * heartbeat that dies inside the log path must still have left the
+	 * proof that it fired.
+	 */
+	{
+		struct lkpi_skb_pool_stats ps;
+		unsigned long q = 0, handed = 0, orph = 0, refu = 0;
+		uint32_t stopped = 0, wakes = 0;
+
+		memset(&ps, 0, sizeof(ps));
+		lkpi_skb_pool_stats(&ps);
+		lkpi_txq_census(&q, &handed, &orph, &refu);
+		lkpi80211_tx_gate_counters(&stopped, &wakes);
+		board_log_emergency("netio: alive rx_in=%lu rxdata=%u "
+				    "usbc=%u usbd=%u txq=%lu txf=%u "
+				    "hdr=%lu/%lu af=%lu t=%lu ph=%u "
+				    "idleq=%u\n",
+				    (unsigned long)rx_in, wc.rx_data,
+				    (unsigned)es.completions,
+				    (unsigned)es.done_pending, q,
+				    (unsigned)es.in_flight,
+				    (unsigned long)ps.skb_used,
+				    (unsigned long)ps.hdr_total,
+				    (unsigned long)ps.alloc_fail,
+				    (unsigned long)refu,
+				    lkpi_usb_drain_phase(), es.idle_queued);
+	}
 	emit_pool("hb");
 	emit_tx_census("hb");
 	emit_usb("hb");
+	/* The same boundary ledgers the cell prints, on every heartbeat.  A
+	 * stall that starts after a cell's window closed leaves its cause
+	 * (frames entering lkpi80211 and the queue's own drops, the done
+	 * handoff's fill/listing state) unwritten until the next boot; these
+	 * two lines are what makes the stall's onset visible in the same
+	 * console capture as its symptom. */
+	MDK_ANCHOR("netio: rxconn tag=hb rx_in=%lu rx_ref=%lu "
+		   "rx_drop=%lu rx_frames=%lu rx_q=%lu\n",
+		   (unsigned long)rx_in, (unsigned long)rx_ref,
+		   (unsigned long)rx_drop, (unsigned long)rx_frames,
+		   (unsigned long)rx_q);
+	MDK_ANCHOR("netio: usbeng tag=hb dph=%u phase=%u idleq=%u "
+		   "recov=%u idlekick=%u done=%u\n",
+		   es.done_pending, lkpi_usb_drain_phase(),
+		   es.idle_queued, es.recovered,
+		   es.idle_kicked, es.completions);
 	/* The bridge's own four counters, short enough to ride the heartbeat.
 	 * They separate the two directions at the layer that owns both: a
 	 * downlink that arrives but never leaves again shows rx climbing with tx
 	 * flat, and a downlink that never arrives shows rx flat while the
 	 * controller's own URBs keep completing. */
-	{
-		struct wlan_bridge_counters wc;
-
-		memset(&wc, 0, sizeof(wc));
-		wlan_bridge_stats(&wc);
-		MDK_ANCHOR("netio: wlan tag=hb tx=%u done=%u rx=%u rxdata=%u "
-			   "pend=%u q=%u\n",
-			   wc.data_tx, wc.tx_completes, wc.rx_frames,
-			   wc.rx_data, wc.tx_pending, wc.txq_high);
-		hb_rearm_probe(wc.rx_data);
-	}
+	MDK_ANCHOR("netio: wlan tag=hb tx=%u done=%u rx=%u rxdata=%u "
+		   "pend=%u q=%u\n",
+		   wc.data_tx, wc.tx_completes, wc.rx_frames,
+		   wc.rx_data, wc.tx_pending, wc.txq_high);
+	hb_rearm_probe(wc.rx_data);
 }
 
 static void hb_start(void)
@@ -1523,8 +1611,12 @@ static void UDP_Server(void *arg)
 				 * cell closed without a single board snapshot,
 				 * so a "post-cell" claim could only quote the
 				 * begin line.  The GMAC backend's output stays
-				 * byte-identical to its measured baseline. */
-				rxpath_window(0);
+				 * byte-identical to its measured baseline.
+				 * The rxpath sampler keeps running past this
+				 * point: the stall this round chases happens
+				 * after the window (S2C or the idle that
+				 * follows it), and a sampler that stops with
+				 * the cell has never seen one. */
 				emit_layer_counters("udp-c2s-end");
 				emit_rxpath("udp-c2s-end");
 #endif
@@ -1567,7 +1659,9 @@ static void UDP_Server(void *arg)
 					__THREAD_EXIT(rc);
 			} else if (io.command == CMD_S2C) {
 #if !NETIO_GMAC
-				rxpath_window(0);
+				/* rxpath stays on: this is the phase the
+				 * stall lives in (see the C2S-end note). */
+				emit_rxpath("udp-s2c-begin");
 #endif
 #if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
 				g_raw_in_window = 0;

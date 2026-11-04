@@ -561,6 +561,7 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 	} else if (cfg_heap_fallback) {
 		if (heap_live_n >= (uint32_t)CONFIG_LKPI_SKB_HEAP_HDR_MAX) {
 			stats.alloc_fail++;
+			stats.fail_hdr++;
 			if (refuse_log_ok())
 				lkpi_spl_log("alloc refused: header slots full "
 				    "(%u) and heap headers full (%u), size=%u",
@@ -571,6 +572,7 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 		skb = (struct sk_buff *)lkpi_spl_malloc((unsigned int)sizeof(*skb));
 		if (skb == NULL) {
 			stats.alloc_fail++;
+			stats.fail_hdr++;
 			if (refuse_log_ok())
 				lkpi_spl_log("alloc refused: no heap for a "
 				    "header, size=%u", size);
@@ -579,6 +581,7 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 		hdr_heap = 1;
 	} else {
 		stats.alloc_fail++;
+		stats.fail_hdr++;
 		if (refuse_log_ok())
 			lkpi_spl_log("alloc refused: no free header slot and "
 			    "no heap fallback, size=%u", size);
@@ -604,6 +607,10 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 
 		if (!cfg_heap_fallback) {
 			stats.alloc_fail++;
+			if (need <= cfg_data_sz)
+				stats.fail_small++;
+			else
+				stats.fail_large++;
 			goto fail_header;
 		}
 		/* one reference word in front of the payload, so a clone can share
@@ -612,9 +619,20 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 		ref = (uint32_t *)lkpi_spl_malloc(8u + need + LKPI_SKB_SHINFO_MAXSZ);
 		if (ref == NULL) {
 			stats.alloc_fail++;
-			lkpi_spl_log("alloc refused: no heap for %u bytes "
-			    "(data slot is %u)", 8u + need + LKPI_SKB_SHINFO_MAXSZ,
-			    cfg_data_sz);
+			if (need <= cfg_data_sz)
+				stats.fail_small++;
+			else
+				stats.fail_large++;
+			/* bounded like every other refusal: this is the path a
+			 * starved receive re-arm (20 KB) takes, and it is also
+			 * the one that used to print once per refusal - a
+			 * console storm that hid the very counters that name
+			 * the shortage */
+			if (refuse_log_ok())
+				lkpi_spl_log("alloc refused: no heap for %u bytes "
+				    "(data slot is %u)",
+				    8u + need + LKPI_SKB_SHINFO_MAXSZ,
+				    cfg_data_sz);
 			goto fail_header;
 		}
 		*ref = 1;
@@ -982,8 +1000,23 @@ void *lkpi_skb_push(struct sk_buff *skb, unsigned int len)
 		goto out;
 	if (len > (unsigned int)(skb->data - skb->head)) {
 		geo_bad++;
-		lkpi_spl_log("push past the headroom refused (len=%u headroom=%u)",
-		    len, (unsigned int)(skb->data - skb->head));
+		/* the caller's address is the only thing that names which push
+		 * site built its buffer without the headroom the contract
+		 * promises (the H2C/RSVD builders are the known ones) */
+		{
+			/* the frame's own bytes name it (mgmt vs data), the
+			 * geometry names where its buffer came from */
+			const unsigned char *d = skb->data;
+			unsigned int fc = (d != NULL) ?
+			    (unsigned int)d[0] | ((unsigned int)d[1] << 8) : 0;
+
+			lkpi_spl_log("push past the headroom refused (len=%u "
+			    "headroom=%u skb_len=%u fc=0x%04x head=%p "
+			    "end=%u tail=%u ra=%p)", len,
+			    (unsigned int)(skb->data - skb->head), skb->len,
+			    fc, (void *)skb->head, skb->end, skb->tail,
+			    __builtin_return_address(0));
+		}
 		goto out;
 	}
 	skb->data -= len;
@@ -1177,15 +1210,31 @@ void lkpi_skb_queue_purge(struct sk_buff_head *q)
 
 void lkpi_skb_pool_stats(struct lkpi_skb_pool_stats *out)
 {
+	unsigned long flags;
+
+	/* the geometry is set lazily by the first alloc; a report that runs
+	 * before it (or from an early probe) must read 0, not race the
+	 * configuration */
+	flags = lkpi_spl_irqsave();
 	*out = stats;
+	out->heap_hdr_live = heap_live_n;
+	out->heap_hdr_cap = (uint32_t)CONFIG_LKPI_SKB_HEAP_HDR_MAX;
+	out->hdr_total = cfg_n_header;
+	out->data_total = cfg_n_data;
+	lkpi_spl_irqrestore(flags);
 }
 
 void lkpi_skb_diag_dump(void)
 {
+	lkpi_skb_pool_init();
 	lkpi_spl_log("pool used=%u/%u high=%u/%u heap_live=%u oversize=%u storage_overflow header=%u data=%u alloc_fail=%u",
 	    stats.skb_used, stats.data_used, stats.skb_high, stats.data_high,
 	    stats.dyalloc_live, stats.dyalloc_oversize, stats.slot_overflow,
 	    stats.data_overflow, stats.alloc_fail);
+	lkpi_spl_log("pool hdr=%u/%u heap_hdr=%u/%u data=%u/%u fail_hdr=%u fail_small=%u fail_large=%u",
+	    stats.skb_used, cfg_n_header, heap_live_n,
+	    (unsigned)CONFIG_LKPI_SKB_HEAP_HDR_MAX, stats.data_used, cfg_n_data,
+	    stats.fail_hdr, stats.fail_small, stats.fail_large);
 	lkpi_spl_log("pool n_alloc=%u n_free=%u geo_bad=%u double_free=%u stray_free=%u uaf_write=%u fence_bad=%u",
 	    stats.n_alloc, stats.n_free, geo_bad, stats.double_free,
 	    stats.stray_free, stats.uaf_write, stats.fence_bad);

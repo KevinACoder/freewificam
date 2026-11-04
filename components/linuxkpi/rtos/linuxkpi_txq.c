@@ -512,6 +512,32 @@ ieee80211_tx_dequeue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 	 */
 	info = (struct ieee80211_tx_info *)skb->cb;
 	info->control.vif = txq->vif;
+	/*
+	 * The driver takes the frame from here straight into its own transmit
+	 * path (rtw88's txq_push -> rtw_txq_push_skb -> hci tx_write), which
+	 * pushes the chip descriptor on and then zeroes it without looking at
+	 * the answer.  A frame that was queued with less room than the driver
+	 * declared turns that zeroing into a write at the address the refusal
+	 * returned; the board died of it on 2026-11-04.  Name the frame once
+	 * and drop it: a short frame is a builder's bug, not a transmit.
+	 */
+	if (skb_headroom(skb) < hw->extra_tx_headroom) {
+		static unsigned long short_frames;
+		static bool said;
+
+		short_frames++;
+		if (!said) {
+			const unsigned char *d = skb->data;
+
+			said = true;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi_txq: dequeue fc=0x%04x len=%u has %u bytes of headroom, the driver declared %u - dropped\n",
+			    (unsigned int)d[0] | ((unsigned int)d[1] << 8), skb->len,
+			    skb_headroom(skb), hw->extra_tx_headroom);
+		}
+		lkpi_skb_free(skb);
+		return NULL;
+	}
 	return skb;
 }
 

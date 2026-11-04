@@ -73,6 +73,9 @@ config NETIO_TCP_PROBE
 config NETIO_TX_STALL_PROBE
 	bool "netio TX stall probe"
 
+config NETIO_WATCHDOG
+	bool "netio liveness watchdog"
+
 menu "Cases"
 
 config CASES
