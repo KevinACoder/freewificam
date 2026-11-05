@@ -384,8 +384,10 @@ static void emit_usb(const char *tag)
 	 * of them armed forever.  The address says the direction (0x8x is an IN
 	 * endpoint, the driver's receive; the OUT endpoint is its transmit), and
 	 * `enq` against `comp` separates "the driver stopped submitting" from
-	 * "the controller stopped completing".  Only busy endpoints are listed,
-	 * so a healthy boot prints nothing here.  `d` is the done handoff's own
+	 * "the controller stopped completing".  IN endpoints are listed only
+	 * while busy; the OUT endpoint is listed every sample even when idle,
+	 * because its cumulative enq/comp is the TX aggregation census
+	 * (frames per URB = wlan_done / comp).  `d` is the done handoff's own
 	 * state: 1 with `f == 0` means a completion sits in the slot and no
 	 * later transfer on this endpoint can be claimed (see the header's ep
 	 * stats); `l` says whether the drain has it listed.
@@ -399,7 +401,8 @@ static void emit_usb(const char *tag)
 			memset(&ep, 0, sizeof(ep));
 			if (lkpi_usb_ep_stats_get(i, &ep) != 0)
 				break;
-			if (ep.qlen == 0 && ep.in_flight == 0 &&
+			if ((ep.ep_addr & 0x80u) != 0u &&
+			    ep.qlen == 0 && ep.in_flight == 0 &&
 			    ep.done_pending == 0)
 				continue;
 			MDK_ANCHOR("netio: usbep tag=%s i=%u addr=0x%02x q=%u f=%u "
