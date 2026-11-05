@@ -288,10 +288,16 @@ static const struct kernel_param_ops wlan_state_ops = {
  * frames the bridge handed to the driver's .tx, tx_done the transmit status
  * the driver reported back. A data plane that hands frames over but never
  * completes them reads differently from one that never hands them over.
+ *
+ * The second half is the seam's admission gauge (W6-05): inflight is the
+ * adapter's handed-minus-completed bound, gated/wakes the bridge's own
+ * backpressure counters, pending the one-frame stash the bridge holds when a
+ * driver entry refuses a frame.
  */
 static int wlan_stats_get(char *buffer, const struct kernel_param *kp)
 {
 	struct wlan_bridge_counters c;
+	struct wlan_linux_hw *w = wlan_hw_single();
 
 	(void)kp;
 	memset(&c, 0, sizeof(c));
@@ -300,12 +306,18 @@ static int wlan_stats_get(char *buffer, const struct kernel_param *kp)
 	    "attached=%d mgt_tx=%u data_tx=%u rx=%u tx_done=%u scan=%u/%u "
 	    "auth_retry=%u auth_ans=%u rx_data=%u rx_data_enc=%u "
 	    "tx_errors=%u mgmt_action=%u ba_rx=%u ba_tx=%u ba_oper=%u "
-	    "ba_stop=%u txq=%u tx_stopped=%u\n",
+	    "ba_stop=%u txq=%u tx_stopped=%u "
+	    "inflight=%u handed=%u done=%u "
+	    "gated=%u wakes=%u pending=%u txq_high=%u\n",
 	    c.attached, c.mgt_tx, c.data_tx, c.rx_frames, c.tx_completes,
 	    c.scan_starts, c.scan_completes, c.auth_retries, c.auth_answers,
 	    c.rx_data, c.rx_data_enc, c.tx_errors, c.mgmt_action_tx,
 	    c.ba_rx_start, c.ba_tx_start, c.ba_tx_operational, c.ba_stop,
-	    c.txq_len, c.tx_stopped);
+	    c.txq_len, c.tx_stopped,
+	    w != NULL ? wlan_adapter_tx_inflight(&w->hw) : 0u,
+	    w != NULL ? w->tx_handed : 0u,
+	    w != NULL ? w->tx_completed : 0u,
+	    c.tx_gated, c.tx_wakes, c.tx_pending, c.txq_high);
 }
 
 static const struct kernel_param_ops wlan_stats_ops = {

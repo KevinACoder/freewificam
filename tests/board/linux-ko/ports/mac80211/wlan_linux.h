@@ -133,6 +133,22 @@ struct wlan_linux_hw {
 	void			(*tx_wake_cb)(void *arg);
 	void			*tx_wake_arg;
 	unsigned int		tx_wakes;
+
+	/*
+	 * The seam's transmit admission gauge (W6-05).  rtw88's USB path never
+	 * stops its queues, so `queue_stopped` above is always false on this
+	 * line and the bridge has nothing to ask: frames the seam handed over
+	 * pile up as pending bulk-OUT URBs (a 32 KB aggregate buffer each, plus
+	 * the frame skbs) until the device drains them.  This pair is the
+	 * substitute's own bound - frames handed to the driver minus transmit
+	 * statuses the driver reported back - and the adapter refuses a data
+	 * frame while their difference has reached tx_inflight_max.  The refusals
+	 * themselves are the bridge's tx_gated (a refusal happens at its drain,
+	 * and this function is also asked by the statistics snapshot, which must
+	 * not count as one).
+	 */
+	unsigned int		tx_handed;
+	unsigned int		tx_completed;
 };
 
 /* the driver-half seam vtable (tests/board/linux-ko/ports/adapter/wlan_seam_adapter_linux.c) */
@@ -157,6 +173,15 @@ void wlan_tx_wake_init(struct wlan_linux_hw *w);
 void wlan_tx_wake_set_cb(struct ieee80211_hw *hw, void (*cb)(void *arg),
     void *arg);
 int wlan_tx_queue_stopped(struct ieee80211_hw *hw);
+
+/* the seam's transmit admission (W6-05): frames handed minus statuses seen.
+ * An aggregate completion arrives as one extra status for the frames it
+ * carried, so the difference can go to zero early; it is a bound, not a
+ * census.  The pump restarts the bridge's queue from the completion work -
+ * with the admission gate in place a completion is the only event that moves
+ * the line, and rtw88's USB path will not raise a queue wake. */
+unsigned int wlan_adapter_tx_inflight(struct ieee80211_hw *hw);
+void wlan_adapter_tx_pump(struct ieee80211_hw *hw);
 
 /* a received frame, from ieee80211_rx_irqsafe() to the net80211 bridge */
 void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb);

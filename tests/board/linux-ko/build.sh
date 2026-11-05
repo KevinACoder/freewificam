@@ -224,6 +224,15 @@ CONFIG_H="$MOD/linuxko_config.h"
 	echo '#define WLAN_PORT_LINUX 1'
 	echo '#define _ROUTE_H 1'
 	echo '#define CONFIG_WLAN_KO 1'
+	# The seam's TX admission gate (W6-05).  Without a number here the module
+	# has no flow control at all (W7-03: unbounded admission -> OOM); 16
+	# keeps the driver's queue and the URB in-flight set short.  Until W6-05
+	# the define reached no code: the ko build compiles its own adapter
+	# (tests/board/linux-ko/ports/adapter/wlan_seam_adapter_linux.c), not the
+	# RTOS one that reads this macro, so the module admitted every frame
+	# (3.4 GB of pending URB buffers in 4 s).  The ko adapter reads it now,
+	# and the module parameter tx_inflight_max overrides it at load time.
+	echo "#define CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX ${TX_INFLIGHT_MAX:-16}"
 	if [ "$WITH_DRIVER" = 1 ]; then
 		echo '#define CONFIG_WLAN_KO_DRIVER 1'
 	fi

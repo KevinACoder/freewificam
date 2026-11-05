@@ -62,6 +62,29 @@ static unsigned int wlan_tx_diag_seen;
 module_param_named(tx_diag, wlan_tx_diag, int, 0644);
 module_param_named(tx_tid, wlan_tx_tid, int, 0644);
 
+#ifndef CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX
+/* a build that does not state a number gets no gate, the pre-W6-05 shape */
+#define CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX 0
+#endif
+
+/*
+ * The seam's transmit admission (W6-05).  rtw88's USB path never stops its
+ * queues, so `queue_ready` above has nothing to report on this line and the
+ * bridge would hand over every frame as fast as the stack produces them.  The
+ * driver puts each aggregate on the wire as one bulk-OUT URB and keeps its
+ * 32 KB aggregate buffer (plus the frame skbs) until that URB completes, so
+ * without a bound the pending set grows with the offered rate instead of the
+ * air rate: measured 2026-11-05, 322k frames in 4 s (90k fps) against an air
+ * rate near 35k fps left 3.4 GB of pending buffers and the machine died in the
+ * out-of-memory panic.  This cap is the substitute's own counter (frames
+ * handed minus statuses reported back); 0 disables it for the A/B control arm,
+ * and the built default comes from the module's config header.
+ */
+static unsigned int wlan_tx_inflight_max = CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX;
+module_param_named(tx_inflight_max, wlan_tx_inflight_max, uint, 0644);
+MODULE_PARM_DESC(tx_inflight_max,
+    "refuse a data frame while this many are in flight (0 = off)");
+
 static struct wlan_linux_hw *ctx_hw(struct wlan_seam_drv *drv)
 {
 	return wlan_hw_of((struct ieee80211_hw *)drv);
@@ -769,12 +792,14 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 		if (txq != NULL && wlan_txq_enqueue(txq, skb) == 0) {
 			ieee80211_schedule_txq(hw, txq);
 			w->ops->wake_tx_queue(hw, txq);
+			w->tx_handed++;
 			wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_SEAM);
 			wlan_ko_prof_end(WLAN_KO_PROF_TX_SEAM, prof_t0);
 			return 0;
 		}
 	}
 	w->ops->tx(hw, &control, skb);
+	w->tx_handed++;
 	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_SEAM);
 	wlan_ko_prof_end(WLAN_KO_PROF_TX_SEAM, prof_t0);
 	return 0;
@@ -1233,15 +1258,38 @@ static int seam_beacon_sync(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 
 /*
  * The seam's backpressure question (wlan_seam_drv_ops.queue_ready): nonzero
- * only while the driver's transmit queue is open.  rtl8xxxu stops it when its
- * tx-urb pool crosses the low water and wakes it above the high water; the
- * bridge refuses to dequeue while stopped and drains on the wake below.
+ * only while the driver can take another frame.  rtl8xxxu stops its transmit
+ * queue when its tx-urb pool crosses the low water and wakes it above the high
+ * water; rtw88's USB path never does (only its PCI path stops queues), so on
+ * this line the driver's own state says nothing and the admission counter is
+ * the bound.  The bridge refuses to dequeue while this says no; the frame stays
+ * in the interface queue and the completion-side pump drains it.
  */
+static unsigned int seam_tx_inflight(struct wlan_linux_hw *w)
+{
+	unsigned int handed = READ_ONCE(w->tx_handed);
+	unsigned int done = READ_ONCE(w->tx_completed);
+
+	return handed > done ? handed - done : 0;
+}
+
+unsigned int wlan_adapter_tx_inflight(struct ieee80211_hw *hw)
+{
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+
+	return w != NULL ? seam_tx_inflight(w) : 0;
+}
+
 static int seam_queue_ready(struct wlan_seam_drv *drv)
 {
 	struct wlan_linux_hw *w = ctx_hw(drv);
+	unsigned int max = READ_ONCE(wlan_tx_inflight_max);
 
-	return w != NULL && !wlan_tx_queue_stopped(&w->hw);
+	if (w == NULL || wlan_tx_queue_stopped(&w->hw))
+		return 0;
+	if (max != 0 && seam_tx_inflight(w) >= max)
+		return 0;
+	return 1;
 }
 
 /*
@@ -1259,6 +1307,22 @@ static void seam_tx_wake(void *arg)
 	 * only a wake reopens it), so the driver's refill has to poke the
 	 * device queue too.
 	 */
+	wlan_netdev_tx_kick();
+}
+
+/*
+ * The completion-side pump (W6-05).  With the admission gate in place a
+ * completion is the only event that moves this line: the driver never stops or
+ * wakes its queues, so the frame the gate had to leave in the interface queue
+ * would never be retried.  The bridge says whether anything is waiting; asking
+ * for a wake when nothing is would cost a work item per frame.
+ */
+void wlan_adapter_tx_pump(struct ieee80211_hw *hw)
+{
+	(void)hw;
+	if (!wlan_bridge_tx_waiting())
+		return;
+	wlan_bridge_tx_wake();
 	wlan_netdev_tx_kick();
 }
 
@@ -1459,6 +1523,7 @@ void wlan_adapter_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 	const struct ieee80211_hdr *hdr = (const void *)skb->data;
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
 	static unsigned int logged;
 
 	/*
@@ -1476,6 +1541,14 @@ void wlan_adapter_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 		    !!(info->flags & IEEE80211_TX_STAT_NOACK_TRANSMITTED),
 		    info->status.rates[0].idx, hdr->addr1);
 	}
-	(void)hw;
+	/*
+	 * The admission gauge's other half.  An aggregate arrives here as one
+	 * extra skb besides the frames it carried (rtw_usb_write_port_tx_complete
+	 * reports every entry of tx_ack_queue), so this counter can pass
+	 * tx_handed; the gate clamps instead of trusting the difference as a
+	 * census.
+	 */
+	if (w != NULL)
+		w->tx_completed++;
 	wlan_bridge_tx_complete();
 }

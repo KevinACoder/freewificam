@@ -190,6 +190,8 @@ static struct {
 	unsigned int tx_pool_low;
 	/* the burst gate's refusals (CONFIG_WLAN_SEAM_TX_BACKLOG_MAX) */
 	unsigned int tx_backlog_low;
+	/* the generic in-flight gate's refusals (CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX) */
+	unsigned int tx_inflight_low;
 	/*
 	 * The link face: what the driver's own receive descriptors said about
 	 * the data frames that actually arrived.  Counted, never printed per
@@ -436,6 +438,23 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 #if CONFIG_WLAN_SEAM_TX_MIN_SPARE > 0
 	if (!is_mgmt && seam_pool_spare() <= (unsigned int)CONFIG_WLAN_SEAM_TX_MIN_SPARE) {
 		adapter.tx_pool_low++;
+		return WLAN_SEAM_TX_ERR_NOSKB;
+	}
+#endif
+#if CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX > 0
+	/*
+	 * The transport-independent cap.  The gate above reads the RTOS USB
+	 * engine's backlog; the kernelmod line has no such engine (Linux's USB
+	 * core takes its place) and its build defines no CONFIG_WLAN_SEAM_*
+	 * at all, so on 2026-11-05 the module admitted frames without any
+	 * bound: 317k frames in 4 s, 3.3 GB of skb heads, OOM panic.  This
+	 * counter lives in the substitute both lines share (handed minus
+	 * completed), so the same rule now holds on both.  Management frames
+	 * stay ungated: a beacon must not wait for bulk data.
+	 */
+	if (!is_mgmt &&
+	    lkpi80211_tx_inflight() >= (unsigned int)CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX) {
+		adapter.tx_inflight_low++;
 		return WLAN_SEAM_TX_ERR_NOSKB;
 	}
 #endif
@@ -1621,9 +1640,11 @@ wlan_bridge_link_dump(void)
 	 * seam and never came back.
 	 */
 	wlan_osal_log("wlan: link txrefuse noskb=%u poollow=%u nopeer=%u "
-	    "nokey=%u purged=%u backlog=%u\n", adapter.tx_noskb, adapter.tx_pool_low,
+	    "nokey=%u purged=%u backlog=%u inflight=%u out=%u\n",
+	    adapter.tx_noskb, adapter.tx_pool_low,
 	    adapter.tx_nopeer, adapter.tx_hw_key_miss,
-	    (unsigned)lkpi80211_tx_purges(), adapter.tx_backlog_low);
+	    (unsigned)lkpi80211_tx_purges(), adapter.tx_backlog_low,
+	    adapter.tx_inflight_low, (unsigned)lkpi80211_tx_inflight());
 	if (sta != NULL)
 		wlan_osal_log("wlan: link peer supp=0x%08x ht=%u mcs=0x%08x "
 		    "nss=%u wme=%u htup=%u\n", (unsigned)sta->deflink.supp_rates[0],

@@ -276,6 +276,14 @@ static void *bridge_arg;
 static u32 lkpi80211_scan_completions;
 static u32 lkpi80211_tx_completions;
 /*
+ * Frames handed to the driver's tx op.  Together with tx_completions this
+ * is the port's one transport-independent in-flight count: the RTOS USB
+ * engine's own backlog counter has no meaning on the kernelmod line
+ * (that engine is not in the module), so the seam gate cannot be built on
+ * it there.
+ */
+static u32 lkpi80211_tx_handed;
+/*
  * Completions whose frame was not acknowledged (IEEE80211_TX_STAT_ACK clear).
  * The bridge counter `tx_completes` cannot separate "the driver reported the
  * frame done" from "the air acknowledged it": mvm reports both, and a join that
@@ -2255,6 +2263,21 @@ lkpi80211_rx_boundary_counters(u32 *in, u32 *refused, u32 *drops, u32 *frames, u
  * the air acknowledged from one the device gave up on: the first says the AP
  * owes an answer, the second says the frame never made it.
  */
+/*
+ * Frames the seam handed the driver whose completion has not come back yet:
+ * the driver's own tx_queue plus whatever the transport below it still holds.
+ * Saturation of this number is the only reason the seam has to refuse a data
+ * frame for flow control rather than for memory (see the seam's gate).
+ */
+u32
+lkpi80211_tx_inflight(void)
+{
+	u32 handed = lkpi80211_tx_handed;
+	u32 done = lkpi80211_tx_completions;
+
+	return handed > done ? handed - done : 0;
+}
+
 u32
 lkpi80211_tx_failures(void)
 {
@@ -2560,6 +2583,7 @@ lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	lkpi80211_tx_headroom_check(hw, skb);
 	control.sta = sta;
 	(void)vif;
+	lkpi80211_tx_handed++;
 	ctx->ops->tx(hw, &control, skb);
 }
 

@@ -302,6 +302,13 @@ static void wlan_tx_work(struct work_struct *work)
 		wlan_ko_prof_depth(WLAN_KO_PROF_Q_TX_STATUS, -1);
 		wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS_WORK, prof_t0);
 	}
+	/*
+	 * The admission gate the seam's queue_ready now applies (W6-05) is
+	 * released only by completions, and rtw88's USB path raises no queue
+	 * wake: after a batch of statuses, restart the bridge's drain if
+	 * anything is still waiting.  One call per work item, not per frame.
+	 */
+	wlan_adapter_tx_pump(&w->hw);
 }
 
 static void wlan_scan_work(struct work_struct *work)

@@ -255,6 +255,7 @@ void	lkpi80211_rx_boundary_counters(u32 *in, u32 *refused, u32 *drops,
  * own log, this is what places a stuck authentication.
  */
 u32	lkpi80211_tx_failures(void);
+u32	lkpi80211_tx_inflight(void);
 
 /*
  * Frames the drivers released through ieee80211_purge_tx_queue() since boot.
