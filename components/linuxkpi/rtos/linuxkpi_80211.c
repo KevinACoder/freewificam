@@ -591,6 +591,18 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	ctx->hw.priv = (u8 *)ctx + sizeof(*ctx);
 	ctx->hw.wiphy = &ctx->wiphy;
 	/*
+	 * The wiphy defaults the kernel gives a registering driver
+	 * (net/wireless/core.c:689-692, wiphy_new_nm): a threshold of 0 is not
+	 * one of them.  rtw88's transmit descriptor asks
+	 * `skb->len > hw->wiphy->rts_threshold` (tx.c:369) and turns RTS on for
+	 * every frame when the field is zero, because kzalloc zeroed it - a
+	 * full RTS/CTS exchange in front of every PPDU, paid at the legacy rate
+	 * on a 126-byte frame.  The linuxnative GT runs the same driver against
+	 * these defaults; this is parity, not a tuning lever.
+	 */
+	ctx->wiphy.rts_threshold = (u32)-1;
+	ctx->wiphy.frag_threshold = (u32)-1;
+	/*
 	 * The receive queue's lock before anything can enqueue into it.  kzalloc
 	 * leaves the lock all zero, which only works while the spinlock is an
 	 * IRQ-mask word; init it explicitly so the queue owns its lock the way
