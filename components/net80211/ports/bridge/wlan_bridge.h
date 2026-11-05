@@ -415,6 +415,8 @@ uint32_t wlan_bridge_stat_bad_auth(void);
 /* One ethernet frame from the presentation layer: queued to the interface, so
  * net80211's own encapsulation and crypto run on the way out. */
 int	wlan_bridge_tx_raw(const uint8_t *frame, size_t len);
+int	wlan_bridge_tx_enqueue(const uint8_t *frame, size_t len);
+void	wlan_bridge_tx_flush(void);
 
 /*
  * Send one raw 802.11 management/action frame (header + body, no FCS) through

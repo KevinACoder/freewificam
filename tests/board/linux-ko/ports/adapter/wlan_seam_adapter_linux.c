@@ -791,7 +791,37 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 		}
 		if (txq != NULL && wlan_txq_enqueue(txq, skb) == 0) {
 			ieee80211_schedule_txq(hw, txq);
-			w->ops->wake_tx_queue(hw, txq);
+			/*
+			 * Inside a batch the wake is the batch owner's job, so
+			 * the driver's work sees every frame of the batch; on
+			 * every other path (management, RTOS callers) the wake
+			 * stays here, one per frame.
+			 */
+			{
+				unsigned long flags;
+				unsigned int i;
+				int defer;
+
+				spin_lock_irqsave(&w->tx_batch_lock, flags);
+				defer = w->tx_batch != 0;
+				if (defer) {
+					w->tx_wake_pending = 1;
+					for (i = 0; i < w->tx_batch_txqs; i++) {
+						if (w->tx_batch_txq[i] == txq) {
+							break;
+						}
+					}
+					if (i == w->tx_batch_txqs &&
+					    w->tx_batch_txqs < 8) {
+						w->tx_batch_txq[w->tx_batch_txqs++] =
+						    txq;
+					}
+				}
+				spin_unlock_irqrestore(&w->tx_batch_lock, flags);
+				if (!defer) {
+					w->ops->wake_tx_queue(hw, txq);
+				}
+			}
 			w->tx_handed++;
 			wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_SEAM);
 			wlan_ko_prof_end(WLAN_KO_PROF_TX_SEAM, prof_t0);
@@ -1317,13 +1347,61 @@ static void seam_tx_wake(void *arg)
  * would never be retried.  The bridge says whether anything is waiting; asking
  * for a wake when nothing is would cost a work item per frame.
  */
+/*
+ * The batch owner's single wake.  Called after wlan_bridge_tx_flush() has put
+ * a whole batch in the driver's queue: one wake_tx_queue() for the batch, and
+ * rtw88's __rtw_tx_work() then dequeues all of it (rtw88/tx.c:656).
+ */
+void wlan_adapter_tx_kick(struct ieee80211_hw *hw)
+{
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+	struct ieee80211_txq *txq[8];
+	unsigned long flags;
+	unsigned int n = 0;
+	unsigned int i;
+
+	if (w == NULL || w->ops == NULL || w->ops->wake_tx_queue == NULL) {
+		return;
+	}
+	spin_lock_irqsave(&w->tx_batch_lock, flags);
+	if (w->tx_batch == 0 && w->tx_wake_pending) {
+		n = w->tx_batch_txqs;
+		for (i = 0; i < n; i++) {
+			txq[i] = w->tx_batch_txq[i];
+		}
+		w->tx_wake_pending = 0;
+		w->tx_batch_txqs = 0;
+	}
+	spin_unlock_irqrestore(&w->tx_batch_lock, flags);
+	for (i = 0; i < n; i++) {
+		if (txq[i] != NULL) {
+			w->ops->wake_tx_queue(hw, txq[i]);
+		}
+	}
+	if (n == 0 && w->vif != NULL && w->vif->txq != NULL) {
+		/* nothing recorded (a wake armed outside a batch): the vif's own
+		 * queue is where the frames went */
+		w->ops->wake_tx_queue(hw, w->vif->txq);
+	}
+}
+
 void wlan_adapter_tx_pump(struct ieee80211_hw *hw)
 {
-	(void)hw;
-	if (!wlan_bridge_tx_waiting())
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+	unsigned long flags;
+
+	if (w == NULL || !wlan_bridge_tx_waiting())
 		return;
+	/* a completion frees a batch of gate slots; drain with the wake held
+	 * back so the driver sees the batch instead of one frame per wake */
+	spin_lock_irqsave(&w->tx_batch_lock, flags);
+	w->tx_batch++;
+	spin_unlock_irqrestore(&w->tx_batch_lock, flags);
 	wlan_bridge_tx_wake();
-	wlan_netdev_tx_kick();
+	spin_lock_irqsave(&w->tx_batch_lock, flags);
+	w->tx_batch--;
+	spin_unlock_irqrestore(&w->tx_batch_lock, flags);
+	wlan_adapter_tx_kick(hw);
 }
 
 const struct wlan_seam_drv_ops wlan_seam_ops = {

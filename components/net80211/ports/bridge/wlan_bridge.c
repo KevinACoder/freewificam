@@ -3253,7 +3253,7 @@ wlan_bridge_set_data_rx(wlan_bridge_data_rx_fn fn, void *arg)
 #define WLAN_BRIDGE_TXQ_CAP	64
 
 int
-wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
+wlan_bridge_tx_enqueue(const uint8_t *frame, size_t len)
 {
 	struct ifnet *ifp;
 	struct mbuf *m;
@@ -3284,8 +3284,35 @@ wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
 		m_freem(m);
 		return -ENOBUFS;
 	}
-	bridge_start(ifp);
 	return (int)len;
+}
+
+/*
+ * The other half: run the drain that turns queued ethernet frames into
+ * encapsulated 802.11 frames on the driver's queue.  Split from the enqueue
+ * so a caller that has several frames can put them all in the interface
+ * queue first and open the gate once.  What that buys is the driver's batch:
+ * the drain hands the driver everything it can take, rtw88's __rtw_tx_work()
+ * then dequeues that many frames in one go (rtw88/tx.c:656) and its USB layer
+ * aggregates them into one 20 KB transfer instead of one frame per transfer.
+ */
+void
+wlan_bridge_tx_flush(void)
+{
+	if (!bridge.attached || bridge.ic == NULL || bridge.ic->ic_ifp == NULL)
+		return;
+	bridge_start(bridge.ic->ic_ifp);
+}
+
+int
+wlan_bridge_tx_raw(const uint8_t *frame, size_t len)
+{
+	int rc = wlan_bridge_tx_enqueue(frame, len);
+
+	if (rc < 0)
+		return rc;
+	wlan_bridge_tx_flush();
+	return rc;
 }
 
 /*

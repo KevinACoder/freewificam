@@ -233,6 +233,15 @@ CONFIG_H="$MOD/linuxko_config.h"
 	# (3.4 GB of pending URB buffers in 4 s).  The ko adapter reads it now,
 	# and the module parameter tx_inflight_max overrides it at load time.
 	echo "#define CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX ${TX_INFLIGHT_MAX:-16}"
+	# How many frames the ko netdev work hands the bridge before it opens the
+	# gate (W6-07).  One at a time is what made rtw88's USB layer build a
+	# 20 KB aggregate around a single 64-byte frame: the driver's work ran
+	# between two frames and always found a queue of one or two.  The batch
+	# is capped by the bridge's own 64-entry send queue.
+	echo "#define CONFIG_WLAN_KO_TX_BATCH ${TX_BATCH:-32}"
+	# How long the netdev holds a frame before its batch is opened.  Frames
+	# arrive one at a time; draining on arrival keeps the batch at one or two.
+	echo "#define CONFIG_WLAN_KO_TX_BATCH_US ${TX_BATCH_US:-1500}"
 	if [ "$WITH_DRIVER" = 1 ]; then
 		echo '#define CONFIG_WLAN_KO_DRIVER 1'
 	fi

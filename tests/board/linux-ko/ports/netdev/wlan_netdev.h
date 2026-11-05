@@ -23,7 +23,7 @@ struct wlan_netdev {
 	struct net_device	*dev;
 	struct sk_buff_head	txq;
 	spinlock_t		tx_lock;
-	struct work_struct	tx_work;
+	struct delayed_work	tx_work;
 	struct wireless_dev	wdev;	/* the cfg80211 WEXT path (wiphy->wext) */
 	struct wlan_wext	wext;
 };

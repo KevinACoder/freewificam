@@ -149,6 +149,37 @@ struct wlan_linux_hw {
 	 */
 	unsigned int		tx_handed;
 	unsigned int		tx_completed;
+	/*
+	 * What the driver asks for, and takes, per wake: __rtw_tx_work() reads
+	 * ieee80211_txq_get_depth() and then dequeues exactly that many frames
+	 * (rtw88/tx.c:656).  depth_frames/depth_calls is therefore the batch size
+	 * that reaches the HCI queue, and the aggregate the USB layer builds from
+	 * it; a mean of one or two means the 20 KB aggregate buffer carries a
+	 * single 64-byte frame and the URB round trip is paid per frame.
+	 */
+	unsigned int		tx_depth_calls;
+	unsigned int		tx_depth_frames;
+	unsigned int		tx_depth_max;
+	/*
+	 * Batched handoff: while tx_batch is set, seam_tx() enqueues but leaves
+	 * the driver's wake to the caller (wlan_adapter_tx_kick), so the whole
+	 * batch is in the txq when the driver's work finally runs.
+	 */
+	unsigned int		tx_batch;
+	unsigned int		tx_wake_pending;
+	/* protects tx_batch/tx_wake_pending/tx_batch_txq[]: the netdev work and
+	 * the completion pump run on different CPUs and both open windows */
+	spinlock_t		tx_batch_lock;
+	/*
+	 * Every txq that received a frame during the current batch.  The wake is
+	 * one per batch, so it has to wake all of them: a batch that carries
+	 * data frames and a management frame fills two queues, and waking only
+	 * the last one leaves the other's frames in their slot with no driver
+	 * work scheduled to come for them (measured 2026-11-05: duplex cell
+	 * stalled halfway and the station fell off the AP).
+	 */
+	struct ieee80211_txq	*tx_batch_txq[8];
+	unsigned int		tx_batch_txqs;
 };
 
 /* the driver-half seam vtable (tests/board/linux-ko/ports/adapter/wlan_seam_adapter_linux.c) */
@@ -182,6 +213,7 @@ int wlan_tx_queue_stopped(struct ieee80211_hw *hw);
  * the line, and rtw88's USB path will not raise a queue wake. */
 unsigned int wlan_adapter_tx_inflight(struct ieee80211_hw *hw);
 void wlan_adapter_tx_pump(struct ieee80211_hw *hw);
+void wlan_adapter_tx_kick(struct ieee80211_hw *hw);
 
 /* a received frame, from ieee80211_rx_irqsafe() to the net80211 bridge */
 void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb);

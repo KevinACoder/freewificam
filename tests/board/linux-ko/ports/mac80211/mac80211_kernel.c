@@ -128,6 +128,7 @@ struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
 	skb_queue_head_init(&w->tx_q);
 	INIT_WORK(&w->rx_work, wlan_rx_work);
 	INIT_WORK(&w->tx_work, wlan_tx_work);
+	spin_lock_init(&w->tx_batch_lock);
 	INIT_WORK(&w->scan_work, wlan_scan_work);
 	/* the driver's queue wake: the work that delivers it to the bridge */
 	wlan_tx_wake_init(w);

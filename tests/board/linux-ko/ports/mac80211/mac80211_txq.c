@@ -174,6 +174,7 @@ void ieee80211_txq_get_depth(struct ieee80211_txq *txq,
     unsigned long *frame_cnt, unsigned long *byte_cnt)
 {
 	struct wlan_txq_slot *slot;
+	struct wlan_linux_hw *w = wlan_hw_single();
 	struct sk_buff *skb;
 	unsigned long flags, frames = 0, bytes = 0;
 
@@ -186,6 +187,13 @@ void ieee80211_txq_get_depth(struct ieee80211_txq *txq,
 		}
 	}
 	spin_unlock_irqrestore(&wlan_txq_lock, flags);
+	if (frames > 0 && w != NULL) {
+		w->tx_depth_calls++;
+		w->tx_depth_frames += frames;
+		if (frames > w->tx_depth_max) {
+			w->tx_depth_max = frames;
+		}
+	}
 	if (frame_cnt != NULL) {
 		*frame_cnt = frames;
 	}

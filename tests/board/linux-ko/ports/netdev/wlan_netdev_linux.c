@@ -52,12 +52,40 @@
  */
 #define WLAN_NETDEV_TX_LOW	(WLAN_NETDEV_TX_MAX - 64)
 
+/*
+ * Frames handed to the bridge in one go.  Each frame used to go through
+ * wlan_bridge_tx_raw() on its own, and the drain that follows wakes the
+ * driver's txq work immediately; the work then found one frame, and rtw88's
+ * USB layer built a 20 KB aggregate around a 64-byte frame and paid a URB
+ * round trip for it (measured: 3.6k frames/s one-way vs 21.5k on the native
+ * kernel, 11 KB of memory per in-flight frame).  Queueing the batch first and
+ * opening the gate once lets __rtw_tx_work() take them all, so the aggregate
+ * is filled.  The cap is the bridge's own 64-entry send queue.
+ */
+#ifndef CONFIG_WLAN_KO_TX_BATCH
+#define CONFIG_WLAN_KO_TX_BATCH 32
+#endif
+/*
+ * How long a frame may wait for its batch.  Frames arrive from the stack one at
+ * a time, so a queue that is drained the moment it is non-empty never holds
+ * more than the one or two frames that happen to overlap: the driver then takes
+ * one or two per wake and the USB aggregate is built around a 64-byte frame.
+ * Waiting a fixed slice lets the queue reach CONFIG_WLAN_KO_TX_BATCH, at the
+ * cost of that much latency per batch (throughput cells do not care; the link
+ * does when the queue is nearly empty).
+ */
+#ifndef CONFIG_WLAN_KO_TX_BATCH_US
+#define CONFIG_WLAN_KO_TX_BATCH_US 1500
+#endif
+
 static void wlan_netdev_tx_work(struct work_struct *work)
 {
-	struct wlan_netdev *wn = container_of(work, struct wlan_netdev, tx_work);
+	struct wlan_netdev *wn = container_of(work, struct wlan_netdev,
+	    tx_work.work);
 	struct net_device *dev = wn->dev;
+	struct wlan_linux_hw *w = wlan_hw_single();
 	struct sk_buff *skb;
-	int rc;
+	int rc, sent = 0;
 
 	/*
 	 * The bridge takes its serializer around every driver entry; this work
@@ -66,7 +94,8 @@ static void wlan_netdev_tx_work(struct work_struct *work)
 	 * arrives as a second drain path on its own work.
 	 */
 	wlan_port_serializer_lock();
-	while ((skb = skb_dequeue(&wn->txq)) != NULL) {
+	while (sent < CONFIG_WLAN_KO_TX_BATCH &&
+	    (skb = skb_dequeue(&wn->txq)) != NULL) {
 		u64 prof_t0 = wlan_ko_prof_begin();
 
 #ifdef CONFIG_WLAN_KO_PROF
@@ -76,7 +105,7 @@ static void wlan_netdev_tx_work(struct work_struct *work)
 			skb->tstamp = 0;
 		}
 #endif
-		rc = wlan_bridge_tx_raw(skb->data, skb->len);
+		rc = wlan_bridge_tx_enqueue(skb->data, skb->len);
 		if (rc < 0) {
 			/*
 			 * Not a drop: the bridge's send queue is full, so the
@@ -96,11 +125,42 @@ static void wlan_netdev_tx_work(struct work_struct *work)
 		dev->stats.tx_packets++;
 		dev->stats.tx_bytes += skb->len;
 		dev_kfree_skb(skb);
+		sent++;
+	}
+	/*
+	 * Open the gate once for the batch: seam_tx() defers its wake_tx_queue
+	 * while tx_batch is set, so the driver's work runs after the whole
+	 * batch is in its queue instead of once per frame.
+	 */
+	if (sent > 0) {
+		if (w != NULL) {
+			unsigned long flags;
+
+			spin_lock_irqsave(&w->tx_batch_lock, flags);
+			w->tx_batch++;
+			spin_unlock_irqrestore(&w->tx_batch_lock, flags);
+			wlan_bridge_tx_flush();
+			spin_lock_irqsave(&w->tx_batch_lock, flags);
+			w->tx_batch--;
+			spin_unlock_irqrestore(&w->tx_batch_lock, flags);
+			wlan_adapter_tx_kick(&w->hw);
+		} else {
+			wlan_bridge_tx_flush();
+		}
 	}
 	wlan_port_serializer_unlock();
-	if (skb_queue_len(&wn->txq) < WLAN_NETDEV_TX_LOW ||
-	    skb_queue_empty(&wn->txq))
-		netif_wake_queue(dev);
+	/*
+	 * The batch cap can leave frames behind, and so can a full bridge
+	 * queue: re-arm the work so the rest keeps moving, and open the device
+	 * queue again.  It has to be opened even when frames remain - the
+	 * seam's queue_ready() reads this queue's stopped flag, so a queue left
+	 * stopped also closes the gate into the driver (measured 2026-11-05:
+	 * 15 frames handed, then nothing moved at all).
+	 */
+	if (!skb_queue_empty(&wn->txq)) {
+		mod_delayed_work(system_wq, &wn->tx_work, 0);
+	}
+	netif_wake_queue(dev);
 }
 
 static netdev_tx_t wlan_netdev_start_xmit(struct sk_buff *skb,
@@ -139,7 +199,19 @@ static netdev_tx_t wlan_netdev_start_xmit(struct sk_buff *skb,
 	wlan_ko_prof_depth(WLAN_KO_PROF_Q_NETDEV_TX, 1);
 	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_ENQ);
 	wlan_ko_prof_end(WLAN_KO_PROF_TX_XMIT, prof_t0);
-	schedule_work(&wn->tx_work);
+	/*
+	 * Fill a batch before opening the gate: one immediate run when the queue
+	 * already holds a batch, otherwise one delayed run that the following
+	 * frames join.  The delay is not re-armed per frame (that would push the
+	 * deadline out forever under a steady stream), so the first frame of a
+	 * batch sets the deadline and the rest ride along.
+	 */
+	if (skb_queue_len(&wn->txq) >= CONFIG_WLAN_KO_TX_BATCH) {
+		mod_delayed_work(system_wq, &wn->tx_work, 0);
+	} else if (!delayed_work_pending(&wn->tx_work)) {
+		schedule_delayed_work(&wn->tx_work,
+		    usecs_to_jiffies(CONFIG_WLAN_KO_TX_BATCH_US));
+	}
 	return NETDEV_TX_OK;
 }
 
@@ -211,7 +283,7 @@ int wlan_netdev_create(struct ieee80211_hw *hw)
 	wn->dev = dev;
 	skb_queue_head_init(&wn->txq);
 	spin_lock_init(&wn->tx_lock);
-	INIT_WORK(&wn->tx_work, wlan_netdev_tx_work);
+	INIT_DELAYED_WORK(&wn->tx_work, wlan_netdev_tx_work);
 	dev->netdev_ops = &wlan_netdev_ops;
 	strscpy(dev->name, "wlan%d", sizeof(dev->name));
 	SET_NETDEV_DEV(dev, hw->wiphy->dev.parent);
@@ -250,7 +322,7 @@ void wlan_netdev_tx_kick(void)
 	if (dev == NULL)
 		return;
 	wn = netdev_priv(dev);
-	schedule_work(&wn->tx_work);
+	mod_delayed_work(system_wq, &wn->tx_work, 0);
 }
 
 void wlan_netdev_destroy(void)
@@ -267,7 +339,7 @@ void wlan_netdev_destroy(void)
 	wlan_bridge_set_data_rx(NULL, NULL);
 	wn = netdev_priv(dev);
 	unregister_netdev(dev);
-	cancel_work_sync(&wn->tx_work);
+	cancel_delayed_work_sync(&wn->tx_work);
 	while ((skb = skb_dequeue(&wn->txq)) != NULL) {
 		dev_kfree_skb(skb);
 	}
