@@ -493,20 +493,17 @@ ieee80211_tx_dequeue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 	if (txq == NULL)
 		return NULL;
 	lkpi_txq_setup();
-	for (;;) {
-		spin_lock_irqsave(&eng.lock, flags);
-		t = lkpi_txq_find_locked(txq);
-		if (t != NULL) {
-			skb = lkpi_skb_do_dequeue(&t->queue);
-			if (skb != NULL)
-				t->bytes = (t->bytes >= skb->len) ?
-				    t->bytes - skb->len : 0;
-		} else {
-			skb = NULL;
-		}
-		spin_unlock_irqrestore(&eng.lock, flags);
-		if (skb == NULL)
-			return NULL;
+	spin_lock_irqsave(&eng.lock, flags);
+	t = lkpi_txq_find_locked(txq);
+	if (t != NULL) {
+		skb = lkpi_skb_do_dequeue(&t->queue);
+		if (skb != NULL)
+			t->bytes = (t->bytes >= skb->len) ?
+			    t->bytes - skb->len : 0;
+	}
+	spin_unlock_irqrestore(&eng.lock, flags);
+	if (skb == NULL)
+		return NULL;
 	/*
 	 * The interface records the queue's vif on the frame before the driver
 	 * sees it (tx.c:3761 in the txq path, tx.c:1761 in the .tx path); the
@@ -550,19 +547,22 @@ ieee80211_tx_dequeue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 			    d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
 		}
 		/*
-		 * The frame has not been through the driver's push yet: it came
-		 * straight out of the queue, so the queue owns it and may free
-		 * it.  Take the next frame instead of returning NULL - the old
-		 * shape left the driver's list entry already removed and every
-		 * frame behind this one stranded (2026-11-04 S2C stall: txq
-		 * stuck at 130, OUT endpoint idle) with the pool slots held.
+		 * Do not free here: a frame at exactly the driver's descriptor
+		 * size of headroom has already been through the driver's push
+		 * (its owner still holds it), and freeing a second queue entry
+		 * of it would hand the pool a live buffer.  Leaking one frame
+		 * is the cheap side of that trade; the count says how often.
+		 *
+		 * Returning NULL ends the driver's dequeue loop, and nothing
+		 * would come back for the frames behind this one: the queue then
+		 * holds them and its pool slots with them (the 2026-11-04 S2C
+		 * stall: txq stuck at 130, OUT endpoint idle).  Ask the port for
+		 * another wake so the drop costs one frame, not the queue.
 		 */
-		lkpi_skb_free(skb);
-		continue;
+		lkpi80211_tx_wake_defer(hw);
+		return NULL;
 	}
 	return skb;
-	}
-	return NULL;
 }
 
 struct sk_buff *
