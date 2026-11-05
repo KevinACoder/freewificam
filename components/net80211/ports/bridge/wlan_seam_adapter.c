@@ -1462,7 +1462,21 @@ static int
 up_ba_start(struct ieee80211_sta *sta, u16 tid, u16 timeout)
 {
 
+#if defined(CONFIG_WLAN_TX_BA) && CONFIG_WLAN_TX_BA
 	return wlan_tx_ba_start(adapter.hw, sta, tid, timeout);
+#else
+	/* the A/B arm (see below) */
+	/*
+	 * W-AGG-02 diagnostic arm: the port keeps its BA state machine out of
+	 * the path, so ieee80211_start_tx_ba_session() answers -EOPNOTSUPP and
+	 * the driver never sets RTW_TXQ_AMPDU.  One variable against the
+	 * aggregate arm: the air's "no frame" split from "aggregate is wrong".
+	 */
+	(void)sta;
+	(void)tid;
+	(void)timeout;
+	return -EOPNOTSUPP;
+#endif
 }
 
 static void

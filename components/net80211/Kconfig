@@ -10,6 +10,17 @@ config WLAN_RX_BA
 	  and the same -D twice (once as an assignment, once inside
 	  CONFIG_LEVERS); after the migration there is one source of truth.
 
+config WLAN_TX_BA
+	bool "TX block-ack state machine (port side)"
+	default y
+	help
+	  Compiles the port's TX block-ack state machine (wlan_tx_ba.c) and
+	  emits -DCONFIG_WLAN_TX_BA=1.  Off is a diagnostic arm, not a shape:
+	  ieee80211_start_tx_ba_session() answers -EOPNOTSUPP, the driver never
+	  sets RTW_TXQ_AMPDU, and every frame rides a single-frame URB.  Used by
+	  W-AGG-02 to separate "aggregation is wrong" from "the frame never got
+	  on the air" (aggregate arm) with one variable.
+
 config WLAN_SEAM_TX_BACKLOG_MAX
 	int "seam transmit burst bound (bulk-OUT transfers outstanding, 0 = off)"
 	default 0

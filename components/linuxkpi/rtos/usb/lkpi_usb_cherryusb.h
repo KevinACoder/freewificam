@@ -90,6 +90,22 @@ struct lkpi_usb_chusb_stats {
 
 void lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out);
 
+/* The bytes of one aggregated bulk-OUT transfer, taken at completion from the
+ * stage (the buffer the controller actually read).  Captured once, for the
+ * first transfer between the two sizes below, because the question is what a
+ * multi-frame buffer looks like on the wire and the console cannot be asked
+ * during a full-rate burst: the ledger path reads it later, at an anchor. */
+struct lkpi_usb_agg_snap {
+	unsigned int	valid;
+	unsigned int	len;		/* transfer buffer length */
+	unsigned int	act;		/* actual length */
+	int		err;
+	unsigned int	used;		/* bytes stored in buf */
+	uint8_t		buf[576];
+};
+
+void lkpi_usb_cherryusb_agg_snap(struct lkpi_usb_agg_snap *out);
+
 /*
  * "Is the device still there on the control pipe?" - asked after a bulk data
  * plane has stopped, and the one question that separates the three candidates

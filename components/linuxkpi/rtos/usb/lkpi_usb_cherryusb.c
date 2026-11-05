@@ -104,6 +104,14 @@ _Static_assert(CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE % LKPI_CHU_CACHE_LINE == 0,
 /* ------------------------------------------------------------------ */
 
 static struct lkpi_usb_chusb_stats chu_stats;
+static struct lkpi_usb_agg_snap chu_agg_snap;
+
+void
+lkpi_usb_cherryusb_agg_snap(struct lkpi_usb_agg_snap *out)
+{
+	if (out != NULL)
+		*out = chu_agg_snap;
+}
 
 void
 lkpi_usb_cherryusb_stats(struct lkpi_usb_chusb_stats *out)
@@ -612,6 +620,34 @@ chu_complete(void *arg, int nbytes)
 #endif
 	}
 	be->actual_length = err == 0 ? (uint32_t)nbytes : slot->urb.actual_length;
+	/*
+	 * The aggregated bulk-OUT's on-the-wire bytes, taken from the stage the
+	 * controller read and published once through the stats/ledger path (the
+	 * console cannot be asked during a full-rate burst).  RTOS-AGG-03 used
+	 * this to catch the aggregate head's TX-descriptor checksum (0x0300 where
+	 * 0x1f00 was due); the capture stays as the cheap way to prove what a
+	 * multi-frame transfer looks like before trusting any aggregation count.
+	 */
+	if (slot->urb.ep != NULL &&
+	    (slot->urb.ep->bEndpointAddress & USB_EP_DIR_IN) == 0U &&
+	    USB_GET_ENDPOINT_TYPE(slot->urb.ep->bmAttributes) ==
+	    USB_ENDPOINT_TYPE_BULK &&
+	    chu_agg_snap.valid == 0U && slot->stage != NULL) {
+		unsigned int len = err == 0 ? (unsigned int)nbytes :
+		    slot->urb.actual_length;
+
+		if (len > 200U && len < 1024U) {
+			unsigned int n = len < sizeof(chu_agg_snap.buf) ?
+			    len : (unsigned int)sizeof(chu_agg_snap.buf);
+
+			memcpy(chu_agg_snap.buf, slot->stage, n);
+			chu_agg_snap.len = len;
+			chu_agg_snap.act = slot->urb.actual_length;
+			chu_agg_snap.err = err;
+			chu_agg_snap.used = n;
+			chu_agg_snap.valid = 1U;
+		}
+	}
 	be->errorcode = err;
 	chu_slot_finish(slot, err);
 

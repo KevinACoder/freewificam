@@ -431,6 +431,40 @@ static void emit_usb(const char *tag)
 				   cs.probe_desc_fail, cs.probe_other_ok,
 				   cs.probe_other_fail);
 	}
+	/*
+	 * The one aggregated bulk-OUT buffer the seam kept, in hex.  The driver's
+	 * own dump cannot be relied on: the console takes ~9 ms per line, so a
+	 * burst that starts inside a heartbeat loses the first lines.  This rides
+	 * the anchor path instead (written past the log ring), and it is the only
+	 * host-side record of what the chip was handed - the Linux ko's usbmon is
+	 * its known answer.
+	 */
+	{
+		static int printed;
+		struct lkpi_usb_agg_snap as;
+
+		memset(&as, 0, sizeof(as));
+		lkpi_usb_cherryusb_agg_snap(&as);
+		if (as.valid && !printed) {
+			unsigned int o;
+
+			printed = 1;
+			MDK_ANCHOR("netio: aggbuf tag=%s len=%u act=%u err=%d n=%u\n",
+				   tag, as.len, as.act, as.err, as.used);
+			for (o = 0; o < as.used; o += 32) {
+				char hex[65];
+				unsigned int i;
+				unsigned int m = as.used - o < 32u ? as.used - o : 32u;
+
+				for (i = 0; i < m; i++)
+					snprintf(hex + i * 2u, 3, "%02x",
+						 as.buf[o + i]);
+				hex[m * 2u] = 0;
+				MDK_ANCHOR("netio: aggbuf tag=%s o=%u %s\n",
+					   tag, o, hex);
+			}
+		}
+	}
 }
 
 /* The socket-buffer supply, on its own so the boot heartbeat can print it
