@@ -397,6 +397,22 @@ static bool rtw_usb_tx_agg_skb(struct rtw_usb *rtwusb, struct sk_buff_head *list
 	struct sk_buff *skb_head;
 	struct sk_buff *skb_iter;
 	int agg_num = 0;
+
+	/*
+	 * W-AGG-02 probe: the chip's USB TX aggregation limit is programmed by
+	 * rtw_dmac_func_pre_enable (mac.c: REG_AUTO_LLT_V1[7:4] and +3).  If
+	 * that write did not stick, the chip discards every multi-frame bulk
+	 * buffer while single-frame ones (ping) still go out - read it back the
+	 * first time this path runs, so the value comes from the silicon.
+	 */
+	if (!rtwusb->agg_probe_done) {
+		rtwusb->agg_probe_done = true;
+		pr_info("rtw88_usb: aggprobe llt=%02x agg=%02x chk1=%02x chip=%d\n",
+			rtw_read8(rtwdev, REG_AUTO_LLT_V1),
+			rtw_read8(rtwdev, REG_AUTO_LLT_V1 + 3),
+			rtw_read8(rtwdev, REG_TXDMA_OFFSET_CHK + 1),
+			(int)rtwdev->chip->usb_tx_agg_desc_num);
+	}
 	unsigned int align_next = 0;
 	u8 qsel;
 	int ret;

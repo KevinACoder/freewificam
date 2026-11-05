@@ -30,7 +30,15 @@
 
 #define RTW_USB_PACKET_OFFSET_SZ	8
 #define RTW_USB_MAX_XMITBUF_SZ		(1024 * 20)
-#define RTW_USB_MAX_RECVBUF_SZ		32768
+/*
+ * W-AGG-02 EHCI arm: the board's EHCI port completes a bulk transfer only
+ * when one qTD covers it (port/ehci/usb_hc_ehci.c: five 4 KiB pages, i.e.
+ * <= 20 KiB from the buffer's own page offset); a longer buffer is chained
+ * and the chain's asynchronous completion never reaches the driver (the
+ * port's recorded >16 KiB bulk defect).  Linux's EHCI splits it for the
+ * driver; this port does not, so the receive URB stays inside one qTD.
+ */
+#define RTW_USB_MAX_RECVBUF_SZ		20480
 
 #define RTW_USB_RECVBUFF_ALIGN_SZ	8
 
@@ -73,6 +81,7 @@ struct rtw_usb {
 	u8 pipe_interrupt;
 	u8 pipe_in;
 	u8 out_ep[RTW_USB_EP_MAX];
+	bool agg_probe_done;
 	int qsel_to_ep[TX_DESC_QSEL_MAX];
 
 	struct workqueue_struct *txwq, *rxwq;
