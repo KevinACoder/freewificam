@@ -454,8 +454,16 @@ SHELL_APP_SRCS :=
 CHERRYSH_SRCS :=
 endif
 
+# -fno-strict-aliasing is the kernel's own contract and the imported driver is
+# written under it: fill_txdesc_checksum_common() (wireless-drivers/rtw88/tx.h)
+# zeroes a __le32 field and then XORs the same bytes through a __le16 pointer,
+# which is exactly the type-punning Linux compiles with this flag.  Without it
+# (-O2, gcc 13) the XOR reads the pre-zeroing word: the aggregate head's TX
+# descriptor checksum comes out 0x0300 instead of 0x1f00 while every member's
+# stays right, and the chip drops the whole multi-frame URB
+# (runs/iterations/0.0.4/2026-11-05-RTOS-AGG-03).
 BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra \
-	-ffreestanding -fno-builtin -fno-stack-protector \
+	-ffreestanding -fno-builtin -fno-stack-protector -fno-strict-aliasing \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	$(PROFILE_CFLAGS) \
 	-ffunction-sections -fdata-sections \

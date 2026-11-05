@@ -73,8 +73,16 @@ RTW88_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 # empty stubs.
 RTW88_DRV_CONFIG :=
 
+# -fno-strict-aliasing: the imported driver is written under the kernel's own
+# flag contract, and one place depends on it.  fill_txdesc_checksum_common()
+# (wireless-drivers/rtw88/tx.h) zeroes a __le32 field and then XORs the same 32
+# bytes through a __le16 pointer; at -O2 with strict aliasing the XOR reads the
+# word from before the zeroing.  The aggregate head's TX descriptor checksum
+# then comes out 0x0300 instead of 0x1f00 while every member's stays right, and
+# the chip drops the whole multi-frame URB - the "aggregation works host-side
+# but only 1 frame per URB is delivered" shape of RTOS-AGG-02/03.
 RTW88_DRV_CFLAGS := -std=c11 -O2 -Wall \
-	-ffreestanding -fno-builtin -fno-stack-protector \
+	-ffreestanding -fno-builtin -fno-stack-protector -fno-strict-aliasing \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	$(RTW88_DRV_CONFIG) $(RTW88_SKB_DEFS) \
@@ -134,13 +142,21 @@ endif
 # the case itself is in the component's lwIP list.  The stack is added here, the
 # same shape rtl8xxxu.mk uses, because it is a third-party tree rather than part
 # of the wireless component.
+# A profile that selects both cases gets the stack from the netio list above:
+# that list is this one plus the server and the case, and a source compiled
+# into the same object path twice is a duplicate symbol at link time, not a
+# second copy (2026-11-05, the AGG-02 arm is the first both-cases profile).
 ifneq ($(filter rtw88_net,$(CASES)),)
+ifeq ($(filter rtw88_netio,$(CASES)),)
 RTW88_LWIP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
 	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
 	$(LWIP_STACK_SRCS)
 RTW88_LWIP_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	-I$(RTW88_NPORT)/bridge
+else
+RTW88_LWIP_SRCS :=
+endif
 else
 RTW88_LWIP_SRCS :=
 endif
