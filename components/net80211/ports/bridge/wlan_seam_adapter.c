@@ -505,6 +505,18 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	lkpi_skb_reserve(skb, headroom);
 	p = lkpi_skb_put(skb, (unsigned int)len);
 	memcpy(p, frame, len);
+	if (len >= 500) {
+		static unsigned trace_n;
+
+		if (trace_n < 6) {
+			trace_n++;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "seam: tx len=%u hr=%u first="
+			    "%02x %02x %02x %02x %02x %02x %02x %02x skb=%p\n",
+			    (unsigned)len, skb_headroom(skb), p[0], p[1], p[2],
+			    p[3], p[4], p[5], p[6], p[7], skb);
+		}
+	}
 
 	info = (struct ieee80211_tx_info *)skb->cb;
 	memset(info, 0, sizeof(*info));

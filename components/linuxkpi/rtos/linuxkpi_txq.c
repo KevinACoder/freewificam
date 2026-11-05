@@ -307,6 +307,22 @@ lkpi_txq_enqueue(struct ieee80211_txq *txq, struct sk_buff *skb)
 
 	if (txq == NULL || skb == NULL)
 		return -EINVAL;
+	if (skb->len >= 500) {
+		static unsigned trace_n;
+
+		if (trace_n < 6) {
+			const unsigned char *d = skb->data;
+
+			trace_n++;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "txq: enq len=%u hr=%u first="
+			    "%02x %02x %02x %02x %02x %02x %02x %02x "
+			    "skb=%p txq=%p\n",
+			    (unsigned)skb->len, skb_headroom(skb),
+			    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+			    skb, txq);
+		}
+	}
 	lkpi_txq_setup();
 	spin_lock_irqsave(&eng.lock, flags);
 	t = lkpi_txq_find_locked(txq);
@@ -513,6 +529,22 @@ ieee80211_tx_dequeue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 	 */
 	info = (struct ieee80211_tx_info *)skb->cb;
 	info->control.vif = txq->vif;
+	if (skb->len >= 500) {
+		static unsigned trace_n;
+
+		if (trace_n < 6) {
+			const unsigned char *d = skb->data;
+
+			trace_n++;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "txq: deq len=%u hr=%u first="
+			    "%02x %02x %02x %02x %02x %02x %02x %02x "
+			    "skb=%p\n",
+			    (unsigned)skb->len, skb_headroom(skb),
+			    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+			    skb);
+		}
+	}
 	/*
 	 * The driver takes the frame from here straight into its own transmit
 	 * path (rtw88's txq_push -> rtw_txq_push_skb -> hci tx_write), which

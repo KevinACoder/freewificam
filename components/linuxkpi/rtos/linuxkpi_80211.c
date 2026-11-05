@@ -2673,6 +2673,22 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		return;
 	ctx = LKPI80211_CTX(hw);
 	lkpi_tx_ctx = ctx;
+	if (skb->len >= 500) {
+		static unsigned trace_n;
+
+		if (trace_n < 6) {
+			const unsigned char *d = skb->data;
+
+			trace_n++;
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi80211: tx len=%u hr=%u first="
+			    "%02x %02x %02x %02x %02x %02x %02x %02x "
+			    "ret=%p skb=%p\n",
+			    (unsigned)skb->len, skb_headroom(skb),
+			    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+			    __builtin_return_address(0), skb);
+		}
+	}
 	/*
 	 * Every frame that reaches this entry is about to be handed to the
 	 * driver's transmit op, which pushes its own descriptor on and declares

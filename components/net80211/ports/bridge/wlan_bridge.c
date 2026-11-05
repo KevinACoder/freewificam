@@ -3264,6 +3264,17 @@ wlan_bridge_tx_enqueue(const uint8_t *frame, size_t len)
 	ifp = bridge.ic->ic_ifp;
 	if (ifp == NULL)
 		return -ENODEV;
+	if (len >= 500) {
+		static unsigned trace_n;
+
+		if (trace_n < 6) {
+			trace_n++;
+			wlan_osal_log("wlan: bridge tx_enqueue len=%u first="
+			    "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+			    (unsigned)len, frame[0], frame[1], frame[2], frame[3],
+			    frame[4], frame[5], frame[6], frame[7]);
+		}
+	}
 	/* the driver's backpressure reaches the producer here: a full send
 	 * queue is a "wait", not a "drop" */
 	if (ifp->if_snd.ifq_len >= WLAN_BRIDGE_TXQ_CAP)
