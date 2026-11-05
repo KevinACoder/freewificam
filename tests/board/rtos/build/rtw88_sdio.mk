@@ -76,7 +76,13 @@ RTW88_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 # an empty unit; the header's stub is what main.c calls).
 RTW88_DRV_CONFIG :=
 
-RTW88_DRV_CFLAGS := -std=c11 -O2 -Wall \
+# Optimisation from the profile, language semantics from KCONTRACT_CFLAGS: the
+# same contract the linux-ko arm gets from KBUILD_CFLAGS.  The SDIO path also
+# calls rtw_tx_fill_txdesc_checksum(), but on a freshly memset descriptor, so it
+# does not exercise the type punning - the flag set stays identical anyway.
+# tools/check-build-contract.sh fails the image if this set stops deriving.
+RTW88_DRV_CFLAGS := -std=c11 $(OPT) -Wall \
+	$(KCONTRACT_CFLAGS) \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \

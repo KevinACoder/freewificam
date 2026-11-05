@@ -67,7 +67,11 @@ RTW89_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 # The chip and bus selection the kernel's Kconfig resolves for the 8851BU.
 RTW89_DRV_CONFIG :=
 
-RTW89_DRV_CFLAGS := -std=c11 -O2 -Wall \
+# Optimisation from the profile, language semantics from KCONTRACT_CFLAGS (see
+# build/Makefile); tools/check-build-contract.sh fails the image if this set
+# stops deriving from it.
+RTW89_DRV_CFLAGS := -std=c11 $(OPT) -Wall \
+	$(KCONTRACT_CFLAGS) \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \

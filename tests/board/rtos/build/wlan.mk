@@ -134,8 +134,10 @@ WLAN_DRV_WARN := -Wall -Wno-address-of-packed-member -Wno-maybe-uninitialized \
 	-Wno-unused-parameter -Wno-type-limits -Wno-pointer-sign -Wno-unused \
 	-Wno-unused-function -Wno-unused-variable -Wno-array-bounds
 
-WLAN_DRV_CFLAGS := -std=c11 -O2 -g3 -ffreestanding -fno-builtin \
-	-fno-stack-protector -fno-strict-aliasing -fms-extensions \
+# The vendor tree is kernel code too: same language contract, same optimisation
+# level as the rest of the image (KCONTRACT_CFLAGS, $(OPT) - see build/Makefile).
+WLAN_DRV_CFLAGS := -std=c11 $(OPT) -g3 $(KCONTRACT_CFLAGS) -ffreestanding \
+	-fno-builtin -fno-stack-protector -fms-extensions \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections $(WLAN_DRV_WARN) \
 	-I$(LKPI) -I$(LKPI)/include -I$(LKPI)/sdio \

@@ -21,7 +21,7 @@ MATRIX_PROFILES ?= net-netio-raw-tx256 rtl8xxxu-8723bu-netio-ar-ht20-ba \
 	rtw89-8851bu-ehci-bringup firefly-v2-sdio-mci pcie-7260 uvc rtos-shell
 
 .PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images libs sdk host host-test digest check case-list-check dump-vars clean distclean \
-	check-no-d check-config-header matrix trimcheck sdk-check rk3568_ci firefly_v1_ci firefly_v2_ci
+	check-no-d check-config-header check-build-contract matrix trimcheck sdk-check rk3568_ci firefly_v1_ci firefly_v2_ci
 
 help:
 	@printf '%s\n' \
@@ -89,6 +89,13 @@ savedefconfig:
 check-no-d: config
 	@$(ROOT)/tools/build/check-no-d.sh $(MATRIX_PROFILES)
 
+# The compiler-semantics contract (tools/build/check-build-contract.sh): one
+# definition, every C flags set derives from it, no set pins its own -O level.
+# Runs before every image because a violation is a language change, not a
+# warning - RTOS-AGG-03 was exactly this, silently, for a whole afternoon.
+check-build-contract:
+	@$(ROOT)/tools/build/check-build-contract.sh
+
 check-config-header: config
 	@$(PYTHON) $(ROOT)/tools/build/check-config-header.py $(GEN_DIR)/freewificam_config.h
 
@@ -106,14 +113,14 @@ trimcheck: config
 	@$(ROOT)/tools/build/check-trim.sh $(PROFILE)
 
 # The build targets print the dev-loop elapsed time (AGENTS 1.3).
-image: config
+image: check-build-contract config
 	@start=$$(date +%s); \
 	$(MAKE) -C $(BUILD_MK) -j$(JOBS) image PROFILE=$(PROFILE) || { \
 		rc=$$?; echo "elapsed: $$(( $$(date +%s) - start ))s (image failed)"; \
 		exit $$rc; }; \
 	echo "elapsed: $$(( $$(date +%s) - start ))s (image, profile=$(PROFILE), jobs=$(JOBS))"
 
-images: config
+images: check-build-contract config
 	@start=$$(date +%s); \
 	$(MAKE) -C $(BUILD_MK) -j$(JOBS) images PROFILE=$(PROFILE) || { \
 		rc=$$?; echo "elapsed: $$(( $$(date +%s) - start ))s (images failed)"; \

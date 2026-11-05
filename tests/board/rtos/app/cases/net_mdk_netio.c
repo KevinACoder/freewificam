@@ -345,6 +345,40 @@ static void emit_tx_census(const char *tag)
 		   (unsigned)wakes);
 }
 
+/*
+ * The aggregate head's TX descriptor checksum, recomputed from the bytes that
+ * actually left the host.  This is the runtime half of the build contract: the
+ * value is computed by fill_txdesc_checksum_common() (rtw88 tx.h), which zeroes
+ * the checksum word and XORs the descriptor's first 32 bytes as 16 little-
+ * endian u16 words.  A build that miscompiles that helper - the RTOS-AGG-03
+ * shape, strict aliasing without the kernel's -fno-strict-aliasing - writes a
+ * value that this recomputation does not reproduce, and the chip then drops the
+ * whole multi-frame URB.  Checking the wire bytes here catches that regardless
+ * of which flag a future build loses.
+ *
+ * Returns the field's value and stores the recomputation in *calc; the caller
+ * compares.  Only meaningful for a multi-frame head (rtw_usb_fill_tx_checksum
+ * runs only when agg_num > 1); a single-frame URB's checksum is not rewritten
+ * on this path and is not covered.
+ */
+static unsigned int agg_head_checksum(const unsigned char *buf, unsigned int len,
+				      unsigned int *calc)
+{
+	unsigned int field, x = 0, i;
+
+	field = (unsigned int)buf[28] | ((unsigned int)buf[29] << 8);
+	for (i = 0; i < 16u && (i + 1u) * 2u <= len; i++) {
+		unsigned int w = (unsigned int)buf[i * 2u] |
+				 ((unsigned int)buf[i * 2u + 1u] << 8);
+
+		if (i == 14u)	/* the checksum word itself is zeroed first */
+			w = 0;
+		x ^= w;
+	}
+	*calc = x & 0xffffu;
+	return field;
+}
+
 /* The controller's own view of the transmit leg, on its own for the same
  * reason: a cell that stalls needs "what is still in flight at the device"
  * beside "what the stack still holds". */
@@ -462,6 +496,23 @@ static void emit_usb(const char *tag)
 				hex[m * 2u] = 0;
 				MDK_ANCHOR("netio: aggbuf tag=%s o=%u %s\n",
 					   tag, o, hex);
+			}
+			/*
+			 * The known-answer check, on the same bytes: the head
+			 * descriptor's checksum must equal the XOR of its own
+			 * first 32 bytes with that word zeroed.  A MISMATCH here
+			 * is the RTOS-AGG-03 failure reproduced from the wire
+			 * side, and it is what the chip acts on.
+			 */
+			if (as.used >= 32u && as.buf[31] >= 2u) {
+				unsigned int field, calc;
+
+				field = agg_head_checksum(as.buf, as.used,
+							  &calc);
+				MDK_ANCHOR("netio: agghdr tag=%s agg=%u "
+					   "field=0x%04x calc=0x%04x %s\n",
+					   tag, as.buf[31], field, calc,
+					   field == calc ? "ok" : "MISMATCH");
 			}
 		}
 	}

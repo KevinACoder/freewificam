@@ -91,7 +91,7 @@ endif
 # The image's own C surface (the iwl7260 case, the pcie case and the board
 # drivers) needs the same Linux face the linuxkpi units compile against: the
 # case includes linuxkpi_core.h/wlan_bridge.h and the driver's public headers.
-IWL_CASE_CFLAGS := -std=gnu11   \
+IWL_CASE_EXTRA := -std=gnu11   \
 	$(IWL_KPI_INCLUDES)
-BASE_CFLAGS += $(IWL_CASE_CFLAGS)
-CFLAGS += $(IWL_CASE_CFLAGS)
+BASE_CFLAGS += $(IWL_CASE_EXTRA)
+CFLAGS += $(IWL_CASE_EXTRA)

@@ -73,16 +73,18 @@ RTW88_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 # empty stubs.
 RTW88_DRV_CONFIG :=
 
-# -fno-strict-aliasing: the imported driver is written under the kernel's own
-# flag contract, and one place depends on it.  fill_txdesc_checksum_common()
-# (wireless-drivers/rtw88/tx.h) zeroes a __le32 field and then XORs the same 32
-# bytes through a __le16 pointer; at -O2 with strict aliasing the XOR reads the
-# word from before the zeroing.  The aggregate head's TX descriptor checksum
-# then comes out 0x0300 instead of 0x1f00 while every member's stays right, and
-# the chip drops the whole multi-frame URB - the "aggregation works host-side
-# but only 1 frame per URB is delivered" shape of RTOS-AGG-02/03.
-RTW88_DRV_CFLAGS := -std=c11 -O2 -Wall \
-	-ffreestanding -fno-builtin -fno-stack-protector -fno-strict-aliasing \
+# Optimisation from the profile, language semantics from KCONTRACT_CFLAGS
+# (build/Makefile).  The one place this tree depends on it is
+# fill_txdesc_checksum_common() (wireless-drivers/rtw88/tx.h): it zeroes a
+# __le32 field and then XORs the same 32 bytes through a __le16 pointer, and at
+# -O2 with strict aliasing the XOR reads the word from before the zeroing.  The
+# aggregate head's TX descriptor checksum then comes out 0x0300 instead of
+# 0x1f00 while every member's stays right, and the chip drops the whole
+# multi-frame URB - the "aggregation works host-side but only 1 frame per URB is
+# delivered" shape of RTOS-AGG-02/03.
+RTW88_DRV_CFLAGS := -std=c11 $(OPT) -Wall \
+	$(KCONTRACT_CFLAGS) \
+	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \
 	$(RTW88_DRV_CONFIG) $(RTW88_SKB_DEFS) \

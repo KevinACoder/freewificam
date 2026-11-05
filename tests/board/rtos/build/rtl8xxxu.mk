@@ -113,9 +113,12 @@ RTL8XXXU_KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	$(RTL8XXXU_KPI_INCLUDES)
 
 # The driver's own flag world: the freestanding set the reference image compiled
-# these nine units with (and the linux-ko arm builds them with the kernel's
-# equivalent).  No Kconfig define: the chip table selects the fileops.
-RTL8XXXU_DRV_CFLAGS := -std=c11 -O2 -Wall \
+# these nine units with.  The optimisation level comes from the profile and the
+# language-semantics flags from KCONTRACT_CFLAGS (build/Makefile) - the same
+# contract the linux-ko arm gets from the kernel's KBUILD_CFLAGS; see
+# tools/check-build-contract.sh, which fails the image if either stops holding.
+RTL8XXXU_DRV_CFLAGS := -std=c11 $(OPT) -Wall \
+	$(KCONTRACT_CFLAGS) \
 	-ffreestanding -fno-builtin -fno-stack-protector \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	-ffunction-sections -fdata-sections \

@@ -454,16 +454,27 @@ SHELL_APP_SRCS :=
 CHERRYSH_SRCS :=
 endif
 
-# -fno-strict-aliasing is the kernel's own contract and the imported driver is
-# written under it: fill_txdesc_checksum_common() (wireless-drivers/rtw88/tx.h)
-# zeroes a __le32 field and then XORs the same bytes through a __le16 pointer,
-# which is exactly the type-punning Linux compiles with this flag.  Without it
-# (-O2, gcc 13) the XOR reads the pre-zeroing word: the aggregate head's TX
-# descriptor checksum comes out 0x0300 instead of 0x1f00 while every member's
-# stays right, and the chip drops the whole multi-frame URB
-# (runs/iterations/0.0.4/2026-11-05-RTOS-AGG-03).
+# The kernel's compiler-semantics contract, in one place.  Every imported
+# driver tree in this build was written under Linux's KBUILD_CFLAGS, which
+# switches these optimisations off for the whole tree; a tree compiled without
+# them is a different language.  One place depends on it in a way that shows on
+# the wire: fill_txdesc_checksum_common() (wireless-drivers/rtw88/tx.h) zeroes
+# a __le32 field and then XORs the same bytes through a __le16 pointer.  With
+# strict aliasing (-O2, gcc 13) the zeroing is dead-stored and the XOR reads
+# the pre-zeroing word: the aggregate head's TX descriptor checksum comes out
+# 0x0300 instead of 0x1f00 while every member's stays right, and the chip drops
+# the whole multi-frame URB (runs/iterations/0.0.4/2026-11-05-RTOS-AGG-03).
+#
+# A missing flag here is not a tuning knob: it changes the meaning of the
+# imported code.  So the list lives once, every C flags set below derives from
+# it, and tools/check-build-contract.sh fails the image when a new set stops
+# deriving from it or pins its own -O level.  The runtime half of the same
+# guarantee is the aggregate-head checksum self-check in the netio case, which
+# recomputes the checksum from the bytes that actually left the host.
+KCONTRACT_CFLAGS := -fno-strict-aliasing -fno-strict-overflow \
+	-fno-delete-null-pointer-checks
 BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra \
-	-ffreestanding -fno-builtin -fno-stack-protector -fno-strict-aliasing \
+	-ffreestanding -fno-builtin -fno-stack-protector $(KCONTRACT_CFLAGS) \
 	-march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics \
 	$(PROFILE_CFLAGS) \
 	-ffunction-sections -fdata-sections \
