@@ -45,6 +45,7 @@
 #include "../osal/wlan_osal.h"
 #include "wlan_bridge.h"
 #include "wlan_rx_ba.h"
+#include "wlan_tx_ba.h"
 
 #include "components/linuxkpi/linuxkpi_80211.h"
 #include "components/linuxkpi/fw_registry.h"
@@ -1365,6 +1366,101 @@ up_ba_deliver(void *arg, const uint8_t *frame, size_t len,
 }
 
 static int
+up_ba_ampdu(void *arg, enum ieee80211_ampdu_mlme_action action, u16 tid,
+    u16 ssn, u16 buf, bool amsdu, u16 timeout)
+{
+	struct ieee80211_ampdu_params params;
+
+	(void)arg;
+	if (adapter.hw == NULL || adapter.vif == NULL || adapter.sta == NULL)
+		return -EOPNOTSUPP;
+	memset(&params, 0, sizeof(params));
+	params.action = action;
+	params.sta = adapter.sta;
+	params.tid = tid;
+	params.ssn = ssn;
+	params.buf_size = buf;
+	params.amsdu = amsdu;
+	params.timeout = timeout;
+	return lkpi80211_drv_ampdu_action(adapter.hw, adapter.vif, &params);
+}
+
+static int
+up_ba_mgmt_tx(void *arg, const uint8_t *frame, size_t len)
+{
+
+	(void)arg;
+	return wlan_bridge_mgmt_tx(frame, len);
+}
+
+static uint16_t
+up_ba_last_tx_seq(void *arg, int tid)
+{
+
+	(void)arg;
+	return wlan_bridge_last_tx_seq(tid);
+}
+
+static void
+up_ba_note(void *arg, int evt)
+{
+
+	(void)arg;
+	switch (evt) {
+	case WLAN_TX_BA_NOTE_START:
+		wlan_bridge_ba_note(WLAN_BRIDGE_BA_TX_START);
+		break;
+	case WLAN_TX_BA_NOTE_OPERATIONAL:
+		wlan_bridge_ba_note(WLAN_BRIDGE_BA_TX_OPERATIONAL);
+		break;
+	case WLAN_TX_BA_NOTE_STOP:
+		wlan_bridge_ba_note(WLAN_BRIDGE_BA_STOP);
+		break;
+	default:
+		break;
+	}
+}
+
+static const uint8_t *
+up_ba_sta_addr(void *arg)
+{
+
+	(void)arg;
+	return adapter.sta != NULL ? adapter.sta->addr : NULL;
+}
+
+static const uint8_t *
+up_ba_local_addr(void *arg)
+{
+
+	(void)arg;
+	return adapter.vif != NULL ? adapter.vif->addr : NULL;
+}
+
+static const struct wlan_tx_ba_ops up_tx_ba_ops = {
+	.ampdu = up_ba_ampdu,
+	.mgmt_tx = up_ba_mgmt_tx,
+	.last_tx_seq = up_ba_last_tx_seq,
+	.note = up_ba_note,
+	.sta_addr = up_ba_sta_addr,
+	.local_addr = up_ba_local_addr,
+};
+
+static int
+up_ba_start(struct ieee80211_sta *sta, u16 tid, u16 timeout)
+{
+
+	return wlan_tx_ba_start(adapter.hw, sta, tid, timeout);
+}
+
+static void
+up_ba_stop(const uint8_t *ra, u16 tid)
+{
+
+	wlan_tx_ba_stop(adapter.hw, ra, tid);
+}
+
+static int
 up_attach(struct ieee80211_hw *hw)
 {
 	uint8_t mac[6];
@@ -1391,6 +1487,16 @@ up_attach(struct ieee80211_hw *hw)
 	 */
 	lkpi80211_set_tx_wake_cb(hw, seam_tx_wake, NULL);
 	wlan_osal_log("wlan: seam tx wake registered\n");
+	/*
+	 * The TX block-ack state machine.  The driver's
+	 * ieee80211_start_tx_ba_session() carries a station and no hw, so the
+	 * substitute keeps the two callbacks file-scope; the adapter supplies
+	 * its own hw/vif/sta when the state machine asks for an ampdu action.
+	 * The receive half keeps the existing wlan_rx_ba path.
+	 */
+	(void)wlan_tx_ba_init(hw, &up_tx_ba_ops, NULL);
+	lkpi80211_set_ba_cbs(up_ba_start, up_ba_stop);
+	wlan_osal_log("wlan: seam tx ba registered\n");
 	/* The downlink block-ack receive side (RTOS-02).  It is the only
 	 * consumer of the AP's ADDBA Request in this port: the imported
 	 * net80211 drops action frames, so without it the link stays at one
@@ -1404,6 +1510,8 @@ up_detach(struct ieee80211_hw *hw)
 {
 
 	(void)hw;
+	lkpi80211_set_ba_cbs(NULL, NULL);
+	wlan_tx_ba_detach(adapter.hw);
 	wlan_rx_ba_detach();
 	wlan_bridge_detach();
 	adapter.hw = NULL;
@@ -1519,6 +1627,15 @@ up_rx(struct ieee80211_hw *hw, struct ieee80211_rx_status *rs,
 			    (unsigned)skb->len);
 		}
 	}
+	/*
+	 * The transmit half's action frames.  An ADDBA Response is consumed
+	 * here (the receive reorder path has no TX-side state); a DELBA is
+	 * handled here and offered on, so the receive window tears down too.
+	 * An ADDBA Request is not consumed and falls through to the receive
+	 * path below, which answers it and seeds the receive window.
+	 */
+	if (wlan_tx_ba_rx(hw, skb->data, (size_t)skb->len) != 0)
+		return;
 	/*
 	 * The block-ack receive side sees the frame before the stack: the
 	 * AP's ADDBA Request/DELBA must be answered (net80211 has no action
@@ -1663,6 +1780,18 @@ wlan_bridge_link_dump(void)
 		    (unsigned)adapter.rx_hist[i].idx,
 		    (unsigned)adapter.rx_hist[i].bw, adapter.rx_hist[i].n,
 		    adapter.rx_hist[i].retry);
+	/* The transmit block-ack ledger, next to the receive one below: the
+	 * driver's TX_START, the AP's Response, and every stop, cumulative
+	 * since attach (a cell is the difference of two dumps). */
+	{
+		struct wlan_bridge_counters wc;
+
+		memset(&wc, 0, sizeof(wc));
+		wlan_bridge_stats(&wc);
+		wlan_osal_log("wlan: link ba rx=%u tx=%u oper=%u stop=%u\n",
+		    wc.ba_rx_start, wc.ba_tx_start, wc.ba_tx_operational,
+		    wc.ba_stop);
+	}
 	/* The block-ack receive side's own ledger: the ADDBA exchange and the
 	 * reorder window's work, cumulative since attach (a cell is the
 	 * difference of two dumps). */

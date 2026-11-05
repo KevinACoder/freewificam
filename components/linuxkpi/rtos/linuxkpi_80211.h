@@ -155,6 +155,11 @@ struct ieee80211_key_conf *
 void	lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    struct ieee80211_sta *sta, struct sk_buff *skb);
 
+/* ops->ampdu_action(hw, vif, &params), for the TX block-ack state machine.
+ * Returns the driver's own answer; -EOPNOTSUPP when it has no ampdu_action. */
+int	lkpi80211_drv_ampdu_action(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_ampdu_params *params);
+
 /*
  * Drain the deferred receive queue.  ieee80211_rx_irqsafe enqueues and a
  * worker delivers (the interface's own contract, net/mac80211/rx.c); a caller
@@ -190,6 +195,17 @@ void	lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 int	lkpi80211_tx_queue_stopped(struct ieee80211_hw *hw);
 void	lkpi80211_set_tx_wake_cb(struct ieee80211_hw *hw, void (*cb)(void *),
 	    void *arg);
+
+/*
+ * The aggregation registration: the bridge's TX block-ack state machine
+ * installs its start/stop at attach.  The start callback is what
+ * ieee80211_start_tx_ba_session() forwards to (0 accepted, -EINVAL refused);
+ * the stop callback is what the driver's ampdu_action TX_STOP reaches through
+ * ieee80211_stop_tx_ba_cb_irqsafe().  With no registration the session entry
+ * keeps answering -EOPNOTSUPP.
+ */
+void	lkpi80211_set_ba_cbs(int (*start)(struct ieee80211_sta *sta, u16 tid,
+	    u16 timeout), void (*stop)(const u8 *ra, u16 tid));
 
 /*
  * Ask for the port's wake without the driver having stopped anything.  A

@@ -737,6 +737,16 @@ static void emit_layer_counters(const char *tag)
 		   wc.tx_stash, wc.tx_stash_ok, wc.tx_perm_drop, wc.txq_high,
 		   wc.tx_pending, mem_err, pbuf_err);
 	/*
+	 * The block-ack fingerprint, one grep-able record per cell: whether the
+	 * driver armed a TX session (ba_tx), whether the AP answered
+	 * (ba_oper), and how many sessions ended (ba_stop).  The same four
+	 * fields are in the kernel module's stats parameter, so the two ports'
+	 * ledgers are read the same way.
+	 */
+	MDK_ANCHOR("netio: ba tag=%s ba_rx=%u ba_tx=%u ba_oper=%u ba_stop=%u\n",
+		   tag, wc.ba_rx_start, wc.ba_tx_start, wc.ba_tx_operational,
+		   wc.ba_stop);
+	/*
 	 * The transmit handoff's own census, between the socket buffer and the
 	 * controller: `q` is what the txq engine still holds (frames handed down
 	 * that no driver dequeue took), and `stopped` is the driver's transmit

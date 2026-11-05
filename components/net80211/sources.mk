@@ -40,8 +40,12 @@ obj-$(CONFIG_NET80211) += ports/bridge/wlan_bridge.c
 endif
 
 ifeq ($(SRC_TAG),kpi)
-# The seam adapter runs in the linuxkpi flag world.
-obj-$(CONFIG_LINUXKPI_NET80211) += ports/bridge/wlan_seam_adapter.c
+# The seam adapter runs in the linuxkpi flag world.  The TX block-ack module
+# belongs here too: it is the Linux face's state machine (kernel types,
+# workqueue, mac80211 headers), while the bridge tag is compiled with the
+# NetBSD prelude and would collide on u_int64_t.
+obj-$(CONFIG_LINUXKPI_NET80211) += ports/bridge/wlan_seam_adapter.c \
+	ports/bridge/wlan_tx_ba.c
 endif
 
 ifeq ($(SRC_TAG),rxba)

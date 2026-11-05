@@ -261,6 +261,17 @@ static const struct lkpi80211_bridge_ops *bridge_ops;
 static void *bridge_arg;
 
 /*
+ * The aggregation registration.  ieee80211_start_tx_ba_session() is handed a
+ * station and no hw, so the two callbacks are file-scope the same way
+ * bridge_ops is: this port runs one hw, and the bridge installs its own pair
+ * at attach and clears them at detach.  Without a registration the entry keeps
+ * answering -EOPNOTSUPP, which is the honest answer for a port that has no
+ * block-ack state machine behind it.
+ */
+static int (*ba_start_cb)(struct ieee80211_sta *sta, u16 tid, u16 timeout);
+static void (*ba_stop_cb)(const u8 *ra, u16 tid);
+
+/*
  * How often the driver reached the substitute's two completion entries.  A
  * sweep that never closes or a frame that never completes has two very
  * different shapes here: the driver never called (a deferred handler with no
@@ -1593,6 +1604,18 @@ lkpi80211_set_tx_wake_cb(struct ieee80211_hw *hw, void (*cb)(void *), void *arg)
 }
 
 /* ------------------------------------------------------------------ */
+/* aggregation registration                                             */
+/* ------------------------------------------------------------------ */
+
+void
+lkpi80211_set_ba_cbs(int (*start)(struct ieee80211_sta *sta, u16 tid,
+    u16 timeout), void (*stop)(const u8 *ra, u16 tid))
+{
+	ba_start_cb = start;
+	ba_stop_cb = stop;
+}
+
+/* ------------------------------------------------------------------ */
 /* aggregation / AP-mode stubs (N3: compile + call order, no function)  */
 /* ------------------------------------------------------------------ */
 
@@ -1601,15 +1624,15 @@ ieee80211_start_tx_ba_session(struct ieee80211_sta *sta, u16 tid, u16 timeout)
 {
 
 	/*
-	 * No aggregation in this port: answering -EOPNOTSUPP is the honest
-	 * refusal (the caller falls back), and counting it keeps the fact
-	 * visible. The driver's ampdu_action is never reached because this is
-	 * the entry that would start it.
+	 * A port with a block-ack state machine registers one and this entry
+	 * forwards to it: the return value is the state machine's (0 accepted,
+	 * -EINVAL refused), exactly what the driver's rtw_txq_ba_iter() reads
+	 * to decide whether to block the TID.  A port without one keeps the
+	 * honest -EOPNOTSUPP refusal (the caller falls back).
 	 */
-	(void)sta;
-	(void)tid;
-	(void)timeout;
-	return -EOPNOTSUPP;
+	if (ba_start_cb == NULL)
+		return -EOPNOTSUPP;
+	return ba_start_cb(sta, tid, timeout);
 }
 
 void
@@ -1617,8 +1640,8 @@ ieee80211_stop_tx_ba_cb_irqsafe(struct ieee80211_vif *vif, const u8 *ra, u16 tid
 {
 
 	(void)vif;
-	(void)ra;
-	(void)tid;	/* nothing was ever started; nothing to stop */
+	if (ba_stop_cb != NULL)
+		ba_stop_cb(ra, tid);
 }
 
 void
@@ -2587,6 +2610,20 @@ lkpi80211_drv_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	ctx->ops->tx(hw, &control, skb);
 }
 
+int
+lkpi80211_drv_ampdu_action(struct ieee80211_hw *hw,
+    struct ieee80211_vif *vif, struct ieee80211_ampdu_params *params)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL || params == NULL)
+		return -EINVAL;
+	ctx = LKPI80211_CTX(hw);
+	if (ctx->ops->ampdu_action == NULL)
+		return -EOPNOTSUPP;
+	return ctx->ops->ampdu_action(hw, vif, params);
+}
+
 /*
  * The transmit handoff mac80211 performs before a driver's own transmit entry:
  * the txq selection (net/mac80211/tx.c:1299-1355, ieee80211_get_txq) and, when
@@ -2768,6 +2805,17 @@ lkpi80211_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		return;
 	}
 	lkpi80211_tx_headroom_check(hw, skb);
+	/*
+	 * The access category the queue belongs to, written where mac80211's
+	 * ieee80211_select_queue() writes it.  The driver reads this field
+	 * (rtw_txq_check_agg(), tx.c:576) and skips the VO value because a VO
+	 * queue must not start block-ack; a freshly allocated skb carries 0,
+	 * which is IEEE80211_AC_VO, so the driver saw every frame as
+	 * voice-class and never armed a session.  The queue's AC was computed
+	 * when it was allocated (lkpi_txq_alloc(), by TID); it only has to be
+	 * copied onto the frame here.
+	 */
+	skb->queue_mapping = txq->ac;
 	/*
 	 * The queue is where a short-headroom frame gets its first chance to be
 	 * named: once enqueued it belongs to the txq, and the dequeue guard can
