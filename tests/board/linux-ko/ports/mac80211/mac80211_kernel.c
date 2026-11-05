@@ -33,6 +33,7 @@
 
 #include "wlan_linux.h"
 #include "mac80211_ba.h"
+#include <wlan_bridge.h>
 #include "wlan_ko_prof.h"
 
 /*
@@ -77,7 +78,7 @@ struct wlan_linux_hw *wlan_hw_single(void)
 }
 
 static void wlan_rx_work(struct work_struct *work);
-static void wlan_tx_work(struct work_struct *work);
+static void wlan_tx_refill_work(struct work_struct *work);
 static void wlan_scan_work(struct work_struct *work);
 
 struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
@@ -127,7 +128,7 @@ struct ieee80211_hw *ieee80211_alloc_hw_nm(size_t priv_data_len,
 	skb_queue_head_init(&w->rx_q);
 	skb_queue_head_init(&w->tx_q);
 	INIT_WORK(&w->rx_work, wlan_rx_work);
-	INIT_WORK(&w->tx_work, wlan_tx_work);
+	INIT_WORK(&w->tx_work, wlan_tx_refill_work);
 	spin_lock_init(&w->tx_batch_lock);
 	INIT_WORK(&w->scan_work, wlan_scan_work);
 	/* the driver's queue wake: the work that delivers it to the bridge */
@@ -290,26 +291,23 @@ static void wlan_rx_work(struct work_struct *work)
 	}
 }
 
-static void wlan_tx_work(struct work_struct *work)
+/*
+ * The refill half of a transmit completion.  mac80211 frees the frame in its
+ * tx-status tasklet; the substitute frees it right in
+ * ieee80211_tx_status_irqsafe() below, because the completion only bumps
+ * counters and an ordered-workqueue round trip there is what kept the transmit
+ * pipeline at one URB per completion.  What is left here is the half that
+ * allocates and therefore must not run under the URB completion: drain the
+ * bridge into the driver's txq and wake the driver once for the whole window.
+ */
+static void wlan_tx_refill_work(struct work_struct *work)
 {
 	struct wlan_linux_hw *w = container_of(work, struct wlan_linux_hw, tx_work);
-	struct sk_buff *skb;
+	u64 prof_t0 = wlan_ko_prof_begin();
 
-	while ((skb = skb_dequeue(&w->tx_q)) != NULL) {
-		u64 prof_t0 = wlan_ko_prof_begin();
-
-		wlan_adapter_tx_complete(&w->hw, skb);
-		dev_kfree_skb_any(skb);
-		wlan_ko_prof_depth(WLAN_KO_PROF_Q_TX_STATUS, -1);
-		wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS_WORK, prof_t0);
-	}
-	/*
-	 * The admission gate the seam's queue_ready now applies (W6-05) is
-	 * released only by completions, and rtw88's USB path raises no queue
-	 * wake: after a batch of statuses, restart the bridge's drain if
-	 * anything is still waiting.  One call per work item, not per frame.
-	 */
+	w->tx_refills++;
 	wlan_adapter_tx_pump(&w->hw);
+	wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS_WORK, prof_t0);
 }
 
 static void wlan_scan_work(struct work_struct *work)
@@ -375,11 +373,21 @@ void ieee80211_tx_status_irqsafe(struct ieee80211_hw *hw, struct sk_buff *skb)
 	struct wlan_linux_hw *w = wlan_hw_of(hw);
 	u64 prof_t0 = wlan_ko_prof_begin();
 
-	skb_queue_tail(&w->tx_q, skb);
-	wlan_ko_prof_depth(WLAN_KO_PROF_Q_TX_STATUS, 1);
+	/*
+	 * mac80211 runs this in a tasklet, i.e. before the softirq returns.
+	 * The completion only counts and frees, both safe here; the drain that
+	 * follows allocates, so it stays on the work.  Going through the work
+	 * for the free as well cost one ordered-workqueue hop per completion
+	 * (measured 2026-11-05: 1.27k URBs/s against the native kernel's
+	 * ~7.2k, with only 1-2 URBs in flight).
+	 */
+	wlan_adapter_tx_complete(hw, skb);
+	dev_kfree_skb_any(skb);
 	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_STATUS);
 	wlan_ko_prof_end(WLAN_KO_PROF_TX_STATUS, prof_t0);
-	queue_work(w->wq, &w->tx_work);
+	if (wlan_bridge_tx_waiting()) {
+		queue_work(w->wq, &w->tx_work);
+	}
 }
 
 /* ------------------------------------------------------------------ */

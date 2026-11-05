@@ -149,6 +149,8 @@ struct wlan_linux_hw {
 	 */
 	unsigned int		tx_handed;
 	unsigned int		tx_completed;
+	/* refill work items run: one per completion batch, not per frame */
+	unsigned int		tx_refills;
 	/*
 	 * What the driver asks for, and takes, per wake: __rtw_tx_work() reads
 	 * ieee80211_txq_get_depth() and then dequeues exactly that many frames

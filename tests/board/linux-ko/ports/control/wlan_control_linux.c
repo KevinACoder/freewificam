@@ -307,7 +307,7 @@ static int wlan_stats_get(char *buffer, const struct kernel_param *kp)
 	    "auth_retry=%u auth_ans=%u rx_data=%u rx_data_enc=%u "
 	    "tx_errors=%u mgmt_action=%u ba_rx=%u ba_tx=%u ba_oper=%u "
 	    "ba_stop=%u txq=%u tx_stopped=%u "
-	    "inflight=%u handed=%u done=%u "
+	    "inflight=%u handed=%u done=%u refills=%u "
 	    "depth_frames=%u depth_calls=%u depth_max=%u "
 	    "gated=%u wakes=%u pending=%u txq_high=%u\n",
 	    c.attached, c.mgt_tx, c.data_tx, c.rx_frames, c.tx_completes,
@@ -318,6 +318,7 @@ static int wlan_stats_get(char *buffer, const struct kernel_param *kp)
 	    w != NULL ? wlan_adapter_tx_inflight(&w->hw) : 0u,
 	    w != NULL ? w->tx_handed : 0u,
 	    w != NULL ? w->tx_completed : 0u,
+	    w != NULL ? w->tx_refills : 0u,
 	    w != NULL ? w->tx_depth_frames : 0u,
 	    w != NULL ? w->tx_depth_calls : 0u,
 	    w != NULL ? w->tx_depth_max : 0u,

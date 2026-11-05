@@ -31,13 +31,17 @@
 #include "wlan_ko_prof.h"
 
 /*
- * LAB PROBE (W3-01 D3): the substitute stack uploads the station with legacy
- * rates only; mac80211 fills ht_cap from the association response and the
- * driver derives its rate mask from it.  With force_ht=1 the upload advertises
- * HT20 1SS MCS0-7 + SGI to the driver, so the chip's rate control may leave
- * legacy 24 Mbit/s.  One variable, load-time, default off.
+ * W3-01 D3: the substitute stack uploads the station with legacy rates only;
+ * mac80211 fills ht_cap from the association response and the driver derives
+ * its rate mask from it.  Without an HT capability the block-ack session that
+ * TX aggregation needs cannot be started (wlan_ba_start_tx() rejects a station
+ * with ht_supported=0 and the driver then blocks BA for that txq), so one-way
+ * 64 B traffic sat at 3.8k frames/s -- one MPDU per ACK, 1.27k URBs/s -- while
+ * the native kernel did 21.5k.  Advertising HT20 1SS MCS0-7 + SGI to the
+ * driver is what the association already negotiated with the lab AP; keep it
+ * on by default and let force_ht=0 bring the old lab behaviour back for A/B.
  */
-static bool force_ht;
+static bool force_ht = true;
 module_param_named(force_ht, force_ht, bool, 0644);
 MODULE_PARM_DESC(force_ht, "1 = advertise HT20 1SS MCS0-7 to the driver (lab probe)");
 
@@ -719,6 +723,24 @@ static int seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame,
 	 * best effort; the diagnostic shape can name another TID/AC.
 	 */
 	skb->priority = (u8)(wlan_tx_tid & 0xf);
+	/*
+	 * mac80211's ieee80211_select_queue() stamps the access category into
+	 * the queue mapping as well, and rtw88's TXQ path reads that first: a
+	 * frame whose mapping equal IEEE80211_AC_VO returns from
+	 * rtw_txq_check_agg() before any block-ack session is armed
+	 * (rtw88/tx.c:588), and an unset mapping is 0 - exactly VO - so the
+	 * whole data plane silently ran without A-MPDU.  Measured 2026-11-05:
+	 * ba_tx=0 across a 14 s cell, 3.8k frames/s one-way, 1.27k URBs/s
+	 * against the native kernel's 21.5k frames/s.
+	 */
+	if (!is_mgmt) {
+		u8 tid = skb->priority;
+
+		/* ieee80211_ac_from_tid(): 0-3 BE, 4-5 VI, 6-7 VO, 8-15 BK */
+		skb->queue_mapping = tid < 4 ? IEEE80211_AC_BE :
+		    tid < 6 ? IEEE80211_AC_VI :
+		    tid < 8 ? IEEE80211_AC_VO : IEEE80211_AC_BK;
+	}
 	if (!is_mgmt) {
 		switch (wlan_tx_diag) {
 		case 1:

@@ -65,18 +65,6 @@
 #ifndef CONFIG_WLAN_KO_TX_BATCH
 #define CONFIG_WLAN_KO_TX_BATCH 32
 #endif
-/*
- * How long a frame may wait for its batch.  Frames arrive from the stack one at
- * a time, so a queue that is drained the moment it is non-empty never holds
- * more than the one or two frames that happen to overlap: the driver then takes
- * one or two per wake and the USB aggregate is built around a 64-byte frame.
- * Waiting a fixed slice lets the queue reach CONFIG_WLAN_KO_TX_BATCH, at the
- * cost of that much latency per batch (throughput cells do not care; the link
- * does when the queue is nearly empty).
- */
-#ifndef CONFIG_WLAN_KO_TX_BATCH_US
-#define CONFIG_WLAN_KO_TX_BATCH_US 1500
-#endif
 
 static void wlan_netdev_tx_work(struct work_struct *work)
 {
@@ -200,18 +188,13 @@ static netdev_tx_t wlan_netdev_start_xmit(struct sk_buff *skb,
 	wlan_ko_prof_event(WLAN_KO_PROF_EVT_TX_ENQ);
 	wlan_ko_prof_end(WLAN_KO_PROF_TX_XMIT, prof_t0);
 	/*
-	 * Fill a batch before opening the gate: one immediate run when the queue
-	 * already holds a batch, otherwise one delayed run that the following
-	 * frames join.  The delay is not re-armed per frame (that would push the
-	 * deadline out forever under a steady stream), so the first frame of a
-	 * batch sets the deadline and the rest ride along.
+	 * Run the handoff now.  The window is what keeps the driver's aggregate
+	 * fed (it takes every frame the txq holds when its work runs), so the
+	 * producer must never sit on a frame waiting for company: one delayed
+	 * arm here would just add latency to a pipeline whose window comes from
+	 * the credit bound, not from a timer.
 	 */
-	if (skb_queue_len(&wn->txq) >= CONFIG_WLAN_KO_TX_BATCH) {
-		mod_delayed_work(system_wq, &wn->tx_work, 0);
-	} else if (!delayed_work_pending(&wn->tx_work)) {
-		schedule_delayed_work(&wn->tx_work,
-		    usecs_to_jiffies(CONFIG_WLAN_KO_TX_BATCH_US));
-	}
+	mod_delayed_work(system_wq, &wn->tx_work, 0);
 	return NETDEV_TX_OK;
 }
 
