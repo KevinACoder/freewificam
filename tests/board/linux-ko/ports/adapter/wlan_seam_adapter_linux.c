@@ -1317,8 +1317,26 @@ static int seam_queue_ready(struct wlan_seam_drv *drv)
 
 	if (w == NULL || wlan_tx_queue_stopped(&w->hw))
 		return 0;
-	if (max != 0 && seam_tx_inflight(w) >= max)
-		return 0;
+	if (max != 0) {
+		unsigned int inflight = seam_tx_inflight(w);
+		unsigned int quantum = CONFIG_WLAN_KO_TX_BATCH;
+
+		/*
+		 * Hand over a whole aggregate's worth, not the slots a single
+		 * completion happened to free.  usbmon on 2026-11-05 measured
+		 * 1271 bulk-OUT URBs/s carrying 399 bytes each - three frames
+		 * per URB, because every completion freed one slot and the
+		 * drain refilled exactly that: the 20 KB aggregate buffer
+		 * never held more than a few frames, and the URB round trip
+		 * was paid per three frames.
+		 */
+		if (quantum > max) {
+			quantum = max;
+		}
+		if (inflight + quantum > max) {
+			return 0;
+		}
+	}
 	return 1;
 }
 
