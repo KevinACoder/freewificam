@@ -135,7 +135,7 @@ PROFILE=rtos-shell ./make.rtos case-list-check  # image vs defconfig vs judge
 AARCH64_CROSS_PATH=/path/to/aarch64-none-elf ./make.rtos images
 # per-image resource/toolchain values live in the defconfig: CONFIG_OPT_O3,
 # CONFIG_DEBUG_G2, CONFIG_HEAP_SIZE, CONFIG_SHELL_STACK_KB, ...
-# see docs/BUILD-DESIGN.md §7.2
+# see docs/BUILD-DESIGN.md section 7.2
 
 make rk3568_ci                        # every rk3568-itx profile, clean build each
 make firefly_v1_ci firefly_v2_ci      # every firefly-v1/v2 profile
@@ -188,6 +188,7 @@ added to the registry first.
 | `W-TCP-D/11g` | TCP downlink, 802.11g 54M | 2.4 GHz ch5 | netio `-t`, 75 s window |
 | `W-UDP-D/HT20` | UDP 1440 B downlink, HT20 72.2 MCS7 SGI | 2.4 GHz ch5 | netio `-u -b 1440`, 6 s cell |
 | `W-UDP-U/HT20` | UDP 1440 B uplink, HT20 72.2 MCS7 SGI | 2.4 GHz ch5 | same cell, server phase |
+| `W-UDP64-U/HT20` | UDP 64 B uplink, HT20 72.2 MCS7 SGI | 2.4 GHz ch5 | netio `-u -b 64`; the server's transmit window is 30 s, the reference's is its own 6 s interval |
 | `W-TCP-D/HT20` | TCP downlink, HT20 72.2 MCS7 SGI | 2.4 GHz ch5 | netio `-t`, 75 s window |
 | `W-UDP-D/HT40` | UDP 1440 B downlink, HT40 150 MCS7 SGI | 2.4 GHz ch5 | frozen: protocol upgrade |
 
@@ -232,9 +233,10 @@ stack (CherryUSB + linuxkpi USB).  Methods: [docs/NET-TESTING.md]
 
 ### RK3568 / RTL8821CU / USB2 xHCI
 
-The first three-arm run on this chip (2026-11-03).  Same AP, same client, same
-1440 B UDP cells as the tables above; downlink rows are the part that lines up
-today.
+Two rounds on this chip.  The 1440 B rows are the three-arm run of 2026-11-03
+(same AP, same client, same cells as the tables above); the 64 B uplink row is
+the sustained-window run of 2026-11-06, which held one transmit window open for
+its whole length instead of the six seconds the earlier cells lasted.
 
 | case | rtos, no BA | rtos, RX-BA | ko | Linux reference |
 |---|---|---|---|---|
@@ -242,20 +244,54 @@ today.
 | `W-UDP-D/11g` | 21.10 / 21.57 Mbit/s | - | 21.44 | 21.44 |
 | `W-UDP-U/11g` | 8.26 / 8.94 Mbit/s | - | - | 18.27-19.58 |
 | `W-UDP-U/HT20` | invalid | invalid | invalid | 10.04-10.84 |
+| `W-UDP64-U/HT20` | **4.32-4.66 Mbit/s, 8.4-9.1k frames/s** (8 boots, four images) | - | - | 9.92 Mbit/s, 19.4k frames/s |
 
 The HT20 downlink row is the block-ack story again: 11.7-23.1 without
 `CONFIG_WLAN_RX_BA`, 54.5 with it, while the same image's legacy downlink stays
 at 21.1-21.6.
 
-The uplink rows are not comparable yet.  On the ko and bare-metal arms the
-netdev transmit path lets the board's netio server queue 440k frames in the
-six-second window while the air carries ~6k, because the driver's refusal is
-counted as a bridge output error and dropped after `sendto` already returned
-success; the GT kernel's qdisc is what paces the server there.  The legacy
-uplink row above *is* valid (0% loss, zero TX errors) and shows a real roughly
-half rate against the reference, still to be attributed.  The transmit path's
-backpressure and the pacing of the server are the next round's work; the
-protocol evidence is in [docs/NET-TESTING.md](docs/NET-TESTING.md) section 9.4.
+The uplink cells of that 2026-11-03 run were not measurable, and the reason was
+in this repository, not in the air.  On the ko and bare-metal arms the netdev
+transmit path let the board's netio server queue 440k frames while the air
+carried ~6k, because the driver's refusal was counted as a bridge output error
+and dropped after `sendto` had already returned success; the reference kernel's
+qdisc is what paces the server there.  The seam now refuses the frame instead,
+the bridge holds it and re-offers it on the next transmit completion, so the
+refusal reaches `sendto` and the server paces itself - `refusals=` on the
+cell's done line is that backpressure, not loss.
+
+The 64 B row is the first uplink that runs to the end of its window: 312k-326k
+frames handed to the seam per boot, 0.02% of them missing at the client, zero
+`wlan_txerr`, zero interface-queue drops, the access point's own receive count
+agreeing to 0.02%, and eight clean boots across four images of the same fix
+(the last one on the tree rebuilt from the commit).  One caveat on the window
+itself: it is armed for 30 s, and both clocks - the board's counter and the
+client's own byte count over its own rate - put the burst at 36.6 s, so the
+timer fires about 6.6 s late under this load.  The rates are computed over the
+interval that actually elapsed, so they are not inflated by the label; the late
+fire is an open question, not a settled 30 s.
+
+What is left is rate: 4.3-4.7 Mbit/s against the reference's 9.9 on the same
+cell, and the wall is the device, not the feed.  The transfer census of the
+preceding round puts a bulk-out at about 250 us of service plus 80 us of gap
+for three frames, against about 140 us for the same three frames on the
+reference, while the transmit queues hold a dozen frames - the engine never
+runs dry.  Three things travel with that rate and are unexplained here: the
+transmit block-ack ledger ends the window at 7 started, 2 operating and 9
+stopped, which is not a one-to-one session count and has not been read yet (the
+image is built with `CONFIG_WLAN_RX_BA=n`, so the receive reorder path, which
+still locks up under a burst, is out of it); the access point reports the
+station's uplink at MCS4 39 Mbit/s where the reference arm of the same cell sat
+at MCS5 52, a rate-control difference nobody has attributed; and the 1440 B
+uplink cells have not been re-run since the transmit path was fixed.
+
+One residue is known and bounded: after a window closes, the driver's report
+queue still holds about 64 frames (one `skbq` line at the engine slot address);
+the next cell starts with empty transmit queues and is unaffected.  One or two
+register accesses per boot also return `-110` (reads of `0x770`, a write of
+`0xaa`), which has not stopped a window.  The earlier, much larger failure of
+this line - a machine that stopped printing a second into the window - was a
+queue-membership defect in the shared socket-buffer code, fixed in this tree.
 
 ### firefly v2 / USB mass storage (USB2 xHCI, `usb3_0`)
 

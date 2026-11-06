@@ -392,3 +392,40 @@ during AP retransmissions.  A window of 128 delivers 0 loss on the same cells,
 and the xHCI 8188EU arm re-measured at 51.7 Mbit/s afterwards, so the change
 does not tax the healthy path.  The remaining ceiling is the ~2,700
 completions/s above.
+
+### 9.5 A sustained uplink window (64 B, 2026-11-06)
+
+The profile `rtw88-usb-8821cu-ar-ht20-agg2-ehci-long` is the same arm as
+`-agg2-ehci` with one change: `CONFIG_NETIO_S2C_MS=30000`, so a transmit cell
+is decided by its own timer instead of ending on the first long run of
+refusals.  Nothing else moves - no rate lever, no queue depth, no observation
+switch.
+
+Client `netio -u -b 64`, the server's window armed for 30 s, eight boots
+across four images of the same fix (the last on the tree rebuilt from the
+commit).  Per boot: `frames` 312k-334k, client `got/srv_sent` short by 0.02%,
+the access point's `rx_packets` delta short of `srv_sent` by 0.018-0.019%,
+`wlan_txerr` 0, `wlan_xdrop` 0, `tx q` and `txqwalk` both 0 at every 2 s
+sample, 4.3-4.7 Mbit/s of 64 B payload (8.4-9.1k frames/s).
+
+Two properties of this arm are worth knowing before it is compared to anything:
+
+- The burst lasts 36.6-36.7 s, by the board's counter and by the client's own
+  byte count over its own rate, while the timer is armed for 30 s.  The two
+  second heartbeat in the same log shows gaps up to 21 s during the burst, so
+  the board's tick is not keeping wall time under this load.  Rates are
+  computed over the interval that actually elapsed (the client's line does
+  that on its own), so they are not inflated by the armed length; what is not
+  explained is why the timer fires late.
+- `refusals=` sits at about 29k per boot.  That is the seam refusing a data
+  frame (pool spare, in-flight cap or USB backlog) with the bridge holding it
+  and re-offering it on the next completion (`wlan_stashok` is the count of
+  held frames the seam later took).  It is backpressure; the client's own
+  `got/srv_sent` line is what says whether anything was lost.
+
+Known residue after such a window: the driver's transmit-report queue keeps
+about 64 frames, visible as one `skbq` line whose address is one of the
+transmit engine's own queue heads rather than a heap address.  The next cell
+starts with empty transmit queues and is unaffected, so the residue is recorded
+rather than gated.  Separately, one or two register accesses per boot return `-110`
+(`read register 0x770`, `write register 0xaa`); no window was stopped by one.
