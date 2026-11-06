@@ -405,8 +405,10 @@ Client `netio -u -b 64`, the server's window armed for 30 s, eight boots
 across four images of the same fix (the last on the tree rebuilt from the
 commit).  Per boot: `frames` 312k-334k, client `got/srv_sent` short by 0.02%,
 the access point's `rx_packets` delta short of `srv_sent` by 0.018-0.019%,
-`wlan_txerr` 0, `wlan_xdrop` 0, `tx q` and `txqwalk` both 0 at every 2 s
-sample, 4.3-4.7 Mbit/s of 64 B payload (8.4-9.1k frames/s).
+`wlan_txerr` 0, `wlan_xdrop` 0, `tx q` and `txqwalk` equal at every two second
+sample (zero in seven of the eight boots; one boot reads 47, 33, 23 on both
+sides of the same samples), 4.3-4.7 Mbit/s of 64 B payload (8.4-9.1k
+frames/s).
 
 Two properties of this arm are worth knowing before it is compared to anything:
 

@@ -262,14 +262,16 @@ cell's done line is that backpressure, not loss.
 
 The 64 B row is the first uplink that runs to the end of its window: 312k-326k
 frames handed to the seam per boot, 0.02% of them missing at the client, zero
-`wlan_txerr`, zero interface-queue drops, the access point's own receive count
-agreeing to 0.02%, and eight clean boots across four images of the same fix
-(the last one on the tree rebuilt from the commit).  One caveat on the window
-itself: it is armed for 30 s, and both clocks - the board's counter and the
-client's own byte count over its own rate - put the burst at 36.6 s, so the
-timer fires about 6.6 s late under this load.  The rates are computed over the
-interval that actually elapsed, so they are not inflated by the label; the late
-fire is an open question, not a settled 30 s.
+`wlan_txerr`, zero interface-queue drops, the transmit queue depth and a walk
+of the same queues agreeing at every two second sample (zero in seven of eight
+boots; one reads 47, 33, 23 on both sides of the same samples), the access
+point's own receive count agreeing to 0.02%, and eight clean boots across four
+images of the same fix (the last on the tree rebuilt from the commit).  One
+caveat on the window itself: it is armed for 30 s, and both clocks - the
+board's counter and the client's own byte count over its own rate - put the
+burst at 36.6 s, so the timer fires about 6.6 s late under this load.  The
+rates are computed over the interval that actually elapsed, so they are not
+inflated by the label; the late fire is an open question, not a settled 30 s.
 
 What is left is rate: 4.3-4.7 Mbit/s against the reference's 9.9 on the same
 cell, and the wall is the device, not the feed.  The transfer census of the
