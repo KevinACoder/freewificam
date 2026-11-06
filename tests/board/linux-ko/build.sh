@@ -208,6 +208,19 @@ if [ "${DEBUGFS:-0}" = 1 ]; then
 	DRIVER_DEFINES="$DRIVER_DEFINES CONFIG_RTW89_DEBUGFS"
 fi
 
+# ---- compiled-in firmware ---------------------------------------------------
+# The blob units are a build product of firmware/ (the RTOS build generates them
+# in tests/board/rtos/build/fw.mk); a module that embeds firmware needs the same
+# unit, so generate it here rather than requiring a hand-run step first.  The
+# rtw88 arm keeps taking the path from RTW88_FW_BLOB, which is also how the
+# protocol-stage arm points at a blob outside the tree.
+if [ "$DRIVER" = rtw89 ] && [ "${FW_EMBED:-0}" != 0 ]; then
+	"$REPO/tools/rtos/fw-blobs.py" --stem rtw8851b_fw
+fi
+case "${RTW88_FW_BLOB:-}" in
+*rtw8821c_fw_blob.c) "$REPO/tools/rtos/fw-blobs.py" --stem rtw8821c_fw ;;
+esac
+
 # ---- module directory: a mirrored symlink tree -----------------------------
 # Relative includes inside the imported trees ("../wlan_osal.h", same-directory
 # headers) must keep resolving, so the module directory mirrors the repository

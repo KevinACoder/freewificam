@@ -20,7 +20,7 @@ endif
 
 ifeq ($(SRC_TAG),kpi)
 obj-$(CONFIG_WLAN_LINE_RTL8XXXU) += \
-	$(if $(filter 1,$(CONFIG_RTL8XXXU_CHIP_8723BU)),$(ROOT)/components/linuxkpi/fw/rtl8723bu_fw_blob.c,$(ROOT)/components/linuxkpi/fw/rtl8188eufw_blob.c)
+	$(if $(filter 1,$(CONFIG_RTL8XXXU_CHIP_8723BU)),$(ROOT)/components/linuxkpi/fw/rtl8723bu_blob.c,$(ROOT)/components/linuxkpi/fw/rtl8188eufw_blob.c)
 endif
 
 ifeq ($(SRC_TAG),case)

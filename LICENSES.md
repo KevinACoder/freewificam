@@ -70,18 +70,20 @@ is first-party BSD-3-Clause: it implements NXP's `sdmmchost_ops_t` table and
 only includes `mci.h`. If the GPL unit is ever replaced by an independent
 implementation, that glue stays as it is.
 
-## Firmware blobs
+## Firmware (`firmware/`)
 
-The RTOS images compile in vendor firmware files; the bytes are not committed.
+The RTOS images compile vendor firmware in, because the target has no
+filesystem.  The vendor files themselves are committed under `firmware/`, with
+`firmware/MANIFEST.sha256` pinning them; the C arrays the images link are
+generated from them by `tools/rtos/fw-blobs.py` and are not committed.
 `docs/FIRMWARE-NOTICES.md` carries each file's digest, its published source and
 the redistribution terms:
 
-| Blob | License |
+| Files | License |
 |---|---|
-| RTL8188EUS firmware (`rtlwifi/rtl8188eufw.bin`) | Realtek binary redistribution terms |
-| RTL8723BU firmware (`rtlwifi/rtl8723bu_nic.bin`) | Realtek binary redistribution terms |
-| RTL8851BU firmware (`rtw89/rtw8851b_fw-1.bin`) | Realtek binary redistribution terms |
-| Intel AC 7260 firmware (`iwlwifi-7260-17.ucode`) | Intel binary redistribution terms (no reverse engineering) |
+| `firmware/rtlwifi/*.bin`, `firmware/rtw88/rtw8821c_fw.bin`, `firmware/rtw89/rtw8851b_fw-1.bin` | Realtek binary redistribution terms (`firmware/REALTEK-LICENCE.txt`) |
+| `firmware/iwlwifi/iwlwifi-7260-17.ucode` | Intel binary redistribution terms, no reverse engineering (`firmware/INTEL-LICENCE.txt`) |
+| `firmware/aic8800/*.bin` | GPL-3.0 (`firmware/GPL-3.0.txt`) |
 
 ## Distribution obligations
 

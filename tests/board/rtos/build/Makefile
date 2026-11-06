@@ -520,6 +520,10 @@ LWIP_STACK_SRCS :=	$(LWIP)/src/core/init.c $(LWIP)/src/core/def.c $(LWIP)/src/co
 # the helper in tools/build/sources.mk turns its kbuild-style obj- lines into
 # the per-flag-world lists the fragments below consume.  The lists are built
 # from the generated configuration, not from the case string.
+#
+# The firmware blobs come first: their units are words in those lists, so the
+# generator has to have run before the lists are expanded (see fw.mk).
+include $(CURDIR)/fw.mk
 include $(ROOT)/tools/build/sources.mk
 
 $(eval $(call component_sources,$(ROOT)/components/net80211,core,NET80211_CORE))

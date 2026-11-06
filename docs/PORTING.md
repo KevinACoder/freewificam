@@ -53,25 +53,22 @@ rebuild it for another profile instead.
 
 ### Firmware blobs
 
-The RTOS image has no filesystem, so a driver firmware is a generated C array
-under `components/linuxkpi/fw/` and that directory is gitignored (the bytes are
-vendor binaries).  A clean checkout therefore has to generate the blob before
-building an image that includes the matching driver:
+The RTOS image has no filesystem, so a driver firmware is a C array under
+`components/linuxkpi/fw/`.  The vendor bytes are committed under `firmware/`
+(see its `README.md`); the arrays are generated from them by
+`tools/rtos/fw-blobs.py`, which the build runs by itself, so a clean checkout
+needs no manual step:
 
 ```
-tools/rtos/fw-blob.py \
-    --in "$FIRMWARE_DIR"/rtlwifi/rtl8723bu_nic.bin \
-    --name rtlwifi/rtl8723bu_nic.bin --symbol rtl8723bu \
-    --sha256 a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969 \
-    --size 32108 \
-    --licence "Realtek binary redistribution terms, docs/FIRMWARE-NOTICES.md" \
-    --out components/linuxkpi/fw/rtl8723bu_fw_blob.c
+tools/rtos/fw-blobs.py --all          # what the build does, by profile source
+tools/rtos/fw-blobs.py --check --all  # arrays vs firmware/, and their digests
 ```
 
-`docs/FIRMWARE-NOTICES.md` carries the command for each chip, the digest and
-the redistribution terms.  This is a build prerequisite, not a consumer
-concern: the blob is inside `libfw_linuxkpi.a` (via the registration object
-that the profile's link flags force in).
+`docs/FIRMWARE-NOTICES.md` carries the per-chip digests, the source each file
+came from and the redistribution terms.  A chip this repository does not carry
+uses the single-file form, `tools/rtos/fw-blob.py`.  This is a build
+prerequisite, not a consumer concern: the array is inside `libfw_linuxkpi.a`
+(via the registration object that the profile's link flags force in).
 
 ## 2. The public headers
 

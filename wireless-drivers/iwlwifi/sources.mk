@@ -82,7 +82,7 @@ endif
 
 ifeq ($(SRC_TAG),kpi)
 obj-$(CONFIG_WLAN_LINE_IWLWIFI) += \
-	$(ROOT)/components/linuxkpi/fw/iwl7260fw_blob.c
+	$(ROOT)/components/linuxkpi/fw/iwl7260_fw_blob.c
 endif
 
 ifeq ($(SRC_TAG),case)

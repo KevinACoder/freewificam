@@ -12,17 +12,12 @@
 # (wireless-drivers/aic8800/patches/0001-osal-port.patch is the port).
 #
 # The firmware blob unit is generated, never committed (the bytes are
-# Aicsemi's GPL-3.0 firmware): tools/rtos/aic8800-fw-blobs.py writes
-# wireless-drivers/aic8800/fw/aic8800_fw_blobs.c and the gate below turns a
-# missing unit into the regeneration command, the same contract as the
-# linuxkpi blobs in docs/FIRMWARE-NOTICES.md.
+# Aicsemi's GPL-3.0 firmware, carried in firmware/aic8800/): tools/rtos/fw-blobs.py
+# writes wireless-drivers/aic8800/fw/aic8800_fw_blobs.c, and fw.mk runs it
+# before this fragment is read.
 
 AIC8800_DRV := $(ROOT)/wireless-drivers/aic8800
 AIC8800_FW_BLOBS_C := $(AIC8800_DRV)/fw/aic8800_fw_blobs.c
-
-ifeq ($(wildcard $(AIC8800_FW_BLOBS_C)),)
-$(error aic8800: $(AIC8800_FW_BLOBS_C) is missing - generate it with: python3 tools/rtos/aic8800-fw-blobs.py --fw-dir <dir with the five AIC8800D80 U02 .bin files>)
-endif
 
 AIC8800_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-I$(AIC8800_DRV) \

@@ -38,7 +38,7 @@ RTL8XXXU_LKPI := $(ROOT)/components/linuxkpi/rtos
 RTL8XXXU_CHIP := $(if $(filter 1,$(CONFIG_RTL8XXXU_CHIP_8723BU)),8723bu,8188eu)
 ifeq ($(RTL8XXXU_CHIP),8723bu)
 RTL8XXXU_FW_NAME := rtlwifi/rtl8723bu_nic.bin
-RTL8XXXU_FW_BLOB := $(ROOT)/components/linuxkpi/fw/rtl8723bu_fw_blob.c
+RTL8XXXU_FW_BLOB := $(ROOT)/components/linuxkpi/fw/rtl8723bu_blob.c
 RTL8XXXU_FW_REGISTER := lkpi_fw_rtl8723bu_register
 RTL8XXXU_CLAIM_ID := 0bda:b720
 else

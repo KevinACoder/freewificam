@@ -1,12 +1,14 @@
 # AIC8800D80 U02 firmware
 
-These five binaries are the D80 U02 USB set copied from the board tree
-`ThirdParty/AIC8800D80/firmware`. They are **not** Apache-2.0.
+These five binaries are the D80 U02 USB set.  They are **not** Apache-2.0.
+They live here (not in `wireless-drivers/aic8800/fw/`, which only receives the
+generated array unit) because they are firmware, and `firmware/` is where this
+repository keeps firmware.
 
 - Source: https://github.com/radxa-pkg/aic8800
 - Commit: `df4c783b663eba1956579c681acd5e45f25c671d`
 - Upstream path: `src/USB/driver_fw/fw/aic8800D80`
-- License: GPL-3.0, see `LICENSE.GPL-3.0`
+- License: GPL-3.0, see `../GPL-3.0.txt`
 
 Use this set for revision `0x07` non-H devices (BootROM chip register
 `0xf3078820` on the validated AIC8800D80 stick).

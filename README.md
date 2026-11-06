@@ -25,6 +25,7 @@ components/                     first-party components
 wireless-drivers/               pinned wireless drivers (source + ports/ + patches/)
   iwlwifi/ rtl8xxxu/ rtw88/ rtw89/
   rtl8189fs/                    external vendor pin: provenance + ports/ + patches/
+firmware/                       the vendor firmware images, compiled in by the build
 third-party/                    ported components (source + ports/ + patches/)
   CMSIS_6/ CMSIS-FreeRTOS/ FreeRTOS-Kernel/ threadx/
   cherryusb/ fsl_sdmmc/ lwip/ printf/ tlsf/ ulog/
@@ -89,11 +90,13 @@ Both firmware trees live on GitHub and are not vendored here:
   branch `v7.3-rc2-firefly`; the measured reference image is commit
   `e71d9a28760f` (`7.3.0-rc2-ge71d9a28760f`).
 
-Wi-Fi firmware is not vendored either: the SoftMAC lines load it from the
-board image's `/lib/firmware`, and the `aic8800` line generates its five
-firmware blobs into `wireless-drivers/aic8800/fw/` with
-`tools/rtos/aic8800-fw-blobs.py` (digests and the upstream they came from are
-in [`docs/FIRMWARE-NOTICES.md`](docs/FIRMWARE-NOTICES.md)).
+Wi-Fi firmware is in the repository, under
+[`firmware/`](firmware/README.md): an image has no filesystem, so each driver's
+firmware is compiled in as a C array generated from those files by
+`tools/rtos/fw-blobs.py`, which the build runs before it names a source.  The
+digests, the upstream each file came from and the redistribution terms are in
+[`docs/FIRMWARE-NOTICES.md`](docs/FIRMWARE-NOTICES.md); the arrays themselves
+are build products and stay out of git.
 
 ## Building the Linux kernel module
 
@@ -445,8 +448,9 @@ tools/check-release-docs.sh         # reader-facing docs carry no private refere
 tools/netio/build.sh                # the pinned NETIO peer (the Linux host / Pi client)
 ```
 
-Firmware blobs are not committed; `docs/FIRMWARE-NOTICES.md` carries their
-digests, the source files and the redistribution terms.
+The firmware images are committed under `firmware/`; the C arrays the images
+link are generated from them by `tools/rtos/fw-blobs.py` and are not.
+`docs/FIRMWARE-NOTICES.md` carries the digests and the redistribution terms.
 
 ## The reference boards
 

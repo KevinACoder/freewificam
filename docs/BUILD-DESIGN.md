@@ -454,11 +454,11 @@ profiles were read.
   boundary is documented in §7.2.  A1-style `-D` equivalence is not expected
   after the resource flags were added; the contract is the defconfig + the
   generated fragment, not byte-identical images.
-* The firmware blobs under `components/linuxkpi/fw/` are generated locally and
-  git-ignored; a clean checkout must produce them before building any
-  firmware-based profile.  This is deliberate (firmware is not redistributed),
-  but it means `make.rtos matrix` is not self-contained until the blob
-  generation step is documented.
+* The firmware arrays under `components/linuxkpi/fw/` are generated from
+  `firmware/` and git-ignored; the build generates them itself
+  (`tests/board/rtos/build/fw.mk`), so `make.rtos matrix` is self-contained.
+  `firmware/` carries the vendor images and their terms, and the arrays are a
+  build product of it.
 * The digest's lwIP manifest drift is pre-existing and needs its own
   provenance decision.
 * The shell is interactive only so far: `CONFIG_SHELL_BATCH` is generated but
