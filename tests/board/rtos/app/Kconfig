@@ -77,6 +77,21 @@ config NETIO_RAW_UDP
 config NETIO_RXPATH
 	bool "netio RX path"
 
+config NETIO_BA_LEDGER_MS
+	int "netio block-ack ledger period (ms, 0 = off)"
+	default 0
+	help
+	  Prints the RX block-ack reorder ledger (two lines: the counters, then
+	  the window's head/newest) every N milliseconds while a cell is open.
+	  Zero leaves the historical behaviour - the same ledger appears only at
+	  the cell boundaries.  It exists because a six-second cell needs a
+	  cadence short against the window's 50 ms flush to tell a step from a
+	  slope, and because the cell's own sampler (NETIO_RXPATH) prints ~55
+	  lines per tick and cannot be run that fast: the console is 115200 baud
+	  and an early W7-10 arm that tried it saturated the link, turning a
+	  6 MB/s cell into 481 KByte/s.  These two lines per tick are ~2 % of
+	  that budget.
+
 config NETIO_TCP_PROBE
 	bool "netio TCP probe"
 

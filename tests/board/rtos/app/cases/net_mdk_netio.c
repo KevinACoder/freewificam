@@ -87,6 +87,13 @@
 #include "ethnetif.h"
 #else
 #include "wlan_bridge.h"
+/* The downlink reorder window's own ledger (CONFIG_WLAN_RX_BA).  It is the
+ * one layer between the driver's delivery and net80211's input, so a lossy
+ * cell's account only closes when this module's counters are in it: the W7-08
+ * cells close to the frame (driver 28502, bridge 23841, difference 4661 =
+ * dupfar 4005 + dupbehind 653 + dupslot 3).  With the symbol off the header
+ * still provides the empty inline, so the call site needs no guard. */
+#include "wlan_rx_ba.h"
 #if defined(RTOS_CASE_RTW88_NETIO)
 #include "rtw88_net.h"
 #elif defined(RTOS_CASE_RTW89_NETIO)
@@ -557,6 +564,50 @@ static void emit_usb(const char *tag)
 		}
 	}
 }
+
+/* ------------------------------------------------------------------------
+ * The reorder window's own fast ledger.
+ *
+ * Why it is separate from the sampler above: that one calls
+ * emit_layer_counters(), which is ~55 console lines.  On a 200 ms cadence that
+ * is ~90 lines/s, and the console is 115200 baud (~11.5 kB/s) - the first
+ * W7-10 arm saturated it, and the cell collapsed from ~6 MB/s to 481 KByte/s
+ * with a 19 % uplink loss that is the observer's, not the window's.  The
+ * question here needs two lines every 200 ms, not fifty-five.
+ *
+ * What the two lines decide: `dupfar` (a frame the window cannot admit at all)
+ * climbing in one step and then staying flat is a window that lost sync once;
+ * climbing at a constant slope is a head predicate that is wrong from the
+ * first frame.  `hole` beside it says whether the SNs the head skipped were
+ * ever delivered by the driver.
+ * ------------------------------------------------------------------------ */
+#if defined(CONFIG_NETIO_BA_LEDGER_MS) && (CONFIG_NETIO_BA_LEDGER_MS > 0)
+#define NETIO_BA_LEDGER_MS ((uint32_t)CONFIG_NETIO_BA_LEDGER_MS)
+static osTimerId_t ba_ledger_timer;
+
+static void ba_ledger_tick(void *arg)
+{
+
+	(void)arg;
+	wlan_rx_ba_dump();
+}
+
+static void ba_ledger_window(int open)
+{
+
+	if (ba_ledger_timer == NULL)
+		ba_ledger_timer = osTimerNew(ba_ledger_tick, osTimerPeriodic,
+					     NULL, NULL);
+	if (ba_ledger_timer == NULL)
+		return;
+	if (open)
+		osTimerStart(ba_ledger_timer, NETIO_BA_LEDGER_MS);
+	else
+		osTimerStop(ba_ledger_timer);
+}
+#else
+#define ba_ledger_window(open)	do { (void)(open); } while (0)
+#endif
 
 /* The socket-buffer supply, on its own so the boot heartbeat can print it
  * without the rest of the ledger. */
@@ -1805,6 +1856,7 @@ static void UDP_Server(void *arg)
 #if !NETIO_GMAC
 				emit_rxpath("begin");
 				rxpath_window(1);
+				ba_ledger_window(1);
 #endif
 
 #if defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP
@@ -2123,6 +2175,12 @@ done_send:
 			}
 		}
 		emit_layer_counters("udp-end");
+#if !NETIO_GMAC
+		/* the fast ledger belongs to the cell, not to the boot: stop it
+		 * with the window so an idle board does not spend console
+		 * bandwidth on two identical lines every 200 ms */
+		ba_ledger_window(0);
+#endif
 		lwip_close(csock);
 	}
 	lwip_close(sock);

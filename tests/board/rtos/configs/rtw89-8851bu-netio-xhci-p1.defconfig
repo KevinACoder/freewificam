@@ -1,0 +1,45 @@
+# RK3568 RTL8851BU on xHCI, W7-10 P1: the reorder window sampled at 200 ms.
+#
+# One change from rtw89-8851bu-netio-xhci.defconfig: CONFIG_NETIO_RXPATH plus
+# CONFIG_NETIO_RXPATH_MS=200.  The point is the block-ack reorder ledger
+# (wlan_rx_ba.c).  Its closed account for one lossy cell (boot3 c1 of W7-08):
+# the driver handed up 28502 data frames, the bridge accepted 23841, and the
+# 4661 difference is exactly dupfar(4005) + dupbehind(653) + dupslot(3).
+# The clean cell (boot4 c1) is the same account with dupfar=0 (126 = 126).
+# So the loss is inside that window, and what decides it between a clean and a
+# lossy cell has to be seen as a *timeline*, not as one number per cell:
+# dupfar is either a step (the window lost sync once and stayed lost) or a
+# uniform slope (the head predicate is wrong all along).  The 2 s in-cell
+# cadence is too coarse for a 6 s cell; this profile samples every 200 ms.
+#
+# Measurement discipline: this is an INSTRUMENTED arm.  It changes the console
+# load, so its rate numbers are not baseline numbers.  Only the ledger shape is
+# read from it, and every verdict is taken on the same boot as its control.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_USB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_WLAN_RX_BA=y
+CONFIG_CASES="tick rtw89 rtw89_scan rtw89_join rtw89_netio"
+CONFIG_WLAN_LINE_RTW89=y
+CONFIG_RTW89_USB_BUS=3
+CONFIG_RTW89_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTW89_AP_FREQ=2432
+CONFIG_RTW89_NET_ADDR_STATIC=y
+CONFIG_RTW89_NET_IP="192.168.99.2"
+CONFIG_RTW89_NET_MASK="255.255.255.0"
+CONFIG_RTW89_NET_GW="192.168.99.1"
+
+# The reorder ledger, two lines every 200 ms while a cell is open.  Its own
+# timer, deliberately: CONFIG_NETIO_RXPATH would move the whole 55-line layer
+# dump onto that cadence, and one W7-10 arm measured what that does (the cell
+# collapsed to 481 KByte/s with 19 % uplink loss - the observer's, not the
+# window's).
+CONFIG_NETIO_BA_LEDGER_MS=200
