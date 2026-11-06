@@ -1,7 +1,7 @@
 # RK3568 RTL8851BU on xHCI, W7-10 P1: the reorder window sampled at 200 ms.
 #
 # One change from rtw89-8851bu-netio-xhci.defconfig: CONFIG_NETIO_RXPATH plus
-# CONFIG_NETIO_RXPATH_MS=200.  The point is the block-ack reorder ledger
+# CONFIG_NETIO_BA_LEDGER_MS=200.  The point is the block-ack reorder ledger
 # (wlan_rx_ba.c).  Its closed account for one lossy cell (boot3 c1 of W7-08):
 # the driver handed up 28502 data frames, the bridge accepted 23841, and the
 # 4661 difference is exactly dupfar(4005) + dupbehind(653) + dupslot(3).

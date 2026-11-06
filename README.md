@@ -151,7 +151,7 @@ The profiles carried today, by group:
 | camera | `uvc` (active) | one USB2 root, the video class, the isochronous engine and the four camera cases |
 | USB host | `usb-xhci`, `usb-xhci-diag`, `usb-xhci-diag-full`, `usb-ehci` | the host stack and the mass-storage class on one controller |
 | USB host (firefly v2) | `firefly-v2-usb-xhci` | the same storage case on the board's `usb3_0` xHCI root |
-| RTL8851BU | `rtw89-8851bu`, `rtw89-8851bu-bringup`, `rtw89-8851bu-tx`, `rtw89-8851bu-ehci`, `rtw89-8851bu-ehci-bringup`, `rtw89-8851bu-ehci-scan`, `rtw89-8851bu-ehci-join`, `rtw89-8851bu-tx-ehci` | rtw89 over the linuxkpi USB engine, on an xHCI or EHCI root |
+| RTL8851BU | `rtw89-8851bu`, `rtw89-8851bu-bringup`, `rtw89-8851bu-tx`, `rtw89-8851bu-ehci`, `rtw89-8851bu-ehci-bringup`, `rtw89-8851bu-ehci-scan`, `rtw89-8851bu-ehci-join`, `rtw89-8851bu-tx-ehci`, `rtw89-8851bu-netio{,-obs,-pool}`, `rtw89-8851bu-netio-xhci{,-noba,-p1}` | rtw89 over the linuxkpi USB engine, on an xHCI or EHCI root; the netio arms are the HT20 throughput cells (plain, instrumented, no-BA, and the 200 ms reorder ledger) |
 | RTL8188EUS | `rtl8xxxu-8188eu-{bringup,bringup-hb,bringup-all,scan,join,data,net,netio-ar-g,netio-ar-ht20,netio-ar-ht20-ba}` | rtl8xxxu over CherryUSB, the bring-up-to-network ladder and the netio arms |
 | RTL8723BU | `rtl8xxxu-8723bu-{bringup,bringup-all,scan,join,data,net,netio-ar-ht20,netio-ar-ht20-ba}` | the same driver on an EHCI root, including the composite-interface case and the netio arms |
 | AC 7260 | `iwlwifi-7260`, `iwlwifi-7260-sjd` | iwlwifi/mvm over the linuxkpi PCI engine, attach to network |
@@ -295,6 +295,69 @@ register accesses per boot also return `-110` (reads of `0x770`, a write of
 this line - a machine that stopped printing a second into the window - was a
 queue-membership defect in the shared socket-buffer code, fixed in this tree.
 
+### RK3568 / RTL8851BU / USB2 xHCI
+
+The same driver as the 8188EUS row above, one generation newer and on the
+other USB controller.  HT20 72.2 MCS7 SGI, 2.4 GHz ch5, the same bench AP and
+the same pinned client as every row in this section; 1440 B UDP in both
+directions, one six second cell each way per boot.
+
+| case | rtos, no BA | rtos, RX-BA (before) | rtos, RX-BA (after) | ko | Linux reference |
+|---|---|---|---|---|---|
+| `W-UDP-D/HT20` | rc=124 | 47.4 / 51.8 / 48.7 / 43.7 / 45.4 / 51.3 (6 cells, 2 more `rc=124`) | **42.7 / 46.6 / 42.5 / 47.0 / 44.7 / 49.0** (6 cells, 3 boots, 0 % loss) | rc=124 | 58.9 / 57.8 / 59.5 |
+| `W-UDP-U/HT20` | 15.3 (rc=124) | 53.7 / 41.6 / 42.5 / 44.7 / 53.3 / 53.3 (**16-19 % loss in three**, 6 cells) | **45.5 / 47.7 / 47.9 / 47.5 / 52.1 / 53.7 / 53.2** (7 cells, 4 boots, 0 % loss) | 56.1 (0.01 %) | 55.6 / 53.9 / 55.3 |
+
+The uplink column pair is one bug, not a slow stack.  Before, three of six
+cells dropped 16-19 % of what the client sent; after, seven of seven cells
+drop none, at 0.83-0.98x the reference mean against 0.76-0.98x before, with
+the mean moving 48.2 to 49.7 Mbit/s.  What separated them was not the air, the
+USB path or the stack: the receive reorder window's own counters closed the
+account to the frame.  In one lossy cell the driver handed up 28,502 data
+frames, the bridge accepted 23,841, and the 4,661 difference was exactly
+`dupfar` 4,005 plus `dupbehind` 653 plus `dupslot` 3; the clean cell of the
+same image is the same account with `dupfar` 0 (126 = 126), and the access
+point's own `tx_packets` with zero retries and zero failures rules out the
+medium.
+
+The window could not recover.  Its resync test asked "is the newest frame
+ahead of the head" with a 12-bit modular compare, which is only meaningful
+while the head trails by fewer than 2048 sequence numbers; past that it reads
+false, and since the flush timer is armed only when a frame enters a slot, a
+lost window stops arming it.  Sampling that ledger every 200 ms inside a cell
+(a Kconfig period, `CONFIG_NETIO_BA_LEDGER_MS`, off by default) caught the
+moment twice: `dupfar` 0 to 625 while the lag crossed 2048, then `dupfar`
+11,827 at the end of the cell with the resync counter frozen at 2 - and a
+second boot with 12,539 against a counter frozen at 11.  Four of 847 samples
+differed; the rest repeated one identical triple of held/flushed/hole.
+
+The fix is three changes in the reorder module, none of them in the driver or
+the USB engine: the window tracks how far the head trails as a plain count
+instead of recomputing it from two 12-bit numbers, so "hopelessly behind"
+becomes a state the code can name; the recovery jumps to the oldest frame
+still held, or to one window behind the live sequence when nothing is held
+(jumping to the live sequence itself turns one late arrival into a window full
+of declared losses - measured, 33 % loss); and a slot the head has passed is
+released, since no other path freed one and the window only has 128.  A frame
+that arrives outside a lost window now triggers the recovery directly instead
+of waiting for a timer that has no reason to be armed, which is the cost: that
+branch walks the slots, and it is taken exactly when the window is lost.
+
+The downlink row is narrower than the uplink one and is not claimed as
+verified.  Two of eight cells still end in `rc=124` after the fix: the board
+stops printing during the peer-to-board phase and stops answering on the
+interface.  That is the same shape as the pre-fix timeouts but it is **not**
+the reorder window - in one of them the window's counters and the receive
+counters kept climbing normally - and it has not been attributed.  The cells
+that did finish sit at 0.72-0.83x the reference mean (45.4 against 58.7),
+slightly under the 48.0 mean of the six pre-fix cells that finished; the two
+spreads overlap and nothing here controls for it, so whether the recovery path
+costs a few percent on the downlink is not known.  Both are the next question
+on this line.
+
+The no-BA column is the image with `CONFIG_WLAN_RX_BA=n`: 15.3 Mbit/s uplink
+at one frame per transfer and then a timeout, which is what the reorder module
+is worth in the other direction.
+
 ### firefly v2 / USB mass storage (USB2 xHCI, `usb3_0`)
 
 The same storage case as the RK3568 rows, moved to the second board.  It runs
@@ -400,7 +463,11 @@ latter were genuine duplicates).  Pacing the same client to 1,000 pps delivered
 6,016 of 6,016 frames, which separated congestion from an algorithm fault.
 
 The window is now 128 slots, one full AP buffer with slack; nothing else
-changed (no driver, no USB engine).  Clean image, two boots, two cells each:
+changed (no driver, no USB engine).  Those 128 slots are the window the
+RTL8851BU row above had to repair: the recovery path in it could disable
+itself, and that module is shared, so a chip whose link fills the window hard
+enough to wrap the 12-bit sequence space can reach it.  Clean image, two
+boots, two cells each:
 30.6 / 24.1 and 30.5 / 21.7 Mbit/s downlink, zero loss in three of four cells,
 uplink 25.8-26.9 Mbit/s.  The fourth cell dropped 11% (21.7 Mbit/s), the
 remaining variance this row does not explain; the xHCI 8188EU arm re-measured

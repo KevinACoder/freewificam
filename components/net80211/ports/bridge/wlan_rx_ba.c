@@ -62,6 +62,7 @@ struct ba_tid {
 	uint16_t head;		/* the next SN the stack must see */
 	uint16_t newest;	/* the highest SN the window has seen */
 	int	newest_valid;
+	unsigned int lag;	/* how far `head` trails `newest`, in SNs */
 };
 
 static struct {
@@ -83,6 +84,7 @@ static struct {
 	unsigned int		dup_far;	/* ahead, but outside the window */
 	unsigned int		dup_slot;	/* the same SN already held */
 	unsigned int		drop_window;	/* window full even after a flush */
+	unsigned int		drop_stale;	/* slot the head had already passed */
 	unsigned int		behind_hist[6];	/* how far behind, in SNs */
 	unsigned int		hole;
 	unsigned int		dropped;
@@ -111,6 +113,59 @@ static uint16_t
 ba_dist(uint16_t a, uint16_t b)
 {
 	return (uint16_t)((a - b) & 0x0fff);
+}
+
+/*
+ * How far the window has fallen behind, with no limb at half the sequence
+ * space.
+ *
+ * ba_after() answers "is a ahead of b", and by construction it can only be
+ * trusted while the gap is under 2048: past that the ordering wraps and it
+ * reads false for a head that is hopelessly behind.  That is not a corner
+ * case here - it is the state the window lands in, and it is the state a
+ * recovery test must be able to name (W7-10: dupfar grew to 11827 for one
+ * boot and 12539 for another while the recovery counter never moved again).
+ *
+ * `lag` is the distance the head is behind the newest SN the TID has seen,
+ * tracked as an unsigned count instead of being recomputed from two 12-bit
+ * numbers: a frame that advances the newest SN while the head stands still
+ * *creates* lag, and only a head advance consumes it.  Nothing wraps until
+ * 4096 frames have been swallowed in one go, which a live link cannot do
+ * (the flush timer bounds the burst at BA_FLUSH_MS of traffic).
+ */
+static unsigned int
+ba_lag(const struct ba_tid *t)
+{
+
+	return t->lag;
+}
+
+static void
+ba_lag_note_newest(struct ba_tid *t, uint16_t sn)
+{
+	unsigned int step;
+
+	if (!t->newest_valid) {
+		t->newest = sn;
+		t->newest_valid = 1;
+		t->lag = 0;
+		return;
+	}
+	step = ba_dist(sn, t->newest);
+	/* a repeat or an out-of-order copy does not move the newest SN, and a
+	 * wrap of the 12-bit space is a normal (small) step */
+	if (step == 0 || step >= 0x800)
+		return;
+	t->newest = sn;
+	t->lag += step;
+}
+
+/* The head moved forward by `n` sequence numbers; consume the lag with it. */
+static void
+ba_lag_consume(struct ba_tid *t, unsigned int n)
+{
+
+	t->lag = t->lag > n ? t->lag - n : 0;
 }
 
 static void
@@ -173,6 +228,7 @@ ba_drain_locked(uint8_t tid)
 			break;
 		ba_slot_deliver(s);
 		ba.tids[tid].head = (uint16_t)((ba.tids[tid].head + 1) & 0x0fff);
+		ba_lag_consume(&ba.tids[tid], 1u);
 		n++;
 	}
 	return n;
@@ -186,29 +242,81 @@ static int
 ba_flush_locked(void)
 {
 	int t, n = 0;
+	int i;
 
 	for (t = 0; t < BA_TIDS; t++) {
 		if (!ba.tids[t].active)
 			continue;
-		/* A gap the AP is not going to fill must not hold the window for
-		 * ever: once the head is more than a window behind the newest frame
-		 * seen, jump it to the oldest SN the window can still admit and count
-		 * the skipped SNs as lost.  Without this, one lost MPDU followed by a
-		 * burst leaves every later frame outside BA_WIN (dup_far) and the
-		 * stack never sees this TID again. */
-		if (ba.tids[t].newest_valid &&
-		    ba_after(ba.tids[t].newest, ba.tids[t].head) &&
-		    ba_dist(ba.tids[t].newest, ba.tids[t].head) > BA_WIN) {
-			ba.hole += (unsigned int)
-			    (ba_dist(ba.tids[t].newest, ba.tids[t].head) - BA_WIN);
-			ba.tids[t].head = (uint16_t)
-			    ((ba.tids[t].newest - BA_WIN + 1) & 0x0fff);
+		/*
+		 * A gap the AP is not going to fill must not hold the window for
+		 * ever.  The test is on `lag`, never on ba_after(): the whole
+		 * point is to fire when the window is hopelessly behind, and that
+		 * is exactly the state in which the modular comparison has
+		 * already wrapped and reads "not ahead" - a recovery test that
+		 * ba_after() can silently disable makes the state permanent,
+		 * which is what W7-10 measured (two boots, dupfar 11827 and
+		 * 12539, recovery counter frozen at 2 and 11).
+		 *
+		 * Where the head lands depends on what is still worth keeping:
+		 *   - the oldest frame the window holds is real data, so jump
+		 *     there and let the drain below deliver it;
+		 *   - with nothing held, the window cannot reconstruct the run at
+		 *     all, so resynchronise to the live sequence (newest + 1) and
+		 *     count everything skipped as lost.  Jumping only
+		 *     `newest - BA_WIN + 1` in that case leaves every arriving
+		 *     frame outside the window again - the window would resync on
+		 *     each frame and never deliver one.
+		 */
+		if (ba.tids[t].newest_valid && ba_lag(&ba.tids[t]) > BA_WIN) {
+			struct ba_slot *oldest = NULL;
+			uint16_t oldest_d = 0;
+			unsigned int lag = ba_lag(&ba.tids[t]);
+			int i;
+
+			for (i = 0; i < BA_SLOTS; i++) {
+				struct ba_slot *s = &ba.slots[i];
+				uint16_t d;
+
+				if (!s->used || s->tid != (uint8_t)t)
+					continue;
+				d = ba_dist(s->sn, ba.tids[t].head);
+				if (d == 0 || d >= 0x800)
+					continue;	/* behind the head */
+				if (oldest == NULL || d < oldest_d) {
+					oldest = s;
+					oldest_d = d;
+				}
+			}
+			if (oldest != NULL) {
+				ba.hole += oldest_d;
+				ba.tids[t].head = oldest->sn;
+				ba_lag_consume(&ba.tids[t],
+					       oldest_d < lag ? oldest_d : lag);
+			} else {
+				/* Nothing held: the window cannot reconstruct the
+				 * run, so it keeps the widest admission it can and
+				 * lets the head sit one window behind the live
+				 * sequence.  Jumping to newest + 1 instead looks
+				 * tidier and is wrong: a frame that is still in
+				 * the host's receive path has not been lost, and
+				 * declaring it lost turns one late arrival into a
+				 * window's worth of holes (W7-10 fix arm: jumping
+				 * to newest + 1 produced 8252 `dupbehind` and a
+				 * 33 % client-side loss).  The skipped SNs are the
+				 * ones that really never came. */
+				unsigned int keep = BA_WIN - 1u;
+
+				if (lag > keep)
+					ba.hole += lag - keep;
+				ba.tids[t].head = (uint16_t)
+				    ((ba.tids[t].newest - keep) & 0x0fff);
+				ba.tids[t].lag = keep;
+			}
 			ba.resync++;
 		}
 		for (;;) {
 			struct ba_slot *best = NULL;
 			uint16_t bestd = 0;
-			int i;
 
 			for (i = 0; i < BA_SLOTS; i++) {
 				struct ba_slot *s = &ba.slots[i];
@@ -231,8 +339,33 @@ ba_flush_locked(void)
 			if (bestd != 0) {
 				ba.hole += bestd;
 				ba.tids[t].head = best->sn;
+				/* the head moved, so the lag it had does too;
+				 * without this the next flush would see the old
+				 * lag and count the same SNs as holes twice */
+				ba_lag_consume(&ba.tids[t], bestd);
 			}
 			n += ba_drain_locked((uint8_t)t);
+		}
+		/*
+		 * A slot the head has passed can never be delivered: the drain
+		 * only walks forward from the head, and a frame that fell behind
+		 * it is stale by definition.  Left alone it would hold its slot
+		 * for the life of the session (there is no other path that frees
+		 * slots), and a window that leaks slots eventually cannot admit
+		 * anything.  Dropping it here is the only place that can.
+		 */
+		for (i = 0; i < BA_SLOTS; i++) {
+			struct ba_slot *s = &ba.slots[i];
+
+			if (!s->used || s->tid != (uint8_t)t)
+				continue;
+			if (s->sn == ba.tids[t].head)
+				continue;
+			if (ba_after(s->sn, ba.tids[t].head))
+				continue;
+			s->used = 0;
+			ba.dropped++;
+			ba.drop_stale++;
 		}
 	}
 	ba.flushed += (unsigned int)n;
@@ -381,14 +514,11 @@ ba_qos_data(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 	sn = (uint16_t)(((uint16_t)(frame[22] | (frame[23] << 8))) >> 4);
 
 	mutex_lock(&ba.lock);
-	if (!ba.tids[tid].newest_valid ||
-	    ba_after(sn, ba.tids[tid].newest)) {
-		ba.tids[tid].newest = sn;
-		ba.tids[tid].newest_valid = 1;
-	}
+	ba_lag_note_newest(&ba.tids[tid], sn);
 	if (sn == ba.tids[tid].head) {
 		ba_deliver_locked(frame, len, m);
 		ba.tids[tid].head = (uint16_t)((ba.tids[tid].head + 1) & 0x0fff);
+		ba_lag_consume(&ba.tids[tid], 1u);
 		(void)ba_drain_locked(tid);
 	} else if (ba_after(sn, ba.tids[tid].head) &&
 	    ba_dist(sn, ba.tids[tid].head) <= BA_WIN) {
@@ -450,8 +580,27 @@ ba_qos_data(const struct wlan_rx_ba_meta *m, const uint8_t *frame, size_t len)
 			ba.behind_hist[4]++;
 		else
 			ba.behind_hist[5]++;
+	} else if (ba_lag(&ba.tids[tid]) > BA_WIN) {
+		/*
+		 * Not in the window, and the window is lost: the head trails the
+		 * live sequence by more than a window, so this frame cannot be
+		 * admitted however it is classified.  Recover here rather than
+		 * waiting for the flush timer, which has no reason to be armed -
+		 * it is armed only when a frame enters a slot, and once the
+		 * window is lost no frame does (W7-10's permanent state).
+		 *
+		 * Losing the race to the 12-bit compare is normal (this branch
+		 * fires whenever a burst outruns the window), so this is not an
+		 * error: the frame is counted, the window resynchronises, and the
+		 * next one lands.
+		 */
+		ba.dup++;
+		ba.dup_far++;
+		(void)ba_flush_locked();
 	} else {
-		/* Ahead of the head, past the window: nothing can hold it. */
+		/* Ahead of the head, past the window, and the window is sane:
+		 * the head is about to advance and this SN is too old a burst
+		 * mate to hold. */
 		ba.dup++;
 		ba.dup_far++;
 	}
@@ -533,9 +682,11 @@ wlan_rx_ba_dump(void)
 {
 
 	wlan_osal_log("wlan: ba addba_req=%u addba_rsp=%u delba=%u held=%u "
-	    "flushed=%u dup=%u hole=%u dropped=%u frames=%u\n",
+	    "flushed=%u dup=%u hole=%u dropped=%u (win=%u stale=%u) "
+	    "frames=%u\n",
 	    ba.addba_req, ba.addba_rsp, ba.delba, ba.held, ba.flushed,
-	    ba.dup, ba.hole, ba.dropped, ba.frames);
+	    ba.dup, ba.hole, ba.dropped, ba.drop_window, ba.drop_stale,
+	    ba.frames);
 	/* The reorder verdict, split by reason: a duplicate copy the head has
 	 * already passed (behind), a copy of a frame still held (slot), a frame
 	 * ahead of the window (far), or a window that stayed full after a
