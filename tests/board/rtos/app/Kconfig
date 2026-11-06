@@ -61,6 +61,16 @@ config NETIO_CPU_KHZ
 	int "netio CPU kHz (requested OPP)"
 	default 1992000
 
+config NETIO_S2C_MS
+	int "netio S2C transmit window (ms)"
+	default 6000
+	help
+	  The board-to-client transmit cell's length.  Six seconds is the
+	  historical lab window; a throughput verdict needs a window long
+	  enough that the rate is not diluted by the ramp, so the alignment
+	  arms raise it to 30000.  It is a measurement lever: changing it
+	  changes what the cell measures, not the device.
+
 config NETIO_RAW_UDP
 	bool "netio raw UDP"
 

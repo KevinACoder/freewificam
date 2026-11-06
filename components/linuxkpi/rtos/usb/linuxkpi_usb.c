@@ -462,12 +462,12 @@ lkpi_usb_census_print(void)
 	lkpi_census_histo_print("perf census: A usb kick", &lkpi_usb_census.kick);
 	lkpi_census_histo_print("perf census: A usb cb", &lkpi_usb_census.cb);
 	lkpi_census_histo_print("perf census: A usb starved", &lkpi_usb_census.starved);
-	lkpi_printf(ULOG_INFO_LEVEL,
+	lkpi_printf(ULOG_ALWAYS_LEVEL,
 	    "perf census: A usb urbs done=%u bytes=%u mean_len=%u short=%u "
 	    "err=%u starved=%u\n", lkpi_usb_urb_done, lkpi_usb_urb_bytes,
 	    lkpi_usb_urb_done != 0u ? lkpi_usb_urb_bytes / lkpi_usb_urb_done : 0u,
 	    lkpi_usb_urb_short, lkpi_usb_urb_err, lkpi_usb_starved);
-	lkpi_printf(ULOG_INFO_LEVEL,
+	lkpi_printf(ULOG_ALWAYS_LEVEL,
 	    "perf census: A usb qlen min=%u mean=%u n=%u\n", lkpi_usb_qlen_min,
 	    lkpi_usb_qlen_n != 0u ? lkpi_usb_qlen_sum / lkpi_usb_qlen_n : 0u,
 	    lkpi_usb_qlen_n);
@@ -485,11 +485,11 @@ lkpi_usb_census_print(void)
 
 		if (ep->key == NULL || ep->enqueued == 0u)
 			continue;
-		lkpi_printf(ULOG_INFO_LEVEL,
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
 		    "perf census: A usb ep%u enq=%u done=%u kicks=%u err=%u "
 		    "lastlen=%u\n", ep->ep_addr, ep->enqueued, ep->completions,
 		    ep->kicks, ep->errors, ep->last_in_len);
-		lkpi_printf(ULOG_INFO_LEVEL,
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
 		    "perf census: A usb ep%u part svc=%u/%u gap=%u/%u "
 		    "starved=%u/%u\n", ep->ep_addr,
 		    ep->census_svc_n, (u32)(ep->census_svc_ns / 1000u),

@@ -77,7 +77,7 @@ lkpi_census_histo_print(const char *tag, const struct lkpi_census_histo *h)
 	if (skipped != 0u)
 		(void)snprintf(&hot[len], sizeof(hot) - len, "%s+%u",
 		    len != 0u ? " " : "", skipped);
-	lkpi_printf(ULOG_INFO_LEVEL,
+	lkpi_printf(ULOG_ALWAYS_LEVEL,
 	    "%s n=%u avg_us=%llu max_us=%llu hot=[%s] over=%u\n", tag,
 	    h->count, avg_us, h->max_ns / 1000u, hot, h->overflow);
 }
@@ -140,7 +140,7 @@ lkpi_census_sites_print(const char *tag, const struct lkpi_census_sites *s)
 		len += (size_t)wrote;
 	}
 	sites[len] = '\0';
-	lkpi_printf(ULOG_INFO_LEVEL, "%s n=%u spent_us=%llu sites=[%s]\n", tag,
+	lkpi_printf(ULOG_ALWAYS_LEVEL, "%s n=%u spent_us=%llu sites=[%s]\n", tag,
 	    s->total_count, s->total_ns / 1000u, sites);
 }
 

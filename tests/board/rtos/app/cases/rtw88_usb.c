@@ -100,6 +100,14 @@ rtw88_usb_sink(ulog_level_t level, const char *line)
 {
 	(void)level;
 
+	/* a census dump is the measurement itself, not driver noise: it is
+	 * printed on demand at a window boundary (30 s of traffic in front of
+	 * it) and the noise gate below would drop it */
+	if (strstr(line, "perf census") != NULL) {
+		rtw88_claim_seen += 0;
+		CASE_ANCHOR("lkpi: %s", line);
+		return;
+	}
 	if (strstr(line, "0bda:c820") != NULL) {
 		rtw88_claim_seen++;
 		CASE_ANCHOR("rtw88: claim %s\n", line);

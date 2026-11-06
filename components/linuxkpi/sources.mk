@@ -31,6 +31,13 @@ obj-$(CONFIG_LINUXKPI_USB) += \
 
 obj-$(CONFIG_LINUXKPI_PCI) += rtos/pci/linuxkpi_pci.c
 obj-$(CONFIG_LINUXKPI_SDIO) += rtos/sdio/linuxkpi_sdio.c rtos/sdio/lkpi_sdio_be.c
+
+# The USB engine's histograms (svc/gap/wake/kick/cb, the qlen census) live
+# behind CONFIG_LKPI_CENSUS, and the helpers that add and print them are in
+# lkpi_census.c.  The wlan tag has always linked it; this tag did not, so the
+# day a USB line switched the census on the helpers were undefined.  Same
+# file, same condition, both consumers.
+obj-$(CONFIG_LINUXKPI_CENSUS) += rtos/lkpi_census.c
 endif
 
 ifeq ($(SRC_TAG),cherry)

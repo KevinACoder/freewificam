@@ -101,6 +101,13 @@
 #include "lkpi_usb_cherryusb.h"
 /* the socket-buffer supply, for the pool ledger the anchors print */
 #include "skbuff_pool.h"
+#ifdef CONFIG_LKPI_CENSUS
+/* the transfer layer's time partition (arm -> completion -> arm).  The census
+ * clock is a case-owned hook (the SDIO case has one; this one needs its own)
+ * and the histograms are engine-wide, so a cell brackets them: reset at the
+ * window's start, print at its end, and the burst is charged to this cell. */
+#include "lkpi_census.h"
+#endif
 
 /* Same seam rtl8xxxu_join.c uses: the counters are exported unconditionally,
  * but their header lives in the mac80211 substitute's world, which this file
@@ -113,8 +120,30 @@ void lkpi80211_rx_boundary_counters(uint32_t *in, uint32_t *refused,
  * gate is closed.  Declared here for the same reason as the pair above. */
 void lkpi_txq_census(unsigned long *queued, unsigned long *handed,
 		     unsigned long *orphans, unsigned long *refusals);
+unsigned long lkpi_txq_list_len(void);
 void lkpi80211_tx_gate_counters(uint32_t *stopped, uint32_t *wakes);
 #endif
+
+#ifdef CONFIG_LKPI_CENSUS
+/*
+ * The census clock.  The engine's histograms are stamped through
+ * lkpi_census_now_ns(); the SDIO case owns one (app/cases/wlan.c), and an
+ * image never carries two cases, so the WLAN netio image needs its own.  The
+ * architectural timer is the project's only time base (24 MHz, fixed), and
+ * this is the same conversion wlan.c uses - wall time, not cycles.
+ */
+uint64_t
+lkpi_census_now_ns(void)
+{
+	uint32_t freq = gtimer_freq_get();
+	uint64_t count = gtimer_count_get();
+
+	if (freq == 0u)
+		return 0u;
+	return (count / freq) * 1000000000ULL +
+	    ((count % freq) * 1000000000ULL) / freq;
+}
+#endif /* CONFIG_LKPI_CENSUS */
 
 /* ---------------------------------------------------------------------------
  * The ported file (Arm's netio.c, with the MDK seams filled by lwIP).
@@ -343,6 +372,10 @@ static void emit_tx_census(const char *tag)
 		   "stopped=%08x wakes=%u\n",
 		   tag, q, handed, orph, refu, (unsigned)stopped,
 		   (unsigned)wakes);
+	/* the counter and the list walk, side by side: a frame that is linked
+	 * but not counted is the stranding shape (see lkpi_txq_list_len) */
+	MDK_ANCHOR("netio: txqwalk tag=%s qlen_walk=%lu\n", tag,
+		   lkpi_txq_list_len());
 }
 
 /*
@@ -949,15 +982,30 @@ static void thread_exit(int32_t line, int32_t bsd_error)
 #ifndef UDP_RX_PRIO
 #define UDP_RX_PRIO osPriorityAboveNormal
 #endif
+/* The board-to-client transmit cell's window.  The historical lab window is
+ * 6 s; a throughput verdict needs one long enough that the rate is not diluted
+ * by the ramp and the pipeline has somewhere to settle, so the alignment arms
+ * raise it through the profile (CONFIG_NETIO_S2C_MS).  It is a measurement
+ * lever, not a device change. */
+#if defined(CONFIG_NETIO_S2C_MS) && CONFIG_NETIO_S2C_MS > 0
+#define NETIO_S2C_MS	CONFIG_NETIO_S2C_MS
+#else
+#define NETIO_S2C_MS	6000
+#endif
 /* How long a UDP transmit cell waits through WLAN netif backpressure before it
- * treats the refusal as an abort.  The bridge gates the driver's transmit queue
- * while it is full and wakes it on the next completion (milliseconds), so a
+ * ends the cell early.  The bridge gates the driver's transmit queue while it
+ * is full and wakes it on the next completion (milliseconds), so a
  * non-blocking `sendto` blast sees ERR_MEM and must wait for the wake the way
- * TCP's window would make it wait.  A refusal that outlives this window is the
- * stall class the cell reports.  The wired arm's 256-slot ring never refuses,
- * and it is compiled without the retry so its bytes stay the measured bytes. */
-#ifndef S2C_REFUSAL_MAX
-#define S2C_REFUSAL_MAX 200
+ * TCP's window would make it wait.  The pre-AGG-04 rule ended the cell after
+ * 200 consecutive refusals (one per millisecond), so a sustained window never
+ * existed; the alignment cell instead runs to its window and only ends early
+ * on a wedge - one full second in which the stack refused every single frame
+ * while a transmit window is open.  That is not backpressure, it is a dead
+ * completion path, and the exit line names it.  The wired arm's 256-slot ring
+ * never refuses, and it is compiled without the retry so its bytes stay the
+ * measured bytes. */
+#ifndef S2C_WEDGE_MS
+#define S2C_WEDGE_MS 1000
 #endif
 
 static const osThreadAttr_t udp_rx_attr = {
@@ -1864,9 +1912,26 @@ static void UDP_Server(void *arg)
 				io.timeover = false;
 				init_buffer(io.buf, io.buf_size);
 				if (io.timer != NULL)
-					osTimerStart(io.timer, 6000U);
+					osTimerStart(io.timer, NETIO_S2C_MS);
+#ifdef CONFIG_LKPI_CENSUS
+				/* the cell brackets the transfer census: the
+				 * window is the phase whose time partition the
+				 * verdict reads */
+				lkpi_usb_census_reset();
+#endif
 
 				io.buf[0] = 0;
+				/* the cell's time base and exit reason outlive the
+				 * send-loop block so the exit line at done_send can
+				 * report both (the block's other state is local) */
+				uint64_t s2c_t0 = gtimer_count_get();
+				const char *s2c_reason = "window";
+#ifdef CONFIG_LKPI_CENSUS
+				/* one mid-cell dump: a chip or endpoint that
+				 * dies before the window closes must not also
+				 * take the time partition with it */
+				bool s2c_census_mid = false;
+#endif
 				{
 					/* The transmit cell opens here, after the
 					 * buffer and timer are armed, so the cell
@@ -1876,14 +1941,15 @@ static void UDP_Server(void *arg)
 					struct net_prof_snap prof_a;
 					struct net_prof_snap prof_b;
 #endif
-					uint64_t s2c_t0 = gtimer_count_get();
 					uint64_t s2c_c0 = net_prof_cpu_cycles();
 					int s2c_reported = 0;
 #if !NETIO_GMAC
 					/* Consecutive netif backpressure refusals the
-					 * transmit cell has waited through (WLAN only;
-					 * see S2C_REFUSAL_MAX). */
+					 * transmit cell has waited through, and when
+					 * the current run began (WLAN only; see
+					 * S2C_WEDGE_MS). */
 					int s2c_refusals = 0;
+					uint64_t s2c_stall_t0 = 0u;
 #endif
 
 #if NETIO_GMAC
@@ -1910,20 +1976,28 @@ static void UDP_Server(void *arg)
 							 * on the next completion, so a
 							 * non-blocking blast sees ERR_MEM
 							 * between wakes.  Wait for the wake
-							 * and resend the same frame; a refusal
-							 * that persists past S2C_REFUSAL_MAX
-							 * milliseconds still aborts the cell.
-							 * WLAN-only so the wired arm's bytes
-							 * remain what its numbers were measured
-							 * with (its 256-slot ring never
-							 * refuses). */
-							if (rc < 0 && ++s2c_refusals < S2C_REFUSAL_MAX) {
+							 * and resend the same frame; only a
+							 * run that outlives S2C_WEDGE_MS ends
+							 * the cell early (and is named in the
+							 * exit line).  WLAN-only so the wired
+							 * arm's bytes remain what its numbers
+							 * were measured with (its 256-slot
+							 * ring never refuses). */
+							if (rc < 0) {
 								netio_s2c_refusals++;
-								osDelay(1);
-								continue;
-							}
-							if (rc >= 0)
+								if (s2c_refusals++ == 0)
+									s2c_stall_t0 = gtimer_count_get();
+								if ((gtimer_count_get() -
+								     s2c_stall_t0) / 24000u >=
+								    (uint64_t)S2C_WEDGE_MS) {
+									s2c_reason = "wedge";
+								} else {
+									osDelay(1);
+									continue;
+								}
+							} else {
 								s2c_refusals = 0;
+							}
 #endif
 							if (rc < 0) {
 								/* Close the cell at
@@ -1962,21 +2036,29 @@ static void UDP_Server(void *arg)
 								 * counters are read-clear that read
 								 * would zero the numbers this line is
 								 * about to report. */
-								emit_layer_counters("udp-s2c-abort");
-								/* K2-16: after the ledger, in the idle
-								 * window this branch waits out. The
-								 * probe freezes its pre-trigger ring,
-								 * scans the TX descriptors, kicks the
-								 * tail pointer once, samples the
-								 * channel for ~96 ms and dumps. */
+								emit_layer_counters("udp-s2c-wedge");
+								/* K2-16: after the ledger. The probe
+								 * freezes its pre-trigger ring, scans
+								 * the TX descriptors, kicks the tail
+								 * pointer once, samples the channel
+								 * for ~96 ms and dumps. */
 								stall_capture();
 								stall_end();
-								while (!io.timeover)
-									osDelay(2);
+								/* a wedge ends the cell; it does not
+								 * idle out the rest of a 30 s window */
+								osDelay(20u);
 								goto done_send;
 							}
 							nb += rc;
 							stall_tick();
+#ifdef CONFIG_LKPI_CENSUS
+							if (!s2c_census_mid &&
+							    gtimer_count_get() - s2c_t0 >
+							    4u * 24000000u) {
+								s2c_census_mid = true;
+								lkpi_usb_census_print();
+							}
+#endif
 						}
 						io.tx_bytes += io.pkt_size;
 						io.pkt_count++;
@@ -1993,9 +2075,27 @@ static void UDP_Server(void *arg)
 						                   net_prof_cpu_cycles() - s2c_c0,
 						                   ticks, io.pkt_count);
 					}
+					/* the window's closing ledger: the same
+					 * counters the wedge path prints, so a
+					 * window that ran its full length has its
+					 * three faces on the console too */
+					emit_layer_counters("udp-s2c-end");
 				}
 done_send:
 				stall_end();
+#ifdef CONFIG_LKPI_CENSUS
+				/* the transfer time partition of the window just
+				 * closed (svc/gap/wake/kick/cb/starved + qlen),
+				 * printed after the burst so the log ring cannot
+				 * drop it */
+				lkpi_usb_census_print();
+#endif
+				MDK_ANCHOR("netio: udp s2c exit reason=%s frames=%lu "
+					   "refusals=%lu secs=%u\n",
+					   s2c_reason,
+					   (unsigned long)io.pkt_count,
+					   netio_s2c_refusals,
+					   (unsigned)((gtimer_count_get() - s2c_t0) / 24000000u));
 #if !(defined(CONFIG_NETIO_RAW_UDP) && CONFIG_NETIO_RAW_UDP)
 				lwip_close(io.udp_sock);
 #endif
