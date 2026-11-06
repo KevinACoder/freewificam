@@ -2465,6 +2465,8 @@ void lkpi_skb_do_queue_tail(struct sk_buff_head *, struct sk_buff *);
 void lkpi_skb_do_queue_head(struct sk_buff_head *, struct sk_buff *);
 struct sk_buff *lkpi_skb_do_dequeue(struct sk_buff_head *);
 void lkpi_skb_do_unlink(struct sk_buff *, struct sk_buff_head *);
+void lkpi_skb_scrub_hit(void);
+unsigned int lkpi_skb_scrub_count(void);
 
 /* the dev_alloc_skb split ([LNX] skbuff.c:600): +NET_SKB_PAD reserve,
  * so a later push on the returned skb has the headroom Linux promises.

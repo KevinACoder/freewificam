@@ -1,0 +1,75 @@
+# RK3568 RTL8821CU, HT20 cell, AGG-05 audit arm (2026-11-06).
+#
+# The clean -long arm plus CONFIG_LKPI_TXQ_AUDIT: the engine compares its
+# per-queue counter with the list it links at every exit and dumps the slots
+# the first few times they disagree.  It is an instrument, not a fix: the
+# numbers from this arm are not comparable to the clean arm's.
+#
+# The aggregation fix (RTOS-AGG-03) made 3 frames per bulk-out deliver at
+# 99.2-99.6%; what is left is rate: 8.65k frames/s against the linuxnative
+# GT's 21.5k.  Every number so far came from a cell that ended after one to
+# three seconds - the transmit window was a fixed 6 s and the abort rule ended
+# it after 200 ms of refusals - so before any rate verdict this arm runs the
+# cell for 30 s.
+#
+# One change from agg2-ehci: CONFIG_NETIO_S2C_MS=30000.  No rate lever, no
+# queue lever, no observation switch: this is the clean arm the final number
+# is allowed to come from.
+# (base of this file: agg2-ehci, 2026-11-05)
+#
+# Identical to rtw88-usb-8821cu-ar-ht20-noba except the case order: rtw88_net
+# (ARP + ten 1 pps ICMP echoes) runs BEFORE rtw88_netio.  Two reasons, both
+# pre-registered in runs/iterations/0.0.4/2026-11-05-RTOS-AGG-02-8821cu-ba-window-and-air.md:
+#
+#   D1  at 1 pps the transmit queue is empty.  If block-ack still delivers
+#       nothing at that rate, the failure is structural, not back-pressure.
+#   H1  the block-ack session is opened while the queue is empty, so its
+#       start sequence cannot sit behind a backlog of ~130 encoded frames.
+#       The blast that follows then tests the hypothesis instead of assuming
+#       it: a working blast means the window was opened out of place, a dead
+#       blast refutes it.
+#
+# Numbers from this arm are still the same cell as the others (no rate lever,
+# no queue lever): the only change is when the ping case runs.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_NETIO_CPU_KHZ=1992000
+CONFIG_USB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_WLAN_RX_BA=n
+CONFIG_CASES="tick rtw88_usb rtw88_scan rtw88_join rtw88_net rtw88_netio"
+CONFIG_WLAN_LINE_RTW88=y
+CONFIG_RTW88_BUS_USB=y
+CONFIG_RTW88_USB_BUS=1
+CONFIG_RTW88_AP_SSID="labwifi-ar-ht20s"
+CONFIG_RTW88_EXPECT_MAC="54:c9:e0:00:29:66"
+CONFIG_RTW88_NET_ADDR_STATIC=y
+CONFIG_RTW88_NET_IP="192.168.99.2"
+CONFIG_RTW88_NET_MASK="255.255.255.0"
+CONFIG_RTW88_NET_GW="192.168.99.1"
+
+# The bulk-in completion length histogram: without this the six buckets read
+# 0/0/0/0/0/0, which looks like an empty pipe but only means nobody counted.
+CONFIG_LKPI_USB_OBS=y
+
+# the in-cell sampler: netio: rxpath/layers every 2 s while a cell is open
+CONFIG_NETIO_RXPATH=y
+
+# The transmit seam keeps this many skb header slots free for the receive
+# path (W6-04: the unbounded tx backlog ate the whole pool, the bulk-in
+# re-arm was refused, and the machine stopped printing).
+CONFIG_WLAN_SEAM_TX_MIN_SPARE=48
+CONFIG_NETIO_WATCHDOG=y
+CONFIG_WLAN_SEAM_TX_BACKLOG_MAX=4
+
+# the measurement window: 30 s of board-to-client transmit (AGG-04)
+CONFIG_NETIO_S2C_MS=30000
+
+# the engine audit (AGG-05 A2): O(1) invariant + violation dumps
+CONFIG_LKPI_TXQ_AUDIT=y

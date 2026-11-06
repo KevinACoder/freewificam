@@ -23,4 +23,17 @@ config LKPI_JOIN_TRACE
 	  channel and with what result" from the console alone; the macro the
 	  sources test is LKPI_JOIN_TRACE.
 
+config LKPI_TXQ_AUDIT
+	bool "transmit-queue engine invariant audit"
+	help
+	  Compares the engine's per-queue counter with the list the queue
+	  actually links, at every engine exit (O(1) per call), and writes a
+	  full slot dump the first few times the two disagree; it also counts
+	  frames released while a queue still links them, slots reused with
+	  frames still on them, and nodes left in slots whose txq is NULL.
+	  This is the 2026-11-06 wedge's instrument: a boot that breaks names
+	  its own first break instead of its final state.  Diagnostic arm
+	  only - the comparison and the dump are part of the measured image.
+	  The macro the sources test is CONFIG_LKPI_TXQ_AUDIT.
+
 endmenu

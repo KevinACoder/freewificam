@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "linuxkpi_core.h"
+#include "linuxkpi_txq_audit.h"
 #include <linux/skbuff.h>
 
 /* the target's critical-section and heap entry points (the facade); a host build
@@ -130,6 +131,8 @@ struct lkpi_skb_heap_rec {
 };
 
 static struct sk_buff		skb_slots[LKPI_SKB_SLOT_MAX];
+/* audit: who released each header slot last (a double free names both) */
+static void			*free_ra[LKPI_SKB_SLOT_MAX];
 static struct lkpi_skb_data_slot skb_data[LKPI_SKB_DATA_MAX];
 static struct lkpi_skb_buf_rec	slot_buf[LKPI_SKB_SLOT_MAX];
 static struct lkpi_skb_heap_rec	heap_live[CONFIG_LKPI_SKB_HEAP_HDR_MAX];
@@ -905,6 +908,8 @@ void lkpi_skb_free(struct sk_buff *skb)
 
 	if (skb == NULL)	/* kfree_skb(NULL) is a documented no-op */
 		return;
+	void *ra = __builtin_return_address(0);
+
 	lkpi_skb_pool_init();
 	flags = lkpi_spl_irqsave();
 
@@ -912,7 +917,11 @@ void lkpi_skb_free(struct sk_buff *skb)
 	if (slot >= 0 && slot < (int)cfg_n_header) {
 		if (skb->_gen == LKPI_SKB_FREED_MAGIC) {
 			stats.double_free++;
-			lkpi_spl_log("double free of released slot %d skipped", slot);
+			/* the two call sites: the first release's and this one's.
+			 * Naming them is the whole diagnosis of a double free. */
+			lkpi_spl_log("double free of released slot %d skipped "
+			    "(first ra=%p, now ra=%p)", slot,
+			    free_ra[slot], ra);
 			goto out;
 		}
 		if (skb->_gen == 0) {
@@ -925,8 +934,10 @@ void lkpi_skb_free(struct sk_buff *skb)
 		 * it detaches it first (the face tracks ->list for exactly this and
 		 * for the double-enqueue diagnostic).
 		 */
-		if (skb->list != NULL)
+		if (skb->list != NULL) {
+			lkpi_txq_audit_free_linked(skb->list, skb, ra);
 			lkpi_skb_do_unlink(skb, skb->list);
+		}
 		buf_ref_put(&slot_buf[slot], skb);
 		/* The buffer record stays: a released slot without its head pointer
 		 * can still be integrity-scanned through this record (the fence scan
@@ -934,6 +945,7 @@ void lkpi_skb_free(struct sk_buff *skb)
 		 * pointer is cleared - it no longer names anything. */
 		if (slot_buf[slot].kind == LKPI_SKB_BUF_HEAP)
 			slot_buf[slot].heap = NULL;
+		free_ra[slot] = ra;
 		slot_mark_released(skb);
 		stats.skb_used--;
 		stats.n_free++;
@@ -944,8 +956,10 @@ void lkpi_skb_free(struct sk_buff *skb)
 	if (hi >= 0) {
 		uintptr_t addr = (uintptr_t)skb;	/* kept past the release */
 
-		if (skb->list != NULL)
+		if (skb->list != NULL) {
+			lkpi_txq_audit_free_linked(skb->list, skb, ra);
 			lkpi_skb_do_unlink(skb, skb->list);
+		}
 		buf_ref_put(&heap_live[hi].buf, skb);
 		lkpi_spl_free(skb);
 		tomb_add(addr);
@@ -1045,6 +1059,20 @@ out:
 	lkpi_spl_irqrestore(flags);
 }
 
+static unsigned int scrubs;
+
+void lkpi_skb_scrub_hit(void)
+{
+
+	scrubs++;
+}
+
+unsigned int lkpi_skb_scrub_count(void)
+{
+
+	return scrubs;
+}
+
 unsigned int lkpi_skb_geo_bad_count(void)
 {
 	return geo_bad;
@@ -1068,6 +1096,7 @@ void lkpi_skb_uaf_hit(struct sk_buff *skb)
 
 void lkpi_skb_queue_reset(struct sk_buff_head *q)
 {
+	lkpi_txq_audit_reset(q);
 	q->next = (struct sk_buff *)q;
 	q->prev = (struct sk_buff *)q;
 	q->qlen = 0;
@@ -1089,14 +1118,30 @@ void lkpi_skb_queue_head_init_lockable(struct sk_buff_head *q)
 
 /* the double-enqueue diagnostic the face keeps ->list for: an skb that still
  * names a queue is refused instead of splicing a cycle into the list */
-static int queue_linkable(const struct sk_buff *skb)
+static int queue_linkable(const struct sk_buff *skb, const struct sk_buff_head *q)
 {
 	if (skb == NULL) {
 		lkpi_spl_log("queue op with a NULL skb refused");
 		return 0;
 	}
 	if (skb->list != NULL) {
+		static unsigned int said;
+
 		lkpi_spl_log("double enqueue refused (skb still owned by a queue)");
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+		/* the frame names an owner while a second queue is being given
+		 * it: name both sides and the caller.  This is the moment the
+		 * two-owner state is first visible, and the caller is the only
+		 * one who can say how the frame was handed out twice. */
+		if (said++ < 8u)
+			lkpi_printf(ULOG_ALWAYS_LEVEL,
+			    "txaudit: relink q=%p qlen=%lu skb=%p stale_list=%p "
+			    "skb_prev=%p skb_next=%p ra=%p\n",
+			    (const void *)q, (unsigned long)q->qlen,
+			    (const void *)skb, (const void *)skb->list,
+			    (const void *)skb->prev, (const void *)skb->next,
+			    __builtin_return_address(0));
+#endif
 		return 0;
 	}
 	return 1;
@@ -1106,8 +1151,15 @@ void lkpi_skb_do_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	struct sk_buff *at;
 
-	if (!queue_linkable(skb))
+	if (!queue_linkable(skb, q))
 		return;
+	if (lkpi_txq_audit_wt_link(skb, q, "q_tail", false)) {
+		/* the node this would splice behind is not ours: linking here
+		 * would graft this frame into a stranger's chain.  Empty the
+		 * queue and start over from the head. */
+		lkpi_skb_queue_reset(q);
+		lkpi_skb_scrub_hit();
+	}
 	at = q->prev;
 	skb->next = (struct sk_buff *)q;
 	skb->prev = at;
@@ -1115,14 +1167,19 @@ void lkpi_skb_do_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 	q->prev = skb;
 	skb->list = q;
 	q->qlen++;
+	lkpi_txq_audit_op(skb, q, "q_tail");
 }
 
 void lkpi_skb_do_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	struct sk_buff *at;
 
-	if (!queue_linkable(skb))
+	if (!queue_linkable(skb, q))
 		return;
+	if (lkpi_txq_audit_wt_link(skb, q, "q_head", true)) {
+		lkpi_skb_queue_reset(q);
+		lkpi_skb_scrub_hit();
+	}
 	at = q->next;
 	skb->next = at;
 	skb->prev = (struct sk_buff *)q;
@@ -1130,25 +1187,117 @@ void lkpi_skb_do_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 	q->next = skb;
 	skb->list = q;
 	q->qlen++;
+	lkpi_txq_audit_op(skb, q, "q_head");
+}
+
+/*
+ * Is this frame really a member of this queue?  A queue's chain is only worth
+ * editing when both of the frame's neighbours name the queue (or are the
+ * queue head itself).  Anything else means the frame's cached links point into
+ * a different list - the shape a released-then-reused buffer leaves behind -
+ * and running the normal surgery would write its neighbours' pointers and
+ * corrupt whatever chain they belong to instead.  That write-through is what
+ * turned one stale frame into every queue disagreeing at once (2026-11-06
+ * audit: `qlen=1` whose head belonged to another queue, then a storm of
+ * foreign dequeues and double frees on the same slot).
+ */
+static bool queue_linked(const struct sk_buff_head *q,
+    const struct sk_buff *skb)
+{
+	const struct sk_buff *h = (const struct sk_buff *)q;
+
+	if (skb == NULL || skb->list != q || skb->prev == NULL || skb->next == NULL)
+		return false;
+	if (skb->prev != h && skb->prev->list != q)
+		return false;
+	if (skb->next != h && skb->next->list != q)
+		return false;
+	return true;
+}
+
+/*
+ * The damage-limited way out: the frame's links name a chain this queue is not
+ * part of, so the frame is NOT touched - its neighbours are somebody else's and
+ * editing them is precisely the corruption this guard exists to stop.  The
+ * queue forgets the frame instead: it becomes empty, and whichever chain the
+ * frame really lives on stays whole.  A queue that loses a frame this way has
+ * been lying about its contents since the previous edit, so the frames it
+ * counted are not reachable through it any more either way.
+ */
+static void queue_scrub(struct sk_buff_head *q, struct sk_buff *skb)
+{
+	/*
+	 * The frame is not a member: unless the queue's own end points at it,
+	 * the chain is intact and only the frame's cached links are wrong.
+	 */
+	if (q->next == skb || q->prev == skb) {
+		q->next = (struct sk_buff *)q;
+		q->prev = (struct sk_buff *)q;
+		q->qlen = 0;
+	} else if (q->qlen != 0u) {
+		q->qlen--;
+	}
+	/* the frame's own links are NOT touched: they describe the chain that
+	 * really holds it, and clearing them would break that chain instead.
+	 * The release path zeroes them when the frame is actually returned. */
+	lkpi_skb_scrub_hit();
 }
 
 static void do_detach(struct sk_buff_head *q, struct sk_buff *skb)
 {
+	lkpi_txq_audit_op(skb, q, "detach-pre");
+	if (!queue_linked(q, skb)) {
+		queue_scrub(q, skb);
+		return;
+	}
+	if (lkpi_txq_audit_wt_detach(skb, q, "detach"))
+		return;
 	skb->prev->next = skb->next;
 	skb->next->prev = skb->prev;
 	q->qlen--;
 	skb->next = NULL;
 	skb->prev = NULL;
 	skb->list = NULL;
+	lkpi_txq_audit_op(skb, q, "detach");
 }
 
 struct sk_buff *lkpi_skb_do_dequeue(struct sk_buff_head *q)
 {
 	struct sk_buff *skb;
 
-	if (q->qlen == 0)
+	/*
+	 * The chain is the truth and `qlen` is its cache: a queue whose counter
+	 * says empty can still link frames (that is exactly the stranding shape
+	 * this face has been chasing), and a queue whose counter says frames can
+	 * be bare.  Draining by the counter would leave the first kind holding
+	 * its frames forever - the driver's aggregate loop reads
+	 * `skb_queue_empty()` and never touches such a queue again - so the pop
+	 * is decided by the links and the counter is repaired to match.
+	 */
+	if (q->next == NULL || q->next == (struct sk_buff *)q) {
+		if (q->qlen != 0u) {
+			q->qlen = 0;
+			lkpi_skb_scrub_hit();
+		}
 		return NULL;
+	}
 	skb = q->next;
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+	/* the head of this queue names a frame another queue owns: whatever
+	 * happens next edits a chain this queue is not part of */
+	if (skb != NULL && skb->list != q) {
+		static unsigned int said;
+
+		if (said++ < 8u)
+			lkpi_printf(ULOG_ALWAYS_LEVEL,
+			    "txaudit: deq-foreign q=%p qlen=%lu skb=%p "
+			    "skb_list=%p skb_prev=%p skb_next=%p ra=%p\n",
+			    (const void *)q, (unsigned long)q->qlen,
+			    (const void *)skb, (const void *)skb->list,
+			    (const void *)skb->prev, (const void *)skb->next,
+			    __builtin_return_address(0));
+	}
+#endif
 	do_detach(q, skb);
 	return skb;
 }

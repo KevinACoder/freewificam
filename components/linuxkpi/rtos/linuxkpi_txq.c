@@ -36,6 +36,7 @@
 #include "os/cmsis2/cmsis2.h"
 #include "linuxkpi_core.h"
 #include "linuxkpi_txq.h"
+#include "linuxkpi_txq_audit.h"
 #include "linuxkpi_80211.h"
 
 #include <net/mac80211.h>
@@ -119,6 +120,469 @@ lkpi_txq_find_locked(struct ieee80211_txq *txq)
 	return NULL;
 }
 
+/* ------------------------------------------------------------------ */
+/* audit (CONFIG_LKPI_TXQ_AUDIT)                                       */
+/* ------------------------------------------------------------------ */
+
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+
+/* Bounds: the dump is a violation path, so it may walk, but it must not turn a
+ * console that is already behind into a second stall. */
+#define LKPI_TXQ_AUDIT_NODES	3u	/* nodes printed per suspicious slot */
+#define LKPI_TXQ_AUDIT_SLOTS	8u	/* suspicious slots printed per dump */
+#define LKPI_TXQ_AUDIT_FORWARD	64u	/* link-walk bound inside one queue */
+#define LKPI_TXQ_AUDIT_WALK	4096u	/* the ledger's node bound, as the census */
+#define LKPI_TXQ_AUDIT_CRUMBS	16u
+#define LKPI_TXQ_AUDIT_DUMPS	8u
+
+struct lkpi_txq_crumb {
+	const char		*what;
+	const void		*q;
+	const void		*skb;
+	u32			qlen;
+	u32			slot;
+};
+
+static struct {
+	u32			enq_bad;	/* queue disagreeable after enqueue */
+	u32			deq_bad;	/* ... after dequeue */
+	u32			free_bad;	/* slots reaped but queue not empty */
+	u32			purge_bad;
+	u32			alloc_race;	/* slot handed twice by alloc's window */
+	u32			alloc_liveq;	/* slot reused with nodes still on it */
+	u32			free_linked;	/* frame freed while still linked */
+	u32			free_eng;	/* ... and the queue was the engine's */
+	u32			reset_live;	/* reset of a queue that still linked */
+	u32			op_bad;	/* a queue primitive left it disagreeing */
+	u32			op_dumps;
+	u32			wt;	/* a primitive refused to write through a
+					 * neighbour that is not its own */
+	u32			wt_dumps;
+	u32			dumps;
+	struct lkpi_txq_crumb	crumb[LKPI_TXQ_AUDIT_CRUMBS];
+	u32			crumb_n;
+	u32			dump_left;
+	unsigned long		dead_nodes;	/* nodes in slots whose txq is NULL */
+	unsigned long		walk_all;	/* nodes over every slot */
+	bool			pending_dump;
+} aud = { .dump_left = LKPI_TXQ_AUDIT_DUMPS };
+
+/*
+ * The invariant, O(1): an empty queue is the head pointing at itself with a
+ * zero count; a non-empty one counts at least one frame, links away from the
+ * head, and both ends' back pointers land on it.  A queue that fails this is
+ * one no dequeue will walk correctly - either it links frames the count says
+ * do not exist (the stranding shape: `q=0` above, thousands of nodes below), or
+ * it counts frames it cannot reach.
+ */
+/* A slot's storage is static and zeroed: a slot the engine has never handed
+ * out has a queue whose links are still NULL, and that is pristine, not a
+ * violation.  `lkpi_skb_queue_reset()` is the shape initializer that runs when
+ * the slot is taken (alloc), after which the empty form is head-at-itself. */
+static bool
+lkpi_txq_q_pristine(const struct sk_buff_head *q)
+{
+
+	return q->qlen == 0u && q->next == NULL && q->prev == NULL;
+}
+
+static bool
+lkpi_txq_q_ok(const struct sk_buff_head *q)
+{
+	const struct sk_buff *h = (const struct sk_buff *)q;
+
+	if (lkpi_txq_q_pristine(q))
+		return true;
+	if (q->qlen == 0u)
+		return q->next == h && q->prev == h;
+	if (q->next == h || q->next == NULL || q->prev == h || q->prev == NULL)
+		return false;
+	return q->next->prev == h && q->prev->next == h;
+}
+
+/* nodes the queue links, bounded: `cap` for the ledger, the small bound inside
+ * a dump (a corrupt chain must not turn one print into a hang) */
+static unsigned long
+lkpi_txq_nodes(const struct sk_buff_head *q, unsigned long cap)
+{
+	const struct sk_buff *h = (const struct sk_buff *)q;
+	const struct sk_buff *it = q->next;
+	unsigned long n = 0;
+
+	while (it != NULL && it != h && n < cap) {
+		n++;
+		it = it->next;
+	}
+	return n;
+}
+
+static void
+lkpi_txq_crumb(const char *what, const void *q, const void *skb, u32 qlen,
+    u32 slot)
+{
+	struct lkpi_txq_crumb *c = &aud.crumb[aud.crumb_n % LKPI_TXQ_AUDIT_CRUMBS];
+
+	aud.crumb_n++;
+	c->what = what;
+	c->q = q;
+	c->skb = skb;
+	c->qlen = qlen;
+	c->slot = slot;
+}
+
+/* the slot a queue head belongs to, by address arithmetic only */
+static struct lkpi_txq *
+lkpi_txq_slot_of(const struct sk_buff_head *q)
+{
+	uintptr_t base = (uintptr_t)&eng.slots[0].queue;
+	uintptr_t addr = (uintptr_t)q;
+	uintptr_t stride = (uintptr_t)sizeof(eng.slots[0]);
+	uintptr_t off;
+
+	if (addr < base)
+		return NULL;
+	off = addr - base;
+	if (off >= (uintptr_t)sizeof(eng.slots))
+		return NULL;
+	if (off % stride != 0u)
+		return NULL;
+	return &eng.slots[off / stride];
+}
+
+static void lkpi_txq_audit_sweep(struct sk_buff *skb, const char *op);
+
+/*
+ * Write-through guards.  Every queue primitive edits its neighbours, and the
+ * neighbour is whatever the frame's cached pointer says: once a frame has
+ * been linked into a second queue (or freed and re-linked), that pointer names
+ * a node of a DIFFERENT queue and the edit corrupts that queue instead.  Both
+ * checks are O(1) and both refuse the edit rather than corrupt a live chain.
+ */
+/*
+ * A queue initialized over its own frames: the shape is emptied, the frames
+ * keep `list` pointing at it, and the next free of any of them edits whatever
+ * chain its stale neighbours name.  That is the entry point this audit is
+ * looking for, so it is checked on every reset (init-time resets are empty and
+ * cost three compares).
+ */
+void
+lkpi_txq_audit_reset(struct sk_buff_head *q)
+{
+	/*
+	 * Engine queues only: this runs before the shape is written, so on a
+	 * stack temporary the fields are garbage and following `next` would
+	 * fault.  A slot's address is pure arithmetic, and the slot reset is
+	 * the one that matters - it is how a reused slot forgets its frames.
+	 */
+	if (q == NULL || lkpi_txq_slot_of(q) == NULL)
+		return;
+	if (q->qlen == 0u || q->next == NULL ||
+	    q->next == (struct sk_buff *)q)
+		return;
+	if (q->next->list != q)
+		return;
+	aud.reset_live++;
+	if (aud.op_dumps++ >= LKPI_TXQ_AUDIT_DUMPS)
+		return;
+	lkpi_printf(ULOG_ALWAYS_LEVEL,
+	    "txaudit: reset_live q=%p qlen=%lu next=%p prev=%p next_list=%p "
+	    "kfree=%p\n", (void *)q, (unsigned long)q->qlen, (void *)q->next,
+	    (void *)q->prev, (void *)q->next->list,
+	    (void *)(uintptr_t)__builtin_return_address(0));
+}
+
+bool
+lkpi_txq_audit_wt_link(struct sk_buff *skb, struct sk_buff_head *q,
+    const char *op, bool head)
+{
+	struct sk_buff *at;
+
+	if (q == NULL)
+		return false;
+	at = head ? q->next : q->prev;
+	if (at == (struct sk_buff *)q || at->list == q)
+		return false;	/* the node we splice into is ours */
+	aud.wt++;
+	if (aud.wt_dumps++ < LKPI_TXQ_AUDIT_DUMPS)
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
+		    "txaudit: writethrough op=%s q=%p qlen=%lu q_next=%p "
+		    "q_prev=%p at=%p at_list=%p skb=%p skb_list=%p\n",
+		    op, (void *)q, (unsigned long)q->qlen, (void *)q->next,
+		    (void *)q->prev, (void *)at, (void *)at->list,
+		    (void *)skb, skb ? (void *)skb->list : NULL);
+	return true;
+}
+
+bool
+lkpi_txq_audit_wt_detach(struct sk_buff *skb, struct sk_buff_head *q,
+    const char *op)
+{
+	if (skb == NULL || q == NULL)
+		return false;
+	if (skb->prev == (const struct sk_buff *)q)
+		return false;	/* head node: the edit lands on the head */
+	if (skb->prev != NULL && skb->prev->next == skb &&
+	    skb->prev->list == q)
+		return false;	/* middle/tail: our predecessor names us */
+	aud.wt++;
+	if (aud.wt_dumps++ < LKPI_TXQ_AUDIT_DUMPS)
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
+		    "txaudit: writethrough op=%s q=%p qlen=%lu q_next=%p "
+		    "q_prev=%p skb=%p skb_list=%p skb_prev=%p skb_next=%p\n",
+		    op, (void *)q, (unsigned long)q->qlen, (void *)q->next,
+		    (void *)q->prev, (void *)skb, (void *)skb->list,
+		    (void *)skb->prev, (void *)skb->next);
+	return true;
+}
+
+/*
+ * The queue primitives' own check: called after each tail/head link, detach
+ * and dequeue on any queue.  It is the only place that can say WHICH
+ * primitive broke the invariant - the exit checks above only say that by the
+ * time the engine's call returned, the queue already disagreed.
+ */
+void
+lkpi_txq_audit_op(struct sk_buff *skb, struct sk_buff_head *q, const char *op)
+{
+	struct lkpi_txq *t;
+
+	if (q == NULL)
+		return;
+	t = lkpi_txq_slot_of(q);
+	if (t == NULL)
+		return;
+	if (lkpi_txq_q_ok(q)) {
+		lkpi_txq_audit_sweep(skb, op);
+		return;
+	}
+	aud.op_bad++;
+	if (aud.op_dumps++ >= LKPI_TXQ_AUDIT_DUMPS)
+		return;
+	lkpi_txq_crumb(op, q, NULL, q->qlen, (u32)(t - eng.slots));
+	/* its own line and its own budget: the exit checks' dumps are spent on
+	 * the state they saw, and this is the one that names the primitive */
+	{
+		const struct sk_buff *h = (const struct sk_buff *)q;
+		const struct sk_buff *it = q->next;
+		unsigned int n;
+
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
+		    "txaudit: op=%s slot=%u qlen=%lu next=%p prev=%p "
+		    "nodes=%lu skb=%p skb_prev=%p skb_next=%p skb_list=%p\n",
+		    op, (unsigned)(t - eng.slots), (unsigned long)q->qlen,
+		    (void *)q->next, (void *)q->prev,
+		    lkpi_txq_nodes(q, LKPI_TXQ_AUDIT_FORWARD),
+		    (void *)skb, skb ? (void *)skb->prev : NULL,
+		    skb ? (void *)skb->next : NULL,
+		    skb ? (void *)skb->list : NULL);
+		for (n = 0; n < LKPI_TXQ_AUDIT_NODES && it != NULL && it != h;
+		    n++, it = it->next)
+			lkpi_printf(ULOG_ALWAYS_LEVEL,
+			    "txaudit:   node=%p len=%u list=%p next=%p prev=%p\n",
+			    (const void *)it, (unsigned)it->len,
+			    (const void *)it->list, (const void *)it->next,
+			    (const void *)it->prev);
+	}
+	if (aud.op_dumps < LKPI_TXQ_AUDIT_DUMPS)
+		lkpi_txq_audit_sweep(skb, op);
+}
+
+/*
+ * Cross-slot sweep.  The damage this is chasing is a write THROUGH a stale
+ * neighbour pointer: the primitive touches its own queue correctly and
+ * breaks a different one.  Checking only the queue the caller passed would
+ * credit the violation to the next operation that happens to look at the
+ * victim; this names the operation that caused it.
+ */
+static void
+lkpi_txq_audit_sweep(struct sk_buff *skb, const char *op)
+{
+	unsigned int i;
+
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++) {
+		struct sk_buff_head *q = &eng.slots[i].queue;
+
+		if (q->qlen == 0u && q->next == (struct sk_buff *)q &&
+		    q->prev == (struct sk_buff *)q)
+			continue;
+		if (lkpi_txq_q_ok(q))
+			continue;
+		aud.op_bad++;
+		if (aud.op_dumps++ >= LKPI_TXQ_AUDIT_DUMPS)
+			return;
+		lkpi_txq_crumb(op, q, skb, q->qlen, i);
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
+		    "txaudit: victim=%u op=%s q=%p qlen=%lu next=%p prev=%p "
+		    "nodes=%lu skb=%p skb_list=%p skb_prev=%p skb_next=%p\n",
+		    i, op, (void *)q, (unsigned long)q->qlen, (void *)q->next,
+		    (void *)q->prev, lkpi_txq_nodes(q, LKPI_TXQ_AUDIT_FORWARD),
+		    (void *)skb, skb ? (void *)skb->list : NULL,
+		    skb ? (void *)skb->prev : NULL,
+		    skb ? (void *)skb->next : NULL);
+	}
+}
+
+/* the caller holds the engine lock */
+static void lkpi_txq_dump_locked(const char *tag);
+
+/* the caller holds the engine lock */
+static void
+lkpi_txq_dump_locked(const char *tag)
+{
+	const struct sk_buff *h;
+	const struct sk_buff *it;
+	unsigned int i, used = 0, nulls = 0, dead = 0, shown = 0;
+	unsigned int n;
+	struct lkpi_txq *t;
+	bool suspicious;
+
+	if (aud.dumps++ >= LKPI_TXQ_AUDIT_DUMPS) {
+		aud.dump_left = 0u;
+		return;
+	}
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++) {
+		t = &eng.slots[i];
+		h = (const struct sk_buff *)&t->queue;
+		if (t->txq == NULL) {
+			nulls++;
+			if (!lkpi_txq_q_pristine(&t->queue) &&
+			    !lkpi_txq_q_ok(&t->queue))
+				dead++;
+			continue;
+		}
+		used++;
+	}
+	aud.dead_nodes = 0ul;
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++)
+		if (eng.slots[i].txq == NULL)
+			aud.dead_nodes += lkpi_txq_nodes(&eng.slots[i].queue,
+			    LKPI_TXQ_AUDIT_FORWARD);
+	lkpi_printf(ULOG_ALWAYS_LEVEL,
+	    "txaudit: dump tag=%s used=%u null=%u dead_slots=%u dead_nodes=%lu "
+	    "enq_bad=%u deq_bad=%u free_bad=%u purge_bad=%u alloc_race=%u "
+	    "alloc_liveq=%u free_linked=%u free_eng=%u reset_live=%u "
+	    "op_bad=%u\n",
+	    tag, used, nulls, dead, aud.dead_nodes, aud.enq_bad, aud.deq_bad,
+	    aud.free_bad, aud.purge_bad, aud.alloc_race, aud.alloc_liveq,
+	    aud.free_linked, aud.free_eng, aud.reset_live, aud.op_bad);
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++) {
+		t = &eng.slots[i];
+		h = (const struct sk_buff *)&t->queue;
+		suspicious = !lkpi_txq_q_ok(&t->queue) &&
+		    !lkpi_txq_q_pristine(&t->queue);
+		if (!suspicious)
+			continue;
+		if (shown >= LKPI_TXQ_AUDIT_SLOTS) {
+			lkpi_printf(ULOG_ALWAYS_LEVEL,
+			    "txaudit: dump tag=%s truncated\n", tag);
+			break;
+		}
+		shown++;
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
+		    "txaudit: slot=%u txq=%p ac=%u act=%u qlen=%lu next=%p "
+		    "prev=%p nodes=%lu\n",
+		    i, (void *)t->txq,
+		    t->txq != NULL ? (unsigned)t->txq->ac : 0u,
+		    (unsigned)t->active, (unsigned long)t->queue.qlen,
+		    (void *)t->queue.next, (void *)t->queue.prev,
+		    lkpi_txq_nodes(&t->queue, LKPI_TXQ_AUDIT_FORWARD));
+		for (n = 0, it = t->queue.next; n < LKPI_TXQ_AUDIT_NODES &&
+		    it != NULL && it != h; n++, it = it->next)
+			lkpi_printf(ULOG_ALWAYS_LEVEL,
+			    "txaudit:   node=%p len=%u list=%p next=%p prev=%p\n",
+			    (const void *)it, (unsigned)it->len,
+			    (const void *)it->list, (const void *)it->next,
+			    (const void *)it->prev);
+	}
+}
+
+void
+lkpi_txq_dump(const char *tag)
+{
+	unsigned long flags;
+
+	lkpi_txq_setup();
+	spin_lock_irqsave(&eng.lock, flags);
+	lkpi_txq_dump_locked(tag);
+	spin_unlock_irqrestore(&eng.lock, flags);
+}
+
+unsigned long
+lkpi_txq_walk_all(void)
+{
+	unsigned long n = 0, dead = 0;
+	unsigned long flags;
+	unsigned int i;
+
+	lkpi_txq_setup();
+	spin_lock_irqsave(&eng.lock, flags);
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++) {
+		unsigned long nodes = lkpi_txq_nodes(&eng.slots[i].queue,
+		    LKPI_TXQ_AUDIT_WALK);
+
+		n += nodes;
+		if (eng.slots[i].txq == NULL)
+			dead += nodes;
+	}
+	aud.walk_all = n;
+	aud.dead_nodes = dead;
+	spin_unlock_irqrestore(&eng.lock, flags);
+	return n;
+}
+
+void
+lkpi_txq_audit_line(const char *tag)
+{
+	lkpi_printf(ULOG_ALWAYS_LEVEL,
+	    "txaudit: tag=%s enq_bad=%u deq_bad=%u free_bad=%u purge_bad=%u "
+	    "alloc_race=%u alloc_liveq=%u free_linked=%u free_eng=%u "
+	    "reset_live=%u op_bad=%u dumps=%u dead_nodes=%lu walk_all=%lu\n",
+	    tag, aud.enq_bad, aud.deq_bad, aud.free_bad, aud.purge_bad,
+	    aud.alloc_race, aud.alloc_liveq, aud.free_linked, aud.free_eng,
+	    aud.reset_live, aud.op_bad, aud.dumps, aud.dead_nodes,
+	    aud.walk_all);
+	if (aud.pending_dump) {
+		aud.pending_dump = false;
+		lkpi_txq_dump("pending");
+	}
+}
+
+void
+lkpi_txq_audit_free_linked(struct sk_buff_head *q, struct sk_buff *skb,
+    void *ra)
+{
+	unsigned int i;
+
+	if (q == NULL) {
+		aud.free_linked++;
+		lkpi_txq_crumb("free_linked_nullq", NULL, skb, 0u, 0u);
+		return;
+	}
+	aud.free_linked++;
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++) {
+		if (&eng.slots[i].queue == q) {
+			aud.free_eng++;
+			lkpi_txq_crumb("free_linked", q, skb, q->qlen, i);
+			/* the pool's own lock is held here; the engine lock is
+			 * not ours to take (the drain holds it above us), so
+			 * the dump waits for the next census */
+			aud.pending_dump = true;
+			return;
+		}
+	}
+	lkpi_txq_crumb("free_linked_foreign", q, skb, q->qlen,
+	    (u32)CONFIG_LKPI_TXQ_MAX);
+	if (aud.wt_dumps++ < LKPI_TXQ_AUDIT_DUMPS)
+		lkpi_printf(ULOG_ALWAYS_LEVEL,
+		    "txaudit: free_linked q=%p qlen=%lu q_next=%p skb=%p "
+		    "skb_list=%p skb_prev=%p skb_next=%p ra=%p\n",
+		    (void *)q, (unsigned long)q->qlen, (void *)q->next,
+		    (void *)skb, (void *)skb->list, (void *)skb->prev,
+		    (void *)skb->next, ra);
+}
+
+#endif /* CONFIG_LKPI_TXQ_AUDIT */
+
 /* the caller holds the engine lock: holding it across the drain is what keeps a
  * reuse of the slot from resetting the queue mid-walk */
 static void
@@ -189,6 +653,26 @@ lkpi_txq_alloc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		    lkpi_txq_ac_from_tid(tid);
 	}
 	spin_lock_irqsave(&eng.lock, flags);
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+	/*
+	 * The slot was picked under an earlier take of this lock and only the
+	 * kzalloc above ran without it, so a second allocator can have taken
+	 * the same slot in that window - and the first queue's frames are then
+	 * still linked in the slot whose record the reset below will zero.
+	 */
+	if (t->txq != NULL) {
+		aud.alloc_race++;
+		lkpi_txq_crumb("alloc_race", &t->queue, txq, t->queue.qlen, i);
+		lkpi_txq_dump_locked("alloc_race");
+	}
+	if (t->queue.qlen != 0u ||
+	    (t->queue.next != (struct sk_buff *)&t->queue &&
+	    t->queue.next != NULL)) {
+		aud.alloc_liveq++;
+		lkpi_txq_crumb("alloc_liveq", &t->queue, txq, t->queue.qlen, i);
+		lkpi_txq_dump_locked("alloc_liveq");
+	}
+#endif
 	t->txq = txq;
 	/* a free slot's queue is empty: free() drains it under this same lock
 	 * before the slot can be handed out again (lkpi_txq_drain_locked) */
@@ -219,6 +703,14 @@ lkpi_txq_free(struct ieee80211_txq *txq)
 		t->txq = NULL;
 		/* still under the lock: see lkpi_txq_drain_locked */
 		lkpi_txq_drain_locked(t);
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+		if (!lkpi_txq_q_ok(&t->queue)) {
+			aud.free_bad++;
+			lkpi_txq_crumb("free_bad", &t->queue, txq, t->queue.qlen,
+			    (u32)(t - eng.slots));
+			lkpi_txq_dump_locked("free_bad");
+		}
+#endif
 	}
 	spin_unlock_irqrestore(&eng.lock, flags);
 	kfree(txq);
@@ -247,6 +739,14 @@ lkpi_txq_purge(struct ieee80211_txq *txq)
 	}
 	if (t != NULL)
 		lkpi_txq_drain_locked(t);
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+	if (t != NULL && !lkpi_txq_q_ok(&t->queue)) {
+		aud.purge_bad++;
+		lkpi_txq_crumb("purge_bad", &t->queue, txq, t->queue.qlen,
+		    (u32)(t - eng.slots));
+		lkpi_txq_dump_locked("purge_bad");
+	}
+#endif
 	spin_unlock_irqrestore(&eng.lock, flags);
 }
 
@@ -337,6 +837,21 @@ lkpi_txq_enqueue(struct ieee80211_txq *txq, struct sk_buff *skb)
 		 * frame only when it actually landed */
 		if (t->queue.qlen != before)
 			t->bytes += skb->len;
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+		/*
+		 * The refusal case matters as much as the success one: the
+		 * pool's `queue_linkable` drops a frame it thinks another queue
+		 * owns, so a queue that counts nothing may still have gained a
+		 * link - or an skb whose list pointer is stale splices a cycle
+		 * into a live list.
+		 */
+		if (!lkpi_txq_q_ok(&t->queue)) {
+			aud.enq_bad++;
+			lkpi_txq_crumb("enq_bad", &t->queue, skb, t->queue.qlen,
+			    (u32)(t - eng.slots));
+			lkpi_txq_dump_locked("enq_bad");
+		}
+#endif
 	}
 	spin_unlock_irqrestore(&eng.lock, flags);
 	if (t == NULL) {
@@ -574,6 +1089,14 @@ ieee80211_tx_dequeue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
 		if (skb != NULL)
 			t->bytes = (t->bytes >= skb->len) ?
 			    t->bytes - skb->len : 0;
+#ifdef CONFIG_LKPI_TXQ_AUDIT
+		if (!lkpi_txq_q_ok(&t->queue)) {
+			aud.deq_bad++;
+			lkpi_txq_crumb("deq_bad", &t->queue, skb, t->queue.qlen,
+			    (u32)(t - eng.slots));
+			lkpi_txq_dump_locked("deq_bad");
+		}
+#endif
 	}
 	spin_unlock_irqrestore(&eng.lock, flags);
 	if (skb == NULL)

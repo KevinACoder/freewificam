@@ -100,6 +100,14 @@ rtw88_usb_sink(ulog_level_t level, const char *line)
 {
 	(void)level;
 
+	/* The engine's invariant audit is an instrument line, not driver
+	 * noise: its counters and its violation dumps are the whole point of
+	 * the arm, and the noise gate below (40 lines, then every hundredth)
+	 * swallowed them in the 2026-11-06 AGG-05 audit boot. */
+	if (strstr(line, "txaudit") != NULL) {
+		CASE_ANCHOR("lkpi: %s", line);
+		return;
+	}
 	/* a census dump is the measurement itself, not driver noise: it is
 	 * printed on demand at a window boundary (30 s of traffic in front of
 	 * it) and the noise gate below would drop it */

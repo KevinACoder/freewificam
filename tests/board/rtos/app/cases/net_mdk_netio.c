@@ -101,6 +101,9 @@
 #include "lkpi_usb_cherryusb.h"
 /* the socket-buffer supply, for the pool ledger the anchors print */
 #include "skbuff_pool.h"
+/* the engine's invariant audit (CONFIG_LKPI_TXQ_AUDIT): a clean image gets the
+ * empty inline; the audit arm prints its counters beside the census */
+#include "rtos/linuxkpi_txq_audit.h"
 #ifdef CONFIG_LKPI_CENSUS
 /* the transfer layer's time partition (arm -> completion -> arm).  The census
  * clock is a case-owned hook (the SDIO case has one; this one needs its own)
@@ -376,6 +379,10 @@ static void emit_tx_census(const char *tag)
 	 * but not counted is the stranding shape (see lkpi_txq_list_len) */
 	MDK_ANCHOR("netio: txqwalk tag=%s qlen_walk=%lu\n", tag,
 		   lkpi_txq_list_len());
+	/* the same walk over every slot, the NULL ones included, and the
+	 * engine's invariant counters: `dead_nodes` is what a slot whose txq
+	 * is NULL still links - frames no queue will ever hand back */
+	lkpi_txq_audit_line(tag);
 }
 
 /*
