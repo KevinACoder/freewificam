@@ -119,9 +119,10 @@ lkpi_txq_find_locked(struct ieee80211_txq *txq)
 	return NULL;
 }
 
-/* the queue is unreachable now, so it can be drained without the lock */
+/* the caller holds the engine lock: holding it across the drain is what keeps a
+ * reuse of the slot from resetting the queue mid-walk */
 static void
-lkpi_txq_drain(struct lkpi_txq *t)
+lkpi_txq_drain_locked(struct lkpi_txq *t)
 {
 	struct sk_buff *skb;
 
@@ -189,6 +190,8 @@ lkpi_txq_alloc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	}
 	spin_lock_irqsave(&eng.lock, flags);
 	t->txq = txq;
+	/* a free slot's queue is empty: free() drains it under this same lock
+	 * before the slot can be handed out again (lkpi_txq_drain_locked) */
 	lkpi_skb_queue_reset(&t->queue);
 	INIT_LIST_HEAD(&t->order);
 	t->bytes = 0;
@@ -213,11 +216,11 @@ lkpi_txq_free(struct ieee80211_txq *txq)
 		if (t->active)
 			list_del_init(&t->order);
 		t->active = false;
-		t->txq = NULL;		/* unreachable: the drain is safe below */
+		t->txq = NULL;
+		/* still under the lock: see lkpi_txq_drain_locked */
+		lkpi_txq_drain_locked(t);
 	}
 	spin_unlock_irqrestore(&eng.lock, flags);
-	if (t != NULL)
-		lkpi_txq_drain(t);
 	kfree(txq);
 }
 
@@ -242,9 +245,9 @@ lkpi_txq_purge(struct ieee80211_txq *txq)
 		list_del_init(&t->order);
 		t->active = false;
 	}
-	spin_unlock_irqrestore(&eng.lock, flags);
 	if (t != NULL)
-		lkpi_txq_drain(t);
+		lkpi_txq_drain_locked(t);
+	spin_unlock_irqrestore(&eng.lock, flags);
 }
 
 /* the sweep both teardowns share: one match at a time, freed outside the lock */
@@ -471,6 +474,61 @@ lkpi_txq_census(unsigned long *queued, unsigned long *handed,
 		*orphans = eng.orphans;
 	if (refusals != NULL)
 		*refusals = eng.refusals;
+}
+
+/*
+ * How many nodes the slot queues actually link, versus what qlen says.  A
+ * frame that is linked but not counted is a frame no dequeue will reach: the
+ * pool keeps its slots, and the seam's spare gate refuses forever - the
+ * 2026-11-06 P0 shape (134 live socket buffers pointing at one queue while
+ * the counter read 0).
+ */
+unsigned long
+lkpi_txq_list_len(void)
+{
+	struct sk_buff *skb;
+	unsigned long n = 0;
+	unsigned long flags;
+	unsigned int i;
+
+	lkpi_txq_setup();
+	spin_lock_irqsave(&eng.lock, flags);
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX; i++) {
+		if (eng.slots[i].txq == NULL)
+			continue;
+		skb_queue_walk(&eng.slots[i].queue, skb) {
+			if (++n >= 4096ul)
+				break;
+		}
+	}
+	spin_unlock_irqrestore(&eng.lock, flags);
+	return n;
+}
+
+#define LKPI_TXQ_KICK_BATCH	16
+
+void
+lkpi_txq_kick_pending(struct ieee80211_hw *hw,
+    void (*kick)(struct ieee80211_hw *hw, struct ieee80211_txq *txq, void *arg),
+    void *arg)
+{
+	struct ieee80211_txq *batch[LKPI_TXQ_KICK_BATCH];
+	unsigned int n = 0;
+	unsigned int i;
+	unsigned long flags;
+
+	if (kick == NULL)
+		return;
+	lkpi_txq_setup();
+	spin_lock_irqsave(&eng.lock, flags);
+	for (i = 0; i < CONFIG_LKPI_TXQ_MAX && n < LKPI_TXQ_KICK_BATCH; i++)
+		if (eng.slots[i].txq != NULL && eng.slots[i].queue.qlen > 0)
+			batch[n++] = eng.slots[i].txq;
+	spin_unlock_irqrestore(&eng.lock, flags);
+	/* outside the engine lock: the driver's wake op takes its own lock and
+	 * may run the driver's transmit path inline for the VO class */
+	for (i = 0; i < n; i++)
+		kick(hw, batch[i], arg);
 }
 
 void

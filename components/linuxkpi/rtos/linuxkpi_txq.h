@@ -53,12 +53,28 @@ int	lkpi_txq_enqueue(struct ieee80211_txq *txq, struct sk_buff *skb);
 /* drop everything still queued on one txq */
 void	lkpi_txq_purge(struct ieee80211_txq *txq);
 
+/*
+ * Walk the queues that still hold frames and hand each one to `kick` (the
+ * port's driver-wake call).  The walk exists because a queue can be holding
+ * frames with nothing left to wake it: the seam refused the next frame for
+ * want of a socket buffer, so no enqueue reaches schedule_txq, so the driver
+ * is never told to drain - the 2026-11-06 P0 stall (txq at 129, bulk-out
+ * endpoint idle, header pool exhausted).  Kicking from the deferred wake work
+ * closes that loop.  At most LKPI_TXQ_KICK_BATCH queues per call; the next
+ * call takes the next ones.
+ */
+void	lkpi_txq_kick_pending(struct ieee80211_hw *hw,
+    void (*kick)(struct ieee80211_hw *hw, struct ieee80211_txq *txq,
+    void *arg), void *arg);
+
 /* how many txqs the engine holds, and the calls it refused for want of a slot */
 unsigned int	lkpi_txq_in_use(void);
 u32	lkpi_txq_alloc_refusals(void);
 /* how many queues the scheduler handed to a driver, and how many calls named a
  * txq this engine never allocated (a frame the caller must take back) */
 unsigned long	lkpi_txq_handed_out(void);
+/* nodes the slot queues actually link (qlen is the counter; this is the walk) */
+unsigned long	lkpi_txq_list_len(void);
 unsigned long	lkpi_txq_orphan_calls(void);
 
 #endif /* _LINUXKPI_TXQ_H_ */

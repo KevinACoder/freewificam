@@ -216,6 +216,15 @@ void	lkpi80211_set_ba_cbs(int (*start)(struct ieee80211_sta *sta, u16 tid,
  */
 void	lkpi80211_tx_wake_defer(struct ieee80211_hw *hw);
 
+/*
+ * Drain the port's txq queues that still hold frames, by calling the driver's
+ * wake_tx_queue for each.  The deferred wake work runs this before the bridge
+ * wake so a queue whose frames were parked by a refusal gets a driver drain
+ * without a new frame having to arrive first (see lkpi_txq_kick_pending).
+ */
+void	lkpi80211_tx_kick_pending(struct ieee80211_hw *hw);
+void	lkpi80211_tx_kick_defer(struct ieee80211_hw *hw);
+
 /* Sta lifetime (call ops->sta_add / sta_remove; the sta carries
  * sta_data_size bytes of zeroed driver-private area).  The ladder is split the
  * way the association splits: drv_sta_add uploads the peer (the moment mac80211

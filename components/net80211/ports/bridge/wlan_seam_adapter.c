@@ -439,6 +439,12 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 #if CONFIG_WLAN_SEAM_TX_MIN_SPARE > 0
 	if (!is_mgmt && seam_pool_spare() <= (unsigned int)CONFIG_WLAN_SEAM_TX_MIN_SPARE) {
 		adapter.tx_pool_low++;
+		/* a refusal parks the frame and, with the pool short, no later
+		 * enqueue reaches the driver - so ask for the drain side of the
+		 * wake here as well: the deferred work kicks the queues that
+		 * still hold frames (2026-11-06 P0: txq 129, endpoint idle,
+		 * pool exhausted, netif full for a full second) */
+		lkpi80211_tx_kick_defer(adapter.hw);
 		return WLAN_SEAM_TX_ERR_NOSKB;
 	}
 #endif
@@ -456,6 +462,7 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	if (!is_mgmt &&
 	    lkpi80211_tx_inflight() >= (unsigned int)CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX) {
 		adapter.tx_inflight_low++;
+		lkpi80211_tx_kick_defer(adapter.hw);
 		return WLAN_SEAM_TX_ERR_NOSKB;
 	}
 #endif
@@ -472,6 +479,7 @@ seam_tx(struct wlan_seam_drv *drv, const uint8_t *frame, size_t len,
 	if (!is_mgmt &&
 	    lkpi_usb_tx_backlog() >= (unsigned int)CONFIG_WLAN_SEAM_TX_BACKLOG_MAX) {
 		adapter.tx_backlog_low++;
+		lkpi80211_tx_kick_defer(adapter.hw);
 		return WLAN_SEAM_TX_ERR_NOSKB;
 	}
 #endif

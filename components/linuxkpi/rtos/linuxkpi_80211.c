@@ -103,6 +103,7 @@ static void lkpi80211_scan_complete_work(struct work_struct *w);
 /* the queue wake's deferred delivery to the port (body in the queue family;
  * ieee80211_wake_queues queues it) */
 static void lkpi80211_tx_wake_work(struct work_struct *w);
+static void lkpi80211_tx_kick_work(struct work_struct *w);
 
 /*
  * The hw context this file owns. `hw` is first so a pointer to the context and
@@ -250,6 +251,16 @@ struct lkpi80211_hw_ctx {
 	 * visible in the counters rather than inferred.
 	 */
 	struct work_struct	tx_wake_work;
+	/*
+	 * The refusal's deferred half, kept separate from the wake above: a
+	 * seam gate that refuses parks the frame in the txq engine, and what
+	 * that needs is a driver drain - not another attempt at the bridge's
+	 * pending frame.  Retrying the pending frame from the same work spins:
+	 * the gate is still shut (the USB backlog is full), so the refusal
+	 * re-arms the work at hundreds of thousands of hertz (2026-11-06
+	 * P0b: 10.7M wakes in 35 s, uplink down to 2.8k frames/s).
+	 */
+	struct work_struct	tx_kick_work;
 	void			(*tx_wake_cb)(void *arg);
 	void			*tx_wake_arg;
 	u32			tx_wakes;
@@ -628,6 +639,7 @@ ieee80211_alloc_hw(size_t priv_data_len, const struct ieee80211_ops *ops)
 	/* the queue wake's deferred forward: the driver raises it from its
 	 * transmit completion, which must not enter the bridge */
 	INIT_WORK(&ctx->tx_wake_work, lkpi80211_tx_wake_work);
+	INIT_WORK(&ctx->tx_kick_work, lkpi80211_tx_kick_work);
 	/* the queue count the driver reads back (core.c:7891 sets 4; the
 	 * engine's own default matches so a driver that does not set it still
 	 * gets a workable value) */
@@ -1469,12 +1481,45 @@ ieee80211_rate_control_unregister(const struct rate_control_ops *ops)
  * transmit completion and only schedules this.
  */
 static void
+tx_kick_one(struct ieee80211_hw *hw, struct ieee80211_txq *txq, void *arg)
+{
+	struct lkpi80211_hw_ctx *ctx = LKPI80211_CTX(hw);
+
+	(void)arg;
+	if (ctx->ops != NULL && ctx->ops->wake_tx_queue != NULL)
+		ctx->ops->wake_tx_queue(hw, txq);
+}
+
+void
+lkpi80211_tx_kick_pending(struct ieee80211_hw *hw)
+{
+
+	if (hw == NULL)
+		return;
+	lkpi_txq_kick_pending(hw, tx_kick_one, NULL);
+}
+
+static void
+lkpi80211_tx_kick_work(struct work_struct *w)
+{
+	struct lkpi80211_hw_ctx *ctx =
+	    container_of(w, struct lkpi80211_hw_ctx, tx_kick_work);
+
+	lkpi80211_tx_kick_pending(&ctx->hw);
+}
+
+static void
 lkpi80211_tx_wake_work(struct work_struct *w)
 {
 	struct lkpi80211_hw_ctx *ctx =
 	    container_of(w, struct lkpi80211_hw_ctx, tx_wake_work);
 
 	ctx->tx_wakes++;
+	/* first the queues that still hold frames: a refusal parks frames in
+	 * the txq engine and only a driver drain can move them, so the wake
+	 * path is where a refused stream restarts (the bridge wake below only
+	 * re-offers the one frame the bridge itself is holding) */
+	lkpi80211_tx_kick_pending(&ctx->hw);
 	if (ctx->tx_wake_cb != NULL)
 		ctx->tx_wake_cb(ctx->tx_wake_arg);
 }
@@ -1535,6 +1580,28 @@ lkpi80211_tx_wake_defer(struct ieee80211_hw *hw)
 	if (ctx->tx_wake_cb == NULL || lkpi_system_wq == NULL)
 		return;
 	(void)lkpi_queue_work(lkpi_system_wq, &ctx->tx_wake_work);
+}
+
+/*
+ * A seam gate refusal asks for the drain half alone.  It must not reuse
+ * tx_wake_defer(): that work also re-offers the frame the bridge is holding,
+ * and while the gate stays shut (the USB backlog is still at its cap) that
+ * retry refuses again and re-arms itself - the 2026-11-06 P0b wake storm.
+ * Here only the queues that still hold frames are kicked, so a refusal costs
+ * one drain attempt and the bridge's pending frame waits for the completion
+ * that will actually reopen the gate.
+ */
+void
+lkpi80211_tx_kick_defer(struct ieee80211_hw *hw)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL)
+		return;
+	ctx = LKPI80211_CTX(hw);
+	if (lkpi_system_wq == NULL)
+		return;
+	(void)lkpi_queue_work(lkpi_system_wq, &ctx->tx_kick_work);
 }
 
 void
