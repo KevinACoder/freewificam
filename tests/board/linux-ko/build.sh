@@ -235,7 +235,12 @@ CONFIG_H="$MOD/linuxko_config.h"
 	echo '#define LINUXKO_CONFIG_H'
 	echo '#define _KERNEL 1'
 	echo '#define WLAN_PORT_LINUX 1'
-	echo '#define _ROUTE_H 1'
+	# _ROUTE_H is deliberately NOT here: it is the kernel's own
+	# <net/route.h> guard, and this header is force-included into the driver's
+	# TUs too (config header, ccflags).  Defining it there made the kernel's
+	# net/ip.h compile without struct rtable (W7-11: iwlwifi pcie/gen1_2/tx.o
+	# "invalid use of undefined type const struct rtable").  The BSD headers'
+	# guard is the stack's business: STACK_CFLAGS below defines it.
 	echo '#define CONFIG_WLAN_KO 1'
 	# The seam's TX admission gate (W6-05).  Without a number here the module
 	# has no flow control at all (W7-03: unbounded admission -> OOM); 16
@@ -349,7 +354,7 @@ done
 
 	echo
 	echo "STACK_CFLAGS := -include \$(TREE)/tests/board/linux-ko/ports/stack_prelude.h \\"
-	echo "  -std=gnu11 \\"
+	echo "  -D_ROUTE_H -std=gnu11 \\"
 	echo "  -Wno-unused-function -Wno-pointer-sign -Wno-unused-parameter \\"
 	echo "  -Wno-address-of-packed-member -Wno-missing-braces"
 	for src in $STACK_SRCS; do
