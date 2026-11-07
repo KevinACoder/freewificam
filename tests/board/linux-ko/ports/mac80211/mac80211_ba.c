@@ -62,6 +62,9 @@ static struct {
 	unsigned int		dialog;
 	/* W7-12 census (CONFIG_WLAN_KO_CENSUS): see mac80211_ba.h */
 	int			rx_start_rc;
+	unsigned int		rx_calls, rx_fail, rx_stale;
+	int			rx_last_rc;
+	u16			rx_last_tid, rx_last_ssn, rx_last_win;
 	unsigned int		hold;
 	unsigned int		flush;
 	unsigned int		drop_old;
@@ -86,7 +89,20 @@ ba_ampdu(struct wlan_linux_hw *w, enum ieee80211_ampdu_mlme_action action,
     u16 tid, u16 ssn, u16 buf, bool amsdu, u16 timeout)
 {
 	struct ieee80211_ampdu_params params;
+	int rc;
 
+	/*
+	 * W7-13 census: the window state alone cannot tell "the driver refused
+	 * the BA" from "the driver took it and the traffic never came".  Record
+	 * every RX_START call, whether the driver entry existed at that moment,
+	 * and the last call's parameters.  Read-only.
+	 */
+	if (action == IEEE80211_AMPDU_RX_START) {
+		ba.rx_calls++;
+		if (w == NULL || w->vif == NULL || w->sta == NULL ||
+		    w->ops == NULL || w->ops->ampdu_action == NULL)
+			ba.rx_stale++;
+	}
 	if (w == NULL || w->vif == NULL || w->sta == NULL ||
 	    w->ops == NULL || w->ops->ampdu_action == NULL)
 		return -EOPNOTSUPP;
@@ -98,7 +114,16 @@ ba_ampdu(struct wlan_linux_hw *w, enum ieee80211_ampdu_mlme_action action,
 	params.buf_size = buf;
 	params.amsdu = amsdu;
 	params.timeout = timeout;
-	return w->ops->ampdu_action(&w->hw, w->vif, &params);
+	rc = w->ops->ampdu_action(&w->hw, w->vif, &params);
+	if (action == IEEE80211_AMPDU_RX_START) {
+		ba.rx_last_rc = rc;
+		ba.rx_last_tid = tid;
+		ba.rx_last_ssn = ssn;
+		ba.rx_last_win = buf;
+		if (rc < 0)
+			ba.rx_fail++;
+	}
+	return rc;
 }
 
 /* Answer an ADDBA Request in the same dialog, with status 0 and the request's
@@ -579,6 +604,13 @@ wlan_ba_get_census(struct wlan_ba_census *c)
 	}
 	c->head = ba.rx[0].head;
 	c->win = ba.rx[0].win;
+	c->rx_calls = ba.rx_calls;
+	c->rx_fail = ba.rx_fail;
+	c->rx_stale = ba.rx_stale;
+	c->rx_last_rc = ba.rx_last_rc;
+	c->rx_last_tid = ba.rx_last_tid;
+	c->rx_last_ssn = ba.rx_last_ssn;
+	c->rx_last_win = ba.rx_last_win;
 	spin_unlock_irqrestore(&ba.lock, flags);
 }
 

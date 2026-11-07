@@ -363,7 +363,9 @@ static int wlan_rxstats_get(char *buffer, const struct kernel_param *kp)
 	    "rxtmg=%u rxtctl=%u rxtdat=%u rxtoth=%u "
 	    "barx0=%u barx1=%u barx2=%u barc=%d "
 	    "bahold=%u baflush=%u badrop=%u badup=%u "
-	    "batid=%u bahead=%u bawin=%u\n",
+	    "batid=%u bahead=%u bawin=%u "
+	    "rxcalls=%u rxfails=%u rxstale=%u rclast=%d "
+	    "rctid=%u rcssn=%u rcwin=%u\n",
 	    w != NULL ? w->rx_seen : 0u, w != NULL ? w->rx_linear : 0u,
 	    w != NULL ? w->rx_frag : 0u, w != NULL ? w->rx_lin_fail : 0u,
 	    w != NULL ? w->rx_amsdu : 0u,
@@ -375,7 +377,10 @@ static int wlan_rxstats_get(char *buffer, const struct kernel_param *kp)
 	    w != NULL ? w->rx_ba_ret[2] : 0u,
 	    w != NULL ? w->rx_ba_start_rc : 0,
 	    bc.hold, bc.flush, bc.drop_old, bc.drop_dup,
-	    bc.active, (unsigned int)bc.head, (unsigned int)bc.win);
+	    bc.active, (unsigned int)bc.head, (unsigned int)bc.win,
+	    bc.rx_calls, bc.rx_fail, bc.rx_stale, bc.rx_last_rc,
+	    (unsigned int)bc.rx_last_tid, (unsigned int)bc.rx_last_ssn,
+	    (unsigned int)bc.rx_last_win);
 	n += scnprintf(buffer + n, PAGE_SIZE - n,
 	    "brx=%u brxdata=%u breorder=%u boversize=%u bwrongbss=%u "
 	    "bnodealloc=%u bmgtdiscard=%u bchanmis=%u\n",

@@ -56,6 +56,14 @@ struct wlan_ba_census {
 	unsigned int	active;		/* RX windows currently active */
 	u16		head;		/* TID 0 head */
 	u16		win;		/* TID 0 negotiated window */
+	/* W7-13: the driver call behind the window (per call, not last-only) */
+	unsigned int	rx_calls;	/* ampdu_action(RX_START) calls */
+	unsigned int	rx_fail;	/* ... that the driver refused (rc < 0) */
+	unsigned int	rx_stale;	/* ... made without a vif/sta/ops */
+	int		rx_last_rc;	/* last RX_START return code */
+	u16		rx_last_tid;
+	u16		rx_last_ssn;
+	u16		rx_last_win;
 };
 
 void	wlan_ba_get_census(struct wlan_ba_census *c);
