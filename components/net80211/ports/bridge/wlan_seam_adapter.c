@@ -144,6 +144,10 @@ static struct {
 					 * connection was prepared (before AUTH),
 					 * so it winds down as an unassociated
 					 * station, not through sta_remove */
+	int sta_authorized;		/* the ASSOC -> AUTHORIZED step was taken
+					 * (CONFIG_WLAN_STA_AUTHZ); the station
+					 * is stepped back to ASSOC before it is
+					 * wound down */
 	uint8_t bssid_store[6];		/* the pre-assoc BSSID the vif points at */
 	/*
 	 * The peer's 11n declaration as the bridge's beacon cache heard it
@@ -938,6 +942,23 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 			seam_sta_apply_ht();
 			(void)lkpi80211_drv_sta_assoc(adapter.hw, adapter.vif,
 			    adapter.sta, aid);
+#if defined(CONFIG_WLAN_STA_AUTHZ) && CONFIG_WLAN_STA_AUTHZ
+			/*
+			 * The authorization step, on an open join.  mac80211
+			 * runs it right after the association when the
+			 * interface has no control port, and iwlwifi reads it:
+			 * only a station at AUTHORIZED gets its rate from the
+			 * firmware's table; below that the driver builds the
+			 * rate from control.rates[0] (idx 0 = CCK 1 Mbit/s).
+			 * A refusal is logged by the khpi layer and leaves the
+			 * station joined; the flag only records that the step
+			 * was taken so the wind-down can mirror mac80211.
+			 */
+			if (adapter.sta != NULL &&
+			    lkpi80211_drv_sta_authorized(adapter.hw,
+				adapter.vif, adapter.sta) == 0)
+				adapter.sta_authorized = 1;
+#endif
 		}
 		/* the peer is associated now (or was never registered): its
 		 * wind-down is the joined station's, not the pre-auth one's */
@@ -949,6 +970,15 @@ seam_bss_info(struct wlan_seam_drv *drv, int joined, const uint8_t bssid[6],
 		memset(adapter.vif->cfg.ap_addr, 0, 6);
 		changed = BSS_CHANGED_ASSOC;
 		if (adapter.sta != NULL) {
+#if defined(CONFIG_WLAN_STA_AUTHZ) && CONFIG_WLAN_STA_AUTHZ
+			/* the ladder back down starts one step higher when
+			 * the authorization was taken (sta_info.c steps a
+			 * destroyed AUTHORIZED station back to ASSOC first) */
+			if (adapter.sta_authorized)
+				(void)lkpi80211_drv_sta_deauthorized(
+				    adapter.hw, adapter.vif, adapter.sta);
+			adapter.sta_authorized = 0;
+#endif
 			lkpi80211_drv_sta_remove(adapter.hw, adapter.vif,
 			    adapter.sta);
 			adapter.sta = NULL;
@@ -1007,6 +1037,7 @@ seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
 			    adapter.sta);
 			adapter.sta = NULL;
 			adapter.sta_preauth = 0;
+			adapter.sta_authorized = 0;
 		}
 		/* the channel context goes with the attempt (the interface
 		 * releases the channel when a connection ends without one) */

@@ -66,6 +66,23 @@ static unsigned int wlan_tx_diag_seen;
 module_param_named(tx_diag, wlan_tx_diag, int, 0644);
 module_param_named(tx_tid, wlan_tx_tid, int, 0644);
 
+/*
+ * The station authorization step (ASSOC -> AUTHORIZED) after an open join.
+ * mac80211 runs it right after the association on an interface without a control
+ * port (net/mac80211/mlme.c), and iwlwifi's transmit path reads it: only a
+ * station at AUTHORIZED gets TX_CMD_FLG_STA_RATE and the firmware's rate table
+ * (mvm/tx.c); below it the driver builds the rate from
+ * info->control.rates[0], which this seam fills with idx 0 - CCK 1 Mbit/s on
+ * 2.4 GHz.  The RTOS bridge's switch is CONFIG_WLAN_STA_AUTHZ; the module has
+ * a parameter instead because the kernelmod build has no Kconfig.  Keep it on:
+ * a refusal is logged and the station stays joined, so the step cannot break a
+ * join; sta_authz=0 is the A arm that restores the pre-W7-11 shape.
+ */
+static bool wlan_sta_authz = true;
+module_param_named(sta_authz, wlan_sta_authz, bool, 0644);
+MODULE_PARM_DESC(sta_authz,
+    "1 = run the STA ASSOC->AUTHORIZED step after an open join (lab parity)");
+
 #ifndef CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX
 /* a build that does not state a number gets no gate, the pre-W6-05 shape */
 #define CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX 0
@@ -985,6 +1002,7 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	w->sta = sta;
 	w->sta_joined = 0;
 	w->sta_auth_sent = 0;
+	w->sta_authorized = false;
 	return sta;
 
 err_free:
@@ -1007,9 +1025,16 @@ static void seam_sta_drop(struct wlan_linux_hw *w)
 	if (w->vif != NULL && w->ops->sta_state != NULL) {
 		/*
 		 * The ladder back down, in the order the interface runs it:
-		 * the association ends (only when it was reached), then the
+		 * the authorization first when it was taken (sta_info.c steps a
+		 * destroyed AUTHORIZED station back to ASSOC), then the
+		 * association ends (only when it was reached), then the
 		 * station is gone.
 		 */
+		if (w->sta_authorized) {
+			(void)w->ops->sta_state(&w->hw, w->vif, sta,
+			    IEEE80211_STA_AUTHORIZED, IEEE80211_STA_ASSOC);
+			w->sta_authorized = false;
+		}
 		if (w->sta_joined) {
 			(void)w->ops->sta_state(&w->hw, w->vif, sta,
 			    IEEE80211_STA_ASSOC, IEEE80211_STA_AUTH);
@@ -1098,6 +1123,28 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 				(void)w->ops->sta_state(&w->hw, vif, sta,
 				    IEEE80211_STA_AUTH,
 				    IEEE80211_STA_ASSOC);
+				/*
+				 * The authorization step: mac80211 runs it right
+				 * after the association on an interface without
+				 * a control port (mlme.c), and iwlwifi reads
+				 * it - only a station at AUTHORIZED gets its
+				 * rate from the firmware's table; below that
+				 * the driver builds the rate from
+				 * info->control.rates[0] (idx 0 = CCK
+				 * 1 Mbit/s).  A refused step leaves the station
+				 * joined, and the flag only records whether the
+				 * wind-down owes a step back.
+				 */
+				if (wlan_sta_authz) {
+					int arc = w->ops->sta_state(&w->hw, vif,
+					    sta, IEEE80211_STA_ASSOC,
+					    IEEE80211_STA_AUTHORIZED);
+
+					if (arc == 0)
+						w->sta_authorized = true;
+					pr_info("wlan: station authorized %pM rc=%d\n",
+					    sta->addr, arc);
+				}
 			}
 			/*
 			 * mac80211's rate-control update for the link. The

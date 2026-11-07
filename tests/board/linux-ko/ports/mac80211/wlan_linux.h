@@ -61,6 +61,9 @@ struct wlan_linux_hw {
 	struct wireless_dev wdev;
 	bool wiphy_registered;
 	bool sta_auth_sent;
+	/* the ASSOC -> AUTHORIZED step was accepted (sta_authz); the station is
+	 * stepped back to ASSOC before it is wound down */
+	bool sta_authorized;
 
 	/*
 	 * The connection's channel context. A driver that declares the channel

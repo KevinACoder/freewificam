@@ -14,3 +14,10 @@ CONFIG_FREERTOS_HEAP_SIZE=16777216
 CONFIG_GMAC_PROF=y
 CONFIG_CASES="tick pcie iwl7260 iwl7260_scan iwl7260_join iwl7260_dataplane iwl7260_net"
 CONFIG_WLAN_LINE_IWLWIFI=y
+# W7-11: the station authorization step (ASSOC -> AUTHORIZED) after an open
+# join.  mac80211 runs it right after the association; iwlwifi only lets the
+# firmware rate table choose transmit rates for a station at that state
+# (mvm/tx.c).  Without it every data frame leaves with rates[0].idx = 0
+# (CCK 1 Mbit/s on 2.4 GHz) - the 1.0 Mbit/s the AP reported for this station.
+# The A arm is configs/iwlwifi-7260-sjd-noauthz.defconfig.
+CONFIG_WLAN_STA_AUTHZ=y

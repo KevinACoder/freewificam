@@ -73,6 +73,7 @@ void wlan_port_serializer_unlock(void);
 #include "lwip/ip4_addr.h"
 #include "lwip/inet_chksum.h"
 #include "lwip/etharp.h"
+#include "lwip/udp.h"
 #include "lwip/apps/lwiperf.h"
 
 #define IWL_NET_IP_A		192u
@@ -95,6 +96,10 @@ void wlan_port_serializer_unlock(void);
  * the session, and the report is what this side waits for). */
 #define IWL_NET_DOWN_WAIT_MS	45000u
 #define IWL_NET_UP_WAIT_MS	40000u
+/* the UDP downlink phase: the peer's iperf2 UDP action runs 20 s, so the
+ * window is that plus connect slack */
+#define IWL_NET_UDP_WAIT_MS	22000u
+#define IWL_NET_UDP_PORT	5002u
 #define IWL_NET_WAIT_STEP_MS	100u
 
 #define IWL_NET_RUN_STATE	4
@@ -435,7 +440,7 @@ iwl_net_iperf_up(void)
 	iwl_up_done = 0;
 	/* The peer's iperf2 server listens on the AP host from round start, so
 	 * this phase only has to start the board's client. */
-	CASE_ANCHOR("net: phase 2 begin window_ms=%u name=tcpup\n",
+	CASE_ANCHOR("net: phase 3 begin window_ms=%u name=tcpup\n",
 	    IWL_NET_UP_WAIT_MS);
 	LOCK_TCPIP_CORE();
 	client = lwiperf_start_tcp_client_default(&iwl_ap_ip,
@@ -452,6 +457,76 @@ iwl_net_iperf_up(void)
 	CASE_ANCHOR("iwl7260: net iperf up done=%d bytes=%u ms=%u kbit=%u\n",
 	    iwl_up_done, iwl_up_bytes, iwl_up_ms, iwl_up_kbit);
 	return ((iwl_up_done != 0) && (iwl_up_bytes != 0u)) ? 0 : -1;
+}
+
+/* --- UDP downlink sink ---------------------------------------------------- */
+
+/*
+ * The transport split that has to come before any attribution: the same
+ * downlink, on a transport with no ACK clock.  A TCP-only number cannot tell
+ * "the receive path cannot carry more" from "the TCP feedback cannot", and the
+ * two send the next round in opposite directions.
+ *
+ * The sink counts and frees; it answers nothing.  A phase with zero frames is a
+ * result, not a failure - the peer's iperf2 UDP report is the second witness
+ * for the same window.  The window is the peer action's 20 s plus slack, and
+ * the peer is driven by the phase anchor as every other phase is.
+ */
+static struct udp_pcb *iwl_udp_pcb;
+static volatile unsigned iwl_udp_pkts;
+static volatile unsigned iwl_udp_bytes;
+
+static void
+iwl_net_udp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+    const ip_addr_t *addr, u16_t port)
+{
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+	if (p == NULL)
+		return;
+	iwl_udp_pkts++;
+	iwl_udp_bytes += (unsigned)p->tot_len;
+	pbuf_free(p);
+}
+
+static int
+iwl_net_udp_down(void)
+{
+	unsigned waited;
+
+	iwl_udp_pkts = 0;
+	iwl_udp_bytes = 0;
+	LOCK_TCPIP_CORE();
+	iwl_udp_pcb = udp_new();
+	if (iwl_udp_pcb != NULL) {
+		udp_recv(iwl_udp_pcb, iwl_net_udp_recv, NULL);
+		if (udp_bind(iwl_udp_pcb, IP_ADDR_ANY, IWL_NET_UDP_PORT) !=
+		    ERR_OK) {
+			udp_remove(iwl_udp_pcb);
+			iwl_udp_pcb = NULL;
+		}
+	}
+	UNLOCK_TCPIP_CORE();
+	if (iwl_udp_pcb == NULL) {
+		CASE_ANCHOR("iwl7260: net FAIL udp sink\n");
+		return -1;
+	}
+	/* the anchor goes out only after the pcb is bound, so a peer that reacts
+	 * to it cannot send into a closed port */
+	CASE_ANCHOR("net: phase 2 begin window_ms=%u name=udpdn\n",
+	    IWL_NET_UDP_WAIT_MS);
+	for (waited = 0u; waited < IWL_NET_UDP_WAIT_MS;
+	     waited += IWL_NET_WAIT_STEP_MS)
+		(void)osDelay(IWL_NET_WAIT_STEP_MS);
+	LOCK_TCPIP_CORE();
+	udp_remove(iwl_udp_pcb);
+	iwl_udp_pcb = NULL;
+	UNLOCK_TCPIP_CORE();
+	CASE_ANCHOR("iwl7260: net udp rx pkts=%u bytes=%u\n", iwl_udp_pkts,
+	    iwl_udp_bytes);
+	return 0;
 }
 
 /* --- the case ------------------------------------------------------------ */
@@ -475,6 +550,7 @@ case_iwl7260_net_run(void)
 	struct wlan_bridge_counters c;
 	int ping_ok;
 	int down_ok;
+	int udp_ok;
 	int up_ok;
 
 	wlan_bridge_stats(&c);
@@ -543,12 +619,19 @@ case_iwl7260_net_run(void)
 	    iwl_ping_rtt_max_us / 1000u);
 
 	down_ok = iwl_net_iperf_down();
+	/* the transport split: informational, never a gate (a zero-frame UDP
+	 * phase is a result about the receive path, not a broken case) */
+	udp_ok = iwl_net_udp_down();
 	up_ok = iwl_net_iperf_up();
 
 	iwl_net_counters_line();
+	/* the peer/rate fingerprint once per case: the bridge's view of the
+	 * station (ht/mcs/nss/wme) and the per-rate delivery histogram, so a
+	 * number can be read against the link it was measured on */
+	wlan_bridge_link_dump();
 	if ((ping_ok != 0) || (down_ok != 0) || (up_ok != 0)) {
-		CASE_ANCHOR("iwl7260: net FAIL ping=%d down=%d up=%d\n",
-		    ping_ok, down_ok, up_ok);
+		CASE_ANCHOR("iwl7260: net FAIL ping=%d down=%d udp=%d up=%d\n",
+		    ping_ok, down_ok, udp_ok, up_ok);
 		return 1;
 	}
 	CASE_ANCHOR("iwl7260: net PASS\n");

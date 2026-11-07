@@ -229,12 +229,19 @@ void	lkpi80211_tx_kick_defer(struct ieee80211_hw *hw);
  * sta_data_size bytes of zeroed driver-private area).  The ladder is split the
  * way the association splits: drv_sta_add uploads the peer (the moment mac80211
  * prepares a connection), drv_sta_assoc runs AUTH -> ASSOC when the association
- * completes, drv_sta_remove winds a joined station down, and drv_sta_free winds
- * down a station that never associated. */
+ * completes, drv_sta_authorized runs ASSOC -> AUTHORIZED for an open join
+ * (mac80211 does it right after the association; iwlwifi only lets the firmware
+ * pick a transmit rate at that state), drv_sta_deauthorized steps a station
+ * back before it is wound down, drv_sta_remove winds a joined station down, and
+ * drv_sta_free winds down a station that never associated. */
 struct ieee80211_sta *lkpi80211_drv_sta_add(struct ieee80211_hw *hw,
 	    struct ieee80211_vif *vif, const u8 addr[6], u16 aid);
 int	lkpi80211_drv_sta_assoc(struct ieee80211_hw *hw,
 	    struct ieee80211_vif *vif, struct ieee80211_sta *sta, u16 aid);
+int	lkpi80211_drv_sta_authorized(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_sta *sta);
+int	lkpi80211_drv_sta_deauthorized(struct ieee80211_hw *hw,
+	    struct ieee80211_vif *vif, struct ieee80211_sta *sta);
 void	lkpi80211_drv_sta_remove(struct ieee80211_hw *hw,
 	    struct ieee80211_vif *vif, struct ieee80211_sta *sta);
 void	lkpi80211_drv_sta_free(struct ieee80211_hw *hw,

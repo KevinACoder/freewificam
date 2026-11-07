@@ -3100,6 +3100,62 @@ lkpi80211_drv_sta_assoc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    IEEE80211_STA_ASSOC);
 }
 
+/*
+ * The authorization step of the station ladder (ASSOC -> AUTHORIZED).
+ * mac80211 runs it immediately after the association on an interface without a
+ * control port (net/mac80211/mlme.c: the two move_state calls after the
+ * association response), and it is a step drivers act on.  iwlwifi is the one
+ * that matters here: at AUTHORIZED and above its transmit path sets
+ * TX_CMD_FLG_STA_RATE and lets the firmware rate table choose (mvm/tx.c), it
+ * initialises that table for the station's links, and it re-sends the MAC
+ * context authorized; below AUTHORIZED the rate comes from
+ * info->control.rates[0], which this port's seams fill with idx 0 (CCK
+ * 1 Mbit/s on 2.4 GHz).
+ *
+ * Only the open-network shape is here: with a control port mac80211 defers
+ * this step to the key install, and this port has no such notification yet.
+ * A driver refusal is logged and reported, never fatal - a station that is
+ * joined stays joined; the caller decides whether to unwind the flag.
+ */
+int
+lkpi80211_drv_sta_authorized(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+    struct ieee80211_sta *sta)
+{
+	struct lkpi80211_hw_ctx *ctx;
+	int ret;
+
+	if (hw == NULL || sta == NULL)
+		return -EINVAL;
+	ctx = LKPI80211_CTX(hw);
+	ret = sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_ASSOC,
+	    IEEE80211_STA_AUTHORIZED);
+	if (ret != 0)
+		lkpi_printf(ULOG_ERROR_LEVEL,
+		    "lkpi80211: sta assoc->authorized refused (%d)\n", ret);
+	return ret;
+}
+
+/*
+ * The reverse step before a joined station is wound down.  mac80211 steps a
+ * station from AUTHORIZED back to ASSOC before it destroys it
+ * (net/mac80211/sta_info.c), and a driver's ASSOC -> AUTH handler assumes it
+ * arrives from ASSOC.  Best effort: a driver that never accepted the
+ * authorization has nothing to step down from, and the caller only calls this
+ * when it recorded that the step was taken.
+ */
+int
+lkpi80211_drv_sta_deauthorized(struct ieee80211_hw *hw,
+    struct ieee80211_vif *vif, struct ieee80211_sta *sta)
+{
+	struct lkpi80211_hw_ctx *ctx;
+
+	if (hw == NULL || sta == NULL)
+		return -EINVAL;
+	ctx = LKPI80211_CTX(hw);
+	return sta_state_call(ctx, hw, vif, sta, IEEE80211_STA_AUTHORIZED,
+	    IEEE80211_STA_ASSOC);
+}
+
 /* the slot release both wind-downs share: the station's table entry, its
  * queues, then the record itself */
 static void

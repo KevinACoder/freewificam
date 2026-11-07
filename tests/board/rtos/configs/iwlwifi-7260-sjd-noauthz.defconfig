@@ -1,0 +1,21 @@
+# W7-11 A arm: the pre-fix shape of iwlwifi-7260-sjd, one variable different.
+#
+# Identical to configs/iwlwifi-7260-sjd.defconfig except that the station
+# authorization step (ASSOC -> AUTHORIZED) is not run, which is what every
+# image before W7-11 did.  The pair exists to attribute the 1.0 Mbit/s the AP
+# reports for this station: with the step the driver lets the firmware rate
+# table choose (mvm/tx.c TX_CMD_FLG_STA_RATE), without it the seam's
+# rates[0].idx = 0 (CCK 1 Mbit/s) is what the descriptor carries.
+#
+# Two images, same tree, same AP, same case list; the only difference is
+# CONFIG_WLAN_STA_AUTHZ.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_GMAC_PROF=y
+CONFIG_CASES="tick pcie iwl7260 iwl7260_scan iwl7260_join iwl7260_dataplane iwl7260_net"
+CONFIG_WLAN_LINE_IWLWIFI=y
+# CONFIG_WLAN_STA_AUTHZ is not set (the default; stated for the A arm's sake)

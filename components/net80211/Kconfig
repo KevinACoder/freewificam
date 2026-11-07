@@ -10,6 +10,22 @@ config WLAN_RX_BA
 	  and the same -D twice (once as an assignment, once inside
 	  CONFIG_LEVERS); after the migration there is one source of truth.
 
+config WLAN_STA_AUTHZ
+	bool "station ASSOC -> AUTHORIZED transition after an open join"
+	default n
+	help
+	  Send the driver the AUTHORIZED step of mac80211's station ladder
+	  after an open association, and step back down to ASSOC on teardown.
+	  mac80211 runs both immediately after ASSOC on an interface without a
+	  control port (net/mac80211/mlme.c, sta_info.c).  A driver acts on it:
+	  iwlwifi only lets the firmware pick a transmit rate for a station at
+	  AUTHORIZED (mvm/tx.c sets TX_CMD_FLG_STA_RATE there), initialises
+	  the firmware rate table for the station's links and re-sends the MAC
+	  context.  Below AUTHORIZED it builds the rate from
+	  info->control.rates[0], which the seam fills with idx 0 - CCK
+	  1 Mbit/s on 2.4 GHz.  Off by default so no other line changes
+	  shape; a profile that wants the parity step sets it to y.
+
 config WLAN_TX_BA
 	bool "TX block-ack state machine (port side)"
 	default y
