@@ -21,7 +21,7 @@
  *   iwl7260: scan bss <bssid> ssid=<s> freq=<f> rssi=<r>
  *   iwl7260: scan done rows=<n> bcn=<n> bcnT=<n> prsp=<n> fcs=<n>
  *               scan=<n>/<n> state=<n> entered=<n> close=<n> rx=<n>
- *   iwl7260: scan hit bssid=d8:3a:dd:26:91:1e ssid=labwifi-brmc freq=2432 rssi=<r>
+ *   iwl7260: scan hit bssid=24:ec:99:b9:8a:00 ssid=labwifi-ar-ht20s freq=2432 rssi=<r>
  *   iwl7260: scan lkpi completions=<n> tx=<n> wq=<n>
  *   iwl7260: scan PASS
  *
@@ -49,13 +49,14 @@ void lkpi80211_completion_counters(uint32_t *scan, uint32_t *tx);
 #define IWL_SCAN_POLL_MS	200u
 #define IWL_SCAN_NWID_LEN	32u
 
-#define IWL_SCAN_SSID		"labwifi-brmc"
-#define IWL_SCAN_SSID_LEN	12u
+#define IWL_SCAN_SSID		"labwifi-ar-ht20s"
+#define IWL_SCAN_SSID_LEN	16u
 #define IWL_SCAN_FREQ		2432u
 
-/* the bench AP (brcmfmac wlan0, open, ch5) */
+/* the bench AP (2026-11-01 起 AR9271 wlan2 当 AP，open，ch5 HT20 SGI；
+ * 旧的 brcmfmac wlan0 已退役) */
 static const uint8_t iwl_scan_target[6] = {
-	0xd8, 0x3a, 0xdd, 0x26, 0x91, 0x1e
+	0x24, 0xec, 0x99, 0xb9, 0x8a, 0x00
 };
 
 struct iwl_scan_rec {

@@ -15,7 +15,7 @@
  * the association's identity is the BSSID the exchange completed with.
  *
  * Anchors:
- *   iwl7260: join start ssid=labwifi-brmc bssid=... state=<n> rc=<n>
+ *   iwl7260: join start ssid=labwifi-ar-ht20s bssid=... state=<n> rc=<n>
  *   iwl7260: join wait t=<s> state=<n> mgt_tx=<n> txc=<n> txfail=<n> rx=<n>
  *            rx_age=<ms> irq=<n> irqth=<n> wq=<ptr> bad_auth=<n>
  *   iwl7260: join ok state=4 mgt_tx=<n> txc=<n> rx=<n>
@@ -57,13 +57,14 @@ void lkpi_pci_irq_counters(unsigned int *hard, unsigned int *thread);
 #define IWL_JOIN_POLL_MS	200u
 #define IWL_JOIN_PULSE_MS	2000u
 
-#define IWL_JOIN_SSID		"labwifi-brmc"
-#define IWL_JOIN_SSID_LEN	12u
+#define IWL_JOIN_SSID		"labwifi-ar-ht20s"
+#define IWL_JOIN_SSID_LEN	16u
 #define IWL_JOIN_RUN		4
 
-/* the bench AP (brcmfmac wlan0, open, ch5) */
+/* the bench AP (2026-11-01 起 AR9271 wlan2 当 AP，open，ch5 HT20 SGI；
+ * 旧的 brcmfmac wlan0 已退役) */
 static const uint8_t iwl_join_target[6] = {
-	0xd8, 0x3a, 0xdd, 0x26, 0x91, 0x1e
+	0x24, 0xec, 0x99, 0xb9, 0x8a, 0x00
 };
 
 static const char *
