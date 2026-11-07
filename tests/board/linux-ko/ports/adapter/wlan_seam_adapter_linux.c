@@ -45,6 +45,17 @@
 static bool force_ht = true;
 module_param_named(force_ht, force_ht, bool, 0644);
 MODULE_PARM_DESC(force_ht, "1 = advertise HT20 1SS MCS0-7 to the driver (lab probe)");
+/*
+ * W7-14: force_ht's own table is the W7-11 shape (1 SS, and no 40 MHz on a
+ * 20 MHz tune).  The AP reads that table and picks its downlink MCS from it,
+ * so the shape, not the air, was setting our downlink rate.  force_ht40=1
+ * keeps force_ht on but declares the capability set the reference station
+ * advertises (20/40 MHz, SGI40, 2 SS).  Default 0 keeps the old shape.
+ */
+static bool force_ht40 = true;
+module_param_named(force_ht40, force_ht40, bool, 0644);
+MODULE_PARM_DESC(force_ht40,
+    "1 = with force_ht, also declare 40 MHz + SGI40 + 2 spatial streams");
 
 /*
  * Transmit diagnosis for the 8851BU data-plane round: the same frame, in the
@@ -142,6 +153,24 @@ static bool wlan_rc_feedback;
 module_param_named(rc_feedback, wlan_rc_feedback, bool, 0644);
 MODULE_PARM_DESC(rc_feedback,
     "1 = feed the driver's rate control with TX status (lab parity)");
+
+/*
+ * The WMM station contract (W7-14).  mac80211 marks an associated station
+ * wme-capable when the AP's WMM element is present and the device has at
+ * least IEEE80211_NUM_ACS queues (net/mac80211/mlme.c:7149); the seam never
+ * did, and iwlwifi reads sta->wme for the ADD_STA U-APSD fields
+ * (mvm/sta.c:227) and as the guard of the aggregated TX-response handler
+ * (mvm/tx.c:1875).  sta_wme=0 keeps the pre-W7-14 shape so the arm is a
+ * single-variable A/B.
+ *
+ * Default is on: it is mac80211's own behaviour, and W7-14 measured that it
+ * removes the mvm/tx.c:1875 WARN and lifts the uplink cell from 0.98 to
+ * 1.77-1.98 Mbit/s (2 boots) with the downlink unchanged.
+ */
+static bool wlan_sta_wme = true;
+module_param_named(sta_wme, wlan_sta_wme, bool, 0644);
+MODULE_PARM_DESC(sta_wme,
+    "1 = mark the peer station WMM-capable as mac80211 does (lab parity)");
 
 bool wlan_adapter_rc_feedback(void)
 {
@@ -1031,15 +1060,29 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 		bool ht40 = w->tuned_width == WLAN_SEAM_CHAN_WIDTH_40;
 
 		sta->deflink.ht_cap.ht_supported = true;
+		/*
+		 * W7-14: this table used to claim one spatial stream and, on
+		 * a 20 MHz tune, no 40 MHz capability at all, while the AP
+		 * (ath9k, HT20 on ch5) kept a 40 MHz short-GI rate table for
+		 * us and simply stepped its MCS down to what it thought we
+		 * could receive (MCS0-MCS3, 15-60 Mbit/s).  mac80211 builds
+		 * the peer's HT capability from the association request's HT
+		 * element, so a table that under-claims throttles the AP's
+		 * rate selection for the whole session.  force_ht passes
+		 * ht40_min=1 to declare 20/40 MHz with SGI40 regardless of
+		 * the tuned width, which is the capability set the reference
+		 * station advertises on this bench.
+		 */
 		sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20 |
-		    (ht40 ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+		    ((ht40 || force_ht40) ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
 			IEEE80211_HT_CAP_SGI_40) : 0);
 		sta->deflink.ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
 		sta->deflink.ht_cap.ampdu_density = IEEE80211_HT_MPDU_DENSITY_NONE;
 		sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
+		sta->deflink.rx_nss = 2;
 		sta->deflink.ht_cap.mcs.rx_highest =
-		    cpu_to_le16(ht40 ? 150 : 72);
-		sta->deflink.bandwidth = ht40 ?
+		    cpu_to_le16(ht40 || force_ht40 ? 300 : 144);
+		sta->deflink.bandwidth = (ht40 || force_ht40) ?
 		    IEEE80211_STA_RX_BW_40 : IEEE80211_STA_RX_BW_20;
 	}
 	sta->max_rx_aggregation_subframes = 64;
@@ -1056,6 +1099,24 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	 */
 	sta->deflink.agg.max_amsdu_len = 3839;
 	sta->cur = &sta->deflink.agg;
+	/*
+	 * mac80211 sets sta->wme while parsing the association response: the
+	 * AP's WMM element present and the hardware has enough queues
+	 * (net/mac80211/mlme.c:7149).  This seam never did, and iwlwifi reads
+	 * it in three places - the ADD_STA U-APSD/AC fields (mvm/sta.c:227,
+	 * gated on STA_MODIFY_UAPSD_ACS), the TX-completion reclamation that
+	 * advances tid_data->next_reclaimed (mvm/tx.c:1734), and the guard of
+	 * the aggregated-TX-response handler (mvm/tx.c:1875) which otherwise
+	 * WARNs and returns before iwl_mvm_check_ratid_empty() runs.
+	 * The bench AP sends no U-APSD element, so mac80211's values here are
+	 * uapsd_queues=0 and max_sp=0 (mvm turns the latter into sp_length=128).
+	 * sta_wme=0 keeps the pre-W7-14 shape for the A/B arm.
+	 */
+	if (wlan_sta_wme) {
+		sta->wme = true;
+		sta->uapsd_queues = 0;
+		sta->max_sp = 0;
+	}
 	/*
 	 * The station's per-TID queues, before the driver hears about the
 	 * station: its station setup walks them to initialise the

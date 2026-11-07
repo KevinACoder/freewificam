@@ -126,6 +126,22 @@ ba_ampdu(struct wlan_linux_hw *w, enum ieee80211_ampdu_mlme_action action,
 	return rc;
 }
 
+/*
+ * W7-14 F2: answer the AP's ADDBA Request with the WLAN_STATUS_REQUEST_DECLINED
+ * of IEEE 802.11-2020 9.6.5.1 instead of accepting it.  The reference station
+ * accepts (status 0) and then emits a BlockAck for every A-MPDU; this line
+ * accepts and emits none, which is the open issue.  Declining moves the AP to
+ * single-frame delivery through the exact same receive path, so the two arms
+ * differ only in "does the AP aggregate" -- if the downlink rate follows the
+ * aggregation state and not our HT table, the 6 Mbit/s residual is downstream
+ * of the missing BlockAck; if the rate stays at MCS1-3, the missing BlockAck
+ * is a symptom, not the owner.
+ */
+static bool ba_decline_rx;
+module_param_named(ba_decline_rx, ba_decline_rx, bool, 0644);
+MODULE_PARM_DESC(ba_decline_rx,
+    "1 = decline the AP's ADDBA Request (single-frame downlink, lab probe)");
+
 /* Answer an ADDBA Request in the same dialog, with status 0 and the request's
  * own parameter set (TID/buffer/policy). */
 static void
@@ -146,7 +162,8 @@ ba_send_response(struct ieee80211_hw *hw, const u8 *req, size_t len)
 	rsp[24] = 3;			/* Block Ack category */
 	rsp[25] = 1;			/* ADDBA Response */
 	rsp[26] = req[26];		/* dialog token */
-	rsp[27] = 0;			/* status: success */
+	/* 0 = success, 37 = WLAN_STATUS_REQUEST_DECLINED */
+	rsp[27] = ba_decline_rx ? 37 : 0;
 	rsp[28] = 0;
 	rsp[29] = req[27];		/* parameter set, echoed */
 	rsp[30] = req[28];
@@ -213,6 +230,13 @@ ba_handle_addba_req(struct ieee80211_hw *hw, const u8 *d, size_t len)
 	win = buf == 0 ? BA_WIN : min_t(u16, buf, BA_WIN);
 	if (tid >= BA_TID_MAX)
 		return;
+	if (ba_decline_rx) {
+		/* No reorder window, no driver RX_START: the AP must fall back
+		 * to single MPDUs, exactly as it does for a station that does
+		 * not want aggregation. */
+		ba_send_response(hw, d, len);
+		return;
+	}
 	spin_lock_irqsave(&ba.lock, flags);
 	ba_rx_free_tid(tid);
 	ba.rx[tid].active = 1;
