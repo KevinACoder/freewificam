@@ -37,6 +37,10 @@ MOD=$BUILD/wlan-ko
 CROSS=${CROSS_COMPILE:-aarch64-linux-gnu-}
 JOBS=${JOBS:-$(nproc)}
 PROF=${PROF:-0}
+# CENSUS 1 = the W7-12 receive-shape/transmit-rate census (per-frame counters
+# in the receive entry and the status path, plus the `rxstats` parameter).
+# Diagnostic artifacts carry their own hash; the delivered build leaves it off.
+CENSUS=${CENSUS:-0}
 
 # ---- source lists -----------------------------------------------------------
 # The net80211 world: imported stack + its port layer + the bridge.  The list
@@ -263,6 +267,9 @@ CONFIG_H="$MOD/linuxko_config.h"
 	if [ "$PROF" = 1 ]; then
 		echo '#define CONFIG_WLAN_KO_PROF 1'
 	fi
+	if [ "$CENSUS" = 1 ]; then
+		echo '#define CONFIG_WLAN_KO_CENSUS 1'
+	fi
 	for d in $DRIVER_DEFINES; do
 		echo "#define $d 1"
 	done
@@ -372,7 +379,7 @@ done
 
 echo "build.sh: module dir $MOD"
 echo "build.sh: kernel     $KOBJ ($KREL)"
-echo "build.sh: driver     $DRIVER debugfs=${DEBUGFS:-0} diag=${DIAG:-0}"
+echo "build.sh: driver     $DRIVER debugfs=${DEBUGFS:-0} diag=${DIAG:-0} census=$CENSUS"
 make -C "$KSRC" O="$KOBJ" ARCH=arm64 CROSS_COMPILE="$CROSS" \
 	KERNELRELEASE="$KREL" M="$MOD" -j"$JOBS" modules
 

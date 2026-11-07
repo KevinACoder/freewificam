@@ -185,6 +185,56 @@ struct wlan_linux_hw {
 	 */
 	struct ieee80211_txq	*tx_batch_txq[8];
 	unsigned int		tx_batch_txqs;
+
+	/*
+	 * The receive-shape census (W7-12, CONFIG_WLAN_KO_CENSUS).  The seam's
+	 * bridge contract is one contiguous frame (`wlan_bridge_input(frame,
+	 * len)` copies `len` bytes from the pointer), while a driver is free to
+	 * hand up a nonlinear skb: the iwlwifi arm's 7260 (no MQ RX) allocates
+	 * a 128-byte skb and puts everything past its tailroom (~190 B) into
+	 * page frags (mvm/rx.c:324, :80, :89).  A copied-from pointer then
+	 * yields the linear head and heap bytes where the payload should be.
+	 * rx_frag is the count of frames in that shape; rx_lin_fail the
+	 * linearisation attempts that could not allocate.  Diagnostic builds
+	 * only - the delivered build must not depend on this block.
+	 */
+	unsigned int		rx_seen;	/* frames offered to the rx entry */
+	unsigned int		rx_linear;	/* skb_headlen == skb->len */
+	unsigned int		rx_frag;	/* nonlinear: head + page frags */
+	unsigned int		rx_lin_fail;	/* skb_linearize() failed */
+	unsigned int		rx_amsdu;	/* QoS data, A-MSDU present bit */
+	unsigned int		rx_len[4];	/* <=192/193-600/601-1200/>1200 */
+	unsigned int		rx_type[4];	/* mgmt / ctrl / data / other */
+	unsigned int		rx_ba_ret[3];	/* wlan_ba_rx(): 0/1/2 */
+	int			rx_ba_start_rc;	/* ampdu_action(RX_START) rc */
+
+	/*
+	 * The transmit-rate census (W7-12): what the firmware says it actually
+	 * used.  mac80211's band-2GHz legacy index 0 is CCK 1 Mbit/s; an HT
+	 * frame carries IEEE80211_TX_RC_MCS and an MCS index in 0..15 instead.
+	 * Separated by frame class because the 1.0 Mbit/s question is about
+	 * data frames only.
+	 */
+	unsigned int		tx_status_seen;
+	unsigned int		tx_status_ack;
+	unsigned int		tx_status_noack;
+	unsigned int		tx_status_filtered;
+	unsigned int		tx_rate_legacy[32];	/* data, legacy idx */
+	unsigned int		tx_rate_mcs[16];	/* data, HT MCS idx */
+	unsigned int		tx_rate_mgmt[32];
+	unsigned int		rc_tx_status;	/* rate_control_ops.tx_status */
+
+	/*
+	 * The rate-feedback plumbing (W7-12, rc_feedback).  mac80211 keeps the
+	 * driver's registered rate-control table (rate_control_alloc in
+	 * ieee80211_register_hw), allocates its per-station state when the
+	 * station is created, and calls its tx_status from the transmit-status
+	 * path; this substitute kept only the registration.  Held here so the
+	 * callback runs against the same objects mac80211 would pass.
+	 */
+	const struct rate_control_ops *rc_ops;
+	void			*rc_priv;
+	void			*rc_sta_priv;
 };
 
 /* the driver-half seam vtable (tests/board/linux-ko/ports/adapter/wlan_seam_adapter_linux.c) */
@@ -228,6 +278,17 @@ void wlan_adapter_deliver(struct ieee80211_hw *hw, struct sk_buff *skb);
 
 /* a transmitted frame completed (ieee80211_tx_status_irqsafe) */
 void wlan_adapter_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb);
+
+/* the rc_feedback module parameter's live value (W7-12): the transmit-status
+ * path asks it before it feeds the driver's rate control */
+bool wlan_adapter_rc_feedback(void);
+
+/* the rate-control plumbing the rc_feedback arm wires (W7-12): attach the
+ * table the driver registered, allocate its per-station state at station
+ * creation, and the getter the iwlwifi closure exposes */
+const struct rate_control_ops *wlan_rc_ops_get(void);
+void wlan_adapter_rc_attach(struct ieee80211_hw *hw);
+void wlan_adapter_rc_sta_add(struct ieee80211_hw *hw, struct ieee80211_sta *sta);
 
 /* the firmware sweep ended (the substitute's deferred scan work) */
 void wlan_adapter_scan_complete(struct ieee80211_hw *hw);

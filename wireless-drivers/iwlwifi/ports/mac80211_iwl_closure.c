@@ -62,6 +62,18 @@ struct ieee80211_vif *__ieee80211_iterate_interfaces(struct ieee80211_hw *hw,
 
 static const struct rate_control_ops *wlan_rc_ops;
 
+/*
+ * The table the driver registered, for the substitute's rate-feedback path
+ * (W7-12).  Registration alone changes nothing: mac80211 allocates the
+ * table's private and per-station state and forwards each transmit status to
+ * it, and this port did none of the three, so iwl_mvm's rate scaling never
+ * saw an ACK and the firmware kept the initial 1 Mbit/s LINK_QUALITY table.
+ */
+const struct rate_control_ops *wlan_rc_ops_get(void)
+{
+	return wlan_rc_ops;
+}
+
 int ieee80211_rate_control_register(const struct rate_control_ops *ops)
 {
 	if (ops == NULL || ops->name == NULL) {

@@ -60,6 +60,12 @@ static struct {
 	struct ba_rx		rx[BA_TID_MAX];
 	struct ba_tx		tx[BA_TID_MAX];
 	unsigned int		dialog;
+	/* W7-12 census (CONFIG_WLAN_KO_CENSUS): see mac80211_ba.h */
+	int			rx_start_rc;
+	unsigned int		hold;
+	unsigned int		flush;
+	unsigned int		drop_old;
+	unsigned int		drop_dup;
 	struct work_struct	tx_work;
 	struct delayed_work	tx_retry;
 	struct delayed_work	rx_timeout;
@@ -190,8 +196,8 @@ ba_handle_addba_req(struct ieee80211_hw *hw, const u8 *d, size_t len)
 	spin_unlock_irqrestore(&ba.lock, flags);
 	wlan_bridge_ba_note(WLAN_BRIDGE_BA_RX_START);
 	if (w != NULL)
-		(void)ba_ampdu(w, IEEE80211_AMPDU_RX_START, tid, ssn, win,
-		    (params & 0x0001) != 0, 0);
+		ba.rx_start_rc = ba_ampdu(w, IEEE80211_AMPDU_RX_START, tid, ssn,
+		    win, (params & 0x0001) != 0, 0);
 	ba_send_response(hw, d, len);
 }
 
@@ -346,18 +352,21 @@ ba_rx_data(struct ieee80211_hw *hw, struct sk_buff *skb)
 		if (r->slot[idx] == NULL) {
 			r->slot[idx] = skb;
 			r->sn[idx] = sn;
+			ba.hold++;
 			spin_unlock_irqrestore(&ba.lock, flags);
 			schedule_delayed_work(&ba.rx_timeout,
 			    msecs_to_jiffies(BA_RETRY_MS));
 			return 2;	/* the reorder window owns the skb */
 		}
 		spin_unlock_irqrestore(&ba.lock, flags);
+		ba.drop_dup++;
 		wlan_bridge_ba_note(WLAN_BRIDGE_BA_REORDER_DROP);
 		return 1;
 	}
 	/* old or outside the window: the AP retransmits, the stack must not see
 	 * a duplicate */
 	spin_unlock_irqrestore(&ba.lock, flags);
+	ba.drop_old++;
 	wlan_bridge_ba_note(WLAN_BRIDGE_BA_REORDER_DROP);
 	return 1;
 }
@@ -403,6 +412,7 @@ ba_rx_timeout_work(struct work_struct *work)
 		}
 		r->head = (u16)((maxsn + 1) & 0x0fff);
 	}
+	ba.flush += (unsigned int)n;
 	spin_unlock_irqrestore(&ba.lock, flags);
 	ba_deliver_run((struct ieee80211_hw *)ba.hw, out, n, 0);
 }
@@ -541,6 +551,35 @@ wlan_ba_detach(struct ieee80211_hw *hw)
 	}
 	spin_unlock_irqrestore(&ba.lock, flags);
 	ba.hw = NULL;
+}
+
+/*
+ * The W7-12 census snapshot.  Taken under the window lock so a concurrent
+ * receive cannot move head/win between the fields; the counters are plain
+ * increments, they may lag a frame and that is fine for a census.
+ */
+void
+wlan_ba_get_census(struct wlan_ba_census *c)
+{
+	unsigned long flags;
+	int t;
+
+	if (c == NULL)
+		return;
+	memset(c, 0, sizeof(*c));
+	spin_lock_irqsave(&ba.lock, flags);
+	c->rx_start_rc = ba.rx_start_rc;
+	c->hold = ba.hold;
+	c->flush = ba.flush;
+	c->drop_old = ba.drop_old;
+	c->drop_dup = ba.drop_dup;
+	for (t = 0; t < BA_TID_MAX; t++) {
+		if (ba.rx[t].active)
+			c->active++;
+	}
+	c->head = ba.rx[0].head;
+	c->win = ba.rx[0].win;
+	spin_unlock_irqrestore(&ba.lock, flags);
 }
 
 int

@@ -39,4 +39,25 @@ int	wlan_ba_rx(struct ieee80211_hw *hw, struct sk_buff *skb);
 int	wlan_ba_start_tx(struct ieee80211_sta *sta, u16 tid, u16 timeout);
 int	wlan_ba_stop_tx(struct ieee80211_sta *sta, u16 tid);
 
+/*
+ * The W7-12 receive-window census (CONFIG_WLAN_KO_CENSUS).  A downlink that
+ * negotiates BA and then stops delivering needs to say which side of the
+ * window the frame died on: `hold` rising with `flush` flat is a window that
+ * keeps frames, `drop_old`/`drop_dup` rising is a window whose head ran away
+ * from the AP's sequence numbers.  Read-only; the sysfs `rxstats` line is the
+ * only consumer.
+ */
+struct wlan_ba_census {
+	int		rx_start_rc;	/* ampdu_action(RX_START) return code */
+	unsigned int	hold;		/* frames the reorder window kept */
+	unsigned int	flush;		/* frames the timeout released */
+	unsigned int	drop_old;	/* old / outside-the-window frames */
+	unsigned int	drop_dup;	/* slot already occupied */
+	unsigned int	active;		/* RX windows currently active */
+	u16		head;		/* TID 0 head */
+	u16		win;		/* TID 0 negotiated window */
+};
+
+void	wlan_ba_get_census(struct wlan_ba_census *c);
+
 #endif /* _MAC80211_BA_H_ */

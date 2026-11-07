@@ -18,6 +18,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
+#include <linux/string.h>
 #include <linux/skbuff.h>
 #include <linux/etherdevice.h>
 #include <net/mac80211.h>
@@ -105,6 +106,104 @@ static unsigned int wlan_tx_inflight_max = CONFIG_WLAN_SEAM_TX_INFLIGHT_MAX;
 module_param_named(tx_inflight_max, wlan_tx_inflight_max, uint, 0644);
 MODULE_PARM_DESC(tx_inflight_max,
     "refuse a data frame while this many are in flight (0 = off)");
+
+/*
+ * The receive-shape repair (W7-12).  The bridge's receive contract is one
+ * contiguous frame: wlan_bridge_input(frame, len) copies len bytes from the
+ * pointer the seam hands it.  A driver may hand up a nonlinear skb instead -
+ * the iwlwifi arm's 7260 (no MQ RX) allocates a 128-byte skb and puts every
+ * frame past its tailroom (~190 B on this kernel) into page frags
+ * (mvm/rx.c:324, :80, :89) - so the copy reads the linear head and then heap
+ * bytes that are not the frame.  Small frames (ping, TCP ACKs, the iperf2
+ * cookie) stay inside the linear head and pass; 1400-byte data frames do not,
+ * which is the shape the 7260 downlink showed (delivered to the netdev, not
+ * to TCP).  mac80211 linearises per receive handler (pskb_may_pull); this
+ * seam has no such helper, so the adapter does it once at the entry.
+ * rx_linearize=0 restores the pre-W7-12 shape for the A/B arm.
+ */
+static bool wlan_rx_linearize = true;
+module_param_named(rx_linearize, wlan_rx_linearize, bool, 0644);
+MODULE_PARM_DESC(rx_linearize,
+    "1 = linearise a fragmented receive skb at the seam (0 = pre-W7-12 shape)");
+
+/*
+ * The rate-feedback repair (W7-12).  mac80211's transmit-status path calls the
+ * driver's registered rate_control_ops->tx_status (net/mac80211/status.c,
+ * rate_control_tx_status); this port only stored the driver's ops table and
+ * never called it, so iwl_mvm's rate scaling (iwl_mvm_rs_tx_status) never ran
+ * and the firmware kept the initial LINK_QUALITY table - whose first entry is
+ * the station's lowest legacy rate (mvm/rs.c:2524 with
+ * IWL_MVM_RS_RSSI_BASED_INIT_RATE=0, mvm/constants.h:51), 1 Mbit/s on 2.4 GHz.
+ * The AP read exactly that for the whole uplink.  rc_feedback=1 wires the
+ * three calls mac80211 makes (alloc, alloc_sta, tx_status); 0 keeps the old
+ * shape so the arm is a single-variable A/B.
+ */
+static bool wlan_rc_feedback;
+module_param_named(rc_feedback, wlan_rc_feedback, bool, 0644);
+MODULE_PARM_DESC(rc_feedback,
+    "1 = feed the driver's rate control with TX status (lab parity)");
+
+bool wlan_adapter_rc_feedback(void)
+{
+	return wlan_rc_feedback;
+}
+
+/*
+ * The three calls mac80211 makes into a registered rate-control table.  The
+ * iwlwifi arm registers "iwl-mvm-rs" in its opmode init (mvm/rs.c:4135,
+ * hw->rate_control_algorithm = RS_NAME at mvm/mac80211.c:438) and that is the
+ * only table in this module; the name check keeps a second line's table from
+ * being attached to the wrong driver.
+ *
+ * alloc returns the driver's op_mode (rs_alloc -> hw->priv), alloc_sta returns
+ * the driver's per-station rate state (rs_drv_alloc_sta -> lq_sta), and
+ * tx_status is the driver's scaling step (rs_drv_mac80211_tx_status).  None of
+ * this is invented here: it is the caller side of the same vtable mac80211's
+ * rate.c/status.c drives.
+ */
+void wlan_adapter_rc_attach(struct ieee80211_hw *hw)
+{
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+	const struct rate_control_ops *ops;
+
+	if (w == NULL || !wlan_rc_feedback) {
+		return;
+	}
+	ops = wlan_rc_ops_get();
+	if (ops == NULL || ops->name == NULL) {
+		pr_info("wlan: rc no table registered\n");
+		return;
+	}
+	if (hw->rate_control_algorithm != NULL &&
+	    strcmp(ops->name, hw->rate_control_algorithm) != 0) {
+		pr_info("wlan: rc table '%s' is not '%s'\n", ops->name,
+		    hw->rate_control_algorithm);
+		return;
+	}
+	w->rc_ops = ops;
+	if (ops->alloc != NULL) {
+		w->rc_priv = ops->alloc(hw);
+	}
+	pr_info("wlan: rc table '%s' attached priv=%d\n", ops->name,
+	    w->rc_priv != NULL);
+}
+
+void wlan_adapter_rc_sta_add(struct ieee80211_hw *hw, struct ieee80211_sta *sta)
+{
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
+
+	if (w == NULL || sta == NULL || !wlan_rc_feedback) {
+		return;
+	}
+	if (w->rc_ops == NULL || w->rc_ops->alloc_sta == NULL) {
+		return;
+	}
+	if (w->rc_sta_priv != NULL) {
+		return;
+	}
+	w->rc_sta_priv = w->rc_ops->alloc_sta(w->rc_priv, sta, GFP_KERNEL);
+	pr_info("wlan: rc sta priv=%d\n", w->rc_sta_priv != NULL);
+}
 
 static struct wlan_linux_hw *ctx_hw(struct wlan_seam_drv *drv)
 {
@@ -981,6 +1080,14 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 		    w->sta_txq[IEEE80211_NUM_TIDS];
 	}
 	/*
+	 * W7-12 rate feedback: mac80211 allocates the driver's per-station rate
+	 * state when it creates the station (rate_control_alloc_sta in
+	 * sta_info_alloc), i.e. before the first sta_state transition.  The
+	 * allocation is unconditional for the station's lifetime; only the
+	 * tx_status feed is gated by rc_feedback.
+	 */
+	wlan_adapter_rc_sta_add(&w->hw, sta);
+	/*
 	 * The upload step. A driver with the new callback is given the
 	 * NOTEXIST -> NONE transition mac80211 gives it while it prepares the
 	 * connection; the older sta_add spelling is called where the previous
@@ -1645,9 +1752,59 @@ void wlan_adapter_deliver(struct ieee80211_hw *hw, struct sk_buff *skb)
 void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb)
 {
 	struct ieee80211_rx_status *status = IEEE80211_SKB_RXCB(skb);
+	struct wlan_linux_hw *w = wlan_hw_of(hw);
 	int rc;
 
 	wlan_rx_freq_correct(skb, status);
+#ifdef CONFIG_WLAN_KO_CENSUS
+	/*
+	 * The receive-shape census.  Recorded before anything touches the
+	 * frame, so a frame counted here is one the driver really handed up -
+	 * the difference between "the AP never sent it" and "it arrived in a
+	 * shape the seam cannot copy" is exactly this counter plus rx_frag.
+	 */
+	if (w != NULL && skb->len >= 2) {
+		u8 fc0 = skb->data[0];
+		unsigned int len = skb->len;
+
+		w->rx_seen++;
+		if (skb_is_nonlinear(skb))
+			w->rx_frag++;
+		else
+			w->rx_linear++;
+		w->rx_len[len <= 192 ? 0 : len <= 600 ? 1 :
+		    len <= 1200 ? 2 : 3]++;
+		if ((fc0 & 0x0c) == 0x00)
+			w->rx_type[0]++;
+		else if ((fc0 & 0x0c) == 0x04)
+			w->rx_type[1]++;
+		else if ((fc0 & 0x0c) == 0x08)
+			w->rx_type[2]++;
+		else
+			w->rx_type[3]++;
+		/* A-MSDU present: QoS control's bit 7 (frame offset 25) */
+		if ((fc0 & 0x0c) == 0x08 && skb->len >= 26 &&
+		    (skb->data[25] & 0x80) != 0)
+			w->rx_amsdu++;
+	}
+#endif
+	/*
+	 * The bridge copies the frame from skb->data, so a nonlinear skb would
+	 * be copied off its linear head (see rx_linearize's note).  One copy
+	 * here, once, instead of one wrong frame later.
+	 */
+	if (wlan_rx_linearize && skb_is_nonlinear(skb)) {
+		if (skb_linearize(skb) != 0) {
+#ifdef CONFIG_WLAN_KO_CENSUS
+			if (w != NULL)
+				w->rx_lin_fail++;
+#endif
+			pr_warn_ratelimited("wlan: rx frame of %u B does not linearise; dropped\n",
+			    skb->len);
+			dev_kfree_skb_any(skb);
+			return;
+		}
+	}
 	/*
 	 * The block-ack state machine sees the frame first: the AP's ADDBA
 	 * Request/Response/DELBA and the reorderable QoS run must not reach the
@@ -1656,6 +1813,10 @@ void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	 * later; return 1 means it consumed the frame and we free it now.
 	 */
 	rc = wlan_ba_rx(hw, skb);
+#ifdef CONFIG_WLAN_KO_CENSUS
+	if (w != NULL)
+		w->rx_ba_ret[rc == 1 ? 1 : rc == 2 ? 2 : 0]++;
+#endif
 	if (rc == 2)
 		return;
 	if (rc) {
@@ -1674,6 +1835,25 @@ void wlan_adapter_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 	static unsigned int logged;
 
 	/*
+	 * The rate-scaling half of a transmit status (W7-12).  mac80211 calls
+	 * rate_control_tx_status() from this same point in status.c, before the
+	 * frame is released, which is what lets the driver's scaling step read
+	 * the header, the reported rates and the ACK flag.  rc_feedback=0
+	 * leaves it out for the A/B arm.
+	 */
+	if (wlan_rc_feedback && w != NULL && w->rc_ops != NULL &&
+	    w->rc_ops->tx_status != NULL && w->sta != NULL &&
+	    w->rc_sta_priv != NULL) {
+		struct ieee80211_supported_band *sband =
+		    hw->wiphy->bands[info->band];
+
+		if (sband != NULL) {
+			w->rc_tx_status++;
+			w->rc_ops->tx_status(w->rc_priv, sband, w->sta,
+			    w->rc_sta_priv, skb);
+		}
+	}
+	/*
 	 * The first few transmit statuses, with the bits that separate "the
 	 * chip heard no ACK" from "the chip never put it on air". The bridge
 	 * only counts the completion, so a data plane that fails silently
@@ -1688,6 +1868,37 @@ void wlan_adapter_tx_complete(struct ieee80211_hw *hw, struct sk_buff *skb)
 		    !!(info->flags & IEEE80211_TX_STAT_NOACK_TRANSMITTED),
 		    info->status.rates[0].idx, hdr->addr1);
 	}
+#ifdef CONFIG_WLAN_KO_CENSUS
+	/*
+	 * What the firmware actually put on the air, per frame class.  The
+	 * 1.0 Mbit/s question is a question about data frames; management
+	 * frames legitimately use the lowest basic rate, so they are counted
+	 * apart instead of polluting the data histogram.
+	 */
+	if (w != NULL) {
+		u16 fc = le16_to_cpu(hdr->frame_control);
+		int idx = info->status.rates[0].idx;
+
+		w->tx_status_seen++;
+		if (info->flags & IEEE80211_TX_STAT_ACK)
+			w->tx_status_ack++;
+		if (info->flags & IEEE80211_TX_STAT_NOACK_TRANSMITTED)
+			w->tx_status_noack++;
+		if (info->flags & IEEE80211_TX_STAT_TX_FILTERED)
+			w->tx_status_filtered++;
+		if (ieee80211_is_mgmt(fc)) {
+			if (idx >= 0 && idx < 32)
+				w->tx_rate_mgmt[idx]++;
+		} else if (idx >= 0) {
+			if ((info->status.rates[0].flags & IEEE80211_TX_RC_MCS) != 0) {
+				if (idx < 16)
+					w->tx_rate_mcs[idx]++;
+			} else if (idx < 32) {
+				w->tx_rate_legacy[idx]++;
+			}
+		}
+	}
+#endif
 	/*
 	 * The admission gauge's other half.  An aggregate arrives here as one
 	 * extra skb besides the frames it carried (rtw_usb_write_port_tx_complete

@@ -40,6 +40,7 @@
 #include <wlan_bridge.h>
 
 #include "wlan_linux.h"
+#include "../mac80211/mac80211_ba.h"
 
 #define WLAN_CTL_SSID		"lab8189"
 #define WLAN_CTL_BSSID		{ 0x24, 0xec, 0x99, 0xb9, 0x8a, 0x00 }
@@ -329,6 +330,82 @@ static const struct kernel_param_ops wlan_stats_ops = {
 	.get = wlan_stats_get,
 };
 
+/*
+ * The W7-12 census snapshot: the receive shape and the transmit rates, on
+ * their own parameters so the long-standing `stats` line stays byte-compatible
+ * with every script that already parses it.  Three lines:
+ *
+ *   rx...   what the receive entry was handed (linear vs fragmented), the
+ *           frame-class/length split, the BA window's verdict, and the
+ *           bridge's own receive counters;
+ *   brx...  the stack-side drop reasons, which separate "the frame never
+ *           reached the bridge" from "it reached it and the stack refused";
+ *   tx...   what the firmware reported per frame class, plus the data-frame
+ *           rate histograms (rl = legacy index 0..11, mcs = MCS 0..7) and
+ *           the rate-control call count (0 = the driver's rate scaling was
+ *           never fed).
+ */
+static int wlan_rxstats_get(char *buffer, const struct kernel_param *kp)
+{
+	struct wlan_bridge_counters c;
+	struct wlan_ba_census bc;
+	struct wlan_linux_hw *w = wlan_hw_single();
+	int n = 0, i;
+
+	(void)kp;
+	memset(&c, 0, sizeof(c));
+	wlan_bridge_stats(&c);
+	memset(&bc, 0, sizeof(bc));
+	wlan_ba_get_census(&bc);
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+	    "rxseen=%u rxlin=%u rxfrag=%u rxlinfail=%u rxamsdu=%u "
+	    "rxl192=%u rxl600=%u rxl1200=%u rxlbig=%u "
+	    "rxtmg=%u rxtctl=%u rxtdat=%u rxtoth=%u "
+	    "barx0=%u barx1=%u barx2=%u barc=%d "
+	    "bahold=%u baflush=%u badrop=%u badup=%u "
+	    "batid=%u bahead=%u bawin=%u\n",
+	    w != NULL ? w->rx_seen : 0u, w != NULL ? w->rx_linear : 0u,
+	    w != NULL ? w->rx_frag : 0u, w != NULL ? w->rx_lin_fail : 0u,
+	    w != NULL ? w->rx_amsdu : 0u,
+	    w != NULL ? w->rx_len[0] : 0u, w != NULL ? w->rx_len[1] : 0u,
+	    w != NULL ? w->rx_len[2] : 0u, w != NULL ? w->rx_len[3] : 0u,
+	    w != NULL ? w->rx_type[0] : 0u, w != NULL ? w->rx_type[1] : 0u,
+	    w != NULL ? w->rx_type[2] : 0u, w != NULL ? w->rx_type[3] : 0u,
+	    w != NULL ? w->rx_ba_ret[0] : 0u, w != NULL ? w->rx_ba_ret[1] : 0u,
+	    w != NULL ? w->rx_ba_ret[2] : 0u,
+	    w != NULL ? w->rx_ba_start_rc : 0,
+	    bc.hold, bc.flush, bc.drop_old, bc.drop_dup,
+	    bc.active, (unsigned int)bc.head, (unsigned int)bc.win);
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+	    "brx=%u brxdata=%u breorder=%u boversize=%u bwrongbss=%u "
+	    "bnodealloc=%u bmgtdiscard=%u bchanmis=%u\n",
+	    c.rx_frames, c.rx_data, c.reorder_drops, c.oversize_drops,
+	    c.rx_wrongbss, c.rx_nodealloc, c.rx_mgtdiscard, c.rx_chanmismatch);
+	n += scnprintf(buffer + n, PAGE_SIZE - n,
+	    "txst=%u txack=%u txnoack=%u txfilt=%u rc=%u rl=",
+	    w != NULL ? w->tx_status_seen : 0u,
+	    w != NULL ? w->tx_status_ack : 0u,
+	    w != NULL ? w->tx_status_noack : 0u,
+	    w != NULL ? w->tx_status_filtered : 0u,
+	    w != NULL ? w->rc_tx_status : 0u);
+	for (i = 0; i < 12; i++) {
+		n += scnprintf(buffer + n, PAGE_SIZE - n, "%s%u", i ? "," : "",
+		    w != NULL ? w->tx_rate_legacy[i] : 0u);
+	}
+	n += scnprintf(buffer + n, PAGE_SIZE - n, " mcs=");
+	for (i = 0; i < 8; i++) {
+		n += scnprintf(buffer + n, PAGE_SIZE - n, "%s%u", i ? "," : "",
+		    w != NULL ? w->tx_rate_mcs[i] : 0u);
+	}
+	n += scnprintf(buffer + n, PAGE_SIZE - n, " tm0=%u\n",
+	    w != NULL ? w->tx_rate_mgmt[0] : 0u);
+	return n;
+}
+
+static const struct kernel_param_ops wlan_rxstats_ops = {
+	.get = wlan_rxstats_get,
+};
+
 module_param_cb(scan, &wlan_scan_ops, NULL, 0200);
 MODULE_PARM_DESC(scan, "write 1 to run a software scan (lab8189)");
 module_param_cb(join, &wlan_join_ops, NULL, 0200);
@@ -337,6 +414,8 @@ module_param_cb(state, &wlan_state_ops, NULL, 0444);
 MODULE_PARM_DESC(state, "current net80211 state (0 INIT .. 4 RUN)");
 module_param_cb(stats, &wlan_stats_ops, NULL, 0444);
 MODULE_PARM_DESC(stats, "bridge counters, one line");
+module_param_cb(rxstats, &wlan_rxstats_ops, NULL, 0444);
+MODULE_PARM_DESC(rxstats, "W7-12 receive-shape and transmit-rate census");
 
 void wlan_control_exit(void)
 {

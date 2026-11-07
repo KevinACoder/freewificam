@@ -198,6 +198,12 @@ int ieee80211_register_hw(struct ieee80211_hw *hw)
 		return rc;
 	}
 	w->wiphy_registered = true;
+	/*
+	 * W7-12: mac80211 attaches the driver's registered rate-control table
+	 * here (rate_control_alloc in ieee80211_register_hw); the substitute
+	 * only stored the registration until this round.
+	 */
+	wlan_adapter_rc_attach(hw);
 
 	if (hw->wiphy->reg_notifier != NULL) {
 		struct regulatory_request request;
