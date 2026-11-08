@@ -650,11 +650,19 @@ static int seam_config(struct wlan_seam_drv *drv, uint32_t changed,
  * runs on (force_ht40 is the lab lever that reproduces the assert).
  */
 static void
-seam_sta_ht_fill(struct wlan_linux_hw *w)
+seam_sta_ht_fill(struct wlan_linux_hw *w, struct ieee80211_sta *sta)
 {
-	struct ieee80211_sta *sta = w->sta;
 	bool ht40 = (w->tuned_width == WLAN_SEAM_CHAN_WIDTH_40) || force_ht40;
 
+	/*
+	 * The station is passed in, not read from w->sta: seam_sta_upload()
+	 * fills the table on the station it is still holding (w->sta is
+	 * assigned only after the driver's station ladder returned), and taking
+	 * the object from w->sta made the whole table a no-op at the one moment
+	 * it has to be right - the ADD_STA commands then carried
+	 * ht_supported = 0 and station_flags = 0 (W7-18 measured it on the
+	 * first four arms and threw them away).
+	 */
 	if (sta == NULL)
 		return;
 	sta->deflink.ht_cap.ht_supported = true;
@@ -710,7 +718,7 @@ static int seam_config_ht(struct wlan_seam_drv *drv, uint32_t freq,
 	 * 40 MHz association keeps deriving MCS rates from the 20 MHz peer.
 	 */
 	if (force_ht)
-		seam_sta_ht_fill(w);
+		seam_sta_ht_fill(w, w->sta);
 	return seam_config(drv, WLAN_SEAM_CONFIG_CHANNEL, freq);
 }
 
@@ -1155,7 +1163,7 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	 * mac80211 derives it, so the two fields can never disagree.
 	 */
 	if (force_ht)
-		seam_sta_ht_fill(w);
+		seam_sta_ht_fill(w, sta);
 	sta->max_rx_aggregation_subframes = 64;
 	/*
 	 * mac80211 leaves SMPS in OFF for an associated station; mvm's
@@ -1342,6 +1350,20 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 		}
 		vif->cfg.assoc = true;
 		vif->cfg.aid = aid;
+		/*
+		 * W7-18: the peer's HT declaration arrives from the bridge
+		 * immediately before this call (seam.h sta_ht), i.e. AFTER the
+		 * station was uploaded at BSSID time, so the table that upload
+		 * wrote was the stand-in.  Refill it here, before the ladder
+		 * below sends the association step's ADD_STA: with ht_peer_real=0
+		 * this rewrites the same stand-in values and changes nothing,
+		 * with it set the firmware finally sees the peer's own
+		 * A-MPDU density instead of 0 (W7-18's first C2 boot measured
+		 * the knob having no effect at all, because this refill did not
+		 * exist and the last ADD_STA still said dens=NONE).
+		 */
+		if (force_ht && w->sta != NULL)
+			seam_sta_ht_fill(w, w->sta);
 		sta = seam_sta_upload(w, vif->bss_conf.bssid);
 		if (sta != NULL && !w->sta_joined) {
 			sta->aid = aid;
