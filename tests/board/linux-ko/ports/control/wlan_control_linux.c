@@ -359,6 +359,7 @@ static int wlan_rxstats_get(char *buffer, const struct kernel_param *kp)
 	wlan_ba_get_census(&bc);
 	n += scnprintf(buffer + n, PAGE_SIZE - n,
 	    "rxseen=%u rxlin=%u rxfrag=%u rxlinfail=%u rxamsdu=%u "
+	    "rxagg=%u rxaggl=%u "
 	    "rxl192=%u rxl600=%u rxl1200=%u rxlbig=%u "
 	    "rxtmg=%u rxtctl=%u rxtdat=%u rxtoth=%u "
 	    "barx0=%u barx1=%u barx2=%u barc=%d "
@@ -369,6 +370,7 @@ static int wlan_rxstats_get(char *buffer, const struct kernel_param *kp)
 	    w != NULL ? w->rx_seen : 0u, w != NULL ? w->rx_linear : 0u,
 	    w != NULL ? w->rx_frag : 0u, w != NULL ? w->rx_lin_fail : 0u,
 	    w != NULL ? w->rx_amsdu : 0u,
+	    w != NULL ? w->rx_ampdu : 0u, w != NULL ? w->rx_ampdu_last : 0u,
 	    w != NULL ? w->rx_len[0] : 0u, w != NULL ? w->rx_len[1] : 0u,
 	    w != NULL ? w->rx_len[2] : 0u, w != NULL ? w->rx_len[3] : 0u,
 	    w != NULL ? w->rx_type[0] : 0u, w != NULL ? w->rx_type[1] : 0u,

@@ -102,6 +102,21 @@ struct wlan_linux_hw {
 	int			sta_joined;
 
 	/*
+	 * The peer's 11n declaration as the bridge heard it (W7-18): the
+	 * association response's HT Capabilities element 45, decoded - cap
+	 * info, the A-MPDU Parameters byte (factor in bits 1:0, density in
+	 * bits 4:2) and the first four bytes of the Supported MCS Set.  The
+	 * same three values mac80211 copies into sta->deflink.ht_cap
+	 * (ieee80211_ht_cap_ie_to_sta_ht_cap), delivered through the seam's
+	 * sta_ht() call before the association step.  Only consumed when the
+	 * ht_peer_real lab knob is set; the stand-in table otherwise.
+	 */
+	uint16_t		peer_ht_cap;
+	uint8_t			peer_ht_ampdu;
+	uint32_t		peer_ht_mcs0;
+	int			peer_ht_valid;
+
+	/*
 	 * Deferred completions: USB URB completions run in interrupt context,
 	 * while the net80211 world allocates with GFP_KERNEL and takes the port
 	 * serializer. The receive/transmit-completion paths only queue here and
@@ -207,6 +222,17 @@ struct wlan_linux_hw {
 	unsigned int		rx_type[4];	/* mgmt / ctrl / data / other */
 	unsigned int		rx_ba_ret[3];	/* wlan_ba_rx(): 0/1/2 */
 	int			rx_ba_start_rc;	/* ampdu_action(RX_START) rc */
+	/*
+	 * The firmware's own verdict (W7-18): iwlwifi sets RX_FLAG_AMPDU_DETAILS
+	 * from the RX descriptor's AGG phy flag (mvm/rx.c:466-473), i.e. the
+	 * firmware reports that this frame was received as (part of) an
+	 * A-MPDU.  Every member of one PPDU carries the flag, so this counts
+	 * MPDUs and is comparable to the air capture's A-MPDU member count,
+	 * not to its aggregate count.  rx_ampdu_last is the flag mac80211
+	 * treats as "last MPDU of the aggregate".
+	 */
+	unsigned int		rx_ampdu;	/* RX_FLAG_AMPDU_DETAILS seen */
+	unsigned int		rx_ampdu_last;	/* ... and RX_FLAG_AMPDU_IS_LAST */
 
 	/*
 	 * The transmit-rate census (W7-12): what the firmware says it actually

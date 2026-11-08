@@ -657,6 +657,22 @@ bridge_ht_cap_build(const uint8_t bssid[6], uint32_t freq, uint8_t out[28],
 	memset(out, 0, 28);
 	out[0] = 45;
 	out[1] = 26;
+	/*
+	 * W7-18: the element body is the DEVICE's declaration, not this
+	 * function's.  mac80211 encodes sband->ht_cap into exactly these bytes
+	 * (net/mac80211/util.c:ieee80211_ie_build_ht_cap), and what the AP
+	 * learns from them - two spatial streams, 20/40 support, an 8 us MPDU
+	 * start spacing - decides how it pads and paces its A-MPDUs to us.  The
+	 * stand-in below declares one stream, HT20 and no density, which is not
+	 * this card; it stays as the fall-back for a port that cannot answer
+	 * (local_ht_cap == NULL, or a device with no HT capability).
+	 */
+	if (bridge.ops != NULL && bridge.ops->local_ht_cap != NULL &&
+	    bridge.ops->local_ht_cap(bridge.drv, freq, out + 2) == 0) {
+		*width = w;
+		*center = c;
+		return 28;
+	}
 	out[2] = (uint8_t)(0x20 | (w == 40 ? 0x42 : 0x00));
 	out[3] = 0;
 	out[4] = 0x03;			/* 64 KiB A-MPDU, no density */

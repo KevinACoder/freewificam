@@ -66,6 +66,47 @@ static bool force_ht40;
 module_param_named(force_ht40, force_ht40, bool, 0644);
 MODULE_PARM_DESC(force_ht40,
     "1 = with force_ht, also declare 40 MHz + SGI40 + 2 spatial streams (lab lever; asserts the 7260 firmware on a 20 MHz peer)");
+/*
+ * W7-18: the two capability tables this line used to write from here are not
+ * ours to write.
+ *
+ *   ht_peer_real  the *peer's* HT Capabilities element, as the bridge delivers
+ *                 it through the seam's sta_ht() call (it is the association
+ *                 response's element 45, the same copy mac80211 makes in
+ *                 ieee80211_ht_cap_ie_to_sta_ht_cap).  The stand-in below
+ *                 hardcodes density 0 where the bench AP advertises 6 (8 us),
+ *                 and iwl_mvm copies exactly that field into the ADD_STA
+ *                 station_flags' STA_FLG_AGG_MPDU_DENS.  It was the only known
+ *                 byte left differing between this line's ADD_STA and the
+ *                 native one.
+ *
+ *   ht_req_real   the *local* HT capability, encoded into the association
+ *                 request's HT element by the bridge (seam.h local_ht_cap).
+ *                 The stand-in there declares one stream, HT20 and density 0;
+ *                 this 7260 is 2x2 / 20-40 capable with a 2 us MPDU spacing,
+ *                 which is what the native stack sent this same AP.
+ *
+ *   bss_qos       the BSS QoS/EDCA notify.  conf_tx() only stores the EDCA
+ *                 parameters - iwl_mvm_mac_conf_tx defers the MAC context
+ *                 update to BSS_CHANGED_QOS (mvm/mac80211.c) - and this port
+ *                 never sent that bit, so the firmware's MAC context carried
+ *                 all-zero EDCA parameters and no MAC_QOS_FLG_UPDATE_EDCA
+ *                 (mvm/mac-ctxt.c:501).
+ *
+ * All three default to the old behaviour so each can be a single-variable arm.
+ */
+static bool ht_peer_real;
+module_param_named(ht_peer_real, ht_peer_real, bool, 0644);
+MODULE_PARM_DESC(ht_peer_real,
+    "1 = take the peer's HT capability from the AP's element instead of the 1x1 stand-in");
+static bool ht_req_real;
+module_param_named(ht_req_real, ht_req_real, bool, 0644);
+MODULE_PARM_DESC(ht_req_real,
+    "1 = encode the association request's HT element from the device's own capability");
+static bool bss_qos;
+module_param_named(bss_qos, bss_qos, bool, 0644);
+MODULE_PARM_DESC(bss_qos,
+    "1 = send BSS_CHANGED_QOS after the EDCA parameters, as mac80211 does");
 
 /*
  * Transmit diagnosis for the 8851BU data-plane round: the same frame, in the
@@ -596,6 +637,59 @@ static int seam_config(struct wlan_seam_drv *drv, uint32_t changed,
  * association width/centre and lets seam_config() program the driver with the
  * same values the join's own config call will use.
  */
+/*
+ * Fill the peer station's HT capability.  Called from the two places that used
+ * to write the table by hand: the station upload (the moment mac80211 copies
+ * the association response's element 45 into sta->deflink.ht_cap) and the join's
+ * width decision (iwl_mvm reads deflink.bandwidth/rx_nss and the A-MPDU
+ * parameters when it builds ADD_STA).
+ *
+ * The width is the connection's, not the peer's claim: W7-17 measured that
+ * declaring 40 MHz to this 20 MHz peer is what makes the 7260 firmware assert,
+ * so deflink.bandwidth may only follow the channel the association actually
+ * runs on (force_ht40 is the lab lever that reproduces the assert).
+ */
+static void
+seam_sta_ht_fill(struct wlan_linux_hw *w)
+{
+	struct ieee80211_sta *sta = w->sta;
+	bool ht40 = (w->tuned_width == WLAN_SEAM_CHAN_WIDTH_40) || force_ht40;
+
+	if (sta == NULL)
+		return;
+	sta->deflink.ht_cap.ht_supported = true;
+	memset(&sta->deflink.ht_cap.mcs, 0, sizeof(sta->deflink.ht_cap.mcs));
+	if (ht_peer_real && w->peer_ht_valid) {
+		u8 ampdu = w->peer_ht_ampdu;
+
+		sta->deflink.ht_cap.cap = w->peer_ht_cap;
+		sta->deflink.ht_cap.ampdu_factor =
+		    ampdu & IEEE80211_HT_AMPDU_PARM_FACTOR;
+		sta->deflink.ht_cap.ampdu_density =
+		    (ampdu & IEEE80211_HT_AMPDU_PARM_DENSITY) >>
+		    IEEE80211_HT_AMPDU_PARM_DENSITY_SHIFT;
+		sta->deflink.ht_cap.mcs.rx_mask[0] = (u8)w->peer_ht_mcs0;
+		sta->deflink.ht_cap.mcs.rx_mask[1] = (u8)(w->peer_ht_mcs0 >> 8);
+		sta->deflink.ht_cap.mcs.rx_mask[2] = (u8)(w->peer_ht_mcs0 >> 16);
+		sta->deflink.ht_cap.mcs.rx_mask[3] = (u8)(w->peer_ht_mcs0 >> 24);
+		sta->deflink.ht_cap.mcs.rx_highest = cpu_to_le16(ht40 ? 300 : 72);
+	} else {
+		sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20 |
+		    (ht40 ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
+			IEEE80211_HT_CAP_SGI_40) : 0);
+		sta->deflink.ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
+		sta->deflink.ht_cap.ampdu_density =
+		    IEEE80211_HT_MPDU_DENSITY_NONE;
+		sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
+		if (ht40)
+			sta->deflink.ht_cap.mcs.rx_mask[1] = 0xff;
+		sta->deflink.ht_cap.mcs.rx_highest = cpu_to_le16(ht40 ? 300 : 72);
+	}
+	sta->deflink.rx_nss = sta->deflink.ht_cap.mcs.rx_mask[1] ? 2 : 1;
+	sta->deflink.bandwidth = ht40 ? IEEE80211_STA_RX_BW_40 :
+	    IEEE80211_STA_RX_BW_20;
+}
+
 static int seam_config_ht(struct wlan_seam_drv *drv, uint32_t freq,
     uint32_t width, uint32_t center_freq1)
 {
@@ -615,23 +709,8 @@ static int seam_config_ht(struct wlan_seam_drv *drv, uint32_t freq,
 	 * Refresh the capability the driver's rate selection reads, otherwise a
 	 * 40 MHz association keeps deriving MCS rates from the 20 MHz peer.
 	 */
-	if (force_ht && w->sta != NULL) {
-		bool ht40 = width == WLAN_SEAM_CHAN_WIDTH_40;
-
-		w->sta->deflink.ht_cap.ht_supported = true;
-		w->sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20 |
-		    (ht40 ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
-			IEEE80211_HT_CAP_SGI_40) : 0);
-		w->sta->deflink.ht_cap.ampdu_factor =
-		    IEEE80211_HT_MAX_AMPDU_64K;
-		w->sta->deflink.ht_cap.ampdu_density =
-		    IEEE80211_HT_MPDU_DENSITY_NONE;
-		w->sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
-		w->sta->deflink.ht_cap.mcs.rx_highest =
-		    cpu_to_le16(ht40 ? 150 : 72);
-		w->sta->deflink.bandwidth = ht40 ?
-		    IEEE80211_STA_RX_BW_40 : IEEE80211_STA_RX_BW_20;
-	}
+	if (force_ht)
+		seam_sta_ht_fill(w);
 	return seam_config(drv, WLAN_SEAM_CONFIG_CHANNEL, freq);
 }
 
@@ -1066,37 +1145,17 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 	 * setup would turn it into a 3-bit 7).
 	 */
 	sta->deflink.rx_nss = 1;
-	if (force_ht) {
-		bool ht40 = w->tuned_width == WLAN_SEAM_CHAN_WIDTH_40;
-
-		sta->deflink.ht_cap.ht_supported = true;
-		/*
-		 * W7-17: the peer table is what mac80211 parses out of the
-		 * Associated station's HT element, and the bench AP is a 1x1
-		 * HT20 AR9271: MCS 0-7, no 20/40 MHz capability, SGI20.  The
-		 * W7-14 shape (20/40 MHz + SGI40 + two streams, 300 Mbit/s)
-		 * was a claim about a peer that cannot receive it, and it
-		 * reached the firmware as STA_FLG_FAT_EN_40MHZ +
-		 * STA_FLG_MIMO_EN_MIMO2 in ADD_STA; the 7260 firmware asserts
-		 * on the first data transmission in that state.  The stream
-		 * count is derived from the MCS mask below, the way mac80211
-		 * derives it, so the two fields can never disagree again.
-		 */
-		sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20 |
-		    ((ht40 || force_ht40) ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
-			IEEE80211_HT_CAP_SGI_40) : 0);
-		sta->deflink.ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
-		sta->deflink.ht_cap.ampdu_density = IEEE80211_HT_MPDU_DENSITY_NONE;
-		sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
-		if (ht40 || force_ht40)
-			sta->deflink.ht_cap.mcs.rx_mask[1] = 0xff;
-		sta->deflink.rx_nss =
-		    sta->deflink.ht_cap.mcs.rx_mask[1] ? 2 : 1;
-		sta->deflink.ht_cap.mcs.rx_highest =
-		    cpu_to_le16(ht40 || force_ht40 ? 300 : 72);
-		sta->deflink.bandwidth = (ht40 || force_ht40) ?
-		    IEEE80211_STA_RX_BW_40 : IEEE80211_STA_RX_BW_20;
-	}
+	/*
+	 * W7-17: the peer table is what mac80211 parses out of the
+	 * Associated station's HT element.  W7-18 moved both writers of it
+	 * (here and the join's width decision) into seam_sta_ht_fill(), which
+	 * either copies the peer's real declaration (ht_peer_real) or keeps the
+	 * truthful 1x1 HT20 stand-in that W7-17 measured this bench's AP to
+	 * need.  The stream count is derived from the MCS mask, the way
+	 * mac80211 derives it, so the two fields can never disagree.
+	 */
+	if (force_ht)
+		seam_sta_ht_fill(w);
 	sta->max_rx_aggregation_subframes = 64;
 	/*
 	 * mac80211 leaves SMPS in OFF for an associated station; mvm's
@@ -1407,6 +1466,20 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 			vif->bss_conf.qos = true;
 		}
 		/*
+		 * W7-18: mac80211 ends ieee80211_set_wmm_default() with
+		 * ieee80211_bss_info_change_notify(sdata, BSS_CHANGED_QOS),
+		 * and that bit is what makes iwl_mvm push the EDCA parameters
+		 * it was just given into the firmware's MAC context - its
+		 * conf_tx only stores them and waits for this notify
+		 * (mvm/mac80211.c:iwl_mvm_mac_conf_tx), and mac-ctxt.c:501
+		 * sets MAC_QOS_FLG_UPDATE_EDCA only when link_conf->qos is
+		 * set.  This port sent every other association bit but never
+		 * this one, so the firmware ran the connection with all-zero
+		 * EDCA parameters.
+		 */
+		if (bss_qos)
+			wlan_bss_changed(w, BSS_CHANGED_QOS);
+		/*
 		 * The power-save half of the association contract. mac80211
 		 * fills vif->cfg.ps and notifies the driver with
 		 * BSS_CHANGED_PS when the association changes the PS state;
@@ -1441,6 +1514,68 @@ static void seam_bss_info(struct wlan_seam_drv *drv, int joined,
 		changed = BSS_CHANGED_ASSOC;
 	}
 	wlan_bss_changed(w, changed);
+}
+
+/*
+ * The peer's 11n declaration, delivered by the bridge before bss_info(joined=1).
+ * Storing it is all this call does: the table it feeds is written where the
+ * station and the connection width are known (seam_sta_ht_fill), and consumed
+ * only when ht_peer_real asked for it.
+ */
+static void seam_sta_ht(struct wlan_seam_drv *drv, const uint8_t bssid[6],
+    uint16_t cap, uint8_t ampdu, uint32_t mcs0)
+{
+	struct wlan_linux_hw *w = ctx_hw(drv);
+
+	(void)bssid;
+	if (w == NULL) {
+		return;
+	}
+	w->peer_ht_cap = cap;
+	w->peer_ht_ampdu = ampdu;
+	w->peer_ht_mcs0 = mcs0;
+	w->peer_ht_valid = 1;
+}
+
+/*
+ * The device's own HT capability, encoded the way mac80211 encodes
+ * sband->ht_cap into the association request's element 45
+ * (net/mac80211/util.c:ieee80211_ie_build_ht_cap): capability info with the
+ * SM Power Save field left at DISABLED as registration sets it
+ * (net/mac80211/main.c:1360), the A-MPDU Parameters byte, the 16-byte
+ * Supported MCS Set, and zeros for the three capability groups mac80211 also
+ * leaves zeroed.
+ *
+ * ht_req_real=0 returns -EOPNOTSUPP, which leaves the bridge on its stand-in
+ * table - the arm switch, not an error path.
+ */
+static int seam_local_ht_cap(struct wlan_seam_drv *drv, uint32_t freq,
+    uint8_t out[26])
+{
+	struct wlan_linux_hw *w = ctx_hw(drv);
+	struct ieee80211_supported_band *sband;
+	struct ieee80211_sta_ht_cap *ht;
+	u16 cap;
+	int band;
+
+	if (!ht_req_real)
+		return -EOPNOTSUPP;
+	if (w == NULL || w->hw.wiphy == NULL)
+		return -EINVAL;
+	band = freq >= 4000 ? NL80211_BAND_5GHZ : NL80211_BAND_2GHZ;
+	sband = w->hw.wiphy->bands[band];
+	if (sband == NULL || !sband->ht_cap.ht_supported)
+		return -EOPNOTSUPP;
+	ht = &sband->ht_cap;
+	memset(out, 0, 26);
+	cap = (u16)(ht->cap & ~IEEE80211_HT_CAP_SM_PS);
+	cap |= (u16)(WLAN_HT_CAP_SM_PS_DISABLED << IEEE80211_HT_CAP_SM_PS_SHIFT);
+	out[0] = (uint8_t)(cap & 0xff);
+	out[1] = (uint8_t)(cap >> 8);
+	out[2] = (uint8_t)((ht->ampdu_factor & IEEE80211_HT_AMPDU_PARM_FACTOR) |
+	    ((ht->ampdu_density & 7) << IEEE80211_HT_AMPDU_PARM_DENSITY_SHIFT));
+	memcpy(out + 3, &ht->mcs, sizeof(ht->mcs));
+	return 0;
 }
 
 static int seam_bssid(struct wlan_seam_drv *drv, const uint8_t bssid[6],
@@ -1671,6 +1806,8 @@ const struct wlan_seam_drv_ops wlan_seam_ops = {
 	.bss_info = seam_bss_info,
 	.bssid = seam_bssid,
 	.beacon_sync = seam_beacon_sync,
+	.sta_ht = seam_sta_ht,
+	.local_ht_cap = seam_local_ht_cap,
 	.queue_ready = seam_queue_ready,
 };
 
@@ -1859,6 +1996,18 @@ void wlan_adapter_rx(struct ieee80211_hw *hw, struct sk_buff *skb)
 		if ((fc0 & 0x0c) == 0x08 && skb->len >= 26 &&
 		    (skb->data[25] & 0x80) != 0)
 			w->rx_amsdu++;
+		/*
+		 * W7-18: the firmware's own "this was an A-MPDU" verdict.
+		 * Counted here, next to rx_seen, so "the AP sent aggregates
+		 * and the device delivered them as aggregates" and "the AP
+		 * sent aggregates the device delivered as plain frames" stop
+		 * looking the same from the host side.
+		 */
+		if ((status->flag & RX_FLAG_AMPDU_DETAILS) != 0) {
+			w->rx_ampdu++;
+			if ((status->flag & RX_FLAG_AMPDU_IS_LAST) != 0)
+				w->rx_ampdu_last++;
+		}
 	}
 #endif
 	/*

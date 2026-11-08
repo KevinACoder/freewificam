@@ -399,6 +399,24 @@ struct wlan_seam_drv_ops {
 	 */
 	int (*config_ht)(struct wlan_seam_drv *drv, uint32_t freq,
 	    uint32_t width, uint32_t center_freq1);
+
+	/*
+	 * The device's own HT capability, encoded as the association request's
+	 * HT Capabilities element body (26 bytes: HT Capabilities Info, A-MPDU
+	 * Parameters, Supported MCS Set, then the three zeroed capability
+	 * groups).  mac80211 builds that element from sband->ht_cap
+	 * (net/mac80211/util.c:ieee80211_ie_build_ht_cap) after registration
+	 * normalized the SM Power Save field to DISABLED
+	 * (net/mac80211/main.c:1360) - the device's own declaration, not a
+	 * hand-written one.  The bridge's fall-back table (1x1, HT20, no MPDU
+	 * density) is a stand-in for this call being absent.
+	 *
+	 * Returns 0 when `out` was filled, a negative value when the port has
+	 * no HT capability to declare for `freq`'s band (the bridge then keeps
+	 * its stand-in).  NULL = no support.
+	 */
+	int (*local_ht_cap)(struct wlan_seam_drv *drv, uint32_t freq,
+	    uint8_t out[26]);
 };
 
 #endif /* _WLAN_NET80211_SEAM_H_ */
