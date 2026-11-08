@@ -7,6 +7,11 @@ the client got "No route to host", and every number measured in that window was
 worthless. This document describes how to prove the bench *before* taking
 numbers, and which card may be the AP.
 
+> Bench revision 2026-11-08: the standard AP host is now a Raspberry Pi 4B
+> running Kali Linux from an encrypted SD card, with an RTL8812AU as the AP and
+> an MT7921AU as the monitor. The AR9271 rows and measurements below are from
+> the previous revision. See `KALI-RPI-AP.md` for the current host.
+
 Two scripts implement it:
 
 - `tools/bench/stability.sh` - send a fixed-rate stream for minutes and decide
@@ -22,18 +27,21 @@ Both run on the AP host. `stability.sh` also needs a build of
 
 | card | bus | role | why |
 |---|---|---|---|
-| AR9271 (`ath9k_htc`) | USB | **AP** | host mac80211 AP, per-station `tx failed/retries`, 1-9 ms RTT, holds a link for minutes |
-| MT7921AU (`mt7921u`) | USB | **monitor** | monitor on a separate phy from the AP; also capable of AP, but see below |
-| BCM43455 (`brcmfmac`, SDIO) | SDIO | **retired from AP duty** | firmware-offload AP; dropped the station every 1-3 minutes |
+| RTL8812AU (`88XXau`) | USB | **AP** (2026-11-08) | aircrack-ng driver, `lab-ap` unit; monitor and injection on the same card; 2.4 GHz AP verified |
+| MT7921AU (`mt7921u`) | USB | **monitor** | monitor on a separate phy from the AP; no injection; 2.4 GHz AP does not beacon on this kernel |
+| AR9271 (`ath9k_htc`) | USB | **retired** (2026-11-08) | previous AP; the 1-9 ms RTT numbers below are from that revision |
+| BCM43455 (`brcmfmac`, SDIO) | SDIO | **retired** | firmware-offload AP; dropped the station every 1-3 minutes; nexmon station associates but passes no data |
 
 Rules that came out of the measurements:
 
 - **The AP and the monitor must be different phys.** A card cannot capture its
   own transmissions, so a single-card bench can either transmit or observe.
-- **Use the AR9271 as the AP, and keep the monitor on the MTK card.** The
-  AR9271 in AP mode held 400 pps for four minutes with `tx failed 0`,
-  `tx retries 0` and zero loss; the same station on the brcmfmac AP dropped
-  every one to three minutes.
+- **Use the RTL8812AU as the AP, and keep the monitor on the MTK card.** In the
+  2026-11-08 check the RTL8812AU held the 2.4 GHz AP (beacons on channel 5) and
+  is the only card on the host that also does monitor and injection. In the
+  previous revision the AR9271 in AP mode held 400 pps for four minutes with
+  `tx failed 0`, `tx retries 0` and zero loss; the same station on the brcmfmac
+  AP dropped every one to three minutes.
 - **Do not use the MT7921AU as the AP for a linuxko station.** It works for the
   Linux reference, but it has a 100-800 ms downlink latency (measured on the
   air: the request and the reply were 719 ms apart, and the delay is on the host
@@ -44,8 +52,9 @@ Rules that came out of the measurements:
 - **The brcmfmac SDIO card is fine as a station, not as an AP.** It also has no
   monitor mode, which is why retiring it costs nothing.
 
-A 5 GHz AR card would extend the same method to the 5 GHz band; nothing in the
-scripts is band specific (pass the right `--freq`).
+A 5 GHz card (the RTL8812AU on 5 GHz, or an AR9271) extends the same method to
+the 5 GHz band; nothing in the scripts is band specific (pass the right
+`--freq`).
 
 ## 2. Procedure
 
