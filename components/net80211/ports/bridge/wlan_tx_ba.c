@@ -151,7 +151,9 @@ tx_ba_handle_delba(const uint8_t *d, unsigned int len)
 	if (len < 28)
 		return;
 	params = (u16)(d[26] | (d[27] << 8));
-	tid = (u16)(params & 0x0f);
+	/* TID is bits 15:12 of the DELBA parameter set (bit 11 is the
+	 * initiator); same field extraction as mac80211 ht.c:467. */
+	tid = (u16)((params & 0xf000) >> 12);
 	if (tid >= TX_BA_TID_MAX)
 		return;
 	spin_lock_irqsave(&ba.lock, flags);

@@ -300,7 +300,10 @@ ba_handle_delba(struct ieee80211_hw *hw, const u8 *d, size_t len)
 	if (len < 28)
 		return;
 	params = (u16)(d[26] | (d[27] << 8));
-	tid = params & 0x0f;
+	/* DELBA parameter set: TID in bits 15:12, initiator in bit 11
+	 * (IEEE80211_DELBA_PARAM_TID_MASK 0xf000; mac80211 ht.c:467).  Reading
+	 * bits 3:0 made the AP's TID 7 DELBA tear down the TID 0 data session. */
+	tid = (params & 0xf000) >> 12;
 	if (tid >= BA_TID_MAX)
 		return;
 	spin_lock_irqsave(&ba.lock, flags);
