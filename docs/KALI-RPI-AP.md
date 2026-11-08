@@ -347,6 +347,10 @@ clients.
 - The onboard `brcmfmac` runs the nexmon firmware, which is aimed at monitor
   and injection. As a station it associates but does not pass data. Do not use
   it to validate the AP data path.
+- The RTL8812AU driver is single-vif. While `wlan2` is an AP, adding a second
+  vif (monitor or managed) fails with `Operation not supported (-95)`; the AP
+  itself stays up. The AP card therefore cannot monitor or inject at the same
+  time. Use a second radio for monitor and injection.
 
 ## 10. TFTP and NFS for the station
 
