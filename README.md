@@ -35,7 +35,8 @@ tests/board/
 tools/                          build entries, board round, judge, gates, board-side scripts
 docs/                           commit convention, patch policy, firmware notices,
                                 release procedure, release notes, migration record,
-                                the reference board (docs/boards/)
+                                the reference board (docs/boards/), the per-module
+                                device handbooks (docs/wireless_devices/)
 known_issues/                   the open issues of each release, tracked per version
 ```
 
@@ -569,6 +570,16 @@ The firefly v2 carries the SDIO, vendor-FullMAC and storage rows added on this
 page.  It has two xHCI roots and no EHCI, so the RK3568 board is the only place
 the EHCI port runs; the two boards share the host stack and the class code, and
 differ in the board directory and the controller facts it selects.
+
+## Device handbooks
+
+`docs/wireless_devices/` carries one handbook per wireless module: what the
+part is, how it is wired, how it is brought up, and which of those facts are
+established.  Each claim is labelled as measured here, as coming from the
+driver source with a file and line, or as not established.
+
+The first handbook is the Intel Wireless-AC 7260:
+[docs/wireless_devices/ac7260/README.md](docs/wireless_devices/ac7260/README.md).
 
 ## Version, releases and known issues
 
