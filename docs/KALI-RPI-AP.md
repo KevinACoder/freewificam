@@ -14,13 +14,14 @@ path has not yet been validated with a real station (see section 8).
 |---|---|---|
 | `wlan2` | RTL8812AU (USB, `0bda:8812`, MAC `1c:a7:70:de:29:a1`) | controlled AP, 2.4 GHz |
 | `wlan1` | MT7921AU (USB, `0e8d:7961`, MAC `90:de:80:4c:38:c5`) | monitor (passive) |
+| `wlan3` | RTL8188EUS (USB, `0bda:8179`, MAC `20:f4:1b:52:8f:01`) | injector (monitor + injection), 2.4 GHz |
 | `wlan0` | BCM43455 (onboard, `brcmfmac`) | retired from AP duty; not used by the bench |
 | `eth0` | onboard Gigabit Ethernet | management, `192.168.0.17/24` |
 
-The AP and the monitor must be different radios. The RTL8812AU is the only card
-on this host that is known to do AP, monitor, and injection at the same time;
-the MT7921AU does monitor but not injection, and its 2.4 GHz AP mode does not
-emit beacons on this kernel (section 9).
+The AP, the monitor, and the injector are separate radios. The RTL8812AU is
+single-vif: while it runs the AP it cannot add a monitor or a second vif
+(section 9). The MT7921AU does monitor but not injection. The RTL8188EUS is
+the injector; it is a separate 2.4 GHz radio and can inject while the AP runs.
 
 The bench station is a separate RK3568 board. It is not described here.
 
@@ -89,6 +90,20 @@ installed kernel. The module name is `88XXau`; its USB alias covers
 `0bda:8812`, so udev loads it at boot. The in-tree kernel `6.12.34` does not
 contain `rtw88_8812au`, so without this package the card enumerates but gets
 no network interface.
+
+The injector is an RTL8188EUS; the aircrack-ng driver is packaged as
+`realtek-rtl8188eus-dkms` and builds `8188eu.ko` (version 5.3.9):
+
+```sh
+echo 'blacklist rtl8xxxu' > /etc/modprobe.d/blacklist-rtl8xxxu.conf
+apt install realtek-rtl8188eus-dkms
+```
+
+The in-tree `rtl8xxxu` also binds `0bda:8179`, so the blacklist is required;
+after the next boot `8188eu` owns the card as `wlan3`. The driver reports
+`type managed` in `iw dev wlan3 info` even after `iw dev wlan3 set type
+monitor`; this is a reporting quirk, and injection works regardless (section
+8).
 
 ## 5. AP service
 
@@ -227,6 +242,12 @@ MACAddress=90:de:80:4c:38:c5
 [Link]
 Name=wlan1
 
+/etc/systemd/network/10-lab-wlan3.link
+[Match]
+MACAddress=20:f4:1b:52:8f:01
+[Link]
+Name=wlan3
+
 /etc/systemd/network/10-lab-wlan0.link
 [Match]
 MACAddress=d8:3a:dd:26:91:1e
@@ -234,9 +255,10 @@ MACAddress=d8:3a:dd:26:91:1e
 Name=wlan0
 ```
 
-`wlan2` is the RTL8812AU (AP), `wlan1` is the MT7921AU (monitor), and `wlan0`
-is the onboard BCM43455. The AP service also checks the permanent address, so
-a wrong mapping fails loudly instead of starting the AP on the MTK card:
+`wlan2` is the RTL8812AU (AP), `wlan1` is the MT7921AU (monitor), `wlan3` is
+the RTL8188EUS (injector), and `wlan0` is the onboard BCM43455. The AP service
+also checks the permanent address, so a wrong mapping fails loudly instead of
+starting the AP on the MTK card:
 
 ```sh
 ethtool -P wlan2        # must print 1c:a7:70:de:29:a1
@@ -281,11 +303,20 @@ iw dev wlan2 set channel 1
 aireplay-ng --test -a <bssid> -e <ssid> wlan2
 ```
 
+Inject with the RTL8188EUS while the AP keeps running; it is a separate radio:
+
+```sh
+lab-inject-up.sh wlan3 5
+aireplay-ng --test -a 1c:a7:70:de:29:a1 -e labwifi-ar-ht20s wlan3
+lab-inject-down.sh wlan3
+```
+
 Return both cards to managed mode when done, then start the AP again:
 
 ```sh
 iw dev wlan2 set type managed
 iw dev wlan1 set type managed
+iw dev wlan3 set type managed
 systemctl start lab-ap
 ```
 
@@ -310,6 +341,11 @@ Verified on 2026-11-08:
   present.
 - RTL8812AU injection: `aireplay-ng --test` reports `Injection is working`
   and 30/30 directed probe responses (100 %, about -29 dBm).
+- The RTL8188EUS injector (`wlan3`, `8188eu`, 13 dBm) injects on channel 5
+  while the RTL8812AU AP is active: `aireplay-ng --test` reports `Injection is
+  working` and 30/30 directed probe responses (100 %, about -20 dBm), and the
+  AP stays active. The `lab-inject-up.sh`/`lab-inject-down.sh` helpers set and
+  restore it.
 - The onboard `brcmfmac` associates to the AP (AP station table shows it,
   signal about -26 dBm), but does not pass data with its nexmon firmware.
 - The MT7921AU station association is unreliable: it associates once in a
@@ -350,7 +386,12 @@ clients.
 - The RTL8812AU driver is single-vif. While `wlan2` is an AP, adding a second
   vif (monitor or managed) fails with `Operation not supported (-95)`; the AP
   itself stays up. The AP card therefore cannot monitor or inject at the same
-  time. Use a second radio for monitor and injection.
+  time. Use the RTL8188EUS (`wlan3`) as the injection radio; the MT7921AU
+  stays monitor-only.
+- The RTL8188EUS driver reports `type managed` in `iw dev wlan3 info` even
+  after `iw dev wlan3 set type monitor`. This is a driver reporting quirk: the
+  card is in monitor/injection mode and `aireplay-ng --test` gets 30/30.
+  Trust the injection test, not the type string.
 
 ## 10. TFTP and NFS for the station
 
@@ -421,3 +462,6 @@ update-initramfs -u -k $(ls /lib/modules | grep rpt-rpi-v8 | sort -V | tail -1)
 
 - 2026-11-08: first standard bench card. Kali 2026.3 on a LUKS root, RTL8812AU
   as AP, MT7921AU as monitor, `lab-ap` unit, DKMS driver, documented caveats.
+- 2026-11-08: RTL8188EUS added as the injector (`wlan3`, aircrack `8188eu`
+  DKMS); injection 30/30 while the AP runs. The RTL8812AU is single-vif, so it
+  cannot inject while it runs the AP.
