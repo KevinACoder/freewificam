@@ -46,16 +46,26 @@ static bool force_ht = true;
 module_param_named(force_ht, force_ht, bool, 0644);
 MODULE_PARM_DESC(force_ht, "1 = advertise HT20 1SS MCS0-7 to the driver (lab probe)");
 /*
- * W7-14: force_ht's own table is the W7-11 shape (1 SS, and no 40 MHz on a
- * 20 MHz tune).  The AP reads that table and picks its downlink MCS from it,
- * so the shape, not the air, was setting our downlink rate.  force_ht40=1
- * keeps force_ht on but declares the capability set the reference station
- * advertises (20/40 MHz, SGI40, 2 SS).  Default 0 keeps the old shape.
+ * W7-17: the table below is the *peer* capability, and iwl_mvm turns exactly
+ * two of its fields into the ADD_STA station_flags word: deflink.bandwidth ->
+ * STA_FLG_FAT_EN_* and deflink.rx_nss -> STA_FLG_MIMO_EN_* (mvm/sta.c:162-196,
+ * bits in fw/api/sta.h).  W7-14 (since cfa2cf94) declared 40 MHz + two spatial
+ * streams to this bench's AP, which is a 1x1 HT20 AR9271 on a 20 MHz channel;
+ * the 7260 firmware answers that ADD_STA with ADVANCED_SYSASSERT (0x2078) on
+ * the first data transmission (W7-16 K0 42.066 / K1e 42.075 / K1f 42.849,
+ * W7-14 F1a 36.143), which killed the P4 TCP cell.  The truthful table for a
+ * 1x1 HT20 peer is one stream / 20 MHz / SGI20, and that is the default again;
+ * the kernel-side answer is a station that claims nothing the peer cannot do.
+ * force_ht40=1 keeps the old claim as a lab lever - it is the arm that
+ * reproduces the assert - and must not be enabled against a 20 MHz peer.
+ * Deriving this table from the Association response's HT element (which would
+ * also carry the peer's A-MPDU density) is the parity follow-up, not this
+ * round's single variable.
  */
-static bool force_ht40 = true;
+static bool force_ht40;
 module_param_named(force_ht40, force_ht40, bool, 0644);
 MODULE_PARM_DESC(force_ht40,
-    "1 = with force_ht, also declare 40 MHz + SGI40 + 2 spatial streams");
+    "1 = with force_ht, also declare 40 MHz + SGI40 + 2 spatial streams (lab lever; asserts the 7260 firmware on a 20 MHz peer)");
 
 /*
  * Transmit diagnosis for the 8851BU data-plane round: the same frame, in the
@@ -1061,17 +1071,16 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 
 		sta->deflink.ht_cap.ht_supported = true;
 		/*
-		 * W7-14: this table used to claim one spatial stream and, on
-		 * a 20 MHz tune, no 40 MHz capability at all, while the AP
-		 * (ath9k, HT20 on ch5) kept a 40 MHz short-GI rate table for
-		 * us and simply stepped its MCS down to what it thought we
-		 * could receive (MCS0-MCS3, 15-60 Mbit/s).  mac80211 builds
-		 * the peer's HT capability from the association request's HT
-		 * element, so a table that under-claims throttles the AP's
-		 * rate selection for the whole session.  force_ht passes
-		 * ht40_min=1 to declare 20/40 MHz with SGI40 regardless of
-		 * the tuned width, which is the capability set the reference
-		 * station advertises on this bench.
+		 * W7-17: the peer table is what mac80211 parses out of the
+		 * Associated station's HT element, and the bench AP is a 1x1
+		 * HT20 AR9271: MCS 0-7, no 20/40 MHz capability, SGI20.  The
+		 * W7-14 shape (20/40 MHz + SGI40 + two streams, 300 Mbit/s)
+		 * was a claim about a peer that cannot receive it, and it
+		 * reached the firmware as STA_FLG_FAT_EN_40MHZ +
+		 * STA_FLG_MIMO_EN_MIMO2 in ADD_STA; the 7260 firmware asserts
+		 * on the first data transmission in that state.  The stream
+		 * count is derived from the MCS mask below, the way mac80211
+		 * derives it, so the two fields can never disagree again.
 		 */
 		sta->deflink.ht_cap.cap = IEEE80211_HT_CAP_SGI_20 |
 		    ((ht40 || force_ht40) ? (IEEE80211_HT_CAP_SUP_WIDTH_20_40 |
@@ -1079,9 +1088,12 @@ static struct ieee80211_sta *seam_sta_upload(struct wlan_linux_hw *w,
 		sta->deflink.ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
 		sta->deflink.ht_cap.ampdu_density = IEEE80211_HT_MPDU_DENSITY_NONE;
 		sta->deflink.ht_cap.mcs.rx_mask[0] = 0xff;
-		sta->deflink.rx_nss = 2;
+		if (ht40 || force_ht40)
+			sta->deflink.ht_cap.mcs.rx_mask[1] = 0xff;
+		sta->deflink.rx_nss =
+		    sta->deflink.ht_cap.mcs.rx_mask[1] ? 2 : 1;
 		sta->deflink.ht_cap.mcs.rx_highest =
-		    cpu_to_le16(ht40 || force_ht40 ? 300 : 144);
+		    cpu_to_le16(ht40 || force_ht40 ? 300 : 72);
 		sta->deflink.bandwidth = (ht40 || force_ht40) ?
 		    IEEE80211_STA_RX_BW_40 : IEEE80211_STA_RX_BW_20;
 	}
