@@ -441,7 +441,77 @@ root for the station, and `MOUNT_POINT` is where the station mounts it.
 - The other SD card still carries the older Debian TFTP/NFS setup. Either card
   can serve the station, but only one is in the slot at a time.
 
-## 11. Recovery
+## 11. Injection and observation
+
+The RTL8188EUS injector (`wlan3`) sends 802.11 frames; the MT7921AU (`wlan1`)
+and a monitor vif on the station capture them. The marker/observation rung is
+verified; the 802.11 sequence is not under the injector's control (see the
+caveats).
+
+Put the injector in monitor mode (the AP keeps running):
+
+```sh
+lab-inject-up.sh wlan3 5
+```
+
+On the station (RK3568 mfs with `tcpdump`), while its RTL8851BU is associated,
+add a monitor vif and capture both the air and the STA interface:
+
+```sh
+ip link set mon3 up
+iw dev mon3 set channel 5
+tcpdump -i mon3 -w $PCAP_DIR/dut_mon.pcap &
+tcpdump -i wlan2 -w $PCAP_DIR/dut_sta.pcap &
+```
+
+On the Pi, capture the same channel on the MT7921AU:
+
+```sh
+ip link set wlan1 down
+iw dev wlan1 set type monitor
+ip link set wlan1 up
+iw dev wlan1 set channel 5
+tcpdump -i wlan1 -w $PCAP_DIR/mtk.pcap &
+```
+
+Send a marker frame with scapy (`DUT` and `AP` are the station and BSSID MAC
+addresses; `PCAP_DIR` is a directory both sides can use):
+
+```python
+from scapy.all import *
+f = (RadioTap() /
+     Dot11(type=2, subtype=8, FCfield=0x02,
+           addr1=DUT, addr2=AP, addr3=AP, SC=0x100 << 4) /
+     Dot11QoS(TID=0) / LLC() / SNAP(code=0x0800) /
+     IP(src="192.168.99.1", dst="192.168.99.2") /
+     UDP(sport=5555, dport=9999) / Raw(b"MARKER-0001"))
+sendp(f, iface="wlan3")
+```
+
+Verified on 2026-11-08:
+
+- Three marker frames were seen on the MT7921AU monitor, on the station's
+  monitor vif, and on the station's STA interface; the station answered with
+  ICMP port unreachable.
+- A payload sequence `4090..4095, 0..3` with a missing `4093` and a repeated
+  `4092` was delivered 9/9 on the station; the markers carry the intended
+  sequence.
+- The marker ID aligns the three capture sources; the station clock is offset
+  (no NTP), so the payload ID is the alignment key.
+
+Caveats:
+
+- The RTL8188EUS driver rewrites the 802.11 sequence control. The on-air
+  `wlan.seq` is the driver counter (277..285 in the test), not the injected
+  `SC`; the intended sequence travels in the payload.
+- The injected frame spoofs the AP transmitter address, so the station's ACK
+  goes to the AP, not the injector. The injector retransmits; the external
+  monitor sees the retries, the station deduplicates them.
+- An A-MPDU / reorder-window test is not possible with this injector: it sends
+  single MPDUs and rewrites the sequence. That case needs an A-MPDU-capable
+  injector or driver-side test hooks.
+
+## 12. Recovery
 
 - LUKS recovery passphrase: set when the card was built and recorded with the
   bench owner. A key file slot is also present; both slots open the container.
@@ -458,7 +528,7 @@ update-initramfs -u -k $(ls /lib/modules | grep rpt-rpi-v8 | sort -V | tail -1)
 - If the card does not reach the AP service, verify the encrypted root mount
   (`findmnt /`) before changing any AP file.
 
-## 12. Change log
+## 13. Change log
 
 - 2026-11-08: first standard bench card. Kali 2026.3 on a LUKS root, RTL8812AU
   as AP, MT7921AU as monitor, `lab-ap` unit, DKMS driver, documented caveats.
