@@ -249,6 +249,7 @@ endif
 ifeq ($(CONFIG_LIBLINUX80211),1)
 S0_CFLAGS := $(KPI_CFLAGS) \
 	-I$(LIB8)/stack/mac80211 -I$(LIB8)/stack/wireless \
+	-include $(LIB8)/include/linux80211/stack_config.h \
 	-Werror=implicit-function-declaration -Werror=incompatible-pointer-types \
 	-Werror=int-conversion -Werror=return-type
 S0_OUT ?= $(abspath $(ROOT)/../runs/S0)
