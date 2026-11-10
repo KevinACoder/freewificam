@@ -4,7 +4,7 @@ Code written in this repository.
 
 | Component | Contents | State |
 |---|---|---|
-| `liblinux80211/` | the kernel API surface, the bus engines and (later) `net/mac80211` + `net/wireless`, behind explicit OS / bus / network seams | not started; landing next |
+| `liblinux80211/` | the Linux kernel API surface, the bus engines, the seams; `net/mac80211` + `net/wireless` land next | **landed**: builds as `liblinux80211.a`, proven on the board by `rk3568-kpi-live` (real root complex) and `rk3568-kpi-mock` (synthetic host/card, null egress) |
 
 ## The component's boundary
 
@@ -12,16 +12,19 @@ Code written in this repository.
 
 - the Linux kernel-facing surface the stack compiles against (headers and
   bodies), because that is what the stack's source expects to find;
-- the bus engines: the Linux-facing PCI/SDIO/USB records and calls, with the
-  host reached only through a narrow backend seam;
+- the bus engines: the Linux-facing PCI/SDIO records and calls, with the host
+  reached only through a narrow backend seam;
 - the network-device face and the seam the egress plugs into.
 
-It does **not** own the OS (threads, timers, locks are supplied by the OS
-port through one facade), the controllers (the backend implements the bus
-seam), or the network stack (the egress implements the network seam).
+It does **not** own the OS (threads, timers, locks are supplied by the OS port
+through the CMSIS-RTOS2 facade), the controllers (a backend implements the bus
+seam), or the network stack (an egress implements the network seam).
+
+## Ports rule
 
 Adapters live with the module whose interface they implement: the component's
-own `ports/` for the adapters that implement the component's seams, the
-third-party tree's `ports/` for the ones that implement that tree's ops
-(`third-party/lwip/ports/`, `third-party/fsl_sdmmc/ports/`), and the board
-directory for the BSP. There is no top-level `ports/`.
+own `ports/` for the adapters that implement the component's seams
+(`ports/pci-rk3568/`), the third-party tree's `ports/` for the ones that
+implement that tree's ops (`third-party/fsl_sdmmc/ports/` for the SDIO card
+stack, `third-party/lwip/ports/` for the egress), and the board directory for
+the BSP. **There is no top-level `ports/`.**

@@ -1,0 +1,52 @@
+# liblinux80211: the Linux kernel API surface, the bus engines and (later) the
+# mac80211/cfg80211 stack, behind explicit OS / bus / network seams.
+#
+# The component is selected by the image that carries it, not by a default:
+# the acceptance images (network, PCIe/NVMe, eMMC, USB storage) do not link it,
+# and an image that does must say which engines and which egress it wants.
+
+menu "liblinux80211"
+
+config LIBLINUX80211
+	bool "liblinux80211 (Linux kernel API + bus engines)"
+	help
+	  The kernel-facing surface a Linux wireless driver/stack compiles
+	  against, plus the bus engines that reach the host through the port's
+	  backend seams.  It carries no OS: the OS port supplies the CMSIS-RTOS2
+	  facade the bodies call.
+
+if LIBLINUX80211
+
+config LIBLINUX80211_PCI
+	bool "PCI engine"
+	help
+	  The Linux PCI records and calls over the backend seam, and the DMA /
+	  interrupt plumbing.  The RK3568 adapter (ports/pci-rk3568) implements
+	  the seam over the board's DesignWare root complex.
+
+config LIBLINUX80211_SDIO
+	bool "SDIO engine"
+	help
+	  The Linux SDIO function records and calls over the backend seam.  The
+	  adapter for this board lives in the SDIO module it drives
+	  (third-party/fsl_sdmmc/ports).
+
+choice LIBLINUX80211_NET
+	prompt "Network egress implementation"
+	default LIBLINUX80211_NET_NONE
+	help
+	  The egress is replaceable by construction: the component calls the
+	  weak lkpi_netdev_rx() for received frames, and an egress module
+	  defines it.  lwIP is the intended one; the null implementation is the
+	  reference second implementation the seam is proven with.
+
+config LIBLINUX80211_NET_NONE
+	bool "none (frames are consumed by the component)"
+
+config LIBLINUX80211_NET_NULL
+	bool "null egress (counts, frees; the seam test's second implementation)"
+
+endchoice
+endif
+
+endmenu

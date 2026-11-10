@@ -28,6 +28,8 @@ CASES = (
     "pcie",
     "usb_xhci",
     "usb_ehci",
+    "kpi_live",
+    "kpi_mock",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -155,6 +157,24 @@ PATTERNS = {
         re.MULTILINE,
     ),
     "usb_msc_blk0": re.compile(r"usbh: msc blk0 ok", re.MULTILINE),
+    "kpi_fail": re.compile(r"kpi: FAIL (?P<reason>.+)$", re.MULTILINE),
+    "kpi_pci_devs": re.compile(r"kpi: pci devs=(?P<n>\d+)", re.MULTILINE),
+    "kpi_dev": re.compile(
+        r"kpi: dev (?P<vid>[0-9a-f]{4}):(?P<did>[0-9a-f]{4}) "
+        r"class (?P<cc>[0-9a-f]{6}) rev (?P<rev>[0-9a-f]{2})", re.MULTILINE
+    ),
+    "kpi_known": re.compile(
+        r"kpi: known wifi=(?P<wifi>[01]) nvme=(?P<nvme>[01])", re.MULTILINE
+    ),
+    "kpi_mock_pci": re.compile(
+        r"kpi: mock pci devs=(?P<n>\d+) (?P<vid>[0-9a-f]{4}):(?P<did>[0-9a-f]{4})",
+        re.MULTILINE
+    ),
+    "kpi_mock_sdio": re.compile(
+        r"kpi: mock sdio card=(?P<vid>[0-9a-f]{4}):(?P<did>[0-9a-f]{4}) "
+        r"funcs=(?P<funcs>\d+) c52=(?P<byte>[0-9a-f]{2})", re.MULTILINE
+    ),
+    "kpi_mock_net": re.compile(r"kpi: mock net rx=(?P<rx>\d+)", re.MULTILINE),
     "usb_msc_ident": re.compile(
         r"usbh: msc ident-only blocks=(?P<blocks>\d+)", re.MULTILINE
     ),
@@ -1343,6 +1363,54 @@ def judge(text: str, expect: dict | None = None) -> dict:
         if "emmc_product" in expect and found["emmc_cid"]:
             if found["emmc_cid"]["product"] != expect["emmc_product"]:
                 errors.append("emmc: product name differs from the Linux readback")
+
+    if cases.get("kpi_live", {}).get("verdict") == "pass":
+        fail = found["kpi_fail"]
+        if fail:
+            errors.append(f"kpi_live: {fail['reason']}")
+        devs = found["kpi_pci_devs"]
+        if not devs:
+            errors.append("kpi_live: PASS without the device-count line")
+        elif int(devs["n"]) == 0:
+            errors.append("kpi_live: no PCI function enumerated")
+        else:
+            notes.append(f"kpi_live: devs={devs['n']}")
+        dev = found["kpi_dev"]
+        if not dev:
+            errors.append("kpi_live: PASS without a device identity line")
+        else:
+            notes.append(
+                f"kpi_live: dev {dev['vid']}:{dev['did']} class {dev['cc']}"
+            )
+        known = found["kpi_known"]
+        if not known:
+            errors.append("kpi_live: PASS without the known-device line")
+        elif known["wifi"] != "1":
+            errors.append("kpi_live: the AC 7260 (8086:08b1) was not enumerated")
+
+    if cases.get("kpi_mock", {}).get("verdict") == "pass":
+        fail = found["kpi_fail"]
+        if fail:
+            errors.append(f"kpi_mock: {fail['reason']}")
+        pci = found["kpi_mock_pci"]
+        if not pci or int(pci["n"]) != 1:
+            errors.append("kpi_mock: the synthetic PCI host did not enumerate")
+        else:
+            notes.append(f"kpi_mock: pci {pci['vid']}:{pci['did']}")
+        sdio = found["kpi_mock_sdio"]
+        if not sdio:
+            errors.append("kpi_mock: no synthetic SDIO card line")
+        elif sdio["byte"] != "42":
+            errors.append(f"kpi_mock: CMD52 byte {sdio['byte']} != 42")
+        else:
+            notes.append(
+                f"kpi_mock: sdio {sdio['vid']}:{sdio['did']} funcs={sdio['funcs']}"
+            )
+        net = found["kpi_mock_net"]
+        if not net or int(net["rx"]) == 0:
+            errors.append("kpi_mock: netif_rx did not reach the null egress")
+        else:
+            notes.append(f"kpi_mock: net rx={net['rx']}")
 
     for case in ("usb_xhci", "usb_ehci"):
         if cases.get(case, {}).get("verdict") != "pass":

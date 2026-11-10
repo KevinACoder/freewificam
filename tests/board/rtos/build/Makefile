@@ -176,6 +176,15 @@ $(eval $(call component_sources,$(PLATFORM)/board,pcie,BOARD_PCIE))
 $(eval $(call component_sources,$(PLATFORM)/board,nvme,BOARD_NVME))
 $(eval $(call component_sources,$(PLATFORM)/os,baremetal,OS_BASE))
 
+# liblinux80211: the component owns its sources; this build only says which
+# world each group is compiled in.
+ifeq ($(CONFIG_LIBLINUX80211),1)
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,kpi,LIBLINUX80211_KPI))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-pci,LIBLINUX80211_BUS_PCI))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-sdio,LIBLINUX80211_BUS_SDIO))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-pci,LIBLINUX80211_PCIE))
+endif
+
 # The wired-network cases each bring the lwIP port face and the stack core; the
 # per-case group below adds that NIC's own netif bridge and driver. A boot may
 # carry more than one (they share one stack bring-up).
@@ -225,13 +234,19 @@ ifneq ($(filter usb_xhci usb_ehci,$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
 
+# The liblinux80211 world (empty unless the component is selected).
+ifeq ($(CONFIG_LIBLINUX80211),1)
+include $(CURDIR)/kpi.mk
+endif
+
 BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 	$(THIRD_PARTY)/ulog/src/ulog.c
 
 # usb_xhci/usb_ehci are compiled in the CherryUSB flag world (usb.mk); every
 # other case is a plain application translation unit.
 USB_CASES := usb_xhci usb_ehci
-CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
+KPI_CASES := kpi_live kpi_mock
+CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 APP_SRCS := \
 	$(LINE)/app/main.c \
@@ -257,7 +272,8 @@ OBJDIR := $(BUILD)/obj/$(BACKEND)
 TAG_STAMP := $(BUILD)/build-tag.stamp
 FLAG_STAMP := $(BUILD)/flags-$(BACKEND).stamp
 
-ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(USB_ALL_SRCS)
+ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(USB_ALL_SRCS) \
+	$(KPI_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 LDFLAGS := -nostdlib -static \
@@ -325,11 +341,12 @@ LIB_OSAL_OBJS := $(filter $(OBJDIR)/tests/board/rtos/platform/os/cmsis2/% $(OBJD
 LIB_SUPPORT_OBJS := $(filter $(OBJDIR)/third-party/ulog/% $(OBJDIR)/third-party/printf/%,$(OBJS))
 LIB_DRV_OBJS := $(filter $(OBJDIR)/third-party/fsl_sdmmc/%,$(OBJS))
 LIB_USBHOST_OBJS := $(filter $(OBJDIR)/third-party/cherryusb/%,$(OBJS))
+LIB_LINUX80211_OBJS := $(filter $(OBJDIR)/components/liblinux80211/%,$(OBJS))
 LIB_APP_OBJS := $(filter $(OBJDIR)/tests/board/rtos/app/%,$(OBJS))
 
 # Static archives can be mutually dependent (log needs uart, board log calls
 # need log), so the link order wraps them in --start-group downstream.
-LIB_LINK_ORDER := fw_app fw_usbhost fw_drivers fw_board_$(BOARD) \
+LIB_LINK_ORDER := fw_app fw_linux80211 fw_usbhost fw_drivers fw_board_$(BOARD) \
 	fw_osal_cmsis2 fw_support fw_arch
 
 libs: image
@@ -345,6 +362,8 @@ libs: image
 		$(AR) rcs $(LIB_DIR)/libfw_support.a $(LIB_SUPPORT_OBJS); fi
 	@if [ -n "$(strip $(LIB_USBHOST_OBJS))" ]; then \
 		$(AR) rcs $(LIB_DIR)/libfw_usbhost.a $(LIB_USBHOST_OBJS); fi
+	@if [ -n "$(strip $(LIB_LINUX80211_OBJS))" ]; then \
+		$(AR) rcs $(LIB_DIR)/liblinux80211.a $(LIB_LINUX80211_OBJS); fi
 	@if [ -n "$(strip $(LIB_DRV_OBJS))" ]; then \
 		$(AR) rcs $(LIB_DIR)/libfw_drivers.a $(LIB_DRV_OBJS); fi
 	@if [ -n "$(strip $(LIB_APP_OBJS))" ]; then \
@@ -376,7 +395,7 @@ $(TAG_STAMP): FORCE
 $(FLAG_STAMP): FORCE $(CONFIG_FILE)
 	mkdir -p $(BUILD)
 	printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'asm: $(ASM_CFLAGS)' 'config: $(shell sha256sum $(CONFIG_FILE) 2>/dev/null | cut -d' ' -f1)' \
-		'usb: $(USB_CFLAGS)' \
+		'usb: $(USB_CFLAGS)' 'kpi: $(KPI_CFLAGS)' \
 		'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	cmp -s $@.tmp $@ || mv $@.tmp $@
 
@@ -388,6 +407,10 @@ $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_C,$(s),$(VENDORED_CFLAGS) $(PRI
 
 ifneq ($(filter usb_xhci usb_ehci,$(CASES)),)
 $(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
+endif
+
+ifneq ($(strip $(KPI_ALL_SRCS)),)
+$(foreach s,$(filter-out %.S,$(KPI_ALL_SRCS)),$(eval $(call COMPILE_C,$(s),$(KPI_CFLAGS))))
 endif
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)

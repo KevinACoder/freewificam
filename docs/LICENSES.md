@@ -5,6 +5,8 @@ Per-component license registry. This is not legal advice.
 | Part | License | Notes |
 |---|---|---|
 | `tests/board/rtos/` (platform, app, build) | BSD-3-Clause | first-party; `LICENSE` at the repository root |
+| `components/liblinux80211/` (written here) | BSD-3-Clause | the component's own code (`Kconfig`, `sources.mk`, seams, adapters, cases) |
+| `components/liblinux80211/include/` + the imported bodies | BSD-3-Clause | the previous tree's first-party linuxkpi, byte-identical; the Linux face is the interface the stack compiles against, not the stack |
 | `tools/` (written here) | BSD-3-Clause | |
 | `tools/kconfig/` | ISC | Kconfiglib, vendored (see its `VENDOR`) |
 | `third-party/FreeRTOS-Kernel/` | MIT | `LICENSE.md` at the tree root |

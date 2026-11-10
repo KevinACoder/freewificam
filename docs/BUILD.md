@@ -33,7 +33,9 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-net` | tick cmsis2 net | lwIP + GMAC: link, address, ping, TCP both ways, UDP probes, census |
 | `rk3568-pcie-nvme` | tick pcie | DWC root complex, ITS/MSI, NVMe namespace, one real I/O completion |
 | `rk3568-emmc` | tick cmsis2 emmc | fsl_sdmmc + DW SDHCI: card ID, block round trip, error path, sweep |
-| `rk3568-usb-msc` | tick usb_xhci | CherryUSB xHCI: enumerate the U-disk, block round trip, sweep |
+| `rk3568-usb-msc` | tick usb_ehci | CherryUSB EHCI: enumerate the U-disk, block zero, round trip (identity arm on a small disk) |
+| `rk3568-kpi-live` | tick pcie kpi_live | liblinux80211's PCI engine over the board's real root complex |
+| `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
 
 ```
 ./make.rtos list
@@ -73,6 +75,7 @@ The components in this line:
 | platform/arch | `platform/arch/sources.mk` | base (boot, GICv3, MMU, cache), pcie (ITS/MSI/IRQ controller) |
 | platform/board | `platform/board/sources.mk` | base, pcie, nvme |
 | platform/os | `platform/os/sources.mk` | base (printf bind, libc stubs, log, tick) |
+| liblinux80211 | `components/liblinux80211/sources.mk` | kpi (kernel-API bodies), bus-pci, bus-sdio, port-pci (RK3568 adapter) |
 
 The USB, lwIP, eMMC and PCIe glue are per-world fragments under
 `tests/board/rtos/build/*.mk` because they compile in their own flag worlds
@@ -101,6 +104,7 @@ own C flags set, all derived from `BASE_CFLAGS`/`KCONTRACT_CFLAGS`:
 | vendored C (lwIP core, fsl_sdmmc, FreeRTOS, CMSIS) | `VENDORED_CFLAGS` | imported C, `-Wextra` off |
 | printf | `VENDORED_CFLAGS + PRINTF_CFLAGS` | the vendored printf has its own knobs |
 | CherryUSB | `USB_CFLAGS` | its own include roots and `-std=gnu11` |
+| liblinux80211 | `KPI_CFLAGS` | the Linux face needs `gnu11` and its own warning set; the component's sources.mk supplies the groups, `tests/board/rtos/build/kpi.mk` the flags |
 
 A world's flags are part of the flag stamp: changing them rebuilds every object
 in that world, so a stale object cannot be certified under a new world.
@@ -120,10 +124,9 @@ in that world, so a stale object cannot be certified under a new world.
 
 `./make.rtos libs` archives the object groups the image already built:
 `libfw_arch`, `libfw_board_rk3568-itx`, `libfw_osal_cmsis2`, `libfw_support`,
-`libfw_usbhost`, `libfw_drivers`, `libfw_app`, plus `manifest.json`
-(members, undefined symbols, size). The archives are a delivery shape of the
-image, not a second build. `components/liblinux80211` joins this list as
-`liblinux80211.a` when it lands.
+`libfw_usbhost`, `libfw_drivers`, `libfw_app`, `liblinux80211` (when the
+component is selected), plus `manifest.json` (members, undefined symbols,
+size). The archives are a delivery shape of the image, not a second build.
 
 ## 8. Adding a world
 

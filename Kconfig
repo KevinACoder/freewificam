@@ -16,4 +16,5 @@
 mainmenu "freewificam build configuration"
 
 rsource "tests/board/rtos/Kconfig"
+rsource "components/liblinux80211/Kconfig"
 rsource "third-party/Kconfig"

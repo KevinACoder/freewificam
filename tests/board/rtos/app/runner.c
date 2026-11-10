@@ -61,6 +61,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_USB_EHCI)
 	CASE_ENTRY("usb_ehci", case_usb_ehci_run)
 #endif
+#if defined(RTOS_CASE_KPI_LIVE)
+	CASE_ENTRY("kpi_live", case_kpi_live_run)
+#endif
+#if defined(RTOS_CASE_KPI_MOCK)
+	CASE_ENTRY("kpi_mock", case_kpi_mock_run)
+#endif
 #if defined(RTOS_HOST_TIER)
 };
 #endif

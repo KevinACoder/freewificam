@@ -10,7 +10,7 @@ python=${PYTHON:-python3}
 cross=${AARCH64_CROSS_PATH:-}
 profiles=${*:-}
 if [ -z "$profiles" ]; then
-	profiles="rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-usb-msc"
+	profiles="rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-usb-msc rk3568-kpi-live rk3568-kpi-mock"
 fi
 status=0
 for p in $profiles; do

@@ -47,13 +47,14 @@ KCONFIG_FILES = [
     "tests/board/rtos/Kconfig",
     "tests/board/rtos/platform/board/Kconfig",
     "tests/board/rtos/app/Kconfig",
+    "components/liblinux80211/Kconfig",
     "third-party/Kconfig",
 ]
 
 # Case list copied from the runner table / all defconfigs.  The hidden
 # CASE_<NAME> symbols are derived by this generator from CONFIG_CASES; they are
 # not edited by a user.
-CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci""".split()
+CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci kpi_live kpi_mock""".split()
 
 KC = None
 

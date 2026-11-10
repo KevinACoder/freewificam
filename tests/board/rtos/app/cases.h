@@ -63,6 +63,13 @@ int case_usb_ehci_run(void);
 int usb_msc_case(unsigned int busid, const char *hcd);
 #endif
 
+#if defined(RTOS_CASE_KPI_LIVE)
+int case_kpi_live_run(void);
+#endif
+#if defined(RTOS_CASE_KPI_MOCK)
+int case_kpi_mock_run(void);
+#endif
+
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf
  * TCP server (only one listener can own the port).  The `net` case brings its

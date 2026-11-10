@@ -1,0 +1,18 @@
+# liblinux80211 seam proof: the PCI and SDIO engines and the network seam over
+# implementations that live in the case (a synthetic host, a synthetic card, a
+# null egress), with no hardware behind any of them.
+#
+# This is the second implementation the seams are judged with: the same engine
+# objects the live arm runs are linked against backends that touch no board
+# register.  The null egress defines lkpi_netdev_rx(), the weak symbol
+# netif_rx() calls.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_CASES="tick kpi_mock"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_NET_NULL=y

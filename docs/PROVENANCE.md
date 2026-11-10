@@ -44,6 +44,32 @@ worlds this line carries; every edit they received is in `DIVERGENCES.md`.
 pin, the patch records and the license; they are the authority for the trees,
 this table is the summary.
 
+## The liblinux80211 component import (2026-11-10)
+
+The kernel-API layer and the PCI/SDIO engines the mac80211 line needs were
+imported from the same source commit, into `components/liblinux80211/`.
+
+| Destination | Source path | Files | Byte-identical |
+|---|---|---|---|
+| `components/liblinux80211/include/` | `components/linuxkpi/rtos/include/` | 154 | yes |
+| `components/liblinux80211/{linuxkpi_core,linuxkpi_compat,linuxkpi_osdep,linuxkpi_netdev,linuxkpi_platform_target}.c`, `linuxkpi_impl.h`, `linuxkpi_txq_audit.h`, `lkpi_census.h` | `components/linuxkpi/rtos/` (same names) | 8 | yes |
+| `components/liblinux80211/skbuff/skbuff_pool.{c,h}` | `components/linuxkpi/rtos/skbuff/` | 2 | yes |
+| `components/liblinux80211/bus/pci.c` | `components/linuxkpi/rtos/pci/linuxkpi_pci.c` | 1 | yes (renamed) |
+| `components/liblinux80211/bus/linuxkpi_pci.h` | `components/linuxkpi/rtos/pci/linuxkpi_pci.h` | 1 | yes |
+| `components/liblinux80211/bus/sdio.c`, `sdio_be.c` | `components/linuxkpi/rtos/sdio/linuxkpi_sdio.c`, `lkpi_sdio_be.c` | 2 | yes (renamed) |
+| `components/liblinux80211/bus/linuxkpi_sdio.h` | `components/linuxkpi/rtos/sdio/linuxkpi_sdio.h` | 1 | yes |
+| `components/liblinux80211/include/linux80211/lkpi_{pcie,sdio}_backend.h`, `lkpi_sdio_rx_probe.h` | `components/linuxkpi/rtos/{pci,sdio}/` | 3 | yes |
+| `components/liblinux80211/ports/pci-rk3568/adapter.{c,h}`, `SOURCE.md` | `components/linuxkpi/rtos/pci/lkpi_pcie_port.*` | 3 | yes |
+
+The file names that the Linux face reaches with a relative include
+(`../../linuxkpi_core.h`, `skbuff/skbuff_pool.h`) keep their names and their
+depth: the core header sits beside `include/`, and the skb pool stays under
+`skbuff/`. Renames are limited to the two engine bodies and their headers.
+
+Written here (not imported): the component's `Kconfig`, `sources.mk`,
+`README.md`, `include/linux80211/{linux80211.h,net.h}`, `net_egress.c`, the
+`kpi`/`kpi_live` cases, the two profiles and `tests/board/rtos/build/kpi.mk`.
+
 ## What was deliberately not imported
 
 | Not imported | Why |

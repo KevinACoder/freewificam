@@ -6,7 +6,7 @@ its reason; the source commit and blob hash of each file are in
 
 | # | File | Change | Reason |
 |---|---|---|---|
-| 1 | `tests/board/rtos/build/Makefile` | rewritten as a trim of the source: FreeRTOS-only backend section, RK3568-only board section, no host tier, no wireless/CMake/SDK worlds | this line carries four bus/network images and one platform; the mechanisms (COMPILE_C, flag stamps, per-world flags, linker gates, libs) are kept byte-for-byte in shape |
+| 1 | `tests/board/rtos/build/Makefile` | rewritten as a trim of the source: FreeRTOS-only backend section, RK3568-only board section, no host tier, no wireless/CMake/SDK worlds; the liblinux80211 component groups and archive added | this line carries four bus/network images and one platform; the mechanisms (COMPILE_C, flag stamps, per-world flags, linker gates, libs) are kept byte-for-byte in shape |
 | 2 | `tests/board/rtos/Kconfig` | `BACKEND_THREADX/ZEPHYR` and their derived defaults removed; ThreadX-only `TX_*` knobs removed | only the FreeRTOS backend is imported; a backend that the build rejects must not be offered |
 | 3 | `tests/board/rtos/platform/board/Kconfig` | firefly board symbols and `UVC_USB_BUS` removed | only the RK3568 board is imported |
 | 4 | `tests/board/rtos/app/Kconfig` | WLAN/netio/lwIP-window knobs removed, `CASES` kept | those worlds are not imported; the case list is the one symbol every image needs |

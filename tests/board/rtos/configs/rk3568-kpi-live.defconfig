@@ -1,0 +1,17 @@
+# liblinux80211, first on-target proof: the PCI engine over the board's real
+# root complex.
+#
+# The `pcie` case group is required, not incidental: the RK3568 adapter reaches
+# the root complex through the board driver and the arch ITS/MSI bridge that
+# group brings.  The engine enumerates both functions (NVMe 126f:2263 and the
+# AC 7260 8086:08b1) and prints the identity it read; no driver attaches here.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_CASES="tick pcie kpi_live"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_NET_NONE=y

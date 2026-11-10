@@ -22,7 +22,7 @@ PROFILE ?= $(shell sed -n 's/^[[:space:]]*CONFIG[[:space:]]*:=[[:space:]]*//p' \
 DEFCONFIG := $(CONFIGS)/$(PROFILE).defconfig
 GEN_DIR := $(ROOT)/build/kconfig/$(PROFILE)
 GEN_CONFIG := $(GEN_DIR)/freewificam_config
-MATRIX_PROFILES ?= rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-usb-msc
+MATRIX_PROFILES ?= rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-usb-msc rk3568-kpi-live rk3568-kpi-mock
 
 .PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images libs \
 	check check-no-d check-config-header check-build-contract case-list-check matrix \
