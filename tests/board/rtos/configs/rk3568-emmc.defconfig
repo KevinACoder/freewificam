@@ -1,0 +1,20 @@
+# Acceptance: the soldered eMMC through the imported fsl_sdmmc stack.
+#
+# The case is `emmc` (app/cases/emmc.c): the card's CID/CSD/ExtCSD as the stack
+# parsed them, the bus mode it settled on, a four-block write/read-back with
+# CRC equal, one hundred rounds, an out-of-range address that must return an
+# error instead of hanging, and the chunk sweep with the controller's census.
+#
+# The write window is the last 4 MiB of the user area; the case prints the LBA
+# range so the operator can see what moved.  It never touches the partition
+# table or the first megabytes.
+#
+# 16 MiB of FreeRTOS heap: the fsl stack allocates its DMA staging buffer and
+# the card mutex from it.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_CASES="tick cmsis2 emmc"

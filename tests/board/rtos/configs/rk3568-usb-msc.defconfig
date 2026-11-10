@@ -1,0 +1,18 @@
+# Acceptance: the CherryUSB host stack + the mass-storage class.
+#
+# The case is `usb_xhci` (app/cases/usb_xhci.c -> usb_msc.c): bring up the
+# board's xHCI root 3 (the upper Type-A port), enumerate the U-disk, read block
+# zero, round-trip a block in the disk's last 32 MiB window and run the size
+# sweep.  The bench's disk is `0781:5583`; the EHCI arm is not part of this
+# profile (the lab has no USB2 disk, and the previous tree left that arm
+# unverified rather than stretching the bench).
+#
+# 16 MiB of FreeRTOS heap: the CherryUSB pools, the MSC buffers and the USB
+# OSAL's allocations come from it.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_CASES="tick usb_xhci"

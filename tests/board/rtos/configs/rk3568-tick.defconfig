@@ -1,0 +1,11 @@
+# Bootstrap profile: the platform's own smoke.  A boot that reaches
+# `tick: PASS` proves the console, MMU, GICv3, the FreeRTOS port, the
+# CMSIS-RTOS2 facade and the runner - nothing else.  It is the first image
+# built after an import and the one to reach for when a later profile fails
+# before its own first line.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_CASES="tick"

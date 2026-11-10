@@ -1,0 +1,109 @@
+From 4d3f294aa9791a2944b1fed8f21477e31331baac Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 16 Oct 2026 05:46:15 +0800
+Subject: [PATCH] tcp: make the delayed-ACK watermark a build-time option
+
+The delayed-ACK mechanism acknowledges every second in-order data
+segment: tcp_ack() toggles a single TF_ACK_DELAY bit, segments are
+acknowledged by a data segment carrying the ACK, the fast timer, or the
+end of input processing. That watermark is exactly right for the general
+case but is not tunable, so a build that wants to trade ACK traffic
+against feedback latency (measurement runs, tiny embedded lines with
+expensive ACKs) cannot.
+
+Add LWIP_TCP_ACK_DELAY_SEGMENTS: 2 keeps the historical behaviour
+byte-for-byte, 1 acknowledges every segment immediately, and values above
+2 hold the ACK across that many segments. Non-default builds count
+in-order segments in a new pcb field; the count restarts whenever
+TF_ACK_DELAY is set anew, so the paths that clear the flag elsewhere
+(data segment carrying the ACK, tcp_fasttmr flush, RST handling) need no
+bookkeeping of their own. Default is 2.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ src/include/lwip/priv/tcp_priv.h | 26 ++++++++++++++++++++++++++
+ src/include/lwip/tcp.h           | 17 +++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/src/include/lwip/priv/tcp_priv.h b/src/include/lwip/priv/tcp_priv.h
+index 346a789..08abecb 100644
+--- a/src/include/lwip/priv/tcp_priv.h
++++ b/src/include/lwip/priv/tcp_priv.h
+@@ -451,6 +451,8 @@ void tcp_segs_free(struct tcp_seg *seg);
+ void tcp_seg_free(struct tcp_seg *seg);
+ struct tcp_seg *tcp_seg_copy(struct tcp_seg *seg);
+ 
++#if LWIP_TCP_ACK_DELAY_SEGMENTS == 2
++/* The default watermark: acknowledge every second segment (RFC 1122). */
+ #define tcp_ack(pcb)                               \
+   do {                                             \
+     if((pcb)->flags & TF_ACK_DELAY) {              \
+@@ -461,6 +463,30 @@ struct tcp_seg *tcp_seg_copy(struct tcp_seg *seg);
+       tcp_set_flags(pcb, TF_ACK_DELAY);            \
+     }                                              \
+   } while (0)
++#elif LWIP_TCP_ACK_DELAY_SEGMENTS == 1
++/* Every segment acknowledged now. */
++#define tcp_ack(pcb)  tcp_ack_now(pcb)
++#else
++/* A custom watermark: count in-order segments while the ACK is held back.
++   The counter restarts whenever TF_ACK_DELAY is set anew, so the paths
++   that clear the flag elsewhere (data segment carrying the ACK, timer
++   flush, RST) need no bookkeeping of their own. */
++#define tcp_ack(pcb)                                         \
++  do {                                                       \
++    if((pcb)->flags & TF_ACK_DELAY) {                        \
++      (pcb)->ack_delay_cnt++;                                \
++      if((pcb)->ack_delay_cnt >= (LWIP_TCP_ACK_DELAY_SEGMENTS - 1)) { \
++        (pcb)->ack_delay_cnt = 0;                            \
++        tcp_clear_flags(pcb, TF_ACK_DELAY);                  \
++        tcp_ack_now(pcb);                                    \
++      }                                                      \
++    }                                                        \
++    else {                                                   \
++      tcp_set_flags(pcb, TF_ACK_DELAY);                      \
++      (pcb)->ack_delay_cnt = 0;                              \
++    }                                                        \
++  } while (0)
++#endif
+ 
+ #define tcp_ack_now(pcb)                           \
+   tcp_set_flags(pcb, TF_ACK_NOW)
+diff --git a/src/include/lwip/tcp.h b/src/include/lwip/tcp.h
+index 3991fd6..da7ba72 100644
+--- a/src/include/lwip/tcp.h
++++ b/src/include/lwip/tcp.h
+@@ -238,6 +238,16 @@ struct tcp_pcb_listen {
+ };
+ 
+ 
++/* The delayed-ACK watermark: how many in-order data segments to let pass
++   before acknowledging. 2 is the historical lwIP behaviour and matches
++   RFC 1122 4.2.3.2's "SHOULD send for every second full-sized segment";
++   1 acknowledges every segment immediately (trading ACK traffic for
++   feedback latency); larger values trade feedback latency for fewer ACKs.
++   Build-time only; measurement builds override it, the default is 2. */
++#ifndef LWIP_TCP_ACK_DELAY_SEGMENTS
++#define LWIP_TCP_ACK_DELAY_SEGMENTS 2
++#endif
++
+ /** the TCP protocol control block */
+ struct tcp_pcb {
+ /** common PCB members */
+@@ -284,6 +294,13 @@ struct tcp_pcb {
+   tcpwnd_size_t rcv_wnd;   /* receiver window available */
+   tcpwnd_size_t rcv_ann_wnd; /* receiver window to announce */
+   u32_t rcv_ann_right_edge; /* announced right edge of window */
++#if LWIP_TCP_ACK_DELAY_SEGMENTS != 2
++  u8_t ack_delay_cnt; /* in-order segments passed since the last ACK;
++                         only in non-default-watermark builds. Any code that
++                         clears TF_ACK_DELAY without it (a data segment
++                         carrying the ACK, tcp_fasttmr) just restarts the
++                         count on the next segment - see tcp_ack(). */
++#endif
+ 
+ #if LWIP_TCP_SACK_OUT
+   /* SACK ranges to include in ACK packets (entry is invalid if left==right) */
+-- 
+2.43.0
+

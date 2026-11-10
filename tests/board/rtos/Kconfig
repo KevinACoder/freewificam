@@ -1,0 +1,257 @@
+# The RTOS image: kernel, optimisation, heap, case list and the two escapes.
+#
+# These are the symbols the build/Makefile consumed before the Kconfig
+# migration; the names are unchanged apart from the dropped CONFIG_ prefix
+# that Kconfig adds back in the generated fragment.
+
+menu "RTOS image"
+
+choice BACKEND
+	prompt "RTOS kernel"
+	default BACKEND_FREERTOS
+	help
+	  The kernel behind CMSIS-RTOS2.  The application sources are the same;
+	  only the backend source set, the backend defines and the link window
+	  differ.
+
+config BACKEND_FREERTOS
+	bool "FreeRTOS"
+
+endchoice
+
+choice OPT
+	prompt "Optimisation level"
+	default OPT_O2
+
+config OPT_O0
+	bool "-O0"
+
+config OPT_O2
+	bool "-O2"
+
+config OPT_O3
+	bool "-O3"
+
+config OPT_OS
+	bool "-Os"
+
+config OPT_OG
+	bool "-Og"
+
+endchoice
+
+choice DEBUG_LEVEL
+	prompt "Debug information"
+	default DEBUG_G3
+	help
+	  The -g level is part of the build contract: -g3 is the historical
+	  default, -g0 strips the image for a size-sensitive profile.
+
+config DEBUG_G0
+	bool "-g0"
+
+config DEBUG_G1
+	bool "-g1"
+
+config DEBUG_G2
+	bool "-g2"
+
+config DEBUG_G3
+	bool "-g3"
+
+endchoice
+
+choice PROFILE
+	prompt "Performance profile"
+	default PROFILE_BASE
+	help
+	  base is the pre-round switch set; perf carries the measured net-positive
+	  lwIP/GMAC switches (PROFILE_DEFS in the Makefile).  The choice is called
+	  PROFILE only in this file; the build's PROFILE variable names the
+	  defconfig and is unrelated.
+
+config PROFILE_BASE
+	bool "base"
+
+config PROFILE_PERF
+	bool "perf"
+
+endchoice
+
+
+
+# Derived names for make.  The make build consumes these directly; the C side
+# gets the same values from freewificam_config.h.  They are strings/int because
+# make cannot expand a Kconfig choice.
+config BACKEND_NAME
+	string
+	default "freertos" if BACKEND_FREERTOS
+
+config BOARD_NAME
+	string
+	default "rk3568-itx" if BOARD_RK3568_ITX
+
+config OPT_FLAGS
+	string
+	default "-O0" if OPT_O0
+	default "-O2" if OPT_O2
+	default "-O3" if OPT_O3
+	default "-Os" if OPT_OS
+	default "-Og" if OPT_OG
+
+config PROFILE_NAME
+	string
+	default "base" if PROFILE_BASE
+	default "perf" if PROFILE_PERF
+
+config DEBUG_LEVEL_VALUE
+	int
+	default 0 if DEBUG_G0
+	default 1 if DEBUG_G1
+	default 2 if DEBUG_G2
+	default 3 if DEBUG_G3
+
+config HEAP_SIZE
+	int "ThreadX kernel heap (MiB)"
+	default 4
+	help
+	  Rendered as -Wl,--defsym=HEAP_SIZE=<n>M for the ThreadX link.  The
+	  FreeRTOS image uses FREERTOS_HEAP_SIZE instead; the value is harmless
+	  there but still part of the profile.
+
+config FREERTOS_HEAP_SIZE
+	int "FreeRTOS heap (bytes)"
+	default 262144
+	help
+	  Total FreeRTOS heap.  The option used to be omitted entirely when the
+	  profile did not set it, in which case FreeRTOSConfig.h supplied 256
+	  KiB.  That fallback moved here, so the generated header always has one
+	  value and the C side has no #ifndef default.
+
+config GMAC_PROF
+	bool "Per-frame GMAC service-time instrument"
+	default y
+	help
+	  The dwc_eqos prof counters and the netio tick buckets.  Default on so
+	  a measurement boot is the same image as before; an A/B arm turns it
+	  off.  The Makefile's old unconditional -DCONFIG_GMAC_PROF= line is
+	  gone; the generator now emits it through CFG_DEFS.
+
+menu "Resources and toolchain"
+
+comment "Every value below is part of the image contract: changing it changes"
+comment "the bytes, so profiles may differ per image.  The generator always"
+comment "emits the CONFIG_* make variables; a value of 0 means 'keep the"
+comment "per-world default' for the pool/deadline knobs."
+
+config BOARD_AUTO_RESET
+	bool "Reset the board after the runner finishes"
+	default y
+
+config SHELL_STACK_KB
+	int "CherrySH task stack (KiB)"
+	default 16
+
+config RUNNER_STACK_KB
+	int "Runner task stack (KiB)"
+	default 8
+
+config RUNNER_BIG_STACK_KB
+	int "Runner stack for netio/wireless cases (KiB)"
+	default 16
+
+config CMSIS2_MAX_THREADS
+	int "CMSIS-RTOS2 maximum threads"
+	default 16
+
+config CMSIS2_MAX_TIMERS
+	int "CMSIS-RTOS2 maximum timers"
+	default 32
+
+config LKPI_SKB_POOL_NUM
+	int "linuxkpi skb pool entries"
+	default 128
+
+config LKPI_SKB_DATA_POOL_NUM
+	int "linuxkpi skb data pool entries"
+	default 64
+
+config LKPI_SKB_HEAP_HDR_MAX
+	int "linuxkpi skb inline header bytes"
+	default 64
+
+config LKPI_USB_CHERRYUSB_SLOTS
+	int "CherryUSB URB slots"
+	default 16
+
+config LKPI_USB_CHERRYUSB_STAGE_SIZE
+	int "linuxkpi USB stage slot size (bytes)"
+	default 4096
+	help
+	  One staged transfer must fit a slot.  rtw88 hands the chip a firmware
+	  packet as a 48-byte TX descriptor followed by up to 4096 bytes of data
+	  in a single bulk transfer (4144 bytes), and its receive urbs are as
+	  large as RTW_USB_MAX_RECVBUF_SZ, so the driver's USB world needs the
+	  stage to carry those transfers.  A transfer larger than the slot is
+	  refused with a named line and the driver fails its probe.
+
+config LKPI_USB_CHERRYUSB_STAGE_SLOTS
+	int "linuxkpi USB stage slots"
+	default 16
+	help
+	  Stage slots are held for the life of an in-flight transfer; rtw88 keeps
+	  its receive urbs submitted permanently, so the slot count has to cover
+	  those plus the transmit side.
+
+config USB_STAGE_SIZE
+	int "USB transfer stage size (bytes)"
+	default 20480
+
+config USBHOST_MSC_TIMEOUT
+	int "USB mass-storage timeout (ms)"
+	default 800
+
+config USB_EHCI_ISO_NUM
+	int "EHCI isochronous descriptors"
+	default 4
+
+config LWIP_TCPIP_CORE_LOCKING_INPUT
+	bool "lwIP TCPIP core locking on input"
+	default y if PROFILE_PERF
+	default n
+
+config LWIP_TCP_ACK_DELAY_SEGMENTS
+	int "lwIP delayed-ACK segment watermark"
+	default 4 if PROFILE_PERF
+	default 2
+
+config LWIPERF_TCP_MAX_IDLE_SEC
+	int "lwiperf TCP maximum idle seconds"
+	default 60
+
+config NETIO_CPU_KHZ_LATE
+	int "netio late CPU-kHz sampling override (kHz, 0 = off)"
+	default 0
+
+config ULOG_ENABLED
+	bool "Enable ulog"
+	default y
+
+config ULOG_MAX_MESSAGE_LENGTH
+	int "ulog maximum message length"
+	default 256
+
+config PRINTF_DISABLE_FLOAT
+	bool "Strip printf float support"
+	default y
+
+config PRINTF_DISABLE_EXPONENTIAL
+	bool "Strip printf exponential support"
+	default y
+
+endmenu
+
+rsource "platform/board/Kconfig"
+rsource "app/Kconfig"
+
+endmenu

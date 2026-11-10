@@ -1,0 +1,19 @@
+# freewificam build configuration
+#
+# One tree feeds the RTOS image entry (make.rtos -> tools/build/rtos.mk).  A
+# profile is a defconfig under tests/board/rtos/configs/; the generated
+# fragment under build/kconfig/<profile>/ is the only file a build consumes.
+#
+# This root is the previous tree's, trimmed to the worlds this line carries
+# (FreeRTOS + RK3568: wired network, PCIe/NVMe, eMMC, USB storage).  The
+# wireless and second-OS roots (components/linuxkpi, components/net80211,
+# components/shell, wireless-drivers) are not imported yet; when the mac80211
+# component lands it is sourced here, in the same shape.
+#
+# rsource is resolved relative to this file; the generator must be run from
+# the repository root so the same paths work from make and menuconfig.
+
+mainmenu "freewificam build configuration"
+
+rsource "tests/board/rtos/Kconfig"
+rsource "third-party/Kconfig"

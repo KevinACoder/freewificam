@@ -1,0 +1,17 @@
+# Acceptance: lwIP over the board's GMAC (DWC EQOS + RTL8211F).
+#
+# The case is `net` (app/cases/net.c): link at 1000/full, the contract address
+# on the wire, ten pings counted at both ends, a TCP session in each
+# direction, the UDP capacity probes, and the per-phase census.  The peer is
+# the lab's Raspberry Pi (192.168.0.17); its side is driven from the image's
+# own phase anchors by tools/rtos/peer.py.
+#
+# 16 MiB of FreeRTOS heap: the lwIP pool, pbufs and the TCP/IP thread's stack
+# all come from it (the previous tree's net images used the same figure).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_CASES="tick cmsis2 net"

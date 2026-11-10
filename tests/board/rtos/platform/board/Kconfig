@@ -1,0 +1,62 @@
+# Board and bus selection, and the board-side diagnostic levers.
+#
+# The board choice feeds BOARD in the build Makefile (platform source set,
+# include flavours, link script, entry gate).  The three names are the three
+# lab boards the image can target; rk3568-itx is the default.
+
+menu "Board and bus"
+
+choice BOARD
+	prompt "Board"
+	default BOARD_RK3568_ITX
+
+config BOARD_RK3568_ITX
+	bool "RK3568 E4AP5G1-ITX"
+
+endchoice
+
+config USB_MSC_DIAG
+	bool "USB mass-storage diagnostics"
+
+config USB_MSC_DIAG_FULL
+	bool "USB mass-storage full diagnostics"
+
+# The GMAC per-frame tuning/instrument levers.  These were only ever -D
+# tokens carried by CONFIG_LEVERS; they are modeled here so a profile can be
+# read and diffed, but the generator renders them through CFG_DEFS only (no
+# make variable is consumed by the build).
+config GMAC_RX_BATCH
+	bool "GMAC RX batch"
+
+config GMAC_RX_BH
+	bool "GMAC RX bottom half"
+
+config GMAC_RX_HWCSUM
+	bool "GMAC RX hardware checksum"
+
+config GMAC_RX_ZC
+	bool "GMAC RX zero copy"
+
+config GMAC_STALL_PROBE
+	bool "GMAC stall probe"
+
+config GMAC_SWEEP_WIDE
+	bool "GMAC wide sweep"
+
+config GMAC_TCP_PROBE
+	bool "GMAC TCP probe"
+
+config GMAC_TX_CSUM
+	bool "GMAC TX checksum"
+
+config GMAC_TX_RING
+	int "GMAC TX ring descriptors"
+	default 256
+
+config GMAC_TX_SWEEP_GUARD
+	bool "GMAC TX sweep guard"
+
+config GMAC_TX_TAIL_IDLE
+	bool "GMAC TX tail idle"
+
+endmenu

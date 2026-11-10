@@ -1,0 +1,9 @@
+# Third-party trees
+#
+# No vendor Kconfig is sourced here.  The compatible-license trees the build
+# compiles (CherryUSB, lwIP) do not ship a Kconfig, and the GPL driver trees
+# must never feed this tree a Kconfig: the values a profile needs are modeled
+# in the first-party files, and the source lists stay in the make fragments.
+#
+# This file exists so the root Kconfig has a stable place to point at when a
+# third-party option does become first-class; it currently defines nothing.

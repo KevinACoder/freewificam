@@ -1,0 +1,107 @@
+From c19d638d9ebfb6df96cce7c5004475c98d29dfcd Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Thu, 15 Oct 2026 09:01:50 +0800
+Subject: [PATCH] lwiperf: take plain payload at the 128 KiB boundary as data
+
+lwiperf_tcp_recv() re-examines the stream every 128 KiB and, when the
+ANSWER_TEST flag is set, requires the packet crossing the boundary to start
+with a repeat of the 24-byte settings block. That repeat is lwiperf's own
+client's behaviour (its send path emits the block twice at the start of a
+session); the iperf2 client never repeats it, so its first data packet after
+the settings fails the comparison and the session is closed with
+LWIPERF_TCP_ABORTED_LOCAL_DATAERROR. This breaks iperf2 in the modes that set
+ANSWER_TEST - dualtest and tradeoff - on the receive leg, on the second
+packet, while the transmit leg runs normally.
+
+A plain stream that happens to cross the boundary is affected too: the same
+branch strips 24 bytes of payload and advances the byte count whenever the
+condition is reached, whether or not the flag is set, so a long single
+direction transfer loses 24 bytes per boundary crossing and reports 24 bytes
+more than it received.
+
+Consume the repeated block only when the packet really starts with one, and
+let everything else fall through to the data path.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+ src/apps/lwiperf/lwiperf.c | 46 ++++++++++++++++++--------------------
+ 1 file changed, 22 insertions(+), 24 deletions(-)
+
+diff --git a/src/apps/lwiperf/lwiperf.c b/src/apps/lwiperf/lwiperf.c
+index 144c8bd..0bebfb7 100644
+--- a/src/apps/lwiperf/lwiperf.c
++++ b/src/apps/lwiperf/lwiperf.c
+@@ -484,35 +484,25 @@ lwiperf_tcp_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
+ 
+   conn->poll_count = 0;
+ 
+-  if ((!conn->have_settings_buf) || ((conn->bytes_transferred - 24) % (1024 * 128) == 0)) {
++  if (!conn->have_settings_buf) {
+     /* wait for 24-byte header */
+     if (p->tot_len < sizeof(lwiperf_settings_t)) {
+       lwiperf_tcp_close(conn, LWIPERF_TCP_ABORTED_LOCAL_DATAERROR);
+       pbuf_free(p);
+       return ERR_OK;
+     }
+-    if (!conn->have_settings_buf) {
+-      if (pbuf_copy_partial(p, &conn->settings, sizeof(lwiperf_settings_t), 0) != sizeof(lwiperf_settings_t)) {
+-        lwiperf_tcp_close(conn, LWIPERF_TCP_ABORTED_LOCAL);
+-        pbuf_free(p);
+-        return ERR_OK;
+-      }
+-      conn->have_settings_buf = 1;
+-      if (conn->settings.flags & PP_HTONL(LWIPERF_FLAGS_ANSWER_TEST)) {
+-        if (conn->settings.flags & PP_HTONL(LWIPERF_FLAGS_ANSWER_NOW)) {
+-          /* client requested parallel transmission test */
+-          err_t err2 = lwiperf_tx_start_passive(conn);
+-          if (err2 != ERR_OK) {
+-            lwiperf_tcp_close(conn, LWIPERF_TCP_ABORTED_LOCAL_TXERROR);
+-            pbuf_free(p);
+-            return ERR_OK;
+-          }
+-        }
+-      }
+-    } else {
+-      if (conn->settings.flags & PP_HTONL(LWIPERF_FLAGS_ANSWER_TEST)) {
+-        if (pbuf_memcmp(p, 0, &conn->settings, sizeof(lwiperf_settings_t)) != 0) {
+-          lwiperf_tcp_close(conn, LWIPERF_TCP_ABORTED_LOCAL_DATAERROR);
++    if (pbuf_copy_partial(p, &conn->settings, sizeof(lwiperf_settings_t), 0) != sizeof(lwiperf_settings_t)) {
++      lwiperf_tcp_close(conn, LWIPERF_TCP_ABORTED_LOCAL);
++      pbuf_free(p);
++      return ERR_OK;
++    }
++    conn->have_settings_buf = 1;
++    if (conn->settings.flags & PP_HTONL(LWIPERF_FLAGS_ANSWER_TEST)) {
++      if (conn->settings.flags & PP_HTONL(LWIPERF_FLAGS_ANSWER_NOW)) {
++        /* client requested parallel transmission test */
++        err_t err2 = lwiperf_tx_start_passive(conn);
++        if (err2 != ERR_OK) {
++          lwiperf_tcp_close(conn, LWIPERF_TCP_ABORTED_LOCAL_TXERROR);
+           pbuf_free(p);
+           return ERR_OK;
+         }
+@@ -525,12 +515,20 @@ lwiperf_tcp_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
+       pbuf_free(p);
+       return ERR_OK;
+     }
++  } else if (((conn->bytes_transferred - 24) % (1024 * 128) == 0) &&
++             (conn->settings.flags & PP_HTONL(LWIPERF_FLAGS_ANSWER_TEST)) &&
++             (p->tot_len >= sizeof(lwiperf_settings_t)) &&
++             (pbuf_memcmp(p, 0, &conn->settings, sizeof(lwiperf_settings_t)) == 0)) {
++    /* lwiperf's own client repeats the 24-byte settings block every 128 KiB and
++     * the copy is consumed here; a client that does not repeat it (iperf2)
++     * reaches this boundary with plain payload, which is data and not a data
++     * error */
++    conn->bytes_transferred += sizeof(lwiperf_settings_t);
+     conn->next_num = 4; /* 24 bytes received... */
+     tmp = pbuf_remove_header(p, 24);
+     LWIP_ASSERT("pbuf_remove_header failed", tmp == 0);
+     LWIP_UNUSED_ARG(tmp); /* for LWIP_NOASSERT */
+   }
+-
+   packet_idx = 0;
+   for (q = p; q != NULL; q = q->next) {
+ #if LWIPERF_CHECK_RX_DATA
+-- 
+2.43.0
+

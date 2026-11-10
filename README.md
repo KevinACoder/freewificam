@@ -13,10 +13,27 @@ management — is the Linux code, unmodified. What changes is what sits below it
    ────────────────────────────────────
    net/mac80211 + net/wireless              upstream, verbatim
    ────────────────────────────────────
-   components/linuxkpi                      this repository
+   components/liblinux80211                 kernel API + bus engines
    ────────────────────────────────────
-   CherryUSB / PCIe host + driver           bus, replaced
+   CherryUSB / PCIe / SDHCI host + driver   bus, replaced
 ```
+
+## Where the line is
+
+This repository is the successor of the previous net80211 line. It starts by
+bringing the **RTOS platform itself** up in this tree, because the mac80211 work
+needs a board that boots before it needs a stack that links:
+
+| Step | State |
+|---|---|
+| RTOS baseline builds (`rk3568-tick`) | done (C0/C1) |
+| Four acceptance images build (network, PCIe/NVMe, eMMC, USB storage) | done (C0/C1) |
+| Four acceptance images boot on the board, 2/2, judged | not yet recorded |
+| `components/liblinux80211` (linuxkpi + bus engines + seams) | not started |
+| mac80211 + cfg80211 + iwlwifi | next stage |
+
+`docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
+build's design and how a new world is added.
 
 ## Why
 
@@ -36,29 +53,41 @@ This repository tests the other split: keep the stack, replace the two edges.
   is equivalent rather than approximate *because* there is no other core to be
   concurrent with. This is a precondition of the design, not an implementation
   detail; a multiprocessor build needs the whole RCU discipline re-done.
-- **A bus backend** for the device you target (USB host stack, or a PCIe host).
+- **A bus backend** for the device you target (USB host stack, a PCIe host, an
+  SDHCI/eMMC host).
 - **An egress** to your network stack (lwIP is the intended one).
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `components/linuxkpi/` | the kernel API surface the stack needs |
-| `docs/` | build notes, provenance of imported files, conventions |
-| `tools/` | helpers (commit-message checker, import scripts) |
+| `tests/board/rtos/platform/` | RK3568 board port, AArch64 boot layer, FreeRTOS/CMSIS-RTOS2 runtime |
+| `tests/board/rtos/app/` | the case runner and the acceptance cases |
+| `tests/board/rtos/build/` | the platform Makefile and the per-world fragments |
+| `tests/board/rtos/configs/` | the profiles (one defconfig each) |
+| `third-party/` | FreeRTOS, CMSIS, lwIP, CherryUSB, fsl_sdmmc, printf, tlsf, ulog (compiled closures, pins in `docs/PROVENANCE.md`) |
+| `tools/` | the Kconfig generator, the build gates, the judge, the commit checker |
+| `components/` | first-party components; `liblinux80211` is the next one |
+| `docs/` | provenance, divergences, licenses, build design, status |
 
-Drivers and the wireless stack itself are not vendored here as of this writing;
-`docs/PROVENANCE.md` records what is imported and from where once that starts.
+## Build and boot
+
+```
+AARCH64_CROSS_PATH=<xpack prefix> ./make.rtos list
+AARCH64_CROSS_PATH=<xpack prefix> ./make.rtos image PROFILE=rk3568-emmc
+```
+
+The image is `tests/board/rtos/build/build/rtos-freertos.bin`: a flat raw image
+linked at `0xa000000`, loaded over TFTP and entered with `go 0xa000000`. The
+board-side control (serial, power, TFTP, evidence) lives in the project's
+`skills/rk3568-board`.
 
 ## License
 
-`net/mac80211` and `net/wireless` are `GPL-2.0-only`, so anything that links
-them is `GPL-2.0`. The kernel-API layer written here is BSD-3-Clause on its own
-and becomes GPL-2.0 as part of a linked image. See `docs/LICENSES.md` for the
-per-component breakdown.
+The platform, the build and the tools written here are `BSD-3-Clause`. The
+imported trees keep their own terms (MIT, Apache-2.0, BSD-3-Clause, ISC); see
+`docs/LICENSES.md`.
 
-## Status
-
-Early. The stack is not yet built against this repository; `docs/STATUS.md`
-tracks which stage has been reached, and states each stage as what it is —
-"compiles" and "links" are not "runs".
+When `net/mac80211` and `net/wireless` land in `components/liblinux80211`, every
+binary that links them becomes a `GPL-2.0` combined work. That is why the
+component is a separate build unit and a separate profile family.

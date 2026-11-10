@@ -1,0 +1,17 @@
+# Acceptance: the DesignWare PCIe root complex + NVMe.
+#
+# The case is `pcie` (app/cases/pcie.c): both controllers inherit the
+# firmware-trained link, the downstream function is claimed and printed, the
+# NVMe namespace geometry is read, and one real I/O completion is forced
+# through the ITS/MSI path.  The PASS requires the NVMe (`126f:2263` on the
+# lab's M.2 slot) and a nonzero message-interrupt delta; an absent endpoint is
+# reported as `pcie: platform-inactive`, which is a bench fact, not a pass.
+#
+# 256 KiB of FreeRTOS heap (the Kconfig default): the case's buffers are
+# static, so this profile needs no more.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_CASES="tick pcie"

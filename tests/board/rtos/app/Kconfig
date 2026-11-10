@@ -1,0 +1,19 @@
+# The application's own configuration.
+#
+# The previous tree carried the wireless-bench and netio instrument knobs here
+# (WLAN_*, NETIO_*, the lwIP window knobs).  This line imports neither, so the
+# menu keeps the one symbol every image needs - the case list - and the place
+# for a knob a future case brings with it.
+
+menu "Application"
+
+config CASES
+	string "Case groups (space-separated)"
+	default ""
+	help
+	  The case groups this image carries, in run order.  Each name is one
+	  translation unit under app/cases/ and one entry in the runner's table;
+	  the build derives the case's RTOS_CASE_* macro from this string, so the
+	  source set, the table and the judge's expectations are the same fact.
+
+endmenu

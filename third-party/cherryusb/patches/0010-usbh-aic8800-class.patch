@@ -1,0 +1,888 @@
+From da9d3a34afbb20a88c20a94792ec236f2091c4f0 Mon Sep 17 00:00:00 2001
+From: Hpx <2722369695@qq.com>
+Date: Sun, 6 Sep 2026 17:11:33 +0800
+Subject: [PATCH] host: add thin usbh_aic8800 vendor Wi-Fi class
+
+---
+ CMakeLists.txt                   |   3 +
+ Kconfig                          |   8 +
+ Kconfig.rtt                      |   5 +
+ Kconfig.rttpkg                   |   5 +
+ SConscript                       |   2 +
+ cherryusb.cmake                  |   4 +
+ cherryusb_config_template.h      |   3 +
+ class/vendor/wifi/usbh_aic8800.c | 380 +++++++++++++++++++++++++++++++
+ class/vendor/wifi/usbh_aic8800.h |  87 +++++++
+ demo/usbh_aic8800_template.c     |  37 +++
+ docs/en/api/api_config.rst       |   8 +-
+ docs/en/demo/usbh_wifi.rst       |  88 +++++++
+ docs/zh/api/api_config.rst       |   8 +-
+ docs/zh/demo/usbh_wifi.rst       |  86 +++++++
+ 14 files changed, 722 insertions(+), 2 deletions(-)
+ create mode 100644 class/vendor/wifi/usbh_aic8800.c
+ create mode 100644 class/vendor/wifi/usbh_aic8800.h
+ create mode 100644 demo/usbh_aic8800_template.c
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index be652aa..360e6f4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -130,6 +130,9 @@ elseif(ESP_PLATFORM)
+         if(CONFIG_CHERRYUSB_HOST_RTL8152)
+             target_link_libraries(${COMPONENT_LIB} INTERFACE "-u rtl8152_class_info")
+         endif()
++        if(CONFIG_CHERRYUSB_HOST_AIC8800)
++            target_link_libraries(${COMPONENT_LIB} INTERFACE "-u aic8800_class_info")
++        endif()
+         if(CONFIG_CHERRYUSB_HOST_FTDI)
+             target_link_libraries(${COMPONENT_LIB} INTERFACE "-u ftdi_class_info")
+         endif()
+diff --git a/Kconfig b/Kconfig
+index b4e055f..d67fb72 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -401,6 +401,14 @@ if CHERRYUSB
+             select USBHOST_PLATFORM_RTL8152
+             default n
+ 
++        config CHERRYUSB_HOST_AIC8800
++            bool
++            prompt "Enable usb aic8800 wifi driver"
++            default n
++            help
++              Thin USB transport for AIC8800 FullMAC dongles.
++              Firmware, WPA2 and lwIP stay in the application.
++
+         config CHERRYUSB_HOST_FTDI
+             bool
+             prompt "Enable usb ftdi driver"
+diff --git a/Kconfig.rtt b/Kconfig.rtt
+index 6cf2ea3..9e394ae 100644
+--- a/Kconfig.rtt
++++ b/Kconfig.rtt
+@@ -429,6 +429,11 @@ if RT_USING_CHERRYUSB
+             select CONFIG_USBHOST_PLATFORM_RTL8152
+             default n
+ 
++        config RT_CHERRYUSB_HOST_AIC8800
++            bool
++            prompt "Enable usb aic8800 wifi driver"
++            default n
++
+         config RT_CHERRYUSB_HOST_FTDI
+             bool
+             prompt "Enable usb ftdi driver"
+diff --git a/Kconfig.rttpkg b/Kconfig.rttpkg
+index 212d727..2a0b607 100644
+--- a/Kconfig.rttpkg
++++ b/Kconfig.rttpkg
+@@ -428,6 +428,11 @@ if PKG_USING_CHERRYUSB
+             select CONFIG_USBHOST_PLATFORM_RTL8152
+             default n
+ 
++        config PKG_CHERRYUSB_HOST_AIC8800
++            bool
++            prompt "Enable usb aic8800 wifi driver"
++            default n
++
+         config PKG_CHERRYUSB_HOST_FTDI
+             bool
+             prompt "Enable usb ftdi driver"
+diff --git a/SConscript b/SConscript
+index 2eeed78..4097bf0 100644
+--- a/SConscript
++++ b/SConscript
+@@ -320,6 +320,8 @@ if GetDepend(['PKG_CHERRYUSB_HOST']):
+         src += Glob('class/vendor/net/usbh_asix.c')
+     if GetDepend(['PKG_CHERRYUSB_HOST_RTL8152']):
+         src += Glob('class/vendor/net/usbh_rtl8152.c')
++    if GetDepend(['PKG_CHERRYUSB_HOST_AIC8800']):
++        src += Glob('class/vendor/wifi/usbh_aic8800.c')
+     if GetDepend(['PKG_CHERRYUSB_HOST_FTDI']):
+         src += Glob('class/serial/usbh_ftdi.c')
+     if GetDepend(['PKG_CHERRYUSB_HOST_CH34X']):
+diff --git a/cherryusb.cmake b/cherryusb.cmake
+index fac45b3..831fec4 100644
+--- a/cherryusb.cmake
++++ b/cherryusb.cmake
+@@ -26,6 +26,7 @@
+ # set(CONFIG_CHERRYUSB_HOST_BLUETOOTH 1)
+ # set(CONFIG_CHERRYUSB_HOST_ASIX 1)
+ # set(CONFIG_CHERRYUSB_HOST_RTL8152 1)
++# set(CONFIG_CHERRYUSB_HOST_AIC8800 1)
+ # set(CONFIG_CHERRYUSB_HOST_DWC2_ST 1)
+ # set(CONFIG_CHERRYUSB_HOST_XBOX 1)
+ 
+@@ -245,6 +246,9 @@ if(CONFIG_CHERRYUSB_HOST)
+     if(CONFIG_CHERRYUSB_HOST_RTL8152)
+         list(APPEND cherryusb_srcs ${CMAKE_CURRENT_LIST_DIR}/class/vendor/net/usbh_rtl8152.c)
+     endif()
++    if(CONFIG_CHERRYUSB_HOST_AIC8800)
++        list(APPEND cherryusb_srcs ${CMAKE_CURRENT_LIST_DIR}/class/vendor/wifi/usbh_aic8800.c)
++    endif()
+     if(CONFIG_CHERRYUSB_HOST_CH34X)
+         list(APPEND cherryusb_srcs ${CMAKE_CURRENT_LIST_DIR}/class/serial/usbh_ch34x.c)
+     endif()
+diff --git a/cherryusb_config_template.h b/cherryusb_config_template.h
+index 5dd1b62..d86c931 100644
+--- a/cherryusb_config_template.h
++++ b/cherryusb_config_template.h
+@@ -217,6 +217,9 @@
+  */
+ // #define CONFIG_USBHOST_MSC_MODESWITCH_FORCE_REENUMERATE
+ 
++/* Register AIC8800 1111:1111 ZeroCD in usbh_aic8800. Needs MSC class. */
++// #define CONFIG_USBHOST_AIC8800_ZEROCD
++
+ /* This parameter affects usb performance, and depends on (TCP_WND)tcp eceive windows size,
+  * you can change to 2K ~ 16K and must be larger than TCP RX windows size in order to avoid being overflow.
+  */
+diff --git a/class/vendor/wifi/usbh_aic8800.c b/class/vendor/wifi/usbh_aic8800.c
+new file mode 100644
+index 0000000..68d0912
+--- /dev/null
++++ b/class/vendor/wifi/usbh_aic8800.c
+@@ -0,0 +1,380 @@
++/*
++ * Copyright (c) 2026, sakumisu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * AIC8800 USB Wi-Fi host class. This file stops at discovery and raw
++ * bulk transport. Firmware, FMAC and lwIP stay in the application.
++ */
++#include "usbh_core.h"
++#include "usbh_aic8800.h"
++
++#ifdef CONFIG_USBHOST_AIC8800_ZEROCD
++#include "usbh_msc.h"
++#endif
++
++#include <string.h>
++
++#undef USB_DBG_TAG
++#define USB_DBG_TAG "usbh_aic8800"
++#include "usb_log.h"
++
++#define DEV_FORMAT "/dev/aic8800"
++
++#define AIC8800_USB_INTERFACE_CLASS    0xffU
++#define AIC8800_USB_INTERFACE_SUBCLASS 0xffU
++#define AIC8800_USB_INTERFACE_PROTOCOL 0xffU
++
++static struct usbh_aic8800 g_aic8800_class;
++
++#ifdef CONFIG_USBHOST_AIC8800_ZEROCD
++/*
++ * 1111:1111 AIC8800D80 adapters initially expose a virtual CD-ROM.
++ * The payload is a standard USB MSC CBW with vendor SCSI CDB
++ * "FD 00 ... 00 F2". There is no data phase; the device normally
++ * disconnects and comes back as a69c:8d80.
++ */
++static const uint8_t g_aic8800_zero_cd_cbw[31] = {
++    0x55, 0x53, 0x42, 0x43,
++    0x87, 0x65, 0x43, 0x21,
++    0x00, 0x00, 0x00, 0x00,
++    0x00,
++    0x00,
++    0x10,
++    0xfd, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0xf2
++};
++
++static struct usbh_msc_modeswitch_config g_aic8800_modeswitch[] = {
++    {
++        .name = "AIC8800D80 ZeroCD",
++        .vid = 0x1111U,
++        .pid = 0x1111U,
++        .message_content = g_aic8800_zero_cd_cbw,
++    },
++    { 0 }
++};
++#endif
++
++void usbh_aic8800_enable_zero_cd_modeswitch(void)
++{
++#ifdef CONFIG_USBHOST_AIC8800_ZEROCD
++    usbh_msc_modeswitch_enable(g_aic8800_modeswitch);
++    USB_LOG_INFO("1111:1111 ZeroCD mode switch registered\r\n");
++#if !defined(CONFIG_USBHOST_MSC_MODESWITCH_NO_CSW) || \
++    !defined(CONFIG_USBHOST_MSC_MODESWITCH_FORCE_REENUMERATE)
++    USB_LOG_WRN("ZeroCD needs CONFIG_USBHOST_MSC_MODESWITCH_NO_CSW and FORCE_REENUMERATE\r\n");
++#endif
++#else
++    USB_LOG_WRN("CONFIG_USBHOST_AIC8800_ZEROCD is not enabled\r\n");
++#endif
++}
++
++static bool usbh_aic8800_product_is_runtime(uint16_t product_id)
++{
++    switch (product_id) {
++        case USBH_AIC8800_PID_8801:
++        case USBH_AIC8800_PID_DC:
++        case USBH_AIC8800_PID_DW:
++        case USBH_AIC8800_PID_D81:
++        case USBH_AIC8800_PID_D83:
++        case USBH_AIC8800_PID_D84:
++        case USBH_AIC8800_PID_D85:
++        case USBH_AIC8800_PID_D86:
++        case USBH_AIC8800_PID_D88:
++        case USBH_AIC8800_PID_D41:
++        case USBH_AIC8800_PID_D81X2:
++        case USBH_AIC8800_PID_D89X2:
++            return true;
++        default:
++            return false;
++    }
++}
++
++static enum usbh_aic8800_family usbh_aic8800_get_family(uint16_t vendor_id,
++                                                        uint16_t product_id)
++{
++    if (vendor_id == USBH_AIC8800_VID) {
++        if ((product_id == USBH_AIC8800_PID_8800) ||
++            (product_id == USBH_AIC8800_PID_8801)) {
++            return USBH_AIC8800_FAMILY_8800;
++        }
++        if ((product_id == USBH_AIC8800_PID_D40_BOOT) ||
++            (product_id == USBH_AIC8800_PID_D41) ||
++            (product_id == USBH_AIC8800_PID_D80_BOOT) ||
++            ((product_id >= USBH_AIC8800_PID_D81) &&
++             (product_id <= USBH_AIC8800_PID_D88))) {
++            return USBH_AIC8800_FAMILY_D80;
++        }
++        if ((product_id == USBH_AIC8800_PID_DC) ||
++            (product_id == USBH_AIC8800_PID_DW)) {
++            return USBH_AIC8800_FAMILY_DC;
++        }
++    }
++
++    if (vendor_id == USBH_AIC8800_VID_V2) {
++        if ((product_id == USBH_AIC8800_PID_D80X2_BOOT) ||
++            (product_id == USBH_AIC8800_PID_D81X2) ||
++            (product_id == USBH_AIC8800_PID_D89X2)) {
++            return USBH_AIC8800_FAMILY_D80X2;
++        }
++        if ((product_id >= USBH_AIC8800_PID_D81) &&
++            (product_id <= USBH_AIC8800_PID_D88)) {
++            return USBH_AIC8800_FAMILY_D80;
++        }
++    }
++    return USBH_AIC8800_FAMILY_UNKNOWN;
++}
++
++static const char *usbh_aic8800_family_name(enum usbh_aic8800_family family)
++{
++    switch (family) {
++        case USBH_AIC8800_FAMILY_8800:  return "AIC8800/AIC8801";
++        case USBH_AIC8800_FAMILY_D80:   return "AIC8800D80/D40";
++        case USBH_AIC8800_FAMILY_D80X2: return "AIC8800D80X2";
++        case USBH_AIC8800_FAMILY_DC:    return "AIC8800DC/DW";
++        default:                        return "unknown";
++    }
++}
++
++struct usbh_aic8800 *usbh_aic8800_get_device(void)
++{
++    return g_aic8800_class.online ? &g_aic8800_class : NULL;
++}
++
++int usbh_aic8800_bulk_send(struct usbh_aic8800 *aic8800_class,
++                           const void *data, uint32_t length,
++                           uint32_t timeout_ms, bool message_pipe)
++{
++    struct usb_endpoint_descriptor *endpoint;
++    int ret;
++
++    if ((aic8800_class == NULL) || !aic8800_class->online ||
++        (aic8800_class->hport == NULL) || !aic8800_class->hport->connected ||
++        (data == NULL) || (length == 0U)) {
++        return -USB_ERR_INVAL;
++    }
++    endpoint = (message_pipe && (aic8800_class->message_out != NULL)) ?
++               aic8800_class->message_out : aic8800_class->data_out;
++    if (endpoint == NULL) {
++        return -USB_ERR_NODEV;
++    }
++
++    usbh_bulk_urb_fill(&aic8800_class->tx_urb, aic8800_class->hport, endpoint,
++                       (uint8_t *)data, length, timeout_ms, NULL, NULL);
++    ret = usbh_submit_urb(&aic8800_class->tx_urb);
++    if (ret < 0) {
++        return ret;
++    }
++    return (int)aic8800_class->tx_urb.actual_length;
++}
++
++int usbh_aic8800_bulk_receive(struct usbh_aic8800 *aic8800_class,
++                              void *data, uint32_t capacity,
++                              uint32_t timeout_ms, bool message_pipe)
++{
++    struct usb_endpoint_descriptor *endpoint;
++    int ret;
++
++    if ((aic8800_class == NULL) || !aic8800_class->online ||
++        (aic8800_class->hport == NULL) || !aic8800_class->hport->connected ||
++        (data == NULL) || (capacity == 0U)) {
++        return -USB_ERR_INVAL;
++    }
++    endpoint = (message_pipe && (aic8800_class->message_in != NULL)) ?
++               aic8800_class->message_in : aic8800_class->data_in;
++    if (endpoint == NULL) {
++        return -USB_ERR_NODEV;
++    }
++
++    usbh_bulk_urb_fill(&aic8800_class->rx_urb, aic8800_class->hport, endpoint,
++                       (uint8_t *)data, capacity, timeout_ms, NULL, NULL);
++    ret = usbh_submit_urb(&aic8800_class->rx_urb);
++    if (ret < 0) {
++        return ret;
++    }
++    return (int)aic8800_class->rx_urb.actual_length;
++}
++
++int usbh_aic8800_bulk_receive_async(struct usbh_aic8800 *aic8800_class,
++                                    void *data, uint32_t capacity,
++                                    usbh_complete_callback_t complete,
++                                    void *arg, bool message_pipe)
++{
++    struct usb_endpoint_descriptor *endpoint;
++
++    if ((aic8800_class == NULL) || !aic8800_class->online ||
++        (aic8800_class->hport == NULL) || !aic8800_class->hport->connected ||
++        (data == NULL) || (capacity == 0U) || (complete == NULL)) {
++        return -USB_ERR_INVAL;
++    }
++    endpoint = (message_pipe && (aic8800_class->message_in != NULL)) ?
++               aic8800_class->message_in : aic8800_class->data_in;
++    if (endpoint == NULL) {
++        return -USB_ERR_NODEV;
++    }
++
++    usbh_bulk_urb_fill(&aic8800_class->rx_urb, aic8800_class->hport, endpoint,
++                       (uint8_t *)data, capacity, 0U, complete, arg);
++    return usbh_submit_urb(&aic8800_class->rx_urb);
++}
++
++void usbh_aic8800_abort_receive(struct usbh_aic8800 *aic8800_class)
++{
++    if ((aic8800_class != NULL) && (aic8800_class->rx_urb.hcpriv != NULL)) {
++        usbh_kill_urb(&aic8800_class->rx_urb);
++    }
++}
++
++__WEAK void usbh_aic8800_run(struct usbh_aic8800 *aic8800_class)
++{
++    (void)aic8800_class;
++}
++
++__WEAK void usbh_aic8800_stop(struct usbh_aic8800 *aic8800_class)
++{
++    (void)aic8800_class;
++}
++
++static int usbh_aic8800_connect(struct usbh_hubport *hport, uint8_t intf)
++{
++    struct usbh_aic8800 *aic8800_class = &g_aic8800_class;
++    struct usbh_interface_altsetting *setting;
++    uint8_t index;
++
++    if ((hport == NULL) || aic8800_class->online) {
++        return -USB_ERR_BUSY;
++    }
++
++    memset(aic8800_class, 0, sizeof(*aic8800_class));
++    aic8800_class->hport = hport;
++    aic8800_class->intf = intf;
++    aic8800_class->vendor_id = hport->device_desc.idVendor;
++    aic8800_class->product_id = hport->device_desc.idProduct;
++    aic8800_class->family = usbh_aic8800_get_family(aic8800_class->vendor_id,
++                                                    aic8800_class->product_id);
++    aic8800_class->runtime = usbh_aic8800_product_is_runtime(aic8800_class->product_id);
++
++    setting = &hport->config.intf[intf].altsetting[0];
++    for (index = 0U; index < setting->intf_desc.bNumEndpoints; index++) {
++        struct usb_endpoint_descriptor *endpoint = &setting->ep[index].ep_desc;
++
++        if (USB_GET_ENDPOINT_TYPE(endpoint->bmAttributes) !=
++            USB_ENDPOINT_TYPE_BULK) {
++            continue;
++        }
++        if ((endpoint->bEndpointAddress & USB_ENDPOINT_DIRECTION_MASK) != 0U) {
++            if (aic8800_class->data_in == NULL) {
++                USBH_EP_INIT(aic8800_class->data_in, endpoint);
++            } else if (aic8800_class->message_in == NULL) {
++                USBH_EP_INIT(aic8800_class->message_in, endpoint);
++            }
++        } else {
++            if (aic8800_class->data_out == NULL) {
++                USBH_EP_INIT(aic8800_class->data_out, endpoint);
++            } else if (aic8800_class->message_out == NULL) {
++                USBH_EP_INIT(aic8800_class->message_out, endpoint);
++            }
++        }
++    }
++
++    if ((aic8800_class->data_in == NULL) || (aic8800_class->data_out == NULL)) {
++        USB_LOG_ERR("AIC %04x:%04x has no bulk endpoint pair\r\n",
++                    aic8800_class->vendor_id, aic8800_class->product_id);
++        memset(aic8800_class, 0, sizeof(*aic8800_class));
++        return -USB_ERR_NODEV;
++    }
++
++    hport->config.intf[intf].priv = aic8800_class;
++    strncpy(hport->config.intf[intf].devname, DEV_FORMAT,
++            CONFIG_USBHOST_DEV_NAMELEN - 1U);
++    hport->config.intf[intf].devname[CONFIG_USBHOST_DEV_NAMELEN - 1U] = '\0';
++    aic8800_class->online = true;
++
++    USB_LOG_INFO("Register AIC8800 Class:%s %04x:%04x, %s, %s\r\n",
++                 hport->config.intf[intf].devname,
++                 aic8800_class->vendor_id, aic8800_class->product_id,
++                 usbh_aic8800_family_name(aic8800_class->family),
++                 aic8800_class->runtime ? "runtime" : "boot-loader");
++    USB_LOG_INFO("AIC pipes data=%02x/%02x message=%02x/%02x\r\n",
++                 aic8800_class->data_in->bEndpointAddress,
++                 aic8800_class->data_out->bEndpointAddress,
++                 aic8800_class->message_in ? aic8800_class->message_in->bEndpointAddress : 0U,
++                 aic8800_class->message_out ? aic8800_class->message_out->bEndpointAddress : 0U);
++
++    usbh_aic8800_run(aic8800_class);
++    return 0;
++}
++
++static int usbh_aic8800_disconnect(struct usbh_hubport *hport, uint8_t intf)
++{
++    struct usbh_aic8800 *aic8800_class;
++
++    if (hport == NULL) {
++        return 0;
++    }
++    aic8800_class = (struct usbh_aic8800 *)hport->config.intf[intf].priv;
++    if (aic8800_class == NULL) {
++        return 0;
++    }
++
++    aic8800_class->online = false;
++    usbh_aic8800_stop(aic8800_class);
++    if (aic8800_class->tx_urb.hcpriv != NULL) {
++        usbh_kill_urb(&aic8800_class->tx_urb);
++    }
++    if (aic8800_class->rx_urb.hcpriv != NULL) {
++        usbh_kill_urb(&aic8800_class->rx_urb);
++    }
++    USB_LOG_INFO("Unregister AIC8800 Class:%s\r\n", hport->config.intf[intf].devname);
++    hport->config.intf[intf].priv = NULL;
++    memset(aic8800_class, 0, sizeof(*aic8800_class));
++    return 0;
++}
++
++static const uint16_t aic8800_id_table[][2] = {
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_8800 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_8801 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_DC },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_DW },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D40_BOOT },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D41 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D80_BOOT },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D81 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D83 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D84 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D85 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D86 },
++    { USBH_AIC8800_VID,    USBH_AIC8800_PID_D88 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D81 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D83 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D84 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D85 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D86 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D88 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D80X2_BOOT },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D81X2 },
++    { USBH_AIC8800_VID_V2, USBH_AIC8800_PID_D89X2 },
++    { 0U, 0U }
++};
++
++static const struct usbh_class_driver aic8800_class_driver = {
++    .driver_name = "aic8800",
++    .connect = usbh_aic8800_connect,
++    .disconnect = usbh_aic8800_disconnect
++};
++
++CLASS_INFO_DEFINE const struct usbh_class_info aic8800_class_info = {
++    .match_flags = USB_CLASS_MATCH_VID_PID |
++                   USB_CLASS_MATCH_INTF_CLASS |
++                   USB_CLASS_MATCH_INTF_SUBCLASS |
++                   USB_CLASS_MATCH_INTF_PROTOCOL,
++    .bInterfaceClass = AIC8800_USB_INTERFACE_CLASS,
++    .bInterfaceSubClass = AIC8800_USB_INTERFACE_SUBCLASS,
++    .bInterfaceProtocol = AIC8800_USB_INTERFACE_PROTOCOL,
++    .bInterfaceNumber = 0,
++    .id_table = aic8800_id_table,
++    .class_driver = &aic8800_class_driver
++};
+diff --git a/class/vendor/wifi/usbh_aic8800.h b/class/vendor/wifi/usbh_aic8800.h
+new file mode 100644
+index 0000000..b221936
+--- /dev/null
++++ b/class/vendor/wifi/usbh_aic8800.h
+@@ -0,0 +1,87 @@
++/*
++ * Copyright (c) 2026, sakumisu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++#ifndef USBH_AIC8800_H
++#define USBH_AIC8800_H
++
++#include "usbh_core.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define USBH_AIC8800_VID    0xa69cU
++#define USBH_AIC8800_VID_V2 0x368bU
++
++#define USBH_AIC8800_PID_8800       0x8800U
++#define USBH_AIC8800_PID_8801       0x8801U
++#define USBH_AIC8800_PID_DC         0x88dcU
++#define USBH_AIC8800_PID_DW         0x88ddU
++#define USBH_AIC8800_PID_D80_BOOT   0x8d80U
++#define USBH_AIC8800_PID_D81        0x8d81U
++#define USBH_AIC8800_PID_D83        0x8d83U
++#define USBH_AIC8800_PID_D84        0x8d84U
++#define USBH_AIC8800_PID_D85        0x8d85U
++#define USBH_AIC8800_PID_D86        0x8d86U
++#define USBH_AIC8800_PID_D88        0x8d88U
++#define USBH_AIC8800_PID_D40_BOOT   0x8d40U
++#define USBH_AIC8800_PID_D41        0x8d41U
++#define USBH_AIC8800_PID_D80X2_BOOT 0x8d90U
++#define USBH_AIC8800_PID_D81X2      0x8d91U
++#define USBH_AIC8800_PID_D89X2      0x8d99U
++
++enum usbh_aic8800_family {
++    USBH_AIC8800_FAMILY_UNKNOWN = 0,
++    USBH_AIC8800_FAMILY_8800,
++    USBH_AIC8800_FAMILY_D80,
++    USBH_AIC8800_FAMILY_D80X2,
++    USBH_AIC8800_FAMILY_DC
++};
++
++struct usbh_aic8800 {
++    struct usbh_hubport *hport;
++    struct usb_endpoint_descriptor *data_in;
++    struct usb_endpoint_descriptor *data_out;
++    struct usb_endpoint_descriptor *message_in;
++    struct usb_endpoint_descriptor *message_out;
++    struct usbh_urb tx_urb;
++    struct usbh_urb rx_urb;
++    enum usbh_aic8800_family family;
++    uint16_t vendor_id;
++    uint16_t product_id;
++    uint8_t intf;
++    bool runtime;
++    volatile bool online;
++};
++
++struct usbh_aic8800 *usbh_aic8800_get_device(void);
++
++/*
++ * Register the 1111:1111 ZeroCD SCSI message. Call once before
++ * usbh_initialize(). Requires CONFIG_USBHOST_AIC8800_ZEROCD and the
++ * MSC modeswitch macros in usb_config.h.
++ */
++void usbh_aic8800_enable_zero_cd_modeswitch(void);
++
++int usbh_aic8800_bulk_send(struct usbh_aic8800 *aic8800_class,
++                           const void *data, uint32_t length,
++                           uint32_t timeout_ms, bool message_pipe);
++int usbh_aic8800_bulk_receive(struct usbh_aic8800 *aic8800_class,
++                              void *data, uint32_t capacity,
++                              uint32_t timeout_ms, bool message_pipe);
++int usbh_aic8800_bulk_receive_async(struct usbh_aic8800 *aic8800_class,
++                                    void *data, uint32_t capacity,
++                                    usbh_complete_callback_t complete,
++                                    void *arg, bool message_pipe);
++void usbh_aic8800_abort_receive(struct usbh_aic8800 *aic8800_class);
++
++void usbh_aic8800_run(struct usbh_aic8800 *aic8800_class);
++void usbh_aic8800_stop(struct usbh_aic8800 *aic8800_class);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* USBH_AIC8800_H */
+diff --git a/demo/usbh_aic8800_template.c b/demo/usbh_aic8800_template.c
+new file mode 100644
+index 0000000..37bfabc
+--- /dev/null
++++ b/demo/usbh_aic8800_template.c
+@@ -0,0 +1,37 @@
++/*
++ * Copyright (c) 2026, sakumisu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Minimal AIC8800 host hook. This file only shows USB attach/detach.
++ * For STA + lwIP see demo/aic8800/usbh_aic8800_wifi_template.c.
++ */
++#include "usbh_core.h"
++#include "usbh_aic8800.h"
++
++void usbh_aic8800_run(struct usbh_aic8800 *aic8800_class)
++{
++    USB_LOG_INFO("aic8800 %04x:%04x %s\r\n",
++                 aic8800_class->vendor_id,
++                 aic8800_class->product_id,
++                 aic8800_class->runtime ? "runtime" : "boot-loader");
++
++    if (!aic8800_class->runtime) {
++        /* Download firmware on the BootROM pipes, then wait for 8d81. */
++    } else {
++        /* Start the FullMAC / netif layer here. */
++    }
++}
++
++void usbh_aic8800_stop(struct usbh_aic8800 *aic8800_class)
++{
++    (void)aic8800_class;
++}
++
++void usbh_aic8800_template_init(uint8_t busid, uint32_t reg_base)
++{
++#ifdef CONFIG_USBHOST_AIC8800_ZEROCD
++    usbh_aic8800_enable_zero_cd_modeswitch();
++#endif
++    usbh_initialize(busid, reg_base, NULL);
++}
+diff --git a/docs/en/api/api_config.rst b/docs/en/api/api_config.rst
+index b2118f8..9b5af8a 100755
+--- a/docs/en/api/api_config.rst
++++ b/docs/en/api/api_config.rst
+@@ -184,4 +184,10 @@ CONFIG_USBHOST_MSC_MODESWITCH_FORCE_REENUMERATE
+ 
+ After MSC modeswitch, force the parent hub port to re-enumerate and do
+ not register the temporary MSC device. Requires
+-``CONFIG_USBHOST_HUB_FORCE_REENUMERATE``. Disabled by default.
+\ No newline at end of file
++``CONFIG_USBHOST_HUB_FORCE_REENUMERATE``. Disabled by default.
++
++CONFIG_USBHOST_AIC8800_ZEROCD
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++Register the AIC8800 ``1111:1111`` ZeroCD message in ``usbh_aic8800``.
++Requires the host MSC class. Disabled by default.
+\ No newline at end of file
+diff --git a/docs/en/demo/usbh_wifi.rst b/docs/en/demo/usbh_wifi.rst
+index 588e813..61a4675 100755
+--- a/docs/en/demo/usbh_wifi.rst
++++ b/docs/en/demo/usbh_wifi.rst
+@@ -1,2 +1,90 @@
+ WIFI Host
+ =================
++
++CherryUSB only hosts the USB transport for vendor Wi-Fi dongles. Scan,
++association, WPA2 and the IP stack stay in the application.
++
++AIC8800
++-----------------
++
++``class/vendor/wifi/usbh_aic8800.c`` matches vendor-specific ``FF/FF/FF``
++interfaces. It binds bulk pipes, then calls ``usbh_aic8800_run()``.
++Override that weak hook to load firmware and start FullMAC. Override
++``usbh_aic8800_stop()`` on disconnect.
++
++The class does **not** implement Wi-Fi. It does not start lwIP.
++
++Enumeration
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++Typical AIC8800D80 stick:
++
++1. ``1111:1111`` virtual CD-ROM (ZeroCD)
++2. ``a69c:8d80`` BootROM
++3. ``a69c:8d81`` runtime Wi-Fi (often a composite device)
++
++ZeroCD needs MSC plus these macros in ``usb_config.h``:
++
++.. code-block:: c
++
++   #define CONFIG_USBHOST_HUB_FORCE_REENUMERATE
++   #define CONFIG_USBHOST_MSC_MODESWITCH_NO_CSW
++   #define CONFIG_USBHOST_MSC_MODESWITCH_FORCE_REENUMERATE
++   #define CONFIG_USBHOST_MSC_MODESWITCH_DELAY_MS 350
++   #define CONFIG_USBHOST_AIC8800_ZEROCD
++
++Call ``usbh_aic8800_enable_zero_cd_modeswitch()`` once before
++``usbh_initialize()``. The modeswitch CBW has no CSW; the reconnect pulse
++is short, so the host must force hub re-enumeration.
++
++Runtime composite
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++Runtime ``8d81`` usually exposes:
++
++- interface 2: Wi-Fi ``FF/FF/FF`` (this class)
++- two Bluetooth ``e0/01/01`` interfaces (use ``usbh_bluetooth`` if needed)
++
++``USB_CLASS_MATCH_INTF_NUM`` is not set, so the class binds the matching
++``FF/FF/FF`` interface even when ``bInterfaceNumber`` is 2.
++
++Endpoints
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++The first bulk IN/OUT pair is the data pipe. A second pair, if present,
++is the message pipe. ``usbh_aic8800_bulk_send()`` /
++``usbh_aic8800_bulk_receive()`` take ``message_pipe`` to choose.
++
++Minimal hook
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++USB-only hook: ``demo/usbh_aic8800_template.c``.
++Wi-Fi + lwIP: ``demo/aic8800/`` (see the stacked STA demo).
++
++.. code-block:: c
++
++   usbh_aic8800_enable_zero_cd_modeswitch();
++   usbh_initialize(0, USB_BASE, NULL);
++
++   void usbh_aic8800_run(struct usbh_aic8800 *aic8800_class)
++   {
++       if (!aic8800_class->runtime) {
++           /* download firmware, then wait for 8d81 */
++       } else {
++           /* start FullMAC / lwIP in the application */
++       }
++   }
++
++Build
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++Enable ``CONFIG_CHERRYUSB_HOST_AIC8800`` (CMake) or
++``CHERRYUSB_HOST_AIC8800`` / ``PKG_CHERRYUSB_HOST_AIC8800`` (Kconfig).
++Also enable the host MSC class when using ZeroCD. Link with
++``-u aic8800_class_info`` so the class table is not dropped.
++
++BL616
++-----------------
++
++``demo/usbh_bl616_wifi_cli.c`` talks to a BL616 AT firmware over CDC ACM.
++It is not an AIC8800 FullMAC driver.
+diff --git a/docs/zh/api/api_config.rst b/docs/zh/api/api_config.rst
+index 8aba753..6ec960d 100644
+--- a/docs/zh/api/api_config.rst
++++ b/docs/zh/api/api_config.rst
+@@ -183,4 +183,10 @@ CONFIG_USBHOST_MSC_MODESWITCH_FORCE_REENUMERATE
+ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 
+ MSC modeswitch 后强制父 hub 端口重新枚举，并且不注册临时 MSC 设备。
+-需要 ``CONFIG_USBHOST_HUB_FORCE_REENUMERATE``。默认关闭。
+\ No newline at end of file
++需要 ``CONFIG_USBHOST_HUB_FORCE_REENUMERATE``。默认关闭。
++
++CONFIG_USBHOST_AIC8800_ZEROCD
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++在 ``usbh_aic8800`` 中注册 AIC8800 ``1111:1111`` ZeroCD 命令。需要 host MSC。
++默认关闭。
+\ No newline at end of file
+diff --git a/docs/zh/demo/usbh_wifi.rst b/docs/zh/demo/usbh_wifi.rst
+index 588e813..e360b5b 100644
+--- a/docs/zh/demo/usbh_wifi.rst
++++ b/docs/zh/demo/usbh_wifi.rst
+@@ -1,2 +1,88 @@
+ WIFI Host
+ =================
++
++CherryUSB 只提供厂商 Wi-Fi 网卡的 USB 传输。扫描、关联、WPA2 和 IP 协议栈
++都在应用侧。
++
++AIC8800
++-----------------
++
++``class/vendor/wifi/usbh_aic8800.c`` 匹配厂商接口 ``FF/FF/FF``，绑定 bulk
++管道后调用 ``usbh_aic8800_run()``。覆盖这个弱符号以下载固件、启动 FullMAC；
++断开时覆盖 ``usbh_aic8800_stop()``。
++
++class **不实现 Wi-Fi**，也不会启动 lwIP。
++
++枚举过程
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++常见 AIC8800D80 网卡：
++
++1. ``1111:1111`` 虚拟光驱（ZeroCD）
++2. ``a69c:8d80`` BootROM
++3. ``a69c:8d81`` 运行时 Wi-Fi（常是复合设备）
++
++ZeroCD 需要 MSC，并在 ``usb_config.h`` 打开：
++
++.. code-block:: c
++
++   #define CONFIG_USBHOST_HUB_FORCE_REENUMERATE
++   #define CONFIG_USBHOST_MSC_MODESWITCH_NO_CSW
++   #define CONFIG_USBHOST_MSC_MODESWITCH_FORCE_REENUMERATE
++   #define CONFIG_USBHOST_MSC_MODESWITCH_DELAY_MS 350
++   #define CONFIG_USBHOST_AIC8800_ZEROCD
++
++在 ``usbh_initialize()`` 之前调用一次
++``usbh_aic8800_enable_zero_cd_modeswitch()``。该 CBW 没有 CSW，重连脉冲
++很短，主机必须强制 hub 重新枚举。
++
++运行时复合设备
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++``8d81`` 通常是：
++
++- 接口 2：Wi-Fi ``FF/FF/FF``（本 class）
++- 两个蓝牙 ``e0/01/01`` 接口（需要时用 ``usbh_bluetooth``）
++
++没有设置 ``USB_CLASS_MATCH_INTF_NUM``，所以即使 ``bInterfaceNumber`` 是 2
++也能绑到 ``FF/FF/FF``。
++
++端点
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++第一对 bulk IN/OUT 是数据管道，第二对（如果有）是消息管道。
++``usbh_aic8800_bulk_send()`` / ``usbh_aic8800_bulk_receive()`` 用
++``message_pipe`` 选择。
++
++最小对接
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++只做 USB：``demo/usbh_aic8800_template.c``。
++上网：``demo/aic8800/``。
++
++.. code-block:: c
++
++   usbh_aic8800_enable_zero_cd_modeswitch();
++   usbh_initialize(0, USB_BASE, NULL);
++
++   void usbh_aic8800_run(struct usbh_aic8800 *aic8800_class)
++   {
++       if (!aic8800_class->runtime) {
++           /* 下载固件，等待 8d81 */
++       } else {
++           /* 应用里启动 FullMAC / lwIP */
++       }
++   }
++
++编译
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++打开 ``CONFIG_CHERRYUSB_HOST_AIC8800``（CMake）或
++``CHERRYUSB_HOST_AIC8800`` / ``PKG_CHERRYUSB_HOST_AIC8800``（Kconfig）。
++使用 ZeroCD 时还要打开 host MSC。链接时加 ``-u aic8800_class_info``。
++
++BL616
++-----------------
++
++``demo/usbh_bl616_wifi_cli.c`` 是对 BL616 AT 固件走 CDC ACM，不是 AIC8800
++FullMAC 驱动。
+-- 
+2.43.0
+

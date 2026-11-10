@@ -1,7 +1,8 @@
 # STATUS
 
 - Updated: 2026-11-10
-- Stage: **compile and link** (the stack is not built against this repository yet)
+- Stage: **the RTOS line builds its acceptance images**; no board boot is
+  recorded in this repository yet.
 
 ## Stages
 
@@ -10,13 +11,17 @@ below it has been reached; "compiles" and "links" are not "runs".
 
 | Stage | Meaning | State |
 |---|---|---|
-| C0 compile | the stack's translation units produce object files | not started |
-| C1 link | no undefined symbols | not started |
-| C2 register | the stack accepts a device registration | not started |
-| C3 attach | a driver probes, firmware loads, start completes | not started |
-| C4 scan | a scan returns the target BSS | not started |
-| C5 associate | link establishment completes | not started |
-| C6 data | frames cross in both directions | not started |
+| C0 compile | the profile's translation units produce object files | **reached** for `rk3568-tick`, `rk3568-net`, `rk3568-pcie-nvme`, `rk3568-emmc`, `rk3568-usb-msc` |
+| C1 link | no undefined symbols; the linker gates pass | **reached** for the same five (gates: `_start`, vector table, backend symbols, 0 undefined) |
+| B board | two clean cold boots per profile, judged by `tools/rtos/judge.py` | not yet recorded here |
+| K component | `components/liblinux80211/` builds as its own archive and proves its bus seams on the board | not started |
+
+## Receipts
+
+The C0/C1 numbers are the image lines in the build logs; the per-profile
+sha256/size are printed by the build itself (`build/build-info-freertos.txt`).
+Board evidence, when it lands, goes under the project's `runs/` ledger, not
+here: this file only says which stage has been reached.
 
 ## Preconditions
 

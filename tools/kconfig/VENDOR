@@ -1,0 +1,11 @@
+name: Kconfiglib
+version: 14.1.0
+upstream: https://github.com/zephyrproject-rtos/Kconfiglib
+vendored-from: zephyrproject-rtos/zephyr
+commit: 0534e997eacb94bae1df6c9a7dd4a9a6cbf1cecf
+paths: scripts/kconfig/kconfiglib.py, scripts/kconfig/menuconfig.py
+license: ISC (see LICENSE.txt)
+vendored: 2026-11-02
+sha256:
+  dd2e0aa56d16e3e08e24928477b31a6f34c73fd7159a001aabc6b2702cb99a43  kconfiglib.py
+  3d3805b6b665c2b7458a199fd8e31eaa8feb10e60568465320e89882e06e2b11  menuconfig.py
