@@ -342,8 +342,8 @@ BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 USB_CASES := usb_xhci usb_ehci
 KPI_CASES := kpi_live kpi_mock
 # The wireless cases compile in the stack's flag world (wl80211.mk), not the
-# plain application world, so they are kept out of the generic list.
-WL80211_CASES := mac80211_c2 iwl7260_c3
+# plain application world, so they are kept out of the generic list.  The list
+# itself is wl80211.mk's (WL80211_CASES), defined before this point.
 CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 APP_SRCS := \
@@ -518,7 +518,7 @@ $(foreach s,$(filter-out %.S,$(KPI_ALL_SRCS)),$(eval $(call COMPILE_C,$(s),$(KPI
 endif
 
 ifneq ($(strip $(WL80211_ALL_SRCS)),)
-$(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
 endif
 

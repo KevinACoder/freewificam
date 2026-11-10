@@ -216,16 +216,28 @@ alloc_netdev_dummy(int sizeof_priv)
 /* :1847 register_netdevice, custom_gpio_linux.c:312 dev_get_by_name)   */
 /* ------------------------------------------------------------------ */
 
+static void lkpi_netdev_notify(unsigned long event, struct net_device *dev);
+
+/* [LNX] net/core/dev.c: dev_new_index().  The port's registry is a small
+ * array, so a monotonic counter is the index; zero is "unset" and the lookup
+ * already compares the stored value.  nl80211 resolves an interface by
+ * NL80211_ATTR_IFINDEX, so a registered device must have a non-zero one. */
+static unsigned int lkpi_netdev_ifindex;
+
 int
 register_netdev(struct net_device *dev)
 {
 
 	if (dev == NULL)
 		return -EINVAL;
+	if (dev->ifindex == 0)
+		dev->ifindex = (int)++lkpi_netdev_ifindex;
+	lkpi_netdev_notify(NETDEV_POST_INIT, dev);
 	if (!lkpi_netdev_track(dev))
 		return 0;		/* already findable by name */
 	/* the device is present; the link's carrier is the driver's to raise */
 	set_bit(__LINK_STATE_PRESENT, &dev->state);
+	lkpi_netdev_notify(NETDEV_REGISTER, dev);
 	lkpi_printf(ULOG_INFO_LEVEL, "lkpi netdev: registered %s\n", dev->name);
 	return 0;
 }
@@ -234,8 +246,10 @@ void
 unregister_netdev(struct net_device *dev)
 {
 
-	if (dev != NULL)
+	if (dev != NULL) {
+		lkpi_netdev_notify(NETDEV_UNREGISTER, dev);
 		lkpi_netdev_untrack(dev);
+	}
 }
 
 /*
@@ -324,11 +338,27 @@ lkpi_notifier_del(struct notifier_block **chain, struct notifier_block *nb)
 
 /*
  * The chains are recorded so registration succeeds and unregistration is exact.
- * No event is delivered: nothing on this port raises NETDEV_* (there is no
- * rtnetlink core) and the driver's own notifier acts only on NETDEV_CHANGENAME /
- * NETDEV_PRE_UP (os_intfs.c:1565-1578), neither of which the probe or scan path
- * produces. Delivering a synthetic event would be inventing state.
+ * Registration delivers the two events the interface's own core delivers:
+ * NETDEV_POST_INIT (cfg80211's notifier sets wdev->netdev there - without it a
+ * registered wlan0 has a wireless_dev whose netdev is NULL, and nl80211's
+ * ifindex lookup answers -ENODEV) and NETDEV_REGISTER.  Events this port has no
+ * producer for (CHANGE, UP/DOWN, ...) are not invented; the scan path does not
+ * need them.
  */
+static void
+lkpi_netdev_notify(unsigned long event, struct net_device *dev)
+{
+	struct netdev_notifier_info info;
+	unsigned int i;
+
+	memset(&info, 0, sizeof(info));
+	info.dev = dev;
+	for (i = 0; i < CONFIG_LKPI_NOTIFIER_MAX; i++)
+		if (lkpi_netdev_notifiers[i] != NULL &&
+		    lkpi_netdev_notifiers[i]->notifier_call != NULL)
+			(void)lkpi_netdev_notifiers[i]->notifier_call(
+				lkpi_netdev_notifiers[i], event, &info);
+}
 int
 register_netdevice_notifier(struct notifier_block *nb)
 {
@@ -796,6 +826,11 @@ dev_open(struct net_device *dev)
 		if (r != 0)
 			return r;
 	}
+	/* [LNX] net/core/dev.c __dev_open(): netif_running() (and therefore
+	 * cfg80211's wdev_running()) reads this bit, not IFF_UP.  Without it the
+	 * interface is "up" to dev_open() and "down" to nl80211, which is the
+	 * shape C4's scan trigger hits first. */
+	set_bit(__LINK_STATE_START, &dev->state);
 	dev->flags |= IFF_UP;
 	return 0;
 }
@@ -808,6 +843,7 @@ dev_close(struct net_device *dev)
 		return;
 	if (dev->netdev_ops != NULL && dev->netdev_ops->ndo_stop != NULL)
 		(void)dev->netdev_ops->ndo_stop(dev);
+	clear_bit(__LINK_STATE_START, &dev->state);
 	dev->flags &= ~IFF_UP;
 }
 
@@ -899,6 +935,12 @@ __hw_addr_unsync(struct netdev_hw_addr_list *to_list,
  * through napi_complete_done().  A future packet-rate path that needs the poll
  * off the IRQ context must move it to a work item here, not change the callers.
  */
+/* The NAPI poll runs in the caller's context (the PCI threaded IRQ); the stack
+ * asks in_softirq() and warns once if it is false.  This depth is that context's
+ * honest answer: the poll is a deferred receive context, not a task's direct
+ * call.  See lkpi_in_softirq() in linuxkpi_core.c. */
+unsigned int lkpi_napi_poll_depth;
+
 bool
 napi_schedule_prep(struct napi_struct *n)
 {
@@ -919,6 +961,8 @@ __napi_schedule(struct napi_struct *n)
 		clear_bit(NAPI_STATE_SCHED, &n->state);
 		return;
 	}
+	lkpi_napi_poll_depth++;
 	(void)n->poll(n, n->weight);
+	lkpi_napi_poll_depth--;
 	clear_bit(NAPI_STATE_SCHED, &n->state);
 }

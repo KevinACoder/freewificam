@@ -37,6 +37,7 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-kpi-live` | tick pcie kpi_live | liblinux80211's PCI engine over the board's real root complex |
 | `rk3568-mac80211-c2` | tick mac80211_c2 | the real mac80211/cfg80211 stack registers a wiphy (C2); no PCI engine |
 | `rk3568-iwl7260-mac80211` | tick pcie iwl7260_c3 | the same stack + the vendored iwlwifi (72 TUs) over the AC 7260: probe, firmware ALIVE, register, `dev_open` start (C3) |
+| `rk3568-iwl7260-c4` | tick pcie iwl7260_c4 | C3's attach plus the real `NL80211_CMD_TRIGGER_SCAN` stream through nl80211: hw scan, BSS table, bench AP (C4) |
 | `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
 
 ```
@@ -195,8 +196,13 @@ Two Kconfig symbols, one flag-world include, two profiles:
 - The component's `sources.mk` stack group is still keyed by
   `CONFIG_LIBLINUX80211` so the S0/S1b measurement targets keep their source
   lists; the image include is what the new symbol gates.
-- Profiles: `rk3568-mac80211-c2` (8 MiB FreeRTOS heap) and
-  `rk3568-iwl7260-mac80211` (16 MiB). The heap is the FreeRTOS one
+- Profiles: `rk3568-mac80211-c2` (8 MiB FreeRTOS heap),
+  `rk3568-iwl7260-mac80211` (16 MiB) and `rk3568-iwl7260-c4` (16 MiB). The
+  C4 helper `linuxkpi_nl80211_probe.c` builds the real trigger attributes and
+  runs nl80211's `pre_doit`/`doit`/`post_doit`; it is compiled in the stack
+  flag world as `WL80211_PROBE_SRCS`, not in the 62/72 TU lists. The driver
+  world also sets `LKPI_ALLOC_SKB_MIN=2048` so RX frames stay linear (see
+  `docs/DIVERGENCES.md` row 45). The heap is the FreeRTOS one
   (`osMemoryAlloc -> pvPortMalloc`), not `CONFIG_HEAP_SIZE`.
 - Build-only targets (no image): `s1-driver-compile` (72 TUs, `runs/S1/driver/`)
   and `s1-link` (partial link + classified undefined list,

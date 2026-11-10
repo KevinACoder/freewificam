@@ -1597,10 +1597,14 @@ lkpi_local_bh_enable(void)
 		(void)osSemaphoreRelease(lkpi_bh_unbarrier);
 }
 
+extern unsigned int lkpi_napi_poll_depth;
+
 int
 lkpi_in_softirq(void)
 {
-	return lkpi_bh_inside != 0;
+	/* Tasklet/BH drain, or the synchronous NAPI poll (the driver's deferred
+	 * receive context); both are what the stack's softirq checks mean here. */
+	return lkpi_bh_inside != 0 || lkpi_napi_poll_depth != 0;
 }
 
 static void

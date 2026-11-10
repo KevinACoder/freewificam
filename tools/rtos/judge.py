@@ -32,6 +32,7 @@ CASES = (
     "kpi_mock",
     "mac80211_c2",
     "iwl7260_c3",
+    "iwl7260_c4",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -195,6 +196,31 @@ PATTERNS = {
     ),
     "iwl7260_c3_fail": re.compile(
         r"iwl7260_c3: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_c4_fwreg": re.compile(
+        r"iwl7260_c4: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c4_fw": re.compile(
+        r"iwl7260_c4: firmware .*loaded firmware version (?P<ver>\S+)"
+        r".*op_mode (?P<op>\S+)", re.MULTILINE
+    ),
+    "iwl7260_c4_wlan0": re.compile(
+        r"iwl7260_c4: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_c4_start": re.compile(
+        r"iwl7260_c4: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c4_scan": re.compile(
+        r"iwl7260_c4: scan ssid=(?P<ssid>\S+) freq=(?P<freq>\d+) "
+        r"rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c4_bss": re.compile(
+        r"iwl7260_c4: bss ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>\d+) signal=(?P<sig>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c4_fail": re.compile(
+        r"iwl7260_c4: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "kpi_pci_devs": re.compile(r"kpi: pci devs=(?P<n>\d+)", re.MULTILINE),
     "kpi_dev": re.compile(
@@ -1481,6 +1507,54 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append(f"iwl7260_c3: start rc={st['rc']}")
         else:
             notes.append("iwl7260_c3: start rc=0")
+
+
+    if cases.get("iwl7260_c4", {}).get("verdict") == "pass":
+        fail = found["iwl7260_c4_fail"]
+        if fail:
+            errors.append(f"iwl7260_c4: {fail['reason']}")
+        reg = found["iwl7260_c4_fwreg"]
+        if not reg:
+            errors.append("iwl7260_c4: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"iwl7260_c4: firmware registration rc={reg['rc']}")
+        fw = found["iwl7260_c4_fw"]
+        if not fw:
+            errors.append("iwl7260_c4: PASS without a firmware ALIVE line")
+        else:
+            notes.append(f"iwl7260_c4: fw {fw['ver']} {fw['op']}")
+        wl = found["iwl7260_c4_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("iwl7260_c4: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("iwl7260_c4: wlan0 has ifindex=0")
+        st = found["iwl7260_c4_start"]
+        if not st:
+            errors.append("iwl7260_c4: PASS without the start line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"iwl7260_c4: start rc={st['rc']}")
+        sc = found["iwl7260_c4_scan"]
+        if not sc:
+            errors.append("iwl7260_c4: PASS without the scan line")
+        elif int(sc["rc"]) != 0:
+            errors.append(f"iwl7260_c4: scan rc={sc['rc']}")
+        elif sc["ssid"] != "labwifi-ar-ht20s" or int(sc["freq"]) != 2432:
+            errors.append(
+                f"iwl7260_c4: scan was {sc['ssid']}@{sc['freq']}, "
+                "expected labwifi-ar-ht20s@2432")
+        bss = found["iwl7260_c4_bss"]
+        if not bss:
+            errors.append("iwl7260_c4: PASS without a BSS line")
+        else:
+            if bss["ssid"] != "labwifi-ar-ht20s":
+                errors.append(f"iwl7260_c4: BSS SSID={bss['ssid']}")
+            if bss["bssid"] != "1c:a7:70:de:29:a1":
+                errors.append(f"iwl7260_c4: BSS BSSID={bss['bssid']}")
+            if int(bss["freq"]) != 2432:
+                errors.append(f"iwl7260_c4: BSS freq={bss['freq']}")
+            notes.append(
+                f"iwl7260_c4: bss {bss['ssid']} {bss['bssid']} "
+                f"ch={bss['freq']} sig={bss['sig']}")
 
     if cases.get("mac80211_c2", {}).get("verdict") == "pass":
         fail = found["mac80211_c2_fail"]

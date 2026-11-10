@@ -30,6 +30,16 @@
 #define CONFIG_IWLWIFI_OPMODE_MODULAR		1
 
 /*
+ * The RX path allocates `alloc_skb(128)` and then hands the frame to mac80211,
+ * which linearizes management frames.  This port's linearize cannot pull page
+ * fragments in, and the pool's data slot is 2 KiB, so the driver's small
+ * allocation is raised to the slot size: the frame then stays linear and the
+ * stack's own receive path sees the beacon/probe-response bytes.  Stack and
+ * host allocations keep the exact size they ask for.
+ */
+#define LKPI_ALLOC_SKB_MIN			2048u
+
+/*
  * Deliberately absent (the `#ifdef` arms stay closed):
  *
  *   CONFIG_IWLDVM, CONFIG_IWLMLD, CONFIG_IWLMEI

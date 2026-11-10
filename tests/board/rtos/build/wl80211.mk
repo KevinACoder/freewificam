@@ -27,7 +27,7 @@
 # The board cases that compile in this world.  The platform Makefile's generic
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
-WL80211_CASES ?= mac80211_c2 iwl7260_c3
+WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -55,7 +55,13 @@ endif
 
 WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
-WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) $(WL80211_CASE_SRCS)
+# The C4 trigger helper is a bench seam, not a stack TU: it builds the real
+# attribute bytes and dispatches nl80211's own handler.  It compiles in the
+# stack flag world but is not part of the S0/S1b source lists.
+WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c
+
+WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
+	$(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)
 
 endif
 

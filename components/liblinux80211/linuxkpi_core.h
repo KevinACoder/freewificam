@@ -2992,7 +2992,16 @@ unsigned int lkpi_skb_scrub_count(void);
  * so a later push on the returned skb has the headroom Linux promises.
  * alloc_skb stays the raw zero-headroom form.  Both prototypes live in
  * skbuff/skbuff_pool.h now (pool-backed, [lkpi-stabilize] FR-1). */
-#define	alloc_skb(size, gfp)		lkpi_skb_alloc((size), (gfp))
+#ifndef LKPI_ALLOC_SKB_MIN
+#define	LKPI_ALLOC_SKB_MIN		0u
+#endif
+static __always_inline struct sk_buff *
+lkpi_alloc_skb_min(unsigned int size, unsigned int gfp)
+{
+	return lkpi_skb_alloc(size < LKPI_ALLOC_SKB_MIN ?
+			      LKPI_ALLOC_SKB_MIN : size, gfp);
+}
+#define	alloc_skb(size, gfp)		lkpi_alloc_skb_min((size), (gfp))
 #define	__dev_alloc_skb(size, gfp)	lkpi_dev_alloc_skb((size), (gfp))
 #define	dev_alloc_skb(size)		lkpi_dev_alloc_skb((size), GFP_ATOMIC)
 #define	kfree_skb(skb)			lkpi_skb_free(skb)
@@ -4180,4 +4189,7 @@ int firmware_request_nowarn(const struct firmware **fw, const char *name,
 void *memchr_inv(const void *s, int c, size_t n);
 
 /* [LNX] helper the compiled set names */
+struct genl_family;
+const struct genl_family *lkpi_genl_family_get(const char *name);
+
 #endif /* LINUXKPI_CORE_H */

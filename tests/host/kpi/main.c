@@ -77,6 +77,7 @@ int kpi_case_net_stubs(void);
 int kpi_case_idr_rb(void);
 int kpi_case_rhtable(void);
 int kpi_case_nla(void);
+int kpi_case_netdev_open(void);
 int kpi_case_ctx_tasklet_thread(void);
 int kpi_case_ctx_fifo(void);
 int kpi_case_ctx_coalesce(void);
@@ -111,6 +112,7 @@ static const struct kpi_case cases[] = {
 	{ "idr_rb", kpi_case_idr_rb },
 	{ "rhtable", kpi_case_rhtable },
 	{ "nla", kpi_case_nla },
+	{ "netdev_open", kpi_case_netdev_open },
 	{ "ctx_tasklet_thread", kpi_case_ctx_tasklet_thread },
 	{ "ctx_fifo", kpi_case_ctx_fifo },
 	{ "ctx_coalesce", kpi_case_ctx_coalesce },

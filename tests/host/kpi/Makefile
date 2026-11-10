@@ -93,6 +93,7 @@ SRCS := \
 	$(CURDIR)/cases/net_stubs.c \
 	$(CURDIR)/cases/idr_rb.c \
 	$(CURDIR)/cases/nla.c \
+	$(CURDIR)/cases/netdev.c \
 	$(CURDIR)/cases/ctx.c \
 	$(CURDIR)/cases/selftest.c
 

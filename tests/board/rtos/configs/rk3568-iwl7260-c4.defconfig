@@ -1,0 +1,26 @@
+# mac80211 on the RTOS line, gate C4: the AC 7260 scans and finds the bench AP.
+#
+# The profile is C3 plus the scan trigger: same stack, same iwlwifi, same
+# board root complex.  The case brings the attach up itself (the pcie group
+# brings the root complex and ITS bridge), opens wlan0, and sends the real
+# NL80211_CMD_TRIGGER_SCAN attribute stream through nl80211's handler.
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md §3).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_c4"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+
+# mac80211 allocates its local/wiphy/netdev/BSS records from the FreeRTOS heap
+# (osMemoryAlloc -> pvPortMalloc); the board default of 256 KiB is not enough,
+# and the scan path also allocates hw_scan_req/IEs and BSS entries.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

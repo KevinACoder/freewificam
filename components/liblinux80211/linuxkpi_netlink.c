@@ -203,19 +203,56 @@ __nlmsg_put(struct sk_buff *skb, u32 portid, u32 seq, int type, int len,
 /* generic netlink: family + message header + send (discard)           */
 /* ------------------------------------------------------------------ */
 
+/*
+ * D1's netlink is a decoder and a discard, not a socket stack.  But the
+ * *handlers* are real, and the C4 bench reaches nl80211's trigger handler
+ * through the registered family rather than re-implementing it: remember the
+ * pointers here, and let the bench helper call pre_doit/doit/post_doit with a
+ * parsed message.  Nothing is exposed to userspace; there is still no socket.
+ */
+#define LKPI_GENL_FAMILY_MAX	8
+
+static const struct genl_family *lkpi_genl_families[LKPI_GENL_FAMILY_MAX];
+static unsigned int lkpi_genl_family_n;
+
+const struct genl_family *
+lkpi_genl_family_get(const char *name)
+{
+	unsigned int i;
+
+	if (name == NULL)
+		return NULL;
+	for (i = 0; i < lkpi_genl_family_n; i++)
+		if (strcmp(lkpi_genl_families[i]->name, name) == 0)
+			return lkpi_genl_families[i];
+	return NULL;
+}
+
 int
 genl_register_family(struct genl_family *family)
 {
-	/* D1: remember nothing, register nothing, succeed.  nl80211_init()
-	 * continues; nl80211_exit() calls unregister_family() unconditionally. */
-	(void)family;
+	if (family == NULL)
+		return -EINVAL;
+	if (lkpi_genl_family_n >= LKPI_GENL_FAMILY_MAX)
+		return -ENOSPC;
+	lkpi_genl_families[lkpi_genl_family_n++] = family;
 	return 0;
 }
 
 int
 genl_unregister_family(const struct genl_family *family)
 {
-	(void)family;
+	unsigned int i;
+
+	for (i = 0; i < lkpi_genl_family_n; i++) {
+		if (lkpi_genl_families[i] != family)
+			continue;
+		memmove(&lkpi_genl_families[i], &lkpi_genl_families[i + 1],
+			(lkpi_genl_family_n - i - 1) *
+			sizeof(lkpi_genl_families[0]));
+		lkpi_genl_family_n--;
+		return 0;
+	}
 	return 0;
 }
 

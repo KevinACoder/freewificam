@@ -73,6 +73,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_IWL7260_C3)
 	CASE_ENTRY("iwl7260_c3", case_iwl7260_c3_run)
 #endif
+#if defined(RTOS_CASE_IWL7260_C4)
+	CASE_ENTRY("iwl7260_c4", case_iwl7260_c4_run)
+#endif
 #if defined(RTOS_HOST_TIER)
 };
 #endif

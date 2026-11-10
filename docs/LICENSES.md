@@ -43,6 +43,7 @@ the one without the imported stack linked in.
 |---|---|---|
 | `rk3568-mac80211-c2` 镜像 | mac80211/cfg80211（GPL-2.0-only）静态链接 | **GPL-2.0** 链接产物 |
 | `rk3568-iwl7260-mac80211` 镜像 | 同上 + iwlwifi/iwlmvm（GPL-2.0） | **GPL-2.0** 链接产物 |
+| `rk3568-iwl7260-c4` 镜像 | 同上（C4 的触发 helper 是第一方 BSD-3-Clause，与 GPL 栈链接） | **GPL-2.0** 链接产物 |
 
 两者都在 `docs/LICENSES.md`（外层）同表登记；`ARCHITECTURE.md` §5 的隔离规则不变：
 这两个 profile 不与 `rtw88`/`rtw89` 的 BSD profile 共链。

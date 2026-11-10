@@ -1,10 +1,10 @@
 # STATUS
 
-- Updated: 2026-11-10 (S1b/S1c + C2/C3 round)
-- Stage: **the imported wireless stack registers and the AC 7260 attaches on
-  the board**.  C0/C1 for both, C2 (wiphy registration) and C3 (iwlwifi probe ->
-  firmware ALIVE -> register -> start) are 2/2 cold boots; C4-C6 are not
-  started.
+- Updated: 2026-11-11 (C4 scan round)
+- Stage: **the imported wireless stack registers, the AC 7260 attaches, and
+  it scans the bench AP**.  C0/C1 for both, C2 (wiphy registration), C3
+  (iwlwifi probe -> firmware ALIVE -> register -> start) and C4 (nl80211
+  trigger -> hw scan -> BSS) are 2/2 cold boots; C5-C6 are not started.
 
 ## Stages
 
@@ -22,8 +22,9 @@ below it has been reached; "compiles" and "links" are not "runs".
 | S1c link | stack + driver partial link, classified undefined list, one winner per API symbol | **reached**: 314 external refs, 186 provided, 112 real gaps, 0 duplicate winners (`runs/S1/link/run-1`, `runs/S1/RUN.md`) |
 | C2 register | `ieee80211_alloc_hw` + `register_hw` + default `wlan0` on the board | **reached 2/2**: `runs/2026-11-10-mac80211-c2` (clean image, cold boots) |
 | C3 attach | iwlwifi claims `8086:08b1`, firmware `17.bfb58538.0` ALIVE, `wlan0`, `dev_open` -> start rc=0 | **reached 2/2**: `runs/2026-11-10-iwl7260-c3` |
-| C4-C6 | scan / association / data plane | **not started** |
-| K1/K2 context | the host semantic bench and the three execution-context experiments | **reached on the host model**: 23/24 cases (1 explicit skip), `--break` red; ADR `2026-11-10-execution-context-model.md`; not board evidence |
+| C4 scan | real `NL80211_CMD_TRIGGER_SCAN` bytes through nl80211's handler -> iwlwifi hw scan -> cfg80211 BSS table carries the bench AP | **reached 2/2**: `runs/2026-11-11-iwl7260-c4` (SSID/BSSID/ch5) |
+| C5/C6 | association / data plane | **not started** |
+| K1/K2 context | the host semantic bench and the three execution-context experiments | **reached on the host model**: 33/33 cases, `--break` red; ADR `2026-11-10-execution-context-model.md`; not board evidence |
 
 ## Receipts
 
