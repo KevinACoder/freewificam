@@ -1,14 +1,14 @@
-# PROVENANCE — 文件来源
+# PROVENANCE
 
-本仓的文件分两类：**搬来的**与**本仓写的**。搬来的必须在这里有一行。
+Files in this repository are either **written here** or **imported**. An
+imported file gets a row in this table.
 
-| 来源 | commit | 许可证 | 搬了什么 | 是否逐字节 |
+| Component | Source | Commit | License | Byte-identical |
 |---|---|---|---|---|
-| （尚无） | — | — | — | — |
+| (nothing imported yet) | — | — | — | — |
 
-## 规则
+## Rules
 
-1. 搬文件时记：来源仓、commit、路径、许可证、是否逐字节。
-2. 逐字节的，在 `docs/DIVERGENCES.md` 里不出现；
-   有改动的，改动必须在 `DIVERGENCES.md` 有一行。
-3. 老仓 → 本仓是单向的。本仓 → 老仓禁止（本仓是 GPL 派生）。
+1. An import records source, commit, path, license and whether the bytes match.
+2. Byte-identical files do not appear in `DIVERGENCES.md`. Any edit does.
+3. Imports move in one direction only; see `LICENSES.md`.

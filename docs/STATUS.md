@@ -1,32 +1,24 @@
-# STATUS — 当前阶段与判据
+# STATUS
 
-- 更新：2026-11-10
-- 阶段：**S0 spike**（只回答"能不能编/链"）
+- Updated: 2026-11-10
+- Stage: **compile and link** (the stack is not built against this repository yet)
 
-## 判据分层（永不合并）
+## Stages
 
-| 层 | 判据 | 当前 |
+Each stage is stated as what it is. A stage is announced only when the one
+below it has been reached; "compiles" and "links" are not "runs".
+
+| Stage | Meaning | State |
 |---|---|---|
-| **C0 编译** | mac80211 的 TU 目标文件产出 | 未开始 |
-| **C1 链接** | 无未定义符号 | 未开始 |
-| C2 注册 | `ieee80211_alloc_hw` 非空、`register_hw` 返回 0 | 未开始 |
-| C3 attach | 7260 probe + 固件加载 + `start` | 未开始 |
-| C4 扫描 | 扫到目标 BSS | 未开始 |
-| C5 关联 | `state=4`，AP 侧见到 | 未开始 |
-| C6 数据面 | ping + 空口帧对上 | 未开始 |
+| C0 compile | the stack's translation units produce object files | not started |
+| C1 link | no undefined symbols | not started |
+| C2 register | the stack accepts a device registration | not started |
+| C3 attach | a driver probes, firmware loads, start completes | not started |
+| C4 scan | a scan returns the target BSS | not started |
+| C5 associate | link establishment completes | not started |
+| C6 data | frames cross in both directions | not started |
 
-**C1 过不许写成 C2 过。**
+## Preconditions
 
-## 当前阻塞
-
-无。下一步是 S1：把 mac80211 的 26 个 TU 逐个对着 linuxkpi 头编一遍。
-
-## 已知的三类缺口（来自老仓实测，本仓未复验）
-
-| 类 | 数量 | 判据 |
-|---|---|---|
-| linuxkpi 缺的内核头 | 23 | 编译 |
-| cfg80211 缺的符号 | 135 | 链接 |
-| mac80211 无条件链接集 | 57648 行 | 行为（S0 回答不了） |
-
-详见老仓外层 `docs/GAP-ANALYSIS.md`。
+See `README.md`: the uniprocessor assumption is a precondition of the design,
+not an implementation detail.

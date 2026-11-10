@@ -1,47 +1,64 @@
-# freewificam — linux-dev
+# freewificam
 
-本仓是 **Linux 无线栈搬到 RTOS** 那条线的代码仓。
-与老仓 `project_rea_wcam/freewificam`（`master` / `dev_v2`，302 个提交）**没有历史关系**：
-本分支从零开始，按需从老仓搬文件并记录来源。
+Run the Linux wireless stack on an RTOS.
 
-## 这条分支做什么
+`freewificam` takes `net/mac80211` and `net/wireless` **verbatim** and runs them
+on top of a small kernel-API layer, with the bus backend and the network egress
+replaced. The MAC layer — MLME, aggregation, rate control, encryption, channel
+management — is the Linux code, unmodified. What changes is what sits below it
+(the bus) and above it (the network stack).
 
-把 `net/mac80211` + `net/wireless`（cfg80211）**原样**搬上 RTOS，
-只替换总线（CherryUSB / PCIe）与网络出口（lwIP）。
-配套的 linuxkpi 从"够驱动用"扩到"够整个 MAC 层用"。
+```
+   lwIP                                     network egress, replaced
+   ────────────────────────────────────
+   net/mac80211 + net/wireless              upstream, verbatim
+   ────────────────────────────────────
+   components/linuxkpi                      this repository
+   ────────────────────────────────────
+   CherryUSB / PCIe host + driver           bus, replaced
+```
 
-**不做什么**：不做 net80211 适配。那是老仓的线，两条线并行。
+## Why
 
-## 状态
+Porting a Linux wireless driver to an RTOS is well-trodden: the driver talks to
+the kernel through a kernel-API compatibility layer, and the layer is small
+because a driver uses a bounded slice of the kernel. Porting the *stack* is the
+part that is usually avoided — a stack leans on scheduling, memory lifetime and
+locking models that an RTOS does not have, and reimplementing it drifts from the
+code being tested.
 
-**S0 spike 阶段。** 当前只回答一件事：mac80211 能不能对着本仓的 linuxkpi 编过、链上。
-判据分层见 `docs/STATUS.md`；C0/C1 与 C2–C6 永不合并。
+This repository tests the other split: keep the stack, replace the two edges.
 
-## 目录
+## Requirements
 
-| 路径 | 内容 |
+- **Single core.** The RTOS side is a uniprocessor FreeRTOS port. Every
+  read-copy-update primitive the stack uses is a plain load/store there, which
+  is equivalent rather than approximate *because* there is no other core to be
+  concurrent with. This is a precondition of the design, not an implementation
+  detail; a multiprocessor build needs the whole RCU discipline re-done.
+- **A bus backend** for the device you target (USB host stack, or a PCIe host).
+- **An egress** to your network stack (lwIP is the intended one).
+
+## Layout
+
+| Path | Contents |
 |---|---|
-| `components/linuxkpi/` | 内核 API 面（本仓主要工作量） |
-| `docs/COMMIT-CONVENTION.md` | 提交信息格式（沿用老仓） |
-| `docs/PROVENANCE.md` | 每个搬进来的文件的来源 commit |
-| `docs/DIVERGENCES.md` | 与来源的偏离 |
-| `docs/STATUS.md` | 当前阶段与判据 |
-| `tools/check-commit-msg.sh` | 提交信息检查器 |
+| `components/linuxkpi/` | the kernel API surface the stack needs |
+| `docs/` | build notes, provenance of imported files, conventions |
+| `tools/` | helpers (commit-message checker, import scripts) |
 
-## 许可证
+Drivers and the wireless stack itself are not vendored here as of this writing;
+`docs/PROVENANCE.md` records what is imported and from where once that starts.
 
-**本仓是 GPL-2.0 派生。** 它承载 `net/mac80211` / `net/wireless`（`GPL-2.0-only`）。
-单向：可以从老仓搬进来，**不许搬回老仓**——老仓的 rtw88/rtw89 两个 profile
-还要保持 BSD 可用。详见老仓外层的 `docs/LICENSES.md`。
+## License
 
-## 提交
+`net/mac80211` and `net/wireless` are `GPL-2.0-only`, so anything that links
+them is `GPL-2.0`. The kernel-API layer written here is BSD-3-Clause on its own
+and becomes GPL-2.0 as part of a linked image. See `docs/LICENSES.md` for the
+per-component breakdown.
 
-```
-<area>: (<label>) <lowercase imperative summary>
-```
+## Status
 
-area / label 见 `docs/COMMIT-CONVENTION.md`。装钩子：
-
-```bash
-tools/install-hooks.sh    # 本仓暂无，需要时从老仓搬
-```
+Early. The stack is not yet built against this repository; `docs/STATUS.md`
+tracks which stage has been reached, and states each stage as what it is —
+"compiles" and "links" are not "runs".

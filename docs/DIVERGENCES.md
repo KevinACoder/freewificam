@@ -1,12 +1,14 @@
-# DIVERGENCES — 与来源的偏离
+# DIVERGENCES
 
-搬来的文件默认逐字节。任何改动在这里记一行，注明**为什么**和**哪一轮**。
+Imported files are byte-identical by default. Every edit is recorded here with
+its reason.
 
-| # | 文件 | 改动 | 原因 | 轮次 |
+| # | File | Change | Reason | Commit |
 |---|---|---|---|---|
-| （尚无） | — | — | — | — |
+| (none yet) | — | — | — | — |
 
-## 规则
+## Rules
 
-- 优先做上游可接受的 patch，而不是就地改。
-- 就地改不可避免时，改到最小，用 `/* LWCAM(L): <what and why> */` 标注，并在本表加行。
+- Prefer a patch that upstream could accept over an in-tree edit.
+- When an in-tree edit is unavoidable, keep it minimal, mark it with
+  `/* FREEWIFICAM: <what and why> */`, and add a row above.
