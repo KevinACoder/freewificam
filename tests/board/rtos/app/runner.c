@@ -58,6 +58,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_USB_XHCI)
 	CASE_ENTRY("usb_xhci", case_usb_xhci_run)
 #endif
+#if defined(RTOS_CASE_USB_EHCI)
+	CASE_ENTRY("usb_ehci", case_usb_ehci_run)
+#endif
 #if defined(RTOS_HOST_TIER)
 };
 #endif

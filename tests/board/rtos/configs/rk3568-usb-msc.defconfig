@@ -1,11 +1,14 @@
 # Acceptance: the CherryUSB host stack + the mass-storage class.
 #
-# The case is `usb_xhci` (app/cases/usb_xhci.c -> usb_msc.c): bring up the
-# board's xHCI root 3 (the upper Type-A port), enumerate the U-disk, read block
-# zero, round-trip a block in the disk's last 32 MiB window and run the size
-# sweep.  The bench's disk is `0781:5583`; the EHCI arm is not part of this
-# profile (the lab has no USB2 disk, and the previous tree left that arm
-# unverified rather than stretching the bench).
+# The case is `usb_ehci` (app/cases/usb_ehci.c -> usb_msc.c): bring one EHCI
+# root up, enumerate the U-disk behind the on-board hub, read block zero,
+# round-trip a block in the disk's last 32 MiB window and run the size sweep.
+#
+# Bench fact (2026-11-10): the U-disk sits on EHCI1 (0xFD880000, busid 1); the
+# xHCI root 3 that carried it in the previous tree's 2026-10-26 round now
+# carries the RTL8851BU only (U-Boot's `usb tree` shows the disk under the
+# second EHCI root).  The xHCI case stays imported and is simply not in this
+# profile; when the disk moves back, the profile flips one line.
 #
 # 16 MiB of FreeRTOS heap: the CherryUSB pools, the MSC buffers and the USB
 # OSAL's allocations come from it.
@@ -15,4 +18,4 @@ CONFIG_OPT_O2=y
 CONFIG_PROFILE_BASE=y
 CONFIG_HEAP_SIZE=16
 CONFIG_FREERTOS_HEAP_SIZE=16777216
-CONFIG_CASES="tick usb_xhci"
+CONFIG_CASES="tick usb_ehci"

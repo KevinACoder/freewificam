@@ -55,6 +55,9 @@ int case_pcie_run(void);
 #if defined(RTOS_CASE_USB_XHCI)
 int case_usb_xhci_run(void);
 #endif
+#if defined(RTOS_CASE_USB_EHCI)
+int case_usb_ehci_run(void);
+#endif
 
 #if defined(RTOS_CASE_USB_XHCI) || defined(RTOS_CASE_USB_EHCI)
 int usb_msc_case(unsigned int busid, const char *hcd);
