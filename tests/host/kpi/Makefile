@@ -78,6 +78,7 @@ SRCS := \
 	$(CURDIR)/host_stubs.c \
 	$(CURDIR)/cases/work.c \
 	$(CURDIR)/cases/timer.c \
+	$(CURDIR)/cases/jiffies.c \
 	$(CURDIR)/cases/sync.c \
 	$(CURDIR)/cases/skb.c \
 	$(CURDIR)/cases/idr_rb.c \

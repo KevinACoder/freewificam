@@ -63,6 +63,7 @@ int kpi_case_work_cancel(void);
 int kpi_case_timer_due(void);
 int kpi_case_timer_rearm(void);
 int kpi_case_timer_cancel(void);
+int kpi_case_jiffies_tick(void);
 int kpi_case_sync_completion(void);
 int kpi_case_sync_mutex(void);
 int kpi_case_sync_semaphore(void);
@@ -89,6 +90,7 @@ static const struct kpi_case cases[] = {
 	{ "timer_due", kpi_case_timer_due },
 	{ "timer_rearm", kpi_case_timer_rearm },
 	{ "timer_cancel", kpi_case_timer_cancel },
+	{ "jiffies_tick", kpi_case_jiffies_tick },
 	{ "sync_completion", kpi_case_sync_completion },
 	{ "sync_mutex", kpi_case_sync_mutex },
 	{ "sync_semaphore", kpi_case_sync_semaphore },

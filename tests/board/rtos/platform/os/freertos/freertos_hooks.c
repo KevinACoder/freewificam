@@ -32,6 +32,27 @@
 #define FREERTOS_HOOKS_TAG    "freertos-hooks"
 #endif
 
+/*
+ * --- the Linux clock's tick supply ---------------------------------------
+ *
+ * liblinux80211's `jiffies` is a real variable advanced once per RTOS tick
+ * (components/liblinux80211/linuxkpi_core.c).  The component is not linked
+ * into every profile, so the reference is weak: an image without it still
+ * links, and "there is no Linux clock in this image" is stated here rather
+ * than defaulted silently.  The static assert pins the other half of the
+ * invariant the component states as HZ (1000): the tick rate.
+ */
+_Static_assert(configTICK_RATE_HZ == 1000,
+               "liblinux80211's HZ (1000) must equal configTICK_RATE_HZ");
+
+extern void lkpi_tick_advance(void) __attribute__((weak));
+
+void vApplicationTickHook(void)
+{
+    if (lkpi_tick_advance != NULL)
+        lkpi_tick_advance();
+}
+
 void vAssertCalled( const char * pcFileName, unsigned long ulLineNumber )
 {
     fprintf( stderr, FREERTOS_HOOKS_TAG ": ASSERT %s:%lu\n", pcFileName, ulLineNumber );

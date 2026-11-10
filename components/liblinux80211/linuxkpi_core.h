@@ -1962,10 +1962,22 @@ atomic_fetch_add_unless(atomic_t *v, int a, int u)
 /* ------------------------------------------------------------------ */
 
 /* the board tick is 1 kHz (CONFIG_TX_TICKS_PER_SECOND, [S3]); HZ must
- * equal the real tick rate or every jiffies<->ms conversion lies */
+ * equal the real tick rate or every jiffies<->ms conversion lies.  The
+ * platform's vApplicationTickHook() asserts configTICK_RATE_HZ == 1000 on
+ * the other side of the same invariant (freertos_hooks.c).
+ *
+ * jiffies is a real variable, not a function-like macro: the interface's
+ * clock is a variable, and the macro spelling rewrites every occurrence of
+ * the identifier - including the `jiffies` member of struct ieee80211_hw,
+ * which is what kept 28 stack translation units from compiling (S0 run-19).
+ * The tick hook advances it once per tick; nothing else writes it. */
 #define	HZ			1000
+extern volatile unsigned long jiffies;
+/* called from vApplicationTickHook() (platform/os/freertos/freertos_hooks.c);
+ * one increment per 1 kHz tick, so jiffies and the RTOS tick count stay in
+ * step.  Single core: an ISR-side increment races with nothing. */
+void lkpi_tick_advance(void);
 unsigned long lkpi_jiffies(void);
-#define	jiffies			lkpi_jiffies()
 
 #define	msecs_to_jiffies(m)	((unsigned long)(((m) * HZ + 999) / 1000))
 #define	usecs_to_jiffies(u)	msecs_to_jiffies((u) / 1000)

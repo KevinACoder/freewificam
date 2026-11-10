@@ -59,7 +59,7 @@
 
 /* Hooks. Idle and tick hooks stay off; a failed allocation must be loud, never silent. */
 #define configUSE_IDLE_HOOK                      0
-#define configUSE_TICK_HOOK                      0
+#define configUSE_TICK_HOOK                      1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK       0
 #define configUSE_MALLOC_FAILED_HOOK             1
 

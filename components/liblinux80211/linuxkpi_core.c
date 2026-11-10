@@ -545,15 +545,29 @@ size_t lkpi_kmem_size(const void *ptr)
 /* time and delays                                                     */
 /* ------------------------------------------------------------------ */
 
-/* The tick is the time base (1 kHz on the board: HZ in the contract header). */
+/*
+ * The tick is the time base (1 kHz on the board: HZ in the contract header).
+ * `jiffies` is the interface's clock variable; the platform tick hook calls
+ * lkpi_tick_advance() once per tick, so a read is a memory read of the same
+ * tick count the conversions were always written against.  It starts at 0
+ * when the image boots, exactly like the interface's, and is not reset later
+ * (a reset would move the clock backwards under every armed timer).
+ */
+volatile unsigned long jiffies;
+
+void lkpi_tick_advance(void)
+{
+	jiffies = jiffies + 1ul;
+}
+
 unsigned long lkpi_jiffies(void)
 {
-	return (unsigned long)osKernelGetTickCount();
+	return jiffies;
 }
 
 ktime_t lkpi_ktime_get(void)
 {
-	return (ktime_t)osKernelGetTickCount() * 1000000LL;
+	return (ktime_t)jiffies * 1000000LL;
 }
 
 /*
