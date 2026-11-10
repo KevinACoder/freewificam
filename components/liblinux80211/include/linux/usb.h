@@ -80,7 +80,7 @@ enum usb_device_state {
 #define	WQ_BH				0x00000020
 #define	WQ_PERCPU			0x00000040
 #define	WQ_UNBOUND			0x00000001
-#define	WQ_HIGHPRI			0x00000004
+/* WQ_HIGHPRI is the workqueue flag enum (linuxkpi_core.h, enum wq_flags). */
 #define	WQ_SYSFS			0x00000010
 
 #define	USB_CTRL_GET_TIMEOUT		5000

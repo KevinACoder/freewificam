@@ -56,6 +56,19 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/netdevice.h: the alignment of the private area the
+ * interface appends to a net_device allocation; arm64's NETDEV_ALIGN is 32. */
+#define	NETDEV_ALIGN	32
+
+/* [LNX] include/linux/netdevice.h: the VLAN filter notifier events and the
+ * notifier entry point the vendored if_vlan.h names.  The stack only calls the
+ * entry point from the VLAN receive path; the bodies are S1's. */
+#define	NETDEV_SVLAN_FILTER_PUSH_INFO	0x0011
+#define	NETDEV_SVLAN_FILTER_DROP_INFO	0x0012
+#define	NETDEV_CVLAN_FILTER_PUSH_INFO	0x000F
+#define	NETDEV_CVLAN_FILTER_DROP_INFO	0x0010
+int	call_netdevice_notifiers(unsigned long val, struct net_device *dev);
+
 /*
  * [LNX] include/linux/netdevice.h:2211: the interface's net-device record carries
  * `struct inet6_dev __rcu *ip6_ptr`, and that member is what puts the tag in scope

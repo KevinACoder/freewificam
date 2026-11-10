@@ -35,6 +35,12 @@
  */
 #include "ulog.h"
 
+/* [LNX] include/linux/compiler_attributes.h: the attribute vocabulary every
+ * kernel header assumes is in scope (__attribute_const__, __printf, __packed,
+ * __always_inline, ...).  The real stack headers use it before naming any
+ * function, so the contract header carries the interface's file verbatim. */
+#include <linux/compiler_attributes.h>
+
 /* -std=c11 has no typeof keyword; the GNU spelling always exists. */
 #ifndef typeof
 #define	typeof(x)	__typeof__(x)
@@ -334,7 +340,7 @@ struct device {
 /* constants and small helpers                                         */
 /* ------------------------------------------------------------------ */
 
-#define	BITS_PER_LONG		(8 * sizeof(unsigned long))
+#define	BITS_PER_LONG		(__SIZEOF_LONG__ * 8)
 #define	BITS_PER_BYTE		8
 #ifndef PAGE_SIZE
 /* [LNX] arch/arm64/include/asm/page-def.h: `#define PAGE_SIZE (_AC(1, UL) <<
@@ -361,6 +367,12 @@ struct device {
 #define	GENMASK(h, l)		(((~0UL) << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
 #endif
 #define	GENMASK_ULL(h, l)	(((~0ULL) << (l)) & (~0ULL >> (64 - 1 - (h))))
+/* [LNX] include/linux/bitops.h: the 32-bit rotates the stack's hash helpers
+ * (include/linux/jhash.h) and the FILS/beacon code name.  The interface's
+ * definition is exactly this pair of shifts; a zero shift is undefined there
+ * too, and no caller passes one. */
+#define	rol32(word, shift)	(((u32)(word) << (shift)) | ((u32)(word) >> (32 - (shift))))
+#define	ror32(word, shift)	(((u32)(word) >> (shift)) | ((u32)(word) << (32 - (shift))))
 
 #define	ARRAY_SIZE(a)		(sizeof(a) / sizeof((a)[0]))
 #define	DIV_ROUND_UP(n, d)	(((n) + (d) - 1) / (d))
@@ -443,6 +455,10 @@ div_s64(s64 dividend, s32 divisor)
 #define	min_t(t, a, b)		((t)min((a), (b)))
 #define	max_t(t, a, b)		((t)max((a), (b)))
 #define	clamp_val(v, lo, hi)	max(min((v), (hi)), (lo))
+/* [LNX] include/linux/compiler_types.h:430: `at_least` is the array-parameter
+ * qualifier (`u8 out[at_least AES_BLOCK_SIZE]`), not an arithmetic helper; the
+ * interface expands it to `static` and that is the whole contract. */
+#define	at_least		static
 #define	clamp_t(t, v, lo, hi)	((t)clamp_val((v), (lo), (hi)))
 #define	clamp(v, lo, hi)	clamp_val((v), (lo), (hi))
 #define	umin(x, y)		min((x) + 0u, (y) + 0u)
@@ -457,9 +473,33 @@ div_s64(s64 dividend, s32 divisor)
 		const typeof(*(ptr)) *: ((const type *)container_of(ptr, type, member)), \
 		default: ((type *)container_of(ptr, type, member)))
 
+/*
+ * [LNX] include/linux/stddef.h:170-188: `struct_group(TAG, MEMBERS...)` states
+ * the same members twice - once anonymous, so a caller keeps reaching them by
+ * name, and once under TAG, so a caller can copy or initialise the whole run as
+ * one object.  The interface's definition expands to __struct_group() with the
+ * empty attribute; that is a plain second declaration of the same layout.  The
+ * real include/linux/ieee80211.h uses it for the address run of
+ * struct ieee80211_hdr (addrs), which the stack's RX/TX helpers then name as
+ * hdr->addr1..addr4 and hdr->addrs at once.
+ */
+#define	__struct_group(TAG, NAME, ATTRS, MEMBERS...)			\
+	union {								\
+		struct { MEMBERS } ATTRS;				\
+		struct TAG { MEMBERS } ATTRS NAME;			\
+	} ATTRS
+#define	struct_group(NAME, ...)					\
+	struct { __VA_ARGS__ };					\
+	struct { __VA_ARGS__ } NAME
+
 #define	VERIFY_OCTAL_PERMISSIONS(x)	(x)
 
 /* linux/typecheck.h: compile-time pointer-type assertion, value 1 */
+/* [LNX] include/linux/compiler_types.h: the compile-time "same type" predicate
+ * (a _Generic over the unqualified types). */
+#ifndef __same_type
+#define	__same_type(a, b)	__builtin_types_compatible_p(__typeof__(a), __typeof__(b))
+#endif
 #define	typecheck(type, x)				\
 ({							\
 	type __dummy_tc;				\
@@ -513,6 +553,14 @@ sign_extend64(u64 value, int index)
 
 #define	fls(x)			lkpi_fls32((uint32_t)(x))
 #define	ffs(x)			lkpi_ffs32((uint32_t)(x))
+/* [LNX] include/linux/bitops.h: `fls64(n)` is fls() over the 64-bit word,
+ * stated as its own builtin form because the stack's rate/HW-value helpers
+ * call it with a u64 and the 32-bit truncation would answer the wrong bit. */
+static __always_inline __unused int
+fls64(u64 x)
+{
+	return x == 0 ? 0 : 64 - __builtin_clzll(x);
+}
 
 static __always_inline __unused unsigned int
 lkpi_hweight8(u8 w)
@@ -730,6 +778,8 @@ is_power_of_2(unsigned long n)
 #define	ENODATA			61
 #define	ENOLINK			67
 #define	EOPNOTSUPP		95
+#define	EMSGSIZE		90
+#define	ENOBUFS			105
 #define	EPIPE			32
 /* [LNX] uapi/asm-generic/errno.h:121 */
 #define	ERFKILL			132
@@ -1045,6 +1095,23 @@ le32_add_cpu(__le32 *var, u32 val)
 #define	be16toh(x)		be16_to_cpu(x)
 #define	be32toh(x)		be32_to_cpu(x)
 #define	be64toh(x)		be64_to_cpu(x)
+/*
+ * [LNX] include/linux/unaligned.h: `get_unaligned(ptr)` / `put_unaligned(val,
+ * ptr)` are the type-generic pair the jhash and crypto-utils helpers use.  The
+ * interface implements them as a direct dereference selected by the
+ * architecture's unaligned-access policy; this port builds with -mstrict-align,
+ * so the pair goes through __builtin_memcpy, which the compiler lowers to byte
+ * loads and which is correct for every alignment.
+ */
+#define	get_unaligned(p)							\
+({										\
+	__typeof__(*(p)) __lkpi_gu_v;						\
+	__builtin_memcpy(&__lkpi_gu_v, (p), sizeof(__lkpi_gu_v));			\
+	__lkpi_gu_v;									\
+})
+#define	put_unaligned(v, p)		do { __typeof__(*(p)) __lkpi_pu_v = (v);	\
+	__builtin_memcpy((p), &__lkpi_pu_v, sizeof(__lkpi_pu_v)); } while (0)
+
 #define	get_unaligned_le16(p)	le16_to_cpu((__force __le16)					\
 				    ((const u8 *)(p))[0] |				\
 				    ((u16)((const u8 *)(p))[1] << 8))
@@ -1080,6 +1147,33 @@ le32_add_cpu(__le32 *var, u32 val)
 	u64 __lkpi_le64v = le64_to_cpu((__force __u64)(v));			\
 	put_unaligned_le32((__u32)__lkpi_le64v, p);				\
 	put_unaligned_le32((__u32)(__lkpi_le64v >> 32), (u8 *)(p) + 4);		\
+} while (0)
+
+/* [LNX] include/linux/unaligned.h + arch/arm64/include/asm/unaligned.h: the
+ * big-endian forms the real include/linux/ieee80211.h reaches (the TDLS and
+ * mesh helpers read be16 fields out of an skb).  Same construction as the
+ * little-endian pair above, with the byte order reversed; the interface's
+ * arm64 build uses the same byte assembly because -mstrict-align is not
+ * needed for byte loads. */
+#define	get_unaligned_be16(p)	be16_to_cpu((__force __be16)				\
+				    ((u16)((const u8 *)(p))[0] << 8 |			\
+				     ((const u8 *)(p))[1]))
+#define	get_unaligned_be32(p)	be32_to_cpu((__force __be32)				\
+				    ((u32)((const u8 *)(p))[0] << 24 |			\
+				     (u32)((const u8 *)(p))[1] << 16 |			\
+				     (u32)((const u8 *)(p))[2] << 8 |			\
+				     ((const u8 *)(p))[3]))
+#define	put_unaligned_be16(v, p) do {						\
+	u16 __lkpi_be16v = be16_to_cpu((__force __be16)(v));			\
+	((u8 *)(p))[0] = (u8)(__lkpi_be16v >> 8);				\
+	((u8 *)(p))[1] = (u8)__lkpi_be16v;					\
+} while (0)
+#define	put_unaligned_be32(v, p) do {						\
+	u32 __lkpi_be32v = be32_to_cpu((__force __be32)(v));			\
+	((u8 *)(p))[0] = (u8)(__lkpi_be32v >> 24);				\
+	((u8 *)(p))[1] = (u8)(__lkpi_be32v >> 16);				\
+	((u8 *)(p))[2] = (u8)(__lkpi_be32v >> 8);				\
+	((u8 *)(p))[3] = (u8)__lkpi_be32v;					\
 } while (0)
 
 /* ------------------------------------------------------------------ */
@@ -1339,6 +1433,9 @@ void *krealloc(const void *p, size_t new_size, gfp_t flags);
 void kvfree(const void *addr);
 /* [LNX] include/linux/string.h:304 */
 void *kvmemdup(const void *src, size_t len, gfp_t gfp);
+/* [LNX] include/linux/string.h: the alloc-tag-free spelling is the 6.x+ name of
+ * the same helper; this port has no alloc tags, so the two are one body. */
+#define	kmemdup_noprof(src, len, gfp)	kmemdup((src), (len), (gfp))
 /* [LNX] include/linux/slab.h:597 */
 void kfree_sensitive(const void *objp);
 
@@ -1618,6 +1715,11 @@ hlist_del(struct hlist_node *n)
 /* kref / rcu (passive-level stubs; drivers never race these here)     */
 /* ------------------------------------------------------------------ */
 
+/* [LNX] include/linux/slab.h: the allocator's guaranteed alignment; arm64's
+ * ARCH_KMALLOC_MINALIGN is the maximum scalar alignment, 8.  crypto's
+ * CRYPTO_MINALIGN derives from it. */
+#define	ARCH_KMALLOC_MINALIGN	8
+
 /* refcount_t (7.x API; rtw89's ap-info refcount) */
 typedef struct {
 	int	refs;
@@ -1682,28 +1784,54 @@ kref_put(struct kref *k, void (*release)(struct kref *))
 	return 0;
 }
 
+/* [LNX] include/linux/u64_stats_sync.h: the 64-bit statistics word.  A
+ * uniprocessor port has no seqcount to pair with it, so the type is the plain
+ * word and the adders are plain arithmetic. */
+typedef struct { u64 v; } u64_stats_t;
+struct u64_stats_sync { unsigned int _seq; };
+#define	u64_stats_update_begin(s)	((void)(s))
+#define	u64_stats_update_end(s)		((void)(s))
+#define	u64_stats_init(s)	((s)->v = 0)
+#define	u64_stats_add(s, n)	((s)->v += (n))
+#define	u64_stats_read(s)	((s)->v)
+
 struct rcu_head {
 	struct rcu_head	*next;
 	void		(*func)(struct rcu_head *head);
 };
 
-#define	rcu_read_lock()		do { } while (0)
-#define	rcu_read_unlock()	do { } while (0)
+/*
+ * RCU on a preemptible uniprocessor (docs/decisions/2026-11-10-execution-context-model.md).
+ *
+ * The earlier reading - "one core, so there is no grace period to wait for;
+ * empty read sections are equivalent" - misses one condition: the reader must
+ * not be preempted.  FreeRTOS is preemptible, so a reader can be switched out
+ * inside its section while a writer frees the object.  The port therefore
+ * counts readers (the counter update is a short critical section, not the
+ * whole read section), lets synchronize_rcu() wait for the count to reach zero,
+ * and defers kfree_rcu()/call_rcu() to a reclaim pass that also waits for zero.
+ * Reader sections must not block (the interface's own rule) and
+ * synchronize_rcu() may not be called from one.
+ */
+void	lkpi_rcu_read_lock(void);
+void	lkpi_rcu_read_unlock(void);
+void	lkpi_synchronize_rcu(void);
+void	lkpi_kfree_rcu_defer(void *ptr);
+void	lkpi_call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *head));
+void	lkpi_rcu_barrier(void);
+
+#define	rcu_read_lock()		lkpi_rcu_read_lock()
+#define	rcu_read_unlock()	lkpi_rcu_read_unlock()
 #define	rcu_dereference(p)	(p)
 #define	rcu_access_pointer(p)	(p)
 #define	rcu_assign_pointer(p, v) do { (p) = (v); } while (0)
 #define	rcu_replace_pointer(p, v, c) do { (p) = (v); } while (0)
-#define	synchronize_rcu()	do { } while (0)
-#define	kfree_rcu(p, member)	kfree(p)
-/* call_rcu has no grace period to defer to on this port; invoking the
- * callback in place is the same effective semantics as kfree_rcu above.
- * The only async RCU free site (rtw89_core_release_tx_wait) is actually
- * unreachable - the tx-wait path is polled - but the symbol is needed. */
-static __always_inline __unused void
-call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *head))
-{
-	func(head);
-}
+#define	synchronize_rcu()	lkpi_synchronize_rcu()
+/* kfree_rcu() ignores the member: the port keeps the pointer itself on the
+ * deferred list, so the embedded rcu_head is not used. */
+#define	kfree_rcu(p, member)	lkpi_kfree_rcu_defer(p)
+#define	rcu_barrier()		lkpi_rcu_barrier()
+#define	call_rcu(head, func)	lkpi_call_rcu((head), (func))
 
 /*
  * The rest of the RCU pointer vocabulary the compiled set names. The interface's
@@ -1717,6 +1845,7 @@ call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *head))
 /* [LNX] include/linux/rcupdate.h:1041 */
 #define	RCU_INIT_POINTER(p, v)		do { WRITE_ONCE((p), (v)); } while (0)
 /* [LNX] include/linux/rcupdate.h:660-662 */
+#define	rcu_dereference_raw(p)	(p)
 #define	rcu_dereference_check(p, c)	(p)
 /* [LNX] include/linux/rcupdate.h:741-742 */
 #define	rcu_dereference_protected(p, c)	(p)
@@ -1869,9 +1998,14 @@ unsigned long round_jiffies(unsigned long j);
  * width, which the driver's %lld/%llu format strings are written against. */
 typedef s64 ktime_t;
 
+/* [LNX] include/uapi/asm-generic/posix_types.h: the clock id the timer setup
+ * calls name; an int in the interface too. */
+typedef int clockid_t;
+
 /* ktime counts nanoseconds, scaled off the hardclock tick */
 ktime_t lkpi_ktime_get(void);
 #define	ktime_get()		lkpi_ktime_get()
+#define	ktime_get_ns()		lkpi_ktime_get()
 #define	ktime_get_real()	lkpi_ktime_get()
 #define	ktime_get_boottime()	lkpi_ktime_get()
 #define	ktime_to_ms(kt)		((unsigned int)((kt) / 1000000LL))
@@ -2206,9 +2340,31 @@ void	lkpi_module_init_run(void);
 #define	BUILD_BUG_ON_MSG(cond, msg)					\
 	lkpi_compiletime_assert(!(cond), msg)
 #define	BUILD_BUG_ON(cond)	BUILD_BUG_ON_MSG(cond, "BUILD_BUG_ON(" #cond ") failed")
+/* [LNX] include/linux/build_bug.h: the statement spelling the stack's macros use. */
+#define	compiletime_assert(condition, msg)					\
+	_Static_assert(condition, msg)
+/* [LNX] include/linux/string.h: clear a secret and keep the compiler from
+ * eliding the store. */
+static __always_inline void memzero_explicit(void *s, size_t count)
+{
+	memset(s, 0, count);
+	barrier();
+}
+
+/* [LNX] include/linux/compiler.h: hide a value from the optimiser so a
+ * speculative path cannot fold it (the constant-time crypto helpers). */
+#define	OPTIMIZER_HIDE_VAR(var)		__asm__ ("" : "+r" (var))
 /* negative bitfield width when e holds - usable in constant contexts
  * (array sizes, wrappers); like upstream, needs an integer constant
  * expression */
+#define	__must_be_array(a)	BUILD_BUG_ON_ZERO(__same_type((a), &(a)[0]))
+#define	is_signed_type(t)	((t)-1 < (t)0)
+#define	kmalloc_noprof(size, flags)	kmalloc((size), (flags))
+#define	DEBUG_NET_WARN_ON_ONCE(cond)	do { (void)(cond); } while (0)
+#ifndef smp_wmb
+#define	smp_wmb()		barrier()
+#endif
+
 #define	BUILD_BUG_ON_ZERO(e)	((int)sizeof(struct {			\
 	int:(-!!(e));							\
 }))
@@ -2333,6 +2489,40 @@ int lkpi_spin_trylock(spinlock_t *l);
 #define	CLASS(_name, var)						\
 	class_##_name##_t var __cleanup(class_##_name##_destructor) =	\
 		class_##_name##_constructor
+/*
+ * [LNX] include/linux/cleanup.h:319-333: DEFINE_GUARD() is DEFINE_CLASS() with
+ * the lock as the initialiser and the unlock as the destructor.  The real
+ * net/cfg80211.h defines the wiphy guard (net/mac80211's ethtool/iface/sme
+ * paths use `guard(wiphy)(...)`), so the two macros are part of the stack's
+ * compile surface even though the port has no lockdep.
+ *
+ * DEFINE_CLASS(name, type, exit, init, init_args...):
+ *   - class_<name>_t is the type;
+ *   - the constructor takes the init arguments and returns the scope's value
+ *     (the interface's init is a struct-returning statement expression);
+ *   - the destructor receives a pointer to the scoped variable (what
+ *     __cleanup() passes) and runs the exit expression over a copy.
+ */
+#define	DEFINE_CLASS(_name, _type, _exit, _init, _init_args...)		\
+	typedef _type class_##_name##_t;					\
+	typedef _type lock_##_name##_t;					\
+	static __always_inline void						\
+	class_##_name##_destructor(_type *p)					\
+	{										\
+		_type _T = *p;							\
+		(void)_T;								\
+		_exit;									\
+	}										\
+	static __always_inline _type						\
+	class_##_name##_constructor(_init_args)					\
+	{										\
+		_type t = _init;							\
+		return t;								\
+	}
+
+#define	DEFINE_GUARD(_name, _type, _lock, _unlock)			\
+	DEFINE_CLASS(_name, _type, _unlock, ({ _lock; _T; }), _type _T)
+
 #define	guard(_name)		CLASS(_name, __UNIQUE_ID(guard))
 #define	__guard_ptr(_name)	class_##_name##_lock_ptr
 #define	__is_cond_ptr(_name)	class_##_name##_is_conditional
@@ -2404,11 +2594,23 @@ class_spinlock_irqsave_lock_ptr(class_spinlock_irqsave_t *t)
 typedef unsigned long irqflags_t;
 #define	local_irq_save(flags)		do { (flags) = 0; } while (0)
 #define	local_irq_restore(flags)	do { (void)(flags); } while (0)
-#define	local_bh_disable()		do { } while (0)
-#define	local_bh_enable()		do { } while (0)
+/*
+ * The softirq half (docs/HANDOFF-S0-HOST.md §4.2/§4.3): one BH consumer thread
+ * (the lkpi-bh workqueue), a nesting counter for local_bh_disable(), and an
+ * "am I inside a tasklet callback" flag for in_softirq().  A tasklet is queued
+ * on the BH queue; the worker waits while the counter is nonzero, so a
+ * deferred callback cannot run inside the section.  in_interrupt() is false:
+ * this port exposes no true ISR context (the board's interrupt handlers run to
+ * completion and never call these); in_atomic() is the critical-section flag.
+ */
+void	lkpi_local_bh_disable(void);
+void	lkpi_local_bh_enable(void);
+int	lkpi_in_softirq(void);
+#define	local_bh_disable()		lkpi_local_bh_disable()
+#define	local_bh_enable()		lkpi_local_bh_enable()
+#define	in_softirq()			lkpi_in_softirq()
 #define	in_interrupt()			0
 #define	in_atomic()			0
-#define	in_softirq()			0
 #define	IRQ_NONE			0
 #define	IRQ_HANDLED			1
 /*
@@ -2812,6 +3014,9 @@ struct work_struct {
 	 * locked or completions get lost (the 2026-09-24 lesson) */
 	int	wk_queued;
 	volatile int wk_running;
+	/* set by cancel_work_sync while the item is still queued; the worker
+	 * consumes it instead of running the body (cleared on the way out) */
+	volatile int wk_cancelled;
 } __aligned(8);
 
 struct delayed_work {
@@ -2905,7 +3110,11 @@ extern struct workqueue_struct *lkpi_system_wq;
 #define	queue_delayed_work(wq, w, j)	lkpi_queue_delayed_work((wq), (w), (j))
 #define	cancel_delayed_work(w)		lkpi_cancel_delayed_work(w)
 #define	cancel_delayed_work_sync(w)	lkpi_cancel_delayed_work_sync(w)
-#define	cancel_work_sync(w)		({ lkpi_work_flush(w); true; })
+/* [LNX] include/linux/workqueue.h: cancel a still-queued item and wait for a
+ * running one.  The interface's return value says whether it was pending; the
+ * body is in linuxkpi_core.c. */
+bool lkpi_cancel_work_sync(struct work_struct *w);
+#define	cancel_work_sync(w)		lkpi_cancel_work_sync(w)
 #define	flush_work(w)			lkpi_work_flush(w)
 #define	flush_workqueue(wq)		do { (void)(wq); } while (0)
 #define	flush_delayed_work(w)		lkpi_flush_delayed_work(w)
@@ -3192,7 +3401,10 @@ struct net_device *alloc_netdev_dummy(int sizeof_priv);
 int firmware_request_nowarn(const struct firmware **fw, const char *name,
 			    struct device *device);
 
-void get_random_mask_addr(u8 *buf, const u8 *addr, const u8 *mask);
+/* get_random_mask_addr() is a static inline in the real include/net/cfg80211.h
+ * (the address-randomisation helper); the stack carries it, so the port must
+ * not also declare an external one - that made every stack TU report a
+ * static-after-non-static conflict.  The old line's component never called it. */
 
 
 

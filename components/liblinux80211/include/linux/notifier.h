@@ -46,4 +46,11 @@ struct notifier_block {
 #define	NOTIFY_BAD		(NOTIFY_STOP_MASK | 0x0002)
 #define	NOTIFY_STOP		(NOTIFY_OK | NOTIFY_STOP_MASK)
 
+/* [LNX] include/linux/notifier.h: a notifier chain's negative answer becomes
+ * that errno, NOTIFY_STOP/OK become 0.  Stated as the interface's expression. */
+static __always_inline int notifier_to_errno(int ret)
+{
+	return ret > NOTIFY_OK ? 0 : ret < 0 ? ret : 0;
+}
+
 #endif /* _LINUXKPI_LINUX_NOTIFIER_H_ */

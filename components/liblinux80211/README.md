@@ -45,6 +45,12 @@ adapter), `third-party/fsl_sdmmc/ports/` for the SDIO card stack's,
 ## License
 
 The component's own code is BSD-3-Clause. `include/` carries the Linux
-headers the surface mirrors; they are the face, not the stack. When
-`net/mac80211` and `net/wireless` land, the component becomes GPL-2.0-only and
-so does every image that links it.
+headers the surface mirrors; they are the face, not the stack.
+
+**Since 2026-11-10 the stack is in the tree**: `stack/mac80211/` (44 TUs + 26
+headers) and `stack/wireless/` (18 TUs + 8 headers) are verbatim GPL-2.0-only
+imports from the GT pin `63a2a8ab9cd3` (`stack/IMPORT.tsv`). The component is
+therefore a mixed-license tree: its own code stays BSD-3-Clause, the stack
+subtree is GPL-2.0-only, and every artifact that links the stack is GPL-2.0
+(`docs/LICENSES.md` §3). The stack is compiled by the S0 inventory target and
+not linked by this build; S1 adds the link behind its own profile.

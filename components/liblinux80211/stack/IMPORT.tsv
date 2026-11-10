@@ -1,0 +1,98 @@
+# Imported stack files: source commit, source path, destination, sha256, lines, kind, license.
+# Written by tools/build/import-stack.py; --check re-derives it.
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/main.c	components/liblinux80211/stack/mac80211/main.c	fe606516d7100c037c186ff68877564bcbc2bf47258bb3f4fadf1cc8486e63ec	1835	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/status.c	components/liblinux80211/stack/mac80211/status.c	45f177dd73f22fccb8a4f892fde9198d5740a2ca9539841be1e99d1dc0155d92	1336	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/driver-ops.c	components/liblinux80211/stack/mac80211/driver-ops.c	56d03c25dedea140079497c2f47a5b71034ecc68bcbab32806848daf010ad7ea	635	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/sta_info.c	components/liblinux80211/stack/mac80211/sta_info.c	6b1fb42444e9ad1d1437255598e613f705662b250cb2b4c4dc14444aae635179	3885	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/wep.c	components/liblinux80211/stack/mac80211/wep.c	0fa01e9066f2e2a6fafadecc511e3c4b8f19384f5e93c0774f698d53aa6a254f	307	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aead_api.c	components/liblinux80211/stack/mac80211/aead_api.c	b2b2d2d3a2682842f75530d0ec16b5f066ae2e0719c8fef0bcae7e854a0978d4	113	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/wpa.c	components/liblinux80211/stack/mac80211/wpa.c	07087347278d9f01307c98bad12554a611a8b70f703af4e7ca31747713d365b5	1075	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/scan.c	components/liblinux80211/stack/mac80211/scan.c	fd6b6654e5383748044805a1a4b7bd283dca04e6d87a886a758f98a8bdaa9908	1482	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/offchannel.c	components/liblinux80211/stack/mac80211/offchannel.c	1a4896644de860c7a9ff9cbb60d6ef745931ab9a13d8adffafda91afc830cc10	1089	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/ht.c	components/liblinux80211/stack/mac80211/ht.c	84ed5858ed5289e74cf15cd13dc4388d26e35789c890ea149f6b4dffa3df0ef3	614	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/agg-tx.c	components/liblinux80211/stack/mac80211/agg-tx.c	b6c90cdd1229b6e490c9b8b9e6e5ee354563481d8da9e57295944c57fabcd0d9	1068	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/agg-rx.c	components/liblinux80211/stack/mac80211/agg-rx.c	357048e7e152cdfc1808979e171b5a4fabb4e86269b1c7dadbfb045abccf2895	541	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/vht.c	components/liblinux80211/stack/mac80211/vht.c	92b31db49364d7306d23399d86da284308b22953c915574e2bc1aa5bad556f8a	494	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/he.c	components/liblinux80211/stack/mac80211/he.c	08f12eb8965ff285663d9de13493c472a85821417395833eb778b0ab5240eb45	359	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/s1g.c	components/liblinux80211/stack/mac80211/s1g.c	645775d90f33afe6395d2af413ba9a1042b82a0e62a5fc6226b53f3c7ec40c0b	234	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/ibss.c	components/liblinux80211/stack/mac80211/ibss.c	ee0f4be6758ec90e49e6a44d20358d863d2639c5ed9b04ea7f69a9579695493a	1806	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/iface.c	components/liblinux80211/stack/mac80211/iface.c	27d765b5833a81df8accd201827cfa01f9ebdd3a79f64a74798987e79b47b335	2568	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/link.c	components/liblinux80211/stack/mac80211/link.c	abb44c7cb5c5347356439b3f4e5f330d276fec7542363e5a3d3a103b3a44aab7	698	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/rate.c	components/liblinux80211/stack/mac80211/rate.c	1868fa525de6f0a526333190ac86d58961d8b513e7acde4fd7c4e126caf61001	1035	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/tkip.c	components/liblinux80211/stack/mac80211/tkip.c	a6ee99751f61e61885ae637c27d2d8984a011589cf2b0f1c5b56f1ff53c1cd36	323	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aes_cmac.c	components/liblinux80211/stack/mac80211/aes_cmac.c	67b8c12d66fe7a02f79c32781b1814625bd370fca42e245190c225c89be47e1d	43	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aes_gmac.c	components/liblinux80211/stack/mac80211/aes_gmac.c	479e6c722e32ceaea56a48c8901639ea80e5ec934bb30efdeeb890630cecac91	94	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/fils_aead.c	components/liblinux80211/stack/mac80211/fils_aead.c	f2932dc59e7a3fb588caed0a21f545b9023fcf1800c89ad20125ee6dce640340	318	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/cfg.c	components/liblinux80211/stack/mac80211/cfg.c	9833d64630ff36568db9e3bdfa64af19d497b0d5cde0fda9d7e334d26cf397dc	6094	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/ethtool.c	components/liblinux80211/stack/mac80211/ethtool.c	d0b8f0a5fa0e840aa3e4787a4e9c2d99809070f71df367b5b164d262b756954f	254	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/rx.c	components/liblinux80211/stack/mac80211/rx.c	e9d38d41e23bb95e1a344641e929ee26c4a4194a7405bfd76623e9c1ebb04900	5770	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/spectmgmt.c	components/liblinux80211/stack/mac80211/spectmgmt.c	d4d80e2ecaf6b7e04e422f353f785965b7976bc03431b3ccb613f20828fc20e0	446	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/tx.c	components/liblinux80211/stack/mac80211/tx.c	1b4fcc50bdc61af59aa6ee6f4834d727065f591592661d91de81436bdcfe93ca	6668	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/key.c	components/liblinux80211/stack/mac80211/key.c	49c16231d7d89446e0642994aa42a065eb914d2a90e3ed7b89899b39aea20fa4	1518	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/util.c	components/liblinux80211/stack/mac80211/util.c	40be00a3ec50e372842238c4fbd6c1f61e5f6554ac205a2d55c905dd0d848bed	4754	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/parse.c	components/liblinux80211/stack/mac80211/parse.c	1016c098a0b9a273c9d130c8666e3738e89cef87131db19acd506b3a8f783fb9	1209	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/wme.c	components/liblinux80211/stack/mac80211/wme.c	d29428479c89df3a1e446e77f67adb20923a8a46deda3804a4832d3695d3eb4a	246	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/chan.c	components/liblinux80211/stack/mac80211/chan.c	e1599013361565ab78ddcff3142ea1a6e35cfde00a997d6986a8942824b0fc50	2555	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/ap.c	components/liblinux80211/stack/mac80211/ap.c	5faef24a026612cc891af89f59f4b3eea944c80ab8c44a1ce0088dcf8887c6e1	353	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/trace.c	components/liblinux80211/stack/mac80211/trace.c	33c7904a3571fa7d9ca27b3e1cfa649056c80a9a0a9866a0af3ca55d9c74c7d8	77	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/mlme.c	components/liblinux80211/stack/mac80211/mlme.c	6f35139af2e9e63b0e4c87e2a0b50ed90337ac589b30fe14a2b01376815a8047	11977	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/tdls.c	components/liblinux80211/stack/mac80211/tdls.c	17a2355fd523828a7437da5f88827d951862215fd3c0163d1dfb57e46f721343	2082	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/ocb.c	components/liblinux80211/stack/mac80211/ocb.c	95fd1a98ac843f0d787b6b498420641eaffcbd52133a23ef8e4f00963c11891b	248	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/airtime.c	components/liblinux80211/stack/mac80211/airtime.c	718be20db29dfecead18d469ebb094a82c44a18dc640f3534c35dd003df76d53	852	tu	ISC
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/eht.c	components/liblinux80211/stack/mac80211/eht.c	3ddef246e9893d5f62e26c4d258a80db47c3600ae2fe787b6f44a0b37142c607	102	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/uhr.c	components/liblinux80211/stack/mac80211/uhr.c	c41ef0d7dfee43bb410b85b64fbb903f9015d4d31a6f64ef45d7a8473e059df0	27	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/nan.c	components/liblinux80211/stack/mac80211/nan.c	4a11895a1f43207fd32cd2edf179965146f15a7101bd27aecffa74611fd5612e	849	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/wbrf.c	components/liblinux80211/stack/mac80211/wbrf.c	e29b4473a7e9a243456f55409685355b1220f7da4b77082ccf701ddd345d8467	94	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/rc80211_minstrel_ht.c	components/liblinux80211/stack/mac80211/rc80211_minstrel_ht.c	2848ead2bc6b25dcfe82045232c5249570ee09d5d89db11d57f0e45a24edb7fc	2031	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/core.c	components/liblinux80211/stack/wireless/core.c	47854289a33facf77401604f9153dad8c72c00a4a1753c710c40dfcf735da41e	2096	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/sysfs.c	components/liblinux80211/stack/wireless/sysfs.c	0ad37bb27dc5e0fb536aaceee9a4b3af9802f31d3dba511228d678385e12af81	187	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/radiotap.c	components/liblinux80211/stack/wireless/radiotap.c	b7c951a36893a808aaeb8bb12080d7b59eb64c4e5d354b9d6d3101ff89e887b3	362	tu	GPL-2.0 OR BSD-2-Clause
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/util.c	components/liblinux80211/stack/wireless/util.c	95a2f945cf684afd31dcafa8752be374c4e41d484965962e4021ba8375f383f2	3136	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/reg.c	components/liblinux80211/stack/wireless/reg.c	0b828677ffe710766a745bce65e0bb330b2032166ba5ff50f4cce5157cff2fc5	4389	tu	ISC
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/scan.c	components/liblinux80211/stack/wireless/scan.c	24570f39d5aa075f9d34b10dbcf17f8e981dbe2267a50f0fb07b7a73b8ba258d	4054	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/nl80211.c	components/liblinux80211/stack/wireless/nl80211.c	e5db0aa762c759ef21b3046a9af6e895805a85226b78c563829d634dbb504c03	23648	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/mlme.c	components/liblinux80211/stack/wireless/mlme.c	c40f679d23650b1b092afdd5d810ebaa16ac778f49d12527d1865c75794c9a7e	1477	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/ibss.c	components/liblinux80211/stack/wireless/ibss.c	25043fa48aff1f6452e44af6b85689a097949fd33c52bb711e1654deafe9fa2b	496	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/sme.c	components/liblinux80211/stack/wireless/sme.c	4a84f2195d36b9372f5897f6b7f04f6e13d824e59bc6d246e9c59e2d7ef80df7	1621	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/chan.c	components/liblinux80211/stack/wireless/chan.c	a58880f0b3225a5790e1874e6a88675e4ac0eb8098df432d597ca1549d79ded0	1879	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/ethtool.c	components/liblinux80211/stack/wireless/ethtool.c	af6f2b7c067fdb6c2ca011714de3dfa79d72dd04106b62304d167a8a344ea2bf	29	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/mesh.c	components/liblinux80211/stack/wireless/mesh.c	89aa26a2492907328264aa9582361adaf6abf42671ce4689c29439725dd32ae2	289	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/ap.c	components/liblinux80211/stack/wireless/ap.c	acc8a9270be54be3f9ef8b4c5cfab5a5a9ee800dc0cd7bad7173c472b7d5e9cd	74	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/trace.c	components/liblinux80211/stack/wireless/trace.c	3b2ab320552f09bab896bcdd2017d73c4c186afbb8503d6b4f376c4c685bb843	8	tu	GPL-2.0
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/ocb.c	components/liblinux80211/stack/wireless/ocb.c	eac52ed78016fc22edb84e402220d30954b17320251a20488e1ef5374fafb199	65	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/michael-mic.c	components/liblinux80211/stack/wireless/michael-mic.c	5b85b0a93b16b66ce510a18332d58c1e0a22ea7810225512befc0243c9c6526c	87	tu	GPL-2.0-only
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/pmsr.c	components/liblinux80211/stack/wireless/pmsr.c	31e55e4dd03ee3fe7c0c5dc2953f9c30cf25a58d8035307806815298a468a8aa	886	tu	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aead_api.h	components/liblinux80211/stack/mac80211/aead_api.h	92d0df47efa49956bc4ef384cf90caa57f1b8a120f4ba987c1e649a22fbf07dd	23	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aes_ccm.h	components/liblinux80211/stack/mac80211/aes_ccm.h	74767efc78badfd21ba42dae4e9b9ac24d8267bc1069b888af16a3146dff9058	45	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aes_cmac.h	components/liblinux80211/stack/mac80211/aes_cmac.h	157c38e89c705c69fad56ee2ece18d17f6d8b95aa9557f07a07e8911ec2eee12	15	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aes_gcm.h	components/liblinux80211/stack/mac80211/aes_gcm.h	3cdeb49694e9a032c711f6f31b63ffea54b1ee635f14950b57e5576208499ab4	43	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/aes_gmac.h	components/liblinux80211/stack/mac80211/aes_gmac.h	ea703e1dbea8511d869611f66ac41f880df2323dc40a9717f583e3a80ba966f2	20	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/debug.h	components/liblinux80211/stack/mac80211/debug.h	a6dc0d5430a5df233f0db533da759d088ca88af6799ae95d4a0619a1cebb1f63	249	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/debugfs.h	components/liblinux80211/stack/mac80211/debugfs.h	9d2b1c57a6232f4ba6858b6af010ee440cbddae92a7767507befe032fce7d258	17	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/debugfs_key.h	components/liblinux80211/stack/mac80211/debugfs_key.h	77431cf4cde596478d2d57475347508807f16e4607741accf1ce9989c1d5decb	29	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/debugfs_netdev.h	components/liblinux80211/stack/mac80211/debugfs_netdev.h	7426aabde7f68d202e3b9544634fd2e11d038269fe7d5fb77ae4c4b2ffc72952	45	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/debugfs_sta.h	components/liblinux80211/stack/mac80211/debugfs_sta.h	2347091eb66b4ab7b68f13c3cd672072c1fe085938911f13f2424b939bf2b776	27	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/driver-ops.h	components/liblinux80211/stack/mac80211/driver-ops.h	08815914592d77ab5de279e9fe342d9a6cddace93ef1c46be96e64756913c6a0	1817	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/drop.h	components/liblinux80211/stack/mac80211/drop.h	e5923a114b329a9e169e611931d95e7fb00db3463b693bc12b7660c2e2fddae6	139	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/fils_aead.h	components/liblinux80211/stack/mac80211/fils_aead.h	26dab7ff778a216a6fb9ae3c69d41ba29e63edcfd89e280e93e3ef3ee91699dd	16	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/ieee80211_i.h	components/liblinux80211/stack/mac80211/ieee80211_i.h	6e8086906ba523740ea9bb5ae350f391ba24fc7fd66a0cfeecd2ddee70a78029	3013	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/key.h	components/liblinux80211/stack/mac80211/key.h	a2d8b850487fe3df29fc8f00c9383ea7cef2e92137b15686b568351b9b163e12	175	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/led.h	components/liblinux80211/stack/mac80211/led.h	3b664a3bc53d278990bbd253593f87f53d1be3b7eb4bb10cee9a8fa78d0f2e91	86	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/mesh.h	components/liblinux80211/stack/mac80211/mesh.h	92c83426790148c181d687444313f526f2033406a165c77f4a0d50023979944c	429	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/rate.h	components/liblinux80211/stack/mac80211/rate.h	c9cce1fd81b807f9f6a667924513243b2f4d43c0677feadfa16bcda2f30b6782	112	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/rc80211_minstrel_ht.h	components/liblinux80211/stack/mac80211/rc80211_minstrel_ht.h	063a42ba1e3975ba572ad0eaa99d66826bff5de1873790d104948e3ae396782a	202	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/sta_info.h	components/liblinux80211/stack/mac80211/sta_info.h	ed2e2525580cb2cf825438163c883450e5eb7fe2138e346908742359b1af4f26	1162	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/tkip.h	components/liblinux80211/stack/mac80211/tkip.h	9b619d915128216b503b631af2bb2cd98583fe4f1d08d7dee25d644ce06e5683	30	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/trace.h	components/liblinux80211/stack/mac80211/trace.h	1d3a33bba1046624de5694cd1a9639b0ee3ad274a146f3a9dee29118b572fcb7	3412	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/trace_msg.h	components/liblinux80211/stack/mac80211/trace_msg.h	b372a6bd3c725abaf24ff92d32922280174d7aa3f260966b95754c006145848e	55	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/wep.h	components/liblinux80211/stack/mac80211/wep.h	cee2f252ac51d16e75e29d4c829f5a0268357fe61661c467ec0994dbf8fe1960	30	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/wme.h	components/liblinux80211/stack/mac80211/wme.h	3af623fec90fc698dd743eed9e319d65fac3924b41d57a1a93570476460ec431	21	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/mac80211/wpa.h	components/liblinux80211/stack/mac80211/wpa.h	1d27d5a6c7b80c5c2ddd199c5e1036e1fe8796ede1905c420f47ea0bb17f081d	47	header	GPL-2.0-only */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/core.h	components/liblinux80211/stack/wireless/core.h	4111a83d756db50f6752d48ac04852fba7ae8fae92759e1f3555777dbe5320c0	657	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/debugfs.h	components/liblinux80211/stack/wireless/debugfs.h	e0a901aab97a02da4c763e9c471071e4ef506c7cdbfafd15e801630f06bc2973	12	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/nl80211.h	components/liblinux80211/stack/wireless/nl80211.h	21b48cd5037d8a9995c3cbbbc38e2c5625a815fe8bad10b52e98e3e38cc78d79	132	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/rdev-ops.h	components/liblinux80211/stack/wireless/rdev-ops.h	a5e56cb25210bc6fbc2831ccaf2c7c999dd50c478fa9fb5b2fde2be7c9a63b6d	1639	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/reg.h	components/liblinux80211/stack/wireless/reg.h	57c768e27b69edea522252680b0b5b9aa3708a462b32f383a3d4f1c7a91752e6	186	header	ISC */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/sysfs.h	components/liblinux80211/stack/wireless/sysfs.h	71d4490d3fdbc26e4f04d772d87bab7b69df1af15639c5fdde60d2ee9e5e5b69	10	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/trace.h	components/liblinux80211/stack/wireless/trace.h	94245f05bfc3d0728c7521f6e27afefef326a862957da1dfa80b62c31b458363	4414	header	GPL-2.0 */
+63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b	net/wireless/wext-compat.h	components/liblinux80211/stack/wireless/wext-compat.h	7334bb4febeb992185218c17f3eefedbd6c6653a188fc43fae681fb9ceca5182	58	header	GPL-2.0-only */

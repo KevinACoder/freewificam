@@ -26,7 +26,7 @@ MATRIX_PROFILES ?= rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-us
 
 .PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images libs \
 	check check-no-d check-config-header check-build-contract case-list-check matrix \
-	dump-vars clean distclean rk3568_ci
+	dump-vars clean distclean rk3568_ci s0-compile host-test
 
 help:
 	@printf '%s\n' \
@@ -41,6 +41,8 @@ help:
 		'  image              one image for the profile backend' \
 		'  images             alias of image (this line carries one backend)' \
 		'  libs               archive the image object groups under build/lib/<profile>' \
+		'  s0-compile         compile the imported stack TUs against the face (no link; S0_RUN=<n>)' \
+		'  host-test          build and run the host semantic bench (green, then --break red)' \
 		'  check              every defconfig parses and regenerates identically' \
 		'  check-no-d         no compile/link command carries a -D (representative set)' \
 		'  check-config-header generated header covers every Kconfig symbol' \
@@ -118,6 +120,29 @@ images: image
 
 libs: check-build-contract config
 	@$(MAKE) -C $(BUILD_MK) -j$(JOBS) libs PROFILE=$(PROFILE)
+
+# S0 is a measurement of the imported stack against the component's Linux face:
+# one `-c` per translation unit, a per-TU log and a summary under runs/S0.  It
+# does not link, does not enter an image, and is expected to report failures -
+# the product is the gap list (docs/HANDOFF-S0-HOST.md §2.4).  The profile only
+# supplies the face's fixed macros; rk3568-kpi-mock is the component profile
+# that is always present.
+S0_PROFILE ?= rk3568-kpi-mock
+S0_RUN ?= 1
+
+s0-compile:
+	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(S0_PROFILE)
+	@$(MAKE) -C $(BUILD_MK) s0-compile PROFILE=$(S0_PROFILE) S0_RUN=$(S0_RUN)
+
+# The host semantic bench: x86 + the upstream FreeRTOS POSIX port + the same
+# kernel-API bodies the images carry.  It is a model of the target's execution
+# context, not a board test (tests/host/kpi/README.md).  The config header is
+# the component profile's; nothing in the bench is compiled into an image.
+HOST_PROFILE ?= rk3568-kpi-mock
+
+host-test:
+	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(HOST_PROFILE)
+	@$(MAKE) -C $(ROOT)/tests/host/kpi run PROFILE=$(HOST_PROFILE)
 
 check:
 	@set -e; for f in $(CONFIGS)/*.defconfig; do \

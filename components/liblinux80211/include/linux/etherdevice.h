@@ -15,6 +15,30 @@
 #define _LINUXKPI_LINUX_ETHERDEVICE_H_
 
 #include "../../linuxkpi_core.h"
+
+/* [LNX] include/linux/etherdevice.h: the MAC <-> u64 helpers the real
+ * net/cfg80211.h names (random address derivation and the scan denominator).
+ * The interface packs the address big-endian into the low 48 bits; both arms
+ * are the interface's own bodies. */
+static __always_inline u64 ether_addr_to_u64(const u8 *addr)
+{
+	u64 u = 0;
+	int i;
+
+	for (i = 0; i < ETH_ALEN; i++)
+		u = u << 8 | addr[i];
+	return u;
+}
+
+static __always_inline void u64_to_ether_addr(u64 u, u8 *addr)
+{
+	int i;
+
+	for (i = ETH_ALEN - 1; i >= 0; i--) {
+		addr[i] = u & 0xff;
+		u >>= 8;
+	}
+}
 #include <linux/if_ether.h>
 #include <linux/netdevice.h>
 

@@ -92,6 +92,21 @@ struct sk_buff *__netdev_alloc_skb(struct net_device *dev, unsigned int length,
  */
 struct sk_buff *skb_clone(const struct sk_buff *skb, gfp_t gfp_mask);
 
+/*
+ * [LNX] include/linux/skbuff.h:3270,3090: the network header and its offset.
+ * The interface reads both from offsets its stack keeps on the buffer
+ * (skb->network_header / skb->transport_header); this port's sk_buff carries
+ * neither, because the bridge builds the whole 802.11 frame in the buffer and
+ * the network header is derived from the frame's own geometry (the derivation
+ * include/linux/ip.h states for ip_hdr()).  The two bodies therefore live in
+ * the pool (skbuff/skbuff_pool.c) where that derivation is compiled once, and
+ * these are their declarations: the real include/linux/ieee80211.h names both
+ * and expects include/linux/skbuff.h to have declared them, exactly as on the
+ * interface.
+ */
+unsigned char *skb_network_header(const struct sk_buff *skb);
+int skb_network_offset(const struct sk_buff *skb);
+
 static inline struct sk_buff *netdev_alloc_skb(struct net_device *dev,
 					       unsigned int length)
 {

@@ -20,31 +20,12 @@
 
 struct rfkill;
 
-/* [LNX] include/uapi/linux/rfkill.h:66-84 (the enumerators the compiled set names) */
-enum rfkill_type {
-	RFKILL_TYPE_ALL = 0,
-	RFKILL_TYPE_WLAN,
-	RFKILL_TYPE_BLUETOOTH,
-	RFKILL_TYPE_UWB,
-	RFKILL_TYPE_WIMAX,
-	RFKILL_TYPE_WWAN,
-	RFKILL_TYPE_GPS,
-	RFKILL_TYPE_FM,
-	RFKILL_TYPE_NFC,
-	NUM_RFKILL_TYPES,
-};
-
-enum rfkill_operation {
-	RFKILL_OP_ADD = 0,
-	RFKILL_OP_DEL,
-	RFKILL_OP_CHANGE,
-	RFKILL_OP_CHANGE_ALL,
-};
-
-enum rfkill_hard_block_reasons {
-	RFKILL_HARD_BLOCK_SIGNAL	= 1 << 0,
-	RFKILL_HARD_BLOCK_NOT_OWNER	= 1 << 1,
-};
+/* The wire enumerations are the uapi header's own file, carried verbatim by
+ * the port (include/uapi/linux/rfkill.h); they used to be restated here as a
+ * face.  The real include/net/cfg80211.h includes the uapi header by name, so
+ * restating the enums made every translation unit that includes both report a
+ * redeclaration.  One definition, in the file the interface keeps it in. */
+#include <uapi/linux/rfkill.h>
 
 /*
  * [LNX] include/linux/rfkill.h:239,313-316: `bool rfkill_soft_blocked(struct
@@ -56,6 +37,22 @@ enum rfkill_hard_block_reasons {
  * takes its default (not-blocked) path, which is the interface's own answer when
  * there is no switch.
  */
+/* [LNX] include/linux/rfkill.h:299-312: the polling pause/resume pair cfg80211's
+ * wiphy registration calls.  The port has no rfkill switch (and therefore no
+ * polling to pause); the calls keep their shape and do nothing, which is the
+ * no-core arm's answer. */
+static __always_inline __unused void
+rfkill_pause_polling(struct rfkill *rfkill)
+{
+	(void)rfkill;
+}
+
+static __always_inline __unused void
+rfkill_resume_polling(struct rfkill *rfkill)
+{
+	(void)rfkill;
+}
+
 static __always_inline __unused bool
 rfkill_soft_blocked(struct rfkill *rfkill)
 {

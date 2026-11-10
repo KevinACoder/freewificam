@@ -38,6 +38,13 @@
 #include "linuxkpi_core.h"
 #include "linuxkpi_txq_audit.h"
 #include <linux/skbuff.h>
+#include <linux/ieee80211.h>
+
+/* [LNX] include/net/cfg80211.h:7677: the 802.11 header-length helper.  Its body
+ * belongs to the stack (net/mac80211/util.c); this unit only derives the
+ * network header for the sk_buff face, and an image that never takes that path
+ * drops the caller with --gc-sections. */
+unsigned int ieee80211_hdrlen(__le16 fc);
 
 /* the target's critical-section and heap entry points (the facade); a host build
  * defines LKPI_SKB_POOL_NO_TARGET_HOOKS and supplies the hooks itself */
@@ -1565,3 +1572,56 @@ __attribute__((weak)) void lkpi_spl_page_put(struct page *page)
 	(void)page;
 }
 #endif /* LKPI_SKB_POOL_NO_TARGET_HOOKS */
+
+/* ------------------------------------------------------------------ */
+/* sk_buff header accessors (the interface declares them in skbuff.h)  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/linux/skbuff.h:3268-3272:
+ *   `static inline unsigned char *skb_network_header(const struct sk_buff *skb)
+ *    { return skb->head + skb->network_header; }`
+ *
+ * The interface reads an offset its stack keeps on the buffer (the 802.11
+ * header sits in the headroom and `network_header` points past it).  This
+ * port's sk_buff carries no such offset: the bridge builds the whole 802.11
+ * frame in the buffer, so the network header is derived from the frame's own
+ * geometry - an 802.11 data frame's payload opens with LLC/SNAP and the
+ * network header follows it; a non-data frame, or one too short to hold that,
+ * has none.  The body lives here, with the sk_buff definition, and
+ * include/linux/ip.h's ip_hdr() is the one-line projection of it the interface
+ * states.  mac80211's own TDLS helper (include/linux/ieee80211.h) names
+ * skb_network_header() and skb_network_offset() as well.
+ */
+unsigned char *
+skb_network_header(const struct sk_buff *skb)
+{
+	const struct ieee80211_hdr *hdr;
+	unsigned int off;
+
+	if (skb == NULL || skb->len < 24u)
+		return NULL;
+	hdr = (const struct ieee80211_hdr *)skb->data;
+	if (!ieee80211_is_data(hdr->frame_control))
+		return NULL;
+	off = ieee80211_hdrlen(hdr->frame_control) + 8u;	/* LLC/SNAP */
+	if (off > skb->len)
+		return NULL;
+	return (unsigned char *)(skb->data + off);
+}
+
+/* [LNX] include/linux/skbuff.h:3270: `return skb->transport_header -
+ * skb->network_header;` - here, the distance from the frame's data start to
+ * the derived network header. */
+int
+skb_network_offset(const struct sk_buff *skb)
+{
+	unsigned char *nh;
+
+	if (skb == NULL)
+		return 0;
+	nh = skb_network_header(skb);
+	if (nh == NULL)
+		return 0;
+	return (int)(nh - skb->data);
+}

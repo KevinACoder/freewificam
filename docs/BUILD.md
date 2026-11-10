@@ -155,3 +155,28 @@ host tier, the SDK packaging and the CMake equivalence entry. None of them is
 imported here; their hooks in the Makefile are gone rather than dormant, so a
 missing world fails at parse time instead of at link time. The edits are rows
 1–13 in `DIVERGENCES.md`.
+
+
+## 5. S0 and the host bench (2026-11-10)
+
+Two targets sit outside the image, on purpose:
+
+```
+./make.rtos s0-compile [S0_RUN=<n>]   # compile the imported stack TUs, no link
+./make.rtos host-test                 # x86 bench: green run, then --break red
+```
+
+- `s0-compile` writes `runs/S0/run-<n>/{compile/*.log,obj/,summary.tsv}` (the
+  project-root `runs/`, beside the repo) and copies the summary to
+  `runs/S0/summary.tsv`.  Flags are the kpi world's plus the stack include roots
+  and four `-Werror` diagnostics; `tools/build/s0-compile.sh` refuses a flag set
+  that reaches into `linux-upstream/include`.  A failed TU is data, not a build
+  failure: the target exits 0 and the summary is the product.
+- `host-test` builds `tests/host/kpi/` against `rk3568-kpi-mock`'s config header
+  and runs the binary twice (normal must be green, `--break` must be red).  It is
+  a model of the target's context, not a board test; the limits are listed in
+  `tests/host/kpi/README.md`.
+- The two new flag worlds (`S0_CFLAGS`, and the host Makefile's own set) do not
+  enter the image link; `S0_CFLAGS` derives from `KPI_CFLAGS` so
+  `check-build-contract.sh` still sees the kernel's three flags and the profile's
+  `-O` token.

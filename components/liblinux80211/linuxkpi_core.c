@@ -697,6 +697,21 @@ unsigned int get_random_int(void)
 	return lkpi_random_u32();
 }
 
+/* [LNX] include/linux/random.h: the byte filler netdev_rss_key_fill() and the
+ * stack's address randomisation call.  Filled from the component's xorshift
+ * stream; the same caveat as above applies (identifiers and jitter, not
+ * cryptography). */
+void get_random_bytes(void *buf, size_t len)
+{
+	u8 *out = buf;
+	size_t i;
+
+	if (out == NULL)
+		return;
+	for (i = 0; i < len; i++)
+		out[i] = (u8)(lkpi_random_u32() >> ((i & 3u) * 8u));
+}
+
 int lkpi_strcasecmp(const char *a, const char *b)
 {
 	int ca, cb;
@@ -1144,6 +1159,14 @@ static void lkpi_worker_entry(void *arg)
 		os_critical_state_t state = osCriticalEnter();
 
 		w->wk_queued = 0;
+		if (w->wk_cancelled != 0) {
+			/* cancel_work_sync() named this item before the worker
+			 * reached it: consume the arm, do not run the body. */
+			w->wk_cancelled = 0;
+			w->wk_running = 0;
+			osCriticalExit(state);
+			continue;
+		}
 		w->wk_running = 1;
 		osCriticalExit(state);
 
@@ -1198,10 +1221,11 @@ struct workqueue_struct *lkpi_alloc_workqueue(const char *fmt, int flags,
 	memset(&attr, 0, sizeof(attr));
 	attr.name = impl->name;
 	attr.stack_size = LKPI_WQ_STACK_SIZE;
-	/* Below the submitter: a driver callback must not be able to starve the
-	 * context that queued it (the same rule the USB engine's drain thread
-	 * follows). */
-	attr.priority = osPriorityNormal;
+	/* The system queue sits below the submitter (a driver callback must not
+	 * starve the context that queued it); the BH queue is the one exception -
+	 * a softirq outranks a task - and is created with WQ_HIGHPRI. */
+	attr.priority = (flags & WQ_HIGHPRI) ? osPriorityAboveNormal
+					     : osPriorityNormal;
 	impl->thread = osThreadNew(lkpi_worker_entry, impl, &attr);
 	if (impl->thread == NULL) {
 		(void)osMessageQueueDelete(impl->mq);
@@ -1408,6 +1432,30 @@ void lkpi_work_flush(struct work_struct *w)
 #endif
 }
 
+/*
+ * The interface's cancel_work_sync(): if the item is still queued, mark it so
+ * the worker consumes it without running the body, then wait for both the
+ * queued flag and a running body.  Returns whether it was pending - the same
+ * answer the interface's bool carries.
+ */
+bool lkpi_cancel_work_sync(struct work_struct *w)
+{
+	os_critical_state_t state;
+	bool was;
+
+	if (w == NULL)
+		return false;
+	state = osCriticalEnter();
+	was = w->wk_queued != 0;
+	if (was)
+		w->wk_cancelled = 1;
+	osCriticalExit(state);
+	/* A body that is already running is waited for, not interrupted (the
+	 * interface's own contract: cancel does not stop a running callback). */
+	lkpi_work_flush(w);
+	return was;
+}
+
 void lkpi_flush_delayed_work(struct delayed_work *dw)
 {
 	(void)lkpi_cancel_delayed_work(dw);
@@ -1493,57 +1541,137 @@ void *lkpi_worker_thread_id(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* the BH consumer and its nesting counter                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * One BH thread consumes every tasklet (docs/HANDOFF-S0-HOST.md §4.2): the
+ * dedicated `lkpi-bh` workqueue runs one callback at a time, above normal
+ * priority (a softirq outranks a task), and `local_bh_disable()`'s nesting
+ * counter keeps it from starting one while a section is open.  Ordinary
+ * workqueue work stays on the system queue and is deliberately not gated: the
+ * interface's local_bh_disable() defers softirqs, not work.
+ */
+static struct workqueue_struct *lkpi_bh_wq;
+static volatile int lkpi_bh_depth;
+static volatile int lkpi_bh_inside;
+static osSemaphoreId_t lkpi_bh_unbarrier;
+
+void
+lkpi_local_bh_disable(void)
+{
+	os_critical_state_t state = osCriticalEnter();
+
+	lkpi_bh_depth++;
+	osCriticalExit(state);
+}
+
+void
+lkpi_local_bh_enable(void)
+{
+	os_critical_state_t state = osCriticalEnter();
+	int release = 0;
+
+	if (lkpi_bh_depth > 0)
+		lkpi_bh_depth--;
+	release = (lkpi_bh_depth == 0) && (lkpi_bh_unbarrier != NULL);
+	osCriticalExit(state);
+	/* Wake the BH consumer outside the critical section: a CMSIS semaphore
+	 * release may yield, and a yield inside the port's critical section is
+	 * exactly the move that deadlocks the host build. */
+	if (release)
+		(void)osSemaphoreRelease(lkpi_bh_unbarrier);
+}
+
+int
+lkpi_in_softirq(void)
+{
+	return lkpi_bh_inside != 0;
+}
+
+static void
+lkpi_bh_wait_open(void)
+{
+	/* A callback may not start while a section is open; waiting here defers
+	 * every pending tasklet, which is the softirq semantics.  The 100 ms cap is
+	 * only a liveness escape: a leaked count would otherwise park the BH
+	 * thread silently (the interface's own failure mode), and the census
+	 * counters record it. */
+	while (lkpi_bh_depth > 0) {
+		if (lkpi_bh_unbarrier != NULL)
+			(void)osSemaphoreAcquire(lkpi_bh_unbarrier, 100u);
+		else
+			(void)osDelay(1);
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /* deferred callbacks (linux/interrupt.h)                              */
 /* ------------------------------------------------------------------ */
 
 /*
- * A tasklet is a coalescing work item on this port: arming it queues one work
- * item, and the worker thread is the softirq context - which is what makes the
- * callback run outside the context that armed it (a driver whose receive path
- * arms from its bus interrupt thread and then hands frames up the stack cannot
- * do that hand-off in the interrupter's context).
- *
- * Why arming must not be allowed to lose the callback: the vendored SDIO driver
- * drains its receive buffers nowhere else - sd_rxhandler() enqueues a buffer and
- * arms the tasklet (hal/rtl8188f/sdio/sdio_ops.c:1466-1468), and
- * rtl8188fs_recv_priv's teardown is the only other reference. A dropped arm
- * stops the drain permanently (its pool of 8 buffers is then never refilled), so
- * the one case the seam cannot serve - a full queue - runs the callback here
- * instead of dropping it.
+ * A tasklet is a coalescing BH item.  The state bit is the interface's
+ * TASKLET_STATE_SCHED: it is set by the arm and cleared by the consumer, so a
+ * second arm before the callback runs is one callback, and an arm made while
+ * the tasklet is disabled is remembered and re-kicked by tasklet_enable().
+ * The work item is the queue slot; the BH worker is the only consumer.
  */
 static void lkpi_tasklet_run(struct work_struct *w)
 {
 	struct tasklet_struct *t = container_of(w, struct tasklet_struct, work);
+	os_critical_state_t state;
 
-	if (t->func != NULL)
+	/* The SCHED bit stays set until the callback is actually about to run:
+	 * an arm that arrives while the consumer is waiting for the BH section to
+	 * open must coalesce into this same callback (the second arm would
+	 * otherwise see the bit clear and queue a second run). */
+	lkpi_bh_wait_open();
+	if (t->count.counter > 0) {
+		/* disabled while queued: the arm stays remembered; enable() kicks */
+		return;
+	}
+	state = osCriticalEnter();
+	t->state &= ~(1UL << TASKLET_STATE_SCHED);
+	osCriticalExit(state);
+	lkpi_bh_inside = 1;
+	if (t->use_callback) {
+		if (t->callback != NULL)
+			t->callback(t);
+	} else if (t->func != NULL) {
 		t->func(t->data);
+	}
+	lkpi_bh_inside = 0;
 }
 
 void lkpi_tasklet_schedule(struct tasklet_struct *t)
 {
+	os_critical_state_t state;
+	int disabled;
+
 	if (t == NULL)
 		return;
-
-	if (lkpi_queue_work(lkpi_system_wq, &t->work))
+	state = osCriticalEnter();
+	if ((t->state & (1UL << TASKLET_STATE_SCHED)) != 0) {
+		osCriticalExit(state);
 		return;
+	}
+	t->state |= (1UL << TASKLET_STATE_SCHED);
+	disabled = t->count.counter > 0;
+	osCriticalExit(state);
 
-	/*
-	 * Not queued. Already armed is the coalescing case (the interface schedules
-	 * a tasklet that is pending without a second run), and needs nothing; a
-	 * refused slot or a seam that is not up yet is the case that must not lose
-	 * the callback, so it runs here.
-	 */
-	if (t->work.wk_queued != 0)
+	if (disabled)
 		return;
+	if (lkpi_bh_wq != NULL && lkpi_queue_work(lkpi_bh_wq, &t->work))
+		return;
+	/* no BH seam yet (init not run) or a refused slot: keep the arm and let
+	 * the next arm deliver it; running it here would violate the "not in the
+	 * armer's context" contract. */
 	lkpi_wq_stats_state.direct++;
-	lkpi_tasklet_run(&t->work);
 }
 
 void tasklet_hi_schedule(struct tasklet_struct *t)
 {
-	/* One seam carries both of the interface's lists; the priority split has no
-	 * counterpart here (the worker is one thread at the scheduler's normal
-	 * priority), so the high list arms exactly as the normal one does. */
+	/* One seam carries both lists; the priority split has no counterpart. */
 	lkpi_tasklet_schedule(t);
 }
 
@@ -1562,17 +1690,55 @@ void tasklet_init(struct tasklet_struct *t, void (*func)(unsigned long),
 	lkpi_work_init(&t->work, lkpi_tasklet_run);
 }
 
-void tasklet_kill(struct tasklet_struct *t)
+void tasklet_disable(struct tasklet_struct *t)
 {
+	os_critical_state_t state;
 
 	if (t == NULL)
 		return;
-	/* Wait for an armed or running callback to leave the seam: the driver's
-	 * teardown calls this before it releases the buffers the callback reads
-	 * (hal/rtl8188f/sdio/rtl8189fs_recv.c:497). This flush runs a callback that
-	 * is still pending rather than discarding it, which is why the ordering the
-	 * driver uses (kill, then free) is the one that holds here. */
+	state = osCriticalEnter();
+	t->count.counter++;
+	osCriticalExit(state);
+}
+
+void tasklet_enable(struct tasklet_struct *t)
+{
+	os_critical_state_t state;
+	int kick = 0;
+
+	if (t == NULL)
+		return;
+	state = osCriticalEnter();
+	if (t->count.counter > 0)
+		t->count.counter--;
+	kick = (t->count.counter == 0) &&
+	       ((t->state & (1UL << TASKLET_STATE_SCHED)) != 0) &&
+	       (t->work.wk_queued == 0);
+	osCriticalExit(state);
+	if (kick && lkpi_bh_wq != NULL)
+		(void)lkpi_queue_work(lkpi_bh_wq, &t->work);
+}
+
+void tasklet_kill(struct tasklet_struct *t)
+{
+	os_critical_state_t state;
+
+	if (t == NULL)
+		return;
+	state = osCriticalEnter();
+	t->state &= ~(1UL << TASKLET_STATE_SCHED);
+	if (t->work.wk_queued == 0 && t->work.wk_running == 0) {
+		osCriticalExit(state);
+		return;
+	}
+	osCriticalExit(state);
+	/* Wait for an armed or running callback to leave the seam.  A queued item
+	 * that finds itself disabled re-arms the state bit; clear it once more
+	 * after the wait so kill is final. */
 	lkpi_work_flush(&t->work);
+	state = osCriticalEnter();
+	t->state &= ~(1UL << TASKLET_STATE_SCHED);
+	osCriticalExit(state);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1847,6 +2013,135 @@ struct task_struct *lkpi_current(void)
 /* start-up                                                            */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* RCU grace periods and deferred release                              */
+/* ------------------------------------------------------------------ */
+
+struct lkpi_rcu_deferred {
+	void		*ptr;
+	struct rcu_head	*head;
+	void		(*func)(struct rcu_head *head);
+};
+
+#define	LKPI_RCU_DEFERRED_MAX	64u
+
+static volatile int lkpi_rcu_readers;
+static struct lkpi_rcu_deferred lkpi_rcu_deferred[LKPI_RCU_DEFERRED_MAX];
+static volatile unsigned int lkpi_rcu_deferred_n;
+static struct work_struct lkpi_rcu_reclaim_work;
+static volatile unsigned int lkpi_rcu_overflow;
+
+void
+lkpi_rcu_read_lock(void)
+{
+	os_critical_state_t state = osCriticalEnter();
+
+	lkpi_rcu_readers++;
+	osCriticalExit(state);
+}
+
+void
+lkpi_rcu_read_unlock(void)
+{
+	os_critical_state_t state = osCriticalEnter();
+
+	if (lkpi_rcu_readers > 0)
+		lkpi_rcu_readers--;
+	osCriticalExit(state);
+}
+
+/*
+ * The grace period on this port: wait until no reader is active.  A reader
+ * that is preempted inside its section keeps the count up, which is exactly
+ * the hazard the old empty implementation missed.  Polling with a 1 ms yield
+ * is deliberate - the interface allows synchronize_rcu() to sleep, and a
+ * blocking wait needs a wake path the counter does not have yet; the cost is
+ * bounded by the length of the read sections (the K2 experiment records it).
+ */
+void
+lkpi_synchronize_rcu(void)
+{
+	while (lkpi_rcu_readers > 0)
+		(void)osDelay(1);
+}
+
+static void
+lkpi_rcu_reclaim(struct work_struct *w)
+{
+	(void)w;
+	lkpi_synchronize_rcu();
+	for (;;) {
+		struct lkpi_rcu_deferred d;
+		os_critical_state_t state = osCriticalEnter();
+
+		if (lkpi_rcu_deferred_n == 0) {
+			osCriticalExit(state);
+			return;
+		}
+		lkpi_rcu_deferred_n--;
+		d = lkpi_rcu_deferred[lkpi_rcu_deferred_n];
+		osCriticalExit(state);
+
+		if (d.head != NULL) {
+			if (d.func != NULL)
+				d.func(d.head);
+		} else {
+			kfree(d.ptr);
+		}
+	}
+}
+
+static void
+lkpi_rcu_enqueue(void *ptr, struct rcu_head *head,
+    void (*func)(struct rcu_head *head))
+{
+	os_critical_state_t state = osCriticalEnter();
+
+	if (lkpi_rcu_deferred_n < LKPI_RCU_DEFERRED_MAX) {
+		struct lkpi_rcu_deferred *d = &lkpi_rcu_deferred[lkpi_rcu_deferred_n];
+
+		d->ptr = ptr;
+		d->head = head;
+		d->func = func;
+		lkpi_rcu_deferred_n++;
+		osCriticalExit(state);
+		(void)lkpi_queue_work(lkpi_bh_wq != NULL ? lkpi_bh_wq : lkpi_system_wq,
+				      &lkpi_rcu_reclaim_work);
+		return;
+	}
+	osCriticalExit(state);
+	/* The bounded list is full: release now rather than leak, and count it -
+	 * a non-zero overflow means the reclaim pass is not keeping up. */
+	lkpi_rcu_overflow++;
+	if (head != NULL) {
+		if (func != NULL)
+			func(head);
+	} else {
+		kfree(ptr);
+	}
+}
+
+void
+lkpi_kfree_rcu_defer(void *ptr)
+{
+	if (ptr != NULL)
+		lkpi_rcu_enqueue(ptr, NULL, NULL);
+}
+
+void
+lkpi_call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *head))
+{
+	if (head != NULL)
+		lkpi_rcu_enqueue(NULL, head, func);
+}
+
+void
+lkpi_rcu_barrier(void)
+{
+	lkpi_synchronize_rcu();
+	lkpi_rcu_reclaim(NULL);
+}
+
 void lkpi_core_init(void)
 {
 	if (lkpi_system_wq != NULL)
@@ -1855,4 +2150,10 @@ void lkpi_core_init(void)
 	lkpi_system_wq = lkpi_alloc_workqueue("lkpi-system", 0, 1);
 	if (lkpi_system_wq == NULL)
 		lkpi_fatal("the system workqueue could not be created");
+
+	lkpi_bh_wq = lkpi_alloc_workqueue("lkpi-bh", WQ_HIGHPRI, 1);
+	if (lkpi_bh_wq == NULL)
+		lkpi_fatal("the BH workqueue could not be created");
+	lkpi_bh_unbarrier = osSemaphoreNew(8u, 0u, NULL);
+	lkpi_work_init(&lkpi_rcu_reclaim_work, lkpi_rcu_reclaim);
 }

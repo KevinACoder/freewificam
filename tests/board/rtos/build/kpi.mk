@@ -20,6 +20,7 @@ LIB8 := $(ROOT)/components/liblinux80211
 
 KPI_INCLUDES := \
 	-I$(LIB8)/include \
+	-I$(LIB8)/include/uapi \
 	-I$(LIB8)/include/linux80211 \
 	-I$(LIB8) \
 	-I$(LIB8)/bus \

@@ -22,7 +22,14 @@
 #include "../../linuxkpi_core.h"
 
 /* [LNX] include/uapi/linux/socket.h:10: typedef unsigned short __kernel_sa_family_t; */
-typedef unsigned short	sa_family_t;
+/* [LNX] include/uapi/linux/socket.h + include/linux/socket.h: the message flag
+ * netlink's receive-side helper passes; the port's netlink layer never reaches
+ * the receive call, but the constant is part of the call's spelling. */
+#define	MSG_DONTWAIT	0x40
+#define	MSG_DONTROUTE	0x04
+
+typedef unsigned short	__kernel_sa_family_t;
+typedef __kernel_sa_family_t	sa_family_t;
 
 /* [LNX] include/linux/socket.h:36-39 */
 struct sockaddr {

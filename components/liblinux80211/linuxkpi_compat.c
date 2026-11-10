@@ -272,6 +272,10 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
  */
 void synchronize_net(void)
 {
+	/* [LNX] net/core/dev.c: the interface waits for RCU readers and drains the
+	 * rtnl todo list.  This port's RTNL has no todo list; the RCU half is the
+	 * reader-count grace period (linuxkpi_core.c). */
+	lkpi_synchronize_rcu();
 }
 
 /*

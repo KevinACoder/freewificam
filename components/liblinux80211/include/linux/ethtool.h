@@ -27,6 +27,13 @@
 
 #include "../../linuxkpi_core.h"
 
+/* The real include/net/cfg80211.h embeds struct hrtimer in its
+ * wiphy_hrtimer_work record.  The interface's chain reaches the type through
+ * include/linux/sched.h and the timer headers; this face carries it because
+ * ethtool.h is cfg80211.h's first include and this port has no sched.h chain
+ * to rely on. */
+#include <linux/hrtimer.h>
+
 struct net_device;
 
 /* [LNX] include/uapi/linux/ethtool.h:148-150 */

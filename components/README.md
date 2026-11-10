@@ -4,7 +4,7 @@ Code written in this repository.
 
 | Component | Contents | State |
 |---|---|---|
-| `liblinux80211/` | the Linux kernel API surface, the bus engines, the seams; `net/mac80211` + `net/wireless` land next | **landed**: builds as `liblinux80211.a`, proven on the board by `rk3568-kpi-live` (real root complex) and `rk3568-kpi-mock` (synthetic host/card, null egress) |
+| `liblinux80211/` | the Linux kernel API surface, the bus engines, the seams, and (2026-11-10) the imported `net/mac80211` + `net/wireless` stack | **landed**: builds as `liblinux80211.a`, proven on the board by `rk3568-kpi-live`/`rk3568-kpi-mock`; the stack has a C0 inventory (S0) but is not linked yet |
 
 Not yet proven: the SDIO engine's real backend. The adapter exists
 (`third-party/fsl_sdmmc/ports/lkpi_sdio_fsl.c`) but no image compiles it: its

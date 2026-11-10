@@ -33,4 +33,11 @@ extern int rtnl_trylock(void);
 extern int rtnl_is_locked(void);
 extern int rtnl_lock_interruptible(void);
 
+/* [LNX] include/linux/rtnetlink.h: the !CONFIG_PROVE_LOCKING arm of ASSERT_RTNL()
+ * is an empty statement; the port runs no lock validator, so that is the arm
+ * the wireless stack compiles against. */
+#ifndef ASSERT_RTNL
+#define	ASSERT_RTNL()		do { } while (0)
+#endif
+
 #endif /* _LINUXKPI_LINUX_RTNETLINK_H_ */

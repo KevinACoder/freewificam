@@ -26,6 +26,9 @@
 #include "../../linuxkpi_core.h"
 #include <linux/in.h>
 #include <linux/ieee80211.h>
+/* the skb header accessors this file builds on (declared by the interface in
+ * include/linux/skbuff.h; their one body is in skbuff/skbuff_pool.c) */
+#include <linux/skbuff.h>
 
 struct sk_buff;
 struct iphdr;
@@ -48,18 +51,7 @@ struct iphdr;
 static __always_inline __unused struct iphdr *
 ip_hdr(const struct sk_buff *skb)
 {
-	const struct ieee80211_hdr *hdr;
-	unsigned int off;
-
-	if (skb == NULL || skb->len < 24)
-		return NULL;
-	hdr = (const struct ieee80211_hdr *)skb->data;
-	if (!ieee80211_is_data(hdr->frame_control))
-		return NULL;
-	off = ieee80211_hdrlen(hdr->frame_control) + 8;	/* LLC/SNAP */
-	if (off > skb->len)
-		return NULL;
-	return (struct iphdr *)(skb->data + off);
+	return (struct iphdr *)skb_network_header(skb);
 }
 
 
@@ -90,11 +82,11 @@ struct iphdr {
  * stated here, over that one derivation, so a driver that names any of them reads
  * the port's real addresses rather than an unset offset.
  */
-static __always_inline __unused unsigned char *
-skb_network_header(const struct sk_buff *skb)
-{
-	return (unsigned char *)ip_hdr(skb);
-}
+/* The body is in skbuff/skbuff_pool.c: the same derivation ip_hdr() states
+ * above, compiled once for every caller (the real include/linux/ieee80211.h
+ * names it from its TDLS helper).  It used to be stated here as an inline;
+ * moving it to the sk_buff face's home is what keeps one definition of the
+ * port's network-header geometry. */
 
 /* [LNX] include/linux/skbuff.h:3270: `return skb->transport_header -
  * skb->network_header;` - the length of the network header alone. */

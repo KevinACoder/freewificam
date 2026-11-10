@@ -40,3 +40,6 @@ build/kconfig/
 # Python bytecode.
 __pycache__/
 *.pyc
+
+# The host bench builds out of tree; its binary and objects are outputs.
+tests/host/kpi/build/

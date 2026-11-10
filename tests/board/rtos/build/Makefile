@@ -183,6 +183,7 @@ $(eval $(call component_sources,$(ROOT)/components/liblinux80211,kpi,LIBLINUX802
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-pci,LIBLINUX80211_BUS_PCI))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-sdio,LIBLINUX80211_BUS_SDIO))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-pci,LIBLINUX80211_PCIE))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack,LIBLINUX80211_STACK))
 endif
 
 # The wired-network cases each bring the lwIP port face and the stack core; the
@@ -237,6 +238,31 @@ endif
 # The liblinux80211 world (empty unless the component is selected).
 ifeq ($(CONFIG_LIBLINUX80211),1)
 include $(CURDIR)/kpi.mk
+endif
+
+# S0: the imported stack, compiled one translation unit at a time against the
+# component's Linux face - no link, no object group, no image.  The flags are
+# the kpi world's (same language, same face) plus the stack's own include roots
+# and the three diagnostics that turn a missing API into a first-class error
+# instead of an implicit-int warning.  The measurement lives in
+# tools/build/s0-compile.sh; this file only owns the flags.
+ifeq ($(CONFIG_LIBLINUX80211),1)
+S0_CFLAGS := $(KPI_CFLAGS) \
+	-I$(LIB8)/stack/mac80211 -I$(LIB8)/stack/wireless \
+	-Werror=implicit-function-declaration -Werror=incompatible-pointer-types \
+	-Werror=int-conversion -Werror=return-type
+S0_OUT ?= $(abspath $(ROOT)/../runs/S0)
+S0_RUN ?= 1
+S0_DIR := $(S0_OUT)/run-$(S0_RUN)
+S0_TU_LIST := $(BUILD)/s0-tus.txt
+
+s0-compile: $(CONFIG_FILE)
+	@mkdir -p $(S0_DIR)
+	@printf '%s\n' $(LIBLINUX80211_STACK_SRCS) > $(S0_TU_LIST)
+	@sh $(ROOT)/tools/build/s0-compile.sh \
+		$(S0_DIR) $(CC) '$(S0_CFLAGS)' $(S0_TU_LIST)
+	@cp $(S0_DIR)/summary.tsv $(S0_OUT)/summary.tsv
+	@printf 's0-compile: run %s -> %s\n' '$(S0_RUN)' '$(S0_DIR)'
 endif
 
 BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \

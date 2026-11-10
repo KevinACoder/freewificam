@@ -87,3 +87,38 @@ Written here (not imported): the component's `Kconfig`, `sources.mk`,
 1. An import records source, commit, path, license and whether the bytes match.
 2. Byte-identical files do not appear in `DIVERGENCES.md`. Any edit does.
 3. Imports move in one direction only; see `LICENSES.md`.
+
+
+## The wireless-stack import (2026-11-10, S0)
+
+The Linux stack itself, taken verbatim from the GT kernel checkout at
+`63a2a8ab9cd31a9821f5c86c05cbb0be88b82e7b` (`docs/MANIFEST.md` pins the tree):
+
+| Destination | Source | Files | License | Byte-identical |
+|---|---|---|---|---|
+| `components/liblinux80211/stack/mac80211/` | `linux-upstream/net/mac80211/` | 44 `.c` (42 `mac80211-y` + `wbrf.c` + `rc80211_minstrel_ht.c`) + 26 `.h` | GPL-2.0-only | yes |
+| `components/liblinux80211/stack/wireless/` | `linux-upstream/net/wireless/` | 18 `.c` (`cfg80211-y`, incl. `nl80211.c`) + 8 `.h` | GPL-2.0-only (`radiotap.c` is GPL-2.0 OR BSD-3-Clause upstream; the BSD arm is not taken here) | yes |
+| `components/liblinux80211/include/net/{mac80211,cfg80211,ieee80211_radiotap}.h` | `linux-upstream/include/net/` | 3 | GPL-2.0-only | yes; **replaces** the old driver-view faces |
+| `components/liblinux80211/include/linux/ieee80211.h` + 9 `ieee80211-*.h` | `linux-upstream/include/linux/` | 10 | GPL-2.0-only | yes; replaces the old face |
+| `components/liblinux80211/include/uapi/linux/{nl80211,rfkill,netlink,const,limits,sysinfo,if_vlan,if_ether,ethtool,pkt_sched,pkt_cls,kernel}.h` | `linux-upstream/include/uapi/linux/` | 12 | GPL-2.0-only with syscall exception / dual as upstream states | yes |
+| `components/liblinux80211/include/{net,linux,crypto,keys,kunit,asm}/…` | `linux-upstream/include/…` | the 42-header batch + its direct closure | GPL-2.0-only | yes; the face headers written for this port are BSD-3-Clause and listed in DIVERGENCES |
+
+`components/liblinux80211/stack/IMPORT.tsv` is the per-file record (source path,
+destination, sha256, lines, kind, SPDX). `tools/build/import-stack.py --check`
+re-derives it and fails on drift; the S0 round used it before every compile run.
+
+**License consequence**: the component now contains GPL-2.0-only sources. Its own
+code stays BSD-3-Clause, but every artifact that links the stack is GPL-2.0
+(`docs/LICENSES.md` §3). The stack subtree is not linked into any image by this
+build; S1 adds the link behind its own profile.
+
+## The host tier import (2026-11-10, K1)
+
+| Destination | Source (same source commit) | Files | License | Byte-identical |
+|---|---|---|---|---|
+| `third-party/FreeRTOS-Kernel/portable/ThirdParty/GCC/Posix/` | upstream V11.3.1 pin, via the previous line's tree | `port.c`, `portmacro.h`, `utils/wait_for_event.{c,h}` | MIT | yes |
+| `tests/board/rtos/platform/host_common_defs.h`, `host_freertos_defs.h` | previous line's tree at `fdceccb95dc85c70229709973ffcd150e643c7cd` | 2 | BSD-3-Clause | yes |
+| `tests/board/rtos/app/port/clock_host.c` | same | 1 | BSD-3-Clause | yes |
+
+`tests/host/kpi/` (bench, cases, host stubs) and `tools/build/{import-stack.py,
+s0-compile.sh}` are written here; they are not imports.

@@ -9,7 +9,7 @@
 # Usage:
 #   ./make.rtos list [--current]
 #   ./make.rtos config [PROFILE=<name>]
-#   ./make.rtos image|images|libs|check|check-no-d|check-config-header|check-build-contract|case-list-check|matrix|dump-vars|clean|distclean
+#   ./make.rtos image|images|libs|check|check-no-d|check-config-header|check-build-contract|case-list-check|matrix|dump-vars|s0-compile|host-test|clean|distclean
 #   ./make.rtos rk3568_ci
 #   PROFILE=<name> ./make.rtos image
 #   ./make.rtos --profile <name> image

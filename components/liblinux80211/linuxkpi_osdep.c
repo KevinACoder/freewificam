@@ -470,6 +470,47 @@ down_interruptible(struct semaphore *sem)
 	}
 }
 
+/* [LNX] include/linux/semaphore.h: down() is the uninterruptible take (no
+ * signal delivery on this port, so it is the same loop as the interruptible
+ * one), down_trylock() is the non-blocking decrement, and down_timeout() bounds
+ * the wait in tick milliseconds. */
+void
+down(struct semaphore *sem)
+{
+	(void)down_interruptible(sem);
+}
+
+int
+down_trylock(struct semaphore *sem)
+{
+	unsigned long long flags;
+	int ret = 1;
+
+	if (sem == NULL)
+		return 1;
+	flags = lkpi_spin_lock_irqsave(&sem->lock);
+	if (sem->count > 0u) {
+		sem->count--;
+		ret = 0;
+	}
+	lkpi_spin_unlock_irqrestore(&sem->lock, flags);
+	return ret;
+}
+
+int
+down_timeout(struct semaphore *sem, long timeout)
+{
+	uint32_t deadline = osKernelGetTickCount() + (uint32_t)timeout;
+
+	for (;;) {
+		if (down_trylock(sem) == 0)
+			return 0;
+		if ((int32_t)(osKernelGetTickCount() - deadline) >= 0)
+			return 1;
+		(void)osDelay(1);
+	}
+}
+
 void
 up(struct semaphore *sem)
 {
@@ -590,44 +631,17 @@ kernel_sigaction(int sig, __sighandler_t handler)
 }
 
 /* ------------------------------------------------------------------ */
-/* the netlink attribute builders (driver: rtw_cfgvendor.c:379, :187)   */
+/* the netlink attribute builders                                      */
 /* ------------------------------------------------------------------ */
 
-int
-nla_put_nohdr(struct sk_buff *skb, int attrlen, const void *data)
-{
-	int len;
-	unsigned char *p;
-
-	if (skb == NULL || attrlen < 0)
-		return -EINVAL;
-	len = (int)NLA_ALIGN((unsigned int)attrlen);
-	if (skb_tailroom(skb) < len)
-		return -EINVAL; /* no room: the port's errno set has no EMSGSIZE */
-	p = skb_put(skb, (unsigned int)len);
-	if (attrlen > 0)
-		memcpy(p, data, (size_t)attrlen);
-	if (len > attrlen)
-		memset(p + attrlen, 0, (size_t)(len - attrlen));
-	return 0;
-}
-
-int
-nla_put_u32(struct sk_buff *skb, int attrtype, u32 value)
-{
-	struct nlattr *nla;
-
-	if (skb == NULL)
-		return -EINVAL;
-	if (skb_tailroom(skb) < NLA_HDRLEN + (int)sizeof(u32))
-		return -EINVAL; /* no room: the port's errno set has no EMSGSIZE */
-	nla = (struct nlattr *)skb_put(skb,
-	    (unsigned int)(NLA_HDRLEN + (int)sizeof(u32)));
-	nla->nla_type = (__u16)attrtype;
-	nla->nla_len = (__u16)(NLA_HDRLEN + (int)sizeof(u32));
-	memcpy((char *)nla + NLA_HDRLEN, &value, sizeof(value));
-	return 0;
-}
+/*
+ * These used to live here as driver-face stubs (nla_put_nohdr/nla_put_u32 for
+ * rtw_cfgvendor.c).  The real stack's include/net/netlink.h now carries the
+ * interface's inline definitions, and the stack's own nl80211/pmsr paths use
+ * them - so the stubs are gone and the header is the one definition.  The
+ * component no longer has a caller of its own: the driver that needed them is
+ * not imported by this line.
+ */
 
 /* ------------------------------------------------------------------ */
 /* the checksum primitives (driver: rtw_br_ext.c:1351, :1354)           */

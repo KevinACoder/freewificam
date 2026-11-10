@@ -20,6 +20,11 @@
 #define _LINUXKPI_LINUX_NL80211_H_
 
 #include "../../linuxkpi_core.h"
-#include <net/cfg80211.h>
+/* The interface keeps these enumerations in the uapi header; the kernel build
+ * resolves <linux/nl80211.h> there through its include/uapi path.  This face
+ * is the same spelling: the uapi file is the one definition, carried verbatim
+ * in include/uapi/linux/nl80211.h.  Including net/cfg80211.h here (as the face
+ * used to) made the two headers circular and the enums incomplete. */
+#include <uapi/linux/nl80211.h>
 
 #endif /* _LINUXKPI_LINUX_NL80211_H_ */
