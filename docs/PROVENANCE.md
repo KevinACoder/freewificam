@@ -112,6 +112,33 @@ code stays BSD-3-Clause, but every artifact that links the stack is GPL-2.0
 (`docs/LICENSES.md` §3). The stack subtree is not linked into any image by this
 build; S1 adds the link behind its own profile.
 
+## The S1a face closure (2026-11-10, S0 run-20..run-50)
+
+S1a closed the 62-TU compile with **zero changes under `stack/`**
+(`import-stack.py --check`: 62 TUs + 34 headers byte-identical to `63a2a8ab9cd3`).
+What changed is the face layer. Three upstream files were vendored whole:
+
+| Destination | Source | Files | License | Byte-identical |
+|---|---|---|---|---|
+| `components/liblinux80211/include/uapi/linux/genetlink.h` | `linux-upstream/include/uapi/linux/genetlink.h` | 1 | GPL-2.0-only with syscall exception | yes |
+| `components/liblinux80211/include/uapi/linux/mpls.h` | `linux-upstream/include/uapi/linux/mpls.h` | 1 | GPL-2.0-only with syscall exception | yes |
+| `components/liblinux80211/include/net/dropreason-core.h` | `linux-upstream/include/net/dropreason-core.h` | 1 | GPL-2.0-only | yes |
+
+The rest of the S1a work is BSD-3-Clause face code written in this component
+(one definition per name, used surface only), listed per file in
+`docs/DIVERGENCES.md` rows 27-35:
+
+- **rewritten** (were oversized vendored copies): `include/linux/{idr,gcd,u64_stats_sync,bitmap}.h`,
+  `include/net/{sock,sch_generic,arp,inet_connection_sock}.h`;
+- **new faces**: `include/linux/{align,rculist,irq_work,rhashtable}.h`,
+  `include/net/{pkt_sched,inet_ecn}.h`, `include/linux80211/stack_config.h`;
+- **grown**: `linuxkpi_core.{h,c}`, `skbuff/skbuff_pool.{h,c}`,
+  `include/linux/{netdevice,device,debugfs,ethtool,rfkill,moduleparam,sysfs,ipv6,module}.h`,
+  `include/net/{net_namespace,genetlink,netlink,iw_handler}.h`.
+
+No conflicts with the pin: the import guard is the authority for `stack/`, and the
+faces are not imports.
+
 ## The host tier import (2026-11-10, K1)
 
 | Destination | Source (same source commit) | Files | License | Byte-identical |

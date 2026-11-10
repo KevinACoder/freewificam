@@ -69,6 +69,11 @@ int kpi_case_sync_mutex(void);
 int kpi_case_sync_semaphore(void);
 int kpi_case_skb_bounds(void);
 int kpi_case_skb_pool(void);
+int kpi_case_skb_geometry(void);
+int kpi_case_skb_helpers(void);
+int kpi_case_skb_vlan(void);
+int kpi_case_macros(void);
+int kpi_case_net_stubs(void);
 int kpi_case_idr_rb(void);
 int kpi_case_ctx_tasklet_thread(void);
 int kpi_case_ctx_fifo(void);
@@ -96,6 +101,11 @@ static const struct kpi_case cases[] = {
 	{ "sync_semaphore", kpi_case_sync_semaphore },
 	{ "skb_bounds", kpi_case_skb_bounds },
 	{ "skb_pool", kpi_case_skb_pool },
+	{ "skb_geometry", kpi_case_skb_geometry },
+	{ "skb_helpers", kpi_case_skb_helpers },
+	{ "skb_vlan", kpi_case_skb_vlan },
+	{ "macros", kpi_case_macros },
+	{ "net_stubs", kpi_case_net_stubs },
 	{ "idr_rb", kpi_case_idr_rb },
 	{ "ctx_tasklet_thread", kpi_case_ctx_tasklet_thread },
 	{ "ctx_fifo", kpi_case_ctx_fifo },

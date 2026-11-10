@@ -81,6 +81,9 @@ SRCS := \
 	$(CURDIR)/cases/jiffies.c \
 	$(CURDIR)/cases/sync.c \
 	$(CURDIR)/cases/skb.c \
+	$(CURDIR)/cases/skbgeom.c \
+	$(CURDIR)/cases/macros.c \
+	$(CURDIR)/cases/net_stubs.c \
 	$(CURDIR)/cases/idr_rb.c \
 	$(CURDIR)/cases/ctx.c \
 	$(CURDIR)/cases/selftest.c
