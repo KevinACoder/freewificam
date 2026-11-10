@@ -23,6 +23,16 @@
  * STATUS: draft (FW_NET_API_READY 0).  The seam is frozen when the real
  * mac80211 net-device path compiles against it; until then this header states
  * the contract the existing code already satisfies and nothing more.
+ *
+ * Relation to the larger egress design: the frame path above is the narrow
+ * half.  The full stack-facing contract - a stack_ops table with tx/rx, link
+ * up/down and set_mac, carrying the stack's own interface pointer - is
+ * proposed in the project's docs/EGRESS-DESIGN.md (section 3.3), where the
+ * management plane (netdev lifecycle, notifiers, the 38-API surface) is
+ * measured and the two-layer split argued.  That proposal is not adopted here
+ * yet, and deliberately so: it is unproven, and this header only freezes what
+ * code already satisfies.  When mac80211's net_device path compiles, this
+ * header grows into that contract or is replaced by it, in one commit.
  */
 
 #ifndef LINUX80211_NET_H
