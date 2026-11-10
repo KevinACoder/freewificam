@@ -54,7 +54,8 @@ KCONFIG_FILES = [
 # Case list copied from the runner table / all defconfigs.  The hidden
 # CASE_<NAME> symbols are derived by this generator from CONFIG_CASES; they are
 # not edited by a user.
-CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci kpi_live kpi_mock""".split()
+CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci kpi_live kpi_mock
+         mac80211_c2 iwl7260_c3""".split()
 
 KC = None
 

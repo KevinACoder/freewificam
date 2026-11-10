@@ -21,4 +21,12 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/export.h: the namespaced spellings. iwlwifi's two modules
+ * (`iwlwifi` core and `iwlmvm`) export their cross-module entry points with
+ * them when CONFIG_IWLWIFI_OPMODE_MODULAR is set (iwl-drv.h:94). This image
+ * links both halves into one flat image, so the export is inert exactly like
+ * EXPORT_SYMBOL above. */
+#define	EXPORT_SYMBOL_NS(sym, ns)
+#define	EXPORT_SYMBOL_NS_GPL(sym, ns)
+
 #endif /* _LINUXKPI_LINUX_EXPORT_H_ */

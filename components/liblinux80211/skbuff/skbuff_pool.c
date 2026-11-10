@@ -1673,3 +1673,121 @@ skb_network_offset(const struct sk_buff *skb)
 		return 0;
 	return (int)(nh - skb->data);
 }
+
+/* ------------------------------------------------------------------ */
+/* the skb library entries the compiled set names                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] net/core/skbuff.c: trim to `len`.  A linear buffer needs only the tail
+ * move; the interface pulls/frees fragments for the non-linear case, which this
+ * port never builds in the registration path.
+ */
+int
+__pskb_trim(struct sk_buff *skb, unsigned int len)
+{
+
+	if (skb == NULL)
+		return -EINVAL;
+	if (len > skb->len)
+		return -EINVAL;
+	skb_trim(skb, len);
+	return 0;
+}
+
+/*
+ * [LNX] net/core/gso.c: the segmentation entry.  This port has no offload
+ * engine, so the honest answer is the interface's no-segment result: callers
+ * treat NULL as "send as is" for the software path.
+ */
+struct sk_buff *
+__skb_gso_segment(struct sk_buff *skb, netdev_features_t features, bool tx_path)
+{
+
+	(void)skb;
+	(void)features;
+	(void)tx_path;
+	return NULL;
+}
+
+/*
+ * [LNX] net/core/skbuff.c: clone for the socket accounting path.  There is no
+ * socket owner in this image, so there is nothing to attach the clone to; the
+ * caller (a TX-status path) handles NULL.
+ */
+struct sk_buff *
+skb_clone_sk(struct sk_buff *skb)
+{
+
+	(void)skb;
+	return NULL;
+}
+
+/*
+ * [LNX] net/core/skbuff.c: complete a WiFi ACK status for a transmitted frame.
+ * The frame's owner is the stack's TX path, which is not carried in the C2/C3
+ * images; the buffer is released so the completion does not leak.
+ */
+void
+skb_complete_wifi_ack(struct sk_buff *skb, bool acked)
+{
+
+	(void)acked;
+	if (skb != NULL)
+		kfree_skb(skb);
+}
+
+/*
+ * [LNX] net/core/skbuff.c: copy with extra head/tail room.  This port's skbs
+ * come from the fixed pool and a grow-copy would need a second pool block; the
+ * callers on the compiled paths check NULL, and nothing on the registration
+ * path calls it.
+ */
+struct sk_buff *
+skb_copy_expand(const struct sk_buff *skb, int newheadroom, int newtailroom,
+		gfp_t gfp_mask)
+{
+
+	(void)skb;
+	(void)newheadroom;
+	(void)newtailroom;
+	(void)gfp_mask;
+	return NULL;
+}
+
+/* [LNX] net/core/skbuff.c: no hardware checksum offload on this port, so the
+ * helper has nothing to fix up and reports success. */
+int
+skb_csum_hwoffload_help(struct sk_buff *skb, const netdev_features_t features)
+{
+
+	(void)skb;
+	(void)features;
+	return 0;
+}
+
+/*
+ * [LNX] net/core/skbuff.c: make `write_len` bytes writable in the linear area.
+ * This port's skbs are linear, so the answer is the length check; a non-linear
+ * buffer would need the pull path, which no compiled caller builds here.
+ */
+int
+skb_ensure_writable(struct sk_buff *skb, unsigned int write_len)
+{
+
+	if (skb == NULL)
+		return -EINVAL;
+	if (skb->len < write_len)
+		return -EINVAL;
+	return 0;
+}
+
+/* [LNX] net/core/flow_dissector.c: the RX flow hash.  No flow dissector is
+ * carried; 0 is the interface's "no hash" value. */
+u32
+skb_get_hash(struct sk_buff *skb)
+{
+
+	(void)skb;
+	return 0;
+}

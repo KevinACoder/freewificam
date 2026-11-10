@@ -36,3 +36,13 @@ profile family: the Realtek BSD-option profiles must never link it.
 Imports come in; nothing goes back out to a tree that must stay free of
 GPL-2.0. If a component here is ever useful elsewhere, the version to share is
 the one without the imported stack linked in.
+
+## 4. 本轮的无线产物（2026-11-10，S1b/C2/C3）
+
+| 产物 | 组成 | 许可证 |
+|---|---|---|
+| `rk3568-mac80211-c2` 镜像 | mac80211/cfg80211（GPL-2.0-only）静态链接 | **GPL-2.0** 链接产物 |
+| `rk3568-iwl7260-mac80211` 镜像 | 同上 + iwlwifi/iwlmvm（GPL-2.0） | **GPL-2.0** 链接产物 |
+
+两者都在 `docs/LICENSES.md`（外层）同表登记；`ARCHITECTURE.md` §5 的隔离规则不变：
+这两个 profile 不与 `rtw88`/`rtw89` 的 BSD profile 共链。

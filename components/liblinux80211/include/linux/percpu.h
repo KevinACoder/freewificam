@@ -26,10 +26,19 @@
 #define	per_cpu(var, cpu)	(*per_cpu_ptr(&(var), (cpu)))
 
 /* [LNX] include/linux/percpu.h:150-151: the typed allocation. With one CPU the
- * per-CPU block is an ordinary zeroed heap block. */
+ * per-CPU block is an ordinary zeroed heap block. The core header carries an
+ * older macro spelling of the same name for units that never include this
+ * header; replace it here so this file is the one definition in a unit that
+ * includes it (the macro would otherwise expand inside the functions below). */
+#ifdef alloc_percpu
+#undef alloc_percpu
+#endif
 #define	alloc_percpu(type)	((typeof(type) *)kzalloc(sizeof(type), GFP_KERNEL))
 
 /* [LNX] include/linux/percpu.h:157: the matching release. */
+#ifdef free_percpu
+#undef free_percpu
+#endif
 static __always_inline __unused void
 free_percpu(void *p)
 {

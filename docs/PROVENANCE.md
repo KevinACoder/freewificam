@@ -149,3 +149,13 @@ faces are not imports.
 
 `tests/host/kpi/` (bench, cases, host stubs) and `tools/build/{import-stack.py,
 s0-compile.sh}` are written here; they are not imports.
+
+## The iwlwifi import (2026-11-10, S1b)
+
+The AC 7260 driver tree was imported verbatim from this line's GT pin into
+`wireless-drivers/iwlwifi/` (294 files), the same flat discipline as the stack
+import. Per-file digests: `wireless-drivers/iwlwifi/IMPORT.tsv`; re-check with
+`tools/build/import-driver.py --driver iwlwifi --check`. The compiled set (72
+TUs) is re-derived from the driver's own Makefiles under
+`include/linux80211/driver_config.h`; `wireless-drivers/iwlwifi/PROVENANCE.md`
+is the tree's own record (pin, licence mix, why 72 and not 74).

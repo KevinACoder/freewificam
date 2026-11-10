@@ -35,6 +35,8 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-emmc` | tick cmsis2 emmc | fsl_sdmmc + DW SDHCI: card ID, block round trip, error path, sweep |
 | `rk3568-usb-msc` | tick usb_ehci | CherryUSB EHCI: enumerate the U-disk, block zero, round trip (identity arm on a small disk) |
 | `rk3568-kpi-live` | tick pcie kpi_live | liblinux80211's PCI engine over the board's real root complex |
+| `rk3568-mac80211-c2` | tick mac80211_c2 | the real mac80211/cfg80211 stack registers a wiphy (C2); no PCI engine |
+| `rk3568-iwl7260-mac80211` | tick pcie iwl7260_c3 | the same stack + the vendored iwlwifi (72 TUs) over the AC 7260: probe, firmware ALIVE, register, `dev_open` start (C3) |
 | `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
 
 ```
@@ -180,3 +182,25 @@ Two targets sit outside the image, on purpose:
   enter the image link; `S0_CFLAGS` derives from `KPI_CFLAGS` so
   `check-build-contract.sh` still sees the kernel's three flags and the profile's
   `-O` token.
+
+## 10. The wireless world (2026-11-10, S1b/C2/C3)
+
+Two Kconfig symbols, one flag-world include, two profiles:
+
+- `CONFIG_LIBLINUX80211_WIRELESS` puts the imported `stack/` TUs in an image;
+  `CONFIG_LIBLINUX80211_IWLWIFI` adds the 72 `wireless-drivers/iwlwifi/` TUs and
+  the generated firmware unit. `tests/board/rtos/build/wl80211.mk` owns the
+  flag worlds (stack: `S0_CFLAGS`; driver: `S1_CFLAGS`; cases: stack flags) and
+  the list order that becomes the `.lkpi_init` execution order.
+- The component's `sources.mk` stack group is still keyed by
+  `CONFIG_LIBLINUX80211` so the S0/S1b measurement targets keep their source
+  lists; the image include is what the new symbol gates.
+- Profiles: `rk3568-mac80211-c2` (8 MiB FreeRTOS heap) and
+  `rk3568-iwl7260-mac80211` (16 MiB). The heap is the FreeRTOS one
+  (`osMemoryAlloc -> pvPortMalloc`), not `CONFIG_HEAP_SIZE`.
+- Build-only targets (no image): `s1-driver-compile` (72 TUs, `runs/S1/driver/`)
+  and `s1-link` (partial link + classified undefined list,
+  `runs/S1/link/`). `s0-compile` is unchanged.
+- The firmware blob is generated, not committed: `tools/rtos/fw-blobs.py`
+  writes `components/liblinux80211/fw/iwl7260_fw_blob.c` from the pinned GT
+  `iwlwifi-7260-17.ucode` (sha256 checked) and the path is git-ignored.

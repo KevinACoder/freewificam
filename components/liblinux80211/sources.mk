@@ -24,6 +24,13 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	linuxkpi_osdep.c \
 	linuxkpi_netdev.c \
 	linuxkpi_platform_target.c \
+	linuxkpi_containers.c \
+	linuxkpi_device.c \
+	linuxkpi_rfkill.c \
+	linuxkpi_netlink.c \
+	linuxkpi_util.c \
+	linuxkpi_crypto.c \
+	fw_registry.c \
 	net_egress.c \
 	skbuff/skbuff_pool.c
 endif

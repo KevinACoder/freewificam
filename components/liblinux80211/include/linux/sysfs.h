@@ -1,6 +1,9 @@
 #ifndef _LINUXKPI_LINUX_SYSFS_H_
 #define _LINUXKPI_LINUX_SYSFS_H_
 #include "../../linuxkpi_core.h"
+/* [LNX] include/linux/sysfs.h includes <linux/stat.h>: the mode bits a
+ * module_param()/attribute line names reach the compiled set through here. */
+#include <linux/stat.h>
 
 /* sysfs - compile-face only.  The one consumer is rtw89/usb.c, which
  * registers two read-only attributes (serial_number/uuid) on the wiphy

@@ -107,6 +107,7 @@ enum tc_setup_type {
  * ifindex attributes; the body is the port's (S1c). */
 struct net;
 struct net_device *__dev_get_by_index(struct net *net, int ifindex);
+int dev_open(struct net_device *dev);
 void dev_close(struct net_device *dev);
 void netif_receive_skb_list(struct list_head *head);
 int dev_queue_xmit(struct sk_buff *skb);

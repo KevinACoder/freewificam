@@ -26,7 +26,7 @@ MATRIX_PROFILES ?= rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-us
 
 .PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images libs \
 	check check-no-d check-config-header check-build-contract case-list-check matrix \
-	dump-vars clean distclean rk3568_ci s0-compile host-test
+	dump-vars clean distclean rk3568_ci s0-compile s1-driver-compile s1-link host-test
 
 help:
 	@printf '%s\n' \
@@ -42,6 +42,8 @@ help:
 		'  images             alias of image (this line carries one backend)' \
 		'  libs               archive the image object groups under build/lib/<profile>' \
 		'  s0-compile         compile the imported stack TUs against the face (no link; S0_RUN=<n>)' \
+		'  s1-driver-compile  compile the vendored iwlwifi TUs against the face (no link; S1_RUN=<n>)' \
+		'  s1-link            partial-link stack+driver and classify the undefined list (S1_LINK_RUN=<n>)' \
 		'  host-test          build and run the host semantic bench (green, then --break red)' \
 		'  check              every defconfig parses and regenerates identically' \
 		'  check-no-d         no compile/link command carries a -D (representative set)' \
@@ -133,6 +135,26 @@ S0_RUN ?= 1
 s0-compile:
 	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(S0_PROFILE)
 	@$(MAKE) -C $(BUILD_MK) s0-compile PROFILE=$(S0_PROFILE) S0_RUN=$(S0_RUN)
+
+# S1b is the same measurement shape as S0, one layer up: the vendored driver's
+# TUs, one `-c` each, against the same face.  It does not link and does not
+# enter an image; docs/HANDOFF-S1-LINK.md §3 is the contract.
+S1_PROFILE ?= rk3568-kpi-mock
+S1_RUN ?= 1
+
+s1-driver-compile:
+	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(S1_PROFILE)
+	@$(MAKE) -C $(BUILD_MK) s1-driver-compile PROFILE=$(S1_PROFILE) S1_RUN=$(S1_RUN)
+
+# S1c is a partial link, not an image: it answers "what is still undefined"
+# and "does any ieee80211_*/cfg80211_* symbol have two definitions".  Same
+# profile as S0/S1b; the classification lives in tools/build/s1-link.sh.
+S1_LINK_PROFILE ?= $(S1_PROFILE)
+S1_LINK_RUN ?= 1
+
+s1-link:
+	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(S1_LINK_PROFILE)
+	@$(MAKE) -C $(BUILD_MK) s1-link PROFILE=$(S1_LINK_PROFILE) S1_LINK_RUN=$(S1_LINK_RUN)
 
 # The host semantic bench: x86 + the upstream FreeRTOS POSIX port + the same
 # kernel-API bodies the images carry.  It is a model of the target's execution

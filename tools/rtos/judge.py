@@ -30,6 +30,8 @@ CASES = (
     "usb_ehci",
     "kpi_live",
     "kpi_mock",
+    "mac80211_c2",
+    "iwl7260_c3",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -158,6 +160,42 @@ PATTERNS = {
     ),
     "usb_msc_blk0": re.compile(r"usbh: msc blk0 ok", re.MULTILINE),
     "kpi_fail": re.compile(r"kpi: FAIL (?P<reason>.+)$", re.MULTILINE),
+    # The mac80211 gates: C2 is the stack's own registration path with a
+    # synthetic driver; C3 is the AC 7260 attach (probe -> firmware -> the
+    # stack's register_hw inside the op-mode start).
+    "mac80211_c2_alloc": re.compile(
+        r"mac80211_c2: alloc hw=(?P<hw>\S+)", re.MULTILINE
+    ),
+    "mac80211_c2_register": re.compile(
+        r"mac80211_c2: register rc=(?P<rc>-?\d+) wiphy=(?P<wiphy>\S+)",
+        re.MULTILINE,
+    ),
+    "mac80211_c2_netdev": re.compile(
+        r"mac80211_c2: netdev wlan0 present=(?P<present>[01])", re.MULTILINE
+    ),
+    "mac80211_c2_fail": re.compile(
+        r"mac80211_c2: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_c3_fwreg": re.compile(
+        r"iwl7260_c3: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c3_pci": re.compile(
+        r"iwl7260_c3: pci devs=(?P<n>\d+)", re.MULTILINE
+    ),
+    "iwl7260_c3_fw": re.compile(
+        r"iwl7260_c3: firmware .*loaded firmware version (?P<ver>\S+)"
+        r".*op_mode (?P<op>\S+)", re.MULTILINE
+    ),
+    "iwl7260_c3_wlan0": re.compile(
+        r"iwl7260_c3: wlan0 present=(?P<present>[01]) after (?P<ms>\d+) ms",
+        re.MULTILINE
+    ),
+    "iwl7260_c3_start": re.compile(
+        r"iwl7260_c3: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c3_fail": re.compile(
+        r"iwl7260_c3: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
     "kpi_pci_devs": re.compile(r"kpi: pci devs=(?P<n>\d+)", re.MULTILINE),
     "kpi_dev": re.compile(
         r"kpi: dev (?P<vid>[0-9a-f]{4}):(?P<did>[0-9a-f]{4}) "
@@ -1411,6 +1449,62 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("kpi_mock: netif_rx did not reach the null egress")
         else:
             notes.append(f"kpi_mock: net rx={net['rx']}")
+
+    if cases.get("iwl7260_c3", {}).get("verdict") == "pass":
+        fail = found["iwl7260_c3_fail"]
+        if fail:
+            errors.append(f"iwl7260_c3: {fail['reason']}")
+        reg = found["iwl7260_c3_fwreg"]
+        if not reg:
+            errors.append("iwl7260_c3: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"iwl7260_c3: firmware registration rc={reg['rc']}")
+        pci = found["iwl7260_c3_pci"]
+        if not pci or int(pci["n"]) == 0:
+            errors.append("iwl7260_c3: no PCI function enumerated")
+        else:
+            notes.append(f"iwl7260_c3: pci devs={pci['n']}")
+        fw = found["iwl7260_c3_fw"]
+        if not fw:
+            errors.append("iwl7260_c3: PASS without a firmware ALIVE line")
+        else:
+            notes.append(f"iwl7260_c3: fw {fw['ver']} {fw['op']}")
+        if fw and fw["op"] != "iwlmvm":
+            errors.append(f"iwl7260_c3: op_mode {fw['op']} != iwlmvm")
+        wl = found["iwl7260_c3_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("iwl7260_c3: the stack's wlan0 interface is missing")
+        st = found["iwl7260_c3_start"]
+        if not st:
+            errors.append("iwl7260_c3: PASS without the start line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"iwl7260_c3: start rc={st['rc']}")
+        else:
+            notes.append("iwl7260_c3: start rc=0")
+
+    if cases.get("mac80211_c2", {}).get("verdict") == "pass":
+        fail = found["mac80211_c2_fail"]
+        if fail:
+            errors.append(f"mac80211_c2: {fail['reason']}")
+        alloc = found["mac80211_c2_alloc"]
+        if not alloc:
+            errors.append("mac80211_c2: PASS without the alloc line")
+        elif alloc["hw"] == "(nil)" or alloc["hw"] == "0x0":
+            errors.append("mac80211_c2: alloc_hw returned NULL")
+        else:
+            notes.append(f"mac80211_c2: alloc hw={alloc['hw']}")
+        reg = found["mac80211_c2_register"]
+        if not reg:
+            errors.append("mac80211_c2: PASS without the register line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"mac80211_c2: register_hw rc={reg['rc']}")
+        else:
+            notes.append(f"mac80211_c2: wiphy={reg['wiphy']}")
+        nd = found["mac80211_c2_netdev"]
+        if not nd:
+            errors.append("mac80211_c2: PASS without the netdev line")
+        elif nd["present"] != "1":
+            errors.append("mac80211_c2: the default wlan0 interface is missing")
 
     for case in ("usb_xhci", "usb_ehci"):
         if cases.get(case, {}).get("verdict") != "pass":

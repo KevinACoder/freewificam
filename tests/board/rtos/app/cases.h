@@ -70,6 +70,15 @@ int case_kpi_live_run(void);
 int case_kpi_mock_run(void);
 #endif
 
+/* The wireless stack's own gates: C2 registers a wiphy with a synthetic
+ * driver; C3 attaches the AC 7260 and lets iwlwifi call back into the stack. */
+#if defined(RTOS_CASE_MAC80211_C2)
+int case_mac80211_c2_run(void);
+#endif
+#if defined(RTOS_CASE_IWL7260_C3)
+int case_iwl7260_c3_run(void);
+#endif
+
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf
  * TCP server (only one listener can own the port).  The `net` case brings its

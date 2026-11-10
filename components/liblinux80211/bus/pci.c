@@ -802,19 +802,6 @@ dma_pool_free(struct dma_pool *pool, void *vaddr, dma_addr_t addr)
 /* the scatter/gather helpers (linux/scatterlist.h)                    */
 /* ------------------------------------------------------------------ */
 
-/* [LNX] include/linux/scatterlist.h:447; body lib/scatterlist.c:130-134: zero the
- * entries and mark the last one the end of the list, which is what sg_next() and
- * sg_is_last() walk. */
-void
-sg_init_table(struct scatterlist *sgl, unsigned int nents)
-{
-
-	if (sgl == NULL || nents == 0)
-		return;
-	memset(sgl, 0, sizeof(*sgl) * nents);
-	sg_mark_end(&sgl[nents - 1]);
-}
-
 /* [LNX] include/linux/scatterlist.h:442; body lib/scatterlist.c:25-30: the entry
  * count, following the chain to the end marker. */
 int
@@ -1446,13 +1433,6 @@ get_device(struct device *dev)
 {
 
 	return dev;
-}
-
-void
-put_device(struct device *dev)
-{
-
-	(void)dev;
 }
 
 /* the engine's record for a device-model node, or NULL */

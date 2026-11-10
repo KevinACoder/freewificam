@@ -1,0 +1,26 @@
+# mac80211 on the RTOS line, gate C3: the AC 7260 attaches to iwlwifi.
+#
+# The pcie case group is selected, not incidental: it brings the board's root
+# complex and the arch ITS/MSI bridge that the component's PCI adapter reaches
+# through.  The driver's own probe loads iwlwifi-7260-17.ucode (compiled in by
+# tools/rtos/fw-blobs.py) and, when the op-mode starts, calls back into
+# mac80211's ieee80211_register_hw().
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md §3).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_c3"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+
+# mac80211 allocates its local/wiphy/netdev records from the FreeRTOS heap
+# (osMemoryAlloc -> pvPortMalloc); the board default of 256 KiB is not enough.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

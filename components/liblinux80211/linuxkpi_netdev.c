@@ -621,3 +621,304 @@ rtnl_is_locked(void)
 	 */
 	return 1;
 }
+
+/* ------------------------------------------------------------------ */
+/* the generic netdev allocator and the address helpers                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] net/core/dev.c: `ether_setup()` gives a device the Ethernet shape.
+ * This port's net_device carries the fields the compiled set reads; the ones
+ * the interface sets but this record does not have (hard_header_len, header
+ * ops) are not carried, and nothing in the set reads them.
+ */
+void
+ether_setup(struct net_device *dev)
+{
+
+	if (dev == NULL)
+		return;
+	dev->type = ARPHRD_ETHER;
+	dev->addr_len = ETH_ALEN;
+	dev->min_mtu = 68;	/* ETH_MIN_MTU (uapi/linux/if_ether.h) */
+	dev->max_mtu = ETH_DATA_LEN;
+	if (dev->dev_addr == NULL) {
+		unsigned char *addr = kzalloc(ETH_ALEN, GFP_KERNEL);
+
+		if (addr != NULL) {
+			dev->dev_addr = addr;
+			dev->perm_addr = addr;
+		}
+	}
+}
+
+/*
+ * [LNX] net/core/dev.c: `alloc_netdev_mqs()` allocates the record, the driver's
+ * private tail, the address storage and the TX-queue array, then calls the
+ * caller's setup().  `alloc_etherdev_mqs()` (above) is the same object with
+ * ether_setup; keeping this one general is what mac80211's
+ * `alloc_netdev_mqs(size, "wlan%d", ..., ieee80211_if_setup, 1, 1)` needs.
+ */
+struct net_device *
+alloc_netdev_mqs(int sizeof_priv, const char *name,
+		 unsigned char name_assign_type, void (*setup)(struct net_device *),
+		 unsigned int txqs, unsigned int rxqs)
+{
+	struct net_device *dev;
+	unsigned int i;
+
+	(void)name_assign_type;
+	(void)rxqs;
+	if (sizeof_priv < 0)
+		return NULL;
+	dev = kzalloc(sizeof(*dev) + (size_t)sizeof_priv, GFP_KERNEL);
+	if (dev == NULL)
+		return NULL;
+	if (name != NULL)
+		snprintf(dev->name, IFNAMSIZ, "%s", name);
+	if (setup != NULL)
+		setup(dev);
+	else
+		ether_setup(dev);
+	if (dev->dev_addr == NULL) {
+		/* a setup() that did not give the device an address: the port's
+		 * allocator still needs storage for eth_hw_addr_set()/perm_addr */
+		unsigned char *addr = kzalloc(ETH_ALEN, GFP_KERNEL);
+
+		if (addr == NULL) {
+			kfree(dev);
+			return NULL;
+		}
+		dev->dev_addr = addr;
+		dev->perm_addr = addr;
+	}
+	dev->num_tx_queues = txqs;
+	dev->real_num_tx_queues = txqs;
+	if (txqs > 0) {
+		dev->_tx = kcalloc(txqs, sizeof(struct netdev_queue), GFP_KERNEL);
+		if (dev->_tx == NULL) {
+			kfree((void *)dev->dev_addr);
+			kfree(dev);
+			return NULL;
+		}
+		for (i = 0; i < txqs; i++)
+			dev->_tx[i].dev = dev;
+	}
+	return dev;
+}
+
+/* [LNX] net/core/dev.c: the ndo_set_mac_address default. */
+bool
+eth_mac_addr(struct net_device *dev, void *p)
+{
+
+	if (dev == NULL || p == NULL)
+		return false;
+	dev_addr_mod(dev, 0, p, ETH_ALEN);
+	return true;
+}
+
+void
+netdev_set_default_ethtool_ops(struct net_device *dev,
+			       const struct ethtool_ops *ops)
+{
+
+	/* this net_device record has no ethtool_ops slot (the face's note); the
+	 * default only matters to a userspace ioctl path this port does not have */
+	(void)dev;
+	(void)ops;
+}
+
+u32
+ethtool_op_get_link(struct net_device *dev)
+{
+
+	(void)dev;
+	/* no carrier state is modelled at the ethtool level; the netdev's own
+	 * IFF_UP/operstate is the observable, and it is not this call's */
+	return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* the operations cfg80211's netdev path names                          */
+/* ------------------------------------------------------------------ */
+
+struct net_device *
+__dev_get_by_index(struct net *net, int ifindex)
+{
+	unsigned int i;
+
+	(void)net;
+	for (i = 0; i < CONFIG_LKPI_NETDEV_MAX; i++) {
+		struct net_device *dev = lkpi_netdevs[i];
+
+		if (dev != NULL && dev->ifindex == ifindex)
+			return dev;
+	}
+	return NULL;
+}
+
+struct net_device *
+dev_get_by_index(struct net *net, int ifindex)
+{
+	return __dev_get_by_index(net, ifindex);
+}
+
+void
+dev_hold(struct net_device *dev)
+{
+	(void)dev;
+}
+
+int
+dev_change_net_namespace(struct net_device *dev, struct net *net, const char *pat)
+{
+	(void)dev;
+	(void)net;
+	(void)pat;
+	return 0;
+}
+
+/* [LNX] net/core/dev.c: open/close the device through its ndo pair.  The
+ * interface's open path is what calls drv_start on a mac80211 driver, so the
+ * store of IFF_UP and the return value of ndo_open are the observable. */
+int
+dev_open(struct net_device *dev)
+{
+	int r = 0;
+
+	if (dev == NULL)
+		return -EINVAL;
+	if (dev->flags & IFF_UP)
+		return 0;
+	if (dev->netdev_ops != NULL && dev->netdev_ops->ndo_open != NULL) {
+		r = dev->netdev_ops->ndo_open(dev);
+		if (r != 0)
+			return r;
+	}
+	dev->flags |= IFF_UP;
+	return 0;
+}
+
+void
+dev_close(struct net_device *dev)
+{
+
+	if (dev == NULL)
+		return;
+	if (dev->netdev_ops != NULL && dev->netdev_ops->ndo_stop != NULL)
+		(void)dev->netdev_ops->ndo_stop(dev);
+	dev->flags &= ~IFF_UP;
+}
+
+int
+dev_queue_xmit(struct sk_buff *skb)
+{
+
+	/* no egress adapter is attached in the C2/C3 images; a frame that
+	 * reaches here is consumed and reported as dropped */
+	kfree_skb(skb);
+	return 1;	/* NET_XMIT_DROP: the interface's "dropped" answer */
+}
+
+gro_result_t
+napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb)
+{
+	(void)napi;
+	kfree_skb(skb);
+	return GRO_CONSUMED;
+}
+
+int
+netif_receive_skb(struct sk_buff *skb)
+{
+
+	kfree_skb(skb);
+	return NET_RX_DROP;
+}
+
+void
+netif_receive_skb_list(struct list_head *head)
+{
+	struct sk_buff *skb;
+	struct sk_buff *tmp;
+
+	if (head == NULL)
+		return;
+	list_for_each_entry_safe(skb, tmp, head, list) {
+		list_del_init(&skb->list);
+		kfree_skb(skb);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* multicast address lists (empty in these images)                     */
+/* ------------------------------------------------------------------ */
+
+void
+__hw_addr_init(struct netdev_hw_addr_list *list)
+{
+
+	if (list == NULL)
+		return;
+	INIT_LIST_HEAD(&list->list);
+	list->count = 0;
+}
+
+void
+__hw_addr_sync(struct netdev_hw_addr_list *to_list,
+	       struct netdev_hw_addr_list *from_list, int addr_len)
+{
+
+	(void)to_list;
+	(void)from_list;
+	(void)addr_len;
+}
+
+void
+__hw_addr_unsync(struct netdev_hw_addr_list *to_list,
+		 struct netdev_hw_addr_list *from_list, int addr_len)
+{
+
+	(void)to_list;
+	(void)from_list;
+	(void)addr_len;
+}
+
+/* ------------------------------------------------------------------ */
+/* NAPI scheduling: this port's poll runs in the caller's context      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] net/core/dev.c: the scheduling pair.  The interface hands the instance
+ * to a softirq poller; this port has no softirq vector of its own, so the poll
+ * runs in whoever scheduled it (the PCI threaded IRQ handler, or a driver's
+ * work item).  The contract that matters is preserved: prep refuses a second
+ * schedule (SCHED is the one-bit latch), the poll runs with the driver's own
+ * weight, and the latch clears afterwards whether or not the poll completed
+ * through napi_complete_done().  A future packet-rate path that needs the poll
+ * off the IRQ context must move it to a work item here, not change the callers.
+ */
+bool
+napi_schedule_prep(struct napi_struct *n)
+{
+
+	if (n == NULL)
+		return false;
+	/* test_and_set: false when SCHED was already set (already scheduled) */
+	return !test_and_set_bit(NAPI_STATE_SCHED, &n->state);
+}
+
+void
+__napi_schedule(struct napi_struct *n)
+{
+
+	if (n == NULL || n->poll == NULL)
+		return;
+	if (test_bit(NAPI_STATE_NPSVC, &n->state)) {
+		clear_bit(NAPI_STATE_SCHED, &n->state);
+		return;
+	}
+	(void)n->poll(n, n->weight);
+	clear_bit(NAPI_STATE_SCHED, &n->state);
+}

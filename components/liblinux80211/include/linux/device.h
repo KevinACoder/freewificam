@@ -105,7 +105,13 @@ devm_request_threaded_irq(struct device *dev, unsigned int irq,
  * registers (name, the device release/groups it installs, the namespace
  * callbacks and the PM operations).  Only the members that initialiser names
  * are carried; the uevent/devnode callbacks have no consumer here. */
-struct kobj_ns_type_operations;
+/* [LNX] include/linux/kobject_ns.h: the namespace-type record a class names.
+ * The compiled set only stores the pointer and defines the one instance below;
+ * the record's callbacks have no consumer on this port. */
+enum kobj_ns_type { KOBJ_NS_TYPE_NONE = 0, KOBJ_NS_TYPE_NET, KOBJ_NS_TYPES };
+struct kobj_ns_type_operations {
+	enum kobj_ns_type	type;
+};
 struct ns_common;
 struct dev_pm_ops;
 struct net;

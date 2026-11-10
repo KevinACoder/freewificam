@@ -67,6 +67,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_KPI_MOCK)
 	CASE_ENTRY("kpi_mock", case_kpi_mock_run)
 #endif
+#if defined(RTOS_CASE_MAC80211_C2)
+	CASE_ENTRY("mac80211_c2", case_mac80211_c2_run)
+#endif
+#if defined(RTOS_CASE_IWL7260_C3)
+	CASE_ENTRY("iwl7260_c3", case_iwl7260_c3_run)
+#endif
 #if defined(RTOS_HOST_TIER)
 };
 #endif

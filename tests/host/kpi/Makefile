@@ -57,6 +57,13 @@ SRCS := \
 	$(LIB8)/linuxkpi_compat.c \
 	$(LIB8)/linuxkpi_osdep.c \
 	$(LIB8)/linuxkpi_netdev.c \
+	$(LIB8)/linuxkpi_containers.c \
+	$(LIB8)/linuxkpi_device.c \
+	$(LIB8)/linuxkpi_rfkill.c \
+	$(LIB8)/linuxkpi_netlink.c \
+	$(LIB8)/linuxkpi_util.c \
+	$(LIB8)/linuxkpi_crypto.c \
+	$(LIB8)/fw_registry.c \
 	$(LIB8)/net_egress.c \
 	$(LIB8)/skbuff/skbuff_pool.c \
 	$(KERNEL)/tasks.c \
@@ -85,6 +92,7 @@ SRCS := \
 	$(CURDIR)/cases/macros.c \
 	$(CURDIR)/cases/net_stubs.c \
 	$(CURDIR)/cases/idr_rb.c \
+	$(CURDIR)/cases/nla.c \
 	$(CURDIR)/cases/ctx.c \
 	$(CURDIR)/cases/selftest.c
 

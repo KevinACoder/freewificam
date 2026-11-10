@@ -31,6 +31,23 @@ config LIBLINUX80211_SDIO
 	  adapter for this board lives in the SDIO module it drives
 	  (third-party/fsl_sdmmc/ports).
 
+config LIBLINUX80211_WIRELESS
+	bool "mac80211 + cfg80211 (the imported Linux wireless stack)"
+	help
+	  Links the real net/mac80211 and net/wireless translation units into the
+	  image.  This is a GPL-2.0-only subtree (components/liblinux80211/stack):
+	  an artifact that selects this symbol is a GPL-2.0 link product.  The
+	  stack is compiled by the S0 inventory even when this is off; this
+	  symbol is what puts it in an image, behind its own profile.
+
+config LIBLINUX80211_IWLWIFI
+	bool "iwlwifi (AC 7260 / mvm) driver"
+	depends on LIBLINUX80211_WIRELESS
+	help
+	  Links the vendored iwlwifi core and iwlmvm op-mode (72 TUs, byte-
+	  identical to the GT pin) against the same face.  The 7260 is the PCIe
+	  target of this line; the driver's probe and firmware ALIVE are C3.
+
 choice LIBLINUX80211_NET
 	prompt "Network egress implementation"
 	default LIBLINUX80211_NET_NONE

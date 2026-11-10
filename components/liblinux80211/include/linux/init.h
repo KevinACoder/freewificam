@@ -18,6 +18,28 @@
 
 #include "../../linuxkpi_core.h"
 
+/*
+ * The initcall levels.  Linux orders built-in initialisation by level
+ * (early/core/postcore/arch/subsys/fs/device/late) and a driver or a stack
+ * unit lands its entry point with one of these spellings.  This port runs a
+ * single flat walk: `lkpi_module_init_run()` (linuxkpi_core.c) executes the
+ * `.lkpi_init` section once, in link order.  Mapping every level to
+ * `module_init` keeps the source unchanged and makes the order a property of
+ * the source list (`sources.mk` / the image's link order), which is visible
+ * and auditable; it is not the kernel's level ordering.  The two levels the
+ * imported stack names are `fs_initcall(cfg80211_init)` and
+ * `subsys_initcall(ieee80211_init)`; `late_initcall` carries cfg80211's
+ * regulatory-db loader.
+ */
+#define	early_initcall(fn)	module_init(fn)
+#define	core_initcall(fn)	module_init(fn)
+#define	postcore_initcall(fn)	module_init(fn)
+#define	arch_initcall(fn)	module_init(fn)
+#define	subsys_initcall(fn)	module_init(fn)
+#define	fs_initcall(fn)		module_init(fn)
+#define	device_initcall(fn)	module_init(fn)
+#define	late_initcall(fn)	module_init(fn)
+
 #ifndef __initdata
 #define	__initdata
 #endif

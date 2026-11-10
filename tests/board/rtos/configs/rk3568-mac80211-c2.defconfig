@@ -1,0 +1,24 @@
+# mac80211 on the RTOS line, gate C2: the real stack registers a wiphy.
+#
+# The case calls ieee80211_alloc_hw()/ieee80211_register_hw() with a synthetic
+# driver (the mandatory callbacks, one 2.4 GHz band).  No PCIe engine and no
+# driver: C2 is the registration gate, and keeping the bus out of the image
+# keeps the first link closure small enough to attribute.
+#
+# The stack is GPL-2.0-only; this profile's image is a GPL-2.0 link product
+# (docs/LICENSES.md §3).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=8
+CONFIG_CASES="tick mac80211_c2"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+
+# mac80211 allocates its local/wiphy/netdev records from the FreeRTOS heap
+# (osMemoryAlloc -> pvPortMalloc); the board default of 256 KiB is not enough.
+CONFIG_FREERTOS_HEAP_SIZE=8388608

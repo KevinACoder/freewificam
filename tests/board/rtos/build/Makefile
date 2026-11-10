@@ -69,6 +69,7 @@ CROSS_COMPILE ?= aarch64-none-elf-
 endif
 CC := $(CROSS_COMPILE)gcc
 OBJCOPY := $(CROSS_COMPILE)objcopy
+LD := $(CROSS_COMPILE)ld
 NM := $(CROSS_COMPILE)nm
 AR := $(CROSS_COMPILE)ar
 SIZE := $(CROSS_COMPILE)size
@@ -266,6 +267,73 @@ s0-compile: $(CONFIG_FILE)
 	@printf 's0-compile: run %s -> %s\n' '$(S0_RUN)' '$(S0_DIR)'
 endif
 
+# S1b: the vendored iwlwifi driver (AC 7260 / mvm, 72 TUs) compiled one
+# translation unit at a time against the same face, plus the driver's own
+# include root and its feature face.  Same measurement contract as S0: a
+# failed TU is data (tools/build/s0-compile.sh does not stop), the product is
+# runs/S1/driver/run-<n>/summary.tsv.  The source list comes from the driver's
+# own sources.mk (tools/build/import-driver.py re-derives it from the upstream
+# Makefiles), so the 72 is not a hand-count.
+ifeq ($(CONFIG_LIBLINUX80211),1)
+IWL_DRV := $(ROOT)/wireless-drivers/iwlwifi
+$(eval $(call component_sources,$(IWL_DRV),drv,IWLWIFI_IMPL))
+
+S1_CFLAGS := $(S0_CFLAGS) \
+	-I$(IWL_DRV) \
+	-include $(LIB8)/include/linux80211/driver_config.h \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
+	-Wno-override-init
+S1_OUT ?= $(abspath $(ROOT)/../runs/S1)
+S1_RUN ?= 1
+S1_DIR := $(S1_OUT)/driver/run-$(S1_RUN)
+S1_TU_LIST := $(BUILD)/s1-tus.txt
+
+s1-driver-compile: $(CONFIG_FILE)
+	@mkdir -p $(S1_DIR)
+	@printf '%s\n' $(IWLWIFI_IMPL_SRCS) > $(S1_TU_LIST)
+	@sh $(ROOT)/tools/build/s0-compile.sh \
+		$(S1_DIR) $(CC) '$(S1_CFLAGS)' $(S1_TU_LIST)
+	@mkdir -p $(S1_OUT)/driver
+	@cp $(S1_DIR)/summary.tsv $(S1_OUT)/driver/summary.tsv
+	@printf 's1-driver-compile: run %s -> %s\n' '$(S1_RUN)' '$(S1_DIR)'
+endif
+
+# S1c: the partial link and its classified undefined list.  The stack and
+# driver objects are rebuilt here (same two flag worlds as S0/S1b) so a run is
+# one self-contained measurement; the component's own bodies are compiled too
+# because "which names does the component already define" is half the answer.
+# tools/build/s1-link.sh owns the `ld -r` and the classification; this file
+# owns the object sets and their flags.
+ifeq ($(CONFIG_LIBLINUX80211),1)
+S1_LINK_OUT ?= $(abspath $(ROOT)/../runs/S1/link)
+S1_LINK_RUN ?= 1
+S1_LINK_DIR := $(S1_LINK_OUT)/run-$(S1_LINK_RUN)
+S1_LINK_STACK_LIST := $(BUILD)/s1-link-stack.txt
+S1_LINK_DRV_LIST := $(BUILD)/s1-link-drv.txt
+S1_LINK_KPI_LIST := $(BUILD)/s1-link-kpi.txt
+
+s1-link: $(CONFIG_FILE)
+	@mkdir -p $(S1_LINK_DIR)
+	@printf '%s\n' $(LIBLINUX80211_STACK_SRCS) > $(S1_LINK_STACK_LIST)
+	@printf '%s\n' $(IWLWIFI_IMPL_SRCS) > $(S1_LINK_DRV_LIST)
+	@printf '%s\n' $(LIBLINUX80211_KPI_SRCS) $(LIBLINUX80211_BUS_PCI_SRCS) \
+		$(LIBLINUX80211_PCIE_PORT_SRCS) > $(S1_LINK_KPI_LIST)
+	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/stack $(CC) '$(S0_CFLAGS)' $(S1_LINK_STACK_LIST)
+	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/driver $(CC) '$(S1_CFLAGS)' $(S1_LINK_DRV_LIST)
+	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/kpi $(CC) '$(KPI_CFLAGS)' $(S1_LINK_KPI_LIST)
+	@awk -F'\t' 'NR > 1 && $$2 != "pass" { bad = 1 } END { exit bad ? 1 : 0 }' \
+		$(S1_LINK_DIR)/kpi/summary.tsv || { \
+		echo 's1-link: the component bodies did not all compile; fix those first' >&2; exit 1; }
+	@sh $(ROOT)/tools/build/s1-link.sh $(S1_LINK_DIR) $(LD) $(NM)
+	@printf 's1-link: run %s -> %s\n' '$(S1_LINK_RUN)' '$(S1_LINK_DIR)'
+endif
+
+# The wireless world (stack + optional driver).  Empty unless the profile
+# selects CONFIG_LIBLINUX80211_WIRELESS; see wl80211.mk for the flag worlds and
+# the link-order contract.
+include $(CURDIR)/wl80211.mk
+
 BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 	$(THIRD_PARTY)/ulog/src/ulog.c
 
@@ -273,7 +341,10 @@ BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 # other case is a plain application translation unit.
 USB_CASES := usb_xhci usb_ehci
 KPI_CASES := kpi_live kpi_mock
-CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
+# The wireless cases compile in the stack's flag world (wl80211.mk), not the
+# plain application world, so they are kept out of the generic list.
+WL80211_CASES := mac80211_c2 iwl7260_c3
+CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 APP_SRCS := \
 	$(LINE)/app/main.c \
@@ -300,7 +371,7 @@ TAG_STAMP := $(BUILD)/build-tag.stamp
 FLAG_STAMP := $(BUILD)/flags-$(BACKEND).stamp
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(USB_ALL_SRCS) \
-	$(KPI_ALL_SRCS)
+	$(KPI_ALL_SRCS) $(WL80211_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 LDFLAGS := -nostdlib -static \
@@ -413,6 +484,11 @@ $(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)
 	$(CC) $(filter-out -D%,$(ASM_CFLAGS)) -c $$< -o $$@
 endef
 
+# Generated firmware units: the blob is a build product, produced from the
+# pinned GT file the first time a driver image needs it.
+$(LIB8)/fw/iwl7260_fw_blob.c:
+	@$(PYTHON) $(ROOT)/tools/rtos/fw-blobs.py
+
 # Every object depends on the tag stamp: a commit changes the banner and must
 # rebuild the image, or a stale banner is certified as the committed build.
 $(TAG_STAMP): FORCE
@@ -423,6 +499,7 @@ $(FLAG_STAMP): FORCE $(CONFIG_FILE)
 	mkdir -p $(BUILD)
 	printf '%s\n' '$(BASE_CFLAGS) $(CFLAGS)' 'asm: $(ASM_CFLAGS)' 'config: $(shell sha256sum $(CONFIG_FILE) 2>/dev/null | cut -d' ' -f1)' \
 		'usb: $(USB_CFLAGS)' 'kpi: $(KPI_CFLAGS)' \
+		'wl: $(WL80211_STACK_CFLAGS) | $(WL80211_DRIVER_CFLAGS)' \
 		'patches: $(PATCHES) $(ADAPTER_PATCHES)' > $@.tmp
 	cmp -s $@.tmp $@ || mv $@.tmp $@
 
@@ -438,6 +515,11 @@ endif
 
 ifneq ($(strip $(KPI_ALL_SRCS)),)
 $(foreach s,$(filter-out %.S,$(KPI_ALL_SRCS)),$(eval $(call COMPILE_C,$(s),$(KPI_CFLAGS))))
+endif
+
+ifneq ($(strip $(WL80211_ALL_SRCS)),)
+$(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
 endif
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)
