@@ -100,17 +100,10 @@ skb_network_header_len(const struct sk_buff *skb)
 	return (u32)iph->ihl * 4;
 }
 
-/* [LNX] include/linux/skbuff.h:3090: the transport header follows the network
- * header by its length, which is the geometry udp_hdr() states for its own
- * family. */
-static __always_inline __unused unsigned char *
-skb_transport_header(const struct sk_buff *skb)
-{
-	const struct iphdr *iph = ip_hdr(skb);
-
-	if (iph == NULL)
-		return NULL;
-	return (unsigned char *)iph + (unsigned int)iph->ihl * 4;
-}
+/*
+ * skb_transport_header()/skb_transport_offset() now live in the contract
+ * header's header-offset block (they read skb->transport_header, the
+ * interface's field), so this face does not restate them.
+ */
 
 #endif /* _LINUX_IP_H */

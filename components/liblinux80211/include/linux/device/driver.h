@@ -30,15 +30,8 @@
 struct device;
 struct dev_pm_ops;
 
-/* [LNX] include/linux/device/driver.h:100-139 */
-struct device_driver {
-	const char		*name;
-
-	void (*shutdown) (struct device *dev);
-	const struct dev_pm_ops	*pm;
-	/* [LNX] include/linux/device/driver.h:123: the device-coredump entry a driver
-	 * hangs off its driver record. */
-	void (*coredump) (struct device *dev);
-};
+/* struct device_driver is stated with struct device in the contract header
+ * (linuxkpi_core.h); every reader reaches it through that pointer, and the
+ * interface's device-model split does not change the one definition here. */
 
 #endif /* _LINUXKPI_LINUX_DEVICE_DRIVER_H_ */

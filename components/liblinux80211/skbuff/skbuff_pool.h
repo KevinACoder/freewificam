@@ -43,10 +43,25 @@ struct sk_buff_head;
 struct net_device;
 struct page;
 
+/* the two-pointer list record; the contract header's list section states the
+ * same type under this guard (the pool header is included from the core after
+ * it, and standalone from the pool body, so one guarded definition serves both) */
+#ifndef _LKPI_LIST_HEAD_TYPE
+#define _LKPI_LIST_HEAD_TYPE
+struct list_head {
+	struct list_head *next, *prev;
+};
+#endif
+
 struct sk_buff {
 	struct sk_buff	*next;
 	struct sk_buff	*prev;
-	struct sk_buff_head *list;
+	/* [LNX] include/linux/skbuff.h:903: the list linkage
+	 * netif_receive_skb_list() and mac80211's rx list walk use. */
+	struct list_head list;
+	/* the port's own diagnostic owner: which queue this buffer was last
+	 * queued on (the double-enqueue/bad-unlink reports read it) */
+	struct sk_buff_head *_queue;
 
 	unsigned char	*head;
 	unsigned char	*data;
@@ -61,9 +76,49 @@ struct sk_buff {
 	uint32_t	priority;
 	uint8_t		pkt_type;
 	uint8_t		ip_summed;
+	/* [LNX] include/linux/skbuff.h: the header-fragment flag and the
+	 * destructor the transmit-completion path tests. */
+	unsigned int	head_frag:1;
+	/* [LNX] include/linux/skbuff.h: the tunnel-encapsulation flag the tx
+	 * checksum fixup tests. */
+	unsigned int	encapsulation:1;
+	void		(*destructor)(struct sk_buff *skb);
+	/* [LNX] include/linux/skbuff.h: the wifi-tx-status completion bits. */
+	unsigned int	wifi_acked_valid:1;
+	unsigned int	wifi_acked:1;
 	/* [LNX] skbuff.h: the running checksum a transmit path stamps onto a buffer
-	 * it hands to a hardware-checksum device. */
-	uint32_t	csum;
+	 * it hands to a hardware-checksum device, unioned with the start/offset pair
+	 * the checksum-offload query reads. */
+	union {
+		uint32_t	csum;
+		struct {
+			uint16_t	csum_start;
+			uint16_t	csum_offset;
+		};
+	};
+
+	/* [LNX] include/linux/skbuff.h:2995-3220: the header offsets.  Linux
+	 * stores them as u16 offsets from head, with (u16)~0U meaning "not set";
+	 * the inner trio and mac_len are the same shape.  This port keeps the old
+	 * "the 802.11 header is data" derivation reachable when an offset is
+	 * unset (linuxkpi_core.h's skb_mac_header()/skb_network_header()), and
+	 * switches to the interface's field semantics once a caller sets one.
+	 * struct sk_buff is aligned(4); the union is the interface's
+	 * vlan_all/vlan_proto/vlan_tci shape. */
+	uint16_t	mac_header;
+	uint16_t	mac_len;
+	uint16_t	network_header;
+	uint16_t	transport_header;
+	uint16_t	inner_mac_header;
+	uint16_t	inner_network_header;
+	uint16_t	inner_transport_header;
+	union {
+		uint32_t	vlan_all;
+		struct {
+			uint16_t	vlan_proto;
+			uint16_t	vlan_tci;
+		};
+	};
 
 	/* slot state, pool-owned: 0 = never handed out, small positive =
 	 * allocation generation of the current owner, LKPI_SKB_FREED_MAGIC

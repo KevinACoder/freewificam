@@ -24,7 +24,15 @@
 
 #include "../../linuxkpi_core.h"
 
-struct socket;
+/* [LNX] include/linux/net.h:299-...: the socket record.  nl80211's WoWLAN TCP
+ * trigger path reads `sock->sk`; the rest of the interface's record (state,
+ * type, file, proto_ops) has no counterpart here and no compiled unit names
+ * it.  The pointer is all the port needs to pass a socket to sock_release()
+ * and to the inet helpers' declarations. */
+struct sock;
+struct socket {
+	struct sock	*sk;
+};
 
 /* [LNX] include/uapi/linux/net.h:33-40: the socket types. */
 #define	SOCK_STREAM	1
@@ -43,8 +51,8 @@ struct socket;
 #define	AF_NETLINK	16
 #define	PF_NETLINK	AF_NETLINK
 
-/* [LNX] include/linux/net.h:290-291: `int sock_release(struct socket *sock)`.
+/* [LNX] include/linux/net.h:305: `void sock_release(struct socket *sock)`.
  * The body is S1's; the stack only releases an already-created socket. */
-int	sock_release(struct socket *sock);
+void	sock_release(struct socket *sock);
 
 #endif /* _LINUXKPI_LINUX_NET_H_ */

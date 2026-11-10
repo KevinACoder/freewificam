@@ -56,6 +56,80 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/netdevice.h:34 includes <linux/rculist.h>; the RCU list
+ * iterators (net/cfg80211's mlme path walks wdev_list with one) reach a unit
+ * through this header, as they do on the interface. */
+#include <linux/rculist.h>
+
+/* [LNX] include/linux/netdevice.h:882-1000: the forwarding-path records and the
+ * tc setup selector.  The 802.11 ops table and driver-ops.h both name these
+ * types, so they must be the same (globally declared) tags, not implicit
+ * declarations inside a parameter list.  Only the tags are carried: the
+ * compiled set passes pointers and reads nothing. */
+enum net_device_path_type {
+	DEV_PATH_ETHERNET = 0,
+	DEV_PATH_VLAN,
+	DEV_PATH_BRIDGE,
+	DEV_PATH_PPPOE,
+	DEV_PATH_DSA,
+	DEV_PATH_MTK_WDMA,
+	DEV_PATH_TUN,
+};
+
+struct net_device_path;
+struct net_device_path_ctx;
+
+enum tc_setup_type {
+	TC_QUERY_CAPS,
+	TC_SETUP_QDISC_MQPRIO,
+	TC_SETUP_CLSU32,
+	TC_SETUP_CLSFLOWER,
+	TC_SETUP_CLSMATCHALL,
+	TC_SETUP_CLSBPF,
+	TC_SETUP_BLOCK,
+	TC_SETUP_QDISC_CBS,
+	TC_SETUP_QDISC_RED,
+	TC_SETUP_QDISC_PRIO,
+	TC_SETUP_QDISC_MQ,
+	TC_SETUP_QDISC_ETF,
+	TC_SETUP_ROOT_QDISC,
+	TC_SETUP_QDISC_GRED,
+	TC_SETUP_QDISC_TAPRIO,
+	TC_SETUP_FT,
+	TC_SETUP_QDISC_ETS,
+	TC_SETUP_QDISC_TBF,
+	TC_SETUP_QDISC_FIFO,
+	TC_SETUP_QDISC_HTB,
+	TC_SETUP_ACT,
+};
+
+/* [LNX] include/linux/netdevice.h: the device lookup nl80211 uses for its
+ * ifindex attributes; the body is the port's (S1c). */
+struct net;
+struct net_device *__dev_get_by_index(struct net *net, int ifindex);
+void dev_close(struct net_device *dev);
+void netif_receive_skb_list(struct list_head *head);
+int dev_queue_xmit(struct sk_buff *skb);
+struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
+				    unsigned char name_assign_type,
+				    void (*setup)(struct net_device *),
+				    unsigned int txqs, unsigned int rxqs);
+
+/* [LNX] include/linux/netdevice.h: the device reference pair.  This port's
+ * devices are static objects with image lifetime; dev_put() is the netdev
+ * registry's (linuxkpi_netdev.c) and dev_hold() is declared for the stack's
+ * unwind paths (the body lands with the first consumer that needs one). */
+void dev_hold(struct net_device *dev);
+
+/* [LNX] include/linux/netdevice.h: a bridge port is a bridge-layer fact this
+ * port has no layer for; the answer is the one a device outside a bridge gets. */
+static __always_inline __unused bool
+netif_is_bridge_port(const struct net_device *dev)
+{
+	(void)dev;
+	return false;
+}
+
 /* [LNX] include/linux/netdevice.h: the alignment of the private area the
  * interface appends to a net_device allocation; arm64's NETDEV_ALIGN is 32. */
 #define	NETDEV_ALIGN	32
@@ -92,7 +166,10 @@ struct iw_handler_def;
 struct wireless_dev;
 struct ethtool_ops;
 
+#ifndef _LKPI_NETDEV_FEATURES_T
+#define _LKPI_NETDEV_FEATURES_T
 typedef u64 netdev_features_t;
+#endif
 
 /*
  * [LNX] include/linux/netdevice.h:130-138: the driver transmit return codes. The value
@@ -339,6 +416,13 @@ struct net_device_ops {
 	u16			(*ndo_select_queue)(struct net_device *dev,
 						    struct sk_buff *skb,
 						    struct net_device *sb_dev);
+	void			(*ndo_set_rx_mode)(struct net_device *dev);
+	int			(*ndo_setup_tc)(struct net_device *dev,
+						enum tc_setup_type type,
+						void *type_data);
+	int			(*ndo_fill_forward_path)(
+					struct net_device_path_ctx *ctx,
+					struct net_device_path *path);
 	int			(*ndo_set_mac_address)(struct net_device *dev,
 						       void *addr);
 	int			(*ndo_do_ioctl)(struct net_device *dev,
@@ -347,6 +431,19 @@ struct net_device_ops {
 						      struct ifreq *ifr,
 						      void __user *data, int cmd);
 	struct net_device_stats *(*ndo_get_stats)(struct net_device *dev);
+};
+
+#define	MAX_ADDR_LEN	32
+
+struct netdev_hw_addr {
+	struct list_head	list;
+	unsigned char		addr[MAX_ADDR_LEN];
+	unsigned char		type;
+};
+
+struct netdev_hw_addr_list {
+	struct list_head	list;
+	unsigned int		count;
 };
 
 /*
@@ -365,6 +462,7 @@ struct net_device {
 	struct netdev_queue	*_tx;
 	unsigned int		real_num_tx_queues;
 	unsigned short		needed_headroom;
+	unsigned short		needed_tailroom;
 
 	/* TXRX read-mostly hotpath */
 	unsigned long		state;
@@ -377,6 +475,15 @@ struct net_device {
 
 	/* Control path */
 	char			name[IFNAMSIZ];
+	int			ifindex;
+	bool			netns_immutable;
+	bool			needs_free_netdev;
+	possible_net_t		nd_net;
+	u8			pcpu_stat_type;
+	const unsigned char	*perm_addr;
+	struct netdev_hw_addr_list mc;
+	unsigned int		min_mtu;
+	unsigned int		max_mtu;
 	netdev_features_t	hw_features;
 	const struct iw_handler_def *wireless_handlers;
 	struct net_device_stats	stats;
@@ -705,16 +812,29 @@ napi_is_scheduled(struct napi_struct *n)
 
 #define	NETIF_F_SG_BIT			0	/* Scatter/gather IO. */
 #define	NETIF_F_IP_CSUM_BIT		1	/* Can checksum TCP/UDP over IPv4. */
+#define	NETIF_F_HW_CSUM_BIT		3	/* Can checksum all the packets. */
 #define	NETIF_F_IPV6_CSUM_BIT		4	/* Can checksum TCP/UDP over IPV6. */
 #define	NETIF_F_HIGHDMA_BIT		5	/* Can DMA to high memory. */
+#define	NETIF_F_FRAGLIST_BIT		6	/* Scatter/gather IO. */
+#define	NETIF_F_HW_VLAN_CTAG_TX_BIT	7	/* Transmit VLAN CTAG HW acceleration */
 #define	NETIF_F_GSO_BIT			11	/* Enable software GSO. */
 #define	NETIF_F_GSO_SHIFT		16	/* keep the order of SKB_GSO_* bits */
 #define	NETIF_F_TSO_BIT			16	/* ... TCPv4 segmentation */
 #define	NETIF_F_TSO6_BIT		20	/* ... TCPv6 segmentation */
 #define	NETIF_F_RXCSUM_BIT		40	/* Receive checksumming offload */
+#define	NETIF_F_HW_VLAN_STAG_TX_BIT	45	/* Transmit VLAN STAG HW acceleration */
+#define	NETIF_F_HW_TC_BIT		49	/* Offload TC infrastructure */
 
 #define	NETIF_F_SG		__NETIF_F(SG)
 #define	NETIF_F_IP_CSUM		__NETIF_F(IP_CSUM)
+#define	NETIF_F_HW_CSUM		__NETIF_F(HW_CSUM)
+#define	NETIF_F_FRAGLIST	__NETIF_F(FRAGLIST)
+#define	NETIF_F_HW_VLAN_CTAG_TX	__NETIF_F(HW_VLAN_CTAG_TX)
+#define	NETIF_F_HW_VLAN_STAG_TX	__NETIF_F(HW_VLAN_STAG_TX)
+#define	NETIF_F_HW_TC		__NETIF_F(HW_TC)
+/* [LNX] include/linux/netdev_features.h: the software-GSO mask.  Only the bits
+ * this face carries can be in it; the interface's other members are absent. */
+#define	NETIF_F_GSO_SOFTWARE	(NETIF_F_TSO | NETIF_F_TSO6)
 #define	NETIF_F_IPV6_CSUM	__NETIF_F(IPV6_CSUM)
 #define	NETIF_F_HIGHDMA		__NETIF_F(HIGHDMA)
 #define	NETIF_F_GSO		__NETIF_F(GSO)
@@ -743,19 +863,6 @@ static inline void napi_synchronize(const struct napi_struct *n)
  * walks. The record keeps the interface's list link and address; the rbtree node
  * and the reference bookkeeping the interface also carries are not named by a
  * compiled consumer. */
-#define	MAX_ADDR_LEN	32
-
-struct netdev_hw_addr {
-	struct list_head	list;
-	unsigned char		addr[MAX_ADDR_LEN];
-	unsigned char		type;
-};
-
-struct netdev_hw_addr_list {
-	struct list_head	list;
-	unsigned int		count;
-};
-
 /* [LNX] include/linux/netdevice.h:261: `#define netdev_hw_addr_list_count(l)
  * ((l)->count)`. The multicast-address count the driver reads before it walks the
  * list; carried as the interface's macro over the record's own counter. */
@@ -763,5 +870,125 @@ struct netdev_hw_addr_list {
 
 #define	netdev_hw_addr_list_for_each(ha, l)	\
 	list_for_each_entry(ha, &(l)->list, list)
+
+
+/* [LNX] include/linux/netdevice.h: the name-source tags dev_alloc_name() takes. */
+enum {
+	NET_NAME_UNKNOWN,
+	NET_NAME_ENUM,
+	NET_NAME_PREDICTABLE,
+	NET_NAME_USER,
+	NET_NAME_RENAMED,
+};
+
+/* [LNX] include/linux/netdevice.h: the by-index/name lookups the wireless
+ * paths use; the bodies are the port's (S1c). */
+struct net_device *dev_get_by_index(struct net *net, int ifindex);
+struct net_device *dev_get_by_name(struct net *net, const char *name);
+
+/* [LNX] include/linux/netdevice.h: the standard MAC-address setter.  Saves the
+ * address into the device; the port's devices are static, so the copy is the
+ * whole operation. */
+bool eth_mac_addr(struct net_device *dev, void *p);
+
+/* [LNX] include/linux/netdevice.h: the netdev_* print wrappers. */
+#define	netdev_info(dev, fmt, args...)					\
+	pr_info("%s: " fmt, (dev)->name, ##args)
+#define	net_dbg_ratelimited(fmt, args...)	do { } while (0)
+
+
+/* [LNX] include/linux/netdevice.h: the address-list lock pair.  The port has no
+ * concurrent address-list writer, so the pair is the empty section. */
+static __always_inline __unused void
+netif_addr_lock_bh(struct net_device *dev)
+{
+	(void)dev;
+}
+
+static __always_inline __unused void
+netif_addr_unlock_bh(struct net_device *dev)
+{
+	(void)dev;
+}
+
+/* [LNX] net/core/dev_addr_lists.c: the list sync bodies; declaration only in
+ * this round (S1c owns the body). */
+void __hw_addr_unsync(struct netdev_hw_addr_list *to_list,
+		      struct netdev_hw_addr_list *from_list, int addr_len);
+void __hw_addr_init(struct netdev_hw_addr_list *list);
+void __hw_addr_sync(struct netdev_hw_addr_list *to_list,
+		    struct netdev_hw_addr_list *from_list, int addr_len);
+
+/* [LNX] include/linux/netdevice.h: the software netdev statistics the monitor
+ * path bumps.  The port carries no per-cpu stats; the calls stay as the
+ * interface's accounting hooks with nothing to add them to yet. */
+static __always_inline __unused void
+dev_sw_netstats_rx_add(struct net_device *dev, unsigned int len)
+{
+	(void)dev;
+	(void)len;
+}
+
+static __always_inline __unused void
+dev_sw_netstats_tx_add(struct net_device *dev, unsigned int packets,
+		       unsigned int len)
+{
+	(void)dev;
+	(void)packets;
+	(void)len;
+}
+
+
+/* [LNX] include/linux/netdevice.h:892-957: the forwarding-path records the
+ * 802.11 fill-forward-path callback reads (path->type/dev, ctx->dev/daddr) and
+ * the driver-ops signature names.  Only the members the compiled set reads are
+ * carried; the tunnel/bridge/dsa unions arrive with their first consumer. */
+struct net_device_path {
+	enum net_device_path_type	type;
+	const struct net_device		*dev;
+	union {
+		struct {
+			u16	id;
+			__be16	proto;
+			u8	h_dest[ETH_ALEN];
+		} encap;
+	};
+};
+
+struct net_device_path_ctx {
+	const struct net_device	*dev;
+	u8			daddr[ETH_ALEN];
+	__be16			ether_type;
+	int			num_vlans;
+	struct {
+		u16		id;
+		__be16		proto;
+	} vlan[2];
+};
+
+/* [LNX] include/linux/skbuff.h: the queue-mapping copy a re-injected buffer
+ * carries. */
+static __always_inline __unused void
+skb_copy_queue_mapping(struct sk_buff *to, const struct sk_buff *from)
+{
+	to->queue_mapping = from->queue_mapping;
+}
+
+#define	netdev_err(dev, fmt, args...)					\
+	pr_err("%s: " fmt, (dev)->name, ##args)
+
+
+/* [LNX] include/linux/netdevice.h: the namespace tag accessors and the per-cpu
+ * statistics selector values (the port stores no per-cpu stats, the selector is
+ * a record field a caller writes). */
+#define	dev_net(dev)			read_pnet(&(dev)->nd_net)
+#define	dev_net_set(dev, net)		write_pnet(&(dev)->nd_net, (net))
+enum netdev_pcpu_stat_type {
+	NETDEV_PCPU_STAT_TSTATS,
+	NETDEV_PCPU_STAT_LSTATS,
+	NETDEV_PCPU_STAT_DSTATS,
+	NETDEV_PCPU_STAT_PCPU_QUEUE,
+	NETDEV_PCPU_STAT_PCPU_SOFTNET,
+};
 
 #endif /* _LINUXKPI_LINUX_NETDEVICE_H_ */

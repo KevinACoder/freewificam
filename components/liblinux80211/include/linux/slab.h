@@ -24,6 +24,11 @@
 #define _LINUXKPI_LINUX_SLAB_H_
 
 #include "../../linuxkpi_core.h"
+
+/* [LNX] include/linux/cleanup.h defines DEFINE_FREE(kfree, ...) in the
+ * interface's slab.h; the consumer here reaches __free(kfree) through the same
+ * header (nl80211.c declares `struct nlattr **attrs __free(kfree)`). */
+#include <linux/cleanup.h>
 /* [LNX] include/linux/slab.h: includes <linux/overflow.h>; the on-stack
  * flexible-array helper a driver uses arrives through this header. */
 #include <linux/overflow.h>

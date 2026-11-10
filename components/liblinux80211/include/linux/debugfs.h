@@ -55,4 +55,13 @@ struct dentry *debugfs_create_file_short(const char *name, umode_t mode,
 		 struct debugfs_short_fops *: debugfs_create_file_short) \
 		(name, mode, parent, data, NULL, fops)
 
+/* [LNX] include/linux/debugfs.h:359: with debugfs off the rename is a no-op
+ * that still type-checks its arguments. */
+static inline int debugfs_change_name(struct dentry *dentry, const char *fmt, ...)
+{
+	(void)dentry;
+	(void)fmt;
+	return 0;
+}
+
 #endif /* _LINUXKPI_LINUX_DEBUGFS_H_ */

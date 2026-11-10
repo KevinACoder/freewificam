@@ -53,4 +53,14 @@ static __always_inline int notifier_to_errno(int ret)
 	return ret > NOTIFY_OK ? 0 : ret < 0 ? ret : 0;
 }
 
+/* [LNX] include/linux/notifier.h:196: the errno-to-notifier-value encoding
+ * (NOTIFY_BAD is the high bit; the value is the wrapped -err). */
+#define	NOTIFY_STOP_MASK	0x8000
+static inline int notifier_from_errno(int err)
+{
+	if (err)
+		return NOTIFY_STOP_MASK | (NOTIFY_OK - err);
+	return NOTIFY_OK;
+}
+
 #endif /* _LINUXKPI_LINUX_NOTIFIER_H_ */

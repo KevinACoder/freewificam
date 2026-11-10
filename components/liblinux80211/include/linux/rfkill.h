@@ -17,6 +17,28 @@
 #define _LINUXKPI_LINUX_RFKILL_H_
 
 #include "../../linuxkpi_core.h"
+/* [LNX] include/linux/rfkill.h:52-66: the by-value operations record
+ * struct wireless_dev embeds (stack/wireless/core.h).  The callbacks are the
+ * interface's three; nothing in the compiled set calls them yet. */
+struct rfkill;
+struct rfkill_ops;
+/* [LNX] include/linux/rfkill.h: the switch allocator the wireless drivers call;
+ * this port has no switch, so a caller reaching the body gets the unresolved
+ * symbol (S1c) rather than a fake switch. */
+int rfkill_register(struct rfkill *rfkill);
+void rfkill_destroy(struct rfkill *rfkill);
+bool rfkill_set_hw_state_reason(struct rfkill *rfkill, bool blocked,
+				unsigned long reason);
+void rfkill_unregister(struct rfkill *rfkill);
+struct rfkill *rfkill_alloc(const char *name, struct device *parent,
+			    enum rfkill_type type,
+			    const struct rfkill_ops *ops, void *ops_data);
+struct rfkill_ops {
+	void	(*poll)(struct rfkill *rfkill, void *data);
+	void	(*query)(struct rfkill *rfkill, void *data);
+	int	(*set_block)(void *data, bool blocked);
+};
+
 
 struct rfkill;
 
@@ -51,6 +73,15 @@ static __always_inline __unused void
 rfkill_resume_polling(struct rfkill *rfkill)
 {
 	(void)rfkill;
+}
+
+/* [LNX] include/linux/rfkill.h: the portable "blocked" test; no switch exists
+ * here, so nothing is hard-blocked. */
+static __always_inline __unused bool
+rfkill_blocked(struct rfkill *rfkill)
+{
+	(void)rfkill;
+	return false;
 }
 
 static __always_inline __unused bool

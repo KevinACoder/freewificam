@@ -22,4 +22,37 @@
 
 #include "../../linuxkpi_core.h"
 
+
+/* [LNX] include/linux/bitfield.h: the field arithmetic.  The interface's
+ * checks (_BF_FIELD_CHECK and the mask_is_constant assertions) are compile-time
+ * diagnostics; the values below are the interface's own expressions. */
+#ifndef __bf_shf
+#define	__bf_shf(x)		(__builtin_ffsll(x) - 1)
+#endif
+#ifndef FIELD_GET
+#define	FIELD_GET(_mask, _reg)						\
+	((__force u64)((_reg) & (_mask)) >> __bf_shf(_mask))
+#endif
+#ifndef FIELD_PREP
+#define	FIELD_PREP(_mask, _val)						\
+	(((_mask) & ((typeof(_mask))(_val) << __bf_shf(_mask))))
+#endif
+
+#define	u8_encode_bits(val, mask)	((u8)FIELD_PREP((mask), (val)))
+#define	u16_encode_bits(val, mask)	((u16)FIELD_PREP((mask), (val)))
+#define	u32_encode_bits(val, mask)	((u32)FIELD_PREP((mask), (val)))
+#define	u64_encode_bits(val, mask)	((u64)FIELD_PREP((mask), (val)))
+#define	u8_get_bits(val, mask)		((u8)FIELD_GET((mask), (val)))
+#define	u16_get_bits(val, mask)		((u16)FIELD_GET((mask), (val)))
+#define	u32_get_bits(val, mask)		((u32)FIELD_GET((mask), (val)))
+#define	u64_get_bits(val, mask)		((u64)FIELD_GET((mask), (val)))
+#define	u8_replace_bits(dst, val, mask)					\
+	((dst) = (u8)(((dst) & ~(mask)) | u8_encode_bits((val), (mask))))
+#define	u16_replace_bits(dst, val, mask)				\
+	((dst) = (u16)(((dst) & ~(mask)) | u16_encode_bits((val), (mask))))
+#define	u32_replace_bits(dst, val, mask)				\
+	((dst) = (u32)(((dst) & ~(mask)) | u32_encode_bits((val), (mask))))
+#define	u64_replace_bits(dst, val, mask)				\
+	((dst) = (u64)(((dst) & ~(mask)) | u64_encode_bits((val), (mask))))
+
 #endif /* _LINUXKPI_LINUX_BITFIELD_H_ */

@@ -37,6 +37,22 @@ struct attribute_group {
 		return a->mode;						\
 	}
 
+/* [LNX] include/linux/sysfs.h: the symlink removal the device teardown calls. */
+void sysfs_remove_link(struct kobject *kobj, const char *name);
+int sysfs_create_link(struct kobject *kobj, struct kobject *target,
+		      const char *name);
+
+#ifndef ATTRIBUTE_GROUPS
+#define	ATTRIBUTE_GROUPS(_name)						\
+	static const struct attribute_group _name##_group = {		\
+		.attrs = _name##_attrs,					\
+	};								\
+	static const struct attribute_group *_name##_groups[] = {	\
+		&_name##_group,						\
+		NULL,							\
+	}
+#endif
+
 #define	__ATTRIBUTE_GROUPS(_name)					\
 	static const struct attribute_group *_name##_groups[] = {	\
 		&_name##_group,						\

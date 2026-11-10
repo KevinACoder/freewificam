@@ -69,6 +69,16 @@ struct tasklet_struct {
  * mechanism. */
 extern void tasklet_init(struct tasklet_struct *t,
 			 void (*func)(unsigned long), unsigned long data);
+
+/* [LNX] include/linux/interrupt.h: the callback-form initialiser.  It is the
+ * same record tasklet_init() prepares, with the callback arm selected. */
+static inline void tasklet_setup(struct tasklet_struct *t,
+				 void (*callback)(struct tasklet_struct *t))
+{
+	tasklet_init(t, NULL, 0);
+	t->callback = callback;
+	t->use_callback = true;
+}
 extern void tasklet_disable(struct tasklet_struct *t);
 extern void tasklet_enable(struct tasklet_struct *t);
 extern void tasklet_kill(struct tasklet_struct *t);

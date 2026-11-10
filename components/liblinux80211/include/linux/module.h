@@ -39,6 +39,11 @@ struct module;
 #define	MODULE_VERSION(version)			extern int lkpi_module_version_inert__
 #define	MODULE_SUPPORTED_DEVICE(name)		extern int lkpi_module_supported_inert__
 #define	MODULE_ALIAS(alias)			extern int lkpi_module_alias_inert__
+/* [LNX] include/linux/module.h: the family/protocol aliases are module-loader
+ * metadata; this project links one image, so they are the same inert line. */
+#define	MODULE_ALIAS_NET_PF_PROTO(pf, proto)	MODULE_ALIAS("net-pf-proto")
+#define	MODULE_ALIAS_NET_PF_PROTO_NAME(pf, proto, name)	MODULE_ALIAS(name)
+#define	MODULE_ALIAS_GENL_FAMILY(name)		MODULE_ALIAS(name)
 /* [LNX] include/linux/module.h:302: the imported-namespace line. It is module
  * metadata for the loader; this project links one image, so it is inert. */
 #define	MODULE_IMPORT_NS(ns)			extern int lkpi_module_import_ns_inert__
@@ -77,5 +82,9 @@ request_module_nowait(const char *name, ...)
 	(void)name;
 	return -ENOSYS;
 }
+
+/* [LNX] include/linux/module.h:23 includes <linux/moduleparam.h>; the compiled
+ * set reaches the parameter lock through it. */
+#include <linux/moduleparam.h>
 
 #endif /* _LINUXKPI_LINUX_MODULE_H_ */

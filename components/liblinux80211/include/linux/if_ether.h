@@ -30,6 +30,7 @@
 /* sizes                                                               */
 /* ------------------------------------------------------------------ */
 
+#define	ETH_TLEN		2		/* octets in the type/length field */
 #define	ETH_ALEN		6		/* octets in an Ethernet address */
 #define	ETH_HLEN		14		/* octets in the Ethernet header */
 #define	ETH_ZLEN		60		/* minimum frame, without the FCS */
@@ -47,12 +48,21 @@
 #define	ETH_P_ARP		0x0806
 #define	ETH_P_ATALK		0x809B
 #define	ETH_P_AARP		0x80F3
+#define	ETH_P_802_3		0x0001		/* Dummy type for 802.3 frames */
+#define	ETH_P_802_2		0x0004		/* 802.2 frames */
 #define	ETH_P_8021Q		0x8100		/* 802.1Q VLAN Extended Header */
+#define	ETH_P_8021AD		0x88A8		/* 802.1ad Service VLAN */
+#define	ETH_P_80221		0x8917		/* IEEE 802.21 MIH */
+#define	ETH_P_MPLS_UC		0x8847		/* MPLS Unicast traffic */
+#define	ETH_P_MPLS_MC		0x8848		/* MPLS Multicast traffic */
 #define	ETH_P_IPX		0x8137
 #define	ETH_P_IPV6		0x86DD
 #define	ETH_P_PPP_DISC		0x8863
 #define	ETH_P_PPP_SES		0x8864
 #define	ETH_P_PAE		0x888E		/* EAPOL over Ethernet */
+#define	ETH_P_PREAUTH		0x88C7		/* 802.11 preauthentication */
+/* [LNX] include/linux/if_ether.h: values at or below this are lengths */
+#define	ETH_P_802_3_MIN		0x0600
 /* [LNX] include/uapi/linux/if_ether.h:112 */
 #define	ETH_P_TDLS		0x890D		/* TDLS */
 

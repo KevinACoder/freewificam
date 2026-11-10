@@ -60,4 +60,13 @@ char *iwe_stream_add_event(struct iw_request_info *info, char *stream,
 char *iwe_stream_add_point(struct iw_request_info *info, char *stream,
 			   char *ends, struct iw_event *iwe, char *extra);
 
+
+/* [LNX] include/net/iw_handler.h:415-417: with WEXT compiled out the event
+ * flush is the interface's empty inline; core.c's call site is unconditional. */
+#ifdef CONFIG_CFG80211_WEXT
+void wireless_nlevent_flush(void);
+#else
+static inline void wireless_nlevent_flush(void) {}
+#endif
+
 #endif /* _LINUXKPI_NET_IW_HANDLER_H_ */

@@ -33,6 +33,12 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/dma-mapping.h:8 includes <linux/scatterlist.h>; the
+ * interface's skbuff.h includes this header, and mac80211's aes_gmac.c gets
+ * the complete struct scatterlist (and sg_init_table/sg_set_buf) through that
+ * chain. */
+#include <linux/scatterlist.h>
+
 struct page;
 struct sg_table;
 

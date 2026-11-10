@@ -713,12 +713,8 @@ memcpy_and_pad(void *dest, size_t dest_len, const void *src, size_t count,
 
 /*
  * [LNX] net/core/net_namespace.c: `struct net init_net` is the initial
- * namespace every device lookup defaults to. The face declares `struct net`
- * opaque; this port has exactly one namespace, so the record is an empty tag and
- * init_net its single instance, which dev_get_by_name accepts and ignores.
+ * namespace every device lookup defaults to.  The record itself is the face's
+ * (net/net_namespace.h), which the stack's genetlink inlines dereference; this
+ * port has one namespace, so init_net is its single instance.
  */
-struct net {
-	int	_unused;
-};
-
 struct net init_net;

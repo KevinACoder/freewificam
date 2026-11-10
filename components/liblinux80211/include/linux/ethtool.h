@@ -110,6 +110,11 @@ struct ethtool_stats {
  * the interface's exact signatures and in the interface's relative order. Nothing else
  * is named, so nothing else is declared.
  */
+struct ethtool_regs;
+struct ethtool_ringparam;
+struct kernel_ethtool_ringparam;
+struct netlink_ext_ack;
+
 struct ethtool_ops {
 	void	(*get_drvinfo)(struct net_device *, struct ethtool_drvinfo *);
 	u32	(*get_link)(struct net_device *);
@@ -117,6 +122,14 @@ struct ethtool_ops {
 	void	(*get_ethtool_stats)(struct net_device *,
 				     struct ethtool_stats *, u64 *);
 	int	(*get_sset_count)(struct net_device *, int);
+	int	(*get_regs_len)(struct net_device *);
+	void	(*get_regs)(struct net_device *, struct ethtool_regs *, void *);
+	void	(*get_ringparam)(struct net_device *, struct ethtool_ringparam *,
+				struct kernel_ethtool_ringparam *,
+				struct netlink_ext_ack *);
+	int	(*set_ringparam)(struct net_device *, struct ethtool_ringparam *,
+				struct kernel_ethtool_ringparam *,
+				struct netlink_ext_ack *);
 };
 
 /* [LNX] include/linux/ethtool.h:1470: the generic link-state callback a driver without
@@ -124,5 +137,37 @@ struct ethtool_ops {
  * carrier state, which on this port is the net-device seam's business, like the other
  * device entry points this face declares. */
 u32 ethtool_op_get_link(struct net_device *dev);
+
+
+/* [LNX] include/linux/ethtool.h: the ring/registers records mac80211's ethtool
+ * callbacks read.  Fields are the interface's; the compiled set names only
+ * these members. */
+struct ethtool_regs {
+	u32	version;
+	u32	len;
+};
+
+struct ethtool_ringparam {
+	u32	rx_max_pending;
+	u32	rx_mini_max_pending;
+	u32	rx_jumbo_max_pending;
+	u32	tx_max_pending;
+	u32	rx_pending;
+	u32	rx_mini_pending;
+	u32	rx_jumbo_pending;
+	u32	tx_pending;
+};
+
+struct kernel_ethtool_ringparam {
+	u32	rx_max_pending;
+	u32	rx_mini_max_pending;
+	u32	rx_jumbo_max_pending;
+	u32	tx_max_pending;
+	u32	rx_pending;
+	u32	rx_mini_pending;
+	u32	rx_jumbo_pending;
+	u32	tx_pending;
+	u32	tx_push_enabled;
+};
 
 #endif /* _LINUXKPI_LINUX_ETHTOOL_H_ */

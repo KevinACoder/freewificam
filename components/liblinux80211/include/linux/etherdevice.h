@@ -146,4 +146,17 @@ static inline void eth_hw_addr_set(struct net_device *dev, const u8 *addr)
 	dev_addr_mod(dev, 0, addr, ETH_ALEN);
 }
 
+
+/* [LNX] include/linux/etherdevice.h:213-230: an Ethertype/length field at or
+ * below ETH_P_802_3_MAX is a length (802.3), not an Ethertype.  htons() is the
+ * contract header's byte-order helper. */
+#define	ETH_P_802_3_MAX	1536
+static inline bool eth_proto_is_802_3(__be16 proto)
+{
+#ifndef __BIG_ENDIAN
+	proto &= htons(0xFF00);
+#endif
+	return proto <= htons(ETH_P_802_3_MAX);
+}
+
 #endif /* _LINUXKPI_LINUX_ETHERDEVICE_H_ */

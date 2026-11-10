@@ -45,5 +45,12 @@ static inline struct new_utsname *utsname(void)
 
 	return &lkpi_utsname;
 }
+/* [LNX] include/linux/utsname.h: the initial utsname the version string is
+ * read from; one image, so the boot record is the only one. */
+static inline struct new_utsname *init_utsname(void)
+{
+	return utsname();
+}
+
 
 #endif /* _LINUXKPI_LINUX_UTSNAME_H_ */

@@ -50,6 +50,7 @@
  */
 
 #include <net/inet_ecn.h>
+#include <linux/math.h>
 
 static void codel_params_init(struct codel_params *params)
 {

@@ -61,4 +61,15 @@ struct ipv6_opt_hdr {
 /* [LNX] include/linux/ipv6.h:8 */
 #define	ipv6_optlen(p)		((((p)->hdrlen) + 1) << 3)
 
+
+/* [LNX] include/net/ipv6.h: the IPv6 header of the buffer, derived from the
+ * network header the port's skb face already answers. */
+struct sk_buff;
+unsigned char *skb_network_header(const struct sk_buff *skb);
+
+static inline struct ipv6hdr *ipv6_hdr(const struct sk_buff *skb)
+{
+	return (struct ipv6hdr *)skb_network_header(skb);
+}
+
 #endif /* _LINUXKPI_LINUX_IPV6_H_ */

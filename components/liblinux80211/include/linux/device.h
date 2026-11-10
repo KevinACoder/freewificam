@@ -1,6 +1,10 @@
 #ifndef _LINUXKPI_LINUX_DEVICE_H_
 #define _LINUXKPI_LINUX_DEVICE_H_
 #include "../../linuxkpi_core.h"
+
+/* [LNX] include/linux/device.h includes <linux/device/driver.h>; the PCI
+ * device's driver record (pdev->driver->name) is complete through this. */
+#include <linux/device/driver.h>
 #include <linux/sysfs.h>
 /* [LNX] include/linux/device.h:25 includes <linux/pm.h>; the power-management table a
  * driver hangs off its bus driver record reaches a unit through it. */
@@ -95,5 +99,55 @@ devm_request_threaded_irq(struct device *dev, unsigned int irq,
 			  irq_handler_t handler, irq_handler_t thread_fn,
 			  unsigned long irqflags, const char *devname,
 			  void *dev_id);
+
+
+/* [LNX] include/linux/device/class.h: the class record cfg80211's sysfs face
+ * registers (name, the device release/groups it installs, the namespace
+ * callbacks and the PM operations).  Only the members that initialiser names
+ * are carried; the uevent/devnode callbacks have no consumer here. */
+struct kobj_ns_type_operations;
+struct ns_common;
+struct dev_pm_ops;
+struct net;
+struct attribute_group;
+struct device;
+
+struct device_type {
+	const char *name;
+};
+
+struct class {
+	const char		*name;
+	const struct attribute_group *const *dev_groups;
+	void			(*dev_release)(struct device *dev);
+	const struct kobj_ns_type_operations *ns_type;
+	const struct ns_common *(*namespace)(const struct device *dev);
+	const struct dev_pm_ops	*pm;
+};
+
+int class_register(const struct class *cls);
+int device_rename(struct device *dev, const char *new_name);
+int dev_set_name(struct device *dev, const char *fmt, ...);
+void device_initialize(struct device *dev);
+int device_add(struct device *dev);
+void device_del(struct device *dev);
+void device_enable_async_suspend(struct device *dev);
+void dev_set_uevent_suppress(struct device *dev, int val);
+void class_unregister(const struct class *cls);
+
+/* [LNX] include/linux/net_namespace.h: the ns operations record the class
+ * points at and the per-net operations the cfg80211 core registers. */
+extern const struct kobj_ns_type_operations net_ns_type_operations;
+
+struct pernet_operations {
+	int	(*init)(struct net *net);
+	void	(*exit)(struct net *net);
+	void	(*exit_batch)(struct list_head *net_exit_list);
+	unsigned int id;
+	size_t	size;
+};
+
+int register_pernet_device(struct pernet_operations *ops);
+void unregister_pernet_device(struct pernet_operations *ops);
 
 #endif /* _LINUXKPI_LINUX_DEVICE_H_ */

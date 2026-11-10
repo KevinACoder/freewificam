@@ -402,7 +402,7 @@ static void slot_mark_released(struct sk_buff *skb)
 {
 	skb->next = NULL;
 	skb->prev = NULL;
-	skb->list = NULL;
+	skb->_queue = NULL;
 	skb->head = NULL;
 	skb->data = NULL;
 	skb->tail = 0;
@@ -415,6 +415,19 @@ static void slot_mark_released(struct sk_buff *skb)
 	skb->priority = 0;
 	skb->pkt_type = 0;
 	skb->ip_summed = 0;
+	skb->head_frag = 0;
+	skb->encapsulation = 0;
+	skb->destructor = NULL;
+	skb->wifi_acked_valid = 0;
+	skb->wifi_acked = 0;
+	skb->mac_header = 0;
+	skb->mac_len = 0;
+	skb->network_header = 0;
+	skb->transport_header = 0;
+	skb->inner_mac_header = 0;
+	skb->inner_network_header = 0;
+	skb->inner_transport_header = 0;
+	skb->vlan_all = 0;
 	skb->dev = NULL;
 	skb->sk = NULL;
 	memset(skb->cb, 0, sizeof(skb->cb));
@@ -425,7 +438,7 @@ static void slot_mark_released(struct sk_buff *skb)
 static const char *free_slot_shape_bad(const struct sk_buff *skb, char *detail,
     size_t n)
 {
-	if (skb->next != NULL || skb->prev != NULL || skb->list != NULL) {
+	if (skb->next != NULL || skb->prev != NULL || skb->_queue != NULL) {
 		snprintf(detail, n, "released slot still linked into a list");
 		return detail;
 	}
@@ -450,6 +463,13 @@ static const char *free_slot_shape_bad(const struct sk_buff *skb, char *detail,
 	if (skb->protocol != 0 || skb->queue_mapping != 0 ||
 	    skb->priority != 0 || skb->pkt_type != 0 || skb->ip_summed != 0) {
 		snprintf(detail, n, "released slot still carries header fields");
+		return detail;
+	}
+	if (skb->mac_header != 0 || skb->mac_len != 0 ||
+	    skb->network_header != 0 || skb->transport_header != 0 ||
+	    skb->inner_mac_header != 0 || skb->inner_network_header != 0 ||
+	    skb->inner_transport_header != 0 || skb->vlan_all != 0) {
+		snprintf(detail, n, "released slot still carries offsets");
 		return detail;
 	}
 	{
@@ -658,6 +678,16 @@ static struct sk_buff *pool_alloc(unsigned int size, int dev)
 	skb->head = buf;
 	skb->data = buf;
 	skb->tail = 0;
+	/* the interface's "no header offset recorded yet" sentinel; the accessors
+	 * fall back to this port's frame-derived answer until a caller sets one */
+	skb->mac_header = (uint16_t)~0U;
+	skb->network_header = (uint16_t)~0U;
+	skb->transport_header = (uint16_t)~0U;
+	skb->inner_mac_header = (uint16_t)~0U;
+	skb->inner_network_header = (uint16_t)~0U;
+	skb->inner_transport_header = (uint16_t)~0U;
+	skb->mac_len = 0;
+	skb->vlan_all = 0;
 	/*
 	 * `end` is the request's - the interface's own geometry (alloc_skb(64)
 	 * followed by skb_reserve(NET_SKB_PAD) leaves 64 bytes of tailroom), and
@@ -788,6 +818,14 @@ struct sk_buff *skb_clone(const struct sk_buff *skb, gfp_t gfp_mask)
 	clone->dev = skb->dev;
 	clone->protocol = skb->protocol;
 	clone->queue_mapping = skb->queue_mapping;
+	clone->mac_header = skb->mac_header;
+	clone->mac_len = skb->mac_len;
+	clone->network_header = skb->network_header;
+	clone->transport_header = skb->transport_header;
+	clone->inner_mac_header = skb->inner_mac_header;
+	clone->inner_network_header = skb->inner_network_header;
+	clone->inner_transport_header = skb->inner_transport_header;
+	clone->vlan_all = skb->vlan_all;
 	clone->_gen = gen_next();
 
 	if (hdr_heap) {
@@ -941,9 +979,9 @@ void lkpi_skb_free(struct sk_buff *skb)
 		 * it detaches it first (the face tracks ->list for exactly this and
 		 * for the double-enqueue diagnostic).
 		 */
-		if (skb->list != NULL) {
-			lkpi_txq_audit_free_linked(skb->list, skb, ra);
-			lkpi_skb_do_unlink(skb, skb->list);
+		if (skb->_queue != NULL) {
+			lkpi_txq_audit_free_linked(skb->_queue, skb, ra);
+			lkpi_skb_do_unlink(skb, skb->_queue);
 		}
 		buf_ref_put(&slot_buf[slot], skb);
 		/* The buffer record stays: a released slot without its head pointer
@@ -963,9 +1001,9 @@ void lkpi_skb_free(struct sk_buff *skb)
 	if (hi >= 0) {
 		uintptr_t addr = (uintptr_t)skb;	/* kept past the release */
 
-		if (skb->list != NULL) {
-			lkpi_txq_audit_free_linked(skb->list, skb, ra);
-			lkpi_skb_do_unlink(skb, skb->list);
+		if (skb->_queue != NULL) {
+			lkpi_txq_audit_free_linked(skb->_queue, skb, ra);
+			lkpi_skb_do_unlink(skb, skb->_queue);
 		}
 		buf_ref_put(&heap_live[hi].buf, skb);
 		lkpi_spl_free(skb);
@@ -1131,7 +1169,7 @@ static int queue_linkable(const struct sk_buff *skb, const struct sk_buff_head *
 		lkpi_spl_log("queue op with a NULL skb refused");
 		return 0;
 	}
-	if (skb->list != NULL) {
+	if (skb->_queue != NULL) {
 		static unsigned int said;
 
 		lkpi_spl_log("double enqueue refused (skb still owned by a queue)");
@@ -1145,7 +1183,7 @@ static int queue_linkable(const struct sk_buff *skb, const struct sk_buff_head *
 			    "txaudit: relink q=%p qlen=%lu skb=%p stale_list=%p "
 			    "skb_prev=%p skb_next=%p ra=%p\n",
 			    (const void *)q, (unsigned long)q->qlen,
-			    (const void *)skb, (const void *)skb->list,
+			    (const void *)skb, (const void *)skb->_queue,
 			    (const void *)skb->prev, (const void *)skb->next,
 			    __builtin_return_address(0));
 #endif
@@ -1172,7 +1210,7 @@ void lkpi_skb_do_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 	skb->prev = at;
 	at->next = skb;
 	q->prev = skb;
-	skb->list = q;
+	skb->_queue = q;
 	q->qlen++;
 	lkpi_txq_audit_op(skb, q, "q_tail");
 }
@@ -1192,7 +1230,7 @@ void lkpi_skb_do_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 	skb->prev = (struct sk_buff *)q;
 	at->prev = skb;
 	q->next = skb;
-	skb->list = q;
+	skb->_queue = q;
 	q->qlen++;
 	lkpi_txq_audit_op(skb, q, "q_head");
 }
@@ -1213,11 +1251,11 @@ static bool queue_linked(const struct sk_buff_head *q,
 {
 	const struct sk_buff *h = (const struct sk_buff *)q;
 
-	if (skb == NULL || skb->list != q || skb->prev == NULL || skb->next == NULL)
+	if (skb == NULL || skb->_queue != q || skb->prev == NULL || skb->next == NULL)
 		return false;
-	if (skb->prev != h && skb->prev->list != q)
+	if (skb->prev != h && skb->prev->_queue != q)
 		return false;
-	if (skb->next != h && skb->next->list != q)
+	if (skb->next != h && skb->next->_queue != q)
 		return false;
 	return true;
 }
@@ -1264,7 +1302,7 @@ static void do_detach(struct sk_buff_head *q, struct sk_buff *skb)
 	q->qlen--;
 	skb->next = NULL;
 	skb->prev = NULL;
-	skb->list = NULL;
+	skb->_queue = NULL;
 	lkpi_txq_audit_op(skb, q, "detach");
 }
 
@@ -1292,7 +1330,7 @@ struct sk_buff *lkpi_skb_do_dequeue(struct sk_buff_head *q)
 #ifdef CONFIG_LKPI_TXQ_AUDIT
 	/* the head of this queue names a frame another queue owns: whatever
 	 * happens next edits a chain this queue is not part of */
-	if (skb != NULL && skb->list != q) {
+	if (skb != NULL && skb->_queue != q) {
 		static unsigned int said;
 
 		if (said++ < 8u)
@@ -1300,7 +1338,7 @@ struct sk_buff *lkpi_skb_do_dequeue(struct sk_buff_head *q)
 			    "txaudit: deq-foreign q=%p qlen=%lu skb=%p "
 			    "skb_list=%p skb_prev=%p skb_next=%p ra=%p\n",
 			    (const void *)q, (unsigned long)q->qlen,
-			    (const void *)skb, (const void *)skb->list,
+			    (const void *)skb, (const void *)skb->_queue,
 			    (const void *)skb->prev, (const void *)skb->next,
 			    __builtin_return_address(0));
 	}
@@ -1311,7 +1349,7 @@ struct sk_buff *lkpi_skb_do_dequeue(struct sk_buff_head *q)
 
 void lkpi_skb_do_unlink(struct sk_buff *skb, struct sk_buff_head *q)
 {
-	if (skb == NULL || skb->list != q) {
+	if (skb == NULL || skb->_queue != q) {
 		lkpi_spl_log("unlink of an skb this queue does not own refused");
 		return;
 	}
@@ -1407,16 +1445,16 @@ unsigned int lkpi_skb_queue_census(struct lkpi_skbq_census *out, unsigned int ma
 
 		if (skb->_gen == 0u || skb->_gen == LKPI_SKB_FREED_MAGIC)
 			continue;
-		if (skb->list == NULL)
+		if (skb->_queue == NULL)
 			continue;
 		for (k = 0; k < n; k++) {
-			if (out[k].q == (void *)skb->list)
+			if (out[k].q == (void *)skb->_queue)
 				break;
 		}
 		if (k == n) {
 			if (n >= max)
 				continue;	/* more owners than rows */
-			out[k].q = (void *)skb->list;
+			out[k].q = (void *)skb->_queue;
 			n++;
 		}
 		out[k].items++;
@@ -1426,16 +1464,16 @@ unsigned int lkpi_skb_queue_census(struct lkpi_skbq_census *out, unsigned int ma
 		struct sk_buff *skb = heap_live[i].p;
 		unsigned int k;
 
-		if (skb == NULL || skb->list == NULL)
+		if (skb == NULL || skb->_queue == NULL)
 			continue;
 		for (k = 0; k < n; k++) {
-			if (out[k].q == (void *)skb->list)
+			if (out[k].q == (void *)skb->_queue)
 				break;
 		}
 		if (k == n) {
 			if (n >= max)
 				continue;
-			out[k].q = (void *)skb->list;
+			out[k].q = (void *)skb->_queue;
 			n++;
 		}
 		out[k].items++;
@@ -1599,7 +1637,14 @@ skb_network_header(const struct sk_buff *skb)
 	const struct ieee80211_hdr *hdr;
 	unsigned int off;
 
-	if (skb == NULL || skb->len < 24u)
+	if (skb == NULL)
+		return NULL;
+	/* the interface's answer once a caller recorded the offset (mac80211's
+	 * rx/tx paths call skb_reset/set_network_header); the frame-derived
+	 * answer below is this port's fallback for a buffer nobody stamped */
+	if (skb->network_header != (uint16_t)~0U)
+		return (unsigned char *)skb->head + skb->network_header;
+	if (skb->len < 24u)
 		return NULL;
 	hdr = (const struct ieee80211_hdr *)skb->data;
 	if (!ieee80211_is_data(hdr->frame_control))
@@ -1620,6 +1665,9 @@ skb_network_offset(const struct sk_buff *skb)
 
 	if (skb == NULL)
 		return 0;
+	if (skb->network_header != (uint16_t)~0U)
+		return (int)skb->network_header -
+		       (int)(skb->data - skb->head);
 	nh = skb_network_header(skb);
 	if (nh == NULL)
 		return 0;

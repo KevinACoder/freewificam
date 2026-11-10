@@ -6,6 +6,7 @@
 #include <net/netlink.h>
 #include <net/net_namespace.h>
 #include <uapi/linux/genetlink.h>
+#include <linux/capability.h>
 
 #define GENLMSG_DEFAULT_SIZE (NLMSG_DEFAULT_SIZE - GENL_HDRLEN)
 

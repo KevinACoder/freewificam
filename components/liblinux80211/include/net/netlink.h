@@ -4,6 +4,13 @@
 
 #include <linux/types.h>
 #include <linux/netlink.h>
+
+/* [LNX] include/uapi/linux/netlink.h: the multicast group a netlink socket
+ * release notification is delivered on; the uapi copy this tree vendors does
+ * not carry the constant (it is stated by the kernel's own header). */
+#ifndef NETLINK_URELEASE
+#define NETLINK_URELEASE	0x0001
+#endif
 #include <linux/jiffies.h>
 #include <linux/in6.h>
 

@@ -38,6 +38,11 @@
 /* [LNX] include/linux/cleanup.h:163 */
 #define	__free(_name)		__cleanup(__free_##_name)
 
+/* DEFINE_CLASS, DEFINE_GUARD and the conditional/lock_ptr helpers are stated
+ * once, in the core contract header (linuxkpi_core.h), because net/cfg80211.h
+ * defines the wiphy guard before any consumer includes this face.  The
+ * guard keeps this file from restating them. */
+#ifndef DEFINE_CLASS
 /* [LNX] include/linux/cleanup.h:260-269: the destructor/constructor pair a named
  * class is built from. */
 #define	DEFINE_CLASS(_name, _type, _exit, _init, _init_args...)		\
@@ -85,6 +90,8 @@
 	_type class_##_name##_constructor(_type _T);			\
 	DEFINE_CLASS(_name, _type, _unlock, ({ _lock; _T; }), _type _T);	\
 	DEFINE_CLASS_IS_GUARD(_name)
+
+#endif /* !DEFINE_CLASS */
 
 /* [LNX] include/linux/slab.h:599: stated here because that is the header the
  * consumer reaches it through (see the @design note). */

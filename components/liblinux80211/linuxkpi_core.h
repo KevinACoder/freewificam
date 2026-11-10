@@ -78,6 +78,10 @@ typedef unsigned long	kernel_ulong_t;
  * never pulls the host <stdio.h>. */
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);
+/* [LNX] lib/vsprintf.c: the unbounded spelling sysfs show() callbacks use.
+ * Declared only in this round: a caller that reaches it at link time gets the
+ * unresolved symbol S1c inventories. */
+int sprintf(char *buf, const char *fmt, ...);
 
 /* ------------------------------------------------------------------ */
 /* basic types                                                         */
@@ -214,6 +218,11 @@ typedef unsigned int		gfp_t;
 #define	U64_MAX			0xffffffffffffffffULL
 #define	UINT_MAX		((unsigned int)~0U)
 #define	INT_MAX			0x7fffffff
+#define	INT_MIN			(-INT_MAX - 1)
+#ifndef USHRT_MAX
+#define	USHRT_MAX		65535
+#endif
+#define	S32_MAX			0x7fffffff
 #define	ULONG_MAX		((unsigned long)~0UL)
 #define	LONG_MAX		((long)(~0UL >> 1))
 #define	S8_MAX			0x7f
@@ -315,8 +324,26 @@ struct kobject {
 	const char	*name;
 };
 
+struct dev_pm_ops;
+struct device;
+
+/* [LNX] include/linux/device/driver.h:100-139: the driver record a device
+ * points at.  Stated with struct device because the device-information path
+ * (pdev->driver->name) reads it through that pointer. */
+struct device_driver {
+	const char		*name;
+	void			(*shutdown)(struct device *dev);
+	const struct dev_pm_ops	*pm;
+	void			(*coredump)(struct device *dev);
+};
+
+struct class;
+struct device_type;
 struct device {
 	const char	*name;
+	struct device_driver *driver;
+	struct class	*class;
+	const struct device_type *type;
 	void		*driver_data;
 	void		*platform_data;
 	struct device	*parent;
@@ -360,9 +387,27 @@ struct device {
 #define	BIT(n)			(1UL << (n))
 #endif
 #define	BIT_ULL(n)		(1ULL << (n))
+/* [LNX] include/linux/bits.h:8: `(UL(1) << ((nr) % BITS_PER_LONG))`. */
+#define	BIT_MASK(nr)		(1UL << ((nr) % BITS_PER_LONG))
+#if !defined(__STDC_HOSTED__) || (__STDC_HOSTED__ == 0)
+/* [LNX] include/linux/math.h: the kernel defines abs() over the builtin; the
+ * freestanding target has no C library to provide one. */
+#define	abs(x)			__builtin_abs(x)
+#endif
 #define	min3(a, b, c)		min(min((a), (b)), (c))
 #define	max3(a, b, c)		max(max((a), (b)), (c))
 #define	offsetofend(t, m)	(offsetof(t, m) + sizeof(((t *)0)->m))
+/* [LNX] include/linux/string.h:509-517: clear the bytes after a member.  It is
+ * stated in the core, not the string face, because net/mac80211.h uses it and
+ * reaches the contract header first; the interface's body is the statement
+ * expression below. */
+#define	memset_after(obj, v, member)					\
+({									\
+	u8 *__ptr = (u8 *)(obj);					\
+	typeof(v) __val = (v);						\
+	memset(__ptr + offsetofend(typeof(*(obj)), member), __val,	\
+	       sizeof(*(obj)) - offsetofend(typeof(*(obj)), member));	\
+})
 #ifndef GENMASK
 #define	GENMASK(h, l)		(((~0UL) << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
 #endif
@@ -500,6 +545,56 @@ div_s64(s64 dividend, s32 divisor)
 #ifndef __same_type
 #define	__same_type(a, b)	__builtin_types_compatible_p(__typeof__(a), __typeof__(b))
 #endif
+/* [LNX] include/linux/compiler.h:339: true only when the compiler folds the
+ * expression, which is how the stack's static-key-free paths stay constant. */
+#define	statically_true(x)	(__builtin_constant_p(x) && (x))
+
+/*
+ * [LNX] include/linux/jump_label.h: this port has no jump-label patching, so a
+ * static key is a plain record whose branches fold to their unpatched answer.
+ * mac80211's only key today gates AQL (DEFINE_STATIC_KEY_FALSE, off), which is
+ * the conservative answer: no aggregation limit is applied.
+ */
+struct static_key {
+	bool		enabled;
+};
+struct static_key_false {
+	struct static_key	key;
+};
+struct static_key_true {
+	struct static_key	key;
+};
+#define	DEFINE_STATIC_KEY_FALSE(name)	struct static_key_false name
+#define	DEFINE_STATIC_KEY_TRUE(name)	struct static_key_true name
+#define	DECLARE_STATIC_KEY_FALSE(name)	extern struct static_key_false name
+#define	DECLARE_STATIC_KEY_TRUE(name)	extern struct static_key_true name
+#define	static_branch_unlikely(key)	(false)
+#define	static_branch_likely(key)	(false)
+#define	static_branch_enable(key)	do { (void)(key); } while (0)
+#define	static_branch_disable(key)	do { (void)(key); } while (0)
+
+/*
+ * [LNX] include/linux/percpu.h: one CPU, so a "percpu" allocation is one object
+ * and the per-cpu accessors are the identity over the single pointer.  The
+ * allocation itself is the ordinary one; a caller that frees it goes through
+ * free_percpu() (kfree here).
+ */
+#define	alloc_percpu_gfp(type, gfp)	kzalloc(sizeof(type), (gfp))
+#define	alloc_percpu(type)		alloc_percpu_gfp(type, GFP_KERNEL)
+#define	free_percpu(p)			kfree(p)
+#define	this_cpu_ptr(p)			(p)
+#define	per_cpu_ptr(p, cpu)		((void)(cpu), (p))
+#define	get_cpu_ptr(p)			(p)
+#define	put_cpu_ptr(p)			((void)(p))
+#define	for_each_possible_cpu(cpu)					\
+	for ((cpu) = 0; (cpu) < 1; (cpu)++)
+
+/* [LNX] lib/vsprintf.c: no allocation tagging on this port, so the hooks macro
+ * is the identity over the allocation call it wraps. */
+#ifndef alloc_hooks
+#define	alloc_hooks(x)			(x)
+#endif
+
 #define	typecheck(type, x)				\
 ({							\
 	type __dummy_tc;				\
@@ -783,6 +878,10 @@ is_power_of_2(unsigned long n)
 #define	EPIPE			32
 /* [LNX] uapi/asm-generic/errno.h:121 */
 #define	ERFKILL			132
+/* [LNX] uapi/asm-generic/errno.h:99,100: the two the mesh/nl80211 paths name */
+#define	EADDRNOTAVAIL		99
+#define	ENETDOWN		100
+#define	ENOTUNIQ		76
 /* [LNX] uapi/asm-generic/errno.h:89,96 */
 #define	ENOBUFS			105
 #define	EHOSTDOWN		112
@@ -959,6 +1058,18 @@ bitmap_or(unsigned long *dst, const unsigned long *src1,
 
 	for (i = 0; i < n; i++)
 		dst[i] = src1[i] | src2[i];
+}
+
+static __always_inline __unused bool
+bitmap_subset(const unsigned long *src1, const unsigned long *src2,
+    unsigned int nbits)
+{
+	unsigned int i, n = BITS_TO_LONGS(nbits);
+
+	for (i = 0; i < n; i++)
+		if (src1[i] & ~src2[i])
+			return false;
+	return true;
 }
 
 static __always_inline __unused int
@@ -1163,6 +1274,28 @@ le32_add_cpu(__le32 *var, u32 val)
 				     (u32)((const u8 *)(p))[1] << 16 |			\
 				     (u32)((const u8 *)(p))[2] << 8 |			\
 				     ((const u8 *)(p))[3]))
+#define	ror16(word, shift)						\
+	((u16)(((u16)(word) >> (shift)) | ((u16)(word) << (16 - (shift)))))
+#define	put_unaligned_be64(v, p) do {					\
+	u64 __lkpi_be64v = be64_to_cpu((__force __be64)(v));		\
+	((u8 *)(p))[0] = (u8)(__lkpi_be64v >> 56);			\
+	((u8 *)(p))[1] = (u8)(__lkpi_be64v >> 48);			\
+	((u8 *)(p))[2] = (u8)(__lkpi_be64v >> 40);			\
+	((u8 *)(p))[3] = (u8)(__lkpi_be64v >> 32);			\
+	((u8 *)(p))[4] = (u8)(__lkpi_be64v >> 24);			\
+	((u8 *)(p))[5] = (u8)(__lkpi_be64v >> 16);			\
+	((u8 *)(p))[6] = (u8)(__lkpi_be64v >> 8);			\
+	((u8 *)(p))[7] = (u8)__lkpi_be64v;				\
+} while (0)
+#define	get_unaligned_be64(p)	be64_to_cpu((__force __be64)				\
+				    ((u64)((const u8 *)(p))[0] << 56 |			\
+				     (u64)((const u8 *)(p))[1] << 48 |			\
+				     (u64)((const u8 *)(p))[2] << 40 |			\
+				     (u64)((const u8 *)(p))[3] << 32 |			\
+				     (u64)((const u8 *)(p))[4] << 24 |			\
+				     (u64)((const u8 *)(p))[5] << 16 |			\
+				     (u64)((const u8 *)(p))[6] << 8 |			\
+				     ((const u8 *)(p))[7]))
 #define	put_unaligned_be16(v, p) do {						\
 	u16 __lkpi_be16v = be16_to_cpu((__force __be16)(v));			\
 	((u8 *)(p))[0] = (u8)(__lkpi_be16v >> 8);				\
@@ -1382,6 +1515,28 @@ kcalloc(size_t n, size_t size, gfp_t flags)
 	return lkpi_kmem_alloc(n * size, (int)flags, true);
 }
 
+/* [LNX] include/linux/bitmap.h: the zeroed bitmap allocation and its release. */
+#define	bitmap_zalloc(nbits, gfp)					\
+	kzalloc(BITS_TO_LONGS(nbits) * sizeof(unsigned long), (gfp))
+#define	bitmap_alloc(nbits, gfp)					\
+	kmalloc(BITS_TO_LONGS(nbits) * sizeof(unsigned long), (gfp))
+#define	bitmap_free(p)			kfree(p)
+
+/* [LNX] include/linux/mm.h: the zeroed vmalloc-family object array; this port's
+ * allocator is the heap, so the v- family is the plain one. */
+#define	kvzalloc_objs(type, n)		kzalloc(sizeof(type) * (size_t)(n), GFP_KERNEL)
+/* [LNX] include/linux/string.h: the copy of n elements into a fresh array. */
+static __always_inline __unused void *
+kmemdup_array(const void *src, size_t n, size_t size, gfp_t gfp)
+{
+	void *p = kmalloc((size_t)n * size, gfp);
+
+	if (p != NULL)
+		memcpy(p, src, (size_t)n * size);
+	return p;
+}
+#define	kvcalloc(n, size, gfp)		kzalloc((size_t)(n) * (size_t)(size), (gfp))
+
 static __always_inline __unused void
 kfree(const void *p)
 {
@@ -1487,9 +1642,12 @@ devm_kmemdup_array(struct device *dev, const void *src, size_t n,
 /* lists (linux/list.h)                                                */
 /* ------------------------------------------------------------------ */
 
+#ifndef _LKPI_LIST_HEAD_TYPE
+#define _LKPI_LIST_HEAD_TYPE
 struct list_head {
 	struct list_head *next, *prev;
 };
+#endif
 
 #define	LIST_HEAD_INIT(name)	{ &(name), &(name) }
 #define	LIST_HEAD(name)		struct list_head name = LIST_HEAD_INIT(name)
@@ -1650,6 +1808,24 @@ list_move(struct list_head *list, struct list_head *head)
 	for (pos = list_last_entry(head, typeof(*pos), member);		\
 	     &pos->member != (head);					\
 	     pos = list_prev_entry(pos, member))
+#define	list_for_each_entry_continue_reverse(pos, head, member)		\
+	for (pos = list_prev_entry(pos, member);			\
+	     &pos->member != (head);					\
+	     pos = list_prev_entry(pos, member))
+#define	list_for_each_entry_safe_reverse(pos, n, head, member)		\
+	for (pos = list_last_entry(head, typeof(*pos), member),		\
+	     n = list_prev_entry(pos, member);				\
+	     &pos->member != (head);					\
+	     pos = n, n = list_prev_entry(n, member))
+/* [LNX] include/linux/list.h: continue from the entry after pos. */
+#define	list_for_each_entry_continue(pos, head, member)			\
+	for (pos = list_next_entry(pos, member);				\
+	     &pos->member != (head);					\
+	     pos = list_next_entry(pos, member))
+/* [LNX] include/linux/list.h: the uninitialised placeholder a
+ * list_for_each_entry_continue() loop starts from. */
+#define	list_prepare_entry(pos, head, member)				\
+	((pos) ? : list_entry(head, typeof(*pos), member))
 
 /* hlist: the rxtx/completion paths iterate plain chains */
 struct hlist_head {
@@ -1791,8 +1967,14 @@ typedef struct { u64 v; } u64_stats_t;
 struct u64_stats_sync { unsigned int _seq; };
 #define	u64_stats_update_begin(s)	((void)(s))
 #define	u64_stats_update_end(s)		((void)(s))
-#define	u64_stats_init(s)	((s)->v = 0)
+/* [LNX] include/linux/u64_stats_sync.h, the 64-bit arm: no seqcount exists, so
+ * the initialiser and the reader's fetch pair are the interface's no-op
+ * answers, not the 32-bit seqcount their spellings suggest. */
+#define	u64_stats_init(s)		do { (void)(s); } while (0)
+#define	u64_stats_fetch_begin(s)	(0u)
+#define	u64_stats_fetch_retry(s, start)	(false)
 #define	u64_stats_add(s, n)	((s)->v += (n))
+#define	u64_stats_inc(s)	((s)->v++)
 #define	u64_stats_read(s)	((s)->v)
 
 struct rcu_head {
@@ -1846,6 +2028,7 @@ void	lkpi_rcu_barrier(void);
 #define	RCU_INIT_POINTER(p, v)		do { WRITE_ONCE((p), (v)); } while (0)
 /* [LNX] include/linux/rcupdate.h:660-662 */
 #define	rcu_dereference_raw(p)	(p)
+#define	rcu_dereference_rtnl(p)	(p)
 #define	rcu_dereference_check(p, c)	(p)
 /* [LNX] include/linux/rcupdate.h:741-742 */
 #define	rcu_dereference_protected(p, c)	(p)
@@ -1883,6 +2066,15 @@ typedef struct {
 	volatile int counter;
 } atomic_t;
 
+/* [LNX] include/linux/atomic.h: the long-width atomic, stated after atomic_t
+ * because struct ns_common (whose `stashed` member is one) is defined below. */
+typedef struct {
+	volatile long counter;
+} atomic_long_t;
+
+#define	atomic_long_read(v)	((v)->counter)
+#define	atomic_long_set(v, i)	do { (v)->counter = (long)(i); } while (0)
+
 #define	ATOMIC_INIT(i)		{ .counter = (i) }
 #define	atomic_read(v)		((v)->counter)
 #define	atomic_set(v, i)	do { (v)->counter = (i); } while (0)
@@ -1893,6 +2085,15 @@ int lkpi_atomic_dec_return(atomic_t *v);
 int lkpi_atomic_dec_and_test(atomic_t *v);
 void lkpi_atomic_add(int i, atomic_t *v);
 void lkpi_atomic_sub(int i, atomic_t *v);
+
+/* [LNX] include/linux/ns_common.h: the namespace identity record net->ns
+ * embeds; wiphy_namespace() returns a pointer to it. */
+struct ns_common {
+	atomic_long_t		stashed;
+	const void		*ops;
+	unsigned int		inum;
+	refcount_t		count;
+};
 
 static __always_inline __unused int
 lkpi_atomic_cmpxchg(atomic_t *v, int old, int new)
@@ -1982,8 +2183,17 @@ unsigned long lkpi_jiffies(void);
 #define	msecs_to_jiffies(m)	((unsigned long)(((m) * HZ + 999) / 1000))
 #define	usecs_to_jiffies(u)	msecs_to_jiffies((u) / 1000)
 #define	jiffies_to_msecs(j)	((unsigned int)(((j) * 1000) / HZ))
+#define	jiffies_delta_to_msecs(j)					\
+	((unsigned int)(({ long __d = (long)(j);				\
+			   __d < 0 ? 0ul : (unsigned long)__d; }) * 1000 / HZ))
 #define	jiffies_to_usecs(j)	((unsigned int)(((j) * 1000000) / HZ))
 #define	round_jiffies_relative(j) ((unsigned long)(j))
+/* [LNX] include/linux/jiffies.h: the two "round to a second" spellings; this
+ * port has no deferred-timer wheel to coalesce against, so they are the
+ * interface's arithmetic with the rounding the port can honour (identity). */
+#define	secs_to_jiffies(s)	((unsigned long)(s) * HZ)
+#define	round_jiffies_up(j)	((unsigned long)(j))
+#define	round_jiffies_up_relative(j) ((unsigned long)(j))
 #define	time_after(a, b)	((long)((b) - (a)) < 0)
 #define	time_before(a, b)	time_after((b), (a))
 #define	time_after_eq(a, b)	((long)((a) - (b)) >= 0)
@@ -2005,6 +2215,12 @@ unsigned long lkpi_jiffies(void);
  * set reaches it through the core contract.
  */
 unsigned long round_jiffies(unsigned long j);
+
+/* [LNX] include/linux/types.h: the process id the namespace lookup takes. */
+#ifndef _LKPI_PID_T
+#define _LKPI_PID_T
+typedef int		pid_t;
+#endif
 
 /* [LNX] include/linux/ktime.h: `typedef s64 ktime_t;` - the interface's own
  * width, which the driver's %lld/%llu format strings are written against. */
@@ -2037,6 +2253,7 @@ ktime_t lkpi_ktime_get(void);
  * defined in terms of NSEC_PER_SEC. */
 #define	NSEC_PER_SEC		1000000000L
 #define	NSEC_PER_USEC		1000L
+#define	NSEC_PER_MSEC		1000000L
 /* [LNX] include/linux/time64.h:22-24: the microsecond and millisecond multiples. */
 #define	MSEC_PER_SEC		1000L
 #define	USEC_PER_SEC		1000000L
@@ -2046,6 +2263,26 @@ ktime_t lkpi_ktime_get(void);
  * ktime_set() saturates against. */
 #define	KTIME_MAX		((s64)~((u64)1 << 63))
 #define	KTIME_SEC_MAX		(KTIME_MAX / NSEC_PER_SEC)
+
+/* [LNX] include/linux/ktime.h: the microsecond constructor. */
+static __always_inline __unused ktime_t
+us_to_ktime(u64 usecs)
+{
+	return (ktime_t)(usecs * 1000ull);
+}
+
+static __always_inline __unused ktime_t
+ms_to_ktime(u64 msecs)
+{
+	return (ktime_t)(msecs * 1000000ull);
+}
+
+/* [LNX] include/linux/ktime.h: the wall-clock seconds read; the port's only
+ * clock is the tick, so the boot-time seconds are its whole answer. */
+static __always_inline __unused time64_t ktime_get_seconds(void)
+{
+	return (time64_t)(jiffies / HZ);
+}
 
 /* [LNX] include/linux/ktime.h:36-41: `static inline ktime_t ktime_set(const s64
  * secs, const unsigned long nsecs)` - the interface's seconds/nanoseconds
@@ -2165,6 +2402,18 @@ static __always_inline __unused const char *str_yes_no(bool v) { return v ? "yes
 #define	pr_info(fmt, ...)		lkpi_printf(ULOG_INFO_LEVEL, fmt "\n", ##__VA_ARGS__)
 #define	pr_notice(fmt, ...)		lkpi_printf(ULOG_INFO_LEVEL, fmt "\n", ##__VA_ARGS__)
 #define	pr_warn_once(fmt, ...)		pr_warn(fmt, ##__VA_ARGS__)
+/* [LNX] include/linux/printk.h: the ratelimited spellings drop the rate limit
+ * here (the port's log is bounded elsewhere); the call is not dropped. */
+#define	pr_err_ratelimited(fmt, ...)	pr_err(fmt, ##__VA_ARGS__)
+#define	pr_warn_ratelimited(fmt, ...)	pr_warn(fmt, ##__VA_ARGS__)
+#define	pr_info_ratelimited(fmt, ...)	pr_info(fmt, ##__VA_ARGS__)
+/* [LNX] include/linux/netdevice.h: the netdev_* wrappers; this port has no
+ * netdev ratelimit state, so each is the matching pr_* call. */
+#define	net_info_ratelimited(fmt, ...)	pr_info(fmt, ##__VA_ARGS__)
+/* net_warn_ratelimited is stated by the netlink face (linux/netlink.h), where
+ * the interface's netdev_* wrappers live for this tree; a second definition
+ * here would be the duplicate mechanism the project forbids. */
+#define	net_err_ratelimited(fmt, ...)	pr_err(fmt, ##__VA_ARGS__)
 #define	pr_err_once(fmt, ...)		pr_err(fmt, ##__VA_ARGS__)
 #define	pr_debug(fmt, ...)		do { } while (0)
 #define	pr_cont(fmt, ...)		lkpi_printf(ULOG_INFO_LEVEL, fmt, ##__VA_ARGS__)
@@ -2352,9 +2601,14 @@ void	lkpi_module_init_run(void);
 #define	BUILD_BUG_ON_MSG(cond, msg)					\
 	lkpi_compiletime_assert(!(cond), msg)
 #define	BUILD_BUG_ON(cond)	BUILD_BUG_ON_MSG(cond, "BUILD_BUG_ON(" #cond ") failed")
-/* [LNX] include/linux/build_bug.h: the statement spelling the stack's macros use. */
+/* [LNX] include/linux/compiler_types.h: a statement, not a _Static_assert:
+ * BUILD_BUG_ON(!__types_ok(ux, uy)) in minmax.h folds builtins that are not
+ * integer constant expressions, so the interface uses an extern function
+ * carrying __attribute__((error(msg))) instead.  A non-constant condition is
+ * then a link-time unresolved reference - the interface's contract for
+ * BUILD_BUG_ON. */
 #define	compiletime_assert(condition, msg)					\
-	_Static_assert(condition, msg)
+	__lkci_assert(condition, msg, __COUNTER__)
 /* [LNX] include/linux/string.h: clear a secret and keep the compiler from
  * eliding the store. */
 static __always_inline void memzero_explicit(void *s, size_t count)
@@ -2494,6 +2748,11 @@ int lkpi_spin_trylock(spinlock_t *l);
 #define	__maybe_unused		__attribute__((__unused__))
 #endif
 #define	__no_context_analysis
+/* [LNX] include/linux/init.h: the section annotation on a pernet exit path;
+ * this port places nothing in sections. */
+#ifndef __net_exit
+#define	__net_exit
+#endif
 #define	__PASTE(a, b)		___PASTE(a, b)
 #define	___PASTE(a, b)		a##b
 #define	__UNIQUE_ID(prefix)	__PASTE(__PASTE(__UNIQUE_ID_, prefix), __COUNTER__)
@@ -2532,8 +2791,43 @@ int lkpi_spin_trylock(spinlock_t *l);
 		return t;								\
 	}
 
+/* [LNX] include/linux/cleanup.h:289-402: DEFINE_GUARD is DEFINE_CLASS plus
+ * the two symbols scoped_guard() reads - the unconditional marker and the
+ * "did the lock get acquired" pointer (the address of the scoped variable for
+ * an unconditional guard, which is never NULL).  net/cfg80211.h defines the
+ * wiphy guard; core.c and reg.c then spell it scoped_guard(wiphy, ...). */
+#define	__DEFINE_CLASS_IS_CONDITIONAL(_name, _is_cond)			\
+	static __maybe_unused const bool					\
+	class_##_name##_is_conditional = (_is_cond)
+#define	__DEFINE_GUARD_LOCK_PTR(_name, _exp)				\
+	static __always_inline void *					\
+	class_##_name##_lock_ptr(class_##_name##_t *_T)			\
+	{								\
+		void *_ptr = (void *)(__force unsigned long)*(_exp);	\
+		if (IS_ERR(_ptr))					\
+			_ptr = NULL;					\
+		return _ptr;						\
+	}								\
+	static __always_inline int					\
+	class_##_name##_lock_err(class_##_name##_t *_T)			\
+	{								\
+		long _rc = (__force unsigned long)*(_exp);		\
+		if (!_rc)						\
+			_rc = -EBUSY;					\
+		if (!IS_ERR_VALUE(_rc))					\
+			_rc = 0;					\
+		return _rc;						\
+	}
+#define	DEFINE_CLASS_IS_GUARD(_name)					\
+	__DEFINE_CLASS_IS_CONDITIONAL(_name, false);			\
+	__DEFINE_GUARD_LOCK_PTR(_name, _T)
+#define	DEFINE_CLASS_IS_COND_GUARD(_name)				\
+	__DEFINE_CLASS_IS_CONDITIONAL(_name, true);			\
+	__DEFINE_GUARD_LOCK_PTR(_name, _T)
+
 #define	DEFINE_GUARD(_name, _type, _lock, _unlock)			\
-	DEFINE_CLASS(_name, _type, _unlock, ({ _lock; _T; }), _type _T)
+	DEFINE_CLASS(_name, _type, _unlock, ({ _lock; _T; }), _type _T)	\
+	DEFINE_CLASS_IS_GUARD(_name)
 
 #define	guard(_name)		CLASS(_name, __UNIQUE_ID(guard))
 #define	__guard_ptr(_name)	class_##_name##_lock_ptr
@@ -2622,6 +2916,18 @@ int	lkpi_in_softirq(void);
 #define	local_bh_enable()		lkpi_local_bh_enable()
 #define	in_softirq()			lkpi_in_softirq()
 #define	in_interrupt()			0
+/* [LNX] include/linux/preempt.h: softirq_count() is the softirq part of the
+ * preempt count; this port's equivalent state is the BH nesting flag, and the
+ * interface only ever tests it for "am I in softirq context". */
+#define	softirq_count()			(in_softirq() ? 1 : 0)
+/* [LNX] include/linux/interrupt.h: the tasklet's containing local record. */
+/* [LNX] include/linux/mm.h: the head page of the page a virtual address sits
+ * in; the body is the port's (S1c). */
+struct page;
+struct page *virt_to_head_page(const void *x);
+
+#define	from_tasklet(var, callback_tasklet, tasklet_fieldname)		\
+	container_of(callback_tasklet, typeof(*(var)), tasklet_fieldname)
 #define	in_atomic()			0
 #define	IRQ_NONE			0
 #define	IRQ_HANDLED			1
@@ -2757,7 +3063,7 @@ lkpi_skb_splice(struct sk_buff_head *list, struct sk_buff_head *head,
 	first = list->next;
 	last = list->prev;
 	for (it = first; it != (struct sk_buff *)list; it = it->next)
-		it->list = head;
+		it->_queue = head;
 	at = head->next;
 	head->next = first;
 	first->prev = (struct sk_buff *)head;
@@ -2772,6 +3078,61 @@ static __always_inline __unused void
 skb_queue_splice(struct sk_buff_head *list, struct sk_buff_head *head)
 {
 	lkpi_skb_splice(list, head, 0);
+}
+
+/* [LNX] include/linux/skbuff.h:2403-2410: splice list onto the tail of head
+ * and reinitialise list.  The port's splice moves onto the front; the tail
+ * variant is the same walk with the insertion point at head->prev. */
+/* [LNX] include/linux/bitops.h: the 64-bit first-set-bit. */
+static __always_inline __unused unsigned long
+__ffs64(u64 word)
+{
+	return (unsigned long)__builtin_ctzll(word);
+}
+
+/* [LNX] include/linux/skbuff.h: the queue position tests the TX fragment path
+ * reads (the list head is the cast queue pointer, as in this port's other
+ * queue helpers). */
+#define	skb_queue_is_last(list, skb)					\
+	((skb)->next == (struct sk_buff *)(list))
+
+/* [LNX] include/linux/skbuff.h: unlink from the receive list and leave the
+ * entry empty (the interface's list_del_init over skb->list). */
+static __always_inline __unused void
+skb_list_del_init(struct sk_buff *skb)
+{
+	list_del_init(&skb->list);
+}
+
+/* [LNX] include/linux/skbuff.h: the head entry without dequeuing (NULL when
+ * empty, which is what the interface's `list->next == (struct sk_buff *)list`
+ * test expresses). */
+static __always_inline __unused struct sk_buff *
+__skb_peek(const struct sk_buff_head *list_)
+{
+	struct sk_buff *skb = list_->next;
+
+	return skb == (struct sk_buff *)list_ ? NULL : skb;
+}
+
+static __always_inline __unused void
+skb_queue_splice_tail_init(struct sk_buff_head *list, struct sk_buff_head *head)
+{
+	struct sk_buff *first, *last, *at, *it;
+
+	if (list->qlen == 0)
+		return;
+	first = list->next;
+	last = list->prev;
+	for (it = first; it != (struct sk_buff *)list; it = it->next)
+		it->_queue = head;
+	at = (struct sk_buff *)head;
+	head->prev->next = first;
+	first->prev = head->prev;
+	last->next = at;
+	at->prev = last;
+	head->qlen += list->qlen;
+	lkpi_skb_queue_reset(list);
 }
 
 static __always_inline __unused void
@@ -2930,20 +3291,330 @@ skb_copy(const struct sk_buff *skb, gfp_t gfp)
 	n->len = skb->len;
 	n->protocol = skb->protocol;
 	n->priority = skb->priority;
+	/* the copy carries the interface's header offsets too: a copied frame
+	 * that already recorded them must not fall back to the geometry answer */
+	n->mac_header = skb->mac_header;
+	n->mac_len = skb->mac_len;
+	n->network_header = skb->network_header;
+	n->transport_header = skb->transport_header;
+	n->inner_mac_header = skb->inner_mac_header;
+	n->inner_network_header = skb->inner_network_header;
+	n->inner_transport_header = skb->inner_transport_header;
+	n->vlan_all = skb->vlan_all;
 	memcpy(n->cb, skb->cb, sizeof(n->cb));
 	return n;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:2995-3220: the header-offset block.  The
+ * interface stores the mac/network/transport headers as u16 offsets from head,
+ * with (u16)~0U meaning "not set", plus the inner trio and mac_len; this port's
+ * sk_buff carries the same fields (skbuff/skbuff_pool.h).
+ *
+ * Two accessors keep the port's older geometry reachable: skb_mac_header()
+ * answers the data pointer when no offset was recorded (the 802.11 header is
+ * the buffer's data here), and skb_network_header() (skbuff_pool.c) falls back
+ * to the frame-derived answer for an 802.11 buffer.  Once a caller records an
+ * offset - mac80211's rx/tx paths do - the interface's field semantics take
+ * over.  The sentinel and the arithmetic are the interface's own.
+ */
+#define	LKPI_SKB_HEADER_UNSET	((u16)~0U)
+
+static __always_inline __unused bool
+skb_mac_header_was_set(const struct sk_buff *skb)
+{
+	return skb->mac_header != LKPI_SKB_HEADER_UNSET;
 }
 
 static __always_inline __unused void
 skb_reset_mac_header(struct sk_buff *skb)
 {
-	(void)skb;
+	skb->mac_header = (u16)(skb->data - skb->head);
+}
+
+static __always_inline __unused void
+skb_set_mac_header(struct sk_buff *skb, const int offset)
+{
+	skb_reset_mac_header(skb);
+	skb->mac_header = (u16)(skb->mac_header + offset);
+}
+
+static __always_inline __unused void
+skb_unset_mac_header(struct sk_buff *skb)
+{
+	skb->mac_header = LKPI_SKB_HEADER_UNSET;
+}
+
+static __always_inline __unused unsigned char *
+skb_mac_header(const struct sk_buff *skb)
+{
+	return skb_mac_header_was_set(skb) ?
+	    skb->head + skb->mac_header : skb->data;
+}
+
+static __always_inline __unused u32
+skb_mac_header_len(const struct sk_buff *skb)
+{
+	return (u32)(skb->network_header - skb->mac_header);
+}
+
+static __always_inline __unused void
+skb_reset_mac_len(struct sk_buff *skb)
+{
+	skb->mac_len = (u16)(skb->network_header - skb->mac_header);
 }
 
 static __always_inline __unused void
 skb_reset_network_header(struct sk_buff *skb)
 {
+	skb->network_header = (u16)(skb->data - skb->head);
+}
+
+static __always_inline __unused void
+skb_set_network_header(struct sk_buff *skb, const int offset)
+{
+	skb_reset_network_header(skb);
+	skb->network_header = (u16)(skb->network_header + offset);
+}
+
+static __always_inline __unused void
+skb_reset_transport_header(struct sk_buff *skb)
+{
+	skb->transport_header = (u16)(skb->data - skb->head);
+}
+
+static __always_inline __unused void
+skb_set_transport_header(struct sk_buff *skb, const int offset)
+{
+	skb_reset_transport_header(skb);
+	skb->transport_header = (u16)(skb->transport_header + offset);
+}
+
+static __always_inline __unused unsigned char *
+skb_transport_header(const struct sk_buff *skb)
+{
+	return skb->head + skb->transport_header;
+}
+
+static __always_inline __unused int
+skb_transport_offset(const struct sk_buff *skb)
+{
+	return (int)skb->transport_header - (int)(skb->data - skb->head);
+}
+
+static __always_inline __unused void
+skb_reset_inner_headers(struct sk_buff *skb)
+{
+	skb->inner_mac_header = (u16)(skb->data - skb->head);
+	skb->inner_network_header = (u16)(skb->data - skb->head);
+	skb->inner_transport_header = (u16)(skb->data - skb->head);
+}
+
+static __always_inline __unused void
+skb_set_inner_mac_header(struct sk_buff *skb, const int offset)
+{
+	skb->inner_mac_header = (u16)(skb->data - skb->head + offset);
+}
+
+static __always_inline __unused void
+skb_set_inner_network_header(struct sk_buff *skb, const int offset)
+{
+	skb->inner_network_header = (u16)(skb->data - skb->head + offset);
+}
+
+static __always_inline __unused void
+skb_set_inner_transport_header(struct sk_buff *skb, const int offset)
+{
+	skb->inner_transport_header = (u16)(skb->data - skb->head + offset);
+}
+
+static __always_inline __unused unsigned char *
+skb_inner_transport_header(const struct sk_buff *skb)
+{
+	return skb->head + skb->inner_transport_header;
+}
+
+/*
+ * [LNX] include/linux/skbuff.h:3958-3972: pull the linear part up to len.  This
+ * port has no fragment store - data_len is always 0 - so skb_headlen() is the
+ * whole frame and "the linear part is enough" is the only branch that can
+ * answer yes.  A caller that would have pulled a fragment up gets the
+ * interface's "cannot" answer (0), never a silently partial frame.
+ */
+static __always_inline __unused int
+pskb_may_pull(struct sk_buff *skb, unsigned int len)
+{
+	return len <= skb_headlen(skb);
+}
+
+/* [LNX] include/linux/skbuff.h: `int __pskb_trim(...)`: declared, body in the
+ * port's buffer library (S1c). */
+int __pskb_trim(struct sk_buff *skb, unsigned int len);
+
+/* [LNX] include/linux/skbuff.h:2819-2822 */
+static __always_inline __unused void
+skb_put_u8(struct sk_buff *skb, u8 val)
+{
+	*(u8 *)skb_put(skb, 1) = val;
+}
+
+/* [LNX] include/linux/skbuff.h: the ip_summed states, stated here because the
+ * checksum helpers below read them and the core header is included before the
+ * skb face; one definition serves both. */
+/* [LNX] include/linux/netdev_features.h: the feature word.  Stated with the
+ * base types because the skb helpers (skbuff.h) test it and that face is
+ * reached before netdevice.h in several chains. */
+#ifndef _LKPI_NETDEV_FEATURES_T
+#define _LKPI_NETDEV_FEATURES_T
+typedef u64 netdev_features_t;
+#endif
+
+#define	CHECKSUM_NONE		0
+#define	CHECKSUM_UNNECESSARY	1
+#define	CHECKSUM_COMPLETE	2
+#define	CHECKSUM_PARTIAL	3
+
+/* [LNX] lib/vsprintf.c: the unbounded scan sysfs/nl80211 parse paths use. */
+int sscanf(const char *buf, const char *fmt, ...);
+
+/* [LNX] include/linux/random.h: the 16-bit draw. */
+static __always_inline __unused u16 get_random_u16(void)
+{
+	u16 v;
+
+	get_random_bytes(&v, sizeof(v));
+	return v;
+}
+
+/* [LNX] include/net/checksum.h: the running one's-complement sum.  Declared
+ * here because the skb helpers below use it before the checksum face is
+ * reached; the body is the port's (linuxkpi_osdep.c). */
+__wsum csum_partial(const void *buff, int len, __wsum sum);
+
+/* [LNX] include/linux/skbuff.h:4055-4062: pull a transport checksum out of the
+ * running checksum when data is pulled. */
+static __always_inline __unused void
+skb_postpull_rcsum(struct sk_buff *skb, const void *start, unsigned int len)
+{
+	if (skb->ip_summed == CHECKSUM_COMPLETE)
+		skb->csum = (__wsum)((u32)skb->csum -
+		    (u32)csum_partial(start, (int)len, 0));
+}
+
+/* [LNX] include/linux/skbuff.h: the reason-carrying free.  This port has no
+ * drop-reason registry, so the reason is accepted and the object freed; the
+ * call site keeps the interface's spelling. */
+#define	kfree_skb_reason(skb, reason)					\
+	do { (void)(reason); kfree_skb(skb); } while (0)
+
+/* [LNX] include/linux/skbuff.h: the receive-hash accessor; the body is the
+ * port's (S1c). */
+u32 skb_get_hash(struct sk_buff *skb);
+
+/* [LNX] include/linux/skbuff.h: copy with requested head/tail room; the body is
+ * the port's (S1c). */
+struct sk_buff *skb_copy_expand(const struct sk_buff *skb, int newheadroom,
+				int newtailroom, gfp_t gfp_mask);
+
+/* [LNX] include/linux/skbuff.h:4341-4360: the header pointer inside the linear
+ * part, or a copy in the caller's buffer when it is not contiguous. */
+int skb_copy_bits(const struct sk_buff *skb, int offset, void *to, int len);
+
+static __always_inline __unused void *
+skb_header_pointer(const struct sk_buff *skb, int offset, int len, void *buffer)
+{
+	if (likely(len <= (int)skb_headlen(skb) - offset))
+		return skb->data + offset;
+	if (!skb || skb_copy_bits(skb, offset, buffer, len) < 0)
+		return NULL;
+	return buffer;
+}
+
+/* [LNX] include/linux/skbuff.h: a driver's "tx status acked" completion; the
+ * body is the port's (S1c). */
+void skb_complete_wifi_ack(struct sk_buff *skb, bool acked);
+
+/* [LNX] include/linux/skbuff.h:4040-4050: trim the buffer to len.  This port
+ * carries no fragment store (data_len is 0), so the interface's trim is the
+ * tail adjustment: a longer len is the interface's -EINVAL answer. */
+static __always_inline __unused int
+pskb_trim(struct sk_buff *skb, unsigned int len)
+{
+	if (len > skb->len)
+		return -EINVAL;
+	skb->len = len;
+	skb->tail = (unsigned int)(skb->data - skb->head) + len;
+	return 0;
+}
+
+/* [LNX] include/linux/skbuff.h:2694-2700: same arithmetic as skb_pull(), minus
+ * the bounds test the caller is asserting by using the double-underscore form. */
+static __always_inline __unused unsigned char *
+__skb_pull(struct sk_buff *skb, unsigned int len)
+{
+	skb->len -= len;
+	BUG_ON(skb->len < skb->data_len);
+	return skb->data += len;
+}
+
+/* [LNX] include/linux/skbuff.h:2840-2870: the pull that first makes the bytes
+ * linear.  No fragment store here, so it is the bounds test plus skb_pull. */
+static __always_inline __unused unsigned char *
+pskb_pull(struct sk_buff *skb, unsigned int len)
+{
+	return len > skb->len ? NULL : __skb_pull(skb, len);
+}
+
+
+/*
+ * [LNX] include/linux/skbuff.h:3941-3944: make room for a header the caller is
+ * about to push.  The interface reallocates (__skb_cow -> pskb_expand_head) when
+ * the headroom is short or the buffer is shared; this port has no relocate path
+ * - skb_clone() shares the head buffer and the pool has no realloc - so the
+ * interface's OOM answer is the honest one, and mac80211's callers already
+ * handle a failed cow.  A buffer with enough headroom answers 0 as upstream.
+ */
+static __always_inline __unused int
+skb_cow_head(struct sk_buff *skb, unsigned int headroom)
+{
+	if (skb_headroom(skb) >= headroom)
+		return 0;
+	return -ENOMEM;
+}
+
+/* [LNX] include/linux/skbuff.h:4564-4567: the metadata block sits in the shared
+ * record; this port never attaches one (no metadata dst), so the length is 0 and
+ * skb_data_move() below takes the interface's no-metadata branch. */
+static __always_inline __unused u8
+skb_metadata_len(const struct sk_buff *skb)
+{
 	(void)skb;
+	return 0;
+}
+
+/* [LNX] include/linux/skbuff.h:4648-4677: move the first n bytes of packet data
+ * back into place after a push/pull.  With meta_len == 0 the interface's body is
+ * the no_metadata branch; postpush passes -len, exactly as the interface does. */
+static __always_inline __unused void
+skb_data_move(struct sk_buff *skb, const int len, const unsigned int n)
+{
+	if (!len || (!n && skb_metadata_len(skb) == 0))
+		return;
+	memmove(skb->data, skb->data - len, n);
+}
+
+static __always_inline __unused void
+skb_postpull_data_move(struct sk_buff *skb, const unsigned int len,
+    const unsigned int n)
+{
+	skb_data_move(skb, (int)len, n);
+}
+
+static __always_inline __unused void
+skb_postpush_data_move(struct sk_buff *skb, const unsigned int len,
+    const unsigned int n)
+{
+	skb_data_move(skb, -(int)len, n);
 }
 
 static __always_inline __unused u16
@@ -3039,9 +3710,29 @@ struct delayed_work {
 	bool			dw_cancel;
 };
 
+/* [LNX] include/linux/workqueue.h: the static initialiser a file-scope
+ * declaration needs.  lkpi_work_init() only records the function pointer and
+ * clears the queueing state, so an aggregate initialiser with .func is the
+ * same object; the zeroed fields are the idle state. */
+#define	__WORK_INITIALIZER(n, f)	{ .func = (f), }
+#define	DECLARE_WORK(n, f)						\
+	struct work_struct n = __WORK_INITIALIZER(n, f)
+#define	__DELAYED_WORK_INITIALIZER(n, f)					\
+	{ .work = __WORK_INITIALIZER((n).work, (f)), }
+#define	DECLARE_DELAYED_WORK(n, f)					\
+	struct delayed_work n = __DELAYED_WORK_INITIALIZER(n, f)
+
 #define	INIT_WORK(w, fn)		lkpi_work_init((w), (fn))
 #define	INIT_DELAYED_WORK(w, fn)	lkpi_delayed_work_init((w), (fn))
 #define	PREPARE_DELAYED_WORK(w, fn)	lkpi_delayed_work_init((w), (fn))
+/* [LNX] include/linux/workqueue.h: `return test_bit(WORK_STRUCT_PENDING_BIT,
+ * work_data_bits(work));`.  This port's delayed work keeps the flag directly;
+ * cancel/flush clear it on the way out. */
+static __always_inline __unused bool
+delayed_work_pending(const struct delayed_work *dwork)
+{
+	return dwork->dw_scheduled;
+}
 #define	INIT_DEFERRABLE_WORK(w, fn)	INIT_DELAYED_WORK((w), (fn))
 
 struct workqueue_struct {
@@ -3113,6 +3804,15 @@ void lkpi_destroy_workqueue(struct workqueue_struct *);
 
 extern struct workqueue_struct *lkpi_system_wq;
 
+/* [LNX] include/linux/workqueue.h: an ordered queue runs one work at a time in
+ * queue order.  The port has one system queue with one worker, so it is already
+ * ordered; the name is the interface's and so is the caller's use. */
+#define	alloc_ordered_workqueue(fmt, flags, args...)	lkpi_system_wq
+/* [LNX] include/linux/workqueue.h: the freezable variants; this port has no
+ * suspend/freeze state, so they are the system queue under another name. */
+#define	system_freezable_wq		lkpi_system_wq
+#define	system_power_efficient_wq	lkpi_system_wq
+#define	system_long_wq			lkpi_system_wq
 #define	schedule_work(w)		lkpi_queue_work(lkpi_system_wq, (w))
 #define	schedule_delayed_work(w, j)	lkpi_queue_delayed_work(lkpi_system_wq, (w), (j))
 /* re-arm: the shim's delayed work queue overwrite-on-requeue is
@@ -3389,15 +4089,10 @@ struct led_classdev {
 
 struct led_trigger;
 
-/* the throughput-blink table type (tpt trigger; never fires here) */
-struct ieee80211_tpt_blink {
-	u64	throughput;
-	u32	blink_time;
-};
-
-#define	IEEE80211_TPT_LEDTRIG_FL_RADIO		BIT(0)
-#define	IEEE80211_TPT_LEDTRIG_FL_WORK		BIT(1)
-#define	IEEE80211_TPT_LEDTRIG_FL_CONNECTED	BIT(2)
+/* struct ieee80211_tpt_blink and the IEEE80211_TPT_LEDTRIG_FL_* bits live in
+ * include/net/mac80211.h at the pin; stating them here as well was a second
+ * definition of the same names (S0 run-19: 32 redefinition errors).  The LED
+ * class types above stay: no pinned header carries them for this port. */
 
 #define	led_classdev_register(dev, cdev)	0
 #define	led_classdev_unregister(cdev)		do { (void)(cdev); } while (0)

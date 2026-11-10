@@ -639,4 +639,16 @@ static inline void module_param_sysfs_remove(struct module *mod)
 { }
 #endif
 
+
+/* The port spells bool as the `bool -> _Bool` macro (linuxkpi_core.h), so the
+ * interface's `param_check_##type` / `param_ops_##type` paste sees `_Bool`.
+ * Alias the two names for that spelling; the interface's own records answer. */
+#define	param_check__Bool(name, p)	param_check_bool(name, p)
+#define	param_ops__Bool			param_ops_bool
+
+/* [LNX] include/linux/moduleparam.h: the parameter lock, stated after the
+ * interface's inline (moduleparam.h:323) so the declaration is not rewritten. */
+#define	kernel_param_lock(mod)		do { (void)(mod); } while (0)
+#define	kernel_param_unlock(mod)	do { (void)(mod); } while (0)
+
 #endif /* _LINUX_MODULE_PARAMS_H */

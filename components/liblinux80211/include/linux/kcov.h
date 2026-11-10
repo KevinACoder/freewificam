@@ -3,6 +3,7 @@
 #define _LINUX_KCOV_H
 
 #include <linux/sched.h>
+#include <linux/types.h>
 #include <uapi/linux/kcov.h>
 
 struct task_struct;

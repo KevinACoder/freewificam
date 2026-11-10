@@ -43,4 +43,14 @@ typedef u16		u_int16_t;
 typedef u32		u_int32_t;
 typedef u64		u_int64_t;
 
+/* [LNX] include/linux/types.h:229-233: the remote-coverage handle.  With
+ * CONFIG_KCOV unset the interface's struct has no member at all (an empty
+ * struct, a GNU extension the kernel build relies on); this port compiles the
+ * same arm, and the handle's users see a zero-sized value. */
+struct kcov_common_handle_id {
+#ifdef CONFIG_KCOV
+	u64	val;
+#endif
+};
+
 #endif /* _LINUXKPI_LINUX_TYPES_H_ */

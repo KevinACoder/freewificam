@@ -5,6 +5,17 @@
 #include <linux/compiler.h>
 
 /*
+ * [LNX] include/linux/compiler.h:198-200: the checked spelling.  The kernel
+ * selects a plain 0 under sparse; this build always has the C11 assertion, and
+ * the helper must exist before BUILD_BUG_ON_ZERO expands it (the core header
+ * carries BUILD_BUG_ON_ZERO's users, not its definition).
+ */
+#ifndef __BUILD_BUG_ON_ZERO_MSG
+#define __BUILD_BUG_ON_ZERO_MSG(e, msg, ...)	\
+	((int)sizeof(struct { _Static_assert(!(e), msg); }))
+#endif
+
+/*
  * Force a compilation error if condition is true, but also produce a
  * result (of value 0 and type int), so the expression can be used
  * e.g. in a structure initializer (or where-ever else comma expressions
@@ -37,7 +48,9 @@
  *
  * See BUILD_BUG_ON for description.
  */
+#ifndef BUILD_BUG_ON_MSG
 #define BUILD_BUG_ON_MSG(cond, msg) compiletime_assert(!(cond), msg)
+#endif
 
 /**
  * BUILD_BUG_ON - break compile if a condition is true.
@@ -47,8 +60,10 @@
  * some other compile-time-evaluated condition, you should use BUILD_BUG_ON to
  * detect if someone changes it.
  */
+#ifndef BUILD_BUG_ON
 #define BUILD_BUG_ON(condition) \
 	BUILD_BUG_ON_MSG(condition, "BUILD_BUG_ON failed: " #condition)
+#endif
 
 /**
  * BUILD_BUG - break compile if used.
@@ -57,7 +72,9 @@
  * build time, you should use BUILD_BUG to detect if it is
  * unexpectedly used.
  */
+#ifndef BUILD_BUG
 #define BUILD_BUG() BUILD_BUG_ON_MSG(1, "BUILD_BUG failed")
+#endif
 
 /**
  * static_assert - check integer constant expression at build time

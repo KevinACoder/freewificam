@@ -39,6 +39,10 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/skbuff.h: the kcov handle record that
+ * skb_get_kcov_handle() returns, declared in linux/types.h. */
+#include <linux/types.h>
+
 /* [LNX] include/linux/skbuff.h:28 includes <linux/dma-mapping.h>; the face keeps
  * the interface's own include, which is how the DMA direction and mapping API
  * reaches a unit that takes this header. */
@@ -73,10 +77,6 @@ struct net_device;
  * `ip_summed` carries. The values are contract with every path that tests them (the
  * receive path writes one, the transmit path and the GRO path compare against them), so
  * they are stated with the interface's values. */
-#define	CHECKSUM_NONE		0
-#define	CHECKSUM_UNNECESSARY	1
-#define	CHECKSUM_COMPLETE	2
-#define	CHECKSUM_PARTIAL	3
 
 /*
  * Allocate a socket buffer with `length` bytes of payload space and `NET_SKB_PAD`
@@ -383,28 +383,27 @@ skb_linearize(struct sk_buff *skb)
 	for ((iter) = NULL; (iter) != NULL; (iter) = (iter)->next)
 
 /*
- * [LNX] include/linux/skbuff.h:3120-3123: `static inline unsigned char
- * *skb_mac_header(const struct sk_buff *skb) { return skb->head + skb->mac_header; }`.
- *
- * This port's sk_buff carries no mac_header offset: the 802.11 header is the
- * buffer's data, built there by the bridge (see the contract header's sk_buff and
- * the ip_hdr() derivation in components/linuxkpi/include/linux/ip.h, which opens
- * the payload at the header's own length). The accessor therefore answers the
- * buffer's data pointer, which is the port's real mac header, and the setter has
- * no offset to store - the header is where the caller put it.
+ * [LNX] include/linux/skbuff.h:5476-5479: `return skb->kcov_handle;`.  This port
+ * has no KCOV: the record has no member (CONFIG_KCOV is unset in linux/types.h's
+ * arm), nothing ever sets a handle, and the interface's zero value is the honest
+ * answer.  mac80211's rx path passes it to kcov_remote_start_common(), whose
+ * non-KCOV body is empty.
  */
-static __always_inline __unused unsigned char *
-skb_mac_header(const struct sk_buff *skb)
-{
-	return skb->data;
-}
-
-static __always_inline __unused void
-skb_set_mac_header(struct sk_buff *skb, int offset)
+static __always_inline __unused struct kcov_common_handle_id
+skb_get_kcov_handle(struct sk_buff *skb)
 {
 	(void)skb;
-	(void)offset;
+	return (struct kcov_common_handle_id){};
 }
+
+/*
+ * [LNX] include/linux/skbuff.h:3120-3220: skb_mac_header(), skb_set_mac_header()
+ * and the rest of the offset block live in the contract header
+ * (components/liblinux80211/linuxkpi_core.h), because the sk_buff record and
+ * every other geometry helper are stated there.  They keep the port's old
+ * answer when no offset was recorded (the 802.11 header is the buffer's data)
+ * and the interface's field semantics once a caller records one.
+ */
 
 /*
  * [LNX] include/linux/skbuff.h:4253-4256: the buffer-list walk a transmit path
@@ -530,6 +529,101 @@ skb_copy_header(struct sk_buff *new, const struct sk_buff *old)
 	 * to invent here */
 	skb_shinfo(new)->gso_size = skb_shinfo(old)->gso_size;
 	skb_shinfo(new)->gso_segs = skb_shinfo(old)->gso_segs;
+}
+
+
+/* [LNX] include/linux/skbuff.h: the software fallback for a device that cannot
+ * checksum an encapsulated packet; the body is the port's (S1c). */
+int skb_csum_hwoffload_help(struct sk_buff *skb,
+			    const netdev_features_t features);
+
+/* [LNX] include/linux/skbuff.h: splice list onto the tail of head (no reset of
+ * the source; the caller decides). */
+static __always_inline __unused void
+skb_queue_splice_tail(struct sk_buff_head *list, struct sk_buff_head *head)
+{
+	struct sk_buff *first, *last, *at, *it;
+
+	if (list->qlen == 0)
+		return;
+	first = list->next;
+	last = list->prev;
+	for (it = first; it != (struct sk_buff *)((void *)list); it = it->next)
+		it->_queue = head;
+	at = (struct sk_buff *)head;
+	head->prev->next = first;
+	first->prev = head->prev;
+	last->next = at;
+	at->prev = last;
+	head->qlen += list->qlen;
+}
+
+/* [LNX] include/linux/skbuff.h: "make at least write_len bytes writable".
+ * No relocate path on this port; the declaration is the interface's and the
+ * body lands with the first consumer that needs it (S1c). */
+int skb_ensure_writable(struct sk_buff *skb, unsigned int write_len);
+
+/* [LNX] include/linux/skbuff.h: the offset of the checksummed payload from the
+ * packet's data start (the interface's csum_start - headroom). */
+static __always_inline __unused int
+skb_checksum_start_offset(const struct sk_buff *skb)
+{
+	return (int)skb->csum_start - (int)skb_headroom(skb);
+}
+
+/* [LNX] include/linux/skbuff.h: the device's offload features decide whether a
+ * nonlinear buffer must be linearised first.  This port has no fragment store
+ * (data_len is always 0, skb_is_nonlinear() is false), so the interface's test
+ * reduces to that predicate. */
+static __always_inline __unused bool
+skb_needs_linearize(struct sk_buff *skb, netdev_features_t features)
+{
+	(void)features;
+	return skb_is_nonlinear(skb);
+}
+
+/* [LNX] include/linux/skbuff.h: make the buffer private before a write path.
+ * The port's skb_cloned() is conservative, so the copy branch is the one this
+ * answer takes; a failed copy returns NULL, which is the interface's "drop"
+ * answer and the caller's existing error path. */
+static __always_inline __unused struct sk_buff *
+skb_share_check(struct sk_buff *skb, gfp_t pri)
+{
+	if (skb_cloned(skb)) {
+		struct sk_buff *n = skb_copy(skb, pri);
+
+		if (n == NULL)
+			return NULL;
+		kfree_skb(skb);
+		skb = n;
+	}
+	return skb;
+}
+
+/* [LNX] include/linux/skbuff.h: clone the buffer and charge it to its socket
+ * (mac80211's tx status path); the body is the port's (S1c). */
+struct sk_buff *skb_clone_sk(struct sk_buff *skb);
+
+/* [LNX] include/linux/skbuff.h: "can this buffer be written in place?"  The
+ * interface answers with skb_header_cloned()/skb_cloned(); this port's
+ * skb_cloned() is conservative (payload sharing is pool-owned and the
+ * descriptor cannot prove it private), so the writable answer is the same
+ * conservative false - a caller takes the copy path, never writes a shared
+ * payload. */
+#define	skb_clone_writable(skb, len)	(0)
+
+/* [LNX] include/linux/skbuff.h: the queue successor and the ethernet header of
+ * the buffer, stated where the rest of the buffer vocabulary lives. */
+static __always_inline __unused struct sk_buff *
+skb_queue_next(const struct sk_buff_head *list, const struct sk_buff *skb)
+{
+	return skb->next;
+}
+
+static __always_inline __unused struct ethhdr *
+eth_hdr(const struct sk_buff *skb)
+{
+	return (struct ethhdr *)skb_mac_header(skb);
 }
 
 #endif /* _LINUXKPI_LINUX_SKBUFF_H_ */

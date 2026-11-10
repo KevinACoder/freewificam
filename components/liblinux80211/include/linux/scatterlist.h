@@ -153,7 +153,6 @@ int sg_nents(struct scatterlist *sg);
 size_t sg_pcopy_from_buffer(struct scatterlist *sgl, unsigned int nents,
 			    const void *buf, size_t buflen, loff_t skip);
 
-#endif /* _LINUXKPI_LINUX_SCATTERLIST_H_ */
 
 /* [LNX] include/linux/scatterlist.h: the one-segment setter the stack's AEAD
  * helpers use (mac80211 hands crypto a single linear buffer). */
@@ -164,3 +163,13 @@ static __always_inline void sg_set_buf(struct scatterlist *sg, const void *buf,
 	sg->offset = 0;
 	sg->length = buflen;
 }
+
+/* [LNX] include/linux/scatterlist.h: the one-entry initialiser. */
+static __always_inline void sg_init_one(struct scatterlist *sg, const void *buf,
+					unsigned int buflen)
+{
+	sg_init_table(sg, 1);
+	sg_set_buf(sg, buf, buflen);
+}
+
+#endif /* _LINUXKPI_LINUX_SCATTERLIST_H_ */

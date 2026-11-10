@@ -66,4 +66,14 @@
 #define	DEFINE_FLEX(TYPE, NAME, MEMBER, COUNTER, COUNT)			\
 	_DEFINE_FLEX(TYPE, NAME, MEMBER, COUNT, = { .COUNTER = COUNT, })
 
+
+/* [LNX] include/linux/overflow.h: the checked arithmetic the netlink sizing
+ * helpers use.  No overflow traps on this port's sizes; the expressions are the
+ * interface's plain arithmetic, stated under their names. */
+#define	size_add(a, b)		((size_t)(a) + (size_t)(b))
+#define	size_sub(a, b)		((size_t)(a) - (size_t)(b))
+#define	size_mul(a, b)		((size_t)(a) * (size_t)(b))
+#define	array_size(a, b)	size_mul((a), (b))
+#define	array3_size(a, b, c)	size_mul(size_mul((a), (b)), (c))
+
 #endif /* _LINUXKPI_LINUX_OVERFLOW_H_ */

@@ -31,4 +31,8 @@ crc32(u32 crc, const void *p, size_t len)
 	return crc32_le(crc, p, len);
 }
 
+/* [LNX] lib/crc32.c: the big-endian polynomial.  Declared only in this round;
+ * the body lands with the port's CRC library (S1c). */
+u32 crc32_be(u32 crc, const void *buf, size_t len);
+
 #endif /* _LINUXKPI_LINUX_CRC32_H_ */
