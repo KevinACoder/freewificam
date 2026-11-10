@@ -26,11 +26,10 @@ needs a board that boots before it needs a stack that links:
 
 | Step | State |
 |---|---|
-| RTOS baseline builds (`rk3568-tick`) | done (C0/C1) |
-| Four acceptance images build (network, PCIe/NVMe, eMMC, USB storage) | done (C0/C1) |
-| Four acceptance images boot on the board, 2/2, judged | not yet recorded |
-| `components/liblinux80211` (linuxkpi + bus engines + seams) | not started |
-| mac80211 + cfg80211 + iwlwifi | next stage |
+| RTOS baseline builds and boots (`rk3568-tick`) | done, 2/2 |
+| Four acceptance images build and boot (network, PCIe/NVMe, eMMC, USB storage) | done, 2/2 each, judged |
+| `components/liblinux80211` (linuxkpi + PCI/SDIO engines + seams) | landed; `rk3568-kpi-live`/`-mock` 2/2 |
+| mac80211 + cfg80211 + iwlwifi | next stage (S0/A) |
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
 build's design and how a new world is added.

@@ -6,6 +6,13 @@ Code written in this repository.
 |---|---|---|
 | `liblinux80211/` | the Linux kernel API surface, the bus engines, the seams; `net/mac80211` + `net/wireless` land next | **landed**: builds as `liblinux80211.a`, proven on the board by `rk3568-kpi-live` (real root complex) and `rk3568-kpi-mock` (synthetic host/card, null egress) |
 
+Not yet proven: the SDIO engine's real backend. The adapter exists
+(`third-party/fsl_sdmmc/ports/lkpi_sdio_fsl.c`) but no image compiles it: its
+host type is the SDIO socket's, and the line that drives one arrives with the
+wireless SDIO driver. The seam itself is exercised by the mock card, and the
+card stack under it is exercised by the eMMC acceptance image - two halves,
+not yet one wire.
+
 ## The component's boundary
 
 `liblinux80211` is the part that must be movable to another OS. It owns:
