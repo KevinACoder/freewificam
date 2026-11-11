@@ -33,6 +33,7 @@ CASES = (
     "mac80211_c2",
     "iwl7260_c3",
     "iwl7260_c4",
+    "iwl7260_c5",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -221,6 +222,46 @@ PATTERNS = {
     ),
     "iwl7260_c4_fail": re.compile(
         r"iwl7260_c4: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_c5_fwreg": re.compile(
+        r"iwl7260_c5: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c5_wlan0": re.compile(
+        r"iwl7260_c5: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_c5_start": re.compile(
+        r"iwl7260_c5: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c5_scan": re.compile(
+        r"iwl7260_c5: scan ssid=(?P<ssid>\S+) freq=(?P<freq>\d+) "
+        r"rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c5_bss": re.compile(
+        r"iwl7260_c5: bss ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>\d+) signal=(?P<sig>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c5_connect": re.compile(
+        r"iwl7260_c5: connect ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>-?\d+) rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_c5_connected": re.compile(
+        r"iwl7260_c5: connected bssid=(?P<bssid>[0-9a-f:]+) "
+        r"waited_ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "iwl7260_c5_pass_c5": re.compile(r"iwl7260_c5: PASS C5", re.MULTILINE),
+    "iwl7260_c5_netif": re.compile(
+        r"iwl7260_c5: netif up name=(?P<name>\S+) ip=(?P<ip>\S+) "
+        r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_c5_diag": re.compile(
+        r"iwl7260_c5: diag rx_frames=(?P<rx>\d+) tx_frames=(?P<tx>\d+) "
+        r"rx_bytes=(?P<rxb>\d+) tx_bytes=(?P<txb>\d+) "
+        r"tx_fail=(?P<fail>\d+)", re.MULTILINE
+    ),
+    "iwl7260_c5_pass_c6": re.compile(r"iwl7260_c5: PASS C6", re.MULTILINE),
+    "iwl7260_c5_fail": re.compile(
+        r"iwl7260_c5: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "kpi_pci_devs": re.compile(r"kpi: pci devs=(?P<n>\d+)", re.MULTILINE),
     "kpi_dev": re.compile(
@@ -726,6 +767,10 @@ PATTERNS = {
 # a phase's absence stays visible as an absence and a second run does not hide
 # the first.
 LIST_PATTERNS = {
+    "iwl7260_c5_ping": re.compile(
+        r"iwl7260_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
+        r"(?P<max>\d+)", re.MULTILINE),
     "net_phase_begin": re.compile(r"net: phase (?P<n>\d+) begin proto=(?P<proto>\S+) role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) name=(?P<name>\S+)", re.MULTILINE),
     "net_phase_done": re.compile(r"net: phase (?P<n>\d+) done name=(?P<name>\S+) ok=(?P<ok>\d+)", re.MULTILINE),
     "net_census": re.compile(r"net: census .*", re.MULTILINE),
@@ -887,7 +932,15 @@ def parse(text: str) -> dict:
     found: dict = {"lines": text.splitlines()}
     for name, pattern in PATTERNS.items():
         match = pattern.search(text)
-        found[name] = match.groupdict() if match else None
+        if match is None:
+            found[name] = None
+        else:
+            # A pattern without named groups is a presence anchor; storing the
+            # empty groupdict() would make it falsy and the verdict would read
+            # a matched line as missing (the C5/C6 PASS anchors are exactly
+            # that shape).  Presence is the value for those.
+            groups = match.groupdict()
+            found[name] = groups if groups else True
     for name, pattern in LIST_PATTERNS.items():
         found[name] = [m.groupdict() for m in pattern.finditer(text)]
     found["case_verdicts"] = {
@@ -1555,6 +1608,87 @@ def judge(text: str, expect: dict | None = None) -> dict:
             notes.append(
                 f"iwl7260_c4: bss {bss['ssid']} {bss['bssid']} "
                 f"ch={bss['freq']} sig={bss['sig']}")
+
+    if cases.get("iwl7260_c5", {}).get("verdict") == "pass":
+        fail = found["iwl7260_c5_fail"]
+        if fail:
+            errors.append(f"iwl7260_c5: {fail['reason']}")
+        reg = found["iwl7260_c5_fwreg"]
+        if not reg:
+            errors.append("iwl7260_c5: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"iwl7260_c5: firmware registration rc={reg['rc']}")
+        wl = found["iwl7260_c5_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("iwl7260_c5: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("iwl7260_c5: wlan0 has ifindex=0")
+        st = found["iwl7260_c5_start"]
+        if not st:
+            errors.append("iwl7260_c5: PASS without the start line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"iwl7260_c5: start rc={st['rc']}")
+        sc = found["iwl7260_c5_scan"]
+        if not sc:
+            errors.append("iwl7260_c5: PASS without the scan line")
+        elif int(sc["rc"]) != 0:
+            errors.append(f"iwl7260_c5: scan rc={sc['rc']}")
+        elif sc["ssid"] != "labwifi-ar-ht20s" or int(sc["freq"]) != 2432:
+            errors.append(
+                f"iwl7260_c5: scan was {sc['ssid']}@{sc['freq']}, "
+                "expected labwifi-ar-ht20s@2432")
+        bss = found["iwl7260_c5_bss"]
+        if not bss:
+            errors.append("iwl7260_c5: PASS without a BSS line")
+        elif bss["bssid"] != "1c:a7:70:de:29:a1" or int(bss["freq"]) != 2432:
+            errors.append(
+                f"iwl7260_c5: BSS {bss['bssid']}@{bss['freq']}, "
+                "expected 1c:a7:70:de:29:a1@2432")
+        conn = found["iwl7260_c5_connect"]
+        if not conn:
+            errors.append("iwl7260_c5: PASS C5 without the connect line")
+        elif int(conn["rc"]) != 0:
+            errors.append(f"iwl7260_c5: connect rc={conn['rc']}")
+        elif conn["bssid"] != "1c:a7:70:de:29:a1":
+            errors.append(f"iwl7260_c5: connected to {conn['bssid']}")
+        done = found["iwl7260_c5_connected"]
+        if not done:
+            errors.append("iwl7260_c5: PASS C5 without the connected line")
+        elif done["bssid"] != "1c:a7:70:de:29:a1":
+            errors.append(f"iwl7260_c5: connected bssid={done['bssid']}")
+        if not found["iwl7260_c5_pass_c5"]:
+            errors.append("iwl7260_c5: the C5 PASS line is missing")
+        netif = found["iwl7260_c5_netif"]
+        if not netif:
+            errors.append("iwl7260_c5: PASS C6 without the netif line")
+        elif not netif["ip"].startswith("192.168.99.2/"):
+            errors.append(f"iwl7260_c5: netif ip={netif['ip']}")
+        pings = {p["payload"]: p for p in found["iwl7260_c5_ping"]}
+        for want in ("56", "1400"):
+            p = pings.get(want)
+            if not p:
+                errors.append(f"iwl7260_c5: no ping line for payload={want}")
+            elif int(p["rx"]) != int(p["tx"]) or int(p["tx"]) != 20:
+                errors.append(
+                    f"iwl7260_c5: ping payload={want} tx={p['tx']} "
+                    f"rx={p['rx']}")
+            else:
+                notes.append(
+                    f"iwl7260_c5: ping {want}B 20/20 "
+                    f"rtt={p['min']}/{p['avg']}/{p['max']} ms")
+        diag = found["iwl7260_c5_diag"]
+        if not diag:
+            errors.append("iwl7260_c5: PASS C6 without the diag line")
+        elif int(diag["tx"]) == 0 or int(diag["rx"]) == 0:
+            errors.append(
+                f"iwl7260_c5: adapter counters tx={diag['tx']} "
+                f"rx={diag['rx']}")
+        else:
+            notes.append(
+                f"iwl7260_c5: adapter tx={diag['tx']} rx={diag['rx']} "
+                f"bytes={diag['txb']}/{diag['rxb']}")
+        if not found["iwl7260_c5_pass_c6"]:
+            errors.append("iwl7260_c5: the C6 PASS line is missing")
 
     if cases.get("mac80211_c2", {}).get("verdict") == "pass":
         fail = found["mac80211_c2_fail"]

@@ -118,7 +118,7 @@ BACKEND_SYMBOLS := FreeRTOS_IRQ_Handler FreeRTOS_Tick_Handler xPortStartSchedule
 BACKEND_FIRST_SRCS := $(PLATFORM)/os/freertos/board/rk3568-itx/freertos_board_glue.c $(PLATFORM)/os/freertos/board/rk3568-itx/freertos_board_vectors.S $(PLATFORM)/os/freertos/board/rk3568-itx/cmsis2_ext_board.c $(PLATFORM)/os/freertos/board/rk3568-itx/cmsis2_memory_board.c
 BACKEND_VENDOR_SRCS := $(KERNEL)/tasks.c $(KERNEL)/list.c $(KERNEL)/queue.c $(KERNEL)/event_groups.c $(KERNEL)/timers.c $(KERNEL)/stream_buffer.c $(KERNEL)/portable/MemMang/heap_4.c $(KERNEL)/portable/GCC/ARM_AARCH64_SRE/port.c $(KERNEL)/portable/GCC/ARM_AARCH64_SRE/portASM.S $(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c
 
-INCLUDES := -I$(PLATFORM) -I$(LINE) -I$(LINE)/app -I$(PLATFORM)/os/cmsis2 -I$(PLATFORM)/os/cmsis2/board-compat -I$(PLATFORM)/arch/aarch64 $(BOARD_INCLUDES) -I$(PLATFORM)/os/baremetal -I$(THIRD_PARTY)/ulog/src -I$(THIRD_PARTY)/tlsf -I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include -I$(ROOT)/build/kconfig/$(PROFILE) -I$(ROOT)/build/kconfig/$(PROFILE)/include/generated -I$(LWIP)/src/include -I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow -I$(THIRD_PARTY)/fsl_sdmmc/common -I$(THIRD_PARTY)/fsl_sdmmc/mmc -I$(THIRD_PARTY)/fsl_sdmmc/osa -I$(CMSIS)/CMSIS/RTOS2/Include -I$(CMSIS)/CMSIS/Driver/Include -I$(CMSIS)/CMSIS/Core/Include/a-profile $(BACKEND_INCLUDES)
+INCLUDES := -I$(PLATFORM) -I$(LINE) -I$(LINE)/app -I$(PLATFORM)/os/cmsis2 -I$(PLATFORM)/os/cmsis2/board-compat -I$(PLATFORM)/arch/aarch64 $(BOARD_INCLUDES) -I$(PLATFORM)/os/baremetal -I$(THIRD_PARTY)/ulog/src -I$(THIRD_PARTY)/tlsf -I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include -I$(ROOT)/components/liblinux80211/include -I$(ROOT)/build/kconfig/$(PROFILE) -I$(ROOT)/build/kconfig/$(PROFILE)/include/generated -I$(LWIP)/src/include -I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow -I$(THIRD_PARTY)/fsl_sdmmc/common -I$(THIRD_PARTY)/fsl_sdmmc/mmc -I$(THIRD_PARTY)/fsl_sdmmc/osa -I$(CMSIS)/CMSIS/RTOS2/Include -I$(CMSIS)/CMSIS/Driver/Include -I$(CMSIS)/CMSIS/Core/Include/a-profile $(BACKEND_INCLUDES)
 
 # The PCIe/NVMe cases include the board driver headers directly (they are not
 # reachable through the generic drivers/ include root).
@@ -205,6 +205,23 @@ NET_APP_SRCS :=
 NET_STACK_SRCS :=
 endif
 
+# The wireless egress (C6): the same lwIP core, with the lkpinetif halves in
+# place of a wired NIC bridge.  It may coexist with a wired case (both share
+# the one tcpip_init); the two blocks add the common port glue twice, so the
+# lists are deduplicated after both have spoken.
+ifeq ($(CONFIG_LIBLINUX80211_NET_LWIP),1)
+NET_APP_SRCS += \
+	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
+	$(THIRD_PARTY)/lwip/ports/platform_hooks.c \
+	$(THIRD_PARTY)/lwip/ports/lkpinetif_lwip.c \
+	$(THIRD_PARTY)/lwip/ports/lkpinetif_case.c
+NET_STACK_SRCS += $(LWIP_STACK_SRCS)
+# The netdev half is the component's world, not lwIP's: it sees the Linux face.
+WL_LWIP_KPI_SRCS := $(THIRD_PARTY)/lwip/ports/lkpinetif.c
+endif
+NET_APP_SRCS := $(sort $(NET_APP_SRCS))
+NET_STACK_SRCS := $(sort $(NET_STACK_SRCS))
+
 # The per-NIC groups: the rk3568 wired case keeps the eqos line.
 EQOS_SRCS :=
 ifneq ($(filter net net_mdk_netio net_pps,$(CASES)),)
@@ -242,6 +259,7 @@ endif
 # The liblinux80211 world (empty unless the component is selected).
 ifeq ($(CONFIG_LIBLINUX80211),1)
 include $(CURDIR)/kpi.mk
+KPI_ALL_SRCS += $(WL_LWIP_KPI_SRCS)
 endif
 
 # S0: the imported stack, compiled one translation unit at a time against the
@@ -380,6 +398,7 @@ OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS)
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(BOARD_LINKSCRIPT) \
 	$(BACKEND_LDFLAGS) \
+	$(WL80211_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys

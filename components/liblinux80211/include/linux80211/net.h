@@ -60,4 +60,42 @@ void lkpi_netdev_rx(struct sk_buff *skb);
  */
 int lkpi_netdev_xmit(struct net_device *dev, const void *frame, size_t len);
 
+/*
+ * The lwIP egress' case face (C6).
+ *
+ * The board case is compiled in the stack's world, so it cannot include lwIP's
+ * headers (the two worlds disagree about htons/ntohs and the buffer types).
+ * These three calls are the whole contract: plain C types only, implemented in
+ * the lwIP world by third-party/lwip/ports/lkpinetif_case.c.
+ */
+
+/* Assemble the lwIP interface over the wireless net device ("wlan0"), set the
+ * static address and bring it up.  No DHCP.  Returns 0 on success, negative on
+ * a bad argument, a missing interface or a failed netif_add. */
+int lkpi_net_wlan_up(const char *ip, const char *mask, const char *gw,
+		     char mac[6]);
+
+/* Send `count` ICMP echoes of `payload_len` bytes to `dst`, one at a time,
+ * waiting at most `timeout_ms` for each reply.  Returns 0 when every echo was
+ * answered, -1 otherwise.  `rx` is the answered count; the RTT outputs are in
+ * milliseconds (0 when no reply carried a usable stamp). */
+int lkpi_net_ping(const char *dst, unsigned count, unsigned payload_len,
+		  unsigned timeout_ms, unsigned *rx, unsigned *rtt_min_ms,
+		  unsigned *rtt_avg_ms, unsigned *rtt_max_ms);
+
+/* The adapter's own counters, copied out so the case can print them. */
+struct lkpi_net_diag {
+	unsigned long rx_frames;
+	unsigned long rx_foreign;
+	unsigned long rx_eapol;
+	unsigned long rx_no_netif;
+	unsigned long rx_input_fail;
+	unsigned long tx_frames;
+	unsigned long tx_fail;
+	unsigned long rx_bytes;
+	unsigned long tx_bytes;
+};
+
+void lkpi_net_diag(struct lkpi_net_diag *out);
+
 #endif /* LINUX80211_NET_H */

@@ -180,10 +180,14 @@ lkpinetif_add(struct netif *netif, const ip4_addr_t *ip,
 	 * callback fills the interface, tcpip_input is the input path (the stack is
 	 * core-locked with a TCP/IP thread in this port).
 	 */
+	LOCK_TCPIP_CORE();
 	if (netif_add(netif, ip, mask, gw, netif, lkpinetif_init,
-	    tcpip_input) == NULL)
+	    tcpip_input) == NULL) {
+		UNLOCK_TCPIP_CORE();
 		return ERR_IF;
+	}
 	g_netif = netif;
+	UNLOCK_TCPIP_CORE();
 	return ERR_OK;
 }
 
@@ -200,6 +204,18 @@ lkpinetif_start(struct netif *netif)
 #if LWIP_DHCP
 	(void)dhcp_start(netif);
 #endif
+}
+
+void
+lkpinetif_start_static(struct netif *netif)
+{
+
+	if (netif == NULL)
+		return;
+	LOCK_TCPIP_CORE();
+	netif_set_up(netif);
+	netif_set_link_up(netif);
+	UNLOCK_TCPIP_CORE();
 }
 
 void

@@ -1,0 +1,34 @@
+# mac80211 on the RTOS line, gate C5-open + C6-open: the AC 7260 joins the
+# open bench AP and moves ICMP through the lwIP netif.
+#
+# The profile is C4 plus the connect path and the wireless egress: same stack,
+# same iwlwifi, same board root complex, same bench AP (open).  The case brings
+# the attach up itself (the pcie group brings the root complex and ITS bridge),
+# opens wlan0, scans, sends the real NL80211_CMD_CONNECT attribute stream
+# through nl80211's handler, waits for cfg80211 to mark the station connected,
+# then assembles the lwIP netif over wlan0 with the lab's static address and
+# sends two ICMP rounds.
+#
+# What this profile is not: the WPA2 round.  There is no supplicant, no EAPOL
+# and no key install here; C5-WPA2 is the next handoff.
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product that also redistributes the Intel firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_c5"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# mac80211 allocates its local/wiphy/netdev/BSS records from the FreeRTOS heap
+# (osMemoryAlloc -> pvPortMalloc); the board default of 256 KiB is not enough,
+# and the scan path also allocates hw_scan_req/IEs and BSS entries.  The lwIP
+# pool, pbufs and the TCP/IP thread's stack come from the same heap.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

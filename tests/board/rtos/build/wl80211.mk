@@ -27,7 +27,7 @@
 # The board cases that compile in this world.  The platform Makefile's generic
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
-WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4
+WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -55,10 +55,18 @@ endif
 
 WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
-# The C4 trigger helper is a bench seam, not a stack TU: it builds the real
-# attribute bytes and dispatches nl80211's own handler.  It compiles in the
-# stack flag world but is not part of the S0/S1b source lists.
-WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c
+# The C4/C5 bench seam, not a stack TU: it builds the real attribute bytes and
+# dispatches nl80211's own handlers.  It compiles in the stack flag world but is
+# not part of the S0/S1b source lists.  tx_dequeue_context.c is the same kind of
+# port shim: a link-time --wrap around the stack's transmit dequeue, stating the
+# port's deferred-context answer (see its header).
+WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
+	$(LIB8)/tx_dequeue_context.c
+
+# The wrap is what makes the shim a seam instead of a stack edit.  It is only
+# meaningful when the stack is linked, and it applies to every reference
+# (iwlwifi's iTXQ wake path is the one that matters).
+WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
 	$(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)

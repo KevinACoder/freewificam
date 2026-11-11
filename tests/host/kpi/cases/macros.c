@@ -14,6 +14,8 @@
 #include <linux/bitfield.h>
 #include <linux/minmax.h>
 #include <linux/netdevice.h>
+#include <linux/ieee80211.h>
+#include <linux/if_vlan.h>
 
 #include "kpi_test.h"
 
@@ -70,5 +72,43 @@ int kpi_case_macros(void)
 	b = 0x05;
 	u8_replace_bits(b, 0x3u, 0x0fu);
 	KPI_ASSERT_EQ(b, 0x03u, "u8_replace_bits");
+	return KPI_PASS;
+}
+
+/*
+ * struct_group() must be a union, not two structs in sequence: the members it
+ * names and the NAME alias have to overlap.  When the macro doubled the group,
+ * struct ieee80211_hdr's seq_ctrl moved from 22 to 40 and mac80211's
+ * defragment handler read two bytes past a 30-byte auth frame (2026-11-11
+ * C5-open, RX_DROP_U_DEFRAG_MISMATCH).  This case is the layout lock.
+ */
+int kpi_case_ieee80211_hdr(void)
+{
+	unsigned char frame[30];
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)frame;
+	unsigned int i;
+
+	KPI_ASSERT_EQ(offsetof(struct ieee80211_hdr, seq_ctrl), 22,
+		      "seq_ctrl at 22");
+	KPI_ASSERT_EQ(offsetof(struct ieee80211_hdr, addr4), 24,
+		      "addr4 at 24");
+	KPI_ASSERT_EQ(sizeof(struct ieee80211_hdr), 30,
+		      "header is 30 bytes");
+	KPI_ASSERT_EQ(offsetof(struct ieee80211_hdr, addrs), 4,
+		      "the named group overlaps addr1");
+	KPI_ASSERT_EQ(offsetof(struct vlan_ethhdr, h_vlan_proto), 12,
+		      "vlan_ethhdr's group is 12 bytes");
+
+	for (i = 0; i < sizeof(frame); i++)
+		frame[i] = 0;
+	frame[0] = 0xb0;	/* auth, no flags */
+	frame[22] = 0x40;
+	frame[23] = 0x91;
+	KPI_ASSERT_EQ(le16_to_cpu(hdr->seq_ctrl), 0x9140,
+		      "seq_ctrl reads the on-air bytes");
+	KPI_ASSERT_EQ(ieee80211_get_sn(hdr), 0x914, "sequence number");
+	KPI_ASSERT_EQ((unsigned long)(void *)hdr->addrs.addr1,
+		      (unsigned long)(void *)(frame + 4),
+		      "the named group points at the same bytes");
 	return KPI_PASS;
 }

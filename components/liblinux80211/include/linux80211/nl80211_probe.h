@@ -27,4 +27,16 @@ int lkpi_nl80211_trigger_scan(struct net_device *dev, const char *ssid,
 int lkpi_nl80211_bss_find(struct wiphy *wiphy, const char *ssid,
 			  unsigned char bssid[6], int *freq, int *signal);
 
+/* Start NL80211_CMD_CONNECT (open AP) through the real handler.  Returns the
+ * handler's code; completion is observed with lkpi_nl80211_connected(). */
+int lkpi_nl80211_connect(struct net_device *dev, const char *ssid,
+			 const unsigned char bssid[6], unsigned int freq_mhz);
+
+/* Start NL80211_CMD_DISCONNECT through the real handler. */
+int lkpi_nl80211_disconnect(struct net_device *dev, unsigned int reason);
+
+/* 1 when the station is connected, 0 when not, negative on a bad argument.
+ * Fills bssid when connected and bssid is non-NULL. */
+int lkpi_nl80211_connected(struct net_device *dev, unsigned char bssid[6]);
+
 #endif /* LINUX80211_NL80211_PROBE_H */

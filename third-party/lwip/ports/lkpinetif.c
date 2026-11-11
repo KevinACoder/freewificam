@@ -15,11 +15,11 @@
  *         bridge splits them (components/net80211/ports/bridge/wlan_wpa_vendor.c:51-54 the
  *         EAPOL seam it registers).
  *
- * The transmit ownership rule comes from the driver's own entry: it consumes the
- * buffer on every path (os_dep/linux/xmit_linux.c:544-552 drops through
- * rtw_os_pkt_complete, which frees the skb, and the success path attaches it to
- * its transmit frame), so this adapter hands the skb over and never frees it
- * again.
+ * The transmit ownership rule is mac80211's: its ndo_start_xmit consumes the
+ * skb on every path (it frees a dropped frame itself), so this adapter hands
+ * the skb over through the egress seam and never frees it again.  The seam
+ * owns the skb's protocol/dev fields and the tailroom, so the supplicant's
+ * EAPOL send and lwIP's linkoutput share exactly one transmit shape.
  *
  * @date    12.10.2026
  */
@@ -28,9 +28,11 @@
 #include <string.h>
 
 #include "linuxkpi_core.h"
-#include "linuxkpi_cfg80211.h"
 #include <linux/if_ether.h>
 #include <linux/netdevice.h>
+#include <net/net_namespace.h>
+
+#include "linux80211/net.h"
 
 #ifdef CONFIG_LKPI_CENSUS
 #include "lkpi_census.h"
@@ -58,10 +60,12 @@ static void *g_eapol_arg;
 static struct lkpinetif_diag g_diag;
 
 int
-lkpinetif_bind(struct wiphy *wiphy)
+lkpinetif_bind(const char *ifname)
 {
 
-	g_dev = lkpicfg_netdev(wiphy);
+	if (ifname == NULL)
+		return -EINVAL;
+	g_dev = dev_get_by_name(&init_net, ifname);
 	lkpi_printf(ULOG_DEBUG_LEVEL, "lkpinetif: bound to %s\n",
 	    g_dev != NULL ? g_dev->name : "(none)");
 	return g_dev != NULL ? 0 : -ENODEV;
@@ -101,35 +105,28 @@ lkpinetif_get_diag(struct lkpinetif_diag *out)
 int
 lkpinetif_tx_frame(const uint8_t *frame, size_t len)
 {
-	struct sk_buff *skb;
 	uint64_t t0, t1;
+	int ret;
 
 	if (frame == NULL || len == 0)
 		return -EINVAL;
-	if (g_dev == NULL || g_dev->netdev_ops == NULL ||
-	    g_dev->netdev_ops->ndo_start_xmit == NULL) {
+	if (g_dev == NULL) {
 		g_diag.tx_fail++;
 		return -ENODEV;
 	}
 
-	skb = lkpi_dev_alloc_skb((unsigned int)len, GFP_KERNEL);
-	if (skb == NULL) {
-		g_diag.tx_fail++;
-		return -ENOMEM;
-	}
-	if (skb_put(skb, (unsigned int)len) == NULL) {
-		kfree_skb(skb);
-		g_diag.tx_fail++;
-		return -ENOMEM;
-	}
-	memcpy(skb->data, frame, len);
-	g_diag.tx_frames++;
-	g_diag.tx_bytes += (unsigned long)len;
 	LKPINETIF_TX_REQUEST_NOTE();
 	t0 = LKPINETIF_NOW_NS();
-	/* the driver's entry owns the skb from here on (see the file's note) */
-	(void)g_dev->netdev_ops->ndo_start_xmit(skb, g_dev);
+	/* the seam builds the skb (protocol, dev, tailroom) and calls the entry;
+	 * the entry owns the skb from here on (see the file's note) */
+	ret = lkpi_netdev_xmit(g_dev, frame, len);
 	t1 = LKPINETIF_NOW_NS();
+	if (ret != 0) {
+		g_diag.tx_fail++;
+		return ret;
+	}
+	g_diag.tx_frames++;
+	g_diag.tx_bytes += (unsigned long)len;
 	g_diag.tx_ndo_ns += (unsigned long long)(t1 - t0);
 	if ((unsigned long long)(t1 - t0) > g_diag.tx_ndo_max_ns)
 		g_diag.tx_ndo_max_ns = (unsigned long long)(t1 - t0);

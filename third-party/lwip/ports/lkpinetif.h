@@ -40,6 +40,11 @@ err_t	lkpinetif_add(struct netif *netif, const ip4_addr_t *ip,
 void	lkpinetif_start(struct netif *netif);
 void	lkpinetif_stop(struct netif *netif);
 
+/* Bring the interface up with the address the caller already set: no DHCP
+ * client.  This is the bench path (static 192.168.99.2/24), where the AP's
+ * DHCP server is not part of the measurement. */
+void	lkpinetif_start_static(struct netif *netif);
+
 /* Link state, from whoever hears the driver's connect/disconnect notifications. */
 void	lkpinetif_note_link(struct netif *netif, int up);
 

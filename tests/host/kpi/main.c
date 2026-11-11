@@ -73,11 +73,13 @@ int kpi_case_skb_geometry(void);
 int kpi_case_skb_helpers(void);
 int kpi_case_skb_vlan(void);
 int kpi_case_macros(void);
+int kpi_case_ieee80211_hdr(void);
 int kpi_case_net_stubs(void);
 int kpi_case_idr_rb(void);
 int kpi_case_rhtable(void);
 int kpi_case_nla(void);
 int kpi_case_netdev_open(void);
+int kpi_case_net_xmit(void);
 int kpi_case_ctx_tasklet_thread(void);
 int kpi_case_ctx_fifo(void);
 int kpi_case_ctx_coalesce(void);
@@ -108,11 +110,13 @@ static const struct kpi_case cases[] = {
 	{ "skb_helpers", kpi_case_skb_helpers },
 	{ "skb_vlan", kpi_case_skb_vlan },
 	{ "macros", kpi_case_macros },
+	{ "ieee80211_hdr", kpi_case_ieee80211_hdr },
 	{ "net_stubs", kpi_case_net_stubs },
 	{ "idr_rb", kpi_case_idr_rb },
 	{ "rhtable", kpi_case_rhtable },
 	{ "nla", kpi_case_nla },
 	{ "netdev_open", kpi_case_netdev_open },
+	{ "net_xmit", kpi_case_net_xmit },
 	{ "ctx_tasklet_thread", kpi_case_ctx_tasklet_thread },
 	{ "ctx_fifo", kpi_case_ctx_fifo },
 	{ "ctx_coalesce", kpi_case_ctx_coalesce },

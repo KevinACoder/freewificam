@@ -860,17 +860,27 @@ dev_queue_xmit(struct sk_buff *skb)
 gro_result_t
 napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb)
 {
+	/* no GRO engine on this port: hand the frame to the same seam the
+	 * non-NAPI path uses (ieee80211_rx_napi reaches here for every data
+	 * frame, because the driver passes its napi instance). */
 	(void)napi;
-	kfree_skb(skb);
+	(void)netif_rx(skb);
 	return GRO_CONSUMED;
 }
 
+/*
+ * The receive entries mac80211 actually calls.  They must funnel into the
+ * same presentation seam as netif_rx(): an image with a netif feed delivers
+ * there, an image without one drops the frame (netif_rx's own no-hook path).
+ * Freeing here instead made every received data frame disappear: the ARP
+ * reply that should answer the first ping was consumed by this stub
+ * (2026-11-11 C5-open, C6: rx_frames=0 with the association up).
+ */
 int
 netif_receive_skb(struct sk_buff *skb)
 {
 
-	kfree_skb(skb);
-	return NET_RX_DROP;
+	return netif_rx(skb);
 }
 
 void
@@ -883,7 +893,7 @@ netif_receive_skb_list(struct list_head *head)
 		return;
 	list_for_each_entry_safe(skb, tmp, head, list) {
 		list_del_init(&skb->list);
-		kfree_skb(skb);
+		(void)netif_rx(skb);
 	}
 }
 
@@ -940,6 +950,14 @@ __hw_addr_unsync(struct netdev_hw_addr_list *to_list,
  * honest answer: the poll is a deferred receive context, not a task's direct
  * call.  See lkpi_in_softirq() in linuxkpi_core.c. */
 unsigned int lkpi_napi_poll_depth;
+
+/* The driver's iTXQ dequeue is the transmit counterpart: mac80211's
+ * ieee80211_tx_dequeue() is called from iwlwifi's wake_tx_queue path, which on
+ * this port is a driver work/IRQ context, not a task's direct call.  The depth
+ * is incremented by the --wrap shim in tx_dequeue_context.c around the real
+ * dequeue; lkpi_in_softirq() reads it for the same reason it reads the NAPI
+ * depth. */
+unsigned int lkpi_tx_dequeue_depth;
 
 bool
 napi_schedule_prep(struct napi_struct *n)

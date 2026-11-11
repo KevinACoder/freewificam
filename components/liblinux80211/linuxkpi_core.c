@@ -555,7 +555,16 @@ size_t lkpi_kmem_size(const void *ptr)
  */
 volatile unsigned long jiffies;
 
-void lkpi_tick_advance(void)
+/*
+ * retain: the platform tick hook references this through a weak symbol (an
+ * image without the component must still link), and a weak reference does not
+ * keep a section under --gc-sections.  Without the attribute the definition was
+ * discarded, the weak pointer resolved to NULL, the CMSIS weak default
+ * vApplicationTickHook ran instead, and jiffies stayed 0 - mac80211's MLME
+ * timer then re-armed at the 1 ms clamp 19,501 times in 20 s and the assoc
+ * never left (2026-11-11 C5-open).
+ */
+__attribute__((retain)) void lkpi_tick_advance(void)
 {
 	jiffies = jiffies + 1ul;
 }
@@ -1598,13 +1607,16 @@ lkpi_local_bh_enable(void)
 }
 
 extern unsigned int lkpi_napi_poll_depth;
+extern unsigned int lkpi_tx_dequeue_depth;
 
 int
 lkpi_in_softirq(void)
 {
-	/* Tasklet/BH drain, or the synchronous NAPI poll (the driver's deferred
-	 * receive context); both are what the stack's softirq checks mean here. */
-	return lkpi_bh_inside != 0 || lkpi_napi_poll_depth != 0;
+	/* Tasklet/BH drain, the synchronous NAPI poll (the driver's deferred
+	 * receive context), or the driver's iTXQ dequeue (the deferred transmit
+	 * context).  All three are what the stack's softirq checks mean here. */
+	return lkpi_bh_inside != 0 || lkpi_napi_poll_depth != 0 ||
+	       lkpi_tx_dequeue_depth != 0;
 }
 
 static void

@@ -31,6 +31,21 @@
 #include "gicv3.h"
 #include "uart.h"
 
+/*
+ * The Linux clock's tick supply.  liblinux80211's jiffies advances once per
+ * RTOS tick; the component is not linked into every profile, so the reference
+ * is weak.  lkpi_tick_advance() is retained in the component, otherwise
+ * --gc-sections drops it (a weak reference does not keep a section), the
+ * pointer resolves to NULL and the CMSIS weak default hook silently wins.
+ */
+extern void lkpi_tick_advance(void) __attribute__((weak));
+
+void vApplicationTickHook(void)
+{
+	if (lkpi_tick_advance != NULL)
+		lkpi_tick_advance();
+}
+
 /* CNTV reload in counter ticks, computed once from the runtime counter
  * frequency (CNTFRQ is read, never assumed). */
 static uint32_t tick_reload;

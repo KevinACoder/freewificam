@@ -497,8 +497,16 @@ div_s64(s64 dividend, s32 divisor)
 #define	max(a, b)		((a) > (b) ? (a) : (b))
 #define	MIN(a, b)		min((a), (b))
 #define	MAX(a, b)		max((a), (b))
-#define	min_t(t, a, b)		((t)min((a), (b)))
-#define	max_t(t, a, b)		((t)max((a), (b)))
+/* Linux's min_t/max_t cast the operands to the named type BEFORE comparing
+ * (minmax.h's __cmp_once declares both as `type`); casting only the result
+ * lets the usual arithmetic conversions win.  mac80211's fast-xmit headroom
+ * is `extra_head + hw_headroom - skb_headroom(skb)`: the unsigned
+ * skb_headroom() makes the difference unsigned, so max_t(int, -44u, 0)
+ * returned -44, pskb_expand_head() saw a negative nhead and refused with
+ * EINVAL, and every data frame (the ARP before the first ping) died with
+ * "failed to reallocate TX buffer" (2026-11-11 C5-open, C6). */
+#define	min_t(t, a, b)		((t)min((t)(a), (t)(b)))
+#define	max_t(t, a, b)		((t)max((t)(a), (t)(b)))
 #define	clamp_val(v, lo, hi)	max(min((v), (hi)), (lo))
 /* [LNX] include/linux/compiler_types.h:430: `at_least` is the array-parameter
  * qualifier (`u8 out[at_least AES_BLOCK_SIZE]`), not an arithmetic helper; the
@@ -533,9 +541,14 @@ div_s64(s64 dividend, s32 divisor)
 		struct { MEMBERS } ATTRS;				\
 		struct TAG { MEMBERS } ATTRS NAME;			\
 	} ATTRS
-#define	struct_group(NAME, ...)					\
-	struct { __VA_ARGS__ };					\
-	struct { __VA_ARGS__ } NAME
+/* The interface's form is a union: the anonymous member and NAME overlap.
+ * Declaring the members twice in sequence (the first version of this macro)
+ * doubles the group, so every field after it moves: struct ieee80211_hdr's
+ * seq_ctrl landed at 40 instead of 22, and mac80211's defragment handler read
+ * two bytes past the 30-byte auth frame (slot-0 fence 0xb4b4) and dropped the
+ * association with RX_DROP_U_DEFRAG_MISMATCH (2026-11-11 C5-open). */
+#define	struct_group(NAME, ...)						\
+	__struct_group(/* no tag */, NAME, /* no attrs */, __VA_ARGS__)
 
 #define	VERIFY_OCTAL_PERMISSIONS(x)	(x)
 
@@ -2920,6 +2933,7 @@ int	lkpi_in_softirq(void);
  * preempt count; this port's equivalent state is the BH nesting flag, and the
  * interface only ever tests it for "am I in softirq context". */
 #define	softirq_count()			(in_softirq() ? 1 : 0)
+
 /* [LNX] include/linux/interrupt.h: the tasklet's containing local record. */
 /* [LNX] include/linux/mm.h: the head page of the page a virtual address sits
  * in; the body is the port's (S1c). */
@@ -3037,20 +3051,15 @@ skb_trim(struct sk_buff *skb, unsigned int len)
 	}
 }
 
-/* pskb_expand_head: no head/tail copies exist here (single linear
- * buffer); growing the tail would need a reallocation, which the rtw89
- * call sites only use to grow by noa_len before _skb_put.  Return the
- * failure path (-ENOMEM) so the driver takes its no-expand branch -
- * exactly what it would do on a failed allocation on Linux. */
-static __always_inline __unused int
-pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp)
-{
-	(void)skb;
-	(void)nhead;
-	(void)ntail;
-	(void)gfp;
-	return -ENOMEM;
-}
+/* pskb_expand_head: the linear pool can grow a buffer by allocating a new
+ * heap-backed one, moving the payload and the shared record, and releasing the
+ * old buffer's reference.  The body lives in skbuff_pool.c because that is
+ * where the buffer records and the reference counts are.  A fragmented buffer
+ * is refused (the page references would have to move); no compiled caller in
+ * this image hands one here.  mac80211's management transmit path needs this
+ * to add IEEE80211_ENCRYPT_HEADROOM; before it was real, every auth/assoc
+ * frame was dropped with "failed to reallocate TX buffer" (2026-11-11). */
+int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp);
 
 /* queue splice, Linux raw semantics ([LNX] skbuff.h): move ALL of list
  * onto the FRONT of head; the CALLER holds both queues' locks (the only

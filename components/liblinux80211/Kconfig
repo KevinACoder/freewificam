@@ -63,6 +63,15 @@ config LIBLINUX80211_NET_NONE
 config LIBLINUX80211_NET_NULL
 	bool "null egress (counts, frees; the seam test's second implementation)"
 
+config LIBLINUX80211_NET_LWIP
+	bool "lwIP (the wireless netif over wlan0; C6)"
+	help
+	  Links the lwIP stack and the two halves of the lkpinetif adapter: the
+	  netdev half in the component's Linux world, the netif/ICMP half in the
+	  lwIP world.  The case face is the plain-C trio in
+	  include/linux80211/net.h.  An image that selects this is the C6
+	  profile; the net case's wired bridges are a separate selection.
+
 endchoice
 endif
 

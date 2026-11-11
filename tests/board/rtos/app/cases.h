@@ -81,6 +81,9 @@ int case_iwl7260_c3_run(void);
 #if defined(RTOS_CASE_IWL7260_C4)
 int case_iwl7260_c4_run(void);
 #endif
+#if defined(RTOS_CASE_IWL7260_C5)
+int case_iwl7260_c5_run(void);
+#endif
 
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf

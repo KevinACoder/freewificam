@@ -26,14 +26,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct wiphy;
-
 /* --- the netdev side (implemented in lkpinetif.c) ------------------------- */
 
-/* Bind the adapter to the interface the driver registered: the address comes
- * from that net device, the transmit path is its own ndo_start_xmit, and the
- * receive hook only accepts frames that arrive on it.  Returns 0 on success. */
-int	lkpinetif_bind(struct wiphy *wiphy);
+/* Bind the adapter to the interface the driver registered, by name (the
+ * wireless netdev is "wlan0" in this line): the address comes from that net
+ * device, the transmit path is its own ndo_start_xmit, and the receive hook
+ * only accepts frames that arrive on it.  Returns 0 on success. */
+int	lkpinetif_bind(const char *ifname);
 
 /* The interface's hardware address (the driver set it from the chip before it
  * registered; its open path may fill it, so a caller reads it after bringing the

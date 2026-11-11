@@ -396,6 +396,105 @@ static void buf_ref_put(const struct lkpi_skb_buf_rec *rec, struct sk_buff *skb)
 	}
 }
 
+/*
+ * pskb_expand_head: grow the linear buffer by `nhead` bytes of headroom and
+ * `ntail` bytes of tailroom, preserving the payload and the shared record.
+ *
+ * Linux reallocates the same skb descriptor's buffer; this port does the same
+ * by allocating a heap-backed buffer (the pool slots have a fixed stride and
+ * cannot grow), moving the payload to its new offset, copying the trailing
+ * shared record, publishing the new buffer record on the skb's header slot or
+ * heap record, and dropping the old buffer's reference.  A clone of the old
+ * buffer keeps the old payload; the expanded skb owns the new one.
+ *
+ * Fragmented buffers are refused: their page references would have to move,
+ * and no compiled caller in this image hands one here.  The callers treat
+ * -ENOMEM as Linux's allocation failure, which is exactly what it is.
+ */
+int
+pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp)
+{
+	struct lkpi_skb_buf_rec oldrec, newrec;
+	struct skb_shared_info *old_sh, *new_sh;
+	unsigned char *newbuf, *newpayload;
+	unsigned int old_end, need, data_off;
+	unsigned long flags;
+	int slot, hi;
+
+	(void)gfp;
+	if (skb == NULL || nhead < 0 || ntail < 0)
+		return -EINVAL;
+	if (nhead == 0 && ntail == 0)
+		return 0;
+
+	flags = lkpi_spl_irqsave();
+	if (!object_buf_rec(skb, &oldrec) || !geom_ok(skb)) {
+		lkpi_spl_irqrestore(flags);
+		return -ENOMEM;
+	}
+	old_sh = skb_shinfo(skb);
+	if (old_sh->nr_frags != 0 || old_sh->frag_list != NULL) {
+		lkpi_spl_irqrestore(flags);
+		return -ENOMEM;
+	}
+
+	old_end = skb->end;
+	data_off = (unsigned int)(skb->data - skb->head);
+	need = old_end + (unsigned int)nhead + (unsigned int)ntail;
+
+	newbuf = lkpi_spl_malloc(8u + need + LKPI_SKB_SHINFO_MAXSZ);
+	if (newbuf == NULL) {
+		stats.alloc_fail++;
+		lkpi_spl_irqrestore(flags);
+		return -ENOMEM;
+	}
+	*(uint32_t *)(void *)newbuf = 1;
+	newpayload = newbuf + 8;
+	memcpy(newpayload + (unsigned int)nhead, skb->head, old_end);
+
+	new_sh = (struct skb_shared_info *)(((uintptr_t)newpayload + need + 7u) &
+	    ~(uintptr_t)7u);
+	memcpy(new_sh, old_sh, sizeof(*new_sh));
+
+	newrec.kind = LKPI_SKB_BUF_HEAP;
+	newrec.pad = 0;
+	newrec.idx = 0;
+	newrec.heap = newpayload;
+
+	slot = pool_slot_index(skb);
+	if (slot >= 0 && slot < (int)cfg_n_header &&
+	    skb_slots[slot]._gen != 0 &&
+	    skb_slots[slot]._gen != LKPI_SKB_FREED_MAGIC) {
+		slot_buf[slot] = newrec;
+	} else {
+		hi = heap_live_find(skb);
+		if (hi < 0) {
+			lkpi_spl_free(newbuf);
+			lkpi_spl_irqrestore(flags);
+			return -ENOMEM;
+		}
+		heap_live[hi].buf = newrec;
+	}
+
+	skb->head = newpayload;
+	skb->data = newpayload + (unsigned int)nhead + data_off;
+	skb->tail = (unsigned int)(skb->data - skb->head) + skb->len;
+	skb->end = need;
+	skb->truesize = (unsigned int)sizeof(*skb) + need;
+
+	stats.dyalloc_live++;
+	if (need > cfg_data_sz)
+		stats.dyalloc_oversize++;
+
+	/* The new record is the skb's; the old buffer's reference goes away.
+	 * frag_pages_release() reads the skb's (new) shared record, whose
+	 * fragment count is zero because fragmented buffers were refused. */
+	buf_ref_put(&oldrec, skb);
+
+	lkpi_spl_irqrestore(flags);
+	return 0;
+}
+
 /* canonical shape of a released header slot: every field zeroed, only the
  * generation carries the release magic. Anything else is slot corruption. */
 static void slot_mark_released(struct sk_buff *skb)
