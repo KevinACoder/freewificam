@@ -38,6 +38,8 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-mac80211-c2` | tick mac80211_c2 | the real mac80211/cfg80211 stack registers a wiphy (C2); no PCI engine |
 | `rk3568-iwl7260-mac80211` | tick pcie iwl7260_c3 | the same stack + the vendored iwlwifi (72 TUs) over the AC 7260: probe, firmware ALIVE, register, `dev_open` start (C3) |
 | `rk3568-iwl7260-c4` | tick pcie iwl7260_c4 | C3's attach plus the real `NL80211_CMD_TRIGGER_SCAN` stream through nl80211: hw scan, BSS table, bench AP (C4) |
+| `rk3568-iwl7260-c5` | tick pcie iwl7260_c5 | C4's scan plus `NL80211_CMD_CONNECT` through nl80211: open association, wl0 over wlan0, 56/1400 B ICMP 20/20 (C5/C6-open) |
+| `rk3568-iwl7260-c6` | tick pcie iwl7260_c5 iwl7260_c6 | C5's join in the same boot, then the seven C6T throughput phases (loopback/tcpdn/udpdn repeats/tcpup/udpup) with the adapter and lwIP phase census |
 | `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
 
 ```

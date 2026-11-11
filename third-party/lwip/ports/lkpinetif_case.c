@@ -17,6 +17,7 @@
  */
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "lwip/opt.h"
@@ -27,8 +28,10 @@
 #include "lwip/ip4_addr.h"
 #include "lwip/raw.h"
 #include "lwip/icmp.h"
+#include "lwip/udp.h"
 #include "lwip/inet_chksum.h"
 #include "lwip/sys.h"
+#include "lwip/apps/lwiperf.h"
 #include "arch/sys_arch.h"
 
 #include "os/cmsis2/cmsis2.h"
@@ -273,6 +276,415 @@ lkpi_net_ping(const char *dst, unsigned count, unsigned payload_len,
 	return ping_rx == count ? 0 : -1;
 }
 
+/* --- the throughput phases (C6T) -----------------------------------------
+ *
+ * One phase = one bounded window.  The case prints the anchors and this file
+ * owns the session: lwiperf speaks iperf2 (the bench peer runs iperf 2.2.1),
+ * and the UDP leg is the counting sink / fixed-length blast the wired `net`
+ * case already proved (tests/board/rtos/app/cases/net.c).
+ *
+ * Slot discipline: a phase sets `tp_slot` before it starts a session and
+ * clears it after the window.  The report callback is asynchronous (it runs
+ * in the TCP/IP thread), so a report is credited to the slot that was active
+ * when it arrived - a late loopback server report can never be counted as a
+ * downlink report.  A report with no slot is dropped.
+ */
+
+#define LKPINETIF_UDP_BLAST_LEN		1470u
+#define LKPINETIF_UDP_BLAST_BURST	64u
+
+enum lkpinetif_tp_slot {
+	TP_SLOT_NONE = 0,
+	TP_SLOT_DOWN,
+	TP_SLOT_UP,
+	TP_SLOT_LOOP,
+};
+
+static volatile int tp_slot = TP_SLOT_NONE;
+static volatile unsigned tp_down_done, tp_down_bytes, tp_down_ms, tp_down_kbit;
+static volatile unsigned tp_up_done, tp_up_bytes, tp_up_ms, tp_up_kbit;
+static volatile unsigned tp_lo_done, tp_lo_bytes, tp_lo_ms, tp_lo_kbit;
+
+static void *g_iperf_server;
+static unsigned g_iperf_server_port;
+
+static struct udp_pcb *g_udp_sink;
+static unsigned g_udp_sink_port;
+static volatile unsigned g_udp_pkts;
+static volatile unsigned g_udp_bytes;
+
+static void
+tp_report(void *arg, enum lwiperf_report_type type,
+	  const ip_addr_t *local_addr, u16_t local_port,
+	  const ip_addr_t *remote_addr, u16_t remote_port,
+	  u32_t bytes, u32_t ms, u32_t kbitpsec)
+{
+	int slot = tp_slot;
+
+	(void)arg;
+	(void)local_addr;
+	(void)local_port;
+	(void)remote_addr;
+	(void)remote_port;
+
+	if (slot == TP_SLOT_NONE)
+		return;
+
+	if (type == LWIPERF_TCP_DONE_SERVER) {
+		if (slot == TP_SLOT_DOWN) {
+			tp_down_bytes = (unsigned)bytes;
+			tp_down_ms = (unsigned)ms;
+			tp_down_kbit = (unsigned)kbitpsec;
+			tp_down_done = 1;
+		} else if (slot == TP_SLOT_LOOP) {
+			/* the loopback session's server half: either half's
+			 * completion closes the attribution phase */
+			tp_lo_bytes = (unsigned)bytes;
+			tp_lo_ms = (unsigned)ms;
+			tp_lo_kbit = (unsigned)kbitpsec;
+			tp_lo_done = 1;
+		}
+	} else if (type == LWIPERF_TCP_DONE_CLIENT) {
+		if (slot == TP_SLOT_UP) {
+			tp_up_bytes = (unsigned)bytes;
+			tp_up_ms = (unsigned)ms;
+			tp_up_kbit = (unsigned)kbitpsec;
+			tp_up_done = 1;
+		} else if (slot == TP_SLOT_LOOP) {
+			tp_lo_bytes = (unsigned)bytes;
+			tp_lo_ms = (unsigned)ms;
+			tp_lo_kbit = (unsigned)kbitpsec;
+			tp_lo_done = 1;
+		}
+	}
+}
+
+static void
+tp_phase_fill(struct lkpi_net_phase *out, int done, unsigned bytes,
+	      unsigned ms, unsigned kbit, unsigned pkts)
+{
+	if (out == NULL)
+		return;
+	out->done = done ? 1 : 0;
+	out->bytes = bytes;
+	out->ms = ms;
+	out->kbit = kbit;
+	out->pkts = pkts;
+}
+
+static unsigned
+tp_kbit(unsigned bytes, unsigned ms)
+{
+	return (ms != 0u) ? (unsigned)(((uint64_t)bytes * 8u) / ms) : 0u;
+}
+
+int
+lkpi_net_iperf_server_start(unsigned port)
+{
+	if (g_iperf_server != NULL)
+		return (g_iperf_server_port == port) ? 0 : -1;
+	if (port == 0u || port > 65535u)
+		return -1;
+
+	LOCK_TCPIP_CORE();
+	g_iperf_server = lwiperf_start_tcp_server(IP_ANY_TYPE, (u16_t)port,
+	    tp_report, NULL);
+	g_iperf_server_port = port;
+	UNLOCK_TCPIP_CORE();
+
+	return g_iperf_server != NULL ? 0 : -1;
+}
+
+int
+lkpi_net_ready(void)
+{
+	return (g_stack_state == 1 && netif_is_up(&g_netif)) ? 1 : 0;
+}
+
+int
+lkpi_net_iperf_down_begin(void)
+{
+	tp_down_done = 0u;
+	tp_down_bytes = 0u;
+	tp_down_ms = 0u;
+	tp_down_kbit = 0u;
+	tp_slot = TP_SLOT_DOWN;
+	return 0;
+}
+
+int
+lkpi_net_iperf_down_poll(struct lkpi_net_phase *out)
+{
+	if (out == NULL)
+		return -1;
+	memset(out, 0, sizeof(*out));
+	tp_phase_fill(out, tp_down_done, tp_down_bytes, tp_down_ms,
+	    tp_down_kbit, 0u);
+	return out->done ? 0 : 1;
+}
+
+void
+lkpi_net_iperf_down_end(void)
+{
+	tp_slot = TP_SLOT_NONE;
+}
+
+int
+lkpi_net_iperf_down(unsigned port, unsigned window_ms,
+		    struct lkpi_net_phase *out)
+{
+	unsigned waited;
+
+	if (out == NULL)
+		return -1;
+	memset(out, 0, sizeof(*out));
+	if (lkpi_net_iperf_server_start(port) != 0)
+		return -1;
+
+	(void)lkpi_net_iperf_down_begin();
+	for (waited = 0u; (waited < window_ms) && (tp_down_done == 0u);
+	     waited += 50u)
+		(void)osDelay(50u);
+	lkpi_net_iperf_down_end();
+
+	tp_phase_fill(out, tp_down_done, tp_down_bytes, tp_down_ms,
+	    tp_down_kbit, 0u);
+
+	return (out->done != 0 && out->bytes != 0u) ? 0 : -1;
+}
+
+int
+lkpi_net_iperf_up(const char *peer, unsigned port, unsigned wait_ms,
+		  struct lkpi_net_phase *out)
+{
+	ip_addr_t addr;
+	void *client;
+	unsigned waited;
+
+	if ((out == NULL) || (peer == NULL) || (port == 0u) || (port > 65535u))
+		return -1;
+	if (ip4addr_aton(peer, &addr) == 0)
+		return -1;
+	memset(out, 0, sizeof(*out));
+
+	tp_up_done = 0u;
+	tp_up_bytes = 0u;
+	tp_up_ms = 0u;
+	tp_up_kbit = 0u;
+	tp_slot = TP_SLOT_UP;
+
+	LOCK_TCPIP_CORE();
+	client = lwiperf_start_tcp_client(&addr, (u16_t)port, LWIPERF_CLIENT,
+	    tp_report, NULL);
+	UNLOCK_TCPIP_CORE();
+	if (client == NULL) {
+		tp_slot = TP_SLOT_NONE;
+		return -1;
+	}
+
+	/* The client half is time-limited by lwiperf's own settings
+	 * (amount = -1000 -> 10 s), so this wait is a ceiling, not a pace. */
+	for (waited = 0u; (waited < wait_ms) && (tp_up_done == 0u);
+	     waited += 50u)
+		(void)osDelay(50u);
+
+	tp_slot = TP_SLOT_NONE;
+	tp_phase_fill(out, tp_up_done, tp_up_bytes, tp_up_ms, tp_up_kbit, 0u);
+
+	return (out->done != 0 && out->bytes != 0u) ? 0 : -1;
+}
+
+static void
+udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+	      const ip_addr_t *addr, u16_t port)
+{
+	(void)arg;
+	(void)pcb;
+	(void)addr;
+	(void)port;
+
+	if (p == NULL)
+		return;
+	g_udp_pkts++;
+	g_udp_bytes += p->tot_len;
+	pbuf_free(p);
+}
+
+int
+lkpi_net_udp_sink_start(unsigned port)
+{
+	struct udp_pcb *pcb;
+
+	if (g_udp_sink != NULL)
+		return (g_udp_sink_port == port) ? 0 : -1;
+	if (port == 0u || port > 65535u)
+		return -1;
+
+	LOCK_TCPIP_CORE();
+	pcb = udp_new();
+	if (pcb != NULL) {
+		udp_recv(pcb, udp_sink_recv, NULL);
+		if (udp_bind(pcb, IP_ANY_TYPE, (u16_t)port) != ERR_OK) {
+			udp_remove(pcb);
+			pcb = NULL;
+		}
+	}
+	UNLOCK_TCPIP_CORE();
+
+	if (pcb == NULL)
+		return -1;
+	g_udp_sink = pcb;
+	g_udp_sink_port = port;
+	return 0;
+}
+
+int
+lkpi_net_udp_sink_window(unsigned window_ms, struct lkpi_net_phase *out)
+{
+	unsigned t0;
+	unsigned ms;
+	unsigned waited;
+
+	if (out == NULL)
+		return -1;
+	memset(out, 0, sizeof(*out));
+
+	LOCK_TCPIP_CORE();
+	g_udp_pkts = 0u;
+	g_udp_bytes = 0u;
+	UNLOCK_TCPIP_CORE();
+
+	t0 = (unsigned)sys_now();
+	for (waited = 0u; waited < window_ms; waited += 50u)
+		(void)osDelay(50u);
+	ms = (unsigned)sys_now() - t0;
+
+	tp_phase_fill(out, (g_udp_bytes != 0u), g_udp_bytes, ms,
+	    tp_kbit(g_udp_bytes, ms), g_udp_pkts);
+
+	return (g_udp_bytes != 0u) ? 0 : -1;
+}
+
+int
+lkpi_net_udp_blast(const char *peer, unsigned port, unsigned window_ms,
+		   unsigned rate_kbps, struct lkpi_net_phase *out)
+{
+	struct udp_pcb *pcb;
+	struct pbuf *p;
+	ip_addr_t addr;
+	uint64_t t0, deadline;
+	unsigned sent = 0u;
+	unsigned pkts = 0u;
+	unsigned per_quantum;
+	unsigned ms;
+
+	if ((out == NULL) || (peer == NULL) || (port == 0u) || (port > 65535u))
+		return -1;
+	if (ip4addr_aton(peer, &addr) == 0)
+		return -1;
+	memset(out, 0, sizeof(*out));
+
+	pcb = udp_new();
+	if (pcb == NULL)
+		return -1;
+	p = pbuf_alloc(PBUF_TRANSPORT, LKPINETIF_UDP_BLAST_LEN, PBUF_RAM);
+	if (p == NULL) {
+		udp_remove(pcb);
+		return -1;
+	}
+	(void)memset(p->payload, 0x5au, LKPINETIF_UDP_BLAST_LEN);
+	if (udp_connect(pcb, &addr, (u16_t)port) != ERR_OK) {
+		pbuf_free(p);
+		udp_remove(pcb);
+		return -1;
+	}
+
+	/* sys_now() is the stack's own millisecond clock; a 1 ms quantum on a
+	 * 20 s window is 0.005%, far below the phase's own noise.
+	 *
+	 * Pacing: `rate_kbps` is split into 10 ms quanta (a 10 ms burst is short
+	 * enough for the TCP/IP thread and the RX path to run between bursts).
+	 * An unpaced blast is kept for the wired capacity shape, but on Wi-Fi it
+	 * overruns the skb pool and the transmit entry refuses most frames - the
+	 * delivered byte count then measures backpressure, not capacity. */
+	/* bytes per 10 ms = rate/8/100; split into full datagrams */
+	per_quantum = (rate_kbps != 0u)
+		? (unsigned)(((uint64_t)rate_kbps * 1000u) / 8u / 100u /
+			     LKPINETIF_UDP_BLAST_LEN)
+		: LKPINETIF_UDP_BLAST_BURST;
+	if (per_quantum == 0u)
+		per_quantum = 1u;
+	t0 = (uint64_t)sys_now();
+	deadline = t0 + (uint64_t)window_ms;
+	for (;;) {
+		unsigned before = pkts;
+		unsigned i;
+
+		LOCK_TCPIP_CORE();
+		for (i = 0u; i < per_quantum; i++) {
+			if (udp_send(pcb, p) != ERR_OK)
+				break;
+			pkts++;
+			sent += p->tot_len;
+		}
+		UNLOCK_TCPIP_CORE();
+		if (pkts == before) {
+			/* The transmit ring is full: one tick for the
+			 * completion path is enough to make progress. */
+			(void)osDelay(1u);
+		}
+		if (rate_kbps != 0u)
+			(void)osDelay(10u);
+		if ((uint64_t)sys_now() >= deadline)
+			break;
+	}
+	ms = (unsigned)((uint64_t)sys_now() - t0);
+
+	tp_phase_fill(out, (sent != 0u), sent, ms, tp_kbit(sent, ms), pkts);
+
+	pbuf_free(p);
+	udp_remove(pcb);
+	return (sent != 0u) ? 0 : -1;
+}
+
+int
+lkpi_net_loopback(unsigned port, unsigned window_ms,
+		  struct lkpi_net_phase *out)
+{
+	ip_addr_t lo;
+	void *client;
+	unsigned waited;
+
+	if (out == NULL)
+		return -1;
+	memset(out, 0, sizeof(*out));
+
+	tp_lo_done = 0u;
+	tp_lo_bytes = 0u;
+	tp_lo_ms = 0u;
+	tp_lo_kbit = 0u;
+	tp_slot = TP_SLOT_LOOP;
+
+	IP_ADDR4(&lo, 127, 0, 0, 1);
+	LOCK_TCPIP_CORE();
+	client = lwiperf_start_tcp_client(&lo, (u16_t)port, LWIPERF_CLIENT,
+	    tp_report, NULL);
+	UNLOCK_TCPIP_CORE();
+	if (client == NULL) {
+		tp_slot = TP_SLOT_NONE;
+		return -1;
+	}
+
+	for (waited = 0u; (waited < window_ms) && (tp_lo_done == 0u);
+	     waited += 50u)
+		(void)osDelay(50u);
+
+	tp_slot = TP_SLOT_NONE;
+	tp_phase_fill(out, tp_lo_done, tp_lo_bytes, tp_lo_ms, tp_lo_kbit, 0u);
+
+	return (out->done != 0 && out->bytes != 0u) ? 0 : -1;
+}
+
 /* --- counters ------------------------------------------------------------- */
 
 void
@@ -293,4 +705,33 @@ lkpi_net_diag(struct lkpi_net_diag *out)
 	out->tx_fail = d.tx_fail;
 	out->rx_bytes = d.rx_bytes;
 	out->tx_bytes = d.tx_bytes;
+	out->rx_deliver_ns = (unsigned long)d.rx_deliver_ns;
+	out->rx_deliver_max_ns = (unsigned long)d.rx_deliver_max_ns;
+	out->tx_ndo_ns = (unsigned long)d.tx_ndo_ns;
+	out->tx_ndo_max_ns = (unsigned long)d.tx_ndo_max_ns;
+}
+
+void
+lkpi_net_stack_diag(struct lkpi_net_stack_diag *out)
+{
+	struct lkpinetif_stack_diag d;
+
+	if (out == NULL)
+		return;
+	memset(out, 0, sizeof(*out));
+	lkpinetif_get_stack_diag(&d);
+	out->tcp_recv = d.tcp_recv;
+	out->tcp_xmit = d.tcp_xmit;
+	out->tcp_drop = d.tcp_drop;
+	out->tcp_memerr = d.tcp_memerr;
+	out->tcp_err = d.tcp_err;
+	out->pbuf_avail = d.pbuf_avail;
+	out->pbuf_err = d.pbuf_err;
+	out->tcpseg_avail = d.tcpseg_avail;
+	out->tcpseg_err = d.tcpseg_err;
+	out->mbox_post_ok = d.mbox_post_ok;
+	out->mbox_post_full = d.mbox_post_full;
+	out->mbox_fetch_ok = d.mbox_fetch_ok;
+	out->mbox_fetch_empty = d.mbox_fetch_empty;
+	out->mbox_fetch_wait_ms = (unsigned long)d.mbox_fetch_wait_ms;
 }

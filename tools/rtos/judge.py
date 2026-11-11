@@ -34,6 +34,8 @@ CASES = (
     "iwl7260_c3",
     "iwl7260_c4",
     "iwl7260_c5",
+    "iwl7260_c6",
+    "iwl7260_stab",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -262,6 +264,32 @@ PATTERNS = {
     "iwl7260_c5_pass_c6": re.compile(r"iwl7260_c5: PASS C6", re.MULTILINE),
     "iwl7260_c5_fail": re.compile(
         r"iwl7260_c5: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # C6 throughput round: the plan line, the two listeners, and the case's
+    # own verdict.  The 80% gate is the harness report's, not the judge's.
+    "iwl7260_c6_plan": re.compile(
+        r"iwl7260_c6: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"dev=(?P<dev>\S+)", re.MULTILINE
+    ),
+    "iwl7260_c6_ready": re.compile(
+        r"iwl7260_c6: ready netif=(?P<netif>[01]) rx_frames=(?P<rx>\d+) "
+        r"tx_frames=(?P<tx>\d+)", re.MULTILINE
+    ),
+    "iwl7260_c6_server": re.compile(
+        r"iwl7260_c6: server tcp=(?P<tcp>\d+) udp=(?P<udp>\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    "iwl7260_c6_pass": re.compile(r"iwl7260_c6: PASS C6T", re.MULTILINE),
+    "iwl7260_c6_fail": re.compile(
+        r"iwl7260_c6: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_stab_plan": re.compile(
+        r"iwl7260_stab: plan=stability bssid=(?P<bssid>[0-9a-f:]+) "
+        r"dev=(?P<dev>\S+)", re.MULTILINE
+    ),
+    "iwl7260_stab_pass": re.compile(r"iwl7260_stab: PASS STAB", re.MULTILINE),
+    "iwl7260_stab_fail": re.compile(
+        r"iwl7260_stab: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "kpi_pci_devs": re.compile(r"kpi: pci devs=(?P<n>\d+)", re.MULTILINE),
     "kpi_dev": re.compile(
@@ -767,6 +795,28 @@ PATTERNS = {
 # a phase's absence stays visible as an absence and a second run does not hide
 # the first.
 LIST_PATTERNS = {
+    "iwl7260_c6_begin": re.compile(
+        r"iwl7260_c6: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) "
+        r"name=(?P<name>\S+)", re.MULTILINE),
+    "iwl7260_c6_report": re.compile(
+        r"iwl7260_c6: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE),
+    "iwl7260_stab_health": re.compile(
+        r"iwl7260_stab: health t=(?P<t>\d+) rxf=(?P<rx>\d+) "
+        r"txf=(?P<tx>\d+) heap_free=(?P<hf>\d+) heap_min=(?P<hm>\d+) "
+        r"pool_used=(?P<pu>\d+) pool_high=(?P<ph>\d+)", re.MULTILINE),
+    "iwl7260_stab_long": re.compile(
+        r"iwl7260_stab: long report done=(?P<done>[01]) "
+        r"bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
+        re.MULTILINE),
+    "iwl7260_stab_recon": re.compile(
+        r"iwl7260_stab: reconnect n=(?P<n>\d+) ok=(?P<ok>[01]) "
+        r"ms=(?P<ms>\d+)( ping=(?P<rx>\d+)/(?P<total>\d+))?",
+        re.MULTILINE),
+    "iwl7260_c6_done": re.compile(
+        r"iwl7260_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE),
     "iwl7260_c5_ping": re.compile(
         r"iwl7260_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
         r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
@@ -1689,6 +1739,88 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"bytes={diag['txb']}/{diag['rxb']}")
         if not found["iwl7260_c5_pass_c6"]:
             errors.append("iwl7260_c5: the C6 PASS line is missing")
+
+    if cases.get("iwl7260_c6", {}).get("verdict") == "pass":
+        fail = found["iwl7260_c6_fail"]
+        if fail:
+            errors.append(f"iwl7260_c6: {fail['reason']}")
+        plan = found["iwl7260_c6_plan"]
+        if not plan:
+            errors.append("iwl7260_c6: PASS without the plan line")
+        elif plan["plan"] != "throughput":
+            errors.append(f"iwl7260_c6: plan={plan['plan']}")
+        ready = found["iwl7260_c6_ready"]
+        if not ready:
+            errors.append("iwl7260_c6: PASS without the ready line")
+        elif ready["netif"] != "1":
+            errors.append("iwl7260_c6: the lwIP netif was not up")
+        elif int(ready["rx"]) == 0 or int(ready["tx"]) == 0:
+            errors.append(
+                f"iwl7260_c6: adapter counters rx={ready['rx']} "
+                f"tx={ready['tx']}")
+        server = found["iwl7260_c6_server"]
+        if not server:
+            errors.append("iwl7260_c6: PASS without the server line")
+        elif server["ok"] != "1":
+            errors.append("iwl7260_c6: a listener did not start")
+        begins = {b["name"]: b for b in found["iwl7260_c6_begin"]}
+        reports = {r["n"]: r for r in found["iwl7260_c6_report"]}
+        dones = {d["n"]: d for d in found["iwl7260_c6_done"]}
+        for name in ("tcpdn", "udpdn", "tcpdn2", "udpdn2", "tcpup", "udpup"):
+            b = begins.get(name)
+            if not b:
+                errors.append(f"iwl7260_c6: no begin anchor for {name}")
+                continue
+            r = reports.get(b["n"])
+            if not r:
+                errors.append(f"iwl7260_c6: no report for {name}")
+                continue
+            if int(r["bytes"]) == 0:
+                errors.append(f"iwl7260_c6: {name} moved no bytes")
+            d = dones.get(b["n"])
+            if d is None or d["ok"] != "1":
+                errors.append(f"iwl7260_c6: {name} did not complete")
+            notes.append(
+                f"iwl7260_c6: {name} {r['kbit']} kbit/s "
+                f"({r['ms']} ms, {r['bytes']} B)")
+        if not found["iwl7260_c6_pass"]:
+            errors.append("iwl7260_c6: the C6T PASS line is missing")
+
+    if cases.get("iwl7260_stab", {}).get("verdict") == "pass":
+        fail = found["iwl7260_stab_fail"]
+        if fail:
+            errors.append(f"iwl7260_stab: {fail['reason']}")
+        plan = found["iwl7260_stab_plan"]
+        if not plan:
+            errors.append("iwl7260_stab: PASS without the plan line")
+        health = found["iwl7260_stab_health"]
+        if len(health) < 50:
+            errors.append(
+                f"iwl7260_stab: only {len(health)} health lines for a "
+                "30-minute run")
+        long = found["iwl7260_stab_long"]
+        if not long:
+            errors.append("iwl7260_stab: PASS without the long report")
+        elif long["done"] != "1" or int(long["bytes"]) == 0:
+            errors.append(
+                f"iwl7260_stab: long run done={long['done']} "
+                f"bytes={long['bytes']}")
+        else:
+            notes.append(
+                f"iwl7260_stab: long {long['kbit']} kbit/s over "
+                f"{long['ms']} ms")
+        recons = {r["n"]: r for r in found["iwl7260_stab_recon"]}
+        for n in range(1, 11):
+            r = recons.get(str(n))
+            if r is None:
+                errors.append(f"iwl7260_stab: no reconnect line for n={n}")
+            elif r["ok"] != "1":
+                errors.append(f"iwl7260_stab: reconnect n={n} failed")
+            else:
+                notes.append(
+                    f"iwl7260_stab: reconnect {n} ok ({r['ms']} ms)")
+        if not found["iwl7260_stab_pass"]:
+            errors.append("iwl7260_stab: the STAB PASS line is missing")
 
     if cases.get("mac80211_c2", {}).get("verdict") == "pass":
         fail = found["mac80211_c2_fail"]

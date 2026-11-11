@@ -94,8 +94,99 @@ struct lkpi_net_diag {
 	unsigned long tx_fail;
 	unsigned long rx_bytes;
 	unsigned long tx_bytes;
+	unsigned long rx_deliver_ns;
+	unsigned long rx_deliver_max_ns;
+	unsigned long tx_ndo_ns;
+	unsigned long tx_ndo_max_ns;
 };
 
 void lkpi_net_diag(struct lkpi_net_diag *out);
+
+/* --- the throughput phases (C6T) -----------------------------------------
+ *
+ * The case drives the same seven phases on both arms; each call below is one
+ * phase and fills what the phase's *receiver* measured.  The case prints,
+ * the harness compares; no call applies a pass threshold.
+ *
+ * `kbit` is lwIP's own report unit (kbit/s); the UDP marker computes it from
+ * the same bytes/ms the sink counted, so the two directions read alike.
+ */
+struct lkpi_net_phase {
+	int done;		/* the phase's completion actually arrived */
+	unsigned bytes;		/* payload bytes counted at the receiver */
+	unsigned ms;		/* the phase's own measured duration */
+	unsigned kbit;		/* kbit/s (payload, not line rate) */
+	unsigned pkts;		/* UDP datagrams (0 for TCP phases) */
+};
+
+/* Start the boot's one lwiperf TCP server on `port`.  Returns 0 when it is
+ * listening (a second call with the same port is a no-op), -1 otherwise. */
+int lkpi_net_iperf_server_start(unsigned port);
+
+/* 1 when the one-shot stack bring-up completed and the wireless netif was
+ * added; 0 before that (the C5 case owns both). */
+int lkpi_net_ready(void);
+
+/* A downlink session the caller itself paces (the stability case's long run):
+ * begin arms the server's report slot, poll returns the current state without
+ * waiting (`done` stays 0 until the peer closes), end releases the slot. */
+int lkpi_net_iperf_down_begin(void);
+int lkpi_net_iperf_down_poll(struct lkpi_net_phase *out);
+void lkpi_net_iperf_down_end(void);
+
+/* Serve one TCP session for at most `window_ms` (the peer connects into the
+ * board).  Fills the server-side report.  Returns 0 when a session completed
+ * and moved bytes, -1 on a missing peer or an empty session. */
+int lkpi_net_iperf_down(unsigned port, unsigned window_ms,
+			struct lkpi_net_phase *out);
+
+/* Initiate one TCP session to `peer:port` (the board is the sender).  Waits
+ * at most `wait_ms`; fills the client-side report.  Returns 0 when the
+ * session completed and moved bytes. */
+int lkpi_net_iperf_up(const char *peer, unsigned port, unsigned wait_ms,
+		      struct lkpi_net_phase *out);
+
+/* Bind the UDP counting sink on `port` once per boot. */
+int lkpi_net_udp_sink_start(unsigned port);
+
+/* One sink window: counters are reset at entry, so a phase is one number.
+ * `bytes`/`pkts` are what arrived; `kbit` is derived from the window. */
+int lkpi_net_udp_sink_window(unsigned window_ms, struct lkpi_net_phase *out);
+
+/* Blast 1470-byte datagrams at `peer:port` for `window_ms`, paced at
+ * `rate_kbps` (0 = unpaced, the wired net case's capacity shape).  On Wi-Fi an
+ * unpaced blast saturates the skb pool and the transmit entry starts refusing
+ * frames, so the delivered rate stops being a capacity read; 40000 matches the
+ * peer arm's `iperf -u -b 40M`.  The counts are what was offered; the Pi's
+ * counting sink is the receiver's witness. */
+int lkpi_net_udp_blast(const char *peer, unsigned port, unsigned window_ms,
+		       unsigned rate_kbps, struct lkpi_net_phase *out);
+
+/* Board-local TCP session (127.0.0.1:port) against the running server.  This
+ * is an attribution instrument, never a pass criterion: both endpoints share
+ * one TCP/IP thread. */
+int lkpi_net_loopback(unsigned port, unsigned window_ms,
+		      struct lkpi_net_phase *out);
+
+/* The lwIP stack's own counters, copied out for the phase census.  Deltas are
+ * the caller's job. */
+struct lkpi_net_stack_diag {
+	unsigned long tcp_recv;
+	unsigned long tcp_xmit;
+	unsigned long tcp_drop;
+	unsigned long tcp_memerr;
+	unsigned long tcp_err;
+	unsigned long pbuf_avail;
+	unsigned long pbuf_err;
+	unsigned long tcpseg_avail;
+	unsigned long tcpseg_err;
+	unsigned long mbox_post_ok;
+	unsigned long mbox_post_full;
+	unsigned long mbox_fetch_ok;
+	unsigned long mbox_fetch_empty;
+	unsigned long mbox_fetch_wait_ms;
+};
+
+void lkpi_net_stack_diag(struct lkpi_net_stack_diag *out);
 
 #endif /* LINUX80211_NET_H */
