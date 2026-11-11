@@ -29,10 +29,39 @@ needs a board that boots before it needs a stack that links:
 | RTOS baseline builds and boots (`rk3568-tick`) | done, 2/2 |
 | Four acceptance images build and boot (network, PCIe/NVMe, eMMC, USB storage) | done, 2/2 each, judged |
 | `components/liblinux80211` (linuxkpi + PCI/SDIO engines + seams) | landed; `rk3568-kpi-live`/`-mock` 2/2 |
-| mac80211 + cfg80211 + iwlwifi | next stage (S0/A) |
+| mac80211 + cfg80211 + iwlwifi | C0-C6 reached: register, attach, scan, join, data plane (2/2 cold boots each) |
+| C6 throughput / stability | measured on the AC 7260 bench; numbers below |
+| AP role (RTOS as AP, Pi 4B as STA) | next stage |
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
 build's design and how a new world is added.
+
+## Measured on the AC 7260 bench
+
+The bench AP is the RTL8812AU `labwifi-ar-ht20s` on channel 5 (2432 MHz,
+**2.4 GHz**, HT20, open, WMM).  The same AC 7260 sits on the RK3568.  Both
+arms use iperf2 and the receiver-side number, two cold boots averaged
+(2026-11-11):
+
+| | GT (`63a2a8ab9cd3`) | this port |
+|---|---|---|
+| PHY link (`iw link`) | 144.4 Mbit/s, MCS15, short GI, 2x2 | not printed; the 60 Mbit/s TCP downlink already requires HT |
+| TCP downlink | 42.4 Mbit/s | **60.5 Mbit/s** |
+| TCP uplink | 24.85 Mbit/s | 23.18 Mbit/s (93% of GT) |
+| UDP 40 M downlink | 41.4 Mbit/s, 0% loss | 37.9 Mbit/s, 0% loss |
+
+**144.4 Mbit/s is the PHY rate, not throughput.**  It is two spatial streams at
+72.2 Mbit/s on a 20 MHz channel with short GI, on 2.4 GHz channel 5 - not 5 GHz.
+The TCP numbers are what the stack actually moves.  The downlink is higher than
+the GT arm; the uplink was 78.8% of GT until the skb data pool went from 64 to
+128 slots (+18.4%, a one-variable arm).  On the same image a 30-minute TCP
+downlink moved 13.95 GB at the adapter (peer 60.4 Mbit/s), ten reconnects took
+0.7-0.9 s each, and no boot reset.
+
+Reproduce: build `PROFILE=rk3568-iwl7260-c6-pool128` (or `-c6` for the clean
+baseline) and drive `tools/rtos/c6-throughput.sh`; the GT arm is the same
+`Image-gt-63a2a8ab9cd3` booted by the project's GT runner; `tools/rtos/c6-report.py`
+applies the 80% / 1% / three-source gates.
 
 ## Why
 
