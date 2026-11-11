@@ -33,3 +33,10 @@ CONFIG_LIBLINUX80211_NET_LWIP=y
 # FreeRTOS heap (osMemoryAlloc -> pvPortMalloc); the AP's beacon templates and
 # the lwIP pool/pbufs/TCP-IP thread stack come from the same heap.
 CONFIG_FREERTOS_HEAP_SIZE=16777216
+
+# The AP case drives the MLME's nl80211 commands from the runner task
+# (NL80211_CMD_NEW_STATION / SET_STATION / FRAME), and those enter mac80211 and
+# iwlwifi with their own locals.  The 2026-11-12 first boot overflowed the 8 KiB
+# default right after NEW_STATION succeeded; 24 KiB covers the chain and is
+# still nothing against the 16 MiB heap.
+CONFIG_RUNNER_STACK_KB=24

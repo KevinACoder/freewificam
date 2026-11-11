@@ -25,6 +25,10 @@ Usage:
         [--gt-tags gt1,gt2] [--rtos-tags rtos1,rtos2] [--json REPORT.json] \
         [--markdown -]
 
+The GT arm may live in an earlier round's directory: the pre-registration
+keeps the same denominator when the bench has not moved, so --gt-run names the
+run whose board/, pi/ and evidence/ trees carry the GT boots (default: --run).
+
 Exit 0 only when every gate that has data is true; a missing cell is reported
 as `missing`, never fabricated.
 """
@@ -298,6 +302,9 @@ def aggregate(boots: list[dict], field: str, mode: str = "mean") -> float | None
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True)
+    ap.add_argument("--gt-run", default=None,
+                    help="directory holding the GT arm's board/pi/evidence "
+                         "(default: --run)")
     ap.add_argument("--gt-tags", default="gt1,gt2")
     ap.add_argument("--rtos-tags", default="rtos1,rtos2")
     ap.add_argument("--json", default=None)
@@ -305,7 +312,8 @@ def main() -> int:
     args = ap.parse_args()
 
     run = Path(args.run)
-    gt = [gt_boot(run, t) for t in args.gt_tags.split(",") if t]
+    gt_run = Path(args.gt_run) if args.gt_run else run
+    gt = [gt_boot(gt_run, t) for t in args.gt_tags.split(",") if t]
     rtos = [rtos_boot(run, t) for t in args.rtos_tags.split(",") if t]
 
     gt_v = [b for b in gt if b["valid"]]

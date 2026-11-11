@@ -29,6 +29,7 @@
 
 #include "linuxkpi_core.h"
 #include "linux80211/nl80211_probe.h"
+#include "linux80211/ap_mlme.h"
 
 static int
 nl80211_doit(const struct genl_family *family, struct net_device *dev,
@@ -587,4 +588,219 @@ lkpi_nl80211_iftype(struct net_device *dev)
 	type = (int)wdev->iftype;
 	wiphy_unlock(wdev->wiphy);
 	return type;
+}
+
+/* --- the AP MLME's three actions (2026-11-12) ----------------------------
+ *
+ * These are the commands hostapd issues after it has parsed the management
+ * frame: NL80211_CMD_FRAME for the response, NEW_STATION to create the client,
+ * SET_STATION to open the controlled port.  They go through the same real
+ * handler chain as the rest of this file (the socket is the only absence).
+ */
+
+/*
+ * NL80211_CMD_FRAME.  DONT_WAIT_FOR_ACK is what makes this path socket-free:
+ * with it, nl80211_tx_mgmt() skips the NL80211_CMD_FRAME reply it would
+ * otherwise unicast to a portid (stack/wireless/nl80211.c:14838-14847).
+ * mac80211 then sends the frame with IEEE80211_TX_CTL_NO_ACK on the AP's
+ * current channel; the rate is the driver's lowest basic rate, as hostapd's
+ * frames were (1.0 Mb/s on ch11).
+ */
+int
+lkpi_nl80211_mgmt_tx(struct net_device *dev, const void *frame,
+		     unsigned int len, int no_cck)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	int rc;
+
+	if (dev == NULL || frame == NULL || len < 24u || len > 1600u)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256 + (int)len, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_FRAME;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put(skb, NL80211_ATTR_FRAME, (int)len, frame);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_flag(skb, NL80211_ATTR_DONT_WAIT_FOR_ACK);
+	if (rc < 0)
+		goto out;
+	if (no_cck) {
+		rc = nla_put_flag(skb, NL80211_ATTR_TX_NO_CCK_RATE);
+		if (rc < 0)
+			goto out;
+	}
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr, NL80211_CMD_FRAME);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+/*
+ * NL80211_CMD_NEW_STATION.  The attribute set is hostapd's nl80211_sta_add():
+ * MAC, AID, listen interval, the station's supported rates (IE 1 followed by
+ * IE 50), its capability field and its HT capability when it sent one.
+ *
+ * STA_FLAGS2 carries WME only when the station advertised WMM: without the WME
+ * flag nl80211 drops the HT capability by design (nl80211.c:9512-9527), so a
+ * non-WMM station must not be given HT.  AUTHENTICATED/ASSOCIATED are
+ * deliberately *not* in the mask: iwlwifi does not set
+ * NL80211_FEATURE_FULL_AP_CLIENT_STATE and nl80211 rejects those bits in a
+ * mask, then adds them itself for compatibility (nl80211.c:9546-9558).
+ */
+int
+lkpi_nl80211_new_station(struct net_device *dev,
+			 const struct lkpi_ap_sta_add *sta)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	struct nl80211_sta_flag_update flags;
+	int rc;
+
+	if (dev == NULL || sta == NULL || sta->rates == NULL ||
+	    sta->rates_len == 0u)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(512 + (int)sta->rates_len, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_NEW_STATION;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put(skb, NL80211_ATTR_MAC, 6, sta->mac);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u16(skb, NL80211_ATTR_STA_AID, sta->aid);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u16(skb, NL80211_ATTR_STA_LISTEN_INTERVAL,
+			 sta->listen_interval);
+	if (rc < 0)
+		goto out;
+	rc = nla_put(skb, NL80211_ATTR_STA_SUPPORTED_RATES,
+		     (int)sta->rates_len, sta->rates);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u16(skb, NL80211_ATTR_STA_CAPABILITY, sta->capab);
+	if (rc < 0)
+		goto out;
+	if (sta->ht_capa != NULL) {
+		rc = nla_put(skb, NL80211_ATTR_HT_CAPABILITY, 26,
+			     sta->ht_capa);
+		if (rc < 0)
+			goto out;
+	}
+
+	memset(&flags, 0, sizeof(flags));
+	if (sta->wmm != NULL)
+		flags.mask = flags.set = 1u << NL80211_STA_FLAG_WME;
+	rc = nla_put(skb, NL80211_ATTR_STA_FLAGS2, (int)sizeof(flags), &flags);
+	if (rc < 0)
+		goto out;
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_NEW_STATION);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+/*
+ * NL80211_CMD_SET_STATION with AUTHORIZED.  Both directions need it: RX drops
+ * every non-EAPOL frame from an unauthorised station
+ * (stack/mac80211/rx.c:2532-2538) and TX drops unicast data to one
+ * (stack/mac80211/tx.c:3953-3962).  hostapd opens the port after association
+ * in open mode; so do we.
+ */
+int
+lkpi_nl80211_sta_authorized(struct net_device *dev,
+			    const unsigned char mac[6])
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	struct nl80211_sta_flag_update flags;
+	int rc;
+
+	if (dev == NULL || mac == NULL)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_SET_STATION;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put(skb, NL80211_ATTR_MAC, 6, mac);
+	if (rc < 0)
+		goto out;
+	memset(&flags, 0, sizeof(flags));
+	flags.mask = flags.set = 1u << NL80211_STA_FLAG_AUTHORIZED;
+	rc = nla_put(skb, NL80211_ATTR_STA_FLAGS2, (int)sizeof(flags), &flags);
+	if (rc < 0)
+		goto out;
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_SET_STATION);
+
+out:
+	kfree_skb(skb);
+	return rc;
 }

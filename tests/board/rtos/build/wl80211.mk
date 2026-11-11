@@ -61,12 +61,14 @@ WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app
 # port shim: a link-time --wrap around the stack's transmit dequeue, stating the
 # port's deferred-context answer (see its header).
 WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
-	$(LIB8)/tx_dequeue_context.c
+	$(LIB8)/tx_dequeue_context.c \
+	$(LIB8)/ap_mlme_rx_wrap.c
 
 # The wrap is what makes the shim a seam instead of a stack edit.  It is only
 # meaningful when the stack is linked, and it applies to every reference
 # (iwlwifi's iTXQ wake path is the one that matters).
-WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue
+WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
+	-Wl,--wrap=cfg80211_rx_mgmt_ext
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
 	$(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)

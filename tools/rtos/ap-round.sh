@@ -178,7 +178,12 @@ for _ in $(seq 1 3000); do
 		pisu "timeout 12 tcpdump -i $MON_IF -s 0 -w $PI_DIR/beacon.pcap" \
 			>"$EVIDENCE/beacon-tcpdump.log" 2>&1 &
 		beacon_pid=$!
+		# Two channel scans 1 s apart (PREREG A1): the first can land
+		# before the first beacon of a freshly started BSS, and the 2026-11-11
+		# round's single scan listed the neighbour but not this AP.
 		pih "scan" > "$EVIDENCE/pi-scan.txt" 2>&1 || true
+		sleep 1
+		pih "scan" >> "$EVIDENCE/pi-scan.txt" 2>&1 || true
 		pih "scan-all" > "$EVIDENCE/pi-scan-all.txt" 2>&1 || true
 		pih "join" > "$EVIDENCE/pi-join.txt" 2>&1 || true
 		pih "link" > "$EVIDENCE/pi-link.txt" 2>&1 || true
@@ -233,6 +238,12 @@ if pi "sudo -n test -d $PI_DIR"; then
 	pi "sudo -n tar -C $(dirname "$PI_DIR") -cf - $(basename "$PI_DIR")" \
 		| tar -C "$EVIDENCE" -xf -
 fi
+# ap-report.py reads run/<tag>/sink-<phase>.txt; the counting sink writes inside
+# the Pi directory, so surface its files one level up too (the 2026-11-12 round
+# had them only under pi-ap-<tag>/ and the report saw 0 bytes).
+for f in "$EVIDENCE"/"pi-ap-$TAG"/sink-*.txt; do
+	[ -e "$f" ] && cp "$f" "$EVIDENCE/" || true
+done
 
 {
 	echo "beacon=$PI_DIR/beacon.pcap"

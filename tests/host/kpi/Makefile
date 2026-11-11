@@ -65,6 +65,8 @@ SRCS := \
 	$(LIB8)/linuxkpi_crypto.c \
 	$(LIB8)/fw_registry.c \
 	$(LIB8)/net_egress.c \
+	$(LIB8)/linuxkpi_ap_beacon.c \
+	$(LIB8)/linuxkpi_ap_mlme.c \
 	$(LIB8)/skbuff/skbuff_pool.c \
 	$(KERNEL)/tasks.c \
 	$(KERNEL)/list.c \
@@ -96,6 +98,7 @@ SRCS := \
 	$(CURDIR)/cases/netdev.c \
 	$(CURDIR)/cases/net_xmit.c \
 	$(CURDIR)/cases/ctx.c \
+	$(CURDIR)/cases/ap_mlme.c \
 	$(CURDIR)/cases/selftest.c
 
 OBJS := $(patsubst %,$(BUILD)/obj/%.o,$(basename $(notdir $(SRCS))))

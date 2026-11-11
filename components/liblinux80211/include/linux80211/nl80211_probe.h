@@ -16,6 +16,7 @@
 
 struct net_device;
 struct wiphy;
+struct lkpi_ap_sta_add;
 
 /* Trigger NL80211_CMD_TRIGGER_SCAN for one SSID on one channel (MHz).
  * Returns the handler's return code (0 = scan started). */
@@ -75,5 +76,25 @@ int lkpi_nl80211_sta_count(struct net_device *dev,
 
 /* The interface's nl80211 type (NL80211_IFTYPE_*), or a negative errno. */
 int lkpi_nl80211_iftype(struct net_device *dev);
+
+/* --- the AP MLME's three actions (2026-11-12) ----------------------------
+ *
+ * hostapd's side of the AP: send one management frame, create the client, open
+ * its controlled port.  They are the same real handler chain as the calls
+ * above; what is absent is the netlink socket (ADR 2026-10-11 D1).
+ */
+
+/* Send one complete 802.11 management frame (NL80211_CMD_FRAME) on the AP's
+ * current channel.  `no_cck` sets NL80211_ATTR_TX_NO_CCK_RATE. */
+int lkpi_nl80211_mgmt_tx(struct net_device *dev, const void *frame,
+			 unsigned int len, int no_cck);
+
+/* NL80211_CMD_NEW_STATION with the association request's parameters. */
+int lkpi_nl80211_new_station(struct net_device *dev,
+			     const struct lkpi_ap_sta_add *sta);
+
+/* NL80211_CMD_SET_STATION with the AUTHORIZED flag (the controlled port). */
+int lkpi_nl80211_sta_authorized(struct net_device *dev,
+				const unsigned char mac[6]);
 
 #endif /* LINUX80211_NL80211_PROBE_H */
