@@ -335,3 +335,256 @@ lkpi_nl80211_connected(struct net_device *dev, unsigned char bssid[6])
 	wiphy_unlock(wdev->wiphy);
 	return connected;
 }
+
+/* --- the AP round (2026-11-11, docs/HANDOFF-AP-MODE.md) ------------------ */
+
+/*
+ * NL80211_CMD_SET_INTERFACE.  The AP case changes the default STA interface
+ * into the AP under the same name: with the device down mac80211's
+ * ieee80211_if_change_type() tears the sdata down and sets it up as the new
+ * type without a driver op (iface.c:2072-2096, the same path `iw dev wlan0 set
+ * type ap` takes).  Nothing here has to know the wiphy index or create a
+ * second netdev.
+ */
+int
+lkpi_nl80211_set_interface(struct net_device *dev, unsigned int type)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	int rc;
+
+	if (dev == NULL)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_SET_INTERFACE;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_IFTYPE, type);
+	if (rc < 0)
+		goto out;
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_SET_INTERFACE);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+/*
+ * NL80211_CMD_START_AP.  The hostapd attribute stream, minus what this AP does
+ * not use: BEACON_HEAD is the 36-byte 802.11 head (header + fixed fields) and
+ * BEACON_TAIL the IEs *after* the TIM, which mac80211 inserts itself between
+ * the two (tx.c:5626-5652).  The HT capability comes from the tail's HT Cap IE
+ * (nl80211.c:6966-6976), so no separate capability attribute is sent; the
+ * channel is the new-API WIDTH/CENTER_FREQ1 pair, as hostapd does.
+ */
+int
+lkpi_nl80211_start_ap(struct net_device *dev, const char *ssid,
+		      unsigned int freq_mhz, unsigned int width,
+		      unsigned int beacon_interval, unsigned int dtim,
+		      const unsigned char *head, unsigned int head_len,
+		      const unsigned char *tail, unsigned int tail_len)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	int rc;
+
+	if (dev == NULL || ssid == NULL || head == NULL || head_len == 0)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256 + head_len + tail_len, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_START_AP;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put(skb, NL80211_ATTR_SSID, (int)strlen(ssid), ssid);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_BEACON_INTERVAL, beacon_interval);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_DTIM_PERIOD, dtim);
+	if (rc < 0)
+		goto out;
+	rc = nla_put(skb, NL80211_ATTR_BEACON_HEAD, (int)head_len, head);
+	if (rc < 0)
+		goto out;
+	if (tail != NULL && tail_len != 0) {
+		rc = nla_put(skb, NL80211_ATTR_BEACON_TAIL, (int)tail_len,
+			     tail);
+		if (rc < 0)
+			goto out;
+	}
+	rc = nla_put_u32(skb, NL80211_ATTR_HIDDEN_SSID,
+			 NL80211_HIDDEN_SSID_NOT_IN_USE);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_AUTH_TYPE,
+			 NL80211_AUTHTYPE_OPEN_SYSTEM);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_WIPHY_FREQ, freq_mhz);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_CHANNEL_WIDTH, width);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_CENTER_FREQ1, freq_mhz);
+	if (rc < 0)
+		goto out;
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr, NL80211_CMD_START_AP);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+int
+lkpi_nl80211_stop_ap(struct net_device *dev)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	int rc;
+
+	if (dev == NULL)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_STOP_AP;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr, NL80211_CMD_STOP_AP);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+struct lkpi_sta_iter {
+	unsigned char (*macs)[6];
+	unsigned int max;
+	unsigned int seen;
+};
+
+static void
+lkpi_sta_iter_cb(void *data, struct ieee80211_sta *sta)
+{
+	struct lkpi_sta_iter *it = data;
+
+	if (sta == NULL)
+		return;
+	if (it->macs != NULL && it->seen < it->max)
+		memcpy(it->macs[it->seen], sta->addr, 6);
+	it->seen++;
+}
+
+/*
+ * The AP's station table, through mac80211's atomic iterator: this is the
+ * read-side answer for A2, and it needs no driver op and no netlink reply.
+ * The image has one vif (the AP) by the time this runs, so every uploaded
+ * station belongs to it.
+ */
+int
+lkpi_nl80211_sta_count(struct net_device *dev, unsigned char macs[][6],
+		       unsigned int max, unsigned int *count)
+{
+	struct wireless_dev *wdev;
+	struct ieee80211_hw *hw;
+	struct lkpi_sta_iter it;
+
+	if (dev == NULL || dev->ieee80211_ptr == NULL)
+		return -EINVAL;
+	wdev = dev->ieee80211_ptr;
+	if (wdev->wiphy == NULL)
+		return -EINVAL;
+
+	/* struct ieee80211_local embeds struct ieee80211_hw first
+	 * (stack/mac80211/ieee80211_i.h:1448-1452); wiphy_priv() is the same
+	 * answer the stack's own cfg80211 ops use. */
+	hw = (struct ieee80211_hw *)wiphy_priv(wdev->wiphy);
+	memset(&it, 0, sizeof(it));
+	it.macs = macs;
+	it.max = max;
+	ieee80211_iterate_stations_atomic(hw, lkpi_sta_iter_cb, &it);
+	if (count != NULL)
+		*count = it.seen;
+	return 0;
+}
+
+int
+lkpi_nl80211_iftype(struct net_device *dev)
+{
+	struct wireless_dev *wdev;
+	int type;
+
+	if (dev == NULL || dev->ieee80211_ptr == NULL)
+		return -EINVAL;
+	wdev = dev->ieee80211_ptr;
+	if (wdev->wiphy == NULL)
+		return -EINVAL;
+
+	wiphy_lock(wdev->wiphy);
+	type = (int)wdev->iftype;
+	wiphy_unlock(wdev->wiphy);
+	return type;
+}

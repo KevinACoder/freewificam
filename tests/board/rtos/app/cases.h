@@ -87,6 +87,11 @@ int case_iwl7260_c5_run(void);
 #if defined(RTOS_CASE_IWL7260_C6)
 int case_iwl7260_c6_run(void);
 #endif
+/* The AP round: the default STA interface becomes the AP, the Pi joins, and
+ * the AP phase table runs (docs/HANDOFF-AP-MODE.md). */
+#if defined(RTOS_CASE_IWL7260_AP)
+int case_iwl7260_ap_run(void);
+#endif
 #if defined(RTOS_CASE_IWL7260_STAB)
 int case_iwl7260_stab_run(void);
 #endif

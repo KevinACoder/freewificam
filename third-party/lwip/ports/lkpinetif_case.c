@@ -85,11 +85,14 @@ lkpi_net_wlan_up(const char *ip, const char *mask, const char *gw, char mac[6])
 {
 	ip4_addr_t ipaddr, maskaddr, gwaddr;
 
-	if (ip == NULL || mask == NULL || gw == NULL)
+	if (ip == NULL || mask == NULL)
 		return -1;
+	/* The AP role has no gateway: the peer is on-link.  NULL is the stated
+	 * "no default route" request, not an empty string. */
+	IP4_ADDR(&gwaddr, 0, 0, 0, 0);
 	if (ip4addr_aton(ip, &ipaddr) == 0 ||
 	    ip4addr_aton(mask, &maskaddr) == 0 ||
-	    ip4addr_aton(gw, &gwaddr) == 0)
+	    (gw != NULL && ip4addr_aton(gw, &gwaddr) == 0))
 		return -1;
 	if (net_stack_up() != 0)
 		return -2;

@@ -70,7 +70,8 @@ int lkpi_netdev_xmit(struct net_device *dev, const void *frame, size_t len);
  */
 
 /* Assemble the lwIP interface over the wireless net device ("wlan0"), set the
- * static address and bring it up.  No DHCP.  Returns 0 on success, negative on
+ * static address and bring it up.  No DHCP.  `gw` may be NULL: the AP role has
+ * no default route and its peer is on-link.  Returns 0 on success, negative on
  * a bad argument, a missing interface or a failed netif_add. */
 int lkpi_net_wlan_up(const char *ip, const char *mask, const char *gw,
 		     char mac[6]);

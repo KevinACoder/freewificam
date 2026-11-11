@@ -1,0 +1,35 @@
+# mac80211 on the RTOS line, AP round: the AC 7260 becomes the AP (A1), the
+# Kali Pi's MT7921AU becomes the STA (A2), the data plane is proven (A3), then
+# the AP phase table runs (A4).  The station-side rounds stay in their own
+# profiles; this image carries no scan/join case.
+#
+# The bring-up is the C4/C5 one (core, firmware, PCI); the case changes the
+# default STA interface in place with the real NL80211_CMD_SET_INTERFACE
+# stream (down interface, no driver op), opens it, and sends the real
+# NL80211_CMD_START_AP stream with the beacon head/tail derived from the GT
+# arm's on-air hostapd beacon.  The lwIP netif is assembled over the same
+# wlan0 with 192.168.99.1/24 and no gateway.
+#
+# The pool/heap are the accepted C6 configuration on purpose (pool 128, heap
+# 16 MiB): the AP round is a new question, not a stack of old levers.
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product that also redistributes the Intel firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_ap"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# mac80211 allocates its local/wiphy/netdev/BSS/station records from the
+# FreeRTOS heap (osMemoryAlloc -> pvPortMalloc); the AP's beacon templates and
+# the lwIP pool/pbufs/TCP-IP thread stack come from the same heap.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

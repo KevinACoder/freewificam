@@ -36,6 +36,7 @@ CASES = (
     "iwl7260_c5",
     "iwl7260_c6",
     "iwl7260_stab",
+    "iwl7260_ap",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -264,6 +265,51 @@ PATTERNS = {
     "iwl7260_c5_pass_c6": re.compile(r"iwl7260_c5: PASS C6", re.MULTILINE),
     "iwl7260_c5_fail": re.compile(
         r"iwl7260_c5: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # --- the AP round (2026-11-11, docs/HANDOFF-AP-MODE.md) ---
+    "iwl7260_ap_fwreg": re.compile(
+        r"iwl7260_ap: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap_wlan0": re.compile(
+        r"iwl7260_ap: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]+) iftype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap_chan": re.compile(
+        r"iwl7260_ap: chan freq=(?P<freq>\d+) present=(?P<present>[01]) "
+        r"flags=(?P<flags>0x[0-9a-f]+) can_beacon=(?P<can>[01])",
+        re.MULTILINE
+    ),
+    "iwl7260_ap_set_iface": re.compile(
+        r"iwl7260_ap: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap_start": re.compile(
+        r"iwl7260_ap: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap_beacon": re.compile(
+        r"iwl7260_ap: beacon head_len=(?P<head>\d+) tail_len=(?P<tail>\d+) "
+        r"ies=(?P<ies>\d+) head_sha=(?P<hsha>[0-9a-f]+) "
+        r"tail_sha=(?P<tsha>[0-9a-f]+)", re.MULTILINE
+    ),
+    "iwl7260_ap_start_ap": re.compile(
+        r"iwl7260_ap: start_ap rc=(?P<rc>-?\d+) freq=(?P<freq>\d+) "
+        r"interval=(?P<int>\d+) dtim=(?P<dtim>\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap_netif": re.compile(
+        r"iwl7260_ap: netif up name=(?P<name>\S+) ip=(?P<ip>[0-9.]+)/24 "
+        r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_ap_peer_window": re.compile(
+        r"iwl7260_ap: peer window ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap_sta": re.compile(
+        r"iwl7260_ap: sta add n=(?P<n>\d+) mac=(?P<mac>[0-9a-f:]+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap_pass_ap": re.compile(r"iwl7260_ap: PASS AP", re.MULTILINE),
+    "iwl7260_ap_pass_apt": re.compile(r"iwl7260_ap: PASS APT", re.MULTILINE),
+    "iwl7260_ap_fail": re.compile(
+        r"iwl7260_ap: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     # C6 throughput round: the plan line, the two listeners, and the case's
     # own verdict.  The 80% gate is the harness report's, not the judge's.
@@ -820,6 +866,21 @@ LIST_PATTERNS = {
         r"iwl7260_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
         r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
         r"(?P<max>\d+)", re.MULTILINE),
+    "iwl7260_ap_ping": re.compile(
+        r"iwl7260_ap: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
+        r"(?P<max>\d+)", re.MULTILINE),
+    "iwl7260_ap_begin": re.compile(
+        r"iwl7260_ap: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) air=(?P<air>\S+) port=(?P<port>\d+) "
+        r"window_ms=(?P<window>\d+) name=(?P<name>\S+) "
+        r"peer_ms=(?P<peer>\d+)", re.MULTILINE),
+    "iwl7260_ap_report": re.compile(
+        r"iwl7260_ap: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE),
+    "iwl7260_ap_done": re.compile(
+        r"iwl7260_ap: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE),
     "net_phase_begin": re.compile(r"net: phase (?P<n>\d+) begin proto=(?P<proto>\S+) role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) name=(?P<name>\S+)", re.MULTILINE),
     "net_phase_done": re.compile(r"net: phase (?P<n>\d+) done name=(?P<name>\S+) ok=(?P<ok>\d+)", re.MULTILINE),
     "net_census": re.compile(r"net: census .*", re.MULTILINE),
@@ -1784,6 +1845,122 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"({r['ms']} ms, {r['bytes']} B)")
         if not found["iwl7260_c6_pass"]:
             errors.append("iwl7260_c6: the C6T PASS line is missing")
+
+    if cases.get("iwl7260_ap", {}).get("verdict") == "pass":
+        fail = found["iwl7260_ap_fail"]
+        if fail:
+            errors.append(f"iwl7260_ap: {fail['reason']}")
+        reg = found["iwl7260_ap_fwreg"]
+        if not reg:
+            errors.append("iwl7260_ap: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"iwl7260_ap: firmware registration rc={reg['rc']}")
+        wl = found["iwl7260_ap_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("iwl7260_ap: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("iwl7260_ap: wlan0 has ifindex=0")
+        elif wl["type"] != "2":
+            errors.append(f"iwl7260_ap: wlan0 boot type={wl['type']}, "
+                          "expected STATION (2) before the type change")
+        chan = found["iwl7260_ap_chan"]
+        if not chan:
+            errors.append("iwl7260_ap: PASS without the channel pre-check")
+        elif chan["present"] != "1" or chan["can"] != "1":
+            errors.append(
+                f"iwl7260_ap: channel present={chan['present']} "
+                f"can_beacon={chan['can']} flags={chan['flags']}")
+        seti = found["iwl7260_ap_set_iface"]
+        if not seti:
+            errors.append("iwl7260_ap: PASS without the set_iface line")
+        elif int(seti["rc"]) != 0 or seti["type"] != "3":
+            errors.append(
+                f"iwl7260_ap: set_iface rc={seti['rc']} type={seti['type']}")
+        st = found["iwl7260_ap_start"]
+        if not st:
+            errors.append("iwl7260_ap: PASS without the dev_open line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"iwl7260_ap: dev_open rc={st['rc']}")
+        bcn = found["iwl7260_ap_beacon"]
+        if not bcn:
+            errors.append("iwl7260_ap: PASS without the beacon line")
+        else:
+            if int(bcn["head"]) != 36:
+                errors.append(
+                    f"iwl7260_ap: beacon head_len={bcn['head']}, "
+                    "expected 36")
+            if int(bcn["tail"]) == 0 or int(bcn["ies"]) == 0:
+                errors.append(
+                    f"iwl7260_ap: beacon tail_len={bcn['tail']} "
+                    f"ies={bcn['ies']}")
+            else:
+                notes.append(
+                    f"iwl7260_ap: beacon {bcn['head']}+{bcn['tail']} B, "
+                    f"{bcn['ies']} IEs, tail={bcn['tsha']}")
+        sap = found["iwl7260_ap_start_ap"]
+        if not sap:
+            errors.append("iwl7260_ap: PASS without the start_ap line")
+        elif int(sap["rc"]) != 0:
+            errors.append(f"iwl7260_ap: start_ap rc={sap['rc']}")
+        elif int(sap["freq"]) != 2462:
+            errors.append(f"iwl7260_ap: start_ap freq={sap['freq']}")
+        elif sap["int"] != "100" or sap["dtim"] != "2":
+            errors.append(
+                f"iwl7260_ap: beacon interval={sap['int']} "
+                f"dtim={sap['dtim']}")
+        netif = found["iwl7260_ap_netif"]
+        if not netif:
+            errors.append("iwl7260_ap: PASS without the netif line")
+        elif netif["name"] != "wl0" or netif["ip"] != "192.168.99.1":
+            errors.append(
+                f"iwl7260_ap: netif {netif['name']} {netif['ip']}")
+        if not found["iwl7260_ap_peer_window"]:
+            errors.append("iwl7260_ap: PASS without the peer window")
+        sta = found["iwl7260_ap_sta"]
+        if not sta:
+            errors.append("iwl7260_ap: PASS without a station add line")
+        elif int(sta["n"]) < 1 or sta["mac"].startswith("00:00:00"):
+            errors.append(f"iwl7260_ap: station {sta['mac']} n={sta['n']}")
+        else:
+            notes.append(f"iwl7260_ap: station {sta['mac']}")
+        pings = {p["payload"]: p for p in found["iwl7260_ap_ping"]}
+        for payload in ("56", "1400"):
+            p = pings.get(payload)
+            if p is None:
+                errors.append(
+                    f"iwl7260_ap: no ping anchor for payload {payload}")
+            elif p["tx"] != "20" or p["rx"] != "20":
+                errors.append(
+                    f"iwl7260_ap: ping {payload} tx={p['tx']} rx={p['rx']}")
+        if not found["iwl7260_ap_pass_ap"]:
+            errors.append("iwl7260_ap: the AP PASS line is missing")
+        begins = {b["name"]: b for b in found["iwl7260_ap_begin"]}
+        reports = {r["n"]: r for r in found["iwl7260_ap_report"]}
+        dones = {d["n"]: d for d in found["iwl7260_ap_done"]}
+        air_of = {"tcpdn": "down", "udpdn": "down", "tcpdn2": "down",
+                  "udpdn2": "down", "tcpup": "up", "udpup": "up"}
+        for name, air in air_of.items():
+            b = begins.get(name)
+            if not b:
+                errors.append(f"iwl7260_ap: no begin anchor for {name}")
+                continue
+            if b["air"] != air:
+                errors.append(
+                    f"iwl7260_ap: {name} air={b['air']}, expected {air}")
+            r = reports.get(b["n"])
+            if not r:
+                errors.append(f"iwl7260_ap: no report for {name}")
+                continue
+            if int(r["bytes"]) == 0:
+                errors.append(f"iwl7260_ap: {name} moved no bytes")
+            d = dones.get(b["n"])
+            if d is None or d["ok"] != "1":
+                errors.append(f"iwl7260_ap: {name} did not complete")
+            notes.append(
+                f"iwl7260_ap: {name} {r['kbit']} kbit/s "
+                f"({r['ms']} ms, {r['bytes']} B)")
+        if not found["iwl7260_ap_pass_apt"]:
+            errors.append("iwl7260_ap: the APT PASS line is missing")
 
     if cases.get("iwl7260_stab", {}).get("verdict") == "pass":
         fail = found["iwl7260_stab_fail"]

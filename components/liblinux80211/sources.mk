@@ -32,6 +32,7 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	linuxkpi_crypto.c \
 	fw_registry.c \
 	net_egress.c \
+	linuxkpi_ap_beacon.c \
 	skbuff/skbuff_pool.c
 endif
 

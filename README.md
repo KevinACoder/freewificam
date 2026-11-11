@@ -31,6 +31,7 @@ needs a board that boots before it needs a stack that links:
 | `components/liblinux80211` (linuxkpi + PCI/SDIO engines + seams) | landed; `rk3568-kpi-live`/`-mock` 2/2 |
 | mac80211 + cfg80211 + iwlwifi | C0-C6 reached: register, attach, scan, join, data plane (2/2 cold boots each) |
 | C6 throughput / stability | measured on the AC 7260 bench; numbers below |
+| A0/A1 AP role | the AC 7260 becomes an AP and its beacons reach the air (2/2); association waits on a userspace AP MLME - `../runs/2026-11-11-iwl7260-ap/` |
 | AP role (RTOS as AP, Pi 4B as STA) | next stage |
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
