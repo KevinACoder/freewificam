@@ -808,9 +808,8 @@ LIST_PATTERNS = {
         r"txf=(?P<tx>\d+) heap_free=(?P<hf>\d+) heap_min=(?P<hm>\d+) "
         r"pool_used=(?P<pu>\d+) pool_high=(?P<ph>\d+)", re.MULTILINE),
     "iwl7260_stab_long": re.compile(
-        r"iwl7260_stab: long report done=(?P<done>[01]) "
-        r"bytes=(?P<bytes>\d+) ms=(?P<ms>\d+) kbit=(?P<kbit>\d+)",
-        re.MULTILINE),
+        r"iwl7260_stab: long report done=(?P<done>[01]) ms=(?P<ms>\d+) "
+        r"rx_bytes=(?P<bytes>\d+)", re.MULTILINE),
     "iwl7260_stab_recon": re.compile(
         r"iwl7260_stab: reconnect n=(?P<n>\d+) ok=(?P<ok>[01]) "
         r"ms=(?P<ms>\d+)( ping=(?P<rx>\d+)/(?P<total>\d+))?",
@@ -1798,7 +1797,8 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append(
                 f"iwl7260_stab: only {len(health)} health lines for a "
                 "30-minute run")
-        long = found["iwl7260_stab_long"]
+        longs = found["iwl7260_stab_long"]
+        long = longs[-1] if longs else None
         if not long:
             errors.append("iwl7260_stab: PASS without the long report")
         elif long["done"] != "1" or int(long["bytes"]) == 0:
@@ -1807,7 +1807,7 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"bytes={long['bytes']}")
         else:
             notes.append(
-                f"iwl7260_stab: long {long['kbit']} kbit/s over "
+                f"iwl7260_stab: long {long['bytes']} bytes over "
                 f"{long['ms']} ms")
         recons = {r["n"]: r for r in found["iwl7260_stab_recon"]}
         for n in range(1, 11):

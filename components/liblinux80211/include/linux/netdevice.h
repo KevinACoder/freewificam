@@ -109,6 +109,13 @@ struct net;
 struct net_device *__dev_get_by_index(struct net *net, int ifindex);
 int dev_open(struct net_device *dev);
 void dev_close(struct net_device *dev);
+
+/* [LNX] net/core/dev.c: re-run the device's receive-mode programming.  The
+ * mac80211 ndo_set_rx_mode handler queues the wiphy's reconfig_filter work,
+ * which is what makes the driver program its multicast filter; the station
+ * open path never calls it, so a port that needs the firmware's filter has to
+ * ask for it explicitly.  No-op when the device has no handler. */
+void dev_set_rx_mode(struct net_device *dev);
 void netif_receive_skb_list(struct list_head *head);
 int dev_queue_xmit(struct sk_buff *skb);
 struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,

@@ -26,8 +26,8 @@ below it has been reached; "compiles" and "links" are not "runs".
 | C3 attach | iwlwifi claims `8086:08b1`, firmware `17.bfb58538.0` ALIVE, `wlan0`, `dev_open` -> start rc=0 | **reached 2/2**: `runs/2026-11-10-iwl7260-c3` |
 | C4 scan | real `NL80211_CMD_TRIGGER_SCAN` bytes through nl80211's handler -> iwlwifi hw scan -> cfg80211 BSS table carries the bench AP | **reached 2/2**: `runs/2026-11-11-iwl7260-c4` (SSID/BSSID/ch5) |
 | C5/C6-open | association (open AP) / ICMP over wl0 | **reached 2/2**: `runs/2026-11-11-iwl7260-c5-open` |
-| C6T throughput | TCP/UDP phases over wl0 against the GT arm; the 80% / 1% gates | **measuring**: `runs/2026-11-11-iwl7260-c6-throughput/` (this round) |
-| C6S stability | 30 min TCP downlink + 10 reconnects | **planned**: `rk3568-iwl7260-stab` (after the throughput gate) |
+| C6T throughput | TCP/UDP phases over wl0 against the GT arm; the 80% / 1% gates | **reached**: GT 2/2 + baseline 2/2 + pool128 2/2; T1 passes on pool128 (TCP down 142.6%, up 93.3%, UDP 0% loss, T2 0.002%/2.37%) - `runs/2026-11-11-iwl7260-c6-throughput/REPORT.json` |
+| C6S stability | 30 min TCP downlink + 10 reconnects | **measuring**: `runs/2026-11-11-iwl7260-stab/` (this round) |
 | K1/K2 context | the host semantic bench and the three execution-context experiments | **reached on the host model**: 33/33 cases, `--break` red; ADR `2026-11-10-execution-context-model.md`; not board evidence |
 
 ## Receipts

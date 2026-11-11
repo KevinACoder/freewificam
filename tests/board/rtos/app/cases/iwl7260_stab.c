@@ -40,6 +40,7 @@
 #include "linux80211/nl80211_probe.h"
 #include "linux80211/net.h"
 
+#include <linux/if.h>
 #include <linux/netdevice.h>
 #include <net/cfg80211.h>
 #include <net/net_namespace.h>
@@ -148,6 +149,9 @@ stab_reconnect(struct net_device *dev, unsigned n)
 			    n, (unsigned)((rtos_clock_us() - t0) / 1000u));
 		return -1;
 	}
+	/* each (re)association resets the firmware's filter */
+	dev->flags |= IFF_ALLMULTI;
+	dev_set_rx_mode(dev);
 
 	rc = lkpi_net_ping(STAB_PEER, STAB_PING_COUNT, 56u, 300u, &rx,
 			   &rtt_min, &rtt_avg, &rtt_max);
@@ -171,6 +175,8 @@ case_iwl7260_stab_run(void)
 	struct lkpi_net_phase r;
 	struct osMemoryStats heap;
 	struct lkpi_net_diag diag;
+	struct lkpi_net_diag diag0;
+	struct lkpi_net_diag diag1;
 	struct lkpi_skb_pool_stats pool;
 	int long_done = 0;
 	int rc;
@@ -189,6 +195,15 @@ case_iwl7260_stab_run(void)
 		    "%02x:%02x dev=%s\n",
 		    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
 		    dev->name);
+
+	/* mac80211's station open path never calls configure_filter, so the
+	 * firmware's multicast filter is only programmed when the device's
+	 * receive-mode is asked for.  Allmulti is this bench's deliberate
+	 * choice (the AP's dynamic ARP is a broadcast); production would
+	 * program the real address list instead. */
+	dev->flags |= IFF_ALLMULTI;
+	dev_set_rx_mode(dev);
+	CASE_ANCHOR("iwl7260_stab: mcast allmulti=1\n");
 	if (lkpi_net_ready() != 1) {
 		CASE_ANCHOR("iwl7260_stab: FAIL lwIP netif not ready\n");
 		return 3;
@@ -204,6 +219,7 @@ case_iwl7260_stab_run(void)
 	/* --- the long run -------------------------------------------------- */
 	CASE_ANCHOR("iwl7260_stab: long begin window_ms=%u health_ms=%u\n",
 		    STAB_LONG_MS, STAB_HEALTH_MS);
+	lkpi_net_diag(&diag0);
 	(void)lkpi_net_iperf_down_begin();
 	t0 = rtos_clock_us();
 	for (elapsed = 0u; elapsed < STAB_LONG_MS; elapsed += STAB_HEALTH_MS) {
@@ -226,11 +242,18 @@ case_iwl7260_stab_run(void)
 		(void)osDelay(STAB_HEALTH_MS);
 	}
 	(void)lkpi_net_iperf_down_poll(&r);
+	if (r.done != 0)
+		long_done = 1;
 	lkpi_net_iperf_down_end();
-	CASE_ANCHOR("iwl7260_stab: long report done=%d bytes=%u ms=%u "
-		    "kbit=%u\n",
-		    long_done, r.bytes, r.ms, r.kbit);
-	if (long_done == 0 || r.bytes == 0u) {
+	lkpi_net_diag(&diag1);
+	/* lwiperf's byte count is a u32 and wraps three times in a 30-minute
+	 * run at 60 Mbit/s; the adapter's rx_bytes is the truthful volume and
+	 * the session's own ms is the truthful duration.  The report's `done`
+	 * is the completion flag the loop's last poll may have missed. */
+	CASE_ANCHOR("iwl7260_stab: long report done=%d ms=%u rx_bytes=%lu\n",
+		    long_done, r.ms,
+		    (unsigned long)(diag1.rx_bytes - diag0.rx_bytes));
+	if (long_done == 0 || diag1.rx_bytes == diag0.rx_bytes) {
 		CASE_ANCHOR("iwl7260_stab: FAIL long run did not complete\n");
 		return 5;
 	}

@@ -120,6 +120,24 @@ for _ in $(seq 1 6000); do
 			pisu "timeout 60 tcpdump -i $AP_IF -s 128 -w $PI_DIR/ap-long-1.pcap" \
 				>"$EVIDENCE/ap-long-1-tcpdump.log" 2>&1
 		) &
+		# The dynamic-ARP gate: at 60 s into the long run, delete the static
+		# neighbour and let the AP resolve the board by broadcast.  The
+		# allmulti/configure-filter path under test is the one the stability
+		# case programs; a static entry would hide it.  The entry is restored
+		# afterwards so the rest of the long run keeps its downlink.
+		(
+			sleep 60
+			{
+				echo "== before"
+				pisu "ip neigh show $BOARD_IP"
+				pisu "ip neigh del $BOARD_IP dev $AP_IF" || true
+				pi "ping -c 3 -W 1 $BOARD_IP" || true
+				echo "== after"
+				pisu "ip neigh show $BOARD_IP"
+			} > "$EVIDENCE/arp-gate.txt" 2>&1
+			pisu "ip neigh replace $BOARD_IP lladdr $STA_MAC dev $AP_IF" \
+				>> "$EVIDENCE/arp-gate.txt" 2>&1 || true
+		) &
 	fi
 	if anchor 'iwl7260_stab: long report ' && [ "$seen_report" = 0 ]; then
 		seen_report=1

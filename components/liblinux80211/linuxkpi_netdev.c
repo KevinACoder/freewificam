@@ -657,6 +657,24 @@ rtnl_is_locked(void)
 /* ------------------------------------------------------------------ */
 
 /*
+ * [LNX] net/core/dev.c: dev_set_rx_mode() -> __dev_set_rx_mode() ->
+ * ndo_set_rx_mode().  The port has no net core to run the helper, so this is
+ * the one-call form the bench uses to make mac80211 re-program the receive
+ * filter (ieee80211_set_multicast_list queues local->reconfig_filter, whose
+ * ieee80211_configure_filter is the only caller of the driver's
+ * configure_filter on the station path).
+ */
+void
+dev_set_rx_mode(struct net_device *dev)
+{
+
+	if (dev == NULL || dev->netdev_ops == NULL)
+		return;
+	if (dev->netdev_ops->ndo_set_rx_mode != NULL)
+		dev->netdev_ops->ndo_set_rx_mode(dev);
+}
+
+/*
  * [LNX] net/core/dev.c: `ether_setup()` gives a device the Ethernet shape.
  * This port's net_device carries the fields the compiled set reads; the ones
  * the interface sets but this record does not have (hard_header_len, header
