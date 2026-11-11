@@ -26,7 +26,7 @@ MATRIX_PROFILES ?= rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-us
 
 .PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images libs \
 	check check-no-d check-config-header check-build-contract case-list-check matrix \
-	dump-vars clean distclean rk3568_ci s0-compile s1-driver-compile s1-link host-test
+	dump-vars clean distclean rk3568_ci s0-compile s1-driver-compile s1-link host-test fw-check
 
 help:
 	@printf '%s\n' \
@@ -45,6 +45,7 @@ help:
 		'  s1-driver-compile  compile the vendored iwlwifi TUs against the face (no link; S1_RUN=<n>)' \
 		'  s1-link            partial-link stack+driver and classify the undefined list (S1_LINK_RUN=<n>)' \
 		'  host-test          build and run the host semantic bench (green, then --break red)' \
+		'  fw-check           verify the tracked firmware image and the generated blob' \
 		'  check              every defconfig parses and regenerates identically' \
 		'  check-no-d         no compile/link command carries a -D (representative set)' \
 		'  check-config-header generated header covers every Kconfig symbol' \
@@ -165,6 +166,12 @@ HOST_PROFILE ?= rk3568-kpi-mock
 host-test:
 	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(HOST_PROFILE)
 	@$(MAKE) -C $(ROOT)/tests/host/kpi run PROFILE=$(HOST_PROFILE)
+
+# The firmware image is a tracked input now (the user's directive: a clean
+# clone must build without the GT tree).  The generated unit is a build
+# product; this target checks both against the pin.
+fw-check:
+	@$(PYTHON) $(ROOT)/tools/rtos/fw-blobs.py --check
 
 check:
 	@set -e; for f in $(CONFIGS)/*.defconfig; do \

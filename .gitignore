@@ -28,9 +28,10 @@ build/kconfig/
 **/.config
 **/generated/
 
-# Firmware blobs are never published; hash them in the manifest instead.
+# Vendor firmware images are tracked inputs, not build products: an image has
+# no filesystem, so the only copy a clean clone could use is the one in git.
+# The generated C arrays beside them are the build products (rules below).
 *.bin
-*.ucode
 
 # Editor residue
 *.swp
@@ -44,5 +45,7 @@ __pycache__/
 # The host bench builds out of tree; its binary and objects are outputs.
 tests/host/kpi/build/
 
-# Generated firmware blobs (build products of tools/rtos/fw-blobs.py).
-components/liblinux80211/fw/
+# Generated firmware blobs (build products of tools/rtos/fw-blobs.py).  The
+# vendor image and its licence beside them are tracked inputs, not products
+# (see components/liblinux80211/fw/PROVENANCE.md); only the C unit is ignored.
+components/liblinux80211/fw/*.c

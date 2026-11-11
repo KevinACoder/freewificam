@@ -74,6 +74,9 @@ NM := $(CROSS_COMPILE)nm
 AR := $(CROSS_COMPILE)ar
 SIZE := $(CROSS_COMPILE)size
 HOSTCC ?= cc
+# Build-time helpers (the firmware generator, the library manifest).  The
+# nested make does not inherit rtos.mk's variable, so it is defined here too.
+PYTHON ?= python3
 
 KERNEL := $(ROOT)/third-party/FreeRTOS-Kernel
 ADAPTER := $(ROOT)/third-party/CMSIS-FreeRTOS
@@ -485,7 +488,8 @@ $(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)
 endef
 
 # Generated firmware units: the blob is a build product, produced from the
-# pinned GT file the first time a driver image needs it.
+# tracked vendor image (components/liblinux80211/fw/) the first time a driver
+# image needs it.
 $(LIB8)/fw/iwl7260_fw_blob.c:
 	@$(PYTHON) $(ROOT)/tools/rtos/fw-blobs.py
 

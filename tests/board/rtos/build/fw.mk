@@ -3,9 +3,10 @@
 #          are named.
 #
 # Every wireless line compiles its firmware in as a C array, because the image
-# has no filesystem.  The arrays are generated from `firmware/` (the vendor
-# images, in this repository) by `tools/rtos/fw-blobs.py`, whose table names
-# each source file, request name, C symbol and output unit.
+# has no filesystem.  The arrays are generated from the vendor images tracked
+# in `components/liblinux80211/fw/` (a clean clone must not need the GT tree)
+# by `tools/rtos/fw-blobs.py`, whose table names each source file, request
+# name, C symbol and output unit.
 #
 # Before this fragment each driver's sources.mk carried its own `$(error)` when
 # its blob was missing, so a clean checkout failed at parse time one line at a
@@ -22,11 +23,13 @@
 
 FW_TOOL := $(ROOT)/tools/rtos/fw-blobs.py
 
-FW_GEN := $(shell $(FW_TOOL) --all 2>&1)
+# The `|| echo` is what carries the exit status into make: a failed run that
+# left a stale blob behind would otherwise pass the wildcard guard below.
+FW_GEN := $(shell $(PYTHON) $(FW_TOOL) --all 2>&1 || echo fw-blobs: FAIL)
 ifneq ($(findstring fw-blobs: FAIL,$(FW_GEN)),)
 $(error fw: the firmware blobs could not be generated: $(FW_GEN))
 endif
-ifneq ($(wildcard $(ROOT)/components/linuxkpi/fw/rtl8188eufw_blob.c),)
+ifneq ($(wildcard $(ROOT)/components/liblinux80211/fw/iwl7260_fw_blob.c),)
 else
-$(error fw: $(FW_TOOL) --all did not produce the blobs; run it by hand to see why)
+$(error fw: $(FW_TOOL) --all did not produce the blob; run it by hand to see why)
 endif

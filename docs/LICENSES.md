@@ -18,12 +18,13 @@ Per-component license registry. This is not legal advice.
 | `third-party/printf/` | MIT | |
 | `third-party/tlsf/` | BSD-3-Clause | terms in the `tlsf.h` header |
 | `third-party/ulog/` | MIT | |
+| `components/liblinux80211/fw/iwlwifi-7260-17.ucode` | Intel binary firmware licence (`LICENCE.iwlwifi_firmware` beside it) | **tracked input**, unmodified; sha256 `5d81a600…`; source and terms in `fw/PROVENANCE.md` |
 
 ## Combined products
 
-The images this repository builds **contain no GPL unit** in this round: the
-four acceptance images are platform, bus and network code under the licenses
-above. There is therefore no GPL obligation attached to them today.
+The four acceptance images (tick, wired network, PCIe/NVMe, eMMC, USB
+storage) contain no GPL unit: they are platform, bus and network code under the
+licenses above. The wireless profiles below do link the GPL-2.0 stack.
 
 When `components/liblinux80211/` lands the real `net/mac80211` and
 `net/wireless` (`GPL-2.0-only`), every binary that links it becomes a GPL-2.0
@@ -47,3 +48,14 @@ the one without the imported stack linked in.
 
 两者都在 `docs/LICENSES.md`（外层）同表登记；`ARCHITECTURE.md` §5 的隔离规则不变：
 这两个 profile 不与 `rtw88`/`rtw89` 的 BSD profile 共链。
+
+## 5. 固件（2026-11-11 起入库）
+
+`components/liblinux80211/fw/iwlwifi-7260-17.ucode` 是 **Intel 二进制固件**，
+不是 GPL，也不是 BSD：它按 `LICENCE.iwlwifi_firmware` 的条款随镜像再分发
+（允许未修改的二进制再分发，要求保留版权声明；禁止反向工程）。它现在与
+licence 文本、`PROVENANCE.md` 一起 tracked，因为镜像没有文件系统、干净 clone
+必须能从仓内生成 `iwl7260_fw_blob.c`。生成物本身仍是构建产物，不入库。
+
+链接这些固件的无线镜像因此同时是 **GPL-2.0 链接产物** 和 **Intel 固件再分发物**；
+两件事分别登记，不互相替代。
