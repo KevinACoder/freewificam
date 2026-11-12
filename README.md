@@ -31,8 +31,7 @@ needs a board that boots before it needs a stack that links:
 | `components/liblinux80211` (linuxkpi + PCI/SDIO engines + seams) | landed; `rk3568-kpi-live`/`-mock` 2/2 |
 | mac80211 + cfg80211 + iwlwifi | C0-C6 reached: register, attach, scan, join, data plane (2/2 cold boots each) |
 | C6 throughput / stability | measured on the AC 7260 bench; numbers below |
-| A0/A1 AP role | the AC 7260 becomes an AP and its beacons reach the air (2/2); association waits on a userspace AP MLME - `../runs/2026-11-11-iwl7260-ap/` |
-| AP role (RTOS as AP, Pi 4B as STA) | next stage |
+| AP role (RTOS as AP, Pi 4B as STA) | **supported**: the AC 7260 beacons, the Pi associates, the data plane runs both ways and WPA2-PSK/CCMP is 2/2; the A4 transmit stall is fixed - throughput below. The uplink is still 57.3% of the GT AP |
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
 build's design and how a new world is added.
@@ -63,6 +62,34 @@ Reproduce: build `PROFILE=rk3568-iwl7260-c6-pool128` (or `-c6` for the clean
 baseline) and drive `tools/rtos/c6-throughput.sh`; the GT arm is the same
 `Image-gt-63a2a8ab9cd3` booted by the project's GT runner; `tools/rtos/c6-report.py`
 applies the 80% / 1% / three-source gates.
+
+The other role reverses it: the RTOS side is the **AP**.  The same AC 7260
+beacons on channel 11 (2462 MHz, HT20, open), the Pi 4B's MT7921AU is the STA,
+and the GT arm is the same card driven as a Linux AP by hostapd.  Both arms use
+iperf2 and the receiver-side number, two cold boots (2026-11-12, the images
+carry the port's diagnostics):
+
+| | GT AP (Linux 7260) | this port (AP) |
+|---|---|---|
+| TCP downlink | 73.3 Mbit/s | **73.2 Mbit/s (99.9% of GT)** |
+| TCP uplink | 76.6 Mbit/s | 43.9 Mbit/s (57.3% of GT) |
+| UDP 40 M downlink | 41.9 Mbit/s, 0% loss | 37.6 Mbit/s, 0.11% loss |
+
+The first sustained flow used to stop the device's interrupts, which looked
+like firmware silence: the PCIe hard-interrupt count froze, no transmit
+completion came back and the skb pool filled.  It was the host.  The port's
+`__napi_schedule()` ran one inline poll; iwlwifi's receive poll re-enables
+`CSR_INT_MASK` only when a poll returns less than its budget, so a poll that
+returned the whole budget (64) left the mask at zero and nothing asked again -
+while the device still had pending receive work.  The shim now repeats the poll
+until the driver's drain round re-enables the interrupt
+(`docs/decisions/2026-11-12-ap-a4-napi-budget.md`); the downlink reaches GT
+parity and UDP loss is 0.11%.  The uplink (43.9 Mbit/s) is the open item: it is
+the board's receive path, not the stall, and is the next round.
+
+Reproduce: build `PROFILE=rk3568-iwl7260-ap` and drive `tools/rtos/ap-round.sh`;
+the GT AP arm is `runs/2026-11-12-iwl7260-ap`, the fixed-arm evidence and the
+pre-registered gates are `runs/2026-11-12-iwl7260-ap-a4/RUN.md`.
 
 ## Why
 
