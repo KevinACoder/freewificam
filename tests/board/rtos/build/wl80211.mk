@@ -27,7 +27,7 @@
 # The board cases that compile in this world.  The platform Makefile's generic
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
-WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap
+WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -87,6 +87,14 @@ WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
 # The hostap include roots come BEFORE the global ones: the NXP tree's
 # <fsl_os_abstraction.h> and <wlan.h> must resolve to this component's shims,
 # not to the fsl_sdmmc OSA header the global -I list carries.
+# The STA profile must force CONFIG_HOSTAPD 0; the AP profile keeps the AP
+# entry.  The header is selected by the image's role, never by both at once.
+ifeq ($(CONFIG_WPA_STA),1)
+WL80211_HOSTAP_CONFIG_HDR := $(LIB8)/hostap/include/hostap_config_sta.h
+else
+WL80211_HOSTAP_CONFIG_HDR := $(LIB8)/hostap/include/hostap_config.h
+endif
+
 WL80211_HOSTAP_CFLAGS := \
 	-I$(LIB8)/hostap/include \
 	-I$(THIRD_PARTY)/wpa_supplicant-rtos \
@@ -109,7 +117,7 @@ WL80211_HOSTAP_CFLAGS := \
 	-Wno-override-init -Wno-implicit-fallthrough -Wno-unused-variable \
 	-Wno-unused-function \
 	$(VENDORED_CFLAGS) \
-	-include $(LIB8)/hostap/include/hostap_config.h \
+	-include $(WL80211_HOSTAP_CONFIG_HDR) \
 	-include $(LIB8)/hostap/include/hostap_printf_bind.h
 
 WL80211_HOSTAP_SRCS := $(LIBLINUX80211_HOSTAP_SRCS)

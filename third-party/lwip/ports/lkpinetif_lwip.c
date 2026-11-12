@@ -197,6 +197,7 @@ lkpinetif_start(struct netif *netif)
 
 	if (netif == NULL)
 		return;
+	LOCK_TCPIP_CORE();
 	netif_set_up(netif);
 	/* the address comes from the plan (DHCP in the board flow, static as the
 	 * documented fallback); the client starts only when the interface is up,
@@ -204,6 +205,7 @@ lkpinetif_start(struct netif *netif)
 #if LWIP_DHCP
 	(void)dhcp_start(netif);
 #endif
+	UNLOCK_TCPIP_CORE();
 }
 
 void
@@ -224,10 +226,12 @@ lkpinetif_stop(struct netif *netif)
 
 	if (netif == NULL)
 		return;
+	LOCK_TCPIP_CORE();
 #if LWIP_DHCP
 	dhcp_stop(netif);
 #endif
 	netif_set_down(netif);
+	UNLOCK_TCPIP_CORE();
 }
 
 void

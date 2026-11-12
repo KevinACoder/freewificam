@@ -52,6 +52,19 @@ config HOSTAP_AP
 	  the AP MLME is hostapd.  BSD-3-Clause code; the image that selects it
 	  also links the GPL-2.0 mac80211 stack and is a GPL-2.0 link product.
 
+config WPA_STA
+	bool "wpa_supplicant STA (WPA2-PSK/CCMP)"
+	depends on LIBLINUX80211_WIRELESS
+	depends on !HOSTAP_AP
+	help
+	  Links the imported NXP wpa_supplicant core as this image's STA
+	  supplicant: the 2.11 core, the NXP FreeRTOS entry/event loop, this
+	  port's l2_packet and STA driver table on the direct nl80211 surface.
+	  This is the G2 role (the board joins an encrypted AP); the AP role is
+	  HOSTAP_AP and the two are mutually exclusive.  BSD-3-Clause code; the
+	  image that selects it also links the GPL-2.0 mac80211 stack and is a
+	  GPL-2.0 link product.
+
 config LIBLINUX80211_IWLWIFI
 	bool "iwlwifi (AC 7260 / mvm) driver"
 	depends on LIBLINUX80211_WIRELESS

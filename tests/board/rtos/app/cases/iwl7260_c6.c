@@ -56,7 +56,19 @@
 #include <linux/netdevice.h>
 #include <net/net_namespace.h>
 
-#define C6_PEER_IP		"192.168.99.1"
+#ifndef CONFIG_C6_PEER_IP
+#define CONFIG_C6_PEER_IP "192.168.99.1"
+#endif
+static char c6_peer_ip[16] = CONFIG_C6_PEER_IP;
+
+void
+lkpi_c6_peer_ip_set(const char *ip)
+{
+	if (ip == NULL || ip[0] == '\0')
+		return;
+	strncpy(c6_peer_ip, ip, sizeof(c6_peer_ip) - 1u);
+	c6_peer_ip[sizeof(c6_peer_ip) - 1u] = '\0';
+}
 #define C6_TCP_PORT		5001u
 #define C6_UDP_PORT		5002u
 
@@ -139,10 +151,10 @@ c6_run_phase(unsigned n, const struct c6_phase *ph)
 		rc = lkpi_net_udp_sink_window(ph->window_ms, &r);
 		break;
 	case C6_TCP_UP:
-		rc = lkpi_net_iperf_up(C6_PEER_IP, ph->port, ph->window_ms, &r);
+		rc = lkpi_net_iperf_up(c6_peer_ip, ph->port, ph->window_ms, &r);
 		break;
 	case C6_UDP_UP:
-		rc = lkpi_net_udp_blast(C6_PEER_IP, ph->port, ph->window_ms,
+		rc = lkpi_net_udp_blast(c6_peer_ip, ph->port, ph->window_ms,
 					40000u, &r);
 		break;
 	default:

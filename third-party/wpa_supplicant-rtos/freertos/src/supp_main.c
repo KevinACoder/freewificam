@@ -119,6 +119,11 @@ static void supplicant_main_task(osa_task_param_t arg);
 OSA_TASK_HANDLE_DEFINE(supplicant_thread);
 OSA_EVENT_HANDLE_DEFINE(supplicant_event_Handle);
 
+/* The supplicant task itself must not yield/delay after posting to its own
+ * event group: vTaskDelay() there stalls the only task that can drain the
+ * queue (observed at wpa_supplicant_init's first periodic timeout). */
+static TaskHandle_t supplicant_task_handle;
+
 /* OSA_TASKS: name, priority, instances, stackSz, useFloat */
 static OSA_TASK_DEFINE(supplicant_main_task, PRIORITY_RTOS_TO_OSA((configMAX_PRIORITIES - 3)), 1, CONFIG_SUPP_MAIN_THREAD_STACK_SIZE, 0);
 #endif
@@ -554,6 +559,8 @@ static void notify_wpa_supplicant_event(wpa_supp_event_t event)
     k_sleep(K_MSEC(10));
 #else
     (void)OSA_EventSet((osa_event_handle_t)supplicant_event_Handle, (1U << event));
+    if (xTaskGetCurrentTaskHandle() == supplicant_task_handle)
+        return; /* already in the eloop task; the loop runs on return */
     if (0U == __get_IPSR())
     {
         OSA_TaskYield();
@@ -601,6 +608,7 @@ static void supplicant_main_task(void *arg, void *arg1, void *arg2)
 static void supplicant_main_task(osa_task_param_t arg)
 #endif
 {
+    supplicant_task_handle = xTaskGetCurrentTaskHandle();
     // const char *iface_name = (const char *)arg;
     struct netif *netif;
     int i;

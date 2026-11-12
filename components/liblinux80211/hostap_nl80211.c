@@ -22,6 +22,7 @@
 
 #include "linux80211/hostap_drv.h"
 #include "linux80211/nl80211_probe.h"
+#include "linux80211/sta_drv.h"
 
 /* the lwIP adapter's transmit entry; the AP's EAPOL uses the same frame path
  * as the supplicant would on Linux (a packet-socket send on wlan0) */
@@ -211,6 +212,85 @@ lkpi_hostap_drv_sta_authorized(const unsigned char *addr, int authorized)
 	return lkpi_nl80211_sta_set_authorized(hostap_dev, addr, authorized);
 }
 
+/* --- the STA role (G2, docs/HANDOFF-AP-WPA2.md §P2) --------------------- */
+
+static struct wiphy *
+lkpi_sta_wiphy(void)
+{
+	if (hostap_dev == NULL || hostap_dev->ieee80211_ptr == NULL)
+		return NULL;
+	return hostap_dev->ieee80211_ptr->wiphy;
+}
+
+int
+lkpi_sta_drv_scan(const char *ssid, unsigned int ssid_len,
+		  unsigned int freq_mhz)
+{
+	char name[33];
+
+	if (hostap_dev == NULL)
+		return -ENODEV;
+	if (ssid == NULL)
+		return lkpi_nl80211_trigger_scan(hostap_dev, NULL, freq_mhz);
+	if (ssid_len == 0u || ssid_len > 32u)
+		return -EINVAL;
+	memcpy(name, ssid, ssid_len);
+	name[ssid_len] = '\0';
+	return lkpi_nl80211_trigger_scan(hostap_dev, name, freq_mhz);
+}
+
+int
+lkpi_sta_drv_connect(const struct lkpi_sta_connect *c)
+{
+	if (hostap_dev == NULL || c == NULL || c->ssid == NULL ||
+	    c->ssid_len == 0u || c->ssid_len > 32u)
+		return -EINVAL;
+	return lkpi_nl80211_connect_ex(hostap_dev, c->ssid, c->ssid_len,
+				       c->bssid, c->freq_mhz, c->ie,
+				       c->ie_len, c->privacy);
+}
+
+int
+lkpi_sta_drv_connected(unsigned char bssid[6])
+{
+	if (hostap_dev == NULL)
+		return -ENODEV;
+	return lkpi_nl80211_connected(hostap_dev, bssid);
+}
+
+int
+lkpi_sta_drv_disconnect(unsigned int reason)
+{
+	if (hostap_dev == NULL)
+		return -ENODEV;
+	return lkpi_nl80211_disconnect(hostap_dev, reason);
+}
+
+int
+lkpi_sta_drv_mac(unsigned char mac[6])
+{
+	if (hostap_dev == NULL || hostap_dev->dev_addr == NULL || mac == NULL)
+		return -ENODEV;
+	memcpy(mac, hostap_dev->dev_addr, 6);
+	return 0;
+}
+
+int
+lkpi_sta_drv_bss_get(const char *ssid, unsigned int ssid_len,
+		     struct lkpi_sta_bss *out,
+		     unsigned char *ie, unsigned int ie_max,
+		     unsigned int *ie_len)
+{
+	struct wiphy *wiphy = lkpi_sta_wiphy();
+
+	if (wiphy == NULL || out == NULL)
+		return -ENODEV;
+	return lkpi_nl80211_bss_get(wiphy, ssid, ssid_len, out->bssid,
+				    &out->freq, &out->signal,
+				    &out->beacon_int, &out->capability,
+				    ie, ie_max, ie_len);
+}
+
 int
 lkpi_hostap_drv_eapol_tx(const void *frame, size_t len)
 {
@@ -248,4 +328,12 @@ int
 lkpi_hostap_drv_del_key(const unsigned char *addr, int key_idx)
 {
 	return lkpi_nl80211_del_key(hostap_dev, key_idx, addr);
+}
+
+int
+lkpi_sta_drv_eapol_tx(const void *frame, size_t len)
+{
+	if (frame == NULL || len == 0u)
+		return -EINVAL;
+	return lkpinetif_tx_frame(frame, len);
 }

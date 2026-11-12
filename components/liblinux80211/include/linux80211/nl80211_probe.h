@@ -33,6 +33,24 @@ int lkpi_nl80211_bss_find(struct wiphy *wiphy, const char *ssid,
 int lkpi_nl80211_connect(struct net_device *dev, const char *ssid,
 			 const unsigned char bssid[6], unsigned int freq_mhz);
 
+/* The WPA2 form: also carries the supplicant's RSN/WPA IE and, when privacy
+ * is non-zero, NL80211_ATTR_PRIVACY.  Without those attrs cfg80211 would look
+ * for an open BSS and mac80211 would send an association request without the
+ * RSN IE.  `ssid_len` is used so a non-NUL SSID byte array is safe. */
+int lkpi_nl80211_connect_ex(struct net_device *dev, const char *ssid,
+			    unsigned int ssid_len,
+			    const unsigned char bssid[6],
+			    unsigned int freq_mhz, const void *ie,
+			    unsigned int ie_len, int privacy);
+
+/* Copy one BSS's IEs and metadata for the supplicant's scan-result list.
+ * Returns 0, -ENOENT, or -EMSGSIZE when `ie_max` is too small. */
+int lkpi_nl80211_bss_get(struct wiphy *wiphy, const char *ssid,
+			 unsigned int ssid_len, unsigned char bssid[6],
+			 int *freq, int *signal, int *beacon_int,
+			 int *capability, unsigned char *ie,
+			 unsigned int ie_max, unsigned int *ie_len);
+
 /* Start NL80211_CMD_DISCONNECT through the real handler. */
 int lkpi_nl80211_disconnect(struct net_device *dev, unsigned int reason);
 

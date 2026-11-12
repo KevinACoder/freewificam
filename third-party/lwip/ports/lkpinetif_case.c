@@ -32,6 +32,7 @@
 #include "lwip/inet_chksum.h"
 #include "lwip/sys.h"
 #include "lwip/apps/lwiperf.h"
+#include "lwip/dhcp.h"
 #include "arch/sys_arch.h"
 
 #include "os/cmsis2/cmsis2.h"
@@ -111,6 +112,76 @@ lkpi_net_wlan_up(const char *ip, const char *mask, const char *gw, char mac[6])
 		if (lkpinetif_hwaddr((uint8_t *)mac) != 0)
 			memset(mac, 0, 6);
 	}
+	return 0;
+}
+
+/* --- DHCP / late static address (G2) -------------------------------------- */
+
+int
+lkpi_net_dhcp_start(void)
+{
+	err_t err;
+
+	LOCK_TCPIP_CORE();
+	err = dhcp_start(&g_netif);
+	if (err == ERR_OK)
+		netif_set_default(&g_netif);
+	UNLOCK_TCPIP_CORE();
+	return err == ERR_OK ? 0 : -1;
+}
+
+int
+lkpi_net_dhcp_wait(struct lkpi_net_lease *lease, unsigned int timeout_ms)
+{
+	unsigned int waited = 0u;
+
+	if (lease == NULL)
+		return -1;
+	lease->ip[0] = '\0';
+	lease->mask[0] = '\0';
+	lease->gw[0] = '\0';
+	while (waited <= timeout_ms) {
+		int ready;
+
+		LOCK_TCPIP_CORE();
+		ready = dhcp_supplied_address(&g_netif) ? 1 : 0;
+		if (ready) {
+			ip4addr_ntoa_r(&g_netif.ip_addr, lease->ip,
+				       (int)sizeof(lease->ip));
+			ip4addr_ntoa_r(&g_netif.netmask, lease->mask,
+				       (int)sizeof(lease->mask));
+			ip4addr_ntoa_r(&g_netif.gw, lease->gw,
+				       (int)sizeof(lease->gw));
+		}
+		UNLOCK_TCPIP_CORE();
+		if (ready)
+			return 0;
+		osDelay(100u);
+		waited += 100u;
+	}
+	return -1;
+}
+
+int
+lkpi_net_set_static(const char *ip, const char *mask, const char *gw)
+{
+	ip4_addr_t ipaddr, maskaddr, gwaddr;
+
+	if (ip == NULL || mask == NULL || gw == NULL)
+		return -1;
+	if (ip4addr_aton(ip, &ipaddr) == 0 ||
+	    ip4addr_aton(mask, &maskaddr) == 0 ||
+	    ip4addr_aton(gw, &gwaddr) == 0)
+		return -1;
+	LOCK_TCPIP_CORE();
+#if LWIP_DHCP
+	dhcp_stop(&g_netif);
+#endif
+	netif_set_addr(&g_netif, &ipaddr, &maskaddr, &gwaddr);
+	netif_set_up(&g_netif);
+	netif_set_link_up(&g_netif);
+	netif_set_default(&g_netif);
+	UNLOCK_TCPIP_CORE();
 	return 0;
 }
 

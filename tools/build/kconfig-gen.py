@@ -56,7 +56,7 @@ KCONFIG_FILES = [
 # not edited by a user.
 CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci kpi_live kpi_mock
          mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab
-         iwl7260_ap""".split()
+         iwl7260_ap iwl7260_sta_wpa2""".split()
 
 KC = None
 

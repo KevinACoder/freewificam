@@ -76,6 +76,23 @@ int lkpi_netdev_xmit(struct net_device *dev, const void *frame, size_t len);
 int lkpi_net_wlan_up(const char *ip, const char *mask, const char *gw,
 		     char mac[6]);
 
+/* The DHCP form used by G2's external AP.  Build the netif (the caller already
+ * used lkpi_net_wlan_up with 0.0.0.0), then start the client after association
+ * and wait for the lease.  Returns 0 when the client started; the wait call
+ * returns 0 when a lease arrived and fills the plain-C strings. */
+struct lkpi_net_lease {
+	char ip[16];
+	char mask[16];
+	char gw[16];
+};
+
+int lkpi_net_dhcp_start(void);
+int lkpi_net_dhcp_wait(struct lkpi_net_lease *lease, unsigned int timeout_ms);
+
+/* Change the live netif's address after a failed DHCP attempt.  The caller
+ * uses this only as a labelled bench fallback. */
+int lkpi_net_set_static(const char *ip, const char *mask, const char *gw);
+
 /* Send `count` ICMP echoes of `payload_len` bytes to `dst`, one at a time,
  * waiting at most `timeout_ms` for each reply.  Returns 0 when every echo was
  * answered, -1 otherwise.  `rx` is the answered count; the RTT outputs are in

@@ -24,35 +24,300 @@
 
 #include "linux80211/hostap_drv.h"
 #include "linux80211/hostap_ap.h"
+#include "linux80211/sta_drv.h"
+#include "linux80211/sta_wpa.h"
+#include "fsl_os_abstraction.h"
+#include "supp_main.h"
 
 struct lkpi_drv {
 	struct hostapd_data	*hapd;
 	int			 opened;
 };
 
-/*
- * The STA-side init.  This image is the AP role, but the imported entry also
- * initialises a wpa_supplicant interface (freertos/src/supp_main.c) and that
- * interface needs a driver context before it can exist.  The STA role has no
- * state here yet (the AP round uses the hostapd side), so the context is a
- * marker: what matters is that the interface initialises and the entry's eloop
- * runs, which is the task that dispatches hostapd's own events.
- */
-static int lkpi_sta_priv;
+/* The STA role's driver context.  `wpa_s` is the event target the imported
+ * entry passes to init2(); the scan SSID is remembered so get_scan_results2()
+ * can return the same BSS scan2() asked for. */
+struct lkpi_sta_drv {
+	void			*wpa_s;
+	unsigned char		 mac[6];
+	char			 scan_ssid[33];
+	unsigned int		 scan_ssid_len;
+};
 
 static void *
 lkpi_sta_init2(void *ctx, const char *ifname, void *global_priv)
 {
-	(void)ctx;
-	(void)ifname;
+	struct lkpi_sta_drv *d;
+
 	(void)global_priv;
-	return &lkpi_sta_priv;
+	if (ifname == NULL ||
+	    lkpi_hostap_drv_open(ifname) != 0) {
+		wpa_printf(MSG_ERROR, "lkpi: no netdev for STA %s",
+			   ifname != NULL ? ifname : "(null)");
+		return NULL;
+	}
+	d = os_zalloc(sizeof(*d));
+	if (d == NULL) {
+		lkpi_hostap_drv_close();
+		return NULL;
+	}
+	d->wpa_s = ctx;
+	(void)lkpi_sta_drv_mac(d->mac);
+	return d;
 }
 
 static void
 lkpi_sta_deinit(void *priv)
 {
+	struct lkpi_sta_drv *d = priv;
+
+	lkpi_hostap_drv_close();
+	os_free(d);
+}
+
+static int
+lkpi_sta_post_event(struct lkpi_sta_drv *d, enum wpa_event_type event,
+		    union wpa_event_data *data)
+{
+	struct wpa_supplicant_event_msg *msg;
+
+	if (d == NULL || d->wpa_s == NULL) {
+		os_free(data);
+		return -1;
+	}
+	msg = os_zalloc(sizeof(*msg));
+	if (msg == NULL) {
+		os_free(data);
+		return -1;
+	}
+	msg->hostapd = 0;
+	msg->ctx = d->wpa_s;
+	msg->event = event;
+	msg->data = data;
+	if (send_wpa_supplicant_event(msg) < 0)
+		return -1;
+	return 0;
+}
+
+static int
+lkpi_sta_scan2(void *priv, struct wpa_driver_scan_params *params)
+{
+	struct lkpi_sta_drv *d = priv;
+	struct lkpi_sta_bss bss;
+	const u8 *ssid = NULL;
+	size_t ssid_len = 0;
+	unsigned int freq = 0;
+	unsigned int ielen = 0;
+	unsigned int i;
+
+	if (d == NULL || params == NULL)
+		return -1;
+	if (params->num_ssids > 0 && params->ssids != NULL) {
+		ssid = params->ssids[0].ssid;
+		ssid_len = params->ssids[0].ssid_len;
+	}
+	if (params->freqs != NULL && params->freqs[0] != 0)
+		freq = (unsigned int)params->freqs[0];
+	if (ssid == NULL || ssid_len == 0u || ssid_len > 32u)
+		return -1;
+
+	os_memcpy(d->scan_ssid, ssid, ssid_len);
+	d->scan_ssid[ssid_len] = '\0';
+	d->scan_ssid_len = (unsigned int)ssid_len;
+
+	if (lkpi_sta_drv_scan(d->scan_ssid, d->scan_ssid_len, freq) != 0)
+		return -1;
+	for (i = 0; i < 100u; i++) {
+		if (lkpi_sta_drv_bss_get(d->scan_ssid, d->scan_ssid_len, &bss,
+					 NULL, 0, &ielen) == 0)
+			break;
+		OSA_TimeDelay(100);
+	}
+	if (i == 100u) {
+		printf("lkpi: sta scan ssid=%s freq=%u no bss\n",
+		       d->scan_ssid, freq);
+		return -1;
+	}
+	printf("lkpi: sta scan ssid=%s bssid=%02x:%02x:%02x:%02x:%02x:%02x "
+	       "freq=%d signal=%d\n", d->scan_ssid,
+	       bss.bssid[0], bss.bssid[1], bss.bssid[2], bss.bssid[3],
+	       bss.bssid[4], bss.bssid[5], bss.freq, bss.signal);
+	return lkpi_sta_post_event(d, EVENT_SCAN_RESULTS, NULL);
+}
+
+static struct wpa_scan_results *
+lkpi_sta_get_scan_results2(void *priv)
+{
+	struct lkpi_sta_drv *d = priv;
+	struct lkpi_sta_bss bss;
+	struct wpa_scan_results *res;
+	struct wpa_scan_res *r;
+	unsigned char ie[1024];
+	unsigned int ielen = 0;
+	int rc;
+
+	if (d == NULL || d->scan_ssid_len == 0u)
+		return NULL;
+	rc = lkpi_sta_drv_bss_get(d->scan_ssid, d->scan_ssid_len, &bss, ie,
+				  sizeof(ie), &ielen);
+	if (rc != 0) {
+		printf("lkpi: sta scan results rc=%d\n", rc);
+		return NULL;
+	}
+	res = os_zalloc(sizeof(*res));
+	if (res == NULL)
+		return NULL;
+	res->res = os_calloc(1, sizeof(*res->res));
+	if (res->res == NULL) {
+		os_free(res);
+		return NULL;
+	}
+	r = os_zalloc(sizeof(*r) + ielen);
+	if (r == NULL) {
+		os_free(res->res);
+		os_free(res);
+		return NULL;
+	}
+	os_memcpy(r->bssid, bss.bssid, 6);
+	r->freq = bss.freq;
+	r->beacon_int = (u16)bss.beacon_int;
+	r->caps = (u16)bss.capability;
+	r->level = bss.signal;
+	r->flags = WPA_SCAN_LEVEL_DBM;
+	r->ie_len = ielen;
+	os_memcpy(r + 1, ie, ielen);
+	res->res[0] = r;
+	res->num = 1;
+	return res;
+}
+
+static int
+lkpi_sta_associate(void *priv, struct wpa_driver_associate_params *params)
+{
+	struct lkpi_sta_drv *d = priv;
+	struct lkpi_sta_connect c;
+	struct lkpi_sta_bss bss;
+	unsigned char ie[1024];
+	unsigned char bssid[6];
+	unsigned int ielen = 0;
+	unsigned int freq;
+	unsigned int i;
+	int rc;
+
+	if (d == NULL || params == NULL || params->ssid == NULL ||
+	    params->ssid_len == 0u || params->ssid_len > 32u)
+		return -1;
+	os_memset(&c, 0, sizeof(c));
+	c.ssid = (const char *)params->ssid;
+	c.ssid_len = (unsigned int)params->ssid_len;
+	c.bssid = params->bssid;
+	c.freq_mhz = params->freq.freq > 0 ? (unsigned int)params->freq.freq : 0u;
+	c.ie = params->wpa_ie;
+	c.ie_len = (unsigned int)params->wpa_ie_len;
+	c.privacy = (params->wpa_proto != 0u || params->key_mgmt_suite != 0u);
+	if (params->wpa_ie == NULL || params->wpa_ie_len == 0u)
+		printf("lkpi: sta associate without RSN ie\n");
+
+	os_memset(&bss, 0, sizeof(bss));
+	if (lkpi_sta_drv_bss_get(c.ssid, c.ssid_len, &bss, ie, sizeof(ie),
+				 &ielen) != 0) {
+		os_memset(ie, 0, sizeof(ie));
+		ielen = 0;
+	}
+	rc = lkpi_sta_drv_connect(&c);
+	if (rc != 0 && rc != -EALREADY) {
+		printf("lkpi: sta connect rc=%d\n", rc);
+		return -1;
+	}
+	for (i = 0; i < 200u; i++) {
+		rc = lkpi_sta_drv_connected(bssid);
+		if (rc == 1)
+			break;
+		if (rc < 0)
+			return -1;
+		OSA_TimeDelay(100);
+	}
+	if (i == 200u) {
+		printf("lkpi: sta connect timeout ssid=%s\n", d->scan_ssid);
+		return -1;
+	}
+	freq = c.freq_mhz != 0u ? c.freq_mhz :
+		(bss.freq > 0 ? (unsigned int)bss.freq : 0u);
+	printf("lkpi: sta assoc bssid=%02x:%02x:%02x:%02x:%02x:%02x "
+	       "freq=%u\n", bssid[0], bssid[1], bssid[2], bssid[3], bssid[4],
+	       bssid[5], freq);
+
+	/* The supplicant already owns its RSN IE (set by
+	 * wpa_sm_set_assoc_wpa_ie_default) and gets the BSSID from get_bssid().
+	 * A data-less EVENT_ASSOC is therefore sufficient here and avoids the
+	 * port's deep-copy allocator on the EAPOL-critical path. */
+	(void)ie;
+	(void)ielen;
+	return lkpi_sta_post_event(d, EVENT_ASSOC, NULL);
+	return 0;
+}
+
+static int
+lkpi_sta_deauthenticate(void *priv, const u8 *addr, u16 reason_code)
+{
 	(void)priv;
+	(void)addr;
+	return lkpi_sta_drv_disconnect(reason_code);
+}
+
+static int
+lkpi_sta_set_supp_port(void *priv, int authorized)
+{
+	(void)priv;
+	(void)authorized;
+	return 0;
+}
+
+static int
+lkpi_sta_set_operstate(void *priv, int state)
+{
+	(void)priv;
+	(void)state;
+	return 0;
+}
+
+static void
+lkpi_sta_poll(void *priv)
+{
+	(void)priv;
+}
+
+static int
+lkpi_sta_get_bssid(void *priv, u8 *bssid)
+{
+	struct lkpi_sta_drv *d = priv;
+
+	if (d == NULL || bssid == NULL || d->wpa_s == NULL)
+		return -1;
+	if (lkpi_sta_drv_connected(bssid) != 1)
+		return -1;
+	return 0;
+}
+
+static int
+lkpi_sta_get_ssid(void *priv, u8 *ssid)
+{
+	struct lkpi_sta_drv *d = priv;
+
+	if (d == NULL || ssid == NULL)
+		return -1;
+	if (d->scan_ssid_len == 0u)
+		return 0;
+	os_memcpy(ssid, d->scan_ssid, d->scan_ssid_len);
+	return (int)d->scan_ssid_len;
+}
+
+static const u8 *
+lkpi_sta_get_mac_addr(void *priv)
+{
+	struct lkpi_sta_drv *d = priv;
+
+	return d != NULL ? d->mac : NULL;
 }
 
 static void *
@@ -208,6 +473,7 @@ lkpi_set_ap(void *priv, struct wpa_driver_ap_params *params)
 	return 0;
 }
 
+#if CONFIG_HOSTAPD
 static int
 lkpi_send_mlme(void *priv, const u8 *data, size_t data_len, int noack,
 	       unsigned int freq, const u16 *csa_offs, size_t csa_offs_len,
@@ -281,6 +547,8 @@ lkpi_send_eapol(void *priv, const u8 *addr, const u8 *data, size_t data_len,
 	return rc != 0 ? -1 : 0;
 }
 
+#endif /* CONFIG_HOSTAPD */
+
 static int
 lkpi_set_key(void *priv, struct wpa_driver_set_key_params *params)
 {
@@ -295,16 +563,24 @@ lkpi_set_key(void *priv, struct wpa_driver_set_key_params *params)
 		/* Deleting a key that was never installed is a normal part of
 		 * the handshake's reset order (wpa_auth clears keyidx 0 before
 		 * the PTK exists).  -ENOENT is not an install failure. */
-		if (rc != 0 && rc != -ENOENT)
+#if CONFIG_HOSTAPD
+		if (rc != 0 && rc != -ENOENT && rc != -ENOLINK)
 			lkpi_hostap_key_note(0, 0, rc);
+#else
+		if (rc != 0 && rc != -ENOENT && rc != -ENOLINK)
+			lkpi_sta_note_key(0, 0, rc);
+#endif
 		printf("lkpi: del_key keyidx=%d rc=%d\n", params->key_idx, rc);
-		return rc != 0 && rc != -ENOENT ? -1 : 0;
+		return rc != 0 && rc != -ENOENT && rc != -ENOLINK ? -1 : 0;
 	}
 	if ((params->key_flag & KEY_FLAG_PMK) != 0u)
 		return 0;	/* no PMK offload: nothing to install */
 	if ((params->key_flag & KEY_FLAG_MODIFY) != 0u) {
-		printf("lkpi: set_key modify unsupported\n");
-		return -1;
+		/* The key is already installed; this form only changes its RX/TX
+		 * state, which mac80211 owns.  Success is the honest answer. */
+		printf("lkpi: set_key modify keyidx=%d (no-op)\n",
+		       params->key_idx);
+		return 0;
 	}
 	if (params->alg != WPA_ALG_CCMP || params->key == NULL ||
 	    params->key_len != 16u) {
@@ -323,11 +599,25 @@ lkpi_set_key(void *priv, struct wpa_driver_set_key_params *params)
 	key.pairwise = (params->key_flag & KEY_FLAG_PAIRWISE) != 0u;
 	key.default_key = (params->key_flag & KEY_FLAG_DEFAULT) != 0u;
 	rc = lkpi_hostap_drv_set_key(&key);
+#if CONFIG_HOSTAPD
 	lkpi_hostap_key_note(key.pairwise, key.default_key, rc);
-	printf("lkpi: set_key keyidx=%d cipher=0x%x pairwise=%d default=%d "
-	       "rc=%d mac=" MACSTR "\n",
-	       key.key_idx, key.cipher, key.pairwise, key.default_key, rc,
-	       MAC2STR(params->addr));
+#else
+	lkpi_sta_note_key(key.pairwise, key.default_key, rc);
+#endif
+	{
+		char macbuf[18];
+
+		if (params->addr != NULL) {
+			snprintf(macbuf, sizeof(macbuf), "%02x:%02x:%02x:%02x:%02x:%02x",
+				 params->addr[0], params->addr[1], params->addr[2],
+				 params->addr[3], params->addr[4], params->addr[5]);
+		} else {
+			strcpy(macbuf, "(group)");
+		}
+		printf("lkpi: set_key keyidx=%d cipher=0x%x pairwise=%d "
+		       "default=%d rc=%d mac=%s\n", key.key_idx, key.cipher,
+		       key.pairwise, key.default_key, rc, macbuf);
+	}
 	return rc != 0 ? -1 : 0;
 }
 
@@ -445,20 +735,34 @@ const struct wpa_driver_ops wpa_driver_lkpi_ops = {
 	.desc = "mac80211 nl80211 (RTOS port)",
 	.init2 = lkpi_sta_init2,
 	.deinit = lkpi_sta_deinit,
-	.hapd_init = lkpi_hapd_init,
-	.hapd_deinit = lkpi_hapd_deinit,
 	.get_capa = lkpi_get_capa,
 	.get_ext_capab = lkpi_get_ext_capab,
 	.get_hw_feature_data = lkpi_get_hw_feature_data,
-	.set_ap = lkpi_set_ap,
-	.send_mlme = lkpi_send_mlme,
-	.hapd_send_eapol = lkpi_send_eapol,
 	.set_key = lkpi_set_key,
-	.sta_add = lkpi_sta_add,
-	.sta_remove = lkpi_sta_remove,
-	.sta_set_flags = lkpi_sta_set_flags,
 	.set_freq = lkpi_set_freq,
 	.set_rts = lkpi_set_rts,
 	.set_frag = lkpi_set_frag,
 	.set_country = lkpi_set_country,
+#if CONFIG_HOSTAPD
+	.hapd_init = lkpi_hapd_init,
+	.hapd_deinit = lkpi_hapd_deinit,
+	.set_ap = lkpi_set_ap,
+	.send_mlme = lkpi_send_mlme,
+	.hapd_send_eapol = lkpi_send_eapol,
+	.sta_add = lkpi_sta_add,
+	.sta_remove = lkpi_sta_remove,
+	.sta_set_flags = lkpi_sta_set_flags,
+#endif
+#if CONFIG_WPA_STA
+	.scan2 = lkpi_sta_scan2,
+	.get_scan_results2 = lkpi_sta_get_scan_results2,
+	.associate = lkpi_sta_associate,
+	.deauthenticate = lkpi_sta_deauthenticate,
+	.get_bssid = lkpi_sta_get_bssid,
+	.get_ssid = lkpi_sta_get_ssid,
+	.get_mac_addr = lkpi_sta_get_mac_addr,
+	.set_supp_port = lkpi_sta_set_supp_port,
+	.set_operstate = lkpi_sta_set_operstate,
+	.poll = lkpi_sta_poll,
+#endif
 };

@@ -213,19 +213,32 @@ int
 lkpi_nl80211_connect(struct net_device *dev, const char *ssid,
 		     const unsigned char bssid[6], unsigned int freq_mhz)
 {
+	if (ssid == NULL)
+		return -EINVAL;
+	return lkpi_nl80211_connect_ex(dev, ssid, (unsigned int)strlen(ssid),
+				       bssid, freq_mhz, NULL, 0, 0);
+}
+
+int
+lkpi_nl80211_connect_ex(struct net_device *dev, const char *ssid,
+			unsigned int ssid_len,
+			const unsigned char bssid[6],
+			unsigned int freq_mhz, const void *ie,
+			unsigned int ie_len, int privacy)
+{
 	const struct genl_family *family;
 	struct sk_buff *skb;
 	struct nlmsghdr *nlh;
 	struct genlmsghdr *ghdr;
 	int rc;
 
-	if (dev == NULL || ssid == NULL)
+	if (dev == NULL || ssid == NULL || ssid_len == 0u || ssid_len > 32u)
 		return -EINVAL;
 	family = lkpi_genl_family_get(NL80211_GENL_NAME);
 	if (family == NULL)
 		return -ENOENT;
 
-	skb = alloc_skb(512, GFP_KERNEL);
+	skb = alloc_skb(512 + (int)ie_len, GFP_KERNEL);
 	if (skb == NULL)
 		return -ENOMEM;
 
@@ -242,7 +255,7 @@ lkpi_nl80211_connect(struct net_device *dev, const char *ssid,
 	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
 	if (rc < 0)
 		goto out;
-	rc = nla_put(skb, NL80211_ATTR_SSID, (int)strlen(ssid), ssid);
+	rc = nla_put(skb, NL80211_ATTR_SSID, (int)ssid_len, ssid);
 	if (rc < 0)
 		goto out;
 	if (bssid != NULL) {
@@ -250,7 +263,7 @@ lkpi_nl80211_connect(struct net_device *dev, const char *ssid,
 		if (rc < 0)
 			goto out;
 	}
-	if (freq_mhz != 0) {
+	if (freq_mhz != 0u) {
 		rc = nla_put_u32(skb, NL80211_ATTR_WIPHY_FREQ, freq_mhz);
 		if (rc < 0)
 			goto out;
@@ -259,12 +272,79 @@ lkpi_nl80211_connect(struct net_device *dev, const char *ssid,
 			 NL80211_AUTHTYPE_OPEN_SYSTEM);
 	if (rc < 0)
 		goto out;
+	if (ie != NULL && ie_len != 0u) {
+		rc = nla_put(skb, NL80211_ATTR_IE, (int)ie_len, ie);
+		if (rc < 0)
+			goto out;
+	}
+	if (privacy != 0) {
+		rc = nla_put_flag(skb, NL80211_ATTR_PRIVACY);
+		if (rc < 0)
+			goto out;
+	}
 
 	nlmsg_end(skb, nlh);
 	rc = nl80211_doit(family, dev, skb, nlh, ghdr, NL80211_CMD_CONNECT);
 
 out:
 	kfree_skb(skb);
+	return rc;
+}
+
+/*
+ * The supplicant's scan-result IE source.  `bss->ies` is the probe-response set
+ * when one arrived and the beacon set otherwise; reading it under RCU and
+ * copying before returning keeps the supplicant world free of cfg80211
+ * references and of the BSS lock.
+ */
+int
+lkpi_nl80211_bss_get(struct wiphy *wiphy, const char *ssid,
+		     unsigned int ssid_len, unsigned char bssid[6],
+		     int *freq, int *signal, int *beacon_int,
+		     int *capability, unsigned char *ie,
+		     unsigned int ie_max, unsigned int *ie_len)
+{
+	struct cfg80211_bss *bss;
+	const struct cfg80211_bss_ies *ies;
+	int rc = 0;
+
+	if (wiphy == NULL || ssid == NULL || ssid_len == 0u || bssid == NULL)
+		return -EINVAL;
+	bss = cfg80211_get_bss(wiphy, NULL, NULL, (const u8 *)ssid, ssid_len,
+			       IEEE80211_BSS_TYPE_ESS, IEEE80211_PRIVACY_ANY);
+	if (bss == NULL)
+		return -ENOENT;
+
+	memcpy(bssid, bss->bssid, 6);
+	if (freq != NULL && bss->channel != NULL)
+		*freq = bss->channel->center_freq;
+	if (signal != NULL)
+		*signal = bss->signal / 100;
+	if (beacon_int != NULL)
+		*beacon_int = bss->beacon_interval;
+	if (capability != NULL)
+		*capability = bss->capability;
+
+	rcu_read_lock();
+	ies = rcu_dereference(bss->ies);
+	if (ies == NULL)
+		ies = rcu_dereference(bss->beacon_ies);
+	if (ies == NULL) {
+		rc = -ENOENT;
+	} else if (ie != NULL && ie_max != 0u) {
+		if ((unsigned int)ies->len > ie_max) {
+			rc = -EMSGSIZE;
+		} else {
+			memcpy(ie, ies->data, (size_t)ies->len);
+			if (ie_len != NULL)
+				*ie_len = (unsigned int)ies->len;
+		}
+	} else if (ie_len != NULL) {
+		*ie_len = (unsigned int)ies->len;
+	}
+	rcu_read_unlock();
+
+	cfg80211_put_bss(wiphy, bss);
 	return rc;
 }
 

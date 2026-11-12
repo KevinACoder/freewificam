@@ -24,4 +24,61 @@ config AP_WPA2
 	  source set, the driver table and the image's other cases are the same
 	  as the open AP profile.  Used by rk3568-iwl7260-ap-wpa2.
 
+config STA_SSID
+	string "G2 STA target SSID"
+	default ""
+
+config STA_BSSID
+	string "G2 STA target BSSID (empty = any)"
+	default ""
+
+config STA_FREQ
+	int "G2 STA target frequency (MHz, 0 = any)"
+	default 2432
+
+config STA_DHCP
+	bool "G2 STA uses DHCP (otherwise the static address below)"
+	default n
+
+config STA_STATIC_IP
+	string "G2 STA static address"
+	default ""
+
+config STA_STATIC_MASK
+	string "G2 STA static netmask"
+	default "255.255.255.0"
+
+config STA_STATIC_GW
+	string "G2 STA static gateway"
+	default ""
+
+config STA_FALLBACK_IP
+	string "G2 STA static fallback address when DHCP times out"
+	default "192.168.3.200"
+
+config STA_FALLBACK_GW
+	string "G2 STA static fallback gateway"
+	default "192.168.3.1"
+
+config STA_PEER_CANDIDATES
+	string "G2 STA peer candidates, space separated"
+	default ""
+
+config C6_PEER_IP
+	string "C6 throughput peer address"
+	default "192.168.99.1"
+
+config STA_PSK
+	string "G2 STA passphrase when it is a non-secret bench constant"
+	default "rtos-7260-wpa2-psk"
+
+config STA_PSK_EXTERNAL
+	bool "G2 STA passphrase comes from generated sta_psk.h"
+	default n
+	help
+	  The QiQiJia passphrase must not enter the repository.  The profile
+	  selects this and tools/rtos/sta-psk.py writes build/kconfig/<profile>/
+	  sta_psk.h (gitignored, 0600) from the STA_PSK environment.  The Pi
+	  bench profile may use its non-secret bench constant instead.
+
 endmenu

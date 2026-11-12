@@ -37,6 +37,7 @@ CASES = (
     "iwl7260_c6",
     "iwl7260_stab",
     "iwl7260_ap",
+    "iwl7260_sta_wpa2",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -332,6 +333,13 @@ PATTERNS = {
     "iwl7260_ap_pass_apt": re.compile(r"iwl7260_ap: PASS APT", re.MULTILINE),
     "iwl7260_ap_fail": re.compile(
         r"iwl7260_ap: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_sta_wpa2_state": re.compile(
+        r"iwl7260_sta_wpa2: sta state=(?P<state>\d+) "
+        r"waited_ms=(?P<wait>\d+) bssid=(?P<bssid>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_sta_wpa2_pass": re.compile(
+        r"iwl7260_sta_wpa2: PASS STAW", re.MULTILINE
     ),
     # C6 throughput round: the plan line, the two listeners, and the case's
     # own verdict.  The 80% gate is the harness report's, not the judge's.
