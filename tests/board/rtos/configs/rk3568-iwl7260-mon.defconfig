@@ -1,0 +1,45 @@
+# mac80211 on the RTOS line, monitor round: the AC 7260 becomes an RX-only
+# monitor on the bench AP's channel, the port's sink counts what arrives, and
+# nothing about the role goes through lwIP (docs/HANDOFF-AC7260-MONITOR.md).
+#
+# The bring-up is the C4/C5 one (core, firmware, PCI, wlan0).  The role change
+# is the real NL80211_CMD_SET_INTERFACE stream with the device down, then a
+# real NL80211_CMD_SET_WIPHY(freq) while it is still down: that is the order
+# mac80211 stores the monitor's channel request before the virtual monitor's
+# channel context exists (stack/mac80211/cfg.c:1093, iface.c:1281).
+#
+# No AP MLME and no netif: the frames' consumer is the component's monitor sink
+# (components/liblinux80211/linuxkpi_netdev.c:netif_rx), not lwIP.  The lwIP
+# component is still linked (CONFIG_LIBLINUX80211_NET_LWIP) because its adapter
+# counters are M4's witness that monitor frames did not become stack frames;
+# no netif is brought up, so nothing is transmitted.
+#
+# The channel is the bench AP's (2432 MHz = ch5) and the window is the GT arm's
+# 20 s; both are profile inputs, not case constants.
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product that also redistributes the Intel firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_mon"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+CONFIG_MON_FREQ=2432
+CONFIG_MON_WINDOW_MS=15000
+
+# mac80211 allocates its local/wiphy/netdev/BSS records from the FreeRTOS heap;
+# a monitor boot adds the virtual monitor sdata and iwlwifi's listener context
+# on top of the C3 set, and the GT arm measured 15-20 frames/s, so the pool and
+# heap are the accepted C6 ones rather than a new lever.
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+
+CONFIG_RUNNER_STACK_KB=24

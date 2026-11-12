@@ -50,6 +50,7 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-iwl7260-ap5g-wpa2` | tick pcie iwl7260_ap5g | the same with `CONFIG_AP_WPA2=y`: passphrase, 4-way, `ptk=1 gtk=1 fail=0`, `PASS AP5W` (P2) |
 | `rk3568-iwl7260-sta5g` | tick pcie iwl7260_sta5g | the station on the 5 GHz band (`CONFIG_STA_FREQ=5180`, empty passphrase = open): the imported supplicant associates, the case reads the association's frequency back out of cfg80211 and fails unless it is 5 GHz, then 56/1400 B ICMP 20/20; `PASS STA5` (P3) |
 | `rk3568-iwl7260-sta5g-wpa2` | tick pcie iwl7260_sta5g | the same with `CONFIG_STA_PSK` set: EAPOL both ways, `ptk=1 gtk=1 fail=0`, `PASS STA5W` (P4) |
+| `rk3568-iwl7260-mon` | tick pcie iwl7260_mon | the AC 7260 as an RX-only monitor on `CONFIG_MON_FREQ` (2432) for `CONFIG_MON_WINDOW_MS` (15 s); the role change is `SET_INTERFACE(MONITOR)` with the device down, then `dev_open` **then** `SET_WIPHY(freq)` (cfg80211 refuses the channel set while no monitor is running), and the frames go to the component's monitor sink, never to lwIP; `PASS MON` requires >=8 beacons/s, `bad=0` radiotap, an unchanged lwIP `rx_frames` and `tx_packets=0` |
 | `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
 
 ```

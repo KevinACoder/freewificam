@@ -44,6 +44,7 @@
 #include <net/cfg80211.h>
 
 #include "linux80211/diag.h"
+#include "linux80211/net.h"
 
 /* ------------------------------------------------------------------ */
 /* the device registry                                                 */
@@ -529,12 +530,248 @@ eth_type_trans(struct sk_buff *skb, struct net_device *dev)
  */
 extern void lkpi_netdev_rx(struct sk_buff *skb) __attribute__((weak));
 
+/* ------------------------------------------------------------------ */
+/* the monitor sink (2026-11-12, docs/HANDOFF-AC7260-MONITOR.md P3)     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * mac80211 delivers a monitor interface's frames through netif_receive_skb()
+ * -> netif_rx() exactly like data, with skb->dev pointing at the monitor
+ * sub-ifdata whose type is ARPHRD_IEEE80211_RADIOTAP (iface.c:1947).  lwIP's
+ * adapter would classify such a frame as foreign and free it (lkpinetif.c
+ * g_dev mismatch), so the sink has to sit here: the frame's consumer is a
+ * counter, not a stack.  The branch is inert unless a case enables it.
+ */
+static int lkpi_mon_enabled;
+static struct lkpi_net_mon_diag lkpi_mon;
+
+int
+lkpi_net_monitor_enable(int enable)
+{
+	int prev = lkpi_mon_enabled;
+
+	lkpi_mon_enabled = enable != 0;
+	return prev;
+}
+
+int
+lkpi_net_monitor_enabled(void)
+{
+
+	return lkpi_mon_enabled;
+}
+
+void
+lkpi_net_monitor_reset(void)
+{
+
+	memset(&lkpi_mon, 0, sizeof(lkpi_mon));
+}
+
+void
+lkpi_net_monitor_diag(struct lkpi_net_mon_diag *out)
+{
+	unsigned long best = 0UL;
+	unsigned int i;
+
+	if (out == NULL)
+		return;
+	*out = lkpi_mon;
+	/* The dominant channel, not the first: a monitor opened before its
+	 * channel request lands sees the wiphy's default channel for a few
+	 * frames, and the frame count is what makes 2432 the answer. */
+	out->freq_mhz = 0u;
+	for (i = 0u; i < LKPI_NET_MON_FREQS; i++) {
+		if (out->freq[i].freq == 0u)
+			continue;
+		if (out->freq[i].count >= best) {
+			best = out->freq[i].count;
+			out->freq_mhz = out->freq[i].freq;
+		}
+	}
+}
+
+/*
+ * The radiotap header starts at skb->data: iwlwifi's monitor path prepends it
+ * (mvm/rxmq.c iwl_mvm_add_rtap_sniffer_config) and mac80211's
+ * ieee80211_rx_monitor() prepends one when the driver did not.  The 802.11
+ * frame-control word follows it; radiotap's own it_len is the only way to
+ * find it, and a header that claims to be longer than the frame is a bug we
+ * count rather than parse.
+ *
+ * The channel field is not at a fixed offset: radiotap fields are aligned and
+ * present only when their presence bit is set, and iwlwifi sets TSFT, FLAGS,
+ * RATE, CHANNEL, signal, antenna and an extended MCS field.  The walk below is
+ * the standard one ([size, alignment] per present bit) with the two fields the
+ * verdict needs; a field this table does not know ends the walk without a
+ * frequency rather than guessing one.
+ */
+static const unsigned char lkpi_rtap_size[29] = {
+	8, 1, 1, 4, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 3,
+	8, 12, 12, 12, 12, 6, 12, 1, 4
+};
+static const unsigned char lkpi_rtap_align[29] = {
+	8, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1,
+	8, 2, 8, 2, 2, 2, 2, 1, 2
+};
+
+static unsigned int
+lkpi_rtap_align_up(unsigned int off, unsigned int a)
+{
+
+	return (off + a - 1u) & ~(a - 1u);
+}
+
+/* Fills *freq with the radiotap channel frequency; returns the it_len, or 0
+ * when the header cannot be walked. */
+static unsigned int
+lkpi_rtap_walk(const unsigned char *data, unsigned int len, unsigned int *freq)
+{
+	unsigned int it_len;
+	unsigned int present;
+	unsigned int off = 8u;
+	unsigned int bit;
+
+	if (len < 8u)
+		return 0u;
+	it_len = (unsigned int)data[2] | ((unsigned int)data[3] << 8);
+	if (it_len < 8u || it_len > len)
+		return 0u;
+	present = (unsigned int)data[4] | ((unsigned int)data[5] << 8) |
+		  ((unsigned int)data[6] << 16) | ((unsigned int)data[7] << 24);
+	/*
+	 * A presence word with bit 31 set is followed by another word, and the
+	 * fixed fields begin after the last one (iwlwifi's monitor frames carry
+	 * three: the standard set, its antenna pair, and a namespace word -
+	 * 12 bytes of bitmap before TSFT).  Walking the standard fields of the
+	 * first word from the wrong base misreads the channel, which is how the
+	 * first sink version reported 8 MHz for a 2432 MHz capture.
+	 */
+	while ((present & 0x80000000u) != 0u) {
+		if (off + 4u > it_len)
+			return 0u;
+		present = (unsigned int)data[off] |
+			  ((unsigned int)data[off + 1u] << 8) |
+			  ((unsigned int)data[off + 2u] << 16) |
+			  ((unsigned int)data[off + 3u] << 24);
+		off += 4u;
+	}
+	/* The standard fields are the first word's bits 0..28 (the namespace
+	 * words' fields are vendor data and are not walked). */
+	present = (unsigned int)data[4] | ((unsigned int)data[5] << 8) |
+		  ((unsigned int)data[6] << 16) | ((unsigned int)data[7] << 24);
+	present &= 0x1fffffffu;
+	for (bit = 0u; bit < 29u; bit++) {
+		if ((present & (1u << bit)) == 0u)
+			continue;
+		off = lkpi_rtap_align_up(off, lkpi_rtap_align[bit]);
+		if (off + lkpi_rtap_size[bit] > it_len)
+			return it_len;
+		if (bit == 3u) {	/* CHANNEL: u16 freq, u16 flags */
+			*freq = (unsigned int)data[off] |
+				((unsigned int)data[off + 1u] << 8);
+		}
+		off += lkpi_rtap_size[bit];
+	}
+	return it_len;
+}
+
+static void
+lkpi_mon_absorb(struct sk_buff *skb)
+{
+	struct lkpi_net_mon_diag *d = &lkpi_mon;
+	unsigned int len = skb->len;
+	unsigned int it_len;
+	unsigned int freq = 0u;
+	unsigned int fc;
+	unsigned int type;
+	unsigned int subtype;
+
+	it_len = lkpi_rtap_walk(skb->data, len, &freq);
+	if (it_len < 8u) {
+		d->bad_radiotap++;
+		return;
+	}
+	if (freq != 0u) {
+		unsigned int i;
+
+		for (i = 0u; i < LKPI_NET_MON_FREQS; i++) {
+			if (d->freq[i].freq == freq) {
+				d->freq[i].count++;
+				break;
+			}
+			if (d->freq[i].freq == 0u) {
+				d->freq[i].freq = freq;
+				d->freq[i].count = 1;
+				break;
+			}
+		}
+	}
+	if (d->it_len_min == 0u || it_len < d->it_len_min)
+		d->it_len_min = it_len;
+	if (it_len > d->it_len_max)
+		d->it_len_max = it_len;
+	if (it_len + 2u > len) {
+		d->too_short++;
+		return;
+	}
+	fc = (unsigned int)skb->data[it_len] |
+	     ((unsigned int)skb->data[it_len + 1u] << 8);
+	type = (fc >> 2) & 3u;
+	subtype = (fc >> 4) & 0xfu;
+
+	d->frames++;
+	d->bytes += len;
+	switch (type) {
+	case 0:	/* management */
+		switch (subtype) {
+		case 8:  d->beacons++; break;
+		case 4:  d->probes++; break;
+		case 5:  d->probes++; d->probe_resp++; break;
+		case 11: d->auth++; break;
+		case 0:
+		case 1:
+		case 2:
+		case 3:  d->assoc++; break;
+		default: d->other++; break;
+		}
+		break;
+	case 1:
+		d->ctrl++;
+		break;
+	case 2:
+		d->data++;
+		break;
+	default:
+		d->other++;
+		break;
+	}
+	if (d->kept < LKPI_NET_MON_KEEP) {
+		struct lkpi_net_mon_frame *k = &d->keep[d->kept];
+		unsigned int n = len < LKPI_NET_MON_KEEP_BYTES ?
+				 len : LKPI_NET_MON_KEEP_BYTES;
+
+		memset(k, 0, sizeof(*k));
+		k->len = len;
+		k->it_len = it_len;
+		k->fc = fc;
+		memcpy(k->head, skb->data, n);
+		d->kept++;
+	}
+}
+
 int
 netif_rx(struct sk_buff *skb)
 {
 
 	if (skb == NULL)
 		return NET_RX_DROP;
+	if (lkpi_mon_enabled && skb->dev != NULL &&
+	    skb->dev->type == ARPHRD_IEEE80211_RADIOTAP) {
+		lkpi_mon_absorb(skb);
+		kfree_skb(skb);
+		return NET_RX_SUCCESS;
+	}
 	if (lkpi_netdev_rx != NULL) {
 		lkpi_netdev_rx(skb);
 		return NET_RX_SUCCESS;
@@ -860,7 +1097,23 @@ dev_change_net_namespace(struct net_device *dev, struct net *net, const char *pa
 
 /* [LNX] net/core/dev.c: open/close the device through its ndo pair.  The
  * interface's open path is what calls drv_start on a mac80211 driver, so the
- * store of IFF_UP and the return value of ndo_open are the observable. */
+ * store of IFF_UP and the return value of ndo_open are the observable.
+ *
+ * NETDEV_UP and NETDEV_DOWN are part of the interface, not an extra: the net
+ * core fires UP after __dev_open() succeeds and DOWN after __dev_close()
+ * (net/core/dev.c:1752, :1829), and cfg80211's notifier is the only writer of
+ * rdev->num_running_ifaces / num_running_monitor_ifaces (wireless/core.c:1775,
+ * :1797, :1497).  Without the pair those counters stay zero, and every
+ * cfg80211 operation that asks "is this wiphy monitors-only and running" - the
+ * monitor channel set is the first - refuses with -EBUSY even though the
+ * interface is up.  That was the 2026-11-12 monitor round's M1 failure; the
+ * fix is the interface's event pair, not a stack change.
+ *
+ * GOING_DOWN is deliberately not invented here: it runs cfg80211_leave(), and
+ * the port's teardown already runs the driver's stop path.  A case that needs
+ * a graceful leave (a station's deauth-on-close) has to call it itself, and
+ * that is stated where the case lives.
+ */
 int
 dev_open(struct net_device *dev)
 {
@@ -881,6 +1134,7 @@ dev_open(struct net_device *dev)
 	 * shape C4's scan trigger hits first. */
 	set_bit(__LINK_STATE_START, &dev->state);
 	dev->flags |= IFF_UP;
+	lkpi_netdev_notify(NETDEV_UP, dev);
 	return 0;
 }
 
@@ -890,10 +1144,13 @@ dev_close(struct net_device *dev)
 
 	if (dev == NULL)
 		return;
+	if (!(dev->flags & IFF_UP))
+		return;
 	if (dev->netdev_ops != NULL && dev->netdev_ops->ndo_stop != NULL)
 		(void)dev->netdev_ops->ndo_stop(dev);
 	clear_bit(__LINK_STATE_START, &dev->state);
 	dev->flags &= ~IFF_UP;
+	lkpi_netdev_notify(NETDEV_DOWN, dev);
 }
 
 int

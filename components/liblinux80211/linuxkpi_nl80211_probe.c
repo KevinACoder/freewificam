@@ -568,6 +568,72 @@ out:
 }
 
 /*
+ * NL80211_CMD_SET_WIPHY with WIPHY_FREQ: the monitor round's channel
+ * (docs/HANDOFF-AC7260-MONITOR.md P2), the same attribute stream
+ * `iw dev wlan0 set channel 5` sends.  For a MONITOR interface nl80211 routes
+ * this to cfg80211_set_monitor_channel (nl80211.c:4200), whose gate is
+ * cfg80211_has_monitors_only(): the wiphy must already have a *running*
+ * monitor (wireless/chan.c:1818-1823).  So the caller opens the interface
+ * first and sets the channel second - the reverse order returns -EBUSY, which
+ * was the monitor round's first M1 failure.  mac80211 then applies it to the
+ * virtual monitor's channel context (cfg.c:1060-1095): with a monitor sdata
+ * present it releases and re-uses the link channel and records the request in
+ * local->monitor_chanreq, which is what iwlwifi receives as the channel switch.
+ */
+int
+lkpi_nl80211_set_freq(struct net_device *dev, unsigned int freq_mhz,
+		      unsigned int width)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	int rc;
+
+	if (dev == NULL || freq_mhz == 0u)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_SET_WIPHY;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_WIPHY_FREQ, freq_mhz);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_CHANNEL_WIDTH, width);
+	if (rc < 0)
+		goto out;
+	if (width > NL80211_CHAN_WIDTH_20_NOHT) {
+		rc = nla_put_u32(skb, NL80211_ATTR_CENTER_FREQ1, freq_mhz);
+		if (rc < 0)
+			goto out;
+	}
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr, NL80211_CMD_SET_WIPHY);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+/*
  * NL80211_CMD_START_AP.  The hostapd attribute stream, minus what this AP does
  * not use: BEACON_HEAD is the 36-byte 802.11 head (header + fixed fields) and
  * BEACON_TAIL the IEs *after* the TIM, which mac80211 inserts itself between

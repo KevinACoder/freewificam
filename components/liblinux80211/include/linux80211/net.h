@@ -207,4 +207,73 @@ struct lkpi_net_stack_diag {
 
 void lkpi_net_stack_diag(struct lkpi_net_stack_diag *out);
 
+/* --- the monitor sink (2026-11-12, docs/HANDOFF-AC7260-MONITOR.md P3) -----
+ *
+ * mac80211 hands a monitor interface's frames (radiotap + 802.11, FCS already
+ * stripped by ieee80211_rx_monitor()) to the same seam as data: netif_rx().
+ * For a data interface that is lwIP; for a monitor it is not, because the
+ * frame has no ethernet header and no stack consumer.  The sink is therefore
+ * a branch netif_rx() takes *before* the egress seam, keyed on the interface
+ * type mac80211 sets for a monitor (ARPHRD_IEEE80211_RADIOTAP), and it owns
+ * the skb: the frame never reaches lkpi_netdev_rx().
+ *
+ * The sink is a compile-in registry, not a Kconfig symbol: it costs a branch
+ * and a 384-byte ring, and an image without a monitor case leaves it disabled
+ * (enable defaults to 0), so the ordinary data path is unchanged.
+ *
+ * The keep ring is the first frames' evidence: len, radiotap length, the
+ * 802.11 frame-control word and the first 64 bytes, which is what tells the
+ * case whether the radiotap it built is the one GT built.
+ */
+#define LKPI_NET_MON_KEEP		4
+#define LKPI_NET_MON_FREQS		4
+#define LKPI_NET_MON_KEEP_BYTES		64
+
+struct lkpi_net_mon_frame {
+	unsigned int	len;		/* skb length as delivered */
+	unsigned int	it_len;		/* radiotap header length */
+	unsigned int	fc;		/* 802.11 frame control (LE u16) */
+	unsigned char	head[LKPI_NET_MON_KEEP_BYTES];
+};
+
+struct lkpi_net_mon_diag {
+	unsigned long	frames;		/* frames taken by the sink */
+	unsigned long	bytes;
+	unsigned long	beacons;
+	unsigned long	probes;		/* probe requests + responses */
+	unsigned long	probe_resp;
+	unsigned long	auth;
+	unsigned long	assoc;		/* assoc/reassoc request+response */
+	unsigned long	data;
+	unsigned long	ctrl;
+	unsigned long	other;
+	unsigned long	bad_radiotap;	/* it_len < 8 or > skb->len */
+	unsigned long	too_short;	/* no room for a frame-control word */
+	unsigned int	it_len_min;
+	unsigned int	it_len_max;
+	/* The channel each frame's radiotap names, as a small histogram: a
+	 * monitor opened before its channel is set receives on the wiphy's
+	 * default channel for a few frames (the 2026-11-12 arm saw 2412 before
+	 * the switch to 2432), so "the frequency" is the dominant one and the
+	 * minority is evidence, not noise to hide. */
+	struct {
+		unsigned int	freq;
+		unsigned long	count;
+	} freq[LKPI_NET_MON_FREQS];
+	unsigned int	freq_mhz;	/* the dominant frequency */
+	unsigned int	kept;		/* entries filled in keep[] */
+	struct lkpi_net_mon_frame keep[LKPI_NET_MON_KEEP];
+};
+
+/* Zero the counters and the ring.  Called before the interface is opened. */
+void lkpi_net_monitor_reset(void);
+
+/* 1 takes monitor-typed frames at netif_rx(); 0 leaves them to the egress
+ * seam exactly as before.  Returns the previous state. */
+int lkpi_net_monitor_enable(int enable);
+
+int lkpi_net_monitor_enabled(void);
+
+void lkpi_net_monitor_diag(struct lkpi_net_mon_diag *out);
+
 #endif /* LINUX80211_NET_H */

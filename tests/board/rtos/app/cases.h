@@ -107,6 +107,11 @@ int case_iwl7260_ap5g_run(void);
 #if defined(RTOS_CASE_IWL7260_STA5G)
 int case_iwl7260_sta5g_run(void);
 #endif
+/* The monitor round (docs/HANDOFF-AC7260-MONITOR.md): the same card as an
+ * RX-only monitor, with the port's sink as the frame's consumer. */
+#if defined(RTOS_CASE_IWL7260_MON)
+int case_iwl7260_mon_run(void);
+#endif
 
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf

@@ -109,9 +109,45 @@ config C6_PEER_IP
 	string "C6 throughput peer address"
 	default "192.168.99.1"
 
+config MON_FREQ
+	int "iwl7260_mon monitor channel frequency (MHz)"
+	default 2432
+	range 2400 6000
+	help
+	  The monitor round's channel (docs/HANDOFF-AC7260-MONITOR.md).  It is
+	  the bench AP's channel, so the monitor sits on the channel the frames
+	  are on; the GT arm sets `iw dev wlan0 set channel` to the same one.
+
+config MON_WINDOW_MS
+	int "iwl7260_mon capture window (ms)"
+	default 15000
+	range 1000 600000
+	help
+	  The window the case counts in.  It is the GT arm's tcpdump window
+	  (`MON_SECONDS * 1000`), so the two arms' beacon rates are comparable
+	  without a rescaling step.
+
 config STA_PSK
 	string "G2 STA passphrase when it is a non-secret bench constant"
 	default "rtos-7260-wpa2-psk"
+
+config MON_FREQ
+	int "iwl7260_mon monitor channel frequency (MHz)"
+	default 2432
+	range 2400 6000
+	help
+	  The monitor round's channel (docs/HANDOFF-AC7260-MONITOR.md).  It is
+	  the bench AP's channel, so the monitor sits on the channel the frames
+	  are on; the GT arm sets `iw dev wlan0 set channel` to the same one.
+
+config MON_WINDOW_MS
+	int "iwl7260_mon capture window (ms)"
+	default 15000
+	range 1000 600000
+	help
+	  The window the case counts in.  It is the GT arm's tcpdump window
+	  (`MON_SECONDS * 1000`), so the two arms' beacon rates are comparable
+	  without a rescaling step.
 
 config STA_PSK_EXTERNAL
 	bool "G2 STA passphrase comes from generated sta_psk.h"

@@ -1837,21 +1837,81 @@ skb_complete_wifi_ack(struct sk_buff *skb, bool acked)
 }
 
 /*
- * [LNX] net/core/skbuff.c: copy with extra head/tail room.  This port's skbs
- * come from the fixed pool and a grow-copy would need a second pool block; the
- * callers on the compiled paths check NULL, and nothing on the registration
- * path calls it.
+ * [LNX] net/core/skbuff.c:skb_copy_expand: a new skb with `newheadroom` bytes
+ * of headroom and `newtailroom` of tailroom, carrying a copy of every header
+ * field and of the payload.  The interface's body is __copy_skb_header() +
+ * skb_copy_bits(); this port's skbs come from the pool, so the copy goes
+ * through skb_copy_bits (which walks fragments too) and lands linear.
+ *
+ * This was a NULL stub on the grounds that "nothing on the registration path
+ * calls it".  That stopped being true when mac80211's monitor receive path
+ * landed: ieee80211_make_monitor_skb() copies the frame to prepend its own
+ * radiotap header whenever the driver did not supply one (stack/mac80211/
+ * rx.c:777), a copy gated on RX_INCLUDES_FCS - which iwlwifi sets exactly when
+ * it enters monitor mode (mvm/mac-ctxt.c:752).  With NULL, that copy was
+ * silently dropped and the monitor interface delivered nothing: the
+ * 2026-11-12 monitor round's M2 failure (control frames only, zero beacons,
+ * two cold boots).  The NULL there was not "no caller", it was a dropped frame.
  */
 struct sk_buff *
 skb_copy_expand(const struct sk_buff *skb, int newheadroom, int newtailroom,
 		gfp_t gfp_mask)
 {
+	struct sk_buff *nskb;
+	unsigned int need;
+	unsigned int off;
 
-	(void)skb;
-	(void)newheadroom;
-	(void)newtailroom;
 	(void)gfp_mask;
-	return NULL;
+	if (skb == NULL || newheadroom < 0 || newtailroom < 0)
+		return NULL;
+	need = skb->len + (unsigned int)newheadroom + (unsigned int)newtailroom;
+	nskb = pool_alloc(need, 0);
+	if (nskb == NULL)
+		return NULL;
+
+	/* Headroom first: the payload begins after it. */
+	off = (unsigned int)newheadroom;
+	if (skb->len != 0 &&
+	    skb_copy_bits(skb, 0, nskb->data + off, (int)skb->len) != 0) {
+		kfree_skb(nskb);
+		return NULL;
+	}
+
+	/* The header block, field by field: the cb carries mac80211's rx
+	 * status, which the monitor path reads after the copy. */
+	nskb->dev = skb->dev;
+	memcpy(nskb->cb, skb->cb, sizeof(skb->cb));
+	nskb->protocol = skb->protocol;
+	nskb->queue_mapping = skb->queue_mapping;
+	nskb->priority = skb->priority;
+	nskb->pkt_type = skb->pkt_type;
+	nskb->ip_summed = skb->ip_summed;
+	nskb->mac_len = skb->mac_len;
+	nskb->vlan_all = skb->vlan_all;
+	/* The header offsets are relative to head, and head is the new buffer's:
+	 * a recorded offset shifts by the headroom the copy added, an unset one
+	 * keeps the interface's sentinel. */
+	if (skb->mac_header != (uint16_t)~0U)
+		nskb->mac_header = (uint16_t)(skb->mac_header + off);
+	if (skb->network_header != (uint16_t)~0U)
+		nskb->network_header = (uint16_t)(skb->network_header + off);
+	if (skb->transport_header != (uint16_t)~0U)
+		nskb->transport_header = (uint16_t)(skb->transport_header + off);
+	if (skb->inner_mac_header != (uint16_t)~0U)
+		nskb->inner_mac_header = (uint16_t)(skb->inner_mac_header + off);
+	if (skb->inner_network_header != (uint16_t)~0U)
+		nskb->inner_network_header =
+			(uint16_t)(skb->inner_network_header + off);
+	if (skb->inner_transport_header != (uint16_t)~0U)
+		nskb->inner_transport_header =
+			(uint16_t)(skb->inner_transport_header + off);
+
+	nskb->data = nskb->head + off;
+	nskb->tail = off + skb->len;
+	nskb->len = skb->len;
+	nskb->data_len = 0;
+	nskb->truesize = (unsigned int)sizeof(*nskb) + need;
+	return nskb;
 }
 
 /* [LNX] net/core/skbuff.c: no hardware checksum offload on this port, so the

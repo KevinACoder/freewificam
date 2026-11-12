@@ -42,6 +42,9 @@ CASES = (
     # as an input and the association's frequency as a verdict input.
     "iwl7260_ap5g",
     "iwl7260_sta5g",
+    # The monitor round (docs/HANDOFF-AC7260-MONITOR.md): the same card as an
+    # RX-only monitor, with the component's sink as the frames' consumer.
+    "iwl7260_mon",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -344,6 +347,60 @@ PATTERNS = {
     ),
     "iwl7260_ap_diag_verdict": re.compile(
         r"iwl7260_ap: diag verdict=(?P<verdict>[a-z-]+)", re.MULTILINE
+    ),
+    # The monitor round's anchors (docs/HANDOFF-AC7260-MONITOR.md M1-M4).
+    "iwl7260_mon_fwreg": re.compile(
+        r"iwl7260_mon: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_wlan0": re.compile(
+        r"iwl7260_mon: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]+) iftype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_sink": re.compile(
+        r"iwl7260_mon: sink enabled=(?P<enabled>[01])", re.MULTILINE
+    ),
+    "iwl7260_mon_set_iface": re.compile(
+        r"iwl7260_mon: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_mon_set_freq": re.compile(
+        r"iwl7260_mon: set_freq rc=(?P<rc>-?\d+) freq=(?P<freq>\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_mon_start": re.compile(
+        r"iwl7260_mon: start rc=(?P<rc>-?\d+) netif_running=(?P<run>[01]) "
+        r"devtype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_window": re.compile(
+        r"iwl7260_mon: window ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_sink_totals": re.compile(
+        r"iwl7260_mon: sink frames=(?P<frames>\d+) bytes=(?P<bytes>\d+) "
+        r"beacons=(?P<beacons>\d+) probes=(?P<probes>\d+) "
+        r"probe_resp=(?P<probe_resp>\d+) auth=(?P<auth>\d+) "
+        r"assoc=(?P<assoc>\d+) data=(?P<data>\d+) ctrl=(?P<ctrl>\d+) "
+        r"other=(?P<other>\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_radiotap": re.compile(
+        r"iwl7260_mon: radiotap it_len=(?P<min>\d+)/(?P<max>\d+) "
+        r"freq=(?P<freq>\d+) bad=(?P<bad>\d+) short=(?P<short>\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_mon_lwip_in": re.compile(
+        r"iwl7260_mon: lwip in rx_frames=(?P<frames>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) tx_frames=(?P<tx>\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_lwip_out": re.compile(
+        r"iwl7260_mon: lwip out rx_frames=(?P<frames>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) tx_frames=(?P<tx>\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_tx": re.compile(
+        r"iwl7260_mon: tx dev tx_packets=(?P<pkts>\d+) "
+        r"tx_bytes=(?P<bytes>\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_pass": re.compile(r"iwl7260_mon: PASS MON", re.MULTILINE),
+    "iwl7260_mon_fail": re.compile(
+        r"iwl7260_mon: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "iwl7260_ap_fail": re.compile(
         r"iwl7260_ap: FAIL (?P<reason>.+)$", re.MULTILINE
@@ -1003,6 +1060,17 @@ PATTERNS = {
 # a phase's absence stays visible as an absence and a second run does not hide
 # the first.
 LIST_PATTERNS = {
+    # The monitor round's window samples and kept frames.
+    "iwl7260_mon_sample": re.compile(
+        r"iwl7260_mon: sample t=(?P<t>\d+) frames=(?P<frames>\d+) "
+        r"beacons=(?P<beacons>\d+) data=(?P<data>\d+)", re.MULTILINE
+    ),
+    "iwl7260_mon_frame": re.compile(
+        r"iwl7260_mon: frame (?P<i>\d+) len=(?P<len>\d+) "
+        r"it_len=(?P<it_len>\d+) fc=0x(?P<fc>[0-9a-f]+) "
+        r"hex=(?P<hex>[0-9a-f]+)", re.MULTILINE
+    ),
+
     "iwl7260_c6_begin": re.compile(
         r"iwl7260_c6: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
         r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) "
@@ -2496,6 +2564,135 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 "iwl7260_sta5g: neither STA5 nor STA5W PASS line is present")
         elif sec and sec["wpa2"] != "0":
             errors.append("iwl7260_sta5g: STA5 PASS with wpa2=1")
+
+    if cases.get("iwl7260_mon", {}).get("verdict") == "pass":
+        fail = found["iwl7260_mon_fail"]
+        if fail:
+            errors.append(f"iwl7260_mon: {fail['reason']}")
+        reg = found["iwl7260_mon_fwreg"]
+        if not reg:
+            errors.append("iwl7260_mon: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"iwl7260_mon: firmware registration rc={reg['rc']}")
+        wl = found["iwl7260_mon_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("iwl7260_mon: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("iwl7260_mon: wlan0 has ifindex=0")
+        elif wl["type"] != "2":
+            errors.append(
+                f"iwl7260_mon: wlan0 boot type={wl['type']}, expected "
+                "STATION (2) before the type change")
+        sink = found["iwl7260_mon_sink"]
+        if not sink or sink["enabled"] != "1":
+            errors.append("iwl7260_mon: the monitor sink is not enabled")
+        seti = found["iwl7260_mon_set_iface"]
+        if not seti:
+            errors.append("iwl7260_mon: PASS without the set_iface line")
+        elif int(seti["rc"]) != 0 or seti["type"] != "6":
+            errors.append(
+                f"iwl7260_mon: set_iface rc={seti['rc']} type={seti['type']}, "
+                "expected rc=0 type=6 (MONITOR)")
+        else:
+            notes.append("iwl7260_mon: set_iface rc=0 type=6")
+        freq = found["iwl7260_mon_set_freq"]
+        if not freq:
+            errors.append("iwl7260_mon: PASS without the set_freq line")
+        elif int(freq["rc"]) != 0:
+            errors.append(f"iwl7260_mon: set_freq rc={freq['rc']}")
+        else:
+            notes.append(f"iwl7260_mon: set_freq rc=0 freq={freq['freq']}")
+        st = found["iwl7260_mon_start"]
+        if not st:
+            errors.append("iwl7260_mon: PASS without the start line")
+        elif int(st["rc"]) != 0 or st["run"] != "1":
+            errors.append(
+                f"iwl7260_mon: start rc={st['rc']} running={st['run']}")
+        # M3: the monitor interface's type is ARPHRD_IEEE80211_RADIOTAP (803).
+        elif st["type"] != "803":
+            errors.append(
+                f"iwl7260_mon: devtype={st['type']}, expected "
+                "ARPHRD_IEEE80211_RADIOTAP (803)")
+        window = found["iwl7260_mon_window"]
+        totals = found["iwl7260_mon_sink_totals"]
+        radiotap = found["iwl7260_mon_radiotap"]
+        if not window or not totals:
+            errors.append(
+                "iwl7260_mon: PASS without the window and sink totals")
+        else:
+            ms = int(window["ms"])
+            beacons = int(totals["beacons"])
+            rate = (beacons * 1000) // ms if ms > 0 else 0
+            # The pre-registered floor (docs/HANDOFF-AC7260-MONITOR.md M2):
+            # 8 beacons/s over the window, and the GT arm's own count is the
+            # comparison the round writes up (the judge holds the floor, the
+            # report holds the parity).
+            if rate < 8:
+                errors.append(
+                    f"iwl7260_mon: {beacons} beacons in {ms} ms = "
+                    f"{rate}/s, below the 8/s floor")
+            elif int(totals["probe_resp"]) < 1:
+                errors.append(
+                    "iwl7260_mon: no probe response in the window")
+            elif int(totals["data"]) < 1:
+                errors.append("iwl7260_mon: no data frame in the window")
+            else:
+                notes.append(
+                    f"iwl7260_mon: {totals['frames']} frames, "
+                    f"{beacons} beacons ({rate}/s), "
+                    f"{totals['data']} data")
+        # M2's samples: at least one per second and a rising beacon count.
+        samples = found["iwl7260_mon_sample"]
+        if len(samples) < 2:
+            errors.append(
+                f"iwl7260_mon: only {len(samples)} window samples")
+        else:
+            first = int(samples[0]["beacons"])
+            last = int(samples[-1]["beacons"])
+            if last <= first:
+                errors.append(
+                    f"iwl7260_mon: beacons did not rise "
+                    f"({first} -> {last})")
+        # M3: every frame carried a radiotap header, and it names the channel.
+        if not radiotap:
+            errors.append("iwl7260_mon: PASS without the radiotap line")
+        else:
+            if int(radiotap["bad"]) != 0:
+                errors.append(
+                    f"iwl7260_mon: {radiotap['bad']} bad radiotap headers")
+            if int(radiotap["min"]) < 8:
+                errors.append(
+                    f"iwl7260_mon: radiotap it_len min={radiotap['min']}")
+            if freq and int(radiotap["freq"]) != int(freq["freq"]):
+                errors.append(
+                    f"iwl7260_mon: radiotap freq={radiotap['freq']} but the "
+                    f"channel was set to {freq['freq']}")
+            else:
+                notes.append(
+                    f"iwl7260_mon: radiotap it_len="
+                    f"{radiotap['min']}-{radiotap['max']} "
+                    f"freq={radiotap['freq']}")
+        frames = found["iwl7260_mon_frame"]
+        if not frames:
+            errors.append("iwl7260_mon: PASS without a kept frame")
+        # M4: the frames stayed out of lwIP and the device never transmitted.
+        lin = found["iwl7260_mon_lwip_in"]
+        lout = found["iwl7260_mon_lwip_out"]
+        if not lin or not lout:
+            errors.append("iwl7260_mon: PASS without the lwIP before/after")
+        elif lin["frames"] != lout["frames"]:
+            errors.append(
+                f"iwl7260_mon: lwIP rx_frames grew {lin['frames']} -> "
+                f"{lout['frames']} (monitor frames reached the stack)")
+        elif lout["tx"] != "0":
+            errors.append(f"iwl7260_mon: lwIP tx_frames={lout['tx']}")
+        tx = found["iwl7260_mon_tx"]
+        if not tx:
+            errors.append("iwl7260_mon: PASS without the device tx line")
+        elif tx["pkts"] != "0":
+            errors.append(f"iwl7260_mon: device tx_packets={tx['pkts']}")
+        if not found["iwl7260_mon_pass"]:
+            errors.append("iwl7260_mon: the PASS anchor is missing")
 
     if cases.get("iwl7260_stab", {}).get("verdict") == "pass":
         fail = found["iwl7260_stab_fail"]

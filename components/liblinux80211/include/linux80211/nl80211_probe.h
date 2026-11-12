@@ -73,6 +73,14 @@ int lkpi_nl80211_connected(struct net_device *dev, unsigned char bssid[6]);
  * handler's code; the device must be down. */
 int lkpi_nl80211_set_interface(struct net_device *dev, unsigned int type);
 
+/* NL80211_CMD_SET_WIPHY with WIPHY_FREQ (the monitor round, 2026-11-12).  On a
+ * MONITOR interface this is `iw dev wlan0 set channel <ch>`: nl80211 routes it
+ * to cfg80211_set_monitor_channel and mac80211 stores it as the monitor's
+ * channel request.  Called while the device is down, before the virtual
+ * monitor's channel context exists.  Returns the handler's code. */
+int lkpi_nl80211_set_freq(struct net_device *dev, unsigned int freq_mhz,
+			  unsigned int width);
+
 /* Start NL80211_CMD_START_AP.  `head` is the 36-byte 802.11 beacon head
  * (header + timestamp/interval/capability); `tail` is the IE list after the
  * TIM, which mac80211 inserts itself.  `width` is NL80211_CHAN_WIDTH_*.
