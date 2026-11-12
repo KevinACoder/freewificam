@@ -76,7 +76,9 @@ WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=ieee80211_wake_queue \
 	-Wl,--wrap=iwl_trans_pcie_tx \
 	-Wl,--wrap=iwl_trans_pcie_send_hcmd \
-	-Wl,--wrap=iwl_mvm_send_cmd
+	-Wl,--wrap=iwl_mvm_send_cmd \
+	-Wl,--wrap=ieee80211_sta_ps_transition \
+	-Wl,--wrap=ieee80211_sta_set_buffered
 
 # The hostapd AP stack (third-party/wpa_supplicant-rtos) and its platform bottom: hostapd's
 # own headers and OS abstraction, so it compiles in its own flag world.  The

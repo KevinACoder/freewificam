@@ -302,12 +302,14 @@ ap_run_phase(unsigned n, const struct ap_phase *ph)
 			    "stopq=%lu wakeq=%lu dq_calls=%lu dq_frames=%lu "
 			    "mgmt=%lu data=%lu iwl_tx=%lu hcmd=%lu "
 			    "hcmd_blockq=%lu hcmd_async=%lu mgmt_tx=%lu "
-			    "beacon=%lu ready=%d sta=%d\n", n,
+			    "beacon=%lu ps_sleep=%lu ps_wake=%lu "
+			    "ps_buffered=%lu ready=%d sta=%d\n", n,
 			    txh.tx_status, txh.stop_queue, txh.wake_queue,
 			    txh.dequeue_calls, txh.dequeue_frames,
 			    txh.status_mgmt, txh.status_data, txh.iwl_tx,
 			    txh.hcmd, txh.hcmd_blockq, txh.hcmd_async,
-			    txh.mgmt_tx, txh.mgmt_beacon, lkpi_hostap_ready(),
+			    txh.mgmt_tx, txh.mgmt_beacon, txh.ps_sleep,
+			    txh.ps_wake, txh.ps_buffered, lkpi_hostap_ready(),
 			    lkpi_hostap_sta_count());
 	}
 	CASE_ANCHOR("iwl7260_ap: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);

@@ -35,6 +35,9 @@ struct lkpi_tx_health {
 	unsigned long	hcmd_async;
 	unsigned long	mgmt_tx;	/* hostapd's send_mlme calls */
 	unsigned long	mgmt_beacon;	/* ... of which beacons */
+	unsigned long	ps_sleep;	/* sta marked dozing (AP mode only) */
+	unsigned long	ps_wake;	/* sta marked awake */
+	unsigned long	ps_buffered;	/* ieee80211_sta_set_buffered calls */
 };
 
 static struct lkpi_tx_health tx_health;
@@ -144,6 +147,40 @@ __wrap_iwl_trans_pcie_tx(void *trans, struct sk_buff *skb, void *dev_cmd,
 {
 	tx_health.iwl_tx++;
 	return __real_iwl_trans_pcie_tx(trans, skb, dev_cmd, txq_id);
+}
+
+/*
+ * The AP-only power-save path.  iwlwifi sets IEEE80211_HW_AP_LINK_PS when the
+ * firmware advertises STA_PM_NOTIF: from then on mac80211 does NOT look at the
+ * PM bit itself, it waits for the driver to call ieee80211_sta_ps_transition().
+ * A station marked dozing stops receiving unicast frames - mac80211 buffers
+ * them in the station's ps_tx_buf - so a missing "awake" leaves the data path
+ * dead with no completion, no error and a filling skb pool.  That path exists
+ * only for AP vifs (iwlwifi's iwl_mvm_sta_pm_notif returns early for others),
+ * which is the one structural difference from the STA rounds that ran for
+ * hours.
+ */
+extern int __real_ieee80211_sta_ps_transition(struct ieee80211_sta *sta,
+					      bool start);
+extern bool __real_ieee80211_sta_set_buffered(struct ieee80211_sta *sta,
+					      u8 tid, bool buffered);
+
+int
+__wrap_ieee80211_sta_ps_transition(struct ieee80211_sta *sta, bool start)
+{
+	if (start)
+		tx_health.ps_sleep++;
+	else
+		tx_health.ps_wake++;
+	return __real_ieee80211_sta_ps_transition(sta, start);
+}
+
+bool
+__wrap_ieee80211_sta_set_buffered(struct ieee80211_sta *sta, u8 tid,
+				  bool buffered)
+{
+	tx_health.ps_buffered++;
+	return __real_ieee80211_sta_set_buffered(sta, tid, buffered);
 }
 
 int

@@ -50,6 +50,8 @@
 #include "linux80211/linux80211.h"
 #include "linux80211/nl80211_probe.h"
 #include "linux80211/net.h"
+#include "linux80211/hostap_ap.h"
+#include "linuxkpi_pci.h"
 
 #include <linux/netdevice.h>
 #include <net/net_namespace.h>
@@ -152,6 +154,20 @@ c6_run_phase(unsigned n, const struct c6_phase *ph)
 	CASE_ANCHOR("iwl7260_c6: phase %u report bytes=%u ms=%u kbit=%u "
 		    "pkts=%u\n",
 		    n, r.bytes, r.ms, r.kbit, r.pkts);
+	{
+		unsigned int hard = 0u, thread = 0u;
+		struct lkpi_tx_health txh;
+
+		lkpi_tx_health_get(&txh);
+		lkpi_pci_irq_counters(&hard, &thread);
+		CASE_ANCHOR("iwl7260_c6: phase %u txhealth tx_status=%lu "
+			    "dq_calls=%lu dq_frames=%lu mgmt=%lu data=%lu "
+			    "iwl_tx=%lu hcmd=%lu hcmd_blockq=%lu irq_hard=%u "
+			    "irq_thread=%u\n", n, txh.tx_status,
+			    txh.dequeue_calls, txh.dequeue_frames,
+			    txh.status_mgmt, txh.status_data, txh.iwl_tx,
+			    txh.hcmd, txh.hcmd_blockq, hard, thread);
+	}
 	CASE_ANCHOR("iwl7260_c6: phase %u census rx_frames=%lu rx_bytes=%lu "
 		    "tx_frames=%lu tx_bytes=%lu tx_fail=%lu rxdlv_us=%lu "
 		    "txndo_us=%lu tcp_recv=%lu tcp_xmit=%lu tcp_drop=%lu "

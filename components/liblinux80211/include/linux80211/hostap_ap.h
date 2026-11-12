@@ -50,6 +50,9 @@ struct lkpi_tx_health {
 	unsigned long	hcmd_async;
 	unsigned long	mgmt_tx;
 	unsigned long	mgmt_beacon;
+	unsigned long	ps_sleep;
+	unsigned long	ps_wake;
+	unsigned long	ps_buffered;
 };
 void lkpi_tx_health_get(struct lkpi_tx_health *out);
 void lkpi_tx_health_mgmt(const void *frame, unsigned int len);
