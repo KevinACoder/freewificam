@@ -40,6 +40,18 @@ config LIBLINUX80211_WIRELESS
 	  stack is compiled by the S0 inventory even when this is off; this
 	  symbol is what puts it in an image, behind its own profile.
 
+config HOSTAP_AP
+	bool "hostapd AP MLME (imported NXP wpa_supplicant-rtos)"
+	depends on LIBLINUX80211_WIRELESS
+	help
+	  Links the imported hostapd AP stack (third-party/hostap: src/ap, the
+	  hostapd core; the NXP FreeRTOS entry and event loop; the internal
+	  crypto) and this port's platform bottom (OSA over FreeRTOS, the
+	  wpa_driver_ops table on the direct nl80211 surface).  This is the AP
+	  role's MLME: this kernel's mac80211 has none in-kernel, and on Linux
+	  the AP MLME is hostapd.  BSD-3-Clause code; the image that selects it
+	  also links the GPL-2.0 mac80211 stack and is a GPL-2.0 link product.
+
 config LIBLINUX80211_IWLWIFI
 	bool "iwlwifi (AC 7260 / mvm) driver"
 	depends on LIBLINUX80211_WIRELESS

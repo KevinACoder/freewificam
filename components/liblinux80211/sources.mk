@@ -32,8 +32,6 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	linuxkpi_crypto.c \
 	fw_registry.c \
 	net_egress.c \
-	linuxkpi_ap_beacon.c \
-	linuxkpi_ap_mlme.c \
 	skbuff/skbuff_pool.c
 endif
 
@@ -113,4 +111,119 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	stack/wireless/ocb.c \
 	stack/wireless/michael-mic.c \
 	stack/wireless/pmsr.c
+endif
+
+# ---------------------------------------------------------------------------
+# hostap: the imported hostapd AP stack (third-party/wpa_supplicant-rtos, from the NXP
+# wpa_supplicant-rtos port) and this port's platform bottom.  These files are
+# not the Linux face's world: they carry hostapd's own headers and a different
+# OS abstraction (OSA), so they get their own compile group (see wl80211.mk).
+#
+# The list is the transferable part of the NXP FreeRTOS/Zephyr CONFIG_HOSTAPD
+# source set: the supplicant core the entry initialises, the hostapd AP MLME,
+# the NXP FreeRTOS os/eloop/l2 files, the internal crypto (no mbedtls) and the
+# four first-party platform files.  supp_api.c is not compiled: its NXP
+# wlan_network API needs the MCUXpresso wlan.h, which is not part of the
+# imported tree (hostap_ap.c applies the same open-AP configuration instead).
+#
+# The two port-world files of this round (hostap_nl80211.c, hostap_rx_wrap.c)
+# live in the Linux face's world and are listed by wl80211.mk instead.
+HOSTAP := $(THIRD_PARTY)/wpa_supplicant-rtos
+
+ifeq ($(SRC_TAG),hostap)
+obj-$(CONFIG_HOSTAP_AP) += \
+	hostap/osa_lkpi.c \
+	hostap/netif_lkpi.c \
+	hostap/driver_lkpi.c \
+	hostap/hostap_ap.c \
+	$(HOSTAP)/src/common/wpa_common.c \
+	$(HOSTAP)/src/common/ieee802_11_common.c \
+	$(HOSTAP)/src/common/hw_features_common.c \
+	$(HOSTAP)/src/drivers/driver_common.c \
+	$(HOSTAP)/src/drivers/drivers.c \
+	$(HOSTAP)/src/l2_packet/l2_packet_none.c \
+	$(HOSTAP)/src/utils/base64.c \
+	$(HOSTAP)/src/utils/common.c \
+	$(HOSTAP)/src/utils/wpabuf.c \
+	$(HOSTAP)/src/utils/bitfield.c \
+	$(HOSTAP)/src/utils/eloop_freertos.c \
+	$(HOSTAP)/src/utils/os_freertos.c \
+	$(HOSTAP)/src/utils/wpa_debug.c \
+	$(HOSTAP)/src/utils/block_alloc.c \
+	$(HOSTAP)/src/utils/crc32.c \
+	$(HOSTAP)/src/utils/ip_addr.c \
+	$(HOSTAP)/wpa_supplicant/ap.c \
+	$(HOSTAP)/wpa_supplicant/config.c \
+	$(HOSTAP)/wpa_supplicant/config_none.c \
+	$(HOSTAP)/wpa_supplicant/notify.c \
+	$(HOSTAP)/wpa_supplicant/bss.c \
+	$(HOSTAP)/wpa_supplicant/eap_register.c \
+	$(HOSTAP)/wpa_supplicant/wpa_supplicant.c \
+	$(HOSTAP)/wpa_supplicant/bssid_ignore.c \
+	$(HOSTAP)/wpa_supplicant/wpas_glue.c \
+	$(HOSTAP)/wpa_supplicant/scan.c \
+	$(HOSTAP)/wpa_supplicant/mbo.c \
+	$(HOSTAP)/wpa_supplicant/rrm.c \
+	$(HOSTAP)/wpa_supplicant/wmm_ac.c \
+	$(HOSTAP)/wpa_supplicant/robust_av.c \
+	$(HOSTAP)/wpa_supplicant/op_classes.c \
+	$(HOSTAP)/src/ap/ap_config.c \
+	$(HOSTAP)/src/ap/ap_drv_ops.c \
+	$(HOSTAP)/src/ap/ap_list.c \
+	$(HOSTAP)/src/ap/ap_mlme.c \
+	$(HOSTAP)/src/ap/authsrv.c \
+	$(HOSTAP)/src/ap/beacon.c \
+	$(HOSTAP)/src/ap/bss_load.c \
+	$(HOSTAP)/src/ap/dfs.c \
+	$(HOSTAP)/src/ap/drv_callbacks.c \
+	$(HOSTAP)/src/ap/eap_user_db.c \
+	$(HOSTAP)/src/ap/hostapd.c \
+	$(HOSTAP)/src/ap/hw_features.c \
+	$(HOSTAP)/src/ap/ieee802_11.c \
+	$(HOSTAP)/src/ap/ieee802_11_auth.c \
+	$(HOSTAP)/src/ap/ieee802_11_ht.c \
+	$(HOSTAP)/src/ap/ieee802_11_shared.c \
+	$(HOSTAP)/src/ap/ieee802_1x.c \
+	$(HOSTAP)/src/ap/neighbor_db.c \
+	$(HOSTAP)/src/ap/p2p_hostapd.c \
+	$(HOSTAP)/src/ap/pmksa_cache_auth.c \
+	$(HOSTAP)/src/ap/preauth_auth.c \
+	$(HOSTAP)/src/ap/rrm.c \
+	$(HOSTAP)/src/ap/sta_info.c \
+	$(HOSTAP)/src/ap/tkip_countermeasures.c \
+	$(HOSTAP)/src/ap/utils.c \
+	$(HOSTAP)/src/ap/wmm.c \
+	$(HOSTAP)/src/ap/wpa_auth.c \
+	$(HOSTAP)/src/ap/wpa_auth_ie.c \
+	$(HOSTAP)/src/ap/wpa_auth_glue.c \
+	$(HOSTAP)/src/ap/wpa_auth_ft.c \
+	$(HOSTAP)/src/eap_common/eap_common.c \
+	$(HOSTAP)/src/eap_server/eap_server.c \
+	$(HOSTAP)/src/eap_server/eap_server_identity.c \
+	$(HOSTAP)/src/eap_server/eap_server_methods.c \
+	$(HOSTAP)/src/eapol_auth/eapol_auth_sm.c \
+	$(HOSTAP)/src/rsn_supp/wpa.c \
+	$(HOSTAP)/src/rsn_supp/wpa_ie.c \
+	$(HOSTAP)/src/rsn_supp/preauth.c \
+	$(HOSTAP)/src/rsn_supp/pmksa_cache.c \
+	$(HOSTAP)/src/crypto/aes-internal.c \
+	$(HOSTAP)/src/crypto/aes-internal-enc.c \
+	$(HOSTAP)/src/crypto/aes-internal-dec.c \
+	$(HOSTAP)/src/crypto/aes-ccm.c \
+	$(HOSTAP)/src/crypto/aes-ctr.c \
+	$(HOSTAP)/src/crypto/aes-omac1.c \
+	$(HOSTAP)/src/crypto/aes-wrap.c \
+	$(HOSTAP)/src/crypto/aes-unwrap.c \
+	$(HOSTAP)/src/crypto/sha1.c \
+	$(HOSTAP)/src/crypto/sha1-internal.c \
+	$(HOSTAP)/src/crypto/sha1-prf.c \
+	$(HOSTAP)/src/crypto/sha1-pbkdf2.c \
+	$(HOSTAP)/src/crypto/sha256.c \
+	$(HOSTAP)/src/crypto/sha256-internal.c \
+	$(HOSTAP)/src/crypto/sha256-prf.c \
+	$(HOSTAP)/src/crypto/md5.c \
+	$(HOSTAP)/src/crypto/md5-internal.c \
+	$(HOSTAP)/src/crypto/rc4.c \
+	$(HOSTAP)/freertos/src/supp_main.c \
+	$(HOSTAP)/hostapd/eap_register.c
 endif

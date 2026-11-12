@@ -20,10 +20,23 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+#include "uart.h"
+
 /* The component's public entry points (components/printf/printf.h). */
 int vsnprintf_(char *buf, size_t count, const char *fmt, va_list va);
 int snprintf_(char *buf, size_t count, const char *fmt, ...);
 int sprintf_(char *buf, const char *fmt, ...);
+
+/*
+ * printf_()'s character sink: the console component's printf route (the one
+ * the hostapd world uses through hostap_printf_bind.h) emits one character at
+ * a time, and the polled early UART is the console.  The line-stamped sink
+ * (log.c) is for board_log()'s whole lines; this is the raw byte path.
+ */
+void _putchar(char c)
+{
+	uart_early_putc(c);
+}
 
 int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
 {

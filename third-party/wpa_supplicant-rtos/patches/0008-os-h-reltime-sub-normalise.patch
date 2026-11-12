@@ -1,0 +1,18 @@
+diff --git a/src/utils/os.h b/src/utils/os.h
+index 6ee45d4..d2e2cd4 100644
+--- a/src/utils/os.h
++++ b/src/utils/os.h
+@@ -57,13 +57,11 @@ static inline void os_time_sub(struct os_time *a, struct os_time *b, struct os_t
+ {
+     res->sec  = a->sec - b->sec;
+     res->usec = a->usec - b->usec;
+-#if 0
+     if (res->usec < 0)
+     {
+         res->sec--;
+         res->usec += 1000000;
+     }
+-#endif
+ }
+ 
+ /* Helpers for handling struct os_reltime */

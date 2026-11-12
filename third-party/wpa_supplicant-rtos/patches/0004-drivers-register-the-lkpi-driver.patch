@@ -1,0 +1,27 @@
+diff --git a/src/drivers/drivers.c b/src/drivers/drivers.c
+index dbaeb7e..cdfd59c 100644
+--- a/src/drivers/drivers.c
++++ b/src/drivers/drivers.c
+@@ -10,6 +10,10 @@
+ #include "utils/common.h"
+ #include "driver.h"
+ 
++#ifdef CONFIG_DRIVER_LKPI
++extern const struct wpa_driver_ops wpa_driver_lkpi_ops;
++#endif /* CONFIG_DRIVER_LKPI */
++
+ const struct wpa_driver_ops *const wpa_drivers[] = {
+ #ifdef CONFIG_DRIVER_NL80211
+     &wpa_driver_nl80211_ops,
+@@ -51,7 +55,10 @@ const struct wpa_driver_ops *const wpa_drivers[] = {
+     &wpa_driver_freertos_ops,
+     // &wpa_driver_zep_ops,
+ #endif /* CONFIG_DRIVER_NONE */
+-#ifdef CONFIG_FREERTOS
++#if defined(CONFIG_FREERTOS) && !defined(CONFIG_OS_LKPI)
+     &wpa_driver_freertos_ops,
+ #endif /* CONFIG_FREERTOS */
++#ifdef CONFIG_DRIVER_LKPI
++    &wpa_driver_lkpi_ops,
++#endif /* CONFIG_DRIVER_LKPI */
+     NULL};

@@ -86,7 +86,7 @@ int kpi_case_ctx_coalesce(void);
 int kpi_case_ctx_kill_running(void);
 int kpi_case_ctx_disable_enable(void);
 int kpi_case_ctx_bh_defers(void);
-int kpi_case_ap_mlme(void);
+int kpi_case_hostap_rx(void);
 int kpi_case_ctx_nesting(void);
 int kpi_case_ctx_in_softirq(void);
 int kpi_case_ctx_spin_bh(void);
@@ -128,7 +128,7 @@ static const struct kpi_case cases[] = {
 	{ "ctx_in_softirq", kpi_case_ctx_in_softirq },
 	{ "ctx_spin_bh", kpi_case_ctx_spin_bh },
 	{ "ctx_rcu", kpi_case_ctx_rcu },
-	{ "ap_mlme", kpi_case_ap_mlme },
+	{ "hostap_rx", kpi_case_hostap_rx },
 	{ "selftest", kpi_case_selftest },
 };
 

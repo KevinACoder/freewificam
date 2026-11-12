@@ -62,16 +62,66 @@ WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app
 # port's deferred-context answer (see its header).
 WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
 	$(LIB8)/tx_dequeue_context.c \
-	$(LIB8)/ap_mlme_rx_wrap.c
+	$(LIB8)/hostap_rx_wrap.c \
+	$(LIB8)/hostap_nl80211.c \
+	$(LIB8)/tx_health.c
 
 # The wrap is what makes the shim a seam instead of a stack edit.  It is only
 # meaningful when the stack is linked, and it applies to every reference
 # (iwlwifi's iTXQ wake path is the one that matters).
 WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
-	-Wl,--wrap=cfg80211_rx_mgmt_ext
+	-Wl,--wrap=cfg80211_rx_mgmt_ext \
+	-Wl,--wrap=ieee80211_tx_status_skb \
+	-Wl,--wrap=ieee80211_stop_queue \
+	-Wl,--wrap=ieee80211_wake_queue \
+	-Wl,--wrap=iwl_trans_pcie_tx \
+	-Wl,--wrap=iwl_trans_pcie_send_hcmd \
+	-Wl,--wrap=iwl_mvm_send_cmd
+
+# The hostapd AP stack (third-party/wpa_supplicant-rtos) and its platform bottom: hostapd's
+# own headers and OS abstraction, so it compiles in its own flag world.  The
+# two files of this round that touch the Linux face (hostap_nl80211.c,
+# hostap_rx_wrap.c) are in WL80211_PROBE_SRCS above, not here.
+# The hostap include roots come BEFORE the global ones: the NXP tree's
+# <fsl_os_abstraction.h> and <wlan.h> must resolve to this component's shims,
+# not to the fsl_sdmmc OSA header the global -I list carries.
+WL80211_HOSTAP_CFLAGS := \
+	-I$(LIB8)/hostap/include \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/utils \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/common \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/ap \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/drivers \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/crypto \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/eap_common \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/eap_server \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/eapol_auth \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/rsn_supp \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/src/l2_packet \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/hostapd \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/wpa_supplicant \
+	-I$(THIRD_PARTY)/wpa_supplicant-rtos/freertos/src \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-unused-but-set-variable -Wno-type-limits -Wno-address-of-packed-member \
+	-Wno-override-init -Wno-implicit-fallthrough -Wno-unused-variable \
+	-Wno-unused-function \
+	$(VENDORED_CFLAGS) \
+	-include $(LIB8)/hostap/include/hostap_config.h \
+	-include $(LIB8)/hostap/include/hostap_printf_bind.h
+
+WL80211_HOSTAP_SRCS := $(LIBLINUX80211_HOSTAP_SRCS)
+
+# wpa_supplicant/events.c is the one hostap TU that carries floating point (the
+# STA roam heuristic, unreachable in the AP role): it compiles without the
+# kernel flag world's -mgeneral-regs-only so the rest of the stack stays
+# integer-only.  The flag is what the port's context switch can guarantee.
+WL80211_HOSTAP_FP_SRCS := $(THIRD_PARTY)/wpa_supplicant-rtos/wpa_supplicant/events.c
+WL80211_HOSTAP_FP_CFLAGS := $(filter-out -mgeneral-regs-only,$(WL80211_HOSTAP_CFLAGS))
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
-	$(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)
+	$(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS) $(WL80211_HOSTAP_SRCS) \
+	$(WL80211_HOSTAP_FP_SRCS)
 
 endif
 

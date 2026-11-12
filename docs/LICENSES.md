@@ -18,6 +18,7 @@ Per-component license registry. This is not legal advice.
 | `third-party/printf/` | MIT | |
 | `third-party/tlsf/` | BSD-3-Clause | terms in the `tlsf.h` header |
 | `third-party/ulog/` | MIT | |
+| `third-party/wpa_supplicant-rtos/` | BSD-3-Clause | NXP `wpa_supplicant-rtos` `release/25.06.00` (`c21bbad`), 897 files, unmodified apart from the port patches in its `patches/`; upstream `port/` (mbedtls/KSDK glue, Apache-2.0) is **not** imported - see `PROVENANCE.md` |
 | `components/liblinux80211/fw/iwlwifi-7260-17.ucode` | Intel binary firmware licence (`LICENCE.iwlwifi_firmware` beside it) | **tracked input**, unmodified; sha256 `5d81a600…`; source and terms in `fw/PROVENANCE.md` |
 
 ## Combined products

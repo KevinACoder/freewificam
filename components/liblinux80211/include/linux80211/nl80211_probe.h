@@ -97,4 +97,28 @@ int lkpi_nl80211_new_station(struct net_device *dev,
 int lkpi_nl80211_sta_authorized(struct net_device *dev,
 				const unsigned char mac[6]);
 
+/* NL80211_CMD_SET_STATION with AUTHORIZED set or cleared: hostapd opens the
+ * port after association and closes it on deauth (open and WPA2 alike). */
+int lkpi_nl80211_sta_set_authorized(struct net_device *dev,
+				    const unsigned char mac[6], int authorized);
+
+/* NL80211_CMD_DEL_STATION (hostapd's sta_remove / deauth). */
+int lkpi_nl80211_del_station(struct net_device *dev,
+			     const unsigned char mac[6]);
+
+/*
+ * The assoc request's parameters for NL80211_CMD_NEW_STATION.  The pointers
+ * point into the request frame and are valid only for the call.
+ */
+struct lkpi_ap_sta_add {
+	unsigned char mac[6];
+	unsigned short aid;
+	unsigned short listen_interval;
+	unsigned short capab;
+	const unsigned char *rates;	/* IE 1 followed by IE 50, raw */
+	unsigned int rates_len;
+	const unsigned char *ht_capa;	/* IE 45 body (26 B) or NULL */
+	const unsigned char *wmm;	/* non-NULL when the station advertised WMM */
+};
+
 #endif /* LINUX80211_NL80211_PROBE_H */

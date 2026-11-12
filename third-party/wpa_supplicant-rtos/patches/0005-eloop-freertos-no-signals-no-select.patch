@@ -1,0 +1,75 @@
+diff --git a/src/utils/eloop_freertos.c b/src/utils/eloop_freertos.c
+index 19fed78..c751184 100644
+--- a/src/utils/eloop_freertos.c
++++ b/src/utils/eloop_freertos.c
+@@ -516,7 +516,7 @@ int eloop_replenish_timeout(
+     return -1;
+ }
+ 
+-#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS))
++#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS) || defined(CONFIG_OS_LKPI))
+ static void eloop_handle_alarm(int sig)
+ {
+     fprintf(stderr,
+@@ -536,7 +536,7 @@ static void eloop_handle_signal(int sig)
+ {
+     int i;
+ 
+-#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS))
++#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS) || defined(CONFIG_OS_LKPI))
+     if ((sig == SIGINT || sig == SIGTERM) && !eloop.pending_terminate)
+     {
+         /* Use SIGALRM to break out from potential busy loops that
+@@ -567,7 +567,7 @@ static void eloop_process_pending_signals(void)
+ 
+     if (eloop.pending_terminate)
+     {
+-#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS))
++#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS) || defined(CONFIG_OS_LKPI))
+         alarm(0);
+ #endif
+         eloop.pending_terminate = 0;
+@@ -598,7 +598,7 @@ int eloop_register_signal(int sig, eloop_signal_handler handler, void *user_data
+     tmp[eloop.signal_count].signaled  = 0;
+     eloop.signal_count++;
+     eloop.signals = tmp;
+-#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS))
++#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS) || defined(CONFIG_OS_LKPI))
+     signal(sig, eloop_handle_signal);
+ #endif
+ 
+@@ -607,7 +607,7 @@ int eloop_register_signal(int sig, eloop_signal_handler handler, void *user_data
+ 
+ int eloop_register_signal_terminate(eloop_signal_handler handler, void *user_data)
+ {
+-#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS))
++#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS) || defined(CONFIG_OS_LKPI))
+ 
+     int ret = eloop_register_signal(SIGINT, handler, user_data);
+     if (ret == 0)
+@@ -620,7 +620,7 @@ int eloop_register_signal_terminate(eloop_signal_handler handler, void *user_dat
+ 
+ int eloop_register_signal_reconfig(eloop_signal_handler handler, void *user_data)
+ {
+-#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS))
++#if !(defined(CONFIG_NATIVE_WINDOWS) || defined(__ZEPHYR__) || defined(CONFIG_FREERTOS) || defined(CONFIG_OS_LKPI))
+     return eloop_register_signal(SIGHUP, handler, user_data);
+ #else
+     return 0;
+@@ -768,6 +768,10 @@ int eloop_terminated(void)
+ 
+ void eloop_wait_for_read_sock(int sock)
+ {
++#if defined(CONFIG_OS_LKPI)
++    /* no sockets on this port: nothing to wait on */
++    (void)sock;
++#else
+     fd_set rfds;
+ 
+     if (sock < 0)
+@@ -776,4 +780,5 @@ void eloop_wait_for_read_sock(int sock)
+     FD_ZERO(&rfds);
+     FD_SET(sock, &rfds);
+     select(sock + 1, &rfds, NULL, NULL, NULL);
++#endif
+ }

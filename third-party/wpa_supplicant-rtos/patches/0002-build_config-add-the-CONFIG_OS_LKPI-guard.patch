@@ -1,0 +1,25 @@
+diff --git a/src/utils/build_config.h b/src/utils/build_config.h
+index f15ddf7..67bcee9 100644
+--- a/src/utils/build_config.h
++++ b/src/utils/build_config.h
+@@ -15,6 +15,11 @@
+ #ifndef BUILD_CONFIG_H
+ #define BUILD_CONFIG_H
+ 
++#if defined(CONFIG_OS_LKPI)
++/* the port config header defines everything this file would default;
++ * the NXP wifi/SDK defaults do not apply */
++#else
++
+ #include <wifi_config_default.h>
+ 
+ #if !CONFIG_WPA_SUPP
+@@ -40,6 +45,8 @@
+ 
+ #define CONFIG_WPA_SUPP_CRYPTO   1
+ 
++#endif /* CONFIG_OS_LKPI */
++
+ #define WPA_SUPPLICANT_CLEANUP_INTERVAL 120
+ 
+ #define HOSTAPD_CLEANUP_INTERVAL 120

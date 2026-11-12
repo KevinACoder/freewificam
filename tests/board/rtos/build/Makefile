@@ -188,6 +188,7 @@ $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-pci,LIBLINU
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-sdio,LIBLINUX80211_BUS_SDIO))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-pci,LIBLINUX80211_PCIE))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack,LIBLINUX80211_STACK))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,hostap,LIBLINUX80211_HOSTAP))
 endif
 
 # The wired-network cases each bring the lwIP port face and the stack core; the
@@ -543,6 +544,8 @@ endif
 ifneq ($(strip $(WL80211_ALL_SRCS)),)
 $(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_FP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_FP_CFLAGS))))
 endif
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)

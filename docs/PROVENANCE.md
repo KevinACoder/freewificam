@@ -175,3 +175,14 @@ The generated unit `components/liblinux80211/fw/iwl7260_fw_blob.c` is a build
 product and stays untracked; `tools/rtos/fw-blobs.py` regenerates it from the
 tracked image and pins the SHA-256. `components/liblinux80211/fw/PROVENANCE.md`
 is the tree's own record.
+
+## third-party/wpa_supplicant-rtos (2026-11-12)
+
+| item | fact |
+|---|---|
+| upstream | `https://github.com/nxp-mcuxpresso/wpa_supplicant-rtos` (NXP MCUXpresso SDK middleware: the FreeRTOS port of hostap, both the STA supplicant and hostapd's AP MLME) |
+| pin | branch `release/25.06.00`, commit `c21bbad35c072d53cec51f268029109893846a14` (2025-06-10) |
+| imported | the whole tree except `port/`: 897 files, upstream layout unchanged |
+| not imported | `port/` (22 files of mbedtls/KSDK hardware-crypto glue, Apache-2.0); this port builds `CONFIG_WPA_SUPP_CRYPTO=0` with hostap's internal crypto and references nothing in it |
+| verification | `third-party/wpa_supplicant-rtos/patches/MANIFEST.sha256` holds the sha256 of all 897 files **as upstream**; `patches/0001..0008` are the port's only changes, and applying them to a pristine tree of the pin reproduces this tree byte for byte (checked 2026-11-12) |
+| build face | the port's own OSA/eloop/l2_packet bottom and its `wpa_driver_lkpi_ops` (see `docs/decisions/2026-11-12-ap-mlme-port.md`) |

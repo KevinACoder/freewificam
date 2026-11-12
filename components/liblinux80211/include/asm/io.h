@@ -25,6 +25,7 @@
 #define _LINUXKPI_ASM_IO_H_
 
 #include "../../linuxkpi_core.h"
+#include <asm/barrier.h>
 
 /* [LNX] arch/arm64/include/asm/io.h:26-52 */
 static __always_inline __unused void
@@ -91,18 +92,31 @@ __raw_readq(const volatile void __iomem *addr)
 static __always_inline __unused u32
 readl(const volatile void __iomem *addr)
 {
-	return __raw_readl(addr);
+	u32 v = __raw_readl(addr);
+
+	/* __io_ar(): a read that follows this one must not be reordered before
+	 * it - the doorbell/status handshake depends on it */
+	dma_rmb();
+	return v;
 }
 
 static __always_inline __unused void
 writeb(u8 value, volatile void __iomem *addr)
 {
+	/* __io_bw(): orders prior memory writes (the descriptor ring) before
+	 * this device write.  Without it the device can fetch a descriptor that
+	 * the writes behind it have not made visible - the transmit doorbell
+	 * (HBUS_TARG_WRPTR) is the one that matters: the ring fills, the
+	 * firmware never sees the new entries, and no transmit status ever
+	 * comes back. */
+	dma_wmb();
 	__raw_writeb(value, addr);
 }
 
 static __always_inline __unused void
 writel(u32 value, volatile void __iomem *addr)
 {
+	dma_wmb();
 	__raw_writel(value, addr);
 }
 

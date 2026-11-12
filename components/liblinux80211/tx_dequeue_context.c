@@ -19,18 +19,7 @@
 
 #include <net/mac80211.h>
 
-extern unsigned int lkpi_tx_dequeue_depth;
-
-struct sk_buff *__real_ieee80211_tx_dequeue(struct ieee80211_hw *hw,
-					    struct ieee80211_txq *txq);
-
-struct sk_buff *
-__wrap_ieee80211_tx_dequeue(struct ieee80211_hw *hw, struct ieee80211_txq *txq)
-{
-	struct sk_buff *skb;
-
-	lkpi_tx_dequeue_depth++;
-	skb = __real_ieee80211_tx_dequeue(hw, txq);
-	lkpi_tx_dequeue_depth--;
-	return skb;
-}
+/*
+ * The dequeue seam itself lives in tx_health.c, which needs the same wrap for
+ * its counters; that file raises lkpi_tx_dequeue_depth around the real call.
+ */

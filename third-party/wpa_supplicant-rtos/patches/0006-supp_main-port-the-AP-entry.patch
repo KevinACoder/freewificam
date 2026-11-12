@@ -1,0 +1,86 @@
+diff --git a/freertos/src/supp_main.c b/freertos/src/supp_main.c
+index 71f8e79..25018ce 100644
+--- a/freertos/src/supp_main.c
++++ b/freertos/src/supp_main.c
+@@ -87,7 +87,9 @@ extern OSA_SEMAPHORE_HANDLE_DEFINE(wpaSuppReadySemaphoreHandle);
+ extern OSA_SEMAPHORE_HANDLE_DEFINE(hostapdReadySemaphoreHandle);
+ #endif
+ 
++#ifndef WS_NUM_MESSAGES
+ #define WS_NUM_MESSAGES (20)
++#endif
+ 
+ struct wpa_global *global;
+ 
+@@ -106,7 +108,9 @@ K_EVENT_DEFINE(suppMainTaskEvent);
+ 
+ #else
+ 
++#ifndef CONFIG_SUPP_MAIN_THREAD_STACK_SIZE
+ #define CONFIG_SUPP_MAIN_THREAD_STACK_SIZE 6144
++#endif
+ 
+ static sys_mbox_t event_queue;
+ 
+@@ -657,6 +661,7 @@ static void supplicant_main_task(osa_task_param_t arg)
+ 
+     idx = 0;
+ 
++#if !CONFIG_HOSTAPD
+     netif = net_get_sta_interface();
+ 
+     if (netif != NULL)
+@@ -671,8 +676,6 @@ static void supplicant_main_task(osa_task_param_t arg)
+         exitcode = -1;
+         goto out;
+     }
+-
+-#if !CONFIG_HOSTAPD
+ /* TODO: add verified code when we want to impl wpa_supplicant AP mode */
+ #if 0
+     netif = net_get_uap_interface();
+@@ -711,6 +714,7 @@ static void supplicant_main_task(osa_task_param_t arg)
+     }
+ #endif
+ 
++#if !CONFIG_HOSTAPD
+     params.ctrl_interface = "test_ctrl";
+     wpa_printf(MSG_INFO, "Using interface %s\n", ifaces[0].ifname);
+ 
+@@ -765,13 +769,7 @@ static void supplicant_main_task(osa_task_param_t arg)
+         }
+ #endif
+     }
+- 
+-#if CONFIG_MATCH_IFACE
+-    if (exitcode == 0)
+-    {
+-        exitcode = wpa_supplicant_init_match(global);
+-    }
+-#endif /* CONFIG_MATCH_IFACE */
++#endif /* !CONFIG_HOSTAPD */
+ 
+     if (exitcode == 0)
+     {
+@@ -1325,6 +1323,13 @@ struct hapd_interfaces *hostapd_get_ifaces(char *ifname)
+ struct hostapd_iface *hostapd_get_interface(const char *ifname)
+ {
+     (void)ifname;
++    /* the registry is NULL until hostapd_main_task() allocates it; the port
++     * polls this accessor, so the empty registry must read as "no interface"
++     * rather than dereference NULL */
++    if (interfaces.iface == NULL)
++    {
++        return NULL;
++    }
+     return interfaces.iface[0];
+ }
+ 
+@@ -1624,6 +1629,7 @@ static void hostapd_main_task(osa_task_param_t arg)
+     }
+ 
+     hostapd_global_ctrl_iface_init(&interfaces);
++    printf("lkpi: hostapd daemon ready\n");
+ 
+     (void)OSA_SemaphorePost((osa_semaphore_handle_t)hostapdReadySemaphoreHandle);
+ 

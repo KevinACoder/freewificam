@@ -29,7 +29,6 @@
 
 #include "linuxkpi_core.h"
 #include "linux80211/nl80211_probe.h"
-#include "linux80211/ap_mlme.h"
 
 static int
 nl80211_doit(const struct genl_family *family, struct net_device *dev,
@@ -757,6 +756,21 @@ int
 lkpi_nl80211_sta_authorized(struct net_device *dev,
 			    const unsigned char mac[6])
 {
+	return lkpi_nl80211_sta_set_authorized(dev, mac, 1);
+}
+
+/*
+ * NL80211_CMD_SET_STATION with the AUTHORIZED flag set or cleared.  Both
+ * directions need the set: RX drops every non-EAPOL frame from an unauthorised
+ * station (stack/mac80211/rx.c:2532-2538) and TX drops unicast data to one
+ * (stack/mac80211/tx.c:3953-3962).  hostapd sets it when the port opens (for an
+ * open AP right after association, for WPA2 after the 4-way handshake) and
+ * clears it on deauth.
+ */
+int
+lkpi_nl80211_sta_set_authorized(struct net_device *dev,
+				const unsigned char mac[6], int authorized)
+{
 	const struct genl_family *family;
 	struct sk_buff *skb;
 	struct nlmsghdr *nlh;
@@ -791,7 +805,8 @@ lkpi_nl80211_sta_authorized(struct net_device *dev,
 	if (rc < 0)
 		goto out;
 	memset(&flags, 0, sizeof(flags));
-	flags.mask = flags.set = 1u << NL80211_STA_FLAG_AUTHORIZED;
+	flags.mask = 1u << NL80211_STA_FLAG_AUTHORIZED;
+	flags.set = authorized ? (1u << NL80211_STA_FLAG_AUTHORIZED) : 0u;
 	rc = nla_put(skb, NL80211_ATTR_STA_FLAGS2, (int)sizeof(flags), &flags);
 	if (rc < 0)
 		goto out;
@@ -799,6 +814,56 @@ lkpi_nl80211_sta_authorized(struct net_device *dev,
 	nlmsg_end(skb, nlh);
 	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
 			  NL80211_CMD_SET_STATION);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+/*
+ * NL80211_CMD_DEL_STATION: hostapd's sta_remove() path (deauth/disassoc and the
+ * removal of an association that never completed).  The MAC is all this AP
+ * needs; the reason code stays the kernel's default.
+ */
+int
+lkpi_nl80211_del_station(struct net_device *dev, const unsigned char mac[6])
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	int rc;
+
+	if (dev == NULL || mac == NULL)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_DEL_STATION;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put(skb, NL80211_ATTR_MAC, 6, mac);
+	if (rc < 0)
+		goto out;
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_DEL_STATION);
 
 out:
 	kfree_skb(skb);

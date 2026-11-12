@@ -29,6 +29,10 @@ CONFIG_LIBLINUX80211_WIRELESS=y
 CONFIG_LIBLINUX80211_IWLWIFI=y
 CONFIG_LIBLINUX80211_NET_LWIP=y
 
+# The AP MLME: the imported hostapd AP stack (third-party/hostap) instead of
+# the hand-written userspace half.  See docs/decisions/2026-11-12-ap-mlme-port.md.
+CONFIG_HOSTAP_AP=y
+
 # mac80211 allocates its local/wiphy/netdev/BSS/station records from the
 # FreeRTOS heap (osMemoryAlloc -> pvPortMalloc); the AP's beacon templates and
 # the lwIP pool/pbufs/TCP-IP thread stack come from the same heap.

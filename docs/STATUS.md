@@ -1,6 +1,6 @@
 # STATUS
 
-- Updated: 2026-11-11 (C6 throughput round)
+- Updated: 2026-11-12 (AP port: hostapd AP MLME on the board)
 - Stage: **the imported wireless stack registers, the AC 7260 attaches, joins
   the bench AP and moves data through lwIP**.  C0/C1/C2/C3/C4 are 2/2 cold
   boots; C5-open and C6-open (ICMP over wl0) are 2/2 in
@@ -28,9 +28,9 @@ below it has been reached; "compiles" and "links" are not "runs".
 | C5/C6-open | association (open AP) / ICMP over wl0 | **reached 2/2**: `runs/2026-11-11-iwl7260-c5-open` |
 | C6T throughput | TCP/UDP phases over wl0 against the GT arm; the 80% / 1% gates | **reached**: GT 2/2 + baseline 2/2 + pool128 2/2; T1 passes on pool128 (TCP down 142.6%, up 93.3%, UDP 0% loss, T2 0.002%/2.37%) - `runs/2026-11-11-iwl7260-c6-throughput/REPORT.json` |
 | C6S stability | 30 min TCP downlink + 10 reconnects; dynamic ARP | **reached 1/1 + partial**: `stab1` 30 min (1,777,484 ms, 13.95 GB, peer 60.4 Mbit/s), 10/10 reconnects (713-903 ms, 4/4 ping), 60 health lines, no reset, judge 4/4; dynamic ARP `PERMANENT -> REACHABLE` with `dev_set_rx_mode`/allmulti. `stab2` was aborted at 7.5 min for session close (partial, not a verdict); PS buffering remains open - `runs/2026-11-11-iwl7260-stab/` |
-| A0/A1 AP | the AC 7260 becomes an AP: `SET_INTERFACE rc=0 type=AP`, `START_AP rc=0`, monitor sees its beacons with the GT IE order (SSID/rates/DS then TIM) and its probe responses **2/2**; the Pi's scan lists the BSS - `runs/2026-11-12-iwl7260-ap/`, ADR `2026-11-12-ap-mlme.md` |
-| A2/A3 AP | the port's minimal open-AP MLME (probe/auth/assoc responses through `NL80211_CMD_FRAME` / `NEW_STATION` / `SET_STATION`) closes association and the data plane: Pi `iw link` Connected, station table and AUTHORIZED **3/3 boots**, both ping payloads 20/20 - same run |
-| A4 AP | **blocked**: the first sustained TCP/UDP flow stalls the AP TX (skb pool 128 full, `tx_fail` 135k, beacons stop, the Pi deauths for inactivity); the throughput numbers are not valid yet - same run §3 |
+| A0/A1 AP | the AC 7260 becomes an AP: `SET_INTERFACE rc=0 type=AP`, `START_AP rc=0`, monitor sees its beacons with the GT IE order and its probe responses **2/2**; the Pi's scan lists the BSS - `runs/2026-11-12-iwl7260-ap/`, ADR `2026-11-11-ap-mode.md` |
+| A2/A3 AP (hostapd) | **reached, repeated**: the AP MLME is the ported NXP hostapd (`third-party/wpa_supplicant-rtos`), not the hand-written one. `hostap start rc=0 ready=1`, the Pi associates, hostapd's station table and `NL80211_CMD_SET_STATION(AUTHORIZED)` land, both ping payloads 20/20 (RTT 1-2 ms) in 6 of 9 rounds of 2026-11-12 - `runs/2026-11-12-iwl7260-ap-port/`, ADR `2026-11-12-ap-mlme-port.md` |
+| A4 AP | **blocked**: the first sustained TCP/UDP flow stops the device. Evidence: 258 frames handed to the transport, only 67 completions, PCIe hard interrupts frozen at 790, the air loses the firmware's own beacons, and the skb pool (128) fills (`tx_fail` 135k). Ruled out: aggregation (HT off), `CMD_BLOCK_TXQS` host commands, workqueue starvation, the missing I/O barrier. See `runs/2026-11-12-iwl7260-ap-port/RUN.md` |
 | K1/K2 context | the host semantic bench and the three execution-context experiments | **reached on the host model**: 33/33 cases, `--break` red; ADR `2026-11-10-execution-context-model.md`; not board evidence |
 
 ## Receipts

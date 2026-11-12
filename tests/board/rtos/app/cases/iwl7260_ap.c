@@ -10,8 +10,15 @@
  * NL80211_CMD_SET_INTERFACE stream.  With the device down mac80211 changes the
  * sdata type without a driver op, so wlan0 keeps its name, ifindex and address
  * and the lwIP netif's "wlan0" bind is untouched (the handoff's DEL+NEW is the
- * fallback, not the path).  Then the 36-byte beacon head + the GT-derived IE
- * tail go through NL80211_CMD_START_AP; mac80211 inserts the TIM itself.
+ * fallback, not the path).
+ *
+ * The AP MLME is hostapd, imported from the NXP wpa_supplicant-rtos port
+ * (third-party/wpa_supplicant-rtos): lkpi_hostap_start() brings up the hostapd daemon task,
+ * applies this AP's configuration and runs hostapd_setup_interface(); hostapd
+ * builds the beacon (its 63-byte head + IE tail go to NL80211_CMD_START_AP),
+ * and its ieee802_11.c answers probe/auth/assoc through the port's driver
+ * table.  The port only drains the management frames the cfg80211_rx_mgmt_ext
+ * wrap queued (lkpi_hostap_poll) and reports status.
  *
  * Direction words are the round's and are printed, not inferred: air=down is
  * AP->STA (the board sends; the Pi's iperf server/sink is the receiver),
@@ -30,10 +37,10 @@
  *   iwl7260_ap: chan freq=<mhz> present=<0|1> flags=0x<hex> can_beacon=<0|1>
  *   iwl7260_ap: set_iface rc=<n> type=<n>
  *   iwl7260_ap: start rc=<n>
- *   iwl7260_ap: beacon head_len=<n> tail_len=<n> ies=<n> head_sha=<hex> tail_sha=<hex>
- *   iwl7260_ap: start_ap rc=<n> freq=<mhz> interval=<n> dtim=<n>
  *   iwl7260_ap: netif up name=wl0 ip=<ip>/24 mac=<mac>
+ *   iwl7260_ap: hostap start rc=<n> ready=<0|1>
  *   iwl7260_ap: peer window ms=<n>
+ *   iwl7260_ap: hostap up ready=<0|1> sta=<n>
  *   iwl7260_ap: sta add n=<n> mac=<mac>
  *   iwl7260_ap: ping tx=<n> rx=<n> payload=<n> rtt_ms=<min>/<avg>/<max>
  *   iwl7260_ap: phase <n> begin proto=<p> role=<r> air=<down|up> port=<n> window_ms=<n> name=<n> peer_ms=<n>
@@ -54,8 +61,7 @@
 #include "linuxkpi_core.h"
 #include "linux80211/linux80211.h"
 #include "linux80211/nl80211_probe.h"
-#include "linux80211/ap_beacon.h"
-#include "linux80211/ap_mlme.h"
+#include "linux80211/hostap_ap.h"
 #include "linux80211/net.h"
 #include "linuxkpi_pci.h"
 #include "adapter.h"
@@ -76,7 +82,7 @@
 #define AP_WAIT_MS		40000U
 #define AP_POLL_MS		200U
 #define AP_CONNECT_WAIT_MS	40000U
-#define AP_MLME_POLL_MS		10U
+#define AP_HOSTAP_POLL_MS	10U
 #define AP_SETTLE_MS		3000U
 #define AP_PEER_WINDOW_MS	12000U
 #define AP_PING_COUNT		20U
@@ -144,38 +150,6 @@ void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 int lkpi_fw_iwl7260_fw_register(void);
 
 static unsigned ap_log_lines;
-static struct net_device *ap_dev;
-
-static int
-ap_mgmt_tx(const unsigned char *frame, unsigned int len)
-{
-	return lkpi_nl80211_mgmt_tx(ap_dev, frame, len, 0);
-}
-
-static int
-ap_new_station(const struct lkpi_ap_sta_add *sta)
-{
-	return lkpi_nl80211_new_station(ap_dev, sta);
-}
-
-static int
-ap_set_authorized(const unsigned char mac[6])
-{
-	return lkpi_nl80211_sta_authorized(ap_dev, mac);
-}
-
-static void
-ap_mlme_emit(const char *line)
-{
-	CASE_ANCHOR("iwl7260_ap: %s\n", line);
-}
-
-static const struct lkpi_ap_mlme_ops ap_mlme_ops = {
-	.mgmt_tx = ap_mgmt_tx,
-	.new_station = ap_new_station,
-	.set_authorized = ap_set_authorized,
-	.emit = ap_mlme_emit,
-};
 
 static void
 ap_sink(ulog_level_t level, const char *line)
@@ -191,6 +165,12 @@ ap_sink(ulog_level_t level, const char *line)
 		 strstr(line, "beacon") != NULL ||
 		 strstr(line, "station") != NULL ||
 		 strstr(line, "sta_state") != NULL ||
+		 strstr(line, "hostapd") != NULL ||
+		 strstr(line, "AP-ENABLED") != NULL ||
+		 strstr(line, "AP-STA") != NULL ||
+		 strstr(line, "IEEE 802.11") != NULL ||
+		 strstr(line, "authenticated") != NULL ||
+		 strstr(line, "associated") != NULL ||
 		 strstr(line, "Failed") != NULL) {
 		CASE_INFO("iwl7260_ap: drv %s\n", line);
 		ap_log_lines++;
@@ -290,6 +270,46 @@ ap_run_phase(unsigned n, const struct ap_phase *ph)
 		    (unsigned long)(after.pool.data_overflow -
 				    before.pool.data_overflow),
 		    (unsigned)after.pool.dyalloc_live);
+	{
+		unsigned int hard = 0u, thread = 0u;
+
+		lkpi_pci_irq_counters(&hard, &thread);
+		CASE_ANCHOR("iwl7260_ap: phase %u irq hard=%u thread=%u\n",
+			    n, hard, thread);
+	}
+	{
+		struct lkpi_wq_census wqc[LKPI_WQ_CENSUS_MAX];
+		struct lkpi_wq_stats wqs;
+		unsigned int i, nw;
+
+		lkpi_wq_stats_get(&wqs);
+		nw = lkpi_wq_census(wqc, LKPI_WQ_CENSUS_MAX);
+		CASE_ANCHOR("iwl7260_ap: phase %u wq bh_full=%u bh_direct=%u "
+			    "bh_runs=%u\n", n, (unsigned)wqs.full,
+			    (unsigned)wqs.direct, (unsigned)wqs.runs);
+		for (i = 0; i < nw; i++)
+			CASE_ANCHOR("iwl7260_ap: phase %u wq[%u] %s runs=%u "
+				    "refused=%u depth=%u\n", n, i, wqc[i].name,
+				    (unsigned)wqc[i].runs,
+				    (unsigned)wqc[i].refused,
+				    (unsigned)wqc[i].depth);
+	}
+	{
+		struct lkpi_tx_health txh;
+
+		lkpi_tx_health_get(&txh);
+		CASE_ANCHOR("iwl7260_ap: phase %u txhealth tx_status=%lu "
+			    "stopq=%lu wakeq=%lu dq_calls=%lu dq_frames=%lu "
+			    "mgmt=%lu data=%lu iwl_tx=%lu hcmd=%lu "
+			    "hcmd_blockq=%lu hcmd_async=%lu mgmt_tx=%lu "
+			    "beacon=%lu ready=%d sta=%d\n", n,
+			    txh.tx_status, txh.stop_queue, txh.wake_queue,
+			    txh.dequeue_calls, txh.dequeue_frames,
+			    txh.status_mgmt, txh.status_data, txh.iwl_tx,
+			    txh.hcmd, txh.hcmd_blockq, txh.hcmd_async,
+			    txh.mgmt_tx, txh.mgmt_beacon, lkpi_hostap_ready(),
+			    lkpi_hostap_sta_count());
+	}
 	CASE_ANCHOR("iwl7260_ap: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);
 	return rc;
 }
@@ -304,10 +324,7 @@ case_iwl7260_ap_run(void)
 	unsigned char mac[6];
 	unsigned char sta_macs[4][6];
 	char netif_mac[6];
-	unsigned char head[LKPI_AP_BEACON_HEAD_MAX];
-	unsigned char tail[LKPI_AP_BEACON_TAIL_MAX];
-	unsigned int head_len = 0u, tail_len = 0u;
-	char why[96];
+	struct lkpi_hostap_cfg ap_cfg;
 	unsigned int waited;
 	unsigned int sta_n = 0u;
 	unsigned int ping_rx = 0u;
@@ -395,52 +412,15 @@ case_iwl7260_ap_run(void)
 		return 6;
 	}
 
-	rc = lkpi_ap_beacon_build(AP_SSID, AP_FREQ_MHZ, mac, head,
-				  sizeof(head), &head_len, tail, sizeof(tail),
-				  &tail_len);
-	if (rc != 0) {
-		CASE_ANCHOR("iwl7260_ap: FAIL beacon build rc=%d\n", rc);
-		return 7;
-	}
-	rc = lkpi_ap_beacon_validate(head, head_len, tail, tail_len, why,
-				     sizeof(why));
-	CASE_ANCHOR("iwl7260_ap: beacon head_len=%u tail_len=%u ies=%u "
-		    "head_sha=%08x tail_sha=%08x\n",
-		    head_len, tail_len,
-		    (unsigned)lkpi_ap_beacon_ie_count(tail, tail_len),
-		    (unsigned)lkpi_ap_beacon_hash(head, head_len),
-		    (unsigned)lkpi_ap_beacon_hash(tail, tail_len));
-	if (rc != 0) {
-		CASE_ANCHOR("iwl7260_ap: FAIL beacon invalid: %s\n", why);
-		return 8;
-	}
-
-	/* The MLME's half: it needs the same head/tail the AP beacons with, so
-	 * its probe/auth/assoc responses carry the GT-derived IE set. */
-	ap_dev = dev;
-	rc = lkpi_ap_mlme_configure(AP_SSID, head, head_len, tail, tail_len,
-				    &ap_mlme_ops);
-	if (rc != 0) {
-		CASE_ANCHOR("iwl7260_ap: FAIL mlme configure rc=%d\n", rc);
-		return 9;
-	}
-
-	rc = lkpi_nl80211_start_ap(dev, AP_SSID, AP_FREQ_MHZ,
-				   NL80211_CHAN_WIDTH_20, 100u, 2u,
-				   head, head_len, tail, tail_len);
-	CASE_ANCHOR("iwl7260_ap: start_ap rc=%d freq=%u interval=100 dtim=2\n",
-		    rc, AP_FREQ_MHZ);
-	if (rc != 0) {
-		CASE_ANCHOR("iwl7260_ap: FAIL start_ap rc=%d\n", rc);
-		return 10;
-	}
-	lkpi_ap_mlme_enable(1);
-
-	/* --- the lwIP netif before the peer can ping --------------------- */
+	/*
+	 * The lwIP netif comes before hostapd: the NXP entry derives the
+	 * interface name it configures from the port's uAP netif
+	 * (net_get_uap_interface(), wm_net.h).
+	 */
 	rc = lkpi_net_wlan_up(AP_BOARD_IP, AP_BOARD_MASK, NULL, netif_mac);
 	if (rc != 0) {
 		CASE_ANCHOR("iwl7260_ap: FAIL netif up rc=%d\n", rc);
-		return 11;
+		return 7;
 	}
 	CASE_ANCHOR("iwl7260_ap: netif up name=wl0 ip=%s/24 mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
 		    AP_BOARD_IP, (unsigned char)netif_mac[0],
@@ -448,34 +428,59 @@ case_iwl7260_ap_run(void)
 		    (unsigned char)netif_mac[3], (unsigned char)netif_mac[4],
 		    (unsigned char)netif_mac[5]);
 
+	/* --- A1: hostapd brings the AP up (beacon via src/ap/beacon.c) --- */
+	ap_cfg.ifname = "wlan0";
+	ap_cfg.ssid = AP_SSID;
+	ap_cfg.channel = 11u;
+	ap_cfg.beacon_int = 100u;
+	ap_cfg.dtim = 2u;
+	rc = lkpi_hostap_start(&ap_cfg);
+	CASE_ANCHOR("iwl7260_ap: hostap start rc=%d ready=%d\n", rc,
+		    lkpi_hostap_ready());
+	if (rc != 0 || !lkpi_hostap_ready()) {
+		CASE_ANCHOR("iwl7260_ap: FAIL hostap start rc=%d\n", rc);
+		return 10;
+	}
+
 	/*
-	 * The harness reads this anchor and runs the Pi's ping; it starts the
-	 * Pi's scan/join earlier, on the start_ap anchor.  The MLME therefore
-	 * has to be serviced from here on, not after a blind sleep: the Pi's
-	 * auth/assoc arrive inside this window.  Each poll handles one queued
-	 * management frame in this task's context (NL80211_CMD_FRAME et al.
-	 * may sleep; the RX path may not).
+	 * The harness starts the Pi's scan/join on the hostap start anchor.
+	 * hostapd has to be serviced from here on, not after a blind sleep:
+	 * the Pi's auth/assoc arrive inside this window.  Each poll hands the
+	 * queued management frames to hostapd's event queue, which the
+	 * imported eloop task dispatches in task context (NL80211_CMD_FRAME et
+	 * al. may sleep; the RX path may not).
 	 */
 	CASE_ANCHOR("iwl7260_ap: peer window ms=%u\n", AP_PEER_WINDOW_MS);
 
-	/* --- A2: serve the MLME until the stack has the station ---------- */
+	/*
+	 * --- A2: hand the queued management frames to hostapd -----------
+	 * The wrap only copies them out of the RX path; here they go to the
+	 * imported event queue, and hostapd's own ieee802_11.c answers.  The
+	 * station's arrival is read from hostapd's table (its MLME owns it).
+	 */
 	sta_n = 0u;
-	for (waited = 0U; waited < AP_CONNECT_WAIT_MS; waited += AP_MLME_POLL_MS) {
-		(void)lkpi_ap_mlme_poll();
-		if (lkpi_nl80211_sta_count(dev, sta_macs, 4u, &sta_n) != 0)
-			break;
+	for (waited = 0U; waited < AP_CONNECT_WAIT_MS;
+	     waited += AP_HOSTAP_POLL_MS) {
+		(void)lkpi_hostap_poll();
+		sta_n = (unsigned)lkpi_hostap_sta_count();
 		if (sta_n != 0u)
 			break;
-		osDelay(AP_MLME_POLL_MS);
+		osDelay(AP_HOSTAP_POLL_MS);
 	}
 	if (sta_n == 0u) {
-		CASE_ANCHOR("iwl7260_ap: FAIL no station after %u ms\n",
-			    AP_CONNECT_WAIT_MS);
+		CASE_ANCHOR("iwl7260_ap: FAIL no station after %u ms "
+			    "(ready=%d)\n", AP_CONNECT_WAIT_MS,
+			    lkpi_hostap_ready());
 		return 12;
 	}
-	CASE_ANCHOR("iwl7260_ap: sta add n=%u mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
-		    sta_n, sta_macs[0][0], sta_macs[0][1], sta_macs[0][2],
-		    sta_macs[0][3], sta_macs[0][4], sta_macs[0][5]);
+	CASE_ANCHOR("iwl7260_ap: hostap up ready=%d sta=%u\n",
+		    lkpi_hostap_ready(), sta_n);
+	if (lkpi_nl80211_sta_count(dev, sta_macs, 4u, &sta_n) == 0 &&
+	    sta_n != 0u)
+		CASE_ANCHOR("iwl7260_ap: sta add n=%u mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+			    sta_n, sta_macs[0][0], sta_macs[0][1],
+			    sta_macs[0][2], sta_macs[0][3], sta_macs[0][4],
+			    sta_macs[0][5]);
 	/* The station exists before the Pi's own iw connect returns; give the
 	 * Pi a moment to finish and to answer ARP before the pings. */
 	osDelay(AP_SETTLE_MS);
@@ -503,25 +508,8 @@ case_iwl7260_ap_run(void)
 			    ping_rx);
 		return 14;
 	}
-	{
-		struct lkpi_ap_mlme_stats mst;
-
-		lkpi_ap_mlme_stats_get(&mst);
-		CASE_ANCHOR("iwl7260_ap: mlme stats rx probe_req=%u auth_req=%u "
-			    "assoc_req=%u drop_bad=%u drop_unsupported=%u\n",
-			    mst.probe_req, mst.auth_req, mst.assoc_req,
-			    mst.drop_bad, mst.drop_unsupported);
-		CASE_ANCHOR("iwl7260_ap: mlme stats tx probe_resp=%u "
-			    "probe_fail=%u auth_resp=%u auth_fail=%u "
-			    "assoc_resp=%u assoc_fail=%u tx_fail=%u\n",
-			    mst.probe_resp, mst.probe_fail, mst.auth_resp,
-			    mst.auth_fail, mst.assoc_resp, mst.assoc_fail,
-			    mst.tx_fail);
-		CASE_ANCHOR("iwl7260_ap: mlme stats sta add=%u add_fail=%u "
-			    "authorized=%u auth_fail=%u q_full=%u\n",
-			    mst.sta_add, mst.sta_add_fail, mst.sta_auth,
-			    mst.sta_auth_fail, mst.q_full);
-	}
+	CASE_ANCHOR("iwl7260_ap: hostap stats ready=%d sta=%d\n",
+		    lkpi_hostap_ready(), lkpi_hostap_sta_count());
 	CASE_ANCHOR("iwl7260_ap: PASS AP\n");
 	ap_ok = 1;
 

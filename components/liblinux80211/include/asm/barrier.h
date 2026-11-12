@@ -24,6 +24,11 @@
 #define	rmb()		__sync_synchronize()
 #define	wmb()		__sync_synchronize()
 #define	dma_mb()	__sync_synchronize()
+/* [LNX] include/asm-generic/barrier.h: the DMA-directional pair.  The single
+ * core does not relax them (they order memory against a device, not against
+ * another CPU), so they keep their direction on this port too. */
+#define	dma_rmb()	__sync_synchronize()
+#define	dma_wmb()	__sync_synchronize()
 #define	io_stop_wc()	do { } while (0)
 
 /* uniprocessor: no cross-CPU ordering to establish */

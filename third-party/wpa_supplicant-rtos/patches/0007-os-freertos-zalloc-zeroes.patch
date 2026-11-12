@@ -1,0 +1,29 @@
+diff --git a/src/utils/os_freertos.c b/src/utils/os_freertos.c
+index dc94e54..aa992e2 100644
+--- a/src/utils/os_freertos.c
++++ b/src/utils/os_freertos.c
+@@ -281,7 +281,23 @@ void os_free(void *ptr)
+ 
+ void *os_zalloc(size_t size)
+ {
+-    return os_malloc(size);
++    void *ptr = os_malloc(size);
++
++    /*
++     * os_zalloc() is calloc(): the whole point of it over os_malloc() is that
++     * the block can be used as an initialised object.  OSA_MemoryAllocate()
++     * (pvPortMalloc) does not zero, so the NXP port's "return os_malloc(size)"
++     * handed out heap garbage whenever the block was a reuse - the AP's
++     * struct sta_info came back with a bogus aid and a stray
++     * WLAN_STA_AUTHORIZED bit, which silently skipped the authorization step
++     * and left the data path dead.
++     */
++    if (ptr != NULL)
++    {
++        os_memset(ptr, 0, size);
++    }
++
++    return ptr;
+ }
+ 
+ void *os_realloc(void *ptr, size_t newsize)
