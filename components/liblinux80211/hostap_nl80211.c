@@ -23,6 +23,10 @@
 #include "linux80211/hostap_drv.h"
 #include "linux80211/nl80211_probe.h"
 
+/* the lwIP adapter's transmit entry; the AP's EAPOL uses the same frame path
+ * as the supplicant would on Linux (a packet-socket send on wlan0) */
+#include "lkpinetif_seam.h"
+
 static struct net_device *hostap_dev;
 
 /* This image has exactly one wireless net_device and it keeps mac80211's
@@ -165,7 +169,8 @@ lkpi_hostap_drv_set_ap(const struct lkpi_hostap_ap_params *params)
 				     (unsigned int)params->beacon_int,
 				     (unsigned int)params->dtim,
 				     params->head, (unsigned int)params->head_len,
-				     params->tail, (unsigned int)params->tail_len);
+				     params->tail, (unsigned int)params->tail_len,
+				     params->privacy);
 }
 
 int
@@ -204,4 +209,43 @@ int
 lkpi_hostap_drv_sta_authorized(const unsigned char *addr, int authorized)
 {
 	return lkpi_nl80211_sta_set_authorized(hostap_dev, addr, authorized);
+}
+
+int
+lkpi_hostap_drv_eapol_tx(const void *frame, size_t len)
+{
+	if (frame == NULL || len == 0u)
+		return -EINVAL;
+	return lkpinetif_tx_frame(frame, len);
+}
+
+int
+lkpi_hostap_drv_set_key(const struct lkpi_hostap_key *key)
+{
+	struct lkpi_nl80211_key k;
+	int rc;
+
+	if (key == NULL || key->key == NULL || key->key_len == 0u)
+		return -EINVAL;
+	memset(&k, 0, sizeof(k));
+	k.cipher = key->cipher;
+	k.key_idx = key->key_idx;
+	k.mac = key->pairwise ? key->addr : NULL;
+	k.key = key->key;
+	k.key_len = (unsigned int)key->key_len;
+	k.seq = key->seq;
+	k.seq_len = (unsigned int)key->seq_len;
+	rc = lkpi_nl80211_new_key(hostap_dev, &k);
+	if (rc != 0)
+		return rc;
+	if (key->default_key)
+		rc = lkpi_nl80211_set_default_key(hostap_dev, key->key_idx,
+						  key->pairwise ? 0 : 1);
+	return rc;
+}
+
+int
+lkpi_hostap_drv_del_key(const unsigned char *addr, int key_idx)
+{
+	return lkpi_nl80211_del_key(hostap_dev, key_idx, addr);
 }

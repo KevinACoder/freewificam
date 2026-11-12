@@ -3,19 +3,13 @@
  * @file    linuxkpi_crypto.c
  * @brief   The crypto library entries the imported set names.
  *
- * @design This port carries no crypto provider.  The API records exist (the
- *         faces declare them and the stack's BIP/TKIP/CCMP code compiles), and
- *         every allocation returns -ENOSYS: a caller that reaches an
- *         encryption path gets a loud, correct failure instead of a fake
- *         success.  The two pure byte functions (xor/memneq) and the ARC4
- *         stream cipher are real because they are small, self-contained and
- *         the soft-MAC's WEP/TKIP paths need them on C5; AES-CMAC is not
- *         carried and says so.
- *
- *         The consequence for the first board gates: C2/C3 exercise an open
- *         network (no key install), so the encryption gap does not touch them.
- *         C5 (association) on an encrypted AP will, and that is where a real
- *         AES/CMAC provider lands.
+ * @design The byte helpers and ARC4 are real; AES-CMAC and the skcipher
+ *         allocations still return -ENOSYS because no caller in the WPA2
+ *         round reaches them.  The AEAD face moved out of this file: the
+ *         WPA2 round needs a working ccm(aes), so linuxkpi_ccm.c carries the
+ *         AES-128/CCM provider and the crypto_aead_* bodies.  Keeping the
+ *         quiet -ENOSYS stubs here would make every CCMP key allocation fail
+ *         before the driver ever sees NL80211_CMD_NEW_KEY.
  * @date    10.11.2026
  */
 
@@ -138,46 +132,6 @@ aes_cmac_final(struct aes_cmac_ctx *ctx, u8 out[AES_BLOCK_SIZE])
 /* the crypto API allocations (loudly unavailable)                     */
 /* ------------------------------------------------------------------ */
 
-struct crypto_aead *
-crypto_alloc_aead(const char *alg_name, u32 type, u32 mask)
-{
-	(void)alg_name;
-	(void)type;
-	(void)mask;
-	return ERR_PTR(-ENOSYS);
-}
-
-int
-crypto_aead_setkey(struct crypto_aead *tfm, const u8 *key, unsigned int keylen)
-{
-	(void)tfm;
-	(void)key;
-	(void)keylen;
-	return -ENOSYS;
-}
-
-int
-crypto_aead_setauthsize(struct crypto_aead *tfm, unsigned int authsize)
-{
-	(void)tfm;
-	(void)authsize;
-	return -ENOSYS;
-}
-
-int
-crypto_aead_encrypt(struct aead_request *req)
-{
-	(void)req;
-	return -ENOSYS;
-}
-
-int
-crypto_aead_decrypt(struct aead_request *req)
-{
-	(void)req;
-	return -ENOSYS;
-}
-
 struct crypto_skcipher *
 crypto_alloc_skcipher(const char *alg_name, u32 type, u32 mask)
 {
@@ -209,11 +163,4 @@ crypto_skcipher_decrypt(struct skcipher_request *req)
 {
 	(void)req;
 	return -ENOSYS;
-}
-
-void
-crypto_destroy_tfm(void *mem, struct crypto_tfm *tfm)
-{
-	(void)mem;
-	(void)tfm;
 }

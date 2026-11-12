@@ -16,4 +16,12 @@ config CASES
 	  the build derives the case's RTOS_CASE_* macro from this string, so the
 	  source set, the table and the judge's expectations are the same fact.
 
+config AP_WPA2
+	bool "iwl7260_ap runs the WPA2-PSK/CCMP variant"
+	help
+	  Only changes the AP case (and the hostapd configuration it applies):
+	  the passphrase, the 4-way wait and the PASS APW gate.  The hostap
+	  source set, the driver table and the image's other cases are the same
+	  as the open AP profile.  Used by rk3568-iwl7260-ap-wpa2.
+
 endmenu

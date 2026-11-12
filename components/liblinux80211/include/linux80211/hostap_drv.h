@@ -29,6 +29,9 @@
 #define LKPI_HOSTAP_CHAN_WIDTH_40P	(1u << 2)
 #define LKPI_HOSTAP_CHAN_WIDTH_40M	(1u << 3)
 
+/* RSN cipher suite: CCMP-128 (the only cipher this round installs) */
+#define LKPI_HOSTAP_CIPHER_CCMP		0x000fac04u
+
 /* mirrors HOSTAPD_CHAN_* flags */
 #define LKPI_HOSTAP_CHAN_DISABLED	0x00000001
 #define LKPI_HOSTAP_CHAN_NO_IR		0x00000002
@@ -67,6 +70,22 @@ struct lkpi_hostap_ap_params {
 	int		 bw_mhz;		/* hostapd's bandwidth unit: 20/40/80/160 */
 	int		 beacon_int;
 	int		 dtim;
+	int		 privacy;		/* WPA2: the beacon's privacy bit */
+};
+
+/* hostapd's set_key(), reduced to what this port maps onto nl80211.  The
+ * cipher is the RSN cipher-suite value (0x000fac04 for CCMP); addr is NULL
+ * for a group key and the station's address for a pairwise key. */
+struct lkpi_hostap_key {
+	const unsigned char	*addr;		/* NULL or 6 bytes */
+	int			 key_idx;
+	unsigned int		 cipher;
+	const void		*key;
+	size_t			 key_len;
+	const void		*seq;		/* optional */
+	size_t			 seq_len;
+	int			 pairwise;
+	int			 default_key;	/* the AP's GTK becomes default */
 };
 
 struct lkpi_hostap_sta_add {
@@ -96,5 +115,11 @@ int lkpi_hostap_drv_send_mlme(const void *frame, size_t len, int noack);
 int lkpi_hostap_drv_sta_add(const struct lkpi_hostap_sta_add *sta);
 int lkpi_hostap_drv_sta_del(const unsigned char *addr);
 int lkpi_hostap_drv_sta_authorized(const unsigned char *addr, int authorized);
+
+/* one complete EAPOL frame (Ethernet header included) on its way to the air */
+int lkpi_hostap_drv_eapol_tx(const void *frame, size_t len);
+
+int lkpi_hostap_drv_set_key(const struct lkpi_hostap_key *key);
+int lkpi_hostap_drv_del_key(const unsigned char *addr, int key_idx);
 
 #endif /* LINUX80211_HOSTAP_DRV_H */

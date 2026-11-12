@@ -30,6 +30,7 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	linuxkpi_netlink.c \
 	linuxkpi_util.c \
 	linuxkpi_crypto.c \
+	linuxkpi_ccm.c \
 	fw_registry.c \
 	net_egress.c \
 	skbuff/skbuff_pool.c

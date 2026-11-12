@@ -36,6 +36,9 @@ FREQ=${FREQ:-2462}
 SSID=${SSID:-rtos-7260-ap}
 PI_IP=${PI_IP:-192.168.99.2}
 AP_IP=${AP_IP:-192.168.99.1}
+PSK=${PSK:-rtos-7260-wpa2-psk}
+WPA_LOG=${WPA_LOG:-/tmp/pi-ap-wpa.log}
+WPA_CTRL=${WPA_CTRL:-/tmp/pi-ap-wpa-ctrl}
 STA_IF=${STA_IF:-wlan1}
 MON_IF=${MON_IF:-wlan2}
 MON_RESTORE_CH=${MON_RESTORE_CH:-5}
@@ -106,8 +109,17 @@ do_status() {
     say "== iperf: $(iperf -v 2>&1 | head -1)"
 }
 
+# The STA side of the WPA2 round: one supplicant on wlan1, no NM, no ctrl
+# daemon beyond wpa_cli.  A leftover supplicant from the previous arm is the
+# one process that can make a fresh join look like a flake.
+stop_wpa() {
+    pkill -f "wpa_supplicant.*$STA_IF" 2>/dev/null || true
+    sleep 1
+}
+
 # --- up: the AP round's bench ---------------------------------------------
 do_up() {
+    stop_wpa
     say "== stop lab-ap"
     systemctl stop lab-ap 2>/dev/null || true
     sleep 1
@@ -173,6 +185,7 @@ do_up() {
 # --- down: restore the standard bench --------------------------------------
 do_down() {
     say "== teardown"
+    stop_wpa
     ip route del "$AP_IP/32" dev "$STA_IF" 2>/dev/null || true
     if [ -r "$RPF_MARK" ]; then
         rpf=/proc/sys/net/ipv4/conf/$STA_IF/rp_filter
@@ -239,15 +252,64 @@ do_link() {
     iw dev "$STA_IF" link 2>&1
 }
 
+# --- A2 (WPA2): wpa_supplicant join ---------------------------------------
+do_join_wpa() {
+    local i rc=1
+
+    ip link set "$STA_IF" up
+    stop_wpa
+    mkdir -p "$WPA_CTRL"
+    : > "$WPA_LOG"
+    cat > /tmp/pi-ap-wpa.conf <<EOF
+ctrl_interface=$WPA_CTRL
+network={
+    ssid="$SSID"
+    psk="$PSK"
+    key_mgmt=WPA-PSK
+    proto=RSN
+    pairwise=CCMP
+    group=CCMP
+    ieee80211w=0
+    scan_ssid=1
+}
+EOF
+    say "== wpa_supplicant $STA_IF ssid=$SSID"
+    wpa_supplicant -B -i "$STA_IF" -c /tmp/pi-ap-wpa.conf -f "$WPA_LOG" \
+        -D nl80211 2>&1 || say "wpa_supplicant start failed"
+    for i in $(seq 1 40); do
+        if grep -q 'WPA: Key negotiation completed' "$WPA_LOG" 2>/dev/null; then
+            rc=0
+            break
+        fi
+        sleep 0.5
+    done
+    say "== wpa_supplicant negotiation rc=$rc after ~$(($i / 2)) s"
+    sleep 1
+    do_wpa_status
+    do_link
+}
+
+do_wpa_status() {
+    wpa_cli -p "$WPA_CTRL" -i "$STA_IF" status 2>&1 || true
+    say "== wpa log (tail)"
+    tail -30 "$WPA_LOG" 2>/dev/null || true
+}
+
+do_wpa_log() {
+    cat "$WPA_LOG" 2>/dev/null || true
+}
+
 # --- A3: ping + dynamic ARP ------------------------------------------------
 do_ping() {
-    say "== icmp 20/20"
+    say "== icmp 56 B 20/20"
     ping -I "$STA_IF" -c 20 -i 0.2 -W 2 "$AP_IP" 2>&1 || true
+    say "== icmp 1400 B 20/20"
+    ping -I "$STA_IF" -c 20 -i 0.2 -W 2 -s 1400 "$AP_IP" 2>&1 || true
     say "== dynamic arp: neighbour deleted, one ping, state must rebuild"
     ip neigh del "$AP_IP" dev "$STA_IF" 2>/dev/null || true
     ip neigh show "$AP_IP" dev "$STA_IF" 2>&1 || true
     ping -I "$STA_IF" -c 1 -W 2 "$AP_IP" >/dev/null 2>&1 || true
-    ip neigh show "$AP_IP" 2>&1 || true
+    ip neigh show "$AP_IP" dev "$STA_IF" 2>&1 || true
 }
 
 do_mac() { cat "/sys/class/net/$STA_IF/address"; }
@@ -294,6 +356,9 @@ case "$cmd" in
     scan)       do_scan ;;
     scan-all)   do_scan_all ;;
     join)       do_join ;;
+    join-wpa)   do_join_wpa ;;
+    wpa-status) do_wpa_status ;;
+    wpa-log)    do_wpa_log ;;
     link)       do_link ;;
     ping)       do_ping ;;
     mac)        do_mac ;;

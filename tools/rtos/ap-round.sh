@@ -37,6 +37,8 @@ SSID=${SSID:-rtos-7260-ap}
 BOARD_IP=${BOARD_IP:-192.168.99.1}
 PI_IP=${PI_IP:-192.168.99.2}
 MON_IF=${MON_IF:-wlan2}
+PSK=${PSK:-rtos-7260-wpa2-psk}
+WPA2=${WPA2:-0}
 BIN="$ROOT/tests/board/rtos/build/build/rtos-freertos.bin"
 TIMEOUT=480
 EVIDENCE=
@@ -48,6 +50,7 @@ while [ $# -gt 0 ]; do
 		--timeout)  TIMEOUT=${2:?}; shift 2 ;;
 		--channel)  CH=${2:?}; shift 2 ;;
 		--freq)     FREQ=${2:?}; shift 2 ;;
+		--wpa2)     WPA2=1; shift ;;
 		-h|--help)  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "ap-round: unknown argument $1" >&2; exit 2 ;;
 	esac
@@ -62,7 +65,7 @@ MON_UP_PCAP=$PI_DIR/mon-up.pcap
 
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" "$@"; }
 pisu() { pi "sudo -n $*"; }
-pih() { pi "sudo -n env CH=$CH FREQ=$FREQ SSID=$SSID PI_IP=$PI_IP AP_IP=$BOARD_IP bash /tmp/pi-ap.sh $*"; }
+pih() { pi "sudo -n env CH=$CH FREQ=$FREQ SSID=$SSID PI_IP=$PI_IP AP_IP=$BOARD_IP PSK=$PSK WPA2=$WPA2 bash /tmp/pi-ap.sh $*"; }
 
 RESTORED=0
 mon_down_pid=
@@ -173,6 +176,13 @@ on_phase() {		# $1 = name
 for _ in $(seq 1 3000); do
 	if [ "$seen_start_ap" = 0 ] && anchor 'iwl7260_ap: (start_ap|hostap start) rc=0'; then
 		seen_start_ap=1
+		# WPA2: capture the 4-way before the join; the open path's beacon
+		# capture stays as it was.
+		if [ "$WPA2" = 1 ]; then
+			pisu "timeout 25 tcpdump -i $MON_IF -s 0 -w $PI_DIR/wpa4way.pcap" \
+				>"$EVIDENCE/wpa4way-tcpdump.log" 2>&1 &
+			wpa_mon_pid=$!
+		fi
 		# A1's on-air probe: full-length beacons on the AP's channel, started
 		# before the scans so a beacon that does appear is not missed.
 		pisu "timeout 12 tcpdump -i $MON_IF -s 0 -w $PI_DIR/beacon.pcap" \
@@ -185,13 +195,25 @@ for _ in $(seq 1 3000); do
 		sleep 1
 		pih "scan" >> "$EVIDENCE/pi-scan.txt" 2>&1 || true
 		pih "scan-all" > "$EVIDENCE/pi-scan-all.txt" 2>&1 || true
-		pih "join" > "$EVIDENCE/pi-join.txt" 2>&1 || true
+		if [ "$WPA2" = 1 ]; then
+			pih "join-wpa" > "$EVIDENCE/pi-join.txt" 2>&1 || true
+			pih "wpa-status" > "$EVIDENCE/pi-wpa-status.txt" 2>&1 || true
+			pih "wpa-log" > "$EVIDENCE/pi-wpa.log" 2>&1 || true
+		else
+			pih "join" > "$EVIDENCE/pi-join.txt" 2>&1 || true
+		fi
 		pih "link" > "$EVIDENCE/pi-link.txt" 2>&1 || true
 	fi
 
 	if [ "$seen_peer" = 0 ] && anchor 'iwl7260_ap: peer window ms='; then
 		seen_peer=1
-		pih "ping" > "$EVIDENCE/pi-ping.txt" 2>&1 || true
+		if [ "$WPA2" = 1 ]; then
+			# join-wpa has already waited for COMPLETED; ping after it,
+			# not at the station-table anchor (which precedes the 4-way).
+			pih "ping" > "$EVIDENCE/pi-ping.txt" 2>&1 || true
+		else
+			pih "ping" > "$EVIDENCE/pi-ping.txt" 2>&1 || true
+		fi
 	fi
 
 	PHASES=""
@@ -223,8 +245,17 @@ if ! [ -f "$SERIAL" ] || ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_ap: core r
 	RESTORED=1
 	exit 2
 fi
+if [ "$WPA2" = 1 ] && ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_ap: security wpa2=1'; then
+	echo "ap-round: INVALID BOOT: --wpa2 but no security wpa2=1 anchor" >&2
+	echo "invalid: wpa2 image not deployed" > "$EVIDENCE/invalid.txt"
+	pih "servers-stop" >/dev/null 2>&1 || true
+	pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
+	RESTORED=1
+	exit 2
+fi
 pih "servers-stop" >/dev/null 2>&1 || true
 [ -n "${beacon_pid:-}" ] && wait "$beacon_pid" 2>/dev/null || true
+[ -n "${wpa_mon_pid:-}" ] && wait "$wpa_mon_pid" 2>/dev/null || true
 [ -n "${mon_down_pid:-}" ] && wait "$mon_down_pid" 2>/dev/null || true
 [ -n "${mon_up_pid:-}" ] && wait "$mon_up_pid" 2>/dev/null || true
 for p in "${phase_pids[@]:-}"; do wait "$p" 2>/dev/null || true; done 2>/dev/null || true
@@ -246,11 +277,22 @@ for f in "$EVIDENCE"/"pi-ap-$TAG"/sink-*.txt; do
 done
 
 {
-	echo "beacon=$PI_DIR/beacon.pcap"
+	echo "beacon=$PI_DIR/beacon.pcap wpa4way=$PI_DIR/wpa4way.pcap"
 	pisu "chmod 644 $PI_DIR/beacon.pcap 2>/dev/null || true"
 	pisu "sha256sum $PI_DIR/beacon.pcap 2>/dev/null || true"
 	pisu "tshark -r $PI_DIR/beacon.pcap -Y 'wlan.fc.type_subtype==8' -T fields -e wlan.bssid -e wlan.ssid -e wlan.fixed.beacon -e wlan.tim.dtim_period -e radiotap.channel.freq 2>/dev/null | sort -u | head -20" || true
 } > "$EVIDENCE/beacon-fields.txt" 2>&1 || true
+
+if [ "$WPA2" = 1 ]; then
+	{
+		pisu "chmod 644 $PI_DIR/wpa4way.pcap 2>/dev/null || true"
+		pisu "sha256sum $PI_DIR/wpa4way.pcap 2>/dev/null || true"
+		echo "== EAPOL frames (802.1X, type 3 = EAPOL-Key)"
+		pisu "tshark -r $PI_DIR/wpa4way.pcap -Y 'eapol' -T fields -e frame.time_relative -e wlan.sa -e wlan.da -e eapol.type -e eapol.keydes.key_info 2>/dev/null" || true
+		echo "== count"
+		pisu "tshark -r $PI_DIR/wpa4way.pcap -Y 'eapol' -T fields -e frame.number 2>/dev/null | wc -l" || true
+	} > "$EVIDENCE/air-eapol.txt" 2>&1 || true
+fi
 
 {
 	echo "down=$MON_DOWN_PCAP up=$MON_UP_PCAP"

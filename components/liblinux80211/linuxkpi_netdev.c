@@ -484,6 +484,13 @@ eth_type_trans(struct sk_buff *skb, struct net_device *dev)
 	if (skb == NULL)
 		return 0;
 	skb->dev = dev;
+	/* [LNX] net/ethernet/eth.c:eth_type_trans: the interface records the
+	 * MAC header before pulling it.  Without this line skb_mac_header()
+	 * falls back to skb->data, and a caller that rewrites the destination
+	 * after the pull (mac80211's control-port delivery) writes the AP's
+	 * address over the first six bytes of the EAPOL PDU.  That was the
+	 * "frame too short for this IEEE 802.1X packet" on the AP. */
+	skb_reset_mac_header(skb);
 	eth = (struct ethhdr *)skb->data;
 
 	/*

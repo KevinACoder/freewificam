@@ -295,6 +295,14 @@ PATTERNS = {
         r"iwl7260_ap: start_ap rc=(?P<rc>-?\d+) freq=(?P<freq>\d+) "
         r"interval=(?P<int>\d+) dtim=(?P<dtim>\d+)", re.MULTILINE
     ),
+    # The hostapd-driven AP (the current case) reports the actual
+    # NL80211_CMD_START_AP beacon through the driver seam, not through a
+    # case-built beacon.  Keep the older case anchors above for old images;
+    # current images are judged on this line.
+    "iwl7260_ap_set_ap_raw": re.compile(
+        r"lkpi: set_ap head=(?P<head>\d+) tail=(?P<tail>\d+) "
+        r"freq=(?P<freq>\d+) rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
     "iwl7260_ap_netif": re.compile(
         r"iwl7260_ap: netif up name=(?P<name>\S+) ip=(?P<ip>[0-9.]+)/24 "
         r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
@@ -306,6 +314,20 @@ PATTERNS = {
         r"iwl7260_ap: sta add n=(?P<n>\d+) mac=(?P<mac>[0-9a-f:]+)",
         re.MULTILINE
     ),
+    "iwl7260_ap_security": re.compile(
+        r"iwl7260_ap: security wpa2=(?P<wpa2>[01]) ssid=(?P<ssid>\S+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap_wpa2_station": re.compile(
+        r"iwl7260_ap: wpa2 station sta=(?P<sta>\d+) ptk=(?P<ptk>\d+) "
+        r"gtk=(?P<gtk>\d+) fail=(?P<fail>\d+) wait_ms=(?P<wait>\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap_eapol": re.compile(
+        r"iwl7260_ap: eapol tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"drop=(?P<drop>\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap_pass_apw": re.compile(r"iwl7260_ap: PASS APW", re.MULTILINE),
     "iwl7260_ap_pass_ap": re.compile(r"iwl7260_ap: PASS AP", re.MULTILINE),
     "iwl7260_ap_pass_apt": re.compile(r"iwl7260_ap: PASS APT", re.MULTILINE),
     "iwl7260_ap_fail": re.compile(
@@ -1882,9 +1904,8 @@ def judge(text: str, expect: dict | None = None) -> dict:
         elif int(st["rc"]) != 0:
             errors.append(f"iwl7260_ap: dev_open rc={st['rc']}")
         bcn = found["iwl7260_ap_beacon"]
-        if not bcn:
-            errors.append("iwl7260_ap: PASS without the beacon line")
-        else:
+        raw = found["iwl7260_ap_set_ap_raw"]
+        if bcn:
             if int(bcn["head"]) != 36:
                 errors.append(
                     f"iwl7260_ap: beacon head_len={bcn['head']}, "
@@ -1897,17 +1918,36 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 notes.append(
                     f"iwl7260_ap: beacon {bcn['head']}+{bcn['tail']} B, "
                     f"{bcn['ies']} IEs, tail={bcn['tsha']}")
+        elif raw:
+            if int(raw["rc"]) != 0:
+                errors.append(f"iwl7260_ap: set_ap rc={raw['rc']}")
+            elif int(raw["head"]) < 36 or int(raw["tail"]) == 0:
+                errors.append(
+                    f"iwl7260_ap: set_ap head={raw['head']} "
+                    f"tail={raw['tail']}")
+            else:
+                notes.append(
+                    f"iwl7260_ap: set_ap {raw['head']}+{raw['tail']} B "
+                    f"at {raw['freq']} MHz")
+        else:
+            errors.append("iwl7260_ap: PASS without a beacon/start_ap line")
         sap = found["iwl7260_ap_start_ap"]
-        if not sap:
+        if sap:
+            if int(sap["rc"]) != 0:
+                errors.append(f"iwl7260_ap: start_ap rc={sap['rc']}")
+            elif int(sap["freq"]) != 2462:
+                errors.append(f"iwl7260_ap: start_ap freq={sap['freq']}")
+            elif sap["int"] != "100" or sap["dtim"] != "2":
+                errors.append(
+                    f"iwl7260_ap: beacon interval={sap['int']} "
+                    f"dtim={sap['dtim']}")
+        elif raw:
+            if int(raw["rc"]) != 0 or int(raw["freq"]) != 2462:
+                errors.append(
+                    f"iwl7260_ap: set_ap rc={raw['rc']} "
+                    f"freq={raw['freq']}")
+        else:
             errors.append("iwl7260_ap: PASS without the start_ap line")
-        elif int(sap["rc"]) != 0:
-            errors.append(f"iwl7260_ap: start_ap rc={sap['rc']}")
-        elif int(sap["freq"]) != 2462:
-            errors.append(f"iwl7260_ap: start_ap freq={sap['freq']}")
-        elif sap["int"] != "100" or sap["dtim"] != "2":
-            errors.append(
-                f"iwl7260_ap: beacon interval={sap['int']} "
-                f"dtim={sap['dtim']}")
         netif = found["iwl7260_ap_netif"]
         if not netif:
             errors.append("iwl7260_ap: PASS without the netif line")
@@ -1932,35 +1972,70 @@ def judge(text: str, expect: dict | None = None) -> dict:
             elif p["tx"] != "20" or p["rx"] != "20":
                 errors.append(
                     f"iwl7260_ap: ping {payload} tx={p['tx']} rx={p['rx']}")
-        if not found["iwl7260_ap_pass_ap"]:
-            errors.append("iwl7260_ap: the AP PASS line is missing")
-        begins = {b["name"]: b for b in found["iwl7260_ap_begin"]}
-        reports = {r["n"]: r for r in found["iwl7260_ap_report"]}
-        dones = {d["n"]: d for d in found["iwl7260_ap_done"]}
-        air_of = {"tcpdn": "down", "udpdn": "down", "tcpdn2": "down",
-                  "udpdn2": "down", "tcpup": "up", "udpup": "up"}
-        for name, air in air_of.items():
-            b = begins.get(name)
-            if not b:
-                errors.append(f"iwl7260_ap: no begin anchor for {name}")
-                continue
-            if b["air"] != air:
-                errors.append(
-                    f"iwl7260_ap: {name} air={b['air']}, expected {air}")
-            r = reports.get(b["n"])
-            if not r:
-                errors.append(f"iwl7260_ap: no report for {name}")
-                continue
-            if int(r["bytes"]) == 0:
-                errors.append(f"iwl7260_ap: {name} moved no bytes")
-            d = dones.get(b["n"])
-            if d is None or d["ok"] != "1":
-                errors.append(f"iwl7260_ap: {name} did not complete")
-            notes.append(
-                f"iwl7260_ap: {name} {r['kbit']} kbit/s "
-                f"({r['ms']} ms, {r['bytes']} B)")
-        if not found["iwl7260_ap_pass_apt"]:
-            errors.append("iwl7260_ap: the APT PASS line is missing")
+        if found["iwl7260_ap_pass_apw"]:
+            # WPA2 variant: the gate is the handshake and the ping-level data
+            # plane.  A4's phase table is not part of this profile.
+            sec = found["iwl7260_ap_security"]
+            if not sec:
+                errors.append("iwl7260_ap: WPA2 PASS without the security line")
+            elif sec["wpa2"] != "1":
+                errors.append("iwl7260_ap: WPA2 PASS with wpa2=0")
+            w2 = found["iwl7260_ap_wpa2_station"]
+            if not w2:
+                errors.append("iwl7260_ap: WPA2 PASS without the 4-way line")
+            else:
+                if int(w2["sta"]) < 1:
+                    errors.append("iwl7260_ap: WPA2 has no associated station")
+                if int(w2["ptk"]) < 1:
+                    errors.append("iwl7260_ap: WPA2 has no pairwise key")
+                if int(w2["gtk"]) < 1:
+                    errors.append("iwl7260_ap: WPA2 has no group key")
+                if w2["fail"] != "0":
+                    errors.append(
+                        f"iwl7260_ap: WPA2 key failures={w2['fail']}")
+                notes.append(
+                    f"iwl7260_ap: WPA2 ptk={w2['ptk']} gtk={w2['gtk']} "
+                    f"wait={w2['wait']} ms")
+            eapol = found["iwl7260_ap_eapol"]
+            if not eapol:
+                errors.append("iwl7260_ap: WPA2 PASS without the EAPOL census")
+            else:
+                notes.append(
+                    f"iwl7260_ap: EAPOL tx={eapol['tx']} rx={eapol['rx']} "
+                    f"drop={eapol['drop']}")
+            if not found["iwl7260_ap_pass_apw"]:
+                errors.append("iwl7260_ap: the APW PASS line is missing")
+        else:
+            if not found["iwl7260_ap_pass_ap"]:
+                errors.append("iwl7260_ap: the AP PASS line is missing")
+        if not found["iwl7260_ap_pass_apw"]:
+            begins = {b["name"]: b for b in found["iwl7260_ap_begin"]}
+            reports = {r["n"]: r for r in found["iwl7260_ap_report"]}
+            dones = {d["n"]: d for d in found["iwl7260_ap_done"]}
+            air_of = {"tcpdn": "down", "udpdn": "down", "tcpdn2": "down",
+                      "udpdn2": "down", "tcpup": "up", "udpup": "up"}
+            for name, air in air_of.items():
+                b = begins.get(name)
+                if not b:
+                    errors.append(f"iwl7260_ap: no begin anchor for {name}")
+                    continue
+                if b["air"] != air:
+                    errors.append(
+                        f"iwl7260_ap: {name} air={b['air']}, expected {air}")
+                r = reports.get(b["n"])
+                if not r:
+                    errors.append(f"iwl7260_ap: no report for {name}")
+                    continue
+                if int(r["bytes"]) == 0:
+                    errors.append(f"iwl7260_ap: {name} moved no bytes")
+                d = dones.get(b["n"])
+                if d is None or d["ok"] != "1":
+                    errors.append(f"iwl7260_ap: {name} did not complete")
+                notes.append(
+                    f"iwl7260_ap: {name} {r['kbit']} kbit/s "
+                    f"({r['ms']} ms, {r['bytes']} B)")
+            if not found["iwl7260_ap_pass_apt"]:
+                errors.append("iwl7260_ap: the APT PASS line is missing")
 
     if cases.get("iwl7260_stab", {}).get("verdict") == "pass":
         fail = found["iwl7260_stab_fail"]

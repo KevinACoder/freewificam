@@ -31,12 +31,14 @@
 #include "ap/hostapd.h"
 #include "ap/ap_config.h"
 #include "ap/sta_info.h"
+#include "ap/wpa_auth.h"
 
 #include "supp_main.h"
 #include "fsl_os_abstraction.h"
 
 #include "linux80211/hostap_ap.h"
 #include "linux80211/hostap_drv.h"
+#include "lkpinetif_seam.h"
 
 /* supp_api.c owns these in the NXP build; this image does not compile that
  * file (it needs the NXP SDK's wlan.h), so the platform side defines them and
@@ -50,6 +52,18 @@ extern struct hostapd_data *hostapd_get_hapd(void);
 
 static int s_os_ready;
 static int s_started;
+
+/* WPA2 round counters, read by the case as anchors */
+static unsigned s_ptk;
+static unsigned s_gtk;
+static unsigned s_key_fail;
+static unsigned s_eapol_tx;
+static unsigned s_eapol_rx;
+static unsigned s_eapol_drop;
+
+static void lkpi_hostap_eapol_sink(const unsigned char src[6],
+				   const unsigned char *pdu, size_t len,
+				   void *arg);
 
 static int
 lkpi_hostap_os_init(void)
@@ -100,13 +114,37 @@ lkpi_hostap_apply_config(struct hostapd_iface *iface,
 	bss->dtim_period = (int)(cfg->dtim != 0u ? cfg->dtim : 2u);
 	bss->max_num_sta = 8;
 
-	/* open + HT20 + WMM, the GT arm's configuration */
+	/* Open unless the case supplied the WPA2 passphrase. */
 	bss->auth_algs = WPA_AUTH_ALG_OPEN;
-	bss->wpa = 0;
-	bss->ieee802_1x = 0;
-	bss->wpa_key_mgmt = 0;
-	bss->rsn_pairwise = 0;
-	bss->wpa_pairwise = 0;
+	if (cfg->passphrase != NULL) {
+		size_t plen = os_strlen(cfg->passphrase);
+
+		if (plen < 8u || plen > 63u)
+			return -EINVAL;
+		os_free(bss->ssid.wpa_passphrase);
+		bss->ssid.wpa_passphrase = os_strdup(cfg->passphrase);
+		if (bss->ssid.wpa_passphrase == NULL)
+			return -ENOMEM;
+		bss->ssid.wpa_passphrase_set = 1;
+		bss->ssid.wpa_psk_set = 0;
+		hostapd_config_clear_wpa_psk(&bss->ssid.wpa_psk);
+		bss->wpa = WPA_PROTO_RSN;
+		bss->wpa_key_mgmt = WPA_KEY_MGMT_PSK;
+		bss->wpa_pairwise = WPA_CIPHER_CCMP;
+		bss->rsn_pairwise = WPA_CIPHER_CCMP;
+		bss->wpa_group = WPA_CIPHER_CCMP;
+		bss->ieee802_1x = 0;
+		/* derive wpa_group/security_policy from the fields above; the
+		 * config was built as open earlier and that derivation must be
+		 * redone, not inferred at check time. */
+		hostapd_set_security_params(bss, 1);
+	} else {
+		bss->wpa = 0;
+		bss->ieee802_1x = 0;
+		bss->wpa_key_mgmt = 0;
+		bss->rsn_pairwise = 0;
+		bss->wpa_pairwise = 0;
+	}
 	conf->ieee80211n = 1;
 	conf->ht_capab = HT_CAP_INFO_SHORT_GI20MHZ;
 	conf->secondary_channel = 0;
@@ -137,6 +175,9 @@ lkpi_hostap_start(const struct lkpi_hostap_cfg *cfg)
 		wpa_printf(MSG_ERROR, "lkpi: OSA init failed: %d", rc);
 		return rc;
 	}
+	/* the AP's EAPOL receive: the lwIP adapter classifies ETH_P_PAE and
+	 * calls this sink; it only deep-copies and posts to the eloop task */
+	lkpinetif_set_eapol_sink(lkpi_hostap_eapol_sink, NULL);
 	if (start_wpa_supplicant((char *)cfg->ifname) != 0) {
 		printf("lkpi: start_wpa_supplicant failed\n");
 		return -EIO;
@@ -201,6 +242,7 @@ lkpi_hostap_stop(void)
 	if (iface != NULL)
 		(void)hostapd_disable_iface(iface);
 	stop_wpa_supplicant();
+	lkpinetif_set_eapol_sink(NULL, NULL);
 	s_started = 0;
 }
 
@@ -308,4 +350,126 @@ lkpi_hostap_mgmt_rx(const void *frame, unsigned int len, int freq)
 	if (send_wpa_supplicant_event(msg) < 0)
 		return -EIO;
 	return 0;
+}
+
+
+/* --- the WPA2 round's counters and EAPOL receive (2026-11-12) ------------ */
+
+void
+lkpi_hostap_key_counts(unsigned *ptk, unsigned *gtk, unsigned *fail)
+{
+	if (ptk != NULL)
+		*ptk = s_ptk;
+	if (gtk != NULL)
+		*gtk = s_gtk;
+	if (fail != NULL)
+		*fail = s_key_fail;
+}
+
+void
+lkpi_hostap_eapol_counts(unsigned *tx, unsigned *rx, unsigned *drop)
+{
+	if (tx != NULL)
+		*tx = s_eapol_tx;
+	if (rx != NULL)
+		*rx = s_eapol_rx;
+	if (drop != NULL)
+		*drop = s_eapol_drop;
+}
+
+void
+lkpi_hostap_key_note(int pairwise, int default_key, int rc)
+{
+	if (rc != 0) {
+		s_key_fail++;
+		return;
+	}
+	if (pairwise)
+		s_ptk++;
+	else if (default_key)
+		s_gtk++;
+}
+
+void
+lkpi_hostap_eapol_tx_note(int rc)
+{
+	s_eapol_tx++;
+	if (rc != 0)
+		s_eapol_drop++;
+}
+
+int
+lkpi_hostap_wpa2_sta_count(void)
+{
+	struct hostapd_data *hapd = hostapd_get_hapd();
+	struct sta_info *sta;
+	int n = 0;
+
+	if (hapd == NULL)
+		return 0;
+	for (sta = hapd->sta_list; sta != NULL; sta = sta->next) {
+		if (sta->wpa_sm != NULL &&
+		    wpa_auth_pairwise_set(sta->wpa_sm))
+			n++;
+	}
+	return n;
+}
+
+/*
+ * One EAPOL frame from the lwIP receive path: the adapter has already
+ * stripped the Ethernet header and classified ETH_P_PAE.  The hostapd event
+ * carries the 802.1X PDU, not the header.  Deep copy runs here (RX context),
+ * dispatch runs in the eloop task.
+ */
+int
+lkpi_hostap_eapol_rx(const void *src, const void *pdu, unsigned int len)
+{
+	struct hostapd_data *hapd;
+	struct wpa_supplicant_event_msg *msg;
+	union wpa_event_data *ev;
+
+	if (src == NULL || pdu == NULL || len < 4u) {
+		s_eapol_drop++;
+		return -EINVAL;
+	}
+	hapd = hostapd_get_hapd();
+	if (hapd == NULL) {
+		s_eapol_drop++;
+		return -ENODEV;
+	}
+	msg = os_zalloc(sizeof(*msg));
+	ev = os_zalloc(sizeof(*ev));
+	if (msg == NULL || ev == NULL) {
+		os_free(msg);
+		os_free(ev);
+		s_eapol_drop++;
+		return -ENOMEM;
+	}
+	msg->hostapd = 1;
+	msg->event = EVENT_EAPOL_RX;
+	msg->ctx = hapd;
+	msg->data = ev;
+	ev->eapol_rx.src = (const u8 *)src;
+	ev->eapol_rx.data = (const u8 *)pdu;
+	ev->eapol_rx.data_len = len;
+	if (wpa_supplicant_event_wrapper_deep_copy(msg, EVENT_EAPOL_RX, ev) < 0) {
+		os_free(ev);
+		os_free(msg);
+		s_eapol_drop++;
+		return -ENOMEM;
+	}
+	if (send_wpa_supplicant_event(msg) < 0) {
+		s_eapol_drop++;
+		return -EIO;
+	}
+	s_eapol_rx++;
+	return 0;
+}
+
+static void
+lkpi_hostap_eapol_sink(const unsigned char src[6],
+		       const unsigned char *pdu, size_t len, void *arg)
+{
+	(void)arg;
+	(void)lkpi_hostap_eapol_rx(src, pdu, (unsigned int)len);
 }

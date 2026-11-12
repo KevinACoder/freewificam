@@ -63,6 +63,7 @@ SRCS := \
 	$(LIB8)/linuxkpi_netlink.c \
 	$(LIB8)/linuxkpi_util.c \
 	$(LIB8)/linuxkpi_crypto.c \
+	$(LIB8)/linuxkpi_ccm.c \
 	$(LIB8)/fw_registry.c \
 	$(LIB8)/net_egress.c \
 	$(LIB8)/hostap_rx_wrap.c \
@@ -98,6 +99,7 @@ SRCS := \
 	$(CURDIR)/cases/net_xmit.c \
 	$(CURDIR)/cases/ctx.c \
 	$(CURDIR)/cases/hostap_rx.c \
+	$(CURDIR)/cases/ccm.c \
 	$(CURDIR)/cases/selftest.c
 
 OBJS := $(patsubst %,$(BUILD)/obj/%.o,$(basename $(notdir $(SRCS))))

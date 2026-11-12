@@ -186,3 +186,27 @@ is the tree's own record.
 | not imported | `port/` (22 files of mbedtls/KSDK hardware-crypto glue, Apache-2.0); this port builds `CONFIG_WPA_SUPP_CRYPTO=0` with hostap's internal crypto and references nothing in it |
 | verification | `third-party/wpa_supplicant-rtos/patches/MANIFEST.sha256` holds the sha256 of all 897 files **as upstream**; `patches/0001..0008` are the port's only changes, and applying them to a pristine tree of the pin reproduces this tree byte for byte (checked 2026-11-12) |
 | build face | the port's own OSA/eloop/l2_packet bottom and its `wpa_driver_lkpi_ops` (see `docs/decisions/2026-11-12-ap-mlme-port.md`) |
+
+## The WPA2 round (2026-11-12, written here)
+
+The G1 WPA2-PSK/CCMP round added code, it did not import a tree.  The new
+`components/liblinux80211/linuxkpi_ccm.c` is written in this repository
+(BSD-3-Clause): AES-128 follows FIPS-197 and CCM follows RFC 3610 (L=2,
+M=authsize); the provider is shaped for mac80211's `crypto_aead_*` API and
+`sg[0]=AAD / sg[1]=data / sg[2]=MIC` request layout.  No mbedtls, no hostap
+crypto object and no copied implementation was added.
+
+The same round edited two imported files; both edits are recorded in
+`DIVERGENCES.md`:
+
+- `components/liblinux80211/linuxkpi_netdev.c`: `eth_type_trans()` now calls
+  `skb_reset_mac_header()` (the missing line Linux's `net/ethernet/eth.c`
+  has).  Without it `skb_mac_header()` fell back to `skb->data` and
+  mac80211's control-port destination rewrite overwrote the EAPOL PDU.
+- `components/liblinux80211/linuxkpi_nl80211_probe.c`: the AP key helpers
+  (`NEW_KEY`/`SET_KEY`/`DEL_KEY`) and `START_AP`'s privacy/control-port
+  attributes; these are port code, not imported kernel files.
+
+`components/liblinux80211/hostap/{driver_lkpi.c,hostap_ap.c,hostap_nl80211.c}`
+and the `linux80211/*.h` seams are port code and were extended in place; the
+imported hostapd tree (`third-party/wpa_supplicant-rtos`) is unchanged.

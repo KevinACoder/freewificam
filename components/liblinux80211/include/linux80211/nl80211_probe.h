@@ -63,7 +63,32 @@ int lkpi_nl80211_start_ap(struct net_device *dev, const char *ssid,
 			  unsigned int freq_mhz, unsigned int width,
 			  unsigned int beacon_interval, unsigned int dtim,
 			  const unsigned char *head, unsigned int head_len,
-			  const unsigned char *tail, unsigned int tail_len);
+			  const unsigned char *tail, unsigned int tail_len,
+			  int privacy);
+
+/* --- the WPA2 key path (2026-11-12, docs/HANDOFF-AP-WPA2.md) -------------
+ *
+ * hostapd's set_key() arrives here: NL80211_CMD_NEW_KEY for the key itself,
+ * a following NL80211_CMD_SET_KEY when the key is to become the default
+ * (the AP's GTK), and NL80211_CMD_DEL_KEY when wpa_auth removes one.  The
+ * commands run through the same real handler chain as everything above.
+ */
+struct lkpi_nl80211_key {
+	unsigned int		cipher;		/* WLAN_CIPHER_SUITE_* */
+	int			key_idx;
+	const unsigned char	*mac;		/* NULL for a group key */
+	const void		*key;		/* NULL only for delete */
+	unsigned int		key_len;
+	const void		*seq;		/* optional */
+	unsigned int		seq_len;
+};
+
+int lkpi_nl80211_new_key(struct net_device *dev,
+			 const struct lkpi_nl80211_key *key);
+int lkpi_nl80211_set_default_key(struct net_device *dev, int key_idx,
+				 int multicast);
+int lkpi_nl80211_del_key(struct net_device *dev, int key_idx,
+			 const unsigned char *mac);
 
 /* Stop NL80211_CMD_STOP_AP. */
 int lkpi_nl80211_stop_ap(struct net_device *dev);

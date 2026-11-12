@@ -20,6 +20,7 @@ struct lkpi_hostap_cfg {
 	unsigned int	 channel;	/* 11 */
 	unsigned int	 beacon_int;	/* 100 */
 	unsigned int	 dtim;		/* 2 */
+	const char	*passphrase;	/* NULL = open; WPA2-PSK otherwise */
 };
 
 /* 0 on success, negative errno otherwise.  The interface must already exist
@@ -33,6 +34,15 @@ int lkpi_hostap_ready(void);
 /* Stations the AP MLME currently holds (hostapd's own table). */
 int lkpi_hostap_sta_count(void);
 int lkpi_hostap_mgmt_tx_status(const void *frame, unsigned int len, int ack);
+
+/* WPA2 round: stations that completed the 4-way (pairwise key installed),
+ * and the key/EAPOL counters the case reports as anchors. */
+int lkpi_hostap_wpa2_sta_count(void);
+void lkpi_hostap_key_counts(unsigned *ptk, unsigned *gtk, unsigned *fail);
+void lkpi_hostap_eapol_counts(unsigned *tx, unsigned *rx, unsigned *drop);
+void lkpi_hostap_key_note(int pairwise, int default_key, int rc);
+void lkpi_hostap_eapol_tx_note(int rc);
+int lkpi_hostap_eapol_rx(const void *src, const void *pdu, unsigned int len);
 
 /* transmit-path health, read by the AP phase census (components/liblinux80211/
  * tx_health.c) */

@@ -1,0 +1,36 @@
+# mac80211 on the RTOS line, AP round: the AC 7260 becomes a WPA2-PSK/CCMP AP
+# (A5/G1).  The Pi's MT7921AU is the STA and runs wpa_supplicant; the gate is
+# the 4-way handshake plus dynamic ARP and 20/20 ping, not throughput.
+#
+# The bring-up is the open AP profile's: core, firmware, PCI, the default STA
+# interface changed in place, hostapd as the AP MLME.  The one axis this
+# profile changes is CONFIG_AP_WPA2: the case supplies a passphrase and stops
+# at A3 instead of running the A4 phase table (A4 is still blocked; see
+# runs/2026-11-12-iwl7260-ap-port/RUN.md).
+#
+# The pool/heap/runner stack are the accepted open-AP configuration on purpose.
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product that also redistributes the Intel firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_ap"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The AP MLME and the WPA2 variant of the case.
+CONFIG_HOSTAP_AP=y
+CONFIG_AP_WPA2=y
+
+# Same heap and runner stack as the accepted open AP profile: mac80211's
+# records, the beacon templates, lwIP's pools and the nl80211/key commands all
+# come from this heap, and the runner's stack carries NEW_STATION / key install.
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_RUNNER_STACK_KB=24

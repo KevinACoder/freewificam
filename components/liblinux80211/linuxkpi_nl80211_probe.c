@@ -19,6 +19,8 @@
 #include <linux/types.h>
 #include <linux/skbuff.h>
 #include <linux/string.h>
+#include <linux/etherdevice.h>
+#include <linux/if_ether.h>
 #include <linux/netlink.h>
 #include <linux/nl80211.h>
 #include <net/netlink.h>
@@ -404,7 +406,8 @@ lkpi_nl80211_start_ap(struct net_device *dev, const char *ssid,
 		      unsigned int freq_mhz, unsigned int width,
 		      unsigned int beacon_interval, unsigned int dtim,
 		      const unsigned char *head, unsigned int head_len,
-		      const unsigned char *tail, unsigned int tail_len)
+		      const unsigned char *tail, unsigned int tail_len,
+		      int privacy)
 {
 	const struct genl_family *family;
 	struct sk_buff *skb;
@@ -468,6 +471,17 @@ lkpi_nl80211_start_ap(struct net_device *dev, const char *ssid,
 	if (rc < 0)
 		goto out;
 	rc = nla_put_u32(skb, NL80211_ATTR_CENTER_FREQ1, freq_mhz);
+	if (rc < 0)
+		goto out;
+	if (privacy != 0) {
+		rc = nla_put_flag(skb, NL80211_ATTR_PRIVACY);
+		if (rc < 0)
+			goto out;
+	}
+	/* The handler defaults this to ETH_P_PAE when absent; state it so the
+	 * control-port classification does not depend on that default. */
+	rc = nla_put_u16(skb, NL80211_ATTR_CONTROL_PORT_ETHERTYPE,
+			 ETH_P_PAE);
 	if (rc < 0)
 		goto out;
 
@@ -865,6 +879,193 @@ lkpi_nl80211_del_station(struct net_device *dev, const unsigned char mac[6])
 	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
 			  NL80211_CMD_DEL_STATION);
 
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+/* --- the WPA2 key path (2026-11-12) -------------------------------------- */
+
+int
+lkpi_nl80211_new_key(struct net_device *dev,
+		     const struct lkpi_nl80211_key *key)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	struct nlattr *nest;
+	int rc;
+
+	if (dev == NULL || key == NULL || key->key == NULL ||
+	    key->key_len == 0u || key->cipher == 0u)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+	skb = alloc_skb(512 + (int)key->key_len, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_NEW_KEY;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	if (key->mac != NULL && !is_broadcast_ether_addr(key->mac)) {
+		rc = nla_put(skb, NL80211_ATTR_MAC, 6, key->mac);
+		if (rc < 0)
+			goto out;
+	}
+	nest = nla_nest_start_noflag(skb, NL80211_ATTR_KEY);
+	if (nest == NULL) {
+		rc = -EMSGSIZE;
+		goto out;
+	}
+	rc = nla_put(skb, NL80211_KEY_DATA, (int)key->key_len, key->key);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_KEY_CIPHER, key->cipher);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u8(skb, NL80211_KEY_IDX, (u8)key->key_idx);
+	if (rc < 0)
+		goto out;
+	if (key->seq != NULL && key->seq_len != 0u) {
+		rc = nla_put(skb, NL80211_KEY_SEQ, (int)key->seq_len,
+			     key->seq);
+		if (rc < 0)
+			goto out;
+	}
+	nla_nest_end(skb, nest);
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_NEW_KEY);
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+int
+lkpi_nl80211_set_default_key(struct net_device *dev, int key_idx,
+			     int multicast)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	struct nlattr *nest;
+	struct nlattr *types;
+	int rc;
+
+	if (dev == NULL || key_idx < 0)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_SET_KEY;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	nest = nla_nest_start_noflag(skb, NL80211_ATTR_KEY);
+	if (nest == NULL) {
+		rc = -EMSGSIZE;
+		goto out;
+	}
+	rc = nla_put_u8(skb, NL80211_KEY_IDX, (u8)key_idx);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_flag(skb, NL80211_KEY_DEFAULT);
+	if (rc < 0)
+		goto out;
+	types = nla_nest_start_noflag(skb, NL80211_KEY_DEFAULT_TYPES);
+	if (types == NULL) {
+		rc = -EMSGSIZE;
+		goto out;
+	}
+	rc = nla_put_flag(skb, multicast ?
+			  NL80211_KEY_DEFAULT_TYPE_MULTICAST :
+			  NL80211_KEY_DEFAULT_TYPE_UNICAST);
+	if (rc < 0)
+		goto out;
+	nla_nest_end(skb, types);
+	nla_nest_end(skb, nest);
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_SET_KEY);
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+int
+lkpi_nl80211_del_key(struct net_device *dev, int key_idx,
+		     const unsigned char *mac)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	struct nlattr *nest;
+	int rc;
+
+	if (dev == NULL || key_idx < 0)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_DEL_KEY;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	if (mac != NULL && !is_broadcast_ether_addr(mac)) {
+		rc = nla_put(skb, NL80211_ATTR_MAC, 6, mac);
+		if (rc < 0)
+			goto out;
+	}
+	nest = nla_nest_start_noflag(skb, NL80211_ATTR_KEY);
+	if (nest == NULL) {
+		rc = -EMSGSIZE;
+		goto out;
+	}
+	rc = nla_put_u8(skb, NL80211_KEY_IDX, (u8)key_idx);
+	if (rc < 0)
+		goto out;
+	nla_nest_end(skb, nest);
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_DEL_KEY);
 out:
 	kfree_skb(skb);
 	return rc;

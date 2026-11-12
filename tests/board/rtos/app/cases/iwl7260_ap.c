@@ -38,8 +38,11 @@
  *   iwl7260_ap: set_iface rc=<n> type=<n>
  *   iwl7260_ap: start rc=<n>
  *   iwl7260_ap: netif up name=wl0 ip=<ip>/24 mac=<mac>
+ *   iwl7260_ap: security wpa2=<0|1> ssid=<ssid>
  *   iwl7260_ap: hostap start rc=<n> ready=<0|1>
  *   iwl7260_ap: peer window ms=<n>
+ *   iwl7260_ap: wpa2 station sta=<n> ptk=<n> gtk=<n> fail=<n> wait_ms=<n>
+ *   iwl7260_ap: eapol tx=<n> rx=<n> drop=<n>
  *   iwl7260_ap: hostap up ready=<0|1> sta=<n>
  *   iwl7260_ap: sta add n=<n> mac=<mac>
  *   iwl7260_ap: ping tx=<n> rx=<n> payload=<n> rtt_ms=<min>/<avg>/<max>
@@ -47,8 +50,9 @@
  *   iwl7260_ap: phase <n> report bytes=<n> ms=<n> kbit=<n> pkts=<n>
  *   iwl7260_ap: phase <n> census ...
  *   iwl7260_ap: phase <n> done ok=<0|1>
- *   iwl7260_ap: PASS AP
- *   iwl7260_ap: PASS APT
+ *   iwl7260_ap: PASS AP            (open; A4 phases follow)
+ *   iwl7260_ap: PASS APW           (WPA2; stops after A3)
+ *   iwl7260_ap: PASS APT           (open, all A4 phases)
  *   iwl7260_ap: FAIL <reason>
  */
 
@@ -76,6 +80,24 @@
 
 #define AP_SSID			"rtos-7260-ap"
 #define AP_FREQ_MHZ		2462u
+
+/* The WPA2 variant: one image-level switch, set by
+ * rk3568-iwl7260-ap-wpa2.defconfig.  The passphrase is a bench credential,
+ * not a secret; the Pi helper carries the same constant. */
+#if defined(CONFIG_AP_WPA2) && CONFIG_AP_WPA2
+#define AP_WPA2			1
+#define AP_PASSPHRASE		"rtos-7260-wpa2-psk"
+#else
+#define AP_WPA2			0
+#define AP_PASSPHRASE		NULL
+#endif
+#define AP_WPA_WAIT_MS		10000u
+/* After the 4-way: leave the peer's own ping/ARP walk a full window before
+ * this case pings and prints PASS.  The AP resets on return, and a peer ping
+ * still in flight would be scored as loss by the harness.  This is a timing
+ * accommodation, not part of the verdict: the verdict's pings are the two
+ * board-originated 20/20 runs below. */
+#define AP_WPA_POST_HS_MS	10000u
 #define AP_BOARD_IP		"192.168.99.1"
 #define AP_BOARD_MASK		"255.255.255.0"
 #define AP_PEER_IP		"192.168.99.2"
@@ -169,6 +191,11 @@ ap_sink(ulog_level_t level, const char *line)
 		 strstr(line, "AP-ENABLED") != NULL ||
 		 strstr(line, "AP-STA") != NULL ||
 		 strstr(line, "IEEE 802.11") != NULL ||
+		 strstr(line, "WPA") != NULL ||
+		 strstr(line, "EAPOL") != NULL ||
+		 strstr(line, "RSN") != NULL ||
+		 strstr(line, "4-Way") != NULL ||
+		 strstr(line, "MIC") != NULL ||
 		 strstr(line, "authenticated") != NULL ||
 		 strstr(line, "associated") != NULL ||
 		 strstr(line, "Failed") != NULL) {
@@ -436,6 +463,9 @@ case_iwl7260_ap_run(void)
 	ap_cfg.channel = 11u;
 	ap_cfg.beacon_int = 100u;
 	ap_cfg.dtim = 2u;
+	ap_cfg.passphrase = AP_PASSPHRASE;
+	CASE_ANCHOR("iwl7260_ap: security wpa2=%d ssid=%s\n", AP_WPA2,
+		    AP_SSID);
 	rc = lkpi_hostap_start(&ap_cfg);
 	CASE_ANCHOR("iwl7260_ap: hostap start rc=%d ready=%d\n", rc,
 		    lkpi_hostap_ready());
@@ -483,6 +513,34 @@ case_iwl7260_ap_run(void)
 			    sta_n, sta_macs[0][0], sta_macs[0][1],
 			    sta_macs[0][2], sta_macs[0][3], sta_macs[0][4],
 			    sta_macs[0][5]);
+	if (AP_WPA2) {
+		unsigned ptk = 0u, gtk = 0u, fail = 0u;
+		unsigned waited_wpa;
+
+		/* hostapd's station table shows the association before the
+		 * 4-way completes; wait for the AP's own pairwise state, not a
+		 * sleep.  EAPOL events are posted by the RX sink; poll only
+		 * drives the management queue the wrap filled. */
+		for (waited_wpa = 0U; waited_wpa < AP_WPA_WAIT_MS;
+		     waited_wpa += AP_HOSTAP_POLL_MS) {
+			(void)lkpi_hostap_poll();
+			if (lkpi_hostap_wpa2_sta_count() > 0)
+				break;
+			osDelay(AP_HOSTAP_POLL_MS);
+		}
+		lkpi_hostap_key_counts(&ptk, &gtk, &fail);
+		CASE_ANCHOR("iwl7260_ap: wpa2 station sta=%d ptk=%u gtk=%u "
+			    "fail=%u wait_ms=%u\n",
+			    lkpi_hostap_wpa2_sta_count(), ptk, gtk, fail,
+			    waited_wpa);
+		if (lkpi_hostap_wpa2_sta_count() <= 0 || ptk == 0u ||
+		    gtk == 0u || fail != 0u) {
+			CASE_ANCHOR("iwl7260_ap: FAIL wpa2 handshake\n");
+			return 17;
+		}
+		osDelay(AP_WPA_POST_HS_MS);
+	}
+
 	/* The station exists before the Pi's own iw connect returns; give the
 	 * Pi a moment to finish and to answer ARP before the pings. */
 	osDelay(AP_SETTLE_MS);
@@ -512,6 +570,18 @@ case_iwl7260_ap_run(void)
 	}
 	CASE_ANCHOR("iwl7260_ap: hostap stats ready=%d sta=%d\n",
 		    lkpi_hostap_ready(), lkpi_hostap_sta_count());
+	if (AP_WPA2) {
+		unsigned etx = 0u, erx = 0u, edrop = 0u;
+
+		/* The encryption gate stops here: the handshake and the data
+		 * plane are proven; A4 is the next round's problem, not this
+		 * profile's phase table. */
+		lkpi_hostap_eapol_counts(&etx, &erx, &edrop);
+		CASE_ANCHOR("iwl7260_ap: eapol tx=%u rx=%u drop=%u\n",
+			    etx, erx, edrop);
+		CASE_ANCHOR("iwl7260_ap: PASS APW\n");
+		return 0;
+	}
 	CASE_ANCHOR("iwl7260_ap: PASS AP\n");
 	ap_ok = 1;
 

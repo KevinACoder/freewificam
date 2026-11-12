@@ -9,15 +9,18 @@
  * swapped for this port's direct cfg80211/nl80211 surface.  The hostap world
  * stays on its own side of the seam - no Linux type appears here.
  *
- * The AP round is open + HT20 + WMM, so the key management ops (set_key,
- * hapd_send_eapol) are absent on purpose: hostapd skips an op a driver does not
- * implement, and the WPA2 round adds them here with the same seam calls.
+ * The open AP round needs only the MLME ops.  The WPA2 round adds the two
+ * key-management ops hostapd looks for - hapd_send_eapol (msg1/msg3) and
+ * set_key (PTK/GTK, plus the DEL_KEY form) - on the same seam.  Both were
+ * absent before because hostapd silently skips an op a driver does not
+ * implement; the EAPOL path in particular failed with no error.
  */
 #include "includes.h"
 
 #include "utils/common.h"
 #include "utils/dl_list.h"
 #include "drivers/driver.h"
+#include "l2_packet/l2_packet.h"
 
 #include "linux80211/hostap_drv.h"
 #include "linux80211/hostap_ap.h"
@@ -240,6 +243,94 @@ lkpi_send_mlme(void *priv, const u8 *data, size_t data_len, int noack,
 	return 0;
 }
 
+/*
+ * The 4-way handshake's EAPOL frames.  The AP path does not use l2_packet:
+ * hostapd hands the 802.1X PDU down, this builds the Ethernet header and
+ * sends it through the normal egress, exactly as the Linux nl80211 driver's
+ * nl80211_send_eapol_data() would on wlan0.
+ */
+static int
+lkpi_send_eapol(void *priv, const u8 *addr, const u8 *data, size_t data_len,
+		int encrypt, const u8 *own_addr, u32 flags)
+{
+	struct l2_ethhdr *eth;
+	unsigned char *buf;
+	size_t len;
+	int rc;
+
+	(void)priv;
+	(void)encrypt;
+	(void)flags;
+	if (addr == NULL || data == NULL || own_addr == NULL ||
+	    data_len > 2000u)
+		return -1;
+	len = sizeof(*eth) + data_len;
+	buf = os_malloc(len);
+	if (buf == NULL)
+		return -1;
+	eth = (struct l2_ethhdr *)buf;
+	os_memcpy(eth->h_dest, addr, ETH_ALEN);
+	os_memcpy(eth->h_source, own_addr, ETH_ALEN);
+	eth->h_proto = host_to_be16(ETH_P_EAPOL);
+	os_memcpy(eth + 1, data, data_len);
+	rc = lkpi_hostap_drv_eapol_tx(buf, len);
+	os_free(buf);
+	lkpi_hostap_eapol_tx_note(rc);
+	if (rc != 0)
+		printf("lkpi: eapol tx len=%u rc=%d\n", (unsigned)len, rc);
+	return rc != 0 ? -1 : 0;
+}
+
+static int
+lkpi_set_key(void *priv, struct wpa_driver_set_key_params *params)
+{
+	struct lkpi_hostap_key key;
+	int rc;
+
+	(void)priv;
+	if (params == NULL)
+		return -1;
+	if (params->alg == WPA_ALG_NONE) {
+		rc = lkpi_hostap_drv_del_key(params->addr, params->key_idx);
+		/* Deleting a key that was never installed is a normal part of
+		 * the handshake's reset order (wpa_auth clears keyidx 0 before
+		 * the PTK exists).  -ENOENT is not an install failure. */
+		if (rc != 0 && rc != -ENOENT)
+			lkpi_hostap_key_note(0, 0, rc);
+		printf("lkpi: del_key keyidx=%d rc=%d\n", params->key_idx, rc);
+		return rc != 0 && rc != -ENOENT ? -1 : 0;
+	}
+	if ((params->key_flag & KEY_FLAG_PMK) != 0u)
+		return 0;	/* no PMK offload: nothing to install */
+	if ((params->key_flag & KEY_FLAG_MODIFY) != 0u) {
+		printf("lkpi: set_key modify unsupported\n");
+		return -1;
+	}
+	if (params->alg != WPA_ALG_CCMP || params->key == NULL ||
+	    params->key_len != 16u) {
+		printf("lkpi: set_key unsupported alg=%d key_len=%u\n",
+		       (int)params->alg, (unsigned)params->key_len);
+		return -1;
+	}
+	os_memset(&key, 0, sizeof(key));
+	key.addr = params->addr;
+	key.key_idx = params->key_idx;
+	key.cipher = LKPI_HOSTAP_CIPHER_CCMP;
+	key.key = params->key;
+	key.key_len = params->key_len;
+	key.seq = params->seq;
+	key.seq_len = params->seq_len;
+	key.pairwise = (params->key_flag & KEY_FLAG_PAIRWISE) != 0u;
+	key.default_key = (params->key_flag & KEY_FLAG_DEFAULT) != 0u;
+	rc = lkpi_hostap_drv_set_key(&key);
+	lkpi_hostap_key_note(key.pairwise, key.default_key, rc);
+	printf("lkpi: set_key keyidx=%d cipher=0x%x pairwise=%d default=%d "
+	       "rc=%d mac=" MACSTR "\n",
+	       key.key_idx, key.cipher, key.pairwise, key.default_key, rc,
+	       MAC2STR(params->addr));
+	return rc != 0 ? -1 : 0;
+}
+
 static int
 lkpi_sta_add(void *priv, struct hostapd_sta_add_params *params)
 {
@@ -361,6 +452,8 @@ const struct wpa_driver_ops wpa_driver_lkpi_ops = {
 	.get_hw_feature_data = lkpi_get_hw_feature_data,
 	.set_ap = lkpi_set_ap,
 	.send_mlme = lkpi_send_mlme,
+	.hapd_send_eapol = lkpi_send_eapol,
+	.set_key = lkpi_set_key,
 	.sta_add = lkpi_sta_add,
 	.sta_remove = lkpi_sta_remove,
 	.sta_set_flags = lkpi_sta_set_flags,
