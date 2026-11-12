@@ -32,64 +32,176 @@ needs a board that boots before it needs a stack that links:
 | mac80211 + cfg80211 + iwlwifi | C0-C6 reached: register, attach, scan, join, data plane (2/2 cold boots each) |
 | C6 throughput / stability | measured on the AC 7260 bench; numbers below |
 | AP role (RTOS as AP, Pi 4B as STA) | **supported**: the AC 7260 beacons, the Pi associates, the data plane runs both ways and WPA2-PSK/CCMP is 2/2; the A4 transmit stall is fixed - throughput below. The uplink is still 57.3% of the GT AP |
+| Monitor role (RX only) | **2/2**: user monitor vif, `SET_INTERFACE`/`dev_open`/`SET_WIPHY` all `rc=0`, 9.87 / 10.4 beacon/s against the same card's 9.25 on a mainline kernel; no injection |
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
 build's design and how a new world is added.
 
-## Measured on the AC 7260 bench
+## Performance
 
-The bench AP is the RTL8812AU `labwifi-ar-ht20s` on channel 5 (2432 MHz,
-**2.4 GHz**, HT20, open, WMM).  The same AC 7260 sits on the RK3568.  Both
-arms use iperf2 and the receiver-side number, two cold boots averaged
-(2026-11-11):
+One board, one bench, one client.  The tables are split by module - platform -
+bus, so a new module adds a table instead of a wider row.  Case names are fixed
+(registry below); a table reports the cases it measured, and a new case is
+added to the registry first.
 
-| | GT (`63a2a8ab9cd3`) | this port |
+Every arm is the same card: the Linux column is the AC 7260 on a mainline kernel
+(`iwlwifi`, `iwlmvm`), the `rtos` column is the same card on this port.  A rate
+is payload bytes over the interval that actually elapsed, counted at the
+receiver: `iperf2`'s own window where the peer receives, the case's byte counter
+where the board receives, and the peer's counting sink for the AP role's UDP
+downlink (which is also what the loss figure comes from).  A cell is one cold boot; where
+a case runs twice inside one boot, the cell is the larger of the two repeats,
+which is the rule the gates use.
+
+### Cases
+
+| case | traffic | condition | parameters |
+|---|---|---|---|
+| `W-TCP-D/HT20` | TCP bulk, access point to station (**the receiver** is the board in the station role and the peer in the AP role) | 2.4 GHz, HT20 | iperf2, 28 s window, two repeats per boot |
+| `W-TCP-U/HT20` | TCP bulk, station to access point (**the receiver** is the peer in the station role and the board in the AP role) | same | iperf2, 28 s window |
+| `W-UDP-D/HT20` | UDP 1470 B, 40 Mbit/s target, downlink | same | iperf2 `-u -b 40M -t 18`; loss from the two ends' payload counts |
+| `W-UDP-U/HT20` | UDP 1470 B, 40 Mbit/s target, uplink | same | same cell, reversed |
+| `W-MON-BEACON/HT20` | beacon + assoc rate seen by a monitor vif | 2.4 GHz ch5 | 15 s window, frame census by type |
+
+Zero loss in every row unless stated; a Wi-Fi cell that drops more than 1% is
+void.  The two benches are not interchangeable and are named per table: in the
+station role the peer is the Pi's RTL8812AU AP on channel 5 (2432 MHz), in the
+AP role the peer is the Pi's MT7921AU station and the board beacons on channel
+11 (2462 MHz).  Both are open unless the row says WPA2.
+
+### RK3568 / Intel AC 7260 / PCIe - station
+
+`PROFILE=rk3568-iwl7260-c6-pool128` (and `-c6` for the clean baseline), driven
+by `tools/rtos/c6-throughput.sh`; gates applied by `tools/rtos/c6-report.py`.
+Two cold boots per arm.
+
+Each column is two cold boots, and each cell is that boot's larger repeat.
+
+| case | rtos, pool64 (baseline) | rtos, pool128 | Linux reference | vs reference |
+|---|---|---|---|---|
+| `W-TCP-D/HT20` | 67.2 / 60.8 | 62.7 / 58.2 | 42.3 / 42.5 | **142.6%** |
+| `W-TCP-U/HT20` | 21.5 / 17.6 | **25.6 / 20.7** | 26.7 / 23.0 | 93.3% |
+| `W-UDP-D/HT20` | 37.8 / 37.8 | 37.8 / 37.9 | 42.1 / 40.7 | 91.5% |
+| `W-UDP-U/HT20` | void | void | void | - |
+
+The uplink was 78.8% of the reference until the static skb data pool went from
+64 to 128 slots, which is the single-variable arm between the two `rtos`
+columns: the transmit path's census showed `data_high=64`, exactly the pool
+size, and the pool was the wall rather than the air.  The downlink is above the
+reference and shifts with boot noise; the reference column's own spread
+(42.3 / 42.5 TCP, 40.7 / 42.1 UDP) is the same size.  UDP loss is computed from the
+two ends' payload counts rather than read off `iperf2`, whose client prints no
+loss column when the server does not answer its report: 94.4-94.8 MB counted at
+the board against the peer's 90.0, i.e. 0.0-0.3%.  The two-source check -
+application bytes against the AP's own capture of the same phase - closed at
+2.4% on UDP and 0.002% on TCP.
+
+The sibling profile `rk3568-iwl7260-sta-wpa2` joins a WPA2-PSK/CCMP AP on the
+same channel and runs the same six phases over the encrypted link, two cold
+boots:
+
+| case | rtos, WPA2 (pi2, pi4) | Linux reference (open, above) |
 |---|---|---|
-| PHY link (`iw link`) | 144.4 Mbit/s, MCS15, short GI, 2x2 | not printed; the 60 Mbit/s TCP downlink already requires HT |
-| TCP downlink | 42.4 Mbit/s | **60.5 Mbit/s** |
-| TCP uplink | 24.85 Mbit/s | 23.18 Mbit/s (93% of GT) |
-| UDP 40 M downlink | 41.4 Mbit/s, 0% loss | 37.9 Mbit/s, 0% loss |
+| `W-TCP-D/HT20` | 42.2 / 41.7, 41.9 / 42.6 | 42.3 / 42.5 |
+| `W-TCP-U/HT20` | 24.8, 26.5 | 26.7 / 23.0 |
+| `W-UDP-D/HT20` | 37.8, 37.8 | 42.1 / 40.7 |
+| `W-UDP-U/HT20` | void (board side only: 40.8, 40.7) | void |
 
-**144.4 Mbit/s is the PHY rate, not throughput.**  It is two spatial streams at
-72.2 Mbit/s on a 20 MHz channel with short GI, on 2.4 GHz channel 5 - not 5 GHz.
-The TCP numbers are what the stack actually moves.  The downlink is higher than
-the GT arm; the uplink was 78.8% of GT until the skb data pool went from 64 to
-128 slots (+18.4%, a one-variable arm).  On the same image a 30-minute TCP
-downlink moved 13.95 GB at the adapter (peer 60.4 Mbit/s), ten reconnects took
-0.7-0.9 s each, and no boot reset.
+The encrypted downlink lands on the open-AP reference rather than under it: the
+software CCMP path is not what costs these cells.  Two limits on reading the
+table.  There is no loss figure for these rows, because the peer's `iperf2`
+window (18 s) and the board's phase window (20 s) are not the same interval, so
+the two byte counts cannot be differenced the way the open arm's sink allows.
+And the reference has no encrypted arm at all, so its column here is the open
+one and the ratios are indicative rather than a gate.
 
-Reproduce: build `PROFILE=rk3568-iwl7260-c6-pool128` (or `-c6` for the clean
-baseline) and drive `tools/rtos/c6-throughput.sh`; the GT arm is the same
-`Image-gt-63a2a8ab9cd3` booted by the project's GT runner; `tools/rtos/c6-report.py`
-applies the 80% / 1% / three-source gates.
+The 40.8 / 40.7 in that last row is the board's own `report` line, not a
+received figure, and the harness cannot weigh this direction in the station
+role: the board blasts raw datagrams with no `iperf2` header, so the peer's
+counting sink sees only the fraction the port accepted (1.1-1.7 Mbit/s), and the
+board's counter has hundreds of thousands of refusals behind it.  The AP role
+weighs the same direction properly because there the *board* receives; that row
+is above, and it is void too.
 
-The other role reverses it: the RTOS side is the **AP**.  The same AC 7260
-beacons on channel 11 (2462 MHz, HT20, open), the Pi 4B's MT7921AU is the STA,
-and the GT arm is the same card driven as a Linux AP by hostapd.  Both arms use
-iperf2 and the receiver-side number, two cold boots (2026-11-12, the images
-carry the port's diagnostics):
+### RK3568 / Intel AC 7260 / PCIe - access point
 
-| | GT AP (Linux 7260) | this port (AP) |
-|---|---|---|
-| TCP downlink | 73.3 Mbit/s | **73.2 Mbit/s (99.9% of GT)** |
-| TCP uplink | 76.6 Mbit/s | 43.9 Mbit/s (57.3% of GT) |
-| UDP 40 M downlink | 41.9 Mbit/s, 0% loss | 37.6 Mbit/s, 0.11% loss |
+`PROFILE=rk3568-iwl7260-ap-a4`, driven by `tools/rtos/ap-round.sh`; gates
+applied by `tools/rtos/ap-report.py`.  Two cold boots.  The AP MLME is the
+ported NXP `hostapd`; the Linux column is the same card under the distribution's
+`hostapd` on channel 11.
 
-The first sustained flow used to stop the device's interrupts, which looked
-like firmware silence: the PCIe hard-interrupt count froze, no transmit
-completion came back and the skb pool filled.  It was the host.  The port's
-`__napi_schedule()` ran one inline poll; iwlwifi's receive poll re-enables
-`CSR_INT_MASK` only when a poll returns less than its budget, so a poll that
-returned the whole budget (64) left the mask at zero and nothing asked again -
-while the device still had pending receive work.  The shim now repeats the poll
-until the driver's drain round re-enables the interrupt
-(`docs/decisions/2026-11-12-ap-a4-napi-budget.md`); the downlink reaches GT
-parity and UDP loss is 0.11%.  The uplink (43.9 Mbit/s) is the open item: it is
-the board's receive path, not the stall, and is the next round.
+Each boot ran the downlink case twice; both repeats are printed for it and
+nothing is averaged away.  The gate is on the mean of all four.
 
-Reproduce: build `PROFILE=rk3568-iwl7260-ap` and drive `tools/rtos/ap-round.sh`;
-the GT AP arm is `runs/2026-11-12-iwl7260-ap`, the fixed-arm evidence and the
-pre-registered gates are `runs/2026-11-12-iwl7260-ap-a4/RUN.md`.
+| case | rtos, a4-1b | rtos, a4-2 | Linux reference | vs reference |
+|---|---|---|---|---|
+| `W-TCP-D/HT20` | **72.7 / 72.8** | **73.3 / 74.1** | 73.3 | **99.9%** (mean 73.2) |
+| `W-TCP-U/HT20` | 43.7 | 44.1 | 76.6 | 57.3% (mean 43.9) |
+| `W-UDP-D/HT20` | 37.56 / 37.56, loss 0.112% / 0% | 37.56 / 37.55, loss 0.0098% / 0% | 41.9, loss <=0.02% | 89.6% |
+| `W-UDP-U/HT20` | 36.8, 2.2% missing | 36.9, 2.5% missing | 41.9, 0% | void (over the 1% line) |
+
+The uplink row is void rather than measured, and it is the one cell the port
+misses by loss rather than by rate: the peer sent 64,201 datagrams in both boots
+and the board's receive path counted 62,757 and 62,620 of them.  The delivered
+rate is within 12% of the reference; the 2.2-2.5% loss is what disqualifies the
+cell, so nothing here should be quoted as a rate.
+
+The downlink reaches parity and the uplink does not.  The first sustained flow
+on this profile used to stop the device's interrupts, which read as firmware
+silence: the hard-interrupt count froze, no transmit completion came back and
+the skb pool filled.  It was the host - the port's `__napi_schedule()` ran one
+inline poll, and iwlwifi's receive poll re-enables `CSR_INT_MASK` only when a
+poll returns less than its budget, so a poll that returned the whole budget
+left the mask at zero with work still pending.  The shim now repeats the poll
+until the driver's drain round re-arms the interrupt
+(`docs/decisions/2026-11-12-ap-a4-napi-budget.md`).  What is left on the uplink
+is the board's receive path, and it is the same wall the station role's uplink
+sits against; it is an open item, not a pass.
+
+### RK3568 / Intel AC 7260 / PCIe - monitor
+
+`PROFILE=rk3568-iwl7260-mon`, driven by `tools/rtos/mon-round.sh`.  The Linux
+column is the same card as a `iw` monitor under mainline `iwlwifi`; the count in
+both arms is beacons and frames from the saved capture, not the live stream.
+
+| case | rtos | Linux reference | vs reference |
+|---|---|---|---|
+| `W-MON-BEACON/HT20` | 9.87 / 10.4 beacon/s (297 / 256 frames in 15 s) | 9.25 beacon/s | +6.7% / +12.4% |
+
+The frame census covers beacons, probe requests and responses, auth, assoc, data
+and control frames; radiotap's `it_len` set is 56/64 in both arms, and every
+frame but the handful that arrived before the channel was set is on 2432.  The
+interface is receive-only: nothing is injected, `tx_packets=0`, and lwIP's
+counters are untouched.  Injection, channel hopping, the 5 GHz band and a
+five-minute soak are untested.
+
+### Stability
+
+One 30-minute `W-TCP-D/HT20` window on the station role: 1,777,484 ms,
+13,947,861,328 bytes at the adapter, peer-side 60.4 Mbit/s, 60 health samples,
+no reset, and ten reconnects each completing in 713-903 ms with 4/4 ping.  The
+image reports `cases=4/4`.
+
+### What these tables do not cover
+
+- **5 GHz.**  The AP role cannot beacon there: the card's per-channel flags
+  carry `NO_IR` on every 5 GHz channel and the mainline kernel on the same card
+  and bench refuses identically, so it is the card, not the port.  The station
+  role receives and transmits on 5 GHz but does not associate yet.
+- **Channel widths above 20 MHz.**  Every cell above is HT20.  The AP seam sets
+  `secondary_channel = 0` and `ieee80211ac = 0`.  This one is a reading of the
+  code, not a measurement: with a secondary channel set, hostapd asks the driver
+  to scan for neighbouring BSSes and reads the results back through
+  `scan2` / `get_scan_results2`, and the AP profile's `wpa_driver_ops` table
+  carries neither (they are compiled in only for the station profile), so
+  hostapd would refuse the configuration rather than run 40 MHz unverified.
+  HT40 and VHT are unmeasured, so "2x2 802.11ac" is the card's specification
+  here, not a result.
+- **Power save.**  `ps_buffered` is the driver's own ledger; there is no
+  `SET_POWER_SAVE` A/B behind it.
+
+The console transcripts for every role, including the two 5 GHz refusals, are
+in [docs/CONSOLE-EVIDENCE.md](docs/CONSOLE-EVIDENCE.md).
 
 ## Why
 
