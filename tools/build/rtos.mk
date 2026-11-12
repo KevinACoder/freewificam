@@ -163,6 +163,13 @@ s1-link:
 # the component profile's; nothing in the bench is compiled into an image.
 HOST_PROFILE ?= rk3568-kpi-mock
 
+# The judge's own test: synthetic serial logs for the newest cases' anchors,
+# positive and negative, in seconds and without a board (tools/rtos/
+# judge-selftest.py).  A new case's anchors land here before it is judged on a
+# board.
+judge-selftest:
+	@$(PYTHON) $(ROOT)/tools/rtos/judge-selftest.py
+
 host-test:
 	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(HOST_PROFILE)
 	@$(MAKE) -C $(ROOT)/tests/host/kpi run PROFILE=$(HOST_PROFILE)

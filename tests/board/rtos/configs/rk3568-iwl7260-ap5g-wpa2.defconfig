@@ -1,0 +1,35 @@
+# mac80211 on the RTOS line, 5 GHz round: the AC 7260 becomes a WPA2-PSK/CCMP AP
+# on the 5 GHz band (docs/HANDOFF-5GHZ.md P2).  The Pi's MT7921AU joins with
+# wpa_supplicant on channel 36; the gate is the 4-way handshake plus 20/20 ping
+# in both directions on 5180 MHz.
+#
+# One axis from rk3568-iwl7260-ap5g: CONFIG_AP_WPA2.  The band, the channel
+# report and the frequency are the open profile's, so a handshake failure cannot
+# hide a band failure.
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product that also redistributes the Intel firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_ap5g"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The AP MLME, the WPA2 variant of the case, and the 5 GHz channel.
+CONFIG_HOSTAP_AP=y
+CONFIG_AP_WPA2=y
+CONFIG_AP_FREQ=5180
+CONFIG_AP_HW_MODE="a"
+
+# Same heap and runner stack as the accepted AP-WPA2 profile: the key install
+# and NEW_STATION commands run on the runner's stack.
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_RUNNER_STACK_KB=24

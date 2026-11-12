@@ -27,7 +27,7 @@
 # The board cases that compile in this world.  The platform Makefile's generic
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
-WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2
+WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 

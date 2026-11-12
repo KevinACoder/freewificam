@@ -1,0 +1,38 @@
+# mac80211 on the RTOS line, 5 GHz round: the AC 7260 joins a WPA2-PSK/CCMP AP as
+# a station on the 5 GHz band (docs/HANDOFF-5GHZ.md P4).  The Pi's RTL8812AU is
+# the AP on channel 36; the gate is EAPOL 2/2, ptk=1 gtk=1 fail=0, the
+# association's frequency read back as 5180, and 20/20 ping in both directions.
+#
+# One axis from rk3568-iwl7260-sta5g: the passphrase.  The passphrase is the
+# non-secret Pi bench constant, the same one the 2.4 GHz G2 profile uses.
+#
+# The stack + WPA supplicant + driver are GPL-2.0-only; this profile's image is a
+# GPL-2.0 link product that also redistributes the Intel firmware image
+# (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_sta5g"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+CONFIG_WPA_STA=y
+CONFIG_STA_SSID="labwifi-5g"
+CONFIG_STA_BSSID=""
+CONFIG_STA_FREQ=5180
+CONFIG_STA_DHCP=n
+CONFIG_STA_STATIC_IP="192.168.99.2"
+CONFIG_STA_STATIC_MASK="255.255.255.0"
+CONFIG_STA_STATIC_GW="192.168.99.1"
+CONFIG_STA_PEER_CANDIDATES="192.168.99.1"
+CONFIG_STA_PSK="rtos-7260-wpa2-psk"
+
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_RUNNER_STACK_KB=24

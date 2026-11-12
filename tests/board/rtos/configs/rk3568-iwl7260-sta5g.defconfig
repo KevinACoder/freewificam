@@ -1,0 +1,39 @@
+# mac80211 on the RTOS line, 5 GHz round: the AC 7260 joins an open 5 GHz AP as a
+# station (docs/HANDOFF-5GHZ.md P3).  The Pi's RTL8812AU is the AP on channel 36
+# and the board is 192.168.99.2; the gate is association + the association's
+# frequency read back as 5180 + 20/20 ping in both directions.
+#
+# The open arm exists on purpose: it isolates the band from the crypto.  The
+# WPA2 arm is rk3568-iwl7260-sta5g-wpa2, one axis different (the passphrase).
+#
+# The stack + WPA supplicant + driver are GPL-2.0-only; this profile's image is a
+# GPL-2.0 link product that also redistributes the Intel firmware image
+# (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_sta5g"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The imported supplicant as the station's connection owner, open network.
+CONFIG_WPA_STA=y
+CONFIG_STA_SSID="labwifi-5g"
+CONFIG_STA_BSSID=""
+CONFIG_STA_FREQ=5180
+CONFIG_STA_DHCP=n
+CONFIG_STA_STATIC_IP="192.168.99.2"
+CONFIG_STA_STATIC_MASK="255.255.255.0"
+CONFIG_STA_STATIC_GW="192.168.99.1"
+CONFIG_STA_PEER_CANDIDATES="192.168.99.1"
+CONFIG_STA_PSK=""
+
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_RUNNER_STACK_KB=24

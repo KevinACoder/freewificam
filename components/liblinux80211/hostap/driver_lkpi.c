@@ -235,6 +235,13 @@ lkpi_sta_associate(void *priv, struct wpa_driver_associate_params *params)
 			break;
 		if (rc < 0)
 			return -1;
+		/* One line every 5 s saying how far the association got: the
+		 * connect command is answered synchronously, so the progress
+		 * happens inside cfg80211's SME and "timeout" alone cannot say
+		 * whether auth, assoc or neither happened. */
+		if (i % 50u == 49u)
+			printf("lkpi: sta wait i=%u progress=0x%x\n", i,
+			       lkpi_sta_drv_assoc_progress());
 		OSA_TimeDelay(100);
 	}
 	if (i == 200u) {
@@ -386,7 +393,7 @@ lkpi_get_ext_capab(void *priv, enum wpa_driver_if_type type,
 static struct hostapd_hw_modes *
 lkpi_get_hw_feature_data(void *priv, u16 *num_modes, u16 *flags, u8 *dfs)
 {
-	struct lkpi_hostap_mode modes[2];
+	struct lkpi_hostap_mode modes[3];	/* 11a + 11g + 11b */
 	struct hostapd_hw_modes *out;
 	int n;
 	int i;
@@ -395,9 +402,9 @@ lkpi_get_hw_feature_data(void *priv, u16 *num_modes, u16 *flags, u8 *dfs)
 	(void)priv;
 	if (num_modes == NULL || flags == NULL || dfs == NULL)
 		return NULL;
-	n = lkpi_hostap_drv_modes(modes, 2);
+	n = lkpi_hostap_drv_modes(modes, 3);
 	if (n <= 0) {
-		wpa_printf(MSG_ERROR, "lkpi: no 2.4 GHz band on the interface");
+		wpa_printf(MSG_ERROR, "lkpi: no usable band on the interface");
 		return NULL;
 	}
 	out = os_zalloc((size_t)n * sizeof(*out));

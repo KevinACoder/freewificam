@@ -120,6 +120,21 @@ int lkpi_nl80211_sta_count(struct net_device *dev,
 /* The interface's nl80211 type (NL80211_IFTYPE_*), or a negative errno. */
 int lkpi_nl80211_iftype(struct net_device *dev);
 
+/* The frequency the interface is operating on right now, in MHz: the AP's
+ * chandef for an AP interface, the connected BSS's channel for a station.
+ * 0 when the interface is down/idle, a negative errno on bad input.  The STA
+ * 5 GHz gate needs this: `connected` and `state=COMPLETED` say nothing about
+ * which band the association landed on, and a 5 GHz attempt that silently
+ * fell back to 2.4 would otherwise read as a pass. */
+int lkpi_nl80211_link_freq(struct net_device *dev);
+
+/* Where an association stopped: bit0 the target BSS is in the scan table,
+ * bit1 authenticated (mac80211's current_bss), bit2 cfg80211-connected.  The
+ * connect seam answers synchronously, so the intermediate steps are what says
+ * which stage of cfg80211's SME stalled. */
+int lkpi_nl80211_assoc_progress(struct net_device *dev, const char *ssid,
+				unsigned int ssid_len);	/* ssid may be NULL */
+
 /* --- the AP MLME's three actions (2026-11-12) ----------------------------
  *
  * hostapd's side of the AP: send one management frame, create the client, open

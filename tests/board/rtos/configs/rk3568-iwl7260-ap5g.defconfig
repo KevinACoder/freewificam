@@ -1,0 +1,37 @@
+# mac80211 on the RTOS line, 5 GHz round: the AC 7260 becomes an open AP on the
+# 5 GHz band (docs/HANDOFF-5GHZ.md P1).  The Pi's MT7921AU is the STA and runs
+# wpa_supplicant on channel 36; the gate is beacon + association + 20/20 ping in
+# both directions, not throughput.
+#
+# This is the AP profile's bring-up with the band as an input: the case derives
+# the channel from CONFIG_AP_FREQ and the hostapd hw_mode from the band, and it
+# prints every candidate channel's flags and beacon verdict before it starts.
+# CONFIG_AP_HW_MODE names the band the profile asks for; the case overrides it
+# from the frequency it actually uses, so the two cannot disagree.
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product that also redistributes the Intel firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_ap5g"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The AP MLME, and the 5 GHz channel.
+CONFIG_HOSTAP_AP=y
+CONFIG_AP_FREQ=5180
+CONFIG_AP_HW_MODE="a"
+
+# The open-AP profile's accepted heap and runner stack: mac80211's records, the
+# beacon templates, lwIP's pools and the nl80211 commands all come from this
+# heap, and the runner's stack carries NEW_STATION.
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_RUNNER_STACK_KB=24

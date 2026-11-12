@@ -88,6 +88,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_IWL7260_STA_WPA2)
 	CASE_ENTRY("iwl7260_sta_wpa2", case_iwl7260_sta_wpa2_run)
 #endif
+#if defined(RTOS_CASE_IWL7260_AP5G)
+	CASE_ENTRY("iwl7260_ap5g", case_iwl7260_ap5g_run)
+#endif
+#if defined(RTOS_CASE_IWL7260_STA5G)
+	CASE_ENTRY("iwl7260_sta5g", case_iwl7260_sta5g_run)
+#endif
 #if defined(RTOS_CASE_IWL7260_STAB)
 	CASE_ENTRY("iwl7260_stab", case_iwl7260_stab_run)
 #endif

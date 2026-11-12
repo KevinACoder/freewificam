@@ -14,14 +14,16 @@
 
 struct lkpi_sta_cfg {
 	const char	*ssid;		/* required, 1..32 bytes */
-	const char	*psk;		/* required, passphrase 8..63 */
+	const char	*psk;		/* passphrase 8..63; NULL = open */
 	const unsigned char *bssid;	/* optional, 6 bytes */
 	int		freq_mhz;	/* 0 = any */
 };
 
 /* Start the supplicant task, add the one network and select it.  Returns 0
  * when the interface exists and the network is configured; the connection
- * itself is asynchronous and is observed with lkpi_sta_state(). */
+ * itself is asynchronous and is observed with lkpi_sta_state().  A NULL psk
+ * configures an open network: the supplicant still owns the association, it
+ * just has no 4-way handshake to run. */
 int lkpi_sta_start(const struct lkpi_sta_cfg *cfg);
 
 /* The supplicant's enum wpa_states value, or -1 before the interface exists. */

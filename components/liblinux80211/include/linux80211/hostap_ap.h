@@ -21,6 +21,14 @@ struct lkpi_hostap_cfg {
 	unsigned int	 beacon_int;	/* 100 */
 	unsigned int	 dtim;		/* 2 */
 	const char	*passphrase;	/* NULL = open; WPA2-PSK otherwise */
+	/* --- 5 GHz (docs/HANDOFF-5GHZ.md) ---
+	 * freq_mhz != 0 makes the frequency authoritative: the channel number
+	 * and the band come from it (hw_mode MUST agree with the band, because
+	 * hostapd selects iface->current_mode by hw_mode before it ever looks
+	 * at the channel).  freq_mhz == 0 keeps the 2.4 GHz path this struct
+	 * has always described, so an existing caller needs no change. */
+	unsigned int	 freq_mhz;	/* 0 = derive nothing, use channel */
+	unsigned int	 hw_mode;	/* LKPI_HOSTAP_MODE_11G unless 5 GHz */
 };
 
 /* 0 on success, negative errno otherwise.  The interface must already exist

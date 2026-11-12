@@ -64,19 +64,26 @@ lkpi_sta_start(const struct lkpi_sta_cfg *cfg)
 	size_t len;
 	unsigned int i;
 
-	if (cfg == NULL || cfg->ssid == NULL || cfg->psk == NULL)
+	if (cfg == NULL || cfg->ssid == NULL)
 		return -1;
 	len = os_strlen(cfg->ssid);
 	if (len == 0u || len > 32u)
 		return -1;
-	if (os_strlen(cfg->psk) < 8u || os_strlen(cfg->psk) > 63u)
+	/* A NULL passphrase is an open network, not a missing argument: the STA
+	 * 5 GHz round needs association without crypto as its own gate (a
+	 * handshake failure must not be able to hide a band failure). */
+	if (cfg->psk != NULL &&
+	    (os_strlen(cfg->psk) < 8u || os_strlen(cfg->psk) > 63u))
 		return -1;
 	if (s_started)
 		return -EBUSY;
 
 	os_memcpy(s_ssid, cfg->ssid, len);
 	s_ssid[len] = '\0';
-	os_strlcpy(s_psk, cfg->psk, sizeof(s_psk));
+	if (cfg->psk != NULL)
+		os_strlcpy(s_psk, cfg->psk, sizeof(s_psk));
+	else
+		s_psk[0] = '\0';
 	if (cfg->bssid != NULL) {
 		os_memcpy(s_bssid, cfg->bssid, 6);
 		s_bssid_set = 1;
@@ -123,19 +130,28 @@ lkpi_sta_start(const struct lkpi_sta_cfg *cfg)
 	if (ssid->ssid == NULL)
 		return -1;
 	ssid->ssid_len = len;
-	/* This tree's wpas_network_disabled() treats a passphrase with a non-zero
-	 * ssid_len as disabled; derive the PMK here and hand the supplicant a
-	 * ready psk_set network. */
-	if (pbkdf2_sha1(s_psk, (const u8 *)s_ssid, len, 4096, ssid->psk,
-			PMK_LEN) != 0) {
-		printf("lkpi: sta pbkdf2 failed\n");
-		return -1;
+	if (cfg->psk == NULL) {
+		/* Open: the supplicant associates and enters WPA_COMPLETED from
+		 * its own assoc event (events.c), so no PSK state is set here. */
+		ssid->key_mgmt = WPA_KEY_MGMT_NONE;
+		ssid->proto = 0;
+		ssid->pairwise_cipher = WPA_CIPHER_NONE;
+		ssid->group_cipher = WPA_CIPHER_NONE;
+	} else {
+		/* This tree's wpas_network_disabled() treats a passphrase with a
+		 * non-zero ssid_len as disabled; derive the PMK here and hand the
+		 * supplicant a ready psk_set network. */
+		if (pbkdf2_sha1(s_psk, (const u8 *)s_ssid, len, 4096, ssid->psk,
+				PMK_LEN) != 0) {
+			printf("lkpi: sta pbkdf2 failed\n");
+			return -1;
+		}
+		ssid->psk_set = 1;
+		ssid->key_mgmt = WPA_KEY_MGMT_PSK;
+		ssid->proto = WPA_PROTO_RSN;
+		ssid->pairwise_cipher = WPA_CIPHER_CCMP;
+		ssid->group_cipher = WPA_CIPHER_CCMP;
 	}
-	ssid->psk_set = 1;
-	ssid->key_mgmt = WPA_KEY_MGMT_PSK;
-	ssid->proto = WPA_PROTO_RSN;
-	ssid->pairwise_cipher = WPA_CIPHER_CCMP;
-	ssid->group_cipher = WPA_CIPHER_CCMP;
 	ssid->scan_ssid = 1;
 	if (s_bssid_set) {
 		os_memcpy(ssid->bssid, s_bssid, 6);

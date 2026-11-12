@@ -89,6 +89,12 @@ flush_if() {
 }
 
 # --- status ---------------------------------------------------------------
+# The regulatory record: the AP round's 5 GHz arm needs the Pi's STA on 5180,
+# and the value before/after is evidence (the world domain marks 5 GHz passive;
+# the bench's US domain does not).
+do_reg_get() { iw reg get 2>&1; }
+do_reg_set() { local cc=${1:?country}; iw reg set "$cc" 2>&1; sleep 1; iw reg get 2>&1; }
+
 do_status() {
     say "== lab-ap: $(systemctl is-active lab-ap 2>/dev/null || true)"
     for i in "$STA_IF" "$MON_IF"; do
@@ -237,11 +243,32 @@ do_scan_all() {
 
 # --- A2: join --------------------------------------------------------------
 do_join() {
-    local i
+    local i out
     ip link set "$STA_IF" up
     for i in 1 2 3; do
-        iw dev "$STA_IF" connect -w "$SSID" "$FREQ" 2>&1 && break
-        say "join attempt $i failed; retry in 2 s"
+        out=$(iw dev "$STA_IF" connect -w "$SSID" "$FREQ" 2>&1)
+        printf '%s\n' "$out"
+        case "$out" in
+        *"Not connected"*) ;;
+        *) break ;;
+        esac
+        # -95 (EOPNOTSUPP) is the type being wrong, not the AP being absent:
+        # the interface reports managed but the wdev is still in its previous
+        # mode, and nl80211 refuses CONNECT for anything but a station.  A
+        # down/type/up round trip is the fix; retrying connect alone is not.
+        case "$out" in
+        *"-95"*|*"not supported"*)
+            say "join attempt $i: EOPNOTSUPP, re-creating the station interface"
+            ip link set "$STA_IF" down 2>/dev/null || true
+            iw dev "$STA_IF" set type managed 2>&1 || true
+            ip link set "$STA_IF" up
+            ip addr flush dev "$STA_IF" 2>/dev/null || true
+            ip addr add "$PI_IP/24" dev "$STA_IF" 2>&1 || true
+            ;;
+        *)
+            say "join attempt $i failed; retry in 2 s"
+            ;;
+        esac
         sleep 2
     done
     sleep 1
@@ -351,6 +378,8 @@ cmd=${1:-status}
 [ $# -gt 0 ] && shift
 case "$cmd" in
     status)     do_status ;;
+    reg-get)    do_reg_get ;;
+    reg-set)    do_reg_set "${1:-US}" ;;
     up)         do_up ;;
     down)       do_down ;;
     scan)       do_scan ;;

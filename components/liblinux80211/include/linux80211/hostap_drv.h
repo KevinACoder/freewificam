@@ -37,7 +37,9 @@
 #define LKPI_HOSTAP_CHAN_NO_IR		0x00000002
 #define LKPI_HOSTAP_CHAN_RADAR		0x00000008
 
-#define LKPI_HOSTAP_MAX_CHAN	16
+/* 40 = the 5 GHz band's 25 channels plus the 2.4 GHz band's 14, with room to
+ * spare: the two modes share this one fixed array and hostapd walks both. */
+#define LKPI_HOSTAP_MAX_CHAN	40
 #define LKPI_HOSTAP_MAX_RATES	16
 
 struct lkpi_hostap_chan {
@@ -109,6 +111,11 @@ const unsigned char *lkpi_hostap_drv_mac(void);
 
 /* the wiphy's 2.4 GHz band, translated; returns the number of modes filled */
 int lkpi_hostap_drv_modes(struct lkpi_hostap_mode *modes, int max_modes);
+
+/* cfg80211's own frequency -> channel number, exposed because the hostap side
+ * of the seam has no Linux header to reach it through (a channel number is a
+ * plain int, so this stays on the seam contract). */
+int lkpi_hostap_drv_chan_of(unsigned int freq_mhz);
 
 int lkpi_hostap_drv_set_ap(const struct lkpi_hostap_ap_params *params);
 int lkpi_hostap_drv_send_mlme(const void *frame, size_t len, int noack);

@@ -36,6 +36,13 @@ int lkpi_sta_drv_scan(const char *ssid, unsigned int ssid_len,
 		      unsigned int freq_mhz);
 int lkpi_sta_drv_connect(const struct lkpi_sta_connect *c);
 int lkpi_sta_drv_connected(unsigned char bssid[6]);
+
+/* Where an association stopped, in the seam's plain integers: bit0 the station
+ * authenticated (mac80211's current_bss is set), bit1 cfg80211 reports it
+ * connected.  The driver answers connect synchronously, so the wait loop needs
+ * this to tell "never authenticated" from "authenticated, no association"; a
+ * negative value is an error. */
+int lkpi_sta_drv_assoc_progress(void);
 int lkpi_sta_drv_disconnect(unsigned int reason);
 int lkpi_sta_drv_mac(unsigned char mac[6]);
 int lkpi_sta_drv_eapol_tx(const void *frame, size_t len);

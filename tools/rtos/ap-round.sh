@@ -115,6 +115,13 @@ if [ "$NO_PEER" = 0 ]; then
 
 	pisu "iw dev $MON_IF info" 2>/dev/null | grep -q "channel $CH" \
 		|| { echo "ap-round: $MON_IF is not a monitor on channel $CH" >&2; exit 3; }
+	# The peer must be a station, not just "not a monitor": the 2026-11-12
+	# regression boot lost a join to EOPNOTSUPP because wlan1 reported managed
+	# while nl80211 still had it in another mode, and the round then recorded
+	# a board FAIL for a bench fault.  Validity first.
+	STA_IF=${STA_IF:-wlan1}
+	pisu "iw dev $STA_IF info" 2>/dev/null | grep -q "type managed" \
+		|| { echo "ap-round: $STA_IF is not a managed station" >&2; exit 3; }
 fi
 
 # --- clean the peer, put the image on the TFTP root -------------------------

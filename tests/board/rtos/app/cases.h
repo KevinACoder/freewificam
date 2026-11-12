@@ -99,6 +99,14 @@ int case_iwl7260_sta_wpa2_run(void);
 #if defined(RTOS_CASE_IWL7260_STAB)
 int case_iwl7260_stab_run(void);
 #endif
+/* The 5 GHz round (docs/HANDOFF-5GHZ.md): the same two roles, with the band as
+ * a profile input and the association's frequency as a verdict input. */
+#if defined(RTOS_CASE_IWL7260_AP5G)
+int case_iwl7260_ap5g_run(void);
+#endif
+#if defined(RTOS_CASE_IWL7260_STA5G)
+int case_iwl7260_sta5g_run(void);
+#endif
 
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf

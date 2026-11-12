@@ -24,6 +24,21 @@ config AP_WPA2
 	  source set, the driver table and the image's other cases are the same
 	  as the open AP profile.  Used by rk3568-iwl7260-ap-wpa2.
 
+config AP_FREQ
+	int "iwl7260_ap5g operating frequency (MHz)"
+	default 5180
+	range 2400 6000
+	help
+	  The 5 GHz round's channel, given as the frequency so that the band and
+	  the hostapd hw_mode cannot disagree: the case derives the channel
+	  number from it and picks hw_mode from the band, and a profile whose
+	  frequency is not beaconable falls back to the fixed candidate order
+	  with a note rather than starting on the wrong channel.
+
+config AP_HW_MODE
+	string "iwl7260_ap5g hostapd hw_mode (a for 5 GHz, g for 2.4)"
+	default "a"
+
 config AP_DIAG
 	bool "iwl7260_ap runs the A4 stall diagnostic variant"
 	help

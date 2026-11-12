@@ -77,10 +77,46 @@ lkpi_hostap_fill_chan(struct lkpi_hostap_chan *out,
 	if ((ch->flags & IEEE80211_CHAN_RADAR) != 0u)
 		flags |= LKPI_HOSTAP_CHAN_RADAR;
 
-	out->chan = (int)((ch->center_freq - 2407u) / 5u);
+	/* The conversion is cfg80211's, not an arithmetic guess: the 2.4 GHz
+	 * form ((freq - 2407) / 5) returns 548 for 5180 MHz, which is the
+	 * "channel 548" that would reach hostapd's hw_features instead of 36. */
+	out->chan = ieee80211_frequency_to_channel((int)ch->center_freq);
 	out->freq = (int)ch->center_freq;
 	out->flags = flags;
 	out->allowed_bw = LKPI_HOSTAP_CHAN_WIDTH_20;
+}
+
+/* One wiphy band as a hostapd hw mode.  hostapd's hw_mode==a path depends on
+ * the mode's own rate table (6..54 Mbit/s OFDM) and on its HT capability being
+ * the 5 GHz band's, not the 2.4 GHz one: copying the 2.4 GHz caps onto an
+ * 11a mode would advertise a 40 MHz/TX-STBC mask the 5 GHz band does not
+ * necessarily share. */
+static void
+lkpi_hostap_fill_mode(struct lkpi_hostap_mode *mode,
+		      const struct ieee80211_supported_band *band)
+{
+	int i;
+
+	memset(mode, 0, sizeof(*mode));
+	mode->num_channels = band->n_channels < LKPI_HOSTAP_MAX_CHAN ?
+	    band->n_channels : LKPI_HOSTAP_MAX_CHAN;
+	for (i = 0; i < mode->num_channels; i++)
+		lkpi_hostap_fill_chan(&mode->channels[i], &band->channels[i]);
+	mode->num_rates = band->n_bitrates < LKPI_HOSTAP_MAX_RATES ?
+	    band->n_bitrates : LKPI_HOSTAP_MAX_RATES;
+	for (i = 0; i < mode->num_rates; i++)
+		mode->rates[i] = (int)band->bitrates[i].bitrate;
+	if (band->ht_cap.ht_supported) {
+		mode->ht_supported = 1;
+		mode->ht_capab = band->ht_cap.cap;
+		memcpy(mode->mcs_set, band->ht_cap.mcs.rx_mask, 10);
+		mode->mcs_set[10] = (unsigned char)(band->ht_cap.mcs.rx_highest & 0xffu);
+		mode->mcs_set[11] = (unsigned char)(band->ht_cap.mcs.rx_highest >> 8);
+		mode->mcs_set[12] = band->ht_cap.mcs.tx_params;
+		mode->a_mpdu_params =
+		    (unsigned char)((band->ht_cap.ampdu_factor & 3u) |
+				    ((band->ht_cap.ampdu_density & 7u) << 2));
+	}
 }
 
 int
@@ -88,9 +124,8 @@ lkpi_hostap_drv_modes(struct lkpi_hostap_mode *modes, int max_modes)
 {
 	struct wireless_dev *wdev;
 	struct wiphy *wiphy;
-	struct ieee80211_supported_band *band;
+	const struct ieee80211_supported_band *band;
 	int n = 0;
-	int i;
 
 	if (hostap_dev == NULL || modes == NULL || max_modes < 1)
 		return -EINVAL;
@@ -98,49 +133,45 @@ lkpi_hostap_drv_modes(struct lkpi_hostap_mode *modes, int max_modes)
 	if (wdev == NULL || wdev->wiphy == NULL)
 		return -EINVAL;
 	wiphy = wdev->wiphy;
-	band = wiphy->bands[NL80211_BAND_2GHZ];
-	if (band == NULL)
-		return -ENODEV;
 
-	/* 802.11g (and the HT caps the driver advertises on it) */
-	memset(&modes[n], 0, sizeof(modes[n]));
-	modes[n].mode = LKPI_HOSTAP_MODE_11G;
-	modes[n].num_channels = band->n_channels < LKPI_HOSTAP_MAX_CHAN ?
-	    band->n_channels : LKPI_HOSTAP_MAX_CHAN;
-	for (i = 0; i < modes[n].num_channels; i++)
-		lkpi_hostap_fill_chan(&modes[n].channels[i], &band->channels[i]);
-	modes[n].num_rates = band->n_bitrates < LKPI_HOSTAP_MAX_RATES ?
-	    band->n_bitrates : LKPI_HOSTAP_MAX_RATES;
-	for (i = 0; i < modes[n].num_rates; i++)
-		modes[n].rates[i] = (int)band->bitrates[i].bitrate;
-	if (band->ht_cap.ht_supported) {
-		modes[n].ht_supported = 1;
-		modes[n].ht_capab = band->ht_cap.cap;
-		memcpy(modes[n].mcs_set, band->ht_cap.mcs.rx_mask, 10);
-		modes[n].mcs_set[10] = (unsigned char)(band->ht_cap.mcs.rx_highest & 0xffu);
-		modes[n].mcs_set[11] = (unsigned char)(band->ht_cap.mcs.rx_highest >> 8);
-		modes[n].mcs_set[12] = band->ht_cap.mcs.tx_params;
-		modes[n].a_mpdu_params =
-		    (unsigned char)((band->ht_cap.ampdu_factor & 3u) |
-				    ((band->ht_cap.ampdu_density & 7u) << 2));
+	/* 802.11a first when the wiphy has a 5 GHz band: hostapd picks
+	 * iface->current_mode by hw_mode, so the order only matters for a
+	 * hw_mode==any configuration - but a table that does not list 11a at
+	 * all is what keeps `hw_mode=a` from ever working. */
+	band = wiphy->bands[NL80211_BAND_5GHZ];
+	if (band != NULL && n < max_modes) {
+		lkpi_hostap_fill_mode(&modes[n], band);
+		modes[n].mode = LKPI_HOSTAP_MODE_11A;
+		n++;
 	}
-	n++;
 
-	/* 802.11b: the four DSSS rates on the same channel set */
-	if (n < max_modes) {
+	band = wiphy->bands[NL80211_BAND_2GHZ];
+	if (band != NULL && n < max_modes) {
+		lkpi_hostap_fill_mode(&modes[n], band);
+		modes[n].mode = LKPI_HOSTAP_MODE_11G;
+		n++;
+	}
+
+	/* 802.11b: the four DSSS rates on the 2.4 GHz channel set */
+	if (band != NULL && n < max_modes) {
 		static const int b_rates[4] = { 10, 20, 55, 110 };
 
-		memset(&modes[n], 0, sizeof(modes[n]));
+		lkpi_hostap_fill_mode(&modes[n], band);
 		modes[n].mode = LKPI_HOSTAP_MODE_11B;
-		modes[n].num_channels = modes[0].num_channels;
-		memcpy(modes[n].channels, modes[0].channels,
-		       sizeof(modes[n].channels));
 		modes[n].num_rates = 4;
 		memcpy(modes[n].rates, b_rates, sizeof(b_rates));
 		n++;
 	}
 
+	if (n == 0)
+		return -ENODEV;
 	return n;
+}
+
+int
+lkpi_hostap_drv_chan_of(unsigned int freq_mhz)
+{
+	return ieee80211_frequency_to_channel((int)freq_mhz);
 }
 
 int
@@ -256,6 +287,16 @@ lkpi_sta_drv_connected(unsigned char bssid[6])
 	if (hostap_dev == NULL)
 		return -ENODEV;
 	return lkpi_nl80211_connected(hostap_dev, bssid);
+}
+
+int
+lkpi_sta_drv_assoc_progress(void)
+{
+	if (hostap_dev == NULL)
+		return -ENODEV;
+	/* the BSS-table bit needs a name; the wait loop only needs the two
+	 * state bits, and the associate path already proved the BSS was there */
+	return lkpi_nl80211_assoc_progress(hostap_dev, NULL, 0u);
 }
 
 int

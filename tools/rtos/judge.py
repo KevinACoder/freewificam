@@ -38,6 +38,10 @@ CASES = (
     "iwl7260_stab",
     "iwl7260_ap",
     "iwl7260_sta_wpa2",
+    # The 5 GHz round (docs/HANDOFF-5GHZ.md): the same two roles with the band
+    # as an input and the association's frequency as a verdict input.
+    "iwl7260_ap5g",
+    "iwl7260_sta5g",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -350,6 +354,124 @@ PATTERNS = {
     ),
     "iwl7260_sta_wpa2_pass": re.compile(
         r"iwl7260_sta_wpa2: PASS STAW", re.MULTILINE
+    ),
+    # --- the 5 GHz round (2026-11-12, docs/HANDOFF-5GHZ.md) ---
+    # The band census and the per-candidate channel report are this round's
+    # discriminator: a NO_IR channel is a regulatory fact about the firmware,
+    # and the report is what turns "START_AP refused" into a finding.
+    "iwl7260_ap5g_fwreg": re.compile(
+        r"iwl7260_ap5g: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_wlan0": re.compile(
+        r"iwl7260_ap5g: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]+) iftype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_bands": re.compile(
+        r"iwl7260_ap5g: bands 2g=(?P<b2>[01]) 5g=(?P<b5>[01]) "
+        r"2g_chans=(?P<n2>\d+) 5g_chans=(?P<n5>\d+) 5g_ht=(?P<ht>[01])",
+        re.MULTILINE
+    ),
+    "iwl7260_ap5g_chan": re.compile(
+        r"iwl7260_ap5g: chan freq=(?P<freq>\d+) chan=(?P<chan>\d+) "
+        r"present=(?P<present>[01]) flags=(?P<flags>0x[0-9a-f]+) "
+        r"can_beacon=(?P<can>[01])", re.MULTILINE
+    ),
+    "iwl7260_ap5g_note_profile": re.compile(
+        r"iwl7260_ap5g: note profile freq=(?P<freq>\d+) not beaconable; "
+        r"using (?P<used>\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_set_iface": re.compile(
+        r"iwl7260_ap5g: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap5g_start": re.compile(
+        r"iwl7260_ap5g: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_netif": re.compile(
+        r"iwl7260_ap5g: netif up name=(?P<name>\S+) ip=(?P<ip>[0-9.]+)/24 "
+        r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_security": re.compile(
+        r"iwl7260_ap5g: security wpa2=(?P<wpa2>[01]) ssid=(?P<ssid>\S+) "
+        r"hw_mode=(?P<hw>\S+) freq=(?P<freq>\d+) chan=(?P<chan>\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap5g_hostap": re.compile(
+        r"iwl7260_ap5g: hostap start rc=(?P<rc>-?\d+) ready=(?P<ready>[01])",
+        re.MULTILINE
+    ),
+    "iwl7260_ap5g_peer_window": re.compile(
+        r"iwl7260_ap5g: peer window ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_hostap_up": re.compile(
+        r"iwl7260_ap5g: hostap up ready=(?P<ready>[01]) sta=(?P<sta>\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap5g_sta": re.compile(
+        r"iwl7260_ap5g: sta add n=(?P<n>\d+) mac=(?P<mac>[0-9a-f:]+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap5g_link": re.compile(
+        r"iwl7260_ap5g: link freq=(?P<freq>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_wpa2_station": re.compile(
+        r"iwl7260_ap5g: wpa2 station sta=(?P<sta>-?\d+) ptk=(?P<ptk>\d+) "
+        r"gtk=(?P<gtk>\d+) fail=(?P<fail>\d+) wait_ms=(?P<wait>\d+)",
+        re.MULTILINE
+    ),
+    "iwl7260_ap5g_eapol": re.compile(
+        r"iwl7260_ap5g: eapol tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"drop=(?P<drop>\d+)", re.MULTILINE
+    ),
+    "iwl7260_ap5g_pass_ap5w": re.compile(r"iwl7260_ap5g: PASS AP5W", re.MULTILINE),
+    "iwl7260_ap5g_pass_ap5": re.compile(r"iwl7260_ap5g: PASS AP5", re.MULTILINE),
+    "iwl7260_ap5g_fail": re.compile(
+        r"iwl7260_ap5g: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "iwl7260_sta5g_fwreg": re.compile(
+        r"iwl7260_sta5g: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_wlan0": re.compile(
+        r"iwl7260_sta5g: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_bands": re.compile(
+        r"iwl7260_sta5g: bands 2g=(?P<b2>[01]) 5g=(?P<b5>[01]) "
+        r"5g_chans=(?P<n5>\d+) 5g_ht=(?P<ht>[01])", re.MULTILINE
+    ),
+    "iwl7260_sta5g_chan": re.compile(
+        r"iwl7260_sta5g: chan freq=(?P<freq>\d+) chan=(?P<chan>\d+) "
+        r"present=(?P<present>[01]) flags=(?P<flags>0x[0-9a-f]+)",
+        re.MULTILINE
+    ),
+    "iwl7260_sta5g_start": re.compile(
+        r"iwl7260_sta5g: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_netif": re.compile(
+        r"iwl7260_sta5g: netif up name=(?P<name>\S+) ip=(?P<ip>[0-9.]+)/"
+        r"(?P<mask>[0-9.]+) mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_security": re.compile(
+        r"iwl7260_sta5g: security wpa2=(?P<wpa2>[01]) ssid=(?P<ssid>\S+) "
+        r"freq=(?P<freq>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_sta_start": re.compile(
+        r"iwl7260_sta5g: sta start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_state": re.compile(
+        r"iwl7260_sta5g: sta state=(?P<state>\d+) waited_ms=(?P<wait>\d+) "
+        r"bssid=(?P<bssid>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_link": re.compile(
+        r"iwl7260_sta5g: link freq=(?P<freq>-?\d+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_peer": re.compile(
+        r"iwl7260_sta5g: peer ip=(?P<ip>[0-9.]+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_pass_sta5w": re.compile(r"iwl7260_sta5g: PASS STA5W", re.MULTILINE),
+    "iwl7260_sta5g_pass_sta5": re.compile(r"iwl7260_sta5g: PASS STA5", re.MULTILINE),
+    "iwl7260_sta5g_fail": re.compile(
+        r"iwl7260_sta5g: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     # C6 throughput round: the plan line, the two listeners, and the case's
     # own verdict.  The 80% gate is the harness report's, not the judge's.
@@ -910,6 +1032,21 @@ LIST_PATTERNS = {
         r"iwl7260_ap: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
         r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
         r"(?P<max>\d+)", re.MULTILINE),
+    "iwl7260_ap5g_cand": re.compile(
+        r"iwl7260_ap5g: cand freq=(?P<freq>\d+) chan=(?P<chan>\d+) "
+        r"present=(?P<present>[01]) flags=(?P<flags>0x[0-9a-f]+) "
+        r"can_beacon=(?P<can>[01])", re.MULTILINE
+    ),
+    "iwl7260_ap5g_ping": re.compile(
+        r"iwl7260_ap5g: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
+        r"(?P<max>\d+)", re.MULTILINE
+    ),
+    "iwl7260_sta5g_ping": re.compile(
+        r"iwl7260_sta5g: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
+        r"(?P<max>\d+)", re.MULTILINE
+    ),
     "iwl7260_ap_begin": re.compile(
         r"iwl7260_ap: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
         r"role=(?P<role>\S+) air=(?P<air>\S+) port=(?P<port>\d+) "
@@ -1126,7 +1263,15 @@ def judge(text: str, expect: dict | None = None) -> dict:
         if not verdicts:
             cases[case] = {"verdict": "missing", "detail": "no verdict line"}
         elif verdicts[-1] != "PASS":
-            cases[case] = {"verdict": "fail", "detail": "case printed FAIL"}
+            # Surface the case's own FAIL reason when it has one: "the image
+            # reported a fail" says nothing about why, and the reason line is
+            # the finding (a NO_IR channel, a refused START_AP, a timeout).
+            reason = found.get(f"{case}_fail")
+            detail = "case printed FAIL"
+            if isinstance(reason, dict) and reason.get("reason"):
+                detail = f"case printed FAIL: {reason['reason']}"
+                errors.append(f"{case}: {reason['reason']}")
+            cases[case] = {"verdict": "fail", "detail": detail}
         else:
             cases[case] = {"verdict": "pass", "detail": "case printed PASS"}
 
@@ -2069,6 +2214,288 @@ def judge(text: str, expect: dict | None = None) -> dict:
                     f"({r['ms']} ms, {r['bytes']} B)")
             if not found["iwl7260_ap_pass_apt"]:
                 errors.append("iwl7260_ap: the APT PASS line is missing")
+
+    if cases.get("iwl7260_ap5g", {}).get("verdict") == "pass":
+        fail = found["iwl7260_ap5g_fail"]
+        if fail:
+            errors.append(f"iwl7260_ap5g: {fail['reason']}")
+        reg = found["iwl7260_ap5g_fwreg"]
+        if not reg:
+            errors.append(
+                "iwl7260_ap5g: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(
+                f"iwl7260_ap5g: firmware registration rc={reg['rc']}")
+        wl = found["iwl7260_ap5g_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("iwl7260_ap5g: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("iwl7260_ap5g: wlan0 has ifindex=0")
+        elif wl["type"] != "2":
+            errors.append(
+                f"iwl7260_ap5g: wlan0 boot type={wl['type']}, expected "
+                "STATION (2) before the type change")
+        bands = found["iwl7260_ap5g_bands"]
+        if not bands:
+            errors.append("iwl7260_ap5g: PASS without the band census")
+        elif bands["b5"] != "1":
+            errors.append("iwl7260_ap5g: no 5 GHz band in the wiphy")
+        elif int(bands["n5"]) < 1:
+            errors.append(
+                f"iwl7260_ap5g: the 5 GHz band has {bands['n5']} channels")
+        else:
+            notes.append(
+                f"iwl7260_ap5g: 5 GHz band {bands['n5']} channels, "
+                f"ht={bands['ht']}")
+        cands = found["iwl7260_ap5g_cand"]
+        if not cands:
+            errors.append("iwl7260_ap5g: PASS without the candidate report")
+        else:
+            usable = [c for c in cands if c["can"] == "1"]
+            if not usable:
+                # A PASS on a band where no candidate is beaconable would be
+                # the one outcome this round must never report: the channel
+                # report is the finding, and it says the band is passive.
+                errors.append(
+                    "iwl7260_ap5g: PASS but no candidate channel is "
+                    "beaconable: "
+                    + " ".join(f"{c['freq']}:{c['flags']}" for c in cands))
+            else:
+                notes.append(
+                    "iwl7260_ap5g: beaconable "
+                    + " ".join(f"{c['freq']}({c['chan']})" for c in usable))
+        chan = found["iwl7260_ap5g_chan"]
+        if not chan:
+            errors.append("iwl7260_ap5g: PASS without the channel line")
+        elif chan["present"] != "1" or chan["can"] != "1":
+            errors.append(
+                f"iwl7260_ap5g: channel present={chan['present']} "
+                f"can_beacon={chan['can']} flags={chan['flags']}")
+        elif int(chan["freq"]) < 4900:
+            errors.append(
+                f"iwl7260_ap5g: started on {chan['freq']} MHz, not 5 GHz")
+        elif int(chan["chan"]) >= 200:
+            # 5180 MHz converted with the 2.4 GHz formula lands on 548; a
+            # channel number that high means the conversion regressed.
+            errors.append(
+                f"iwl7260_ap5g: channel number {chan['chan']} is not a "
+                "channel (frequency conversion)")
+        seti = found["iwl7260_ap5g_set_iface"]
+        if not seti:
+            errors.append("iwl7260_ap5g: PASS without the set_iface line")
+        elif int(seti["rc"]) != 0 or seti["type"] != "3":
+            errors.append(
+                f"iwl7260_ap5g: set_iface rc={seti['rc']} "
+                f"type={seti['type']}")
+        st = found["iwl7260_ap5g_start"]
+        if not st:
+            errors.append("iwl7260_ap5g: PASS without the dev_open line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"iwl7260_ap5g: dev_open rc={st['rc']}")
+        netif = found["iwl7260_ap5g_netif"]
+        if not netif:
+            errors.append("iwl7260_ap5g: PASS without the netif line")
+        elif netif["name"] != "wl0" or netif["ip"] != "192.168.99.1":
+            errors.append(
+                f"iwl7260_ap5g: netif {netif['name']} {netif['ip']}")
+        sec = found["iwl7260_ap5g_security"]
+        if not sec:
+            errors.append("iwl7260_ap5g: PASS without the security line")
+        else:
+            if sec["hw"] != "a":
+                errors.append(
+                    f"iwl7260_ap5g: hostapd hw_mode={sec['hw']}, "
+                    "expected a")
+            if int(sec["freq"]) < 4900:
+                errors.append(
+                    f"iwl7260_ap5g: configured {sec['freq']} MHz, not 5 GHz")
+        hostap = found["iwl7260_ap5g_hostap"]
+        if not hostap:
+            errors.append("iwl7260_ap5g: PASS without the hostap start line")
+        elif int(hostap["rc"]) != 0 or hostap["ready"] != "1":
+            errors.append(
+                f"iwl7260_ap5g: hostap start rc={hostap['rc']} "
+                f"ready={hostap['ready']}")
+        up = found["iwl7260_ap5g_hostap_up"]
+        if not up:
+            errors.append(
+                "iwl7260_ap5g: PASS without the hostap up (station) line")
+        elif up["ready"] != "1" or int(up["sta"]) < 1:
+            errors.append(
+                f"iwl7260_ap5g: hostap up ready={up['ready']} "
+                f"sta={up['sta']}")
+        if not found["iwl7260_ap5g_peer_window"]:
+            errors.append("iwl7260_ap5g: PASS without the peer window")
+        link = found["iwl7260_ap5g_link"]
+        if not link:
+            errors.append("iwl7260_ap5g: PASS without the link frequency")
+        elif int(link["freq"]) < 4900:
+            errors.append(
+                f"iwl7260_ap5g: the AP is on {link['freq']} MHz, "
+                "not 5 GHz")
+        elif int(link["freq"]) != int(chan["freq"]):
+            errors.append(
+                f"iwl7260_ap5g: link {link['freq']} MHz != channel "
+                f"{chan['freq']} MHz")
+        if "freq" in expect:
+            want = int(expect["freq"])
+            got = int(link["freq"]) if link else 0
+            if got != want:
+                errors.append(
+                    f"iwl7260_ap5g: expected {want} MHz, got {got}")
+        sta = found["iwl7260_ap5g_sta"]
+        if not sta:
+            errors.append("iwl7260_ap5g: PASS without a station add line")
+        elif int(sta["n"]) < 1 or sta["mac"].startswith("00:00:00"):
+            errors.append(
+                f"iwl7260_ap5g: station {sta['mac']} n={sta['n']}")
+        else:
+            notes.append(f"iwl7260_ap5g: station {sta['mac']}")
+        pings = {p["payload"]: p for p in found["iwl7260_ap5g_ping"]}
+        for payload in ("56", "1400"):
+            p = pings.get(payload)
+            if p is None:
+                errors.append(
+                    f"iwl7260_ap5g: no ping anchor for payload {payload}")
+            elif p["tx"] != "20" or p["rx"] != "20":
+                errors.append(
+                    f"iwl7260_ap5g: ping {payload} tx={p['tx']} "
+                    f"rx={p['rx']}")
+        if found["iwl7260_ap5g_pass_ap5w"]:
+            if sec and sec["wpa2"] != "1":
+                errors.append("iwl7260_ap5g: AP5W PASS with wpa2=0")
+            w2 = found["iwl7260_ap5g_wpa2_station"]
+            if not w2:
+                errors.append("iwl7260_ap5g: AP5W PASS without the 4-way line")
+            else:
+                if int(w2["sta"]) < 1:
+                    errors.append(
+                        "iwl7260_ap5g: WPA2 has no associated station")
+                if int(w2["ptk"]) < 1:
+                    errors.append("iwl7260_ap5g: WPA2 has no pairwise key")
+                if int(w2["gtk"]) < 1:
+                    errors.append("iwl7260_ap5g: WPA2 has no group key")
+                if w2["fail"] != "0":
+                    errors.append(
+                        f"iwl7260_ap5g: WPA2 key failures={w2['fail']}")
+                notes.append(
+                    f"iwl7260_ap5g: WPA2 ptk={w2['ptk']} gtk={w2['gtk']} "
+                    f"wait={w2['wait']} ms")
+            eapol = found["iwl7260_ap5g_eapol"]
+            if not eapol:
+                errors.append(
+                    "iwl7260_ap5g: AP5W PASS without the EAPOL census")
+            else:
+                notes.append(
+                    f"iwl7260_ap5g: EAPOL tx={eapol['tx']} rx={eapol['rx']} "
+                    f"drop={eapol['drop']}")
+        elif not found["iwl7260_ap5g_pass_ap5"]:
+            errors.append(
+                "iwl7260_ap5g: neither AP5 nor AP5W PASS line is present")
+        elif sec and sec["wpa2"] != "0":
+            errors.append("iwl7260_ap5g: AP5 PASS with wpa2=1")
+
+    if cases.get("iwl7260_sta5g", {}).get("verdict") == "pass":
+        fail = found["iwl7260_sta5g_fail"]
+        if fail:
+            errors.append(f"iwl7260_sta5g: {fail['reason']}")
+        reg = found["iwl7260_sta5g_fwreg"]
+        if not reg:
+            errors.append(
+                "iwl7260_sta5g: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(
+                f"iwl7260_sta5g: firmware registration rc={reg['rc']}")
+        wl = found["iwl7260_sta5g_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("iwl7260_sta5g: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("iwl7260_sta5g: wlan0 has ifindex=0")
+        bands = found["iwl7260_sta5g_bands"]
+        if not bands:
+            errors.append("iwl7260_sta5g: PASS without the band census")
+        elif bands["b5"] != "1":
+            errors.append("iwl7260_sta5g: no 5 GHz band in the wiphy")
+        else:
+            notes.append(
+                f"iwl7260_sta5g: 5 GHz band {bands['n5']} channels, "
+                f"ht={bands['ht']}")
+        chan = found["iwl7260_sta5g_chan"]
+        if not chan:
+            errors.append("iwl7260_sta5g: PASS without the channel line")
+        elif chan["present"] != "1":
+            errors.append(
+                f"iwl7260_sta5g: {chan['freq']} MHz is not in the band")
+        st = found["iwl7260_sta5g_start"]
+        if not st:
+            errors.append("iwl7260_sta5g: PASS without the dev_open line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"iwl7260_sta5g: dev_open rc={st['rc']}")
+        netif = found["iwl7260_sta5g_netif"]
+        if not netif:
+            errors.append("iwl7260_sta5g: PASS without the netif line")
+        elif netif["name"] != "wl0" or netif["ip"] != "192.168.99.2":
+            errors.append(
+                f"iwl7260_sta5g: netif {netif['name']} {netif['ip']}")
+        sec = found["iwl7260_sta5g_security"]
+        if not sec:
+            errors.append("iwl7260_sta5g: PASS without the security line")
+        elif int(sec["freq"]) < 4900:
+            errors.append(
+                f"iwl7260_sta5g: configured {sec['freq']} MHz, not 5 GHz")
+        start = found["iwl7260_sta5g_sta_start"]
+        if not start:
+            errors.append("iwl7260_sta5g: PASS without the sta start line")
+        elif int(start["rc"]) != 0:
+            errors.append(f"iwl7260_sta5g: sta start rc={start['rc']}")
+        state = found["iwl7260_sta5g_state"]
+        if not state:
+            errors.append("iwl7260_sta5g: PASS without the assoc state line")
+        else:
+            if int(state["state"]) < 4:
+                errors.append(
+                    f"iwl7260_sta5g: supplicant state={state['state']}")
+            if state["bssid"].startswith("00:00:00"):
+                errors.append(
+                    f"iwl7260_sta5g: bssid={state['bssid']}")
+            else:
+                notes.append(
+                    f"iwl7260_sta5g: associated to {state['bssid']} "
+                    f"in {state['wait']} ms")
+        link = found["iwl7260_sta5g_link"]
+        if not link:
+            errors.append("iwl7260_sta5g: PASS without the link frequency")
+        else:
+            got = int(link["freq"])
+            if got < 4900:
+                errors.append(
+                    f"iwl7260_sta5g: associated on {got} MHz, not 5 GHz")
+            else:
+                notes.append(f"iwl7260_sta5g: link {got} MHz")
+            if "freq" in expect and got != int(expect["freq"]):
+                errors.append(
+                    f"iwl7260_sta5g: expected {expect['freq']} MHz, "
+                    f"got {got}")
+        if not found["iwl7260_sta5g_peer"]:
+            errors.append("iwl7260_sta5g: PASS without the peer line")
+        pings = {p["payload"]: p for p in found["iwl7260_sta5g_ping"]}
+        for payload in ("56", "1400"):
+            p = pings.get(payload)
+            if p is None:
+                errors.append(
+                    f"iwl7260_sta5g: no ping anchor for payload {payload}")
+            elif p["tx"] != "20" or p["rx"] != "20":
+                errors.append(
+                    f"iwl7260_sta5g: ping {payload} tx={p['tx']} "
+                    f"rx={p['rx']}")
+        if found["iwl7260_sta5g_pass_sta5w"]:
+            if sec and sec["wpa2"] != "1":
+                errors.append("iwl7260_sta5g: STA5W PASS with wpa2=0")
+        elif not found["iwl7260_sta5g_pass_sta5"]:
+            errors.append(
+                "iwl7260_sta5g: neither STA5 nor STA5W PASS line is present")
+        elif sec and sec["wpa2"] != "0":
+            errors.append("iwl7260_sta5g: STA5 PASS with wpa2=1")
 
     if cases.get("iwl7260_stab", {}).get("verdict") == "pass":
         fail = found["iwl7260_stab_fail"]

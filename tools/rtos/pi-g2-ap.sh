@@ -9,12 +9,32 @@
 set -u
 export PATH=/usr/sbin:/sbin:/usr/bin:/bin
 
-CH=${CH:-5}
-FREQ=${FREQ:-2432}
+# The band is the one knob the 5 GHz round adds (docs/HANDOFF-5GHZ.md P3/P4):
+# BAND=5g makes the AP an 802.11a/n AP on 36/5180 and sets the Pi's regulatory
+# domain to US for the duration, because the card's world regdomain marks 5 GHz
+# passive and hostapd refuses an AP on a NO_IR channel.  BAND=2g is the bench's
+# own G2 configuration and is unchanged.
+BAND=${BAND:-2g}
+if [ "$BAND" = 5g ]; then
+    CH=${CH:-36}
+    FREQ=${FREQ:-5180}
+    HW_MODE=${HW_MODE:-a}
+    REG_SET=${REG_SET:-US}
+    REG_RESTORE=${REG_RESTORE:-00}
+else
+    CH=${CH:-5}
+    FREQ=${FREQ:-2432}
+    HW_MODE=${HW_MODE:-g}
+    REG_SET=${REG_SET:-}
+    REG_RESTORE=${REG_RESTORE:-}
+fi
 SSID=${SSID:-labwifi-ar-ht20s}
 PI_IP=${PI_IP:-192.168.99.1}
 BOARD_IP=${BOARD_IP:-192.168.99.2}
 PSK=${PSK:-rtos-7260-wpa2-psk}
+# OPEN=1 makes the AP open (the STA round's P3 arm: the band gate must not be
+# able to hide behind a handshake).  The default stays the G2 WPA2 bench.
+OPEN=${OPEN:-0}
 MON_IF=${MON_IF:-wlan1}
 AP_IF=${AP_IF:-wlan2}
 CONF=/tmp/g2-hostapd.conf
@@ -22,6 +42,25 @@ LOG=/tmp/g2-hostapd.log
 PID=/tmp/g2-hostapd.pid
 
 say() { printf '%s\n' "$*"; }
+
+# The regulatory state is recorded before and after, never assumed: a 5 GHz AP
+# that fails because the domain was left at 00 is a bench fault, not a finding.
+do_reg() {
+    say "== reg domain now"
+    iw reg get 2>&1 | sed 's/^/   /'
+    if [ -n "$REG_SET" ]; then
+        say "== set reg $REG_SET (band $BAND)"
+        iw reg set "$REG_SET" 2>&1 | sed 's/^/   /'
+        sleep 1
+        iw reg get 2>&1 | sed 's/^/   /'
+    fi
+}
+
+reg_restore() {
+    [ -n "$REG_RESTORE" ] || return 0
+    say "== restore reg $REG_RESTORE"
+    iw reg set "$REG_RESTORE" 2>&1 | sed 's/^/   /'
+}
 
 do_status() {
     say "== lab-ap: $(systemctl is-active lab-ap 2>/dev/null || true)"
@@ -45,6 +84,7 @@ do_up() {
     say "== stop lab-ap"
     systemctl stop lab-ap 2>/dev/null || true
     sleep 1
+    do_reg
     command -v nmcli >/dev/null 2>&1 && nmcli device set "$AP_IF" managed no >/dev/null 2>&1 || true
     command -v nmcli >/dev/null 2>&1 && nmcli device set "$MON_IF" managed no >/dev/null 2>&1 || true
     sleep 1
@@ -58,23 +98,29 @@ do_up() {
 interface=$AP_IF
 driver=nl80211
 ssid=$SSID
-hw_mode=g
+hw_mode=$HW_MODE
 channel=$CH
 ieee80211n=1
 ht_capab=[SHORT-GI-20]
 wmm_enabled=1
 auth_algs=1
 ignore_broadcast_ssid=0
+EOF
+    if [ "$OPEN" = 1 ]; then
+        say "== open AP (no RSN)"
+    else
+        cat >> "$CONF" <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK
 wpa_pairwise=CCMP
 rsn_pairwise=CCMP
 wpa_passphrase=$PSK
 EOF
+    fi
     chmod 600 "$CONF"
     : > "$LOG"
     rm -f "$PID"
-    say "== start WPA2 hostapd $AP_IF ch$CH"
+    say "== start hostapd $AP_IF hw_mode=$HW_MODE ch$CH ($FREQ MHz) open=$OPEN"
     hostapd -B -P "$PID" -f "$LOG" "$CONF" || { say "hostapd start failed"; tail -20 "$LOG"; return 1; }
     sleep 2
     ip link set "$MON_IF" down 2>/dev/null || true
@@ -97,6 +143,7 @@ do_down() {
     say "== restart lab-ap"
     systemctl restart lab-ap 2>/dev/null || true
     sleep 1
+    reg_restore
     ip link set "$MON_IF" down 2>/dev/null || true
     iw dev "$MON_IF" set type monitor 2>/dev/null || true
     ip link set "$MON_IF" up
@@ -128,6 +175,8 @@ case "$cmd" in
     station) do_station ;;
     log) do_log ;;
     scan) do_scan ;;
+    reg) do_reg ;;
+    reg-restore) reg_restore ;;
     servers-stop) servers_stop ;;
     server-tcp) do_server_tcp "$@" ;;
     server-udp) do_server_udp "$@" ;;

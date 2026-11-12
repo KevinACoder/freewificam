@@ -418,6 +418,100 @@ lkpi_nl80211_connected(struct net_device *dev, unsigned char bssid[6])
 	return connected;
 }
 
+/*
+ * Where an association stopped.  The port's connect seam answers the driver
+ * synchronously, so everything after it happens inside cfg80211's own SME
+ * (scan -> auth -> assoc); the case's wait loop can only see the last step.
+ * This returns the intermediate steps as bits so one line says which one never
+ * happened:
+ *   bit0  the target BSS is in cfg80211's scan table (so a scan found it)
+ *   bit1  the station authenticated (mac80211's current_bss is set)
+ *   bit2  cfg80211 considers the station connected (assoc + assoc-resp done)
+ * A zero is "nothing happened yet", not an error; a negative errno is bad input.
+ */
+int
+lkpi_nl80211_assoc_progress(struct net_device *dev, const char *ssid,
+			    unsigned int ssid_len)
+{
+	struct wireless_dev *wdev;
+	struct cfg80211_bss *bss;
+	int progress = 0;
+
+	if (dev == NULL || dev->ieee80211_ptr == NULL)
+		return -EINVAL;
+	wdev = dev->ieee80211_ptr;
+	if (wdev->wiphy == NULL)
+		return -EINVAL;
+
+	if (ssid != NULL && ssid_len != 0u) {
+		bss = cfg80211_get_bss(wdev->wiphy, NULL, NULL,
+				       (const u8 *)ssid, ssid_len,
+				       IEEE80211_BSS_TYPE_ESS,
+				       IEEE80211_PRIVACY_ANY);
+		if (bss != NULL) {
+			progress |= 0x1;
+			cfg80211_put_bss(wdev->wiphy, bss);
+		}
+	}
+	wiphy_lock(wdev->wiphy);
+	if (wdev->links[0].client.current_bss != NULL)
+		progress |= 0x2;
+	if (wdev->connected)
+		progress |= 0x4;
+	wiphy_unlock(wdev->wiphy);
+	return progress;
+}
+
+/*
+ * The operating frequency, in MHz: the AP's chandef for an AP interface, the
+ * connected BSS's channel for a station.  `connected` alone cannot answer
+ * "which band", and a 5 GHz attempt that silently fell back to 2.4 GHz would
+ * otherwise read as a pass.  The station's lookup goes through cfg80211's own
+ * public BSS reference (the same call the supplicant's scan-result path uses),
+ * so the port never reaches into the internal BSS record.
+ */
+int
+lkpi_nl80211_link_freq(struct net_device *dev)
+{
+	struct wireless_dev *wdev;
+	int freq = 0;
+	u8 bssid[ETH_ALEN];
+	int connected;
+
+	if (dev == NULL || dev->ieee80211_ptr == NULL)
+		return -EINVAL;
+	wdev = dev->ieee80211_ptr;
+	if (wdev->wiphy == NULL)
+		return -EINVAL;
+
+	wiphy_lock(wdev->wiphy);
+	if (wdev->iftype == NL80211_IFTYPE_AP ||
+	    wdev->iftype == NL80211_IFTYPE_P2P_GO) {
+		if (wdev->links[0].ap.chandef.chan != NULL)
+			freq = (int)wdev->links[0].ap.chandef.chan->center_freq;
+	}
+	connected = wdev->connected ? 1 : 0;
+	if (connected)
+		memcpy(bssid, wdev->u.client.connected_addr, ETH_ALEN);
+	wiphy_unlock(wdev->wiphy);
+
+	if (!connected)
+		return freq;
+	{
+		struct cfg80211_bss *bss;
+
+		bss = cfg80211_get_bss(wdev->wiphy, NULL, bssid, NULL, 0,
+				       IEEE80211_BSS_TYPE_ESS,
+				       IEEE80211_PRIVACY_ANY);
+		if (bss != NULL) {
+			if (bss->channel != NULL)
+				freq = (int)bss->channel->center_freq;
+			cfg80211_put_bss(wdev->wiphy, bss);
+		}
+	}
+	return freq;
+}
+
 /* --- the AP round (2026-11-11, docs/HANDOFF-AP-MODE.md) ------------------ */
 
 /*

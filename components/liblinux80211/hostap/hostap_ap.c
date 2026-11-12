@@ -108,8 +108,18 @@ lkpi_hostap_apply_config(struct hostapd_iface *iface,
 	bss->ssid.ssid_set = 1;
 	bss->ssid.short_ssid = 0;
 
-	conf->hw_mode = HOSTAPD_MODE_IEEE80211G;
-	conf->channel = (int)cfg->channel;
+	/* Band and channel.  With a frequency the band is the frequency's:
+	 * hostapd resolves iface->freq from `hw_mode` + `channel` through its
+	 * own hw_feature table (hostapd.c:configured_fixed_chan_to_freq), so
+	 * hw_mode=G with channel 36 finds no channel at all and the AP never
+	 * starts - the mismatch is silent unless the mode is set here. */
+	if (cfg->freq_mhz != 0u) {
+		conf->hw_mode = (enum hostapd_hw_mode)cfg->hw_mode;
+		conf->channel = lkpi_hostap_drv_chan_of(cfg->freq_mhz);
+	} else {
+		conf->hw_mode = HOSTAPD_MODE_IEEE80211G;
+		conf->channel = (int)cfg->channel;
+	}
 	conf->beacon_int = (int)(cfg->beacon_int != 0u ? cfg->beacon_int : 100u);
 	bss->dtim_period = (int)(cfg->dtim != 0u ? cfg->dtim : 2u);
 	bss->max_num_sta = 8;
@@ -146,8 +156,13 @@ lkpi_hostap_apply_config(struct hostapd_iface *iface,
 		bss->wpa_pairwise = 0;
 	}
 	conf->ieee80211n = 1;
+	/* HT20 only, on either band: the 5 GHz round does not mix VHT and does
+	 * not run 40 MHz (a 40 MHz setup makes hostapd scan neighbouring BSSes
+	 * through get_scan_results, which this port does not implement). */
 	conf->ht_capab = HT_CAP_INFO_SHORT_GI20MHZ;
 	conf->secondary_channel = 0;
+	conf->ieee80211ac = 0;
+	conf->ieee80211h = 0;
 	bss->wmm_enabled = 1;
 	bss->wmm_uapsd = 0;
 
