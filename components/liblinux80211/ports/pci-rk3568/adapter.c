@@ -42,6 +42,7 @@
 #include "gicv3.h"
 #include "gicv3_its.h"
 #include "lkpi_pcie_backend.h"
+#include "adapter.h"
 #include "log.h"
 #include "msi.h"
 
@@ -127,6 +128,50 @@ static struct port_irq port_irq[PORT_IRQ_MAX];
 #define PORT_CSR_GP_CNTRL	0x024u
 #define PORT_IRQ_TRACE_MAX	6u
 
+/*
+ * The stall round's flight recorder: every delivery's four status registers,
+ * kept in a small ring so the last interrupt's view survives the freeze.  The
+ * first six still print (the bring-up's question); the ring is the one the
+ * case reads after the host has gone quiet, when no further interrupt will
+ * print anything.  Reads only, the same four registers the trace already
+ * reads; GP_CNTRL is deliberately not in the ring (a task-context read of the
+ * MAC clock register is the one the 2026-11-12 round hung the board on).
+ */
+#define PORT_CSR_RING_MAX	16
+
+struct port_csr_snap {
+	unsigned long	tick;
+	uint32_t	int_status;
+	uint32_t	int_mask;
+	uint32_t	fh_status;
+	uint32_t	reset;
+};
+
+static struct port_csr_snap port_csr_ring[PORT_CSR_RING_MAX];
+static unsigned int port_csr_ring_next;
+static unsigned int port_csr_ring_count;
+
+static void port_csr_capture(uintptr_t bar0, struct port_csr_snap *s)
+{
+	volatile uint32_t *csr = (volatile uint32_t *)bar0;
+
+	s->tick = jiffies;
+	s->int_status = csr[PORT_CSR_INT / 4u];
+	s->int_mask = csr[PORT_CSR_INT_MASK / 4u];
+	s->fh_status = csr[PORT_CSR_FH_INT_STATUS / 4u];
+	s->reset = csr[PORT_CSR_RESET / 4u];
+}
+
+static void port_csr_record(uintptr_t bar0)
+{
+	struct port_csr_snap *s = &port_csr_ring[port_csr_ring_next];
+
+	port_csr_capture(bar0, s);
+	port_csr_ring_next = (port_csr_ring_next + 1u) % PORT_CSR_RING_MAX;
+	if (port_csr_ring_count < PORT_CSR_RING_MAX)
+		port_csr_ring_count++;
+}
+
 /* One dispatcher for every vector: the registry carries the slot as the handler's
  * argument, so the delivery finds the pair the engine registered. */
 static void port_irq_dispatch(void *arg)
@@ -134,6 +179,8 @@ static void port_irq_dispatch(void *arg)
 	struct port_irq *slot = arg;
 
 	if (slot->fn != NULL) {
+		if (slot->bar0 != 0)
+			port_csr_record(slot->bar0);
 		if (slot->traced < PORT_IRQ_TRACE_MAX && slot->bar0 != 0) {
 			volatile uint32_t *csr =
 			    (volatile uint32_t *)slot->bar0;
@@ -561,6 +608,63 @@ static void port_dma_sync_op(void *ctx, void *cpu, size_t len, int dir)
 
 	(void)ctx;
 	port_dma_sync(cpu, len, dir);
+}
+
+/*
+ * The task-context CSR read the A4 round's E2 needs.  It deliberately reuses
+ * the address and the four registers of the interrupt-time trace above - the
+ * only read path on this port that is known to survive - and it is compiled in
+ * only for the diagnostic profile (CONFIG_LKPI_PCIE_CSR_SNAPSHOT).  The caller
+ * takes one read at a known-good moment first (after the interface is up); a
+ * hang there invalidates the boot rather than being mistaken for a finding.
+ */
+int lkpi_pcie_csr_snapshot(struct lkpi_pcie_csr_snap *out)
+{
+#if defined(CONFIG_LKPI_PCIE_CSR_SNAPSHOT) && CONFIG_LKPI_PCIE_CSR_SNAPSHOT
+	struct port_csr_snap s;
+	unsigned int i;
+
+	if (out == NULL)
+		return -1;
+	for (i = 0; i < PORT_IRQ_MAX; i++) {
+		if (!port_irq[i].used || port_irq[i].bar0 == 0)
+			continue;
+		port_csr_capture(port_irq[i].bar0, &s);
+		out->tick = s.tick;
+		out->int_status = s.int_status;
+		out->int_mask = s.int_mask;
+		out->fh_status = s.fh_status;
+		out->reset = s.reset;
+		return 0;
+	}
+	return -1;
+#else
+	(void)out;
+	return -1;
+#endif
+}
+
+/* The ring is memory only: it is readable whether or not the device answers. */
+unsigned int lkpi_pcie_csr_irq_ring(struct lkpi_pcie_csr_snap *out,
+    unsigned int max)
+{
+	unsigned int i, n;
+
+	if (out == NULL || max == 0u || port_csr_ring_count == 0u)
+		return 0;
+	n = port_csr_ring_count;
+	if (n > max)
+		n = max;
+	for (i = 0; i < n; i++) {
+		unsigned int idx = (port_csr_ring_next + PORT_CSR_RING_MAX - n + i)
+		    % PORT_CSR_RING_MAX;
+		out[i].tick = port_csr_ring[idx].tick;
+		out[i].int_status = port_csr_ring[idx].int_status;
+		out[i].int_mask = port_csr_ring[idx].int_mask;
+		out[i].fh_status = port_csr_ring[idx].fh_status;
+		out[i].reset = port_csr_ring[idx].reset;
+	}
+	return n;
 }
 
 static const struct lkpi_pcie_be_ops port_ops = {

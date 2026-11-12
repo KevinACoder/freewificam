@@ -42,6 +42,8 @@ WPA2=${WPA2:-0}
 BIN="$ROOT/tests/board/rtos/build/build/rtos-freertos.bin"
 TIMEOUT=480
 EVIDENCE=
+DIAG=0
+NO_PEER=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -51,7 +53,9 @@ while [ $# -gt 0 ]; do
 		--channel)  CH=${2:?}; shift 2 ;;
 		--freq)     FREQ=${2:?}; shift 2 ;;
 		--wpa2)     WPA2=1; shift ;;
-		-h|--help)  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		--diag)     DIAG=1; shift ;;
+		--no-peer)  NO_PEER=1; shift ;;
+		-h|--help)  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "ap-round: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -75,8 +79,10 @@ restore_pi() {
 	RESTORED=1
 	[ -n "${mon_down_pid:-}" ] && kill "$mon_down_pid" 2>/dev/null || true
 	[ -n "${mon_up_pid:-}" ] && kill "$mon_up_pid" 2>/dev/null || true
-	pih "servers-stop" >/dev/null 2>&1 || true
-	pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
+	if [ "$NO_PEER" = 0 ]; then
+		pih "servers-stop" >/dev/null 2>&1 || true
+		pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
+	fi
 }
 trap restore_pi EXIT
 
@@ -91,26 +97,34 @@ pi "mkdir -p $PI_DIR"
 	echo "tag=$TAG"
 	echo "time=$(date -Is)"
 	echo "channel=$CH ssid=$SSID ap=$BOARD_IP sta=$PI_IP"
-	pi 'systemctl is-active lab-ap 2>/dev/null || true'
-	pih status
-	pi 'iperf -v 2>&1 | head -1'
+	echo "mode=diag:$DIAG no_peer:$NO_PEER"
+	if [ "$NO_PEER" = 0 ]; then
+		pi 'systemctl is-active lab-ap 2>/dev/null || true'
+		pih status
+		pi 'iperf -v 2>&1 | head -1'
+	fi
 } > "$EVIDENCE/bench-gate-before.txt" 2>&1 || true
 
-pih "up" > "$EVIDENCE/bench-gate-up.txt" 2>&1
-pisu "iw dev $MON_IF info" >> "$EVIDENCE/bench-gate-up.txt" 2>&1 || true
-pih "mac" > "$EVIDENCE/pi-mac.txt" 2>&1 || true
-STA_MAC=$(tr -d '\r\n' < "$EVIDENCE/pi-mac.txt" 2>/dev/null || true)
-echo "sta_mac=${STA_MAC:-?}" >> "$EVIDENCE/bench-gate-up.txt"
+STA_MAC=
+if [ "$NO_PEER" = 0 ]; then
+	pih "up" > "$EVIDENCE/bench-gate-up.txt" 2>&1
+	pisu "iw dev $MON_IF info" >> "$EVIDENCE/bench-gate-up.txt" 2>&1 || true
+	pih "mac" > "$EVIDENCE/pi-mac.txt" 2>&1 || true
+	STA_MAC=$(tr -d '\r\n' < "$EVIDENCE/pi-mac.txt" 2>/dev/null || true)
+	echo "sta_mac=${STA_MAC:-?}" >> "$EVIDENCE/bench-gate-up.txt"
 
-pisu "iw dev $MON_IF info" 2>/dev/null | grep -q "channel $CH" \
-	|| { echo "ap-round: $MON_IF is not a monitor on channel $CH" >&2; exit 3; }
+	pisu "iw dev $MON_IF info" 2>/dev/null | grep -q "channel $CH" \
+		|| { echo "ap-round: $MON_IF is not a monitor on channel $CH" >&2; exit 3; }
+fi
 
 # --- clean the peer, put the image on the TFTP root -------------------------
 # The image is copied into the evidence directory first: a concurrent build
 # writes the same build/build/rtos-freertos.bin, and 2026-11-11's first rtos1
 # boot came up with the CI's last profile (tick usb_ehci) for exactly that
 # reason.  The copy makes the measured bytes and the deployed bytes one file.
-pih "servers-stop" >/dev/null 2>&1 || true
+if [ "$NO_PEER" = 0 ]; then
+	pih "servers-stop" >/dev/null 2>&1 || true
+fi
 cp -f "$BIN" "$EVIDENCE/rtos.bin"
 sha256sum "$EVIDENCE/rtos.bin" > "$EVIDENCE/rtos-bin.sha256"
 "$BOARD/tftp.sh" put "$EVIDENCE/rtos.bin" --name rtos.bin \
@@ -125,9 +139,12 @@ BOOT_PID=$!
 SERIAL="$EVIDENCE/serial.log"
 seen_start_ap=0
 seen_peer=0
+seen_hostap_up=0
 seen_mondown=0
 seen_monup=0
 beacon_pid=
+diag_mon_pid=
+
 declare -A seen_phase=()
 phase_pids=()
 
@@ -188,24 +205,49 @@ for _ in $(seq 1 3000); do
 		pisu "timeout 12 tcpdump -i $MON_IF -s 0 -w $PI_DIR/beacon.pcap" \
 			>"$EVIDENCE/beacon-tcpdump.log" 2>&1 &
 		beacon_pid=$!
-		# Two channel scans 1 s apart (PREREG A1): the first can land
-		# before the first beacon of a freshly started BSS, and the 2026-11-11
-		# round's single scan listed the neighbour but not this AP.
-		pih "scan" > "$EVIDENCE/pi-scan.txt" 2>&1 || true
-		sleep 1
-		pih "scan" >> "$EVIDENCE/pi-scan.txt" 2>&1 || true
-		pih "scan-all" > "$EVIDENCE/pi-scan-all.txt" 2>&1 || true
-		if [ "$WPA2" = 1 ]; then
-			pih "join-wpa" > "$EVIDENCE/pi-join.txt" 2>&1 || true
-			pih "wpa-status" > "$EVIDENCE/pi-wpa-status.txt" 2>&1 || true
-			pih "wpa-log" > "$EVIDENCE/pi-wpa.log" 2>&1 || true
-		else
-			pih "join" > "$EVIDENCE/pi-join.txt" 2>&1 || true
+		# The diagnostic arm needs the whole round on the air, not the A1
+		# 12 s window: the freeze and the last beacon are minutes apart.
+		if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 0 ]; then
+			pisu "timeout 500 tcpdump -i $MON_IF -s 256 -w $PI_DIR/mon-diag.pcap" \
+				>"$EVIDENCE/mon-diag-tcpdump.log" 2>&1 &
+			diag_mon_pid=$!
 		fi
-		pih "link" > "$EVIDENCE/pi-link.txt" 2>&1 || true
+		if [ "$NO_PEER" = 0 ]; then
+			# Two channel scans 1 s apart (PREREG A1): the first can land
+			# before the first beacon of a freshly started BSS, and the 2026-11-11
+			# round's single scan listed the neighbour but not this AP.
+			pih "scan" > "$EVIDENCE/pi-scan.txt" 2>&1 || true
+			sleep 1
+			pih "scan" >> "$EVIDENCE/pi-scan.txt" 2>&1 || true
+			pih "scan-all" > "$EVIDENCE/pi-scan-all.txt" 2>&1 || true
+			if [ "$WPA2" = 1 ]; then
+				pih "join-wpa" > "$EVIDENCE/pi-join.txt" 2>&1 || true
+				pih "wpa-status" > "$EVIDENCE/pi-wpa-status.txt" 2>&1 || true
+				pih "wpa-log" > "$EVIDENCE/pi-wpa.log" 2>&1 || true
+			else
+				pih "join" > "$EVIDENCE/pi-join.txt" 2>&1 || true
+			fi
+			pih "link" > "$EVIDENCE/pi-link.txt" 2>&1 || true
+		fi
 	fi
 
-	if [ "$seen_peer" = 0 ] && anchor 'iwl7260_ap: peer window ms='; then
+	if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 1 ] && [ "$seen_peer" = 0 ] && \
+	   anchor 'iwl7260_ap: peer window ms='; then
+		seen_peer=1
+		# The idle arm has no peer by construction; nothing to start.
+		echo "idle arm: no peer at $(date -Is)" >> "$EVIDENCE/phase-seen.txt"
+	fi
+
+	if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 0 ] && [ "$seen_hostap_up" = 0 ] && \
+	   anchor 'iwl7260_ap: hostap up ready=1 sta='; then
+		seen_hostap_up=1
+		pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-diag.txt 120" \
+			>/dev/null 2>&1 &
+		phase_pids+=($!)
+	fi
+
+	if [ "$NO_PEER" = 0 ] && [ "$seen_peer" = 0 ] && \
+	   anchor 'iwl7260_ap: peer window ms='; then
 		seen_peer=1
 		if [ "$WPA2" = 1 ]; then
 			# join-wpa has already waited for COMPLETED; ping after it,
@@ -217,7 +259,9 @@ for _ in $(seq 1 3000); do
 	fi
 
 	PHASES=""
-	[ -f "$SERIAL" ] && PHASES=$(tr -d '\r' < "$SERIAL" 2>/dev/null | sed -n 's/.*iwl7260_ap: phase [0-9][0-9]* begin .*name=\([a-z0-9]*\) peer_ms=.*/\1/p')
+	if [ "$NO_PEER" = 0 ]; then
+		[ -f "$SERIAL" ] && PHASES=$(tr -d '\r' < "$SERIAL" 2>/dev/null | sed -n 's/.*iwl7260_ap: phase [0-9][0-9]* begin .*name=\([a-z0-9]*\) peer_ms=.*/\1/p')
+	fi
 	while IFS= read -r ph; do
 		[ -n "$ph" ] || continue
 		[ -n "${seen_phase[$ph]:-}" ] && continue
@@ -234,26 +278,37 @@ done
 
 wait "$BOOT_PID" || true
 sleep 2
+if [ -n "${diag_mon_pid:-}" ]; then
+	kill "$diag_mon_pid" 2>/dev/null || true
+	pisu "pkill -f mon-diag.pcap" >/dev/null 2>&1 || true
+	diag_mon_pid=
+fi
 
 # The image identity check the banner cannot give: the case list is what says
 # this is the AP image and not whatever the last build left behind.
 if ! [ -f "$SERIAL" ] || ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_ap: core ready'; then
 	echo "ap-round: INVALID BOOT: no iwl7260_ap anchors (wrong image?)" >&2
 	echo "invalid: wrong image (no iwl7260_ap anchor)" > "$EVIDENCE/invalid.txt"
-	pih "servers-stop" >/dev/null 2>&1 || true
-	pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
+	if [ "$NO_PEER" = 0 ]; then
+		pih "servers-stop" >/dev/null 2>&1 || true
+		pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
+	fi
 	RESTORED=1
 	exit 2
 fi
 if [ "$WPA2" = 1 ] && ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_ap: security wpa2=1'; then
 	echo "ap-round: INVALID BOOT: --wpa2 but no security wpa2=1 anchor" >&2
 	echo "invalid: wpa2 image not deployed" > "$EVIDENCE/invalid.txt"
-	pih "servers-stop" >/dev/null 2>&1 || true
-	pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
+	if [ "$NO_PEER" = 0 ]; then
+		pih "servers-stop" >/dev/null 2>&1 || true
+		pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
+	fi
 	RESTORED=1
 	exit 2
 fi
-pih "servers-stop" >/dev/null 2>&1 || true
+if [ "$NO_PEER" = 0 ]; then
+	pih "servers-stop" >/dev/null 2>&1 || true
+fi
 [ -n "${beacon_pid:-}" ] && wait "$beacon_pid" 2>/dev/null || true
 [ -n "${wpa_mon_pid:-}" ] && wait "$wpa_mon_pid" 2>/dev/null || true
 [ -n "${mon_down_pid:-}" ] && wait "$mon_down_pid" 2>/dev/null || true
@@ -261,11 +316,13 @@ pih "servers-stop" >/dev/null 2>&1 || true
 for p in "${phase_pids[@]:-}"; do wait "$p" 2>/dev/null || true; done 2>/dev/null || true
 
 # --- A3 evidence from the AP side: the round's own log ----------------------
-pih "down" > "$EVIDENCE/bench-gate-after.txt" 2>&1 || true
+if [ "$NO_PEER" = 0 ]; then
+	pih "down" > "$EVIDENCE/bench-gate-after.txt" 2>&1 || true
+fi
 RESTORED=1
 
 # --- collect the Pi's receivers --------------------------------------------
-if pi "sudo -n test -d $PI_DIR"; then
+if [ "$NO_PEER" = 0 ] && pi "sudo -n test -d $PI_DIR"; then
 	pi "sudo -n tar -C $(dirname "$PI_DIR") -cf - $(basename "$PI_DIR")" \
 		| tar -C "$EVIDENCE" -xf -
 fi
@@ -276,12 +333,28 @@ for f in "$EVIDENCE"/"pi-ap-$TAG"/sink-*.txt; do
 	[ -e "$f" ] && cp "$f" "$EVIDENCE/" || true
 done
 
+if [ "$NO_PEER" = 0 ]; then
 {
 	echo "beacon=$PI_DIR/beacon.pcap wpa4way=$PI_DIR/wpa4way.pcap"
 	pisu "chmod 644 $PI_DIR/beacon.pcap 2>/dev/null || true"
 	pisu "sha256sum $PI_DIR/beacon.pcap 2>/dev/null || true"
 	pisu "tshark -r $PI_DIR/beacon.pcap -Y 'wlan.fc.type_subtype==8' -T fields -e wlan.bssid -e wlan.ssid -e wlan.fixed.beacon -e wlan.tim.dtim_period -e radiotap.channel.freq 2>/dev/null | sort -u | head -20" || true
 } > "$EVIDENCE/beacon-fields.txt" 2>&1 || true
+fi
+
+# The diagnostic arm needs the whole round on the air: when did the last
+# beacon leave the AP, relative to the last host interrupt?  tshark runs on
+# the Pi (the host has no dissector); the summary is computed here.
+if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 0 ]; then
+	pisu "chmod 644 $PI_DIR/mon-diag.pcap 2>/dev/null || true"
+	pisu "sha256sum $PI_DIR/mon-diag.pcap 2>/dev/null || true"
+	pisu "tshark -r $PI_DIR/mon-diag.pcap -Y 'wlan.fc.type_subtype==8' -T fields -e frame.time_relative -e wlan.sa -e wlan.seq 2>/dev/null" \
+		> "$EVIDENCE/air-beacon-diag.txt" || true
+	awk -F'\t' 'NF { n++; last=$1; if (n==1) first=$1; c[$2]++ }
+		END { printf "beacons=%d first=%s last=%s\n", n, first, last;
+		      for (k in c) printf "sa=%s frames=%d\n", k, c[k] }' \
+		"$EVIDENCE/air-beacon-diag.txt" > "$EVIDENCE/air-beacon-diag-summary.txt" 2>/dev/null || true
+fi
 
 if [ "$WPA2" = 1 ]; then
 	{

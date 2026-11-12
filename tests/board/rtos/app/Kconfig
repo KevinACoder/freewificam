@@ -24,6 +24,32 @@ config AP_WPA2
 	  source set, the driver table and the image's other cases are the same
 	  as the open AP profile.  Used by rk3568-iwl7260-ap-wpa2.
 
+config AP_DIAG
+	bool "iwl7260_ap runs the A4 stall diagnostic variant"
+	help
+	  Replaces the throughput table with the A4 diagnosis: the A3 pings,
+	  a post-ping probe, short UDP windows, a 1 s interrupt-freeze detector,
+	  NAPI/MMIO/CSR snapshots and the pre-registered verdict line.  The
+	  normal AP profiles leave this off; used by rk3568-iwl7260-ap-a4.
+
+config AP_DIAG_IDLE
+	bool "the A4 diagnostic idles the AP instead of using the peer"
+	depends on AP_DIAG
+	help
+	  Skips the station wait and the pings: the AP is started and left
+	  alone for 60 s while the interrupt-delivery delta is recorded.  This
+	  is the no-peer baseline for the traffic arm, not a stall test.
+	  Used by rk3568-iwl7260-ap-a4-idle.
+
+config AP_DIAG_TABLE
+	bool "the A4 diagnostic runs the standard phase table with probes"
+	depends on AP_DIAG
+	help
+	  Keeps the original round's exact seven-phase sequence and adds the
+	  diagnostic probe at every phase boundary, so a freeze lands on a
+	  named phase.  This is the faithful-reproduction arm; used by
+	  rk3568-iwl7260-ap-a4-table.
+
 config STA_SSID
 	string "G2 STA target SSID"
 	default ""

@@ -47,9 +47,13 @@ struct lkpi_pci_stats {
 	unsigned int	probe_errors;	/* probes that ran and failed */
 	unsigned int	irqs;		/* interrupts delivered to a handler */
 	unsigned int	irq_threads;	/* threaded halves actually run */
+	unsigned int	irq_threads_done; /* ... of which returned to the executor */
 	unsigned int	msi;		/* MSI vectors allocated */
 	unsigned int	dma_maps;	/* streaming maps */
 	unsigned int	errors;		/* seam calls that returned an error */
+	unsigned long	last_irq_jiffies;
+	unsigned long	last_thread_start_jiffies;
+	unsigned long	last_thread_done_jiffies;
 };
 
 const struct lkpi_pci_stats *lkpi_pci_stats_get(void);

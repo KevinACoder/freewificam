@@ -100,6 +100,7 @@ SRCS := \
 	$(CURDIR)/cases/ctx.c \
 	$(CURDIR)/cases/hostap_rx.c \
 	$(CURDIR)/cases/ccm.c \
+	$(CURDIR)/cases/napi.c \
 	$(CURDIR)/cases/selftest.c
 
 OBJS := $(patsubst %,$(BUILD)/obj/%.o,$(basename $(notdir $(SRCS))))

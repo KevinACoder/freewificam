@@ -19,6 +19,8 @@
 
 #include <net/mac80211.h>
 
+#include "linux80211/diag.h"
+
 extern unsigned int lkpi_tx_dequeue_depth;
 
 struct lkpi_tx_health {
@@ -202,4 +204,100 @@ int
 __wrap_iwl_mvm_send_cmd(void *mvm, void *cmd)
 {
 	return __real_iwl_mvm_send_cmd(mvm, cmd);
+}
+
+/*
+ * The A4 stall round's MMIO breadcrumbs.  The interrupt freeze's two host-side
+ * candidates are "the driver never re-wrote CSR_INT_MASK" and "the threaded
+ * half never returned"; a count of every mask/ack/doorbell access, with the
+ * last four carrying their caller and the NAPI poll depth, answers both without
+ * touching iwlwifi's bytes.  The four offsets are the adapter's interrupt-trace
+ * registers (iwl-csr.h) and the transmit doorbell (HBUS_TARG_WRPTR).
+ */
+extern unsigned int lkpi_napi_poll_depth;
+
+static struct lkpi_mmio_health lkpi_mmio_health;
+
+void
+lkpi_mmio_health_get(struct lkpi_mmio_health *out)
+{
+
+	if (out != NULL)
+		*out = lkpi_mmio_health;
+}
+
+static void
+lkpi_mmio_note(uint32_t ofs, uint32_t val, int write, const void *caller)
+{
+	struct lkpi_mmio_op *op;
+
+	switch (ofs) {
+	case LKPI_MMIO_CSR_INT:
+	case LKPI_MMIO_CSR_INT_MASK:
+	case LKPI_MMIO_CSR_FH_INT_STATUS:
+	case LKPI_MMIO_HBUS_TARG_WRPTR:
+		break;
+	default:
+		return;
+	}
+
+	if (write) {
+		if (ofs == LKPI_MMIO_CSR_INT_MASK) {
+			lkpi_mmio_health.mask_writes++;
+			if (val == 0u)
+				lkpi_mmio_health.mask_zero_writes++;
+		} else if (ofs == LKPI_MMIO_CSR_INT) {
+			lkpi_mmio_health.ack_writes++;
+		} else if (ofs == LKPI_MMIO_HBUS_TARG_WRPTR) {
+			lkpi_mmio_health.doorbell_writes++;
+		}
+	} else if (ofs == LKPI_MMIO_CSR_INT) {
+		lkpi_mmio_health.int_reads++;
+	} else if (ofs == LKPI_MMIO_CSR_FH_INT_STATUS) {
+		lkpi_mmio_health.fh_reads++;
+	}
+
+	op = &lkpi_mmio_health.ring[lkpi_mmio_health.ring_next];
+	op->tick = jiffies;
+	op->ofs = ofs;
+	op->val = val;
+	op->ctx = lkpi_napi_poll_depth;
+	op->caller = caller;
+	op->write = (uint8_t)(write ? 1 : 0);
+	lkpi_mmio_health.ring_next =
+	    (lkpi_mmio_health.ring_next + 1u) % LKPI_MMIO_RING_MAX;
+	if (lkpi_mmio_health.ring_count < LKPI_MMIO_RING_MAX)
+		lkpi_mmio_health.ring_count++;
+}
+
+extern u32 __real_iwl_read32(void *trans, u32 ofs);
+extern void __real_iwl_write32(void *trans, u32 ofs, u32 val);
+extern void __real_iwl_trans_pci_interrupts(void *trans, bool enable);
+
+u32
+__wrap_iwl_read32(void *trans, u32 ofs)
+{
+	u32 val = __real_iwl_read32(trans, ofs);
+
+	lkpi_mmio_note(ofs, val, 0, __builtin_return_address(0));
+	return val;
+}
+
+void
+__wrap_iwl_write32(void *trans, u32 ofs, u32 val)
+{
+
+	lkpi_mmio_note(ofs, val, 1, __builtin_return_address(0));
+	__real_iwl_write32(trans, ofs, val);
+}
+
+void
+__wrap_iwl_trans_pci_interrupts(void *trans, bool enable)
+{
+
+	if (enable)
+		lkpi_mmio_health.int_enable_calls++;
+	else
+		lkpi_mmio_health.int_disable_calls++;
+	__real_iwl_trans_pci_interrupts(trans, enable);
 }

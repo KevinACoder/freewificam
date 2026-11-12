@@ -57,6 +57,7 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "cases.h"
@@ -67,6 +68,7 @@
 #include "linux80211/nl80211_probe.h"
 #include "linux80211/hostap_ap.h"
 #include "linux80211/net.h"
+#include "linux80211/diag.h"
 #include "linuxkpi_pci.h"
 #include "adapter.h"
 
@@ -90,6 +92,29 @@
 #else
 #define AP_WPA2			0
 #define AP_PASSPHRASE		NULL
+#endif
+
+/*
+ * The A4 stall round's diagnostic variant: one image-level switch, set by
+ * rk3568-iwl7260-ap-a4.defconfig.  It runs the same A1-A3 bring-up, then the
+ * observation sequence (post-ping probe, short UDP windows, freeze detector,
+ * CSR/NAPI snapshots, mechanical verdict) instead of the throughput table.
+ * `idle` skips the peer entirely and idles the AP with the same detector.
+ */
+#if defined(CONFIG_AP_DIAG) && CONFIG_AP_DIAG
+#define AP_DIAG			1
+#else
+#define AP_DIAG			0
+#endif
+#if AP_DIAG && defined(CONFIG_AP_DIAG_IDLE) && CONFIG_AP_DIAG_IDLE
+#define AP_DIAG_IDLE		1
+#else
+#define AP_DIAG_IDLE		0
+#endif
+#if AP_DIAG && defined(CONFIG_AP_DIAG_TABLE) && CONFIG_AP_DIAG_TABLE
+#define AP_DIAG_TABLE		1
+#else
+#define AP_DIAG_TABLE		0
 #endif
 #define AP_WPA_WAIT_MS		10000u
 /* After the 4-way: leave the peer's own ping/ARP walk a full window before
@@ -167,6 +192,12 @@ struct ap_snap {
 	struct lkpi_net_stack_diag stack;
 	struct lkpi_skb_pool_stats pool;
 };
+
+#if AP_DIAG
+/* defined with the diagnostic sequence below; the table arm probes every
+ * phase's end through this forward declaration */
+static void ap_diag_probe(const char *tag, int full);
+#endif
 
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 int lkpi_fw_iwl7260_fw_register(void);
@@ -339,9 +370,255 @@ ap_run_phase(unsigned n, const struct ap_phase *ph)
 			    txh.ps_wake, txh.ps_buffered, lkpi_hostap_ready(),
 			    lkpi_hostap_sta_count());
 	}
+#if AP_DIAG && AP_DIAG_TABLE
+	{
+		char tag[16];
+
+		(void)snprintf(tag, sizeof(tag), "phase-%u", n);
+		ap_diag_probe(tag, 2);
+	}
+#endif
 	CASE_ANCHOR("iwl7260_ap: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);
 	return rc;
 }
+
+#if AP_DIAG
+/* --- the A4 stall round's observation sequence ----------------------------
+ *
+ * The question is not "is the data path slow" but "who stopped first".  Every
+ * probe reads only counters and the four interrupt-status registers; the
+ * freeze detector is a 1 s window on the interrupt delivery count, and the
+ * verdict is the pre-registered table from docs/HANDOFF-AP-A4-TX-STALL.md:
+ *
+ *   thread-hung  the threaded half entered and never returned (started > done)
+ *   napi-budget  the mask is zero and a poll returned the whole budget
+ *   mask-zero    the mask is zero with no budget hit (unresolved, needs a probe)
+ *   delivery     the mask is set and a cause is pending (MSI/GIC, not the device)
+ *   fw-silent    the mask is set and nothing is pending (the device is quiet)
+ *
+ * The idle arm never claims a freeze: with no traffic, a flat interrupt count
+ * is the expected baseline.  It reports the interrupt delta over a 60 s idle
+ * window instead, which is what tells whether the AP's beacons reach the host
+ * as notifications at all.
+ */
+static void
+ap_diag_probe(const char *tag, int full)
+{
+	struct lkpi_napi_health napi;
+	struct lkpi_mmio_health mmio;
+	struct lkpi_tx_health txh;
+	struct lkpi_skb_pool_stats pool;
+	const struct lkpi_pci_stats *pci = lkpi_pci_stats_get();
+	struct lkpi_pcie_csr_snap csr;
+	struct lkpi_pcie_csr_snap ring[8];
+	unsigned int i, n;
+	int csr_rc;
+
+	lkpi_napi_health_get(&napi);
+	lkpi_mmio_health_get(&mmio);
+	lkpi_tx_health_get(&txh);
+	lkpi_skb_pool_stats(&pool);
+
+	CASE_ANCHOR("iwl7260_ap: diag probe tag=%s irq_hard=%u irq_thread=%u "
+		    "thread_done=%u napi_sched=%lu napi_polls=%lu "
+		    "napi_budget=%lu napi_comp=%lu napi_ret=%lu napi_rx=%lu "
+		    "skb=%u/%u tx_status=%lu iwl_tx=%lu dq=%lu\n",
+		    tag, pci->irqs, pci->irq_threads, pci->irq_threads_done,
+		    napi.schedules, napi.polls, napi.budget_hits,
+		    napi.completes, napi.last_ret, napi.rounds_exhausted,
+		    (unsigned)pool.skb_used,
+		    (unsigned)pool.skb_high, txh.tx_status, txh.iwl_tx,
+		    txh.dequeue_calls);
+	CASE_ANCHOR("iwl7260_ap: diag mmio tag=%s mask_wr=%lu mask0=%lu "
+		    "ack=%lu doorbell=%lu int_rd=%lu fh_rd=%lu en=%lu dis=%lu\n",
+		    tag, mmio.mask_writes, mmio.mask_zero_writes,
+		    mmio.ack_writes, mmio.doorbell_writes, mmio.int_reads,
+		    mmio.fh_reads, mmio.int_enable_calls, mmio.int_disable_calls);
+	/*
+	 * The breadcrumbs go out before the CSR read: the last mask write is
+	 * the one fact the task-context read could otherwise take with it if the
+	 * device is wedged (the 2026-11-12 read hung the board once).
+	 */
+	if (full == 1) {
+		for (i = 0; i < mmio.ring_count; i++) {
+			unsigned int idx = (mmio.ring_next + LKPI_MMIO_RING_MAX -
+			    mmio.ring_count + i) % LKPI_MMIO_RING_MAX;
+			struct lkpi_mmio_op *op = &mmio.ring[idx];
+
+			CASE_ANCHOR("iwl7260_ap: diag mmio-op tag=%s i=%u w=%u "
+				    "ofs=0x%03x val=0x%08x ctx=%u tick=%lu "
+				    "caller=0x%lx\n",
+				    tag, i, (unsigned)op->write, (unsigned)op->ofs,
+				    (unsigned)op->val, (unsigned)op->ctx, op->tick,
+				    (unsigned long)(uintptr_t)op->caller);
+		}
+	}
+	if (full == 2) {
+		/* counters only: the table arm's per-phase probe must not add a
+		 * device read between phases */
+		return;
+	}
+	csr_rc = lkpi_pcie_csr_snapshot(&csr);
+	CASE_ANCHOR("iwl7260_ap: diag csr tag=%s rc=%d int=0x%08x mask=0x%08x "
+		    "fh=0x%08x reset=0x%08x tick=%lu\n",
+		    tag, csr_rc,
+		    csr_rc == 0 ? (unsigned)csr.int_status : 0u,
+		    csr_rc == 0 ? (unsigned)csr.int_mask : 0u,
+		    csr_rc == 0 ? (unsigned)csr.fh_status : 0u,
+		    csr_rc == 0 ? (unsigned)csr.reset : 0u,
+		    csr_rc == 0 ? csr.tick : 0ul);
+	if (full != 1)
+		return;
+	n = lkpi_pcie_csr_irq_ring(ring, 8u);
+	for (i = 0; i < n; i++)
+		CASE_ANCHOR("iwl7260_ap: diag csr-ring tag=%s i=%u tick=%lu "
+			    "int=0x%08x mask=0x%08x fh=0x%08x reset=0x%08x\n",
+			    tag, i, ring[i].tick,
+			    (unsigned)ring[i].int_status,
+			    (unsigned)ring[i].int_mask,
+			    (unsigned)ring[i].fh_status,
+			    (unsigned)ring[i].reset);
+}
+
+static int
+ap_diag_frozen(unsigned int hold_ms, unsigned int *hard_out)
+{
+	unsigned long t0 = jiffies;
+	unsigned int h0, h;
+
+	lkpi_pci_irq_counters(&h0, NULL);
+	while ((jiffies - t0) < (unsigned long)hold_ms) {
+		osDelay(50u);
+		lkpi_pci_irq_counters(&h, NULL);
+		if (h != h0) {
+			if (hard_out != NULL)
+				*hard_out = h;
+			return 0;
+		}
+	}
+	if (hard_out != NULL)
+		*hard_out = h0;
+	return 1;
+}
+
+static void
+ap_diag_verdict(const char *where, unsigned int hard)
+{
+	const struct lkpi_pci_stats *pci = lkpi_pci_stats_get();
+	struct lkpi_napi_health napi;
+	struct lkpi_pcie_csr_snap csr;
+	const char *v;
+	int csr_rc;
+
+	lkpi_napi_health_get(&napi);
+	csr_rc = lkpi_pcie_csr_snapshot(&csr);
+	if (pci->irq_threads > pci->irq_threads_done)
+		v = "thread-hung";
+	else if (csr_rc == 0 && csr.int_mask == 0u &&
+		 napi.budget_hits != 0ul)
+		v = "napi-budget";
+	else if (csr_rc == 0 && csr.int_mask == 0u)
+		v = "mask-zero";
+	else if (csr_rc == 0 &&
+		 (csr.int_status != 0u || csr.fh_status != 0u))
+		v = "delivery";
+	else if (csr_rc == 0)
+		v = "fw-silent";
+	else
+		v = "no-csr";
+	CASE_ANCHOR("iwl7260_ap: diag verdict=%s where=%s irq_hard=%u "
+		    "thread=%u done=%u csr_rc=%d budget=%lu\n",
+		    v, where, hard, pci->irq_threads,
+		    pci->irq_threads_done, csr_rc, napi.budget_hits);
+}
+
+static int
+ap_diag_run(void)
+{
+	unsigned int hard = 0u;
+
+	CASE_ANCHOR("iwl7260_ap: diag begin mode=%s\n",
+		    AP_DIAG_IDLE ? "idle" : "traffic");
+#if AP_DIAG_IDLE
+	{
+		unsigned int h0, h1;
+		unsigned long t0 = jiffies;
+
+		lkpi_pci_irq_counters(&h0, NULL);
+		ap_diag_probe("idle-start", 0);
+		while ((jiffies - t0) < 60000ul) {
+			osDelay(5000u);
+			ap_diag_probe("idle", 0);
+		}
+		lkpi_pci_irq_counters(&h1, NULL);
+		CASE_ANCHOR("iwl7260_ap: diag idle delta=%u over_ms=%lu "
+			    "hard_end=%u\n", h1 - h0,
+			    (unsigned long)(jiffies - t0), h1);
+	}
+	(void)hard;
+#else
+	ap_diag_probe("after-a3", 0);
+	if (ap_diag_frozen(1000u, &hard)) {
+		ap_diag_probe("stall", 1);
+		ap_diag_verdict("after-a3", hard);
+		return 0;
+	}
+	/*
+	 * The original round's quiet window: A3 ends at ~22 s, the phase-1
+	 * census at ~32 s already showed the freeze, and phase 1 itself ran no
+	 * over-the-air data.  A 20 s idle here is the same shape (only the AP's
+	 * own beacon/management activity); the detector runs continuously so a
+	 * freeze inside the window is caught where it happens, not at its end.
+	 */
+	{
+		unsigned int i;
+
+		for (i = 0u; i < 20u; i++) {
+			if (ap_diag_frozen(1000u, &hard)) {
+				ap_diag_probe("stall", 1);
+				ap_diag_verdict("idle-window", hard);
+				return 0;
+			}
+		}
+	}
+	ap_diag_probe("idle20", 0);
+	/*
+	 * Then the handoff's minimal repro: one sustained 20 s UDP downlink at
+	 * the preregistered 40 Mbit/s.  Two windows, because the original
+	 * freeze was not tied to a frame count.
+	 */
+	{
+		unsigned int r;
+
+		for (r = 1u; r <= 2u; r++) {
+			struct lkpi_net_phase rep;
+
+			(void)memset(&rep, 0, sizeof(rep));
+			(void)lkpi_net_udp_blast(AP_PEER_IP, AP_UDP_PORT,
+						 20000u, 40000u, &rep);
+			CASE_ANCHOR("iwl7260_ap: diag blast round=%u bytes=%u "
+				    "kbit=%u\n", r, rep.bytes, rep.kbit);
+			ap_diag_probe("udp", 0);
+			if (ap_diag_frozen(1000u, &hard)) {
+				ap_diag_probe("stall", 1);
+				ap_diag_verdict("udp", hard);
+				return 0;
+			}
+		}
+	}
+	osDelay(3000u);
+	ap_diag_probe("idle", 0);
+	if (ap_diag_frozen(1000u, &hard)) {
+		ap_diag_probe("stall", 1);
+		ap_diag_verdict("idle", hard);
+		return 0;
+	}
+#endif
+	CASE_ANCHOR("iwl7260_ap: diag verdict=none where=%s\n",
+		    AP_DIAG_IDLE ? "idle" : "traffic");
+	return 0;
+}
+#endif /* AP_DIAG */
 
 int
 case_iwl7260_ap_run(void)
@@ -441,6 +718,27 @@ case_iwl7260_ap_run(void)
 		return 6;
 	}
 
+#if AP_DIAG
+	/*
+	 * The task-context CSR read's sanity check, taken while the device is
+	 * known awake and before any traffic.  If this line does not appear the
+	 * read itself is unsafe on this port and the boot is invalid; if it does,
+	 * the same read after a freeze is credible.
+	 */
+	{
+		struct lkpi_pcie_csr_snap early;
+		int early_rc = lkpi_pcie_csr_snapshot(&early);
+
+		CASE_ANCHOR("iwl7260_ap: diag csr-early rc=%d int=0x%08x "
+			    "mask=0x%08x fh=0x%08x reset=0x%08x\n",
+			    early_rc,
+			    early_rc == 0 ? (unsigned)early.int_status : 0u,
+			    early_rc == 0 ? (unsigned)early.int_mask : 0u,
+			    early_rc == 0 ? (unsigned)early.fh_status : 0u,
+			    early_rc == 0 ? (unsigned)early.reset : 0u);
+	}
+#endif
+
 	/*
 	 * The lwIP netif comes before hostapd: the NXP entry derives the
 	 * interface name it configures from the port's uAP netif
@@ -483,6 +781,17 @@ case_iwl7260_ap_run(void)
 	 * al. may sleep; the RX path may not).
 	 */
 	CASE_ANCHOR("iwl7260_ap: peer window ms=%u\n", AP_PEER_WINDOW_MS);
+
+#if AP_DIAG && AP_DIAG_IDLE
+	/*
+	 * The idle arm: no peer, no station, no traffic.  It answers whether the
+	 * AP's own beacons reach the host as notifications at all, which is the
+	 * baseline the traffic arm's freeze is read against.
+	 */
+	(void)ap_diag_run();
+	CASE_ANCHOR("iwl7260_ap: PASS APD\n");
+	return 0;
+#endif
 
 	/*
 	 * --- A2: hand the queued management frames to hostapd -----------
@@ -585,6 +894,24 @@ case_iwl7260_ap_run(void)
 	CASE_ANCHOR("iwl7260_ap: PASS AP\n");
 	ap_ok = 1;
 
+#if AP_DIAG && !AP_DIAG_IDLE && !AP_DIAG_TABLE
+	/*
+	 * The traffic arm: the A4 diagnostic replaces the throughput table.  It
+	 * runs the same A3 pings first (the freeze has been observed before the
+	 * UDP phase), probes once, then drives short UDP windows while watching
+	 * the interrupt-delivery count.  The verdict is the pre-registered
+	 * table; the throughput table is the fixed image's arm, not this one.
+	 */
+	(void)ap_diag_run();
+	CASE_ANCHOR("iwl7260_ap: PASS APD\n");
+	return 0;
+#endif
+#if AP_DIAG && AP_DIAG_TABLE
+	/* The table arm keeps the original round's exact phase sequence and
+	 * probes at every boundary, so the freeze lands on a named phase. */
+	ap_diag_probe("pre-table", 0);
+#endif
+
 	/* --- A4: the phase table ---------------------------------------- */
 	rc = lkpi_net_iperf_server_start(AP_TCP_PORT);
 	if (rc == 0)
@@ -607,6 +934,28 @@ case_iwl7260_ap_run(void)
 		}
 	}
 
+#if AP_DIAG && AP_DIAG_TABLE
+	{
+		unsigned int hard = 0u;
+
+		/*
+		 * A verdict is only meaningful at a freeze: on a healthy table the
+		 * mask is non-zero and nothing is pending, which the table would
+		 * otherwise mislabel as fw-silent.  The detector is the same 1 s
+		 * window the traffic arm uses.
+		 */
+		if (ap_diag_frozen(1000u, &hard)) {
+			ap_diag_probe("post-table", 1);
+			ap_diag_verdict("table", hard);
+		} else {
+			ap_diag_probe("post-table", 0);
+			CASE_ANCHOR("iwl7260_ap: diag verdict=none "
+				    "where=table\n");
+		}
+		CASE_ANCHOR("iwl7260_ap: PASS APD\n");
+		return 0;
+	}
+#endif
 	if (ok == AP_TRAFFIC_PHASES && ap_ok) {
 		CASE_ANCHOR("iwl7260_ap: PASS APT\n");
 		return 0;

@@ -43,6 +43,8 @@
 #include <linux/netdevice.h>
 #include <net/cfg80211.h>
 
+#include "linux80211/diag.h"
+
 /* ------------------------------------------------------------------ */
 /* the device registry                                                 */
 /* ------------------------------------------------------------------ */
@@ -607,6 +609,26 @@ napi_disable(struct napi_struct *n)
 }
 
 /*
+ * The A4 round's first observation: how many times a poll returned the whole
+ * budget.  On Linux the receive softirq re-polls until a poll returns less
+ * than its weight, and only that poll re-enables the device interrupt
+ * (iwlwifi's iwl_pcie_napi_poll()).  This port runs the poll inline in the
+ * threaded interrupt and never re-arms it, so a hit is the difference between
+ * "the device went quiet" and "the host stopped asking" - the 2026-11-12
+ * stall's first candidate.  Counters only: the scheduling semantics are not
+ * changed here.
+ */
+static struct lkpi_napi_health lkpi_napi_health;
+
+void
+lkpi_napi_health_get(struct lkpi_napi_health *out)
+{
+
+	if (out != NULL)
+		*out = lkpi_napi_health;
+}
+
+/*
  * [LNX] include/linux/netdevice.h:592: `bool napi_complete_done(struct
  * napi_struct *n, int work_done)` returns false when the device should avoid
  * rearming interrupts. This port has no interrupt to rearm (the poll runs inline
@@ -621,6 +643,8 @@ napi_complete_done(struct napi_struct *n, int work_done)
 	(void)work_done;
 	if (n == NULL)
 		return false;
+	lkpi_napi_health.completes++;
+	lkpi_napi_health.last_complete_jiffies = jiffies;
 	clear_bit(NAPI_STATE_SCHED, &n->state);
 	return true;
 }
@@ -994,9 +1018,19 @@ napi_schedule_prep(struct napi_struct *n)
 	return !test_and_set_bit(NAPI_STATE_SCHED, &n->state);
 }
 
+/*
+ * The re-poll bound.  The receive ring is 256 entries (RX_QUEUE_SIZE), and one
+ * poll consumes at most `weight - 1` = 63 of them, so five rounds drain a full
+ * ring; sixteen leaves the counter room to prove a drain that is not making
+ * progress instead of spinning forever in the interrupt thread.
+ */
+#define LKPI_NAPI_ROUNDS_MAX	16u
+
 void
 __napi_schedule(struct napi_struct *n)
 {
+	int ret = 0;
+	unsigned int weight, round;
 
 	if (n == NULL || n->poll == NULL)
 		return;
@@ -1004,8 +1038,31 @@ __napi_schedule(struct napi_struct *n)
 		clear_bit(NAPI_STATE_SCHED, &n->state);
 		return;
 	}
-	lkpi_napi_poll_depth++;
-	(void)n->poll(n, n->weight);
-	lkpi_napi_poll_depth--;
+	weight = (n->weight != 0) ? (unsigned int)n->weight : 64u;
+	lkpi_napi_health.schedules++;
+	lkpi_napi_health.last_schedule_jiffies = jiffies;
+	lkpi_napi_health.last_weight = (unsigned long)weight;
+	/*
+	 * Linux's receive softirq polls until a poll returns less than its
+	 * budget; only that poll re-enables the device interrupt
+	 * (iwlwifi's iwl_pcie_napi_poll() writes CSR_INT_MASK from inside it).
+	 * This port runs the poll inline in the threaded interrupt, so the
+	 * repeat has to be here: a single poll that returned the whole budget
+	 * left CSR_INT_MASK at zero and nothing scheduled another one - the
+	 * 2026-11-12 AP stall's exact shape (napi_ret=64, napi_comp one short
+	 * of napi_polls, IRQ thread returned, hard count frozen).
+	 */
+	for (round = 0u; round < LKPI_NAPI_ROUNDS_MAX; round++) {
+		lkpi_napi_poll_depth++;
+		ret = n->poll(n, (int)weight);
+		lkpi_napi_poll_depth--;
+		lkpi_napi_health.polls++;
+		lkpi_napi_health.last_ret = (unsigned long)ret;
+		if (ret < (int)weight)
+			break;
+		lkpi_napi_health.budget_hits++;
+	}
+	if (ret >= (int)weight)
+		lkpi_napi_health.rounds_exhausted++;
 	clear_bit(NAPI_STATE_SCHED, &n->state);
 }

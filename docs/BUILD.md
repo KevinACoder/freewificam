@@ -44,6 +44,8 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-iwl7260-stab` | tick pcie iwl7260_c5 iwl7260_stab | C5's join plus the stability case: 30-minute TCP downlink with a 30 s health line, then ten disconnect/scan/connect/ping cycles; carries the accepted pool128 configuration |
 | `rk3568-iwl7260-ap` | tick pcie iwl7260_ap | the AC 7260 becomes the AP: `SET_INTERFACE` on the down interface, `START_AP` with the GT-derived beacon template, the AP phase table; A1 (beacon on air) reaches 2/2, association waits on the userspace AP MLME (docs/decisions/2026-11-11-ap-mode.md) |
 | `rk3568-iwl7260-ap-wpa2` | tick pcie iwl7260_ap | the same AP with WPA2-PSK/CCMP (`CONFIG_AP_WPA2=y`): passphrase, 4-way, PTK+GTK `set_key`, `PASS APW`; it stops after A3 and does not run the A4 phase table (A4 is blocked independently) |
+| `rk3568-iwl7260-ap-a4` | tick pcie iwl7260_ap | the A4 transmit-stall diagnostic (`CONFIG_AP_DIAG=y`, `CONFIG_LKPI_PCIE_CSR_SNAPSHOT=y`): the A1–A3 bring-up, then the post-ping probe, short UDP windows, the 1 s interrupt-freeze detector, NAPI/MMIO/CSR snapshots and the pre-registered `diag verdict`; its PASS line is `PASS APD`, the throughput arm stays the plain AP profile |
+| `rk3568-iwl7260-ap-a4-idle` | tick pcie iwl7260_ap | the same diagnostic with `CONFIG_AP_DIAG_IDLE=y`: no peer, no station, the AP idles for 60 s and the run records the interrupt-delivery delta (the traffic arm's baseline, not a stall verdict) |
 | `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
 
 ```

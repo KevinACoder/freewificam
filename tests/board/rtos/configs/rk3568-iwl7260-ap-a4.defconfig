@@ -1,0 +1,54 @@
+# mac80211 on the RTOS line, AP round: the A4 transmit-stall diagnostic.
+# The A1-A3 bring-up is the open AP profile's; after A3 the case runs the
+# observation sequence (post-ping probe, short UDP windows, interrupt-freeze
+# detector, NAPI/MMIO/CSR snapshot, mechanical verdict) instead of the
+# throughput table.  This image's PASS line is APD, not APT; the throughput
+# arm is the fixed rk3568-iwl7260-ap image.
+#
+# The bring-up is the C4/C5 one (core, firmware, PCI); the case changes the
+# default STA interface in place with the real NL80211_CMD_SET_INTERFACE
+# stream (down interface, no driver op), opens it, and sends the real
+# NL80211_CMD_START_AP stream with the beacon head/tail derived from the GT
+# arm's on-air hostapd beacon.  The lwIP netif is assembled over the same
+# wlan0 with 192.168.99.1/24 and no gateway.
+#
+# The pool/heap are the accepted C6 configuration on purpose (pool 128, heap
+# 16 MiB): the AP round is a new question, not a stack of old levers.
+#
+# The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product that also redistributes the Intel firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick pcie iwl7260_ap"
+CONFIG_LKPI_SKB_DATA_POOL_NUM=128
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=y
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_IWLWIFI=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The AP MLME: the imported hostapd AP stack (third-party/hostap) instead of
+# the hand-written userspace half.  See docs/decisions/2026-11-12-ap-mlme-port.md.
+CONFIG_HOSTAP_AP=y
+
+# The A4 stall diagnostic: NAPI scheduling counters, the interrupt half's
+# started/done pair, the MMIO breadcrumbs, and the task-context CSR read.
+# Only this profile compiles the CSR read in (the normal images do not).
+CONFIG_AP_DIAG=y
+CONFIG_LKPI_PCIE_CSR_SNAPSHOT=y
+
+# mac80211 allocates its local/wiphy/netdev/BSS/station records from the
+# FreeRTOS heap (osMemoryAlloc -> pvPortMalloc); the AP's beacon templates and
+# the lwIP pool/pbufs/TCP-IP thread stack come from the same heap.
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+
+# The AP case drives the MLME's nl80211 commands from the runner task
+# (NL80211_CMD_NEW_STATION / SET_STATION / FRAME), and those enter mac80211 and
+# iwlwifi with their own locals.  The 2026-11-12 first boot overflowed the 8 KiB
+# default right after NEW_STATION succeeded; 24 KiB covers the chain and is
+# still nothing against the 16 MiB heap.
+CONFIG_RUNNER_STACK_KB=24

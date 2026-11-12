@@ -77,6 +77,9 @@ WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=iwl_trans_pcie_tx \
 	-Wl,--wrap=iwl_trans_pcie_send_hcmd \
 	-Wl,--wrap=iwl_mvm_send_cmd \
+	-Wl,--wrap=iwl_read32 \
+	-Wl,--wrap=iwl_write32 \
+	-Wl,--wrap=iwl_trans_pci_interrupts \
 	-Wl,--wrap=ieee80211_sta_ps_transition \
 	-Wl,--wrap=ieee80211_sta_set_buffered
 

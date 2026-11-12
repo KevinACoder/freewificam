@@ -1,6 +1,6 @@
 # STATUS
 
-- Updated: 2026-11-12 (AP port: hostapd AP MLME on the board)
+- Updated: 2026-11-12 (A4 TX stall: root cause found and fixed; down/UDP pass, up open)
 - Stage: **the imported wireless stack registers, the AC 7260 attaches, joins
   the bench AP and moves data through lwIP**.  C0/C1/C2/C3/C4 are 2/2 cold
   boots; C5-open and C6-open (ICMP over wl0) are 2/2 in
@@ -31,7 +31,7 @@ below it has been reached; "compiles" and "links" are not "runs".
 | A0/A1 AP | the AC 7260 becomes an AP: `SET_INTERFACE rc=0 type=AP`, `START_AP rc=0`, monitor sees its beacons with the GT IE order and its probe responses **2/2**; the Pi's scan lists the BSS - `runs/2026-11-12-iwl7260-ap/`, ADR `2026-11-11-ap-mode.md` |
 | A2/A3 AP (hostapd) | **reached, repeated**: the AP MLME is the ported NXP hostapd (`third-party/wpa_supplicant-rtos`), not the hand-written one. `hostap start rc=0 ready=1`, the Pi associates, hostapd's station table and `NL80211_CMD_SET_STATION(AUTHORIZED)` land, both ping payloads 20/20 (RTT 1-2 ms) in 6 of 9 rounds of 2026-11-12 - `runs/2026-11-12-iwl7260-ap-port/`, ADR `2026-11-12-ap-mlme-port.md` |
 | A5 AP-WPA2 (G1) | **reached 2/2**: the 7260 is a WPA2-PSK/CCMP AP and the Pi's MT7921AU completes the 4-way. PTK+GTK `set_key rc=0`, 4/5 EAPOL frames on air, `wpa_state=COMPLETED`, 56/1400 B ICMP 20/20 **both directions**, dynamic ARP `REACHABLE`, `PASS APW`, judge PASS. The round also added a real `ccm(aes)` provider (`runs/2026-11-12-iwl7260-ap-wpa2/`, ADR `2026-11-12-ap-wpa2.md`) |
-| A4 AP | **blocked**: the first sustained TCP/UDP flow stops the device. Evidence: 258 frames handed to the transport, only 67 completions, PCIe hard interrupts frozen at 790, the air loses the firmware's own beacons, and the skb pool (128) fills (`tx_fail` 135k). Ruled out: aggregation (HT off), `CMD_BLOCK_TXQS` host commands, workqueue starvation, the missing I/O barrier. See `runs/2026-11-12-iwl7260-ap-port/RUN.md` |
+| A4 AP | **TX stall fixed**: the stop was the port's single-shot NAPI poll, not the device. A poll returned the whole budget (`napi_ret=64`), iwlwifi's poll therefore did not re-enable `CSR_INT_MASK`, and the port cleared SCHED without a second poll; the device still had pending RX (`int=0x92000000 mask=0`). Root cause 2/2 (`table1/table2`), fix validated (`fix1` verdict=none; standard AP arm `a4-1b`/`a4-2` both `PASS APT`). A4-P2: TCP down 73.2 Mbit/s (99.9% of GT 73.3), UDP 40M loss <=0.12%, app-vs-app <=0.11% pass; **TCP up 43.9 Mbit/s (57.3% of GT 76.6) fails the 80% gate** - the board RX path, next round. See `runs/2026-11-12-iwl7260-ap-a4/RUN.md`, ADR `docs/decisions/2026-11-12-ap-a4-napi-budget.md` |
 | K1/K2 context | the host semantic bench and the three execution-context experiments | **reached on the host model**: 33/33 cases, `--break` red; ADR `2026-11-10-execution-context-model.md`; not board evidence |
 
 ## Receipts

@@ -88,6 +88,7 @@ int kpi_case_ctx_disable_enable(void);
 int kpi_case_ctx_bh_defers(void);
 int kpi_case_hostap_rx(void);
 int kpi_case_ccm(void);
+int kpi_case_napi_budget(void);
 int kpi_case_ctx_nesting(void);
 int kpi_case_ctx_in_softirq(void);
 int kpi_case_ctx_spin_bh(void);
@@ -131,6 +132,7 @@ static const struct kpi_case cases[] = {
 	{ "ctx_rcu", kpi_case_ctx_rcu },
 	{ "hostap_rx", kpi_case_hostap_rx },
 	{ "ccm", kpi_case_ccm },
+	{ "napi_budget", kpi_case_napi_budget },
 	{ "selftest", kpi_case_selftest },
 };
 

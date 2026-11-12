@@ -331,6 +331,16 @@ PATTERNS = {
     "iwl7260_ap_pass_apw": re.compile(r"iwl7260_ap: PASS APW", re.MULTILINE),
     "iwl7260_ap_pass_ap": re.compile(r"iwl7260_ap: PASS AP", re.MULTILINE),
     "iwl7260_ap_pass_apt": re.compile(r"iwl7260_ap: PASS APT", re.MULTILINE),
+    # The A4 stall round's diagnostic arm (rk3568-iwl7260-ap-a4[-idle]):
+    # the A1-A3 anchors are the same; the PASS line and the verdict are its
+    # own, and the idle arm has no station or ping by construction.
+    "iwl7260_ap_pass_apd": re.compile(r"iwl7260_ap: PASS APD", re.MULTILINE),
+    "iwl7260_ap_diag_mode": re.compile(
+        r"iwl7260_ap: diag begin mode=(?P<mode>[a-z]+)", re.MULTILINE
+    ),
+    "iwl7260_ap_diag_verdict": re.compile(
+        r"iwl7260_ap: diag verdict=(?P<verdict>[a-z-]+)", re.MULTILINE
+    ),
     "iwl7260_ap_fail": re.compile(
         r"iwl7260_ap: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
@@ -1964,23 +1974,38 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"iwl7260_ap: netif {netif['name']} {netif['ip']}")
         if not found["iwl7260_ap_peer_window"]:
             errors.append("iwl7260_ap: PASS without the peer window")
-        sta = found["iwl7260_ap_sta"]
-        if not sta:
-            errors.append("iwl7260_ap: PASS without a station add line")
-        elif int(sta["n"]) < 1 or sta["mac"].startswith("00:00:00"):
-            errors.append(f"iwl7260_ap: station {sta['mac']} n={sta['n']}")
-        else:
-            notes.append(f"iwl7260_ap: station {sta['mac']}")
-        pings = {p["payload"]: p for p in found["iwl7260_ap_ping"]}
-        for payload in ("56", "1400"):
-            p = pings.get(payload)
-            if p is None:
+        diag = found["iwl7260_ap_pass_apd"]
+        diag_mode = found["iwl7260_ap_diag_mode"]
+        diag_idle = bool(diag and diag_mode and diag_mode["mode"] == "idle")
+        if not diag_idle:
+            sta = found["iwl7260_ap_sta"]
+            if not sta:
+                errors.append("iwl7260_ap: PASS without a station add line")
+            elif int(sta["n"]) < 1 or sta["mac"].startswith("00:00:00"):
                 errors.append(
-                    f"iwl7260_ap: no ping anchor for payload {payload}")
-            elif p["tx"] != "20" or p["rx"] != "20":
+                    f"iwl7260_ap: station {sta['mac']} n={sta['n']}")
+            else:
+                notes.append(f"iwl7260_ap: station {sta['mac']}")
+            pings = {p["payload"]: p for p in found["iwl7260_ap_ping"]}
+            for payload in ("56", "1400"):
+                p = pings.get(payload)
+                if p is None:
+                    errors.append(
+                        f"iwl7260_ap: no ping anchor for payload {payload}")
+                elif p["tx"] != "20" or p["rx"] != "20":
+                    errors.append(
+                        f"iwl7260_ap: ping {payload} tx={p['tx']} "
+                        f"rx={p['rx']}")
+        if diag:
+            dv = found["iwl7260_ap_diag_verdict"]
+            if not dv:
                 errors.append(
-                    f"iwl7260_ap: ping {payload} tx={p['tx']} rx={p['rx']}")
-        if found["iwl7260_ap_pass_apw"]:
+                    "iwl7260_ap: APD PASS without a diag verdict line")
+            else:
+                notes.append(
+                    f"iwl7260_ap: diag verdict={dv['verdict']} "
+                    f"mode={diag_mode['mode'] if diag_mode else '?'}")
+        elif found["iwl7260_ap_pass_apw"]:
             # WPA2 variant: the gate is the handshake and the ping-level data
             # plane.  A4's phase table is not part of this profile.
             sec = found["iwl7260_ap_security"]
@@ -2016,7 +2041,7 @@ def judge(text: str, expect: dict | None = None) -> dict:
         else:
             if not found["iwl7260_ap_pass_ap"]:
                 errors.append("iwl7260_ap: the AP PASS line is missing")
-        if not found["iwl7260_ap_pass_apw"]:
+        if not diag and not found["iwl7260_ap_pass_apw"]:
             begins = {b["name"]: b for b in found["iwl7260_ap_begin"]}
             reports = {r["n"]: r for r in found["iwl7260_ap_report"]}
             dones = {d["n"]: d for d in found["iwl7260_ap_done"]}

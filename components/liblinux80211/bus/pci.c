@@ -142,8 +142,11 @@ lkpi_pci_irq_thread_work(struct work_struct *w)
 	    container_of(w, struct lkpi_pci_irq_slot, thread_work);
 
 	lkpi_pci_stats.irq_threads++;
+	lkpi_pci_stats.last_thread_start_jiffies = jiffies;
 	if (slot->thread_fn != NULL)
 		(void)slot->thread_fn(slot->intid, slot->dev);
+	lkpi_pci_stats.irq_threads_done++;
+	lkpi_pci_stats.last_thread_done_jiffies = jiffies;
 }
 
 /*
@@ -181,6 +184,7 @@ lkpi_pci_irq_trampoline(void *arg)
 	irqreturn_t ret;
 
 	lkpi_pci_stats.irqs++;
+	lkpi_pci_stats.last_irq_jiffies = jiffies;
 	if (slot->fn == NULL)
 		return;
 	ret = slot->fn(slot->intid, slot->dev);

@@ -24,6 +24,15 @@ config LIBLINUX80211_PCI
 	  interrupt plumbing.  The RK3568 adapter (ports/pci-rk3568) implements
 	  the seam over the board's DesignWare root complex.
 
+config LKPI_PCIE_CSR_SNAPSHOT
+	bool "PCI CSR task-context snapshot (stall diagnosis)"
+	depends on LIBLINUX80211_PCI
+	help
+	  Compiles the AC 7260's four interrupt-status registers into a
+	  task-context read for the A4 diagnostic profile.  Off in every normal
+	  image: the 2026-11-12 round hung the board once on a task-context BAR0
+	  read, so the read is opt-in and only the diag case calls it.
+
 config LIBLINUX80211_SDIO
 	bool "SDIO engine"
 	help
