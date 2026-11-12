@@ -171,7 +171,7 @@ on_phase() {		# $1 = name
 }
 
 for _ in $(seq 1 3000); do
-	if [ "$seen_start_ap" = 0 ] && anchor 'iwl7260_ap: start_ap rc=0'; then
+	if [ "$seen_start_ap" = 0 ] && anchor 'iwl7260_ap: (start_ap|hostap start) rc=0'; then
 		seen_start_ap=1
 		# A1's on-air probe: full-length beacons on the AP's channel, started
 		# before the scans so a beacon that does appear is not missed.
