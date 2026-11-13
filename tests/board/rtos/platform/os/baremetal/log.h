@@ -47,6 +47,12 @@ ulog_level_t log_level_get(void);
  * ALWAYS lines pass at any threshold. */
 void log_level_set(ulog_level_t severity);
 
+/* How many messages reached the anchor-family scan since boot.  The scan runs
+ * per emitted line and is a handful of strstr() calls; a high rate here while
+ * a thread holds the SDIO claim names the log path as the claim's tenant. */
+unsigned int log_anchor_call_count(void);
+unsigned long long log_emit_byte_count(void);
+
 /* Entry macros. With ULOG_ENABLED undefined the whole family compiles to
  * nothing, arguments included - the compile-time master gate. */
 #ifdef ULOG_ENABLED

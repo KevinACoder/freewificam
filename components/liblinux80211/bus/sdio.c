@@ -158,6 +158,7 @@ struct lkpi_sdio_card {
 	 * still reports pending work. Both default to the shapes every earlier
 	 * measurement ran. */
 	bool				pump_prio_normal;
+	unsigned int			pump_prio_level;	/* 0 below .. 4 realtime */
 	bool				pump_drain;
 	/* when the last cycle that moved bytes finished (the hot hold's stamp) */
 	uint64_t			pump_hot_ns;
@@ -656,9 +657,9 @@ lkpi_sdio_census_print(void)
 	lkpi_census_histo_print("perf census: D pump_byt", &c->busy_bytes);
 	/* the card-interrupt line, its own shape so no earlier anchor moves */
 	lkpi_printf(ULOG_INFO_LEVEL,
-	    "perf census: D pumpirq on=%u notify=%u wake=%u prio=%s drain=%u\n",
+	    "perf census: D pumpirq on=%u notify=%u wake=%u prio=%u drain=%u\n",
 	    lkpi_sdio_card_state.pump_irq ? 1u : 0u, c->irq_notify, c->wake_irq,
-	    lkpi_sdio_card_state.pump_prio_normal ? "normal" : "below",
+	    lkpi_sdio_card_state.pump_prio_level,
 	    lkpi_sdio_card_state.pump_drain ? 1u : 0u);
 	/* the round's timeline and receive-release shapes: the four boundaries a
 	 * frame crosses (the stack's handoff notes, the bus claim, the wire write,
@@ -816,6 +817,173 @@ lkpi_sdio_census_note_cycle(uint64_t t0, uint64_t t1, uint64_t t2, bool busy,
 
 #endif	/* CONFIG_LKPI_CENSUS */
 
+/* ------------------------------------------------------------------ */
+/* transfer trace (diagnostic images)                                  */
+/* ------------------------------------------------------------------ */
+/*
+ * The claim holder's own account of the transfer it is inside.  A frozen
+ * bring-up already names the claim stage ("handler/ext-r"); this names the
+ * operation inside that stage - kind, address, bytes, blocks - and keeps the
+ * last few completed ones so the operation that led to the freeze is readable
+ * without a debugger.  One writer by construction (every transfer runs under
+ * the claim); the reader is the stall watchdog, which tolerates a torn entry
+ * by construction: the writer zeroes seq before it fills a slot and raises it
+ * after, and the reader checks seq before and after its copy.
+ */
+#ifdef CONFIG_LKPI_CENSUS
+
+#define	LKPI_SDIO_OP_RING	256u
+
+static struct lkpi_sdio_op lkpi_sdio_op_ring[LKPI_SDIO_OP_RING];
+static uint32_t lkpi_sdio_op_head;
+static uint32_t lkpi_sdio_op_count;
+static uint32_t lkpi_sdio_progress;
+static const char *lkpi_sdio_site_state = "-";
+static struct lkpi_sdio_inflight {
+	uint32_t	t0_us;
+	uint32_t	addr;
+	uint32_t	bytes;
+	uint32_t	blocks;
+	uint8_t		valid;
+	uint8_t		kind;
+	uint8_t		func;
+} lkpi_sdio_inflight_state;
+
+static uint32_t
+lkpi_sdio_now_us(void)
+{
+	uint64_t ns = lkpi_sdio_census_now();
+
+	return (uint32_t)(ns / 1000u);
+}
+
+void
+lkpi_sdio_site_set(const char *site)
+{
+	if (site != NULL)
+		lkpi_sdio_site_state = site;
+}
+
+static const char *
+lkpi_sdio_kind_site(uint8_t kind)
+{
+	switch (kind) {
+	case LKPI_SDIO_OP_C52R:
+	case LKPI_SDIO_OP_C52W:
+		return "c52";
+	case LKPI_SDIO_OP_BLK_R:
+	case LKPI_SDIO_OP_BLK_W:
+		return "blk";
+	default:
+		return "byt";
+	}
+}
+
+static void
+lkpi_sdio_diag_begin(uint8_t kind, unsigned int func, unsigned int addr,
+    unsigned int bytes, unsigned int blocks)
+{
+	lkpi_sdio_site_set(lkpi_sdio_kind_site(kind));
+	lkpi_sdio_inflight_state.t0_us = lkpi_sdio_now_us();
+	lkpi_sdio_inflight_state.addr = addr;
+	lkpi_sdio_inflight_state.bytes = bytes;
+	lkpi_sdio_inflight_state.blocks = blocks;
+	lkpi_sdio_inflight_state.kind = kind;
+	lkpi_sdio_inflight_state.func = (uint8_t)func;
+	__atomic_store_n(&lkpi_sdio_inflight_state.valid, (uint8_t)1u,
+	    __ATOMIC_RELEASE);
+}
+
+static void
+lkpi_sdio_diag_end(int ret)
+{
+	struct lkpi_sdio_op *op;
+	uint32_t now = lkpi_sdio_now_us();
+	uint32_t seq = lkpi_sdio_op_count + 1u;
+
+	op = &lkpi_sdio_op_ring[lkpi_sdio_op_head % LKPI_SDIO_OP_RING];
+	__atomic_store_n(&op->seq, 0u, __ATOMIC_RELAXED);
+	op->t0_us = lkpi_sdio_inflight_state.t0_us;
+	op->dur_us = now - lkpi_sdio_inflight_state.t0_us;
+	op->addr = lkpi_sdio_inflight_state.addr;
+	op->bytes = lkpi_sdio_inflight_state.bytes;
+	op->blocks = (uint16_t)lkpi_sdio_inflight_state.blocks;
+	op->kind = lkpi_sdio_inflight_state.kind;
+	op->ret = (ret < -127) ? (int8_t)-127 :
+	    (ret > 127 ? (int8_t)127 : (int8_t)ret);
+	__atomic_store_n(&op->seq, seq, __ATOMIC_RELEASE);
+
+	lkpi_sdio_op_head++;
+	__atomic_store_n(&lkpi_sdio_op_count, seq, __ATOMIC_RELEASE);
+	__atomic_store_n(&lkpi_sdio_progress, seq, __ATOMIC_RELEASE);
+	lkpi_sdio_inflight_state.valid = 0u;
+	lkpi_sdio_site_set("done");
+}
+
+void
+lkpi_sdio_diag_get(struct lkpi_sdio_diag *out)
+{
+	uint8_t valid, valid2;
+
+	if (out == NULL)
+		return;
+	(void)memset(out, 0, sizeof(*out));
+	out->site = lkpi_sdio_site_state;
+	out->progress = __atomic_load_n(&lkpi_sdio_progress, __ATOMIC_ACQUIRE);
+	out->ops = __atomic_load_n(&lkpi_sdio_op_count, __ATOMIC_ACQUIRE);
+
+	valid = __atomic_load_n(&lkpi_sdio_inflight_state.valid,
+	    __ATOMIC_ACQUIRE);
+	if (valid == 1u) {
+		out->inflight_t0_us = lkpi_sdio_inflight_state.t0_us;
+		out->inflight_addr = lkpi_sdio_inflight_state.addr;
+		out->inflight_bytes = lkpi_sdio_inflight_state.bytes;
+		out->inflight_blocks = lkpi_sdio_inflight_state.blocks;
+		out->inflight_kind = lkpi_sdio_inflight_state.kind;
+		out->inflight_func = lkpi_sdio_inflight_state.func;
+		valid2 = __atomic_load_n(&lkpi_sdio_inflight_state.valid,
+		    __ATOMIC_ACQUIRE);
+		out->inflight_valid = (valid == valid2) ? 1u : 0u;
+	}
+}
+
+unsigned int
+lkpi_sdio_op_dump(struct lkpi_sdio_op *out, unsigned int max)
+{
+	uint32_t count, head, n, i;
+
+	if (out == NULL || max == 0u)
+		return 0u;
+	count = __atomic_load_n(&lkpi_sdio_op_count, __ATOMIC_ACQUIRE);
+	head = __atomic_load_n(&lkpi_sdio_op_head, __ATOMIC_ACQUIRE);
+	n = (count < LKPI_SDIO_OP_RING) ? count : LKPI_SDIO_OP_RING;
+	if (n > max)
+		n = max;
+	for (i = 0u; i < n; i++) {
+		uint32_t idx = (head + LKPI_SDIO_OP_RING - n + i) %
+		    LKPI_SDIO_OP_RING;
+		uint32_t seq;
+
+		(void)memset(&out[i], 0, sizeof(out[i]));
+		seq = __atomic_load_n(&lkpi_sdio_op_ring[idx].seq,
+		    __ATOMIC_ACQUIRE);
+		if (seq == 0u)
+			continue;
+		out[i] = lkpi_sdio_op_ring[idx];
+		if (__atomic_load_n(&lkpi_sdio_op_ring[idx].seq,
+		    __ATOMIC_ACQUIRE) != seq)
+			(void)memset(&out[i], 0, sizeof(out[i]));
+	}
+	return n;
+}
+
+#else	/* !CONFIG_LKPI_CENSUS */
+
+#define	lkpi_sdio_diag_begin(kind, func, addr, bytes, blocks)	do { } while (0)
+#define	lkpi_sdio_diag_end(ret)	do { (void)(ret); } while (0)
+
+#endif	/* CONFIG_LKPI_CENSUS */
+
 static struct sdio_driver *lkpi_sdio_drivers[LKPI_SDIO_DRIVERS_MAX];
 static unsigned int lkpi_sdio_driver_count;
 
@@ -910,6 +1078,104 @@ lkpi_sdio_claim_held_by_current(void)
 }
 
 /*
+ * The backend's guard against a transfer that did not pass through the claim.
+ * Linux's contract is that every transfer reaches the host with the bus
+ * claimed; a driver that reaches the backend without it has either skipped the
+ * claim or lost it - and two transfers on the wire at once is a corrupted
+ * controller, not a slow one.  The count is the finding; the first occurrence
+ * also prints, because a silent violation is indistinguishable from a hang.
+ */
+static unsigned int lkpi_sdio_claim_violations_count;
+static const char *lkpi_sdio_violation_thread_state = "-";
+static const char *lkpi_sdio_violation_owner_state = "-";
+static uint32_t lkpi_sdio_violation_progress_state;
+static uint32_t lkpi_sdio_violation_tick_state;
+static bool lkpi_sdio_claim_violation_noted;
+static bool lkpi_sdio_claim_guard_on;
+
+void
+lkpi_sdio_claim_guard_set(bool on)
+{
+
+	lkpi_sdio_claim_guard_on = on;
+}
+
+int
+lkpi_sdio_claim_check(int extended)
+{
+
+	if (!lkpi_sdio_claim_guard_on)
+		return 1;
+	if (lkpi_sdio_claim_held_by_current())
+		return 1;
+	lkpi_sdio_claim_violations_count++;
+	lkpi_sdio_violation_thread_state = osThreadGetName(osThreadGetId());
+	if (lkpi_sdio_violation_thread_state == NULL)
+		lkpi_sdio_violation_thread_state = "?";
+	lkpi_sdio_violation_owner_state = lkpi_sdio_claim_owner();
+#ifdef CONFIG_LKPI_CENSUS
+	lkpi_sdio_violation_progress_state =
+	    __atomic_load_n(&lkpi_sdio_progress, __ATOMIC_ACQUIRE);
+#endif
+	lkpi_sdio_violation_tick_state = (uint32_t)osKernelGetTickCount();
+#ifdef CONFIG_LKPI_CENSUS
+	if (!lkpi_sdio_claim_violation_noted) {
+		lkpi_sdio_claim_violation_noted = true;
+		lkpi_printf(ULOG_ERROR_LEVEL,
+		    "sdiokpi: transfer without the bus claim: caller=%s owner=%s "
+		    "ext=%d\n", lkpi_sdio_violation_thread_state,
+		    lkpi_sdio_violation_owner_state, extended);
+	}
+#else
+	(void)extended;
+#endif
+	return 0;
+}
+
+void *
+lkpi_sdio_claim_owner_thread(void)
+{
+
+	return lkpi_sdio_card_state.host.claimed ?
+	    lkpi_sdio_card_state.claim_owner : NULL;
+}
+
+unsigned int
+lkpi_sdio_claim_violations(void)
+{
+
+	return lkpi_sdio_claim_violations_count;
+}
+
+const char *
+lkpi_sdio_claim_violation_thread(void)
+{
+
+	return lkpi_sdio_violation_thread_state;
+}
+
+const char *
+lkpi_sdio_claim_violation_owner(void)
+{
+
+	return lkpi_sdio_violation_owner_state;
+}
+
+unsigned int
+lkpi_sdio_claim_violation_progress(void)
+{
+
+	return lkpi_sdio_violation_progress_state;
+}
+
+unsigned int
+lkpi_sdio_claim_violation_tick(void)
+{
+
+	return lkpi_sdio_violation_tick_state;
+}
+
+/*
  * Who holds the bus claim and for how long - the reading an episode needs when
  * the pump is running but nothing moves. The name comes from the RTOS thread
  * table; a thread that carries none reports "?".
@@ -926,6 +1192,13 @@ lkpi_sdio_claim_op(void)
 {
 
 	return lkpi_sdio_claim_op_state;
+}
+
+void *
+lkpi_sdio_pump_thread(void)
+{
+
+	return (void *)lkpi_sdio_card_state.pump;
 }
 
 const char *
@@ -990,7 +1263,10 @@ lkpi_sdio_direct(unsigned int func, unsigned int addr, bool write, u8 *value)
 
 	t0 = lkpi_sdio_census_now();
 	lkpi_sdio_claim_op_state = write ? "c52w" : "c52r";
+	lkpi_sdio_diag_begin(write ? LKPI_SDIO_OP_C52W : LKPI_SDIO_OP_C52R,
+	    func, addr, 1u, 0u);
 	st = lkpi_sdio_be_io_direct(func, addr, write, value);
+	lkpi_sdio_diag_end(st);
 	lkpi_sdio_claim_op_state = "done";
 	lkpi_sdio_census_note_direct(t0, lkpi_sdio_census_now());
 	lkpi_sdio_stats.io_direct++;
@@ -1156,8 +1432,11 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 			bytes = blocks * func->cur_blksize;
 			t0 = lkpi_sdio_census_now();
 			lkpi_sdio_claim_op_state = write ? "ext-w" : "ext-r";
+			lkpi_sdio_diag_begin(write ? LKPI_SDIO_OP_BLK_W :
+			    LKPI_SDIO_OP_BLK_R, func->num, addr, bytes, blocks);
 			st = lkpi_sdio_be_io_extended(func->num, addr, buf, blocks,
 			    base | LKPI_SDIO_BE_F_BLOCK);
+			lkpi_sdio_diag_end(st);
 			lkpi_sdio_claim_op_state = "done";
 			lkpi_sdio_census_note_ext(write, true, bytes, t0,
 			    lkpi_sdio_census_now());
@@ -1185,7 +1464,10 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 			n = remainder;
 		t0 = lkpi_sdio_census_now();
 		lkpi_sdio_claim_op_state = write ? "ext-w" : "ext-r";
+		lkpi_sdio_diag_begin(write ? LKPI_SDIO_OP_BYT_W :
+		    LKPI_SDIO_OP_BYT_R, func->num, addr, n, 0u);
 		st = lkpi_sdio_be_io_extended(func->num, addr, buf, n, base);
+		lkpi_sdio_diag_end(st);
 		lkpi_sdio_claim_op_state = "done";
 		lkpi_sdio_census_note_ext(write, false, n, t0,
 		    lkpi_sdio_census_now());
@@ -1847,28 +2129,49 @@ lkpi_sdio_pump_prio_set(bool normal)
 	lkpi_sdio_pump_prio_level_set(normal ? 1u : 0u);
 }
 
+/*
+ * The bands a caller can ask for.  The original knob names two of them (below
+ * and normal); the observation round needs the two above normal as well,
+ * because on this port the consumer that starves the pump is lwIP's TCP/IP
+ * thread in the High band - "above normal" still loses to it.  The mapping is
+ * the CMSIS band the level names, not a new priority space.
+ */
+static osPriority_t
+lkpi_sdio_prio_of(unsigned int level)
+{
+
+	switch (level) {
+	case 1u:
+		return osPriorityNormal;
+	case 2u:
+		return osPriorityAboveNormal;
+	case 3u:
+		return osPriorityHigh;
+	case 4u:
+		return osPriorityRealtime;
+	default:
+		return osPriorityBelowNormal;
+	}
+}
+
 void
 lkpi_sdio_pump_prio_level_set(unsigned int level)
 {
 	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
-	osPriority_t prio;
 
+	if (level > 4u)
+		level = 4u;
+	c->pump_prio_level = level;
 	c->pump_prio_normal = (level != 0u) ? true : false;
-	if (level >= 2u)
-		prio = osPriorityAboveNormal;
-	else if (level == 1u)
-		prio = osPriorityNormal;
-	else
-		prio = osPriorityBelowNormal;
 	if (c->pump != NULL)
-		(void)osThreadSetPriority(c->pump, prio);
+		(void)osThreadSetPriority(c->pump, lkpi_sdio_prio_of(level));
 }
 
 unsigned int
 lkpi_sdio_pump_prio_level_get(void)
 {
 
-	return lkpi_sdio_card_state.pump_prio_normal ? 1u : 0u;
+	return lkpi_sdio_card_state.pump_prio_level;
 }
 
 bool
@@ -2272,8 +2575,7 @@ lkpi_sdio_pump_start(void)
 	 * moves the thread at runtime and keeps this default the shape every
 	 * earlier measurement ran.
 	 */
-	attr.priority = c->pump_prio_normal ? osPriorityNormal :
-					      osPriorityBelowNormal;
+	attr.priority = lkpi_sdio_prio_of(c->pump_prio_level);
 	c->pump = osThreadNew(lkpi_sdio_pump_entry, c, &attr);
 	if (c->pump == NULL) {
 		lkpi_printf(ULOG_ERROR_LEVEL, "sdiokpi: cannot start the pump thread\n");

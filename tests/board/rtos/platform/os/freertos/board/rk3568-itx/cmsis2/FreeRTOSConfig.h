@@ -68,6 +68,24 @@
 #define configUSE_TASK_NOTIFICATIONS             1
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_EVENT_GROUPS                   1
+
+/*
+ * Per-task run time (observation images only).  CMSIS-RTOS2 has no "who is
+ * eating the core" query, and a freeze that leaves the pump READY while it
+ * never runs is exactly that question.  The time source is the architectural
+ * counter the board already reads (24 MHz here): one read per context switch
+ * and a 32-bit counter, so a one-second delta is exact and a boot's worth of
+ * wrap is not in play.  Delivery images keep the kernel's own accounting off.
+ */
+#if CONFIG_LKPI_CENSUS
+#include <stdint.h>
+extern uint64_t gtimer_count_get(void);
+#define configGENERATE_RUN_TIME_STATS            1
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS()
+#define portGET_RUN_TIME_COUNTER_VALUE()         ((uint32_t)gtimer_count_get())
+#else
+#define configGENERATE_RUN_TIME_STATS            0
+#endif
 #define configUSE_STREAM_BUFFERS                 1
 
 /* --- hooks ---------------------------------------------------------------- */

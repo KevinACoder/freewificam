@@ -113,7 +113,16 @@ const struct dwc_mmc_cfg *dwc_mmc_board_cfg(unsigned int index)
 /* Microsecond busy-wait on the architectural counter. A requested delay always
  * costs at least one tick, so a zero-length request does not degenerate into
  * no wait at all. */
-static void dwc_mmc_udelay(uint32_t usec)
+static const void *volatile dwc_mmc_udelay_caller;
+
+const void *
+dwc_mmc_udelay_caller_get(void)
+{
+
+	return dwc_mmc_udelay_caller;
+}
+
+static void __attribute__((noinline)) dwc_mmc_udelay(uint32_t usec)
 {
 	uint64_t freq = (uint64_t)gtimer_freq_get();
 	uint64_t ticks = (freq * (uint64_t)usec) / 1000000ULL;
@@ -123,6 +132,7 @@ static void dwc_mmc_udelay(uint32_t usec)
 		ticks = 1ULL;
 	}
 
+	dwc_mmc_udelay_caller = __builtin_return_address(0);
 	start = gtimer_count_get();
 	while ((gtimer_count_get() - start) < ticks) {
 		/* spin */
@@ -134,6 +144,29 @@ static void dwc_mmc_udelay(uint32_t usec)
 static void dwc_mmc_cru_write(uintptr_t reg, uint32_t mask, uint32_t val)
 {
 	mmio_wr32(reg, ((mask & 0xffffu) << 16) | (val & mask));
+}
+
+/* --- stage beacon --------------------------------------------------------- */
+
+/*
+ * The innermost stage the driver reached, for the freeze watchdog.  A single
+ * store per stage, read from another thread; it is an instrument, not an
+ * invariant, and a reader may catch the string a stage late.
+ */
+static const char *volatile dwc_mmc_site_state = "-";
+
+const char *
+dwc_mmc_site(void)
+{
+
+	return dwc_mmc_site_state;
+}
+
+static void
+dwc_mmc_site_set(const char *site)
+{
+
+	dwc_mmc_site_state = site;
 }
 
 /* --- census --------------------------------------------------------------- */
@@ -370,6 +403,47 @@ static void dwc_mmc_dump_state(struct dwc_mmc *hc)
 		  mmio_rd32(base + DWC_MMC_PLDMND));
 }
 
+/*
+ * The same picture, taken by a reader that is not the transfer thread.  The
+ * board's controller is the one the table names; the registers are read-only
+ * here, so the snapshot cannot disturb a transfer that is in flight - it can
+ * only catch it mid-stage, which is exactly what the freeze watchdog wants.
+ */
+int
+dwc_mmc_snapshot_get(struct dwc_mmc_snapshot *out)
+{
+	const struct dwc_mmc_cfg *cfg = dwc_mmc_board_cfg(0u);
+	uintptr_t base;
+
+	if (out == NULL || cfg == NULL)
+		return -1;
+	base = cfg->base;
+	(void)memset(out, 0, sizeof(*out));
+	out->rintsts = mmio_rd32(base + DWC_MMC_RINTSTS);
+	out->idsts = mmio_rd32(base + DWC_MMC_IDSTS);
+	out->status = mmio_rd32(base + DWC_MMC_STATUS);
+	out->cmdarg = mmio_rd32(base + DWC_MMC_CMDARG);
+	out->cmd = mmio_rd32(base + DWC_MMC_CMD);
+	out->blksiz = mmio_rd32(base + DWC_MMC_BLKSIZ);
+	out->bytcnt = mmio_rd32(base + DWC_MMC_BYTCNT);
+	out->tcb = mmio_rd32(base + DWC_MMC_TCBCNT);
+	out->tbb = mmio_rd32(base + DWC_MMC_TBBCNT);
+	out->dscaddr = mmio_rd32(base + DWC_MMC_DSCADDR);
+	out->bufaddr = mmio_rd32(base + DWC_MMC_BUFADDR);
+	out->bmod = mmio_rd32(base + DWC_MMC_BMOD);
+	out->idinten = mmio_rd32(base + DWC_MMC_IDINTEN);
+	out->tmout = mmio_rd32(base + DWC_MMC_TMOUT);
+	out->ctype = mmio_rd32(base + DWC_MMC_CTYPE);
+	out->clkena = mmio_rd32(base + DWC_MMC_CLKENA);
+	out->clkdiv = mmio_rd32(base + DWC_MMC_CLKDIV);
+	out->fifoth = mmio_rd32(base + DWC_MMC_FIFOTH);
+	out->pldmnd = mmio_rd32(base + DWC_MMC_PLDMND);
+	out->desc0_flags = dwc_mmc_desc_pool[0].flags;
+	out->desc0_cnt = dwc_mmc_desc_pool[0].cnt;
+	out->desc0_addr = dwc_mmc_desc_pool[0].addr;
+	return 0;
+}
+
 /* --- command issue -------------------------------------------------------- */
 
 static uint32_t dwc_mmc_make_raw_cmd(const struct dwc_mmc_cmd *cmd)
@@ -431,6 +505,8 @@ static int dwc_mmc_send_command(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 #ifdef CONFIG_LKPI_CENSUS
 	uint64_t t0, t1;
 #endif
+
+	dwc_mmc_site_set("dwc.cmd");
 
 	/* one iteration budget for both waits, so the census reads the same loop */
 	budget = dwc_mmc_polls_for(DWC_MMC_CMD_BUDGET_US);
@@ -671,6 +747,8 @@ static int dwc_mmc_wait_idmac_rx(struct dwc_mmc *hc)
 	uintptr_t base = hc->cfg.base;
 	uint32_t idsts = 0U;
 	uint32_t loop = dwc_mmc_data_polls_for(DWC_MMC_DATA_BUDGET_US);
+
+	dwc_mmc_site_set("dwc.wait_idmac");
 #ifdef CONFIG_LKPI_CENSUS
 	uint64_t t0, t1;
 
@@ -714,6 +792,7 @@ static int dwc_mmc_wait_data(struct dwc_mmc *hc, const struct dwc_mmc_cmd *cmd)
 	t0 = dwc_mmc_census_now();
 #endif
 
+	dwc_mmc_site_set("dwc.wait_data");
 	do {
 		mask = mmio_rd32(base + DWC_MMC_RINTSTS);
 
@@ -784,6 +863,7 @@ static int dwc_mmc_transfer_data(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 {
 	int ret;
 
+	dwc_mmc_site_set("dwc.prep");
 	ret = dwc_mmc_prepare_dma(hc, cmd);
 	if (ret != DWC_MMC_OK) {
 		return ret;
@@ -796,6 +876,29 @@ static int dwc_mmc_transfer_data(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 	}
 
 	ret = dwc_mmc_wait_data(hc, cmd);
+
+	/*
+	 * The data phase can end with a successful DTO while the IDMAC itself took
+	 * a fatal bus error or an unavailable descriptor: DTO is the card's view,
+	 * IDSTS is the engine's.  The read path checks IDSTS in its wait; the write
+	 * path did not, so a failed 12 KB TX was reported as sent and the engine
+	 * was left in its error state for the next transfer - which then found a
+	 * data path that would not clear.  Record it, put the controller back to a
+	 * known state, and report the transfer as failed rather than as sent.
+	 */
+	if (ret == DWC_MMC_OK) {
+		uint32_t idsts = mmio_rd32(hc->cfg.base + DWC_MMC_IDSTS);
+
+		if ((idsts & DWC_MMC_IDMAC_ERR_FLAGS) != 0U) {
+			LOG_ERROR("dwc_mmc: CMD%u IDMAC error after DTO "
+				  "(idsts=0x%x write=%u len=%u)\n",
+				  cmd->index, idsts, cmd->data->write,
+				  cmd->data->len);
+			(void)dwc_mmc_soft_reset(hc);
+			dwc_mmc_reprogram(hc);
+			ret = DWC_MMC_ERR_DATA;
+		}
+	}
 
 	dwc_mmc_dma_disable(hc);
 
@@ -1006,6 +1109,7 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 		return DWC_MMC_ERR_NO_CARD;
 	}
 
+	dwc_mmc_site_set("dwc.xfer");
 #ifdef CONFIG_LKPI_CENSUS
 	dwc_mmc_census_state.pending = 1u;
 	dwc_mmc_census_state.last_cmd = cmd->index;
@@ -1049,6 +1153,7 @@ int dwc_mmc_transfer(struct dwc_mmc *hc, struct dwc_mmc_cmd *cmd)
 			  cmd->index, ret);
 		(void)dwc_mmc_reset(hc);
 	}
+	dwc_mmc_site_set("dwc.done");
 
 	return ret;
 }

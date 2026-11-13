@@ -19,5 +19,10 @@ struct sdmmc_lock_diag {
 };
 
 void sdmmc_osa_lock_diag_get(struct sdmmc_lock_diag *out);
+/* one mutex, by handle: the card lock's owner/waiters without the ambiguity of
+ * "the last slot that has an owner" */
+void sdmmc_osa_lock_diag_get_one(void *handle, struct sdmmc_lock_diag *out);
+/* the fsl card service's own lock (the one every transfer takes) */
+void lkpi_sdio_fsl_card_lock_get(struct sdmmc_lock_diag *out);
 
 #endif /* SDMMC_LOCK_DIAG_H */

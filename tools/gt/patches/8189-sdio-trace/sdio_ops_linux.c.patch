@@ -1,0 +1,354 @@
+--- a/os_dep/linux/sdio_ops_linux.c	2026-11-13 13:04:10.521299209 +0800
++++ b/os_dep/linux/sdio_ops_linux.c	2026-11-13 13:04:10.523927963 +0800
+@@ -16,6 +16,131 @@
+ 
+ #include <drv_types.h>
+ 
++/* ---- GT SDIO geometry trace (observation-only, GPL-2.0-only) -------------
++ *
++ * This block is the GT arm's instrument, not part of the pinned driver: it is
++ * applied to a build copy (tools/gt/patches/8189-sdio-trace) and the module it
++ * produces never supplies the denominator.  It records the commands the
++ * driver issued at the two funnels the vendor owns - the CMD52 register path
++ * (_sd_cmd52_read/_sd_cmd52_write and the raw sd_readXX/sd_writeXX helpers)
++ * and the CMD53 data path (_sd_read/_sd_write) - as kind, address, byte count,
++ * duration and return code, and keeps the last 64.  Aggregates and the ring
++ * are dumped on demand through the sdio_trace_dump module parameter, so the
++ * board script reads them at a phase boundary and nothing prints during the
++ * measured window.
++ */
++#include <linux/ktime.h>
++#include <linux/moduleparam.h>
++
++#define RTW_TR_RING	64
++#define RTW_TR_KINDS	4
++
++static const char * const rtw_tr_kind_name[RTW_TR_KINDS] = {
++	"c52r", "c52w", "ext_r", "ext_w"
++};
++
++struct rtw_tr_cnt {
++	u64	n;
++	u64	bytes;
++	u64	sum_us;
++	u32	max_us;
++};
++
++struct rtw_tr_op {
++	u32	seq;
++	u32	t0_us;
++	u32	dur_us;
++	u32	addr;
++	u32	bytes;
++	u32	blocks;
++	u8	kind;
++	s8	ret;
++};
++
++static struct rtw_tr_cnt rtw_tr_cnt[RTW_TR_KINDS];
++static struct rtw_tr_op rtw_tr_ring[RTW_TR_RING];
++static u32 rtw_tr_head;
++static int rtw_tr_on = 1;
++static int rtw_tr_dump;
++
++static inline u32 rtw_tr_us(void)
++{
++	return (u32)(ktime_get_ns() / 1000);
++}
++
++static void rtw_tr_note(u8 kind, u32 addr, u32 bytes, u32 blocks, s32 ret, u32 t0)
++{
++	struct rtw_tr_op *op;
++	u32 now = rtw_tr_us();
++	u32 dur = now - t0;
++	u32 seq;
++
++	if (!rtw_tr_on || kind >= RTW_TR_KINDS)
++		return;
++	rtw_tr_cnt[kind].n++;
++	rtw_tr_cnt[kind].bytes += bytes;
++	rtw_tr_cnt[kind].sum_us += dur;
++	if (dur > rtw_tr_cnt[kind].max_us)
++		rtw_tr_cnt[kind].max_us = dur;
++	seq = rtw_tr_head + 1;
++	op = &rtw_tr_ring[rtw_tr_head % RTW_TR_RING];
++	op->seq = 0;
++	op->t0_us = t0;
++	op->dur_us = dur;
++	op->addr = addr;
++	op->bytes = bytes;
++	op->blocks = blocks;
++	op->kind = kind;
++	op->ret = (s8)ret;
++	smp_wmb();
++	op->seq = seq;
++	rtw_tr_head = seq;
++}
++
++static int rtw_tr_dump_set(const char *val, const struct kernel_param *kp)
++{
++	u32 head = rtw_tr_head;
++	unsigned int k, i, n;
++
++	(void)val;
++	(void)kp;
++	pr_info("RTWTR begin on=%d head=%u\n", rtw_tr_on, head);
++	for (k = 0; k < RTW_TR_KINDS; k++) {
++		pr_info("RTWTR GEOM k=%s n=%llu bytes=%llu avg_us=%llu max_us=%u\n",
++			rtw_tr_kind_name[k],
++			(unsigned long long)rtw_tr_cnt[k].n,
++			(unsigned long long)rtw_tr_cnt[k].bytes,
++			rtw_tr_cnt[k].n ?
++				(unsigned long long)(rtw_tr_cnt[k].sum_us /
++					rtw_tr_cnt[k].n) : 0ULL,
++			rtw_tr_cnt[k].max_us);
++	}
++	n = (head < RTW_TR_RING) ? head : RTW_TR_RING;
++	for (i = 0; i < n; i++) {
++		/* Absolute write index of the entry: the ring holds the writes
++		 * head-n .. head-1, and write h stored seq h+1 at slot h%RING. */
++		u32 at = head - n + i;
++		struct rtw_tr_op *op = &rtw_tr_ring[at % RTW_TR_RING];
++
++		if (op->seq == 0 || op->seq != at + 1)
++			continue;
++		pr_info("RTWTR OP t=%u dur=%u k=%u addr=%05x bytes=%u blk=%u ret=%d\n",
++			op->t0_us, op->dur_us, op->kind, op->addr, op->bytes,
++			op->blocks, op->ret);
++	}
++	pr_info("RTWTR end\n");
++	return 0;
++}
++
++static const struct kernel_param_ops rtw_tr_dump_ops = {
++	.set = rtw_tr_dump_set,
++	.get = param_get_int,
++};
++
++module_param_named(sdio_trace, rtw_tr_on, int, 0644);
++module_param_cb(sdio_trace_dump, &rtw_tr_dump_ops, &rtw_tr_dump, 0644);
++/* ---- end of the GT SDIO geometry trace ---------------------------------- */
++
+ inline bool rtw_is_sdio30(_adapter *adapter)
+ {
+ 	struct dvobj_priv *dvobj = adapter_to_dvobj(adapter);
+@@ -114,6 +239,7 @@
+  */
+ s32 _sd_cmd52_read(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *pdata)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -142,6 +268,7 @@
+ 
+ 
+ 	return err;
++	rtw_tr_note(0, addr, cnt, 0, err, __tr_t0);
+ }
+ 
+ /*
+@@ -188,6 +315,7 @@
+  */
+ s32 _sd_cmd52_write(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *pdata)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -216,6 +344,7 @@
+ 
+ 
+ 	return err;
++	rtw_tr_note(1, addr, cnt, 0, err, __tr_t0);
+ }
+ 
+ /*
+@@ -257,6 +386,7 @@
+ 
+ u8 _sd_read8(struct intf_hdl *pintfhdl, u32 addr, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -276,6 +406,7 @@
+ 	func = psdio->func;
+ 
+ 	v = sdio_readb(func, addr, err);
++	rtw_tr_note(0, addr, 1, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 
+ 	if (err && *err)
+ 		RTW_ERR("%s: FAIL!(%d) addr=0x%05x\n", __func__, *err, addr);
+@@ -286,6 +417,7 @@
+ 
+ u8 sd_read8(struct intf_hdl *pintfhdl, u32 addr, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -309,6 +441,7 @@
+ 	if (claim_needed)
+ 		sdio_claim_host(func);
+ 	v = sdio_readb(func, addr, err);
++	rtw_tr_note(0, addr, 1, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 	if (claim_needed)
+ 		sdio_release_host(func);
+ 	if (err && *err)
+@@ -320,6 +453,7 @@
+ 
+ u16 sd_read16(struct intf_hdl *pintfhdl, u32 addr, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -343,6 +477,7 @@
+ 	if (claim_needed)
+ 		sdio_claim_host(func);
+ 	v = sdio_readw(func, addr, err);
++	rtw_tr_note(0, addr, 2, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 	if (claim_needed)
+ 		sdio_release_host(func);
+ 	if (err && *err)
+@@ -354,6 +489,7 @@
+ 
+ u32 _sd_read32(struct intf_hdl *pintfhdl, u32 addr, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -373,6 +509,7 @@
+ 	func = psdio->func;
+ 
+ 	v = sdio_readl(func, addr, err);
++	rtw_tr_note(0, addr, 4, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 
+ 	if (err && *err) {
+ 		int i;
+@@ -413,6 +550,7 @@
+ 
+ u32 sd_read32(struct intf_hdl *pintfhdl, u32 addr, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -436,6 +574,7 @@
+ 	if (claim_needed)
+ 		sdio_claim_host(func);
+ 	v = sdio_readl(func, addr, err);
++	rtw_tr_note(0, addr, 4, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 	if (claim_needed)
+ 		sdio_release_host(func);
+ 
+@@ -480,6 +619,7 @@
+ 
+ void sd_write8(struct intf_hdl *pintfhdl, u32 addr, u8 v, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -503,6 +643,7 @@
+ 	if (claim_needed)
+ 		sdio_claim_host(func);
+ 	sdio_writeb(func, v, addr, err);
++	rtw_tr_note(1, addr, 1, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 	if (claim_needed)
+ 		sdio_release_host(func);
+ 	if (err && *err)
+@@ -512,6 +653,7 @@
+ 
+ void sd_write16(struct intf_hdl *pintfhdl, u32 addr, u16 v, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -534,6 +676,7 @@
+ 	if (claim_needed)
+ 		sdio_claim_host(func);
+ 	sdio_writew(func, v, addr, err);
++	rtw_tr_note(1, addr, 2, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 	if (claim_needed)
+ 		sdio_release_host(func);
+ 	if (err && *err)
+@@ -543,6 +686,7 @@
+ 
+ void _sd_write32(struct intf_hdl *pintfhdl, u32 addr, u32 v, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -561,6 +705,7 @@
+ 	func = psdio->func;
+ 
+ 	sdio_writel(func, v, addr, err);
++	rtw_tr_note(1, addr, 4, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 
+ 	if (err && *err) {
+ 		int i;
+@@ -596,6 +741,7 @@
+ 
+ void sd_write32(struct intf_hdl *pintfhdl, u32 addr, u32 v, s32 *err)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -617,6 +763,7 @@
+ 	if (claim_needed)
+ 		sdio_claim_host(func);
+ 	sdio_writel(func, v, addr, err);
++	rtw_tr_note(1, addr, 4, 0, (err != NULL) ? *err : 0, __tr_t0);
+ 	if (claim_needed)
+ 		sdio_release_host(func);
+ 
+@@ -673,6 +820,7 @@
+  */
+ s32 _sd_read(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, void *pdata)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -703,10 +851,12 @@
+ 				break;
+ 			}
+ 		}
++		rtw_tr_note(0, addr, cnt, 0, err, __tr_t0);
+ 		return err;
+ 	}
+ 
+ 	err = sdio_memcpy_fromio(func, pdata, addr, cnt);
++	rtw_tr_note(2, addr, cnt, 0, err, __tr_t0);
+ 	if (err)
+ 		RTW_ERR("%s: FAIL(%d)! ADDR=%#x Size=%d\n", __func__, err, addr, cnt);
+ 
+@@ -776,6 +926,7 @@
+  */
+ s32 _sd_write(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, void *pdata)
+ {
++	u32 __tr_t0 = rtw_tr_us();
+ 	PADAPTER padapter;
+ 	struct dvobj_priv *psdiodev;
+ 	PSDIO_DATA psdio;
+@@ -807,12 +958,13 @@
+ 				break;
+ 			}
+ 		}
+-
++		rtw_tr_note(1, addr, cnt, 0, err, __tr_t0);
+ 		return err;
+ 	}
+ 
+ 	size = cnt;
+ 	err = sdio_memcpy_toio(func, addr, pdata, size);
++	rtw_tr_note(3, addr, size, 0, err, __tr_t0);
+ 	if (err)
+ 		RTW_ERR("%s: FAIL(%d)! ADDR=%#x Size=%d(%d)\n", __func__, err, addr, cnt, size);
+ 

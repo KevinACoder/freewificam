@@ -309,6 +309,34 @@ static struct sdmmc_lock_slot *sdmmc_lock_slot(void *handle)
 	return free_slot;
 }
 
+/* The card lock's own record, by handle: the all-slots getter below answers
+ * "some mutex has an owner", which is not the same question as "who holds the
+ * card lock" - the freeze watchdog needs the latter. */
+void sdmmc_osa_lock_diag_get_one(void *handle, struct sdmmc_lock_diag *out)
+{
+	struct sdmmc_lock_slot *s;
+	uint32_t now;
+
+	if (out == NULL)
+		return;
+	out->owner = "-";
+	out->held_ms = 0u;
+	out->waiters = 0u;
+	out->valid = 0u;
+	if (handle == NULL)
+		return;
+	s = sdmmc_lock_slot(handle);
+	if (s == NULL || s->owner == NULL)
+		return;
+	now = osKernelGetTickCount();
+	out->owner = osThreadGetName((osThreadId_t)s->owner);
+	if (out->owner == NULL)
+		out->owner = "?";
+	out->held_ms = (uint32_t)(now - s->since);
+	out->waiters = s->waiters;
+	out->valid = 1u;
+}
+
 void sdmmc_osa_lock_diag_get(struct sdmmc_lock_diag *out)
 {
 	unsigned int i;

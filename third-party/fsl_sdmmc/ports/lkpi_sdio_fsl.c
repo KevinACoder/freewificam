@@ -54,6 +54,7 @@
 #include "fsl_sdmmc.h"
 
 #include "sdmmc_port.h"
+#include "sdmmc_lock_diag.h"
 
 #ifdef CONFIG_LKPI_CENSUS
 #include "lkpi_census.h"
@@ -256,11 +257,14 @@ static int lkpi_sdio_fsl_io_direct(void *ctx, unsigned int func, unsigned int ad
 		return -LKPI_SDIO_BE_ERR_INVAL;
 	}
 
+	lkpi_sdio_site_set("fsl.c52");
+	(void)lkpi_sdio_claim_check(0);
 	if (write) {
 		st = SDIO_IO_Write_Direct(card, (sdio_func_num_t)func, addr, value, false);
 	} else {
 		st = SDIO_IO_Read_Direct(card, (sdio_func_num_t)func, addr, value);
 	}
+	lkpi_sdio_site_set("fsl.done");
 
 	return sdmmc_fsl_err(st);
 }
@@ -391,6 +395,23 @@ static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 	return sdmmc_fsl_err(st);
 }
 
+void
+lkpi_sdio_fsl_card_lock_get(struct sdmmc_lock_diag *out)
+{
+	sdio_card_t *card = sdmmc_card();
+
+	if (card == NULL) {
+		if (out != NULL) {
+			out->owner = "-";
+			out->held_ms = 0u;
+			out->waiters = 0u;
+			out->valid = 0u;
+		}
+		return;
+	}
+	sdmmc_osa_lock_diag_get_one(&card->lock, out);
+}
+
 static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int addr,
 				     void *buf, unsigned int count, unsigned int flags)
 {
@@ -412,11 +433,14 @@ static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int 
 		return -LKPI_SDIO_BE_ERR_INVAL;
 	}
 
+	lkpi_sdio_site_set("fsl.xfer");
+	(void)lkpi_sdio_claim_check(1);
 	if ((flags & LKPI_SDIO_BE_F_BLOCK) != 0U) {
 		ret = sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
 	} else {
 		ret = sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);
 	}
+	lkpi_sdio_site_set("fsl.done");
 
 #ifdef CONFIG_LKPI_CENSUS
 	lkpi_fsl_census_state.ext_calls++;

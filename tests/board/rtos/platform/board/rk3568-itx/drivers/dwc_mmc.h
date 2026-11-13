@@ -155,6 +155,48 @@ int dwc_mmc_card_irq_arm(struct dwc_mmc *hc, void (*cb)(void *), void *arg);
  * DAT1 cannot storm the GIC while the consumer works. */
 void dwc_mmc_card_irq_enable(struct dwc_mmc *hc, bool enable);
 
+/*
+ * The controller's state, one read, for the moment a transfer did not come
+ * back.  The error paths already dump this beside their failure line; this
+ * face lets an observation image take the same picture from the freeze
+ * watchdog, where no error line exists to attach it to.  It reads registers
+ * only: no state machine is touched, and it is safe from another thread while
+ * a transfer is in flight.
+ *
+ * `site` is the innermost stage the driver reached ("dwc.prep", "dwc.cmd",
+ * "dwc.wait_data", "dwc.wait_idmac", "dwc.done"); a transfer that never
+ * returned leaves it at the stage that did not finish.
+ */
+struct dwc_mmc_snapshot {
+	uint32_t	rintsts;
+	uint32_t	idsts;
+	uint32_t	status;
+	uint32_t	cmdarg;
+	uint32_t	cmd;
+	uint32_t	blksiz;
+	uint32_t	bytcnt;
+	uint32_t	tcb;		/* TCBCNT: bytes the card moved */
+	uint32_t	tbb;		/* TBBCNT: bytes the buffer moved */
+	uint32_t	dscaddr;
+	uint32_t	bufaddr;
+	uint32_t	bmod;
+	uint32_t	idinten;
+	uint32_t	tmout;
+	uint32_t	ctype;
+	uint32_t	clkena;
+	uint32_t	clkdiv;
+	uint32_t	fifoth;
+	uint32_t	pldmnd;
+	uint32_t	desc0_flags;
+	uint32_t	desc0_cnt;
+	uint32_t	desc0_addr;
+};
+
+int dwc_mmc_snapshot_get(struct dwc_mmc_snapshot *out);
+const char *dwc_mmc_site(void);
+/* the caller of the last dwc_mmc_udelay (a wait-loop address, for a PC venue) */
+const void *dwc_mmc_udelay_caller_get(void);
+
 #ifdef CONFIG_LKPI_CENSUS
 /* The controller's census: transfers and bytes by direction, plus the polled
  * waits' iteration counts and wall time - the number that says how much of a

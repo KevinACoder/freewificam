@@ -64,6 +64,23 @@ struct sdio_func	*lkpi_sdio_func0(void);
  * when it touches the card without claiming. */
 bool	lkpi_sdio_claim_held_by_current(void);
 
+/* The backend's guard: 1 when the caller holds the claim, 0 (and counted)
+ * otherwise.  A non-zero count after a boot is a serialization defect. */
+/* The guard is off until the measured window opens: the engine's own bring-up
+ * reads run before a driver owns the bus, and counting them would report a
+ * violation that is not one. */
+void	lkpi_sdio_claim_guard_set(bool on);
+int	lkpi_sdio_claim_check(int extended);
+unsigned int	lkpi_sdio_claim_violations(void);
+/* The thread the claim is held by, or NULL: the freeze watchdog names the
+ * holder's own last instruction, which is not the pump when the holder is a
+ * vendor thread. */
+void	*lkpi_sdio_claim_owner_thread(void);
+const char	*lkpi_sdio_claim_violation_thread(void);
+const char	*lkpi_sdio_claim_violation_owner(void);
+unsigned int	lkpi_sdio_claim_violation_progress(void);
+unsigned int	lkpi_sdio_claim_violation_tick(void);
+
 /* who holds the bus claim right now, and for how long. "-" when free; the
  * episode recorder uses these to separate "nobody is reading" from "the card
  * has nothing to give". */
@@ -81,6 +98,11 @@ const char	*lkpi_sdio_claim_op(void);
 
 /* The pump thread's CMSIS-RTOS2 state: running/ready/blocked/terminated/error. */
 const char	*lkpi_sdio_pump_state(void);
+
+/* The pump thread's kernel handle (the value osThreadNew returned), so a
+ * sampler can ask what this thread was executing; NULL before the pump
+ * starts. */
+void	*lkpi_sdio_pump_thread(void);
 
 /* run one interrupt-poll cycle and return once it finished. The pump thread
  * does this on its own timer; this entry makes a test's cycle deterministic. */
@@ -188,6 +210,64 @@ struct lkpi_sdio_rx_stats {
 };
 
 void	lkpi_sdio_rx_stats_get(struct lkpi_sdio_rx_stats *out);
-#endif
+
+/*
+ * The transfer trace (diagnostic images): the operation the engine is inside
+ * right now and a short ring of the ones that completed.  A frozen bring-up
+ * says which claim stage the pump is in; this says which transfer inside that
+ * stage never came back - its kind, its address, its length and its block
+ * count.  The site string is the innermost layer the transfer reached
+ * ("c52"/"blk"/"byt" in this file, then whatever the backend and the host
+ * driver publish), so a frozen read can be placed without a debugger.
+ *
+ * One writer at a time by construction: every transfer runs under the bus
+ * claim.  The reader may see a torn ring entry during a dump; entries carry a
+ * sequence number so a torn one can be skipped rather than misread.
+ */
+enum lkpi_sdio_op_kind {
+	LKPI_SDIO_OP_C52R = 0,
+	LKPI_SDIO_OP_C52W,
+	LKPI_SDIO_OP_BLK_R,
+	LKPI_SDIO_OP_BLK_W,
+	LKPI_SDIO_OP_BYT_R,
+	LKPI_SDIO_OP_BYT_W,
+};
+
+struct lkpi_sdio_op {
+	uint32_t	seq;		/* 0 = empty, else the write order */
+	uint32_t	t0_us;
+	uint32_t	dur_us;
+	uint32_t	addr;
+	uint32_t	bytes;
+	uint16_t	blocks;		/* block mode only */
+	uint8_t		kind;		/* enum lkpi_sdio_op_kind */
+	int8_t		ret;
+};
+
+struct lkpi_sdio_diag {
+	const char	*site;		/* the innermost layer reached */
+	uint32_t	progress;	/* completed transfers since boot */
+	uint32_t	ops;		/* ring entries written since boot */
+	uint32_t	inflight_t0_us;
+	uint32_t	inflight_addr;
+	uint32_t	inflight_bytes;
+	uint32_t	inflight_blocks;
+	uint8_t		inflight_valid;
+	uint8_t		inflight_kind;
+	uint8_t		inflight_func;
+};
+
+void	lkpi_sdio_site_set(const char *site);
+void	lkpi_sdio_diag_get(struct lkpi_sdio_diag *out);
+/* last `max` completed transfers, oldest first; returns the count written */
+unsigned int	lkpi_sdio_op_dump(struct lkpi_sdio_op *out, unsigned int max);
+#else	/* !CONFIG_LKPI_CENSUS */
+static inline void
+lkpi_sdio_site_set(const char *site)
+{
+
+	(void)site;
+}
+#endif	/* CONFIG_LKPI_CENSUS */
 
 #endif /* LKPI_SDIO_H */

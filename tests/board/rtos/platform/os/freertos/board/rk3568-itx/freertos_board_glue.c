@@ -42,6 +42,12 @@ extern void lkpi_tick_advance(void) __attribute__((weak));
 
 void vApplicationTickHook(void)
 {
+#if CONFIG_LKPI_CENSUS
+	/* defined below, in the census block: the interrupted PC of this tick */
+	extern void rtos_pc_note( void );
+
+	rtos_pc_note();
+#endif
 	if (lkpi_tick_advance != NULL)
 		lkpi_tick_advance();
 }
@@ -203,3 +209,205 @@ void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName )
 		__asm__ __volatile__( "wfe" );
 	}
 }
+
+#if CONFIG_LKPI_CENSUS && ( configUSE_TRACE_FACILITY == 1 ) && \
+	( configGENERATE_RUN_TIME_STATS == 1 )
+/*
+ * The per-task run-time snapshot (platform/rtos_stats.h).  The kernel keeps the
+ * counter per task because tasks.c was built with configGENERATE_RUN_TIME_STATS
+ * and the port macro reads CNTVCT; uxTaskGetSystemState hands back the table in
+ * one pass, so the reader pays one scheduler suspension, not one lock per task.
+ */
+#include "rtos_stats.h"
+
+#define RTOS_STATS_TASKS	24u
+
+unsigned int rtos_task_stats_get( struct rtos_task_stat * out, unsigned int max )
+{
+	static TaskStatus_t snap[ RTOS_STATS_TASKS ];
+	UBaseType_t n;
+	UBaseType_t i;
+
+	if( ( out == NULL ) || ( max == 0u ) ) {
+		return 0u;
+	}
+
+	n = uxTaskGetSystemState( snap, RTOS_STATS_TASKS, NULL );
+	if( n > max ) {
+		n = max;
+	}
+
+	for( i = 0u; i < n; i++ ) {
+		out[ i ].name = snap[ i ].pcTaskName;
+		out[ i ].number = ( uint32_t ) snap[ i ].xTaskNumber;
+		out[ i ].runtime = ( uint32_t ) snap[ i ].ulRunTimeCounter;
+		out[ i ].state = ( uint32_t ) snap[ i ].eCurrentState;
+		out[ i ].prio = ( uint32_t ) snap[ i ].uxCurrentPriority;
+		out[ i ].stack_free = ( uint32_t ) snap[ i ].usStackHighWaterMark *
+			( uint32_t ) sizeof( StackType_t );
+		out[ i ].handle = ( void * ) snap[ i ].xHandle;
+	}
+
+	return ( unsigned int ) n;
+}
+
+/*
+ * The tick PC sampler.  One sample per tick, taken in the tick hook below:
+ * the interrupted PC (ELR_EL1) and the task it belonged to.  A spin is then a
+ * named address instead of an inferred mechanism - the freeze watchdog asks
+ * for the pump's own samples and prints the top ones.
+ */
+#define RTOS_PC_RING	1024u
+
+struct rtos_pc_sample {
+	void		*task;
+	uint64_t	pc;
+};
+
+static struct rtos_pc_sample rtos_pc_ring[ RTOS_PC_RING ];
+static volatile uint32_t rtos_pc_head;
+
+void rtos_pc_note( void )
+{
+	uint32_t head = rtos_pc_head;
+	uint64_t pc;
+
+	__asm__ __volatile__( "mrs %0, elr_el1" : "=r"( pc ) );
+	rtos_pc_ring[ head % RTOS_PC_RING ].task = xTaskGetCurrentTaskHandle();
+	rtos_pc_ring[ head % RTOS_PC_RING ].pc = pc;
+	rtos_pc_head = head + 1u;
+}
+
+uint64_t rtos_task_saved_pc( void * task )
+{
+	TaskHandle_t h = ( TaskHandle_t ) task;
+	uint64_t *sp;
+
+	if( h == NULL ) {
+		return 0u;
+	}
+	/* TCB_t's first member is pxTopOfStack; the frame's first word is the
+	 * ELR portSAVE_CONTEXT pushed last (the pump uses no FPU context). */
+	sp = ( uint64_t * ) ( *( void ** ) h );
+	if( sp == NULL ) {
+		return 0u;
+	}
+	return sp[ 0 ];
+}
+
+unsigned int rtos_task_frame_scan( void * task, uint64_t * vals,
+	uint32_t * offs, unsigned int max )
+{
+	TaskHandle_t h = ( TaskHandle_t ) task;
+	uint64_t * sp;
+	unsigned int i, n = 0u;
+
+	if( h == NULL || vals == NULL || offs == NULL ) {
+		return 0u;
+	}
+	sp = ( uint64_t * ) ( *( void ** ) h );
+	if( sp == NULL ) {
+		return 0u;
+	}
+	/* 0x300 bytes covers the GPRs, SPSR/ELR and the FPU indicator. */
+	for( i = 0u; i < 0x300u / 8u && n < max; i++ ) {
+		uint64_t v = sp[ i ];
+
+		if( v >= 0xa0000000ull && v < 0xa2000000ull ) {
+			vals[ n ] = v;
+			offs[ n ] = i * 8u;
+			n++;
+		}
+	}
+	return n;
+}
+
+unsigned int rtos_task_frame_raw( void * task, uint32_t off, uint64_t * out,
+	unsigned int n )
+{
+	TaskHandle_t h = ( TaskHandle_t ) task;
+	uint64_t * sp;
+	unsigned int i;
+
+	if( h == NULL || out == NULL ) {
+		return 0u;
+	}
+	sp = ( uint64_t * ) ( *( void ** ) h );
+	if( sp == NULL ) {
+		return 0u;
+	}
+	for( i = 0u; i < n; i++ ) {
+		out[ i ] = sp[ ( off / 8u ) + i ];
+	}
+	return n;
+}
+
+uint64_t rtos_pc_last( void * task, uint32_t * ago_ms )
+{
+	unsigned int i;
+	uint32_t head = rtos_pc_head;
+
+	if( ago_ms != NULL ) {
+		*ago_ms = 0u;
+	}
+	for( i = 0; i < RTOS_PC_RING; i++ ) {
+		uint32_t at = ( head + RTOS_PC_RING - 1u - i ) % RTOS_PC_RING;
+		struct rtos_pc_sample * s = &rtos_pc_ring[ at ];
+
+		if( s->task == task ) {
+			if( ago_ms != NULL ) {
+				*ago_ms = i;
+			}
+			return s->pc;
+		}
+	}
+	return 0u;
+}
+
+unsigned int rtos_pc_top( void * task, struct rtos_pc_hit * out, unsigned int max )
+{
+	uint32_t head = rtos_pc_head;
+	uint32_t n = ( head < RTOS_PC_RING ) ? head : RTOS_PC_RING;
+	uint32_t i, j, used = 0u;
+
+	if( ( task == NULL ) || ( out == NULL ) || ( max == 0u ) ) {
+		return 0u;
+	}
+	for( i = 0u; i < n; i++ ) {
+		uint32_t idx = ( head + RTOS_PC_RING - n + i ) % RTOS_PC_RING;
+		uint64_t pc = rtos_pc_ring[ idx ].pc;
+
+		if( rtos_pc_ring[ idx ].task != task ) {
+			continue;
+		}
+		for( j = 0u; j < used; j++ ) {
+			if( out[ j ].pc == pc ) {
+				out[ j ].count++;
+				break;
+			}
+		}
+		if( j == used ) {
+			if( used < max ) {
+				out[ used ].pc = pc;
+				out[ used ].count = 1u;
+				used++;
+			}
+		}
+	}
+	/* selection sort, top first: the table is at most a few entries */
+	for( i = 0u; i < used; i++ ) {
+		uint32_t best = i;
+		struct rtos_pc_hit t;
+
+		for( j = i + 1u; j < used; j++ ) {
+			if( out[ j ].count > out[ best ].count ) {
+				best = j;
+			}
+		}
+		t = out[ i ];
+		out[ i ] = out[ best ];
+		out[ best ] = t;
+	}
+	return used;
+}
+#endif /* CONFIG_LKPI_CENSUS && trace facility && run-time stats */

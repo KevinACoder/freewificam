@@ -45,6 +45,9 @@ CASE_EXPECT=${CASE_EXPECT:-tick,pcie,iwl7260_c5,iwl7260_c6}
 # The downlink UDP rate the counting sink is offered.  40M is the capacity
 # shape; the 8189FTV arm offers 35M, the GT ladder's top rung.
 UDP_DN_RATE=${UDP_DN_RATE:-40M}
+# Wall-clock cap on the AP-side capture.  The phases finish well inside 200 s;
+# a shorter cap only trims the post-run wait, never the measured window.
+AP_CAP_SECS=${AP_CAP_SECS:-360}
 AP_CONF=/tmp/w722-ht20.conf
 
 EVIDENCE=
@@ -100,7 +103,7 @@ scp -q -o BatchMode=yes "$HERE/udp-sink.py" "$PI:/tmp/udp-sink-$TAG.py"
 sleep 1
 
 # --- captures: AP whole round, monitor down/up windows ----------------------
-pisu "timeout 360 tcpdump -i $AP_IF -s 128 -w $AP_PCAP" \
+pisu "timeout $AP_CAP_SECS tcpdump -i $AP_IF -s 128 -w $AP_PCAP" \
 	> "$EVIDENCE/ap-tcpdump.log" 2>&1 &
 APCAP_PID=$!
 

@@ -1,0 +1,33 @@
+# rtl8189fs on the RTOS line: the C6T image plus the kernel-API census.
+#
+# This is the attribution arm for a C6T boot that is short on an explanation.
+# It is the same station + throughput case pair as rk3568-rtl8189fs-c6t, with
+# CONFIG_LKPI_CENSUS on: the engine's transfer/claim histograms, the receive
+# presentation counters, the controller's wait census, and the freeze
+# watchdog's one-shot snapshot.  The numbers a throughput verdict is written
+# from come from the clean image; this one only attributes.
+#
+# The pump priority band is the freeze round's single causal variable: 0 runs
+# the shape every earlier round ran (below normal), 3 moves the pump to the
+# band lwIP's TCP/IP thread runs in.  The case prints the level it applied, so
+# a boot cannot silently measure the wrong arm.
+#
+# The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_sta rtl8189fs_c6t"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_LKPI_CENSUS=y
+CONFIG_C6T_PUMP_PRIO=3
+
+# The vendor stack's pools, the lwIP pbufs and the TCP/IP thread share the
+# FreeRTOS heap; see the C3 profile's note.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

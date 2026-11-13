@@ -298,10 +298,29 @@ static void console_repeat_gate(const char *msg)
  * judged: their lines are promoted here by text. The family table is generated
  * from the judges' anchor tables by tools/gates/log-anchors.py.
  */
+static volatile unsigned int log_anchor_calls;
+static volatile unsigned long long log_emit_bytes;
+
+unsigned int log_anchor_call_count(void)
+{
+
+	return __atomic_load_n(&log_anchor_calls, __ATOMIC_RELAXED);
+}
+
+/* Total characters the formatter produced, before the level gate.  A line the
+ * console drops still paid this; a large per-packet message is visible here as
+ * megabytes per second with only a few hundred calls. */
+unsigned long long log_emit_byte_count(void)
+{
+
+	return __atomic_load_n(&log_emit_bytes, __ATOMIC_RELAXED);
+}
+
 static bool log_anchor_promote(const char *msg)
 {
 	unsigned int i;
 
+	__atomic_add_fetch(&log_anchor_calls, 1u, __ATOMIC_RELAXED);
 	for (i = 0U; i < log_anchor_family_count; i++) {
 		if (strstr(msg, log_anchor_families[i]) != NULL) {
 			return true;
@@ -328,7 +347,14 @@ void log_emit(ulog_level_t severity, const char *fmt, ...)
 	uint64_t saved_daif;
 
 	va_start(ap, fmt);
-	(void)vsnprintf(msg, sizeof(msg), fmt, ap);
+	{
+		int produced = vsnprintf(msg, sizeof(msg), fmt, ap);
+
+		if (produced > 0) {
+			__atomic_add_fetch(&log_emit_bytes, (unsigned)produced,
+					   __ATOMIC_RELAXED);
+		}
+	}
 	va_end(ap);
 
 	/* The promotion must see the text, so the format happens before the

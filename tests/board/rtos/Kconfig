@@ -90,6 +90,22 @@ config C6T_UDP_FIRST
 	  so one boot says whether a stall needs the transmit path to be busy.  It
 	  is a diagnostic ordering, not a tuning knob.
 
+# The pump's priority band, as the C6T case sets it before traffic starts.
+# 0 below normal (the shape every earlier round ran), 1 normal, 2 above normal,
+# 3 high (lwIP's TCP/IP thread band), 4 realtime.  The causal arm for the
+# freeze reads the level back in the case's plan line, so the boot says which
+# band it measured.
+config C6T_PUMP_PRIO
+	int "C6T: SDIO pump priority band (0 below .. 4 realtime)"
+	range 0 4
+	default 0
+	help
+	  The SDIO pump runs below the consumer threads by default, which is the
+	  right shape when the consumer blocks often.  When it does not (a CPU-bound
+	  TCP/IP thread on a single core), the pump is READY and never runs while
+	  it holds the bus claim.  This arm moves the pump to the named CMSIS band;
+	  it is the single variable of the freeze's causal test, not a tuning knob.
+
 # Derived names for make.  The make build consumes these directly; the C side
 # gets the same values from freewificam_config.h.  They are strings/int because
 # make cannot expand a Kconfig choice.
