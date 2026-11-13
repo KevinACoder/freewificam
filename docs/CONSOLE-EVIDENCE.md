@@ -682,6 +682,138 @@ wl1: Trying to associate with 1c:a7:70:de:29:a1 (SSID='labwifi-5g' freq=5180 MHz
 [  43.956] rtos: result fail cases=2/3 backend=freertos
 ```
 
+## RTL8189FTV - station role
+
+The 8189FTV is a second card and a second driver world: the vendor's
+`rtl8189fs` full-MAC stack, brought up over the board's SDIO port rather than
+over PCIe, and talking to the bench's RTL8812AU AP on channel 5.  What the
+console shows in this role is a clean bring-up and one instrument line that
+matters.
+
+Bring-up anchors, in order, one cold boot:
+
+```
+rtl8189fs_sta: wlan0 present=1 ifindex=1 mac=8c:bd:37:95:95:48
+rtl8189fs_sta: start rc=0
+rtl8189fs_diag: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 freq=2432 signal=-40
+drv RTW: rtw_set_802_11_connect(wlan0)  fw_state=0x00000008
+rtl8189fs_sta: connected bssid=1c:a7:70:de:29:a1 waited_ms=400
+rtl8189fs_sta: PASS C5
+rtl8189fs_sta: netif up name=wlan0 ip=192.168.99.2/24
+rtl8189fs_sta: PASS C6
+    rtl8189fs_c6t: PASS C6T
+```
+
+The one line worth reading twice is the per-second sampler the port prints
+during the throughput phases - it is the card's own view of its receive path,
+and it is the instrument that decides whether a low cell is the pump, the
+driver or the air:
+
+```
+obs t=... claim=... pump=... irq=0 io=.../... err=0 drv recv=256 rxbuf=8
+    min=253/8 rxfifo=0 txb=.../256 cmd=.../0 la=... lb=...
+```
+
+`err=0`, `rxfifo=0` and `rxbuf=8` hold for all 60 samples of every boot; when
+the pump stops advancing it shows as `claim` going stale, not as an error, which
+is why the pump-timing arms (adaptive, yield, prio, drain) are the ones that
+moved the downlink and the SDIO interrupt arm did not.
+
+Two console facts about this role.  The card prints nothing at AP-role volume
+here: a station boot's serial log carries the bring-up above and the phase
+anchors, and no driver warnings at all - in particular the
+`rx_data compare failed` line that the AP role produces does **not** appear in
+any station boot, which is how that warning was first localised to the
+broadcast/multicast clone path rather than to receive in general.  And the peer
+side has no console of its own in this role: the peer is an access point running
+a stock driver, so every number from that end comes from `iperf2` and the
+counting sink, not from a serial line.
+
+## RTL8189FTV - access point role
+
+## RTL8189FTV - access point role (2026-11-13)
+
+Same card, same SDIO port, the other role: the port's `hostapd` brings the board
+up on channel 5 and the bench's `MT7921AU` joins it.  The console is the whole
+reason this role was worth a round, because the bring-up is a strict sequence
+that fails quietly one step at a time.
+
+The anchors, in the order they must appear, one cold boot:
+
+```
+rtl8189fs_ap: wlan0 present=1 ifindex=1 mac=8c:bd:37:95:95:48 iftype=2
+rtl8189fs_ap: start rc=0
+rtl8189fs_ap: chan freq=2432 ... can_beacon=1
+rtl8189fs_ap: set_iface rc=0 type=3 order=up_first
+rtl8189fs_ap: security wpa2=0 ssid=rtos-8189-ap channel=5 bcn_int=100 dtim_req=2
+lkpi: hostapd daemon ready
+wl1: interface state UNINITIALIZED->COUNTRY_UPDATE
+lkpi: set_ap head=63 tail=87 freq=2432 rc=0
+wl1: interface state COUNTRY_UPDATE->ENABLED
+wl1: AP-ENABLED
+hostap start rc=0 ready=1
+rtl8189fs_ap: diag post-start valid=1 fwstate=0x00000011 ap_state=1 bstart=1
+    ch=5 bcn_int=100 nr_ap_if=1 nr_sta=0
+RTW: cfg80211_rtw_start_ap(wlan0) hidden_ssid:0, auth_type:0
+rtl8189fs_ap: PASS A1
+```
+
+Two things in that sequence are worth knowing before reading any AP log from
+this card.  The daemon calls its interface `wl1` while the driver's netdev is
+`wlan0`; the port's `hostap` seam maps any `wl*` name onto `wlan0`, so a log
+where the two names disagree is normal and not a mis-wiring.  And the requested
+DTIM is 2 while the beacon that goes on the air carries 1 - the vendor's own
+`rtw_set_tim_ie` is called with a fixed `(0, 1)` - so the log line is honest
+about the request and the air is what the card does.
+
+Association, from the board's side:
+
+```
+RTW: OnAssocReq(wlan0) allocate new AID=1
+RTW: issue_asocrsp
+RTW: indicate_sta_assoc_event to upper layer - hostapd
+RTW: rtw_cfg80211_indicate_sta_assoc(wlan0)
+rtl8189fs_ap: sta n=1 mac=90:de:80:4c:38:c5 aid=1 state=0x4001 flags=0x2a80
+    rate_id=3 cur_rate=0 bw=0 sgi=1
+rtl8189fs_ap: PASS A2
+rtl8189fs_ap: link window rx_frames=85 ... rx_foreign=0 rx_no_netif=0
+    rx_input_fail=0 tx_fail=0
+lkpinetif: rx#1 dev=wlan0(ours) bound=wlan0 proto=0x0806 len=28
+rtl8189fs_ap: PASS A3
+rtl8189fs_ap: server tcp=5001 udp=5002 ok=1
+rtl8189fs_ap: PASS APT
+rtos: result pass cases=2/2 backend=freertos
+```
+
+The nine lines between `PASS A1` and `PASS A3` are the ones that make an AP
+round diagnosable rather than a pass/fail: `OnAssocReq` -> `issue_asocrsp` is
+the step that used to take ~110 ms of console time on this card and blow the
+client's association budget, and the `link window` line is the port's own
+count of what it accepted - `rx_foreign=0` and `rx_input_fail=0` say the frames
+reached the right netdev and the stack took them.
+
+The warning this role produces and the station role does not:
+
+```
+rtl8189fs_ap: rx_data compare failed
+```
+
+It appears on **every** AP boot (6 to 33 hits, and the console's repeat folder
+collapses runs of identical lines, so a grep alone undercounts) and on **no**
+station boot and never in the reference kernel's log.  It comes from the
+broadcast/multicast clone path: the driver copies a received frame once per
+registered interface and compares the copy against the original, and on this
+port the copy differs.  What is established is where it lives and when it
+fires; what is not established is whether it costs throughput, and it is
+recorded here as an open port-side discrepancy rather than as a cause of the
+AP role's numbers.
+
+Beacon cadence, from the same logs, is a card fact rather than a port fact: the
+mean interval is 116-125 ms with occasional gaps of 300-410 ms on this port and
+114.9 ms with a 307 ms gap on the reference kernel, against an advertised 100 TU.
+That is the vendor's software beacon timer, and it is why the AP role's timing
+is compared between the two arms and not against the advertisement.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the

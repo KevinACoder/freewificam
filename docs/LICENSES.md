@@ -49,6 +49,8 @@ the one without the imported stack linked in.
 | `rk3568-iwl7260-c5` 镜像 | 同上（C5 的 nl80211 connect helper 是第一方 BSD-3-Clause，与 GPL 栈链接） | **GPL-2.0** 链接产物 |
 | `rk3568-iwl7260-c6` 镜像 | 同上（C6T 的 lwIP 相位面与吞吐工具是第一方 BSD-3-Clause，与 GPL 栈链接） | **GPL-2.0** 链接产物 |
 | `rk3568-iwl7260-c6-pool128` 镜像 | 同上（只是板级 skb 池尺寸不同，仍是 GPL 栈 + iwlwifi 的链接产物） | **GPL-2.0** 链接产物 |
+| `rk3568-rtl8189fs-ap` 镜像 | 8189FTV 厂商栈 `wireless-drivers/rtl8189fs`（GPL-2.0 per its `PROVENANCE.md`）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层，静态链接 | **GPL-2.0** 链接产物 |
+| `rk3568-rtl8189fs-ap-tp` 镜像 | 同上，另加 `CONFIG_RTL8189FS_AP_TP` 的相位表 | **GPL-2.0** 链接产物 |
 | `rk3568-iwl7260-stab` 镜像 | 同上（稳定性 case 与 pool128 配置） | **GPL-2.0** 链接产物 |
 
 两者都在 `docs/LICENSES.md`（外层）同表登记；`ARCHITECTURE.md` §5 的隔离规则不变：

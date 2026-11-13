@@ -68,9 +68,13 @@ which is the rule the gates use.
 
 Zero loss in every row unless stated; a Wi-Fi cell that drops more than 1% is
 void.  The two benches are not interchangeable and are named per table: in the
-station role the peer is the Pi's RTL8812AU AP on channel 5 (2432 MHz), in the
-AP role the peer is the Pi's MT7921AU station and the board beacons on channel
-11 (2462 MHz).  Both are open unless the row says WPA2.
+station role the peer is the Pi's RTL8812AU AP on channel 5 (2432 MHz); in the
+AP role the peer is a Pi station (the MT7921AU on the AC 7260 bench, where the
+board beacons on channel 11) and the RTL8189FTV beacons on channel 5.  Both are
+open unless the row says WPA2.  A rate is quoted over the interval the flow
+actually ran, which is not always the phase's own window - where the two differ
+the row says so.  A volume in MB is 10^6 bytes; where a figure is `iperf2`'s
+own `MBytes` column it is MiB and the row says so.
 
 ### RK3568 / Intel AC 7260 / PCIe - station
 
@@ -177,6 +181,98 @@ frame but the handful that arrived before the channel was set is on 2432.  The
 interface is receive-only: nothing is injected, `tx_packets=0`, and lwIP's
 counters are untouched.  Injection, channel hopping, the 5 GHz band and a
 five-minute soak are untested.
+
+### RK3568 / Realtek RTL8189FTV / SDIO - station
+
+`PROFILE=rk3568-rtl8189fs-c6t-adaptive-yield` (and `-prio1`, `-drain`), driven
+by `tools/rtos/c6-throughput.sh`; gates applied by `tools/rtos/c6-report.py`.
+The Linux column is the same card on a mainline kernel with the vendor's own
+`rtl8189fs` stack (`tools/gt/gt-8189fs-board.sh --mode station`), same bench,
+same day, same clean module.  Three cold boots on the port, one on the
+reference; the three RTOS columns are the arms of the pump-timing sweep, which
+is where the port's transmit pacing lives.
+
+| case | rtos, adaptive+yield | rtos, +prio1 | rtos, +drain | Linux, same day | vs Linux |
+|---|---|---|---|---|---|
+| `W-TCP-D/HT20` | 30.0 | **30.5** | 29.0 | **41.8** (162 MB / 32.56 s) | 69-73% |
+| `W-TCP-U/HT20` | **11.0** | 10.9 | 10.5 | 9.97 (27.1 MB / 22.78 s) | **105-110%** |
+| `W-UDP-D/HT20` (35 Mbit/s offered) | **33.1**, no measurable loss | 33.1, same | 33.1, same | 36.7, 0% | 90% |
+| `W-UDP-U/HT20` (35 Mbit/s offered) | 35.2 offered, **30,711,550 B** accepted | 35.2, 31,665,870 B | 35.2, 29,012,190 B | 23.3 offered, peer reports 10.5 MB accepted | void (see below) |
+
+Three readings the table needs.  The TCP downlink is 69-73% of the same-day
+reference, and that is the one number in this table to trust: both ends of both
+arms are counted by the same instrument over the interval the flow actually
+ran.  The round's own ledger called this pair 87-93% by dividing the reference's
+*board* counter by its 45 s window; that window carries the peer's ~12 s
+connect lead-in and the board's counter covers more than the peer says it sent,
+so it is not a usable denominator.  Against the reference
+document's own historical anchor (30.9 / 31.3, peer-timed, same method) these
+rows are 95-97%; the same-day bench ran about a third faster than the day the
+anchor was taken, which is exactly why the denominator is re-taken the same day.
+
+The UDP uplink row is void, not a win.  Both arms name 35 Mbit/s and neither
+delivers it: the port's sink accepts 30.7 MB of the 88.1 MB the board emitted, and the
+reference's own two ends disagree with each other (23.3 Mbit/s at its board's
+counter against 10.5 MB in its peer's report).  They are also weighed
+by different instruments over different windows - the reference's `iperf2`
+server answers with its own report, the port's raw blast has no `iperf2` header
+and only a counting sink can weigh it - so the two cannot be differenced.  The
+round's ledger read this pair as 151% of the reference; that comparison is
+between two offered rates and is not a measurement of either.
+
+UDP downlink is a paced blast: the port's `report` byte count is what it
+*offered*, and the loss figure is the peer's count against it - 82,761,000 B
+counted at the board against the peer's 56,177 x 1470 B = 82,580,190 B, i.e.
+the two agree to 0.2% and the sign is the window difference, so no loss is
+resolvable here.  The uplink is the port's raw blast
+with no `iperf2` header, so the accepted figure comes from the peer's counting
+sink (`tools/rtos/udp-sink.py`), not from `iperf2 -s -u`.  The port's own census
+for the blast phase is `tx_bytes=32,247,150 tx_fail=75,534` in one boot: the
+refusals are the pacing loop's, and they are why the offered number is not a
+throughput number.
+
+### RK3568 / Realtek RTL8189FTV / SDIO - access point
+
+`PROFILE=rk3568-rtl8189fs-ap-tp`, driven by `tools/rtos/ap-round.sh`; gates
+applied by `tools/rtos/ap-report.py`.  The AP MLME is the ported NXP
+`hostapd`; the peer is a Pi station (`MT7921AU`).  The Linux column is the same
+card as a mainline `hostapd` AP on the same channel, same day, clean module.
+Two cold boots each.
+
+| case | rtos, a4-2 | rtos, a4-3 | Linux, same day | vs Linux |
+|---|---|---|---|---|
+| `W-TCP-D/HT20` | 14.9 | **15.3** | **34.5** (84.6 MB / 20.57 s) | 43-44% |
+| `W-TCP-U/HT20` | 13.6 | **16.2** | **38.7** (113 MB / 24.52 s) | 35-42% |
+| `W-UDP-D/HT20` 15 Mbit/s | 14.58 received, **0.0% loss** | 14.58, 0.0% | 15.7, 0% | 93% |
+| `W-UDP-D/HT20` 25 Mbit/s | 25.5 offered, 22.4 received (**12.3% loss**) | 25.5, 23.2 (9.1%) | 26.2, 0% | ~89%, void over the 1% line |
+| `W-UDP-D/HT20` 35 Mbit/s | 35.2 offered, 22.5 received (**36.3% loss**) | 35.2, 22.9 (35.0%) | 36.6, 0% | 63%, void |
+| `W-UDP-U/HT20` 35 Mbit/s | board's counter 11.1, peer sent 21,155 datagrams in 18.0 s (13.8) | board's counter 14.2, peer 26,679 datagrams (17.4) | n/a (no such phase) | - |
+
+The AP role is the weaker role and the table says so plainly.  The 15 Mbit/s
+rung lands within 7% of the reference with no loss; from 25 Mbit/s up the port
+keeps offering the rate and the peer stops receiving it, so the cell is void on
+loss rather than on rate.  TCP is 43-44% downlink and 35-42% uplink.
+
+Three limits on reading this table.  The reference has no UDP uplink phase at
+all, so that row has no denominator and is not a parity claim either way.  The
+board's counter and the peer's window are not the same interval (20 s against
+18 s), so the two columns cannot be differenced into a loss figure here - unlike
+the downlink rows, where the peer's sink and the phase's counter do share a
+window.  The reference's UDP ladder stops at 35 Mbit/s, exactly where the
+port's loss becomes fatal, so nothing here says whether the port could carry 45.
+And the downlink loss percentages come from the peer's counting sink, the one
+end that can count datagrams, because the port's blast carries no `iperf2`
+header.
+
+What the AP role's counters say about where the loss is: in the 35 Mbit/s
+downlink phase the board transmits 52.85 MB and the peer's sink accepts 22.9 MB,
+while every TCP counter in the same boot (`tcp_drop`, `memerr`, `tcp_err`,
+`pbuf_err`, `tcpseg_err`) is zero - the loss is on the air or at the peer's
+driver, not in lwIP or the port's queues.  The AP's own air census for the same
+boot counts 67,938 frames down and 125,725 up with `retry=0` and `ampdu=0`: the
+reference peer's driver reports no retries for these frames, and the port's
+counter records no aggregation, so rate/aggregation state is the open
+observation face here, not a conclusion.
 
 ### Stability
 
