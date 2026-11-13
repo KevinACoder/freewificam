@@ -391,6 +391,40 @@ def rtw89_c5_short_ping() -> str:
             + CASE_PASS.format(name="rtw89_c5") + RESULT_PASS)
 
 
+# --- the RTL8851BU C6T arm ------------------------------------------------
+def _rtw89_c6_body(phases: int, dones: int) -> str:
+    names = ("loopback", "tcpdn", "udpdn", "tcpdn2", "udpdn2", "tcpup", "udpup")
+    protos = ("tcp", "tcp", "udp", "tcp", "udp", "tcp", "tcp")
+    roles = ("client", "server", "server", "server", "server", "client",
+             "client")
+    body = ("rtw89_c6: plan=throughput bssid=1c:a7:70:de:29:a1 dev=wlan0\n"
+            "rtw89_c6: ready netif=1 rx_frames=10 tx_frames=8\n"
+            "rtw89_c6: server tcp=5001 udp=5002 ok=1\n")
+    for i in range(phases):
+        body += (f"rtw89_c6: phase {i + 1} begin proto={protos[i]} "
+                 f"role={roles[i]} port=5001 window_ms=30000 "
+                 f"name={names[i]}\n")
+    for i in range(phases):
+        body += (f"rtw89_c6: phase {i + 1} report bytes={1000000 + i} "
+                 f"ms=30000 kbit=4000 pkts=900\n")
+    for i in range(dones):
+        body += f"rtw89_c6: phase {i + 1} done ok=1\n"
+    return body
+
+
+def rtw89_c6_open() -> str:
+    return (BANNER + _rtw89_c6_body(7, 7)
+            + "rtw89_c6: PASS C6T\n"
+            + CASE_PASS.format(name="rtw89_c6") + RESULT_PASS)
+
+
+def rtw89_c6_short() -> str:
+    """PASS C6T with two phases never closed."""
+    return (BANNER + _rtw89_c6_body(7, 5)
+            + "rtw89_c6: PASS C6T\n"
+            + CASE_PASS.format(name="rtw89_c6") + RESULT_PASS)
+
+
 SAMPLES = [
     ("ap5g-open", ap5g_open, None, {"cases": ["iwl7260_ap5g"]}),
     ("ap5g-wpa2", ap5g_wpa2, None, {"cases": ["iwl7260_ap5g"]}),
@@ -429,6 +463,9 @@ SAMPLES = [
     ("rtw89-c5-open", rtw89_c5_open, None, {"cases": ["rtw89_c5"]}),
     ("rtw89-c5-short-ping", rtw89_c5_short_ping, "ping 1400B tx=20 rx=19",
      {"cases": ["rtw89_c5"]}),
+    ("rtw89-c6-open", rtw89_c6_open, None, {"cases": ["rtw89_c6"]}),
+    ("rtw89-c6-short", rtw89_c6_short, "only 5 of 7 phases closed",
+     {"cases": ["rtw89_c6"]}),
 ]
 
 

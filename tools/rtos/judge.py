@@ -64,6 +64,7 @@ CASES = (
     "rtw89_c3",
     "rtw89_c4",
     "rtw89_c5",
+    "rtw89_c6",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1359,6 +1360,23 @@ PATTERNS = {
     "rtw89_c5_fail": re.compile(
         r"rtw89_c5: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
+    # --- RTL8851BU C6T (the throughput phases over wl0) --------------------
+    "rtw89_c6_plan": re.compile(
+        r"rtw89_c6: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"dev=(?P<dev>\S+)", re.MULTILINE,
+    ),
+    "rtw89_c6_ready": re.compile(
+        r"rtw89_c6: ready netif=(?P<netif>[01]) rx_frames=(?P<rx>\d+) "
+        r"tx_frames=(?P<tx>\d+)", re.MULTILINE,
+    ),
+    "rtw89_c6_server": re.compile(
+        r"rtw89_c6: server tcp=(?P<tcp>\d+) udp=(?P<udp>\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE,
+    ),
+    "rtw89_c6_pass": re.compile(r"rtw89_c6: PASS C6T", re.MULTILINE),
+    "rtw89_c6_fail": re.compile(
+        r"rtw89_c6: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
@@ -1632,6 +1650,25 @@ LIST_PATTERNS = {
         r"rtw89_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
         r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
         r"(?P<max>\d+)", re.MULTILINE,
+    ),
+    "rtw89_c6_begin": re.compile(
+        r"rtw89_c6: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) "
+        r"name=(?P<name>\S+)", re.MULTILINE,
+    ),
+    "rtw89_c6_report": re.compile(
+        r"rtw89_c6: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_c6_census": re.compile(
+        r"rtw89_c6: phase (?P<n>\d+) census rx_frames=(?P<rx>\d+) "
+        r"rx_bytes=(?P<rxb>\d+) tx_frames=(?P<tx>\d+) "
+        r"tx_bytes=(?P<txb>\d+) tx_fail=(?P<fail>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_c6_done": re.compile(
+        r"rtw89_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
     ),
 }
 
@@ -4198,6 +4235,41 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"{rep['ms']}ms {rep['kbit']} kbit/s")
         if not begins:
             errors.append("rtl8189fs_c6t: PASS without a phase begin line")
+
+    if cases.get("rtw89_c6", {}).get("verdict") == "pass":
+        fail = found["rtw89_c6_fail"]
+        if fail:
+            errors.append(f"rtw89_c6: {fail['reason']}")
+        if not found["rtw89_c6_plan"]:
+            errors.append("rtw89_c6: PASS without the plan line")
+        ready = found["rtw89_c6_ready"]
+        if not ready:
+            errors.append("rtw89_c6: PASS without the ready line")
+        elif ready["netif"] != "1":
+            errors.append("rtw89_c6: the lwIP netif was not up")
+        srv = found["rtw89_c6_server"]
+        if not srv:
+            errors.append("rtw89_c6: PASS without the server line")
+        elif srv["ok"] != "1":
+            errors.append("rtw89_c6: a listener did not start")
+        begins = found["rtw89_c6_begin"]
+        reports = found["rtw89_c6_report"]
+        dones = found["rtw89_c6_done"]
+        if len(begins) < 7:
+            errors.append(
+                f"rtw89_c6: only {len(begins)} of 7 phases began")
+        if len(dones) < 7:
+            errors.append(
+                f"rtw89_c6: only {len(dones)} of 7 phases closed")
+        for d in dones:
+            if d["ok"] != "1":
+                errors.append(f"rtw89_c6: phase {d['n']} closed ok=0")
+        for rep in reports:
+            notes.append(
+                f"rtw89_c6: phase {rep['n']} {rep['bytes']}B "
+                f"{rep['ms']}ms {rep['kbit']} kbit/s")
+        if not found["rtw89_c6_pass"]:
+            errors.append("rtw89_c6: the C6T PASS line is missing")
 
     if cases.get("rtl8189fs_ap", {}).get("verdict") == "pass":
         fail = found["rtl8189fs_ap_fail"]

@@ -146,6 +146,9 @@ int case_rtw89_c4_run(void);
 #if defined(RTOS_CASE_RTW89_C5)
 int case_rtw89_c5_run(void);
 #endif
+#if defined(RTOS_CASE_RTW89_C6)
+int case_rtw89_c6_run(void);
+#endif
 
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf

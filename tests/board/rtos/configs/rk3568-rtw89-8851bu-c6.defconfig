@@ -1,0 +1,34 @@
+# rtw89 on the RTOS line, C6T: the RTL8851BU brings up the same C5 ladder
+# (attach -> scan -> NL80211_CMD_CONNECT -> lwIP netif -> ICMP), then runs the
+# throughput phases over wl0 in the same boot.
+#
+# The case table is the 7260 C6T table, unchanged: loopback (attribution only),
+# tcpdn, udpdn, tcpdn2, udpdn2, tcpup, udpup.  The peer is the Kali Pi's
+# iperf 2.2.1; the board's side is lwIP's lwiperf.  The gates (TCP down/up
+# >= 80% of the GT arm, UDP 40M loss <= 1%) are pre-registered in the project's
+# run ledger, not in this image.
+#
+# What this profile is not: the stability round, WPA2, the AP role, monitor.
+#
+# The driver + stack are a GPL-2.0 link product and redistribute the Realtek
+# firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw89_c5 rtw89_c6"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW89=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW89_C5_PEER_WINDOW_MS=12000
+CONFIG_RTW89_USB_BUS=0
+CONFIG_C6_PEER_IP="192.168.99.1"

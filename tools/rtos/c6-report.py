@@ -28,11 +28,13 @@ from pathlib import Path
 MBITS = re.compile(r"(\d+(?:\.\d+)?)\s+Mbits/sec")
 MBYTES = re.compile(r"(\d+(?:\.\d+)?)\s+MBytes")
 LOSS = re.compile(r"\((\d+(?:\.\d+)?)%\)")
-PHASE_BEGIN = re.compile(
-    r"iwl7260_c6: phase \d+ begin proto=\S+ role=\S+ port=\d+ "
+# The phase anchors carry the case name; the tool takes it as an argument so
+# the same gates serve every C6T arm (iwl7260_c6, rtw89_c6, ...).
+PHASE_BEGIN_FMT = (
+    r"{case}: phase \d+ begin proto=\S+ role=\S+ port=\d+ "
     r"window_ms=\d+ name=(\S+)")
-PHASE_REPORT = re.compile(
-    r"iwl7260_c6: phase \d+ report bytes=(\d+) ms=(\d+) kbit=(\d+) "
+PHASE_REPORT_FMT = (
+    r"{case}: phase \d+ report bytes=(\d+) ms=(\d+) kbit=(\d+) "
     r"pkts=(\d+)")
 
 
@@ -65,16 +67,18 @@ def iperf_summary(path: Path) -> dict:
     return out
 
 
-def rtos_phases(serial: Path) -> dict:
+def rtos_phases(serial: Path, case: str = "iwl7260_c6") -> dict:
     """name -> {bytes, ms, kbit, pkts} from the case's own anchors."""
+    begin_re = re.compile(PHASE_BEGIN_FMT.format(case=re.escape(case)))
+    report_re = re.compile(PHASE_REPORT_FMT.format(case=re.escape(case)))
     phases: dict[str, dict] = {}
     current = None
     for line in read(serial).replace("\r", "").splitlines():
-        m = PHASE_BEGIN.search(line)
+        m = begin_re.search(line)
         if m:
             current = m.group(1)
             continue
-        m = PHASE_REPORT.search(line)
+        m = report_re.search(line)
         if m and current:
             phases[current] = {
                 "bytes": int(m.group(1)),
@@ -129,8 +133,8 @@ def gt_arm(board: Path) -> dict:
     return arm
 
 
-def rtos_arm(evidence: Path) -> dict:
-    phases = rtos_phases(evidence / "serial.log")
+def rtos_arm(evidence: Path, case: str = "iwl7260_c6") -> dict:
+    phases = rtos_phases(evidence / "serial.log", case)
     arm = {"src": str(evidence), "phases": phases}
     for name in ("tcpdn", "tcpdn2", "udpdn", "udpdn2", "tcpup", "udpup"):
         p = phases.get(name)
@@ -210,14 +214,16 @@ def main() -> int:
     ap.add_argument("--json", type=Path, default=None)
     ap.add_argument("--tcp-min", type=float, default=0.80,
                     help="TCP ratio gate against GT (default 0.80)")
+    ap.add_argument("--case-prefix", default="iwl7260_c6",
+                    help="the case name the phase anchors carry")
     args = ap.parse_args()
 
     gt_arms = [gt_arm(args.gt)]
     if args.gt2:
         gt_arms.append(gt_arm(args.gt2))
-    rt_arms = [rtos_arm(args.rtos)]
+    rt_arms = [rtos_arm(args.rtos, args.case_prefix)]
     if args.rtos2:
-        rt_arms.append(rtos_arm(args.rtos2))
+        rt_arms.append(rtos_arm(args.rtos2, args.case_prefix))
 
     gt, gt_boots = aggregate(gt_arms)
     rt, rt_boots = aggregate(rt_arms)
