@@ -1,0 +1,45 @@
+# rtl8189fs on the RTOS line, the AP role (A1-A3): the board's SDIO 8189FTV
+# becomes the AP (SSID rtos-8189-ap, ch5/2432, HT20, open), the Pi's MT7921AU
+# joins it, and the data plane is proven both ways.
+#
+# The control plane is the real one: NL80211_CMD_SET_INTERFACE(AP) and then
+# NL80211_CMD_START_AP run nl80211's own handlers, which dispatch to the vendor
+# driver's `.change_virtual_intf` / `.start_ap`.  The AP MLME itself is the
+# vendor's (autoconf.h defines CONFIG_AP_MODE + CONFIG_NATIVEAP_MLME): it answers
+# probe/auth/assoc and sends the beacons from its software beacon timer.
+# hostapd (imported NXP port, docs/decisions/2026-11-12-ap-mlme-port.md)
+# supplies the beacon's 36-byte head + IE tail through set_ap; the port has no
+# .set_beacon op, so there is exactly one beacon source.
+#
+# What this profile is not: the A4 throughput table (rk3568-rtl8189fs-ap-tp, a
+# separate image on purpose), WPA2, monitor, and the station role (its own
+# profiles).  The station's own MLME is not in this path: cfg80211 is the
+# control plane and mac80211 runs no vif here.
+#
+# The vendor tree is GPL-2.0-only and the imported mac80211/cfg80211 stack is
+# GPL-2.0-only, so this image is a GPL-2.0 link product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_ap"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The AP MLME's beacon/EAPOL half.  hostapd and wpa_supplicant are mutually
+# exclusive (components/liblinux80211/Kconfig), and this image is the AP.
+CONFIG_HOSTAP_AP=y
+
+# The vendor stack's pools, hostapd's own allocations, the lwIP pbufs and the
+# TCP/IP thread share the FreeRTOS heap; see the C3 profile's note.
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+
+# The AP case drives nl80211's SET_INTERFACE / START_AP from the runner task and
+# then the vendor's beacon path through hostapd's task; the 2026-11-12 AP round
+# overflowed the 8 KiB default right after STATION add.  24 KiB is the accepted
+# AP-round size and still nothing against the 16 MiB heap.
+CONFIG_RUNNER_STACK_KB=24

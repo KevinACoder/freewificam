@@ -124,6 +124,12 @@ int case_rtl8189fs_sta_run(void);
 #if defined(RTOS_CASE_RTL8189FS_STA_WPA2)
 int case_rtl8189fs_sta_wpa2_run(void);
 #endif
+#if defined(RTOS_CASE_RTL8189FS_AP)
+/* The AP role (docs/HANDOFF-8189FTV-RTOS-AP.md): the vendor stack's own AP
+ * MLME beacons and answers auth/assoc, hostapd supplies the beacon's IEs, and
+ * the station table is the vendor's (no netlink in this image). */
+int case_rtl8189fs_ap_run(void);
+#endif
 #if defined(RTOS_CASE_RTL8189FS_C6T)
 int case_rtl8189fs_c6t_run(void);
 #endif

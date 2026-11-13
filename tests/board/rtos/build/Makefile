@@ -555,6 +555,23 @@ $(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)
 	$(CC) $(filter-out -D%,$(2)) -I$(ROOT)/build/kconfig/$(PROFILE) -include $(PLATFORM)/build_defs.h -MMD -MP -c $$< -o $$@
 endef
 
+# The rtl8189fs vendor tree and the imported hostapd/supplicant tree are two
+# independent code bases that were never meant to share a link unit: both define
+# `ap_free_sta` (a 5-argument vendor function and hostapd's 2-argument teardown,
+# in src/ap/sta_info.c), `hexstr2bin`, `omac1_aes_128` and the standard AES
+# T-tables.  Letting the linker pick one is not an option: hostapd's own 40-odd
+# `ap_free_sta(hapd, sta)` calls would bind to the vendor's signature.  The
+# vendor sources are byte-identical to the GT pin and must stay so, therefore
+# the rename happens on the *object*, after the compile, with one map applied to
+# every vendor unit so its internal references move with it.  The map is in
+# wl80211.mk (WL80211_RTL8189FS_RENAME) and needs no link flag at all.
+define COMPILE_C_RENAME
+$(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)
+	mkdir -p $$(dir $$@)
+	$(CC) $(filter-out -D%,$(2)) -I$(ROOT)/build/kconfig/$(PROFILE) -include $(PLATFORM)/build_defs.h -MMD -MP -c $$< -o $$@
+	$(OBJCOPY) $(WL80211_RTL8189FS_RENAME) $$@
+endef
+
 define COMPILE_S
 $(OBJDIR)/$(patsubst $(ROOT)/%,%,$(1)).o: $(1) $(TAG_STAMP) $(FLAG_STAMP)
 	mkdir -p $$(dir $$@)
@@ -598,7 +615,7 @@ endif
 ifneq ($(strip $(WL80211_ALL_SRCS)),)
 $(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
-$(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C_RENAME,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_CFLAGS))))

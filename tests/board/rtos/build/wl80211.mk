@@ -28,7 +28,7 @@
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
 WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g iwl7260_mon \
-	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t
+	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -109,12 +109,28 @@ else
 WL80211_HOSTAP_CONFIG_HDR := $(LIB8)/hostap/include/hostap_config.h
 endif
 
-# The 8189 vendor tree carries its own AES T-tables (rtw_security.c) and a
-# hexstr2bin (osdep_service.c); the NXP supplicant carries the same standard
-# AES tables and hexstr2bin in its crypto/utils.  Both are the same tables, so
-# the first definition is the same value - allow the duplicate rather than
-# patch either imported tree.
-WL80211_LDFLAGS += -Wl,--allow-multiple-definition
+# The 8189 vendor tree and the imported hostapd/supplicant tree define the same
+# global names, and they are NOT all the same code:
+#
+#   ap_free_sta      vendor rtw_ap.c (5 args) vs hostapd src/ap/sta_info.c (2)
+#   omac1_aes_128    vendor rtw_security.c vs crypto/aes-omac1.c
+#   hexstr2bin       vendor osdep_service.c vs utils/common.c
+#   Te0 Td0 Td4s rcons   the standard AES T-tables (identical values)
+#
+# `--allow-multiple-definition` would bind hostapd's own `ap_free_sta(hapd,
+# sta)` calls to the vendor's five-argument function: a crash on every station
+# teardown, not a table alias.  Both trees stay byte-identical, so the rename is
+# done on the vendor objects (COMPILE_C_RENAME in the Makefile) with this map,
+# which moves the vendor's definitions and internal references together.  The
+# link then needs no flag at all.
+WL80211_RTL8189FS_RENAME := \
+	--redefine-sym ap_free_sta=rtw_ap_free_sta \
+	--redefine-sym omac1_aes_128=rtw_omac1_aes_128 \
+	--redefine-sym hexstr2bin=rtw_hexstr2bin \
+	--redefine-sym Te0=rtw_Te0 \
+	--redefine-sym Td0=rtw_Td0 \
+	--redefine-sym Td4s=rtw_Td4s \
+	--redefine-sym rcons=rtw_rcons
 
 WL80211_HOSTAP_CFLAGS := \
 	-I$(LIB8)/hostap/include \

@@ -65,6 +65,32 @@ config AP_DIAG_TABLE
 	  named phase.  This is the faithful-reproduction arm; used by
 	  rk3568-iwl7260-ap-a4-table.
 
+# --- the 8189FTV AP role (docs/HANDOFF-8189FTV-RTOS-AP.md) ----------------
+#
+# The AP is the vendor stack's own MLME; these three symbols only choose which
+# arm of the round the image is.  The SSID/channel/frequency live in the case
+# (they are the pre-registered constants), not in Kconfig, so two profiles of
+# the same arm cannot silently disagree about what went on the air.
+
+config RTL8189FS_AP_TP
+	bool "rtl8189fs_ap runs the A4 phase table (throughput verdict image)"
+	help
+	  Off: the case stops after A3 (A1-A3 functional verdict).  On: after
+	  the same bring-up and pings it runs the AP phase table and prints
+	  PASS APT.  A throughput verdict and a functional verdict must not
+	  share an image; used by rk3568-rtl8189fs-ap-tp.
+
+config RTL8189FS_AP_WPA2
+	bool "rtl8189fs_ap runs the WPA2-PSK/CCMP variant"
+	help
+	  The same AP with hostapd configured WPA2-PSK/CCMP and the case
+	  stopping after A3 (the handshake gate).  Used by
+	  rk3568-rtl8189fs-ap-wpa2.  The bench passphrase is not a secret.
+
+config RTL8189FS_AP_PSK
+	string "rtl8189fs_ap WPA2 passphrase"
+	default "rtos-8189-wpa2-psk"
+
 config STA_SSID
 	string "G2 STA target SSID"
 	default ""

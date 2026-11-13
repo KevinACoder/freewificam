@@ -112,6 +112,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTL8189FS_C6T)
 	CASE_ENTRY("rtl8189fs_c6t", case_rtl8189fs_c6t_run)
 #endif
+#if defined(RTOS_CASE_RTL8189FS_AP)
+	CASE_ENTRY("rtl8189fs_ap", case_rtl8189fs_ap_run)
+#endif
 #if defined(RTOS_HOST_TIER)
 };
 #endif

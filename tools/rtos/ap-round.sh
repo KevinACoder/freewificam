@@ -39,6 +39,10 @@ PI_IP=${PI_IP:-192.168.99.2}
 MON_IF=${MON_IF:-wlan2}
 PSK=${PSK:-rtos-7260-wpa2-psk}
 WPA2=${WPA2:-0}
+# The case under test.  The default is the AC 7260 AP arm; the 8189FTV arm
+# overrides both (its anchors carry its own prefix and its own case list).
+CASE=${CASE:-iwl7260_ap}
+CASE_EXPECT=${CASE_EXPECT:-tick,pcie,iwl7260_ap}
 BIN="$ROOT/tests/board/rtos/build/build/rtos-freertos.bin"
 TIMEOUT=480
 EVIDENCE=
@@ -177,6 +181,10 @@ on_phase() {		# $1 = name
 		pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-udpdn.txt 25" >/dev/null 2>&1 &
 		phase_pids+=($!)
 		;;
+	udpdn15|udpdn25|udpdn35|udpdn45)
+		pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-$1.txt 25" >/dev/null 2>&1 &
+		phase_pids+=($!)
+		;;
 	tcpdn2)
 		pih "server-tcp $PI_DIR/peer-tcpdn2.txt 25" >/dev/null 2>&1 &
 		phase_pids+=($!)
@@ -198,7 +206,7 @@ on_phase() {		# $1 = name
 }
 
 for _ in $(seq 1 3000); do
-	if [ "$seen_start_ap" = 0 ] && anchor 'iwl7260_ap: (start_ap|hostap start) rc=0'; then
+	if [ "$seen_start_ap" = 0 ] && anchor "$CASE: hostap start rc=0 ready=1"; then
 		seen_start_ap=1
 		# WPA2: capture the 4-way before the join; the open path's beacon
 		# capture stays as it was.
@@ -239,14 +247,14 @@ for _ in $(seq 1 3000); do
 	fi
 
 	if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 1 ] && [ "$seen_peer" = 0 ] && \
-	   anchor 'iwl7260_ap: peer window ms='; then
+	   anchor "$CASE: peer window ms="; then
 		seen_peer=1
 		# The idle arm has no peer by construction; nothing to start.
 		echo "idle arm: no peer at $(date -Is)" >> "$EVIDENCE/phase-seen.txt"
 	fi
 
 	if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 0 ] && [ "$seen_hostap_up" = 0 ] && \
-	   anchor 'iwl7260_ap: hostap up ready=1 sta='; then
+	   anchor "$CASE: PASS A2"; then
 		seen_hostap_up=1
 		pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-diag.txt 120" \
 			>/dev/null 2>&1 &
@@ -254,7 +262,7 @@ for _ in $(seq 1 3000); do
 	fi
 
 	if [ "$NO_PEER" = 0 ] && [ "$seen_peer" = 0 ] && \
-	   anchor 'iwl7260_ap: peer window ms='; then
+	   anchor "$CASE: peer window ms="; then
 		seen_peer=1
 		if [ "$WPA2" = 1 ]; then
 			# join-wpa has already waited for COMPLETED; ping after it,
@@ -267,7 +275,11 @@ for _ in $(seq 1 3000); do
 
 	PHASES=""
 	if [ "$NO_PEER" = 0 ]; then
-		[ -f "$SERIAL" ] && PHASES=$(tr -d '\r' < "$SERIAL" 2>/dev/null | sed -n 's/.*iwl7260_ap: phase [0-9][0-9]* begin .*name=\([a-z0-9]*\) peer_ms=.*/\1/p')
+		# double-quoted on purpose: $CASE must expand.  A single-quoted sed
+		# here leaves the literal "$CASE" in the pattern, the phase list stays
+		# empty, and every peer-driven phase reads 0 bytes for a harness
+		# reason (the 2026-11-13 A4 boot 1 did exactly that).
+		[ -f "$SERIAL" ] && PHASES=$(tr -d '\r' < "$SERIAL" 2>/dev/null | sed -n "s/.*$CASE: phase [0-9][0-9]* begin .*name=\([a-z0-9]*\) peer_ms=.*/\1/p")
 	fi
 	while IFS= read -r ph; do
 		[ -n "$ph" ] || continue
@@ -293,9 +305,9 @@ fi
 
 # The image identity check the banner cannot give: the case list is what says
 # this is the AP image and not whatever the last build left behind.
-if ! [ -f "$SERIAL" ] || ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_ap: core ready'; then
-	echo "ap-round: INVALID BOOT: no iwl7260_ap anchors (wrong image?)" >&2
-	echo "invalid: wrong image (no iwl7260_ap anchor)" > "$EVIDENCE/invalid.txt"
+if ! [ -f "$SERIAL" ] || ! tr -d '\r' < "$SERIAL" | grep -aq "$CASE: core ready"; then
+	echo "ap-round: INVALID BOOT: no $CASE anchors (wrong image?)" >&2
+	echo "invalid: wrong image (no $CASE anchor)" > "$EVIDENCE/invalid.txt"
 	if [ "$NO_PEER" = 0 ]; then
 		pih "servers-stop" >/dev/null 2>&1 || true
 		pih "down" > "$EVIDENCE/pi-restore.txt" 2>&1 || true
@@ -303,7 +315,7 @@ if ! [ -f "$SERIAL" ] || ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_ap: core r
 	RESTORED=1
 	exit 2
 fi
-if [ "$WPA2" = 1 ] && ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_ap: security wpa2=1'; then
+if [ "$WPA2" = 1 ] && ! tr -d '\r' < "$SERIAL" | grep -aq "$CASE: security wpa2=1"; then
 	echo "ap-round: INVALID BOOT: --wpa2 but no security wpa2=1 anchor" >&2
 	echo "invalid: wpa2 image not deployed" > "$EVIDENCE/invalid.txt"
 	if [ "$NO_PEER" = 0 ]; then
@@ -401,7 +413,7 @@ fi
 
 # --- judge -------------------------------------------------------------------
 python3 "$HERE/judge.py" "$SERIAL" --json "$EVIDENCE/judge.json" \
-	--expect cases=tick,pcie,iwl7260_ap \
+	--expect cases=$CASE_EXPECT \
 	>"$EVIDENCE/judge.txt" 2>&1 || true
 
 echo "ap-round: evidence -> $EVIDENCE"

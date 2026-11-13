@@ -51,6 +51,10 @@ CASES = (
     "rtl8189fs_sdio",
     "rtl8189fs_sta",
     "rtl8189fs_c6t",
+    # The AP role (docs/HANDOFF-8189FTV-RTOS-AP.md): the vendor's own AP MLME
+    # beacons and answers auth/assoc, hostapd supplies the beacon's IEs, and
+    # the station table is the vendor's (this image has no netlink socket).
+    "rtl8189fs_ap",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -262,6 +266,92 @@ PATTERNS = {
     ),
     "rtl8189fs_c6t_fail": re.compile(
         r"rtl8189fs_c6t: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # --- the 8189FTV AP role (docs/HANDOFF-8189FTV-RTOS-AP.md) -------------
+    "rtl8189fs_ap_wlan0": re.compile(
+        r"rtl8189fs_ap: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]{17}) iftype=(?P<iftype>-?\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_start": re.compile(
+        r"rtl8189fs_ap: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_chan": re.compile(
+        r"rtl8189fs_ap: chan freq=(?P<freq>\d+) present=(?P<present>[01]) "
+        r"flags=0x(?P<flags>[0-9a-f]+) can_beacon=(?P<can>[01])",
+        re.MULTILINE
+    ),
+    "rtl8189fs_ap_set_iface": re.compile(
+        r"rtl8189fs_ap: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+) "
+        r"order=(?P<order>\S+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_netif": re.compile(
+        r"rtl8189fs_ap: netif up name=(?P<name>\S+) ip=(?P<ip>[0-9.]+)",
+        re.MULTILINE
+    ),
+    "rtl8189fs_ap_security": re.compile(
+        r"rtl8189fs_ap: security wpa2=(?P<wpa2>[01]) ssid=(?P<ssid>\S+) "
+        r"channel=(?P<ch>\d+) bcn_int=(?P<bcn>\d+) dtim_req=(?P<dtim>\d+)",
+        re.MULTILINE
+    ),
+    "rtl8189fs_ap_hostap": re.compile(
+        r"rtl8189fs_ap: hostap start rc=(?P<rc>-?\d+) ready=(?P<ready>[01])",
+        re.MULTILINE
+    ),
+    # The vendor's own MLME state: the BSS start and the channel it derived
+    # from the beacon's DS IE are A1's witness (hostapd's ready flag is not).
+    "rtl8189fs_ap_mlme": re.compile(
+        r"rtl8189fs_ap: diag (?P<tag>\S+) valid=1 fwstate=0x(?P<fw>[0-9a-f]+) "
+        r"ap_state=(?P<ap>[01]) bstart=(?P<bstart>[01]) ch=(?P<ch>\d+) "
+        r"bcn_int=(?P<bcn>\d+) nr_ap_if=(?P<nr_ap_if>\d+) "
+        r"nr_sta=(?P<nr_sta>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_resources": re.compile(
+        r"rtl8189fs_ap: resources heap_free=(?P<free>\d+) "
+        r"heap_min=(?P<min>\d+) total=(?P<total>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_pass_a1": re.compile(
+        r"rtl8189fs_ap: PASS A1", re.MULTILINE
+    ),
+    "rtl8189fs_ap_peer_window": re.compile(
+        r"rtl8189fs_ap: peer window ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_link": re.compile(
+        r"rtl8189fs_ap: link traffic rx_frames=(?P<rx>\d+) "
+        r"tx_frames=(?P<tx>\d+) rx_bytes=(?P<rxb>\d+) tx_bytes=(?P<txb>\d+) "
+        r"tx_fail=(?P<fail>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_sta": re.compile(
+        r"rtl8189fs_ap: sta n=(?P<n>\d+) mac=(?P<mac>[0-9a-f:]{17}) "
+        r"aid=(?P<aid>\d+) state=0x(?P<state>[0-9a-f]+) "
+        r"flags=0x(?P<flags>[0-9a-f]+) rate_id=(?P<rate_id>\d+) "
+        r"cur_rate=(?P<cur_rate>\d+) bw=(?P<bw>\d+) sgi=(?P<sgi>\d+) "
+        r"rx_pkts=(?P<rx>\d+) tx_pkts=(?P<tx>\d+) tx_bytes=(?P<txb>\d+)",
+        re.MULTILINE
+    ),
+    "rtl8189fs_ap_pass_a2": re.compile(
+        r"rtl8189fs_ap: PASS A2", re.MULTILINE
+    ),
+    "rtl8189fs_ap_pass_a3": re.compile(
+        r"rtl8189fs_ap: PASS A3", re.MULTILINE
+    ),
+    "rtl8189fs_ap_loglevel": re.compile(
+        r"rtl8189fs_ap: log level 4->2", re.MULTILINE
+    ),
+    "rtl8189fs_ap_server": re.compile(
+        r"rtl8189fs_ap: server tcp=(?P<tcp>\d+) udp=(?P<udp>\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    "rtl8189fs_ap_pass_ap": re.compile(
+        r"rtl8189fs_ap: PASS AP$", re.MULTILINE
+    ),
+    "rtl8189fs_ap_pass_apw": re.compile(
+        r"rtl8189fs_ap: PASS APW", re.MULTILINE
+    ),
+    "rtl8189fs_ap_pass_apt": re.compile(
+        r"rtl8189fs_ap: PASS APT", re.MULTILINE
+    ),
+    "rtl8189fs_ap_fail": re.compile(
+        r"rtl8189fs_ap: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "iwl7260_c3_fwreg": re.compile(
         r"iwl7260_c3: fw registered=(?P<rc>-?\d+)", re.MULTILINE
@@ -1165,6 +1255,26 @@ LIST_PATTERNS = {
     ),
     "rtl8189fs_c6t_done": re.compile(
         r"rtl8189fs_c6t: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE),
+    "rtl8189fs_ap_begin": re.compile(
+        r"rtl8189fs_ap: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) air=(?P<air>\S+) port=(?P<port>\d+) "
+        r"window_ms=(?P<win>\d+) name=(?P<name>\S+) peer_ms=(?P<peer>\d+) "
+        r"rate_kbps=(?P<rate>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_ap_report": re.compile(
+        r"rtl8189fs_ap: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE
+    ),
+    "rtl8189fs_ap_done": re.compile(
+        r"rtl8189fs_ap: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE),
+    "rtl8189fs_ap_phase_ap": re.compile(
+        r"rtl8189fs_ap: phase (?P<n>\d+) ap tx_pkts=(?P<tx>\d+) "
+        r"rx_pkts=(?P<rx>\d+) bstart=(?P<bstart>[01]) ch=(?P<ch>\d+) "
+        r"nr_ap_if=(?P<nr_ap_if>\d+)", re.MULTILINE),
+    "rtl8189fs_ap_ping": re.compile(
+        r"rtl8189fs_ap: ping payload=(?P<payload>\d+) tx=(?P<tx>\d+) "
+        r"rx=(?P<rx>\d+)", re.MULTILINE),
     "iwl7260_c6_begin": re.compile(
         r"iwl7260_c6: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
         r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) "
@@ -3759,6 +3869,81 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"{rep['ms']}ms {rep['kbit']} kbit/s")
         if not begins:
             errors.append("rtl8189fs_c6t: PASS without a phase begin line")
+
+    if cases.get("rtl8189fs_ap", {}).get("verdict") == "pass":
+        fail = found["rtl8189fs_ap_fail"]
+        if fail:
+            errors.append(f"rtl8189fs_ap: {fail['reason']}")
+        # A1: the interface changed type, hostapd came up, and the vendor's
+        # own MLME started the BSS.  hostapd's ready flag alone is not A1.
+        iface = found["rtl8189fs_ap_set_iface"]
+        if not iface or iface["rc"] != "0" or iface["type"] != "3":
+            errors.append(
+                "rtl8189fs_ap: PASS without a successful SET_INTERFACE(AP)")
+        else:
+            notes.append(
+                f"rtl8189fs_ap: set_iface type={iface['type']} "
+                f"order={iface['order']}")
+        hostap = found["rtl8189fs_ap_hostap"]
+        if not hostap or hostap["rc"] != "0" or hostap["ready"] != "1":
+            errors.append("rtl8189fs_ap: PASS without hostap start rc=0 ready=1")
+        mlme = found["rtl8189fs_ap_mlme"]
+        if not mlme or mlme["bstart"] != "1":
+            errors.append(
+                "rtl8189fs_ap: the vendor's BSS never started (bstart=0)")
+        elif mlme["ch"] != "5":
+            errors.append(
+                f"rtl8189fs_ap: the BSS started on channel {mlme['ch']}, not 5")
+        else:
+            notes.append(
+                f"rtl8189fs_ap: mlme bstart=1 ch={mlme['ch']} "
+                f"bcn_int={mlme['bcn']} nr_ap_if={mlme['nr_ap_if']}")
+        if not found["rtl8189fs_ap_pass_a1"]:
+            errors.append("rtl8189fs_ap: PASS without the A1 gate line")
+        # A2: the vendor's station list, not hostapd's.
+        sta = found["rtl8189fs_ap_sta"]
+        if not sta:
+            errors.append(
+                "rtl8189fs_ap: PASS without the vendor's station line")
+        elif sta["aid"] == "0":
+            errors.append("rtl8189fs_ap: the station's aid is 0")
+        else:
+            notes.append(
+                f"rtl8189fs_ap: sta {sta['mac']} aid={sta['aid']} "
+                f"rate_id={sta['rate_id']} cur_rate={sta['cur_rate']} "
+                f"tx_pkts={sta['tx']}")
+        if not found["rtl8189fs_ap_pass_a2"]:
+            errors.append("rtl8189fs_ap: PASS without the A2 gate line")
+        # A3: both ICMP rounds this case owns (the peer->AP direction is the
+        # harness's file, not this judge's input).
+        pings = found["rtl8189fs_ap_ping"]
+        if len(pings) < 2:
+            errors.append("rtl8189fs_ap: PASS without both ICMP rounds")
+        else:
+            for row in pings:
+                if row["tx"] != row["rx"]:
+                    errors.append(
+                        f"rtl8189fs_ap: ping {row['payload']}B "
+                        f"{row['rx']}/{row['tx']}")
+                else:
+                    notes.append(
+                        f"rtl8189fs_ap: ping {row['payload']}B "
+                        f"{row['rx']}/{row['tx']}")
+        if not found["rtl8189fs_ap_pass_a3"]:
+            errors.append("rtl8189fs_ap: PASS without the A3 gate line")
+        # A4 (the throughput image only).
+        if found["rtl8189fs_ap_pass_apt"]:
+            dones = found["rtl8189fs_ap_done"]
+            if len(dones) < 7:
+                errors.append(
+                    f"rtl8189fs_ap: only {len(dones)} of 7 traffic phases closed")
+            for rep in found["rtl8189fs_ap_report"]:
+                notes.append(
+                    f"rtl8189fs_ap: phase {rep['n']} {rep['bytes']}B "
+                    f"{rep['ms']}ms {rep['kbit']} kbit/s")
+            if not found["rtl8189fs_ap_loglevel"]:
+                errors.append(
+                    "rtl8189fs_ap: PASS APT without the log-level drop line")
 
     result = found["result"]
     if not result:

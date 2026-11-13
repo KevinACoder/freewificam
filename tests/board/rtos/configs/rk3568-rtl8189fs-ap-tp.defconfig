@@ -1,0 +1,44 @@
+# rtl8189fs on the RTOS line, the AP throughput arm (A4): the same A1-A3
+# bring-up in one boot, then the AP phase table over the same netif while the
+# Pi drives the peer half.
+#
+# Direction words are the round's: air=down is AP->STA (this board sends; the
+# Pi's server/sink receives), air=up is STA->AP (the Pi sends; this board's lwIP
+# receives) - the opposite of the C6 arm's board roles with the same names.
+#
+# This profile is the A1-A3 arm plus `RTL8189FS_AP_TP`, and it is a separate
+# image on purpose: a throughput verdict and a functional verdict must not share
+# an image, and the numbers a verdict is written from come from a clean image
+# (no census).  When the clean arm is short, the attribution image is the
+# census variant (rk3568-rtl8189fs-c6t-census's knobs apply unchanged).
+#
+# The pump cadence is the STA round's accepted alignment arm (adaptive + claim
+# yield, d93dbaa): the beacon timer is a third claimant on the same SDIO claim,
+# so the baseline that already hands the claim to a parked driver thread is the
+# honest starting point, not a tuning lever of this round.
+#
+# The vendor tree is GPL-2.0-only and the imported mac80211/cfg80211 stack is
+# GPL-2.0-only, so this image is a GPL-2.0 link product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_ap"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_HOSTAP_AP=y
+
+CONFIG_RTL8189FS_AP_TP=y
+
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_RUNNER_STACK_KB=24
+
+# The accepted STA-round cadence arm, unchanged: an immediate next cycle while a
+# cycle moved bytes, backoff to the 10 ms idle period when it does not, and a
+# one-tick yield to a parked driver thread instead of queueing in front of it.
+CONFIG_C6T_PUMP_MODE=1
+CONFIG_C6T_PUMP_YIELD=y
