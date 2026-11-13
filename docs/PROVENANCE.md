@@ -139,6 +139,35 @@ The rest of the S1a work is BSD-3-Clause face code written in this component
 No conflicts with the pin: the import guard is the authority for `stack/`, and the
 faces are not imports.
 
+## The USB engine import (2026-11-13, rtw89)
+
+The linuxkpi USB layer's *face* (`include/linux/usb.h`) came in with the
+original component import; what was missing was its body. The rtw89 line needs
+it, so the previous line's USB engine, its CherryUSB class hook and its adapter
+were imported from the same source commit, with the same byte-identical rule
+(the adapter's three include lines are the only edit and are recorded in
+`DIVERGENCES.md`).
+
+| Destination | Source path (previous line, `fdceccb9`) | Files | License | Byte-identical |
+|---|---|---|---|---|
+| `components/liblinux80211/bus/usb.c` | `components/linuxkpi/rtos/usb/linuxkpi_usb.c` | 1 | BSD-3-Clause | yes (renamed) |
+| `components/liblinux80211/bus/linuxkpi_usb.h` | `components/linuxkpi/rtos/usb/linuxkpi_usb.h` | 1 | BSD-3-Clause | yes (renamed) |
+| `components/liblinux80211/include/linux80211/lkpi_usb_backend.h` | `components/linuxkpi/rtos/usb/lkpi_usb_backend.h` | 1 | BSD-3-Clause | yes (moved to the seam header's directory) |
+| `components/liblinux80211/bus/lkpi_usbh_class.{c,h}` | `components/linuxkpi/rtos/usb/` | 2 | BSD-3-Clause | yes (renamed) |
+| `components/liblinux80211/bus/lkpi_usbh_modeswitch.{c,h}` | `components/linuxkpi/rtos/usb/` | 2 | BSD-3-Clause | yes (renamed) |
+| `components/liblinux80211/ports/usb-rk3568/adapter.c` | `components/linuxkpi/rtos/usb/lkpi_usb_cherryusb.c` | 1 | BSD-3-Clause | **no**: three include paths rewritten for this component's layout (`DIVERGENCES.md`) |
+| `components/liblinux80211/ports/usb-rk3568/lkpi_usb_cherryusb.h` | `components/linuxkpi/rtos/usb/lkpi_usb_cherryusb.h` | 1 | BSD-3-Clause | yes (renamed) |
+| `components/liblinux80211/lkpi_rxtrace.{c,h}`, `lkpi_tcp_trace.{c,h}` | `components/linuxkpi/rtos/` | 4 | BSD-3-Clause | yes (moved to the component root, beside `lkpi_census`) |
+
+The two trace units are observation-only: their bodies compile to nothing
+unless `CONFIG_LKPI_RXTRACE` / `CONFIG_WLAN_TCP_TRACE` is on, which no image
+selects. `lkpi_rxtrace`'s delivery hook had its caller in the previous line's
+net80211 receive helper, which this line does not carry; the hook is therefore
+present but uncalled, and that is recorded rather than wired to a second place.
+
+`docs/IMPORT-MANIFEST.tsv` carries the per-file rows; the adapter's row holds
+the imported blob and `DIVERGENCES.md` records why the current bytes differ.
+
 ## The host tier import (2026-11-10, K1)
 
 | Destination | Source (same source commit) | Files | License | Byte-identical |

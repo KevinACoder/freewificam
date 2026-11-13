@@ -6,7 +6,9 @@
 #   kpi       the kernel-API bodies (one world, the Linux face)
 #   bus-pci   the PCI engine (Linux semantics over the backend seam)
 #   bus-sdio  the SDIO engine and the backend registration
+#   bus-usb   the USB engine, the CherryUSB class hook and the modeswitch
 #   port-pci  the RK3568 adapter (its own world: board drivers + arch)
+#   port-usb  the CherryUSB adapter, over the board's USB glue
 #
 # The stack group is the imported Linux wireless stack: it is compiled only by
 # the S0 inventory target (tools/build/rtos.mk s0-compile), never linked into an
@@ -33,6 +35,8 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	linuxkpi_crypto.c \
 	linuxkpi_ccm.c \
 	lkpi_census.c \
+	lkpi_rxtrace.c \
+	lkpi_tcp_trace.c \
 	fw_registry.c \
 	net_egress.c \
 	skbuff/skbuff_pool.c
@@ -48,6 +52,22 @@ endif
 
 ifeq ($(SRC_TAG),port-pci)
 port-obj-$(CONFIG_LIBLINUX80211_PCI) += ports/pci-rk3568/adapter.c
+endif
+
+# The USB engine (the URB layer over the backend seam), the CherryUSB class
+# hook that turns its enumeration into the Linux usb_driver probe, and the
+# board adapter.  The class hook and the modeswitch helper are part of the
+# engine's bus world: they read CherryUSB's descriptors and hand the result to
+# the adapter-neutral core.
+ifeq ($(SRC_TAG),bus-usb)
+obj-$(CONFIG_LIBLINUX80211_USB) += \
+	bus/usb.c \
+	bus/lkpi_usbh_class.c \
+	bus/lkpi_usbh_modeswitch.c
+endif
+
+ifeq ($(SRC_TAG),port-usb)
+port-obj-$(CONFIG_LIBLINUX80211_USB) += ports/usb-rk3568/adapter.c
 endif
 
 ifeq ($(SRC_TAG),stack)

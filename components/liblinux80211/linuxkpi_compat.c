@@ -152,6 +152,26 @@ int scnprintf(char *buf, size_t size, const char *fmt, ...)
 }
 
 /*
+ * [LNX] fs/sysfs/file.c: sysfs_emit().  The interface formats a show caller's
+ * answer into its PAGE_SIZE buffer and clamps the count the way scnprintf does;
+ * this port has no sysfs, so the body is the formatting half and the size rule.
+ * rtw89's USB unit names it for its efuse/uuid attributes.
+ */
+int sysfs_emit(char *buf, const char *fmt, ...)
+{
+	va_list args;
+	int i;
+
+	if (buf == NULL || fmt == NULL)
+		return 0;
+	va_start(args, fmt);
+	i = lkpi_vscnprintf(buf, PAGE_SIZE, fmt, args);
+	va_end(args);
+
+	return i;
+}
+
+/*
  * [LNX] include/linux/math64.h:328 (declaration) and lib/math/div64.c:256-341 (the
  * interface's body): the full 128-bit product a * b + c, divided by d, answering ~0
  * when the quotient does not fit a u64. The interface has an __int128 arm that

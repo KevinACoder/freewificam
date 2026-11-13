@@ -186,7 +186,9 @@ ifeq ($(CONFIG_LIBLINUX80211),1)
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,kpi,LIBLINUX80211_KPI))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-pci,LIBLINUX80211_BUS_PCI))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-sdio,LIBLINUX80211_BUS_SDIO))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-usb,LIBLINUX80211_BUS_USB))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-pci,LIBLINUX80211_PCIE))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-usb,LIBLINUX80211_USB_PORT))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack,LIBLINUX80211_STACK))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,hostap,LIBLINUX80211_HOSTAP))
 endif
@@ -250,10 +252,14 @@ MMC_PORT_SRCS :=
 MMC_VENDOR_SRCS :=
 endif
 
-# The USB host domain (empty unless the storage case is selected): the imported
+# The USB host domain (empty unless a USB consumer is selected): the imported
 # CherryUSB stack, the board's USB power/PHY/reset layer, the CMSIS-RTOS2 OSAL,
-# the first-party glue and the mass-storage class with its test case.
-ifneq ($(filter usb_xhci usb_ehci,$(CASES)),)
+# the first-party glue and - for storage images only - the mass-storage class
+# with its test case.  The rtw89 cases are consumers too: their linuxkpi USB
+# engine rides the same controllers, while the engine and its adapter belong to
+# the liblinux80211 world (kpi.mk), not to this file.
+USB_CONSUMER_CASES := usb_xhci usb_ehci rtw89_c3 rtw89_c4 rtw89_c5
+ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
 
@@ -338,6 +344,25 @@ RTL8189FS_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
 	-Wno-pointer-sign -Wno-unused-function -Wno-unused-variable
 
+# The third vendored driver: rtw89 (RTL8851BU, USB).  Its own include root and
+# feature face, and it is a wireless driver like iwlwifi (same stack, same
+# bring-up shape), so its sources compile in the driver flag world below rather
+# than in the kpi world.
+RTW89_DIR := $(ROOT)/wireless-drivers/rtw89
+$(eval $(call component_sources,$(RTW89_DIR),drv,RTW89_IMPL))
+
+# The driver's single bulk-in transfer, read from the driver's own header: the
+# image gate compares it with the adapter's stage slot instead of trusting a
+# comment (the previous line's rtw89.mk did the same).
+RTW89_RECVBUF_SZ := $(shell sed -n 's/^#define[[:space:]]*RTW89_USB_RECVBUF_SZ[[:space:]]*\([0-9][0-9]*\).*/\1/p' $(RTW89_DIR)/usb.h)
+
+RTW89_CFLAGS := $(S0_CFLAGS) \
+	-I$(RTW89_DIR) \
+	-include $(RTW89_DIR)/driver_config.h \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
+	-Wno-override-init
+
 S1_CFLAGS := $(S0_CFLAGS) \
 	-I$(IWL_DRV) \
 	-include $(LIB8)/include/linux80211/driver_config.h \
@@ -353,6 +378,10 @@ ifeq ($(S1_DRIVER),rtl8189fs)
 S1_TU_SET := $(RTL8189FS_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(RTL8189FS_CFLAGS)
 S1_DRIVER_TAG := rtl8189fs
+else ifeq ($(S1_DRIVER),rtw89)
+S1_TU_SET := $(RTW89_IMPL_SRCS)
+S1_DRIVER_CFLAGS := $(RTW89_CFLAGS)
+S1_DRIVER_TAG := rtw89
 else
 S1_TU_SET := $(IWLWIFI_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(S1_CFLAGS)
@@ -392,7 +421,8 @@ s1-link: $(CONFIG_FILE)
 	@printf '%s\n' $(LIBLINUX80211_STACK_SRCS) > $(S1_LINK_STACK_LIST)
 	@printf '%s\n' $(S1_TU_SET) > $(S1_LINK_DRV_LIST)
 	@printf '%s\n' $(LIBLINUX80211_KPI_SRCS) $(LIBLINUX80211_BUS_PCI_SRCS) \
-		$(LIBLINUX80211_BUS_SDIO_SRCS) $(LIBLINUX80211_PCIE_PORT_SRCS) \
+		$(LIBLINUX80211_BUS_SDIO_SRCS) $(LIBLINUX80211_BUS_USB_SRCS) \
+		$(LIBLINUX80211_PCIE_PORT_SRCS) $(LIBLINUX80211_USB_PORT_SRCS) \
 		$(RTL8189FS_SDIO_SRCS) > $(S1_LINK_KPI_LIST)
 	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/stack $(CC) '$(S0_CFLAGS)' $(S1_LINK_STACK_LIST)
 	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/driver $(CC) '$(S1_DRIVER_CFLAGS)' $(S1_LINK_DRV_LIST)
@@ -497,6 +527,21 @@ ifneq ($(filter usb_xhci usb_ehci,$(CASES)),)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx msc_class_info || \
 		{ echo "FAIL: msc_class_info not in the image (the class table would claim nothing)"; exit 1; }; \
 	echo "PASS: usb msc class table present"
+endif
+# The rtw89 image's two resource gates.  A stage slot smaller than the driver's
+# single bulk-in transfer refuses every receive urb for good (the adapter names
+# it once, but the image would still boot into a deaf driver), and a class
+# table the linker dropped enumerates the device and claims nothing.
+ifeq ($(CONFIG_LIBLINUX80211_RTW89),1)
+	@set -e; \
+	stage=$(CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE); \
+	want=$(RTW89_RECVBUF_SZ); \
+	[ -n "$$want" ] || { echo "FAIL: cannot read RTW89_USB_RECVBUF_SZ from $(RTW89_DIR)/usb.h"; exit 1; }; \
+	[ "$$stage" -ge "$$want" ] || { \
+		echo "FAIL: CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$$stage < rtw89's bulk-in $$want"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_wlan_class_info || \
+		{ echo "FAIL: lkpi_wlan_class_info not in the image (no wireless class hook)"; exit 1; }; \
+	echo "PASS: rtw89 stage $$stage >= recvbuf $$want, wlan class table present"
 endif
 	@$(SIZE) $(TARGET).elf
 	@printf 'opt: %s\ndefconfig: %s\nprofile: %s\nlwip: %s\nprof: %s\n' '$(OPT)' '$(PROFILE)' '$(SWITCH_PROFILE)' '$(LWIP)' '$(CONFIG_GMAC_PROF)' | tee $(BUILD)/build-info-$(BACKEND).txt
@@ -604,7 +649,10 @@ $(foreach s,$(filter-out %.S,$(VENDOR_SRCS)),$(eval $(call COMPILE_C,$(s),$(VEND
 $(foreach s,$(filter %.S,$(VENDOR_SRCS)),$(eval $(call COMPILE_S,$(s))))
 $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_C,$(s),$(VENDORED_CFLAGS) $(PRINTF_CFLAGS))))
 
-ifneq ($(filter usb_xhci usb_ehci,$(CASES)),)
+# The USB domain's compile rules follow the same consumer list as the include
+# (USB_CONSUMER_CASES): a wireless image that carries the linuxkpi USB engine
+# needs CherryUSB and the board glue but no mass-storage class.
+ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
 $(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
 endif
 
@@ -615,6 +663,7 @@ endif
 ifneq ($(strip $(WL80211_ALL_SRCS)),)
 $(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_RTW89_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C_RENAME,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))

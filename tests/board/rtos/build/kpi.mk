@@ -25,8 +25,17 @@ KPI_INCLUDES := \
 	-I$(LIB8) \
 	-I$(LIB8)/bus \
 	-I$(LIB8)/ports/pci-rk3568 \
+	-I$(LIB8)/ports/usb-rk3568 \
 	-I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
 	-I$(PLATFORM)/arch/aarch64
+
+# The USB engine's class hook and its adapter read CherryUSB descriptors, so
+# that group compiles with the host stack's include roots.  They are only
+# defined when the image carries a USB consumer (usb.mk); a wireless image
+# without the USB engine does not need them.
+ifeq ($(CONFIG_LIBLINUX80211_USB),1)
+KPI_INCLUDES += $(USB_INCLUDES)
+endif
 
 KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 	-Wno-unused-function -Wno-pointer-sign -Wno-unused-parameter \
@@ -36,5 +45,6 @@ KPI_CFLAGS := $(filter-out -Wextra,$(BASE_CFLAGS)) -std=gnu11 \
 KPI_CASE_SRCS := $(foreach c,$(filter kpi_live kpi_mock,$(CASES)),$(LINE)/app/cases/$(c).c)
 
 KPI_ALL_SRCS := $(LIBLINUX80211_KPI_SRCS) $(LIBLINUX80211_BUS_PCI_SRCS) \
-	$(LIBLINUX80211_BUS_SDIO_SRCS) $(LIBLINUX80211_PCIE_PORT_SRCS) \
+	$(LIBLINUX80211_BUS_SDIO_SRCS) $(LIBLINUX80211_BUS_USB_SRCS) \
+	$(LIBLINUX80211_PCIE_PORT_SRCS) $(LIBLINUX80211_USB_PORT_SRCS) \
 	$(KPI_CASE_SRCS)

@@ -46,13 +46,19 @@
 #define	u16_get_bits(val, mask)		((u16)FIELD_GET((mask), (val)))
 #define	u32_get_bits(val, mask)		((u32)FIELD_GET((mask), (val)))
 #define	u64_get_bits(val, mask)		((u64)FIELD_GET((mask), (val)))
-#define	u8_replace_bits(dst, val, mask)					\
-	((dst) = (u8)(((dst) & ~(mask)) | u8_encode_bits((val), (mask))))
-#define	u16_replace_bits(dst, val, mask)				\
-	((dst) = (u16)(((dst) & ~(mask)) | u16_encode_bits((val), (mask))))
-#define	u32_replace_bits(dst, val, mask)				\
-	((dst) = (u32)(((dst) & ~(mask)) | u32_encode_bits((val), (mask))))
-#define	u64_replace_bits(dst, val, mask)				\
-	((dst) = (u64)(((dst) & ~(mask)) | u64_encode_bits((val), (mask))))
+/* [LNX] include/linux/bitfield.h:236-247 at the pin: the replace family is
+ * VALUE-returning (it replaced an older lvalue-assignment macro), so a caller
+ * writes `val = u32_replace_bits(rtw89_read32(...), v, m)` - the argument is an
+ * expression, not a variable.  The pointer forms (u8p/u16p/u32p/u64p and the
+ * le/be pairs) are the contract header's inline bodies, one definition each;
+ * a macro here would shadow them for no gain. */
+#define	u8_replace_bits(old, val, mask)					\
+	((u8)(((old) & ~(mask)) | u8_encode_bits((val), (mask))))
+#define	u16_replace_bits(old, val, mask)				\
+	((u16)(((old) & ~(mask)) | u16_encode_bits((val), (mask))))
+#define	u32_replace_bits(old, val, mask)				\
+	((u32)(((old) & ~(mask)) | u32_encode_bits((val), (mask))))
+#define	u64_replace_bits(old, val, mask)				\
+	((u64)(((old) & ~(mask)) | u64_encode_bits((val), (mask))))
 
 #endif /* _LINUXKPI_LINUX_BITFIELD_H_ */

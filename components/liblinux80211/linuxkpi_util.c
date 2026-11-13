@@ -20,6 +20,7 @@
 #include <linux/ctype.h>
 #include <linux/crc32.h>
 #include <linux/gcd.h>
+#include <linux/sort.h>
 #include <linux/mm.h>
 #include <linux/hrtimer_types.h>
 #include <linux/hrtimer.h>
@@ -160,4 +161,109 @@ sg_init_table(struct scatterlist *sgl, unsigned int nents)
 		return;
 	memset(sgl, 0, sizeof(*sgl) * nents);
 	sg_mark_end(&sgl[nents - 1]);
+}
+
+/*
+ * [LNX] lib/string.c: memchr_inv().  The first byte that differs from `c`,
+ * NULL when the region is all-`c`.  rtw89's firmware-format walk and its GTK
+ * check name it.
+ */
+void *
+memchr_inv(const void *s, int c, size_t n)
+{
+	const u8 *p = s;
+	u8 v = (u8)c;
+
+	while (n-- != 0) {
+		if (*p != v)
+			return (void *)p;
+		p++;
+	}
+	return NULL;
+}
+
+/*
+ * [LNX] lib/sort.c: the generic in-place heapsort the interface documents.
+ * The algorithm is the interface's (heapsort, not stable, O(n log n), no
+ * allocation); only the byte-level swap and the optional caller swap are this
+ * port's.  `swap` is called as swap(a, b, size) per the interface.
+ */
+static void
+lkpi_sort_byte_swap(void *a, void *b, int size)
+{
+	u8 *pa = a;
+	u8 *pb = b;
+	int i;
+
+	for (i = 0; i < size; i++) {
+		u8 t = pa[i];
+
+		pa[i] = pb[i];
+		pb[i] = t;
+	}
+}
+
+static void
+lkpi_sort_sift(char *base, size_t root, size_t end, size_t size,
+	       int (*cmp)(const void *, const void *, const void *),
+	       void (*swapfn)(void *, void *, int), const void *priv)
+{
+	for (;;) {
+		size_t child = root * 2 + 1;
+
+		if (child >= end)
+			break;
+		if (child + 1 < end &&
+		    cmp(base + child * size, base + (child + 1) * size, priv) < 0)
+			child++;
+		if (cmp(base + root * size, base + child * size, priv) >= 0)
+			break;
+		swapfn(base + root * size, base + child * size, (int)size);
+		root = child;
+	}
+}
+
+void
+sort_r(void *base, size_t num, size_t size,
+       int (*cmp)(const void *, const void *, const void *),
+       void (*swapfn)(void *, void *, int), const void *priv)
+{
+	size_t i;
+
+	if (base == NULL || cmp == NULL || num < 2 || size == 0)
+		return;
+	if (swapfn == NULL)
+		swapfn = lkpi_sort_byte_swap;
+	/* Build the max-heap, then move the root to the tail one element at a
+	 * time: the interface's heapsort shape. */
+	for (i = num / 2; i-- > 0;)
+		lkpi_sort_sift(base, i, num, size, cmp, swapfn, priv);
+	for (i = num - 1; i > 0; i--) {
+		swapfn(base, (char *)base + i * size, (int)size);
+		lkpi_sort_sift(base, 0, i, size, cmp, swapfn, priv);
+	}
+}
+
+struct lkpi_sort2_ctx {
+	int (*cmp)(const void *, const void *);
+};
+
+static int
+lkpi_sort2_cmp(const void *a, const void *b, const void *priv)
+{
+	const struct lkpi_sort2_ctx *ctx = priv;
+
+	return ctx->cmp(a, b);
+}
+
+void
+sort(void *base, size_t num, size_t size,
+     int (*cmp)(const void *, const void *),
+     void (*swapfn)(void *, void *, int))
+{
+	struct lkpi_sort2_ctx ctx = { .cmp = cmp };
+
+	if (cmp == NULL)
+		return;
+	sort_r(base, num, size, lkpi_sort2_cmp, swapfn, &ctx);
 }

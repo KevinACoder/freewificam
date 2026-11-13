@@ -28,7 +28,8 @@
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
 WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g iwl7260_mon \
-	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap
+	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap \
+	rtw89_c3 rtw89_c4 rtw89_c5
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -62,6 +63,16 @@ ifeq ($(CONFIG_LIBLINUX80211_RTL8189FS),1)
 WL80211_RTL8189FS_SRCS := $(RTL8189FS_IMPL_SRCS)
 else
 WL80211_RTL8189FS_SRCS :=
+endif
+
+# rtw89 is a third driver world, same shape: the driver's 24 units under its own
+# face (wireless-drivers/rtw89/driver_config.h) and its own compile rule.  The
+# USB engine and its CherryUSB adapter are the component's bus/port groups
+# (kpi.mk), not part of this list: a driver is a driver, the bus is the bus.
+ifeq ($(CONFIG_LIBLINUX80211_RTW89),1)
+WL80211_RTW89_SRCS := $(RTW89_IMPL_SRCS)
+else
+WL80211_RTW89_SRCS :=
 endif
 
 WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
@@ -167,8 +178,8 @@ WL80211_HOSTAP_FP_SRCS := $(THIRD_PARTY)/wpa_supplicant-rtos/wpa_supplicant/even
 WL80211_HOSTAP_FP_CFLAGS := $(filter-out -mgeneral-regs-only,$(WL80211_HOSTAP_CFLAGS))
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
-	$(WL80211_RTL8189FS_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS) \
-	$(WL80211_HOSTAP_SRCS) $(WL80211_HOSTAP_FP_SRCS)
+	$(WL80211_RTW89_SRCS) $(WL80211_RTL8189FS_SRCS) $(WL80211_CASE_SRCS) \
+	$(WL80211_PROBE_SRCS) $(WL80211_HOSTAP_SRCS) $(WL80211_HOSTAP_FP_SRCS)
 
 endif
 

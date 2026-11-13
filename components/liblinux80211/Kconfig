@@ -40,6 +40,17 @@ config LIBLINUX80211_SDIO
 	  adapter for this board lives in the SDIO module it drives
 	  (third-party/fsl_sdmmc/ports).
 
+config LIBLINUX80211_USB
+	bool "USB engine (URB layer over CherryUSB)"
+	help
+	  The Linux USB host API (struct usb_device/usb_interface/urb, the
+	  usb_driver registry, the anchor and coherent-allocation helpers) over
+	  the component's narrow backend seam.  The adapter is
+	  ports/usb-rk3568: it maps the seam onto the imported CherryUSB host
+	  stack and this board's USB glue, and all DMA staging comes from the
+	  non-cacheable window.  The image must also carry the USB host domain
+	  (tests/board/rtos/build/usb.mk), which owns the controllers.
+
 config LIBLINUX80211_WIRELESS
 	bool "mac80211 + cfg80211 (the imported Linux wireless stack)"
 	help
@@ -81,6 +92,20 @@ config LIBLINUX80211_IWLWIFI
 	  Links the vendored iwlwifi core and iwlmvm op-mode (72 TUs, byte-
 	  identical to the GT pin) against the same face.  The 7260 is the PCIe
 	  target of this line; the driver's probe and firmware ALIVE are C3.
+
+config LIBLINUX80211_RTW89
+	bool "rtw89 (RTL8851BU / USB) driver"
+	depends on LIBLINUX80211_USB
+	depends on LIBLINUX80211_WIRELESS
+	help
+	  Links the vendored rtw89 driver (24 TUs, byte-identical to the GT pin)
+	  and its USB bus unit against the wireless stack.  This is a mac80211
+	  driver: the stack is the MLME and the driver implements the ops.  The
+	  compiled set is derived from the driver's own Makefile under
+	  wireless-drivers/rtw89/driver_config.h.  The driver tree is
+	  GPL-2.0 OR BSD-3-Clause; an artifact that links it with the GPL-2.0
+	  mac80211 stack is a GPL-2.0 link product and also redistributes the
+	  Realtek firmware image (docs/LICENSES.md).
 
 config LIBLINUX80211_RTL8189FS
 	bool "rtl8189fs (RTL8188F / SDIO 8189FTV) vendor driver"

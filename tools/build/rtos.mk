@@ -42,7 +42,7 @@ help:
 		'  images             alias of image (this line carries one backend)' \
 		'  libs               archive the image object groups under build/lib/<profile>' \
 		'  s0-compile         compile the imported stack TUs against the face (no link; S0_RUN=<n>)' \
-		'  s1-driver-compile  compile a vendored driver's TUs against its face (S1_DRIVER=iwlwifi|rtl8189fs, S1_RUN=<n>)' \
+		'  s1-driver-compile  compile a vendored driver's TUs against its face (S1_DRIVER=iwlwifi|rtl8189fs|rtw89, S1_RUN=<n>)' \
 		'  s1-link            partial-link stack+driver and classify the undefined list (S1_DRIVER, S1_LINK_RUN=<n>)' \
 		'  host-test          build and run the host semantic bench (green, then --break red)' \
 		'  fw-check           verify the tracked firmware image and the generated blob' \
@@ -141,11 +141,14 @@ s0-compile:
 # TUs, one `-c` each, against the same face.  It does not link and does not
 # enter an image; docs/HANDOFF-S1-LINK.md §3 is the contract.
 S1_PROFILE ?= rk3568-kpi-mock
+# Which vendored driver S1b/S1c measures; the nested make owns the flag world
+# and the source list, so the selector has to cross the make boundary.
+S1_DRIVER ?= iwlwifi
 S1_RUN ?= 1
 
 s1-driver-compile:
 	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(S1_PROFILE)
-	@$(MAKE) -C $(BUILD_MK) s1-driver-compile PROFILE=$(S1_PROFILE) S1_RUN=$(S1_RUN)
+	@$(MAKE) -C $(BUILD_MK) s1-driver-compile PROFILE=$(S1_PROFILE) S1_RUN=$(S1_RUN) S1_DRIVER=$(S1_DRIVER)
 
 # S1c is a partial link, not an image: it answers "what is still undefined"
 # and "does any ieee80211_*/cfg80211_* symbol have two definitions".  Same
@@ -155,7 +158,7 @@ S1_LINK_RUN ?= 1
 
 s1-link:
 	@$(PYTHON) $(ROOT)/tools/build/kconfig-gen.py --profile $(S1_LINK_PROFILE)
-	@$(MAKE) -C $(BUILD_MK) s1-link PROFILE=$(S1_LINK_PROFILE) S1_LINK_RUN=$(S1_LINK_RUN)
+	@$(MAKE) -C $(BUILD_MK) s1-link PROFILE=$(S1_LINK_PROFILE) S1_LINK_RUN=$(S1_LINK_RUN) S1_DRIVER=$(S1_DRIVER)
 
 # The host semantic bench: x86 + the upstream FreeRTOS POSIX port + the same
 # kernel-API bodies the images carry.  It is a model of the target's execution

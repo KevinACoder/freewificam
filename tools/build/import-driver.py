@@ -46,11 +46,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 DRIVERS_ROOT = REPO / "wireless-drivers"
 
-# The feature face the iwlwifi compiled set is derived under.  This is the same
-# answer include/linux80211/driver_config.h states for the preprocessor: IWLMVM
-# on, the optional features off.  If one of those changes, both spellings change
-# together (the --check run compares this set against the face header).
-FEATURES = {
+# Each driver carries its own feature face under `features`: the answer its
+# `driver_config.h` states for the preprocessor, spelled again here so the
+# compiled set and the header cannot drift (each --check re-derives the set).
+# A symbol absent from the map is off; the faces list the offs explicitly
+# because the generated PROVENANCE.md prints them as the face statement.
+IWLWIFI_FEATURES = {
+    "IWLWIFI": True,
     "IWLMVM": True,
     "IWLDVM": False,
     "IWLMLD": False,
@@ -61,6 +63,41 @@ FEATURES = {
     "PM_SLEEP": False,
     "ACPI": False,
     "EFI": False,
+}
+
+# The RTL8851BU world: the driver's own Makefile under the same four symbols
+# the GT build selects, and every optional unit off (debug/LED/PM/other chips).
+# This is the face the previous line's board-proven image compiled.
+RTW89_FEATURES = {
+    "RTW89_CORE": True,
+    "RTW89_USB": True,
+    "RTW89_8851B": True,
+    "RTW89_8851BU": True,
+    "RTW89_PCI": False,
+    "RTW89_8851BE": False,
+    "RTW89_8852A": False,
+    "RTW89_8852AE": False,
+    "RTW89_8852AU": False,
+    "RTW89_8852B_COMMON": False,
+    "RTW89_8852B": False,
+    "RTW89_8852BE": False,
+    "RTW89_8852BU": False,
+    "RTW89_8852BT": False,
+    "RTW89_8852BTE": False,
+    "RTW89_8852C": False,
+    "RTW89_8852CE": False,
+    "RTW89_8852CU": False,
+    "RTW89_8922A": False,
+    "RTW89_8922AE": False,
+    "RTW89_8922AU": False,
+    "RTW89_8922D": False,
+    "RTW89_8922DE": False,
+    "RTW89_DEBUG": False,
+    "RTW89_DEBUGMSG": False,
+    "RTW89_DEBUGFS": False,
+    "RTW89_LEDS": False,
+    "RTW89_LEDS_MC": False,
+    "PM": False,
 }
 
 # One entry per driver:
@@ -76,6 +113,7 @@ DRIVERS = {
         "kind": "kbuild",
         "upstream": "drivers/net/wireless/intel/iwlwifi",
         "dest": "",
+        "features": IWLWIFI_FEATURES,
         "makefiles": ("Makefile", "mvm/Makefile"),
         "want": 72,
         "tu_prefix": "",
@@ -102,6 +140,50 @@ DRIVERS = {
                 "`tests/board/rtos/build/wl80211.mk` compiles this set into the\n"
                 "`rk3568-iwl7260-mac80211` profile; `tools/build/s1-driver-compile` "
                 "compiles it\nstandalone into `runs/S1/driver/` (the S1b measurement).\n",
+        },
+    },
+    "rtw89": {
+        "kind": "kbuild",
+        "upstream": "drivers/net/wireless/realtek/rtw89",
+        "dest": "",
+        "features": RTW89_FEATURES,
+        "makefiles": ("Makefile",),
+        "want": 24,
+        "tu_prefix": "",
+        "first_party": ("IMPORT.tsv", "PROVENANCE.md", "sources.mk",
+                        "driver_config.h"),
+        "sources_header": [
+            "# rtw89: the compiled set for the RTL8851BU (USB) under the feature",
+            "# face wireless-drivers/rtw89/driver_config.h (CORE/USB/8851B/8851BU",
+            "# on; PCI, every other chip, DEBUG/DEBUGMSG/DEBUGFS/LEDS/LEDS_MC/PM",
+            "# off).",
+        ],
+        "sources_symbol": "CONFIG_LIBLINUX80211_RTW89",
+        "provenance": {
+            "licence_note":
+                "The tree is `GPL-2.0 OR BSD-3-Clause` in every file. The "
+                "previous line took\nthe BSD option for its net80211 profile; "
+                "this line links the driver with the\nGPL-2.0-only "
+                "mac80211/cfg80211 stack, so every artifact that carries it is a\n"
+                "GPL-2.0 link product (see `docs/LICENSES.md`). The driver bytes "
+                "are\nunmodified, which is why the licence table above is the "
+                "tree's own.",
+            "count_note":
+                "## Why 24\n\nThe driver's own Makefile resolves to 24 translation "
+                "units under this face:\n18 core units (its `rtw89_core-y` names "
+                "the three `*_be` units\nunconditionally), the four 8851B chip "
+                "units, the USB bus unit and the\n8851BU device unit. The Wi-Fi 7 "
+                "`*_be` units are compiled because the\nMakefile lists them; the "
+                "chip selection never reaches them, and the image's\nzero-undefined "
+                "gate is the check. The GT build compiles more: `debug.c`,\n"
+                "`led.c`, `led_mc.c` and `wow.c` ride CONFIG_RTW89_DEBUG/LEDS/PM, "
+                "which this\nface keeps out (logging, LED and suspend units, not "
+                "the data path).\n",
+            "consumers":
+                "`tests/board/rtos/build/wl80211.mk` compiles this set in the "
+                "driver's\nflag world (`driver_config.h` is force-included); "
+                "`tools/build/s1-driver-compile`\ncompiles it standalone with "
+                "`S1_DRIVER=rtw89` as the S1b measurement.\n",
         },
     },
     "rtl8189fs": {
@@ -185,45 +267,117 @@ def dest_rel(driver: str, rel: str) -> str:
     return f"{dest}/{rel}" if dest else rel
 
 
-def _config_enabled(symbol: str) -> bool:
+def _config_enabled(driver: str, symbol: str) -> bool:
     symbol = symbol.removeprefix("CONFIG_")
-    return FEATURES.get(symbol, False)
+    return DRIVERS[driver]["features"].get(symbol, False)
 
 
-def _objects(text: str, subdir: str) -> list[str]:
-    """The .o names a Makefile enables under FEATURES, in file order."""
-    out: list[str] = []
+def _aggregates(text: str) -> set[str]:
+    """The module aggregate stems a Makefile's `-objs`/`-y` lists define.
+
+    `obj-$(CONFIG_RTW89_CORE) += rtw89_core.o` names the link aggregate, not a
+    translation unit; the aggregate exists because `rtw89_core-y` is assigned.
+    """
+    out: set[str] = set()
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
-        m = re.match(r"^(?:[\w-]+-objs|\w+-y)\s*\+=\s*(.+)$", line)
+        m = re.match(r"^([\w-]+)-(?:objs|y)\s*(?::=|\+=|\?=|=)", line)
         if m:
-            names = re.findall(r"([A-Za-z0-9_/-]+)\.o", m.group(1))
-            out += [subdir + n for n in names]
+            out.add(m.group(1))
+    return out
+
+
+def _logical_lines(text: str) -> list[str]:
+    """A Makefile's lines with `\\` continuations joined (one assignment each).
+
+    A driver that groups its objects as one `rtw89_core-y += a.o b.o ...`
+    assignment over several physical lines only names its units on the first
+    line, so matching physical lines would derive one TU per group.
+    """
+    out: list[str] = []
+    pending = ""
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if line.endswith("\\"):
+            pending += line[:-1] + " "
             continue
-        m = re.match(r"^[\w-]+-\$\(CONFIG_([A-Z0-9_]+)\)\s*\+=\s*(.+)$", line)
+        out.append(pending + line)
+        pending = ""
+    if pending:
+        out.append(pending)
+    return out
+
+
+def _objects(text: str, subdir: str, driver: str) -> list[str]:
+    """The .o names a Makefile enables under the driver's face, in file order.
+
+    Kbuild names units two ways, and a driver may use both in one Makefile:
+    an aggregate (`obj-$(CONFIG_RTW89_CORE) += rtw89_core.o` plus
+    `rtw89_core-y := core.o ...`), or the unit directly
+    (`obj-$(CONFIG_FOO) += foo.o`).  Only the aggregate's list is gated by the
+    `obj-*` line that names it - writing every `-y` list in the file would
+    compile every chip in a multi-chip driver.
+    """
+    lines = _logical_lines(text)
+
+    # Pass 1: the object lists, keyed by the aggregate stem that owns them,
+    # including the CONFIG-gated additions (`rtw89_core-$(CONFIG_RTW89_DEBUG)+=`).
+    lists: dict[str, list[str]] = {}
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        m = re.match(r"^([\w-]+)-(?:objs|y)\s*(?::=|\+=|\?=|=)\s*(.+)$", line)
         if m:
-            if not _config_enabled(m.group(1)):
+            lists.setdefault(m.group(1), []).extend(
+                re.findall(r"([A-Za-z0-9_/-]+)\.o", m.group(2)))
+            continue
+        m = re.match(r"^([\w-]+)-\$\(CONFIG_([A-Z0-9_]+)\)\s*\+=\s*(.+)$",
+                     line)
+        if m and _config_enabled(driver, m.group(2)):
+            lists.setdefault(m.group(1), []).extend(
+                re.findall(r"([A-Za-z0-9_/-]+)\.o", m.group(3)))
+
+    # Pass 2: the `obj-*` lines decide which aggregates (or direct units) are
+    # in the compiled set, in file order.
+    out: list[str] = []
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        m = re.match(r"^obj-\$\(CONFIG_([A-Z0-9_]+)\)\s*\+=\s*(.+)$", line)
+        if m:
+            if not _config_enabled(driver, m.group(1)):
                 continue
             names = re.findall(r"([A-Za-z0-9_/-]+)\.o", m.group(2))
-            out += [subdir + n for n in names]
+        else:
+            m = re.match(r"^obj-y\s*\+=\s*(.+)$", line)
+            if not m:
+                continue
+            names = re.findall(r"([A-Za-z0-9_/-]+)\.o", m.group(1))
+        for name in names:
+            stem = name.rsplit("/", 1)[-1]
+            if stem in lists:
+                out += [subdir + n for n in lists[stem]]
+            else:
+                out.append(subdir + name)
     return out
 
 
 def _kbuild_tus(src: Path, driver: str) -> list[str]:
     spec = DRIVERS[driver]
     tus: list[str] = []
+    aggregates: set[str] = set()
     for rel in spec["makefiles"]:
         text = (src / rel).read_text()
         subdir = rel.rsplit("/", 1)[0] + "/" if "/" in rel else ""
-        for name in _objects(text, subdir):
+        aggregates |= _aggregates(text)
+        for name in _objects(text, subdir, driver):
             # A Makefile may name a directory's objects as `dvm/` (the
             # `obj-$(CONFIG_IWLDVM) += dvm/` line); those are disabled by the
             # feature face and never reach here.
             tus.append(name + ".c")
     # Drop duplicates while keeping the first position: one unit is listed by
     # two Makefiles only when a feature moved it, and the feature face decided.
-    # A module aggregate (`iwlwifi.o`, `iwlmvm.o`) is a link target, not a
-    # translation unit: it has no .c of the same name and is filtered here.
+    # A module aggregate (`iwlwifi.o`, `rtw89_core.o`) is a link target, not a
+    # translation unit: it has no .c of the same name and is filtered here by
+    # the `-objs`/`-y` list that defines it.
     module_names = {"iwlwifi", "iwlmvm", "iwldvm", "iwlmld", "mvm/iwlmvm"}
     seen: set[str] = set()
     ordered: list[str] = []
@@ -231,7 +385,8 @@ def _kbuild_tus(src: Path, driver: str) -> list[str]:
         if tu in seen:
             continue
         if not (src / tu).is_file():
-            if tu.removesuffix(".c") in module_names:
+            stem = tu.removesuffix(".c")
+            if stem in module_names or Path(stem).name in aggregates:
                 continue
             raise SystemExit(f"{driver}: Makefile names a missing unit {tu}")
         seen.add(tu)
@@ -366,8 +521,9 @@ def provenance(upstream: Path, driver: str, files: list[str],
         lic[key] = lic.get(key, 0) + 1
     lic_lines = "\n".join(f"| `{k}` | {v} |" for k, v in sorted(lic.items()))
     if spec["kind"] == "kbuild":
-        enabled = ", ".join(f"{k}=1" for k, v in FEATURES.items() if v)
-        disabled = ", ".join(k for k, v in FEATURES.items() if not v)
+        feats = spec["features"]
+        enabled = ", ".join(f"{k}=1" for k, v in feats.items() if v)
+        disabled = ", ".join(k for k, v in feats.items() if not v)
         face = f"| Feature face | on: {enabled} |\n| | off: {disabled} |"
         vendoring = (f"flat import, byte-identical: {len(files)} files. "
                      "Digests in `IMPORT.tsv`; verify with "
