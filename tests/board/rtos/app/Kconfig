@@ -224,14 +224,16 @@ config STA_HOLD_MS
 # reads as "no controller" with the list beside it instead of a silent timeout.
 
 config RTW89_USB_BUS
-	int "rtw89 USB controller family (1 = EHCI roots 1,0; 0 = xHCI roots 3,2)"
-	default 1
+	int "rtw89 USB controller family (0 = xHCI roots 3,2; 1 = EHCI roots 1,0)"
+	default 0
 	range 0 1
 	help
-	  The two controller lists available on this board.  1 (the default) is
-	  the USB2 EHCI pair the panel ports hang on, which is where the 8851BU
-	  has attached in every measured round; 0 is the USB3 (DWC3) xHCI pair,
-	  kept as the fallback arm rather than a second runtime probe.  A profile
-	  that changes this is a different arm and must say so in its run record.
+	  The two controller lists available on this board.  0 (the default) is
+	  the USB3 (DWC3) xHCI pair; the bench's 8851BU hangs on the DWC3 at
+	  0xFCC00000 (busid 3), which is what the GT kernel's own topology shows
+	  (xhci-hcd.0.auto/usb2/2-1.1, the driver binding interface 1.2).  1 is
+	  the USB2 EHCI pair (busids 0/1, 0xFD800000/0xFD880000) and stays as
+	  the fallback arm for a port on those roots - a different arm, which a
+	  profile changing this must say in its run record.
 
 endmenu

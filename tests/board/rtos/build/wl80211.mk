@@ -70,7 +70,10 @@ endif
 # USB engine and its CherryUSB adapter are the component's bus/port groups
 # (kpi.mk), not part of this list: a driver is a driver, the bus is the bus.
 ifeq ($(CONFIG_LIBLINUX80211_RTW89),1)
-WL80211_RTW89_SRCS := $(RTW89_IMPL_SRCS)
+# The rtw89 blob is generated from the pinned firmware image by fw-blobs.py and
+# compiled into the driver world; without it the driver's request_firmware has
+# nothing to find (the registry is the image's only filesystem).
+WL80211_RTW89_SRCS := $(RTW89_IMPL_SRCS) $(LIB8)/fw/rtw8851b_fw_blob.c
 else
 WL80211_RTW89_SRCS :=
 endif

@@ -62,6 +62,12 @@
 
 #include <stdint.h>
 #include <string.h>
+/* The seam below pulls in the linuxkpi contract header, whose
+ * compiler-attributes header defines __alloc_size__ - a name newlib's
+ * <sys/cdefs.h> expands into an attribute.  Parsing <stdlib.h> after that turns
+ * its declarations into syntax errors, so the C library header is read first.
+ * (The USB and wireless flag worlds force-include it; the kpi world does not.) */
+#include <stdlib.h>
 
 /*
  * Include order and the one boundary mechanic. The seam's header (below) pulls in

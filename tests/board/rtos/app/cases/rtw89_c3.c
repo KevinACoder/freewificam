@@ -80,9 +80,11 @@ void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
 int lkpi_fw_rtw8851b_fw_register(void);
 
-/* The profile's controller family: both EHCI roots (USB2 panel ports) or both
- * xHCI roots (the USB3 sockets).  The 8851BU is a USB2 part; the EHCI list is
- * the default and the xHCI profile is the fallback arm, never a runtime guess. */
+/* The profile's controller family: the two DWC3 xHCI instances (busids 3,2)
+ * or the two EHCI roots (busids 0,1).  The 8851BU is a USB2 device, but on
+ * this bench it hangs on the DWC3 at 0xFCC00000 (busid 3) - the GT kernel's
+ * topology puts it at xhci-hcd.0.auto/usb2/2-1.1 - so the xHCI list is the
+ * default and EHCI is the fallback arm, never a runtime guess. */
 #if CONFIG_RTW89_USB_BUS == 0
 static const unsigned int c3_buses[] = { 3U, 2U };
 #define C3_BUS_LIST_TXT	"3,2"

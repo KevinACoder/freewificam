@@ -188,7 +188,10 @@ $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-pci,LIBLINU
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-sdio,LIBLINUX80211_BUS_SDIO))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,bus-usb,LIBLINUX80211_BUS_USB))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-pci,LIBLINUX80211_PCIE))
-$(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-usb,LIBLINUX80211_USB_PORT))
+# The NAME is the list family, not the file family: `port-obj-` publishes
+# <NAME>_PORT_SRCS, so the name must be LIBLINUX80211_USB (whose _PORT_SRCS the
+# kpi world links) - naming it ..._USB_PORT would silently publish an empty list.
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-usb,LIBLINUX80211_USB))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack,LIBLINUX80211_STACK))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,hostap,LIBLINUX80211_HOSTAP))
 endif
