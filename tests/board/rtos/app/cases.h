@@ -134,6 +134,19 @@ int case_rtl8189fs_ap_run(void);
 int case_rtl8189fs_c6t_run(void);
 #endif
 
+/* The RTL8851BU (rtw89, USB): C3 attach over the linuxkpi USB engine and
+ * CherryUSB, C4 scan, C5/C6 open join + ICMP.  The cases are mac80211 drivers'
+ * gates (the stack owns the MLME), not the net80211 bridge's. */
+#if defined(RTOS_CASE_RTW89_C3)
+int case_rtw89_c3_run(void);
+#endif
+#if defined(RTOS_CASE_RTW89_C4)
+int case_rtw89_c4_run(void);
+#endif
+#if defined(RTOS_CASE_RTW89_C5)
+int case_rtw89_c5_run(void);
+#endif
+
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf
  * TCP server (only one listener can own the port).  The `net` case brings its

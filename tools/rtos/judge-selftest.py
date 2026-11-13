@@ -273,6 +273,124 @@ def c6t_short() -> str:
             CASE_PASS.format(name="rtl8189fs_c6t") + RESULT_PASS)
 
 
+# --- the RTL8851BU (rtw89, USB) -------------------------------------------
+RTW89_C3_HEAD = (
+    "rtw89_c3: core ready\n"
+    "rtw89_c3: usb backend ready\n"
+    "rtw89_c3: initcalls run\n"
+    "rtw89_c3: usb drivers=1\n"
+    "rtw89_c3: fw registered=0 name=rtw89/rtw8851b_fw-1.bin\n"
+    "rtw89_c3: usb buses=1,0\n"
+    "rtw89_c3: usb bus=1 hcd=ehci base=0xfd880000 started\n"
+    "rtw89_c3: firmware rtw89: Firmware version 0.29.41.5 (4bd6ebac), "
+    "type 5/3\n"
+    "rtw89_c3: wlan0 present=1 after 300 ms\n"
+    "rtw89_c3: mac=90:de:80:1b:25:ed\n"
+    "rtw89_c3: start rc=0\n"
+)
+
+RTW89_C3_TAIL = (
+    "rtw89_c3: usb submits=120 completes=118 refused=0 stage_overflow=0 "
+    "slots_exhausted=0 stage_size=32768 slots=16 rx=64 rx_err=0\n"
+    "rtw89_c3: PASS\n"
+)
+
+
+def rtw89_c3_open() -> str:
+    return (BANNER + RTW89_C3_HEAD + RTW89_C3_TAIL
+            + CASE_PASS.format(name="rtw89_c3") + RESULT_PASS)
+
+
+def rtw89_c3_no_fw() -> str:
+    """PASS without the driver's firmware version line."""
+    body = RTW89_C3_HEAD.replace(
+        "rtw89_c3: firmware rtw89: Firmware version 0.29.41.5 (4bd6ebac), "
+        "type 5/3\n", "")
+    return (BANNER + body + RTW89_C3_TAIL
+            + CASE_PASS.format(name="rtw89_c3") + RESULT_PASS)
+
+
+RTW89_C4_HEAD = (
+    "rtw89_c4: core ready\n"
+    "rtw89_c4: usb backend ready\n"
+    "rtw89_c4: initcalls run\n"
+    "rtw89_c4: usb drivers=1\n"
+    "rtw89_c4: fw registered=0 name=rtw89/rtw8851b_fw-1.bin\n"
+    "rtw89_c4: usb buses=1,0\n"
+    "rtw89_c4: usb bus=1 hcd=ehci base=0xfd880000 started\n"
+    "rtw89_c4: firmware rtw89: Firmware version 0.29.41.5 (4bd6ebac), "
+    "type 5/3\n"
+    "rtw89_c4: wlan0 present=1 ifindex=3\n"
+    "rtw89_c4: start rc=0\n"
+)
+
+RTW89_C4_TAIL = (
+    "rtw89_c4: scan ssid=labwifi-ar-ht20s freq=2432 rc=0\n"
+    "rtw89_c4: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 "
+    "freq=2432 signal=-46\n"
+    "rtw89_c4: PASS\n"
+)
+
+
+def rtw89_c4_open() -> str:
+    return (BANNER + RTW89_C4_HEAD + RTW89_C4_TAIL
+            + CASE_PASS.format(name="rtw89_c4") + RESULT_PASS)
+
+
+def rtw89_c4_wrong_band() -> str:
+    """A PASS with the BSS on the wrong channel."""
+    body = RTW89_C4_TAIL.replace("freq=2432 signal", "freq=5180 signal")
+    return (BANNER + RTW89_C4_HEAD + body
+            + CASE_PASS.format(name="rtw89_c4") + RESULT_PASS)
+
+
+RTW89_C5_HEAD = (
+    "rtw89_c5: core ready\n"
+    "rtw89_c5: usb backend ready\n"
+    "rtw89_c5: initcalls run\n"
+    "rtw89_c5: usb drivers=1\n"
+    "rtw89_c5: fw registered=0 name=rtw89/rtw8851b_fw-1.bin\n"
+    "rtw89_c5: usb buses=1,0\n"
+    "rtw89_c5: usb bus=1 hcd=ehci base=0xfd880000 started\n"
+    "rtw89_c5: firmware rtw89: Firmware version 0.29.41.5 (4bd6ebac), "
+    "type 5/3\n"
+    "rtw89_c5: wlan0 present=1 ifindex=3 mac=90:de:80:1b:25:ed\n"
+    "rtw89_c5: start rc=0\n"
+)
+
+RTW89_C5_BODY = (
+    "rtw89_c5: scan ssid=labwifi-ar-ht20s freq=2432 rc=0\n"
+    "rtw89_c5: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 "
+    "freq=2432 signal=-46\n"
+    "rtw89_c5: connect ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 "
+    "freq=2432 rc=0\n"
+    "rtw89_c5: connected bssid=1c:a7:70:de:29:a1 waited_ms=420\n"
+    "rtw89_c5: PASS C5\n"
+    "rtw89_c5: netif up name=wl0 ip=192.168.99.2/24 mac=90:de:80:1b:25:ed\n"
+    "rtw89_c5: peer window ms=6000\n"
+    "rtw89_c5: ping tx=20 rx=20 payload=56 rtt_ms=2/3/7\n"
+    "rtw89_c5: ping tx=20 rx=20 payload=1400 rtt_ms=3/5/9\n"
+    "rtw89_c5: diag rx_frames=42 tx_frames=44 rx_bytes=2100 tx_bytes=2300 "
+    "tx_fail=0\n"
+    "rtw89_c5: PASS C6\n"
+    "rtw89_c5: PASS\n"
+)
+
+
+def rtw89_c5_open() -> str:
+    return (BANNER + RTW89_C5_HEAD + RTW89_C5_BODY
+            + CASE_PASS.format(name="rtw89_c5") + RESULT_PASS)
+
+
+def rtw89_c5_short_ping() -> str:
+    """A C6 PASS with one 1400 B round lost."""
+    body = RTW89_C5_BODY.replace(
+        "rtw89_c5: ping tx=20 rx=20 payload=1400",
+        "rtw89_c5: ping tx=20 rx=19 payload=1400")
+    return (BANNER + RTW89_C5_HEAD + body
+            + CASE_PASS.format(name="rtw89_c5") + RESULT_PASS)
+
+
 SAMPLES = [
     ("ap5g-open", ap5g_open, None, {"cases": ["iwl7260_ap5g"]}),
     ("ap5g-wpa2", ap5g_wpa2, None, {"cases": ["iwl7260_ap5g"]}),
@@ -302,6 +420,15 @@ SAMPLES = [
      {"cases": ["rtl8189fs_sta", "rtl8189fs_c6t"]}),
     ("c6t-short", c6t_short, "only 5 of 6 traffic phases closed",
      {"cases": ["rtl8189fs_sta", "rtl8189fs_c6t"]}),
+    ("rtw89-c3-open", rtw89_c3_open, None, {"cases": ["rtw89_c3"]}),
+    ("rtw89-c3-no-fw", rtw89_c3_no_fw, "firmware version",
+     {"cases": ["rtw89_c3"]}),
+    ("rtw89-c4-open", rtw89_c4_open, None, {"cases": ["rtw89_c4"]}),
+    ("rtw89-c4-wrong-band", rtw89_c4_wrong_band, "expected labwifi-ar-ht20s@2432",
+     {"cases": ["rtw89_c4"]}),
+    ("rtw89-c5-open", rtw89_c5_open, None, {"cases": ["rtw89_c5"]}),
+    ("rtw89-c5-short-ping", rtw89_c5_short_ping, "ping 1400B tx=20 rx=19",
+     {"cases": ["rtw89_c5"]}),
 ]
 
 

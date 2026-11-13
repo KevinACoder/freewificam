@@ -1,0 +1,31 @@
+# rtw89 on the RTOS line, C5-open + C6-open: the RTL8851BU joins the open bench
+# AP and moves ICMP through the lwIP netif over wlan0.
+#
+# The case does the whole ladder in one boot (attach -> scan -> NL80211_CMD_CONNECT
+# -> cfg80211 connected -> lwIP netif -> ICMP 56/1400 B), matching the AC 7260
+# C5 profile's shape.  It exercises the driver's first transmit path (auth and
+# assoc are mac80211 frames through rtw89's USB bulk-out), which is why this
+# profile is the one that reads the USB ledger on failure.
+#
+# What this profile is not: WPA2 (no supplicant), the AP role, monitor, or the
+# throughput arm.
+#
+# The driver + stack are a GPL-2.0 link product and redistribute the Realtek
+# firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw89_c5"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW89=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RTW89_USB_BUS=1

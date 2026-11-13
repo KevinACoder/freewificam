@@ -56,6 +56,9 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-rtl8189fs-sta` | tick rtl8189fs_sta | C3 plus the real `NL80211_CMD_TRIGGER_SCAN`/`CONNECT` streams through nl80211, dispatched to the vendor driver's cfg80211 ops: scan, open association, lwIP netif, 56/1400 B ICMP both ways (C4–C6 open) |
 | `rk3568-rtl8189fs-c6t` | tick rtl8189fs_sta rtl8189fs_c6t | the same join, then the throughput phase table: 30 s sampled TCP downlink, 35 Mbit/s UDP downlink sink, TCP/UDP uplink, board-local loopback; each phase carries the adapter/stack/pool and the SDIO claim/pump + vendor queue gauges |
 | `rk3568-rtl8189fs-udpdn` | tick rtl8189fs_sta rtl8189fs_c6t | the C6T diagnostic ordering `CONFIG_C6T_UDP_FIRST`: the receive-only downlink is offered before any TCP phase, so one boot separates an RX-path stall from a transmit/receive concurrency stall |
+| `rk3568-rtw89-8851bu-c3` | tick rtw89_c3 | the RTL8851BU (`0bda:b851`, USB) attaches through the linuxkpi USB engine and CherryUSB: the engine's `.lkpi_module` walk registers the driver, the board's USB domain starts the EHCI roots, the driver's probe downloads `rtw8851b_fw-1.bin` from the compiled-in registry, `ieee80211_register_hw` creates `wlan0`, and `dev_open` reaches start (C3) |
+| `rk3568-rtw89-8851bu-c4` | tick rtw89_c4 | C3 plus the real `NL80211_CMD_TRIGGER_SCAN` stream through nl80211: mac80211 -> rtw89 -> the USB bulk endpoints, the BSS table carries the bench AP (C4) |
+| `rk3568-rtw89-8851bu-c5` | tick rtw89_c5 | C4 plus `NL80211_CMD_CONNECT`: open association, the lwIP netif over `wlan0`, 56/1400 B ICMP 20/20 (C5/C6-open) |
 
 ```
 ./make.rtos list

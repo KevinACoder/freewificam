@@ -216,4 +216,22 @@ config STA_HOLD_MS
 	  window; the long profiles hold 30 s and the case ends with an `end`
 	  anchor the capture runs to.
 
+# --- rtw89 (RTL8851BU, USB) ------------------------------------------------
+#
+# The controller family is a bench fact, not a runtime guess: the dongle is a
+# USB2 part, and which root it hangs on depends on the bench's cabling.  The
+# case prints the list it tried and the bus that attached, so a wrong profile
+# reads as "no controller" with the list beside it instead of a silent timeout.
+
+config RTW89_USB_BUS
+	int "rtw89 USB controller family (1 = EHCI roots 1,0; 0 = xHCI roots 3,2)"
+	default 1
+	range 0 1
+	help
+	  The two controller lists available on this board.  1 (the default) is
+	  the USB2 EHCI pair the panel ports hang on, which is where the 8851BU
+	  has attached in every measured round; 0 is the USB3 (DWC3) xHCI pair,
+	  kept as the fallback arm rather than a second runtime probe.  A profile
+	  that changes this is a different arm and must say so in its run record.
+
 endmenu

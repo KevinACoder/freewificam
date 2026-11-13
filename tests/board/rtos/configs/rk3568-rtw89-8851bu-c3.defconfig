@@ -1,0 +1,40 @@
+# rtw89 on the RTOS line, gate C3: the RTL8851BU (0bda:b851) enumerates on an
+# EHCI root, the vendored rtw89 driver probes it over the linuxkpi USB engine
+# and CherryUSB, downloads rtw8851b_fw-1.bin from the compiled-in registry,
+# registers its wiphy with the real mac80211, and dev_open reaches start.
+#
+# The bring-up order is the previous line's board-proven one, with this line's
+# stack in place of the net80211 bridge: core services -> CherryUSB class hook
+# -> `.lkpi_init` walk (cfg80211, mac80211, driver) -> URB engine (`.lkpi_module`
+# walk registers the driver, the drain thread starts) -> asynchronous lane ->
+# firmware -> USB domain and one ush_initialize per controller -> wlan0.
+#
+# The two numbers that are not defaults:
+#   - the stage slot must cover rtw89's single bulk-in transfer
+#     (RTW89_USB_RECVBUF_SZ = 20480); 32768 is the previous line's working
+#     size and the build gate refuses anything smaller;
+#   - the FreeRTOS heap carries mac80211's records, the driver's 8 receive skbs
+#     (20 KiB each) and the USB stage pool's bookkeeping.
+#
+# What this profile is not: scan (C4), association or ICMP (C5).
+#
+# The driver is GPL-2.0 OR BSD-3-Clause and the stack is GPL-2.0-only; this
+# profile's image is a GPL-2.0 link product that also redistributes the
+# Realtek firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw89_c3"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW89=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RTW89_USB_BUS=1
