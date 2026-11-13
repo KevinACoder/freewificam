@@ -36,4 +36,4 @@ CONFIG_C6T_PUMP_YIELD=y
 
 # The card-interrupt arm: the pump's wait becomes a backstop instead of the
 # discovery mechanism, and the controller's DAT1 mask is armed.
-CONFIG_C6T_PUMP_IRQ=y
+CONFIG_C6T_PUMP_IRQ=1

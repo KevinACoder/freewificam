@@ -98,7 +98,9 @@ pi "mkdir -p $PI_DIR"
 "$BOARD/tftp.sh" put "$BIN" --name rtos.bin > "$EVIDENCE/tftp.txt" 2>&1
 
 # --- peer listeners (the uplink phases' receivers) --------------------------
-pi "nohup iperf -s -p 5001 -i 5 > $PI_DIR/peer-tcp-server.log 2>&1 & echo \$! > $PI_DIR/peer-tcp.pid"
+# A server or client left by a killed run silently takes part in the next one
+# (T7b's uplink read 96 kbit because a stale client was still sending).
+pi "pkill -x iperf 2>/dev/null || true; sleep 0.5; nohup iperf -s -p 5001 -i 5 > $PI_DIR/peer-tcp-server.log 2>&1 & echo \$! > $PI_DIR/peer-tcp.pid"
 scp -q -o BatchMode=yes "$HERE/udp-sink.py" "$PI:/tmp/udp-sink-$TAG.py"
 sleep 1
 
@@ -139,6 +141,11 @@ peer_udp() {	# $1 = phase name, $2 = seconds
 }
 station() {	# $1 = tag
 	pisu "iw dev $AP_IF station dump" > "$EVIDENCE/ap-station-$1.txt" 2>&1 || true
+	# The vendor proc carries the per-station fields iw does not print on this
+	# driver: the BA state, the rate ids and the byte counters.  Same phase,
+	# same station, so the GT arm can be compared field by field.
+	pisu "cat /proc/net/rtl88XXau/$AP_IF/all_sta_info" \
+		> "$EVIDENCE/ap-sta-info-$1.txt" 2>&1 || true
 }
 
 anchor() {	# $1 = regex; true when the capture already holds it
@@ -186,6 +193,9 @@ for _ in $(seq 1 3000); do
 		pisu "timeout 40 tcpdump -i $MON_IF -s 0 -w $MON_UP_PCAP" \
 			>"$EVIDENCE/mon-up-tcpdump.log" 2>&1 &
 		mon_up_pid=$!
+		# The station's own record at the up phase: the same proc fields the
+		# GT arm captures, at the same phase boundary.
+		station tcpup
 	fi
 	# The raw blast has no iperf2 header; the counting sink is started a
 	# phase early so its first datagram is not lost, and it idles until the

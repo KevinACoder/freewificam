@@ -36,4 +36,4 @@ CONFIG_C6T_PUMP_YIELD=y
 
 # The drain arm: hold the claim across the dispatch rounds while the card
 # still reports pending work.
-CONFIG_C6T_PUMP_DRAIN=y
+CONFIG_C6T_PUMP_DRAIN=1
