@@ -126,18 +126,9 @@ enum c6t_phase_kind {
 #define C6T_WD_TASKS		24u
 #define C6T_WD_OPS		12u
 
-uint64_t
-lkpi_census_now_ns(void)
-{
-	uint32_t freq = gtimer_freq_get();
-	uint64_t count;
-
-	if (freq == 0u)
-		return 0u;
-	count = gtimer_count_get();
-	return (count / freq) * 1000000000ULL +
-	    ((count % freq) * 1000000000ULL) / freq;
-}
+/* The census clock is the board glue's (freertos_board_glue.c): it is the one
+ * unit every census image compiles, while this case is only in the throughput
+ * images.  See that file's note for the 2026-11-13 link failure it fixes. */
 
 static volatile unsigned int c6t_traffic_active;
 static osThreadId_t c6t_wd_thread;
@@ -749,7 +740,16 @@ case_rtl8189fs_c6t_run(void)
 	 * band it actually ran, not the band the profile asked for. */
 	lkpi_sdio_pump_prio_level_set(CONFIG_C6T_PUMP_PRIO);
 	lkpi_sdio_pump_mode_set(CONFIG_C6T_PUMP_MODE);
-	lkpi_sdio_pump_yield_set(CONFIG_C6T_PUMP_YIELD);
+	/* The yield knob is a Kconfig bool, so a profile that leaves it unset gets
+	 * the generated `is not set` comment rather than a 0 - passing the macro as
+	 * a value then fails to compile (2026-11-13: the census profile stopped
+	 * building on exactly this line).  The IRQ knob below is already used this
+	 * way. */
+#if CONFIG_C6T_PUMP_YIELD
+	lkpi_sdio_pump_yield_set(true);
+#else
+	lkpi_sdio_pump_yield_set(false);
+#endif
 	lkpi_sdio_pump_drain_set(CONFIG_C6T_PUMP_DRAIN);
 #if CONFIG_C6T_PUMP_IRQ
 	(void)lkpi_sdio_pump_irq_set(true);
@@ -762,7 +762,11 @@ case_rtl8189fs_c6t_run(void)
 		    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
 		    dev->name, lkpi_sdio_pump_prio_level_get(),
 		    (unsigned)CONFIG_C6T_PUMP_MODE,
-		    (unsigned)CONFIG_C6T_PUMP_YIELD,
+#if CONFIG_C6T_PUMP_YIELD
+		    1u,
+#else
+		    0u,
+#endif
 		    (unsigned)CONFIG_C6T_PUMP_DRAIN,
 		    lkpi_sdio_pump_irq_get() ? 1u : 0u);
 

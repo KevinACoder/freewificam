@@ -196,6 +196,43 @@ lkpi_netdev_rx(struct sk_buff *skb)
 		return;
 	}
 
+	/*
+	 * Classify by ethertype before the deliver call: the receive path's
+	 * 2026-11-13 open question is whether a broadcast ARP request reaches the
+	 * stack at all, and lwIP's ARP table cannot answer it (an unanswered
+	 * request leaves no trace).  The ARP opcode is the payload's bytes 6..7,
+	 * which is `skb->data` after eth_type_trans()'s pull.
+	 */
+	if (skb->protocol == htons(ETH_P_ARP)) {
+		unsigned int op = 0u;
+
+		if (skb->len >= 8) {
+			op = ((unsigned int)skb->data[6] << 8) |
+			    (unsigned int)skb->data[7];
+		}
+		if (op == 2u)
+			g_diag.rx_arp_rep++;
+		else
+			g_diag.rx_arp_req++;
+	} else if (skb->protocol == htons(ETH_P_IP)) {
+		g_diag.rx_ip++;
+	} else {
+		if (g_diag.rx_other_n < 4u) {
+			unsigned long i = g_diag.rx_other_n;
+			const unsigned char *raw = (const unsigned char *)skb->data -
+			    ETH_HLEN;
+			unsigned int n = (unsigned int)skb->len + ETH_HLEN;
+			unsigned int k;
+
+			g_diag.rx_other_len[i] = (unsigned short)n;
+			g_diag.rx_other_proto[i] = (unsigned short)ntohs(skb->protocol);
+			for (k = 0u; k < 16u && k < n; k++)
+				g_diag.rx_other_head[i][k] = raw[k];
+			g_diag.rx_other_n++;
+		}
+		g_diag.rx_other++;
+	}
+
 	/* lwIP takes a whole ethernet frame, header included */
 	frame = skb->data - ETH_HLEN;
 	len = (size_t)skb->len + ETH_HLEN;

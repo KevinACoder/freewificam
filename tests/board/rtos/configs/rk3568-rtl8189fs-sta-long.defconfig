@@ -1,0 +1,44 @@
+# rtl8189fs on the RTOS line, the station's AP->board arm with a window the
+# host can actually measure in (docs/HANDOFF-8189FTV-STA-RX.md).
+#
+# The 2026-11-13 open arm measured the AP->board direction against a 6 s case
+# window while its ping ran 10.5 s, and the runner resets the board as soon as
+# the case returns - so the 4/30 it recorded could be the reset, not the link.
+# This profile keeps the same case and the same verdict lines, and only widens
+# the two windows:
+#
+#   CONFIG_STA_WINDOW_MS = 60000  the host's ping (56 B and 1400 B, 20 each)
+#                                 runs inside it, with the neighbour state
+#                                 sampled before and after
+#   CONFIG_STA_HOLD_MS   = 30000  the link stays up after the verdict lines,
+#                                 which is the only place a reverse arm can
+#                                 overlap a board that is still alive
+#
+# The case prints what arrived while the window was open (seam frame classes,
+# vendor receive counters), so a host-side 0/N is read against the board's own
+# counters.  Dynamic ARP is the verdict arm; a static neighbour is the positive
+# control the earlier passing arms used.
+#
+# What this profile is not: WPA2 (its own long profile), the throughput table
+# (rk3568-rtl8189fs-c6t*), the AP role, monitor.
+#
+# The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_sta"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+CONFIG_STA_WINDOW_MS=60000
+CONFIG_STA_HOLD_MS=30000
+
+# The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
+# FreeRTOS heap; see the C3 profile's note.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

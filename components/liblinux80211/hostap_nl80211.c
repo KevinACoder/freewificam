@@ -340,6 +340,10 @@ lkpi_hostap_drv_eapol_tx(const void *frame, size_t len)
 	return lkpinetif_tx_frame(frame, len);
 }
 
+/* Implemented in the 8189 vendor world only (ports/rtos/obs.c); the reference
+ * is weak so an image without that driver still links. */
+extern void rtl8189f_grp_privacy_fixup(void) __attribute__((weak));
+
 int
 lkpi_hostap_drv_set_key(const struct lkpi_hostap_key *key)
 {
@@ -359,6 +363,14 @@ lkpi_hostap_drv_set_key(const struct lkpi_hostap_key *key)
 	rc = lkpi_nl80211_new_key(hostap_dev, &k);
 	if (rc != 0)
 		return rc;
+	if (!key->pairwise && key->cipher == LKPI_HOSTAP_CIPHER_CCMP) {
+		/* A group key's receive parameters are the vendor's own business,
+		 * and its station path leaves one of them unset; the 8189 port
+		 * states it here (weak: drivers without the shim link unchanged).
+		 * See wireless-drivers/rtl8189fs/ports/rtos/obs.c. */
+		if (rtl8189f_grp_privacy_fixup != NULL)
+			rtl8189f_grp_privacy_fixup();
+	}
 	if (key->default_key)
 		rc = lkpi_nl80211_set_default_key(hostap_dev, key->key_idx,
 						  key->pairwise ? 0 : 1);

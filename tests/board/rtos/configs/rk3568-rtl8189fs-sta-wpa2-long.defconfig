@@ -1,0 +1,54 @@
+# rtl8189fs on the RTOS line, the WPA2 station's AP->board arm with a window
+# the host can measure in (docs/HANDOFF-8189FTV-STA-RX.md).
+#
+# The 2026-11-13 WPA2 arm recorded 0/30 while its capture stopped at the hold's
+# own anchor (wall 48.2 s, hold 20 s), so that number had no board-side counter
+# behind it and no record of when the Pi's ping started.  This profile keeps
+# the same connection path (the supplicant owns scan/assoc/4-way) and widens the
+# two windows:
+#
+#   CONFIG_STA_WINDOW_MS = 60000  the host's dynamic-ARP ping (56 B and 1400 B)
+#                                 runs inside it
+#   CONFIG_STA_HOLD_MS   = 30000  an extra post-verdict window for the reverse
+#                                 arm
+#
+# The bench AP is the same WPA2-PSK/CCMP one the 2026-11-13 arm used
+# (`pi-g2-ap.sh up`, SSID/channel unchanged, PSK rtos-7260-wpa2-psk).
+#
+# What this profile is not: the open arm (its own long profile), the WPA2
+# throughput table (same case pair after this connection is 2/2).
+#
+# The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_sta_wpa2"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The STA supplicant role (not hostapd).
+CONFIG_WPA_STA=y
+
+CONFIG_STA_SSID="labwifi-ar-ht20s"
+CONFIG_STA_BSSID="1c:a7:70:de:29:a1"
+CONFIG_STA_FREQ=2432
+CONFIG_STA_DHCP=n
+CONFIG_STA_STATIC_IP="192.168.99.2"
+CONFIG_STA_STATIC_MASK="255.255.255.0"
+CONFIG_STA_STATIC_GW="192.168.99.1"
+CONFIG_STA_PEER_CANDIDATES="192.168.99.1"
+CONFIG_STA_PSK="rtos-7260-wpa2-psk"
+CONFIG_STA_PSK_EXTERNAL=n
+
+CONFIG_STA_WINDOW_MS=60000
+CONFIG_STA_HOLD_MS=30000
+
+# The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
+# FreeRTOS heap; see the C3 profile's note.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

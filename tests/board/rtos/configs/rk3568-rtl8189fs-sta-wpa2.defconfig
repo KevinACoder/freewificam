@@ -38,6 +38,13 @@ CONFIG_STA_PEER_CANDIDATES="192.168.99.1"
 CONFIG_STA_PSK="rtos-7260-wpa2-psk"
 CONFIG_STA_PSK_EXTERNAL=n
 
+# The AP->board arm's windows (app/Kconfig).  The 20 s hold is this profile's
+# historical value; the window stays the 6 s default so this image is the same
+# one the 2026-11-13 WPA2 arm measured, and the long window has its own profile
+# (rk3568-rtl8189fs-sta-wpa2-long).
+CONFIG_STA_WINDOW_MS=6000
+CONFIG_STA_HOLD_MS=20000
+
 # The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
 # FreeRTOS heap; see the C3 profile's note.
 CONFIG_FREERTOS_HEAP_SIZE=16777216

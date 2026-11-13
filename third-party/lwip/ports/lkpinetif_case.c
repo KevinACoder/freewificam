@@ -773,6 +773,20 @@ lkpi_net_diag(struct lkpi_net_diag *out)
 	out->rx_frames = d.rx_frames;
 	out->rx_foreign = d.rx_foreign;
 	out->rx_eapol = d.rx_eapol;
+	out->rx_arp_req = d.rx_arp_req;
+	out->rx_arp_rep = d.rx_arp_rep;
+	out->rx_ip = d.rx_ip;
+	out->rx_other = d.rx_other;
+	out->rx_other_n = d.rx_other_n;
+	{
+		unsigned int i;
+
+		for (i = 0u; i < 4u; i++) {
+			out->rx_other_len[i] = d.rx_other_len[i];
+			out->rx_other_proto[i] = d.rx_other_proto[i];
+			memcpy(out->rx_other_head[i], d.rx_other_head[i], 16u);
+		}
+	}
 	out->rx_no_netif = d.rx_no_netif;
 	out->rx_input_fail = d.rx_input_fail;
 	out->tx_frames = d.tx_frames;

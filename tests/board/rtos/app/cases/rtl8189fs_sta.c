@@ -33,9 +33,15 @@
  *   rtl8189fs_sta: PASS C5
  *   rtl8189fs_sta: netif up name=wlan0 ip=<ip>/24 mac=<mac>
  *   rtl8189fs_sta: peer window ms=<n>
+ *   rtl8189fs_sta: window done ms=<n> rx_frames=<n> rx_bytes=<n> arp_req=<n>
+ *                  arp_rep=<n> ip=<n> other=<n> eapol=<n> foreign=<n>
+ *                  no_netif=<n> input_fail=<n> drv_rx_pkts=<n> drv_rx_drop=<n>
+ *                  drv_rx_bytes=<n> drv_rx_icv_err=<n> drv_rx_crc_err=<n>
  *   rtl8189fs_sta: ping tx=<n> rx=<n> payload=<n> rtt_ms=<min>/<avg>/<max>
  *   rtl8189fs_sta: diag rx_frames=<n> tx_frames=<n> rx_bytes=<n> tx_bytes=<n> tx_fail=<n>
  *   rtl8189fs_sta: PASS C6
+ *   rtl8189fs_sta: hold ms=<n>
+ *   rtl8189fs_sta: end
  *   rtl8189fs_sta: FAIL <reason>
  */
 
@@ -51,6 +57,7 @@
 #include "linux80211/nl80211_probe.h"
 #include "linux80211/net.h"
 #include "linuxkpi_sdio.h"
+#include "rtl8189fs_diag.h"
 
 #include <linux/etherdevice.h>
 #include <linux/mmc/sdio_func.h>
@@ -84,6 +91,20 @@
 #define STA_PING_LARGE		1400U
 #define STA_LOG_MAX		40U
 
+/* The AP->board arm is driven from the host on the `peer window ms=` anchor,
+ * so both numbers are profile inputs (tests/board/rtos/app/Kconfig): a window
+ * shorter than the bench's ping measures the runner's reset instead of the
+ * link, and a hold is the only window that overlaps a board which is still
+ * alive (the runner resets as soon as the case returns). */
+#ifndef CONFIG_STA_WINDOW_MS
+#define CONFIG_STA_WINDOW_MS	6000
+#endif
+#ifndef CONFIG_STA_HOLD_MS
+#define CONFIG_STA_HOLD_MS	0
+#endif
+#define STA_WINDOW_MS		((unsigned)CONFIG_STA_WINDOW_MS)
+#define STA_HOLD_MS		((unsigned)CONFIG_STA_HOLD_MS)
+
 void lkpi_sdio_fsl_install(void);
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 
@@ -96,6 +117,30 @@ extern unsigned int rtw_drv_log_level;
 #define LPS_OFF			0
 
 static unsigned sta_log_lines;
+
+/* The census probe is this file's only when the image has no throughput case:
+ * rtl8189fs_c6t.c owns the same symbol in the throughput images, and one link
+ * can carry exactly one definition. */
+#if defined(CONFIG_LKPI_CENSUS) && !defined(RTOS_CASE_RTL8189FS_C6T)
+#define STA_OWNS_CENSUS_PROBE 1
+/* The engine's per-cycle probe (components/liblinux80211/lkpi_census.h): the
+ * reading only the board can take before a bus cycle, kept as a low-water
+ * mark of the vendor driver's free receive buffers.  It lives here because
+ * this image's census carries no throughput case to own it; rtl8189fs_c6t.c
+ * owns the same probe in the throughput images, and the guard keeps the two
+ * out of one link. */
+static unsigned sta_rxbuf_min = ~0u;
+
+void
+lkpi_census_pump_probe(void)
+{
+	struct rtl8189f_diag d;
+
+	rtl8189f_diag_get(&d);
+	if (d.valid != 0u && d.recvbuf_free < sta_rxbuf_min)
+		sta_rxbuf_min = d.recvbuf_free;
+}
+#endif
 
 static void
 sta_sink(ulog_level_t level, const char *line)
@@ -146,7 +191,10 @@ case_rtl8189fs_sta_run(void)
 	unsigned int connected_ms = 0U;
 	unsigned int ping_rx = 0U;
 	unsigned int rtt_min = 0U, rtt_avg = 0U, rtt_max = 0U;
+	unsigned long i;
 	struct lkpi_net_diag diag;
+	struct lkpi_net_diag dbefore;
+	struct rtl8189f_diag vbefore, vafter;
 	int freq = 0;
 	int sig = 0;
 	int rc;
@@ -272,10 +320,61 @@ found:
 		    (unsigned char)netif_mac[3], (unsigned char)netif_mac[4],
 		    (unsigned char)netif_mac[5]);
 
-	/* The peer arm (the Pi pings the board) is driven from the host by this
-	 * anchor, the same window the C5 round uses. */
-	CASE_ANCHOR("rtl8189fs_sta: peer window ms=6000\n");
-	osDelay(6000u);
+	/* The AP->board arm is driven from the host on this anchor.  The window's
+	 * close prints what actually arrived while the host was pinging, so a
+	 * host-side 0/N is read against the board's own counters (the seam's
+	 * frame classes and the vendor's receive counters) instead of against
+	 * the runner's reset. */
+	CASE_ANCHOR("rtl8189fs_sta: peer window ms=%u\n", STA_WINDOW_MS);
+	(void)memset(&dbefore, 0, sizeof(dbefore));
+	(void)memset(&vbefore, 0, sizeof(vbefore));
+	(void)memset(&vafter, 0, sizeof(vafter));
+	lkpi_net_diag(&dbefore);
+	rtl8189f_diag_get(&vbefore);
+	osDelay(STA_WINDOW_MS);
+	lkpi_net_diag(&diag);
+	rtl8189f_diag_get(&vafter);
+	CASE_ANCHOR("rtl8189fs_sta: window done ms=%u rx_frames=%lu rx_bytes=%lu "
+		    "arp_req=%lu arp_rep=%lu ip=%lu other=%lu eapol=%lu foreign=%lu "
+		    "no_netif=%lu input_fail=%lu drv_rx_pkts=%u drv_rx_drop=%u "
+		    "drv_rx_bytes=%u drv_rx_icv_err=%u drv_rx_crc_err=%u "
+		    "rxbuf_min=%u\n",
+		    STA_WINDOW_MS, diag.rx_frames - dbefore.rx_frames,
+		    diag.rx_bytes - dbefore.rx_bytes,
+		    diag.rx_arp_req - dbefore.rx_arp_req,
+		    diag.rx_arp_rep - dbefore.rx_arp_rep,
+		    diag.rx_ip - dbefore.rx_ip,
+		    diag.rx_other - dbefore.rx_other,
+		    diag.rx_eapol - dbefore.rx_eapol,
+		    diag.rx_foreign - dbefore.rx_foreign,
+		    diag.rx_no_netif - dbefore.rx_no_netif,
+		    diag.rx_input_fail - dbefore.rx_input_fail,
+		    vafter.rx_pkts - vbefore.rx_pkts,
+		    vafter.rx_drops - vbefore.rx_drops,
+		    vafter.rx_bytes - vbefore.rx_bytes,
+		    vafter.rx_icv_err - vbefore.rx_icv_err,
+		    vafter.rx_crc_err - vbefore.rx_crc_err,
+#ifdef STA_OWNS_CENSUS_PROBE
+		    (unsigned)sta_rxbuf_min
+#else
+		    0u
+#endif
+		    );
+	/* The frames that reached the seam as an unowned ethertype: for the WPA2
+	 * arm this is where a group-addressed frame the vendor indicated with the
+	 * wrong bytes shows up.  Bounded to the first four, sampled at the seam. */
+	for (i = 0u; i < diag.rx_other_n && i < 4u; i++) {
+		CASE_ANCHOR("rtl8189fs_sta: rx other#%lu proto=0x%04lx len=%lu "
+			    "head=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
+			    i, diag.rx_other_proto[i], diag.rx_other_len[i],
+			    diag.rx_other_head[i][0], diag.rx_other_head[i][1],
+			    diag.rx_other_head[i][2], diag.rx_other_head[i][3],
+			    diag.rx_other_head[i][4], diag.rx_other_head[i][5],
+			    diag.rx_other_head[i][6], diag.rx_other_head[i][7],
+			    diag.rx_other_head[i][8], diag.rx_other_head[i][9],
+			    diag.rx_other_head[i][10], diag.rx_other_head[i][11]);
+	}
+
 
 	rc = lkpi_net_ping(RTL8189FS_AP_IP, STA_PING_COUNT, STA_PING_SMALL,
 			   STA_PING_TIMEOUT_MS, &ping_rx, &rtt_min, &rtt_avg,
@@ -306,6 +405,15 @@ found:
 		    diag.rx_frames, diag.tx_frames, diag.rx_bytes, diag.tx_bytes,
 		    diag.tx_fail);
 	CASE_ANCHOR("rtl8189fs_sta: PASS C6\n");
+
+	/* The hold is the reverse arm's window: the runner resets the board as
+	 * soon as this case returns, so a profile that measures AP->board after
+	 * the verdict lines holds the link here.  Zero is the historical shape. */
+	if (STA_HOLD_MS != 0U) {
+		CASE_ANCHOR("rtl8189fs_sta: hold ms=%u\n", STA_HOLD_MS);
+		osDelay(STA_HOLD_MS);
+	}
+	CASE_ANCHOR("rtl8189fs_sta: end\n");
 
 	return 0;
 }

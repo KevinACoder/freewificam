@@ -50,6 +50,9 @@ CASES = (
     # join, and the C6T throughput phases.
     "rtl8189fs_sdio",
     "rtl8189fs_sta",
+    # The WPA2 arm of the same station (docs/HANDOFF-8189FTV-RTOS-STA.md): the
+    # supplicant owns the join and the verdict is PASS STAW.
+    "rtl8189fs_sta_wpa2",
     "rtl8189fs_c6t",
     # The AP role (docs/HANDOFF-8189FTV-RTOS-AP.md): the vendor's own AP MLME
     # beacons and answers auth/assoc, hostapd supplies the beacon's IEs, and
@@ -256,6 +259,42 @@ PATTERNS = {
     ),
     "rtl8189fs_sta_fail": re.compile(
         r"rtl8189fs_sta: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # The window's own bookkeeping (the AP->board arm's board-side witness):
+    # what arrived while the host was pinging, classified at the egress seam
+    # and in the vendor driver.
+    "rtl8189fs_sta_window_done": re.compile(
+        r"rtl8189fs_sta: window done ms=(?P<ms>\d+) rx_frames=(?P<rx>\d+) "
+        r"rx_bytes=(?P<bytes>\d+) arp_req=(?P<arpreq>\d+) "
+        r"arp_rep=(?P<arprep>\d+) ip=(?P<ip>\d+) other=(?P<other>\d+) "
+        r"eapol=(?P<eapol>\d+) foreign=(?P<foreign>\d+) "
+        r"no_netif=(?P<nonetif>\d+) input_fail=(?P<inputfail>\d+) "
+        r"drv_rx_pkts=(?P<drvpkts>\d+) drv_rx_drop=(?P<drvdrop>\d+) "
+        r"drv_rx_bytes=(?P<drvbytes>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_wpa2_netif": re.compile(
+        r"rtl8189fs_sta_wpa2: netif up name=(?P<name>\S+) "
+        r"ip=(?P<ip>[0-9.]+)/24 mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_wpa2_state": re.compile(
+        r"rtl8189fs_sta_wpa2: sta state=(?P<state>-?\d+) "
+        r"waited_ms=(?P<ms>\d+) bssid=(?P<bssid>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_wpa2_key": re.compile(
+        r"rtl8189fs_sta_wpa2: sta key ptk=(?P<ptk>\d+) gtk=(?P<gtk>\d+) "
+        r"fail=(?P<fail>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_wpa2_window_done": re.compile(
+        r"rtl8189fs_sta_wpa2: window done ms=(?P<ms>\d+) "
+        r"rx_frames=(?P<rx>\d+) rx_bytes=(?P<bytes>\d+) "
+        r"arp_req=(?P<arpreq>\d+) arp_rep=(?P<arprep>\d+) "
+        r"ip=(?P<ip>\d+) other=(?P<other>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_wpa2_pass": re.compile(
+        r"rtl8189fs_sta_wpa2: PASS STAW", re.MULTILINE
+    ),
+    "rtl8189fs_sta_wpa2_fail": re.compile(
+        r"rtl8189fs_sta_wpa2: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "rtl8189fs_c6t_plan": re.compile(
         r"rtl8189fs_c6t: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
@@ -1237,6 +1276,10 @@ LIST_PATTERNS = {
 
     "rtl8189fs_sta_ping": re.compile(
         r"rtl8189fs_sta: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_wpa2_ping": re.compile(
+        r"rtl8189fs_sta_wpa2: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
         r"payload=(?P<payload>\d+)", re.MULTILINE
     ),
     "rtl8189fs_c6t_begin": re.compile(
@@ -3850,6 +3893,44 @@ def judge(text: str, expect: dict | None = None) -> dict:
                         notes.append(
                             f"rtl8189fs_sta: ping {row['payload']}B "
                             f"{row['rx']}/{row['tx']}")
+
+    if cases.get("rtl8189fs_sta_wpa2", {}).get("verdict") == "pass":
+        fail = found["rtl8189fs_sta_wpa2_fail"]
+        if fail:
+            errors.append(f"rtl8189fs_sta_wpa2: {fail['reason']}")
+        if not found["rtl8189fs_sta_wpa2_netif"]:
+            errors.append("rtl8189fs_sta_wpa2: PASS without the netif line")
+        st = found["rtl8189fs_sta_wpa2_state"]
+        if not st:
+            errors.append("rtl8189fs_sta_wpa2: PASS without the sta state line")
+        elif st["state"] != "9":
+            errors.append(f"rtl8189fs_sta_wpa2: state={st['state']} != 9")
+        else:
+            notes.append(
+                f"rtl8189fs_sta_wpa2: state=9 bssid={st['bssid']} "
+                f"waited_ms={st['ms']}")
+        key = found["rtl8189fs_sta_wpa2_key"]
+        if not key:
+            errors.append("rtl8189fs_sta_wpa2: PASS without the key line")
+        elif key["ptk"] == "0":
+            errors.append("rtl8189fs_sta_wpa2: PTK not installed")
+        else:
+            notes.append(
+                f"rtl8189fs_sta_wpa2: ptk={key['ptk']} gtk={key['gtk']} "
+                f"fail={key['fail']}")
+        pings = found["rtl8189fs_sta_wpa2_ping"]
+        if len(pings) < 2:
+            errors.append("rtl8189fs_sta_wpa2: PASS without both ICMP rounds")
+        else:
+            for row in pings:
+                if row["tx"] != row["rx"]:
+                    errors.append(
+                        f"rtl8189fs_sta_wpa2: ping {row['payload']}B "
+                        f"{row['rx']}/{row['tx']}")
+                else:
+                    notes.append(
+                        f"rtl8189fs_sta_wpa2: ping {row['payload']}B "
+                        f"{row['rx']}/{row['tx']}")
 
     if cases.get("rtl8189fs_c6t", {}).get("verdict") == "pass":
         fail = found["rtl8189fs_c6t_fail"]

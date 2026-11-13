@@ -58,6 +58,98 @@ rtl8189f_diag_get(struct rtl8189f_diag *out)
 	out->tx_pg_pub = (unsigned int)hal->SdioTxFIFOFreePage[3];
 	out->cmd_issued = (unsigned int)adapter->cmdpriv.cmd_issued_cnt;
 	out->cmd_done = (unsigned int)adapter->cmdpriv.cmd_done_cnt;
+	out->rx_pkts = (unsigned int)adapter->recvpriv.rx_pkts;
+	out->rx_bytes = (unsigned int)adapter->recvpriv.rx_bytes;
+	out->rx_drops = (unsigned int)adapter->recvpriv.rx_drop;
+	out->rx_dbg_drop = (unsigned int)adapter->recvpriv.dbg_rx_drop_count;
+	out->rx_dbg_ampdu_drop =
+	    (unsigned int)adapter->recvpriv.dbg_rx_ampdu_drop_count;
+	out->rx_icv_err = adapter->recvpriv.rx_icv_err;
+	out->rx_crc_err = adapter->recvpriv.rx_largepacket_crcerr +
+	    adapter->recvpriv.rx_middlepacket_crcerr +
+	    adapter->recvpriv.rx_smallpacket_crcerr;
+	out->valid = 1u;
+}
+
+/* --- the group-key fixup (write side) ------------------------------------
+ *
+ * The vendor's station group-key install (ioctl_cfg80211.c: rtw_cfg80211_set_
+ * encryption, the `set_tx == 0` branch) copies the GTK into the driver, marks
+ * it installed and writes the CAM entry - but it never sets
+ * `securitypriv.dot118021XGrpPrivacy`.  GET_ENCRY_ALGO (rtw_security.h:255)
+ * reads that field for every multicast/broadcast frame, so with it left at
+ * _NO_PRIVACY_ the receive path treats an encrypted group frame as plaintext:
+ * iv_len/icv_len stay 0, the 8-byte CCMP header and the 8-byte MIC are not
+ * stripped, and the Ethernet conversion reads the ethertype out of the CCMP
+ * header.  lwIP then sees a frame from ff:ff:ff:ff:ff:ff with an unknown
+ * ethertype and never answers the AP's ARP request (2026-11-13: the WPA2
+ * arm's 0/20 with 36 frames of 66 B classified "other", against 20/20 with a
+ * static neighbour, where no broadcast is needed).
+ *
+ * Stating the field after the key is installed is the whole fix; the vendor
+ * source stays byte-identical, the way every other departure in this port is
+ * kept (docs/HANDOFF-8189FTV-STA-RX.md, runs/2026-11-13-rtl8189fs-sta-rx).
+ */
+void
+rtl8189f_grp_privacy_fixup(void)
+{
+	struct sdio_func *func;
+	struct dvobj_priv *dvobj;
+	_adapter *adapter;
+
+	func = lkpi_sdio_func(1u);
+	if (func == NULL)
+		return;
+	dvobj = (struct dvobj_priv *)sdio_get_drvdata(func);
+	if (dvobj == NULL)
+		return;
+	adapter = dvobj_get_primary_adapter(dvobj);
+	if (adapter == NULL)
+		return;
+	if (adapter->securitypriv.binstallGrpkey != _TRUE)
+		return;
+	if (adapter->securitypriv.dot118021XGrpPrivacy != _NO_PRIVACY_)
+		return;
+	if (adapter->securitypriv.dot11AuthAlgrthm != dot11AuthAlgrthm_8021X)
+		return;
+	adapter->securitypriv.dot118021XGrpPrivacy = _AES_;
+}
+
+/* --- the security state (the WPA2 station's group-key question) ---------- */
+void
+rtl8189f_sec_diag_get(struct rtl8189f_sec_diag *out)
+{
+	struct sdio_func *func;
+	struct dvobj_priv *dvobj;
+	_adapter *adapter;
+	struct sta_info *psta;
+
+	if (out == NULL)
+		return;
+	out->valid = 0u;
+
+	func = lkpi_sdio_func(1u);
+	if (func == NULL)
+		return;
+	dvobj = (struct dvobj_priv *)sdio_get_drvdata(func);
+	if (dvobj == NULL)
+		return;
+	adapter = dvobj_get_primary_adapter(dvobj);
+	if (adapter == NULL)
+		return;
+
+	out->binstall_grpkey = adapter->securitypriv.binstallGrpkey;
+	out->grp_keyid = adapter->securitypriv.dot118021XGrpKeyid;
+	out->grp_privacy = adapter->securitypriv.dot118021XGrpPrivacy;
+	out->ndis_authtype = adapter->securitypriv.ndisauthtype;
+	out->ndis_encrypt = adapter->securitypriv.ndisencryptstatus;
+	out->hw_decrypted = adapter->securitypriv.hw_decrypted;
+	psta = rtw_get_stainfo(&adapter->stapriv, get_bssid(&adapter->mlmepriv));
+	if (psta != NULL) {
+		out->ap_sta_present = 1u;
+		out->ap_sta_pairwise = psta->bpairwise_key_installed;
+		out->ap_sta_privacy = psta->dot118021XPrivacy;
+	}
 	out->valid = 1u;
 }
 

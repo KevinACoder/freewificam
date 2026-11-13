@@ -1,0 +1,32 @@
+# rtl8189fs on the RTOS line: the long-window station plus the kernel-API
+# census (the attribution arm for docs/HANDOFF-8189FTV-STA-RX.md).
+#
+# Same case, same windows, same bench as rk3568-rtl8189fs-sta-long, with
+# CONFIG_LKPI_CENSUS on: the SDIO receive-presentation counters (the card's
+# offer, the host's read, HISR bits - wired for 8189 by the OBS addresses in
+# platform/build_defs.h) and the engine's transfer/claim histograms.  The
+# numbers a verdict is written from come from the clean image; this one only
+# attributes.
+#
+# The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_sta"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+CONFIG_LKPI_CENSUS=y
+
+CONFIG_STA_WINDOW_MS=60000
+CONFIG_STA_HOLD_MS=30000
+
+# The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
+# FreeRTOS heap; see the C3 profile's note.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

@@ -411,3 +411,30 @@ unsigned int rtos_pc_top( void * task, struct rtos_pc_hit * out, unsigned int ma
 	return used;
 }
 #endif /* CONFIG_LKPI_CENSUS && trace facility && run-time stats */
+
+#if CONFIG_LKPI_CENSUS
+/*
+ * The census clock (components/liblinux80211/lkpi_census.h): nanoseconds from
+ * the architectural counter, for the census timestamps the 1 kHz tick cannot
+ * resolve.
+ *
+ * It lives here, not in a case, because two images define CONFIG_LKPI_CENSUS
+ * and only one of them carries the throughput case: while it sat in
+ * rtl8189fs_c6t.c, every other census image failed to link with
+ * `undefined reference to lkpi_census_now_ns` (2026-11-13, the station census
+ * arm).  The board glue is compiled by every freertos image, so the clock now
+ * has exactly one definition per image.
+ */
+uint64_t
+lkpi_census_now_ns(void)
+{
+	uint32_t freq = gtimer_freq_get();
+	uint64_t count;
+
+	if (freq == 0u)
+		return 0u;
+	count = gtimer_count_get();
+	return (count / freq) * 1000000000ULL +
+	    ((count % freq) * 1000000000ULL) / freq;
+}
+#endif /* CONFIG_LKPI_CENSUS */

@@ -184,4 +184,36 @@ config STA_PSK_EXTERNAL
 	  sta_psk.h (gitignored, 0600) from the STA_PSK environment.  The Pi
 	  bench profile may use its non-secret bench constant instead.
 
+# --- the station cases' own window (docs/HANDOFF-8189FTV-STA-RX.md) --------
+#
+# The AP->board arm is driven from the host on the case's own anchor, so the
+# window has to be long enough for the bench's ping and long enough to record
+# what arrived.  A 6 s window with a 10 s ping measures the reset, not the
+# link (2026-11-13: the open arm's 4/30 was that arithmetic, the WPA2 arm's
+# capture ended before its hold).  Both numbers are Kconfig so a profile can
+# say which window it measured in, and the case prints them in its anchors.
+
+config STA_WINDOW_MS
+	int "STA peer window (ms) the AP->board arm runs inside"
+	default 6000
+	range 1000 600000
+	help
+	  The window between the station's own bring-up and its own ping rounds.
+	  The host fires the AP->board ping (and the neighbour-state probes) on
+	  the `peer window ms=` anchor.  rk3568-rtl8189fs-sta-long raises it to
+	  60000 so both ICMP sizes fit with the neighbour state sampled before
+	  and after.
+
+config STA_HOLD_MS
+	int "STA post-verdict hold (ms): the link stays up for the reverse arm"
+	default 0
+	range 0 600000
+	help
+	  After the verdict lines the case holds the link for this long, which is
+	  the only way the host's AP->board arm overlaps a board that is still
+	  alive (the runner resets the board once the case returns).  The station
+	  images before 2026-11-13 measured the reverse arm outside any captured
+	  window; the long profiles hold 30 s and the case ends with an `end`
+	  anchor the capture runs to.
+
 endmenu

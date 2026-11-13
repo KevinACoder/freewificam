@@ -180,6 +180,21 @@
 #define LKPI_SDIO_OBS_IRQ 1
 #endif
 
+/* The receive-presentation probe's watched addresses.
+ *
+ * The engine counts the card's offer (RX0_REQ_LEN) and the host's read only
+ * when it is told which CMD52 byte addresses carry them; with no addresses it
+ * compiles the whole observation out and `offer/read/hisr` read 0 for a card
+ * that is offering work.  That is exactly the reading the 2026-11-13 STA round
+ * hit (docs/HANDOFF-8189FTV-STA-RX.md §3.6: "RX 请求探针没接线").  The addresses
+ * are the vendor's SDIO local device space (hal_com_reg.h:1660 SDIO_LOCAL_DEVICE_ID,
+ * :1680 SDIO_REG_HISR 0x18, :1682 SDIO_REG_RX0_REQ_LEN 0x1C) and only mean
+ * anything for the 8189's SDIO function 1. */
+#if defined(CONFIG_LKPI_CENSUS) && CONFIG_LIBLINUX80211_RTL8189FS
+#define LKPI_SDIO_OBS_RX_REQ_ADDR	0x1C	/* SDIO_REG_RX0_REQ_LEN */
+#define LKPI_SDIO_OBS_HISR_ADDR		0x18	/* SDIO_REG_HISR */
+#endif
+
 /* rtw88 / iwlwifi host builds use the host tier; the forced-include path is
  * only used for target objects, so there is no host-only definition here. */
 

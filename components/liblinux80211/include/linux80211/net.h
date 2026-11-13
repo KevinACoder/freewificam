@@ -106,6 +106,17 @@ struct lkpi_net_diag {
 	unsigned long rx_frames;
 	unsigned long rx_foreign;
 	unsigned long rx_eapol;
+	/* The frame classes of the frames the egress owns (see lkpinetif_seam.h):
+	 * an AP's broadcast ARP request and the board's reply are what a
+	 * "the AP cannot reach the station" verdict is about. */
+	unsigned long rx_arp_req;
+	unsigned long rx_arp_rep;
+	unsigned long rx_ip;
+	unsigned long rx_other;
+	unsigned long rx_other_n;
+	unsigned long rx_other_len[4];
+	unsigned long rx_other_proto[4];
+	unsigned char rx_other_head[4][16];
 	unsigned long rx_no_netif;
 	unsigned long rx_input_fail;
 	unsigned long tx_frames;

@@ -30,9 +30,16 @@
  *   rtl8189fs_sta_wpa2: sta eapol tx=<n> rx=<n> drop=<n>
  *   rtl8189fs_sta_wpa2: sta key ptk=<n> gtk=<n> fail=<n>
  *   rtl8189fs_sta_wpa2: peer window ms=<n>
+ *   rtl8189fs_sta_wpa2: window done ms=<n> rx_frames=<n> rx_bytes=<n>
+ *                       arp_req=<n> arp_rep=<n> ip=<n> other=<n> eapol=<n>
+ *                       foreign=<n> no_netif=<n> input_fail=<n>
+ *                       drv_rx_pkts=<n> drv_rx_drop=<n> drv_rx_bytes=<n>
+ *                       drv_rx_icv_err=<n> drv_rx_crc_err=<n>
  *   rtl8189fs_sta_wpa2: ping tx=<n> rx=<n> payload=<n> rtt_ms=<min>/<avg>/<max>
  *   rtl8189fs_sta_wpa2: diag rx_frames=<n> tx_frames=<n> rx_bytes=<n> tx_bytes=<n> tx_fail=<n>
  *   rtl8189fs_sta_wpa2: PASS STAW
+ *   rtl8189fs_sta_wpa2: hold ms=<n>
+ *   rtl8189fs_sta_wpa2: end
  *   rtl8189fs_sta_wpa2: FAIL <reason>
  */
 
@@ -50,6 +57,7 @@
 #include "linux80211/net.h"
 #include "linux80211/sta_wpa.h"
 #include "linuxkpi_sdio.h"
+#include "rtl8189fs_diag.h"
 
 #include <linux/etherdevice.h>
 #include <linux/mmc/sdio_func.h>
@@ -99,7 +107,20 @@
 #define STA_PING_SMALL		56U
 #define STA_PING_LARGE		1400U
 #define STA_LOG_MAX		40U
-#define STA_HOLD_MS		20000U
+
+/* The AP->board arm runs inside these two numbers (app/Kconfig).  Until
+ * 2026-11-13 the window was a hardcoded 6 s and the 20 s hold was the only
+ * place the Pi's ping could land, but the capture stopped at the hold's own
+ * anchor (runs/2026-11-13-rtl8189fs-sta-wpa2: wall 48.2 s, hold 20 s) - so the
+ * 0/30 had no board-side counters behind it at all. */
+#ifndef CONFIG_STA_WINDOW_MS
+#define CONFIG_STA_WINDOW_MS	6000
+#endif
+#ifndef CONFIG_STA_HOLD_MS
+#define CONFIG_STA_HOLD_MS	20000
+#endif
+#define STA_WINDOW_MS		((unsigned)CONFIG_STA_WINDOW_MS)
+#define STA_HOLD_MS		((unsigned)CONFIG_STA_HOLD_MS)
 
 void lkpi_sdio_fsl_install(void);
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
@@ -183,8 +204,11 @@ case_rtl8189fs_sta_wpa2_run(void)
 	unsigned int rtt_min = 0U, rtt_avg = 0U, rtt_max = 0U;
 	unsigned int eapol_tx = 0U, eapol_rx = 0U, eapol_drop = 0U;
 	unsigned int ptk = 0U, gtk = 0U, key_fail = 0U;
+	unsigned long i;
 	int state = -1;
 	struct lkpi_net_diag diag;
+	struct lkpi_net_diag dbefore;
+	struct rtl8189f_diag vbefore, vafter;
 	int rc;
 
 	lkpi_core_init();
@@ -276,6 +300,22 @@ case_rtl8189fs_sta_wpa2_run(void)
 		    eapol_tx, eapol_rx, eapol_drop);
 	CASE_ANCHOR("rtl8189fs_sta_wpa2: sta key ptk=%u gtk=%u fail=%u\n",
 		    ptk, gtk, key_fail);
+	{
+		/* The vendor's own group-key state: its add_key returns 0 even when
+		 * it took no action, so the host-side rc cannot tell a WPA2 station
+		 * whether the GTK reached the CAM (see rtl8189fs_diag.h). */
+		struct rtl8189f_sec_diag sec;
+
+		(void)memset(&sec, 0, sizeof(sec));
+		rtl8189f_sec_diag_get(&sec);
+		CASE_ANCHOR("rtl8189fs_sta_wpa2: sec grpkey=%u grpkeyid=%u "
+			    "grppriv=%u apsta=%u pairwise=%u privacy=%u "
+			    "authtype=%u encrypt=%u hwdec=%u valid=%u\n",
+			    sec.binstall_grpkey, sec.grp_keyid, sec.grp_privacy,
+			    sec.ap_sta_present, sec.ap_sta_pairwise,
+			    sec.ap_sta_privacy, sec.ndis_authtype,
+			    sec.ndis_encrypt, sec.hw_decrypted, sec.valid);
+	}
 	/* `fail` counts key-install errors the supplicant recovered from (the
 	 * handshake may still complete with the keys installed); only a missing
 	 * PTK is fatal here, and the count is printed so a retry is visible. */
@@ -286,10 +326,54 @@ case_rtl8189fs_sta_wpa2_run(void)
 		return 7;
 	}
 
-	/* The peer arm (the Pi pings the board) is driven from the host by this
-	 * anchor, the same window the C5 round uses. */
-	CASE_ANCHOR("rtl8189fs_sta_wpa2: peer window ms=6000\n");
-	osDelay(6000u);
+	/* The AP->board arm is driven from the host on this anchor.  Its window
+	 * closes with what arrived, so the host's numbers are read against the
+	 * board's counters (seam frame classes, vendor receive counters) and not
+	 * against the runner's reset. */
+	CASE_ANCHOR("rtl8189fs_sta_wpa2: peer window ms=%u\n", STA_WINDOW_MS);
+	(void)memset(&dbefore, 0, sizeof(dbefore));
+	(void)memset(&vbefore, 0, sizeof(vbefore));
+	(void)memset(&vafter, 0, sizeof(vafter));
+	lkpi_net_diag(&dbefore);
+	rtl8189f_diag_get(&vbefore);
+	osDelay(STA_WINDOW_MS);
+	lkpi_net_diag(&diag);
+	rtl8189f_diag_get(&vafter);
+	CASE_ANCHOR("rtl8189fs_sta_wpa2: window done ms=%u rx_frames=%lu "
+		    "rx_bytes=%lu arp_req=%lu arp_rep=%lu ip=%lu other=%lu "
+		    "eapol=%lu foreign=%lu no_netif=%lu input_fail=%lu "
+		    "drv_rx_pkts=%u drv_rx_drop=%u drv_rx_bytes=%u "
+		    "drv_rx_icv_err=%u drv_rx_crc_err=%u\n",
+		    STA_WINDOW_MS, diag.rx_frames - dbefore.rx_frames,
+		    diag.rx_bytes - dbefore.rx_bytes,
+		    diag.rx_arp_req - dbefore.rx_arp_req,
+		    diag.rx_arp_rep - dbefore.rx_arp_rep,
+		    diag.rx_ip - dbefore.rx_ip,
+		    diag.rx_other - dbefore.rx_other,
+		    diag.rx_eapol - dbefore.rx_eapol,
+		    diag.rx_foreign - dbefore.rx_foreign,
+		    diag.rx_no_netif - dbefore.rx_no_netif,
+		    diag.rx_input_fail - dbefore.rx_input_fail,
+		    vafter.rx_pkts - vbefore.rx_pkts,
+		    vafter.rx_drops - vbefore.rx_drops,
+		    vafter.rx_bytes - vbefore.rx_bytes,
+		    vafter.rx_icv_err - vbefore.rx_icv_err,
+		    vafter.rx_crc_err - vbefore.rx_crc_err);
+	/* The frames that reached the seam as an unowned ethertype: for the WPA2
+	 * arm this is where a group-addressed frame the vendor indicated with the
+	 * wrong bytes shows up.  Bounded to the first four, sampled at the seam. */
+	for (i = 0u; i < diag.rx_other_n && i < 4u; i++) {
+		CASE_ANCHOR("rtl8189fs_sta_wpa2: rx other#%lu proto=0x%04lx len=%lu "
+			    "head=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
+			    i, diag.rx_other_proto[i], diag.rx_other_len[i],
+			    diag.rx_other_head[i][0], diag.rx_other_head[i][1],
+			    diag.rx_other_head[i][2], diag.rx_other_head[i][3],
+			    diag.rx_other_head[i][4], diag.rx_other_head[i][5],
+			    diag.rx_other_head[i][6], diag.rx_other_head[i][7],
+			    diag.rx_other_head[i][8], diag.rx_other_head[i][9],
+			    diag.rx_other_head[i][10], diag.rx_other_head[i][11]);
+	}
+
 
 	rc = lkpi_net_ping(CONFIG_STA_STATIC_GW, STA_PING_COUNT, STA_PING_SMALL,
 			   STA_PING_TIMEOUT_MS, &ping_rx, &rtt_min, &rtt_avg,
@@ -324,9 +408,14 @@ case_rtl8189fs_sta_wpa2_run(void)
 	CASE_ANCHOR("rtl8189fs_sta_wpa2: PASS STAW\n");
 
 	/* The reverse direction (the AP pings the board) is driven from the host
-	 * after the PASS anchor; the hold keeps the link up for that window. */
-	CASE_ANCHOR("rtl8189fs_sta_wpa2: hold ms=%u\n", STA_HOLD_MS);
-	osDelay(STA_HOLD_MS);
+	 * after the PASS anchor; the hold keeps the link up for that window, and
+	 * the `end` anchor is what the capture runs to (the runner resets as soon
+	 * as the case returns). */
+	if (STA_HOLD_MS != 0U) {
+		CASE_ANCHOR("rtl8189fs_sta_wpa2: hold ms=%u\n", STA_HOLD_MS);
+		osDelay(STA_HOLD_MS);
+	}
+	CASE_ANCHOR("rtl8189fs_sta_wpa2: end\n");
 
 	return 0;
 }

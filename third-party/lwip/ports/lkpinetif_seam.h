@@ -66,6 +66,23 @@ struct lkpinetif_diag {
 	unsigned long	rx_frames;	/* frames the driver handed over */
 	unsigned long	rx_foreign;	/* another interface's frames */
 	unsigned long	rx_eapol;	/* handed to the EAPOL sink */
+	/* Frame classes of the frames this adapter owns (the 2026-11-13 STA RX
+	 * round's question): a broadcast ARP request and the board's unicast
+	 * reply are the two frames an "the AP cannot reach the board" verdict
+	 * turns on, and lwIP's own ARP table cannot say whether they arrived. */
+	unsigned long	rx_arp_req;	/* ARP opcode 1 (who-has) */
+	unsigned long	rx_arp_rep;	/* ARP opcode 2 (is-at) */
+	unsigned long	rx_ip;		/* ETH_P_IP */
+	unsigned long	rx_other;	/* everything else (incl. IPv6, LLDP) */
+	/* The first "other" frames, kept raw: an encrypted broadcast frame the
+	 * vendor indicates with the wrong bytes reaches the seam as an ethertype
+	 * nobody owns, and the only way to say what it really was is to look at
+	 * the bytes (2026-11-13: the WPA2 arm's 36 frames of 66 B, all "other",
+	 * while the open arm delivered the same ARP request as ARP). */
+	unsigned long	rx_other_n;		/* how many were sampled */
+	unsigned short	rx_other_len[4];	/* frame length incl. ethernet */
+	unsigned short	rx_other_proto[4];	/* the ethertype eth_type_trans read */
+	unsigned char	rx_other_head[4][16];	/* the first 16 frame bytes */
 	unsigned long	rx_no_netif;	/* arrived before the netif was added */
 	unsigned long	rx_input_fail;	/* the stack refused them */
 	unsigned long	rx_alloc_fail;	/* no pbuf for the handoff */

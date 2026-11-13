@@ -18,6 +18,7 @@
 # Outputs under --evidence:
 #   serial.log / transcript.txt / timings.json   (boot-rtos.sh)
 #   peer-tcpdn.txt / peer-tcpdn2.txt / peer-udpdn.txt / peer-udpdn2.txt
+#   peer-reverse-ping-tcpdn.txt                   (REVERSE_PING=1 only)
 #   peer-tcp-server.log                           (the TCP uplink receiver)
 #   udp-sink.txt                                  (the raw-blast counting sink)
 #   ap-station-<phase>.txt                       (AP's view at each phase)
@@ -45,6 +46,15 @@ CASE_EXPECT=${CASE_EXPECT:-tick,pcie,iwl7260_c5,iwl7260_c6}
 # The downlink UDP rate the counting sink is offered.  40M is the capacity
 # shape; the 8189FTV arm offers 35M, the GT ladder's top rung.
 UDP_DN_RATE=${UDP_DN_RATE:-40M}
+# The reverse arm (docs/HANDOFF-8189FTV-STA-RX.md §4.1): with the downlink
+# already proven in phase tcpdn, drop the static neighbour entry this runner
+# plants at `netif up`, let the AP resolve the board by broadcast, and ping it.
+# On: the arm says whether dynamic ARP works while the link is demonstrably
+# carrying the downlink (and whether a failure is ARP-specific, since the
+# phase's own byte count keeps coming from the adapter).
+REVERSE_PING=${REVERSE_PING:-0}
+REVERSE_PING_COUNT=${REVERSE_PING_COUNT:-20}
+REVERSE_PING_INTERVAL=${REVERSE_PING_INTERVAL:-0.2}
 # Wall-clock cap on the AP-side capture.  The phases finish well inside 200 s;
 # a shorter cap only trims the post-run wait, never the measured window.
 AP_CAP_SECS=${AP_CAP_SECS:-360}
@@ -134,6 +144,26 @@ peer_tcp() {	# $1 = phase name, $2 = seconds
 	pi "iperf -c $BOARD_IP -p 5001 -t $secs -i 5" \
 		>"$EVIDENCE/peer-$name.txt" 2>&1 || true
 }
+reverse_ping() {	# $1 = phase name
+	local name=$1 out="$EVIDENCE/peer-reverse-ping-$1.txt"
+	{
+		echo "== start $(date -Is) arp=dynamic (the static entry is dropped)"
+		pisu "ip neigh show $BOARD_IP dev $AP_IF"
+		pisu "ip neigh del $BOARD_IP dev $AP_IF 2>/dev/null || true"
+		pisu "ip neigh show $BOARD_IP dev $AP_IF"
+	} >"$out" 2>&1 || true
+	pisu "ping -I $AP_IF -c $REVERSE_PING_COUNT -i $REVERSE_PING_INTERVAL -W 1 $BOARD_IP" \
+		>>"$out" 2>&1 || true
+	{
+		echo "== end $(date -Is)"
+		pisu "ip neigh show $BOARD_IP dev $AP_IF"
+		# the phase table's later phases still need the unicast path, so the
+		# bench's static entry comes back and the arm's reading stays isolated
+		pisu "ip neigh replace $BOARD_IP lladdr $STA_MAC dev $AP_IF"
+		pisu "ip neigh show $BOARD_IP dev $AP_IF"
+	} >>"$out" 2>&1 || true
+}
+
 peer_udp() {	# $1 = phase name, $2 = seconds
 	local name=$1 secs=$2
 	pi "iperf -c $BOARD_IP -p 5002 -u -b $UDP_DN_RATE -t $secs -i 5" \
@@ -170,6 +200,9 @@ for _ in $(seq 1 3000); do
 	fi
 	if [ "$seen_tcpdn" = 0 ] && anchor 'name=tcpdn$'; then
 		seen_tcpdn=1
+		if [ "$REVERSE_PING" = 1 ]; then
+			reverse_ping tcpdn
+		fi
 		peer_tcp tcpdn 28
 		station tcpdn
 	fi

@@ -24,6 +24,20 @@ struct rtl8189f_diag {
 	unsigned int tx_pg_pub;		/* [3] */
 	unsigned int cmd_issued;
 	unsigned int cmd_done;
+	/* The vendor's own receive account.  A frame the card accepted but the
+	 * driver dropped leaves no trace in the egress seam's counters, so these
+	 * are the layer between the bus and the netdev (docs/HANDOFF-8189FTV-
+	 * STA-RX.md: "does the board receive the AP's broadcast ARP request").
+	 * The `dbg_*` fields are the vendor's unconditional drop counters; the
+	 * `rx_logs` block is compiled out of this face (CONFIG_DBG_COUNTER off),
+	 * which is why it is not surfaced here. */
+	unsigned int rx_pkts;
+	unsigned int rx_bytes;
+	unsigned int rx_drops;		/* recvpriv.rx_drop */
+	unsigned int rx_dbg_drop;	/* dbg_rx_drop_count */
+	unsigned int rx_dbg_ampdu_drop;	/* dbg_rx_ampdu_drop_count */
+	unsigned int rx_icv_err;	/* hardware decryption failures */
+	unsigned int rx_crc_err;	/* large+middle+small packet CRC */
 	unsigned int valid;		/* driver/adapter present */
 };
 
@@ -76,5 +90,37 @@ struct rtl8189f_ap_diag {
 };
 
 void rtl8189f_ap_diag_get(struct rtl8189f_ap_diag *out);
+
+/* --- the security state a WPA2 station's receive path turns on ------------
+ *
+ * The group key's install is the vendor's own decision, and its cfg80211
+ * add_key returns 0 even when it took no action (the "Obtain Sta_info fail"
+ * path leaves ret at its initial 0).  A host-side rc=0 therefore says nothing
+ * about whether the GTK reached the CAM; these are the vendor's own flags, so
+ * a boot can say which link is missing instead of inferring it from frames
+ * that arrive malformed (docs/HANDOFF-8189FTV-STA-RX.md).  Scalars only.
+ */
+struct rtl8189f_sec_diag {
+	unsigned int valid;
+	unsigned int binstall_grpkey;	/* securitypriv.binstallGrpkey */
+	unsigned int grp_keyid;		/* securitypriv.dot118021XGrpKeyid */
+	unsigned int grp_privacy;	/* securitypriv.dot118021XGrpPrivacy */
+	unsigned int ndis_authtype;	/* securitypriv.ndisauthtype */
+	unsigned int ndis_encrypt;	/* securitypriv.ndisencryptstatus */
+	unsigned int hw_decrypted;	/* securitypriv.hw_decrypted (last frame) */
+	unsigned int ap_sta_present;	/* rtw_get_stainfo(get_bssid()) != NULL */
+	unsigned int ap_sta_pairwise;	/* psta->bpairwise_key_installed */
+	unsigned int ap_sta_privacy;	/* psta->dot118021XPrivacy */
+};
+
+void rtl8189f_sec_diag_get(struct rtl8189f_sec_diag *out);
+
+/* The station group-key fixup (see obs.c): the vendor's station group-key
+ * install leaves dot118021XGrpPrivacy unset, which makes the receive path
+ * treat encrypted group frames as plaintext.  Called from the port's set_key
+ * after a group key is installed; defined only in the 8189 vendor world (the
+ * port reaches it through a weak reference), so other drivers link unchanged.
+ */
+void rtl8189f_grp_privacy_fixup(void);
 
 #endif /* RTL8189F_RTOS_DIAG_H */
