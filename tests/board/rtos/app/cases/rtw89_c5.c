@@ -335,9 +335,16 @@ found:
 		    (unsigned char)netif_mac[5]);
 
 	/* The peer-side arm (the Pi pings the board) is driven from the host by
-	 * this anchor.  The window is the bench's, not the stack's. */
-	CASE_ANCHOR("rtw89_c5: peer window ms=6000\n");
-	osDelay(6000u);
+	 * this anchor.  The window is the bench's, not the stack's: it must be
+	 * long enough for the host's neighbour lookup plus its two 20-packet
+	 * rounds (about 8 s), or the last packets land after the case has moved
+	 * to its own ping and the arm measures contention instead of the path. */
+#ifndef CONFIG_RTW89_C5_PEER_WINDOW_MS
+#define CONFIG_RTW89_C5_PEER_WINDOW_MS 6000
+#endif
+	CASE_ANCHOR("rtw89_c5: peer window ms=%d\n",
+		    CONFIG_RTW89_C5_PEER_WINDOW_MS);
+	osDelay(CONFIG_RTW89_C5_PEER_WINDOW_MS);
 
 	rc = lkpi_net_ping(C5_AP_IP, C5_PING_COUNT, C5_PING_SMALL,
 			   C5_PING_TIMEOUT_MS, &ping_rx, &rtt_min, &rtt_avg,

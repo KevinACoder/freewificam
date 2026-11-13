@@ -223,6 +223,18 @@ config STA_HOLD_MS
 # case prints the list it tried and the bus that attached, so a wrong profile
 # reads as "no controller" with the list beside it instead of a silent timeout.
 
+config RTW89_C5_PEER_WINDOW_MS
+	int "rtw89 C5 peer-arm window (ms)"
+	default 6000
+	range 1000 30000
+	help
+	  How long the C5 case holds the link idle for the host's AP->board
+	  arm (neighbour lookup, two 20-packet ICMP rounds, the AP's station
+	  dump).  6000 ms is what the iwl7260 C5 arm uses; this bench's
+	  round takes about 8 s, so the rtw89 profile sets 12000.  Too short a
+	  window makes the last packets land after the case's own ping and the
+	  arm measures contention, not the receive path.
+
 config RTW89_USB_BUS
 	int "rtw89 USB controller family (0 = xHCI roots 3,2; 1 = EHCI roots 1,0)"
 	default 0
