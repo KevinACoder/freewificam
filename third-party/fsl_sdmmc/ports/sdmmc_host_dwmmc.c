@@ -281,16 +281,14 @@ static void fdwmmchost_convert_cmd(const sdmmchost_transfer_t *content,
 	data->len = data->blksz * data->blkcnt;
 
 	/*
-	 * What fsl asked for, printed next to what the controller reports it was
-	 * handed: the two disagreeing is the difference between a stack that built
-	 * the wrong transfer and one whose transfer never started at all. This is a
-	 * per-transfer trace - a driver that programs its registers in a loop emits
-	 * tens of thousands of them - so it lives at the verbose level and stays
-	 * off the console unless the level is raised deliberately.
+	 * No per-transfer trace here.  A LOG_DEBUG on this path is not free even
+	 * when the console level hides it: log_emit() formats the line and scans
+	 * it against every anchor family before the level gate, so a transfer
+	 * trace costs microseconds per transfer on whichever thread holds the bus
+	 * claim.  That is how a 12 KB TX ended up holding the claim for most of a
+	 * second - the formatter, not the controller.  A trace that is needed
+	 * belongs behind a counter read at the freeze, not on the data path.
 	 */
-	LOG_DEBUG("sdio: data cmd=%u arg=0x%x blksz=%u blkcnt=%u len=%u %s\n",
-		  cmd->index, cmd->arg, data->blksz, data->blkcnt, data->len,
-		  data->write ? "write" : "read");
 
 	cmd->data = data;
 }
