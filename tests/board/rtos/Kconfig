@@ -106,6 +106,23 @@ config C6T_PUMP_MODE
 	  arriving, backing off to the same idle period when it does not.  The
 	  case reads the mode back in its plan line.
 
+config C6T_PUMP_DRAIN
+	bool "C6T: SDIO pump keeps dispatching while the card reports work"
+	default n
+	help
+	  A cycle that saw work is followed by another look while the card still
+	  reports some, with the claim held across the rounds (bounded by the
+	  engine's drain round cap).  Fewer claim handoffs per receive burst.
+
+config C6T_PUMP_IRQ
+	bool "C6T: SDIO pump driven by the card interrupt (DAT1)"
+	default n
+	help
+	  On, the controller's card-interrupt mask is armed and the pump's
+	  wait becomes a 10 ms backstop instead of the discovery mechanism.
+	  The card's own interrupt enable is the function driver's call; the
+	  case prints irq=1 only when the engine accepted the switch.
+
 config C6T_PUMP_YIELD
 	bool "C6T: SDIO pump yields the claim to a parked driver"
 	default n
