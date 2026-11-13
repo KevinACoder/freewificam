@@ -29,6 +29,16 @@
 #include "linuxkpi_core.h"
 #include "linuxkpi_impl.h"
 
+/*
+ * The join trace is the workqueue's own naming face: which work body holds the
+ * worker and which schedule was refused.  It used to be a compile-line lever
+ * only; the C6T diagnostic profile selects it through Kconfig so the same
+ * source serves both builds.
+ */
+#if defined(CONFIG_LKPI_WQ_TRACE) && !defined(LKPI_JOIN_TRACE)
+#define LKPI_JOIN_TRACE 1
+#endif
+
 #ifdef CONFIG_LKPI_CENSUS
 #include "lkpi_census.h"
 #endif
@@ -333,11 +343,69 @@ static int lkpi_vlog(ulog_level_t level, const char *fmt, va_list ap)
 	return n;
 }
 
+#ifdef CONFIG_LKPI_MEMCMP_TRACE
+/*
+ * Who calls lkpi_printf.  The memcmp census named the C library's compare but
+ * not its caller's caller; a message storm that pays a sink filter per line is
+ * named by the return address of the formatting call itself.
+ */
+#define LKPI_PRINTF_SITES	8u
+
+static struct lkpi_printf_site lkpi_printf_sites[LKPI_PRINTF_SITES];
+static unsigned long lkpi_printf_calls;
+
+void
+lkpi_printf_trace_reset(void)
+{
+	unsigned int i;
+
+	for (i = 0u; i < LKPI_PRINTF_SITES; i++) {
+		lkpi_printf_sites[i].ra = NULL;
+		lkpi_printf_sites[i].calls = 0u;
+	}
+	lkpi_printf_calls = 0u;
+}
+
+unsigned int
+lkpi_printf_trace_get(struct lkpi_printf_site *out, unsigned int max,
+    unsigned long *calls)
+{
+	unsigned int i;
+
+	*calls = lkpi_printf_calls;
+	for (i = 0u; i < LKPI_PRINTF_SITES && i < max; i++)
+		out[i] = lkpi_printf_sites[i];
+	return i;
+}
+
+static void
+lkpi_printf_trace_note(void *ra)
+{
+	unsigned int i;
+
+	for (i = 0u; i < LKPI_PRINTF_SITES; i++) {
+		if (lkpi_printf_sites[i].ra == ra) {
+			lkpi_printf_sites[i].calls++;
+			break;
+		}
+		if (lkpi_printf_sites[i].ra == NULL) {
+			lkpi_printf_sites[i].ra = ra;
+			lkpi_printf_sites[i].calls = 1u;
+			break;
+		}
+	}
+	lkpi_printf_calls++;
+}
+#endif
+
 int lkpi_printf(ulog_level_t level, const char *fmt, ...)
 {
 	va_list ap;
 	int n;
 
+#ifdef CONFIG_LKPI_MEMCMP_TRACE
+	lkpi_printf_trace_note(__builtin_return_address(0));
+#endif
 	va_start(ap, fmt);
 	n = lkpi_vlog(level, fmt, ap);
 	va_end(ap);
@@ -1103,6 +1171,8 @@ struct lkpi_wq_impl {
 	char			name[24];
 	unsigned long		runs;
 	unsigned long		refused;
+	unsigned int		busy;
+	void			*cur;
 };
 
 /* every live queue, for the per-queue service account (creation order) */
@@ -1191,6 +1261,8 @@ static void lkpi_worker_entry(void *arg)
 			continue;
 		}
 		w->wk_running = 1;
+		impl->busy = 1;
+		impl->cur = (void *)w->func;
 		osCriticalExit(state);
 
 #if defined(LKPI_JOIN_TRACE)
@@ -1201,6 +1273,8 @@ static void lkpi_worker_entry(void *arg)
 #if defined(LKPI_JOIN_TRACE)
 		lkpi_wq_current_work = NULL;
 #endif
+		impl->busy = 0;
+		impl->cur = NULL;
 		w->wk_running = 0;
 		impl->runs++;
 		lkpi_wq_stats_state.runs++;
@@ -1514,9 +1588,17 @@ lkpi_wq_census(struct lkpi_wq_census *out, unsigned int max)
 			       impl->name);
 		out[i].runs = (uint32_t)impl->runs;
 		out[i].refused = (uint32_t)impl->refused;
+		out[i].busy = impl->busy;
+		out[i].cur = impl->cur;
 		if (impl->mq != NULL)
 			out[i].depth = (uint32_t)osMessageQueueGetCount(
 			    impl->mq);
+		if (impl->thread != NULL) {
+			out[i].stack_free =
+			    (uint32_t)osThreadGetStackSpace(impl->thread);
+			out[i].thread_state =
+			    (uint32_t)osThreadGetState(impl->thread);
+		}
 	}
 	return max;
 }
@@ -1775,11 +1857,14 @@ void tasklet_kill(struct tasklet_struct *t)
 /* timers                                                              */
 /* ------------------------------------------------------------------ */
 
+static struct lkpi_timer_stats lkpi_tstats;
+
 static void lkpi_timer_cb(void *arg)
 {
 	struct timer_list *t = arg;
 
 	t->tl_pending = false;
+	lkpi_tstats.fires++;
 	if (t->tl_func != NULL)
 		t->tl_func(t);
 }
@@ -1810,6 +1895,9 @@ void lkpi_timer_setup(struct timer_list *t, void (*func)(struct timer_list *))
 	shell->owner = t;
 	shell->timer = osTimerNew(lkpi_timer_cb, osTimerOnce, t, NULL);
 	shell->inited = (shell->timer != NULL) ? 1u : 0u;
+	lkpi_tstats.setups++;
+	if (shell->timer == NULL)
+		lkpi_tstats.new_fail++;
 }
 
 int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
@@ -1828,7 +1916,30 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 
 	t->tl_pending = true;
 	shell->pending = 1;
-	(void)osTimerStart(shell->timer, (uint32_t)delta);
+	lkpi_tstats.mods++;
+	if (osTimerStart(shell->timer, (uint32_t)delta) != osOK) {
+		unsigned int i;
+
+		lkpi_tstats.mod_fail++;
+		for (i = 0; i < 4u; i++) {
+			if (lkpi_tstats.fail_fn[i] == (void *)t->tl_func) {
+				lkpi_tstats.fail_fn_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.fail_fn[i] == NULL) {
+				lkpi_tstats.fail_fn[i] = (void *)t->tl_func;
+				lkpi_tstats.fail_fn_n[i] = 1;
+				break;
+			}
+		}
+		if (lkpi_tstats.mod_fail <= 4u)
+			lkpi_printf(ULOG_ERROR_LEVEL,
+			    "lkpi: timer arm refused fn=%p delta=%ld jiffies=%lu thread=%p\n",
+			    (void *)t->tl_func, delta, lkpi_jiffies(),
+			    (void *)osThreadGetId());
+		t->tl_pending = false;
+		shell->pending = 0;
+	}
 	return was;
 }
 
@@ -1861,6 +1972,40 @@ int lkpi_del_timer_sync(struct timer_list *t)
 int lkpi_timer_pending(const struct timer_list *t)
 {
 	return t->tl_pending ? 1 : 0;
+}
+
+void
+lkpi_timer_stats_get(struct lkpi_timer_stats *out)
+{
+
+	if (out == NULL)
+		return;
+	*out = lkpi_tstats;
+}
+
+static void lkpi_timer_selftest_cb(struct timer_list *t)
+{
+
+	(void)t;
+}
+
+int
+lkpi_timer_selftest(void)
+{
+	static struct timer_list t;
+	static int armed;
+	int fired;
+
+	if (!armed) {
+		timer_setup(&t, lkpi_timer_selftest_cb, 0);
+		armed = 1;
+	}
+	(void)lkpi_mod_timer(&t, lkpi_jiffies() + 20UL);
+	if (!lkpi_timer_pending(&t))
+		return -1;	/* the arm itself was refused */
+	(void)osDelay(120);
+	fired = lkpi_timer_pending(&t) ? 0 : 1;
+	return fired;
 }
 
 /* ------------------------------------------------------------------ */

@@ -491,6 +491,12 @@ LDFLAGS := -nostdlib -static \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
 
+# The memcmp caller census is a link-time wrap, so it lives beside the link
+# flags and is selected by the one diagnostic profile that names it.
+ifeq ($(CONFIG_LKPI_MEMCMP_TRACE),1)
+LDFLAGS += -Wl,--wrap=memcmp
+endif
+
 .PHONY: image gates libs clean FORCE
 
 image: $(TARGET).bin gates

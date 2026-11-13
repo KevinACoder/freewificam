@@ -211,6 +211,44 @@ struct lkpi_skbq_census {
 unsigned int lkpi_skb_queue_census(struct lkpi_skbq_census *out,
 				   unsigned int max);
 
+/*
+ * Queue-owner identity (CONFIG_LKPI_SKBQ_DIAG).  The census above names the
+ * queue by address only; this face also records who enqueued/dequeued it
+ * (the caller's return address, resolved offline with addr2line) and, at dump
+ * time, whether the queue's `qlen` agrees with the frames actually reachable
+ * from its head.  A row whose `chain` and `qlen` disagree is the stranding
+ * shape, and the frame head of the first entry says whether the queue holds
+ * 802.11 MPDUs (mac80211's reorder) or transport buffers (rtw89's rx_queue).
+ */
+#define LKPI_SKBQ_OWNER_MAX	8
+struct lkpi_skbq_owner {
+	void		*q;
+	const void	*enq_ra;	/* first enqueue caller */
+	const void	*deq_ra;	/* first dequeue caller */
+	uint32_t	qlen;		/* the queue's own counter */
+	uint32_t	owned;		/* live frames the pool still names this queue */
+	uint32_t	enqs;
+	uint32_t	deqs;
+	uint32_t	len_min;
+	uint32_t	len_max;
+	uint32_t	len_avg;
+	uint32_t	first_len;
+	uint8_t		first_head[16];
+};
+
+unsigned int lkpi_skbq_owner_dump(struct lkpi_skbq_owner *out,
+				  unsigned int max);
+
+/*
+ * Probe one queue the census already named (its address came from a live skb's
+ * `_queue`, so it needs no registry entry): fill the same row, including the
+ * first frame's length and its first 16 bytes.  The head bytes are the
+ * identity test that needs no symbols - an 802.11 data frame starts with a
+ * frame-control word (type/subtype) while an rtw89 URB buffer starts with the
+ * chip's receive descriptor.
+ */
+unsigned int lkpi_skbq_probe(void *q, struct lkpi_skbq_owner *out);
+
 /* emergency outlet: called from the heap assert path, where the normal
  * print lock can be held (board_log_emergency semantics) */
 void lkpi_skb_gen_report(void);

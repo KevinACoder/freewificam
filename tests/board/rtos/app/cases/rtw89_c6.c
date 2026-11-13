@@ -46,6 +46,16 @@
 
 #include "os/cmsis2/cmsis2.h"
 
+#ifdef CONFIG_LKPI_CENSUS
+#include "rtos_stats.h"
+#include <linux/rhashtable.h>
+extern unsigned int log_anchor_call_count(void);
+extern unsigned long long log_emit_byte_count(void);
+extern unsigned int log_ring_count(void);
+extern unsigned int log_ring_line(unsigned int idx, char *out,
+    unsigned int max);
+#endif
+
 #include "linuxkpi_core.h"
 #include "linux80211/linux80211.h"
 #include "linux80211/nl80211_probe.h"
@@ -55,6 +65,83 @@
 
 #include <linux/netdevice.h>
 #include <net/net_namespace.h>
+
+#ifdef CONFIG_LKPI_MEMCMP_TRACE
+/*
+ * The receive worker that burns its window inside the C library's compare
+ * loop needs a name for the structure it is walking.  The caller's return
+ * address is that name (symbolise with the ELF the boot ran), and the largest
+ * length says whether the loop is many small compares or one long scan.
+ */
+#define LKPI_MCMP_MAX	8u
+
+struct lkpi_mcmp_row {
+	void		*ra;
+	unsigned long	calls;
+	unsigned long	max_n;
+};
+
+static struct lkpi_mcmp_row mcmp_rows[LKPI_MCMP_MAX];
+static unsigned long mcmp_calls;
+static unsigned long long mcmp_bytes;
+
+int __real_memcmp(const void *a, const void *b, size_t n);
+
+int
+__wrap_memcmp(const void *a, const void *b, size_t n)
+{
+	void *ra = __builtin_return_address(0);
+	os_critical_state_t st = osCriticalEnter();
+	unsigned int i;
+
+	for (i = 0u; i < LKPI_MCMP_MAX; i++) {
+		if (mcmp_rows[i].ra == ra) {
+			mcmp_rows[i].calls++;
+			if (n > mcmp_rows[i].max_n)
+				mcmp_rows[i].max_n = (unsigned long)n;
+			goto out;
+		}
+		if (mcmp_rows[i].ra == NULL) {
+			mcmp_rows[i].ra = ra;
+			mcmp_rows[i].calls = 1u;
+			mcmp_rows[i].max_n = (unsigned long)n;
+			goto out;
+		}
+	}
+out:
+	mcmp_calls++;
+	mcmp_bytes += n;
+	osCriticalExit(st);
+	return __real_memcmp(a, b, n);
+}
+
+static void
+lkpi_mcmp_reset(void)
+{
+	unsigned int i;
+
+	for (i = 0u; i < LKPI_MCMP_MAX; i++) {
+		mcmp_rows[i].ra = NULL;
+		mcmp_rows[i].calls = 0u;
+		mcmp_rows[i].max_n = 0u;
+	}
+	mcmp_calls = 0u;
+	mcmp_bytes = 0u;
+}
+
+static unsigned int
+lkpi_mcmp_get(struct lkpi_mcmp_row *out, unsigned int max,
+    unsigned long *calls, unsigned long long *bytes)
+{
+	unsigned int i;
+
+	*calls = mcmp_calls;
+	*bytes = mcmp_bytes;
+	for (i = 0u; i < LKPI_MCMP_MAX && i < max; i++)
+		out[i] = mcmp_rows[i];
+	return i;
+}
+#endif
 
 #ifndef CONFIG_C6_PEER_IP
 #define CONFIG_C6_PEER_IP "192.168.99.1"
@@ -126,6 +213,105 @@ c6_snap_take(struct c6_snap *s)
 	lkpi_skb_pool_stats(&s->pool);
 }
 
+#ifdef CONFIG_LKPI_CENSUS
+#define C6_TASK_MAX	24u
+
+static const char *
+c6_task_state(uint32_t st)
+{
+	switch (st) {
+	case RTOS_TASK_RUNNING:		return "run";
+	case RTOS_TASK_READY:		return "ready";
+	case RTOS_TASK_BLOCKED:		return "block";
+	case RTOS_TASK_SUSPENDED:	return "susp";
+	case RTOS_TASK_DELETED:		return "del";
+	default:			return "?";
+	}
+}
+
+/*
+ * Who held the core during this phase.  The freeze the C6T round is chasing
+ * leaves two workers READY with a body marked running, which means something
+ * above them never blocked; the run-time counters name it, and the tick PC
+ * sampler says what that task was executing.  Addresses are image addresses
+ * (symbolise with the ELF the boot ran).
+ */
+static void
+c6_task_census(unsigned phase, const struct rtos_task_stat *a, unsigned int na,
+    const struct rtos_task_stat *b, unsigned int nb)
+{
+	uint32_t delta[C6_TASK_MAX];
+	unsigned int i, j, k, shown = 0u;
+	int top = -1;
+
+	for (i = 0u; i < nb && i < C6_TASK_MAX; i++) {
+		delta[i] = 0u;
+		for (j = 0u; j < na; j++) {
+			if (a[j].number == b[i].number) {
+				delta[i] = b[i].runtime - a[j].runtime;
+				break;
+			}
+		}
+	}
+	for (k = 0u; k < 5u; k++) {
+		unsigned int best = nb;
+
+		for (i = 0u; i < nb && i < C6_TASK_MAX; i++) {
+			if (delta[i] == 0u)
+				continue;
+			if (best == nb || delta[i] > delta[best])
+				best = i;
+		}
+		if (best == nb)
+			break;
+		if (k == 0u)
+			top = (int)best;
+		CASE_ANCHOR("rtw89_c6: task phase %u name=%s st=%s prio=%u "
+			    "ticks=%u stack=%u\n", phase,
+			    b[best].name != NULL ? b[best].name : "?",
+			    c6_task_state(b[best].state), b[best].prio,
+			    delta[best], b[best].stack_free);
+		delta[best] = 0u;
+		shown++;
+	}
+	if (shown == 0u)
+		CASE_ANCHOR("rtw89_c6: task phase %u none\n", phase);
+	if (top >= 0 && b[top].handle != NULL) {
+		struct rtos_pc_hit hits[4];
+		unsigned int nh = rtos_pc_top(b[top].handle, hits, 4u);
+		unsigned int q;
+
+		for (q = 0u; q < nh; q++)
+			CASE_ANCHOR("rtw89_c6: hogpc phase %u name=%s "
+				    "pc=0x%llx n=%u\n", phase,
+				    b[top].name != NULL ? b[top].name : "?",
+				    (unsigned long long)hits[q].pc,
+				    hits[q].count);
+		{
+			uint64_t vals[6];
+			uint32_t offs[6];
+			unsigned int nv;
+
+			CASE_ANCHOR("rtw89_c6: hogsaved phase %u name=%s "
+				    "pc=0x%llx\n", phase,
+				    b[top].name != NULL ? b[top].name : "?",
+				    (unsigned long long)rtos_task_saved_pc(
+					b[top].handle));
+			nv = rtos_task_frame_scan(b[top].handle, vals, offs, 6u);
+			for (q = 0u; q < nv; q++)
+				CASE_ANCHOR("rtw89_c6: hogframe phase %u "
+					    "off=%u ra=0x%llx\n", phase,
+					    offs[q],
+					    (unsigned long long)vals[q]);
+		}
+	}
+}
+static struct rtos_task_stat c6_task_begin[C6_TASK_MAX];
+static unsigned int c6_task_begin_n;
+static unsigned int c6_log_calls_begin;
+static unsigned long long c6_log_bytes_begin;
+#endif
+
 static int
 c6_run_phase(unsigned n, const struct c6_phase *ph)
 {
@@ -138,6 +324,24 @@ c6_run_phase(unsigned n, const struct c6_phase *ph)
 	CASE_ANCHOR("rtw89_c6: phase %u begin proto=%s role=%s port=%u "
 		    "window_ms=%u name=%s\n",
 		    n, ph->proto, ph->role, ph->port, ph->window_ms, ph->name);
+#ifdef CONFIG_LKPI_CENSUS
+	{
+		struct rtos_task_stat st[C6_TASK_MAX];
+		unsigned int nst;
+
+		nst = rtos_task_stats_get(st, C6_TASK_MAX);
+		(void)nst;
+		/* kept for the end-of-phase diff */
+		memcpy(c6_task_begin, st, sizeof(st));
+		c6_task_begin_n = nst;
+		c6_log_calls_begin = log_anchor_call_count();
+		c6_log_bytes_begin = log_emit_byte_count();
+#ifdef CONFIG_LKPI_MEMCMP_TRACE
+		lkpi_mcmp_reset();
+		lkpi_printf_trace_reset();
+#endif
+	}
+#endif
 	c6_snap_take(&before);
 
 	switch (ph->kind) {
@@ -205,6 +409,15 @@ c6_run_phase(unsigned n, const struct c6_phase *ph)
 		    (unsigned long)(after.pool.data_overflow -
 				    before.pool.data_overflow),
 		    (unsigned)after.pool.dyalloc_live);
+	CASE_ANCHOR("rtw89_c6: proto phase %u rx_ip=%lu arp_req=%lu "
+		    "arp_rep=%lu other=%lu foreign=%lu eapol=%lu\n",
+		    n,
+		    after.diag.rx_ip - before.diag.rx_ip,
+		    after.diag.rx_arp_req - before.diag.rx_arp_req,
+		    after.diag.rx_arp_rep - before.diag.rx_arp_rep,
+		    after.diag.rx_other - before.diag.rx_other,
+		    after.diag.rx_foreign - before.diag.rx_foreign,
+		    after.diag.rx_eapol - before.diag.rx_eapol);
 	{
 		/* The pool's own owner rows answer "who holds the 128" when a phase
 		 * ends with skb_used at the ceiling: a receive queue that grows and a
@@ -232,6 +445,153 @@ c6_run_phase(unsigned n, const struct c6_phase *ph)
 				    "bytes=%u\n", n, rows[i].q, rows[i].items,
 				    rows[i].bytes);
 	}
+#ifdef CONFIG_LKPI_SKBQ_DIAG
+	{
+		/* The queue census above names the owner by address only.  This
+		 * block answers the two questions the C6T stall left open: whose
+		 * queue is it (the first caller's return address, resolved with
+		 * addr2line offline) and does `qlen` still match the chain.  The
+		 * frame head tells an 802.11 MPDU from a transport buffer. */
+		struct lkpi_skbq_owner owners[LKPI_SKBQ_OWNER_MAX];
+		struct lkpi_skbq_census cen[LKPI_SKBQ_CENSUS_MAX];
+		struct lkpi_wq_census wqs[LKPI_WQ_CENSUS_MAX];
+		struct lkpi_wq_stats wst;
+		struct lkpi_timer_stats tst;
+		unsigned int no, nw, i;
+
+		lkpi_timer_stats_get(&tst);
+		CASE_ANCHOR("rtw89_c6: timer phase %u mods=%u fail=%u "
+			    "fires=%u setups=%u new_fail=%u\n", n,
+			    tst.mods, tst.mod_fail, tst.fires, tst.setups,
+			    tst.new_fail);
+		CASE_ANCHOR("rtw89_c6: rht phase %u walk_max=%u cycles=%u\n",
+			    n, lkpi_rht_walk_max(), lkpi_rht_cycle_hits());
+#ifdef CONFIG_LKPI_MEMCMP_TRACE
+		{
+			struct lkpi_mcmp_row mc[LKPI_MCMP_MAX];
+			unsigned long calls = 0u;
+			unsigned long long bytes = 0u;
+			unsigned int nr = lkpi_mcmp_get(mc, LKPI_MCMP_MAX,
+			    &calls, &bytes);
+			unsigned int q;
+
+			{
+				struct lkpi_printf_site ps[8];
+				unsigned long pcalls = 0u;
+				unsigned int nps = lkpi_printf_trace_get(
+				    ps, 8u, &pcalls);
+
+				CASE_ANCHOR("rtw89_c6: pf phase %u calls=%lu\n",
+					    n, pcalls);
+				for (q = 0u; q < nps; q++) {
+					if (ps[q].ra == NULL)
+						break;
+					CASE_ANCHOR("rtw89_c6: pfra phase %u "
+						    "ra=%p n=%lu\n", n,
+						    ps[q].ra, ps[q].calls);
+				}
+			}
+			CASE_ANCHOR("rtw89_c6: mcmp phase %u calls=%lu "
+				    "bytes=%lu\n", n, calls,
+				    (unsigned long)bytes);
+			for (q = 0u; q < nr; q++) {
+				if (mc[q].ra == NULL)
+					break;
+				CASE_ANCHOR("rtw89_c6: mcmpra phase %u ra=%p "
+					    "n=%lu maxn=%lu\n", n, mc[q].ra,
+					    mc[q].calls, mc[q].max_n);
+			}
+		}
+#endif
+		for (i = 0u; i < 4u; i++) {
+			if (tst.fail_fn[i] == NULL)
+				break;
+			CASE_ANCHOR("rtw89_c6: tfail phase %u fn=%p n=%u\n",
+				    n, tst.fail_fn[i], tst.fail_fn_n[i]);
+		}
+		lkpi_wq_stats_get(&wst);
+		CASE_ANCHOR("rtw89_c6: wqstat phase %u direct=%u full=%u "
+			    "state=%s cur=%p\n", n, wst.direct, wst.full,
+			    lkpi_wq_state(), lkpi_wq_current_work_func());
+		nw = lkpi_wq_census(wqs, LKPI_WQ_CENSUS_MAX);
+		for (i = 0u; i < nw; i++)
+			CASE_ANCHOR("rtw89_c6: wq phase %u name=%s runs=%u "
+				    "refused=%u depth=%u busy=%u cur=%p "
+				    "stack=%u st=%u\n", n, wqs[i].name,
+				    wqs[i].runs, wqs[i].refused, wqs[i].depth,
+				    wqs[i].busy, wqs[i].cur, wqs[i].stack_free,
+				    wqs[i].thread_state);
+		if (lkpi_skb_queue_census(cen, LKPI_SKBQ_CENSUS_MAX) > 0u) {
+			/* The census row is an owner proven by live skbs, so this
+			 * probe is safe even when the head is a dead stack or
+			 * freed-queue address: only the counter and the first
+			 * frame's bytes are read.  The frame head is the identity
+			 * test: 802.11 data starts with an FC word, an rtw89 URB
+			 * buffer starts with the chip's RX descriptor. */
+			struct lkpi_skbq_owner probe;
+
+			(void)lkpi_skbq_probe(cen[0].q, &probe);
+			CASE_ANCHOR("rtw89_c6: qprobe phase %u q=%p qlen=%u "
+				    "owned=%u len=%u fc=%02x%02x "
+				    "head=%02x%02x%02x%02x%02x%02x%02x%02x "
+				    "%02x%02x%02x%02x%02x%02x%02x%02x\n",
+				    n, probe.q, probe.qlen, probe.owned,
+				    probe.first_len,
+				    probe.first_head[0], probe.first_head[1],
+				    probe.first_head[0], probe.first_head[1],
+				    probe.first_head[2], probe.first_head[3],
+				    probe.first_head[4], probe.first_head[5],
+				    probe.first_head[6], probe.first_head[7],
+				    probe.first_head[8], probe.first_head[9],
+				    probe.first_head[10], probe.first_head[11],
+				    probe.first_head[12], probe.first_head[13],
+				    probe.first_head[14], probe.first_head[15]);
+		}
+		no = lkpi_skbq_owner_dump(owners, LKPI_SKBQ_OWNER_MAX);
+		CASE_ANCHOR("rtw89_c6: skbq rows=%u\n", no);
+		for (i = 0u; i < no && i < 6u; i++) {
+			if (owners[i].owned == 0u && owners[i].qlen == 0u)
+				continue;
+			CASE_ANCHOR("rtw89_c6: skbq phase %u q=%p qlen=%u "
+				    "owned=%u enq=%u deq=%u len=%u/%u/%u "
+				    "first_len=%u head=%02x%02x%02x%02x "
+				    "enq_ra=%p deq_ra=%p\n",
+				    n, owners[i].q, owners[i].qlen,
+				    owners[i].owned, owners[i].enqs,
+				    owners[i].deqs, owners[i].len_min,
+				    owners[i].len_avg, owners[i].len_max,
+				    owners[i].first_len,
+				    owners[i].first_head[0],
+				    owners[i].first_head[1],
+				    owners[i].first_head[2],
+				    owners[i].first_head[3],
+				    owners[i].enq_ra, owners[i].deq_ra);
+		}
+	}
+#endif
+#ifdef CONFIG_LKPI_CENSUS
+	{
+		struct rtos_task_stat st[C6_TASK_MAX];
+		unsigned int nst = rtos_task_stats_get(st, C6_TASK_MAX);
+		unsigned int calls = log_anchor_call_count();
+		unsigned long long bytes = log_emit_byte_count();
+		unsigned int i;
+		char line[64];
+
+		CASE_ANCHOR("rtw89_c6: log phase %u calls=%u bytes=%lu\n", n,
+			    calls - c6_log_calls_begin,
+			    (unsigned long)(bytes - c6_log_bytes_begin));
+		for (i = 0u; i < 4u; i++) {
+			unsigned int idx = log_ring_count() - 1u - i;
+
+			(void)log_ring_line(idx, line, sizeof(line));
+			if (line[0] != '\0')
+				CASE_ANCHOR("rtw89_c6: logtail phase %u "
+					    "i=%u msg=%s\n", n, i, line);
+		}
+		c6_task_census(n, c6_task_begin, c6_task_begin_n, st, nst);
+	}
+#endif
 	CASE_ANCHOR("rtw89_c6: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);
 
 	return rc;
@@ -270,6 +630,12 @@ case_rtw89_c6_run(void)
 	lkpi_net_diag(&diag);
 	CASE_ANCHOR("rtw89_c6: ready netif=1 rx_frames=%lu tx_frames=%lu\n",
 		    diag.rx_frames, diag.tx_frames);
+#ifdef CONFIG_LKPI_SKBQ_DIAG
+	/* Same callout machinery the stack's timers use, exercised once before
+	 * the traffic starts: a control arm inside the same boot. */
+	CASE_ANCHOR("rtw89_c6: timer selftest fired=%d\n",
+		    lkpi_timer_selftest());
+#endif
 
 	rc = lkpi_net_iperf_server_start(C6_TCP_PORT);
 	if (rc == 0)
@@ -282,6 +648,14 @@ case_rtw89_c6_run(void)
 	}
 
 	for (i = 0u; i < (unsigned)C6_PLAN_LEN; i++) {
+#ifdef CONFIG_RTW89_C6_SKIP_LOOPBACK
+		if (c6_plan[i].kind == C6_LOOPBACK) {
+			CASE_ANCHOR("rtw89_c6: phase %u skipped "
+				    "name=%s (loopback consumes the listener)\n",
+				    i + 1u, c6_plan[i].name);
+			continue;
+		}
+#endif
 		rc = c6_run_phase(i + 1u, &c6_plan[i]);
 		if (rc == 0) {
 			if (c6_plan[i].kind != C6_LOOPBACK)

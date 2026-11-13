@@ -129,6 +129,25 @@ config LKPI_CENSUS
 	  from come from the clean image, and a census image is the attribution
 	  arm when the clean one is short.  Off in every delivery image.
 
+config LKPI_SKBQ_DIAG
+	bool "skb queue owner identity and chain check"
+	help
+	  Records, per queue, the first enqueue/dequeue caller's return
+	  address and walks the chain at dump time so `qlen` and the frames
+	  actually reachable can be compared.  This is the instrument that
+	  names which queue a stalled receive path is holding (a mac80211
+	  reorder slot, a driver's URB queue, or a queue whose counter has
+	  parted from its chain) instead of inferring it from slot addresses.
+	  Observation only; off in every delivery image.
+
+config LKPI_WQ_TRACE
+	bool "workqueue join trace (name the held work body)"
+	help
+	  Turns on the workqueue's existing join trace: the body a worker is
+	  executing and a refused schedule are printed once per site.  Its
+	  cost is a console line per unique site, not per frame.  Off in every
+	  delivery image.
+
 
 choice LIBLINUX80211_NET
 	prompt "Network egress implementation"

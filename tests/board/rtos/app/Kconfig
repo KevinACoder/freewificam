@@ -248,4 +248,25 @@ config RTW89_USB_BUS
 	  the fallback arm for a port on those roots - a different arm, which a
 	  profile changing this must say in its run record.
 
+
+config RTW89_C6_SKIP_LOOPBACK
+	bool "skip the board-local loopback phase (diagnostic arm)"
+	help
+	  The loopback phase starts an lwiperf client to 127.0.0.1 on the same
+	  port the external listener owns, which consumes the single server
+	  session.  On this port the listener does not always return to LISTEN
+	  afterwards, and the peer's later TCP connect then times out.  The
+	  diagnostic arm skips the phase (it is attribution only, never a gate);
+	  the delivery arm keeps the full seven-phase table.
+
+config LKPI_MEMCMP_TRACE
+	bool "memcmp caller census (who scans memory in a receive loop)"
+	help
+	  Links a __wrap_memcmp that counts callers (return address), calls and
+	  the largest length seen, and lets a case print the top callers.  It is
+	  the instrument for a receive worker that burns its window inside the C
+	  library's compare loop: the caller names the structure being walked,
+	  and the length says whether it is many small compares or one long one.
+	  Diagnostic only; off in every delivery image.
+
 endmenu

@@ -316,6 +316,55 @@ unsigned long long log_emit_byte_count(void)
 	return __atomic_load_n(&log_emit_bytes, __ATOMIC_RELAXED);
 }
 
+#if defined(CONFIG_LKPI_CENSUS)
+/*
+ * Last-messages ring (census builds).  A receive path that spends its time
+ * formatting messages the level gate then drops is invisible in the serial;
+ * this keeps the last few formatted lines so a phase could name them.  The
+ * ring is written under the print lock's caller (log_emit already holds it
+ * when it matters), and the reader is a diagnostic case.
+ */
+#define LOG_RING_N	16u
+#define LOG_RING_LEN	64u
+static char log_ring[LOG_RING_N][LOG_RING_LEN];
+static volatile unsigned int log_ring_head;
+
+static void log_ring_note(const char *msg)
+{
+	unsigned int i = __atomic_fetch_add(&log_ring_head, 1u,
+	    __ATOMIC_RELAXED) % LOG_RING_N;
+	unsigned int k;
+
+	for (k = 0u; k + 1u < LOG_RING_LEN && msg[k] != '\0'; k++)
+		log_ring[i][k] = msg[k];
+	log_ring[i][k] = '\0';
+}
+
+unsigned int log_ring_count(void)
+{
+
+	return __atomic_load_n(&log_ring_head, __ATOMIC_RELAXED);
+}
+
+unsigned int log_ring_line(unsigned int idx, char *out, unsigned int max)
+{
+	unsigned int i;
+	unsigned int k;
+
+	if (out == NULL || max == 0u)
+		return 0u;
+	i = idx % LOG_RING_N;
+	out[0] = '\0';
+	for (k = 0u; k + 1u < max && k + 1u < LOG_RING_LEN; k++) {
+		out[k] = log_ring[i][k];
+		if (out[k] == '\0')
+			break;
+	}
+	out[k] = '\0';
+	return k;
+}
+#endif
+
 static bool log_anchor_promote(const char *msg)
 {
 	unsigned int i;
@@ -357,6 +406,9 @@ void log_emit(ulog_level_t severity, const char *fmt, ...)
 	}
 	va_end(ap);
 
+#if defined(CONFIG_LKPI_CENSUS)
+	log_ring_note(msg);
+#endif
 	/* The promotion must see the text, so the format happens before the
 	 * gate. A filtered line still pays one vsnprintf - cheaper than the
 	 * serial write it would otherwise cost. */

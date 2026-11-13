@@ -248,6 +248,35 @@ rhltable_insert(struct rhltable *hlt, struct rhlist_head *list,
 	return 0;
 }
 
+/*
+ * A bucket chain is a list of nodes; a chain longer than the table's own
+ * element count, or one that revisits a node, is cyclic.  The interface's
+ * rhashtable cannot produce that (it is a hash table with per-bucket lists,
+ * and a node is removed before it is re-inserted), but this shim's insertion
+ * is the port's own and a double insert would make `next` point into its own
+ * chain.  The counters exist so a lookup that does not terminate names itself
+ * instead of freezing a receive worker; the bound is the table's element count
+ * (a legitimate chain is at most that long) with a hard ceiling for the case
+ * where the count itself is wrong.
+ */
+#define LKPI_RHT_WALK_MAX	4096u
+
+static unsigned int rht_walk_last;
+static unsigned int rht_walk_max;
+static unsigned int rht_cycle_hits;
+
+unsigned int lkpi_rht_walk_max(void)
+{
+
+	return rht_walk_max;
+}
+
+unsigned int lkpi_rht_cycle_hits(void)
+{
+
+	return rht_cycle_hits;
+}
+
 int
 rhltable_remove(struct rhltable *hlt, struct rhlist_head *list,
 		const struct rhashtable_params params)
@@ -283,12 +312,34 @@ rhltable_lookup(struct rhltable *hlt, const void *key,
 	if (t == NULL || key == NULL)
 		return NULL;
 	h = lkpi_rht_hash(key, params.key_len) % t->nbuckets;
-	for (list = t->bucket[h]; list != NULL; list = list->next) {
-		const void *obj_key =
-			(const char *)list - params.head_offset + params.key_offset;
+	{
+		unsigned int steps = 0u;
 
-		if (memcmp(key, obj_key, params.key_len) == 0)
-			return list;
+		for (list = t->bucket[h]; list != NULL; list = list->next) {
+			const void *obj_key =
+				(const char *)list - params.head_offset +
+				params.key_offset;
+
+			if (++steps > hlt->ht.nelems + 1u ||
+			    steps > LKPI_RHT_WALK_MAX) {
+				rht_cycle_hits++;
+				if (rht_cycle_hits <= 4u)
+					lkpi_printf(ULOG_ERROR_LEVEL,
+					    "lkpi: rhashtable walk did not terminate bucket=%u nelems=%u steps=%u\n",
+					    h, (unsigned)hlt->ht.nelems,
+					    steps);
+				break;
+			}
+			if (memcmp(key, obj_key, params.key_len) == 0) {
+				if (steps > rht_walk_max)
+					rht_walk_max = steps;
+				rht_walk_last = steps;
+				return list;
+			}
+		}
+		rht_walk_last = steps;
+		if (steps > rht_walk_max)
+			rht_walk_max = steps;
 	}
 	return NULL;
 }

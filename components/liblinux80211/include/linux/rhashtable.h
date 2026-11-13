@@ -70,6 +70,11 @@ int rhltable_insert(struct rhltable *hlt, struct rhlist_head *list,
 		    const struct rhashtable_params params);
 int rhltable_remove(struct rhltable *hlt, struct rhlist_head *list,
 		    const struct rhashtable_params params);
+/* the port's own bucket-walk bound (see linuxkpi_containers.c): a chain longer
+ * than the table's element count is cyclic, and these counters name it */
+unsigned int lkpi_rht_walk_max(void);
+unsigned int lkpi_rht_cycle_hits(void);
+
 struct rhlist_head *rhltable_lookup(struct rhltable *hlt, const void *key,
 				    const struct rhashtable_params params);
 

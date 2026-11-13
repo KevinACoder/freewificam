@@ -1238,6 +1238,120 @@ void lkpi_skb_uaf_hit(struct sk_buff *skb)
 /* queue surgery                                                       */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Who owns a queue and does its counter tell the truth (CONFIG_LKPI_SKBQ_DIAG).
+ *
+ * The address census already says which queue holds the pool's live frames.
+ * The two questions it cannot answer are "whose queue is that" and "is the
+ * queue's `qlen` still the chain's own length".  Both have been live on this
+ * line: the 8851BU C6T stall left 185 frames in one 32-byte-spaced queue and
+ * the old-repo reads split between mac80211's reorder and rtw89's USB receive
+ * queue.  This registry records the first enqueue/dequeue caller's return
+ * address (resolved offline with addr2line, never guessed) and walks the chain
+ * at dump time, so `qlen` and `chain` can be compared.
+ *
+ * Compiled only when the diagnostic profile asks for it; the clean images get
+ * the stub at the bottom and pay nothing.
+ */
+#ifdef CONFIG_LKPI_SKBQ_DIAG
+#define LKPI_SKBQ_ENT_MAX	48
+
+struct lkpi_skbq_ent {
+	struct sk_buff_head	*q;
+	const void		*enq_ra;
+	const void		*deq_ra;
+	unsigned long		enqs;
+	unsigned long		deqs;
+	unsigned long		len_min;
+	unsigned long		len_max;
+	unsigned long long	len_sum;
+};
+
+static struct lkpi_skbq_ent skbq_ents[LKPI_SKBQ_ENT_MAX];
+static unsigned int skbq_ent_n;
+
+static struct lkpi_skbq_ent *
+skbq_ent(struct sk_buff_head *q, int create)
+{
+	unsigned int i;
+
+	if (q == NULL)
+		return NULL;
+	for (i = 0; i < skbq_ent_n; i++) {
+		if (skbq_ents[i].q == q)
+			return &skbq_ents[i];
+	}
+	if (!create || skbq_ent_n >= LKPI_SKBQ_ENT_MAX)
+		return NULL;
+	memset(&skbq_ents[skbq_ent_n], 0, sizeof(skbq_ents[skbq_ent_n]));
+	skbq_ents[skbq_ent_n].q = q;
+	skbq_ents[skbq_ent_n].len_min = ~0UL;
+	return &skbq_ents[skbq_ent_n++];
+}
+
+/*
+ * The locked wrappers (drivers call skb_queue_tail()/skb_dequeue()) and the
+ * raw __skb_* forms (mac80211 calls those) both reach the same bookkeeping.
+ * The wrapper records its own caller first, so the RA names the driver or the
+ * stack function rather than the wrapper; a first direct call wins when there
+ * is no wrapper at all.
+ */
+void
+lkpi_skbq_note_ra(struct sk_buff_head *q, const void *ra, int deq)
+{
+	unsigned long flags = lkpi_spl_irqsave();
+	struct lkpi_skbq_ent *e = skbq_ent(q, 1);
+
+	if (e != NULL) {
+		if (deq) {
+			if (e->deq_ra == NULL)
+				e->deq_ra = ra;
+		} else if (e->enq_ra == NULL) {
+			e->enq_ra = ra;
+		}
+	}
+	lkpi_spl_irqrestore(flags);
+}
+
+static void
+skbq_note_enq(struct sk_buff_head *q, struct sk_buff *skb, const void *ra)
+{
+	unsigned long flags = lkpi_spl_irqsave();
+	struct lkpi_skbq_ent *e = skbq_ent(q, 1);
+
+	if (e != NULL) {
+		unsigned long len = skb != NULL ? skb->len : 0UL;
+
+		if (e->enq_ra == NULL)
+			e->enq_ra = ra;
+		e->enqs++;
+		e->len_sum += len;
+		if (len < e->len_min)
+			e->len_min = len;
+		if (len > e->len_max)
+			e->len_max = len;
+	}
+	lkpi_spl_irqrestore(flags);
+}
+
+static void
+skbq_note_deq(struct sk_buff_head *q, const void *ra)
+{
+	unsigned long flags = lkpi_spl_irqsave();
+	struct lkpi_skbq_ent *e = skbq_ent(q, 1);
+
+	if (e != NULL) {
+		if (e->deq_ra == NULL)
+			e->deq_ra = ra;
+		e->deqs++;
+	}
+	lkpi_spl_irqrestore(flags);
+}
+#else
+#define skbq_note_enq(q, skb, ra)	do { (void)(q); (void)(skb); } while (0)
+#define skbq_note_deq(q, ra)		do { (void)(q); } while (0)
+#endif /* CONFIG_LKPI_SKBQ_DIAG */
+
 void lkpi_skb_queue_reset(struct sk_buff_head *q)
 {
 	lkpi_txq_audit_reset(q);
@@ -1311,6 +1425,7 @@ void lkpi_skb_do_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 	q->prev = skb;
 	skb->_queue = q;
 	q->qlen++;
+	skbq_note_enq(q, skb, __builtin_return_address(0));
 	lkpi_txq_audit_op(skb, q, "q_tail");
 }
 
@@ -1331,6 +1446,7 @@ void lkpi_skb_do_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 	q->next = skb;
 	skb->_queue = q;
 	q->qlen++;
+	skbq_note_enq(q, skb, __builtin_return_address(0));
 	lkpi_txq_audit_op(skb, q, "q_head");
 }
 
@@ -1443,6 +1559,7 @@ struct sk_buff *lkpi_skb_do_dequeue(struct sk_buff_head *q)
 	}
 #endif
 	do_detach(q, skb);
+	skbq_note_deq(q, __builtin_return_address(0));
 	return skb;
 }
 
@@ -1453,11 +1570,15 @@ void lkpi_skb_do_unlink(struct sk_buff *skb, struct sk_buff_head *q)
 		return;
 	}
 	do_detach(q, skb);
+	skbq_note_deq(q, __builtin_return_address(0));
 }
 
 void lkpi_skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	unsigned long long flags = lkpi_spin_lock_irqsave(&q->lock);
+#ifdef CONFIG_LKPI_SKBQ_DIAG
+	lkpi_skbq_note_ra(q, __builtin_return_address(0), 0);
+#endif
 
 	lkpi_skb_do_queue_tail(q, skb);
 	lkpi_spin_unlock_irqrestore(&q->lock, flags);
@@ -1466,6 +1587,9 @@ void lkpi_skb_queue_tail(struct sk_buff_head *q, struct sk_buff *skb)
 void lkpi_skb_queue_head(struct sk_buff_head *q, struct sk_buff *skb)
 {
 	unsigned long long flags = lkpi_spin_lock_irqsave(&q->lock);
+#ifdef CONFIG_LKPI_SKBQ_DIAG
+	lkpi_skbq_note_ra(q, __builtin_return_address(0), 0);
+#endif
 
 	lkpi_skb_do_queue_head(q, skb);
 	lkpi_spin_unlock_irqrestore(&q->lock, flags);
@@ -1475,6 +1599,9 @@ struct sk_buff *lkpi_skb_dequeue(struct sk_buff_head *q)
 {
 	unsigned long long flags = lkpi_spin_lock_irqsave(&q->lock);
 	struct sk_buff *skb;
+#ifdef CONFIG_LKPI_SKBQ_DIAG
+	lkpi_skbq_note_ra(q, __builtin_return_address(0), 1);
+#endif
 
 	skb = lkpi_skb_do_dequeue(q);
 	lkpi_spin_unlock_irqrestore(&q->lock, flags);
@@ -1592,6 +1719,173 @@ unsigned int lkpi_skb_queue_census(struct lkpi_skbq_census *out, unsigned int ma
 	lkpi_spl_irqrestore(flags);
 	return n;
 }
+
+
+#ifdef CONFIG_LKPI_SKBQ_DIAG
+/*
+ * How many live frames the pool still names this queue, plus the first one's
+ * length and header bytes.  This is the pool-side count, not a walk of the
+ * queue's own chain: the registry also sees stack-local heads (mac80211's
+ * per-call `frames` queues) whose memory dies with the call frame, and walking
+ * those links later is a fault rather than a measurement.  Comparing this
+ * count with the head's own `qlen` answers the same question the chain walk
+ * was for - "does the counter still describe the frames" - without touching
+ * any link that outlives its owner.
+ */
+static unsigned int
+skbq_owned(struct sk_buff_head *q, uint32_t *first_len, uint8_t head[16])
+{
+	unsigned int n = 0;
+	unsigned int i;
+
+	for (i = 0; i < cfg_n_header; i++) {
+		struct sk_buff *skb = &skb_slots[i];
+
+		if (skb->_gen == 0u || skb->_gen == LKPI_SKB_FREED_MAGIC)
+			continue;
+		if (skb->_queue != q)
+			continue;
+		if (n == 0u) {
+			*first_len = (uint32_t)skb->len;
+			if (skb->len != 0u && skb->data != NULL) {
+				unsigned int k = skb->len > 16u ? 16u :
+				    (unsigned int)skb->len;
+
+				memcpy(head, skb->data, k);
+			}
+		}
+		n++;
+	}
+	for (i = 0; i < heap_live_n; i++) {
+		struct sk_buff *skb = heap_live[i].p;
+
+		if (skb == NULL || skb->_queue != q)
+			continue;
+		if (n == 0u) {
+			*first_len = (uint32_t)skb->len;
+			if (skb->len != 0u && skb->data != NULL) {
+				unsigned int k = skb->len > 16u ? 16u :
+				    (unsigned int)skb->len;
+
+				memcpy(head, skb->data, k);
+			}
+		}
+		n++;
+	}
+	return n;
+}
+
+/*
+ * The dump asked for by the throughput round: every registered queue with the
+ * two facts the census cannot give - who queued it (the first caller's return
+ * address) and whether the head's `qlen` still matches the frames the pool
+ * names it.  Largest `qlen` first; rows that never carried a stream are kept
+ * (they cost one line and may be the one that mattered).
+ */
+unsigned int
+lkpi_skbq_owner_dump(struct lkpi_skbq_owner *out, unsigned int max)
+{
+	struct lkpi_skbq_owner rows[LKPI_SKBQ_ENT_MAX];
+	unsigned long flags;
+	unsigned int n = 0;
+	unsigned int i;
+	unsigned int k;
+
+	if (out == NULL || max == 0u)
+		return 0;
+	if (max > LKPI_SKBQ_OWNER_MAX)
+		max = LKPI_SKBQ_OWNER_MAX;
+
+	lkpi_skb_pool_init();
+	flags = lkpi_spl_irqsave();
+	for (i = 0; i < skbq_ent_n; i++) {
+		struct sk_buff_head *q = skbq_ents[i].q;
+		uint32_t first_len = 0;
+		uint8_t head[16];
+
+		if (q == NULL)
+			continue;
+		memset(&rows[n], 0, sizeof(rows[n]));
+		memset(head, 0, sizeof(head));
+		/* A queue head allocated per transmit (rtw89's txcb) or on a call
+		 * frame (mac80211's per-call frames heads) is dead by the time
+		 * this runs; its memory is reused, so `qlen` is not a counter any
+		 * more.  A sane counter plus either a stream or a live owner is
+		 * what a persistent queue looks like. */
+		if ((uint32_t)q->qlen > 4096u ||
+		    (skbq_ents[i].enqs < 8u &&
+		     skbq_owned(q, &first_len, head) == 0u))
+			continue;
+		rows[n].q = q;
+		rows[n].enq_ra = skbq_ents[i].enq_ra;
+		rows[n].deq_ra = skbq_ents[i].deq_ra;
+		rows[n].qlen = (uint32_t)q->qlen;
+		rows[n].enqs = (uint32_t)skbq_ents[i].enqs;
+		rows[n].deqs = (uint32_t)skbq_ents[i].deqs;
+		rows[n].len_min = skbq_ents[i].enqs != 0u ?
+		    (uint32_t)skbq_ents[i].len_min : 0u;
+		rows[n].len_max = (uint32_t)skbq_ents[i].len_max;
+		rows[n].len_avg = skbq_ents[i].enqs != 0u ?
+		    (uint32_t)(skbq_ents[i].len_sum / skbq_ents[i].enqs) : 0u;
+		rows[n].owned = skbq_owned(q, &first_len, head);
+		rows[n].first_len = first_len;
+		memcpy(rows[n].first_head, head, sizeof(head));
+		n++;
+	}
+	lkpi_spl_irqrestore(flags);
+
+	for (i = 1; i < n; i++) {
+		struct lkpi_skbq_owner row = rows[i];
+
+		k = i;
+		while (k > 0u && rows[k - 1u].qlen < row.qlen) {
+			rows[k] = rows[k - 1u];
+			k--;
+		}
+		rows[k] = row;
+	}
+
+	if (n > max)
+		n = max;
+	memcpy(out, rows, n * sizeof(out[0]));
+	return n;
+}
+unsigned int
+lkpi_skbq_probe(void *q, struct lkpi_skbq_owner *out)
+{
+	struct sk_buff_head *head = q;
+	uint32_t first_len = 0;
+	uint8_t frame[16];
+
+	if (q == NULL || out == NULL)
+		return 0;
+	memset(out, 0, sizeof(*out));
+	memset(frame, 0, sizeof(frame));
+	out->q = q;
+	out->qlen = (uint32_t)head->qlen;
+	out->owned = skbq_owned(head, &first_len, frame);
+	out->first_len = first_len;
+	memcpy(out->first_head, frame, sizeof(frame));
+	return out->owned;
+}
+
+#else
+unsigned int
+lkpi_skbq_owner_dump(struct lkpi_skbq_owner *out, unsigned int max)
+{
+	(void)out;
+	(void)max;
+	return 0;
+}
+
+void
+lkpi_skbq_note_ra(struct sk_buff_head *q, const void *ra, int deq)
+{
+	(void)q;
+	(void)ra;
+	(void)deq;
+}
+#endif /* CONFIG_LKPI_SKBQ_DIAG */
 
 void lkpi_skb_diag_dump(void)
 {

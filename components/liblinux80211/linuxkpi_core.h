@@ -2558,7 +2558,20 @@ void	lkpi_module_init_run(void);
 		lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN_ON(%s)\n", __FILE__, __LINE__, #cond); \
 	__w;								\
 })
-#define	WARN_ON_ONCE(cond)	WARN_ON(cond)
+/*
+ * The "once" forms really are once per call site, as the interface's are.
+ * This port's earlier spelling made WARN_ON_ONCE() print on every evaluation,
+ * and mac80211's receive entry warns when softirq_count() is zero - which it is
+ * in a task-context receive worker.  One warning per received frame then paid
+ * the formatter and the log sink's filter per frame, and the receive worker
+ * spent its window logging instead of draining the driver's completed URBs
+ * (the 2026-11-14 C6T stall: 4,808 warning prints, 305M memcmp calls inside
+ * the sink's strstr, the URBs' queue at 187, the skb pool at 128/128).
+ * `__warned` carries a line-unique name so two uses in one block do not clash.
+ */
+#define	LKPI_WARN_CAT_(a, b)	a##b
+#define	LKPI_WARN_CAT(a, b)	LKPI_WARN_CAT_(a, b)
+#define	WARN_ON_ONCE(cond)	({						static bool LKPI_WARN_CAT(__warned_, __LINE__);			bool __w = (cond);							if (__w && !LKPI_WARN_CAT(__warned_, __LINE__)) {				LKPI_WARN_CAT(__warned_, __LINE__) = true;				lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN_ON_ONCE(%s)\n", __FILE__, __LINE__, #cond); 	}									__w;								})
 /*
  * The message-carrying forms. The interface's WARN()/WARN_ONCE() print the
  * condition's site AND the call site's formatted message with its arguments
@@ -2581,7 +2594,7 @@ void	lkpi_module_init_run(void);
 	}								\
 	__w;								\
 })
-#define	WARN_ONCE(cond, fmt, ...)	WARN(cond, fmt, ##__VA_ARGS__)
+#define	WARN_ONCE(cond, fmt, ...)	({					static bool LKPI_WARN_CAT(__warned_once_, __LINE__);		bool __w = (cond);							if (__w && !LKPI_WARN_CAT(__warned_once_, __LINE__)) {			LKPI_WARN_CAT(__warned_once_, __LINE__) = true;			lkpi_printf(ULOG_WARNING_LEVEL, "%s:%d: WARN_ONCE\n", __FILE__, __LINE__); 		lkpi_printf(ULOG_WARNING_LEVEL, fmt "\n", ##__VA_ARGS__); 	}									__w;								})
 #define	BUG_ON(cond)		do { if (cond) lkpi_fatal("BUG_ON(" #cond ")"); } while (0)
 /* print_hex_dump prefix args ([LNX] kernel.h) */
 #define	DUMP_PREFIX_NONE	0
@@ -3806,6 +3819,10 @@ struct lkpi_wq_census {
 	uint32_t	runs;		/* bodies executed on this queue */
 	uint32_t	refused;	/* schedules refused (queue full) */
 	uint32_t	depth;		/* messages waiting now */
+	uint32_t	busy;		/* a body is executing on this queue */
+	void		*cur;		/* that body's function pointer */
+	uint32_t	stack_free;	/* worker thread's stack high-water */
+	uint32_t	thread_state;	/* osThreadState_t snapshot */
 };
 
 unsigned int	lkpi_wq_census(struct lkpi_wq_census *out, unsigned int max);
@@ -3902,6 +3919,47 @@ int lkpi_mod_timer(struct timer_list *, unsigned long expires);
 int lkpi_del_timer(struct timer_list *);
 int lkpi_del_timer_sync(struct timer_list *);
 int lkpi_timer_pending(const struct timer_list *);
+
+/*
+ * The kernel-timer service account (CONFIG_LKPI_SKBQ_DIAG images only in
+ * practice, but the counters are cheap and always compiled): how many arms
+ * were requested, how many the CMSIS/FreeRTOS callout refused, and how many
+ * callbacks actually ran.  A reorder timer whose `mods` climbs while `fires`
+ * stays flat is the "armed but never fires" shape; `new_fail` names the other
+ * one (no callout object at all).  The counters are observation only -
+ * lkpi_mod_timer's behaviour is unchanged.
+ */
+/* The formatting-call caller census (CONFIG_LKPI_MEMCMP_TRACE images): which
+ * call sites are producing messages, and how many.  A message storm that the
+ * console filters still pays the formatter and the sink's filter, so this is
+ * the face that names it. */
+struct lkpi_printf_site {
+	void		*ra;
+	unsigned long	calls;
+};
+
+void lkpi_printf_trace_reset(void);
+unsigned int lkpi_printf_trace_get(struct lkpi_printf_site *out,
+    unsigned int max, unsigned long *calls);
+
+struct lkpi_timer_stats {
+	uint32_t	setups;
+	uint32_t	new_fail;
+	uint32_t	mods;
+	uint32_t	mod_fail;
+	uint32_t	fires;
+	/* which callbacks the refused arms belonged to (first four distinct) */
+	void		*fail_fn[4];
+	uint32_t	fail_fn_n[4];
+};
+
+void lkpi_timer_stats_get(struct lkpi_timer_stats *out);
+/*
+ * Arm a 20 ms one-shot and wait 120 ms: the same callout machinery the stack's
+ * timers use, exercised once in the boot that reports it.  Returns 1 when the
+ * callback ran, 0 when it did not, -1 when the arm was refused outright.
+ */
+int lkpi_timer_selftest(void);
 
 #define	timer_setup(t, fn, flags)	lkpi_timer_setup((t), (fn))
 #define	setup_timer(t, fn, arg)		lkpi_timer_setup((t), (fn))
