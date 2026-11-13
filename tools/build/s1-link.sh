@@ -85,7 +85,8 @@ is_libc() {
 	case "$1" in
 	__memcpy|__memset|__memmove|memchr|memcmp|memcpy|memmove|memset|\
 	memscan|strcat|strchr|strcmp|strcpy|strlen|strncmp|strncpy|strnlen|\
-	strrchr|strstr|strtok|strtok_r|strscpy|strsep|stpcpy|stpncpy|\
+	strncasecmp|strpbrk|strrchr|strstr|strtok|strtok_r|strscpy|strsep|\
+	stpcpy|stpncpy|\
 	sprintf|snprintf|vsnprintf|sscanf|vsscanf|printf|puts|abort|\
 	_ctype|gcd|crc32_le|crc32_be|crc32c|__crc32c_le|\
 	div_s64|div_u64|div64_u64|__divdi3|__udivdi3|__aeabi_uldivmod)

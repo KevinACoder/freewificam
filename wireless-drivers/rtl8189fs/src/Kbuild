@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Kbuild for the vendored Realtek RTL8189FS (RTL8188F, SDIO) driver.
+#
+# The vendor tree keeps its own Makefile, which is what an out-of-tree build
+# (`make -C <kernel> M=<tree>`) reads.  In-tree kbuild reads Kbuild first, so
+# this file is the build description and the vendor Makefile stays byte
+# identical to the imported tree (see the commit message and the manifest
+# note in docs/MANIFEST.md).
+#
+# The object list is the vendor's own link table, taken from
+# `make -pn KERNELRELEASE=dumptest src=.` on the imported tree: the
+# rtk_core/os_dep/hal/phydm/platform lists plus the conditional
+# core/rtw_mp.o, 131 unique objects (the vendor lists
+# os_dep/linux/sdio_ops_linux.o twice for the SDIO HCI).
+#
+# Differences from the vendor Makefile:
+#   * -DCONFIG_BR_EXT / -DCONFIG_BR_EXT_BRNAME are dropped: the bridge
+#     extension calls br_fdb_find_port(), which only the bridge module exports
+#     (CONFIG_BRIDGE=m here), so a built-in driver cannot link it.  The
+#     station/AP paths under test do not use the bridge extension.
+#   * -DEFUSE_MAP_PATH / -DWIFIMAC_PATH are kept, with the vendor's paths:
+#     hal_com.c references the macros unconditionally and only opens the
+#     files when they exist.  Neither exists on this board.
+#   * -DREALTEK_CONFIG_PATH is kept as well (firmware is compiled in, so it
+#     is only a fallback search path for phy parameter files).
+#
+# The vendor Makefile still computes RTL871X/HCI_NAME/MODULE_NAME and is the
+# reference for the out-of-tree build; keep the two object lists in sync by
+# re-running the -pn dump when the vendor tree is re-imported.
+
+ccflags-y += -O1
+ccflags-y += -Wno-unused-variable -Wno-unused-function -Wno-unused -Wno-date-time
+ccflags-y += -I$(src)/include -I$(src)/platform -I$(src)/hal/btc -I$(src)/hal/phydm
+ccflags-y += -DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211
+ccflags-y += -DRTW_USE_CFG80211_STA_EVENT -DCONFIG_CONCURRENT_MODE
+ccflags-y += -DCONFIG_RTL8188F -DCONFIG_MP_INCLUDED -DCONFIG_POWER_SAVING
+ccflags-y += -DCONFIG_EFUSE_CONFIG_FILE -DCONFIG_LOAD_PHY_PARA_FROM_FILE
+ccflags-y += -DREALTEK_CONFIG_PATH=\"/lib/firmware/\"
+# The vendor's default search paths for an efuse map and a wifimac file.  Both
+# are only opened when the file exists (hal_com.c), and on this board neither
+# exists: the efuse is read from the chip and the MAC comes from it.  The
+# definitions must still be present, the code references them unconditionally.
+ccflags-y += -DEFUSE_MAP_PATH=\"/system/etc/wifi/wifi_efuse_rtl8189fs.map\"
+ccflags-y += -DWIFIMAC_PATH=\"/data/wifimac.txt\"
+ccflags-y += -DCONFIG_TXPWR_BY_RATE=1 -DCONFIG_TXPWR_BY_RATE_EN=1
+ccflags-y += -DCONFIG_TXPWR_LIMIT=1 -DCONFIG_TXPWR_LIMIT_EN=0
+ccflags-y += -DCONFIG_RTW_ADAPTIVITY_EN=0 -DCONFIG_RTW_ADAPTIVITY_MODE=0
+ccflags-y += -DHIGH_ACTIVE_HST2DEV=0 -DCONFIG_RTW_SDIO_PM_KEEP_POWER
+ccflags-y += -DCONFIG_RTW_NETIF_SG -DCONFIG_RTW_DEBUG -DCONFIG_PROC_DEBUG
+ccflags-y += -DRTW_LOG_LEVEL=4 -DDM_ODM_SUPPORT_TYPE=0x04
+# Monitor mode is one of the three roles this port has to characterise
+# (AP/STA/MONITOR), and the vendor build description defaults it off
+# (Makefile: CONFIG_WIFI_MONITOR = n).  The flag admits
+# NL80211_IFTYPE_MONITOR in the wiphy and compiles the receiver path that
+# already exists in the vendor tree.  It is RX-only here: the vendor's
+# CONFIG_MONITOR_MODE_XMIT injector stays off.
+ccflags-y += -DCONFIG_WIFI_MONITOR
+
+obj-$(CONFIG_RTL8189FS) += rtl8189fs.o
+
+# vendor core/ (36)
+rtl8189fs-y += core/rtw_cmd.o \
+	core/rtw_security.o \
+	core/rtw_debug.o \
+	core/rtw_io.o \
+	core/rtw_ioctl_query.o \
+	core/rtw_ioctl_set.o \
+	core/rtw_ieee80211.o \
+	core/rtw_mlme.o \
+	core/rtw_mlme_ext.o \
+	core/rtw_mi.o \
+	core/rtw_wlan_util.o \
+	core/rtw_vht.o \
+	core/rtw_pwrctrl.o \
+	core/rtw_rf.o \
+	core/rtw_chplan.o \
+	core/rtw_recv.o \
+	core/rtw_sta_mgt.o \
+	core/rtw_ap.o \
+	core/mesh/rtw_mesh.o \
+	core/mesh/rtw_mesh_pathtbl.o \
+	core/mesh/rtw_mesh_hwmp.o \
+	core/rtw_xmit.o \
+	core/rtw_p2p.o \
+	core/rtw_rson.o \
+	core/rtw_tdls.o \
+	core/rtw_br_ext.o \
+	core/rtw_iol.o \
+	core/rtw_sreset.o \
+	core/rtw_btcoex_wifionly.o \
+	core/rtw_btcoex.o \
+	core/rtw_beamforming.o \
+	core/rtw_odm.o \
+	core/rtw_rm.o \
+	core/rtw_rm_fsm.o \
+	core/efuse/rtw_efuse.o \
+	core/rtw_sdio.o
+
+# vendor os_dep/ (16; the SDIO HCI also uses core/rtw_sdio.o, listed in core/)
+rtl8189fs-y += os_dep/osdep_service.o \
+	os_dep/linux/os_intfs.o \
+	os_dep/linux/sdio_intf.o \
+	os_dep/linux/sdio_ops_linux.o \
+	os_dep/linux/ioctl_linux.o \
+	os_dep/linux/xmit_linux.o \
+	os_dep/linux/mlme_linux.o \
+	os_dep/linux/recv_linux.o \
+	os_dep/linux/ioctl_cfg80211.o \
+	os_dep/linux/rtw_cfgvendor.o \
+	os_dep/linux/wifi_regd.o \
+	os_dep/linux/rtw_android.o \
+	os_dep/linux/rtw_proc.o \
+	os_dep/linux/rtw_rhashtable.o \
+	os_dep/linux/ioctl_mp.o \
+	os_dep/linux/custom_gpio_linux.o
+
+# vendor hal/ chip + HCI (29)
+rtl8189fs-y += hal/hal_intf.o \
+	hal/hal_com.o \
+	hal/hal_com_phycfg.o \
+	hal/hal_phy.o \
+	hal/hal_dm.o \
+	hal/hal_dm_acs.o \
+	hal/hal_btcoex_wifionly.o \
+	hal/hal_btcoex.o \
+	hal/hal_mp.o \
+	hal/hal_mcc.o \
+	hal/hal_hci/hal_sdio.o \
+	hal/led/hal_led.o \
+	hal/led/hal_sdio_led.o \
+	hal/HalPwrSeqCmd.o \
+	hal/rtl8188f/Hal8188FPwrSeq.o \
+	hal/rtl8188f/rtl8188f_sreset.o \
+	hal/rtl8188f/rtl8188f_hal_init.o \
+	hal/rtl8188f/rtl8188f_phycfg.o \
+	hal/rtl8188f/rtl8188f_rf6052.o \
+	hal/rtl8188f/rtl8188f_dm.o \
+	hal/rtl8188f/rtl8188f_rxdesc.o \
+	hal/rtl8188f/rtl8188f_cmd.o \
+	hal/rtl8188f/hal8188f_fw.o \
+	hal/rtl8188f/sdio/sdio_halinit.o \
+	hal/rtl8188f/sdio/rtl8189fs_led.o \
+	hal/rtl8188f/sdio/rtl8189fs_xmit.o \
+	hal/rtl8188f/sdio/rtl8189fs_recv.o \
+	hal/rtl8188f/sdio/sdio_ops.o \
+	hal/efuse/rtl8188f/HalEfuseMask8188F_SDIO.o
+
+# vendor hal/phydm/ (48, from hal/phydm/phydm.mk)
+rtl8189fs-y += hal/phydm/phydm_debug.o \
+	hal/phydm/phydm_antdiv.o \
+	hal/phydm/phydm_soml.o \
+	hal/phydm/phydm_smt_ant.o \
+	hal/phydm/phydm_antdect.o \
+	hal/phydm/phydm_interface.o \
+	hal/phydm/phydm_phystatus.o \
+	hal/phydm/phydm_hwconfig.o \
+	hal/phydm/phydm.o \
+	hal/phydm/phydm_dig.o \
+	hal/phydm/phydm_pathdiv.o \
+	hal/phydm/phydm_rainfo.o \
+	hal/phydm/phydm_dynamictxpower.o \
+	hal/phydm/phydm_adaptivity.o \
+	hal/phydm/phydm_cfotracking.o \
+	hal/phydm/phydm_noisemonitor.o \
+	hal/phydm/phydm_beamforming.o \
+	hal/phydm/phydm_direct_bf.o \
+	hal/phydm/phydm_dfs.o \
+	hal/phydm/txbf/halcomtxbf.o \
+	hal/phydm/txbf/haltxbfinterface.o \
+	hal/phydm/txbf/phydm_hal_txbf_api.o \
+	hal/phydm/phydm_adc_sampling.o \
+	hal/phydm/phydm_ccx.o \
+	hal/phydm/phydm_psd.o \
+	hal/phydm/phydm_primary_cca.o \
+	hal/phydm/phydm_cck_pd.o \
+	hal/phydm/phydm_rssi_monitor.o \
+	hal/phydm/phydm_auto_dbg.o \
+	hal/phydm/phydm_math_lib.o \
+	hal/phydm/phydm_api.o \
+	hal/phydm/phydm_pow_train.o \
+	hal/phydm/phydm_lna_sat.o \
+	hal/phydm/phydm_pmac_tx_setting.o \
+	hal/phydm/phydm_mp.o \
+	hal/phydm/halrf/halrf.o \
+	hal/phydm/halrf/halrf_debug.o \
+	hal/phydm/halrf/halphyrf_ce.o \
+	hal/phydm/halrf/halrf_powertracking_ce.o \
+	hal/phydm/halrf/halrf_powertracking.o \
+	hal/phydm/halrf/halrf_kfree.o \
+	hal/phydm/halrf/halrf_psd.o \
+	hal/phydm/rtl8188f/halhwimg8188f_bb.o \
+	hal/phydm/rtl8188f/halhwimg8188f_mac.o \
+	hal/phydm/rtl8188f/halhwimg8188f_rf.o \
+	hal/phydm/rtl8188f/phydm_regconfig8188f.o \
+	hal/phydm/halrf/rtl8188f/halrf_8188f.o \
+	hal/phydm/rtl8188f/phydm_rtl8188f.o
+
+# vendor platform/ (1)
+rtl8189fs-y += platform/platform_ops.o
+
+# The vendor Makefile adds this one conditionally on CONFIG_MP_INCLUDED, which
+# is on in the build description above:
+#   $(MODULE_NAME)-$(CONFIG_MP_INCLUDED) += core/rtw_mp.o
+rtl8189fs-y += core/rtw_mp.o

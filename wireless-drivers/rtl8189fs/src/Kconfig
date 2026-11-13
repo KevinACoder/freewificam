@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config RTL8189FS
+	tristate "Realtek 8189FS SDIO WiFi"
+	depends on MMC && CFG80211 && WLAN
+	help
+	  This is a vendor driver for the Realtek RTL8188F (marketed as
+	  RTL8189FS/RTL8189FTV) 802.11n 1T1R SDIO wireless chip.  It is a
+	  full source drop from the vendor and is not the mainline driver
+	  for this part; the mainline rtl8xxxu driver is USB-only and rtw88
+	  does not cover this generation.
+
+	  The firmware image is compiled into the module, so no separate
+	  firmware file is needed in /lib/firmware.
+
+	  To compile this driver as a module, choose M here; the module will
+	  be called rtl8189fs.
