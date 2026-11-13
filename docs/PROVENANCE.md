@@ -160,21 +160,24 @@ TUs) is re-derived from the driver's own Makefiles under
 `include/linux80211/driver_config.h`; `wireless-drivers/iwlwifi/PROVENANCE.md`
 is the tree's own record (pin, licence mix, why 72 and not 74).
 
-## The tracked firmware input (2026-11-11)
+## The tracked firmware inputs (2026-11-11; RTL8851BU added 2026-11-13)
 
-The AC 7260 firmware image used to be a build product of the GT tree, which
-made a clean clone of this repository unable to build a wireless image. It is
-now a tracked input of this repository, together with its licence text:
+The driver firmware images used to be build products of the GT tree, which
+made a clean clone of this repository unable to build a wireless image. They
+are now tracked inputs of this repository, together with their licence texts:
 
 | File | Size | SHA-256 | Origin | License |
 |---|---|---|---|---|
 | `components/liblinux80211/fw/iwlwifi-7260-17.ucode` | 1,049,340 | `5d81a6003df0228a497ad27f916ba2c979614b4c439b0f45a5f2873dc0607fe8` | GT line's initramfs at pin `63a2a8ab9cd3`, unmodified | Intel binary firmware licence (`LICENCE.iwlwifi_firmware` beside it) |
 | `components/liblinux80211/fw/LICENCE.iwlwifi_firmware` | 2,046 | — | Intel's redistribution terms as distributed by linux-firmware | — |
+| `components/liblinux80211/fw/rtw89/rtw8851b_fw-1.bin` | 1,408,706 | `1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7` | GT line's initramfs `lib/firmware/rtw89/` and the previous line's tracked `firmware/rtw89/` copy (same bytes), unmodified | Realtek binary redistribution terms (`LICENCE.realtek_firmware` beside it) |
+| `components/liblinux80211/fw/LICENCE.realtek_firmware` | 2,120 | — | Realtek's redistribution terms as distributed by linux-firmware | — |
 
-The generated unit `components/liblinux80211/fw/iwl7260_fw_blob.c` is a build
-product and stays untracked; `tools/rtos/fw-blobs.py` regenerates it from the
-tracked image and pins the SHA-256. `components/liblinux80211/fw/PROVENANCE.md`
-is the tree's own record.
+The generated units `components/liblinux80211/fw/iwl7260_fw_blob.c` and
+`components/liblinux80211/fw/rtw8851b_fw_blob.c` are build products and stay
+untracked; `tools/rtos/fw-blobs.py` regenerates them from the tracked images
+and pins each SHA-256. `components/liblinux80211/fw/PROVENANCE.md` is the
+tree's own record.
 
 ## third-party/wpa_supplicant-rtos (2026-11-12)
 

@@ -29,7 +29,13 @@ FW_GEN := $(shell $(PYTHON) $(FW_TOOL) --all 2>&1 || echo fw-blobs: FAIL)
 ifneq ($(findstring fw-blobs: FAIL,$(FW_GEN)),)
 $(error fw: the firmware blobs could not be generated: $(FW_GEN))
 endif
-ifneq ($(wildcard $(ROOT)/components/liblinux80211/fw/iwl7260_fw_blob.c),)
-else
-$(error fw: $(FW_TOOL) --all did not produce the blob; run it by hand to see why)
+# The tool's table is the authority for which units exist; this list only has
+# to notice that every one of them was produced.  A new blob is one more word
+# here and one more row in tools/rtos/fw-blobs.py.
+FW_BLOBS := \
+	$(ROOT)/components/liblinux80211/fw/iwl7260_fw_blob.c \
+	$(ROOT)/components/liblinux80211/fw/rtw8851b_fw_blob.c
+FW_MISSING := $(foreach f,$(FW_BLOBS),$(if $(wildcard $(f)),,$(f)))
+ifneq ($(strip $(FW_MISSING)),)
+$(error fw: $(FW_TOOL) --all did not produce $(FW_MISSING); run it by hand to see why)
 endif

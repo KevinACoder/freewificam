@@ -64,3 +64,13 @@ licence 文本、`PROVENANCE.md` 一起 tracked，因为镜像没有文件系统
 
 链接这些固件的无线镜像因此同时是 **GPL-2.0 链接产物** 和 **Intel 固件再分发物**；
 两件事分别登记，不互相替代。
+
+`components/liblinux80211/fw/rtw89/rtw8851b_fw-1.bin`（1,408,706 B，sha256
+`1c4ccb5f…`，2026-11-13 入库）是 **Realtek 二进制固件**，按同目录
+`LICENCE.realtek_firmware` 的条款再分发：允许未修改的二进制再分发，要求保留
+版权声明与免责声明，禁止反向工程/反编译。它同样是 tracked 输入，生成的
+`rtw8851b_fw_blob.c` 是构建产物、不入库；来源与校验见 `fw/PROVENANCE.md`。
+链接它的 rtw89 镜像因此是 **GPL-2.0 链接产物 + Realtek 固件再分发物**，两件事
+分别登记。`rtw89` 驱动本身是 `GPL-2.0 OR BSD-3-Clause`，但本仓的 mac80211
+backend 把它链接进 GPL-2.0 产物——它不构成老仓按 BSD 发布的那条 rtw89 线。
+

@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Generate (or verify) the compiled-in iwlwifi firmware blob.
+"""Generate (or verify) the compiled-in wireless firmware blobs.
 
-An RTOS image has no filesystem: iwlwifi's request_firmware() is answered by
-components/liblinux80211/fw_registry.c from a table the image fills at
-start-up.  The table's data is this generated unit, a C array byte-identical to
-the firmware the GT line already booted with.
+An RTOS image has no filesystem: a driver's ``request_firmware()`` is answered
+by ``components/liblinux80211/fw_registry.c`` from a table the image fills at
+start-up.  The table's data is this tool's output, one C unit per blob,
+byte-identical to the vendor image the GT line already booted with, kept under
+``components/liblinux80211/fw/`` so a clean clone can build a wireless image
+without the GT tree.
 
-    tools/rtos/fw-blobs.py            write the unit if missing or stale
-    tools/rtos/fw-blobs.py --all      the same for every blob this tool owns
-    tools/rtos/fw-blobs.py --check    verify the unit against the source blob
+    tools/rtos/fw-blobs.py                write every unit that is missing or stale
+    tools/rtos/fw-blobs.py --all          the same (the form fw.mk calls)
+    tools/rtos/fw-blobs.py --stem rtw8851b_fw   one blob
+    tools/rtos/fw-blobs.py --check        verify the tracked sources and the units
 
-The source is a tracked input of this repository
-(components/liblinux80211/fw/iwlwifi-7260-17.ucode): a clean clone must be able
-to build a wireless image without the GT tree.  The generated unit stays
-git-ignored (it is a build product, 6.4 MB against the 1 MB source).  The hash
-in the unit's header is the anchor: the build does not trust the path alone.
+The table below is the one place that names each source, its request name, the
+emitted C symbol and the licence.  The generated units stay git-ignored (they
+are build products, several megabytes against the vendor images); the SHA-256
+in the unit's header and this tool's pinned digest are the anchors.
 """
 
 from __future__ import annotations
@@ -22,42 +24,86 @@ from __future__ import annotations
 import argparse
 import hashlib
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_SOURCE = (REPO / "components" / "liblinux80211" / "fw" /
-                  "iwlwifi-7260-17.ucode")
-DEST = REPO / "components" / "liblinux80211" / "fw" / "iwl7260_fw_blob.c"
-REQUEST_NAME = "iwlwifi-7260-17.ucode"
-EXPECTED_SHA256 = "5d81a6003df0228a497ad27f916ba2c979614b4c439b0f45a5f2873dc0607fe8"
+FW_DIR = REPO / "components" / "liblinux80211" / "fw"
+
 BYTES_PER_LINE = 12
+
+
+@dataclass(frozen=True)
+class Blob:
+    """One compiled-in firmware image."""
+
+    stem: str           # C symbol stem: <stem>_data, lkpi_fw_<stem>_register
+    source: str         # path under components/liblinux80211/fw/
+    request: str        # the name the driver's request_firmware() asks for
+    sha256: str         # pinned digest of the tracked source
+    brief: str          # second @brief line: who asks for it
+    licence: str        # licence text file beside the source
+    licence_note: str   # the licence's short name in the header
+
+
+# The tracked blobs.  Adding a driver's firmware means adding a row here, a
+# tracked image under fw/, its licence text, and the register call in the
+# image's bring-up; nothing else is driver-specific.
+BLOBS: tuple[Blob, ...] = (
+    Blob(
+        stem="iwl7260_fw",
+        source="iwlwifi-7260-17.ucode",
+        request="iwlwifi-7260-17.ucode",
+        sha256="5d81a6003df0228a497ad27f916ba2c979614b4c439b0f45a5f2873dc0607fe8",
+        brief="the AC 7260 driver asks for by name.",
+        licence="LICENCE.iwlwifi_firmware",
+        licence_note="Intel binary redistribution terms",
+    ),
+    Blob(
+        stem="rtw8851b_fw",
+        source="rtw89/rtw8851b_fw-1.bin",
+        request="rtw89/rtw8851b_fw-1.bin",
+        sha256="1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7",
+        brief="the RTL8851BU driver asks for by name.",
+        licence="LICENCE.realtek_firmware",
+        licence_note="Realtek binary redistribution terms",
+    ),
+)
 
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def render(data: bytes, sha: str) -> str:
+def dest_for(blob: Blob) -> Path:
+    return FW_DIR / f"{blob.stem}_blob.c"
+
+
+def source_for(blob: Blob) -> Path:
+    return FW_DIR / blob.source
+
+
+def render(blob: Blob, data: bytes, sha: str) -> str:
     lines = [
         "/* SPDX-License-Identifier: BSD-3-Clause */",
         "/*",
-        " * @file    fw/iwl7260_fw_blob.c",
-        " * @brief   The iwlwifi-7260-17.ucode image, compiled in as the one blob",
-        " *          the AC 7260 driver asks for by name.",
+        f" * @file    fw/{blob.stem}_blob.c",
+        f" * @brief   The {blob.request} image, compiled in as the one blob",
+        f" *          {blob.brief}",
         " *",
         " * @design static data table registered by name at start-up: the target has",
         " *         no filesystem, so the registry is the loader and this unit is its",
-        f" *         data.  The bytes are byte-identical to {REQUEST_NAME}",
+        f" *         data.  The bytes are byte-identical to {blob.request}",
         f" *         sha256 {sha}",
-        f" *         {len(data)} bytes.  License: Intel binary redistribution terms",
-        " *         (LICENCE.iwlwifi_firmware beside the source image); unmodified.",
+        f" *         {len(data)} bytes.  License: {blob.licence_note}",
+        f" *         ({blob.licence} beside the source image); unmodified.",
         " *         GENERATED by tools/rtos/fw-blobs.py - do not edit by hand.",
         " */",
         "",
         '#include "../fw_registry.h"',
         "",
         f"/* {len(data)} bytes. */",
-        "static const unsigned char iwl7260_fw_data[] = {",
+        f"static const unsigned char {blob.stem}_data[] = {{",
     ]
     body = []
     for i in range(0, len(data), BYTES_PER_LINE):
@@ -68,58 +114,98 @@ def render(data: bytes, sha: str) -> str:
         "};",
         "",
         "int",
-        "lkpi_fw_iwl7260_fw_register(void)",
+        f"lkpi_fw_{blob.stem}_register(void)",
         "{",
-        f'\treturn lkpi_fw_register("{REQUEST_NAME}", iwl7260_fw_data,',
-        "\t                        sizeof(iwl7260_fw_data));",
+        f'\treturn lkpi_fw_register("{blob.request}", {blob.stem}_data,',
+        f"\t                        sizeof({blob.stem}_data));",
         "}",
         "",
     ]
     return "\n".join(lines)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
-    ap.add_argument("--all", action="store_true",
-                    help="generate every blob this tool owns (the fw.mk probe)")
-    ap.add_argument("--check", action="store_true")
-    args = ap.parse_args()
-    src = args.source.resolve()
+def load(blob: Blob) -> tuple[bytes, str] | None:
+    """The blob's bytes and digest, or None after naming the reason."""
+
+    src = source_for(blob)
     if not src.is_file():
         print(f"fw-blobs: no source blob at {src}", file=sys.stderr)
-        return 2
+        return None
     # The licence's redistribution condition is that the notice travels with
     # the binary; a clean clone has no other copy of it.
-    licence = src.parent / "LICENCE.iwlwifi_firmware"
+    licence = FW_DIR / blob.licence
     if not licence.is_file():
-        print(f"fw-blobs: no licence text at {licence}", file=sys.stderr)
-        return 2
-    sha = sha256(src)
-    if sha != EXPECTED_SHA256:
-        print(f"fw-blobs: {src} sha256 {sha} != pinned {EXPECTED_SHA256}",
+        print(f"fw-blobs: no licence text at {licence} for {blob.stem}",
               file=sys.stderr)
+        return None
+    data = src.read_bytes()
+    sha = sha256(src)
+    if sha != blob.sha256:
+        print(f"fw-blobs: {src} sha256 {sha} != pinned {blob.sha256}",
+              file=sys.stderr)
+        return None
+    return data, sha
+
+
+def do_write(blob: Blob) -> int:
+    loaded = load(blob)
+    if loaded is None:
         return 2
-    text = render(src.read_bytes(), sha)
-    if args.check:
-        if not DEST.is_file():
-            print(f"fw-blobs: missing {DEST}", file=sys.stderr)
-            return 1
-        if DEST.read_text() != text:
-            print(f"fw-blobs: {DEST} is stale", file=sys.stderr)
-            return 1
-        print(f"check: ok ({REQUEST_NAME} {len(src.read_bytes())} bytes, sha256 {sha[:12]}...)")
+    data, sha = loaded
+    text = render(blob, data, sha)
+    dest = dest_for(blob)
+    # A no-op when the unit is current: rewriting a multi-megabyte file on
+    # every make would touch its mtime and rebuild the blob object, and the
+    # build calls this from a parse-time probe.
+    if dest.is_file() and dest.read_text() == text:
+        print(f"fw-blobs: current ({dest})")
         return 0
-    # A no-op when the unit is current: rewriting a 6.4 MB file on every make
-    # would touch its mtime and rebuild the blob object, and the build calls
-    # this from a parse-time probe.
-    if DEST.is_file() and DEST.read_text() == text:
-        print(f"fw-blobs: current ({DEST})")
-        return 0
-    DEST.parent.mkdir(parents=True, exist_ok=True)
-    DEST.write_text(text)
-    print(f"wrote {DEST} ({len(src.read_bytes())} bytes, sha256 {sha[:12]}...)")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(text)
+    print(f"wrote {dest} ({len(data)} bytes, sha256 {sha[:12]}...)")
     return 0
+
+
+def do_check(blob: Blob) -> int:
+    loaded = load(blob)
+    if loaded is None:
+        return 2
+    data, sha = loaded
+    text = render(blob, data, sha)
+    dest = dest_for(blob)
+    if not dest.is_file():
+        print(f"fw-blobs: missing {dest}", file=sys.stderr)
+        return 1
+    if dest.read_text() != text:
+        print(f"fw-blobs: {dest} is stale", file=sys.stderr)
+        return 1
+    print(f"check: ok ({blob.request} {len(data)} bytes, sha256 {sha[:12]}...)")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--all", action="store_true",
+                    help="every blob this tool owns (the fw.mk probe; the default)")
+    ap.add_argument("--stem", help="one blob stem (iwl7260_fw, rtw8851b_fw)")
+    ap.add_argument("--check", action="store_true",
+                    help="verify the tracked sources and the generated units")
+    args = ap.parse_args()
+
+    if args.stem:
+        selected = [b for b in BLOBS if b.stem == args.stem]
+        if not selected:
+            stems = ", ".join(b.stem for b in BLOBS)
+            print(f"fw-blobs: no such stem {args.stem!r} (have {stems})",
+                  file=sys.stderr)
+            return 2
+    else:
+        selected = list(BLOBS)
+
+    rc = 0
+    for blob in selected:
+        rc = max(rc, do_check(blob) if args.check else do_write(blob))
+    return rc
 
 
 if __name__ == "__main__":

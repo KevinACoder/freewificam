@@ -49,3 +49,7 @@ tests/host/kpi/build/
 # vendor image and its licence beside them are tracked inputs, not products
 # (see components/liblinux80211/fw/PROVENANCE.md); only the C unit is ignored.
 components/liblinux80211/fw/*.c
+
+# The vendor firmware images under fw/ are tracked inputs; the *.bin rule above
+# is about built images, not these blobs.
+!components/liblinux80211/fw/**/*.bin
