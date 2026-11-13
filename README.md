@@ -44,8 +44,11 @@ bus, so a new module adds a table instead of a wider row.  Case names are fixed
 (registry below); a table reports the cases it measured, and a new case is
 added to the registry first.
 
-Every arm is the same card: the Linux column is the AC 7260 on a mainline kernel
-(`iwlwifi`, `iwlmvm`), the `rtos` column is the same card on this port.  A rate
+In the AC 7260 tables every arm is the same card: the Linux column is that card
+on a mainline kernel (`iwlwifi`, `iwlmvm`), the `rtos` column is the same card
+on this port.  The RTL8189FTV tables are a second card and a second driver
+world, and their Linux column is that card on a mainline kernel with the
+vendor's own stack.  A rate
 is payload bytes over the interval that actually elapsed, counted at the
 receiver: `iperf2`'s own window where the peer receives, the case's byte counter
 where the board receives, and the peer's counting sink for the AP role's UDP
