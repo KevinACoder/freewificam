@@ -106,6 +106,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTL8189FS_STA)
 	CASE_ENTRY("rtl8189fs_sta", case_rtl8189fs_sta_run)
 #endif
+#if defined(RTOS_CASE_RTL8189FS_STA_WPA2)
+	CASE_ENTRY("rtl8189fs_sta_wpa2", case_rtl8189fs_sta_wpa2_run)
+#endif
 #if defined(RTOS_CASE_RTL8189FS_C6T)
 	CASE_ENTRY("rtl8189fs_c6t", case_rtl8189fs_c6t_run)
 #endif

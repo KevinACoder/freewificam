@@ -28,7 +28,7 @@
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
 WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g iwl7260_mon \
-	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_c6t
+	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -108,6 +108,13 @@ WL80211_HOSTAP_CONFIG_HDR := $(LIB8)/hostap/include/hostap_config_sta.h
 else
 WL80211_HOSTAP_CONFIG_HDR := $(LIB8)/hostap/include/hostap_config.h
 endif
+
+# The 8189 vendor tree carries its own AES T-tables (rtw_security.c) and a
+# hexstr2bin (osdep_service.c); the NXP supplicant carries the same standard
+# AES tables and hexstr2bin in its crypto/utils.  Both are the same tables, so
+# the first definition is the same value - allow the duplicate rather than
+# patch either imported tree.
+WL80211_LDFLAGS += -Wl,--allow-multiple-definition
 
 WL80211_HOSTAP_CFLAGS := \
 	-I$(LIB8)/hostap/include \

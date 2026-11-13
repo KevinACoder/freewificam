@@ -121,6 +121,9 @@ int case_rtl8189fs_sdio_run(void);
 #if defined(RTOS_CASE_RTL8189FS_STA)
 int case_rtl8189fs_sta_run(void);
 #endif
+#if defined(RTOS_CASE_RTL8189FS_STA_WPA2)
+int case_rtl8189fs_sta_wpa2_run(void);
+#endif
 #if defined(RTOS_CASE_RTL8189FS_C6T)
 int case_rtl8189fs_c6t_run(void);
 #endif

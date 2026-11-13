@@ -1,0 +1,43 @@
+# rtl8189fs on the RTOS line, C5-WPA2 arm: the vendor stack's station joins a
+# WPA2-PSK/CCMP AP with the NXP wpa_supplicant-rtos port owning scan,
+# association and the 4-way handshake.  The bench helper turns the Pi's
+# wlan2 from the open lab AP into a WPA2 AP on the same SSID/channel
+# (`pi-g2-ap.sh`, PSK rtos-7260-wpa2-psk), so the scan target and BSSID stay
+# the ones the open arm uses.
+#
+# This closes the gap the STA handoff recorded: the open arm was the only one
+# tested.  What this profile is not: the AP role (HANDOFF-8189FTV-RTOS-AP) and
+# the WPA2 throughput table (same case pair as the open C6 arm, after this
+# profile's connection is 2/2).
+#
+# The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_sta_wpa2"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The STA supplicant role (not hostapd).
+CONFIG_WPA_STA=y
+
+CONFIG_STA_SSID="labwifi-ar-ht20s"
+CONFIG_STA_BSSID="1c:a7:70:de:29:a1"
+CONFIG_STA_FREQ=2432
+CONFIG_STA_DHCP=n
+CONFIG_STA_STATIC_IP="192.168.99.2"
+CONFIG_STA_STATIC_MASK="255.255.255.0"
+CONFIG_STA_STATIC_GW="192.168.99.1"
+CONFIG_STA_PEER_CANDIDATES="192.168.99.1"
+CONFIG_STA_PSK="rtos-7260-wpa2-psk"
+CONFIG_STA_PSK_EXTERNAL=n
+
+# The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
+# FreeRTOS heap; see the C3 profile's note.
+CONFIG_FREERTOS_HEAP_SIZE=16777216
