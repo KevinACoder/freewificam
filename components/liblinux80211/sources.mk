@@ -29,6 +29,7 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	linuxkpi_rfkill.c \
 	linuxkpi_netlink.c \
 	linuxkpi_util.c \
+	linuxkpi_params.c \
 	linuxkpi_crypto.c \
 	linuxkpi_ccm.c \
 	fw_registry.c \

@@ -82,6 +82,29 @@ config LIBLINUX80211_IWLWIFI
 	  identical to the GT pin) against the same face.  The 7260 is the PCIe
 	  target of this line; the driver's probe and firmware ALIVE are C3.
 
+config LIBLINUX80211_RTL8189FS
+	bool "rtl8189fs (RTL8188F / SDIO 8189FTV) vendor driver"
+	depends on LIBLINUX80211_SDIO
+	depends on LIBLINUX80211_WIRELESS
+	help
+	  Links the vendored Realtek rtl8189fs vendor stack (131 TUs, byte-
+	  identical to the GT pin) against the same face, plus the board's SDIO
+	  host group.  This is the vendor's own MLME: cfg80211 is the control
+	  plane, not mac80211.  The tree is GPL-2.0, and an artifact that links
+	  it is a GPL-2.0 link product (docs/LICENSES.md).
+
+config LKPI_CENSUS
+	bool "kernel-API census (SDIO RX probe, claim/workqueue histograms)"
+	help
+	  Compiles the component's observation seam: the SDIO engine's transfer,
+	  claim and pump counters with their latency histograms, the receive-
+	  presentation probe the vendored driver calls, the workqueue counters,
+	  and the per-frame timestamps the throughput rounds turn on.  It is an
+	  observation-only build: the numbers a throughput verdict is written
+	  from come from the clean image, and a census image is the attribution
+	  arm when the clean one is short.  Off in every delivery image.
+
+
 choice LIBLINUX80211_NET
 	prompt "Network egress implementation"
 	default LIBLINUX80211_NET_NONE

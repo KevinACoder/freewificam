@@ -30,7 +30,16 @@ BOARD="$ROOT/../skills/rk3568-board/scripts"
 PI=pi@192.168.0.17
 AP_IF=wlan2
 MON_IF=wlan1
-BOARD_IP=192.168.99.2
+BOARD_IP=${BOARD_IP:-192.168.99.2}
+# The case whose window this round drives, and the peer arm's ping count.  The
+# defaults are the AC 7260 C5 round's; the 8189FTV station arm overrides both.
+CASE_PREFIX=${CASE_PREFIX:-iwl7260_c5}
+STA_MAC=${STA_MAC:-6c:29:95:12:f0:d9}
+PEER_PING_COUNT=${PEER_PING_COUNT:-5}
+# The case's window is 6 s; a 1 s interval would leave most of a 20-ping arm
+# outside it, so the count and the interval are one setting.
+PEER_PING_INTERVAL=${PEER_PING_INTERVAL:-1}
+CASE_EXPECT=${CASE_EXPECT:-tick,pcie,iwl7260_c5}
 PCAP=/tmp/c5-round.pcap
 
 EVIDENCE=
@@ -61,7 +70,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
 #    this bench; the pcap stays in /tmp on the Pi).
 "$BOARD/tftp.sh" put "$BIN" --name rtos.bin
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
-    "sudo -n timeout 45 tcpdump -i $MON_IF -w $PCAP -U 2>/tmp/c5-round.tcpdump.log" \
+    "sudo -n rm -f $PCAP; sudo -n timeout 45 tcpdump -i $MON_IF -w $PCAP -U 2>/tmp/c5-round.tcpdump.log" \
     >/dev/null 2>&1 &
 CAP_PID=$!
 sleep 1
@@ -74,7 +83,7 @@ BOOT_PID=$!
 
 # 3) wait for the netif anchor (the case prints it right after PASS C5).
 for _ in $(seq 1 240); do
-    if grep -aq "iwl7260_c5: peer window ms=" "$EVIDENCE/serial.log" 2>/dev/null; then
+    if grep -aq "$CASE_PREFIX: peer window ms=" "$EVIDENCE/serial.log" 2>/dev/null; then
         break
     fi
     if ! kill -0 "$BOOT_PID" 2>/dev/null; then
@@ -83,7 +92,7 @@ for _ in $(seq 1 240); do
     sleep 0.5
 done
 
-if grep -aq "iwl7260_c5: peer window ms=" "$EVIDENCE/serial.log" 2>/dev/null; then
+if grep -aq "$CASE_PREFIX: peer window ms=" "$EVIDENCE/serial.log" 2>/dev/null; then
     sleep 0.2
     # 4) the peer arm: the AP host pings the board inside its 6 s window.
     #    The AP's *dynamic* ARP for the board is not answered: this port never
@@ -93,8 +102,8 @@ if grep -aq "iwl7260_c5: peer window ms=" "$EVIDENCE/serial.log" 2>/dev/null; th
     #    broadcast ARP is recorded as a known gap, not hidden.
     { echo "== at $(date +%H:%M:%S)"; \
       ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
-        "sudo -n ip neigh replace $BOARD_IP lladdr 6c:29:95:12:f0:d9 dev $AP_IF; \
-         ip neigh show $BOARD_IP; ping -c 5 -W 1 $BOARD_IP"; } \
+        "sudo -n ip neigh replace $BOARD_IP lladdr $STA_MAC dev $AP_IF; \
+         ip neigh show $BOARD_IP; ping -c $PEER_PING_COUNT -i $PEER_PING_INTERVAL -W 1 $BOARD_IP"; } \
         >"$EVIDENCE/peer-ping.txt" 2>&1 || true
     # 5) the AP's view of the station, still connected.
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
@@ -112,7 +121,7 @@ wait "$CAP_PID" || true
 # 6) air summary: the frame classes this round must contain.
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
     "sudo -n tshark -r $PCAP -q -z io,phs 2>/dev/null; \
-     sudo -n tshark -r $PCAP -Y 'wlan.addr==6c:29:95:12:f0:d9' -T fields \
+     sudo -n tshark -r $PCAP -Y \"wlan.addr==$STA_MAC\" -T fields \
         -e wlan.fc.type_subtype 2>/dev/null | sort | uniq -c | sort -rn; \
      sudo -n tcpdump -r $PCAP -nn 2>/dev/null | grep -c 'ICMP echo' || true" \
     >"$EVIDENCE/air-summary.txt" 2>&1 || true

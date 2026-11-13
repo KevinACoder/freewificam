@@ -36,7 +36,15 @@ PI=pi@192.168.0.17
 AP_IF=wlan2
 MON_IF=wlan1
 BOARD_IP=192.168.99.2
-STA_MAC=6c:29:95:12:f0:d9
+# The station under test and the case that brings it up.  The defaults are the
+# AC 7260 C5/C6 pair; the 8189FTV throughput arm overrides both (its station
+# case prints the same `peer window` / `netif up` anchors).
+STA_MAC=${STA_MAC:-6c:29:95:12:f0:d9}
+STA_CASE_PREFIX=${STA_CASE_PREFIX:-iwl7260_c5}
+CASE_EXPECT=${CASE_EXPECT:-tick,pcie,iwl7260_c5,iwl7260_c6}
+# The downlink UDP rate the counting sink is offered.  40M is the capacity
+# shape; the 8189FTV arm offers 35M, the GT ladder's top rung.
+UDP_DN_RATE=${UDP_DN_RATE:-40M}
 AP_CONF=/tmp/w722-ht20.conf
 
 EVIDENCE=
@@ -123,7 +131,7 @@ peer_tcp() {	# $1 = phase name, $2 = seconds
 }
 peer_udp() {	# $1 = phase name, $2 = seconds
 	local name=$1 secs=$2
-	pi "iperf -c $BOARD_IP -p 5002 -u -b 40M -t $secs -i 5" \
+	pi "iperf -c $BOARD_IP -p 5002 -u -b $UDP_DN_RATE -t $secs -i 5" \
 		>"$EVIDENCE/peer-$name.txt" 2>&1 || true
 }
 station() {	# $1 = tag
@@ -137,7 +145,7 @@ anchor() {	# $1 = regex; true when the capture already holds it
 }
 
 for _ in $(seq 1 3000); do
-	if anchor 'iwl7260_c5: netif up ' && [ "$seen_neigh" = 0 ]; then
+	if anchor "$STA_CASE_PREFIX: netif up " && [ "$seen_neigh" = 0 ]; then
 		seen_neigh=1
 		pisu "ip neigh replace $BOARD_IP lladdr $STA_MAC dev $AP_IF" \
 			>"$EVIDENCE/peer-neigh.txt" 2>&1 || true
@@ -228,7 +236,7 @@ pisu "chmod 644 $AP_PCAP $MON_DOWN_PCAP $MON_UP_PCAP 2>/dev/null || true"
 
 # --- judge -------------------------------------------------------------------
 python3 "$HERE/judge.py" "$SERIAL" --json "$EVIDENCE/judge.json" \
-	--expect cases=tick,pcie,iwl7260_c5,iwl7260_c6 \
+	--expect cases=$CASE_EXPECT \
 	>"$EVIDENCE/judge.txt" 2>&1 || true
 
 echo "c6-throughput: evidence -> $EVIDENCE"

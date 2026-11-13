@@ -1,0 +1,32 @@
+# rtl8189fs on the RTOS line, gates C4-C6 open: the vendor stack's station
+# joins the bench AP (labwifi-ar-ht20s, ch5/2432, HT20, open) over the real
+# cfg80211/nl80211 path, then the lwIP netif over the driver's netdev moves
+# ICMP.
+#
+# The control plane is the same `lkpi_nl80211_*` seam the AC 7260 rounds use:
+# the case builds the real NL80211_CMD_TRIGGER_SCAN and NL80211_CMD_CONNECT
+# attribute streams and runs nl80211's own handlers, which dispatch to the
+# vendor driver's cfg80211 ops.  There is no netlink socket in this image
+# (ADR 2026-11-10-nl80211-scope, D1) and no mac80211 data path: the vendor
+# stack has its own MLME.
+#
+# What this profile is not: WPA2 (the GT denominator does not exist for it
+# yet), the AP role, monitor, and the throughput arm.
+#
+# The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_sta"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+
+# The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
+# FreeRTOS heap; see the C3 profile's note.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

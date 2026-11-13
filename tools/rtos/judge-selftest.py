@@ -182,6 +182,97 @@ def sta5g_no_link() -> str:
             + CASE_PASS.format(name="iwl7260_sta5g") + RESULT_PASS)
 
 
+
+# --- the 8189FTV vendor stack (SDIO) --------------------------------------
+SDIO_HEAD = (
+    "rtl8189fs_sdio: core ready\n"
+    "rtl8189fs_sdio: initcalls run\n"
+    "rtl8189fs_sdio: card 024c:f179 funcs=1 clock=50000000 width=4 blk=512\n"
+    "rtl8189fs_sdio: fw RTW: rtl8188f_FirmwareDownload fw: FW_NIC, size: 20306\n"
+    "rtl8189fs_sdio: fw RTW: rtl8188f_FirmwareDownload: fw_ver=e fw_subver=0000 "
+    "sig=0x88f1, Month=06, Date=07\n"
+    "rtl8189fs_sdio: fw RTW: rtl8188f_FirmwareDownload: DLFW OK !\n"
+    "rtl8189fs_sdio: wlan0 present=1 after 300 ms\n"
+    "rtl8189fs_sdio: mac=8c:bd:37:95:95:48\n"
+    "rtl8189fs_sdio: start rc=0\n"
+)
+
+
+def sdio_open() -> str:
+    return (BANNER + SDIO_HEAD + CASE_PASS.format(name="rtl8189fs_sdio") +
+            RESULT_PASS)
+
+
+def sdio_bad_fw() -> str:
+    return (BANNER + SDIO_HEAD.replace("size: 20306", "size: 12345") +
+            CASE_PASS.format(name="rtl8189fs_sdio") + RESULT_PASS)
+
+
+STA_HEAD = (
+    "rtl8189fs_sta: core ready\n"
+    "rtl8189fs_sta: initcalls run\n"
+    "rtl8189fs_sta: wlan0 present=1 ifindex=3 mac=8c:bd:37:95:95:48\n"
+    "rtl8189fs_sta: start rc=0\n"
+    "rtl8189fs_sta: scan ssid=labwifi-ar-ht20s freq=2432 rc=0\n"
+    "rtl8189fs_sta: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 "
+    "freq=2432 signal=-38\n"
+    "rtl8189fs_sta: connect ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 "
+    "freq=2432 rc=0\n"
+    "rtl8189fs_sta: connected bssid=1c:a7:70:de:29:a1 waited_ms=1200\n"
+    "rtl8189fs_sta: PASS C5\n"
+    "rtl8189fs_sta: netif up name=wlan0 ip=192.168.99.2/24 "
+    "mac=8c:bd:37:95:95:48\n"
+    "rtl8189fs_sta: peer window ms=6000\n"
+    "rtl8189fs_sta: ping tx=20 rx=20 payload=56 rtt_ms=2/4/9\n"
+    "rtl8189fs_sta: ping tx=20 rx=20 payload=1400 rtt_ms=3/6/11\n"
+    "rtl8189fs_sta: diag rx_frames=41 tx_frames=43 rx_bytes=60000 "
+    "tx_bytes=61000 tx_fail=0\n"
+    "rtl8189fs_sta: PASS C6\n"
+)
+
+
+def sta_open() -> str:
+    return (BANNER + STA_HEAD + CASE_PASS.format(name="rtl8189fs_sta") +
+            RESULT_PASS)
+
+
+def sta_ping_short() -> str:
+    return (BANNER + STA_HEAD.replace(
+        "rtl8189fs_sta: ping tx=20 rx=20 payload=1400",
+        "rtl8189fs_sta: ping tx=20 rx=19 payload=1400") +
+        CASE_PASS.format(name="rtl8189fs_sta") + RESULT_PASS)
+
+
+def _c6t_phases() -> str:
+    names = ("loopback", "tcpdn", "udpdn", "tcpdn2", "udpdn2", "tcpup",
+             "udpup")
+    out = ["rtl8189fs_c6t: plan=throughput bssid=1c:a7:70:de:29:a1 "
+           "dev=wlan0\n",
+           "rtl8189fs_c6t: ready netif=1 rx_frames=10 tx_frames=10\n",
+           "rtl8189fs_c6t: server tcp=5001 udp=5002 ok=1\n"]
+    for i, name in enumerate(names, 1):
+        out.append(f"rtl8189fs_c6t: phase {i} begin proto=tcp role=server "
+                   f"port=5001 window_ms=30000 name={name}\n")
+        out.append(f"rtl8189fs_c6t: phase {i} report bytes=100000 ms=30000 "
+                   f"kbit=26666 pkts=0\n")
+        if name != "loopback":
+            out.append(f"rtl8189fs_c6t: phase {i} done ok=1\n")
+    return "".join(out)
+
+
+def c6t_open() -> str:
+    return (BANNER + STA_HEAD + _c6t_phases() +
+            CASE_PASS.format(name="rtl8189fs_sta") +
+            CASE_PASS.format(name="rtl8189fs_c6t") + RESULT_PASS)
+
+
+def c6t_short() -> str:
+    text = _c6t_phases().replace("phase 7 done ok=1\n", "")
+    return (BANNER + STA_HEAD + text +
+            CASE_PASS.format(name="rtl8189fs_sta") +
+            CASE_PASS.format(name="rtl8189fs_c6t") + RESULT_PASS)
+
+
 SAMPLES = [
     ("ap5g-open", ap5g_open, None, {"cases": ["iwl7260_ap5g"]}),
     ("ap5g-wpa2", ap5g_wpa2, None, {"cases": ["iwl7260_ap5g"]}),
@@ -201,6 +292,16 @@ SAMPLES = [
      {"cases": ["iwl7260_sta5g"]}),
     ("sta5g-expect-freq", sta5g_open, "expected 5200",
      {"cases": ["iwl7260_sta5g"], "freq": "5200"}),
+    ("sdio-open", sdio_open, None, {"cases": ["rtl8189fs_sdio"]}),
+    ("sdio-bad-fw", sdio_bad_fw, "FW_NIC size",
+     {"cases": ["rtl8189fs_sdio"]}),
+    ("sta-open", sta_open, None, {"cases": ["rtl8189fs_sta"]}),
+    ("sta-ping-short", sta_ping_short, "ping 1400B 19/20",
+     {"cases": ["rtl8189fs_sta"]}),
+    ("c6t-open", c6t_open, None,
+     {"cases": ["rtl8189fs_sta", "rtl8189fs_c6t"]}),
+    ("c6t-short", c6t_short, "only 5 of 6 traffic phases closed",
+     {"cases": ["rtl8189fs_sta", "rtl8189fs_c6t"]}),
 ]
 
 

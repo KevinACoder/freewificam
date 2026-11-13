@@ -1,0 +1,33 @@
+# rtl8189fs on the RTOS line, gate C3: the board's SDIO 8189FTV (024c:f179)
+# comes up through the imported fsl_sdmmc stack and the board's dwc_mmc host,
+# the vendored vendor stack registers its SDIO driver and its probe runs the
+# power sequence, the embedded firmware download and the MAC/BB/RF init, then
+# the driver registers its wiphy and netdev.
+#
+# This profile is C3 only: no scan, no association, no lwIP.  It carries the
+# wireless stack because the vendor driver's cfg80211 face (ioctl_cfg80211.c)
+# is compiled in and wiphy_register is called during probe; mac80211 is linked
+# but has no driver here (the vendor stack owns the MLME).
+#
+# What this profile is not: the station arm (rk3568-rtl8189fs-sta) and the
+# throughput arm (rk3568-rtl8189fs-c6t).
+#
+# The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
+# product (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8189fs_sdio"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+
+# The vendor stack allocates its adapter, recv/xmit buffer pools and the phydm
+# tables from the FreeRTOS heap (osMemoryAlloc -> pvPortMalloc); the board
+# default of 256 KiB is not enough.  The SDIO engine's transfer buffers and the
+# skb pool come from the same heap.
+CONFIG_FREERTOS_HEAP_SIZE=16777216

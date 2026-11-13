@@ -45,6 +45,12 @@ CASES = (
     # The monitor round (docs/HANDOFF-AC7260-MONITOR.md): the same card as an
     # RX-only monitor, with the component's sink as the frames' consumer.
     "iwl7260_mon",
+    # The 8189FTV vendor stack on the board's SDIO port
+    # (docs/HANDOFF-8189FTV-RTOS-STA.md): C3 attach, the station's C4-C6 open
+    # join, and the C6T throughput phases.
+    "rtl8189fs_sdio",
+    "rtl8189fs_sta",
+    "rtl8189fs_c6t",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -188,6 +194,74 @@ PATTERNS = {
     ),
     "mac80211_c2_fail": re.compile(
         r"mac80211_c2: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # --- the 8189FTV vendor stack (SDIO) -----------------------------------
+    "rtl8189fs_sdio_card": re.compile(
+        r"rtl8189fs_sdio: card (?P<vid>[0-9a-f]{4}):(?P<pid>[0-9a-f]{4}) "
+        r"funcs=(?P<funcs>\d+) clock=(?P<clock>\d+) width=(?P<width>\d+) "
+        r"blk=(?P<blk>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sdio_fw": re.compile(
+        r"rtl8189fs_sdio: fw .*FW_NIC, size: (?P<size>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sdio_fwver": re.compile(
+        r"rtl8189fs_sdio: fw .*fw_ver=(?P<ver>\w+) .*sig=(?P<sig>0x[0-9a-f]+)",
+        re.MULTILINE
+    ),
+    "rtl8189fs_sdio_dlfw": re.compile(
+        r"rtl8189fs_sdio: fw .*DLFW OK", re.MULTILINE
+    ),
+    "rtl8189fs_sdio_wlan0": re.compile(
+        r"rtl8189fs_sdio: wlan0 present=(?P<present>[01]) after (?P<ms>\d+) ms",
+        re.MULTILINE
+    ),
+    "rtl8189fs_sdio_mac": re.compile(
+        r"rtl8189fs_sdio: mac=(?P<mac>[0-9a-f:]{17})", re.MULTILINE
+    ),
+    "rtl8189fs_sdio_start": re.compile(
+        r"rtl8189fs_sdio: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sdio_fail": re.compile(
+        r"rtl8189fs_sdio: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtl8189fs_sta_scan": re.compile(
+        r"rtl8189fs_sta: scan ssid=(?P<ssid>\S+) freq=(?P<freq>\d+) "
+        r"rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_bss": re.compile(
+        r"rtl8189fs_sta: bss ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>-?\d+) signal=(?P<sig>-?\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_connect": re.compile(
+        r"rtl8189fs_sta: connect ssid=\S+ bssid=[0-9a-f:]+ freq=-?\d+ "
+        r"rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_connected": re.compile(
+        r"rtl8189fs_sta: connected bssid=(?P<bssid>[0-9a-f:]+) "
+        r"waited_ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_sta_netif": re.compile(
+        r"rtl8189fs_sta: netif up name=(?P<name>\S+) ip=(?P<ip>[0-9.]+)",
+        re.MULTILINE
+    ),
+    "rtl8189fs_sta_pass_c5": re.compile(
+        r"rtl8189fs_sta: PASS C5", re.MULTILINE
+    ),
+    "rtl8189fs_sta_pass_c6": re.compile(
+        r"rtl8189fs_sta: PASS C6", re.MULTILINE
+    ),
+    "rtl8189fs_sta_fail": re.compile(
+        r"rtl8189fs_sta: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtl8189fs_c6t_plan": re.compile(
+        r"rtl8189fs_c6t: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"dev=(?P<dev>\S+)", re.MULTILINE
+    ),
+    "rtl8189fs_c6t_pass": re.compile(
+        r"rtl8189fs_c6t: PASS C6T", re.MULTILINE
+    ),
+    "rtl8189fs_c6t_fail": re.compile(
+        r"rtl8189fs_c6t: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "iwl7260_c3_fwreg": re.compile(
         r"iwl7260_c3: fw registered=(?P<rc>-?\d+)", re.MULTILINE
@@ -1071,6 +1145,26 @@ LIST_PATTERNS = {
         r"hex=(?P<hex>[0-9a-f]+)", re.MULTILINE
     ),
 
+    "rtl8189fs_sta_ping": re.compile(
+        r"rtl8189fs_sta: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+)", re.MULTILINE
+    ),
+    "rtl8189fs_c6t_begin": re.compile(
+        r"rtl8189fs_c6t: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<win>\d+) "
+        r"name=(?P<name>\S+)", re.MULTILINE
+    ),
+    "rtl8189fs_c6t_report": re.compile(
+        r"rtl8189fs_c6t: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE
+    ),
+    "rtl8189fs_c6t_t": re.compile(
+        r"rtl8189fs_c6t: t=(?P<t>\d+) bytes=(?P<bytes>\d+) "
+        r"delta=(?P<delta>\d+) done=(?P<done>[01])", re.MULTILINE
+    ),
+    "rtl8189fs_c6t_done": re.compile(
+        r"rtl8189fs_c6t: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE),
     "iwl7260_c6_begin": re.compile(
         r"iwl7260_c6: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
         r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) "
@@ -3555,6 +3649,116 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("sdio_mci: the mmc0 control read did not complete")
         else:
             notes.append(f"sdio_mci: mmc0 CMD17 rc=0 data={control['data']}")
+
+    # --- the 8189FTV vendor stack (SDIO) -----------------------------------
+    if cases.get("rtl8189fs_sdio", {}).get("verdict") == "pass":
+        fail = found["rtl8189fs_sdio_fail"]
+        if fail:
+            errors.append(f"rtl8189fs_sdio: {fail['reason']}")
+        card = found["rtl8189fs_sdio_card"]
+        if not card:
+            errors.append("rtl8189fs_sdio: PASS without the card line")
+        elif (card["vid"], card["pid"]) != ("024c", "f179"):
+            errors.append(
+                f"rtl8189fs_sdio: card {card['vid']}:{card['pid']} != 024c:f179")
+        else:
+            notes.append(
+                f"rtl8189fs_sdio: card {card['vid']}:{card['pid']} "
+                f"clock={card['clock']} width={card['width']}")
+        fw = found["rtl8189fs_sdio_fw"]
+        if not fw:
+            errors.append("rtl8189fs_sdio: PASS without the FW_NIC size line")
+        elif fw["size"] != "20306":
+            errors.append(f"rtl8189fs_sdio: FW_NIC size={fw['size']} != 20306")
+        else:
+            notes.append(f"rtl8189fs_sdio: FW_NIC size={fw['size']}")
+        ver = found["rtl8189fs_sdio_fwver"]
+        if not ver:
+            errors.append("rtl8189fs_sdio: PASS without the firmware version line")
+        elif ver["ver"] != "e" or ver["sig"].lower() != "0x88f1":
+            errors.append(
+                f"rtl8189fs_sdio: fw_ver={ver['ver']} sig={ver['sig']} "
+                f"!= e/0x88f1")
+        else:
+            notes.append(f"rtl8189fs_sdio: fw_ver={ver['ver']} sig={ver['sig']}")
+        if not found["rtl8189fs_sdio_dlfw"]:
+            errors.append("rtl8189fs_sdio: PASS without DLFW OK")
+        wl = found["rtl8189fs_sdio_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("rtl8189fs_sdio: the driver's netdev is missing")
+        mac = found["rtl8189fs_sdio_mac"]
+        if not mac:
+            errors.append("rtl8189fs_sdio: PASS without the MAC line")
+        elif mac["mac"].lower() != "8c:bd:37:95:95:48":
+            errors.append(
+                f"rtl8189fs_sdio: mac={mac['mac']} != 8c:bd:37:95:95:48")
+        else:
+            notes.append(f"rtl8189fs_sdio: mac={mac['mac']}")
+        st = found["rtl8189fs_sdio_start"]
+        if not st or st["rc"] != "0":
+            errors.append("rtl8189fs_sdio: PASS without a successful dev_open")
+
+    if cases.get("rtl8189fs_sta", {}).get("verdict") == "pass":
+        fail = found["rtl8189fs_sta_fail"]
+        if fail:
+            errors.append(f"rtl8189fs_sta: {fail['reason']}")
+        scan = found["rtl8189fs_sta_scan"]
+        if not scan:
+            errors.append("rtl8189fs_sta: PASS without the scan line")
+        elif scan["rc"] != "0":
+            errors.append(f"rtl8189fs_sta: scan rc={scan['rc']}")
+        bss = found["rtl8189fs_sta_bss"]
+        if not bss:
+            errors.append("rtl8189fs_sta: PASS without a BSS line")
+        else:
+            notes.append(
+                f"rtl8189fs_sta: bss {bss['bssid']} freq={bss['freq']} "
+                f"signal={bss['sig']}")
+        con = found["rtl8189fs_sta_connect"]
+        if not con:
+            errors.append("rtl8189fs_sta: PASS without the connect line")
+        elif con["rc"] != "0":
+            errors.append(f"rtl8189fs_sta: connect rc={con['rc']}")
+        if not found["rtl8189fs_sta_connected"]:
+            errors.append("rtl8189fs_sta: PASS C5 without the connected line")
+        if not found["rtl8189fs_sta_pass_c6"]:
+            errors.append("rtl8189fs_sta: the C6 PASS line is missing")
+        else:
+            netif = found["rtl8189fs_sta_netif"]
+            if not netif:
+                errors.append("rtl8189fs_sta: C6 PASS without the netif line")
+            pings = found["rtl8189fs_sta_ping"]
+            if len(pings) < 2:
+                errors.append("rtl8189fs_sta: C6 PASS without both ICMP rounds")
+            else:
+                for row in pings:
+                    if row["tx"] != row["rx"]:
+                        errors.append(
+                            f"rtl8189fs_sta: ping {row['payload']}B "
+                            f"{row['rx']}/{row['tx']}")
+                    else:
+                        notes.append(
+                            f"rtl8189fs_sta: ping {row['payload']}B "
+                            f"{row['rx']}/{row['tx']}")
+
+    if cases.get("rtl8189fs_c6t", {}).get("verdict") == "pass":
+        fail = found["rtl8189fs_c6t_fail"]
+        if fail:
+            errors.append(f"rtl8189fs_c6t: {fail['reason']}")
+        if not found["rtl8189fs_c6t_plan"]:
+            errors.append("rtl8189fs_c6t: PASS without the plan line")
+        begins = found["rtl8189fs_c6t_begin"]
+        reports = found["rtl8189fs_c6t_report"]
+        dones = found["rtl8189fs_c6t_done"]
+        if len(dones) < 6:
+            errors.append(
+                f"rtl8189fs_c6t: only {len(dones)} of 6 traffic phases closed")
+        for rep in reports:
+            notes.append(
+                f"rtl8189fs_c6t: phase {rep['n']} {rep['bytes']}B "
+                f"{rep['ms']}ms {rep['kbit']} kbit/s")
+        if not begins:
+            errors.append("rtl8189fs_c6t: PASS without a phase begin line")
 
     result = found["result"]
     if not result:

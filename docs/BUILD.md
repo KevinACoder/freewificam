@@ -52,6 +52,10 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-iwl7260-sta5g-wpa2` | tick pcie iwl7260_sta5g | the same with `CONFIG_STA_PSK` set: EAPOL both ways, `ptk=1 gtk=1 fail=0`, `PASS STA5W` (P4) |
 | `rk3568-iwl7260-mon` | tick pcie iwl7260_mon | the AC 7260 as an RX-only monitor on `CONFIG_MON_FREQ` (2432) for `CONFIG_MON_WINDOW_MS` (15 s); the role change is `SET_INTERFACE(MONITOR)` with the device down, then `dev_open` **then** `SET_WIPHY(freq)` (cfg80211 refuses the channel set while no monitor is running), and the frames go to the component's monitor sink, never to lwIP; `PASS MON` requires >=8 beacons/s, `bad=0` radiotap, an unchanged lwIP `rx_frames` and `tx_packets=0` |
 | `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
+| `rk3568-rtl8189fs-sdio` | tick rtl8189fs_sdio | the board's SDIO 8189FTV attaches through the imported fsl_sdmmc stack to the vendored vendor stack: card `024c:f179`, embedded firmware `FW_NIC 20306`, MAC, wiphy + netdev, `dev_open` (C3) |
+| `rk3568-rtl8189fs-sta` | tick rtl8189fs_sta | C3 plus the real `NL80211_CMD_TRIGGER_SCAN`/`CONNECT` streams through nl80211, dispatched to the vendor driver's cfg80211 ops: scan, open association, lwIP netif, 56/1400 B ICMP both ways (C4–C6 open) |
+| `rk3568-rtl8189fs-c6t` | tick rtl8189fs_sta rtl8189fs_c6t | the same join, then the throughput phase table: 30 s sampled TCP downlink, 35 Mbit/s UDP downlink sink, TCP/UDP uplink, board-local loopback; each phase carries the adapter/stack/pool and the SDIO claim/pump + vendor queue gauges |
+| `rk3568-rtl8189fs-udpdn` | tick rtl8189fs_sta rtl8189fs_c6t | the C6T diagnostic ordering `CONFIG_C6T_UDP_FIRST`: the receive-only downlink is offered before any TCP phase, so one boot separates an RX-path stall from a transmit/receive concurrency stall |
 
 ```
 ./make.rtos list

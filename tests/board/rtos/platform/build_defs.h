@@ -77,38 +77,13 @@
 #define BOARD_FIREFLY_V2 1
 #endif
 
-/* Wireless family / vendor ABI.  The family is selected by the case set, so
- * the same fixed header serves every image and no per-image -D is needed. */
-#if defined(RTOS_CASE_WLAN)
-#define CONFIG_RTL8188F 1
-#define CONFIG_MP_INCLUDED 1
-#define CONFIG_BR_EXT 1
-#define CONFIG_BR_EXT_BRNAME "br0"
-#define CONFIG_CONCURRENT_MODE 1
-#define CONFIG_POWER_SAVING 1
-#define CONFIG_RTW_DEBUG 1
-#define CONFIG_EFUSE_CONFIG_FILE 1
-#define CONFIG_LOAD_PHY_PARA_FROM_FILE 1
-#define CONFIG_TXPWR_BY_RATE 1
-#define CONFIG_TXPWR_BY_RATE_EN 1
-#define CONFIG_TXPWR_LIMIT 1
-#define CONFIG_TXPWR_LIMIT_EN 0
-#define CONFIG_RTW_ADAPTIVITY_EN 0
-#define CONFIG_RTW_ADAPTIVITY_MODE 0
-#define CONFIG_RTW_NETIF_SG 1
-#define CONFIG_RTW_SDIO_PM_KEEP_POWER 1
-#define CONFIG_IOCTL_CFG80211 1
-#define RTW_USE_CFG80211_STA_EVENT 1
-#define CONFIG_LITTLE_ENDIAN 1
-#define RTW_LOG_LEVEL 2
-#define EFUSE_MAP_PATH "/system/etc/wifi/wifi_efuse_8189fs.map"
-#define REALTEK_CONFIG_PATH "/lib/firmware/"
-#define WIFIMAC_PATH "/data/wifimac.txt"
-#define DM_ODM_SUPPORT_TYPE 0x04
-#define HIGH_ACTIVE_HST2DEV 0
-#define __KBUILD_MODNAME 8189fs
-#define WLAN_BRIDGE_ADAPTER_NAME "rtl8189fs"
-#define WLAN_BRIDGE_FIRMWARE_NAME ""
+/* SDIO host selection for the 8189FTV line.  This is a board fact, not a driver
+ * knob: the fsl_sdmmc port refuses to compile until the controller is named
+ * (third-party/fsl_sdmmc/ports/sdmmc_port.h:52), and the name belongs to the
+ * SDIO world (the host port, the card service, the board's dwc_mmc), not to the
+ * vendor driver's flag world.  The driver's own feature face lives beside it:
+ * wireless-drivers/rtl8189fs/driver_config.h (force-included in that world). */
+#if CONFIG_LIBLINUX80211_RTL8189FS
 #define SDMMC_PORT_SDIO_HOST_TYPE kSDMMCHOST_TYPE_FDWMMC
 #endif
 
@@ -188,6 +163,11 @@
 #define CONFIG_FSL_SDMMC_ENABLE_SDIO 1
 #endif
 #if defined(RTOS_CASE_WLAN) || defined(RTOS_CASE_RTW88) || defined(RTOS_CASE_SDIO_MCI)
+#define CONFIG_FSL_SDMMC_ENABLE_SDIO 1
+#endif
+/* The 8189FTV line's own selection: the SDIO port group compiles the card
+ * service's SDIO half, which the FSL wrapper gates on this name. */
+#if CONFIG_LIBLINUX80211_RTL8189FS
 #define CONFIG_FSL_SDMMC_ENABLE_SDIO 1
 #endif
 

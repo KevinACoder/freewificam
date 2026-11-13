@@ -100,6 +100,15 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_IWL7260_MON)
 	CASE_ENTRY("iwl7260_mon", case_iwl7260_mon_run)
 #endif
+#if defined(RTOS_CASE_RTL8189FS_SDIO)
+	CASE_ENTRY("rtl8189fs_sdio", case_rtl8189fs_sdio_run)
+#endif
+#if defined(RTOS_CASE_RTL8189FS_STA)
+	CASE_ENTRY("rtl8189fs_sta", case_rtl8189fs_sta_run)
+#endif
+#if defined(RTOS_CASE_RTL8189FS_C6T)
+	CASE_ENTRY("rtl8189fs_c6t", case_rtl8189fs_c6t_run)
+#endif
 #if defined(RTOS_HOST_TIER)
 };
 #endif

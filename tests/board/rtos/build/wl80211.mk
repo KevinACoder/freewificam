@@ -27,13 +27,14 @@
 # The board cases that compile in this world.  The platform Makefile's generic
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).
-WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g iwl7260_mon
+WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g iwl7260_mon \
+	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_c6t
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
-WL80211_STACK_CFLAGS := $(S0_CFLAGS)
+WL80211_STACK_CFLAGS := $(S0_CFLAGS) -I$(RTL8189_DIR)/ports/rtos
 WL80211_DRIVER_CFLAGS := $(S1_CFLAGS)
-WL80211_CASE_CFLAGS := $(S0_CFLAGS)
+WL80211_CASE_CFLAGS := $(WL80211_STACK_CFLAGS)
 
 # cfg80211 before mac80211: the first owns the wiphy/netdev registration the
 # second calls into, and its fs_initcall entry must run before the late
@@ -51,6 +52,16 @@ ifeq ($(CONFIG_LIBLINUX80211_IWLWIFI),1)
 WL80211_DRIVER_SRCS := $(IWLWIFI_IMPL_SRCS) $(WL80211_FW_SRCS)
 else
 WL80211_DRIVER_SRCS :=
+endif
+
+# The 8189FTV vendor stack is a second driver world: its own include roots and
+# its own feature face (wireless-drivers/rtl8189fs/driver_config.h), so it gets
+# its own source list and compile rule instead of joining the iwlwifi one.
+# Same wireless world, different driver.
+ifeq ($(CONFIG_LIBLINUX80211_RTL8189FS),1)
+WL80211_RTL8189FS_SRCS := $(RTL8189FS_IMPL_SRCS)
+else
+WL80211_RTL8189FS_SRCS :=
 endif
 
 WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
@@ -133,8 +144,8 @@ WL80211_HOSTAP_FP_SRCS := $(THIRD_PARTY)/wpa_supplicant-rtos/wpa_supplicant/even
 WL80211_HOSTAP_FP_CFLAGS := $(filter-out -mgeneral-regs-only,$(WL80211_HOSTAP_CFLAGS))
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
-	$(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS) $(WL80211_HOSTAP_SRCS) \
-	$(WL80211_HOSTAP_FP_SRCS)
+	$(WL80211_RTL8189FS_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS) \
+	$(WL80211_HOSTAP_SRCS) $(WL80211_HOSTAP_FP_SRCS)
 
 endif
 

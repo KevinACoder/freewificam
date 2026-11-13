@@ -300,25 +300,77 @@ ifeq ($(CONFIG_LIBLINUX80211),1)
 IWL_DRV := $(ROOT)/wireless-drivers/iwlwifi
 $(eval $(call component_sources,$(IWL_DRV),drv,IWLWIFI_IMPL))
 
+# The second vendored driver: the 8189FTV vendor stack (rtl8189fs, SDIO).  Its
+# file set and feature face are stated here rather than in wl80211.mk because
+# the S1b measurement below consumes both before the wireless world is
+# included.  The SDIO group is the board's host path; it compiles in the kpi
+# world (platform + Linux face), the same split the component's own port group
+# uses.
+RTL8189_DIR := $(ROOT)/wireless-drivers/rtl8189fs
+$(eval $(call component_sources,$(RTL8189_DIR),drv,RTL8189FS_IMPL))
+$(eval $(call component_sources,$(RTL8189_DIR),sdio,RTL8189FS))
+$(eval $(call component_sources,$(RTL8189_DIR),port,RTL8189FS_OBS))
+
+# The vendor tree's include roots and its warning set.  It is kernel code: the
+# same relaxation the iwlwifi world states, plus the vendor tree's own habits
+# (packed-member addresses, maybe-uninitialized, switch fallthrough).
+RTL8189FS_CFLAGS := $(KPI_CFLAGS) \
+	-I$(RTL8189_DIR)/src -I$(RTL8189_DIR)/src/include \
+	-I$(RTL8189_DIR)/src/platform -I$(RTL8189_DIR)/src/hal/phydm \
+	-I$(RTL8189_DIR)/src/hal/btc \
+	-include $(RTL8189_DIR)/driver_config.h \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
+	-Wno-override-init -Wno-maybe-uninitialized -Wno-array-bounds \
+	-Wno-pointer-sign -Wno-unused-variable -Wno-unused-function
+
+# The SDIO port group is the platform's world plus the Linux face: the board's
+# host driver and the imported card service see the platform's C library, and
+# only the seam adapter (lkpi_sdio_fsl.c) also includes the component's headers.
+# This is the split the previous line compiled the same files under
+# (wlan.mk, WLAN_SDIO_CFLAGS); compiling them in the kpi world instead puts the
+# Linux face ahead of the platform's forced stdio/stdlib includes and the two
+# headers' spelling of the same attribute macros collide.
+SDIO_PORT_SRCS := $(RTL8189FS_SDIO_SRCS)
+RTL8189FS_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
+	-I$(LIB8)/include -I$(LIB8)/include/linux80211 -I$(LIB8)/bus -I$(LIB8) \
+	-I$(THIRD_PARTY)/fsl_sdmmc/sdio \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-pointer-sign -Wno-unused-function -Wno-unused-variable
+
 S1_CFLAGS := $(S0_CFLAGS) \
 	-I$(IWL_DRV) \
 	-include $(LIB8)/include/linux80211/driver_config.h \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
 	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
 	-Wno-override-init
+
+# Which driver S1b/S1c measures.  The two sets have their own include roots and
+# feature faces, so the selector carries the flag world with the file list; the
+# default keeps the previous line's measurement unchanged.
+S1_DRIVER ?= iwlwifi
+ifeq ($(S1_DRIVER),rtl8189fs)
+S1_TU_SET := $(RTL8189FS_IMPL_SRCS)
+S1_DRIVER_CFLAGS := $(RTL8189FS_CFLAGS)
+S1_DRIVER_TAG := rtl8189fs
+else
+S1_TU_SET := $(IWLWIFI_IMPL_SRCS)
+S1_DRIVER_CFLAGS := $(S1_CFLAGS)
+S1_DRIVER_TAG := iwlwifi
+endif
+
 S1_OUT ?= $(abspath $(ROOT)/../runs/S1)
 S1_RUN ?= 1
-S1_DIR := $(S1_OUT)/driver/run-$(S1_RUN)
-S1_TU_LIST := $(BUILD)/s1-tus.txt
+S1_DIR := $(S1_OUT)/driver-$(S1_DRIVER_TAG)/run-$(S1_RUN)
+S1_TU_LIST := $(BUILD)/s1-tus-$(S1_DRIVER_TAG).txt
 
 s1-driver-compile: $(CONFIG_FILE)
 	@mkdir -p $(S1_DIR)
-	@printf '%s\n' $(IWLWIFI_IMPL_SRCS) > $(S1_TU_LIST)
+	@printf '%s\n' $(S1_TU_SET) > $(S1_TU_LIST)
 	@sh $(ROOT)/tools/build/s0-compile.sh \
-		$(S1_DIR) $(CC) '$(S1_CFLAGS)' $(S1_TU_LIST)
-	@mkdir -p $(S1_OUT)/driver
-	@cp $(S1_DIR)/summary.tsv $(S1_OUT)/driver/summary.tsv
-	@printf 's1-driver-compile: run %s -> %s\n' '$(S1_RUN)' '$(S1_DIR)'
+		$(S1_DIR) $(CC) '$(S1_DRIVER_CFLAGS)' $(S1_TU_LIST)
+	@cp $(S1_DIR)/summary.tsv $(S1_OUT)/driver-$(S1_DRIVER_TAG)/summary.tsv
+	@printf 's1-driver-compile: %s run %s -> %s\n' '$(S1_DRIVER_TAG)' '$(S1_RUN)' '$(S1_DIR)'
 endif
 
 # S1c: the partial link and its classified undefined list.  The stack and
@@ -330,7 +382,7 @@ endif
 ifeq ($(CONFIG_LIBLINUX80211),1)
 S1_LINK_OUT ?= $(abspath $(ROOT)/../runs/S1/link)
 S1_LINK_RUN ?= 1
-S1_LINK_DIR := $(S1_LINK_OUT)/run-$(S1_LINK_RUN)
+S1_LINK_DIR := $(S1_LINK_OUT)/$(S1_DRIVER_TAG)-run-$(S1_LINK_RUN)
 S1_LINK_STACK_LIST := $(BUILD)/s1-link-stack.txt
 S1_LINK_DRV_LIST := $(BUILD)/s1-link-drv.txt
 S1_LINK_KPI_LIST := $(BUILD)/s1-link-kpi.txt
@@ -338,11 +390,12 @@ S1_LINK_KPI_LIST := $(BUILD)/s1-link-kpi.txt
 s1-link: $(CONFIG_FILE)
 	@mkdir -p $(S1_LINK_DIR)
 	@printf '%s\n' $(LIBLINUX80211_STACK_SRCS) > $(S1_LINK_STACK_LIST)
-	@printf '%s\n' $(IWLWIFI_IMPL_SRCS) > $(S1_LINK_DRV_LIST)
+	@printf '%s\n' $(S1_TU_SET) > $(S1_LINK_DRV_LIST)
 	@printf '%s\n' $(LIBLINUX80211_KPI_SRCS) $(LIBLINUX80211_BUS_PCI_SRCS) \
-		$(LIBLINUX80211_PCIE_PORT_SRCS) > $(S1_LINK_KPI_LIST)
+		$(LIBLINUX80211_BUS_SDIO_SRCS) $(LIBLINUX80211_PCIE_PORT_SRCS) \
+		$(RTL8189FS_SDIO_SRCS) > $(S1_LINK_KPI_LIST)
 	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/stack $(CC) '$(S0_CFLAGS)' $(S1_LINK_STACK_LIST)
-	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/driver $(CC) '$(S1_CFLAGS)' $(S1_LINK_DRV_LIST)
+	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/driver $(CC) '$(S1_DRIVER_CFLAGS)' $(S1_LINK_DRV_LIST)
 	@sh $(ROOT)/tools/build/s0-compile.sh $(S1_LINK_DIR)/kpi $(CC) '$(KPI_CFLAGS)' $(S1_LINK_KPI_LIST)
 	@awk -F'\t' 'NR > 1 && $$2 != "pass" { bad = 1 } END { exit bad ? 1 : 0 }' \
 		$(S1_LINK_DIR)/kpi/summary.tsv || { \
@@ -393,7 +446,8 @@ TAG_STAMP := $(BUILD)/build-tag.stamp
 FLAG_STAMP := $(BUILD)/flags-$(BACKEND).stamp
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(USB_ALL_SRCS) \
-	$(KPI_ALL_SRCS) $(WL80211_ALL_SRCS)
+	$(KPI_ALL_SRCS) $(WL80211_ALL_SRCS) $(SDIO_PORT_SRCS) \
+	$(RTL8189FS_OBS_PORT_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 LDFLAGS := -nostdlib -static \
@@ -544,6 +598,9 @@ endif
 ifneq ($(strip $(WL80211_ALL_SRCS)),)
 $(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_FP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_FP_CFLAGS))))
 endif

@@ -78,7 +78,17 @@ config PROFILE_PERF
 
 endchoice
 
-
+# C6T's diagnostic ordering (see the symbol's help): outside the profile choice
+# on purpose - it is a case-order switch, not a performance profile.
+config C6T_UDP_FIRST
+	bool "C6T: offer the UDP downlink before the TCP downlink"
+	default n
+	help
+	  The throughput case's default plan leads with TCP, whose ACKs make the
+	  board transmit while it receives.  This arm leads with the UDP counting
+	  sink, which is receive-only on the board (802.11 ACKs are the firmware's),
+	  so one boot says whether a stall needs the transmit path to be busy.  It
+	  is a diagnostic ordering, not a tuning knob.
 
 # Derived names for make.  The make build consumes these directly; the C side
 # gets the same values from freewificam_config.h.  They are strings/int because

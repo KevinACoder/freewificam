@@ -175,6 +175,50 @@ nla_put_64bit(struct sk_buff *skb, int attrtype, int attrlen,
 	return 0;
 }
 
+/*
+ * The headerless forms.  Upstream appends the attribute's data without the
+ * `struct nlattr` (lib/nlattr.c:nla_reserve_nohdr / __nla_put_nohdr); the
+ * vendor driver's cfg80211 path puts the SSID/IE bytes it already framed this
+ * way.  The reserve is the same tailroom check as nla_reserve, minus the
+ * header, and the put copies into it.
+ */
+void *
+nla_reserve_nohdr(struct sk_buff *skb, int attrlen)
+{
+	unsigned char *p;
+
+	if (skb == NULL || attrlen < 0)
+		return NULL;
+	if (attrlen > skb_tailroom(skb))
+		return NULL;
+	p = skb_put(skb, (unsigned int)attrlen);
+	memset(p, 0, (size_t)attrlen);
+	return p;
+}
+
+void
+__nla_put_nohdr(struct sk_buff *skb, int attrlen, const void *data)
+{
+	void *p;
+
+	p = nla_reserve_nohdr(skb, attrlen);
+	if (p != NULL && attrlen > 0 && data != NULL)
+		memcpy(p, data, (size_t)attrlen);
+}
+
+int
+nla_put_nohdr(struct sk_buff *skb, int attrlen, const void *data)
+{
+	void *p;
+
+	p = nla_reserve_nohdr(skb, attrlen);
+	if (p == NULL)
+		return -EMSGSIZE;
+	if (attrlen > 0 && data != NULL)
+		memcpy(p, data, (size_t)attrlen);
+	return 0;
+}
+
 /* [LNX] net/netlink/af_netlink.c: put the message header at the skb's tail.
  * This is the raw spelling nlmsg_put() wraps, and it is real (lengths and
  * pointers are honest); only the send half of the stack is a discard. */

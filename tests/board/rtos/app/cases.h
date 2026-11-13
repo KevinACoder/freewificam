@@ -113,6 +113,18 @@ int case_iwl7260_sta5g_run(void);
 int case_iwl7260_mon_run(void);
 #endif
 
+/* The 8189FTV vendor stack (RTL8188F, SDIO): C3 attach, the station's C4-C6
+ * open join, and the C6T throughput phases. */
+#if defined(RTOS_CASE_RTL8189FS_SDIO)
+int case_rtl8189fs_sdio_run(void);
+#endif
+#if defined(RTOS_CASE_RTL8189FS_STA)
+int case_rtl8189fs_sta_run(void);
+#endif
+#if defined(RTOS_CASE_RTL8189FS_C6T)
+int case_rtl8189fs_c6t_run(void);
+#endif
+
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf
  * TCP server (only one listener can own the port).  The `net` case brings its
