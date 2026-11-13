@@ -95,6 +95,26 @@ config C6T_UDP_FIRST
 # 3 high (lwIP's TCP/IP thread band), 4 realtime.  The causal arm for the
 # freeze reads the level back in the case's plan line, so the boot says which
 # band it measured.
+config C6T_PUMP_MODE
+	int "C6T: SDIO pump cadence (0 fixed, 1 adaptive)"
+	range 0 1
+	default 0
+	help
+	  Fixed cadence is the one every earlier measurement ran: the pump polls
+	  on a 10 ms idle period.  Adaptive turns a cycle that moved bytes into
+	  an immediate next cycle and holds the hot floor while work keeps
+	  arriving, backing off to the same idle period when it does not.  The
+	  case reads the mode back in its plan line.
+
+config C6T_PUMP_YIELD
+	bool "C6T: SDIO pump yields the claim to a parked driver"
+	default n
+	help
+	  With the cadence arm the pump can own the bus continuously while the
+	  driver's transmit thread is parked on the claim.  On, the pump gives
+	  that turn away for one tick when a waiter is present; off, its cadence
+	  owns the bus.  The case prints the applied value.
+
 config C6T_PUMP_PRIO
 	int "C6T: SDIO pump priority band (0 below .. 4 realtime)"
 	range 0 4

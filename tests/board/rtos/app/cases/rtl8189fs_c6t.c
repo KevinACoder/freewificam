@@ -748,13 +748,17 @@ case_rtl8189fs_c6t_run(void)
 	 * the default; setting it before the plan line makes the boot record the
 	 * band it actually ran, not the band the profile asked for. */
 	lkpi_sdio_pump_prio_level_set(CONFIG_C6T_PUMP_PRIO);
+	lkpi_sdio_pump_mode_set(CONFIG_C6T_PUMP_MODE);
+	lkpi_sdio_pump_yield_set(CONFIG_C6T_PUMP_YIELD);
 #ifdef CONFIG_LKPI_CENSUS
 	lkpi_sdio_claim_guard_set(true);
 #endif
 	CASE_ANCHOR("rtl8189fs_c6t: plan=throughput bssid=%02x:%02x:%02x:%02x:"
-		    "%02x:%02x dev=%s prio=%u irq=%u\n",
+		    "%02x:%02x dev=%s prio=%u mode=%u yield=%u irq=%u\n",
 		    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
 		    dev->name, lkpi_sdio_pump_prio_level_get(),
+		    (unsigned)CONFIG_C6T_PUMP_MODE,
+		    (unsigned)CONFIG_C6T_PUMP_YIELD,
 		    lkpi_sdio_pump_irq_get() ? 1u : 0u);
 
 	if (lkpi_net_ready() != 1) {
