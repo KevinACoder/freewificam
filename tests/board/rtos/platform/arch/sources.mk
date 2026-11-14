@@ -7,12 +7,13 @@
 # the firefly ECAM board.
 
 ifeq ($(SRC_TAG),base)
-obj-y += \
+obj-$(CONFIG_ARCH_AARCH64) += \
 	aarch64/start.S \
 	aarch64/gicv3.c \
 	aarch64/generic_timer.c \
 	aarch64/mmu.c \
 	aarch64/cache.c
+obj-$(CONFIG_ARCH_ARM_V7M) += armv7m/startup_stm32f429.s armv7m/fault.c
 endif
 
 ifeq ($(SRC_TAG),pcie)

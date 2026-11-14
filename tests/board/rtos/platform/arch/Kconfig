@@ -1,0 +1,23 @@
+# CPU architecture selection.  The architecture owns the boot/exception layer
+# and the source list; a board choice only names board drivers and a link
+# script.  Adding a second board on the same core must not fork this file.
+menu "Architecture"
+
+choice ARCH
+	prompt "CPU architecture"
+	default ARCH_AARCH64
+
+config ARCH_AARCH64
+	bool "AArch64"
+
+config ARCH_ARM_V7M
+	bool "ARMv7-M (Cortex-M)"
+
+endchoice
+
+config ARCH_NAME
+	string
+	default "aarch64" if ARCH_AARCH64
+	default "armv7m" if ARCH_ARM_V7M
+
+endmenu

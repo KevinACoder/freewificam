@@ -155,6 +155,7 @@ config BACKEND_NAME
 config BOARD_NAME
 	string
 	default "rk3568-itx" if BOARD_RK3568_ITX
+	default "stm32f429-challenger" if BOARD_STM32F429_CHALLENGER
 
 config OPT_FLAGS
 	string
@@ -316,6 +317,7 @@ config PRINTF_DISABLE_EXPONENTIAL
 
 endmenu
 
+rsource "platform/arch/Kconfig"
 rsource "platform/board/Kconfig"
 rsource "app/Kconfig"
 

@@ -13,6 +13,9 @@ choice BOARD
 config BOARD_RK3568_ITX
 	bool "RK3568 E4AP5G1-ITX"
 
+config BOARD_STM32F429_CHALLENGER
+	bool "STM32F429 挑战者 V2 (FreeRTOS CM4F)"
+
 endchoice
 
 config USB_MSC_DIAG

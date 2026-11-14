@@ -1,0 +1,11 @@
+# F429 platform smoke: console + FreeRTOS CM4F tick + the CMSIS-RTOS2 facade.
+# The board is the same one oh-my-mculab flashes over fireDAP; the console is
+# the onboard CH340 (USART1 PA9/PA10, 115200).
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=65536
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_CASES="tick"

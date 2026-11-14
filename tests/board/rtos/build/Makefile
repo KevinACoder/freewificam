@@ -52,6 +52,7 @@ image libs: $(CONFIG_FILE)
 
 BACKEND := $(subst ",,$(CONFIG_BACKEND_NAME))
 BOARD := $(subst ",,$(CONFIG_BOARD_NAME))
+ARCH := $(subst ",,$(CONFIG_ARCH_NAME))
 CASES := $(subst ",,$(CONFIG_CASES))
 OPT := $(subst ",,$(CONFIG_OPT_FLAGS))
 SWITCH_PROFILE := $(subst ",,$(CONFIG_PROFILE_NAME))
@@ -59,10 +60,13 @@ HEAP_SIZE := $(CONFIG_HEAP_SIZE)M
 # A literal comma for function arguments whose value contains one (link flags).
 comma := ,
 
-# The cross toolchain: put an `aarch64-none-elf-` toolchain on PATH, or name
-# its prefix directory in AARCH64_CROSS_PATH, or name the whole prefix in
-# CROSS_COMPILE. No machine layout is assumed here.
-ifneq ($(strip $(AARCH64_CROSS_PATH)),)
+# The cross toolchain.  The AArch64 boards keep the historical names; the
+# STM32F429 target finds the xPack ARM toolchain by default, overridable with
+# CROSS_COMPILE.
+ifeq ($(BOARD),stm32f429-challenger)
+ARM_ENV ?= $(HOME)/workspace/env/src/xpack-arm-none-eabi-gcc-13.2.1-1.1/bin
+CROSS_COMPILE ?= $(ARM_ENV)/arm-none-eabi-
+else ifneq ($(strip $(AARCH64_CROSS_PATH)),)
 CROSS_COMPILE ?= $(AARCH64_CROSS_PATH)/bin/aarch64-none-elf-
 else
 CROSS_COMPILE ?= aarch64-none-elf-
@@ -93,6 +97,10 @@ BUILD_TAG ?= $(shell git -C $(ROOT) describe --always --dirty 2>/dev/null || ech
 
 ifneq ($(BACKEND),)
 
+ifeq ($(ARCH),)
+$(error ARCH_NAME missing from the generated config)
+endif
+
 # --- board selection ---------------------------------------------------------
 # One board per image. The board choice is a Kconfig symbol; the source set,
 # the include flavours, the link window and the entry gate follow from it.
@@ -100,8 +108,12 @@ ifeq ($(BOARD),rk3568-itx)
 BOARD_INCLUDES := -I$(PLATFORM)/board/rk3568-itx -I$(PLATFORM)/board/rk3568-itx/drivers
 BOARD_LINKSCRIPT := $(PLATFORM)/arch/aarch64/baremetal.ld
 BOARD_LOAD_BASE := 0xa000000
+else ifeq ($(BOARD),stm32f429-challenger)
+BOARD_INCLUDES := -I$(PLATFORM)/board/stm32f429-challenger
+BOARD_LINKSCRIPT := $(PLATFORM)/arch/armv7m/stm32f429.ld
+BOARD_LOAD_BASE := 0x08000000
 else
-$(error unknown BOARD '$(BOARD)': this line carries rk3568-itx only)
+$(error unknown BOARD '$(BOARD)': this line carries rk3568-itx and stm32f429-challenger only)
 endif
 
 # --- backend selection -------------------------------------------------------
@@ -111,14 +123,32 @@ ifneq ($(BACKEND),freertos)
 $(error unknown BACKEND '$(BACKEND)': this line carries freertos only)
 endif
 KERNEL_NAME := FreeRTOS-Kernel V11.3.1
+ifeq ($(BOARD),stm32f429-challenger)
+BACKEND_INCLUDES := -I$(PLATFORM)/os/freertos/board/stm32f429-challenger -I$(PLATFORM)/os/freertos/port/ARM_CM4F -I$(KERNEL)/include -I$(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Include
+BACKEND_LDFLAGS :=
+BACKEND_VECTOR := g_pfnVectors
+BACKEND_SYMBOLS := vPortSVCHandler xPortPendSVHandler xPortSysTickHandler xPortStartScheduler
+BACKEND_FIRST_SRCS := $(PLATFORM)/os/freertos/board/stm32f429-challenger/freertos_board_glue.c $(PLATFORM)/os/freertos/board/stm32f429-challenger/tick_compat.c
+BACKEND_VENDOR_SRCS := $(KERNEL)/tasks.c $(KERNEL)/list.c $(KERNEL)/queue.c $(KERNEL)/event_groups.c $(KERNEL)/timers.c $(KERNEL)/stream_buffer.c $(KERNEL)/portable/MemMang/heap_4.c $(PLATFORM)/os/freertos/port/ARM_CM4F/port.c $(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c
+else
 BACKEND_INCLUDES := -I$(PLATFORM)/os/freertos/board/rk3568-itx/cmsis2 -I$(PLATFORM)/os/freertos/board/rk3568-itx -I$(KERNEL)/include -I$(KERNEL)/portable/GCC/ARM_AARCH64_SRE -I$(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Include
 BACKEND_LDFLAGS := -Wl,-u,osCriticalEnter -Wl,-u,osCriticalExit
 BACKEND_VECTOR := _freertos_vector_table
 BACKEND_SYMBOLS := FreeRTOS_IRQ_Handler FreeRTOS_Tick_Handler xPortStartScheduler
 BACKEND_FIRST_SRCS := $(PLATFORM)/os/freertos/board/rk3568-itx/freertos_board_glue.c $(PLATFORM)/os/freertos/board/rk3568-itx/freertos_board_vectors.S $(PLATFORM)/os/freertos/board/rk3568-itx/cmsis2_ext_board.c $(PLATFORM)/os/freertos/board/rk3568-itx/cmsis2_memory_board.c
 BACKEND_VENDOR_SRCS := $(KERNEL)/tasks.c $(KERNEL)/list.c $(KERNEL)/queue.c $(KERNEL)/event_groups.c $(KERNEL)/timers.c $(KERNEL)/stream_buffer.c $(KERNEL)/portable/MemMang/heap_4.c $(KERNEL)/portable/GCC/ARM_AARCH64_SRE/port.c $(KERNEL)/portable/GCC/ARM_AARCH64_SRE/portASM.S $(ADAPTER)/CMSIS/RTOS2/FreeRTOS/Source/cmsis_os2.c
+endif
 
-INCLUDES := -I$(PLATFORM) -I$(LINE) -I$(LINE)/app -I$(PLATFORM)/os/cmsis2 -I$(PLATFORM)/os/cmsis2/board-compat -I$(PLATFORM)/arch/aarch64 $(BOARD_INCLUDES) -I$(PLATFORM)/os/baremetal -I$(THIRD_PARTY)/ulog/src -I$(THIRD_PARTY)/tlsf -I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include -I$(ROOT)/components/liblinux80211/include -I$(ROOT)/build/kconfig/$(PROFILE) -I$(ROOT)/build/kconfig/$(PROFILE)/include/generated -I$(LWIP)/src/include -I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow -I$(THIRD_PARTY)/fsl_sdmmc/common -I$(THIRD_PARTY)/fsl_sdmmc/mmc -I$(THIRD_PARTY)/fsl_sdmmc/osa -I$(CMSIS)/CMSIS/RTOS2/Include -I$(CMSIS)/CMSIS/Driver/Include -I$(CMSIS)/CMSIS/Core/Include/a-profile $(BACKEND_INCLUDES)
+ifeq ($(ARCH),armv7m)
+ARCH_INCLUDES := -I$(PLATFORM)/os/freertos/board/stm32f429-challenger
+CMSIS_COMPAT_INCLUDES :=
+CMSIS_CORE_INCLUDES :=
+else
+ARCH_INCLUDES :=
+CMSIS_COMPAT_INCLUDES := -I$(PLATFORM)/os/cmsis2/board-compat
+CMSIS_CORE_INCLUDES := -I$(CMSIS)/CMSIS/Core/Include/a-profile
+endif
+INCLUDES := -I$(PLATFORM) -I$(LINE) -I$(LINE)/app -I$(PLATFORM)/os/cmsis2 $(CMSIS_COMPAT_INCLUDES) -I$(PLATFORM)/arch/$(ARCH) $(BOARD_INCLUDES) -I$(PLATFORM)/os/baremetal -I$(THIRD_PARTY)/ulog/src -I$(THIRD_PARTY)/tlsf -I$(THIRD_PARTY)/lwip/ports -I$(THIRD_PARTY)/lwip/ports/include -I$(ROOT)/components/liblinux80211/include -I$(ROOT)/build/kconfig/$(PROFILE) -I$(ROOT)/build/kconfig/$(PROFILE)/include/generated -I$(LWIP)/src/include -I$(THIRD_PARTY)/fsl_sdmmc/ports -I$(THIRD_PARTY)/fsl_sdmmc/ports/shadow -I$(THIRD_PARTY)/fsl_sdmmc/common -I$(THIRD_PARTY)/fsl_sdmmc/mmc -I$(THIRD_PARTY)/fsl_sdmmc/osa -I$(CMSIS)/CMSIS/RTOS2/Include -I$(CMSIS)/CMSIS/Driver/Include $(CMSIS_CORE_INCLUDES) $(ARCH_INCLUDES) $(BACKEND_INCLUDES)
 
 # The PCIe/NVMe cases include the board driver headers directly (they are not
 # reachable through the generic drivers/ include root).
@@ -135,10 +165,19 @@ endif
 # from it, and tools/build/check-build-contract.sh fails the image when a new
 # set stops deriving from it or pins its own -O level.
 KCONTRACT_CFLAGS := -fno-strict-aliasing -fno-strict-overflow -fno-delete-null-pointer-checks
-BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra -ffreestanding -fno-builtin -fno-stack-protector $(KCONTRACT_CFLAGS) -march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics $(PROFILE_CFLAGS) -ffunction-sections -fdata-sections -include $(PLATFORM)/build_defs.h $(INCLUDES)
+ifeq ($(ARCH),armv7m)
+# softfp keeps the xPack newlib multilib compatible; the tasks here use no
+# floating-point state and the CM4F port's default context does not include it.
+ARCH_CFLAGS := $(KCONTRACT_CFLAGS) -mcpu=cortex-m4 -mthumb -mfloat-abi=softfp -mfpu=fpv4-sp-d16
+ARCH_ASM_CFLAGS := $(KCONTRACT_CFLAGS) -mcpu=cortex-m4 -mthumb -mfloat-abi=softfp -mfpu=fpv4-sp-d16
+else
+ARCH_CFLAGS := $(KCONTRACT_CFLAGS) -march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics
+ARCH_ASM_CFLAGS := $(KCONTRACT_CFLAGS) -march=armv8-a -mgeneral-regs-only -mstrict-align
+endif
+BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra -ffreestanding -fno-builtin -fno-stack-protector $(KCONTRACT_CFLAGS) $(ARCH_CFLAGS) $(PROFILE_CFLAGS) -ffunction-sections -fdata-sections -include $(PLATFORM)/build_defs.h $(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h
-ASM_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -march=armv8-a -mgeneral-regs-only -mstrict-align -include $(PLATFORM)/build_defs.h $(INCLUDES)
+ASM_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) $(ARCH_ASM_CFLAGS) -include $(PLATFORM)/build_defs.h $(INCLUDES)
 VENDORED_CFLAGS := $(filter-out -Wextra,$(CFLAGS))
 PRINTF_CFLAGS :=
 
@@ -261,7 +300,8 @@ endif
 # with its test case.  The rtw89 cases are consumers too: their linuxkpi USB
 # engine rides the same controllers, while the engine and its adapter belong to
 # the liblinux80211 world (kpi.mk), not to this file.
-USB_CONSUMER_CASES := usb_xhci usb_ehci rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon
+USB_CONSUMER_CASES := usb_xhci usb_ehci rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
+	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6
 ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
@@ -366,6 +406,23 @@ RTW89_CFLAGS := $(S0_CFLAGS) \
 	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
 	-Wno-override-init
 
+# The fourth vendored driver: rtw88 (RTL8821CU, USB).  Same shape as rtw89:
+# its own include root and feature face, and it is a mac80211 driver like
+# iwlwifi, so its sources compile in the driver flag world below.
+RTW88_DIR := $(ROOT)/wireless-drivers/rtw88
+$(eval $(call component_sources,$(RTW88_DIR),drv,RTW88_IMPL))
+
+# The driver's bulk-in buffer, read from the driver's own header: the image gate
+# compares it with the adapter's stage slot instead of trusting a comment.
+RTW88_RECVBUF_SZ := $(shell sed -n 's/^#define[[:space:]]*RTW_USB_MAX_RECVBUF_SZ[[:space:]]*\([0-9][0-9]*\).*/\1/p' $(RTW88_DIR)/usb.h)
+
+RTW88_CFLAGS := $(S0_CFLAGS) \
+	-I$(RTW88_DIR) \
+	-include $(RTW88_DIR)/driver_config.h \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
+	-Wno-override-init
+
 S1_CFLAGS := $(S0_CFLAGS) \
 	-I$(IWL_DRV) \
 	-include $(LIB8)/include/linux80211/driver_config.h \
@@ -385,6 +442,10 @@ else ifeq ($(S1_DRIVER),rtw89)
 S1_TU_SET := $(RTW89_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(RTW89_CFLAGS)
 S1_DRIVER_TAG := rtw89
+else ifeq ($(S1_DRIVER),rtw88)
+S1_TU_SET := $(RTW88_IMPL_SRCS)
+S1_DRIVER_CFLAGS := $(RTW88_CFLAGS)
+S1_DRIVER_TAG := rtw88
 else
 S1_TU_SET := $(IWLWIFI_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(S1_CFLAGS)
@@ -454,10 +515,15 @@ KPI_CASES := kpi_live kpi_mock
 # itself is wl80211.mk's (WL80211_CASES), defined before this point.
 CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
+ifeq ($(ARCH),armv7m)
+APP_CLOCK_SRC := $(LINE)/app/port/clock_cm4.c
+else
+APP_CLOCK_SRC := $(LINE)/app/port/clock_board.c
+endif
 APP_SRCS := \
 	$(LINE)/app/main.c \
 	$(LINE)/app/runner.c \
-	$(LINE)/app/port/clock_board.c \
+	$(APP_CLOCK_SRC) \
 	$(CASE_SRCS)
 
 # The PCIe domain's source groups live in platform/{arch,board}/sources.mk;
@@ -483,6 +549,18 @@ ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(USB_ALL_SRCS) \
 	$(RTL8189FS_OBS_PORT_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
+ifeq ($(ARCH),armv7m)
+# The arch flags are part of the link too: without -mthumb/-mcpu the driver
+# selects the ARM-state newlib multilib and every libc call faults on a
+# Cortex-M (found as a BusFault inside memset during xTaskCreate).
+LDFLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=softfp -mfpu=fpv4-sp-d16 \
+	-nostdlib -static \
+	-Wl,-T,$(BOARD_LINKSCRIPT) \
+	$(BACKEND_LDFLAGS) \
+	-Wl,--gc-sections -Wl,--build-id=none \
+	-Wl,-Map,$(TARGET).map \
+	-specs=nano.specs -lc -lgcc -lnosys
+else
 LDFLAGS := -nostdlib -static \
 	-Wl,-T,$(BOARD_LINKSCRIPT) \
 	$(BACKEND_LDFLAGS) \
@@ -490,6 +568,7 @@ LDFLAGS := -nostdlib -static \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-lc -lgcc -lnosys
+endif
 
 # The memcmp caller census is a link-time wrap, so it lives beside the link
 # flags and is selected by the one diagnostic profile that names it.
@@ -551,6 +630,20 @@ ifeq ($(CONFIG_LIBLINUX80211_RTW89),1)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_wlan_class_info || \
 		{ echo "FAIL: lkpi_wlan_class_info not in the image (no wireless class hook)"; exit 1; }; \
 	echo "PASS: rtw89 stage $$stage >= recvbuf $$want, wlan class table present"
+endif
+# The same two resource gates for the 8821CU world.  Its single bulk-in buffer
+# is RTW_USB_MAX_RECVBUF_SZ (32 KiB); a stage slot below it refuses every
+# receive urb, so the image gate is the check, not the adapter's one-time name.
+ifeq ($(CONFIG_LIBLINUX80211_RTW88),1)
+	@set -e; \
+	stage=$(CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE); \
+	want=$(RTW88_RECVBUF_SZ); \
+	[ -n "$$want" ] || { echo "FAIL: cannot read RTW_USB_MAX_RECVBUF_SZ from $(RTW88_DIR)/usb.h"; exit 1; }; \
+	[ "$$stage" -ge "$$want" ] || { \
+		echo "FAIL: CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=$$stage < rtw88's bulk-in $$want"; exit 1; }; \
+	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx lkpi_wlan_class_info || \
+		{ echo "FAIL: lkpi_wlan_class_info not in the image (no wireless class hook)"; exit 1; }; \
+	echo "PASS: rtw88 stage $$stage >= recvbuf $$want, wlan class table present"
 endif
 	@$(SIZE) $(TARGET).elf
 	@printf 'opt: %s\ndefconfig: %s\nprofile: %s\nlwip: %s\nprof: %s\n' '$(OPT)' '$(PROFILE)' '$(SWITCH_PROFILE)' '$(LWIP)' '$(CONFIG_GMAC_PROF)' | tee $(BUILD)/build-info-$(BACKEND).txt
@@ -673,6 +766,7 @@ ifneq ($(strip $(WL80211_ALL_SRCS)),)
 $(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS) $(WL80211_PROBE_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_STACK_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTW89_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_RTW88_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C_RENAME,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
