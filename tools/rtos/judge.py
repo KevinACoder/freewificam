@@ -81,6 +81,10 @@ CASES = (
     "rtw88_c4",
     "rtw88_c5",
     "rtw88_c6",
+    # The same USB card as an AP (runs/2026-11-14-rtw88-8821cu-sta-ap): hostapd
+    # owns the AP MLME, mac80211 the AP state machine, rtw88 the reserved-page
+    # beacon; the anchors are the 8851BU AP case's with this card's prefix.
+    "rtw88_ap",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1819,6 +1823,11 @@ LIST_PATTERNS = {
     "rtw89_c6_done": re.compile(
         r"rtw89_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
     ),
+    "rtw88_ap_ping": re.compile(
+        r"rtw88_ap: ping payload=(?P<payload>\d+) tx=(?P<tx>\d+) "
+        r"rx=(?P<rx>\d+) dup=(?P<dup>\d+) "
+        r"rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/(?P<max>\d+)", re.MULTILINE
+    ),
     "rtw88_c5_ping": re.compile(
         r"rtw88_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
         r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
@@ -1843,6 +1852,58 @@ LIST_PATTERNS = {
     "rtw88_c6_done": re.compile(
         r"rtw88_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
     ),
+    "rtw88_c5_txhealth": re.compile(
+        r"rtw88_c5: txhealth dequeue=(?P<dequeue>\d+) "
+        r"tx_status=(?P<status>\d+) mgmt=(?P<mgmt>\d+) data=(?P<data>\d+) "
+        r"stop=(?P<stop>\d+) wake=(?P<wake>\d+) ps_sleep=(?P<pssleep>\d+) "
+        r"ps_wake=(?P<pswake>\d+) ps_buffered=(?P<psbuf>\d+)", re.MULTILINE
+    ),
+    "rtw88_c5_txreport": re.compile(
+        r"rtw88_c5: txreport purges=(?P<purges>\d+)", re.MULTILINE
+    ),
+    # --- the AP role of the same card (runs/2026-11-14-rtw88-8821cu-sta-ap) --
+    "rtw88_ap_chan": re.compile(
+        r"rtw88_ap: chan freq=(?P<freq>\d+) present=(?P<present>[01]) "
+        r"flags=0x(?P<flags>[0-9a-f]+) can_beacon=(?P<can>[01])",
+        re.MULTILINE,
+    ),
+    "rtw88_ap_iface": re.compile(
+        r"rtw88_ap: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_ap_start": re.compile(
+        r"rtw88_ap: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtw88_ap_security": re.compile(
+        r"rtw88_ap: security wpa2=(?P<wpa2>[01]) ssid=(?P<ssid>\S+) "
+        r"channel=(?P<ch>\d+) bcn_int=(?P<bcn>\d+) dtim_req=(?P<dtim>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_ap_hostap": re.compile(
+        r"rtw88_ap: hostap start rc=(?P<rc>-?\d+) ready=(?P<ready>[01])",
+        re.MULTILINE,
+    ),
+    "rtw88_ap_link": re.compile(
+        r"rtw88_ap: link freq=(?P<freq>-?\d+)", re.MULTILINE
+    ),
+    "rtw88_ap_pass_a1": re.compile(r"rtw88_ap: PASS A1", re.MULTILINE),
+    "rtw88_ap_sta": re.compile(
+        r"rtw88_ap: sta n=(?P<n>\d+) hostap=(?P<hostap>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]{17})", re.MULTILINE
+    ),
+    "rtw88_ap_pass_a2": re.compile(r"rtw88_ap: PASS A2", re.MULTILINE),
+    "rtw88_ap_link_window": re.compile(
+        r"rtw88_ap: link window rx_frames=(?P<rx>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) rx_no_netif=(?P<none>\d+) "
+        r"rx_input_fail=(?P<fail>\d+) rx_bytes=(?P<rxb>\d+) "
+        r"tx_frames=(?P<tx>\d+) tx_fail=(?P<txf>\d+)", re.MULTILINE
+    ),
+    "rtw88_ap_pass_a3": re.compile(r"rtw88_ap: PASS A3", re.MULTILINE),
+    "rtw88_ap_pass_ap": re.compile(r"rtw88_ap: PASS AP$", re.MULTILINE),
+    "rtw88_ap_fail": re.compile(
+        r"rtw88_ap: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+
     # --- the AP role of the same card (runs/2026-11-14-rtw89-8851bu-ap) -----
     "rtw89_ap_chan": re.compile(
         r"rtw89_ap: chan freq=(?P<freq>\d+) present=(?P<present>[01]) "
@@ -4835,6 +4896,110 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("rtw88_c5: the C6 PASS line is missing")
         if not found["rtw88_c5_pass"]:
             errors.append("rtw88_c5: the case PASS line is missing")
+        # The link's mechanism ledger (2026-11-14 second round): reported, not
+        # gated.  A PASS with purges>0 is still a PASS on the ping gate, but the
+        # reader must see the number next to it (S2 in the round's PREREG).
+        health = found["rtw88_c5_txhealth"]
+        report = found["rtw88_c5_txreport"]
+        if health and report:
+            notes.append(
+                f"rtw88_c5: tx feedback dequeue={health['dequeue']} "
+                f"tx_status={health['status']} purges={report['purges']}")
+            if int(health["dequeue"]) > 0:
+                ratio = int(health["status"]) / int(health["dequeue"])
+                notes.append(f"rtw88_c5: tx_status/dequeue={ratio:.2f}")
+
+    if cases.get("rtw88_ap", {}).get("verdict") == "pass":
+        # The rtw88_ap patterns live in LIST_PATTERNS (the file's second table),
+        # so each parse value is a list of match dicts; these anchors are
+        # single-occurrence and are read through one helper.
+        def ap(key):
+            # LIST_PATTERNS values are lists of match dicts; a presence
+            # anchor's dict is empty and must still read as "found".
+            value = found.get(key)
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if value is None:
+                return None
+            return value or True
+
+        fail = ap("rtw88_ap_fail")
+        if fail:
+            errors.append(f"rtw88_ap: {fail['reason']}")
+        chan = ap("rtw88_ap_chan")
+        if not chan:
+            errors.append("rtw88_ap: PASS without the channel line")
+        elif chan["present"] != "1" or chan["can"] != "1":
+            errors.append(
+                f"rtw88_ap: channel not beaconable present={chan['present']} "
+                f"can_beacon={chan['can']}")
+        iface = ap("rtw88_ap_iface")
+        if not iface:
+            errors.append("rtw88_ap: PASS without the set_iface line")
+        elif int(iface["rc"]) != 0 or int(iface["type"]) != 3:
+            errors.append(
+                f"rtw88_ap: set_iface rc={iface['rc']} type={iface['type']}")
+        start = ap("rtw88_ap_start")
+        if not start:
+            errors.append("rtw88_ap: PASS without the dev_open line")
+        elif int(start["rc"]) != 0:
+            errors.append(f"rtw88_ap: dev_open rc={start['rc']}")
+        sec = ap("rtw88_ap_security")
+        if not sec:
+            errors.append("rtw88_ap: PASS without the security line")
+        elif int(sec["ch"]) != 5 or int(sec["bcn"]) != 100 or int(sec["dtim"]) != 2:
+            errors.append(
+                f"rtw88_ap: security ch={sec['ch']} bcn={sec['bcn']} "
+                f"dtim={sec['dtim']}")
+        else:
+            notes.append(
+                f"rtw88_ap: ssid={sec['ssid']} ch={sec['ch']} open "
+                f"bcn={sec['bcn']} dtim={sec['dtim']}")
+        hostap = ap("rtw88_ap_hostap")
+        if not hostap:
+            errors.append("rtw88_ap: PASS without the hostap start line")
+        elif int(hostap["rc"]) != 0 or hostap["ready"] != "1":
+            errors.append(
+                f"rtw88_ap: hostap rc={hostap['rc']} ready={hostap['ready']}")
+        link = ap("rtw88_ap_link")
+        if not link:
+            errors.append("rtw88_ap: PASS without the link line")
+        elif int(link["freq"]) != 2432:
+            errors.append(f"rtw88_ap: link freq={link['freq']}")
+        if not ap("rtw88_ap_pass_a1"):
+            errors.append("rtw88_ap: the A1 PASS line is missing")
+        sta = ap("rtw88_ap_sta")
+        if not sta:
+            errors.append("rtw88_ap: PASS without the station line")
+        elif int(sta["n"]) < 1:
+            errors.append(f"rtw88_ap: station table n={sta['n']}")
+        else:
+            notes.append(f"rtw88_ap: sta {sta['mac']} n={sta['n']}")
+        if not ap("rtw88_ap_pass_a2"):
+            errors.append("rtw88_ap: the A2 PASS line is missing")
+        pings = {p["payload"]: p for p in found["rtw88_ap_ping"]}
+        for want in ("56", "1400"):
+            ping = pings.get(want)
+            if not ping:
+                errors.append(f"rtw88_ap: no ping line for payload={want}")
+            elif int(ping["rx"]) != int(ping["tx"]) or int(ping["tx"]) != 20:
+                errors.append(
+                    f"rtw88_ap: ping {want}B tx={ping['tx']} rx={ping['rx']}")
+            else:
+                notes.append(
+                    f"rtw88_ap: ping {want}B 20/20 "
+                    f"rtt={ping['min']}/{ping['avg']}/{ping['max']} ms")
+        window = ap("rtw88_ap_link_window")
+        if not window:
+            errors.append("rtw88_ap: PASS A3 without the link window line")
+        elif int(window["foreign"]) != 0 or int(window["fail"]) != 0:
+            errors.append(
+                f"rtw88_ap: rx_foreign={window['foreign']} "
+                f"rx_input_fail={window['fail']}")
+        if not ap("rtw88_ap_pass_a3"):
+            errors.append("rtw88_ap: the A3 PASS line is missing")
+        if not ap("rtw88_ap_pass_ap"):
+            errors.append("rtw88_ap: the AP PASS line is missing")
 
     if cases.get("rtw88_c6", {}).get("verdict") == "pass":
         fail = found["rtw88_c6_fail"]

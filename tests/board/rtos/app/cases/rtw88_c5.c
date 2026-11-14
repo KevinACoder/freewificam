@@ -32,6 +32,9 @@
  *   rtw88_c5: PASS C5
  *   rtw88_c5: netif up name=<n> ip=<ip>/<mask> mac=<mac>
  *   rtw88_c5: ping tx=<n> rx=<n> payload=<n> rtt_ms=<min>/<avg>/<max>
+ *   rtw88_c5: txhealth dequeue=<n> tx_status=<n> mgmt=<n> data=<n> stop=<n>
+ *              wake=<n> ps_sleep=<n> ps_wake=<n> ps_buffered=<n>
+ *   rtw88_c5: txreport purges=<n>
  *   rtw88_c5: diag rx_frames=<n> tx_frames=<n> rx_bytes=<n> tx_bytes=<n> tx_fail=<n>
  *   rtw88_c5: PASS C6
  *   rtw88_c5: PASS
@@ -53,6 +56,7 @@
 #include "linux80211/linux80211.h"
 #include "linux80211/nl80211_probe.h"
 #include "linux80211/net.h"
+#include "linux80211/hostap_ap.h"	/* lkpi_tx_health_get */
 #include "linuxkpi_usb.h"
 #include "lkpi_usb_cherryusb.h"
 
@@ -80,8 +84,11 @@ void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
 int lkpi_fw_rtw8821c_fw_register(void);
-/* first-party read-only TX-power probe (wireless-drivers/rtw88/ports/rtos) */
+/* first-party read-only probes (wireless-drivers/rtw88/ports/rtos): the
+ * TX-power dump, and the link state (power save, full per-rate table, TX
+ * report accounting). */
 void rtw88_diag_txpower(void *wiphy);
+void rtw88_diag_state(void *wiphy);
 
 #if CONFIG_RTW88_USB_BUS == 0
 static const unsigned int c5_buses[] = { 3U, 2U };
@@ -92,6 +99,7 @@ static const unsigned int c5_buses[] = { 1U, 0U };
 #endif
 
 static unsigned int c5_log_lines;
+static unsigned int c5_txrpt_purges;
 
 static void
 c5_sink(ulog_level_t level, const char *line)
@@ -118,6 +126,17 @@ c5_sink(ulog_level_t level, const char *line)
 	if (strstr(line, "tx report") != NULL ||
 	    strstr(line, "C2H") != NULL ||
 	    strstr(line, "c2h") != NULL) {
+		if (strstr(line, "failed to get tx report") != NULL)
+			c5_txrpt_purges++;
+		CASE_INFO("rtw88_c5: drv %s\n", line);
+		c5_log_lines++;
+		return;
+	}
+	/* The power-save path's own warnings (ps.c:168, "firmware failed to
+	 * leave lps state") were filtered out by the first round's sink, so the
+	 * 100 ms leave-LPS wait was invisible while the RTT spikes were exactly
+	 * that size.  Forward them; they are bounded by the round's traffic. */
+	if (strstr(line, "lps") != NULL || strstr(line, "LPS") != NULL) {
 		CASE_INFO("rtw88_c5: drv %s\n", line);
 		c5_log_lines++;
 		return;
@@ -134,6 +153,39 @@ c5_sink(ulog_level_t level, const char *line)
 		CASE_INFO("rtw88_c5: drv %s\n", line);
 		c5_log_lines++;
 	}
+}
+
+/* Did the driver ever hand a frame back to mac80211?  tx_status is
+ * ieee80211_tx_status_irqsafe - the call rate control's per-frame feedback
+ * comes through.  A blind minstrel reads as tx_status << dequeue_frames even
+ * when the USB engine completed every URB (tx_fail=0 is not that answer). */
+static void
+c5_tx_feedback(const struct lkpi_tx_health *before)
+{
+	struct lkpi_tx_health now;
+
+	(void)memset(&now, 0, sizeof(now));
+	lkpi_tx_health_get(&now);
+	CASE_ANCHOR("rtw88_c5: txhealth dequeue=%lu tx_status=%lu mgmt=%lu "
+		    "data=%lu stop=%lu wake=%lu ps_sleep=%lu ps_wake=%lu "
+		    "ps_buffered=%lu\n",
+		    now.dequeue_frames - before->dequeue_frames,
+		    now.tx_status - before->tx_status,
+		    now.status_mgmt - before->status_mgmt,
+		    now.status_data - before->status_data,
+		    now.stop_queue - before->stop_queue,
+		    now.wake_queue - before->wake_queue,
+		    now.ps_sleep - before->ps_sleep,
+		    now.ps_wake - before->ps_wake,
+		    now.ps_buffered - before->ps_buffered);
+}
+
+/* The driver purges a rate report it did not match within 500 ms and warns
+ * once per purge; the sink counts those lines. */
+static void
+c5_txrpt_ledger(void)
+{
+	CASE_ANCHOR("rtw88_c5: txreport purges=%u\n", c5_txrpt_purges);
 }
 
 static void
@@ -229,6 +281,7 @@ case_rtw88_c5_run(void)
 	unsigned int ping_rx = 0U;
 	unsigned int rtt_min = 0U, rtt_avg = 0U, rtt_max = 0U;
 	struct lkpi_net_diag diag;
+	struct lkpi_tx_health th0, th1;
 	int freq = 0;
 	int sig = 0;
 	int rc;
@@ -363,6 +416,10 @@ found:
 	 * handler, not a stack field poke. */
 	rc = lkpi_nl80211_set_power_save(dev, 0);
 	CASE_ANCHOR("rtw88_c5: power save off rc=%d\n", rc);
+	/* rc=0 is the handler's answer, not the state: read the driver's own
+	 * LPS gate and mac80211's vif/conf flags before any traffic. */
+	if (dev->ieee80211_ptr != NULL)
+		rtw88_diag_state(dev->ieee80211_ptr->wiphy);
 
 	/* The association channel's TX-power state, read from the driver's own
 	 * hal (the C3 probe read it before any scan, on channel 1). */
@@ -404,6 +461,8 @@ found:
 		    CONFIG_RTW88_C5_PEER_WINDOW_MS);
 	osDelay(CONFIG_RTW88_C5_PEER_WINDOW_MS);
 
+	(void)memset(&th0, 0, sizeof(th0));
+	lkpi_tx_health_get(&th0);
 	rc = lkpi_net_ping(C5_AP_IP, C5_PING_COUNT, C5_PING_SMALL,
 			   C5_PING_TIMEOUT_MS, &ping_rx, &rtt_min, &rtt_avg,
 			   &rtt_max);
@@ -421,6 +480,23 @@ found:
 			    "rx_bytes=%lu tx_bytes=%lu tx_fail=%lu\n",
 			    diag.rx_frames, diag.tx_frames, diag.rx_bytes,
 			    diag.tx_bytes, diag.tx_fail);
+		/* The port's own cost and drop accounting for the same window: a
+		 * 100 ms RTT spike has to be paid somewhere, and these are the
+		 * only two places the port owns (the RX deliver and the lwIP
+		 * egress call).  rx_alloc_fail/rx_post_fail are frame drops
+		 * between the driver and lwIP. */
+		CASE_ANCHOR("rtw88_c5: path rx_alloc_fail=%lu rx_post_fail=%lu "
+			    "rx_deliver_us=%lu rx_deliver_max_us=%lu "
+			    "tx_ndo_us=%lu tx_ndo_max_us=%lu\n",
+			    diag.rx_alloc_fail, diag.rx_post_fail,
+			    diag.rx_deliver_ns / 1000u,
+			    diag.rx_deliver_max_ns / 1000u,
+			    diag.tx_ndo_ns / 1000u,
+			    diag.tx_ndo_max_ns / 1000u);
+		c5_tx_feedback(&th0);
+		c5_txrpt_ledger();
+		if (dev->ieee80211_ptr != NULL)
+			rtw88_diag_state(dev->ieee80211_ptr->wiphy);
 		c5_usb_ledger();
 		return 11;
 	}
@@ -441,6 +517,10 @@ found:
 	CASE_ANCHOR("rtw88_c5: diag rx_frames=%lu tx_frames=%lu rx_bytes=%lu tx_bytes=%lu tx_fail=%lu\n",
 		    diag.rx_frames, diag.tx_frames, diag.rx_bytes, diag.tx_bytes,
 		    diag.tx_fail);
+	c5_tx_feedback(&th0);
+	c5_txrpt_ledger();
+	if (dev->ieee80211_ptr != NULL)
+		rtw88_diag_state(dev->ieee80211_ptr->wiphy);
 	CASE_ANCHOR("rtw88_c5: PASS C6\n");
 	CASE_ANCHOR("rtw88_c5: PASS\n");
 	return 0;

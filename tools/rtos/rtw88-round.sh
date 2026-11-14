@@ -59,6 +59,11 @@ case "$MODE" in
 esac
 mkdir -p "$EVIDENCE"
 EVIDENCE=$(cd "$EVIDENCE" && pwd)
+TAG=$(basename "$EVIDENCE")
+# The capture is evidence, not a scratch file: keep it on the Pi's disk-backed
+# home and copy its hash into the evidence directory (the 2026-11-14 rounds
+# left it in /tmp and could not re-read it).
+PCAP=${PCAP:-/home/pi/rtw88-round-$TAG.pcap}
 
 CASE=rtw88_$MODE
 [ "$MODE" = attach ] && CASE=rtw88_c3
@@ -72,10 +77,20 @@ BOOT_ARGS=(--bin "$(basename "$BIN")" --success "rtos: result" --quiet 0
 # 1) the image, then the capture: the pcap covers the whole boot, because the
 #    scan's probe traffic is over in the case's own window.
 "$BOARD/tftp.sh" put "$BIN" --name "$(basename "$BIN")" > "$EVIDENCE/tftp.txt"
+AP_PCAP=${AP_PCAP:-/home/pi/rtw88-ap-$TAG.pcap}
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
     "sudo -n rm -f $PCAP; sudo -n timeout 120 tcpdump -i $MON_IF -s 0 -w $PCAP -U 2>/tmp/rtw88-tcpdump.log" \
     >/dev/null 2>&1 &
 CAP_PID=$!
+# The AP's own 802.3 view of the ICMP exchange, in parallel with the monitor.
+# This is the ledger that separates "the board's request never reached the AP"
+# from "the AP's reply never reached the board": the monitor on this bench sees
+# the AP's beacons but not its unicast data (the 2026-11-14 D1 boot and the GT
+# round's empty air CSVs), so the AP's kernel is the receiver of record.
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
+    "sudo -n rm -f $AP_PCAP; sudo -n timeout 90 tcpdump -i $AP_IF -s 0 -w $AP_PCAP icmp -U 2>/tmp/rtw88-ap-tcpdump.log" \
+    >/dev/null 2>&1 &
+AP_CAP_PID=$!
 sleep 1
 
 # 2) boot
@@ -99,6 +114,14 @@ if [ "$MODE" = sta ]; then
                 > "$EVIDENCE/peer-ping.txt" 2>&1 || true
             ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
                 "sudo -n iw dev $AP_IF station dump" > "$EVIDENCE/ap-station.txt" 2>&1 || true
+            # The 8812AU's vendor view: per-station RX/TX packet and byte
+            # counters plus the aggregation state (the 2026-11-14 C6T rounds
+            # read agg_enable_bitmap from the same file).  iw's station dump on
+            # this driver carries only signal/inactive, so this is the AP's
+            # per-direction ledger for the station under test.
+            ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
+                "sudo -n cat /proc/net/rtl88XXau/$AP_IF/all_sta_info" \
+                > "$EVIDENCE/ap-sta-info.txt" 2>&1 || true
             break
         fi
         if ! kill -0 "$BOOT_PID" 2>/dev/null; then
@@ -110,12 +133,48 @@ fi
 
 wait "$BOOT_PID" || true
 wait "$CAP_PID" || true
+wait "${AP_CAP_PID:-}" || true
 
 # 4) the air: which frame classes the round carried, from the monitor pcap.
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
     "sudo -n tshark -r $PCAP -T fields -e wlan.fc.type_subtype 2>/dev/null | sort | uniq -c | sort -rn; \
      sudo -n tshark -r $PCAP -Y 'wlan.fc.type_subtype==0x08' -T fields -e frame.len 2>/dev/null | wc -l" \
     > "$EVIDENCE/air-summary.txt" 2>&1 || true
+
+# 4b) the board's own air ledger: rate, MCS, RSSI, retry and subtype of every
+#     frame that carries the station's MAC either way.  This is the face the
+#     2026-11-14 EHCI round did not have (its pcap was class counts only), so
+#     "the board sends at OFDM 6 Mbit/s" or "at MCS7 and -24 dBm" could not be
+#     told apart from the AP's single station-dump number.
+STA_MAC_FROM_LOG=$(sed -n 's/.*: wlan0 present=1 ifindex=[0-9]* mac=\([0-9a-f:]*\).*/\1/p' \
+    "$EVIDENCE/serial.log" 2>/dev/null | tail -1)
+AIR_FILTER=""
+[ -n "$STA_MAC_FROM_LOG" ] && AIR_FILTER="-Y wlan.addr==$STA_MAC_FROM_LOG"
+{
+    echo "pcap=$PCAP sta_mac=${STA_MAC_FROM_LOG:-unknown} filter=${AIR_FILTER:-none}"
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
+        "sudo -n sha256sum $PCAP 2>/dev/null; sudo -n stat -c '%n %s' $PCAP 2>/dev/null"
+    ssh -o BatchMode=yes -o ConnectTimeout=20 "$PI" \
+        "sudo -n tshark -r $PCAP $AIR_FILTER -T fields -e frame.time_relative \
+            -e wlan.fc.type_subtype -e wlan.fc.retry -e wlan_radio.data_rate \
+            -e wlan_radio.11n.mcs_index -e wlan_radio.signal_dbm \
+            -e wlan.ta -e wlan.ra -e frame.len 2>/dev/null" \
+        > "$EVIDENCE/air-board.csv" 2>&1 || true
+} > "$EVIDENCE/pcap-facts.txt" 2>&1 || true
+python3 "$HERE/sta-air.py" "$EVIDENCE" > "$EVIDENCE/air-board.txt" 2>&1 || true
+
+# 4c) the AP-side ICMP ledger: four counters (board->AP request, AP->board
+#     reply, AP->board request, board->AP reply).  A ping that the board reports
+#     lost is one of these four lines being short.
+{
+    echo "pcap=$AP_PCAP if=$AP_IF"
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" \
+        "sudo -n sha256sum $AP_PCAP 2>/dev/null; sudo -n stat -c '%n %s' $AP_PCAP 2>/dev/null" || true
+    ssh -o BatchMode=yes -o ConnectTimeout=20 "$PI" \
+        "sudo -n tshark -r $AP_PCAP -Y icmp -T fields -e ip.src -e ip.dst -e icmp.type 2>/dev/null" \
+        > "$EVIDENCE/icmp-ap.csv" || true
+} > "$EVIDENCE/ap-pcap-facts.txt" 2>&1 || true
+python3 "$HERE/icmp-ledger.py" "$EVIDENCE" > "$EVIDENCE/icmp-ledger.txt" 2>&1 || true
 
 # 5) the judge over the captured serial log.
 if [ -r "$EVIDENCE/serial.log" ]; then

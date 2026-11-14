@@ -455,7 +455,11 @@ if [ "$NO_PEER" = 0 ]; then
 	# the AP's BSSID is the second address the air ledger needs; the Pi's
 	# link line is the authority (the RTOS case's MAC anchor differs per case).
 	AP_MAC=$(sed -n 's/^Connected to \([0-9a-f:]*\).*/\1/p' "$EVIDENCE/pi-link.txt" 2>/dev/null | head -1)
-	for ph in "${phase_order[@]:-}"; do
+	# An A3-only case (rtw88_ap) prints no phase lines, so the list is empty
+	# and the expansion below yields one empty element; indexing an
+	# associative array with "" is an error under set -u (2026-11-14 AP arm).
+	for ph in ${phase_order[@]+"${phase_order[@]}"}; do
+		[ -n "$ph" ] || continue
 		t0=${phase_t0[$ph]:-}
 		t1=${phase_t1[$ph]:-}
 		[ -n "$t0" ] && [ -n "$t1" ] || continue
