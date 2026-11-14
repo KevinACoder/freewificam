@@ -143,6 +143,15 @@ RTW88_FEATURES = {
     "PM": False,
 }
 
+# The RTL8188EU world: one module whose fileops table names every chip, so the
+# face is the driver's single symbol.  CONFIG_RTL8XXXU_UNTESTED is off: the
+# 0bda:8179 part is in the driver's tested table, and the option only widens the
+# usb id table (8192c.c/core.c) with parts this bench does not carry.
+RTL8XXXU_FEATURES = {
+    "RTL8XXXU": True,
+    "RTL8XXXU_UNTESTED": False,
+}
+
 # One entry per driver:
 #   kind        kbuild | vendor-make (how the compiled set is derived)
 #   upstream    where the sources live under the kernel tree
@@ -273,6 +282,55 @@ DRIVERS = {
                 "`S1_DRIVER=rtw88` as the S1b measurement. The\n"
                 "`rtw8821c_fw.bin` image is a compiled-in blob, not a driver "
                 "unit (tools/rtos/fw-blobs.py).\n",
+        },
+    },
+    "rtl8xxxu": {
+        "kind": "kbuild",
+        "upstream": "drivers/net/wireless/realtek/rtl8xxxu",
+        "dest": "",
+        "features": RTL8XXXU_FEATURES,
+        "makefiles": ("Makefile",),
+        "want": 9,
+        "tu_prefix": "",
+        "first_party": ("IMPORT.tsv", "PROVENANCE.md", "sources.mk",
+                        "driver_config.h"),
+        "sources_header": [
+            "# rtl8xxxu: the compiled set for the RTL8188EU (USB) under the",
+            "# feature face wireless-drivers/rtl8xxxu/driver_config.h (RTL8XXXU",
+            "# on, RTL8XXXU_UNTESTED off).  The driver is one module whose",
+            "# fileops table names every chip, so all nine units are in the link",
+            "# closure; the chip only selects the firmware blob.",
+        ],
+        "sources_symbol": "CONFIG_LIBLINUX80211_RTL8XXXU",
+        "provenance": {
+            "licence_note":
+                "Every file of the tree carries `SPDX-License-Identifier: "
+                "GPL-2.0-only`\n(the module's own `MODULE_LICENSE` line names no "
+                "alternative), so the driver\nadds no licensing option to this "
+                "line: an artifact that links it with the\nGPL-2.0-only "
+                "mac80211/cfg80211 stack is a GPL-2.0 link product (see\n"
+                "`docs/LICENSES.md`). The driver bytes are unmodified, which is "
+                "why the\nlicence table above is the tree's own.",
+            "count_note":
+                "## Why 9\n\nThe driver's own Makefile resolves to nine "
+                "translation units under this\nface (`rtl8xxxu-y := core.o "
+                "8192e.o 8723b.o 8723a.o 8192c.o 8188f.o\n8188e.o 8710b.o "
+                "8192f.o`): one module whose `fileops` table names every\nchip it "
+                "supports, so a chip that is not the target still contributes "
+                "its fileops\nand its register/PHY callbacks to the same "
+                "module, and the chip selection is a\nrun-time `id_table` match "
+                "plus the firmware blob, not a build-time unit list.\n"
+                "The GT build compiles the same nine under "
+                "`CONFIG_RTL8XXXU=m`; this face\nstates that symbol and leaves "
+                "`CONFIG_RTL8XXXU_UNTESTED` off (the untested\nparts' id-table "
+                "block only, 0bda:8179 is in the tested table).\n",
+            "consumers":
+                "`tests/board/rtos/build/wl80211.mk` compiles this set in the "
+                "driver's\nflag world (`driver_config.h` is force-included); "
+                "`tools/build/s1-driver-compile`\ncompiles it standalone with "
+                "`S1_DRIVER=rtl8xxxu` as the S1b measurement. The\n"
+                "`rtlwifi/rtl8188eufw.bin` image is a compiled-in blob, not a "
+                "driver unit\n(tools/rtos/fw-blobs.py).\n",
         },
     },
     "rtl8189fs": {

@@ -76,6 +76,21 @@ the one without the imported stack linked in.
 不互相替代。它们不构成老仓按 BSD 发布的那条 rtw89 线，也不与 `rtw88`/`rtw89`
 的 BSD profile 共链。
 
+## 4c. 8188EU 产物（2026-11-14）
+
+| 产物 | 组成 | 许可证 |
+|---|---|---|
+| `rk3568-rtl8xxxu-8188eu-c3` 镜像 | rtl8xxxu（**GPL-2.0-only**）+ mac80211/cfg80211（GPL-2.0-only）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtlwifi/rtl8188eufw.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8xxxu-8188eu-c4` 镜像 | 同上（C4 的 nl80211 scan helper 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8xxxu-8188eu-c5` 镜像 | 同上（C5 的 connect helper、lwIP netif 与 ping 面是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+
+`wireless-drivers/rtl8xxxu/` 与另三个驱动不同：**13 个文件全部是
+`GPL-2.0-only`**（`SPDX-License-Identifier: GPL-2.0-only`，模块的
+`MODULE_LICENSE` 也没有给替代选项），所以这里没有"取 BSD 选项"的余地，
+链接它的产物一律按 GPL-2.0 登记。`rtlwifi/rtl8188eufw.bin`（15,262 B，
+sha256 `2ff74315…`）是 Realtek 二进制固件，按 `LICENCE.realtek_firmware`
+再分发，与 GPL 登记是两件事、不互相替代。
+
 ## 5. 固件（2026-11-11 起入库）
 
 `components/liblinux80211/fw/iwlwifi-7260-17.ucode` 是 **Intel 二进制固件**，

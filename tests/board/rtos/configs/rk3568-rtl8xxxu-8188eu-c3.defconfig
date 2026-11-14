@@ -1,0 +1,33 @@
+# rtl8xxxu on the RTOS line, C3: the RTL8188EUS (0bda:8179) enumerates behind
+# the external hub on the bench's "xhci0" - the GT kernel's xhci-hcd.0.auto,
+# the DWC3 at 0xFCC00000, i.e. this board map's busid 3 - the vendored driver
+# probes it over the linuxkpi USB engine, downloads rtlwifi/rtl8188eufw.bin from
+# the compiled-in registry and registers its wiphy with the real mac80211;
+# opening the interface reaches the driver's start.
+#
+# The controller list is a bench fact of this round: the user's 2026-11-14 setup
+# put the dongle on a hub at xhci0, so the xHCI pair (busids 3,2) is the list and
+# bus 3 is the one the claim line must name.  The case prints the list it tried
+# and the claim hook prints bus/hub/port, so a moved dongle reads as evidence,
+# not as a silent timeout.  EHCI (busids 1,0) stays a different profile/arm.
+#
+# The driver is GPL-2.0-only and the stack is GPL-2.0-only; this image is a
+# GPL-2.0 link product that also redistributes the Realtek rtl8188eu firmware
+# image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_c3"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RTL8XXXU_USB_BUS=0

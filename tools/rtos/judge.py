@@ -85,6 +85,13 @@ CASES = (
     # owns the AP MLME, mac80211 the AP state machine, rtw88 the reserved-page
     # beacon; the anchors are the 8851BU AP case's with this card's prefix.
     "rtw88_ap",
+    # The RTL8188EUS (rtl8xxxu, USB): C3 attach - including the claim line's
+    # bus/hub/port, which is how the round pins the "behind a hub on xHCI0"
+    # bench fact - then C4 scan and C5/C6-open join + ICMP.  The driver is the
+    # previous net80211 line's pilot card; this is its first mac80211 arm.
+    "rtl8xxxu_c3",
+    "rtl8xxxu_c4",
+    "rtl8xxxu_c5",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1510,6 +1517,71 @@ PATTERNS = {
     "rtw88_c5_fail": re.compile(
         r"rtw88_c5: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
+    # --- RTL8188EUS (rtl8xxxu, mac80211) cases ----------------------------
+    "rtl8xxxu_c3_drivers": re.compile(
+        r"rtl8xxxu_c3: usb drivers=(?P<n>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_c3_fw": re.compile(
+        r"rtl8xxxu_c3: firmware (?P<line>.+)$", re.MULTILINE
+    ),
+    "rtl8xxxu_c3_claim": re.compile(
+        r"rtl8xxxu_c3: usbh: lkpi claim attempt 0bda:8179 bus=(?P<bus>\d+) "
+        r"hub=(?P<hub>\d+) port=(?P<port>\d+) intf=(?P<intf>\d+) "
+        r"spd=(?P<spd>\d+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c3_wlan0": re.compile(
+        r"rtl8xxxu_c3: wlan0 present=(?P<present>[01]) after (?P<ms>\d+) ms",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_c3_mac": re.compile(
+        r"rtl8xxxu_c3: mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE
+    ),
+    "rtl8xxxu_c3_wiphy": re.compile(
+        r"rtl8xxxu_c3: wiphy bands=(?P<bands>\d+) managed=(?P<managed>[01]) "
+        r"ht=(?P<ht>[01]) vht=(?P<vht>[01])", re.MULTILINE,
+    ),
+    "rtl8xxxu_c3_start": re.compile(
+        r"rtl8xxxu_c3: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_c3_pass": re.compile(r"rtl8xxxu_c3: PASS$", re.MULTILINE),
+    "rtl8xxxu_c3_fail": re.compile(
+        r"rtl8xxxu_c3: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtl8xxxu_c4_scan": re.compile(
+        r"rtl8xxxu_c4: scan ssid=(?P<ssid>\S+) freq=(?P<freq>\d+) "
+        r"rc=(?P<rc>-?\d+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c4_bss": re.compile(
+        r"rtl8xxxu_c4: bss ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>\d+) signal=(?P<sig>-?\d+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c4_pass": re.compile(r"rtl8xxxu_c4: PASS$", re.MULTILINE),
+    "rtl8xxxu_c4_fail": re.compile(
+        r"rtl8xxxu_c4: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtl8xxxu_c5_connect": re.compile(
+        r"rtl8xxxu_c5: connect ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>-?\d+) rc=(?P<rc>-?\d+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c5_connected": re.compile(
+        r"rtl8xxxu_c5: connected bssid=(?P<bssid>[0-9a-f:]+) "
+        r"waited_ms=(?P<ms>\d+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c5_pass_c5": re.compile(r"rtl8xxxu_c5: PASS C5", re.MULTILINE),
+    "rtl8xxxu_c5_netif": re.compile(
+        r"rtl8xxxu_c5: netif up name=(?P<name>\S+) ip=(?P<ip>\S+) "
+        r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c5_diag": re.compile(
+        r"rtl8xxxu_c5: diag rx_frames=(?P<rx>\d+) tx_frames=(?P<tx>\d+) "
+        r"rx_bytes=(?P<rxb>\d+) tx_bytes=(?P<txb>\d+) "
+        r"tx_fail=(?P<fail>\d+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c5_pass_c6": re.compile(r"rtl8xxxu_c5: PASS C6", re.MULTILINE),
+    "rtl8xxxu_c5_pass": re.compile(r"rtl8xxxu_c5: PASS$", re.MULTILINE),
+    "rtl8xxxu_c5_fail": re.compile(
+        r"rtl8xxxu_c5: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
     "rtw88_c6_plan": re.compile(
         r"rtw88_c6: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
         r"dev=(?P<dev>\S+)", re.MULTILINE,
@@ -1827,6 +1899,11 @@ LIST_PATTERNS = {
         r"rtw88_ap: ping payload=(?P<payload>\d+) tx=(?P<tx>\d+) "
         r"rx=(?P<rx>\d+) dup=(?P<dup>\d+) "
         r"rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/(?P<max>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_c5_ping": re.compile(
+        r"rtl8xxxu_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/(?P<max>\d+)",
+        re.MULTILINE,
     ),
     "rtw88_c5_ping": re.compile(
         r"rtw88_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
@@ -4908,6 +4985,151 @@ def judge(text: str, expect: dict | None = None) -> dict:
             if int(health["dequeue"]) > 0:
                 ratio = int(health["status"]) / int(health["dequeue"])
                 notes.append(f"rtw88_c5: tx_status/dequeue={ratio:.2f}")
+
+    # --- RTL8188EUS (rtl8xxxu, mac80211) evidence checks -----------------
+    if cases.get("rtl8xxxu_c3", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_c3_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_c3: {fail['reason']}")
+        drv = found["rtl8xxxu_c3_drivers"]
+        if not drv or int(drv["n"]) == 0:
+            errors.append("rtl8xxxu_c3: PASS without a registered usb_driver")
+        fw = found["rtl8xxxu_c3_fw"]
+        if not fw:
+            errors.append(
+                "rtl8xxxu_c3: PASS without the firmware revision line")
+        elif "signature 0x88e1" not in fw["line"]:
+            errors.append(
+                f"rtl8xxxu_c3: firmware line is not the 8188EU's: {fw['line']}")
+        else:
+            notes.append(f"rtl8xxxu_c3: fw {fw['line'].strip()}")
+        # The bench fact this round pre-registers: the dongle is behind the
+        # external hub on the bench's "xhci0".  The name needs its mapping: the
+        # GT kernel's xhci-hcd.0.auto is the DWC3 instance at 0xFCC00000, which
+        # this board map calls busid 3 (usb_domain.h enumerates it second); the
+        # 2026-11-14 18:10 boot put the 8188EUS at `bus=3 hub=2 port=2`, next to
+        # the 8851BU on the same hub (port 1).  A claim on another controller is
+        # a different arm, so it is an error here rather than a note.
+        claim = found["rtl8xxxu_c3_claim"]
+        if not claim:
+            errors.append(
+                "rtl8xxxu_c3: PASS without the 0bda:8179 claim line")
+        elif int(claim["bus"]) != 3 or int(claim["hub"]) < 2:
+            errors.append(
+                f"rtl8xxxu_c3: claimed on bus={claim['bus']} hub={claim['hub']}, "
+                "the round's bench is bus=3 (xhci-hcd.0.auto / 0xFCC00000) "
+                "behind the hub")
+        else:
+            notes.append(
+                f"rtl8xxxu_c3: claim bus={claim['bus']} hub={claim['hub']} "
+                f"port={claim['port']} intf={claim['intf']} "
+                f"spd={claim['spd']}")
+        wl = found["rtl8xxxu_c3_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("rtl8xxxu_c3: wlan0 is missing")
+        mac = found["rtl8xxxu_c3_mac"]
+        if not mac:
+            errors.append("rtl8xxxu_c3: PASS without the netdev MAC line")
+        else:
+            notes.append(f"rtl8xxxu_c3: mac={mac['mac']}")
+        ph = found["rtl8xxxu_c3_wiphy"]
+        if not ph:
+            errors.append("rtl8xxxu_c3: PASS without the wiphy (M0) line")
+        elif (ph["managed"] != "1" or ph["ht"] != "1" or ph["vht"] != "0" or
+              ph["bands"] != "1"):
+            errors.append(
+                f"rtl8xxxu_c3: wiphy bands={ph['bands']} "
+                f"managed={ph['managed']} ht={ph['ht']} vht={ph['vht']}")
+        else:
+            notes.append(
+                f"rtl8xxxu_c3: wiphy bands={ph['bands']} "
+                f"managed={ph['managed']} ht={ph['ht']} vht={ph['vht']}")
+        st = found["rtl8xxxu_c3_start"]
+        if not st:
+            errors.append("rtl8xxxu_c3: PASS without the start line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"rtl8xxxu_c3: start rc={st['rc']}")
+        if not found["rtl8xxxu_c3_pass"]:
+            errors.append("rtl8xxxu_c3: the PASS line is missing")
+
+    if cases.get("rtl8xxxu_c4", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_c4_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_c4: {fail['reason']}")
+        sc = found["rtl8xxxu_c4_scan"]
+        if not sc:
+            errors.append("rtl8xxxu_c4: PASS without the scan line")
+        elif int(sc["rc"]) != 0:
+            errors.append(f"rtl8xxxu_c4: scan rc={sc['rc']}")
+        elif sc["ssid"] != "labwifi-ar-ht20s" or int(sc["freq"]) != 2432:
+            errors.append(
+                f"rtl8xxxu_c4: scan was {sc['ssid']}@{sc['freq']}, "
+                "expected labwifi-ar-ht20s@2432")
+        bss = found["rtl8xxxu_c4_bss"]
+        if not bss:
+            errors.append("rtl8xxxu_c4: PASS without a BSS line")
+        elif bss["ssid"] != "labwifi-ar-ht20s" or int(bss["freq"]) != 2432:
+            errors.append(
+                f"rtl8xxxu_c4: BSS {bss['ssid']}@{bss['freq']}, "
+                "expected labwifi-ar-ht20s@2432")
+        else:
+            notes.append(
+                f"rtl8xxxu_c4: bss {bss['bssid']} ch={bss['freq']} "
+                f"sig={bss['sig']}")
+        if not found["rtl8xxxu_c4_pass"]:
+            errors.append("rtl8xxxu_c4: the PASS line is missing")
+
+    if cases.get("rtl8xxxu_c5", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_c5_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_c5: {fail['reason']}")
+        conn = found["rtl8xxxu_c5_connect"]
+        if not conn:
+            errors.append("rtl8xxxu_c5: PASS C5 without the connect line")
+        elif int(conn["rc"]) != 0:
+            errors.append(f"rtl8xxxu_c5: connect rc={conn['rc']}")
+        elif int(conn["freq"]) != 2432:
+            errors.append(f"rtl8xxxu_c5: connect freq={conn['freq']}")
+        done = found["rtl8xxxu_c5_connected"]
+        if not done:
+            errors.append("rtl8xxxu_c5: PASS C5 without the connected line")
+        elif conn and done["bssid"] != conn["bssid"]:
+            errors.append(
+                f"rtl8xxxu_c5: connected bssid={done['bssid']} differs from "
+                "the connect target")
+        if not found["rtl8xxxu_c5_pass_c5"]:
+            errors.append("rtl8xxxu_c5: the C5 PASS line is missing")
+        netif = found["rtl8xxxu_c5_netif"]
+        if not netif:
+            errors.append("rtl8xxxu_c5: PASS C6 without the netif line")
+        elif not netif["ip"].startswith("192.168.99.2/"):
+            errors.append(f"rtl8xxxu_c5: netif ip={netif['ip']}")
+        pings = {p["payload"]: p for p in found["rtl8xxxu_c5_ping"]}
+        for want in ("56", "1400"):
+            ping = pings.get(want)
+            if not ping:
+                errors.append(
+                    f"rtl8xxxu_c5: PASS C6 without the {want} B ping row")
+            elif ping["tx"] != ping["rx"]:
+                errors.append(
+                    f"rtl8xxxu_c5: ping {want} B {ping['rx']}/{ping['tx']}")
+            else:
+                notes.append(
+                    f"rtl8xxxu_c5: ping {want} B {ping['rx']}/{ping['tx']} "
+                    f"rtt {ping['min']}/{ping['avg']}/{ping['max']} ms")
+        diag = found["rtl8xxxu_c5_diag"]
+        if not diag:
+            errors.append("rtl8xxxu_c5: PASS C6 without the diag ledger")
+        elif int(diag["rx"]) == 0:
+            errors.append("rtl8xxxu_c5: adapter counted no receive frame")
+        else:
+            notes.append(
+                f"rtl8xxxu_c5: adapter rx={diag['rx']} tx={diag['tx']} "
+                f"tx_fail={diag['fail']}")
+        if not found["rtl8xxxu_c5_pass_c6"]:
+            errors.append("rtl8xxxu_c5: the C6 PASS line is missing")
+        if not found["rtl8xxxu_c5_pass"]:
+            errors.append("rtl8xxxu_c5: the case PASS line is missing")
 
     if cases.get("rtw88_ap", {}).get("verdict") == "pass":
         # The rtw88_ap patterns live in LIST_PATTERNS (the file's second table),

@@ -42,7 +42,7 @@ help:
 		'  images             alias of image (this line carries one backend)' \
 		'  libs               archive the image object groups under build/lib/<profile>' \
 		'  s0-compile         compile the imported stack TUs against the face (no link; S0_RUN=<n>)' \
-		'  s1-driver-compile  compile a vendored driver's TUs against its face (S1_DRIVER=iwlwifi|rtl8189fs|rtw89, S1_RUN=<n>)' \
+		'  s1-driver-compile  compile a vendored driver'"'"'s TUs against its face (S1_DRIVER=iwlwifi|rtl8189fs|rtw88|rtw89|rtl8xxxu, S1_RUN=<n>)' \
 		'  s1-link            partial-link stack+driver and classify the undefined list (S1_DRIVER, S1_LINK_RUN=<n>)' \
 		'  host-test          build and run the host semantic bench (green, then --break red)' \
 		'  fw-check           verify the tracked firmware image and the generated blob' \

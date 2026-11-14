@@ -122,6 +122,23 @@ config LIBLINUX80211_RTW88
 	  mac80211 stack is a GPL-2.0 link product and also redistributes the
 	  Realtek rtw8821c firmware image (docs/LICENSES.md).
 
+config LIBLINUX80211_RTL8XXXU
+	bool "rtl8xxxu (RTL8188EU / USB) driver"
+	depends on LIBLINUX80211_USB
+	depends on LIBLINUX80211_WIRELESS
+	help
+	  Links the vendored rtl8xxxu driver (9 TUs, byte-identical to the GT
+	  pin) against the wireless stack.  This is a mac80211 SoftMAC driver:
+	  the stack is the MLME and the driver implements the ops over its own
+	  USB HCI.  The module's fileops table names every chip it supports, so
+	  all nine units are in the link closure and the chip is a run-time
+	  id_table match plus its firmware image; the compiled set is derived
+	  from the driver's own Makefile under
+	  wireless-drivers/rtl8xxxu/driver_config.h.  The tree is GPL-2.0-only,
+	  so an artifact that links it is a GPL-2.0 link product and also
+	  redistributes the Realtek rtl8188eu firmware image
+	  (docs/LICENSES.md).
+
 config LIBLINUX80211_RTL8189FS
 	bool "rtl8189fs (RTL8188F / SDIO 8189FTV) vendor driver"
 	depends on LIBLINUX80211_SDIO

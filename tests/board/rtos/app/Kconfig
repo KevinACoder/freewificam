@@ -254,6 +254,41 @@ config RTW88_C5_PEER_WINDOW_MS
 	  arm uses 12000; too short a window puts the last packets after the
 	  case's own ping and measures contention.
 
+# --- rtl8xxxu (RTL8188EU, USB) ---------------------------------------------
+#
+# Same two knobs as the other USB cards: which controller family the profile
+# brings up, and how long C5 holds the link for the host's AP->board arm.  The
+# bench fact this round pins: the dongle sits behind the external hub on the
+# bench's "xhci0", which is the GT kernel's xhci-hcd.0.auto - the DWC3 instance
+# at 0xFCC00000, i.e. this board map's busid 3 (the 2026-11-14 18:10 boot put
+# the 8188EUS at bus=3 hub=2 port=2, and the 8851BU on the same hub at port 1).
+# So 0 (the xHCI pair) is the default; the case prints the controller list it
+# tried and the claim hook prints the bus/hub/port it landed on.
+
+config RTL8XXXU_USB_BUS
+	int "rtl8xxxu USB controller family (0 = xHCI roots 3,2; 1 = EHCI roots 1,0)"
+	default 0
+	range 0 1
+	help
+	  The two controller lists this board offers.  0 (the default) is the
+	  USB3 (DWC3) xHCI pair; the 2026-11-14 bench pins the RTL8188EUS behind
+	  the external hub on the bench's "xhci0" = the GT kernel's
+	  xhci-hcd.0.auto = 0xFCC00000 = this board map's busid 3 (measured:
+	  `claim ... bus=3 hub=2 port=2`), and the previous line's same dongle
+	  was seen behind a hub on an xHCI instance too.  1 is the USB2 EHCI pair
+	  (busids 1,0), the fallback arm if the dongle moves.  A profile that
+	  changes this must say so in its run record.
+
+config RTL8XXXU_C5_PEER_WINDOW_MS
+	int "rtl8xxxu C5 peer-arm window (ms)"
+	default 12000
+	range 1000 30000
+	help
+	  How long the C5 case holds the link idle for the host's AP->board arm
+	  (the Pi's two ICMP rounds and its station dump).  The other USB cards
+	  use 12000 on this bench; too short a window puts the last packets
+	  after the case's own ping and measures contention.
+
 config RTW88_C6_UDPUP_KBPS
 	int "rtw88 C6 UDP-up offered rate (kbit/s)"
 	default 10000

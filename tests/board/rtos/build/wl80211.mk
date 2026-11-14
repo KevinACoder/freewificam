@@ -30,7 +30,8 @@
 WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g iwl7260_mon \
 	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap \
 	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
-	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap
+	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
+	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -94,6 +95,16 @@ else
 WL80211_RTW88_SRCS :=
 endif
 
+# rtl8xxxu is a fifth driver world of the same shape: the driver's nine units
+# under its own face (wireless-drivers/rtl8xxxu/driver_config.h) plus the
+# compiled-in rtl8188eufw image.  It has no first-party diagnostic unit yet: the
+# C3-C5 gates are the driver's own lines, so nothing is added beside the import.
+ifeq ($(CONFIG_LIBLINUX80211_RTL8XXXU),1)
+WL80211_RTL8XXXU_SRCS := $(RTL8XXXU_IMPL_SRCS) $(LIB8)/fw/rtl8188eufw_blob.c
+else
+WL80211_RTL8XXXU_SRCS :=
+endif
+
 WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The C4/C5 bench seam, not a stack TU: it builds the real attribute bytes and
@@ -111,11 +122,21 @@ WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
 # The wrap is what makes the shim a seam instead of a stack edit.  It is only
 # meaningful when the stack is linked, and it applies to every reference
 # (iwlwifi's iTXQ wake path is the one that matters).
+#
+# Three of the wraps are NOT the component's: `__wrap_ieee80211_amsdu_to_8023s`,
+# `__wrap_rtw_fw_c2h_cmd_rx_irqsafe` and `__wrap_rtw_tx_report_handle` are
+# defined by rtw88's first-party diagnostic unit
+# (wireless-drivers/rtw88/ports/rtos/rtw88_diag.c), which is compiled only into
+# rtw88 images.  Carrying their -Wl,--wrap on every wireless image made the
+# other driver worlds fail at link: mac80211's `__ieee80211_rx_h_amsdu` keeps a
+# live call to `ieee80211_amsdu_to_8023s`, the wrap rewrites it to
+# `__wrap_ieee80211_amsdu_to_8023s`, and that symbol is defined nowhere outside
+# the rtw88 world (found by the rtl8xxxu C3 image's link gate, 2026-11-14).  The
+# other wraps are component-defined (c2h_inline.c, tx_health.c,
+# tx_dequeue_context.c) or iwlwifi's (unreferenced outside that world), so they
+# stay global.
 WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=ieee80211_queue_work \
-	-Wl,--wrap=rtw_fw_c2h_cmd_rx_irqsafe \
-	-Wl,--wrap=rtw_tx_report_handle \
-	-Wl,--wrap=ieee80211_amsdu_to_8023s \
 	-Wl,--wrap=cfg80211_rx_mgmt_ext \
 	-Wl,--wrap=ieee80211_tx_status_skb \
 	-Wl,--wrap=ieee80211_stop_queue \
@@ -128,6 +149,15 @@ WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=iwl_trans_pci_interrupts \
 	-Wl,--wrap=ieee80211_sta_ps_transition \
 	-Wl,--wrap=ieee80211_sta_set_buffered
+
+# The rtw88-only wraps, added when (and only when) the unit that defines them is
+# in the link closure.
+ifeq ($(CONFIG_LIBLINUX80211_RTW88),1)
+WL80211_LDFLAGS += \
+	-Wl,--wrap=rtw_fw_c2h_cmd_rx_irqsafe \
+	-Wl,--wrap=rtw_tx_report_handle \
+	-Wl,--wrap=ieee80211_amsdu_to_8023s
+endif
 
 # The hostapd AP stack (third-party/wpa_supplicant-rtos) and its platform bottom: hostapd's
 # own headers and OS abstraction, so it compiles in its own flag world.  The
@@ -202,7 +232,7 @@ WL80211_HOSTAP_FP_SRCS := $(THIRD_PARTY)/wpa_supplicant-rtos/wpa_supplicant/even
 WL80211_HOSTAP_FP_CFLAGS := $(filter-out -mgeneral-regs-only,$(WL80211_HOSTAP_CFLAGS))
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
-	$(WL80211_RTW89_SRCS) $(WL80211_RTW88_SRCS) \
+	$(WL80211_RTW89_SRCS) $(WL80211_RTW88_SRCS) $(WL80211_RTL8XXXU_SRCS) \
 	$(WL80211_RTL8189FS_SRCS) $(WL80211_CASE_SRCS) \
 	$(WL80211_PROBE_SRCS) $(WL80211_HOSTAP_SRCS) $(WL80211_HOSTAP_FP_SRCS)
 

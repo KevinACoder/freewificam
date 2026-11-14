@@ -34,6 +34,8 @@ endif
 # here and one more row in tools/rtos/fw-blobs.py.
 FW_BLOBS := \
 	$(ROOT)/components/liblinux80211/fw/iwl7260_fw_blob.c \
+	$(ROOT)/components/liblinux80211/fw/rtw8821c_fw_blob.c \
+	$(ROOT)/components/liblinux80211/fw/rtl8188eufw_blob.c \
 	$(ROOT)/components/liblinux80211/fw/rtw8851b_fw_blob.c
 FW_MISSING := $(foreach f,$(FW_BLOBS),$(if $(wildcard $(f)),,$(f)))
 ifneq ($(strip $(FW_MISSING)),)

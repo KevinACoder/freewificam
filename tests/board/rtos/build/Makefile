@@ -301,7 +301,8 @@ endif
 # engine rides the same controllers, while the engine and its adapter belong to
 # the liblinux80211 world (kpi.mk), not to this file.
 USB_CONSUMER_CASES := usb_xhci usb_ehci rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
-	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap
+	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
+	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5
 ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
@@ -423,6 +424,23 @@ RTW88_CFLAGS := $(S0_CFLAGS) \
 	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
 	-Wno-override-init
 
+# The fifth vendored driver: rtl8xxxu (RTL8188EU, USB).  Same shape again: its
+# own include root and feature face, and it is a mac80211 SoftMAC driver, so its
+# sources compile in the driver flag world below.  Its face is one symbol (the
+# module's fileops table names every chip, so all nine units are in the link
+# closure); the driver's receive urbs are `IEEE80211_MAX_FRAME_LEN + rx_desc`
+# (~2.3 KiB), two orders below the adapter's stage slot, so unlike rtw88/rtw89
+# there is no bulk-in size to read out of a driver header and gate on.
+RTL8XXXU_DIR := $(ROOT)/wireless-drivers/rtl8xxxu
+$(eval $(call component_sources,$(RTL8XXXU_DIR),drv,RTL8XXXU_IMPL))
+
+RTL8XXXU_CFLAGS := $(S0_CFLAGS) \
+	-I$(RTL8XXXU_DIR) \
+	-include $(RTL8XXXU_DIR)/driver_config.h \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
+	-Wno-override-init
+
 S1_CFLAGS := $(S0_CFLAGS) \
 	-I$(IWL_DRV) \
 	-include $(LIB8)/include/linux80211/driver_config.h \
@@ -446,6 +464,10 @@ else ifeq ($(S1_DRIVER),rtw88)
 S1_TU_SET := $(RTW88_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(RTW88_CFLAGS)
 S1_DRIVER_TAG := rtw88
+else ifeq ($(S1_DRIVER),rtl8xxxu)
+S1_TU_SET := $(RTL8XXXU_IMPL_SRCS)
+S1_DRIVER_CFLAGS := $(RTL8XXXU_CFLAGS)
+S1_DRIVER_TAG := rtl8xxxu
 else
 S1_TU_SET := $(IWLWIFI_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(S1_CFLAGS)
@@ -767,6 +789,7 @@ $(foreach s,$(filter-out %.S,$(WL80211_STACK_SRCS) $(WL80211_CASE_SRCS) $(WL8021
 $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_DRIVER_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTW89_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTW88_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_RTL8XXXU_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C_RENAME,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))

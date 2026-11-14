@@ -189,6 +189,24 @@ TUs) is re-derived from the driver's own Makefiles under
 `include/linux80211/driver_config.h`; `wireless-drivers/iwlwifi/PROVENANCE.md`
 is the tree's own record (pin, licence mix, why 72 and not 74).
 
+## The rtl8xxxu import (2026-11-14, the RTL8188EUS arm)
+
+The 8188EU driver tree was imported verbatim from the same GT pin into
+`wireless-drivers/rtl8xxxu/` (13 files: nine `*.c`, two headers, `Kconfig`,
+`Makefile`). It is byte-identical to the tree the previous net80211 line
+vendored for its pilot card - the `diff` is empty - so that line's board
+evidence (attach, scan, join, data plane, with the same CherryUSB xHCI port
+bytes this repository carries) describes the same driver bytes. Per-file
+digests: `wireless-drivers/rtl8xxxu/IMPORT.tsv`; re-check with
+`tools/build/import-driver.py --driver rtl8xxxu --check`. The compiled set (nine
+TUs: the module's `fileops` table names every chip it supports) is re-derived
+from the driver's own Makefile under
+`wireless-drivers/rtl8xxxu/driver_config.h`; the tree's own record is
+`wireless-drivers/rtl8xxxu/PROVENANCE.md`.
+
+The tree is `GPL-2.0-only` in every file (not dual-licensed, unlike rtw88/rtw89),
+so a product that links it has no licence choice: see `docs/LICENSES.md` §4c.
+
 ## The tracked firmware inputs (2026-11-11; RTL8851BU added 2026-11-13)
 
 The driver firmware images used to be build products of the GT tree, which
@@ -200,10 +218,13 @@ are now tracked inputs of this repository, together with their licence texts:
 | `components/liblinux80211/fw/iwlwifi-7260-17.ucode` | 1,049,340 | `5d81a6003df0228a497ad27f916ba2c979614b4c439b0f45a5f2873dc0607fe8` | GT line's initramfs at pin `63a2a8ab9cd3`, unmodified | Intel binary firmware licence (`LICENCE.iwlwifi_firmware` beside it) |
 | `components/liblinux80211/fw/LICENCE.iwlwifi_firmware` | 2,046 | — | Intel's redistribution terms as distributed by linux-firmware | — |
 | `components/liblinux80211/fw/rtw89/rtw8851b_fw-1.bin` | 1,408,706 | `1c4ccb5fa06bf5649146025e95993db66876a1fbc0bd766ec05686587f69c1b7` | GT line's initramfs `lib/firmware/rtw89/` and the previous line's tracked `firmware/rtw89/` copy (same bytes), unmodified | Realtek binary redistribution terms (`LICENCE.realtek_firmware` beside it) |
+| `components/liblinux80211/fw/rtw88/rtw8821c_fw.bin` | 139,472 | `2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0` | the previous line's tracked `firmware/rtw88/` copy (same bytes), unmodified | Realtek binary redistribution terms (`LICENCE.realtek_firmware` beside it) |
+| `components/liblinux80211/fw/rtlwifi/rtl8188eufw.bin` | 15,262 | `2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4` | the previous line's tracked `firmware/rtlwifi/` copy (same bytes as its GT initramfs image and its compiled-in blob), unmodified | Realtek binary redistribution terms (`LICENCE.realtek_firmware` beside it) |
 | `components/liblinux80211/fw/LICENCE.realtek_firmware` | 2,120 | — | Realtek's redistribution terms as distributed by linux-firmware | — |
 
-The generated units `components/liblinux80211/fw/iwl7260_fw_blob.c` and
-`components/liblinux80211/fw/rtw8851b_fw_blob.c` are build products and stay
+The generated units `components/liblinux80211/fw/iwl7260_fw_blob.c`,
+`components/liblinux80211/fw/rtw8821c_fw_blob.c` and
+`components/liblinux80211/fw/rtl8188eufw_blob.c` are build products and stay
 untracked; `tools/rtos/fw-blobs.py` regenerates them from the tracked images
 and pins each SHA-256. `components/liblinux80211/fw/PROVENANCE.md` is the
 tree's own record.
