@@ -895,6 +895,8 @@ and both ICMP payloads in both directions.
 [   7.189] rtw89_ap: start rc=0
 [   7.192] rtw89_ap: netif up name=wl0 ip=192.168.99.1/24 mac=90:de:80:1b:25:ed
 [   7.200] rtw89_ap: security wpa2=0 ssid=rtos-8851-ap channel=5 bcn_int=100 dtim_req=2
+[  14.019] rtw89_ap: hostap start rc=0 ready=1
+[  14.023] rtw89_ap: link freq=2432
 [  14.026] rtw89_ap: PASS A1
 [  20.571] rtw89_ap: sta n=1 hostap=1 mac=90:de:80:4c:38:c5
 [  20.576] rtw89_ap: PASS A2
