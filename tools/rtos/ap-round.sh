@@ -43,6 +43,24 @@ WPA2=${WPA2:-0}
 # overrides both (its anchors carry its own prefix and its own case list).
 CASE=${CASE:-iwl7260_ap}
 CASE_EXPECT=${CASE_EXPECT:-tick,pcie,iwl7260_ap}
+# The bench's two roles inside pi-ap.sh.  The defaults are every AP round so
+# far: the Pi's MT7921AU (wlan1) is the client and the 8812AU (wlan2) the
+# monitor.  The 8188EU throughput arm swaps them (`--peer wlan2 --mon wlan1`)
+# so both arms of that round run the same radio pair with the roles exchanged,
+# and passes RESTORE_MON_IF=wlan1 to put the standard bench back afterwards.
+PEER_IF=${PEER_IF:-wlan1}
+MON_IF=${MON_IF:-wlan2}
+RESTORE_MON_IF=${RESTORE_MON_IF:-wlan1}
+STA_IF=$PEER_IF
+# The A4 phase windows: the defaults are the 7260/8851 AP table's.  The 8188EU
+# arm runs the station arm's direction-paired windows (TCP up 30 s, down 20 s;
+# UDP up 20 s, down 10 s), so the peer's senders are told to run longer.
+CLIENT_TCP_SECS=${CLIENT_TCP_SECS:-24}
+CLIENT_UDP_SECS=${CLIENT_UDP_SECS:-18}
+UDP_UP_RATE=${UDP_UP_RATE:-40M}
+# How many sequential TCP servers to pre-start for the down phases: 2 for the
+# AP tables with tcpdn+tcpdn2, 1 for the 8188EU arm's single send phase.
+TCP_SERVERS=${TCP_SERVERS:-2}
 BIN="$ROOT/tests/board/rtos/build/build/rtos-freertos.bin"
 TIMEOUT=480
 EVIDENCE=
@@ -51,7 +69,7 @@ NO_PEER=0
 # The stall arm keeps the boot alive through a silence and sends a liveness
 # ping every 2 s; the clean arm stays free of that extra traffic.
 STALL=0
-BOOT_RETRY=1
+BOOT_RETRY=${BOOT_RETRY:-1}
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -60,6 +78,8 @@ while [ $# -gt 0 ]; do
 		--timeout)  TIMEOUT=${2:?}; shift 2 ;;
 		--channel)  CH=${2:?}; shift 2 ;;
 		--freq)     FREQ=${2:?}; shift 2 ;;
+		--peer)     PEER_IF=${2:?}; STA_IF=$PEER_IF; shift 2 ;;
+		--mon)      MON_IF=${2:?}; shift 2 ;;
 		--wpa2)     WPA2=1; shift ;;
 		--diag)     DIAG=1; shift ;;
 		--no-peer)  NO_PEER=1; shift ;;
@@ -78,7 +98,7 @@ MON_UP_PCAP=$PI_DIR/mon-up.pcap
 
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" "$@"; }
 pisu() { pi "sudo -n $*"; }
-pih() { pi "sudo -n env CH=$CH FREQ=$FREQ SSID=$SSID PI_IP=$PI_IP AP_IP=$BOARD_IP PSK=$PSK WPA2=$WPA2 bash /tmp/pi-ap.sh $*"; }
+pih() { pi "sudo -n env CH=$CH FREQ=$FREQ SSID=$SSID PI_IP=$PI_IP AP_IP=$BOARD_IP PSK=$PSK WPA2=$WPA2 STA_IF=$STA_IF MON_IF=$MON_IF RESTORE_MON_IF=$RESTORE_MON_IF UDP_UP_RATE=$UDP_UP_RATE bash /tmp/pi-ap.sh $*"; }
 
 RESTORED=0
 mon_down_pid=
@@ -213,6 +233,11 @@ start_peer_sink() {	# $1 = tag, $2 = seconds
 # done raced the first server's 40 s timeout and it died on "Address already
 # in use" (2026-11-14 rtos-ap1: phase 3 0 bytes).
 start_tcp_pair() {
+	if [ "$TCP_SERVERS" = 1 ]; then
+		pih "server-tcp $PI_DIR/peer-tcpdn.txt 25" >/dev/null 2>&1 &
+		phase_pids+=($!)
+		return 0
+	fi
 	( pih "server-tcp $PI_DIR/peer-tcpdn.txt 25" >/dev/null 2>&1
 	  pih "server-tcp $PI_DIR/peer-tcpdn2.txt 70" >/dev/null 2>&1 ) &
 	phase_pids+=($!)
@@ -227,11 +252,11 @@ alive_ping() {
 on_phase() {		# $1 = name
 	case "$1" in
 	tcpup)
-		pih "client-tcp 24" > "$EVIDENCE/peer-tcpup.txt" 2>&1 &
+		pih "client-tcp $CLIENT_TCP_SECS" > "$EVIDENCE/peer-tcpup.txt" 2>&1 &
 		phase_pids+=($!)
 		;;
 	udpup)
-		pih "client-udp 18" > "$EVIDENCE/peer-udpup.txt" 2>&1 &
+		pih "client-udp $CLIENT_UDP_SECS" > "$EVIDENCE/peer-udpup.txt" 2>&1 &
 		phase_pids+=($!)
 		;;
 	esac
@@ -343,10 +368,14 @@ for _ in $(seq 1 3000); do
 		phase_order+=("$ph")
 		echo "phase $ph at $(date -Is) epoch=${phase_t0[$ph]}" \
 			>> "$EVIDENCE/phase-seen.txt"
-		# The downlink sink is up ~15 s before phase 4 (started during
-		# phase 3), so its bind cannot race the blast.
+		# The downlink sink is up before the board's blast, so its bind
+		# cannot race it: the 7260/8851 tables put udpdn after tcpdn2, the
+		# 8188EU direction-paired table puts it after udpup.
 		if [ "$ph" = tcpdn2 ]; then
 			start_peer_sink udpdn 40
+		fi
+		if [ "$ph" = udpup ]; then
+			start_peer_sink udpdn 25
 		fi
 		on_phase "$ph"
 	done <<< "$PHASES"

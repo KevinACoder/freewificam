@@ -98,6 +98,19 @@ CASES = (
     # are the rtw88 AP case's with this case's prefix, so ap-round.sh drives
     # both; the driver carries two recorded patches for the role.
     "rtl8xxxu_ap",
+    # The monitor role of the same USB card (runs/2026-11-14-rtl8xxxu-8188eu-mon):
+    # the same M1-M4 shape as the 7260/8851BU monitor arms, with this driver's
+    # bring-up in front.  The role needed the driver's fourth recorded patch
+    # (WANT_MONITOR_VIF + the promiscuous RCR); the judge holds the
+    # pre-registered floor, and the BSSID line is the bench identity the A/B
+    # arm against the MT7921AU monitor compares.
+    "rtl8xxxu_mon",
+    # The same card's C6T arm (runs/2026-11-14-rtl8xxxu-8188eu-tp): the seven
+    # phases over the wl0 netif rtl8xxxu_c5 assembled in the same boot.  The
+    # anchors are the rtw88 C6T case's with this card's prefix, so one judge
+    # block shape serves both; the throughput verdict itself is the report
+    # tool's (tools/rtos/c6-report.py), not this file's.
+    "rtl8xxxu_c6",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -700,6 +713,67 @@ PATTERNS = {
     "rtw89_mon_pass": re.compile(r"rtw89_mon: PASS MON", re.MULTILINE),
     "rtw89_mon_fail": re.compile(
         r"rtw89_mon: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # The rtl8xxxu monitor role's anchors.
+    "rtl8xxxu_mon_fwreg": re.compile(
+        r"rtl8xxxu_mon: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_wlan0": re.compile(
+        r"rtl8xxxu_mon: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]+) iftype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_sink": re.compile(
+        r"rtl8xxxu_mon: sink enabled=(?P<enabled>[01])", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_set_iface": re.compile(
+        r"rtl8xxxu_mon: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE
+    ),
+    "rtl8xxxu_mon_set_freq": re.compile(
+        r"rtl8xxxu_mon: set_freq rc=(?P<rc>-?\d+) freq=(?P<freq>\d+)",
+        re.MULTILINE
+    ),
+    "rtl8xxxu_mon_start": re.compile(
+        r"rtl8xxxu_mon: start rc=(?P<rc>-?\d+) netif_running=(?P<run>[01]) "
+        r"devtype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_window": re.compile(
+        r"rtl8xxxu_mon: window ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_sink_totals": re.compile(
+        r"rtl8xxxu_mon: sink frames=(?P<frames>\d+) bytes=(?P<bytes>\d+) "
+        r"beacons=(?P<beacons>\d+) probes=(?P<probes>\d+) "
+        r"probe_resp=(?P<probe_resp>\d+) auth=(?P<auth>\d+) "
+        r"assoc=(?P<assoc>\d+) data=(?P<data>\d+) ctrl=(?P<ctrl>\d+) "
+        r"other=(?P<other>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_radiotap": re.compile(
+        r"rtl8xxxu_mon: radiotap it_len=(?P<min>\d+)/(?P<max>\d+) "
+        r"freq=(?P<freq>\d+) bad=(?P<bad>\d+) short=(?P<short>\d+)",
+        re.MULTILINE
+    ),
+    "rtl8xxxu_mon_bssid": re.compile(
+        r"rtl8xxxu_mon: bssid=(?P<bssid>[0-9a-f:]+) "
+        r"first_frame=(?P<i>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_bssid_none": re.compile(
+        r"rtl8xxxu_mon: bssid=none", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_lwip_in": re.compile(
+        r"rtl8xxxu_mon: lwip in rx_frames=(?P<frames>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) tx_frames=(?P<tx>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_lwip_out": re.compile(
+        r"rtl8xxxu_mon: lwip out rx_frames=(?P<frames>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) tx_frames=(?P<tx>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_tx": re.compile(
+        r"rtl8xxxu_mon: tx dev tx_packets=(?P<pkts>\d+) "
+        r"tx_bytes=(?P<bytes>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_pass": re.compile(r"rtl8xxxu_mon: PASS MON", re.MULTILINE),
+    "rtl8xxxu_mon_fail": re.compile(
+        r"rtl8xxxu_mon: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "iwl7260_ap_fail": re.compile(
         r"iwl7260_ap: FAIL (?P<reason>.+)$", re.MULTILINE
@@ -1604,6 +1678,22 @@ PATTERNS = {
     "rtw88_c6_fail": re.compile(
         r"rtw88_c6: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
+    "rtl8xxxu_c6_plan": re.compile(
+        r"rtl8xxxu_c6: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"dev=(?P<dev>\S+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c6_ready": re.compile(
+        r"rtl8xxxu_c6: ready netif=(?P<netif>[01]) rx_frames=(?P<rx>\d+) "
+        r"tx_frames=(?P<tx>\d+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c6_server": re.compile(
+        r"rtl8xxxu_c6: server tcp=(?P<tcp>\d+) udp=(?P<udp>\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE,
+    ),
+    "rtl8xxxu_c6_pass": re.compile(r"rtl8xxxu_c6: PASS C6T", re.MULTILINE),
+    "rtl8xxxu_c6_fail": re.compile(
+        r"rtl8xxxu_c6: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
@@ -1623,6 +1713,23 @@ LIST_PATTERNS = {
         r"iwl7260_mon: frame (?P<i>\d+) len=(?P<len>\d+) "
         r"it_len=(?P<it_len>\d+) fc=0x(?P<fc>[0-9a-f]+) "
         r"hex=(?P<hex>[0-9a-f]+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_bsscensus": re.compile(
+        r"rtl8xxxu_mon: bsscensus slots=(?P<slots>\d+)/(?P<max>\d+) "
+        r"full=(?P<full>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_bssbeacons": re.compile(
+        r"rtl8xxxu_mon: bssbeacons=(?P<bssid>[0-9a-f:]+) "
+        r"beacons=(?P<beacons>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_sample": re.compile(
+        r"rtl8xxxu_mon: sample t=(?P<t>\d+) frames=(?P<frames>\d+) "
+        r"beacons=(?P<beacons>\d+) data=(?P<data>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_mon_frame": re.compile(
+        r"rtl8xxxu_mon: frame (?P<i>\d+) len=(?P<len>\d+) "
+        r"it_len=(?P<it_len>\d+) fc=0x(?P<fc>[0-9a-f]+) "
+        r"hdr=(?P<hdr>[0-9a-f-]+)", re.MULTILINE
     ),
 
     "rtl8189fs_sta_ping": re.compile(
@@ -1935,6 +2042,25 @@ LIST_PATTERNS = {
     "rtw88_c6_done": re.compile(
         r"rtw88_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
     ),
+    "rtl8xxxu_c6_begin": re.compile(
+        r"rtl8xxxu_c6: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) "
+        r"name=(?P<name>\S+)", re.MULTILINE,
+    ),
+    "rtl8xxxu_c6_report": re.compile(
+        r"rtl8xxxu_c6: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_c6_census": re.compile(
+        r"rtl8xxxu_c6: phase (?P<n>\d+) census rx_frames=(?P<rx>\d+) "
+        r"rx_bytes=(?P<rxb>\d+) tx_frames=(?P<tx>\d+) "
+        r"tx_bytes=(?P<txb>\d+) tx_fail=(?P<fail>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_c6_done": re.compile(
+        r"rtl8xxxu_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
+    ),
     "rtw88_c5_txhealth": re.compile(
         r"rtw88_c5: txhealth dequeue=(?P<dequeue>\d+) "
         r"tx_status=(?P<status>\d+) mgmt=(?P<mgmt>\d+) data=(?P<data>\d+) "
@@ -2029,6 +2155,27 @@ LIST_PATTERNS = {
         r"tx_frames=(?P<tx>\d+) tx_fail=(?P<txf>\d+)", re.MULTILINE
     ),
     "rtl8xxxu_ap_pass_a3": re.compile(r"rtl8xxxu_ap: PASS A3", re.MULTILINE),
+    "rtl8xxxu_ap_server": re.compile(
+        r"rtl8xxxu_ap: server tcp=(?P<tcp>\d+) udp=(?P<udp>\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_pass_apt": re.compile(
+        r"rtl8xxxu_ap: PASS APT", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_phase_begin": re.compile(
+        r"rtl8xxxu_ap: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) air=(?P<air>\S+) port=(?P<port>\d+) "
+        r"window_ms=(?P<win>\d+) name=(?P<name>\S+) "
+        r"peer_ms=(?P<peer>\d+) rate_kbps=(?P<rate>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_phase_report": re.compile(
+        r"rtl8xxxu_ap: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE
+    ),
+    "rtl8xxxu_ap_phase_done": re.compile(
+        r"rtl8xxxu_ap: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
+    ),
     "rtl8xxxu_ap_pass_ap": re.compile(r"rtl8xxxu_ap: PASS AP$", re.MULTILINE),
     "rtl8xxxu_ap_fail": re.compile(
         r"rtl8xxxu_ap: FAIL (?P<reason>.+)$", re.MULTILINE
@@ -3798,6 +3945,181 @@ def judge(text: str, expect: dict | None = None) -> dict:
         if not found["rtw89_mon_pass"]:
             errors.append("rtw89_mon: the PASS anchor is missing")
 
+    if cases.get("rtl8xxxu_mon", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_mon_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_mon: {fail['reason']}")
+        reg = found["rtl8xxxu_mon_fwreg"]
+        if not reg:
+            errors.append(
+                "rtl8xxxu_mon: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"rtl8xxxu_mon: firmware registration rc={reg['rc']}")
+        wl = found["rtl8xxxu_mon_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("rtl8xxxu_mon: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("rtl8xxxu_mon: wlan0 has ifindex=0")
+        elif wl["type"] != "2":
+            errors.append(
+                f"rtl8xxxu_mon: wlan0 boot type={wl['type']}, expected "
+                "STATION (2) before the type change")
+        else:
+            notes.append(f"rtl8xxxu_mon: wlan0 mac={wl['mac']}")
+        sink = found["rtl8xxxu_mon_sink"]
+        if not sink or sink["enabled"] != "1":
+            errors.append("rtl8xxxu_mon: the monitor sink is not enabled")
+        seti = found["rtl8xxxu_mon_set_iface"]
+        if not seti:
+            errors.append("rtl8xxxu_mon: PASS without the set_iface line")
+        elif int(seti["rc"]) != 0 or seti["type"] != "6":
+            errors.append(
+                f"rtl8xxxu_mon: set_iface rc={seti['rc']} type={seti['type']}, "
+                "expected rc=0 type=6 (MONITOR)")
+        else:
+            notes.append("rtl8xxxu_mon: set_iface rc=0 type=6")
+        freq = found["rtl8xxxu_mon_set_freq"]
+        if not freq:
+            errors.append("rtl8xxxu_mon: PASS without the set_freq line")
+        elif int(freq["rc"]) != 0:
+            errors.append(f"rtl8xxxu_mon: set_freq rc={freq['rc']}")
+        else:
+            notes.append(f"rtl8xxxu_mon: set_freq rc=0 freq={freq['freq']}")
+        st = found["rtl8xxxu_mon_start"]
+        if not st:
+            errors.append("rtl8xxxu_mon: PASS without the start line")
+        elif int(st["rc"]) != 0 or st["run"] != "1":
+            errors.append(
+                f"rtl8xxxu_mon: start rc={st['rc']} running={st['run']}")
+        elif st["type"] != "803":
+            errors.append(
+                f"rtl8xxxu_mon: devtype={st['type']}, expected "
+                "ARPHRD_IEEE80211_RADIOTAP (803)")
+        window = found["rtl8xxxu_mon_window"]
+        totals = found["rtl8xxxu_mon_sink_totals"]
+        radiotap = found["rtl8xxxu_mon_radiotap"]
+        if not window or not totals:
+            errors.append(
+                "rtl8xxxu_mon: PASS without the window and sink totals")
+        else:
+            ms = int(window["ms"])
+            beacons = int(totals["beacons"])
+            rate = (beacons * 1000) // ms if ms > 0 else 0
+            if rate < 8:
+                errors.append(
+                    f"rtl8xxxu_mon: {beacons} beacons in {ms} ms = "
+                    f"{rate}/s, below the 8/s floor")
+            else:
+                notes.append(
+                    f"rtl8xxxu_mon: {totals['frames']} frames, "
+                    f"{beacons} beacons ({rate}/s), {totals['data']} data, "
+                    f"{totals['probes']} probes")
+        samples = found["rtl8xxxu_mon_sample"]
+        if len(samples) < 2:
+            errors.append(
+                f"rtl8xxxu_mon: only {len(samples)} window samples")
+        else:
+            first = int(samples[0]["beacons"])
+            last = int(samples[-1]["beacons"])
+            if last <= first:
+                errors.append(
+                    f"rtl8xxxu_mon: beacons did not rise ({first} -> {last})")
+        if not radiotap:
+            errors.append("rtl8xxxu_mon: PASS without the radiotap line")
+        else:
+            if int(radiotap["bad"]) != 0:
+                errors.append(
+                    f"rtl8xxxu_mon: {radiotap['bad']} bad radiotap headers")
+            if int(radiotap["min"]) < 8:
+                errors.append(
+                    f"rtl8xxxu_mon: radiotap it_len min={radiotap['min']}")
+            if freq and int(radiotap["freq"]) != int(freq["freq"]):
+                errors.append(
+                    f"rtl8xxxu_mon: radiotap freq={radiotap['freq']} but the "
+                    f"channel was set to {freq['freq']}")
+            else:
+                notes.append(
+                    f"rtl8xxxu_mon: radiotap it_len="
+                    f"{radiotap['min']}-{radiotap['max']} "
+                    f"freq={radiotap['freq']}")
+        # The kept frames carry the 802.11 header after the radiotap length, so
+        # the beacon BSSIDs are readable from the line: addr3 (bytes 16..21 of
+        # the header) is the BSSID of a beacon.  The bench has neighbours on
+        # ch5, so "a BSSID was decoded" is not M3: when the harness passes the
+        # AP's own address, that address must be one of them.
+        frames = found["rtl8xxxu_mon_frame"]
+        seen_bssids: list[str] = []
+        for fr in frames:
+            if fr["fc"].lower() != "0080":
+                continue
+            hdr = fr["hdr"]
+            if len(hdr) < 44:
+                continue
+            b = hdr[32:44]
+            seen_bssids.append(":".join(b[i:i + 2] for i in range(0, 12, 2)))
+        want_bssid = expect.get("mon_bssid")
+        census = {f["bssid"].lower(): int(f["beacons"])
+                  for f in found["rtl8xxxu_mon_bssbeacons"]}
+        census_hdr = found["rtl8xxxu_mon_bsscensus"]
+        if isinstance(census_hdr, list):
+            census_hdr = census_hdr[-1] if census_hdr else None
+        if census:
+            notes.append(
+                "rtl8xxxu_mon: beacon census "
+                + ", ".join(f"{b}={n}" for b, n in sorted(census.items())))
+        if census_hdr:
+            if int(census_hdr["full"]) != 0:
+                notes.append(
+                    f"rtl8xxxu_mon: census overflowed "
+                    f"({census_hdr['full']} beacons of BSSes beyond the "
+                    f"{census_hdr['max']} slots)")
+            else:
+                notes.append(
+                    f"rtl8xxxu_mon: census slots "
+                    f"{census_hdr['slots']}/{census_hdr['max']}")
+        if want_bssid:
+            if want_bssid.lower() in census:
+                notes.append(
+                    f"rtl8xxxu_mon: bench BSSID {want_bssid} counted "
+                    f"{census[want_bssid.lower()]} beacons")
+            elif want_bssid.lower() in [b.lower() for b in seen_bssids]:
+                notes.append(
+                    f"rtl8xxxu_mon: bench BSSID {want_bssid} among the kept "
+                    f"beacons (no census line in this image)")
+            else:
+                errors.append(
+                    f"rtl8xxxu_mon: the bench BSSID {want_bssid} is in neither "
+                    f"the census ({', '.join(sorted(census)) or 'none'}) nor "
+                    f"the kept beacons "
+                    f"({', '.join(sorted(set(seen_bssids))) or 'none'})")
+        if seen_bssids:
+            notes.append(
+                "rtl8xxxu_mon: kept-beacon BSSIDs "
+                + ", ".join(sorted(set(seen_bssids))))
+        bssid = found["rtl8xxxu_mon_bssid"]
+        if bssid and bssid["bssid"] not in ("00:00:00:00:00:00",
+                                            "ff:ff:ff:ff:ff:ff"):
+            notes.append(
+                f"rtl8xxxu_mon: first kept beacon BSSID {bssid['bssid']} "
+                f"(frame {bssid['i']}; a sample, not the bench identity)")
+        lin = found["rtl8xxxu_mon_lwip_in"]
+        lout = found["rtl8xxxu_mon_lwip_out"]
+        if not lin or not lout:
+            errors.append("rtl8xxxu_mon: PASS without the lwIP before/after")
+        elif lin["frames"] != lout["frames"]:
+            errors.append(
+                f"rtl8xxxu_mon: lwIP rx_frames grew {lin['frames']} -> "
+                f"{lout['frames']} (monitor frames reached the stack)")
+        elif lout["tx"] != "0":
+            errors.append(f"rtl8xxxu_mon: lwIP tx_frames={lout['tx']}")
+        tx = found["rtl8xxxu_mon_tx"]
+        if not tx:
+            errors.append("rtl8xxxu_mon: PASS without the device tx line")
+        elif tx["pkts"] != "0":
+            errors.append(f"rtl8xxxu_mon: device tx_packets={tx['pkts']}")
+        if not found["rtl8xxxu_mon_pass"]:
+            errors.append("rtl8xxxu_mon: the PASS anchor is missing")
+
     if cases.get("iwl7260_stab", {}).get("verdict") == "pass":
         fail = found["iwl7260_stab_fail"]
         if fail:
@@ -5363,6 +5685,36 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"rx_input_fail={window['fail']}")
         if not ap8188("rtl8xxxu_ap_pass_a3"):
             errors.append("rtl8xxxu_ap: the A3 PASS line is missing")
+        # A4: only the judgement image carries the table (the functional AP
+        # profile stops at A3), so the phase checks run when its anchor is
+        # there.  The rates themselves are the report tool's verdict
+        # (tools/rtos/c6-report.py); the judge holds "all phases closed".
+        if ap8188("rtl8xxxu_ap_pass_apt"):
+            srv = ap8188("rtl8xxxu_ap_server")
+            if not srv:
+                errors.append(
+                    "rtl8xxxu_ap: PASS APT without the server line")
+            elif srv["ok"] != "1":
+                errors.append(f"rtl8xxxu_ap: server ok={srv['ok']}")
+            begins = found["rtl8xxxu_ap_phase_begin"]
+            reports = found["rtl8xxxu_ap_phase_report"]
+            dones = found["rtl8xxxu_ap_phase_done"]
+            if len(begins) < 4 or len(reports) < 4 or len(dones) < 4:
+                errors.append(
+                    f"rtl8xxxu_ap: only {len(begins)} begins / "
+                    f"{len(reports)} reports / {len(dones)} dones of 4 phases")
+            for d in dones:
+                if d["ok"] != "1":
+                    errors.append(
+                        f"rtl8xxxu_ap: phase {d['n']} closed ok={d['ok']}")
+            for rep in reports:
+                notes.append(
+                    f"rtl8xxxu_ap: phase {rep['n']} {rep['bytes']}B "
+                    f"{rep['ms']}ms {rep['kbit']} kbit/s")
+            for b in begins:
+                notes.append(
+                    f"rtl8xxxu_ap: phase {b['n']} {b['name']} air={b['air']} "
+                    f"win={b['win']}ms rate={b['rate']}")
         if not ap8188("rtl8xxxu_ap_pass_ap"):
             errors.append("rtl8xxxu_ap: the AP PASS line is missing")
 
@@ -5387,6 +5739,28 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"{rep['kbit']} kbit/s")
         if not found["rtw88_c6_pass"]:
             errors.append("rtw88_c6: the PASS C6T line is missing")
+
+    if cases.get("rtl8xxxu_c6", {}).get("verdict") == "pass":
+        fail = found["rtl8xxxu_c6_fail"]
+        if fail:
+            errors.append(f"rtl8xxxu_c6: {fail['reason']}")
+        srv = found["rtl8xxxu_c6_server"]
+        if not srv:
+            errors.append("rtl8xxxu_c6: PASS without the server line")
+        elif srv["ok"] != "1":
+            errors.append(f"rtl8xxxu_c6: server ok={srv['ok']}")
+        reps = found["rtl8xxxu_c6_report"]
+        dones = found["rtl8xxxu_c6_done"]
+        if len(reps) < 7 or len(dones) < 7:
+            errors.append(
+                f"rtl8xxxu_c6: only {len(reps)} reports / {len(dones)} dones "
+                "of 7 traffic phases")
+        for rep in reps:
+            notes.append(
+                f"rtl8xxxu_c6: phase {rep['n']} {rep['bytes']}B {rep['ms']}ms "
+                f"{rep['kbit']} kbit/s")
+        if not found["rtl8xxxu_c6_pass"]:
+            errors.append("rtl8xxxu_c6: the PASS C6T line is missing")
 
     result = found["result"]
     if not result:

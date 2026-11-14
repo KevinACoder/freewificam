@@ -205,6 +205,14 @@ here:
 | `0001-rtl8xxxu-enable-ap-mode-for-the-rtl8188eu.patch` | `8188e.c` | the 8188e fileops gains `supports_ap`/`max_macid_num`; upstream's enablement RFC (v3 patch 4) |
 | `0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch` | `core.c`, `rtl8xxxu.h` | `fill_txdesc_v3` writes the frame's macid into `txdw1[5:0]`; the rtl8xxxu maintainer's review of that series, and the vendor's own descriptor layout |
 | `0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch` | `8188e.c`, `core.c`, `rtl8xxxu.h` | the chip does not repeat a host-downloaded beacon, so the host keeps the beacon timer for this chip (`host_beacon_repeat`); this line's own fix, no upstream counterpart |
+| `0004-rtl8xxxu-support-the-monitor-role-on-the-rtl8188eu.patch` | `core.c`, `rtl8xxxu.h`, `8188e.c` | the monitor role: a chip-gated `supports_monitor` sets `WANT_MONITOR_VIF`, `add_interface`/`remove_interface` own the promiscuous RCR, `configure_filter` keeps it for as long as the monitor is up, and the RX status tolerates an unset chandef; mainline rtl8xxxu has no monitor mode on any chip, and this is this line's own work (no upstream counterpart) |
+
+The GT arm of the closing round is not an import: it boots the pin's own
+in-tree `rtl8xxxu` (`Image-gt-b98a1dfd4661`, `CONFIG_RTL8XXXU=y`, initrd
+`alpine-rootfs-gt-63a2a8ab9cd3.cpio.gz` whose
+`lib/firmware/rtlwifi/rtl8188eufw.bin` is byte-identical to this repo's
+vendored blob, sha256 `2ff74315...`, 15,262 B), and its scripts are
+first-party (`tools/gt/gt-rtl8xxxu-board.sh`, `tools/gt/run-gt-rtl8xxxu.sh`).
 
 Per-file digests: `wireless-drivers/rtl8xxxu/IMPORT.tsv` (the pin's bytes);
 `wireless-drivers/rtl8xxxu/patches/README.md` is the patches' record, and

@@ -160,6 +160,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTL8XXXU_AP)
 	CASE_ENTRY("rtl8xxxu_ap", case_rtl8xxxu_ap_run)
 #endif
+#if defined(RTOS_CASE_RTL8XXXU_MON)
+	CASE_ENTRY("rtl8xxxu_mon", case_rtl8xxxu_mon_run)
+#endif
+#if defined(RTOS_CASE_RTL8XXXU_C6)
+	CASE_ENTRY("rtl8xxxu_c6", case_rtl8xxxu_c6_run)
+#endif
 #if defined(RTOS_HOST_TIER)
 };
 #endif

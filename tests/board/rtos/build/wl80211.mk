@@ -31,7 +31,7 @@ WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260
 	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap \
 	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
-	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap
+	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 

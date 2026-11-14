@@ -303,22 +303,26 @@ DRIVERS = {
             "# closure; the chip only selects the firmware blob.",
         ],
         "sources_symbol": "CONFIG_LIBLINUX80211_RTL8XXXU",
-        # The AP-mode enablement is the first recorded divergence on a vendored
-        # driver: two hunks from the pending upstream series and its review
-        # (patches/README.md states the provenance).  The check replays them
+        # The AP-mode and monitor enablements are this driver's recorded
+        # divergences: three hunks from the pending upstream series and its
+        # review, this line's host-beacon repeat, and the monitor role
+        # (patches/README.md states each provenance).  The check replays them
         # onto the pin instead of asserting byte equality for these files.
         "patched": {
             "8188e.c": (
                 "patches/0001-rtl8xxxu-enable-ap-mode-for-the-rtl8188eu.patch",
                 "patches/0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch",
+                "patches/0004-rtl8xxxu-support-the-monitor-role-on-the-rtl8188eu.patch",
             ),
             "core.c": (
                 "patches/0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch",
                 "patches/0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch",
+                "patches/0004-rtl8xxxu-support-the-monitor-role-on-the-rtl8188eu.patch",
             ),
             "rtl8xxxu.h": (
                 "patches/0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch",
                 "patches/0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch",
+                "patches/0004-rtl8xxxu-support-the-monitor-role-on-the-rtl8188eu.patch",
             ),
         },
         "first_party_prefixes": ("patches/", "ports/"),
@@ -329,10 +333,10 @@ DRIVERS = {
                 "alternative), so the driver\nadds no licensing option to this "
                 "line: an artifact that links it with the\nGPL-2.0-only "
                 "mac80211/cfg80211 stack is a GPL-2.0 link product (see\n"
-                "`docs/LICENSES.md`). Eleven of the thirteen files are the pin's "
-                "bytes; two\ncarry the recorded AP-mode patches (see the local "
-                "differences row above), so\nthe licence table is still the "
-                "tree's own.",
+                "`docs/LICENSES.md`). Ten of the thirteen files are the pin's "
+                "bytes; three\ncarry the recorded AP-mode and monitor patches (see "
+                "the local differences row above), so\nthe licence table is still "
+                "the tree's own.",
             "count_note":
                 "## Why 9\n\nThe driver's own Makefile resolves to nine "
                 "translation units under this\nface (`rtl8xxxu-y := core.o "

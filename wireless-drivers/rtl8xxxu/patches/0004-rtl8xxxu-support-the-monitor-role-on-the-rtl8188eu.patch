@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000004 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 14 Nov 2026 20:05:00 +0800
+Subject: [PATCH 4/4] wifi: rtl8xxxu: support the monitor role on the RTL8188EU
+
+Mainline rtl8xxxu has no monitor mode on any chip: the driver never sets
+WANT_MONITOR_VIF and its add_interface() rejects NL80211_IFTYPE_MONITOR,
+so mac80211 treats the interface as a software-only one and the hardware
+keeps filtering.  On this line the monitor role is the card's third mode
+(the 2026-11-14 station and AP rounds are the other two), and it is the
+instrument the bench uses for air truth, so the chip needs to hand up
+traffic that is not addressed to it.
+
+Most of the receive plumbing is already generic in this pin: the filter
+map is opened for every data and management frame at start
+(REG_RXFLTMAP0/2 = 0xffff), the RX parser reports the raw frame plus its
+PHY status and lets mac80211 build the radiotap header, and the filter code
+already maps FIF_FCSFAIL / FIF_BCN_PRBRESP_PROMISC / FIF_CONTROL /
+FIF_OTHER_BSS onto RCR.  What is missing is the interface and one RCR
+shape: accept all unicast (RCR_ACCEPT_AP), every data/control frame, and no
+BSSID check.
+
+The flag is chip-gated (`supports_monitor` in the fileops table, set only
+for the 8188E) so the other chips keep their current interface set and
+receive configuration.  The monitor's RCR is programmed as one unit in
+add_interface() and re-asserted in configure_filter(), because this port's
+nl80211 SET_INTERFACE carries no monitor flags: mac80211 never asks for
+FIF_OTHER_BSS/FIF_CONTROL on a monitor vif, and the generic filter
+assignments would otherwise clear the accept bits on the next update.
+remove_interface() puts the interface default back.
+
+The RX status also stops dereferencing hw->conf.chandef.chan
+unconditionally: a monitor changes its channel after the interface is up,
+and any role can see a stray frame before the first channel
+configuration.  With no channel configured the frame is reported with no
+frequency and mac80211 drops it, instead of the driver faulting.
+
+Boundary: receive only.  There is no injection path (mac80211's monitor TX
+would need a driver TX on a monitor vif), no MONITOR_FLAG_ACTIVE and no
+otherbss plumbing in this port, and FIF_FCSFAIL is not honored while the
+monitor's RCR is asserted as one unit.  Those are decisions, not gaps to
+be filled silently.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+--- a/wireless-drivers/rtl8xxxu/core.c
++++ b/wireless-drivers/rtl8xxxu/core.c
+@@ -58,6 +58,28 @@
+ #define RTL8XXXU_TX_URB_LOW_WATER	25
+ #define RTL8XXXU_TX_URB_HIGH_WATER	32
+ 
++/*
++ * The two receive-configuration shapes this driver programs.
++ *
++ * RTL8XXXU_RCR_BASE is the power-on/interface-default set: the chip hands up
++ * what is addressed to us (PHYS_MATCH plus multicast/broadcast), every
++ * management frame, with the PHY status/ICV/MIC trailer the RX parsers expect.
++ * The two CHECK_BSSID bits (added by the filter code below) then decide which
++ * BSS the "for us" part means.
++ *
++ * RTL8XXXU_RCR_MONITOR is the promiscuous set a monitor needs: accept all
++ * unicast (RCR_ACCEPT_AP) and every data/control frame, and no BSSID check.
++ * REG_RXFLTMAP0/2 already accept all management and data (rtl8xxxu_start()),
++ * so RCR is the remaining gate.
++ */
++#define RTL8XXXU_RCR_BASE	(RCR_ACCEPT_PHYS_MATCH | RCR_ACCEPT_MCAST | \
++				 RCR_ACCEPT_BCAST | RCR_ACCEPT_MGMT_FRAME | \
++				 RCR_HTC_LOC_CTRL | RCR_APPEND_PHYSTAT | \
++				 RCR_APPEND_ICV | RCR_APPEND_MIC)
++#define RTL8XXXU_RCR_MONITOR	(RTL8XXXU_RCR_BASE | RCR_ACCEPT_AP | \
++				 RCR_ACCEPT_DATA_FRAME | RCR_ACCEPT_CTRL_FRAME)
++
++
+ static int rtl8xxxu_submit_rx_urb(struct rtl8xxxu_priv *priv,
+ 				  struct rtl8xxxu_rx_urb *rx_urb);
+ 
+@@ -4175,9 +4197,7 @@
+ 	/*
+ 	 * Configure initial WMAC settings
+ 	 */
+-	val32 = RCR_ACCEPT_PHYS_MATCH | RCR_ACCEPT_MCAST | RCR_ACCEPT_BCAST |
+-		RCR_ACCEPT_MGMT_FRAME | RCR_HTC_LOC_CTRL |
+-		RCR_APPEND_PHYSTAT | RCR_APPEND_ICV | RCR_APPEND_MIC;
++	val32 = RTL8XXXU_RCR_BASE;
+ 	rtl8xxxu_write32(priv, REG_RCR, val32);
+ 	priv->regrcr = val32;
+ 
+@@ -6437,8 +6457,15 @@
+ 				rx_status->rate_idx = rx_desc->rxmcs;
+ 			}
+ 
+-			rx_status->freq = hw->conf.chandef.chan->center_freq;
+-			rx_status->band = hw->conf.chandef.chan->band;
++			/* A monitor changes its channel after the interface is
++			 * up, and any role can see a stray frame before the
++			 * first channel configuration; a NULL chandef must drop
++			 * the report (freq 0) instead of the boot. */
++			if (hw->conf.chandef.chan) {
++				rx_status->freq =
++					hw->conf.chandef.chan->center_freq;
++				rx_status->band = hw->conf.chandef.chan->band;
++			}
+ 
+ 			ieee80211_rx_irqsafe(hw, skb);
+ 		}
+@@ -6545,8 +6572,15 @@
+ 				rx_status->rate_idx = rx_desc->rxmcs;
+ 			}
+ 
+-			rx_status->freq = hw->conf.chandef.chan->center_freq;
+-			rx_status->band = hw->conf.chandef.chan->band;
++			/* A monitor changes its channel after the interface is
++			 * up, and any role can see a stray frame before the
++			 * first channel configuration; a NULL chandef must drop
++			 * the report (freq 0) instead of the boot. */
++			if (hw->conf.chandef.chan) {
++				rx_status->freq =
++					hw->conf.chandef.chan->center_freq;
++				rx_status->band = hw->conf.chandef.chan->band;
++			}
+ 
+ 			ieee80211_rx_irqsafe(hw, skb);
+ 		}
+@@ -6757,6 +6791,7 @@
+ 	struct rtl8xxxu_vif *rtlvif = (struct rtl8xxxu_vif *)vif->drv_priv;
+ 	struct rtl8xxxu_priv *priv = hw->priv;
+ 	int port_num;
++	u32 rcr;
+ 	u8 val8;
+ 
+ 	if (!priv->vifs[0])
+@@ -6800,6 +6835,17 @@
+ 		val8 &= ~BIT_BCN_PORT_SEL;
+ 		rtl8xxxu_write8(priv, REG_CCK_CHECK, val8);
+ 		break;
++	case NL80211_IFTYPE_MONITOR:
++		/* Receive-only.  mac80211 builds no data path for this vif, so
++		 * there is no MSR/linktype to program (set_linktype() below
++		 * ignores the type) and no beacon to arm; what matters is that
++		 * the hardware stops filtering.  The set is one unit, and
++		 * configure_filter() keeps it for as long as this vif is the
++		 * monitor. */
++		rcr = RTL8XXXU_RCR_MONITOR;
++		rtl8xxxu_write32(priv, REG_RCR, rcr);
++		priv->regrcr = rcr;
++		break;
+ 	default:
+ 		return -EOPNOTSUPP;
+ 	}
+@@ -6823,6 +6869,14 @@
+ 
+ 	dev_dbg(&priv->udev->dev, "%s\n", __func__);
+ 
++	/* The promiscuous monitor set is not something the filter code can
++	 * rebuild from total_flags; put the interface default back so a later
++	 * station/AP interface starts from the same RCR every boot does. */
++	if (vif->type == NL80211_IFTYPE_MONITOR) {
++		priv->regrcr = RTL8XXXU_RCR_BASE;
++		rtl8xxxu_write32(priv, REG_RCR, priv->regrcr);
++	}
++
+ 	priv->vifs[rtlvif->port_num] = NULL;
+ }
+ 
+@@ -6967,6 +7021,17 @@
+ 	 * FIF_PROBE_REQ ignored as probe requests always seem to be accepted
+ 	 */
+ 
++	/*
++	 * A monitor is promiscuous by definition, and this port's nl80211
++	 * SET_INTERFACE carries no monitor flags: mac80211 never asks for
++	 * FIF_OTHER_BSS/FIF_CONTROL on a monitor vif, so the assignments above
++	 * would clear ACCEPT_AP/ACCEPT_CTRL on the next filter update and the
++	 * hardware would start dropping other stations' frames again.  Keep the
++	 * monitor's RCR as the one unit add_interface() programmed.
++	 */
++	if (priv->vifs[0] && priv->vifs[0]->type == NL80211_IFTYPE_MONITOR)
++		rcr = RTL8XXXU_RCR_MONITOR;
++
+ 	rtl8xxxu_write32(priv, REG_RCR, rcr);
+ 	priv->regrcr = rcr;
+ 
+@@ -7908,6 +7973,15 @@
+ 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
+ 	if (priv->fops->supports_ap)
+ 		hw->wiphy->interface_modes |= BIT(NL80211_IFTYPE_AP);
++	/*
++	 * Monitor is always in mac80211's software_iftypes (main.c: the stack
++	 * supports it for every driver).  WANT_MONITOR_VIF is what makes
++	 * mac80211 hand the monitor vif to this driver - add_interface() when it
++	 * is opened, remove_interface() when it is closed - which is where the
++	 * promiscuous RCR is programmed.
++	 */
++	if (priv->fops->supports_monitor)
++		ieee80211_hw_set(hw, WANT_MONITOR_VIF);
+ 	hw->queues = 4;
+ 
+ 	hw->wiphy->flags |= WIPHY_FLAG_HAS_CHANNEL_SWITCH;
+--- a/wireless-drivers/rtl8xxxu/rtl8xxxu.h
++++ b/wireless-drivers/rtl8xxxu/rtl8xxxu.h
+@@ -2023,6 +2023,11 @@
+ 	u8 ustime_tsf_edca;
+ 	u16 max_aggr_num;
+ 	u8 supports_ap:1;
++	/* Monitor: the fileops accepts a MONITOR interface and the driver owns
++	 * the promiscuous receive configuration.  The port's nl80211
++	 * SET_INTERFACE carries no monitor flags, so mac80211 never asks for
++	 * FIF_OTHER_BSS/FIF_CONTROL and RCR has to be set here. */
++	u8 supports_monitor:1;
+ 	/* AP mode: the beacon is recomposed and sent from the host every
+ 	 * beacon interval (the 8188E does not repeat a host-downloaded
+ 	 * beacon; see patches/README.md). */
+--- a/wireless-drivers/rtl8xxxu/8188e.c
++++ b/wireless-drivers/rtl8xxxu/8188e.c
+@@ -1870,6 +1870,7 @@
+ 	.max_sec_cam_num = 32,
+ 	.supports_ap = 1,
+ 	.max_macid_num = 32,
++	.supports_monitor = 1,
+ 	.host_beacon_repeat = 1,
+ 	.adda_1t_init = 0x0b1b25a0,
+ 	.adda_1t_path_on = 0x0bdb25a0,

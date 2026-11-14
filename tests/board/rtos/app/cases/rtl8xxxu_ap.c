@@ -152,6 +152,130 @@ static const unsigned int ap_buses[] = { 1U, 0U };
 #define AP_BUS_LIST_TXT	"1,0"
 #endif
 
+/* --- A4: the AP throughput table (CONFIG_RTL8XXXU_AP_TP) ------------------
+ *
+ * The table is defined by the BOARD'S DIRECTION, not by the word "down": the
+ * station arm's ruler (runs/2026-11-14-rtl8xxxu-8188eu-tp/PREREG.md §1) runs
+ * 30 s of TCP into the board and 20 s out of it, 20 s of UDP in and 10 s out;
+ * this arm runs the same four cells with the roles swapped, so the two roles
+ * can be compared direction by direction.  The `air` word follows the AP
+ * convention (down = AP -> STA), which is why the names look inverted next to
+ * the station arm.
+ *
+ * Order: the board-send TCP phase first, because the harness's peer TCP server
+ * is started on the `server tcp=` anchor and its lifetime has to cover the
+ * first phase; then receive TCP, then receive UDP (the peer's iperf client),
+ * then send UDP (the peer's counting sink, started one phase early).
+ */
+#if defined(CONFIG_RTL8XXXU_AP_TP)
+#ifndef CONFIG_RTL8XXXU_AP_TP_UDP_KBPS
+#define CONFIG_RTL8XXXU_AP_TP_UDP_KBPS 10000
+#endif
+#ifndef CONFIG_RTL8XXXU_AP_TP_PEER_MS
+#define CONFIG_RTL8XXXU_AP_TP_PEER_MS 3000
+#endif
+
+#define AP_TP_TCP_PORT		5001u
+#define AP_TP_UDP_PORT		5002u
+#define AP_TP_TCP_TX_MS		20000u	/* board sends (matches the station arm's tcpup) */
+#define AP_TP_TCP_RX_MS		30000u	/* board receives (station arm's tcpdn) */
+#define AP_TP_UDP_RX_MS		20000u	/* board receives (station arm's udpdn) */
+#define AP_TP_UDP_TX_MS		10000u	/* board sends (station arm's udpup) */
+
+enum ap_tp_kind {
+	AP_TP_TCP_TX,
+	AP_TP_TCP_RX,
+	AP_TP_UDP_TX,
+	AP_TP_UDP_RX,
+};
+
+struct ap_tp_phase {
+	const char	*name;
+	const char	*proto;
+	const char	*role;
+	const char	*air;
+	unsigned int	 port;
+	unsigned int	 window_ms;
+	unsigned int	 rate_kbps;	/* UDP only, 0 = unpaced */
+	enum ap_tp_kind	 kind;
+};
+
+static const struct ap_tp_phase ap_tp_plan[] = {
+	{ "tcpdn", "tcp", "client", "down", AP_TP_TCP_PORT, AP_TP_TCP_TX_MS,
+	  0u, AP_TP_TCP_TX },
+	{ "tcpup", "tcp", "server", "up",   AP_TP_TCP_PORT, AP_TP_TCP_RX_MS,
+	  0u, AP_TP_TCP_RX },
+	{ "udpup", "udp", "server", "up",   AP_TP_UDP_PORT, AP_TP_UDP_RX_MS,
+	  0u, AP_TP_UDP_RX },
+	{ "udpdn", "udp", "client", "down", AP_TP_UDP_PORT, AP_TP_UDP_TX_MS,
+	  CONFIG_RTL8XXXU_AP_TP_UDP_KBPS, AP_TP_UDP_TX },
+};
+
+#define AP_TP_PLAN_LEN	(sizeof(ap_tp_plan) / sizeof(ap_tp_plan[0]))
+
+static int
+ap_tp_phase(unsigned int n, const struct ap_tp_phase *ph)
+{
+	struct lkpi_net_phase r;
+	struct lkpi_net_diag d0, d1;
+	int rc;
+
+	(void)memset(&r, 0, sizeof(r));
+	(void)memset(&d0, 0, sizeof(d0));
+	(void)memset(&d1, 0, sizeof(d1));
+	lkpi_net_diag(&d0);
+
+	/* The begin line is printed BEFORE the wait: the harness drives the
+	 * peer from it (the 8851BU AP-align round's lesson: a peer started on
+	 * a sleep instead of the anchor lands outside its window). */
+	CASE_ANCHOR("rtl8xxxu_ap: phase %u begin proto=%s role=%s air=%s "
+		    "port=%u window_ms=%u name=%s peer_ms=%u rate_kbps=%u\n",
+		    n, ph->proto, ph->role, ph->air, ph->port, ph->window_ms,
+		    ph->name, (unsigned int)CONFIG_RTL8XXXU_AP_TP_PEER_MS,
+		    ph->rate_kbps);
+	osDelay(CONFIG_RTL8XXXU_AP_TP_PEER_MS);
+
+	switch (ph->kind) {
+	case AP_TP_TCP_TX:
+		rc = lkpi_net_iperf_up(RTL8XXXU_AP_PEER_IP, ph->port,
+				       ph->window_ms, &r);
+		break;
+	case AP_TP_TCP_RX:
+		rc = lkpi_net_iperf_down(ph->port, ph->window_ms, &r);
+		break;
+	case AP_TP_UDP_TX:
+		rc = lkpi_net_udp_blast(RTL8XXXU_AP_PEER_IP, ph->port,
+					ph->window_ms, ph->rate_kbps, &r);
+		break;
+	case AP_TP_UDP_RX:
+		rc = lkpi_net_udp_sink_window(ph->window_ms, &r);
+		break;
+	default:
+		rc = -1;
+		break;
+	}
+
+	CASE_ANCHOR("rtl8xxxu_ap: phase %u report bytes=%u ms=%u kbit=%u "
+		    "pkts=%u\n", n, r.bytes, r.ms, r.kbit, r.pkts);
+	CASE_ANCHOR("rtl8xxxu_ap: phase %u udp offered=%u tx_err=%u "
+		    "rx_drop=%u first_ms=%u last_ms=%u beat=%lu stall_ms=%u\n",
+		    n, r.offered, r.tx_err, r.rx_drop, r.first_ms, r.last_ms,
+		    r.beat, r.stall_ms);
+	lkpi_net_diag(&d1);
+	CASE_ANCHOR("rtl8xxxu_ap: phase %u census rx_frames=%lu rx_bytes=%lu "
+		    "tx_frames=%lu tx_bytes=%lu tx_fail=%lu rx_foreign=%lu\n",
+		    n,
+		    d1.rx_frames - d0.rx_frames,
+		    d1.rx_bytes - d0.rx_bytes,
+		    d1.tx_frames - d0.tx_frames,
+		    d1.tx_bytes - d0.tx_bytes,
+		    d1.tx_fail - d0.tx_fail,
+		    d1.rx_foreign - d0.rx_foreign);
+	CASE_ANCHOR("rtl8xxxu_ap: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);
+	return rc;
+}
+#endif /* CONFIG_RTL8XXXU_AP_TP */
+
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
@@ -529,6 +653,33 @@ case_rtl8xxxu_ap_run(void)
 
 	rtl8xxxu_diag_beacon_counters();
 	ap_usb_ledger();
+
+#if defined(CONFIG_RTL8XXXU_AP_TP)
+	/* --- A4: the phase table (the same four direction cells the station
+	 * arm runs; see PREREG.md §1).  The server line is the harness's
+	 * "receivers up" anchor, so it precedes the first phase. */
+	{
+		unsigned int pi;
+		int lrc;
+
+		/* The receive cells need the listeners up before the first
+		 * phase, not inside it: the harness fires the peer's client on
+		 * the phase's begin line, and the 3 s peer margin runs on this
+		 * side.  The 2026-11-14 ap1 boot proved it the hard way - the
+		 * TCP cell's peer got "Connection refused" and the UDP cell's
+		 * sink was never bound, because this line printed ok=1 without
+		 * starting either. */
+		lrc = lkpi_net_iperf_server_start(AP_TP_TCP_PORT);
+		if (lrc == 0)
+			lrc = lkpi_net_udp_sink_start(AP_TP_UDP_PORT);
+		CASE_ANCHOR("rtl8xxxu_ap: server tcp=%u udp=%u ok=%d\n",
+			    (unsigned int)AP_TP_TCP_PORT,
+			    (unsigned int)AP_TP_UDP_PORT, (lrc == 0) ? 1 : 0);
+		for (pi = 0U; pi < AP_TP_PLAN_LEN; pi++)
+			(void)ap_tp_phase(pi + 1U, &ap_tp_plan[pi]);
+	}
+	CASE_ANCHOR("rtl8xxxu_ap: PASS APT\n");
+#endif
 	CASE_ANCHOR("rtl8xxxu_ap: PASS AP\n");
 	return 0;
 }

@@ -136,7 +136,7 @@ config C6_PEER_IP
 	default "192.168.99.1"
 
 config MON_FREQ
-	int "monitor channel frequency (MHz) (iwl7260_mon, rtw89_mon)"
+	int "monitor channel frequency (MHz) (iwl7260_mon, rtw89_mon, rtl8xxxu_mon)"
 	default 2432
 	range 2400 6000
 	help
@@ -145,7 +145,7 @@ config MON_FREQ
 	  are on; the GT arm sets `iw dev wlan0 set channel` to the same one.
 
 config MON_WINDOW_MS
-	int "monitor capture window (ms) (iwl7260_mon, rtw89_mon)"
+	int "monitor capture window (ms) (iwl7260_mon, rtw89_mon, rtl8xxxu_mon)"
 	default 15000
 	range 1000 600000
 	help
@@ -289,6 +289,45 @@ config RTL8XXXU_AP_ARM_BCN4
 	  REG_BCN_CTRL bit3 set and bit4 (DIS_TSF_UDT0) cleared after the download;
 	  mainline's AP path leaves bit4 set.  This arm clears bit4 right after the
 	  start-up beacon so one boot answers whether that is the missing arming.
+
+config RTL8XXXU_AP_TP
+	bool "rtl8xxxu_ap runs the A4 phase table (throughput verdict image)"
+	help
+	  The AP role's throughput table: four phases defined by the board's
+	  direction (30 s TCP in, 20 s TCP out, 20 s UDP in, 10 s UDP out), the
+	  same cells the station arm's C6T table runs with the roles swapped.
+	  Only the judgement image selects it; the functional AP profile stays
+	  A1-A3 only, so its round's boot time is unchanged.
+
+config RTL8XXXU_AP_TP_UDP_KBPS
+	int "rtl8xxxu AP A4 UDP-down offered rate (kbit/s)"
+	default 10000
+	range 1000 60000
+	depends on RTL8XXXU_AP_TP
+	help
+	  The board->peer UDP blast's offered rate on the AP arm.  10M is the
+	  rate the station arm offers in the opposite direction, so the cell is
+	  comparable; the 8188EU's HT20 link cannot carry much more.
+
+config RTL8XXXU_AP_TP_PEER_MS
+	int "rtl8xxxu AP A4 peer-start margin (ms)"
+	default 3000
+	range 500 10000
+	depends on RTL8XXXU_AP_TP
+	help
+	  How long the case waits after printing a phase's begin line before it
+	  starts its own flow: the harness starts the peer from that line, and
+	  the wait is the ssh round trip, outside the flow.
+
+config RTL8XXXU_C6_UDPUP_KBPS
+	int "rtl8xxxu C6 UDP-up offered rate (kbit/s)"
+	default 10000
+	range 1000 60000
+	help
+	  The paced UDP-up blast's offered rate on the C6T arm.  The 8188EU is a
+	  1T1R HT20 part (about 20-25 Mbit/s of air on this bench), so 10M is the
+	  rate that keeps the loss gate meaningful; the GT arm's 10/20/40 ladder
+	  says which rung this link actually carries.
 
 config RTL8XXXU_C5_PEER_WINDOW_MS
 	int "rtl8xxxu C5 peer-arm window (ms)"

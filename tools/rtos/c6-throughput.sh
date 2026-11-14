@@ -37,6 +37,12 @@ PI=pi@192.168.0.17
 AP_IF=wlan2
 MON_IF=wlan1
 BOARD_IP=192.168.99.2
+# Boot retries are OFF by default on this arm: a retried boot runs under
+# attempt-2/ while this script's phase state (seen_tcpdn, seen_sink, the peer
+# commands) is already spent on attempt-1, so attempt-2 measures a board with
+# no peer (2026-11-14 sta1: every receive phase 0 bytes, send phases fine).
+# A failed boot here is invalid and is re-run whole.
+BOOT_RETRY=${BOOT_RETRY:-0}
 # The station under test and the case that brings it up.  The defaults are the
 # AC 7260 C5/C6 pair; the 8189FTV throughput arm overrides both (its station
 # case prints the same `peer window` / `netif up` anchors).
@@ -121,7 +127,7 @@ APCAP_PID=$!
 
 # --- boot -------------------------------------------------------------------
 "$BOARD/boot-rtos.sh" --bin rtos.bin --success "rtos: result" \
-	--quiet 0 --timeout "$TIMEOUT" --power-cycle --retry 1 \
+	--quiet 0 --timeout "$TIMEOUT" --power-cycle --retry "$BOOT_RETRY" \
 	--evidence "$EVIDENCE" \
 	>"$EVIDENCE/boot.out" 2>&1 &
 BOOT_PID=$!

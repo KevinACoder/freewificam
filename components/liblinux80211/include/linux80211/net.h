@@ -265,6 +265,7 @@ unsigned long lkpi_net_tcpip_beat(void);
  */
 #define LKPI_NET_MON_KEEP		4
 #define LKPI_NET_MON_FREQS		4
+#define LKPI_NET_MON_BSS		8
 #define LKPI_NET_MON_KEEP_BYTES		64
 
 struct lkpi_net_mon_frame {
@@ -301,6 +302,20 @@ struct lkpi_net_mon_diag {
 	unsigned int	freq_mhz;	/* the dominant frequency */
 	unsigned int	kept;		/* entries filled in keep[] */
 	struct lkpi_net_mon_frame keep[LKPI_NET_MON_KEEP];
+	/*
+	 * The beacon census per BSSID.  `beacons` above counts every beacon the
+	 * sink saw, which on a bench with neighbours is several BSSes' worth;
+	 * this table is what lets a case (and the A/B arm) talk about *the bench
+	 * AP's* cadence instead of the channel's total.  Only beacons are keyed
+	 * (addr3); probe responses are not, so an idle channel cannot grow the
+	 * table into a scan result.
+	 */
+	struct {
+		unsigned char	bssid[6];
+		unsigned long	beacons;
+	} bss[LKPI_NET_MON_BSS];
+	unsigned int	bss_kept;
+	unsigned long	bss_full;	/* beacons whose BSS had no slot left */
 };
 
 /* Zero the counters and the ring.  Called before the interface is opened. */

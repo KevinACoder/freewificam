@@ -31,7 +31,7 @@ LOSS = re.compile(r"\((\d+(?:\.\d+)?)%\)")
 # The phase anchors carry the case name; the tool takes it as an argument so
 # the same gates serve every C6T arm (iwl7260_c6, rtw89_c6, ...).
 PHASE_BEGIN_FMT = (
-    r"{case}: phase \d+ begin proto=\S+ role=\S+ port=\d+ "
+    r"{case}: phase \d+ begin proto=\S+ role=\S+ (?:air=\S+ )?port=\d+ "
     r"window_ms=\d+ name=(\S+)")
 PHASE_REPORT_FMT = (
     r"{case}: phase \d+ report bytes=(\d+) ms=(\d+) kbit=(\d+) "
@@ -114,8 +114,8 @@ def max_or_none(*values):
     return max(vals) if vals else None
 
 
-def gt_arm(board: Path) -> dict:
-    inner = list(board.glob("gt-ac7260-*"))
+def gt_arm(board: Path, inner_glob: str = "gt-ac7260-*") -> dict:
+    inner = list(board.glob(inner_glob))
     src = inner[0] if inner else board
     arm = {
         "src": str(src),
@@ -129,12 +129,31 @@ def gt_arm(board: Path) -> dict:
         "peer_udpdn": iperf_summary(board / "peer-udpdn.txt"),
         "peer_tcpdn2": iperf_summary(board / "peer-tcpdn2.txt"),
         "peer_udpdn2": iperf_summary(board / "peer-udpdn2.txt"),
+        # The board's own send phases: the Pi's servers are the receivers.
+        "peer_tcpup_srv": iperf_summary(board / "peer-tcp-server.log"),
+        "peer_udpup_srv": iperf_summary(board / "peer-udp-server.log"),
     }
     return arm
 
 
-def rtos_arm(evidence: Path, case: str = "iwl7260_c6") -> dict:
+def rename_phases(phases: dict, rename: dict) -> dict:
+    """Re-label an arm's phases into the ruler's direction names.
+
+    The AP arm of the 8188EU round runs the station arm's four direction cells
+    with the roles swapped (PREREG.md §1), so its `tcpdn` is the board SENDING
+    while the station/GT arms' `tcpdn` is the board RECEIVING.  Renaming the
+    AP arm's phases (and the peer files they index) is what makes one report
+    compare like with like; the mapping is printed in the report.
+    """
+    if not rename:
+        return phases
+    return {rename.get(k, k): v for k, v in phases.items()}
+
+
+def rtos_arm(evidence: Path, case: str = "iwl7260_c6",
+             rename: dict | None = None) -> dict:
     phases = rtos_phases(evidence / "serial.log", case)
+    phases = rename_phases(phases, rename)
     arm = {"src": str(evidence), "phases": phases}
     for name in ("tcpdn", "tcpdn2", "udpdn", "udpdn2", "tcpup", "udpup"):
         p = phases.get(name)
@@ -149,10 +168,26 @@ def rtos_arm(evidence: Path, case: str = "iwl7260_c6") -> dict:
         arm[f"peer_{name}"] = iperf_summary(evidence / f"peer-{name}.txt")
     arm["ap_pcap"] = ap_pcap_totals(evidence)
     sink_text = read(evidence / "udp-sink.txt")
-    try:
-        arm["udp_sink"] = json.loads(sink_text.splitlines()[-1])
-    except (ValueError, IndexError):
-        arm["udp_sink"] = None
+    if not sink_text.strip():
+        # The AP round's sink is per phase (ap-round.sh): the board-send UDP
+        # cell is `udpdn` there.
+        sink_text = read(evidence / "sink-udpdn.txt")
+    # The sink prints one JSON object per second and then a summary line with
+    # no `t`; the flow's duration is the last *interval* line's timestamp (the
+    # summary's `seconds` is the sink's whole lifetime, idle time included).
+    arm["udp_sink"] = None
+    for line in sink_text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if "t" in obj:
+            arm["udp_sink"] = obj
+        elif arm["udp_sink"] is None and "bytes" in obj:
+            arm["udp_sink"] = obj
     return arm
 
 
@@ -173,14 +208,24 @@ def loss_from(peer: dict, board: dict) -> float | None:
 def arm_metrics(arm: dict) -> dict:
     """Per-boot capacity numbers: the repeat phases' larger value each."""
     sink = arm.get("udp_sink") or {}
+    # The board-send UDP cell: the sender's own paced report is the rate (the
+    # blast is paced, so its own window is the flow's), then the receiver's
+    # sink (whose `t` includes the idle time before the blast), then the GT
+    # arm's iperf server log.  The app-vs-app bytes are reported separately.
+    udp_up = arm["udpup"].get("mbit")
+    if udp_up is None:
+        udp_up = (round(sink["bytes"] * 8 / sink["t"] / 1e6, 3)
+                  if sink.get("bytes") and sink.get("t") else None)
+    if udp_up is None and arm.get("peer_udpup_srv"):
+        udp_up = arm["peer_udpup_srv"].get("mbit")
     return {
         "tcp_down": max_or_none(arm["tcpdn"].get("mbit"),
                                 arm["tcpdn2"].get("mbit")),
-        "tcp_up": arm["tcpup"].get("mbit"),
+        "tcp_up": max_or_none(arm["tcpup"].get("mbit"),
+                              (arm.get("peer_tcpup_srv") or {}).get("mbit")),
         "udp_down": max_or_none(arm["udpdn"].get("mbit"),
                                 arm["udpdn2"].get("mbit")),
-        "udp_up": (round(sink["bytes"] * 8 / 20.0 / 1e6, 3)
-                   if sink.get("bytes") else None),
+        "udp_up": udp_up,
         "udp_loss": loss_from(arm["peer_udpdn"], arm["udpdn"]),
     }
 
@@ -216,14 +261,32 @@ def main() -> int:
                     help="TCP ratio gate against GT (default 0.80)")
     ap.add_argument("--case-prefix", default="iwl7260_c6",
                     help="the case name the phase anchors carry")
+    ap.add_argument("--gt-inner-glob", default="gt-ac7260-*",
+                    help="the GT board script's output dir name inside the GT "
+                         "boot dir (one per card)")
+    ap.add_argument("--rtos-rename", default="",
+                    help="phase renames for the RTOS arm, e.g. "
+                         "tcpdn=tcpup,tcpup=tcpdn (direction-paired tables)")
+    ap.add_argument("--gates", choices=("c6", "full"), default="c6",
+                    help="c6 = the 7260 pre-registration's gates; full adds "
+                         "the UDP rate gates of a direction-paired round")
+    ap.add_argument("--no-t2", dest="t2", action="store_false",
+                    help="skip the AP-pcap T2 gate (an arm without that "
+                         "capture)")
+    ap.set_defaults(t2=True)
     args = ap.parse_args()
 
-    gt_arms = [gt_arm(args.gt)]
+    rename = {}
+    for item in args.rtos_rename.split(","):
+        if "=" in item:
+            src, _, dst = item.partition("=")
+            rename[src.strip()] = dst.strip()
+    gt_arms = [gt_arm(args.gt, args.gt_inner_glob)]
     if args.gt2:
-        gt_arms.append(gt_arm(args.gt2))
-    rt_arms = [rtos_arm(args.rtos, args.case_prefix)]
+        gt_arms.append(gt_arm(args.gt2, args.gt_inner_glob))
+    rt_arms = [rtos_arm(args.rtos, args.case_prefix, rename)]
     if args.rtos2:
-        rt_arms.append(rtos_arm(args.rtos2, args.case_prefix))
+        rt_arms.append(rtos_arm(args.rtos2, args.case_prefix, rename))
 
     gt, gt_boots = aggregate(gt_arms)
     rt, rt_boots = aggregate(rt_arms)
@@ -269,10 +332,23 @@ def main() -> int:
         and ratios["tcp_up"] >= args.tcp_min,
         "udp_down_loss_le_1pct": rt["udp_loss"] is not None
         and rt["udp_loss"] <= 1.0,
-        "t2_ap_pcap_within_5pct": (t2["tcp_pct"] is not None
-                                   and t2["tcp_pct"] <= 5.0)
-        and (t2["udp_pct"] is not None and t2["udp_pct"] <= 5.0),
     }
+    if args.t2:
+        gates["t2_ap_pcap_within_5pct"] = (
+            (t2["tcp_pct"] is not None and t2["tcp_pct"] <= 5.0)
+            and (t2["udp_pct"] is not None and t2["udp_pct"] <= 5.0))
+    if args.gates == "full":
+        udp_ratios = {
+            "udp_down": (rt["udp_down"] / gt["udp_down"])
+            if rt["udp_down"] and gt["udp_down"] else None,
+            "udp_up": (rt["udp_up"] / gt["udp_up"])
+            if rt["udp_up"] and gt["udp_up"] else None,
+        }
+        gates["udp_down_ge_80pct"] = (udp_ratios["udp_down"] is not None
+                                      and udp_ratios["udp_down"] >= args.tcp_min)
+        gates["udp_up_ge_80pct"] = (udp_ratios["udp_up"] is not None
+                                    and udp_ratios["udp_up"] >= args.tcp_min)
+        ratios.update(udp_ratios)
     verdict = "pass" if all(gates.values()) else "fail"
 
     report = {
@@ -283,6 +359,7 @@ def main() -> int:
         "rtos": {"aggregate": rt, "boots": rt_boots},
         "ratios": ratios,
         "t2": t2,
+        "rtos_rename": rename,
     }
 
     print(f"verdict: {verdict}")

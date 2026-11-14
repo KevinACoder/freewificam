@@ -1,0 +1,41 @@
+# rtl8xxxu on the RTOS line, C6T: the RTL8188EUS (USB, behind the external hub
+# on the bench's "xhci0") brings up the C5 ladder in the same boot and then runs
+# the seven-phase throughput table over wl0: loopback (attribution only), tcpdn,
+# udpdn, tcpdn2, udpdn2, tcpup, udpup.
+#
+# The phase table is the same one the GT arm runs (tools/gt/gt-rtl8xxxu-board.sh,
+# a clone of the 8821CU arm's): 30 s TCP down, 20 s UDP down, 20 s TCP up, 10 s
+# UDP up, with the peer's stream 2 s inside each window and the same iperf2
+# binary + `-w 128K` on the Pi (lwIP's TCP_WND is 131072, so the two ends'
+# windows agree).  The UDP offered rates are the harness's: 10M down (the link
+# carries ~20-25 Mbit/s) and 10M up.
+#
+# The gates (TCP down/up >= 80% of the same-day GT, UDP down loss <= 1%, T2
+# pcap-within-5%) are pre-registered in runs/2026-11-14-rtl8xxxu-8188eu-tp/
+# PREREG.md, not in this image.  CONFIG_LKPI_CENSUS keeps the per-phase
+# task/skb census the C6T rounds use for attribution.
+#
+# The driver + stack are a GPL-2.0 link product and redistribute the Realtek
+# rtl8188eufw image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_c5 rtl8xxxu_c6"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_LKPI_CENSUS=y
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTL8XXXU_C5_PEER_WINDOW_MS=2000
+CONFIG_RTL8XXXU_C6_UDPUP_KBPS=10000
+CONFIG_RTL8XXXU_USB_BUS=0
+CONFIG_C6_PEER_IP="192.168.99.1"

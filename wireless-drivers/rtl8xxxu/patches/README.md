@@ -9,10 +9,10 @@ replay directory.
 | Upstream | Linux `drivers/net/wireless/realtek/rtl8xxxu/` |
 | Base (= pin) | `b98a1dfd4661670b9e16d9c74da43e0389ef7e62` |
 | License | `GPL-2.0-only` (every file's SPDX line) |
-| Patch list | `0001-rtl8xxxu-enable-ap-mode-for-the-rtl8188eu.patch` (the 8188e fileops gains `supports_ap` and `max_macid_num`), `0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch` (`fill_txdesc_v3` writes the frame's macid into `txdw1[5:0]`, plus the `TXDESC32_MACID_MASK` define), `0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch` (a chip-gated `host_beacon_repeat`: the 8188E does not repeat a host-downloaded beacon, so the host recomposes one per beacon interval) |
-| Applied | all three replayed with `patch -p3 --fuzz=0` on 2026-11-14; apply order is the file-name order (`0003` sits on `0001`+`0002`) |
+| Patch list | `0001-rtl8xxxu-enable-ap-mode-for-the-rtl8188eu.patch` (the 8188e fileops gains `supports_ap` and `max_macid_num`), `0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch` (`fill_txdesc_v3` writes the frame's macid into `txdw1[5:0]`, plus the `TXDESC32_MACID_MASK` define), `0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch` (a chip-gated `host_beacon_repeat`: the 8188E does not repeat a host-downloaded beacon, so the host recomposes one per beacon interval), `0004-rtl8xxxu-support-the-monitor-role-on-the-rtl8188eu.patch` (a chip-gated `supports_monitor`: `WANT_MONITOR_VIF`, the monitor vif in `add_interface`/`remove_interface`, and the promiscuous `RCR` shape the driver keeps for as long as the monitor is up) |
+| Applied | all four replayed with `patch -p3 --fuzz=0` on 2026-11-14; apply order is the file-name order (`0003` sits on `0001`+`0002`, `0004` on all three) |
 | Manifest | `MANIFEST.sha256` - the digest of the imported tree, excluding this directory (13 files) |
-| Verify | `cd wireless-drivers/rtl8xxxu && sha256sum -c patches/MANIFEST.sha256`; and `tools/build/import-driver.py --driver rtl8xxxu --check` replays the two patches onto the pin and compares (the other 11 files stay byte-identical) |
+| Verify | `cd wireless-drivers/rtl8xxxu && sha256sum -c patches/MANIFEST.sha256`; and `tools/build/import-driver.py --driver rtl8xxxu --check` replays the four patches onto the pin and compares (the other 10 files stay byte-identical) |
 
 ## Why the tree is no longer zero-patch
 
@@ -47,6 +47,26 @@ the host-downloaded beacon in hardware, and this chip does not. So the beacon
 timer moves into the host for the 8188E only (`host_beacon_repeat` in the
 fileops table). Boundary: the cadence is the host timer's, not the chip's TBTT.
 
+`0004` is the monitor role, also this line's own work. Mainline rtl8xxxu has no
+monitor mode on any chip: it never sets `WANT_MONITOR_VIF`, so mac80211 treats
+the interface as a software-only one and the hardware keeps filtering. Most of
+the receive plumbing is already generic in this pin — `rtl8xxxu_start()` opens
+`REG_RXFLTMAP0/2` to every management and data frame, the RX parsers report the
+raw frame and let mac80211 build the radiotap header, and `configure_filter()`
+already maps `FIF_*` onto `RCR`. What was missing is the interface and one `RCR`
+shape (accept all unicast plus every data/control frame, no BSSID check), which
+`add_interface()` now programs and `configure_filter()` re-asserts — this port's
+`SET_INTERFACE` carries no monitor flags, so mac80211 never asks for
+`FIF_OTHER_BSS`/`FIF_CONTROL` and the generic assignments would otherwise clear
+the accept bits. `remove_interface()` restores the interface default. The same
+patch stops the RX status from dereferencing an unset `hw->conf.chandef.chan`
+(a monitor takes its channel after the interface is up; a frame in that window
+is dropped by mac80211 instead of faulting the driver). Boundary: receive only —
+no injection, no `MONITOR_FLAG_ACTIVE`/otherbss plumbing, and `FIF_FCSFAIL` is
+not honored while the monitor's `RCR` is asserted as one unit. Chip-gated
+(`supports_monitor`, 8188E only), so no other chip's interface set or receive
+configuration changes.
+
 The AP-mode rate-control changes from the same RFC (per-macid `ra_info`, the
 `dynamic_tx_rpt_timing_counter` move, the max-report-macid update) are **not**
 carried: this line's AP round is a single-client open AP, and those patches
@@ -55,4 +75,5 @@ the data plane shows a rate-control signature instead of a macid one.
 
 A future upstream acceptance of the series removes `0001`/`0002` here, moves the
 pin forward and notes both in `../../docs/PROVENANCE.md` and
-`wireless-drivers/rtl8xxxu/PROVENANCE.md`.
+`wireless-drivers/rtl8xxxu/PROVENANCE.md`. `0003` and `0004` are this line's and
+move with it.

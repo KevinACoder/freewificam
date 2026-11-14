@@ -197,6 +197,12 @@ int case_rtl8xxxu_c5_run(void);
 #if defined(RTOS_CASE_RTL8XXXU_AP)
 int case_rtl8xxxu_ap_run(void);
 #endif
+#if defined(RTOS_CASE_RTL8XXXU_MON)
+int case_rtl8xxxu_mon_run(void);
+#endif
+#if defined(RTOS_CASE_RTL8XXXU_C6)
+int case_rtl8xxxu_c6_run(void);
+#endif
 
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf

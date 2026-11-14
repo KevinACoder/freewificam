@@ -746,6 +746,39 @@ lkpi_mon_absorb(struct sk_buff *skb)
 		d->other++;
 		break;
 	}
+	/*
+	 * The per-BSSID beacon census: addr3 of a beacon is the BSSID, and on a
+	 * bench with neighbours the total above says nothing about the AP under
+	 * test.  The table is fixed-size and keyed by addr3 only; a full table
+	 * drops later BSSes, which is visible in the case's line count.
+	 */
+	if (type == 0u && subtype == 8u && it_len + 22u <= len) {
+		const unsigned char *b = &skb->data[it_len + 16u];
+		unsigned int i;
+		bool placed = false;
+
+		for (i = 0u; i < LKPI_NET_MON_BSS; i++) {
+			if (d->bss[i].beacons != 0u &&
+			    memcmp(d->bss[i].bssid, b, 6u) == 0) {
+				d->bss[i].beacons++;
+				placed = true;
+				break;
+			}
+			if (d->bss[i].beacons == 0u) {
+				memcpy(d->bss[i].bssid, b, 6u);
+				d->bss[i].beacons = 1ul;
+				d->bss_kept++;
+				placed = true;
+				break;
+			}
+		}
+		/* A full table must not hide itself: mon3 (2026-11-14) lost the
+		 * bench AP's 139 beacons into the four neighbour BSSes' slots
+		 * before the table was widened, and the case's census line was
+		 * the only place that could have said so. */
+		if (!placed)
+			d->bss_full++;
+	}
 	if (d->kept < LKPI_NET_MON_KEEP) {
 		struct lkpi_net_mon_frame *k = &d->keep[d->kept];
 		unsigned int n = len < LKPI_NET_MON_KEEP_BYTES ?

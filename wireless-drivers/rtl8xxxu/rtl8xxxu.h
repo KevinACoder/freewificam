@@ -2023,6 +2023,11 @@ struct rtl8xxxu_fileops {
 	u8 ustime_tsf_edca;
 	u16 max_aggr_num;
 	u8 supports_ap:1;
+	/* Monitor: the fileops accepts a MONITOR interface and the driver owns
+	 * the promiscuous receive configuration.  The port's nl80211
+	 * SET_INTERFACE carries no monitor flags, so mac80211 never asks for
+	 * FIF_OTHER_BSS/FIF_CONTROL and RCR has to be set here. */
+	u8 supports_monitor:1;
 	/* AP mode: the beacon is recomposed and sent from the host every
 	 * beacon interval (the 8188E does not repeat a host-downloaded
 	 * beacon; see patches/README.md). */

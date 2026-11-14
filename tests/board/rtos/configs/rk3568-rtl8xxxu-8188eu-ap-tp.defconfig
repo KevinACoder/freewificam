@@ -1,0 +1,42 @@
+# rtl8xxxu on the RTOS line, the AP role with the A4 phase table: the same
+# 8188EU AP as `-ap` (rtos-8188-ap, ch5/2432, HT20, open, hostapd as the AP
+# MLME, the host-sent beacon of patch 0003), plus the four throughput cells the
+# station arm's C6T table runs with the roles swapped:
+#
+#   tcpdn  board sends TCP   20 s   (station arm: tcpup)
+#   tcpup  board receives    30 s   (station arm: tcpdn)
+#   udpup  board receives    20 s, peer offers 10M (station arm: udpdn)
+#   udpdn  board sends       10 s at 10M            (station arm: udpup)
+#
+# The direction pairing and the gates are pre-registered in
+# runs/2026-11-14-rtl8xxxu-8188eu-tp/PREREG.md; this image only carries the
+# table.  CONFIG_LKPI_CENSUS keeps the per-phase net/stack counters.
+#
+# The AP arm's peer is the 8812AU as a client (bench swapped), so the two arms
+# are the same radio pair with the roles exchanged - the reason the PREREG puts
+# the swap in the pre-registration.  The driver + stack are GPL-2.0; the
+# imported hostapd is BSD-3-Clause and the rtl8188eufw image is redistributed
+# (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_ap"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_HOSTAP_AP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_LKPI_CENSUS=y
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTL8XXXU_AP_TP=y
+CONFIG_RTL8XXXU_AP_TP_UDP_KBPS=10000
+CONFIG_RTL8XXXU_AP_TP_PEER_MS=3000
+CONFIG_RTL8XXXU_USB_BUS=0

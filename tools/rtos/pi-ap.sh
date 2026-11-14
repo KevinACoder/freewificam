@@ -42,6 +42,12 @@ WPA_CTRL=${WPA_CTRL:-/tmp/pi-ap-wpa-ctrl}
 STA_IF=${STA_IF:-wlan1}
 MON_IF=${MON_IF:-wlan2}
 MON_RESTORE_CH=${MON_RESTORE_CH:-5}
+# The standard bench's monitor interface and channel after `down`.  The default
+# is this arm's own monitor (the 7260/8189/8851 AP rounds); the 8188EU AP
+# throughput arm swaps the radios (8812AU as the client, MT7921AU as the
+# monitor), so it passes RESTORE_MON_IF=wlan1 and gets the standard bench back.
+RESTORE_MON_IF=${RESTORE_MON_IF:-$STA_IF}
+UDP_UP_RATE=${UDP_UP_RATE:-40M}
 NM_MARK=/tmp/pi-ap-nm-unmanaged
 RPF_MARK=/tmp/pi-ap-rpfilter-wlan1
 
@@ -202,9 +208,7 @@ do_down() {
     iw dev "$STA_IF" disconnect 2>/dev/null || true
     ip addr flush dev "$STA_IF" 2>/dev/null || true
     ip link set "$STA_IF" down 2>/dev/null || true
-    iw dev "$STA_IF" set type monitor 2>&1 || say "sta -> monitor failed"
-    ip link set "$STA_IF" up
-    iw dev "$STA_IF" set channel "$MON_RESTORE_CH" 2>&1 || say "monitor ch$MON_RESTORE_CH failed"
+    iw dev "$STA_IF" set type managed 2>&1 || true
     ip link set "$MON_IF" down 2>/dev/null || true
     iw dev "$MON_IF" set type managed 2>&1 || say "monitor -> managed failed"
     say "== restart lab-ap"
@@ -218,11 +222,11 @@ do_down() {
     # "managed yes" made NM take wlan1 back as a managed station, so the
     # monitor role was lost after every round (2026-11-11).  Re-release them
     # and put wlan1 back on its monitor channel after lab-ap has run.
-    nm_release "$STA_IF" "$MON_IF"
-    ip link set "$STA_IF" down 2>/dev/null || true
-    iw dev "$STA_IF" set type monitor 2>/dev/null || true
-    ip link set "$STA_IF" up
-    iw dev "$STA_IF" set channel "$MON_RESTORE_CH" 2>/dev/null || true
+    nm_release "$RESTORE_MON_IF" "$MON_IF"
+    ip link set "$RESTORE_MON_IF" down 2>/dev/null || true
+    iw dev "$RESTORE_MON_IF" set type monitor 2>/dev/null || true
+    ip link set "$RESTORE_MON_IF" up
+    iw dev "$RESTORE_MON_IF" set channel "$MON_RESTORE_CH" 2>/dev/null || true
     rm -f "$NM_MARK"
     do_status
 }
@@ -391,7 +395,7 @@ do_client_tcp() {	# $1 = seconds
 }
 
 do_client_udp() {	# $1 = seconds
-    iperf -c "$AP_IP" -p 5002 -u -b 40M -t "${1:-18}" -i 5 2>&1
+    iperf -c "$AP_IP" -p 5002 -u -b "$UDP_UP_RATE" -t "${1:-18}" -i 5 2>&1
 }
 
 do_station() { iw dev "$STA_IF" station dump 2>&1; }

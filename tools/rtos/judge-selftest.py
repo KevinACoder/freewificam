@@ -425,6 +425,160 @@ def rtw89_c6_short() -> str:
             + CASE_PASS.format(name="rtw89_c6") + RESULT_PASS)
 
 
+# --- the RTL8188EUS AP arm (A1-A3, and A4 when the image carries it) ------
+RTL8XXXU_AP_BODY = (
+    "rtl8xxxu_ap: wlan0 present=1 ifindex=3 mac=20:f4:1b:52:8f:01 "
+    "iftype=2\n"
+    "rtl8xxxu_ap: chan freq=2432 present=1 flags=0x00000000 can_beacon=1\n"
+    "rtl8xxxu_ap: set_iface rc=0 type=3\n"
+    "rtl8xxxu_ap: start rc=0\n"
+    "rtl8xxxu_ap: netif up name=wl0 ip=192.168.99.1/24 "
+    "mac=20:f4:1b:52:8f:01\n"
+    "rtl8xxxu_ap: security wpa2=0 ssid=rtos-8188-ap channel=5 bcn_int=100 "
+    "dtim_req=2\n"
+    "rtl8xxxu_ap: hostap start rc=0 ready=1\n"
+    "rtl8xxxu_ap: link freq=2432\n"
+    "rtl8xxxu_ap: PASS A1\n"
+    "rtl8xxxu_ap: sta n=1 hostap=1 mac=90:de:80:4c:38:c5\n"
+    "rtl8xxxu_ap: PASS A2\n"
+    "rtl8xxxu_ap: ping payload=56 tx=20 rx=20 dup=0 rtt_ms=0/2/9\n"
+    "rtl8xxxu_ap: ping payload=1400 tx=20 rx=20 dup=0 rtt_ms=3/4/15\n"
+    "rtl8xxxu_ap: link window rx_frames=21 rx_foreign=0 rx_no_netif=0 "
+    "rx_input_fail=0 rx_bytes=1000 tx_frames=21 tx_fail=0\n"
+    "rtl8xxxu_ap: PASS A3\n"
+)
+
+RTL8XXXU_AP_TP_BODY = (
+    "rtl8xxxu_ap: server tcp=5001 udp=5002 ok=1\n"
+    "rtl8xxxu_ap: phase 1 begin proto=tcp role=client air=down port=5001 "
+    "window_ms=20000 name=tcpdn peer_ms=3000 rate_kbps=0\n"
+    "rtl8xxxu_ap: phase 2 begin proto=tcp role=server air=up port=5001 "
+    "window_ms=30000 name=tcpup peer_ms=3000 rate_kbps=0\n"
+    "rtl8xxxu_ap: phase 3 begin proto=udp role=server air=up port=5002 "
+    "window_ms=20000 name=udpup peer_ms=3000 rate_kbps=0\n"
+    "rtl8xxxu_ap: phase 4 begin proto=udp role=client air=down port=5002 "
+    "window_ms=10000 name=udpdn peer_ms=3000 rate_kbps=10000\n"
+    "rtl8xxxu_ap: phase 1 report bytes=800000 ms=20000 kbit=320 pkts=900\n"
+    "rtl8xxxu_ap: phase 2 report bytes=2000000 ms=30000 kbit=533 pkts=900\n"
+    "rtl8xxxu_ap: phase 3 report bytes=2400000 ms=20000 kbit=960 pkts=900\n"
+    "rtl8xxxu_ap: phase 4 report bytes=1200000 ms=10000 kbit=960 pkts=900\n"
+    "rtl8xxxu_ap: phase 1 done ok=1\n"
+    "rtl8xxxu_ap: phase 2 done ok=1\n"
+    "rtl8xxxu_ap: phase 3 done ok=1\n"
+    "rtl8xxxu_ap: phase 4 done ok=1\n"
+    "rtl8xxxu_ap: PASS APT\n"
+)
+
+
+def rtl8xxxu_ap_function() -> str:
+    """The A1-A3 image: no A4 anchors, and that is not a failure."""
+    return (BANNER + RTL8XXXU_AP_BODY
+            + "rtl8xxxu_ap: PASS AP\n"
+            + CASE_PASS.format(name="rtl8xxxu_ap") + RESULT_PASS)
+
+
+def rtl8xxxu_ap_tp() -> str:
+    return (BANNER + RTL8XXXU_AP_BODY + RTL8XXXU_AP_TP_BODY
+            + "rtl8xxxu_ap: PASS AP\n"
+            + CASE_PASS.format(name="rtl8xxxu_ap") + RESULT_PASS)
+
+
+def rtl8xxxu_ap_tp_open_phase() -> str:
+    """PASS APT with the last phase reporting done ok=0."""
+    body = RTL8XXXU_AP_TP_BODY.replace(
+        "rtl8xxxu_ap: phase 4 done ok=1\n",
+        "rtl8xxxu_ap: phase 4 done ok=0\n")
+    return (BANNER + RTL8XXXU_AP_BODY + body
+            + "rtl8xxxu_ap: PASS AP\n"
+            + CASE_PASS.format(name="rtl8xxxu_ap") + RESULT_PASS)
+
+
+# --- the RTL8188EUS C6T arm -----------------------------------------------
+def _rtl8xxxu_c6_body(phases: int, dones: int) -> str:
+    names = ("loopback", "tcpdn", "udpdn", "tcpdn2", "udpdn2", "tcpup",
+             "udpup")
+    protos = ("tcp", "tcp", "udp", "tcp", "udp", "tcp", "tcp")
+    roles = ("client", "server", "server", "server", "server", "client",
+             "client")
+    body = ("rtl8xxxu_c6: plan=throughput bssid=1c:a7:70:de:29:a1 dev=wlan0\n"
+            "rtl8xxxu_c6: ready netif=1 rx_frames=10 tx_frames=8\n"
+            "rtl8xxxu_c6: server tcp=5001 udp=5002 ok=1\n")
+    for i in range(phases):
+        body += (f"rtl8xxxu_c6: phase {i + 1} begin proto={protos[i]} "
+                 f"role={roles[i]} port=5001 window_ms=30000 "
+                 f"name={names[i]}\n")
+    for i in range(phases):
+        body += (f"rtl8xxxu_c6: phase {i + 1} report bytes={1000000 + i} "
+                 f"ms=30000 kbit=4000 pkts=900\n")
+    for i in range(dones):
+        body += f"rtl8xxxu_c6: phase {i + 1} done ok=1\n"
+    return body
+
+
+def rtl8xxxu_c6_open() -> str:
+    return (BANNER + _rtl8xxxu_c6_body(7, 7)
+            + "rtl8xxxu_c6: PASS C6T\n"
+            + CASE_PASS.format(name="rtl8xxxu_c6") + RESULT_PASS)
+
+
+def rtl8xxxu_c6_short() -> str:
+    """PASS C6T with two phases never closed."""
+    return (BANNER + _rtl8xxxu_c6_body(7, 5)
+            + "rtl8xxxu_c6: PASS C6T\n"
+            + CASE_PASS.format(name="rtl8xxxu_c6") + RESULT_PASS)
+
+
+# --- the RTL8188EUS monitor arm -------------------------------------------
+RTL8XXXU_MON_BODY = (
+    "rtl8xxxu_mon: fw registered=0 name=rtlwifi/rtl8188eufw.bin\n"
+    "rtl8xxxu_mon: firmware rtl8188eu: Firmware revision 28.0 "
+    "(signature 0x88e1)\n"
+    "rtl8xxxu_mon: wlan0 present=1 ifindex=3 mac=20:f4:1b:52:8f:01 "
+    "iftype=2\n"
+    "rtl8xxxu_mon: chan freq=2432 present=1 flags=0x00000000\n"
+    "rtl8xxxu_mon: sink enabled=1\n"
+    "rtl8xxxu_mon: set_iface rc=0 type=6\n"
+    "rtl8xxxu_mon: start rc=0 netif_running=1 devtype=803\n"
+    "rtl8xxxu_mon: set_freq rc=0 freq=2432\n"
+    "rtl8xxxu_mon: window ms=15000\n"
+    "rtl8xxxu_mon: sample t=1000 frames=12 beacons=10 data=1\n"
+    "rtl8xxxu_mon: sample t=2000 frames=24 beacons=20 data=2\n"
+    "rtl8xxxu_mon: sink frames=150 bytes=24000 beacons=140 probes=4 "
+    "probe_resp=2 auth=1 assoc=1 data=2 ctrl=0 other=0\n"
+    "rtl8xxxu_mon: radiotap it_len=32/40 freq=2432 bad=0 short=0\n"
+    "rtl8xxxu_mon: bssbeacons=1c:a7:70:de:29:a1 beacons=120\n"
+    "rtl8xxxu_mon: bssbeacons=64:eb:94:7b:b4:7a beacons=20\n"
+    "rtl8xxxu_mon: frame 0 len=180 it_len=32 fc=0x0080 "
+    "hdr=80000000ffffffffffff1ca770de29a11ca770de29a100000000\n"
+    "rtl8xxxu_mon: bssid=1c:a7:70:de:29:a1 first_frame=0\n"
+    "rtl8xxxu_mon: lwip in rx_frames=0 rx_foreign=0 tx_frames=0\n"
+    "rtl8xxxu_mon: lwip out rx_frames=0 rx_foreign=0 tx_frames=0\n"
+    "rtl8xxxu_mon: tx dev tx_packets=0 tx_bytes=0\n"
+)
+
+
+def rtl8xxxu_mon_open() -> str:
+    return (BANNER + RTL8XXXU_MON_BODY
+            + "rtl8xxxu_mon: PASS MON\n"
+            + CASE_PASS.format(name="rtl8xxxu_mon") + RESULT_PASS)
+
+
+def rtl8xxxu_mon_census_absent() -> str:
+    """PASS MON from an image without the per-BSSID census.
+
+    The first census image is 2026-11-14's; the earlier status line was the
+    kept-frame sample.  A boot logged before the census existed must still be
+    judgeable when the harness names the bench BSSID, and the judge falls back
+    to the kept frames (which carry addr3) rather than failing it.
+    """
+    body = RTL8XXXU_MON_BODY.replace(
+        "rtl8xxxu_mon: bssbeacons=1c:a7:70:de:29:a1 beacons=120\n", "").replace(
+        "rtl8xxxu_mon: bssbeacons=64:eb:94:7b:b4:7a beacons=20\n", "")
+    return (BANNER + body
+            + "rtl8xxxu_mon: PASS MON\n"
+            + CASE_PASS.format(name="rtl8xxxu_mon") + RESULT_PASS)
+
+
 SAMPLES = [
     ("ap5g-open", ap5g_open, None, {"cases": ["iwl7260_ap5g"]}),
     ("ap5g-wpa2", ap5g_wpa2, None, {"cases": ["iwl7260_ap5g"]}),
@@ -466,6 +620,24 @@ SAMPLES = [
     ("rtw89-c6-open", rtw89_c6_open, None, {"cases": ["rtw89_c6"]}),
     ("rtw89-c6-short", rtw89_c6_short, "only 5 of 7 phases closed",
      {"cases": ["rtw89_c6"]}),
+    ("rtl8xxxu-ap-function", rtl8xxxu_ap_function, None,
+     {"cases": ["rtl8xxxu_ap"]}),
+    ("rtl8xxxu-ap-tp", rtl8xxxu_ap_tp, None, {"cases": ["rtl8xxxu_ap"]}),
+    ("rtl8xxxu-ap-tp-open", rtl8xxxu_ap_tp_open_phase,
+     "phase 4 closed ok=0", {"cases": ["rtl8xxxu_ap"]}),
+    ("rtl8xxxu-c6-open", rtl8xxxu_c6_open, None,
+     {"cases": ["rtl8xxxu_c5", "rtl8xxxu_c6"]}),
+    ("rtl8xxxu-c6-short", rtl8xxxu_c6_short, "only 7 reports / 5 dones",
+     {"cases": ["rtl8xxxu_c5", "rtl8xxxu_c6"]}),
+    ("rtl8xxxu-mon-open", rtl8xxxu_mon_open, None,
+     {"cases": ["rtl8xxxu_mon"]}),
+    ("rtl8xxxu-mon-no-census", rtl8xxxu_mon_census_absent, None,
+     {"cases": ["rtl8xxxu_mon"], "mon_bssid": "1c:a7:70:de:29:a1"}),
+    ("rtl8xxxu-mon-want-bssid", rtl8xxxu_mon_open,
+     "is in neither the census",
+     {"cases": ["rtl8xxxu_mon"], "mon_bssid": "aa:bb:cc:dd:ee:ff"}),
+    ("rtl8xxxu-mon-bench-bssid", rtl8xxxu_mon_open, None,
+     {"cases": ["rtl8xxxu_mon"], "mon_bssid": "1c:a7:70:de:29:a1"}),
 ]
 
 

@@ -58,6 +58,28 @@ MODULE_PARM_DESC(dma_agg_pages, "Set DMA aggregation pages (range 1-127, 0 to di
 #define RTL8XXXU_TX_URB_LOW_WATER	25
 #define RTL8XXXU_TX_URB_HIGH_WATER	32
 
+/*
+ * The two receive-configuration shapes this driver programs.
+ *
+ * RTL8XXXU_RCR_BASE is the power-on/interface-default set: the chip hands up
+ * what is addressed to us (PHYS_MATCH plus multicast/broadcast), every
+ * management frame, with the PHY status/ICV/MIC trailer the RX parsers expect.
+ * The two CHECK_BSSID bits (added by the filter code below) then decide which
+ * BSS the "for us" part means.
+ *
+ * RTL8XXXU_RCR_MONITOR is the promiscuous set a monitor needs: accept all
+ * unicast (RCR_ACCEPT_AP) and every data/control frame, and no BSSID check.
+ * REG_RXFLTMAP0/2 already accept all management and data (rtl8xxxu_start()),
+ * so RCR is the remaining gate.
+ */
+#define RTL8XXXU_RCR_BASE	(RCR_ACCEPT_PHYS_MATCH | RCR_ACCEPT_MCAST | \
+				 RCR_ACCEPT_BCAST | RCR_ACCEPT_MGMT_FRAME | \
+				 RCR_HTC_LOC_CTRL | RCR_APPEND_PHYSTAT | \
+				 RCR_APPEND_ICV | RCR_APPEND_MIC)
+#define RTL8XXXU_RCR_MONITOR	(RTL8XXXU_RCR_BASE | RCR_ACCEPT_AP | \
+				 RCR_ACCEPT_DATA_FRAME | RCR_ACCEPT_CTRL_FRAME)
+
+
 static int rtl8xxxu_submit_rx_urb(struct rtl8xxxu_priv *priv,
 				  struct rtl8xxxu_rx_urb *rx_urb);
 
@@ -4175,9 +4197,7 @@ static int rtl8xxxu_init_device(struct ieee80211_hw *hw)
 	/*
 	 * Configure initial WMAC settings
 	 */
-	val32 = RCR_ACCEPT_PHYS_MATCH | RCR_ACCEPT_MCAST | RCR_ACCEPT_BCAST |
-		RCR_ACCEPT_MGMT_FRAME | RCR_HTC_LOC_CTRL |
-		RCR_APPEND_PHYSTAT | RCR_APPEND_ICV | RCR_APPEND_MIC;
+	val32 = RTL8XXXU_RCR_BASE;
 	rtl8xxxu_write32(priv, REG_RCR, val32);
 	priv->regrcr = val32;
 
@@ -6437,8 +6457,15 @@ int rtl8xxxu_parse_rxdesc16(struct rtl8xxxu_priv *priv, struct sk_buff *skb)
 				rx_status->rate_idx = rx_desc->rxmcs;
 			}
 
-			rx_status->freq = hw->conf.chandef.chan->center_freq;
-			rx_status->band = hw->conf.chandef.chan->band;
+			/* A monitor changes its channel after the interface is
+			 * up, and any role can see a stray frame before the
+			 * first channel configuration; a NULL chandef must drop
+			 * the report (freq 0) instead of the boot. */
+			if (hw->conf.chandef.chan) {
+				rx_status->freq =
+					hw->conf.chandef.chan->center_freq;
+				rx_status->band = hw->conf.chandef.chan->band;
+			}
 
 			ieee80211_rx_irqsafe(hw, skb);
 		}
@@ -6545,8 +6572,15 @@ int rtl8xxxu_parse_rxdesc24(struct rtl8xxxu_priv *priv, struct sk_buff *skb)
 				rx_status->rate_idx = rx_desc->rxmcs;
 			}
 
-			rx_status->freq = hw->conf.chandef.chan->center_freq;
-			rx_status->band = hw->conf.chandef.chan->band;
+			/* A monitor changes its channel after the interface is
+			 * up, and any role can see a stray frame before the
+			 * first channel configuration; a NULL chandef must drop
+			 * the report (freq 0) instead of the boot. */
+			if (hw->conf.chandef.chan) {
+				rx_status->freq =
+					hw->conf.chandef.chan->center_freq;
+				rx_status->band = hw->conf.chandef.chan->band;
+			}
 
 			ieee80211_rx_irqsafe(hw, skb);
 		}
@@ -6757,6 +6791,7 @@ static int rtl8xxxu_add_interface(struct ieee80211_hw *hw,
 	struct rtl8xxxu_vif *rtlvif = (struct rtl8xxxu_vif *)vif->drv_priv;
 	struct rtl8xxxu_priv *priv = hw->priv;
 	int port_num;
+	u32 rcr;
 	u8 val8;
 
 	if (!priv->vifs[0])
@@ -6800,6 +6835,17 @@ static int rtl8xxxu_add_interface(struct ieee80211_hw *hw,
 		val8 &= ~BIT_BCN_PORT_SEL;
 		rtl8xxxu_write8(priv, REG_CCK_CHECK, val8);
 		break;
+	case NL80211_IFTYPE_MONITOR:
+		/* Receive-only.  mac80211 builds no data path for this vif, so
+		 * there is no MSR/linktype to program (set_linktype() below
+		 * ignores the type) and no beacon to arm; what matters is that
+		 * the hardware stops filtering.  The set is one unit, and
+		 * configure_filter() keeps it for as long as this vif is the
+		 * monitor. */
+		rcr = RTL8XXXU_RCR_MONITOR;
+		rtl8xxxu_write32(priv, REG_RCR, rcr);
+		priv->regrcr = rcr;
+		break;
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -6822,6 +6868,14 @@ static void rtl8xxxu_remove_interface(struct ieee80211_hw *hw,
 	struct rtl8xxxu_priv *priv = hw->priv;
 
 	dev_dbg(&priv->udev->dev, "%s\n", __func__);
+
+	/* The promiscuous monitor set is not something the filter code can
+	 * rebuild from total_flags; put the interface default back so a later
+	 * station/AP interface starts from the same RCR every boot does. */
+	if (vif->type == NL80211_IFTYPE_MONITOR) {
+		priv->regrcr = RTL8XXXU_RCR_BASE;
+		rtl8xxxu_write32(priv, REG_RCR, priv->regrcr);
+	}
 
 	priv->vifs[rtlvif->port_num] = NULL;
 }
@@ -6966,6 +7020,17 @@ static void rtl8xxxu_configure_filter(struct ieee80211_hw *hw,
 	/*
 	 * FIF_PROBE_REQ ignored as probe requests always seem to be accepted
 	 */
+
+	/*
+	 * A monitor is promiscuous by definition, and this port's nl80211
+	 * SET_INTERFACE carries no monitor flags: mac80211 never asks for
+	 * FIF_OTHER_BSS/FIF_CONTROL on a monitor vif, so the assignments above
+	 * would clear ACCEPT_AP/ACCEPT_CTRL on the next filter update and the
+	 * hardware would start dropping other stations' frames again.  Keep the
+	 * monitor's RCR as the one unit add_interface() programmed.
+	 */
+	if (priv->vifs[0] && priv->vifs[0]->type == NL80211_IFTYPE_MONITOR)
+		rcr = RTL8XXXU_RCR_MONITOR;
 
 	rtl8xxxu_write32(priv, REG_RCR, rcr);
 	priv->regrcr = rcr;
@@ -7908,6 +7973,15 @@ static int rtl8xxxu_probe(struct usb_interface *interface,
 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 	if (priv->fops->supports_ap)
 		hw->wiphy->interface_modes |= BIT(NL80211_IFTYPE_AP);
+	/*
+	 * Monitor is always in mac80211's software_iftypes (main.c: the stack
+	 * supports it for every driver).  WANT_MONITOR_VIF is what makes
+	 * mac80211 hand the monitor vif to this driver - add_interface() when it
+	 * is opened, remove_interface() when it is closed - which is where the
+	 * promiscuous RCR is programmed.
+	 */
+	if (priv->fops->supports_monitor)
+		ieee80211_hw_set(hw, WANT_MONITOR_VIF);
 	hw->queues = 4;
 
 	hw->wiphy->flags |= WIPHY_FLAG_HAS_CHANNEL_SWITCH;
