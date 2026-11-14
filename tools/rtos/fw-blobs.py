@@ -68,6 +68,15 @@ BLOBS: tuple[Blob, ...] = (
         licence="LICENCE.realtek_firmware",
         licence_note="Realtek binary redistribution terms",
     ),
+    Blob(
+        stem="rtw8821c_fw",
+        source="rtw88/rtw8821c_fw.bin",
+        request="rtw88/rtw8821c_fw.bin",
+        sha256="2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0",
+        brief="the RTL8821CU driver asks for by name.",
+        licence="LICENCE.realtek_firmware",
+        licence_note="Realtek binary redistribution terms",
+    ),
 )
 
 

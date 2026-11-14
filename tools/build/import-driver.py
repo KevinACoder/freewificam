@@ -100,6 +100,49 @@ RTW89_FEATURES = {
     "PM": False,
 }
 
+# The RTL8821CU world: the driver's own Makefile under the four symbols the GT
+# build selects for the 0bda:c820 part (RTW88_CORE, RTW88_USB, RTW88_8821C,
+# RTW88_8821CU), with the PCI/SDIO buses, every other chip and the optional
+# LED/suspend/debug units off.  The RTOS face restates these answers in
+# wireless-drivers/rtw88/driver_config.h.
+RTW88_FEATURES = {
+    "RTW88_CORE": True,
+    "RTW88_USB": True,
+    "RTW88_8821C": True,
+    "RTW88_8821CU": True,
+    "RTW88_PCI": False,
+    "RTW88_SDIO": False,
+    "RTW88_8822B": False,
+    "RTW88_8822BE": False,
+    "RTW88_8822BS": False,
+    "RTW88_8822BU": False,
+    "RTW88_8822C": False,
+    "RTW88_8822CE": False,
+    "RTW88_8822CS": False,
+    "RTW88_8822CU": False,
+    "RTW88_8723X": False,
+    "RTW88_8703B": False,
+    "RTW88_8723CS": False,
+    "RTW88_8723D": False,
+    "RTW88_8723DE": False,
+    "RTW88_8723DS": False,
+    "RTW88_8723DU": False,
+    "RTW88_8821CE": False,
+    "RTW88_8821CS": False,
+    "RTW88_8821AU": False,
+    "RTW88_88XXA": False,
+    "RTW88_8821A": False,
+    "RTW88_8812A": False,
+    "RTW88_8812AU": False,
+    "RTW88_8814A": False,
+    "RTW88_8814AE": False,
+    "RTW88_8814AU": False,
+    "RTW88_DEBUG": False,
+    "RTW88_DEBUGFS": False,
+    "RTW88_LEDS": False,
+    "PM": False,
+}
+
 # One entry per driver:
 #   kind        kbuild | vendor-make (how the compiled set is derived)
 #   upstream    where the sources live under the kernel tree
@@ -184,6 +227,52 @@ DRIVERS = {
                 "driver's\nflag world (`driver_config.h` is force-included); "
                 "`tools/build/s1-driver-compile`\ncompiles it standalone with "
                 "`S1_DRIVER=rtw89` as the S1b measurement.\n",
+        },
+    },
+    "rtw88": {
+        "kind": "kbuild",
+        "upstream": "drivers/net/wireless/realtek/rtw88",
+        "dest": "",
+        "features": RTW88_FEATURES,
+        "makefiles": ("Makefile",),
+        "want": 20,
+        "tu_prefix": "",
+        "first_party": ("IMPORT.tsv", "PROVENANCE.md", "sources.mk",
+                        "driver_config.h"),
+        "first_party_prefixes": ("ports/",),
+        "sources_header": [
+            "# rtw88: the compiled set for the RTL8821CU (USB) under the feature",
+            "# face wireless-drivers/rtw88/driver_config.h (CORE/USB/8821C/8821CU",
+            "# on; PCI, SDIO, every other chip, DEBUG/DEBUGFS/LEDS/PM off).",
+        ],
+        "sources_symbol": "CONFIG_LIBLINUX80211_RTW88",
+        "provenance": {
+            "licence_note":
+                "The tree is `GPL-2.0 OR BSD-3-Clause` in every file. The "
+                "previous line took\nthe BSD option for its net80211 profile; "
+                "this line links the driver with the\nGPL-2.0-only "
+                "mac80211/cfg80211 stack, so every artifact that carries it is a\n"
+                "GPL-2.0 link product (see `docs/LICENSES.md`). The driver bytes "
+                "are\nunmodified, which is why the licence table above is the "
+                "tree's own.",
+            "count_note":
+                "## Why 20\n\nThe driver's own Makefile resolves to 20 translation "
+                "units under this face:\n16 core units (`rtw88_core-y`), the two "
+                "8821C chip units (`rtw8821c.c`,\n`rtw8821c_table.c`), the 8821CU "
+                "USB device unit (`rtw8821cu.c`) and the\nUSB bus unit (`usb.c`). "
+                "The GT build compiles more: `led.c` and `wow.c` ride\n"
+                "CONFIG_RTW88_LEDS and CONFIG_PM (LED and suspend units, not the "
+                "data path),\nand the debugfs registration in `debug.c` is "
+                "`CONFIG_RTW88_DEBUGFS`-gated while the\nunit itself stays in the "
+                "core aggregate. The GT Image reaches the same chip with\n"
+                "CONFIG_RTW88_8821CU=y; this face keeps the same data-path units.\n",
+            "consumers":
+                "`tests/board/rtos/build/wl80211.mk` compiles this set in the "
+                "driver's\nflag world (`driver_config.h` is force-included); "
+                "`tools/build/s1-driver-compile`\ncompiles it standalone with "
+                "`S1_DRIVER=rtw88` as the S1b measurement. The\n"
+                "`rtw8821c_fw.bin` image is a compiled-in blob, not a driver "
+                "unit (tools/rtos/fw-blobs.py).\n",
         },
     },
     "rtl8189fs": {
