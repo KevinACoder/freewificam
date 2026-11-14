@@ -5001,6 +5001,7 @@ rtl8xxxu_bss_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			rtl8xxxu_start_tx_beacon(priv);
 			schedule_delayed_work(&priv->update_beacon_work, 0);
 		} else {
+			cancel_delayed_work_sync(&priv->update_beacon_work);
 			rtl8xxxu_stop_tx_beacon(priv);
 		}
 	}
@@ -5391,6 +5392,14 @@ rtl8xxxu_fill_txdesc_v3(struct ieee80211_hw *hw, struct ieee80211_hdr *hdr,
 
 	seq_number = IEEE80211_SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl));
 
+	/* The descriptor's low six bits of txdw1 are the frame's macid on the
+	 * v3 chips (queue at [12:8]); the firmware keys its per-station state
+	 * on it, so an AP's unicast frames and management responses must carry
+	 * the station's macid, not 0.  The vendor driver writes mac_id & 0x3F
+	 * here for both data and management frames (hal/rtl8188eu_xmit.c:228,
+	 * 288); STA mode is unchanged because its macids are 0/1. */
+	tx_desc->txdw1 |= cpu_to_le32(macid & TXDESC32_MACID_MASK);
+
 	if (ieee80211_is_data(hdr->frame_control)) {
 		rate = ra->decision_rate;
 		tx_desc->txdw5 = cpu_to_le32(rate);
@@ -5662,6 +5671,17 @@ static void rtl8xxxu_update_beacon_work_callback(struct work_struct *work)
 				      msecs_to_jiffies(vif->bss_conf.beacon_int));
 	}
 	rtl8xxxu_send_beacon_frame(hw, vif);
+
+	/* Chips whose hardware does not repeat a host-downloaded beacon keep
+	 * the beacon timer in the host: recompose and send one every beacon
+	 * interval while the AP is enabled.  The 8188E is such a chip (the
+	 * beacon sent once at start-up is the only one the chip emits; the
+	 * vendor driver instead hands the beacon to firmware through the
+	 * reserved page, which this driver does not implement).  beacon_int is
+	 * in TUs of 1024 us. */
+	if (priv->fops->host_beacon_repeat && vif->bss_conf.enable_beacon)
+		schedule_delayed_work(&priv->update_beacon_work,
+				      usecs_to_jiffies(vif->bss_conf.beacon_int * 1024));
 }
 
 static inline bool rtl8xxxu_is_packet_match_bssid(struct rtl8xxxu_priv *priv,

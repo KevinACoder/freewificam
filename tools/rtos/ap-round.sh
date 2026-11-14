@@ -147,13 +147,18 @@ sha256sum "$EVIDENCE/rtos.bin" > "$EVIDENCE/rtos-bin.sha256"
 	> "$EVIDENCE/tftp.txt" 2>&1
 
 # --- boot -------------------------------------------------------------------
-"$BOARD/boot-rtos.sh" --bin rtos.bin --success "rtos: result" --quiet 0 \
+# The success pattern is the whole verdict line: matching the prefix
+# ("rtos: result") stopped the capture mid-line on the 2026-11-14 ap-2 boot and
+# the judge lost cases=/backend=.  The '.* backend=freertos' part of the
+# pattern only matches once the line's tail has arrived.
+"$BOARD/boot-rtos.sh" --bin rtos.bin --success "rtos: result .* backend=freertos" --quiet 0 \
 	--timeout "$TIMEOUT" --power-cycle --retry "$BOOT_RETRY" --evidence "$EVIDENCE" \
 	>"$EVIDENCE/boot.out" 2>&1 &
 BOOT_PID=$!
 
 SERIAL="$EVIDENCE/serial.log"
 seen_start_ap=0
+seen_beacon_cap=0
 seen_peer=0
 seen_hostap_up=0
 seen_mondown=0
@@ -235,6 +240,17 @@ on_phase() {		# $1 = name
 }
 
 for _ in $(seq 1 3000); do
+	# A1's on-air probe: start it at the first AP anchor ("netif up", before
+	# hostapd runs) so the host-composed start-up beacon cannot land before
+	# the capture window.  The 20 s window then covers hostapd's start, the
+	# first beacons and the station's join.
+	if [ "$seen_beacon_cap" = 0 ] && anchor "$CASE: netif up "; then
+		seen_beacon_cap=1
+		pisu "timeout 20 tcpdump -i $MON_IF -s 0 -w $PI_DIR/beacon.pcap" \
+			>"$EVIDENCE/beacon-tcpdump.log" 2>&1 &
+		beacon_pid=$!
+	fi
+
 	if [ "$seen_start_ap" = 0 ] && anchor "$CASE: hostap start rc=0 ready=1"; then
 		seen_start_ap=1
 		# WPA2: capture the 4-way before the join; the open path's beacon
@@ -244,11 +260,8 @@ for _ in $(seq 1 3000); do
 				>"$EVIDENCE/wpa4way-tcpdump.log" 2>&1 &
 			wpa_mon_pid=$!
 		fi
-		# A1's on-air probe: full-length beacons on the AP's channel, started
-		# before the scans so a beacon that does appear is not missed.
-		pisu "timeout 12 tcpdump -i $MON_IF -s 0 -w $PI_DIR/beacon.pcap" \
-			>"$EVIDENCE/beacon-tcpdump.log" 2>&1 &
-		beacon_pid=$!
+		# (the A1 beacon capture is started at the "netif up" anchor above;
+		# the 8188EU's host-sent start-up beacon can precede this line)
 		# The diagnostic arm needs the whole round on the air, not the A1
 		# 12 s window: the freeze and the last beacon are minutes apart.
 		if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 0 ]; then

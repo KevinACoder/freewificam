@@ -491,6 +491,9 @@ struct rtl8xxxu_txdesc40 {
 #define TXDESC32_AGG_BREAK		BIT(6)
 #define TXDESC40_MACID_SHIFT		0
 #define TXDESC40_MACID_MASK		0x00f0
+/* 32-byte descriptor (the v3 tx path): bits 0-5 of txdw1 carry the macid,
+ * the queue is at [12:8] (vendor hal/rtl8188eu_xmit.c: mac_id & 0x3F). */
+#define TXDESC32_MACID_MASK		0x3f
 #define TXDESC_QUEUE_SHIFT		8
 #define TXDESC_QUEUE_MASK		0x1f00
 #define TXDESC_QUEUE_BK			0x2
@@ -2020,6 +2023,10 @@ struct rtl8xxxu_fileops {
 	u8 ustime_tsf_edca;
 	u16 max_aggr_num;
 	u8 supports_ap:1;
+	/* AP mode: the beacon is recomposed and sent from the host every
+	 * beacon interval (the 8188E does not repeat a host-downloaded
+	 * beacon; see patches/README.md). */
+	u8 host_beacon_repeat:1;
 	u16 max_macid_num;
 	u16 max_sec_cam_num;
 	u32 adda_1t_init;

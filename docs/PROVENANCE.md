@@ -191,16 +191,27 @@ is the tree's own record (pin, licence mix, why 72 and not 74).
 
 ## The rtl8xxxu import (2026-11-14, the RTL8188EUS arm)
 
-The 8188EU driver tree was imported verbatim from the same GT pin into
+The 8188EU driver tree was imported from the same GT pin into
 `wireless-drivers/rtl8xxxu/` (13 files: nine `*.c`, two headers, `Kconfig`,
-`Makefile`). It is byte-identical to the tree the previous net80211 line
-vendored for its pilot card - the `diff` is empty - so that line's board
+`Makefile`). Eleven files are byte-identical to the pin (and to the tree the
+previous net80211 line vendored for its pilot card), so that line's board
 evidence (attach, scan, join, data plane, with the same CherryUSB xHCI port
-bytes this repository carries) describes the same driver bytes. Per-file
-digests: `wireless-drivers/rtl8xxxu/IMPORT.tsv`; re-check with
-`tools/build/import-driver.py --driver rtl8xxxu --check`. The compiled set (nine
-TUs: the module's `fileops` table names every chip it supports) is re-derived
-from the driver's own Makefile under
+bytes this repository carries) describes the same bytes. Three files carry the
+AP-role patches, which are the first recorded divergence on a vendored driver
+here:
+
+| patch | files | why |
+|---|---|---|
+| `0001-rtl8xxxu-enable-ap-mode-for-the-rtl8188eu.patch` | `8188e.c` | the 8188e fileops gains `supports_ap`/`max_macid_num`; upstream's enablement RFC (v3 patch 4) |
+| `0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch` | `core.c`, `rtl8xxxu.h` | `fill_txdesc_v3` writes the frame's macid into `txdw1[5:0]`; the rtl8xxxu maintainer's review of that series, and the vendor's own descriptor layout |
+| `0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch` | `8188e.c`, `core.c`, `rtl8xxxu.h` | the chip does not repeat a host-downloaded beacon, so the host keeps the beacon timer for this chip (`host_beacon_repeat`); this line's own fix, no upstream counterpart |
+
+Per-file digests: `wireless-drivers/rtl8xxxu/IMPORT.tsv` (the pin's bytes);
+`wireless-drivers/rtl8xxxu/patches/README.md` is the patches' record, and
+`tools/build/import-driver.py --driver rtl8xxxu --check` replays them onto the
+pin and compares the result with the tree (the other ten files stay
+byte-identical). The compiled set (nine TUs: the module's `fileops` table names
+every chip it supports) is re-derived from the driver's own Makefile under
 `wireless-drivers/rtl8xxxu/driver_config.h`; the tree's own record is
 `wireless-drivers/rtl8xxxu/PROVENANCE.md`.
 

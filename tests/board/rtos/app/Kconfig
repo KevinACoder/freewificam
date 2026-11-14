@@ -279,6 +279,17 @@ config RTL8XXXU_USB_BUS
 	  (busids 1,0), the fallback arm if the dongle moves.  A profile that
 	  changes this must say so in its run record.
 
+config RTL8XXXU_AP_ARM_BCN4
+	bool "rtl8xxxu_ap diagnostic arm: clear BCN_CTRL bit4 after the first beacon"
+	help
+	  Diagnostic arm only, never a delivery profile.  The 2026-11-14 AP-1/AP-2
+	  boots showed exactly one beacon on air (the host-composed start-up
+	  beacon) and none afterwards, while BCN_VALID, EN_BCNQ_DL and
+	  EN_BCN_FUNCTION all read back set.  The vendor 8188E sequence ends with
+	  REG_BCN_CTRL bit3 set and bit4 (DIS_TSF_UDT0) cleared after the download;
+	  mainline's AP path leaves bit4 set.  This arm clears bit4 right after the
+	  start-up beacon so one boot answers whether that is the missing arming.
+
 config RTL8XXXU_C5_PEER_WINDOW_MS
 	int "rtl8xxxu C5 peer-arm window (ms)"
 	default 12000

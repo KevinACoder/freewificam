@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000003 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 14 Nov 2026 19:40:00 +0800
+Subject: [PATCH 3/3] wifi: rtl8xxxu: repeat the AP beacon from the host on the RTL8188EU
+
+The 8188E does not repeat a beacon the host has downloaded to its beacon
+queue: with supports_ap/max_macid_num set and the station macid in the TX
+descriptor, the chip emits exactly the one start-up beacon and nothing
+after (measured on the RK3568 line, 2026-11-14: one beacon in a 20 s
+monitor capture, while BCN_VALID, EN_BCNQ_DL and EN_BCN_FUNCTION all read
+back set).  Clients that active-scan still associate through the probe
+responses, but the BSS is not announced on the beacon cadence.
+
+The vendor driver does not use the host beacon path at all: it builds the
+beacon into a reserved page and hands it to firmware (H2C RSVD_PAGE), so
+the firmware owns the cadence.  rtl8xxxu has no reserved-page support;
+its AP-capable chips repeat the host-downloaded beacon in hardware, which
+this chip does not.  The smallest correct alternative for a host-beacon
+driver is therefore to keep the beacon timer in the host: recompose and
+send one beacon per beacon interval while the AP is enabled.
+
+The behaviour is chip-gated (`host_beacon_repeat` in the fileops table,
+set only for the 8188E), so the other AP-capable chips keep their
+hardware cadence and no image sends duplicate beacons.  The pending work
+is cancelled when beaconing is turned off, and `rtl8xxxu_stop()` already
+cancels it at interface stop.
+
+Boundary: the cadence is the host timer's, not the chip's TBTT, so the
+interval can jitter with the workqueue's latency.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+--- a/wireless-drivers/rtl8xxxu/8188e.c
++++ b/wireless-drivers/rtl8xxxu/8188e.c
+@@ -1870,6 +1870,7 @@
+ 	.max_sec_cam_num = 32,
+ 	.supports_ap = 1,
+ 	.max_macid_num = 32,
++	.host_beacon_repeat = 1,
+ 	.adda_1t_init = 0x0b1b25a0,
+ 	.adda_1t_path_on = 0x0bdb25a0,
+ 	/*
+--- a/wireless-drivers/rtl8xxxu/core.c
++++ b/wireless-drivers/rtl8xxxu/core.c
+@@ -5001,6 +5001,7 @@
+ 			rtl8xxxu_start_tx_beacon(priv);
+ 			schedule_delayed_work(&priv->update_beacon_work, 0);
+ 		} else {
++			cancel_delayed_work_sync(&priv->update_beacon_work);
+ 			rtl8xxxu_stop_tx_beacon(priv);
+ 		}
+ 	}
+@@ -5670,6 +5671,17 @@
+ 				      msecs_to_jiffies(vif->bss_conf.beacon_int));
+ 	}
+ 	rtl8xxxu_send_beacon_frame(hw, vif);
++
++	/* Chips whose hardware does not repeat a host-downloaded beacon keep
++	 * the beacon timer in the host: recompose and send one every beacon
++	 * interval while the AP is enabled.  The 8188E is such a chip (the
++	 * beacon sent once at start-up is the only one the chip emits; the
++	 * vendor driver instead hands the beacon to firmware through the
++	 * reserved page, which this driver does not implement).  beacon_int is
++	 * in TUs of 1024 us. */
++	if (priv->fops->host_beacon_repeat && vif->bss_conf.enable_beacon)
++		schedule_delayed_work(&priv->update_beacon_work,
++				      usecs_to_jiffies(vif->bss_conf.beacon_int * 1024));
+ }
+ 
+ static inline bool rtl8xxxu_is_packet_match_bssid(struct rtl8xxxu_priv *priv,
+--- a/wireless-drivers/rtl8xxxu/rtl8xxxu.h
++++ b/wireless-drivers/rtl8xxxu/rtl8xxxu.h
+@@ -2023,6 +2023,10 @@
+ 	u8 ustime_tsf_edca;
+ 	u16 max_aggr_num;
+ 	u8 supports_ap:1;
++	/* AP mode: the beacon is recomposed and sent from the host every
++	 * beacon interval (the 8188E does not repeat a host-downloaded
++	 * beacon; see patches/README.md). */
++	u8 host_beacon_repeat:1;
+ 	u16 max_macid_num;
+ 	u16 max_sec_cam_num;
+ 	u32 adda_1t_init;

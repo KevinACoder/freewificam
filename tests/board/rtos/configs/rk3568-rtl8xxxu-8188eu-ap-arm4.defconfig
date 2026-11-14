@@ -1,0 +1,34 @@
+# rtl8xxxu on the RTOS line, the AP role (A1-A3), DIAGNOSTIC ARM bcn4:
+# the AP profile plus one write, and never a delivery profile.
+#
+# The 2026-11-14 ap-1/ap-2 boots put exactly one beacon on air (the
+# host-composed start-up beacon) and none afterwards, while the chip's
+# BCN_VALID / EN_BCNQ_DL / EN_BCN_FUNCTION all read back set.  The vendor 8188E
+# sequence ends with REG_BCN_CTRL bit3 set and bit4 (DIS_TSF_UDT0) cleared
+# after the download; mainline's AP path leaves bit4 set.  This profile
+# selects CONFIG_RTL8XXXU_AP_ARM_BCN4 so the case clears bit4 right after the
+# start-up beacon and one boot answers whether that is the missing arming for
+# the hardware beacon repeat.
+#
+# Everything else is the AP profile's (SSID rtos-8188-ap, ch5/2432, open,
+# hostapd AP MLME, the two recorded driver patches).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_ap"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_HOSTAP_AP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTL8XXXU_AP_ARM_BCN4=y
+CONFIG_RTL8XXXU_USB_BUS=0

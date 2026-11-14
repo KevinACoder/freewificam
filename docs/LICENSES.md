@@ -83,11 +83,16 @@ the one without the imported stack linked in.
 | `rk3568-rtl8xxxu-8188eu-c3` 镜像 | rtl8xxxu（**GPL-2.0-only**）+ mac80211/cfg80211（GPL-2.0-only）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtlwifi/rtl8188eufw.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `rk3568-rtl8xxxu-8188eu-c4` 镜像 | 同上（C4 的 nl80211 scan helper 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `rk3568-rtl8xxxu-8188eu-c5` 镜像 | 同上（C5 的 connect helper、lwIP netif 与 ping 面是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8xxxu-8188eu-ap` 镜像 | rtl8xxxu（GPL-2.0-only，含三个记录补丁）+ mac80211/cfg80211（GPL-2.0-only）+ 导入的 NXP hostapd（BSD-3-Clause）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtlwifi/rtl8188eufw.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8xxxu-8188eu-ap-arm4` 镜像 | 同上（诊断臂只加一次 `REG_BCN_CTRL` 写入，不改变链接边界；不入交付） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 
 `wireless-drivers/rtl8xxxu/` 与另三个驱动不同：**13 个文件全部是
 `GPL-2.0-only`**（`SPDX-License-Identifier: GPL-2.0-only`，模块的
 `MODULE_LICENSE` 也没有给替代选项），所以这里没有"取 BSD 选项"的余地，
-链接它的产物一律按 GPL-2.0 登记。`rtlwifi/rtl8188eufw.bin`（15,262 B，
+链接它的产物一律按 GPL-2.0 登记。其中三个文件带 AP 角色的记录补丁
+（`patches/0001..0003`，见 `docs/PROVENANCE.md`），补丁不改变许可：
+仍是 GPL-2.0-only。AP 镜像另链导入的 hostapd（BSD-3-Clause），与 GPL 栈
+静态链接后整体按 GPL-2.0 登记。`rtlwifi/rtl8188eufw.bin`（15,262 B，
 sha256 `2ff74315…`）是 Realtek 二进制固件，按 `LICENCE.realtek_firmware`
 再分发，与 GPL 登记是两件事、不互相替代。
 

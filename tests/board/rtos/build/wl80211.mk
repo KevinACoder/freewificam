@@ -31,7 +31,7 @@ WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260
 	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap \
 	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
-	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5
+	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -100,7 +100,8 @@ endif
 # compiled-in rtl8188eufw image.  It has no first-party diagnostic unit yet: the
 # C3-C5 gates are the driver's own lines, so nothing is added beside the import.
 ifeq ($(CONFIG_LIBLINUX80211_RTL8XXXU),1)
-WL80211_RTL8XXXU_SRCS := $(RTL8XXXU_IMPL_SRCS) $(LIB8)/fw/rtl8188eufw_blob.c
+WL80211_RTL8XXXU_SRCS := $(RTL8XXXU_IMPL_SRCS) $(LIB8)/fw/rtl8188eufw_blob.c \
+	$(RTL8XXXU_DIR)/ports/rtos/rtl8xxxu_diag.c
 else
 WL80211_RTL8XXXU_SRCS :=
 endif
@@ -157,6 +158,15 @@ WL80211_LDFLAGS += \
 	-Wl,--wrap=rtw_fw_c2h_cmd_rx_irqsafe \
 	-Wl,--wrap=rtw_tx_report_handle \
 	-Wl,--wrap=ieee80211_amsdu_to_8023s
+endif
+
+# The rtl8xxxu-only wraps: the driver-world diagnostic unit defines them
+# (wireless-drivers/rtl8xxxu/ports/rtos/rtl8xxxu_diag.c), so they are added
+# only when that world is linked.
+ifeq ($(CONFIG_LIBLINUX80211_RTL8XXXU),1)
+WL80211_LDFLAGS += \
+	-Wl,--wrap=ieee80211_beacon_get_tim \
+	-Wl,--wrap=rtl8xxxu_fill_txdesc_v3
 endif
 
 # The hostapd AP stack (third-party/wpa_supplicant-rtos) and its platform bottom: hostapd's

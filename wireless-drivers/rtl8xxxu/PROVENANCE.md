@@ -4,8 +4,8 @@
 |---|---|
 | Upstream | Linux `drivers/net/wireless/realtek/rtl8xxxu/` |
 | Pin | commit `b98a1dfd4661670b9e16d9c74da43e0389ef7e62` |
-| Vendoring | flat import, byte-identical: 13 files. Digests in `IMPORT.tsv`; verify with `tools/build/import-driver.py --driver rtl8xxxu --check`. |
-| Local differences | none (zero patch) |
+| Vendoring | flat import of the pin's 13 files, 3 of them patched (see `patches/`).  Digests in `IMPORT.tsv`; verify with `tools/build/import-driver.py --driver rtl8xxxu --check`. |
+| Local differences | 3 files patched (8188e.c, core.c, rtl8xxxu.h): `0001-rtl8xxxu-enable-ap-mode-for-the-rtl8188eu.patch`, `0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch`, `0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch`; the replay is what `--check` verifies, the record is `patches/README.md` |
 | Compiled set | **9 TUs** under the feature face below; named by `sources.mk` |
 | Feature face | on: RTL8XXXU=1 |
 | | off: RTL8XXXU_UNTESTED |
@@ -20,8 +20,9 @@ Every file of the tree carries `SPDX-License-Identifier: GPL-2.0-only`
 (the module's own `MODULE_LICENSE` line names no alternative), so the driver
 adds no licensing option to this line: an artifact that links it with the
 GPL-2.0-only mac80211/cfg80211 stack is a GPL-2.0 link product (see
-`docs/LICENSES.md`). The driver bytes are unmodified, which is why the
-licence table above is the tree's own.
+`docs/LICENSES.md`). Eleven of the thirteen files are the pin's bytes; two
+carry the recorded AP-mode patches (see the local differences row above), so
+the licence table is still the tree's own.
 
 ## Why 9
 

@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000002 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 14 Nov 2026 19:15:00 +0800
+Subject: [PATCH 2/2] wifi: rtl8xxxu: set the station macid in the v3 TX descriptor
+
+rtl8xxxu_fill_txdesc_v3() receives the frame's macid and never writes it
+into the descriptor, so every frame is sent as macid 0.  In STA mode that
+is the broadcast macid and matches the status quo, but an AP must send a
+station's unicast frames and management responses with that station's
+macid: the firmware keys its per-station state (rate, ACK/BA, TIM) on
+it.  This is the gap the rtl8xxxu maintainer named in review of the
+8188EU AP-mode RFC:
+  https://lkml.iu.edu/hypermail/linux/kernel/2603.1/12855.html
+
+The vendor 8188EU driver writes mac_id & 0x3F into the low bits of txdw1
+for both data and management frames (hal/rtl8188eu_xmit.c:228,288); the
+queue lives at [12:8] and nothing else uses [5:0], so the field is safe
+to take.  The define is the 32-byte-descriptor counterpart of the
+existing TXDESC40_MACID_* pair.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+diff --git a/wireless-drivers/rtl8xxxu/core.c b/wireless-drivers/rtl8xxxu/core.c
+index bddbd09..1fa2dc6 100644
+--- a/wireless-drivers/rtl8xxxu/core.c
++++ b/wireless-drivers/rtl8xxxu/core.c
+@@ -5391,6 +5391,14 @@ rtl8xxxu_fill_txdesc_v3(struct ieee80211_hw *hw, struct ieee80211_hdr *hdr,
+ 
+ 	seq_number = IEEE80211_SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl));
+ 
++	/* The descriptor's low six bits of txdw1 are the frame's macid on the
++	 * v3 chips (queue at [12:8]); the firmware keys its per-station state
++	 * on it, so an AP's unicast frames and management responses must carry
++	 * the station's macid, not 0.  The vendor driver writes mac_id & 0x3F
++	 * here for both data and management frames (hal/rtl8188eu_xmit.c:228,
++	 * 288); STA mode is unchanged because its macids are 0/1. */
++	tx_desc->txdw1 |= cpu_to_le32(macid & TXDESC32_MACID_MASK);
++
+ 	if (ieee80211_is_data(hdr->frame_control)) {
+ 		rate = ra->decision_rate;
+ 		tx_desc->txdw5 = cpu_to_le32(rate);
+diff --git a/wireless-drivers/rtl8xxxu/rtl8xxxu.h b/wireless-drivers/rtl8xxxu/rtl8xxxu.h
+index eeb18eb..dbcac6c 100644
+--- a/wireless-drivers/rtl8xxxu/rtl8xxxu.h
++++ b/wireless-drivers/rtl8xxxu/rtl8xxxu.h
+@@ -491,6 +491,9 @@ struct rtl8xxxu_txdesc40 {
+ #define TXDESC32_AGG_BREAK		BIT(6)
+ #define TXDESC40_MACID_SHIFT		0
+ #define TXDESC40_MACID_MASK		0x00f0
++/* 32-byte descriptor (the v3 tx path): bits 0-5 of txdw1 carry the macid,
++ * the queue is at [12:8] (vendor hal/rtl8188eu_xmit.c: mac_id & 0x3F). */
++#define TXDESC32_MACID_MASK		0x3f
+ #define TXDESC_QUEUE_SHIFT		8
+ #define TXDESC_QUEUE_MASK		0x1f00
+ #define TXDESC_QUEUE_BK			0x2

@@ -41,6 +41,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -302,6 +303,25 @@ DRIVERS = {
             "# closure; the chip only selects the firmware blob.",
         ],
         "sources_symbol": "CONFIG_LIBLINUX80211_RTL8XXXU",
+        # The AP-mode enablement is the first recorded divergence on a vendored
+        # driver: two hunks from the pending upstream series and its review
+        # (patches/README.md states the provenance).  The check replays them
+        # onto the pin instead of asserting byte equality for these files.
+        "patched": {
+            "8188e.c": (
+                "patches/0001-rtl8xxxu-enable-ap-mode-for-the-rtl8188eu.patch",
+                "patches/0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch",
+            ),
+            "core.c": (
+                "patches/0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch",
+                "patches/0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch",
+            ),
+            "rtl8xxxu.h": (
+                "patches/0002-rtl8xxxu-set-the-station-macid-in-the-v3-tx-descriptor.patch",
+                "patches/0003-rtl8xxxu-repeat-the-ap-beacon-from-the-host-on-the-rtl8188eu.patch",
+            ),
+        },
+        "first_party_prefixes": ("patches/", "ports/"),
         "provenance": {
             "licence_note":
                 "Every file of the tree carries `SPDX-License-Identifier: "
@@ -309,8 +329,10 @@ DRIVERS = {
                 "alternative), so the driver\nadds no licensing option to this "
                 "line: an artifact that links it with the\nGPL-2.0-only "
                 "mac80211/cfg80211 stack is a GPL-2.0 link product (see\n"
-                "`docs/LICENSES.md`). The driver bytes are unmodified, which is "
-                "why the\nlicence table above is the tree's own.",
+                "`docs/LICENSES.md`). Eleven of the thirteen files are the pin's "
+                "bytes; two\ncarry the recorded AP-mode patches (see the local "
+                "differences row above), so\nthe licence table is still the "
+                "tree's own.",
             "count_note":
                 "## Why 9\n\nThe driver's own Makefile resolves to nine "
                 "translation units under this\nface (`rtl8xxxu-y := core.o "
@@ -655,6 +677,48 @@ def sources_block(driver: str, tus: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _patched_files(driver: str) -> dict[str, tuple[str, ...]]:
+    return DRIVERS[driver].get("patched", {})
+
+
+def replay_patches(upstream: Path, driver: str) -> dict[str, bytes]:
+    """The patched files' bytes: the pin's file with the recorded patches applied.
+
+    The patches are recorded against the tree root (``a/8188e.c`` with the
+    driver directory stripped by ``-p3``), so the replay runs in a scratch
+    directory holding the unpatched files from the pin.  A patch that does not
+    apply cleanly is an error, not a warning: the digest manifest and
+    ``--check`` both rest on this replay being exact.
+    """
+    spec = DRIVERS[driver]
+    patched = _patched_files(driver)
+    if not patched:
+        return {}
+    src = upstream / spec["upstream"]
+    patches_dir = REPO / "wireless-drivers" / driver
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        for rel in patched:
+            shutil.copyfile(src / rel, tmpdir / Path(rel).name)
+        # Numbered patch files, applied in name order: a later patch's context
+        # is the earlier patch's result, so the order is not the dict's.
+        for patch_rel in sorted(dict.fromkeys(
+                p for rel in patched.values() for p in rel)):
+            patch_file = patches_dir / patch_rel
+            if not patch_file.is_file():
+                raise SystemExit(f"{driver}: recorded patch is missing: {patch_file}")
+            result = subprocess.run(
+                ["patch", "-p3", "--fuzz=0", "--no-backup-if-mismatch", "-s",
+                 "-d", str(tmpdir), "-i", str(patch_file)],
+                text=True, capture_output=True,
+            )
+            if result.returncode != 0:
+                raise SystemExit(
+                    f"{driver}: {patch_rel} does not apply to the pin:\n"
+                    f"{result.stdout}{result.stderr}")
+        return {rel: (tmpdir / Path(rel).name).read_bytes() for rel in patched}
+
+
 def provenance(upstream: Path, driver: str, files: list[str],
                tus: list[str]) -> str:
     spec = DRIVERS[driver]
@@ -672,9 +736,15 @@ def provenance(upstream: Path, driver: str, files: list[str],
         enabled = ", ".join(f"{k}=1" for k, v in feats.items() if v)
         disabled = ", ".join(k for k, v in feats.items() if not v)
         face = f"| Feature face | on: {enabled} |\n| | off: {disabled} |"
-        vendoring = (f"flat import, byte-identical: {len(files)} files. "
-                     "Digests in `IMPORT.tsv`; verify with "
-                     f"`tools/build/import-driver.py --driver {driver} --check`.")
+        if _patched_files(driver):
+            vendoring = (f"flat import of the pin's {len(files)} files, "
+                         f"{len(_patched_files(driver))} of them patched "
+                         "(see `patches/`).  Digests in `IMPORT.tsv`; verify with "
+                         f"`tools/build/import-driver.py --driver {driver} --check`.")
+        else:
+            vendoring = (f"flat import, byte-identical: {len(files)} files. "
+                         "Digests in `IMPORT.tsv`; verify with "
+                         f"`tools/build/import-driver.py --driver {driver} --check`.")
     else:
         face = ("| Feature face | the vendor Makefile's own CONFIG_ block (the GT "
                 "build's), with `CONFIG_PROC_DEBUG`,\n| | `CONFIG_WIFI_MONITOR` and "
@@ -683,6 +753,16 @@ def provenance(upstream: Path, driver: str, files: list[str],
                      "Digests in `IMPORT.tsv`; verify with "
                      f"`tools/build/import-driver.py --driver {driver} --check`.")
     note = spec["provenance"]
+    patched = _patched_files(driver)
+    if patched:
+        patch_names = ", ".join(
+            f"`{Path(p).name}`" for p in dict.fromkeys(
+                q for rel in patched.values() for q in rel))
+        local = (f"{len(patched)} files patched ({', '.join(sorted(patched))}): "
+                 f"{patch_names}; the replay is what `--check` verifies, the "
+                 "record is `patches/README.md`")
+    else:
+        local = "none (zero patch)"
     return f"""# wireless-drivers/{driver} - provenance
 
 | Item | Value |
@@ -690,7 +770,7 @@ def provenance(upstream: Path, driver: str, files: list[str],
 | Upstream | Linux `{spec['upstream']}/` |
 | Pin | commit `{commit}` |
 | Vendoring | {vendoring} |
-| Local differences | none (zero patch) |
+| Local differences | {local} |
 | Compiled set | **{len(tus)} TUs** under the feature face below; named by `sources.mk` |
 {face}
 
@@ -722,6 +802,8 @@ def do_import(upstream: Path, driver: str) -> int:
         d.parent.mkdir(parents=True, exist_ok=True)
         if not d.exists() or sha256(d) != sha256(s):
             shutil.copyfile(s, d)
+    for rel, data in replay_patches(upstream, driver).items():
+        (dest / dest_rel(driver, rel)).write_bytes(data)
     (dest / "IMPORT.tsv").write_text(
         "\n".join(manifest_rows(upstream, driver, files, tus)) + "\n")
     (dest / "PROVENANCE.md").write_text(provenance(upstream, driver, files, tus))
@@ -743,6 +825,7 @@ def do_check(upstream: Path, driver: str) -> int:
     tus = upstream_tus(src, driver)
     files = all_files(src)
     first_party, first_party_prefixes = _first_party(driver)
+    patched = replay_patches(upstream, driver)
     bad = 0
     for rel in files:
         s = src / rel
@@ -750,7 +833,16 @@ def do_check(upstream: Path, driver: str) -> int:
         if not d.exists():
             print(f"MISSING {d.relative_to(REPO)}", file=sys.stderr)
             bad += 1
-        elif sha256(d) != sha256(s):
+            continue
+        if rel in patched:
+            # The pin's bytes plus the recorded patches must be what the tree
+            # carries; a hand edit after the fact fails here.
+            if d.read_bytes() != patched[rel]:
+                print(f"DIFFERS (patch replay) {d.relative_to(REPO)}",
+                      file=sys.stderr)
+                bad += 1
+            continue
+        if sha256(d) != sha256(s):
             print(f"DIFFERS {d.relative_to(REPO)}", file=sys.stderr)
             bad += 1
     imported = set(files)
@@ -781,7 +873,10 @@ def do_check(upstream: Path, driver: str) -> int:
         ["git", "-C", str(upstream), "rev-parse", "--short", "HEAD"],
         text=True, capture_output=True,
     ).stdout.strip()
-    print(f"check: ok ({len(files)} files, {len(tus)} TUs byte-identical to {commit})")
+    patched_note = (f", {len(patched)} patched by replay"
+                    if patched else "")
+    print(f"check: ok ({len(files)} files, {len(tus)} TUs byte-identical to "
+          f"{commit}{patched_note})")
     return 0
 
 

@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 14 Nov 2026 19:15:00 +0800
+Subject: [PATCH 1/2] wifi: rtl8xxxu: enable AP mode for the RTL8188EU
+
+The RTL8188EU's fileops table never set `supports_ap`, so the wiphy was
+registered with NL80211_IFTYPE_STATION only and the chip could not be
+used as an access point, although every other AP-capable chip in the
+driver (8188f, 8192c, 8192e, 8192f, 8710b, 8723b) sets the field.  The
+rest of the AP path is chip-agnostic and already present: add_interface's
+AP branch (beacon control, ATIM window, TSF offset, port switch),
+start_ap, set_tim, sta_add/sta_remove, update_beacon_work and the
+BEACON TX queue.
+
+This mirrors the pending upstream RFC ("wifi: rtl8xxxu: implement AP mode
+for 8188EU", v3 patch 4):
+  https://lkml.iu.edu/hypermail/linux/kernel/2603.1/11890.html
+
+The station count is the vendor driver's NUM_STA (32), the same value
+the 8192CU family uses here; 0bda:8179 is the tested path.
+
+Signed-off-by: zhugengyu <zhugengyu2023@gmail.com>
+---
+diff --git a/wireless-drivers/rtl8xxxu/8188e.c b/wireless-drivers/rtl8xxxu/8188e.c
+index fea5aec..ac8299d 100644
+--- a/wireless-drivers/rtl8xxxu/8188e.c
++++ b/wireless-drivers/rtl8xxxu/8188e.c
+@@ -1868,6 +1868,8 @@ struct rtl8xxxu_fileops rtl8188eu_fops = {
+ 	.gen2_thermal_meter = 1,
+ 	.hw_feature_report = 0,
+ 	.max_sec_cam_num = 32,
++	.supports_ap = 1,
++	.max_macid_num = 32,
+ 	.adda_1t_init = 0x0b1b25a0,
+ 	.adda_1t_path_on = 0x0bdb25a0,
+ 	/*

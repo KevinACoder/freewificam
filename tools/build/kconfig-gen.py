@@ -60,7 +60,8 @@ CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci kpi_live kpi_mock
          iwl7260_mon rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2
          rtl8189fs_c6t rtl8189fs_ap rtw89_c3 rtw89_c4 rtw89_c5
          rtw89_c6 rtw89_ap rtw89_mon rtw88_c3 rtw88_c4 rtw88_c5
-         rtw88_c6 rtw88_ap rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5""".split()
+         rtw88_c6 rtw88_ap rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5
+         rtl8xxxu_ap""".split()
 
 KC = None
 

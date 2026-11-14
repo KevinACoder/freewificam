@@ -92,6 +92,12 @@ CASES = (
     "rtl8xxxu_c3",
     "rtl8xxxu_c4",
     "rtl8xxxu_c5",
+    # The same card as an AP (runs/2026-11-14-rtl8xxxu-8188eu-ap): the
+    # imported hostapd owns the AP MLME and rtl8xxxu sends the beacon from
+    # the host - the first host-sent beacon on this line.  The A1-A3 anchors
+    # are the rtw88 AP case's with this case's prefix, so ap-round.sh drives
+    # both; the driver carries two recorded patches for the role.
+    "rtl8xxxu_ap",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1979,6 +1985,53 @@ LIST_PATTERNS = {
     "rtw88_ap_pass_ap": re.compile(r"rtw88_ap: PASS AP$", re.MULTILINE),
     "rtw88_ap_fail": re.compile(
         r"rtw88_ap: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # --- the AP role of the 8188EUS (runs/2026-11-14-rtl8xxxu-8188eu-ap) ----
+    "rtl8xxxu_ap_chan": re.compile(
+        r"rtl8xxxu_ap: chan freq=(?P<freq>\d+) present=(?P<present>[01]) "
+        r"flags=0x(?P<flags>[0-9a-f]+) can_beacon=(?P<can>[01])",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_ap_iface": re.compile(
+        r"rtl8xxxu_ap: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_ap_start": re.compile(
+        r"rtl8xxxu_ap: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_security": re.compile(
+        r"rtl8xxxu_ap: security wpa2=(?P<wpa2>[01]) ssid=(?P<ssid>\S+) "
+        r"channel=(?P<ch>\d+) bcn_int=(?P<bcn>\d+) dtim_req=(?P<dtim>\d+)",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_ap_hostap": re.compile(
+        r"rtl8xxxu_ap: hostap start rc=(?P<rc>-?\d+) ready=(?P<ready>[01])",
+        re.MULTILINE,
+    ),
+    "rtl8xxxu_ap_link": re.compile(
+        r"rtl8xxxu_ap: link freq=(?P<freq>-?\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_pass_a1": re.compile(r"rtl8xxxu_ap: PASS A1", re.MULTILINE),
+    "rtl8xxxu_ap_sta": re.compile(
+        r"rtl8xxxu_ap: sta n=(?P<n>\d+) hostap=(?P<hostap>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]{17})", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_pass_a2": re.compile(r"rtl8xxxu_ap: PASS A2", re.MULTILINE),
+    "rtl8xxxu_ap_ping": re.compile(
+        r"rtl8xxxu_ap: ping payload=(?P<payload>\d+) tx=(?P<tx>\d+) "
+        r"rx=(?P<rx>\d+) dup=(?P<dup>\d+) "
+        r"rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/(?P<max>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_link_window": re.compile(
+        r"rtl8xxxu_ap: link window rx_frames=(?P<rx>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) rx_no_netif=(?P<none>\d+) "
+        r"rx_input_fail=(?P<fail>\d+) rx_bytes=(?P<rxb>\d+) "
+        r"tx_frames=(?P<tx>\d+) tx_fail=(?P<txf>\d+)", re.MULTILINE
+    ),
+    "rtl8xxxu_ap_pass_a3": re.compile(r"rtl8xxxu_ap: PASS A3", re.MULTILINE),
+    "rtl8xxxu_ap_pass_ap": re.compile(r"rtl8xxxu_ap: PASS AP$", re.MULTILINE),
+    "rtl8xxxu_ap_fail": re.compile(
+        r"rtl8xxxu_ap: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
 
     # --- the AP role of the same card (runs/2026-11-14-rtw89-8851bu-ap) -----
@@ -5222,6 +5275,96 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append("rtw88_ap: the A3 PASS line is missing")
         if not ap("rtw88_ap_pass_ap"):
             errors.append("rtw88_ap: the AP PASS line is missing")
+
+    if cases.get("rtl8xxxu_ap", {}).get("verdict") == "pass":
+        # Same shape as the rtw88 AP arm: the patterns are LIST_PATTERNS (the
+        # file's second table), so a value is a list of match dicts and is read
+        # through one helper.
+        def ap8188(key):
+            value = found.get(key)
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if value is None:
+                return None
+            return value or True
+
+        fail = ap8188("rtl8xxxu_ap_fail")
+        if fail:
+            errors.append(f"rtl8xxxu_ap: {fail['reason']}")
+        chan = ap8188("rtl8xxxu_ap_chan")
+        if not chan:
+            errors.append("rtl8xxxu_ap: PASS without the channel line")
+        elif chan["present"] != "1" or chan["can"] != "1":
+            errors.append(
+                f"rtl8xxxu_ap: channel not beaconable present={chan['present']} "
+                f"can_beacon={chan['can']}")
+        iface = ap8188("rtl8xxxu_ap_iface")
+        if not iface:
+            errors.append("rtl8xxxu_ap: PASS without the set_iface line")
+        elif int(iface["rc"]) != 0 or int(iface["type"]) != 3:
+            errors.append(
+                f"rtl8xxxu_ap: set_iface rc={iface['rc']} type={iface['type']}")
+        start = ap8188("rtl8xxxu_ap_start")
+        if not start:
+            errors.append("rtl8xxxu_ap: PASS without the dev_open line")
+        elif int(start["rc"]) != 0:
+            errors.append(f"rtl8xxxu_ap: dev_open rc={start['rc']}")
+        sec = ap8188("rtl8xxxu_ap_security")
+        if not sec:
+            errors.append("rtl8xxxu_ap: PASS without the security line")
+        elif int(sec["ch"]) != 5 or int(sec["bcn"]) != 100 or int(sec["dtim"]) != 2:
+            errors.append(
+                f"rtl8xxxu_ap: security ch={sec['ch']} bcn={sec['bcn']} "
+                f"dtim={sec['dtim']}")
+        else:
+            notes.append(
+                f"rtl8xxxu_ap: ssid={sec['ssid']} ch={sec['ch']} open "
+                f"bcn={sec['bcn']} dtim={sec['dtim']}")
+        hostap = ap8188("rtl8xxxu_ap_hostap")
+        if not hostap:
+            errors.append("rtl8xxxu_ap: PASS without the hostap start line")
+        elif int(hostap["rc"]) != 0 or hostap["ready"] != "1":
+            errors.append(
+                f"rtl8xxxu_ap: hostap rc={hostap['rc']} ready={hostap['ready']}")
+        link = ap8188("rtl8xxxu_ap_link")
+        if not link:
+            errors.append("rtl8xxxu_ap: PASS without the link line")
+        elif int(link["freq"]) != 2432:
+            errors.append(f"rtl8xxxu_ap: link freq={link['freq']}")
+        if not ap8188("rtl8xxxu_ap_pass_a1"):
+            errors.append("rtl8xxxu_ap: the A1 PASS line is missing")
+        sta = ap8188("rtl8xxxu_ap_sta")
+        if not sta:
+            errors.append("rtl8xxxu_ap: PASS without the station line")
+        elif int(sta["n"]) < 1:
+            errors.append(f"rtl8xxxu_ap: station table n={sta['n']}")
+        else:
+            notes.append(f"rtl8xxxu_ap: sta {sta['mac']} n={sta['n']}")
+        if not ap8188("rtl8xxxu_ap_pass_a2"):
+            errors.append("rtl8xxxu_ap: the A2 PASS line is missing")
+        pings = {p["payload"]: p for p in found["rtl8xxxu_ap_ping"]}
+        for want in ("56", "1400"):
+            ping = pings.get(want)
+            if not ping:
+                errors.append(f"rtl8xxxu_ap: no ping line for payload={want}")
+            elif int(ping["rx"]) != int(ping["tx"]) or int(ping["tx"]) != 20:
+                errors.append(
+                    f"rtl8xxxu_ap: ping {want}B tx={ping['tx']} rx={ping['rx']}")
+            else:
+                notes.append(
+                    f"rtl8xxxu_ap: ping {want}B 20/20 "
+                    f"rtt={ping['min']}/{ping['avg']}/{ping['max']} ms")
+        window = ap8188("rtl8xxxu_ap_link_window")
+        if not window:
+            errors.append("rtl8xxxu_ap: PASS A3 without the link window line")
+        elif int(window["foreign"]) != 0 or int(window["fail"]) != 0:
+            errors.append(
+                f"rtl8xxxu_ap: rx_foreign={window['foreign']} "
+                f"rx_input_fail={window['fail']}")
+        if not ap8188("rtl8xxxu_ap_pass_a3"):
+            errors.append("rtl8xxxu_ap: the A3 PASS line is missing")
+        if not ap8188("rtl8xxxu_ap_pass_ap"):
+            errors.append("rtl8xxxu_ap: the AP PASS line is missing")
 
     if cases.get("rtw88_c6", {}).get("verdict") == "pass":
         fail = found["rtw88_c6_fail"]
