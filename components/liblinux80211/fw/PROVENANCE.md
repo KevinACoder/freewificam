@@ -40,6 +40,23 @@ loaded (`loaded firmware rtw89/rtw8851b_fw-1.bin`, `Firmware version
 | License | Realtek binary redistribution terms, `LICENCE.realtek_firmware` beside this file | Realtek binary redistribution terms, `LICENCE.realtek_firmware` beside this file |
 | Generated unit | `rtw8821c_fw_blob.c`, `lkpi_fw_rtw8821c_fw_register()` | `rtl8188eufw_blob.c`, `lkpi_fw_rtl8188eufw_register()` |
 
+## The RTL8723BU (2026-11-15)
+
+| | RTL8723BU (rtl8xxxu) |
+|---|---|
+| File | `rtlwifi/rtl8723bu_nic.bin` |
+| Request name | `rtlwifi/rtl8723bu_nic.bin` |
+| Size | 32,108 bytes |
+| SHA-256 | `a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969` |
+| Source | the GT line's initramfs (`linux-upstream/build/e4ap5g1-itx/initramfs/rootfs/lib/firmware/rtlwifi/rtl8723bu_nic.bin`); the same blob the 2026-11-14 gt1 boot loaded for the board's EHCI 8723BU, which printed `Firmware revision 35.0 (signature 0x5301)` |
+| Modification | none |
+| License | Realtek binary redistribution terms, `LICENCE.realtek_firmware` beside this file |
+| Generated unit | `rtl8723bu_nic_blob.c`, `lkpi_fw_rtl8723bu_nic_register()` |
+
+Only the chip's profile links it (`CONFIG_RTL8XXXU_CHIP_8723BU`): the 8188EU
+image keeps its own blob, and an image never carries a firmware name the
+driver's probe on that bench will not ask for.
+
 Both names are the literal `MODULE_FIRMWARE()` strings of their drivers, which
 is the name `request_firmware()` is called with; the registry matches by name,
 so a different spelling would be a silent "no firmware".
@@ -55,6 +72,8 @@ sha256sum components/liblinux80211/fw/rtw88/rtw8821c_fw.bin
 # 2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0
 sha256sum components/liblinux80211/fw/rtlwifi/rtl8188eufw.bin
 # 2ff74315287529dec2e50eb57d6e0c97d2116f28ae166773ccdf93b6360000c4
+sha256sum components/liblinux80211/fw/rtlwifi/rtl8723bu_nic.bin
+# a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969
 tools/rtos/fw-blobs.py --check
 ```
 

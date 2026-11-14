@@ -1,0 +1,38 @@
+# rtl8xxxu on the RTOS line, C6T for the RTL8723BU (the EHCI dongle): the C5
+# ladder in the same boot, then the seven-phase throughput table over wl0:
+# loopback (attribution only), tcpdn, udpdn, tcpdn2, udpdn2, tcpup, udpup.
+#
+# The phase table is the same the 8188EU arm and the GT arm run
+# (tools/gt/gt-rtl8xxxu-board.sh): 30 s TCP down, 20 s UDP down, 20 s TCP up,
+# 10 s UDP up, offered 10M both UDP ways, the peer's stream 2 s inside each
+# window, iperf2 with -w 128K (lwIP's TCP_WND is 131072).  The gates are
+# pre-registered in runs/2026-11-15-rtl8723bu-sta/PREREG.md, not in the image.
+#
+# The dongle is the EHCI one (busids 1,0) behind the 1a86 hub, not the xHCI
+# hub the 8188EUS sits on; the image carries the 8723bu firmware (35.0 /
+# 0x5301), not the 8188eu one.  CONFIG_LKPI_CENSUS keeps the per-phase
+# task/skb census.  The driver + stack are a GPL-2.0 link product that also
+# redistributes the Realtek rtl8723bu firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_c5 rtl8xxxu_c6"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_LKPI_CENSUS=y
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTL8XXXU_C5_PEER_WINDOW_MS=2000
+CONFIG_RTL8XXXU_C6_UDPUP_KBPS=10000
+CONFIG_RTL8XXXU_CHIP_8723BU=y
+CONFIG_RTL8XXXU_USB_BUS=1
+CONFIG_C6_PEER_IP="192.168.99.1"

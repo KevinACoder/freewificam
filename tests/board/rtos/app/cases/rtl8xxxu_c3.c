@@ -40,7 +40,7 @@
  * Anchors:
  *   rtl8xxxu_c3: core ready
  *   rtl8xxxu_c3: usb backend ready
- *   rtl8xxxu_c3: fw registered=<0|err> name=rtlwifi/rtl8188eufw.bin
+ *   rtl8xxxu_c3: fw registered=<0|err> name=<profile blob>
  *   rtl8xxxu_c3: initcalls run
  *   rtl8xxxu_c3: usb drivers=<n>
  *   rtl8xxxu_c3: usb buses=3,2
@@ -59,6 +59,7 @@
 #include <string.h>
 
 #include "cases.h"
+#include "rtl8xxxu_fw.h"
 #include "os/cmsis2/cmsis2.h"
 
 /* CherryUSB first.  Its headers include <stdlib.h>, and the Linux face's
@@ -86,7 +87,6 @@
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
-int lkpi_fw_rtl8188eufw_register(void);
 
 /* The profile's controller family: the two DWC3 xHCI instances (busids 3,2) or
  * the two EHCI roots (busids 1,0).  The 8188EUS is a USB2 device, but this
@@ -170,11 +170,11 @@ c3_usb_up(void)
 		    (unsigned)lkpi_usb_driver_count_get());
 
 	lkpi_usb_force_sync_set(false);
-	if (lkpi_fw_rtl8188eufw_register() != 0) {
+	if (rtl8xxxu_fw_register() != 0) {
 		CASE_ANCHOR("rtl8xxxu_c3: FAIL firmware blob registration\n");
 		return -1;
 	}
-	CASE_ANCHOR("rtl8xxxu_c3: fw registered=0 name=rtlwifi/rtl8188eufw.bin\n");
+	CASE_ANCHOR("rtl8xxxu_c3: fw registered=0 name=%s\n", RTL8XXXU_FW_NAME);
 
 	usb_osal_timer_service_start();
 	CASE_ANCHOR("rtl8xxxu_c3: usb buses=%s\n", C3_BUS_LIST_TXT);

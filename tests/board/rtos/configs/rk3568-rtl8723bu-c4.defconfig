@@ -1,0 +1,29 @@
+# rtl8xxxu on the RTOS line, C4 for the RTL8723BU: C3's attach plus the real
+# NL80211_CMD_TRIGGER_SCAN through nl80211's handlers -> mac80211's SW scan ->
+# rtl8xxxu's channel changes and USB bulk frames -> cfg80211's BSS table
+# carries the bench AP (labwifi-ar-ht20s, ch5/2432).
+#
+# The 32 KiB runner stack is the scan chain's (the 8851BU/8821CU C4 arms hit
+# the same 8 KiB overflow).  The dongle is the EHCI one (busids 1,0), not the
+# xHCI hub the 8188EUS sits on.  The driver + stack are a GPL-2.0 link product
+# that also redistributes the Realtek rtl8723bu firmware image
+# (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_c4"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTL8XXXU_CHIP_8723BU=y
+CONFIG_RTL8XXXU_USB_BUS=1

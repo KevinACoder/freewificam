@@ -20,6 +20,7 @@ Per-component license registry. This is not legal advice.
 | `third-party/ulog/` | MIT | |
 | `third-party/wpa_supplicant-rtos/` | BSD-3-Clause | NXP `wpa_supplicant-rtos` `release/25.06.00` (`c21bbad`), 897 files, unmodified apart from the port patches in its `patches/`; upstream `port/` (mbedtls/KSDK glue, Apache-2.0) is **not** imported - see `PROVENANCE.md` |
 | `components/liblinux80211/fw/iwlwifi-7260-17.ucode` | Intel binary firmware licence (`LICENCE.iwlwifi_firmware` beside it) | **tracked input**, unmodified; sha256 `5d81a600…`; source and terms in `fw/PROVENANCE.md` |
+| `components/liblinux80211/fw/rtlwifi/rtl8723bu_nic.bin` | Realtek binary redistribution terms (`LICENCE.realtek_firmware` beside it) | **tracked input**, unmodified; sha256 `a52b5a7b…`, 32,108 B; source and terms in `fw/PROVENANCE.md` |
 
 ## Combined products
 
@@ -98,6 +99,22 @@ the one without the imported stack linked in.
 静态链接后整体按 GPL-2.0 登记。`rtlwifi/rtl8188eufw.bin`（15,262 B，
 sha256 `2ff74315…`）是 Realtek 二进制固件，按 `LICENCE.realtek_firmware`
 再分发，与 GPL 登记是两件事、不互相替代。
+
+## 4d. RTL8723BU 产物（2026-11-15）
+
+| 产物 | 组成 | 许可证 |
+|---|---|---|
+| `rk3568-rtl8723bu-c3` 镜像 | rtl8xxxu（**GPL-2.0-only**）+ mac80211/cfg80211（GPL-2.0-only）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtlwifi/rtl8723bu_nic.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8723bu-c4` 镜像 | 同上（C4 的 nl80211 scan helper 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8723bu-c5` 镜像 | 同上（C5 的 connect helper、lwIP netif 与 ping 面是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8723bu-c6` 镜像 | 同上（C6T 的吞吐 case 与 census 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+
+与 8188EU 产物同一条链接边界：`rtl8xxxu/` 的 13 个文件全是
+`GPL-2.0-only`，所以这些镜像一律按 GPL-2.0 登记。RTL8723BU 这一组**没有**
+新增驱动补丁（芯片的 fileops 原生在 device table 里，`supports_ap` 也已在
+pin 内），补丁数仍是 4 个、只服务 8188EU 的角色；许可证不因芯片选择而变。
+`rtlwifi/rtl8723bu_nic.bin`（32,108 B，sha256 `a52b5a7b…`）是 Realtek 二进制
+固件，按 `LICENCE.realtek_firmware` 再分发，与 GPL 登记是两件事、不互相替代。
 
 ## 5. 固件（2026-11-11 起入库）
 

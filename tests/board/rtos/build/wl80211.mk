@@ -100,7 +100,15 @@ endif
 # compiled-in rtl8188eufw image.  It has no first-party diagnostic unit yet: the
 # C3-C5 gates are the driver's own lines, so nothing is added beside the import.
 ifeq ($(CONFIG_LIBLINUX80211_RTL8XXXU),1)
-WL80211_RTL8XXXU_SRCS := $(RTL8XXXU_IMPL_SRCS) $(LIB8)/fw/rtl8188eufw_blob.c \
+# The chip selects the firmware blob the image carries: the 8188EU profile gets
+# rtl8188eufw, the 8723BU profile gets rtl8723bu_nic.  Both register by name, so
+# the driver's request_firmware() finds only the one the profile linked - an
+# image that carries a blob no probe asks for would hide a fallback.
+WL80211_RTL8XXXU_FW_SRCS := $(LIB8)/fw/rtl8188eufw_blob.c
+ifeq ($(CONFIG_RTL8XXXU_CHIP_8723BU),1)
+WL80211_RTL8XXXU_FW_SRCS := $(LIB8)/fw/rtl8723bu_nic_blob.c
+endif
+WL80211_RTL8XXXU_SRCS := $(RTL8XXXU_IMPL_SRCS) $(WL80211_RTL8XXXU_FW_SRCS) \
 	$(RTL8XXXU_DIR)/ports/rtos/rtl8xxxu_diag.c
 else
 WL80211_RTL8XXXU_SRCS :=

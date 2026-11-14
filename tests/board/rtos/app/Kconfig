@@ -279,6 +279,22 @@ config RTL8XXXU_USB_BUS
 	  (busids 1,0), the fallback arm if the dongle moves.  A profile that
 	  changes this must say so in its run record.
 
+config RTL8XXXU_CHIP_8723BU
+	bool "rtl8xxxu profile drives the RTL8723BU (0bda:b720) instead of the 8188EUS"
+	help
+	  The chip selects which firmware unit the image links and which
+	  revision the bring-up expects: the 8188EUS profile carries
+	  rtlwifi/rtl8188eufw.bin (28.0 / 0x88e1), the RTL8723BU profile
+	  carries rtlwifi/rtl8723bu_nic.bin (35.0 / 0x5301).  The driver itself
+	  is the same vendored rtl8xxxu: both chips are in its device table, and
+	  the 8723BU's fileops already sets supports_ap.
+
+	  The bench fact this costs one boot to pin: the 8723BU is the board's
+	  EHCI dongle (the GT kernel's `usb 1-1.2`, i.e. the EHCI root this map
+	  calls busid 1, behind the 1a86:8091 hub at port 2), not the xHCI hub
+	  the 8188EUS sits on.  A profile for it therefore also sets
+	  RTL8XXXU_USB_BUS=1; the claim line in the boot is the evidence.
+
 config RTL8XXXU_AP_ARM_BCN4
 	bool "rtl8xxxu_ap diagnostic arm: clear BCN_CTRL bit4 after the first beacon"
 	help

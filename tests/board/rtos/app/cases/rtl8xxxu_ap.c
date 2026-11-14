@@ -46,7 +46,7 @@
  *   rtl8xxxu_ap: usb backend ready
  *   rtl8xxxu_ap: initcalls run
  *   rtl8xxxu_ap: usb drivers=<n>
- *   rtl8xxxu_ap: fw registered=0 name=rtlwifi/rtl8188eufw.bin
+ *   rtl8xxxu_ap: fw registered=0 name=<profile blob>
  *   rtl8xxxu_ap: usb buses=3,2
  *   rtl8xxxu_ap: usb bus=<n> hcd=<ehci|xhci> base=0x... started
  *   rtl8xxxu_ap: firmware <driver line>
@@ -75,6 +75,7 @@
 #include <string.h>
 
 #include "cases.h"
+#include "rtl8xxxu_fw.h"
 #include "os/cmsis2/cmsis2.h"
 
 /* CherryUSB first (see rtl8xxxu_c3.c): its <stdlib.h> must be parsed before the
@@ -279,7 +280,6 @@ ap_tp_phase(unsigned int n, const struct ap_tp_phase *ph)
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
-int lkpi_fw_rtl8188eufw_register(void);
 /* first-party read-only AP probes (wireless-drivers/rtl8xxxu/ports/rtos) */
 void rtl8xxxu_diag_ap_state(void *wiphy);
 void rtl8xxxu_diag_beacon_counters(void);
@@ -353,11 +353,11 @@ ap_usb_up(void)
 		    (unsigned)lkpi_usb_driver_count_get());
 
 	lkpi_usb_force_sync_set(false);
-	if (lkpi_fw_rtl8188eufw_register() != 0) {
+	if (rtl8xxxu_fw_register() != 0) {
 		CASE_ANCHOR("rtl8xxxu_ap: FAIL firmware blob registration\n");
 		return -1;
 	}
-	CASE_ANCHOR("rtl8xxxu_ap: fw registered=0 name=rtlwifi/rtl8188eufw.bin\n");
+	CASE_ANCHOR("rtl8xxxu_ap: fw registered=0 name=%s\n", RTL8XXXU_FW_NAME);
 
 	usb_osal_timer_service_start();
 	CASE_ANCHOR("rtl8xxxu_ap: usb buses=%s\n", AP_BUS_LIST_TXT);

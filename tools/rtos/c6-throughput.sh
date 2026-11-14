@@ -64,6 +64,9 @@ REVERSE_PING_INTERVAL=${REVERSE_PING_INTERVAL:-0.2}
 # Wall-clock cap on the AP-side capture.  The phases finish well inside 200 s;
 # a shorter cap only trims the post-run wait, never the measured window.
 AP_CAP_SECS=${AP_CAP_SECS:-360}
+# The board can already be sitting at the U-Boot prompt (a previous case just
+# reset it); the flag stays on by default so a cold bench behaves as before.
+POWER_CYCLE=${POWER_CYCLE:-1}
 AP_CONF=/tmp/w722-ht20.conf
 
 EVIDENCE=
@@ -75,6 +78,7 @@ while [ $# -gt 0 ]; do
 		--evidence) EVIDENCE=${2:?}; shift 2 ;;
 		--bin)      BIN=${2:?}; shift 2 ;;
 		--timeout)  TIMEOUT=${2:?}; shift 2 ;;
+		--no-power-cycle) POWER_CYCLE=0; shift ;;
 		-h|--help)  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "c6-throughput: unknown argument $1" >&2; exit 2 ;;
 	esac
@@ -126,8 +130,10 @@ pisu "timeout $AP_CAP_SECS tcpdump -i $AP_IF -s 128 -w $AP_PCAP" \
 APCAP_PID=$!
 
 # --- boot -------------------------------------------------------------------
+BOOT_POWER=(--power-cycle)
+[ "$POWER_CYCLE" = 0 ] && BOOT_POWER=()
 "$BOARD/boot-rtos.sh" --bin rtos.bin --success "rtos: result" \
-	--quiet 0 --timeout "$TIMEOUT" --power-cycle --retry "$BOOT_RETRY" \
+	--quiet 0 --timeout "$TIMEOUT" "${BOOT_POWER[@]}" --retry "$BOOT_RETRY" \
 	--evidence "$EVIDENCE" \
 	>"$EVIDENCE/boot.out" 2>&1 &
 BOOT_PID=$!

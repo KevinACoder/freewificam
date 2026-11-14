@@ -40,7 +40,7 @@
  *   rtl8xxxu_mon: usb drivers=<n>
  *   rtl8xxxu_mon: firmware <driver line>
  *   rtl8xxxu_mon: fw image <driver line>
- *   rtl8xxxu_mon: fw registered=0 name=rtlwifi/rtl8188eufw.bin
+ *   rtl8xxxu_mon: fw registered=0 name=<profile blob>
  *   rtl8xxxu_mon: usb buses=3,2
  *   rtl8xxxu_mon: usb bus=<n> hcd=<xhci|ehci> base=0x<hex> started
  *   rtl8xxxu_mon: wlan0 present=1 ifindex=<n> mac=<mac> iftype=<n>
@@ -75,6 +75,7 @@
 #include <string.h>
 
 #include "cases.h"
+#include "rtl8xxxu_fw.h"
 #include "os/cmsis2/cmsis2.h"
 
 /* CherryUSB first (see rtl8xxxu_c3.c): its <stdlib.h> must be parsed before
@@ -130,7 +131,6 @@ static const unsigned int mon_buses[] = { 1U, 0U };
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
-int lkpi_fw_rtl8188eufw_register(void);
 
 static unsigned int mon_log_lines;
 
@@ -193,11 +193,11 @@ mon_usb_up(void)
 		    (unsigned)lkpi_usb_driver_count_get());
 
 	lkpi_usb_force_sync_set(false);
-	if (lkpi_fw_rtl8188eufw_register() != 0) {
+	if (rtl8xxxu_fw_register() != 0) {
 		CASE_ANCHOR("rtl8xxxu_mon: FAIL firmware blob registration\n");
 		return -1;
 	}
-	CASE_ANCHOR("rtl8xxxu_mon: fw registered=0 name=rtlwifi/rtl8188eufw.bin\n");
+	CASE_ANCHOR("rtl8xxxu_mon: fw registered=0 name=%s\n", RTL8XXXU_FW_NAME);
 
 	usb_osal_timer_service_start();
 	CASE_ANCHOR("rtl8xxxu_mon: usb buses=%s\n", MON_BUS_LIST_TXT);

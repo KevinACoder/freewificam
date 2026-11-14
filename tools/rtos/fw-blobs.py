@@ -86,6 +86,15 @@ BLOBS: tuple[Blob, ...] = (
         licence="LICENCE.realtek_firmware",
         licence_note="Realtek binary redistribution terms",
     ),
+    Blob(
+        stem="rtl8723bu_nic",
+        source="rtlwifi/rtl8723bu_nic.bin",
+        request="rtlwifi/rtl8723bu_nic.bin",
+        sha256="a52b5a7be4841b4b2839eddf5122b3300a3610866abe4bb3c3c9e444c8ab7969",
+        brief="the RTL8723BU driver asks for by name.",
+        licence="LICENCE.realtek_firmware",
+        licence_note="Realtek binary redistribution terms",
+    ),
 )
 
 

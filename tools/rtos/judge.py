@@ -1609,6 +1609,15 @@ PATTERNS = {
         r"hub=(?P<hub>\d+) port=(?P<port>\d+) intf=(?P<intf>\d+) "
         r"spd=(?P<spd>\d+)", re.MULTILINE,
     ),
+    # The same case's other bench chip: the RTL8723BU is a composite device
+    # (Bluetooth on interfaces 0/1, Wi-Fi on interface 2) on the EHCI root, so
+    # its claim is a different bus and a non-zero interface.  `--expect
+    # chip=8723bu` selects this row; the default row above stays the 8188EU.
+    "rtl8xxxu_c3_claim_8723bu": re.compile(
+        r"rtl8xxxu_c3: usbh: lkpi claim attempt 0bda:b720 bus=(?P<bus>\d+) "
+        r"hub=(?P<hub>\d+) port=(?P<port>\d+) intf=(?P<intf>\d+) "
+        r"spd=(?P<spd>\d+)", re.MULTILINE,
+    ),
     "rtl8xxxu_c3_wlan0": re.compile(
         r"rtl8xxxu_c3: wlan0 present=(?P<present>[01]) after (?P<ms>\d+) ms",
         re.MULTILINE,
@@ -5369,13 +5378,37 @@ def judge(text: str, expect: dict | None = None) -> dict:
         drv = found["rtl8xxxu_c3_drivers"]
         if not drv or int(drv["n"]) == 0:
             errors.append("rtl8xxxu_c3: PASS without a registered usb_driver")
+        # Which chip the profile carried: the same case runs both benches, and
+        # the firmware signature / claim row are the chip's own facts.  The
+        # default stays the 8188EU so the 2026-11-14 runs re-judge unchanged.
+        chip = expect.get("chip", "8188eu")
+        if chip == "8723bu":
+            want_sig = "signature 0x5301"
+            want_pid = "0bda:b720"
+            claim = found["rtl8xxxu_c3_claim_8723bu"]
+            want_bus = 1
+            want_hub = 2
+            want_port = 2
+            want_intf = 2
+            bus_note = ("the 8723BU's bench is the EHCI root at 0xFD880000 "
+                        "(busid 1), behind the 1a86:8091 hub")
+        else:
+            want_sig = "signature 0x88e1"
+            want_pid = "0bda:8179"
+            claim = found["rtl8xxxu_c3_claim"]
+            want_bus = 3
+            want_hub = 2
+            want_port = None
+            want_intf = None
+            bus_note = ("the round's bench is bus=3 (xhci-hcd.0.auto / "
+                        "0xFCC00000) behind the hub")
         fw = found["rtl8xxxu_c3_fw"]
         if not fw:
             errors.append(
                 "rtl8xxxu_c3: PASS without the firmware revision line")
-        elif "signature 0x88e1" not in fw["line"]:
+        elif want_sig not in fw["line"]:
             errors.append(
-                f"rtl8xxxu_c3: firmware line is not the 8188EU's: {fw['line']}")
+                f"rtl8xxxu_c3: firmware line is not the {chip}'s: {fw['line']}")
         else:
             notes.append(f"rtl8xxxu_c3: fw {fw['line'].strip()}")
         # The bench fact this round pre-registers: the dongle is behind the
@@ -5385,15 +5418,15 @@ def judge(text: str, expect: dict | None = None) -> dict:
         # 2026-11-14 18:10 boot put the 8188EUS at `bus=3 hub=2 port=2`, next to
         # the 8851BU on the same hub (port 1).  A claim on another controller is
         # a different arm, so it is an error here rather than a note.
-        claim = found["rtl8xxxu_c3_claim"]
         if not claim:
             errors.append(
-                "rtl8xxxu_c3: PASS without the 0bda:8179 claim line")
-        elif int(claim["bus"]) != 3 or int(claim["hub"]) < 2:
+                f"rtl8xxxu_c3: PASS without the {want_pid} claim line")
+        elif (int(claim["bus"]) != want_bus or int(claim["hub"]) != want_hub or
+              (want_port is not None and int(claim["port"]) != want_port) or
+              (want_intf is not None and int(claim["intf"]) != want_intf)):
             errors.append(
-                f"rtl8xxxu_c3: claimed on bus={claim['bus']} hub={claim['hub']}, "
-                "the round's bench is bus=3 (xhci-hcd.0.auto / 0xFCC00000) "
-                "behind the hub")
+                f"rtl8xxxu_c3: claimed on bus={claim['bus']} hub={claim['hub']} "
+                f"port={claim['port']} intf={claim['intf']}, {bus_note}")
         else:
             notes.append(
                 f"rtl8xxxu_c3: claim bus={claim['bus']} hub={claim['hub']} "

@@ -1,0 +1,34 @@
+# rtl8xxxu on the RTOS line, C3 for the RTL8723BU (0bda:b720): the board's
+# EHCI dongle - the GT kernel's `usb 1-1.2`, i.e. the EHCI root this map calls
+# busid 1, behind the 1a86:8091 hub at its port 2 - enumerates, the vendored
+# driver recognises the chip in its own probe (RTL8723BU rev E, 1T1R, 3 TX
+# queues, MAC 88:e6:28:53:10:9c), downloads rtlwifi/rtl8723bu_nic.bin from the
+# compiled-in registry (Firmware revision 35.0 / signature 0x5301) and
+# registers its wiphy with the real mac80211; opening the interface reaches
+# the driver's start.
+#
+# The 8723BU is a composite device whose Wi-Fi interface is interface 2 (the
+# GT kernel binds `usb 1-1.2:1.2`), so the claim line's intf field is part of
+# the evidence.  The controller list is the EHCI pair (busids 1,0): this bench's
+# 8723BU shares the 1a86 hub with the 8821CU arm's dongle at 1-1.1.
+#
+# The driver + stack are a GPL-2.0 link product and redistribute the Realtek
+# rtl8723bu firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_c3"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RTL8XXXU_CHIP_8723BU=y
+CONFIG_RTL8XXXU_USB_BUS=1

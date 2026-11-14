@@ -52,6 +52,7 @@
 #include <string.h>
 
 #include "cases.h"
+#include "rtl8xxxu_fw.h"
 #include "os/cmsis2/cmsis2.h"
 
 /* CherryUSB first (see rtl8xxxu_c3.c): its <stdlib.h> must be parsed before the
@@ -91,7 +92,6 @@
 void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
-int lkpi_fw_rtl8188eufw_register(void);
 
 #if CONFIG_RTL8XXXU_USB_BUS == 0
 static const unsigned int c5_buses[] = { 3U, 2U };
@@ -194,11 +194,11 @@ c5_usb_up(void)
 		    (unsigned)lkpi_usb_driver_count_get());
 
 	lkpi_usb_force_sync_set(false);
-	if (lkpi_fw_rtl8188eufw_register() != 0) {
+	if (rtl8xxxu_fw_register() != 0) {
 		CASE_ANCHOR("rtl8xxxu_c5: FAIL firmware blob registration\n");
 		return -1;
 	}
-	CASE_ANCHOR("rtl8xxxu_c5: fw registered=0 name=rtlwifi/rtl8188eufw.bin\n");
+	CASE_ANCHOR("rtl8xxxu_c5: fw registered=0 name=%s\n", RTL8XXXU_FW_NAME);
 
 	usb_osal_timer_service_start();
 	CASE_ANCHOR("rtl8xxxu_c5: usb buses=%s\n", C5_BUS_LIST_TXT);
