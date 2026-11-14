@@ -51,7 +51,10 @@ def summarise(path: Path) -> dict:
             addba += 1
         elif subtype in SUBTYPE_QOS_DATA:
             qos += 1
-        if retry_bit == "1":
+        # tshark 4.6 prints display booleans as True/False; earlier versions
+        # printed 1/0.  The 2026-11-14 air summary compared against "1" and
+        # reported retry=0 on a capture with 3.4% retries.
+        if retry_bit in ("1", "True"):
             retry += 1
         if ampdu_flag.strip() != "":
             ampdu += 1

@@ -48,6 +48,10 @@ TIMEOUT=480
 EVIDENCE=
 DIAG=0
 NO_PEER=0
+# The stall arm keeps the boot alive through a silence and sends a liveness
+# ping every 2 s; the clean arm stays free of that extra traffic.
+STALL=0
+BOOT_RETRY=1
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -59,6 +63,7 @@ while [ $# -gt 0 ]; do
 		--wpa2)     WPA2=1; shift ;;
 		--diag)     DIAG=1; shift ;;
 		--no-peer)  NO_PEER=1; shift ;;
+		--stall-arm) STALL=1; TIMEOUT=900; BOOT_RETRY=0; shift ;;
 		-h|--help)  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "ap-round: unknown argument $1" >&2; exit 2 ;;
 	esac
@@ -143,7 +148,7 @@ sha256sum "$EVIDENCE/rtos.bin" > "$EVIDENCE/rtos-bin.sha256"
 
 # --- boot -------------------------------------------------------------------
 "$BOARD/boot-rtos.sh" --bin rtos.bin --success "rtos: result" --quiet 0 \
-	--timeout "$TIMEOUT" --power-cycle --retry 1 --evidence "$EVIDENCE" \
+	--timeout "$TIMEOUT" --power-cycle --retry "$BOOT_RETRY" --evidence "$EVIDENCE" \
 	>"$EVIDENCE/boot.out" 2>&1 &
 BOOT_PID=$!
 
@@ -157,52 +162,76 @@ beacon_pid=
 diag_mon_pid=
 
 declare -A seen_phase=()
+declare -A seen_done=()
+declare -A phase_t0=()
+declare -A phase_t1=()
 phase_pids=()
+phase_order=()
+a4_started=0
+a4_mon_pid=
+a4_ip_pid=
+alive_pid=
 
 anchor() {	# $1 = regex
 	[ -f "$SERIAL" ] || return 1
 	tr -d '\r' < "$SERIAL" 2>/dev/null | grep -aqE "$1"
 }
 
-start_mon_window() {	# $1 = down|up
-	pisu "timeout $2 tcpdump -i $MON_IF -s 128 -w $PI_DIR/mon-$1.pcap" \
-		>>"$EVIDENCE/mon-$1-tcpdump.log" 2>&1 &
+# One whole-A4 monitor capture (not one per direction): the frames carry both
+# directions, so the phase is the time slice, not the file.  The old down
+# window spanned four phases and its payload totals were reported as one.
+start_a4_captures() {
+	pisu "timeout 200 tcpdump -i $MON_IF -s 256 -w $PI_DIR/mon-a4.pcap" \
+		>>"$EVIDENCE/mon-a4-tcpdump.log" 2>&1 &
+	a4_mon_pid=$!
+	pisu "timeout 200 tcpdump -i $STA_IF -s 96 -w $PI_DIR/ip-a4.pcap" \
+		>>"$EVIDENCE/ip-a4-tcpdump.log" 2>&1 &
+	a4_ip_pid=$!
+}
+
+# The peer receivers are started before the board's phase, not on its begin
+# line: the 2026-11-14 a4-5 boot lost phase 1 because the ssh + iperf startup
+# had not finished when the board connected.
+start_peer_tcp() {	# $1 = tag, $2 = seconds
+	pih "server-tcp $PI_DIR/peer-$1.txt $2" >/dev/null 2>&1 &
+	phase_pids+=($!)
+}
+
+start_peer_sink() {	# $1 = tag, $2 = seconds
+	pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-$1.txt $2" >/dev/null 2>&1 &
+	phase_pids+=($!)
+}
+
+# Both downlink TCP servers from one sequential job: the first serves phase 1
+# and exits when the client closes; the second then binds the now-free port
+# and waits through phase 2 for phase 3.  Starting the second at phase 1's
+# done raced the first server's 40 s timeout and it died on "Address already
+# in use" (2026-11-14 rtos-ap1: phase 3 0 bytes).
+start_tcp_pair() {
+	( pih "server-tcp $PI_DIR/peer-tcpdn.txt 25" >/dev/null 2>&1
+	  pih "server-tcp $PI_DIR/peer-tcpdn2.txt 70" >/dev/null 2>&1 ) &
+	phase_pids+=($!)
+}
+
+alive_ping() {
+	pi "sudo -n ping -I $STA_IF -c 600 -i 2 -W 1 $BOARD_IP" \
+		> "$EVIDENCE/alive.txt" 2>&1 &
+	alive_pid=$!
 }
 
 on_phase() {		# $1 = name
 	case "$1" in
-	tcpdn)
-		pih "server-tcp $PI_DIR/peer-tcpdn.txt 25" >/dev/null 2>&1 &
-		phase_pids+=($!)
-		start_mon_window down 75
-		mon_down_pid=$!
-		;;
-	udpdn)
-		pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-udpdn.txt 25" >/dev/null 2>&1 &
-		phase_pids+=($!)
-		;;
-	udpdn15|udpdn25|udpdn35|udpdn45)
-		pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-$1.txt 25" >/dev/null 2>&1 &
-		phase_pids+=($!)
-		;;
-	tcpdn2)
-		pih "server-tcp $PI_DIR/peer-tcpdn2.txt 25" >/dev/null 2>&1 &
-		phase_pids+=($!)
-		;;
-	udpdn2)
-		pih "sink /tmp/udp-sink-ap.py $PI_DIR/sink-udpdn2.txt 25" >/dev/null 2>&1 &
-		phase_pids+=($!)
-		;;
 	tcpup)
-		start_mon_window up 60
-		mon_up_pid=$!
-		pih "client-tcp 28" > "$EVIDENCE/peer-tcpup.txt" 2>&1
+		pih "client-tcp 24" > "$EVIDENCE/peer-tcpup.txt" 2>&1 &
+		phase_pids+=($!)
 		;;
 	udpup)
-		pih "client-udp 18" > "$EVIDENCE/peer-udpup.txt" 2>&1
+		pih "client-udp 18" > "$EVIDENCE/peer-udpup.txt" 2>&1 &
+		phase_pids+=($!)
 		;;
 	esac
-	pih "link" > "$EVIDENCE/link-$1.txt" 2>&1 || true
+	pih "link" > "$EVIDENCE/link-$1.txt" 2>&1 &
+	phase_pids+=($!)
 }
 
 for _ in $(seq 1 3000); do
@@ -273,6 +302,18 @@ for _ in $(seq 1 3000); do
 		fi
 	fi
 
+	if [ "$a4_started" = 0 ] && [ "$NO_PEER" = 0 ] && \
+	   anchor "$CASE: server tcp="; then
+		a4_started=1
+		echo "a4-ready at $(date -Is)" >> "$EVIDENCE/phase-seen.txt"
+		start_a4_captures
+		# both TCP receivers are up before the board's first connect.
+		start_tcp_pair
+		if [ "$STALL" = 1 ]; then
+			alive_ping
+		fi
+	fi
+
 	PHASES=""
 	if [ "$NO_PEER" = 0 ]; then
 		# double-quoted on purpose: $CASE must expand.  A single-quoted sed
@@ -285,9 +326,42 @@ for _ in $(seq 1 3000); do
 		[ -n "$ph" ] || continue
 		[ -n "${seen_phase[$ph]:-}" ] && continue
 		seen_phase[$ph]=1
-		echo "phase $ph at $(date -Is)" >> "$EVIDENCE/phase-seen.txt"
+		phase_t0[$ph]=$(date +%s.%N)
+		phase_order+=("$ph")
+		echo "phase $ph at $(date -Is) epoch=${phase_t0[$ph]}" \
+			>> "$EVIDENCE/phase-seen.txt"
+		# The downlink sink is up ~15 s before phase 4 (started during
+		# phase 3), so its bind cannot race the blast.
+		if [ "$ph" = tcpdn2 ]; then
+			start_peer_sink udpdn 40
+		fi
 		on_phase "$ph"
 	done <<< "$PHASES"
+
+	# Phase ends: the Nth done line maps to the Nth begin in phase_order.
+	DONE=""
+	if [ -f "$SERIAL" ]; then
+		DONE=$(tr -d '\r' < "$SERIAL" 2>/dev/null | \
+			sed -n "s/.*$CASE: phase \([0-9][0-9]*\) done ok=\([01]\).*/\1 \2/p")
+	fi
+	while read -r num ok; do
+		[ -n "$num" ] || continue
+		[ -n "${seen_done[$num]:-}" ] && continue
+		seen_done[$num]=1
+		ph=${phase_order[$((num - 1))]:-phase$num}
+		phase_t1[$ph]=$(date +%s.%N)
+		printf '%s\t%s\t%s\t%s\n' "$ph" "${phase_t0[$ph]:-}" \
+			"${phase_t1[$ph]}" "$ok" >> "$EVIDENCE/phase-window.tsv"
+		# Backgrounded: a phase's snapshots must not delay the next
+		# phase's receiver (the gt-ap3 run's loop fell behind and its
+		# peer actions landed after the board's flows).
+		pih "station" > "$EVIDENCE/pi-$ph-station.txt" 2>&1 &
+		phase_pids+=($!)
+		pih "netdev" > "$EVIDENCE/pi-$ph-netdev.txt" 2>&1 &
+		phase_pids+=($!)
+		pih "nstat" > "$EVIDENCE/pi-$ph-nstat.txt" 2>&1 &
+		phase_pids+=($!)
+	done <<< "$DONE"
 
 	if ! kill -0 "$BOOT_PID" 2>/dev/null; then
 		break
@@ -328,10 +402,19 @@ fi
 if [ "$NO_PEER" = 0 ]; then
 	pih "servers-stop" >/dev/null 2>&1 || true
 fi
+# The A4 captures run under `timeout`; stop them now so the tar below copies
+# complete files.  `pkill -x tcpdump` is exact-name on purpose: the earlier
+# `pkill -f <pcap>` matched the ssh command that carried the pattern and killed
+# the session (2026-11-14).
+pisu "pkill -x tcpdump" >/dev/null 2>&1 || true
+[ -n "${a4_mon_pid:-}" ] && wait "$a4_mon_pid" 2>/dev/null || true
+[ -n "${a4_ip_pid:-}" ] && wait "$a4_ip_pid" 2>/dev/null || true
+if [ -n "${alive_pid:-}" ]; then
+	kill "$alive_pid" 2>/dev/null || true
+	pisu "pkill -x ping" >/dev/null 2>&1 || true
+fi
 [ -n "${beacon_pid:-}" ] && wait "$beacon_pid" 2>/dev/null || true
 [ -n "${wpa_mon_pid:-}" ] && wait "$wpa_mon_pid" 2>/dev/null || true
-[ -n "${mon_down_pid:-}" ] && wait "$mon_down_pid" 2>/dev/null || true
-[ -n "${mon_up_pid:-}" ] && wait "$mon_up_pid" 2>/dev/null || true
 for p in "${phase_pids[@]:-}"; do wait "$p" 2>/dev/null || true; done 2>/dev/null || true
 
 # --- A3 evidence from the AP side: the round's own log ----------------------
@@ -348,68 +431,72 @@ fi
 # ap-report.py reads run/<tag>/sink-<phase>.txt; the counting sink writes inside
 # the Pi directory, so surface its files one level up too (the 2026-11-12 round
 # had them only under pi-ap-<tag>/ and the report saw 0 bytes).
-for f in "$EVIDENCE"/"pi-ap-$TAG"/sink-*.txt; do
+for f in "$EVIDENCE"/"pi-ap-$TAG"/sink-*.txt*; do
 	[ -e "$f" ] && cp "$f" "$EVIDENCE/" || true
 done
 
 if [ "$NO_PEER" = 0 ]; then
 {
-	echo "beacon=$PI_DIR/beacon.pcap wpa4way=$PI_DIR/wpa4way.pcap"
-	pisu "chmod 644 $PI_DIR/beacon.pcap 2>/dev/null || true"
-	pisu "sha256sum $PI_DIR/beacon.pcap 2>/dev/null || true"
-	pisu "tshark -r $PI_DIR/beacon.pcap -Y 'wlan.fc.type_subtype==8' -T fields -e wlan.bssid -e wlan.ssid -e wlan.fixed.beacon -e wlan.tim.dtim_period -e radiotap.channel.freq 2>/dev/null | sort -u | head -20" || true
+	echo "beacon=$PI_DIR/beacon.pcap mon=$PI_DIR/mon-a4.pcap ip=$PI_DIR/ip-a4.pcap"
+	pisu "chmod 644 $PI_DIR/beacon.pcap $PI_DIR/mon-a4.pcap $PI_DIR/ip-a4.pcap 2>/dev/null || true"
+	pisu "sha256sum $PI_DIR/beacon.pcap $PI_DIR/mon-a4.pcap $PI_DIR/ip-a4.pcap 2>/dev/null || true"
+	pisu "stat -c '%n %s' $PI_DIR/beacon.pcap $PI_DIR/mon-a4.pcap $PI_DIR/ip-a4.pcap 2>/dev/null || true"
+	pisu "tshark -r $PI_DIR/beacon.pcap -Y 'wlan.fc.type_subtype==0x0008' -T fields -e wlan.bssid -e wlan.ssid -e wlan.fixed.beacon -e wlan.tim.dtim_period -e radiotap.channel.freq -e wlan.tag.number -e wlan.tag.length 2>/dev/null | sort -u | head -5" || true
+	echo "== tcpdump drop lines"
+	tail -2 "$EVIDENCE/mon-a4-tcpdump.log" "$EVIDENCE/ip-a4-tcpdump.log" 2>/dev/null || true
 } > "$EVIDENCE/beacon-fields.txt" 2>&1 || true
 fi
 
-# The diagnostic arm needs the whole round on the air: when did the last
-# beacon leave the AP, relative to the last host interrupt?  tshark runs on
-# the Pi (the host has no dissector); the summary is computed here.
-if [ "$DIAG" = 1 ] && [ "$NO_PEER" = 0 ]; then
-	pisu "chmod 644 $PI_DIR/mon-diag.pcap 2>/dev/null || true"
-	pisu "sha256sum $PI_DIR/mon-diag.pcap 2>/dev/null || true"
-	pisu "tshark -r $PI_DIR/mon-diag.pcap -Y 'wlan.fc.type_subtype==8' -T fields -e frame.time_relative -e wlan.sa -e wlan.seq 2>/dev/null" \
-		> "$EVIDENCE/air-beacon-diag.txt" || true
-	awk -F'\t' 'NF { n++; last=$1; if (n==1) first=$1; c[$2]++ }
-		END { printf "beacons=%d first=%s last=%s\n", n, first, last;
-		      for (k in c) printf "sa=%s frames=%d\n", k, c[k] }' \
-		"$EVIDENCE/air-beacon-diag.txt" > "$EVIDENCE/air-beacon-diag-summary.txt" 2>/dev/null || true
+# --- per-phase air and IP ledgers ------------------------------------------
+# Each phase is a time slice of one whole-A4 capture.  The 2026-11-14 round's
+# "down" window spanned four phases, which is how a 5% board->air loss got
+# written from a total that mixed them.
+if [ "$NO_PEER" = 0 ]; then
+	# the AP's BSSID is the second address the air ledger needs; the Pi's
+	# link line is the authority (the RTOS case's MAC anchor differs per case).
+	AP_MAC=$(sed -n 's/^Connected to \([0-9a-f:]*\).*/\1/p' "$EVIDENCE/pi-link.txt" 2>/dev/null | head -1)
+	for ph in "${phase_order[@]:-}"; do
+		t0=${phase_t0[$ph]:-}
+		t1=${phase_t1[$ph]:-}
+		[ -n "$t0" ] && [ -n "$t1" ] || continue
+		pisu "tshark -r $PI_DIR/mon-a4.pcap -Y 'frame.time_epoch>=$t0 && frame.time_epoch<=$t1 && wlan.addr==$STA_MAC' -T fields -e wlan.fc.type_subtype -e wlan.fc.retry -e wlan_radio.11n.mcs_index -e radiotap.ampdu.flags -e frame.len -e wlan.ta -e wlan.ra -e tcp.len -e udp.length 2>/dev/null" \
+			> "$EVIDENCE/air-$ph.csv" || true
+		python3 "$HERE/c6-air.py" "$EVIDENCE/air-$ph.csv" \
+			> "$EVIDENCE/air-$ph.txt" 2>&1 || true
+		# direction and payload, from the same CSV: ta == AP is this board
+		# sending (down); ta == STA is the peer sending (up).
+		awk -F'\t' -v ap="$AP_MAC" -v sta="$STA_MAC" '
+			NF {
+				n++
+				if ($2 == "True" || $2 == "1") retry++
+				if (ap != "" && $6 == ap) {
+					down++
+					if ($8 != "" && $8 > 0) { dtcp++; dtcpb += $8 }
+					if ($9 != "" && $9 > 0) { dudp++; dudpb += $9 - 8 }
+				} else if ($6 == sta) {
+					up++
+					if ($8 != "" && $8 > 0) { utcp++; utcpb += $8 }
+					if ($9 != "" && $9 > 0) { uudp++; uudpb += $9 - 8 }
+				}
+			}
+			END {
+				printf "phase frames=%d down=%d up=%d retry=%d ", n, down, up, retry
+				printf "down_tcp=%d/%d down_udp=%d/%d up_tcp=%d/%d up_udp=%d/%d\n", \
+					dtcp, dtcpb, dudp, dudpb, utcp, utcpb, uudp, uudpb
+			}' "$EVIDENCE/air-$ph.csv" >> "$EVIDENCE/air-$ph.txt" 2>/dev/null || true
+		pisu "tshark -r $PI_DIR/ip-a4.pcap -Y 'frame.time_epoch>=$t0 && frame.time_epoch<=$t1' -T fields -e frame.len -e ip.proto 2>/dev/null" \
+			> "$EVIDENCE/ip-$ph.csv" || true
+		awk -F'\t' '
+			NF {
+				n++; b += $1
+				if ($2 == "6") { tcp++; tcpb += $1 }
+				else if ($2 == "17") { udp++; udpb += $1 }
+			}
+			END { printf "ip frames=%d bytes=%d tcp=%d/%d udp=%d/%d\n", n, b, tcp, tcpb, udp, udpb }
+		' "$EVIDENCE/ip-$ph.csv" > "$EVIDENCE/ip-$ph.txt" 2>/dev/null || true
+	done
+	python3 "$HERE/c6-air.py" "$EVIDENCE"/air-*.csv > "$EVIDENCE/air-summary.txt" 2>&1 || true
 fi
-
-if [ "$WPA2" = 1 ]; then
-	{
-		pisu "chmod 644 $PI_DIR/wpa4way.pcap 2>/dev/null || true"
-		pisu "sha256sum $PI_DIR/wpa4way.pcap 2>/dev/null || true"
-		echo "== EAPOL frames (802.1X, type 3 = EAPOL-Key)"
-		pisu "tshark -r $PI_DIR/wpa4way.pcap -Y 'eapol' -T fields -e frame.time_relative -e wlan.sa -e wlan.da -e eapol.type -e eapol.keydes.key_info 2>/dev/null" || true
-		echo "== count"
-		pisu "tshark -r $PI_DIR/wpa4way.pcap -Y 'eapol' -T fields -e frame.number 2>/dev/null | wc -l" || true
-	} > "$EVIDENCE/air-eapol.txt" 2>&1 || true
-fi
-
-{
-	echo "down=$MON_DOWN_PCAP up=$MON_UP_PCAP"
-	pisu "chmod 644 $MON_DOWN_PCAP $MON_UP_PCAP 2>/dev/null || true"
-	pisu "sha256sum $MON_DOWN_PCAP $MON_UP_PCAP 2>/dev/null || true"
-	pisu "stat -c '%n %s' $MON_DOWN_PCAP $MON_UP_PCAP 2>/dev/null || true"
-	grep -c 'packets dropped by kernel' "$EVIDENCE/mon-down-tcpdump.log" "$EVIDENCE/mon-up-tcpdump.log" 2>/dev/null || true
-} > "$EVIDENCE/pcap.txt" 2>&1 || true
-
-{
-	echo "== monitor (802.11) frames for the station, per direction window"
-	pisu "tshark -r $MON_DOWN_PCAP -Y 'wlan.addr==$STA_MAC' -T fields -e wlan.fc.type_subtype -e wlan.fc.retry -e wlan_radio.11n.mcs_index -e radiotap.ampdu.flags -e frame.len 2>/dev/null" > "$EVIDENCE/air-fields-down.csv" || true
-	pisu "tshark -r $MON_UP_PCAP -Y 'wlan.addr==$STA_MAC' -T fields -e wlan.fc.type_subtype -e wlan.fc.retry -e wlan_radio.11n.mcs_index -e radiotap.ampdu.flags -e frame.len 2>/dev/null" > "$EVIDENCE/air-fields-up.csv" || true
-	awk -F'\t' 'NF{ n++; if ($1=="0x0019") ba++; if ($2=="1") retry++; if ($4!="") ampdu++ } END { printf "down frames=%d ba=%d retry=%d ampdu=%d\n", n, ba+0, retry+0, ampdu+0 }' "$EVIDENCE/air-fields-down.csv" || true
-	awk -F'\t' 'NF{ n++; if ($1=="0x0019") ba++; if ($2=="1") retry++; if ($4!="") ampdu++ } END { printf "up   frames=%d ba=%d retry=%d ampdu=%d\n", n, ba+0, retry+0, ampdu+0 }' "$EVIDENCE/air-fields-up.csv" || true
-} > "$EVIDENCE/air-summary.txt" 2>&1 || true
-
-{
-	pisu "tshark -r $MON_DOWN_PCAP -Y 'wlan.addr==$STA_MAC && tcp && tcp.len>0' -T fields -e tcp.len 2>/dev/null | awk '{n++; s+=\$1} END {printf \"tcp_frames=%d tcp_bytes=%d\\n\", n, s}'" || true
-	pisu "tshark -r $MON_DOWN_PCAP -Y 'wlan.addr==$STA_MAC && udp && udp.length>8' -T fields -e udp.length 2>/dev/null | awk '{n++; s+=\$1-8} END {printf \"udp_frames=%d udp_bytes=%d\\n\", n, s}'" || true
-} > "$EVIDENCE/air-payload-down.txt" 2>&1 || true
-{
-	pisu "tshark -r $MON_UP_PCAP -Y 'wlan.addr==$STA_MAC && tcp && tcp.len>0' -T fields -e tcp.len 2>/dev/null | awk '{n++; s+=\$1} END {printf \"tcp_frames=%d tcp_bytes=%d\\n\", n, s}'" || true
-	pisu "tshark -r $MON_UP_PCAP -Y 'wlan.addr==$STA_MAC && udp && udp.length>8' -T fields -e udp.length 2>/dev/null | awk '{n++; s+=\$1-8} END {printf \"udp_frames=%d udp_bytes=%d\\n\", n, s}'" || true
-} > "$EVIDENCE/air-payload-up.txt" 2>&1 || true
 
 # --- judge -------------------------------------------------------------------
 python3 "$HERE/judge.py" "$SERIAL" --json "$EVIDENCE/judge.json" \

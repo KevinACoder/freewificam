@@ -343,15 +343,22 @@ do_mac() { cat "/sys/class/net/$STA_IF/address"; }
 
 # --- peer half of the phase table -----------------------------------------
 servers_stop() {
+    # kill by PID first: `pkill -f` matches the ssh command line that carries
+    # this script's own name and killed the session on 2026-11-14.
+    if [ -f /tmp/pi-ap-sink.pid ]; then
+        kill "$(cat /tmp/pi-ap-sink.pid)" 2>/dev/null || true
+        rm -f /tmp/pi-ap-sink.pid
+    fi
     pkill -x iperf 2>/dev/null || true
-    pkill -f 'udp-sink' 2>/dev/null || true
     sleep 1
 }
 
 do_server_tcp() {	# $1 = out file, $2 = seconds
     local out=${1:?out} secs=${2:-25}
     : > "$out"
-    timeout "$secs" iperf -s -p 5001 -i 5 >> "$out" 2>&1 || true
+    # Same ruler as the GT arm: the 2026-11-14 comparison had this server at
+    # the kernel's 128 KB default while the GT arm ran 256 KB.
+    timeout "$secs" iperf -s -p 5001 -i 5 -w 128K >> "$out" 2>&1 || true
 }
 
 do_server_udp() {	# $1 = out file, $2 = seconds
@@ -363,16 +370,33 @@ do_server_udp() {	# $1 = out file, $2 = seconds
 do_sink() {		# $1 = sink script, $2 = out, $3 = seconds
     local py=${1:?script} out=${2:?out} secs=${3:-25}
     : > "$out"
-    python3 "$py" --port 5002 --seconds "$secs" >> "$out" 2>&1 || true
+    rm -f "$out.ready" /tmp/pi-ap-sink.pid
+    # The sink announces its bound port before it counts: the harness waits
+    # for the .ready file instead of hoping the ssh round trip beat the board.
+    python3 "$py" --port 5002 --seconds "$secs" --rcvbuf 4194304 \
+        --ready "$out.ready" --out "$out" >> "$out.log" 2>&1 &
+    local pid=$!
+    echo "$pid" > /tmp/pi-ap-sink.pid
+    local i
+    for i in $(seq 1 50); do
+        [ -f "$out.ready" ] && break
+        sleep 0.1
+    done
+    wait "$pid" || true
+    rm -f /tmp/pi-ap-sink.pid
 }
 
 do_client_tcp() {	# $1 = seconds
-    iperf -c "$AP_IP" -p 5001 -t "${1:-28}" -i 5 2>&1
+    iperf -c "$AP_IP" -p 5001 -t "${1:-28}" -i 5 -w 128K 2>&1
 }
 
 do_client_udp() {	# $1 = seconds
     iperf -c "$AP_IP" -p 5002 -u -b 40M -t "${1:-18}" -i 5 2>&1
 }
+
+do_station() { iw dev "$STA_IF" station dump 2>&1; }
+do_netdev() { cat /proc/net/dev 2>&1; }
+do_nstat() { netstat -su 2>&1; echo "== /proc/net/snmp"; cat /proc/net/snmp 2>&1; }
 
 cmd=${1:-status}
 [ $# -gt 0 ] && shift
@@ -396,6 +420,9 @@ case "$cmd" in
     sink)       do_sink "$@" ;;
     client-tcp) do_client_tcp "$@" ;;
     client-udp) do_client_udp "$@" ;;
+    station)    do_station ;;
+    netdev)     do_netdev ;;
+    nstat)      do_nstat ;;
     servers-stop) servers_stop ;;
     *) echo "pi-ap: unknown command $cmd" >&2; exit 2 ;;
 esac

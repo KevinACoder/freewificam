@@ -121,6 +121,7 @@ struct lkpinetif_stack_diag {
 	unsigned long	mbox_fetch_ok, mbox_fetch_empty;
 	unsigned long long mbox_fetch_wait_ms;
 	unsigned long	ip_drop, ip_chkerr, link_drop;
+	unsigned long	udp_in, udp_in_err, udp_noport, udp_out;
 	unsigned long	netif_n;
 	unsigned long	netif_up[3], netif_link[3], netif_ip[3], netif_num[3];
 	char		netif_name[3][2];

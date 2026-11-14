@@ -87,6 +87,7 @@
 #include "linux80211/hostap_ap.h"
 #include "linux80211/hostap_drv.h"	/* the hw_mode values, plain C */
 #include "linux80211/net.h"
+#include "linux80211/diag.h"
 #include "linuxkpi_usb.h"
 #include "lkpi_usb_cherryusb.h"
 
@@ -142,6 +143,15 @@
 #define AP_TP			0
 #endif
 
+/* The diagnostic arm's phase stages: three bounded anchors per phase say
+ * whether a stall was before the call, inside the core lock, or after it.
+ * The verdict image has none of them. */
+#if defined(CONFIG_RTW89_AP_STAGE)
+#define AP_STAGE(...)		CASE_ANCHOR(__VA_ARGS__)
+#else
+#define AP_STAGE(...)		do { } while (0)
+#endif
+
 /* The phase windows: the lwIP client is time-limited by lwiperf (10 s), so
  * the board-sent TCP phases use 12 s; the board-received TCP phase can run
  * longer.  No loopback phase: lwiperf has one listener and the C6T round
@@ -149,7 +159,7 @@
 #define AP_TCPDN_MS		12000u
 #define AP_UDPDN_MS		12000u
 #define AP_TCPUP_MS		30000u
-#define AP_UDPUP_MS		20000u
+#define AP_UDPUP_MS		18000u
 #define AP_PEER_MS		3000u
 #define AP_UDP_RATE_10		10000u
 
@@ -329,24 +339,35 @@ static const struct ap_phase ap_plan[] = {
 #define AP_PLAN_LEN	(sizeof(ap_plan) / sizeof(ap_plan[0]))
 #define AP_TRAFFIC_PHASES	5u
 
+struct ap_snap {
+	struct lkpi_net_diag diag;
+	struct lkpi_net_stack_diag stack;
+	struct lkpi_skb_pool_stats pool;
+	struct lkpi_tx_health txh;
+};
+
+static void
+ap_snap_take(struct ap_snap *s)
+{
+	(void)memset(s, 0, sizeof(*s));
+	lkpi_net_diag(&s->diag);
+	lkpi_net_stack_diag(&s->stack);
+	lkpi_skb_pool_stats(&s->pool);
+	lkpi_tx_health_get(&s->txh);
+}
+
 static int
 ap_run_phase(unsigned int n, const struct ap_phase *ph)
 {
 	struct lkpi_net_phase r;
-	struct lkpi_net_stack_diag s0, s1;
-	struct lkpi_net_diag d0, d1;
+	struct ap_snap a0, a1;
 	struct lkpi_usb_chusb_stats u0, u1;
 	int rc;
 
 	(void)memset(&r, 0, sizeof(r));
-	(void)memset(&s0, 0, sizeof(s0));
-	(void)memset(&s1, 0, sizeof(s1));
-	(void)memset(&d0, 0, sizeof(d0));
-	(void)memset(&d1, 0, sizeof(d1));
 	(void)memset(&u0, 0, sizeof(u0));
 	(void)memset(&u1, 0, sizeof(u1));
-	lkpi_net_stack_diag(&s0);
-	lkpi_net_diag(&d0);
+	ap_snap_take(&a0);
 	lkpi_usb_cherryusb_stats(&u0);
 	CASE_ANCHOR("rtw89_ap: phase %u begin proto=%s role=%s air=%s "
 		    "port=%u window_ms=%u name=%s peer_ms=%u rate_kbps=%u\n",
@@ -354,14 +375,18 @@ ap_run_phase(unsigned int n, const struct ap_phase *ph)
 		    ph->name, AP_PEER_MS, ph->rate_kbps);
 
 	/* The harness starts the peer on this line; the margin is bench latency
-	 * and sits outside the flow.  It is kept for every phase: the v3 arm
-	 * (no margin on the up phases) let the Pi's client connect while the
-	 * lwIP iperf server was still entering its serve loop, and the second
-	 * A4 boot hung in that phase (rtos-a4-3, no output after 12 min).  The
-	 * 3 s is the 8189 AP table's accepted shape; the up sink's first 3 s is
-	 * the price, and it is reported, not hidden. */
+	 * and sits outside the flow.  The 2026-11-14 a4-3 boot went silent after
+	 * the *third* phase's begin (tcpdn2), not in tcpup, so the old
+	 * "up-phase accept/serve race" story is withdrawn: the diag image drops
+	 * this margin to reproduce the timing, and the bounded core lock plus
+	 * the watchdog name where it stops. */
+#if !defined(CONFIG_RTW89_AP_NO_MARGIN)
 	osDelay(AP_PEER_MS);
+#else
+	AP_STAGE("rtw89_ap: phase %u stage margin skipped\n", n);
+#endif
 
+	AP_STAGE("rtw89_ap: phase %u stage call\n", n);
 	switch (ph->kind) {
 	case AP_TCP_DOWN:
 		rc = lkpi_net_iperf_up(RTW89_AP_PEER_IP, ph->port,
@@ -381,24 +406,69 @@ ap_run_phase(unsigned int n, const struct ap_phase *ph)
 		rc = -1;
 		break;
 	}
+	AP_STAGE("rtw89_ap: phase %u stage returned rc=%d\n", n, rc);
 
 	CASE_ANCHOR("rtw89_ap: phase %u report bytes=%u ms=%u kbit=%u "
 		    "pkts=%u\n", n, r.bytes, r.ms, r.kbit, r.pkts);
+	/* The sender's half of the same window (UDP phases): what was offered,
+	 * what the stack refused, and where the first/last datagram sat inside
+	 * the window.  A window that is longer than the peer's flow understates
+	 * the rate; these two stamps make that visible. */
+	CASE_ANCHOR("rtw89_ap: phase %u udp offered=%u tx_err=%u rx_drop=%u "
+		    "first_ms=%u last_ms=%u beat=%lu stall_ms=%u\n",
+		    n, r.offered, r.tx_err, r.rx_drop, r.first_ms, r.last_ms,
+		    r.beat, r.stall_ms);
 	/* The stack's side of the same window: a phase that moved fewer bytes
 	 * than the air could carry either never sent (tcp_xmit), had segments
-	 * refused (memerr/pbuf_err/tcpseg_err), or its peer's segments were
-	 * dropped (tcp_recv vs tcp_drop).  This is the A4 first-round
-	 * observation surface, not a pass criterion. */
-	lkpi_net_stack_diag(&s1);
-	lkpi_net_diag(&d1);
+	 * refused (memerr/pbuf_err/tcpseg_err), or its peer's frames were
+	 * dropped (tcp_recv vs tcp_drop / udp_in_err). */
+	ap_snap_take(&a1);
 	lkpi_usb_cherryusb_stats(&u1);
 	CASE_ANCHOR("rtw89_ap: phase %u stack tcp_recv=%lu tcp_xmit=%lu "
 		    "tcp_drop=%lu tcp_memerr=%lu tcp_err=%lu pbuf_err=%lu "
-		    "tcpseg_err=%lu\n",
-		    n, s1.tcp_recv - s0.tcp_recv, s1.tcp_xmit - s0.tcp_xmit,
-		    s1.tcp_drop - s0.tcp_drop, s1.tcp_memerr - s0.tcp_memerr,
-		    s1.tcp_err - s0.tcp_err, s1.pbuf_err - s0.pbuf_err,
-		    s1.tcpseg_err - s0.tcpseg_err);
+		    "tcpseg_err=%lu udp_in=%lu udp_in_err=%lu udp_noport=%lu "
+		    "ip_drop=%lu ip_chkerr=%lu link_drop=%lu mbox_full=%lu\n",
+		    n,
+		    a1.stack.tcp_recv - a0.stack.tcp_recv,
+		    a1.stack.tcp_xmit - a0.stack.tcp_xmit,
+		    a1.stack.tcp_drop - a0.stack.tcp_drop,
+		    a1.stack.tcp_memerr - a0.stack.tcp_memerr,
+		    a1.stack.tcp_err - a0.stack.tcp_err,
+		    a1.stack.pbuf_err - a0.stack.pbuf_err,
+		    a1.stack.tcpseg_err - a0.stack.tcpseg_err,
+		    a1.stack.udp_in - a0.stack.udp_in,
+		    a1.stack.udp_in_err - a0.stack.udp_in_err,
+		    a1.stack.udp_noport - a0.stack.udp_noport,
+		    a1.stack.ip_drop - a0.stack.ip_drop,
+		    a1.stack.ip_chkerr - a0.stack.ip_chkerr,
+		    a1.stack.link_drop - a0.stack.link_drop,
+		    a1.stack.mbox_post_full - a0.stack.mbox_post_full);
+	/* The adapter's half: frames handed to the stack / to the driver, the
+	 * handoff cost, and the TX queue's own health.  The UDP-down arm's
+	 * fragmentation bug showed up here as tx_frames ~= 2 x datagrams; with
+	 * one pbuf per datagram the ratio must be ~1. */
+	CASE_ANCHOR("rtw89_ap: phase %u census rx_frames=%lu rx_bytes=%lu "
+		    "tx_frames=%lu tx_fail=%lu rxdlv_us=%lu txndo_us=%lu "
+		    "tx_status=%lu dequeue=%lu stopq=%lu wakeq=%lu "
+		    "skb_used=%u skb_high=%u alloc_fail=%lu data_ovf=%lu\n",
+		    n,
+		    a1.diag.rx_frames - a0.diag.rx_frames,
+		    a1.diag.rx_bytes - a0.diag.rx_bytes,
+		    a1.diag.tx_frames - a0.diag.tx_frames,
+		    a1.diag.tx_fail - a0.diag.tx_fail,
+		    (unsigned long)((a1.diag.rx_deliver_ns -
+				     a0.diag.rx_deliver_ns) / 1000u),
+		    (unsigned long)((a1.diag.tx_ndo_ns -
+				     a0.diag.tx_ndo_ns) / 1000u),
+		    a1.txh.tx_status - a0.txh.tx_status,
+		    a1.txh.dequeue_frames - a0.txh.dequeue_frames,
+		    a1.txh.stop_queue - a0.txh.stop_queue,
+		    a1.txh.wake_queue - a0.txh.wake_queue,
+		    (unsigned)a1.pool.skb_used,
+		    (unsigned)a1.pool.skb_high,
+		    (unsigned long)(a1.pool.alloc_fail - a0.pool.alloc_fail),
+		    (unsigned long)(a1.pool.data_overflow -
+				    a0.pool.data_overflow));
 	CASE_ANCHOR("rtw89_ap: phase %u usb submits=%u completes=%u "
 		    "refused=%u stage_overflow=%u slots_exhausted=%u rx=%u "
 		    "rx_err=%u\n",
@@ -409,15 +479,26 @@ ap_run_phase(unsigned int n, const struct ap_phase *ph)
 		    u1.rx_completes - u0.rx_completes,
 		    u1.rx_errors - u0.rx_errors);
 	CASE_ANCHOR("rtw89_ap: phase %u net rx_frames=%lu tx_frames=%lu "
-		    "rx_foreign=%lu rx_no_netif=%lu rx_input_fail=%lu\n",
-		    n, d1.rx_frames - d0.rx_frames,
-		    d1.tx_frames - d0.tx_frames,
-		    d1.rx_foreign - d0.rx_foreign,
-		    d1.rx_no_netif - d0.rx_no_netif,
-		    d1.rx_input_fail - d0.rx_input_fail);
+		    "rx_foreign=%lu rx_no_netif=%lu rx_input_fail=%lu "
+		    "rx_post_fail=%lu\n",
+		    n,
+		    a1.diag.rx_frames - a0.diag.rx_frames,
+		    a1.diag.tx_frames - a0.diag.tx_frames,
+		    a1.diag.rx_foreign - a0.diag.rx_foreign,
+		    a1.diag.rx_no_netif - a0.diag.rx_no_netif,
+		    a1.diag.rx_input_fail - a0.diag.rx_input_fail,
+		    a1.diag.rx_post_fail - a0.diag.rx_post_fail);
+	if (rc != 0) {
+		CASE_ANCHOR("rtw89_ap: phase %u fail rc=%d lock=%s "
+			    "held=%lums beat=%lu stall_ms=%u\n",
+			    n, rc, lkpi_net_lock_owner(),
+			    lkpi_net_lock_held_ms(), lkpi_net_tcpip_beat(),
+			    r.stall_ms);
+	}
 	CASE_ANCHOR("rtw89_ap: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);
 	return rc;
 }
+
 #endif /* AP_TP */
 
 static int
@@ -620,8 +701,9 @@ case_rtw89_ap_run(void)
 	rc = lkpi_net_iperf_server_start(AP_TCP_PORT);
 	if (rc == 0)
 		rc = lkpi_net_udp_sink_start(AP_UDP_PORT);
-	CASE_ANCHOR("rtw89_ap: server tcp=%u udp=%u ok=%d\n",
-		    AP_TCP_PORT, AP_UDP_PORT, (rc == 0) ? 1 : 0);
+	CASE_ANCHOR("rtw89_ap: server tcp=%u udp=%u ok=%d ready=%d\n",
+		    AP_TCP_PORT, AP_UDP_PORT, (rc == 0) ? 1 : 0,
+		    lkpi_net_server_ready());
 	if (rc != 0) {
 		CASE_ANCHOR("rtw89_ap: FAIL listener rc=%d\n", rc);
 		return 14;

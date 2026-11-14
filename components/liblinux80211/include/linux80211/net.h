@@ -119,6 +119,8 @@ struct lkpi_net_diag {
 	unsigned char rx_other_head[4][16];
 	unsigned long rx_no_netif;
 	unsigned long rx_input_fail;
+	unsigned long rx_alloc_fail;
+	unsigned long rx_post_fail;
 	unsigned long tx_frames;
 	unsigned long tx_fail;
 	unsigned long rx_bytes;
@@ -146,6 +148,13 @@ struct lkpi_net_phase {
 	unsigned ms;		/* the phase's own measured duration */
 	unsigned kbit;		/* kbit/s (payload, not line rate) */
 	unsigned pkts;		/* UDP datagrams (0 for TCP phases) */
+	unsigned offered;	/* sender-side bytes the phase tried to send */
+	unsigned tx_err;	/* UDP sends the stack refused */
+	unsigned rx_drop;	/* UDP datagrams the sink refused */
+	unsigned first_ms;	/* first/last datagram inside the window */
+	unsigned last_ms;
+	unsigned long beat;	/* tcpip mailbox heartbeats at the end */
+	unsigned stall_ms;	/* longest span with the heartbeat static */
 };
 
 /* Start the boot's one lwiperf TCP server on `port`.  Returns 0 when it is
@@ -214,9 +223,27 @@ struct lkpi_net_stack_diag {
 	unsigned long mbox_fetch_ok;
 	unsigned long mbox_fetch_empty;
 	unsigned long mbox_fetch_wait_ms;
+	/* The UDP/IP drops that are otherwise silent: a frame counted by the
+	 * adapter but never delivered to a UDP pcb (checksum/length) shows up
+	 * in udp_in_err, not in any netif counter. */
+	unsigned long udp_in;
+	unsigned long udp_in_err;
+	unsigned long udp_noport;
+	unsigned long udp_out;
+	unsigned long ip_drop;
+	unsigned long ip_chkerr;
+	unsigned long link_drop;
 };
 
 void lkpi_net_stack_diag(struct lkpi_net_stack_diag *out);
+
+/* The stack's core-lock witness, for the phase that stalls: a bounded take
+ * can say who held the lock and for how long, and the mailbox heartbeat says
+ * whether the TCP/IP thread is still turning. */
+int lkpi_net_server_ready(void);
+const char *lkpi_net_lock_owner(void);
+unsigned long lkpi_net_lock_held_ms(void);
+unsigned long lkpi_net_tcpip_beat(void);
 
 /* --- the monitor sink (2026-11-12, docs/HANDOFF-AC7260-MONITOR.md P3) -----
  *

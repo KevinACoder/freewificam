@@ -269,6 +269,32 @@ config RTW89_AP_TP
 	  not share an image; the two profiles are rk3568-rtw89-8851bu-ap and
 	  rk3568-rtw89-8851bu-ap-tp.
 
+config RTW89_AP_STAGE
+	bool "rtw89_ap prints three stage anchors per phase (diagnostic arm)"
+	help
+	  The 2026-11-14 a4-3 boot went silent after a phase's begin anchor.
+	  With the stages, the same silence says whether it was before the call,
+	  inside the stack's core lock, or after it.  Diagnostic only; off in
+	  every verdict image.
+
+config RTW89_AP_NO_MARGIN
+	bool "rtw89_ap skips the 3 s peer margin (reproduce the a4-3 timing)"
+	help
+	  The margin is bench latency, not part of a flow.  The diagnostic arm
+	  drops it to reproduce the timing of the boot that stalled, so the
+	  bounded core lock and the watchdog can name the holder.  Verdict
+	  images keep the margin.
+
+config APP_WATCHDOG
+	bool "liveness watchdog thread (realtime, 2 s, prints lock owner)"
+	help
+	  A realtime thread writing the polled console every 2 s: while its
+	  "WD: alive" line keeps coming, the tick, the scheduler and the console
+	  are alive and only the case's thread is stuck; when it stops, the
+	  wedge is below the scheduler.  The line also prints the stack's
+	  core-lock owner/held time and the lwIP mailbox heartbeat.  Instrument
+	  only; off in every verdict image.
+
 config LKPI_MEMCMP_TRACE
 	bool "memcmp caller census (who scans memory in a receive loop)"
 	help

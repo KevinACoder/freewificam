@@ -1,0 +1,35 @@
+# rtw89 on the RTOS line, the AP stall **diagnostic** arm: the same A4 table as
+# rk3568-rtw89-8851bu-ap-tp, plus the face the 2026-11-14 a4-3 silence needs:
+# three stage anchors per phase, the realtime watchdog (lock owner / held time
+# / lwIP mailbox heartbeat), and the peer margin dropped so the timing that
+# produced the silence is reproducible.
+#
+# This image is an instrument, not a verdict: a throughput number is only
+# written from the clean -tp profile.  The gates and the decision rules are in
+# runs/2026-11-14-rtw89-8851bu-ap-align/PREREG.md.
+#
+# The driver + stack are a GPL-2.0 link product and redistribute the Realtek
+# firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw89_ap"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW89=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_HOSTAP_AP=y
+CONFIG_RTW89_AP_TP=y
+CONFIG_RTW89_AP_STAGE=y
+CONFIG_RTW89_AP_NO_MARGIN=y
+CONFIG_APP_WATCHDOG=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW89_USB_BUS=0

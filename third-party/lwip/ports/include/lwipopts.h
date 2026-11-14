@@ -302,6 +302,15 @@
 #define MIB2_STATS                      1
 #endif
 
+/* The AP phase census (2026-11-14) needs UDP's silent-drop counters: a
+ * datagram the adapter delivered but udp_input refused (checksum/length)
+ * never reaches the sink, so only mib2.udpinerrors can name it.  The AP
+ * throughput image pays one increment per datagram; every other image keeps
+ * the shipped layout. */
+#if defined(CONFIG_RTW89_AP_TP) && CONFIG_RTW89_AP_TP
+#define MIB2_STATS                      1
+#endif
+
 /* STAT_COUNTER is u16 by default, and at line rate that is not a
  * large-number concern but a correctness one: one 10 s phase at 1 Gbit/s
  * moves far more than 65535 frames, so every frame counter wraps repeatedly

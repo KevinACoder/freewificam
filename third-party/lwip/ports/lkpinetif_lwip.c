@@ -298,6 +298,15 @@ lkpinetif_get_stack_diag(struct lkpinetif_stack_diag *out)
 	out->ip_drop = lwip_stats.ip.drop;
 	out->ip_chkerr = lwip_stats.ip.chkerr;
 	out->link_drop = lwip_stats.link.drop;
+	/* UDP's silent drops: a datagram the adapter delivered but udp_input
+	 * refused (checksum/length) never reaches the sink, so only the MIB2
+	 * counter can name it. */
+#if MIB2_STATS
+	out->udp_in = lwip_stats.mib2.udpindatagrams;
+	out->udp_in_err = lwip_stats.mib2.udpinerrors;
+	out->udp_noport = lwip_stats.mib2.udpnoports;
+	out->udp_out = lwip_stats.mib2.udpoutdatagrams;
+#endif
 	for (n = netif_list; n != NULL && i < 3U; n = n->next, i++) {
 		out->netif_up[i] = (n->flags & NETIF_FLAG_UP) ? 1UL : 0UL;
 		out->netif_link[i] = (n->flags & NETIF_FLAG_LINK_UP) ? 1UL : 0UL;

@@ -386,6 +386,19 @@ static struct udp_pcb *g_udp_sink;
 static unsigned g_udp_sink_port;
 static volatile unsigned g_udp_pkts;
 static volatile unsigned g_udp_bytes;
+static volatile unsigned g_udp_rx_drop;
+static volatile unsigned g_udp_first_abs;
+static volatile unsigned g_udp_last_abs;
+
+/* The bounded core-lock take: on timeout the witness names the holder, so a
+ * stalled phase prints a cause instead of going silent. */
+#define LKPINETIF_LOCK_MS	2000u
+
+static int
+tp_core_lock(unsigned ms)
+{
+	return lkpinetif_core_lock_timeout(ms);
+}
 
 static void
 tp_report(void *arg, enum lwiperf_report_type type,
@@ -460,7 +473,8 @@ lkpi_net_iperf_server_start(unsigned port)
 	if (port == 0u || port > 65535u)
 		return -1;
 
-	LOCK_TCPIP_CORE();
+	if (tp_core_lock(LKPINETIF_LOCK_MS) != 0)
+		return -1;
 	g_iperf_server = lwiperf_start_tcp_server(IP_ANY_TYPE, (u16_t)port,
 	    tp_report, NULL);
 	g_iperf_server_port = port;
@@ -508,6 +522,8 @@ lkpi_net_iperf_down(unsigned port, unsigned window_ms,
 		    struct lkpi_net_phase *out)
 {
 	unsigned waited;
+	unsigned long beat, last;
+	unsigned stall = 0u;
 
 	if (out == NULL)
 		return -1;
@@ -516,13 +532,28 @@ lkpi_net_iperf_down(unsigned port, unsigned window_ms,
 		return -1;
 
 	(void)lkpi_net_iperf_down_begin();
+	/* The mailbox heartbeat is the stack's own liveness: if it stops while
+	 * this loop still turns, the TCP/IP thread is wedged and the longest
+	 * static span names how long.  It is a read, not a lock. */
+	last = lkpinetif_tcpip_heartbeat();
 	for (waited = 0u; (waited < window_ms) && (tp_down_done == 0u);
-	     waited += 50u)
+	     waited += 50u) {
 		(void)osDelay(50u);
+		beat = lkpinetif_tcpip_heartbeat();
+		if (beat != last) {
+			last = beat;
+			stall = 0u;
+		} else if (stall < 60000u) {
+			stall += 50u;
+		}
+		if (stall > out->stall_ms)
+			out->stall_ms = stall;
+	}
 	lkpi_net_iperf_down_end();
 
 	tp_phase_fill(out, tp_down_done, tp_down_bytes, tp_down_ms,
 	    tp_down_kbit, 0u);
+	out->beat = last;
 
 	return (out->done != 0 && out->bytes != 0u) ? 0 : -1;
 }
@@ -534,6 +565,8 @@ lkpi_net_iperf_up(const char *peer, unsigned port, unsigned wait_ms,
 	ip_addr_t addr;
 	void *client;
 	unsigned waited;
+	unsigned long beat, last;
+	unsigned stall = 0u;
 
 	if ((out == NULL) || (peer == NULL) || (port == 0u) || (port > 65535u))
 		return -1;
@@ -547,25 +580,72 @@ lkpi_net_iperf_up(const char *peer, unsigned port, unsigned wait_ms,
 	tp_up_kbit = 0u;
 	tp_slot = TP_SLOT_UP;
 
-	LOCK_TCPIP_CORE();
+	/* A connect that never returns is what the a4-3 stall looked like (the
+	 * last anchor was the next phase's begin).  Take the core lock with a
+	 * ceiling so a wedged holder names itself instead of stopping the
+	 * transcript. */
+	if (tp_core_lock(LKPINETIF_LOCK_MS) != 0) {
+		tp_slot = TP_SLOT_NONE;
+		out->beat = lkpinetif_tcpip_heartbeat();
+		return -1;
+	}
 	client = lwiperf_start_tcp_client(&addr, (u16_t)port, LWIPERF_CLIENT,
 	    tp_report, NULL);
 	UNLOCK_TCPIP_CORE();
 	if (client == NULL) {
 		tp_slot = TP_SLOT_NONE;
+		out->beat = lkpinetif_tcpip_heartbeat();
 		return -1;
 	}
 
 	/* The client half is time-limited by lwiperf's own settings
 	 * (amount = -1000 -> 10 s), so this wait is a ceiling, not a pace. */
+	last = lkpinetif_tcpip_heartbeat();
 	for (waited = 0u; (waited < wait_ms) && (tp_up_done == 0u);
-	     waited += 50u)
+	     waited += 50u) {
 		(void)osDelay(50u);
+		beat = lkpinetif_tcpip_heartbeat();
+		if (beat != last) {
+			last = beat;
+			stall = 0u;
+		} else if (stall < 60000u) {
+			stall += 50u;
+		}
+		if (stall > out->stall_ms)
+			out->stall_ms = stall;
+	}
 
 	tp_slot = TP_SLOT_NONE;
 	tp_phase_fill(out, tp_up_done, tp_up_bytes, tp_up_ms, tp_up_kbit, 0u);
+	out->beat = last;
 
 	return (out->done != 0 && out->bytes != 0u) ? 0 : -1;
+}
+
+/* --- the stall face ------------------------------------------------------- */
+
+int
+lkpi_net_server_ready(void)
+{
+	return g_iperf_server != NULL ? 1 : 0;
+}
+
+const char *
+lkpi_net_lock_owner(void)
+{
+	return lkpinetif_core_lock_owner();
+}
+
+unsigned long
+lkpi_net_lock_held_ms(void)
+{
+	return lkpinetif_core_lock_held_ms();
+}
+
+unsigned long
+lkpi_net_tcpip_beat(void)
+{
+	return lkpinetif_tcpip_heartbeat();
 }
 
 static void
@@ -577,8 +657,13 @@ udp_sink_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 	(void)addr;
 	(void)port;
 
-	if (p == NULL)
+	if (p == NULL) {
+		g_udp_rx_drop++;
 		return;
+	}
+	if (g_udp_pkts == 0u)
+		g_udp_first_abs = (unsigned)sys_now();
+	g_udp_last_abs = (unsigned)sys_now();
 	g_udp_pkts++;
 	g_udp_bytes += p->tot_len;
 	pbuf_free(p);
@@ -594,7 +679,8 @@ lkpi_net_udp_sink_start(unsigned port)
 	if (port == 0u || port > 65535u)
 		return -1;
 
-	LOCK_TCPIP_CORE();
+	if (tp_core_lock(LKPINETIF_LOCK_MS) != 0)
+		return -1;
 	pcb = udp_new();
 	if (pcb != NULL) {
 		udp_recv(pcb, udp_sink_recv, NULL);
@@ -623,9 +709,13 @@ lkpi_net_udp_sink_window(unsigned window_ms, struct lkpi_net_phase *out)
 		return -1;
 	memset(out, 0, sizeof(*out));
 
-	LOCK_TCPIP_CORE();
+	if (tp_core_lock(LKPINETIF_LOCK_MS) != 0)
+		return -1;
 	g_udp_pkts = 0u;
 	g_udp_bytes = 0u;
+	g_udp_rx_drop = 0u;
+	g_udp_first_abs = 0u;
+	g_udp_last_abs = 0u;
 	UNLOCK_TCPIP_CORE();
 
 	t0 = (unsigned)sys_now();
@@ -635,6 +725,12 @@ lkpi_net_udp_sink_window(unsigned window_ms, struct lkpi_net_phase *out)
 
 	tp_phase_fill(out, (g_udp_bytes != 0u), g_udp_bytes, ms,
 	    tp_kbit(g_udp_bytes, ms), g_udp_pkts);
+	out->rx_drop = g_udp_rx_drop;
+	if (g_udp_first_abs != 0u) {
+		out->first_ms = (g_udp_first_abs > t0) ? g_udp_first_abs - t0 : 0u;
+		out->last_ms = (g_udp_last_abs > t0) ? g_udp_last_abs - t0 : 0u;
+	}
+	out->beat = lkpinetif_tcpip_heartbeat();
 
 	return (g_udp_bytes != 0u) ? 0 : -1;
 }
@@ -644,12 +740,14 @@ lkpi_net_udp_blast(const char *peer, unsigned port, unsigned window_ms,
 		   unsigned rate_kbps, struct lkpi_net_phase *out)
 {
 	struct udp_pcb *pcb;
-	struct pbuf *p;
 	ip_addr_t addr;
-	uint64_t t0, deadline;
+	uint64_t t0, deadline, next;
+	uint32_t budget = 0u;
 	unsigned sent = 0u;
 	unsigned pkts = 0u;
-	unsigned per_quantum;
+	unsigned errs = 0u;
+	unsigned first_ms = 0u;
+	unsigned last_ms = 0u;
 	unsigned ms;
 
 	if ((out == NULL) || (peer == NULL) || (port == 0u) || (port > 65535u))
@@ -661,62 +759,100 @@ lkpi_net_udp_blast(const char *peer, unsigned port, unsigned window_ms,
 	pcb = udp_new();
 	if (pcb == NULL)
 		return -1;
-	p = pbuf_alloc(PBUF_TRANSPORT, LKPINETIF_UDP_BLAST_LEN, PBUF_RAM);
-	if (p == NULL) {
-		udp_remove(pcb);
-		return -1;
-	}
-	(void)memset(p->payload, 0x5au, LKPINETIF_UDP_BLAST_LEN);
 	if (udp_connect(pcb, &addr, (u16_t)port) != ERR_OK) {
-		pbuf_free(p);
 		udp_remove(pcb);
 		return -1;
 	}
 
-	/* sys_now() is the stack's own millisecond clock; a 1 ms quantum on a
-	 * 20 s window is 0.005%, far below the phase's own noise.
+	/* Pacing: `rate_kbps` is spent from a byte budget in 10 ms quanta, so
+	 * the offered rate is the requested one.  The old shape divided
+	 * rate/8/100 by the datagram length with integer truncation, which sent
+	 * a "10 Mbit/s" phase at 11.76 Mbit/s.
 	 *
-	 * Pacing: `rate_kbps` is split into 10 ms quanta (a 10 ms burst is short
-	 * enough for the TCP/IP thread and the RX path to run between bursts).
-	 * An unpaced blast is kept for the wired capacity shape, but on Wi-Fi it
-	 * overruns the skb pool and the transmit entry refuses most frames - the
-	 * delivered byte count then measures backpressure, not capacity. */
-	/* bytes per 10 ms = rate/8/100; split into full datagrams */
-	per_quantum = (rate_kbps != 0u)
-		? (unsigned)(((uint64_t)rate_kbps * 1000u) / 8u / 100u /
-			     LKPINETIF_UDP_BLAST_LEN)
-		: LKPINETIF_UDP_BLAST_BURST;
-	if (per_quantum == 0u)
-		per_quantum = 1u;
+	 * One pbuf per datagram, freed after the send.  lwIP adds the UDP/IP/
+	 * Ethernet headers to the caller's pbuf and never removes them, so the
+	 * old reuse of a single pbuf carried 42 stale header bytes as payload:
+	 * every datagram became a 1540-byte IP packet, the peer saw two IP
+	 * fragments per datagram, and reassembly loss measured as "UDP down
+	 * loss" (2026-11-14 pcap: 1559+127-byte frame pairs, UDP length 1520).
+	 */
 	t0 = (uint64_t)sys_now();
 	deadline = t0 + (uint64_t)window_ms;
+	next = t0;
 	for (;;) {
 		unsigned before = pkts;
+		unsigned want;
 		unsigned i;
 
-		LOCK_TCPIP_CORE();
-		for (i = 0u; i < per_quantum; i++) {
-			if (udp_send(pcb, p) != ERR_OK)
+		if (rate_kbps != 0u) {
+			/* 5 ms quanta, slept to the *next* boundary rather than a
+			 * fixed delay after the work: the old 10 ms + work period
+			 * ran at ~550 datagrams/s and made a "10M" phase offer
+			 * 6.4 Mbit/s (2026-11-14 rtos-ap1). */
+			next += 5u;
+			budget += (uint32_t)(((uint64_t)rate_kbps * 1000u) / 8u /
+					     200u);
+			want = budget / LKPINETIF_UDP_BLAST_LEN;
+			if (want > 5u)
+				want = 5u;
+		} else {
+			want = LKPINETIF_UDP_BLAST_BURST;
+		}
+
+		if (tp_core_lock(LKPINETIF_LOCK_MS) != 0) {
+			errs++;
+			break;
+		}
+		for (i = 0u; i < want; i++) {
+			struct pbuf *p;
+			err_t err;
+
+			p = pbuf_alloc(PBUF_TRANSPORT, LKPINETIF_UDP_BLAST_LEN,
+				       PBUF_RAM);
+			if (p == NULL) {
+				errs++;
 				break;
+			}
+			(void)memset(p->payload, 0x5au, LKPINETIF_UDP_BLAST_LEN);
+			err = udp_send(pcb, p);
+			if (err != ERR_OK) {
+				errs++;
+				pbuf_free(p);
+				break;
+			}
+			pbuf_free(p);
+			if (budget >= LKPINETIF_UDP_BLAST_LEN)
+				budget -= LKPINETIF_UDP_BLAST_LEN;
+			if (pkts == 0u)
+				first_ms = (unsigned)((uint64_t)sys_now() - t0);
+			last_ms = (unsigned)((uint64_t)sys_now() - t0);
 			pkts++;
-			sent += p->tot_len;
+			sent += LKPINETIF_UDP_BLAST_LEN;
 		}
 		UNLOCK_TCPIP_CORE();
-		if (pkts == before) {
-			/* The transmit ring is full: one tick for the
-			 * completion path is enough to make progress. */
+		if (budget > 5u * LKPINETIF_UDP_BLAST_LEN)
+			budget = 5u * LKPINETIF_UDP_BLAST_LEN;
+		if (rate_kbps == 0u && pkts == before) {
 			(void)osDelay(1u);
 		}
-		if (rate_kbps != 0u)
-			(void)osDelay(10u);
+		if (rate_kbps != 0u) {
+			uint64_t now = (uint64_t)sys_now();
+
+			if (now < next)
+				(void)osDelay((unsigned)(next - now));
+		}
 		if ((uint64_t)sys_now() >= deadline)
 			break;
 	}
 	ms = (unsigned)((uint64_t)sys_now() - t0);
 
 	tp_phase_fill(out, (sent != 0u), sent, ms, tp_kbit(sent, ms), pkts);
+	out->offered = sent;
+	out->tx_err = errs;
+	out->first_ms = first_ms;
+	out->last_ms = last_ms;
+	out->beat = lkpinetif_tcpip_heartbeat();
 
-	pbuf_free(p);
 	udp_remove(pcb);
 	return (sent != 0u) ? 0 : -1;
 }
@@ -789,6 +925,8 @@ lkpi_net_diag(struct lkpi_net_diag *out)
 	}
 	out->rx_no_netif = d.rx_no_netif;
 	out->rx_input_fail = d.rx_input_fail;
+	out->rx_alloc_fail = d.rx_alloc_fail;
+	out->rx_post_fail = d.rx_post_fail;
 	out->tx_frames = d.tx_frames;
 	out->tx_fail = d.tx_fail;
 	out->rx_bytes = d.rx_bytes;
@@ -822,4 +960,11 @@ lkpi_net_stack_diag(struct lkpi_net_stack_diag *out)
 	out->mbox_fetch_ok = d.mbox_fetch_ok;
 	out->mbox_fetch_empty = d.mbox_fetch_empty;
 	out->mbox_fetch_wait_ms = (unsigned long)d.mbox_fetch_wait_ms;
+	out->udp_in = d.udp_in;
+	out->udp_in_err = d.udp_in_err;
+	out->udp_noport = d.udp_noport;
+	out->udp_out = d.udp_out;
+	out->ip_drop = d.ip_drop;
+	out->ip_chkerr = d.ip_chkerr;
+	out->link_drop = d.link_drop;
 }

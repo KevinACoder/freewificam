@@ -62,7 +62,7 @@ static void fatal(const char *what)
 	}
 }
 
-#if defined(CONFIG_NETIO_WATCHDOG)
+#if defined(CONFIG_APP_WATCHDOG)
 #include "log.h"
 
 /*
@@ -73,6 +73,9 @@ static void fatal(const char *what)
  */
 extern const char *sys_arch_core_lock_owner(void);
 extern unsigned long sys_arch_core_lock_held_ms(void);
+/* the lwIP arm's mailbox heartbeat; weak so an image without the net case
+ * still links the watchdog. */
+extern unsigned long lkpi_net_tcpip_beat(void) __attribute__((weak));
 #if defined(RTOS_CASE_RTW88_NETIO) || defined(RTOS_CASE_RTW89_NETIO)
 void lkpi80211_rx_boundary_counters(uint32_t *in, uint32_t *refused,
 				    uint32_t *drops, uint32_t *frames,
@@ -101,12 +104,14 @@ static void watchdog_entry(void *arg)
 		uint32_t in = 0, ref = 0, drop = 0, frames = 0, q = 0;
 
 		lkpi80211_rx_boundary_counters(&in, &ref, &drop, &frames, &q);
-		board_log_emergency("WD: alive rx_in=%lu rx_q=%lu lock=%s held=%lums\n",
+		board_log_emergency("WD: alive rx_in=%lu rx_q=%lu lock=%s held=%lums beat=%lu\n",
 		    (unsigned long)in, (unsigned long)q,
-		    sys_arch_core_lock_owner(), sys_arch_core_lock_held_ms());
+		    sys_arch_core_lock_owner(), sys_arch_core_lock_held_ms(),
+		    (lkpi_net_tcpip_beat != NULL) ? lkpi_net_tcpip_beat() : 0ul);
 #else
-		board_log_emergency("WD: alive lock=%s held=%lums\n",
-		    sys_arch_core_lock_owner(), sys_arch_core_lock_held_ms());
+		board_log_emergency("WD: alive lock=%s held=%lums beat=%lu\n",
+		    sys_arch_core_lock_owner(), sys_arch_core_lock_held_ms(),
+		    (lkpi_net_tcpip_beat != NULL) ? lkpi_net_tcpip_beat() : 0ul);
 #endif
 		(void)osDelay(2000u);
 	}
@@ -165,7 +170,7 @@ int main(void)
 	}
 	uart_early_puts("Hz\n");
 
-#if defined(CONFIG_NETIO_WATCHDOG)
+#if defined(CONFIG_APP_WATCHDOG)
 	if (watchdog_start() != 0)
 		fatal("watchdog thread create failed");
 #endif
