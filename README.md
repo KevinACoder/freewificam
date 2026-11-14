@@ -325,9 +325,10 @@ excluded from TCP).  It is a fallback, recorded in the round's PREREG section
 
 The TCP cells are a 10 s common window: the GT flow ends at 10.4 s and the
 RTOS phase runs 24 s, so the whole-window RTOS numbers are higher (7.95 / 6.86
-up) and are not the cells.  The UDP downlink has no common GT cell (the old GT
-40 M arm used a different offered rate and receiver); it is judged by the
-pre-registered absolute gate, at least 8.0 Mbit/s and at most 2% loss.  The
+up) and are not the cells.  The UDP downlink has no common GT cell (the GT AP
+arm's UDP down used a different offered rate and its sink was not taken); it is
+judged by the pre-registered absolute gate, at least 8.0 Mbit/s and at most 2%
+loss.  The
 mean passes (8.63, 0.96%), but ap3 alone is 7.76 Mbit/s with 1.39% loss; the
 gate uses the mean and both per-boot values are printed.  The old 15.4%
 UDP-down loss was the port's pbuf reuse: one pbuf per datagram gives one frame
