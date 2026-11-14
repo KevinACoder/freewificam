@@ -3,12 +3,21 @@
 #
 #   tools/rtos/mon-round.sh --evidence runs/<date>-iwl7260-mon/mon1
 #   tools/rtos/mon-round.sh --evidence .../mon2 --keep-pi   # second cold boot
+#   tools/rtos/mon-round.sh --card rtw89 \
+#       --evidence runs/<date>-rtw89-8851bu-mon/mon1 \
+#       --bin freewificam/tests/board/rtos/build/build/rtos-freertos.bin
 #
-# The image is `rk3568-iwl7260-mon` (tick pcie iwl7260_mon).  The bench is the
-# standard one with one change: the Pi's MT7921AU (wlan1) is a managed client of
-# lab-ap instead of a monitor, and it reconnects/pings for the whole window so
-# the capture has a station's auth/assoc/probe/data frames next to the AP's
-# beacons.  The AP itself (wlan2 / lab-ap / ch5 / 2432 MHz) is never touched.
+# The card is selected by --card (default iwl7260, so the old command is
+# unchanged):
+#   iwl7260  image `rk3568-iwl7260-mon` (tick pcie iwl7260_mon)
+#   rtw89    image `rk3568-rtw89-8851bu-mon` (tick rtw89_mon), the RTL8851BU
+#            over the DWC3 xHCI, firmware 0.29.41.5
+#
+# The bench is the standard one with one change: the Pi's MT7921AU (wlan1) is a
+# managed client of lab-ap instead of a monitor, and it reconnects/pings for the
+# whole window so the capture has a station's auth/assoc/probe/data frames next
+# to the AP's beacons.  The AP itself (wlan2 / lab-ap / ch5 / 2432 MHz) is never
+# touched.
 #
 # Outputs under --evidence: serial.log, transcript.txt, timings.json (the
 # board tool's four-piece evidence), rtos.bin + sha256, bench-gate-*.txt,
@@ -24,7 +33,8 @@ CH=${CH:-5}
 FREQ=${FREQ:-2432}
 AP_IF=${AP_IF:-wlan2}
 STA_IF=${STA_IF:-wlan1}
-MON_EXPECT_MAC=${MON_EXPECT_MAC:-6c:29:95:12:f0:d9}
+CARD=${CARD:-iwl7260}
+MON_EXPECT_MAC=${MON_EXPECT_MAC:-}
 BIN="$ROOT/tests/board/rtos/build/build/rtos-freertos.bin"
 TIMEOUT=${TIMEOUT:-420}
 EVIDENCE=
@@ -32,14 +42,34 @@ KEEP_PI=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
+		--card)     CARD=${2:?}; shift 2 ;;
 		--evidence) EVIDENCE=${2:?}; shift 2 ;;
 		--bin)      BIN=${2:?}; shift 2 ;;
 		--timeout)  TIMEOUT=${2:?}; shift 2 ;;
 		--keep-pi)  KEEP_PI=1; shift ;;
-		-h|--help)  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "mon-round: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
+
+case "$CARD" in
+	iwl7260)
+		CASE=iwl7260_mon
+		EXPECT_CASES=tick,pcie,iwl7260_mon
+		ANCHOR="iwl7260_mon: core ready"
+		MON_EXPECT_MAC=${MON_EXPECT_MAC:-6c:29:95:12:f0:d9}
+		;;
+	rtw89)
+		CASE=rtw89_mon
+		EXPECT_CASES=tick,rtw89_mon
+		ANCHOR="rtw89_mon: core ready"
+		MON_EXPECT_MAC=${MON_EXPECT_MAC:-90:de:80:1b:25:ed}
+		;;
+	*)
+		echo "mon-round: --card must be iwl7260 or rtw89" >&2
+		exit 2
+		;;
+esac
 [ -n "$EVIDENCE" ] || { echo "mon-round: --evidence DIR is required" >&2; exit 2; }
 mkdir -p "$EVIDENCE"
 EVIDENCE=$(cd "$EVIDENCE" && pwd)
@@ -63,7 +93,7 @@ scp -q -o BatchMode=yes "$HERE/pi-mon-sta.sh" "$PI:/tmp/pi-mon-sta.sh"
 pisu "chmod 755 /tmp/pi-mon-sta.sh"
 
 {
-	echo "tag=$TAG"
+	echo "tag=$TAG card=$CARD case=$CASE"
 	echo "time=$(date -Is)"
 	echo "channel=$CH freq=$FREQ ssid=$SSID expect_mac=$MON_EXPECT_MAC"
 	pi 'systemctl is-active lab-ap 2>/dev/null || true'
@@ -71,8 +101,9 @@ pisu "chmod 755 /tmp/pi-mon-sta.sh"
 	pisu "bash /tmp/pi-mon-sta.sh status" || true
 } > "$EVIDENCE/bench-gate-before.txt" 2>&1 || true
 
-# The AP gate: the standard bench's AP must be the one the GT arm captured
-# beacons from, or the two arms are not the same measurement.
+# The AP gate: the standard bench's AP must be the one the round is tuned to,
+# or the monitor is counting a different BSS.  Both cards use the same bench
+# AP on the same channel; only the DUT and its case name change.
 pisu "iw dev $AP_IF info" 2>/dev/null | grep -q "channel $CH " \
 	|| { echo "mon-round: $AP_IF is not the AP on channel $CH" >&2; exit 3; }
 
@@ -95,10 +126,27 @@ sha256sum "$EVIDENCE/rtos.bin" > "$EVIDENCE/rtos-bin.sha256"
 	>"$EVIDENCE/boot.out" 2>&1 || true
 sleep 2
 
+# boot-rtos.sh --retry 1 writes a retried boot under attempt-2/; the top
+# level then has only the failed attempt's empty serial.log.  The boot that
+# counts is the retried one, so promote its four-piece files and say so.
+BOOTDIR=$EVIDENCE
+if ! [ -s "$EVIDENCE/serial.log" ]; then
+	LATEST=$(ls -dt "$EVIDENCE"/attempt-*/serial.log 2>/dev/null | head -1 || true)
+	if [ -n "$LATEST" ] && [ -s "$LATEST" ]; then
+		BOOTDIR=$(dirname "$LATEST")
+		for f in serial.log transcript.txt timings.json meta.txt facts.txt \
+			 milestones.tsv transfers.tsv; do
+			[ -f "$BOOTDIR/$f" ] && cp -f "$BOOTDIR/$f" "$EVIDENCE/$f"
+		done
+		echo "boot-rtos retried; the boot that counts is $(basename "$BOOTDIR")" \
+			> "$EVIDENCE/boot-retry.txt"
+	fi
+fi
+
 SERIAL="$EVIDENCE/serial.log"
-if ! [ -f "$SERIAL" ] || ! tr -d '\r' < "$SERIAL" | grep -aq 'iwl7260_mon: core ready'; then
-	echo "mon-round: INVALID BOOT: no iwl7260_mon anchors (wrong image?)" >&2
-	echo "invalid: wrong image (no iwl7260_mon anchor)" > "$EVIDENCE/invalid.txt"
+if ! [ -f "$SERIAL" ] || ! tr -d '\r' < "$SERIAL" | grep -aqF "$ANCHOR"; then
+	echo "mon-round: INVALID BOOT: no $CASE anchors (wrong image?)" >&2
+	echo "invalid: wrong image (no $CASE anchor)" > "$EVIDENCE/invalid.txt"
 	exit 2
 fi
 
@@ -112,7 +160,7 @@ grep -q "$MON_EXPECT_MAC" "$EVIDENCE/pi-station-after.txt" \
 pi "sudo -n tail -20 $PI_LOG" > "$EVIDENCE/pi-loop-tail.txt" 2>&1 || true
 
 python3 "$HERE/judge.py" "$SERIAL" --json "$EVIDENCE/judge.json" \
-	--expect cases=tick,pcie,iwl7260_mon \
+	--expect "cases=$EXPECT_CASES" \
 	>"$EVIDENCE/judge.txt" 2>&1 || true
 
 restore_pi

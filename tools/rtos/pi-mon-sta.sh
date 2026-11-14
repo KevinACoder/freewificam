@@ -62,8 +62,13 @@ nm_restore() {
     command -v nmcli >/dev/null 2>&1 || return 0
     while IFS= read -r i; do
         [ -n "$i" ] || continue
-        nmcli device set "$i" managed yes >/dev/null 2>&1 || true
-        say "nm: $i managed=yes"
+        # The standard bench's wlan1 is an *unmanaged* monitor.  Restoring it
+        # to managed makes NetworkManager turn it back into a managed client
+        # right after the type is set, and the "restored" line then lies
+        # (2026-11-14 monitor round: nm managed=yes, type managed).  Hand it
+        # back unmanaged and set the monitor type after this.
+        nmcli device set "$i" managed no >/dev/null 2>&1 || true
+        say "nm: $i managed=no"
     done < "$NM_MARK"
     rm -f "$NM_MARK"
 }
@@ -149,6 +154,10 @@ do_down() {
     iw dev "$STA_IF" disconnect >/dev/null 2>&1 || true
     ip addr flush dev "$STA_IF" 2>/dev/null || true
     ip link set "$STA_IF" down 2>/dev/null || true
+    # Hand the interface back to the unmanaged state *before* the type change:
+    # nm_restore no longer sets managed=yes, so NetworkManager will not flip it
+    # back to a client after the monitor type is set.
+    nm_restore
     iw dev "$STA_IF" set type monitor 2>&1 || say "set type monitor failed"
     ip link set "$STA_IF" up 2>/dev/null || true
     iw dev "$STA_IF" set channel "$CH" 2>&1 || say "set channel $CH failed"
@@ -156,7 +165,6 @@ do_down() {
         cat "$RPF_MARK" > /proc/sys/net/ipv4/conf/$STA_IF/rp_filter 2>/dev/null || true
         rm -f "$RPF_MARK"
     fi
-    nm_restore
     iw dev "$STA_IF" info 2>/dev/null | grep -E 'type|channel' | sed 's/^/   /' || true
     say "restored: $STA_IF monitor ch$CH, lab-ap untouched"
 }

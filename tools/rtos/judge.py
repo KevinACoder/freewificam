@@ -69,6 +69,11 @@ CASES = (
     # owns the AP MLME, mac80211 the station table, and the anchors are the
     # 8189 AP ladder's with the rtw89 USB bring-up in front.
     "rtw89_ap",
+    # The monitor role of the same USB card (runs/2026-11-14-rtw89-8851bu-mon):
+    # the same M1-M4 shape as iwl7260_mon, with the rtw89 USB bring-up in
+    # front.  The judge holds the pre-registered floor (beacons/s, radiotap,
+    # lwIP untouched, tx=0); the frame census is reported, not gated.
+    "rtw89_mon",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -615,6 +620,62 @@ PATTERNS = {
     "iwl7260_mon_pass": re.compile(r"iwl7260_mon: PASS MON", re.MULTILINE),
     "iwl7260_mon_fail": re.compile(
         r"iwl7260_mon: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    # The rtw89 monitor role's anchors: the same M1-M4 shape as the 7260,
+    # with the USB bring-up in front.  The judge holds the pre-registered
+    # floor; the frame census is reported, not gated.
+    "rtw89_mon_fwreg": re.compile(
+        r"rtw89_mon: fw registered=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_wlan0": re.compile(
+        r"rtw89_mon: wlan0 present=(?P<present>[01]) ifindex=(?P<idx>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]+) iftype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_sink": re.compile(
+        r"rtw89_mon: sink enabled=(?P<enabled>[01])", re.MULTILINE
+    ),
+    "rtw89_mon_set_iface": re.compile(
+        r"rtw89_mon: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE
+    ),
+    "rtw89_mon_set_freq": re.compile(
+        r"rtw89_mon: set_freq rc=(?P<rc>-?\d+) freq=(?P<freq>\d+)",
+        re.MULTILINE
+    ),
+    "rtw89_mon_start": re.compile(
+        r"rtw89_mon: start rc=(?P<rc>-?\d+) netif_running=(?P<run>[01]) "
+        r"devtype=(?P<type>-?\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_window": re.compile(
+        r"rtw89_mon: window ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_sink_totals": re.compile(
+        r"rtw89_mon: sink frames=(?P<frames>\d+) bytes=(?P<bytes>\d+) "
+        r"beacons=(?P<beacons>\d+) probes=(?P<probes>\d+) "
+        r"probe_resp=(?P<probe_resp>\d+) auth=(?P<auth>\d+) "
+        r"assoc=(?P<assoc>\d+) data=(?P<data>\d+) ctrl=(?P<ctrl>\d+) "
+        r"other=(?P<other>\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_radiotap": re.compile(
+        r"rtw89_mon: radiotap it_len=(?P<min>\d+)/(?P<max>\d+) "
+        r"freq=(?P<freq>\d+) bad=(?P<bad>\d+) short=(?P<short>\d+)",
+        re.MULTILINE
+    ),
+    "rtw89_mon_lwip_in": re.compile(
+        r"rtw89_mon: lwip in rx_frames=(?P<frames>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) tx_frames=(?P<tx>\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_lwip_out": re.compile(
+        r"rtw89_mon: lwip out rx_frames=(?P<frames>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) tx_frames=(?P<tx>\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_tx": re.compile(
+        r"rtw89_mon: tx dev tx_packets=(?P<pkts>\d+) "
+        r"tx_bytes=(?P<bytes>\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_pass": re.compile(r"rtw89_mon: PASS MON", re.MULTILINE),
+    "rtw89_mon_fail": re.compile(
+        r"rtw89_mon: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     "iwl7260_ap_fail": re.compile(
         r"iwl7260_ap: FAIL (?P<reason>.+)$", re.MULTILINE
@@ -1390,6 +1451,10 @@ LIST_PATTERNS = {
     # The monitor round's window samples and kept frames.
     "iwl7260_mon_sample": re.compile(
         r"iwl7260_mon: sample t=(?P<t>\d+) frames=(?P<frames>\d+) "
+        r"beacons=(?P<beacons>\d+) data=(?P<data>\d+)", re.MULTILINE
+    ),
+    "rtw89_mon_sample": re.compile(
+        r"rtw89_mon: sample t=(?P<t>\d+) frames=(?P<frames>\d+) "
         r"beacons=(?P<beacons>\d+) data=(?P<data>\d+)", re.MULTILINE
     ),
     "iwl7260_mon_frame": re.compile(
@@ -3326,6 +3391,117 @@ def judge(text: str, expect: dict | None = None) -> dict:
             errors.append(f"iwl7260_mon: device tx_packets={tx['pkts']}")
         if not found["iwl7260_mon_pass"]:
             errors.append("iwl7260_mon: the PASS anchor is missing")
+
+    if cases.get("rtw89_mon", {}).get("verdict") == "pass":
+        fail = found["rtw89_mon_fail"]
+        if fail:
+            errors.append(f"rtw89_mon: {fail['reason']}")
+        reg = found["rtw89_mon_fwreg"]
+        if not reg:
+            errors.append("rtw89_mon: PASS without the firmware-registry line")
+        elif int(reg["rc"]) != 0:
+            errors.append(f"rtw89_mon: firmware registration rc={reg['rc']}")
+        wl = found["rtw89_mon_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("rtw89_mon: wlan0 is missing")
+        elif int(wl["idx"]) == 0:
+            errors.append("rtw89_mon: wlan0 has ifindex=0")
+        elif wl["type"] != "2":
+            errors.append(
+                f"rtw89_mon: wlan0 boot type={wl['type']}, expected "
+                "STATION (2) before the type change")
+        sink = found["rtw89_mon_sink"]
+        if not sink or sink["enabled"] != "1":
+            errors.append("rtw89_mon: the monitor sink is not enabled")
+        seti = found["rtw89_mon_set_iface"]
+        if not seti:
+            errors.append("rtw89_mon: PASS without the set_iface line")
+        elif int(seti["rc"]) != 0 or seti["type"] != "6":
+            errors.append(
+                f"rtw89_mon: set_iface rc={seti['rc']} type={seti['type']}, "
+                "expected rc=0 type=6 (MONITOR)")
+        else:
+            notes.append("rtw89_mon: set_iface rc=0 type=6")
+        freq = found["rtw89_mon_set_freq"]
+        if not freq:
+            errors.append("rtw89_mon: PASS without the set_freq line")
+        elif int(freq["rc"]) != 0:
+            errors.append(f"rtw89_mon: set_freq rc={freq['rc']}")
+        else:
+            notes.append(f"rtw89_mon: set_freq rc=0 freq={freq['freq']}")
+        st = found["rtw89_mon_start"]
+        if not st:
+            errors.append("rtw89_mon: PASS without the start line")
+        elif int(st["rc"]) != 0 or st["run"] != "1":
+            errors.append(
+                f"rtw89_mon: start rc={st['rc']} running={st['run']}")
+        elif st["type"] != "803":
+            errors.append(
+                f"rtw89_mon: devtype={st['type']}, expected "
+                "ARPHRD_IEEE80211_RADIOTAP (803)")
+        window = found["rtw89_mon_window"]
+        totals = found["rtw89_mon_sink_totals"]
+        radiotap = found["rtw89_mon_radiotap"]
+        if not window or not totals:
+            errors.append(
+                "rtw89_mon: PASS without the window and sink totals")
+        else:
+            ms = int(window["ms"])
+            beacons = int(totals["beacons"])
+            rate = (beacons * 1000) // ms if ms > 0 else 0
+            if rate < 8:
+                errors.append(
+                    f"rtw89_mon: {beacons} beacons in {ms} ms = "
+                    f"{rate}/s, below the 8/s floor")
+            else:
+                notes.append(
+                    f"rtw89_mon: {totals['frames']} frames, "
+                    f"{beacons} beacons ({rate}/s), "
+                    f"{totals['data']} data")
+        samples = found["rtw89_mon_sample"]
+        if len(samples) < 2:
+            errors.append(f"rtw89_mon: only {len(samples)} window samples")
+        else:
+            first = int(samples[0]["beacons"])
+            last = int(samples[-1]["beacons"])
+            if last <= first:
+                errors.append(
+                    f"rtw89_mon: beacons did not rise ({first} -> {last})")
+        if not radiotap:
+            errors.append("rtw89_mon: PASS without the radiotap line")
+        else:
+            if int(radiotap["bad"]) != 0:
+                errors.append(
+                    f"rtw89_mon: {radiotap['bad']} bad radiotap headers")
+            if int(radiotap["min"]) < 8:
+                errors.append(
+                    f"rtw89_mon: radiotap it_len min={radiotap['min']}")
+            if freq and int(radiotap["freq"]) != int(freq["freq"]):
+                errors.append(
+                    f"rtw89_mon: radiotap freq={radiotap['freq']} but the "
+                    f"channel was set to {freq['freq']}")
+            else:
+                notes.append(
+                    f"rtw89_mon: radiotap it_len="
+                    f"{radiotap['min']}-{radiotap['max']} "
+                    f"freq={radiotap['freq']}")
+        lin = found["rtw89_mon_lwip_in"]
+        lout = found["rtw89_mon_lwip_out"]
+        if not lin or not lout:
+            errors.append("rtw89_mon: PASS without the lwIP before/after")
+        elif lin["frames"] != lout["frames"]:
+            errors.append(
+                f"rtw89_mon: lwIP rx_frames grew {lin['frames']} -> "
+                f"{lout['frames']} (monitor frames reached the stack)")
+        elif lout["tx"] != "0":
+            errors.append(f"rtw89_mon: lwIP tx_frames={lout['tx']}")
+        tx = found["rtw89_mon_tx"]
+        if not tx:
+            errors.append("rtw89_mon: PASS without the device tx line")
+        elif tx["pkts"] != "0":
+            errors.append(f"rtw89_mon: device tx_packets={tx['pkts']}")
+        if not found["rtw89_mon_pass"]:
+            errors.append("rtw89_mon: the PASS anchor is missing")
 
     if cases.get("iwl7260_stab", {}).get("verdict") == "pass":
         fail = found["iwl7260_stab_fail"]

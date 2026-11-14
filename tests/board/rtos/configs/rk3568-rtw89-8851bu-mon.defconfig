@@ -1,0 +1,38 @@
+# rtw89 on the RTOS line, the monitor role: the RTL8851BU (USB) becomes an
+# RX-only monitor on the bench AP's channel (ch5/2432, HT20) for a 15 s
+# window, and the port's monitor sink counts the frames.  No AP MLME and no
+# netif: the frames' consumer is the sink, not lwIP.
+#
+# The role change is the real NL80211_CMD_SET_INTERFACE(MONITOR) with the
+# device down, then dev_open, then NL80211_CMD_SET_WIPHY(freq): cfg80211's
+# cfg80211_set_monitor_channel() refuses while no monitor is running, so the
+# channel can only be set after the interface is up.
+#
+# The lwIP component is still linked because its adapter counters are M4's
+# witness that monitor frames did not become stack frames; no netif is brought
+# up, so nothing is transmitted.
+#
+# No same-card Linux monitor arm is taken this round: the reference is the
+# bench AP's 100 TU cadence, stated in README and CONSOLE-EVIDENCE.  The
+# driver + stack are a GPL-2.0 link product; the rtw8851b firmware is
+# redistributed with the image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw89_mon"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW89=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW89_USB_BUS=0
+CONFIG_MON_FREQ=2432
+CONFIG_MON_WINDOW_MS=15000
