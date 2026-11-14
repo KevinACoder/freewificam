@@ -1,0 +1,30 @@
+# rtw88 on the RTOS line, C5 + the workqueue-priority diagnostic arm.
+#
+# The 2026-11-14 EHCI C5 rounds printed "failed to get tx report from
+# firmware": the driver enqueues the rate-adaptation frames for a firmware
+# C2H report and purges them after 500 ms when the report's work has not run.
+# The C2H work is on mac80211's ordered workqueue at Normal (24); tcpip runs at
+# 40.  This arm lifts every lkpi workqueue to Realtime (CONFIG_LKPI_WQ_FORCE_HIGHPRI)
+# and is perturbation only: its numbers are not a baseline.
+#
+# Everything else is rk3568-rtw88-8821cu-c5.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw88_c5"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW88=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW88_C5_PEER_WINDOW_MS=12000
+CONFIG_RTW88_USB_BUS=1
+CONFIG_LKPI_WQ_FORCE_HIGHPRI=y

@@ -232,6 +232,46 @@ config RTW89_USB_BUS
 	  profile changing this must say in its run record.
 
 
+config RTW88_USB_BUS
+	int "rtw88 USB controller family (0 = xHCI roots 3,2; 1 = EHCI roots 1,0)"
+	default 1
+	range 0 1
+	help
+	  The two controller lists available on this board.  The 2026-11-14
+	  preflight put this bench's 8821CU on the USB2 EHCI root at
+	  0xFD880000 (busid 1, path 1-1.1 after the 0bda:1a2b -> c820 eject),
+	  so 1 (the EHCI pair) is the 8821CU default.  0 is the DWC3 xHCI pair
+	  the 8851BU uses (busid 3); a profile that changes this must say so in
+	  its run record, and the case prints the list it tried either way.
+
+config RTW88_C5_PEER_WINDOW_MS
+	int "rtw88 C5 peer-arm window (ms)"
+	default 12000
+	range 1000 30000
+	help
+	  How long the C5 case holds the link idle for the host's AP->board
+	  arm (the Pi's two ICMP rounds and its station dump).  The 8851BU
+	  arm uses 12000; too short a window puts the last packets after the
+	  case's own ping and measures contention.
+
+config RTW88_C6_UDPUP_KBPS
+	int "rtw88 C6 UDP-up offered rate (kbit/s)"
+	default 10000
+	range 1000 60000
+	help
+	  The paced UDP-up blast's offered rate.  The GT arm runs 10/20/40
+	  Mbit/s rungs; the gate rate is the highest GT rung with <=1% loss,
+	  so this profile value is set from that GT result (the default 10M is
+	  the floor, not a guess at the link's ceiling).
+
+config RTW88_C6_SKIP_LOOPBACK
+	bool "skip the board-local loopback phase (diagnostic arm)"
+	help
+	  The loopback phase starts an lwiperf client to 127.0.0.1 on the same
+	  port the external listener owns, which consumes the single server
+	  session.  The diagnostic arm skips the phase (it is attribution only,
+	  never a gate); the delivery arm keeps the full seven-phase table.
+
 config RTW89_C6_SKIP_LOOPBACK
 	bool "skip the board-local loopback phase (diagnostic arm)"
 	help

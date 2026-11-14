@@ -1323,6 +1323,14 @@ struct workqueue_struct *lkpi_alloc_workqueue(const char *fmt, int flags,
 	 * a softirq outranks a task - and is created with WQ_HIGHPRI. */
 	attr.priority = (flags & WQ_HIGHPRI) ? osPriorityAboveNormal
 					     : osPriorityNormal;
+#ifdef CONFIG_LKPI_WQ_FORCE_HIGHPRI
+	/* Diagnostic arm (2026-11-14, 8821CU C5): the rate-report work sits at
+	 * Normal while tcpip runs at 40; the driver purges a report that has not
+	 * been handled within 500 ms.  This arm lifts every workqueue to
+	 * Realtime so the C2H work can run inside that window; it is off in
+	 * every delivery image. */
+	attr.priority = osPriorityRealtime;
+#endif
 	impl->thread = osThreadNew(lkpi_worker_entry, impl, &attr);
 	if (impl->thread == NULL) {
 		(void)osMessageQueueDelete(impl->mq);

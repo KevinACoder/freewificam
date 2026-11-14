@@ -29,7 +29,8 @@
 # both lists see the same answer).
 WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g iwl7260_mon \
 	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap \
-	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon
+	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
+	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -78,6 +79,21 @@ else
 WL80211_RTW89_SRCS :=
 endif
 
+# rtw88 is a fourth driver world, same shape: the 8821CU's 20 units under its
+# own face (wireless-drivers/rtw88/driver_config.h) and its own compile rule.
+# The USB engine and the CherryUSB adapter stay the component's bus/port
+# groups, not part of this list.
+ifeq ($(CONFIG_LIBLINUX80211_RTW88),1)
+# The rtw8821c blob is generated from the pinned firmware image by
+# fw-blobs.py and compiled into the driver world; without it the driver's
+# request_firmware has nothing to find (the registry is the image's only
+# filesystem).
+WL80211_RTW88_SRCS := $(RTW88_IMPL_SRCS) $(LIB8)/fw/rtw8821c_fw_blob.c \
+	$(RTW88_DIR)/ports/rtos/rtw88_diag.c
+else
+WL80211_RTW88_SRCS :=
+endif
+
 WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 # The C4/C5 bench seam, not a stack TU: it builds the real attribute bytes and
@@ -86,6 +102,7 @@ WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app
 # port shim: a link-time --wrap around the stack's transmit dequeue, stating the
 # port's deferred-context answer (see its header).
 WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
+	$(LIB8)/c2h_inline.c \
 	$(LIB8)/tx_dequeue_context.c \
 	$(LIB8)/hostap_rx_wrap.c \
 	$(LIB8)/hostap_nl80211.c \
@@ -95,6 +112,10 @@ WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
 # meaningful when the stack is linked, and it applies to every reference
 # (iwlwifi's iTXQ wake path is the one that matters).
 WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
+	-Wl,--wrap=ieee80211_queue_work \
+	-Wl,--wrap=rtw_fw_c2h_cmd_rx_irqsafe \
+	-Wl,--wrap=rtw_tx_report_handle \
+	-Wl,--wrap=ieee80211_amsdu_to_8023s \
 	-Wl,--wrap=cfg80211_rx_mgmt_ext \
 	-Wl,--wrap=ieee80211_tx_status_skb \
 	-Wl,--wrap=ieee80211_stop_queue \
@@ -181,7 +202,8 @@ WL80211_HOSTAP_FP_SRCS := $(THIRD_PARTY)/wpa_supplicant-rtos/wpa_supplicant/even
 WL80211_HOSTAP_FP_CFLAGS := $(filter-out -mgeneral-regs-only,$(WL80211_HOSTAP_CFLAGS))
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
-	$(WL80211_RTW89_SRCS) $(WL80211_RTL8189FS_SRCS) $(WL80211_CASE_SRCS) \
+	$(WL80211_RTW89_SRCS) $(WL80211_RTW88_SRCS) \
+	$(WL80211_RTL8189FS_SRCS) $(WL80211_CASE_SRCS) \
 	$(WL80211_PROBE_SRCS) $(WL80211_HOSTAP_SRCS) $(WL80211_HOSTAP_FP_SRCS)
 
 endif

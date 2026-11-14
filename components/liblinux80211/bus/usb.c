@@ -2508,11 +2508,19 @@ int
 usb_control_msg(struct usb_device *dev, unsigned int pipe, u8 request,
     u8 requesttype, u16 value, u16 index, void *data, u16 size, int timeout)
 {
+	/* The controller DMAs into the data stage and reads the setup packet.
+	 * Both live in the non-cacheable window: a cacheable stage made the
+	 * CPU read whatever cache line the previous transfer left behind (the
+	 * 8821CU's efuse power block read back as 0xFF while its first block
+	 * was valid, 2026-11-14), which is a DMA-coherence bug, not a device
+	 * one.  The window is the same one the coherent pool and the adapter's
+	 * stage buffers use. */
 	static struct lkpi_usb_setup_packet setup
-	    __attribute__((aligned(64)));
+	    __attribute__((aligned(64), section(".noncacheable")));
 	/* the widest control data stage the seam accepts; a larger request is
 	 * refused with -ENOMEM rather than truncated */
-	static u8 stage[2048] __attribute__((aligned(64)));
+	static u8 stage[2048]
+	    __attribute__((aligned(64), section(".noncacheable")));
 	struct lkpi_usb_be_hubport *hport = lkpi_usb_hport(dev);
 	bool is_in = (requesttype & USB_DIR_IN) != 0;
 	int ret;

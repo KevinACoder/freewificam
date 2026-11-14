@@ -1,0 +1,29 @@
+# rtw88 on the RTOS line, C4: C3's attach plus the real NL80211_CMD_TRIGGER_SCAN
+# through nl80211's handlers -> mac80211's SW scan -> rtw88's channel changes and
+# USB bulk frames -> cfg80211's BSS table carries the bench AP.
+#
+# C4 is the first SW-scan driver on this port: rtw88 has no hw_scan, so the
+# scan runs on mac80211's scan work with drv_sw_scan_start/config/
+# sw_scan_complete.  A timeout here is a scan-path finding, not "the card is
+# deaf"; the run record says which of those anchors ran.
+#
+# The 32 KiB runner stack is the C4 scan chain's (the 8851BU C4 arm hit the same
+# 8 KiB overflow).  The driver + stack are a GPL-2.0 link product (LICENSES).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw88_c4"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW88=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW88_USB_BUS=1

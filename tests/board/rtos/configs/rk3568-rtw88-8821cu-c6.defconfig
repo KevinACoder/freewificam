@@ -1,0 +1,36 @@
+# rtw88 on the RTOS line, C6T: the RTL8821CU brings up the C5 ladder in the
+# same boot and then runs the seven-phase throughput table over wl0:
+# loopback (attribution only), tcpdn, udpdn, tcpdn2, udpdn2, tcpup, udpup.
+#
+# The phase table is the same one the GT arm runs (tools/gt/gt-8821cu-board.sh),
+# with the peer's stream 2 s inside each window: 30 s TCP down, 20 s UDP down,
+# 20 s TCP up, 10 s UDP up.  The UDP-up offered rate is the highest GT rung with
+# <=1% loss (the GT arm runs 10/20/40 Mbit/s); the 10M default is the floor
+# until that GT result is in the run record, not a guess at the ceiling.
+#
+# The gates (TCP down/up >= 80% of the same-day GT, UDP loss <= 1%, no >= 2 s
+# stall) are pre-registered in the project's run ledger, not in this image.
+#
+# The driver + stack are a GPL-2.0 link product and redistribute the Realtek
+# rtw8821c firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw88_c5 rtw88_c6"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW88=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW88_C5_PEER_WINDOW_MS=12000
+CONFIG_RTW88_C6_UDPUP_KBPS=10000
+CONFIG_RTW88_USB_BUS=1
+CONFIG_C6_PEER_IP="192.168.99.1"

@@ -73,6 +73,12 @@ int lkpi_nl80211_connected(struct net_device *dev, unsigned char bssid[6]);
  * handler's code; the device must be down. */
 int lkpi_nl80211_set_interface(struct net_device *dev, unsigned int type);
 
+/* NL80211_CMD_SET_POWER_SAVE: `enabled` is the PS_STATE.  The GT arm's
+ * `iw dev <nd> set power_save off` is a bench control, so the same command is
+ * dispatched here after association and before the first ping.  Returns the
+ * handler's code. */
+int lkpi_nl80211_set_power_save(struct net_device *dev, int enabled);
+
 /* NL80211_CMD_SET_WIPHY with WIPHY_FREQ (the monitor round, 2026-11-12).  On a
  * MONITOR interface this is `iw dev wlan0 set channel <ch>`: nl80211 routes it
  * to cfg80211_set_monitor_channel and mac80211 stores it as the monitor's

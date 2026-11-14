@@ -1,0 +1,30 @@
+# rtw88 on the RTOS line, C3: the RTL8821CU (0bda:c820) enumerates on the
+# board's EHCI root, the vendored rtw88 driver probes it over the linuxkpi USB
+# engine after the in-image 0bda:1a2b -> c820 eject, downloads rtw8821c_fw.bin
+# from the compiled-in registry and registers its wiphy with the real mac80211;
+# opening the interface reaches the driver's start.
+#
+# The controller list is a bench fact: the 2026-11-14 preflight put the dongle
+# on the EHCI root at 0xFD880000 (busid 1, path 1-1.1), so this profile takes
+# the EHCI pair.  A dongle on the DWC3 port is the xHCI arm (busids 3,2) and a
+# different profile/run record, not a runtime guess.
+#
+# The driver + stack are a GPL-2.0 link product and redistribute the Realtek
+# rtw8821c firmware image (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw88_c3"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW88=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RTW88_USB_BUS=1

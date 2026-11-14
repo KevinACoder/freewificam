@@ -163,6 +163,21 @@ int case_rtw89_ap_run(void);
 int case_rtw89_mon_run(void);
 #endif
 
+/* The RTL8821CU (rtw88, USB): the same four mac80211 gates as the 8851BU,
+ * with rtw88's SW scan and its own USB HCI in place of rtw89's. */
+#if defined(RTOS_CASE_RTW88_C3)
+int case_rtw88_c3_run(void);
+#endif
+#if defined(RTOS_CASE_RTW88_C4)
+int case_rtw88_c4_run(void);
+#endif
+#if defined(RTOS_CASE_RTW88_C5)
+int case_rtw88_c5_run(void);
+#endif
+#if defined(RTOS_CASE_RTW88_C6)
+int case_rtw88_c6_run(void);
+#endif
+
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf
  * TCP server (only one listener can own the port).  The `net` case brings its

@@ -107,6 +107,21 @@ config LIBLINUX80211_RTW89
 	  mac80211 stack is a GPL-2.0 link product and also redistributes the
 	  Realtek firmware image (docs/LICENSES.md).
 
+config LIBLINUX80211_RTW88
+	bool "rtw88 (RTL8821CU / USB) driver"
+	depends on LIBLINUX80211_USB
+	depends on LIBLINUX80211_WIRELESS
+	help
+	  Links the vendored rtw88 driver (20 TUs, byte-identical to the GT pin)
+	  and its USB bus unit against the wireless stack.  This is a mac80211
+	  SoftMAC driver: the stack is the MLME and the driver implements the
+	  ops (including the USB HCI and the chip's own rate/aggregation
+	  control).  The compiled set is derived from the driver's own Makefile
+	  under wireless-drivers/rtw88/driver_config.h.  The driver tree is
+	  GPL-2.0 OR BSD-3-Clause; an artifact that links it with the GPL-2.0
+	  mac80211 stack is a GPL-2.0 link product and also redistributes the
+	  Realtek rtw8821c firmware image (docs/LICENSES.md).
+
 config LIBLINUX80211_RTL8189FS
 	bool "rtl8189fs (RTL8188F / SDIO 8189FTV) vendor driver"
 	depends on LIBLINUX80211_SDIO
@@ -139,6 +154,16 @@ config LKPI_SKBQ_DIAG
 	  reorder slot, a driver's URB queue, or a queue whose counter has
 	  parted from its chain) instead of inferring it from slot addresses.
 	  Observation only; off in every delivery image.
+
+config LKPI_WQ_FORCE_HIGHPRI
+	bool "lift every workqueue to Realtime (diagnostic arm)"
+	help
+	  Diagnostic only: the default workqueue priority is Normal (24) and
+	  the driver's rate-report purge window is 500 ms, so a workqueue
+	  starved by tcpip (40) loses its C2H reports and the rate control
+	  loses its feedback.  This arm lifts every lkpi workqueue thread to
+	  Realtime to test that window.  Off in every delivery image; an
+	  artifact that sets it is a perturbed arm, not a baseline.
 
 config LKPI_WQ_TRACE
 	bool "workqueue join trace (name the held work body)"

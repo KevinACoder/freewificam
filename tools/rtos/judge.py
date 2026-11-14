@@ -74,6 +74,13 @@ CASES = (
     # front.  The judge holds the pre-registered floor (beacons/s, radiotap,
     # lwIP untouched, tx=0); the frame census is reported, not gated.
     "rtw89_mon",
+    # The RTL8821CU (rtw88, USB): the same four mac80211 gates as the 8851BU,
+    # with rtw88's SW scan and its own USB HCI.  The C3 case also prints the
+    # wiphy's M0 row (bands/managed/ht/vht) and C1's own firmware version.
+    "rtw88_c3",
+    "rtw88_c4",
+    "rtw88_c5",
+    "rtw88_c6",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1442,6 +1449,79 @@ PATTERNS = {
     "rtw89_c6_fail": re.compile(
         r"rtw89_c6: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
+    # --- RTL8821CU (rtw88, mac80211) cases --------------------------------
+    "rtw88_c3_drivers": re.compile(
+        r"rtw88_c3: usb drivers=(?P<n>\d+)", re.MULTILINE
+    ),
+    "rtw88_c3_fw": re.compile(
+        r"rtw88_c3: firmware (?P<line>.+)$", re.MULTILINE
+    ),
+    "rtw88_c3_wlan0": re.compile(
+        r"rtw88_c3: wlan0 present=(?P<present>[01]) after (?P<ms>\d+) ms",
+        re.MULTILINE,
+    ),
+    "rtw88_c3_wiphy": re.compile(
+        r"rtw88_c3: wiphy bands=(?P<bands>\d+) managed=(?P<managed>[01]) "
+        r"ht=(?P<ht>[01]) vht=(?P<vht>[01])", re.MULTILINE,
+    ),
+    "rtw88_c3_start": re.compile(
+        r"rtw88_c3: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtw88_c3_pass": re.compile(r"rtw88_c3: PASS$", re.MULTILINE),
+    "rtw88_c3_fail": re.compile(
+        r"rtw88_c3: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw88_c4_scan": re.compile(
+        r"rtw88_c4: scan ssid=(?P<ssid>\S+) freq=(?P<freq>\d+) "
+        r"rc=(?P<rc>-?\d+)", re.MULTILINE,
+    ),
+    "rtw88_c4_bss": re.compile(
+        r"rtw88_c4: bss ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>\d+) signal=(?P<sig>-?\d+)", re.MULTILINE,
+    ),
+    "rtw88_c4_pass": re.compile(r"rtw88_c4: PASS$", re.MULTILINE),
+    "rtw88_c4_fail": re.compile(
+        r"rtw88_c4: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw88_c5_connect": re.compile(
+        r"rtw88_c5: connect ssid=(?P<ssid>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"freq=(?P<freq>-?\d+) rc=(?P<rc>-?\d+)", re.MULTILINE,
+    ),
+    "rtw88_c5_connected": re.compile(
+        r"rtw88_c5: connected bssid=(?P<bssid>[0-9a-f:]+) "
+        r"waited_ms=(?P<ms>\d+)", re.MULTILINE,
+    ),
+    "rtw88_c5_pass_c5": re.compile(r"rtw88_c5: PASS C5", re.MULTILINE),
+    "rtw88_c5_netif": re.compile(
+        r"rtw88_c5: netif up name=(?P<name>\S+) ip=(?P<ip>\S+) "
+        r"mac=(?P<mac>[0-9a-f:]+)", re.MULTILINE,
+    ),
+    "rtw88_c5_diag": re.compile(
+        r"rtw88_c5: diag rx_frames=(?P<rx>\d+) tx_frames=(?P<tx>\d+) "
+        r"rx_bytes=(?P<rxb>\d+) tx_bytes=(?P<txb>\d+) "
+        r"tx_fail=(?P<fail>\d+)", re.MULTILINE,
+    ),
+    "rtw88_c5_pass_c6": re.compile(r"rtw88_c5: PASS C6", re.MULTILINE),
+    "rtw88_c5_pass": re.compile(r"rtw88_c5: PASS$", re.MULTILINE),
+    "rtw88_c5_fail": re.compile(
+        r"rtw88_c5: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
+    "rtw88_c6_plan": re.compile(
+        r"rtw88_c6: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+        r"dev=(?P<dev>\S+)", re.MULTILINE,
+    ),
+    "rtw88_c6_ready": re.compile(
+        r"rtw88_c6: ready netif=(?P<netif>[01]) rx_frames=(?P<rx>\d+) "
+        r"tx_frames=(?P<tx>\d+)", re.MULTILINE,
+    ),
+    "rtw88_c6_server": re.compile(
+        r"rtw88_c6: server tcp=(?P<tcp>\d+) udp=(?P<udp>\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE,
+    ),
+    "rtw88_c6_pass": re.compile(r"rtw88_c6: PASS C6T", re.MULTILINE),
+    "rtw88_c6_fail": re.compile(
+        r"rtw88_c6: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
@@ -1738,6 +1818,30 @@ LIST_PATTERNS = {
     ),
     "rtw89_c6_done": re.compile(
         r"rtw89_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    "rtw88_c5_ping": re.compile(
+        r"rtw88_c5: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
+        r"payload=(?P<payload>\d+) rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/"
+        r"(?P<max>\d+)", re.MULTILINE,
+    ),
+    "rtw88_c6_begin": re.compile(
+        r"rtw88_c6: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<window>\d+) "
+        r"name=(?P<name>\S+)", re.MULTILINE,
+    ),
+    "rtw88_c6_report": re.compile(
+        r"rtw88_c6: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_c6_census": re.compile(
+        r"rtw88_c6: phase (?P<n>\d+) census rx_frames=(?P<rx>\d+) "
+        r"rx_bytes=(?P<rxb>\d+) tx_frames=(?P<tx>\d+) "
+        r"tx_bytes=(?P<txb>\d+) tx_fail=(?P<fail>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw88_c6_done": re.compile(
+        r"rtw88_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
     ),
     # --- the AP role of the same card (runs/2026-11-14-rtw89-8851bu-ap) -----
     "rtw89_ap_chan": re.compile(
@@ -4622,6 +4726,137 @@ def judge(text: str, expect: dict | None = None) -> dict:
             if not found["rtl8189fs_ap_loglevel"]:
                 errors.append(
                     "rtl8189fs_ap: PASS APT without the log-level drop line")
+
+    # --- RTL8821CU (rtw88, mac80211) evidence checks ----------------------
+    if cases.get("rtw88_c3", {}).get("verdict") == "pass":
+        fail = found["rtw88_c3_fail"]
+        if fail:
+            errors.append(f"rtw88_c3: {fail['reason']}")
+        drv = found["rtw88_c3_drivers"]
+        if not drv or int(drv["n"]) == 0:
+            errors.append("rtw88_c3: PASS without a registered usb_driver")
+        fw = found["rtw88_c3_fw"]
+        if not fw:
+            errors.append("rtw88_c3: PASS without the firmware version line")
+        else:
+            notes.append(f"rtw88_c3: fw {fw['line'].strip()}")
+        wl = found["rtw88_c3_wlan0"]
+        if not wl or wl["present"] != "1":
+            errors.append("rtw88_c3: wlan0 is missing")
+        ph = found["rtw88_c3_wiphy"]
+        if not ph:
+            errors.append("rtw88_c3: PASS without the wiphy (M0) line")
+        elif ph["managed"] != "1" or ph["ht"] != "1":
+            errors.append(
+                f"rtw88_c3: wiphy managed={ph['managed']} ht={ph['ht']}")
+        else:
+            notes.append(
+                f"rtw88_c3: wiphy bands={ph['bands']} managed={ph['managed']} "
+                f"ht={ph['ht']} vht={ph['vht']}")
+        st = found["rtw88_c3_start"]
+        if not st:
+            errors.append("rtw88_c3: PASS without the start line")
+        elif int(st["rc"]) != 0:
+            errors.append(f"rtw88_c3: start rc={st['rc']}")
+        if not found["rtw88_c3_pass"]:
+            errors.append("rtw88_c3: the PASS line is missing")
+
+    if cases.get("rtw88_c4", {}).get("verdict") == "pass":
+        fail = found["rtw88_c4_fail"]
+        if fail:
+            errors.append(f"rtw88_c4: {fail['reason']}")
+        sc = found["rtw88_c4_scan"]
+        if not sc:
+            errors.append("rtw88_c4: PASS without the scan line")
+        elif int(sc["rc"]) != 0:
+            errors.append(f"rtw88_c4: scan rc={sc['rc']}")
+        elif sc["ssid"] != "labwifi-ar-ht20s" or int(sc["freq"]) != 2432:
+            errors.append(
+                f"rtw88_c4: scan was {sc['ssid']}@{sc['freq']}, "
+                "expected labwifi-ar-ht20s@2432")
+        bss = found["rtw88_c4_bss"]
+        if not bss:
+            errors.append("rtw88_c4: PASS without a BSS line")
+        elif bss["ssid"] != "labwifi-ar-ht20s" or int(bss["freq"]) != 2432:
+            errors.append(
+                f"rtw88_c4: BSS {bss['ssid']}@{bss['freq']}, "
+                "expected labwifi-ar-ht20s@2432")
+        else:
+            notes.append(
+                f"rtw88_c4: bss {bss['bssid']} ch={bss['freq']} "
+                f"sig={bss['sig']}")
+        if not found["rtw88_c4_pass"]:
+            errors.append("rtw88_c4: the PASS line is missing")
+
+    if cases.get("rtw88_c5", {}).get("verdict") == "pass":
+        fail = found["rtw88_c5_fail"]
+        if fail:
+            errors.append(f"rtw88_c5: {fail['reason']}")
+        conn = found["rtw88_c5_connect"]
+        if not conn:
+            errors.append("rtw88_c5: PASS C5 without the connect line")
+        elif int(conn["rc"]) != 0:
+            errors.append(f"rtw88_c5: connect rc={conn['rc']}")
+        elif int(conn["freq"]) != 2432:
+            errors.append(f"rtw88_c5: connect freq={conn['freq']}")
+        done = found["rtw88_c5_connected"]
+        if not done:
+            errors.append("rtw88_c5: PASS C5 without the connected line")
+        elif conn and done["bssid"] != conn["bssid"]:
+            errors.append(
+                f"rtw88_c5: connected bssid={done['bssid']} differs from the "
+                "connect target")
+        if not found["rtw88_c5_pass_c5"]:
+            errors.append("rtw88_c5: the C5 PASS line is missing")
+        netif = found["rtw88_c5_netif"]
+        if not netif:
+            errors.append("rtw88_c5: PASS C6 without the netif line")
+        elif not netif["ip"].startswith("192.168.99.2/"):
+            errors.append(f"rtw88_c5: netif ip={netif['ip']}")
+        pings = {p["payload"]: p for p in found["rtw88_c5_ping"]}
+        for want in ("56", "1400"):
+            ping = pings.get(want)
+            if not ping:
+                errors.append(f"rtw88_c5: no ping line for payload={want}")
+            elif int(ping["rx"]) != int(ping["tx"]) or int(ping["tx"]) != 20:
+                errors.append(
+                    f"rtw88_c5: ping {want}B tx={ping['tx']} rx={ping['rx']}")
+            else:
+                notes.append(
+                    f"rtw88_c5: ping {want}B 20/20 "
+                    f"rtt={ping['min']}/{ping['avg']}/{ping['max']} ms")
+        diag = found["rtw88_c5_diag"]
+        if not diag:
+            errors.append("rtw88_c5: PASS C6 without the diag line")
+        elif int(diag["tx"]) == 0 or int(diag["rx"]) == 0:
+            errors.append(
+                f"rtw88_c5: adapter tx={diag['tx']} rx={diag['rx']}")
+        if not found["rtw88_c5_pass_c6"]:
+            errors.append("rtw88_c5: the C6 PASS line is missing")
+        if not found["rtw88_c5_pass"]:
+            errors.append("rtw88_c5: the case PASS line is missing")
+
+    if cases.get("rtw88_c6", {}).get("verdict") == "pass":
+        fail = found["rtw88_c6_fail"]
+        if fail:
+            errors.append(f"rtw88_c6: {fail['reason']}")
+        srv = found["rtw88_c6_server"]
+        if not srv:
+            errors.append("rtw88_c6: PASS without the server line")
+        elif srv["ok"] != "1":
+            errors.append(f"rtw88_c6: server ok={srv['ok']}")
+        reps = found["rtw88_c6_report"]
+        dones = found["rtw88_c6_done"]
+        if len(reps) < 7 or len(dones) < 7:
+            errors.append(
+                f"rtw88_c6: only {len(reps)} reports / {len(dones)} dones "
+                "of 7 traffic phases")
+        for rep in reps:
+            notes.append(
+                f"rtw88_c6: phase {rep['n']} {rep['bytes']}B {rep['ms']}ms "
+                f"{rep['kbit']} kbit/s")
+        if not found["rtw88_c6_pass"]:
+            errors.append("rtw88_c6: the PASS C6T line is missing")
 
     result = found["result"]
     if not result:

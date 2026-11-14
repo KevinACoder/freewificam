@@ -568,6 +568,61 @@ out:
 }
 
 /*
+ * NL80211_CMD_SET_POWER_SAVE with PS_STATE: the attribute stream
+ * `iw dev <nd> set power_save off` sends.  mac80211's handler
+ * (cfg.c:ieee80211_set_power_mgmt) clears IEEE80211_CONF_PS and reconfigures
+ * the driver, which is the same bench control the GT arm applies before its
+ * first ping.  Without it the stack enables PS on association and a measured
+ * RTT/loss carries the beacon-interval wake-up instead of the data path - the
+ * 8821CU C5 arm's first boot read 52/97/109 ms and 10/20.
+ */
+int
+lkpi_nl80211_set_power_save(struct net_device *dev, int enabled)
+{
+	const struct genl_family *family;
+	struct sk_buff *skb;
+	struct nlmsghdr *nlh;
+	struct genlmsghdr *ghdr;
+	int rc;
+
+	if (dev == NULL)
+		return -EINVAL;
+	family = lkpi_genl_family_get(NL80211_GENL_NAME);
+	if (family == NULL)
+		return -ENOENT;
+
+	skb = alloc_skb(256, GFP_KERNEL);
+	if (skb == NULL)
+		return -ENOMEM;
+
+	nlh = nlmsg_put(skb, 0, 1, family->id, GENL_HDRLEN, 0);
+	if (nlh == NULL) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	ghdr = nlmsg_data(nlh);
+	memset(ghdr, 0, sizeof(*ghdr));
+	ghdr->cmd = NL80211_CMD_SET_POWER_SAVE;
+	ghdr->version = family->version;
+
+	rc = nla_put_u32(skb, NL80211_ATTR_IFINDEX, (u32)dev->ifindex);
+	if (rc < 0)
+		goto out;
+	rc = nla_put_u32(skb, NL80211_ATTR_PS_STATE,
+			 enabled ? NL80211_PS_ENABLED : NL80211_PS_DISABLED);
+	if (rc < 0)
+		goto out;
+
+	nlmsg_end(skb, nlh);
+	rc = nl80211_doit(family, dev, skb, nlh, ghdr,
+			  NL80211_CMD_SET_POWER_SAVE);
+
+out:
+	kfree_skb(skb);
+	return rc;
+}
+
+/*
  * NL80211_CMD_SET_WIPHY with WIPHY_FREQ: the monitor round's channel
  * (docs/HANDOFF-AC7260-MONITOR.md P2), the same attribute stream
  * `iw dev wlan0 set channel 5` sends.  For a MONITOR interface nl80211 routes
