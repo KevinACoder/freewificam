@@ -149,6 +149,13 @@ int case_rtw89_c5_run(void);
 #if defined(RTOS_CASE_RTW89_C6)
 int case_rtw89_c6_run(void);
 #endif
+#if defined(RTOS_CASE_RTW89_AP)
+/* The AP role of the same USB card (runs/2026-11-14-rtw89-8851bu-ap): the
+ * hostapd AP MLME beacons and answers auth/assoc, mac80211 owns the station
+ * table, and the case proves the data plane both ways before the AP phase
+ * table. */
+int case_rtw89_ap_run(void);
+#endif
 
 /* The shared one-shot lwIP stack bring-up (a boot may run more than one NIC
  * case; tcpip_init is once-per-boot by contract), and the boot's one lwiperf

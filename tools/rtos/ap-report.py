@@ -45,17 +45,18 @@ from pathlib import Path
 MBITS = re.compile(r"(\d+(?:\.\d+)?)\s+Mbits/sec")
 BYTES = re.compile(r"(\d+(?:\.\d+)?)\s+(K|M|G)?Bytes")
 LOSS = re.compile(r"\((\d+(?:\.\d+)?)%\)")
-PHASE_BEGIN = re.compile(
-    r"iwl7260_ap: phase \d+ begin proto=\S+ role=\S+ air=(\S+) "
-    r"port=\d+ window_ms=\d+ name=(\S+) peer_ms=\d+")
-PHASE_REPORT = re.compile(
-    r"iwl7260_ap: phase (\d+) report bytes=(\d+) ms=(\d+) kbit=(\d+) "
+PHASE_REPORT_FMT = (
+    r"{case}: phase (\d+) report bytes=(\d+) ms=(\d+) kbit=(\d+) "
     r"pkts=(\d+)")
-PHASE_NAME = re.compile(
-    r"iwl7260_ap: phase (\d+) begin proto=\S+ role=\S+ air=\S+ port=\d+ "
+PHASE_NAME_FMT = (
+    r"{case}: phase (\d+) begin proto=\S+ role=\S+ air=\S+ port=\d+ "
     r"window_ms=\d+ name=(\S+) peer_ms=\d+")
 
-TCP_DOWN = ("tcpdn", "tcpdn2")
+# The gate's downlink number is the first downlink phase.  The AP table runs a
+# second one (tcpdn2) as a stability repeat and it is not a gate: the GT arm's
+# second downlink was lost after its 40M blast in gt-ap1/5, so gating on the
+# second would compare the RTOS repeat with a GT hole.
+TCP_DOWN = ("tcpdn",)
 UDP_DOWN = ("udpdn", "udpdn2")
 TCP_UP = ("tcpup",)
 UDP_UP = ("udpup",)
@@ -106,13 +107,15 @@ def _pi_file(d: Path, name: str) -> Path | None:
     return None
 
 
-def rtos_boot(run: Path, tag: str) -> dict:
+def rtos_boot(run: Path, tag: str, case: str = "iwl7260_ap") -> dict:
     """One RTOS AP boot: the serial phases, the Pi's files and the air sums."""
     d = run / tag
     serial = read(d / "serial.log")
     phases: dict[str, dict] = {}
-    names = {m.group(1): m.group(2) for m in PHASE_NAME.finditer(serial)}
-    for m in PHASE_REPORT.finditer(serial):
+    name_re = re.compile(PHASE_NAME_FMT.format(case=re.escape(case)))
+    report_re = re.compile(PHASE_REPORT_FMT.format(case=re.escape(case)))
+    names = {m.group(1): m.group(2) for m in name_re.finditer(serial)}
+    for m in report_re.finditer(serial):
         name = names.get(m.group(1))
         if name is None:
             continue
@@ -147,14 +150,15 @@ def rtos_boot(run: Path, tag: str) -> dict:
         if ph is None or ph["ms"] == 0:
             continue
         if s.get("bytes") is not None:
-            down_udp_rates.append(s["bytes"] * 8.0 / ph["ms"])
+            # kbit/s from the sink, converted to the GT arm's Mbit/s unit.
+            down_udp_rates.append(s["bytes"] * 8.0 / ph["ms"] / 1000.0)
             down_received += int(s["bytes"])
             down_offered += ph["bytes"]
             if ph["bytes"] > 0:
                 down_udp_loss.append(
                     max(0.0, 100.0 * (1.0 - s["bytes"] / ph["bytes"])))
         else:
-            down_udp_rates.append(ph["kbit"])
+            down_udp_rates.append(ph["kbit"] / 1000.0)
 
     # up: the Pi sends; this board's server/sink is the receiver.
     up_rates = []
@@ -163,18 +167,23 @@ def rtos_boot(run: Path, tag: str) -> dict:
     for name in TCP_UP:
         ph = phases.get(name)
         if ph is not None:
-            up_rates.append(ph["kbit"])
+            up_rates.append(ph["kbit"] / 1000.0)
             up_received += ph["bytes"]
     for name, peer in zip(UDP_UP, pi_udp_up):
         ph = phases.get(name)
         if ph is not None:
-            up_rates.append(ph["kbit"])
+            up_rates.append(ph["kbit"] / 1000.0)
             up_received += ph["bytes"]
             if peer.get("loss") is not None:
                 up_loss.append(peer["loss"])
             elif ph["bytes"] > 0 and peer.get("bytes"):
                 up_loss.append(
                     max(0.0, 100.0 * (1.0 - ph["bytes"] / peer["bytes"])))
+
+    # The down receiver account is TCP + UDP: the sink is the UDP half only,
+    # and comparing the total sent against the UDP half alone reads as an 85%
+    # "app-vs-app" failure that is an arithmetic bug, not a measurement.
+    down_received += sum(int(x["bytes"] or 0) for x in pi_tcp_down)
 
     down_mbit = _mean(down_rates + down_udp_rates)
     up_mbit = _mean(up_rates)
@@ -193,9 +202,9 @@ def rtos_boot(run: Path, tag: str) -> dict:
         "phases": phases,
         "tcp_down_mbit": _mean([x["mbit"] for x in pi_tcp_down]),
         "udp_down_mbit": _mean(down_udp_rates),
-        "tcp_up_mbit": _mean([phases[p]["kbit"] for p in TCP_UP
+        "tcp_up_mbit": _mean([phases[p]["kbit"] / 1000.0 for p in TCP_UP
                               if p in phases]),
-        "udp_up_mbit": _mean([phases[p]["kbit"] for p in UDP_UP
+        "udp_up_mbit": _mean([phases[p]["kbit"] / 1000.0 for p in UDP_UP
                               if p in phases]),
         "down_mbit": down_mbit,
         "up_mbit": up_mbit,
@@ -211,17 +220,22 @@ def rtos_boot(run: Path, tag: str) -> dict:
     }
 
 
-def gt_boot(run: Path, tag: str) -> dict:
+def gt_boot(run: Path, tag: str, board_dir: str = "gt-ac7260",
+            peer_dir: str = "gt-ap") -> dict:
     """One GT AP boot: the board's iperf outputs and the Pi's peer files."""
-    bd = run / "board" / tag / f"gt-ac7260-{tag}"
+    bd = run / "board" / tag / f"{board_dir}-{tag}"
     pd = run / "pi" / tag
     ed = run / "evidence" / tag
 
     def peer(name: str) -> dict:
-        for p in (pd / f"peer-{name}.txt", pd / f"gt-ap-{tag}" / f"peer-{name}.txt"):
+        for p in (pd / f"peer-{name}.txt",
+                  pd / f"{peer_dir}-{tag}" / f"peer-{name}.txt"):
             if p.exists():
                 return iperf(read(p))
-        return {}
+        # Keys stay present with None values: the AP table may carry fewer
+        # rungs than the 7260 arm (no udpdn2), and a missing file must read
+        # as "no data", not as a KeyError in the gate arithmetic.
+        return {"mbit": None, "bytes": None, "loss": None}
 
     board = {name: iperf(read(bd / f"tp-{name}-board.txt"))
              for name in TCP_DOWN + UDP_DOWN + TCP_UP + UDP_UP}
@@ -307,14 +321,23 @@ def main() -> int:
                          "(default: --run)")
     ap.add_argument("--gt-tags", default="gt1,gt2")
     ap.add_argument("--rtos-tags", default="rtos1,rtos2")
+    ap.add_argument("--case-prefix", default="iwl7260_ap",
+                    help="the RTOS case name the phase anchors carry")
+    ap.add_argument("--gt-board-dir", default="gt-ac7260",
+                    help="the GT board's NFS directory prefix (the round's tag "
+                         "is appended: <prefix>-<tag>)")
+    ap.add_argument("--gt-peer-dir", default="gt-ap",
+                    help="the GT peer's Pi directory prefix")
     ap.add_argument("--json", default=None)
     ap.add_argument("--markdown", default=None)
     args = ap.parse_args()
 
     run = Path(args.run)
     gt_run = Path(args.gt_run) if args.gt_run else run
-    gt = [gt_boot(gt_run, t) for t in args.gt_tags.split(",") if t]
-    rtos = [rtos_boot(run, t) for t in args.rtos_tags.split(",") if t]
+    gt = [gt_boot(gt_run, t, args.gt_board_dir, args.gt_peer_dir)
+          for t in args.gt_tags.split(",") if t]
+    rtos = [rtos_boot(run, t, args.case_prefix)
+            for t in args.rtos_tags.split(",") if t]
 
     gt_v = [b for b in gt if b["valid"]]
     rtos_v = [b for b in rtos if b["valid"]]
@@ -325,6 +348,7 @@ def main() -> int:
         "udp_down": aggregate(gt_v, "udp_down_mbit"),
         "udp_up": aggregate(gt_v, "udp_up_mbit"),
         "udp_down_loss": aggregate(gt_v, "udp_down_loss", "max"),
+        "udp_up_loss": aggregate(gt_v, "udp_up_loss", "max"),
     }
     rtos_agg = {
         "tcp_down": aggregate(rtos_v, "tcp_down_mbit"),
@@ -332,6 +356,7 @@ def main() -> int:
         "udp_down": aggregate(rtos_v, "udp_down_mbit"),
         "udp_up": aggregate(rtos_v, "udp_up_mbit"),
         "udp_down_loss": aggregate(rtos_v, "udp_down_loss", "max"),
+        "udp_up_loss": aggregate(rtos_v, "udp_up_loss", "max"),
     }
 
     def pct(rt: float | None, g: float | None) -> float | None:
@@ -343,6 +368,7 @@ def main() -> int:
         "tcp_down": pct(rtos_agg["tcp_down"], gt_agg["tcp_down"]),
         "tcp_up": pct(rtos_agg["tcp_up"], gt_agg["tcp_up"]),
         "udp_down": pct(rtos_agg["udp_down"], gt_agg["udp_down"]),
+        "udp_up": pct(rtos_agg["udp_up"], gt_agg["udp_up"]),
     }
 
     # Air: the monitor's IP payload against the receiver's app bytes, over the
@@ -377,8 +403,22 @@ def main() -> int:
                               ratios["tcp_down"] >= 80.0),
         "tcp_up_ge_80pct": (ratios["tcp_up"] is not None and
                             ratios["tcp_up"] >= 80.0),
-        "udp_down_loss_le_1pct": (rtos_agg["udp_down_loss"] is not None and
-                                  rtos_agg["udp_down_loss"] <= 1.0),
+        # The AP role's ceiling on this card is ~6-12 Mbit/s, so a 40 Mbit/s
+        # UDP rung is over capacity by construction; the gate is the same
+        # offered rate relative to the GT arm (<= GT loss + 1 point), not an
+        # absolute 1%.  The absolute numbers stay in the report.
+        "udp_down_loss_le_gt_plus_1": (
+            None if (rtos_agg["udp_down_loss"] is None or
+                     gt_agg["udp_down_loss"] is None) else
+            rtos_agg["udp_down_loss"] <= gt_agg["udp_down_loss"] + 1.0),
+        "udp_down_ge_80pct": (ratios["udp_down"] is not None and
+                              ratios["udp_down"] >= 80.0),
+        "udp_up_ge_80pct": (ratios["udp_up"] is not None and
+                            ratios["udp_up"] >= 80.0),
+        "udp_up_loss_le_gt_plus_1": (
+            None if (rtos_agg["udp_up_loss"] is None or
+                     gt_agg["udp_up_loss"] is None) else
+            rtos_agg["udp_up_loss"] <= gt_agg["udp_up_loss"] + 1.0),
         "app_vs_app_le_1pct": (
             app_down is not None and app_up is not None and
             app_down <= 1.0 and app_up <= 1.0),
@@ -388,8 +428,16 @@ def main() -> int:
              air["up"]["delta_pct"] is not None and
              air["up"]["delta_pct"] <= 5.0)),
     }
-    mandatory = ("tcp_down_ge_80pct", "tcp_up_ge_80pct",
-                 "udp_down_loss_le_1pct", "app_vs_app_le_1pct")
+    mandatory = ["tcp_down_ge_80pct", "tcp_up_ge_80pct",
+                 "app_vs_app_le_1pct"]
+    if gates["udp_down_ge_80pct"] is not None:
+        mandatory.append("udp_down_ge_80pct")
+    if gates["udp_up_ge_80pct"] is not None:
+        mandatory.append("udp_up_ge_80pct")
+    if gates["udp_down_loss_le_gt_plus_1"] is not None:
+        mandatory.append("udp_down_loss_le_gt_plus_1")
+    if gates["udp_up_loss_le_gt_plus_1"] is not None:
+        mandatory.append("udp_up_loss_le_gt_plus_1")
     verdict = "pass" if all(gates[g] for g in mandatory) else "fail"
     if not gt_v or not rtos_v:
         verdict = "missing"

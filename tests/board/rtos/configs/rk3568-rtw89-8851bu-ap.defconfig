@@ -1,0 +1,34 @@
+# rtw89 on the RTOS line, the AP role (A1-A3): the RTL8851BU becomes a
+# 2.4 GHz AP (SSID rtos-8851-ap, ch5/2432, HT20, open), the Pi's MT7921AU
+# joins it, and the data plane is proven both ways.
+#
+# The AP MLME is the imported NXP hostapd (CONFIG_HOSTAP_AP); mac80211 keeps
+# the AP state machine in the kernel and rtw89 pushes the beacon to the
+# firmware over its H2C beacon-update path.  The station's own C5/C6 ladder is
+# not this image: the card is beaconing a BSS, not joining one.
+#
+# What this profile is not: the A4 phase table (rk3568-rtw89-8851bu-ap-tp, a
+# separate image on purpose), WPA2, 5 GHz, monitor, and the station role.
+#
+# The driver + stack are a GPL-2.0 link product; the imported hostapd is
+# BSD-3-Clause and the rtw8851b firmware is redistributed with the image
+# (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw89_ap"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW89=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_HOSTAP_AP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW89_USB_BUS=0

@@ -259,6 +259,16 @@ config RTW89_C6_SKIP_LOOPBACK
 	  diagnostic arm skips the phase (it is attribution only, never a gate);
 	  the delivery arm keeps the full seven-phase table.
 
+config RTW89_AP_TP
+	bool "rtw89_ap runs the AP phase table (throughput verdict image)"
+	help
+	  Off: the case stops after A3 (the AP functional verdict).  On: after
+	  the same bring-up and pings it starts lwiperf and the UDP sink and
+	  runs the AP phase table (tcpdn, udpdn 40M, tcpdn2, tcpup, udpup),
+	  ending with PASS APT.  The AP's A1-A3 and its throughput verdict must
+	  not share an image; the two profiles are rk3568-rtw89-8851bu-ap and
+	  rk3568-rtw89-8851bu-ap-tp.
+
 config LKPI_MEMCMP_TRACE
 	bool "memcmp caller census (who scans memory in a receive loop)"
 	help

@@ -1,0 +1,39 @@
+# rtw89 on the RTOS line, the AP throughput arm (A4): the same A1-A3 bring-up
+# in one boot, then the AP phase table over the same netif while the Pi drives
+# the peer half.
+#
+# Direction words are the round's: air=down is AP->STA (this board sends; the
+# Pi's server/sink receives), air=up is STA->AP (the Pi sends; this board's lwIP
+# receives) - the opposite of the C6 arm's board roles with the same names.
+#
+# This profile is the A1-A3 arm plus CONFIG_RTW89_AP_TP, and it is a separate
+# image on purpose: a throughput verdict and a functional verdict must not
+# share an image, and the numbers a verdict is written from come from a clean
+# image (no census).
+#
+# The gates (TCP down/up >= 80% of the same-day GT AP, UDP 40M loss <= 1%) are
+# pre-registered in runs/2026-11-14-rtw89-8851bu-ap/PREREG.md, not here.
+#
+# The driver + stack are a GPL-2.0 link product; the imported hostapd is
+# BSD-3-Clause and the rtw8851b firmware is redistributed with the image
+# (docs/LICENSES.md).
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtw89_ap"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTW89=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_HOSTAP_AP=y
+CONFIG_RTW89_AP_TP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTW89_USB_BUS=0

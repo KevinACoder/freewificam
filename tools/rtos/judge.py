@@ -65,6 +65,10 @@ CASES = (
     "rtw89_c4",
     "rtw89_c5",
     "rtw89_c6",
+    # The same USB card as an AP (runs/2026-11-14-rtw89-8851bu-ap): hostapd
+    # owns the AP MLME, mac80211 the station table, and the anchors are the
+    # 8189 AP ladder's with the rtw89 USB bring-up in front.
+    "rtw89_ap",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1669,6 +1673,103 @@ LIST_PATTERNS = {
     ),
     "rtw89_c6_done": re.compile(
         r"rtw89_c6: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    # --- the AP role of the same card (runs/2026-11-14-rtw89-8851bu-ap) -----
+    "rtw89_ap_chan": re.compile(
+        r"rtw89_ap: chan freq=(?P<freq>\d+) present=(?P<present>[01]) "
+        r"flags=0x(?P<flags>[0-9a-f]+) can_beacon=(?P<can>[01])",
+        re.MULTILINE,
+    ),
+    "rtw89_ap_iface": re.compile(
+        r"rtw89_ap: set_iface rc=(?P<rc>-?\d+) type=(?P<type>-?\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_ap_start": re.compile(
+        r"rtw89_ap: start rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_security": re.compile(
+        r"rtw89_ap: security wpa2=(?P<wpa2>[01]) ssid=(?P<ssid>\S+) "
+        r"channel=(?P<ch>\d+) bcn_int=(?P<bcn>\d+) dtim_req=(?P<dtim>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_ap_hostap": re.compile(
+        r"rtw89_ap: hostap start rc=(?P<rc>-?\d+) ready=(?P<ready>[01])",
+        re.MULTILINE,
+    ),
+    "rtw89_ap_link": re.compile(
+        r"rtw89_ap: link freq=(?P<freq>-?\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_pass_a1": re.compile(
+        r"rtw89_ap: PASS A1", re.MULTILINE
+    ),
+    "rtw89_ap_sta": re.compile(
+        r"rtw89_ap: sta n=(?P<n>\d+) hostap=(?P<hostap>\d+) "
+        r"mac=(?P<mac>[0-9a-f:]{17})", re.MULTILINE
+    ),
+    "rtw89_ap_pass_a2": re.compile(
+        r"rtw89_ap: PASS A2", re.MULTILINE
+    ),
+    "rtw89_ap_peer_window": re.compile(
+        r"rtw89_ap: peer window ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_ping": re.compile(
+        r"rtw89_ap: ping payload=(?P<payload>\d+) tx=(?P<tx>\d+) "
+        r"rx=(?P<rx>\d+) dup=(?P<dup>\d+) "
+        r"rtt_ms=(?P<min>\d+)/(?P<avg>\d+)/(?P<max>\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_link_window": re.compile(
+        r"rtw89_ap: link window rx_frames=(?P<rx>\d+) "
+        r"rx_foreign=(?P<foreign>\d+) rx_no_netif=(?P<none>\d+) "
+        r"rx_input_fail=(?P<fail>\d+) rx_bytes=(?P<rxb>\d+) "
+        r"tx_frames=(?P<tx>\d+) tx_fail=(?P<txf>\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_pass_a3": re.compile(
+        r"rtw89_ap: PASS A3", re.MULTILINE
+    ),
+    "rtw89_ap_server": re.compile(
+        r"rtw89_ap: server tcp=(?P<tcp>\d+) udp=(?P<udp>\d+) "
+        r"ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    "rtw89_ap_phase_begin": re.compile(
+        r"rtw89_ap: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+        r"role=(?P<role>\S+) air=(?P<air>\S+) port=(?P<port>\d+) "
+        r"window_ms=(?P<window>\d+) name=(?P<name>\S+) peer_ms=(?P<peer>\d+) "
+        r"rate_kbps=(?P<rate>\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_phase_report": re.compile(
+        r"rtw89_ap: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+        r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_ap_phase_stack": re.compile(
+        r"rtw89_ap: phase (?P<n>\d+) stack tcp_recv=(?P<recv>\d+) "
+        r"tcp_xmit=(?P<xmit>\d+) tcp_drop=(?P<drop>\d+) "
+        r"tcp_memerr=(?P<memerr>\d+) tcp_err=(?P<err>\d+) "
+        r"pbuf_err=(?P<pbuf>\d+) tcpseg_err=(?P<seg>\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_phase_usb": re.compile(
+        r"rtw89_ap: phase (?P<n>\d+) usb submits=(?P<submits>\d+) "
+        r"completes=(?P<completes>\d+) refused=(?P<refused>\d+) "
+        r"stage_overflow=(?P<sover>\d+) slots_exhausted=(?P<slots>\d+) "
+        r"rx=(?P<rx>\d+) rx_err=(?P<rxerr>\d+)", re.MULTILINE
+    ),
+    "rtw89_ap_phase_net": re.compile(
+        r"rtw89_ap: phase (?P<n>\d+) net rx_frames=(?P<rx>\d+) "
+        r"tx_frames=(?P<tx>\d+) rx_foreign=(?P<foreign>\d+) "
+        r"rx_no_netif=(?P<none>\d+) rx_input_fail=(?P<fail>\d+)",
+        re.MULTILINE,
+    ),
+    "rtw89_ap_phase_done": re.compile(
+        r"rtw89_ap: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE
+    ),
+    "rtw89_ap_pass_ap": re.compile(
+        r"rtw89_ap: PASS AP$", re.MULTILINE
+    ),
+    "rtw89_ap_pass_apt": re.compile(
+        r"rtw89_ap: PASS APT", re.MULTILINE
+    ),
+    "rtw89_ap_fail": re.compile(
+        r"rtw89_ap: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
 }
 

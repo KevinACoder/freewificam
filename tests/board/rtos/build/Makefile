@@ -261,7 +261,7 @@ endif
 # with its test case.  The rtw89 cases are consumers too: their linuxkpi USB
 # engine rides the same controllers, while the engine and its adapter belong to
 # the liblinux80211 world (kpi.mk), not to this file.
-USB_CONSUMER_CASES := usb_xhci usb_ehci rtw89_c3 rtw89_c4 rtw89_c5
+USB_CONSUMER_CASES := usb_xhci usb_ehci rtw89_c3 rtw89_c4 rtw89_c5 rtw89_ap
 ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
 include $(CURDIR)/usb.mk
 endif
