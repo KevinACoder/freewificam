@@ -1035,6 +1035,189 @@ falling back to the heap; `skb_used/high` is the pool's occupancy.  A phase
 that reports 0 bytes with a stale `beat` never sent; one that reports bytes
 with a rising `tx_fail` offers faster than the port can drain.
 
+## RTL8188EUS and RTL8723BU (USB, mac80211 + rtl8xxxu)
+
+Two cards, one vendored driver tree.  The RTL8188EUS (`0bda:8179`, MAC
+`20:f4:1b:52:8f:01`) is the dongle behind the external hub on the board's
+xHCI (`bus=3 hub=2 port=2`); the RTL8723BU (`0bda:b720`, MAC
+`88:e6:28:53:10:9c`) is the board's EHCI dongle behind the `1a86:8091` hub
+(`bus=1 hub=2 port=2`).  The stack is the ported `net/mac80211` +
+`net/wireless`; the driver is the GT pin's `rtl8xxxu` tree, with the four
+recorded patches for the 8188EU's AP/monitor roles and no patch for the
+8723BU.  The 8723BU is a composite device - Bluetooth on interfaces 0/1,
+Wi-Fi on interface 2 - which is why its claim line carries `intf=2` while
+the 8188EU's is `intf=0`.
+
+The 8723BU's firmware is `rtlwifi/rtl8723bu_nic.bin`, printed as
+`Firmware revision 35.0 (signature 0x5301)`; the 8188EU asks for
+`rtlwifi/rtl8188eufw.bin` and prints `28.0 (signature 0x88e1)`.  The two
+profiles link only their own blob (`CONFIG_RTL8XXXU_CHIP_8723BU`), so a
+boot's `fw registered=0 name=...` line says which image it is.
+
+The GT arm is the same pin's in-tree `rtl8xxxu` on the same bench and the
+same firmware image.  Both dongles are on the GT board at once, so the GT
+boot's log carries **two** firmware lines; which one a parser picks is a
+serial-identification question, not a card question (see the phenomena
+below).
+
+The throughput ruler is defined by the **board's direction**, not by the
+phase name: 30 s board-receive TCP, 20 s board-send TCP, 20 s
+board-receive UDP at 10M offered, 10 s board-send UDP at 10M paced.  The
+GT arm runs the same table; the AP arm runs the mirrored names
+(`tcpdn`/`tcpup` swapped) and is mapped back.  The raw `serial.log` files and
+the peer-side iperf outputs for every boot named here are in
+`runs/2026-11-14-rtl8xxxu-8188eu-tp/` and `runs/2026-11-15-rtl8723bu-tp/`
+(workspace ledger); this section carries the transcript excerpts and the
+numbers they support.
+
+### RTL8188EUS - station and AP
+
+What the transcript proves, in order: the driver claims `0bda:8179` on the
+xHCI hub's port 2, loads `rtl8188eufw.bin` (28.0 / 0x88e1), the open
+association completes, and the seven phases run over the lwIP netif.
+
+```
+[   3.061] rtl8xxxu_c5: usb buses=3,2
+[   4.829] rtl8xxxu_c5: drv usbh: lkpi claim attempt 0bda:8179 bus=3 hub=2 port=2 intf=0 spd=3
+[   4.988] rtl8xxxu_c5: firmware none: Firmware revision 28.0 (signature 0x88e1)
+[   6.295] rtl8xxxu_c5: drv wlan0: authenticate with 000000000A3A7528M (local address=000000000A3A274CM)
+[   6.666] rtl8xxxu_c5: connected bssid=1c:a7:70:de:29:a1 waited_ms=300
+[  23.917] rtl8xxxu_c6: phase 1 report bytes=499015614 ms=10000 kbit=399208 pkts=0
+[  53.322] rtl8xxxu_c6: phase 2 report bytes=141033496 ms=27906 kbit=40424 pkts=0
+[  73.543] rtl8xxxu_c6: phase 3 report bytes=23755200 ms=20000 kbit=9502 pkts=16160
+[ 103.877] rtl8xxxu_c6: phase 4 report bytes=137625624 ms=27901 kbit=39456 pkts=0
+[ 124.098] rtl8xxxu_c6: phase 5 report bytes=23752260 ms=20000 kbit=9500 pkts=16158
+[ 134.330] rtl8xxxu_c6: phase 6 report bytes=6693394 ms=10010 kbit=5344 pkts=0
+[ 144.516] rtl8xxxu_c6: phase 7 report bytes=12499410 ms=10000 kbit=9999 pkts=8503
+[ 144.681] rtl8xxxu_c6: PASS C6T
+```
+
+`authenticate with 000000000A3A7528M` is the `%pM` artifact described at the
+top of this file: the port's `printf` has no `%pM`, so the address is not a
+MAC in the log.  The case's own `mac=`/`bssid=` lines are the identity
+evidence.
+
+The two clean boots (`sta2`, `sta3`) and the same-day GT arm (`gt1`,
+`gt2`) give the four cells:
+
+| board direction | 8188EU station | GT | ratio |
+|---|---|---|---|
+| board-receive TCP | 40.54 | 39.10 | **104%** |
+| board-send TCP | 5.26 | 37.65 | **14%** |
+| board-receive UDP (10M) | 9.49 (0% loss) | 10.5 (0%) | 90% |
+| board-send UDP (10M) | 10.0 | 10.5 | 95% |
+
+The AP role (`rk3568-rtl8xxxu-8188eu-ap-tp`, `ap1`/`ap3`) runs the same
+table with the roles swapped: the ported NXP `hostapd` owns the AP MLME and
+`rtl8xxxu` sends the host-composed beacon.
+
+```
+[   4.993] rtl8xxxu_ap: firmware none: Firmware revision 28.0 (signature 0x88e1)
+[   6.097] rtl8xxxu_ap: set_iface rc=0 type=3
+[  11.316] rtl8xxxu_ap: hostap start rc=0 ready=1
+[  11.321] rtl8xxxu_ap: link freq=2432
+[  53.242] rtl8xxxu_ap: phase 1 report bytes=8192084 ms=10017 kbit=6536 pkts=0
+[  78.791] rtl8xxxu_ap: phase 2 report bytes=125567000 ms=23778 kbit=42240 pkts=0
+[ 101.883] rtl8xxxu_ap: phase 3 report bytes=13788600 ms=20000 kbit=5515 pkts=9380
+[ 114.932] rtl8xxxu_ap: phase 4 report bytes=12499410 ms=10000 kbit=9999 pkts=8503
+[ 114.964] rtl8xxxu_ap: PASS APT
+```
+
+The AP table maps the phase names to the board's direction (`tcpdn` is
+board-send here, `tcpup` is board-receive):
+
+| board direction | 8188EU AP | GT | ratio |
+|---|---|---|---|
+| board-receive TCP | 38.16 | 39.10 | 98% |
+| board-send TCP | 6.38 | 37.65 | **17%** |
+| board-receive UDP (10M) | 5.42 (12.4/15.4% loss) | 10.5 (0%) | **52%** |
+| board-send UDP (10M) | 10.0 | 10.5 | 95% |
+
+AP/STA same-direction: receive TCP 94%, send TCP 121%, receive UDP 57%,
+send UDP 100%.  Three of four directions align; the two open mechanisms are
+the board-send TCP gap (14-17%) and the AP-role UDP receive (12-15% loss
+where the station role loses none).
+
+### RTL8723BU - station
+
+The 8723BU claims on the EHCI root; the composite device's Bluetooth
+interfaces are enumerated and declined, and the Wi-Fi interface is `intf=2`.
+
+```
+[   4.311] rtl8xxxu_c5: drv usbh: modeswitch eject attempt 1: 31 byte(s) sent
+[   5.377] rtl8xxxu_c5: drv usbh: modeswitch accepted (device left the bus)
+[   5.392] [E/usbh_hub] Port 1 enumerate fail
+[   5.725] rtl8xxxu_c5: drv usbh: lkpi claim attempt 0bda:b720 bus=1 hub=2 port=2 intf=2 spd=3
+[   6.071] rtl8xxxu_c5: firmware none: Firmware revision 35.0 (signature 0x5301)
+[   7.965] rtl8xxxu_c5: drv wlan0: authenticate with 000000000A3AFDE8M (local address=000000000A3AB0BCM)
+[   8.355] rtl8xxxu_c5: connected bssid=1c:a7:70:de:29:a1 waited_ms=300
+[  25.701] rtl8xxxu_c6: phase 1 report bytes=493985914 ms=10001 kbit=395144 pkts=0
+[  55.490] rtl8xxxu_c6: phase 2 report bytes=59637784 ms=28354 kbit=16824 pkts=0
+[  75.693] rtl8xxxu_c6: phase 3 report bytes=23709630 ms=20000 kbit=9483 pkts=16129
+[ 105.917] rtl8xxxu_c6: phase 4 report bytes=0 ms=0 kbit=0 pkts=0
+[ 126.128] rtl8xxxu_c6: phase 5 report bytes=23671410 ms=20000 kbit=9468 pkts=16103
+[ 136.361] rtl8xxxu_c6: phase 6 report bytes=26923154 ms=10019 kbit=21496 pkts=0
+[ 146.539] rtl8xxxu_c6: phase 7 report bytes=12499410 ms=10000 kbit=9999 pkts=8503
+[ 146.713] rtl8xxxu_c6: PASS C6T
+```
+
+The two clean boots (`c6-2`, `c6-3`) and the same-day GT arm (`gt1`,
+`gt2`):
+
+| board direction | 8723BU station | GT | ratio |
+|---|---|---|---|
+| board-receive TCP | 16.94 | 27.1 (tcpdn 21.4/28.7; repeat 25.4/27.7) | **62.5%** |
+| board-send TCP | 21.16 | 18.35 (18.0/18.7) | **115%** |
+| board-receive UDP (10M) | 9.49 (0% loss) | 10.5 (0%) | 90% |
+| board-send UDP (10M) | 10.0 | 10.4 (10.3/10.5) | 96% |
+
+Three cells align; the board-receive TCP is the one open cell.  The GT's own
+two `tcpdn` sessions scatter 21.4/28.7 (it decays from 37.5 to 13-19 inside
+the 29 s window), so the cell is reported as 62.5% of the max-of-two with
+the raw range beside it, not as a stable single rate.
+
+Two defects are visible in the serial, not hidden:
+
+- `c6-1` stopped at `phase 6 begin` (126.201 s) and printed nothing for
+  more than three minutes; the board needed a power cycle.  `c6-2`/`c6-3`
+  did not reproduce it (1/3 boots).
+- the repeat session `tcpdn2` is 0 bytes in **3/3** RTOS boots while the
+  adapter's counters keep moving in the same window (e.g. `c6-2` phase 4:
+  `rx_frames=39170`, report 0 bytes).  The GT's second session is normal
+  (25.4/27.7).  It is a lwiperf/second-session defect, not a rate gate.
+
+### The serial phenomena in these transcripts
+
+- **The `%pM` artifact.**  The port's `printf` has no `%pM`, so MACs print as
+  `000000000A3A7528M`.  This is in every 8188/8723 transcript (the
+  `authenticate with` line above) and in the AC 7260 ones; the case's own
+  `mac=`/`bssid=` lines are the identity evidence.
+- **Two dongles in the GT log.**  The GT board carries both cards, so its
+  boot has two `Firmware revision` lines.  The 2026-11-14 `gt1` summary's
+  `GT_RTL8XXXU_FW` is the **8723BU's** line
+  (`usb 1-1.2: ... 35.0 (0x5301)`), not the 8188EU's
+  (`usb 4-1.2: ... 28.0 (0x88e1)`); the arm's WLAN was selected by MAC, but
+  the firmware sentinel was the other card.  The runner now anchors on the
+  firmware request name (`EXPECT_FWREQ`) rather than the first
+  `Firmware revision`, and the 8723 arm passes `EXPECT_FWREQ` explicitly.
+- **GT lines duplicated.**  The GT bootargs are
+  `console=ttyS2,115200 earlycon=uart8250,mmio32,0xfe660000 keep_bootcon`;
+  with `keep_bootcon` the early console and `ttyS2` both write to the same
+  UART, so every kernel line after `printk: console [ttyS2] enabled`
+  appears twice.  The RTOS logs have one copy each.  The duplication is an
+  instrument artifact; the reports' parsers take the last/ anchored line,
+  but a naive count doubles.
+- **`none:` as the device prefix.**  The RTOS printk has no device name for
+  the USB interface, so lines read `firmware none: ...` and `drv none: ...`
+  where Linux prints `usb 1-1.2: ...`.  It is a log-prefix gap, not a
+  missing firmware: the firmware line follows and names the blob.
+- **The 8723 image ejects the 8821CU.**  The common USB glue runs the
+  `0bda:1a2b -> c820` modeswitch even in the rtl8xxxu-only image (the
+  sibling dongle on the hub's port 1), so the 8723 transcript has
+  `modeswitch ...` and `Port 1 enumerate fail` before the 8723BU claim.
+  It is a profile leak in the instrument, not a 8723 step; the 8723 claim
+  on port 2 is unaffected.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the
@@ -1074,6 +1257,17 @@ Not claimed, each with its reason:
 - **The GT arm as a control for anything but throughput and the monitor frame
   rate.**  Its job is to be the same card on a mainline kernel; it is not a
   second measurement of the port.
+- **The 8188EU/8723BU throughput is a port-vs-GT comparison, not a chip
+  ceiling.**  The 8723's board-receive TCP is 62.5% of the GT, but the GT's
+  own `tcpdn` scatter is 21.4/28.7 and decays within the window; the gap is
+  the EHCI receive path/RX aggregation candidate, not a proven card limit.
+  The 8188 AP's UDP receive (52%, 12-15% loss) and both roles' board-send
+  TCP (14-17%) are open mechanisms, not alignment.
+- **8723BU AP and monitor are unverified.**  The chip's fileops carries
+  `supports_ap` in the pin, but neither role was run; the monitor role and
+  both cards' WPA2/multi-client/5 GHz paths are not measured here.  The
+  8723 `c6-1` stop (1/3) and the repeat `tcpdn2` 0 bytes (3/3) are open
+  defects, listed above, not rate cells.
 - **Compliance.**  There is no `regulatory.db` in this image, so the wiphy runs
   on the world regdomain.  The channel flags above are the driver's
   `orig_flags`, not a country's rules.
