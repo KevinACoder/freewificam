@@ -1,5 +1,5 @@
-#ifndef BRINGUP_BOARD_H
-#define BRINGUP_BOARD_H
+#ifndef FREEWIFICAM_STM32F429_BOARD_H
+#define FREEWIFICAM_STM32F429_BOARD_H
 
 #include <stdint.h>
 
