@@ -48,7 +48,10 @@ In the AC 7260 tables every arm is the same card: the Linux column is that card
 on a mainline kernel (`iwlwifi`, `iwlmvm`), the `rtos` column is the same card
 on this port.  The RTL8189FTV tables are a second card and a second driver
 world, and their Linux column is that card on a mainline kernel with the
-vendor's own stack.  A rate
+vendor's own stack.  The RTL8851BU tables are a third card and a third driver
+world (`rtw89` over USB); their Linux column is the same card on the pin's GT
+kernel, and the AP table's GT column is a fallback denominator, described
+under it.  A rate
 is payload bytes over the interval that actually elapsed, counted at the
 receiver: `iperf2`'s own window where the peer receives, the case's byte counter
 where the board receives, and the peer's counting sink for the AP role's UDP
@@ -70,7 +73,8 @@ Zero loss in every row unless stated; a Wi-Fi cell that drops more than 1% is
 void.  The two benches are not interchangeable and are named per table: in the
 station role the peer is the Pi's RTL8812AU AP on channel 5 (2432 MHz); in the
 AP role the peer is a Pi station (the MT7921AU on the AC 7260 bench, where the
-board beacons on channel 11) and the RTL8189FTV beacons on channel 5.  Both are
+board beacons on channel 11; the 8851BU AP uses the same MT7921AU station on
+channel 5) and the RTL8189FTV beacons on channel 5.  Both are
 open unless the row says WPA2.  A rate is quoted over the interval the flow
 actually ran, which is not always the phase's own window - where the two differ
 the row says so.  A volume in MB is 10^6 bytes; where a figure is `iperf2`'s
@@ -273,6 +277,90 @@ boot counts 67,938 frames down and 125,725 up with `retry=0` and `ampdu=0`: the
 reference peer's driver reports no retries for these frames, and the port's
 counter records no aggregation, so rate/aggregation state is the open
 observation face here, not a conclusion.
+
+### RK3568 / Realtek RTL8851BU / USB - station
+
+`PROFILE=rk3568-rtw89-8851bu-c6`, driven by `tools/rtos/c6-throughput.sh`; two
+cold boots.  The Linux column is the same card on the pin's GT kernel with
+mainline `rtw89`, on the same bench AP (`labwifi-ar-ht20s`, ch5/2432/HT20) and
+the same iperf2 windows.
+
+| case | rtos, boot 1 | rtos, boot 2 | Linux reference | vs reference |
+|---|---|---|---|---|
+| `W-TCP-D/HT20` | 27.26 / **33.30** | 30.17 / **30.51** | 42.3 | **75.4%** (mean 31.90; gate 33.8, fail) |
+| `W-TCP-U/HT20` | 45.27 | 45.93 | 56.1 | **81.3%** (mean 45.60; gate 44.9, pass) |
+| `W-UDP-D/HT20` (40 M offered) | 37.87, 0% loss | 37.87, 0% loss | 36.7 at 35 M / 47.2 at 45 M | no same-offer cell; loss is the gate |
+| `W-UDP-U/HT20` | board-side 30.16 | board-side 30.18 | 36.7 | void |
+
+The downlink cell is the larger of the boot's two repeats (both are printed:
+27.26/33.30 and 30.17/30.51); the gate is the mean of the two boot cells
+(31.90), which is 1.9 Mbit/s short of 33.8.  The UDP downlink was offered at 40 M, between the
+reference's 35 M and 45 M rungs, so the row reports loss (0% within the 1%
+gate; the board counts 94.67 MB and the peer 94.37 MB, +0.31%) and no ratio.
+The UDP uplink is void for the same instrument reason as the 7260 station
+table: the board's blast counter is not a received figure.
+
+The C6T round's stall was the port's `WARN_ON_ONCE` printing once per received
+frame (mac80211's `softirq_count()==0` warning), which consumed 25-28 s of the
+30 s window; the per-site once fix made the seven phases complete.  The
+downlink is still 0.75x the reference.
+
+### RK3568 / Realtek RTL8851BU / USB - access point
+
+`PROFILE=rk3568-rtw89-8851bu-ap-tp`, driven by `tools/rtos/ap-round.sh`; two
+cold boots, both `PASS APT`.  The AP MLME is the ported NXP `hostapd`; the peer
+is the Pi's MT7921AU.  The GT column is the same card's AP arm on the pin's GT
+kernel, but the same-ruler rerun failed three times on instruments; the
+denominator is the first round's `gt-ap5` for TCP (256K windows) and the
+`gt-ap1` + `gt-ap5` mean for UDP uplink (`gt-ap1`'s 128K/16K windows are
+excluded from TCP).  It is a fallback, recorded in the round's PREREG section
+10.
+
+| case | rtos, ap2 | rtos, ap3 | GT (fallback) | vs GT |
+|---|---|---|---|---|
+| `W-TCP-D/HT20` | 6.64 | 5.91 | 5.37 | **116.9%** (mean 6.28, pass) |
+| `W-TCP-U/HT20` | 7.66 | 5.66 | 8.50 | **78.4%** (mean 6.66, fail) |
+| `W-UDP-D/HT20` (10 M offered) | 9.50, 0.52% loss | 7.76, 1.39% loss | no common cell | mean 8.63, mean loss 0.96%; absolute gate pass |
+| `W-UDP-U/HT20` | 8.31 | 8.18 | 9.115 | **90.4%** (mean 8.24, pass) |
+
+The TCP cells are a 10 s common window: the GT flow ends at 10.4 s and the
+RTOS phase runs 24 s, so the whole-window RTOS numbers are higher (7.95 / 6.86
+up) and are not the cells.  The UDP downlink has no common GT cell (the old GT
+40 M arm used a different offered rate and receiver); it is judged by the
+pre-registered absolute gate, at least 8.0 Mbit/s and at most 2% loss.  The
+mean passes (8.63, 0.96%), but ap3 alone is 7.76 Mbit/s with 1.39% loss; the
+gate uses the mean and both per-boot values are printed.  The old 15.4%
+UDP-down loss was the port's pbuf reuse: one pbuf per datagram gives one frame
+per datagram and 0.52%/1.39% at the sink.  The `tcpdn2` zero-byte phase was two
+Pi TCP servers racing port 5001; starting them as one sequential job fixed it.
+
+The report's verdict is `fail`, and the only failed gate is `tcp_up_ge_80`;
+TCP down, both UDP gates and both app-vs-app checks pass.  The scatter is 11.3%
+(TCP down), 16% (TCP up), 15% (UDP down) and 1.6% (UDP up), so the table
+reports means and ranges, not stable rates.  app-vs-app down is 0.61%;
+app-vs-app up is 0.0% using the board's `udp_in` count (the sink's 5.1% is the
+3 s margin offset, not a loss).  The a4-3 silence did not reproduce in the 2/2
+clean boots; its mechanism is unproven.
+
+### RK3568 / Realtek RTL8851BU / USB - monitor
+
+`PROFILE=rk3568-rtw89-8851bu-mon`, driven by `tools/rtos/mon-round.sh --card
+rtw89`.  Two cold boots, both `PASS MON`.  The monitor is receive-only on the
+bench AP's channel (ch5/2432, HT20); the reference is the AP's advertised 100 TU
+cadence (about 9.77 beacons/s), not a same-card Linux monitor arm.
+
+| case | rtos, mon1 | rtos, mon2 | AP cadence | vs cadence |
+|---|---|---|---|---|
+| `W-MON-BEACON/HT20` | 161 beacons/15 s (**10.7/s**), 236 frames | 161/15 s (**10.7/s**), 231 frames | 100 TU = 9.77/s | +9.9% |
+
+Both boots print `set_iface rc=0 type=6`, `start rc=0 devtype=803` and
+`set_freq rc=0 freq=2432`.  Radiotap `it_len` is 26/39 and 26/50, `freq=2432`
+on 226/221 frames (10 frames are on 2412 from before the channel request
+landed), and `bad=0`.  lwIP's `rx_frames` stays 0 -> 0 and `tx_packets=0`.  The
+census also carries probes (7/4), probe responses (3/2), auth (6/6), assoc
+(6/6), data (12/14) and control (35/31) from the Pi's client loop.  RX only:
+nothing is injected, and channel hopping, 5 GHz and a five-minute soak are
+untested.
 
 ### Stability
 

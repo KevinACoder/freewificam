@@ -56,6 +56,26 @@ the one without the imported stack linked in.
 两者都在 `docs/LICENSES.md`（外层）同表登记；`ARCHITECTURE.md` §5 的隔离规则不变：
 这两个 profile 不与 `rtw88`/`rtw89` 的 BSD profile 共链。
 
+## 4b. 8851BU 产物（2026-11-14）
+
+| 产物 | 组成 | 许可证 |
+|---|---|---|
+| `rk3568-rtw89-8851bu-c3` 镜像 | rtw89（双许可，本产物取 GPL-2.0 链接）+ mac80211/cfg80211（GPL-2.0-only）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtw8851b_fw-1.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-c4` 镜像 | 同上（C4 的 nl80211 scan helper 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-c5` 镜像 | 同上（C5/C6 的 connect helper 与 lwIP netif 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-c6` 镜像 | 同上（C6T 的相位面与吞吐工具是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-c6-diag` 镜像 | 同上（诊断臂只加观测，不改变链接边界） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-ap` 镜像 | 同上 + 导入的 NXP hostapd（BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-ap-tp` 镜像 | 同上 + `CONFIG_RTW89_AP_TP` 的相位表 | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-ap-diag` 镜像 | 同上 + stage/watchdog/no-margin 诊断开关 | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtw89-8851bu-mon` 镜像 | 同上（monitor 角色；lwIP 只作 M4 计数见证，未起 netif） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+
+这些产物全部链接 `net/mac80211` + `net/wireless`（GPL-2.0-only），因此尽管
+`rtw89` 驱动本身是 `GPL-2.0 OR BSD-3-Clause`，产物按 **GPL-2.0** 登记；
+`rtw8851b_fw-1.bin` 另按 `LICENCE.realtek_firmware` 再分发。两件事分别登记，
+不互相替代。它们不构成老仓按 BSD 发布的那条 rtw89 线，也不与 `rtw88`/`rtw89`
+的 BSD profile 共链。
+
 ## 5. 固件（2026-11-11 起入库）
 
 `components/liblinux80211/fw/iwlwifi-7260-17.ucode` 是 **Intel 二进制固件**，

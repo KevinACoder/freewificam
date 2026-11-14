@@ -814,6 +814,225 @@ mean interval is 116-125 ms with occasional gaps of 300-410 ms on this port and
 That is the vendor's software beacon timer, and it is why the AP role's timing
 is compared between the two arms and not against the advertisement.
 
+## RTL8851BU (USB, mac80211 + rtw89)
+
+Card: Realtek RTL8851BU, `0bda:b851`, MAC `90:de:80:1b:25:ed`, firmware
+`0.29.41.5 (4bd6ebac)`, on the board's DWC3 xHCI at `0xFCC00000`.  The stack is
+the ported `net/mac80211` + `net/wireless`; the driver is the GT pin's `rtw89`
+tree with no source patch.  The bench is the standard one: Pi RTL8812AU
+`wlan2` is `labwifi-ar-ht20s` on ch5/2432/HT20/open, and for the monitor round
+the Pi's MT7921AU `wlan1` is a client.  Three roles below; each transcript is
+one cold boot, and the two boots named 2/2 are the two in the run record.
+
+Every boot also prints this line, as the other cards do:
+
+```
+[   3.063] rtw89_mon: drv failed to load regulatory.db
+```
+
+That is the world regdomain talking, not a card failure: the image has no
+`regulatory.db`, so every channel's flags are the driver's `orig_flags` and
+not a country's rules.  The channel the roles use is `flags=0x00080180` on
+2432, which the AP case prints before it beacons.
+
+### Station - `rk3568-rtw89-8851bu-c5` and `-c6`
+
+What the transcript proves, in order: the USB engine and the compiled-in
+firmware bring up `wlan0`; the real scan finds the bench BSS on 2432; the open
+association completes in 600 ms; `PASS C5`; the lwIP netif is `wl0` with the
+card's MAC and `192.168.99.2/24`; both ICMP payloads are 20/20 and `PASS C6`.
+
+```
+[   3.050] rtw89_c5: core ready
+[   5.980] rtw89_c5: wlan0 present=1 ifindex=1 mac=90:de:80:1b:25:ed
+[   8.256] rtw89_c5: scan ssid=labwifi-ar-ht20s freq=2432 rc=0
+[   8.361] rtw89_c5: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 freq=2432 signal=-18
+[  10.033] rtw89_c5: connect ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 freq=2432 rc=0
+[  10.759] rtw89_c5: connected bssid=1c:a7:70:de:29:a1 waited_ms=600
+[  10.765] rtw89_c5: PASS C5
+[  10.968] rtw89_c5: netif up name=wl0 ip=192.168.99.2/24 mac=90:de:80:1b:25:ed
+[  23.725] rtw89_c5: ping tx=20 rx=20 payload=56 rtt_ms=2/4/20
+[  24.450] rtw89_c5: ping tx=20 rx=20 payload=1400 rtt_ms=3/3/13
+[  24.464] rtw89_c5: PASS C6
+```
+
+The clean C6T arm (`rk3568-rtw89-8851bu-c6`) adds the seven phases.  The phase
+block is worth reading in full once; the short version here is the one the
+README's station table comes from:
+
+```
+[  24.455] rtw89_c6: plan=throughput bssid=1c:a7:70:de:29:a1 dev=wlan0
+[  24.462] rtw89_c6: ready netif=1 rx_frames=43 tx_frames=43
+[  24.472] rtw89_c6: phase 1 begin proto=tcp role=client port=5001 window_ms=12000 name=loopback
+[  34.487] rtw89_c6: phase 1 report bytes=498690034 ms=10001 kbit=398912 pkts=0
+[  34.574] rtw89_c6: phase 2 begin proto=tcp role=server port=5001 window_ms=30000 name=tcpdn
+[  63.794] rtw89_c6: phase 2 report bytes=91095064 ms=26736 kbit=27256 pkts=0
+[  63.864] rtw89_c6: phase 3 begin proto=udp role=server port=5002 window_ms=20000 name=udpdn
+[  85.349] rtw89_c6: phase 3 report bytes=94668000 ms=20000 kbit=37867 pkts=64400
+[  85.419] rtw89_c6: phase 4 begin proto=tcp role=server port=5001 window_ms=30000 name=tcpdn2
+[ 114.937] rtw89_c6: phase 4 report bytes=111280152 ms=26733 kbit=33296 pkts=0
+[ 136.654] rtw89_c6: phase 6 begin proto=tcp role=client port=5001 window_ms=12000 name=tcpup
+[ 146.722] rtw89_c6: phase 6 report bytes=56636344 ms=10007 kbit=45272 pkts=0
+[ 166.886] rtw89_c6: PASS C6T
+```
+
+The two TCP-down repeats are 27.26 and 33.30 Mbit/s; the boot's cell is the
+larger, and the 80% gate (33.8) is missed at the two-boot mean of 31.90.  The
+TCP-up cell is 45.27 (81.3% of the reference), and the 40 M UDP downlink is
+37.87 with 0% loss.  That is the station table's fail and pass; the console's
+job is to show that the phases ran and which counters moved.
+
+### AP - `rk3568-rtw89-8851bu-ap` and `-ap-tp`
+
+The AP role is the other direction of the same seam: the ported NXP `hostapd`
+owns the AP MLME, mac80211 owns the AP state machine, and rtw89 pushes the
+beacon to the firmware.  The transcript below proves, in order: the interface
+type change, the lwIP netif, hostapd's start and beacon, the Pi's association,
+and both ICMP payloads in both directions.
+
+```
+[   5.999] rtw89_ap: set_iface rc=0 type=3
+[   7.189] rtw89_ap: start rc=0
+[   7.192] rtw89_ap: netif up name=wl0 ip=192.168.99.1/24 mac=90:de:80:1b:25:ed
+[   7.200] rtw89_ap: security wpa2=0 ssid=rtos-8851-ap channel=5 bcn_int=100 dtim_req=2
+[  14.026] rtw89_ap: PASS A1
+[  20.571] rtw89_ap: sta n=1 hostap=1 mac=90:de:80:4c:38:c5
+[  20.576] rtw89_ap: PASS A2
+[  36.669] rtw89_ap: ping payload=56 tx=20 rx=20 dup=0 rtt_ms=3/24/78
+[  37.786] rtw89_ap: ping payload=1400 tx=20 rx=20 dup=0 rtt_ms=3/25/74
+[  37.803] rtw89_ap: PASS A3
+```
+
+The A4 arm (`rk3568-rtw89-8851bu-ap-tp`, `PASS APT` twice) adds the five-phase
+table.  The block for the first phase is the shape every phase has:
+
+```
+[  37.811] rtw89_ap: phase 1 begin proto=tcp role=client air=down port=5001 window_ms=12000 name=tcpdn peer_ms=3000 rate_kbps=0
+[  50.883] rtw89_ap: phase 1 report bytes=8360714 ms=10007 kbit=6680 pkts=0
+[  50.890] rtw89_ap: phase 1 udp offered=0 tx_err=0 rx_drop=0 first_ms=0 last_ms=0 beat=5548 stall_ms=250
+[  50.900] rtw89_ap: phase 1 stack tcp_recv=5462 tcp_xmit=5729 tcp_drop=0 tcp_memerr=0 tcp_err=0 pbuf_err=0 tcpseg_err=0 udp_in=0 udp_in_err=0 udp_noport=0 ip_drop=0 ip_chkerr=0 link_drop=0 mbox_full=0
+[  50.918] rtw89_ap: phase 1 census rx_frames=5462 rx_bytes=294956 tx_frames=5729 tx_fail=0 rxdlv_us=0 txndo_us=0 tx_status=5729 dequeue=5729 stopq=0 wakeq=0 skb_used=16 skb_high=128 alloc_fail=0 data_ovf=0
+[  50.936] rtw89_ap: phase 1 usb submits=6865 completes=6865 refused=0 stage_overflow=0 slots_exhausted=0 rx=1130 rx_err=0
+[  50.947] rtw89_ap: phase 1 net rx_frames=5462 tx_frames=5729 rx_foreign=0 rx_no_netif=0 rx_input_fail=0 rx_post_fail=0
+[  50.957] rtw89_ap: phase 1 done ok=1
+```
+
+The A4 table's cells are a 10 s common window (the GT flow ends at 10.4 s);
+the phase report is the full 24 s, so phase 2's 7.95 is not the table's 7.66.
+
+### Monitor - `rk3568-rtw89-8851bu-mon`
+
+What the transcript proves, in order: the type change, the open (devtype 803,
+the radiotap type), the channel request, and a 15 s window in which the port's
+sink, not lwIP, takes the frames.  `PASS MON` is gated on >=8 beacons/s,
+`bad=0`, an unchanged lwIP `rx_frames` and `tx_packets=0`; the frame census is
+reported, not gated.
+
+```
+[   5.986] rtw89_mon: wlan0 present=1 ifindex=1 mac=90:de:80:1b:25:ed iftype=2
+[   5.993] rtw89_mon: chan freq=2432 present=1 flags=0x00080180
+[   5.999] rtw89_mon: sink enabled=1
+[   6.002] rtw89_mon: set_iface rc=0 type=6
+[   7.088] rtw89_mon: start rc=0 netif_running=1 devtype=803
+[   8.096] rtw89_mon: set_freq rc=0 freq=2432
+[   8.100] rtw89_mon: window ms=15000
+[  23.191] rtw89_mon: sample t=15000 frames=236 beacons=161 data=12
+[  23.197] rtw89_mon: sink frames=236 bytes=42007 beacons=161 probes=7 probe_resp=3 auth=6 assoc=6 data=12 ctrl=35 other=9
+[  23.208] rtw89_mon: radiotap it_len=26/39 freq=2432 bad=0 short=0
+[  23.214] rtw89_mon: freq 0 mhz=2412 frames=10
+[  23.218] rtw89_mon: freq 1 mhz=2432 frames=226
+[  23.256] rtw89_mon: lwip in rx_frames=0 rx_foreign=0 tx_frames=0
+[  23.262] rtw89_mon: lwip out rx_frames=0 rx_foreign=0 tx_frames=0
+[  23.268] rtw89_mon: tx dev tx_packets=0 tx_bytes=0
+[  23.283] rtw89_mon: PASS MON
+```
+
+The second boot prints 231 frames and the same 161 beacons, `it_len` 26/50,
+221 frames on 2432, and the same lwIP and tx lines.  The ten frames on 2412
+are the wiphy's default channel before the channel request lands; the sink
+keeps a per-frequency histogram so that "the frequency" is the dominant one
+and the minority is visible rather than hidden.  The reference is the AP's
+100 TU (about 9.77 beacons/s), not a same-card Linux monitor arm; the two boots
+see 10.7/s, which is the cadence check the README reports.  RX only: nothing
+is injected, and channel hopping, 5 GHz and a five-minute soak are untested.
+
+### The lines that mattered
+
+**The a4-3 silence.**  The 2026-11-14 AP round's `rtos-a4-3` boot ends at a
+phase's begin line, with the next ~25 s of the capture carrying nothing:
+
+```
+[  82.358] rtw89_ap: phase 2 done ok=1
+[  82.361] rtw89_ap: phase 3 begin proto=tcp role=client air=down port=5001 window_ms=12000 name=tcpdn2 peer_ms=3000 rate_kbps=0
+```
+
+The old record called this "tcpup / 12 minutes"; both were wrong.  It is phase
+3 (`tcpdn2`), the capture ends about 25 s later at the host's own clock, and
+the case never resumed.  It did not reproduce in the 2/2 clean A4 boots, and
+the mechanism is not proven; the diag image that would name it
+(`-ap-diag`, stage anchors plus the 2 s watchdog) was built but not booted.
+The reopen condition is in the run's PREREG.
+
+**The invalid `rtos-ap1` boot.**  This is the boot that exposed the two Pi TCP
+servers racing port 5001.  Its phase 3 is a 0-byte TCP downlink with the
+heartbeat stale, and phases 4/5 show the pool pressure that follows:
+
+```
+[  92.785] rtw89_ap: phase 3 fail rc=-1 lock=- held=0ms beat=20807 stall_ms=11900
+[ 101.804] rtw89_ap: drv lkpiu: failed to alloc skb for h2c join
+[ 107.819] [previous line repeated 1 times]
+[ 120.029] rtw89_ap: drv lkpiu: failed to alloc skb for h2c join
+[ 129.124] [previous line repeated 4 times]
+[ 129.163] rtw89_ap: phase 5 census rx_frames=5636 rx_bytes=8521632 tx_frames=0 tx_fail=0 rxdlv_us=0 txndo_us=0 tx_status=0 dequeue=0 stopq=0 wakeq=0 skb_used=128 skb_high=128 alloc_fail=2454 data_ovf=7968
+[ 129.206] rtw89_ap: FAIL traffic phases 4/5
+```
+
+The h2c line is the driver failing to allocate a join command because the skb
+pool is full (`skb_used=128/128`); it is a symptom of the phase's TX pressure,
+not a read on the air.  The boot is invalid for the 2/2 because phase 3 had no
+server; it is kept as mechanism evidence.
+
+**The C6T WARN flood.**  The previous C6T round misread a stalled receive
+window as a mac80211 reorder-ring freeze.  The diagnostic arm
+(`rk3568-rtw89-8851bu-c6-diag`, `diag1l`) says otherwise: the queue held 187
+unparsed USB RX buffers, the pool was 128/128, and the receive worker spent the
+window printing one warning per frame:
+
+```
+[  54.731] rtw89_c6: phase 2 report bytes=0 ms=0 kbit=0 pkts=0
+[  54.780] rtw89_c6: pool phase 2 skb=128/128 data=3/64 af=8 df=0 sf=0
+[  54.787] rtw89_c6: owner phase 2 q=000000000A521BF8 items=187 bytes=173990
+[  54.816] rtw89_c6: pf phase 2 calls=4820
+[  54.821] rtw89_c6: pfra phase 2 ra=000000000A0A6EF0 n=4808
+[  54.840] rtw89_c6: mcmp phase 2 calls=305812919 bytes=4278978371
+```
+
+`pfra`'s 4,808 calls resolve to `ieee80211_rx_list`'s
+`WARN_ON_ONCE(softirq_count()==0)`, and the 305.8 million `memcmp` calls
+resolve to the log sink's `strstr`.  The port's `WARN_ON_ONCE` was a
+`WARN_ON`; the RX runs in task context, so the warning was true on every
+frame.  Making it per-site once removed the flood; the clean arm's seven
+phases complete and `PASS C6T`, and the downlink is 0.75x the reference.  The
+old "reorder freeze" classification is withdrawn.
+
+**The repeated-line folder.**  The console collapses runs of identical lines
+into `[previous line repeated N times]`.  It is the console's own compression,
+not a case anchor, and a `grep` for the repeated text undercounts it.  The
+a4-3 boot has no repeat lines because it went silent; the invalid `rtos-ap1`
+boot has two runs, in phases 4 and 5.
+
+**How to read a phase block.**  `begin` names proto/role/air/port/window;
+`report` is the client's or server's own bytes over the interval it measured;
+`udp` is the sender's half (offered, `tx_err`, first/last datagram time,
+heartbeat `beat` and `stall_ms`); `stack` is lwIP's counters; `census` is the
+adapter plus the skb pool and TX health; `usb` is the CherryUSB completions;
+`net` is the port's netdev view; `done ok=` is the phase verdict.  `stall_ms`
+is the gap between lwIP heartbeat samples, not a card stall; `tx_err` is a
+refused transmit (pool or queue), not an air loss; `data_ovf` is the data pool
+falling back to the heap; `skb_used/high` is the pool's occupancy.  A phase
+that reports 0 bytes with a stale `beat` never sent; one that reports bytes
+with a rising `tx_fail` offers faster than the port can drain.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the
@@ -831,7 +1050,23 @@ Not claimed, each with its reason:
 - **5 GHz in either role**: the AP's refusal is the card's, and the station's
   association is blocked with a reopen condition, not judged.
 - **Transmit from a monitor interface** - injection, channel hopping and the
-  five-minute monitor soak are untested.  The transcript above is receive only.
+  five-minute monitor soak are untested.  The monitor transcripts (AC 7260 and
+  RTL8851BU) are receive only.
+- **The 8851BU monitor rate is a cadence check, not a GT parity claim.**  The
+  two boots see 10.7 beacons/s against the AP's 100 TU (9.77/s); there is no
+  same-card Linux monitor arm this round, and the 10 frames on 2412 are the
+  default channel before the request landed.
+- **The 8851BU AP table's GT column is a fallback denominator.**  The
+  same-ruler GT arm failed three times on instruments; the TCP column is
+  `gt-ap5` and the UDP-uplink column is the `gt-ap1`+`gt-ap5` mean.  The TCP
+  uplink is 78.4% and fails the gate; the three non-UDP-uplink cells scatter
+  11-16%, so the table reports means and ranges, not stable rates.  The a4-3
+  silence's mechanism is unproven and the invalid `rtos-ap1` boot is not part
+  of the 2/2.
+- **The 8851BU station downlink is below the gate.**  The C6T cells are
+  33.30/30.51 (mean 31.90) against 42.3, 75.4%; the 40 M UDP downlink has no
+  same-offer GT cell, so only its 0% loss is judged, and the UDP uplink is
+  void for the instrument reason above.
 - **Power-save buffering.**  `ps_buffered` in the AP transcript is the driver's
   own ledger; there is no `SET_POWER_SAVE` A/B behind it.
 - **The GT arm as a control for anything but throughput and the monitor frame
