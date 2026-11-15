@@ -112,15 +112,16 @@ not a failed enumeration; a separate generic-enumeration case is future work.
 
 A USB3 hub (`05e3:0610`) is visible and USB2-compatible on this FS host: the
 hub itself, the RTL8188EUS (`0bda:8179`, hub port 2) and the U disk
-(`05e3:0749`, hub port 4) all complete USB enumeration.  The U disk's block 0
-and eight-block read pass through the hub, but the 512 B WRITE10 roundtrip
-stops after the CBW (no CSW/PASS).  The same image and disk direct on P2 pass
-2/2, so this is a hub-path/out-transfer or power issue, not the direct link.
+(`05e3:0749`, hub port 4) all complete USB enumeration.  In a USB_DBG_LOG
+diagnostic boot, the U disk's block 0 and eight-block read pass through the
+hub, but the 512 B WRITE10 roundtrip stops after the CBW (no CSW/PASS).  The
+same code and disk direct on P2 with the normal INFO image pass 2/2, so this
+is a hub-path/out-transfer or power issue, not the direct link.
 
 The hub is therefore **not** an accepted storage topology yet.  Reopen with a
 self-powered hub (or external 5 V) first; if the write still hangs, instrument
 the DWC2 OUT channel/HCINT path rather than adding a longer timeout.  One INFO
-boot registered the hub but saw no downstream device within 30 s, while a
+boot registered the hub but saw no downstream device within 30 s, while the
 USB_DBG_LOG build saw both; that timing is also unclassified.  Evidence:
 `runs/2026-11-15-f429-usb-hub/`.
 
@@ -131,10 +132,11 @@ Structurally the stack can carry **one external hub**:
 core has 12 host channels.  That is enough endpoints/channels for a few FS
 devices on one hub.  But it is not a promise that multiple WiFi modules work:
 
-1. The hub path is only proven for enumeration and U-disk reads.  The U-disk
-   512 B WRITE10 through the hub still stops after the CBW, while the direct
-   P2 path is 2/2.  WiFi transmit is bulk OUT, the same path that hangs, so
-   the hub OUT path (and its power/current budget) has to be closed first.
+1. The hub path is only proven for enumeration and U-disk reads in the DBG
+   boot.  The U-disk 512 B WRITE10 through the hub still stops after the
+   CBW, while the direct P2 path is 2/2.  WiFi transmit is bulk OUT, the same
+   path that hangs, so the hub OUT path (and its power/current budget) has to
+   be closed first.
 2. The F429 is a **single full-speed host**: all devices behind the hub share
    12 Mbit/s.  Two or more WiFi modules doing scan/assoc/data will compete for
    that one FS frame budget, before any driver/CPU cost.

@@ -1324,13 +1324,13 @@ USB path is loaded; the vendor interface is deliberately unclaimed.  Run:
 
 A USB3 hub (`05e3:0610`) on the FS host enumerates, and its two devices are
 visible: RTL8188EUS `0bda:8179` on hub port 2 (class 0xff, unsupported) and
-U disk `05e3:0749` on hub port 4.  The U disk reads block 0 and eight blocks
-through the hub, then the 512 B WRITE10 stops after the CBW with no CSW/PASS.
-The same image and disk direct on P2 pass 2/2, so the direct link is not the
-issue.  The hub is **not** an accepted storage topology; the leftover is the
-hub-path bulk-OUT or power question, plus one INFO boot that registered the hub
-but saw no downstream device within 30 s.  Run:
-`runs/2026-11-15-f429-usb-hub/`.
+U disk `05e3:0749` on hub port 4.  In a USB_DBG_LOG diagnostic boot the U disk
+reads block 0 and eight blocks through the hub, then the 512 B WRITE10 stops
+after the CBW with no CSW/PASS.  The same code and disk direct on P2 with the
+normal INFO image pass 2/2, so the direct link is not the issue.  The hub is
+**not** an accepted storage topology; the leftover is the hub-path bulk-OUT or
+power question, plus one INFO boot that registered the hub but saw no
+downstream device within 30 s.  Run: `runs/2026-11-15-f429-usb-hub/`.
 
 ## What is not claimed here
 
