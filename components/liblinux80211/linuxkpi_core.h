@@ -130,9 +130,35 @@ typedef uint32_t		__wsum;
 typedef unsigned long		ulong;
 typedef unsigned int		uint;
 typedef int64_t			loff_t;
+/*
+ * sysfs show/store signatures. The interface's ssize_t is a long: 64 bits on a
+ * 64-bit target, 32 on a 32-bit one. On a 64-bit target the port states the type
+ * itself, unchanged (int64_t is that target's `long`, and it is also the newlib
+ * ssize_t, so a unit that included <stdio.h> first does not disagree).
+ * On a 32-bit target the C library's ssize_t is `int`, and a typedef of a different
+ * width is a hard error in the units that reach this header through <stdio.h>. The
+ * type is therefore only stated when the C library has not stated it yet; its own
+ * guard (`_SSIZE_T_DECLARED`, set by newlib's stdio.h:80 and sys/types.h:183) keeps
+ * the declaration single in both directions. Stating it here rather than including
+ * <sys/types.h> keeps the driver world free of the rest of that header's POSIX types
+ * (clockid_t above all - the contract states it as `int` in linux/timekeeping.h, and
+ * newlib's is `unsigned long`). Both the stack world (S0, no stdio force-included)
+ * and the KPI world (stdio included by the target layer) compile with this.
+ */
+#if __SIZEOF_LONG__ == 8
 typedef int64_t			ssize_t;	/* sysfs show/store signatures */
+#elif !defined(_SSIZE_T_DECLARED)
+typedef int			ssize_t;	/* 32-bit newlib's width */
+#define	_SSIZE_T_DECLARED		/* the C library's own guard */
+#endif
 typedef int64_t			time64_t;	/* the second count of a timespec64 */
-typedef uint64_t		dma_addr_t;
+/*
+ * DMA addresses are the CPU's addresses: long-sized, which is what the interface's
+ * dma_addr_t spells on Linux (64 bits on the 64-bit board - unsigned long stays 64
+ * bits there, so the ABI is unchanged - and 32 bits on the 32-bit MCU, whose DMA
+ * engines are 32-bit).
+ */
+typedef unsigned long		dma_addr_t;
 typedef unsigned int		gfp_t;
 
 #define	__user

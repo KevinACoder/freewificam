@@ -31,7 +31,15 @@
 #define configSUPPORT_DYNAMIC_ALLOCATION         1
 #define configSUPPORT_STATIC_ALLOCATION          0
 #define configTOTAL_HEAP_SIZE                    ( ( size_t ) CONFIG_FREERTOS_HEAP_SIZE )
+/* The wireless profiles place the heap in the core board's 32 MB FMC SDRAM
+ * (main() brings the controller up before the first allocation); the board
+ * glue then supplies ucHeap in the .sdram.heap section.  Every other image
+ * keeps the kernel's own .bss array. */
+#if defined(CONFIG_F429_HEAP_SDRAM)
+#define configAPPLICATION_ALLOCATED_HEAP         1
+#else
 #define configAPPLICATION_ALLOCATED_HEAP         0
+#endif
 
 #define configUSE_MUTEXES                        1
 #define configUSE_RECURSIVE_MUTEXES              1
@@ -46,7 +54,7 @@
 #define configUSE_CO_ROUTINES                    0
 
 #define configUSE_IDLE_HOOK                      0
-#define configUSE_TICK_HOOK                      0
+#define configUSE_TICK_HOOK                      1
 #define configCHECK_FOR_STACK_OVERFLOW           2
 #define configUSE_MALLOC_FAILED_HOOK             1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK       0

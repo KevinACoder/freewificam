@@ -31,7 +31,7 @@ WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260
 	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap \
 	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
-	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6
+	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6 f429_wifi
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -144,7 +144,16 @@ WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
 # other wraps are component-defined (c2h_inline.c, tx_health.c,
 # tx_dequeue_context.c) or iwlwifi's (unreferenced outside that world), so they
 # stay global.
-WL80211_LDFLAGS := -Wl,--wrap=ieee80211_tx_dequeue \
+# The F429 station arm's cfg80211 auth->assoc seams: its case defines the two
+# wrap bodies, so the flags are added only for that image.
+ifneq ($(filter f429_wifi,$(CASES)),)
+WL80211_LDFLAGS += -Wl,--wrap=cfg80211_sme_rx_auth \
+	-Wl,--wrap=cfg80211_mlme_assoc \
+	-Wl,--wrap=ieee80211_scan_completed \
+	-Wl,--wrap=ieee80211_sta_work
+endif
+
+WL80211_LDFLAGS += -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=ieee80211_queue_work \
 	-Wl,--wrap=cfg80211_rx_mgmt_ext \
 	-Wl,--wrap=ieee80211_tx_status_skb \

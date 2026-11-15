@@ -53,6 +53,14 @@ struct lkpi_usb_chusb_stats {
 	unsigned int	zero_packet_ignored;	/* ZLP asked for but not required (IN, len 0, aligned to nothing) */
 	unsigned int	zlp_added;		/* OUTs that got the maxpacket-boundary delimiter */
 	unsigned int	refused;		/* malformed requests refused */
+	/* Bulk-OUT completions, split from the receive side: a transmit whose
+	 * URB fails is invisible in rx_errors and the driver still reports a tx
+	 * status, so the two directions need their own counters before "the
+	 * frame never hit the air" can be attributed. */
+	unsigned int	tx_completes;
+	unsigned int	tx_errors;
+	int		tx_last_err;		/* first/last non-zero status */
+	unsigned int	tx_last_len;
 	unsigned int	stage_size;		/* the compiled stage slot size */
 	unsigned int	stage_slots;		/* the compiled stage slot count */
 	/* the first four bytes of the last control IN transfer's stage, taken

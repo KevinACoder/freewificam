@@ -36,7 +36,7 @@
  *                                         path never sets URB_ZERO_PACKET)
  *   be_urb.interval                       unused here: the stack derives the interval
  *                                         from the endpoint descriptor it is handed
- *   poll(ctx)                             usb_board_bus_ready() + USBH_IRQHandler()
+ *   poll(ctx)                             usb_board_bus_ready() + usb_board_irq_dispatch()
  *                                         for every started bus (EHCI included), run
  *                                         from the engine's drain thread
  *
@@ -87,7 +87,7 @@
 
 #include "usbh_core.h"
 #include "usb_errno.h"
-#include "usb_domain.h"
+#include "lkpi_usb_board.h"
 #include "usb_osal.h"
 
 /* ------------------------------------------------------------------ */
@@ -625,6 +625,18 @@ chu_complete(void *arg, int nbytes)
 		}
 #endif
 	}
+	if (slot->urb.ep != NULL &&
+	    (slot->urb.ep->bEndpointAddress & USB_EP_DIR_IN) == 0U &&
+	    USB_GET_ENDPOINT_TYPE(slot->urb.ep->bmAttributes) ==
+	    USB_ENDPOINT_TYPE_BULK) {
+		chu_stats.tx_completes++;
+		chu_stats.tx_last_len = err == 0 ? (unsigned int)nbytes :
+		    slot->urb.actual_length;
+		if (err != 0) {
+			chu_stats.tx_errors++;
+			chu_stats.tx_last_err = err;
+		}
+	}
 	be->actual_length = err == 0 ? (uint32_t)nbytes : slot->urb.actual_length;
 	/*
 	 * The aggregated bulk-OUT's on-the-wire bytes, taken from the stage the
@@ -953,7 +965,7 @@ chu_seam_poll(void *ctx)
 		 * stack's critical section; the completion path and a
 		 * submitting thread share that protected state */
 		flags = usb_osal_enter_critical_section();
-		USBH_IRQHandler(busid);
+		usb_board_irq_dispatch(busid);
 		usb_osal_leave_critical_section(flags);
 	}
 }

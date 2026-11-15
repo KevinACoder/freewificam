@@ -24,7 +24,8 @@ obj-$(CONFIG_BOARD_FIREFLY_V2) += \
 obj-$(CONFIG_BOARD_STM32F429_CHALLENGER) += \
 	stm32f429-challenger/clock.c \
 	stm32f429-challenger/uart.c \
-	stm32f429-challenger/reset.c
+	stm32f429-challenger/reset.c \
+	stm32f429-challenger/fmc_sdram.c
 endif
 
 ifeq ($(SRC_TAG),pcie)

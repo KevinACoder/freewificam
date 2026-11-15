@@ -164,17 +164,29 @@ usb_board_bus_ready(unsigned int busid)
 	return 1;
 }
 
-static void usb_board_isr(void *arg)
+/* The board's one dispatch entry: the interrupt path and the linuxkpi URB
+ * engine's drain-thread poll both come through here. */
+void
+usb_board_irq_dispatch(unsigned int busid)
 {
 	size_t flags;
+
+	if (busid >= USB_BOARD_BUS_COUNT)
+		return;
+
+	flags = usb_osal_enter_critical_section();
+	USBH_IRQHandler((uint8_t)busid);
+	usb_osal_leave_critical_section(flags);
+}
+
+static void usb_board_isr(void *arg)
+{
 	uint8_t busid = (uint8_t)(uintptr_t)arg;
 
 	if (busid < USB_BOARD_BUS_COUNT)
 		usb_board_irqs[busid]++;
 
-	flags = usb_osal_enter_critical_section();
-	USBH_IRQHandler(busid);
-	usb_osal_leave_critical_section(flags);
+	usb_board_irq_dispatch(busid);
 }
 
 /* Bind one bus's interrupt line: handler, level trigger, the board's default

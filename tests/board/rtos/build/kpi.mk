@@ -24,10 +24,14 @@ KPI_INCLUDES := \
 	-I$(LIB8)/include/linux80211 \
 	-I$(LIB8) \
 	-I$(LIB8)/bus \
-	-I$(LIB8)/ports/pci-rk3568 \
-	-I$(LIB8)/ports/usb-rk3568 \
-	-I$(PLATFORM)/board/rk3568-itx/drivers/pcie \
-	-I$(PLATFORM)/arch/aarch64
+	-I$(LIB8)/ports/usb-cherryusb \
+	-I$(PLATFORM)/arch/$(ARCH)
+# The PCI engine and its board adapter are RK3568-only: the F429 image has no
+# PCIe and must not name that board's driver include roots.
+ifeq ($(BOARD),rk3568-itx)
+KPI_INCLUDES += -I$(LIB8)/ports/pci-rk3568 \
+	-I$(PLATFORM)/board/rk3568-itx/drivers/pcie
+endif
 
 # The USB engine's class hook and its adapter read CherryUSB descriptors, so
 # that group compiles with the host stack's include roots.  They are only

@@ -35,22 +35,30 @@
 #include "os/cmsis2/cmsis2.h"
 
 /*
- * Shells. The sizes are the contract's: mutex 64 bytes (struct mutex._storage),
- * condition 96 (struct completion._cv, struct wait_queue_head._cv), callout 112
- * (struct timer_list._callout, struct delayed_work._callout).
+ * Shells. The slot sizes are the contract's (linuxkpi_core.h): mutex 8 pointer
+ * words, condition 12, callout 14 - that is 64/96/112 bytes on the 64-bit board
+ * and 32/48/56 bytes on the 32-bit MCU. The `_reserved` tail is whatever is left
+ * of the slot after the shell's own fields, counted in pointer words, so the shell
+ * fills the slot exactly at either word size (the per-slot assert below proves it;
+ * a tail written in uint64_t would be right on one target only).
  */
+#define	LKPI_SHELL_RESERVED_WORDS(slot_bytes, fixed_bytes)		\
+	(((slot_bytes) - (fixed_bytes)) / sizeof(void *))
+
 struct lkpi_mutex_shell {
 	osMutexId_t	id;
 	uint32_t	inited;
 	uint32_t	locked;		/* bookkeeping for mutex_is_locked() */
-	uint64_t	_reserved[6];
+	void		*_reserved[LKPI_SHELL_RESERVED_WORDS(8 * sizeof(void *),
+				    sizeof(osMutexId_t) + 2 * sizeof(uint32_t))];
 };
 
 struct lkpi_cv_shell {
 	osSemaphoreId_t	sem;
 	uint32_t	waiters;
 	uint32_t	inited;
-	uint64_t	_reserved[10];
+	void		*_reserved[LKPI_SHELL_RESERVED_WORDS(12 * sizeof(void *),
+				    sizeof(osSemaphoreId_t) + 2 * sizeof(uint32_t))];
 };
 
 struct lkpi_callout_shell {
@@ -58,7 +66,9 @@ struct lkpi_callout_shell {
 	void		*owner;		/* the object the callback belongs to */
 	uint32_t	inited;
 	uint32_t	pending;
-	uint64_t	_reserved[11];
+	void		*_reserved[LKPI_SHELL_RESERVED_WORDS(14 * sizeof(void *),
+				    sizeof(osTimerId_t) + sizeof(void *) +
+				    2 * sizeof(uint32_t))];
 };
 
 _Static_assert(sizeof(struct lkpi_mutex_shell) == 8 * sizeof(void *),

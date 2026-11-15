@@ -20,6 +20,17 @@
  * for any other busid. */
 int usb_board_init(unsigned busid);
 
+/* One OTG_HS controller, so one host bus (the RK3568 board has four). */
+#define USB_BOARD_BUS_COUNT	1U
+
+/* The linuxkpi URB engine's board seam (components/liblinux80211/ports/
+ * usb-cherryusb/lkpi_usb_board.h): the bus is ready once usb_board_init()
+ * ran, it is never xHCI, and the interrupt dispatch takes no bus id on this
+ * single-controller port. */
+int usb_board_bus_ready(unsigned int busid);
+int usb_board_bus_is_xhci(unsigned int busid);
+void usb_board_irq_dispatch(unsigned int busid);
+
 /* Post-start work: seed the root port's connect-change bit and wake the hub
  * thread, so a disk already attached at boot is enumerated even if DWC2's
  * power-on did not produce a fresh connect edge. */

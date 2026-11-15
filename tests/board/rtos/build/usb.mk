@@ -93,13 +93,13 @@ USB_BOARD_SRCS += $(USB_BOARD)/usb_domain.c
 endif
 endif
 
-USB_MSC_CASES := $(filter usb_xhci usb_ehci usb_dwc2,$(CASES))
+USB_MSC_CASES := $(filter usb_xhci usb_ehci usb_dwc2 f429_sdram,$(CASES))
 
 # The RK storage cases share app/cases/usb_msc.c (2 MiB of static buffers and
 # two controller wrappers); the F429 carries its own smaller case.  Keep the
 # source sets separate so the F429 image never links the RK body.
 USB_MSC_SHARED_CASES := $(filter usb_xhci usb_ehci,$(CASES))
-USB_MSC_F429_CASES := $(filter usb_dwc2,$(CASES))
+USB_MSC_F429_CASES := $(filter usb_dwc2 f429_sdram,$(CASES))
 
 # The AIC8800 image needs the MSC class for the ZeroCD modeswitch (the switch
 # rides the MSC connect path) but carries neither the first-party MSC app half

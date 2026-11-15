@@ -16,6 +16,33 @@
 #include "cmsis_board_device.h"
 #include "uart.h"
 
+#if defined(CONFIG_F429_HEAP_SDRAM)
+/* The kernel heap lives in the core board's FMC SDRAM (NOLOAD section, so the
+ * startup .bss zeroing never touches it).  heap_4.c declares this array
+ * extern when configAPPLICATION_ALLOCATED_HEAP is 1 and initialises it on the
+ * first pvPortMalloc(); main() has already brought the controller up by then.
+ * portBYTE_ALIGNMENT on the CM4F port is 8. */
+uint8_t ucHeap[ configTOTAL_HEAP_SIZE ]
+    __attribute__( ( used, section( ".sdram.heap" ), aligned( 8 ) ) );
+#endif
+
+/*
+ * The Linux clock's tick supply.  liblinux80211's `jiffies` advances once per
+ * RTOS tick and every mac80211 MLME deadline is a jiffies comparison; an image
+ * that links the component but never advances the tick runs the MLME timer at
+ * the port's 1 ms clamp forever, the iface work spins, and the association
+ * request never leaves (2026-11-15 F429 W5: 9153 `sta_work` entries in 2 s and
+ * no assoc).  The component is not linked into every F429 image, so the
+ * reference is weak; lkpi_tick_advance() is retained there for this.
+ */
+extern void lkpi_tick_advance( void ) __attribute__( ( weak ) );
+
+void vApplicationTickHook( void )
+{
+    if ( lkpi_tick_advance != 0 )
+        lkpi_tick_advance();
+}
+
 void vAssertCalled( const char *file, unsigned long line )
 {
     uart_early_panic( "assert: " );

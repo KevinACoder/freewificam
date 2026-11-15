@@ -18,6 +18,42 @@ config BOARD_STM32F429_CHALLENGER
 
 endchoice
 
+# --- STM32F429 memory map (2026-11-15) -------------------------------------
+#
+# The 挑战者 V2 core board carries a 32 MB W9825G6 on FMC SDRAM bank 2
+# (0xD0000000).  The wireless images put the FreeRTOS heap and the lwIP heap
+# there, because mac80211's working set (RX skbs, driver records, wiphy/BSS
+# tables) cannot fit in the 192 KB SRAM next to the DMA-visible static
+# buffers.  The SDRAM is brought up from main() after the console and before
+# the first allocation; a failure has to be spoken, not faulted on.
+
+config F429_SDRAM
+	bool "FMC SDRAM (32 MB W9825G6 on the core board)"
+	depends on BOARD_STM32F429_CHALLENGER
+	help
+	  Initialises the FMC SDRAM bank 2 from main() and runs the bounded
+	  self-test (three 64 KiB windows, address uniqueness, 8/16-bit
+	  accesses).  Off: the core board's SDRAM is never touched.
+
+config F429_HEAP_SDRAM
+	bool "Place the FreeRTOS heap in SDRAM"
+	depends on F429_SDRAM
+	help
+	  ucHeap moves to the .sdram.heap section (NOLOAD) and heap_4 is told
+	  the application supplies the array.  The heap size is
+	  CONFIG_FREERTOS_HEAP_SIZE; the wireless profiles give it 4 MiB.
+
+config F429_WIFI_STAGE
+	int "F429 8188EUS ladder stage (3 attach, 4 scan, 5 join, 6 throughput)"
+	depends on BOARD_STM32F429_CHALLENGER
+	range 3 6
+	default 3
+	help
+	  The f429_wifi case stops after this layer; the four
+	  stm32f429-wifi-c{3,4,5,6} profiles set it.  It is a ladder switch,
+	  not a tuning knob: each stage's anchors are the evidence for that
+	  layer.
+
 config USB_MSC_DIAG
 	bool "USB mass-storage diagnostics"
 

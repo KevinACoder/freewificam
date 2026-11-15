@@ -300,12 +300,12 @@ endif
 # with its test case.  The rtw89 cases are consumers too: their linuxkpi USB
 # engine rides the same controllers, while the engine and its adapter belong to
 # the liblinux80211 world (kpi.mk), not to this file.
-USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
+USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram f429_wifi rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
 	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6
 ifeq ($(BOARD),stm32f429-challenger)
-ifneq ($(filter-out usb_dwc2,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
-$(error the stm32f429 board carries only usb_dwc2, not '$(filter-out usb_dwc2,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
+ifneq ($(filter-out usb_dwc2 f429_sdram f429_wifi,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
+$(error the stm32f429 board carries only usb_dwc2/f429_sdram/f429_wifi, not '$(filter-out usb_dwc2 f429_sdram f429_wifi,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
 endif
 else
 ifneq ($(filter usb_dwc2,$(CASES)),)
@@ -539,7 +539,7 @@ BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 
 # usb_xhci/usb_ehci are compiled in the CherryUSB flag world (usb.mk); every
 # other case is a plain application translation unit.
-USB_CASES := usb_xhci usb_ehci usb_dwc2
+USB_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram
 KPI_CASES := kpi_live kpi_mock
 # The wireless cases compile in the stack's flag world (wl80211.mk), not the
 # plain application world, so they are kept out of the generic list.  The list
@@ -588,6 +588,7 @@ LDFLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=softfp -mfpu=fpv4-sp-d16 \
 	-nostdlib -static \
 	-Wl,-T,$(BOARD_LINKSCRIPT) \
 	$(BACKEND_LDFLAGS) \
+	$(WL80211_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
 	-Wl,-Map,$(TARGET).map \
 	-specs=nano.specs -lc -lgcc -lnosys
@@ -641,7 +642,7 @@ gates: $(TARGET).elf
 	undef=$$($(NM) -u $(TARGET).elf); \
 	[ -z "$$undef" ] || { echo "FAIL: undefined symbols:"; echo "$$undef"; exit 1; }; \
 	echo "PASS: _start=0x$$start vectors=0x$$vec backend=$(BACKEND) 0 undefined"
-ifneq ($(filter usb_xhci usb_ehci usb_dwc2,$(CASES)),)
+ifneq ($(filter usb_xhci usb_ehci usb_dwc2 f429_sdram,$(CASES)),)
 	@set -e; \
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx msc_class_info || \
 		{ echo "FAIL: msc_class_info not in the image (the class table would claim nothing)"; exit 1; }; \

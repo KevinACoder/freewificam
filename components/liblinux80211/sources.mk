@@ -67,7 +67,7 @@ obj-$(CONFIG_LIBLINUX80211_USB) += \
 endif
 
 ifeq ($(SRC_TAG),port-usb)
-port-obj-$(CONFIG_LIBLINUX80211_USB) += ports/usb-rk3568/adapter.c
+port-obj-$(CONFIG_LIBLINUX80211_USB) += ports/usb-cherryusb/adapter.c
 endif
 
 ifeq ($(SRC_TAG),stack)

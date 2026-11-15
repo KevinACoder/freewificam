@@ -57,6 +57,7 @@
 #define RCC_AHB1ENR_OTGHS	(1UL << 29)
 
 static volatile unsigned int usb_board_irqs;
+static volatile int usb_board_started;
 
 /* Enable the OTG_HS and GPIOB clocks, pin PB14/PB15 to AF12 and bind the
  * controller's line.  Idempotent: a second call rewrites the same values. */
@@ -89,8 +90,35 @@ int usb_board_init(unsigned busid)
 
 	usb_board_hw_up();
 	usb_osal_timer_service_start();
+	usb_board_started = 1;
 
 	return 0;
+}
+
+/* --- the linuxkpi URB engine's board seam --------------------------------- */
+
+int
+usb_board_bus_ready(unsigned int busid)
+{
+	return (busid == 0U && usb_board_started) ? 1 : 0;
+}
+
+int
+usb_board_bus_is_xhci(unsigned int busid)
+{
+	(void)busid;
+	return 0;
+}
+
+/* The single-controller DWC2 port's handler takes no bus id; the caller (the
+ * engine's drain thread or the board's own ISR) holds the stack critical
+ * section.  On this board the NVIC line stays enabled, so the ISR path runs
+ * the handler too; this entry is the engine's poll fallback. */
+void
+usb_board_irq_dispatch(unsigned int busid)
+{
+	if (busid == 0U)
+		USBH_IRQHandler(0);
 }
 
 void usb_board_after_start(unsigned busid)

@@ -174,12 +174,20 @@ int sysfs_emit(char *buf, const char *fmt, ...)
 /*
  * [LNX] include/linux/math64.h:328 (declaration) and lib/math/div64.c:256-341 (the
  * interface's body): the full 128-bit product a * b + c, divided by d, answering ~0
- * when the quotient does not fit a u64. The interface has an __int128 arm that
- * computes exactly this product; this port compiles for a target whose compiler
- * provides the 128-bit integer, so the body is that product and the interface's own
- * overflow rule. The interface faults on a zero divisor (it divides by a hidden
- * zero to raise a trap); a freestanding port refuses instead, answering ~0.
+ * when the quotient does not fit a u64. Two arms state the same contract:
+ *   - a compiler with a 128-bit integer (the 64-bit board) computes the product with
+ *     it - the interface's own __int128 arm, kept verbatim;
+ *   - a 32-bit target has no such type (Cortex-M4), so the product is built from
+ *     32-bit limbs and the quotient is restored bit by bit; neither a 128-bit type nor
+ *     a library 64-bit-divide call is needed there.
+ * The interface faults on a zero divisor (it divides by a hidden zero to raise a trap);
+ * a freestanding port refuses instead, answering ~0. A carry out of the 128-bit
+ * product+c sum answers ~0 for the same reason: the quotient could not be the truncated
+ * value. (For u64 inputs that carry cannot actually occur - (2^64-1)^2 + (2^64-1) <
+ * 2^128 - so the rule is stated, not exercised.)
  */
+/* LKPI_MULDIV_BEGIN - the host differential test extracts this block verbatim */
+#if defined(__SIZEOF_INT128__)
 u64 mul_u64_add_u64_div_u64(u64 a, u64 b, u64 c, u64 d)
 {
 	unsigned __int128 prod = (unsigned __int128)a * b + c;
@@ -194,6 +202,72 @@ u64 mul_u64_add_u64_div_u64(u64 a, u64 b, u64 c, u64 d)
 
 	return (u64)q;
 }
+#else /* !__SIZEOF_INT128__: the 32-bit target */
+/*
+ * The 128-bit sum a * b + c in 32-bit limbs: p0 = a0*b0 sits at bit 0, p1 = a0*b1
+ * and p2 = a1*b0 at bit 32, p3 = a1*b1 at bit 64. The middle pair is added first;
+ * its bit 64 (`mid < p1`) is part of the high half's `mid >> 32` term, hence the
+ * `(mid < p1) << 32`. Every partial sum is bounded by the exact result, so no u64
+ * overflows, and each product is a 32x32->64 the target multiplies natively (UMULL).
+ * Returns 1 when the sum does not fit 128 bits.
+ */
+static int lkpi_mul_u64_add_u64(u64 a, u64 b, u64 c, u64 *hi, u64 *lo)
+{
+	u32 a0 = (u32)a, a1 = (u32)(a >> 32);
+	u32 b0 = (u32)b, b1 = (u32)(b >> 32);
+	u64 p0 = (u64)a0 * b0;
+	u64 p1 = (u64)a0 * b1;
+	u64 p2 = (u64)a1 * b0;
+	u64 p3 = (u64)a1 * b1;
+	u64 mid = p1 + p2;
+	u64 h, low, carry;
+
+	h = p3 + (mid >> 32) + ((u64)(mid < p1) << 32);
+	low = p0 + ((mid & 0xffffffffULL) << 32);
+	carry = (low < p0);
+	*lo = low + c;
+	carry += (*lo < low);
+	*hi = h + carry;
+
+	return *hi < h;
+}
+
+u64 mul_u64_add_u64_div_u64(u64 a, u64 b, u64 c, u64 d)
+{
+	u64 hi, lo, r, q = 0;
+	int i;
+
+	if (d == 0)
+		return ~0ULL;
+	if (lkpi_mul_u64_add_u64(a, b, c, &hi, &lo))
+		return ~0ULL;
+	if (hi >= d)		/* the quotient would not fit a u64 */
+		return ~0ULL;
+
+	/*
+	 * Restoring long division of hi:lo by d, one quotient bit at a time from the
+	 * most significant. hi < d keeps the remainder in range; the doubled remainder
+	 * needs a 65th bit only when it was already >= 2^63, and then it is larger than
+	 * d, so the subtract is taken unconditionally - the wrapped u64 low half of
+	 * (2^64 + t - d) is the true remainder (which is < d < 2^64).
+	 */
+	r = hi;
+	for (i = 63; i >= 0; i--) {
+		u64 t = (r << 1) | ((lo >> i) & 1ULL);
+
+		if ((r >> 63) || t >= d) {
+			r = t - d;	/* modulo 2^64 is the true value here */
+			q = (q << 1) | 1ULL;
+		} else {
+			r = t;
+			q <<= 1;
+		}
+	}
+
+	return q;
+}
+#endif /* __SIZEOF_INT128__ */
+/* LKPI_MULDIV_END */
 
 /* ------------------------------------------------------------------ */
 /* net: the rate limiter and the RTNL lock                             */
