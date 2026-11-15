@@ -142,4 +142,7 @@ backend 把它链接进 GPL-2.0 产物——它不构成老仓按 BSD 发布的�
 | `stm32f429-wifi-c6` 镜像 | 同上 + lwIP（**BSD-3-Clause**）的 MCU 配置与 netif 出口 + 第一方 BSD-3-Clause 的 data-plane case（netif、两轮 ICMP） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `stm32f429-wifi-c6t` 镜像 | 同上 + 四相位吞吐 case（`CONFIG_F429_WIFI_TP`，lwiperf 来自 lwIP，BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `stm32f429-wifi-c6h2c` / `-c6diag` 镜像 | 同上 + 第一方 BSD-3-Clause 的诊断仪器（`RTL8XXXU_TX_CENSUS` 的 H2C mailbox 读回与芯片普查；`F429_TICK_PC` 的轮询 UART PC 采样），**默认 n、不入交付** | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-ap-fp` 镜像 | 同 `stm32f429-wifi-c6`，AP 角色的 MLME 改为本仓第一方 BSD-3-Clause 的最小 open-AP MLME（`linuxkpi_ap_mlme.c`/`linuxkpi_ap_beacon.c`），不再链入 hostapd | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-ap-fp-tp` 镜像 | 同上 + 四相位 report-only case（`CONFIG_F429_WIFI_AP_TP`） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-ap-empty` 镜像 | 同 `stm32f429-wifi-c6` 的栈/驱动 + 导入的 hostapd（BSD-3-Clause，链接但不启动，只量 flash 成本） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `stm32f429-sdram` 镜像 | 第一方 BSD-3-Clause 平台/case 层（无无线栈） | **BSD-3-Clause 第一方产物** |

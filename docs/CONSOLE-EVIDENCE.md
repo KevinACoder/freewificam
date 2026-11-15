@@ -1405,6 +1405,65 @@ counting 10,550 packets and 0 drops. The AP's `tcpdump -i wlan2` in the same
 boot carries the whole round (44 ICMP requests + 44 replies, then the TCP/UDP
 flows).  Full record: the 2026-11-15 bench run.
 
+### STM32F429 wi-fi AP role (2026-11-16)
+
+The AP role's boot on the shipped image (`stm32f429-wifi-ap-fp`, 728,888 B,
+sha256 `7bec76fb…`, build tag `897b505`).  The BSS comes up and beacons; the
+peer's authentication never arrives because the receive path is already dead.
+Truncated (`...`), one line per anchor:
+
+```
+[   0.871] f429_wifi_ap: drv usbh: lkpi claim attempt 0bda:8179 bus=0 hub=1 port=1 intf=0 spd=2
+[   1.038] f429_wifi_ap: firmware none: Firmware revision 28.0 (signature 0x88e1)
+[   2.358] f429_wifi_ap: wlan0 present=1 ifindex=1 mac=20:f4:1b:52:8f:01 iftype=2
+[   2.368] f429_wifi_ap: wiphy bands=1 managed=1 ap=1 ht=1 vht=0
+[   2.377] f429_wifi_ap: chan freq=2432 present=1 flags=0x00080180 can_beacon=1
+[   2.386] f429_wifi_ap: set_iface rc=0 type=3
+[   2.613] f429_wifi_ap: start rc=0
+[   2.621] f429_wifi_ap: beacon head_len=63 tail_len=101 ies=7 head_sha=c675a9ed tail_sha=59e61b29
+[   2.674] f429_wifi_ap: start_ap rc=0 freq=2432 interval=100 dtim=2
+[   2.690] f429_wifi_ap: netif up rc=0 name=wl0 ip=192.168.99.1/24 mac=20:f4:1b:52:8f:01
+[   3.540] f429_wifi_ap: link freq=2432
+[   3.583] f429_wifi_ap: drv rtl8xxxu_diag: beacon get=7 null=0 txdesc=7 len=170 txdw1=0x00001000 macid=0
+[   3.607] f429_wifi_ap: usb submits=48 completes=48 refused=0 stage_overflow=0 slots_exhausted=0 stage_size=4096 slots=4 rx=41 rx_err=31 rx_last_err=-9 rx_len=0 rx_max=0 babble_len=2376 babble_act=0 babble_mps=64 tx=7 tx_err=0 tx_last_err=0 tx_len=202
+[   3.630] f429_wifi_ap: PASS A1
+...
+[  12.687] f429_wifi_ap: mlme stats a2 rx probe_req=0 auth_req=0 assoc_req=0 drop_bad=0 drop_unsupported=0
+[  12.702] f429_wifi_ap: mlme stats a2 tx probe_resp=0 probe_fail=0 auth_resp=0 auth_fail=0 assoc_resp=0 assoc_fail=0 tx_fail=0
+[  12.717] f429_wifi_ap: mlme stats a2 sta add=0 add_fail=0 authorized=0 auth_fail=0 q_full=0 emit_dropped=0
+[  12.729] f429_wifi_ap: sta n=0 mac=a5:a5:a5:a5:a5:a5 waited_ms=60000
+[  12.737] f429_wifi_ap: FAIL no station after 60000 ms
+[  12.752] f429_wifi_ap: usb submits=630 completes=630 refused=0 stage_overflow=0 slots_exhausted=0 stage_size=4096 slots=4 rx=41 rx_err=31 rx_last_err=-9 rx_len=0 rx_max=0 babble_len=2376 babble_act=0 babble_mps=64 tx=589 tx_err=0 tx_last_err=0 tx_len=202
+```
+
+How to read it:
+
+- `ap=1` in the wiphy row is the driver's AP interface mode; `set_iface rc=0
+  type=3` is the type change, and `start_ap rc=0 ... freq=2432` is the BSS.
+- `head_len=63 tail_len=101 ies=7` is the beacon split the template was built
+  for (hostapd's split at the TIM); `beacon get=7` is the host composing, not
+  the chip repeating.
+- The receive ledger is the AP role's failure signature: `rx=41 rx_err=31`
+  with `rx_last_err=-9` (a bulk-IN babble) and `babble_mps=64`, and the same
+  `rx=41` sixty seconds later while `tx` climbs to 589 - the receive pool is
+  gone, so no management frame can reach the MLME (`rx probe_req=0`).
+- The monitor for this role is the 8812AU (`wlan2`), not the MT7921AU: the
+  same boot's capture counts the board's beacons (several hundred in the
+  window) while the MTK monitor sees none of this board's frames.
+
+The same bench, board, cable and dongle run the station image
+(`stm32f429-wifi-c6`, sha256 `c1efbc9f…`) with `rx_err=0`:
+
+```
+[   1.519] f429_wifi: usbh: lkpi claim attempt 0bda:8179 bus=0 hub=1 port=1 intf=0 spd=2
+[   3.314] f429_wifi: PASS SCAN
+[   5.826] f429_wifi: PASS ASSOC
+[   9.567] f429_wifi: PASS DATA
+[   9.577] f429_wifi: usb submits=169 completes=168 refused=0 stage_overflow=0 slots_exhausted=0 stage_size=4096 slots=4 rx=120 rx_err=0 tx=48 tx_err=0 tx_last_err=0 tx_len=1494
+```
+
+That pair is the A/B: the receive start is the variable, not the dongle.
+
 ### STM32F429 wi-fi: serial phenomena worth recognising
 
 Four console signatures that each cost a round; recognise them before

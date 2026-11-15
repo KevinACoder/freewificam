@@ -266,3 +266,65 @@ Profiles: `stm32f429-wifi-c6` (pings, the data-plane gate) and
 tcp down/up + udp down/up against the Pi's iperf2 and UDP counting arms).
 Throughput is **report-only**: measured and recorded in 5.3, but the data-plane gate
 is the two ICMP rounds above, not a number.
+
+## 6. AP role (2026-11-15/16) — BSS and beacon work, association blocked in USB
+
+The board's second wireless role: the same dongle becomes a 2.4 GHz open AP
+(`rtos-8188-ap`, ch5/2432, HT20/WMM), the Pi's MT7921AU joins it, and the two
+ICMP rounds prove the data plane.  The bridge and the stack are unchanged; the
+one new piece is the AP MLME, which mac80211 does not have in-kernel.
+
+**Two ways to own the AP MLME, and the flash picked one.**  The imported NXP
+hostapd (the role the RK3568 AP images run) costs **326,612 B** of flash here:
+an image that links it with only a case that takes the AP entry's address is
+975,644 B, against 649,032 B for the same image without it.  This part has 1 MiB
+and the shipped wireless image here is 728,888 B, so hostapd is out.  The
+image therefore links the port's own minimal open-AP MLME
+(`linuxkpi_ap_mlme.c` + `linuxkpi_ap_beacon.c`, `CONFIG_AP_MLME`): probe
+request, open authentication and association are parsed and answered from the
+case's task, the station is created and its controlled port opened through the
+real nl80211 command chain, and mac80211 keeps the AP state machine.  The two
+MLMEs are mutually exclusive at build time, and each brings its own
+`cfg80211_rx_mgmt_ext` seam, so an image has exactly one AP receive owner.
+
+**The beacon template** is an open 802.11g/HT20/WMM access point's IE set split
+at the TIM, which is hostapd's split, not "fixed fields vs IEs": the head is
+36 fixed bytes + SSID + supported rates + DS parameter (63 bytes), and
+mac80211 inserts the TIM before the tail (101 bytes: ERP, extended rates,
+operating classes, HT capabilities, HT operation, extended capabilities, WMM).
+The validator rejects a template with a TIM in it or with a missing IE.  The
+same head (subtype changed to a probe response) plus the tail is what answers
+probe requests.
+
+**What was measured**: the BSS comes up and beacons on air — `ap=1` in the
+wiphy row, `SET_INTERFACE rc=0 type=3`, `START_AP rc=0` at 2432 MHz with
+interval 100 and DTIM 2, `link freq=2432`, the monitor counts 614 beacons from
+the board's BSSID, and the Pi's scan lists the BSS with the template's IEs
+(SSID, ch5, interval 100, DTIM 2, HT20, -22 dBm).  The beacon repeats from the host:
+this chip does not repeat a beacon the host downloaded, so the driver
+recomposes one per beacon interval (the driver tree carries the recorded
+patch for that).
+
+**What blocked the role**: the peer's authentication frames never reach the
+stack.  At `dev_open` the driver submits 32 receive URBs and 29 of them come
+back with a bulk-IN babble (`USB_ERR_BABBLE`) — the seam reports it as `-EIO`,
+the driver frees a receive URB on any error and does not resubmit it, and the
+receive count then freezes for the rest of the boot (`rx=41` unchanged 60 s
+later).  The geometry captured in the adapter is transfer length 2376, endpoint
+max packet 64, and **zero bytes moved** at the babble - the controller judged
+the very first packet larger than a full-speed bulk packet may be.  A bounded
+retry of the same transfer was tried and turned none of the babbles into a
+success.  The same board, cable and dongle run the station image with
+`rx_err=0` and pass scan/associate/data on the same bench, so the variable is
+the AP role's receive start, not the dongle, the power or the relay.
+
+**Reopen condition**: a boot whose first receive URBs no longer fail at
+interface start (the receive count keeps growing and the MLME reports
+`auth_req>=1`), or a measurement that names why the chip's packets are larger
+than the full-speed endpoint allows in this role.  Until then the role's gates
+are: **A1 measured, A2/A3 not verified**.
+
+Profiles: `stm32f429-wifi-ap-fp` (A1-A3 gates) and `stm32f429-wifi-ap-fp-tp`
+(`CONFIG_F429_WIFI_AP_TP=y`, the four report-only AP phases, not run).
+`stm32f429-wifi-ap-empty` is the flash-cost probe that chose the MLME; it is a
+measurement artifact, not a role image.
