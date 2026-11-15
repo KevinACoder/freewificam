@@ -1328,9 +1328,68 @@ U disk `05e3:0749` on hub port 4.  In a USB_DBG_LOG diagnostic boot the U disk
 reads block 0 and eight blocks through the hub, then the 512 B WRITE10 stops
 after the CBW with no CSW/PASS.  The same code and disk direct on P2 with the
 normal INFO image pass 2/2, so the direct link is not the issue.  The hub is
-**not** an accepted storage topology; the leftover is the hub-path bulk-OUT or
-power question, plus one INFO boot that registered the hub but saw no
-downstream device within 30 s.  Run: `runs/2026-11-15-f429-usb-hub/`.
+**not** an accepted *storage* topology yet; the leftover is the hub-path
+bulk-OUT or power question.  (A later boot on the same day showed that a
+**self-powered** hub changes the picture for the WiFi path: four dongles
+enumerate and the 8188EUS passes W6 through the hub - next section.)  Run:
+`runs/2026-11-15-f429-usb-hub/`.
+
+### Four wireless dongles behind a self-powered hub (2026-11-15 evening)
+
+The WiFi image (`stm32f429-wifi-c6`) with a self-powered 4-port hub
+(`05e3:0610`) on P2 and four Realtek dongles on its ports.  All four enumerate
+at the USB layer, and the 8188EUS runs the whole W6 data plane through the
+hub (the AP's own capture has 44 echo requests + 44 replies).  Verbatim,
+boot7 (same in boot8, both after a relay cold boot):
+
+```text
+[   1.446] [I/usbh_hub] New full-speed device on Bus 0, Hub 1, Port 1 connected
+[   1.466] [I/usbh_core] New device found,idVendor:05e3,idProduct:0610,bcdDevice:0656
+[   1.529] [I/usbh_hub] Register HUB Class:/dev/hub2
+[   2.414] [I/usbh_core] New device found,idVendor:0bda,idProduct:8179,bcdDevice:0000
+[   2.467] f429_wifi: usbh: lkpi claim attempt 0bda:8179 bus=0 hub=2 port=1 intf=0 spd=2
+[   3.927] f429_wifi: usbkpi: 'rtl8xxxu' claimed 0bda:8179
+[   3.996] f429_wifi: wlan0 present=1 after=3000 ms
+[   4.468] [I/usbh_core] New device found,idVendor:0bda,idProduct:1a2b,bcdDevice:0200
+[   4.520] f429_wifi: usbh: modeswitch 0bda:1a2b CD-ROM persona, ejecting
+[   5.538] f429_wifi: usbh: modeswitch CSW read -14 byte(s), retrying
+[   6.651] f429_wifi: usbh: modeswitch accepted (device left the bus)
+[   6.658] f429_wifi: usbh: modeswitch sent, expecting 0bda:c820
+[   7.229] [I/usbh_core] New device found,idVendor:0bda,idProduct:b720,bcdDevice:0200
+[   7.274] [E/usbh_core] Do not support Class:0xe0, Subclass:0x01, Protocl:0x01 on interface 0
+[   7.325] f429_wifi: usbh: lkpi claim attempt 0bda:b720 bus=0 hub=2 port=3 intf=2 spd=2
+[   8.044] f429_wifi: usbh: usb_driver probe failed (ret -11) for 0bda:b720
+[   8.439] [I/usbh_core] New device found,idVendor:0bda,idProduct:b851,bcdDevice:0000
+[   8.535] f429_wifi: usbh: lkpi claim attempt 0bda:b851 bus=0 hub=2 port=4 intf=2 spd=2
+[   8.546] f429_wifi: usbh: usb_driver probe failed (ret -19) for 0bda:b851
+[  10.064] f429_wifi: ping small tx=20 rx=20 payload=56 rtt_ms=3/5/13 rc=0
+[  11.007] f429_wifi: ping big tx=20 rx=20 payload=1400 rtt_ms=5/7/10 rc=0
+[  11.028] f429_wifi: PASS W6
+[  11.060] rtos: result pass cases=1/1 backend=freertos
+```
+
+That transcript is the corrected one: with the board's old static limits
+(`MAX_INTF_ALTSETTINGS=2`, `MAX_ENDPOINTS=4`) the last three dongles died in
+config parsing (`Interface altsetting num 2 overflow`, `Endpoint num 6/8
+overflow`) before any driver saw them; raising both to 8 (the xHCI reference
+port's values) is what lets the enumeration reach the driver layer.  The b720
+and b851 lines at 7.2-8.5 s are the two combo dongles' **Bluetooth**
+interfaces (class 0xe0/0x01/0x01), which neither the bridge nor a driver
+claims; their vendor (WiFi) interfaces are on intf=2 and get the claim
+attempt above.  Power matters as much as the limits: a bus-powered hub
+produced no downstream devices within 60 s on two boots and a 15-19 s delay
+on a third, while the self-powered hub brings all four up within 2-5 s.
+Run: `runs/2026-11-15-f429-wifi-hub-multi/`.
+
+### Relay cold boot (2026-11-15 evening)
+
+The UStone relay (`192.168.0.44`) is now on the F429's supply
+(`skills/rk3568-board/scripts/power.sh off|on|cycle --confirm`).  The console
+shows the difference plainly: after `off` the serial stream stops
+(`power_on=false`, last-RX age climbing); after `on` a fresh `rtos: banner`
+starts and the hub + four dongles enumerate again.  This is the standard reset
+for F429 rounds - an MCU reset does not reset the USB devices (a wedged dongle
+keeps failing every RX bulk IN with `-EIO` after `mcu reset`).
 
 ## STM32F429 wi-fi (liblinux80211 + rtl8xxxu, 8188EUS, 2026-11-15)
 

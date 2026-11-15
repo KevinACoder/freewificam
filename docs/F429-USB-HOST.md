@@ -20,7 +20,8 @@ board photo give the wiring:
   `0x40040000`, IRQ 77), not the OTG_FS core. `clock.c` already produces
   PLLQ = 48 MHz at 168 MHz.
 - The USB HOST socket is not a hub: the root port sees one device directly.
-  A self-powered hub can be inserted but is not needed.
+  A **self-powered** hub works and is now the bench's multi-dongle topology
+  (section 6); a bus-powered hub is not reliable (section 6).
 
 Evidence for the selector/OTG1 gate: on the invalid boot the DWC2 port reported
 `GSNPSID=0x4f54281a`, `GHWCFG2=0x229ed590` (12 host channels, INT DMA), host
@@ -87,8 +88,9 @@ rtos: result pass cases=2/2 backend=freertos
 last 1 MiB window (LBA 123,594,752), with 4 MiB in front never touched. The
 test is raw MSC, not FatFs; the disk's exFAT/FAT32 formatting is irrelevant to
 this verdict. Hot-plug, composite devices, multiple LUNs and write-protected
-disks are out of scope. There is no cold boot on this bench
-(`mculab` `power.type=none`), so the evidence is 2/2 nRST resets.
+disks are out of scope. That run's evidence is 2/2 nRST resets; the bench
+gained a **relay cold boot** later the same day (section 7), which is now the
+standard reset (an MCU reset does not reset the dongle's USB state).
 
 ## 5. RTL8188EUS at the USB layer (2026-11-15)
 
@@ -108,46 +110,56 @@ interface is deliberately unclaimed and the MSC-specific `usb_dwc2` case then
 fails its 30 s mass-storage wait.  That failure is the missing class driver,
 not a failed enumeration; a separate generic-enumeration case is future work.
 
-## 6. USB3 hub leftover (2026-11-15)
+## 6. A hub on the host port: four wireless dongles (2026-11-15 evening)
 
-A USB3 hub (`05e3:0610`) is visible and USB2-compatible on this FS host: the
-hub itself, the RTL8188EUS (`0bda:8179`, hub port 2) and the U disk
-(`05e3:0749`, hub port 4) all complete USB enumeration.  In a USB_DBG_LOG
-diagnostic boot, the U disk's block 0 and eight-block read pass through the
-hub, but the 512 B WRITE10 roundtrip stops after the CBW (no CSW/PASS).  The
-same code and disk direct on P2 with the normal INFO image pass 2/2, so this
-is a hub-path/out-transfer or power issue, not the direct link.
+The bench topology the F429 line now uses: the P2 host socket -> a **self-powered**
+USB hub `05e3:0610` (4 ports) -> four Realtek wireless dongles.  All four are
+recognised at the USB layer, and the 8188EUS runs the full W6 data plane
+**through the hub** (`runs/2026-11-15-f429-wifi-hub-multi/`):
 
-The hub is therefore **not** an accepted storage topology yet.  Reopen with a
-self-powered hub (or external 5 V) first; if the write still hangs, instrument
-the DWC2 OUT channel/HCINT path rather than adding a longer timeout.  One INFO
-boot registered the hub but saw no downstream device within 30 s, while the
-USB_DBG_LOG build saw both; that timing is also unclassified.  Evidence:
-`runs/2026-11-15-f429-usb-hub/`.
+| hub port | USB ID | what it is | driver result |
+|---|---|---|---|
+| 1 | `0bda:8179` | RTL8188EUS | claimed by rtl8xxxu, wlan0, W6 PASS |
+| 2 | `0bda:1a2b` -> `0bda:c820` | RTL8188CUS/8192CU family | CD-ROM persona; the modeswitch ejects it and expects `c820` back (the re-enumeration was not sampled yet) |
+| 3 | `0bda:b720` | RTL8723BU (WiFi+BT) | enumerated; its vendor interface is claimed and the rtl8xxxu probe fails (`-11`) - this port has only the 8188E firmware paths |
+| 4 | `0bda:b851` | RTL8851BU (WiFi+BT) | enumerated; no driver (`-19`, rtw89 is not ported) |
 
-## 7. Can the hub carry multiple wireless modules later?
+Two **static limits** had to be raised in the board's `usb_config.h`, or the
+last three dongles fail config parsing before any driver sees them:
 
-Structurally the stack can carry **one external hub**:
-`CONFIG_USBHOST_MAX_EXTHUBS=1`, `CONFIG_USBHOST_MAX_EHPORTS=4`, and the DWC2
-core has 12 host channels.  That is enough endpoints/channels for a few FS
-devices on one hub.  But it is not a promise that multiple WiFi modules work:
+1. `CONFIG_USBHOST_MAX_INTF_ALTSETTINGS` 2 -> **8**.  The 8723BU, the 8188CUS
+   and the 8851BU each present `bAlternateSetting 2` in interface 0; with 2 the
+   parser returns `Interface altsetting num 2 overflow / Parse config
+   descriptor fail`.
+2. `CONFIG_USBHOST_MAX_ENDPOINTS` 4 -> **8**.  The 8723BU's config has 6
+   endpoints in one interface and the 8851BU's has 8; with 4 they fail with
+   `Endpoint num 6/8 overflow`.
 
-1. The hub path is only proven for enumeration and U-disk reads in the DBG
-   boot.  The U-disk 512 B WRITE10 through the hub still stops after the
-   CBW, while the direct P2 path is 2/2.  WiFi transmit is bulk OUT, the same
-   path that hangs, so the hub OUT path (and its power/current budget) has to
-   be closed first.
-2. The F429 is a **single full-speed host**: all devices behind the hub share
-   12 Mbit/s.  Two or more WiFi modules doing scan/assoc/data will compete for
-   that one FS frame budget, before any driver/CPU cost.
-3. This image has no WiFi class driver.  A module is only enumerated
-   (`0bda:8179`, class 0xff); claiming the vendor interface needs the
-   rtl8xxxu/linuxkpi USB stack, which is not in the F429 image.
-4. The F429 line's documented wireless target is **SDIO RTL8189FS**, not USB
-   HS.  Multiple USB WiFi modules are a separate, later porting question; do
-   not treat the hub as a supported multi-radio bus yet.
+Power was the other half: with a **bus-powered** hub the downstream devices
+either never appeared within the 60 s attach window or took 15-19 s; with the
+external supply they all appear within 2-5 s.  The W6 gate then passes with
+`rx_err=0` and the AP's capture holds 44 echo requests + 44 replies.
 
-Practical order: self-powered hub/external 5 V and a passing U-disk write
-through the hub; one WiFi module's interface claim; only then a second module
-with a measured power/bandwidth/RAM budget.  Record the hub write result in
-`runs/2026-11-15-f429-usb-hub/` when it is rerun.
+The WiFi image (`stm32f429-wifi-c6`) is the one that claims the dongles: its
+linuxkpi USB hook matches the vendor interface triple 0xff/0xff/0xff and runs
+the driver's own id_table.  The other three dongles enumerate but are not
+usable until the port grows those chips' probe paths (8723BU) or rtw89 is
+ported (8851BU); that is driver work, not USB work.
+
+## 7. Relay cold boot (2026-11-15 evening)
+
+The bench now has a UStone relay (`192.168.0.44`) on the F429's supply, so a
+**cold boot is controllable from the session**:
+
+```
+cd ~/workspace/project_linux_wcam
+bash skills/rk3568-board/scripts/power.sh off|on|cycle --confirm
+```
+
+`cycle` cuts power for >=6 s, switches on, and settles 12 s.  This is the
+standard reset for F429 rounds because an MCU reset does not reset the USB
+devices (a wedged dongle keeps failing every RX bulk IN with `-EIO` after
+`mcu reset`, the trap first seen in the W6 round).  The relay path was
+validated with `off` (the console goes silent) -> `on` -> a fresh boot that
+enumerates the hub + all four dongles and passes W6, twice
+(`.../f429-wifi-hub-multi/boot7`, `boot8`).
