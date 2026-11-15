@@ -89,3 +89,37 @@ test is raw MSC, not FatFs; the disk's exFAT/FAT32 formatting is irrelevant to
 this verdict. Hot-plug, composite devices, multiple LUNs and write-protected
 disks are out of scope. There is no cold boot on this bench
 (`mculab` `power.type=none`), so the evidence is 2/2 nRST resets.
+
+## 5. RTL8188EUS at the USB layer (2026-11-15)
+
+A direct RTL8188EUS (`0bda:8179`, full speed, one interface, class 0xff)
+enumerates on the F429 host.  The evidence is the core's own lines:
+
+```text
+[I/usbh_hub] New full-speed device on Bus 0, Hub 1, Port 1 connected
+[I/usbh_core] New device found,idVendor:0bda,idProduct:8179,bcdDevice:0000
+[I/usbh_core] The device has 1 interfaces
+[E/usbh_core] Do not support Class:0xff, Subclass:0xff, Protocl:0xff on interface 0
+```
+
+The `mcu flash --expect "idVendor:0bda,idProduct:8179"` command returns 0.
+This image has no rtl8xxxu/mac80211/linuxkpi-USB driver, so the vendor
+interface is deliberately unclaimed and the MSC-specific `usb_dwc2` case then
+fails its 30 s mass-storage wait.  That failure is the missing class driver,
+not a failed enumeration; a separate generic-enumeration case is future work.
+
+## 6. USB3 hub leftover (2026-11-15)
+
+A USB3 hub (`05e3:0610`) is visible and USB2-compatible on this FS host: the
+hub itself, the RTL8188EUS (`0bda:8179`, hub port 2) and the U disk
+(`05e3:0749`, hub port 4) all complete USB enumeration.  The U disk's block 0
+and eight-block read pass through the hub, but the 512 B WRITE10 roundtrip
+stops after the CBW (no CSW/PASS).  The same image and disk direct on P2 pass
+2/2, so this is a hub-path/out-transfer or power issue, not the direct link.
+
+The hub is therefore **not** an accepted storage topology yet.  Reopen with a
+self-powered hub (or external 5 V) first; if the write still hangs, instrument
+the DWC2 OUT channel/HCINT path rather than adding a longer timeout.  One INFO
+boot registered the hub but saw no downstream device within 30 s, while a
+USB_DBG_LOG build saw both; that timing is also unclassified.  Evidence:
+`runs/2026-11-15-f429-usb-hub/`.

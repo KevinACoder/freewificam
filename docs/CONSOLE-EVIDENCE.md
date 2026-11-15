@@ -1302,6 +1302,36 @@ exFAT/FAT32 formatting is not part of this judgement.  Hot-plug, composite
 CD-ROM+storage devices, multiple LUNs and write-protected sticks are not
 covered.
 
+### RTL8188EUS at the USB layer (2026-11-15)
+
+A direct RTL8188EUS enumerates on the F429 host even though this image has no
+WiFi class driver:
+
+```text
+[I/usbh_hub] New full-speed device on Bus 0, Hub 1, Port 1 connected
+[I/usbh_core] New device found,idVendor:0bda,idProduct:8179,bcdDevice:0000
+[I/usbh_core] The device has 1 interfaces
+[E/usbh_core] Do not support Class:0xff, Subclass:0xff, Protocl:0xff on interface 0
+```
+
+The `mcu` expectation on `idVendor:0bda,idProduct:8179` matches; the later
+`usbh: msc FAIL no mass-storage instance` is the MSC-specific case refusing a
+non-storage device, not an enumeration failure.  No rtl8xxxu/mac80211/linuxkpi
+USB path is loaded; the vendor interface is deliberately unclaimed.  Run:
+`runs/2026-11-15-f429-usb-8188eus/`.
+
+### USB3 hub (2026-11-15)
+
+A USB3 hub (`05e3:0610`) on the FS host enumerates, and its two devices are
+visible: RTL8188EUS `0bda:8179` on hub port 2 (class 0xff, unsupported) and
+U disk `05e3:0749` on hub port 4.  The U disk reads block 0 and eight blocks
+through the hub, then the 512 B WRITE10 stops after the CBW with no CSW/PASS.
+The same image and disk direct on P2 pass 2/2, so the direct link is not the
+issue.  The hub is **not** an accepted storage topology; the leftover is the
+hub-path bulk-OUT or power question, plus one INFO boot that registered the hub
+but saw no downstream device within 30 s.  Run:
+`runs/2026-11-15-f429-usb-hub/`.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the
