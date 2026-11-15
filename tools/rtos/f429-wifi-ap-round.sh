@@ -143,6 +143,14 @@ if [ "$NO_PEER" = 0 ]; then
 fi
 
 # --- flash, then cold boot ------------------------------------------------
+# The flash needs the target powered: if the bench was switched off (or the
+# relay is off), the probe cannot attach and the flash fails before it starts.
+# The cold boot below still owns the reset; this only guarantees a target.
+if ! bash "$BOARD/power.sh" status --json 2>/dev/null | grep -q '"power_on":true'; then
+	echo "== relay on (target was off) =="
+	bash "$BOARD/power.sh" on --confirm > "$EVIDENCE/relay-on.txt" 2>&1 || true
+	sleep 3
+fi
 echo "== mcu flash (no reset; the relay cycle below is the reset) =="
 "$MCU" flash "$EVIDENCE/rtos.bin" --bin-base 0x08000000 --verify --no-reset \
 	--json > "$EVIDENCE/flash.json" || {
