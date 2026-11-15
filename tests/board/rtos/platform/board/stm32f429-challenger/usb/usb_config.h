@@ -66,16 +66,28 @@ void usbh_console_printf(const char *fmt, ...);
 #endif
 
 /* Device model: a mass-storage disk has one interface and two bulk endpoints;
- * four interfaces / two alt settings / four endpoints leave room for a
- * composite stick without spending much RAM. */
+ * four interfaces leave room for a composite stick without spending much RAM.
+ *
+ * Alt settings: 8, not 2.  The bench's Realtek dongles disagree on this - the
+ * 8188EUS presents one altsetting, while the 8723BU, the 8188CUS and the
+ * 8851BU each present a config with bAlternateSetting 2 in interface 0, and
+ * the parser's `cur_alt_setting >= MAX` check then fails the whole config
+ * ("Interface altsetting num 2 overflow", 2026-11-15 four-dongle boot).  The
+ * RK3568 xHCI ports already use 8; the cost here is a static array per
+ * interface (CONFIG_USBHOST_MAX_INTERFACES x 8 altsettings), not per device. */
 #ifndef CONFIG_USBHOST_MAX_INTERFACES
 #define CONFIG_USBHOST_MAX_INTERFACES	4
 #endif
 #ifndef CONFIG_USBHOST_MAX_INTF_ALTSETTINGS
-#define CONFIG_USBHOST_MAX_INTF_ALTSETTINGS	2
+#define CONFIG_USBHOST_MAX_INTF_ALTSETTINGS	8
 #endif
 #ifndef CONFIG_USBHOST_MAX_ENDPOINTS
-#define CONFIG_USBHOST_MAX_ENDPOINTS	4
+/* 8, matching the xHCI reference port: the bench's Realtek dongles present
+ * configs with 6 (8723BU) and 8 (8851BU) endpoints in interface 0; the 4 the
+ * MSC image needed failed them with "Endpoint num N overflow" (2026-11-15
+ * four-dongle boot).  Static cost: MAX_INTERFACES x MAX_INTF_ALTSETTINGS x 8
+ * endpoint structs per hubport. */
+#define CONFIG_USBHOST_MAX_ENDPOINTS	8
 #endif
 #ifndef CONFIG_USBHOST_DEV_NAMELEN
 #define CONFIG_USBHOST_DEV_NAMELEN	16
