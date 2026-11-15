@@ -26,6 +26,9 @@
 #include "cases.h"
 #include "clock.h"
 #include "runner.h"
+#if defined(CONFIG_F429_SDRAM)
+#include "fmc_sdram.h"
+#endif
 #if defined(CONFIG_SHELL)
 #include "shell_port.h"
 #endif
@@ -139,6 +142,15 @@ int main(void)
 	uart_early_puts("rtos: banner backend=" RTOS_BACKEND_NAME
 			" kernel=" RTOS_KERNEL_NAME
 			" build=" FW_BUILD_TAG "\n");
+
+#if defined(CONFIG_F429_SDRAM)
+	/* The core board's 32 MB FMC SDRAM.  The wireless profiles place the
+	 * kernel heap there, so the memory is brought up and checked before the
+	 * first allocation; the console is already up, so a failure is spoken
+	 * instead of becoming a fault on an uninitialised bus. */
+	if (f429_memory_boot() != 0)
+		fatal("sdram bring-up failed");
+#endif
 
 	if (osKernelInitialize() != osOK) {
 		fatal("kernel init failed");

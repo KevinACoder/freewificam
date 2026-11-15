@@ -1,0 +1,22 @@
+# F429 W0: the core board's 32 MB FMC SDRAM, its bounded self-test, and the
+# DMA arm (a U disk read into SDRAM versus the same read into internal SRAM).
+#
+# The kernel heap stays in internal SRAM in this profile: the case isolates the
+# SDRAM-reachability question from the heap placement.  The wireless profiles
+# (stm32f429-wifi-c{3,4,5,6}) are the ones that set F429_HEAP_SDRAM.
+#
+# main() brings the SDRAM up after the console and before the first allocation
+# (`f429: sdram init ok` / `f429: sdram test ok size=33554432`); the case then
+# answers whether the OTG_HS host DMA can reach it.  The U disk is a bench
+# prerequisite for the DMA arm only - without it the case prints a SKIP line
+# and the arm is recorded unverified, not failed.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=65536
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_USBHOST_MSC_TIMEOUT=5000
+CONFIG_CASES="f429_sdram"

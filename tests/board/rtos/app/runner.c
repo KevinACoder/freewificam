@@ -64,6 +64,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_USB_DWC2)
 	CASE_ENTRY("usb_dwc2", case_usb_dwc2_run)
 #endif
+#if defined(RTOS_CASE_F429_SDRAM)
+	CASE_ENTRY("f429_sdram", case_f429_sdram_run)
+#endif
+#if defined(RTOS_CASE_F429_WIFI)
+	CASE_ENTRY("f429_wifi", case_f429_wifi_run)
+#endif
 #if defined(RTOS_CASE_KPI_LIVE)
 	CASE_ENTRY("kpi_live", case_kpi_live_run)
 #endif

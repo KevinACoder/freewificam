@@ -1332,6 +1332,66 @@ normal INFO image pass 2/2, so the direct link is not the issue.  The hub is
 power question, plus one INFO boot that registered the hub but saw no
 downstream device within 30 s.  Run: `runs/2026-11-15-f429-usb-hub/`.
 
+## STM32F429 wi-fi (liblinux80211 + rtl8xxxu, 8188EUS, 2026-11-15)
+
+Board image `stm32f429-wifi-c5` (679,024 B, sha256 `23fa5920e1468f96e5e55584718026ce1a61fd904c88a28a1d52a59d9abd50e7`),
+USB OTG_HS full speed, 8188EUS `0bda:8179`. Bench AP `labwifi-ar-ht20s` ch5
+open. Full evidence: `runs/2026-11-15-f429-wifi-w5/boot27..29` (+ the w0/w1/w4
+dirs for the lower gates). Boot29, verbatim excerpt:
+
+```
+[   0.000] rtos: runner start cases=1 build=8ec49e0-dirty
+[   0.019] f429_wifi: core ready
+[   0.033] f429_wifi: syswq ran=1 waited_ms=10
+[   0.248] f429_wifi: dwprobe ran=1 waited_ms=210
+[   0.454] f429_wifi: tlprobe ran=1 waited_ms=200
+[   0.660] f429_wifi: tlprobe2 rearm=2 waited_ms=100
+[   0.810] [I/usbh_hub] New full-speed device on Bus 0, Hub 1, Port 1 connected
+[   0.837] [I/usbh_core] New device found,idVendor:0bda,idProduct:8179,bcdDevice:0000
+...
+[   3.114] f429_wifi: start rc=0
+[   3.129] f429_wifi: wiphy_work ran=1 waited_ms=10
+[   3.192] f429_wifi: scan ssid=labwifi-ar-ht20s freq=2432 rc=0
+[   3.320] f429_wifi: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 freq=2432 signal=-59
+[   3.330] f429_wifi: PASS W4
+[   5.333] f429_wifi: scan settle done
+[   5.337] f429_wifi: wlan0: authenticate with D006B570M (local address=D0068590M)
+[   5.347] f429_wifi: wlan0: send auth to D006B570M (try 1/3)
+[   5.355] f429_wifi: none: rtl8xxxu_fill_txdesc_v3: TX rate: 0, pkt size 30
+[   5.380] f429_wifi: wlan0: authenticated
+[   5.519] f429_wifi: wlan0: associate with D0073358M (try 1/3)
+[   5.528] f429_wifi: none: rtl8xxxu_fill_txdesc_v3: TX rate: 0, pkt size 109
+[   5.543] f429_wifi: wlan0: RX AssocResp from D0073358M (capab=0x401 status=0 aid=1)
+[   5.621] f429_wifi: wlan0: associated
+[   5.637] f429_wifi: connected bssid=1c:a7:70:de:29:a1 waited_ms=200
+[   5.645] f429_wifi: PASS W5
+```
+
+AP-side witness (same boot, `sudo -n iw dev wlan2 station dump`):
+`Station 20:f4:1b:52:8f:01 (on wlan2)  signal: -41 dBm`.
+
+Console identity traps that bit this round:
+
+1. **`%pM` is not in this port's printf.** MAC arguments print as a pointer
+   (`D006B570M`); the addresses are fine in the frames. Judge with the case's
+   own `mac=`/`bssid=` fields only.
+2. **The Linux clock must be advanced by the platform.** The F429 image had
+   `configUSE_TICK_HOOK 0` and no `vApplicationTickHook`, so `jiffies` stayed
+   0: the MLME timer re-armed at the 1 ms clamp, `ieee80211_sta_work` ran
+   9,153 times in 2 s (the console literally shows
+   `[7.535] [previous line repeated 999 times]` followed by
+   `9153`), and the association never left even though
+   `wlan0: authenticated` and `cfg80211_mlme_assoc rc=0` both appeared. The
+   port-contract probes (`syswq/dwprobe/tlprobe/tlprobe2/wiphy_work`) all
+   passed while this was happening: the timers were fine, only the clock
+   variable was frozen. Fix: `configUSE_TICK_HOOK 1` +
+   `vApplicationTickHook()->lkpi_tick_advance()` in the F429 board glue.
+3. **Two rtl8xxxu dongles on the bench**: the firmware line must be matched by
+   the `request_firmware` name (`rtlwifi/rtl8188eufw.bin`, 28.0/0x88e1), never
+   by the first `Firmware revision` line (the 8723BU is 35.0/0x5301).
+4. The scan must complete before connect (mac80211 drops iface work while
+   `SCAN_SW_SCANNING` is set); the C5 case waits ~2 s after the BSS on the MCU.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the

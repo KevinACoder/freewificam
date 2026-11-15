@@ -135,4 +135,7 @@ licence 文本、`PROVENANCE.md` 一起 tracked，因为镜像没有文件系统
 链接它的 rtw89 镜像因此是 **GPL-2.0 链接产物 + Realtek 固件再分发物**，两件事
 分别登记。`rtw89` 驱动本身是 `GPL-2.0 OR BSD-3-Clause`，但本仓的 mac80211
 backend 把它链接进 GPL-2.0 产物——它不构成老仓按 BSD 发布的那条 rtw89 线。
-
+| `stm32f429-wifi-c3` 镜像 | STM32F429 平台源码（第一方 BSD-3-Clause）+ rtl8xxxu（**GPL-2.0-only**）+ mac80211/cfg80211（GPL-2.0-only）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtlwifi/rtl8188eufw.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-c4` 镜像 | 同上（C4 的 scan helper 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-c5` 镜像 | 同上（C5 的 connect helper 与 W5 seams 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-sdram` 镜像 | 第一方 BSD-3-Clause 平台/case 层（无无线栈） | **BSD-3-Clause 第一方产物** |

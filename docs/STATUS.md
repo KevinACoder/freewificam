@@ -67,3 +67,20 @@ See `README.md`: the uniprocessor assumption is a precondition of the design,
 not an implementation detail.
 | C5 8821CU station | the same card joined to the bench AP: the C5 gate (56/1400 B ICMP both ways) and the link mechanism | **blocked** (2026-11-14 second round): four candidate mechanisms were eliminated with one instrumented boot each - power save is off (`cfg_ps=0`, `ps_enabled=0`), the TX report matches the driver's own V1 branch (`sn_match=2/2`, `tx_status=21 == dequeue=21`; the first round's `sn 0x00/0x04 对不上 4/8` was read with the opposite macro), the AP sees the station at -24 dBm (GT -24), and there is no BA session (`agg_enable_bitmap=0`). The AP-side 802.3 ICMP ledger is the finding: the AP answered 23/23 of the board's requests while the board counted 11/20 replies, and a same-day GT control boot on the same card/port/AP is 20/20 with 0% loss - so the bench, the card and the port are not the variable. Reopen: (1) delay the AP's reply after the board's transmit and plot the loss (`tc netem`), (2) force MCS7 through `dm_info.fix_rate` and see whether the loss follows the rate or the transmit itself, (3) read the same PHY-DM registers on GT (`igi_bitmap=0` on the RTOS side) - `runs/2026-11-14-rtw88-8821cu-sta-ap/RUN.md` |
 | A1-A2 8821CU AP | the RTL8821CU (rtw88, EHCI) as a 2.4 GHz AP: hostapd owns the AP MLME, mac80211 the AP state machine, rtw88 the reserved-page beacon | **A1 2/2 reached; A2 1/2** (2026-11-14): both boots print `set_iface rc=0 type=3`, `start rc=0`, `netif up 192.168.99.1/24`, `hostap start rc=0 ready=1` at 17.4 s and `link freq=2432`; the monitor sees the BSS (`rtos-8821-ap`, ch5, interval 100, DTIM 2) and the Pi joined once (`sta n=1 hostap=1 mac=90:de:80:4c:38:c5`, 7 s after hostap start). The second boot's `iw connect` timed out and the third is the repetition. A3 is not reached: the same first boot`s counted round is 0/20 with the board's own receive ledger pending. This is the RTL8821CU's first AP role on this line - `runs/2026-11-14-rtw88-8821cu-sta-ap/RUN.md` |
+
+## STM32F429 (MCU) wireless line — 2026-11-15
+
+The MCU is a separate platform, judged by its own ladder (see
+`docs/F429-WIFI.md`; it does not transfer to the RK3568 numbers):
+
+| gate | state |
+|---|---|
+| W0 SDRAM bring-up + DMA | **2/2 PASS** (`sdram test ok size=33554432`) |
+| W1 attach / link / register | **2/2 PASS** |
+| W4 scan (BSS + probe request on air) | **PASS** |
+| W5 association (auth + assoc, AP station table) | **3/3 PASS**, 200 ms |
+| W6 data plane (lwIP, ICMP, TCP/UDP throughput) | **not run** — next round |
+
+The F429 W5 defect was a frozen Linux clock (`jiffies` stayed 0 because the
+board's FreeRTOS config never enabled the tick hook), not a stack or driver
+defect; `runs/2026-11-15-f429-wifi-w5/RUN.md` has the trace and the fix.

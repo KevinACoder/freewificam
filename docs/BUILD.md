@@ -251,3 +251,24 @@ Two Kconfig symbols, one flag-world include, two profiles:
 - The firmware blob is generated, not committed: `tools/rtos/fw-blobs.py`
   writes `components/liblinux80211/fw/iwl7260_fw_blob.c` from the pinned GT
   `iwlwifi-7260-17.ucode` (sha256 checked) and the path is git-ignored.
+
+## STM32F429 wireless profiles (2026-11-15)
+
+The F429 is the MCU platform of this line; its only extra prerequisite is that
+the SDRAM is brought up before the kernel (`main.c` calls
+`f429_memory_boot()` and parks on failure). Images are flashed as **BIN**
+(`mculab` rejects the >1 MB debug ELF):
+
+```
+./make.rtos image PROFILE=stm32f429-sdram      # W0: SDRAM + DMA A/B arm
+./make.rtos image PROFILE=stm32f429-wifi-c3    # W3: attach
+./make.rtos image PROFILE=stm32f429-wifi-c4    # W4: scan
+./make.rtos image PROFILE=stm32f429-wifi-c5    # W5: connect (delivery image, 679,024 B)
+mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --verify --reset \
+    --expect "f429_wifi: (PASS W5|FAIL)"
+```
+
+`F429_WIFI_STAGE=3|4|5` selects the case stage; `CONFIG_F429_SDRAM` +
+`CONFIG_F429_HEAP_SDRAM` put the FreeRTOS heap (4 MiB) in the FMC SDRAM.
+The c5 image links the shared CherryUSB USB adapter through
+`ports/usb-cherryusb` and the wireless stack with `NET_NONE` until W6.

@@ -61,6 +61,12 @@ int case_usb_ehci_run(void);
 #if defined(RTOS_CASE_USB_DWC2)
 int case_usb_dwc2_run(void);
 #endif
+#if defined(RTOS_CASE_F429_SDRAM)
+int case_f429_sdram_run(void);
+#endif
+#if defined(RTOS_CASE_F429_WIFI)
+int case_f429_wifi_run(void);
+#endif
 
 #if defined(RTOS_CASE_USB_XHCI) || defined(RTOS_CASE_USB_EHCI)
 int usb_msc_case(unsigned int busid, const char *hcd);
