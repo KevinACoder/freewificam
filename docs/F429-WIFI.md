@@ -15,7 +15,9 @@ how far a full Linux MAC layer gets on an MCU. The answer as of this round:
 ICMP 20/20 both payloads, the AP's own capture carrying all 44 requests and
 44 replies), and the four throughput phases have been measured once
 (report-only, no gate; 2.8 Mbit/s TCP down, 6.1–6.9 Mbit/s UDP down with zero
-loss, both limited by the full-speed USB host, not by the radio).
+loss; on this full-speed USB host the UDP cell sits at 63% of the bulk
+ceiling, so the USB link is the candidate ceiling - measuring the bus
+itself is the next instrument, not a claim made here).
 
 ## 1. Memory plan (the part that makes it possible)
 
@@ -240,8 +242,9 @@ with a compact per-direction ledger in the run record.
 
 **How to read the numbers**: this board's USB host is **full speed**
 (12 Mbit/s signalling; a bulk transfer tops out near 9.7 Mbit/s on this
-controller), so 6–7 Mbit/s of UDP is the *USB link* being approached, not the
-radio's throughput. The downlink TCP rate is stable across the two boots
+controller), and the UDP cell is 63% of that - which makes the USB link the
+*candidate* ceiling, not a proven one (the bus itself was not measured; that
+is the next instrument). The downlink TCP rate is stable across the two boots
 (2.78 / 2.84 Mbit/s) and is the one cell that behaves like a rate. The uplink
 TCP (0.36 vs 1.85 Mbit/s) and the UDP blast (0.16 vs 0.71 Mbit/s offered,
 90% delivered when the sink overlapped it) are **not stable and not
