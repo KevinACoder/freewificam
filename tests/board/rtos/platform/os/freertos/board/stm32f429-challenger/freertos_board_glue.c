@@ -38,10 +38,62 @@ uint8_t ucHeap[ configTOTAL_HEAP_SIZE ]
  */
 extern void lkpi_tick_advance( void ) __attribute__( ( weak ) );
 
+/*
+ * W6 wedge sampler (diagnostic, polled UART, no locks): every half second the
+ * tick hook prints the PC the tick interrupted.  A wedged loop that leaves
+ * interrupts on keeps printing the same PC (which names the loop); a loop with
+ * interrupts masked stops printing entirely (which names that class instead).
+ * Printing from the tick hook bypasses the console outlet on purpose - its
+ * lock is a blocking mutex and must never be taken from an exception.
+ */
+#if defined( CONFIG_F429_TICK_PC ) && CONFIG_F429_TICK_PC
+static uint32_t read_psp( void )
+{
+    uint32_t v;
+
+    __asm__ __volatile__( "mrs %0, psp" : "=r"( v ) );
+    return v;
+}
+
+static uint32_t read_msp( void )
+{
+    uint32_t v;
+
+    __asm__ __volatile__( "mrs %0, msp" : "=r"( v ) );
+    return v;
+}
+
+static void tick_pc_sample( uint32_t tick )
+{
+    uint32_t psp_pc = *( volatile uint32_t * )( read_psp() + 0x18U );
+    uint32_t msp_pc = *( volatile uint32_t * )( read_msp() + 0x18U );
+    uint32_t pc = 0U;
+
+    if ( psp_pc >= 0x08000000U && psp_pc < 0x08100000U )
+        pc = psp_pc;
+    else if ( msp_pc >= 0x08000000U && msp_pc < 0x08100000U )
+        pc = msp_pc;
+    uart_early_puts( "tickpc: tick=" );
+    uart_early_put_hex32( tick );
+    uart_early_puts( " pc=0x" );
+    uart_early_put_hex32( pc );
+    uart_early_putc( '\n' );
+}
+#endif
+
 void vApplicationTickHook( void )
 {
     if ( lkpi_tick_advance != 0 )
         lkpi_tick_advance();
+#if defined( CONFIG_F429_TICK_PC ) && CONFIG_F429_TICK_PC
+    {
+        static uint32_t tick_n;
+
+        tick_n++;
+        if ( ( tick_n % 500U ) == 0U )
+            tick_pc_sample( tick_n );
+    }
+#endif
 }
 
 #if defined(CONFIG_F429_LWIP_SDRAM) && CONFIG_F429_LWIP_SDRAM

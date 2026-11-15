@@ -66,6 +66,14 @@ config F429_LWIP_SDRAM
 	  exports lkpi_lwip_heap_ptr).  The data path still copies into the
 	  driver's SRAM skbs, so no lwIP buffer is ever DMA'd from SDRAM.
 
+config F429_TICK_PC
+	bool "F429 diagnostic: print the tick-interrupted PC every 500 ticks"
+	depends on BOARD_STM32F429_CHALLENGER
+	help
+	  Turns the tick hook into a PC sampler on the polled UART (no console
+	  lock): a wedged loop with interrupts on keeps naming its PC, a loop
+	  with interrupts masked stops printing.  Diagnostic only.
+
 config F429_WIFI_TP
 	bool "F429 wifi: run the throughput phases after the W6 pings"
 	depends on F429_WIFI_STAGE = 6
