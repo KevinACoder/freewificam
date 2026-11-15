@@ -6,7 +6,7 @@
 # interface changed in place, hostapd as the AP MLME.  The one axis this
 # profile changes is CONFIG_AP_WPA2: the case supplies a passphrase and stops
 # at A3 instead of running the A4 phase table (A4 is still blocked; see
-# runs/2026-11-12-iwl7260-ap-port/RUN.md).
+# 2026-11-12 bench run).
 #
 # The pool/heap/runner stack are the accepted open-AP configuration on purpose.
 # The stack + driver are GPL-2.0-only; this profile's image is a GPL-2.0 link

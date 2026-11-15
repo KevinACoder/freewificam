@@ -12,7 +12,7 @@
 # image (no census).
 #
 # The gates (TCP down/up >= 80% of the same-day GT AP, UDP 40M loss <= 1%) are
-# pre-registered in runs/2026-11-14-rtw89-8851bu-ap/PREREG.md, not here.
+# pre-registered in 2026-11-14 bench run, not here.
 #
 # The driver + stack are a GPL-2.0 link product; the imported hostapd is
 # BSD-3-Clause and the rtw8851b firmware is redistributed with the image

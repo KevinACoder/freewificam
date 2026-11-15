@@ -764,7 +764,7 @@ void usb_free_urb(struct urb *urb);
  * the PCIe/xHCI port the completion runs in a threaded IRQ, so the CMSIS
  * semaphore give is legal; on a DWC2 hard-IRQ port it is not (FreeRTOS wants
  * xSemaphoreGiveFromISR, and the plain give corrupts the scheduler state - the
- * STM32F429 W6 wedge).  The platform therefore overrides this weak default.
+ * the STM32F429 data-plane wedge).  The platform therefore overrides this weak default.
  */
 void lkpi_usb_done_wake(osSemaphoreId_t sem) __attribute__((weak));
 
@@ -1019,7 +1019,7 @@ static void lkpi_usb_drain_thread_entry(void *arg);
  * event in the event ring with EINT asserted, INTE set and the interrupt line
  * never reaching the CPU: usbsts=EINT, usbcmd=RS|INTE, iman IP clear, the
  * consumer entry fresh, the IRQ count frozen - and every endpoint on that bus
- * stalled from that instant (runs/wireless/2026-11-01-W2-01-wedge, four boots,
+ * stalled from that instant (an early board round, four boots,
  * a thread-context drain then recovered the cell).  Nothing in the engine can
  * see a controller, so the wait below is bounded while a transfer is actually
  * outstanding and the backend gets a chance to run its own drain; an idle port

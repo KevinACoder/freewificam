@@ -75,7 +75,7 @@ config F429_TICK_PC
 	  with interrupts masked stops printing.  Diagnostic only.
 
 config F429_WIFI_TP
-	bool "F429 wifi: run the throughput phases after the W6 pings"
+	bool "F429 wifi: run the throughput phases after the data plane pings"
 	depends on F429_WIFI_STAGE = 6
 	help
 	  Turns the four report-only phases on (tcp down/up, udp down/up).

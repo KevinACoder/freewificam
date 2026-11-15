@@ -2726,7 +2726,7 @@ int lkpi_mutex_is_locked(struct mutex *m);
 #define	mutex_is_locked(m)		lkpi_mutex_is_locked(m)
 
 /*
- * Spinlocks are DAIF critical sections, NOT mutexes (2026-10-05 W3: the
+ * Spinlocks are DAIF critical sections, NOT mutexes (2026-10-05: the
  * old passive-mutex mapping made every skb-queue head own a HEAP
  * allocation - rtw89's per-frame txcb ack queue then created and leaked
  * a ThreadX mutex object per TX frame, and the urb-completion mutex
@@ -3695,7 +3695,7 @@ struct completion {
 	void	*_cv[12];	/* the port condvar shell's size - MUST fit
 				 * lkpi_cv_shell IN THIS SLOT (linuxkpi_impl.h
 				 * pins it with a per-slot _Static_assert; the
-				 * rtw89 W2 board round proved a 72-byte shell
+				 * an early rtw89 board round proved a 72-byte shell
 				 * in a 64-byte slot aliases `done`, and
 				 * complete_all's waiter loop then reads the
 				 * sticky marker as its trip count - a 63-second

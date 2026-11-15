@@ -9,7 +9,7 @@
 # until that GT result is in the run record, not a guess at the ceiling.
 #
 # The gates (TCP down/up >= 80% of the same-day GT, UDP loss <= 1%, no >= 2 s
-# stall) are pre-registered in the project's run ledger, not in this image.
+# stall) are pre-registered for the project's run ledger, not in this image.
 #
 # The driver + stack are a GPL-2.0 link product and redistribute the Realtek
 # rtw8821c firmware image (docs/LICENSES.md).

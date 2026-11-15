@@ -56,7 +56,7 @@ subtree is GPL-2.0-only, and every artifact that links the stack is GPL-2.0
 not linked by this build; S1 adds the link behind its own profile.
 
 As of 2026-11-10 (S1a) all **62 stack TUs compile** against these faces
-(`runs/S0/run-50/`, C0 only). The faces that grew for it are the used-surface
+(2026-10-25 bench run, C0 only). The faces that grew for it are the used-surface
 ones under `include/linux/` and `include/net/` (idr/sock/sch_generic/arp/
 inet_connection_sock/rhashtable/rculist/irq_work/align/pkt_sched/inet_ecn),
 `include/linux80211/stack_config.h` (the stack's feature identity:

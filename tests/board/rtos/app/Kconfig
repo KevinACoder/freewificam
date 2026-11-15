@@ -307,9 +307,9 @@ config RTL8XXXU_AP_ARM_BCN4
 	  start-up beacon so one boot answers whether that is the missing arming.
 
 config RTL8XXXU_TX_CENSUS
-	bool "rtl8xxxu W6 census: H2C read-back and TX state registers (diagnostic)"
+	bool "rtl8xxxu data plane census: H2C read-back and TX state registers (diagnostic)"
 	help
-	  Diagnostic only, never a delivery profile.  The F429 W6 blocker is "the
+	  Diagnostic only, never a delivery profile.  The F429 data plane blocker is "the
 	  chip transmits the broadcast ARP and no unicast frame after it", while
 	  the descriptor census shows the two differ only in txdw0[0] and the USB
 	  engine completes every frame.  This config adds two first-party probes
@@ -330,7 +330,7 @@ config RTL8XXXU_TX_CENSUS
 	  field by field.  The transmit path itself stays untouched.
 
 config RTL8XXXU_RTSOFF_ARM
-	bool "rtl8xxxu W6 arm: clear the RTS/CTS bits in the first unicast TX descriptors"
+	bool "rtl8xxxu data plane arm: clear the RTS/CTS bits in the first unicast TX descriptors"
 	depends on RTL8XXXU_TX_CENSUS
 	help
 	  Diagnostic arm only.  The unicast data descriptors carry
@@ -341,7 +341,7 @@ config RTL8XXXU_RTSOFF_ARM
 	  the air.
 
 config RTL8XXXU_BMC_ARM
-	bool "rtl8xxxu W6 arm: set the BROADMULTICAST bit on the first unicast TX descriptors"
+	bool "rtl8xxxu data plane arm: set the BROADMULTICAST bit on the first unicast TX descriptors"
 	depends on RTL8XXXU_TX_CENSUS
 	help
 	  Diagnostic arm only.  The broadcast ARP is the one data frame that

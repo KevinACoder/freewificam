@@ -5,7 +5,7 @@
  *         mac80211/cfg80211 stack (components/liblinux80211) over the DWC2
  *         host and the CherryUSB URB engine.
  *
- * The case is one boot of the W0-W6 ladder, stopped at CONFIG_F429_WIFI_STAGE:
+ * The case is one boot of the bring-up ladder, stopped at CONFIG_F429_WIFI_STAGE:
  *
  *   3  attach:   probe, compiled-in firmware, wlan0, wiphy row, dev_open
  *   4  scan:     the real NL80211_CMD_TRIGGER_SCAN stream -> mac80211's SW scan
@@ -35,7 +35,7 @@
  *   f429_wifi: start rc=0
  *   f429_wifi: scan ssid=... freq=2432 rc=0
  *   f429_wifi: bss ssid=... bssid=.. freq=2432 signal=..
- *   f429_wifi: PASS W3 | PASS W4 | FAIL <reason>
+ *   f429_wifi: PASS ATTACH | PASS SCAN | FAIL <reason>
  *
  * What this is not: WPA2, the AP or monitor role, DHCP, or a throughput
  * verdict.  The F429 numbers do not transfer to the RK3568 line.
@@ -60,7 +60,7 @@
 #include "linux80211/linux80211.h"
 #include "linux80211/nl80211_probe.h"
 #include "linux80211/hostap_ap.h"	/* lkpi_tx_health_get */
-#include "linux80211/net.h"	/* W6: lwIP netif, ICMP, phases */
+#include "linux80211/net.h"	/* data plane: lwIP netif, ICMP, phases */
 #include "linuxkpi_usb.h"
 #include "lkpi_usb_cherryusb.h"
 
@@ -92,7 +92,7 @@ void lkpi_usb_cherryusb_init(void);
 static char fw_line[160];
 
 /*
- * W6 census (CONFIG_RTL8XXXU_TX_CENSUS): the chip's transmit state, read at
+ * data-plane census (CONFIG_RTL8XXXU_TX_CENSUS): the chip's transmit state, read at
  * three points of the data-plane boot.  The unit lives in the driver world
  * (rtl8xxxu_diag.c) and takes the wiphy as an opaque pointer; this case only
  * owns the call sites, so the delivery images compile it out.
@@ -128,7 +128,7 @@ syswq_probe_fn(struct work_struct *w)
 static struct work_struct syswq_probe;
 
 /*
- * W6 watchdog: a second, higher-priority thread that keeps printing after the
+ * data-plane watchdog: a second, higher-priority thread that keeps printing after the
  * data path.  A hard wedge (an ISR storm or a fault that never prints) stops
  * it; a thread-level deadlock does not - and in that case the watchdog prints
  * the task/workqueue census once, which names the stuck thread and the held
@@ -277,7 +277,7 @@ dwprobe_fn(struct work_struct *w)
 }
 
 /*
- * W5 diagnostic seams.  After the authentication the cfg80211 SME queues its
+ * association diagnostic seams.  After the authentication the cfg80211 SME queues its
  * connection work, which calls cfg80211_mlme_assoc(); the association request
  * never appeared on the wire, and both steps are silent on the ordinary
  * console.  These two -Wl,--wrap shims (the component's seam style, not a
@@ -298,7 +298,7 @@ __wrap_cfg80211_sme_rx_auth(struct wireless_dev *wdev, const u8 *buf, size_t len
 }
 
 /*
- * W6 A-MPDU-off arm.  After the first QoS data frame the driver starts a TX
+ * data plane A-MPDU-off arm.  After the first QoS data frame the driver starts a TX
  * Block-Ack session and the chip's aggregation engine then swallows the
  * per-frame URBs (the AP sees nothing on air while the USB transfers all
  * complete).  The MCU image does not start TX BA sessions: the wrap refuses
@@ -359,7 +359,7 @@ __wrap_cfg80211_mlme_assoc(struct cfg80211_registered_device *rdev,
 	return rc;
 }
 
-/* The driver's own probe lines are the W3 evidence.  The firmware revision is
+/* The driver's own probe lines are the attach evidence.  The firmware revision is
  * promoted to an anchor; the rest is filtered to the driver/USB prefix so a
  * 115200 console is not flooded. */
 static void
@@ -372,7 +372,7 @@ fw_sink(ulog_level_t level, const char *line)
 	/* Never take the console from an exception context: the driver logs from
 	 * its USB completion, which on this board runs in the OTG_HS hard IRQ,
 	 * and the console outlet's lock is a blocking CMSIS mutex.  A print there
-	 * wedges the machine (the W6 data-frame wedge, intermittently, depending
+	 * wedges the machine (the data-plane data-frame wedge, intermittently, depending
 	 * on whether the interrupted thread held the console). */
 	{
 		unsigned int ipsr;
@@ -536,7 +536,7 @@ case_f429_wifi_run(void)
 	/* The driver's probe runs from CherryUSB's hub thread once the vendor
 	 * interface is claimed; it is slow by design (efuse, 8051 reset,
 	 * firmware download, PHY init).  wlan0 appearing is the register + attach
-	 * evidence (W2/W3 in one line). */
+	 * evidence (attach in one line). */
 	for (waited = 0U; waited < F429_WIFI_WAIT_MS; waited += F429_WIFI_POLL_MS) {
 		dev = dev_get_by_name(&init_net, "wlan0");
 		if (dev != NULL)
@@ -606,7 +606,7 @@ case_f429_wifi_run(void)
 			    ww_probe_ran, waited_ww);
 	}
 
-	/* W4: the directed scan on the bench AP's channel, then the wildcard
+	/* scan: the directed scan on the bench AP's channel, then the wildcard
 	 * retry.  The scan is mac80211's SW scan (rtl8xxxu has no hw_scan). */
 	rc = lkpi_nl80211_trigger_scan(dev, F429_WIFI_SSID, F429_WIFI_FREQ);
 	CASE_ANCHOR("f429_wifi: scan ssid=%s freq=%u rc=%d\n",
@@ -646,10 +646,10 @@ found:
 		    "freq=%d signal=%d\n",
 		    F429_WIFI_SSID, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq, sig / 100);
-	CASE_ANCHOR("f429_wifi: PASS W4\n");
+	CASE_ANCHOR("f429_wifi: PASS SCAN\n");
 
 #if CONFIG_F429_WIFI_STAGE >= 5
-	/* W5: NL80211_CMD_CONNECT (open AP) through cfg80211/mac80211's own
+	/* association: NL80211_CMD_CONNECT (open AP) through cfg80211/mac80211's own
 	 * SME, then wait until cfg80211 marks the station connected.  The AP-side
 	 * witness (iw station dump) is the external half of this gate. */
 	{
@@ -657,7 +657,7 @@ found:
 		unsigned int connect_ms = 0U;
 		int connected = 0;
 
-		/* W5: let the scan finish before connecting.  mac80211 drops every
+		/* association: let the scan finish before connecting.  mac80211 drops every
 		 * iface work item (including the association the MLME timer queues)
 		 * while SCAN_SW_SCANNING is set; the MCU's scan is far slower than the
 		 * RK line's because every channel write is a USB full-speed control
@@ -795,11 +795,11 @@ found:
 		 * the beacon wake-up. */
 		rc = lkpi_nl80211_set_power_save(dev, 0);
 		CASE_ANCHOR("f429_wifi: power save off rc=%d\n", rc);
-		CASE_ANCHOR("f429_wifi: PASS W5\n");
+		CASE_ANCHOR("f429_wifi: PASS ASSOC\n");
 	}
 #endif /* CONFIG_F429_WIFI_STAGE >= 5 */
 #if CONFIG_F429_WIFI_STAGE >= 6
-	/* W6: the data plane.  The lwIP netif is assembled over wlan0 with the
+	/* data plane: the data plane.  The lwIP netif is assembled over wlan0 with the
 	 * lab's static address, two counted ICMP rounds are the functional
 	 * gate, and (with CONFIG_F429_WIFI_TP) the four report-only phases run
 	 * against the Pi's iperf2 arms.  No phase applies a pass threshold. */
@@ -909,7 +909,7 @@ found:
 		}
 
 		if (small_rx == 20U && big_rx == 20U)
-			CASE_ANCHOR("f429_wifi: PASS W6\n");
+			CASE_ANCHOR("f429_wifi: PASS DATA\n");
 		else
 			CASE_ANCHOR("f429_wifi: FAIL ping small=%u big=%u\n",
 				    small_rx, big_rx);
@@ -974,7 +974,7 @@ found:
 	}
 #endif /* CONFIG_F429_WIFI_STAGE >= 6 */
 #else
-	CASE_ANCHOR("f429_wifi: PASS W3\n");
+	CASE_ANCHOR("f429_wifi: PASS ATTACH\n");
 #endif /* CONFIG_F429_WIFI_STAGE >= 4 */
 	usb_ledger();
 	return 0;

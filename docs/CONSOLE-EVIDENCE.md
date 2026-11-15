@@ -960,7 +960,7 @@ is injected, and channel hopping, 5 GHz and a five-minute soak are untested.
 
 ### The lines that mattered
 
-**The a4-3 silence.**  The 2026-11-14 AP round's `rtos-a4-3` boot ends at a
+**The an earlier A4 boot silence.**  The 2026-11-14 AP round's `rtos-an earlier A4 boot` boot ends at a
 phase's begin line, with the next ~25 s of the capture carrying nothing:
 
 ```
@@ -973,9 +973,9 @@ The old record called this "tcpup / 12 minutes"; both were wrong.  It is phase
 the case never resumed.  It did not reproduce in the 2/2 clean A4 boots, and
 the mechanism is not proven; the diag image that would name it
 (`-ap-diag`, stage anchors plus the 2 s watchdog) was built but not booted.
-The reopen condition is in the run's PREREG.
+The reopen condition is in the bench record.
 
-**The invalid `rtos-ap1` boot.**  This is the boot that exposed the two Pi TCP
+**The invalid one invalid boot boot.**  This is the boot that exposed the two Pi TCP
 servers racing port 5001.  Its phase 3 is a 0-byte TCP downlink with the
 heartbeat stale, and phases 4/5 show the pool pressure that follows:
 
@@ -1020,7 +1020,7 @@ old "reorder freeze" classification is withdrawn.
 **The repeated-line folder.**  The console collapses runs of identical lines
 into `[previous line repeated N times]`.  It is the console's own compression,
 not a case anchor, and a `grep` for the repeated text undercounts it.  The
-a4-3 boot has no repeat lines because it went silent; the invalid `rtos-ap1`
+an earlier A4 boot has no repeat lines because it went silent; the invalid one invalid boot
 boot has two runs, in phases 4 and 5.
 
 **How to read a phase block.**  `begin` names proto/role/air/port/window;
@@ -1066,7 +1066,7 @@ board-receive UDP at 10M offered, 10 s board-send UDP at 10M paced.  The
 GT arm runs the same table; the AP arm runs the mirrored names
 (`tcpdn`/`tcpup` swapped) and is mapped back.  The raw `serial.log` files and
 the peer-side iperf outputs for every boot named here are in
-`runs/2026-11-14-rtl8xxxu-8188eu-tp/` and `runs/2026-11-15-rtl8723bu-tp/`
+the 2026-11-14 bench run and the 2026-11-15 bench run
 (workspace ledger); this section carries the transcript excerpts and the
 numbers they support.
 
@@ -1097,8 +1097,7 @@ top of this file: the port's `printf` has no `%pM`, so the address is not a
 MAC in the log.  The case's own `mac=`/`bssid=` lines are the identity
 evidence.
 
-The two clean boots (`sta2`, `sta3`) and the same-day GT arm (`gt1`,
-`gt2`) give the four cells:
+The two clean boots (the two clean boots) and the same-day GT arm (the same-day GT arm) give the four cells:
 
 | board direction | 8188EU station | GT | ratio |
 |---|---|---|---|
@@ -1161,8 +1160,7 @@ interfaces are enumerated and declined, and the Wi-Fi interface is `intf=2`.
 [ 146.713] rtl8xxxu_c6: PASS C6T
 ```
 
-The two clean boots (`c6-2`, `c6-3`) and the same-day GT arm (`gt1`,
-`gt2`):
+The two clean boots (the two clean boots) and the same-day GT arm (the same-day GT arm):
 
 | board direction | 8723BU station | GT | ratio |
 |---|---|---|---|
@@ -1178,11 +1176,11 @@ the raw range beside it, not as a stable single rate.
 
 Two defects are visible in the serial, not hidden:
 
-- `c6-1` stopped at `phase 6 begin` (126.201 s) and printed nothing for
-  more than three minutes; the board needed a power cycle.  `c6-2`/`c6-3`
+- one boot stopped at `phase 6 begin` (126.201 s) and printed nothing for
+  more than three minutes; the board needed a power cycle.  the two clean boots
   did not reproduce it (1/3 boots).
 - the repeat session `tcpdn2` is 0 bytes in **3/3** RTOS boots while the
-  adapter's counters keep moving in the same window (e.g. `c6-2` phase 4:
+  adapter's counters keep moving in the same window (e.g. one boot phase 4:
   `rx_frames=39170`, report 0 bytes).  The GT's second session is normal
   (25.4/27.7).  It is a lwiperf/second-session defect, not a rate gate.
 
@@ -1193,7 +1191,7 @@ Two defects are visible in the serial, not hidden:
   `authenticate with` line above) and in the AC 7260 ones; the case's own
   `mac=`/`bssid=` lines are the identity evidence.
 - **Two dongles in the GT log.**  The GT board carries both cards, so its
-  boot has two `Firmware revision` lines.  The 2026-11-14 `gt1` summary's
+  boot has two `Firmware revision` lines.  The 2026-11-14 the GT arm summary's
   `GT_RTL8XXXU_FW` is the **8723BU's** line
   (`usb 1-1.2: ... 35.0 (0x5301)`), not the 8188EU's
   (`usb 4-1.2: ... 28.0 (0x88e1)`); the arm's WLAN was selected by MAC, but
@@ -1223,7 +1221,7 @@ Two defects are visible in the serial, not hidden:
 This is the F429 OTG_HS full-speed host arm (`PROFILE=stm32f429-usb-msc`,
 case `usb_dwc2`), a **2/2 PASS** on the second U disk (USB3.0 Card Reader,
 `05e3:0749`).  The transcript is one of the two boots; both are byte-identical
-in their judged anchors and are `runs/2026-11-15-f429-usb-msc/boot{2,3}-hos/`.
+in their judged anchors and are `2026-11-15 bench run{2,3}-hos/`.
 
 ```
 rtos: banner backend=freertos kernel=FreeRTOS-Kernel V11.3.1 build=...
@@ -1288,7 +1286,7 @@ FromISR pair by `IPSR`, because the CM4F port asserts on `taskENTER_CRITICAL()`
 from an interrupt.  The control-transfer timeout was also raised to 5 s for a
 card reader's first response.
 
-The earlier, **invalid** boot is kept in `boot1-otg-port/`: the first stick did
+The earlier, **invalid** boot is kept in an earlier invalid boot: the first stick did
 not present D+ (`HPRT=0x00001000`, PCSTS=0, `irq=0`) while the U disk was on
 the micro USB OTG1 port; that port's VBUS is a `5V_USB` input and does not power
 a bus-powered stick, and P2 USB-A's `HOST_DN/DP` need J74-J76 on the HOS side.
@@ -1318,7 +1316,7 @@ The `mcu` expectation on `idVendor:0bda,idProduct:8179` matches; the later
 `usbh: msc FAIL no mass-storage instance` is the MSC-specific case refusing a
 non-storage device, not an enumeration failure.  No rtl8xxxu/mac80211/linuxkpi
 USB path is loaded; the vendor interface is deliberately unclaimed.  Run:
-`runs/2026-11-15-f429-usb-8188eus/`.
+the 2026-11-15 bench run.
 
 ### USB3 hub (2026-11-15)
 
@@ -1331,162 +1329,27 @@ normal INFO image pass 2/2, so the direct link is not the issue.  The hub is
 **not** an accepted *storage* topology yet; the leftover is the hub-path
 bulk-OUT or power question.  (A later boot on the same day showed that a
 **self-powered** hub changes the picture for the WiFi path: four dongles
-enumerate and the 8188EUS passes W6 through the hub - next section.)  Run:
-`runs/2026-11-15-f429-usb-hub/`.
+enumerate and the 8188EUS passes the data-plane gate through the hub - next section.)  Run:
+the 2026-11-15 bench run.
 
 ### Four wireless dongles behind a self-powered hub (2026-11-15 evening)
 
 The WiFi image (`stm32f429-wifi-c6`) with a self-powered 4-port hub
 (`05e3:0610`) on P2 and four Realtek dongles on its ports.  All four enumerate
-at the USB layer, and the 8188EUS runs the whole W6 data plane through the
-hub (the AP's own capture has 44 echo requests + 44 replies).  Verbatim,
-boot7 (same in boot8, both after a relay cold boot):
+at the USB layer, and the 8188EUS runs the whole data plane through the
+hub (the AP's own capture has 44 echo requests + 44 replies).  One boot, after a relay cold boot:
 
 ```text
-[   1.446] [I/usbh_hub] New full-speed device on Bus 0, Hub 1, Port 1 connected
-[   1.466] [I/usbh_core] New device found,idVendor:05e3,idProduct:0610,bcdDevice:0656
-[   1.529] [I/usbh_hub] Register HUB Class:/dev/hub2
-[   2.414] [I/usbh_core] New device found,idVendor:0bda,idProduct:8179,bcdDevice:0000
-[   2.467] f429_wifi: usbh: lkpi claim attempt 0bda:8179 bus=0 hub=2 port=1 intf=0 spd=2
-[   3.927] f429_wifi: usbkpi: 'rtl8xxxu' claimed 0bda:8179
-[   3.996] f429_wifi: wlan0 present=1 after=3000 ms
-[   4.468] [I/usbh_core] New device found,idVendor:0bda,idProduct:1a2b,bcdDevice:0200
-[   4.520] f429_wifi: usbh: modeswitch 0bda:1a2b CD-ROM persona, ejecting
-[   5.538] f429_wifi: usbh: modeswitch CSW read -14 byte(s), retrying
-[   6.651] f429_wifi: usbh: modeswitch accepted (device left the bus)
-[   6.658] f429_wifi: usbh: modeswitch sent, expecting 0bda:c820
-[   7.229] [I/usbh_core] New device found,idVendor:0bda,idProduct:b720,bcdDevice:0200
-[   7.274] [E/usbh_core] Do not support Class:0xe0, Subclass:0x01, Protocl:0x01 on interface 0
-[   7.325] f429_wifi: usbh: lkpi claim attempt 0bda:b720 bus=0 hub=2 port=3 intf=2 spd=2
-[   8.044] f429_wifi: usbh: usb_driver probe failed (ret -11) for 0bda:b720
-[   8.439] [I/usbh_core] New device found,idVendor:0bda,idProduct:b851,bcdDevice:0000
-[   8.535] f429_wifi: usbh: lkpi claim attempt 0bda:b851 bus=0 hub=2 port=4 intf=2 spd=2
-[   8.546] f429_wifi: usbh: usb_driver probe failed (ret -19) for 0bda:b851
-[  10.064] f429_wifi: ping small tx=20 rx=20 payload=56 rtt_ms=3/5/13 rc=0
-[  11.007] f429_wifi: ping big tx=20 rx=20 payload=1400 rtt_ms=5/7/10 rc=0
-[  11.028] f429_wifi: PASS W6
-[  11.060] rtos: result pass cases=1/1 backend=freertos
-```
-
-That transcript is the corrected one: with the board's old static limits
-(`MAX_INTF_ALTSETTINGS=2`, `MAX_ENDPOINTS=4`) the last three dongles died in
-config parsing (`Interface altsetting num 2 overflow`, `Endpoint num 6/8
-overflow`) before any driver saw them; raising both to 8 (the xHCI reference
-port's values) is what lets the enumeration reach the driver layer.  The b720
-and b851 lines at 7.2-8.5 s are the two combo dongles' **Bluetooth**
-interfaces (class 0xe0/0x01/0x01), which neither the bridge nor a driver
-claims; their vendor (WiFi) interfaces are on intf=2 and get the claim
-attempt above.  Power matters as much as the limits: a bus-powered hub
-produced no downstream devices within 60 s on two boots and a 15-19 s delay
-on a third, while the self-powered hub brings all four up within 2-5 s.
-Run: `runs/2026-11-15-f429-wifi-hub-multi/`.
-
-### Relay cold boot (2026-11-15 evening)
-
-The UStone relay (`192.168.0.44`) is now on the F429's supply
-(`skills/rk3568-board/scripts/power.sh off|on|cycle --confirm`).  The console
-shows the difference plainly: after `off` the serial stream stops
-(`power_on=false`, last-RX age climbing); after `on` a fresh `rtos: banner`
-starts and the hub + four dongles enumerate again.  This is the standard reset
-for F429 rounds - an MCU reset does not reset the USB devices (a wedged dongle
-keeps failing every RX bulk IN with `-EIO` after `mcu reset`).
-
-## STM32F429 wi-fi (liblinux80211 + rtl8xxxu, 8188EUS, 2026-11-15)
-
-Board image `stm32f429-wifi-c5` (679,024 B, sha256 `23fa5920e1468f96e5e55584718026ce1a61fd904c88a28a1d52a59d9abd50e7`),
-USB OTG_HS full speed, 8188EUS `0bda:8179`. Bench AP `labwifi-ar-ht20s` ch5
-open. Full evidence: `runs/2026-11-15-f429-wifi-w5/boot27..29` (+ the w0/w1/w4
-dirs for the lower gates). Boot29, verbatim excerpt:
-
-```
-[   0.000] rtos: runner start cases=1 build=8ec49e0-dirty
-[   0.019] f429_wifi: core ready
-[   0.033] f429_wifi: syswq ran=1 waited_ms=10
-[   0.248] f429_wifi: dwprobe ran=1 waited_ms=210
-[   0.454] f429_wifi: tlprobe ran=1 waited_ms=200
-[   0.660] f429_wifi: tlprobe2 rearm=2 waited_ms=100
-[   0.810] [I/usbh_hub] New full-speed device on Bus 0, Hub 1, Port 1 connected
-[   0.837] [I/usbh_core] New device found,idVendor:0bda,idProduct:8179,bcdDevice:0000
-...
-[   3.114] f429_wifi: start rc=0
-[   3.129] f429_wifi: wiphy_work ran=1 waited_ms=10
-[   3.192] f429_wifi: scan ssid=labwifi-ar-ht20s freq=2432 rc=0
-[   3.320] f429_wifi: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 freq=2432 signal=-59
-[   3.330] f429_wifi: PASS W4
-[   5.333] f429_wifi: scan settle done
-[   5.337] f429_wifi: wlan0: authenticate with D006B570M (local address=D0068590M)
-[   5.347] f429_wifi: wlan0: send auth to D006B570M (try 1/3)
-[   5.355] f429_wifi: none: rtl8xxxu_fill_txdesc_v3: TX rate: 0, pkt size 30
-[   5.380] f429_wifi: wlan0: authenticated
-[   5.519] f429_wifi: wlan0: associate with D0073358M (try 1/3)
-[   5.528] f429_wifi: none: rtl8xxxu_fill_txdesc_v3: TX rate: 0, pkt size 109
-[   5.543] f429_wifi: wlan0: RX AssocResp from D0073358M (capab=0x401 status=0 aid=1)
-[   5.621] f429_wifi: wlan0: associated
-[   5.637] f429_wifi: connected bssid=1c:a7:70:de:29:a1 waited_ms=200
-[   5.645] f429_wifi: PASS W5
-```
-
-AP-side witness (same boot, `sudo -n iw dev wlan2 station dump`):
-`Station 20:f4:1b:52:8f:01 (on wlan2)  signal: -41 dBm`.
-
-Console identity traps that bit this round:
-
-1. **`%pM` is not in this port's printf.** MAC arguments print as a pointer
-   (`D006B570M`); the addresses are fine in the frames. Judge with the case's
-   own `mac=`/`bssid=` fields only.
-2. **The Linux clock must be advanced by the platform.** The F429 image had
-   `configUSE_TICK_HOOK 0` and no `vApplicationTickHook`, so `jiffies` stayed
-   0: the MLME timer re-armed at the 1 ms clamp, `ieee80211_sta_work` ran
-   9,153 times in 2 s (the console literally shows
-   `[7.535] [previous line repeated 999 times]` followed by
-   `9153`), and the association never left even though
-   `wlan0: authenticated` and `cfg80211_mlme_assoc rc=0` both appeared. The
-   port-contract probes (`syswq/dwprobe/tlprobe/tlprobe2/wiphy_work`) all
-   passed while this was happening: the timers were fine, only the clock
-   variable was frozen. Fix: `configUSE_TICK_HOOK 1` +
-   `vApplicationTickHook()->lkpi_tick_advance()` in the F429 board glue.
-3. **Two rtl8xxxu dongles on the bench**: the firmware line must be matched by
-   the `request_firmware` name (`rtlwifi/rtl8188eufw.bin`, 28.0/0x88e1), never
-   by the first `Firmware revision` line (the 8723BU is 35.0/0x5301).
-4. The scan must complete before connect (mac80211 drops iface work while
-   `SCAN_SW_SCANNING` is set); the C5 case waits ~2 s after the BSS on the MCU.
-
-### STM32F429 wi-fi W6 (c6 image, same boot)
-
-The c6 image adds the lwIP egress; W3-W5 pass as above and the netif comes up,
-then the first data frame wedges the system (4/4 boots):
-
-```
-[   5.753] f429_wifi: netif up rc=0 ip=192.168.99.2/24 mac=20:f4:1b:52:8f:01
-[   5.761] f429_wifi: ping warmup call=1
-[   5.768] f429_wifi: none: rtl8xxxu_fill_txdesc_v3: TX rate: 19, pkt size 62
-[   5.779] <console stops, no fault line, 60-120 s>
-```
-
-One boot stopped mid-line (`[   5.881] f`), which is why the record's second
-hypothesis is a console-lock interaction rather than a plain hang. The
-`IEEE80211_AMPDU_TX_START` line appears in the boots without the BA-off arm
-and its absence does not change the wedge. Full record:
-`runs/2026-11-15-f429-wifi-w6/RUN.md`.
-
-### STM32F429 wi-fi W6 data plane - PASS (2026-11-15 evening)
-
-The round that closed W6. Two blockers were outside the driver and outside the
-chip: a stale PERMANENT ARP entry on the AP (all replies went to
-`88:e6:28:53:10:9c`, not to the board) and the armv7m console print lock, which
-had no interrupt masking and spun forever whenever a higher-priority printer
-preempted the holder. With both fixed, one boot (`boot13`, delivery image
-`42beedc0...`):
-
-```
-[   6.635] f429_wifi: lkpinetif: rx#1 dev=wlan0(ours) bound=wlan0 proto=0x0806 len=28 data=00010800
-[   6.693] f429_wifi: lkpinetif: rx#2 dev=wlan0(ours) bound=wlan0 proto=0x0800 len=36 data=45000024
-[   7.308] f429_wifi: ping warmup ret=0 rx=1
-[   8.620] f429_wifi: ping small tx=20 rx=20 payload=56 rtt_ms=4/6/10 rc=0
-[   9.596] f429_wifi: ping big tx=20 rx=20 payload=1400 rtt_ms=6/10/29 rc=0
-[   9.607] f429_wifi: net rx_frames=45 tx_frames=45 rx_bytes=31090 tx_bytes=31090
-[   9.617] f429_wifi: PASS W6
-[   9.654] rtos: result pass cases=1/1 backend=freertos
+[   3.913] f429_wifi: wlan0 present=1 after=2900 ms
+[   3.920] f429_wifi: wlan0 present=1 ifindex=1 mac=20:f4:1b:52:8f:01
+[   4.285] f429_wifi: PASS SCAN
+[   6.688] f429_wifi: wlan0: associated
+[   6.896] f429_wifi: PASS ASSOC
+[  10.000] f429_wifi: ping small tx=20 rx=20 payload=56 rtt_ms=3/5/11 rc=0
+[  10.960] f429_wifi: ping big tx=20 rx=20 payload=1400 rtt_ms=6/8/25 rc=0
+[  10.986] f429_wifi: PASS DATA
+[  10.996] f429_wifi: usb submits=170 completes=169 refused=0 stage_overflow=0 slots_exhausted=0 stage_size=4096 slots=4 rx=121 rx_err=0 tx=48 tx_err=0 tx_last_err=0 tx_len=1494
+[  11.018] rtos: result pass cases=1/1 backend=freertos
 ```
 
 AP-side ledger for the same boot (`tcpdump -i wlan2 icmp`): 44 echo requests
@@ -1515,12 +1378,12 @@ rtl8xxxu_diag: h2c n=0 macid=0 role=2 conn=1 hmtfr_before=0x00 hmtfr_after=0x00 
 rtl8xxxu_diag: chip tag=post-assoc out_eps=2 ep_tx=2 hmtfr=0x00 txpause=0x00 cr=0x06ff fwhw_txq=0x7f301f80 trxdma=0xfaf0 rqpn=0x00630029 rqpn_npq=0x00001c1c txrpt=0x33 hisr=0x00000000 hisre=0x00000000
 ```
 
-Full record: `runs/2026-11-15-f429-wifi-w6b/RUN.md`.
+Full record: the 2026-11-15 bench run.
 
-### STM32F429 wi-fi W6 throughput (c6t image, same AP)
+### STM32F429 wi-fi data-plane throughput (c6t image, same AP)
 
-The `stm32f429-wifi-c6t` image runs the four report-only phases after the W6
-gate in the same boot. boot3 (the supported sample; the console's phase
+The `stm32f429-wifi-c6t` image runs the four report-only phases after the data plane
+gate in the same boot (the supported sample; the console's phase
 timestamps are not monotonic - read the order and the `bytes`/`ms`/`kbit`
 fields, not the clock):
 
@@ -1540,7 +1403,7 @@ accounting: tcpdn **2.84 Mbit/s** (8.63 MB / 25.5 s), tcpup **1.85 Mbit/s**
 (4.39 MB / 19.9 s), udpdn 14.7 MB offered / 6.86 Mbit/s with the board
 counting 10,550 packets and 0 drops. The AP's `tcpdump -i wlan2` in the same
 boot carries the whole round (44 ICMP requests + 44 replies, then the TCP/UDP
-flows).  Full record: `runs/2026-11-15-f429-wifi-tp/RUN.md`.
+flows).  Full record: the 2026-11-15 bench run.
 
 ### STM32F429 wi-fi: serial phenomena worth recognising
 
@@ -1595,8 +1458,8 @@ Not claimed, each with its reason:
   same-ruler GT arm failed three times on instruments; the TCP column is
   `gt-ap5` and the UDP-uplink column is the `gt-ap1`+`gt-ap5` mean.  The TCP
   uplink is 78.4% and fails the gate; the three non-UDP-uplink cells scatter
-  11-16%, so the table reports means and ranges, not stable rates.  The a4-3
-  silence's mechanism is unproven and the invalid `rtos-ap1` boot is not part
+  11-16%, so the table reports means and ranges, not stable rates.  The an earlier A4 boot
+  silence's mechanism is unproven and the invalid one invalid boot boot is not part
   of the 2/2.
 - **The 8851BU station downlink is below the gate.**  The C6T cells are
   33.30/30.51 (mean 31.90) against 42.3, 75.4%; the 40 M UDP downlink has no
@@ -1616,7 +1479,7 @@ Not claimed, each with its reason:
 - **8723BU AP and monitor are unverified.**  The chip's fileops carries
   `supports_ap` in the pin, but neither role was run; the monitor role and
   both cards' WPA2/multi-client/5 GHz paths are not measured here.  The
-  8723 `c6-1` stop (1/3) and the repeat `tcpdn2` 0 bytes (3/3) are open
+  8723 one boot stop (1/3) and the repeat `tcpdn2` 0 bytes (3/3) are open
   defects, listed above, not rate cells.
 - **Compliance.**  There is no `regulatory.db` in this image, so the wiphy runs
   on the world regdomain.  The channel flags above are the driver's

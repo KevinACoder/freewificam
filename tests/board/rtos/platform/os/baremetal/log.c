@@ -161,7 +161,7 @@ static void print_lock_take(uint64_t *saved_daif)
 	 * lock is held across a polled 115200-baud line (several ms), and this
 	 * platform's wait is a bare spin - no yield, so anything that preempts
 	 * the holder and then prints never gives it the CPU back.  The F429's
-	 * W6 wedge (tick-PC sampler parked in print_try_lock, tick still
+	 * data-plane wedge (tick-PC sampler parked in print_try_lock, tick still
 	 * advancing, console frozen mid-line, no fault) is exactly that
 	 * deadlock: a higher-priority task or an ISR printing while a log line
 	 * was in flight.  Mask IRQs for the hold (PRIMASK saved/restored, so an

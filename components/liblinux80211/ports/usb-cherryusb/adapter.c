@@ -939,7 +939,7 @@ chu_seam_control(void *ctx, struct lkpi_usb_be_hubport *port,
  * The polled drain (lkpi_usb_be_ops.poll): the controller's own completion path
  * run from the engine's drain thread.  The xHCI cores on this board were
  * measured leaving an event interrupt undelivered with the event in the ring
- * (runs/wireless/2026-11-01-W2-01-wedge: usbsts=EINT, usbcmd=RS|INTE, iman IP
+ * (an early board round: usbsts=EINT, usbcmd=RS|INTE, iman IP
  * clear, evt_ep fresh, IRQ count frozen, every endpoint stalled; a
  * thread-context drain run by hand recovered the cell).  The handler's first
  * act is the controller status read, so calling it costs two register reads
@@ -1042,7 +1042,7 @@ chu_seam_async_rearm(void)
  * Every buffer here must satisfy the stack's DMA alignment
  * (CONFIG_USB_ALIGN_SIZE, 64 on this port): the HCD asserts it, and a
  * stack-local setup packet takes the console down the moment the probe runs -
- * which is exactly what the first board arm of W7-06 did.  The probe runs once
+ * which is exactly what an early board arm did.  The probe runs once
  * per boot, so static buffers cannot race with themselves, and the two
  * descriptor buffers are separate so the stalled device's bytes survive the
  * sibling's transfer.

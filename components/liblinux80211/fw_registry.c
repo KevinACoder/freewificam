@@ -127,7 +127,7 @@ release_firmware(const struct firmware *firmware)
  * is queued on the component's system workqueue.  Running it inline is wrong
  * in a way the board showed: cfg80211's regulatory work (`reg_todo`) holds RTNL
  * while it asks for regulatory.db, and an inline callback re-takes RTNL on the
- * same thread -- a self-deadlock on a non-recursive mutex (runs/2026-11-10-
+ * same thread -- a self-deadlock on a non-recursive mutex (an early board round, 2026-11-10:
  * mac80211-c2, boot1f: `rtnl: lock begin` twice on one thread).
  *
  * A miss queues the continuation with NULL, which is the interface's own

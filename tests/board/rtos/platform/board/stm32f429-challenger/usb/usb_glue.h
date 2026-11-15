@@ -49,7 +49,7 @@ uintptr_t usb_board_reg_base(unsigned busid);
  * arrives through a timeout drain leaves this standing still. */
 unsigned int usb_board_irq_count(unsigned int busid);
 
-/* The W6 interrupt-storm face: a level-triggered line that re-enters forever
+/* The data plane interrupt-storm face: a level-triggered line that re-enters forever
  * is masked past a per-tick ceiling, and the channel snapshot names what is
  * still enabled (the register offsets are DWC2's). */
 unsigned int usb_board_irq_storm_get(void);

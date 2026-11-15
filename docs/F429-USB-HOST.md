@@ -114,12 +114,12 @@ not a failed enumeration; a separate generic-enumeration case is future work.
 
 The bench topology the F429 line now uses: the P2 host socket -> a **self-powered**
 USB hub `05e3:0610` (4 ports) -> four Realtek wireless dongles.  All four are
-recognised at the USB layer, and the 8188EUS runs the full W6 data plane
-**through the hub** (`runs/2026-11-15-f429-wifi-hub-multi/`):
+recognised at the USB layer, and the 8188EUS runs the full data plane
+**through the hub** (the 2026-11-15 bench run):
 
 | hub port | USB ID | what it is | driver result |
 |---|---|---|---|
-| 1 | `0bda:8179` | RTL8188EUS | claimed by rtl8xxxu, wlan0, W6 PASS |
+| 1 | `0bda:8179` | RTL8188EUS | claimed by rtl8xxxu, wlan0, data plane PASS |
 | 2 | `0bda:1a2b` -> `0bda:c820` | RTL8188CUS/8192CU family | CD-ROM persona; the modeswitch ejects it and expects `c820` back (the re-enumeration was not sampled yet) |
 | 3 | `0bda:b720` | RTL8723BU (WiFi+BT) | enumerated; its vendor interface is claimed and the rtl8xxxu probe fails (`-11`) - this port has only the 8188E firmware paths |
 | 4 | `0bda:b851` | RTL8851BU (WiFi+BT) | enumerated; no driver (`-19`, rtw89 is not ported) |
@@ -137,7 +137,7 @@ last three dongles fail config parsing before any driver sees them:
 
 Power was the other half: with a **bus-powered** hub the downstream devices
 either never appeared within the 60 s attach window or took 15-19 s; with the
-external supply they all appear within 2-5 s.  The W6 gate then passes with
+external supply they all appear within 2-5 s.  The data-plane gate then passes with
 `rx_err=0` and the AP's capture holds 44 echo requests + 44 replies.
 
 The WiFi image (`stm32f429-wifi-c6`) is the one that claims the dongles: its
@@ -149,17 +149,12 @@ ported (8851BU); that is driver work, not USB work.
 ## 7. Relay cold boot (2026-11-15 evening)
 
 The bench now has a UStone relay (`192.168.0.44`) on the F429's supply, so a
-**cold boot is controllable from the session**:
-
-```
-cd ~/workspace/project_linux_wcam
-bash skills/rk3568-board/scripts/power.sh off|on|cycle --confirm
-```
-
-`cycle` cuts power for >=6 s, switches on, and settles 12 s.  This is the
+**cold boot is controllable remotely**.  The relay switches the board's 5 V
+supply: an off of at least 6 s, then on, then a ~12 s settle before the next
+boot.  This is the
 standard reset for F429 rounds because an MCU reset does not reset the USB
 devices (a wedged dongle keeps failing every RX bulk IN with `-EIO` after
-`mcu reset`, the trap first seen in the W6 round).  The relay path was
+`mcu reset`, the trap first seen in the data-plane round).  The relay path was
 validated with `off` (the console goes silent) -> `on` -> a fresh boot that
-enumerates the hub + all four dongles and passes W6, twice
-(`.../f429-wifi-hub-multi/boot7`, `boot8`).
+enumerates the hub + all four dongles and passes data plane, twice
+(two boots).

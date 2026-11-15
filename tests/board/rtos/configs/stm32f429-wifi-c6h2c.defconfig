@@ -1,7 +1,7 @@
-# F429 W6 census: the c6 image plus the H2C read-back and the TX-state census.
+# F429 data-plane census: the c6 image plus the H2C read-back and the TX-state census.
 # and (c6t) the four report-only throughput phases.  See docs/F429-WIFI.md.
 #
-# F429 W1/W2: the RTL8188EUS attaches on the real mac80211/cfg80211 stack
+# F429 attach: the RTL8188EUS attaches on the real mac80211/cfg80211 stack
 # (components/liblinux80211) over the OTG_HS DWC2 host and the CherryUSB URB
 # engine, on a Cortex-M4.  Stage 3 stops after probe + compiled-in firmware +
 # wlan0 + wiphy row + dev_open (the registration/attach layer); the c4 profile
@@ -41,6 +41,6 @@ CONFIG_LKPI_WQ_TRACE=y
 CONFIG_RTL8XXXU_USB_BUS=0
 CONFIG_F429_LWIP_SDRAM=y
 
-# W6 census (diagnostic, see app/Kconfig): wraps report_connect and prints
+# data-plane census (diagnostic, see app/Kconfig): wraps report_connect and prints
 # the chip TX state after association and around the ping window.
 CONFIG_RTL8XXXU_TX_CENSUS=y

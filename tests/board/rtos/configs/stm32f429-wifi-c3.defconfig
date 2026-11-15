@@ -1,4 +1,4 @@
-# F429 W1/W2: the RTL8188EUS attaches on the real mac80211/cfg80211 stack
+# F429 attach: the RTL8188EUS attaches on the real mac80211/cfg80211 stack
 # (components/liblinux80211) over the OTG_HS DWC2 host and the CherryUSB URB
 # engine, on a Cortex-M4.  Stage 3 stops after probe + compiled-in firmware +
 # wlan0 + wiphy row + dev_open (the registration/attach layer); the c4 profile

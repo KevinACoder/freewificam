@@ -222,7 +222,7 @@ sdram_pins(void)
 
 /* Bring-up instrument: one line per command, naming whether the command
  * engine moved (SDSR BUSY/MODES2) and what the command register kept.  These
- * lines are the W0 evidence for the command sequence; they stay until the
+ * lines are the SDRAM bring-up evidence for the command sequence; they stay until the
  * SDRAM init is stable. */
 static void
 sdram_dbg(const char *tag)

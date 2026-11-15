@@ -233,7 +233,7 @@ void dwc2_get_user_params(uint32_t reg_base, struct dwc2_user_params *params)
  * Interrupt-storm guard.  The OTG_HS line is level-triggered: a channel whose
  * HCINT/HAINT is not acknowledged re-arms it immediately and the handler
  * re-enters forever, so no thread runs again and the console stops mid-line.
- * That is the shape of the 2026-11-15 W6 data-frame wedge.  Past a ceiling
+ * That is the shape of the 2026-11-15 data-plane data-frame wedge.  Past a ceiling
  * that no legitimate full-speed transfer can produce in one tick, the glue
  * masks the line and records why, so the failure is named and the threads
  * (the case's watchdog among them) can print the channel state.

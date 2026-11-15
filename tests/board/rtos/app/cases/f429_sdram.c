@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file   f429_sdram.c
- * @brief  F429 case f429_sdram: the W0 DMA arm - can the OTG_HS host's DMA
+ * @brief  F429 case f429_sdram: the SDRAM bring-up DMA arm - can the OTG_HS host's DMA
  *         reach the core board's 32 MB FMC SDRAM?
  *
  * main() already brought the SDRAM up and ran the bounded pattern test (the
  * `f429: sdram init/test` anchors), so this case only answers the one question
  * the wireless architecture depends on: the 8188EUS's receive path allocates
- * its skbs from the kernel heap, and the W0 plan puts that heap in SDRAM.  The
+ * its skbs from the kernel heap, and the SDRAM bring-up plan puts that heap in SDRAM.  The
  * DWC2 host DMA must therefore be able to read and write SDRAM.
  *
  * The experiment is a U disk, not the wireless driver: the imported MSC class

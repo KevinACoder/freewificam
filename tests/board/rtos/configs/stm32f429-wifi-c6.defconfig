@@ -1,7 +1,7 @@
-# F429 W6: the W5 image plus the lwIP netif, the two ICMP rounds
+# F429 data plane: the association image plus the lwIP netif, the two ICMP rounds
 # and (c6t) the four report-only throughput phases.  See docs/F429-WIFI.md.
 #
-# F429 W1/W2: the RTL8188EUS attaches on the real mac80211/cfg80211 stack
+# F429 attach: the RTL8188EUS attaches on the real mac80211/cfg80211 stack
 # (components/liblinux80211) over the OTG_HS DWC2 host and the CherryUSB URB
 # engine, on a Cortex-M4.  Stage 3 stops after probe + compiled-in firmware +
 # wlan0 + wiphy row + dev_open (the registration/attach layer); the c4 profile

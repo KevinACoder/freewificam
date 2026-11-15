@@ -11,8 +11,8 @@
 # carries ~20-25 Mbit/s) and 10M up.
 #
 # The gates (TCP down/up >= 80% of the same-day GT, UDP down loss <= 1%, T2
-# pcap-within-5%) are pre-registered in runs/2026-11-14-rtl8xxxu-8188eu-tp/
-# PREREG.md, not in this image.  CONFIG_LKPI_CENSUS keeps the per-phase
+# pcap-within-5%) are pre-registered in 2026-11-14 bench run
+# not in this image.  CONFIG_LKPI_CENSUS keeps the per-phase
 # task/skb census the C6T rounds use for attribution.
 #
 # The driver + stack are a GPL-2.0 link product and redistribute the Realtek

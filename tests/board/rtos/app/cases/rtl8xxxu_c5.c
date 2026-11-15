@@ -94,7 +94,7 @@ void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
 
 /*
- * The F429 W6 control arm (CONFIG_RTL8XXXU_TX_CENSUS): this bench drives the
+ * The F429 data plane control arm (CONFIG_RTL8XXXU_TX_CENSUS): this bench drives the
  * same RTL8188EUS with the same driver, so it prints the same chip-state lines
  * and the two boots can be diffed field by field.  Compiled out of every
  * delivery profile; the unit itself lives in the driver world.

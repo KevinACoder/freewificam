@@ -6,7 +6,7 @@
 # (tools/gt/gt-rtl8xxxu-board.sh): 30 s TCP down, 20 s UDP down, 20 s TCP up,
 # 10 s UDP up, offered 10M both UDP ways, the peer's stream 2 s inside each
 # window, iperf2 with -w 128K (lwIP's TCP_WND is 131072).  The gates are
-# pre-registered in runs/2026-11-15-rtl8723bu-sta/PREREG.md, not in the image.
+# pre-registered in 2026-11-15 bench run, not in the image.
 #
 # The dongle is the EHCI one (busids 1,0) behind the 1a86 hub, not the xHCI
 # hub the 8188EUS sits on; the image carries the 8723bu firmware (35.0 /

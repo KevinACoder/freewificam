@@ -187,7 +187,7 @@ WL80211_LDFLAGS += \
 	-Wl,--wrap=rtl8xxxu_fill_txdesc_v3
 endif
 
-# The W6 census wraps the driver's report_connect() fops callback (the media
+# The data plane census wraps the driver's report_connect() fops callback (the media
 # status H2C).  Its body in rtl8xxxu_diag.c is compiled under the same config,
 # so the two halves move together: a flag without the body fails the link, a
 # body without the flag observes nothing.

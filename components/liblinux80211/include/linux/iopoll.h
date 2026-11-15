@@ -82,7 +82,7 @@ static inline void cpu_relax(void)
  * `__left_ns -= __delay_ns` per round plus one nanosecond, and the expiry is
  * decided from the value the previous round left).  Charging wall-clock time
  * here made a slow register read look like an expired budget: a real answer
- * that took longer than the window was reported as -ETIMEDOUT (the rtw89 W2
+ * that took longer than the window was reported as -ETIMEDOUT (an early rtw89 round
  * board round read a C2H answer in 5.2-6.1 ms against a 4 ms window and lost
  * it).  The expiry is read before the operation and the operation runs before
  * the decision, so the last round still gets its answer.

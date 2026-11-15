@@ -5,7 +5,7 @@
 # The case table is the 7260 C6T table, unchanged: loopback (attribution only),
 # tcpdn, udpdn, tcpdn2, udpdn2, tcpup, udpup.  The peer is the Kali Pi's
 # iperf 2.2.1; the board's side is lwIP's lwiperf.  The gates (TCP down/up
-# >= 80% of the GT arm, UDP 40M loss <= 1%) are pre-registered in the project's
+# >= 80% of the GT arm, UDP 40M loss <= 1%) are pre-registered for the project's
 # run ledger, not in this image.
 #
 # What this profile is not: the stability round, WPA2, the AP role, monitor.

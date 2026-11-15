@@ -32,14 +32,14 @@ uint8_t ucHeap[ configTOTAL_HEAP_SIZE ]
  * RTOS tick and every mac80211 MLME deadline is a jiffies comparison; an image
  * that links the component but never advances the tick runs the MLME timer at
  * the port's 1 ms clamp forever, the iface work spins, and the association
- * request never leaves (2026-11-15 F429 W5: 9153 `sta_work` entries in 2 s and
+ * request never leaves (2026-11-15 F429 association: 9153 `sta_work` entries in 2 s and
  * no assoc).  The component is not linked into every F429 image, so the
  * reference is weak; lkpi_tick_advance() is retained there for this.
  */
 extern void lkpi_tick_advance( void ) __attribute__( ( weak ) );
 
 /*
- * W6 wedge sampler (diagnostic, polled UART, no locks): every half second the
+ * data-plane wedge sampler (diagnostic, polled UART, no locks): every half second the
  * tick hook prints the PC the tick interrupted.  A wedged loop that leaves
  * interrupts on keeps printing the same PC (which names the loop); a loop with
  * interrupts masked stops printing entirely (which names that class instead).
@@ -110,7 +110,7 @@ void *lkpi_lwip_heap_ptr = (void *)__lwip_heap;
  * the OTG_HS hard IRQ (third-party/cherryusb/port/dwc2/usb_hc_dwc2.c), so the
  * drain-thread semaphore must be given with the FromISR form: the plain
  * osSemaphoreRelease/xSemaphoreGive manipulates the ready lists and corrupts
- * the scheduler when called from an exception (the W6 data-frame wedge).
+ * the scheduler when called from an exception (the data-plane data-frame wedge).
  * The CMSIS-FreeRTOS adapter returns the FreeRTOS handle itself, so the cast
  * is the interface's own representation.
  */

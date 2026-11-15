@@ -9,11 +9,11 @@
 #   udpdn  board sends       10 s at 10M            (station arm: udpup)
 #
 # The direction pairing and the gates are pre-registered in
-# runs/2026-11-14-rtl8xxxu-8188eu-tp/PREREG.md; this image only carries the
+# 2026-11-14 bench run; this image only carries the
 # table.  CONFIG_LKPI_CENSUS keeps the per-phase net/stack counters.
 #
 # The AP arm's peer is the 8812AU as a client (bench swapped), so the two arms
-# are the same radio pair with the roles exchanged - the reason the PREREG puts
+# are the same radio pair with the roles exchanged - the reason the pre-registration puts
 # the swap in the pre-registration.  The driver + stack are GPL-2.0; the
 # imported hostapd is BSD-3-Clause and the rtl8188eufw image is redistributed
 # (docs/LICENSES.md).

@@ -62,24 +62,24 @@ world derives from it, and no world pins its own `-O` level.
 | `rk3568-rtw89-8851bu-c3` | tick rtw89_c3 | the RTL8851BU (`0bda:b851`, USB) attaches through the linuxkpi USB engine and CherryUSB: the engine's `.lkpi_module` walk registers the driver, the board's USB domain starts the DWC3 xHCI pair (the card hangs on the instance at `0xFCC00000`), the driver's probe downloads `rtw8851b_fw-1.bin` from the compiled-in registry, `ieee80211_register_hw` creates `wlan0`, and `dev_open` reaches start (C3) |
 | `rk3568-rtw89-8851bu-c4` | tick rtw89_c4 | C3 plus the real `NL80211_CMD_TRIGGER_SCAN` stream through nl80211: mac80211 -> rtw89 -> the USB bulk endpoints, the BSS table carries the bench AP (C4) |
 | `rk3568-rtw89-8851bu-c5` | tick rtw89_c5 | C4 plus `NL80211_CMD_CONNECT`: open association, the lwIP netif over `wlan0`, 56/1400 B ICMP 20/20 (C5/C6-open) |
-| `rk3568-rtw89-8851bu-c6` | tick rtw89_c6 | the seven-phase C6T table over `wl0`: 30 s TCP down twice, 40 M UDP down twice, 12 s TCP up, 20 s UDP up (board-side blast), with the adapter/stack/pool and TX-health census per phase; the clean arm is 2/2 `PASS C6T`, downlink 0.75x GT and uplink 0.81x - `runs/2026-11-14-rtw89-8851bu-c6t2/` |
+| `rk3568-rtw89-8851bu-c6` | tick rtw89_c6 | the seven-phase C6T table over `wl0`: 30 s TCP down twice, 40 M UDP down twice, 12 s TCP up, 20 s UDP up (board-side blast), with the adapter/stack/pool and TX-health census per phase; the clean arm is 2/2 `PASS C6T`, downlink 0.75x GT and uplink 0.81x - the 2026-11-14 bench run |
 | `rk3568-rtw89-8851bu-c6-diag` | tick rtw89_c6 | the C6T diagnostic arm (`CONFIG_RTW89_C6_SKIP_LOOPBACK=y`): the skb-queue owner walk, the WARN call-site/`memcmp` census and the pool/timer counters; it is attribution only and never a throughput verdict |
-| `rk3568-rtw89-8851bu-ap` | tick rtw89_ap | the same USB card as an AP: `SET_INTERFACE(AP)`, the lwIP netif, the ported NXP `hostapd` start and beacon (100 TU, ch5/open), the Pi's MT7921AU joins, and 56/1400 B ICMP 20/20 both ways; `PASS AP` (A1-A3) - `runs/2026-11-14-rtw89-8851bu-ap/` |
-| `rk3568-rtw89-8851bu-ap-tp` | tick rtw89_ap | the AP role plus `CONFIG_RTW89_AP_TP`: the five-phase A4 table (tcpdn, tcpup, tcpdn2, 10 M udpdn, udpup) with the per-phase census; 2/2 `PASS APT`; the report's verdict is `fail` because TCP up is 78.4% - `runs/2026-11-14-rtw89-8851bu-ap-align/` |
-| `rk3568-rtw89-8851bu-ap-diag` | tick rtw89_ap | the A4 diagnostic arm (`CONFIG_RTW89_AP_STAGE`, `CONFIG_RTW89_AP_NO_MARGIN`, `CONFIG_APP_WATCHDOG`): three stage anchors per phase, no 3 s peer margin and a 2 s realtime watchdog that prints the core-lock owner and the lwIP heartbeat; it exists to name the a4-3 silence, not to pass a gate |
-| `rk3568-rtw89-8851bu-mon` | tick rtw89_mon | the same card as an RX-only monitor: `SET_INTERFACE(MONITOR)` with the device down, `dev_open` (devtype 803), then `SET_WIPHY(2432)`; the frames go to the port's sink, not lwIP; `PASS MON` requires >=8 beacons/s, `bad=0`, unchanged lwIP `rx_frames` and `tx_packets=0` - `runs/2026-11-14-rtw89-8851bu-mon/` |
+| `rk3568-rtw89-8851bu-ap` | tick rtw89_ap | the same USB card as an AP: `SET_INTERFACE(AP)`, the lwIP netif, the ported NXP `hostapd` start and beacon (100 TU, ch5/open), the Pi's MT7921AU joins, and 56/1400 B ICMP 20/20 both ways; `PASS AP` (A1-A3) - the 2026-11-14 bench run |
+| `rk3568-rtw89-8851bu-ap-tp` | tick rtw89_ap | the AP role plus `CONFIG_RTW89_AP_TP`: the five-phase A4 table (tcpdn, tcpup, tcpdn2, 10 M udpdn, udpup) with the per-phase census; 2/2 `PASS APT`; the report's verdict is `fail` because TCP up is 78.4% - the 2026-11-14 bench run |
+| `rk3568-rtw89-8851bu-ap-diag` | tick rtw89_ap | the A4 diagnostic arm (`CONFIG_RTW89_AP_STAGE`, `CONFIG_RTW89_AP_NO_MARGIN`, `CONFIG_APP_WATCHDOG`): three stage anchors per phase, no 3 s peer margin and a 2 s realtime watchdog that prints the core-lock owner and the lwIP heartbeat; it exists to name the an earlier A4 boot silence, not to pass a gate |
+| `rk3568-rtw89-8851bu-mon` | tick rtw89_mon | the same card as an RX-only monitor: `SET_INTERFACE(MONITOR)` with the device down, `dev_open` (devtype 803), then `SET_WIPHY(2432)`; the frames go to the port's sink, not lwIP; `PASS MON` requires >=8 beacons/s, `bad=0`, unchanged lwIP `rx_frames` and `tx_packets=0` - the 2026-11-14 bench run |
 | `rk3568-rtl8xxxu-8188eu-c3` | tick rtl8xxxu_c3 | the RTL8188EUS (`0bda:8179`, USB, behind the external hub on xHCI0/busid 2) attaches through the linuxkpi USB engine and CherryUSB: `.lkpi_module` registers the driver, the probe reads the efuse map, downloads `rtlwifi/rtl8188eufw.bin` from the compiled-in registry (`Firmware revision 28.0`, `signature 0x88e1`), `ieee80211_register_hw` creates `wlan0`, and `dev_open` reaches start (C3). The claim line carries `bus/hub/port`, which is how the round pins the topology |
 | `rk3568-rtl8xxxu-8188eu-c4` | tick rtl8xxxu_c4 | C3 plus the real `NL80211_CMD_TRIGGER_SCAN` stream: mac80211's SW scan drives rtl8xxxu's channel changes over the USB bulk endpoints, the BSS table carries `labwifi-ar-ht20s` at 2432 MHz (C4) |
 | `rk3568-rtl8xxxu-8188eu-c5` | tick rtl8xxxu_c5 | C4 plus `NL80211_CMD_CONNECT`: open association, the lwIP netif over `wlan0` (`192.168.99.2/24`), power save off through the nl80211 handler, and 56 B / 1400 B ICMP 20/20 in both directions with the link held open for the host's AP->board arm (C5/C6-open) |
 | `rk3568-rtl8xxxu-8188eu-ap` | tick rtl8xxxu_ap | the same card as a 2.4 GHz AP (`rtos-8188-ap`, ch5/2432, HT20, open) behind the hub on xHCI0/busid 3: the imported NXP hostapd owns the AP MLME and `SET_INTERFACE(AP)` + `START_AP` bring the BSS up; the board's MT7921AU peer joins and both ICMP payload sizes cross 20/20. The beacon is host-composed and host-sent every beacon interval (`host_beacon_repeat`, patch 0003) - the first host-sent beacon on this line; the monitor's beacon capture is A1's witness (A1-A3) |
-| `rk3568-rtl8xxxu-8188eu-ap-arm4` | tick rtl8xxxu_ap | diagnostic arm, never a delivery profile: the AP profile plus a one-shot clear of `REG_BCN_CTRL` bit4 after the start-up beacon, asking whether that is the chip's missing beacon arming. It is not (ap-3-arm4 still produced one beacon), which is what selected the host-repeat patch - `runs/2026-11-14-rtl8xxxu-8188eu-ap/RUN.md` |
-| `rk3568-rtl8xxxu-8188eu-mon` | tick rtl8xxxu_mon | the same card as an RX-only monitor on ch5/2432: `SET_INTERFACE(MONITOR)` (the driver's fourth recorded patch, `supports_monitor` + `WANT_MONITOR_VIF` + the promiscuous RCR), `dev_open devtype=803`, `SET_WIPHY 2432`, then a 15 s window counted by the port's sink. The frames reach the sink (beacons/probes/data with mac80211's radiotap), never lwIP; the bench AP's BSSID is named from the sink's per-BSSID beacon census, and the A/B arm counts the same beacons with the Pi's MT7921AU monitor - `runs/2026-11-14-rtl8xxxu-8188eu-mon/RUN.md` |
-| `rk3568-rtl8xxxu-8188eu-c6` | tick rtl8xxxu_c5 rtl8xxxu_c6 | the station plus the C6T throughput table (loopback, tcpdn, udpdn, tcpdn2, udpdn2, tcpup, udpup): the GT denominator is the same pin's in-tree `rtl8xxxu` on the same bench (same firmware blob), and the case's repeat phases are samples, not gates - `runs/2026-11-14-rtl8xxxu-8188eu-tp/RUN.md` |
+| `rk3568-rtl8xxxu-8188eu-ap-arm4` | tick rtl8xxxu_ap | diagnostic arm, never a delivery profile: the AP profile plus a one-shot clear of `REG_BCN_CTRL` bit4 after the start-up beacon, asking whether that is the chip's missing beacon arming. It is not (the diagnostic AP arm still produced one beacon), which is what selected the host-repeat patch - the 2026-11-14 bench run |
+| `rk3568-rtl8xxxu-8188eu-mon` | tick rtl8xxxu_mon | the same card as an RX-only monitor on ch5/2432: `SET_INTERFACE(MONITOR)` (the driver's fourth recorded patch, `supports_monitor` + `WANT_MONITOR_VIF` + the promiscuous RCR), `dev_open devtype=803`, `SET_WIPHY 2432`, then a 15 s window counted by the port's sink. The frames reach the sink (beacons/probes/data with mac80211's radiotap), never lwIP; the bench AP's BSSID is named from the sink's per-BSSID beacon census, and the A/B arm counts the same beacons with the Pi's MT7921AU monitor - the 2026-11-14 bench run |
+| `rk3568-rtl8xxxu-8188eu-c6` | tick rtl8xxxu_c5 rtl8xxxu_c6 | the station plus the C6T throughput table (loopback, tcpdn, udpdn, tcpdn2, udpdn2, tcpup, udpup): the GT denominator is the same pin's in-tree `rtl8xxxu` on the same bench (same firmware blob), and the case's repeat phases are samples, not gates - the 2026-11-14 bench run |
 | `rk3568-rtl8723bu-c3` | tick rtl8xxxu_c3 | the RTL8723BU (`0bda:b720`, USB, the board's EHCI dongle behind the `1a86:8091` hub at `bus=1 hub=2 port=2`, interface 2) attaches through the same linuxkpi USB engine: the probe reads `RTL8723BU rev E ... 1T1R, TX queues 3`, downloads `rtlwifi/rtl8723bu_nic.bin` from the compiled-in registry (`Firmware revision 35.0`, `signature 0x5301`), registers `wlan0` (MAC `88:e6:28:53:10:9c`) and `dev_open` reaches start (C3) |
 | `rk3568-rtl8723bu-c4` | tick rtl8xxxu_c4 | C3 plus the real `NL80211_CMD_TRIGGER_SCAN`: the SW scan finds `labwifi-ar-ht20s` at 2432 MHz (C4) |
 | `rk3568-rtl8723bu-c5` | tick rtl8xxxu_c5 | C4 plus `NL80211_CMD_CONNECT`: open association, the lwIP netif over `wlan0` (`192.168.99.2/24`), power save off, and 56 B / 1400 B ICMP 20/20 both ways (C5/C6-open) |
-| `rk3568-rtl8723bu-c6` | tick rtl8xxxu_c5 rtl8xxxu_c6 | the station plus the C6T table, compared with the same pin's in-tree `rtl8xxxu` on the same bench and firmware (the GT arm selects the 8723BU by MAC/firmware line; both dongles are on the board) - `runs/2026-11-15-rtl8723bu-tp/RUN.md` |
-| `rk3568-rtl8xxxu-8188eu-ap-tp` | tick rtl8xxxu_ap | the AP role plus the A4 table with the station arm's four direction cells (`tcpdn` board-send 20 s, `tcpup` board-receive 30 s, `udpup` board-receive 10M, `udpdn` board-send 10M), so the two roles are comparable direction by direction; the round swaps the bench (8812AU as the client, MT7921AU as the monitor) - `runs/2026-11-14-rtl8xxxu-8188eu-tp/RUN.md` |
+| `rk3568-rtl8723bu-c6` | tick rtl8xxxu_c5 rtl8xxxu_c6 | the station plus the C6T table, compared with the same pin's in-tree `rtl8xxxu` on the same bench and firmware (the GT arm selects the 8723BU by MAC/firmware line; both dongles are on the board) - the 2026-11-15 bench run |
+| `rk3568-rtl8xxxu-8188eu-ap-tp` | tick rtl8xxxu_ap | the AP role plus the A4 table with the station arm's four direction cells (`tcpdn` board-send 20 s, `tcpup` board-receive 30 s, `udpup` board-receive 10M, `udpdn` board-send 10M), so the two roles are comparable direction by direction; the round swaps the bench (8812AU as the client, MT7921AU as the monitor) - the 2026-11-14 bench run |
 
 ```
 ./make.rtos list
@@ -210,9 +210,9 @@ Two targets sit outside the image, on purpose:
 ./make.rtos host-test                 # x86 bench: green run, then --break red
 ```
 
-- `s0-compile` writes `runs/S0/run-<n>/{compile/*.log,obj/,summary.tsv}` (the
-  project-root `runs/`, beside the repo) and copies the summary to
-  `runs/S0/summary.tsv`.  Flags are the kpi world's plus the stack include roots
+- `s0-compile` writes `bench record` (the
+  the project's evidence ledger, beside the repo) and copies the summary to
+  `bench record`.  Flags are the kpi world's plus the stack include roots
   and four `-Werror` diagnostics; `tools/build/s0-compile.sh` refuses a flag set
   that reaches into `linux-upstream/include`.  A failed TU is data, not a build
   failure: the target exits 0 and the summary is the product.
@@ -245,9 +245,9 @@ Two Kconfig symbols, one flag-world include, two profiles:
   world also sets `LKPI_ALLOC_SKB_MIN=2048` so RX frames stay linear (see
   `docs/DIVERGENCES.md` row 45). The heap is the FreeRTOS one
   (`osMemoryAlloc -> pvPortMalloc`), not `CONFIG_HEAP_SIZE`.
-- Build-only targets (no image): `s1-driver-compile` (72 TUs, `runs/S1/driver/`)
+- Build-only targets (no image): `s1-driver-compile` (72 TUs, `bench record`)
   and `s1-link` (partial link + classified undefined list,
-  `runs/S1/link/`). `s0-compile` is unchanged.
+  `bench record`). `s0-compile` is unchanged.
 - The firmware blob is generated, not committed: `tools/rtos/fw-blobs.py`
   writes `components/liblinux80211/fw/iwl7260_fw_blob.c` from the pinned GT
   `iwlwifi-7260-17.ucode` (sha256 checked) and the path is git-ignored.
@@ -260,12 +260,12 @@ the SDRAM is brought up before the kernel (`main.c` calls
 (`mculab` rejects the >1 MB debug ELF):
 
 ```
-./make.rtos image PROFILE=stm32f429-sdram      # W0: SDRAM + DMA A/B arm
-./make.rtos image PROFILE=stm32f429-wifi-c3    # W3: attach
-./make.rtos image PROFILE=stm32f429-wifi-c4    # W4: scan
-./make.rtos image PROFILE=stm32f429-wifi-c5    # W5: connect
-./make.rtos image PROFILE=stm32f429-wifi-c6    # W6: connect + lwIP + ICMP (delivery, 726,712 B)
-./make.rtos image PROFILE=stm32f429-wifi-c6t   # W6 + four report-only throughput phases (736,552 B)
+./make.rtos image PROFILE=stm32f429-sdram      # SDRAM bring-up: SDRAM + DMA A/B arm
+./make.rtos image PROFILE=stm32f429-wifi-c3    # attach: attach
+./make.rtos image PROFILE=stm32f429-wifi-c4    # scan: scan
+./make.rtos image PROFILE=stm32f429-wifi-c5    # association: connect
+./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,848 B)
+./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (736,552 B)
 mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --erase sector \
     --verify --reset --expect "rtos: result"
 ```

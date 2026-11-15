@@ -154,10 +154,10 @@ rtl8xxxu_diag_ap_arm_bcn4(void *wiphy)
 	    (unsigned)before, (unsigned)after);
 }
 
-/* --- the W6 census (CONFIG_RTL8XXXU_TX_CENSUS) ---------------------------- */
+/* --- the data-plane census (CONFIG_RTL8XXXU_TX_CENSUS) ---------------------------- */
 
 /*
- * The W6 data-plane blocker is "the chip sends the broadcast ARP and no
+ * The data-plane data-plane blocker is "the chip sends the broadcast ARP and no
  * unicast frame after it".  The descriptor census proves the host side is
  * identical for the two (only txdw0[0], the BROADMULTICAST bit, differs), so
  * the question is what the chip does differently.  Two observations answer it:
@@ -173,7 +173,7 @@ rtl8xxxu_diag_ap_arm_bcn4(void *wiphy)
  *     benches (2 bulk-OUT endpoints here, 4 on the RK3568 arm).
  *
  * Both are read-only and both print one line; the case calls chip_state at
- * three points of the W6 boot.  Never in the transmit path: these are
+ * three points of the data-plane boot.  Never in the transmit path: these are
  * synchronous USB control transfers and the TX path is not the place for them.
  */
 #if CONFIG_RTL8XXXU_TX_CENSUS
@@ -287,7 +287,7 @@ __wrap_rtl8xxxu_fill_txdesc_v3(struct ieee80211_hw *hw,
 
 		if (ieee80211_is_data(hdr->frame_control))
 			diag_data_txdesc++;
-		/* The first frames of the W6 data path: the descriptor the chip
+		/* The first frames of the data-plane data path: the descriptor the chip
 		 * accepts for the one frame that reaches the air and for the ones
 		 * that do not.  Bounded to sixteen, one line each, so the broadcast
 		 * ARP and the unicast frames that follow it are both in the record. */
@@ -326,7 +326,7 @@ __wrap_rtl8xxxu_fill_txdesc_v3(struct ieee80211_hw *hw,
  * The fill-descriptor census.  A zero data count beside the driver's own
  * per-frame `TX rate` lines is impossible; a data count of one beside them
  * means the frames after the first are filled by a path the wrap does not
- * see.  The F429 W6 case prints this after its ping window.
+ * see.  The F429 data-plane case prints this after its ping window.
  */
 void
 rtl8xxxu_diag_tx_counts(unsigned int *total, unsigned int *data)

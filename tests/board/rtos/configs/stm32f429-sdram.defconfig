@@ -1,4 +1,4 @@
-# F429 W0: the core board's 32 MB FMC SDRAM, its bounded self-test, and the
+# F429 SDRAM bring-up: the core board's 32 MB FMC SDRAM, its bounded self-test, and the
 # DMA arm (a U disk read into SDRAM versus the same read into internal SRAM).
 #
 # The kernel heap stays in internal SRAM in this profile: the case isolates the

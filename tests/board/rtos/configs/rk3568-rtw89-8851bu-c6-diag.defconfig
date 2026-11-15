@@ -8,7 +8,7 @@
 #
 # This image is an instrument, not a verdict: a throughput number is only
 # written from the clean profile.  The gates and the decision rules are in
-# runs/2026-11-14-rtw89-8851bu-c6t2/PREREG.md.
+# 2026-11-14 bench run
 #
 # The driver + stack are a GPL-2.0 link product and redistribute the Realtek
 # firmware image (docs/LICENSES.md).
