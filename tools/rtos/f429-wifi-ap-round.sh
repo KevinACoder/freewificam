@@ -202,9 +202,10 @@ while [ $idx -lt $((TIMEOUT * 2)) ]; do
 import json, sys
 ring = json.load(open(sys.argv[1]))
 text = ring.get("text", "")
-base = int(ring.get("base", 0) or 0)
+nxt = int(ring.get("next", 0) or 0)
+text_start = nxt - len(text)
 off0 = int(sys.argv[4])
-start = off0 - base if off0 >= base else 0
+start = off0 - text_start if text_start and off0 >= text_start else 0
 sub = text[max(0, start):]
 lines = sub.splitlines()
 first = next((i for i, line in enumerate(lines) if "rtos: banner" in line), None)
@@ -304,8 +305,10 @@ try:
 except Exception:
     ring = {}
 text = ring.get("text", "")
-base = int(ring.get("base", 0) or 0)
-sub = text[max(0, int(sys.argv[3]) - base):]
+nxt = int(ring.get("next", 0) or 0)
+text_start = nxt - len(text)
+off0 = int(sys.argv[3])
+sub = text[max(0, off0 - text_start) if text_start and off0 >= text_start else 0:]
 lines = sub.splitlines()
 first = next((i for i, line in enumerate(lines) if "rtos: banner" in line), None)
 open(sys.argv[2], "w").write("\n".join(lines[first:]) + "\n" if first is not None else "")
