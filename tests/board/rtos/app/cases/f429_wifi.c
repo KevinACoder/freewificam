@@ -54,6 +54,7 @@
  * before the Linux face's compiler-attributes header is. */
 #include "usbh_core.h"
 #include "usb_glue.h"
+#include "uart.h"
 
 #include "linuxkpi_core.h"
 #include "linux80211/linux80211.h"
@@ -129,6 +130,27 @@ f429_wifi_hb(void *arg)
 			hb_ticks = 0xFFFFU;	/* report once */
 			CASE_ANCHOR("f429_wifi: usb irq storm at hb=%u\n", n);
 			usb_board_dwc2_dump();
+		}
+		if ((n % 10U) == 0U) {
+			/* Lock-free (polled UART): the console may be the deadlock's
+			 * hostage, so the liveness line must not take its lock. */
+			TaskStatus_t hbt[24];
+			uint32_t hbtotal = 0U;
+			unsigned int htn, hti;
+			const char *lock_owner = lkpi_net_lock_owner();
+
+			uart_early_puts("hb2 t=");
+			uart_early_put_hex32(n);
+			uart_early_puts(" lock=");
+			uart_early_puts(lock_owner != NULL ? lock_owner : "-");
+			htn = (unsigned int)uxTaskGetSystemState(hbt, 24U, &hbtotal);
+			for (hti = 0U; hti < htn; hti++) {
+				uart_early_putc(' ');
+				uart_early_puts(hbt[hti].pcTaskName);
+				uart_early_putc(':');
+				uart_early_put_hex32((uint32_t)hbt[hti].eCurrentState);
+			}
+			uart_early_puts("\n");
 		}
 		if ((n % 10U) == 0U) {
 			struct lkpi_net_diag nd;
