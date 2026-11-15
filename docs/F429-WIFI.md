@@ -217,7 +217,7 @@ the numbers are samples, not a table:
 | tcpdn (Pi->board) | 9.04 MB / 15.0 s = 4.81 Mbit/s | 8.63 MB / 25.5 s = 2.84 Mbit/s |
 | tcpup (board->Pi) | 4.61 MB / 10.0 s = 3.68 Mbit/s | 4.39 MB / 19.9 s = 1.85 Mbit/s |
 | udpdn (Pi->board) | 15.5 MB / 20.3 s = 6.12 Mbit/s, 10,550 pkts, drop=0 | 14.7 MB / 18 s = 6.86 Mbit/s offered |
-| udpup (board->Pi blast) | offered 241 KB / 12 s = 0.16 Mbit/s | sink sample (other boot): 960 KB / 653 pkts = 0.64 Mbit/s |
+| udpup (board->Pi blast) | offered 241 KB / 12 s = 0.16 Mbit/s | sink sample (other boot): 960 KB / 653 pkts arrived, 90% of the 1.07 MB offered (the 12 s blast runs at ~0.64 Mbit/s) |
 
 **How to read it**: this board's USB host is **full speed** (12 Mbit/s); a bulk
 transfer tops out near 9.7 Mbit/s, so 6-7 Mbit/s of UDP is the *USB* ceiling
