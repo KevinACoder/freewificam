@@ -72,6 +72,22 @@ config HOSTAP_AP
 	  the AP MLME is hostapd.  BSD-3-Clause code; the image that selects it
 	  also links the GPL-2.0 mac80211 stack and is a GPL-2.0 link product.
 
+config AP_MLME
+	bool "minimal open-AP MLME (the port's own hostapd stand-in)"
+	depends on LIBLINUX80211_WIRELESS
+	depends on !HOSTAP_AP
+	help
+	  Links the port's own minimal open-AP MLME (linuxkpi_ap_mlme.c and
+	  the beacon template) instead of hostapd: probe/auth/assoc parsing,
+	  the three responses, the station record and the controlled-port
+	  open, with the real nl80211 command chain underneath.  This is the
+	  AP role for a board whose flash cannot carry the imported hostapd
+	  stack; the beacon template is a fixed open HT20/WMM access point's
+	  IE set, so the role is a single-client open AP.  It is mutually
+	  exclusive with HOSTAP_AP: one image has exactly one AP MLME, and
+	  one cfg80211_rx_mgmt_ext seam (AP_MLME images link
+	  ap_mlme_rx_wrap.c, hostapd images link hostap_rx_wrap.c).
+
 config WPA_STA
 	bool "wpa_supplicant STA (WPA2-PSK/CCMP)"
 	depends on LIBLINUX80211_WIRELESS

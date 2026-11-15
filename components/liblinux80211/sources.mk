@@ -40,6 +40,13 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	fw_registry.c \
 	net_egress.c \
 	skbuff/skbuff_pool.c
+
+# The AP role's own minimal MLME (hostapd's userspace half, reduced to an open
+# single-client AP) and the beacon template it answers with.  Only the AP_MLME
+# profile pays for them; hostapd AP images link the imported stack instead.
+obj-$(CONFIG_AP_MLME) += \
+	linuxkpi_ap_mlme.c \
+	linuxkpi_ap_beacon.c
 endif
 
 ifeq ($(SRC_TAG),bus-pci)

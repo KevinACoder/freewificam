@@ -31,7 +31,8 @@ WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260
 	rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2 rtl8189fs_c6t rtl8189fs_ap \
 	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
-	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6 f429_wifi
+	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6 f429_wifi \
+	f429_wifi_ap f429_ap_link
 
 ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
 
@@ -124,9 +125,20 @@ WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app
 WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
 	$(LIB8)/c2h_inline.c \
 	$(LIB8)/tx_dequeue_context.c \
-	$(LIB8)/hostap_rx_wrap.c \
-	$(LIB8)/hostap_nl80211.c \
 	$(LIB8)/tx_health.c
+
+# The AP receive seam: exactly one wrap body per image, because both define
+# __wrap_cfg80211_rx_mgmt_ext and the stack has one userspace-management call.
+# A hostapd image feeds the imported daemon (hostap_rx_wrap.c); a minimal-MLME
+# image feeds the port's own AP MLME (ap_mlme_rx_wrap.c).  An image that selects
+# neither has no AP role and no wrap (the stack's own function is called).
+ifeq ($(CONFIG_HOSTAP_AP),1)
+WL80211_PROBE_SRCS += $(LIB8)/hostap_rx_wrap.c
+WL80211_PROBE_SRCS += $(LIB8)/hostap_nl80211.c
+endif
+ifeq ($(CONFIG_AP_MLME),1)
+WL80211_PROBE_SRCS += $(LIB8)/ap_mlme_rx_wrap.c
+endif
 
 # The wrap is what makes the shim a seam instead of a stack edit.  It is only
 # meaningful when the stack is linked, and it applies to every reference
@@ -150,13 +162,19 @@ ifneq ($(filter f429_wifi,$(CASES)),)
 WL80211_LDFLAGS += -Wl,--wrap=cfg80211_sme_rx_auth \
 	-Wl,--wrap=cfg80211_mlme_assoc \
 	-Wl,--wrap=ieee80211_scan_completed \
-	-Wl,--wrap=ieee80211_sta_work \
-	-Wl,--wrap=ieee80211_start_tx_ba_session
+	-Wl,--wrap=ieee80211_sta_work
+endif
+
+# Both F429 wireless roles refuse transmit block-ack sessions: once the 8188E's
+# aggregation engine starts one, it swallows the per-frame URBs (the station
+# role measured it; the AP role sends through the same engine).  The case owns
+# the body.
+ifneq ($(filter f429_wifi f429_wifi_ap,$(CASES)),)
+WL80211_LDFLAGS += -Wl,--wrap=ieee80211_start_tx_ba_session
 endif
 
 WL80211_LDFLAGS += -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=ieee80211_queue_work \
-	-Wl,--wrap=cfg80211_rx_mgmt_ext \
 	-Wl,--wrap=ieee80211_tx_status_skb \
 	-Wl,--wrap=ieee80211_stop_queue \
 	-Wl,--wrap=ieee80211_wake_queue \
@@ -168,6 +186,12 @@ WL80211_LDFLAGS += -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=iwl_trans_pci_interrupts \
 	-Wl,--wrap=ieee80211_sta_ps_transition \
 	-Wl,--wrap=ieee80211_sta_set_buffered
+
+# The AP userspace-management seam, added only where its body is linked (see
+# the PROBE source choice above).
+ifneq ($(filter 1,$(CONFIG_HOSTAP_AP) $(CONFIG_AP_MLME)),)
+WL80211_LDFLAGS += -Wl,--wrap=cfg80211_rx_mgmt_ext
+endif
 
 # The rtw88-only wraps, added when (and only when) the unit that defines them is
 # in the link closure.
