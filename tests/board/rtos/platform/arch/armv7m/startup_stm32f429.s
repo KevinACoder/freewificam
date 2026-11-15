@@ -27,7 +27,15 @@ g_pfnVectors:
     .word 0
     .word xPortPendSVHandler
     .word xPortSysTickHandler
-    .rept 82
+    /* IRQ 0..76 */
+    .rept 77
+    .word Default_Handler
+    .endr
+    /* IRQ 77: OTG_HS.  The USB glue supplies the strong handler; fault.c
+     * supplies a weak stub so a tick-only image still links. */
+    .word OTG_HS_IRQHandler
+    /* IRQ 78..81 */
+    .rept 4
     .word Default_Handler
     .endr
 

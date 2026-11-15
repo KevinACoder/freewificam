@@ -277,6 +277,15 @@ config USBHOST_MSC_TIMEOUT
 	int "USB mass-storage timeout (ms)"
 	default 800
 
+config USB_MSC_WRITE_TEST
+	bool "USB mass-storage write/read round trip"
+	default n
+	help
+	  The F429 U-disk acceptance writes one 512 B sector in the disk's
+	  last 1 MiB window and reads it back.  It is destructive to that one
+	  sector; only the stm32f429-usb-msc profile enables it.  A read-only
+	  profile leaves it off and the case prints "write skipped".
+
 config USB_EHCI_ISO_NUM
 	int "EHCI isochronous descriptors"
 	default 4

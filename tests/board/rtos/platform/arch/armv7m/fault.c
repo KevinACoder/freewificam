@@ -78,3 +78,15 @@ void DebugMon_Handler(void)
 		__asm__ __volatile__("wfe");
 	}
 }
+
+/* The vector table names IRQ 77 (OTG_HS).  A tick-only image never enables
+ * the line; the USB image's strong definition in the board glue overrides
+ * this stub.  It parks rather than returning, so an accidentally enabled line
+ * without a handler is visible instead of spinning forever. */
+__attribute__((weak)) void OTG_HS_IRQHandler(void)
+{
+	uart_early_panic("fatal: OTG_HS IRQ without USB glue\n");
+	for (;;) {
+		__asm__ __volatile__("wfe");
+	}
+}

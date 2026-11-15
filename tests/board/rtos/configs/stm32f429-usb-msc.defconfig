@@ -1,0 +1,19 @@
+# F429 USB host: CherryUSB's DWC2 port on OTG_HS (full speed), the
+# mass-storage class and the U-disk acceptance case.
+#
+# Hardware: V2 base schematic sheet 8 - P2 USB-A HOST, VBUS tied to 5V,
+# HOST_DN/HOST_DP on PB14/PB15, J74-J76 selected to HOS.  The core is
+# OTG_HS in FS mode; clock.c already produces PLLQ=48 MHz at 168 MHz.
+#
+# The case writes one 512 B sector in the disk's last 1 MiB window and reads
+# it back (CONFIG_USB_MSC_WRITE_TEST); it is the only destructive step.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=65536
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_USBHOST_MSC_TIMEOUT=5000
+CONFIG_USB_MSC_WRITE_TEST=y
+CONFIG_CASES="tick usb_dwc2"

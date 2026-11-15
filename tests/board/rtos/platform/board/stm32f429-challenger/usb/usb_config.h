@@ -1,0 +1,125 @@
+/*
+ * @file   usb_config.h
+ * @brief  Board configuration of the imported CherryUSB host stack for the
+ *         STM32F429 挑战者 V2 (OTG_HS in full-speed host mode).
+ *
+ * The imported headers include "usb_config.h" themselves, so this file is
+ * selected by include path alone (the F429 USB board directory is first in
+ * USB_CFLAGS).  Every build key lives here; no compiler -D carries one.
+ *
+ * Hardware facts (V2 base schematic, sheet 8):
+ *   - the USB HOST socket is P2 (USB-A), its VBUS is tied to 5V;
+ *   - HOST_DN/HOST_DP are PB14/PB15, selected by J74-J76 in the HOS position;
+ *   - the OTG_HS core is used in FS mode, 48 MHz from PLLQ (clock.c).
+ *
+ * This is a single-controller image: CONFIG_USBHOST_MULT_HC stays undefined,
+ * so the DWC2 port supplies usb_hc_init()/usbh_submit_urb()/USBH_IRQHandler()
+ * directly and the core's per-bus dispatch branch is not compiled.
+ */
+
+#ifndef FREEWIFICAM_STM32F429_USB_CONFIG_H
+#define FREEWIFICAM_STM32F429_USB_CONFIG_H
+
+#include <stddef.h>
+
+/* --- console -------------------------------------------------------------- */
+
+/* The stack's diagnostics go through the board glue's sink, which formats one
+ * piece and hands it to the image log.  The sink does not add a newline: the
+ * USB formatter writes a header fragment and then the message, and the log
+ * sink assembles them into one stamped line. */
+void usbh_console_printf(const char *fmt, ...);
+#define CONFIG_USB_PRINTF(...)	usbh_console_printf(__VA_ARGS__)
+
+/* Info level during bring-up: the DWC2 GHWCFG lines and the enumeration
+ * milestones are the C2 evidence.  No colour escapes on the polled console. */
+#ifndef CONFIG_USB_DBG_LEVEL
+#define CONFIG_USB_DBG_LEVEL	USB_DBG_INFO
+#endif
+
+/* --- DMA / alignment ------------------------------------------------------ */
+
+/* Cortex-M4 has no data cache, so the stack's cache-maintenance contract is
+ * compiled out (CONFIG_USB_DCACHE_ENABLE stays undefined) and USB_NOCACHE_-
+ * RAM_SECTION is empty.  DWC2 host DMA still requires 4-byte aligned buffers;
+ * the linker places .bss in SRAM at 0x20000000, never in CCM. */
+#define CONFIG_USB_ALIGN_SIZE	4
+#define USB_NOCACHE_RAM_SECTION
+
+/* --- host stack width ----------------------------------------------------- */
+
+#ifndef CONFIG_USBHOST_MAX_BUS
+#define CONFIG_USBHOST_MAX_BUS	1
+#endif
+
+/* One root port, one optional external hub level, four hub ports: the U disk
+ * sits directly on P2, but the hub class's tables are sized for one level so
+ * a self-powered hub can be inserted without relinking. */
+#ifndef CONFIG_USBHOST_MAX_RHPORTS
+#define CONFIG_USBHOST_MAX_RHPORTS	1
+#endif
+#ifndef CONFIG_USBHOST_MAX_EXTHUBS
+#define CONFIG_USBHOST_MAX_EXTHUBS	1
+#endif
+#ifndef CONFIG_USBHOST_MAX_EHPORTS
+#define CONFIG_USBHOST_MAX_EHPORTS	4
+#endif
+
+/* Device model: a mass-storage disk has one interface and two bulk endpoints;
+ * four interfaces / two alt settings / four endpoints leave room for a
+ * composite stick without spending much RAM. */
+#ifndef CONFIG_USBHOST_MAX_INTERFACES
+#define CONFIG_USBHOST_MAX_INTERFACES	4
+#endif
+#ifndef CONFIG_USBHOST_MAX_INTF_ALTSETTINGS
+#define CONFIG_USBHOST_MAX_INTF_ALTSETTINGS	2
+#endif
+#ifndef CONFIG_USBHOST_MAX_ENDPOINTS
+#define CONFIG_USBHOST_MAX_ENDPOINTS	4
+#endif
+#ifndef CONFIG_USBHOST_DEV_NAMELEN
+#define CONFIG_USBHOST_DEV_NAMELEN	16
+#endif
+
+/* 1 KiB covers a U disk's configuration descriptor with margin; 1 s control
+ * timeout is ample at full speed. */
+#ifndef CONFIG_USBHOST_REQUEST_BUFFER_LEN
+#define CONFIG_USBHOST_REQUEST_BUFFER_LEN	1024
+#endif
+#ifndef CONFIG_USBHOST_CONTROL_TRANSFER_TIMEOUT
+#define CONFIG_USBHOST_CONTROL_TRANSFER_TIMEOUT	5000
+#endif
+
+/* --- hub thread ----------------------------------------------------------- */
+
+/* The hub thread runs the enumeration chain and the MSC connect hook's SCSI
+ * identity handshake; 8 KiB is the measured-safe end of the range that still
+ * fits the 64 KiB FreeRTOS heap.  Priority 1 is one band below the top (the
+ * OSAL maps 0 to osPriorityISR); it blocks on the hub queue between events. */
+#ifndef CONFIG_USBHOST_PSC_STACKSIZE
+#define CONFIG_USBHOST_PSC_STACKSIZE	8192
+#endif
+#ifndef CONFIG_USBHOST_PSC_PRIO
+#define CONFIG_USBHOST_PSC_PRIO		1
+#endif
+
+/* --- class drivers -------------------------------------------------------- */
+
+/* One MSC instance (one disk), five ready polls with a 5 s per-transfer
+ * timeout: a stick that is not ready within 25 s fails with a named line
+ * instead of hanging the runner. */
+#ifndef CONFIG_USBHOST_MSC_TIMEOUT
+#define CONFIG_USBHOST_MSC_TIMEOUT	5000
+#endif
+#ifndef CONFIG_USBHOST_MAX_MSC_CLASS
+#define CONFIG_USBHOST_MAX_MSC_CLASS	1
+#endif
+#ifndef CONFIG_USBHOST_MSC_READY_CHECK_TIMES
+#define CONFIG_USBHOST_MSC_READY_CHECK_TIMES	5
+#endif
+
+#ifndef CONFIG_USBHOST_MSOS_VENDOR_CODE
+#define CONFIG_USBHOST_MSOS_VENDOR_CODE	0x00
+#endif
+
+#endif /* FREEWIFICAM_STM32F429_USB_CONFIG_H */

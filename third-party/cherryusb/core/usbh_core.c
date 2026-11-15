@@ -377,10 +377,19 @@ int usbh_enumerate(struct usbh_hubport *hport)
         goto errout;
     }
 
-    /* Extract the correct max packetsize from the device descriptor */
+    /* Extract the correct max packetsize from the device descriptor.
+     *
+     * A USB 3.x device's bMaxPacketSize0 (9) is the SuperSpeed encoding; the
+     * same device enumerated on a USB 2 host (the F429 is FS-only) must use
+     * the USB 2 endpoint-zero maximum, not 2^9 = 512.  Using 512 on the FS
+     * port makes SET_ADDRESS time out and the timeout/kill path then trips
+     * the RTOS port's ISR-entry assert; the vendor ST host library uses 64
+     * here and enumerates the same card reader. */
     dev_desc = (struct usb_device_descriptor *)ep0_request_buffer[hport->bus->busid];
-    if (dev_desc->bcdUSB >= USB_3_0) {
+    if (dev_desc->bcdUSB >= USB_3_0 && hport->speed == USB_SPEED_SUPER) {
         ep_mps = 1 << dev_desc->bMaxPacketSize0;
+    } else if (dev_desc->bcdUSB >= USB_3_0) {
+        ep_mps = 64;
     } else {
         ep_mps = dev_desc->bMaxPacketSize0;
     }

@@ -1218,6 +1218,90 @@ Two defects are visible in the serial, not hidden:
   It is a profile leak in the instrument, not a 8723 step; the 8723 claim
   on port 2 is unaffected.
 
+## STM32F429 USB host (DWC2 + MSC, 2026-11-15)
+
+This is the F429 OTG_HS full-speed host arm (`PROFILE=stm32f429-usb-msc`,
+case `usb_dwc2`), a **2/2 PASS** on the second U disk (USB3.0 Card Reader,
+`05e3:0749`).  The transcript is one of the two boots; both are byte-identical
+in their judged anchors and are `runs/2026-11-15-f429-usb-msc/boot{2,3}-hos/`.
+
+```
+rtos: banner backend=freertos kernel=FreeRTOS-Kernel V11.3.1 build=...
+rtos: kernel ready tick=1000Hz
+...
+tick: PASS
+rtos: case tick PASS
+rtos: case usb_dwc2 start
+usbh: clock hz=168000000 fallback=0
+usbh: core init bus=0 hcd=dwc2 base=0x40040000
+usbh: bus0 event init hub=0 port=0 intf=255
+[I/USB] ========== dwc2 hcd params ==========
+[I/USB] CID:00001100
+[I/USB] GSNPSID:4f54281a
+[I/USB] GHWCFG1:00000000
+[I/USB] GHWCFG2:229ed590
+[I/USB] GHWCFG3:03f403e8
+[I/USB] GHWCFG4:17f00030
+[I/USB] dwc2 has 12 channels and dfifo depth(32-bit words) is 1024
+...
+[I/usbh_hub] New full-speed device on Bus 0, Hub 1, Port 1 connected
+[I/usbh_core] New device found,idVendor:05e3,idProduct:0749,bcdDevice:1532
+[I/usbh_core] Enumeration success, start loading class driver
+usbh: bus0 event device-configured hub=1 port=1 intf=255
+[I/usbh_core] Loading msc class driver on interface 0
+[I/usbh_msc] Get max LUN:1
+[I/usbh_msc] Ep=81 Attr=02 Mps=64 Interval=00 Mult=00
+[I/usbh_msc] Ep=02 Attr=02 Mps=64 Interval=00 Mult=00
+[I/usbh_msc] Register MSC Class:/dev/sda
+[E/usbh_msc] csw bStatus 1
+[W/usbh_msc] Device not ready, try again...
+[I/usbh_msc] Capacity info:
+[I/usbh_msc] Block num:123596800,block size:512
+usbh_msc: ready bus=0 dev=2 blocks=123596800 bsize=512 (60350 MiB)
+usbh: bus0 event interface-start hub=1 port=1 intf=0
+usbh: msc bus=0 hcd=dwc2 vid=05e3 pid=0749 speed=2 blocks=123596800 bsize=512 serial=-
+usbh: msc ep in=0x81 type=bulk maxp=64 out=0x02 type=bulk maxp=64
+usbh: msc blk0 ok sig=55aa
+usbh: msc read lba=0 blocks=8 bytes=4096 ok
+usbh: msc window lba=123594752 blocks=2048
+usbh: msc roundtrip ok lba=123594752 len=512
+usbh: msc PASS
+rtos: case usb_dwc2 PASS
+rtos: result pass cases=2/2 backend=freertos
+```
+
+What it proves: the OTG_HS core is reachable at `0x40040000` (GSNPSID
+`0x4f54281a`, 12 host channels, 1024-word FIFO), the DWC2 port switched it to
+host mode, the USB3 card reader enumerated at full speed, the MSC class claimed
+interface 0 (subclass 6, protocol 0x50), and the raw block path read LBA 0 /
+eight blocks and wrote/read back one 512 B sector at LBA 123,594,752 (the
+1 MiB-aligned start of the disk's last 1 MiB window, with 4 MiB in front never
+touched).  `judge.py` passes the `usb_dwc2` branch on both boots: identity +
+bulk endpoints + block zero + roundtrip, no RK throughput arms.
+
+Two code fixes are part of this transcript.  First, a USB 3.x device's
+`bMaxPacketSize0=9` is the SuperSpeed encoding; the F429 is a full-speed host,
+so `usbh_core.c` now uses 64 for EP0 unless the port actually negotiated
+SuperSpeed.  Second, the DWC2 channel-free path can enter the OSAL critical
+section from the OTG_HS ISR; the F429 `osCriticalEnter/Exit` now selects the
+FromISR pair by `IPSR`, because the CM4F port asserts on `taskENTER_CRITICAL()`
+from an interrupt.  The control-transfer timeout was also raised to 5 s for a
+card reader's first response.
+
+The earlier, **invalid** boot is kept in `boot1-otg-port/`: the first stick did
+not present D+ (`HPRT=0x00001000`, PCSTS=0, `irq=0`) while the U disk was on
+the micro USB OTG1 port; that port's VBUS is a `5V_USB` input and does not power
+a bus-powered stick, and P2 USB-A's `HOST_DN/DP` need J74-J76 on the HOS side.
+It is not part of the 2/2.  The vendor's own `S-ST-USB-HOST读写U盘` example uses
+the same OTG_HS/PB14/PB15 and enumerated the same card reader, which is how the
+hardware/clock/pin side was separated from this port's code.
+
+There is no cold boot on this bench (`mculab` `power.type=none`); both passes
+are nRST hardware resets.  The test is raw MSC, not FatFs: the card reader's
+exFAT/FAT32 formatting is not part of this judgement.  Hot-plug, composite
+CD-ROM+storage devices, multiple LUNs and write-protected sticks are not
+covered.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the

@@ -38,6 +38,38 @@ RESULT_FAIL = "rtos: result fail cases=0/1 backend=freertos\n"
 CASE_PASS = "rtos: case {name} PASS\n"
 CASE_FAIL = "rtos: case {name} FAIL\n"
 
+# The F429 USB host arm: the tick case plus the DWC2 mass-storage case.  The
+# judge's usb_dwc2 branch requires the identity, the bulk endpoints, block
+# zero and the one-sector roundtrip, but no throughput/sweep arms.
+USB_DWC2_BODY = (
+    "tick: ladder beats=3 err_max_ms=1 tol_ms=20\n"
+    "tick: PASS\n"
+    "rtos: case tick PASS\n"
+    "rtos: case usb_dwc2 start\n"
+    "usbh: msc bus=0 hcd=dwc2 vid=1234 pid=5678 speed=2 blocks=60000000 "
+    "bsize=512 serial=ABC123\n"
+    "usbh: msc ep in=0x81 type=bulk maxp=64 out=0x02 type=bulk maxp=64\n"
+    "usbh: msc blk0 ok sig=55aa\n"
+    "usbh: msc read lba=0 blocks=8 bytes=4096 ok\n"
+    "usbh: msc window lba=59996160 blocks=2048\n"
+    "usbh: msc roundtrip ok lba=59996160 len=512\n"
+    "usbh: msc PASS\n"
+)
+
+
+def usb_dwc2_open() -> str:
+    return (BANNER + USB_DWC2_BODY
+            + "rtos: case usb_dwc2 PASS\n"
+            + "rtos: result pass cases=2/2 backend=freertos\n")
+
+
+def usb_dwc2_no_roundtrip() -> str:
+    body = USB_DWC2_BODY.replace(
+        "usbh: msc roundtrip ok lba=59996160 len=512\n", "")
+    return (BANNER + body
+            + "rtos: case usb_dwc2 PASS\n"
+            + "rtos: result pass cases=2/2 backend=freertos\n")
+
 AP5G_HEAD = (
     "iwl7260_ap5g: core ready\n"
     "iwl7260_ap5g: fw registered=0\n"
@@ -580,6 +612,10 @@ def rtl8xxxu_mon_census_absent() -> str:
 
 
 SAMPLES = [
+    ("usb-dwc2-open", usb_dwc2_open, None,
+     {"cases": ["tick", "usb_dwc2"]}),
+    ("usb-dwc2-no-roundtrip", usb_dwc2_no_roundtrip,
+     "no verified write/read round trip", {"cases": ["tick", "usb_dwc2"]}),
     ("ap5g-open", ap5g_open, None, {"cases": ["iwl7260_ap5g"]}),
     ("ap5g-wpa2", ap5g_wpa2, None, {"cases": ["iwl7260_ap5g"]}),
     ("ap5g-noir", ap5g_noir, "no beaconable", {"cases": ["iwl7260_ap5g"]}),

@@ -37,6 +37,18 @@ SECTIONS
         __exidx_end = .;
     } > FLASH
 
+    /* USB host class registry: the hub and mass-storage class drivers publish
+     * one struct usbh_class_info entry here and usbh_initialize() walks the
+     * section between these two symbols to match an enumerated interface. */
+    .usbh_class_info :
+    {
+        . = ALIGN(4);
+        __usbh_class_info_start__ = .;
+        KEEP(*(.usbh_class_info))
+        __usbh_class_info_end__ = .;
+        . = ALIGN(4);
+    } > FLASH
+
     .board_tests :
     {
         . = ALIGN(4);

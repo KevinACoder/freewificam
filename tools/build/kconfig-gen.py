@@ -54,7 +54,7 @@ KCONFIG_FILES = [
 # Case list copied from the runner table / all defconfigs.  The hidden
 # CASE_<NAME> symbols are derived by this generator from CONFIG_CASES; they are
 # not edited by a user.
-CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci kpi_live kpi_mock
+CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci usb_dwc2 kpi_live kpi_mock
          mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260_stab
          iwl7260_ap iwl7260_sta_wpa2 iwl7260_ap5g iwl7260_sta5g
          iwl7260_mon rtl8189fs_sdio rtl8189fs_sta rtl8189fs_sta_wpa2
@@ -188,10 +188,12 @@ def legacy_macros(kconf) -> list[str]:
         lines.append("#define MSC_DIAG 1")
     if flag("USB_MSC_DIAG_FULL"):
         lines.append("#define MSC_DIAG_FULL 1")
+    # The app tests this with #if defined(), so "off" must mean "not
+    # defined": emitting 0 made every profile auto-reset even when the
+    # profile said CONFIG_BOARD_AUTO_RESET=n (found on the F429 bench,
+    # 2026-11-15, where the fail/result line was followed by a reboot).
     if flag("BOARD_AUTO_RESET"):
         lines.append("#define RTOS_BOARD_AUTO_RESET 1")
-    else:
-        lines.append("#define RTOS_BOARD_AUTO_RESET 0")
 
     # Case-derived card-type selection: the fsl wrapper has no other source
     # for it (the previous tree derived it from its CASE_DEFS make variable).

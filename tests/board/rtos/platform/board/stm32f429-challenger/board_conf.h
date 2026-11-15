@@ -2,8 +2,11 @@
 /*
  * board_conf.h - STM32F429 挑战者 V2 board constants.
  *
- * DATA ONLY.  The USB priority default is here because build_defs.h names it
- * for every board; this board carries no USB host, but the macro must exist.
+ * DATA ONLY.  The USB priority is here because build_defs.h names it for every
+ * board.  This board's USB host is OTG_HS in full-speed mode on PB14/PB15
+ * (V2 base schematic sheet 8; J74-J76 in the HOS position); the line is
+ * IRQ 77 and the value below sits exactly at FreeRTOS's
+ * configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY (5).
  */
 
 #ifndef FREEWIFICAM_STM32F429_BOARD_CONF_H

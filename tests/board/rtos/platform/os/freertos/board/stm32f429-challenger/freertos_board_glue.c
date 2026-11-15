@@ -13,6 +13,7 @@
 #include "task.h"
 
 #include "os/cmsis2/cmsis2.h"
+#include "cmsis_board_device.h"
 #include "uart.h"
 
 void vAssertCalled( const char *file, unsigned long line )
@@ -46,15 +47,28 @@ void vApplicationStackOverflowHook( TaskHandle_t task, char *name )
     }
 }
 
+/* The USB host's completion path can call usb_osal_enter_critical_section()
+ * from the OTG_HS interrupt (the DWC2 channel-free path does), and the
+ * FreeRTOS CM4F port asserts if taskENTER_CRITICAL() is entered from an ISR.
+ * The CMSIS-RTOS2 facade has no context argument, so the context is read from
+ * IPSR and the matching FromISR pair is used. */
 os_critical_state_t osCriticalEnter( void )
 {
+    if( __get_IPSR() != 0U )
+    {
+        return ( os_critical_state_t ) taskENTER_CRITICAL_FROM_ISR();
+    }
     taskENTER_CRITICAL();
     return 0;
 }
 
 void osCriticalExit( os_critical_state_t state )
 {
-    (void)state;
+    if( __get_IPSR() != 0U )
+    {
+        taskEXIT_CRITICAL_FROM_ISR( state );
+        return;
+    }
     taskEXIT_CRITICAL();
 }
 

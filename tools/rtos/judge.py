@@ -28,6 +28,7 @@ CASES = (
     "pcie",
     "usb_xhci",
     "usb_ehci",
+    "usb_dwc2",
     "kpi_live",
     "kpi_mock",
     "mac80211_c2",
@@ -4190,7 +4191,7 @@ def judge(text: str, expect: dict | None = None) -> dict:
         elif nd["present"] != "1":
             errors.append("mac80211_c2: the default wlan0 interface is missing")
 
-    for case in ("usb_xhci", "usb_ehci"):
+    for case in ("usb_xhci", "usb_ehci", "usb_dwc2"):
         if cases.get(case, {}).get("verdict") != "pass":
             continue
         fail = found["usb_msc_fail"]
@@ -4235,6 +4236,12 @@ def judge(text: str, expect: dict | None = None) -> dict:
             notes.append(
                 f"{case}: roundtrip lba={rt['lba']} len={rt['len']}"
             )
+        if case == "usb_dwc2":
+            # The F429 full-speed arm is an identity + one-sector roundtrip
+            # acceptance; the throughput/sweep arms belong to the RK3568
+            # controller cases and are not part of this image.
+            notes.append(f"{case}: identity + roundtrip only (no throughput arms)")
+            continue
         ident = found["usb_msc_ident"]
         io = found["usb_msc_io"]
         if ident is not None:
