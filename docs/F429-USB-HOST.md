@@ -123,3 +123,29 @@ the DWC2 OUT channel/HCINT path rather than adding a longer timeout.  One INFO
 boot registered the hub but saw no downstream device within 30 s, while a
 USB_DBG_LOG build saw both; that timing is also unclassified.  Evidence:
 `runs/2026-11-15-f429-usb-hub/`.
+
+## 7. Can the hub carry multiple wireless modules later?
+
+Structurally the stack can carry **one external hub**:
+`CONFIG_USBHOST_MAX_EXTHUBS=1`, `CONFIG_USBHOST_MAX_EHPORTS=4`, and the DWC2
+core has 12 host channels.  That is enough endpoints/channels for a few FS
+devices on one hub.  But it is not a promise that multiple WiFi modules work:
+
+1. The hub path is only proven for enumeration and U-disk reads.  The U-disk
+   512 B WRITE10 through the hub still stops after the CBW, while the direct
+   P2 path is 2/2.  WiFi transmit is bulk OUT, the same path that hangs, so
+   the hub OUT path (and its power/current budget) has to be closed first.
+2. The F429 is a **single full-speed host**: all devices behind the hub share
+   12 Mbit/s.  Two or more WiFi modules doing scan/assoc/data will compete for
+   that one FS frame budget, before any driver/CPU cost.
+3. This image has no WiFi class driver.  A module is only enumerated
+   (`0bda:8179`, class 0xff); claiming the vendor interface needs the
+   rtl8xxxu/linuxkpi USB stack, which is not in the F429 image.
+4. The F429 line's documented wireless target is **SDIO RTL8189FS**, not USB
+   HS.  Multiple USB WiFi modules are a separate, later porting question; do
+   not treat the hub as a supported multi-radio bus yet.
+
+Practical order: self-powered hub/external 5 V and a passing U-disk write
+through the hub; one WiFi module's interface claim; only then a second module
+with a measured power/bandwidth/RAM budget.  Record the hub write result in
+`runs/2026-11-15-f429-usb-hub/` when it is rerun.
