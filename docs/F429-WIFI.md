@@ -205,6 +205,28 @@ lwIP is sized for the MCU by `CONFIG_F429_LWIP_SDRAM` (platform/board/Kconfig):
 counter include (`gtimer_count_get`: aarch64 extern vs CM4 DWT inline) and
 the `MEMP_STATS` override that must survive `MEMP_MEM_MALLOC=1`.
 
+### 5.3 Throughput: measured once, report-only, no table
+
+The `stm32f429-wifi-c6t` image then ran the four report-only phases
+(`CONFIG_F429_WIFI_TP=y`: tcpdn / tcpup / udpdn / udpup against the Pi's
+iperf 2.2.1 and the UDP counting sink).  All four moved data in both boots;
+the numbers are samples, not a table:
+
+| phase | board's own count | peer's end-to-end view |
+|---|---|---|
+| tcpdn (Pi->board) | 9.04 MB / 15.0 s = 4.81 Mbit/s | 8.63 MB / 25.5 s = 2.84 Mbit/s |
+| tcpup (board->Pi) | 4.61 MB / 10.0 s = 3.68 Mbit/s | 4.39 MB / 19.9 s = 1.85 Mbit/s |
+| udpdn (Pi->board) | 15.5 MB / 20.3 s = 6.12 Mbit/s, 10,550 pkts, drop=0 | 14.7 MB / 18 s = 6.86 Mbit/s offered |
+| udpup (board->Pi blast) | offered 241 KB / 12 s = 0.16 Mbit/s | sink sample (other boot): 960 KB / 653 pkts = 0.64 Mbit/s |
+
+**How to read it**: this board's USB host is **full speed** (12 Mbit/s); a bulk
+transfer tops out near 9.7 Mbit/s, so 6-7 Mbit/s of UDP is the *USB* ceiling
+approaching, not the radio's.  The downlink TCP rate is stable across two boots
+(2.78 / 2.84 Mbit/s); the uplink TCP and the UDP blast are not (0.36 vs 1.85
+Mbit/s, 0.16 vs 0.71 Mbit/s offered), and neither has been explained yet.
+These numbers do not transfer to the RK3568 line (high-speed USB) or to a GT
+arm.  Full record and the harness caveats: `runs/2026-11-15-f429-wifi-tp/`.
+
 Profiles: `stm32f429-wifi-c6` (pings, the W6 gate) and
 `stm32f429-wifi-c6t` (`CONFIG_F429_WIFI_TP=y`, the four report-only phases:
 tcp down/up + udp down/up against the Pi's iperf2 and UDP counting arms).
