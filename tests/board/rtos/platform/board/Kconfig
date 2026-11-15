@@ -82,6 +82,17 @@ config F429_WIFI_TP
 	  Each phase waits for its peer inside its own window; a missing
 	  peer is recorded as done=0, never as a pass.  No 80% gate here.
 
+config F429_WIFI_AP_TP
+	bool "F429 wifi AP: run the four report-only throughput phases"
+	depends on BOARD_STM32F429_CHALLENGER
+	help
+	  Turns the four report-only AP phases on (the board sends TCP and
+	  receives TCP, receives UDP and sends UDP, against the bench's iperf2
+	  and counting-sink arms).  Each phase waits for its peer inside its own
+	  window; a missing peer is recorded as ok=0 and bytes=0, never as a
+	  pass.  There is no throughput gate here: the numbers are samples of
+	  one window on this bench, and this board's host is full-speed USB.
+
 config USB_MSC_DIAG
 	bool "USB mass-storage diagnostics"
 

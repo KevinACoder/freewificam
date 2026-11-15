@@ -300,12 +300,12 @@ endif
 # with its test case.  The rtw89 cases are consumers too: their linuxkpi USB
 # engine rides the same controllers, while the engine and its adapter belong to
 # the liblinux80211 world (kpi.mk), not to this file.
-USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram f429_wifi rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
+USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
 	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6
 ifeq ($(BOARD),stm32f429-challenger)
-ifneq ($(filter-out usb_dwc2 f429_sdram f429_wifi,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
-$(error the stm32f429 board carries only usb_dwc2/f429_sdram/f429_wifi, not '$(filter-out usb_dwc2 f429_sdram f429_wifi,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
+ifneq ($(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
+$(error the stm32f429 board carries only usb_dwc2/f429_sdram/f429_wifi/f429_wifi_ap/f429_ap_link, not '$(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
 endif
 else
 ifneq ($(filter usb_dwc2,$(CASES)),)

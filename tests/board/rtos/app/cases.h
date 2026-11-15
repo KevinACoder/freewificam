@@ -67,6 +67,14 @@ int case_f429_sdram_run(void);
 #if defined(RTOS_CASE_F429_WIFI)
 int case_f429_wifi_run(void);
 #endif
+/* The AP role on the same board: the delivery case (the port's minimal MLME)
+ * and the link-only probe image that measures the imported hostapd's cost. */
+#if defined(RTOS_CASE_F429_WIFI_AP)
+int case_f429_wifi_ap_run(void);
+#endif
+#if defined(RTOS_CASE_F429_AP_LINK)
+int case_f429_ap_link_run(void);
+#endif
 
 #if defined(RTOS_CASE_USB_XHCI) || defined(RTOS_CASE_USB_EHCI)
 int usb_msc_case(unsigned int busid, const char *hcd);

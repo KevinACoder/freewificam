@@ -70,6 +70,12 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_F429_WIFI)
 	CASE_ENTRY("f429_wifi", case_f429_wifi_run)
 #endif
+#if defined(RTOS_CASE_F429_WIFI_AP)
+	CASE_ENTRY("f429_wifi_ap", case_f429_wifi_ap_run)
+#endif
+#if defined(RTOS_CASE_F429_AP_LINK)
+	CASE_ENTRY("f429_ap_link", case_f429_ap_link_run)
+#endif
 #if defined(RTOS_CASE_KPI_LIVE)
 	CASE_ENTRY("kpi_live", case_kpi_live_run)
 #endif

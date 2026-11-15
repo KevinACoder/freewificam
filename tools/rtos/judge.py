@@ -112,6 +112,14 @@ CASES = (
     # block shape serves both; the throughput verdict itself is the report
     # tool's (tools/rtos/c6-report.py), not this file's.
     "rtl8xxxu_c6",
+    # The STM32F429 wireless roles: the attach/scan/associate/data ladder on the
+    # MCU, the AP role driven by the port's own minimal MLME, and the link-only
+    # image that measures the imported hostapd stack's flash cost.  Their
+    # verdicts are the case's own PASS/FAIL lines; the board harness adds the
+    # on-air and peer-side witnesses.
+    "f429_wifi",
+    "f429_wifi_ap",
+    "f429_ap_link",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still

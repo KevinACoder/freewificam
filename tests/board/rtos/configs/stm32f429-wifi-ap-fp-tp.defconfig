@@ -1,0 +1,50 @@
+# F429 AP role with the four report-only throughput phases (A1-A3, A4).
+#
+# The AP MLME is the port's own minimal open-AP MLME (CONFIG_AP_MLME): probe
+# request, open authentication and association are parsed and answered from
+# the case's task, the station is created and its controlled port opened
+# through the real nl80211 command chain, and mac80211 keeps the AP state
+# machine.  The imported hostapd stack is deliberately not linked: it costs
+# about 320 KiB of flash on this part, and a 1 MiB image that also carries the
+# wireless stack, the rtl8xxxu driver, lwIP and its firmware blob cannot hold
+# it.  See docs/F429-WIFI.md for the two options and the measurement.
+#
+# The beacon is host-composed and host-sent: the 8188E does not repeat a
+# host-downloaded beacon, so the driver recomposes one per beacon interval
+# (the driver tree carries the recorded patch for that).
+#
+# What this image is not: WPA2, multiple clients, 5 GHz, or a throughput
+# verdict.  The role is a single-client open AP, and the throughput phases are
+# the separate stm32f429-wifi-ap-fp-tp profile (report-only samples).
+#
+# The image is a GPL-2.0 link product (mac80211/cfg80211 + rtl8xxxu) that
+# redistributes the rtl8188eufw image - see docs/LICENSES.md.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=4194304
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_CASES="f429_wifi_ap"
+CONFIG_F429_WIFI_AP_TP=y
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_AP_MLME=y
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=4096
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=4
+CONFIG_LKPI_USB_CHERRYUSB_SLOTS=8
+CONFIG_LKPI_SKB_POOL_NUM=8
+CONFIG_LKPI_SKB_DATA_POOL_NUM=8
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_LKPI_WQ_TRACE=y
+CONFIG_RTL8XXXU_USB_BUS=0
+CONFIG_F429_LWIP_SDRAM=y
