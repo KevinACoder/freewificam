@@ -156,6 +156,24 @@ static void print_lock_take(uint64_t *saved_daif)
 	 * spinning on the lock its own interrupted context holds). */
 	ARCH_DAIF_GET(*saved_daif);
 	ARCH_IRQ_MASK();
+#elif defined(__arm__)
+	/* The same rule as the aarch64 branch, and for the same reason: the
+	 * lock is held across a polled 115200-baud line (several ms), and this
+	 * platform's wait is a bare spin - no yield, so anything that preempts
+	 * the holder and then prints never gives it the CPU back.  The F429's
+	 * W6 wedge (tick-PC sampler parked in print_try_lock, tick still
+	 * advancing, console frozen mid-line, no fault) is exactly that
+	 * deadlock: a higher-priority task or an ISR printing while a log line
+	 * was in flight.  Mask IRQs for the hold (PRIMASK saved/restored, so an
+	 * ISR caller stays masked) and the holder cannot be preempted out of
+	 * the critical section at all. */
+	{
+		unsigned int primask;
+
+		__asm__ __volatile__("mrs %0, primask" : "=r"(primask));
+		*saved_daif = primask;
+		__asm__ __volatile__("cpsid i" ::: "memory");
+	}
 #else
 	*saved_daif = 0u;
 #endif
@@ -180,6 +198,13 @@ static void print_lock_give(uint64_t saved_daif)
 	 * the I bit: callers in ISR context arrive with IRQs masked and must
 	 * stay that way). */
 	ARCH_DAIF_PUT(saved_daif);
+#elif defined(__arm__)
+	__atomic_store_n(&print_lock_held, 0u, __ATOMIC_RELEASE);
+	/* Restore exactly: an ISR caller entered with PRIMASK=1 and must leave
+	 * with it set, a task with 0 and must leave enabled. */
+	if ((saved_daif & 1u) == 0u) {
+		__asm__ __volatile__("cpsie i" ::: "memory");
+	}
 #else
 	(void)saved_daif;
 	__atomic_store_n(&print_lock_held, 0u, __ATOMIC_RELEASE);
