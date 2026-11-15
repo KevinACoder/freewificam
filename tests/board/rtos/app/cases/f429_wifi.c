@@ -131,25 +131,41 @@ f429_wifi_hb(void *arg)
 			CASE_ANCHOR("f429_wifi: usb irq storm at hb=%u\n", n);
 			usb_board_dwc2_dump();
 		}
-		if ((n % 10U) == 0U) {
-			/* Lock-free (polled UART): the console may be the deadlock's
-			 * hostage, so the liveness line must not take its lock. */
+		if (n <= 40U) {
+			/* Fast lock-free timeline around the first data frames:
+			 * runner/drain states, the core-lock owner and the URB
+			 * ledger deltas, one short polled-UART line each 200 ms. */
 			TaskStatus_t hbt[24];
 			uint32_t hbtotal = 0U;
-			unsigned int htn, hti;
+			unsigned int htn, hti, rstate = 9U, dstate = 9U;
+			struct lkpi_usb_chusb_stats us;
 			const char *lock_owner = lkpi_net_lock_owner();
 
-			uart_early_puts("hb2 t=");
-			uart_early_put_hex32(n);
-			uart_early_puts(" lock=");
-			uart_early_puts(lock_owner != NULL ? lock_owner : "-");
 			htn = (unsigned int)uxTaskGetSystemState(hbt, 24U, &hbtotal);
 			for (hti = 0U; hti < htn; hti++) {
-				uart_early_putc(' ');
-				uart_early_puts(hbt[hti].pcTaskName);
-				uart_early_putc(':');
-				uart_early_put_hex32((uint32_t)hbt[hti].eCurrentState);
+				if (strcmp(hbt[hti].pcTaskName, "runner") == 0)
+					rstate = (unsigned int)hbt[hti].eCurrentState;
+				else if (strcmp(hbt[hti].pcTaskName, "lkpi_usb_drain") == 0)
+					dstate = (unsigned int)hbt[hti].eCurrentState;
 			}
+			(void)memset(&us, 0, sizeof(us));
+			lkpi_usb_cherryusb_stats(&us);
+			uart_early_puts("hb3 n=");
+			uart_early_put_hex32(n);
+			uart_early_puts(" R=");
+			uart_early_put_hex32(rstate);
+			uart_early_puts(" D=");
+			uart_early_put_hex32(dstate);
+			uart_early_puts(" L=");
+			uart_early_puts(lock_owner != NULL ? lock_owner : "-");
+			uart_early_puts(" s=");
+			uart_early_put_hex32(us.submits);
+			uart_early_puts(" c=");
+			uart_early_put_hex32(us.completed);
+			uart_early_puts(" x=");
+			uart_early_put_hex32(us.rx_completes);
+			uart_early_puts(" t=");
+			uart_early_put_hex32(us.tx_completes);
 			uart_early_puts("\n");
 		}
 		if ((n % 10U) == 0U) {
