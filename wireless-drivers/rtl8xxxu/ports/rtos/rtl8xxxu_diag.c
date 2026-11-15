@@ -56,6 +56,9 @@
 #include "../../regs.h"
 
 /* Read-only counters filled by the wrappers at the bottom. */
+static unsigned int diag_fill_total;
+static unsigned int diag_data_txdesc;
+static unsigned int diag_data_dumped;
 static unsigned int diag_beacon_get;
 static unsigned int diag_beacon_get_null;
 static unsigned int diag_beacon_txdesc;
@@ -179,8 +182,38 @@ __wrap_rtl8xxxu_fill_txdesc_v3(struct ieee80211_hw *hw,
     struct rtl8xxxu_txdesc32 *tx_desc, bool sgi, bool short_preamble,
     bool ampdu_enable, u32 rts_rate, u8 macid)
 {
+	diag_fill_total++;
 	__real_rtl8xxxu_fill_txdesc_v3(hw, hdr, tx_info, tx_desc, sgi,
 	    short_preamble, ampdu_enable, rts_rate, macid);
+	if (1) {
+		struct rtl8xxxu_priv *priv = hw->priv;
+
+		if (ieee80211_is_data(hdr->frame_control))
+			diag_data_txdesc++;
+		/* The first frames of the W6 data path: the descriptor the chip
+		 * accepts for the one frame that reaches the air and for the ones
+		 * that do not.  Bounded to six, one line each. */
+		if (diag_data_dumped < 6U) {
+			diag_data_dumped++;
+			dev_info(&priv->udev->dev,
+				 "rtl8xxxu_txdump: #%u/%u fc=%04x da=%02x:%02x:%02x:%02x:%02x:%02x len=%u off=%u txdw0=%08x txdw1=%08x txdw2=%08x txdw3=%08x txdw4=%08x txdw5=%08x q=%u macid=%u rate=%u\n",
+				 diag_fill_total, diag_data_txdesc,
+				 (unsigned)le16_to_cpu(hdr->frame_control),
+				 hdr->addr1[0], hdr->addr1[1], hdr->addr1[2],
+				 hdr->addr1[3], hdr->addr1[4], hdr->addr1[5],
+				 (unsigned)le16_to_cpu(tx_desc->pkt_size),
+				 (unsigned)tx_desc->pkt_offset,
+				 le32_to_cpu(tx_desc->txdw0),
+				 le32_to_cpu(tx_desc->txdw1),
+				 le32_to_cpu(tx_desc->txdw2),
+				 le32_to_cpu(tx_desc->txdw3),
+				 le32_to_cpu(tx_desc->txdw4),
+				 le32_to_cpu(tx_desc->txdw5),
+				 (unsigned)((le32_to_cpu(tx_desc->txdw1) >> 8) & 0x1fU),
+				 (unsigned)(le32_to_cpu(tx_desc->txdw1) & 0x3fU),
+				 (unsigned)(le32_to_cpu(tx_desc->txdw5) & 0x3fU));
+		}
+	}
 	if (ieee80211_is_beacon(hdr->frame_control)) {
 		if (diag_beacon_txdesc == 0U) {
 			diag_beacon_txdw1 = le32_to_cpu(tx_desc->txdw1);
@@ -189,4 +222,19 @@ __wrap_rtl8xxxu_fill_txdesc_v3(struct ieee80211_hw *hw,
 		}
 		diag_beacon_txdesc++;
 	}
+}
+
+/*
+ * The fill-descriptor census.  A zero data count beside the driver's own
+ * per-frame `TX rate` lines is impossible; a data count of one beside them
+ * means the frames after the first are filled by a path the wrap does not
+ * see.  The F429 W6 case prints this after its ping window.
+ */
+void
+rtl8xxxu_diag_tx_counts(unsigned int *total, unsigned int *data)
+{
+	if (total != NULL)
+		*total = diag_fill_total;
+	if (data != NULL)
+		*data = diag_data_txdesc;
 }

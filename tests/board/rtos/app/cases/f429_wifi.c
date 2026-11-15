@@ -779,6 +779,15 @@ found:
 		}
 		CASE_ANCHOR("f429_wifi: ping warmup tries=%u rx=%u rc=%d irq_storm=%u\n",
 			    warm + 1U, rx, rc, usb_board_irq_storm_get());
+		{
+			extern void rtl8xxxu_diag_tx_counts(unsigned int *t,
+							    unsigned int *d);
+			unsigned int filler = 0U, dataf = 0U;
+
+			rtl8xxxu_diag_tx_counts(&filler, &dataf);
+			CASE_ANCHOR("f429_wifi: fill_txdesc total=%u data=%u\n",
+				    filler, dataf);
+		}
 
 		rc = lkpi_net_ping("192.168.99.1", 20U, 56U, 1000U,
 				   &rx, &rmin, &ravg, &rmax);
