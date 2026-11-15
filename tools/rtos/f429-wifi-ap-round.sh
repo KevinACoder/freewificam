@@ -152,8 +152,20 @@ if ! bash "$BOARD/power.sh" status --json 2>/dev/null | grep -q '"power_on":true
 	sleep 3
 fi
 echo "== mcu flash (no reset; the relay cycle below is the reset) =="
-"$MCU" flash "$EVIDENCE/rtos.bin" --bin-base 0x08000000 --verify --no-reset \
-	--json > "$EVIDENCE/flash.json" || {
+# The probe occasionally drops its SWD session during the loader's uninit
+# (DAP_SWJ_SEQUENCE) after the image was written and verified; a retry costs
+# ten seconds and saves the boot, so the round does not depend on that race.
+flash_ok=0
+for attempt in 1 2 3; do
+	if "$MCU" flash "$EVIDENCE/rtos.bin" --bin-base 0x08000000 --verify \
+		--no-reset --json > "$EVIDENCE/flash.json" 2>&1; then
+		flash_ok=1
+		break
+	fi
+	echo "flash attempt $attempt failed; retry" >&2
+	sleep 3
+done
+[ "$flash_ok" = 1 ] || {
 	echo "f429-wifi-ap-round: flash failed (see flash.json)" >&2
 	exit 4
 }
