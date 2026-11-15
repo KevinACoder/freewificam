@@ -88,6 +88,7 @@ the one without the imported stack linked in.
 | `rk3568-rtl8xxxu-8188eu-ap-arm4` 镜像 | 同上（诊断臂只加一次 `REG_BCN_CTRL` 写入，不改变链接边界；不入交付） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `rk3568-rtl8xxxu-8188eu-mon` 镜像 | rtl8xxxu（GPL-2.0-only，含四个记录补丁）+ mac80211/cfg80211（GPL-2.0-only）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtlwifi/rtl8188eufw.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `rk3568-rtl8xxxu-8188eu-c6` 镜像 | 同上（C6T 的吞吐 case 与 census 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `rk3568-rtl8xxxu-8188eu-c5-census` 镜像 | 同上（C5 + 同一份 `RTL8XXXU_TX_CENSUS` 诊断仪器，F429 census 的 RK 对照臂；默认 n、不入交付） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `rk3568-rtl8xxxu-8188eu-ap-tp` 镜像 | 同上 + 导入的 NXP hostapd（BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 
 `wireless-drivers/rtl8xxxu/` 与另三个驱动不同：**13 个文件全部是
@@ -138,4 +139,7 @@ backend 把它链接进 GPL-2.0 产物——它不构成老仓按 BSD 发布的�
 | `stm32f429-wifi-c3` 镜像 | STM32F429 平台源码（第一方 BSD-3-Clause）+ rtl8xxxu（**GPL-2.0-only**）+ mac80211/cfg80211（GPL-2.0-only）+ 第一方 BSD-3-Clause 的 case/runner/kpi 层 + `rtlwifi/rtl8188eufw.bin` | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `stm32f429-wifi-c4` 镜像 | 同上（C4 的 scan helper 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `stm32f429-wifi-c5` 镜像 | 同上（C5 的 connect helper 与 W5 seams 是第一方 BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-c6` 镜像 | 同上 + lwIP（**BSD-3-Clause**）的 MCU 配置与 netif 出口 + 第一方 BSD-3-Clause 的 W6 case（netif、两轮 ICMP） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-c6t` 镜像 | 同上 + 四相位吞吐 case（`CONFIG_F429_WIFI_TP`，lwiperf 来自 lwIP，BSD-3-Clause） | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
+| `stm32f429-wifi-c6h2c` / `-c6diag` 镜像 | 同上 + 第一方 BSD-3-Clause 的诊断仪器（`RTL8XXXU_TX_CENSUS` 的 H2C mailbox 读回与芯片普查；`F429_TICK_PC` 的轮询 UART PC 采样），**默认 n、不入交付** | **GPL-2.0 链接产物 + Realtek 固件再分发物** |
 | `stm32f429-sdram` 镜像 | 第一方 BSD-3-Clause 平台/case 层（无无线栈） | **BSD-3-Clause 第一方产物** |

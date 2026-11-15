@@ -1458,6 +1458,57 @@ rtl8xxxu_diag: chip tag=post-assoc out_eps=2 ep_tx=2 hmtfr=0x00 txpause=0x00 cr=
 
 Full record: `runs/2026-11-15-f429-wifi-w6b/RUN.md`.
 
+### STM32F429 wi-fi W6 throughput (c6t image, same AP)
+
+The `stm32f429-wifi-c6t` image runs the four report-only phases after the W6
+gate in the same boot. boot3 (the supported sample; the console's phase
+timestamps are not monotonic - read the order and the `bytes`/`ms`/`kbit`
+fields, not the clock):
+
+```
+[   9.644] f429_wifi: iperf server start rc=0 port=5001
+[  13.170] f429_wifi: phase tcpdn rc=0 done=1 bytes=9043992 ms=15027 kbit=4808
+[   7.493] f429_wifi: phase tcpup rc=0 done=1 bytes=4607784 ms=10002 kbit=3680
+[   2.929] f429_wifi: phase udpdn rc=0 done=1 bytes=15508500 ms=20283 kbit=6116 pkts=10550 drop=0
+[  15.627] f429_wifi: phase udpup rc=0 done=1 offered=241080 bytes=241080 ms=12000 kbit=160
+[  15.639] f429_wifi: throughput phases moved=4/4
+[  15.681] rtos: result pass cases=1/1 backend=freertos
+```
+
+The peer's view of the same phases (Pi, iperf 2.2.1 and the UDP sink) is the
+cross-check that makes these numbers end-to-end rather than the board's own
+accounting: tcpdn **2.84 Mbit/s** (8.63 MB / 25.5 s), tcpup **1.85 Mbit/s**
+(4.39 MB / 19.9 s), udpdn 14.7 MB offered / 6.86 Mbit/s with the board
+counting 10,550 packets and 0 drops. The AP's `tcpdump -i wlan2` in the same
+boot carries the whole round (44 ICMP requests + 44 replies, then the TCP/UDP
+flows).  Full record: `runs/2026-11-15-f429-wifi-tp/RUN.md`.
+
+### STM32F429 wi-fi: serial phenomena worth recognising
+
+Four console signatures that each cost a round; recognise them before
+re-deriving the diagnosis:
+
+1. **`rx_complete status -5` on every bulk IN (`rx_err=32`)** - the MCU was
+   reset while the 8188EUS was left in a stuck bulk-IN state. The next boot's
+   scan/association fail (`FAIL bss timeout`), and the *known-good* c5 image
+   fails the same way: this is the dongle, not the image. An MCU reset does
+   not power-cycle VBUS, so the recovery is a board power cycle (or replugging
+   the dongle), not another reset.
+2. **The print-lock wedge**: the console stops **mid-line** (a partial
+   `[   7.` with no newline), there is **no `fatal:` line**, the periodic
+   heartbeat keeps printing, and the tick-PC sampler shows every sample in
+   `print_try_lock` - the console lock's holder was starved by a higher
+   priority printer (fixed in `platform/os/baremetal/log.c`).
+3. **`tickpc: tick=… pc=0x…`** - the polled-UART PC sampler
+   (`CONFIG_F429_TICK_PC`, diagnostic only). It prints every 500 ticks and
+   deliberately does not take the console lock, so it survives the state that
+   silences everything else; symbolize the PCs against the image's ELF.
+4. **`hb3 n=… R=… D=… L=- s=… c=… x=… t=…`** - the case's polled-UART
+   heartbeat (also lock-free). `L=-` means the lwIP core lock is not held by
+   anyone; `s`/`c` are submit/complete counts, `x`/`t` the RX/TX frame counts.
+   It is the instrument that says "the CPU is alive" while the console is
+   frozen, so it disambiguates a wedge from a dead board.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the
@@ -1511,3 +1562,10 @@ Not claimed, each with its reason:
 - **Compliance.**  There is no `regulatory.db` in this image, so the wiphy runs
   on the world regdomain.  The channel flags above are the driver's
   `orig_flags`, not a country's rules.
+- **The F429's four throughput cells are samples of one harness, not a table.**
+  The downlink TCP rate is stable across the two boots (2.78 / 2.84 Mbit/s),
+  but the uplink TCP (0.36 vs 1.85) and the UDP blast (0.16 vs 0.71 Mbit/s
+  offered) are not, and neither is explained.  The board's USB host is full
+  speed (12 Mbit/s signalling, bulk ceiling near 9.7), so the 6-7 Mbit/s UDP
+  cell is the USB link being approached, not the radio; none of the four
+  numbers transfers to the RK3568 line or a GT arm.

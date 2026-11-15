@@ -11,8 +11,11 @@ bulk OUT EP2/EP3, no interrupt endpoint). Bench AP: Kali Pi 4B, RTL8812AU,
 The point of this platform: run the **real mac80211/cfg80211 + linuxkpi**
 (`components/liblinux80211`) on a single-core Cortex-M4 with SDRAM, and see
 how far a full Linux MAC layer gets on an MCU. The answer as of this round:
-**W0–W5 pass** (SDRAM foundation, attach, scan, association); the data plane
-(W6) is the next round. Throughput is report-only by plan.
+**W0–W6 pass** (SDRAM foundation, attach, scan, association, data plane —
+ICMP 20/20 both payloads, the AP's own capture carrying all 44 requests and
+44 replies), and the four throughput phases have been measured once
+(report-only, no gate; 2.8 Mbit/s TCP down, 6.1–6.9 Mbit/s UDP down with zero
+loss, both limited by the full-speed USB host, not by the radio).
 
 ## 1. Memory plan (the part that makes it possible)
 
@@ -44,14 +47,19 @@ A 64 KiB bounded self-test runs before the kernel starts.
 | `stm32f429-wifi-c3` | W3: attach — module init, USB driver probe, firmware, `wlan0`, `wiphy`, `dev_open` |
 | `stm32f429-wifi-c4` | W4: directed scan on 2432 (wildcard retry), BSS anchor |
 | `stm32f429-wifi-c5` | W5: connect (auth + assoc), power-save off, `PASS W5` |
-| W6 | not yet defined: the C5 image + lwIP netif + ICMP/TCP/UDP phases |
+| `stm32f429-wifi-c6` | **W6 delivery image**: the C5 ladder + lwIP netif over wlan0 + the two counted ICMP rounds (`PASS W6`), 726,712 B, sha `42beedc0…` |
+| `stm32f429-wifi-c6t` | the delivery image + `CONFIG_F429_WIFI_TP=y`: the four report-only throughput phases (tcpdn / tcpup / udpdn / udpup), 736,552 B, sha `94e55254…` |
+| `stm32f429-wifi-c6h2c` | diagnostic: the delivery image + `CONFIG_RTL8XXXU_TX_CENSUS=y` (H2C mailbox read-back + the TX-state register census), never a delivery image |
+| `stm32f429-wifi-c6diag` | diagnostic: the W6 image + `CONFIG_F429_TICK_PC=y` (the polled tick-hook PC sampler that named the console-lock wedge) |
+| `rk3568-rtl8xxxu-8188eu-c5-census` | the RK3568 control arm for the same census (same dongle, same driver, same instrument) |
 
 Memory-relevant Kconfig: `F429_SDRAM`, `F429_HEAP_SDRAM` (heap in SDRAM),
-`F429_WIFI_STAGE` (3–5), `LIBLINUX80211_*` (USB backend, WIRELESS,
-RTL8XXXU, `NET_NONE` today), the SKB/USB slot counts (8/8, stage 4096 B × 4),
-`RUNNER_STACK_KB=32`. The final c5 image is 679,024 B (< 1 MB flash) and its
-serial RAM gate leaves ~133 KB of internal SRAM free with the SDRAM sections
-NOLOAD.
+`F429_WIFI_STAGE` (3–6), `F429_LWIP_SDRAM`, `F429_WIFI_TP` (report-only
+phases), `RTL8XXXU_TX_CENSUS` (diagnostic, default n), `LIBLINUX80211_*`
+(USB backend, WIRELESS, RTL8XXXU, `NET_LWIP`), the SKB/USB slot counts
+(8/8, stage 4096 B × 4), `RUNNER_STACK_KB=32`. The delivery c6 image is
+726,712 B (< 1 MB flash) and its serial RAM gate leaves >120 KB of internal
+SRAM free with the SDRAM sections NOLOAD.
 
 Flash the **BIN**, not the ELF: mculab rejects the >1 MB debug ELF
 (`IMAGE_TOO_LARGE`) but accepts `rtos-freertos.bin` with `--bin-base
@@ -205,30 +213,52 @@ lwIP is sized for the MCU by `CONFIG_F429_LWIP_SDRAM` (platform/board/Kconfig):
 counter include (`gtimer_count_get`: aarch64 extern vs CM4 DWT inline) and
 the `MEMP_STATS` override that must survive `MEMP_MEM_MALLOC=1`.
 
-### 5.3 Throughput: measured once, report-only, no table
+### 5.3 Throughput: the four phases (measured 2026-11-15, report-only)
 
-The `stm32f429-wifi-c6t` image then ran the four report-only phases
-(`CONFIG_F429_WIFI_TP=y`: tcpdn / tcpup / udpdn / udpup against the Pi's
-iperf 2.2.1 and the UDP counting sink).  All four moved data in both boots;
-the numbers are samples, not a table:
+The `stm32f429-wifi-c6t` image (736,552 B, sha256 `94e55254…`) runs the four
+throughput phases after the W6 gate in the same boot: `tcpdn` and `tcpup`
+against the Pi's iperf 2.2.1 (the board is lwIP's lwiperf server / client),
+`udpdn` against the board's UDP sink on 5002, `udpup` as a 1470 B datagram
+blast to the Pi's counting sink on 5003. Two boots were measured; the second
+one (boot3, after the harness's UDP anchor was corrected) is the supported
+sample, the first (boot2) gives the cross-check for the two TCP phases:
 
 | phase | board's own count | peer's end-to-end view |
 |---|---|---|
-| tcpdn (Pi->board) | 9.04 MB / 15.0 s = 4.81 Mbit/s | 8.63 MB / 25.5 s = 2.84 Mbit/s |
-| tcpup (board->Pi) | 4.61 MB / 10.0 s = 3.68 Mbit/s | 4.39 MB / 19.9 s = 1.85 Mbit/s |
-| udpdn (Pi->board) | 15.5 MB / 20.3 s = 6.12 Mbit/s, 10,550 pkts, drop=0 | 14.7 MB / 18 s = 6.86 Mbit/s offered |
-| udpup (board->Pi blast) | offered 241 KB / 12 s = 0.16 Mbit/s | sink sample (other boot): 960 KB / 653 pkts arrived, 90% of the 1.07 MB offered (the 12 s blast runs at ~0.64 Mbit/s) |
+| tcpdn (Pi→board) | 9.04 MB / 15.0 s = 4.81 Mbit/s | 8.63 MB / 25.5 s = **2.84 Mbit/s** (boot2: 2.78, 8.63 MB / 26.0 s) |
+| tcpup (board→Pi) | 4.61 MB / 10.0 s = 3.68 Mbit/s | 4.39 MB / 19.9 s = **1.85 Mbit/s** (boot2: 0.36, 917 KB / 21 s) |
+| udpdn (Pi→board) | 15.51 MB / 20.3 s = **6.12 Mbit/s**, 10,550 pkts, **drop=0** | Pi offered 14.7 MB / 18 s = 6.86 Mbit/s, 10,498 datagrams |
+| udpup (board→Pi blast) | offered 241 KB / 12 s = 0.16 Mbit/s | boot2's sink: 960 KB / 653 pkts of the 1.07 MB offered (90%) |
 
-**How to read it**: this board's USB host is **full speed** (12 Mbit/s); a bulk
-transfer tops out near 9.7 Mbit/s, so 6-7 Mbit/s of UDP is the *USB* ceiling
-approaching, not the radio's.  The downlink TCP rate is stable across two boots
-(2.78 / 2.84 Mbit/s); the uplink TCP and the UDP blast are not (0.36 vs 1.85
-Mbit/s, 0.16 vs 0.71 Mbit/s offered), and neither has been explained yet.
-These numbers do not transfer to the RK3568 line (high-speed USB) or to a GT
-arm.  Full record and the harness caveats: `runs/2026-11-15-f429-wifi-tp/`.
+Conditions: bench AP `labwifi-ar-ht20s` ch5 HT20 open (conf sha `2932e5a4…`),
+the board's static address, and the AP's neighbour entry pointing at the
+board's MAC. The peer is the Pi's `iperf 2.2.1`; the UDP sink is
+`tools/rtos/udp-sink.py`. The AP's own capture for the same boot holds the
+whole round (44 echo requests + 44 replies for the gate, then the TCP/UDP
+flows); it stays on the Pi as `/home/pi/f429tp-3/ap.pcap`, sha `c7160b39…`,
+with a compact per-direction ledger in the run record.
+
+**How to read the numbers**: this board's USB host is **full speed**
+(12 Mbit/s signalling; a bulk transfer tops out near 9.7 Mbit/s on this
+controller), so 6–7 Mbit/s of UDP is the *USB link* being approached, not the
+radio's throughput. The downlink TCP rate is stable across the two boots
+(2.78 / 2.84 Mbit/s) and is the one cell that behaves like a rate. The uplink
+TCP (0.36 vs 1.85 Mbit/s) and the UDP blast (0.16 vs 0.71 Mbit/s offered,
+90% delivered when the sink overlapped it) are **not stable and not
+explained**; they are recorded as the next round's target, not as rates.
+These samples do not transfer to the RK3568 line (high-speed USB) or to a GT
+arm — the F429 is a different bus speed on a different host.
+
+Report-only means what it says: there is no throughput gate, the W6 gate is
+the two ICMP rounds above, and these four numbers are samples of one harness
+on one afternoon. The harness defects found while measuring (an anchor fired
+one phase early in the first boot, a sink killed before it wrote its JSON,
+and the console's phase timestamps not being monotonic — only `bytes`/`ms`/
+`kbit` are usable) are listed in the run record so the next round starts from
+a known state.
 
 Profiles: `stm32f429-wifi-c6` (pings, the W6 gate) and
 `stm32f429-wifi-c6t` (`CONFIG_F429_WIFI_TP=y`, the four report-only phases:
 tcp down/up + udp down/up against the Pi's iperf2 and UDP counting arms).
-Throughput stays **report-only and unclaimed**: the W6 gate is the two ICMP
-rounds above, not a number.
+Throughput is **report-only**: measured and recorded in 5.3, but the W6 gate
+is the two ICMP rounds above, not a number.

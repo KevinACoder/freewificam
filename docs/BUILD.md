@@ -263,12 +263,23 @@ the SDRAM is brought up before the kernel (`main.c` calls
 ./make.rtos image PROFILE=stm32f429-sdram      # W0: SDRAM + DMA A/B arm
 ./make.rtos image PROFILE=stm32f429-wifi-c3    # W3: attach
 ./make.rtos image PROFILE=stm32f429-wifi-c4    # W4: scan
-./make.rtos image PROFILE=stm32f429-wifi-c5    # W5: connect (delivery image, 679,024 B)
-mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --verify --reset \
-    --expect "f429_wifi: (PASS W5|FAIL)"
+./make.rtos image PROFILE=stm32f429-wifi-c5    # W5: connect
+./make.rtos image PROFILE=stm32f429-wifi-c6    # W6: connect + lwIP + ICMP (delivery, 726,712 B)
+./make.rtos image PROFILE=stm32f429-wifi-c6t   # W6 + four report-only throughput phases (736,552 B)
+mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --erase sector \
+    --verify --reset --expect "rtos: result"
 ```
 
-`F429_WIFI_STAGE=3|4|5` selects the case stage; `CONFIG_F429_SDRAM` +
-`CONFIG_F429_HEAP_SDRAM` put the FreeRTOS heap (4 MiB) in the FMC SDRAM.
-The c5 image links the shared CherryUSB USB adapter through
-`ports/usb-cherryusb` and the wireless stack with `NET_NONE` until W6.
+`F429_WIFI_STAGE=3|4|5|6` selects the case stage; `CONFIG_F429_SDRAM` +
+`CONFIG_F429_HEAP_SDRAM` put the FreeRTOS heap (4 MiB) in the FMC SDRAM and
+`CONFIG_F429_LWIP_SDRAM` puts lwIP's 255 KiB heap in its own `.sdram.lwip`
+reserve.  The c6 image links the shared CherryUSB USB adapter through
+`ports/usb-cherryusb` and the wireless stack with `NET_LWIP`.
+
+Two diagnostic profiles sit on top of the delivery image and **never ship**:
+`stm32f429-wifi-c6h2c` (`CONFIG_RTL8XXXU_TX_CENSUS=y`: the H2C mailbox
+read-back and the TX-state register census) and `stm32f429-wifi-c6diag`
+(`CONFIG_F429_TICK_PC=y`: the polled-UART tick-hook PC sampler).
+`rk3568-rtl8xxxu-8188eu-c5-census` is the same census on the RK3568 control
+arm (same dongle, same driver).  All three are default-n in Kconfig, so a
+delivery build cannot pick them up by accident.

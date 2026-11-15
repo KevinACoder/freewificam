@@ -108,8 +108,9 @@ RK3568 板控一律用 `skills/rk3568-board`（上电/串口/TFTP/断电），�
   `tests/board/rtos/app/cases/f429_wifi.c`（W1–W6 case，含端口契约探针与 W5/W6 seam）、
   `platform/board/stm32f429-challenger/fmc_sdram.c`、`platform/arch/armv7m/stm32f429.ld`（SDRAM 与组件注册表 KEEP）、
   `wireless-drivers/rtl8xxxu/ports/rtos/rtl8xxxu_diag.c`（描述符 dump/census）。
-- 待验证假设一律不要写成结论；W6 未声称，吞吐未声称。W6 的 gate 设计是
-  ICMP 20×56 + 20×1400 零丢包；吞吐只记录不设门（`CONFIG_F429_WIFI_TP=y` 的四个相位已备好）。
+- 待验证假设一律不要写成结论。W6 已过（2026-11-15 晚，见 §10）：gate 是
+  ICMP 20×56 + 20×1400 各 20/20；吞吐已测、只记录不设门（§10.4，
+  `CONFIG_F429_WIFI_TP=y` 的四个相位）。
 
 ## 9. 停损（W6 再跑两轮没有新观测面就换策略）
 
@@ -162,5 +163,21 @@ RK3568 板控一律用 `skills/rk3568-board`（上电/串口/TFTP/断电），�
 - `CONFIG_RTL8XXXU_TX_CENSUS`（default n）保留为"芯片侧"主张的复核仪器：
   H2C mailbox 读回 `hmtfr=0x00`、芯片普查 `txpause=0/cr/rqpn/rqpn_npq/txrpt/hisr`
   全部正常——本轮用它排掉了 H1/H2。
-- **未做**：c6t 吞吐四相位（report-only，仍未测、未声称）；RK3568 同芯片对照臂
-  （需要把 dongle 挪到 RK，本轮用户不在，延后）；W6 之后的稳定性/长稳。
+- 吞吐已测（§10.4）：交付镜像单 boot 四相位全动，端到端 TCP 下 2.84 /
+  上 1.85 Mbit/s、UDP 下 6.12 Mbit/s 0 丢包；上行不稳（另一 boot 0.36）、
+  UDP blast 的板端投递率不稳，均未解释——这是下一轮的靶子，不是速率声明。
+- **未做**：交付镜像的第 2 个 W6 boot（需整板断电后补，见 §10.1 的 nRST 坑）；
+  RK3568 同芯片对照臂（需要把 dongle 挪到 RK）；W6 之后的稳定性/长稳；
+  上行 TCP 与 UDP blast 的 A/B（固定窗口 / blast 节拍）。
+
+### 10.4 吞吐（report-only，2026-11-15 晚已测）
+
+`stm32f429-wifi-c6t`（736,552 B，sha `94e55254…`）在 W6 gate 之后同 boot 跑
+四相位（tcpdn / tcpup / udpdn / udpup，对端 Pi 的 iperf 2.2.1 + UDP sink）。
+boot3 的端到端（对端视角）：TCP 下 **2.84 Mbit/s**（另一 boot 2.78，稳定）、
+TCP 上 **1.85**（另一 boot 0.36，不稳）、UDP 下 **6.12 Mbit/s / 0 丢包**
+（Pi 发 6.86）、UDP 上 blast 板端 offered 0.16 Mbit/s（另一 boot 0.71，
+收下 90%）。**读法**：F429 的 USB 是全速（bulk 上限 ≈9.7 Mbit/s），6–7 Mbit/s
+是 USB 在被打满，不是空口上限；这些数不迁移到 RK3568/GT。上行不稳未解释，
+是下一轮靶子。判据、台架缺陷与完整原文：`runs/2026-11-15-f429-wifi-tp/RUN.md`、
+`docs/F429-WIFI.md` §5.3、`docs/CONSOLE-EVIDENCE.md`。
