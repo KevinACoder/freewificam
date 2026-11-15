@@ -306,6 +306,50 @@ config RTL8XXXU_AP_ARM_BCN4
 	  mainline's AP path leaves bit4 set.  This arm clears bit4 right after the
 	  start-up beacon so one boot answers whether that is the missing arming.
 
+config RTL8XXXU_TX_CENSUS
+	bool "rtl8xxxu W6 census: H2C read-back and TX state registers (diagnostic)"
+	help
+	  Diagnostic only, never a delivery profile.  The F429 W6 blocker is "the
+	  chip transmits the broadcast ARP and no unicast frame after it", while
+	  the descriptor census shows the two differ only in txdw0[0] and the USB
+	  engine completes every frame.  This config adds two first-party probes
+	  to wireless-drivers/rtl8xxxu/ports/rtos/rtl8xxxu_diag.c:
+
+	    - a -Wl,--wrap around the driver's report_connect() fops callback
+	      that reads REG_HMTFR (the H2C mailbox-full flag) and the four
+	      mailbox registers before and after the call, so one boot says
+	      whether the firmware consumed the media-status report;
+	    - rtl8xxxu_diag_chip_state(), called by the case after association
+	      and around the ping window, printing REG_TXPAUSE, REG_CR,
+	      REG_FWHW_TXQ_CTRL, REG_TRXDMA_CTRL, REG_RQPN/RQPN_NPQ,
+	      REG_TX_REPORT_CTRL and REG_HISR/HISRE - the chip's transmit state
+	      that can differ between the F429 (2 bulk-OUT endpoints) and the
+	      RK3568 control arm (4 endpoints).
+
+	  The same instrument runs on both benches so their lines can be diffed
+	  field by field.  The transmit path itself stays untouched.
+
+config RTL8XXXU_RTSOFF_ARM
+	bool "rtl8xxxu W6 arm: clear the RTS/CTS bits in the first unicast TX descriptors"
+	depends on RTL8XXXU_TX_CENSUS
+	help
+	  Diagnostic arm only.  The unicast data descriptors carry
+	  TXDESC32_RTS_CTS_ENABLE|TXDESC32_HW_RTS_ENABLE and an rts_rate; a chip
+	  that waits for a CTS that never comes transmits nothing.  This arm
+	  clears the two bits in the first four unicast data descriptors so one
+	  boot answers whether the RTS/CTS handshake is what keeps the frames off
+	  the air.
+
+config RTL8XXXU_BMC_ARM
+	bool "rtl8xxxu W6 arm: set the BROADMULTICAST bit on the first unicast TX descriptors"
+	depends on RTL8XXXU_TX_CENSUS
+	help
+	  Diagnostic arm only.  The broadcast ARP is the one data frame that
+	  reaches the air.  This arm sets TXDESC_BROADMULTICAST on the first four
+	  unicast data descriptors (the 802.11 header is untouched, the receiver
+	  stays the AP) so one boot answers whether the chip's unicast path is
+	  gated by the firmware's per-macid state that the broadcast bit bypasses.
+
 config RTL8XXXU_AP_TP
 	bool "rtl8xxxu_ap runs the A4 phase table (throughput verdict image)"
 	help

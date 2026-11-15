@@ -65,6 +65,9 @@ static unsigned int diag_beacon_txdesc;
 static unsigned int diag_beacon_txdesc_len;
 static u32 diag_beacon_txdw1;
 static u8 diag_beacon_macid;
+#if CONFIG_RTL8XXXU_TX_CENSUS
+static unsigned int diag_h2c_calls;
+#endif
 
 static struct rtl8xxxu_priv *
 diag_priv(void *wiphy)
@@ -151,6 +154,100 @@ rtl8xxxu_diag_ap_arm_bcn4(void *wiphy)
 	    (unsigned)before, (unsigned)after);
 }
 
+/* --- the W6 census (CONFIG_RTL8XXXU_TX_CENSUS) ---------------------------- */
+
+/*
+ * The W6 data-plane blocker is "the chip sends the broadcast ARP and no
+ * unicast frame after it".  The descriptor census proves the host side is
+ * identical for the two (only txdw0[0], the BROADMULTICAST bit, differs), so
+ * the question is what the chip does differently.  Two observations answer it:
+ *
+ *   - the H2C media-status report: the driver's own comment says "the firmware
+ *     turns on the rate control when it knows it's connected to a network".
+ *     report_connect() writes one mailbox and the firmware clears REG_HMTFR's
+ *     bit when it reads it, so the read-back separates "written but never
+ *     consumed" from "consumed".
+ *   - the TX state registers: a paused queue (REG_TXPAUSE), the queue-to-DMA
+ *     map (REG_TRXDMA_CTRL), the page split (REG_RQPN/RQPN_NPQ) and the TX
+ *     report arming are the chip-side state that differs between the two
+ *     benches (2 bulk-OUT endpoints here, 4 on the RK3568 arm).
+ *
+ * Both are read-only and both print one line; the case calls chip_state at
+ * three points of the W6 boot.  Never in the transmit path: these are
+ * synchronous USB control transfers and the TX path is not the place for them.
+ */
+#if CONFIG_RTL8XXXU_TX_CENSUS
+
+void
+rtl8xxxu_diag_chip_state(void *wiphy, const char *tag)
+{
+	struct rtl8xxxu_priv *priv;
+	u8 txpause, txrpt, hmtfr;
+	u16 cr, trxdma;
+	u32 fwhw, rqpn, rqnpq, hisr, hisre;
+
+	if (wiphy == NULL)
+		return;
+	priv = diag_priv(wiphy);
+	if (priv == NULL)
+		return;
+
+	hmtfr = rtl8xxxu_read8(priv, REG_HMTFR);
+	txpause = rtl8xxxu_read8(priv, REG_TXPAUSE);
+	cr = rtl8xxxu_read16(priv, REG_CR);
+	fwhw = rtl8xxxu_read32(priv, REG_FWHW_TXQ_CTRL);
+	trxdma = rtl8xxxu_read16(priv, REG_TRXDMA_CTRL);
+	rqpn = rtl8xxxu_read32(priv, REG_RQPN);
+	rqnpq = rtl8xxxu_read32(priv, REG_RQPN_NPQ);
+	txrpt = rtl8xxxu_read8(priv, REG_TX_REPORT_CTRL);
+	hisr = rtl8xxxu_read32(priv, REG_HISR);
+	hisre = rtl8xxxu_read32(priv, REG_HISRE);
+
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "rtl8xxxu_diag: chip tag=%s out_eps=%d ep_tx=%u hmtfr=0x%02x "
+	    "txpause=0x%02x cr=0x%04x fwhw_txq=0x%08x trxdma=0x%04x "
+	    "rqpn=0x%08x rqpn_npq=0x%08x txrpt=0x%02x hisr=0x%08x "
+	    "hisre=0x%08x\n",
+	    tag != NULL ? tag : "-", priv->nr_out_eps,
+	    (unsigned)priv->ep_tx_count, (unsigned)hmtfr, (unsigned)txpause,
+	    (unsigned)cr,
+	    (unsigned)fwhw, (unsigned)trxdma, (unsigned)rqpn,
+	    (unsigned)rqnpq, (unsigned)txrpt, (unsigned)hisr,
+	    (unsigned)hisre);
+}
+
+void __real_rtl8xxxu_gen2_report_connect(struct rtl8xxxu_priv *priv,
+    u8 macid, u8 role, bool connect);
+
+void
+__wrap_rtl8xxxu_gen2_report_connect(struct rtl8xxxu_priv *priv, u8 macid,
+    u8 role, bool connect)
+{
+	u8 before = 0U, after = 0U;
+	u32 mbox[4] = { 0U, 0U, 0U, 0U };
+	unsigned int i;
+
+	if (priv == NULL) {
+		__real_rtl8xxxu_gen2_report_connect(priv, macid, role, connect);
+		return;
+	}
+	before = rtl8xxxu_read8(priv, REG_HMTFR);
+	__real_rtl8xxxu_gen2_report_connect(priv, macid, role, connect);
+	after = rtl8xxxu_read8(priv, REG_HMTFR);
+	for (i = 0U; i < 4U; i++)
+		mbox[i] = rtl8xxxu_read32(priv, (u16)(REG_HMBOX_0 + i * 4U));
+	lkpi_printf(ULOG_INFO_LEVEL,
+	    "rtl8xxxu_diag: h2c n=%u macid=%u role=%u conn=%u "
+	    "hmtfr_before=0x%02x hmtfr_after=0x%02x next=%d "
+	    "mbox0=0x%08x mbox1=0x%08x mbox2=0x%08x mbox3=0x%08x\n",
+	    diag_h2c_calls++, (unsigned)macid, (unsigned)role,
+	    connect ? 1U : 0U, (unsigned)before, (unsigned)after,
+	    priv->next_mbox, (unsigned)mbox[0], (unsigned)mbox[1],
+	    (unsigned)mbox[2], (unsigned)mbox[3]);
+}
+
+#endif /* CONFIG_RTL8XXXU_TX_CENSUS */
+
 /* --- the two shims -------------------------------------------------------- */
 
 struct sk_buff *__real_ieee80211_beacon_get_tim(struct ieee80211_hw *hw,
@@ -192,8 +289,9 @@ __wrap_rtl8xxxu_fill_txdesc_v3(struct ieee80211_hw *hw,
 			diag_data_txdesc++;
 		/* The first frames of the W6 data path: the descriptor the chip
 		 * accepts for the one frame that reaches the air and for the ones
-		 * that do not.  Bounded to six, one line each. */
-		if (diag_data_dumped < 6U) {
+		 * that do not.  Bounded to sixteen, one line each, so the broadcast
+		 * ARP and the unicast frames that follow it are both in the record. */
+		if (diag_data_dumped < 16U) {
 			diag_data_dumped++;
 			dev_info(&priv->udev->dev,
 				 "rtl8xxxu_txdump: #%u/%u fc=%04x da=%02x:%02x:%02x:%02x:%02x:%02x len=%u off=%u txdw0=%08x txdw1=%08x txdw2=%08x txdw3=%08x txdw4=%08x txdw5=%08x q=%u macid=%u rate=%u\n",

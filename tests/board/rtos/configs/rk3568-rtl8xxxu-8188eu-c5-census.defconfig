@@ -1,0 +1,36 @@
+# rtl8xxxu on the RTOS line, C5-census: the C5 arm plus the W6 chip census.
+# Same image as rk3568-rtl8xxxu-8188eu-c5 plus CONFIG_RTL8XXXU_TX_CENSUS,
+# the F429 W6 control arm: same dongle, same driver, same instrument.
+# rtl8xxxu on the RTOS line, C5/C6-open: C4's scan plus NL80211_CMD_CONNECT ->
+# cfg80211 connected -> the lwIP netif over wlan0 -> 56 B / 1400 B ICMP both
+# ways, with the link held open for the host's AP->board ping arm.
+#
+# The window (CONFIG_RTL8XXXU_C5_PEER_WINDOW_MS=12000) is the host arm's: the Pi
+# pings the board and dumps its station inside it, before the case's own pings.
+# The driver + stack are a GPL-2.0 link product that also redistributes the
+# Realtek rtl8188eu firmware image (docs/LICENSES.md).
+#
+# What this profile is not: the C6 throughput table, WPA2, the AP role or
+# monitor - they are later rounds, and the RUN record names them.
+
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_HEAP_SIZE=16
+CONFIG_CASES="tick rtl8xxxu_c5"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_FREERTOS_HEAP_SIZE=16777216
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=32768
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=16
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_RTL8XXXU_C5_PEER_WINDOW_MS=12000
+CONFIG_RTL8XXXU_USB_BUS=0
+
+# W6 census (diagnostic, see app/Kconfig): the F429 W6 control arm.
+CONFIG_RTL8XXXU_TX_CENSUS=y

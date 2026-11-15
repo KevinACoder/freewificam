@@ -187,6 +187,14 @@ WL80211_LDFLAGS += \
 	-Wl,--wrap=rtl8xxxu_fill_txdesc_v3
 endif
 
+# The W6 census wraps the driver's report_connect() fops callback (the media
+# status H2C).  Its body in rtl8xxxu_diag.c is compiled under the same config,
+# so the two halves move together: a flag without the body fails the link, a
+# body without the flag observes nothing.
+ifeq ($(CONFIG_RTL8XXXU_TX_CENSUS),1)
+WL80211_LDFLAGS += -Wl,--wrap=rtl8xxxu_gen2_report_connect
+endif
+
 # The hostapd AP stack (third-party/wpa_supplicant-rtos) and its platform bottom: hostapd's
 # own headers and OS abstraction, so it compiles in its own flag world.  The
 # two files of this round that touch the Linux face (hostap_nl80211.c,

@@ -91,6 +91,29 @@ void lkpi_usb_cherryusb_init(void);
 
 static char fw_line[160];
 
+/*
+ * W6 census (CONFIG_RTL8XXXU_TX_CENSUS): the chip's transmit state, read at
+ * three points of the data-plane boot.  The unit lives in the driver world
+ * (rtl8xxxu_diag.c) and takes the wiphy as an opaque pointer; this case only
+ * owns the call sites, so the delivery images compile it out.
+ */
+#if CONFIG_RTL8XXXU_TX_CENSUS
+extern void rtl8xxxu_diag_chip_state(void *wiphy, const char *tag);
+
+static void
+f429_wifi_chip_state(struct net_device *dev, const char *tag)
+{
+	struct wireless_dev *wdev;
+
+	if (dev == NULL)
+		return;
+	wdev = dev->ieee80211_ptr;
+	if (wdev == NULL || wdev->wiphy == NULL)
+		return;
+	rtl8xxxu_diag_chip_state(wdev->wiphy, tag);
+}
+#endif
+
 /* System-workqueue probe: cfg80211 drives the post-authentication association
  * from a plain schedule_work() (wireless/sme.c: cfg80211_conn_work).  A work
  * queued here and never run is the difference between "the stack did not ask"
@@ -816,6 +839,11 @@ found:
 		}
 
 		/* Warm-up: the first echo may race the netif's neighbour setup. */
+		/* The chip state the association left behind: the media-status H2C
+		 * went out during BSS_CHANGED_ASSOC, a few ms before this line. */
+#if CONFIG_RTL8XXXU_TX_CENSUS
+		f429_wifi_chip_state(dev, "post-assoc");
+#endif
 		for (warm = 0U; warm < 20U; warm++) {
 			CASE_ANCHOR("f429_wifi: ping warmup call=%u\n",
 				    warm + 1U);
@@ -823,12 +851,27 @@ found:
 					   &rx, &rmin, &ravg, &rmax);
 			CASE_ANCHOR("f429_wifi: ping warmup ret=%d rx=%u\n",
 				    rc, rx);
+			/* Right after the first data frame went through the driver:
+			 * the H2C mailbox flag a few hundred ms after the media-status
+			 * write, i.e. whether the firmware consumed it.  Bounded to the
+			 * first attempt so the console keeps one early snapshot. */
+			if (warm == 0U) {
+#if CONFIG_RTL8XXXU_TX_CENSUS
+				f429_wifi_chip_state(dev, "early");
+#endif
+			}
 			if (rc == 0 && rx == 1U)
 				break;
 			osDelay(250U);
 		}
 		CASE_ANCHOR("f429_wifi: ping warmup tries=%u rx=%u rc=%d irq_storm=%u\n",
 			    warm + 1U, rx, rc, usb_board_irq_storm_get());
+		/* The same registers after a few seconds of data frames: the
+		 * before/after pair separates "association state" from "the chip
+		 * changed state once the first data frames went through". */
+#if CONFIG_RTL8XXXU_TX_CENSUS
+		f429_wifi_chip_state(dev, "mid");
+#endif
 		{
 			extern void rtl8xxxu_diag_tx_counts(unsigned int *t,
 							    unsigned int *d);
@@ -870,6 +913,10 @@ found:
 		else
 			CASE_ANCHOR("f429_wifi: FAIL ping small=%u big=%u\n",
 				    small_rx, big_rx);
+#if CONFIG_RTL8XXXU_TX_CENSUS
+		/* Last snapshot: 40 counted echoes and 20 warm-up tries later. */
+		f429_wifi_chip_state(dev, "end");
+#endif
 
 #if CONFIG_F429_WIFI_TP
 		/* Report-only throughput.  Each phase waits for its peer inside

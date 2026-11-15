@@ -93,6 +93,29 @@ void lkpi_log_sink_register(void (*sink)(ulog_level_t level, const char *line));
 void lkpi_usb_cherryusb_init(void);
 void usb_osal_timer_service_start(void);
 
+/*
+ * The F429 W6 control arm (CONFIG_RTL8XXXU_TX_CENSUS): this bench drives the
+ * same RTL8188EUS with the same driver, so it prints the same chip-state lines
+ * and the two boots can be diffed field by field.  Compiled out of every
+ * delivery profile; the unit itself lives in the driver world.
+ */
+#if CONFIG_RTL8XXXU_TX_CENSUS
+extern void rtl8xxxu_diag_chip_state(void *wiphy, const char *tag);
+
+static void
+c5_chip_state(struct net_device *dev, const char *tag)
+{
+	struct wireless_dev *wdev;
+
+	if (dev == NULL)
+		return;
+	wdev = dev->ieee80211_ptr;
+	if (wdev == NULL || wdev->wiphy == NULL)
+		return;
+	rtl8xxxu_diag_chip_state(wdev->wiphy, tag);
+}
+#endif
+
 #if CONFIG_RTL8XXXU_USB_BUS == 0
 static const unsigned int c5_buses[] = { 3U, 2U };
 #define C5_BUS_LIST_TXT	"3,2"
@@ -386,6 +409,11 @@ found:
 	 * handler, not a stack field poke. */
 	rc = lkpi_nl80211_set_power_save(dev, 0);
 	CASE_ANCHOR("rtl8xxxu_c5: power save off rc=%d\n", rc);
+#if CONFIG_RTL8XXXU_TX_CENSUS
+	/* The control arm's post-association snapshot: on the RK bench this is
+	 * the known-good value the F429 boot is diffed against. */
+	c5_chip_state(dev, "post-assoc");
+#endif
 
 	/* The GT arm waits for its neighbour before its 20-packet round; the
 	 * RTOS link needs the same bench step.  The first ~2 s after netif up
@@ -469,6 +497,11 @@ found:
 		    diag.rx_frames, diag.tx_frames, diag.rx_bytes, diag.tx_bytes,
 		    diag.tx_fail);
 	c5_tx_feedback(&th0);
+#if CONFIG_RTL8XXXU_TX_CENSUS
+	/* After both counted rounds: the same registers the F429 arm prints at
+	 * its "end" point, so the two transcripts line up. */
+	c5_chip_state(dev, "post-ping");
+#endif
 	CASE_ANCHOR("rtl8xxxu_c5: PASS C6\n");
 	CASE_ANCHOR("rtl8xxxu_c5: PASS\n");
 	return 0;
