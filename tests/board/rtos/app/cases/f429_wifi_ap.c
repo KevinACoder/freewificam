@@ -598,6 +598,10 @@ case_f429_wifi_ap_run(void)
 	CASE_ANCHOR("f429_wifi_ap: link freq=%d\n", freq);
 	rtl8xxxu_diag_ap_state(wdev->wiphy);
 	rtl8xxxu_diag_beacon_counters();
+	/* The receive ledger right after the interface is up: the management
+	 * frames of the peer's scan/join never reached the MLME in the first
+	 * boots, and these counters say whether the URBs complete at all. */
+	ap_usb_ledger();
 	CASE_ANCHOR("f429_wifi_ap: PASS A1\n");
 
 	/* --- A2: serve the MLME until the stack has the station -------------- */
@@ -619,6 +623,7 @@ case_f429_wifi_ap_run(void)
 	if (sta_n == 0U) {
 		CASE_ANCHOR("f429_wifi_ap: FAIL no station after %u ms\n",
 			    F429_AP_STA_WAIT_MS);
+		ap_usb_ledger();
 		return 11;
 	}
 	CASE_ANCHOR("f429_wifi_ap: PASS A2\n");
