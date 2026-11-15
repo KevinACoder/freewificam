@@ -759,6 +759,21 @@ void usb_free_urb(struct urb *urb);
  * slot twice while the endpoint's next claim is still refused by the
  * done_urb check in lkpi_usb_kick.
  */
+/*
+ * Wake the drain thread from whichever context produced the completion.  On
+ * the PCIe/xHCI port the completion runs in a threaded IRQ, so the CMSIS
+ * semaphore give is legal; on a DWC2 hard-IRQ port it is not (FreeRTOS wants
+ * xSemaphoreGiveFromISR, and the plain give corrupts the scheduler state - the
+ * STM32F429 W6 wedge).  The platform therefore overrides this weak default.
+ */
+void lkpi_usb_done_wake(osSemaphoreId_t sem) __attribute__((weak));
+
+void
+lkpi_usb_done_wake(osSemaphoreId_t sem)
+{
+	(void)osSemaphoreRelease(sem);
+}
+
 static void
 lkpi_usb_done_list_add(struct lkpi_usb_ep *ep)
 {
@@ -779,7 +794,7 @@ lkpi_usb_done_list_add(struct lkpi_usb_ep *ep)
 	lkpi_usb_done_tail = ep;
 	ep->done_listed = true;
 	osCriticalExit(csr);
-	(void)osSemaphoreRelease(lkpi_usb_done_sem);
+	lkpi_usb_done_wake(lkpi_usb_done_sem);
 }
 
 static void

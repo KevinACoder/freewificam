@@ -308,6 +308,18 @@ fw_sink(ulog_level_t level, const char *line)
 
 	if (line == NULL)
 		return;
+	/* Never take the console from an exception context: the driver logs from
+	 * its USB completion, which on this board runs in the OTG_HS hard IRQ,
+	 * and the console outlet's lock is a blocking CMSIS mutex.  A print there
+	 * wedges the machine (the W6 data-frame wedge, intermittently, depending
+	 * on whether the interrupted thread held the console). */
+	{
+		unsigned int ipsr;
+
+		__asm__ __volatile__("mrs %0, ipsr" : "=r"(ipsr));
+		if (ipsr != 0U)
+			return;
+	}
 	if (strstr(line, "Firmware revision") != NULL) {
 		strncpy(fw_line, line, sizeof(fw_line) - 1U);
 		fw_line[sizeof(fw_line) - 1U] = '\0';

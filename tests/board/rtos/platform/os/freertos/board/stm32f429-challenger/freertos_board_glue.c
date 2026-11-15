@@ -11,6 +11,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 
 #include "os/cmsis2/cmsis2.h"
 #include "cmsis_board_device.h"
@@ -51,6 +52,28 @@ void vApplicationTickHook( void )
 extern unsigned char __lwip_heap[];
 void *lkpi_lwip_heap_ptr = (void *)__lwip_heap;
 #endif
+
+/*
+ * The USB completion wake.  On this board the DWC2 completion is produced in
+ * the OTG_HS hard IRQ (third-party/cherryusb/port/dwc2/usb_hc_dwc2.c), so the
+ * drain-thread semaphore must be given with the FromISR form: the plain
+ * osSemaphoreRelease/xSemaphoreGive manipulates the ready lists and corrupts
+ * the scheduler when called from an exception (the W6 data-frame wedge).
+ * The CMSIS-FreeRTOS adapter returns the FreeRTOS handle itself, so the cast
+ * is the interface's own representation.
+ */
+void lkpi_usb_done_wake( osSemaphoreId_t sem );
+
+void lkpi_usb_done_wake( osSemaphoreId_t sem )
+{
+    if ( __get_IPSR() != 0U ) {
+        BaseType_t woken = pdFALSE;
+        (void)xSemaphoreGiveFromISR( (SemaphoreHandle_t)sem, &woken );
+        portYIELD_FROM_ISR( woken );
+        return;
+    }
+    (void)osSemaphoreRelease( sem );
+}
 
 void vAssertCalled( const char *file, unsigned long line )
 {
