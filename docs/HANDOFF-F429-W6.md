@@ -118,3 +118,49 @@ RK3568 板控一律用 `skills/rk3568-board`（上电/串口/TFTP/断电），�
   （例如经 hub 或换 EHCI 板），把"全速 OTG_HS + CherryUSB 引擎"这个变量摘掉。
 - 任何新结论必须落 `runs/<date>-<topic>/<boot>/` 四件套 + 更新 `docs/F429-WIFI.md` 与
   `CONSOLE-EVIDENCE.md`；不要把"编译过/链接过"写成"能传"。
+
+## 10. 2026-11-15 晚：W6 已打通 —— 本 HANDOFF 的主假设被推翻（新会话说先读这一节）
+
+**判词：W6 PASS（今日实测）**：census 镜像 2/2（boot11/boot12）；交付镜像 1/2
+（boot13 PASS，第 2 boot 被 §10.2 的 nRST 环境坑挡在扫描阶段，需整板断电后补一次）。
+证据与命令：`runs/2026-11-15-f429-wifi-w6b/RUN.md`；交付镜像
+`stm32f429-wifi-c6`，726,712 B，sha256 `42beedc00ed38d038dc7d09baa3d04edbcea6d377bc8cb70b4e91c7d439387fa`。
+
+### 10.1 真正的两个 blocker（都不在驱动/芯片里）
+
+1. **台架：AP 上一条永久错误 ARP 表项**。Kali AP 把 `192.168.99.2` 永久映射到
+   `88:e6:28:53:10:9c`（不是板子 MAC `20:f4:1b:52:8f:01`）：
+   `ip neigh` 显示 `PERMANENT`。于是板子的 echo request 到了 AP、AP 也回了，
+   但回包按错 MAC 发出 → 板子 `rx=0` → 看起来像"数据面不通"。
+   修法：`ip neigh replace 192.168.99.2 lladdr 20:f4:1b:52:8f:01 dev wlan2 nud permanent`。
+   **推论：本文 §3 的"空口只到第一帧"、§4 的 H2C 主假设、§5/§6 的实验全部作废**：
+   那些 boot 里板子的单播帧其实是能上空口的（AP 侧 tcpdump 抓得到），
+   `net_rx=1` 的 ARP reply 是唯一按 request 内 sender MAC 回包、所以能到板子的帧。
+   **MT7921AU monitor 在本台架上看不到 F429 的帧**（同一 boot：AP 侧 44 请求/44 回包，
+   monitor 里板子 MAC 0 帧），所以"monitor 只看到 1 个 data frame"是仪器假象；
+   空口真值以 AP 内核 `tcpdump -i wlan2` 为准。
+2. **平台：armv7m 的 console 打印锁没有关中断**。`platform/os/baremetal/log.c`
+   的 `print_lock_take()` 在 aarch64 分支会关中断再拿锁（注释写明防 ISR 自旋死锁），
+   armv7m 分支却是裸 `while (print_try_lock())`、不关中断也不让出。console 是
+   115200 轮询 UART（一行 5–9 ms），任何更高优先级任务/ISR 在这个窗口打印就会
+   自旋，把持锁者饿死：tick 在走、CPU 100% 在 `print_try_lock`、控制台停在半行、
+   无 `fatal:`。**这就是前两轮追的"硬 wedge"**。修法：armv7m 按 aarch64 语义
+   保存 `PRIMASK`、`cpsid i` 拿锁、`cpsie i` 精确恢复。
+   tick-PC 采样器（`CONFIG_F429_TICK_PC`）在 wedge 时全部采样到
+   `print_try_lock`（`log.c:147`），直接点名。
+
+### 10.2 另一个必须记住的环境事实
+
+**MCU nRST 不重置 8188EUS**：卡死镜像跑久之后，新 boot 的所有 RX bulk IN 以
+`-EIO` 完成（`rx_complete: status -5`、`rx_err=32`），扫描/关联全废；
+**已知-good 的 c5 镜像同样失败**（boot4），整板断电重启后恢复（c5 PASS W4/W5）。
+所以：前一个镜像 wedge 过时，烧录前先整板断电（F429 的 USB-A VBUS 是硬 5V）。
+
+### 10.3 仍然成立/仍待做
+
+- W0–W5 的判据与坑（§2）不变；§7 的 F429 环境速查不变。
+- `CONFIG_RTL8XXXU_TX_CENSUS`（default n）保留为"芯片侧"主张的复核仪器：
+  H2C mailbox 读回 `hmtfr=0x00`、芯片普查 `txpause=0/cr/rqpn/rqpn_npq/txrpt/hisr`
+  全部正常——本轮用它排掉了 H1/H2。
+- **未做**：c6t 吞吐四相位（report-only，仍未测、未声称）；RK3568 同芯片对照臂
+  （需要把 dongle 挪到 RK，本轮用户不在，延后）；W6 之后的稳定性/长稳。

@@ -1410,6 +1410,54 @@ hypothesis is a console-lock interaction rather than a plain hang. The
 and its absence does not change the wedge. Full record:
 `runs/2026-11-15-f429-wifi-w6/RUN.md`.
 
+### STM32F429 wi-fi W6 data plane - PASS (2026-11-15 evening)
+
+The round that closed W6. Two blockers were outside the driver and outside the
+chip: a stale PERMANENT ARP entry on the AP (all replies went to
+`88:e6:28:53:10:9c`, not to the board) and the armv7m console print lock, which
+had no interrupt masking and spun forever whenever a higher-priority printer
+preempted the holder. With both fixed, one boot (`boot13`, delivery image
+`42beedc0...`):
+
+```
+[   6.635] f429_wifi: lkpinetif: rx#1 dev=wlan0(ours) bound=wlan0 proto=0x0806 len=28 data=00010800
+[   6.693] f429_wifi: lkpinetif: rx#2 dev=wlan0(ours) bound=wlan0 proto=0x0800 len=36 data=45000024
+[   7.308] f429_wifi: ping warmup ret=0 rx=1
+[   8.620] f429_wifi: ping small tx=20 rx=20 payload=56 rtt_ms=4/6/10 rc=0
+[   9.596] f429_wifi: ping big tx=20 rx=20 payload=1400 rtt_ms=6/10/29 rc=0
+[   9.607] f429_wifi: net rx_frames=45 tx_frames=45 rx_bytes=31090 tx_bytes=31090
+[   9.617] f429_wifi: PASS W6
+[   9.654] rtos: result pass cases=1/1 backend=freertos
+```
+
+AP-side ledger for the same boot (`tcpdump -i wlan2 icmp`): 44 echo requests
+and 44 echo replies, from/to `20:f4:1b:52:8f:01`, payload split 3 x 16 B
+(warmup), 21 x 64 B, 20 x 1408 B - exactly the case's traffic. The MT7921AU
+monitor on this bench shows none of those frames (0 packets with the board's
+MAC), so the AP kernel's capture is the air truth for this line, not the
+monitor.
+
+The wedge's mechanism, named by the tick-PC sampler (`CONFIG_F429_TICK_PC`,
+polled UART): every sample during the freeze sat in `print_try_lock`
+(`platform/os/baremetal/log.c:147`) while the tick kept advancing - a
+console-lock spin, not a fault.
+
+```
+tickpc: tick=000370dc pc=0x08000a7c
+tickpc: tick=000372d0 pc=0x08000a86
+...
+```
+
+Census instrumentation that carried the "chip state is normal" half of the
+proof (`CONFIG_RTL8XXXU_TX_CENSUS`, default n):
+
+```
+rtl8xxxu_diag: h2c n=0 macid=0 role=2 conn=1 hmtfr_before=0x00 hmtfr_after=0x00 next=1 mbox0=0x00002101 ...
+rtl8xxxu_diag: chip tag=post-assoc out_eps=2 ep_tx=2 hmtfr=0x00 txpause=0x00 cr=0x06ff fwhw_txq=0x7f301f80 trxdma=0xfaf0 rqpn=0x00630029 rqpn_npq=0x00001c1c txrpt=0x33 hisr=0x00000000 hisre=0x00000000
+```
+
+Full record: `runs/2026-11-15-f429-wifi-w6b/RUN.md`.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the

@@ -118,39 +118,84 @@ Traps:
    `--wrap=cfg80211_sme_rx_auth`, `--wrap=cfg80211_mlme_assoc`); it is not a
    stack anchor, and it is linked only into the `f429_wifi` image.
 
-## 5. W6 (data plane) — in progress, one named blocker
+## 5. W6 (data plane) — **PASS** (2026-11-15 evening)
 
-The `stm32f429-wifi-c6` image (725,640 B, sha256 `9ed827d7fd0f2f05…`) adds the
-lwIP egress to the W5 image. It builds and boots; W3/W4/W5 still pass in the
-same boot and the netif comes up over wlan0 with the lab's static address:
+**W6 is met**: one boot of the delivery image `stm32f429-wifi-c6` (726,712 B,
+sha256 `42beedc00ed38d038dc7d09baa3d04edbcea6d377bc8cb70b4e91c7d439387fa`, the
+W5 image plus the lwIP egress and the two platform fixes below) runs the full
+gate, and the AP's own kernel is the receiver of record:
 
 ```
-f429_wifi: netif up rc=0 ip=192.168.99.2/24 mac=20:f4:1b:52:8f:01
-f429_wifi: ping warmup call=1
-rtl8xxxu_fill_txdesc_v3: TX rate: 19, pkt size 62     <- the ARP request
-<console stops>
+[   7.308] f429_wifi: ping warmup ret=0 rx=1
+[   8.620] f429_wifi: ping small tx=20 rx=20 payload=56  rtt_ms=4/6/10   rc=0
+[   9.596] f429_wifi: ping big   tx=20 rx=20 payload=1400 rtt_ms=6/10/29  rc=0
+[   9.607] f429_wifi: net rx_frames=45 tx_frames=45 rx_bytes=31090 tx_bytes=31090
+[   9.617] f429_wifi: PASS W6
+[   9.627] f429_wifi: usb submits=171 completes=170 refused=0 stage_overflow=0
+           slots_exhausted=0 rx=122 rx_err=0 tx=48 tx_err=0
+[   9.654] rtos: result pass cases=1/1 backend=freertos
 ```
 
-So the first data frame (a 62-byte ARP) reaches the driver's descriptor fill
-and then the whole system wedges: no fault trace, no further anchor, 4/4
-boots at the same point. An A-MPDU-off arm (`--wrap=ieee80211_start_tx_ba_session`
-returning `-EINVAL`) removed the `ampdu_action: IEEE80211_AMPDU_TX_START`
-line and still wedged one line later, so the BA session start is not the
-trigger. The prime suspect is the port's own documented trap
-(`third-party/lwip/ports/lkpinetif_lwip.c:79`, "LOCK_TCPIP_CORE() waits
-forever"): the lwIP core lock is held across the driver's synchronous USB
-control transfers in the TX path; a control transfer whose completion needs
-the deferred path, while the receive worker waits on the same core lock,
-deadlocks. With a heartbeat thread and the USB interrupt-storm guard in the image the
-first "console stops" wedge does not reproduce; the system now reports its own
-state (`hb stat`: `net_rx=1 net_tx=44`, tx completions growing) while the AP
-reports the station inactive for 29 s and a 40 s ch5 monitor capture sees
-exactly **one data frame** on air from the board. So the blocker narrowed to
-"the chip transmits only the first data frame": the USB path accepts and
-completes every frame, lwIP sends, and nothing further reaches the air; the
-A-MPDU-off arm changed nothing. The next experiments (TX descriptor dump of
-the first vs second data frame, the 8188EU TX page/C2H report path, and an
-EP2/EP3 endpoint A/B) are listed in `runs/2026-11-15-f429-wifi-w6/RUN.md`.
+AP-side `tcpdump -i wlan2 icmp` for the same boot: **44 echo requests + 44 echo
+replies** from/to `20:f4:1b:52:8f:01` (3 warmup 8 B, 21 x 56 B, 20 x 1400 B — the
+case's exact traffic), i.e. every counted ping was on air and answered.
+
+**Repeat count, stated exactly**: the census image (same W6 code path, plus the
+read-only census) is **2/2** (`boot11`+`boot12`); the delivery image is **1/2**
+(`boot13`), because the second boot ran into the platform trap recorded in `AGENTS.md` section 4.1 -
+an MCU reset does not reset the 8188EUS, so a device left in a stuck bulk-IN
+state fails at the *scan* with `rx_err=32` before W6 is reached.  A board power
+cycle followed by one more boot is the outstanding step; it is an environment
+action, not an image change.  Evidence: `runs/2026-11-15-f429-wifi-w6b/`.
+
+### 5.1 What the two real blockers were (both outside the driver)
+
+The previous round's reading — "the chip transmits only the first data frame",
+with the H2C media-status report as the prime suspect — is **retracted**. Three
+independent measurements killed it: the H2C mailbox was written and read back
+clear (`h2c n=0 … hmtfr_before=0x00 hmtfr_after=0x00 mbox0=0x00002101`), the
+per-chip TX census read normal (`txpause=0`, `CR` TX/RX enabled, `RQPN` =
+hi 41 / pubq 99 pages, no pending `HISR`), and — decisively — the board's
+**unicast** data frames were on air all along once the bench was healthy.
+
+1. **Bench: a stale PERMANENT ARP entry on the AP.** The Kali AP mapped the
+   board's static address to a wrong MAC:
+   `192.168.99.2 dev wlan2 lladdr 88:e6:28:53:10:9c PERMANENT`, while the board
+   is `20:f4:1b:52:8f:01`. Every ICMP reply was therefore sent to a station that
+   does not exist: the board's request reached the AP (its own capture proves
+   it), the AP answered, the board's `rx` stayed 0 and the case kept retrying.
+   `ip neigh replace 192.168.99.2 lladdr 20:f4:1b:52:8f:01 dev wlan2 nud permanent`
+   fixed it; the next boot received the ARP reply and the echo reply
+   (`lkpinetif: rx#1 … proto=0x0806`, `rx#2 … proto=0x0800`).
+   The MT7921AU monitor on this bench **does not see the F429's frames** (0
+   frames from the board's MAC while the AP's own tcpdump had all of them), so
+   the earlier "the monitor saw exactly one data frame" was an instrument
+   artifact; the air truth for this line is the AP kernel's capture.
+2. **Platform: the console print lock had no interrupt masking on armv7m.**
+   `platform/os/baremetal/log.c`'s `print_lock_take()` masks IRQs for the hold
+   on aarch64 (with the comment naming the exact deadlock), but the armv7m
+   branch was a bare spin with IRQs enabled. The console is a polled 115200 UART
+   (~5-9 ms per line); anything that preempted the holder and printed — a
+   higher-priority task or an ISR — spun in `print_try_lock` forever and starved
+   the holder: the tick kept running, the CPU sat 100% in that loop, the console
+   froze mid-line and no fault was taken. That is the "hard wedge, no fault
+   line" this line had been chasing for two rounds. The fix mirrors the aarch64
+   semantics on armv7m (save PRIMASK, `cpsid i` for the hold, restore exactly on
+   release). The tick-PC sampler (`CONFIG_F429_TICK_PC`) named the loop:
+   `tickpc: tick=… pc=0x08000a72` → `print_try_lock` (`log.c:147`).
+
+### 5.2 The census instrumentation kept
+
+`CONFIG_RTL8XXXU_TX_CENSUS` (default n, never in a delivery profile) adds, in
+`wireless-drivers/rtl8xxxu/ports/rtos/rtl8xxxu_diag.c`:
+a `-Wl,--wrap=rtl8xxxu_gen2_report_connect` that reads `REG_HMTFR` and the four
+H2C mailboxes before/after the media-status write, and
+`rtl8xxxu_diag_chip_state()` (read-only: `TXPAUSE`, `CR`, `FWHW_TXQ_CTRL`,
+`TRXDMA_CTRL`, `RQPN`, `RQPN_NPQ`, `TX_REPORT_CTRL`, `HISR/HISRE`), called by
+the case after association and around the ping window. It gave the "chip state
+is normal" half of the proof above and is the A/B instrument for any future
+"chip side" claim. The per-frame descriptor dump was widened from 6 to 16
+frames so a unicast frame's descriptor is always in the record.
 
 lwIP is sized for the MCU by `CONFIG_F429_LWIP_SDRAM` (platform/board/Kconfig):
 `MEM_SIZE` 255 KiB in the linker's `.sdram.lwip` reserve, `MEMP_MEM_MALLOC=1`
@@ -163,5 +208,5 @@ the `MEMP_STATS` override that must survive `MEMP_MEM_MALLOC=1`.
 Profiles: `stm32f429-wifi-c6` (pings, the W6 gate) and
 `stm32f429-wifi-c6t` (`CONFIG_F429_WIFI_TP=y`, the four report-only phases:
 tcp down/up + udp down/up against the Pi's iperf2 and UDP counting arms).
-Until the TX wedge is fixed neither gate is met and no throughput number is
-claimed.
+Throughput stays **report-only and unclaimed**: the W6 gate is the two ICMP
+rounds above, not a number.
