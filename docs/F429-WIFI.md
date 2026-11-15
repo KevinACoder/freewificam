@@ -141,7 +141,16 @@ trigger. The prime suspect is the port's own documented trap
 forever"): the lwIP core lock is held across the driver's synchronous USB
 control transfers in the TX path; a control transfer whose completion needs
 the deferred path, while the receive worker waits on the same core lock,
-deadlocks. Next experiments and the full record: `runs/2026-11-15-f429-wifi-w6/RUN.md`.
+deadlocks. With a heartbeat thread and the USB interrupt-storm guard in the image the
+first "console stops" wedge does not reproduce; the system now reports its own
+state (`hb stat`: `net_rx=1 net_tx=44`, tx completions growing) while the AP
+reports the station inactive for 29 s and a 40 s ch5 monitor capture sees
+exactly **one data frame** on air from the board. So the blocker narrowed to
+"the chip transmits only the first data frame": the USB path accepts and
+completes every frame, lwIP sends, and nothing further reaches the air; the
+A-MPDU-off arm changed nothing. The next experiments (TX descriptor dump of
+the first vs second data frame, the 8188EU TX page/C2H report path, and an
+EP2/EP3 endpoint A/B) are listed in `runs/2026-11-15-f429-wifi-w6/RUN.md`.
 
 lwIP is sized for the MCU by `CONFIG_F429_LWIP_SDRAM` (platform/board/Kconfig):
 `MEM_SIZE` 255 KiB in the linker's `.sdram.lwip` reserve, `MEMP_MEM_MALLOC=1`

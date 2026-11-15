@@ -150,7 +150,8 @@ ifneq ($(filter f429_wifi,$(CASES)),)
 WL80211_LDFLAGS += -Wl,--wrap=cfg80211_sme_rx_auth \
 	-Wl,--wrap=cfg80211_mlme_assoc \
 	-Wl,--wrap=ieee80211_scan_completed \
-	-Wl,--wrap=ieee80211_sta_work
+	-Wl,--wrap=ieee80211_sta_work \
+	-Wl,--wrap=ieee80211_start_tx_ba_session
 endif
 
 WL80211_LDFLAGS += -Wl,--wrap=ieee80211_tx_dequeue \

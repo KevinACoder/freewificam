@@ -27,6 +27,8 @@
 #include "board_conf.h"
 #include "log.h"
 
+#include "os/cmsis2/cmsis2.h"
+
 #include "usbh_core.h"
 #include "usbh_hub.h"
 #include "usb_dwc2_param.h"
@@ -227,8 +229,68 @@ void dwc2_get_user_params(uint32_t reg_base, struct dwc2_user_params *params)
 	params->total_fifo_size = 1024;
 }
 
+/*
+ * Interrupt-storm guard.  The OTG_HS line is level-triggered: a channel whose
+ * HCINT/HAINT is not acknowledged re-arms it immediately and the handler
+ * re-enters forever, so no thread runs again and the console stops mid-line.
+ * That is the shape of the 2026-11-15 W6 data-frame wedge.  Past a ceiling
+ * that no legitimate full-speed transfer can produce in one tick, the glue
+ * masks the line and records why, so the failure is named and the threads
+ * (the case's watchdog among them) can print the channel state.
+ */
+volatile unsigned int usb_board_irq_storm;
+unsigned int usb_board_irq_storm_get(void)
+{
+	return usb_board_irq_storm;
+}
+
+static volatile uint32_t usb_irq_burst_tick;
+static volatile uint32_t usb_irq_burst;
+
+#define USB_IRQ_STORM_BURST	2000U
+
+/* The DWC2 host registers this dump reads, by the controller's own offsets
+ * (RM0090 35.6): GINTSTS 0x14, HAINT 0x518, HAINTMSK 0x51C, HCCHAR 0x500,
+ * HCINT 0x508, HCINTMSK 0x50C, HCTSIZ 0x510 (0x20 per channel). */
+void usb_board_dwc2_dump(void)
+{
+	volatile uint32_t *base = (volatile uint32_t *)USB_OTG_HS_BASE;
+	unsigned int i;
+
+	LOG_ANCHOR("f429: dwc2 gintsts=%08x haint=%08x haintmsk=%08x storm=%u irqs=%u\n",
+		   (unsigned int)base[0x14 / 4], (unsigned int)base[0x518 / 4],
+		   (unsigned int)base[0x51C / 4], usb_board_irq_storm,
+		   usb_board_irqs);
+	for (i = 0U; i < 12U; i++) {
+		unsigned int ch = 0x500U + 0x20U * i;
+		uint32_t hcchar = base[(ch + 0x00U) / 4];
+
+		if ((hcchar & 0x80000000UL) == 0U)
+			continue;
+		LOG_ANCHOR("f429: dwc2 ch%u hcchar=%08x hcint=%08x hcintmsk=%08x hctsiz=%08x\n",
+			   i, (unsigned int)hcchar,
+			   (unsigned int)base[(ch + 0x08U) / 4],
+			   (unsigned int)base[(ch + 0x0CU) / 4],
+			   (unsigned int)base[(ch + 0x10U) / 4]);
+	}
+}
+
 void OTG_HS_IRQHandler(void)
 {
+	uint32_t now = (uint32_t)osKernelGetTickCount();
+
 	usb_board_irqs++;
+	if (usb_board_irq_storm != 0U) {
+		return;
+	}
+	if (now != usb_irq_burst_tick) {
+		usb_irq_burst_tick = now;
+		usb_irq_burst = 0U;
+	}
+	if (++usb_irq_burst > USB_IRQ_STORM_BURST) {
+		usb_board_irq_storm = 1U;
+		NVIC_ICER(OTG_HS_IRQ_REG) = OTG_HS_IRQ_BIT;
+		return;
+	}
 	USBH_IRQHandler(0);
 }

@@ -103,6 +103,71 @@ syswq_probe_fn(struct work_struct *w)
 }
 static struct work_struct syswq_probe;
 
+/*
+ * W6 watchdog: a second, higher-priority thread that keeps printing after the
+ * data path.  A hard wedge (an ISR storm or a fault that never prints) stops
+ * it; a thread-level deadlock does not - and in that case the watchdog prints
+ * the task/workqueue census once, which names the stuck thread and the held
+ * lock instead of leaving "the console stopped" as the whole observation.
+ */
+static volatile unsigned int hb_ticks;
+static void
+f429_wifi_hb(void *arg)
+{
+	unsigned int n = 0U;
+
+	(void)arg;
+	for (;;) {
+		osDelay(200U);
+		n++;
+		hb_ticks = n;
+		if (n <= 6U)
+			CASE_ANCHOR("f429_wifi: hb=%u\n", n);
+		if (n > 6U && (n % 5U) == 0U)
+			CASE_ANCHOR("f429_wifi: hb alive n=%u\n", n);
+		if (usb_board_irq_storm_get() != 0U && hb_ticks != 0xFFFFU) {
+			hb_ticks = 0xFFFFU;	/* report once */
+			CASE_ANCHOR("f429_wifi: usb irq storm at hb=%u\n", n);
+			usb_board_dwc2_dump();
+		}
+		if ((n % 10U) == 0U) {
+			struct lkpi_net_diag nd;
+			struct lkpi_tx_health th;
+
+			(void)memset(&nd, 0, sizeof(nd));
+			lkpi_net_diag(&nd);
+			(void)memset(&th, 0, sizeof(th));
+			lkpi_tx_health_get(&th);
+			CASE_ANCHOR("f429_wifi: hb stat n=%u net_rx=%lu net_tx=%lu net_allocfail=%lu txdeq=%lu txstat=%lu data=%lu\n",
+				    n, nd.rx_frames, nd.tx_frames,
+				    nd.rx_alloc_fail, th.dequeue_frames,
+				    th.tx_status, th.status_data);
+		}
+		if ((n % 20U) == 0U) {
+			TaskStatus_t tasks[24];
+			uint32_t total = 0U;
+			unsigned int tn, i;
+			struct lkpi_wq_census cen[LKPI_WQ_CENSUS_MAX];
+			unsigned int wn;
+
+			CASE_ANCHOR("f429_wifi: hb wedge-check n=%u\n", n);
+			tn = (unsigned int)uxTaskGetSystemState(tasks, 24U,
+								&total);
+			for (i = 0U; i < tn; i++)
+				CASE_ANCHOR("f429_wifi: hbn task[%u] name=%s state=%u prio=%u\n",
+					    i, tasks[i].pcTaskName,
+					    (unsigned)tasks[i].eCurrentState,
+					    (unsigned)tasks[i].uxCurrentPriority);
+			wn = lkpi_wq_census(cen, LKPI_WQ_CENSUS_MAX);
+			for (i = 0U; i < wn; i++)
+				CASE_ANCHOR("f429_wifi: hbn wq[%u] name=%s runs=%u depth=%u busy=%u cur=%p st=%u\n",
+					    i, cen[i].name, cen[i].runs,
+					    cen[i].depth, cen[i].busy, cen[i].cur,
+					    cen[i].thread_state);
+		}
+	}
+}
+
 /* wiphy work probe: mac80211's ifmgd timer callback queues sdata->work on the
  * wiphy work list (mlme.c: ieee80211_sta_timer -> wiphy_work_queue), and every
  * MLME step after the authentication runs from that work. */
@@ -169,6 +234,28 @@ __wrap_cfg80211_sme_rx_auth(struct wireless_dev *wdev, const u8 *buf, size_t len
 	CASE_ANCHOR("f429_wifi: sme_rx_auth conn=%p\n", (void *)(wdev != NULL ?
 		    wdev->conn : NULL));
 	__real_cfg80211_sme_rx_auth(wdev, buf, len);
+}
+
+/*
+ * W6 A-MPDU-off arm.  After the first QoS data frame the driver starts a TX
+ * Block-Ack session and the chip's aggregation engine then swallows the
+ * per-frame URBs (the AP sees nothing on air while the USB transfers all
+ * complete).  The MCU image does not start TX BA sessions: the wrap refuses
+ * the session, the driver keeps AGG_ENABLE off and sends every frame as its
+ * own USB transfer.  Report-only consequence: no A-MPDU, so these numbers are
+ * not the RK line's.  Linked only into the f429_wifi image.
+ */
+struct ieee80211_sta;
+int __real_ieee80211_start_tx_ba_session(struct ieee80211_sta *pubsta,
+					 u16 tid, u16 timeout);
+int
+__wrap_ieee80211_start_tx_ba_session(struct ieee80211_sta *pubsta, u16 tid,
+				     u16 timeout)
+{
+	(void)pubsta;
+	(void)tid;
+	(void)timeout;
+	return -EINVAL;
 }
 
 struct ieee80211_hw;
@@ -648,6 +735,19 @@ found:
 		unsigned int rx = 0U, rmin = 0U, ravg = 0U, rmax = 0U;
 		unsigned int small_rx = 0U, big_rx = 0U, warm = 0U;
 
+		{
+			osThreadAttr_t attr;
+
+			(void)memset(&attr, 0, sizeof(attr));
+			attr.name = "f429-wifi-hb";
+			attr.priority = osPriorityAboveNormal;
+			attr.stack_size = 4096U;
+			(void)osThreadNew((osThreadFunc_t)f429_wifi_hb, NULL,
+					  &attr);
+		}
+		osDelay(700U);
+		CASE_ANCHOR("f429_wifi: hb up ticks=%u\n", hb_ticks);
+
 		(void)memset(netif_mac, 0, sizeof(netif_mac));
 		rc = lkpi_net_wlan_up("192.168.99.2", "255.255.255.0",
 				      "192.168.99.1", netif_mac);
@@ -677,8 +777,8 @@ found:
 				break;
 			osDelay(250U);
 		}
-		CASE_ANCHOR("f429_wifi: ping warmup tries=%u rx=%u rc=%d\n",
-			    warm + 1U, rx, rc);
+		CASE_ANCHOR("f429_wifi: ping warmup tries=%u rx=%u rc=%d irq_storm=%u\n",
+			    warm + 1U, rx, rc, usb_board_irq_storm_get());
 
 		rc = lkpi_net_ping("192.168.99.1", 20U, 56U, 1000U,
 				   &rx, &rmin, &ravg, &rmax);
