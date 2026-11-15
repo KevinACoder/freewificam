@@ -43,6 +43,15 @@ void vApplicationTickHook( void )
         lkpi_tick_advance();
 }
 
+#if defined(CONFIG_F429_LWIP_SDRAM) && CONFIG_F429_LWIP_SDRAM
+/* lwIP's heap lives in the linker's .sdram.lwip reserve (stm32f429.ld:
+ * __lwip_heap .. +256K).  lwipopts.h declares LWIP_RAM_HEAP_POINTER = this
+ * pointer, so mem.c's ram_heap is that reserve instead of a 1 MB .bss array
+ * the MCU does not have. */
+extern unsigned char __lwip_heap[];
+void *lkpi_lwip_heap_ptr = (void *)__lwip_heap;
+#endif
+
 void vAssertCalled( const char *file, unsigned long line )
 {
     uart_early_panic( "assert: " );

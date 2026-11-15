@@ -359,4 +359,47 @@ void wlan_tcp_event(unsigned int site, void *pcb, unsigned long ackno,
  * image linked libc.a. lwIP's own knob for exactly this. */
 #define LWIP_TIMEVAL_PRIVATE            0
 
+
+/* --- the MCU image (STM32F429): heap and pools in the FMC SDRAM ------------
+ *
+ * The RK profiles size the stack for a DDR machine (1 MB heap, 448 pbufs,
+ * 128 KB windows).  An MCU has 192 KB of SRAM; this branch moves the heap to
+ * the linker's .sdram.lwip reserve and lets every memp pool live on it
+ * (MEMP_MEM_MALLOC), so the .bss keeps only pointers.  The one rule that keeps
+ * this safe: the board's data path copies from lwIP pbufs into the driver's
+ * SRAM skbs, so no lwIP buffer is ever handed to DMA.  Selected by
+ * CONFIG_F429_LWIP_SDRAM (platform/board/Kconfig).
+ */
+#if defined(CONFIG_F429_LWIP_SDRAM) && CONFIG_F429_LWIP_SDRAM
+#undef MEM_SIZE
+/* One byte under the linker reserve so mem.c's two trailing struct mem
+ * entries stay inside it. */
+#define MEM_SIZE                        (255 * 1024)
+#undef MEMP_MEM_MALLOC
+#define MEMP_MEM_MALLOC                 1
+/* memp.h derives the pool stats from MEMP_MEM_MALLOC; keep the stats structs
+ * (the netif diag guards every read with a NULL test, and with every pool on
+ * the heap the array stays NULL). */
+#undef MEMP_STATS
+#define MEMP_STATS                      1
+/* The board glue exports this pointer (it is __lwip_heap from stm32f429.ld). */
+extern void *lkpi_lwip_heap_ptr;
+#undef LWIP_RAM_HEAP_POINTER
+#define LWIP_RAM_HEAP_POINTER           lkpi_lwip_heap_ptr
+#undef PBUF_POOL_SIZE
+#define PBUF_POOL_SIZE                  24
+#undef TCP_WND
+#define TCP_WND                         (16 * 1024)
+#undef TCP_SND_BUF
+#define TCP_SND_BUF                     (16 * 1024)
+#undef TCP_SND_QUEUELEN
+#define TCP_SND_QUEUELEN                48
+#undef TCP_SNDLOWAT
+#define TCP_SNDLOWAT                    (8 * 1024)
+#undef MEMP_NUM_TCP_SEG
+#define MEMP_NUM_TCP_SEG                48
+#undef MEMP_NUM_TCPIP_MSG_INPKT
+#define MEMP_NUM_TCPIP_MSG_INPKT        16
+#endif /* CONFIG_F429_LWIP_SDRAM */
+
 #endif /* FREEWEB_LWIPOPTS_H */

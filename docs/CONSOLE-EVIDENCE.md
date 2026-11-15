@@ -1392,6 +1392,24 @@ Console identity traps that bit this round:
 4. The scan must complete before connect (mac80211 drops iface work while
    `SCAN_SW_SCANNING` is set); the C5 case waits ~2 s after the BSS on the MCU.
 
+### STM32F429 wi-fi W6 (c6 image, same boot)
+
+The c6 image adds the lwIP egress; W3-W5 pass as above and the netif comes up,
+then the first data frame wedges the system (4/4 boots):
+
+```
+[   5.753] f429_wifi: netif up rc=0 ip=192.168.99.2/24 mac=20:f4:1b:52:8f:01
+[   5.761] f429_wifi: ping warmup call=1
+[   5.768] f429_wifi: none: rtl8xxxu_fill_txdesc_v3: TX rate: 19, pkt size 62
+[   5.779] <console stops, no fault line, 60-120 s>
+```
+
+One boot stopped mid-line (`[   5.881] f`), which is why the record's second
+hypothesis is a console-lock interaction rather than a plain hang. The
+`IEEE80211_AMPDU_TX_START` line appears in the boots without the BA-off arm
+and its absence does not change the wedge. Full record:
+`runs/2026-11-15-f429-wifi-w6/RUN.md`.
+
 ## What is not claimed here
 
 Every transcript is one boot.  Where a cell is shown it is one cell: the

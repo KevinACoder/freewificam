@@ -1,0 +1,42 @@
+# F429 W6: the W5 image plus the lwIP netif, the two ICMP rounds
+# and (c6t) the four report-only throughput phases.  See docs/F429-WIFI.md.
+#
+# F429 W1/W2: the RTL8188EUS attaches on the real mac80211/cfg80211 stack
+# (components/liblinux80211) over the OTG_HS DWC2 host and the CherryUSB URB
+# engine, on a Cortex-M4.  Stage 3 stops after probe + compiled-in firmware +
+# wlan0 + wiphy row + dev_open (the registration/attach layer); the c4 profile
+# is the same image with the scan layer on.
+#
+# The kernel heap is in the core board's 32 MB FMC SDRAM (4 MiB): mac80211's
+# per-skb receive buffers and the driver's records do not fit in the 192 KB
+# SRAM next to the DMA-visible static pool.  The image is a GPL-2.0 link
+# product (mac80211/cfg80211 + rtl8xxxu) that redistributes the rtl8188eufw
+# image - see docs/LICENSES.md.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=4194304
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_F429_WIFI_STAGE=6
+CONFIG_CASES="f429_wifi"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_PCI=n
+CONFIG_LIBLINUX80211_SDIO=n
+CONFIG_LIBLINUX80211_USB=y
+CONFIG_LIBLINUX80211_WIRELESS=y
+CONFIG_LIBLINUX80211_RTL8XXXU=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SIZE=4096
+CONFIG_LKPI_USB_CHERRYUSB_STAGE_SLOTS=4
+CONFIG_LKPI_USB_CHERRYUSB_SLOTS=8
+CONFIG_LKPI_SKB_POOL_NUM=8
+CONFIG_LKPI_SKB_DATA_POOL_NUM=8
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_LKPI_WQ_TRACE=y
+CONFIG_RTL8XXXU_USB_BUS=0
+CONFIG_F429_LWIP_SDRAM=y

@@ -118,15 +118,41 @@ Traps:
    `--wrap=cfg80211_sme_rx_auth`, `--wrap=cfg80211_mlme_assoc`); it is not a
    stack anchor, and it is linked only into the `f429_wifi` image.
 
-## 5. W6 (next round)
+## 5. W6 (data plane) — in progress, one named blocker
 
-- Enable `LIBLINUX80211_NET_LWIP` for the F429 and size lwIP for the board:
-  `MEM_SIZE` 128–256 KB in SDRAM, PBUF_POOL 24, TCP_SEG 32 KB? (32 double
-  words), stacks 4–6 KB, `TCP_WND`/`SND_BUF` 8–16 KB, lwIP heap via the
-  SDRAM `pvPortMalloc` seam.
-- Attach the netif to `wlan0` (`lkpinetif` port), `192.168.99.2/24`, gateway
-  `192.168.99.1`; ICMP 56/1400 B × 20 with 0 % loss as the C6 gate; then
-  TCP down (`iperf2` client on the Pi → lwiperf server on the board), TCP up
-  (lwiperf client, 10 s), and UDP 1440 blast/sink; report-only (no 80 % gate).
-- Witnesses: AP `iw station dump` (rate/retransmits), monitor pcap per phase
-  if the dwell lands, `lkpi_net_diag` counters on both sides.
+The `stm32f429-wifi-c6` image (725,640 B, sha256 `9ed827d7fd0f2f05…`) adds the
+lwIP egress to the W5 image. It builds and boots; W3/W4/W5 still pass in the
+same boot and the netif comes up over wlan0 with the lab's static address:
+
+```
+f429_wifi: netif up rc=0 ip=192.168.99.2/24 mac=20:f4:1b:52:8f:01
+f429_wifi: ping warmup call=1
+rtl8xxxu_fill_txdesc_v3: TX rate: 19, pkt size 62     <- the ARP request
+<console stops>
+```
+
+So the first data frame (a 62-byte ARP) reaches the driver's descriptor fill
+and then the whole system wedges: no fault trace, no further anchor, 4/4
+boots at the same point. An A-MPDU-off arm (`--wrap=ieee80211_start_tx_ba_session`
+returning `-EINVAL`) removed the `ampdu_action: IEEE80211_AMPDU_TX_START`
+line and still wedged one line later, so the BA session start is not the
+trigger. The prime suspect is the port's own documented trap
+(`third-party/lwip/ports/lkpinetif_lwip.c:79`, "LOCK_TCPIP_CORE() waits
+forever"): the lwIP core lock is held across the driver's synchronous USB
+control transfers in the TX path; a control transfer whose completion needs
+the deferred path, while the receive worker waits on the same core lock,
+deadlocks. Next experiments and the full record: `runs/2026-11-15-f429-wifi-w6/RUN.md`.
+
+lwIP is sized for the MCU by `CONFIG_F429_LWIP_SDRAM` (platform/board/Kconfig):
+`MEM_SIZE` 255 KiB in the linker's `.sdram.lwip` reserve, `MEMP_MEM_MALLOC=1`
+(every pool on that heap; the SRAM keeps pointers only), 24 pbufs of 1600 B,
+16 KiB TCP window/send buffer, 48 TCP segments. The board glue exports
+`lkpi_lwip_heap_ptr = __lwip_heap`; the lwIP port headers gained the per-arch
+counter include (`gtimer_count_get`: aarch64 extern vs CM4 DWT inline) and
+the `MEMP_STATS` override that must survive `MEMP_MEM_MALLOC=1`.
+
+Profiles: `stm32f429-wifi-c6` (pings, the W6 gate) and
+`stm32f429-wifi-c6t` (`CONFIG_F429_WIFI_TP=y`, the four report-only phases:
+tcp down/up + udp down/up against the Pi's iperf2 and UDP counting arms).
+Until the TX wedge is fixed neither gate is met and no throughput number is
+claimed.

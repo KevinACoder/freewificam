@@ -79,7 +79,7 @@ The MCU is a separate platform, judged by its own ladder (see
 | W1 attach / link / register | **2/2 PASS** |
 | W4 scan (BSS + probe request on air) | **PASS** |
 | W5 association (auth + assoc, AP station table) | **3/3 PASS**, 200 ms |
-| W6 data plane (lwIP, ICMP, TCP/UDP throughput) | **not run** — next round |
+| W6 data plane (lwIP, ICMP, TCP/UDP throughput) | **in progress**: netif up over wlan0, first ARP TX wedges the TX path; see `runs/2026-11-15-f429-wifi-w6/RUN.md` |
 
 The F429 W5 defect was a frozen Linux clock (`jiffies` stayed 0 because the
 board's FreeRTOS config never enabled the tick hook), not a stack or driver

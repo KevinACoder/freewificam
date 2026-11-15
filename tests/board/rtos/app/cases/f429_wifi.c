@@ -59,6 +59,7 @@
 #include "linux80211/linux80211.h"
 #include "linux80211/nl80211_probe.h"
 #include "linux80211/hostap_ap.h"	/* lkpi_tx_health_get */
+#include "linux80211/net.h"	/* W6: lwIP netif, ICMP, phases */
 #include "linuxkpi_usb.h"
 #include "lkpi_usb_cherryusb.h"
 
@@ -637,6 +638,135 @@ found:
 		CASE_ANCHOR("f429_wifi: PASS W5\n");
 	}
 #endif /* CONFIG_F429_WIFI_STAGE >= 5 */
+#if CONFIG_F429_WIFI_STAGE >= 6
+	/* W6: the data plane.  The lwIP netif is assembled over wlan0 with the
+	 * lab's static address, two counted ICMP rounds are the functional
+	 * gate, and (with CONFIG_F429_WIFI_TP) the four report-only phases run
+	 * against the Pi's iperf2 arms.  No phase applies a pass threshold. */
+	{
+		char netif_mac[6];
+		unsigned int rx = 0U, rmin = 0U, ravg = 0U, rmax = 0U;
+		unsigned int small_rx = 0U, big_rx = 0U, warm = 0U;
+
+		(void)memset(netif_mac, 0, sizeof(netif_mac));
+		rc = lkpi_net_wlan_up("192.168.99.2", "255.255.255.0",
+				      "192.168.99.1", netif_mac);
+		CASE_ANCHOR("f429_wifi: netif up rc=%d ip=192.168.99.2/24 "
+			    "mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+			    rc, (unsigned char)netif_mac[0],
+			    (unsigned char)netif_mac[1],
+			    (unsigned char)netif_mac[2],
+			    (unsigned char)netif_mac[3],
+			    (unsigned char)netif_mac[4],
+			    (unsigned char)netif_mac[5]);
+		if (rc != 0) {
+			CASE_ANCHOR("f429_wifi: FAIL netif up rc=%d\n", rc);
+			usb_ledger();
+			return 11;
+		}
+
+		/* Warm-up: the first echo may race the netif's neighbour setup. */
+		for (warm = 0U; warm < 20U; warm++) {
+			CASE_ANCHOR("f429_wifi: ping warmup call=%u\n",
+				    warm + 1U);
+			rc = lkpi_net_ping("192.168.99.1", 1U, 56U, 1000U,
+					   &rx, &rmin, &ravg, &rmax);
+			CASE_ANCHOR("f429_wifi: ping warmup ret=%d rx=%u\n",
+				    rc, rx);
+			if (rc == 0 && rx == 1U)
+				break;
+			osDelay(250U);
+		}
+		CASE_ANCHOR("f429_wifi: ping warmup tries=%u rx=%u rc=%d\n",
+			    warm + 1U, rx, rc);
+
+		rc = lkpi_net_ping("192.168.99.1", 20U, 56U, 1000U,
+				   &rx, &rmin, &ravg, &rmax);
+		small_rx = rx;
+		CASE_ANCHOR("f429_wifi: ping small tx=20 rx=%u payload=56 "
+			    "rtt_ms=%u/%u/%u rc=%d\n",
+			    rx, rmin, ravg, rmax, rc);
+
+		rc = lkpi_net_ping("192.168.99.1", 20U, 1400U, 1000U,
+				   &rx, &rmin, &ravg, &rmax);
+		big_rx = rx;
+		CASE_ANCHOR("f429_wifi: ping big tx=20 rx=%u payload=1400 "
+			    "rtt_ms=%u/%u/%u rc=%d\n",
+			    rx, rmin, ravg, rmax, rc);
+
+		{
+			struct lkpi_net_diag nd;
+
+			(void)memset(&nd, 0, sizeof(nd));
+			lkpi_net_diag(&nd);
+			CASE_ANCHOR("f429_wifi: net rx_frames=%lu tx_frames=%lu "
+				    "rx_bytes=%lu tx_bytes=%lu rx_alloc_fail=%lu "
+				    "tx_fail=%lu\n",
+				    nd.rx_frames, nd.tx_frames, nd.rx_bytes,
+				    nd.tx_bytes, nd.rx_alloc_fail, nd.tx_fail);
+		}
+
+		if (small_rx == 20U && big_rx == 20U)
+			CASE_ANCHOR("f429_wifi: PASS W6\n");
+		else
+			CASE_ANCHOR("f429_wifi: FAIL ping small=%u big=%u\n",
+				    small_rx, big_rx);
+
+#if CONFIG_F429_WIFI_TP
+		/* Report-only throughput.  Each phase waits for its peer inside
+		 * its own window; the harness starts the Pi's arms (iperf2
+		 * client/server and the UDP counting sink) around this boot. */
+		{
+			struct lkpi_net_phase ph;
+			unsigned int moved = 0U;
+
+			rc = lkpi_net_iperf_server_start(5001U);
+			CASE_ANCHOR("f429_wifi: iperf server start rc=%d port=5001\n",
+				    rc);
+
+			(void)memset(&ph, 0, sizeof(ph));
+			rc = lkpi_net_iperf_down(5001U, 25000U, &ph);
+			CASE_ANCHOR("f429_wifi: phase tcpdn rc=%d done=%d "
+				    "bytes=%u ms=%u kbit=%u\n",
+				    rc, ph.done, ph.bytes, ph.ms, ph.kbit);
+			if (ph.bytes)
+				moved++;
+
+			(void)memset(&ph, 0, sizeof(ph));
+			rc = lkpi_net_iperf_up("192.168.99.1", 5001U, 15000U,
+					       &ph);
+			CASE_ANCHOR("f429_wifi: phase tcpup rc=%d done=%d "
+				    "bytes=%u ms=%u kbit=%u\n",
+				    rc, ph.done, ph.bytes, ph.ms, ph.kbit);
+			if (ph.bytes)
+				moved++;
+
+			rc = lkpi_net_udp_sink_start(5002U);
+			(void)memset(&ph, 0, sizeof(ph));
+			rc = lkpi_net_udp_sink_window(20000U, &ph);
+			CASE_ANCHOR("f429_wifi: phase udpdn rc=%d done=%d "
+				    "bytes=%u ms=%u kbit=%u pkts=%u drop=%u\n",
+				    rc, ph.done, ph.bytes, ph.ms, ph.kbit,
+				    ph.pkts, ph.rx_drop);
+			if (ph.bytes)
+				moved++;
+
+			(void)memset(&ph, 0, sizeof(ph));
+			rc = lkpi_net_udp_blast("192.168.99.1", 5003U, 12000U,
+						40000U, &ph);
+			CASE_ANCHOR("f429_wifi: phase udpup rc=%d done=%d "
+				    "offered=%u bytes=%u ms=%u kbit=%u\n",
+				    rc, ph.done, ph.offered, ph.bytes, ph.ms,
+				    ph.kbit);
+			if (ph.bytes)
+				moved++;
+
+			CASE_ANCHOR("f429_wifi: throughput phases moved=%u/4\n",
+				    moved);
+		}
+#endif /* CONFIG_F429_WIFI_TP */
+	}
+#endif /* CONFIG_F429_WIFI_STAGE >= 6 */
 #else
 	CASE_ANCHOR("f429_wifi: PASS W3\n");
 #endif /* CONFIG_F429_WIFI_STAGE >= 4 */

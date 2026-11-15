@@ -54,6 +54,26 @@ config F429_WIFI_STAGE
 	  not a tuning knob: each stage's anchors are the evidence for that
 	  layer.
 
+config F429_LWIP_SDRAM
+	bool "Place lwIP's heap and memp pools in the FMC SDRAM"
+	depends on F429_SDRAM && LIBLINUX80211_NET_LWIP
+	help
+	  The 192 KB of internal SRAM cannot hold the RK-sized lwIP pools
+	  (1 MB heap, 448 x 1600 B pbufs).  With this on, lwipopts.h takes
+	  its F429 branch: MEM_SIZE fits the linker's .sdram.lwip reserve,
+	  MEMP_MEM_MALLOC moves every memp pool onto that heap, and
+	  LWIP_RAM_HEAP_POINTER points at the reserve (the board glue
+	  exports lkpi_lwip_heap_ptr).  The data path still copies into the
+	  driver's SRAM skbs, so no lwIP buffer is ever DMA'd from SDRAM.
+
+config F429_WIFI_TP
+	bool "F429 wifi: run the throughput phases after the W6 pings"
+	depends on F429_WIFI_STAGE = 6
+	help
+	  Turns the four report-only phases on (tcp down/up, udp down/up).
+	  Each phase waits for its peer inside its own window; a missing
+	  peer is recorded as done=0, never as a pass.  No 80% gate here.
+
 config USB_MSC_DIAG
 	bool "USB mass-storage diagnostics"
 

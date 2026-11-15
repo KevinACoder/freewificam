@@ -39,7 +39,13 @@
  * board - the struct definition needs no libc link. */
 #include <sys/time.h>
 
+/* The counter accessor is per-arch: AArch64 declares the CNTVCT read in
+ * generic_timer.c, the CM4 provides a DWT-read static inline. */
+#if defined(__aarch64__)
 #include "arch/aarch64/generic_timer.h"
+#else
+#include "arch/armv7m/generic_timer.h"
+#endif
 
 /* --- libc facts ------------------------------------------------------------ */
 
