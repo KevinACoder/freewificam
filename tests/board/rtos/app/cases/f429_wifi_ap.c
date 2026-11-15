@@ -239,10 +239,15 @@ ap_usb_ledger(void)
 	lkpi_usb_cherryusb_stats(&st);
 	CASE_ANCHOR("f429_wifi_ap: usb submits=%u completes=%u refused=%u "
 		    "stage_overflow=%u slots_exhausted=%u stage_size=%u slots=%u "
-		    "rx=%u rx_err=%u tx=%u tx_err=%u tx_last_err=%d tx_len=%u\n",
+		    "rx=%u rx_err=%u rx_last_err=%d rx_len=%u rx_max=%u "
+		    "babble_len=%u babble_act=%u babble_mps=%u "
+		    "tx=%u tx_err=%u tx_last_err=%d tx_len=%u\n",
 		    st.submits, st.completed, st.refused, st.stage_overflow,
 		    st.slots_exhausted, st.stage_size, st.stage_slots,
-		    st.rx_completes, st.rx_errors, st.tx_completes, st.tx_errors,
+		    st.rx_completes, st.rx_errors, st.rx_last_err,
+		    st.rx_last_len, st.rx_max_len,
+		    st.rx_babble_len, st.rx_babble_actual, st.rx_babble_mps,
+		    st.tx_completes, st.tx_errors,
 		    st.tx_last_err, st.tx_last_len);
 }
 

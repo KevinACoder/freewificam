@@ -637,6 +637,25 @@ chu_complete(void *arg, int nbytes)
 			chu_stats.tx_last_err = err;
 		}
 	}
+	/*
+	 * A bulk-IN babble is the controller reporting a packet larger than the
+	 * transfer allows.  The geometry - how long the transfer was, how much
+	 * the controller had moved, and the endpoint's max packet - is what
+	 * separates "the device is sending packets of the wrong size" from "the
+	 * transfer was cut short".  This runs in the controller's interrupt, so
+	 * the values are captured here and read from a task.  The F429 AP role
+	 * saw a burst at interface start (29 of the first 32 receive URBs;
+	 * length 2376, max packet 64, actual 0) and the receive count then froze
+	 * for the rest of the boot.  A bounded retry of the same transfer was
+	 * tried and turned none of them into a success, which is why only the
+	 * capture stays.
+	 */
+	if (err == -USB_ERR_BABBLE && slot->is_in) {
+		chu_stats.rx_babble_len = slot->urb.transfer_buffer_length;
+		chu_stats.rx_babble_actual = slot->urb.actual_length;
+		chu_stats.rx_babble_mps = slot->urb.ep != NULL ?
+		    USB_GET_MAXPACKETSIZE(slot->urb.ep->wMaxPacketSize) : 0u;
+	}
 	be->actual_length = err == 0 ? (uint32_t)nbytes : slot->urb.actual_length;
 	/*
 	 * The aggregated bulk-OUT's on-the-wire bytes, taken from the stage the

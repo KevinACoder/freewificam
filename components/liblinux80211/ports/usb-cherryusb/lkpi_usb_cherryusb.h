@@ -76,6 +76,9 @@ struct lkpi_usb_chusb_stats {
 	 * workqueue stopped consuming them" when a receive count freezes. */
 	unsigned int	rx_completes;
 	unsigned int	rx_errors;
+	unsigned int	rx_babble_len;		/* last babble's transfer length */
+	unsigned int	rx_babble_actual;	/* ... and what the core had moved */
+	unsigned int	rx_babble_mps;		/* ... and the endpoint's max packet */
 	unsigned int	rx_last_len;
 	/* The split a stalled receive needs: was the completion short (one MPDU
 	 * per transfer, the shape the driver's 2328-byte URB expects) or did it
