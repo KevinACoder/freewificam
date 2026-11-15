@@ -151,6 +151,14 @@ if ! bash "$BOARD/power.sh" status --json 2>/dev/null | grep -q '"power_on":true
 	bash "$BOARD/power.sh" on --confirm > "$EVIDENCE/relay-on.txt" 2>&1 || true
 	sleep 3
 fi
+# The ring holds earlier boots, and an anchor from one of them must never
+# drive this boot's bench actions (or end the round early).  The offset before
+# the flash is the point after which everything belongs to this boot.
+"$MCU" serial status --json > "$EVIDENCE/serial-status-before.json" 2>/dev/null || true
+BOOT_OFF=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("next", 0))' \
+	"$EVIDENCE/serial-status-before.json" 2>/dev/null || echo 0)
+echo "serial offset before flash: ${BOOT_OFF:-0}" | tee "$EVIDENCE/serial-offset.txt"
+
 echo "== mcu flash (no reset; the relay cycle below is the reset) =="
 # The probe occasionally drops its SWD session during the loader's uninit
 # (DAP_SWJ_SEQUENCE) after the image was written and verified; a retry costs
@@ -189,21 +197,28 @@ while [ $idx -lt $((TIMEOUT * 2)) ]; do
 	if ! "$MCU" serial tail -n 20000 --json > "$EVIDENCE/serial-tail.json" 2>/dev/null; then
 		sleep 0.5; idx=$((idx + 1)); continue
 	fi
-	python3 - "$EVIDENCE/serial-tail.json" "$SERIAL" <<'PY' || true
+	python3 - "$EVIDENCE/serial-tail.json" "$SERIAL" "$EVIDENCE/serial-boot.log" \
+		"${BOOT_OFF:-0}" <<'PY' || true
 import json, sys
-try:
-    data = json.load(open(sys.argv[1]))
-    open(sys.argv[2], "w").write(data.get("text", ""))
-except Exception:
-    pass
+ring = json.load(open(sys.argv[1]))
+text = ring.get("text", "")
+base = int(ring.get("base", 0) or 0)
+off0 = int(sys.argv[4])
+start = off0 - base if off0 >= base else 0
+sub = text[max(0, start):]
+lines = sub.splitlines()
+first = next((i for i, line in enumerate(lines) if "rtos: banner" in line), None)
+open(sys.argv[3], "w").write("\n".join(lines[first:]) + "\n" if first is not None else "")
+open(sys.argv[2], "w").write(text)
 PY
+	BOOTLOG="$EVIDENCE/serial-boot.log"
 
-	if [ "$seen_boot" = 0 ] && grep -aq "rtos: banner" "$SERIAL"; then
+	if [ "$seen_boot" = 0 ] && grep -aq "rtos: banner" "$BOOTLOG"; then
 		seen_boot=1
 		echo "boot at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 	fi
 
-	if [ "$seen_start_ap" = 0 ] && grep -aq "f429_wifi_ap: start_ap rc=0" "$SERIAL"; then
+	if [ "$seen_start_ap" = 0 ] && grep -aq "f429_wifi_ap: start_ap rc=0" "$BOOTLOG"; then
 		seen_start_ap=1
 		echo "start_ap at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 		if [ "$NO_PEER" = 0 ]; then
@@ -215,7 +230,7 @@ PY
 		fi
 	fi
 
-	if [ "$seen_peer" = 0 ] && grep -aq "f429_wifi_ap: peer window ms=" "$SERIAL"; then
+	if [ "$seen_peer" = 0 ] && grep -aq "f429_wifi_ap: peer window ms=" "$BOOTLOG"; then
 		seen_peer=1
 		echo "peer window at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 		if [ "$NO_PEER" = 0 ]; then
@@ -225,7 +240,7 @@ PY
 		fi
 	fi
 
-	if [ "$seen_server" = 0 ] && grep -aq "f429_wifi_ap: server tcp=" "$SERIAL"; then
+	if [ "$seen_server" = 0 ] && grep -aq "f429_wifi_ap: server tcp=" "$BOOTLOG"; then
 		seen_server=1
 		echo "server at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 		if [ "$NO_PEER" = 0 ]; then
@@ -235,7 +250,7 @@ PY
 		fi
 	fi
 
-	if [ "$seen_phase2" = 0 ] && grep -aq "f429_wifi_ap: phase 2 begin" "$SERIAL"; then
+	if [ "$seen_phase2" = 0 ] && grep -aq "f429_wifi_ap: phase 2 begin" "$BOOTLOG"; then
 		seen_phase2=1
 		echo "phase2 at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 		if [ "$NO_PEER" = 0 ]; then
@@ -244,7 +259,7 @@ PY
 		fi
 	fi
 
-	if [ "$seen_phase3" = 0 ] && grep -aq "f429_wifi_ap: phase 3 begin" "$SERIAL"; then
+	if [ "$seen_phase3" = 0 ] && grep -aq "f429_wifi_ap: phase 3 begin" "$BOOTLOG"; then
 		seen_phase3=1
 		echo "phase3 at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 		if [ "$NO_PEER" = 0 ]; then
@@ -256,12 +271,12 @@ PY
 		fi
 	fi
 
-	if [ "$seen_end" = 0 ] && grep -aq "rtos: result " "$SERIAL"; then
+	if [ "$seen_end" = 0 ] && grep -aq "rtos: result " "$BOOTLOG"; then
 		seen_end=1
 		echo "result at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 		break
 	fi
-	if grep -aq "f429_wifi_ap: FAIL " "$SERIAL"; then
+	if grep -aq "f429_wifi_ap: FAIL " "$BOOTLOG"; then
 		echo "case FAIL at $(date -Is)" >> "$EVIDENCE/anchors.txt"
 		# keep capturing a few lines after a FAIL, then stop
 		sleep 2
@@ -281,16 +296,19 @@ if [ "$NO_PEER" = 0 ]; then
 	pih "down" > "$EVIDENCE/bench-gate-after.txt" 2>&1 || true
 fi
 
-# The boot's own text: everything after the last banner in the ring.
-python3 - "$SERIAL" "$EVIDENCE/serial-boot.log" <<'PY' || true
-import sys
-text = open(sys.argv[1], errors="replace").read()
-lines = text.splitlines()
-start = 0
-for i, line in enumerate(lines):
-    if "rtos: banner" in line:
-        start = i
-open(sys.argv[2], "w").write("\n".join(lines[start:]) + "\n")
+# The boot's own text: from the recorded offset, cut at this boot's banner.
+python3 - "$EVIDENCE/serial-tail.json" "$EVIDENCE/serial-boot.log" "${BOOT_OFF:-0}" <<'PY' || true
+import json, sys
+try:
+    ring = json.load(open(sys.argv[1]))
+except Exception:
+    ring = {}
+text = ring.get("text", "")
+base = int(ring.get("base", 0) or 0)
+sub = text[max(0, int(sys.argv[3]) - base):]
+lines = sub.splitlines()
+first = next((i for i, line in enumerate(lines) if "rtos: banner" in line), None)
+open(sys.argv[2], "w").write("\n".join(lines[first:]) + "\n" if first is not None else "")
 PY
 
 if [ "$NO_PEER" = 0 ]; then
