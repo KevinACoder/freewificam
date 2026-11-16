@@ -196,6 +196,7 @@ check:
 	done
 	@$(PYTHON) tools/build/kconfig-gen.py --check-all
 	@$(PYTHON) tools/build/check-config-used.py
+	@$(PYTHON) tools/build/check-public-language.py
 	@if [ -n "$$(git ls-files -- build/kconfig 2>/dev/null)" ]; then \
 		echo "FAIL: generated files are tracked:" >&2; \
 		git ls-files -- build/kconfig >&2; exit 1; \

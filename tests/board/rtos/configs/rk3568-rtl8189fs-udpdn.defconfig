@@ -1,5 +1,5 @@
-# rtl8189fs on the RTOS line: the C6T arm with the receive-only downlink first
-# (CONFIG_C6T_UDP_FIRST).  Same cases and same bench as rk3568-rtl8189fs-c6t;
+# rtl8189fs on the RTOS line: the throughput arm with the receive-only downlink first
+# (CONFIG_THROUGHPUT_UDP_FIRST).  Same cases and same bench as rk3568-rtl8189fs-throughput;
 # only the phase order differs, so one boot answers whether a stall needs the
 # board's transmit path to be busy.
 #
@@ -8,13 +8,13 @@
 CONFIG_BACKEND_FREERTOS=y
 CONFIG_OPT_O2=y
 CONFIG_PROFILE_BASE=y
-CONFIG_CASES="tick rtl8189fs_sta rtl8189fs_c6t"
+CONFIG_CASES="tick rtl8189fs_sta rtl8189fs_throughput"
 CONFIG_LIBLINUX80211=y
 CONFIG_LIBLINUX80211_SDIO=y
 CONFIG_LIBLINUX80211_CFG80211=y
 CONFIG_LIBLINUX80211_MAC80211=y
 CONFIG_LIBLINUX80211_RTL8189FS=y
 CONFIG_LIBLINUX80211_NET_LWIP=y
-CONFIG_C6T_UDP_FIRST=y
+CONFIG_THROUGHPUT_UDP_FIRST=y
 
 CONFIG_FREERTOS_HEAP_SIZE=16777216

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Compare one GT throughput round with one RTOS C6T round.
+"""Compare one GT throughput round with one RTOS throughput round.
 
 Inputs are the two arms' evidence directories:
   * GT:  runs/<date>/board/<tag>/  (the tar of the board's NFS output, plus the
          peer's iperf outputs saved by tools/gt/run-gt-throughput.sh)
   * RTOS: runs/<date>/<tag>/       (serial.log + peer-*.txt + air-summary.txt)
 
-The pre-registered gates are in runs/2026-11-11-iwl7260-c6-throughput/PREREG.md:
+The pre-registered gates are:
 TCP down and up each >= 80% of GT; UDP 40 Mbit/s downlink loss <= 1%; the AP-side
 pcap's payload within 5% of the application's.  The tool applies those gates
 and exits 0 only when all of them pass.  It never fabricates a missing cell:
 an absent file or anchor is reported as `missing` and fails the run.
 
 Usage:
-    tools/rtos/c6-report.py --gt runs/.../board/gt1 --rtos runs/.../rtos1 \
+    tools/rtos/throughput-report.py --gt runs/.../board/gt1 --rtos runs/.../rtos1 \
         [--json REPORT.json] [--markdown -]
 """
 
@@ -29,7 +29,7 @@ MBITS = re.compile(r"(\d+(?:\.\d+)?)\s+Mbits/sec")
 MBYTES = re.compile(r"(\d+(?:\.\d+)?)\s+MBytes")
 LOSS = re.compile(r"\((\d+(?:\.\d+)?)%\)")
 # The phase anchors carry the case name; the tool takes it as an argument so
-# the same gates serve every C6T arm (iwl7260_c6, rtw89_c6, ...).
+# the same gates serve every throughput arm (iwl7260_c6, rtw89_c6, ...).
 PHASE_BEGIN_FMT = (
     r"{case}: phase \d+ begin proto=\S+ role=\S+ (?:air=\S+ )?port=\d+ "
     r"window_ms=\d+ name=(\S+)")

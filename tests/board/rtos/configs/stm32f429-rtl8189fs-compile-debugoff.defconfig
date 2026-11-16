@@ -1,9 +1,9 @@
-# C0-only: rtl8189fs with the vendor face trimmed for a station-only F429.
+# compile-only: rtl8189fs with the vendor face trimmed for a station-only F429.
 #
-# C0-only size ceiling: the delivery-shaped trim plus CONFIG_RTW_DEBUG off.
+# compile-only size ceiling: the delivery-shaped trim plus CONFIG_RTW_DEBUG off.
 # NETIF_SG/EFUSE_FILE/LOAD_PHY_FILE off; AP and DEBUG stay on because AP off
 # does not compile (vendor fields live behind CONFIG_AP_MODE while unguarded
-# code uses them) and DEBUG carries the C3/C4 attach evidence.  Used by
+# code uses them) and DEBUG carries the attach and scan evidence.  Used by
 # `./make.rtos s1-driver-compile S1_PROFILE=... S1_DRIVER=rtl8189fs`; the
 # image target is expected to fail (no SDIO host adapter), and ci.sh skips it.
 CONFIG_ARCH_ARM_V7M=y

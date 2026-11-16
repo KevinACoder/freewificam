@@ -1,4 +1,4 @@
-# rtl8189fs on the RTOS line, gates C4-C6 open: the vendor stack's station
+# rtl8189fs on the RTOS line, gates scan-data open: the vendor stack's station
 # joins the bench AP (labwifi-ar-ht20s, ch5/2432, HT20, open) over the real
 # cfg80211/nl80211 path, then the lwIP netif over the driver's netdev moves
 # ICMP.
@@ -28,5 +28,5 @@ CONFIG_LIBLINUX80211_RTL8189FS=y
 CONFIG_LIBLINUX80211_NET_LWIP=y
 
 # The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
-# FreeRTOS heap; see the C3 profile's note.
+# FreeRTOS heap; see the attach profile's note.
 CONFIG_FREERTOS_HEAP_SIZE=16777216

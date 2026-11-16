@@ -1,4 +1,4 @@
-# rtl8189fs on the RTOS line, the AP role (A1-A3): the board's SDIO 8189FTV
+# rtl8189fs on the RTOS line, the AP role (beacon/association/data): the board's SDIO 8189FTV
 # becomes the AP (SSID rtos-8189-ap, ch5/2432, HT20, open), the Pi's MT7921AU
 # joins it, and the data plane is proven both ways.
 #
@@ -11,7 +11,7 @@
 # supplies the beacon's 36-byte head + IE tail through set_ap; the port has no
 # .set_beacon op, so there is exactly one beacon source.
 #
-# What this profile is not: the A4 throughput table (rk3568-rtl8189fs-ap-tp, a
+# What this profile is not: the throughput table (rk3568-rtl8189fs-ap-throughput, a
 # separate image on purpose), WPA2, monitor, and the station role (its own
 # profiles).  The station's own MLME is not in this path: cfg80211 is the
 # control plane and mac80211 runs no vif here.
@@ -35,7 +35,7 @@ CONFIG_LIBLINUX80211_NET_LWIP=y
 CONFIG_HOSTAP_AP=y
 
 # The vendor stack's pools, hostapd's own allocations, the lwIP pbufs and the
-# TCP/IP thread share the FreeRTOS heap; see the C3 profile's note.
+# TCP/IP thread share the FreeRTOS heap; see the attach profile's note.
 CONFIG_FREERTOS_HEAP_SIZE=16777216
 
 # The AP case drives nl80211's SET_INTERFACE / START_AP from the runner task and

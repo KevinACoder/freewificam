@@ -2,7 +2,7 @@
 /*
  * @file   rtl8189fs_sta_wpa2.c
  * @brief  Case rtl8189fs_sta_wpa2: the board's SDIO 8189FTV joins a WPA2-PSK/
- *         CCMP AP as a station (C5 secured), with the supplicant owning the
+ *         CCMP AP as a station (association secured), with the supplicant owning the
  *         connection.
  *
  * The attach is rtl8189fs_sta's (SDIO backend, module_init, engine start, the

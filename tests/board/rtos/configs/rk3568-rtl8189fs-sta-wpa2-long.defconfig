@@ -50,5 +50,5 @@ CONFIG_STA_WINDOW_MS=60000
 CONFIG_STA_HOLD_MS=30000
 
 # The vendor stack's pools and the lwIP pbuf/TCP-IP allocations share the
-# FreeRTOS heap; see the C3 profile's note.
+# FreeRTOS heap; see the attach profile's note.
 CONFIG_FREERTOS_HEAP_SIZE=16777216

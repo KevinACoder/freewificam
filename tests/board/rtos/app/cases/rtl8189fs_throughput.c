@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
- * @file   rtl8189fs_c6t.c
- * @brief  Case rtl8189fs_c6t: the throughput phases over the lwIP netif the
+ * @file   rtl8189fs_throughput.c
+ * @brief  Case rtl8189fs_throughput: the throughput phases over the lwIP netif the
  *         station case already brought up.
  *
  * The case is deliberately not a second connection bring-up: `rtl8189fs_sta`
@@ -31,16 +31,16 @@
  * pre-registered criterion.
  *
  * Anchors:
- *   rtl8189fs_c6t: plan=throughput bssid=<mac> dev=<name>
- *   rtl8189fs_c6t: ready netif=<0|1> rx_frames=<n> tx_frames=<n>
- *   rtl8189fs_c6t: server tcp=<port> udp=<port> ok=<0|1>
- *   rtl8189fs_c6t: phase <n> begin proto=<p> role=<r> port=<n> window_ms=<n> name=<n>
- *   rtl8189fs_c6t: t=<n> bytes=<n> delta=<n> done=<0|1>
- *   rtl8189fs_c6t: phase <n> report bytes=<n> ms=<n> kbit=<n> pkts=<n>
- *   rtl8189fs_c6t: phase <n> census rx_frames=<n> rx_bytes=<n> tx_frames=<n> ...
- *   rtl8189fs_c6t: phase <n> done ok=<0|1>
- *   rtl8189fs_c6t: PASS C6T
- *   rtl8189fs_c6t: FAIL <reason>
+ *   rtl8189fs_throughput: plan=throughput bssid=<mac> dev=<name>
+ *   rtl8189fs_throughput: ready netif=<0|1> rx_frames=<n> tx_frames=<n>
+ *   rtl8189fs_throughput: server tcp=<port> udp=<port> ok=<0|1>
+ *   rtl8189fs_throughput: phase <n> begin proto=<p> role=<r> port=<n> window_ms=<n> name=<n>
+ *   rtl8189fs_throughput: t=<n> bytes=<n> delta=<n> done=<0|1>
+ *   rtl8189fs_throughput: phase <n> report bytes=<n> ms=<n> kbit=<n> pkts=<n>
+ *   rtl8189fs_throughput: phase <n> census rx_frames=<n> rx_bytes=<n> tx_frames=<n> ...
+ *   rtl8189fs_throughput: phase <n> done ok=<0|1>
+ *   rtl8189fs_throughput: PASS THROUGHPUT
+ *   rtl8189fs_throughput: FAIL <reason>
  */
 
 #include <stdint.h>
@@ -74,34 +74,34 @@
 #ifndef RTL8189FS_PEER_IP
 #define RTL8189FS_PEER_IP	"192.168.99.1"
 #endif
-static char c6t_peer_ip[16] = RTL8189FS_PEER_IP;
+static char throughput_peer_ip[16] = RTL8189FS_PEER_IP;
 
 void
-lkpi_c6_peer_ip_set(const char *ip)
+lkpi_net_peer_ip_set(const char *ip)
 {
 	if (ip == NULL || ip[0] == '\0')
 		return;
-	strncpy(c6t_peer_ip, ip, sizeof(c6t_peer_ip) - 1u);
-	c6t_peer_ip[sizeof(c6t_peer_ip) - 1u] = '\0';
+	strncpy(throughput_peer_ip, ip, sizeof(throughput_peer_ip) - 1u);
+	throughput_peer_ip[sizeof(throughput_peer_ip) - 1u] = '\0';
 }
 
-#define C6T_TCP_PORT		5001u
-#define C6T_UDP_PORT		5002u
+#define THROUGHPUT_TCP_PORT		5001u
+#define THROUGHPUT_UDP_PORT		5002u
 
-#define C6T_LOOP_MS		12000u
-#define C6T_DN_MS		30000u
-#define C6T_UDPDN_MS		20000u
-#define C6T_UP_MS		12000u
-#define C6T_UDPUP_MS		20000u
-#define C6T_UDPUP_KBIT		35000u
-#define C6T_SAMPLE_MS		1000u
+#define THROUGHPUT_LOOP_MS		12000u
+#define THROUGHPUT_DN_MS		30000u
+#define THROUGHPUT_UDPDN_MS		20000u
+#define THROUGHPUT_UP_MS		12000u
+#define THROUGHPUT_UDPUP_MS		20000u
+#define THROUGHPUT_UDPUP_KBIT		35000u
+#define THROUGHPUT_SAMPLE_MS		1000u
 
-enum c6t_phase_kind {
-	C6T_LOOPBACK,
-	C6T_TCP_DOWN,
-	C6T_UDP_DOWN,
-	C6T_TCP_UP,
-	C6T_UDP_UP,
+enum throughput_phase_kind {
+	THROUGHPUT_LOOPBACK,
+	THROUGHPUT_TCP_DOWN,
+	THROUGHPUT_UDP_DOWN,
+	THROUGHPUT_TCP_UP,
+	THROUGHPUT_UDP_UP,
 };
 
 #ifdef CONFIG_LKPI_CENSUS
@@ -110,7 +110,7 @@ enum c6t_phase_kind {
  *
  * The engine's own account says where a transfer stopped; it cannot say who
  * owned the core instead.  This thread is the second half of that reading: when
- * the engine's progress counter has not moved for C6T_WD_STALL_MS while a
+ * the engine's progress counter has not moved for THROUGHPUT_WD_STALL_MS while a
  * wireless phase is running, it takes one snapshot - the engine's in-flight
  * operation and site, the fsl card-lock owner, the controller's registers, the
  * kernel's per-task run time over a 250 ms window, and the tail of the transfer
@@ -121,20 +121,20 @@ enum c6t_phase_kind {
  * being scheduled, so the observer must be able to outrank whatever is on the
  * core.  It costs one 200 ms tick and nothing else until it fires.
  */
-#define C6T_WD_PERIOD_MS	200u
-#define C6T_WD_STALL_MS		600u
-#define C6T_WD_TASKS		24u
-#define C6T_WD_OPS		12u
+#define THROUGHPUT_WD_PERIOD_MS	200u
+#define THROUGHPUT_WD_STALL_MS		600u
+#define THROUGHPUT_WD_TASKS		24u
+#define THROUGHPUT_WD_OPS		12u
 
 /* The census clock is the board glue's (freertos_board_glue.c): it is the one
  * unit every census image compiles, while this case is only in the throughput
  * images.  See that file's note for the 2026-11-13 link failure it fixes. */
 
-static volatile unsigned int c6t_traffic_active;
-static osThreadId_t c6t_wd_thread;
+static volatile unsigned int throughput_traffic_active;
+static osThreadId_t throughput_wd_thread;
 
 static const char *
-c6t_task_state(uint32_t state)
+throughput_task_state(uint32_t state)
 {
 	switch (state) {
 	case RTOS_TASK_RUNNING:		return "run";
@@ -147,16 +147,16 @@ c6t_task_state(uint32_t state)
 }
 
 static void
-c6t_watchdog_tasks(const struct rtos_task_stat *a, unsigned int na,
+throughput_watchdog_tasks(const struct rtos_task_stat *a, unsigned int na,
     const struct rtos_task_stat *b, unsigned int nb)
 {
-	uint32_t delta[C6T_WD_TASKS];
+	uint32_t delta[THROUGHPUT_WD_TASKS];
 	uint32_t freq = gtimer_freq_get();
 	uint32_t per_ms = (freq != 0u) ? (freq / 1000u) : 24000u;
 	unsigned int i, j, k, shown = 0u;
 	int top = -1;
 
-	for (i = 0u; i < nb && i < C6T_WD_TASKS; i++) {
+	for (i = 0u; i < nb && i < THROUGHPUT_WD_TASKS; i++) {
 		delta[i] = 0u;
 		/* Match by task number, not name: the vendor creates more than one
 		 * task named RTWHALXT, and a name match then pairs two different
@@ -171,7 +171,7 @@ c6t_watchdog_tasks(const struct rtos_task_stat *a, unsigned int na,
 	for (k = 0u; k < 6u; k++) {
 		unsigned int best = nb;
 
-		for (i = 0u; i < nb && i < C6T_WD_TASKS; i++) {
+		for (i = 0u; i < nb && i < THROUGHPUT_WD_TASKS; i++) {
 			if (delta[i] == 0u)
 				continue;
 			if (best == nb || delta[i] > delta[best])
@@ -181,16 +181,16 @@ c6t_watchdog_tasks(const struct rtos_task_stat *a, unsigned int na,
 			break;
 		if (k == 0u)
 			top = (int)best;
-		CASE_ANCHOR("rtl8189fs_c6t: stall task %s st=%s prio=%u "
+		CASE_ANCHOR("rtl8189fs_throughput: stall task %s st=%s prio=%u "
 			    "cpu_ms=%u stack=%u\n",
 			    b[best].name != NULL ? b[best].name : "?",
-			    c6t_task_state(b[best].state), b[best].prio,
+			    throughput_task_state(b[best].state), b[best].prio,
 			    delta[best] / per_ms, b[best].stack_free);
 		delta[best] = 0u;
 		shown++;
 	}
 	if (shown == 0u)
-		CASE_ANCHOR("rtl8189fs_c6t: stall task none\n");
+		CASE_ANCHOR("rtl8189fs_throughput: stall task none\n");
 	/* What the biggest consumer was executing: a spin names itself here, and
 	 * an ISR storm shows up as PCs in the vector/board range attributed to the
 	 * task it interrupted. */
@@ -200,7 +200,7 @@ c6t_watchdog_tasks(const struct rtos_task_stat *a, unsigned int na,
 		unsigned int q;
 
 		for (q = 0u; q < nh; q++) {
-			CASE_ANCHOR("rtl8189fs_c6t: stall hogpc task=%s pc=0x%llx n=%u\n",
+			CASE_ANCHOR("rtl8189fs_throughput: stall hogpc task=%s pc=0x%llx n=%u\n",
 				    b[top].name != NULL ? b[top].name : "?",
 				    (unsigned long long)h[q].pc, h[q].count);
 		}
@@ -208,12 +208,12 @@ c6t_watchdog_tasks(const struct rtos_task_stat *a, unsigned int na,
 }
 
 static void
-c6t_watchdog_dump(unsigned int no_progress_ms)
+throughput_watchdog_dump(unsigned int no_progress_ms)
 {
 	struct lkpi_sdio_diag d;
 	struct lkpi_sdio_stats st;
-	struct lkpi_sdio_op ops[C6T_WD_OPS];
-	struct rtos_task_stat a[C6T_WD_TASKS], b[C6T_WD_TASKS];
+	struct lkpi_sdio_op ops[THROUGHPUT_WD_OPS];
+	struct rtos_task_stat a[THROUGHPUT_WD_TASKS], b[THROUGHPUT_WD_TASKS];
 	struct dwc_mmc_snapshot sn;
 	struct dwc_mmc_census mc;
 	struct sdmmc_lock_diag osa;
@@ -231,25 +231,25 @@ c6t_watchdog_dump(unsigned int no_progress_ms)
 	    now_ms >= d.inflight_t0_us / 1000u) ?
 	    now_ms - d.inflight_t0_us / 1000u : 0u;
 
-	CASE_ANCHOR("rtl8189fs_c6t: stall begin no_progress_ms=%u progress=%u "
+	CASE_ANCHOR("rtl8189fs_throughput: stall begin no_progress_ms=%u progress=%u "
 		    "site=%s dwcsite=%s\n", no_progress_ms, d.progress,
 		    d.site, dwc_mmc_site());
-	CASE_ANCHOR("rtl8189fs_c6t: stall claim=%s/%u/%s/%s pump=%s irq=%u "
+	CASE_ANCHOR("rtl8189fs_throughput: stall claim=%s/%u/%s/%s pump=%s irq=%u "
 		    "prio=%u io=%u/%u err=%u\n", lkpi_sdio_claim_owner(),
 		    lkpi_sdio_claim_held_ms(), lkpi_sdio_pump_stage(),
 		    lkpi_sdio_claim_op(), lkpi_sdio_pump_state(),
 		    lkpi_sdio_pump_irq_get() ? 1u : 0u,
 		    lkpi_sdio_pump_prio_level_get(), st.io_direct,
 		    st.io_extended, st.errors);
-	CASE_ANCHOR("rtl8189fs_c6t: stall inflight valid=%u kind=%u func=%u "
+	CASE_ANCHOR("rtl8189fs_throughput: stall inflight valid=%u kind=%u func=%u "
 		    "addr=0x%x bytes=%u blocks=%u age_ms=%u\n",
 		    d.inflight_valid, d.inflight_kind, d.inflight_func,
 		    d.inflight_addr, d.inflight_bytes, d.inflight_blocks,
 		    age_ms);
-	CASE_ANCHOR("rtl8189fs_c6t: stall dwc pending=%u cmd=%u len=%u err=%u "
+	CASE_ANCHOR("rtl8189fs_throughput: stall dwc pending=%u cmd=%u len=%u err=%u "
 		    "laststs=0x%x\n", mc.pending, mc.last_cmd, mc.last_len,
 		    mc.last_error, mc.last_status);
-	CASE_ANCHOR("rtl8189fs_c6t: stall dwc t=%u d=%u e=%u cmd_p=%u/"
+	CASE_ANCHOR("rtl8189fs_throughput: stall dwc t=%u d=%u e=%u cmd_p=%u/"
 		    "%llu/%llu data_p=%u/%llu/%llu idmac_p=%u/%llu/%llu\n",
 		    mc.transfers, mc.with_data, mc.errors, mc.cmd_polls,
 		    (unsigned long long)(mc.cmd_wait_ns / 1000u),
@@ -260,65 +260,65 @@ c6t_watchdog_dump(unsigned int no_progress_ms)
 		    mc.idmac_polls,
 		    (unsigned long long)(mc.idmac_wait_ns / 1000u),
 		    (unsigned long long)(mc.idmac_wait_max_ns / 1000u));
-	CASE_ANCHOR("rtl8189fs_c6t: stall reg rintsts=0x%x idsts=0x%x "
+	CASE_ANCHOR("rtl8189fs_throughput: stall reg rintsts=0x%x idsts=0x%x "
 		    "status=0x%x bytcnt=%u tcb=%u tbb=%u dsc=0x%x buf=0x%x\n",
 		    sn.rintsts, sn.idsts, sn.status, sn.bytcnt, sn.tcb,
 		    sn.tbb, sn.dscaddr, sn.bufaddr);
-	CASE_ANCHOR("rtl8189fs_c6t: stall reg bmod=0x%x idinten=0x%x "
+	CASE_ANCHOR("rtl8189fs_throughput: stall reg bmod=0x%x idinten=0x%x "
 		    "tmout=0x%x ctype=0x%x clkena=0x%x clkdiv=%u fifoth=0x%x\n",
 		    sn.bmod, sn.idinten, sn.tmout, sn.ctype, sn.clkena,
 		    sn.clkdiv, sn.fifoth);
-	CASE_ANCHOR("rtl8189fs_c6t: stall reg pldmnd=%u desc0=0x%x/%u/0x%x "
+	CASE_ANCHOR("rtl8189fs_throughput: stall reg pldmnd=%u desc0=0x%x/%u/0x%x "
 		    "osa=%s/%u/%u\n", sn.pldmnd, sn.desc0_flags, sn.desc0_cnt,
 		    sn.desc0_addr, osa.owner, osa.held_ms, osa.waiters);
 	{
 		struct sdmmc_lock_diag card_lock;
 
 		lkpi_sdio_fsl_card_lock_get(&card_lock);
-		CASE_ANCHOR("rtl8189fs_c6t: stall cardlock=%s/%u/w%u v=%u\n",
+		CASE_ANCHOR("rtl8189fs_throughput: stall cardlock=%s/%u/w%u v=%u\n",
 			    card_lock.owner, card_lock.held_ms,
 			    card_lock.waiters, card_lock.valid);
 	}
-	CASE_ANCHOR("rtl8189fs_c6t: stall udelay_caller=0x%lx\n",
+	CASE_ANCHOR("rtl8189fs_throughput: stall udelay_caller=0x%lx\n",
 		    (unsigned long)dwc_mmc_udelay_caller_get());
-	CASE_ANCHOR("rtl8189fs_c6t: stall savedpc pump=0x%llx\n",
+	CASE_ANCHOR("rtl8189fs_throughput: stall savedpc pump=0x%llx\n",
 		    (unsigned long long)rtos_task_saved_pc(
 		    lkpi_sdio_pump_thread()));
 	{
-		uint64_t c0 = gtimer_count_get();
-		uint64_t c1 = gtimer_count_get();
+		uint64_t t0 = gtimer_count_get();
+		uint64_t t1 = gtimer_count_get();
 
-		CASE_ANCHOR("rtl8189fs_c6t: stall loganchor=%u\n",
+		CASE_ANCHOR("rtl8189fs_throughput: stall loganchor=%u\n",
 		    log_anchor_call_count());
-	CASE_ANCHOR("rtl8189fs_c6t: stall claim_violations=%u thread=%s owner=%s "
+	CASE_ANCHOR("rtl8189fs_throughput: stall claim_violations=%u thread=%s owner=%s "
 		    "prog=%u tick=%u\n",
 		    lkpi_sdio_claim_violations(),
 		    lkpi_sdio_claim_violation_thread(),
 		    lkpi_sdio_claim_violation_owner(),
 		    lkpi_sdio_claim_violation_progress(),
 		    lkpi_sdio_claim_violation_tick());
-	CASE_ANCHOR("rtl8189fs_c6t: stall clk freq=%u poll_us=%u "
-			    "dpoll_us=%u c0=%llu dc=%llu\n",
+	CASE_ANCHOR("rtl8189fs_throughput: stall clk freq=%u poll_us=%u "
+			    "dpoll_us=%u t0=%llu dc=%llu\n",
 			    gtimer_freq_get(), dwc_mmc_get_poll_us(),
 			    dwc_mmc_get_data_poll_us(),
-			    (unsigned long long)c0,
-			    (unsigned long long)(c1 - c0));
+			    (unsigned long long)t0,
+			    (unsigned long long)(t1 - t0));
 	}
 
-	na = rtos_task_stats_get(a, C6T_WD_TASKS);
+	na = rtos_task_stats_get(a, THROUGHPUT_WD_TASKS);
 	osDelay(250u);
-	nb = rtos_task_stats_get(b, C6T_WD_TASKS);
-	c6t_watchdog_tasks(a, na, b, nb);
+	nb = rtos_task_stats_get(b, THROUGHPUT_WD_TASKS);
+	throughput_watchdog_tasks(a, na, b, nb);
 
 	{
 		struct rtos_pc_hit hits[4];
 		unsigned int nh = rtos_pc_top(lkpi_sdio_pump_thread(), hits, 4u);
 
 		if (nh == 0u) {
-			CASE_ANCHOR("rtl8189fs_c6t: stall pc none\n");
+			CASE_ANCHOR("rtl8189fs_throughput: stall pc none\n");
 		}
 		for (i = 0u; i < nh; i++) {
-			CASE_ANCHOR("rtl8189fs_c6t: stall pc=0x%llx n=%u\n",
+			CASE_ANCHOR("rtl8189fs_throughput: stall pc=0x%llx n=%u\n",
 				    (unsigned long long)hits[i].pc, hits[i].count);
 		}
 		{
@@ -333,10 +333,10 @@ c6t_watchdog_dump(unsigned int no_progress_ms)
 				if (b[hi].handle == holder)
 					break;
 			}
-			CASE_ANCHOR("rtl8189fs_c6t: stall holder=%s st=%s "
+			CASE_ANCHOR("rtl8189fs_throughput: stall holder=%s st=%s "
 				    "lastpc=0x%llx ago=%u sp=0x%llx\n",
 				    (hi < nb) ? b[hi].name : "-",
-				    (hi < nb) ? c6t_task_state(b[hi].state) : "-",
+				    (hi < nb) ? throughput_task_state(b[hi].state) : "-",
 				    (unsigned long long)hlast, ago,
 				    (unsigned long long)(holder != NULL ?
 					*(uint64_t *)holder : 0u));
@@ -348,12 +348,12 @@ c6t_watchdog_dump(unsigned int no_progress_ms)
 
 				hn = rtos_task_frame_scan(holder, hv, ho, 8u);
 				for (hk = 0u; hk < hn; hk++)
-					CASE_ANCHOR("rtl8189fs_c6t: stall hframe "
+					CASE_ANCHOR("rtl8189fs_throughput: stall hframe "
 						    "off=0x%x val=0x%llx\n",
 						    ho[hk], (unsigned long long)hv[hk]);
 				(void)rtos_task_frame_raw(holder, 0x200u, raw, 16u);
 				for (hk = 0u; hk < 16u; hk++)
-					CASE_ANCHOR("rtl8189fs_c6t: stall hraw "
+					CASE_ANCHOR("rtl8189fs_throughput: stall hraw "
 						    "off=0x%x val=0x%llx\n",
 						    0x200u + hk * 8u,
 						    (unsigned long long)raw[hk]);
@@ -362,32 +362,32 @@ c6t_watchdog_dump(unsigned int no_progress_ms)
 			uint32_t fo[8];
 			unsigned int fn, k;
 
-			CASE_ANCHOR("rtl8189fs_c6t: stall lastpc pump=0x%llx "
+			CASE_ANCHOR("rtl8189fs_throughput: stall lastpc pump=0x%llx "
 				    "ago_tick=%u\n",
 				    (unsigned long long)last, ago);
 			fn = rtos_task_frame_scan(lkpi_sdio_pump_thread(), fv,
 						  fo, 8u);
 			for (k = 0u; k < fn; k++)
-				CASE_ANCHOR("rtl8189fs_c6t: stall frame "
+				CASE_ANCHOR("rtl8189fs_throughput: stall frame "
 					    "off=0x%x val=0x%llx\n",
 					    fo[k], (unsigned long long)fv[k]);
 		}
 	}
 
-	n = lkpi_sdio_op_dump(ops, C6T_WD_OPS);
+	n = lkpi_sdio_op_dump(ops, THROUGHPUT_WD_OPS);
 	for (i = 0u; i < n; i++) {
 		if (ops[i].seq == 0u)
 			continue;
-		CASE_ANCHOR("rtl8189fs_c6t: stall op kind=%u addr=0x%x "
+		CASE_ANCHOR("rtl8189fs_throughput: stall op kind=%u addr=0x%x "
 			    "bytes=%u blk=%u dur_us=%u ret=%d\n",
 			    ops[i].kind, ops[i].addr, ops[i].bytes,
 			    ops[i].blocks, ops[i].dur_us, ops[i].ret);
 	}
-	CASE_ANCHOR("rtl8189fs_c6t: stall end\n");
+	CASE_ANCHOR("rtl8189fs_throughput: stall end\n");
 }
 
 static void
-c6t_watchdog_entry(void *arg)
+throughput_watchdog_entry(void *arg)
 {
 	uint32_t base = 0u, last = 0u;
 	unsigned int still = 0u, primed = 0u, dumped = 0u;
@@ -397,8 +397,8 @@ c6t_watchdog_entry(void *arg)
 	for (;;) {
 		struct lkpi_sdio_diag d;
 
-		osDelay(C6T_WD_PERIOD_MS);
-		if (c6t_traffic_active == 0u) {
+		osDelay(THROUGHPUT_WD_PERIOD_MS);
+		if (throughput_traffic_active == 0u) {
 			active_prev = 0u;
 			primed = 0u;
 			still = 0u;
@@ -428,61 +428,61 @@ c6t_watchdog_entry(void *arg)
 			dumped = 0u;
 			continue;
 		}
-		still += C6T_WD_PERIOD_MS;
-		if (still >= C6T_WD_STALL_MS && dumped == 0u) {
+		still += THROUGHPUT_WD_PERIOD_MS;
+		if (still >= THROUGHPUT_WD_STALL_MS && dumped == 0u) {
 			dumped = 1u;
-			c6t_watchdog_dump(still);
+			throughput_watchdog_dump(still);
 		}
 	}
 }
 #endif	/* CONFIG_LKPI_CENSUS */
 
-struct c6t_phase {
+struct throughput_phase {
 	const char *name;
 	const char *proto;
 	const char *role;
 	unsigned port;
 	unsigned window_ms;
-	enum c6t_phase_kind kind;
+	enum throughput_phase_kind kind;
 };
 
-#if CONFIG_C6T_UDP_FIRST
-/* The receive-only-first arm (tests/board/rtos/Kconfig: C6T_UDP_FIRST): no
+#if CONFIG_THROUGHPUT_UDP_FIRST
+/* The receive-only-first arm (tests/board/rtos/Kconfig: THROUGHPUT_UDP_FIRST): no
  * TCP phase runs before the sink, so the transmit path is idle while the
  * downlink is offered.  A stall here is an RX-path finding; a clean window
  * followed by the default plan's stall points at the transmit path's claim. */
-static const struct c6t_phase c6t_plan[] = {
-	{ "udpdn",    "udp", "server", C6T_UDP_PORT, C6T_UDPDN_MS, C6T_UDP_DOWN },
-	{ "udpdn2",   "udp", "server", C6T_UDP_PORT, C6T_UDPDN_MS, C6T_UDP_DOWN },
-	{ "loopback", "tcp", "client", C6T_TCP_PORT, C6T_LOOP_MS, C6T_LOOPBACK },
-	{ "tcpdn",    "tcp", "server", C6T_TCP_PORT, C6T_DN_MS, C6T_TCP_DOWN },
-	{ "tcpdn2",   "tcp", "server", C6T_TCP_PORT, C6T_DN_MS, C6T_TCP_DOWN },
-	{ "tcpup",    "tcp", "client", C6T_TCP_PORT, C6T_UP_MS, C6T_TCP_UP },
-	{ "udpup",    "udp", "client", C6T_TCP_PORT, C6T_UDPUP_MS, C6T_UDP_UP },
+static const struct throughput_phase throughput_plan[] = {
+	{ "udpdn",    "udp", "server", THROUGHPUT_UDP_PORT, THROUGHPUT_UDPDN_MS, THROUGHPUT_UDP_DOWN },
+	{ "udpdn2",   "udp", "server", THROUGHPUT_UDP_PORT, THROUGHPUT_UDPDN_MS, THROUGHPUT_UDP_DOWN },
+	{ "loopback", "tcp", "client", THROUGHPUT_TCP_PORT, THROUGHPUT_LOOP_MS, THROUGHPUT_LOOPBACK },
+	{ "tcpdn",    "tcp", "server", THROUGHPUT_TCP_PORT, THROUGHPUT_DN_MS, THROUGHPUT_TCP_DOWN },
+	{ "tcpdn2",   "tcp", "server", THROUGHPUT_TCP_PORT, THROUGHPUT_DN_MS, THROUGHPUT_TCP_DOWN },
+	{ "tcpup",    "tcp", "client", THROUGHPUT_TCP_PORT, THROUGHPUT_UP_MS, THROUGHPUT_TCP_UP },
+	{ "udpup",    "udp", "client", THROUGHPUT_TCP_PORT, THROUGHPUT_UDPUP_MS, THROUGHPUT_UDP_UP },
 };
 #else
-static const struct c6t_phase c6t_plan[] = {
-	{ "loopback", "tcp", "client", C6T_TCP_PORT, C6T_LOOP_MS, C6T_LOOPBACK },
-	{ "tcpdn",    "tcp", "server", C6T_TCP_PORT, C6T_DN_MS, C6T_TCP_DOWN },
-	{ "udpdn",    "udp", "server", C6T_UDP_PORT, C6T_UDPDN_MS, C6T_UDP_DOWN },
-	{ "tcpdn2",   "tcp", "server", C6T_TCP_PORT, C6T_DN_MS, C6T_TCP_DOWN },
-	{ "udpdn2",   "udp", "server", C6T_UDP_PORT, C6T_UDPDN_MS, C6T_UDP_DOWN },
-	{ "tcpup",    "tcp", "client", C6T_TCP_PORT, C6T_UP_MS, C6T_TCP_UP },
-	{ "udpup",    "udp", "client", C6T_TCP_PORT, C6T_UDPUP_MS, C6T_UDP_UP },
+static const struct throughput_phase throughput_plan[] = {
+	{ "loopback", "tcp", "client", THROUGHPUT_TCP_PORT, THROUGHPUT_LOOP_MS, THROUGHPUT_LOOPBACK },
+	{ "tcpdn",    "tcp", "server", THROUGHPUT_TCP_PORT, THROUGHPUT_DN_MS, THROUGHPUT_TCP_DOWN },
+	{ "udpdn",    "udp", "server", THROUGHPUT_UDP_PORT, THROUGHPUT_UDPDN_MS, THROUGHPUT_UDP_DOWN },
+	{ "tcpdn2",   "tcp", "server", THROUGHPUT_TCP_PORT, THROUGHPUT_DN_MS, THROUGHPUT_TCP_DOWN },
+	{ "udpdn2",   "udp", "server", THROUGHPUT_UDP_PORT, THROUGHPUT_UDPDN_MS, THROUGHPUT_UDP_DOWN },
+	{ "tcpup",    "tcp", "client", THROUGHPUT_TCP_PORT, THROUGHPUT_UP_MS, THROUGHPUT_TCP_UP },
+	{ "udpup",    "udp", "client", THROUGHPUT_TCP_PORT, THROUGHPUT_UDPUP_MS, THROUGHPUT_UDP_UP },
 };
 #endif
 
-#define C6T_PLAN_LEN	(sizeof(c6t_plan) / sizeof(c6t_plan[0]))
-#define C6T_TRAFFIC_PHASES	6u
+#define THROUGHPUT_PLAN_LEN	(sizeof(throughput_plan) / sizeof(throughput_plan[0]))
+#define THROUGHPUT_TRAFFIC_PHASES	6u
 
-struct c6t_snap {
+struct throughput_snap {
 	struct lkpi_net_diag diag;
 	struct lkpi_net_stack_diag stack;
 	struct lkpi_skb_pool_stats pool;
 };
 
 static void
-c6t_snap_take(struct c6t_snap *s)
+throughput_snap_take(struct throughput_snap *s)
 {
 	(void)memset(s, 0, sizeof(*s));
 	lkpi_net_diag(&s->diag);
@@ -497,8 +497,8 @@ c6t_snap_take(struct c6t_snap *s)
  * stall with the claim held mid-read, a stall with the pump idle and the FIFO
  * growing, and a stall with every buffer drained are three different findings;
  * one line per second separates them. */
-static unsigned c6t_recv_min = ~0u;
-static unsigned c6t_rxbuf_min = ~0u;
+static unsigned throughput_recv_min = ~0u;
+static unsigned throughput_rxbuf_min = ~0u;
 
 #ifdef CONFIG_LKPI_CENSUS
 /*
@@ -514,13 +514,13 @@ lkpi_census_pump_probe(void)
 	struct rtl8189f_diag d;
 
 	rtl8189f_diag_get(&d);
-	if (d.valid != 0u && d.recv_free < c6t_recv_min)
-		c6t_recv_min = d.recv_free;
+	if (d.valid != 0u && d.recv_free < throughput_recv_min)
+		throughput_recv_min = d.recv_free;
 }
 #endif
 
 static void
-c6t_obs_line(unsigned int sec)
+throughput_obs_line(unsigned int sec)
 {
 	struct rtl8189f_diag d;
 	struct lkpi_sdio_stats st;
@@ -528,12 +528,12 @@ c6t_obs_line(unsigned int sec)
 	rtl8189f_diag_get(&d);
 	lkpi_sdio_stats_get(&st);
 	if (d.valid != 0u) {
-		if (d.recv_free < c6t_recv_min)
-			c6t_recv_min = d.recv_free;
-		if (d.recvbuf_free < c6t_rxbuf_min)
-			c6t_rxbuf_min = d.recvbuf_free;
+		if (d.recv_free < throughput_recv_min)
+			throughput_recv_min = d.recv_free;
+		if (d.recvbuf_free < throughput_rxbuf_min)
+			throughput_rxbuf_min = d.recvbuf_free;
 	}
-	CASE_ANCHOR("rtl8189fs_c6t: obs t=%u claim=%s/%u/%s/%s pump=%s "
+	CASE_ANCHOR("rtl8189fs_throughput: obs t=%u claim=%s/%u/%s/%s pump=%s "
 		    "irq=%u io=%u/%u err=%u drv recv=%u rxbuf=%u min=%u/%u "
 		    "rxfifo=%u txb=%u/%u cmd=%u/%u la=%u lb=%llu\n",
 		    sec, lkpi_sdio_claim_owner(), (unsigned)lkpi_sdio_claim_held_ms(),
@@ -542,7 +542,7 @@ c6t_obs_line(unsigned int sec)
 		    lkpi_sdio_pump_irq_get() ? 1u : 0u,
 		    (unsigned)st.io_direct, (unsigned)st.io_extended,
 		    (unsigned)st.errors, (unsigned)d.recv_free,
-		    (unsigned)d.recvbuf_free, c6t_recv_min, c6t_rxbuf_min,
+		    (unsigned)d.recvbuf_free, throughput_recv_min, throughput_rxbuf_min,
 		    (unsigned)d.rx_fifo, (unsigned)d.txbuf_free,
 		    (unsigned)d.txframe_free, (unsigned)d.cmd_issued,
 		    (unsigned)d.cmd_done, log_anchor_call_count(),
@@ -554,7 +554,7 @@ c6t_obs_line(unsigned int sec)
 
 		lkpi_sdio_rx_stats_get(&rxs);
 		lkpi_sdio_diag_get(&dg);
-		CASE_ANCHOR("rtl8189fs_c6t: obs2 t=%u site=%s dwc=%s prog=%u "
+		CASE_ANCHOR("rtl8189fs_throughput: obs2 t=%u site=%s dwc=%s prog=%u "
 			    "offer=%u/%u bytes=%lu read=%u/%u/%u "
 			    "hisr=%u/%u/%u/%u\n",
 			    sec, dg.site, dwc_mmc_site(), dg.progress,
@@ -570,7 +570,7 @@ c6t_obs_line(unsigned int sec)
  * count once a second, printed before the next second is waited for, so a
  * zero-delta stretch is visible where it happened. */
 static int
-c6t_tcp_down_sampled(unsigned window_ms, struct lkpi_net_phase *out)
+throughput_tcp_down_sampled(unsigned window_ms, struct lkpi_net_phase *out)
 {
 	struct lkpi_net_phase cur;
 	struct lkpi_net_diag diag;
@@ -585,20 +585,20 @@ c6t_tcp_down_sampled(unsigned window_ms, struct lkpi_net_phase *out)
 	(void)lkpi_net_diag(&diag);
 	prev_rx = diag.rx_bytes;
 	(void)lkpi_net_iperf_down_begin();
-	for (elapsed = C6T_SAMPLE_MS; elapsed <= window_ms;
-	     elapsed += C6T_SAMPLE_MS) {
-		osDelay(C6T_SAMPLE_MS);
+	for (elapsed = THROUGHPUT_SAMPLE_MS; elapsed <= window_ms;
+	     elapsed += THROUGHPUT_SAMPLE_MS) {
+		osDelay(THROUGHPUT_SAMPLE_MS);
 		(void)memset(&cur, 0, sizeof(cur));
 		(void)lkpi_net_iperf_down_poll(&cur);
 		(void)lkpi_net_diag(&diag);
-		CASE_ANCHOR("rtl8189fs_c6t: t=%u bytes=%u delta=%u rx=%lu "
+		CASE_ANCHOR("rtl8189fs_throughput: t=%u bytes=%u delta=%u rx=%lu "
 			    "rxd=%lu done=%d\n",
-			    elapsed / C6T_SAMPLE_MS, cur.bytes,
+			    elapsed / THROUGHPUT_SAMPLE_MS, cur.bytes,
 			    cur.bytes - prev_bytes, diag.rx_bytes,
 			    diag.rx_bytes - prev_rx, cur.done);
 		prev_bytes = cur.bytes;
 		prev_rx = diag.rx_bytes;
-		c6t_obs_line(elapsed / C6T_SAMPLE_MS);
+		throughput_obs_line(elapsed / THROUGHPUT_SAMPLE_MS);
 	}
 	(void)memset(out, 0, sizeof(*out));
 	(void)lkpi_net_iperf_down_poll(out);
@@ -608,29 +608,29 @@ c6t_tcp_down_sampled(unsigned window_ms, struct lkpi_net_phase *out)
 }
 
 static int
-c6t_run_phase(unsigned n, const struct c6t_phase *ph)
+throughput_run_phase(unsigned n, const struct throughput_phase *ph)
 {
-	struct c6t_snap before;
-	struct c6t_snap after;
+	struct throughput_snap before;
+	struct throughput_snap after;
 	struct lkpi_net_phase r;
 	int rc;
 
 	(void)memset(&r, 0, sizeof(r));
-	CASE_ANCHOR("rtl8189fs_c6t: phase %u begin proto=%s role=%s port=%u "
+	CASE_ANCHOR("rtl8189fs_throughput: phase %u begin proto=%s role=%s port=%u "
 		    "window_ms=%u name=%s\n",
 		    n, ph->proto, ph->role, ph->port, ph->window_ms, ph->name);
-	c6t_snap_take(&before);
+	throughput_snap_take(&before);
 #ifdef CONFIG_LKPI_CENSUS
-	if (ph->kind != C6T_LOOPBACK)
-		c6t_traffic_active = 1u;
+	if (ph->kind != THROUGHPUT_LOOPBACK)
+		throughput_traffic_active = 1u;
 #endif
 
 	switch (ph->kind) {
-	case C6T_LOOPBACK:
+	case THROUGHPUT_LOOPBACK:
 		rc = lkpi_net_loopback(ph->port, ph->window_ms, &r);
 		break;
-	case C6T_TCP_DOWN:
-		rc = c6t_tcp_down_sampled(ph->window_ms, &r);
+	case THROUGHPUT_TCP_DOWN:
+		rc = throughput_tcp_down_sampled(ph->window_ms, &r);
 		/*
 		 * The iperf server reports once per session, and a second down
 		 * window on the same server can miss that report while the data
@@ -648,35 +648,35 @@ c6t_run_phase(unsigned n, const struct c6t_phase *ph)
 						    ph->window_ms);
 				r.done = 1u;
 				rc = 0;
-				CASE_ANCHOR("rtl8189fs_c6t: phase %u report "
+				CASE_ANCHOR("rtl8189fs_throughput: phase %u report "
 					    "source=adapter\n", n);
 			}
 		}
 		break;
-	case C6T_UDP_DOWN:
+	case THROUGHPUT_UDP_DOWN:
 		rc = lkpi_net_udp_sink_window(ph->window_ms, &r);
 		break;
-	case C6T_TCP_UP:
-		rc = lkpi_net_iperf_up(c6t_peer_ip, ph->port, ph->window_ms, &r);
+	case THROUGHPUT_TCP_UP:
+		rc = lkpi_net_iperf_up(throughput_peer_ip, ph->port, ph->window_ms, &r);
 		break;
-	case C6T_UDP_UP:
-		rc = lkpi_net_udp_blast(c6t_peer_ip, ph->port, ph->window_ms,
-					C6T_UDPUP_KBIT, &r);
+	case THROUGHPUT_UDP_UP:
+		rc = lkpi_net_udp_blast(throughput_peer_ip, ph->port, ph->window_ms,
+					THROUGHPUT_UDPUP_KBIT, &r);
 		break;
 	default:
 		rc = -1;
 		break;
 	}
 
-	c6t_snap_take(&after);
+	throughput_snap_take(&after);
 #ifdef CONFIG_LKPI_CENSUS
-	if (ph->kind != C6T_LOOPBACK)
-		c6t_traffic_active = 0u;
+	if (ph->kind != THROUGHPUT_LOOPBACK)
+		throughput_traffic_active = 0u;
 #endif
-	CASE_ANCHOR("rtl8189fs_c6t: phase %u report bytes=%u ms=%u kbit=%u "
+	CASE_ANCHOR("rtl8189fs_throughput: phase %u report bytes=%u ms=%u kbit=%u "
 		    "pkts=%u\n",
 		    n, r.bytes, r.ms, r.kbit, r.pkts);
-	CASE_ANCHOR("rtl8189fs_c6t: phase %u census rx_frames=%lu rx_bytes=%lu "
+	CASE_ANCHOR("rtl8189fs_throughput: phase %u census rx_frames=%lu rx_bytes=%lu "
 		    "tx_frames=%lu tx_bytes=%lu tx_fail=%lu rxdlv_us=%lu "
 		    "txndo_us=%lu tcp_recv=%lu tcp_xmit=%lu tcp_drop=%lu "
 		    "tcp_memerr=%lu pbuf_err=%lu mbox_full=%lu skb_used=%u "
@@ -709,13 +709,13 @@ c6t_run_phase(unsigned n, const struct c6t_phase *ph)
 		    (unsigned long)(after.pool.data_overflow -
 				    before.pool.data_overflow),
 		    (unsigned)after.pool.dyalloc_live);
-	CASE_ANCHOR("rtl8189fs_c6t: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);
+	CASE_ANCHOR("rtl8189fs_throughput: phase %u done ok=%d\n", n, (rc == 0) ? 1 : 0);
 
 	return rc;
 }
 
 int
-case_rtl8189fs_c6t_run(void)
+case_rtl8189fs_throughput_run(void)
 {
 	struct net_device *dev;
 	unsigned char bssid[6];
@@ -726,65 +726,65 @@ case_rtl8189fs_c6t_run(void)
 
 	dev = dev_get_by_name(&init_net, "wlan0");
 	if (dev == NULL) {
-		CASE_ANCHOR("rtl8189fs_c6t: FAIL no wlan0\n");
+		CASE_ANCHOR("rtl8189fs_throughput: FAIL no wlan0\n");
 		return 1;
 	}
 
 	rc = lkpi_nl80211_connected(dev, bssid);
 	if (rc != 1) {
-		CASE_ANCHOR("rtl8189fs_c6t: FAIL not connected rc=%d\n", rc);
+		CASE_ANCHOR("rtl8189fs_throughput: FAIL not connected rc=%d\n", rc);
 		return 2;
 	}
 	/* The pump's band is the round's single causal variable when it is not
 	 * the default; setting it before the plan line makes the boot record the
 	 * band it actually ran, not the band the profile asked for. */
-	lkpi_sdio_pump_prio_level_set(CONFIG_C6T_PUMP_PRIO);
-	lkpi_sdio_pump_mode_set(CONFIG_C6T_PUMP_MODE);
+	lkpi_sdio_pump_prio_level_set(CONFIG_THROUGHPUT_PUMP_PRIO);
+	lkpi_sdio_pump_mode_set(CONFIG_THROUGHPUT_PUMP_MODE);
 	/* The yield knob is a Kconfig bool, so a profile that leaves it unset gets
 	 * the generated `is not set` comment rather than a 0 - passing the macro as
 	 * a value then fails to compile (2026-11-13: the census profile stopped
 	 * building on exactly this line).  The IRQ knob below is already used this
 	 * way. */
-#if CONFIG_C6T_PUMP_YIELD
+#if CONFIG_THROUGHPUT_PUMP_YIELD
 	lkpi_sdio_pump_yield_set(true);
 #else
 	lkpi_sdio_pump_yield_set(false);
 #endif
-	lkpi_sdio_pump_drain_set(CONFIG_C6T_PUMP_DRAIN);
-#if CONFIG_C6T_PUMP_IRQ
+	lkpi_sdio_pump_drain_set(CONFIG_THROUGHPUT_PUMP_DRAIN);
+#if CONFIG_THROUGHPUT_PUMP_IRQ
 	(void)lkpi_sdio_pump_irq_set(true);
 #endif
 #ifdef CONFIG_LKPI_CENSUS
 	lkpi_sdio_claim_guard_set(true);
 #endif
-	CASE_ANCHOR("rtl8189fs_c6t: plan=throughput bssid=%02x:%02x:%02x:%02x:"
+	CASE_ANCHOR("rtl8189fs_throughput: plan=throughput bssid=%02x:%02x:%02x:%02x:"
 		    "%02x:%02x dev=%s prio=%u mode=%u yield=%u drain=%u irq=%u\n",
 		    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
 		    dev->name, lkpi_sdio_pump_prio_level_get(),
-		    (unsigned)CONFIG_C6T_PUMP_MODE,
-#if CONFIG_C6T_PUMP_YIELD
+		    (unsigned)CONFIG_THROUGHPUT_PUMP_MODE,
+#if CONFIG_THROUGHPUT_PUMP_YIELD
 		    1u,
 #else
 		    0u,
 #endif
-		    (unsigned)CONFIG_C6T_PUMP_DRAIN,
+		    (unsigned)CONFIG_THROUGHPUT_PUMP_DRAIN,
 		    lkpi_sdio_pump_irq_get() ? 1u : 0u);
 
 	if (lkpi_net_ready() != 1) {
-		CASE_ANCHOR("rtl8189fs_c6t: FAIL lwIP netif not ready\n");
+		CASE_ANCHOR("rtl8189fs_throughput: FAIL lwIP netif not ready\n");
 		return 3;
 	}
 	lkpi_net_diag(&diag);
-	CASE_ANCHOR("rtl8189fs_c6t: ready netif=1 rx_frames=%lu tx_frames=%lu\n",
+	CASE_ANCHOR("rtl8189fs_throughput: ready netif=1 rx_frames=%lu tx_frames=%lu\n",
 		    diag.rx_frames, diag.tx_frames);
 
-	rc = lkpi_net_iperf_server_start(C6T_TCP_PORT);
+	rc = lkpi_net_iperf_server_start(THROUGHPUT_TCP_PORT);
 	if (rc == 0)
-		rc = lkpi_net_udp_sink_start(C6T_UDP_PORT);
-	CASE_ANCHOR("rtl8189fs_c6t: server tcp=%u udp=%u ok=%d\n",
-		    C6T_TCP_PORT, C6T_UDP_PORT, (rc == 0) ? 1 : 0);
+		rc = lkpi_net_udp_sink_start(THROUGHPUT_UDP_PORT);
+	CASE_ANCHOR("rtl8189fs_throughput: server tcp=%u udp=%u ok=%d\n",
+		    THROUGHPUT_TCP_PORT, THROUGHPUT_UDP_PORT, (rc == 0) ? 1 : 0);
 	if (rc != 0) {
-		CASE_ANCHOR("rtl8189fs_c6t: FAIL listener rc=%d\n", rc);
+		CASE_ANCHOR("rtl8189fs_throughput: FAIL listener rc=%d\n", rc);
 		return 4;
 	}
 
@@ -792,42 +792,42 @@ case_rtl8189fs_c6t_run(void)
 	{
 		osThreadAttr_t wd = { 0 };
 
-		wd.name = "c6t_wd";
+		wd.name = "throughput_wd";
 		wd.priority = osPriorityRealtime;
 		wd.stack_size = 12288u;
-		c6t_wd_thread = osThreadNew(c6t_watchdog_entry, NULL, &wd);
-		if (c6t_wd_thread == NULL)
-			CASE_ANCHOR("rtl8189fs_c6t: note watchdog not started\n");
+		throughput_wd_thread = osThreadNew(throughput_watchdog_entry, NULL, &wd);
+		if (throughput_wd_thread == NULL)
+			CASE_ANCHOR("rtl8189fs_throughput: note watchdog not started\n");
 	}
 #endif
 
-	for (i = 0u; i < (unsigned)C6T_PLAN_LEN; i++) {
-		rc = c6t_run_phase(i + 1u, &c6t_plan[i]);
+	for (i = 0u; i < (unsigned)THROUGHPUT_PLAN_LEN; i++) {
+		rc = throughput_run_phase(i + 1u, &throughput_plan[i]);
 		if (rc == 0) {
-			if (c6t_plan[i].kind != C6T_LOOPBACK)
+			if (throughput_plan[i].kind != THROUGHPUT_LOOPBACK)
 				ok++;
-		} else if (c6t_plan[i].kind == C6T_LOOPBACK) {
+		} else if (throughput_plan[i].kind == THROUGHPUT_LOOPBACK) {
 			/* The board-local session is an attribution instrument,
 			 * not a claim: a failed loopback narrows where the wall
 			 * is and does not fail the wire phases. */
-			CASE_ANCHOR("rtl8189fs_c6t: note loopback failed "
+			CASE_ANCHOR("rtl8189fs_throughput: note loopback failed "
 				    "(attribution only)\n");
 		}
 	}
 
 #ifdef CONFIG_LKPI_CENSUS
-	c6t_traffic_active = 0u;
-	if (c6t_wd_thread != NULL) {
-		(void)osThreadTerminate(c6t_wd_thread);
-		c6t_wd_thread = NULL;
+	throughput_traffic_active = 0u;
+	if (throughput_wd_thread != NULL) {
+		(void)osThreadTerminate(throughput_wd_thread);
+		throughput_wd_thread = NULL;
 	}
 #endif
 
-	if (ok == C6T_TRAFFIC_PHASES) {
-		CASE_ANCHOR("rtl8189fs_c6t: PASS C6T\n");
+	if (ok == THROUGHPUT_TRAFFIC_PHASES) {
+		CASE_ANCHOR("rtl8189fs_throughput: PASS THROUGHPUT\n");
 		return 0;
 	}
-	CASE_ANCHOR("rtl8189fs_c6t: FAIL traffic phases %u/%u\n", ok,
-		    C6T_TRAFFIC_PHASES);
+	CASE_ANCHOR("rtl8189fs_throughput: FAIL traffic phases %u/%u\n", ok,
+		    THROUGHPUT_TRAFFIC_PHASES);
 	return 5;
 }

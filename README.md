@@ -53,7 +53,7 @@ is 12,918 B flash / 20,896 B RAM, and liblinux80211's URB engine + skb pool is
 | `stm32f429-wifi-c6` delivery | 726,080 | 81,356 | 4,456,448 |
 | `stm32f429-wifi-c6t` throughput | 735,936 | 81,484 | 4,456,448 |
 | `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 4,456,448 |
-| 8189FS driver C0, delivery face (not linked) | 609,933 | 75,967 | — |
+| 8189FS driver, compile probe, delivery face (not linked) | 609,933 | 75,967 | — |
 
 The per-component table, the pre-link per-file USB table and the measured task
 stack high-water marks are in [docs/FOOTPRINTS.md](docs/FOOTPRINTS.md).
@@ -104,7 +104,7 @@ own `MBytes` column it is MiB and the row says so.
 ### RK3568 / Intel AC 7260 / PCIe - station
 
 `PROFILE=rk3568-iwl7260-c6-pool128` (and `-c6` for the clean baseline), driven
-by `tools/rtos/c6-throughput.sh`; gates applied by `tools/rtos/c6-report.py`.
+by `tools/rtos/throughput.sh`; gates applied by `tools/rtos/throughput-report.py`.
 Two cold boots per arm.
 
 Each column is two cold boots, and each cell is that boot's larger repeat.
@@ -209,8 +209,8 @@ five-minute soak are untested.
 
 ### RK3568 / Realtek RTL8189FTV / SDIO - station
 
-`PROFILE=rk3568-rtl8189fs-c6t-adaptive-yield` (and `-prio1`, `-drain`), driven
-by `tools/rtos/c6-throughput.sh`; gates applied by `tools/rtos/c6-report.py`.
+`PROFILE=rk3568-rtl8189fs-throughput-adaptive-yield` (and `-prio1`, `-drain`), driven
+by `tools/rtos/throughput.sh`; gates applied by `tools/rtos/throughput-report.py`.
 The Linux column is the same card on a mainline kernel with the vendor's own
 `rtl8189fs` stack (`tools/gt/gt-8189fs-board.sh --mode station`), same bench,
 same day, same clean module.  Three cold boots on the port, one on the
@@ -258,7 +258,7 @@ throughput number.
 
 ### RK3568 / Realtek RTL8189FTV / SDIO - access point
 
-`PROFILE=rk3568-rtl8189fs-ap-tp`, driven by `tools/rtos/ap-round.sh`; gates
+`PROFILE=rk3568-rtl8189fs-ap-throughput`, driven by `tools/rtos/ap-round.sh`; gates
 applied by `tools/rtos/ap-report.py`.  The AP MLME is the ported NXP
 `hostapd`; the peer is a Pi station (`MT7921AU`).  The Linux column is the same
 card as a mainline `hostapd` AP on the same channel, same day, clean module.
@@ -301,7 +301,7 @@ observation face here, not a conclusion.
 
 ### RK3568 / Realtek RTL8851BU / USB - station
 
-`PROFILE=rk3568-rtw89-8851bu-c6`, driven by `tools/rtos/c6-throughput.sh`; two
+`PROFILE=rk3568-rtw89-8851bu-c6`, driven by `tools/rtos/throughput.sh`; two
 cold boots.  The Linux column is the same card on the pin's GT kernel with
 mainline `rtw89`, on the same bench AP (`labwifi-ar-ht20s`, ch5/2432/HT20) and
 the same iperf2 windows.
@@ -321,7 +321,7 @@ gate; the board counts 94.67 MB and the peer 94.37 MB, +0.31%) and no ratio.
 The UDP uplink is void for the same instrument reason as the 7260 station
 table: the board's blast counter is not a received figure.
 
-The C6T round's stall was the port's `WARN_ON_ONCE` printing once per received
+The throughput round's stall was the port's `WARN_ON_ONCE` printing once per received
 frame (mac80211's `softirq_count()==0` warning), which consumed 25-28 s of the
 30 s window; the per-site once fix made the seven phases complete.  The
 downlink is still 0.75x the reference.

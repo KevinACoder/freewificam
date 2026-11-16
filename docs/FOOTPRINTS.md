@@ -20,7 +20,7 @@ SRAM reserved for DMA staging. SDRAM is the `.sdram` NOLOAD section. A task
 | `stm32f429-wifi-c6t` (throughput) | 735,936 | 81,484 | 18,496 | 4,456,448 |
 | `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 18,496 | 4,456,448 |
 | `stm32f429-cfg80211-only` link probe | 168,036 | 92,660 | 16 | 1,048,576 |
-| 8189FS driver C0, delivery face (not linked) | 609,933 | 75,967 | 0 | — |
+| 8189FS driver, compile probe, delivery face (not linked) | 609,933 | 75,967 | 0 | — |
 
 The cfg80211-only probe is a `tick` image and includes the tick case's 64 KiB
 CPU buffers; it is a link probe, not a delivery profile. The 8189FS row is the
@@ -112,12 +112,12 @@ configured thread stacks alone are 105,472 B; the 4 MiB heap is sized far
 above the measured use. lwIP's own heap is 255 KiB, with `PBUF_POOL_SIZE=24`,
 `TCP_WND`/`TCP_SND_BUF` 16 KiB and `MEMP_NUM_TCP_SEG=48` on the F429 branch.
 
-## 8189FS C0 (driver only)
+## 8189FS compile probe (driver only)
 
-The delivery face (`stm32f429-rtl8189fs-c0-trim`, 127/127 TUs) is 609,933 B
+The delivery face (`stm32f429-rtl8189fs-compile-trim`, 127/127 TUs) is 609,933 B
 FLASH and 75,967 B static RAM (53,678 data + 22,289 bss), pre-link. The GT
 face is 742,203 B / 80,191 B. The vendor stack allocates its adapter, receive
-and transmit pools from the FreeRTOS heap at run time; that is not in a C0
+and transmit pools from the FreeRTOS heap at run time; that is not in a compile-probe
 number and is not measured here (no SDIO host adapter in the tree yet). The
 F429 profile gives that heap 4 MiB; the RK3568 8189 profiles use 16 MiB.
 
@@ -130,8 +130,8 @@ python3 tools/rtos/size-ledger.py --profile stm32f429-wifi-c6 \
   --elf tests/board/rtos/build/build/rtos-freertos.elf \
   --map tests/board/rtos/build/build/rtos-freertos.map
 
-# C0 objects
-./make.rtos s1-driver-compile S1_PROFILE=stm32f429-rtl8189fs-c0-trim \
+# compile objects
+./make.rtos s1-driver-compile S1_PROFILE=stm32f429-rtl8189fs-compile-trim \
   S1_DRIVER=rtl8189fs S1_RUN=<n>
 python3 tools/rtos/size-ledger.py --objects <run>/obj
 

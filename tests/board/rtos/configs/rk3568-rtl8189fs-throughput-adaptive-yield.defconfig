@@ -1,12 +1,12 @@
-# rtl8189fs on the RTOS line, the throughput arm (C6T): the station case joins
+# rtl8189fs on the RTOS line, the throughput arm (throughput): the station case joins
 # the open bench AP in the same boot, then the phase table runs over the same
 # netif while the Pi drives the peer half.
 #
-# This profile is the C5 arm plus one case.  It is separate from
+# This profile is the association arm plus one case.  It is separate from
 # rk3568-rtl8189fs-sta on purpose: a throughput verdict and a functional
 # verdict must not share an image, and the numbers a verdict is written from
 # come from a clean image (no census).  The attribution arm, when the clean one
-# is short, is rk3568-rtl8189fs-c6t-census.
+# is short, is rk3568-rtl8189fs-throughput-census.
 #
 # The vendor tree is GPL-2.0-only; this profile's image is a GPL-2.0 link
 # product (docs/LICENSES.md).
@@ -14,7 +14,7 @@
 CONFIG_BACKEND_FREERTOS=y
 CONFIG_OPT_O2=y
 CONFIG_PROFILE_BASE=y
-CONFIG_CASES="tick rtl8189fs_sta rtl8189fs_c6t"
+CONFIG_CASES="tick rtl8189fs_sta rtl8189fs_throughput"
 CONFIG_LIBLINUX80211=y
 CONFIG_LIBLINUX80211_SDIO=y
 CONFIG_LIBLINUX80211_CFG80211=y
@@ -23,5 +23,13 @@ CONFIG_LIBLINUX80211_RTL8189FS=y
 CONFIG_LIBLINUX80211_NET_LWIP=y
 
 # The vendor stack's pools, the lwIP pbufs and the TCP/IP thread share the
-# FreeRTOS heap; see the C3 profile's note.
+# FreeRTOS heap; see the attach profile's note.
 CONFIG_FREERTOS_HEAP_SIZE=16777216
+
+# Cadence arm: an immediate next cycle while a cycle moved bytes, backing off
+# to the 10 ms idle period when it does not.
+CONFIG_THROUGHPUT_PUMP_MODE=1
+
+# The transmit-side companion to the cadence arm: hand the claim to a parked
+# driver thread for one tick instead of queueing in front of it.
+CONFIG_THROUGHPUT_PUMP_YIELD=y

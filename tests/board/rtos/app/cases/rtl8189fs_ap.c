@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * @file   rtl8189fs_ap.c
- * @brief  Case rtl8189fs_ap: the board's SDIO 8189FTV becomes an AP (A1), the
- *         Pi's MT7921AU joins it (A2), the data plane is proven (A3), then the
- *         AP phase table runs (A4).
+ * @brief  Case rtl8189fs_ap: the board's SDIO 8189FTV becomes an AP, the
+ *         Pi's MT7921AU joins it, the data plane is proven, then the AP
+ *         phase table runs.
  *
  * The attach is rtl8189fs_sta's (SDIO backend, module_init, engine start, the
  * vendor probe).  What changes is the role and the owner of the MLME:
@@ -15,7 +15,7 @@
  *     `dvobj->txbcn_timer` and `tx_beacon_handlder` re-arms it and calls
  *     `send_beacon()` from the FreeRTOS timer daemon task - a TX every 100 ms
  *     from that context, which is this role's platform risk and the reason the
- *     A1 anchors report the BSS state and the timer task's stack headroom.
+ *     beacon anchors report the BSS state and the timer task's stack headroom.
  *   - hostapd (the imported NXP port) supplies the beacon's IE set: its
  *     set_ap builds the 36-byte head + IE tail and NL80211_CMD_START_AP runs
  *     nl80211's real handler, which calls the vendor's `.start_ap`.  The port
@@ -24,8 +24,9 @@
  *   - Because there is no netlink socket in this image (ADR
  *     2026-11-10-nl80211-scope D1), the vendor's cfg80211_new_sta()
  *     indication is a multicast into nothing: hostapd never learns of the
- *     station.  A2 therefore reads the vendor's own asoc_list through the
- *     first-party port (ports/rtos/obs.c), not hostapd's table.
+ *     station.  The association stage therefore reads the vendor's own
+ *     asoc_list through the first-party port (ports/rtos/obs.c), not
+ *     hostapd's table.
  *
  * The channel is not carried by nl80211: `lkpi_set_freq` is a no-op in this
  * port, and the vendor derives the operating channel from the beacon's DS/HT
@@ -35,7 +36,7 @@
  *
  * Direction words are the round's (docs/HANDOFF-8189FTV-RTOS-AP.md): air=down
  * is AP->STA (this board sends; the Pi's server/sink receives), air=up is
- * STA->AP (the Pi sends; this board's lwIP receives) - the opposite of the C6
+ * STA->AP (the Pi sends; this board's lwIP receives) - the opposite of the data
  * case's board roles with the same phase names.
  *
  * Console discipline (the GT AP round's 110 ms lesson): the vendor's log level
@@ -57,15 +58,15 @@
  *   rtl8189fs_ap: mlme valid=<0|1> fwstate=0x<hex> ap_state=<0|1> bstart=<0|1> ch=<n> bcn_int=<n> nr_ap_if=<n>
  *   rtl8189fs_ap: resources heap_free=<n> heap_min=<n> total=<n>
  *   rtl8189fs_ap: drv-<start|assoc> t=<ms> <driver line>   (buffered, printed after the gate)
- *   rtl8189fs_ap: PASS A1
+ *   rtl8189fs_ap: PASS BEACON
  *   rtl8189fs_ap: waiting station ms=<n>
- *   rtl8189fs_ap: peer window ms=<n>   (after A2: the peer's ping window)
+ *   rtl8189fs_ap: peer window ms=<n>   (after association: the peer's ping window)
  *   rtl8189fs_ap: link traffic rx_frames=<n> tx_frames=<n> rx_bytes=<n> tx_bytes=<n> tx_fail=<n>
  *   rtl8189fs_ap: sta n=<n> mac=<mac> aid=<n> state=0x<hex> flags=0x<hex> rate_id=<n> cur_rate=<n> bw=<n> sgi=<n> rx_pkts=<n> tx_pkts=<n> tx_bytes=<n>
- *   rtl8189fs_ap: PASS A2
+ *   rtl8189fs_ap: PASS ASSOCIATION
  *   rtl8189fs_ap: ping payload=<n> tx=<n> rx=<n> dup=<n> rtt_ms=<min>/<avg>/<max>
  *   rtl8189fs_ap: link window rx_frames=<n> rx_foreign=<n> rx_no_netif=<n> rx_input_fail=<n> rx_bytes=<n> tx_frames=<n> tx_fail=<n>
- *   rtl8189fs_ap: PASS A3
+ *   rtl8189fs_ap: PASS DATA
  *   rtl8189fs_ap: log level 4->2
  *   rtl8189fs_ap: server tcp=<n> udp=<n> ok=<0|1>
  *   rtl8189fs_ap: phase <n> begin proto=<p> role=<r> air=<down|up|local> port=<n> window_ms=<n> name=<n> peer_ms=<n> rate_kbps=<n>
@@ -73,9 +74,9 @@
  *   rtl8189fs_ap: phase <n> stack tcp_recv=<n> tcp_xmit=<n> tcp_drop=<n> tcp_memerr=<n> tcp_err=<n> pbuf_err=<n> tcpseg_err=<n>
  *   rtl8189fs_ap: phase <n> ap tx_pkts=<n> rx_pkts=<n> bstart=<n> ch=<n> nr_ap_if=<n>
  *   rtl8189fs_ap: phase <n> done ok=<0|1>
- *   rtl8189fs_ap: PASS AP          (A1-A3 only)
- *   rtl8189fs_ap: PASS APW         (WPA2; stops after A3)
- *   rtl8189fs_ap: PASS APT         (A1-A3 plus all A4 phases)
+ *   rtl8189fs_ap: PASS AP          (through the data stage only)
+ *   rtl8189fs_ap: PASS APW         (WPA2; stops after data)
+ *   rtl8189fs_ap: PASS APT         (beacon, association and data plus all throughput phases)
  *   rtl8189fs_ap: FAIL <reason>
  */
 
@@ -145,12 +146,12 @@
 #define AP_PASSPHRASE		NULL
 #endif
 
-/* The traffic table is a separate image (the C6T arm's rule: a throughput
+/* The traffic table is a separate image (the throughput arm's rule: a throughput
  * verdict and a functional verdict must not share an image). */
-#if defined(CONFIG_RTL8189FS_AP_TP) && CONFIG_RTL8189FS_AP_TP
-#define AP_TP			1
+#if defined(CONFIG_RTL8189FS_AP_THROUGHPUT) && CONFIG_RTL8189FS_AP_THROUGHPUT
+#define AP_THROUGHPUT			1
 #else
-#define AP_TP			0
+#define AP_THROUGHPUT			0
 #endif
 
 #define AP_WAIT_MS		40000U
@@ -177,7 +178,7 @@
 /* The peer's receiver is started by ssh + sudo on the harness side; the
  * throughput arm needs more slack than the functional one because a phase that
  * loses its listener reports 0 bytes and costs a boot. */
-#if AP_TP
+#if AP_THROUGHPUT
 #define AP_PEER_MS		3000u
 #else
 #define AP_PEER_MS		1500u
@@ -262,7 +263,7 @@ ap_dump_logs(const char *tag)
 	ap_log_lines = 0u;
 }
 
-/* The A2 witness: the vendor's own associated-station list.  hostapd's table
+/* The association witness: the vendor's own associated-station list.  hostapd's table
  * stays empty in this image and is not a witness (see the header). */
 static void
 ap_print_station(const char *tag)
@@ -301,9 +302,9 @@ ap_wait_station(struct rtl8189f_ap_diag *out, unsigned int *waited_ms)
 	return -1;
 }
 
-/* --- the A4 table (CONFIG_RTL8189FS_AP_TP) -------------------------------- */
+/* --- the throughput table (CONFIG_RTL8189FS_AP_THROUGHPUT) -------------------------------- */
 
-#if AP_TP
+#if AP_THROUGHPUT
 enum ap_phase_kind {
 	AP_LOOPBACK,
 	AP_TCP_DOWN,
@@ -323,7 +324,7 @@ struct ap_phase {
 	enum ap_phase_kind kind;
 };
 
-/* Same phase names as the C6 arm (so the report's gates read alike) but with
+/* Same phase names as the data arm (so the report's gates read alike) but with
  * the AP's roles: down = this board sends.  The 15/25 rungs are the ones the
  * GT AP arm measured clean; 35 is a reference rung only (GT's 35/45 were
  * truncated by peer phase racing). */
@@ -400,7 +401,7 @@ ap_run_phase(unsigned int n, const struct ap_phase *ph)
 	 * bytes than the air could carry did so because the stack refused a
 	 * segment (memerr/pbuf_err/tcpseg_err) or because it never sent
 	 * (tcp_xmit), or because the peer's segments were dropped (tcp_recv vs
-	 * tcp_drop).  This is the first A4 round's missing observation surface. */
+	 * tcp_drop).  This is the first throughput round's missing observation surface. */
 	lkpi_net_stack_diag(&s1);
 	CASE_ANCHOR("rtl8189fs_ap: phase %u stack tcp_recv=%lu tcp_xmit=%lu "
 		    "tcp_drop=%lu tcp_memerr=%lu tcp_err=%lu pbuf_err=%lu "
@@ -419,7 +420,7 @@ ap_run_phase(unsigned int n, const struct ap_phase *ph)
 		    (rc == 0) ? 1 : 0);
 	return rc;
 }
-#endif /* AP_TP */
+#endif /* AP_THROUGHPUT */
 
 int
 case_rtl8189fs_ap_run(void)
@@ -541,7 +542,7 @@ case_rtl8189fs_ap_run(void)
 		    (unsigned char)netif_mac[3], (unsigned char)netif_mac[4],
 		    (unsigned char)netif_mac[5]);
 
-	/* --- A1: hostapd supplies the beacon, the vendor's MLME sends it --- */
+	/* --- beacon: hostapd supplies the beacon, the vendor's MLME sends it --- */
 	(void)memset(&ap_cfg, 0, sizeof(ap_cfg));
 	ap_cfg.ifname = AP_IFNAME;
 	ap_cfg.ssid = RTL8189FS_AP_SSID;
@@ -571,7 +572,7 @@ case_rtl8189fs_ap_run(void)
 	}
 
 	/* The BSS state, the channel the vendor derived from the beacon's DS IE,
-	 * and the two resource numbers A1's failure mode needs: the beacon TX
+	 * and the two resource numbers beacon's failure mode needs: the beacon TX
 	 * runs in the FreeRTOS timer daemon task, and a starved heap turns into
 	 * "no beacons" with no other symptom. */
 	ap_print_station("post-start");
@@ -586,9 +587,9 @@ case_rtl8189fs_ap_run(void)
 			    (unsigned)heap.min_free_bytes,
 			    (unsigned)heap.total_bytes);
 	}
-	CASE_ANCHOR("rtl8189fs_ap: PASS A1\n");
+	CASE_ANCHOR("rtl8189fs_ap: PASS BEACON\n");
 
-	/* --- A2: the peer joins; the witness is the vendor's station list --- */
+	/* --- association: the peer joins; the witness is the vendor's station list --- */
 	CASE_ANCHOR("rtl8189fs_ap: waiting station ms=%u\n", AP_STA_WAIT_MS);
 	lkpi_net_diag(&d0);
 	rc = ap_wait_station(&ad, &sta_ms);
@@ -613,10 +614,10 @@ case_rtl8189fs_ap_run(void)
 		    ad.sta[0].flags, ad.sta[0].rate_id, ad.sta[0].cur_rate,
 		    ad.sta[0].bw_mode, ad.sta[0].sgi, ad.sta[0].rx_data_pkts,
 		    ad.sta[0].tx_pkts, ad.sta[0].tx_bytes);
-	CASE_ANCHOR("rtl8189fs_ap: PASS A2\n");
+	CASE_ANCHOR("rtl8189fs_ap: PASS ASSOCIATION\n");
 	ap_dump_logs("assoc");
 
-	/* --- A3: this board pings the peer -------------------------------
+	/* --- data: this board pings the peer -------------------------------
 	 * The peer->AP direction is the harness's (`pi-ap.sh ping` runs its own
 	 * 20/20 and the runner records it).  Its window is announced here, after
 	 * the association exists: the first AP boot announced it before the
@@ -654,7 +655,7 @@ case_rtl8189fs_ap_run(void)
 			    ping_rx);
 		return 9;
 	}
-	/* The whole A3 window's receive account: the peer's own ping/ARP walk
+	/* The whole data window's receive account: the peer's own ping/ARP walk
 	 * happened inside it, and these five counters separate "the driver never
 	 * delivered the frame" (rx_frames flat) from "the adapter refused it"
 	 * (rx_foreign/rx_no_netif/input_fail moving) from "it never left the
@@ -669,8 +670,8 @@ case_rtl8189fs_ap_run(void)
 		    d1.rx_input_fail - d0.rx_input_fail,
 		    d1.rx_bytes - d0.rx_bytes,
 		    d1.tx_frames - d0.tx_frames, d1.tx_fail - d0.tx_fail);
-	ap_dump_logs("a3");
-	CASE_ANCHOR("rtl8189fs_ap: PASS A3\n");
+	ap_dump_logs("data");
+	CASE_ANCHOR("rtl8189fs_ap: PASS DATA\n");
 
 	if (AP_WPA2) {
 		/* The 4-way is a later arm of this round; the encryption gate
@@ -678,12 +679,12 @@ case_rtl8189fs_ap_run(void)
 		CASE_ANCHOR("rtl8189fs_ap: PASS APW\n");
 		return 0;
 	}
-	if (!AP_TP) {
+	if (!AP_THROUGHPUT) {
 		CASE_ANCHOR("rtl8189fs_ap: PASS AP\n");
 		return 0;
 	}
 
-#if AP_TP
+#if AP_THROUGHPUT
 	CASE_ANCHOR("rtl8189fs_ap: log level 4->2\n");
 	rtw_drv_log_level = RTW_LOG_ERR;
 
@@ -721,5 +722,5 @@ case_rtl8189fs_ap_run(void)
 	return 0;
 #else
 	return 0;
-#endif /* AP_TP */
+#endif /* AP_THROUGHPUT */
 }

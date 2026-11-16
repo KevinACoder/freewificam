@@ -695,13 +695,13 @@ Bring-up anchors, in order, one cold boot:
 ```
 rtl8189fs_sta: wlan0 present=1 ifindex=1 mac=8c:bd:37:95:95:48
 rtl8189fs_sta: start rc=0
-rtl8189fs_diag: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 freq=2432 signal=-40
+rtl8189fs_sta: bss ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 freq=2432 signal=-40
 drv RTW: rtw_set_802_11_connect(wlan0)  fw_state=0x00000008
 rtl8189fs_sta: connected bssid=1c:a7:70:de:29:a1 waited_ms=400
-rtl8189fs_sta: PASS C5
+rtl8189fs_sta: PASS ASSOCIATION
 rtl8189fs_sta: netif up name=wlan0 ip=192.168.99.2/24
-rtl8189fs_sta: PASS C6
-    rtl8189fs_c6t: PASS C6T
+rtl8189fs_sta: PASS DATA
+    rtl8189fs_throughput: PASS THROUGHPUT
 ```
 
 The one line worth reading twice is the per-second sampler the port prints
@@ -755,7 +755,7 @@ hostap start rc=0 ready=1
 rtl8189fs_ap: diag post-start valid=1 fwstate=0x00000011 ap_state=1 bstart=1
     ch=5 bcn_int=100 nr_ap_if=1 nr_sta=0
 RTW: cfg80211_rtw_start_ap(wlan0) hidden_ssid:0, auth_type:0
-rtl8189fs_ap: PASS A1
+rtl8189fs_ap: PASS BEACON
 ```
 
 Two things in that sequence are worth knowing before reading any AP log from
@@ -775,17 +775,17 @@ RTW: indicate_sta_assoc_event to upper layer - hostapd
 RTW: rtw_cfg80211_indicate_sta_assoc(wlan0)
 rtl8189fs_ap: sta n=1 mac=90:de:80:4c:38:c5 aid=1 state=0x4001 flags=0x2a80
     rate_id=3 cur_rate=0 bw=0 sgi=1
-rtl8189fs_ap: PASS A2
+rtl8189fs_ap: PASS ASSOCIATION
 rtl8189fs_ap: link window rx_frames=85 ... rx_foreign=0 rx_no_netif=0
     rx_input_fail=0 tx_fail=0
 lkpinetif: rx#1 dev=wlan0(ours) bound=wlan0 proto=0x0806 len=28
-rtl8189fs_ap: PASS A3
+rtl8189fs_ap: PASS DATA
 rtl8189fs_ap: server tcp=5001 udp=5002 ok=1
 rtl8189fs_ap: PASS APT
 rtos: result pass cases=2/2 backend=freertos
 ```
 
-The nine lines between `PASS A1` and `PASS A3` are the ones that make an AP
+The nine lines between `PASS BEACON` and `PASS DATA` are the ones that make an AP
 round diagnosable rather than a pass/fail: `OnAssocReq` -> `issue_asocrsp` is
 the step that used to take ~110 ms of console time on this card and blow the
 client's association budget, and the `link window` line is the port's own

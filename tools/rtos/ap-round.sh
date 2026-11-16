@@ -507,7 +507,7 @@ if [ "$NO_PEER" = 0 ]; then
 		[ -n "$t0" ] && [ -n "$t1" ] || continue
 		pisu "tshark -r $PI_DIR/mon-a4.pcap -Y 'frame.time_epoch>=$t0 && frame.time_epoch<=$t1 && wlan.addr==$STA_MAC' -T fields -e wlan.fc.type_subtype -e wlan.fc.retry -e wlan_radio.11n.mcs_index -e radiotap.ampdu.flags -e frame.len -e wlan.ta -e wlan.ra -e tcp.len -e udp.length 2>/dev/null" \
 			> "$EVIDENCE/air-$ph.csv" || true
-		python3 "$HERE/c6-air.py" "$EVIDENCE/air-$ph.csv" \
+		python3 "$HERE/air-report.py" "$EVIDENCE/air-$ph.csv" \
 			> "$EVIDENCE/air-$ph.txt" 2>&1 || true
 		# direction and payload, from the same CSV: ta == AP is this board
 		# sending (down); ta == STA is the peer sending (up).
@@ -541,7 +541,7 @@ if [ "$NO_PEER" = 0 ]; then
 			END { printf "ip frames=%d bytes=%d tcp=%d/%d udp=%d/%d\n", n, b, tcp, tcpb, udp, udpb }
 		' "$EVIDENCE/ip-$ph.csv" > "$EVIDENCE/ip-$ph.txt" 2>/dev/null || true
 	done
-	python3 "$HERE/c6-air.py" "$EVIDENCE"/air-*.csv > "$EVIDENCE/air-summary.txt" 2>&1 || true
+	python3 "$HERE/air-report.py" "$EVIDENCE"/air-*.csv > "$EVIDENCE/air-summary.txt" 2>&1 || true
 fi
 
 # --- judge -------------------------------------------------------------------

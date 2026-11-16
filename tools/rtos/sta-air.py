@@ -30,7 +30,7 @@ from collections import Counter
 from pathlib import Path
 
 # wlan.fc.type_subtype is (type << 4) | subtype in tshark's display form:
-# management 0x0X, control 0x1X, data 0x2X (see tools/rtos/c6-air.py, which
+# management 0x0X, control 0x1X, data 0x2X (see tools/rtos/air-report.py, which
 # already relies on 0x0028 = QoS data and 0x0019 = BlockAck).
 NAMES = {
     "0x00": "assoc-req", "0x01": "assoc-resp", "0x02": "reassoc-req",

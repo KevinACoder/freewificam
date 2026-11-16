@@ -57,14 +57,14 @@ that way.
 | `rk3568-iwl7260-sta5g-wpa2` | tick pcie iwl7260_sta5g | the same with `CONFIG_STA_PSK` set: EAPOL both ways, `ptk=1 gtk=1 fail=0`, `PASS STA5W` (P4) |
 | `rk3568-iwl7260-mon` | tick pcie iwl7260_mon | the AC 7260 as an RX-only monitor on `CONFIG_MON_FREQ` (2432) for `CONFIG_MON_WINDOW_MS` (15 s); the role change is `SET_INTERFACE(MONITOR)` with the device down, then `dev_open` **then** `SET_WIPHY(freq)` (cfg80211 refuses the channel set while no monitor is running), and the frames go to the component's monitor sink, never to lwIP; `PASS MON` requires >=8 beacons/s, `bad=0` radiotap, an unchanged lwIP `rx_frames` and `tx_packets=0` |
 | `rk3568-kpi-mock` | tick kpi_mock | the same engines over a synthetic host/card and the null egress |
-| `rk3568-rtl8189fs-sdio` | tick rtl8189fs_sdio | the board's SDIO 8189FTV attaches through the imported fsl_sdmmc stack to the vendored vendor stack: card `024c:f179`, embedded firmware `FW_NIC 20306`, MAC, wiphy + netdev, `dev_open` (C3) |
-| `rk3568-rtl8189fs-sta` | tick rtl8189fs_sta | C3 plus the real `NL80211_CMD_TRIGGER_SCAN`/`CONNECT` streams through nl80211, dispatched to the vendor driver's cfg80211 ops: scan, open association, lwIP netif, 56/1400 B ICMP both ways (C4–C6 open) |
-| `rk3568-rtl8189fs-c6t` | tick rtl8189fs_sta rtl8189fs_c6t | the same join, then the throughput phase table: 30 s sampled TCP downlink, 35 Mbit/s UDP downlink sink, TCP/UDP uplink, board-local loopback; each phase carries the adapter/stack/pool and the SDIO claim/pump + vendor queue gauges |
-| `rk3568-rtl8189fs-udpdn` | tick rtl8189fs_sta rtl8189fs_c6t | the C6T diagnostic ordering `CONFIG_C6T_UDP_FIRST`: the receive-only downlink is offered before any TCP phase, so one boot separates an RX-path stall from a transmit/receive concurrency stall |
-| `rk3568-rtl8189fs-ap` | tick rtl8189fs_ap | the same card as an AP: the ported NXP `hostapd` brings `wlan0` up on `CONFIG_AP_FREQ` (2432) with a 100 TU beacon and an open BSS, the peer associates (A1/A2), both ICMP payload sizes cross in both directions (A3) |
-| `rk3568-rtl8189fs-ap-tp` | tick rtl8189fs_ap rtl8189fs_c6t | the AP role plus the throughput phase table (`CONFIG_C6T_PUMP_MODE=1`, `CONFIG_C6T_PUMP_YIELD=y`): loopback, TCP downlink twice, the UDP downlink ladder 15/25/35, TCP uplink, UDP uplink; the runner runs a counting sink on the peer for each downlink rung |
+| `rk3568-rtl8189fs-sdio` | tick rtl8189fs_sdio | the board's SDIO 8189FTV attaches through the imported fsl_sdmmc stack to the vendored vendor stack: card `024c:f179`, embedded firmware `FW_NIC 20306`, MAC, wiphy + netdev, `dev_open` (attach) |
+| `rk3568-rtl8189fs-sta` | tick rtl8189fs_sta | attach plus the real `NL80211_CMD_TRIGGER_SCAN`/`CONNECT` streams through nl80211, dispatched to the vendor driver's cfg80211 ops: scan, open association, lwIP netif, 56/1400 B ICMP both ways (scan, association and data) |
+| `rk3568-rtl8189fs-throughput` | tick rtl8189fs_sta rtl8189fs_throughput | the same join, then the throughput phase table: 30 s sampled TCP downlink, 35 Mbit/s UDP downlink sink, TCP/UDP uplink, board-local loopback; each phase carries the adapter/stack/pool and the SDIO claim/pump + vendor queue gauges |
+| `rk3568-rtl8189fs-udpdn` | tick rtl8189fs_sta rtl8189fs_throughput | the throughput diagnostic ordering `CONFIG_THROUGHPUT_UDP_FIRST`: the receive-only downlink is offered before any TCP phase, so one boot separates an RX-path stall from a transmit/receive concurrency stall |
+| `rk3568-rtl8189fs-ap` | tick rtl8189fs_ap | the same card as an AP: the ported NXP `hostapd` brings `wlan0` up on `CONFIG_AP_FREQ` (2432) with a 100 TU beacon and an open BSS, the peer associates (association), both ICMP payload sizes cross in both directions (data) |
+| `rk3568-rtl8189fs-ap-throughput` | tick rtl8189fs_ap rtl8189fs_throughput | the AP role plus the throughput phase table (`CONFIG_THROUGHPUT_PUMP_MODE=1`, `CONFIG_THROUGHPUT_PUMP_YIELD=y`): loopback, TCP downlink twice, the UDP downlink ladder 15/25/35, TCP uplink, UDP uplink; the runner runs a counting sink on the peer for each downlink rung |
 | `rk3568-rtw89-8851bu-c3` | tick rtw89_c3 | the RTL8851BU (`0bda:b851`, USB) attaches through the linuxkpi USB engine and CherryUSB: the engine's `.lkpi_module` walk registers the driver, the board's USB domain starts the DWC3 xHCI pair (the card hangs on the instance at `0xFCC00000`), the driver's probe downloads `rtw8851b_fw-1.bin` from the compiled-in registry, `ieee80211_register_hw` creates `wlan0`, and `dev_open` reaches start (C3) |
-| `rk3568-rtw89-8851bu-c4` | tick rtw89_c4 | C3 plus the real `NL80211_CMD_TRIGGER_SCAN` stream through nl80211: mac80211 -> rtw89 -> the USB bulk endpoints, the BSS table carries the bench AP (C4) |
+| `rk3568-rtw89-8851bu-c4` | tick rtw89_c4 | attach plus the real `NL80211_CMD_TRIGGER_SCAN` stream through nl80211: mac80211 -> rtw89 -> the USB bulk endpoints, the BSS table carries the bench AP (C4) |
 | `rk3568-rtw89-8851bu-c5` | tick rtw89_c5 | C4 plus `NL80211_CMD_CONNECT`: open association, the lwIP netif over `wlan0`, 56/1400 B ICMP 20/20 (C5/C6-open) |
 | `rk3568-rtw89-8851bu-c6` | tick rtw89_c6 | the seven-phase C6T table over `wl0`: 30 s TCP down twice, 40 M UDP down twice, 12 s TCP up, 20 s UDP up (board-side blast), with the adapter/stack/pool and TX-health census per phase; the clean arm is 2/2 `PASS C6T`, downlink 0.75x GT and uplink 0.81x - the 2026-11-14 bench run |
 | `rk3568-rtw89-8851bu-c6-diag` | tick rtw89_c6 | the C6T diagnostic arm (`CONFIG_RTW89_C6_SKIP_LOOPBACK=y`): the skb-queue owner walk, the WARN call-site/`memcmp` census and the pool/timer counters; it is attribution only and never a throughput verdict |
@@ -73,14 +73,14 @@ that way.
 | `rk3568-rtw89-8851bu-ap-diag` | tick rtw89_ap | the A4 diagnostic arm (`CONFIG_RTW89_AP_STAGE`, `CONFIG_RTW89_AP_NO_MARGIN`, `CONFIG_APP_WATCHDOG`): three stage anchors per phase, no 3 s peer margin and a 2 s realtime watchdog that prints the core-lock owner and the lwIP heartbeat; it exists to name the an earlier A4 boot silence, not to pass a gate |
 | `rk3568-rtw89-8851bu-mon` | tick rtw89_mon | the same card as an RX-only monitor: `SET_INTERFACE(MONITOR)` with the device down, `dev_open` (devtype 803), then `SET_WIPHY(2432)`; the frames go to the port's sink, not lwIP; `PASS MON` requires >=8 beacons/s, `bad=0`, unchanged lwIP `rx_frames` and `tx_packets=0` - the 2026-11-14 bench run |
 | `rk3568-rtl8xxxu-8188eu-c3` | tick rtl8xxxu_c3 | the RTL8188EUS (`0bda:8179`, USB, behind the external hub on xHCI0/busid 2) attaches through the linuxkpi USB engine and CherryUSB: `.lkpi_module` registers the driver, the probe reads the efuse map, downloads `rtlwifi/rtl8188eufw.bin` from the compiled-in registry (`Firmware revision 28.0`, `signature 0x88e1`), `ieee80211_register_hw` creates `wlan0`, and `dev_open` reaches start (C3). The claim line carries `bus/hub/port`, which is how the round pins the topology |
-| `rk3568-rtl8xxxu-8188eu-c4` | tick rtl8xxxu_c4 | C3 plus the real `NL80211_CMD_TRIGGER_SCAN` stream: mac80211's SW scan drives rtl8xxxu's channel changes over the USB bulk endpoints, the BSS table carries `labwifi-ar-ht20s` at 2432 MHz (C4) |
+| `rk3568-rtl8xxxu-8188eu-c4` | tick rtl8xxxu_c4 | attach plus the real `NL80211_CMD_TRIGGER_SCAN` stream: mac80211's SW scan drives rtl8xxxu's channel changes over the USB bulk endpoints, the BSS table carries `labwifi-ar-ht20s` at 2432 MHz (C4) |
 | `rk3568-rtl8xxxu-8188eu-c5` | tick rtl8xxxu_c5 | C4 plus `NL80211_CMD_CONNECT`: open association, the lwIP netif over `wlan0` (`192.168.99.2/24`), power save off through the nl80211 handler, and 56 B / 1400 B ICMP 20/20 in both directions with the link held open for the host's AP->board arm (C5/C6-open) |
 | `rk3568-rtl8xxxu-8188eu-ap` | tick rtl8xxxu_ap | the same card as a 2.4 GHz AP (`rtos-8188-ap`, ch5/2432, HT20, open) behind the hub on xHCI0/busid 3: the imported NXP hostapd owns the AP MLME and `SET_INTERFACE(AP)` + `START_AP` bring the BSS up; the board's MT7921AU peer joins and both ICMP payload sizes cross 20/20. The beacon is host-composed and host-sent every beacon interval (`host_beacon_repeat`, patch 0003) - the first host-sent beacon on this line; the monitor's beacon capture is A1's witness (A1-A3) |
 | `rk3568-rtl8xxxu-8188eu-ap-arm4` | tick rtl8xxxu_ap | diagnostic arm, never a delivery profile: the AP profile plus a one-shot clear of `REG_BCN_CTRL` bit4 after the start-up beacon, asking whether that is the chip's missing beacon arming. It is not (the diagnostic AP arm still produced one beacon), which is what selected the host-repeat patch - the 2026-11-14 bench run |
 | `rk3568-rtl8xxxu-8188eu-mon` | tick rtl8xxxu_mon | the same card as an RX-only monitor on ch5/2432: `SET_INTERFACE(MONITOR)` (the driver's fourth recorded patch, `supports_monitor` + `WANT_MONITOR_VIF` + the promiscuous RCR), `dev_open devtype=803`, `SET_WIPHY 2432`, then a 15 s window counted by the port's sink. The frames reach the sink (beacons/probes/data with mac80211's radiotap), never lwIP; the bench AP's BSSID is named from the sink's per-BSSID beacon census, and the A/B arm counts the same beacons with the Pi's MT7921AU monitor - the 2026-11-14 bench run |
 | `rk3568-rtl8xxxu-8188eu-c6` | tick rtl8xxxu_c5 rtl8xxxu_c6 | the station plus the C6T throughput table (loopback, tcpdn, udpdn, tcpdn2, udpdn2, tcpup, udpup): the GT denominator is the same pin's in-tree `rtl8xxxu` on the same bench (same firmware blob), and the case's repeat phases are samples, not gates - the 2026-11-14 bench run |
 | `rk3568-rtl8723bu-c3` | tick rtl8xxxu_c3 | the RTL8723BU (`0bda:b720`, USB, the board's EHCI dongle behind the `1a86:8091` hub at `bus=1 hub=2 port=2`, interface 2) attaches through the same linuxkpi USB engine: the probe reads `RTL8723BU rev E ... 1T1R, TX queues 3`, downloads `rtlwifi/rtl8723bu_nic.bin` from the compiled-in registry (`Firmware revision 35.0`, `signature 0x5301`), registers `wlan0` (MAC `88:e6:28:53:10:9c`) and `dev_open` reaches start (C3) |
-| `rk3568-rtl8723bu-c4` | tick rtl8xxxu_c4 | C3 plus the real `NL80211_CMD_TRIGGER_SCAN`: the SW scan finds `labwifi-ar-ht20s` at 2432 MHz (C4) |
+| `rk3568-rtl8723bu-c4` | tick rtl8xxxu_c4 | attach plus the real `NL80211_CMD_TRIGGER_SCAN`: the SW scan finds `labwifi-ar-ht20s` at 2432 MHz (C4) |
 | `rk3568-rtl8723bu-c5` | tick rtl8xxxu_c5 | C4 plus `NL80211_CMD_CONNECT`: open association, the lwIP netif over `wlan0` (`192.168.99.2/24`), power save off, and 56 B / 1400 B ICMP 20/20 both ways (C5/C6-open) |
 | `rk3568-rtl8723bu-c6` | tick rtl8xxxu_c5 rtl8xxxu_c6 | the station plus the C6T table, compared with the same pin's in-tree `rtl8xxxu` on the same bench and firmware (the GT arm selects the 8723BU by MAC/firmware line; both dongles are on the board) - the 2026-11-15 bench run |
 | `rk3568-rtl8xxxu-8188eu-ap-tp` | tick rtl8xxxu_ap | the AP role plus the A4 table with the station arm's four direction cells (`tcpdn` board-send 20 s, `tcpup` board-receive 30 s, `udpup` board-receive 10M, `udpdn` board-send 10M), so the two roles are comparable direction by direction; the round swaps the bench (8812AU as the client, MT7921AU as the monitor) - the 2026-11-14 bench run |
@@ -291,9 +291,9 @@ delivery build cannot pick them up by accident.
 
 The size round adds compiler probes beside the images:
 `stm32f429-cfg80211-only` is a real `tick` image that proves net/wireless
-links without net/mac80211, and `stm32f429-rtl8189fs-c0`,
-`-c0-trim` and `-c0-debugoff` are C0-only defconfigs for
-`s1-driver-compile` (their `# C0-only` marker is what `ci.sh` skips; they are
+links without net/mac80211, and `stm32f429-rtl8189fs-compile`,
+`-compile-trim` and `-compile-debugoff` are compile-only defconfigs for
+`s1-driver-compile` (their `# compile-only` marker is what `ci.sh` skips; they are
 not flashable images).
 
 
@@ -374,14 +374,14 @@ turns them off.
   measured at exactly zero and are not offered.
 - `CONFIG_LKPI_SKB_DATA_BUF_SZ` and `CONFIG_LKPI_SKB_TOMB_MAX` make the last
   two skb geometry literals visible; the pool counts were already Kconfig.
-- One face fix the 8189FS C0 needed: `u32`/`s32`/`__u32`/`__s32` are now
+- One face fix the 8189FS compile needed: `u32`/`s32`/`__u32`/`__s32` are now
   spelled `unsigned int`/`int` (the kernel's own types) rather than
   `int32_t`.  newlib's `int32_t` is `long` on 32-bit ARM, so a vendor
   prototype written as `s32 f(...)` collided with the same function defined
   as `int f(...)`; the width and alignment are unchanged, and the vendor
   driver now compiles 131/131 on the F429 face.
 
-### The 8189FS budget (C0 exact, C1 base exact, SDIO glue estimated)
+### The 8189FS budget (compile exact, link base exact, SDIO glue estimated)
 
 The F429 8189FS line has no SDIO host adapter yet, so its number is a budget:
 the vendor driver is compiled with the F429 face (131/131 TUs), and the base
@@ -392,7 +392,7 @@ is the cfg80211-only image's flat `.bin`.  The host glue is the one estimate.
 | cfg80211-only base image | 168,036 |
 | rtl8189fs, GT face | 742,203 |
 | rtl8189fs, delivery face (MP/P2P/CONCURRENT/POWER_SAVING/NETIF_SG/EFUSE_FILE/LOAD_PHY_FILE off; AP+DEBUG on) | 609,933 |
-| lwIP (C5/C6 egress) | 35,080 |
+| lwIP (data egress) | 35,080 |
 | SDIO engine + fsl_sdmmc + F429 glue (estimate) | 25,000 |
 | case + runner (estimate) | 4,000 |
 | **pre-trim total** | **974,319 (74,257 B free)** |

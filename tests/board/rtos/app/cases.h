@@ -103,7 +103,7 @@ int case_iwl7260_c5_run(void);
 #endif
 #if defined(RTOS_CASE_IWL7260_C6)
 int case_iwl7260_c6_run(void);
-void lkpi_c6_peer_ip_set(const char *ip);
+void lkpi_net_peer_ip_set(const char *ip);
 #endif
 /* The AP round: the default STA interface becomes the AP, the Pi joins, and
  * the AP phase table runs (docs/HANDOFF-AP-MODE.md). */
@@ -130,8 +130,8 @@ int case_iwl7260_sta5g_run(void);
 int case_iwl7260_mon_run(void);
 #endif
 
-/* The 8189FTV vendor stack (RTL8188F, SDIO): C3 attach, the station's C4-C6
- * open join, and the C6T throughput phases. */
+/* The 8189FTV vendor stack (RTL8188F, SDIO): attach, the station's
+ * scan/association/data open join, and the throughput phases. */
 #if defined(RTOS_CASE_RTL8189FS_SDIO)
 int case_rtl8189fs_sdio_run(void);
 #endif
@@ -147,8 +147,8 @@ int case_rtl8189fs_sta_wpa2_run(void);
  * the station table is the vendor's (no netlink in this image). */
 int case_rtl8189fs_ap_run(void);
 #endif
-#if defined(RTOS_CASE_RTL8189FS_C6T)
-int case_rtl8189fs_c6t_run(void);
+#if defined(RTOS_CASE_RTL8189FS_THROUGHPUT)
+int case_rtl8189fs_throughput_run(void);
 #endif
 
 /* The RTL8851BU (rtw89, USB): C3 attach over the linuxkpi USB engine and

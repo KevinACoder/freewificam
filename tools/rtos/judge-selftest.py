@@ -251,7 +251,7 @@ STA_HEAD = (
     "rtl8189fs_sta: connect ssid=labwifi-ar-ht20s bssid=1c:a7:70:de:29:a1 "
     "freq=2432 rc=0\n"
     "rtl8189fs_sta: connected bssid=1c:a7:70:de:29:a1 waited_ms=1200\n"
-    "rtl8189fs_sta: PASS C5\n"
+    "rtl8189fs_sta: PASS ASSOCIATION\n"
     "rtl8189fs_sta: netif up name=wlan0 ip=192.168.99.2/24 "
     "mac=8c:bd:37:95:95:48\n"
     "rtl8189fs_sta: peer window ms=6000\n"
@@ -259,7 +259,7 @@ STA_HEAD = (
     "rtl8189fs_sta: ping tx=20 rx=20 payload=1400 rtt_ms=3/6/11\n"
     "rtl8189fs_sta: diag rx_frames=41 tx_frames=43 rx_bytes=60000 "
     "tx_bytes=61000 tx_fail=0\n"
-    "rtl8189fs_sta: PASS C6\n"
+    "rtl8189fs_sta: PASS DATA\n"
 )
 
 
@@ -275,34 +275,34 @@ def sta_ping_short() -> str:
         CASE_PASS.format(name="rtl8189fs_sta") + RESULT_PASS)
 
 
-def _c6t_phases() -> str:
+def _throughput_phases() -> str:
     names = ("loopback", "tcpdn", "udpdn", "tcpdn2", "udpdn2", "tcpup",
              "udpup")
-    out = ["rtl8189fs_c6t: plan=throughput bssid=1c:a7:70:de:29:a1 "
+    out = ["rtl8189fs_throughput: plan=throughput bssid=1c:a7:70:de:29:a1 "
            "dev=wlan0\n",
-           "rtl8189fs_c6t: ready netif=1 rx_frames=10 tx_frames=10\n",
-           "rtl8189fs_c6t: server tcp=5001 udp=5002 ok=1\n"]
+           "rtl8189fs_throughput: ready netif=1 rx_frames=10 tx_frames=10\n",
+           "rtl8189fs_throughput: server tcp=5001 udp=5002 ok=1\n"]
     for i, name in enumerate(names, 1):
-        out.append(f"rtl8189fs_c6t: phase {i} begin proto=tcp role=server "
+        out.append(f"rtl8189fs_throughput: phase {i} begin proto=tcp role=server "
                    f"port=5001 window_ms=30000 name={name}\n")
-        out.append(f"rtl8189fs_c6t: phase {i} report bytes=100000 ms=30000 "
+        out.append(f"rtl8189fs_throughput: phase {i} report bytes=100000 ms=30000 "
                    f"kbit=26666 pkts=0\n")
         if name != "loopback":
-            out.append(f"rtl8189fs_c6t: phase {i} done ok=1\n")
+            out.append(f"rtl8189fs_throughput: phase {i} done ok=1\n")
     return "".join(out)
 
 
-def c6t_open() -> str:
-    return (BANNER + STA_HEAD + _c6t_phases() +
+def throughput_open() -> str:
+    return (BANNER + STA_HEAD + _throughput_phases() +
             CASE_PASS.format(name="rtl8189fs_sta") +
-            CASE_PASS.format(name="rtl8189fs_c6t") + RESULT_PASS)
+            CASE_PASS.format(name="rtl8189fs_throughput") + RESULT_PASS)
 
 
-def c6t_short() -> str:
-    text = _c6t_phases().replace("phase 7 done ok=1\n", "")
+def throughput_short() -> str:
+    text = _throughput_phases().replace("phase 7 done ok=1\n", "")
     return (BANNER + STA_HEAD + text +
             CASE_PASS.format(name="rtl8189fs_sta") +
-            CASE_PASS.format(name="rtl8189fs_c6t") + RESULT_PASS)
+            CASE_PASS.format(name="rtl8189fs_throughput") + RESULT_PASS)
 
 
 # --- the RTL8851BU (rtw89, USB) -------------------------------------------
@@ -640,10 +640,10 @@ SAMPLES = [
     ("sta-open", sta_open, None, {"cases": ["rtl8189fs_sta"]}),
     ("sta-ping-short", sta_ping_short, "ping 1400B 19/20",
      {"cases": ["rtl8189fs_sta"]}),
-    ("c6t-open", c6t_open, None,
-     {"cases": ["rtl8189fs_sta", "rtl8189fs_c6t"]}),
-    ("c6t-short", c6t_short, "only 5 of 6 traffic phases closed",
-     {"cases": ["rtl8189fs_sta", "rtl8189fs_c6t"]}),
+    ("throughput-open", throughput_open, None,
+     {"cases": ["rtl8189fs_sta", "rtl8189fs_throughput"]}),
+    ("throughput-short", throughput_short, "only 5 of 6 traffic phases closed",
+     {"cases": ["rtl8189fs_sta", "rtl8189fs_throughput"]}),
     ("rtw89-c3-open", rtw89_c3_open, None, {"cases": ["rtw89_c3"]}),
     ("rtw89-c3-no-fw", rtw89_c3_no_fw, "firmware version",
      {"cases": ["rtw89_c3"]}),

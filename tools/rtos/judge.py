@@ -47,14 +47,14 @@ CASES = (
     # RX-only monitor, with the component's sink as the frames' consumer.
     "iwl7260_mon",
     # The 8189FTV vendor stack on the board's SDIO port
-    # (docs/HANDOFF-8189FTV-RTOS-STA.md): C3 attach, the station's C4-C6 open
-    # join, and the C6T throughput phases.
+    # (docs/HANDOFF-8189FTV-RTOS-STA.md): attach, the station's
+    # scan/association/data open join, and the throughput phases.
     "rtl8189fs_sdio",
     "rtl8189fs_sta",
     # The WPA2 arm of the same station (docs/HANDOFF-8189FTV-RTOS-STA.md): the
     # supplicant owns the join and the verdict is PASS STAW.
     "rtl8189fs_sta_wpa2",
-    "rtl8189fs_c6t",
+    "rtl8189fs_throughput",
     # The AP role (docs/HANDOFF-8189FTV-RTOS-AP.md): the vendor's own AP MLME
     # beacons and answers auth/assoc, hostapd supplies the beacon's IEs, and
     # the station table is the vendor's (this image has no netlink socket).
@@ -95,7 +95,7 @@ CASES = (
     "rtl8xxxu_c5",
     # The same card as an AP (runs/2026-11-14-rtl8xxxu-8188eu-ap): the
     # imported hostapd owns the AP MLME and rtl8xxxu sends the beacon from
-    # the host - the first host-sent beacon on this line.  The A1-A3 anchors
+    # the host - the first host-sent beacon on this line.  The beacon/association/data anchors
     # are the rtw88 AP case's with this case's prefix, so ap-round.sh drives
     # both; the driver carries two recorded patches for the role.
     "rtl8xxxu_ap",
@@ -110,7 +110,7 @@ CASES = (
     # phases over the wl0 netif rtl8xxxu_c5 assembled in the same boot.  The
     # anchors are the rtw88 C6T case's with this card's prefix, so one judge
     # block shape serves both; the throughput verdict itself is the report
-    # tool's (tools/rtos/c6-report.py), not this file's.
+    # tool's (tools/rtos/throughput-report.py), not this file's.
     "rtl8xxxu_c6",
     # The STM32F429 wireless roles: the attach/scan/associate/data ladder on the
     # MCU, the AP role driven by the port's own minimal MLME, and the link-only
@@ -313,11 +313,11 @@ PATTERNS = {
         r"rtl8189fs_sta: netif up name=(?P<name>\S+) ip=(?P<ip>[0-9.]+)",
         re.MULTILINE
     ),
-    "rtl8189fs_sta_pass_c5": re.compile(
-        r"rtl8189fs_sta: PASS C5", re.MULTILINE
+    "rtl8189fs_sta_pass_association": re.compile(
+        r"rtl8189fs_sta: PASS ASSOCIATION", re.MULTILINE
     ),
-    "rtl8189fs_sta_pass_c6": re.compile(
-        r"rtl8189fs_sta: PASS C6", re.MULTILINE
+    "rtl8189fs_sta_pass_data": re.compile(
+        r"rtl8189fs_sta: PASS DATA", re.MULTILINE
     ),
     "rtl8189fs_sta_fail": re.compile(
         r"rtl8189fs_sta: FAIL (?P<reason>.+)$", re.MULTILINE
@@ -358,15 +358,15 @@ PATTERNS = {
     "rtl8189fs_sta_wpa2_fail": re.compile(
         r"rtl8189fs_sta_wpa2: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
-    "rtl8189fs_c6t_plan": re.compile(
-        r"rtl8189fs_c6t: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
+    "rtl8189fs_throughput_plan": re.compile(
+        r"rtl8189fs_throughput: plan=(?P<plan>\S+) bssid=(?P<bssid>[0-9a-f:]+) "
         r"dev=(?P<dev>\S+)", re.MULTILINE
     ),
-    "rtl8189fs_c6t_pass": re.compile(
-        r"rtl8189fs_c6t: PASS C6T", re.MULTILINE
+    "rtl8189fs_throughput_pass": re.compile(
+        r"rtl8189fs_throughput: PASS THROUGHPUT", re.MULTILINE
     ),
-    "rtl8189fs_c6t_fail": re.compile(
-        r"rtl8189fs_c6t: FAIL (?P<reason>.+)$", re.MULTILINE
+    "rtl8189fs_throughput_fail": re.compile(
+        r"rtl8189fs_throughput: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
     # --- the 8189FTV AP role (docs/HANDOFF-8189FTV-RTOS-AP.md) -------------
     "rtl8189fs_ap_wlan0": re.compile(
@@ -410,8 +410,8 @@ PATTERNS = {
         r"rtl8189fs_ap: resources heap_free=(?P<free>\d+) "
         r"heap_min=(?P<min>\d+) total=(?P<total>\d+)", re.MULTILINE
     ),
-    "rtl8189fs_ap_pass_a1": re.compile(
-        r"rtl8189fs_ap: PASS A1", re.MULTILINE
+    "rtl8189fs_ap_pass_beacon": re.compile(
+        r"rtl8189fs_ap: PASS BEACON", re.MULTILINE
     ),
     "rtl8189fs_ap_peer_window": re.compile(
         r"rtl8189fs_ap: peer window ms=(?P<ms>\d+)", re.MULTILINE
@@ -429,11 +429,11 @@ PATTERNS = {
         r"rx_pkts=(?P<rx>\d+) tx_pkts=(?P<tx>\d+) tx_bytes=(?P<txb>\d+)",
         re.MULTILINE
     ),
-    "rtl8189fs_ap_pass_a2": re.compile(
-        r"rtl8189fs_ap: PASS A2", re.MULTILINE
+    "rtl8189fs_ap_pass_association": re.compile(
+        r"rtl8189fs_ap: PASS ASSOCIATION", re.MULTILINE
     ),
-    "rtl8189fs_ap_pass_a3": re.compile(
-        r"rtl8189fs_ap: PASS A3", re.MULTILINE
+    "rtl8189fs_ap_pass_data": re.compile(
+        r"rtl8189fs_ap: PASS DATA", re.MULTILINE
     ),
     "rtl8189fs_ap_loglevel": re.compile(
         r"rtl8189fs_ap: log level 4->2", re.MULTILINE
@@ -603,8 +603,8 @@ PATTERNS = {
     "iwl7260_ap_pass_apw": re.compile(r"iwl7260_ap: PASS APW", re.MULTILINE),
     "iwl7260_ap_pass_ap": re.compile(r"iwl7260_ap: PASS AP", re.MULTILINE),
     "iwl7260_ap_pass_apt": re.compile(r"iwl7260_ap: PASS APT", re.MULTILINE),
-    # The A4 stall round's diagnostic arm (rk3568-iwl7260-ap-a4[-idle]):
-    # the A1-A3 anchors are the same; the PASS line and the verdict are its
+    # The throughput stall round's diagnostic arm (rk3568-iwl7260-ap-a4[-idle]):
+    # the beacon/association/data anchors are the same; the PASS line and the verdict are its
     # own, and the idle arm has no station or ping by construction.
     "iwl7260_ap_pass_apd": re.compile(r"iwl7260_ap: PASS APD", re.MULTILINE),
     "iwl7260_ap_diag_mode": re.compile(
@@ -1758,22 +1758,22 @@ LIST_PATTERNS = {
         r"rtl8189fs_sta_wpa2: ping tx=(?P<tx>\d+) rx=(?P<rx>\d+) "
         r"payload=(?P<payload>\d+)", re.MULTILINE
     ),
-    "rtl8189fs_c6t_begin": re.compile(
-        r"rtl8189fs_c6t: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
+    "rtl8189fs_throughput_begin": re.compile(
+        r"rtl8189fs_throughput: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
         r"role=(?P<role>\S+) port=(?P<port>\d+) window_ms=(?P<win>\d+) "
         r"name=(?P<name>\S+)", re.MULTILINE
     ),
-    "rtl8189fs_c6t_report": re.compile(
-        r"rtl8189fs_c6t: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
+    "rtl8189fs_throughput_report": re.compile(
+        r"rtl8189fs_throughput: phase (?P<n>\d+) report bytes=(?P<bytes>\d+) "
         r"ms=(?P<ms>\d+) kbit=(?P<kbit>\d+) pkts=(?P<pkts>\d+)",
         re.MULTILINE
     ),
-    "rtl8189fs_c6t_t": re.compile(
-        r"rtl8189fs_c6t: t=(?P<t>\d+) bytes=(?P<bytes>\d+) "
+    "rtl8189fs_throughput_t": re.compile(
+        r"rtl8189fs_throughput: t=(?P<t>\d+) bytes=(?P<bytes>\d+) "
         r"delta=(?P<delta>\d+) done=(?P<done>[01])", re.MULTILINE
     ),
-    "rtl8189fs_c6t_done": re.compile(
-        r"rtl8189fs_c6t: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE),
+    "rtl8189fs_throughput_done": re.compile(
+        r"rtl8189fs_throughput: phase (?P<n>\d+) done ok=(?P<ok>[01])", re.MULTILINE),
     "rtl8189fs_ap_begin": re.compile(
         r"rtl8189fs_ap: phase (?P<n>\d+) begin proto=(?P<proto>\S+) "
         r"role=(?P<role>\S+) air=(?P<air>\S+) port=(?P<port>\d+) "
@@ -3378,7 +3378,7 @@ def judge(text: str, expect: dict | None = None) -> dict:
                     f"mode={diag_mode['mode'] if diag_mode else '?'}")
         elif found["iwl7260_ap_pass_apw"]:
             # WPA2 variant: the gate is the handshake and the ping-level data
-            # plane.  A4's phase table is not part of this profile.
+            # plane.  throughput's phase table is not part of this profile.
             sec = found["iwl7260_ap_security"]
             if not sec:
                 errors.append("iwl7260_ap: WPA2 PASS without the security line")
@@ -5076,16 +5076,16 @@ def judge(text: str, expect: dict | None = None) -> dict:
         elif con["rc"] != "0":
             errors.append(f"rtl8189fs_sta: connect rc={con['rc']}")
         if not found["rtl8189fs_sta_connected"]:
-            errors.append("rtl8189fs_sta: PASS C5 without the connected line")
-        if not found["rtl8189fs_sta_pass_c6"]:
-            errors.append("rtl8189fs_sta: the C6 PASS line is missing")
+            errors.append("rtl8189fs_sta: PASS ASSOCIATION without the connected line")
+        if not found["rtl8189fs_sta_pass_data"]:
+            errors.append("rtl8189fs_sta: the DATA PASS line is missing")
         else:
             netif = found["rtl8189fs_sta_netif"]
             if not netif:
-                errors.append("rtl8189fs_sta: C6 PASS without the netif line")
+                errors.append("rtl8189fs_sta: DATA PASS without the netif line")
             pings = found["rtl8189fs_sta_ping"]
             if len(pings) < 2:
-                errors.append("rtl8189fs_sta: C6 PASS without both ICMP rounds")
+                errors.append("rtl8189fs_sta: DATA PASS without both ICMP rounds")
             else:
                 for row in pings:
                     if row["tx"] != row["rx"]:
@@ -5135,24 +5135,24 @@ def judge(text: str, expect: dict | None = None) -> dict:
                         f"rtl8189fs_sta_wpa2: ping {row['payload']}B "
                         f"{row['rx']}/{row['tx']}")
 
-    if cases.get("rtl8189fs_c6t", {}).get("verdict") == "pass":
-        fail = found["rtl8189fs_c6t_fail"]
+    if cases.get("rtl8189fs_throughput", {}).get("verdict") == "pass":
+        fail = found["rtl8189fs_throughput_fail"]
         if fail:
-            errors.append(f"rtl8189fs_c6t: {fail['reason']}")
-        if not found["rtl8189fs_c6t_plan"]:
-            errors.append("rtl8189fs_c6t: PASS without the plan line")
-        begins = found["rtl8189fs_c6t_begin"]
-        reports = found["rtl8189fs_c6t_report"]
-        dones = found["rtl8189fs_c6t_done"]
+            errors.append(f"rtl8189fs_throughput: {fail['reason']}")
+        if not found["rtl8189fs_throughput_plan"]:
+            errors.append("rtl8189fs_throughput: PASS without the plan line")
+        begins = found["rtl8189fs_throughput_begin"]
+        reports = found["rtl8189fs_throughput_report"]
+        dones = found["rtl8189fs_throughput_done"]
         if len(dones) < 6:
             errors.append(
-                f"rtl8189fs_c6t: only {len(dones)} of 6 traffic phases closed")
+                f"rtl8189fs_throughput: only {len(dones)} of 6 traffic phases closed")
         for rep in reports:
             notes.append(
-                f"rtl8189fs_c6t: phase {rep['n']} {rep['bytes']}B "
+                f"rtl8189fs_throughput: phase {rep['n']} {rep['bytes']}B "
                 f"{rep['ms']}ms {rep['kbit']} kbit/s")
         if not begins:
-            errors.append("rtl8189fs_c6t: PASS without a phase begin line")
+            errors.append("rtl8189fs_throughput: PASS without a phase begin line")
 
     if cases.get("rtw89_c6", {}).get("verdict") == "pass":
         fail = found["rtw89_c6_fail"]
@@ -5217,9 +5217,9 @@ def judge(text: str, expect: dict | None = None) -> dict:
             notes.append(
                 f"rtl8189fs_ap: mlme bstart=1 ch={mlme['ch']} "
                 f"bcn_int={mlme['bcn']} nr_ap_if={mlme['nr_ap_if']}")
-        if not found["rtl8189fs_ap_pass_a1"]:
-            errors.append("rtl8189fs_ap: PASS without the A1 gate line")
-        # A2: the vendor's station list, not hostapd's.
+        if not found["rtl8189fs_ap_pass_beacon"]:
+            errors.append("rtl8189fs_ap: PASS without the beacon gate line")
+        # association: the vendor's station list, not hostapd's.
         sta = found["rtl8189fs_ap_sta"]
         if not sta:
             errors.append(
@@ -5231,9 +5231,9 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"rtl8189fs_ap: sta {sta['mac']} aid={sta['aid']} "
                 f"rate_id={sta['rate_id']} cur_rate={sta['cur_rate']} "
                 f"tx_pkts={sta['tx']}")
-        if not found["rtl8189fs_ap_pass_a2"]:
-            errors.append("rtl8189fs_ap: PASS without the A2 gate line")
-        # A3: both ICMP rounds this case owns (the peer->AP direction is the
+        if not found["rtl8189fs_ap_pass_association"]:
+            errors.append("rtl8189fs_ap: PASS without the association gate line")
+        # data: both ICMP rounds this case owns (the peer->AP direction is the
         # harness's file, not this judge's input).
         pings = found["rtl8189fs_ap_ping"]
         if len(pings) < 2:
@@ -5248,9 +5248,9 @@ def judge(text: str, expect: dict | None = None) -> dict:
                     notes.append(
                         f"rtl8189fs_ap: ping {row['payload']}B "
                         f"{row['rx']}/{row['tx']}")
-        if not found["rtl8189fs_ap_pass_a3"]:
-            errors.append("rtl8189fs_ap: PASS without the A3 gate line")
-        # A4 (the throughput image only).
+        if not found["rtl8189fs_ap_pass_data"]:
+            errors.append("rtl8189fs_ap: PASS without the data gate line")
+        # throughput (the throughput image only).
         if found["rtl8189fs_ap_pass_apt"]:
             dones = found["rtl8189fs_ap_done"]
             if len(dones) < 7:
@@ -5733,10 +5733,10 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"rx_input_fail={window['fail']}")
         if not ap8188("rtl8xxxu_ap_pass_a3"):
             errors.append("rtl8xxxu_ap: the A3 PASS line is missing")
-        # A4: only the judgement image carries the table (the functional AP
+        # throughput: only the judgement image carries the table (the functional AP
         # profile stops at A3), so the phase checks run when its anchor is
         # there.  The rates themselves are the report tool's verdict
-        # (tools/rtos/c6-report.py); the judge holds "all phases closed".
+        # (tools/rtos/throughput-report.py); the judge holds "all phases closed".
         if ap8188("rtl8xxxu_ap_pass_apt"):
             srv = ap8188("rtl8xxxu_ap_server")
             if not srv:

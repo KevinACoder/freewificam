@@ -431,7 +431,7 @@ case_iwl7260_sta_wpa2_run(void)
 	if (peer_ok) {
 		CASE_ANCHOR("iwl7260_sta_wpa2: peer ip=%s\n", peer);
 #if defined(RTOS_CASE_IWL7260_C6)
-		lkpi_c6_peer_ip_set(peer);
+		lkpi_net_peer_ip_set(peer);
 #endif
 	} else {
 		CASE_ANCHOR("iwl7260_sta_wpa2: peer none candidates=%s\n",

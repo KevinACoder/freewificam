@@ -27,7 +27,7 @@ import re
 import sys
 
 RTOS_OP = re.compile(
-    r"rtl8189fs_c6t: stall op kind=(\d+) addr=0x([0-9a-fA-F]+) "
+    r"rtl8189fs_throughput: stall op kind=(\d+) addr=0x([0-9a-fA-F]+) "
     r"bytes=(\d+) blk=(\d+) dur_us=(\d+) ret=(-?\d+)")
 GT_OP = re.compile(
     r"RTWTR OP t=(\d+) dur=(\d+) k=(\d+) addr=([0-9a-fA-F]+) "
@@ -35,10 +35,10 @@ GT_OP = re.compile(
 GT_GEOM = re.compile(
     r"RTWTR GEOM k=(\w+) n=(\d+) bytes=(\d+) avg_us=(\d+) max_us=(\d+)")
 RTOS_CLK = re.compile(
-    r"rtl8189fs_c6t: stall clk freq=(\d+) poll_us=(\d+) dpoll_us=(\d+)")
-RTOS_VIOL = re.compile(r"rtl8189fs_c6t: stall claim_violations=(\d+)")
+    r"rtl8189fs_throughput: stall clk freq=(\d+) poll_us=(\d+) dpoll_us=(\d+)")
+RTOS_VIOL = re.compile(r"rtl8189fs_throughput: stall claim_violations=(\d+)")
 RTOS_INFLIGHT = re.compile(
-    r"rtl8189fs_c6t: stall inflight valid=(\d+) kind=(\d+) func=(\d+) "
+    r"rtl8189fs_throughput: stall inflight valid=(\d+) kind=(\d+) func=(\d+) "
     r"addr=0x([0-9a-fA-F]+) bytes=(\d+) blocks=(\d+) age_ms=(\d+)")
 
 NAMES = {0: "c52r", 1: "c52w", 2: "ext_r", 3: "ext_w", 4: "byt_r", 5: "byt_w"}

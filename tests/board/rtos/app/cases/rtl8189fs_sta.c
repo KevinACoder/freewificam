@@ -2,11 +2,12 @@
 /*
  * @file   rtl8189fs_sta.c
  * @brief  Case rtl8189fs_sta: the board's SDIO 8189FTV joins the open bench AP
- *         (C4 scan, C5 association, C6 ICMP) through the vendor stack's own
+ *         (scan, association, data) through the vendor stack's own
  *         cfg80211 ops.
  *
- * The attach is the C3 case's (SDIO backend, module_init, engine start, the
- * vendor probe's firmware and MAC init).  What is new is the control plane:
+ * The attach is the rtl8189fs_sdio case's (SDIO backend, module_init, engine
+ * start, the vendor probe's firmware and MAC init).  What is new is the
+ * control plane:
  * the case builds the real NL80211_CMD_TRIGGER_SCAN and NL80211_CMD_CONNECT
  * attribute streams through `lkpi_nl80211_*` and runs nl80211's own handlers,
  * which dispatch to the vendor driver's `.scan` / `.connect` ops.  The vendor
@@ -16,10 +17,11 @@
  * The console is quiet before the attach starts: the driver's runtime log
  * level goes to errors only, because the GT round proved a 115200 console
  * costs tens of milliseconds per line and the association budget is 25 ms on
- * the peer.  The attach's own firmware evidence belongs to the C3 arm.
+ * the peer.  The attach's own firmware evidence belongs to the attach image.
  *
  * What this is not: WPA2 (no GT denominator yet), the AP role, monitor, and
- * the throughput arm (rk3568-rtl8189fs-c6t, same join then the phase table).
+ * the throughput arm (rk3568-rtl8189fs-throughput, same join then the phase
+ * table).
  *
  * Anchors:
  *   rtl8189fs_sta: core ready
@@ -30,7 +32,7 @@
  *   rtl8189fs_sta: bss ssid=<ssid> bssid=<mac> freq=<mhz> signal=<dbm>
  *   rtl8189fs_sta: connect ssid=<ssid> bssid=<mac> freq=<mhz> rc=<n>
  *   rtl8189fs_sta: connected bssid=<mac> waited_ms=<n>
- *   rtl8189fs_sta: PASS C5
+ *   rtl8189fs_sta: PASS ASSOCIATION
  *   rtl8189fs_sta: netif up name=wlan0 ip=<ip>/24 mac=<mac>
  *   rtl8189fs_sta: peer window ms=<n>
  *   rtl8189fs_sta: window done ms=<n> rx_frames=<n> rx_bytes=<n> arp_req=<n>
@@ -39,7 +41,7 @@
  *                  drv_rx_bytes=<n> drv_rx_icv_err=<n> drv_rx_crc_err=<n>
  *   rtl8189fs_sta: ping tx=<n> rx=<n> payload=<n> rtt_ms=<min>/<avg>/<max>
  *   rtl8189fs_sta: diag rx_frames=<n> tx_frames=<n> rx_bytes=<n> tx_bytes=<n> tx_fail=<n>
- *   rtl8189fs_sta: PASS C6
+ *   rtl8189fs_sta: PASS DATA
  *   rtl8189fs_sta: hold ms=<n>
  *   rtl8189fs_sta: end
  *   rtl8189fs_sta: FAIL <reason>
@@ -119,14 +121,14 @@ extern unsigned int rtw_drv_log_level;
 static unsigned sta_log_lines;
 
 /* The census probe is this file's only when the image has no throughput case:
- * rtl8189fs_c6t.c owns the same symbol in the throughput images, and one link
+ * rtl8189fs_throughput.c owns the same symbol in the throughput images, and one link
  * can carry exactly one definition. */
-#if defined(CONFIG_LKPI_CENSUS) && !defined(RTOS_CASE_RTL8189FS_C6T)
+#if defined(CONFIG_LKPI_CENSUS) && !defined(RTOS_CASE_RTL8189FS_THROUGHPUT)
 #define STA_OWNS_CENSUS_PROBE 1
 /* The engine's per-cycle probe (components/liblinux80211/lkpi_census.h): the
  * reading only the board can take before a bus cycle, kept as a low-water
  * mark of the vendor driver's free receive buffers.  It lives here because
- * this image's census carries no throughput case to own it; rtl8189fs_c6t.c
+ * this image's census carries no throughput case to own it; rtl8189fs_throughput.c
  * owns the same probe in the throughput images, and the guard keeps the two
  * out of one link. */
 static unsigned sta_rxbuf_min = ~0u;
@@ -242,7 +244,7 @@ case_rtl8189fs_sta_run(void)
 		return 3;
 	}
 
-	/* --- C4: scan through the real nl80211 handler --------------------- */
+	/* --- scan: through the real nl80211 handler --------------------- */
 
 	rc = lkpi_nl80211_trigger_scan(dev, RTL8189FS_SSID, RTL8189FS_FREQ_MHZ);
 	CASE_ANCHOR("rtl8189fs_sta: scan ssid=%s freq=%u rc=%d\n",
@@ -281,7 +283,7 @@ found:
 		    RTL8189FS_SSID, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq, sig / 100);
 
-	/* --- C5: connect through the real nl80211 handler ------------------ */
+	/* --- association: through the real nl80211 handler ------------------ */
 
 	rc = lkpi_nl80211_connect(dev, RTL8189FS_SSID, bssid, (unsigned int)freq);
 	CASE_ANCHOR("rtl8189fs_sta: connect ssid=%s bssid=%02x:%02x:%02x:%02x:%02x:%02x freq=%d rc=%d\n",
@@ -302,11 +304,11 @@ found:
 	CASE_ANCHOR("rtl8189fs_sta: connected bssid=%02x:%02x:%02x:%02x:%02x:%02x waited_ms=%u\n",
 		    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
 		    connected_ms);
-	CASE_ANCHOR("rtl8189fs_sta: PASS C5\n");
+	CASE_ANCHOR("rtl8189fs_sta: PASS ASSOCIATION\n");
 
 	osDelay(200u);
 
-	/* --- C6: the lwIP netif and two ICMP rounds ------------------------ */
+	/* --- data: the lwIP netif and two ICMP rounds ------------------------ */
 
 	rc = lkpi_net_wlan_up(RTL8189FS_BOARD_IP, RTL8189FS_BOARD_MASK,
 			      RTL8189FS_AP_IP, netif_mac);
@@ -404,7 +406,7 @@ found:
 	CASE_ANCHOR("rtl8189fs_sta: diag rx_frames=%lu tx_frames=%lu rx_bytes=%lu tx_bytes=%lu tx_fail=%lu\n",
 		    diag.rx_frames, diag.tx_frames, diag.rx_bytes, diag.tx_bytes,
 		    diag.tx_fail);
-	CASE_ANCHOR("rtl8189fs_sta: PASS C6\n");
+	CASE_ANCHOR("rtl8189fs_sta: PASS DATA\n");
 
 	/* The hold is the reverse arm's window: the runner resets the board as
 	 * soon as this case returns, so a profile that measures AP->board after

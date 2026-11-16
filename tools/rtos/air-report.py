@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summarise the monitor capture's 802.11 view for one throughput arm.
 
-The input is the compact CSV tools/rtos/c6-throughput.sh extracts on the Pi:
+The input is the compact CSV tools/rtos/throughput.sh extracts on the Pi:
 
     wlan.fc.type_subtype, wlan.fc.retry, wlan_radio.11n.mcs_index,
     radiotap.ampdu.flags, frame.len
@@ -13,7 +13,7 @@ between arms - BlockAck control frames, ADDBA action frames, retry fraction,
 A-MPDU-flagged frames and the MCS histogram - and says `instrument=monitor-
 sample` so a reader knows what the numbers are.
 
-Usage: tools/rtos/c6-air.py DIR [DIR2 ...]
+Usage: tools/rtos/air-report.py DIR [DIR2 ...]
 """
 
 from __future__ import annotations

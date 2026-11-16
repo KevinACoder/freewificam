@@ -1,4 +1,4 @@
-# C0-only: the rtl8189fs vendor stack compiled against the F429 face.
+# compile-only: the rtl8189fs vendor stack compiled against the F429 face.
 #
 # Not an image profile: the F429 SDIO host glue is a separate line, so this
 # profile exists for `./make.rtos s1-driver-compile S1_PROFILE=... \

@@ -3,7 +3,7 @@
  * @file   rtl8189fs_sdio.c
  * @brief  Case rtl8189fs_sdio: the board's SDIO 8189FTV attaches through the
  *         imported fsl_sdmmc stack to the vendored vendor driver, downloads its
- *         embedded firmware, and registers its wiphy + netdev (C3).
+ *         embedded firmware, and registers its wiphy + netdev (attach).
  *
  * The component's services come up in the vendor stack's own order: the SDIO
  * backend is installed, the module_init entries run (cfg80211/mac80211's
@@ -14,12 +14,12 @@
  * The case then opens the interface (the driver's ndo_open) and reports the bus
  * and transfer counters the engine kept.
  *
- * This is C3 only: no scan, no association, no frames.  The vendor stack has
+ * This is the attach stage only: no scan, no association, no frames.  The vendor stack has
  * its own MLME, so the control plane is cfg80211 (D2 of the round's plan), not
  * mac80211; mac80211 is linked (the wireless world is one candidate set) but
  * has no driver in this image.
  *
- * The console carries the driver's attach lines here on purpose: C3 has no
+ * The console carries the driver's attach lines here on purpose: attach has no
  * timing requirement, and the firmware identity is the gate's own evidence.
  * The station case lowers the same runtime level before its attach, because
  * the GT round proved console printing costs association time.
@@ -33,7 +33,7 @@
  *   rtl8189fs_sdio: mac=<mac>
  *   rtl8189fs_sdio: start rc=<n>
  *   rtl8189fs_sdio: sdio cards=<n> drivers=<n> probes=<n> io=<n>/<n> errors=<n>
- *   rtl8189fs_sdio: PASS C3
+ *   rtl8189fs_sdio: PASS ATTACH
  *   rtl8189fs_sdio: FAIL <reason>
  */
 
@@ -169,6 +169,6 @@ case_rtl8189fs_sdio_run(void)
 		    (unsigned)stats.probes, (unsigned)stats.io_direct,
 		    (unsigned)stats.io_extended, (unsigned)stats.errors);
 
-	CASE_ANCHOR("rtl8189fs_sdio: PASS C3\n");
+	CASE_ANCHOR("rtl8189fs_sdio: PASS ATTACH\n");
 	return 0;
 }

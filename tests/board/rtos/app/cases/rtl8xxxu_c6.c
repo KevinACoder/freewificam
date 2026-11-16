@@ -156,7 +156,7 @@ lkpi_mcmp_get(struct lkpi_mcmp_row *out, unsigned int max,
 static char c6_peer_ip[16] = CONFIG_C6_PEER_IP;
 
 void
-lkpi_c6_peer_ip_set(const char *ip)
+lkpi_net_peer_ip_set(const char *ip)
 {
 	if (ip == NULL || ip[0] == '\0')
 		return;

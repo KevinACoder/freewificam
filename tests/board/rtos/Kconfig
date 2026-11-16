@@ -87,10 +87,11 @@ config OPT_LTO
 	  needs -Wl,-u for the backend entry points (LTO inlines them into their
 	  only caller).  It is a reserve lever: structural trimming comes first.
 
-# C6T's diagnostic ordering (see the symbol's help): outside the profile choice
-# on purpose - it is a case-order switch, not a performance profile.
-config C6T_UDP_FIRST
-	bool "C6T: offer the UDP downlink before the TCP downlink"
+# The throughput case's diagnostic ordering (see the symbol's help): outside
+# the profile choice on purpose - it is a case-order switch, not a performance
+# profile.
+config THROUGHPUT_UDP_FIRST
+	bool "throughput: offer the UDP downlink before the TCP downlink"
 	default n
 	help
 	  The throughput case's default plan leads with TCP, whose ACKs make the
@@ -99,13 +100,13 @@ config C6T_UDP_FIRST
 	  so one boot says whether a stall needs the transmit path to be busy.  It
 	  is a diagnostic ordering, not a tuning knob.
 
-# The pump's priority band, as the C6T case sets it before traffic starts.
+# The pump's priority band, as the throughput case sets it before traffic starts.
 # 0 below normal (the shape every earlier round ran), 1 normal, 2 above normal,
 # 3 high (lwIP's TCP/IP thread band), 4 realtime.  The causal arm for the
 # freeze reads the level back in the case's plan line, so the boot says which
 # band it measured.
-config C6T_PUMP_MODE
-	int "C6T: SDIO pump cadence (0 fixed, 1 adaptive)"
+config THROUGHPUT_PUMP_MODE
+	int "throughput: SDIO pump cadence (0 fixed, 1 adaptive)"
 	range 0 1
 	default 0
 	help
@@ -115,8 +116,8 @@ config C6T_PUMP_MODE
 	  arriving, backing off to the same idle period when it does not.  The
 	  case reads the mode back in its plan line.
 
-config C6T_PUMP_DRAIN
-	int "C6T: SDIO pump keeps dispatching while the card reports work"
+config THROUGHPUT_PUMP_DRAIN
+	int "throughput: SDIO pump keeps dispatching while the card reports work"
 	range 0 1
 	default 0
 	help
@@ -124,8 +125,8 @@ config C6T_PUMP_DRAIN
 	  reports some, with the claim held across the rounds (bounded by the
 	  engine's drain round cap).  Fewer claim handoffs per receive burst.
 
-config C6T_PUMP_IRQ
-	int "C6T: SDIO pump driven by the card interrupt (DAT1)"
+config THROUGHPUT_PUMP_IRQ
+	int "throughput: SDIO pump driven by the card interrupt (DAT1)"
 	range 0 1
 	default 0
 	help
@@ -134,8 +135,8 @@ config C6T_PUMP_IRQ
 	  The card's own interrupt enable is the function driver's call; the
 	  case prints irq=1 only when the engine accepted the switch.
 
-config C6T_PUMP_YIELD
-	bool "C6T: SDIO pump yields the claim to a parked driver"
+config THROUGHPUT_PUMP_YIELD
+	bool "throughput: SDIO pump yields the claim to a parked driver"
 	default n
 	help
 	  With the cadence arm the pump can own the bus continuously while the
@@ -143,8 +144,8 @@ config C6T_PUMP_YIELD
 	  that turn away for one tick when a waiter is present; off, its cadence
 	  owns the bus.  The case prints the applied value.
 
-config C6T_PUMP_PRIO
-	int "C6T: SDIO pump priority band (0 below .. 4 realtime)"
+config THROUGHPUT_PUMP_PRIO
+	int "throughput: SDIO pump priority band (0 below .. 4 realtime)"
 	range 0 4
 	default 0
 	help

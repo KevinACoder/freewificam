@@ -1,11 +1,12 @@
 #!/bin/bash
-# c6-throughput.sh - one C6T board round: boot the image, drive the peer's
+# throughput.sh - one throughput board round: boot the image, drive the peer's
 # iperf2 sessions from the case's own phase anchors, and collect the evidence.
 #
-#   tools/rtos/c6-throughput.sh --evidence runs/<date>-iwl7260-c6-throughput/rtos1
+#   tools/rtos/throughput.sh --evidence runs/<date>-iwl7260-throughput/rtos1
 #
-# The image is `rk3568-iwl7260-c6` (tick pcie iwl7260_c5 iwl7260_c6): C5
-# connects to the open bench AP and assembles wl0, C6T runs the seven phases.
+# The image is `rk3568-iwl7260-c6` (tick pcie iwl7260_c5 iwl7260_c6): the
+# station case connects to the open bench AP and assembles wl0; the throughput
+# case then runs the seven phases.
 # The peer side is the Kali Pi's iperf 2.2.1 (the same binary the GT arm uses);
 # the board's TCP server/client is lwIP's lwiperf, which is iperf2.
 #
@@ -25,7 +26,7 @@
 #   ap-gate.txt / ap-conf.sha256
 #   ap-summary.txt / air-summary.txt / air-fields.csv
 #   judge.json
-# The pcaps stay on the Pi in /home/pi/c6-<tag>/; their hashes and paths land
+# The pcaps stay on the Pi in /home/pi/throughput-<tag>/; their hashes and paths land
 # in pcap.txt.
 
 set -eu
@@ -80,14 +81,14 @@ while [ $# -gt 0 ]; do
 		--timeout)  TIMEOUT=${2:?}; shift 2 ;;
 		--no-power-cycle) POWER_CYCLE=0; shift ;;
 		-h|--help)  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-		*) echo "c6-throughput: unknown argument $1" >&2; exit 2 ;;
+		*) echo "throughput: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
-[ -n "$EVIDENCE" ] || { echo "c6-throughput: --evidence DIR is required" >&2; exit 2; }
+[ -n "$EVIDENCE" ] || { echo "throughput: --evidence DIR is required" >&2; exit 2; }
 mkdir -p "$EVIDENCE"
 EVIDENCE=$(cd "$EVIDENCE" && pwd)
 TAG=$(basename "$EVIDENCE")
-PI_DIR=/home/pi/c6-$TAG
+PI_DIR=/home/pi/throughput-$TAG
 AP_PCAP=$PI_DIR/ap.pcap
 MON_DOWN_PCAP=$PI_DIR/mon-down.pcap
 MON_UP_PCAP=$PI_DIR/mon-up.pcap
@@ -108,7 +109,7 @@ pisu() { pi "sudo -n $*"; }
 pisu "sha256sum $AP_CONF" 2>/dev/null | awk '{print $1}' > "$EVIDENCE/ap-conf.sha256" || true
 
 pisu "iw dev $MON_IF info" 2>/dev/null | grep -q 'channel 5' \
-	|| { echo "c6-throughput: $MON_IF is not a monitor on channel 5" >&2; exit 3; }
+	|| { echo "throughput: $MON_IF is not a monitor on channel 5" >&2; exit 3; }
 
 # --- clean the peer's own servers from an earlier round ----------------------
 pi "pkill -x iperf 2>/dev/null || true" || true
@@ -297,5 +298,5 @@ python3 "$HERE/judge.py" "$SERIAL" --json "$EVIDENCE/judge.json" \
 	--expect cases=$CASE_EXPECT \
 	>"$EVIDENCE/judge.txt" 2>&1 || true
 
-echo "c6-throughput: evidence -> $EVIDENCE"
+echo "throughput: evidence -> $EVIDENCE"
 tail -5 "$EVIDENCE/judge.txt" 2>/dev/null || true
