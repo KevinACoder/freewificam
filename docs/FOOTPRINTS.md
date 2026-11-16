@@ -150,3 +150,22 @@ python3 tools/rtos/size-ledger.py --objects <run>/obj
   separate line, so it has no placed flash/RAM yet.
 - Heap is not attributed per module; the task table is the measured
   allocation, and the lwIP heap is separate by design.
+
+## F429 8189FTV images (build/link)
+
+The four 8189FTV images build and link against the 1 MiB F429 flash.  The
+throughput row is the measured size ledger (the largest of the four); the
+probe/attach/station rows are build/link sizes, not placed ledgers.
+
+| image | FLASH (B) | static SRAM (B) | SDRAM (B) |
+|---|---:|---:|---:|
+| `stm32f429-rtl8189fs-probe` | 40,112 | — | — |
+| `stm32f429-rtl8189fs-attach` | 678,476 | — | — |
+| `stm32f429-rtl8189fs-station` | 727,924 | — | — |
+| `stm32f429-rtl8189fs-throughput` | 741,404 | 112,497 | 4,194,304 |
+
+The F429 8189FTV line has no board-run evidence yet: the CH340 serial
+instrument was unavailable in the 2026-11-16 session, so probe/attach/
+association/data/throughput are **build/link only** and no 2/2 claim is made.
+The re-open condition is a working CH340 serial port and a relay cold boot of
+each image.

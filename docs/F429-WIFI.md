@@ -331,3 +331,27 @@ Profiles: `stm32f429-wifi-ap-fp` (A1-A3 gates) and `stm32f429-wifi-ap-fp-tp`
 (`CONFIG_F429_WIFI_AP_TP=y`, the four report-only AP phases, not run).
 `stm32f429-wifi-ap-empty` is the flash-cost probe that chose the MLME; it is a
 measurement artifact, not a role image.
+
+## 8189FTV SDIO line
+
+The board's TF slot carries the RTL8189FTV (SDIO `024c:f179`).  The ST HAL LL
+SDMMC layer is imported byte-faithfully; the fsl card service enumerates the
+card and the vendor stack attaches over it.  PB13 (the AP6181's `WIFI_EN`) is
+held low for this line, so the other card stays off the shared bus.
+
+Four images build and link against the 1 MiB flash:
+
+| profile | cases | size |
+|---|---|---:|
+| `stm32f429-rtl8189fs-probe` | `tick f429_sdio_probe` | 40,112 B |
+| `stm32f429-rtl8189fs-attach` | `tick rtl8189fs_sdio` | 678,476 B |
+| `stm32f429-rtl8189fs-station` | `tick rtl8189fs_sta` | 727,924 B |
+| `stm32f429-rtl8189fs-throughput` | `tick rtl8189fs_sta rtl8189fs_throughput` | 741,404 B |
+
+The board run is **not yet claimed**: the CH340 serial instrument was
+unavailable on 2026-11-16, so no probe/attach/association/data/throughput
+evidence exists for this line.  The re-open condition is a working CH340
+serial port and a relay cold boot of each image: the probe reports vendor
+`0x024c`, device `0xf179`, four data lines and 24 MHz; the attach reports the
+embedded firmware, MAC, wiphy/netdev and start; the station reports the scan,
+the association and both ICMP rounds; the throughput table is report-only.
