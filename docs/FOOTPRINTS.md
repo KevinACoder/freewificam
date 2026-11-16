@@ -14,7 +14,7 @@ SRAM reserved for DMA staging. SDRAM is the `.sdram` NOLOAD section. A task
 
 ## Image totals
 
-| image | FLASH | static SRAM | of which no-cache | SDRAM |
+| image | FLASH | static SRAM (incl. no-cache) | of which no-cache | SDRAM |
 |---|---:|---:|---:|---:|
 | `stm32f429-wifi-c6` delivery | 726,080 | 81,356 | 18,496 | 4,456,448 |
 | `stm32f429-wifi-c6t` (throughput) | 735,936 | 81,484 | 18,496 | 4,456,448 |
@@ -29,7 +29,7 @@ yet); its base/lwIP/glue budget is in `BUILD.md`.
 
 ## `stm32f429-wifi-c6` by component
 
-| component | FLASH | no-cache | static RAM | SDRAM | heap |
+| component | FLASH | no-cache | RAM (data+bss) | SDRAM | heap |
 |---|---:|---:|---:|---:|---|
 | mac80211 | 254,499 | 0 | 449 | 0 | 0 |
 | cfg80211 | 148,697 | 0 | 1,051 | 0 | 0 |
