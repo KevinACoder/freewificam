@@ -24,6 +24,10 @@ fails the build when a compile or link command carries a `-D`; the header and
 `build_defs.h` are the only sources. `check-build-contract.sh` enforces the
 second half of the same rule: one `KCONTRACT_CFLAGS` definition, every C flag
 world derives from it, and no world pins its own `-O` level.
+`check-config-used.py` (part of `./make.rtos check`) fails when a Kconfig
+symbol has no consumer at all: the size round found `HEAP_SIZE` (a ThreadX
+link symbol no FreeRTOS image passed) and `USB_STAGE_SIZE` (no consumer)
+that way.
 
 ## 2. Profiles
 

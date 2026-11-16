@@ -25,7 +25,7 @@ GEN_CONFIG := $(GEN_DIR)/freewificam_config
 MATRIX_PROFILES ?= rk3568-tick rk3568-net rk3568-pcie-nvme rk3568-emmc rk3568-usb-msc rk3568-kpi-live rk3568-kpi-mock
 
 .PHONY: help list defconfig config menuconfig olddefconfig savedefconfig image images libs \
-	check check-no-d check-config-header check-build-contract case-list-check matrix \
+	check check-no-d check-config-header check-config-used check-build-contract case-list-check matrix \
 	dump-vars clean distclean rk3568_ci s0-compile s1-driver-compile s1-link host-test fw-check
 
 help:
@@ -100,6 +100,11 @@ check-build-contract:
 
 check-config-header: config
 	@$(PYTHON) $(ROOT)/tools/build/check-config-header.py $(GEN_DIR)/freewificam_config.h
+
+# Every Kconfig symbol must be referenced by a consumer; the size round's
+# dead HEAP_SIZE/USB_STAGE_SIZE are the reason this is a gate, not a habit.
+check-config-used:
+	@$(PYTHON) $(ROOT)/tools/build/check-config-used.py
 
 matrix:
 	@set -e; failed=0; mkdir -p $(ROOT)/build/matrix; \
@@ -190,6 +195,7 @@ check:
 		$(PYTHON) tools/build/kconfig-gen.py --profile $$p >/dev/null; \
 	done
 	@$(PYTHON) tools/build/kconfig-gen.py --check-all
+	@$(PYTHON) tools/build/check-config-used.py
 	@if [ -n "$$(git ls-files -- build/kconfig 2>/dev/null)" ]; then \
 		echo "FAIL: generated files are tracked:" >&2; \
 		git ls-files -- build/kconfig >&2; exit 1; \
