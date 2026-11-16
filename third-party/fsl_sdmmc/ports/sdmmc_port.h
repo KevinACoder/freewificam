@@ -27,9 +27,13 @@
 
 #include "fsl_sdmmc.h"
 
-/* The card clock this port brings the SDIO card up at: 50 MHz, the high-speed
- * mode an SDIO WiFi part runs at on 3.3 V signalling. */
+/* The card clock this port brings the SDIO card up at.  The default is the
+ * high-speed 50 MHz an SDIO WiFi part runs at on 3.3 V signalling; a board
+ * whose controller tops out lower (the F429's SDIO at 24 MHz) overrides it in
+ * platform/build_defs.h. */
+#ifndef SDMMC_PORT_CARD_CLOCK_HZ
 #define SDMMC_PORT_CARD_CLOCK_HZ	50000000U
+#endif
 
 /*
  * Which controller the SDIO card sits on. An image drives exactly one, and the

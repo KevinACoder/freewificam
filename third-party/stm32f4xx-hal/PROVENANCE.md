@@ -8,7 +8,7 @@
 | Vendoring | **partial, byte-identical**: 13 files, contract `MANIFEST.sha256` (sha256 per file). The package's other drivers, projects and middlewares are not imported |
 | Fetched | 2026-11-16 |
 | Local differences | none (zero patch) |
-| Compiled set | `Src/stm32f4xx_ll_sdmmc.c`; the headers are include-only |
+| Compiled set | `Src/stm32f4xx_ll_sdmmc.c` through the first-party `Src/stm32f4xx_ll_sdmmc_rename.c` wrapper (the wrapper renames `SDIO_Init` so the fsl card service's own `SDIO_Init` does not collide); the headers are include-only |
 | First-party companion | `tests/board/rtos/platform/board/stm32f429-challenger/sdio/stm32f4xx_hal_conf.h` selects only the low-level face (device header + HAL definitions + LL SDMMC) and compiles the HAL asserts out |
 | Consumers | the F429 SDIO host adapter (`sdmmc_host_stm32f4_sdio.c`) and the 8189FTV SDIO probe |
 | Reason | The 8189FTV card needs an SDIO host on the F429's SDIO controller. The project decision was to port the ST HAL library's low-level SDMMC layer as-is rather than rewrite the register sequence. The high-level HAL SD memory-card driver (CMD8/ACMD41 enumeration) is deliberately **not** imported and is not used for the SDIO card; the card service stays in the fsl_sdmmc stack |

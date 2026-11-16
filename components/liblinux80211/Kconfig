@@ -168,6 +168,14 @@ config LIBLINUX80211_RTL8XXXU
 	  redistributes the Realtek rtl8188eu firmware image
 	  (docs/LICENSES.md).
 
+config LIBLINUX80211_SDIO_PROBE
+	bool "SDIO host probe (no vendor driver)"
+	depends on LIBLINUX80211_SDIO
+	help
+	  Compiles the SDIO host path and the imported card service without the
+	  vendor driver, for the first probe case.  The case enumerates the card
+	  and reports its identity; no function driver claims it.
+
 config LIBLINUX80211_RTL8189FS
 	bool "rtl8189fs (RTL8188F / SDIO 8189FTV) vendor driver"
 	depends on LIBLINUX80211_SDIO

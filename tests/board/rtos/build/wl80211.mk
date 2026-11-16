@@ -27,6 +27,11 @@
 # The `.lkpi_init` walk runs the section in link order; this list is where that
 # order is decided.
 
+# Cases that compile in the SDIO port's platform world rather than in this
+# file's stack/driver world.  The generic case list and the wireless case list
+# both exclude them; their source is added to the SDIO port group.
+SDIO_PORT_CASES ?= f429_sdio_probe
+
 # The board cases that compile in this world.  The platform Makefile's generic
 # case list excludes them; this file owns them (defined before the include so
 # both lists see the same answer).

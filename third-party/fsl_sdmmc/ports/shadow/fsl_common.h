@@ -241,6 +241,12 @@ typedef int32_t status_t;
 #define SUPPRESS_FALL_THROUGH_WARNING()
 #endif
 
+/*
+ * The CMSIS core (the F429 SDIO host's ST LL import) defines the same
+ * intrinsics in cmsis_gcc.h.  When that header is already in this translation
+ * unit, its definitions win; the SDK's copy is only for the plain SDK build.
+ */
+#if !defined(__CMSIS_GCC_H)
 static inline uint32_t __REV(uint32_t value)
 {
     return __builtin_bswap32(value);
@@ -250,6 +256,7 @@ static inline uint16_t __REV16(uint16_t value)
 {
     return __builtin_bswap16(value);
 }
+#endif
 
 static inline uintptr_t __ALIGN(uintptr_t addr, uintptr_t alignment, size_t size, size_t *usage)
 {

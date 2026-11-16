@@ -127,6 +127,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_RTL8189FS_THROUGHPUT)
 	CASE_ENTRY("rtl8189fs_throughput", case_rtl8189fs_throughput_run)
 #endif
+#if defined(RTOS_CASE_F429_SDIO_PROBE)
+	CASE_ENTRY("f429_sdio_probe", case_f429_sdio_probe_run)
+#endif
 #if defined(RTOS_CASE_RTL8189FS_AP)
 	CASE_ENTRY("rtl8189fs_ap", case_rtl8189fs_ap_run)
 #endif

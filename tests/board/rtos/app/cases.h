@@ -150,6 +150,9 @@ int case_rtl8189fs_ap_run(void);
 #if defined(RTOS_CASE_RTL8189FS_THROUGHPUT)
 int case_rtl8189fs_throughput_run(void);
 #endif
+#if defined(RTOS_CASE_F429_SDIO_PROBE)
+int case_f429_sdio_probe_run(void);
+#endif
 
 /* The RTL8851BU (rtw89, USB): C3 attach over the linuxkpi USB engine and
  * CherryUSB, C4 scan, C5/C6 open join + ICMP.  The cases are mac80211 drivers'

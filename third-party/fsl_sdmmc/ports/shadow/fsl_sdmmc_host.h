@@ -211,6 +211,10 @@ typedef struct _sdmmchost_config_
  * upstream enumeration never assigned: the SDK's controller list stops at
  * FDWMSHC, and this port's host glue is the only implementation of it. */
 #define kSDMMCHOST_TYPE_FIREFLY_MCI 6
+/* The STM32F4 SDIO controller (the F429's SDIO peripheral).  Another value
+ * the upstream enumeration never assigned: the port's host glue is its only
+ * implementation. */
+#define kSDMMCHOST_TYPE_STM32F4_SDIO 7
     uint32_t cardType;
 #define kSDMMCHOST_CARD_TYPE_STANDARD_SD 1
 #define kSDMMCHOST_CARD_TYPE_MICRO_SD    2

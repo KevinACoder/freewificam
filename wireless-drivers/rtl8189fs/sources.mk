@@ -161,6 +161,23 @@ endif
 # same split the previous line used.  Paths are make variables, so the helper
 # keeps them absolute.
 ifeq ($(SRC_TAG),sdio)
+ifeq ($(CONFIG_BOARD_STM32F429_CHALLENGER),1)
+# The F429's SDIO peripheral: the ST LL driver, the board socket glue and the
+# fsl host adapter.  The group is also the probe image's only source of the
+# stack, so the vendor driver and the probe config are the two triggers.
+ifneq ($(filter 1,$(CONFIG_LIBLINUX80211_RTL8189FS) $(CONFIG_LIBLINUX80211_SDIO_PROBE)),)
+sdio-obj-y += \
+	$(PLATFORM)/board/stm32f429-challenger/sdio_board.c \
+	$(THIRD_PARTY)/stm32f4xx-hal/Src/stm32f4xx_ll_sdmmc_rename.c \
+	$(THIRD_PARTY)/fsl_sdmmc/ports/fsl_sdmmc_osa.c \
+	$(THIRD_PARTY)/fsl_sdmmc/ports/sdmmc_card.c \
+	$(THIRD_PARTY)/fsl_sdmmc/ports/sdmmc_host_stm32f4_sdio.c \
+	$(THIRD_PARTY)/fsl_sdmmc/ports/lkpi_sdio_fsl.c \
+	$(THIRD_PARTY)/fsl_sdmmc/common/fsl_sdmmc_common.c \
+	$(THIRD_PARTY)/fsl_sdmmc/sdio/fsl_sdio.c \
+	$(LINE)/app/cases/f429_sdio_probe.c
+endif
+else
 sdio-obj-$(CONFIG_LIBLINUX80211_RTL8189FS) += \
 	$(PLATFORM)/board/rk3568-itx/drivers/dwc_mmc.c \
 	$(THIRD_PARTY)/fsl_sdmmc/ports/fsl_sdmmc_osa.c \
@@ -169,6 +186,7 @@ sdio-obj-$(CONFIG_LIBLINUX80211_RTL8189FS) += \
 	$(THIRD_PARTY)/fsl_sdmmc/ports/lkpi_sdio_fsl.c \
 	$(THIRD_PARTY)/fsl_sdmmc/common/fsl_sdmmc_common.c \
 	$(THIRD_PARTY)/fsl_sdmmc/sdio/fsl_sdio.c
+endif
 endif
 
 # The first-party observation port: a plain-C snapshot of the vendor driver's

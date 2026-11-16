@@ -55,6 +55,8 @@ CASES = (
     # supplicant owns the join and the verdict is PASS STAW.
     "rtl8189fs_sta_wpa2",
     "rtl8189fs_throughput",
+    # The F429 SDIO probe: the card's identity before any function driver.
+    "f429_sdio_probe",
     # The AP role (docs/HANDOFF-8189FTV-RTOS-AP.md): the vendor's own AP MLME
     # beacons and answers auth/assoc, hostapd supplies the beacon's IEs, and
     # the station table is the vendor's (this image has no netlink socket).

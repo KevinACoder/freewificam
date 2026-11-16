@@ -90,3 +90,14 @@ __attribute__((weak)) void OTG_HS_IRQHandler(void)
 		__asm__ __volatile__("wfe");
 	}
 }
+
+/* IRQ 49: the SDIO card interrupt (DAT1).  The first SDIO round polls the
+ * card's own pending word, so a tick-only or polling image never enables the
+ * line; the SDIO glue supplies the strong handler when it arms DAT1. */
+__attribute__((weak)) void SDIO_IRQHandler(void)
+{
+	uart_early_panic("fatal: SDIO IRQ without SDIO glue\n");
+	for (;;) {
+		__asm__ __volatile__("wfe");
+	}
+}

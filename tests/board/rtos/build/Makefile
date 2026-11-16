@@ -416,11 +416,21 @@ RTL8189FS_CFLAGS := $(KPI_CFLAGS) \
 # Linux face ahead of the platform's forced stdio/stdlib includes and the two
 # headers' spelling of the same attribute macros collide.
 SDIO_PORT_SRCS := $(RTL8189FS_SDIO_SRCS)
-RTL8189FS_SDIO_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
+RTL8189FS_SDIO_CFLAGS := $(if $(filter 1,$(CONFIG_BOARD_STM32F429_CHALLENGER)),-I$(THIRD_PARTY)/stm32f4xx-hal/Inc/CMSIS) \
+	$(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
 	-I$(LIB8)/include -I$(LIB8)/include/linux80211 -I$(LIB8)/bus -I$(LIB8) \
 	-I$(THIRD_PARTY)/fsl_sdmmc/sdio \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
 	-Wno-pointer-sign -Wno-unused-function -Wno-unused-variable
+
+# The F429 SDIO port's own flag world: the ST LL driver/device headers, the
+# board's minimal HAL configuration, and the controller's part number.
+ifeq ($(CONFIG_BOARD_STM32F429_CHALLENGER),1)
+RTL8189FS_SDIO_CFLAGS += -DSTM32F429xx \
+	-I$(THIRD_PARTY)/stm32f4xx-hal/Inc \
+	-I$(THIRD_PARTY)/stm32f4xx-hal/Inc/CMSIS \
+	-I$(PLATFORM)/board/stm32f429-challenger/sdio
+endif
 
 # The third vendored driver: rtw89 (RTL8851BU, USB).  Its own include root and
 # feature face, and it is a wireless driver like iwlwifi (same stack, same
@@ -570,7 +580,7 @@ KPI_CASES := kpi_live kpi_mock
 # The wireless cases compile in the stack's flag world (wl80211.mk), not the
 # plain application world, so they are kept out of the generic list.  The list
 # itself is wl80211.mk's (WL80211_CASES), defined before this point.
-CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES) $(SDIO_PORT_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 ifeq ($(ARCH),armv7m)
 APP_CLOCK_SRC := $(LINE)/app/port/clock_cm4.c
@@ -849,11 +859,16 @@ $(foreach s,$(filter-out %.S,$(WL80211_RTW89_SRCS)),$(eval $(call COMPILE_C,$(s)
 $(foreach s,$(filter-out %.S,$(WL80211_RTW88_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8XXXU_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C_RENAME,$(s),$(RTL8189FS_CFLAGS))))
-$(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_FP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_FP_CFLAGS))))
 endif
+
+# The SDIO port group is independent of the wireless stack: the probe image
+# carries the card service and the host glue without cfg80211.  The ST LL
+# source is built through its rename wrapper (SDIO_Init collides with the fsl
+# card service's own SDIO_Init).
+$(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_SDIO_CFLAGS))))
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)
 

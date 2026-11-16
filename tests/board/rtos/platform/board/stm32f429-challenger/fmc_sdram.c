@@ -190,7 +190,12 @@ nand_hold_off(void)
 	(void)RCC_AHB1ENR;
 
 	gpio_output(GPIOG_BASE, 9U, 1);		/* FMC_NCE2# deasserted */
-	gpio_output(GPIOB_BASE, 13U, 1);	/* board NAND select, high */
+	/*
+	 * PB13 is NOT a NAND select on this board: it is WIFI_EN (the AP6181's
+	 * enable, with R72 pulling it low).  The SDIO glue owns it and holds it
+	 * low for the 8189FTV line; driving it high here would put the other
+	 * card back on the shared SDIO bus.
+	 */
 	gpio_output(GPIOD_BASE, 4U, 1);		/* FMC_NOE# deasserted */
 	gpio_output(GPIOD_BASE, 5U, 1);		/* FMC_NWE# deasserted */
 	gpio_output(GPIOD_BASE, 11U, 0);	/* FMC_A16 / NAND ALE low */
