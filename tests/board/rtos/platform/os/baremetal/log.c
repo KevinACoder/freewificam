@@ -335,10 +335,34 @@ unsigned int log_anchor_call_count(void)
 /* Total characters the formatter produced, before the level gate.  A line the
  * console drops still paid this; a large per-packet message is visible here as
  * megabytes per second with only a few hundred calls. */
+/*
+ * Cortex-M4 has no 64-bit atomic: the two GCC builtins below would pull
+ * libatomic, which this freestanding image does not link.  The writer holds
+ * the print lock and the reader is a diagnostic, so the plain 64-bit access is
+ * enough on the single core; the AArch64 builds keep the atomic.
+ */
+static inline unsigned long long log_emit_bytes_load(void)
+{
+#if defined(__arm__)
+	return log_emit_bytes;
+#else
+	return __atomic_load_n(&log_emit_bytes, __ATOMIC_RELAXED);
+#endif
+}
+
+static inline void log_emit_bytes_add(unsigned int produced)
+{
+#if defined(__arm__)
+	log_emit_bytes += produced;
+#else
+	(void)__atomic_add_fetch(&log_emit_bytes, produced, __ATOMIC_RELAXED);
+#endif
+}
+
 unsigned long long log_emit_byte_count(void)
 {
 
-	return __atomic_load_n(&log_emit_bytes, __ATOMIC_RELAXED);
+	return log_emit_bytes_load();
 }
 
 #if defined(CONFIG_LKPI_CENSUS)
@@ -425,8 +449,7 @@ void log_emit(ulog_level_t severity, const char *fmt, ...)
 		int produced = vsnprintf(msg, sizeof(msg), fmt, ap);
 
 		if (produced > 0) {
-			__atomic_add_fetch(&log_emit_bytes, (unsigned)produced,
-					   __ATOMIC_RELAXED);
+			log_emit_bytes_add((unsigned int)produced);
 		}
 	}
 	va_end(ap);
