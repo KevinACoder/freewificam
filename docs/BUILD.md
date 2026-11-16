@@ -265,8 +265,8 @@ the SDRAM is brought up before the kernel (`main.c` calls
 ./make.rtos image PROFILE=stm32f429-wifi-c3    # attach: attach
 ./make.rtos image PROFILE=stm32f429-wifi-c4    # scan: scan
 ./make.rtos image PROFILE=stm32f429-wifi-c5    # association: connect
-./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,096 B)
-./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (735,944 B)
+./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,080 B)
+./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (735,936 B)
 mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --erase sector \
     --verify --reset --expect "rtos: result"
 ```
@@ -307,7 +307,7 @@ within 16 B of `arm-none-eabi-size`; the remainder is final alignment.
 | build | text | data | bin | free of 1 MiB |
 |---|---:|---:|---:|---:|
 | before the round | 722,952 | 3,692 | 726,656 | 321,920 |
-| delivery image (this round) | 722,392 | 3,692 | 726,096 | 322,480 |
+| delivery image (this round) | 722,376 | 3,692 | 726,080 | 322,496 |
 | delivery + `CONFIG_OPT_LTO=y` | 686,372 | 3,260 | 689,648 | 358,928 |
 
 The delivery image was booted twice from a relay cold start: `PASS SCAN`,
@@ -316,14 +316,14 @@ The delivery image was booted twice from a relay cold start: `PASS SCAN`,
 same way and passed the same gates; the link gate needed
 `-Wl,-u,xPortStartScheduler` (LTO inlines it into its only caller).
 
-Where the 726,096 B goes (placed, `size-ledger.py`):
+Where the 726,080 B goes (placed, `size-ledger.py`):
 
 | group | text | rodata | data | flash |
 |---|---:|---:|---:|---:|
 | mac80211 | 246,934 | 7,515 | 50 | 254,499 |
 | cfg80211 | 137,692 | 10,087 | 918 | 148,697 |
 | rtl8xxxu | 69,066 | 42,092 | 2,580 | 113,738 |
-| merged strings (`rodata.str*`) | 0 | 92,672 | 0 | 92,672 |
+| merged strings (`rodata.str*`) | 0 | 92,660 | 0 | 92,660 |
 | linuxkpi + bus + skb | 26,112 | 15,238 | 9 | 41,359 |
 | lwIP | 35,072 | 0 | 8 | 35,080 |
 | CherryUSB | 12,918 | 0 | 0 | 12,918 |
@@ -331,10 +331,10 @@ Where the 726,096 B goes (placed, `size-ledger.py`):
 | platform | 5,468 | 62 | 17 | 5,547 |
 | app/cases | 4,490 | 0 | 0 | 4,498 |
 | other + support + libc | 6,524 | 0 | 80 | 6,604 |
-| **total** | **554,176** | **167,666** | **3,662** | **725,512** |
+| **total** | **554,176** | **167,654** | **3,662** | **725,500** |
 
 The flash column also carries 8 B of `other` input sections (`.ARM`/fill);
-the three named columns sum to 725,504.
+the three named columns sum to 725,492.
 
 `.rodata` is half strings (92,672 B), which is why turning vendor log levels
 off is a size lever but also an evidence decision: the C3/C4 attach lines are

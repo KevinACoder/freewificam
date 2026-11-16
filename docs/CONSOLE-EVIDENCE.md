@@ -1382,8 +1382,8 @@ Full record: the 2026-11-15 bench run.
 
 ### STM32F429 wi-fi size round (c6 image, 2026-11-16)
 
-The delivery image `stm32f429-wifi-c6` after the size round (726,096 B, sha
-`8e643487…`) was booted twice from a relay cold start; both boots printed the
+The delivery image `stm32f429-wifi-c6` after the size round (726,080 B, sha
+`74ada2a0…`) was booted twice from a relay cold start; both boots printed the
 same sequence.  The heap line is new: it is the SDRAM heap's high-water
 measurement (`free`/`min`, both 4,157,952 of 4 MiB on this boot):
 

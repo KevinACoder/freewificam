@@ -49,8 +49,8 @@ A 64 KiB bounded self-test runs before the kernel starts.
 | `stm32f429-wifi-c3` | attach: attach — module init, USB driver probe, firmware, `wlan0`, `wiphy`, `dev_open` |
 | `stm32f429-wifi-c4` | scan: directed scan on 2432 (wildcard retry), BSS anchor |
 | `stm32f429-wifi-c5` | association: connect (auth + assoc), power-save off, `PASS ASSOC` |
-| `stm32f429-wifi-c6` | **data plane delivery image**: the C5 ladder + lwIP netif over wlan0 + the two counted ICMP rounds (`PASS DATA`), 726,096 B, sha `8e643487…` |
-| `stm32f429-wifi-c6t` | the delivery image + `CONFIG_F429_WIFI_TP=y`: the four report-only throughput phases (tcpdn / tcpup / udpdn / udpup), 735,944 B, sha `18844f3f…` |
+| `stm32f429-wifi-c6` | **data plane delivery image**: the C5 ladder + lwIP netif over wlan0 + the two counted ICMP rounds (`PASS DATA`), 726,080 B, sha `74ada2a0…` |
+| `stm32f429-wifi-c6t` | the delivery image + `CONFIG_F429_WIFI_TP=y`: the four report-only throughput phases (tcpdn / tcpup / udpdn / udpup), 735,936 B, sha `85821daf…` |
 | `stm32f429-wifi-c6h2c` | diagnostic: the delivery image + `CONFIG_RTL8XXXU_TX_CENSUS=y` (H2C mailbox read-back + the TX-state register census), never a delivery image |
 | `stm32f429-wifi-c6diag` | diagnostic: the data-plane image + `CONFIG_F429_TICK_PC=y` (the polled tick-hook PC sampler that named the console-lock wedge) |
 | `rk3568-rtl8xxxu-8188eu-c5-census` | the RK3568 control arm for the same census (same dongle, same driver, same instrument) |
@@ -60,7 +60,7 @@ Memory-relevant Kconfig: `F429_SDRAM`, `F429_HEAP_SDRAM` (heap in SDRAM),
 phases), `RTL8XXXU_TX_CENSUS` (diagnostic, default n), `LIBLINUX80211_*`
 (USB backend, `CFG80211` + `MAC80211`, RTL8XXXU, `NET_LWIP`), the SKB/USB slot counts
 (8/8, stage 4096 B × 4), `RUNNER_STACK_KB=32`. The delivery c6 image is
-726,096 B (< 1 MB flash; see `BUILD.md` §"F429 image size ledger") and its
+726,080 B (< 1 MB flash; see `BUILD.md` §"F429 image size ledger") and its
 serial RAM gate leaves >120 KB of internal SRAM free with the SDRAM
 sections NOLOAD.
 
@@ -132,8 +132,8 @@ Traps:
 
 ## 5. The data plane — **PASS** (2026-11-15 evening)
 
-**The data plane is met**: the delivery image `stm32f429-wifi-c6` (726,096 B,
-sha256 `8e643487a769e684ee2fd06abc7b5e1f1fc230db3813d0e3ce6cf9b6e32eee68`,
+**The data plane is met**: the delivery image `stm32f429-wifi-c6` (726,080 B,
+sha256 `74ada2a002d6c3202dbe80bc6e5eead3d3ad510c5f7746478e81e590a3a665f3`,
 the association image plus the lwIP egress and the two platform fixes below)
 was booted twice from a relay cold start and runs the full gate both times;
 the AP's own kernel is the receiver of record:
@@ -222,7 +222,7 @@ the `MEMP_STATS` override that must survive `MEMP_MEM_MALLOC=1`.
 
 ### 5.3 Throughput: the four phases (measured 2026-11-15, report-only)
 
-The `stm32f429-wifi-c6t` image (735,944 B, sha256 `18844f3f…`) runs the four
+The `stm32f429-wifi-c6t` image (735,936 B, sha256 `85821daf…`) runs the four
 throughput phases after the data-plane gate in the same boot: `tcpdn` and `tcpup`
 against the Pi's iperf 2.2.1 (the board is lwIP's lwiperf server / client),
 `udpdn` against the board's UDP sink on 5002, `udpup` as a 1470 B datagram
