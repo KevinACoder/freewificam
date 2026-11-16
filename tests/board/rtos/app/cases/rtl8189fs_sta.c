@@ -261,6 +261,19 @@ case_rtl8189fs_sta_run(void)
 		osDelay(STA_POLL_MS);
 	}
 
+	{
+		struct lkpi_sdio_stats sdio_stats;
+
+		lkpi_sdio_stats_get(&sdio_stats);
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout sdio pump=%u callbacks=%u irq=%u io=%u/%u errors=%u\n",
+			    (unsigned)sdio_stats.pump_polls,
+			    (unsigned)sdio_stats.callbacks,
+			    (unsigned)sdio_stats.irq_claims,
+			    (unsigned)sdio_stats.io_direct,
+			    (unsigned)sdio_stats.io_extended,
+			    (unsigned)sdio_stats.errors);
+	}
+
 	/* A directed scan the peer did not answer in time: the wildcard shape is
 	 * the bench's fallback, the same one the AC 7260 round uses. */
 	rc = lkpi_nl80211_trigger_scan(dev, NULL, 0);

@@ -225,6 +225,8 @@ static uint32_t f4sdio_signal_line_status(sdmmchost_t *host, uint32_t signalLine
 
 /* --- ops: the card interrupt (DAT1) --------------------------------------- */
 
+static struct sdmmc_host_dev *s_f4sdio_irq_dev;
+
 static status_t f4sdio_card_int_init(sdmmchost_t *host, void *sdioInt)
 {
 	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
@@ -234,16 +236,40 @@ static status_t f4sdio_card_int_init(sdmmchost_t *host, void *sdioInt)
 
 	dev->card_int_rec = sdioInt;
 	host->cardInt = sdioInt;
-	/* The line stays masked: the first round polls the card's own pending
-	 * word.  The record is kept so a later round can arm DAT1 without a
-	 * different host API. */
+	s_f4sdio_irq_dev = dev;
 	return kStatus_Success;
 }
 
 static void f4sdio_card_enable_int(sdmmchost_t *host, bool enable)
 {
 	(void)host;
-	(void)enable;
+	if (enable) {
+		/* Arm the card's DAT1 line and the controller's SDIO interrupt. */
+		SDIO->ICR = SDIO_FLAG_SDIOIT;
+		SDIO->MASK |= SDIO_IT_SDIOIT;
+		sdio_board_irq_enable(true);
+	} else {
+		SDIO->MASK &= ~SDIO_IT_SDIOIT;
+		sdio_board_irq_enable(false);
+	}
+}
+
+void SDIO_IRQHandler(void)
+{
+	uint32_t sta = SDIO->STA;
+
+	if ((sta & SDIO_FLAG_SDIOIT) == 0U)
+		return;
+
+	SDIO->ICR = SDIO_FLAG_SDIOIT;
+	if ((s_f4sdio_irq_dev != NULL) &&
+	    (s_f4sdio_irq_dev->card_int_rec != NULL)) {
+		const sdio_card_int_t *rec =
+			(const sdio_card_int_t *)s_f4sdio_irq_dev->card_int_rec;
+
+		if (rec->cardInterrupt != NULL)
+			rec->cardInterrupt(rec->userData);
+	}
 }
 
 void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable)
@@ -275,18 +301,39 @@ static uint32_t f4sdio_block_size(size_t blockSize)
 	}
 }
 
-static status_t f4sdio_wait_command(uint32_t want)
+static status_t f4sdio_wait_command(uint32_t want, bool no_crc,
+				    uint32_t *sta_out)
 {
 	uint32_t spin;
-	uint32_t sta;
+	uint32_t sta = 0U;
 
 	for (spin = 0U; spin < F4SDIO_CMD_SPIN; spin++) {
 		sta = SDIO->STA;
-		if ((sta & want) != 0U)
-			return kStatus_Success;
-		if ((sta & (SDIO_FLAG_CCRCFAIL | SDIO_FLAG_CTIMEOUT)) != 0U)
-			break;
+		if (no_crc) {
+			/*
+			 * R4 (CMD5's OCR) has no CRC on the wire: the
+			 * controller reports CCRCFAIL as a matter of course.
+			 * The ST reference ignores that bit and waits for the
+			 * command to leave the active state; the card's presence
+			 * is told by the response, not by a CRC we cannot get.
+			 */
+			if (((sta & SDIO_FLAG_CMDACT) == 0U) &&
+			    ((sta & (SDIO_FLAG_CMDREND | SDIO_FLAG_CCRCFAIL |
+				     SDIO_FLAG_CTIMEOUT)) != 0U)) {
+				if ((sta & SDIO_FLAG_CTIMEOUT) != 0U)
+					break;
+				return kStatus_Success;
+			}
+		} else {
+			if ((sta & want) != 0U)
+				return kStatus_Success;
+			if ((sta & (SDIO_FLAG_CCRCFAIL |
+				    SDIO_FLAG_CTIMEOUT)) != 0U)
+				break;
+		}
 	}
+	if (sta_out != NULL)
+		*sta_out = sta;
 	SDIO->ICR = SDIO_FLAG_CCRCFAIL | SDIO_FLAG_CTIMEOUT |
 		    SDIO_FLAG_CMDREND | SDIO_FLAG_CMDSENT;
 	return kStatus_SDMMC_TransferFailed;
@@ -298,6 +345,9 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
 	SDIO_CmdInitTypeDef cmd;
 	uint32_t response = SDIO_RESPONSE_NO;
 	uint32_t want = SDIO_FLAG_CMDSENT;
+	uint32_t sta = 0U;
+	bool no_crc = (command->responseType == kCARD_ResponseTypeR4) ||
+		      (command->index == 5U);
 
 	(void)host;
 
@@ -326,11 +376,27 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
 	cmd.CPSM = SDIO_CPSM_ENABLE;
 	(void)SDIO_SendCommand(SDIO, &cmd);
 
-	if (f4sdio_wait_command(want) != kStatus_Success)
+	if (f4sdio_wait_command(want, no_crc, &sta) != kStatus_Success) {
+		/* The first failing command names the enumeration step. */
+		SDMMC_LOGE("f4sdio", "cmd=%u arg=0x%08x resp=%u sta=0x%08x\n",
+			   (unsigned)command->index,
+			   (unsigned)command->argument,
+			   (unsigned)command->responseType,
+			   (unsigned)sta);
 		return kStatus_SDMMC_TransferFailed;
+	}
 
 	if (response != SDIO_RESPONSE_NO) {
 		command->response[0] = SDIO_GetResponse(SDIO, SDIO_RESP1);
+		if ((command->responseErrorFlags != 0U) &&
+		    ((command->response[0] & command->responseErrorFlags) != 0U)) {
+			SDMMC_LOGE("f4sdio", "r5 cmd=%u arg=0x%08x resp=0x%08x mask=0x%08x\n",
+				   (unsigned)command->index,
+				   (unsigned)command->argument,
+				   (unsigned)command->response[0],
+				   (unsigned)command->responseErrorFlags);
+			return kStatus_SDMMC_TransferFailed;
+		}
 		if (response == SDIO_RESPONSE_LONG) {
 			command->response[1] = SDIO_GetResponse(SDIO, SDIO_RESP2);
 			command->response[2] = SDIO_GetResponse(SDIO, SDIO_RESP3);
@@ -375,7 +441,12 @@ static status_t f4sdio_wait_data_end(void)
 
 	for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
 		sta = SDIO->STA;
-		if ((sta & SDIO_FLAG_DATAEND) != 0U) {
+		/*
+		 * A single-block CMD53 (the CCCR/CIS reads) ends with DBCKEND;
+		 * DATAEND is the multi-block/whole-transfer flag.  Waiting for
+		 * DATAEND alone turns every 4-byte read into a 10M-spin failure.
+		 */
+		if ((sta & (SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND)) != 0U) {
 			SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND;
 			return kStatus_Success;
 		}
@@ -420,7 +491,12 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data)
 					  SDIO_FLAG_DCRCFAIL |
 					  SDIO_FLAG_DTIMEOUT)) != 0U)
 				break;
-			if ((SDIO->STA & SDIO_FLAG_TXDAVL) != 0U) {
+			/*
+			 * TXFIFOHE ("half empty") is the write-side credit;
+			 * TXDAVL ("data available") is the read-side view of
+			 * the same FIFO and stalls the writer once it drains.
+			 */
+			if ((SDIO->STA & SDIO_FLAG_TXFIFOHE) != 0U) {
 				uint32_t word = 0U;
 				uint32_t n = (remaining < 4U) ? remaining : 4U;
 
@@ -467,8 +543,18 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 	if (status != kStatus_Success)
 		return status;
 
-	if (content->data != NULL)
-		return f4sdio_transfer_data(content->data);
+	if (content->data != NULL) {
+		status = f4sdio_transfer_data(content->data);
+		if (status != kStatus_Success)
+			SDMMC_LOGE("f4sdio",
+				   "data cmd=%u len=%u dir=%s sta=0x%08x",
+				   (unsigned)content->command->index,
+				   (unsigned)(content->data->blockSize *
+					      content->data->blockCount),
+				   (content->data->rxData != NULL) ? "rx" : "tx",
+				   (unsigned)SDIO->STA);
+		return status;
+	}
 
 	return kStatus_Success;
 }
@@ -524,6 +610,7 @@ status_t SDMMCHOST_Init(sdmmchost_t *host)
 
 	host->ops = f4sdio_ops;
 	host->dev = dev;
+	s_f4sdio_irq_dev = dev;
 
 	sdio_board_init();
 	dev->bus_width = 1U;

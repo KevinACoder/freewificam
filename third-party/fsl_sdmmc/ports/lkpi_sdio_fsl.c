@@ -435,8 +435,22 @@ static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int 
 
 	lkpi_sdio_site_set("fsl.xfer");
 	(void)lkpi_sdio_claim_check(1);
+	/*
+	 * The block flag says the caller's count is a byte count.  A request
+	 * shorter than one block (the 472-byte C2H read at the end of a scan is
+	 * the one that exposed it) cannot use the block path: passing 472 to the
+	 * stack's block count turns it into 472 blocks of 512 bytes and the
+	 * transfer never completes.  Fall back to the byte path for the tail.
+	 */
 	if ((flags & LKPI_SDIO_BE_F_BLOCK) != 0U) {
-		ret = sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
+		uint32_t blksz = (func == 0U) ? card->io0blockSize :
+						(uint32_t)card->ioFBR[func - 1U].ioBlockSize;
+
+		if ((blksz != 0U) && (count >= blksz)) {
+			ret = sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
+		} else {
+			ret = sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);
+		}
 	} else {
 		ret = sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);
 	}

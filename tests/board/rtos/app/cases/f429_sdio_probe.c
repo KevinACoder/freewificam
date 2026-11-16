@@ -34,7 +34,8 @@ case_f429_sdio_probe_run(void)
 
 	status = sdmmc_card_start();
 	if (status != kStatus_Success) {
-		CASE_ANCHOR("f429_sdio_probe: FAIL card start=%d\n", (int)status);
+		CASE_ANCHOR("f429_sdio_probe: FAIL card start=%d (0x%x)\n",
+			    (int)status, (unsigned)status);
 		return 1;
 	}
 
