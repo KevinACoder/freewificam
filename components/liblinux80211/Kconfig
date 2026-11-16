@@ -51,18 +51,31 @@ config LIBLINUX80211_USB
 	  non-cacheable window.  The image must also carry the USB host domain
 	  (tests/board/rtos/build/usb.mk), which owns the controllers.
 
-config LIBLINUX80211_WIRELESS
-	bool "mac80211 + cfg80211 (the imported Linux wireless stack)"
+config LIBLINUX80211_CFG80211
+	bool "cfg80211 (net/wireless)"
 	help
-	  Links the real net/mac80211 and net/wireless translation units into the
-	  image.  This is a GPL-2.0-only subtree (components/liblinux80211/stack):
-	  an artifact that selects this symbol is a GPL-2.0 link product.  The
-	  stack is compiled by the S0 inventory even when this is off; this
-	  symbol is what puts it in an image, behind its own profile.
+	  Links the real net/wireless translation units into the image: the
+	  control plane (wiphy/regulatory/nl80211) every Linux wireless driver
+	  speaks to.  This is a GPL-2.0-only subtree
+	  (components/liblinux80211/stack); an artifact that selects it is a
+	  GPL-2.0 link product.  A FullMAC driver (rtl8189fs, brcmfmac) needs
+	  this half only.  The imported tree is compiled by the S0 inventory
+	  even when this is off; this symbol is what puts it in an image.
+
+config LIBLINUX80211_MAC80211
+	bool "mac80211 (net/mac80211)"
+	depends on LIBLINUX80211_CFG80211
+	help
+	  Links the real net/mac80211 translation units into the image: the
+	  SoftMAC MLME, aggregation, rate control and the driver-ops path.  It
+	  requires cfg80211.  This is a GPL-2.0-only subtree
+	  (components/liblinux80211/stack); an artifact that selects it is a
+	  GPL-2.0 link product.  The SoftMAC drivers (iwlwifi, rtw88, rtw89,
+	  rtl8xxxu) and the hostapd/supplicant roles need this half.
 
 config HOSTAP_AP
 	bool "hostapd AP MLME (imported NXP wpa_supplicant-rtos)"
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_MAC80211
 	help
 	  Links the imported hostapd AP stack (third-party/hostap: src/ap, the
 	  hostapd core; the NXP FreeRTOS entry and event loop; the internal
@@ -74,7 +87,7 @@ config HOSTAP_AP
 
 config AP_MLME
 	bool "minimal open-AP MLME (the port's own hostapd stand-in)"
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_MAC80211
 	depends on !HOSTAP_AP
 	help
 	  Links the port's own minimal open-AP MLME (linuxkpi_ap_mlme.c and
@@ -90,7 +103,7 @@ config AP_MLME
 
 config WPA_STA
 	bool "wpa_supplicant STA (WPA2-PSK/CCMP)"
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_MAC80211
 	depends on !HOSTAP_AP
 	help
 	  Links the imported NXP wpa_supplicant core as this image's STA
@@ -103,7 +116,7 @@ config WPA_STA
 
 config LIBLINUX80211_IWLWIFI
 	bool "iwlwifi (AC 7260 / mvm) driver"
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_MAC80211
 	help
 	  Links the vendored iwlwifi core and iwlmvm op-mode (72 TUs, byte-
 	  identical to the GT pin) against the same face.  The 7260 is the PCIe
@@ -112,7 +125,7 @@ config LIBLINUX80211_IWLWIFI
 config LIBLINUX80211_RTW89
 	bool "rtw89 (RTL8851BU / USB) driver"
 	depends on LIBLINUX80211_USB
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_MAC80211
 	help
 	  Links the vendored rtw89 driver (24 TUs, byte-identical to the GT pin)
 	  and its USB bus unit against the wireless stack.  This is a mac80211
@@ -126,7 +139,7 @@ config LIBLINUX80211_RTW89
 config LIBLINUX80211_RTW88
 	bool "rtw88 (RTL8821CU / USB) driver"
 	depends on LIBLINUX80211_USB
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_MAC80211
 	help
 	  Links the vendored rtw88 driver (20 TUs, byte-identical to the GT pin)
 	  and its USB bus unit against the wireless stack.  This is a mac80211
@@ -141,7 +154,7 @@ config LIBLINUX80211_RTW88
 config LIBLINUX80211_RTL8XXXU
 	bool "rtl8xxxu (RTL8188EU / USB) driver"
 	depends on LIBLINUX80211_USB
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_MAC80211
 	help
 	  Links the vendored rtl8xxxu driver (9 TUs, byte-identical to the GT
 	  pin) against the wireless stack.  This is a mac80211 SoftMAC driver:
@@ -158,13 +171,118 @@ config LIBLINUX80211_RTL8XXXU
 config LIBLINUX80211_RTL8189FS
 	bool "rtl8189fs (RTL8188F / SDIO 8189FTV) vendor driver"
 	depends on LIBLINUX80211_SDIO
-	depends on LIBLINUX80211_WIRELESS
+	depends on LIBLINUX80211_CFG80211
 	help
 	  Links the vendored Realtek rtl8189fs vendor stack (131 TUs, byte-
 	  identical to the GT pin) against the same face, plus the board's SDIO
 	  host group.  This is the vendor's own MLME: cfg80211 is the control
 	  plane, not mac80211.  The tree is GPL-2.0, and an artifact that links
 	  it is a GPL-2.0 link product (docs/LICENSES.md).
+
+menu "rtl8189fs vendor feature face"
+	depends on LIBLINUX80211_RTL8189FS
+
+comment "Defaults are the GT build's answers; an F429 size profile turns"
+comment "these off explicitly.  The vendor source stays verbatim."
+
+config RTL8189FS_MP
+	bool "CONFIG_MP_INCLUDED (manufacturing/MP commands)"
+	default y
+	help
+	  The vendor's production-test surface (rtw_mp.c, ioctl_mp.c, hal_mp.c,
+	  phydm_mp.c and their branches).  A station/AP image never calls it;
+	  turning it off removes the units from the compiled set.
+
+config RTL8189FS_AP
+	bool "CONFIG_AP_MODE (vendor AP MLME)"
+	default y
+	help
+	  The vendor's own AP role (rtw_ap.c and the AP branches in the MLME and
+	  cfg80211 paths).  A station-only image can drop it.  autoconf.h defines
+	  CONFIG_AP_MODE unconditionally, so driver_config.h undefines it after
+	  the vendor config is included.
+
+config RTL8189FS_P2P
+	bool "CONFIG_P2P (Wi-Fi Direct)"
+	default y
+	help
+	  The vendor's P2P/WFD surface (rtw_p2p.c and its branches).  Same
+	  post-autoconf mechanism as AP: autoconf.h defines CONFIG_P2P
+	  unconditionally, driver_config.h undefines it when this is off.
+
+config RTL8189FS_CONCURRENT
+	bool "CONFIG_CONCURRENT_MODE (multi-interface)"
+	default y
+	help
+	  The vendor's multi-interface core (rtw_mi.c and the per-port runtime
+	  switch).  A single-role image does not need it.
+
+config RTL8189FS_POWER_SAVING
+	bool "CONFIG_POWER_SAVING (LPS/IPS)"
+	default y
+	help
+	  The vendor's power-save state machines.  The bench station already
+	  turns power save off through nl80211; an image that never enables it
+	  can compile the LPS/IPS paths out.
+
+config RTL8189FS_DEBUG
+	bool "CONFIG_RTW_DEBUG (vendor log strings)"
+	default y
+	help
+	  The vendor RTW_INFO/RTW_ERR/RTW_WARN/RTW_DBG macros and their format
+	  strings.  This is the largest single .rodata block in the driver.
+	  Off makes every level a no-op, including the attach lines the C3/C4
+	  judgement uses, so only a size-only arm may turn it off until the
+	  case prints the same facts itself.
+
+config RTL8189FS_NETIF_SG
+	bool "CONFIG_RTW_NETIF_SG (scatter-gather netif)"
+	default y
+	help
+	  The vendor netif's SG transmit path.  The F429 USB/SDIO data path has
+	  no SG carrier; a copy-based image can drop it.
+
+config RTL8189FS_EFUSE_FILE
+	bool "CONFIG_EFUSE_CONFIG_FILE (efuse map from a file)"
+	default y
+	help
+	  The vendor's file-based efuse map.  The RTOS image has no filesystem
+	  (the path is absent and the open fails); off removes the read path.
+
+config RTL8189FS_LOAD_PHY_FILE
+	bool "CONFIG_LOAD_PHY_PARA_FROM_FILE (PHY parameter files)"
+	default y
+	help
+	  The vendor's PHY-parameter file loader.  The RTOS image has no
+	  filesystem; off removes the read path.
+
+config RTL8189FS_WIFI_MONITOR
+	bool "CONFIG_WIFI_MONITOR"
+	default n
+
+config RTL8189FS_TDLS
+	bool "CONFIG_TDLS"
+	default n
+
+config RTL8189FS_BT_COEX
+	bool "CONFIG_BT_COEXIST"
+	default n
+
+config RTL8189FS_PROC_DEBUG
+	bool "CONFIG_PROC_DEBUG"
+	default n
+	help
+	  The vendor /proc surface.  The port has no filesystem; off leaves
+	  rtw_proc.c as the empty #ifdef arm.
+
+config RTL8189FS_BR_EXT
+	bool "CONFIG_BR_EXT (bridge extension)"
+	default n
+	help
+	  The GT Kbuild itself leaves this off: it calls br_fdb_find_port(),
+	  which only the Linux bridge module exports.
+
+endmenu
 
 config LKPI_CENSUS
 	bool "kernel-API census (SDIO RX probe, claim/workqueue histograms)"

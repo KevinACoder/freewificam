@@ -829,6 +829,7 @@ out:
 	return rc;
 }
 
+#if CONFIG_LIBLINUX80211_MAC80211
 struct lkpi_sta_iter {
 	unsigned char (*macs)[6];
 	unsigned int max;
@@ -879,6 +880,24 @@ lkpi_nl80211_sta_count(struct net_device *dev, unsigned char macs[][6],
 		*count = it.seen;
 	return 0;
 }
+
+#else /* !CONFIG_LIBLINUX80211_MAC80211 */
+/*
+ * A cfg80211-only image (the vendor FullMAC stack) has no mac80211 station
+ * table.  The AP role's station dump is a later round; the station arm does
+ * not call this.  Say so instead of failing at link time.
+ */
+int
+lkpi_nl80211_sta_count(struct net_device *dev, unsigned char macs[][6],
+		       unsigned int max, unsigned int *count)
+{
+	(void)dev;
+	(void)macs;
+	(void)max;
+	(void)count;
+	return -EOPNOTSUPP;
+}
+#endif /* CONFIG_LIBLINUX80211_MAC80211 */
 
 int
 lkpi_nl80211_iftype(struct net_device *dev)

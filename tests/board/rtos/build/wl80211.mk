@@ -14,9 +14,12 @@
 #   case    the stack face; a board case includes <net/mac80211.h> and calls
 #           the public entry points only
 #
-# The stack must be selected by CONFIG_LIBLINUX80211_WIRELESS; the driver adds
-# CONFIG_LIBLINUX80211_IWLWIFI.  A profile that selects neither links none of
-# this (the component's kpi/bus images are unaffected).
+# The world is selected by CONFIG_LIBLINUX80211_CFG80211 (every wireless
+# image needs the control plane); CONFIG_LIBLINUX80211_MAC80211 adds the
+# SoftMAC half and the mac80211-only shims.  A FullMAC vendor stack
+# (rtl8189fs) selects cfg80211 and leaves mac80211 out entirely.  A profile
+# that selects neither links none of this (the component's kpi/bus images are
+# unaffected).
 #
 # Link order is part of the contract: the stack's wireless units come before
 # its mac80211 units (cfg80211's fs_initcall then mac80211's subsys_initcall),
@@ -34,18 +37,19 @@ WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260
 	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6 f429_wifi \
 	f429_wifi_ap f429_ap_link
 
-ifeq ($(CONFIG_LIBLINUX80211_WIRELESS),1)
+ifeq ($(CONFIG_LIBLINUX80211_CFG80211),1)
 
-WL80211_STACK_CFLAGS := $(S0_CFLAGS) -I$(RTL8189_DIR)/ports/rtos
+WL80211_STACK_CFLAGS := $(STACK_FACE_CFLAGS) -I$(RTL8189_DIR)/ports/rtos
 WL80211_DRIVER_CFLAGS := $(S1_CFLAGS)
 WL80211_CASE_CFLAGS := $(WL80211_STACK_CFLAGS)
 
 # cfg80211 before mac80211: the first owns the wiphy/netdev registration the
 # second calls into, and its fs_initcall entry must run before the late
 # regulatory-db loader.
-WL80211_STACK_SRCS := \
-	$(filter $(LIB8)/stack/wireless/%,$(LIBLINUX80211_STACK_SRCS)) \
-	$(filter $(LIB8)/stack/mac80211/%,$(LIBLINUX80211_STACK_SRCS))
+# The two lists are already selected by their own Kconfig symbols in
+# sources.mk; cfg80211 comes first so its fs_initcall runs before mac80211's.
+WL80211_STACK_SRCS := $(LIBLINUX80211_STACK_WIRELESS_SRCS) \
+	$(LIBLINUX80211_STACK_MAC80211_SRCS)
 
 # The compiled-in firmware unit is generated from the pinned GT blob by
 # tools/rtos/fw-blobs.py; it is a build product (git-ignored) and joins the
@@ -122,10 +126,15 @@ WL80211_CASE_SRCS := $(foreach c,$(filter $(WL80211_CASES),$(CASES)),$(LINE)/app
 # not part of the S0/S1b source lists.  tx_dequeue_context.c is the same kind of
 # port shim: a link-time --wrap around the stack's transmit dequeue, stating the
 # port's deferred-context answer (see its header).
-WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c \
-	$(LIB8)/c2h_inline.c \
+WL80211_PROBE_SRCS := $(LIB8)/linuxkpi_nl80211_probe.c
+# The transmit/dequeue shims wrap mac80211 symbols; a cfg80211-only image has
+# no `__real_` for them, so they are part of the MAC80211 world, not the
+# wireless world.
+ifeq ($(CONFIG_LIBLINUX80211_MAC80211),1)
+WL80211_PROBE_SRCS += $(LIB8)/c2h_inline.c \
 	$(LIB8)/tx_dequeue_context.c \
 	$(LIB8)/tx_health.c
+endif
 
 # The AP receive seam: exactly one wrap body per image, because both define
 # __wrap_cfg80211_rx_mgmt_ext and the stack has one userspace-management call.
@@ -158,17 +167,20 @@ endif
 # stay global.
 # The F429 station arm's cfg80211 auth->assoc seams: its case defines the two
 # wrap bodies, so the flags are added only for that image.
+ifeq ($(CONFIG_LIBLINUX80211_MAC80211),1)
 ifneq ($(filter f429_wifi,$(CASES)),)
 WL80211_LDFLAGS += -Wl,--wrap=cfg80211_sme_rx_auth \
 	-Wl,--wrap=cfg80211_mlme_assoc \
 	-Wl,--wrap=ieee80211_scan_completed \
 	-Wl,--wrap=ieee80211_sta_work
 endif
+endif
 
 # Both F429 wireless roles refuse transmit block-ack sessions: once the 8188E's
 # aggregation engine starts one, it swallows the per-frame URBs (the station
 # role measured it; the AP role sends through the same engine).  The case owns
 # the body.
+ifeq ($(CONFIG_LIBLINUX80211_MAC80211),1)
 ifneq ($(filter f429_wifi f429_wifi_ap,$(CASES)),)
 WL80211_LDFLAGS += -Wl,--wrap=ieee80211_start_tx_ba_session
 endif
@@ -178,14 +190,20 @@ WL80211_LDFLAGS += -Wl,--wrap=ieee80211_tx_dequeue \
 	-Wl,--wrap=ieee80211_tx_status_skb \
 	-Wl,--wrap=ieee80211_stop_queue \
 	-Wl,--wrap=ieee80211_wake_queue \
-	-Wl,--wrap=iwl_trans_pcie_tx \
+	-Wl,--wrap=ieee80211_sta_ps_transition \
+	-Wl,--wrap=ieee80211_sta_set_buffered
+endif
+
+# iwlwifi's wraps: the bodies live in tx_health.c and the driver world; the
+# symbols exist only in an iwlwifi image.
+ifeq ($(CONFIG_LIBLINUX80211_IWLWIFI),1)
+WL80211_LDFLAGS += -Wl,--wrap=iwl_trans_pcie_tx \
 	-Wl,--wrap=iwl_trans_pcie_send_hcmd \
 	-Wl,--wrap=iwl_mvm_send_cmd \
 	-Wl,--wrap=iwl_read32 \
 	-Wl,--wrap=iwl_write32 \
-	-Wl,--wrap=iwl_trans_pci_interrupts \
-	-Wl,--wrap=ieee80211_sta_ps_transition \
-	-Wl,--wrap=ieee80211_sta_set_buffered
+	-Wl,--wrap=iwl_trans_pci_interrupts
+endif
 
 # The AP userspace-management seam, added only where its body is linked (see
 # the PROBE source choice above).

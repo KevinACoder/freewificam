@@ -64,7 +64,6 @@ obj-$(CONFIG_LIBLINUX80211_RTL8189FS) += \
 	src/os_dep/linux/rtw_android.c \
 	src/os_dep/linux/rtw_proc.c \
 	src/os_dep/linux/rtw_rhashtable.c \
-	src/os_dep/linux/ioctl_mp.c \
 	src/os_dep/linux/custom_gpio_linux.c \
 	src/hal/hal_intf.c \
 	src/hal/hal_com.c \
@@ -74,7 +73,6 @@ obj-$(CONFIG_LIBLINUX80211_RTL8189FS) += \
 	src/hal/hal_dm_acs.c \
 	src/hal/hal_btcoex_wifionly.c \
 	src/hal/hal_btcoex.c \
-	src/hal/hal_mp.c \
 	src/hal/hal_mcc.c \
 	src/hal/hal_hci/hal_sdio.c \
 	src/hal/led/hal_led.c \
@@ -129,7 +127,6 @@ obj-$(CONFIG_LIBLINUX80211_RTL8189FS) += \
 	src/hal/phydm/phydm_pow_train.c \
 	src/hal/phydm/phydm_lna_sat.c \
 	src/hal/phydm/phydm_pmac_tx_setting.c \
-	src/hal/phydm/phydm_mp.c \
 	src/hal/phydm/halrf/halrf.c \
 	src/hal/phydm/halrf/halrf_debug.c \
 	src/hal/phydm/halrf/halphyrf_ce.c \
@@ -143,8 +140,17 @@ obj-$(CONFIG_LIBLINUX80211_RTL8189FS) += \
 	src/hal/phydm/rtl8188f/phydm_regconfig8188f.c \
 	src/hal/phydm/halrf/rtl8188f/halrf_8188f.c \
 	src/hal/phydm/rtl8188f/phydm_rtl8188f.c \
-	src/platform/platform_ops.c \
-	src/core/rtw_mp.c
+	src/platform/platform_ops.c
+endif
+
+# The manufacturing/production-test units are a Kconfig face, not a permanent
+# part of the 131: an image that turns RTL8189FS_MP off does not compile them.
+ifeq ($(SRC_TAG),drv)
+obj-$(CONFIG_RTL8189FS_MP) += \
+	src/core/rtw_mp.c \
+	src/os_dep/linux/ioctl_mp.c \
+	src/hal/hal_mp.c \
+	src/hal/phydm/phydm_mp.c
 endif
 
 # The SDIO world this driver needs: the board's DesignWare MMC host driver, the

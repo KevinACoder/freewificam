@@ -11,6 +11,10 @@ MEMORY
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 
+/* The lwIP heap reserve.  The build passes the Kconfig value with
+ * --defsym=LWIP_HEAP_BYTES=...; a profile without the SDRAM branch passes 0. */
+PROVIDE(LWIP_HEAP_BYTES = 0);
+
 SECTIONS
 {
     .isr_vector :
@@ -140,7 +144,7 @@ SECTIONS
         KEEP(*(.sdram))
         . = ALIGN(8);
         __lwip_heap = .;
-        . += 256K;	/* lwIP MEM_SIZE reserve for the F429 wireless profiles */
+        . += LWIP_HEAP_BYTES;	/* CONFIG_LWIP_MEM_SIZE_KB + 1 KiB */
         . = ALIGN(8);
         __sdram_end = .;
     } > SDRAM

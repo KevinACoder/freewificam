@@ -74,9 +74,11 @@
 /* 1 MB: the converged measurement-tier heap. 128 KB exhausted the static
  * heap under a 128-deep pbuf burst in the earlier gigabit work, and the
  * reference single-core gigabit SDK this tier follows carries 1 MB too. */
-#define MEM_SIZE                        (1024 * 1024)
-/* AArch64 pointers are 8 bytes: aligned blocks keep every pointer field of
- * every pbuf naturally aligned. */
+#define MEM_SIZE                        (LWIP_MEM_SIZE_KB * 1024)
+/* 8: the converged value both targets were measured with.  Cortex-M4 could
+ * use 4 (its pointers are 4 bytes), but that changes every pbuf/memp offset
+ * and is a heap A/B of its own, not a size-round freebie; keep 8 until that
+ * arm is measured. */
 #define MEM_ALIGNMENT                   8
 /* 448 buffers: the RX ring depth (128) plus an in-flight TCP burst must fit
  * without pool exhaustion - a 40-deep pool dropped 13.5% of ACKs in the
@@ -88,9 +90,7 @@
  * window and this pool are sized together (a 512 KiB window is 359 frames, so
  * the ring has to hold them and the pool has to back a whole window plus the
  * burst). A lever moves the three; nothing else in this file can. */
-#ifndef PBUF_POOL_SIZE
-#define PBUF_POOL_SIZE                  448
-#endif
+#define PBUF_POOL_SIZE                  LWIP_PBUF_POOL_SIZE
 /* One full 1518-byte frame plus headroom in a single pool buffer, so a
  * maximum-frame receive never needs a chain. */
 #define PBUF_POOL_BUFSIZE               1600
@@ -150,7 +150,7 @@
  * 16 slots matches MEMP_NUM_NETBUF (a mailbox slot without its netbuf element
  * is dead weight - same rule as MEMP_NUM_TCPIP_MSG_INPKT below) and covers a
  * batch drain handing several datagrams to a reader that was asleep. */
-#define DEFAULT_UDP_RECVMBOX_SIZE       16
+#define DEFAULT_UDP_RECVMBOX_SIZE       LWIP_UDP_RECVMBOX_SIZE
 #define MEMP_NUM_NETBUF                 16
 
 /* --- core locking ----------------------------------------------------------- */
@@ -211,27 +211,19 @@
 #ifndef TCP_RCV_SCALE
 #define TCP_RCV_SCALE                   4
 #endif
-#ifndef TCP_WND
-#define TCP_WND                         131072
-#endif
-#ifndef TCP_SND_BUF
-#define TCP_SND_BUF                     131072
-#endif
+#define TCP_WND                         LWIP_TCP_WND
+#define TCP_SND_BUF                     LWIP_TCP_SND_BUF
 /* Floor is 4 * TCP_SND_BUF / TCP_MSS = 359 at this size; 1536 keeps a whole
  * window of segments queueable with room for the retransmit list. */
-#ifndef TCP_SND_QUEUELEN
-#define TCP_SND_QUEUELEN                1536
-#endif
+#define TCP_SND_QUEUELEN                LWIP_TCP_SND_QUEUELEN
 /* A quarter of the send buffer: the writer is woken while it still has 96 KB
  * of room, far from the u16 guard sanity check. */
-#define TCP_SNDLOWAT                    32768
+#define TCP_SNDLOWAT                    LWIP_TCP_SNDLOWAT
 #define TCP_QUEUE_OOSEQ                 1
-#define MEMP_NUM_TCP_SEG                1536
+#define MEMP_NUM_TCP_SEG                LWIP_MEMP_NUM_TCP_SEG
 /* Matches TCPIP_MBOX_SIZE: an mbox slot without its msg-pool element drops the
  * frame anyway, so sizing only the mbox is dead weight. */
-#ifndef MEMP_NUM_TCPIP_MSG_INPKT
-#define MEMP_NUM_TCPIP_MSG_INPKT        128
-#endif
+#define MEMP_NUM_TCPIP_MSG_INPKT        LWIP_MEMP_NUM_TCPIP_MSG_INPKT
 #endif /* LWIP_PERF_TIER */
 
 /* --- RX checksum offload (flips with the driver, never alone) ----------------
@@ -371,10 +363,11 @@ void wlan_tcp_event(unsigned int site, void *pcb, unsigned long ackno,
  * CONFIG_F429_LWIP_SDRAM (platform/board/Kconfig).
  */
 #if defined(CONFIG_F429_LWIP_SDRAM) && CONFIG_F429_LWIP_SDRAM
-#undef MEM_SIZE
-/* One byte under the linker reserve so mem.c's two trailing struct mem
- * entries stay inside it. */
-#define MEM_SIZE                        (255 * 1024)
+/* The sizes are the lwIP-memory Kconfig symbols (MEM_SIZE, PBUF_POOL_SIZE,
+ * TCP_WND/SND_BUF/QUEUELEN/SNDLOWAT, MEMP_NUM_TCP_SEG,
+ * MEMP_NUM_TCPIP_MSG_INPKT); this branch only moves the heap to SDRAM and
+ * switches the memp pools onto it.  The linker reserve is
+ * CONFIG_LWIP_MEM_SIZE_KB + 1 KiB. */
 #undef MEMP_MEM_MALLOC
 #define MEMP_MEM_MALLOC                 1
 /* memp.h derives the pool stats from MEMP_MEM_MALLOC; keep the stats structs
@@ -386,20 +379,6 @@ void wlan_tcp_event(unsigned int site, void *pcb, unsigned long ackno,
 extern void *lkpi_lwip_heap_ptr;
 #undef LWIP_RAM_HEAP_POINTER
 #define LWIP_RAM_HEAP_POINTER           lkpi_lwip_heap_ptr
-#undef PBUF_POOL_SIZE
-#define PBUF_POOL_SIZE                  24
-#undef TCP_WND
-#define TCP_WND                         (16 * 1024)
-#undef TCP_SND_BUF
-#define TCP_SND_BUF                     (16 * 1024)
-#undef TCP_SND_QUEUELEN
-#define TCP_SND_QUEUELEN                48
-#undef TCP_SNDLOWAT
-#define TCP_SNDLOWAT                    (8 * 1024)
-#undef MEMP_NUM_TCP_SEG
-#define MEMP_NUM_TCP_SEG                48
-#undef MEMP_NUM_TCPIP_MSG_INPKT
-#define MEMP_NUM_TCPIP_MSG_INPKT        16
 #endif /* CONFIG_F429_LWIP_SDRAM */
 
 #endif /* FREEWEB_LWIPOPTS_H */

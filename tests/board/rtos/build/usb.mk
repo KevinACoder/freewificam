@@ -53,12 +53,6 @@ USB_STACK_SRCS := \
 	$(USB)/port/xhci/usb_hc_xhci.c
 endif
 
-# The widest single transfer the stage pool must cover.  The storage line's
-# largest command is 1 MiB and the native MSC path moves the caller's buffer
-# directly, so this value sizes the linuxkpi adapter's pool (used by the
-# wireless image); the gate below keeps it in step with the driver's RX size.
-USB_STAGE_SIZE := $(CONFIG_USB_STAGE_SIZE)
-
 USB_INCLUDES := \
 	-I$(USB_BOARD) \
 	-I$(LINE)/app/usb \

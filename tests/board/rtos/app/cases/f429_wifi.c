@@ -63,6 +63,7 @@
 #include "linux80211/net.h"	/* data plane: lwIP netif, ICMP, phases */
 #include "linuxkpi_usb.h"
 #include "lkpi_usb_cherryusb.h"
+#include "FreeRTOS.h"		/* heap high-water, the SDRAM budget's measurement */
 
 #include <linux/etherdevice.h>
 #include <linux/workqueue.h>
@@ -432,13 +433,14 @@ case_f429_wifi_run(void)
 					/* CHANNEL | TX | USB | INTERRUPT */
 		log_level_set(ULOG_DEBUG_LEVEL);
 	}
-	CASE_ANCHOR("f429_wifi: heap=%s\n",
+	CASE_ANCHOR("f429_wifi: heap=%s free=%u min=%u\n",
 #if defined(CONFIG_F429_HEAP_SDRAM)
-		    "sdram"
+		    "sdram",
 #else
-		    "sram"
+		    "sram",
 #endif
-	    );
+		    (unsigned)xPortGetFreeHeapSize(),
+		    (unsigned)xPortGetMinimumEverFreeHeapSize());
 
 	lkpi_core_init();
 	CASE_ANCHOR("f429_wifi: core ready\n");

@@ -229,7 +229,8 @@ Two targets sit outside the image, on purpose:
 
 Two Kconfig symbols, one flag-world include, two profiles:
 
-- `CONFIG_LIBLINUX80211_WIRELESS` puts the imported `stack/` TUs in an image;
+- `CONFIG_LIBLINUX80211_CFG80211` (and `_MAC80211` for the SoftMAC half)
+  puts the imported `stack/` TUs in an image;
   `CONFIG_LIBLINUX80211_IWLWIFI` adds the 72 `wireless-drivers/iwlwifi/` TUs and
   the generated firmware unit. `tests/board/rtos/build/wl80211.mk` owns the
   flag worlds (stack: `S0_CFLAGS`; driver: `S1_CFLAGS`; cases: stack flags) and
@@ -244,7 +245,7 @@ Two Kconfig symbols, one flag-world include, two profiles:
   flag world as `WL80211_PROBE_SRCS`, not in the 62/72 TU lists. The driver
   world also sets `LKPI_ALLOC_SKB_MIN=2048` so RX frames stay linear (see
   `docs/DIVERGENCES.md` row 45). The heap is the FreeRTOS one
-  (`osMemoryAlloc -> pvPortMalloc`), not `CONFIG_HEAP_SIZE`.
+  (`osMemoryAlloc -> pvPortMalloc`); there is no second heap knob.
 - Build-only targets (no image): `s1-driver-compile` (72 TUs, `bench record`)
   and `s1-link` (partial link + classified undefined list,
   `bench record`). `s0-compile` is unchanged.
@@ -264,8 +265,8 @@ the SDRAM is brought up before the kernel (`main.c` calls
 ./make.rtos image PROFILE=stm32f429-wifi-c3    # attach: attach
 ./make.rtos image PROFILE=stm32f429-wifi-c4    # scan: scan
 ./make.rtos image PROFILE=stm32f429-wifi-c5    # association: connect
-./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,848 B)
-./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (736,552 B)
+./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,096 B)
+./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (735,944 B)
 mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --erase sector \
     --verify --reset --expect "rtos: result"
 ```
@@ -283,3 +284,120 @@ read-back and the TX-state register census) and `stm32f429-wifi-c6diag`
 `rk3568-rtl8xxxu-8188eu-c5-census` is the same census on the RK3568 control
 arm (same dongle, same driver).  All three are default-n in Kconfig, so a
 delivery build cannot pick them up by accident.
+
+The size round adds compiler probes beside the images:
+`stm32f429-cfg80211-only` is a real `tick` image that proves net/wireless
+links without net/mac80211, and `stm32f429-rtl8189fs-c0`,
+`-c0-trim` and `-c0-debugoff` are C0-only defconfigs for
+`s1-driver-compile` (their `# C0-only` marker is what `ci.sh` skips; they are
+not flashable images).
+
+
+## F429 image size ledger (2026-11-16)
+
+The 1 MiB F429 flash is the binding constraint for the SDIO lines, so the
+size round starts with an account, not a flag.  `tools/rtos/size-ledger.py`
+reads the link map and attributes every placed input section to its object
+once (an address-interval union; merged `.rodata.str*` blocks are counted
+once, and `--gc-sections` discards are a separate row).  It reconciles to
+within 16 B of `arm-none-eabi-size`; the remainder is final alignment.
+
+### The delivery image (`stm32f429-wifi-c6`)
+
+| build | text | data | bin | free of 1 MiB |
+|---|---:|---:|---:|---:|
+| before the round | 722,952 | 3,692 | 726,656 | 321,920 |
+| delivery image (this round) | 722,392 | 3,692 | 726,096 | 322,480 |
+| delivery + `CONFIG_OPT_LTO=y` | 686,372 | 3,260 | 689,648 | 358,928 |
+
+The delivery image was booted twice from a relay cold start: `PASS SCAN`,
+`PASS ASSOC`, 20/20 ICMP at 56 B and 20/20 at 1400 B, `PASS DATA`, and
+`rtos: result pass cases=1/1` both times.  The LTO image was booted twice the
+same way and passed the same gates; the link gate needed
+`-Wl,-u,xPortStartScheduler` (LTO inlines it into its only caller).
+
+Where the 726,096 B goes (placed, `size-ledger.py`):
+
+| group | text | rodata | data | flash |
+|---|---:|---:|---:|---:|
+| mac80211 | 246,934 | 7,515 | 50 | 254,499 |
+| cfg80211 | 137,692 | 10,087 | 918 | 148,697 |
+| rtl8xxxu | 69,066 | 42,092 | 2,580 | 113,738 |
+| merged strings (`rodata.str*`) | 0 | 92,672 | 0 | 92,672 |
+| linuxkpi + bus + skb | 26,112 | 15,238 | 9 | 41,359 |
+| lwIP | 35,072 | 0 | 8 | 35,080 |
+| CherryUSB | 12,918 | 0 | 0 | 12,918 |
+| FreeRTOS | 9,900 | 0 | 0 | 9,900 |
+| platform | 5,468 | 62 | 17 | 5,547 |
+| app/cases | 4,490 | 0 | 0 | 4,498 |
+| other + support + libc | 6,524 | 0 | 80 | 6,604 |
+| **total** | **554,176** | **167,666** | **3,662** | **725,512** |
+
+The flash column also carries 8 B of `other` input sections (`.ARM`/fill);
+the three named columns sum to 725,504.
+
+`.rodata` is half strings (92,672 B), which is why turning vendor log levels
+off is a size lever but also an evidence decision: the C3/C4 attach lines are
+part of the judgement.  The delivery face keeps them; only a size-only arm
+turns them off.
+
+### What the Kconfig now owns
+
+- `LIBLINUX80211_CFG80211` / `LIBLINUX80211_MAC80211` replace the old
+  one-symbol wireless gate.  The split is byte-identical for every image that
+  selects both (the c6 `.bin` was compared before/after); a FullMAC/ vendor
+  stack can select cfg80211 only.  `stack_config.h` derives the two stack
+  macros from these symbols; S0/S1 use `s0_face.h` because the inventory
+  measures the whole imported tree.
+- `RTL8189FS_{MP,AP,P2P,CONCURRENT,POWER_SAVING,DEBUG,NETIF_SG,EFUSE_FILE,
+  LOAD_PHY_FILE}` are the vendor face.  Defaults are the GT answers; an F429
+  profile turns them off explicitly.  AP is **not** separable in this vendor
+  drop: its fields live behind `CONFIG_AP_MODE` while unguarded code reads
+  them (10 of 131 TUs fail with AP off), so AP stays on.
+- `LWIP_MEM_SIZE_KB`, `LWIP_PBUF_POOL_SIZE`, `LWIP_TCP_WND`,
+  `LWIP_TCP_SND_BUF`, `LWIP_TCP_SND_QUEUELEN`, `LWIP_TCP_SNDLOWAT`,
+  `LWIP_MEMP_NUM_TCP_SEG`, `LWIP_MEMP_NUM_TCPIP_MSG_INPKT` and
+  `LWIP_UDP_RECVMBOX_SIZE` replace the literals in `lwipopts.h`; the F429
+  defaults are 255 KiB / 24 / 16 KiB / 48, the RK defaults are the measured
+  gigabit tier.  The linker's `.sdram` lwIP reserve is
+  `CONFIG_LWIP_MEM_SIZE_KB + 1 KiB`, passed as `--defsym=LWIP_HEAP_BYTES`,
+  not a second 256K literal.
+- `CONFIG_OPT_LTO` is the compile/link reserve; `-Oz` and `-fipa-icf` were
+  measured at exactly zero and are not offered.
+- `CONFIG_LKPI_SKB_DATA_BUF_SZ` and `CONFIG_LKPI_SKB_TOMB_MAX` make the last
+  two skb geometry literals visible; the pool counts were already Kconfig.
+- One face fix the 8189FS C0 needed: `u32`/`s32`/`__u32`/`__s32` are now
+  spelled `unsigned int`/`int` (the kernel's own types) rather than
+  `int32_t`.  newlib's `int32_t` is `long` on 32-bit ARM, so a vendor
+  prototype written as `s32 f(...)` collided with the same function defined
+  as `int f(...)`; the width and alignment are unchanged, and the vendor
+  driver now compiles 131/131 on the F429 face.
+
+### The 8189FS budget (C0 exact, C1 base exact, SDIO glue estimated)
+
+The F429 8189FS line has no SDIO host adapter yet, so its number is a budget:
+the vendor driver is compiled with the F429 face (131/131 TUs), and the base
+is the cfg80211-only image's flat `.bin`.  The host glue is the one estimate.
+
+| item | bytes |
+|---|---:|
+| cfg80211-only base image | 168,036 |
+| rtl8189fs, GT face | 742,203 |
+| rtl8189fs, delivery face (MP/P2P/CONCURRENT/POWER_SAVING/NETIF_SG/EFUSE_FILE/LOAD_PHY_FILE off; AP+DEBUG on) | 609,933 |
+| lwIP (C5/C6 egress) | 35,080 |
+| SDIO engine + fsl_sdmmc + F429 glue (estimate) | 25,000 |
+| case + runner (estimate) | 4,000 |
+| **pre-trim total** | **974,319 (74,257 B free)** |
+| **delivery-face total** | **842,049 (206,527 B free)** |
+
+So the GT face does **not** meet the 100 KiB margin; the delivery face does,
+with the vendor attach lines still on.  The DEBUG-off ceiling (414,053 B for
+the driver) would leave ~393 KiB free but removes the C3/C4 log evidence, so
+it is a size-only arm, not a delivery profile.  The exact per-feature deltas
+are in the private round record.
+
+Heap/pool note: the c6 heap low-water was `free=4,157,952 min=4,157,952` of a
+4 MiB SDRAM heap, i.e. about 36 KiB ever used on this boot.  The size is
+therefore ample and **not** changed in this round; shrinking it is a RAM
+footprint choice, not an image-size one.  lwIP's `MEM_ALIGNMENT` stays 8: a
+move to 4 is a separate heap A/B, not a free size win.

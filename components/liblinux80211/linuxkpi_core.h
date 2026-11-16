@@ -100,20 +100,27 @@ int sprintf(char *buf, const char *fmt, ...);
  */
 typedef uint8_t			u8;
 typedef uint16_t		u16;
-typedef uint32_t		u32;
+/* Linux's u32/s32 are `unsigned int`/`signed int` on every architecture
+ * (include/uapi/asm-generic/int-ll64.h).  newlib's int32_t is `long` on
+ * 32-bit ARM, which is the same 32-bit object but a different type: a vendor
+ * prototype written as `s32 f(...)` then conflicts with the same function
+ * defined as `int f(...)` (rtl8189fs's issue_probereq_ex, the two C0 failures
+ * on the F429 face, 2026-11-16).  Spell the interface's own types; the width
+ * and alignment are unchanged. */
+typedef unsigned int		u32;
 typedef unsigned long long	u64;
 typedef int8_t			s8;
 typedef int16_t			s16;
-typedef int32_t			s32;
+typedef int				s32;
 typedef long long		s64;
 
 typedef uint8_t			__u8;
 typedef uint16_t		__u16;
-typedef uint32_t		__u32;
+typedef unsigned int		__u32;
 typedef unsigned long long	__u64;
 typedef int8_t			__s8;
 typedef int16_t			__s16;
-typedef int32_t			__s32;
+typedef int				__s32;
 typedef long long		__s64;
 
 typedef uint16_t		__le16;

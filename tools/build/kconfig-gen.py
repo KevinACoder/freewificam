@@ -117,7 +117,7 @@ def ensure_values(kconf) -> None:
     """Fail loudly when a required configured value is empty."""
     required = [
         "BACKEND_NAME", "BOARD_NAME", "OPT_FLAGS", "PROFILE_NAME",
-        "DEBUG_LEVEL_VALUE", "CASES", "HEAP_SIZE", "FREERTOS_HEAP_SIZE",
+        "DEBUG_LEVEL_VALUE", "CASES", "FREERTOS_HEAP_SIZE",
     ]
     for name in required:
         sym = kconf.syms.get(name)
@@ -128,6 +128,16 @@ def ensure_values(kconf) -> None:
 
 
 def read_git_tag() -> str:
+    """The banner tag embedded in the image.
+
+    ``FW_BUILD_TAG`` is the explicit override: a size A/B compares two builds
+    of the same tree at different commits and needs the banner to be the same
+    fact in both, without requiring a clean worktree (a dirty tree otherwise
+    appends ``-dirty`` and changes the string, not the code).
+    """
+    override = os.environ.get("FW_BUILD_TAG")
+    if override:
+        return override
     try:
         return subprocess.check_output(
             ["git", "-C", str(REPO), "describe", "--always", "--dirty"],
@@ -401,6 +411,15 @@ def lwip_config_text(kconf) -> str:
         "#define LWIP_TCPIP_CORE_LOCKING_INPUT %s" % val("LWIP_TCPIP_CORE_LOCKING_INPUT", "0"),
         "#define LWIP_TCP_ACK_DELAY_SEGMENTS %s" % val("LWIP_TCP_ACK_DELAY_SEGMENTS", "2"),
         "#define LWIPERF_TCP_MAX_IDLE_SEC %s" % val("LWIPERF_TCP_MAX_IDLE_SEC", "60"),
+        "#define LWIP_MEM_SIZE_KB %s" % val("LWIP_MEM_SIZE_KB", "1024"),
+        "#define LWIP_PBUF_POOL_SIZE %s" % val("LWIP_PBUF_POOL_SIZE", "448"),
+        "#define LWIP_TCP_WND %s" % val("LWIP_TCP_WND", "131072"),
+        "#define LWIP_TCP_SND_BUF %s" % val("LWIP_TCP_SND_BUF", "131072"),
+        "#define LWIP_TCP_SND_QUEUELEN %s" % val("LWIP_TCP_SND_QUEUELEN", "1536"),
+        "#define LWIP_TCP_SNDLOWAT %s" % val("LWIP_TCP_SNDLOWAT", "32768"),
+        "#define LWIP_MEMP_NUM_TCP_SEG %s" % val("LWIP_MEMP_NUM_TCP_SEG", "1536"),
+        "#define LWIP_MEMP_NUM_TCPIP_MSG_INPKT %s" % val("LWIP_MEMP_NUM_TCPIP_MSG_INPKT", "128"),
+        "#define LWIP_UDP_RECVMBOX_SIZE %s" % val("LWIP_UDP_RECVMBOX_SIZE", "16"),
         "",
         "#endif /* FREEWIFICAM_LWIPOPTS_KCONFIG_H */",
         "",

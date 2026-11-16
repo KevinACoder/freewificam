@@ -1,0 +1,29 @@
+# F429 cfg80211-only link probe (size round, 2026-11-16).
+#
+# This is not a delivery profile and carries no driver: it exists to answer
+# one question the SDIO lines depend on - does net/wireless link without
+# net/mac80211?  The image is a `tick` image plus the cfg80211 half; a zero
+# undefined-symbol count is the C1 answer.  Its size is the base the 8189FS
+# budget is built on.
+#
+# The FullMAC vendor stack (rtl8189fs) and the board's AP6181/brcmfmac both
+# need cfg80211 only; mac80211 is a SoftMAC MLME they do not use.
+
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_CASES="tick"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_CFG80211=y
+CONFIG_LIBLINUX80211_MAC80211=n
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_LKPI_SKB_POOL_NUM=8
+CONFIG_LKPI_SKB_DATA_POOL_NUM=8
+CONFIG_LKPI_SKB_HEAP_HDR_MAX=64

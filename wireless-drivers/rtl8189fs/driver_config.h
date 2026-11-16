@@ -58,21 +58,35 @@
 
 /* The vendor's multi-interface core; GT compiled it in, and the station path
  * shares the adapter/interface records it sets up. */
+#if CONFIG_RTL8189FS_CONCURRENT
 #define CONFIG_CONCURRENT_MODE			1
+#endif
 
 /* --- feature set, as on GT ------------------------------------------------ */
+#if CONFIG_RTL8189FS_MP
 #define CONFIG_MP_INCLUDED			1
+#endif
+#if CONFIG_RTL8189FS_POWER_SAVING
 #define CONFIG_POWER_SAVING			1
+#endif
+#if CONFIG_RTL8189FS_DEBUG
 #define CONFIG_RTW_DEBUG			1
+#endif
+#if CONFIG_RTL8189FS_EFUSE_FILE
 #define CONFIG_EFUSE_CONFIG_FILE		1
+#endif
+#if CONFIG_RTL8189FS_LOAD_PHY_FILE
 #define CONFIG_LOAD_PHY_PARA_FROM_FILE		1
+#endif
+#if CONFIG_RTL8189FS_NETIF_SG
+#define CONFIG_RTW_NETIF_SG			1
+#endif
 #define CONFIG_TXPWR_BY_RATE			1
 #define CONFIG_TXPWR_BY_RATE_EN			1
 #define CONFIG_TXPWR_LIMIT			1
 #define CONFIG_TXPWR_LIMIT_EN			0
 #define CONFIG_RTW_ADAPTIVITY_EN		0
 #define CONFIG_RTW_ADAPTIVITY_MODE		0
-#define CONFIG_RTW_NETIF_SG			1
 #define CONFIG_RTW_SDIO_PM_KEEP_POWER		1
 #define CONFIG_LITTLE_ENDIAN			1
 #define DM_ODM_SUPPORT_TYPE			0x04
@@ -87,9 +101,47 @@
 #define WIFIMAC_PATH		"/data/wifimac.txt"
 #define REALTEK_CONFIG_PATH	"/lib/firmware/"
 
-/* --- departures from the GT face (see the header comment) ----------------- */
-/* #undef CONFIG_PROC_DEBUG */		/* no filesystem on this port */
-/* #undef CONFIG_WIFI_MONITOR */	/* station round */
-/* #undef CONFIG_BR_EXT */		/* same as the GT Kbuild */
+/* --- departure switches (defaults are the GT face) ------------------------ */
+#if CONFIG_RTL8189FS_WIFI_MONITOR
+#define CONFIG_WIFI_MONITOR		1
+#endif
+#if CONFIG_RTL8189FS_TDLS
+#define CONFIG_TDLS			1
+#endif
+#if CONFIG_RTL8189FS_BT_COEX
+#define CONFIG_BT_COEXIST		1
+#endif
+#if CONFIG_RTL8189FS_PROC_DEBUG
+#define CONFIG_PROC_DEBUG		1
+#endif
+#if CONFIG_RTL8189FS_BR_EXT
+#define CONFIG_BR_EXT			1
+#endif
+
+/* --- the two unconditional autoconf answers ------------------------------
+ *
+ * autoconf.h defines CONFIG_AP_MODE and CONFIG_P2P unconditionally (it has no
+ * include guard of its own, but drv_conf.h does).  Pull the vendor config in
+ * here, after this face's own defines, then undo the two answers the profile
+ * turned off.  drv_types.h's later #include <drv_conf.h> is the guarded second
+ * include and does not re-define them.  This is the one place a profile can
+ * turn the vendor's AP/P2P surface off without editing the vendor tree.
+ */
+#include "src/include/drv_conf.h"
+
+#if !CONFIG_RTL8189FS_AP
+#undef CONFIG_AP_MODE
+#undef CONFIG_NATIVEAP_MLME
+#undef CONFIG_HOSTAPD_MLME
+#endif
+
+#if !CONFIG_RTL8189FS_P2P
+#undef CONFIG_P2P
+#undef CONFIG_WFD
+#undef CONFIG_P2P_REMOVE_GROUP_INFO
+#undef CONFIG_P2P_PS
+#undef CONFIG_P2P_OP_CHK_SOCIAL_CH
+#undef CONFIG_CFG80211_ONECHANNEL_UNDER_CONCURRENT
+#endif
 
 #endif /* _RTL8189FS_DRIVER_CONFIG_H_ */

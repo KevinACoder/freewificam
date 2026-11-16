@@ -65,10 +65,10 @@ choice PROFILE
 	prompt "Performance profile"
 	default PROFILE_BASE
 	help
-	  base is the pre-round switch set; perf carries the measured net-positive
-	  lwIP/GMAC switches (PROFILE_DEFS in the Makefile).  The choice is called
-	  PROFILE only in this file; the build's PROFILE variable names the
-	  defconfig and is unrelated.
+	  base is the pre-round lwIP tier; perf raises the core-locking and
+	  delayed-ACK defaults (the choice feeds those Kconfig defaults, not a
+	  compiler flag set).  The choice is called PROFILE only in this file;
+	  the build's PROFILE variable names the defconfig and is unrelated.
 
 config PROFILE_BASE
 	bool "base"
@@ -77,6 +77,15 @@ config PROFILE_PERF
 	bool "perf"
 
 endchoice
+
+config OPT_LTO
+	bool "Link-time optimisation (-flto)"
+	default n
+	help
+	  Builds and links with -flto.  The measured c6 result is -37,264 B of
+	  text (-5.2%), at the cost of a serial LTRANS link and a link gate that
+	  needs -Wl,-u for the backend entry points (LTO inlines them into their
+	  only caller).  It is a reserve lever: structural trimming comes first.
 
 # C6T's diagnostic ordering (see the symbol's help): outside the profile choice
 # on purpose - it is a case-order switch, not a performance profile.
@@ -177,14 +186,6 @@ config DEBUG_LEVEL_VALUE
 	default 2 if DEBUG_G2
 	default 3 if DEBUG_G3
 
-config HEAP_SIZE
-	int "ThreadX kernel heap (MiB)"
-	default 4
-	help
-	  Rendered as -Wl,--defsym=HEAP_SIZE=<n>M for the ThreadX link.  The
-	  FreeRTOS image uses FREERTOS_HEAP_SIZE instead; the value is harmless
-	  there but still part of the profile.
-
 config FREERTOS_HEAP_SIZE
 	int "FreeRTOS heap (bytes)"
 	default 262144
@@ -201,7 +202,7 @@ config GMAC_PROF
 	  The dwc_eqos prof counters and the netio tick buckets.  Default on so
 	  a measurement boot is the same image as before; an A/B arm turns it
 	  off.  The Makefile's old unconditional -DCONFIG_GMAC_PROF= line is
-	  gone; the generator now emits it through CFG_DEFS.
+	  gone; it is a Kconfig value in the generated header.
 
 menu "Resources and toolchain"
 
@@ -213,10 +214,6 @@ comment "per-world default' for the pool/deadline knobs."
 config BOARD_AUTO_RESET
 	bool "Reset the board after the runner finishes"
 	default y
-
-config SHELL_STACK_KB
-	int "CherrySH task stack (KiB)"
-	default 16
 
 config RUNNER_STACK_KB
 	int "Runner task stack (KiB)"
@@ -246,6 +243,21 @@ config LKPI_SKB_HEAP_HDR_MAX
 	int "linuxkpi skb inline header bytes"
 	default 64
 
+config LKPI_SKB_DATA_BUF_SZ
+	int "linuxkpi skb data slot payload (bytes)"
+	default 2048
+	help
+	  One linear data slot.  The F429's receive urbs are ~2.3 KiB and the
+	  driver copies into its own SRAM skbs, so 2048 is the measured fit; a
+	  1600-byte slot would chain a maximum frame.
+
+config LKPI_SKB_TOMB_MAX
+	int "linuxkpi skb freed-header tombstone ring"
+	default 64
+	help
+	  Released heap-backed headers remembered for double-free detection.
+	  RAM only; the ring degrades a very old double free to a named refusal.
+
 config LKPI_USB_CHERRYUSB_SLOTS
 	int "CherryUSB URB slots"
 	default 16
@@ -268,10 +280,6 @@ config LKPI_USB_CHERRYUSB_STAGE_SLOTS
 	  Stage slots are held for the life of an in-flight transfer; rtw88 keeps
 	  its receive urbs submitted permanently, so the slot count has to cover
 	  those plus the transmit side.
-
-config USB_STAGE_SIZE
-	int "USB transfer stage size (bytes)"
-	default 20480
 
 config USBHOST_MSC_TIMEOUT
 	int "USB mass-storage timeout (ms)"
@@ -329,5 +337,70 @@ endmenu
 rsource "platform/arch/Kconfig"
 rsource "platform/board/Kconfig"
 rsource "app/Kconfig"
+
+menu "lwIP memory"
+
+comment "The stack's heap and pool sizes.  The F429 branch moves the heap"
+comment "to SDRAM and keeps the pools small; the RK profiles keep the"
+comment "measured gigabit tier.  lwipopts.h consumes these, not literals."
+
+config LWIP_MEM_SIZE_KB
+	int "lwIP heap (KiB)"
+	range 16 4096
+	default 255 if F429_LWIP_SDRAM
+	default 1024
+	help
+	  MEM_SIZE.  On F429 this is the .sdram.lwip reserve: the linker gets
+	  one KiB more than this value so mem.c's two trailing struct mem
+	  entries stay inside the reserve.
+
+config LWIP_PBUF_POOL_SIZE
+	int "PBUF_POOL_SIZE"
+	range 4 2048
+	default 24 if F429_LWIP_SDRAM
+	default 448
+
+config LWIP_TCP_WND
+	int "TCP_WND (bytes)"
+	range 2048 1048576
+	default 16384 if F429_LWIP_SDRAM
+	default 131072
+
+config LWIP_TCP_SND_BUF
+	int "TCP_SND_BUF (bytes)"
+	range 2048 1048576
+	default 16384 if F429_LWIP_SDRAM
+	default 131072
+
+config LWIP_TCP_SND_QUEUELEN
+	int "TCP_SND_QUEUELEN"
+	range 16 8192
+	default 48 if F429_LWIP_SDRAM
+	default 1536
+
+config LWIP_TCP_SNDLOWAT
+	int "TCP_SNDLOWAT (bytes)"
+	range 512 262144
+	default 8192 if F429_LWIP_SDRAM
+	default 32768
+
+config LWIP_MEMP_NUM_TCP_SEG
+	int "MEMP_NUM_TCP_SEG"
+	range 16 8192
+	default 48 if F429_LWIP_SDRAM
+	default 1536
+
+config LWIP_MEMP_NUM_TCPIP_MSG_INPKT
+	int "MEMP_NUM_TCPIP_MSG_INPKT"
+	range 4 512
+	default 16 if F429_LWIP_SDRAM
+	default 128
+
+config LWIP_UDP_RECVMBOX_SIZE
+	int "DEFAULT_UDP_RECVMBOX_SIZE"
+	range 1 128
+	default 16
+
+endmenu
 
 endmenu

@@ -77,8 +77,31 @@ ifeq ($(SRC_TAG),port-usb)
 port-obj-$(CONFIG_LIBLINUX80211_USB) += ports/usb-cherryusb/adapter.c
 endif
 
-ifeq ($(SRC_TAG),stack)
-obj-$(CONFIG_LIBLINUX80211) += \
+# The imported stack is two source groups behind two symbols.  The image
+# lists (`stack-wireless` / `stack-mac80211`) are filtered by their own
+# Kconfig symbol; `stack-all` is the S0/S1 inventory list and always names
+# both halves, because S0 measures the imported tree, not one image.
+STACK_WIRELESS_FILES := \
+	stack/wireless/core.c \
+	stack/wireless/sysfs.c \
+	stack/wireless/radiotap.c \
+	stack/wireless/util.c \
+	stack/wireless/reg.c \
+	stack/wireless/scan.c \
+	stack/wireless/nl80211.c \
+	stack/wireless/mlme.c \
+	stack/wireless/ibss.c \
+	stack/wireless/sme.c \
+	stack/wireless/chan.c \
+	stack/wireless/ethtool.c \
+	stack/wireless/mesh.c \
+	stack/wireless/ap.c \
+	stack/wireless/trace.c \
+	stack/wireless/ocb.c \
+	stack/wireless/michael-mic.c \
+	stack/wireless/pmsr.c
+
+STACK_MAC80211_FILES := \
 	stack/mac80211/main.c \
 	stack/mac80211/status.c \
 	stack/mac80211/driver-ops.c \
@@ -122,25 +145,18 @@ obj-$(CONFIG_LIBLINUX80211) += \
 	stack/mac80211/uhr.c \
 	stack/mac80211/nan.c \
 	stack/mac80211/wbrf.c \
-	stack/mac80211/rc80211_minstrel_ht.c \
-	stack/wireless/core.c \
-	stack/wireless/sysfs.c \
-	stack/wireless/radiotap.c \
-	stack/wireless/util.c \
-	stack/wireless/reg.c \
-	stack/wireless/scan.c \
-	stack/wireless/nl80211.c \
-	stack/wireless/mlme.c \
-	stack/wireless/ibss.c \
-	stack/wireless/sme.c \
-	stack/wireless/chan.c \
-	stack/wireless/ethtool.c \
-	stack/wireless/mesh.c \
-	stack/wireless/ap.c \
-	stack/wireless/trace.c \
-	stack/wireless/ocb.c \
-	stack/wireless/michael-mic.c \
-	stack/wireless/pmsr.c
+	stack/mac80211/rc80211_minstrel_ht.c
+
+ifeq ($(SRC_TAG),stack-wireless)
+obj-$(CONFIG_LIBLINUX80211_CFG80211) += $(STACK_WIRELESS_FILES)
+endif
+
+ifeq ($(SRC_TAG),stack-mac80211)
+obj-$(CONFIG_LIBLINUX80211_MAC80211) += $(STACK_MAC80211_FILES)
+endif
+
+ifeq ($(SRC_TAG),stack-all)
+obj-$(CONFIG_LIBLINUX80211) += $(STACK_WIRELESS_FILES) $(STACK_MAC80211_FILES)
 endif
 
 # ---------------------------------------------------------------------------

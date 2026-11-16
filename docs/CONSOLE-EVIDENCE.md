@@ -1380,6 +1380,31 @@ rtl8xxxu_diag: chip tag=post-assoc out_eps=2 ep_tx=2 hmtfr=0x00 txpause=0x00 cr=
 
 Full record: the 2026-11-15 bench run.
 
+### STM32F429 wi-fi size round (c6 image, 2026-11-16)
+
+The delivery image `stm32f429-wifi-c6` after the size round (726,096 B, sha
+`8e643487…`) was booted twice from a relay cold start; both boots printed the
+same sequence.  The heap line is new: it is the SDRAM heap's high-water
+measurement (`free`/`min`, both 4,157,952 of 4 MiB on this boot):
+
+```
+[   0.010] f429_wifi: stage=6
+[   0.015] f429_wifi: heap=sdram free=4157952 min=4157952
+...
+[   5.869] f429_wifi: wlan0: associated
+[   6.030] f429_wifi: PASS ASSOC
+[   8.802] f429_wifi: ping small tx=20 rx=20 payload=56 rtt_ms=3/5/10 rc=0
+[   9.752] f429_wifi: ping big tx=20 rx=20 payload=1400 rtt_ms=4/7/21 rc=0
+[   9.773] f429_wifi: PASS DATA
+[   9.783] f429_wifi: usb submits=189 completes=188 refused=0 stage_overflow=0 slots_exhausted=0 stage_size=4096 slots=4 rx=140 rx_err=0 tx=48 tx_err=0 tx_last_err=0 tx_len=1494
+[   9.805] rtos: result pass cases=1/1 backend=freertos
+```
+
+The `CONFIG_OPT_LTO=y` build of the same image (689,648 B, sha `c79bf5b9…`)
+was booted twice the same way and printed the same `PASS DATA` /
+`rtos: result pass cases=1/1`; the size ledger and the lever table are in
+`BUILD.md` §"F429 image size ledger".
+
 ### STM32F429 wi-fi data-plane throughput (c6t image, same AP)
 
 The `stm32f429-wifi-c6t` image runs the four report-only phases after the data plane

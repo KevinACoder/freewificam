@@ -8,7 +8,9 @@ migration must preserve:
 
   * the flag strings (``BASE_CFLAGS``, ``CFLAGS``, every ``*_CFLAGS``),
   * the link flags (``LDFLAGS``),
-  * every source list (``*_SRCS``).
+  * every source list (``*_SRCS``),
+  * every effective Kconfig value (``CONFIG_*``), so a size/feature switch is
+    visible in the same dump as the flags and the source list.
 
 The repository root is rewritten to ``<ROOT>`` so a baseline captured before a
 build-system change compares with a dump taken after it.  Values are kept as
@@ -64,9 +66,11 @@ def parse_make_db(text: str) -> dict[str, str]:
 def wanted(name: str) -> bool:
     if name in EXTRA_FLAGS:
         return True
+    if name.startswith("CONFIG_"):
+        return True
     # The link contract is split over the common LDFLAGS and the per-backend
-    # BACKEND_LDFLAGS (the heap size rides on --defsym=HEAP_SIZE=...), so a
-    # comparator that only reads LDFLAGS cannot see a heap regression.
+    # BACKEND_LDFLAGS (the lwIP reserve rides on --defsym=LWIP_HEAP_BYTES=...),
+    # so a comparator that only reads LDFLAGS cannot see a reserve regression.
     if name.endswith("_CFLAGS") or name.endswith("_SRCS") or name.endswith("_LDFLAGS"):
         return True
     return False

@@ -56,7 +56,6 @@ ARCH := $(subst ",,$(CONFIG_ARCH_NAME))
 CASES := $(subst ",,$(CONFIG_CASES))
 OPT := $(subst ",,$(CONFIG_OPT_FLAGS))
 SWITCH_PROFILE := $(subst ",,$(CONFIG_PROFILE_NAME))
-HEAP_SIZE := $(CONFIG_HEAP_SIZE)M
 # A literal comma for function arguments whose value contains one (link flags).
 comma := ,
 
@@ -174,7 +173,18 @@ else
 ARCH_CFLAGS := $(KCONTRACT_CFLAGS) -march=armv8-a -mgeneral-regs-only -mstrict-align -mno-outline-atomics
 ARCH_ASM_CFLAGS := $(KCONTRACT_CFLAGS) -march=armv8-a -mgeneral-regs-only -mstrict-align
 endif
-BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra -ffreestanding -fno-builtin -fno-stack-protector $(KCONTRACT_CFLAGS) $(ARCH_CFLAGS) $(PROFILE_CFLAGS) -ffunction-sections -fdata-sections -include $(PLATFORM)/build_defs.h $(INCLUDES)
+# LTO is one Kconfig switch: the C flags carry it and the link must carry it
+# too, or the plugin objects are never merged.  -u keeps the backend entry
+# points the gates read (LTO inlines xPortStartScheduler into its only caller).
+ifeq ($(CONFIG_OPT_LTO),1)
+LTO_CFLAGS := -flto
+LTO_LDFLAGS := -flto $(foreach s,$(BACKEND_SYMBOLS),-Wl,-u,$(s))
+else
+LTO_CFLAGS :=
+LTO_LDFLAGS :=
+endif
+
+BASE_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) -std=c11 -Wall -Wextra -ffreestanding -fno-builtin -fno-stack-protector $(KCONTRACT_CFLAGS) $(ARCH_CFLAGS) $(LTO_CFLAGS) -ffunction-sections -fdata-sections -include $(PLATFORM)/build_defs.h $(INCLUDES)
 
 CFLAGS := $(BASE_CFLAGS) -include stdio.h -include string.h -include strings.h -include stdlib.h
 ASM_CFLAGS := $(OPT) -g$(CONFIG_DEBUG_LEVEL_VALUE) $(ARCH_ASM_CFLAGS) -include $(PLATFORM)/build_defs.h $(INCLUDES)
@@ -231,8 +241,15 @@ $(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-pci,LIBLIN
 # <NAME>_PORT_SRCS, so the name must be LIBLINUX80211_USB (whose _PORT_SRCS the
 # kpi world links) - naming it ..._USB_PORT would silently publish an empty list.
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,port-usb,LIBLINUX80211_USB))
-$(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack,LIBLINUX80211_STACK))
+# The imported stack has two image halves behind two Kconfig symbols and one
+# inventory list for S0/S1b/S1c (which measure the whole imported tree, not
+# one image).  The image half is selected by the profile; `stack-all` is the
+# unfiltered list.
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack-wireless,LIBLINUX80211_STACK_WIRELESS))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack-mac80211,LIBLINUX80211_STACK_MAC80211))
+$(eval $(call component_sources,$(ROOT)/components/liblinux80211,stack-all,LIBLINUX80211_STACK_ALL))
 $(eval $(call component_sources,$(ROOT)/components/liblinux80211,hostap,LIBLINUX80211_HOSTAP))
+LIBLINUX80211_STACK_SRCS := $(LIBLINUX80211_STACK_ALL_SRCS)
 endif
 
 # The wired-network cases each bring the lwIP port face and the stack core; the
@@ -329,11 +346,19 @@ endif
 # instead of an implicit-int warning.  The measurement lives in
 # tools/build/s0-compile.sh; this file only owns the flags.
 ifeq ($(CONFIG_LIBLINUX80211),1)
-S0_CFLAGS := $(KPI_CFLAGS) \
+STACK_FACE_BASE := $(KPI_CFLAGS) \
 	-I$(LIB8)/stack/mac80211 -I$(LIB8)/stack/wireless \
-	-include $(LIB8)/include/linux80211/stack_config.h \
 	-Werror=implicit-function-declaration -Werror=incompatible-pointer-types \
 	-Werror=int-conversion -Werror=return-type
+# The image face: the profile's cfg80211/mac80211 symbols decide what
+# stack_config.h defines.
+STACK_FACE_CFLAGS := $(STACK_FACE_BASE) \
+	-include $(LIB8)/include/linux80211/stack_config.h
+# The inventory face: both halves on, because S0/S1 measure the imported
+# tree, not one image.  s0_face.h must precede stack_config.h.
+S0_CFLAGS := $(STACK_FACE_BASE) \
+	-include $(LIB8)/include/linux80211/s0_face.h \
+	-include $(LIB8)/include/linux80211/stack_config.h
 S0_OUT ?= $(abspath $(ROOT)/../runs/S0)
 S0_RUN ?= 1
 S0_DIR := $(S0_OUT)/run-$(S0_RUN)
@@ -450,7 +475,7 @@ RTL8XXXU_CFLAGS := $(S0_CFLAGS) \
 	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
 	-Wno-override-init
 
-S1_CFLAGS := $(S0_CFLAGS) \
+S1_CFLAGS := $(STACK_FACE_CFLAGS) \
 	-I$(IWL_DRV) \
 	-include $(LIB8)/include/linux80211/driver_config.h \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
@@ -530,7 +555,8 @@ s1-link: $(CONFIG_FILE)
 endif
 
 # The wireless world (stack + optional driver).  Empty unless the profile
-# selects CONFIG_LIBLINUX80211_WIRELESS; see wl80211.mk for the flag worlds and
+# selects CONFIG_LIBLINUX80211_CFG80211 (and, for SoftMAC, _MAC80211);
+# see wl80211.mk for the flag worlds and
 # the link-order contract.
 include $(CURDIR)/wl80211.mk
 
@@ -584,9 +610,20 @@ ifeq ($(ARCH),armv7m)
 # The arch flags are part of the link too: without -mthumb/-mcpu the driver
 # selects the ARM-state newlib multilib and every libc call faults on a
 # Cortex-M (found as a BusFault inside memset during xTaskCreate).
+#
+# The lwIP SDRAM reserve follows the Kconfig heap size (plus one KiB for
+# mem.c's two trailing struct mem entries) instead of a second literal in the
+# linker script.  A profile without the SDRAM lwIP branch reserves zero.
+ifeq ($(CONFIG_F429_LWIP_SDRAM),1)
+LWIP_HEAP_BYTES := $(shell expr $(CONFIG_LWIP_MEM_SIZE_KB) \* 1024 + 1024)
+else
+LWIP_HEAP_BYTES := 0
+endif
 LDFLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=softfp -mfpu=fpv4-sp-d16 \
 	-nostdlib -static \
 	-Wl,-T,$(BOARD_LINKSCRIPT) \
+	-Wl,--defsym=LWIP_HEAP_BYTES=$(LWIP_HEAP_BYTES) \
+	$(LTO_LDFLAGS) \
 	$(BACKEND_LDFLAGS) \
 	$(WL80211_LDFLAGS) \
 	-Wl,--gc-sections -Wl,--build-id=none \
@@ -690,7 +727,7 @@ ifeq ($(CONFIG_LIBLINUX80211_RTW88),1)
 endif
 	@$(SIZE) $(TARGET).elf
 	@printf 'opt: %s\ndefconfig: %s\nprofile: %s\nlwip: %s\nprof: %s\n' '$(OPT)' '$(PROFILE)' '$(SWITCH_PROFILE)' '$(LWIP)' '$(CONFIG_GMAC_PROF)' | tee $(BUILD)/build-info-$(BACKEND).txt
-	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip $(PROFILE_CFLAGS)),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt
+	@printf 'cflags: %s\npatches: %s\n' '$(if $(strip),$(PROFILE_CFLAGS),(none))' '$(if $(strip $(PATCHES)),$(PATCHES),(none))' | tee -a $(BUILD)/build-info-$(BACKEND).txt
 	@printf 'build-tag: %s\n' '$(BUILD_TAG)'
 	@printf 'sha256: '; sha256sum $(TARGET).bin | cut -d' ' -f1
 	@printf 'size: '; stat -c '%s' $(TARGET).bin

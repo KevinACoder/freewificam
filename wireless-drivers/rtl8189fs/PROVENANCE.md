@@ -6,7 +6,7 @@
 | Pin | commit `b98a1dfd4661670b9e16d9c74da43e0389ef7e62` |
 | Vendoring | import under `src/`, byte-identical: 533 files. Digests in `IMPORT.tsv`; verify with `tools/build/import-driver.py --driver rtl8189fs --check`. |
 | Local differences | none (zero patch) |
-| Compiled set | **131 TUs** under the feature face below; named by `sources.mk` |
+| Compiled set | **131 TUs** with the full face; **127** when `CONFIG_RTL8189FS_MP=n` (the four MP units are a Kconfig face); named by `sources.mk` |
 | Feature face | the vendor Makefile's own CONFIG_ block (the GT build's), with `CONFIG_PROC_DEBUG`,
 | | `CONFIG_WIFI_MONITOR` and `CONFIG_BR_EXT` off; stated in `driver_config.h` |
 
@@ -25,7 +25,7 @@ array (`FW_NIC`, 20,306 B) is part of the driver source and travels under the
 same terms; it is not a separately extracted blob. Every artifact that links
 it is GPL-2.0; see `docs/LICENSES.md`.
 
-## 131 units, and why the face keeps all of them
+## 131 units, and why the face keeps all of them (except the MP face)
 
 The vendor Makefile assembles its link table from `:=` lists plus
 `hal/phydm/phydm.mk`; `make -pn` on this tree resolves `8189fs-y` to 132

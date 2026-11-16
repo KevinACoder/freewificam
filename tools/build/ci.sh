@@ -36,6 +36,8 @@ for f in "$configs"/*.defconfig; do
     [ -e "$f" ] || continue
     # A profile that explicitly selects another board is not this target's.
     grep -q '^CONFIG_BOARD_FIREFLY_' "$f" && continue
+    # C0-only profiles are compiler probes, not images (their comment says so).
+    grep -q '^# C0-only' "$f" && continue
     profiles="$profiles $(basename "$f" .defconfig)"
 done
 
