@@ -316,7 +316,9 @@ within 16 B of `arm-none-eabi-size`; the remainder is final alignment.
 
 The delivery image was booted twice from a relay cold start: `PASS SCAN`,
 `PASS ASSOC`, 20/20 ICMP at 56 B and 20/20 at 1400 B, `PASS DATA`, and
-`rtos: result pass cases=1/1` both times.  The LTO image was booted twice the
+`rtos: result pass cases=1/1` both times.  `FW_BUILD_TAG` is embedded, so a
+sha pins a commit as well as the code; the size and the code are the stable
+facts across commits.  The LTO image was booted twice the
 same way and passed the same gates; the link gate needed
 `-Wl,-u,xPortStartScheduler` (LTO inlines it into its only caller).
 
