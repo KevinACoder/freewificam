@@ -15,6 +15,7 @@ Per-component license registry. This is not legal advice.
 | `third-party/lwip/` | BSD-3-Clause style | `COPYING` at the tree root |
 | `third-party/cherryusb/` | Apache-2.0 | `LICENSE` at the tree root; eight patches applied in the tree, recorded in `patches/` |
 | `third-party/fsl_sdmmc/` | BSD-3-Clause | NXP copyright blocks; `COPYING-BSD-3` beside the tree |
+| `third-party/stm32f4xx-hal/` | BSD-3-Clause (ST HAL driver + device headers) AND Apache-2.0 (CMSIS 5 core) | partial, byte-identical LL SDMMC subset; `COPYING-BSD-3`, `COPYING-BSD-3-CMSIS`, `COPYING-APACHE-2.0`; see `PROVENANCE.md` |
 | `third-party/printf/` | MIT | |
 | `third-party/tlsf/` | BSD-3-Clause | terms in the `tlsf.h` header |
 | `third-party/ulog/` | MIT | |
