@@ -36,6 +36,27 @@ needs a board that boots before it needs a stack that links:
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
 build's design and how a new world is added.
+`docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
+build's design and how a new world is added.
+
+## Footprints
+
+The F429 delivery image (`stm32f429-wifi-c6`) is 726,080 B of flash,
+81,356 B of static SRAM (18,496 B of it the DMA/no-cache staging window) and
+4,456,448 B of SDRAM (4 MiB FreeRTOS heap + 256 KiB lwIP reserve). LTO brings
+the flash to 689,648 B. In that image CherryUSB's host core + hub + DWC2 port
+is 12,918 B flash / 20,896 B RAM, and liblinux80211's URB engine + skb pool is
+41,359 B flash / 30,723 B RAM / 18,440 B no-cache.
+
+| image | FLASH | static SRAM | SDRAM |
+|---|---:|---:|---:|
+| `stm32f429-wifi-c6` delivery | 726,080 | 81,356 | 4,456,448 |
+| `stm32f429-wifi-c6t` throughput | 735,936 | 81,484 | 4,456,448 |
+| `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 4,456,448 |
+| 8189FS driver C0, delivery face (not linked) | 609,933 | 75,967 | — |
+
+The per-component table, the pre-link per-file USB table and the measured task
+stack high-water marks are in [docs/FOOTPRINTS.md](docs/FOOTPRINTS.md).
 
 ## Performance
 

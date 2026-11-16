@@ -300,7 +300,9 @@ not flashable images).
 ## F429 image size ledger (2026-11-16)
 
 The 1 MiB F429 flash is the binding constraint for the SDIO lines, so the
-size round starts with an account, not a flag.  `tools/rtos/size-ledger.py`
+size round starts with an account, not a flag.  The resource tables (flash,
+static SRAM, no-cache/DMA RAM, SDRAM, task stacks) are in
+`docs/FOOTPRINTS.md`; this section keeps the size-round decisions.  `tools/rtos/size-ledger.py`
 reads the link map and attributes every placed input section to its object
 once (an address-interval union; merged `.rodata.str*` blocks are counted
 once, and `--gc-sections` discards are a separate row).  It reconciles to

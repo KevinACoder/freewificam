@@ -54,7 +54,9 @@ TEXT_PREFIXES = (
 )
 RODATA_PREFIXES = (".rodata", ".ARM.attributes", ".comment")
 DATA_PREFIXES = (".data",)
-BSS_PREFIXES = (".bss", ".noncacheable", ".sdram", ".COMMON")
+BSS_PREFIXES = (".bss", ".COMMON")
+NOCACHE_PREFIXES = (".noncacheable",)
+SDRAM_PREFIXES = (".sdram",)
 DEBUG_PREFIXES = (".debug",)
 
 # Output sections that are NOLOAD/RAM, not flash.  Used only for the
@@ -91,6 +93,12 @@ def classify(in_sec: str) -> str:
     for prefix in DEBUG_PREFIXES:
         if name.startswith(prefix):
             return "debug"
+    for prefix in SDRAM_PREFIXES:
+        if name.startswith(prefix):
+            return "sdram"
+    for prefix in NOCACHE_PREFIXES:
+        if name.startswith(prefix):
+            return "nocache"
     for prefix in BSS_PREFIXES:
         if name.startswith(prefix):
             return "bss"
@@ -391,6 +399,8 @@ def image_ledger(elf: Path, map_path: Path | None, bin_path: Path | None,
             "data": cats.get("data", 0),
             "other": cats.get("other", 0),
             "bss": cats.get("bss", 0),
+            "nocache": cats.get("nocache", 0),
+            "sdram": cats.get("sdram", 0),
             "flash": flash,
         })
     group_rows.sort(key=lambda r: (-r["flash"], r["group"]))
@@ -414,6 +424,8 @@ def image_ledger(elf: Path, map_path: Path | None, bin_path: Path | None,
             "data": total.get("data", 0),
             "other": total.get("other", 0),
             "bss": total.get("bss", 0),
+            "nocache": total.get("nocache", 0),
+            "sdram": total.get("sdram", 0),
             "flash": flash_sum,
         },
         "reconciliation": {
@@ -518,13 +530,14 @@ def print_image(doc: dict, limit: int | None, strict: bool) -> int:
         print(f"bin: {bin_size} bytes ({bin_size / 1024.0:.1f} KiB){tail}")
     print()
     print(f"{'group':22s} {'text':>9s} {'rodata':>9s} {'data':>7s} "
-          f"{'flash':>9s} {'bss':>9s}")
+          f"{'flash':>9s} {'sram':>9s} {'nocache':>9s} {'sdram':>9s}")
     for row in doc["groups"]:
         print(f"{row['group']:22s} {row['text']:9d} {row['rodata']:9d} "
-              f"{row['data']:7d} {row['flash']:9d} {row['bss']:9d}")
+              f"{row['data']:7d} {row['flash']:9d} {row['bss']:9d} "
+              f"{row['nocache']:9d} {row['sdram']:9d}")
     t = doc["group_totals"]
     print(f"{'TOTAL':22s} {t['text']:9d} {t['rodata']:9d} {t['data']:7d} "
-          f"{t['flash']:9d} {t['bss']:9d}")
+          f"{t['flash']:9d} {t['bss']:9d} {t['nocache']:9d} {t['sdram']:9d}")
     r = doc["reconciliation"]
     print()
     print(f"reconcile: elf_text+data={r['elf_text_plus_data']} "
