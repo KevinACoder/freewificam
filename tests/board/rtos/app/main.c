@@ -18,6 +18,7 @@
 
 #include "arch_asm.h"
 #include "uart.h"
+#include "swd_console.h"
 
 #if defined(RTOS_BOARD_AUTO_RESET)
 #include "reset.h"
@@ -139,6 +140,7 @@ static int watchdog_start(void)
 
 int main(void)
 {
+	swd_console_init();
 	uart_early_init();
 	rtos_clock_init();
 

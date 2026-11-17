@@ -25,6 +25,7 @@ struct swd_console_block {
 
 extern struct swd_console_block g_swd_console;
 
+void swd_console_init(void);
 void swd_console_putc(char c);
 
 #endif
