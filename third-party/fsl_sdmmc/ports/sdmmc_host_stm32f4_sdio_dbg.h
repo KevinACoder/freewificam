@@ -57,6 +57,21 @@ struct f4sdio_fifo_rec {
 	uint8_t		head[F4SDIO_FIFO_HEAD];
 };
 
+/* A transmit-queue write (CMD53 to a TX FIFO port, devices 4/5/6): the frame
+ * the driver handed the card.  The recorded head is the vendor's transmit
+ * descriptor followed by the first bytes of the 802.11 frame, so "the frame
+ * was written" and "the frame never left the driver" are distinguishable
+ * without a second instrument. */
+#define F4SDIO_TX_REC_MAX	4u
+#define F4SDIO_TX_HEAD		16u
+
+struct f4sdio_tx_rec {
+	uint32_t	dev;		/* CMD53 device id: 4/5/6 = HI/MID/LO */
+	uint32_t	len;		/* bytes the write carried */
+	uint32_t	status;		/* the seam's verdict (0 ok) */
+	uint8_t		head[F4SDIO_TX_HEAD];
+};
+
 struct f4sdio_dbg {
 	uint32_t	irq_entries;	/* SDIO_IRQHandler entries */
 	uint32_t	irq_sdioit;	/* entries that saw SDIOIT */
@@ -90,6 +105,9 @@ struct f4sdio_dbg {
 	uint32_t	fifo_zero;	/* reads that delivered nothing but zeros */
 	uint32_t	fifo_rec_head;
 	struct f4sdio_fifo_rec fifo[F4SDIO_FIFO_REC_MAX];
+	/* the transmit-queue writes, separately from the register writes */
+	uint32_t	txq_rec_head;
+	struct f4sdio_tx_rec txq[F4SDIO_TX_REC_MAX];
 };
 
 /* Snapshot; the counters are written by the calling thread and the ISR, so a

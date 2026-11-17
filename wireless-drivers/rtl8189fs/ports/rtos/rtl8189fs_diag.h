@@ -83,6 +83,25 @@ struct rtl8189f_diag {
 	unsigned int link_timer_expires;
 	unsigned int jiffies_now;
 	unsigned int tx_pkts;		/* dvobj traffic_stat, whole adapter */
+	/* The SDIO transmit worker: the vendor hands every transmit to a
+	 * kthread (RTWHALXT) that drains the pending xmit-buffer queue.  A null
+	 * pointer means the worker was never created; frames would then queue
+	 * and never reach the card.  txframe_free/txbuf_free above say whether
+	 * one is parked there (a pending buffer is not free). */
+	unsigned int xmit_thread;	/* xmitpriv.SdioXmitThread */
+	/* The management-frame buffer pool and the pending write queue.  The
+	 * vendor allocates management frames (probe requests, auth, assoc) from
+	 * a pool separate from the data buffers; a pool of one, never returned,
+	 * is "every management transmit fails silently". */
+	unsigned int xmit_ext_free;	/* xmitpriv.free_xmit_extbuf_cnt */
+	unsigned int xmit_pending;	/* a write is queued for the worker */
+	/* The three flags that make the vendor's transmit helpers drop a frame
+	 * without a log: a stopped driver, a surprise-removed device (the
+	 * management-frame helper frees the buffer), and a HAL whose init never
+	 * completed (the SDIO write port refuses before the transfer). */
+	unsigned int drv_stopped;
+	unsigned int surprise_removed;
+	unsigned int hw_init_done;
 	unsigned int valid;		/* driver/adapter present */
 };
 

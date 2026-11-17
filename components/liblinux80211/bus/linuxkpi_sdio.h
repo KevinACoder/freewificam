@@ -84,6 +84,29 @@ struct lkpi_sdio_card_probe {
 	unsigned int	cccr_ien;	/* function 0, 0x04: interrupt enable */
 	unsigned int	cccr_pending;	/* function 0, 0x05: which function wants */
 	unsigned int	rx_req_len;	/* function 1, 0x1c: FIFO bytes waiting */
+	/* The card's transmit side, the two numbers the vendor's transmit path
+	 * waits on before it writes a frame: the free page count per queue
+	 * (function 1, 0x20; high/mid/low/public at bytes 0/2/4/6) and the
+	 * outstanding-queue free space (function 1, 0x2a).  A card that reports
+	 * zero here stalls every transmit before the SDIO write - the frame
+	 * never reaches the FIFO, so nothing can appear on air. */
+	unsigned int	txpg_hi;
+	unsigned int	txpg_mid;
+	unsigned int	txpg_lo;
+	unsigned int	txpg_pub;
+	unsigned int	oqt_free;
+	/* Why the card can hold a frame it has already accepted: its MAC
+	 * transmit enable (REG_CR bit 6) and its TX pause word (REG_TXPAUSE).
+	 * Both are WLAN registers behind the IOREG device, read through the
+	 * same claim as the FIFO state. */
+	unsigned int	reg_cr;
+	unsigned int	reg_txpause;
+	/* The firmware's own state and the queue page allocation: a card whose
+	 * firmware is not ready (or whose request-queue pages were never
+	 * configured) accepts frames into the FIFO and never drains them, which
+	 * looks exactly like "the transmit went nowhere". */
+	unsigned int	reg_mcufwdl;	/* 0x0080: FW download/ready state */
+	unsigned int	reg_rqpn;	/* 0x0200: request-queue page numbers */
 	uint64_t	stamp_ns;	/* when the last complete probe finished */
 };
 

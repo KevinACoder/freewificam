@@ -246,6 +246,29 @@ config STA_CARD_PROBE
 	  copy of HIMR is not the card's register.  Diagnostic-only; the probe
 	  costs a handful of CMD52s per second.
 
+config STA_VERBOSE_ATTACH
+	bool "Raise the vendor log level to INFO from the start through the attach"
+	default n
+	help
+	  The attach's own messages - the firmware download's checksum, the
+	  firmware version, the queue and H2C setup - are INFO level.  This
+	  option opens the level from the case's first line through "start
+	  rc=0" and closes it again before the scan, so the scan and the join
+	  keep their own windows.  It perturbs the attach's timing, so it
+	  belongs to a diagnosis image, never a verdict.
+
+config STA_VERBOSE_JOIN
+	bool "Raise the vendor log level to INFO for the join wait"
+	default n
+	help
+	  The join's own messages - the auth/assoc transmit, the link timer,
+	  the receive of the response - are INFO level in the vendor stack, and
+	  the station case keeps the level at ERR because a 115200 console costs
+	  a 25 ms association budget.  A diagnostic boot opens the level only
+	  around the join wait (after the scan, before the verdict), so those
+	  lines are on the console without the scan's chatter.  It perturbs the
+	  join's timing, so it belongs to a diagnosis image, never a verdict.
+
 config STA_CONNECT_WAIT_MS
 	int "STA association wait (ms)"
 	default 20000

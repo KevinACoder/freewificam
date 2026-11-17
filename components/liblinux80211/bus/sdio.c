@@ -1961,12 +1961,29 @@ lkpi_sdio_card_read(unsigned int func, unsigned int addr, unsigned int *word,
 	return true;
 }
 
+static bool
+lkpi_sdio_card_read_bytes(unsigned int func, unsigned int addr, u8 *buf,
+			  unsigned int bytes)
+{
+	unsigned int n;
+
+	for (n = 0u; n < bytes; n++) {
+		int st = lkpi_sdio_direct(func, addr + n, false, &buf[n]);
+
+		if (st != 0)
+			return false;
+	}
+	return true;
+}
+
 static void
 lkpi_sdio_card_probe_run(void)
 {
 	struct lkpi_sdio_card_probe p;
 	unsigned int himr = 0u, hisr = 0u, ien = 0u, pend = 0u, rxl = 0u;
+	unsigned int oqt = 0u, cr = 0u, txp = 0u, mcufwdl = 0u, rqpn = 0u;
 	unsigned int ok = 0u, fails = 0u;
+	u8 txpg[8];
 
 	/* fresh values every probe: a refused read must not leave the previous
 	 * answer standing, or "the register says zero" and "the read failed"
@@ -1991,6 +2008,35 @@ lkpi_sdio_card_probe_run(void)
 		ok++;
 	else
 		fails++;
+	/* The transmit side: the page counts the vendor's write path waits on,
+	 * and the outstanding-queue space.  Both are status reads. */
+	(void)memset(txpg, 0, sizeof(txpg));
+	if (lkpi_sdio_card_read_bytes(1u, 0x20u, txpg, 8u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, 0x2au, &oqt, 1u))
+		ok++;
+	else
+		fails++;
+	/* The WLAN registers live behind the IOREG device: the command address
+	 * is (8 << 13) | register.  REG_CR = 0x0100, REG_TXPAUSE = 0x0522. */
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0100u, &cr, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0522u, &txp, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0080u, &mcufwdl, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0200u, &rqpn, 4u))
+		ok++;
+	else
+		fails++;
 
 	p = lkpi_sdio_card_probe_state;
 	p.ok += ok;
@@ -2000,6 +2046,15 @@ lkpi_sdio_card_probe_run(void)
 	p.cccr_ien = ien;
 	p.cccr_pending = pend;
 	p.rx_req_len = rxl;
+	p.txpg_hi = txpg[0];
+	p.txpg_mid = txpg[2];
+	p.txpg_lo = txpg[4];
+	p.txpg_pub = txpg[6];
+	p.oqt_free = oqt;
+	p.reg_cr = cr;
+	p.reg_txpause = txp;
+	p.reg_mcufwdl = mcufwdl;
+	p.reg_rqpn = rqpn;
 	p.stamp_ns = lkpi_sdio_census_now();
 	lkpi_sdio_card_probe_state = p;
 }

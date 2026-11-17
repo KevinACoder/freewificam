@@ -121,6 +121,13 @@ rtl8189f_diag_get(struct rtl8189f_diag *out)
 	out->sdio_hisr = (unsigned int)hal->sdio_hisr;
 	out->sdio_himr = (unsigned int)hal->sdio_himr;
 	out->tx_pkts = (unsigned int)dvobj->traffic_stat.tx_pkts;
+	out->xmit_thread = (unsigned int)(SIZE_PTR)adapter->xmitpriv.SdioXmitThread;
+	out->xmit_ext_free = (unsigned int)adapter->xmitpriv.free_xmit_extbuf_cnt;
+	out->xmit_pending =
+	    (unsigned int)check_pending_xmitbuf(&adapter->xmitpriv);
+	out->drv_stopped = (unsigned int)rtw_is_drv_stopped(adapter);
+	out->surprise_removed = (unsigned int)rtw_is_surprise_removed(adapter);
+	out->hw_init_done = (unsigned int)rtw_is_hw_init_completed(adapter);
 	out->valid = 1u;
 }
 

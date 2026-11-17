@@ -101,7 +101,13 @@
 #define STA_PING_TIMEOUT_MS	300U
 #define STA_PING_SMALL		56U
 #define STA_PING_LARGE		1400U
+#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
+/* The attach adds the firmware and queue messages to the mirrored set; the
+ * diagnosis image has room for them, the delivery image does not. */
+#define STA_LOG_MAX		160U
+#else
 #define STA_LOG_MAX		40U
+#endif
 
 /* The AP->board arm is driven from the host on the `peer window ms=` anchor,
  * so both numbers are profile inputs (tests/board/rtos/app/Kconfig): a window
@@ -176,8 +182,8 @@ sta_card_line(const char *where)
 	rtl8189f_diag_get(&vd);
 	/* One message is capped at ULOG_MAX_MESSAGE_LENGTH (256): the console
 	 * truncates an overlong line instead of wrapping it, so the reading is
-	 * split into three lines that each fit.  The 255-byte cap is a platform
-	 * fact, not this case's choice. */
+	 * split into host/card/tx/stage lines that each fit.  The 255-byte cap
+	 * is a platform fact, not this case's choice. */
 	CASE_ANCHOR("rtl8189fs_sta: %s host bus=%u/%ukHz irq=%u/%u/%u/%u/%u "
 		    "masked=%u mask=0x%08x dctrl=0x%08x dat1=%u armed=%u tx=%u/%u\n",
 		    where, bus.bus_width, (unsigned)(bus.clock_hz / 1000u),
@@ -186,11 +192,33 @@ sta_card_line(const char *where)
 		    f4.mask, f4.dctrl, f4.dat1_level, f4.irq_armed,
 		    f4.tx_xfers, f4.tx_ok);
 	CASE_ANCHOR("rtl8189fs_sta: %s card himr=0x%x hisr=0x%x ien=0x%x "
-		    "pend=0x%x rxl=%u cok=%u cfail=%u drv rx=%u/%u fifo=%u "
-		    "free=%u/%u\n",
+		    "pend=0x%x rxl=%u cok=%u cfail=%u txpg=%u/%u/%u/%u "
+		    "oqt=%u cr=0x%02x txp=0x%02x fw=0x%02x rq=0x%08x\n",
 		    where, cp.himr, cp.hisr, cp.cccr_ien, cp.cccr_pending,
-		    cp.rx_req_len, cp.ok, cp.fails, vd.rx_pkts, vd.rx_drops,
-		    vd.rx_fifo, vd.recvbuf_free, vd.recv_free);
+		    cp.rx_req_len, cp.ok, cp.fails, cp.txpg_hi, cp.txpg_mid,
+		    cp.txpg_lo, cp.txpg_pub, cp.oqt_free, cp.reg_cr,
+		    cp.reg_txpause, cp.reg_mcufwdl, cp.reg_rqpn);
+	{
+		const struct f4sdio_tx_rec *t = NULL;
+
+		if (f4.txq_rec_head != 0u)
+			t = &f4.txq[(f4.txq_rec_head - 1u) % F4SDIO_TX_REC_MAX];
+		CASE_ANCHOR("rtl8189fs_sta: %s drv rx=%u/%u fifo=%u free=%u/%u "
+			    "tp=%u xt=%x tf=%u/%u xtf=%u/%u st=%u/%u/%u txq=%u "
+			    "last=%u/%u/%u "
+			    "head=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+			    where, vd.rx_pkts, vd.rx_drops, vd.rx_fifo,
+			    vd.recvbuf_free, vd.recv_free, vd.tx_pkts,
+			    vd.xmit_thread, vd.txframe_free, vd.txbuf_free,
+			    vd.xmit_ext_free, vd.xmit_pending, vd.drv_stopped,
+			    vd.surprise_removed, vd.hw_init_done,
+			    f4.txq_rec_head, t ? t->dev : 0u, t ? t->len : 0u,
+			    t ? t->status : 0u,
+			    t ? t->head[0] : 0u, t ? t->head[1] : 0u,
+			    t ? t->head[2] : 0u, t ? t->head[3] : 0u,
+			    t ? t->head[4] : 0u, t ? t->head[5] : 0u,
+			    t ? t->head[6] : 0u, t ? t->head[7] : 0u);
+	}
 	CASE_ANCHOR("rtl8189fs_sta: %s stage=%u/%u/%u/%u/%u/%u/%u/%u/%u/%u "
 		    "skb=%u/%u/%u/%u/%u notify=%u wake=%u\n",
 		    where, vd.rx_stage_core, vd.rx_stage_pre, vd.rx_stage_ver,
@@ -340,6 +368,14 @@ sta_sink(ulog_level_t level, const char *line)
 		"crc_err", "exceed ptail", "abnormal rx", "recv fail",
 		"recvbuf unavailable", "no enough recv frame", "RX type",
 		"sd_int_hdl", "OnBeacon", "auth timeout", "assoc timeout",
+		/* the transmit path's silent-drop sites (the diagnostic join
+		 * window compiles them in): a refused write port, a failed
+		 * management-frame allocation, a stopped driver */
+		"hw_init_completed", "WRITE_PORT", "sd_write", "mgnt_xmit",
+		"alloc xmitbuf", "surprise",
+		/* the attach's own account: the firmware image and its checksum,
+		 * the firmware version, the power-on and queue setup */
+		"fw_ver", "DLFW", "Power on", "Firmware version", "H2C",
 	};
 	unsigned int k;
 
@@ -405,7 +441,14 @@ case_rtl8189fs_sta_run(void)
 
 	rtw_power_mgnt = PS_MODE_ACTIVE;
 	rtw_lps_level = LPS_OFF;
+#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
+	/* The attach's own account (firmware download and its checksum, the
+	 * firmware version, the queue setup) is INFO level; it closes again
+	 * right after the start verdict. */
+	rtw_drv_log_level = RTW_LOG_INFO;
+#else
 	rtw_drv_log_level = RTW_LOG_ERR;
+#endif
 
 	lkpi_sdio_fsl_install();
 #if defined(CONFIG_STA_DISPATCH_FORCE) && CONFIG_STA_DISPATCH_FORCE
@@ -434,8 +477,17 @@ case_rtl8189fs_sta_run(void)
 	CASE_ANCHOR("rtl8189fs_sta: wlan0 present=1 ifindex=%d mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
 		    dev->ifindex, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
+#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
+	/* The module init re-reads the vendor's log level from its parameter
+	 * defaults, so the attach window is opened here, immediately before the
+	 * open that runs the download and the queue setup. */
+	rtw_drv_log_level = RTW_LOG_INFO;
+#endif
 	rc = dev_open(dev);
 	CASE_ANCHOR("rtl8189fs_sta: start rc=%d\n", rc);
+#if defined(CONFIG_STA_VERBOSE_ATTACH) && CONFIG_STA_VERBOSE_ATTACH
+	rtw_drv_log_level = RTW_LOG_ERR;
+#endif
 	if (rc != 0) {
 		CASE_ANCHOR("rtl8189fs_sta: FAIL start rc=%d\n", rc);
 		return 2;
@@ -648,7 +700,21 @@ found:
 		return 7;
 	}
 
+#if defined(CONFIG_STA_VERBOSE_JOIN) && CONFIG_STA_VERBOSE_JOIN
+	/*
+	 * The join's own messages are INFO-level in the vendor stack, and the
+	 * delivery image keeps them off because a 115200 console costs the join
+	 * its timing.  A diagnostic boot opens the window only here - after the
+	 * scan, before the join - so the lines a stalled association needs
+	 * (issue_auth, the link timer, the receive of the auth response) are on
+	 * the console without the scan's chatter.
+	 */
+	rtw_drv_log_level = RTW_LOG_INFO;
+#endif
 	rc = sta_wait_connected(dev, bssid, &connected_ms);
+#if defined(CONFIG_STA_VERBOSE_JOIN) && CONFIG_STA_VERBOSE_JOIN
+	rtw_drv_log_level = RTW_LOG_ERR;
+#endif
 	if (rc != 0) {
 		CASE_ANCHOR("rtl8189fs_sta: FAIL connect timeout waited_ms=%u\n",
 			    connected_ms);

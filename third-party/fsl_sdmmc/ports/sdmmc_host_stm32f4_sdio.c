@@ -634,15 +634,18 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
 	 */
 	bool byte_read = f4sdio_byte_read(data);
 
-	blockSize = f4sdio_block_size(data->blockSize);
-	if (byte_read) {
-		blockSize = SDIO_DATABLOCK_SIZE_1B;
-	} else if (blockSize == 0xFFFFFFFFUL) {
-		return kStatus_SDMMC_TransferFailed;
-	}
-
 	s_f4sdio_tx_deferred = false;
 
+	/*
+	 * An SDIO-multibyte write first: its length is DLEN, it never encodes a
+	 * block size, so a count DBLOCKSIZE cannot express is exactly the case
+	 * it exists for.  Doing the block-size lookup before this branch made
+	 * every transmit whose length is not a power of two fail in silence -
+	 * the card write path's byte count is the frame length (a probe request
+	 * is 84/100 bytes, an auth frame about 40), and the block lookup
+	 * answered 0xFFFFFFFF, which the caller saw as -EIO with no line on the
+	 * console: the card never received a frame, so nothing was transmitted.
+	 */
 	if (byte_mode && (data->txData != NULL)) {
 		uint32_t total = (uint32_t)(data->blockSize * data->blockCount);
 
@@ -650,8 +653,25 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
 		SDIO->DLEN = total;
 		s_f4sdio_tx_dctrl = SDIO_DATABLOCK_SIZE_1B | SDIO_DCTRL_DTEN |
 				    SDIO_DCTRL_SDIOEN | SDIO_DCTRL_DTMODE;
+		/*
+		 * Arm the data path before the command, not after its response.
+		 * The card's SDIO data phase follows the response, so a data
+		 * path enabled afterwards starts with an empty FIFO and the
+		 * peripheral reports TXUNDERR a couple of words in (measured:
+		 * 8 of 84 bytes written, then the transfer stops and the card
+		 * keeps a truncated frame).  The reference manual and the Linux
+		 * hosts arm the path first for SDIO multibyte writes; the
+		 * response wait then does not clock the data phase.
+		 */
 		s_f4sdio_tx_deferred = true;
 		return kStatus_Success;
+	}
+
+	blockSize = f4sdio_block_size(data->blockSize);
+	if (byte_read) {
+		blockSize = SDIO_DATABLOCK_SIZE_1B;
+	} else if (blockSize == 0xFFFFFFFFUL) {
+		return kStatus_SDMMC_TransferFailed;
 	}
 
 	/* An SDIO multibyte read ends where the card stops sending, which can
@@ -714,6 +734,9 @@ static uint32_t s_f4sdio_rx_total;
 static uint32_t s_f4sdio_rx_left;
 static uint32_t s_f4sdio_rx_end;
 
+/* The transmit FIFO holds 32 words (128 bytes). */
+#define F4SDIO_TX_FIFO_WORDS	32u
+
 static uint32_t s_f4sdio_tx_left;	/* bytes still unpushed when the loop left */
 static uint32_t s_f4sdio_tx_sta;	/* STA at that instant */
 static uint32_t s_f4sdio_tx_dcount;	/* DCOUNT at that instant */
@@ -724,7 +747,7 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 	uint32_t remaining = (uint32_t)(data->blockSize * data->blockCount);
 	uint8_t *rx = (uint8_t *)data->rxData;
 	const uint8_t *tx = (const uint8_t *)data->txData;
-	uint32_t spin;
+	uint32_t spin = 0U;
 
 	if (data->rxData != NULL) {
 		/*
@@ -835,6 +858,35 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		s_f4sdio_tx_left = remaining;
 		s_f4sdio_tx_sta = 0U;
 		s_f4sdio_tx_dcount = 0U;
+
+		/*
+		 * SDIO multibyte mode cannot pause: the DPSM keeps sending while
+		 * the byte counter is nonzero and sets TXUNDERR the moment the
+		 * FIFO runs empty (the reference manual's stream-mode text).  A
+		 * per-word loop that also reads the status register between
+		 * words runs at about the card's own rate at 24 MHz, so the
+		 * FIFO drains under it after two words - measured: 8 of 84
+		 * bytes written.  Fill the whole 32-word FIFO first in one
+		 * straight-line burst (every management frame fits: a probe
+		 * request is 84/100 bytes, an auth frame about 40) and only
+		 * fall into the status-checked loop for a longer frame.
+		 */
+		{
+			uint32_t burst = remaining;
+
+			if (burst > F4SDIO_TX_FIFO_WORDS * 4u)
+				burst = F4SDIO_TX_FIFO_WORDS * 4u;
+			while (burst != 0U) {
+				uint32_t word = 0U;
+				uint32_t n = (burst < 4U) ? burst : 4U;
+
+				(void)memcpy(&word, tx, n);
+				tx += n;
+				remaining -= n;
+				burst -= n;
+				(void)SDIO_WriteFIFO(SDIO, &word);
+			}
+		}
 
 		while (remaining != 0U) {
 			if ((SDIO->STA & (SDIO_FLAG_TXUNDERR |
@@ -1027,6 +1079,31 @@ static void f4sdio_fifo_record(const sdmmchost_data_t *data, status_t status)
 	f4sdio_sample_state();
 }
 
+/* A write to one of the three transmit FIFO ports is a frame the driver handed
+ * the card; the other writes are register traffic.  The record keeps the
+ * vendor's transmit descriptor and the frame's first bytes, which is what a
+ * later "the card never transmitted" finding is read from. */
+#define F4SDIO_TX_HIQ_DEV	4U
+#define F4SDIO_TX_MIQ_DEV	5U
+#define F4SDIO_TX_LOQ_DEV	6U
+
+static void f4sdio_txq_record(const sdmmchost_data_t *data, status_t status,
+			      unsigned int dev)
+{
+	struct f4sdio_tx_rec *rec;
+	const uint8_t *p = (const uint8_t *)data->txData;
+	uint32_t len = (uint32_t)(data->blockSize * data->blockCount);
+	uint32_t i;
+
+	rec = &s_f4dbg.txq[s_f4dbg.txq_rec_head % F4SDIO_TX_REC_MAX];
+	s_f4dbg.txq_rec_head++;
+	rec->dev = dev;
+	rec->len = len;
+	rec->status = (uint32_t)status;
+	for (i = 0U; i < F4SDIO_TX_HEAD; i++)
+		rec->head[i] = (i < len) ? p[i] : 0U;
+}
+
 static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content)
 {
 	status_t status;
@@ -1058,6 +1135,23 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 
 	status = f4sdio_send_command(host, content->command);
 	if (status != kStatus_Success) {
+		/*
+		 * A command that never completed is the one failure this path used to
+		 * swallow: the data-phase failure has its own line below, but a
+		 * CMD53 that the card never answered (or answered with a CRC error)
+		 * returns here with nothing on the console - and a transmit write
+		 * then simply never happens.
+		 */
+		SDMMC_LOGE("f4sdio",
+			   "cmd%u arg=0x%08x failed sta=0x%08x dir=%s len=%u",
+			   (unsigned)content->command->index,
+			   (unsigned)content->command->argument,
+			   (unsigned)SDIO->STA,
+			   (content->data != NULL) ?
+			   ((content->data->txData != NULL) ? "tx" : "rx") : "-",
+			   (content->data != NULL) ?
+			   (unsigned)(content->data->blockSize *
+				      content->data->blockCount) : 0u);
 		f4sdio_irq_unmask();
 		return status;
 	}
@@ -1076,11 +1170,17 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 		     F4SDIO_RX_FIFO_DEV))
 			f4sdio_fifo_record(content->data, status);
 		if (content->data->txData != NULL) {
+			unsigned int dev = F4SDIO_ARG_DEV(content->command->argument);
+
 			s_f4dbg.tx_xfers++;
 			if (status == kStatus_Success)
 				s_f4dbg.tx_ok++;
 			else
 				s_f4dbg.tx_err++;
+			if ((content->command->index == 53U) &&
+			    (dev == F4SDIO_TX_HIQ_DEV || dev == F4SDIO_TX_MIQ_DEV ||
+			     dev == F4SDIO_TX_LOQ_DEV))
+				f4sdio_txq_record(content->data, status, dev);
 		}
 		if (byte_read && !s_f4sdio_irq_armed)
 			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;

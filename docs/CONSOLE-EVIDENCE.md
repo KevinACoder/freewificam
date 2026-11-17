@@ -1624,3 +1624,55 @@ last RX-FIFO read makes the same point from the bus side:
 `5d 01 04 84 00 00 0f 80 …` is the card's 24-byte status descriptor with a
 32-byte driver-info area, and `80 00 00 00 ff ff ff ff` at offset 56 is a
 broadcast beacon frame.
+
+## RTL8189FTV - F429 station, the transmit write path (2026-11-17)
+
+The transmit write path is the one place where a failure is silent at both ends:
+the driver builds the frame, the card's FIFO either receives it or does not, and
+a byte-mode CMD53 that fails inside the host glue leaves the driver with a
+generic error and the console with nothing.  Two lines name the defect and one
+record names the fix.
+
+The first defect, before the fix - a probe request of 84 bytes (and a second of
+100) fails in the vendor's write helper with no host-glue line at all, because
+the transfer was rejected before the peripheral ran.  The frame never reached
+the card, yet the scan still ran on received beacons:
+
+```
+rtl8189fs_sta: drv RTW: ERROR _sd_write: FAIL(-5)! ADDR=0x8015 Size=84(84)
+rtl8189fs_sta: drv RTW: ERROR _sd_write: FAIL(-5)! ADDR=0x8019 Size=100(100)
+```
+
+After the classification fix the write reached the peripheral but stopped at 8
+of 84 bytes: the data path state machine in SDIO multibyte mode cannot pause, so
+the per-word loop that also read the status register ran at about the card's own
+rate and the FIFO drained under it.  `left=76` is the last two words the loop
+got in before the underrun stopped it:
+
+```
+data cmd=53 len=84 dir=tx sta=0x00400040 left=76 tsta=0x00400050 dcnt=80
+```
+
+After the FIFO burst fix the same transfer completes and the host glue's
+transmit-queue record names the frame it handed the card - device 4 (the high
+queue), 72 bytes (the authentication frame with its 40-byte descriptor), status
+0, and the first bytes of the descriptor (`1e 00` = the 30-byte 802.11 frame,
+`28 01` = the payload offset of 40):
+
+```
+rtl8189fs_sta: conn timeout drv rx=0/0 fifo=0 free=8/256 tp=0 xt=20020054 tf=256/16 xtf=32/0 st=0/0/1 txq=29 last=4/72/0 head=1e00280001120800
+```
+
+The card's own side says the frame is accepted but not transmitted: the free
+TX page counts and the outstanding-queue space read back unchanged from their
+initial values (`txpg=12/2/2/229 oqt=32` at arm and at the connect timeout), the
+card's interrupt status reports a transmit FIFO overflow (`hisr=0x10`), and no
+frame appears at the bench.  The firmware itself is running - its download
+checksum passes, its version and signature are read back, and the ready bit is
+set:
+
+```
+rtl8188f_FirmwareDownload: fw_ver=e fw_subver=0000 sig=0x88f1, Month=06, Date=07, Hour=17, Minute=18
+rtl8188f_FirmwareDownload: DLFW OK !
+Power on ok!
+```

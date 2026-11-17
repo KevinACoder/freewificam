@@ -346,6 +346,7 @@ Six images build and link against the 1 MiB flash:
 | `stm32f429-rtl8189fs-probe` | `tick f429_sdio_probe` | 40,112 B |
 | `stm32f429-rtl8189fs-attach` | `tick rtl8189fs_sdio` | 678,476 B |
 | `stm32f429-rtl8189fs-station` | `tick rtl8189fs_sta` | 735,988 B |
+| `stm32f429-rtl8189fs-station-diag` | `tick rtl8189fs_sta`, card-side probe + receive-stage counters, polled | 737,356 B |
 | `stm32f429-rtl8189fs-station-irq` | `tick rtl8189fs_sta`, card interrupt armed + card-side probe | 736,868 B |
 | `stm32f429-rtl8189fs-write` | `tick f429_sdio_probe f429_sdio_write_probe` | 44,108 B |
 | `stm32f429-rtl8189fs-throughput` | `tick rtl8189fs_sta rtl8189fs_throughput` | 741,404 B |
@@ -385,6 +386,40 @@ receive-stage counters compiled in, a scan boot shows the management counter
 tracking the frames that arrive while `rx_pkts` stays at zero, which is the
 counter's definition rather than a drop.
 
+### The transmit path, measured from the write to the card's answer
+
+Two host-glue defects kept a transmit from ever reaching the card, and both are
+now fixed and measured.  The first: a byte-mode CMD53 write whose length is not
+a power of two - a scan's probe request is 84 or 100 bytes, an authentication
+frame about 40 - was classified by looking up its block size first.  A byte-mode
+write carries its length in DLEN and never encodes a block size, so the lookup
+answered "no such block size" for those lengths and the transfer failed with
+-EIO before the peripheral ran: the frame was discarded with nothing on the
+console.  The second: after that fix the write reached the peripheral but
+stopped after 8 of 84 bytes with a transmit FIFO underrun.  In SDIO multibyte
+(stream) mode the data path state machine cannot pause - it sends while the
+byte counter is nonzero and flags underrun the moment the FIFO empties - and the
+per-word loop that also read the status register ran at about the card's own
+rate, so the FIFO drained under it after two words.  The fix fills up to 32
+words (128 bytes, the whole FIFO) in one straight-line burst before any status
+check; every management frame fits in that, and only a longer frame falls back
+to the checked loop.
+
+With both fixed, the card records the frames: the host glue's transmit-queue
+record shows the authentication frame (device 4, 72 bytes, status 0) and the
+scan's probe requests, and each transfer's byte counter reaches zero, so the
+card consumed the data.  What it does with the frame is the open question: its
+own free-page and outstanding-queue registers never move from their initial
+values, the card reports a transmit FIFO overflow, and no frame appears on the
+bench (the bench's monitor cannot see this board's frames, and the AP's hostapd
+log and station dump stay empty).  The firmware itself is running: the download's
+checksum passes, the image signature and version are read back, the
+firmware-ready bit is set, the MAC transmit enable is on and the queue page
+allocation is non-zero.  The remaining break is therefore between the card's
+FIFO and its transmit scheduler, not in the host's write - and the next step is
+to compare those registers and the queue mapping with the same card on the
+RK3568 line, where association works.
+
 Scan and association are still **not claimed**.  The station image reaches
 association on some cold boots and times out before it on most of them (two of
 four boots with the line left unarmed found the BSS, none of three
@@ -395,5 +430,6 @@ association path after `start auth`, and one unexplained count: a scan boot
 counted 15,566 management frames while the host glue recorded only 20 RX-FIFO
 reads, so either the vendor counter is not per received frame or a receive
 buffer is parsed more than once.  Until those are answered the honest statement
-is: the write path and the card interrupt are measured, the scan is
-intermittent, association is not established.
+is: the write path is measured end to end (the card accepts a management frame)
+and so is the card interrupt, the scan is intermittent, and association is not
+established.

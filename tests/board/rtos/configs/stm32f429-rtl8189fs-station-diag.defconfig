@@ -1,0 +1,56 @@
+# F429 station, diagnostic arm: the station case's polled bring-up (the card
+# interrupt left unarmed, which is the shape whose scan found the BSS in two of
+# four boots) with the two instruments that read the card and the vendor's
+# receive stages.  It exists for the join/data investigation: the card-side
+# probe shows the transmit page counts the vendor's write path waits on, and
+# the stage counters show where a received frame goes.
+#
+# Not a delivery profile.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_CASES="tick rtl8189fs_sta"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_CFG80211=y
+CONFIG_LIBLINUX80211_MAC80211=n
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_F429_LWIP_SDRAM=y
+CONFIG_FREERTOS_HEAP_SIZE=4194304
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_LKPI_SKB_POOL_NUM=8
+CONFIG_LKPI_SKB_DATA_POOL_NUM=8
+CONFIG_LKPI_SKB_HEAP_HDR_MAX=64
+
+# The polled shape that scans: no card-interrupt arm.
+CONFIG_STA_PUMP_IRQ=n
+CONFIG_STA_DISPATCH_FORCE=y
+
+# Instruments: the card-side probe every second and the vendor's receive-stage
+# counters.  Both are read-only.
+CONFIG_STA_CARD_PROBE=y
+CONFIG_RTL8189FS_DBG_COUNTER=y
+
+CONFIG_STA_WATCH=y
+CONFIG_STA_WATCH_MS=2000
+CONFIG_STA_CONNECT_WAIT_MS=20000
+
+# The join's own vendor messages for this diagnosis image (perturbs the join's
+# timing by design; not a verdict image).
+CONFIG_STA_VERBOSE_JOIN=y
+CONFIG_STA_VERBOSE_ATTACH=y
+
+CONFIG_RTL8189FS_MP=n
+CONFIG_RTL8189FS_P2P=n
+CONFIG_RTL8189FS_CONCURRENT=n
+CONFIG_RTL8189FS_POWER_SAVING=n
+CONFIG_RTL8189FS_NETIF_SG=n
+CONFIG_RTL8189FS_EFUSE_FILE=n
+CONFIG_RTL8189FS_LOAD_PHY_FILE=n
