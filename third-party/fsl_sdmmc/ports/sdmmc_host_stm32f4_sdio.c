@@ -413,14 +413,31 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
 	return kStatus_Success;
 }
 
+/*
+ * A byte-mode read carries the exact number of bytes waiting in the card's
+ * FIFO (472, 212, ...), which DBLOCKSIZE cannot express.  SDIO multibyte mode
+ * can: with DTMODE=1 and SDIOEN=1, DLEN is the byte count and no block size is
+ * encoded.  Writes keep block framing, which is the path the register writes
+ * already use.
+ */
+static bool f4sdio_byte_read(const sdmmchost_data_t *data)
+{
+	return (data != NULL) && (data->rxData != NULL) &&
+	       (f4sdio_block_size(data->blockSize) == 0xFFFFFFFFUL);
+}
+
 static status_t f4sdio_data_config(const sdmmchost_data_t *data)
 {
 	SDIO_DataInitTypeDef cfg;
 	uint32_t blockSize;
+	bool byte_read = f4sdio_byte_read(data);
 
 	blockSize = f4sdio_block_size(data->blockSize);
-	if (blockSize == 0xFFFFFFFFUL)
+	if (byte_read) {
+		blockSize = SDIO_DATABLOCK_SIZE_1B;
+	} else if (blockSize == 0xFFFFFFFFUL) {
 		return kStatus_SDMMC_TransferFailed;
+	}
 
 	cfg.DataTimeOut = 0xFFFFFFFFUL;
 	cfg.DataLength = (uint32_t)(data->blockSize * data->blockCount);
@@ -428,8 +445,18 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data)
 	cfg.TransferDir = (data->rxData != NULL) ?
 			  SDIO_TRANSFER_DIR_TO_SDIO :
 			  SDIO_TRANSFER_DIR_TO_CARD;
-	cfg.TransferMode = SDIO_TRANSFER_MODE_BLOCK;
+	cfg.TransferMode = byte_read ? SDIO_TRANSFER_MODE_STREAM :
+				       SDIO_TRANSFER_MODE_BLOCK;
 	cfg.DPSM = SDIO_DPSM_ENABLE;
+
+	/* SDIOEN selects what DTMODE means (SDIO multibyte vs MMC stream).  It
+	 * must be in place before SDIO_ConfigData writes DTEN; the LL call's
+	 * read-modify-write leaves this bit alone.  Only the byte-read path
+	 * touches it: an extra DCTRL write on every block transfer runs into
+	 * the peripheral's write-delay rule and breaks the next command. */
+	if (byte_read)
+		SDIO->DCTRL |= SDIO_DCTRL_SDIOEN;
+
 	(void)SDIO_ConfigData(SDIO, &cfg);
 	return kStatus_Success;
 }
@@ -544,8 +571,12 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 		return status;
 
 	if (content->data != NULL) {
+		bool byte_read = f4sdio_byte_read(content->data);
+
 		status = f4sdio_transfer_data(content->data);
-		if (status != kStatus_Success)
+		if (status != kStatus_Success) {
+			if (byte_read)
+				SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 			SDMMC_LOGE("f4sdio",
 				   "data cmd=%u len=%u dir=%s sta=0x%08x",
 				   (unsigned)content->command->index,
@@ -553,7 +584,10 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 					      content->data->blockCount),
 				   (content->data->rxData != NULL) ? "rx" : "tx",
 				   (unsigned)SDIO->STA);
-		return status;
+			return status;
+		}
+		if (byte_read)
+			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 	}
 
 	return kStatus_Success;

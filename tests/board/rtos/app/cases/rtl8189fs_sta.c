@@ -115,6 +115,7 @@ extern int rtw_lps_level;
 extern unsigned int rtw_drv_log_level;
 
 #define RTW_LOG_ERR		2	/* _DRV_ERR_ */
+#define RTW_LOG_INFO		4	/* _DRV_INFO_ */
 #define PS_MODE_ACTIVE		0
 #define LPS_OFF			0
 
@@ -214,7 +215,6 @@ case_rtl8189fs_sta_run(void)
 	CASE_ANCHOR("rtl8189fs_sta: initcalls run\n");
 
 	lkpi_sdio_start();
-
 	while (waited < STA_WAIT_MS) {
 		dev = dev_get_by_name(&init_net, "wlan0");
 		if (dev != NULL)
@@ -263,8 +263,10 @@ case_rtl8189fs_sta_run(void)
 
 	{
 		struct lkpi_sdio_stats sdio_stats;
+		struct rtl8189f_diag vd;
 
 		lkpi_sdio_stats_get(&sdio_stats);
+		rtl8189f_diag_get(&vd);
 		CASE_ANCHOR("rtl8189fs_sta: scan timeout sdio pump=%u callbacks=%u irq=%u io=%u/%u errors=%u\n",
 			    (unsigned)sdio_stats.pump_polls,
 			    (unsigned)sdio_stats.callbacks,
@@ -272,6 +274,11 @@ case_rtl8189fs_sta_run(void)
 			    (unsigned)sdio_stats.io_direct,
 			    (unsigned)sdio_stats.io_extended,
 			    (unsigned)sdio_stats.errors);
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout diag rx_pkts=%u rx_bytes=%u "
+			    "rx_drops=%u cmd=%u/%u txframe_free=%u txbuf_free=%u\n",
+			    vd.rx_pkts, vd.rx_bytes, vd.rx_drops,
+			    vd.cmd_issued, vd.cmd_done, vd.txframe_free,
+			    vd.txbuf_free);
 	}
 
 	/* A directed scan the peer did not answer in time: the wildcard shape is
@@ -295,6 +302,16 @@ found:
 	CASE_ANCHOR("rtl8189fs_sta: bss ssid=%s bssid=%02x:%02x:%02x:%02x:%02x:%02x freq=%d signal=%d\n",
 		    RTL8189FS_SSID, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq, sig / 100);
+	{
+		struct lkpi_sdio_stats sdio_stats;
+
+		lkpi_sdio_stats_get(&sdio_stats);
+		CASE_ANCHOR("rtl8189fs_sta: scan bss_ms=%u sdio io=%u/%u errors=%u\n",
+			    (unsigned)waited,
+			    (unsigned)sdio_stats.io_direct,
+			    (unsigned)sdio_stats.io_extended,
+			    (unsigned)sdio_stats.errors);
+	}
 
 	/* --- association: through the real nl80211 handler ------------------ */
 
