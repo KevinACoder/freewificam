@@ -174,8 +174,10 @@ sdio-obj-y += \
 	$(THIRD_PARTY)/fsl_sdmmc/ports/sdmmc_host_stm32f4_sdio.c \
 	$(THIRD_PARTY)/fsl_sdmmc/ports/lkpi_sdio_fsl.c \
 	$(THIRD_PARTY)/fsl_sdmmc/common/fsl_sdmmc_common.c \
-	$(THIRD_PARTY)/fsl_sdmmc/sdio/fsl_sdio.c \
-	$(LINE)/app/cases/f429_sdio_probe.c
+	$(THIRD_PARTY)/fsl_sdmmc/sdio/fsl_sdio.c
+sdio-obj-$(CONFIG_LIBLINUX80211_SDIO_PROBE) += \
+	$(LINE)/app/cases/f429_sdio_probe.c \
+	$(LINE)/app/cases/f429_sdio_write_probe.c
 endif
 else
 sdio-obj-$(CONFIG_LIBLINUX80211_RTL8189FS) += \

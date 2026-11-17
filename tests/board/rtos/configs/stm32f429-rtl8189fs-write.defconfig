@@ -1,0 +1,26 @@
+# F429 8189FTV write-shape probe: which CMD53 write framing completes.
+#
+# The image carries the imported fsl_sdmmc card service and the ST LL SDMMC
+# host glue, not the vendor driver.  The probe case enumerates the card and
+# reports the common CIS identity, the negotiated four-bit bus and the 24 MHz
+# clock.  The kernel heap is in the core board's SDRAM; the staging buffer the
+# card service allocates is 16 KiB.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=4194304
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_CASES="tick f429_sdio_probe f429_sdio_write_probe"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_CFG80211=n
+CONFIG_LIBLINUX80211_MAC80211=n
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_SDIO_PROBE=y
+CONFIG_LIBLINUX80211_RTL8189FS=n
+CONFIG_LIBLINUX80211_NET_NONE=y

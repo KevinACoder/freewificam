@@ -35,6 +35,15 @@
 
 #define F4SDIO_CMD_SPIN		10000000U
 #define F4SDIO_DATA_SPIN	10000000U
+/*
+ * Consecutive empty-FIFO polls that end an SDIO multibyte read.  The card
+ * stops when it has sent what it has, not when DLEN is reached, so a finished
+ * transfer and a stuck one look the same until the FIFO has been quiet long
+ * enough to mean it.
+ */
+/* Consecutive empty-FIFO polls that end an SDIO multibyte read: the card has
+ * stopped sending, so the transfer is over whatever DLEN said. */
+#define F4SDIO_RX_IDLE		200000U
 #define F4SDIO_MAX_DIV		118U
 
 struct sdmmc_host_dev {
@@ -420,16 +429,60 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
  * encoded.  Writes keep block framing, which is the path the register writes
  * already use.
  */
+#define F4SDIO_CMD53_BLOCK_MODE  (1UL << 27)
+
+/*
+ * One framing for every SDIO byte-mode transfer, in both directions:
+ * SDIOEN + DTMODE.  A byte-mode CMD53 carries an arbitrary byte count that
+ * DBLOCKSIZE cannot express, and the device ends the data phase itself
+ * instead of the host waiting for the CRC status token that a memory-card
+ * write gets and an I/O device never sends.
+ *
+ * Block framing here is not merely a size problem: an 84-byte write framed as
+ * 21 four-byte blocks sends 21 data CRCs and then waits for 21 CRC status
+ * tokens that never arrive, which leaves TXACT up and every later transfer
+ * failing.
+ *
+ * The framing follows the CMD53 argument's block bit, not the byte count: a
+ * 4-byte register write is byte mode too, and its count is a power of two, so
+ * the count cannot tell the two apart.
+ */
+static bool f4sdio_byte_mode(const sdmmchost_cmd_t *cmd)
+{
+	return (cmd != NULL) && (cmd->index == 53U) &&
+	       ((cmd->argument & F4SDIO_CMD53_BLOCK_MODE) == 0U);
+}
+
 static bool f4sdio_byte_read(const sdmmchost_data_t *data)
 {
 	return (data != NULL) && (data->rxData != NULL) &&
 	       (f4sdio_block_size(data->blockSize) == 0xFFFFFFFFUL);
 }
 
-static status_t f4sdio_data_config(const sdmmchost_data_t *data)
+static uint32_t s_f4sdio_tx_dctrl;
+static bool s_f4sdio_tx_deferred;
+
+static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
+				   bool stream_rx)
 {
 	SDIO_DataInitTypeDef cfg;
 	uint32_t blockSize;
+	/*
+	 * Reads keep the classification that has been working: the power-of-two
+	 * counts (4, 8, 512) go through block framing and the FIFO counts that
+	 * DBLOCKSIZE cannot express (84, 212, 408, 472) through SDIO
+	 * multibyte.  Forcing every byte-mode CMD53 into multibyte looks more
+	 * principled and breaks the 4- and 8-byte register reads on this
+	 * peripheral, so the rule stays as measured.
+	 */
+	/*
+	 * Reads: block framing for the counts DBLOCKSIZE can express and SDIO
+	 * multibyte for the FIFO counts it cannot.  Forcing every byte-mode
+	 * CMD53 into multibyte looks more principled and fails the 4- and
+	 * 8-byte register reads on this peripheral (measured: the data arrives
+	 * but the transfer reports failure), so the classification stays on
+	 * the byte count for reads.
+	 */
 	bool byte_read = f4sdio_byte_read(data);
 
 	blockSize = f4sdio_block_size(data->blockSize);
@@ -439,6 +492,23 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data)
 		return kStatus_SDMMC_TransferFailed;
 	}
 
+	s_f4sdio_tx_deferred = false;
+
+	if (byte_mode && (data->txData != NULL)) {
+		uint32_t total = (uint32_t)(data->blockSize * data->blockCount);
+
+		SDIO->DTIMER = 0xFFFFFFFFUL;
+		SDIO->DLEN = total;
+		s_f4sdio_tx_dctrl = SDIO_DATABLOCK_SIZE_1B | SDIO_DCTRL_DTEN |
+				    SDIO_DCTRL_SDIOEN | SDIO_DCTRL_DTMODE;
+		s_f4sdio_tx_deferred = true;
+		return kStatus_Success;
+	}
+
+	/* An SDIO multibyte read ends where the card stops sending, which can
+	 * be a word short of the requested count; a data timeout turns that
+	 * into an event instead of a wait that never ends.  It is per data
+	 * token, so a card that is still sending never trips it. */
 	cfg.DataTimeOut = 0xFFFFFFFFUL;
 	cfg.DataLength = (uint32_t)(data->blockSize * data->blockCount);
 	cfg.DataBlockSize = blockSize;
@@ -489,7 +559,12 @@ static status_t f4sdio_wait_data_end(void)
 	return kStatus_SDMMC_TransferFailed;
 }
 
-static status_t f4sdio_transfer_data(const sdmmchost_data_t *data)
+static uint32_t s_f4sdio_tx_left;	/* bytes still unpushed when the loop left */
+static uint32_t s_f4sdio_tx_sta;	/* STA at that instant */
+static uint32_t s_f4sdio_tx_dcount;	/* DCOUNT at that instant */
+
+static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mode,
+				     bool stream_rx)
 {
 	uint32_t remaining = (uint32_t)(data->blockSize * data->blockCount);
 	uint8_t *rx = (uint8_t *)data->rxData;
@@ -497,33 +572,80 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data)
 	uint32_t spin;
 
 	if (data->rxData != NULL) {
-		while (remaining != 0U) {
-			if ((SDIO->STA & (SDIO_FLAG_RXOVERR |
-					  SDIO_FLAG_DCRCFAIL |
-					  SDIO_FLAG_DTIMEOUT |
-					  SDIO_FLAG_STBITERR)) != 0U)
+		/*
+		 * An SDIO multibyte read ends where the card says it ends, not
+		 * where the host asked it to: the driver requests RND4 of the
+		 * length the RX FIFO reported, and the card sends only what it
+		 * has - 470 of the 472 asked for, and then stops.  DLEN is
+		 * never reached, so the DPSM sits in RXACT for ever and every
+		 * frame is lost.  An idle FIFO after real progress is the end
+		 * of the transfer.
+		 */
+		uint32_t idle = 0U;
+		bool got = false;
+
+		/* Bounded: a data path that delivers nothing at all must fail,
+		 * not poll for ever - that is what turns a bad transfer into a
+		 * firmware that stops reporting. */
+		for (; (remaining != 0U) && (spin < F4SDIO_DATA_SPIN); spin++) {
+			uint32_t err = SDIO->STA & (SDIO_FLAG_RXOVERR |
+						    SDIO_FLAG_DCRCFAIL |
+						    SDIO_FLAG_DTIMEOUT |
+						    SDIO_FLAG_STBITERR);
+
+			if (err != 0U)
 				break;
-			if ((SDIO->STA & SDIO_FLAG_RXDAVL) != 0U) {
+			/*
+			 * Take everything the FIFO has, not one word per poll.
+			 * At 24 MHz on a 4-bit bus the card fills the 32-word
+			 * FIFO faster than a single-word poll can turn around,
+			 * and falling behind ends the transfer with RXOVERR -
+			 * which is what the 404-byte RX FIFO reads were doing.
+			 */
+			if ((SDIO->STA & (SDIO_FLAG_RXDAVL |
+					  SDIO_FLAG_RXFIFOHF)) == 0U) {
+				if (stream_rx && got && (++idle > F4SDIO_RX_IDLE)) {
+					(void)memset(rx, 0, remaining);
+					rx += remaining;
+					remaining = 0U;
+					break;
+				}
+				continue;
+			}
+			idle = 0U;
+			while ((remaining != 0U) &&
+			       ((SDIO->STA & SDIO_FLAG_RXDAVL) != 0U)) {
 				uint32_t word = SDIO_ReadFIFO(SDIO);
 				uint32_t n = (remaining < 4U) ? remaining : 4U;
 
 				(void)memcpy(rx, &word, n);
 				rx += n;
 				remaining -= n;
+				got = true;
 			}
+
 		}
 	} else if (data->txData != NULL) {
+		s_f4sdio_tx_left = remaining;
+		s_f4sdio_tx_sta = 0U;
+		s_f4sdio_tx_dcount = 0U;
+
 		while (remaining != 0U) {
 			if ((SDIO->STA & (SDIO_FLAG_TXUNDERR |
 					  SDIO_FLAG_DCRCFAIL |
-					  SDIO_FLAG_DTIMEOUT)) != 0U)
+					  SDIO_FLAG_DTIMEOUT)) != 0U) {
+				s_f4sdio_tx_left = remaining;
+				s_f4sdio_tx_sta = SDIO->STA;
+				s_f4sdio_tx_dcount = SDIO->DCOUNT;
 				break;
+			}
 			/*
-			 * TXFIFOHE ("half empty") is the write-side credit;
-			 * TXDAVL ("data available") is the read-side view of
-			 * the same FIFO and stalls the writer once it drains.
+			 * Write credit is "the FIFO is not full", not "the FIFO
+			 * is at least half empty": with 21 words to push into a
+			 * 32-word FIFO, waiting for the half-empty flag stops a
+			 * third of the way and the card sees a short transfer.
 			 */
-			if ((SDIO->STA & SDIO_FLAG_TXFIFOHE) != 0U) {
+			if ((SDIO->STA & SDIO_FLAG_TXFIFOF) == 0U) {
 				uint32_t word = 0U;
 				uint32_t n = (remaining < 4U) ? remaining : 4U;
 
@@ -533,6 +655,29 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data)
 				(void)SDIO_WriteFIFO(SDIO, &word);
 			}
 		}
+	}
+
+	if ((remaining == 0U) && byte_mode && (data->txData != NULL)) {
+		/*
+		 * A byte-mode write has no CRC status token, so DATAEND never
+		 * comes; what says the device has every byte is the byte
+		 * counter reaching zero with the FIFO empty.  Dropping DTEN any
+		 * earlier stops the clock with bytes still in the FIFO and the
+		 * device silently keeps the truncated write.
+		 */
+		for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
+			uint32_t sta = SDIO->STA;
+
+			if (((SDIO->DCOUNT == 0U) &&
+			     ((sta & SDIO_FLAG_TXDAVL) == 0U)) ||
+			    ((sta & (SDIO_FLAG_TXUNDERR |
+				     SDIO_FLAG_DCRCFAIL |
+				     SDIO_FLAG_DTIMEOUT)) != 0U))
+				break;
+		}
+		SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
+		SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND;
+		return kStatus_Success;
 	}
 
 	if (remaining != 0U)
@@ -548,48 +693,115 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data)
 		}
 	}
 
+	/*
+	 * An SDIO multibyte read has no block boundary to end on, so the
+	 * peripheral raises neither DBCKEND nor DATAEND for it; what says the
+	 * read is complete is the byte count.  Reporting the drained transfer
+	 * as a failure here is what kept the driver's RX FIFO reads from ever
+	 * delivering a frame - the bytes were all there, only the verdict was
+	 * wrong.
+	 */
+	if (stream_rx && (data->rxData != NULL)) {
+		/*
+		 * The counter is the verdict, but the data path is still
+		 * running (RXACT up): a multibyte read has no block boundary,
+		 * so nothing stops the DPSM when the count runs out.  Dropping
+		 * DTEN returns it to Idle, which is the state the next command
+		 * expects to find the bus in.
+		 */
+		SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
+		SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND;
+		return kStatus_Success;
+	}
+
 	return f4sdio_wait_data_end();
+}
+
+/*
+ * A data transfer masks the card interrupt for its whole length.  The device
+ * raises it on DAT1 whenever it wants attention, and serving it means issuing
+ * CMD52 - a command, in the middle of a running CMD53.  The peripheral then
+ * abandons the data path, which is exactly the short stop counts the log shows.
+ * The line is level-based, so it is still there when the bus is free.
+ */
+static bool s_f4sdio_irq_masked;
+
+static void f4sdio_irq_mask(void)
+{
+	if ((SDIO->MASK & SDIO_IT_SDIOIT) != 0U) {
+		s_f4sdio_irq_masked = true;
+		SDIO->MASK &= ~SDIO_IT_SDIOIT;
+	}
+}
+
+static void f4sdio_irq_unmask(void)
+{
+	if (!s_f4sdio_irq_masked)
+		return;
+
+	s_f4sdio_irq_masked = false;
+	SDIO->ICR = SDIO_FLAG_SDIOIT;
+	SDIO->MASK |= SDIO_IT_SDIOIT;
 }
 
 static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content)
 {
 	status_t status;
+	bool byte_mode;
+	bool byte_read;
 
 	if ((content == NULL) || (content->command == NULL))
 		return kStatus_InvalidArgument;
 
+	byte_mode = f4sdio_byte_mode(content->command);
+	byte_read = (content->data != NULL) && f4sdio_byte_read(content->data);
+
 	SDIO->ICR = 0xFFFFFFFFUL;
 
 	if (content->data != NULL) {
-		status = f4sdio_data_config(content->data);
+		status = f4sdio_data_config(content->data, byte_mode, byte_read);
 		if (status != kStatus_Success)
 			return status;
 	}
 
+	f4sdio_irq_mask();
+
 	status = f4sdio_send_command(host, content->command);
-	if (status != kStatus_Success)
+	if (status != kStatus_Success) {
+		f4sdio_irq_unmask();
 		return status;
+	}
+
+	if (s_f4sdio_tx_deferred) {
+		s_f4sdio_tx_deferred = false;
+		SDIO->DCTRL = s_f4sdio_tx_dctrl;
+	}
 
 	if (content->data != NULL) {
-		bool byte_read = f4sdio_byte_read(content->data);
-
-		status = f4sdio_transfer_data(content->data);
+		status = f4sdio_transfer_data(content->data, byte_mode,
+					      byte_read);
+		if (byte_read)
+			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
+		f4sdio_irq_unmask();
 		if (status != kStatus_Success) {
-			if (byte_read)
-				SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 			SDMMC_LOGE("f4sdio",
-				   "data cmd=%u len=%u dir=%s sta=0x%08x",
+				   "data cmd=%u len=%u dir=%s sta=0x%08x "
+				   "left=%u tsta=0x%08x dcnt=%u",
 				   (unsigned)content->command->index,
 				   (unsigned)(content->data->blockSize *
 					      content->data->blockCount),
 				   (content->data->rxData != NULL) ? "rx" : "tx",
-				   (unsigned)SDIO->STA);
+				   (unsigned)SDIO->STA,
+				   (unsigned)s_f4sdio_tx_left,
+				   (unsigned)s_f4sdio_tx_sta,
+				   (unsigned)s_f4sdio_tx_dcount);
 			return status;
 		}
 		if (byte_read)
 			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 	}
 
+	f4sdio_irq_unmask();
 	return kStatus_Success;
 }
 
