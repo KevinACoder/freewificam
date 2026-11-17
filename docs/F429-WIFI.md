@@ -386,50 +386,64 @@ receive-stage counters compiled in, a scan boot shows the management counter
 tracking the frames that arrive while `rx_pkts` stays at zero, which is the
 counter's definition rather than a drop.
 
-### The transmit path, measured from the write to the card's answer
+### The transmit path, measured from the write to the air
 
-Two host-glue defects kept a transmit from ever reaching the card, and both are
-now fixed and measured.  The first: a byte-mode CMD53 write whose length is not
-a power of two - a scan's probe request is 84 or 100 bytes, an authentication
-frame about 40 - was classified by looking up its block size first.  A byte-mode
-write carries its length in DLEN and never encodes a block size, so the lookup
-answered "no such block size" for those lengths and the transfer failed with
--EIO before the peripheral ran: the frame was discarded with nothing on the
-console.  The second: after that fix the write reached the peripheral but
-stopped after 8 of 84 bytes with a transmit FIFO underrun.  In SDIO multibyte
-(stream) mode the data path state machine cannot pause - it sends while the
-byte counter is nonzero and flags underrun the moment the FIFO empties - and the
-per-word loop that also read the status register ran at about the card's own
-rate, so the FIFO drained under it after two words.  The fix fills up to 32
-words (128 bytes, the whole FIFO) in one straight-line burst before any status
-check; every management frame fits in that, and only a longer frame falls back
-to the checked loop.
+Three host-glue defects kept a transmit from ever leaving the board, and all
+three are now fixed and measured.  The first: a byte-mode CMD53 write whose
+length is not a power of two - a scan's probe request is 84 or 100 bytes, an
+authentication frame about 40 - was classified by looking up its block size
+first.  A byte-mode write carries its length in DLEN and never encodes a block
+size, so the lookup answered "no such block size" for those lengths and the
+transfer failed with -EIO before the peripheral ran: the frame was discarded
+with nothing on the console.  The second: after that fix the write reached the
+peripheral but stopped after 8 of 84 bytes with a transmit FIFO underrun.  In
+SDIO multibyte (stream) mode the data path state machine cannot pause - it sends
+while the byte counter is nonzero and flags underrun the moment the FIFO empties.
 
-With both fixed, the card records the frames: the host glue's transmit-queue
-record shows the authentication frame (device 4, 72 bytes, status 0) and the
-scan's probe requests, and each transfer's byte counter reaches zero, so the
-card consumed the data.  What it does with the frame is the open question: its
-own free-page and outstanding-queue registers never move from their initial
-values, the card reports a transmit FIFO overflow, and no frame appears on the
-bench (the bench's monitor cannot see this board's frames, and the AP's hostapd
-log and station dump stay empty).  The firmware itself is running: the download's
-checksum passes, the image signature and version are read back, the
-firmware-ready bit is set, the MAC transmit enable is on and the queue page
-allocation is non-zero.  The remaining break is therefore between the card's
-FIFO and its transmit scheduler, not in the host's write - and the next step is
-to compare those registers and the queue mapping with the same card on the
-RK3568 line, where association works.
+The third is the one that made the first two hard to see.  The card takes one
+32-bit word out of the transmit FIFO every eight SDIO clocks - 333 ns at 24 MHz
+four-bit - and the FIFO holds 32 words, so a whole frame has to be in it within
+10.6 us of the data path being armed.  The fill path copied each word through a
+helper call and then through the imported FIFO helper, which costs about one
+word of card time per word: the state machine took the first word and then
+underruns on an empty FIFO.  A straight-line burst is not enough by itself; the
+load and the FIFO store have to be inlined.  With that, the transmit-queue
+record changes from "ended on a transmit underrun with the byte counter at
+length minus four" to "ended on the byte counter with the count at zero", and
+the interface's FIFO is still full one instant after the frame is loaded.  The
+underrun was silent: both completion paths disable the data path and return
+success, so the driver's transmit counter and the frame's write both report
+success while the card holds a truncated frame.
+
+The card's own registers now agree with what the host wrote.  Sampled every
+20 ms across an association window (2071 samples), the high queue's free-page
+count covers 12 down to 9 and back to 12, so the card's firmware takes the
+frames and returns their pages; the register never moved in earlier rounds
+because a truncated write does not consume a page.  What the bench sees is the
+same story from the other side: with the fill fixed, the monitor captures the
+scan's probe requests - type/subtype 0x0004, source the board's MAC, channel 5,
+about -40 dBm - which it had never seen before.  The earlier statement that this
+bench's monitor cannot see the board's frames is therefore withdrawn: it was an
+artifact of frames that were never complete.
+
+What is still not reached is association.  The station reaches `start auth` on a
+cold boot, sends its authentication frame five times (the link timer retries
+every ~306 ms), and times out; the frame is written to the card completely, but
+the AP's debug log carries no authentication at all.  The one air capture that
+would settle whether the authentication frame leaves the card has not been taken
+on a boot that reached the join, so the honest statement is: a management frame
+now leaves the card on the air, association is not established, and the next
+measurement is a capture across a join.
 
 Scan and association are still **not claimed**.  The station image reaches
-association on some cold boots and times out before it on most of them (two of
-four boots with the line left unarmed found the BSS, none of three
-interrupt-armed boots did),
-which is not the 2-of-2 a claim needs.  The open questions are the scan's
+association on some cold boots and times out before it on most of them (one of
+eight cold boots in the latest round reported the BSS and ran the join), which
+is not the 2-of-2 a claim needs.  The open questions are the scan's
 timing (whether arming the card interrupt perturbs the channel walk), the
 association path after `start auth`, and one unexplained count: a scan boot
 counted 15,566 management frames while the host glue recorded only 20 RX-FIFO
 reads, so either the vendor counter is not per received frame or a receive
 buffer is parsed more than once.  Until those are answered the honest statement
-is: the write path is measured end to end (the card accepts a management frame)
-and so is the card interrupt, the scan is intermittent, and association is not
-established.
+is: the transmit path is measured end to end (a management frame leaves the card
+and is captured on the air) and so is the card interrupt, the scan is
+intermittent, and association is not established.

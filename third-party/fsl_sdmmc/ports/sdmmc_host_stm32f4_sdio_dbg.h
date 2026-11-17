@@ -69,6 +69,25 @@ struct f4sdio_tx_rec {
 	uint32_t	dev;		/* CMD53 device id: 4/5/6 = HI/MID/LO */
 	uint32_t	len;		/* bytes the write carried */
 	uint32_t	status;		/* the seam's verdict (0 ok) */
+	/* The data path's own word at the instant the transfer's completion
+	 * criterion was met, i.e. just before the glue drops DTEN.  The byte
+	 * counter is what the criterion looks at; TXACT is what the criterion
+	 * does not look at, and a still-set TXACT there means the last word was
+	 * still on the wire when the clock was stopped. */
+	uint32_t	sta_drop;	/* SDIO->STA at the completion instant */
+	uint32_t	dcnt_drop;	/* SDIO->DCOUNT at the completion instant */
+	uint32_t	txact_drop;	/* SDIO_FLAG_TXACT at the completion instant */
+	uint32_t	drop_end;	/* 0 none, 1 done, 2 error flag, 3 spin */
+	/* The data path's state at the two instants the write can go wrong: one
+	 * bus write after the deferred arm (an empty-FIFO underrun already set
+	 * there means arming itself failed) and right after the frame was loaded
+	 * (an empty FIFO there means the words never landed, and a count still
+	 * at the full length means the DPSM never started). */
+	uint32_t	sta_arm;	/* SDIO->STA just after the data path armed */
+	uint32_t	dctrl_arm;	/* SDIO->DCTRL just after the frame was loaded */
+	uint32_t	sta_burst;	/* SDIO->STA just after the frame was loaded */
+	uint32_t	dcnt_burst;	/* SDIO->DCOUNT just after the load */
+	uint32_t	burst_cycles;	/* the fill loop's own duration, in core cycles */
 	uint8_t		head[F4SDIO_TX_HEAD];
 };
 
@@ -108,6 +127,16 @@ struct f4sdio_dbg {
 	/* the transmit-queue writes, separately from the register writes */
 	uint32_t	txq_rec_head;
 	struct f4sdio_tx_rec txq[F4SDIO_TX_REC_MAX];
+	/* The transmit completion's two counters.  `tx_txact_set` counts the
+	 * byte-mode writes whose data path was still transmitting when the
+	 * completion criterion fired; `tx_settle_timeout` counts the ones whose
+	 * post-completion wait for that to end did not run out on its own. */
+	uint32_t	tx_txact_set;
+	uint32_t	tx_settle_timeout;
+	/* byte-mode transmit writes whose completion wait ended on an error flag
+	 * (TXUNDERR/DTIMEOUT/DCRCFAIL) rather than on the byte counter: the seam
+	 * still returns success for those, so this counter is the only notice */
+	uint32_t	tx_drop_err;
 };
 
 /* Snapshot; the counters are written by the calling thread and the ISR, so a

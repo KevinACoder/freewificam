@@ -89,7 +89,12 @@
 
 #define STA_WAIT_MS		30000U
 #define STA_POLL_MS		100U
-#define STA_SCAN_WAIT_MS	10000U
+/* The scan's own per-channel dwell is slow enough on this card that a
+ * whole-band walk takes tens of seconds; the find loop below polls the BSS
+ * table every 100 ms and stops as soon as the AP appears, so this is an
+ * umbrella, not a fixed cost.  Ten seconds cut the walk off before the bench
+ * channel and made the join look intermittent for the wrong reason. */
+#define STA_SCAN_WAIT_MS	45000U
 #ifndef CONFIG_STA_WATCH_MS
 #define CONFIG_STA_WATCH_MS	1000
 #endif
@@ -185,12 +190,14 @@ sta_card_line(const char *where)
 	 * split into host/card/tx/stage lines that each fit.  The 255-byte cap
 	 * is a platform fact, not this case's choice. */
 	CASE_ANCHOR("rtl8189fs_sta: %s host bus=%u/%ukHz irq=%u/%u/%u/%u/%u "
-		    "masked=%u mask=0x%08x dctrl=0x%08x dat1=%u armed=%u tx=%u/%u\n",
+		    "masked=%u mask=0x%08x dctrl=0x%08x dat1=%u armed=%u tx=%u/%u "
+		    "sett=%u/%u drop_err=%u\n",
 		    where, bus.bus_width, (unsigned)(bus.clock_hz / 1000u),
 		    f4.irq_entries, f4.irq_sdioit, f4.irq_spurious,
 		    f4.dat1_high, f4.self_poke, f4.irq_masked_xfer,
 		    f4.mask, f4.dctrl, f4.dat1_level, f4.irq_armed,
-		    f4.tx_xfers, f4.tx_ok);
+		    f4.tx_xfers, f4.tx_ok, f4.tx_txact_set, f4.tx_settle_timeout,
+		    f4.tx_drop_err);
 	CASE_ANCHOR("rtl8189fs_sta: %s card himr=0x%x hisr=0x%x ien=0x%x "
 		    "pend=0x%x rxl=%u cok=%u cfail=%u txpg=%u/%u/%u/%u "
 		    "oqt=%u cr=0x%02x txp=0x%02x fw=0x%02x rq=0x%08x\n",
@@ -198,6 +205,29 @@ sta_card_line(const char *where)
 		    cp.rx_req_len, cp.ok, cp.fails, cp.txpg_hi, cp.txpg_mid,
 		    cp.txpg_lo, cp.txpg_pub, cp.oqt_free, cp.reg_cr,
 		    cp.reg_txpause, cp.reg_mcufwdl, cp.reg_rqpn);
+	/* The firmware's doorbell and the MAC's own two readbacks.  A box word
+	 * that equals the command the driver sent says the host's write reached
+	 * the card; an all-zero box with HMETFR quiet says it never did. */
+	CASE_ANCHOR("rtl8189fs_sta: %s fwd hmefr=0x%02x box=%08x,%08x,%08x,%08x "
+		    "msr=0x%02x txdma=0x%08x\n",
+		    where, cp.hmefr,
+		    (unsigned)((unsigned)cp.hmebox[0] |
+			       ((unsigned)cp.hmebox[1] << 8) |
+			       ((unsigned)cp.hmebox[2] << 16) |
+			       ((unsigned)cp.hmebox[3] << 24)),
+		    (unsigned)((unsigned)cp.hmebox[4] |
+			       ((unsigned)cp.hmebox[5] << 8) |
+			       ((unsigned)cp.hmebox[6] << 16) |
+			       ((unsigned)cp.hmebox[7] << 24)),
+		    (unsigned)((unsigned)cp.hmebox[8] |
+			       ((unsigned)cp.hmebox[9] << 8) |
+			       ((unsigned)cp.hmebox[10] << 16) |
+			       ((unsigned)cp.hmebox[11] << 24)),
+		    (unsigned)((unsigned)cp.hmebox[12] |
+			       ((unsigned)cp.hmebox[13] << 8) |
+			       ((unsigned)cp.hmebox[14] << 16) |
+			       ((unsigned)cp.hmebox[15] << 24)),
+		    cp.reg_msr, cp.txdma_status);
 	{
 		const struct f4sdio_tx_rec *t = NULL;
 
@@ -205,7 +235,7 @@ sta_card_line(const char *where)
 			t = &f4.txq[(f4.txq_rec_head - 1u) % F4SDIO_TX_REC_MAX];
 		CASE_ANCHOR("rtl8189fs_sta: %s drv rx=%u/%u fifo=%u free=%u/%u "
 			    "tp=%u xt=%x tf=%u/%u xtf=%u/%u st=%u/%u/%u txq=%u "
-			    "last=%u/%u/%u "
+			    "last=%u/%u/%u drop=%u/%u/%08x "
 			    "head=%02x%02x%02x%02x%02x%02x%02x%02x\n",
 			    where, vd.rx_pkts, vd.rx_drops, vd.rx_fifo,
 			    vd.recvbuf_free, vd.recv_free, vd.tx_pkts,
@@ -214,10 +244,34 @@ sta_card_line(const char *where)
 			    vd.surprise_removed, vd.hw_init_done,
 			    f4.txq_rec_head, t ? t->dev : 0u, t ? t->len : 0u,
 			    t ? t->status : 0u,
+			    t ? t->txact_drop : 0u, t ? t->dcnt_drop : 0u,
+			    t ? t->sta_drop : 0u,
 			    t ? t->head[0] : 0u, t ? t->head[1] : 0u,
 			    t ? t->head[2] : 0u, t ? t->head[3] : 0u,
 			    t ? t->head[4] : 0u, t ? t->head[5] : 0u,
 			    t ? t->head[6] : 0u, t ? t->head[7] : 0u);
+	}
+	{
+		/* All four transmit records, each one a card write the seam called
+		 * a success: dev/len/status/drop_end/dcount/STA.  drop_end 1 is
+		 * the byte counter, 2 an error flag (the seam still says ok), 3
+		 * the bounded wait running out. */
+		unsigned int n = f4.txq_rec_head;
+		unsigned int k;
+
+		if (n > 4u)
+			n = 4u;
+		for (k = 0u; k < n; k++) {
+			const struct f4sdio_tx_rec *r =
+			    &f4.txq[(f4.txq_rec_head - 1u - k) % F4SDIO_TX_REC_MAX];
+
+			CASE_ANCHOR("rtl8189fs_sta: %s tx[%u]=%u/%u/%u/%u/%u/%08x\n",
+				    where, k, r->dev, r->len, r->status,
+				    r->drop_end, r->dcnt_drop, r->sta_drop);
+			CASE_ANCHOR("rtl8189fs_sta: %s txarm[%u]=%08x/%08x/%08x/%u\n",
+				    where, k, r->sta_arm, r->dctrl_arm,
+				    r->sta_burst, r->dcnt_burst);
+		}
 	}
 	CASE_ANCHOR("rtl8189fs_sta: %s stage=%u/%u/%u/%u/%u/%u/%u/%u/%u/%u "
 		    "skb=%u/%u/%u/%u/%u notify=%u wake=%u\n",
@@ -227,6 +281,30 @@ sta_card_line(const char *where)
 		    vd.rx_stage_indicate, vd.rx_stage_ind_err,
 		    ps.skb_used, ps.skb_high, ps.alloc_fail, ps.fail_hdr,
 		    ps.fail_small, ss.card_notify, ss.irq_wakes);
+}
+
+/* The fast window's verdict: the range the transmit-side counters covered
+ * while the join ran.  One line per window, not per sample: a page count that
+ * moved down and back up is the only card-side evidence that the firmware took
+ * a frame, and it is invisible to the one-second probe. */
+static void
+sta_card_fast(const char *where)
+{
+	struct lkpi_sdio_card_probe cp;
+
+	(void)memset(&cp, 0, sizeof(cp));
+	lkpi_sdio_card_probe_get(&cp);
+	CASE_ANCHOR("rtl8189fs_sta: %s fast n=%u per=%ums "
+		    "txpg=%u..%u/%u..%u/%u..%u/%u..%u oqt=%u..%u moved=%u "
+		    "hisr=0x%08x chg=%u rxl_max=%u hmefr=0x%02x box0=%08x/%u\n",
+		    where, cp.fast_samples, cp.fast_period_ms,
+		    cp.fast_txpg_min[0], cp.fast_txpg_max[0],
+		    cp.fast_txpg_min[1], cp.fast_txpg_max[1],
+		    cp.fast_txpg_min[2], cp.fast_txpg_max[2],
+		    cp.fast_txpg_min[3], cp.fast_txpg_max[3],
+		    cp.fast_oqt_min, cp.fast_oqt_max, cp.fast_txpg_changed,
+		    cp.fast_hisr_or, cp.fast_hisr_changes, cp.fast_rxl_max,
+		    cp.fast_hmefr_or, cp.fast_box0_last, cp.fast_box0_seen);
 }
 
 /* The last RX-FIFO read's head, 16 bytes a line: the card's receive status
@@ -376,6 +454,12 @@ sta_sink(ulog_level_t level, const char *line)
 		/* the attach's own account: the firmware image and its checksum,
 		 * the firmware version, the power-on and queue setup */
 		"fw_ver", "DLFW", "Power on", "Firmware version", "H2C",
+		/* The host's two write-path witnesses, both the vendor's own:
+		 * `sdio_power_on_check` compares a 4-byte CMD53 write against its
+		 * read-back (0x1B8) and against the same bytes read by CMD52
+		 * (0x100), and FillH2CCmd prints when a firmware command was
+		 * dropped because the card had not taken the previous one. */
+		"0x1B8", "cmd52 and cmd53", "fw read cmd",
 	};
 	unsigned int k;
 
@@ -508,6 +592,14 @@ case_rtl8189fs_sta_run(void)
 	lkpi_sdio_card_probe_set(true);
 #endif
 	sta_card_line("irq arm");
+
+#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
+	/* The transmit-side window opens with the scan: the scan is the first
+	 * thing that writes frames to the card, and a window that only covered
+	 * the join would miss them. */
+	lkpi_sdio_card_probe_fast_set(true,
+				     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
+#endif
 
 	wdev = dev->ieee80211_ptr;
 	if (wdev == NULL || wdev->wiphy == NULL) {
@@ -669,6 +761,11 @@ case_rtl8189fs_sta_run(void)
 			goto found;
 		osDelay(STA_POLL_MS);
 	}
+#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
+	lkpi_sdio_card_probe_fast_set(false,
+				     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
+	sta_card_fast("scan");
+#endif
 	CASE_ANCHOR("rtl8189fs_sta: FAIL bss timeout (scan started, no BSS)\n");
 	return 6;
 
@@ -696,6 +793,11 @@ found:
 		    RTL8189FS_SSID, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq, rc);
 	if (rc != 0) {
+#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
+		lkpi_sdio_card_probe_fast_set(false,
+					     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
+		sta_card_fast("connect");
+#endif
 		CASE_ANCHOR("rtl8189fs_sta: FAIL connect rc=%d\n", rc);
 		return 7;
 	}
@@ -712,6 +814,11 @@ found:
 	rtw_drv_log_level = RTW_LOG_INFO;
 #endif
 	rc = sta_wait_connected(dev, bssid, &connected_ms);
+#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
+	lkpi_sdio_card_probe_fast_set(false,
+				     (unsigned int)CONFIG_STA_CARD_PROBE_FAST_MS);
+	sta_card_fast("join");
+#endif
 #if defined(CONFIG_STA_VERBOSE_JOIN) && CONFIG_STA_VERBOSE_JOIN
 	rtw_drv_log_level = RTW_LOG_ERR;
 #endif

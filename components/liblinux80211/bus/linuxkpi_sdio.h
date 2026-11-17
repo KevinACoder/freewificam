@@ -107,6 +107,46 @@ struct lkpi_sdio_card_probe {
 	 * looks exactly like "the transmit went nowhere". */
 	unsigned int	reg_mcufwdl;	/* 0x0080: FW download/ready state */
 	unsigned int	reg_rqpn;	/* 0x0200: request-queue page numbers */
+	/* The firmware's host doorbell.  H2C commands travel through four
+	 * message boxes; REG_HMETFR's bit n says box n has not been read by the
+	 * firmware yet (the vendor polls exactly this: "MAC_0x1cc=0 means H2C
+	 * done by FW").  The box contents say whether the host's write arrived
+	 * at all, which is the difference between a firmware that ignores the
+	 * host and a bus layer whose writes never land. */
+	unsigned int	hmefr;		/* 0x01cc: H2C boxes the FW has not read */
+	unsigned char	hmebox[16];	/* 0x01d0..0x01df: the four H2C boxes */
+	unsigned char	hmebox_ex[16];	/* 0x01f0..0x01ff: their extension words */
+	/* Two more MAC readbacks: the network type the driver set (MSR, the
+	 * low half of REG_CR's network-type field) and the transmit DMA's own
+	 * error word, which is where a FIFO overflow is reported next to the
+	 * interrupt status. */
+	unsigned int	reg_msr;	/* 0x0102: network type for port 0 */
+	unsigned int	txdma_status;	/* 0x0210: TX DMA error status */
+	/*
+	 * The same card, sampled inside the join window at a rate that can see a
+	 * transient: the free-page counts and the outstanding-queue space move
+	 * down when the firmware takes a frame and back up when it lets go, so a
+	 * one-second probe sees only the rest state.  The window keeps the range
+	 * each field covered and how often the bits changed, not every sample.
+	 */
+	unsigned int	fast_period_ms;	/* the window's sampling period */
+	unsigned int	fast_samples;	/* samples taken in the window */
+	unsigned int	fast_txpg_min[4];/* hi/mid/lo/public minima */
+	unsigned int	fast_txpg_max[4];/* ... and maxima */
+	unsigned int	fast_oqt_min;
+	unsigned int	fast_oqt_max;
+	unsigned int	fast_hisr_or;	/* every HISR bit seen in the window */
+	unsigned int	fast_hisr_changes;
+	unsigned int	fast_rxl_max;	/* largest receive FIFO offer seen */
+	unsigned int	fast_txpg_changed;/* a queue's page count moved */
+	/* The firmware's doorbell sampled by the same window: OR of the "box not
+	 * read" word, the last non-zero H2C box 0 word and whether one was ever
+	 * seen.  A box the host wrote and the firmware never read is the one
+	 * datum that tells "the firmware ignores the host" from "the write never
+	 * landed", and it lives for a few milliseconds at each command. */
+	unsigned int	fast_hmefr_or;
+	unsigned int	fast_box0_last;
+	unsigned int	fast_box0_seen;
 	uint64_t	stamp_ns;	/* when the last complete probe finished */
 };
 
@@ -114,6 +154,14 @@ void	lkpi_sdio_card_probe_set(bool on);
 bool	lkpi_sdio_card_probe_enabled(void);
 /* Snapshot of the last probe; zeroed when no probe has completed. */
 void	lkpi_sdio_card_probe_get(struct lkpi_sdio_card_probe *out);
+/*
+ * The fast window: while on, the pump's probe runs at `period_ms` instead of
+ * once a second and accumulates a range for the transmit-side counters (see
+ * the fast_* fields above).  Switching it off keeps the accumulated range for
+ * the case to print; switching it on again starts a new window.
+ */
+void	lkpi_sdio_card_probe_fast_set(bool on, unsigned int period_ms);
+bool	lkpi_sdio_card_probe_fast_enabled(void);
 
 /*
  * Bring the card up and hand it to the registered drivers: enumerate through the

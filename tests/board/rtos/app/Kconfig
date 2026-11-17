@@ -246,6 +246,52 @@ config STA_CARD_PROBE
 	  copy of HIMR is not the card's register.  Diagnostic-only; the probe
 	  costs a handful of CMD52s per second.
 
+config STA_CARD_PROBE_FAST_MS
+	int "Fast card-probe period over the join (ms)"
+	depends on STA_CARD_PROBE
+	default 20
+	range 5 200
+	help
+	  The station case opens a fast sampling window right before it asks for
+	  the association and closes it when the join wait ends.  Inside the
+	  window the engine samples only the transmit-side counters (the free
+	  page count per queue, the outstanding-queue space, HISR and the receive
+	  length) at this period and keeps the range each covered instead of the
+	  last value.  The reason is that a working card's firmware takes a frame
+	  and returns its page well inside the one-second probe's interval, so
+	  the one-second reading cannot tell "never fetched" from "fetched and
+	  returned"; a range can.  Diagnostic-only.
+
+config F4SDIO_TX_SETTLE
+	bool "Keep the F429 SDIO write's data phase running to its real end"
+	default n
+	depends on ARCH_ARM_V7M
+	help
+	  The STM32F4 byte-mode CMD53 write is ended by the glue when the byte
+	  counter reaches zero and the FIFO is empty.  The counter, however,
+	  decrements as a word is loaded out of the FIFO, so at that instant the
+	  last word and the CRC behind it may still be on the wire, and clearing
+	  DTEN stops the card's clock in the middle of them.  This arm waits for
+	  the peripheral's own TXACT flag to clear (bounded, with a short floor
+	  on the run-out path) before disabling the data path, and counts both
+	  outcomes.  It changes the write path only; the read path and the
+	  register path are untouched.  Diagnostic arm first: a profile turns it
+	  on to measure the difference, and the delivery profiles keep the
+	  measured behaviour until an arm proves better.
+
+config F4SDIO_TX_FASTFILL
+	bool "Fill the F429 SDIO transmit FIFO at the card's own rate"
+	default n
+	depends on ARCH_ARM_V7M
+	help
+	  The card's transmit FIFO drains one 32-bit word per eight SDIO clocks
+	  (333 ns at 24 MHz four-bit) and holds 32 words, so a frame has to be in
+	  the FIFO within 10.6 us of the data path being armed.  The byte-wise
+	  fill path copies each word through a helper call, which costs about one
+	  word of card time per word and underruns after the first one.  This arm
+	  fills the same bytes with the load and the FIFO store inlined (the byte
+	  tail keeps the old path).  One variable against F4SDIO_TX_SETTLE.
+
 config STA_VERBOSE_ATTACH
 	bool "Raise the vendor log level to INFO from the start through the attach"
 	default n

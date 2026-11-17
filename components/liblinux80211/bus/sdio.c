@@ -1918,6 +1918,11 @@ lkpi_sdio_has_handler(void)
 
 static struct lkpi_sdio_card_probe lkpi_sdio_card_probe_state;
 static bool lkpi_sdio_card_probe_on;
+/* The fast window: a shorter period and a range kept for the transmit-side
+ * counters, so a firmware that takes a frame and returns its page inside one
+ * poll interval is still visible. */
+static bool lkpi_sdio_card_probe_fast;
+static unsigned int lkpi_sdio_card_probe_fast_ms;
 
 void
 lkpi_sdio_card_probe_set(bool on)
@@ -1931,6 +1936,35 @@ lkpi_sdio_card_probe_enabled(void)
 {
 
 	return lkpi_sdio_card_probe_on;
+}
+
+void
+lkpi_sdio_card_probe_fast_set(bool on, unsigned int period_ms)
+{
+
+	if (on && (period_ms == 0u))
+		period_ms = 20u;
+	lkpi_sdio_card_probe_fast = on;
+	lkpi_sdio_card_probe_fast_ms = period_ms;
+	if (on) {
+		/* a new window: the previous range says nothing about this one */
+		lkpi_sdio_card_probe_state.fast_period_ms = period_ms;
+		lkpi_sdio_card_probe_state.fast_samples = 0u;
+		lkpi_sdio_card_probe_state.fast_hisr_or = 0u;
+		lkpi_sdio_card_probe_state.fast_hisr_changes = 0u;
+		lkpi_sdio_card_probe_state.fast_rxl_max = 0u;
+		lkpi_sdio_card_probe_state.fast_txpg_changed = 0u;
+		lkpi_sdio_card_probe_state.fast_hmefr_or = 0u;
+		lkpi_sdio_card_probe_state.fast_box0_last = 0u;
+		lkpi_sdio_card_probe_state.fast_box0_seen = 0u;
+	}
+}
+
+bool
+lkpi_sdio_card_probe_fast_enabled(void)
+{
+
+	return lkpi_sdio_card_probe_fast;
 }
 
 void
@@ -1976,14 +2010,118 @@ lkpi_sdio_card_read_bytes(unsigned int func, unsigned int addr, u8 *buf,
 	return true;
 }
 
+/*
+ * The fast window's one sample: the transmit-side counters only, four reads,
+ * so the pump can afford it at a rate that sees a transient.  The firmware
+ * takes a frame and returns its page inside one second on any working card,
+ * which is why the one-second probe cannot tell "never fetched" from
+ * "fetched and returned": this keeps the range instead of the last value.
+ */
+static unsigned int lkpi_sdio_card_probe_lean_count;
+
+static void
+lkpi_sdio_card_probe_tx_sample(void)
+{
+	struct lkpi_sdio_card_probe p = lkpi_sdio_card_probe_state;
+	unsigned int oqt = 0u, hisr = 0u, rxl = 0u, hmefr = 0u, box0 = 0u;
+	unsigned int ok = 0u, fails = 0u;
+	unsigned int prev_hisr = p.hisr;
+	unsigned int i;
+	u8 page[8];
+
+	(void)memset(page, 0, sizeof(page));
+	if (lkpi_sdio_card_read_bytes(1u, 0x20u, page, 8u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, 0x2au, &oqt, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, 0x18u, &hisr, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, 0x1cu, &rxl, 2u))
+		ok++;
+	else
+		fails++;
+	/* the firmware's doorbell: at 20 ms a command the firmware reads within
+	 * a millisecond is still visible, and one it never reads stays visible */
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x01ccu, &hmefr, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x01d0u, &box0, 4u))
+		ok++;
+	else
+		fails++;
+
+	p.ok += ok;
+	p.fails += fails;
+	p.stamp_ns = lkpi_sdio_census_now();
+	if (fails != 0u) {
+		/* a refused sample is not a reading: do not fold it in */
+		lkpi_sdio_card_probe_state = p;
+		return;
+	}
+
+	if (p.fast_samples == 0u) {
+		for (i = 0u; i < 4u; i++) {
+			p.fast_txpg_min[i] = page[i * 2u];
+			p.fast_txpg_max[i] = page[i * 2u];
+		}
+		p.fast_oqt_min = oqt;
+		p.fast_oqt_max = oqt;
+	} else {
+		for (i = 0u; i < 4u; i++) {
+			if (page[i * 2u] < p.fast_txpg_min[i])
+				p.fast_txpg_min[i] = page[i * 2u];
+			if (page[i * 2u] > p.fast_txpg_max[i])
+				p.fast_txpg_max[i] = page[i * 2u];
+			if (p.fast_txpg_min[i] != p.fast_txpg_max[i])
+				p.fast_txpg_changed = 1u;
+		}
+		if (oqt < p.fast_oqt_min)
+			p.fast_oqt_min = oqt;
+		if (oqt > p.fast_oqt_max)
+			p.fast_oqt_max = oqt;
+	}
+	if (hisr != prev_hisr)
+		p.fast_hisr_changes++;
+	p.fast_hisr_or |= hisr;
+	if (rxl > p.fast_rxl_max)
+		p.fast_rxl_max = rxl;
+	p.fast_hmefr_or |= hmefr;
+	if (box0 != 0u) {
+		p.fast_box0_last = box0;
+		p.fast_box0_seen = 1u;
+	}
+	p.fast_samples++;
+
+	/* the "latest" fields stay the card's current answer */
+	p.txpg_hi = page[0];
+	p.txpg_mid = page[2];
+	p.txpg_lo = page[4];
+	p.txpg_pub = page[6];
+	p.oqt_free = oqt;
+	p.hisr = hisr;
+	p.rx_req_len = rxl;
+	lkpi_sdio_card_probe_state = p;
+}
+
 static void
 lkpi_sdio_card_probe_run(void)
 {
 	struct lkpi_sdio_card_probe p;
 	unsigned int himr = 0u, hisr = 0u, ien = 0u, pend = 0u, rxl = 0u;
 	unsigned int oqt = 0u, cr = 0u, txp = 0u, mcufwdl = 0u, rqpn = 0u;
+	unsigned int hmefr = 0u, msr = 0u, txdma = 0u;
 	unsigned int ok = 0u, fails = 0u;
+	unsigned int i;
 	u8 txpg[8];
+	u8 box[16];
+	u8 boxex[16];
 
 	/* fresh values every probe: a refused read must not leave the previous
 	 * answer standing, or "the register says zero" and "the read failed"
@@ -2037,6 +2175,35 @@ lkpi_sdio_card_probe_run(void)
 		ok++;
 	else
 		fails++;
+	/*
+	 * The firmware's host doorbell.  REG_HMETFR bit n is set while the
+	 * firmware has not read H2C box n (the vendor polls it as "0x1cc=0
+	 * means the H2C is done by the FW"), and the box words are the payload
+	 * the host wrote: a box that reads back as the command the driver sent
+	 * says the write landed, an all-zero box says it did not.
+	 */
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x01ccu, &hmefr, 1u))
+		ok++;
+	else
+		fails++;
+	(void)memset(box, 0, sizeof(box));
+	if (lkpi_sdio_card_read_bytes(1u, (8u << 13) | 0x01d0u, box, 16u))
+		ok++;
+	else
+		fails++;
+	(void)memset(boxex, 0, sizeof(boxex));
+	if (lkpi_sdio_card_read_bytes(1u, (8u << 13) | 0x01f0u, boxex, 16u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0102u, &msr, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, (8u << 13) | 0x0210u, &txdma, 4u))
+		ok++;
+	else
+		fails++;
 
 	p = lkpi_sdio_card_probe_state;
 	p.ok += ok;
@@ -2055,6 +2222,13 @@ lkpi_sdio_card_probe_run(void)
 	p.reg_txpause = txp;
 	p.reg_mcufwdl = mcufwdl;
 	p.reg_rqpn = rqpn;
+	p.hmefr = hmefr;
+	for (i = 0u; i < sizeof(box); i++)
+		p.hmebox[i] = box[i];
+	for (i = 0u; i < sizeof(boxex); i++)
+		p.hmebox_ex[i] = boxex[i];
+	p.reg_msr = msr;
+	p.txdma_status = txdma;
 	p.stamp_ns = lkpi_sdio_census_now();
 	lkpi_sdio_card_probe_state = p;
 }
@@ -2089,11 +2263,27 @@ lkpi_sdio_pump_cycle(bool card_irq)
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
 
-	/* the card's own interrupt registers, at most once a second */
-	if (lkpi_sdio_card_probe_on &&
-	    (lkpi_sdio_card_probe_state.stamp_ns == 0u ||
-	     t1 - lkpi_sdio_card_probe_state.stamp_ns >= LKPI_SDIO_PROBE_PERIOD_NS))
-		lkpi_sdio_card_probe_run();
+	/* The card's own registers: once a second normally; inside the fast
+	 * window at its own period, with a full reading folded in every fifty
+	 * samples so the doorbell and the MAC readbacks keep their cadence. */
+	if (lkpi_sdio_card_probe_on) {
+		uint64_t period = lkpi_sdio_card_probe_fast ?
+		    ((uint64_t)lkpi_sdio_card_probe_fast_ms * 1000000ull) :
+		    LKPI_SDIO_PROBE_PERIOD_NS;
+
+		if ((lkpi_sdio_card_probe_state.stamp_ns == 0u) ||
+		    (t1 - lkpi_sdio_card_probe_state.stamp_ns >= period)) {
+			if (!lkpi_sdio_card_probe_fast) {
+				lkpi_sdio_card_probe_run();
+			} else {
+				lkpi_sdio_card_probe_tx_sample();
+				if (++lkpi_sdio_card_probe_lean_count >= 50u) {
+					lkpi_sdio_card_probe_lean_count = 0u;
+					lkpi_sdio_card_probe_run();
+				}
+			}
+		}
+	}
 
 	/*
 	 * One round dispatches the functions the card reports pending. With

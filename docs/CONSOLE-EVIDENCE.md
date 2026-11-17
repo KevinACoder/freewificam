@@ -1663,11 +1663,45 @@ queue), 72 bytes (the authentication frame with its 40-byte descriptor), status
 rtl8189fs_sta: conn timeout drv rx=0/0 fifo=0 free=8/256 tp=0 xt=20020054 tf=256/16 xtf=32/0 st=0/0/1 txq=29 last=4/72/0 head=1e00280001120800
 ```
 
-The card's own side says the frame is accepted but not transmitted: the free
-TX page counts and the outstanding-queue space read back unchanged from their
-initial values (`txpg=12/2/2/229 oqt=32` at arm and at the connect timeout), the
-card's interrupt status reports a transmit FIFO overflow (`hisr=0x10`), and no
-frame appears at the bench.  The firmware itself is running - its download
+That record was still describing a truncated write, and the round that found
+out added two readings to it.  The first is the interface's own state at the two
+instants the write can go wrong: one bus write after the data path is armed, and
+right after the frame is loaded.  With the old fill the second reading is a
+transmit underrun with the byte counter at length minus four - one word in, the
+FIFO empty, and the seam still reporting success:
+
+```
+rtl8189fs_sta: tx[0]=4/100/0/2/96/00400050
+rtl8189fs_sta: txarm[0]=00045040/00000805/00400050/96
+```
+
+(`drop_end` 2 is "the completion wait ended on an error flag", `96` is DCOUNT
+after a 100-byte frame, `0x00400050` is TXUNDERR plus CMDREND plus the card
+interrupt.)  With the load and the FIFO store inlined the same two readings
+become "ended on the byte counter, count zero, FIFO still holding data":
+
+```
+rtl8189fs_sta: tx[0]=4/100/0/1/0/00045040
+rtl8189fs_sta: txarm[0]=00045040/00000805/00105040/61
+```
+
+(`0x00105040` has TXDAVL set - the interface's FIFO has data one instant after
+the frame is loaded - and `61` is the byte counter already draining.)  The
+second reading is the card sampled every 20 ms across the association window,
+which is what a one-second probe cannot see: the high queue's free-page count
+moves and comes back, so the card's firmware does take the frames and return
+their pages:
+
+```
+rtl8189fs_sta: join fast n=2071 per=20ms txpg=9..12/2..2/2..2/229..229 oqt=32..32 moved=1 hisr=0x00000001 chg=94 rxl_max=405 hmefr=0x00 box0=00000000/0
+```
+
+The same frames then appear at the bench's monitor as probe requests from the
+board's MAC on the operating channel at about -40 dBm, which is what withdraws
+the earlier statement that the monitor could not see this board.  What does not
+appear is the authentication: the frame is written completely
+(`tx[..]=4/72/0/1/0/00045040`) and the AP's debug-level log carries no
+authentication line at all.  The firmware itself is running - its download
 checksum passes, its version and signature are read back, and the ready bit is
 set:
 

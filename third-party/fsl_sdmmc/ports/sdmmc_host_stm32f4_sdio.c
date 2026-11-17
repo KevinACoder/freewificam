@@ -59,6 +59,15 @@ void f4sdio_dbg_get(struct f4sdio_dbg *out)
 #define F4SDIO_CMD_SPIN		10000000U
 #define F4SDIO_DATA_SPIN	10000000U
 /*
+ * The byte-mode write's settle bound (CONFIG_F4SDIO_TX_SETTLE): how long the
+ * data path may take to report it is done, and the floor the run-out path
+ * waits instead.  The core runs at 168 MHz, so 33,600 cycles is 200 us and
+ * 3,000 is about 18 us - both far above one four-bit word's eight clocks
+ * (333 ns at 24 MHz), so neither can be mistaken for the transfer's own pace.
+ */
+#define F4SDIO_TX_SETTLE_CYCLES		33600U
+#define F4SDIO_TX_SETTLE_TAIL_CYCLES	3000U
+/*
  * Consecutive empty-FIFO polls that end an SDIO multibyte read.  The card
  * stops when it has sent what it has, not when DLEN is reached, so a finished
  * transfer and a stuck one look the same until the FIFO has been quiet long
@@ -740,6 +749,26 @@ static uint32_t s_f4sdio_rx_end;
 static uint32_t s_f4sdio_tx_left;	/* bytes still unpushed when the loop left */
 static uint32_t s_f4sdio_tx_sta;	/* STA at that instant */
 static uint32_t s_f4sdio_tx_dcount;	/* DCOUNT at that instant */
+/* The completion instant of the last byte-mode write: what the criterion saw
+ * and whether the data path was still on the wire.  Read by f4sdio_txq_record. */
+static uint32_t s_f4sdio_tx_sta_drop;
+static uint32_t s_f4sdio_tx_dcnt_drop;
+static uint32_t s_f4sdio_tx_txact_drop;
+/* Which condition ended the byte-mode write's completion wait.  A write that
+ * ended on an error flag is a write the seam still reports as success, so the
+ * two have to be told apart by something, and this is it. */
+#define F4SDIO_TX_DROP_NONE	0u
+#define F4SDIO_TX_DROP_DONE	1u
+#define F4SDIO_TX_DROP_ERR	2u
+#define F4SDIO_TX_DROP_SPIN	3u
+static uint32_t s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_NONE;
+/* The data path right after the frame was loaded into the FIFO, and the
+ * control word the deferred arming actually left there. */
+static uint32_t s_f4sdio_tx_dctrl_arm;
+static uint32_t s_f4sdio_tx_sta_arm;
+static uint32_t s_f4sdio_tx_sta_burst;
+static uint32_t s_f4sdio_tx_dcnt_burst;
+static uint32_t s_f4sdio_tx_burst_cycles;	/* the fill's own duration */
 
 static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mode,
 				     bool stream_rx)
@@ -858,6 +887,12 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		s_f4sdio_tx_left = remaining;
 		s_f4sdio_tx_sta = 0U;
 		s_f4sdio_tx_dcount = 0U;
+		/* Fresh captures for this write: the record printed for it must not
+		 * repeat the previous write's completion word. */
+		s_f4sdio_tx_sta_drop = 0U;
+		s_f4sdio_tx_dcnt_drop = 0U;
+		s_f4sdio_tx_txact_drop = 0U;
+		s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_NONE;
 
 		/*
 		 * SDIO multibyte mode cannot pause: the DPSM keeps sending while
@@ -873,9 +908,37 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		 */
 		{
 			uint32_t burst = remaining;
+			uint32_t t0 = f4_cyccnt();
 
 			if (burst > F4SDIO_TX_FIFO_WORDS * 4u)
 				burst = F4SDIO_TX_FIFO_WORDS * 4u;
+#if defined(CONFIG_F4SDIO_TX_FASTFILL) && CONFIG_F4SDIO_TX_FASTFILL
+			/*
+			 * The card drains the FIFO one word per eight SDIO clocks -
+			 * 333 ns at 24 MHz four-bit - and the FIFO is 32 words, so the
+			 * host has 10.6 us to put a frame in.  A per-word call chain
+			 * (memcpy plus the imported FIFO helper) costs more than a
+			 * word's worth of card time each, so the data path underruns
+			 * after the first word however many are queued: measured, an
+			 * 84-byte write ended with TXUNDERR and DCOUNT=80.  The fast
+			 * path is the same bytes with the copy and the store inlined,
+			 * about ten cycles a word.
+			 */
+			if ((((uintptr_t)tx & 3u) == 0u) && (burst >= 4u)) {
+				uint32_t words = burst >> 2;
+
+				if (words > F4SDIO_TX_FIFO_WORDS)
+					words = F4SDIO_TX_FIFO_WORDS;
+				while (words-- != 0u) {
+					SDIO->FIFO = *(const uint32_t *)(const void *)tx;
+					tx += 4;
+					remaining -= 4u;
+				}
+				burst = remaining;
+				if (burst > F4SDIO_TX_FIFO_WORDS * 4u)
+					burst = F4SDIO_TX_FIFO_WORDS * 4u;
+			}
+#endif
 			while (burst != 0U) {
 				uint32_t word = 0U;
 				uint32_t n = (burst < 4U) ? burst : 4U;
@@ -886,7 +949,15 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 				burst -= n;
 				(void)SDIO_WriteFIFO(SDIO, &word);
 			}
+			s_f4sdio_tx_burst_cycles = (uint32_t)(f4_cyccnt() - t0);
 		}
+		/* What the data path looked like with the frame loaded: an empty
+		 * FIFO here means the words never landed (the FIFO is written only
+		 * while the path is armed for transmit), and a count that has not
+		 * moved means the DPSM never started. */
+		s_f4sdio_tx_dctrl_arm = SDIO->DCTRL;
+		s_f4sdio_tx_sta_burst = SDIO->STA;
+		s_f4sdio_tx_dcnt_burst = SDIO->DCOUNT;
 
 		while (remaining != 0U) {
 			if ((SDIO->STA & (SDIO_FLAG_TXUNDERR |
@@ -922,17 +993,68 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		 * counter reaching zero with the FIFO empty.  Dropping DTEN any
 		 * earlier stops the clock with bytes still in the FIFO and the
 		 * device silently keeps the truncated write.
+		 *
+		 * The counter is not the last word, though: DCOUNT decrements
+		 * when the data path loads a word out of the FIFO, so
+		 * `DCOUNT==0 && !TXDAVL` means "the FIFO is empty", not "the
+		 * last word and its CRC have left the pins".  STA.TXACT is the
+		 * peripheral's own answer to the second question, and with a
+		 * 24 MHz four-bit clock one word is eight clock cycles wide -
+		 * clearing DTEN in that window cuts the frame's tail.
 		 */
+		s_f4sdio_tx_sta_drop = 0U;
+		s_f4sdio_tx_dcnt_drop = 0U;
+		s_f4sdio_tx_txact_drop = 0U;
+		s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_SPIN;
 		for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
 			uint32_t sta = SDIO->STA;
 
-			if (((SDIO->DCOUNT == 0U) &&
-			     ((sta & SDIO_FLAG_TXDAVL) == 0U)) ||
-			    ((sta & (SDIO_FLAG_TXUNDERR |
-				     SDIO_FLAG_DCRCFAIL |
-				     SDIO_FLAG_DTIMEOUT)) != 0U))
-				break;
+			if ((sta & (SDIO_FLAG_TXUNDERR |
+				    SDIO_FLAG_DCRCFAIL |
+				    SDIO_FLAG_DTIMEOUT)) != 0U) {
+				s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_ERR;
+				s_f4dbg.tx_drop_err++;
+			} else if ((SDIO->DCOUNT == 0U) &&
+				   ((sta & SDIO_FLAG_TXDAVL) == 0U)) {
+				s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_DONE;
+			} else {
+				continue;
+			}
+			s_f4sdio_tx_sta_drop = sta;
+			s_f4sdio_tx_dcnt_drop = SDIO->DCOUNT;
+			s_f4sdio_tx_txact_drop =
+			    ((sta & SDIO_FLAG_TXACT) != 0U) ? 1U : 0U;
+			break;
 		}
+		if (s_f4sdio_tx_txact_drop != 0U)
+			s_f4dbg.tx_txact_set++;
+#if defined(CONFIG_F4SDIO_TX_SETTLE) && CONFIG_F4SDIO_TX_SETTLE
+		/*
+		 * Diagnostic arm: let the data path finish before the clock
+		 * stops.  Bounded in the core's own cycle counter so a DPSM
+		 * that never leaves Send cannot hold the claim; the run-out
+		 * path still gives the last word its eight clock cycles.
+		 */
+		{
+			uint32_t t0 = f4_cyccnt();
+			uint32_t budget = F4SDIO_TX_SETTLE_CYCLES;
+			bool timed_out = false;
+
+			while ((SDIO->STA & SDIO_FLAG_TXACT) != 0U) {
+				if ((uint32_t)(f4_cyccnt() - t0) > budget) {
+					timed_out = true;
+					break;
+				}
+			}
+			if (timed_out) {
+				volatile uint32_t d;
+
+				s_f4dbg.tx_settle_timeout++;
+				for (d = 0U; d < F4SDIO_TX_SETTLE_TAIL_CYCLES; d++)
+					;
+			}
+		}
+#endif
 		SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
 		SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND;
 		return kStatus_Success;
@@ -1100,6 +1222,15 @@ static void f4sdio_txq_record(const sdmmchost_data_t *data, status_t status,
 	rec->dev = dev;
 	rec->len = len;
 	rec->status = (uint32_t)status;
+	rec->sta_drop = s_f4sdio_tx_sta_drop;
+	rec->dcnt_drop = s_f4sdio_tx_dcnt_drop;
+	rec->txact_drop = s_f4sdio_tx_txact_drop;
+	rec->drop_end = s_f4sdio_tx_drop_end;
+	rec->sta_arm = s_f4sdio_tx_sta_arm;
+	rec->dctrl_arm = s_f4sdio_tx_dctrl_arm;
+	rec->sta_burst = s_f4sdio_tx_sta_burst;
+	rec->dcnt_burst = s_f4sdio_tx_dcnt_burst;
+	rec->burst_cycles = s_f4sdio_tx_burst_cycles;
 	for (i = 0U; i < F4SDIO_TX_HEAD; i++)
 		rec->head[i] = (i < len) ? p[i] : 0U;
 }
@@ -1159,6 +1290,10 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 	if (s_f4sdio_tx_deferred) {
 		s_f4sdio_tx_deferred = false;
 		SDIO->DCTRL = s_f4sdio_tx_dctrl;
+		/* The data path one bus write after arming: a TXUNDERR already set
+		 * here says the DPSM started with an empty FIFO, before the frame
+		 * was written. */
+		s_f4sdio_tx_sta_arm = SDIO->STA;
 	}
 
 	if (content->data != NULL) {
