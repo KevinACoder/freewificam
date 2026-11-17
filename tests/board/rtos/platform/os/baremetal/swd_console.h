@@ -29,4 +29,8 @@ extern struct swd_console_block g_swd_console;
 void swd_console_init(void);
 void swd_console_putc(char c);
 
+/* Safe from a fault handler: no init, no lock, no dependency on the UART. */
+void swd_console_panic_puts(const char *s);
+void swd_console_panic_hex(uint32_t value);
+
 #endif

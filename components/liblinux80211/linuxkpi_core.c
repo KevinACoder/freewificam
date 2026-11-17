@@ -1867,14 +1867,65 @@ void tasklet_kill(struct tasklet_struct *t)
 
 static struct lkpi_timer_stats lkpi_tstats;
 
+static void lkpi_timer_cb(void *arg);
+
+/*
+ * Create the OS timer object with interrupts live.
+ *
+ * The CMSIS adapter refuses to create a timer while the CPU reports interrupt
+ * context, and its test counts BASEPRI != 0 as interrupt context - which is
+ * exactly the state a driver is in when it initialises a timer inside its own
+ * critical section (the vendor station table builds each new sta_info that
+ * way).  A refusal there is permanent: the timer object never exists, every
+ * later arm is a no-op, and the step it drives - an ADDBA retry, a link
+ * timeout - silently never happens.  Creating the FreeRTOS object is a
+ * thread-only call that touches allocator and timer-service state, not the
+ * caller's protected data, so it runs with the caller's mask lifted and the
+ * exact prior state restored afterwards.
+ */
+static osTimerId_t lkpi_timer_new(struct timer_list *t)
+{
+#ifdef __arm__
+	uint32_t basepri;
+	uint32_t primask;
+	osTimerId_t id;
+
+	__asm__ __volatile__("mrs %0, basepri" : "=r"(basepri));
+	__asm__ __volatile__("mrs %0, primask" : "=r"(primask));
+	__asm__ __volatile__("msr basepri, %0" :: "r"(0u) : "memory");
+	__asm__ __volatile__("cpsie i" ::: "memory");
+	id = osTimerNew(lkpi_timer_cb, osTimerOnce, t, NULL);
+	__asm__ __volatile__("msr basepri, %0" :: "r"(basepri) : "memory");
+	if (primask != 0u)
+		__asm__ __volatile__("cpsid i" ::: "memory");
+	return id;
+#else
+	return osTimerNew(lkpi_timer_cb, osTimerOnce, t, NULL);
+#endif
+}
+
 static void lkpi_timer_cb(void *arg)
 {
 	struct timer_list *t = arg;
 
 	t->tl_pending = false;
 	lkpi_tstats.fires++;
-	if (t->tl_func != NULL)
+	if (t->tl_func != NULL) {
+		unsigned int i;
+
+		for (i = 0; i < 6u; i++) {
+			if (lkpi_tstats.fire_fn[i] == (void *)t->tl_func) {
+				lkpi_tstats.fire_fn_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.fire_fn[i] == NULL) {
+				lkpi_tstats.fire_fn[i] = (void *)t->tl_func;
+				lkpi_tstats.fire_fn_n[i] = 1;
+				break;
+			}
+		}
 		t->tl_func(t);
+	}
 }
 
 void lkpi_timer_setup(struct timer_list *t, void (*func)(struct timer_list *))
@@ -1901,11 +1952,37 @@ void lkpi_timer_setup(struct timer_list *t, void (*func)(struct timer_list *))
 	t->tl_pending = false;
 
 	shell->owner = t;
-	shell->timer = osTimerNew(lkpi_timer_cb, osTimerOnce, t, NULL);
+	shell->timer = lkpi_timer_new(t);
 	shell->inited = (shell->timer != NULL) ? 1u : 0u;
 	lkpi_tstats.setups++;
-	if (shell->timer == NULL)
+	if (!shell->inited) {
+		unsigned int i;
+		void *ra = __builtin_return_address(0);
+
 		lkpi_tstats.new_fail++;
+		for (i = 0; i < 4u; i++) {
+			if (lkpi_tstats.new_fail_fn[i] == (void *)t->tl_func) {
+				lkpi_tstats.new_fail_fn_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.new_fail_fn[i] == NULL) {
+				lkpi_tstats.new_fail_fn[i] = (void *)t->tl_func;
+				lkpi_tstats.new_fail_fn_n[i] = 1;
+				break;
+			}
+		}
+		for (i = 0; i < 4u; i++) {
+			if (lkpi_tstats.new_fail_ra[i] == ra) {
+				lkpi_tstats.new_fail_ra_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.new_fail_ra[i] == NULL) {
+				lkpi_tstats.new_fail_ra[i] = ra;
+				lkpi_tstats.new_fail_ra_n[i] = 1;
+				break;
+			}
+		}
+	}
 }
 
 int lkpi_mod_timer(struct timer_list *t, unsigned long expires)

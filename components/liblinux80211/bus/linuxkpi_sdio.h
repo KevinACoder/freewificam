@@ -39,6 +39,17 @@ struct lkpi_sdio_stats {
 	unsigned int	callbacks;	/* IRQ handler invocations */
 	unsigned int	irq_claims;	/* function IRQs claimed */
 	unsigned int	errors;		/* transfers or polls that failed */
+	/* The read side's own account, and where a wake-up came from.  A card
+	 * whose frames stop arriving has three candidate breaks (the engine's
+	 * request, the card's interrupt, the handler's dispatch) and these
+	 * counts say which of them stopped first. */
+	unsigned int	ext_rx;		/* extended (CMD53) reads issued */
+	unsigned int	ext_rx_bytes;	/* bytes those reads asked for */
+	unsigned int	ext_rx_fail;	/* extended reads that failed */
+	unsigned int	pending_reads;	/* CCCR pending-word reads */
+	unsigned int	pending_nonzero;/* ones that reported work */
+	unsigned int	dispatch_pending;/* handlers run off the pending word */
+	unsigned int	dispatch_look;	/* handlers run off the card line */
 };
 
 /*
@@ -137,6 +148,10 @@ bool	lkpi_sdio_pump_prio_get(void);
 void	lkpi_sdio_pump_prio_level_set(unsigned int level);
 unsigned int	lkpi_sdio_pump_prio_level_get(void);
 void	lkpi_sdio_pump_drain_set(bool on);
+/* Run a handler once per poll cycle even when the CCCR pending word is quiet
+ * (cards that signal only through the DAT1 level). */
+void	lkpi_sdio_pump_force_dispatch_set(bool on);
+bool	lkpi_sdio_pump_force_dispatch_get(void);
 bool	lkpi_sdio_pump_drain_get(void);
 
 /*

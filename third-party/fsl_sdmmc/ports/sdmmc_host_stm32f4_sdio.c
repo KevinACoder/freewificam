@@ -32,6 +32,29 @@
 
 #include "sdio_board.h"
 #include "sdmmc_port.h"
+#include "sdmmc_host_stm32f4_sdio_dbg.h"
+
+/* The DWT cycle counter is the fine time base of this core; the platform's
+ * clock init enables it before the first stamped console line. */
+static inline uint32_t f4_cyccnt(void)
+{
+	return *(volatile uint32_t *)0xE0001004UL;
+}
+
+static inline uint32_t f4_cyccnt_to_us(uint32_t cycles)
+{
+	uint32_t per_us = SystemCoreClock / 1000000U;
+
+	return (per_us == 0U) ? 0U : cycles / per_us;
+}
+
+static struct f4sdio_dbg s_f4dbg;
+
+void f4sdio_dbg_get(struct f4sdio_dbg *out)
+{
+	if (out != NULL)
+		*out = s_f4dbg;
+}
 
 #define F4SDIO_CMD_SPIN		10000000U
 #define F4SDIO_DATA_SPIN	10000000U
@@ -65,6 +88,13 @@ static status_t f4sdio_program_clock(struct sdmmc_host_dev *dev, uint32_t div)
 	init.BusWide = (dev->bus_width == 4U) ? SDIO_BUS_WIDE_4B :
 		       (dev->bus_width == 8U) ? SDIO_BUS_WIDE_8B :
 						SDIO_BUS_WIDE_1B;
+	/*
+	 * Hardware flow control stays off: it uses DAT1 as the busy signal, and
+	 * the 8189FTV does not drive it - enabling it hangs the card in the
+	 * middle of its own initialisation (reproduced on two cold boots, the
+	 * console stops right after the capability dump).  Keeping up with the
+	 * card is the data loop's job instead, see f4sdio_transfer_data().
+	 */
 	init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
 	init.ClockDiv = div;
 	(void)STM32F4_SDIO_LL_Init(SDIO, init);
@@ -267,9 +297,15 @@ void SDIO_IRQHandler(void)
 {
 	uint32_t sta = SDIO->STA;
 
-	if ((sta & SDIO_FLAG_SDIOIT) == 0U)
+	s_f4dbg.irq_entries++;
+	if ((sta & SDIO_FLAG_SDIOIT) == 0U) {
+		s_f4dbg.irq_spurious++;
 		return;
+	}
 
+	s_f4dbg.irq_sdioit++;
+	if ((GPIOC->IDR & (1UL << 9U)) != 0U)
+		s_f4dbg.dat1_high++;
 	SDIO->ICR = SDIO_FLAG_SDIOIT;
 	if ((s_f4sdio_irq_dev != NULL) &&
 	    (s_f4sdio_irq_dev->card_int_rec != NULL)) {
@@ -559,6 +595,12 @@ static status_t f4sdio_wait_data_end(void)
 	return kStatus_SDMMC_TransferFailed;
 }
 
+/* What the last multibyte read left over and how it ended; the FIFO record
+ * needs both, and they are local to f4sdio_transfer_data(). */
+static uint32_t s_f4sdio_rx_total;
+static uint32_t s_f4sdio_rx_left;
+static uint32_t s_f4sdio_rx_end;
+
 static uint32_t s_f4sdio_tx_left;	/* bytes still unpushed when the loop left */
 static uint32_t s_f4sdio_tx_sta;	/* STA at that instant */
 static uint32_t s_f4sdio_tx_dcount;	/* DCOUNT at that instant */
@@ -583,28 +625,24 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		 */
 		uint32_t idle = 0U;
 		bool got = false;
+		uint32_t req0 = remaining;
+		uint32_t end = F4SDIO_RX_END_OTHER;
+		uint32_t t0 = f4_cyccnt();
 
 		/* Bounded: a data path that delivers nothing at all must fail,
 		 * not poll for ever - that is what turns a bad transfer into a
 		 * firmware that stops reporting. */
 		for (; (remaining != 0U) && (spin < F4SDIO_DATA_SPIN); spin++) {
-			uint32_t err = SDIO->STA & (SDIO_FLAG_RXOVERR |
-						    SDIO_FLAG_DCRCFAIL |
-						    SDIO_FLAG_DTIMEOUT |
-						    SDIO_FLAG_STBITERR);
+			uint32_t sta = SDIO->STA;
 
-			if (err != 0U)
+			if ((sta & (SDIO_FLAG_RXOVERR | SDIO_FLAG_DCRCFAIL |
+				    SDIO_FLAG_DTIMEOUT | SDIO_FLAG_STBITERR)) != 0U) {
+				end = F4SDIO_RX_END_ERR;
 				break;
-			/*
-			 * Take everything the FIFO has, not one word per poll.
-			 * At 24 MHz on a 4-bit bus the card fills the 32-word
-			 * FIFO faster than a single-word poll can turn around,
-			 * and falling behind ends the transfer with RXOVERR -
-			 * which is what the 404-byte RX FIFO reads were doing.
-			 */
-			if ((SDIO->STA & (SDIO_FLAG_RXDAVL |
-					  SDIO_FLAG_RXFIFOHF)) == 0U) {
+			}
+			if ((sta & (SDIO_FLAG_RXDAVL | SDIO_FLAG_RXFIFOHF)) == 0U) {
 				if (stream_rx && got && (++idle > F4SDIO_RX_IDLE)) {
+					end = F4SDIO_RX_END_IDLE;
 					(void)memset(rx, 0, remaining);
 					rx += remaining;
 					remaining = 0U;
@@ -613,17 +651,72 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 				continue;
 			}
 			idle = 0U;
-			while ((remaining != 0U) &&
-			       ((SDIO->STA & SDIO_FLAG_RXDAVL) != 0U)) {
-				uint32_t word = SDIO_ReadFIFO(SDIO);
-				uint32_t n = (remaining < 4U) ? remaining : 4U;
+			/*
+			 * Drain the FIFO at the card's rate.  The card writes at 12 MB/s
+			 * on a 24 MHz four-bit bus, so the loop may spend about ten
+			 * cycles per word: one FIFO read and one word store.  Anything
+			 * heavier here (a call to memcpy per word, for instance) falls
+			 * behind, the 32-word FIFO fills and the transfer ends in
+			 * RXOVERR - which is what every long receive read was doing.
+			 */
+			do {
+				uint32_t word = SDIO->FIFO;
 
-				(void)memcpy(rx, &word, n);
-				rx += n;
-				remaining -= n;
+				if (remaining >= 4U) {
+					*(uint32_t *)(void *)rx = word;
+					rx += 4U;
+					remaining -= 4U;
+				} else {
+					uint8_t tail[4];
+					uint32_t i;
+
+					(void)memcpy(tail, &word, 4U);
+					for (i = 0U; i < remaining; i++)
+						rx[i] = tail[i];
+					rx += remaining;
+					remaining = 0U;
+				}
 				got = true;
-			}
+			} while ((remaining != 0U) &&
+				 ((SDIO->STA & SDIO_FLAG_RXDAVL) != 0U));
+		}
+		if (end == F4SDIO_RX_END_OTHER) {
+			if (remaining == 0U)
+				end = F4SDIO_RX_END_COUNT;
+			else
+				end = F4SDIO_RX_END_NOBODY;
+		}
+		s_f4sdio_rx_total = req0;
+		s_f4sdio_rx_left = remaining;
+		s_f4sdio_rx_end = end;
+		{
+			struct f4sdio_rx_rec *rec =
+			    &s_f4dbg.rec[s_f4dbg.rec_head % F4SDIO_RX_REC_MAX];
 
+			rec->req = req0;
+			rec->got = req0 - remaining;
+			rec->end = end;
+			rec->us = f4_cyccnt_to_us(f4_cyccnt() - t0);
+			rec->sta = SDIO->STA;
+			rec->dctrl = SDIO->DCTRL;
+			rec->dcount = SDIO->DCOUNT;
+			s_f4dbg.rec_head++;
+			s_f4dbg.rx_xfers++;
+			s_f4dbg.rx_bytes += rec->got;
+			switch (end) {
+			case F4SDIO_RX_END_COUNT:
+				s_f4dbg.rx_count_end++;
+				break;
+			case F4SDIO_RX_END_IDLE:
+				s_f4dbg.rx_idle_end++;
+				break;
+			case F4SDIO_RX_END_NOBODY:
+				s_f4dbg.rx_zero++;
+				break;
+			default:
+				s_f4dbg.rx_err++;
+				break;
+			}
 		}
 	} else if (data->txData != NULL) {
 		s_f4sdio_tx_left = remaining;
@@ -744,6 +837,59 @@ static void f4sdio_irq_unmask(void)
 	SDIO->MASK |= SDIO_IT_SDIOIT;
 }
 
+/* CMD53 argument fields (SDIO simplified spec 5.3): the function number is the
+ * top nibble, the block bit is bit 27, the increment-address bit 26, and bits
+ * 25:9 hold the register address.  The vendor driver addresses its four data
+ * ports by the address's own top three bits (device 7 is the RX FIFO port), not
+ * by the function nibble - every transfer here is function 1.
+ */
+#define F4SDIO_ARG_FUNC(arg)	((unsigned)((arg) >> 28))
+#define F4SDIO_ARG_BLOCK(arg)	(((arg) >> 27) & 1UL)
+#define F4SDIO_ARG_ADDR(arg)	(((arg) >> 9) & 0x1FFFFUL)
+#define F4SDIO_ARG_DEV(arg)	((unsigned)(F4SDIO_ARG_ADDR(arg) >> 13))
+
+/* The RX-FIFO port: a read there is the card handing over received frames, and
+ * its bytes are the only direct witness of "did the card ever receive
+ * anything". */
+#define F4SDIO_RX_FIFO_DEV	7U
+
+static void f4sdio_fifo_record(const sdmmchost_data_t *data, status_t status)
+{
+	const uint8_t *p = (const uint8_t *)data->rxData;
+	struct f4sdio_fifo_rec *rec;
+	uint32_t req = (uint32_t)(data->blockSize * data->blockCount);
+	uint32_t i;
+	uint32_t first = req;
+	uint32_t copied = 0U;
+
+	if ((s_f4sdio_rx_total == req) && (s_f4sdio_rx_left <= req))
+		copied = req - s_f4sdio_rx_left;
+
+	rec = &s_f4dbg.fifo[s_f4dbg.fifo_rec_head % F4SDIO_FIFO_REC_MAX];
+	s_f4dbg.fifo_rec_head++;
+	rec->req = req;
+	rec->copied = copied;
+	rec->end = s_f4sdio_rx_end;
+	rec->status = (uint32_t)status;
+	rec->got = copied;
+	rec->zero = 1U;
+	for (i = 0U; i < req; i++) {
+		if (p[i] != 0U) {
+			rec->zero = 0U;
+			first = i;
+			break;
+		}
+	}
+	rec->first = first;
+	for (i = 0U; i < F4SDIO_FIFO_HEAD; i++)
+		rec->head[i] = (i < req) ? p[i] : 0U;
+	s_f4dbg.fifo_reads++;
+	if (status == kStatus_Success)
+		s_f4dbg.fifo_bytes += req;
+	if (rec->zero != 0U)
+		s_f4dbg.fifo_zero++;
+}
+
 static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content)
 {
 	status_t status;
@@ -780,6 +926,18 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 	if (content->data != NULL) {
 		status = f4sdio_transfer_data(content->data, byte_mode,
 					      byte_read);
+		if ((content->data->rxData != NULL) &&
+		    (content->command->index == 53U) &&
+		    (F4SDIO_ARG_DEV(content->command->argument) ==
+		     F4SDIO_RX_FIFO_DEV))
+			f4sdio_fifo_record(content->data, status);
+		if (content->data->txData != NULL) {
+			s_f4dbg.tx_xfers++;
+			if (status == kStatus_Success)
+				s_f4dbg.tx_ok++;
+			else
+				s_f4dbg.tx_err++;
+		}
 		if (byte_read)
 			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 		f4sdio_irq_unmask();

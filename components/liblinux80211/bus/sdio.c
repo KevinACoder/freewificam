@@ -160,6 +160,12 @@ struct lkpi_sdio_card {
 	bool				pump_prio_normal;
 	unsigned int			pump_prio_level;	/* 0 below .. 4 realtime */
 	bool				pump_drain;
+	/* polled-dispatch: run a function's handler once per cycle even when the
+	 * card's CCCR pending word is quiet.  A card that signals its function
+	 * interrupt only as a DAT1 level (this 8189FTV does) leaves the pending
+	 * word at zero, so waiting for it starves the handler - the driver then
+	 * reads the receive FIFO only when some other path happens to call it. */
+	bool				pump_force_dispatch;
 	/* when the last cycle that moved bytes finished (the hot hold's stamp) */
 	uint64_t			pump_hot_ns;
 	/* always-on accounting of the bytes the splitter moved, by direction.
@@ -1441,6 +1447,12 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 			lkpi_sdio_census_note_ext(write, true, bytes, t0,
 			    lkpi_sdio_census_now());
 			lkpi_sdio_stats.io_extended++;
+			if (!write) {
+				lkpi_sdio_stats.ext_rx++;
+				lkpi_sdio_stats.ext_rx_bytes += bytes;
+				if (st != 0)
+					lkpi_sdio_stats.ext_rx_fail++;
+			}
 			if (st != 0) {
 				lkpi_sdio_stats.errors++;
 				return lkpi_sdio_errno(st);
@@ -1472,6 +1484,12 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 		lkpi_sdio_census_note_ext(write, false, n, t0,
 		    lkpi_sdio_census_now());
 		lkpi_sdio_stats.io_extended++;
+		if (!write) {
+			lkpi_sdio_stats.ext_rx++;
+			lkpi_sdio_stats.ext_rx_bytes += n;
+			if (st != 0)
+				lkpi_sdio_stats.ext_rx_fail++;
+		}
 		if (st != 0) {
 			lkpi_sdio_stats.errors++;
 			return lkpi_sdio_errno(st);
@@ -1923,11 +1941,14 @@ lkpi_sdio_pump_cycle(bool card_irq)
 	 */
 	for (;;) {
 		lkpi_sdio_stats.pump_polls++;
+		lkpi_sdio_stats.pending_reads++;
 		if (lkpi_sdio_be_irq_pending(&pending) != 0) {
 			lkpi_sdio_stats.errors++;
 			err = true;
 			break;
 		}
+		if (pending != 0u)
+			lkpi_sdio_stats.pending_nonzero++;
 		if (pending == 0u) {
 			/*
 			 * The host's DAT1 assertion is the authoritative "look".
@@ -1935,13 +1956,16 @@ lkpi_sdio_pump_cycle(bool card_irq)
 			 * not reflect its function interrupt there: a card
 			 * interrupt with a quiet word still runs the claimed
 			 * handlers once, and each reads its own status word.
+			 * Polled dispatch extends the same rule to a boot with no
+			 * card interrupt at all.
 			 */
-			if (card_irq) {
+			if (card_irq || c->pump_force_dispatch) {
 				for (i = 1u;
 				     i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS;
 				     i++) {
 					if (c->func[i].irq_handler != NULL) {
 						lkpi_sdio_stats.callbacks++;
+						lkpi_sdio_stats.dispatch_look++;
 						lkpi_sdio_census_note_dispatch();
 						busy = true;
 						lkpi_sdio_pump_stage_state = "handler";
@@ -1957,6 +1981,7 @@ lkpi_sdio_pump_cycle(bool card_irq)
 				continue;
 			if (c->func[i].irq_handler != NULL) {
 				lkpi_sdio_stats.callbacks++;
+				lkpi_sdio_stats.dispatch_pending++;
 				lkpi_sdio_census_note_dispatch();
 				busy = true;
 				lkpi_sdio_pump_stage_state = "handler";
@@ -2211,6 +2236,20 @@ lkpi_sdio_pump_drain_set(bool on)
 {
 
 	lkpi_sdio_card_state.pump_drain = on;
+}
+
+void
+lkpi_sdio_pump_force_dispatch_set(bool on)
+{
+
+	lkpi_sdio_card_state.pump_force_dispatch = on;
+}
+
+bool
+lkpi_sdio_pump_force_dispatch_get(void)
+{
+
+	return lkpi_sdio_card_state.pump_force_dispatch;
 }
 
 bool

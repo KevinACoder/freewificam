@@ -38,6 +38,36 @@ struct rtl8189f_diag {
 	unsigned int rx_dbg_ampdu_drop;	/* dbg_rx_ampdu_drop_count */
 	unsigned int rx_icv_err;	/* hardware decryption failures */
 	unsigned int rx_crc_err;	/* large+middle+small packet CRC */
+	/* Where a join stopped.  The station case's wait only sees
+	 * cfg80211's connected flag, so these read the vendor's own MLME: the
+	 * scan state, the station state machine (0x200 auth, 0x2000 assoc),
+	 * the join result and the auth sequence.  A join that never starts,
+	 * one that starts and never authenticates, and one that authenticates
+	 * and never associates are three different findings. */
+	unsigned int fw_state;		/* mlmepriv.fw_state */
+	unsigned int to_join;		/* mlmepriv.to_join */
+	unsigned int mlme_state;	/* mlmext_info.state */
+	unsigned int auth_seq;		/* mlmext_info.auth_seq */
+	unsigned int join_res;		/* cur_network.join_res */
+	unsigned int scan_state;	/* sitesurvey_res.state */
+	unsigned int scan_ch_idx;	/* sitesurvey_res.channel_idx */
+	/* The vendor's SDIO interrupt state: the last HISR the driver read and the
+	 * mask it compares it against.  The receive path runs only when the two
+	 * intersect, so "the card has bytes waiting" (rx_fifo) and "the driver
+	 * serviced them" (rx_pkts) can disagree with both of these quiet. */
+	unsigned int sdio_hisr;
+	unsigned int sdio_himr;
+	/* The two vendor timers that drive a scan and a join: whether each is
+	 * still armed, and the expiry (in the engine's jiffies) it was armed for.
+	 * A scan that walks channels and a join that never leaves "auth" are
+	 * both decided by these two, so "armed and expired but never ran" and
+	 * "never armed" have to be told apart from the board. */
+	unsigned int survey_timer_pending;
+	unsigned int survey_timer_expires;
+	unsigned int link_timer_pending;
+	unsigned int link_timer_expires;
+	unsigned int jiffies_now;
+	unsigned int tx_pkts;		/* dvobj traffic_stat, whole adapter */
 	unsigned int valid;		/* driver/adapter present */
 };
 

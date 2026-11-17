@@ -60,6 +60,9 @@
 #include "linux80211/net.h"
 #include "linuxkpi_sdio.h"
 #include "rtl8189fs_diag.h"
+#include "FreeRTOS.h"
+#include "timers.h"
+#include "sdmmc_host_stm32f4_sdio_dbg.h"
 
 #include <linux/etherdevice.h>
 #include <linux/mmc/sdio_func.h>
@@ -86,7 +89,13 @@
 #define STA_WAIT_MS		30000U
 #define STA_POLL_MS		100U
 #define STA_SCAN_WAIT_MS	10000U
-#define STA_CONNECT_WAIT_MS	20000U
+#ifndef CONFIG_STA_WATCH_MS
+#define CONFIG_STA_WATCH_MS	1000
+#endif
+#ifndef CONFIG_STA_CONNECT_WAIT_MS
+#define CONFIG_STA_CONNECT_WAIT_MS	20000
+#endif
+#define STA_CONNECT_WAIT_MS	((unsigned)CONFIG_STA_CONNECT_WAIT_MS)
 #define STA_PING_COUNT		20U
 #define STA_PING_TIMEOUT_MS	300U
 #define STA_PING_SMALL		56U
@@ -121,6 +130,65 @@ extern unsigned int rtw_drv_log_level;
 
 static unsigned sta_log_lines;
 
+#if defined(CONFIG_STA_WATCH) && CONFIG_STA_WATCH
+/*
+ * The one line a boot needs when the join stalls: how far the vendor MLME
+ * got (scan state, station state, join result), whether the engine's card
+ * events are arriving (pending reads vs nonzero, handler dispatches), and
+ * what the last CMD53 read actually returned.  One per second, bounded by
+ * the wait loops' own length; the delivery images compile it out.
+ */
+static void
+sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
+{
+	struct lkpi_sdio_stats ss;
+	struct rtl8189f_diag vd;
+	struct f4sdio_dbg f4;
+	struct f4sdio_rx_rec *rec = NULL;
+	struct lkpi_timer_stats ts;
+	int prog;
+
+	prog = lkpi_nl80211_assoc_progress(dev, RTL8189FS_SSID,
+					   (unsigned int)strlen(RTL8189FS_SSID));
+	lkpi_sdio_stats_get(&ss);
+	rtl8189f_diag_get(&vd);
+	f4sdio_dbg_get(&f4);
+	lkpi_timer_stats_get(&ts);
+	if (f4.rec_head != 0u)
+		rec = &f4.rec[(f4.rec_head - 1u) % F4SDIO_RX_REC_MAX];
+	CASE_INFO("rtl8189fs_sta: watch %s ms=%u prog=%d fw=0x%x join=%d mlme=0x%x "
+		  "scan=%u/%u io=%u/%u err=%u pend=%u/%u cb=%u irq=%u/%u "
+		  "rx=%u,%u,%u,%u/%u tx=%u,%u last=%u/%u/%u/%u "
+		  "tmr=%u/%u/%u/%u/%u claim=%s/%ums/%s/%s/%s "
+		  "tmrfn=%p,%u/%p,%u/%p,%u nf=%p,%u/%p,%u\n",
+		  where, waited_ms, prog, vd.fw_state, (int)vd.join_res,
+		  vd.mlme_state, vd.scan_state, vd.scan_ch_idx,
+		  ss.io_direct, ss.io_extended, ss.errors,
+		  ss.pending_nonzero, ss.pending_reads, ss.callbacks,
+		  f4.irq_entries, f4.irq_sdioit,
+		  f4.rx_count_end, f4.rx_idle_end, f4.rx_zero, f4.rx_err,
+		  f4.rx_bytes, f4.tx_xfers, f4.tx_ok,
+		  rec ? rec->req : 0u, rec ? rec->got : 0u,
+		  rec ? rec->end : 0u, rec ? rec->us : 0u,
+		  ts.setups, ts.mods, ts.fires, ts.new_fail, ts.mod_fail,
+		  lkpi_sdio_claim_owner(), lkpi_sdio_claim_held_ms(),
+		  lkpi_sdio_claim_op(), lkpi_sdio_pump_stage(),
+		  lkpi_sdio_pump_state(),
+		  ts.fire_fn[0], ts.fire_fn_n[0], ts.fire_fn[1], ts.fire_fn_n[1],
+		  ts.fire_fn[2], ts.fire_fn_n[2],
+		  ts.new_fail_fn[0], ts.new_fail_fn_n[0],
+		  ts.new_fail_fn[1], ts.new_fail_fn_n[1]);
+}
+#else
+static void
+sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
+{
+	(void)dev;
+	(void)where;
+	(void)waited_ms;
+}
+#endif
+
 /* The census probe is this file's only when the image has no throughput case:
  * rtl8189fs_throughput.c owns the same symbol in the throughput images, and one link
  * can carry exactly one definition. */
@@ -148,15 +216,29 @@ lkpi_census_pump_probe(void)
 static void
 sta_sink(ulog_level_t level, const char *line)
 {
+	/* Only the join's own milestone lines; everything else would be console
+	 * time the association cannot afford. */
+	static const char *const keys[] = {
+		"OnAssocReq", "OnAssocRsp", "joinbss", "connect", "issue_auth",
+		"start_clnt", "report_join_res", "link_timer", "issue_assocreq",
+		"start auth",
+		/* the receive path's own drop reasons: a frame the card handed
+		 * over and the driver threw away says which check refused it */
+		"crc_err", "exceed ptail", "abnormal rx", "recv fail",
+		"recvbuf unavailable", "no enough recv frame", "RX type",
+		"sd_int_hdl", "OnBeacon", "auth timeout", "assoc timeout",
+	};
+	unsigned int k;
+
 	(void)level;
 	if (line == NULL || sta_log_lines >= STA_LOG_MAX)
 		return;
-	/* Only the join's own milestone lines; everything else would be console
-	 * time the association cannot afford. */
-	if (strstr(line, "OnAssocReq") != NULL || strstr(line, "OnAssocRsp") != NULL ||
-	    strstr(line, "joinbss") != NULL || strstr(line, "connect") != NULL) {
-		CASE_INFO("rtl8189fs_sta: drv %s\n", line);
-		sta_log_lines++;
+	for (k = 0U; k < sizeof(keys) / sizeof(keys[0]); k++) {
+		if (strstr(line, keys[k]) != NULL) {
+			CASE_INFO("rtl8189fs_sta: drv %s\n", line);
+			sta_log_lines++;
+			return;
+		}
 	}
 }
 
@@ -175,6 +257,8 @@ sta_wait_connected(struct net_device *dev, unsigned char bssid[6],
 		}
 		if (connected < 0)
 			return connected;
+		if ((waited != 0U) && ((waited % (unsigned)CONFIG_STA_WATCH_MS) == 0U))
+			sta_watch(dev, "conn", waited);
 		osDelay(STA_POLL_MS);
 		waited += STA_POLL_MS;
 	}
@@ -211,6 +295,12 @@ case_rtl8189fs_sta_run(void)
 	rtw_drv_log_level = RTW_LOG_ERR;
 
 	lkpi_sdio_fsl_install();
+#if defined(CONFIG_STA_DISPATCH_FORCE) && CONFIG_STA_DISPATCH_FORCE
+	/* Polled dispatch: this card reports its function interrupt only as the
+	 * DAT1 level, so the CCCR pending word stays quiet and the engine would
+	 * wait for an interrupt that never comes. */
+	lkpi_sdio_pump_force_dispatch_set(true);
+#endif
 	lkpi_module_init_run();
 	CASE_ANCHOR("rtl8189fs_sta: initcalls run\n");
 
@@ -258,15 +348,19 @@ case_rtl8189fs_sta_run(void)
 		if (lkpi_nl80211_bss_find(wdev->wiphy, RTL8189FS_SSID, bssid,
 					  &freq, &sig) == 0)
 			goto found;
+		if ((waited != 0U) && ((waited % (unsigned)CONFIG_STA_WATCH_MS) == 0U))
+			sta_watch(dev, "scan", waited);
 		osDelay(STA_POLL_MS);
 	}
 
 	{
 		struct lkpi_sdio_stats sdio_stats;
 		struct rtl8189f_diag vd;
+		struct f4sdio_dbg sdio_f4dbg;
 
 		lkpi_sdio_stats_get(&sdio_stats);
 		rtl8189f_diag_get(&vd);
+		f4sdio_dbg_get(&sdio_f4dbg);
 		CASE_ANCHOR("rtl8189fs_sta: scan timeout sdio pump=%u callbacks=%u irq=%u io=%u/%u errors=%u\n",
 			    (unsigned)sdio_stats.pump_polls,
 			    (unsigned)sdio_stats.callbacks,
@@ -275,12 +369,107 @@ case_rtl8189fs_sta_run(void)
 			    (unsigned)sdio_stats.io_extended,
 			    (unsigned)sdio_stats.errors);
 		CASE_ANCHOR("rtl8189fs_sta: scan timeout diag rx_pkts=%u rx_bytes=%u "
-			    "rx_drops=%u cmd=%u/%u txframe_free=%u txbuf_free=%u "
-			    "rx_fifo=%u recvbuf_free=%u recv_free=%u crc=%u icv=%u\n",
-			    vd.rx_pkts, vd.rx_bytes, vd.rx_drops,
-			    vd.cmd_issued, vd.cmd_done, vd.txframe_free,
-			    vd.txbuf_free, vd.rx_fifo, vd.recvbuf_free,
-			    vd.recv_free, vd.rx_crc_err, vd.rx_icv_err);
+			    "rx_drops=%u dbg=%u ampdu=%u cmd=%u/%u txframe_free=%u "
+			    "txbuf_free=%u rx_fifo=%u recvbuf_free=%u recv_free=%u "
+			    "crc=%u icv=%u\n",
+			    vd.rx_pkts, vd.rx_bytes, vd.rx_drops, vd.rx_dbg_drop,
+			    vd.rx_dbg_ampdu_drop, vd.cmd_issued, vd.cmd_done,
+			    vd.txframe_free, vd.txbuf_free, vd.rx_fifo,
+			    vd.recvbuf_free, vd.recv_free, vd.rx_crc_err,
+			    vd.rx_icv_err);
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout tmr survey=%u/%u link=%u/%u "
+			    "jiffies=%u\n", vd.survey_timer_pending,
+			    vd.survey_timer_expires, vd.link_timer_pending,
+			    vd.link_timer_expires, vd.jiffies_now);
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout hisr=0x%08x himr=0x%08x "
+			    "match=0x%08x\n", vd.sdio_hisr, vd.sdio_himr,
+			    vd.sdio_hisr & vd.sdio_himr);
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout join fw=0x%x to_join=%u "
+			    "mlme=0x%x auth_seq=%u join_res=%d scan_state=%u ch=%u tx=%u\n",
+			    vd.fw_state, vd.to_join, vd.mlme_state, vd.auth_seq,
+			    (int)vd.join_res, vd.scan_state, vd.scan_ch_idx,
+			    vd.tx_pkts);
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout rx account "
+			    "ext=%u/%u fail=%u pend=%u/%u disp=%u/%u irq=%u/%u\n",
+			    sdio_stats.ext_rx, sdio_stats.ext_rx_bytes,
+			    sdio_stats.ext_rx_fail, sdio_stats.pending_nonzero,
+			    sdio_stats.pending_reads, sdio_stats.dispatch_pending,
+			    sdio_stats.dispatch_look, sdio_f4dbg.irq_entries,
+			    sdio_f4dbg.irq_sdioit);
+		{
+			struct lkpi_timer_stats ts2;
+
+			lkpi_timer_stats_get(&ts2);
+			CASE_ANCHOR("rtl8189fs_sta: tmr sets=%u mods=%u fires=%u "
+				    "newfail=%u modfail=%u heap=%u minheap=%u "
+				    "daemon=%p\n",
+				    ts2.setups, ts2.mods, ts2.fires, ts2.new_fail,
+				    ts2.mod_fail, (unsigned)xPortGetFreeHeapSize(),
+				    (unsigned)xPortGetMinimumEverFreeHeapSize(),
+				    (void *)xTimerGetTimerDaemonTaskHandle());
+			CASE_ANCHOR("rtl8189fs_sta: tmr fires %p,%u %p,%u %p,%u %p,%u %p,%u\n",
+				    ts2.fire_fn[0], ts2.fire_fn_n[0],
+				    ts2.fire_fn[1], ts2.fire_fn_n[1],
+				    ts2.fire_fn[2], ts2.fire_fn_n[2],
+				    ts2.fire_fn[3], ts2.fire_fn_n[3],
+				    ts2.fire_fn[4], ts2.fire_fn_n[4]);
+			CASE_ANCHOR("rtl8189fs_sta: tmr newfail %p,%u %p,%u %p,%u %p,%u\n",
+				    ts2.new_fail_fn[0], ts2.new_fail_fn_n[0],
+				    ts2.new_fail_fn[1], ts2.new_fail_fn_n[1],
+				    ts2.new_fail_fn[2], ts2.new_fail_fn_n[2],
+				    ts2.new_fail_fn[3], ts2.new_fail_fn_n[3]);
+			CASE_ANCHOR("rtl8189fs_sta: tmr newfail ra %p,%u %p,%u %p,%u %p,%u "
+				    "ctx primask=%u basepri=%u ipsr=%u\n",
+				    ts2.new_fail_ra[0], ts2.new_fail_ra_n[0],
+				    ts2.new_fail_ra[1], ts2.new_fail_ra_n[1],
+				    ts2.new_fail_ra[2], ts2.new_fail_ra_n[2],
+				    ts2.new_fail_ra[3], ts2.new_fail_ra_n[3],
+				    ts2.new_fail_primask, ts2.new_fail_basepri,
+				    ts2.new_fail_ipsr);
+		}
+		CASE_ANCHOR("rtl8189fs_sta: fifo account reads=%u bytes=%u zero=%u "
+			    "tx=%u/%u/%u\n", sdio_f4dbg.fifo_reads,
+			    sdio_f4dbg.fifo_bytes, sdio_f4dbg.fifo_zero,
+			    sdio_f4dbg.tx_xfers, sdio_f4dbg.tx_ok,
+			    sdio_f4dbg.tx_err);
+		{
+			unsigned int n = sdio_f4dbg.fifo_rec_head;
+			unsigned int k;
+
+			if (n > 4U)
+				n = 4U;
+			for (k = 0U; k < n; k++) {
+				const struct f4sdio_fifo_rec *r =
+				    &sdio_f4dbg.fifo[(sdio_f4dbg.fifo_rec_head - 1U - k) %
+						     F4SDIO_FIFO_REC_MAX];
+
+				CASE_ANCHOR("rtl8189fs_sta: fifo[%u] req=%u got=%u copied=%u "
+					    "end=%u st=%u zero=%u first=%u "
+					    "head=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+					    k, r->req, r->got, r->copied, r->end,
+					    r->status, r->zero, r->first,
+					    r->head[0], r->head[1], r->head[2],
+					    r->head[3], r->head[4], r->head[5],
+					    r->head[6], r->head[7]);
+			}
+		}
+		{
+			unsigned int n = sdio_f4dbg.rec_head;
+			unsigned int k;
+
+			if (n > 4U)
+				n = 4U;
+			for (k = 0U; k < n; k++) {
+				const struct f4sdio_rx_rec *r =
+				    &sdio_f4dbg.rec[(sdio_f4dbg.rec_head - 1U - k) %
+						    F4SDIO_RX_REC_MAX];
+
+				CASE_ANCHOR("rtl8189fs_sta: rxrec[%u] req=%u got=%u end=%u "
+					    "us=%u sta=0x%08x dctrl=0x%08x dcnt=%u\n",
+					    k, r->req, r->got, r->end, r->us,
+					    r->sta, r->dctrl, r->dcount);
+			}
+		}
 	}
 
 	/* A directed scan the peer did not answer in time: the wildcard shape is

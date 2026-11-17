@@ -3984,6 +3984,26 @@ struct lkpi_timer_stats {
 	/* which callbacks the refused arms belonged to (first four distinct) */
 	void		*fail_fn[4];
 	uint32_t	fail_fn_n[4];
+	/* Which timers never got an OS object at all (first four distinct
+	 * callbacks).  A timer whose creation failed is not "late": every
+	 * later arm on it is a no-op, so the stack step it drives - a scan
+	 * channel advance, a link timeout - simply never happens. */
+	void		*new_fail_fn[4];
+	uint32_t	new_fail_fn_n[4];
+	/* Where the refused creation was attempted from, and the CPU's interrupt
+	 * state at that moment.  The CMSIS adapter refuses to create a timer while
+	 * interrupts are masked (IRQ_Context() reports 1 for BASEPRI != 0 as well
+	 * as for an exception), so a caller that reaches timer_setup with a lock
+	 * held gets no timer at all - and every later arm on it is a no-op. */
+	void		*new_fail_ra[4];
+	uint32_t	new_fail_ra_n[4];
+	uint32_t	new_fail_primask;
+	uint32_t	new_fail_basepri;
+	uint32_t	new_fail_ipsr;
+	/* Which callbacks actually fired, so "the timer is armed and running"
+	 * and "the timer never existed" are two different readings. */
+	void		*fire_fn[6];
+	uint32_t	fire_fn_n[6];
 };
 
 void lkpi_timer_stats_get(struct lkpi_timer_stats *out);

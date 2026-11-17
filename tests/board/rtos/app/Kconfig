@@ -188,6 +188,51 @@ config STA_WINDOW_MS
 	  60000 so both ICMP sizes fit with the neighbour state sampled before
 	  and after.
 
+config STA_WATCH
+	bool "STA join watch: a one-second line with the vendor MLME and SDIO state"
+	default n
+	help
+	  The station case's wait loops print one compact line a second with
+	  the vendor MLME state (scan state, station state, join result), the
+	  SDIO engine's read/dispatch counters and the host glue's last RX
+	  record.  It is a bring-up instrument: on a passing image the same
+	  line is console time the join cannot afford, so it stays off in the
+	  delivery profiles.
+
+config STA_WATCH_MS
+	int "STA join watch period (ms)"
+	default 1000
+	range 200 5000
+	depends on STA_WATCH
+	help
+	  How often the watch line prints while the case waits for a BSS or
+	  for cfg80211's connected flag.
+
+config STA_DISPATCH_FORCE
+	bool "Polled dispatch: run the card's handler once per pump cycle"
+	default n
+	help
+	  The engine's poll cycle runs a function's handler when the card's
+	  CCCR pending word reports it.  A card that signals its function
+	  interrupt only as a DAT1 level leaves that word at zero, so the
+	  handler runs only when a card interrupt happens to be seen.  This
+	  option runs the handler once per cycle regardless, which is the
+	  shape a polled bring-up needs; it costs one claim per cycle even
+	  when the card has nothing to give, so delivery profiles leave it
+	  off.
+
+config STA_CONNECT_WAIT_MS
+	int "STA association wait (ms)"
+	default 20000
+	range 1000 120000
+	help
+	  How long the case waits for cfg80211 to mark the station connected
+	  after NL80211_CMD_CONNECT returns 0.  The vendor stack runs its own
+	  MLME (auth retries, assoc), and on this MCU the bus is a polled
+	  full-speed path, so the wait is a profile input rather than a
+	  constant: the diagnose arm raises it to tell "never joins" from
+	  "joined after the case gave up".
+
 config STA_HOLD_MS
 	int "STA post-verdict hold (ms): the link stays up for the reverse arm"
 	default 0

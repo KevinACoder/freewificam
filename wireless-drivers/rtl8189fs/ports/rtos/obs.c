@@ -68,6 +68,26 @@ rtl8189f_diag_get(struct rtl8189f_diag *out)
 	out->rx_crc_err = adapter->recvpriv.rx_largepacket_crcerr +
 	    adapter->recvpriv.rx_middlepacket_crcerr +
 	    adapter->recvpriv.rx_smallpacket_crcerr;
+	out->fw_state = (unsigned int)adapter->mlmepriv.fw_state;
+	out->to_join = (unsigned int)adapter->mlmepriv.to_join;
+	out->mlme_state = (unsigned int)adapter->mlmeextpriv.mlmext_info.state;
+	out->auth_seq = (unsigned int)adapter->mlmeextpriv.mlmext_info.auth_seq;
+	out->join_res = (unsigned int)adapter->mlmepriv.cur_network.join_res;
+	out->scan_state = (unsigned int)adapter->mlmeextpriv.sitesurvey_res.state;
+	out->scan_ch_idx =
+	    (unsigned int)adapter->mlmeextpriv.sitesurvey_res.channel_idx;
+	out->survey_timer_pending =
+	    (unsigned int)adapter->mlmeextpriv.survey_timer.timer.tl_pending;
+	out->survey_timer_expires =
+	    (unsigned int)adapter->mlmeextpriv.survey_timer.timer.expires;
+	out->link_timer_pending =
+	    (unsigned int)adapter->mlmeextpriv.link_timer.timer.tl_pending;
+	out->link_timer_expires =
+	    (unsigned int)adapter->mlmeextpriv.link_timer.timer.expires;
+	out->jiffies_now = (unsigned int)jiffies;
+	out->sdio_hisr = (unsigned int)hal->sdio_hisr;
+	out->sdio_himr = (unsigned int)hal->sdio_himr;
+	out->tx_pkts = (unsigned int)dvobj->traffic_stat.tx_pkts;
 	out->valid = 1u;
 }
 
