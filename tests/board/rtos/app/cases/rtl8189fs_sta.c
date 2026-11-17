@@ -275,10 +275,12 @@ case_rtl8189fs_sta_run(void)
 			    (unsigned)sdio_stats.io_extended,
 			    (unsigned)sdio_stats.errors);
 		CASE_ANCHOR("rtl8189fs_sta: scan timeout diag rx_pkts=%u rx_bytes=%u "
-			    "rx_drops=%u cmd=%u/%u txframe_free=%u txbuf_free=%u\n",
+			    "rx_drops=%u cmd=%u/%u txframe_free=%u txbuf_free=%u "
+			    "rx_fifo=%u recvbuf_free=%u recv_free=%u crc=%u icv=%u\n",
 			    vd.rx_pkts, vd.rx_bytes, vd.rx_drops,
 			    vd.cmd_issued, vd.cmd_done, vd.txframe_free,
-			    vd.txbuf_free);
+			    vd.txbuf_free, vd.rx_fifo, vd.recvbuf_free,
+			    vd.recv_free, vd.rx_crc_err, vd.rx_icv_err);
 	}
 
 	/* A directed scan the peer did not answer in time: the wildcard shape is
