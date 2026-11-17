@@ -20,6 +20,7 @@
 struct swd_console_block {
 	volatile uint32_t head;		/* total characters written */
 	uint32_t size;			/* SWD_CONSOLE_SIZE */
+	uint32_t boot;			/* bumped once per boot */
 	char data[SWD_CONSOLE_SIZE];	/* ring, head & (size - 1) */
 };
 

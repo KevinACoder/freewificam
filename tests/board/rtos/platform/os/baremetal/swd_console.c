@@ -8,6 +8,7 @@ void swd_console_init(void)
 {
 	g_swd_console.head = 0u;
 	g_swd_console.size = SWD_CONSOLE_SIZE;
+	g_swd_console.boot++;
 }
 
 void swd_console_putc(char c)
