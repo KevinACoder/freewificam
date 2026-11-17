@@ -60,6 +60,7 @@
 #include "linux80211/net.h"
 #include "linuxkpi_sdio.h"
 #include "rtl8189fs_diag.h"
+#include "skbuff/skbuff_pool.h"
 #include "FreeRTOS.h"
 #include "timers.h"
 #include "sdmmc_host_stm32f4_sdio_dbg.h"
@@ -130,6 +131,108 @@ extern unsigned int rtw_drv_log_level;
 
 static unsigned sta_log_lines;
 
+/*
+ * The card-interrupt round's one-shot reading: the host line's state, the
+ * card's own interrupt registers (only when the engine's probe is on) and the
+ * vendor's receive-stage counters.  It is printed when the line is armed and
+ * when a wait ends, never per second: the per-second watch keeps the timeline
+ * cheap on the 8 KiB console ring, and a boot's full reading is still a single
+ * grep.  The reading is three messages (host/card/stage) because one console
+ * message is capped at 255 bytes and an overlong one is truncated.
+ *
+ * What each group answers:
+ *   irq=      entries/sdioit/spurious/dat1-high/self-poke.  `entries` with
+ *             `sdioit` is the controller's word that the card's DAT1 event
+ *             reached the CPU; `spurious` would be the line firing for another
+ *             source; `self-poke` is the level-held fallback firing.
+ *   mask/     the controller's own interrupt mask and data control: SDIOITIE in
+ *   dctrl     the mask and SDIOEN in DCTRL are the two bits the detector needs.
+ *   card      the card's HIMR/HISR and CCCR IEN/pending plus the receive length,
+ *             i.e. whether the card ever asked (its HAL copy is not the
+ *             register).
+ *   stage     the vendor's receive path, one counter per check; the first
+ *             counter that stays flat is the check a frame died at.
+ *   skb       the pool's used/high/fail counts: a receive drop by allocation
+ *             failure shows here, not in the driver's counters.
+ */
+static void
+sta_card_line(const char *where)
+{
+	struct lkpi_sdio_card_probe cp;
+	struct lkpi_sdio_bus_info bus;
+	struct lkpi_sdio_stats ss;
+	struct lkpi_skb_pool_stats ps;
+	struct f4sdio_dbg f4;
+	struct rtl8189f_diag vd;
+
+	(void)memset(&cp, 0, sizeof(cp));
+	(void)memset(&bus, 0, sizeof(bus));
+	(void)memset(&ps, 0, sizeof(ps));
+	lkpi_sdio_stats_get(&ss);
+	lkpi_sdio_card_probe_get(&cp);
+	lkpi_sdio_bus_info_get(&bus);
+	lkpi_skb_pool_stats(&ps);
+	f4sdio_dbg_get(&f4);
+	rtl8189f_diag_get(&vd);
+	/* One message is capped at ULOG_MAX_MESSAGE_LENGTH (256): the console
+	 * truncates an overlong line instead of wrapping it, so the reading is
+	 * split into three lines that each fit.  The 255-byte cap is a platform
+	 * fact, not this case's choice. */
+	CASE_ANCHOR("rtl8189fs_sta: %s host bus=%u/%ukHz irq=%u/%u/%u/%u/%u "
+		    "masked=%u mask=0x%08x dctrl=0x%08x dat1=%u armed=%u tx=%u/%u\n",
+		    where, bus.bus_width, (unsigned)(bus.clock_hz / 1000u),
+		    f4.irq_entries, f4.irq_sdioit, f4.irq_spurious,
+		    f4.dat1_high, f4.self_poke, f4.irq_masked_xfer,
+		    f4.mask, f4.dctrl, f4.dat1_level, f4.irq_armed,
+		    f4.tx_xfers, f4.tx_ok);
+	CASE_ANCHOR("rtl8189fs_sta: %s card himr=0x%x hisr=0x%x ien=0x%x "
+		    "pend=0x%x rxl=%u cok=%u cfail=%u drv rx=%u/%u fifo=%u "
+		    "free=%u/%u\n",
+		    where, cp.himr, cp.hisr, cp.cccr_ien, cp.cccr_pending,
+		    cp.rx_req_len, cp.ok, cp.fails, vd.rx_pkts, vd.rx_drops,
+		    vd.rx_fifo, vd.recvbuf_free, vd.recv_free);
+	CASE_ANCHOR("rtl8189fs_sta: %s stage=%u/%u/%u/%u/%u/%u/%u/%u/%u/%u "
+		    "skb=%u/%u/%u/%u/%u notify=%u wake=%u\n",
+		    where, vd.rx_stage_core, vd.rx_stage_pre, vd.rx_stage_ver,
+		    vd.rx_stage_mgmt, vd.rx_stage_ctrl, vd.rx_stage_data,
+		    vd.rx_stage_unknown, vd.rx_stage_post,
+		    vd.rx_stage_indicate, vd.rx_stage_ind_err,
+		    ps.skb_used, ps.skb_high, ps.alloc_fail, ps.fail_hdr,
+		    ps.fail_small, ss.card_notify, ss.irq_wakes);
+}
+
+/* The last RX-FIFO read's head, 16 bytes a line: the card's receive status
+ * descriptor followed by the first bytes of the 802.11 frame.  One record per
+ * boot is enough to tell "the FIFO was read but not from where the driver
+ * thinks" from "the frame really starts there". */
+static void
+sta_fifo_last(const char *where)
+{
+	struct f4sdio_dbg f4;
+	const struct f4sdio_fifo_rec *r;
+	unsigned int n, k;
+
+	f4sdio_dbg_get(&f4);
+	n = f4.fifo_rec_head;
+	if (n == 0u)
+		return;
+	r = &f4.fifo[(n - 1u) % F4SDIO_FIFO_REC_MAX];
+	CASE_ANCHOR("rtl8189fs_sta: %s fifo req=%u got=%u copied=%u end=%u "
+		    "st=%u zero=%u first=%u\n", where, r->req, r->got,
+		    r->copied, r->end, r->status, r->zero, r->first);
+	for (k = 0u; k < F4SDIO_FIFO_HEAD; k += 16u) {
+		CASE_ANCHOR("rtl8189fs_sta: %s fifo[%u] "
+			    "%02x%02x%02x%02x%02x%02x%02x%02x"
+			    "%02x%02x%02x%02x%02x%02x%02x%02x\n",
+			    where, k, r->head[k + 0u], r->head[k + 1u],
+			    r->head[k + 2u], r->head[k + 3u], r->head[k + 4u],
+			    r->head[k + 5u], r->head[k + 6u], r->head[k + 7u],
+			    r->head[k + 8u], r->head[k + 9u], r->head[k + 10u],
+			    r->head[k + 11u], r->head[k + 12u], r->head[k + 13u],
+			    r->head[k + 14u], r->head[k + 15u]);
+	}
+}
+
 #if defined(CONFIG_STA_WATCH) && CONFIG_STA_WATCH
 /*
  * The one line a boot needs when the join stalls: how far the vendor MLME
@@ -137,6 +240,10 @@ static unsigned sta_log_lines;
  * events are arriving (pending reads vs nonzero, handler dispatches), and
  * what the last CMD53 read actually returned.  One per second, bounded by
  * the wait loops' own length; the delivery images compile it out.
+ *
+ * The interrupt round appends the card line's short form (the controller's
+ * counters and mask plus the stage counters' four head marks) so the timeline
+ * says when the line started firing; the run's runaway guard lives here too.
  */
 static void
 sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
@@ -144,8 +251,8 @@ sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
 	struct lkpi_sdio_stats ss;
 	struct rtl8189f_diag vd;
 	struct f4sdio_dbg f4;
-	struct f4sdio_rx_rec *rec = NULL;
-	struct lkpi_timer_stats ts;
+	static unsigned int last_sdioit;
+	static int first_irq_done;
 	int prog;
 
 	prog = lkpi_nl80211_assoc_progress(dev, RTL8189FS_SSID,
@@ -153,31 +260,37 @@ sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
 	lkpi_sdio_stats_get(&ss);
 	rtl8189f_diag_get(&vd);
 	f4sdio_dbg_get(&f4);
-	lkpi_timer_stats_get(&ts);
-	if (f4.rec_head != 0u)
-		rec = &f4.rec[(f4.rec_head - 1u) % F4SDIO_RX_REC_MAX];
-	CASE_INFO("rtl8189fs_sta: watch %s ms=%u prog=%d fw=0x%x join=%d mlme=0x%x "
-		  "scan=%u/%u io=%u/%u err=%u pend=%u/%u cb=%u irq=%u/%u "
-		  "rx=%u,%u,%u,%u/%u tx=%u,%u last=%u/%u/%u/%u "
-		  "tmr=%u/%u/%u/%u/%u claim=%s/%ums/%s/%s/%s "
-		  "tmrfn=%p,%u/%p,%u/%p,%u nf=%p,%u/%p,%u\n",
+
+	/* the first card interrupt is an event, not a sample: name the moment */
+	if ((f4.irq_sdioit != 0u) && !first_irq_done) {
+		first_irq_done = 1;
+		sta_card_line("irq first");
+	}
+	/* A line that keeps firing without the handler draining the card would
+	 * hold the pump at cycle rate; one boot is lost rather than the board. */
+	if ((f4.irq_sdioit - last_sdioit) > 2000u) {
+		(void)lkpi_sdio_pump_irq_set(false);
+		CASE_ANCHOR("rtl8189fs_sta: irq runaway %s it=%u d=%u mask=0x%08x\n",
+			    where, f4.irq_sdioit,
+			    f4.irq_sdioit - last_sdioit, f4.mask);
+	}
+	last_sdioit = f4.irq_sdioit;
+
+	CASE_INFO("rtl8189fs_sta: watch %s ms=%u prog=%d fw=0x%x join=%d "
+		  "mlme=0x%x scan=%u/%u io=%u/%u err=%u pend=%u/%u cb=%u "
+		  "it=%u/%u/%u/%u/%u m=0x%08x st=%u/%u/%u/%u pk=%u/%u "
+		  "claim=%s/%ums/%s/%s/%s\n",
 		  where, waited_ms, prog, vd.fw_state, (int)vd.join_res,
 		  vd.mlme_state, vd.scan_state, vd.scan_ch_idx,
 		  ss.io_direct, ss.io_extended, ss.errors,
 		  ss.pending_nonzero, ss.pending_reads, ss.callbacks,
-		  f4.irq_entries, f4.irq_sdioit,
-		  f4.rx_count_end, f4.rx_idle_end, f4.rx_zero, f4.rx_err,
-		  f4.rx_bytes, f4.tx_xfers, f4.tx_ok,
-		  rec ? rec->req : 0u, rec ? rec->got : 0u,
-		  rec ? rec->end : 0u, rec ? rec->us : 0u,
-		  ts.setups, ts.mods, ts.fires, ts.new_fail, ts.mod_fail,
+		  f4.irq_sdioit, f4.irq_spurious, f4.dat1_level,
+		  f4.self_poke, f4.irq_masked_xfer, f4.mask,
+		  vd.rx_stage_core, vd.rx_stage_ver, vd.rx_stage_post,
+		  vd.rx_stage_indicate, vd.rx_pkts, vd.rx_drops,
 		  lkpi_sdio_claim_owner(), lkpi_sdio_claim_held_ms(),
 		  lkpi_sdio_claim_op(), lkpi_sdio_pump_stage(),
-		  lkpi_sdio_pump_state(),
-		  ts.fire_fn[0], ts.fire_fn_n[0], ts.fire_fn[1], ts.fire_fn_n[1],
-		  ts.fire_fn[2], ts.fire_fn_n[2],
-		  ts.new_fail_fn[0], ts.new_fail_fn_n[0],
-		  ts.new_fail_fn[1], ts.new_fail_fn_n[1]);
+		  lkpi_sdio_pump_state());
 }
 #else
 static void
@@ -328,6 +441,22 @@ case_rtl8189fs_sta_run(void)
 		return 2;
 	}
 
+	/*
+	 * The card interrupt is armed after the interface is up: the driver has
+	 * claimed the function and written the card's own interrupt mask by then,
+	 * so a card event that is already waiting reaches the freshly armed line
+	 * instead of being lost against an unconfigured card.  The card-side probe
+	 * runs from the pump under the claim; this call only enables it.
+	 */
+#if defined(CONFIG_STA_PUMP_IRQ) && CONFIG_STA_PUMP_IRQ
+	rc = lkpi_sdio_pump_irq_set(true);
+	CASE_ANCHOR("rtl8189fs_sta: irq mode rc=%d\n", rc);
+#endif
+#if defined(CONFIG_STA_CARD_PROBE) && CONFIG_STA_CARD_PROBE
+	lkpi_sdio_card_probe_set(true);
+#endif
+	sta_card_line("irq arm");
+
 	wdev = dev->ieee80211_ptr;
 	if (wdev == NULL || wdev->wiphy == NULL) {
 		CASE_ANCHOR("rtl8189fs_sta: FAIL no wireless_dev\n");
@@ -474,6 +603,8 @@ case_rtl8189fs_sta_run(void)
 
 	/* A directed scan the peer did not answer in time: the wildcard shape is
 	 * the bench's fallback, the same one the AC 7260 round uses. */
+	sta_card_line("scan timeout");
+	sta_fifo_last("scan timeout");
 	rc = lkpi_nl80211_trigger_scan(dev, NULL, 0);
 	CASE_ANCHOR("rtl8189fs_sta: scan wildcard rc=%d\n", rc);
 	if (rc != 0) {
@@ -503,6 +634,8 @@ found:
 			    (unsigned)sdio_stats.io_extended,
 			    (unsigned)sdio_stats.errors);
 	}
+	sta_card_line("bss");
+	sta_fifo_last("bss");
 
 	/* --- association: through the real nl80211 handler ------------------ */
 
@@ -519,6 +652,8 @@ found:
 	if (rc != 0) {
 		CASE_ANCHOR("rtl8189fs_sta: FAIL connect timeout waited_ms=%u\n",
 			    connected_ms);
+		sta_card_line("conn timeout");
+		sta_fifo_last("conn timeout");
 		(void)lkpi_nl80211_disconnect(dev, 3u);
 		return 8;
 	}

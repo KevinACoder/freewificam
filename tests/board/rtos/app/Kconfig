@@ -221,6 +221,31 @@ config STA_DISPATCH_FORCE
 	  when the card has nothing to give, so delivery profiles leave it
 	  off.
 
+config STA_PUMP_IRQ
+	bool "Arm the SDIO card interrupt (DAT1) in the station case"
+	default n
+	help
+	  Calls the engine's card-interrupt arm once the driver has claimed the
+	  card: the host glue enables the controller's SDIO interrupt (DAT1
+	  sampling), the engine's pump waits on card events instead of a fixed
+	  period, and a handler runs when the card asks.  This is the
+	  event-driven shape the GT host runs; a profile that leaves it off is
+	  the polled bring-up this line has measured so far.  The arm is a
+	  runtime call, not a compile-time shape: the same image can be tested
+	  both ways only by not selecting this.
+
+config STA_CARD_PROBE
+	bool "Read the card's own interrupt registers once a second"
+	default n
+	help
+	  The engine reads the card's HIMR (function 1, 0x14), HISR (0x18), the
+	  receive length (0x1c) and CCCR IEN/INT PENDING (function 0, 0x04/0x05)
+	  under the pump's bus claim, once a second, and the station watch line
+	  prints them.  Those reads are what separate "the card never asked" from
+	  "the card asked and the host line was not listening": the driver's HAL
+	  copy of HIMR is not the card's register.  Diagnostic-only; the probe
+	  costs a handful of CMD52s per second.
+
 config STA_CONNECT_WAIT_MS
 	int "STA association wait (ms)"
 	default 20000

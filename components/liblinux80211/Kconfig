@@ -290,6 +290,20 @@ config RTL8189FS_BR_EXT
 	  The GT Kbuild itself leaves this off: it calls br_fdb_find_port(),
 	  which only the Linux bridge module exports.
 
+config RTL8189FS_DBG_COUNTER
+	bool "CONFIG_DBG_COUNTER (vendor receive-stage counters)"
+	default n
+	help
+	  The vendor's DBG_COUNTER macros and the per-adapter rx_logs block:
+	  frames entering the receive function, the frame classes and the
+	  version/fragment/port-control rejects, all counted in place with no
+	  console output.  This is the stage decoder for "the card handed the
+	  driver a frame and rx_pkts never moved": with it, the counters name
+	  the check the frame died at instead of a log level raised for the
+	  boot (which changes the scan's timing on a 115200 console).  Counters
+	  only; the driver's behaviour is unchanged.  Off in every delivery
+	  image.
+
 endmenu
 
 config LKPI_CENSUS

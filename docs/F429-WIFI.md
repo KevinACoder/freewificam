@@ -339,13 +339,14 @@ SDMMC layer is imported byte-faithfully; the fsl card service enumerates the
 card and the vendor stack attaches over it.  PB13 (the AP6181's `WIFI_EN`) is
 held low for this line, so the other card stays off the shared bus.
 
-Four images build and link against the 1 MiB flash:
+Six images build and link against the 1 MiB flash:
 
 | profile | cases | size |
 |---|---|---:|
 | `stm32f429-rtl8189fs-probe` | `tick f429_sdio_probe` | 40,112 B |
 | `stm32f429-rtl8189fs-attach` | `tick rtl8189fs_sdio` | 678,476 B |
-| `stm32f429-rtl8189fs-station` | `tick rtl8189fs_sta` | 729,588 B |
+| `stm32f429-rtl8189fs-station` | `tick rtl8189fs_sta` | 735,988 B |
+| `stm32f429-rtl8189fs-station-irq` | `tick rtl8189fs_sta`, card interrupt armed + card-side probe | 736,868 B |
 | `stm32f429-rtl8189fs-write` | `tick f429_sdio_probe f429_sdio_write_probe` | 44,108 B |
 | `stm32f429-rtl8189fs-throughput` | `tick rtl8189fs_sta rtl8189fs_throughput` | 741,404 B |
 
@@ -359,10 +360,40 @@ never sends (leaving TXACT up and every later transfer failing), and a byte-mode
 read never reaches DLEN because the card stops when it has sent what it has,
 which left the data path in RXACT and lost the frames it had delivered.
 
-Scan and association are **not claimed**.  The station image reaches
-association on some cold boots and times out before it on most of them
-(observed 1 of 8), which is not the 2-of-2 a claim needs; the open question is
-the relationship between the RX FIFO's reported length, the card-interrupt
-count and the number of transfers that actually return bytes.  Until that is
-answered the honest statement is: the write path is measured, the scan is
+The card interrupt is a separate mechanism from the data path, and it is now
+armed and measured: `stm32f429-rtl8189fs-station-irq` enables the controller's
+DAT1 sampling (`SDIO_DCTRL.SDIOEN`), arms `SDIO_MASK.SDIOITIE` and lets the
+engine's pump wait on card events instead of the poll period; the ISR stands the
+request down and the pump re-arms it after the handler has cleared the card's
+own source, which is the order the reference manual gives.  On two cold boots
+the host counted `irq=37/37` and `11/11` (entries/with-SDIOIT, no spurious), the
+engine's callback and wake counts matched one-for-one, and the card-side reads
+taken under the bus claim agreed: `HIMR=0x3`, `HISR=0x1` (receive request),
+`CCCR IEN=0x3`, function-1 pending, 509 bytes offered in the receive FIFO.  A
+control boot with the line left unarmed ran the same scan and never entered the
+ISR, which is what makes the counter evidence mean something.
+
+Two earlier readings were wrong and are withdrawn.  The receive FIFO does hand
+the driver valid frames: the 24-byte card status descriptor plus a 32-byte
+driver-info area, with a broadcast beacon frame starting at offset 56
+(`80 00 00 00 ff ff ff ff`), all visible in the host glue's 64-byte record of an
+RX-FIFO read.  And `rx_pkts` staying zero does not mean frames never entered the
+driver: the vendor's `validate_recv_frame()` deliberately returns failure for
+management frames after handling them ("only data frame return _SUCCESS"), so
+`recv_func()` never reaches the step that increments `rx_pkts`.  With the
+receive-stage counters compiled in, a scan boot shows the management counter
+tracking the frames that arrive while `rx_pkts` stays at zero, which is the
+counter's definition rather than a drop.
+
+Scan and association are still **not claimed**.  The station image reaches
+association on some cold boots and times out before it on most of them (two of
+four boots with the line left unarmed found the BSS, none of three
+interrupt-armed boots did),
+which is not the 2-of-2 a claim needs.  The open questions are the scan's
+timing (whether arming the card interrupt perturbs the channel walk), the
+association path after `start auth`, and one unexplained count: a scan boot
+counted 15,566 management frames while the host glue recorded only 20 RX-FIFO
+reads, so either the vendor counter is not per received frame or a receive
+buffer is parsed more than once.  Until those are answered the honest statement
+is: the write path and the card interrupt are measured, the scan is
 intermittent, association is not established.

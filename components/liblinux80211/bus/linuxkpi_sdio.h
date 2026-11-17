@@ -50,7 +50,47 @@ struct lkpi_sdio_stats {
 	unsigned int	pending_nonzero;/* ones that reported work */
 	unsigned int	dispatch_pending;/* handlers run off the pending word */
 	unsigned int	dispatch_look;	/* handlers run off the card line */
+	/* The wake chain's own two links, which the four counts above cannot
+	 * separate: `card_notify` is the backend's interrupt upcall reaching
+	 * the engine (the controller's ISR ran and called the card callback),
+	 * and `irq_wakes` is the pump classifying a wake as that call rather
+	 * than as its own backstop timeout.  A line that is armed but never
+	 * fires leaves both at zero; a line that fires but whose wake is lost
+	 * shows `card_notify` growing with `irq_wakes` flat. */
+	unsigned int	card_notify;	/* ISR-to-engine card wake calls */
+	unsigned int	irq_wakes;	/* pump wakes classified as card events */
 };
+
+/*
+ * What the card itself says, read over the bus while the pump holds the claim.
+ *
+ * The host's counters say whether the line was armed and whether it fired; only
+ * the card's own registers say whether it ever wanted to.  HIMR is the mask the
+ * driver wrote (its HAL copy and the card's are two different things), HISR is
+ * the pending event the card asserts DAT1 for, CCCR IEN is what sdio_claim_irq
+ * wrote, CCCR INT PENDING is the function-level word the pump dispatches on, and
+ * RX0_REQ_LEN is how many bytes the card's receive FIFO holds right now.  All of
+ * these are reads; none clears the card's state.
+ *
+ * The probe runs at most once a second, under the claim, so it neither perturbs
+ * the pump's timing materially nor touches the bus from a thread that does not
+ * own it.
+ */
+struct lkpi_sdio_card_probe {
+	unsigned int	ok;		/* reads that completed */
+	unsigned int	fails;		/* reads refused by the bus */
+	unsigned int	himr;		/* function 1, 0x14: the card's mask */
+	unsigned int	hisr;		/* function 1, 0x18: pending events */
+	unsigned int	cccr_ien;	/* function 0, 0x04: interrupt enable */
+	unsigned int	cccr_pending;	/* function 0, 0x05: which function wants */
+	unsigned int	rx_req_len;	/* function 1, 0x1c: FIFO bytes waiting */
+	uint64_t	stamp_ns;	/* when the last complete probe finished */
+};
+
+void	lkpi_sdio_card_probe_set(bool on);
+bool	lkpi_sdio_card_probe_enabled(void);
+/* Snapshot of the last probe; zeroed when no probe has completed. */
+void	lkpi_sdio_card_probe_get(struct lkpi_sdio_card_probe *out);
 
 /*
  * Bring the card up and hand it to the registered drivers: enumerate through the

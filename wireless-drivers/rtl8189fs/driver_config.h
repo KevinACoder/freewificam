@@ -117,6 +117,16 @@
 #if CONFIG_RTL8189FS_BR_EXT
 #define CONFIG_BR_EXT			1
 #endif
+/*
+ * The receive-stage counters.  A diagnostic face only: DBG_COUNTER adds the
+ * per-adapter rx_logs block and one increment at each step of the vendor's
+ * receive path, which is what names the check a frame died at when the card
+ * handed it over and rx_pkts never moved.  The counter's default (off) is the
+ * GT build's answer.
+ */
+#if CONFIG_RTL8189FS_DBG_COUNTER
+#define CONFIG_DBG_COUNTER		1
+#endif
 
 /* --- the two unconditional autoconf answers ------------------------------
  *

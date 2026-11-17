@@ -38,6 +38,21 @@ struct rtl8189f_diag {
 	unsigned int rx_dbg_ampdu_drop;	/* dbg_rx_ampdu_drop_count */
 	unsigned int rx_icv_err;	/* hardware decryption failures */
 	unsigned int rx_crc_err;	/* large+middle+small packet CRC */
+	/* The vendor's receive-stage counters (CONFIG_DBG_COUNTER, diagnostic
+	 * faces only).  One frame is counted at each check it must pass, so the
+	 * counter that stops growing names the check the frame died at: the FIFO
+	 * reads and these are the layer between the bus and the netdev.  All
+	 * zero when the face is off. */
+	unsigned int rx_stage_core;	/* frames entering recv_func */
+	unsigned int rx_stage_pre;	/* recv_func_prehandle entered */
+	unsigned int rx_stage_ver;	/* 802.11 version check refused */
+	unsigned int rx_stage_mgmt;
+	unsigned int rx_stage_ctrl;
+	unsigned int rx_stage_data;
+	unsigned int rx_stage_unknown;
+	unsigned int rx_stage_post;	/* past prehandle, into decrypt/port */
+	unsigned int rx_stage_indicate;	/* delivered to the net stack */
+	unsigned int rx_stage_ind_err;	/* delivery refused */
 	/* Where a join stopped.  The station case's wait only sees
 	 * cfg80211's connected flag, so these read the vendor's own MLME: the
 	 * scan state, the station state machine (0x200 auth, 0x2000 assoc),

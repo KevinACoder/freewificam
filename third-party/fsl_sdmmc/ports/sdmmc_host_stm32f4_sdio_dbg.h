@@ -39,9 +39,12 @@ struct f4sdio_rx_rec {
 /* An RX-FIFO port read (CMD53 device 7), the only transfer that carries the
  * card's received frames.  Its size and first bytes say whether the card ever
  * handed the host frame data at all, which no driver counter can answer once
- * the driver's own parser has dropped it. */
+ * the driver's own parser has dropped it.  The head covers the card's receive
+ * status descriptor (24 B) and the first bytes of the 802.11 frame behind it,
+ * so the frame-control byte and the descriptor's own length/offset fields can
+ * be read off a single record. */
 #define F4SDIO_FIFO_REC_MAX	4u
-#define F4SDIO_FIFO_HEAD	24u
+#define F4SDIO_FIFO_HEAD	64u
 
 struct f4sdio_fifo_rec {
 	uint32_t	req;
@@ -59,6 +62,17 @@ struct f4sdio_dbg {
 	uint32_t	irq_sdioit;	/* entries that saw SDIOIT */
 	uint32_t	irq_spurious;	/* entries without SDIOIT */
 	uint32_t	dat1_high;	/* ISR samples with PC9 (DAT1) high */
+	/* The card-interrupt line's control state, sampled at the points that
+	 * change it.  A line that was never armed shows up here before any
+	 * counter does: `mask` without SDIOITIE or `sdioen` without DCTRL[11]
+	 * means the detector was not listening, whatever the card did. */
+	uint32_t	irq_armed;	/* engine asked for card interrupts */
+	uint32_t	irq_masked_xfer;/* transfers that took the line down */
+	uint32_t	mask;		/* SDIO->MASK at the last sample */
+	uint32_t	dctrl;		/* SDIO->DCTRL at the last sample */
+	uint32_t	sta;		/* SDIO->STA at the last sample */
+	uint32_t	dat1_level;	/* PC9 at the last sample: 1 high, 0 low */
+	uint32_t	self_poke;	/* level-held line re-notified in software */
 	uint32_t	rx_xfers;
 	uint32_t	rx_bytes;
 	uint32_t	rx_count_end;

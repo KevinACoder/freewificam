@@ -266,6 +266,77 @@ static uint32_t f4sdio_signal_line_status(sdmmchost_t *host, uint32_t signalLine
 
 static struct sdmmc_host_dev *s_f4sdio_irq_dev;
 
+/*
+ * The card-interrupt line, armed by the engine's pump_irq_set() (the engine's
+ * card_irq_mode op): the one runtime state this glue keeps for it.
+ *
+ * The reference manual's ordering is what the whole section implements: the
+ * card's in-band interrupt is detected on DAT1 only while DCTRL[11] (SDIOEN) is
+ * set; a detected interrupt sets STA.SDIOIT, and SDIO_MASK.SDIOITIE gates the
+ * request; serving it is "disable the request, clear the card's source, clear
+ * SDIOIT, re-enable the request".  The service step is a bus transfer, which
+ * belongs to the pump thread (the ISR must not touch the bus), so the ISR only
+ * stands the request down and wakes the pump; the pump's re-arm is the step
+ * that clears SDIOIT and re-enables the request.
+ */
+static bool s_f4sdio_irq_armed;
+
+/* DAT1 is PC9 (sdio_board.c); the card holds it low while it wants service,
+ * and the socket's only pull-up is the pin's internal one. */
+static bool f4sdio_dat1_low(void)
+{
+	return (GPIOC->IDR & (1UL << 9U)) == 0U;
+}
+
+/* The short critical section the MASK read-modify-writes need: a thread that
+ * re-enables the request can otherwise lose the ISR's mask between its read and
+ * its write, leaving a level-held line enabled while the pump is not looking. */
+static uint32_t f4sdio_crit_enter(void)
+{
+	uint32_t primask = __get_PRIMASK();
+
+	__disable_irq();
+	return primask;
+}
+
+static void f4sdio_crit_exit(uint32_t primask)
+{
+	__set_PRIMASK(primask);
+}
+
+static void f4sdio_sample_state(void)
+{
+	s_f4dbg.mask = SDIO->MASK;
+	s_f4dbg.dctrl = SDIO->DCTRL;
+	s_f4dbg.sta = SDIO->STA;
+	s_f4dbg.dat1_level = f4sdio_dat1_low() ? 0U : 1U;
+	s_f4dbg.irq_armed = s_f4sdio_irq_armed ? 1U : 0U;
+}
+
+/*
+ * The line is level held and the detector samples it during the interrupt
+ * periods only, so a set flag can be cleared by an unrelated transfer without
+ * the level ever re-latching it.  This is the software restatement of "the card
+ * is still asking", and it only fires in exactly that lost case: armed, DAT1
+ * low, flag clear.  The pump's next cycle then services the card; if the
+ * handler clears the card's source, DAT1 goes high and this stops.
+ */
+static void f4sdio_soft_poke(void)
+{
+	const sdio_card_int_t *rec;
+
+	if (!s_f4sdio_irq_armed)
+		return;
+	if ((s_f4sdio_irq_dev == NULL) ||
+	    (s_f4sdio_irq_dev->card_int_rec == NULL))
+		return;
+	rec = (const sdio_card_int_t *)s_f4sdio_irq_dev->card_int_rec;
+	if (rec->cardInterrupt == NULL)
+		return;
+	s_f4dbg.self_poke++;
+	rec->cardInterrupt(rec->userData);
+}
+
 static status_t f4sdio_card_int_init(sdmmchost_t *host, void *sdioInt)
 {
 	struct sdmmc_host_dev *dev = (struct sdmmc_host_dev *)host->dev;
@@ -281,40 +352,82 @@ static status_t f4sdio_card_int_init(sdmmchost_t *host, void *sdioInt)
 
 static void f4sdio_card_enable_int(sdmmchost_t *host, bool enable)
 {
+	uint32_t primask;
+	bool first;
+
 	(void)host;
-	if (enable) {
-		/* Arm the card's DAT1 line and the controller's SDIO interrupt. */
-		SDIO->ICR = SDIO_FLAG_SDIOIT;
-		SDIO->MASK |= SDIO_IT_SDIOIT;
-		sdio_board_irq_enable(true);
-	} else {
+
+	if (!enable) {
+		primask = f4sdio_crit_enter();
 		SDIO->MASK &= ~SDIO_IT_SDIOIT;
+		s_f4sdio_irq_armed = false;
+		f4sdio_crit_exit(primask);
 		sdio_board_irq_enable(false);
+		f4sdio_sample_state();
+		return;
 	}
+
+	first = !s_f4sdio_irq_armed;
+	primask = f4sdio_crit_enter();
+	/*
+	 * SDIOEN is what makes the peripheral sample DAT1 at all.  The byte-mode
+	 * read path used to clear it at the end of every FIFO read, so even an
+	 * armed mask would have listened only between two of those transfers.
+	 */
+	SDIO->DCTRL |= SDIO_DCTRL_SDIOEN;
+	if (first || !f4sdio_dat1_low()) {
+		/* A stale flag from before the line was armed would fire as soon as
+		 * the request is enabled; clear it only when the card is not
+		 * holding the line, which is the manual's order. */
+		SDIO->ICR = SDIO_FLAG_SDIOIT;
+	}
+	SDIO->MASK |= SDIO_IT_SDIOIT;
+	s_f4sdio_irq_armed = true;
+	f4sdio_crit_exit(primask);
+
+	sdio_board_irq_enable(true);
+
+	/* The card may already be holding the line with no flag to re-latch. */
+	if (f4sdio_dat1_low() && (SDIO->STA & SDIO_FLAG_SDIOIT) == 0U)
+		f4sdio_soft_poke();
+	f4sdio_sample_state();
 }
 
 void SDIO_IRQHandler(void)
 {
+	const sdio_card_int_t *rec;
 	uint32_t sta = SDIO->STA;
+	uint32_t primask;
 
 	s_f4dbg.irq_entries++;
+	s_f4dbg.sta = sta;
+	s_f4dbg.dat1_level = f4sdio_dat1_low() ? 0U : 1U;
+
 	if ((sta & SDIO_FLAG_SDIOIT) == 0U) {
 		s_f4dbg.irq_spurious++;
 		return;
 	}
 
 	s_f4dbg.irq_sdioit++;
-	if ((GPIOC->IDR & (1UL << 9U)) != 0U)
+	if (s_f4dbg.dat1_level != 0U)
 		s_f4dbg.dat1_high++;
-	SDIO->ICR = SDIO_FLAG_SDIOIT;
-	if ((s_f4sdio_irq_dev != NULL) &&
-	    (s_f4sdio_irq_dev->card_int_rec != NULL)) {
-		const sdio_card_int_t *rec =
-			(const sdio_card_int_t *)s_f4sdio_irq_dev->card_int_rec;
 
-		if (rec->cardInterrupt != NULL)
-			rec->cardInterrupt(rec->userData);
-	}
+	/*
+	 * Stand the request down.  Clearing SDIOIT here would be premature: the
+	 * card's own source is cleared later, by the handler on the pump thread,
+	 * and the manual puts the flag clear after that.  A line that is still
+	 * held when the pump re-arms re-asserts from the flag it kept.
+	 */
+	primask = f4sdio_crit_enter();
+	SDIO->MASK &= ~SDIO_IT_SDIOIT;
+	f4sdio_crit_exit(primask);
+
+	if ((s_f4sdio_irq_dev == NULL) ||
+	    (s_f4sdio_irq_dev->card_int_rec == NULL))
+		return;
+	rec = (const sdio_card_int_t *)s_f4sdio_irq_dev->card_int_rec;
+	if (rec->cardInterrupt != NULL)
+		rec->cardInterrupt(rec->userData);
 }
 
 void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable)
@@ -821,20 +934,38 @@ static bool s_f4sdio_irq_masked;
 
 static void f4sdio_irq_mask(void)
 {
+	uint32_t primask;
+
+	primask = f4sdio_crit_enter();
 	if ((SDIO->MASK & SDIO_IT_SDIOIT) != 0U) {
 		s_f4sdio_irq_masked = true;
 		SDIO->MASK &= ~SDIO_IT_SDIOIT;
+		s_f4dbg.irq_masked_xfer++;
 	}
+	f4sdio_crit_exit(primask);
 }
 
 static void f4sdio_irq_unmask(void)
 {
+	uint32_t primask;
+
 	if (!s_f4sdio_irq_masked)
 		return;
 
 	s_f4sdio_irq_masked = false;
-	SDIO->ICR = SDIO_FLAG_SDIOIT;
+	primask = f4sdio_crit_enter();
+	/*
+	 * Restore the request but leave STA.SDIOIT alone.  The flag may be a card
+	 * event that arrived while the line was down, and the manual clears it
+	 * only after the card's own source has been served - which is the pump's
+	 * re-arm step, not a transfer's tail.
+	 */
 	SDIO->MASK |= SDIO_IT_SDIOIT;
+	f4sdio_crit_exit(primask);
+
+	if (f4sdio_dat1_low() && (SDIO->STA & SDIO_FLAG_SDIOIT) == 0U)
+		f4sdio_soft_poke();
+	f4sdio_sample_state();
 }
 
 /* CMD53 argument fields (SDIO simplified spec 5.3): the function number is the
@@ -888,6 +1019,12 @@ static void f4sdio_fifo_record(const sdmmchost_data_t *data, status_t status)
 		s_f4dbg.fifo_bytes += req;
 	if (rec->zero != 0U)
 		s_f4dbg.fifo_zero++;
+	/*
+	 * An RX-FIFO read is the best in-band sample of the DAT1 line: the card
+	 * has just handed over frames, so "it is asserting" and "it is not" are
+	 * both meaningful here, and no extra bus access is involved.
+	 */
+	f4sdio_sample_state();
 }
 
 static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content)
@@ -902,7 +1039,14 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 	byte_mode = f4sdio_byte_mode(content->command);
 	byte_read = (content->data != NULL) && f4sdio_byte_read(content->data);
 
-	SDIO->ICR = 0xFFFFFFFFUL;
+	/*
+	 * Clear the command/data status this transfer may inherit, but never the
+	 * card-interrupt flag while the card line is armed: a card event that
+	 * arrived between the ISR's stand-down and this transfer would otherwise
+	 * be erased without the card's source being served.
+	 */
+	SDIO->ICR = s_f4sdio_irq_armed ?
+		    (0xFFFFFFFFUL & ~(uint32_t)SDIO_FLAG_SDIOIT) : 0xFFFFFFFFUL;
 
 	if (content->data != NULL) {
 		status = f4sdio_data_config(content->data, byte_mode, byte_read);
@@ -938,7 +1082,7 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 			else
 				s_f4dbg.tx_err++;
 		}
-		if (byte_read)
+		if (byte_read && !s_f4sdio_irq_armed)
 			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 		f4sdio_irq_unmask();
 		if (status != kStatus_Success) {
@@ -955,7 +1099,7 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 				   (unsigned)s_f4sdio_tx_dcount);
 			return status;
 		}
-		if (byte_read)
+		if (byte_read && !s_f4sdio_irq_armed)
 			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 	}
 

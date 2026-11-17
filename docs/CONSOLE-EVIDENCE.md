@@ -1575,3 +1575,52 @@ Not claimed, each with its reason:
   speed (12 Mbit/s signalling, bulk ceiling near 9.7), so the 6-7 Mbit/s UDP
   cell is the USB link being approached, not the radio; none of the four
   numbers transfers to the RK3568 line or a GT arm.
+## RTL8189FTV - F429 station, the SDIO card interrupt (2026-11-17)
+
+The same card as the station role above, but on the MCU's SDIO socket and with
+the in-band card interrupt armed instead of the poll period.  The console is
+read through the debug probe's RAM ring (the CH340 is dead on this bench), so
+the anchors are the firmware's own lines, not a UART capture.  One cold boot,
+in order:
+
+```
+rtl8189fs_sta: irq mode rc=0
+rtl8189fs_sta: irq arm host bus=4/24000kHz irq=0/0/0/0/0 masked=0
+    mask=0x00400000 dctrl=0x00000804 dat1=1 armed=1 tx=10683/10683
+rtl8189fs_sta: irq arm card himr=0x0 hisr=0x0 ien=0x0 pend=0x0 rxl=0 cok=0 cfail=0
+    drv rx=0/0 fifo=0 free=8/256
+rtl8189fs_sta: irq first host irq=37/37/0/17/0 masked=655 mask=0x00400000
+    dctrl=0x00000804 dat1=0 armed=1
+rtl8189fs_sta: irq first card himr=0x3 hisr=0x1 ien=0x3 pend=0x2 rxl=509
+    cok=475 cfail=0 drv rx=0/0 fifo=509 free=8/256
+rtl8189fs_sta: irq first stage=1969/0/0/1969/0/0/0/0/0/0 skb=8/8/0/0/0
+    notify=37 wake=37
+```
+
+`irq arm` is the state the case leaves behind: `mask=0x00400000` is the
+SDIOITIE bit, `dctrl` bit 11 is SDIOEN (the detector enable), `dat1=1` is the
+card not asking yet.  `irq first` is the first card interrupt: 37 ISR entries,
+all 37 with the controller's SDIOIT flag, 0 spurious; the engine's `notify` and
+`wake` counters equal the ISR count, and the card's own registers read back
+`HIMR=0x3`, `HISR=0x1` (receive request), `CCCR IEN=0x3`, function-1 pending,
+509 bytes offered.  A second cold boot repeated it with 11/11.  A control boot
+with `irq=0/0` on every sample line never entered the ISR at all, which is what
+the `irq entries`/`notify` counters are read against.
+
+Two console facts this round had to learn.  The arm line's first reading of the
+card is zeros: the probe runs from the pump after this call, so `irq arm card`
+is "before the first card-side read", not "the card said zero".  And a single
+log message is capped at 255 bytes (`ULOG_MAX_MESSAGE_LENGTH`), so the reading
+is split into `host`/`card`/`stage` lines of their own; an over-long line is
+truncated, not wrapped - which is why the first build of this instrument lost
+the `notify/wake` tail.
+
+The receive-stage line is the one that corrects an older reading.  In a scan
+boot the vendor's counters show management frames arriving and being parsed
+(`stage=.../0/0/15566/...`), while `rx_pkts` in the vendor's own diag stays zero
+- `validate_recv_frame()` returns failure for management frames by design, so
+the step that increments `rx_pkts` is never reached.  The 64-byte record of the
+last RX-FIFO read makes the same point from the bus side:
+`5d 01 04 84 00 00 0f 80 …` is the card's 24-byte status descriptor with a
+32-byte driver-info area, and `80 00 00 00 ff ff ff ff` at offset 56 is a
+broadcast beacon frame.

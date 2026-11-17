@@ -1,0 +1,59 @@
+# F429 station, card-interrupt arm: the 8189FTV attaches and the station case
+# runs the same scan/join/data attempts as stm32f429-rtl8189fs-station, with the
+# one causal difference this arm exists for: the controller's DAT1 card
+# interrupt is armed after the interface is up, and the polled dispatch is off.
+# The card-side probe and the vendor receive-stage counters are instruments, not
+# behaviour; they are what make the arm's verdict readable.
+#
+# Not a delivery profile: it prints a per-second watch and a one-shot card
+# reading, and it is the arm a "did the interrupt ever fire" verdict is written
+# from.
+#
+# The kernel and lwIP heaps are in the core board's SDRAM; the vendor stack's
+# static pools stay in SRAM.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_CASES="tick rtl8189fs_sta"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_CFG80211=y
+CONFIG_LIBLINUX80211_MAC80211=n
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_RTL8189FS=y
+CONFIG_LIBLINUX80211_NET_LWIP=y
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_F429_LWIP_SDRAM=y
+CONFIG_FREERTOS_HEAP_SIZE=4194304
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_LKPI_SKB_POOL_NUM=8
+CONFIG_LKPI_SKB_DATA_POOL_NUM=8
+CONFIG_LKPI_SKB_HEAP_HDR_MAX=64
+
+# The arm itself: card events wake the pump, and no handler runs on a cycle
+# where the card said nothing.
+CONFIG_STA_PUMP_IRQ=y
+CONFIG_STA_DISPATCH_FORCE=n
+
+# The instruments: the engine's card-side register probe every second, and the
+# vendor's receive-stage counters (counters only; no console output).
+CONFIG_STA_CARD_PROBE=y
+CONFIG_RTL8189FS_DBG_COUNTER=y
+
+# Two seconds keeps the extended watch line off the 8 KiB console ring's back
+# while still sampling the whole scan/join window.
+CONFIG_STA_WATCH=y
+CONFIG_STA_WATCH_MS=2000
+CONFIG_STA_CONNECT_WAIT_MS=20000
+
+CONFIG_RTL8189FS_MP=n
+CONFIG_RTL8189FS_P2P=n
+CONFIG_RTL8189FS_CONCURRENT=n
+CONFIG_RTL8189FS_POWER_SAVING=n
+CONFIG_RTL8189FS_NETIF_SG=n
+CONFIG_RTL8189FS_EFUSE_FILE=n
+CONFIG_RTL8189FS_LOAD_PHY_FILE=n

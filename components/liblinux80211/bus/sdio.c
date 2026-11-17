@@ -1901,6 +1901,109 @@ lkpi_sdio_has_handler(void)
 	return false;
 }
 
+/* --- the card-side interrupt probe ---------------------------------------
+ *
+ * The host's counters say whether the line was armed and whether the ISR ran;
+ * these reads say whether the card ever wanted to interrupt.  They run here,
+ * under the claim, because the previous round's attempt to read the card from
+ * the diagnostic path (a thread that does not own the bus) ended in a HardFault
+ * with a torn bus state.  Reads only: HIMR, HISR, CCCR IEN/pending and the
+ * receive length are all status, and reading them does not clear the card's
+ * pending event.
+ *
+ * The cadence is one probe a second: the probe is an instrument, not a service
+ * path, and the four-byte HIMR is four single-byte CMD52s on this card.
+ */
+#define LKPI_SDIO_PROBE_PERIOD_NS	1000000000ull	/* one second */
+
+static struct lkpi_sdio_card_probe lkpi_sdio_card_probe_state;
+static bool lkpi_sdio_card_probe_on;
+
+void
+lkpi_sdio_card_probe_set(bool on)
+{
+
+	lkpi_sdio_card_probe_on = on;
+}
+
+bool
+lkpi_sdio_card_probe_enabled(void)
+{
+
+	return lkpi_sdio_card_probe_on;
+}
+
+void
+lkpi_sdio_card_probe_get(struct lkpi_sdio_card_probe *out)
+{
+
+	if (out == NULL)
+		return;
+	*out = lkpi_sdio_card_probe_state;
+}
+
+static bool
+lkpi_sdio_card_read(unsigned int func, unsigned int addr, unsigned int *word,
+		    unsigned int bytes)
+{
+	unsigned int n;
+	unsigned int v = 0u;
+
+	for (n = 0u; n < bytes; n++) {
+		u8 b = 0u;
+		int st = lkpi_sdio_direct(func, addr + n, false, &b);
+
+		if (st != 0)
+			return false;
+		v |= (unsigned int)b << (8u * n);
+	}
+	*word = v;
+	return true;
+}
+
+static void
+lkpi_sdio_card_probe_run(void)
+{
+	struct lkpi_sdio_card_probe p;
+	unsigned int himr = 0u, hisr = 0u, ien = 0u, pend = 0u, rxl = 0u;
+	unsigned int ok = 0u, fails = 0u;
+
+	/* fresh values every probe: a refused read must not leave the previous
+	 * answer standing, or "the register says zero" and "the read failed"
+	 * would read the same on the console */
+	if (lkpi_sdio_card_read(1u, 0x14u, &himr, 4u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, 0x18u, &hisr, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(1u, 0x1cu, &rxl, 2u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(0u, 0x04u, &ien, 1u))
+		ok++;
+	else
+		fails++;
+	if (lkpi_sdio_card_read(0u, 0x05u, &pend, 1u))
+		ok++;
+	else
+		fails++;
+
+	p = lkpi_sdio_card_probe_state;
+	p.ok += ok;
+	p.fails += fails;
+	p.himr = himr;
+	p.hisr = hisr;
+	p.cccr_ien = ien;
+	p.cccr_pending = pend;
+	p.rx_req_len = rxl;
+	p.stamp_ns = lkpi_sdio_census_now();
+	lkpi_sdio_card_probe_state = p;
+}
+
 /*
  * One poll cycle, on the pump thread: claim the bus, read the card's pending
  * word, hand each pending function to its handler with the claim still held (the
@@ -1930,6 +2033,12 @@ lkpi_sdio_pump_cycle(bool card_irq)
 	c->claim_since_ns = t1;
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
+
+	/* the card's own interrupt registers, at most once a second */
+	if (lkpi_sdio_card_probe_on &&
+	    (lkpi_sdio_card_probe_state.stamp_ns == 0u ||
+	     t1 - lkpi_sdio_card_probe_state.stamp_ns >= LKPI_SDIO_PROBE_PERIOD_NS))
+		lkpi_sdio_card_probe_run();
 
 	/*
 	 * One round dispatches the functions the card reports pending. With
@@ -2039,6 +2148,7 @@ lkpi_sdio_pump_entry(void *arg)
 		card_irq = c->irq_wake;
 		if (c->irq_wake) {
 			c->irq_wake = false;
+			lkpi_sdio_stats.irq_wakes++;
 			lkpi_sdio_census_note_wake_irq();
 		} else {
 			lkpi_sdio_census_note_wake(requested, wait_ms);
@@ -2125,6 +2235,9 @@ lkpi_sdio_pump_notify(void)
 	if (!c->pump_running)
 		return;
 	c->irq_wake = true;
+	/* the ISR-to-engine link of the wake chain (see lkpi_sdio_stats): counted
+	 * here, at the one place every backend's card upcall lands */
+	lkpi_sdio_stats.card_notify++;
 	lkpi_sdio_census_note_irq_notify();
 	lkpi_sdio_census_note_irq_stamp(lkpi_sdio_census_now());
 	(void)osSemaphoreRelease(c->pump_req);

@@ -68,6 +68,39 @@ rtl8189f_diag_get(struct rtl8189f_diag *out)
 	out->rx_crc_err = adapter->recvpriv.rx_largepacket_crcerr +
 	    adapter->recvpriv.rx_middlepacket_crcerr +
 	    adapter->recvpriv.rx_smallpacket_crcerr;
+	/* The receive-stage counters, when this face compiles them.  A frame the
+	 * card handed over and rx_pkts never saw is counted at each check it
+	 * passes, so the first counter that stays flat is the check that refused
+	 * it (see the CONFIG_DBG_COUNTER Kconfig entry). */
+	out->rx_stage_core = 0u;
+	out->rx_stage_pre = 0u;
+	out->rx_stage_ver = 0u;
+	out->rx_stage_mgmt = 0u;
+	out->rx_stage_ctrl = 0u;
+	out->rx_stage_data = 0u;
+	out->rx_stage_unknown = 0u;
+	out->rx_stage_post = 0u;
+	out->rx_stage_indicate = 0u;
+	out->rx_stage_ind_err = 0u;
+#ifdef CONFIG_DBG_COUNTER
+	out->rx_stage_core = (unsigned int)adapter->rx_logs.core_rx;
+	out->rx_stage_pre = (unsigned int)adapter->rx_logs.core_rx_pre;
+	out->rx_stage_ver =
+	    (unsigned int)adapter->rx_logs.core_rx_pre_ver_err;
+	out->rx_stage_mgmt =
+	    (unsigned int)adapter->rx_logs.core_rx_pre_mgmt;
+	out->rx_stage_ctrl =
+	    (unsigned int)adapter->rx_logs.core_rx_pre_ctrl;
+	out->rx_stage_data =
+	    (unsigned int)adapter->rx_logs.core_rx_pre_data;
+	out->rx_stage_unknown =
+	    (unsigned int)adapter->rx_logs.core_rx_pre_unknown;
+	out->rx_stage_post = (unsigned int)adapter->rx_logs.core_rx_post;
+	out->rx_stage_indicate =
+	    (unsigned int)adapter->rx_logs.os_indicate;
+	out->rx_stage_ind_err =
+	    (unsigned int)adapter->rx_logs.os_indicate_err;
+#endif
 	out->fw_state = (unsigned int)adapter->mlmepriv.fw_state;
 	out->to_join = (unsigned int)adapter->mlmepriv.to_join;
 	out->mlme_state = (unsigned int)adapter->mlmeextpriv.mlmext_info.state;
