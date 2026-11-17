@@ -1891,7 +1891,7 @@ lkpi_sdio_has_handler(void)
  * whether the cycle moved any bytes - the adaptive cadence's progress signal.
  */
 static bool
-lkpi_sdio_pump_cycle(void)
+lkpi_sdio_pump_cycle(bool card_irq)
 {
 	struct lkpi_sdio_card *c = &lkpi_sdio_card_state;
 	u8 pending = 0;
@@ -1928,8 +1928,30 @@ lkpi_sdio_pump_cycle(void)
 			err = true;
 			break;
 		}
-		if (pending == 0u)
+		if (pending == 0u) {
+			/*
+			 * The host's DAT1 assertion is the authoritative "look".
+			 * The CCCR pending word is optional, and this card does
+			 * not reflect its function interrupt there: a card
+			 * interrupt with a quiet word still runs the claimed
+			 * handlers once, and each reads its own status word.
+			 */
+			if (card_irq) {
+				for (i = 1u;
+				     i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS;
+				     i++) {
+					if (c->func[i].irq_handler != NULL) {
+						lkpi_sdio_stats.callbacks++;
+						lkpi_sdio_census_note_dispatch();
+						busy = true;
+						lkpi_sdio_pump_stage_state = "handler";
+						c->func[i].irq_handler(&c->func[i]);
+						lkpi_sdio_pump_stage_state = "pending";
+					}
+				}
+			}
 			break;
+		}
 		for (i = 1u; i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; i++) {
 			if ((pending & (1u << i)) == 0)
 				continue;
@@ -1947,6 +1969,7 @@ lkpi_sdio_pump_cycle(void)
 			}
 		}
 		rounds++;
+		card_irq = false;
 		if ((!c->pump_drain) || (rounds >= LKPI_SDIO_DRAIN_MAX_ROUNDS))
 			break;
 	}
@@ -1975,6 +1998,7 @@ lkpi_sdio_pump_entry(void *arg)
 	(void)arg;
 	for (;;) {
 		bool requested;
+		bool card_irq;
 		bool progress = false;
 		unsigned int wait_ms;
 
@@ -1987,6 +2011,7 @@ lkpi_sdio_pump_entry(void *arg)
 		 */
 		wait_ms = c->pump_irq ? LKPI_SDIO_PUMP_IDLE_MS : c->pump_period_ms;
 		requested = osSemaphoreAcquire(c->pump_req, wait_ms) == osOK;
+		card_irq = c->irq_wake;
 		if (c->irq_wake) {
 			c->irq_wake = false;
 			lkpi_sdio_census_note_wake_irq();
@@ -2017,7 +2042,7 @@ lkpi_sdio_pump_entry(void *arg)
 		 * handler: the re-arm below follows the cycle, and a masked line that
 		 * nobody re-arms would strand the card's events. */
 		if (lkpi_sdio_has_handler() || c->pump_irq)
-			progress = lkpi_sdio_pump_cycle();
+			progress = lkpi_sdio_pump_cycle(card_irq);
 		else
 			lkpi_sdio_pump_stage_state = "-";
 		/*
