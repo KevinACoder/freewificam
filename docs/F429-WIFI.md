@@ -345,13 +345,24 @@ Four images build and link against the 1 MiB flash:
 |---|---|---:|
 | `stm32f429-rtl8189fs-probe` | `tick f429_sdio_probe` | 40,112 B |
 | `stm32f429-rtl8189fs-attach` | `tick rtl8189fs_sdio` | 678,476 B |
-| `stm32f429-rtl8189fs-station` | `tick rtl8189fs_sta` | 727,924 B |
+| `stm32f429-rtl8189fs-station` | `tick rtl8189fs_sta` | 729,588 B |
+| `stm32f429-rtl8189fs-write` | `tick f429_sdio_probe f429_sdio_write_probe` | 44,108 B |
 | `stm32f429-rtl8189fs-throughput` | `tick rtl8189fs_sta rtl8189fs_throughput` | 741,404 B |
 
-The board run is **not yet claimed**: the CH340 serial instrument was
-unavailable on 2026-11-16, so no probe/attach/association/data/throughput
-evidence exists for this line.  The re-open condition is a working CH340
-serial port and a relay cold boot of each image: the probe reports vendor
-`0x024c`, device `0xf179`, four data lines and 24 MHz; the attach reports the
-embedded firmware, MAC, wiphy/netdev and start; the station reports the scan,
-the association and both ICMP rounds; the throughput table is report-only.
+On the board, enumeration, the embedded firmware download and `start` pass,
+and a byte-mode CMD53 **write** is now verifiable without guessing: the
+`stm32f429-rtl8189fs-write` profile writes a known pattern to a card register
+and reads it back, so the verdict is the card's answer rather than the host's
+flags.  Two host-side defects had to be fixed for that: a byte-mode write
+framed as a memory-card block waits for a CRC status token that an I/O device
+never sends (leaving TXACT up and every later transfer failing), and a byte-mode
+read never reaches DLEN because the card stops when it has sent what it has,
+which left the data path in RXACT and lost the frames it had delivered.
+
+Scan and association are **not claimed**.  The station image reaches
+association on some cold boots and times out before it on most of them
+(observed 1 of 8), which is not the 2-of-2 a claim needs; the open question is
+the relationship between the RX FIFO's reported length, the card-interrupt
+count and the number of transfers that actually return bytes.  Until that is
+answered the honest statement is: the write path is measured, the scan is
+intermittent, association is not established.
