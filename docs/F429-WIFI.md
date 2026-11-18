@@ -461,3 +461,60 @@ It validates the shared socket, the pins, the 24 MHz four-bit bus and the ST
 host glue; it is **not** a fix for this section's 8189FTV stack.  The 8189FTV
 line stays at its measured position: the transmit path and the card interrupt
 are measured, scan is intermittent, association is not established.
+
+## AP6181 (BCM43362) SDIO line (2026-11-19, separate from the 8189FTV line)
+
+The 挑战者 V2 carries an AP6181 (Broadcom BCM43362, SDIO `02d0:a962`) on the
+same socket the TF card and the 8189FTV use.  The socket carries one card at a
+time: the TF slot must be empty, and `J66` (the module's 3V3 rail) must be
+installed.  The profile family sets `CONFIG_F429_SDIO_AP6181`, which drives
+`PB13` (`WL_REG_ON` / `WIFI_EN`) high from the first instruction and holds it
+through the board bring-up; every other SDIO profile keeps it low so the other
+card is alone on the bus.
+
+The card enumerates four-bit at 24 MHz with two I/O functions.  Its chipcommon
+block reports `0x1591a962` at backplane offset 0.  The bring-up sequence the
+first-party image now speaks is the one the module needs, and each step was
+measured by its absence:
+
+- **ALP clock.**  Write `SBSDIO_FUNC1_CHIPCLKCSR` (`0x1000E`) with
+  `FORCE_HW_CLKREQ_OFF | ALP_AVAIL_REQ | FORCE_ALP` (`0x29`), poll the same
+  register for `ALP_AVAIL` (`0x40`), and keep the request asserted while the
+  backplane is touched.  With the request released first, the data window
+  answers a command with no data.
+- **Block sizes.**  The vendor's sequence writes 64 to the function-0 and
+  function-1 block-size registers and reads the function-0 one back.  The
+  common CIS states 32, so the generic set-block-size path refuses 64; the
+  registers accept it and must be written directly.
+- **Backplane window.**  The window registers (`0x1000A..0x1000C`) take address
+  bits [31:8]; chipcommon is `0x18000000`, i.e. the high byte is `0x18`.  A
+  window of zero is not chipcommon on this backplane, and the card answers the
+  following CMD53 with an R5 out-of-range and no data.
+- **Data window.**  Backplane transfers use `(offset & 0x7fff) | 0x8000`; the
+  chip id is read as one 64-byte block at `0x8000` and as four bytes in byte
+  mode at the same address, and the two must agree.
+
+Three data-path defects had to be fixed before the engine could move a byte:
+
+1. The STM32 host's data path set `SDIOEN` only on stream reads.  Every CMD53
+   to an SDIO card needs it, block and byte mode alike; SD memory commands
+   (CMD17/18/24/25) keep it clear.
+2. The engine chose byte mode for a transfer of exactly one block.  This card
+   rejects a byte-mode CMD53 whose count equals its 64-byte block size with an
+   R5 out-of-range; a whole-block request now goes through block mode.
+3. The fsl adapter compared a block count with the block size, so a one-block
+   request fell into a one-byte byte transfer and returned success with one
+   byte moved.  With the block flag, the count is a block count.
+
+The image `stm32f429-ap6181-probe` (`tick f429_sdio_probe f429_sdio_engine`,
+61,552 B) passes both cases on two cold boots: the identity line
+`card vendor=0x02d0 device=0xa962 funcs=2 bus=4 clock=24000000`, and an engine
+line whose block read and byte read both return `0x1591a962` with zero engine
+errors.
+
+Boundaries: this is the SDIO identity and the engine's read path, not
+brcmfmac, not association, not ICMP.  The module vendor's own SDK, built
+outside this tree and not linked into any image here, starts an AP on the same
+card (SSID `fire_<MAC>`, channel 1) and the bench monitor sees its beacons;
+that is the hardware/RF reference for this line, and it is not a freewificam
+result.  The 8189FTV line's position is unchanged.
