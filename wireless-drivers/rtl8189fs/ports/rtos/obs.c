@@ -20,6 +20,10 @@
 /* the engine's function accessor; declared here so this unit does not pull the
  * linuxkpi header world into the vendor translation unit */
 struct sdio_func *lkpi_sdio_func(unsigned int num);
+/* the engine's kernel-thread accessor (linuxkpi_osdep.c): the CMSIS thread
+ * behind an interface task record, or NULL when the record is not one of its
+ * own; declared here for the same reason as the function accessor */
+void *lkpi_kthread_cmsis_id(void *task);
 
 void
 rtl8189f_diag_get(struct rtl8189f_diag *out)
@@ -117,6 +121,89 @@ rtl8189f_diag_get(struct rtl8189f_diag *out)
 	    (unsigned int)adapter->mlmeextpriv.link_timer.timer.tl_pending;
 	out->link_timer_expires =
 	    (unsigned int)adapter->mlmeextpriv.link_timer.timer.expires;
+	/* The two objects, so the engine's refused-arm record can name which
+	 * step died: the survey timer is the one that walks the scan's channel
+	 * list, and a scan that sits at `channel_idx` while the timer is quiet
+	 * is "the arm was refused" or "the arm was never asked for" - these
+	 * addresses tell the two apart against `lkpi_tstats.mod_fail_timer[]`. */
+	out->survey_timer_addr =
+	    (unsigned int)(SIZE_PTR)&adapter->mlmeextpriv.survey_timer.timer;
+	out->link_timer_addr =
+	    (unsigned int)(SIZE_PTR)&adapter->mlmeextpriv.link_timer.timer;
+	out->scan_to_timer_addr =
+	    (unsigned int)(SIZE_PTR)&adapter->mlmepriv.scan_to_timer.timer;
+	out->scan_to_timer_pending =
+	    (unsigned int)adapter->mlmepriv.scan_to_timer.timer.tl_pending;
+	out->scan_to_timer_expires =
+	    (unsigned int)adapter->mlmepriv.scan_to_timer.timer.expires;
+	out->scan_next_state =
+	    (unsigned int)adapter->mlmeextpriv.sitesurvey_res.next_state;
+	out->scan_ch_ms =
+	    (unsigned int)adapter->mlmeextpriv.sitesurvey_res.scan_ch_ms;
+	out->scan_ch_num =
+	    (unsigned int)adapter->mlmeextpriv.sitesurvey_res.ch_num;
+	out->scan_bss_cnt =
+	    (unsigned int)adapter->mlmeextpriv.sitesurvey_res.bss_cnt;
+	out->cmdthd_running =
+	    (unsigned int)ATOMIC_READ(&adapter->cmdpriv.cmdthd_running);
+	/* Whether a command is waiting behind the thread's sash: a queue that
+	 * keeps a depth while `cmd_issued` stops climbing is "the thread stopped
+	 * taking work", the other half of a stalled scan. */
+	out->cmd_queue_len =
+	    (unsigned int)(rtw_is_list_empty(&adapter->cmdpriv.cmd_queue.queue)
+			   ? 0u : 1u);
+	/* The command thread and the command it is not taking.  The stall this
+	 * face exists for is "a step fired, its command is in the queue, and the
+	 * thread never runs it": the head's code says which command is stranded,
+	 * the thread's state says whether it is runnable, and the saved frame says
+	 * where it stopped.  Reading a saved frame is safe here because the
+	 * reader is a different thread and the context switch that would rewrite
+	 * it is the one that would make this snapshot stale, not wrong. */
+	/* The driver holds the interface's task record; the CMSIS thread that
+	 * runs it is a different object, and only that one answers a scheduler
+	 * query.  The engine's accessor maps the first to the second. */
+	out->cmd_thread_handle =
+	    (unsigned int)(SIZE_PTR)lkpi_kthread_cmsis_id(adapter->cmdThread);
+	out->cmd_seq = (unsigned int)adapter->cmdpriv.cmd_seq;
+	{
+		struct cmd_obj *head = NULL;
+
+		if (!rtw_is_list_empty(&adapter->cmdpriv.cmd_queue.queue))
+			head = LIST_CONTAINOR(get_next(&adapter->cmdpriv.cmd_queue.queue),
+					      struct cmd_obj, list);
+		out->cmd_head_code = (head != NULL) ? (unsigned int)head->cmdcode : 0xffffu;
+		out->cmd_head_parm =
+		    (head != NULL) ? (unsigned int)(SIZE_PTR)head->parmbuf : 0u;
+	}
+	out->cmd_thread_sp = 0u;
+	out->cmd_saved_exc = 0u;
+	out->cmd_saved_pc = 0u;
+	out->cmd_saved_lr = 0u;
+	if (out->cmd_thread_handle != 0u) {
+		/* The port's save shape: the TCB's first member is the saved stack
+		 * pointer; the port pushes {r4-r11, r14} there and the hardware
+		 * frame lies above it, so [8] is the saved r14 (EXC_RETURN), [14]
+		 * the hardware frame's lr and [15] its pc.  Every value is read
+		 * through one pointer, so a stale pointer gives a wrong number,
+		 * never a fault on this port's flat SRAM/SDRAM map. */
+		unsigned int *sp =
+		    (unsigned int *)(SIZE_PTR)(*(unsigned int *)(SIZE_PTR)
+					       out->cmd_thread_handle);
+
+		/* The two ranges a thread stack can live in on this board: the
+		 * MCU's own SRAM and the FMC SDRAM the RTOS heap comes from.  A
+		 * pointer outside both is a stale record, and reporting it as a
+		 * frame would be a number that means nothing. */
+		if (sp != NULL
+		    && (((SIZE_PTR)sp >= 0x20000000u && (SIZE_PTR)sp < 0x20030000u)
+			|| ((SIZE_PTR)sp >= 0xD0000000u
+			    && (SIZE_PTR)sp < 0xE0000000u))) {
+			out->cmd_thread_sp = (unsigned int)(SIZE_PTR)sp;
+			out->cmd_saved_exc = sp[8];
+			out->cmd_saved_lr = sp[14];
+			out->cmd_saved_pc = sp[15];
+		}
+	}
 	out->jiffies_now = (unsigned int)jiffies;
 	out->sdio_hisr = (unsigned int)hal->sdio_hisr;
 	out->sdio_himr = (unsigned int)hal->sdio_himr;

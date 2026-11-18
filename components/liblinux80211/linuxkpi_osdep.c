@@ -110,6 +110,24 @@ lkpi_kthread_of(struct task_struct *task)
 	return NULL;
 }
 
+/*
+ * The CMSIS thread a task record stands for.  A kernel thread on this port is
+ * two objects - the interface's `struct task_struct` (what the driver holds and
+ * passes to kthread_stop) and the CMSIS thread that runs it - and the
+ * observation seam needs the second one: only the CMSIS handle answers "is this
+ * thread running, ready or blocked" and points at the saved stack frame.  The
+ * identity is exact (the record is the table entry's first member), so a
+ * pointer this file never handed out answers NULL rather than naming a
+ * stranger's thread.
+ */
+void *
+lkpi_kthread_cmsis_id(void *task)
+{
+	struct lkpi_kthread *k = lkpi_kthread_of((struct task_struct *)task);
+
+	return (k != NULL) ? (void *)k->id : NULL;
+}
+
 static struct lkpi_kthread *
 lkpi_kthread_by_thread(osThreadId_t id)
 {

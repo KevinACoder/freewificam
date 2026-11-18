@@ -4004,6 +4004,36 @@ struct lkpi_timer_stats {
 	 * and "the timer never existed" are two different readings. */
 	void		*fire_fn[6];
 	uint32_t	fire_fn_n[6];
+	/* Which timer *objects* fired, and how often.  The vendored driver routes
+	 * every one of its timers through one wrapper callback (`timer_hdl`), so
+	 * `fire_fn` cannot tell the survey timer from the link timer - and "did
+	 * the survey's step fire at all" is exactly the question a stalled scan
+	 * turns on.  The object address is compared with the driver's own
+	 * `survey_timer_addr` / `link_timer_addr` (obs.c). */
+	void		*fire_timer[6];
+	uint32_t	fire_timer_n[6];
+	/* Per-object arm count, the third side of the same ledger: arms vs fires
+	 * vs refusals names all three shapes at once - an object armed twice and
+	 * fired once is "the second arm was taken and never delivered" (the timer
+	 * service), while an object armed once, fired once and refused zero times
+	 * is "the caller stopped arming it". */
+	void		*arm_timer[6];
+	uint32_t	arm_timer_n[6];
+	/* The refused arm's identity, the same way new_fail names a refused
+	 * creation: the timer object (so a caller can say *which* timer - a
+	 * survey step, a link timeout - lost its step), the caller, and the
+	 * CPU's interrupt state at that instant.  mod_timer runs from task
+	 * context on this port, so an IPSR/BASEPRI read here separates "the
+	 * CMSIS adapter saw a masked section and refused" from "the timer
+	 * service queue was full" - two mechanisms with the same visible
+	 * outcome (a step that never happens) and different fixes. */
+	void		*mod_fail_timer[4];
+	uint32_t	mod_fail_timer_n[4];
+	void		*mod_fail_ra[4];
+	uint32_t	mod_fail_ra_n[4];
+	uint32_t	mod_fail_primask;
+	uint32_t	mod_fail_basepri;
+	uint32_t	mod_fail_ipsr;
 };
 
 void lkpi_timer_stats_get(struct lkpi_timer_stats *out);

@@ -82,6 +82,47 @@ struct rtl8189f_diag {
 	unsigned int link_timer_pending;
 	unsigned int link_timer_expires;
 	unsigned int jiffies_now;
+	/* The two timer objects' addresses, in the same address space the host's
+	 * kernel-timer account reports a refused arm with.  A scan that stalls
+	 * with `scan_state=SCAN_PROCESS` and a quiet survey timer is either "the
+	 * arm was refused" or "the arm was never asked for", and the engine's
+	 * `mod_fail_timer[]` names the object - without these two the address
+	 * says nothing.  Also the survey's own step size and the next state it
+	 * was going to move to, so a boot says how far the walk got. */
+	unsigned int survey_timer_addr;
+	unsigned int link_timer_addr;
+	/* The scan's own umbrella timer (`pmlmepriv->scan_to_timer`): the one the
+	 * driver arms with the whole-walk timeout from `rtw_sitesurvey_cmd`, i.e.
+	 * from inside the caller's spinlock.  On this port a timer armed under a
+	 * masked section is refused by the CMSIS adapter, so this address is what
+	 * the engine's `mod_fail_timer[]` is compared against when the refused
+	 * arm must be told apart from the survey step's own arm. */
+	unsigned int scan_to_timer_addr;
+	unsigned int scan_to_timer_pending;
+	unsigned int scan_to_timer_expires;
+	unsigned int scan_next_state;	/* mlmeext scan_next_state */
+	unsigned int scan_ch_ms;	/* sitesurvey_res.scan_ch_ms */
+	unsigned int scan_ch_num;	/* sitesurvey_res.ch_num */
+	unsigned int scan_bss_cnt;	/* sitesurvey_res.bss_cnt */
+	unsigned int cmdthd_running;	/* cmdpriv.cmdthd_running */
+	unsigned int cmd_queue_len;	/* cmdpriv cmd_queue depth */
+	/* The command thread itself.  A survey step that fires and lands in the
+	 * queue while `cmd_issued` stops climbing is either "the thread is asleep
+	 * and was never woken" or "the thread is inside a handler and cannot take
+	 * the next command"; the queue head's code says which command is waiting,
+	 * the thread's state says whether it is runnable, and the saved frame says
+	 * where it stopped when it is blocked.  The frame is the port's own save
+	 * shape: the first TCB member is the saved stack pointer, and the port
+	 * pushes {r4-r11, r14} below the hardware frame, so [8] is EXC_RETURN and
+	 * the hardware frame's pc/lr are [15] and [14]. */
+	unsigned int cmd_thread_handle;	/* cmdThread (FreeRTOS TCB pointer) */
+	unsigned int cmd_thread_sp;	/* saved pxTopOfStack */
+	unsigned int cmd_saved_exc;	/* saved r14 (EXC_RETURN) */
+	unsigned int cmd_saved_pc;
+	unsigned int cmd_saved_lr;
+	unsigned int cmd_head_code;	/* queue head cmdcode, 0xffff when empty */
+	unsigned int cmd_head_parm;	/* queue head parmbuf, 0 when empty */
+	unsigned int cmd_seq;		/* cmdpriv.cmd_seq */
 	unsigned int tx_pkts;		/* dvobj traffic_stat, whole adapter */
 	/* The SDIO transmit worker: the vendor hands every transmit to a
 	 * kthread (RTWHALXT) that drains the pending xmit-buffer queue.  A null

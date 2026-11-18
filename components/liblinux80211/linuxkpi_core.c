@@ -1924,6 +1924,19 @@ static void lkpi_timer_cb(void *arg)
 				break;
 			}
 		}
+		/* The object as well: one wrapper callback serves every vendor
+		 * timer, so the function pointer cannot say which step ran. */
+		for (i = 0; i < 6u; i++) {
+			if (lkpi_tstats.fire_timer[i] == (void *)t) {
+				lkpi_tstats.fire_timer_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.fire_timer[i] == NULL) {
+				lkpi_tstats.fire_timer[i] = (void *)t;
+				lkpi_tstats.fire_timer_n[i] = 1;
+				break;
+			}
+		}
 		t->tl_func(t);
 	}
 }
@@ -1991,6 +2004,7 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 	    (struct lkpi_callout_shell *)(void *)t->_callout;
 	long delta = (long)(expires - lkpi_jiffies());
 	int was;
+	osStatus_t arm_status;
 
 	if (!shell->inited)
 		return 0;
@@ -1999,11 +2013,35 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 	if (delta < 1)
 		delta = 1;
 
+	/*
+	 * Record the expiry the caller asked for.  A compiled consumer reads it
+	 * back off the object (`tmr survey=<pending>/<expires>`), and it is the
+	 * only witness that separates "the step was armed for a later tick" from
+	 * "the step was armed and the deadline is already in the past".
+	 */
+	t->expires = expires;
 	t->tl_pending = true;
 	shell->pending = 1;
 	lkpi_tstats.mods++;
-	if (osTimerStart(shell->timer, (uint32_t)delta) != osOK) {
+	{
 		unsigned int i;
+
+		for (i = 0; i < 6u; i++) {
+			if (lkpi_tstats.arm_timer[i] == (void *)t) {
+				lkpi_tstats.arm_timer_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.arm_timer[i] == NULL) {
+				lkpi_tstats.arm_timer[i] = (void *)t;
+				lkpi_tstats.arm_timer_n[i] = 1;
+				break;
+			}
+		}
+	}
+	arm_status = osTimerStart(shell->timer, (uint32_t)delta);
+	if (arm_status != osOK) {
+		unsigned int i;
+		void *ra = __builtin_return_address(0);
 
 		lkpi_tstats.mod_fail++;
 		for (i = 0; i < 4u; i++) {
@@ -2017,10 +2055,49 @@ int lkpi_mod_timer(struct timer_list *t, unsigned long expires)
 				break;
 			}
 		}
+		/* The object, not just the callback: one callback can drive two
+		 * timers (the survey and the link share the shape), and the
+		 * address is what says which step died. */
+		for (i = 0; i < 4u; i++) {
+			if (lkpi_tstats.mod_fail_timer[i] == (void *)t) {
+				lkpi_tstats.mod_fail_timer_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.mod_fail_timer[i] == NULL) {
+				lkpi_tstats.mod_fail_timer[i] = (void *)t;
+				lkpi_tstats.mod_fail_timer_n[i] = 1;
+				break;
+			}
+		}
+		for (i = 0; i < 4u; i++) {
+			if (lkpi_tstats.mod_fail_ra[i] == ra) {
+				lkpi_tstats.mod_fail_ra_n[i]++;
+				break;
+			}
+			if (lkpi_tstats.mod_fail_ra[i] == NULL) {
+				lkpi_tstats.mod_fail_ra[i] = ra;
+				lkpi_tstats.mod_fail_ra_n[i] = 1;
+				break;
+			}
+		}
+#ifdef __arm__
+		{
+			uint32_t primask;
+			uint32_t basepri;
+			uint32_t ipsr;
+
+			__asm__ __volatile__("mrs %0, primask" : "=r"(primask));
+			__asm__ __volatile__("mrs %0, basepri" : "=r"(basepri));
+			__asm__ __volatile__("mrs %0, ipsr" : "=r"(ipsr));
+			lkpi_tstats.mod_fail_primask = primask;
+			lkpi_tstats.mod_fail_basepri = basepri;
+			lkpi_tstats.mod_fail_ipsr = ipsr;
+		}
+#endif
 		if (lkpi_tstats.mod_fail <= 4u)
 			lkpi_printf(ULOG_ERROR_LEVEL,
-			    "lkpi: timer arm refused fn=%p delta=%ld jiffies=%lu thread=%p\n",
-			    (void *)t->tl_func, delta, lkpi_jiffies(),
+			    "lkpi: timer arm refused fn=%p timer=%p delta=%ld jiffies=%lu thread=%p\n",
+			    (void *)t->tl_func, (void *)t, delta, lkpi_jiffies(),
 			    (void *)osThreadGetId());
 		t->tl_pending = false;
 		shell->pending = 0;

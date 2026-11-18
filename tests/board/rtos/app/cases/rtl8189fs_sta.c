@@ -339,6 +339,21 @@ sta_fifo_last(const char *where)
 	}
 }
 
+/*
+ * The command thread's scheduler state as a small integer the ring can carry
+ * (osThreadState_t is the CMSIS order: inactive 0, ready 1, running 2,
+ * blocked 3, terminated 4, error -1).  An unknown handle reads as -2 so the
+ * line never silently claims a state it did not observe.
+ */
+static int
+cmd_thread_state(const struct rtl8189f_diag *vd)
+{
+	if (vd->cmd_thread_handle == 0u)
+		return -2;
+	return (int)osThreadGetState((osThreadId_t)(uintptr_t)
+				     vd->cmd_thread_handle);
+}
+
 #if defined(CONFIG_STA_WATCH) && CONFIG_STA_WATCH
 /*
  * The one line a boot needs when the join stalls: how far the vendor MLME
@@ -397,6 +412,39 @@ sta_watch(struct net_device *dev, const char *where, unsigned int waited_ms)
 		  lkpi_sdio_claim_owner(), lkpi_sdio_claim_held_ms(),
 		  lkpi_sdio_claim_op(), lkpi_sdio_pump_stage(),
 		  lkpi_sdio_pump_state());
+	/*
+	 * The scan's own walk, every ten seconds: the first line is the state
+	 * machine's position, the second is the timer that is supposed to move
+	 * it.  `sv=0/0` while `st=4` is the shape of "the timer stopped being
+	 * armed"; `sv=1/<expires>` with `expires` long past `jf` is "armed and
+	 * never fired".  One line per ten seconds keeps the 8 KiB ring usable
+	 * while still dating the moment the walk stopped.
+	 */
+	if ((waited_ms % 10000u) == 0u)
+		CASE_INFO("rtl8189fs_sta: walk %s ms=%u st=%u idx=%u next=%u "
+			  "sv=%u/%u jf=%u chnum=%u chms=%u bss=%u at=%08x\n",
+			  where, waited_ms, vd.scan_state, vd.scan_ch_idx,
+			  vd.scan_next_state, vd.survey_timer_pending,
+			  vd.survey_timer_expires, vd.jiffies_now,
+			  vd.scan_ch_num, vd.scan_ch_ms, vd.scan_bss_cnt,
+			  vd.survey_timer_addr);
+	/*
+	 * The command channel beside the timer channel, every ten seconds: a
+	 * survey step that fires and hands its work to the command thread shows
+	 * up as `cmd` climbing; a survey step whose command never runs shows up
+	 * as `cmd` frozen with `cmdq=1`.  Those two are the only shapes left
+	 * once the timer side is quiet.
+	 */
+	if ((waited_ms % 10000u) == 0u)
+		CASE_INFO("rtl8189fs_sta: cmdwalk %s ms=%u cmd=%u/%u q=%u thd=%u "
+			  "st=%d tcb=%08x sp=%08x exc=%08x pc=%08x lr=%08x "
+			  "head=%02x parm=%08x seq=%u\n",
+			  where, waited_ms, vd.cmd_issued, vd.cmd_done,
+			  vd.cmd_queue_len, vd.cmdthd_running,
+			  (int)cmd_thread_state(&vd), vd.cmd_thread_handle,
+			  vd.cmd_thread_sp, vd.cmd_saved_exc, vd.cmd_saved_pc,
+			  vd.cmd_saved_lr, vd.cmd_head_code, vd.cmd_head_parm,
+			  vd.cmd_seq);
 }
 #else
 static void
@@ -460,6 +508,13 @@ sta_sink(ulog_level_t level, const char *line)
 		 * (0x100), and FillH2CCmd prints when a firmware command was
 		 * dropped because the card had not taken the previous one. */
 		"0x1B8", "cmd52 and cmd53", "fw read cmd",
+		/* The engine's own refusals and stalls: a timer arm the CMSIS
+		 * adapter declined names the object and the caller, and a
+		 * command thread parked forever prints its own line.  These are
+		 * emitted by the component, not the driver, so the sink's
+		 * keyword list is the only thing that decides whether they
+		 * reach the ring at all. */
+		"lkpi:", "timer arm refused", "completion wait", "mutex stuck",
 	};
 	unsigned int k;
 
@@ -654,9 +709,30 @@ case_rtl8189fs_sta_run(void)
 			    "jiffies=%u\n", vd.survey_timer_pending,
 			    vd.survey_timer_expires, vd.link_timer_pending,
 			    vd.link_timer_expires, vd.jiffies_now);
+		/* The walk itself, not just the state it stopped at: `state=4`
+		 * (SCAN_PROCESS) with `channel_idx=k` says the survey timer fired
+		 * k times, and `next`/`chms`/`bss` say what the next step was
+		 * going to be and how much of the channel list was left.  A
+		 * nonzero `modfail` whose timer address equals `survey_at` is the
+		 * one reading that names the refused arm as this walk's step. */
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout walk next=%u chnum=%u "
+			    "bss=%u chms=%u cmdthd=%u cmdq=%u "
+			    "survey_at=%08x link_at=%08x sto=%u/%u at=%08x\n",
+			    vd.scan_next_state, vd.scan_ch_num, vd.scan_bss_cnt,
+			    vd.scan_ch_ms, vd.cmdthd_running, vd.cmd_queue_len,
+			    vd.survey_timer_addr, vd.link_timer_addr,
+			    vd.scan_to_timer_pending, vd.scan_to_timer_expires,
+			    vd.scan_to_timer_addr);
 		CASE_ANCHOR("rtl8189fs_sta: scan timeout hisr=0x%08x himr=0x%08x "
 			    "match=0x%08x\n", vd.sdio_hisr, vd.sdio_himr,
 			    vd.sdio_hisr & vd.sdio_himr);
+		CASE_ANCHOR("rtl8189fs_sta: scan timeout cmdthd st=%d tcb=%08x "
+			    "sp=%08x exc=%08x pc=%08x lr=%08x head=%02x "
+			    "parm=%08x seq=%u\n",
+			    (int)cmd_thread_state(&vd), vd.cmd_thread_handle,
+			    vd.cmd_thread_sp, vd.cmd_saved_exc, vd.cmd_saved_pc,
+			    vd.cmd_saved_lr, vd.cmd_head_code, vd.cmd_head_parm,
+			    vd.cmd_seq);
 		CASE_ANCHOR("rtl8189fs_sta: scan timeout join fw=0x%x to_join=%u "
 			    "mlme=0x%x auth_seq=%u join_res=%d scan_state=%u ch=%u tx=%u\n",
 			    vd.fw_state, vd.to_join, vd.mlme_state, vd.auth_seq,
@@ -686,6 +762,16 @@ case_rtl8189fs_sta_run(void)
 				    ts2.fire_fn[2], ts2.fire_fn_n[2],
 				    ts2.fire_fn[3], ts2.fire_fn_n[3],
 				    ts2.fire_fn[4], ts2.fire_fn_n[4]);
+			/* Odd numbers are the object addresses: compare them with the
+			 * walk line's `survey_at`.  A survey address that never appears
+			 * here while the walk is stuck is "the step never fired". */
+			CASE_ANCHOR("rtl8189fs_sta: tmr firetimer %p,%u %p,%u %p,%u %p,%u %p,%u %p,%u\n",
+				    ts2.fire_timer[0], ts2.fire_timer_n[0],
+				    ts2.fire_timer[1], ts2.fire_timer_n[1],
+				    ts2.fire_timer[2], ts2.fire_timer_n[2],
+				    ts2.fire_timer[3], ts2.fire_timer_n[3],
+				    ts2.fire_timer[4], ts2.fire_timer_n[4],
+				    ts2.fire_timer[5], ts2.fire_timer_n[5]);
 			CASE_ANCHOR("rtl8189fs_sta: tmr newfail %p,%u %p,%u %p,%u %p,%u\n",
 				    ts2.new_fail_fn[0], ts2.new_fail_fn_n[0],
 				    ts2.new_fail_fn[1], ts2.new_fail_fn_n[1],
@@ -699,6 +785,25 @@ case_rtl8189fs_sta_run(void)
 				    ts2.new_fail_ra[3], ts2.new_fail_ra_n[3],
 				    ts2.new_fail_primask, ts2.new_fail_basepri,
 				    ts2.new_fail_ipsr);
+			/* The refused arm's identity - the piece this line exists for.
+			 * `timer` is the object (compare with the walk line's
+			 * `survey_at`); `ctx` says whether the CMSIS adapter refused
+			 * because the CPU was in a masked section (IPS R/BASEPRI
+			 * nonzero) or because the timer service could not take the
+			 * command (all three zero). */
+			CASE_ANCHOR("rtl8189fs_sta: tmr modfail timer %p,%u %p,%u %p,%u %p,%u\n",
+				    ts2.mod_fail_timer[0], ts2.mod_fail_timer_n[0],
+				    ts2.mod_fail_timer[1], ts2.mod_fail_timer_n[1],
+				    ts2.mod_fail_timer[2], ts2.mod_fail_timer_n[2],
+				    ts2.mod_fail_timer[3], ts2.mod_fail_timer_n[3]);
+			CASE_ANCHOR("rtl8189fs_sta: tmr modfail ra %p,%u %p,%u %p,%u %p,%u "
+				    "ctx primask=%u basepri=%u ipsr=%u\n",
+				    ts2.mod_fail_ra[0], ts2.mod_fail_ra_n[0],
+				    ts2.mod_fail_ra[1], ts2.mod_fail_ra_n[1],
+				    ts2.mod_fail_ra[2], ts2.mod_fail_ra_n[2],
+				    ts2.mod_fail_ra[3], ts2.mod_fail_ra_n[3],
+				    ts2.mod_fail_primask, ts2.mod_fail_basepri,
+				    ts2.mod_fail_ipsr);
 		}
 		CASE_ANCHOR("rtl8189fs_sta: fifo account reads=%u bytes=%u zero=%u "
 			    "tx=%u/%u/%u\n", sdio_f4dbg.fifo_reads,
@@ -773,6 +878,11 @@ found:
 	CASE_ANCHOR("rtl8189fs_sta: bss ssid=%s bssid=%02x:%02x:%02x:%02x:%02x:%02x freq=%d signal=%d\n",
 		    RTL8189FS_SSID, bssid[0], bssid[1], bssid[2], bssid[3],
 		    bssid[4], bssid[5], freq, sig / 100);
+	/* The scan gate's own verdict line: the case, not the runner, decides
+	 * that a BSS was found in time.  The station case's later gates (join,
+	 * data plane) still have to pass; this anchor only says the walk
+	 * completed and cfg80211's table carries the bench AP. */
+	CASE_ANCHOR("rtl8189fs_sta: PASS SCAN\n");
 	{
 		struct lkpi_sdio_stats sdio_stats;
 
