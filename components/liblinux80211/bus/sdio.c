@@ -1421,8 +1421,19 @@ sdio_io_rw_ext_helper(struct sdio_func *func, bool write, unsigned int addr,
 	if (incr)
 		base |= LKPI_SDIO_BE_F_INCR;
 
-	if (func->card->cccr.multi_block != 0 &&
-	    size > sdio_max_byte_size(func) && func->cur_blksize != 0u) {
+	/*
+	 * A request that is exactly one (or more) blocks goes through block
+	 * mode even when it would also fit the byte-mode ceiling: this card
+	 * (BCM43362) rejects a byte-mode CMD53 whose count equals its 64-byte
+	 * block size with an R5 "out of range" and sends no data, while the
+	 * same transfer as one block completes.  Linux's helper would pick
+	 * byte mode for size == cur_blksize; the vendor's own driver switches
+	 * to block mode at 64 bytes, and that is the shape this port must
+	 * speak.  The byte-mode chunk path still covers everything that is
+	 * not a whole block.
+	 */
+	if (func->card->cccr.multi_block != 0 && func->cur_blksize != 0u &&
+	    (size > sdio_max_byte_size(func) || size >= func->cur_blksize)) {
 		max_blocks = func->card->host->max_blk_count;
 		if (max_blocks > LKPI_SDIO_EXT_MAX_BLOCKS)
 			max_blocks = LKPI_SDIO_EXT_MAX_BLOCKS;

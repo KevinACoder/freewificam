@@ -446,7 +446,15 @@ static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int 
 		uint32_t blksz = (func == 0U) ? card->io0blockSize :
 						(uint32_t)card->ioFBR[func - 1U].ioBlockSize;
 
-		if ((blksz != 0U) && (count >= blksz)) {
+		/*
+		 * With the block flag, `count` is a BLOCK COUNT, not a byte
+		 * count (the seam says so, and the engine's splitter hands it
+		 * over that way).  Comparing it to the block size - the check
+		 * this file used to make - turned every one-block request (the
+		 * common case: a 64-byte block at a 64-byte function) into a
+		 * one-byte transfer, which returned success and moved one byte.
+		 */
+		if ((blksz != 0U) && (count != 0U)) {
 			ret = sdmmc_fsl_block_transfer(card, func, addr, buf, count, write);
 		} else {
 			ret = sdmmc_fsl_byte_transfer(card, func, addr, buf, count, write, incr);

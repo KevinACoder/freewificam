@@ -637,7 +637,7 @@ static uint32_t s_f4sdio_tx_dctrl;
 static bool s_f4sdio_tx_deferred;
 
 static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
-				   bool stream_rx)
+				   bool stream_rx, bool sdio_card)
 {
 	SDIO_DataInitTypeDef cfg;
 	uint32_t blockSize;
@@ -713,12 +713,15 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
 				       SDIO_TRANSFER_MODE_BLOCK;
 	cfg.DPSM = SDIO_DPSM_ENABLE;
 
-	/* SDIOEN selects what DTMODE means (SDIO multibyte vs MMC stream).  It
-	 * must be in place before SDIO_ConfigData writes DTEN; the LL call's
-	 * read-modify-write leaves this bit alone.  Only the byte-read path
-	 * touches it: an extra DCTRL write on every block transfer runs into
-	 * the peripheral's write-delay rule and breaks the next command. */
-	if (byte_read)
+	/* SDIOEN is the "this is an SDIO card, not an SD memory card" bit; the
+	 * controller's data path does not start an SDIO transfer without it.
+	 * The vendor's F429 SDIO driver sets it for every CMD53 (both block and
+	 * byte mode); this port did so only on the stream reads, which is why a
+	 * block-mode CMD53 to the BCM43362 answered its command but never sent
+	 * data.  It must be in place before SDIO_ConfigData writes DTEN; the
+	 * LL call's read-modify-write leaves this bit alone.  SD memory card
+	 * commands (CMD17/18/24/25) keep it clear. */
+	if (sdio_card)
 		SDIO->DCTRL |= SDIO_DCTRL_SDIOEN;
 
 	(void)SDIO_ConfigData(SDIO, &cfg);
@@ -1325,7 +1328,8 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 		    (0xFFFFFFFFUL & ~(uint32_t)SDIO_FLAG_SDIOIT) : 0xFFFFFFFFUL;
 
 	if (content->data != NULL) {
-		status = f4sdio_data_config(content->data, byte_mode, byte_read);
+		status = f4sdio_data_config(content->data, byte_mode, byte_read,
+					    content->command->index == 53U);
 		if (status != kStatus_Success)
 			return status;
 	}
@@ -1390,13 +1394,17 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 		f4sdio_irq_unmask();
 		if (status != kStatus_Success) {
 			SDMMC_LOGE("f4sdio",
-				   "data cmd=%u len=%u dir=%s sta=0x%08x "
+				   "data cmd=%u arg=0x%08x len=%u dir=%s "
+				   "sta=0x%08x dctrl=0x%08x resp=0x%08x "
 				   "left=%u tsta=0x%08x dcnt=%u",
 				   (unsigned)content->command->index,
+				   (unsigned)content->command->argument,
 				   (unsigned)(content->data->blockSize *
 					      content->data->blockCount),
 				   (content->data->rxData != NULL) ? "rx" : "tx",
 				   (unsigned)SDIO->STA,
+				   (unsigned)SDIO->DCTRL,
+				   (unsigned)SDIO->RESP1,
 				   (unsigned)s_f4sdio_tx_left,
 				   (unsigned)s_f4sdio_tx_sta,
 				   (unsigned)s_f4sdio_tx_dcount);
