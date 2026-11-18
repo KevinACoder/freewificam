@@ -149,10 +149,15 @@ int main(void)
 			" build=" FW_BUILD_TAG "\n");
 
 #if defined(CONFIG_BOARD_STM32F429_CHALLENGER) && defined(CONFIG_LIBLINUX80211_SDIO)
-	/* The SDIO socket shares its pins with the AP6181; hold the other card's
-	 * WIFI_EN low from the first instruction.  The SDIO host glue configures
-	 * the pin again when the card is brought up. */
+	/* The SDIO socket shares its pins with the AP6181: the AP6181 profile
+	 * powers it (PB13 high) from the first instruction, every other line
+	 * holds its WIFI_EN low so the other card is alone on the bus.  The
+	 * SDIO host glue configures the pin again when the card is brought up. */
+#if defined(CONFIG_F429_SDIO_AP6181) && CONFIG_F429_SDIO_AP6181
+	sdio_board_wl_reg_on(true);
+#else
 	sdio_board_wl_reg_on(false);
+#endif
 #endif
 
 #if defined(CONFIG_F429_SDRAM)

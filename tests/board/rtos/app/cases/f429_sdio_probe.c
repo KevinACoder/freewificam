@@ -7,8 +7,10 @@
  * The image carries the imported fsl_sdmmc card service and the ST LL SDMMC
  * host glue, not the vendor driver.  The case starts the service and reports
  * the identity the card's common CIS carries, the negotiated bus width and
- * the clock.  The expected card is the 8189FTV: vendor 0x024c, device 0xf179,
- * four data lines, 24 MHz (the F429's SDIO ceiling).
+ * the clock.  The expected card is the profile's: the 8189FTV (vendor 0x024c,
+ * device 0xf179) in the TF-slot line, or the onboard AP6181 / BCM43362
+ * (vendor 0x02d0, device 0xa962) when CONFIG_F429_SDIO_AP6181 powers it.
+ * Four data lines and 24 MHz (the F429's SDIO ceiling) are the gate for both.
  */
 
 #include "cases.h"
@@ -16,8 +18,13 @@
 #include "fsl_sdmmc.h"
 #include "sdmmc_port.h"
 
+#if defined(CONFIG_F429_SDIO_AP6181) && CONFIG_F429_SDIO_AP6181
+#define F429_SDIO_VENDOR	0x02d0U
+#define F429_SDIO_DEVICE	0xa962U
+#else
 #define F429_SDIO_VENDOR	0x024cU
 #define F429_SDIO_DEVICE	0xf179U
+#endif
 #define F429_SDIO_MIN_CLOCK	20000000U
 
 int
@@ -58,8 +65,11 @@ case_f429_sdio_probe_run(void)
 		    (unsigned)bus, (unsigned)clock);
 
 	if (vendor != F429_SDIO_VENDOR || device != F429_SDIO_DEVICE) {
-		CASE_ANCHOR("f429_sdio_probe: FAIL identity 0x%04x:0x%04x\n",
-			    (unsigned)vendor, (unsigned)device);
+		CASE_ANCHOR("f429_sdio_probe: FAIL identity 0x%04x:0x%04x "
+			    "(expected 0x%04x:0x%04x)\n",
+			    (unsigned)vendor, (unsigned)device,
+			    (unsigned)F429_SDIO_VENDOR,
+			    (unsigned)F429_SDIO_DEVICE);
 		return 1;
 	}
 	if (bus != 4U) {

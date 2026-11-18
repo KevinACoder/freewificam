@@ -4,10 +4,12 @@
  *
  * Pins follow the vendor SD example (bsp_sdio_sd.c) and the board schematic:
  * PC8-PC11 D0-D3, PC12 CLK, PD2 CMD, AF12, internal pull-ups.  The same
- * socket carries the 8189FTV module (the WiFi line) or a plain SD memory card
- * (the SD card line).  The socket has no card-detect pin; the host glue
- * reports the card as present and the command path is the detector.  PB13 is
- * the AP6181's WIFI_EN and is held low for both lines.
+ * socket carries the onboard AP6181 (BCM43362, the WiFi line), the 8189FTV
+ * module (the vendor-SDIO line) or a plain SD memory card (the SD card line);
+ * the profile decides which one is powered.  The socket has no card-detect
+ * pin; the host glue reports the card as present and the command path is the
+ * detector.  PB13 is the AP6181's WIFI_EN: high powers the module, low keeps
+ * it off the shared bus.
  */
 
 #include "sdio_board.h"
@@ -73,8 +75,16 @@ sdio_board_wl_reg_on(bool on)
 void
 sdio_board_init(void)
 {
-	/* Hold the AP6181 off before the shared bus is touched. */
+	/*
+	 * The socket is shared, so the module's rail state is the profile's
+	 * decision: the AP6181 image powers it (PB13 high); every other line
+	 * holds it off before the shared bus is touched.
+	 */
+#if defined(CONFIG_F429_SDIO_AP6181) && CONFIG_F429_SDIO_AP6181
+	sdio_board_wl_reg_on(true);
+#else
 	sdio_board_wl_reg_on(false);
+#endif
 
 	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN | RCC_AHB1ENR_GPIODEN;
 	RCC->APB2ENR |= RCC_APB2ENR_SDIOEN;
@@ -101,6 +111,17 @@ sdio_board_init(void)
 	NVIC_DisableIRQ(SDIO_IRQn);
 	NVIC_ClearPendingIRQ(SDIO_IRQn);
 	NVIC_SetPriority(SDIO_IRQn, 6U);
+
+#if defined(CONFIG_F429_SDIO_AP6181) && CONFIG_F429_SDIO_AP6181
+	/*
+	 * WL_REG_ON has to be stable before the card's first clock.  The
+	 * vendor's own power-on sequence waits on this pin; a couple of
+	 * milliseconds at 168 MHz keeps the 400 kHz enumeration well inside
+	 * the module's boot window and costs nothing on the bench.
+	 */
+	for (volatile uint32_t i = 0U; i < 200000U; i++)
+		__NOP();
+#endif
 }
 
 uint32_t

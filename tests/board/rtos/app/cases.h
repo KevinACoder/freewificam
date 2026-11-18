@@ -153,6 +153,11 @@ int case_rtl8189fs_throughput_run(void);
 #if defined(RTOS_CASE_F429_SDIO_PROBE)
 int case_f429_sdio_probe_run(void);
 #endif
+/* The engine's own read path on the AP6181: CMD52/53 values cross-checked
+ * against a second path, so a "success" that moved no bytes cannot pass. */
+#if defined(RTOS_CASE_F429_SDIO_ENGINE)
+int case_f429_sdio_engine_run(void);
+#endif
 #if defined(RTOS_CASE_F429_SDIO_WRITE_PROBE)
 int case_f429_sdio_write_probe_run(void);
 #endif

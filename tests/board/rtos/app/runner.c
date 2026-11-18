@@ -130,6 +130,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_F429_SDIO_PROBE)
 	CASE_ENTRY("f429_sdio_probe", case_f429_sdio_probe_run)
 #endif
+#if defined(RTOS_CASE_F429_SDIO_ENGINE)
+	CASE_ENTRY("f429_sdio_engine", case_f429_sdio_engine_run)
+#endif
 #if defined(RTOS_CASE_F429_SDIO_WRITE_PROBE)
 	CASE_ENTRY("f429_sdio_write_probe", case_f429_sdio_write_probe_run)
 #endif

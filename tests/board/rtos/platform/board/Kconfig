@@ -43,6 +43,17 @@ config F429_HEAP_SDRAM
 	  the application supplies the array.  The heap size is
 	  CONFIG_FREERTOS_HEAP_SIZE; the wireless profiles give it 4 MiB.
 
+config F429_SDIO_AP6181
+	bool "Power the onboard AP6181 (BCM43362) on the SDIO socket"
+	depends on BOARD_STM32F429_CHALLENGER
+	help
+	  The 挑战者 V2 carries an AP6181 (BCM43362) on the same SDIO pins the
+	  TF socket uses.  With this on, the socket bring-up drives PB13
+	  (WL_REG_ON / WIFI_EN) high and gives the module its settle before
+	  the host programs the card clock.  Off holds PB13 low, which is the
+	  8189FTV and the plain-SD-card state: the module must stay off the
+	  shared bus.  The TF socket must be empty in either case.
+
 config F429_WIFI_STAGE
 	int "F429 8188EUS ladder stage (3 attach, 4 scan, 5 join, 6 throughput)"
 	depends on BOARD_STM32F429_CHALLENGER
