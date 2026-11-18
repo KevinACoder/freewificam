@@ -447,3 +447,17 @@ buffer is parsed more than once.  Until those are answered the honest statement
 is: the transmit path is measured end to end (a management frame leaves the card
 and is captured on the air) and so is the card interrupt, the scan is
 intermittent, and association is not established.
+
+## SD card line (2026-11-18, separate from the 8189FTV line)
+
+The same TF socket also carries a plain SD memory card, and that line is now
+2/2 on cold boots: the card identifies as a 29 GB SDHC (61,067,264 512-byte
+blocks), the stack switches it to four data lines at 24 MHz, block 0 reads,
+and one block in the card's last 1 MiB window writes, reads back and restores
+with equal CRCs.  The image is `stm32f429-sdcard` (`tick f429_sd_card`), 49,784
+B.  The line is described in `docs/F429-SDCARD.md`.
+
+It validates the shared socket, the pins, the 24 MHz four-bit bus and the ST
+host glue; it is **not** a fix for this section's 8189FTV stack.  The 8189FTV
+line stays at its measured position: the transmit path and the card interrupt
+are measured, scan is intermittent, association is not established.

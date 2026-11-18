@@ -3,10 +3,11 @@
  * sdio_board.c - the F429 SDIO socket bring-up.
  *
  * Pins follow the vendor SD example (bsp_sdio_sd.c) and the board schematic:
- * PC8-PC11 D0-D3, PC12 CLK, PD2 CMD, AF12, internal pull-ups.  The socket has
- * no card-detect pin; the host glue reports the card as present and the
- * command path is the detector.  PB13 is the AP6181's WIFI_EN and is held low
- * for the whole 8189FTV line.
+ * PC8-PC11 D0-D3, PC12 CLK, PD2 CMD, AF12, internal pull-ups.  The same
+ * socket carries the 8189FTV module (the WiFi line) or a plain SD memory card
+ * (the SD card line).  The socket has no card-detect pin; the host glue
+ * reports the card as present and the command path is the detector.  PB13 is
+ * the AP6181's WIFI_EN and is held low for both lines.
  */
 
 #include "sdio_board.h"

@@ -8,8 +8,8 @@
  * Minimal first-party shadow of the SDK's sdmmc dispatch header, narrowed to
  * the instances this port builds. The upstream header pulls in the SD, MMC and
  * SDIO card types behind configuration macros; this port builds the SDIO
- * instance (the WiFi line) and the MMC one (the storage line), and the SD
- * instance is not carried.
+ * instance (the WiFi line), the MMC one (the eMMC line) and the SD one (the
+ * F429 TF-slot card line), one per image.
  */
 
 #ifndef FSL_SDMMC_H_SHADOW
@@ -23,6 +23,10 @@
 
 #if defined(CONFIG_FSL_SDMMC_ENABLE_MMC)
 #include "fsl_mmc.h"
+#endif
+
+#if defined(CONFIG_FSL_SDMMC_ENABLE_SD)
+#include "fsl_sd.h"
 #endif
 
 #ifdef __cplusplus
@@ -54,6 +58,20 @@ typedef struct _sdmmc_sdio_
 
 /*! @brief Configure and initialize host controller for the SDIO card. */
 status_t SDIO_CfgInitialize(sdmmc_sdio_t *sdmmc, sdmmchost_config_t *config);
+#endif
+
+#if defined(CONFIG_FSL_SDMMC_ENABLE_SD)
+/*!@brief sdmmc (SD memory card) instance */
+typedef struct _sdmmc_sd_
+{
+    sdmmchost_t host;
+    sd_card_t card;
+    sd_detect_card_t cardDetect;
+    sd_io_voltage_t ioVoltage;
+} sdmmc_sd_t;
+
+/*! @brief Configure and initialize host controller for the SD memory card. */
+status_t SD_CfgInitialize(sdmmc_sd_t *sdmmc, sdmmchost_config_t *config);
 #endif
 
 #ifdef __cplusplus

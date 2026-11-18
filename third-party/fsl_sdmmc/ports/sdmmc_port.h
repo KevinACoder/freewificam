@@ -1,19 +1,20 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
- * sdmmc_port.h - the port's own entry points over the imported SDIO/MMC stack.
+ * sdmmc_port.h - the port's own entry points over the imported SDIO/MMC/SD
+ * stack.
  *
  * The imported units (components/fsl_sdmmc/) are consumed byte-faithfully and
  * are never edited, so everything this port adds to them lives here and in the
  * .c files beside it: the platform dispatch the upstream tree keeps in its own
  * host/ directory (SDIO_CfgInitialize for the WiFi socket, MMC_CfgInitialize
- * for the soldered eMMC), the host glue for this board's controllers
- * (SDMMCHOST_Init and the ops table), and the wiring the upstream host glue
- * does not carry at all.
+ * for the soldered eMMC, SD_CfgInitialize for the F429's TF slot), the host
+ * glue for this board's controllers (SDMMCHOST_Init and the ops table), and
+ * the wiring the upstream host glue does not carry at all.
  *
- * The two card types live in separate files (sdmmc_card.c, sdmmc_mmc_card.c)
- * and separate host glues (sdmmc_host_dwmmc.c, sdmmc_host_dwcmshc.c), because
- * each image drives exactly one of them: the stack's own contract is one
- * SDMMCHOST_Init per image, and a build that carried both would link two.
+ * The three card types live in separate files (sdmmc_card.c,
+ * sdmmc_mmc_card.c, sdmmc_sd_card.c) and separate host glues, because each
+ * image drives exactly one of them: the stack's own contract is one
+ * SDMMCHOST_Init per image, and a build that carried two would link two.
  *
  * @design ports & adapters, the adapter side: this header is the boundary the
  * seam implementation (lkpi_sdio_fsl.c) and the block-device registry
@@ -137,5 +138,13 @@ void lkpi_sdio_fsl_install(void);
  * here because the platform dispatch calls it. */
 status_t FDWMSHCHOST_MMCConfig(sdmmc_mmc_t *sdmmc, sdmmchost_config_t *config);
 #endif /* CONFIG_FSL_SDMMC_ENABLE_MMC */
+
+#if defined(CONFIG_FSL_SDMMC_ENABLE_SD)
+/* The SD half of the F429 host glue: capability flags (3.3 V, 4-bit), the
+ * card's user parameters (host card-detect, no 1.8 V switch), the maximum
+ * block count and the source clock.  Declared here because SD_CfgInitialize
+ * calls it. */
+status_t FDWMMCHOST_SDConfig(sdmmc_sd_t *sdmmc, sdmmchost_config_t *config);
+#endif /* CONFIG_FSL_SDMMC_ENABLE_SD */
 
 #endif /* SDMMC_PORT_H */

@@ -1,0 +1,23 @@
+# F429 SD card: the board's TF slot as a raw 512-byte block device, through
+# the imported fsl_sdmmc SD stack and the ST SDIO host glue.
+#
+# This is a separate line from the 8189FTV SDIO station.  The socket, the pins
+# (PC8-PC11 D0-D3, PC12 CLK, PD2 CMD, AF12) and the controller are the same;
+# the card type and the stack half are not.  The image is PIO, 4-bit, 24 MHz;
+# the case reads block 0, then writes and restores one 512-byte block in the
+# card's last 1 MiB window.  FatFs and multi-block transfers are the next
+# round, not this profile.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_FREERTOS_HEAP_SIZE=81920
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_CASES="tick f429_sd_card"
+# The SD block-write prefill uses the same inlined FIFO store the 8189 line
+# needed for its frames; the block path's half-empty bursts are in the host
+# glue and do not depend on this arm.
+CONFIG_F4SDIO_TX_FASTFILL=y

@@ -1710,3 +1710,50 @@ rtl8188f_FirmwareDownload: fw_ver=e fw_subver=0000 sig=0x88f1, Month=06, Date=07
 rtl8188f_FirmwareDownload: DLFW OK !
 Power on ok!
 ```
+
+## STM32F429 TF-slot SD card (2026-11-18)
+
+The F429's TF socket with a plain 29 GB SDHC card (`PROFILE=stm32f429-sdcard`),
+read over the SWD RAM console because the CH340 link is unavailable on this
+bench.  The two accepted relay cold boots carry the same image
+(`sha256 f5555386…`, 49,784 B) and the same anchors; the card dump's
+`Start card identificationsdmmc_sdName:` line is the vendor dump's missing
+newline plus the unit tag, not a second message.
+
+```
+rtos: banner backend=freertos kernel=FreeRTOS-Kernel V11.3.1 build=53489a6-dirty
+rtos: kernel ready tick=1000Hz
+rtos: runner start cases=2 build=53489a6-dirty
+...
+tick: ladder beats=3 err_max_ms=9 tol_ms=20
+tick: PASS
+rtos: case tick PASS
+rtos: case f429_sd_card start
+sdcard: start
+Start card identificationsdmmc_sdName: SD [@0x1]
+  Card-Version: SD 3.0 SDHC
+  Size: 29 GB
+  Bus-Speed: 24 MHz
+  Voltage: 3.3v
+  Timing: High-Speed
+  Max. Current: 200mA
+  Drv. Type: B
+sdcard: cardsize blocks=61067264 block_size=512 clock=24000000 width=4 timing=1 version=8 flags=0x000000ce
+sdcard: cid manufacturer=0xfe oem=0x3432 product=SD rev=0x20 serial=0x0000008b date=0x019b
+sdcard: csd structure=1 size=59635 read_bl_len=9
+sdcard: scr spec=2 bus_widths=0x05
+sdcard: read lba=0 rc=0 bytes=512 crc=0x55a8dee9
+sdcard: rw lba=61065216 crc_w=0xf54345a2 crc_r=0xf54345a2 verify=ok
+sdcard: restore lba=61065216 verify=ok
+sdcard: PASS SDCARD
+rtos: case f429_sd_card PASS
+rtos: result pass cases=2/2 backend=freertos
+```
+
+The write window is the card's last 1 MiB (`blocks - 2048`); the case reads
+the original 512 bytes there, writes a position-dependent pattern, reads it
+back, restores the original and compares.  The second cold boot repeats the
+same anchors with slightly different timestamps (the line's 2/2 evidence).
+The bench card's CID is non-standard (`0xfe`/`0x3432`, product `SD`); the CSD
+is the SDHC v2 geometry and the read/write gates pass, so the CID is reported
+as read and not used to claim a brand.

@@ -20,6 +20,7 @@ SRAM reserved for DMA staging. SDRAM is the `.sdram` NOLOAD section. A task
 | `stm32f429-wifi-c6t` (throughput) | 735,936 | 81,484 | 18,496 | 4,456,448 |
 | `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 18,496 | 4,456,448 |
 | `stm32f429-cfg80211-only` link probe | 168,036 | 92,660 | 16 | 1,048,576 |
+| `stm32f429-sdcard` delivery | 49,784 | 171,832 | 0 | 0 |
 | 8189FS driver, compile probe, delivery face (not linked) | 609,933 | 75,967 | 0 | — |
 
 The cfg80211-only probe is a `tick` image and includes the tick case's 64 KiB

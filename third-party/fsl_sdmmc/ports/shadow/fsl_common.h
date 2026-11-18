@@ -53,6 +53,18 @@ extern "C" {
 #if !defined(SZ_1G)
 #define SZ_1G				0x40000000
 #endif
+/* The SD card dump compares against the doubled thresholds; the upstream
+ * kernel helper header carries them and the shadow must too, or the imported
+ * fsl_sd.c does not compile. */
+#if !defined(SZ_2K)
+#define SZ_2K				0x00000800
+#endif
+#if !defined(SZ_2M)
+#define SZ_2M				0x00200000
+#endif
+#if !defined(SZ_2G)
+#define SZ_2G				0x80000000
+#endif
 
 /*! @brief Construct a status code value from a group and code number. */
 #define MAKE_STATUS(group, code) ((((group)*100L) + (code)))

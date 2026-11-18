@@ -90,10 +90,12 @@
 #define STM32F429xx 1
 #endif
 
-#if CONFIG_LIBLINUX80211_SDIO && CONFIG_BOARD_STM32F429_CHALLENGER
+#if (CONFIG_LIBLINUX80211_SDIO || defined(RTOS_CASE_F429_SD_CARD)) && \
+    CONFIG_BOARD_STM32F429_CHALLENGER
 /* The F429's SDIO peripheral, 24 MHz maximum (48 MHz source / (2 + 0)).  This
  * branch also serves the probe image, which has the SDIO stack but not the
- * vendor driver. */
+ * vendor driver, and the SD card image, which drives the same controller
+ * through the imported SD stack instead of the SDIO one. */
 #define SDMMC_PORT_SDIO_HOST_TYPE kSDMMCHOST_TYPE_STM32F4_SDIO
 #define SDMMC_PORT_CARD_CLOCK_HZ 24000000U
 #elif CONFIG_LIBLINUX80211_RTL8189FS

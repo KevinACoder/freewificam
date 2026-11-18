@@ -2,8 +2,9 @@
 /*
  * sdio_board.h - the F429 SDIO socket: pins, card rail and controller reset.
  *
- * The 8189FTV sits in the board's TF card slot on the SDIO bus the AP6181
- * shares: PC8-PC11 (D0-D3), PC12 (CLK) and PD2 (CMD), all AF12.  PB13 is the
+ * The TF slot carries either the 8189FTV module (the WiFi line) or a plain SD
+ * memory card (the SD card line), on the SDIO bus it shares with the AP6181:
+ * PC8-PC11 (D0-D3), PC12 (CLK) and PD2 (CMD), all AF12.  PB13 is the
  * AP6181's WIFI_EN; it must stay low so the other card does not answer on the
  * shared bus.
  */

@@ -133,6 +133,9 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_F429_SDIO_WRITE_PROBE)
 	CASE_ENTRY("f429_sdio_write_probe", case_f429_sdio_write_probe_run)
 #endif
+#if defined(RTOS_CASE_F429_SD_CARD)
+	CASE_ENTRY("f429_sd_card", case_f429_sd_card_run)
+#endif
 #if defined(RTOS_CASE_RTL8189FS_AP)
 	CASE_ENTRY("rtl8189fs_ap", case_rtl8189fs_ap_run)
 #endif

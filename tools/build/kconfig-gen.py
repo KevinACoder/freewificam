@@ -61,7 +61,8 @@ CASES = """tick cmsis2 net pcie emmc usb_xhci usb_ehci usb_dwc2 f429_sdram f429_
          rtl8189fs_throughput rtl8189fs_ap rtw89_c3 rtw89_c4 rtw89_c5
          rtw89_c6 rtw89_ap rtw89_mon rtw88_c3 rtw88_c4 rtw88_c5
          rtw88_c6 rtw88_ap rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5
-         rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6 f429_wifi_ap f429_ap_link f429_sdio_probe f429_sdio_write_probe""".split()
+         rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6 f429_wifi_ap f429_ap_link f429_sdio_probe f429_sdio_write_probe
+         f429_sd_card""".split()
 
 KC = None
 
@@ -209,6 +210,10 @@ def legacy_macros(kconf) -> list[str]:
     # for it (the previous tree derived it from its CASE_DEFS make variable).
     if "emmc" in selected_cases:
         lines.append("#define CONFIG_FSL_SDMMC_ENABLE_MMC 1")
+    # The F429 SD card line selects the imported SD stack; the SDIO line keeps
+    # its own ENABLE_SDIO write above.
+    if "f429_sd_card" in selected_cases:
+        lines.append("#define CONFIG_FSL_SDMMC_ENABLE_SD 1")
     return lines
 
 

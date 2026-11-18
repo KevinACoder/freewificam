@@ -1,16 +1,18 @@
 /*
  * @file   sdmmc_host_stm32f4_sdio.c
- * @brief  The imported SDIO stack's host glue for the STM32F429 SDIO
+ * @brief  The imported SDIO/SD stack's host glue for the STM32F429 SDIO
  *         peripheral: the ops table over the ST HAL LL SDMMC driver.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2026 freewificam contributors
  *
- * The card service (sdmmc_card.c) speaks the imported stack's one ops table.
- * This file maps that table onto the ST LL driver carried in
- * third-party/stm32f4xx-hal: SDIO_Init, SDIO_SendCommand, SDIO_ConfigData,
- * the FIFO accessors and the controller's status flags.  The transfer path is
- * polled PIO, the same shape the vendor SD example uses; DMA is a later arm.
+ * Two card services speak the imported stack's one ops table through this
+ * file: the SDIO instance (sdmmc_card.c, the 8189FTV line) and the SD memory
+ * card instance (sdmmc_sd_card.c, the F429 TF-slot line).  This file maps the
+ * table onto the ST LL driver carried in third-party/stm32f4xx-hal: SDIO_Init,
+ * SDIO_SendCommand, SDIO_ConfigData, the FIFO accessors and the controller's
+ * status flags.  The transfer path is polled PIO, the same shape the vendor SD
+ * example uses; DMA is a later arm.
  *
  * Board facts live in sdio_board.c (pins, PB13/AP6181, controller reset).  The
  * socket has no card-detect pin, so the host reports the card present and the
@@ -514,6 +516,7 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
 	uint32_t want = SDIO_FLAG_CMDSENT;
 	uint32_t sta = 0U;
 	bool no_crc = (command->responseType == kCARD_ResponseTypeR4) ||
+		      (command->responseType == kCARD_ResponseTypeR3) ||
 		      (command->index == 5U);
 
 	(void)host;
@@ -554,20 +557,33 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
 	}
 
 	if (response != SDIO_RESPONSE_NO) {
-		command->response[0] = SDIO_GetResponse(SDIO, SDIO_RESP1);
-		if ((command->responseErrorFlags != 0U) &&
-		    ((command->response[0] & command->responseErrorFlags) != 0U)) {
-			SDMMC_LOGE("f4sdio", "r5 cmd=%u arg=0x%08x resp=0x%08x mask=0x%08x\n",
-				   (unsigned)command->index,
-				   (unsigned)command->argument,
-				   (unsigned)command->response[0],
-				   (unsigned)command->responseErrorFlags);
-			return kStatus_SDMMC_TransferFailed;
-		}
 		if (response == SDIO_RESPONSE_LONG) {
-			command->response[1] = SDIO_GetResponse(SDIO, SDIO_RESP2);
-			command->response[2] = SDIO_GetResponse(SDIO, SDIO_RESP3);
-			command->response[3] = SDIO_GetResponse(SDIO, SDIO_RESP4);
+			/*
+			 * R2 (CID/CSD) is 128 bits.  The imported stack's decoders
+			 * number the four words from the least significant end:
+			 * SD_DecodeCid reads the manufacturer from response[3] and
+			 * SD_DecodeCsd reads CSD[127:126] from rawCsd[3].  The ST
+			 * controller's RESP1 is the most significant word (the ST
+			 * HAL's own GetCardCID reads CID[0]=RESP1 the same way), so
+			 * fill the stack's order, not the controller's.  Without
+			 * this the CID/CSD decode into a plausible-looking but
+			 * wrong identity and a 448 KB geometry for a real card.
+			 */
+			command->response[0] = SDIO_GetResponse(SDIO, SDIO_RESP4);
+			command->response[1] = SDIO_GetResponse(SDIO, SDIO_RESP3);
+			command->response[2] = SDIO_GetResponse(SDIO, SDIO_RESP2);
+			command->response[3] = SDIO_GetResponse(SDIO, SDIO_RESP1);
+		} else {
+			command->response[0] = SDIO_GetResponse(SDIO, SDIO_RESP1);
+			if ((command->responseErrorFlags != 0U) &&
+			    ((command->response[0] & command->responseErrorFlags) != 0U)) {
+				SDMMC_LOGE("f4sdio", "r5 cmd=%u arg=0x%08x resp=0x%08x mask=0x%08x\n",
+					   (unsigned)command->index,
+					   (unsigned)command->argument,
+					   (unsigned)command->response[0],
+					   (unsigned)command->responseErrorFlags);
+				return kStatus_SDMMC_TransferFailed;
+			}
 		}
 	}
 
@@ -884,6 +900,9 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 			}
 		}
 	} else if (data->txData != NULL) {
+		uint32_t tx_primask = 0U;
+		bool tx_crit = false;
+
 		s_f4sdio_tx_left = remaining;
 		s_f4sdio_tx_sta = 0U;
 		s_f4sdio_tx_dcount = 0U;
@@ -905,7 +924,18 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		 * straight-line burst (every management frame fits: a probe
 		 * request is 84/100 bytes, an auth frame about 40) and only
 		 * fall into the status-checked loop for a longer frame.
+		 *
+		 * A memory-card block write is the same problem over a longer
+		 * window: 512 bytes take about 43 us, and an RTOS tick or another
+		 * ISR inside that window drains the FIFO faster than this loop
+		 * refills it (measured: 448 of 512 bytes, TXUNDERR at DCOUNT 80).
+		 * The block write therefore runs with the CPU's interrupts held
+		 * off, prefill included, until the last word is in the FIFO.
 		 */
+		if (!byte_mode) {
+			tx_primask = f4sdio_crit_enter();
+			tx_crit = true;
+		}
 		{
 			uint32_t burst = remaining;
 			uint32_t t0 = f4_cyccnt();
@@ -959,30 +989,68 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		s_f4sdio_tx_sta_burst = SDIO->STA;
 		s_f4sdio_tx_dcnt_burst = SDIO->DCOUNT;
 
-		while (remaining != 0U) {
-			if ((SDIO->STA & (SDIO_FLAG_TXUNDERR |
-					  SDIO_FLAG_DCRCFAIL |
-					  SDIO_FLAG_DTIMEOUT)) != 0U) {
-				s_f4sdio_tx_left = remaining;
-				s_f4sdio_tx_sta = SDIO->STA;
-				s_f4sdio_tx_dcount = SDIO->DCOUNT;
-				break;
-			}
+		if (!byte_mode) {
 			/*
-			 * Write credit is "the FIFO is not full", not "the FIFO
-			 * is at least half empty": with 21 words to push into a
-			 * 32-word FIFO, waiting for the half-empty flag stops a
-			 * third of the way and the card sees a short transfer.
+			 * Memory-card block writes: keep the FIFO full rather than
+			 * waiting for the half-empty flag.  The flag-based loop
+			 * underran near the end of the block (measured: 440/448 of
+			 * 512 bytes, TXUNDERR while 64 bytes were still unwritten);
+			 * filling every free slot with a direct store and holding
+			 * interrupts off gives the card no window to starve.
 			 */
-			if ((SDIO->STA & SDIO_FLAG_TXFIFOF) == 0U) {
-				uint32_t word = 0U;
-				uint32_t n = (remaining < 4U) ? remaining : 4U;
+			while (remaining != 0U) {
+				if ((SDIO->STA & (SDIO_FLAG_TXUNDERR |
+						  SDIO_FLAG_DCRCFAIL |
+						  SDIO_FLAG_DTIMEOUT)) != 0U) {
+					s_f4sdio_tx_left = remaining;
+					s_f4sdio_tx_sta = SDIO->STA;
+					s_f4sdio_tx_dcount = SDIO->DCOUNT;
+					break;
+				}
+				while ((remaining != 0U) &&
+				       ((SDIO->STA & SDIO_FLAG_TXFIFOF) == 0U)) {
+					if ((((uintptr_t)tx & 3u) == 0u)) {
+						SDIO->FIFO =
+						    *(const uint32_t *)(const void *)tx;
+					} else {
+						uint32_t word = 0U;
 
-				(void)memcpy(&word, tx, n);
-				tx += n;
-				remaining -= n;
-				(void)SDIO_WriteFIFO(SDIO, &word);
+						(void)memcpy(&word, tx, 4U);
+						SDIO->FIFO = word;
+					}
+					tx += 4U;
+					remaining -= 4U;
+				}
 			}
+		} else {
+			while (remaining != 0U) {
+				if ((SDIO->STA & (SDIO_FLAG_TXUNDERR |
+						  SDIO_FLAG_DCRCFAIL |
+						  SDIO_FLAG_DTIMEOUT)) != 0U) {
+					s_f4sdio_tx_left = remaining;
+					s_f4sdio_tx_sta = SDIO->STA;
+					s_f4sdio_tx_dcount = SDIO->DCOUNT;
+					break;
+				}
+				/*
+				 * Write credit is "the FIFO is not full", not "the FIFO
+				 * is at least half empty": with 21 words to push into a
+				 * 32-word FIFO, waiting for the half-empty flag stops a
+				 * third of the way and the card sees a short transfer.
+				 */
+				if ((SDIO->STA & SDIO_FLAG_TXFIFOF) == 0U) {
+					uint32_t word = 0U;
+					uint32_t n = (remaining < 4U) ? remaining : 4U;
+
+					(void)memcpy(&word, tx, n);
+					tx += n;
+					remaining -= n;
+					(void)SDIO_WriteFIFO(SDIO, &word);
+				}
+			}
+		}
+		if (tx_crit) {
+			f4sdio_crit_exit(tx_primask);
 		}
 	}
 
@@ -1342,6 +1410,47 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 	return kStatus_Success;
 }
 
+/*
+ * The SD stack's wide registers (SCR via ACMD51, SD status via ACMD13) are
+ * sent MSB first, while this controller's FIFO hands the first byte back in
+ * the low byte of the first word.  The stack asks the host to put the packet
+ * into its memory order; only the MSB-first form needs the swap.  CMD6's
+ * switch status is usual LSB-first data and does not call this.
+ */
+static void f4sdio_convert_data_to_little_endian(sdmmchost_t *host,
+						 uint32_t *data,
+						 uint32_t wordSize,
+						 uint32_t format)
+{
+	uint32_t i;
+
+	(void)host;
+
+	if ((data == NULL) ||
+	    (format != (uint32_t)kSDMMC_DataPacketFormatMSBFirst)) {
+		return;
+	}
+
+	for (i = 0U; i < wordSize; i++) {
+		data[i] = ((data[i] & 0x000000FFUL) << 24) |
+			  ((data[i] & 0x0000FF00UL) << 8) |
+			  ((data[i] & 0x00FF0000UL) >> 8) |
+			  ((data[i] & 0xFF000000UL) >> 24);
+	}
+}
+
+/*
+ * DAT0 is the card's busy line after a write or erase.  The SD stack polls it
+ * through SDMMCHOST_IsCardBusy, and only a host that answers lets
+ * SD_PollingCardStatusBusy run its timeout instead of issuing CMD13 without a
+ * bound.  PC8 is D0 on this board (sdio_board.c).
+ */
+static bool f4sdio_card_is_busy(sdmmchost_t *host)
+{
+	(void)host;
+	return (GPIOC->IDR & (1UL << 8U)) == 0U;
+}
+
 static const sdmmchost_ops_t f4sdio_ops = {
 	.deinit = f4sdio_deinit,
 	.reset = f4sdio_reset,
@@ -1352,7 +1461,7 @@ static const sdmmchost_ops_t f4sdio_ops = {
 	.enableHS400Mode = NULL,
 	.enableStrobeDll = NULL,
 	.getSignalLineStatus = f4sdio_signal_line_status,
-	.convertDataToLittleEndian = NULL,
+	.convertDataToLittleEndian = f4sdio_convert_data_to_little_endian,
 
 	.cardDetectInit = f4sdio_card_detect_init,
 	.cardSetPower = f4sdio_card_set_power,
@@ -1364,7 +1473,7 @@ static const sdmmchost_ops_t f4sdio_ops = {
 	.cardDetectStatus = f4sdio_card_detect_status,
 	.cardSendActive = f4sdio_card_send_active,
 	.cardSetClock = f4sdio_card_set_clock,
-	.cardIsBusy = NULL,
+	.cardIsBusy = f4sdio_card_is_busy,
 
 	.transferFunction = f4sdio_transfer,
 
@@ -1404,6 +1513,7 @@ status_t SDMMCHOST_Init(sdmmchost_t *host)
 	return kStatus_Success;
 }
 
+#if defined(CONFIG_FSL_SDMMC_ENABLE_SDIO)
 status_t FDWMMCHOST_SDIOConfig(sdmmc_sdio_t *sdmmc, sdmmchost_config_t *config)
 {
 	sdmmchost_t *host = &sdmmc->host;
@@ -1437,3 +1547,40 @@ status_t FDWMMCHOST_SDIOConfig(sdmmc_sdio_t *sdmmc, sdmmchost_config_t *config)
 
 	return kStatus_Success;
 }
+#endif /* CONFIG_FSL_SDMMC_ENABLE_SDIO */
+
+#if defined(CONFIG_FSL_SDMMC_ENABLE_SD)
+status_t FDWMMCHOST_SDConfig(sdmmc_sd_t *sdmmc, sdmmchost_config_t *config)
+{
+	sdmmchost_t *host = &sdmmc->host;
+	sd_card_t *card = &sdmmc->card;
+	sd_detect_card_t *card_cd = &sdmmc->cardDetect;
+	sd_io_voltage_t *io_voltage = &sdmmc->ioVoltage;
+
+	assert(sdmmc != NULL);
+	assert(config != NULL);
+
+	card_cd->type = kSD_DetectCardByHostCD;
+	card_cd->cdDebounce_ms = 10U;
+
+	card->usrParam.pwr = NULL;
+	card->usrParam.powerOnDelayMS = 0U;
+	card->usrParam.powerOffDelayMS = 0U;
+	card->usrParam.ioStrength = NULL;
+	card->usrParam.ioVoltage = io_voltage;
+	io_voltage->type = kSD_IOVoltageCtrlNotSupport;
+	io_voltage->func = NULL;
+
+	card->usrParam.maxFreq = config->cardClock;
+	card->usrParam.capability = 0U;
+	card->noInteralAlign = false;
+
+	host->capability = (uint32_t)kSDMMCHOST_SupportVoltage3v3 |
+			   (uint32_t)kSDMMCHOST_Support4BitDataWidth;
+	host->maxBlockCount = (uint32_t)(config->maxTransSize / config->defBlockSize);
+	host->maxBlockSize = SDMMCHOST_SUPPORT_MAX_BLOCK_LENGTH;
+	host->sourceClock_Hz = sdio_board_source_hz();
+
+	return kStatus_Success;
+}
+#endif /* CONFIG_FSL_SDMMC_ENABLE_SD */

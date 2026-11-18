@@ -156,6 +156,11 @@ int case_f429_sdio_probe_run(void);
 #if defined(RTOS_CASE_F429_SDIO_WRITE_PROBE)
 int case_f429_sdio_write_probe_run(void);
 #endif
+/* The F429 TF slot as a raw SD block device (the SD card line): identify,
+ * read block 0, write/read back/restore one block in the tail window. */
+#if defined(RTOS_CASE_F429_SD_CARD)
+int case_f429_sd_card_run(void);
+#endif
 
 /* The RTL8851BU (rtw89, USB): C3 attach over the linuxkpi USB engine and
  * CherryUSB, C4 scan, C5/C6 open join + ICMP.  The cases are mac80211 drivers'
