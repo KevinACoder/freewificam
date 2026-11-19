@@ -562,6 +562,12 @@ the data phase underruns (the card does not drain), which says the card's
 function-1 error is real, not a host verdict.  A second arm requested
 HT_AVAIL before the backplane writes (the vendor's clock ladder); this card
 never leaves ALP during the download, and the request only stalls the first
-chunk.  The open question is therefore the first block write itself: the host
-reports it complete, but the card refuses everything after it.  C3 is not
-claimed.
+chunk.  One more arm settled which side fails: a block read of the same address
+succeeds just before the first write, and a read-back immediately after the
+write is already refused with the same R5 error, so the first function-1 block
+write itself puts the card into its error state; the second command, the timing
+and the R5 flags are not the cause.  A one-block variant did not reach the card
+because the host's data phase failed for that shape.  The next work is the
+chip's SOCRAM core state before the write: the module vendor's driver resets
+that core explicitly, while the upstream driver does not when it is already up.
+C3 is not claimed.
