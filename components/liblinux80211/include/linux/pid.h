@@ -21,6 +21,13 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/pid.h:11 includes <linux/wait.h>: the interface's pid
+ * accessors are written over the wait-queue API (a child waits on its parent's
+ * queued signal), and on a kernel build this header is one of the paths by which a
+ * unit that takes sched/signal.h reaches the wait-entry vocabulary (brcmfmac's SDIO
+ * control-frame wait declares one, sdio.c:1731). */
+#include <linux/wait.h>
+
 struct pid;
 
 /* [LNX] include/linux/pid.h:125: extern struct pid *find_vpid(int nr); */

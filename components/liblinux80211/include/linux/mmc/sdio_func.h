@@ -185,4 +185,17 @@ void	sdio_f0_writeb(struct sdio_func *func, unsigned char b, unsigned int addr,
 mmc_pm_flag_t	sdio_get_host_pm_caps(struct sdio_func *func);
 int	sdio_set_host_pm_flags(struct sdio_func *func, mmc_pm_flag_t flags);
 
+/*
+ * [LNX] include/linux/mmc/sdio_func.h:176-180: the UHS tuning hold/disable pair a
+ * driver calls around a sequence of commands that would otherwise be interrupted
+ * by an automatic retune. All four return void. brcmfmac calls them around its
+ * clock-request and power-state handshakes (sdio.c), which is a bus operation
+ * rather than a tuning decision; this port's engine has no tuning state to hold,
+ * so its bodies (bus/sdio.c) are empty - see the DIVERGENCES row.
+ */
+void	sdio_retune_crc_disable(struct sdio_func *func);
+void	sdio_retune_crc_enable(struct sdio_func *func);
+void	sdio_retune_hold_now(struct sdio_func *func);
+void	sdio_retune_release(struct sdio_func *func);
+
 #endif /* _LINUXKPI_LINUX_MMC_SDIO_FUNC_H_ */

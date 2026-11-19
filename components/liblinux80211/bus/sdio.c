@@ -43,6 +43,7 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
 #include <linux/mmc/card.h>
+#include <linux/mmc/core.h>
 #include <linux/mmc/host.h>
 
 #include "lkpi_sdio_backend.h"
@@ -137,6 +138,11 @@ struct lkpi_sdio_card {
 	osMutexId_t			claim;
 	osThreadId_t			pump;
 	osThreadId_t			claim_owner;
+	/* Linux' mmc claim is recursive for the claiming task (claim_cnt); the
+	 * firmware download path relies on it (brcmf_sdio_download_firmware
+	 * claims, then brcmf_sdiod_ramrw claims again for every window).  A plain
+	 * non-recursive mutex deadlocks that path on this port. */
+	unsigned int			claim_depth;
 	uint64_t			claim_since_ns;
 	osSemaphoreId_t			pump_req;
 	osSemaphoreId_t			pump_done;
@@ -1046,6 +1052,13 @@ sdio_claim_host(struct sdio_func *func)
 
 	if (func == NULL || c == NULL || c->claim == NULL)
 		return;
+	/* the same task may claim again (Linux counts the nesting), and only the
+	 * outermost release gives the bus back */
+	if (c->claim_owner == osThreadGetId()) {
+		c->claim_depth++;
+		lkpi_sdio_stats.claims++;
+		return;
+	}
 	t0 = lkpi_sdio_census_now();
 	/* announced before the wait, so the pump can see the request and stand aside
 	 * for a turn rather than re-taking the bus ahead of this caller */
@@ -1055,6 +1068,7 @@ sdio_claim_host(struct sdio_func *func)
 	lkpi_sdio_census_note_claim_wait(t0, lkpi_sdio_census_now());
 	lkpi_sdio_census_note_claim_hold(lkpi_sdio_census_now());
 	c->claim_owner = osThreadGetId();
+	c->claim_depth = 1u;
 	c->claim_since_ns = lkpi_sdio_census_now();
 	c->host.claimed = true;
 	lkpi_sdio_stats.claims++;
@@ -1067,6 +1081,16 @@ sdio_release_host(struct sdio_func *func)
 
 	if (func == NULL || c == NULL || c->claim == NULL)
 		return;
+	/* a release from a thread that does not hold the claim is a defect in
+	 * the caller, not a bus operation; do not hand the bus to a stranger */
+	if (c->claim_owner != osThreadGetId())
+		return;
+	if (c->claim_depth > 1u) {
+		c->claim_depth--;
+		lkpi_sdio_stats.releases++;
+		return;
+	}
+	c->claim_depth = 0u;
 	c->host.claimed = false;
 	c->claim_owner = NULL;
 	c->claim_since_ns = 0u;
@@ -2784,7 +2808,17 @@ static int
 lkpi_sdio_probe(struct sdio_driver *drv)
 {
 	unsigned int i;
+	int claimed_any = 0;
 
+	/*
+	 * The interface's SDIO bus probes the driver once per matching function;
+	 * a driver may decline one and claim another.  brcmfmac is the case that
+	 * makes this visible: its function-1 probe is a deliberate no-op success
+	 * ("consume func num 1") and the real probe runs for function 2.  This
+	 * loop used to return after the first successful function, so the engine
+	 * reported the driver attached while the real probe had never run - and
+	 * wlan0 never appeared.
+	 */
 	for (i = 1u; i <= (unsigned int)LKPI_SDIO_BE_MAX_FUNCS; i++) {
 		struct sdio_func *f = &lkpi_sdio_card_state.func[i];
 		const struct sdio_device_id *id;
@@ -2799,13 +2833,13 @@ lkpi_sdio_probe(struct sdio_driver *drv)
 		if (ret == 0) {
 			lkpi_sdio_card_state.claimed[i] = true;
 			lkpi_sdio_stats.probes++;
+			claimed_any = 1;
 			lkpi_printf(ULOG_INFO_LEVEL,
 			    "sdiokpi: '%s' claimed %04x:%04x function %u\n",
 			    drv->name, f->vendor, f->device, f->num);
-			return 0;
 		}
 	}
-	return -ENODEV;
+	return claimed_any ? 0 : -ENODEV;
 }
 
 int
@@ -2861,6 +2895,104 @@ sdio_set_host_pm_flags(struct sdio_func *func, mmc_pm_flag_t flags)
 		return -EINVAL;
 	func->card->host->pm_flags = flags;
 	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* the MMC request and tuning-hold entry points                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/linux/mmc/core.h:180 (drivers/mmc/core/core.c's
+ * mmc_wait_for_req): the wait a client uses when it builds the request itself.
+ * The engine moves data through the backend seam one buffer at a time and has no
+ * request queue, no completion callback and no host-ops table, so it cannot
+ * execute an mmc_request.
+ *
+ * The call is not reachable from a compiled driver: brcmfmac enters its
+ * scatter-gather path only when host->max_segs > 1 (bcmsdh.c:765), and this
+ * engine reports one segment (lkpi_sdio_build_functions), so the driver issues
+ * each transfer through sdio_memcpy_*(). The answer is therefore an error, and
+ * it is recorded where the caller reads it: the driver takes
+ * `mc->error ? mc->error : md->error` (bcmsdh.c:353), so leaving the two zero
+ * would report a transfer that never happened as successful.
+ */
+void
+mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq)
+{
+	(void)host;
+	if (mrq == NULL)
+		return;
+	if (mrq->cmd != NULL)
+		mrq->cmd->error = -EOPNOTSUPP;
+	if (mrq->data != NULL)
+		mrq->data->error = -EOPNOTSUPP;
+}
+
+/*
+ * [LNX] include/linux/mmc/core.h:186 (mmc_set_data_timeout): derive the data
+ * timeout from the card's CSD/EXT_CSD timing values. The port's card record
+ * carries neither table - the backend reports the card's identity and block
+ * geometry, not its timing descriptors - and the only caller is the
+ * scatter-gather path above, which never runs here. The timeout the engine does
+ * use lives in its own seam. The function keeps the interface's signature and
+ * leaves the request's timeout fields at zero, which is the value the interface
+ * itself uses for "no timeout setting".
+ */
+void
+mmc_set_data_timeout(struct mmc_data *data, const struct mmc_card *card)
+{
+	(void)data;
+	(void)card;
+}
+
+/*
+ * [LNX] include/linux/mmc/core.h:184 (mmc_hw_reset): reset the card through the
+ * host controller. The engine has no reset operation in its seam, and the card
+ * on this board is behind a controller that can only be reset as a bus (the
+ * board's SDIO power is shared with the socket) - neither is a card reset the
+ * driver asked for. The answer is the interface's "this host cannot" value; the
+ * one caller (sdio.c:4174) ignores the return and continues its own bus-down
+ * sequence, which is what it would do after a reset that failed.
+ */
+int
+mmc_hw_reset(struct mmc_card *card)
+{
+	(void)card;
+	return -EOPNOTSUPP;
+}
+
+/*
+ * [LNX] include/linux/mmc/sdio_func.h:176-180: the UHS tuning hold/disable pair.
+ * In the interface they set host->retune_crc_disable and call the tuning state
+ * machine, because a UHS card's bus can need an automatic retune that would
+ * corrupt a command sequence the driver is in the middle of. This port's host
+ * record carries no retune state and the engine never retunes (the bus runs at
+ * the card's high-speed timing, not UHS), so there is nothing to disable, hold or
+ * release. All four are void in the interface, so an empty body cannot be read as
+ * success by a caller.
+ */
+void
+sdio_retune_crc_disable(struct sdio_func *func)
+{
+	(void)func;
+}
+
+void
+sdio_retune_crc_enable(struct sdio_func *func)
+{
+	(void)func;
+}
+
+void
+sdio_retune_hold_now(struct sdio_func *func)
+{
+	(void)func;
+}
+
+void
+sdio_retune_release(struct sdio_func *func)
+{
+	(void)func;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2920,6 +3052,24 @@ lkpi_sdio_build_functions(void)
 	c->host.max_req_size = c->info.host_max_req_size != 0u ?
 	    c->info.host_max_req_size :
 	    c->info.host_max_blk_size * c->info.host_max_blk_count;
+	/*
+	 * The engine moves one buffer per transfer (the seam has one address, one
+	 * pointer and one length), so a request carries one scatterlist entry.
+	 * This is the answer a client reads before it decides to build its own
+	 * mmc_request: brcmfmac turns scatter-gather on only when max_segs > 1
+	 * (bcmsdh.c:765) and otherwise issues each transfer through
+	 * sdio_memcpy_*(). Reporting more entries than the seam can move would
+	 * make the driver build a request this engine cannot execute.
+	 *
+	 * max_seg_size is the engine's own per-transfer ceiling for the same
+	 * reason, and caps stays clear: the engine cannot power-cycle the card
+	 * alone nor detect its removal, and a capability bit would be a promise
+	 * the backend does not make. brcmfmac sets NONREMOVABLE on the host
+	 * itself after its probe (bcmsdh.c:892-897).
+	 */
+	c->host.max_segs = 1u;
+	c->host.max_seg_size = c->host.max_req_size;
+	c->host.caps = 0u;
 	c->host.ios.clock = c->info.clock_hz;
 	c->host.ios.power_mode = MMC_POWER_ON;
 	c->host.ios.bus_mode = MMC_BUSMODE_PUSHPULL;

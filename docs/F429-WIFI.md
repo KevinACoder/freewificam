@@ -518,3 +518,40 @@ outside this tree and not linked into any image here, starts an AP on the same
 card (SSID `fire_<MAC>`, channel 1) and the bench monitor sees its beacons;
 that is the hardware/RF reference for this line, and it is not a freewificam
 result.  The 8189FTV line's position is unchanged.
+
+### brcmfmac on the same card (2026-11-19, C0/C1, C3 in progress)
+
+The onboard AP6181 also has a second implementation path: the public brcmfmac
+FullMAC driver from the kernel's broadcom tree, imported whole (136 files,
+`brcm80211/`) with 24 compiled units (brcmfmac core + BCDC + SDIO, the
+built-in wcc/cyw/bca cores, brcmutil).  It is ISC; the image links cfg80211, so
+the product is a GPL-2.0 link product.  The driver is a cfg80211 consumer: no
+mac80211, no in-driver MLME.
+
+C0 and C1 are measured: every one of the 24 units compiles against the port's
+face (the first pass had 2; the gap list is the C0 record), and
+`stm32f429-ap6181-attach` links with 0 undefined symbols, `_start` at
+`0x08000000`, 85,824 B of RAM margin and a 543,308 B image.  The image carries
+the 43362 firmware (linux-firmware `cyfirmware`, 202,623 B) and an Ampak
+AP6210 NVRAM (803 B) as compiled-in blobs.
+
+C3 (attach) is **not** reached yet.  What is measured on the board: the SDIO
+engine probes every matching function (function 1 is the driver's deliberate
+no-op, function 2 is the real probe), the driver requests
+`brcm/brcmfmac43362-sdio.bin` and finds it, and the firmware download starts.
+Three engine/host semantics had to be corrected to get that far:
+
+- the bus claim is recursive for the claiming task, as Linux' mmc claim is;
+  the download claims and then claims again per backplane window, and a plain
+  mutex deadlocked it;
+- a driver's probe is offered every matching SDIO function, not only the
+  first;
+- a block-mode CMD53 write arms its data path only after the FIFO prefill,
+  otherwise the card starts consuming at the command response and the first
+  2048-byte firmware chunk underruns.
+
+The download then stops at the second 2048-byte block write: the card answers
+CMD53 with an R5 error (flags `0x0800`/`0x2000`) at backplane address
+`0x8800`, the driver aborts the image and no `wlan0` is registered.  The next
+work is that block-write shape (window/address advance, block count against
+DLEN, the first chunk's data-phase close), not the stack.  C3 is not claimed.

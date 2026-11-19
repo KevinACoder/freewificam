@@ -317,6 +317,22 @@ skb_cloned(const struct sk_buff *skb)
 }
 
 /*
+ * [LNX] include/linux/skbuff.h:2063-2078: `skb_header_cloned()` - whether writing the
+ * buffer's header requires a copy. The interface tests the clone flag and the shared
+ * record's dataref; this port has neither (see skb_cloned() above), so the descriptor
+ * cannot prove a private header either, and the answer is the conservative one. A
+ * driver that asks before it prepends its own header therefore takes its copy path
+ * (brcmfmac's transmit header push, core.c:332), which is correct at the cost of one
+ * copy - never a write into a shared head.
+ */
+static __always_inline __unused int
+skb_header_cloned(const struct sk_buff *skb)
+{
+	(void)skb;
+	return 1;
+}
+
+/*
  * [LNX] include/linux/skbuff.h:4286: `int skb_copy_bits(const struct sk_buff *skb, int
  * offset, void *to, int len)`. Declared, not defined: the body lives with the sk_buff
  * seam the pool owns, next to the other copy operations there, and it walks the same

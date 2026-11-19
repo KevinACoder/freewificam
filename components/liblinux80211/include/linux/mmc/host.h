@@ -85,6 +85,18 @@ struct mmc_ios {
 #define	MMC_SET_DRIVER_TYPE_D	3
 
 /*
+ * [LNX] include/linux/mmc/host.h:396-408, the controller capabilities a driver
+ * tests through host->caps. brcmfmac names two: NONREMOVABLE, which its SDIO
+ * glue sets after the probe so a resume is not treated as a card swap, and
+ * POWER_OFF_CARD, which tells it whether the host can cut the card's power
+ * across a system suspend (this port cannot, so the bit stays clear and the
+ * driver's "power will be cut" branch is never chosen).
+ */
+#define	MMC_CAP_SDIO_IRQ	(1 << 3)	/* can signal pending SDIO IRQs */
+#define	MMC_CAP_NONREMOVABLE	(1 << 8)	/* nonremovable (eMMC, soldered SDIO) */
+#define	MMC_CAP_POWER_OFF_CARD	(1 << 14)	/* can power off after boot */
+
+/*
  * The controller. One host carries at most one card in this port, which is what
  * the engine's single-card seam assumes; the card pointer is that relationship.
  */
@@ -110,6 +122,18 @@ struct mmc_host {
 	unsigned int		sdio_irqs;	/* number of claimed function IRQs */
 	mmc_pm_flag_t		pm_caps;	/* power-management capabilities */
 	mmc_pm_flag_t		pm_flags;	/* power-management flags in effect */
+	/*
+	 * [LNX] include/linux/mmc/host.h: the controller's scatter-gather
+	 * geometry and its capability word. A driver reads max_segs to decide
+	 * whether it may hand one request with more than one entry
+	 * (brcmfmac/bcmsdh.c:765 turns scatter-gather support on only when
+	 * `host->max_segs > 1`), max_seg_size as the per-entry ceiling, and caps
+	 * as the capability bits below. This port's engine moves one buffer per
+	 * request, so it reports one segment (see bus/sdio.c).
+	 */
+	unsigned int		max_segs;	/* scatterlist entries per request */
+	unsigned int		max_seg_size;	/* largest single scatterlist entry */
+	unsigned int		caps;		/* MMC_CAP_* */
 };
 
 #define	mmc_hostname(host)	dev_name(&(host)->class_dev)

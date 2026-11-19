@@ -515,6 +515,23 @@ RTL8XXXU_CFLAGS := $(S0_CFLAGS) \
 	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
 	-Wno-override-init
 
+# The sixth vendored driver: brcmfmac (BCM43362 / AP6181, SDIO FullMAC).
+# Its source list is the brcm80211 import's own sources.mk (24 units under the
+# face); the driver's kbuild adds `-I $(src) -I $(src)/../include`, which is
+# brcmfmac/ and the brcm80211 include/ directory here.  S1b compiles it against
+# the full inventory face (S0_CFLAGS) because the driver is a cfg80211 consumer
+# and the measurement must not depend on an image profile.
+BRCMFMAC_DIR := $(ROOT)/wireless-drivers/brcmfmac
+$(eval $(call component_sources,$(BRCMFMAC_DIR),drv,BRCMFMAC_IMPL))
+
+BRCMFMAC_CFLAGS := $(S0_CFLAGS) \
+	-I$(BRCMFMAC_DIR)/brcmfmac -I$(BRCMFMAC_DIR)/include \
+	-include $(BRCMFMAC_DIR)/driver_config.h \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
+	-Wno-override-init -Wno-maybe-uninitialized -Wno-unused-function \
+	-Wno-unused-variable -Wno-pointer-sign
+
 S1_CFLAGS := $(STACK_FACE_CFLAGS) \
 	-I$(IWL_DRV) \
 	-include $(LIB8)/include/linux80211/driver_config.h \
@@ -542,6 +559,10 @@ else ifeq ($(S1_DRIVER),rtl8xxxu)
 S1_TU_SET := $(RTL8XXXU_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(RTL8XXXU_CFLAGS)
 S1_DRIVER_TAG := rtl8xxxu
+else ifeq ($(S1_DRIVER),brcmfmac)
+S1_TU_SET := $(BRCMFMAC_IMPL_SRCS)
+S1_DRIVER_CFLAGS := $(BRCMFMAC_CFLAGS)
+S1_DRIVER_TAG := brcmfmac
 else
 S1_TU_SET := $(IWLWIFI_IMPL_SRCS)
 S1_DRIVER_CFLAGS := $(S1_CFLAGS)
@@ -890,6 +911,7 @@ $(foreach s,$(filter-out %.S,$(WL80211_DRIVER_SRCS)),$(eval $(call COMPILE_C,$(s
 $(foreach s,$(filter-out %.S,$(WL80211_RTW89_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW89_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTW88_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTW88_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8XXXU_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8XXXU_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(WL80211_BRCMFMAC_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_BRCMFMAC_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_RTL8189FS_SRCS)),$(eval $(call COMPILE_C_RENAME,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_CFLAGS))))

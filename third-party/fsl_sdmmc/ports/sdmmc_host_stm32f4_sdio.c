@@ -692,6 +692,28 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
 		return kStatus_Success;
 	}
 
+	/*
+	 * A block-mode CMD53 write has the same arming problem in a larger
+	 * shape: with the data path enabled before the command, the card starts
+	 * consuming the FIFO at the response, and the CPU prefill that follows
+	 * arrives after the first block has already underrun (the BCM43362
+	 * firmware download measured TXUNDERR at 8 bytes, 1920 left).  Defer
+	 * the arming for this shape too; the transfer path prefills the FIFO
+	 * and only then sets DCTRL.
+	 */
+	if (sdio_card && (data->txData != NULL)) {
+		uint32_t bs = f4sdio_block_size(data->blockSize);
+
+		if (bs == 0xFFFFFFFFUL)
+			return kStatus_SDMMC_TransferFailed;
+		SDIO->DTIMER = 0xFFFFFFFFUL;
+		SDIO->DLEN = (uint32_t)(data->blockSize * data->blockCount);
+		s_f4sdio_tx_dctrl = bs | SDIO_DCTRL_DTEN |
+				    SDIO_DCTRL_SDIOEN;
+		s_f4sdio_tx_deferred = true;
+		return kStatus_Success;
+	}
+
 	blockSize = f4sdio_block_size(data->blockSize);
 	if (byte_read) {
 		blockSize = SDIO_DATABLOCK_SIZE_1B;
@@ -945,6 +967,40 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 
 			if (burst > F4SDIO_TX_FIFO_WORDS * 4u)
 				burst = F4SDIO_TX_FIFO_WORDS * 4u;
+			/*
+			 * A block-mode write gets the prefill only, in direct stores,
+			 * and then the FIFO-full-checked loop below owns the rest.
+			 * The generic burst loop that follows is shaped for byte-mode
+			 * frames (<= 100 B, already in the FIFO before the card
+			 * notices); on a 2048-byte CMD53 block write its per-word
+			 * helper calls let the card drain the prefill, and the first
+			 * check of the block loop then sees TXUNDERR with 1920 bytes
+			 * left (the BCM43362 firmware download's shape).
+			 */
+			if (!byte_mode) {
+				uint32_t words = remaining >> 2;
+
+				if (words > F4SDIO_TX_FIFO_WORDS)
+					words = F4SDIO_TX_FIFO_WORDS;
+				while (words-- != 0u) {
+					uint32_t word;
+
+					if (((uintptr_t)tx & 3u) == 0u) {
+						word = *(const uint32_t *)(const void *)tx;
+					} else {
+						(void)memcpy(&word, tx, 4U);
+					}
+					SDIO->FIFO = word;
+					tx += 4U;
+					remaining -= 4U;
+				}
+				burst = 0U;
+				if (s_f4sdio_tx_deferred) {
+					s_f4sdio_tx_deferred = false;
+					SDIO->DCTRL = s_f4sdio_tx_dctrl;
+					s_f4sdio_tx_sta_arm = SDIO->STA;
+				}
+			}
 #if defined(CONFIG_F4SDIO_TX_FASTFILL) && CONFIG_F4SDIO_TX_FASTFILL
 			/*
 			 * The card drains the FIFO one word per eight SDIO clocks -
@@ -1359,7 +1415,7 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 		return status;
 	}
 
-	if (s_f4sdio_tx_deferred) {
+	if (s_f4sdio_tx_deferred && byte_mode) {
 		s_f4sdio_tx_deferred = false;
 		SDIO->DCTRL = s_f4sdio_tx_dctrl;
 		/* The data path one bus write after arming: a TXUNDERR already set

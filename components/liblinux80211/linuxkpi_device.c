@@ -213,3 +213,84 @@ put_device(struct device *dev)
 {
 	(void)dev;
 }
+
+/* ------------------------------------------------------------------ */
+/* runtime power management                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/linux/pm_runtime.h:84-85 (drivers/base/power/runtime.c's
+ * pm_runtime_allow/pm_runtime_forbid): the user-space suspend permission switch,
+ * which in the interface increments or decrements the device's runtime-PM
+ * disable count. brcmfmac calls forbid() around its SDIO probe (bcmsdh.c:895,
+ * "runtime-pm powers off the device") and allow() when the bus goes away
+ * (bcmsdh.c:888).
+ *
+ * This port has no runtime power management: nothing ever asks a device to
+ * suspend, and the device record carries no disable count (linuxkpi_core.h's
+ * struct dev_pm_info is the one `is_prepared` flag a cfg80211 consumer reads).
+ * Both calls are therefore empty - there is no suspend opportunity to forbid and
+ * no count to move. They are not a success answer to anything: the interface
+ * declares them void, and the only effect they have upstream is to change a state
+ * machine this image does not run.
+ */
+void
+pm_runtime_allow(struct device *dev)
+{
+	(void)dev;
+}
+
+void
+pm_runtime_forbid(struct device *dev)
+{
+	(void)dev;
+}
+
+/* ------------------------------------------------------------------ */
+/* the platform bus                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * [LNX] include/linux/platform_device.h:307-315 (drivers/base/platform.c): the
+ * platform bus registers the driver and then tries to bind it to the devices the
+ * board described statically. This port has no platform bus and no such devices
+ * (its one device model is the PCI engine; the SDIO card is enumerated by the
+ * port's own engine), so the probe request has nothing to match against. The
+ * answer is the interface's own "no device" value, -ENODEV, which is exactly what
+ * brcmfmac's common.c:610 tests for before it prints "No platform data
+ * available." and continues with module parameters.
+ *
+ * Nothing was registered, so the unregister call has nothing to undo; it is empty
+ * rather than a fake teardown. The one caller (common.c:621,631) only reaches it
+ * when a platform-data probe succeeded, which cannot happen here.
+ */
+int
+__platform_driver_probe(struct platform_driver *driver,
+			int (*probe)(struct platform_device *),
+			struct module *module, const char *modname)
+{
+	(void)driver;
+	(void)probe;
+	(void)module;
+	(void)modname;
+	return -ENODEV;
+}
+
+void
+platform_driver_unregister(struct platform_driver *drv)
+{
+	(void)drv;
+}
+
+/*
+ * [LNX] drivers/base/dd.c: the unbind entry.  This port's device model has no
+ * driver core to release a device from: a device is bound once by the SDIO /
+ * PCI / USB engine's probe and never hot-unplugged, so the remove path's
+ * "release the current driver" has nothing to do.  brcmfmac names it in the
+ * bus-remove and firmware-callback failure arms, which an image does not run.
+ */
+void
+device_release_driver(struct device *dev)
+{
+	(void)dev;
+}

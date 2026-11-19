@@ -40,7 +40,7 @@ WL80211_CASES ?= mac80211_c2 iwl7260_c3 iwl7260_c4 iwl7260_c5 iwl7260_c6 iwl7260
 	rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
 	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6 f429_wifi \
-	f429_wifi_ap f429_ap_link
+	f429_wifi_ap f429_ap_link ap6181_c3
 
 ifeq ($(CONFIG_LIBLINUX80211_CFG80211),1)
 
@@ -65,6 +65,28 @@ ifeq ($(CONFIG_LIBLINUX80211_IWLWIFI),1)
 WL80211_DRIVER_SRCS := $(IWLWIFI_IMPL_SRCS) $(WL80211_FW_SRCS)
 else
 WL80211_DRIVER_SRCS :=
+endif
+
+# brcmfmac (BCM43362 / AP6181) is a FullMAC driver world of the same shape:
+# its own 24-unit source list under wireless-drivers/brcmfmac/driver_config.h
+# and its own compile rule.  The SDIO engine and the fsl host group are the
+# component's bus group and the board port, not part of this list: a driver is
+# a driver, the bus is the bus.  The 43362 firmware/NVRAM blobs join here when
+# the attach gate needs them.
+ifeq ($(CONFIG_LIBLINUX80211_BRCMFMAC),1)
+WL80211_BRCMFMAC_SRCS := $(BRCMFMAC_IMPL_SRCS) \
+	$(LIB8)/fw/brcmfmac43362_fw_blob.c \
+	$(LIB8)/fw/brcmfmac43362_nvram_blob.c
+WL80211_BRCMFMAC_CFLAGS := $(STACK_FACE_CFLAGS) \
+	-I$(BRCMFMAC_DIR)/brcmfmac -I$(BRCMFMAC_DIR)/include \
+	-include $(BRCMFMAC_DIR)/driver_config.h \
+	-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
+	-Wno-address-of-packed-member -Wno-type-limits -Wno-unused-but-set-variable \
+	-Wno-override-init -Wno-maybe-uninitialized -Wno-unused-function \
+	-Wno-unused-variable -Wno-pointer-sign
+else
+WL80211_BRCMFMAC_SRCS :=
+WL80211_BRCMFMAC_CFLAGS :=
 endif
 
 # The 8189FTV vendor stack is a second driver world: its own include roots and
@@ -316,6 +338,7 @@ WL80211_HOSTAP_FP_CFLAGS := $(filter-out -mgeneral-regs-only,$(WL80211_HOSTAP_CF
 
 WL80211_ALL_SRCS := $(WL80211_STACK_SRCS) $(WL80211_DRIVER_SRCS) \
 	$(WL80211_RTW89_SRCS) $(WL80211_RTW88_SRCS) $(WL80211_RTL8XXXU_SRCS) \
+	$(WL80211_BRCMFMAC_SRCS) \
 	$(WL80211_RTL8189FS_SRCS) $(WL80211_CASE_SRCS) \
 	$(WL80211_PROBE_SRCS) $(WL80211_HOSTAP_SRCS) $(WL80211_HOSTAP_FP_SRCS)
 

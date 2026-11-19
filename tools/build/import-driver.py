@@ -153,6 +153,29 @@ RTL8XXXU_FEATURES = {
     "RTL8XXXU_UNTESTED": False,
 }
 
+# The BCM43362 (AP6181) world: the FullMAC brcmfmac driver over SDIO, with
+# the vendor's broadcast-core protocol (BCDC).  The tree is imported whole
+# from brcm80211/; only brcmfmac and brcmutil are compiled.  The built-in
+# branch of brcmfmac/Makefile also names the wcc/cyw/bca core units, so they
+# are in the set.  No PCIe/USB/MSGBUF, no debug/tracing, no OF/ACPI/DMI/PM:
+# this port supplies its own bus and has no device tree.
+BRCMFMAC_FEATURES = {
+    "BRCMUTIL": True,
+    "BRCMFMAC": True,
+    "BRCMSMAC": False,
+    "BRCMFMAC_SDIO": True,
+    "BRCMFMAC_PROTO_BCDC": True,
+    "BRCMFMAC_PROTO_MSGBUF": False,
+    "BRCMFMAC_USB": False,
+    "BRCMFMAC_PCIE": False,
+    "BRCMDBG": False,
+    "BRCM_TRACING": False,
+    "OF": False,
+    "DMI": False,
+    "ACPI": False,
+    "PM": False,
+}
+
 # One entry per driver:
 #   kind        kbuild | vendor-make (how the compiled set is derived)
 #   upstream    where the sources live under the kernel tree
@@ -357,6 +380,51 @@ DRIVERS = {
                 "`S1_DRIVER=rtl8xxxu` as the S1b measurement. The\n"
                 "`rtlwifi/rtl8188eufw.bin` image is a compiled-in blob, not a "
                 "driver unit\n(tools/rtos/fw-blobs.py).\n",
+        },
+    },
+    "brcmfmac": {
+        "kind": "kbuild",
+        "upstream": "drivers/net/wireless/broadcom/brcm80211",
+        "dest": "",
+        "features": BRCMFMAC_FEATURES,
+        "makefiles": ("Makefile", "brcmfmac/Makefile", "brcmutil/Makefile"),
+        "want": 24,
+        "tu_prefix": "",
+        "first_party": ("IMPORT.tsv", "PROVENANCE.md", "sources.mk",
+                        "driver_config.h"),
+        "sources_header": [
+            "# brcmfmac: the compiled set for the BCM43362 (AP6181) over SDIO",
+            "# under the feature face wireless-drivers/brcmfmac/driver_config.h.",
+            "# The tree is brcm80211/ imported whole; only brcmfmac/ and",
+            "# brcmutil/ units are compiled (SDIO + BCDC; no PCIe/USB/MSGBUF,",
+            "# no debug/tracing, no OF/ACPI/DMI/PM).  The built-in Makefile",
+            "# branch also names the wcc/cyw/bca core units, so they are in.",
+        ],
+        "sources_symbol": "CONFIG_LIBLINUX80211_BRCMFMAC",
+        "provenance": {
+            "licence_note":
+                "Every brcmfmac/ and brcmutil/ file is `ISC` (the driver's "
+                "own SPDX tags);\nthe imported brcm80211/ tree also carries the "
+                "GPL-2.0-only brcmsmac/ sources\nand the bca/cyw helper trees, "
+                "which are not compiled here.  The compiled\nbrcmfmac set is "
+                "ISC, but the image links the GPL-2.0-only cfg80211, so the\n"
+                "artifact is a GPL-2.0 link product (see `docs/LICENSES.md`);",
+            "count_note":
+                "## Why 24\n\nThe driver's own Makefiles resolve to 24 units "
+                "under this face:\n15 brcmfmac core units, 2 BCDC units "
+                "(`bcdc.o`, `fwsignal.o`), 2 SDIO\nunits (`sdio.o`, `bcmsdh.o`), "
+                "the three built-in helper cores the Makefile\nnames under "
+                "`CONFIG_BRCMFMAC=y` (`wcc/core.o`, `cyw/core.o`,\n"
+                "`bca/core.o`), and `brcmutil/{utils,d11}.o`.  The feasibility "
+                "probe measured\nthe SDIO closure at 19 + brcmutil + wcc; the "
+                "two extra core units are the\nMakefile's own built-in branch "
+                "and the C0 compile decides whether they stay.\n",
+            "consumers":
+                "`tests/board/rtos/build/wl80211.mk` compiles this set in the "
+                "driver's\nflag world (`driver_config.h` is force-included); "
+                "`tools/build/s1-driver-compile`\ncompiles it standalone with "
+                "`S1_DRIVER=brcmfmac`.  The 43362 firmware and NVRAM\nare "
+                "compiled-in blobs (`tools/rtos/fw-blobs.py`), not driver units.\n",
         },
     },
     "rtl8189fs": {

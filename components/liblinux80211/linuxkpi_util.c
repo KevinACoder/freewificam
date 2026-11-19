@@ -164,6 +164,46 @@ sg_init_table(struct scatterlist *sgl, unsigned int nents)
 }
 
 /*
+ * [LNX] lib/scatterlist.c: allocate a table of `nents` entries and start it the way
+ * sg_init_table() does. The interface's allocator chains pages when the count
+ * exceeds SG_MAX_SINGLE_ALLOC; brcmfmac's SDIO glue clamps its depth to that ceiling
+ * (bcmsdh.c:769), so the single-allocation form below is the shape its caller uses.
+ *
+ * The call is part of the driver's scatter-gather path, which this port turns off:
+ * the engine reports one segment per request (bus/sdio.c), so
+ * brcmf_sdiod_sgtable_alloc() returns before it asks for a table. The body is
+ * nevertheless real - a caller that did ask gets a real table, not a refusal - since
+ * "the caller does not need it today" is not a reason to answer with a failure.
+ */
+int
+sg_alloc_table(struct sg_table *table, unsigned int nents, gfp_t gfp_mask)
+{
+	struct scatterlist *sgl;
+
+	if (table == NULL || nents == 0)
+		return -EINVAL;
+	sgl = kmalloc_array(nents, sizeof(*sgl), gfp_mask);
+	if (sgl == NULL)
+		return -ENOMEM;
+	sg_init_table(sgl, nents);
+	table->sgl = sgl;
+	table->nents = nents;
+	table->orig_nents = nents;
+	return 0;
+}
+
+void
+sg_free_table(struct sg_table *table)
+{
+	if (table == NULL)
+		return;
+	kfree(table->sgl);
+	table->sgl = NULL;
+	table->nents = 0;
+	table->orig_nents = 0;
+}
+
+/*
  * [LNX] lib/string.c: memchr_inv().  The first byte that differs from `c`,
  * NULL when the region is all-`c`.  rtw89's firmware-format walk and its GTK
  * check name it.

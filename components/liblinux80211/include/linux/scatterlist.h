@@ -148,7 +148,22 @@ sg_next(struct scatterlist *sg)
 	for_each_sg((sgt)->sgl, sg, (sgt)->nents, i)
 
 /* [LNX] include/linux/scatterlist.h:447,442,524 */
+/*
+ * [LNX] include/linux/scatterlist.h:535: the largest number of entries one
+ * allocation can carry (a page's worth of entries). brcmfmac clamps its
+ * scatter-gather depth with it (bcmsdh.c:769); the value is the interface's
+ * expression, which is what makes it the same ceiling here as there.
+ */
+#define	SG_MAX_SINGLE_ALLOC		(PAGE_SIZE / sizeof(struct scatterlist))
+
 void sg_init_table(struct scatterlist *, unsigned int);
+/* [LNX] include/linux/scatterlist.h: the table allocator/releaser a client uses when
+ * it builds its own scatter-gather list (brcmfmac's SDIO glue, bcmsdh.c:783, and its
+ * bus teardown). Both bodies are the component's (linuxkpi_util.c): one allocation
+ * of `nents` entries, initialised as the interface's sg_init_table() does, and the
+ * matching release. */
+int sg_alloc_table(struct sg_table *table, unsigned int nents, gfp_t gfp_mask);
+void sg_free_table(struct sg_table *table);
 int sg_nents(struct scatterlist *sg);
 size_t sg_pcopy_from_buffer(struct scatterlist *sgl, unsigned int nents,
 			    const void *buf, size_t buflen, loff_t skip);

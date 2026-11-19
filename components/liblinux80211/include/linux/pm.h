@@ -87,4 +87,35 @@ struct dev_pm_ops {
 		.resume = resume_fn,					\
 	}
 
+/*
+ * [LNX] include/linux/pm.h:416 `DEFINE_SIMPLE_DEV_PM_OPS(name, suspend_fn,
+ * resume_fn)`: the current spelling of the same definition, expanded with the
+ * runtime-PM slot left NULL. A driver that ends its suspend section with it owns
+ * the object (it is a definition, not a declaration), which is why both
+ * spellings have to exist: brcmfmac's bcmsdh.c:1256 defines
+ * `brcmf_sdio_pm_ops` this way while iwlwifi/rtw88 use the older name.
+ *
+ * The table is defined unconditionally here, the same object the interface
+ * produces in a build with CONFIG_PM enabled, because this port's device model
+ * has no power state machine to switch an object in and out of (the same reason
+ * SIMPLE_DEV_PM_OPS above is unconditional).
+ */
+#define	DEFINE_SIMPLE_DEV_PM_OPS(name, suspend_fn, resume_fn)		\
+	const struct dev_pm_ops name = {				\
+		.suspend = suspend_fn,					\
+		.resume = resume_fn,					\
+	}
+
+/*
+ * [LNX] include/linux/pm.h:473-474 `pm_ptr(_ptr)` / `pm_sleep_ptr(_ptr)`: the
+ * "make this table disappear when PM is off" annotations. Both are the identity
+ * here for the reason just given: the table exists in every build of this port,
+ * and the port has no `.pm` consumer that would have to see NULL. They are
+ * identity macros rather than a PTR_IF() over an unset CONFIG symbol so that a
+ * driver's `.pm = pm_sleep_ptr(&table)` keeps pointing at the table the driver
+ * defined.
+ */
+#define	pm_ptr(_ptr)		(_ptr)
+#define	pm_sleep_ptr(_ptr)	(_ptr)
+
 #endif /* _LINUXKPI_LINUX_PM_H_ */

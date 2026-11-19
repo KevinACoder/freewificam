@@ -45,6 +45,20 @@ signal_pending(struct task_struct *p)
 	return 0;
 }
 
+/*
+ * [LNX] include/linux/sched/signal.h:346: `extern int send_sig(int, struct
+ * task_struct *, int);` - deliver a signal to a task. brcmfmac asks the SDIO
+ * watchdog thread to end with it before it stops the thread (sdio.c:2481).
+ *
+ * This port has no signal delivery: a task is stopped through kthread_stop()'s
+ * stop flag, which the same teardown calls immediately after. The answer is
+ * therefore the interface's "this signal could not be delivered" (-EINVAL, the
+ * number it returns for a signal it cannot queue); the caller ignores the return and
+ * the stop itself is the stop flag's, so nothing is lost by the honest refusal. The
+ * body is linuxkpi_osdep.c.
+ */
+extern int send_sig(int sig, struct task_struct *p, int priv);
+
 /* [LNX] include/linux/sched/signal.h:283:
  * extern void flush_signals(struct task_struct *); */
 extern void flush_signals(struct task_struct *);

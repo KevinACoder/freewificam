@@ -24,10 +24,15 @@
  * @date    12.10.2026
  */
 
+#include <asm/uaccess.h>
+
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+/* [LNX] include/linux/fs.h: the inode/file records simple_open() reads. */
+#include <linux/fs.h>
 
 #include "linuxkpi_core.h"
 
@@ -664,3 +669,252 @@ void free_pages(unsigned long addr, unsigned int order)
 /* page_address() is the accessor's inline in include/linux/mm.h, not a body here:
  * a unit that reaches the page API only through it must not have to link this
  * file. */
+
+/*
+ * [LNX] lib/string.c: `char *strreplace(char *s, char old, char new)` - replace
+ * every occurrence of one character, returning the string's end pointer (the
+ * interface's return is the walk's end, not the start). brcmfmac uses it to turn
+ * the NVRAM's comment markers into a form its parser accepts (common.c:397).
+ */
+char *
+strreplace(char *s, char old, char new)
+{
+	for (; *s; ++s)
+		if (*s == old)
+			*s = new;
+	return s;
+}
+
+/*
+ * [LNX] lib/kasprintf.c / include/linux/sprintf.h:17: format into a freshly
+ * allocated buffer. The interface asks vsnprintf() for the length with a NULL
+ * buffer first (that is how it handles a format whose size it cannot know), then
+ * allocates length+1 and formats again. This port's formatter is the component's
+ * vsnprintf, which answers the "would have written" count when the buffer is NULL,
+ * so the same two-pass body is the correct one here - and it is what brcmfmac's
+ * firmware-path builder needs (firmware.c:638), a string whose size depends on the
+ * board and chip names.
+ */
+char *
+kasprintf(gfp_t gfp, const char *fmt, ...)
+{
+	va_list ap, aq;
+	char *p;
+	int n;
+
+	if (fmt == NULL)
+		return NULL;
+	va_start(ap, fmt);
+	va_copy(aq, ap);
+	n = vsnprintf(NULL, 0, fmt, aq);
+	va_end(aq);
+	if (n < 0) {
+		va_end(ap);
+		return NULL;
+	}
+	p = kmalloc((size_t)n + 1u, gfp);
+	if (p != NULL)
+		(void)vsnprintf(p, (size_t)n + 1u, fmt, ap);
+	va_end(ap);
+	return p;
+}
+
+/*
+ * [LNX] include/linux/interrupt.h:233-241: the interrupt line's mask/unmask calls
+ * and the system-wake pair.
+ *
+ * The mask pair belongs to the out-of-band-interrupt path in brcmfmac: the driver
+ * masks its own level-triggered line from inside the handler (bcmsdh.c:73) and
+ * unmasks it once the deferred work has drained the device (sdio.c:2551). It
+ * requests that handler only when its platform data says the board wires an OOB
+ * interrupt (bcmsdh.c's brcmf_sdiod_intr_register), and this port has no platform
+ * data at all, so the card's in-band SDIO interrupt is the only one used and no
+ * caller reaches these. The engine's seam exposes no per-line mask either, so an
+ * empty body is the honest statement of "there is no such line here" rather than
+ * a mask that silently does nothing on a line that exists.
+ *
+ * The wake pair is the suspend/WOWL path (bcmsdh.c:120,125,1206,1248). This image
+ * has no system sleep (linux/suspend.h's face; CONFIG_PM is off in the driver's
+ * configuration face), so there is no sleep state for a wake source to be armed
+ * against; the interface returns an error for a line that cannot wake the system,
+ * and -EOPNOTSUPP is that answer here. It must not report success for an arm that
+ * did not happen.
+ */
+void
+disable_irq_nosync(unsigned int irq)
+{
+	(void)irq;
+}
+
+void
+disable_irq(unsigned int irq)
+{
+	(void)irq;
+}
+
+void
+enable_irq(unsigned int irq)
+{
+	(void)irq;
+}
+
+/*
+ * [LNX] kernel/irq/manage.c: the out-of-band IRQ names.  The SDIO line hears
+ * its card through DAT1 (sdio_claim_irq -> the engine's pump), not through an
+ * OOB line: the board's WL_HOST_WAKE is PA0, shared with KEY1/WKUP, and the
+ * port deliberately never registers it.  brcmfmac names these only in its
+ * OOB arm, unreachable with no platform data; the bodies state "no such
+ * line" rather than pretending one exists.
+ */
+int
+request_irq(unsigned int irq, irq_handler_t handler, unsigned long flags,
+	    const char *name, void *dev)
+{
+	(void)irq; (void)handler; (void)flags; (void)name; (void)dev;
+	return -EINVAL;
+}
+
+void
+free_irq(unsigned int irq, void *dev_id)
+{
+	(void)irq; (void)dev_id;
+}
+
+int
+enable_irq_wake(unsigned int irq)
+{
+	(void)irq;
+	return -EOPNOTSUPP;
+}
+
+int
+disable_irq_wake(unsigned int irq)
+{
+	(void)irq;
+	return -EOPNOTSUPP;
+}
+
+/*
+ * [LNX] include/linux/kstrtox.h:30-40 (lib/kstrtox.c): parse an unsigned long with
+ * the interface's contract - leading whitespace is skipped, one optional '+', digits
+ * in the given base, and the first character that is not a digit ends the number
+ * (`\n` is accepted as the terminator because that is what a sysfs store leaves
+ * behind). An empty or sign-invalid string is -EINVAL and a value that does not fit
+ * is -ERANGE. The body is a straightforward digit loop because the port's 32-bit
+ * `unsigned long` is the plain C type here (no _parse_integer_fixup_radix dependency).
+ */
+int
+kstrtoul(const char *s, unsigned int base, unsigned long *res)
+{
+	unsigned long v = 0;
+	int any = 0;
+
+	if (s == NULL || res == NULL)
+		return -EINVAL;
+	if (base != 0 && (base < 2 || base > 36))
+		return -EINVAL;
+	while (*s == ' ' || *s == '\t' || *s == '\n')
+		s++;
+	if (*s == '+')
+		s++;
+	else if (*s == '-')
+		return -EINVAL;
+	if (base == 0) {
+		if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+			base = 16;
+			s += 2;
+		} else if (s[0] == '0') {
+			base = 8;
+			s++;
+		} else {
+			base = 10;
+		}
+	} else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+		s += 2;
+	}
+	for (;; s++) {
+		unsigned int d;
+
+		if (*s >= '0' && *s <= '9')
+			d = (unsigned int)(*s - '0');
+		else if (*s >= 'a' && *s <= 'z')
+			d = (unsigned int)(*s - 'a') + 10u;
+		else if (*s >= 'A' && *s <= 'Z')
+			d = (unsigned int)(*s - 'A') + 10u;
+		else
+			break;
+		if (d >= base)
+			break;
+		if (v > (~0UL - d) / base)
+			return -ERANGE;
+		v = v * base + d;
+		any = 1;
+	}
+	if (*s != '\0' && *s != '\n')
+		return -EINVAL;
+	if (!any && base != 8)
+		return -EINVAL;
+	*res = v;
+	return 0;
+}
+
+/*
+ * [LNX] include/linux/kstrtox.h:111 (lib/kstrtox.c): the debugfs store form. The
+ * interface copies at most a small buffer's worth of the caller's bytes into a
+ * local string and parses that, which is what makes a short write behave like a
+ * terminated string. This port has one address space, so copy_from_user is the
+ * direct copy of asm/uaccess.h; the parse is the same kstrtou8 the rest of the face
+ * declares. brcmfmac's "bus_reset" debugfs attribute is the caller (core.c:1213),
+ * and its entry is only ever created when a debugfs exists - which this port does
+ * not have - so the path is unreachable in an image but the body is a real parse,
+ * not a refusal.
+ */
+/*
+ * [LNX] lib/kstrtox.c:16-22: the 8-bit form.  The port's unsigned long is 32
+ * bits, so the range check is the interface's own -ERANGE arm for a value
+ * that does not fit a u8.
+ */
+int
+kstrtou8(const char *s, unsigned int base, u8 *res)
+{
+	unsigned long v = 0;
+	int rc;
+
+	if (res == NULL)
+		return -EINVAL;
+	rc = kstrtoul(s, base, &v);
+	if (rc != 0)
+		return rc;
+	if (v > 0xffUL)
+		return -ERANGE;
+	*res = (u8)v;
+	return 0;
+}
+
+int
+kstrtou8_from_user(const char __user *s, size_t count, unsigned int base, u8 *res)
+{
+	char buf[32];
+	unsigned int len = (unsigned int)min_t(size_t, count, sizeof(buf) - 1u);
+
+	if (copy_from_user(buf, s, len))
+		return -EFAULT;
+	buf[len] = '\0';
+	return kstrtou8(buf, base, res);
+}
+
+/*
+ * [LNX] fs/libfs.c / include/linux/fs.h: `simple_open()` - the opener that copies the
+ * inode's private pointer into the open file and succeeds. It is the whole body
+ * upstream, and this port's inode and file records carry the same two members, so the
+ * transcription is exact. brcmfmac's bus-reset attribute names it (core.c:1224); the
+ * debugfs entry that would call it is never created on this port, but the body is the
+ * interface's, not a refusal.
+ */
+int
+simple_open(struct inode *inode, struct file *file)
+{
+	if (inode->i_private != NULL)
+		file->private_data = inode->i_private;
+	return 0;
+}

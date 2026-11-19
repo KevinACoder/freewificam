@@ -1356,3 +1356,22 @@ __napi_schedule(struct napi_struct *n)
 		lkpi_napi_health.rounds_exhausted++;
 	clear_bit(NAPI_STATE_SCHED, &n->state);
 }
+
+/*
+ * [LNX] net/ethernet/eth.c: the platform's MAC address for a device. The
+ * interface reads the address out of the device's firmware node (device tree,
+ * ACPI, DMI) and copies it into the caller's buffer. This port has no firmware
+ * node and no platform data - the device record's platform_data is never
+ * assigned (see linux/platform_device.h) - so there is no address to report and
+ * the answer is the interface's own -ENODEV ("no address found"), not a made-up
+ * one. brcmfmac's firmware path uses the answer only to decide whether to strip
+ * the NVRAM's MAC line (firmware.c:408), so -ENODEV keeps the board's own
+ * address, which is the correct answer for a board with no platform description.
+ */
+int
+eth_platform_get_mac_address(struct device *dev, u8 *mac_addr)
+{
+	(void)dev;
+	(void)mac_addr;
+	return -ENODEV;
+}

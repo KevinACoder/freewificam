@@ -54,6 +54,14 @@ struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
 /* [LNX] include/linux/kthread.h:104,107-109 */
 void kthread_bind(struct task_struct *k, unsigned int cpu);
 int kthread_stop(struct task_struct *k);
+
+/*
+ * [LNX] include/linux/kthread.h:108: stop the thread and drop the reference taken
+ * when it was created. This port's task objects have image lifetime (see
+ * linux/sched.h's get_task_struct), so the second half is already true and the call
+ * is the same stop. brcmfmac's SDIO watchdog teardown uses it (sdio.c:2482).
+ */
+void kthread_stop_put(struct task_struct *k);
 bool kthread_should_stop(void);
 
 /* [LNX] include/linux/kthread.h:120: the exit path of a thread that was started with a

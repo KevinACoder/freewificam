@@ -168,6 +168,19 @@ config LIBLINUX80211_RTL8XXXU
 	  redistributes the Realtek rtl8188eu firmware image
 	  (docs/LICENSES.md).
 
+config LIBLINUX80211_BRCMFMAC
+	bool "brcmfmac (BCM43362 / AP6181, SDIO FullMAC)"
+	depends on LIBLINUX80211_SDIO
+	depends on LIBLINUX80211_CFG80211
+	help
+	  Links the vendored brcmfmac FullMAC driver for the onboard AP6181
+	  (Broadcom BCM43362) over the SDIO engine.  The tree is the whole
+	  brcm80211/ import (ISC for the compiled units); the compiled set is
+	  24 units: brcmfmac core + BCDC + SDIO, the built-in wcc/cyw/bca
+	  helper cores, and brcmutil.  This driver is FullMAC: cfg80211 is the
+	  control plane and mac80211 is not linked.  The image needs the
+	  43362 firmware and NVRAM as compiled-in blobs (tools/rtos/fw-blobs.py).
+
 config LIBLINUX80211_SDIO_PROBE
 	bool "SDIO host probe (no vendor driver)"
 	depends on LIBLINUX80211_SDIO

@@ -19,6 +19,11 @@
 
 #include "../../linuxkpi_core.h"
 #include <linux/fs.h>
+/* [LNX] include/linux/debugfs.h:16 includes <linux/seq_file.h>: a debugfs entry
+ * is served by a seq_file callback, and the driver's callback dereferences the
+ * record's `private` (brcmfmac feature.c:261). The face keeps the interface's
+ * include, which is how that record is complete here. */
+#include <linux/seq_file.h>
 /* umode_t lives in this tree's sysfs face; the interface has it in linux/types.h. */
 #include <linux/sysfs.h>
 

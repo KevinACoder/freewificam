@@ -65,6 +65,11 @@
 #define	ETH_P_802_3_MIN		0x0600
 /* [LNX] include/uapi/linux/if_ether.h:112 */
 #define	ETH_P_TDLS		0x890D		/* TDLS */
+/* [LNX] include/uapi/linux/if_ether.h:84: the EtherType of the link-local
+ * control tunnel. brcmfmac's fweh.h carries its event frame inside it
+ * (brcmf_fweh.h:373 tests the skb's protocol against it before it parses a
+ * firmware event), so the number is contract with the receive path. */
+#define	ETH_P_LINK_CTL		0x886C		/* HPNA, wlan link local tunnel */
 
 /* ------------------------------------------------------------------ */
 /* the wire header                                                     */

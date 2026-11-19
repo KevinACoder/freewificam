@@ -84,6 +84,17 @@ int __must_check device_reprobe(struct device *dev);
 struct device *get_device(struct device *dev);
 void put_device(struct device *dev);
 
+/* [LNX] include/linux/device.h: the platform data a board attached to a device.
+ * The interface's body is the record's own field (dev->platform_data), and the
+ * field exists here for the same reason: it is how a platform driver reaches its
+ * board description. On this port nothing assigns it (no platform bus), so it
+ * reads NULL, which is what brcmfmac's common.c:582 already handles. */
+static inline void *
+dev_get_platdata(const struct device *dev)
+{
+	return dev->platform_data;
+}
+
 /* [LNX] include/linux/device/devres.h:93-94 (reached from the interface's
  * include/linux/device.h:31): the device-managed format-into-memory helper. */
 char * __printf(3, 4)

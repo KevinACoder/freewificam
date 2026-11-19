@@ -165,7 +165,7 @@ ifeq ($(CONFIG_BOARD_STM32F429_CHALLENGER),1)
 # The F429's SDIO peripheral: the ST LL driver, the board socket glue and the
 # fsl host adapter.  The group is also the probe/engine image's only source of
 # the stack, so the vendor driver and the probe config are the two triggers.
-ifneq ($(filter 1,$(CONFIG_LIBLINUX80211_RTL8189FS) $(CONFIG_LIBLINUX80211_SDIO_PROBE)),)
+ifneq ($(filter 1,$(CONFIG_LIBLINUX80211_RTL8189FS) $(CONFIG_LIBLINUX80211_SDIO_PROBE) $(CONFIG_LIBLINUX80211_BRCMFMAC)),)
 sdio-obj-y += \
 	$(PLATFORM)/board/stm32f429-challenger/sdio_board.c \
 	$(THIRD_PARTY)/stm32f4xx-hal/Src/stm32f4xx_ll_sdmmc_rename.c \

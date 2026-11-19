@@ -86,4 +86,12 @@ struct mmc_card {
 
 #define	mmc_card_sdio(c)	((c)->type == MMC_TYPE_SDIO)
 
+/*
+ * [LNX] include/linux/mmc/card.h: the card quirks the compiled set names.
+ * LENIENT_FN0 is the one brcmfmac sets (bcmsdh.c:1060): function 0 is told to
+ * tolerate an out-of-range address instead of failing the whole transfer, which
+ * is what its CMD52 write of the block size to the CCCR needs.
+ */
+#define	MMC_QUIRK_LENIENT_FN0	(1 << 0)	/* allow out-of-range FN0 access */
+
 #endif /* _LINUXKPI_LINUX_MMC_CARD_H_ */

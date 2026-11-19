@@ -159,4 +159,18 @@ static inline bool eth_proto_is_802_3(__be16 proto)
 	return proto <= htons(ETH_P_802_3_MAX);
 }
 
+/*
+ * [LNX] include/linux/etherdevice.h: the MAC address a platform (device tree,
+ * ACPI or DMI) says the device has. The interface's body reads the firmware
+ * node's address and copies it; this port has no firmware node and no platform
+ * data (see linux/platform_device.h and linux/property.h), so the answer is the
+ * interface's own "no address found", -ENODEV, and the caller keeps what it has.
+ * brcmfmac asks before it strips the MAC line out of the NVRAM
+ * (firmware.c:408): with -ENODEV the NVRAM's own address stays, which is the
+ * address a board without a platform description has always used.
+ * Body: linuxkpi_netdev.c.
+ */
+struct device;
+int eth_platform_get_mac_address(struct device *dev, u8 *mac_addr);
+
 #endif /* _LINUXKPI_LINUX_ETHERDEVICE_H_ */

@@ -27,6 +27,11 @@
 #include <string.h>
 
 #include "linuxkpi_core.h"
+
+/* [LNX] include/linux/wait.h: the wait-entry record the manual wait protocol
+ * (init_waitqueue_entry/add_wait_queue/remove_wait_queue below) takes; the
+ * interface declares the record in that header, so the body takes it from there. */
+#include <linux/wait.h>
 #include "linuxkpi_impl.h"
 
 /*
@@ -2195,6 +2200,19 @@ void lkpi_waitqueue_init(struct wait_queue_head *wq)
 	cv->inited = (cv->sem != NULL) ? 1u : 0u;
 }
 
+/*
+ * [LNX] include/linux/wait.h: `waitqueue_active()` - the lockless "does anything
+ * wait here" test a waker makes before it pays for a wake. This port's head is a
+ * condition shell whose parked waiters are counted (lkpi_waitq_cv()->waiters), so
+ * the answer is that count rather than an entry list.
+ */
+int lkpi_waitqueue_active(struct wait_queue_head *wq)
+{
+	struct lkpi_cv_shell *cv = lkpi_wq_cv(wq);
+
+	return cv->inited ? (cv->waiters != 0u) : 0;
+}
+
 void lkpi_waitqueue_wake(struct wait_queue_head *wq)
 {
 	struct lkpi_cv_shell *cv = lkpi_wq_cv(wq);
@@ -2204,6 +2222,44 @@ void lkpi_waitqueue_wake(struct wait_queue_head *wq)
 	 * so a spurious wake costs one loop and never a missed one. */
 	while (n-- > 0)
 		(void)osSemaphoreRelease(cv->sem);
+}
+
+/*
+ * [LNX] include/linux/wait.h:44-58,169: the manual wait protocol a caller uses when
+ * it wants to wait on a condition of its own rather than through wait_event(). In
+ * the interface the entry is linked into the head's entry list, the waiter sets its
+ * task state and calls schedule_timeout(), and wake_up() walks that list calling the
+ * entries' callbacks.
+ *
+ * This port's wait head is a CMSIS condition shell, not an entry list: its waiters
+ * are the tasks already parked in lkpi_waitq_timedwait() (the count the shell keeps),
+ * and the port's schedule_timeout() is a bounded delay (linuxkpi_osdep.c). There is
+ * therefore no list for these three calls to join or leave, and they are empty. The
+ * consequence is recorded in the component's DIVERGENCES file: a caller that takes
+ * this path waits its timeout instead of being woken early by the wake_up() its peer
+ * issues, which is the interface's "no early wake" case and not a fake completion -
+ * the caller's own condition is still tested after every sleep.
+ */
+void
+init_waitqueue_entry(struct wait_queue_entry *wq_entry, struct task_struct *p)
+{
+	if (wq_entry == NULL)
+		return;
+	wq_entry->private = p;
+}
+
+void
+add_wait_queue(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry)
+{
+	(void)wq_head;
+	(void)wq_entry;
+}
+
+void
+remove_wait_queue(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry)
+{
+	(void)wq_head;
+	(void)wq_entry;
 }
 
 void lkpi_waitq_lock(struct wait_queue_head *wq)

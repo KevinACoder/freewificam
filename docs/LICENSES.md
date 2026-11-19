@@ -22,6 +22,9 @@ Per-component license registry. This is not legal advice.
 | `third-party/wpa_supplicant-rtos/` | BSD-3-Clause | NXP `wpa_supplicant-rtos` `release/25.06.00` (`c21bbad`), 897 files, unmodified apart from the port patches in its `patches/`; upstream `port/` (mbedtls/KSDK glue, Apache-2.0) is **not** imported - see `PROVENANCE.md` |
 | `components/liblinux80211/fw/iwlwifi-7260-17.ucode` | Intel binary firmware licence (`LICENCE.iwlwifi_firmware` beside it) | **tracked input**, unmodified; sha256 `5d81a600…`; source and terms in `fw/PROVENANCE.md` |
 | `components/liblinux80211/fw/rtlwifi/rtl8723bu_nic.bin` | Realtek binary redistribution terms (`LICENCE.realtek_firmware` beside it) | **tracked input**, unmodified; sha256 `a52b5a7b…`, 32,108 B; source and terms in `fw/PROVENANCE.md` |
+| `components/liblinux80211/fw/brcm/brcmfmac43362-sdio.bin` | Broadcom binary redistribution terms (`LICENCE.broadcom_bcm43xx` beside it) | **tracked input**, unmodified; sha256 `24e9c2eb…`, 202,623 B; linux-firmware `cypress/cyfmac43362-sdio.bin`; source and terms in `fw/PROVENANCE.md` |
+| `components/liblinux80211/fw/brcm/brcmfmac43362-sdio.txt` | GPL-2.0+ (`LICENCE.ap6210_nvram`; the file's own SPDX header) | **tracked input**, Ampak AP6210 board file from linux-firmware; sha256 `c17e2913…`, 803 B; renamed to the generic request name |
+| `wireless-drivers/brcmfmac/` | ISC (the compiled brcmfmac/ and brcmutil/ units; the imported tree also carries GPL-2.0-only `brcmsmac/` sources, not compiled) | the driver tree is `brcm80211/` imported whole; `IMPORT.tsv`/`PROVENANCE.md`; every image that links it also links the GPL-2.0-only cfg80211, so the artifact is a GPL-2.0 link product |
 
 ## Combined products
 

@@ -24,6 +24,12 @@
 
 #include "../../linuxkpi_core.h"
 
+/* [LNX] include/linux/notifier.h:13 includes <linux/errno.h>; that include is how
+ * a unit that takes this header (netdevice.h includes it) reaches the error
+ * numbers a driver's probe path answers with. The face keeps the interface's
+ * include for the same reason. */
+#include <linux/errno.h>
+
 /* [LNX] include/linux/notifier.h: notifier_fn_t is the callback signature every notifier
  * block carries: the block itself, the event and its payload. */
 struct notifier_block;

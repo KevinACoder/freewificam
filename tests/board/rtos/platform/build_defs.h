@@ -182,7 +182,8 @@
 #endif
 /* The 8189FTV line's own selection: the SDIO port group compiles the card
  * service's SDIO half, which the FSL wrapper gates on this name. */
-#if CONFIG_LIBLINUX80211_RTL8189FS || defined(RTOS_CASE_F429_SDIO_PROBE) || \
+#if CONFIG_LIBLINUX80211_RTL8189FS || CONFIG_LIBLINUX80211_BRCMFMAC || \
+    defined(RTOS_CASE_F429_SDIO_PROBE) || \
     defined(RTOS_CASE_F429_SDIO_WRITE_PROBE)
 #define CONFIG_FSL_SDMMC_ENABLE_SDIO 1
 #endif
