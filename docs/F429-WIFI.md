@@ -556,7 +556,12 @@ card's next command to fail; the host now waits for DATAEND of the whole
 transfer and for TXACT to fall.  The first block chunk completes, but the card
 still answers the second CMD53 in the same window with an R5 error (flags
 `0x0800`/`0x2000`), and after that every function-1 CMD52/53 is refused.  The
-card's own driver does not treat the CMD53 R5 flags as fatal, so the next work
-is the shape of that second block write (clear/ignore the card's R5 error, the
-window rewrite between chunks, the card's function-1 error state), not the
-stack.  C3 is not claimed.
+card's own driver does not treat the CMD53 R5 flags as fatal, so one further
+arm let block-mode CMD53 ignore R5_ERROR: the command then goes through but
+the data phase underruns (the card does not drain), which says the card's
+function-1 error is real, not a host verdict.  A second arm requested
+HT_AVAIL before the backplane writes (the vendor's clock ladder); this card
+never leaves ALP during the download, and the request only stalls the first
+chunk.  The open question is therefore the first block write itself: the host
+reports it complete, but the card refuses everything after it.  C3 is not
+claimed.
