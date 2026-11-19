@@ -550,29 +550,45 @@ Three engine/host semantics had to be corrected to get that far:
   otherwise the card starts consuming at the command response and the first
   2048-byte firmware chunk underruns.
 
-The block-write completion was then corrected as well: the data path used to
-drop DTEN as soon as the last word entered the FIFO, leaving TXACT up and the
-card's next command to fail; the host now waits for DATAEND of the whole
-transfer and for TXACT to fall.  The first block chunk completes, but the card
-still answers the second CMD53 in the same window with an R5 error (flags
-`0x0800`/`0x2000`), and after that every function-1 CMD52/53 is refused.
+The block-write completion had a defect of its own, found when the write path
+was re-read for the per-write record: the block-mode completion block was
+compiled inside the byte-mode branch, so a block write returned success as soon
+as its last word entered the FIFO, never dropped DTEN when the transfer had not
+ended, and left the card's data phase open - which is exactly the
+second-command R5 error the earlier paragraph describes.  The completion now
+runs for both framings: a multi-block write ends on DATAEND, a single-block
+write on DATAEND or DBCKEND (the controller sets the latter for single-block
+transfers, the same behaviour its single-block CMD53 reads already showed), and
+DTEN is dropped only after TXACT has fallen and the card's DAT0 busy line has
+had a bounded window.  A failed block write also issues the per-function I/O
+abort, so the driver's error path continues with a live function.
 
 Measuring the shapes instead of the sequence narrowed that: the card's
 function-1 state is sound (its block-size register reads 64, its CCCR has the
 function enabled and ready, the ALP clock is up), and a four-byte byte-mode
 write to the download's own window lands and reads back.  But **no block-mode
-write is acknowledged by the card**: one block as well as two, eight or
-thirty-two blocks, with a 64- or 32-byte block, in either the controller's SDIO
-mode or its memory-card data path, all end the same way - the host sends the
-data, the card never returns the block's CRC status, the data path stays
-active and the function has to be recovered.  A write of eight or forty-eight
-bytes in SDIO multibyte mode is accepted on the bus but does not land, and a
-496-byte multibyte request is refused by the card as out of range.  The four
-bytes are the only data phase the card confirms.  The vendor host, on the same
-board and card, fills the same FIFO with a DMA channel and arms the data path
-before the command; that structural difference is the open question, not the
-chip initialisation (the driver's passive step does reset the RAM core, and its
+write is acknowledged by the card**: one block as well as two or thirty-two
+blocks, with a 64-byte block, in either the controller's SDIO mode or its
+memory-card data path, with the data path armed before or after the command,
+all end the same way.  With the completion fixed, the record of the first block
+write of a clean boot reads: command accepted (R5 `0x1000`, no error flag),
+data path armed with SDIOEN and a 64-byte block, DLEN 2048, all data pushed,
+and then **no DATAEND inside a one-second bound** - TXACT still up, DAT0 high,
+the card not busy.  The card never returns a block's CRC status, so the
+transfer cannot end; the host then drops DTEN and the function has to be
+recovered.  A write of eight bytes in SDIO multibyte mode lands on one boot and
+not on the next; forty-eight bytes do not land; a 496-byte multibyte request is
+refused by the card as out of range.  The four bytes are the only data phase
+the card confirms on every boot.  The vendor host, on the same board and card,
+fills the same FIFO with a DMA channel and arms the data path before the
+command; that structural difference is the open question, not the chip
+initialisation (the driver's passive step does reset the RAM core, and its
 RAM-size read fails the attach when the core is down).
+
+An arm that carries the firmware in 4-byte byte-mode CMD53s (the one confirmed
+shape) does not error, but a four-byte write costs about ten milliseconds on
+this seam: the 202 KB image would need minutes, so that shape is a dead end as
+a download transport, not an answer.
 
 The wedged function is recoverable in software: writing the function number to
 the SDIO I/O-abort register (CCCR `0x06`) brings function 1 back on every
@@ -581,5 +597,6 @@ power cycle per shape.  A card reset (writing `0x08` there) is the fallback.
 
 C3 is not claimed: the firmware download does not complete yet.  The next
 implementation is the vendor host's data path shape - a DMA-fed transmit FIFO
-with the data path armed before the command - and its block-framed byte mode,
-tested with the abort in between shapes.
+with the data path armed before the command, completion on the DMA transfer
+complete plus TXACT/RXACT clear - with the per-write record kept so the two
+shapes can be compared field for field.

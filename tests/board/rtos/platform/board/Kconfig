@@ -59,14 +59,25 @@ config F429_AP6181_F1_PROBE
 	depends on F429_SDIO_AP6181
 	help
 	  Diagnostic only.  Before the first function-1 block write the
-	  brcmfmac firmware download issues, read the chip's ARM/SOCRAM core
-	  wrappers and the card's f1 block size/CCCR, then write a staircase of
-	  shapes (4/48/496 B byte mode, 1/2/8/32 blocks of 64 B at 0x8000 and
-	  0x8800) with single-block read-backs and a CHIPCLKCSR liveness check
-	  after each.  The first failing shape is the answer the C3 blocker
-	  needs; on failure the probe tries an IO abort and a card reset and
-	  stops the download instead of letting the driver hammer a wedged
-	  function.  Off for every shipping image.
+	  brcmfmac firmware download issues, read the card's f1 block size and
+	  CCCR, then write a matrix of shapes (4/8/48 B byte mode and, with
+	  F429_AP6181_F1_PROBE_BLOCK, 1/2/32 blocks of 64 B) at their own
+	  addresses with single-block read-backs and a CHIPCLKCSR liveness
+	  check after each.  A failed shape is cleared with the CCCR IO abort
+	  so the next one runs on a live card.  Off for every shipping image.
+
+config F429_AP6181_F1_PROBE_BLOCK
+	bool "AP6181 probe also measures block-mode write shapes"
+	depends on F429_AP6181_F1_PROBE
+	default n
+	help
+	  Adds the 1-, 2- and 32-block cases to the write-shape probe.  They
+	  are off by default because a block write that fails inside the probe
+	  leaves the card's function 1 in a state the next block write cannot
+	  use, even after the CCCR abort brings the function back: the
+	  driver's own first download chunk then fails for a reason the probe
+	  caused.  Keep them off when the question is what the driver's first
+	  block write does.
 
 config F429_AP6181_F1_BYTE_WRITE
 	bool "AP6181 f1 bulk writes in byte mode"

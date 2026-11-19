@@ -76,8 +76,9 @@ struct f4sdio_tx_rec {
 	 * still on the wire when the clock was stopped. */
 	uint32_t	sta_drop;	/* SDIO->STA at the completion instant */
 	uint32_t	dcnt_drop;	/* SDIO->DCOUNT at the completion instant */
-	uint32_t	txact_drop;	/* SDIO_FLAG_TXACT at the completion instant */
-	uint32_t	drop_end;	/* 0 none, 1 done, 2 error flag, 3 spin */
+	uint32_t	txact_drop;	/* SDIO_FLAG_TXACT after the drain */
+	uint32_t	drop_end;	/* 0 none, 1 done, 2 error flag, 3 spin,
+					 * 4 TXACT drain timed out */
 	/* The data path's state at the two instants the write can go wrong: one
 	 * bus write after the deferred arm (an empty-FIFO underrun already set
 	 * there means arming itself failed) and right after the frame was loaded
@@ -112,14 +113,15 @@ struct f4sdio_blk_rec {
 	uint32_t	dlen;		/* DLEN */
 	uint32_t	sta_dataend;	/* STA when DATAEND (or the first error) was seen */
 	uint32_t	dcnt_dataend;	/* DCOUNT at that instant */
-	uint32_t	txwait;		/* TXACT-wait iterations; == bound: timed out */
-	uint32_t	txact_drop;	/* TXACT still up after the wait */
+	uint32_t	txwait;		/* iterations the END wait took; == bound: timed out */
+	uint32_t	txact_drop;	/* TXACT still up after the drain */
 	uint32_t	dat0_dataend;	/* PC8 at DATAEND: 1 = low = card busy */
-	uint32_t	dat0_drop;	/* PC8 after the TXACT wait */
+	uint32_t	dat0_drop;	/* PC8 after the TXACT drain */
 	uint32_t	dat0_after;	/* PC8 after DCTRL lost DTEN */
 	uint32_t	dat0_settle;	/* PC8 after the bounded post-transfer settle */
 	uint32_t	sta_after;	/* STA after DCTRL lost DTEN */
-	uint32_t	drop_end;	/* 0 none, 1 dataend, 2 error flag, 3 no dataend */
+	uint32_t	drop_end;	/* 0 none, 1 dataend, 2 error flag,
+					 * 3 no end flag, 4 TXACT drain timed out */
 };
 
 struct f4sdio_dbg {
@@ -176,6 +178,13 @@ struct f4sdio_dbg {
 	uint32_t	blk_err;
 	uint32_t	blk_txwait_timeout;
 	uint32_t	blk_dat0_busy_drop;
+	/* Write data paths whose TXACT never fell inside the drain bound: for a
+	 * byte-mode write it is recorded only (the 8189 transmit path shares
+	 * this code), for a block-mode write it fails the transfer. */
+	uint32_t	tx_drain_timeout;
+	/* Block writes where the card still held DAT0 after the drain: waited
+	 * up to the bound, then reported, never failed. */
+	uint32_t	blk_dat0_wait_timeout;
 	struct f4sdio_blk_rec blk[F4SDIO_BLK_REC_MAX];
 };
 

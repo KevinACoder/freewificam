@@ -52,6 +52,25 @@ static inline uint32_t f4_cyccnt_to_us(uint32_t cycles)
 
 static struct f4sdio_dbg s_f4dbg;
 
+/*
+ * The SWD console ring is 8 KiB and is the only console on this board: an
+ * unbounded per-failure log line turns a wedged bus into a ring that holds
+ * nothing but the retry loop, which is what lost the first failing transfer of
+ * the 2026-11-20 boot.  The first lines of each kind are the evidence; after
+ * the cap the counter alone keeps the volume story.
+ */
+#define F4SDIO_FAIL_LOG_MAX	24u
+static uint32_t s_f4sdio_cmd_fail_logs;
+static uint32_t s_f4sdio_data_fail_logs;
+
+static bool f4sdio_fail_log_room(uint32_t *used)
+{
+	if (*used >= F4SDIO_FAIL_LOG_MAX)
+		return false;
+	(*used)++;
+	return true;
+}
+
 void f4sdio_dbg_get(struct f4sdio_dbg *out)
 {
 	if (out != NULL)
@@ -76,6 +95,18 @@ void f4sdio_dbg_get(struct f4sdio_dbg *out)
  * still belongs to this transfer.
  */
 #define F4SDIO_BLK_SETTLE_CYCLES	16800U
+/*
+ * How long a write's data phase may stay active after the host has pushed its
+ * last byte.  The last word and its CRC are still on the wire, and for a block
+ * write the card answers each block with a CRC status token and then commits
+ * the data on its own clock - the module vendor's host waits for exactly this
+ * (TXACT/RXACT clear) and never looks at DATAEND.  Two milliseconds at 168 MHz
+ * is far above one block's wire time and still bounded; the card's commit
+ * after a 2048-byte backplane write is the one that needs the longer end.
+ */
+#define F4SDIO_BLK_TXACT_CYCLES		336000U
+#define F4SDIO_BLK_DAT0_CYCLES		336000U
+#define F4SDIO_BYTE_TXACT_CYCLES	33600U
 /*
  * Consecutive empty-FIFO polls that end an SDIO multibyte read.  The card
  * stops when it has sent what it has, not when DLEN is reached, so a finished
@@ -322,6 +353,24 @@ static bool f4sdio_dat0_low(void)
 bool sdmmc_port_dat0_busy(void)
 {
 	return f4sdio_dat0_low();
+}
+
+/*
+ * The card's own end of a write, after the controller has finished its part:
+ * DAT0 low is the card still committing the data, and a command sent into that
+ * window is what the AP6181 answered with R5 ERROR plus IO_CURRENT_STATE=TRN.
+ * Bounded in the core's cycle counter; returns false when the card never let
+ * go, which is a measurement, not a hang.
+ */
+static bool f4sdio_wait_dat0_idle(uint32_t cycles)
+{
+	uint32_t t0 = f4_cyccnt();
+
+	while (f4sdio_dat0_low()) {
+		if ((uint32_t)(f4_cyccnt() - t0) > cycles)
+			return false;
+	}
+	return true;
 }
 
 /* The short critical section the MASK read-modify-writes need: a thread that
@@ -573,11 +622,13 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
 
 	if (f4sdio_wait_command(want, no_crc, &sta) != kStatus_Success) {
 		/* The first failing command names the enumeration step. */
-		SDMMC_LOGE("f4sdio", "cmd=%u arg=0x%08x resp=%u sta=0x%08x\n",
-			   (unsigned)command->index,
-			   (unsigned)command->argument,
-			   (unsigned)command->responseType,
-			   (unsigned)sta);
+		if (f4sdio_fail_log_room(&s_f4sdio_cmd_fail_logs))
+			SDMMC_LOGE("f4sdio",
+				   "cmd=%u arg=0x%08x resp=%u sta=0x%08x\n",
+				   (unsigned)command->index,
+				   (unsigned)command->argument,
+				   (unsigned)command->responseType,
+				   (unsigned)sta);
 		return kStatus_SDMMC_TransferFailed;
 	}
 
@@ -602,11 +653,14 @@ static status_t f4sdio_send_command(sdmmchost_t *host,
 			command->response[0] = SDIO_GetResponse(SDIO, SDIO_RESP1);
 			if ((command->responseErrorFlags != 0U) &&
 			    ((command->response[0] & command->responseErrorFlags) != 0U)) {
-				SDMMC_LOGE("f4sdio", "r5 cmd=%u arg=0x%08x resp=0x%08x mask=0x%08x\n",
-					   (unsigned)command->index,
-					   (unsigned)command->argument,
-					   (unsigned)command->response[0],
-					   (unsigned)command->responseErrorFlags);
+				if (f4sdio_fail_log_room(
+					&s_f4sdio_cmd_fail_logs))
+					SDMMC_LOGE("f4sdio",
+						   "r5 cmd=%u arg=0x%08x resp=0x%08x mask=0x%08x\n",
+						   (unsigned)command->index,
+						   (unsigned)command->argument,
+						   (unsigned)command->response[0],
+						   (unsigned)command->responseErrorFlags);
 				return kStatus_SDMMC_TransferFailed;
 			}
 		}
@@ -717,14 +771,13 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
 		s_f4sdio_tx_dctrl = SDIO_DATABLOCK_SIZE_1B | SDIO_DCTRL_DTEN |
 				    SDIO_DCTRL_SDIOEN | SDIO_DCTRL_DTMODE;
 		/*
-		 * Arm the data path before the command, not after its response.
-		 * The card's SDIO data phase follows the response, so a data
-		 * path enabled afterwards starts with an empty FIFO and the
-		 * peripheral reports TXUNDERR a couple of words in (measured:
-		 * 8 of 84 bytes written, then the transfer stops and the card
-		 * keeps a truncated frame).  The reference manual and the Linux
-		 * hosts arm the path first for SDIO multibyte writes; the
-		 * response wait then does not clock the data phase.
+		 * Defer the arming to the transfer path, which writes DCTRL one
+		 * bus write after the command response and then fills the FIFO -
+		 * the module vendor's order.  The FIFO must not be filled before
+		 * DCTRL on this controller: measured on this card, filling first
+		 * and arming second makes the first 4-byte backplane write leave
+		 * function 1 in its transfer state (every later CMD53 answered
+		 * R5 ERROR + IO_CURRENT_STATE=TRN).
 		 */
 		s_f4sdio_tx_deferred = true;
 		return kStatus_Success;
@@ -817,6 +870,28 @@ static status_t f4sdio_wait_data_end(void)
 	return kStatus_SDMMC_TransferFailed;
 }
 
+/*
+ * The end of a write's data phase is not the end of the data path.  After the
+ * last word and its CRC16 the controller keeps TXACT up while it waits for the
+ * card's CRC status (block mode) and while the card finishes on its own clock;
+ * the module vendor's host turns the transfer over on exactly that (it waits
+ * TXACT/RXACT clear and never looks at DATAEND).  Dropping DTEN inside that
+ * window is what the AP6181 line measured: the command after a 2048-byte block
+ * write came back R5 ERROR with IO_CURRENT_STATE=TRN, and every later function-1
+ * access failed.  Bounded in the core's cycle counter so a card that never
+ * releases the bus cannot hold the bus claim.
+ */
+static bool f4sdio_tx_drain(uint32_t cycles)
+{
+	uint32_t t0 = f4_cyccnt();
+
+	while ((SDIO->STA & SDIO_FLAG_TXACT) != 0U) {
+		if ((uint32_t)(f4_cyccnt() - t0) > cycles)
+			return false;
+	}
+	return true;
+}
+
 /* What the last multibyte read left over and how it ended; the FIFO record
  * needs both, and they are local to f4sdio_transfer_data(). */
 static uint32_t s_f4sdio_rx_total;
@@ -841,6 +916,7 @@ static uint32_t s_f4sdio_tx_txact_drop;
 #define F4SDIO_TX_DROP_DONE	1u
 #define F4SDIO_TX_DROP_ERR	2u
 #define F4SDIO_TX_DROP_SPIN	3u
+#define F4SDIO_TX_DROP_DRAIN	4u
 static uint32_t s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_NONE;
 /* The data path right after the frame was loaded into the FIFO, and the
  * control word the deferred arming actually left there. */
@@ -1081,16 +1157,19 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 			if (burst > F4SDIO_TX_FIFO_WORDS * 4u)
 				burst = F4SDIO_TX_FIFO_WORDS * 4u;
 			/*
-			 * A block-mode write gets the prefill only, in direct stores,
-			 * and then the FIFO-full-checked loop below owns the rest.
-			 * The generic burst loop that follows is shaped for byte-mode
-			 * frames (<= 100 B, already in the FIFO before the card
-			 * notices); on a 2048-byte CMD53 block write its per-word
-			 * helper calls let the card drain the prefill, and the first
-			 * check of the block loop then sees TXUNDERR with 1920 bytes
-			 * left (the BCM43362 firmware download's shape).
+			 * The first 32 words go into the FIFO in direct stores, and a
+			 * block-framed write arms the data path only after that prefill
+			 * (a byte-framed write was armed one bus write after the command
+			 * response, in f4sdio_transfer, and is prefilled here - the
+			 * module vendor's order, and the one this card accepts: filling
+			 * first and arming second left function 1 in its transfer
+			 * state).  The prefill is not just a head start: a per-word
+			 * helper loop that owned a 2048-byte block write let the card
+			 * drain it (TXUNDERR with 1920 bytes left, the BCM43362
+			 * download's shape), so the rest of a block write is filled
+			 * from the FIFO-full-checked loops below with interrupts off.
 			 */
-			if (!byte_mode) {
+			{
 				uint32_t words = remaining >> 2;
 
 				if (words > F4SDIO_TX_FIFO_WORDS)
@@ -1107,12 +1186,12 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 					tx += 4U;
 					remaining -= 4U;
 				}
-				burst = 0U;
-				if (s_f4sdio_tx_deferred) {
-					s_f4sdio_tx_deferred = false;
-					SDIO->DCTRL = s_f4sdio_tx_dctrl;
-					s_f4sdio_tx_sta_arm = SDIO->STA;
-				}
+			}
+			burst = 0U;
+			if (s_f4sdio_tx_deferred) {
+				s_f4sdio_tx_deferred = false;
+				SDIO->DCTRL = s_f4sdio_tx_dctrl;
+				s_f4sdio_tx_sta_arm = SDIO->STA;
 			}
 #if defined(CONFIG_F4SDIO_TX_FASTFILL) && CONFIG_F4SDIO_TX_FASTFILL
 			/*
@@ -1226,146 +1305,132 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 		}
 	}
 
-	if ((remaining == 0U) && byte_mode && (data->txData != NULL)) {
-		/*
-		 * A byte-mode write has no CRC status token, so DATAEND never
-		 * comes; what says the device has every byte is the byte
-		 * counter reaching zero with the FIFO empty.  Dropping DTEN any
-		 * earlier stops the clock with bytes still in the FIFO and the
-		 * device silently keeps the truncated write.
-		 *
-		 * The counter is not the last word, though: DCOUNT decrements
-		 * when the data path loads a word out of the FIFO, so
-		 * `DCOUNT==0 && !TXDAVL` means "the FIFO is empty", not "the
-		 * last word and its CRC have left the pins".  STA.TXACT is the
-		 * peripheral's own answer to the second question, and with a
-		 * 24 MHz four-bit clock one word is eight clock cycles wide -
-		 * clearing DTEN in that window cuts the frame's tail.
-		 */
-		s_f4sdio_tx_sta_drop = 0U;
-		s_f4sdio_tx_dcnt_drop = 0U;
-		s_f4sdio_tx_txact_drop = 0U;
-		s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_SPIN;
-		for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
-			uint32_t sta = SDIO->STA;
+	if ((remaining == 0U) && (data->txData != NULL)) {
+		bool ok = true;
 
-			if ((sta & (SDIO_FLAG_TXUNDERR |
-				    SDIO_FLAG_DCRCFAIL |
-				    SDIO_FLAG_DTIMEOUT)) != 0U) {
-				s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_ERR;
-				s_f4dbg.tx_drop_err++;
-			} else if ((SDIO->DCOUNT == 0U) &&
-				   ((sta & SDIO_FLAG_TXDAVL) == 0U)) {
-				s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_DONE;
-			} else {
-				continue;
-			}
-			s_f4sdio_tx_sta_drop = sta;
-			s_f4sdio_tx_dcnt_drop = SDIO->DCOUNT;
-			s_f4sdio_tx_txact_drop =
-			    ((sta & SDIO_FLAG_TXACT) != 0U) ? 1U : 0U;
-			break;
-		}
-		if (s_f4sdio_tx_txact_drop != 0U)
-			s_f4dbg.tx_txact_set++;
-#if defined(CONFIG_F4SDIO_TX_SETTLE) && CONFIG_F4SDIO_TX_SETTLE
-		/*
-		 * Diagnostic arm: let the data path finish before the clock
-		 * stops.  Bounded in the core's own cycle counter so a DPSM
-		 * that never leaves Send cannot hold the claim; the run-out
-		 * path still gives the last word its eight clock cycles.
-		 */
-		{
-			uint32_t t0 = f4_cyccnt();
-			uint32_t budget = F4SDIO_TX_SETTLE_CYCLES;
-			bool timed_out = false;
-
-			while ((SDIO->STA & SDIO_FLAG_TXACT) != 0U) {
-				if ((uint32_t)(f4_cyccnt() - t0) > budget) {
-					timed_out = true;
-					break;
-				}
-			}
-			if (timed_out) {
-				volatile uint32_t d;
-
-				s_f4dbg.tx_settle_timeout++;
-				for (d = 0U; d < F4SDIO_TX_SETTLE_TAIL_CYCLES; d++)
-					;
-			}
-		}
-#endif
-		if (!byte_mode) {
+		if (byte_mode) {
 			/*
-			 * A block write is not over when the last word leaves the
-			 * FIFO: the DPSM is still shifting the final blocks and
-			 * their CRC status tokens.  Clearing DTEN here (what this
-			 * path used to do) aborts the card's data phase and leaves
-			 * TXACT up; the card then answers the next CMD53 in the
-			 * same window with R5_ERROR — measured on the BCM43362
-			 * firmware download, where only the first block chunk ever
-			 * completed.  Wait for the data end of the whole transfer
-			 * (DATAEND, not the first block's DBCKEND) and for TXACT to
-			 * fall before releasing the data path.
+			 * A byte-mode write has no CRC status token, so DATAEND
+			 * never comes; what says the device has every byte is the
+			 * byte counter reaching zero with the FIFO empty.
 			 */
-			uint32_t sta = 0U;
-			bool rec = (data->txData != NULL);
+			s_f4sdio_tx_sta_drop = 0U;
+			s_f4sdio_tx_dcnt_drop = 0U;
+			s_f4sdio_tx_txact_drop = 0U;
+			s_f4sdio_tx_drop_end = F4SDIO_TX_DROP_SPIN;
+			for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
+				uint32_t sta = SDIO->STA;
 
+				if ((sta & (SDIO_FLAG_TXUNDERR |
+					    SDIO_FLAG_DCRCFAIL |
+					    SDIO_FLAG_DTIMEOUT)) != 0U) {
+					s_f4sdio_tx_drop_end =
+					    F4SDIO_TX_DROP_ERR;
+					s_f4dbg.tx_drop_err++;
+				} else if ((SDIO->DCOUNT == 0U) &&
+					   ((sta & SDIO_FLAG_TXDAVL) == 0U)) {
+					s_f4sdio_tx_drop_end =
+					    F4SDIO_TX_DROP_DONE;
+				} else {
+					continue;
+				}
+				s_f4sdio_tx_sta_drop = sta;
+				s_f4sdio_tx_dcnt_drop = SDIO->DCOUNT;
+				s_f4sdio_tx_txact_drop =
+				    ((sta & SDIO_FLAG_TXACT) != 0U) ? 1U : 0U;
+				break;
+			}
+			if (s_f4sdio_tx_txact_drop != 0U)
+				s_f4dbg.tx_txact_set++;
+			/*
+			 * The byte counter says the FIFO is empty, not that the
+			 * data path is finished: the last word and its CRC16 are
+			 * still shifted out, and a card that sees a short frame
+			 * commits nothing.  Wait for TXACT to fall (the module
+			 * vendor's own completion); a timeout is recorded but does
+			 * not fail the write, because this path also carries the
+			 * 8189 transmit frames.
+			 */
+			if (s_f4sdio_tx_drop_end == F4SDIO_TX_DROP_DONE) {
+				if (!f4sdio_tx_drain(F4SDIO_BYTE_TXACT_CYCLES)) {
+					s_f4dbg.tx_drain_timeout++;
+					s_f4sdio_tx_drop_end =
+					    F4SDIO_TX_DROP_DRAIN;
+				}
+				s_f4sdio_tx_txact_drop =
+				    ((SDIO->STA & SDIO_FLAG_TXACT) != 0U) ?
+				    1U : 0U;
+			}
+		} else {
+			uint32_t sta = 0U;
+			bool single = (data->blockCount <= 1U);
+			bool ended = false;
+
+			/*
+			 * A block write ends on DATAEND for a multi-block
+			 * transfer; a transfer that is a single block ends on
+			 * DBCKEND on this controller (the same behaviour the
+			 * single-block CMD53 reads in this file already measured).
+			 * Waiting for DATAEND alone is what left every
+			 * single-block function-1 write abandoned mid-phase.
+			 */
 			for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
 				sta = SDIO->STA;
-				if ((sta & SDIO_FLAG_DATAEND) != 0U) {
-					if (rec) {
-						s_f4sdio_blk.sta_dataend = sta;
-						s_f4sdio_blk.dcnt_dataend =
-						    SDIO->DCOUNT;
-						s_f4sdio_blk.dat0_dataend =
-						    f4sdio_dat0_low() ? 1U : 0U;
-					}
-					break;
-				}
 				if ((sta & (SDIO_FLAG_RXOVERR |
 					    SDIO_FLAG_TXUNDERR |
 					    SDIO_FLAG_DCRCFAIL |
 					    SDIO_FLAG_DTIMEOUT |
 					    SDIO_FLAG_STBITERR)) != 0U)
 					break;
-			}
-			if ((sta & SDIO_FLAG_DATAEND) == 0U) {
-				if (rec) {
-					s_f4sdio_blk.sta_dataend = sta;
-					s_f4sdio_blk.dcnt_dataend =
-					    SDIO->DCOUNT;
-					s_f4sdio_blk.dat0_dataend =
-					    f4sdio_dat0_low() ? 1U : 0U;
-					s_f4sdio_blk.drop_end = 3U;
-				}
-				SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
-				if (rec) {
-					s_f4sdio_blk.sta_after = SDIO->STA;
-					s_f4sdio_blk.dat0_after =
-					    f4sdio_dat0_low() ? 1U : 0U;
-				}
-				SDIO->ICR = SDIO_FLAG_DATAEND |
-					    SDIO_FLAG_DBCKEND;
-				if (rec)
-					f4sdio_blk_record_publish(
-					    kStatus_SDMMC_TransferFailed);
-				return kStatus_SDMMC_TransferFailed;
-			}
-			for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
-				if ((SDIO->STA & SDIO_FLAG_TXACT) == 0U)
+				if ((sta & SDIO_FLAG_DATAEND) != 0U) {
+					ended = true;
 					break;
+				}
+				if (single &&
+				    ((sta & SDIO_FLAG_DBCKEND) != 0U)) {
+					ended = true;
+					break;
+				}
 			}
-			if (rec) {
-				s_f4sdio_blk.txwait = spin;
-				s_f4sdio_blk.txact_drop =
-				    ((SDIO->STA & SDIO_FLAG_TXACT) != 0U) ? 1U : 0U;
+			s_f4sdio_blk.sta_dataend = sta;
+			s_f4sdio_blk.dcnt_dataend = SDIO->DCOUNT;
+			s_f4sdio_blk.dat0_dataend =
+			    f4sdio_dat0_low() ? 1U : 0U;
+			s_f4sdio_blk.txwait = spin;
+			if (!ended) {
+				s_f4sdio_blk.drop_end = 3U;
+				ok = false;
+			} else if (!f4sdio_tx_drain(F4SDIO_BLK_TXACT_CYCLES)) {
+				/*
+				 * The card is still on the bus after the last
+				 * block: TXACT did not fall inside the bound.
+				 * That is a real failure, not a measurement.
+				 */
+				s_f4dbg.blk_txwait_timeout++;
+				s_f4sdio_blk.txact_drop = 1U;
+				s_f4sdio_blk.drop_end = 4U;
+				ok = false;
+			} else {
+				s_f4sdio_blk.txact_drop = 0U;
 				s_f4sdio_blk.dat0_drop =
 				    f4sdio_dat0_low() ? 1U : 0U;
+				/*
+				 * The card may still be committing the data on
+				 * DAT0 after the controller is done; a command
+				 * sent into that window is answered R5 ERROR with
+				 * IO_CURRENT_STATE=TRN.  Report-only: DAT0 is
+				 * also a data line.
+				 */
+				if (f4sdio_dat0_low() &&
+				    !f4sdio_wait_dat0_idle(
+					F4SDIO_BLK_DAT0_CYCLES)) {
+					s_f4dbg.blk_dat0_wait_timeout++;
+					s_f4sdio_blk.dat0_drop = 1U;
+				}
 			}
 		}
 		SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
-		if (!byte_mode && (data->txData != NULL)) {
+		if (!byte_mode) {
 			s_f4sdio_blk.sta_after = SDIO->STA;
 			s_f4sdio_blk.dat0_after =
 			    f4sdio_dat0_low() ? 1U : 0U;
@@ -1382,12 +1447,14 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 #endif
 			s_f4sdio_blk.dat0_settle =
 			    f4sdio_dat0_low() ? 1U : 0U;
-			s_f4sdio_blk.drop_end = 1U;
+			if (s_f4sdio_blk.drop_end == 0U)
+				s_f4sdio_blk.drop_end = 1U;
 		}
 		SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND;
-		if (!byte_mode && (data->txData != NULL))
-			f4sdio_blk_record_publish(kStatus_Success);
-		return kStatus_Success;
+		if (!byte_mode)
+			f4sdio_blk_record_publish(ok ? kStatus_Success :
+						      kStatus_SDMMC_TransferFailed);
+		return ok ? kStatus_Success : kStatus_SDMMC_TransferFailed;
 	}
 
 	if (remaining != 0U)
@@ -1604,16 +1671,18 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 		 * returns here with nothing on the console - and a transmit write
 		 * then simply never happens.
 		 */
-		SDMMC_LOGE("f4sdio",
-			   "cmd%u arg=0x%08x failed sta=0x%08x dir=%s len=%u",
-			   (unsigned)content->command->index,
-			   (unsigned)content->command->argument,
-			   (unsigned)SDIO->STA,
-			   (content->data != NULL) ?
-			   ((content->data->txData != NULL) ? "tx" : "rx") : "-",
-			   (content->data != NULL) ?
-			   (unsigned)(content->data->blockSize *
-				      content->data->blockCount) : 0u);
+		if (f4sdio_fail_log_room(&s_f4sdio_cmd_fail_logs))
+			SDMMC_LOGE("f4sdio",
+				   "cmd%u arg=0x%08x failed sta=0x%08x dir=%s len=%u",
+				   (unsigned)content->command->index,
+				   (unsigned)content->command->argument,
+				   (unsigned)SDIO->STA,
+				   (content->data != NULL) ?
+				   ((content->data->txData != NULL) ? "tx" : "rx") :
+				   "-",
+				   (content->data != NULL) ?
+				   (unsigned)(content->data->blockSize *
+					      content->data->blockCount) : 0u);
 		f4sdio_irq_unmask();
 		return status;
 	}
@@ -1623,6 +1692,16 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 	    (content->data->txData != NULL) && !byte_mode)
 		f4sdio_blk_record_begin(content->command, content->data);
 
+	/*
+	 * A byte-mode write is armed here, one bus write after the command
+	 * response, and only then is the FIFO filled - the module vendor's own
+	 * order (DCTRL before the command, DMA fills the FIFO afterwards).
+	 * The reversed order (fill the FIFO, then arm) wedges this card's
+	 * function 1 on the very first 4-byte backplane write: measured, the
+	 * boot after the change answered every CMD53 with R5 ERROR and
+	 * IO_CURRENT_STATE=TRN.  A block-mode write keeps the prefill-then-arm
+	 * order measured on this port (see f4sdio_transfer_data).
+	 */
 	if (s_f4sdio_tx_deferred && byte_mode) {
 		s_f4sdio_tx_deferred = false;
 		SDIO->DCTRL = s_f4sdio_tx_dctrl;
@@ -1657,21 +1736,40 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 			SDIO->DCTRL &= ~SDIO_DCTRL_SDIOEN;
 		f4sdio_irq_unmask();
 		if (status != kStatus_Success) {
-			SDMMC_LOGE("f4sdio",
-				   "data cmd=%u arg=0x%08x len=%u dir=%s "
-				   "sta=0x%08x dctrl=0x%08x resp=0x%08x "
-				   "left=%u tsta=0x%08x dcnt=%u",
-				   (unsigned)content->command->index,
-				   (unsigned)content->command->argument,
-				   (unsigned)(content->data->blockSize *
-					      content->data->blockCount),
-				   (content->data->rxData != NULL) ? "rx" : "tx",
-				   (unsigned)SDIO->STA,
-				   (unsigned)SDIO->DCTRL,
-				   (unsigned)SDIO->RESP1,
-				   (unsigned)s_f4sdio_tx_left,
-				   (unsigned)s_f4sdio_tx_sta,
-				   (unsigned)s_f4sdio_tx_dcount);
+			uint32_t sta_fail = SDIO->STA;
+			uint32_t dctrl_fail = SDIO->DCTRL;
+
+			if (f4sdio_fail_log_room(&s_f4sdio_data_fail_logs))
+				SDMMC_LOGE("f4sdio",
+					   "data cmd=%u arg=0x%08x len=%u dir=%s "
+					   "sta=0x%08x dctrl=0x%08x resp=0x%08x "
+					   "left=%u tsta=0x%08x dcnt=%u",
+					   (unsigned)content->command->index,
+					   (unsigned)content->command->argument,
+					   (unsigned)(content->data->blockSize *
+						      content->data->blockCount),
+					   (content->data->rxData != NULL) ?
+					   "rx" : "tx",
+					   (unsigned)sta_fail,
+					   (unsigned)dctrl_fail,
+					   (unsigned)SDIO->RESP1,
+					   (unsigned)s_f4sdio_tx_left,
+					   (unsigned)s_f4sdio_tx_sta,
+					   (unsigned)s_f4sdio_tx_dcount);
+			/*
+			 * A failed data phase leaves the DPSM where it stopped -
+			 * RXACT for a read that delivered fewer bytes than DLEN,
+			 * TXACT for a write - and every later command then talks
+			 * to a controller that is still in a transfer.  One failed
+			 * transfer used to poison every 4-byte read and write after
+			 * it with the card reporting R5 0x2800.  Release the data
+			 * path here so a retry is a fresh transfer.
+			 */
+			SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
+			SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND |
+				    SDIO_FLAG_RXOVERR | SDIO_FLAG_TXUNDERR |
+				    SDIO_FLAG_DCRCFAIL | SDIO_FLAG_DTIMEOUT |
+				    SDIO_FLAG_STBITERR;
 			return status;
 		}
 		if (byte_read && !s_f4sdio_irq_armed)
