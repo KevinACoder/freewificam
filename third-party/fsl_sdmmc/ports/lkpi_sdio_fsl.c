@@ -390,11 +390,16 @@ static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 	/*
 	 * Open finding (F429 / AP6181): the card completes the first backplane
 	 * block write and answers the next CMD53 in the same window with
-	 * R5_ERROR (0x2800), whatever the chunk size or the delay between the
-	 * two.  The vendor's host does not treat the R5 flags as fatal; this
-	 * stack does, so the firmware download stops at the second block.  The
-	 * bounded trace below is what the next session reads the window and
-	 * address sequence from.
+	 * R5_ERROR (0x2800), whatever the chunk size.  The firmware download
+	 * stops at the second block.  The bounded trace below is what a session
+	 * reads the window and address sequence from.
+	 *
+	 * The settle-time arm (one millisecond before every block write after
+	 * the first) did not change the second transfer's R5, so the refusal is
+	 * not timing.  This arm instead reads the first written block back and
+	 * compares it: a match says the card stored the first transfer and the
+	 * refusal comes later; a read error says function 1 is already in its
+	 * error state when the write returns.
 	 */
 	{
 		static unsigned int blk_logs;
@@ -407,15 +412,70 @@ static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 			    (unsigned int)blocks);
 		}
 	}
+	unsigned int nblocks = blocks;
+
+#if defined(CONFIG_BOARD_STM32F429_CHALLENGER)
+	if (write && (func == 1u)) {
+		static bool preread_done;
+		static bool first_write_capped;
+		static uint8_t preread_buf[64];
+
+		if (!first_write_capped) {
+			first_write_capped = true;
+			if (nblocks > 1u)
+				nblocks = 1u;	/* 64-byte first write */
+		}
+		if (!preread_done) {
+			preread_done = true;
+			st = SDIO_IO_Read_Extended(card,
+						   (sdio_func_num_t)func, addr,
+						   preread_buf, 1u, flags);
+			lkpi_printf(ULOG_INFO_LEVEL,
+			    "fsl: preread st=%d\n", (int)st);
+		}
+		lkpi_printf(ULOG_INFO_LEVEL,
+		    "fsl: first write capped n=%u\n", nblocks);
+	}
+#endif
 	if (write) {
 		st = SDIO_IO_Write_Extended(card, (sdio_func_num_t)func, addr, buf,
-					    blocks, flags);
+					    nblocks, flags);
 	} else {
 		st = SDIO_IO_Read_Extended(card, (sdio_func_num_t)func, addr, buf,
 					   blocks, flags);
 	}
 	if (st != kStatus_Success)
 		return sdmmc_fsl_err(st);
+#if defined(CONFIG_BOARD_STM32F429_CHALLENGER)
+	if (write && (func == 1u)) {
+		static bool readback_done;
+		static uint8_t readback_buf[2048];
+
+		if (!readback_done &&
+		    ((uint32_t)blksz * nblocks <= sizeof(readback_buf))) {
+			readback_done = true;
+			st = SDIO_IO_Read_Extended(card,
+						   (sdio_func_num_t)func, addr,
+						   readback_buf, nblocks, flags);
+			if (st != kStatus_Success) {
+				lkpi_printf(ULOG_INFO_LEVEL,
+				    "fsl: readback failed st=%d\n", (int)st);
+			} else {
+				uint32_t i;
+				uint32_t bad = 0u;
+
+				for (i = 0u; i < (uint32_t)blksz * nblocks; i++) {
+					if (readback_buf[i] != buf[i])
+						bad++;
+				}
+				lkpi_printf(ULOG_INFO_LEVEL,
+				    "fsl: readback bytes=%u bad=%u\n",
+				    (unsigned int)(blksz * nblocks),
+				    (unsigned int)bad);
+			}
+		}
+	}
+#endif
 #ifdef CONFIG_LKPI_CENSUS
 	lkpi_fsl_census_state.blk_ops++;
 	if (write)
