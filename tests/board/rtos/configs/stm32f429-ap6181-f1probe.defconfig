@@ -1,0 +1,36 @@
+# F429 AP6181 f1 write-shape probe: the attach image plus the diagnostic that
+# runs before brcmfmac's first function-1 block write.
+#
+# The C3 blocker is that the first f1 block write (the firmware download's
+# first chunk) leaves the card answering every f1 CMD52/53 with R5 0x2800.  The
+# probe reads the chip's core wrappers and the card's f1 block size/CCCR, then
+# writes a staircase of byte/block shapes at the download's own window/address
+# with single-block read-backs and a liveness check after each.  The first
+# failing shape is the answer; the abort/card-reset writes say whether the
+# wedged function can be cleared without a power cycle.
+#
+# Diagnostic only: the shipping image is stm32f429-ap6181-attach with the
+# measured fix, not this profile.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_CASES="tick ap6181_c3"
+CONFIG_LIBLINUX80211=y
+CONFIG_LIBLINUX80211_CFG80211=y
+CONFIG_LIBLINUX80211_MAC80211=n
+CONFIG_LIBLINUX80211_SDIO=y
+CONFIG_LIBLINUX80211_BRCMFMAC=y
+CONFIG_LIBLINUX80211_NET_NONE=y
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_F429_SDIO_AP6181=y
+CONFIG_F429_AP6181_F1_PROBE=y
+CONFIG_FREERTOS_HEAP_SIZE=4194304
+CONFIG_RUNNER_STACK_KB=32
+CONFIG_LKPI_SKB_POOL_NUM=8
+CONFIG_LKPI_SKB_DATA_POOL_NUM=8
+CONFIG_LKPI_SKB_HEAP_HDR_MAX=64

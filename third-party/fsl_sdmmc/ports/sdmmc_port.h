@@ -112,6 +112,18 @@ void sdmmc_card_int_set(void (*cb)(void *), void *arg);
  * given a card-interrupt upcall. */
 void FDWMMCHOST_CardIntEnable(sdmmchost_t *host, bool enable);
 
+/* The card's DAT0 busy line as this board's controller glue reads it (PC8 on
+ * the F429): true while the card holds it low.  The SD stack polls it for
+ * memory cards through SDMMCHOST_IsCardBusy; an SDIO CMD53 write has no such
+ * poll, so the AP6181 write probe samples it directly. */
+bool sdmmc_port_dat0_busy(void);
+
+/* Select the controller's data-path mode for block-mode CMD53 writes: true is
+ * the default SDIO mode (SDIOEN=1), false the memory-card path (SDIOEN=0).
+ * The AP6181 write probe uses it to measure which mode the card acknowledges;
+ * byte-mode writes keep SDIOEN unconditionally. */
+void sdmmc_port_block_write_sdioen(bool on);
+
 /* The controller state this port's host glue keeps, or NULL when the card is
  * not up. Exposed for the board case's evidence lines (the register fields, the
  * counters and the failure snapshot), not for the stack. */

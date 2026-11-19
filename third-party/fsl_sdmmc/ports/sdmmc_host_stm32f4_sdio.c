@@ -70,6 +70,13 @@ void f4sdio_dbg_get(struct f4sdio_dbg *out)
 #define F4SDIO_TX_SETTLE_CYCLES		33600U
 #define F4SDIO_TX_SETTLE_TAIL_CYCLES	3000U
 /*
+ * How long the block-write record lets the bus settle after DTEN is dropped
+ * before it samples DAT0 for the last time: 16,800 core cycles is 100 us at
+ * 168 MHz, far above one block's wire time but short enough that the record
+ * still belongs to this transfer.
+ */
+#define F4SDIO_BLK_SETTLE_CYCLES	16800U
+/*
  * Consecutive empty-FIFO polls that end an SDIO multibyte read.  The card
  * stops when it has sent what it has, not when DLEN is reached, so a finished
  * transfer and a stuck one look the same until the FIFO has been quiet long
@@ -297,6 +304,24 @@ static bool s_f4sdio_irq_armed;
 static bool f4sdio_dat1_low(void)
 {
 	return (GPIOC->IDR & (1UL << 9U)) == 0U;
+}
+
+/* DAT0 is PC8 (sdio_board.c): the card's busy line after a write.  The SD
+ * stack polls it through SDMMCHOST_IsCardBusy for memory cards; an SDIO
+ * CMD53 write has no such poll anywhere above this glue, so the block-write
+ * record samples it here - a card still holding DAT0 low when the host drops
+ * DTEN and issues the next command is exactly the state the AP6181 line has
+ * to be able to tell apart from a card that answered an R5 error. */
+static bool f4sdio_dat0_low(void)
+{
+	return (GPIOC->IDR & (1UL << 8U)) == 0U;
+}
+
+/* The host seam's DAT0 answer, for the SDIO adapter's AP6181 write probe
+ * (sdmmc_port.h).  Low is the card busy. */
+bool sdmmc_port_dat0_busy(void)
+{
+	return f4sdio_dat0_low();
 }
 
 /* The short critical section the MASK read-modify-writes need: a thread that
@@ -635,6 +660,19 @@ static bool f4sdio_byte_read(const sdmmchost_data_t *data)
 
 static uint32_t s_f4sdio_tx_dctrl;
 static bool s_f4sdio_tx_deferred;
+/*
+ * SDIOEN for block-mode writes.  The AP6181 probe measures whether the card
+ * acknowledges a block-mode write with the controller in SDIO mode (the
+ * default, and what the module vendor's host uses) or in the memory-card data
+ * path (SDIOEN=0, the shape the 8189FTV line uses for its block writes).  Byte
+ * mode keeps SDIOEN unconditionally - that is measured and working.
+ */
+static bool s_f4sdio_block_sdioen = true;
+
+void sdmmc_port_block_write_sdioen(bool on)
+{
+	s_f4sdio_block_sdioen = on;
+}
 
 static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
 				   bool stream_rx, bool sdio_card)
@@ -709,7 +747,8 @@ static status_t f4sdio_data_config(const sdmmchost_data_t *data, bool byte_mode,
 		SDIO->DTIMER = 0xFFFFFFFFUL;
 		SDIO->DLEN = (uint32_t)(data->blockSize * data->blockCount);
 		s_f4sdio_tx_dctrl = bs | SDIO_DCTRL_DTEN |
-				    SDIO_DCTRL_SDIOEN;
+				    (s_f4sdio_block_sdioen ?
+				     SDIO_DCTRL_SDIOEN : 0U);
 		s_f4sdio_tx_deferred = true;
 		return kStatus_Success;
 	}
@@ -810,6 +849,80 @@ static uint32_t s_f4sdio_tx_sta_arm;
 static uint32_t s_f4sdio_tx_sta_burst;
 static uint32_t s_f4sdio_tx_dcnt_burst;
 static uint32_t s_f4sdio_tx_burst_cycles;	/* the fill's own duration */
+
+
+/*
+ * The block-mode write's completion record.  It is filled by the transfer
+ * path, published at the moment the data path is released, and printed once
+ * per transfer (bounded): the first f1 block writes of a brcmfmac download
+ * are the whole question, and there are only three of them before the boot
+ * either proceeds or the card stops answering.
+ */
+static struct f4sdio_blk_rec s_f4sdio_blk;
+static bool s_f4sdio_blk_active;
+
+static void f4sdio_blk_record_begin(const sdmmchost_cmd_t *cmd,
+				    const sdmmchost_data_t *data)
+{
+	(void)memset(&s_f4sdio_blk, 0, sizeof(s_f4sdio_blk));
+	s_f4sdio_blk.func = (cmd->argument >> 28) & 0x7U;
+	s_f4sdio_blk.addr = (cmd->argument >> 9) & 0x1FFFFU;
+	s_f4sdio_blk.blocks = data->blockCount;
+	s_f4sdio_blk.resp = SDIO->RESP1;
+	s_f4sdio_blk.sta_cmd = SDIO->STA;
+	s_f4sdio_blk.dctrl_cfg = s_f4sdio_tx_dctrl;
+	s_f4sdio_blk.dlen = SDIO->DLEN;
+	s_f4sdio_blk_active = true;
+}
+
+static void f4sdio_blk_record_publish(status_t status)
+{
+	struct f4sdio_blk_rec *rec;
+
+	if (!s_f4sdio_blk_active)
+		return;
+	s_f4sdio_blk_active = false;
+
+	s_f4dbg.blk_wr++;
+	if (status == kStatus_Success)
+		s_f4dbg.blk_ok++;
+	else
+		s_f4dbg.blk_err++;
+	if (s_f4sdio_blk.txwait >= F4SDIO_DATA_SPIN)
+		s_f4dbg.blk_txwait_timeout++;
+	if (s_f4sdio_blk.dat0_after != 0U)
+		s_f4dbg.blk_dat0_busy_drop++;
+
+	rec = &s_f4dbg.blk[s_f4dbg.blk_rec_head % F4SDIO_BLK_REC_MAX];
+	*rec = s_f4sdio_blk;
+	s_f4dbg.blk_rec_head++;
+
+	/*
+	 * One line per write, and only for the backplane function: the line
+	 * carries the whole verdict (command response, data end, data path,
+	 * the card's busy line at four instants), so a later session reads
+	 * the failing transfer out of the ring instead of reconstructing it.
+	 * The first six are enough for a download's first chunks.
+	 */
+	if ((s_f4sdio_blk.func == 1U) && (s_f4dbg.blk_rec_head <= 6U)) {
+		SDMMC_LOGE("f4sdio",
+		    "blk f1 addr=%05x n=%u resp=%08x stacmd=%08x dctrl=%08x "
+		    "dlen=%u dataend=%08x dcnt=%u txwait=%u txact=%u "
+		    "dat0=%u/%u/%u/%u drop=%u",
+		    (unsigned)s_f4sdio_blk.addr, (unsigned)s_f4sdio_blk.blocks,
+		    (unsigned)s_f4sdio_blk.resp, (unsigned)s_f4sdio_blk.sta_cmd,
+		    (unsigned)s_f4sdio_blk.dctrl_cfg, (unsigned)s_f4sdio_blk.dlen,
+		    (unsigned)s_f4sdio_blk.sta_dataend,
+		    (unsigned)s_f4sdio_blk.dcnt_dataend,
+		    (unsigned)s_f4sdio_blk.txwait,
+		    (unsigned)s_f4sdio_blk.txact_drop,
+		    (unsigned)s_f4sdio_blk.dat0_dataend,
+		    (unsigned)s_f4sdio_blk.dat0_drop,
+		    (unsigned)s_f4sdio_blk.dat0_after,
+		    (unsigned)s_f4sdio_blk.dat0_settle,
+		    (unsigned)s_f4sdio_blk.drop_end);
+	}
+}
 
 static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mode,
 				     bool stream_rx)
@@ -1196,11 +1309,20 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 			 * fall before releasing the data path.
 			 */
 			uint32_t sta = 0U;
+			bool rec = (data->txData != NULL);
 
 			for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
 				sta = SDIO->STA;
-				if ((sta & SDIO_FLAG_DATAEND) != 0U)
+				if ((sta & SDIO_FLAG_DATAEND) != 0U) {
+					if (rec) {
+						s_f4sdio_blk.sta_dataend = sta;
+						s_f4sdio_blk.dcnt_dataend =
+						    SDIO->DCOUNT;
+						s_f4sdio_blk.dat0_dataend =
+						    f4sdio_dat0_low() ? 1U : 0U;
+					}
 					break;
+				}
 				if ((sta & (SDIO_FLAG_RXOVERR |
 					    SDIO_FLAG_TXUNDERR |
 					    SDIO_FLAG_DCRCFAIL |
@@ -1209,18 +1331,62 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 					break;
 			}
 			if ((sta & SDIO_FLAG_DATAEND) == 0U) {
+				if (rec) {
+					s_f4sdio_blk.sta_dataend = sta;
+					s_f4sdio_blk.dcnt_dataend =
+					    SDIO->DCOUNT;
+					s_f4sdio_blk.dat0_dataend =
+					    f4sdio_dat0_low() ? 1U : 0U;
+					s_f4sdio_blk.drop_end = 3U;
+				}
 				SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
+				if (rec) {
+					s_f4sdio_blk.sta_after = SDIO->STA;
+					s_f4sdio_blk.dat0_after =
+					    f4sdio_dat0_low() ? 1U : 0U;
+				}
 				SDIO->ICR = SDIO_FLAG_DATAEND |
 					    SDIO_FLAG_DBCKEND;
+				if (rec)
+					f4sdio_blk_record_publish(
+					    kStatus_SDMMC_TransferFailed);
 				return kStatus_SDMMC_TransferFailed;
 			}
 			for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
 				if ((SDIO->STA & SDIO_FLAG_TXACT) == 0U)
 					break;
 			}
+			if (rec) {
+				s_f4sdio_blk.txwait = spin;
+				s_f4sdio_blk.txact_drop =
+				    ((SDIO->STA & SDIO_FLAG_TXACT) != 0U) ? 1U : 0U;
+				s_f4sdio_blk.dat0_drop =
+				    f4sdio_dat0_low() ? 1U : 0U;
+			}
 		}
 		SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
+		if (!byte_mode && (data->txData != NULL)) {
+			s_f4sdio_blk.sta_after = SDIO->STA;
+			s_f4sdio_blk.dat0_after =
+			    f4sdio_dat0_low() ? 1U : 0U;
+#if defined(CONFIG_F429_AP6181_F1_PROBE) && CONFIG_F429_AP6181_F1_PROBE
+			/* The post-transfer settle is a measurement, not a fix:
+			 * only the probe build pays its 100 us. */
+			{
+				uint32_t t0 = f4_cyccnt();
+
+				while ((uint32_t)(f4_cyccnt() - t0) <
+				       F4SDIO_BLK_SETTLE_CYCLES) {
+				}
+			}
+#endif
+			s_f4sdio_blk.dat0_settle =
+			    f4sdio_dat0_low() ? 1U : 0U;
+			s_f4sdio_blk.drop_end = 1U;
+		}
 		SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND;
+		if (!byte_mode && (data->txData != NULL))
+			f4sdio_blk_record_publish(kStatus_Success);
 		return kStatus_Success;
 	}
 
@@ -1451,6 +1617,11 @@ static status_t f4sdio_transfer(sdmmchost_t *host, sdmmchost_transfer_t *content
 		f4sdio_irq_unmask();
 		return status;
 	}
+
+	s_f4sdio_blk_active = false;
+	if ((content->command->index == 53U) && (content->data != NULL) &&
+	    (content->data->txData != NULL) && !byte_mode)
+		f4sdio_blk_record_begin(content->command, content->data);
 
 	if (s_f4sdio_tx_deferred && byte_mode) {
 		s_f4sdio_tx_deferred = false;

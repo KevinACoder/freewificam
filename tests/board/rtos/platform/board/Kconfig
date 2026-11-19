@@ -54,6 +54,31 @@ config F429_SDIO_AP6181
 	  8189FTV and the plain-SD-card state: the module must stay off the
 	  shared bus.  The TF socket must be empty in either case.
 
+config F429_AP6181_F1_PROBE
+	bool "AP6181 f1 write-shape probe before the brcmfmac download"
+	depends on F429_SDIO_AP6181
+	help
+	  Diagnostic only.  Before the first function-1 block write the
+	  brcmfmac firmware download issues, read the chip's ARM/SOCRAM core
+	  wrappers and the card's f1 block size/CCCR, then write a staircase of
+	  shapes (4/48/496 B byte mode, 1/2/8/32 blocks of 64 B at 0x8000 and
+	  0x8800) with single-block read-backs and a CHIPCLKCSR liveness check
+	  after each.  The first failing shape is the answer the C3 blocker
+	  needs; on failure the probe tries an IO abort and a card reset and
+	  stops the download instead of letting the driver hammer a wedged
+	  function.  Off for every shipping image.
+
+config F429_AP6181_F1_BYTE_WRITE
+	bool "AP6181 f1 bulk writes in byte mode"
+	depends on F429_SDIO_AP6181
+	help
+	  Fallback for the measured block-mode failure: function-1 bulk writes
+	  (the firmware download) are split into byte-mode CMD53 transfers of
+	  496 bytes, while reads keep the block path that already works.  It is
+	  slower than block mode and exists to get the firmware into the chip
+	  and wlan0 registered; the block-mode path stays the default until the
+	  probe has named the shape that breaks it.
+
 config F429_WIFI_STAGE
 	int "F429 8188EUS ladder stage (3 attach, 4 scan, 5 join, 6 throughput)"
 	depends on BOARD_STM32F429_CHALLENGER

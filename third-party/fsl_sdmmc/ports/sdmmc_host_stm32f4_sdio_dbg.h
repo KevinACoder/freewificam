@@ -91,6 +91,37 @@ struct f4sdio_tx_rec {
 	uint8_t		head[F4SDIO_TX_HEAD];
 };
 
+/* A block-mode CMD53 write (the shape brcmfmac uses for the AP6181 firmware
+ * download).  Unlike the byte-mode write above, the DPSM has to get the card
+ * through N blocks and their CRC status tokens; the record keeps what the
+ * data path and the card's DAT0 busy line said at the four instants that
+ * separate "the transfer is over" from "the host moved on while the card was
+ * still working": DATAEND, the TXACT fall, the DTEN drop, and a bounded
+ * settle time after it.  `txwait` equal to the bound means the TXACT wait
+ * timed out and the record was written anyway - the old completion would have
+ * called that a success. */
+#define F4SDIO_BLK_REC_MAX	4u
+
+struct f4sdio_blk_rec {
+	uint32_t	func;		/* CMD53 function number */
+	uint32_t	addr;		/* CMD53 register address */
+	uint32_t	blocks;		/* CMD53 block count */
+	uint32_t	resp;		/* R5 response (RESP1) */
+	uint32_t	sta_cmd;	/* STA right after the command response */
+	uint32_t	dctrl_cfg;	/* DCTRL the deferred arm writes */
+	uint32_t	dlen;		/* DLEN */
+	uint32_t	sta_dataend;	/* STA when DATAEND (or the first error) was seen */
+	uint32_t	dcnt_dataend;	/* DCOUNT at that instant */
+	uint32_t	txwait;		/* TXACT-wait iterations; == bound: timed out */
+	uint32_t	txact_drop;	/* TXACT still up after the wait */
+	uint32_t	dat0_dataend;	/* PC8 at DATAEND: 1 = low = card busy */
+	uint32_t	dat0_drop;	/* PC8 after the TXACT wait */
+	uint32_t	dat0_after;	/* PC8 after DCTRL lost DTEN */
+	uint32_t	dat0_settle;	/* PC8 after the bounded post-transfer settle */
+	uint32_t	sta_after;	/* STA after DCTRL lost DTEN */
+	uint32_t	drop_end;	/* 0 none, 1 dataend, 2 error flag, 3 no dataend */
+};
+
 struct f4sdio_dbg {
 	uint32_t	irq_entries;	/* SDIO_IRQHandler entries */
 	uint32_t	irq_sdioit;	/* entries that saw SDIOIT */
@@ -137,6 +168,15 @@ struct f4sdio_dbg {
 	 * (TXUNDERR/DTIMEOUT/DCRCFAIL) rather than on the byte counter: the seam
 	 * still returns success for those, so this counter is the only notice */
 	uint32_t	tx_drop_err;
+	/* the block-mode write completions, the shape the firmware download
+	 * turns on; the ring holds the last few, the counter every one */
+	uint32_t	blk_rec_head;
+	uint32_t	blk_wr;
+	uint32_t	blk_ok;
+	uint32_t	blk_err;
+	uint32_t	blk_txwait_timeout;
+	uint32_t	blk_dat0_busy_drop;
+	struct f4sdio_blk_rec blk[F4SDIO_BLK_REC_MAX];
 };
 
 /* Snapshot; the counters are written by the calling thread and the ISR, so a
