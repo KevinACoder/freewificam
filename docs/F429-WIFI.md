@@ -550,8 +550,13 @@ Three engine/host semantics had to be corrected to get that far:
   otherwise the card starts consuming at the command response and the first
   2048-byte firmware chunk underruns.
 
-The download then stops at the second 2048-byte block write: the card answers
-CMD53 with an R5 error (flags `0x0800`/`0x2000`) at backplane address
-`0x8800`, the driver aborts the image and no `wlan0` is registered.  The next
-work is that block-write shape (window/address advance, block count against
-DLEN, the first chunk's data-phase close), not the stack.  C3 is not claimed.
+The block-write completion was then corrected as well: the data path used to
+drop DTEN as soon as the last word entered the FIFO, leaving TXACT up and the
+card's next command to fail; the host now waits for DATAEND of the whole
+transfer and for TXACT to fall.  The first block chunk completes, but the card
+still answers the second CMD53 in the same window with an R5 error (flags
+`0x0800`/`0x2000`), and after that every function-1 CMD52/53 is refused.  The
+card's own driver does not treat the CMD53 R5 flags as fatal, so the next work
+is the shape of that second block write (clear/ignore the card's R5 error, the
+window rewrite between chunks, the card's function-1 error state), not the
+stack.  C3 is not claimed.

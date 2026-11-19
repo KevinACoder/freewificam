@@ -259,6 +259,19 @@ static int lkpi_sdio_fsl_io_direct(void *ctx, unsigned int func, unsigned int ad
 
 	lkpi_sdio_site_set("fsl.c52");
 	(void)lkpi_sdio_claim_check(0);
+	{
+		static unsigned int win_logs;
+
+		if ((func == 1u) && (win_logs < 40u) &&
+		    ((addr == 0x1000Au) || (addr == 0x1000Bu) ||
+		     (addr == 0x1000Cu) || (addr == 0x1000Eu))) {
+			win_logs++;
+			lkpi_printf(ULOG_INFO_LEVEL,
+			    "fsl: c52 %s %05x=%02x\n",
+			    write ? "wr" : "rd", addr,
+			    (unsigned int)*value);
+		}
+	}
 	if (write) {
 		st = SDIO_IO_Write_Direct(card, (sdio_func_num_t)func, addr, value, false);
 	} else {
@@ -374,6 +387,26 @@ static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 		return -LKPI_SDIO_BE_ERR_INVAL;
 	}
 
+	/*
+	 * Open finding (F429 / AP6181): the card completes the first backplane
+	 * block write and answers the next CMD53 in the same window with
+	 * R5_ERROR (0x2800), whatever the chunk size or the delay between the
+	 * two.  The vendor's host does not treat the R5 flags as fatal; this
+	 * stack does, so the firmware download stops at the second block.  The
+	 * bounded trace below is what the next session reads the window and
+	 * address sequence from.
+	 */
+	{
+		static unsigned int blk_logs;
+
+		if (blk_logs < 12u) {
+			blk_logs++;
+			lkpi_printf(ULOG_INFO_LEVEL,
+			    "fsl: blk %s f%u addr=%05x n=%u\n",
+			    write ? "wr" : "rd", func, addr,
+			    (unsigned int)blocks);
+		}
+	}
 	if (write) {
 		st = SDIO_IO_Write_Extended(card, (sdio_func_num_t)func, addr, buf,
 					    blocks, flags);
@@ -381,18 +414,17 @@ static int sdmmc_fsl_block_transfer(sdio_card_t *card, unsigned int func,
 		st = SDIO_IO_Read_Extended(card, (sdio_func_num_t)func, addr, buf,
 					   blocks, flags);
 	}
-
+	if (st != kStatus_Success)
+		return sdmmc_fsl_err(st);
 #ifdef CONFIG_LKPI_CENSUS
-	if (st == kStatus_Success) {
-		lkpi_fsl_census_state.blk_ops++;
-		if (write)
-			lkpi_fsl_census_state.tx_bytes += (uint64_t)blksz * blocks;
-		else
-			lkpi_fsl_census_state.rx_bytes += (uint64_t)blksz * blocks;
-	}
+	lkpi_fsl_census_state.blk_ops++;
+	if (write)
+		lkpi_fsl_census_state.tx_bytes += (uint64_t)blksz * blocks;
+	else
+		lkpi_fsl_census_state.rx_bytes += (uint64_t)blksz * blocks;
 #endif
 
-	return sdmmc_fsl_err(st);
+	return sdmmc_fsl_err(kStatus_Success);
 }
 
 void
@@ -445,6 +477,7 @@ static int lkpi_sdio_fsl_io_extended(void *ctx, unsigned int func, unsigned int 
 	if ((flags & LKPI_SDIO_BE_F_BLOCK) != 0U) {
 		uint32_t blksz = (func == 0U) ? card->io0blockSize :
 						(uint32_t)card->ioFBR[func - 1U].ioBlockSize;
+
 
 		/*
 		 * With the block flag, `count` is a BLOCK COUNT, not a byte

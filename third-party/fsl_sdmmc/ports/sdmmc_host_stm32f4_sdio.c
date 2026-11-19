@@ -1182,6 +1182,43 @@ static status_t f4sdio_transfer_data(const sdmmchost_data_t *data, bool byte_mod
 			}
 		}
 #endif
+		if (!byte_mode) {
+			/*
+			 * A block write is not over when the last word leaves the
+			 * FIFO: the DPSM is still shifting the final blocks and
+			 * their CRC status tokens.  Clearing DTEN here (what this
+			 * path used to do) aborts the card's data phase and leaves
+			 * TXACT up; the card then answers the next CMD53 in the
+			 * same window with R5_ERROR — measured on the BCM43362
+			 * firmware download, where only the first block chunk ever
+			 * completed.  Wait for the data end of the whole transfer
+			 * (DATAEND, not the first block's DBCKEND) and for TXACT to
+			 * fall before releasing the data path.
+			 */
+			uint32_t sta = 0U;
+
+			for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
+				sta = SDIO->STA;
+				if ((sta & SDIO_FLAG_DATAEND) != 0U)
+					break;
+				if ((sta & (SDIO_FLAG_RXOVERR |
+					    SDIO_FLAG_TXUNDERR |
+					    SDIO_FLAG_DCRCFAIL |
+					    SDIO_FLAG_DTIMEOUT |
+					    SDIO_FLAG_STBITERR)) != 0U)
+					break;
+			}
+			if ((sta & SDIO_FLAG_DATAEND) == 0U) {
+				SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
+				SDIO->ICR = SDIO_FLAG_DATAEND |
+					    SDIO_FLAG_DBCKEND;
+				return kStatus_SDMMC_TransferFailed;
+			}
+			for (spin = 0U; spin < F4SDIO_DATA_SPIN; spin++) {
+				if ((SDIO->STA & SDIO_FLAG_TXACT) == 0U)
+					break;
+			}
+		}
 		SDIO->DCTRL &= ~SDIO_DCTRL_DTEN;
 		SDIO->ICR = SDIO_FLAG_DATAEND | SDIO_FLAG_DBCKEND;
 		return kStatus_Success;
