@@ -1,5 +1,8 @@
 # STATUS
 
+> Detailed RK3568 performance tables: [RK3568-PERFORMANCE.md](RK3568-PERFORMANCE.md).
+> F429 UVC camera parameters and results: [F429-UVC.md](F429-UVC.md).
+
 - Updated: 2026-11-15 (RTL8723BU: C3-C5 2/2, C6T 2/2; three of four
   throughput directions align, board-receive TCP is 62.5% of the same-driver
   GT; the chip needed no driver change, only a profile/firmware selection)

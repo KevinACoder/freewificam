@@ -1,7 +1,7 @@
 {
   "note": "Debt ledger for historical non-8189FTV occurrences; new hits are failures and are not added here.",
   "files": {
-    "README.md": 18,
+    "README.md": 7,
     "components/README.md": 1,
     "components/liblinux80211/Kconfig": 6,
     "components/liblinux80211/README.md": 1,
@@ -34,6 +34,7 @@
     "docs/F429-WIFI.md": 19,
     "docs/FOOTPRINTS.md": 11,
     "docs/LICENSES.md": 44,
+    "docs/RK3568-PERFORMANCE.md": 10,
     "docs/STATUS.md": 91,
     "tests/board/rtos/Kconfig": 1,
     "tests/board/rtos/app/Kconfig": 31,

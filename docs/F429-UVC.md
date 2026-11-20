@@ -14,6 +14,10 @@ isochronous. The round adds the isochronous engine the DWC2 port was missing,
 then measures what the camera can actually put through a **1023-byte-per-1 ms**
 full-speed isochronous pipe.
 
+The README carries the one-screen adaptation table; this document is the full
+record: the raw descriptors, the engine's contract, the measured windows and the
+limits.
+
 ## 1. The full-speed ceiling, stated before the measurements
 
 A full-speed isochronous endpoint carries at most one 1023-byte transaction per
