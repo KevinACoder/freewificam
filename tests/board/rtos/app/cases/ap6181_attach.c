@@ -33,6 +33,13 @@
 
 #include "wiced_port.h"
 
+static void
+print_mac(const char *label, const uint8_t *mac)
+{
+	CASE_INFO("ap6181: %s=%02x:%02x:%02x:%02x:%02x:%02x\n", label,
+		  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 int
 case_f429_ap6181_attach_run(void)
 {
