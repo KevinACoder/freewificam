@@ -58,24 +58,16 @@ AP6181_VENDOR_INC := \
 	-I$(AP6181_VENDOR)/WiFi_SDK/libraries/utilities/linked_list \
 	-I$(AP6181_VENDOR)/WiFi_SDK/resources/firmware/43362
 
-# WICED_DISABLE_BOOTLOADER: no DCT and no bootloader in this image, which is
-# also what the vendor's own example build defines.  FIRMWARE_WITH_PMK_CALC_SUPPORT
-# is the 43362's face in WWD.mk (PMK computed in firmware, no host crypto).
-AP6181_DEFS := -DWICED_DISABLE_BOOTLOADER -DFIRMWARE_WITH_PMK_CALC_SUPPORT
-
-ifeq ($(CONFIG_WICED_AP6181_NO_OOB),1)
-AP6181_DEFS += -DWICED_DISABLE_MCU_POWERSAVE
-endif
-
-ifeq ($(CONFIG_WICED_AP6181_LOG),1)
-AP6181_DEFS += -DWICED_VERBOSE
-endif
+# The vendor driver's build-time switches are not -D flags: they are derived
+# from the profile's Kconfig options in ports/f429/wiced_kconfig.h, which is
+# force-included ahead of every source of this world.  One place to look, and a
+# config change rebuilds exactly the units that read it.
 
 # The vendor tree is C99 with its own warning taste; the port files are ours and
 # could take -Wextra, but one world for both is the point of this file.  The
 # kernel contract flags (check-build-contract) and $(OPT) come from CFLAGS.
 WICED_CFLAGS := $(filter-out -Wextra,$(CFLAGS)) -std=gnu11 \
-	$(AP6181_DEFS) $(AP6181_VENDOR_INC)
+	$(AP6181_VENDOR_INC) -include $(AP6181_DIR)/ports/f429/wiced_kconfig.h
 
 AP6181_ALL_SRCS := $(AP6181_PORT_SRCS) $(AP6181_VENDOR_SRC_SRCS)
 AP6181_CASE_SRCS := $(foreach c,$(filter $(WICED_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
