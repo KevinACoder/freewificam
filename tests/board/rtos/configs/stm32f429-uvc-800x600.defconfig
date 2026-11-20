@@ -1,0 +1,20 @@
+# F429 UVC maximum-FS-mode arm: the same image as the 640x480 control arm,
+# opened at 800x600 MJPEG.  The camera (Logitech Pro 9000, 046d:0990) exposes
+# this as its largest mode at full speed; it has no 720-line mode in its FS
+# descriptor set.  The probe census says the camera asks for 944 bytes per
+# frame and the largest streaming alt setting is 944, so this arm tests the
+# ceiling rather than a 720p claim.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=24
+CONFIG_UVC_TARGET_WIDTH=800
+CONFIG_UVC_TARGET_HEIGHT=600
+CONFIG_UVC_FRAME_BYTES=131072
+CONFIG_CASES="uvc_detect uvc_open uvc_iso_smoke uvc_stream"

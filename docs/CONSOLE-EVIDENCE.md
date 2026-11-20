@@ -1627,3 +1627,63 @@ board's clock.
 alone is not the rung: the link wait and the BSSID are what the case judges.
 The data rung's ICMP is also visible on the bench AP's own capture (20 echo
 requests, 20 replies).
+
+## STM32F429 UVC camera (DWC2 full-speed ISO, 2026-11-20)
+
+Image: `stm32f429-uvc-480` (bin sha `188cc4fb…`, 69,644 B); camera Logitech
+Pro 9000 `046d:0990` on P2. Reset: relay cold boot. The transcript below is
+from the second of two 640x480 boots; the first's numbers are in the table.
+
+```text
+[   1.090] uvc: connect vid=046d pid=0990 bus=0 dev=2 minor=0 formats=3 alts=7
+...
+[   1.182] uvc: mode fmt=1(mjpeg) 640x480 def_ival=666666
+[   1.188] uvc: mode fmt=1(mjpeg) 800x600 def_ival=666666
+...
+[   1.245] uvc: census max_mps=944 target=640x480 720_line_modes=0
+[   1.331] uvc: probe fmt=1 frm=5 ival=666666 fps=15.000 want=944 frame=62933 max_mps=944 fits=yes
+[   1.403] uvc: probe fmt=1 frm=6 ival=666666 fps=15.000 want=944 frame=62933 max_mps=944 fits=yes
+[   1.412] uvc: detect PASS
+[   1.773] uvc: open mjpeg 640x480 alt=4 fmt=1 frm=5 mps=640 dmp=640 ival=1
+[   1.780] uvc: open PASS
+[   1.922] uvc: iso smoke urbs=16 done=16 err_urbs=0 err_pkts=0 bytes=1536 max=12
+[   1.931] uvc: iso smoke PASS
+[   1.945] uvc: stream open mps=640 dmp=640 pool=3
+[   3.679] uvc: stream first frame size=15497
+[  22.025] uvc: stream frames=276 bytes=5179513 avg=18766 ms=20057 fps=13.760 kbit=2065 dropped=1 invalid=0 err=0 max=19053
+[  22.038] uvc: stream jpeg soi=276 eoi=276 timeouts=3
+[  22.046] uvc: 720p verdict=no target=640x480 fps=13.760 kbit=2065 frames=276
+[  22.057] uvc: stream PASS
+[  22.066] rtos: result pass cases=4/4 backend=freertos
+```
+
+The first 640x480 boot: 248 frames, 4,799,371 B, 12.383 fps, 1917 kbit/s,
+`err=0`, 1 dropped, 248/248 JPEG SOI/EOI; the second is the transcript above.
+The 800x600 arm (alt6, mps=944) measured 275 frames / 2,907 kbit/s and 275
+frames / 2,899 kbit/s in its two boots, `err=0`, 1 dropped each, every frame
+JPEG SOI/EOI. The camera's
+full-speed descriptor table has no 720-line mode (`720_line_modes=0`), so the
+720p answer on this camera is the negative in `docs/F429-UVC.md`; it is not a
+bus-rate subtraction.
+
+The class's own `usbh_video_list_info` block is omitted above; its parsed
+table is the `uvc: mode` lines' source.
+
+The census probe's `want=944` and the open's `dmp=640` are different stages:
+the census probes the camera directly, while the class's open sequence
+re-probes after its `SET_CUR` and commits the value it gets then. The open
+value (640) is what the 640x480 stream ran at; the 800x600 arm opened with the
+census value (944). Both are below the 1023-byte full-speed bound.
+
+A boot of the `stm32f429-uvc-720p` image against the same camera is the
+negative control:
+
+```text
+uvc: open FAIL mode 1280x720 mjpeg not in the camera's tables
+uvc: iso smoke FAIL camera not open
+uvc: stream FAIL camera not open
+rtos: result fail cases=1/4 backend=freertos
+```
+
+`uvc_detect` passes; the stream cases fail at the mode table. That is the
+expected result for this camera, not a transport failure.

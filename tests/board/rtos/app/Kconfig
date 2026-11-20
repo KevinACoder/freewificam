@@ -16,6 +16,34 @@ config CASES
 	  the build derives the case's RTOS_CASE_* macro from this string, so the
 	  source set, the table and the judge's expectations are the same fact.
 
+config UVC_TARGET_WIDTH
+	int "UVC target width (pixels)"
+	default 1280
+	range 160 4096
+	help
+	  The mode uvc_open asks the camera for.  The camera's own UVC frame
+	  descriptors are the truth: a profile whose target is absent fails the
+	  open case with the mode table, not with a transport error.  The F429
+	  full-speed host's bandwidth ceiling is 1023 bytes per USB frame, so
+	  1280x720 is only viable at a low frame interval (or not at all).
+
+config UVC_TARGET_HEIGHT
+	int "UVC target height (pixels)"
+	default 720
+	range 120 4096
+	help
+	  See UVC_TARGET_WIDTH.  960x720 is a real mode on some Logitech parts
+	  and is reported as "720 lines", not as 720p.
+
+config UVC_FRAME_BYTES
+	int "UVC frame pool bytes per buffer"
+	default 524288
+	range 16384 4194304
+	help
+	  One MJPEG frame is assembled into a caller-provided buffer; a frame
+	  that overflows it is dropped and counted.  512 KiB covers a 720-line
+	  MJPEG frame with margin; 640x480 profiles can use 128 KiB.
+
 config AP_WPA2
 	bool "iwl7260_ap runs the WPA2-PSK/CCMP variant"
 	help

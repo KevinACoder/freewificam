@@ -60,6 +60,7 @@ USB_INCLUDES := \
 	-I$(USB)/core \
 	-I$(USB)/class/hub \
 	-I$(USB)/class/msc \
+	-I$(USB)/class/video \
 	-I$(USB)/class/vendor/wifi \
 	-I$(USB)/port/dwc2 \
 	-I$(USB)/port/ehci \
@@ -121,6 +122,17 @@ endif
 endif
 
 USB_ALL_SRCS := $(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)
+
+# The UVC camera image adds the video class, its running-stream half, the
+# first-party application half and the four camera cases.  The file is
+# included here, after the storage sets are decided, so a camera image links
+# hub + video and no storage class (a second class on one controller would
+# make a bring-up failure ambiguous).
+UVC_CASES := $(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES))
+ifneq ($(strip $(UVC_CASES)),)
+include $(CURDIR)/uvc.mk
+USB_ALL_SRCS += $(UVC_ALL_SRCS)
+endif
 
 # Build-side gates for this domain (the `gates` recipe calls them):
 #  - the xHCI/EHCI class table must be in the image, or enumeration succeeds

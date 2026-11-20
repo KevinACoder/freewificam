@@ -1,0 +1,290 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 20 Nov 2026 15:00:00 +0800
+Subject: [PATCH] port/dwc2: serve full-speed isochronous urbs one packet at a time
+
+The DWC2 host port had no isochronous submit path: usbh_submit_urb() left
+the iso case empty and the channel-halt interrupt had an empty iso branch, so
+a UVC camera's streaming endpoint was never serviced.  This adds the engine
+the full-speed UVC image needs.
+
+The core reports only the total length of the transaction it halted, but UVC
+needs every payload packet's length to parse its variable-length payload
+header.  The engine therefore programs one iso_packet[] entry per channel
+activation (PKTCNT=1), records its actual_length from HCTSIZ's remaining
+size, and re-arms the same channel for the next entry from the halt interrupt.
+This is the per-frame model Linux's dwc2 host driver uses for iso urbs.
+
+One channel per endpoint is the contract: a second in-flight urb for the same
+endpoint is refused with -USB_ERR_BUSY.  The UVC stream engine is configured
+for a single urb and resubmits it after the pump has consumed it; the
+synchronous path (timeout > 0) is used by the ISO smoke case.  Per-packet
+errors are recorded on the iso_packet entry and do not kill the urb; a halt
+without XFRC costs exactly one packet.  The engine implements IN only (the UVC
+streaming direction).
+
+The code is compiled only under CONFIG_USB_DWC2_ISO, which the UVC cases
+select in platform/build_defs.h; every other F429 USB image keeps the port's
+pin bytes and pays no code size.
+
+diff --git a/third-party/cherryusb/port/dwc2/usb_hc_dwc2.c b/third-party/cherryusb/port/dwc2/usb_hc_dwc2.c
+@@ -28,6 +28,8 @@ struct dwc2_chan {
+     usb_osal_sem_t waitsem;
+     struct usbh_urb *urb;
+     uint32_t iso_frame_idx;
++    uint32_t iso_next;   /* next iso_packet[] index to arm */
++    bool iso_active;     /* this channel owns an isochronous urb */
+ };
+ 
+ struct dwc2_hcd {
+@@ -483,6 +485,8 @@ static int dwc2_chan_alloc(struct usbh_bus *bus)
+ 
+             g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[chidx].do_ssplit = 0;
+             g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[chidx].do_csplit = 0;
++            g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[chidx].iso_active = false;
++            g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[chidx].iso_next = 0;
+             return chidx;
+         }
+     }
+@@ -499,6 +503,8 @@ static void dwc2_chan_free(struct dwc2_chan *chan)
+         chan->urb->hcpriv = NULL;
+         chan->urb = NULL;
+     }
++    chan->iso_active = false;
++    chan->iso_next = 0;
+     chan->inuse = false;
+     usb_osal_leave_critical_section(flags);
+ }
+@@ -645,18 +651,67 @@ static void dwc2_bulk_intr_urb_init(struct usbh_bus *bus, uint8_t chidx, struct
+     dwc2_chan_transfer(bus, chidx, urb->ep->bEndpointAddress, buffer, chan->xferlen, chan->num_packets, urb->data_toggle == 0 ? HC_PID_DATA0 : HC_PID_DATA1);
+ }
+ 
+-#if 0
+-static void dwc2_iso_urb_init(struct usbh_bus *bus, uint8_t chidx, struct usbh_urb *urb, struct usbh_iso_frame_packet *iso_packet)
++#if defined(CONFIG_USB_DWC2_ISO)
++/*
++ * Full-speed isochronous IN on DWC2.
++ *
++ * The core runs one transaction per (micro-)frame for a periodic channel and
++ * reports only the total length of the transaction it just halted.  UVC needs
++ * the length of every payload packet, because every packet starts with a
++ * variable-length payload header; the engine therefore programs exactly one
++ * iso_packet[] entry (PKTCNT=1) per channel activation, records its
++ * actual_length from HCTSIZ's remaining size, and re-arms the same channel for
++ * the next entry from the channel-halt interrupt.  This is the same per-frame
++ * model Linux's dwc2 host driver uses for isochronous URBs.
++ *
++ * One channel is enough for the camera image: a URB of N packets occupies N
++ * consecutive frames, and the stream engine submits the next URB after the
++ * pump has parsed this one.  A second URB for the same endpoint is refused
++ * with -USB_ERR_BUSY rather than silently colliding on the frame list.
++ */
++static void dwc2_iso_arm_packet(struct usbh_bus *bus, uint8_t chidx)
+ {
+-    struct dwc2_chan *chan;
++    struct dwc2_chan *chan = &g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[chidx];
++    struct usbh_urb *urb = chan->urb;
++    struct usbh_iso_frame_packet *packet;
+ 
+-    chan = &g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[chidx];
++    if ((urb == NULL) || (chan->iso_next >= urb->num_of_iso_packets)) {
++        return;
++    }
+ 
+-    chan->num_packets = dwc2_calculate_packet_num(iso_packet->transfer_buffer_length, urb->ep->bEndpointAddress, USB_GET_MAXPACKETSIZE(urb->ep->wMaxPacketSize), &chan->xferlen);
+-    dwc2_chan_init(bus, chidx, urb->hport->dev_addr, urb->ep->bEndpointAddress, USB_ENDPOINT_TYPE_ISOCHRONOUS, USB_GET_MAXPACKETSIZE(urb->ep->wMaxPacketSize), urb->hport->speed);
+-    dwc2_chan_transfer(bus, chidx, urb->ep->bEndpointAddress, iso_packet->transfer_buffer, chan->xferlen, chan->num_packets, HC_PID_DATA0);
++    packet = &urb->iso_packet[chan->iso_next];
++    chan->xferlen = packet->transfer_buffer_length;
++
++    if ((packet->transfer_buffer != NULL) && (packet->transfer_buffer_length != 0)) {
++        usb_dcache_invalidate((uintptr_t)packet->transfer_buffer,
++                              USB_ALIGN_UP(packet->transfer_buffer_length, CONFIG_USB_ALIGN_SIZE));
++    }
++
++    /* One transaction for this frame.  dwc2_chan_transfer() also selects the
++     * next frame's odd/even parity from HFNUM and enables the channel. */
++    dwc2_chan_transfer(bus, chidx, urb->ep->bEndpointAddress,
++                       packet->transfer_buffer, packet->transfer_buffer_length,
++                       1, HC_PID_DATA0);
+ }
+-#endif
++
++static void dwc2_iso_urb_init(struct usbh_bus *bus, uint8_t chidx, struct usbh_urb *urb)
++{
++    struct dwc2_chan *chan = &g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[chidx];
++
++    chan->iso_next = 0;
++    chan->iso_active = true;
++    chan->do_ssplit = false;
++    chan->do_csplit = false;
++    urb->errorcode = 0;
++
++    dwc2_chan_init(bus, chidx, urb->hport->dev_addr, urb->ep->bEndpointAddress,
++                   USB_ENDPOINT_TYPE_ISOCHRONOUS,
++                   USB_GET_MAXPACKETSIZE(urb->ep->wMaxPacketSize),
++                   1, urb->hport->speed);
++
++    dwc2_iso_arm_packet(bus, chidx);
++}
++#endif /* CONFIG_USB_DWC2_ISO */
+ 
+ extern void usb_hc_low_level_init(struct usbh_bus *bus);
+ extern void usb_hc_low_level_deinit(struct usbh_bus *bus);
+@@ -985,6 +1040,42 @@ int usbh_submit_urb(struct usbh_urb *urb)
+         return -USB_ERR_NOTCONN;
+     }
+ 
++#if defined(CONFIG_USB_DWC2_ISO)
++    if (USB_GET_ENDPOINT_TYPE(urb->ep->bmAttributes) == USB_ENDPOINT_TYPE_ISOCHRONOUS) {
++        uint16_t mps = USB_GET_MAXPACKETSIZE(urb->ep->wMaxPacketSize);
++
++        /* The engine implements the IN direction only; UVC streaming is IN. */
++        if ((urb->ep->bEndpointAddress & 0x80U) == 0U) {
++            return -USB_ERR_NOTSUPP;
++        }
++        if (urb->num_of_iso_packets == 0U) {
++            return -USB_ERR_INVAL;
++        }
++        for (uint32_t p = 0; p < urb->num_of_iso_packets; p++) {
++            struct usbh_iso_frame_packet *packet = &urb->iso_packet[p];
++
++            if ((packet->transfer_buffer == NULL) ||
++                (packet->transfer_buffer_length > mps) ||
++                ((uintptr_t)packet->transfer_buffer % CONFIG_USB_ALIGN_SIZE) != 0U) {
++                return -USB_ERR_INVAL;
++            }
++        }
++        /* One channel per endpoint in this round: a second in-flight URB for
++         * the same endpoint would collide on the periodic frame list.  The
++         * stream engine is configured for a single URB and resubmits after
++         * the pump has consumed it. */
++        for (uint8_t i = 0; i < g_dwc2_hcd[bus->hcd.hcd_id].hw_params.host_channels; i++) {
++            struct dwc2_chan *active = &g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[i];
++
++            if (active->iso_active && (active->urb != NULL) &&
++                (active->urb->hport == urb->hport) &&
++                (active->urb->ep == urb->ep)) {
++                return -USB_ERR_BUSY;
++            }
++        }
++    }
++#endif
++
+     if (urb->errorcode == -USB_ERR_BUSY) {
+         return -USB_ERR_BUSY;
+     }
+@@ -1056,6 +1147,10 @@ int usbh_submit_urb(struct usbh_urb *urb)
+             dwc2_bulk_intr_urb_init(bus, chidx, urb, urb->transfer_buffer, urb->transfer_buffer_length);
+             break;
+         case USB_ENDPOINT_TYPE_ISOCHRONOUS:
++#if defined(CONFIG_USB_DWC2_ISO)
++            urb->start_frame = usbh_get_frame_number(bus);
++            dwc2_iso_urb_init(bus, chidx, urb);
++#endif
+             break;
+         default:
+             break;
+@@ -1101,6 +1196,16 @@ int usbh_kill_urb(struct usbh_urb *urb)
+ 
+     dwc2_halt(bus, chan->chidx);
+ 
++#if defined(CONFIG_USB_DWC2_ISO)
++    if (USB_GET_ENDPOINT_TYPE(urb->ep->bmAttributes) == USB_ENDPOINT_TYPE_ISOCHRONOUS) {
++        for (uint32_t p = chan->iso_next; p < urb->num_of_iso_packets; p++) {
++            urb->iso_packet[p].actual_length = 0;
++            urb->iso_packet[p].errorcode = -USB_ERR_SHUTDOWN;
++        }
++        chan->iso_active = false;
++    }
++#endif
++
+     urb->errorcode = -USB_ERR_SHUTDOWN;
+     usb_osal_leave_critical_section(flags);
+ 
+@@ -1138,6 +1243,70 @@ static inline void dwc2_urb_waitup(struct usbh_urb *urb)
+     }
+ }
+ 
++#if defined(CONFIG_USB_DWC2_ISO)
++/*
++ * One isochronous packet has retired.  Record what the controller actually
++ * moved, then either arm the next packet on this channel or complete the URB.
++ * Isochronous transfers have no retry and no per-packet status register: a
++ * halt without XFRC is the only transport-error signal, and it costs exactly
++ * one packet, so the URB continues (the stream engine drops the frame that
++ * packet belongs to).
++ */
++static void dwc2_iso_irq_handler(struct usbh_bus *bus, uint8_t ch_num,
++                                 struct usbh_urb *urb, uint32_t status)
++{
++    struct dwc2_chan *chan = &g_dwc2_hcd[bus->hcd.hcd_id].chan_pool[ch_num];
++    struct usbh_iso_frame_packet *packet;
++    uint32_t remaining;
++    uint32_t count = 0;
++    bool err = false;
++
++    if ((status & USB_OTG_HCINT_CHH) == 0) {
++        /* Not a channel halt: acknowledge and leave the transfer running. */
++        USB_OTG_HC(ch_num)->HCINT = status;
++        return;
++    }
++
++    USB_OTG_HC(ch_num)->HCINT = status;
++
++    if (chan->iso_next >= urb->num_of_iso_packets) {
++        return;
++    }
++
++    packet = &urb->iso_packet[chan->iso_next];
++
++    if (status & USB_OTG_HCINT_XFRC) {
++        remaining = USB_OTG_HC(ch_num)->HCTSIZ & USB_OTG_HCTSIZ_XFRSIZ;
++        count = (remaining <= chan->xferlen) ? (chan->xferlen - remaining) : 0U;
++        if (count > packet->transfer_buffer_length) {
++            count = packet->transfer_buffer_length;
++        }
++        if ((packet->transfer_buffer != NULL) && (count != 0U)) {
++            usb_dcache_invalidate((uintptr_t)packet->transfer_buffer,
++                                  USB_ALIGN_UP(count, CONFIG_USB_ALIGN_SIZE));
++        }
++    } else {
++        err = true;
++    }
++
++    packet->actual_length = count;
++    packet->errorcode = err ? -USB_ERR_IO : 0;
++    urb->actual_length += count;
++    if (err && (urb->errorcode == 0)) {
++        urb->errorcode = -USB_ERR_IO;
++    }
++
++    chan->iso_next++;
++    if (chan->iso_next < urb->num_of_iso_packets) {
++        dwc2_iso_arm_packet(bus, ch_num);
++        return;
++    }
++
++    chan->iso_active = false;
++    dwc2_urb_waitup(urb);
++}
++#endif /* CONFIG_USB_DWC2_ISO */
++
+ static void dwc2_inchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num)
+ {
+     uint32_t chan_intstatus;
+@@ -1150,6 +1319,14 @@ static void dwc2_inchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num)
+     urb = chan->urb;
+     //printf("s1:%08x\r\n", chan_intstatus);
+ 
++#if defined(CONFIG_USB_DWC2_ISO)
++    if ((urb != NULL) &&
++        (USB_GET_ENDPOINT_TYPE(urb->ep->bmAttributes) == USB_ENDPOINT_TYPE_ISOCHRONOUS)) {
++        dwc2_iso_irq_handler(bus, ch_num, urb, chan_intstatus);
++        return;
++    }
++#endif
++
+     if (chan_intstatus & USB_OTG_HCINT_CHH) {
+         USB_OTG_HC(ch_num)->HCINT = chan_intstatus;
+         if (chan_intstatus & USB_OTG_HCINT_XFRC) {

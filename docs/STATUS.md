@@ -107,3 +107,25 @@ The image gate (`make wiced-image-gate`) proves the images carry no
 `linuxkpi`/`mac80211`/`cfg80211`/`brcmfmac` symbol. Details, including the two
 seams that bit (one lwIP init per image, and the pbuf headroom the driver
 prepends into), are in `docs/F429-AP6181.md`.
+
+## F429 UVC camera (2026-11-20)
+
+The same OTG_HS full-speed host carries a Logitech QuickCam Pro 9000
+(`046d:0990`). The DWC2 port's missing isochronous path is patch 0011 (one
+packet per channel activation, per-packet `actual_length`/`errorcode`, one
+channel per endpoint); the camera image is `stm32f429-uvc-{detect,480,
+800x600,720p}`.
+
+| Rung | Case / profile | State |
+|---|---|---|
+| identity + mode/probe census | `uvc_detect` / `stm32f429-uvc-detect` | **PASS**: `046d:0990`, 3 formats, 7 alts, MJPEG 160x120..800x600, **`720_line_modes=0`** |
+| open | `uvc_open` / `-480`, `-800x600` | **2/2 each**: 640x480 alt4 mps=640 dmp=640 ival=1; 800x600 alt6 mps=944 dmp=944 ival=1 |
+| raw ISO transport | `uvc_iso_smoke` | **2/2 each**: 16/16 URBs, 1536 bytes, 0 packet errors |
+| stream, 640x480 | `uvc_stream` / `-480` | **2/2**: 248/276 frames, 12.38/13.76 fps, 1917/2065 kbit/s, err=0, 1 dropped, JPEG SOI/EOI on every frame |
+| stream, 800x600 (max FS mode) | `uvc_stream` / `-800x600` | **2/2**: 275/275 frames, 13.71/13.73 fps, 2907/2899 kbit/s, err=0, 1 dropped |
+| 1280x720 | `-720p` | **not available on this camera at full speed**: the FS descriptor set has no 720-line mode. Booted once as an expected negative: `uvc: open FAIL mode 1280x720 mjpeg not in the camera's tables`, `1/4` cases (detect only). The negative is the camera's mode table, not the bus |
+
+The full-speed isochronous ceiling is 1023 B/1 ms = 8.184 Mbit/s; the 800x600
+arm uses 2.9 Mbit/s of it, so the missing 720p is not a bandwidth subtraction.
+Details, the mode table, the engine's contract and the commands are in
+`docs/F429-UVC.md`; the USB-host facts are in `docs/F429-USB-HOST.md` section 8.

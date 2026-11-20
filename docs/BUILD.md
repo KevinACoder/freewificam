@@ -39,6 +39,10 @@ that way.
 | `rk3568-emmc` | tick cmsis2 emmc | fsl_sdmmc + DW SDHCI: card ID, block round trip, error path, sweep |
 | `rk3568-usb-msc` | tick usb_ehci | CherryUSB EHCI: enumerate the U-disk, block zero, round trip (identity arm on a small disk) |
 | `stm32f429-usb-msc` | tick usb_dwc2 | STM32F429 OTG_HS in full-speed host mode + CherryUSB's DWC2 port + MSC: enumerate the U disk, read block 0 / eight blocks, then write and read back one 512 B sector in the disk's last 1 MiB window; verdict `usbh: msc PASS` |
+| `stm32f429-uvc-detect` | uvc_detect | F429 OTG_HS full-speed host + CherryUSB's DWC2 port + the video class: identify the UVC camera, print its format/frame/alt table and raw interval descriptors, and probe the 720-line modes without opening a stream; the 720p feasibility census |
+| `stm32f429-uvc-480` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the same host/class path opened at 640x480 MJPEG; the DWC2 isochronous engine's raw 16-URB smoke and a 20 s stream window; camera/frame pool in SDRAM |
+| `stm32f429-uvc-800x600` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the same at 800x600 MJPEG, the Pro 9000's largest full-speed mode; report-only rate, same four-case gate |
+| `stm32f429-uvc-720p` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the 1280x720 target image for a camera whose full-speed descriptor set actually contains a 720-line mode; the bench Pro 9000 does not, so its verdict for this camera is the descriptor-table negative |
 | `rk3568-kpi-live` | tick pcie kpi_live | liblinux80211's PCI engine over the board's real root complex |
 | `rk3568-mac80211-c2` | tick mac80211_c2 | the real mac80211/cfg80211 stack registers a wiphy (C2); no PCI engine |
 | `rk3568-iwl7260-mac80211` | tick pcie iwl7260_c3 | the same stack + the vendored iwlwifi (72 TUs) over the AC 7260: probe, firmware ALIVE, register, `dev_open` start (C3) |

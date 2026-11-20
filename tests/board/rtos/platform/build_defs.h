@@ -151,11 +151,14 @@
 #define WLAN_SEAM_NO_USB_OBS 1
 #endif
 
-/* Case-derived FSL SDIO/MMC selection: the old CASE_DEFS did this, and the
- * FSL wrapper has no other source for it. */
+/* The camera image's isochronous engine is the DWC2 port's (the F429 is a
+ * full-speed OTG_HS host).  The RK3568 camera line used the EHCI engine; this
+ * tree carries only the DWC2 implementation, so the UVC cases select it here
+ * rather than in a make -D.  The engine's code in usb_hc_dwc2.c is compiled
+ * only when this key is defined. */
 #if defined(RTOS_CASE_UVC_DETECT) || defined(RTOS_CASE_UVC_ISO_SMOKE) || \
     defined(RTOS_CASE_UVC_OPEN) || defined(RTOS_CASE_UVC_STREAM)
-#define CONFIG_USB_EHCI_ISO 1
+#define CONFIG_USB_DWC2_ISO 1
 #endif
 
 #if defined(RTOS_CASE_SDIO_MCI)

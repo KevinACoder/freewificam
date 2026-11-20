@@ -61,6 +61,21 @@ int case_usb_ehci_run(void);
 #if defined(RTOS_CASE_USB_DWC2)
 int case_usb_dwc2_run(void);
 #endif
+/* The UVC camera ladder on the same OTG_HS host: identify and census the
+ * camera, negotiate the target mode, prove the raw ISO transport, then run
+ * the stream engine over a bounded window. */
+#if defined(RTOS_CASE_UVC_DETECT)
+int case_uvc_detect_run(void);
+#endif
+#if defined(RTOS_CASE_UVC_OPEN)
+int case_uvc_open_run(void);
+#endif
+#if defined(RTOS_CASE_UVC_ISO_SMOKE)
+int case_uvc_iso_smoke_run(void);
+#endif
+#if defined(RTOS_CASE_UVC_STREAM)
+int case_uvc_stream_run(void);
+#endif
 #if defined(RTOS_CASE_F429_SDRAM)
 int case_f429_sdram_run(void);
 #endif

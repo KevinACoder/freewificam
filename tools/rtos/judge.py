@@ -20,6 +20,16 @@ import re
 import sys
 from pathlib import Path
 
+# The camera image's cases.  They are parsed in addition to the default CASES
+# tuple (so a camera round can pass `--expect cases=uvc_...`) but are not in
+# the default tuple: a non-camera image must not be judged as missing them.
+UVC_CASES = (
+    "uvc_detect",
+    "uvc_open",
+    "uvc_iso_smoke",
+    "uvc_stream",
+)
+
 CASES = (
     "tick",
     "cmsis2",
@@ -2317,7 +2327,7 @@ def parse(text: str) -> dict:
         found[name] = [m.groupdict() for m in pattern.finditer(text)]
     found["case_verdicts"] = {
         case: re.findall(rf"rtos: case {case} (PASS|FAIL)", text)
-        for case in CASES
+        for case in CASES + UVC_CASES
     }
     return found
 
@@ -4864,10 +4874,12 @@ def judge(text: str, expect: dict | None = None) -> dict:
         if not connect:
             errors.append("uvc_detect: PASS without the connect line")
         else:
-            if connect["vid"] != "046d" or connect["pid"] != "0990":
+            want_vid = expect.get("uvc_vid", "046d")
+            want_pid = expect.get("uvc_pid", "0990")
+            if connect["vid"] != want_vid or connect["pid"] != want_pid:
                 errors.append(
                     f"uvc_detect: camera {connect['vid']}:{connect['pid']} "
-                    f"is not the bench camera 046d:0990"
+                    f"is not the expected camera {want_vid}:{want_pid}"
                 )
             if host and connect["bus"] != host["bus"]:
                 errors.append(
@@ -4898,9 +4910,29 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 )
             if int(opened["alt"]) < 1:
                 errors.append("uvc_open: opened on alternate setting 0 (no bandwidth)")
-            if not (1 <= int(opened["ival"]) <= 4):
+            mps_max = int(expect.get("uvc_mps_max", 4096))
+            ival = int(opened["ival"])
+            if "uvc_ival" in expect:
+                ival_ok = (ival == int(expect["uvc_ival"]))
+            else:
+                ival_ok = (1 <= ival <= 4)
+            if mps > mps_max:
+                errors.append(
+                    f"uvc_open: endpoint bound {mps} above the expected {mps_max}"
+                )
+            if not ival_ok:
                 errors.append(
                     f"uvc_open: interval {opened['ival']} outside the engine's table"
+                )
+            if "uvc_width" in expect and int(opened["width"]) != int(expect["uvc_width"]):
+                errors.append(
+                    f"uvc_open: opened {opened['width']}x{opened['height']}, "
+                    f"expected width {expect['uvc_width']}"
+                )
+            if "uvc_height" in expect and int(opened["height"]) != int(expect["uvc_height"]):
+                errors.append(
+                    f"uvc_open: opened {opened['width']}x{opened['height']}, "
+                    f"expected height {expect['uvc_height']}"
                 )
             notes.append(
                 f"uvc_open: {opened['width']}x{opened['height']} alt={opened['alt']} "
@@ -4933,19 +4965,29 @@ def judge(text: str, expect: dict | None = None) -> dict:
             frames = int(stream["frames"])
             ms = int(stream["ms"])
             dropped = int(stream["dropped"])
-            if not (15000 <= ms <= 30000):
-                errors.append(f"uvc_stream: window {ms} ms is not the 20 s window")
-            if frames < 130:
+            window_min = int(expect.get("uvc_window_min_ms", 15000))
+            window_max = int(expect.get("uvc_window_max_ms", 30000))
+            min_frames = int(expect.get("uvc_min_frames", 130))
+            max_frame = int(expect.get("uvc_max_frame_bytes", 48 * 1024))
+            if not (window_min <= ms <= window_max):
+                errors.append(
+                    f"uvc_stream: window {ms} ms outside "
+                    f"{window_min}..{window_max} ms"
+                )
+            if frames < min_frames:
                 errors.append(
                     f"uvc_stream: {frames} frames in {ms} ms "
-                    f"(the release floor is 130)"
+                    f"(the floor for this arm is {min_frames})"
                 )
             if int(stream["err"]) != 0:
                 errors.append(f"uvc_stream: {stream['err']} packet errors")
             if dropped > max(1, frames // 20):
                 errors.append(f"uvc_stream: {dropped} frames dropped")
-            if int(stream["max"]) > 48 * 1024:
-                errors.append(f"uvc_stream: frame of {stream['max']} bytes exceeds the pool")
+            if int(stream["max"]) > max_frame:
+                errors.append(
+                    f"uvc_stream: frame of {stream['max']} bytes exceeds "
+                    f"the expected {max_frame}"
+                )
             notes.append(
                 f"uvc_stream: {frames} frames, {stream['bytes']} bytes, "
                 f"{stream['fps']} fps, {stream['kbit']} kbit/s, "

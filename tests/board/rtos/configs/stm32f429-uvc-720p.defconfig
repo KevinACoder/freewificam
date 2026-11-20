@@ -1,0 +1,19 @@
+# F429 UVC 720p arm: the same image as the control arm with the target mode
+# at 1280x720 MJPEG.  The full-speed host can carry at most 1023 bytes per
+# 1 ms frame (8.184 Mbit/s); whether this camera's 720p setting fits is the
+# detect census's answer, not an assumption of this profile.  The 512 KiB
+# per-frame pool covers a 720-line MJPEG frame; three of them live in SDRAM.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=24
+CONFIG_UVC_TARGET_WIDTH=1280
+CONFIG_UVC_TARGET_HEIGHT=720
+CONFIG_UVC_FRAME_BYTES=524288
+CONFIG_CASES="uvc_detect uvc_open uvc_iso_smoke uvc_stream"

@@ -33,6 +33,7 @@ needs a board that boots before it needs a stack that links:
 | C6 throughput / stability | measured on the AC 7260 bench; numbers below |
 | AP role (RTOS as AP, Pi 4B as STA) | **supported**: the AC 7260 beacons, the Pi associates, the data plane runs both ways and WPA2-PSK/CCMP is 2/2; the A4 transmit stall is fixed - throughput below. The uplink is still 57.3% of the GT AP |
 | Monitor role (RX only) | **2/2**: user monitor vif, `SET_INTERFACE`/`dev_open`/`SET_WIPHY` all `rc=0`, 9.87 / 10.4 beacon/s against the same card's 9.25 on a mainline kernel; no injection |
+| USB camera (UVC) on F429 | **640x480 and 800x600 2/2** through the CherryUSB video class and a new DWC2 full-speed isochronous engine; the bench Pro 9000 has no 720-line mode at full speed, so 720p is a camera-table negative, not a bus result - [docs/F429-UVC.md](docs/F429-UVC.md) |
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
 build's design and how a new world is added.
@@ -54,6 +55,8 @@ is 12,918 B flash / 20,896 B RAM, and liblinux80211's URB engine + skb pool is
 | `stm32f429-wifi-c6t` throughput | 735,936 | 81,484 | 4,456,448 |
 | `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 4,456,448 |
 | 8189FS driver, compile probe, delivery face (not linked) | 609,933 | 75,967 | — |
+| `stm32f429-uvc-480` | 69,644 | 50,188 | 1,441,792 |
+| `stm32f429-uvc-800x600` | 69,652 | 50,188 | 1,441,792 |
 
 The per-component table, the pre-link per-file USB table and the measured task
 stack high-water marks are in [docs/FOOTPRINTS.md](docs/FOOTPRINTS.md).

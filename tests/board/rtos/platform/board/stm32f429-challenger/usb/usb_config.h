@@ -68,18 +68,20 @@ void usbh_console_printf(const char *fmt, ...);
 /* Device model: a mass-storage disk has one interface and two bulk endpoints;
  * four interfaces leave room for a composite stick without spending much RAM.
  *
- * Alt settings: 8, not 2.  The bench's Realtek dongles disagree on this - the
+ * Alt settings: 16.  The bench's Realtek dongles disagree on this - the
  * 8188EUS presents one altsetting, while the 8723BU, the 8188CUS and the
  * 8851BU each present a config with bAlternateSetting 2 in interface 0, and
  * the parser's `cur_alt_setting >= MAX` check then fails the whole config
- * ("Interface altsetting num 2 overflow", 2026-11-15 four-dongle boot).  The
- * RK3568 xHCI ports already use 8; the cost here is a static array per
- * interface (CONFIG_USBHOST_MAX_INTERFACES x 8 altsettings), not per device. */
+ * ("Interface altsetting num 2 overflow", 2026-11-15 four-dongle boot).  A
+ * UVC camera presents one alternate setting per bandwidth rung: the old
+ * line's Pro 9000 reported 12 for its streaming interface, so 8 is not enough.
+ * The cost is a static array per interface
+ * (CONFIG_USBHOST_MAX_INTERFACES x 16 altsettings), not per device. */
 #ifndef CONFIG_USBHOST_MAX_INTERFACES
 #define CONFIG_USBHOST_MAX_INTERFACES	4
 #endif
 #ifndef CONFIG_USBHOST_MAX_INTF_ALTSETTINGS
-#define CONFIG_USBHOST_MAX_INTF_ALTSETTINGS	8
+#define CONFIG_USBHOST_MAX_INTF_ALTSETTINGS	16
 #endif
 #ifndef CONFIG_USBHOST_MAX_ENDPOINTS
 /* 8, matching the xHCI reference port: the bench's Realtek dongles present
@@ -93,10 +95,11 @@ void usbh_console_printf(const char *fmt, ...);
 #define CONFIG_USBHOST_DEV_NAMELEN	16
 #endif
 
-/* 1 KiB covers a U disk's configuration descriptor with margin; 1 s control
- * timeout is ample at full speed. */
+/* 2 KiB: a U disk's configuration descriptor fits in 1 KiB, but a UVC
+ * camera carries a video-control interface plus a dozen streaming alternate
+ * settings and their format/frame descriptors in the same configuration. */
 #ifndef CONFIG_USBHOST_REQUEST_BUFFER_LEN
-#define CONFIG_USBHOST_REQUEST_BUFFER_LEN	1024
+#define CONFIG_USBHOST_REQUEST_BUFFER_LEN	2048
 #endif
 #ifndef CONFIG_USBHOST_CONTROL_TRANSFER_TIMEOUT
 #define CONFIG_USBHOST_CONTROL_TRANSFER_TIMEOUT	5000
@@ -132,6 +135,31 @@ void usbh_console_printf(const char *fmt, ...);
 
 #ifndef CONFIG_USBHOST_MSOS_VENDOR_CODE
 #define CONFIG_USBHOST_MSOS_VENDOR_CODE	0x00
+#endif
+
+/* --- video class (UVC camera) --------------------------------------------- */
+
+/* One class instance per camera; only the UVC images compile class/video. */
+#ifndef CONFIG_USBHOST_MAX_VIDEO_CLASS
+#define CONFIG_USBHOST_MAX_VIDEO_CLASS	1
+#endif
+
+/* The stream engine's ring.  The F429 DWC2 port arms one packet per USB frame
+ * and completes a URB after its whole packet array; 64 packets = 64 ms of
+ * full-speed bus time, which keeps the pump's one-URB-at-a-time resubmit gap
+ * small relative to a 5-15 fps MJPEG frame.  CONFIG_UVC_STREAM_URBS=1 is the
+ * DWC2 ISO engine's one-channel-per-endpoint contract, not a tuning default. */
+#ifndef CONFIG_UVC_STREAM_URBS
+#define CONFIG_UVC_STREAM_URBS	1
+#endif
+#ifndef CONFIG_UVC_STREAM_PACKETS
+#define CONFIG_UVC_STREAM_PACKETS	64
+#endif
+#ifndef CONFIG_UVC_STREAM_STACKSIZE
+#define CONFIG_UVC_STREAM_STACKSIZE	4096
+#endif
+#ifndef CONFIG_UVC_STREAM_PRIO
+#define CONFIG_UVC_STREAM_PRIO	1
 #endif
 
 #endif /* FREEWIFICAM_STM32F429_USB_CONFIG_H */

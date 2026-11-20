@@ -64,6 +64,18 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_USB_DWC2)
 	CASE_ENTRY("usb_dwc2", case_usb_dwc2_run)
 #endif
+#if defined(RTOS_CASE_UVC_DETECT)
+	CASE_ENTRY("uvc_detect", case_uvc_detect_run)
+#endif
+#if defined(RTOS_CASE_UVC_OPEN)
+	CASE_ENTRY("uvc_open", case_uvc_open_run)
+#endif
+#if defined(RTOS_CASE_UVC_ISO_SMOKE)
+	CASE_ENTRY("uvc_iso_smoke", case_uvc_iso_smoke_run)
+#endif
+#if defined(RTOS_CASE_UVC_STREAM)
+	CASE_ENTRY("uvc_stream", case_uvc_stream_run)
+#endif
 #if defined(RTOS_CASE_F429_SDRAM)
 	CASE_ENTRY("f429_sdram", case_f429_sdram_run)
 #endif

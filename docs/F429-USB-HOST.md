@@ -158,3 +158,35 @@ devices (a wedged dongle keeps failing every RX bulk IN with `-EIO` after
 validated with `off` (the console goes silent) -> `on` -> a fresh boot that
 enumerates the hub + all four dongles and passes data plane, twice
 (two boots).
+
+## 8. UVC camera and the DWC2 isochronous engine (2026-11-20)
+
+The same OTG_HS host also carries a UVC camera.  The camera's streaming
+endpoint is isochronous, and the DWC2 port at the pin had no working ISO path
+(`usbh_submit_urb()` left the case empty and the halt interrupt had an empty
+ISO branch).  Patch 0011 adds a full-speed ISO engine: one `iso_packet[]`
+entry per channel activation, its `actual_length` read back from the remaining
+`XFRSIZ`, and the next entry armed from the channel-halt interrupt.  The
+engine is compiled only for the UVC images (`CONFIG_USB_DWC2_ISO`); the MSC
+and wireless images keep the port's pin bytes and code size.
+
+The camera on the bench is a Logitech QuickCam Pro 9000 (`046d:0990`).  At full
+speed it exposes MJPEG 160x120/176x144/320x240/352x288/640x480/800x600 and
+**no 720-line mode**; its largest alternate setting is 944 bytes/frame.  The
+full-speed ceiling is 1023 bytes/1 ms (8.184 Mbit/s), so 640x480 and 800x600
+fit, but this camera cannot ask for 720p at all.
+
+Measured with the same four-case ladder (`uvc_detect`/`uvc_open`/
+`uvc_iso_smoke`/`uvc_stream`, 20 s window):
+
+| mode | result | frames | rate | payload |
+|---|---:|---:|---:|---:|
+| 640x480 MJPEG | 2/2 | 248 / 276 | 12.38 / 13.76 fps | 1917 / 2065 kbit/s |
+| 800x600 MJPEG | 2/2 | 275 / 275 | 13.71 / 13.73 fps | 2907 / 2899 kbit/s |
+
+Both arms had `err=0`, one dropped frame, and every delivered frame carried a
+JPEG SOI and EOI; the raw ISO smoke is 16/16 URBs.  The 800x600 arm is 2.9
+Mbit/s of the 8.184 Mbit/s bus, so the 720p absence is the camera's full-speed
+mode table, not a bandwidth subtraction.  Details, the mode table, the engine's
+contract and the reproduction commands are in `docs/F429-UVC.md`; the board
+limits it needed are `MAX_INTF_ALTSETTINGS` 16 and a 2 KiB request buffer.

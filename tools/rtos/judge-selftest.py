@@ -611,9 +611,32 @@ def rtl8xxxu_mon_census_absent() -> str:
             + CASE_PASS.format(name="rtl8xxxu_mon") + RESULT_PASS)
 
 
+def uvc_480_open() -> str:
+    body = (
+        BANNER
+        + "uvc: host up bus=0 hcd=dwc2 base=0x40040000\n"
+        + "uvc: connect vid=046d pid=0990 bus=0 dev=2 minor=0 formats=3 alts=7\n"
+        + "uvc: open mjpeg 640x480 alt=4 fmt=1 frm=5 mps=640 dmp=640 ival=1\n"
+        + "uvc: iso smoke urbs=16 done=16 err_urbs=0 err_pkts=0 bytes=1536 max=12\n"
+        + "uvc: stream first frame size=15608\n"
+        + "uvc: stream frames=280 bytes=4957380 avg=17704 ms=20062 fps=13.956 "
+          "kbit=1976 dropped=1 invalid=0 err=0 max=18181\n"
+        + "uvc: stream jpeg soi=280 eoi=280 timeouts=2\n"
+        + "uvc: 720p verdict=no target=640x480 fps=13.956 kbit=1976 frames=280\n"
+    )
+    for case in ("uvc_detect", "uvc_open", "uvc_iso_smoke", "uvc_stream"):
+        body += f"rtos: case {case} PASS\n"
+    return body + "rtos: result pass cases=4/4 backend=freertos\n"
+
+
 SAMPLES = [
     ("usb-dwc2-open", usb_dwc2_open, None,
      {"cases": ["tick", "usb_dwc2"]}),
+    ("uvc-480-open", uvc_480_open, None,
+     {"cases": ["uvc_detect", "uvc_open", "uvc_iso_smoke", "uvc_stream"],
+      "uvc_vid": "046d", "uvc_pid": "0990", "uvc_width": "640",
+      "uvc_height": "480", "uvc_ival": "1", "uvc_mps_max": "1023",
+      "uvc_min_frames": "50", "uvc_max_frame_bytes": "131072"}),
     ("usb-dwc2-no-roundtrip", usb_dwc2_no_roundtrip,
      "no verified write/read round trip", {"cases": ["tick", "usb_dwc2"]}),
     ("ap5g-open", ap5g_open, None, {"cases": ["iwl7260_ap5g"]}),

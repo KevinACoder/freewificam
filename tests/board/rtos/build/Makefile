@@ -317,16 +317,16 @@ endif
 # with its test case.  The rtw89 cases are consumers too: their linuxkpi USB
 # engine rides the same controllers, while the engine and its adapter belong to
 # the liblinux80211 world (kpi.mk), not to this file.
-USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
+USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
 	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6
 ifeq ($(BOARD),stm32f429-challenger)
-ifneq ($(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
-$(error the stm32f429 board carries only usb_dwc2/f429_sdram/f429_wifi/f429_wifi_ap/f429_ap_link, not '$(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
+ifneq ($(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
+$(error the stm32f429 board carries only the usb_dwc2/f429_sdram/f429_wifi/f429_wifi_ap/f429_ap_link/uvc_* cases, not '$(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
 endif
 else
-ifneq ($(filter usb_dwc2,$(CASES)),)
-$(error usb_dwc2 requires BOARD=stm32f429-challenger)
+ifneq ($(filter usb_dwc2 uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES)),)
+$(error usb_dwc2 and the uvc_* cases require BOARD=stm32f429-challenger)
 endif
 endif
 ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
@@ -570,7 +570,7 @@ BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 
 # usb_xhci/usb_ehci are compiled in the CherryUSB flag world (usb.mk); every
 # other case is a plain application translation unit.
-USB_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram
+USB_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram $(UVC_CASES)
 KPI_CASES := kpi_live kpi_mock
 # The wireless cases compile in the stack's flag world (wl80211.mk), not the
 # plain application world, so they are kept out of the generic list.  The list
@@ -599,7 +599,7 @@ FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
 	$(MMC_PORT_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_BOARD_SRCS) $(NVME_BOARD_SRCS) \
 	$(BACKEND_FIRST_SRCS)
 VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
-USB_ALL_SRCS := $(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)
+USB_ALL_SRCS := $(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS) $(UVC_ALL_SRCS)
 
 TARGET := $(BUILD)/rtos-$(BACKEND)
 OBJDIR := $(BUILD)/obj/$(BACKEND)
@@ -689,6 +689,14 @@ ifneq ($(filter usb_xhci usb_ehci usb_dwc2 f429_sdram,$(CASES)),)
 	$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx msc_class_info || \
 		{ echo "FAIL: msc_class_info not in the image (the class table would claim nothing)"; exit 1; }; \
 	echo "PASS: usb msc class table present"
+endif
+ifneq ($(strip $(UVC_CASES)),)
+	@set -e; \
+	for s in $(UVC_GATE_REQUIRED); do \
+		$(NM) $(TARGET).elf | awk '{print $$3}' | grep -qx "$$s" || \
+			{ echo "FAIL: $$s not in the camera image"; exit 1; }; \
+	done; \
+	echo "PASS: uvc video class and stream engine present"
 endif
 ifeq ($(ARCH),armv7m)
 	@set -e; \
@@ -840,7 +848,7 @@ $(foreach s,$(PRINTF_SRCS),$(eval $(call COMPILE_C,$(s),$(VENDORED_CFLAGS) $(PRI
 # (USB_CONSUMER_CASES): a wireless image that carries the linuxkpi USB engine
 # needs CherryUSB and the board glue but no mass-storage class.
 ifneq ($(filter $(USB_CONSUMER_CASES),$(CASES)),)
-$(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
+$(foreach s,$(filter-out %.S,$(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS) $(UVC_ALL_SRCS)),$(eval $(call COMPILE_C,$(s),$(USB_CFLAGS))))
 endif
 
 ifneq ($(strip $(KPI_ALL_SRCS)),)

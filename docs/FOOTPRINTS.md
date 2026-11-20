@@ -150,3 +150,22 @@ python3 tools/rtos/size-ledger.py --objects <run>/obj
   separate line, so it has no placed flash/RAM yet.
 - Heap is not attributed per module; the task table is the measured
   allocation, and the lwIP heap is separate by design.
+
+## F429 UVC images (2026-11-20)
+
+Measured with `arm-none-eabi-size -A` on the linked images. "Static SRAM" is
+`.data` + `.bss` + `.noncacheable`, excluding the `.sdram` NOLOAD section;
+"SDRAM" is the `.sdram` section (the FreeRTOS heap plus the camera frame pool).
+
+| image | FLASH (bin) | text+data | static SRAM | SDRAM |
+|---|---:|---:|---:|---:|
+| `stm32f429-uvc-detect` | 58,836 | 58,824 | 107,260 | 0 |
+| `stm32f429-uvc-480` | 69,644 | 69,632 | 50,188 | 1,441,792 |
+| `stm32f429-uvc-800x600` | 69,652 | 69,640 | 50,188 | 1,441,792 |
+
+The detect image keeps its 64 KiB FreeRTOS heap in SRAM and has no frame pool;
+its larger static SRAM is the 16-altsetting USB device table. The two stream
+images place a 1 MiB heap and three 128 KiB (480) or 512 KiB (800x600/720p)
+frame buffers in SDRAM. The F429 RAM-margin gate still reports >80 KiB free
+between `end` and `_estack` for the detect image and >140 KiB for the stream
+images. The 1 MiB flash part is not a constraint for this line.

@@ -1,0 +1,22 @@
+# F429 UVC control arm: the same host/class path as the 720p profile, opened
+# at 640x480 MJPEG (or the nearest FS-viable control mode the detect census
+# found).  The frame pool and the FreeRTOS heap live in the core board's 32 MB
+# FMC SDRAM; the DWC2 host's DMA reaches it (the stm32f429-sdram case proved
+# the path with a U-disk bulk read).
+#
+# Cases: identify/census, open the target, prove the raw ISO transport, then
+# run the stream engine for 20 s.  The camera is left open between cases.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=24
+CONFIG_UVC_TARGET_WIDTH=640
+CONFIG_UVC_TARGET_HEIGHT=480
+CONFIG_UVC_FRAME_BYTES=131072
+CONFIG_CASES="uvc_detect uvc_open uvc_iso_smoke uvc_stream"

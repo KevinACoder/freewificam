@@ -34,7 +34,7 @@ worlds this line carries; every edit they received is in `DIVERGENCES.md`.
 | `third-party/CMSIS_6/` | same, RTOS2/Core/Driver headers | 8 | Apache-2.0 | yes |
 | `third-party/CMSIS-FreeRTOS/` | same, `CMSIS/RTOS2/FreeRTOS` | 5 | Apache-2.0 AND MIT | yes |
 | `third-party/lwip/` | same, `src/` + `ports/` + `patches/` | 327 | BSD-3-Clause style | yes (the tree carries its patches applied) |
-| `third-party/cherryusb/` | same, `core/ class/{hub,msc}/ port/{xhci,ehci,dwc2}/ common/ osal/ ports/osal/cmsis2/ patches/` | 77 | Apache-2.0 | yes (patches applied; `port/dwc2` is the pin's bytes; one local change in `core/usbh_core.c`, divergence 66) |
+| `third-party/cherryusb/` | same, `core/ class/{hub,msc,video}/ port/{xhci,ehci,dwc2}/ common/ osal/ ports/osal/cmsis2/ patches/` | 82 | Apache-2.0 | yes (patches applied; `class/video` is the same pin's host class; `port/dwc2/usb_hc_dwc2.c` carries patch 0011 for the F429 UVC image; one local change in `core/usbh_core.c`, divergence 66) |
 | `third-party/fsl_sdmmc/` | same, whole tree | 27 | BSD-3-Clause | yes |
 | `third-party/{printf,tlsf,ulog}/` | same | 17 | MIT / BSD-3 / MIT | yes |
 | `LICENSE` | same | 1 | BSD-3-Clause | yes |

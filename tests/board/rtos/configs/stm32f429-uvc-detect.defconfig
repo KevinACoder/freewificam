@@ -1,0 +1,16 @@
+# F429 UVC detection arm: OTG_HS full-speed host + CherryUSB's DWC2 port +
+# the video class.  One case brings the controller up, identifies the camera
+# and prints its mode/alt/interval tables plus the 720-line probe census; it
+# does not commit a stream, so this image needs no SDRAM frame pool.
+#
+# The census answers whether the camera asks for more than a full-speed
+# isochronous endpoint can carry: 1023 bytes per 1 ms frame is the ceiling.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=65536
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_RUNNER_STACK_KB=24
+CONFIG_CASES="uvc_detect"

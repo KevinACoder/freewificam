@@ -13,7 +13,7 @@ Per-component license registry. This is not legal advice.
 | `third-party/CMSIS_6/` | Apache-2.0 | `LICENSE` at the tree root |
 | `third-party/CMSIS-FreeRTOS/` | Apache-2.0 AND MIT | `LICENSE` at the tree root |
 | `third-party/lwip/` | BSD-3-Clause style | `COPYING` at the tree root |
-| `third-party/cherryusb/` | Apache-2.0 | `LICENSE` at the tree root; eight patches applied in the tree, recorded in `patches/` |
+| `third-party/cherryusb/` | Apache-2.0 | `LICENSE` at the tree root; eleven patches applied in the tree, recorded in `patches/` |
 | `third-party/fsl_sdmmc/` | BSD-3-Clause | NXP copyright blocks; `COPYING-BSD-3` beside the tree |
 | `third-party/printf/` | MIT | |
 | `third-party/tlsf/` | BSD-3-Clause | terms in the `tlsf.h` header |
@@ -35,6 +35,11 @@ When `components/liblinux80211/` lands the real `net/mac80211` and
 combined work regardless of the license of the parts written here. That
 boundary is the reason the component is a separate build unit and a separate
 profile family: the Realtek BSD-option profiles must never link it.
+
+The F429 UVC images (`stm32f429-uvc-detect`, `-480`, `-800x600`, `-720p`)
+link the Apache-2.0 CherryUSB host stack, its video class and the first-party
+`app/usb/uvc_app.c`/`app/cases/uvc_*.c`; they contain no GPL unit.  The DWC2
+isochronous engine is patch 0011 in the same Apache-2.0 tree.
 
 The F429 AP6181 images (`stm32f429-ap6181-attach`, `-scan`, `-join`, `-data`)
 link the Cypress WICED WWD driver. They contain no GPL unit and no Linux
