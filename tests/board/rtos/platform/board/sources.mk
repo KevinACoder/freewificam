@@ -74,3 +74,14 @@ endif
 ifeq ($(SRC_TAG),base)
 obj-$(CONFIG_WICED_AP6181) += stm32f429-challenger/sdio_board.c
 endif
+
+# The F429 wired-Ethernet glue (the imported ST HAL's MSP hook, the HAL time
+# base and the frame-level seam).  Compiled only for the f429_eth image: every
+# other F429 image must not link the HAL or its station buffers.
+ifeq ($(SRC_TAG),eth)
+ifneq ($(filter f429_eth,$(CASES)),)
+ifeq ($(BOARD),stm32f429-challenger)
+obj-y += stm32f429-challenger/eth.c
+endif
+endif
+endif

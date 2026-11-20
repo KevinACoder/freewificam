@@ -115,6 +115,12 @@ else
 $(error unknown BOARD '$(BOARD)': this line carries rk3568-itx and stm32f429-challenger only)
 endif
 
+# The wired-Ethernet world (the imported STM32F4 HAL + its board seam).  It
+# appends the HAL include roots to BOARD_INCLUDES before INCLUDES is expanded
+# below, and publishes the HAL/board/netif source lists; empty for every
+# profile that does not carry f429_eth.
+include $(CURDIR)/eth.mk
+
 # --- backend selection -------------------------------------------------------
 # FreeRTOS is the only backend carried here. The Kconfig tree still owns the
 # selection so a second backend lands as a new branch, not as a rewrite.
@@ -227,6 +233,7 @@ $(eval $(call component_sources,$(PLATFORM)/arch,pcie,ARCH_PCIE))
 $(eval $(call component_sources,$(PLATFORM)/board,base,BOARD_BASE))
 $(eval $(call component_sources,$(PLATFORM)/board,pcie,BOARD_PCIE))
 $(eval $(call component_sources,$(PLATFORM)/board,nvme,BOARD_NVME))
+$(eval $(call component_sources,$(PLATFORM)/board,eth,F429_ETH))
 $(eval $(call component_sources,$(PLATFORM)/os,baremetal,OS_BASE))
 
 # liblinux80211: the component owns its sources; this build only says which
@@ -255,7 +262,7 @@ endif
 # The wired-network cases each bring the lwIP port face and the stack core; the
 # per-case group below adds that NIC's own netif bridge and driver. A boot may
 # carry more than one (they share one stack bring-up).
-LWIP_CASES := net net_xmac net_mdk_netio net_loop net_pps
+LWIP_CASES := net net_xmac net_mdk_netio net_loop net_pps f429_eth
 ifneq ($(filter $(LWIP_CASES),$(CASES)),)
 NET_APP_SRCS := \
 	$(THIRD_PARTY)/lwip/ports/sys_arch.c \
@@ -596,9 +603,11 @@ NVME_BOARD_SRCS := $(BOARD_NVME_SRCS)
 PRINTF_SRCS := $(THIRD_PARTY)/printf/printf.c
 
 FIRST_SRCS := $(BASE_SRCS) $(APP_SRCS) $(NET_APP_SRCS) $(EQOS_SRCS) \
+	$(F429_ETH_SRCS) $(ETH_NETIF_SRCS) \
 	$(MMC_PORT_SRCS) $(ARCH_PCIE_SRCS) $(PCIE_BOARD_SRCS) $(NVME_BOARD_SRCS) \
 	$(BACKEND_FIRST_SRCS)
-VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS)
+VENDOR_SRCS := $(NET_STACK_SRCS) $(MMC_VENDOR_SRCS) $(BACKEND_VENDOR_SRCS) \
+	$(ETH_HAL_SRCS)
 USB_ALL_SRCS := $(USB_STACK_SRCS) $(USB_BOARD_SRCS) $(USB_CLASS_SRCS) $(USB_CASE_SRCS) $(UVC_ALL_SRCS) $(UAC_ALL_SRCS) $(USB_APP_SRCS)
 
 TARGET := $(BUILD)/rtos-$(BACKEND)

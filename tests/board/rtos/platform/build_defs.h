@@ -73,6 +73,14 @@
 #if CONFIG_BOARD_FIREFLY_V1
 #define BOARD_FIREFLY_V1 1
 #endif
+
+/* The part name the STM32F4 HAL/CMSIS device header switches its register
+ * map on.  The build system filters -D out of every compile line (COMPILE_C),
+ * so the part is named here, with the other build-fixed facts.  Only the
+ * board's own HAL users and the imported HAL sources see it. */
+#if CONFIG_BOARD_STM32F429_CHALLENGER
+#define STM32F429xx 1
+#endif
 #if CONFIG_BOARD_FIREFLY_V2
 #define BOARD_FIREFLY_V2 1
 #endif
