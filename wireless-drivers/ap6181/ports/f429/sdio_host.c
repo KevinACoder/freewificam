@@ -160,10 +160,11 @@ sdio_controller_reset(void)
 
 #define DMA_S3_COMMON		(DMA_SCR_MINC | \
 				 DMA_SCR_PSIZE_WORD | DMA_SCR_MSIZE_WORD | \
-				 DMA_SCR_PL_VERY_HIGH | DMA_SCR_PBURST_INC4 | \
-				 DMA_SCR_MBURST_INC4 | DMA_SCR_CHSEL_4)
-/* FIFO mode, full threshold, as the vendor host programs it. */
-#define DMA_S3_FCR_VALUE	(0UL)	/* direct mode */
+				 DMA_SCR_PL_VERY_HIGH | DMA_SCR_CHSEL_4)
+/* Single-beat DMA flow control in direct mode: the vendor's PFCTRL + INC4
+ * burst + FIFO shape raises FEIF on this controller at the moment the stream
+ * is enabled (EN is cleared by hardware before a byte moves). */
+#define DMA_S3_FCR_VALUE	(0UL)
 
 #define DMA_DATA_SPIN		2000000U
 
@@ -315,6 +316,9 @@ dma_arm(wwd_bus_transfer_direction_t direction)
 	if (direction == BUS_WRITE)
 		cr |= DMA_SCR_DIR_M2P;
 	DMA2_S3CR = cr;
+	ap6181_trace("ap6181: armed cr=0x%08lx ndtr=%lu lisr=0x%08lx\n",
+		     (unsigned long)DMA2_S3CR, (unsigned long)DMA2_S3NDTR,
+		     (unsigned long)DMA2_LISR);
 }
 
 /* Wait for the stream's completion interrupt and for the data path to go
@@ -327,7 +331,11 @@ data_wait(uint32_t total)
 	uint32_t spin;
 	uint32_t sta;
 
-	if (host_rtos_get_semaphore(&s_done, 50U, WICED_TRUE) != WWD_SUCCESS) {
+	/* Short wait: a healthy transfer completes in microseconds, and the
+	 * four-word stall is known, so a long wait only stretches the gap
+	 * between chunks (the card's backplane goes to sleep in long gaps and
+	 * then NAKs the bring-up accesses). */
+	if (host_rtos_get_semaphore(&s_done, 5U, WICED_TRUE) != WWD_SUCCESS) {
 		ap6181_stats.cmd_timeouts++;
 		return false;
 	}
@@ -348,6 +356,40 @@ data_wait(uint32_t total)
 			return false;
 	}
 	(void)total;
+}
+
+/* The stream on this controller stops four words before the end of a block
+ * write (measured: NDTR=4, DCOUNT=16, no error flag, DPSM idle).  Finish the
+ * last words from the CPU: the card is still clocking and takes them, which
+ * turns the stall into a completed transfer. */
+static bool
+pio_tail(uint32_t total)
+{
+	uint32_t words = total / 4U;
+	uint32_t left = DMA2_S3NDTR & 0xFFFFUL;
+	uint32_t done = (left <= words) ? (words - left) : 0U;
+	uint32_t i;
+	uint32_t spin;
+
+	for (i = done; i < words; i++) {
+		spin = FIFO_SPIN;
+		while ((SDIO_STA & STA_TXFIFOF) != 0U && --spin != 0U)
+			;
+		if (spin == 0U)
+			return false;
+		SDIO_FIFO = ((const uint32_t *)s_stage)[i];
+	}
+
+	spin = DATA_IDLE_SPIN;
+	while (spin-- != 0U) {
+		uint32_t sta = SDIO_STA;
+
+		if ((sta & STA_DATA_ERRORS) != 0U)
+			return false;
+		if ((sta & (STA_TXACT | STA_RXACT)) == 0U)
+			return true;
+	}
+	return false;
 }
 
 /* --- platform bus interface ---------------------------------------------- */
@@ -520,14 +562,17 @@ restart:
 		SDIO_CMD = (uint32_t)command | SDIO_CMD_WAITRESP_SHORT |
 			   SDIO_CMD_CPSMEN;
 
-		if (!data_wait(total)) {
+		if (!data_wait(total) &&
+		    !(direction == BUS_WRITE && pio_tail(total))) {
 			ap6181_trace("ap6181: dma fail dir=%d len=%lu att=%lu "
-				     "sta=0x%08lx dc=0x%08lx ndtr=%lu dma=0x%08lx\n",
+				     "sta=0x%08lx dc=0x%08lx ndtr=%lu lisr=0x%08lx "
+				     "dma=0x%08lx\n",
 				     (int)direction, (unsigned long)total,
 				     (unsigned long)attempts,
 				     (unsigned long)SDIO_STA,
 				     (unsigned long)SDIO_DCOUNT,
 				     (unsigned long)DMA2_S3NDTR,
+				     (unsigned long)DMA2_LISR,
 				     (unsigned long)ap6181_stats.dma_intrs);
 			(void)command_send((uint32_t)SDIO_CMD_52,
 					   0x110UL << 9, true, true);
@@ -575,6 +620,7 @@ restart:
 
 	if (response != NULL)
 		*response = SDIO_RESP1;
+
 	return WWD_SUCCESS;
 
 retry:
