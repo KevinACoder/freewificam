@@ -56,6 +56,12 @@
 #define SDIO_CLKCR_PWRSAV	(1UL << 9)
 #define SDIO_CLKCR_WIDBUS_4	(1UL << 11)
 
+/* Last backplane window bytes WWD wrote (registers 0x1000A/B/C); used only to
+ * recognise the NVRAM write for an in-place readback. */
+static uint8_t s_win_low;
+static uint8_t s_win_mid;
+static uint8_t s_win_high;
+
 #define SDIO_CMD_WAITRESP_SHORT	(1UL << 6)
 #define SDIO_CMD_CPSMEN		(1UL << 10)
 
@@ -569,6 +575,19 @@ restart:
 		return WWD_SDIO_RETRIES_EXCEEDED;
 	}
 
+	if (command == SDIO_CMD_52) {
+		uint32_t a52 = ((argument >> 9) & 0x1FFFFUL);
+		uint32_t rw = (argument >> 31) & 1UL;
+
+		if (rw != 0UL) {
+			if (a52 == 0x1000AUL)
+				s_win_low = argument & 0xFFUL;
+			else if (a52 == 0x1000BUL)
+				s_win_mid = argument & 0xFFUL;
+			else if (a52 == 0x1000CUL)
+				s_win_high = argument & 0xFFUL;
+		}
+	}
 	if (command == SDIO_CMD_53) {
 		uint32_t total;
 		uint32_t t0 = (uint32_t)host_rtos_get_time();
@@ -688,6 +707,53 @@ restart:
 		if (ap6181_stats.cmd53_isr <= 6U)
 			ap6181_trace("ap6181: t=%lu ms\n",
 				     (unsigned long)((uint32_t)host_rtos_get_time() - t0));
+
+		/* The NVRAM image is the one multi-kilobyte write that comes
+		 * after the firmware: read its head back through the same
+		 * window and compare with both the staged copy and the
+		 * resource it came from. */
+		if (direction == BUS_WRITE &&
+		    s_win_mid >= 0x03U && s_win_mid <= 0x03U &&
+		    s_win_low >= 0x80U) {
+			uint8_t saved[64];
+			uint8_t rb[64];
+			uint8_t expect[64];
+			uint32_t got = 0U;
+			uint32_t rarg = (argument & ~0x80000000UL & ~0x1FFUL) | 1UL;
+			unsigned i;
+			unsigned d_stage = 0U;
+			unsigned d_res = 0U;
+
+			memcpy(saved, s_stage, sizeof(saved));
+			if (host_platform_sdio_transfer(BUS_READ, SDIO_CMD_53,
+							SDIO_BLOCK_MODE,
+							SDIO_64B_BLOCK, rarg,
+							(uint32_t *)rb,
+							sizeof(rb),
+							RESPONSE_NEEDED,
+							NULL) == WWD_SUCCESS) {
+				for (i = 0U; i < sizeof(rb); i++) {
+					if (rb[i] != saved[i])
+						d_stage++;
+				}
+				if (host_platform_resource_read_indirect(
+					    WWD_RESOURCE_WLAN_NVRAM, 0U, expect,
+					    sizeof(expect), &got) == WWD_SUCCESS &&
+				    got == sizeof(expect)) {
+					for (i = 0U; i < sizeof(rb); i++) {
+						if (rb[i] != expect[i])
+							d_res++;
+					}
+				}
+				ap6181_trace("ap6181: nvram rb diffs=%u res=%u "
+					     "d=%02x%02x%02x%02x want=%02x%02x%02x%02x\n",
+					     d_stage, d_res, rb[0], rb[1], rb[2],
+					     rb[3], expect[0], expect[1],
+					     expect[2], expect[3]);
+			} else {
+				ap6181_trace("ap6181: nvram rb failed\n");
+			}
+		}
 
 		/* In-place integrity check: read the block just written back
 		 * through the same window (no window register is touched) and
