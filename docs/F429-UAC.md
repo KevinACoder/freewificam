@@ -100,9 +100,9 @@ into a 200 ms single-producer/single-consumer PCM ring (6,400 bytes at
 - **Nothing may print while an URB is in flight.**  The console sink holds the
   print lock with interrupts masked; a diagnostic line printed between the
   first submit and the measurement window cost seven 1 ms frames on this
-  board (the counter said `gaps=7`, and the PCM byte count was short by 224
-  bytes).  The start banner now prints before the first submit; the
-  microphone and video+microphone windows then report `gaps=0`.
+  board (`gaps=7`, `gap_max=7`).  The start banner now prints before the
+  first submit; the microphone and video+microphone windows then report
+  `gaps=0`.
 - Stopping the stream marks the in-flight URB's remaining packets with
   `-USB_ERR_SHUTDOWN`.  Those packets were never attempted and are counted as
   `shutdown`, not as transport errors; the transport-error counter stays 0 on
