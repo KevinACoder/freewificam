@@ -169,3 +169,23 @@ images place a 1 MiB heap and three 128 KiB (480) or 512 KiB (800x600/720p)
 frame buffers in SDRAM. The F429 RAM-margin gate still reports >80 KiB free
 between `end` and `_estack` for the detect image and >140 KiB for the stream
 images. The 1 MiB flash part is not a constraint for this line.
+
+## F429 UAC images (2026-11-20)
+
+Measured with the same definition (`arm-none-eabi-size -A` on the linked
+images; FLASH is the BIN, static SRAM is `.data` + `.bss` + `.noncacheable`,
+SDRAM is the `.sdram` NOLOAD section).  The PCM ring (6,400 B) and the
+16 x 36 B packet buffers are allocated from the FreeRTOS heap at runtime, so
+they are inside the heap figure, not a separate section.
+
+| image | FLASH (bin) | text+data | static SRAM | SDRAM |
+|---|---:|---:|---:|---:|
+| `stm32f429-uac-detect` | 58,280 | 58,268 | 107,260 | 0 |
+| `stm32f429-uac-mic` | 71,512 | 71,500 | 44,540 | 1,048,576 |
+| `stm32f429-uac-av` | 78,564 | 78,552 | 44,540 | 1,441,792 |
+
+The detect image keeps its 64 KiB FreeRTOS heap in SRAM and allocates no ring.
+The microphone image places the 1 MiB heap in SDRAM (no video frame pool); the
+video+microphone image adds three 128 KiB video frame buffers.  The F429
+RAM-margin gate reports 89,344 B free between `end` and `_estack` for the
+detect image and 152,064 B for both stream images.

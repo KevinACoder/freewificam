@@ -76,6 +76,17 @@ int case_uvc_iso_smoke_run(void);
 #if defined(RTOS_CASE_UVC_STREAM)
 int case_uvc_stream_run(void);
 #endif
+/* The UAC1 microphone ladder on the same OTG_HS host: descriptor census,
+ * single-microphone capture, then video + microphone together. */
+#if defined(RTOS_CASE_UAC_DETECT)
+int case_uac_detect_run(void);
+#endif
+#if defined(RTOS_CASE_UAC_MIC)
+int case_uac_mic_run(void);
+#endif
+#if defined(RTOS_CASE_UAC_AV)
+int case_uac_av_run(void);
+#endif
 #if defined(RTOS_CASE_F429_SDRAM)
 int case_f429_sdram_run(void);
 #endif

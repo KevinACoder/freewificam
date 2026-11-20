@@ -629,6 +629,94 @@ def uvc_480_open() -> str:
     return body + "rtos: result pass cases=4/4 backend=freertos\n"
 
 
+UAC_HEAD = (
+    BANNER
+    + "uac: host up bus=0 hcd=dwc2 base=0x40040000\n"
+    + "uac: connect vid=046d pid=0990 bus=0 dev=2 ac=2 as=3 bcdADC=0x0100\n"
+    + "uac: desc ac_intf=2 as_intf=3 bcdADC=0x0100 proto=0x00 ch=1 sub=2 "
+      "bits=16 fmt=1 rates=16000 ep=0x86 mps=32 ival=1 dir=in sfctrl=1\n"
+    + "uac: terminal in=0x0201 in_id=1 out_id=3 src=3 fu=2 mute_ch=0 vol_ch=0\n"
+    + "uac: raw ac off=00 24 01 00 01 0a 00 01 03 \n"
+)
+
+UAC_OPEN = (
+    "uac: open rate=16000 ch=1 sub=2 bits=16 alt=1 ep=0x86 mps=32 "
+    "setcur=ok getcur=16000 src=target\n"
+)
+
+UAC_MIC_OK = (
+    "uac: mic rate=16000 ch=1 bits=16 ep=0x86 mps=32 packets=624 urbs=39 "
+    "bytes=319488 read=319488 ms=10003 gaps=0 err=0 empty=0 overrun=0 "
+    "shutdown=16 gap_first=0 err_run=0 err_first=0 err_last=0 err_mid=0 gap_max=0 "
+    "nz=319400 peak=12000 mute=0 unmuted=0\n"
+)
+
+UAC_AV_OK = (
+    "uac: av video frames=260 dequeued=260 bytes=5200000 soi=260 eoi=260 "
+    "max=20000 err=0 urb_err=0 dropped=1 invalid=0 timeouts=3\n"
+    "uac: av audio rate=16000 ch=1 bits=16 packets=1250 urbs=78 "
+    "bytes=640000 read=640000 nz=630000 peak=12000 gaps=0 err=0 empty=0 "
+    "overrun=0 shutdown=16 gap_first=0 err_run=0 err_first=0 err_last=0 "
+    "err_mid=0 gap_max=0 ms=20010\n"
+)
+
+UVC_HEAD = (
+    "uvc: host up bus=0 hcd=dwc2 base=0x40040000\n"
+    "uvc: connect vid=046d pid=0990 bus=0 dev=2 minor=0 formats=3 alts=7\n"
+    "uvc: open mjpeg 640x480 alt=4 fmt=1 frm=5 mps=640 dmp=640 ival=1\n"
+)
+
+
+def uac_detect_ok() -> str:
+    return (UAC_HEAD
+            + "uac: detect PASS\n"
+            + CASE_PASS.format(name="uac_detect") + RESULT_PASS)
+
+
+def uac_detect_uac2() -> str:
+    body = UAC_HEAD.replace("bcdADC=0x0100", "bcdADC=0x0200")
+    return (body
+            + "uac: detect PASS\n"
+            + CASE_PASS.format(name="uac_detect") + RESULT_PASS)
+
+
+def uac_mic_ok() -> str:
+    return (UAC_HEAD + UAC_OPEN + UAC_MIC_OK
+            + "uac: mic PASS\n"
+            + CASE_PASS.format(name="uac_detect")
+            + CASE_PASS.format(name="uac_mic") + RESULT_PASS)
+
+
+def uac_mic_gaps() -> str:
+    body = UAC_MIC_OK.replace("gaps=0", "gaps=1")
+    return (UAC_HEAD + UAC_OPEN + body
+            + "uac: mic PASS\n"
+            + CASE_PASS.format(name="uac_detect")
+            + CASE_PASS.format(name="uac_mic") + RESULT_PASS)
+
+
+def uac_av_ok() -> str:
+    return (UAC_HEAD + UVC_HEAD + UAC_AV_OK
+            + "uac: av PASS\n"
+            + CASE_PASS.format(name="uac_detect")
+            + CASE_PASS.format(name="uvc_detect")
+            + CASE_PASS.format(name="uvc_open")
+            + CASE_PASS.format(name="uac_av")
+            + "rtos: result pass cases=4/4 backend=freertos\n")
+
+
+def uac_av_video_short() -> str:
+    body = UAC_AV_OK.replace("frames=260", "frames=10").replace(
+        "soi=260", "soi=10").replace("eoi=260", "eoi=10")
+    return (UAC_HEAD + UVC_HEAD + body
+            + "uac: av PASS\n"
+            + CASE_PASS.format(name="uac_detect")
+            + CASE_PASS.format(name="uvc_detect")
+            + CASE_PASS.format(name="uvc_open")
+            + CASE_PASS.format(name="uac_av")
+            + "rtos: result pass cases=4/4 backend=freertos\n")
+
+
 SAMPLES = [
     ("usb-dwc2-open", usb_dwc2_open, None,
      {"cases": ["tick", "usb_dwc2"]}),
@@ -697,6 +785,25 @@ SAMPLES = [
      {"cases": ["rtl8xxxu_mon"], "mon_bssid": "aa:bb:cc:dd:ee:ff"}),
     ("rtl8xxxu-mon-bench-bssid", rtl8xxxu_mon_open, None,
      {"cases": ["rtl8xxxu_mon"], "mon_bssid": "1c:a7:70:de:29:a1"}),
+    ("uac-detect-ok", uac_detect_ok, None,
+     {"cases": ["uac_detect"], "uac_vid": "046d", "uac_pid": "0990",
+      "uac_ac": "2", "uac_as": "3", "uac_rate": "16000"}),
+    ("uac-detect-uac2", uac_detect_uac2, "is not UAC1",
+     {"cases": ["uac_detect"]}),
+    ("uac-mic-ok", uac_mic_ok, None,
+     {"cases": ["uac_detect", "uac_mic"]}),
+    ("uac-mic-gaps", uac_mic_gaps, "missed USB frames",
+     {"cases": ["uac_detect", "uac_mic"]}),
+    ("uac-av-ok", uac_av_ok, None,
+     {"cases": ["uac_detect", "uvc_detect", "uvc_open", "uac_av"],
+      "uvc_width": "640", "uvc_height": "480", "uvc_ival": "1",
+      "uvc_mps_max": "1023", "uvc_min_frames": "50",
+      "uvc_max_frame_bytes": "131072", "uac_video_min_frames": "200"}),
+    ("uac-av-video-short", uac_av_video_short, "floor 200",
+     {"cases": ["uac_detect", "uvc_detect", "uvc_open", "uac_av"],
+      "uvc_width": "640", "uvc_height": "480", "uvc_ival": "1",
+      "uvc_mps_max": "1023", "uvc_min_frames": "50",
+      "uvc_max_frame_bytes": "131072", "uac_video_min_frames": "200"}),
 ]
 
 

@@ -30,6 +30,7 @@ brought up; its detailed performance records are in
 | board | line | state |
 |---|---|---|
 | **STM32F429** (Cortex-M4, 168 MHz, 1 MB flash, 192 KB SRAM + 32 MB SDRAM) | UVC camera on the full-speed OTG_HS host | **640x480 and 800x600 2/2**; 12.4-13.8 fps, 1.92-2.07 / 2.90 Mbit/s; **no 720-line mode on the bench camera** (see below) |
+| **STM32F429** | UAC1 camera microphone on the same host | descriptor census + **10 s microphone 2/2** + **20 s video+microphone 2/2**; 16 kHz mono 16-bit, 32 B/ms, `gaps=0`, `err=0` (see below) |
 | **STM32F429** | Wi-Fi: liblinux80211 + rtl8xxxu on USB | attach/scan/join/data 2/2; report-only 2.8 Mbit/s TCP down, 6.1 Mbit/s UDP down |
 | **STM32F429** | USB host MSC + SDRAM | 2/2; U-disk block I/O and the DMA-to-SDRAM arm |
 | **STM32F429** | AP6181 SDIO (Cypress WICED port) | attach/scan/join/ICMP 2/2; report-only TCP TX 6.06 / RX 9.83 Mbit/s |
@@ -85,10 +86,51 @@ camera that exposes a 720-line mode at a low frame interval and reports
 `dwMaxPayloadTransferSize <= 1023` would fit the bus; the profile is kept for
 that camera.  Full details: [F429-UVC.md](docs/F429-UVC.md).
 
+## STM32F429 UAC microphone
+
+The same camera's interfaces 2/3 are a **USB Audio Class 1.0 microphone**
+(`bcdADC=0x0100`): one channel, 16-bit samples, one 16 kHz rate, isochronous
+IN endpoint `0x86` with `wMaxPacketSize=36` and `bInterval=1`.  The F429 line
+carries a first-party UAC1 host class (patch 0012) and a PCM capture engine;
+the camera has **no UAC OUT**, so playback is not part of this line.
+
+A microphone-only image receives zero-length packets on this camera: its audio
+function produces samples only after the video function has been claimed.  The
+microphone image therefore carries the UVC class and its descriptor census;
+the 10 s window itself measures the microphone only.
+
+### Adaptation parameters
+
+| item | value |
+|---|---|
+| audio function | AC interface 2, AS interface 3, `bcdADC=0x0100`, protocol 0x00 |
+| microphone path | input terminal 1 (`0x0201`), output terminal 3 (`0x0101`), feature unit 5 (master mute+volume) |
+| format | format type I PCM, 1 channel, 2 bytes/sample, 16 bits, one rate **16000 Hz** |
+| endpoint | `0x86` ISO IN, `mps=36`, `bInterval=1`; sampling-frequency control present |
+| class requests | `SET_INTERFACE` alt 1, `SET_CUR`/`GET_CUR` sampling frequency (3 bytes, endpoint recipient) |
+| capture ring | 1 URB x 16 packets (16 ms), one URB in flight, 200 ms PCM ring (6,400 B) |
+| resubmit | from the URB-completion callback (interrupt context), not a pump task |
+| board limits | `MAX_AUDIO_CLASS=1`, 16-packet URB, 200 ms ring |
+| memory | 1 MiB FreeRTOS heap in FMC SDRAM; the 6.4 KiB ring and 16 x 36 B packet buffers come from it |
+| profiles | `stm32f429-uac-detect`, `-mic`, `-av` |
+
+### Measured
+
+| window | result | numbers |
+|---|---|---|
+| 10 s microphone | **2/2** | 10,000 packets, 319,994 / 319,992 bytes, `gaps=0`, `err=0`, non-zero samples 159,997 / 159,988 |
+| 20 s video + microphone | **2/2** | video 297 / 297 frames, JPEG SOI/EOI 297/297, 0 packet/URB errors; audio 20,003 / 20,004 packets, 640,080 / 640,114 bytes, `gaps=0`, `err=0` |
+
+Both microphone boots and both video+microphone boots are relay cold starts of
+the same image.  The video stream is not degraded by the microphone; the two
+isochronous endpoints each hold their own DWC2 channel.  Full details: the
+descriptor bytes, the class's refusals, the engine's contract and the commands
+are in [F429-UAC.md](docs/F429-UAC.md).
+
 ## Footprints
 
-The F429 camera images are the small end of the line: 58,836-69,652 B of
-flash, 50,188-107,260 B of static SRAM and up to 1.4 MiB of SDRAM.  The Wi-Fi delivery image
+The F429 camera images are the small end of the line: 58,280-78,564 B of
+flash, 44,540-107,260 B of static SRAM and up to 1.4 MiB of SDRAM.  The Wi-Fi delivery image
 is the large end (`stm32f429-wifi-c6`, 726,080 B of flash, 81,356 B of static
 SRAM - 18,496 B of it the DMA/no-cache staging window - and 4,456,448 B of
 SDRAM: 4 MiB FreeRTOS heap + 256 KiB lwIP reserve).  LTO brings that flash to
@@ -101,6 +143,9 @@ SDRAM: 4 MiB FreeRTOS heap + 256 KiB lwIP reserve).  LTO brings that flash to
 | `stm32f429-uvc-detect` | 58,836 | 107,260 | 0 |
 | `stm32f429-uvc-480` | 69,644 | 50,188 | 1,441,792 |
 | `stm32f429-uvc-800x600` | 69,652 | 50,188 | 1,441,792 |
+| `stm32f429-uac-detect` | 58,280 | 107,260 | 0 |
+| `stm32f429-uac-mic` | 71,512 | 44,540 | 1,048,576 |
+| `stm32f429-uac-av` | 78,564 | 44,540 | 1,441,792 |
 | `stm32f429-wifi-c6` delivery | 726,080 | 81,356 | 4,456,448 |
 | `stm32f429-wifi-c6t` throughput | 735,936 | 81,484 | 4,456,448 |
 | `stm32f429-wifi-c6` + `CONFIG_OPT_LTO` | 689,648 | 80,212 | 4,456,448 |
@@ -168,7 +213,7 @@ This repository tests the other split: keep the stack, replace the two edges.
 | `components/` | first-party components; `liblinux80211` is the Linux stack import |
 | `wireless-drivers/` | the vendored card drivers (`rtl8xxxu`, `rtw88`, `rtw89`, the AP6181 WICED port) |
 | `tools/` | the Kconfig generator, the build gates, the judge, the commit checker |
-| `docs/` | provenance, divergences, licenses, build design, status, the F429 camera/Wi-Fi/USB facts and the RK3568 performance tables |
+| `docs/` | provenance, divergences, licenses, build design, status, the F429 camera/audio/Wi-Fi/USB facts and the RK3568 performance tables |
 
 ## Build and boot
 
@@ -189,8 +234,8 @@ is a flat raw image linked at `0xa000000`, loaded over TFTP and entered with
 project's RK3568 board tooling.  On STM32F429 it is a flat image linked at
 `0x08000000`, flashed over the board's Pi/pyOCD path and relay-cold-booted; the
 camera-side commands and the observed console anchors are in
-[F429-UVC.md](docs/F429-UVC.md), and the Wi-Fi line's in
-[F429-WIFI.md](docs/F429-WIFI.md).
+[F429-UVC.md](docs/F429-UVC.md) and [F429-UAC.md](docs/F429-UAC.md), and the
+Wi-Fi line's in [F429-WIFI.md](docs/F429-WIFI.md).
 
 ## License
 

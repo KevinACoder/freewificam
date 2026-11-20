@@ -13,7 +13,7 @@ Per-component license registry. This is not legal advice.
 | `third-party/CMSIS_6/` | Apache-2.0 | `LICENSE` at the tree root |
 | `third-party/CMSIS-FreeRTOS/` | Apache-2.0 AND MIT | `LICENSE` at the tree root |
 | `third-party/lwip/` | BSD-3-Clause style | `COPYING` at the tree root |
-| `third-party/cherryusb/` | Apache-2.0 | `LICENSE` at the tree root; eleven patches applied in the tree, recorded in `patches/` |
+| `third-party/cherryusb/` | Apache-2.0 | `LICENSE` at the tree root; twelve patches applied in the tree, recorded in `patches/` |
 | `third-party/fsl_sdmmc/` | BSD-3-Clause | NXP copyright blocks; `COPYING-BSD-3` beside the tree |
 | `third-party/printf/` | MIT | |
 | `third-party/tlsf/` | BSD-3-Clause | terms in the `tlsf.h` header |
@@ -40,6 +40,14 @@ The F429 UVC images (`stm32f429-uvc-detect`, `-480`, `-800x600`, `-720p`)
 link the Apache-2.0 CherryUSB host stack, its video class and the first-party
 `app/usb/uvc_app.c`/`app/cases/uvc_*.c`; they contain no GPL unit.  The DWC2
 isochronous engine is patch 0011 in the same Apache-2.0 tree.
+
+The F429 UAC images (`stm32f429-uac-detect`, `-mic`, `-av`) link the same
+Apache-2.0 CherryUSB host stack, the first-party UAC1 host class
+(`class/audio/`, patch 0012, written here from the USB Audio 1.0
+specification), `app/usb/uac_app.c` and the `uac_*` cases; they contain no GPL
+unit.  The microphone image also links the video class and its census because
+this camera's audio function only produces samples after the video function
+has been claimed; that does not change the license of the image.
 
 The F429 AP6181 images (`stm32f429-ap6181-attach`, `-scan`, `-join`, `-data`)
 link the Cypress WICED WWD driver. They contain no GPL unit and no Linux

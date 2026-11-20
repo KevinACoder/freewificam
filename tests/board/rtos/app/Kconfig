@@ -44,6 +44,18 @@ config UVC_FRAME_BYTES
 	  that overflows it is dropped and counted.  512 KiB covers a 720-line
 	  MJPEG frame with margin; 640x480 profiles can use 128 KiB.
 
+config UAC_TARGET_RATE
+	int "UAC microphone sample rate (Hz)"
+	default 16000
+	range 8000 96000
+	help
+	  The rate uac_open asks the camera's microphone for.  The device's own
+	  format descriptor is the truth: when the target is absent the open
+	  falls back to the device's first rate and says so (`src=first`), and
+	  the descriptor census case fails because the profile asked for a rate
+	  the device does not carry.  16000 mono 16-bit is 32 bytes per 1 ms
+	  full-speed frame, well below the 1023-byte ceiling.
+
 config AP_WPA2
 	bool "iwl7260_ap runs the WPA2-PSK/CCMP variant"
 	help

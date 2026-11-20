@@ -1,0 +1,31 @@
+# F429 UAC microphone capture arm: the same host/class path as the detect
+# profile, opened at 16 kHz mono 16-bit and run for 10 s.  The PCM ring and the
+# packet buffers live in the core board's 32 MB FMC SDRAM (the DWC2 host's DMA
+# reach into it was proven by the stm32f429-sdram case and the UVC frame pool),
+# and the FreeRTOS heap with them.
+#
+# The image carries the UVC class and its descriptor census even though the
+# window measures only the microphone: this camera's audio function produces
+# samples only after the video function has been claimed (a microphone-only
+# image receives zero-length packets; measured 2026-11-20).  The census does
+# not open or stream the camera, so the 10 s window is still microphone-only.
+#
+# Cases: the audio census, the video descriptor census (the composite init),
+# then the microphone window.  The streaming interface is left at its
+# alternate setting after the window, matching the camera family's "do not
+# leave the streaming setting" rule.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=24
+CONFIG_UVC_TARGET_WIDTH=640
+CONFIG_UVC_TARGET_HEIGHT=480
+CONFIG_UVC_FRAME_BYTES=131072
+CONFIG_UAC_TARGET_RATE=16000
+CONFIG_CASES="uac_detect uvc_detect uac_mic"

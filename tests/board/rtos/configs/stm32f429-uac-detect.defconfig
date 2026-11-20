@@ -1,0 +1,19 @@
+# F429 UAC microphone detection arm: OTG_HS full-speed host + CherryUSB's
+# DWC2 port + the first-party UAC1 host class.  One case brings the controller
+# up, waits for the class instance and prints the AudioControl/AudioStreaming
+# descriptor census.  It does not open the streaming interface, so this image
+# needs no SDRAM and no capture ring.
+#
+# The census answers whether the camera's audio function is a UAC1 microphone
+# at all: bcdADC, interface pair, input terminal, channels/bits, the sample
+# rate table and the isochronous IN endpoint's size and interval.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=65536
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_RUNNER_STACK_KB=24
+CONFIG_UAC_TARGET_RATE=16000
+CONFIG_CASES="uac_detect"

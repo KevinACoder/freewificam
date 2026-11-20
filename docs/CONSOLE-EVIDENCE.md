@@ -1687,3 +1687,76 @@ rtos: result fail cases=1/4 backend=freertos
 
 `uvc_detect` passes; the stream cases fail at the mode table. That is the
 expected result for this camera, not a transport failure.
+
+## STM32F429 UAC microphone (DWC2 full-speed ISO, 2026-11-20)
+
+Images: `stm32f429-uac-detect` (bin sha `237955d7…`, 58,280 B),
+`stm32f429-uac-mic` (bin sha `61557c7d…`, 71,512 B) and
+`stm32f429-uac-av` (bin sha `3261da9c…`, 78,564 B); camera Logitech
+Pro 9000 `046d:0990` on P2. Reset: relay cold boot. The microphone transcript
+is from the first of its two boots and the video+microphone transcript from
+the second of its two; the other boots' numbers are in the note below.
+
+Descriptor census (`stm32f429-uac-detect`):
+
+```text
+uac: connect vid=046d pid=0990 bus=0 dev=2 ac=2 as=3 bcdADC=0x0100
+uac: desc ac_intf=2 as_intf=3 bcdADC=0x0100 proto=0x00 ch=1 sub=2 bits=16 fmt=1 rates=16000 ep=0x86 mps=36 ival=1 dir=in sfctrl=1
+uac: terminal in=0x0201 in_id=1 out_id=3 src=5 fu=5 mute_ch=0 vol_ch=0
+uac: raw ac off=00 09 24 01 00 01 26 00 01 03 0c 24 02 01 01 02 00
+uac: raw ac off=10 01 00 00 00 00 09 24 03 03 01 01 01 05 00 08 24
+uac: raw ac off=20 06 05 01 01 03 00
+uac: raw as off=00 07 24 01 03 01 01 00 0b 24 02 01 01 02 10 01 80
+uac: raw as off=10 3e 00 07 25 01 01 00 00 00
+uac: detect PASS
+```
+
+The raw blocks decode to: AC header (`bcdADC` 0x0100, one AS interface = 3),
+input terminal 1 (type 0x0201, microphone, one channel), output terminal 3
+(USB streaming, source 5), feature unit 5 (source 1, master mute+volume),
+AS general (terminal link 3, PCM), format type I (one channel, 2 bytes,
+16 bits, one rate 16000) and the endpoint companion (sampling-frequency
+control).
+
+A microphone-only image (UAC class alone, no UVC class) gets zero-length
+packets for the whole window; the same image with the UVC class loaded and
+its descriptor census run captures audio:
+
+```text
+uac: mic rate=16000 ch=1 bits=16 ep=0x86 mps=36 packets=0 urbs=625 bytes=0 ...
+uac: mic FAIL no PCM arrived
+```
+
+The microphone window (`stm32f429-uac-mic`, UVC class present, no video
+stream; 10 s):
+
+```text
+uac: open rate=16000 ch=1 sub=2 bits=16 alt=1 ep=0x86 mps=36 setcur=ok getcur=16000 src=target
+uac: mic rate=16000 ch=1 bits=16 ep=0x86 mps=36 packets=10000 urbs=626 bytes=319994 read=319994 ms=10000 gaps=0 err=0 empty=0 overrun=0 shutdown=16 gap_first=0 err_run=0 err_first=0 err_last=0 err_mid=0 gap_max=0 nz=159997 peak=256 mute=0 unmuted=0
+uac: mic PASS
+```
+
+The video+microphone window (`stm32f429-uac-av`, 640x480 MJPEG + 16 kHz
+microphone, 20 s):
+
+```text
+uac: av video frames=297 dequeued=297 bytes=5352435 soi=297 eoi=297 max=18414 err=0 urb_err=0 dropped=1 invalid=0 timeouts=924
+uac: av audio rate=16000 ch=1 bits=16 packets=20004 urbs=1251 bytes=640114 read=639986 nz=319993 peak=228 gaps=0 err=0 empty=0 overrun=0 shutdown=12 gap_first=0 err_run=0 err_first=0 err_last=0 err_mid=0 gap_max=0 ms=20004
+uac: av PASS
+```
+
+The first microphone boot: 10,000 packets, 319,994 bytes, `gaps=0`,
+`err=0`, `nz=159,997`; the second: 319,992 bytes, `nz=159,988`.  The first
+video+microphone boot: video 297/297 frames, 4,859,221 bytes, 0 errors,
+1 dropped; audio 20,003 packets, 640,080 bytes, `gaps=0`, `err=0`,
+`nz=319,992`.
+
+`shutdown` counts the packets the stop path marked as not transferred; they
+are not transport errors.  A diagnostic boot that printed its start banner
+while the first URB was in flight cost seven 1 ms frames (`gaps=7`); the
+banner now prints before the first submit, and the windows above are clean.
+
+The camera needs its video function claimed before its microphone produces
+samples: without the UVC class the audio endpoint returns zero-length packets.
+The microphone image carries the UVC class and the `uvc_detect` census for
+that reason; the window itself measures audio only.

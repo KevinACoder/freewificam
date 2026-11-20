@@ -30,6 +30,15 @@ UVC_CASES = (
     "uvc_stream",
 )
 
+# The UAC1 microphone image's cases.  Same rule as UVC_CASES: parsed only when
+# a round asks for them, so a non-microphone image is not judged as missing
+# them.
+UAC_CASES = (
+    "uac_detect",
+    "uac_mic",
+    "uac_av",
+)
+
 CASES = (
     "tick",
     "cmsis2",
@@ -1446,6 +1455,71 @@ PATTERNS = {
     "uvc_fail": re.compile(
         r"uvc: (?P<case>[a-z_ ]+) FAIL (?P<reason>.+)$", re.MULTILINE
     ),
+    # The microphone image: bring-up, the descriptor census, the negotiated
+    # open, the single-microphone window and the video+microphone window.
+    "uac_host": re.compile(
+        r"uac: host up bus=(?P<bus>\d+) hcd=(?P<hcd>\w+) base=(?P<base>0x[0-9a-f]+)",
+        re.MULTILINE,
+    ),
+    "uac_connect": re.compile(
+        r"uac: connect vid=(?P<vid>[0-9a-f]{4}) pid=(?P<pid>[0-9a-f]{4}) "
+        r"bus=(?P<bus>\d+) dev=(?P<dev>\d+) ac=(?P<ac>\d+) as=(?P<as>\d+) "
+        r"bcdADC=0x(?P<bcdADC>[0-9a-f]{4})",
+        re.MULTILINE,
+    ),
+    "uac_desc": re.compile(
+        r"uac: desc ac_intf=(?P<ac_intf>\d+) as_intf=(?P<as_intf>\d+) "
+        r"bcdADC=0x(?P<bcdADC>[0-9a-f]{4}) proto=0x(?P<proto>[0-9a-f]{2}) "
+        r"ch=(?P<ch>\d+) sub=(?P<sub>\d+) bits=(?P<bits>\d+) fmt=(?P<fmt>\d+) "
+        r"rates=(?P<rates>[\d,\-]+) ep=0x(?P<ep>[0-9a-f]{2}) mps=(?P<mps>\d+) "
+        r"ival=(?P<ival>\d+) dir=(?P<dir>in|out) sfctrl=(?P<sfctrl>\d+)",
+        re.MULTILINE,
+    ),
+    "uac_open": re.compile(
+        r"uac: open rate=(?P<rate>\d+) ch=(?P<ch>\d+) sub=(?P<sub>\d+) "
+        r"bits=(?P<bits>\d+) alt=(?P<alt>\d+) ep=0x(?P<ep>[0-9a-f]{2}) "
+        r"mps=(?P<mps>\d+) setcur=(?P<setcur>\w+) getcur=(?P<getcur>\d+) "
+        r"src=(?P<src>[\w-]+)",
+        re.MULTILINE,
+    ),
+    "uac_mic": re.compile(
+        r"uac: mic rate=(?P<rate>\d+) ch=(?P<ch>\d+) bits=(?P<bits>\d+) "
+        r"ep=0x(?P<ep>[0-9a-f]{2}) mps=(?P<mps>\d+) packets=(?P<packets>\d+) "
+        r"urbs=(?P<urbs>\d+) bytes=(?P<bytes>\d+) read=(?P<read>\d+) "
+        r"ms=(?P<ms>\d+) gaps=(?P<gaps>\d+) err=(?P<err>\d+) "
+        r"empty=(?P<empty>\d+) overrun=(?P<overrun>\d+) "
+        r"shutdown=(?P<shutdown>\d+) gap_first=(?P<gap_first>\d+) "
+        r"err_run=(?P<err_run>\d+) err_first=(?P<err_first>\d+) "
+        r"err_last=(?P<err_last>\d+) err_mid=(?P<err_mid>\d+) "
+        r"gap_max=(?P<gap_max>\d+) nz=(?P<nz>\d+) "
+        r"peak=(?P<peak>\d+) mute=(?P<mute>-?\d+) unmuted=(?P<unmuted>\d+)",
+        re.MULTILINE,
+    ),
+    "uac_av_video": re.compile(
+        r"uac: av video frames=(?P<video_frames>\d+) dequeued=(?P<video_dequeued>\d+) "
+        r"bytes=(?P<video_bytes>\d+) soi=(?P<video_soi>\d+) eoi=(?P<video_eoi>\d+) "
+        r"max=(?P<video_max>\d+) err=(?P<video_err>\d+) "
+        r"urb_err=(?P<video_urb_err>\d+) dropped=(?P<video_dropped>\d+) "
+        r"invalid=(?P<video_invalid>\d+) timeouts=(?P<video_timeouts>\d+)",
+        re.MULTILINE,
+    ),
+    "uac_av_audio": re.compile(
+        r"uac: av audio rate=(?P<audio_rate>\d+) ch=(?P<audio_ch>\d+) "
+        r"bits=(?P<audio_bits>\d+) packets=(?P<audio_packets>\d+) "
+        r"urbs=(?P<audio_urbs>\d+) bytes=(?P<audio_bytes>\d+) "
+        r"read=(?P<audio_read>\d+) nz=(?P<audio_nz>\d+) "
+        r"peak=(?P<audio_peak>\d+) gaps=(?P<audio_gaps>\d+) "
+        r"err=(?P<audio_err>\d+) empty=(?P<audio_empty>\d+) "
+        r"overrun=(?P<audio_overrun>\d+) shutdown=(?P<audio_shutdown>\d+) "
+        r"gap_first=(?P<audio_gap_first>\d+) "
+        r"err_run=(?P<audio_err_run>\d+) err_first=(?P<audio_err_first>\d+) "
+        r"err_last=(?P<audio_err_last>\d+) err_mid=(?P<audio_err_mid>\d+) "
+        r"gap_max=(?P<audio_gap_max>\d+) ms=(?P<ms>\d+)",
+        re.MULTILINE,
+    ),
+    "uac_fail": re.compile(
+        r"uac: (?P<case>[a-z_ ]+) FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
     # --- RTL8851BU (rtw89, USB) -------------------------------------------
     "rtw89_c3_drivers": re.compile(
         r"rtw89_c3: usb drivers=(?P<n>\d+)", re.MULTILINE
@@ -2327,7 +2401,7 @@ def parse(text: str) -> dict:
         found[name] = [m.groupdict() for m in pattern.finditer(text)]
     found["case_verdicts"] = {
         case: re.findall(rf"rtos: case {case} (PASS|FAIL)", text)
-        for case in CASES + UVC_CASES
+        for case in CASES + UVC_CASES + UAC_CASES
     }
     return found
 
@@ -4992,6 +5066,187 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"uvc_stream: {frames} frames, {stream['bytes']} bytes, "
                 f"{stream['fps']} fps, {stream['kbit']} kbit/s, "
                 f"avg={stream['avg']} max={stream['max']}"
+            )
+
+    # The microphone image.  A PASS carries its census or its window numbers;
+    # the byte budget is computed from the line's own rate/channels/bits/ms so
+    # a wrong sample rate cannot pass on a matching byte count.
+    uac_fail = found["uac_fail"]
+    if uac_fail:
+        errors.append(f"uac: {uac_fail['reason']}")
+
+    if cases.get("uac_detect", {}).get("verdict") == "pass":
+        host = found["uac_host"]
+        connect = found["uac_connect"]
+        desc = found["uac_desc"]
+        if not host:
+            errors.append("uac_detect: PASS without the controller line")
+        if not connect:
+            errors.append("uac_detect: PASS without the connect line")
+        else:
+            want_vid = expect.get("uac_vid", "046d")
+            want_pid = expect.get("uac_pid", "0990")
+            if connect["vid"] != want_vid or connect["pid"] != want_pid:
+                errors.append(
+                    f"uac_detect: device {connect['vid']}:{connect['pid']} "
+                    f"is not the expected camera {want_vid}:{want_pid}"
+                )
+            if host and connect["bus"] != host["bus"]:
+                errors.append(
+                    f"uac_detect: camera on bus {connect['bus']}, "
+                    f"controller on bus {host['bus']}"
+                )
+            if connect["ac"] == connect["as"]:
+                errors.append(
+                    f"uac_detect: control and streaming share interface "
+                    f"{connect['ac']}"
+                )
+        if not desc:
+            errors.append("uac_detect: PASS without the descriptor census")
+        else:
+            if desc["bcdADC"] != "0100":
+                errors.append(
+                    f"uac_detect: bcdADC=0x{desc['bcdADC']} is not UAC1"
+                )
+            if desc["proto"] != "00":
+                errors.append(f"uac_detect: protocol 0x{desc['proto']} is not UAC1")
+            if desc["dir"] != "in":
+                errors.append(f"uac_detect: streaming endpoint direction {desc['dir']}")
+            if desc["fmt"] != "1":
+                errors.append(f"uac_detect: format tag {desc['fmt']} is not PCM")
+            if desc["sub"] != "2" or desc["bits"] != "16":
+                errors.append(
+                    f"uac_detect: {desc['sub']}-byte/{desc['bits']}-bit samples, "
+                    f"this line does 16-bit"
+                )
+            if int(desc["ch"]) < 1:
+                errors.append("uac_detect: no channels")
+            if not (1 <= int(desc["mps"]) <= 1023):
+                errors.append(
+                    f"uac_detect: endpoint bound {desc['mps']} outside 1..1023"
+                )
+            if desc["ival"] != "1":
+                errors.append(
+                    f"uac_detect: endpoint interval {desc['ival']}, full speed needs 1"
+                )
+            want_ac = expect.get("uac_ac", "2")
+            want_as = expect.get("uac_as", "3")
+            if desc["ac_intf"] != want_ac or desc["as_intf"] != want_as:
+                errors.append(
+                    f"uac_detect: interfaces ac={desc['ac_intf']}/"
+                    f"as={desc['as_intf']}, expected {want_ac}/{want_as}"
+                )
+            want_rate = expect.get("uac_rate", "16000")
+            rate_ok = False
+            for part in desc["rates"].split(","):
+                if "-" in part:
+                    lo, hi = part.split("-", 1)
+                    if int(lo) <= int(want_rate) <= int(hi):
+                        rate_ok = True
+                elif part == want_rate:
+                    rate_ok = True
+            if not rate_ok:
+                errors.append(
+                    f"uac_detect: target rate {want_rate} not in "
+                    f"[{desc['rates']}]"
+                )
+            notes.append(
+                f"uac_detect: ac={desc['ac_intf']} as={desc['as_intf']} "
+                f"bcdADC=0x{desc['bcdADC']} ch={desc['ch']} "
+                f"{desc['sub']}B/{desc['bits']}bit rates={desc['rates']} "
+                f"ep=0x{desc['ep']} mps={desc['mps']} ival={desc['ival']} "
+                f"sfctrl={desc['sfctrl']}"
+            )
+
+    if cases.get("uac_mic", {}).get("verdict") == "pass":
+        row = found["uac_mic"]
+        if not row:
+            errors.append("uac_mic: PASS without the window line")
+        else:
+            rate = int(row["rate"])
+            ch = int(row["ch"])
+            bits = int(row["bits"])
+            ms = int(row["ms"])
+            expected = rate * ch * (bits // 8) * ms / 1000.0
+            if int(row["gaps"]) != 0:
+                errors.append(f"uac_mic: {row['gaps']} missed USB frames")
+            if int(row["err"]) != 0:
+                errors.append(f"uac_mic: {row['err']} transport errors")
+            if int(row["overrun"]) != 0:
+                errors.append(f"uac_mic: ring overrun {row['overrun']} bytes")
+            if int(row["nz"]) == 0:
+                errors.append("uac_mic: PCM is all zero")
+            if not (8000 <= ms <= 12000):
+                errors.append(f"uac_mic: window {ms} ms outside 8000..12000")
+            if expected == 0 or not (
+                0.80 * expected <= int(row["bytes"]) <= 1.20 * expected
+            ):
+                errors.append(
+                    f"uac_mic: bytes={row['bytes']} outside 80-120% of "
+                    f"{int(expected)}"
+                )
+            if int(row["packets"]) == 0:
+                errors.append("uac_mic: no packets")
+            notes.append(
+                f"uac_mic: rate={rate} ch={ch} bits={bits} "
+                f"packets={row['packets']} bytes={row['bytes']} "
+                f"gaps={row['gaps']} err={row['err']} nz={row['nz']} "
+                f"peak={row['peak']} ms={ms}"
+            )
+
+    if cases.get("uac_av", {}).get("verdict") == "pass":
+        vrow = found["uac_av_video"]
+        arow = found["uac_av_audio"]
+        if not vrow or not arow:
+            errors.append("uac_av: PASS without both window lines")
+        else:
+            min_frames = int(expect.get("uac_video_min_frames", 200))
+            frames = int(vrow["video_frames"])
+            ms = int(arow["ms"])
+            rate = int(arow["audio_rate"])
+            ch = int(arow["audio_ch"])
+            bits = int(arow["audio_bits"])
+            expected = rate * ch * (bits // 8) * ms / 1000.0
+            if frames < min_frames:
+                errors.append(
+                    f"uac_av: {frames} video frames in {ms} ms "
+                    f"(floor {min_frames})"
+                )
+            if int(vrow["video_err"]) != 0:
+                errors.append(f"uac_av: {vrow['video_err']} video packet errors")
+            if int(vrow["video_urb_err"]) != 0:
+                errors.append(f"uac_av: {vrow['video_urb_err']} video urb errors")
+            if int(vrow["video_soi"]) != frames or int(vrow["video_eoi"]) != frames:
+                errors.append(
+                    f"uac_av: jpeg soi={vrow['video_soi']} eoi={vrow['video_eoi']} "
+                    f"frames={frames}"
+                )
+            if int(arow["audio_gaps"]) != 0:
+                errors.append(f"uac_av: {arow['audio_gaps']} audio frames missed")
+            if int(arow["audio_err"]) != 0:
+                errors.append(f"uac_av: {arow['audio_err']} audio transport errors")
+            if int(arow["audio_overrun"]) != 0:
+                errors.append(
+                    f"uac_av: audio ring overrun {arow['audio_overrun']} bytes"
+                )
+            if int(arow["audio_nz"]) == 0:
+                errors.append("uac_av: audio PCM is all zero")
+            if int(arow["audio_packets"]) == 0:
+                errors.append("uac_av: no audio packets")
+            if not (15000 <= ms <= 25000):
+                errors.append(f"uac_av: window {ms} ms outside 15000..25000")
+            if expected == 0 or not (
+                0.80 * expected <= int(arow["audio_bytes"]) <= 1.20 * expected
+            ):
+                errors.append(
+                    f"uac_av: audio bytes={arow['audio_bytes']} outside "
+                    f"80-120% of {int(expected)}"
+                )
+            notes.append(
+                f"uac_av: video {frames} frames / {vrow['video_soi']} soi / "
+                f"{vrow['video_err']} err; audio {arow['audio_packets']} packets "
+                f"/ {arow['audio_bytes']} bytes / gaps={arow['audio_gaps']} / "
+                f"err={arow['audio_err']} / ms={ms}"
             )
 
     if cases.get("sdio_mci", {}).get("verdict") == "pass":

@@ -162,4 +162,25 @@ void usbh_console_printf(const char *fmt, ...);
 #define CONFIG_UVC_STREAM_PRIO	1
 #endif
 
+/* --- audio class (UAC1 microphone) ---------------------------------------- */
+
+/* One class instance per camera microphone; only the UAC images compile
+ * class/audio.  The camera's AudioControl and AudioStreaming interfaces are
+ * claimed by the same instance. */
+#ifndef CONFIG_USBHOST_MAX_AUDIO_CLASS
+#define CONFIG_USBHOST_MAX_AUDIO_CLASS	1
+#endif
+
+/* The capture ring and its resubmit cadence.  One urb spans 16 one-millisecond
+ * packets: the DWC2 engine completes it at the last packet and the completion
+ * callback arms the next one inside that frame, so no task scheduling sits
+ * between two urbs.  One in-flight urb is the DWC2 engine's contract; a second
+ * one for the same endpoint would be refused with -USB_ERR_BUSY. */
+#ifndef CONFIG_UAC_STREAM_PACKETS
+#define CONFIG_UAC_STREAM_PACKETS	16
+#endif
+#ifndef CONFIG_UAC_RING_MS
+#define CONFIG_UAC_RING_MS	200
+#endif
+
 #endif /* FREEWIFICAM_STM32F429_USB_CONFIG_H */

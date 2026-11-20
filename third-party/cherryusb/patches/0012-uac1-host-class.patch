@@ -1,0 +1,1489 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zhugengyu <zhugengyu2023@gmail.com>
+Date: Fri, 20 Nov 2026 16:00:00 +0800
+Subject: [PATCH] class/audio: add the UAC1 host microphone class and PCM engine
+
+The F429 camera line needed the camera's UAC1 microphone (AudioControl
+interface 2, AudioStreaming interface 3) alongside its UVC video.  The pin
+carries no host audio class - its host-UAC framework is the commercial tier -
+so this adds the subset the camera needs, written from the USB Audio Class 1.0
+specification rather than from the vendor host-audio source.
+
+The class claims both interfaces, parses the class-specific descriptors while
+the raw configuration descriptor is still alive (the core frees it after
+enumeration), and exposes the two class requests one microphone needs:
+SET_INTERFACE to the streaming alternate setting, and the endpoint's sampling
+frequency control (with GET_CUR readback).  It refuses UAC2, OUT endpoints,
+PCM formats other than 16-bit type I, intervals other than one frame, and
+non-microphone terminals with a named reason, so the descriptor census is the
+only place a wrong device shows up.
+
+The stream half keeps one isochronous urb of 16 one-millisecond packets on the
+streaming IN endpoint and copies each packet's actual_length bytes into a
+single-producer/single-consumer PCM ring.  The next urb is armed from the
+urb-completion callback (interrupt context) rather than from a pump task: the
+DWC2 engine completes the urb at its last packet and the next one must be in
+the frame list before the next 1 ms frame, which a task wake cannot guarantee
+next to the video pump.  A 50 ms settle after SET_INTERFACE/SET_CUR keeps the
+camera's first urb from arriving before its audio engine is running.
+
+The camera's audio function produces samples only after the video function has
+been claimed: a microphone-only image gets zero-length packets.  That is the
+image's composition problem, not the class's - the F429 microphone image
+carries the UVC class and its descriptor census for it.
+diff --git a/class/audio/usb_audio.h b/class/audio/usb_audio.h
+new file mode 100644
+--- /dev/null
++++ b/class/audio/usb_audio.h
+@@ -0,0 +1,72 @@
++/*
++ * Copyright (c) 2026, zhugengyu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * USB Audio Class 1.0 vocabulary used by the host microphone class.  Only the
++ * subset this tree's camera needs is defined: the AC/AS interface subclasses,
++ * the class-specific descriptor types and subtypes, the class request codes,
++ * the terminal types, the feature-unit and endpoint control selectors, and
++ * format type I.  Field layouts are read by byte offset in usbh_uac.c, the
++ * same way class/video reads its descriptors, because the descriptors are
++ * variable length.
++ */
++#ifndef USB_AUDIO_H
++#define USB_AUDIO_H
++
++/* Audio interface subclass codes (Audio 1.0, table A-2). */
++#define AUDIO_SUBCLASS_UNDEFINED      0x00U
++#define AUDIO_SUBCLASS_AUDIOCONTROL   0x01U
++#define AUDIO_SUBCLASS_AUDIOSTREAMING 0x02U
++#define AUDIO_SUBCLASS_MIDISTREAMING  0x03U
++
++/* Audio interface protocol codes (Audio 1.0, table A-3; UAC2 uses 0x20). */
++#define AUDIO_PROTOCOL_UNDEFINED 0x00U
++#define AUDIO_PROTOCOL_V2        0x20U
++
++/* Class-specific descriptor types (Audio 1.0, table A-4). */
++#define AUDIO_CS_INTERFACE_DESCRIPTOR_TYPE 0x24U
++#define AUDIO_CS_ENDPOINT_DESCRIPTOR_TYPE  0x25U
++
++/* AudioControl interface descriptor subtypes (Audio 1.0, table A-5). */
++#define AUDIO_AC_HEADER_DESCRIPTOR     0x01U
++#define AUDIO_AC_INPUT_TERMINAL        0x02U
++#define AUDIO_AC_OUTPUT_TERMINAL       0x03U
++#define AUDIO_AC_MIXER_UNIT            0x04U
++#define AUDIO_AC_SELECTOR_UNIT         0x05U
++#define AUDIO_AC_FEATURE_UNIT          0x06U
++
++/* AudioStreaming interface descriptor subtypes (Audio 1.0, table A-6). */
++#define AUDIO_AS_GENERAL_DESCRIPTOR    0x01U
++#define AUDIO_AS_FORMAT_TYPE_DESCRIPTOR 0x02U
++
++/* AudioStreaming endpoint descriptor subtype (Audio 1.0, table A-7). */
++#define AUDIO_EP_GENERAL_DESCRIPTOR 0x01U
++
++/* Class-specific request codes (Audio 1.0, table A-9). */
++#define AUDIO_REQUEST_SET_CUR 0x01U
++#define AUDIO_REQUEST_GET_CUR 0x81U
++
++/* Terminal types (Audio 1.0, table A-17). */
++#define AUDIO_TERMINAL_USB_STREAMING    0x0101U
++#define AUDIO_TERMINAL_INPUT_MICROPHONE 0x0201U
++#define AUDIO_TERMINAL_OUTPUT_SPEAKER   0x0301U
++
++/* Feature unit control selectors (Audio 1.0, table A-10.2). */
++#define AUDIO_FU_MUTE_CONTROL   0x01U
++#define AUDIO_FU_VOLUME_CONTROL 0x02U
++
++/* Endpoint control selectors (Audio 1.0, table A-10.3). */
++#define AUDIO_EP_SAMPLING_FREQ_CONTROL 0x01U
++
++/* Format type codes (Audio 1.0, table A-14). */
++#define AUDIO_FORMAT_TYPE_I 0x01U
++
++/* Format tag for PCM (Audio 1.0, table A-15). */
++#define AUDIO_FORMAT_TAG_PCM 0x0001U
++
++/* AudioStreaming endpoint companion bmAttributes (Audio 1.0, A.7.1). */
++#define AUDIO_EP_ATTR_SAMPLING_FREQ 0x01U
++#define AUDIO_EP_ATTR_PITCH         0x02U
++
++#endif /* USB_AUDIO_H */
+\ No newline at end of file
+diff --git a/class/audio/usbh_uac.h b/class/audio/usbh_uac.h
+new file mode 100644
+--- /dev/null
++++ b/class/audio/usbh_uac.h
+@@ -0,0 +1,136 @@
++/*
++ * Copyright (c) 2026, zhugengyu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Host-side USB Audio Class 1.0 microphone: the class driver half.  It claims
++ * the AudioControl interface (class 0x01 subclass 0x01) and the
++ * AudioStreaming interface (0x01/0x02), copies and parses the class-specific
++ * descriptors while the raw configuration descriptor is still alive, and
++ * provides the control requests the capture engine needs (alternate setting,
++ * sampling frequency, mute).
++ *
++ * This is deliberately not a general UAC framework: it supports one
++ * microphone stream, format type I PCM, 16-bit samples, discrete sample
++ * rates, and isochronous IN endpoints at one frame per packet.  Anything
++ * outside that set is refused with a named reason by the descriptor census
++ * instead of being half-supported.
++ */
++#ifndef USBH_UAC_H
++#define USBH_UAC_H
++
++#include "usb_audio.h"
++
++#ifndef CONFIG_USBHOST_MAX_AUDIO_CLASS
++#define CONFIG_USBHOST_MAX_AUDIO_CLASS 1
++#endif
++
++/* The camera's UAC1 rate table is one or two entries; eight is the cap a
++ * continuous-rate descriptor's two endpoints would also fit inside. */
++#ifndef CONFIG_USBHOST_UAC_MAX_RATES
++#define CONFIG_USBHOST_UAC_MAX_RATES 8
++#endif
++
++/* Raw class-specific descriptor bytes kept for the census: the camera's AC
++ * block is under 100 bytes and the AS block under 100; 192 is the same
++ * "enough with margin" choice the video line made for its tables. */
++#ifndef CONFIG_USBHOST_UAC_RAW_BYTES
++#define CONFIG_USBHOST_UAC_RAW_BYTES 192
++#endif
++
++struct usbh_uac {
++    struct usbh_hubport *hport;
++    struct usb_endpoint_descriptor *isoin;
++    uint8_t ctrl_intf;
++    uint8_t stream_intf;
++    uint8_t minor;
++
++    uint16_t bcdADC;
++    uint8_t protocol;
++
++    /* 0 = the descriptor set is usable; negative = the census refusal.  The
++     * instance is published either way so the application's detect case can
++     * print the reason instead of waiting for a class that will never come. */
++    int error;
++    char reason[48];
++
++    /* AudioControl: the microphone path. */
++    uint8_t ac_input_terminal_id;
++    uint16_t ac_input_terminal_type;
++    uint8_t ac_output_terminal_id;
++    uint8_t ac_output_terminal_source;
++    uint8_t channels;
++    uint16_t channel_config;
++
++    /* Feature unit (0 = absent).  bmaControls entry 0 is the master, entry i
++     * is channel i; a control selector is present when its bit is set in an
++     * entry.  fu_mute_ch / fu_volume_ch are the channel number to address
++     * (0 = master) or 0xff when the unit does not carry the control. */
++    uint8_t fu_id;
++    uint8_t fu_bcontrolsize;
++    uint8_t fu_mute_ch;
++    uint8_t fu_volume_ch;
++
++    /* AudioStreaming: format type I and the streaming endpoint. */
++    uint8_t as_terminal_link;
++    uint8_t as_format_type;
++    uint16_t as_format_tag;
++    uint8_t as_subframe_size;
++    uint8_t as_bit_resolution;
++    uint8_t as_num_rates;
++    uint32_t as_rates[CONFIG_USBHOST_UAC_MAX_RATES];
++    uint8_t as_rate_type; /* 0 = continuous range, else discrete count */
++    uint32_t as_rate_min;
++    uint32_t as_rate_max;
++    uint8_t as_alt;
++    uint16_t as_mps;
++    uint8_t as_interval;
++    uint8_t as_sfctrl;
++    uint8_t as_ep_addr;
++    bool as_ep_in;
++
++    /* Session state. */
++    bool is_opened;
++    bool alt_set;
++    uint32_t rate;
++    uint8_t rate_set; /* 1 = SET_CUR acknowledged, 2 = no control, 3 = stalled */
++    uint32_t get_rate;
++    bool mute_known;
++    bool muted;
++
++    uint8_t raw_ac[CONFIG_USBHOST_UAC_RAW_BYTES];
++    uint8_t raw_ac_len;
++    uint8_t raw_as[CONFIG_USBHOST_UAC_RAW_BYTES];
++    uint8_t raw_as_len;
++
++    void *user_data;
++};
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Open the streaming interface at `alt`, set the sampling frequency when the
++ * endpoint carries the control, and bind the endpoint.  Idempotent.
++ * Returns 0, or a negative USB error. */
++int usbh_uac_open(struct usbh_uac *uac, uint32_t rate, uint8_t alt);
++
++/* Leave the streaming interface at alternate setting 0.  The camera family is
++ * not closed by the capture engine (a leave can wedge its class requests for
++ * the rest of the boot), so this is only for disconnect/cleanup paths. */
++int usbh_uac_close(struct usbh_uac *uac);
++
++/* Feature-unit mute: GET_CUR / SET_CUR.  Returns the mute state (0/1) or a
++ * negative error when the unit has no mute control. */
++int usbh_uac_get_mute(struct usbh_uac *uac);
++int usbh_uac_set_mute(struct usbh_uac *uac, bool mute);
++
++/* Class hooks the application overrides (weak in the class). */
++void usbh_uac_run(struct usbh_uac *uac);
++void usbh_uac_stop(struct usbh_uac *uac);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* USBH_UAC_H */
+\ No newline at end of file
+diff --git a/class/audio/usbh_uac.c b/class/audio/usbh_uac.c
+new file mode 100644
+--- /dev/null
++++ b/class/audio/usbh_uac.c
+@@ -0,0 +1,697 @@
++/*
++ * Copyright (c) 2026, zhugengyu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Host-side USB Audio Class 1.0 microphone: enumeration, descriptor census and
++ * the control requests of one capture stream.
++ *
++ * The class deliberately copies every descriptor field it needs while
++ * `hport->raw_config_desc` is alive: the core frees that buffer at the end of
++ * enumeration, so a census that reads it later would race the hub thread.
++ * The camera's AudioControl interface is claimed first (it names the
++ * AudioStreaming interface in its header); the AudioStreaming class-info row
++ * exists so the core claims that interface too, and its connect is a no-op
++ * because the AC pass already parsed both blocks.
++ */
++#include <stdio.h>
++
++#include "usbh_core.h"
++#include "usbh_uac.h"
++
++#undef USB_DBG_TAG
++#define USB_DBG_TAG "usbh_uac"
++#include "usb_log.h"
++
++#define DEV_FORMAT "/dev/audio%d"
++
++/* General descriptor field offsets (the same style class/video uses: the
++ * descriptors are variable length, so fields are read by offset). */
++#define DESC_bLength             0
++#define DESC_bDescriptorType      1
++#define DESC_bDescriptorSubType   2
++#define INTF_DESC_bInterfaceNumber   2
++#define INTF_DESC_bAlternateSetting  3
++
++USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t g_uac_buf[USB_ALIGN_UP(64, CONFIG_USB_ALIGN_SIZE)];
++
++static struct usbh_uac g_uac_class[CONFIG_USBHOST_MAX_AUDIO_CLASS];
++static uint32_t g_devinuse;
++
++static struct usbh_uac *usbh_uac_class_alloc(void)
++{
++    uint8_t devno;
++
++    for (devno = 0; devno < CONFIG_USBHOST_MAX_AUDIO_CLASS; devno++) {
++        if ((g_devinuse & (1U << devno)) == 0) {
++            g_devinuse |= (1U << devno);
++            memset(&g_uac_class[devno], 0, sizeof(struct usbh_uac));
++            g_uac_class[devno].minor = devno;
++            g_uac_class[devno].stream_intf = 0xff;
++            g_uac_class[devno].fu_mute_ch = 0xff;
++            g_uac_class[devno].fu_volume_ch = 0xff;
++            return &g_uac_class[devno];
++        }
++    }
++    return NULL;
++}
++
++static void usbh_uac_class_free(struct usbh_uac *uac)
++{
++    uint8_t devno = uac->minor;
++
++    if (devno < 32) {
++        g_devinuse &= ~(1U << devno);
++    }
++    memset(uac, 0, sizeof(struct usbh_uac));
++}
++
++static void uac_fail(struct usbh_uac *uac, const char *reason)
++{
++    snprintf(uac->reason, sizeof(uac->reason), "%s", reason);
++    uac->error = -USB_ERR_NOTSUPP;
++}
++
++static void uac_raw_copy(uint8_t *dst, uint8_t *lenp, const uint8_t *p, uint8_t len)
++{
++    if ((uint32_t)*lenp + (uint32_t)len <= (uint32_t)CONFIG_USBHOST_UAC_RAW_BYTES) {
++        memcpy(dst + *lenp, p, len);
++        *lenp = (uint8_t)(*lenp + len);
++    }
++}
++
++static bool uac_terminal_is_mic(uint16_t type)
++{
++    /* Microphone, desktop microphone, personal microphone, omni microphone,
++     * microphone array: all share the 0x02xx terminal class. */
++    return (type & 0xff00U) == 0x0200U;
++}
++
++/* Pass 1: the AudioControl header names the AudioStreaming interface. */
++static void uac_find_stream_interface(struct usbh_uac *uac)
++{
++    const uint8_t *p = uac->hport->raw_config_desc;
++    uint32_t total = uac->hport->config.config_desc.wTotalLength;
++    uint32_t off = 0;
++    uint8_t cur_iface = 0xff;
++
++    if (p == NULL) {
++        return;
++    }
++    while ((off + 2U) <= total) {
++        uint8_t len = p[DESC_bLength];
++
++        if ((len < 2U) || ((off + len) > total)) {
++            break;
++        }
++        if (p[DESC_bDescriptorType] == USB_DESCRIPTOR_TYPE_INTERFACE) {
++            cur_iface = p[INTF_DESC_bInterfaceNumber];
++        } else if ((p[DESC_bDescriptorType] == AUDIO_CS_INTERFACE_DESCRIPTOR_TYPE) &&
++                   (cur_iface == uac->ctrl_intf) &&
++                   (p[DESC_bDescriptorSubType] == AUDIO_AC_HEADER_DESCRIPTOR) &&
++                   (len >= 8U)) {
++            uac->bcdADC = (uint16_t)((uint16_t)p[3] | ((uint16_t)p[4] << 8));
++            if ((p[7] > 0U) && (len >= 9U)) {
++                uac->stream_intf = p[8];
++            }
++            return;
++        }
++        off += len;
++        p += len;
++    }
++}
++
++/* Pass 2: AudioControl fields (input/output terminal, feature unit). */
++static void uac_parse_ac(struct usbh_uac *uac)
++{
++    const uint8_t *p = uac->hport->raw_config_desc;
++    uint32_t total = uac->hport->config.config_desc.wTotalLength;
++    uint32_t off = 0;
++    uint8_t cur_iface = 0xff;
++    bool mic_terminal_seen = false;
++    bool any_input_seen = false;
++
++    if (p == NULL) {
++        return;
++    }
++    while ((off + 2U) <= total) {
++        uint8_t len = p[DESC_bLength];
++
++        if ((len < 2U) || ((off + len) > total)) {
++            break;
++        }
++        if (p[DESC_bDescriptorType] == USB_DESCRIPTOR_TYPE_INTERFACE) {
++            cur_iface = p[INTF_DESC_bInterfaceNumber];
++        } else if ((p[DESC_bDescriptorType] == AUDIO_CS_INTERFACE_DESCRIPTOR_TYPE) &&
++                   (cur_iface == uac->ctrl_intf)) {
++            uac_raw_copy(uac->raw_ac, &uac->raw_ac_len, p, len);
++
++            switch (p[DESC_bDescriptorSubType]) {
++                case AUDIO_AC_INPUT_TERMINAL:
++                    if (len >= 8U) {
++                        uint8_t id = p[3];
++                        uint16_t type = (uint16_t)((uint16_t)p[4] | ((uint16_t)p[5] << 8));
++
++                        if (!mic_terminal_seen &&
++                            (uac_terminal_is_mic(type) || !any_input_seen)) {
++                            /* Prefer the microphone terminal; a first non-mic
++                             * terminal is kept only until a mic appears. */
++                            uac->ac_input_terminal_id = id;
++                            uac->ac_input_terminal_type = type;
++                            uac->channels = p[7];
++                            if (len >= 10U) {
++                                uac->channel_config = (uint16_t)((uint16_t)p[8] | ((uint16_t)p[9] << 8));
++                            }
++                            any_input_seen = true;
++                            mic_terminal_seen = uac_terminal_is_mic(type);
++                        }
++                    }
++                    break;
++
++                case AUDIO_AC_OUTPUT_TERMINAL:
++                    if (len >= 9U) {
++                        uac->ac_output_terminal_id = p[3];
++                        uac->ac_output_terminal_source = p[7];
++                    }
++                    break;
++
++                case AUDIO_AC_FEATURE_UNIT:
++                    if ((len >= 7U) && (p[5] != 0U)) {
++                        uint8_t csize = p[5];
++                        uint8_t entries = (uint8_t)((len - 6U) / csize);
++                        uint8_t i, b;
++
++                        uac->fu_id = p[3];
++                        uac->fu_bcontrolsize = csize;
++                        for (i = 0; i < entries; i++) {
++                            uint32_t bits = 0;
++
++                            for (b = 0; (b < csize) && (b < 4U); b++) {
++                                if ((6U + (uint32_t)i * csize + b) < len) {
++                                    bits |= (uint32_t)p[6U + (uint32_t)i * csize + b] << (8U * b);
++                                }
++                            }
++                            if ((bits & 0x0001U) != 0U) {
++                                if (i == 0U) {
++                                    uac->fu_mute_ch = 0;
++                                } else if (uac->fu_mute_ch == 0xffU) {
++                                    uac->fu_mute_ch = (uint8_t)(i - 1U);
++                                }
++                            }
++                            if ((bits & 0x0002U) != 0U) {
++                                if (i == 0U) {
++                                    uac->fu_volume_ch = 0;
++                                } else if (uac->fu_volume_ch == 0xffU) {
++                                    uac->fu_volume_ch = (uint8_t)(i - 1U);
++                                }
++                            }
++                        }
++                    }
++                    break;
++
++                default:
++                    break;
++            }
++        }
++        off += len;
++        p += len;
++    }
++}
++
++/* Pass 2: AudioStreaming general/format blocks and the endpoint companion. */
++static void uac_parse_as(struct usbh_uac *uac)
++{
++    const uint8_t *p = uac->hport->raw_config_desc;
++    uint32_t total = uac->hport->config.config_desc.wTotalLength;
++    uint32_t off = 0;
++    uint8_t cur_iface = 0xff;
++    uint8_t cur_alt = 0xff;
++    uint8_t ep_attrs[CONFIG_USBHOST_MAX_INTF_ALTSETTINGS];
++    bool have_attrs = false;
++
++    memset(ep_attrs, 0, sizeof(ep_attrs));
++    if (p == NULL) {
++        return;
++    }
++    while ((off + 2U) <= total) {
++        uint8_t len = p[DESC_bLength];
++
++        if ((len < 2U) || ((off + len) > total)) {
++            break;
++        }
++        if (p[DESC_bDescriptorType] == USB_DESCRIPTOR_TYPE_INTERFACE) {
++            cur_iface = p[INTF_DESC_bInterfaceNumber];
++            cur_alt = p[INTF_DESC_bAlternateSetting];
++        } else if ((p[DESC_bDescriptorType] == AUDIO_CS_INTERFACE_DESCRIPTOR_TYPE) &&
++                   (cur_iface == uac->stream_intf)) {
++            uac_raw_copy(uac->raw_as, &uac->raw_as_len, p, len);
++
++            switch (p[DESC_bDescriptorSubType]) {
++                case AUDIO_AS_GENERAL_DESCRIPTOR:
++                    if (len >= 7U) {
++                        uac->as_terminal_link = p[3];
++                        uac->as_format_tag = (uint16_t)((uint16_t)p[5] | ((uint16_t)p[6] << 8));
++                    }
++                    break;
++
++                case AUDIO_AS_FORMAT_TYPE_DESCRIPTOR:
++                    if (len >= 8U) {
++                        uint8_t n = p[7];
++
++                        uac->as_format_type = p[3];
++                        uac->as_subframe_size = p[5];
++                        uac->as_bit_resolution = p[6];
++                        uac->as_rate_type = n;
++                        if (uac->channels == 0U) {
++                            uac->channels = p[4];
++                        }
++                        if (n == 0U) {
++                            if (len >= 14U) {
++                                uac->as_rate_min = (uint32_t)p[8] | ((uint32_t)p[9] << 8) | ((uint32_t)p[10] << 16);
++                                uac->as_rate_max = (uint32_t)p[11] | ((uint32_t)p[12] << 8) | ((uint32_t)p[13] << 16);
++                            }
++                        } else {
++                            for (uint8_t i = 0; (i < n) && (i < CONFIG_USBHOST_UAC_MAX_RATES) &&
++                                                ((8U + 3U * (i + 1U)) <= len); i++) {
++                                uac->as_rates[i] = (uint32_t)p[8U + 3U * i] |
++                                                   ((uint32_t)p[9U + 3U * i] << 8) |
++                                                   ((uint32_t)p[10U + 3U * i] << 16);
++                                uac->as_num_rates++;
++                            }
++                        }
++                    }
++                    break;
++
++                default:
++                    break;
++            }
++        } else if ((p[DESC_bDescriptorType] == AUDIO_CS_ENDPOINT_DESCRIPTOR_TYPE) &&
++                   (cur_iface == uac->stream_intf)) {
++            uac_raw_copy(uac->raw_as, &uac->raw_as_len, p, len);
++            if ((len >= 4U) && (p[DESC_bDescriptorSubType] == AUDIO_EP_GENERAL_DESCRIPTOR) &&
++                (cur_alt < CONFIG_USBHOST_MAX_INTF_ALTSETTINGS)) {
++                ep_attrs[cur_alt] = p[3];
++                have_attrs = true;
++            }
++        }
++        off += len;
++        p += len;
++    }
++
++    /* The endpoint is the first AudioStreaming alternate setting that carries
++     * an isochronous IN endpoint; its companion's attributes say whether the
++     * sampling frequency is software-selectable. */
++    {
++        const struct usbh_interface *intf = &uac->hport->config.intf[uac->stream_intf];
++
++        for (uint8_t alt = 1; alt < intf->altsetting_num; alt++) {
++            const struct usb_endpoint_descriptor *ep = &intf->altsetting[alt].ep[0].ep_desc;
++
++            if (ep->bLength == 0U) {
++                continue;
++            }
++            if (USB_GET_ENDPOINT_TYPE(ep->bmAttributes) != USB_ENDPOINT_TYPE_ISOCHRONOUS) {
++                continue;
++            }
++            if ((ep->bEndpointAddress & 0x80U) == 0U) {
++                continue;
++            }
++            uac->as_alt = alt;
++            uac->isoin = (struct usb_endpoint_descriptor *)ep;
++            uac->as_mps = (uint16_t)(ep->wMaxPacketSize & USB_MAXPACKETSIZE_MASK);
++            uac->as_interval = ep->bInterval;
++            uac->as_ep_addr = ep->bEndpointAddress;
++            uac->as_ep_in = true;
++            if (have_attrs && (alt < CONFIG_USBHOST_MAX_INTF_ALTSETTINGS)) {
++                uac->as_sfctrl = (uint8_t)(ep_attrs[alt] & AUDIO_EP_ATTR_SAMPLING_FREQ);
++            }
++            break;
++        }
++    }
++}
++
++static int uac_parse(struct usbh_uac *uac)
++{
++    uac_find_stream_interface(uac);
++
++    if (uac->bcdADC != 0x0100U) {
++        snprintf(uac->reason, sizeof(uac->reason), "bcdADC=0x%04x is not UAC1",
++                 (unsigned)uac->bcdADC);
++        return -USB_ERR_NOTSUPP;
++    }
++    if (uac->protocol != AUDIO_PROTOCOL_UNDEFINED) {
++        snprintf(uac->reason, sizeof(uac->reason), "protocol=0x%02x is not UAC1",
++                 (unsigned)uac->protocol);
++        return -USB_ERR_NOTSUPP;
++    }
++    if ((uac->stream_intf == 0xffU) ||
++        (uac->stream_intf >= CONFIG_USBHOST_MAX_INTERFACES) ||
++        (uac->stream_intf == uac->ctrl_intf) ||
++        (uac->hport->config.intf[uac->stream_intf].altsetting_num == 0U)) {
++        snprintf(uac->reason, sizeof(uac->reason), "no AudioStreaming interface (ac=%u)",
++                 (unsigned)uac->ctrl_intf);
++        return -USB_ERR_NOTSUPP;
++    }
++
++    uac_parse_ac(uac);
++    uac_parse_as(uac);
++
++    if (!uac->as_ep_in || (uac->isoin == NULL)) {
++        uac_fail(uac, "no isochronous IN endpoint");
++        return uac->error;
++    }
++    if (uac->as_interval != 1U) {
++        snprintf(uac->reason, sizeof(uac->reason), "bInterval=%u (full speed needs 1)",
++                 (unsigned)uac->as_interval);
++        return -USB_ERR_NOTSUPP;
++    }
++    if ((uac->as_mps == 0U) || (uac->as_mps > 1023U)) {
++        snprintf(uac->reason, sizeof(uac->reason), "mps=%u outside 1..1023",
++                 (unsigned)uac->as_mps);
++        return -USB_ERR_NOTSUPP;
++    }
++    if (uac->as_format_type != AUDIO_FORMAT_TYPE_I) {
++        snprintf(uac->reason, sizeof(uac->reason), "format type %u is not type I",
++                 (unsigned)uac->as_format_type);
++        return -USB_ERR_NOTSUPP;
++    }
++    if (uac->as_format_tag != AUDIO_FORMAT_TAG_PCM) {
++        snprintf(uac->reason, sizeof(uac->reason), "format tag 0x%04x is not PCM",
++                 (unsigned)uac->as_format_tag);
++        return -USB_ERR_NOTSUPP;
++    }
++    if ((uac->as_subframe_size != 2U) || (uac->as_bit_resolution != 16U)) {
++        snprintf(uac->reason, sizeof(uac->reason), "subframe=%u bits=%u (this line does 16-bit)",
++                 (unsigned)uac->as_subframe_size, (unsigned)uac->as_bit_resolution);
++        return -USB_ERR_NOTSUPP;
++    }
++    if (uac->channels == 0U) {
++        uac_fail(uac, "no channel count");
++        return uac->error;
++    }
++    if ((uac->as_num_rates == 0U) && (uac->as_rate_min == 0U)) {
++        uac_fail(uac, "no sample rate");
++        return uac->error;
++    }
++    if (!uac_terminal_is_mic(uac->ac_input_terminal_type)) {
++        snprintf(uac->reason, sizeof(uac->reason),
++                 "input terminal 0x%04x is not a microphone",
++                 (unsigned)uac->ac_input_terminal_type);
++        return -USB_ERR_NOTSUPP;
++    }
++
++    uac->reason[0] = '\0';
++    return 0;
++}
++
++/* ------------------------------------------------------------------------
++ * Control requests
++ * --------------------------------------------------------------------- */
++
++static int uac_set_rate(struct usbh_uac *uac, uint32_t rate)
++{
++    struct usb_setup_packet *setup = uac->hport->setup;
++    int ret;
++
++    g_uac_buf[0] = (uint8_t)(rate & 0xffU);
++    g_uac_buf[1] = (uint8_t)((rate >> 8) & 0xffU);
++    g_uac_buf[2] = (uint8_t)((rate >> 16) & 0xffU);
++
++    setup->bmRequestType = USB_REQUEST_DIR_OUT | USB_REQUEST_CLASS | USB_REQUEST_RECIPIENT_ENDPOINT;
++    setup->bRequest = AUDIO_REQUEST_SET_CUR;
++    setup->wValue = (uint16_t)(AUDIO_EP_SAMPLING_FREQ_CONTROL << 8);
++    setup->wIndex = uac->as_ep_addr;
++    setup->wLength = 3;
++
++    ret = usbh_control_transfer(uac->hport, setup, g_uac_buf);
++    if (ret < 0) {
++        return ret;
++    }
++
++    memset(g_uac_buf, 0, 4);
++    setup->bmRequestType = USB_REQUEST_DIR_IN | USB_REQUEST_CLASS | USB_REQUEST_RECIPIENT_ENDPOINT;
++    setup->bRequest = AUDIO_REQUEST_GET_CUR;
++    setup->wValue = (uint16_t)(AUDIO_EP_SAMPLING_FREQ_CONTROL << 8);
++    setup->wIndex = uac->as_ep_addr;
++    setup->wLength = 3;
++    ret = usbh_control_transfer(uac->hport, setup, g_uac_buf);
++    if (ret == 3) {
++        uac->get_rate = (uint32_t)g_uac_buf[0] | ((uint32_t)g_uac_buf[1] << 8) |
++                        ((uint32_t)g_uac_buf[2] << 16);
++        if (uac->get_rate != rate) {
++            USB_LOG_WRN("sampling frequency readback %u != %u\r\n",
++                        (unsigned)uac->get_rate, (unsigned)rate);
++        }
++    }
++    return 0;
++}
++
++int usbh_uac_open(struct usbh_uac *uac, uint32_t rate, uint8_t alt)
++{
++    struct usb_setup_packet *setup;
++    const struct usbh_interface *intf;
++    const struct usb_endpoint_descriptor *ep;
++    int ret;
++
++    if ((uac == NULL) || (uac->hport == NULL)) {
++        return -USB_ERR_INVAL;
++    }
++    if (uac->error != 0) {
++        return uac->error;
++    }
++    if (uac->is_opened) {
++        return 0;
++    }
++
++    intf = &uac->hport->config.intf[uac->stream_intf];
++    if ((alt == 0U) || (alt >= intf->altsetting_num)) {
++        return -USB_ERR_INVAL;
++    }
++    ep = &intf->altsetting[alt].ep[0].ep_desc;
++    if ((ep->bLength == 0U) ||
++        (USB_GET_ENDPOINT_TYPE(ep->bmAttributes) != USB_ENDPOINT_TYPE_ISOCHRONOUS) ||
++        ((ep->bEndpointAddress & 0x80U) == 0U) ||
++        (ep->bInterval != 1U)) {
++        return -USB_ERR_NOTSUPP;
++    }
++
++    setup = uac->hport->setup;
++    setup->bmRequestType = USB_REQUEST_DIR_OUT | USB_REQUEST_STANDARD | USB_REQUEST_RECIPIENT_INTERFACE;
++    setup->bRequest = USB_REQUEST_SET_INTERFACE;
++    setup->wValue = alt;
++    setup->wIndex = uac->stream_intf;
++    setup->wLength = 0;
++    ret = usbh_control_transfer(uac->hport, setup, NULL);
++    if (ret < 0) {
++        USB_LOG_ERR("SET_INTERFACE alt=%u rc=%d\r\n", (unsigned)alt, ret);
++        return ret;
++    }
++    uac->alt_set = true;
++
++    uac->rate_set = 2; /* no sampling-frequency control on this endpoint */
++    if (uac->as_sfctrl) {
++        ret = uac_set_rate(uac, rate);
++        if (ret < 0) {
++            /* The camera family is known to refuse a second SET_CUR after a
++             * leave; a refused first one means the device streams at its own
++             * default.  The capture window's byte count is the evidence. */
++            USB_LOG_WRN("SET_CUR sampling frequency %u refused: %d\r\n",
++                        (unsigned)rate, ret);
++            uac->rate_set = 3;
++        } else {
++            uac->rate_set = 1;
++        }
++    }
++
++    uac->isoin = (struct usb_endpoint_descriptor *)ep;
++    uac->as_alt = alt;
++    uac->as_mps = (uint16_t)(ep->wMaxPacketSize & USB_MAXPACKETSIZE_MASK);
++    uac->as_interval = ep->bInterval;
++    uac->as_ep_addr = ep->bEndpointAddress;
++    uac->rate = rate;
++    uac->is_opened = true;
++
++    USB_LOG_INFO("Open audio alt=%u rate=%u mps=%u sfctrl=%u set=%u\r\n",
++                 (unsigned)alt, (unsigned)rate, (unsigned)uac->as_mps,
++                 (unsigned)uac->as_sfctrl, (unsigned)uac->rate_set);
++    return 0;
++}
++
++int usbh_uac_close(struct usbh_uac *uac)
++{
++    struct usb_setup_packet *setup;
++    int ret;
++
++    if ((uac == NULL) || (uac->hport == NULL) || !uac->is_opened) {
++        return 0;
++    }
++
++    setup = uac->hport->setup;
++    setup->bmRequestType = USB_REQUEST_DIR_OUT | USB_REQUEST_STANDARD | USB_REQUEST_RECIPIENT_INTERFACE;
++    setup->bRequest = USB_REQUEST_SET_INTERFACE;
++    setup->wValue = 0;
++    setup->wIndex = uac->stream_intf;
++    setup->wLength = 0;
++    ret = usbh_control_transfer(uac->hport, setup, NULL);
++    uac->is_opened = false;
++    uac->alt_set = false;
++    return ret;
++}
++
++int usbh_uac_get_mute(struct usbh_uac *uac)
++{
++    struct usb_setup_packet *setup;
++    int ret;
++
++    if ((uac == NULL) || (uac->hport == NULL) || (uac->fu_mute_ch == 0xffU)) {
++        return -USB_ERR_NOTSUPP;
++    }
++    setup = uac->hport->setup;
++    setup->bmRequestType = USB_REQUEST_DIR_IN | USB_REQUEST_CLASS | USB_REQUEST_RECIPIENT_INTERFACE;
++    setup->bRequest = AUDIO_REQUEST_GET_CUR;
++    setup->wValue = (uint16_t)((AUDIO_FU_MUTE_CONTROL << 8) | uac->fu_mute_ch);
++    setup->wIndex = (uint16_t)(((uint16_t)uac->fu_id << 8) | uac->ctrl_intf);
++    setup->wLength = 1;
++    memset(g_uac_buf, 0, 4);
++    ret = usbh_control_transfer(uac->hport, setup, g_uac_buf);
++    if (ret != 1) {
++        return -USB_ERR_IO;
++    }
++    uac->mute_known = true;
++    uac->muted = (g_uac_buf[0] & 0x01U) != 0U;
++    return uac->muted ? 1 : 0;
++}
++
++int usbh_uac_set_mute(struct usbh_uac *uac, bool mute)
++{
++    struct usb_setup_packet *setup;
++    int ret;
++
++    if ((uac == NULL) || (uac->hport == NULL) || (uac->fu_mute_ch == 0xffU)) {
++        return -USB_ERR_NOTSUPP;
++    }
++    g_uac_buf[0] = mute ? 1U : 0U;
++    setup = uac->hport->setup;
++    setup->bmRequestType = USB_REQUEST_DIR_OUT | USB_REQUEST_CLASS | USB_REQUEST_RECIPIENT_INTERFACE;
++    setup->bRequest = AUDIO_REQUEST_SET_CUR;
++    setup->wValue = (uint16_t)((AUDIO_FU_MUTE_CONTROL << 8) | uac->fu_mute_ch);
++    setup->wIndex = (uint16_t)(((uint16_t)uac->fu_id << 8) | uac->ctrl_intf);
++    setup->wLength = 1;
++    ret = usbh_control_transfer(uac->hport, setup, g_uac_buf);
++    if (ret < 0) {
++        return ret;
++    }
++    uac->mute_known = true;
++    uac->muted = mute;
++    return 0;
++}
++
++__WEAK void usbh_uac_run(struct usbh_uac *uac)
++{
++    (void)uac;
++}
++
++__WEAK void usbh_uac_stop(struct usbh_uac *uac)
++{
++    (void)uac;
++}
++
++static int usbh_uac_ctrl_connect(struct usbh_hubport *hport, uint8_t intf);
++static int usbh_uac_ctrl_disconnect(struct usbh_hubport *hport, uint8_t intf);
++static int usbh_uac_streaming_connect(struct usbh_hubport *hport, uint8_t intf);
++static int usbh_uac_streaming_disconnect(struct usbh_hubport *hport, uint8_t intf);
++
++static const struct usbh_class_driver audio_ctrl_driver = {
++    .driver_name = "audio_ctrl",
++    .connect = usbh_uac_ctrl_connect,
++    .disconnect = usbh_uac_ctrl_disconnect,
++};
++
++static const struct usbh_class_driver audio_streaming_driver = {
++    .driver_name = "audio_streaming",
++    .connect = usbh_uac_streaming_connect,
++    .disconnect = usbh_uac_streaming_disconnect,
++};
++
++static int usbh_uac_ctrl_connect(struct usbh_hubport *hport, uint8_t intf)
++{
++    struct usbh_uac *uac = usbh_uac_class_alloc();
++    int ret;
++
++    if (uac == NULL) {
++        USB_LOG_ERR("Fail to alloc audio_class\r\n");
++        return -USB_ERR_NOMEM;
++    }
++
++    uac->hport = hport;
++    uac->ctrl_intf = intf;
++    uac->protocol = hport->config.intf[intf].altsetting[0].intf_desc.bInterfaceProtocol;
++    hport->config.intf[intf].priv = uac;
++
++    ret = uac_parse(uac);
++    if (ret < 0) {
++        uac->error = ret;
++        USB_LOG_ERR("Audio descriptor refused: %s\r\n", uac->reason);
++    } else {
++        uac->error = 0;
++    }
++
++    snprintf(hport->config.intf[intf].devname, CONFIG_USBHOST_DEV_NAMELEN,
++             DEV_FORMAT, uac->minor);
++    if (uac->error == 0) {
++        USB_LOG_INFO("Register Audio Class:%s\r\n", hport->config.intf[intf].devname);
++    }
++
++    /* Publish even a refused instance: the application's census prints the
++     * descriptor facts and the reason, instead of timing out for a class
++     * instance that would never become valid. */
++    usbh_uac_run(uac);
++    return uac->error;
++}
++
++static int usbh_uac_ctrl_disconnect(struct usbh_hubport *hport, uint8_t intf)
++{
++    struct usbh_uac *uac = (struct usbh_uac *)hport->config.intf[intf].priv;
++
++    if (uac != NULL) {
++        if (hport->config.intf[intf].devname[0] != '\0') {
++            usb_osal_thread_schedule_other();
++            USB_LOG_INFO("Unregister Audio Class:%s\r\n", hport->config.intf[intf].devname);
++            usbh_uac_stop(uac);
++        }
++        usbh_uac_class_free(uac);
++    }
++    return 0;
++}
++
++static int usbh_uac_streaming_connect(struct usbh_hubport *hport, uint8_t intf)
++{
++    (void)hport;
++    (void)intf;
++    return 0;
++}
++
++static int usbh_uac_streaming_disconnect(struct usbh_hubport *hport, uint8_t intf)
++{
++    (void)hport;
++    (void)intf;
++    return 0;
++}
++
++CLASS_INFO_DEFINE const struct usbh_class_info audio_ctrl_class_info = {
++    .match_flags = USB_CLASS_MATCH_INTF_CLASS | USB_CLASS_MATCH_INTF_SUBCLASS,
++    .bInterfaceClass = USB_DEVICE_CLASS_AUDIO,
++    .bInterfaceSubClass = AUDIO_SUBCLASS_AUDIOCONTROL,
++    .bInterfaceProtocol = AUDIO_PROTOCOL_UNDEFINED,
++    .id_table = NULL,
++    .class_driver = &audio_ctrl_driver,
++};
++
++CLASS_INFO_DEFINE const struct usbh_class_info audio_streaming_class_info = {
++    .match_flags = USB_CLASS_MATCH_INTF_CLASS | USB_CLASS_MATCH_INTF_SUBCLASS,
++    .bInterfaceClass = USB_DEVICE_CLASS_AUDIO,
++    .bInterfaceSubClass = AUDIO_SUBCLASS_AUDIOSTREAMING,
++    .bInterfaceProtocol = AUDIO_PROTOCOL_UNDEFINED,
++    .id_table = NULL,
++    .class_driver = &audio_streaming_driver,
++};
+\ No newline at end of file
+diff --git a/class/audio/usbh_uac_stream.h b/class/audio/usbh_uac_stream.h
+new file mode 100644
+--- /dev/null
++++ b/class/audio/usbh_uac_stream.h
+@@ -0,0 +1,93 @@
++/*
++ * Copyright (c) 2026, zhugengyu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Host-side USB Audio Class 1.0 microphone: the running-stream half.  It
++ * keeps one isochronous urb on the AudioStreaming IN endpoint, parses each
++ * packet as raw PCM (no payload header in UAC1) into a single-producer /
++ * single-consumer byte ring, and resubmits the urb from a pump thread.
++ *
++ * The urb geometry is the DWC2 isochronous engine's contract: one channel per
++ * endpoint, one packet per 1 ms frame, the urb's packet array is the batch.
++ * CONFIG_UAC_STREAM_PACKETS therefore trades resubmit frequency against
++ * latency; 16 packets is 16 ms, which keeps a missed boundary short.  The
++ * resubmit runs in the completion callback (interrupt context), so there is no
++ * pump task to be scheduled late.
++ */
++#ifndef USBH_UAC_STREAM_H
++#define USBH_UAC_STREAM_H
++
++#include "usbh_uac.h"
++
++/* One urb of 16 one-millisecond packets.  The engine completes the urb at the
++ * last packet; the pump then consumes the 16 lengths and resubmits. */
++#ifndef CONFIG_UAC_STREAM_PACKETS
++#define CONFIG_UAC_STREAM_PACKETS 16
++#endif
++
++/* The DWC2 isochronous engine allows one in-flight urb per endpoint (a second
++ * one is refused with -USB_ERR_BUSY), so the ring is one slot.  A future
++ * engine change that schedules two urbs per endpoint would raise this. */
++#ifndef CONFIG_UAC_STREAM_URBS
++#define CONFIG_UAC_STREAM_URBS 1
++#endif
++
++/* Ring depth in milliseconds of audio.  200 ms absorbs the consumer's 20 ms
++ * read cadence with a wide margin; the ring is allocated from the FreeRTOS
++ * heap (SDRAM on the profiles that stream). */
++#ifndef CONFIG_UAC_RING_MS
++#define CONFIG_UAC_RING_MS 200
++#endif
++
++struct uac_stream_stats {
++    uint32_t packets;  /* 1 ms packets consumed */
++    uint32_t urbs;     /* urbs completed */
++    uint32_t bytes;    /* PCM bytes pushed into the ring */
++    uint32_t gaps;     /* 1 ms frames the host did not schedule between urbs */
++    uint32_t err;      /* packet transport errors + refused resubmissions */
++    uint32_t empty;    /* zero-length packets */
++    uint32_t overrun;  /* bytes dropped because the ring was full */
++    uint32_t shutdown;     /* packets the stop path marked as not transferred */
++    uint32_t gap_first;    /* the first inter-urb boundary's gap, if any */
++    uint32_t err_run;      /* current run of consecutive packet errors */
++    uint32_t err_max_run;  /* longest such run */
++    uint32_t err_first;    /* errors on a urb's first packet */
++    uint32_t err_last;     /* errors on a urb's last packet */
++    uint32_t err_mid;      /* errors on a packet between them */
++    uint32_t gap_max;      /* largest single boundary gap, in frames */
++    uint32_t rate;     /* snapshot of the class rate */
++    uint8_t channels;
++    uint8_t subframe;
++    uint16_t mps;
++};
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Bind the class instance published by the application's usbh_uac_run hook. */
++int usbh_uac_stream_attach(struct usbh_uac *uac);
++
++/* Open (through the class) and start capture at the class's selected rate. */
++int usbh_uac_stream_start(void);
++
++/* Stop capture: kill the urb, park the pump, free the ring.  The streaming
++ * interface is deliberately left at its alternate setting (see usbh_uac.h). */
++void usbh_uac_stream_stop(void);
++
++/* Disconnect path: stop capture, callable when the device is already gone. */
++void usbh_uac_stream_abort(void);
++
++/* Copy up to `len` PCM bytes; 0 when the ring has none (after waiting up to
++ * `timeout_ms` for the first byte).  Returns the byte count. */
++int usbh_uac_stream_read(void *buf, uint32_t len, uint32_t timeout_ms);
++
++/* A copy of the session counters. */
++void usbh_uac_stream_stats(struct uac_stream_stats *stats);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* USBH_UAC_STREAM_H */
+\ No newline at end of file
+diff --git a/class/audio/usbh_uac_stream.c b/class/audio/usbh_uac_stream.c
+new file mode 100644
+--- /dev/null
++++ b/class/audio/usbh_uac_stream.c
+@@ -0,0 +1,428 @@
++/*
++ * Copyright (c) 2026, zhugengyu
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Host-side UAC1 microphone capture: one isochronous urb of 16 one-millisecond
++ * packets on the AudioStreaming IN endpoint, copied into a SPSC PCM ring, and
++ * resubmitted from the urb's completion callback.
++ *
++ * Why the resubmit is in the completion callback and not in a pump thread: the
++ * DWC2 engine completes the urb at its last packet, and the next urb must be
++ * armed before the next 1 ms frame or that frame's audio is lost.  A thread
++ * wake can be delayed past the frame boundary by another runnable task (the
++ * video pump shares the image); an immediate resubmit from the callback runs
++ * inside the same interrupt, with only register writes between the two urbs.
++ * The callback's work is bounded: 16 packets x at most 36 bytes, plus one
++ * submit.
++ *
++ * The counters are the honesty layer: a packet with a transport error, a
++ * zero-length packet, a ring overrun and a frame the host did not schedule are
++ * four different defects and are counted separately.
++ */
++#include "usbh_core.h"
++#include "usbh_uac.h"
++#include "usbh_uac_stream.h"
++
++#undef USB_DBG_TAG
++#define USB_DBG_TAG "uac_stream"
++#include "usb_log.h"
++
++/* The 10-bit periodic frame counter is the only common clock between urbs. */
++#define UAC_FRAME_MASK 0x3ffU
++
++struct uac_stream {
++    struct usbh_uac *uac;
++    volatile bool running;
++
++    struct usbh_urb *urb;
++    uint8_t *packet_mem;
++
++    uint8_t *ring;
++    uint32_t ring_size;
++    volatile uint32_t head;
++    volatile uint32_t tail;
++    usb_osal_sem_t data_sem;
++
++    uint16_t last_start;
++    bool have_last_start;
++
++    struct uac_stream_stats stats;
++};
++
++static struct uac_stream uac_stream;
++
++/* ------------------------------------------------------------------------
++ * PCM ring: one producer (the urb completion, interrupt context) and one
++ * consumer (the reader).  The counters are monotonic and wrap in 32 bits; the
++ * used count is their difference, which stays far below 2^31 for any ring this
++ * line allocates.  No lock is needed on one core with one writer and one
++ * reader; the data semaphore only says "the ring became non-empty".
++ * --------------------------------------------------------------------- */
++
++static void ring_write(struct uac_stream *s, const uint8_t *data, uint32_t len)
++{
++    uint32_t used = s->head - s->tail;
++    uint32_t room = s->ring_size - used;
++    uint32_t first;
++
++    if (room == 0U) {
++        s->stats.overrun += len;
++        return;
++    }
++    if (len > room) {
++        s->stats.overrun += len - room;
++        len = room;
++    }
++
++    first = s->ring_size - (s->head % s->ring_size);
++    if (first > len) {
++        first = len;
++    }
++    memcpy(s->ring + (s->head % s->ring_size), data, first);
++    if (len > first) {
++        memcpy(s->ring, data + first, len - first);
++    }
++    s->head += len;
++    s->stats.bytes += len;
++    if (used == 0U) {
++        usb_osal_sem_give(s->data_sem);
++    }
++}
++
++static uint32_t ring_read(struct uac_stream *s, uint8_t *data, uint32_t len)
++{
++    uint32_t used = s->head - s->tail;
++    uint32_t first;
++
++    if (len > used) {
++        len = used;
++    }
++    if (len == 0U) {
++        return 0;
++    }
++    first = s->ring_size - (s->tail % s->ring_size);
++    if (first > len) {
++        first = len;
++    }
++    memcpy(data, s->ring + (s->tail % s->ring_size), first);
++    if (len > first) {
++        memcpy(data + first, s->ring, len - first);
++    }
++    s->tail += len;
++    return len;
++}
++
++/* ------------------------------------------------------------------------
++ * The urb path
++ * --------------------------------------------------------------------- */
++
++static void uac_note_start(struct uac_stream *s)
++{
++    uint16_t delta;
++
++    if (!s->have_last_start) {
++        s->last_start = (uint16_t)(s->urb->start_frame & UAC_FRAME_MASK);
++        s->have_last_start = true;
++        return;
++    }
++    delta = (uint16_t)((s->urb->start_frame - s->last_start) & UAC_FRAME_MASK);
++    s->last_start = (uint16_t)(s->urb->start_frame & UAC_FRAME_MASK);
++    if (!s->stats.urbs) {
++        /* The first boundary after start: recorded separately so a startup
++         * artefact cannot hide inside the steady-state gap count. */
++        s->stats.gap_first = (delta > CONFIG_UAC_STREAM_PACKETS) ?
++                             (uint32_t)delta - CONFIG_UAC_STREAM_PACKETS : 0U;
++    }
++    /* A boundary seen in the same frame the previous packet retired gives a
++     * delta of packets-1; only a larger delta is a frame the host skipped. */
++    if ((delta > CONFIG_UAC_STREAM_PACKETS) && (delta < 0x200U)) {
++        uint32_t missed = (uint32_t)delta - CONFIG_UAC_STREAM_PACKETS;
++
++        s->stats.gaps += missed;
++        if (missed > s->stats.gap_max) {
++            s->stats.gap_max = missed;
++        }
++    }
++}
++
++/* One submission attempt.  Called from the completion callback (interrupt
++ * context) and from start() (thread context); both paths take the DWC2
++ * engine's critical section, which this port maps to the FromISR pair when
++ * IPSR is non-zero.  There is no sleep and no retry here for that reason: a
++ * submit that fails at a boundary is counted and the capture stops rather than
++ * blocking the interrupt. */
++static bool uac_submit(struct uac_stream *s)
++{
++    struct usbh_urb *urb = s->urb;
++    int ret;
++
++    for (uint32_t p = 0; p < urb->num_of_iso_packets; p++) {
++        urb->iso_packet[p].actual_length = 0;
++        urb->iso_packet[p].errorcode = 0;
++    }
++    urb->actual_length = 0;
++    urb->errorcode = 0;
++    urb->timeout = 0;
++
++    ret = usbh_submit_urb(urb);
++    if (ret == 0) {
++        uac_note_start(s);
++        return true;
++    }
++    s->stats.err++;
++    return false;
++}
++
++static void uac_consume(struct uac_stream *s)
++{
++    struct usbh_urb *urb = s->urb;
++
++    for (uint32_t i = 0; i < urb->num_of_iso_packets; i++) {
++        struct usbh_iso_frame_packet *packet = &urb->iso_packet[i];
++
++        if (packet->errorcode < 0) {
++            if (packet->errorcode == -USB_ERR_SHUTDOWN) {
++                /* The stop path marks the remaining packets of the in-flight
++                 * urb with this code; they were never attempted, so they are
++                 * not transport errors. */
++                s->stats.shutdown++;
++                continue;
++            }
++            s->stats.err++;
++            s->stats.err_run++;
++            if (s->stats.err_run > s->stats.err_max_run) {
++                s->stats.err_max_run = s->stats.err_run;
++            }
++            if (i == 0U) {
++                s->stats.err_first++;
++            } else if (i == (urb->num_of_iso_packets - 1U)) {
++                s->stats.err_last++;
++            } else {
++                s->stats.err_mid++;
++            }
++            continue;
++        }
++        s->stats.err_run = 0;
++        s->stats.packets++;
++        if (packet->actual_length == 0U) {
++            s->stats.empty++;
++            continue;
++        }
++        ring_write(s, packet->transfer_buffer, packet->actual_length);
++    }
++    s->stats.urbs++;
++}
++
++static void uac_urb_complete(void *arg, int nbytes)
++{
++    struct uac_stream *s = arg;
++
++    (void)nbytes;
++    uac_consume(s);
++    if (!s->running) {
++        return;
++    }
++    if (!uac_submit(s)) {
++        s->running = false;
++    }
++}
++
++/* ------------------------------------------------------------------------
++ * Public interface
++ * --------------------------------------------------------------------- */
++
++int usbh_uac_stream_attach(struct usbh_uac *uac)
++{
++    if ((uac == NULL) || (uac->hport == NULL)) {
++        return -USB_ERR_NODEV;
++    }
++    uac_stream.uac = uac;
++    return 0;
++}
++
++int usbh_uac_stream_start(void)
++{
++    struct uac_stream *s = &uac_stream;
++    struct usbh_uac *uac = s->uac;
++    uint32_t pkt_size, urb_size, ring_size;
++
++    if ((uac == NULL) || uac->error != 0 || !uac->is_opened) {
++        return -USB_ERR_NODEV;
++    }
++    if (s->running) {
++        return 0;
++    }
++    if ((uac->as_ep_in == false) || (uac->isoin == NULL) || (uac->as_mps == 0U)) {
++        return -USB_ERR_NODEV;
++    }
++
++    memset(&s->stats, 0, sizeof(s->stats));
++    s->stats.rate = uac->rate;
++    s->stats.channels = uac->channels;
++    s->stats.subframe = uac->as_subframe_size;
++    s->stats.mps = uac->as_mps;
++
++    pkt_size = ((uint32_t)uac->as_mps + CONFIG_USB_ALIGN_SIZE - 1U) &
++               ~((uint32_t)CONFIG_USB_ALIGN_SIZE - 1U);
++    urb_size = sizeof(struct usbh_urb) +
++               ((uint32_t)CONFIG_UAC_STREAM_PACKETS * sizeof(struct usbh_iso_frame_packet));
++
++    ring_size = (uac->rate * (uint32_t)uac->channels * (uint32_t)uac->as_subframe_size *
++                 (uint32_t)CONFIG_UAC_RING_MS) / 1000U;
++    ring_size = (ring_size + 63U) & ~63U;
++    if (ring_size < 1024U) {
++        ring_size = 1024U;
++    }
++
++    s->urb = usb_osal_malloc(urb_size);
++    s->packet_mem = usb_osal_malloc((pkt_size * CONFIG_UAC_STREAM_PACKETS) + CONFIG_USB_ALIGN_SIZE);
++    s->ring = usb_osal_malloc(ring_size);
++    if ((s->urb == NULL) || (s->packet_mem == NULL) || (s->ring == NULL)) {
++        USB_LOG_ERR("start: allocation failed (urb=%p pkt=%p ring=%p)\r\n",
++                    s->urb, s->packet_mem, s->ring);
++        goto fail;
++    }
++    memset(s->urb, 0, urb_size);
++
++    s->urb->hport = uac->hport;
++    s->urb->ep = uac->isoin;
++    s->urb->num_of_iso_packets = CONFIG_UAC_STREAM_PACKETS;
++    s->urb->complete = uac_urb_complete;
++    s->urb->arg = s;
++    {
++        uint8_t *base = (uint8_t *)(((uintptr_t)s->packet_mem + CONFIG_USB_ALIGN_SIZE - 1U) &
++                                    ~(uintptr_t)(CONFIG_USB_ALIGN_SIZE - 1U));
++
++        for (uint32_t p = 0; p < CONFIG_UAC_STREAM_PACKETS; p++) {
++            s->urb->iso_packet[p].transfer_buffer = base + (p * pkt_size);
++            s->urb->iso_packet[p].transfer_buffer_length = uac->as_mps;
++        }
++    }
++
++    s->ring_size = ring_size;
++    s->head = 0;
++    s->tail = 0;
++    s->have_last_start = false;
++    s->data_sem = usb_osal_sem_create_counting(1);
++    if (s->data_sem == NULL) {
++        USB_LOG_ERR("start: semaphore creation failed\r\n");
++        goto fail;
++    }
++
++    /* The camera's audio engine starts a few milliseconds after the
++     * SET_INTERFACE/SET_CUR pair; arming the first urb before that yields a
++     * whole urb of empty packets (measured: one 16-packet burst at start).
++     * The delay is inside start, so the caller's measurement window begins
++     * after the device is actually streaming. */
++    usb_osal_msleep(50);
++
++    /* The banner is printed before the first urb: the console sink holds the
++     * print lock with interrupts masked, and a line printed while an urb is in
++     * flight costs the frames the lock spans. */
++    USB_LOG_INFO("capture started rate=%u ch=%u sub=%u mps=%u ring=%u\r\n",
++                 (unsigned)uac->rate, (unsigned)uac->channels,
++                 (unsigned)uac->as_subframe_size, (unsigned)uac->as_mps,
++                 (unsigned)ring_size);
++
++    s->running = true;
++    if (!uac_submit(s)) {
++        USB_LOG_ERR("start: first urb refused\r\n");
++        s->running = false;
++        goto fail;
++    }
++    return 0;
++
++fail:
++    s->running = false;
++    if ((s->urb != NULL) && (s->urb->hcpriv != NULL)) {
++        (void)usbh_kill_urb(s->urb);
++    }
++    if (s->data_sem != NULL) {
++        usb_osal_sem_delete(s->data_sem);
++        s->data_sem = NULL;
++    }
++    if (s->urb != NULL) {
++        usb_osal_free(s->urb);
++        s->urb = NULL;
++    }
++    if (s->packet_mem != NULL) {
++        usb_osal_free(s->packet_mem);
++        s->packet_mem = NULL;
++    }
++    if (s->ring != NULL) {
++        usb_osal_free(s->ring);
++        s->ring = NULL;
++    }
++    s->ring_size = 0;
++    return -USB_ERR_NOMEM;
++}
++
++void usbh_uac_stream_stop(void)
++{
++    struct uac_stream *s = &uac_stream;
++
++    if (!s->running && (s->urb == NULL)) {
++        return;
++    }
++    s->running = false;
++    if ((s->urb != NULL) && (s->urb->hcpriv != NULL)) {
++        /* kill invokes the completion callback with -USB_ERR_SHUTDOWN; the
++         * callback consumes the packets that did move and sees running=false,
++         * so it does not resubmit. */
++        (void)usbh_kill_urb(s->urb);
++    }
++    if (s->data_sem != NULL) {
++        usb_osal_sem_delete(s->data_sem);
++        s->data_sem = NULL;
++    }
++    if (s->urb != NULL) {
++        usb_osal_free(s->urb);
++        s->urb = NULL;
++    }
++    if (s->packet_mem != NULL) {
++        usb_osal_free(s->packet_mem);
++        s->packet_mem = NULL;
++    }
++    if (s->ring != NULL) {
++        usb_osal_free(s->ring);
++        s->ring = NULL;
++    }
++    s->ring_size = 0;
++    s->head = 0;
++    s->tail = 0;
++    s->have_last_start = false;
++}
++
++void usbh_uac_stream_abort(void)
++{
++    usbh_uac_stream_stop();
++}
++
++int usbh_uac_stream_read(void *buf, uint32_t len, uint32_t timeout_ms)
++{
++    struct uac_stream *s = &uac_stream;
++    uint32_t n;
++
++    if ((buf == NULL) || (len == 0U) || (s->ring == NULL)) {
++        return 0;
++    }
++    n = ring_read(s, buf, len);
++    if (n != 0U) {
++        return (int)n;
++    }
++    if (timeout_ms == 0U) {
++        return 0;
++    }
++    if (usb_osal_sem_take(s->data_sem, timeout_ms) < 0) {
++        return 0;
++    }
++    return (int)ring_read(s, buf, len);
++}
++
++void usbh_uac_stream_stats(struct uac_stream_stats *stats)
++{
++    if (stats != NULL) {
++        *stats = uac_stream.stats;
++    }
++}
+\ No newline at end of file

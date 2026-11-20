@@ -1,0 +1,23 @@
+# F429 UVC video + UAC microphone arm: the camera's two isochronous IN
+# endpoints (video on interface 1, audio on interface 3) run in the same 20 s
+# window, each with its own DWC2 channel and its own 1 ms packet stream.
+#
+# The video side reuses the 640x480 control arm (uvc_detect -> uvc_open); the
+# audio side is opened before either stream starts, so no class control
+# request is issued while an isochronous channel is live.  The case leaves the
+# camera and the audio streaming interface open, as both lines require.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_O2=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=1048576
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=24
+CONFIG_UVC_TARGET_WIDTH=640
+CONFIG_UVC_TARGET_HEIGHT=480
+CONFIG_UVC_FRAME_BYTES=131072
+CONFIG_UAC_TARGET_RATE=16000
+CONFIG_CASES="uac_detect uvc_detect uvc_open uac_av"

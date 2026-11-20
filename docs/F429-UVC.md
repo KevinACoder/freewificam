@@ -187,9 +187,9 @@ cd freewificam
 ./make.rtos image PROFILE=stm32f429-uvc-720p       # target for a 720-line camera
 ```
 
-Flash the BIN through the Pi (`skills/stm32f429-board/scripts/pi-flash.sh
-<bin> --cycle`; the standard reset is the relay cold boot). The camera is on
-P2, the USB-A host socket, with J74–J76 in the HOS position. The console is
+Flash the BIN through the board's Pi-based pyOCD path and cold-boot the
+board; the standard reset is the relay cold boot. The camera is on P2, the
+USB-A host socket, with J74–J76 in the HOS position. The console is
 115200 8N1 on the CH340; the SWD ring mirrors it.
 
 `uvc_detect` is the first boot for a new camera: its `uvc: mode`, `uvc: alt`,
@@ -212,3 +212,14 @@ the bandwidth answer. Do not build a target profile before reading
 - The 800x600 arm is report-only for rate; its gate is the same four cases
   (frames > 0, JPEG SOI/EOI, zero transport errors, drops within the window's
   budget), not a bit-rate floor.
+
+## 8. The microphone half
+
+The same camera's interfaces 2 and 3 are a UAC1 microphone.  The line carries a
+first-party UAC1 host class (patch 0012) and a PCM engine on the second
+isochronous IN endpoint (`0x86`, 16 kHz mono 16-bit); the video and microphone
+streams run together for 20 s with no video degradation.  The descriptor
+census, the class's refusals, the capture engine's contract and the measured
+windows are in `docs/F429-UAC.md`.  The camera's audio function only produces
+samples after its video function has been claimed, so the microphone image
+carries the video class and this document's census path.

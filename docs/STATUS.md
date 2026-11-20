@@ -2,7 +2,11 @@
 
 > Detailed RK3568 performance tables: [RK3568-PERFORMANCE.md](RK3568-PERFORMANCE.md).
 > F429 UVC camera parameters and results: [F429-UVC.md](F429-UVC.md).
+> F429 UAC microphone parameters and results: [F429-UAC.md](F429-UAC.md).
 
+- Updated: 2026-11-20 (F429 UAC microphone: descriptor census, 10 s capture
+  and 20 s video+microphone each 2/2 relay cold boots; 16 kHz mono 16-bit,
+  32 bytes per 1 ms frame, zero gaps and zero transport errors)
 - Updated: 2026-11-15 (RTL8723BU: C3-C5 2/2, C6T 2/2; three of four
   throughput directions align, board-receive TCP is 62.5% of the same-driver
   GT; the chip needed no driver change, only a profile/firmware selection)
@@ -132,3 +136,22 @@ The full-speed isochronous ceiling is 1023 B/1 ms = 8.184 Mbit/s; the 800x600
 arm uses 2.9 Mbit/s of it, so the missing 720p is not a bandwidth subtraction.
 Details, the mode table, the engine's contract and the commands are in
 `docs/F429-UVC.md`; the USB-host facts are in `docs/F429-USB-HOST.md` section 8.
+
+## F429 UAC microphone (2026-11-20)
+
+The camera's interfaces 2/3 are a USB Audio Class 1.0 microphone; the line
+carries a first-party host class (patch 0012) and a PCM capture engine.  The
+camera has no UAC OUT, so playback is not part of this line.
+
+| Rung | Case / profile | State |
+|---|---|---|
+| descriptor census | `uac_detect` / `stm32f429-uac-detect` | **PASS**: interfaces 2/3, `bcdADC=0x0100`, 1 channel, 2 bytes/16 bits, one rate 16000, `ep=0x86` ISO IN, `mps=36`, `bInterval=1`, sampling-frequency control present |
+| microphone, 10 s | `uac_mic` / `stm32f429-uac-mic` | **2/2**: 10,000 packets, 319,994 / 319,992 bytes, `gaps=0`, `err=0`, non-zero samples 159,997 / 159,988 |
+| video + microphone, 20 s | `uac_av` / `stm32f429-uac-av` | **2/2**: video 297 / 297 frames, JPEG SOI/EOI 297/297, 0 packet/URB errors, 1 frame dropped; audio 20,003 / 20,004 packets, 640,080 / 640,114 bytes, `gaps=0`, `err=0`, overruns 0 |
+
+The microphone image carries the UVC class (and its descriptor census) even
+though the window measures audio only: this camera's audio function returns
+zero-length packets until its video function has been claimed.  The two
+isochronous endpoints share the DWC2 host's 12 channels; the video stream is
+not degraded by the microphone.  Details, descriptor bytes, the engine's
+contract and the reproduce commands are in `docs/F429-UAC.md`.

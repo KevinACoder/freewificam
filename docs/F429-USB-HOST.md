@@ -190,3 +190,11 @@ Mbit/s of the 8.184 Mbit/s bus, so the 720p absence is the camera's full-speed
 mode table, not a bandwidth subtraction.  Details, the mode table, the engine's
 contract and the reproduction commands are in `docs/F429-UVC.md`; the board
 limits it needed are `MAX_INTF_ALTSETTINGS` 16 and a 2 KiB request buffer.
+
+The same camera's microphone is the second isochronous IN endpoint on this
+port: UAC1, 16 kHz mono 16-bit, endpoint `0x86`, 36-byte maximum, one packet
+per frame.  It uses the same DWC2 ISO engine (one packet per channel
+activation) and a 16-packet URB whose next submit is made from the completion
+callback; the second channel does not degrade the video stream.  Its
+descriptor census, class requests and measured windows are in
+`docs/F429-UAC.md`.

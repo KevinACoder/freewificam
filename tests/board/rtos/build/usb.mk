@@ -61,6 +61,7 @@ USB_INCLUDES := \
 	-I$(USB)/class/hub \
 	-I$(USB)/class/msc \
 	-I$(USB)/class/video \
+	-I$(USB)/class/audio \
 	-I$(USB)/class/vendor/wifi \
 	-I$(USB)/port/dwc2 \
 	-I$(USB)/port/ehci \
@@ -132,6 +133,20 @@ UVC_CASES := $(filter uvc_detect uvc_open uvc_iso_smoke uvc_stream,$(CASES))
 ifneq ($(strip $(UVC_CASES)),)
 include $(CURDIR)/uvc.mk
 USB_ALL_SRCS += $(UVC_ALL_SRCS)
+endif
+
+# The microphone image adds the first-party UAC1 host class, its PCM capture
+# half, the application half and the three audio cases.  The controller's
+# bring-up is shared with the video half (app/usb/usb_app.c) because the
+# video+microphone image runs cases from both.
+UAC_CASES := $(filter uac_detect uac_mic uac_av,$(CASES))
+ifneq ($(strip $(UAC_CASES)),)
+include $(CURDIR)/uac.mk
+USB_ALL_SRCS += $(UAC_ALL_SRCS)
+endif
+ifneq ($(strip $(UVC_CASES) $(UAC_CASES)),)
+USB_APP_SRCS := $(LINE)/app/usb/usb_app.c
+USB_ALL_SRCS += $(USB_APP_SRCS)
 endif
 
 # Build-side gates for this domain (the `gates` recipe calls them):

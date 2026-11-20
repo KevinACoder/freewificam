@@ -27,6 +27,7 @@
 #include "usbh_video.h"
 #include "usbh_uvc_stream.h"
 
+#include "usb_app.h"
 #include "uvc_app.h"
 
 #ifndef CONFIG_UVC_TARGET_WIDTH
@@ -47,7 +48,6 @@ int usbh_videostreaming_set_cur_probe(struct usbh_video *video_class,
                                       uint32_t dwFrameInterval);
 
 static struct usbh_video *uvc_instance;
-static int uvc_bus_up;
 
 unsigned uvc_app_bus(void)
 {
@@ -90,26 +90,16 @@ int uvc_app_ensure_up(void)
 	struct usbh_video *video_class;
 	unsigned spin;
 
-	if (uvc_bus_up == 0) {
-		if (usb_board_init(UVC_USB_BUS) != 0) {
-			LOG_ERROR("uvc: usb board init failed bus=%u\n",
+	if (!usb_app_bus_is_up(UVC_USB_BUS)) {
+		if (usb_app_bus_ensure(UVC_USB_BUS) != 0) {
+			LOG_ERROR("uvc: usb board bring-up failed bus=%u\n",
 				  (unsigned)UVC_USB_BUS);
 			return -1;
 		}
-		if (usbh_initialize((uint8_t)UVC_USB_BUS,
-				    usb_board_reg_base(UVC_USB_BUS),
-				    usb_board_event_handler) != 0) {
-			LOG_ERROR("uvc: usbh_initialize failed bus=%u\n",
-				  (unsigned)UVC_USB_BUS);
-			return -1;
-		}
-		usb_board_after_start((uint8_t)UVC_USB_BUS);
-
-		LOG_ANCHOR("uvc: host up bus=%u hcd=dwc2 base=0x%lx\n",
-			   (unsigned)UVC_USB_BUS,
-			   (unsigned long)usb_board_reg_base(UVC_USB_BUS));
-		uvc_bus_up = 1;
 	}
+	LOG_ANCHOR("uvc: host up bus=%u hcd=dwc2 base=0x%lx\n",
+		   (unsigned)UVC_USB_BUS,
+		   (unsigned long)usb_board_reg_base(UVC_USB_BUS));
 
 	for (spin = 0; spin < UVC_WAIT_STEPS; spin++) {
 		video_class = uvc_instance;

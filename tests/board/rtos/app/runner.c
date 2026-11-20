@@ -76,6 +76,15 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_UVC_STREAM)
 	CASE_ENTRY("uvc_stream", case_uvc_stream_run)
 #endif
+#if defined(RTOS_CASE_UAC_DETECT)
+	CASE_ENTRY("uac_detect", case_uac_detect_run)
+#endif
+#if defined(RTOS_CASE_UAC_MIC)
+	CASE_ENTRY("uac_mic", case_uac_mic_run)
+#endif
+#if defined(RTOS_CASE_UAC_AV)
+	CASE_ENTRY("uac_av", case_uac_av_run)
+#endif
 #if defined(RTOS_CASE_F429_SDRAM)
 	CASE_ENTRY("f429_sdram", case_f429_sdram_run)
 #endif
