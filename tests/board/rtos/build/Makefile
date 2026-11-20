@@ -317,12 +317,12 @@ endif
 # with its test case.  The rtw89 cases are consumers too: their linuxkpi USB
 # engine rides the same controllers, while the engine and its adapter belong to
 # the liblinux80211 world (kpi.mk), not to this file.
-USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream uac_detect uac_mic uac_av rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
+USB_CONSUMER_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream uac_detect uac_mic uac_av pi_stream rtw89_c3 rtw89_c4 rtw89_c5 rtw89_c6 rtw89_ap rtw89_mon \
 	rtw88_c3 rtw88_c4 rtw88_c5 rtw88_c6 rtw88_ap \
 	rtl8xxxu_c3 rtl8xxxu_c4 rtl8xxxu_c5 rtl8xxxu_ap rtl8xxxu_mon rtl8xxxu_c6
 ifeq ($(BOARD),stm32f429-challenger)
-ifneq ($(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream uac_detect uac_mic uac_av,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
-$(error the stm32f429 board carries only the usb_dwc2/f429_sdram/f429_wifi/f429_wifi_ap/f429_ap_link/uvc_*/uac_* cases, not '$(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream uac_detect uac_mic uac_av,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
+ifneq ($(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream uac_detect uac_mic uac_av pi_stream,$(filter $(USB_CONSUMER_CASES),$(CASES))),)
+$(error the stm32f429 board carries only the usb_dwc2/f429_sdram/f429_wifi/f429_wifi_ap/f429_ap_link/uvc_*/uac_*/pi_stream cases, not '$(filter-out usb_dwc2 f429_sdram f429_wifi f429_wifi_ap f429_ap_link uvc_detect uvc_open uvc_iso_smoke uvc_stream uac_detect uac_mic uac_av pi_stream,$(filter $(USB_CONSUMER_CASES),$(CASES)))')
 endif
 else
 ifneq ($(filter usb_dwc2 uvc_detect uvc_open uvc_iso_smoke uvc_stream uac_detect uac_mic uac_av,$(CASES)),)
@@ -570,7 +570,7 @@ BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 
 # usb_xhci/usb_ehci are compiled in the CherryUSB flag world (usb.mk); every
 # other case is a plain application translation unit.
-USB_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram $(UVC_CASES) $(UAC_CASES)
+USB_CASES := usb_xhci usb_ehci usb_dwc2 f429_sdram $(UVC_CASES) $(UAC_CASES) pi_stream
 KPI_CASES := kpi_live kpi_mock
 # The wireless cases compile in the stack's flag world (wl80211.mk), not the
 # plain application world, so they are kept out of the generic list.  The list

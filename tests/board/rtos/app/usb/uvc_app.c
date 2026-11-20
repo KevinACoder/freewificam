@@ -30,6 +30,10 @@
 #include "usb_app.h"
 #include "uvc_app.h"
 
+#ifndef CONFIG_UVC_FORCE_ALT
+#define CONFIG_UVC_FORCE_ALT 0
+#endif
+
 #ifndef CONFIG_UVC_TARGET_WIDTH
 #define CONFIG_UVC_TARGET_WIDTH 1280U
 #endif
@@ -490,6 +494,9 @@ int uvc_app_ensure_open(void)
 	}
 
 	alt = uvc_pick_alt(video, want, &picked_mps);
+#if CONFIG_UVC_FORCE_ALT > 0
+	alt = (uint8_t)CONFIG_UVC_FORCE_ALT;
+#endif
 	if (alt == 0U) {
 		LOG_ANCHOR("uvc: open FAIL want=%u above max_mps=%u (no full-speed alt carries it)\n",
 			   (unsigned)want, (unsigned)max_mps);

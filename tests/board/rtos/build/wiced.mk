@@ -38,6 +38,7 @@ NET_STACK_SRCS += $(LWIP_STACK_SRCS)
 
 AP6181_VENDOR_INC := \
 	-I$(AP6181_DIR)/ports/f429 \
+	-I$(LINE)/app/stream \
 	-I$(AP6181_VENDOR)/wifi_lwip_AP/User \
 	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/platform/MCU/STM32F4xx/peripherals \
 	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/RTOS/FreeRTOS/WWD \
@@ -87,5 +88,13 @@ wiced-image-gate: image
 	@sh $(ROOT)/tools/build/wiced-image-gate.sh $(TARGET).elf
 AP6181_CASE_SRCS := $(foreach c,$(filter $(WICED_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 AP6181_ALL_SRCS += $(AP6181_CASE_SRCS)
+
+# The Pi stream image's network half lives in the same WICED flag world (it
+# includes the driver and lwIP headers), but its case is compiled by the USB
+# world; only pi_net.c is added here.
+PI_STREAM_CASES := $(filter pi_stream,$(CASES))
+ifneq ($(strip $(PI_STREAM_CASES)),)
+AP6181_ALL_SRCS += $(LINE)/app/stream/pi_net.c
+endif
 
 endif # CONFIG_WICED_AP6181

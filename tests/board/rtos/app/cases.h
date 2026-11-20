@@ -87,6 +87,11 @@ int case_uac_mic_run(void);
 #if defined(RTOS_CASE_UAC_AV)
 int case_uac_av_run(void);
 #endif
+/* The F429 -> Pi 4B stream: link, one frame, video, or video + microphone,
+ * selected by STREAM_STAGE. */
+#if defined(RTOS_CASE_PI_STREAM)
+int case_pi_stream_run(void);
+#endif
 #if defined(RTOS_CASE_F429_SDRAM)
 int case_f429_sdram_run(void);
 #endif

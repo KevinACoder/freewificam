@@ -96,6 +96,8 @@ int case_uvc_iso_smoke_run(void)
 			done++;
 			bytes += smoke.urb.actual_length;
 		} else {
+			if (err_urbs == 0U)
+				CASE_INFO("uvc: iso smoke first submit rc=%d\n", ret);
 			err_urbs++;
 		}
 

@@ -35,6 +35,16 @@ config UVC_TARGET_HEIGHT
 	  See UVC_TARGET_WIDTH.  960x720 is a real mode on some Logitech parts
 	  and is reported as "720 lines", not as 720p.
 
+config UVC_FORCE_ALT
+	int "UVC alternate setting override (0 = pick from the probe)"
+	default 0
+	range 0 15
+	help
+	  Diagnostic override for cameras whose probe response selects a
+	  bandwidth whose isochronous endpoint never delivers.  0 keeps the
+	  class's own smallest-setting-that-fits choice; 4 is the 640x480
+	  15 fps setting on the bench camera (mps=640).
+
 config UVC_FRAME_BYTES
 	int "UVC frame pool bytes per buffer"
 	default 524288
@@ -55,6 +65,52 @@ config UAC_TARGET_RATE
 	  the descriptor census case fails because the profile asked for a rate
 	  the device does not carry.  16000 mono 16-bit is 32 bytes per 1 ms
 	  full-speed frame, well below the 1023-byte ceiling.
+
+# --- F429 -> Pi 4B stream ---------------------------------------------------
+#
+# The stage is the image's gate, not a runtime switch: each value has its own
+# profile and its own two cold boots.  The network half (pi_net.c) and the
+# camera case (pi_stream.c) both read these symbols.
+config STREAM_STAGE
+	int "Pi stream stage (1 link, 2 one frame, 3 video, 4 audio+video)"
+	default 1
+	range 1 4
+	help
+	  1: join + DHCP + 20 ICMP echoes, no camera.
+	  2: one captured JPEG to the Pi, then stop.
+	  3: 20 s of 640x480 MJPEG to the Pi.
+	  4: 20 s of MJPEG plus the camera microphone's PCM.
+
+config STREAM_WINDOW_MS
+	int "Pi stream window (ms)"
+	default 20000
+	range 1000 120000
+
+config STREAM_SSID
+	string "Pi stream target SSID"
+	default "labwifi-ar-ht20s"
+
+config STREAM_DHCP
+	bool "Pi stream link uses DHCP (else the static address below)"
+	default y
+
+config STREAM_STATIC_IP
+	string "Pi stream static fallback address"
+	default "192.168.99.2"
+
+config STREAM_PI_IP
+	string "Pi 4B address"
+	default "192.168.99.1"
+
+config STREAM_VIDEO_PORT
+	int "Pi video TCP port"
+	default 5000
+	range 1 65535
+
+config STREAM_AUDIO_PORT
+	int "Pi audio TCP port"
+	default 5001
+	range 1 65535
 
 config AP_WPA2
 	bool "iwl7260_ap runs the WPA2-PSK/CCMP variant"

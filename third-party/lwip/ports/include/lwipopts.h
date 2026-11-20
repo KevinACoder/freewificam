@@ -60,6 +60,9 @@
  * receive timeout. */
 #define LWIP_RAW                        1
 #define LWIP_SO_RCVTIMEO                1
+/* The F429 stream sender bounds a stalled Pi with SO_SNDTIMEO; without it a
+ * blocking lwip_send() has no deadline and the camera thread cannot exit. */
+#define LWIP_SO_SNDTIMEO                1
 /* FIONREAD has to answer "is a datagram already queued?" for the cost
  * instrument's application bucket. The stock implementation answers from
  * recv_avail, which UDP never maintains; LINUXMODE takes the datagram into

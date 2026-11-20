@@ -56,6 +56,7 @@ endif
 USB_INCLUDES := \
 	-I$(USB_BOARD) \
 	-I$(LINE)/app/usb \
+	-I$(LINE)/app/stream \
 	-I$(USB)/common \
 	-I$(USB)/core \
 	-I$(USB)/class/hub \
@@ -143,6 +144,14 @@ UAC_CASES := $(filter uac_detect uac_mic uac_av,$(CASES))
 ifneq ($(strip $(UAC_CASES)),)
 include $(CURDIR)/uac.mk
 USB_ALL_SRCS += $(UAC_ALL_SRCS)
+endif
+# The Pi stream image needs both camera classes and the AP6181/lwIP world.
+# stream.mk owns its source list (the classes, both app halves, the case) so
+# the combined image does not have to pretend to be a uvc_* or uac_* case.
+STREAM_CASES := $(filter pi_stream,$(CASES))
+ifneq ($(strip $(STREAM_CASES)),)
+include $(CURDIR)/stream.mk
+USB_CASE_SRCS += $(STREAM_ALL_SRCS)
 endif
 ifneq ($(strip $(UVC_CASES) $(UAC_CASES)),)
 USB_APP_SRCS := $(LINE)/app/usb/usb_app.c

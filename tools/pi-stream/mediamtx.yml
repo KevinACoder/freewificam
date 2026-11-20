@@ -1,0 +1,12 @@
+logLevel: info
+rtspAddress: :8554
+apiAddress: 127.0.0.1:9997
+pathDefaults:
+  record: yes
+  recordPath: /home/pi/f429cam/record/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordSegmentDuration: 30s
+  recordDeleteAfter: 0s
+  overridePublisher: true
+paths:
+  all_others:

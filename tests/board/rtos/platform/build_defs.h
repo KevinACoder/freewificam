@@ -159,7 +159,7 @@
 #if defined(RTOS_CASE_UVC_DETECT) || defined(RTOS_CASE_UVC_ISO_SMOKE) || \
     defined(RTOS_CASE_UVC_OPEN) || defined(RTOS_CASE_UVC_STREAM) || \
     defined(RTOS_CASE_UAC_DETECT) || defined(RTOS_CASE_UAC_MIC) || \
-    defined(RTOS_CASE_UAC_AV)
+    defined(RTOS_CASE_UAC_AV) || defined(RTOS_CASE_PI_STREAM)
 #define CONFIG_USB_DWC2_ISO 1
 #endif
 
