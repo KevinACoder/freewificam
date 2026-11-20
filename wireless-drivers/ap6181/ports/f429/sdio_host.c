@@ -530,6 +530,11 @@ restart:
 				     (unsigned long)SDIO_DCOUNT,
 				     (unsigned long)DMA2_S3NDTR,
 				     (unsigned long)ap6181_stats.dma_intrs);
+			(void)command_send((uint32_t)SDIO_CMD_52,
+					   0x110UL << 9, true, true);
+			ap6181_trace("ap6181: cccr110=0x%02lx dcount=%lu\n",
+				     (unsigned long)(SDIO_RESP1 & 0xFFUL),
+				     (unsigned long)SDIO_DCOUNT);
 			ap6181_trace("ap6181: isr sta=0x%08lx n=%lu cmd53 isr=%lu "
 				     "cmd=%lu\n",
 				     (unsigned long)ap6181_stats.last_isr_sta,
