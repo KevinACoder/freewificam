@@ -717,6 +717,55 @@ def uac_av_video_short() -> str:
             + "rtos: result pass cases=4/4 backend=freertos\n")
 
 
+# --- the F429 wired-Ethernet case ------------------------------------------
+
+F429_ETH_BODY = (
+    "f429_eth: start\n"
+    "f429_eth: init rc=0\n"
+    "f429_eth: phy id=0007:c0f1 addr=0\n"
+    "f429_eth: mac=02:00:1a:2b:3c:4d\n"
+    "f429_eth: link speed=100 duplex=1\n"
+    "f429_eth: dhcp ip=192.168.0.77 mask=255.255.255.0 gw=192.168.0.1 "
+    "lease_ms=1200\n"
+    "f429_eth: arp gw=192.168.0.1 mac=aa:bb:cc:dd:ee:01\n"
+    "f429_eth: ping dst=192.168.0.1 tx=10 rx=10 min=0 avg=1 max=3\n"
+    "f429_eth: dns name=www.baidu.com rc=0 ip=110.242.68.66\n"
+)
+
+
+def f429_eth_open() -> str:
+    return (BANNER + F429_ETH_BODY
+            + "f429_eth: ping dst=223.5.5.5 tx=10 rx=10 min=10 avg=12 "
+              "max=15\n"
+            + "f429_eth: stats rx=31 tx=30 len_err=0 copy_err=0 tx_busy=0 "
+              "missed=0\n"
+            + "f429_eth: bridge fed=31 pbuf_fail=0 input_fail=0 tx_drop=0\n"
+            + "f429_eth: PASS DATA\n"
+            + CASE_PASS.format(name="f429_eth") + RESULT_PASS)
+
+
+def f429_eth_no_public() -> str:
+    """PASS DATA from a board that only answered its gateway: the gate is the
+    public echo reply, and a PASS without one is a broken image."""
+    return (BANNER + F429_ETH_BODY
+            + "f429_eth: ping dst=223.5.5.5 tx=10 rx=0 min=0 avg=0 max=0\n"
+            + "f429_eth: stats rx=12 tx=11 len_err=0 copy_err=0 tx_busy=0 "
+              "missed=0\n"
+            + "f429_eth: PASS DATA\n"
+            + CASE_PASS.format(name="f429_eth") + RESULT_PASS)
+
+
+def f429_eth_no_link() -> str:
+    """PASS DATA with the link line at speed=0."""
+    body = F429_ETH_BODY.replace("f429_eth: link speed=100 duplex=1\n",
+                                 "f429_eth: link speed=0 duplex=0\n")
+    return (BANNER + body
+            + "f429_eth: ping dst=223.5.5.5 tx=10 rx=10 min=10 avg=12 "
+              "max=15\n"
+            + "f429_eth: PASS DATA\n"
+            + CASE_PASS.format(name="f429_eth") + RESULT_PASS)
+
+
 SAMPLES = [
     ("usb-dwc2-open", usb_dwc2_open, None,
      {"cases": ["tick", "usb_dwc2"]}),
@@ -804,6 +853,11 @@ SAMPLES = [
       "uvc_width": "640", "uvc_height": "480", "uvc_ival": "1",
       "uvc_mps_max": "1023", "uvc_min_frames": "50",
       "uvc_max_frame_bytes": "131072", "uac_video_min_frames": "200"}),
+    ("f429-eth-open", f429_eth_open, None, {"cases": ["f429_eth"]}),
+    ("f429-eth-no-public", f429_eth_no_public, "no public echo reply",
+     {"cases": ["f429_eth"]}),
+    ("f429-eth-no-link", f429_eth_no_link, "link speed=0",
+     {"cases": ["f429_eth"]}),
 ]
 
 

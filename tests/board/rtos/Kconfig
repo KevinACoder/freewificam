@@ -402,6 +402,15 @@ config LWIP_UDP_RECVMBOX_SIZE
 	range 1 128
 	default 16
 
+config LWIP_DNS
+	bool "lwIP DNS client"
+	default n
+	help
+	  Link lwIP's resolver and let DHCP install the servers it hands out.
+	  Off for every measured image; the wired-Ethernet bring-up turns it on
+	  to show a name resolving through the router, as a report-only line
+	  beside the internet gate (which is an IP echo reply, not a lookup).
+
 endmenu
 
 endmenu

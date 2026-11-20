@@ -123,7 +123,15 @@
 #define LWIP_ARP                        1
 #define LWIP_ICMP                       1
 #define LWIP_IGMP                       0
+/* The resolver is a per-image option (CONFIG_LWIP_DNS): DHCP installs the
+ * servers the lease carries, and the wired-Ethernet bring-up resolves one
+ * name as a report-only line.  Off for the measured images, whose gate is an
+ * IP echo reply and whose size should not carry a second protocol. */
+#if CONFIG_LWIP_DNS
+#define LWIP_DNS                        1
+#else
 #define LWIP_DNS                        0
+#endif
 #define LWIP_DHCP                       1
 #define LWIP_AUTOIP                     0
 #define LWIP_UDP                        1

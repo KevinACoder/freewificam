@@ -107,6 +107,12 @@ int case_f429_wifi_ap_run(void);
 int case_f429_ap_link_run(void);
 #endif
 
+/* The wired NIC on the same board: the imported ST HAL ETH driver, DHCP and
+ * the internet gate (docs/F429-ETH.md). */
+#if defined(RTOS_CASE_F429_ETH)
+int case_f429_eth_run(void);
+#endif
+
 /* The AP6181 (BCM43362) WICED line: one case per rung of the ladder.  The
  * driver is not the Linux stack, so these cases do not include any linuxkpi
  * header; their anchors are the four PASS lines. */

@@ -139,6 +139,10 @@ CASES = (
     "f429_wifi",
     "f429_wifi_ap",
     "f429_ap_link",
+    # The same board's wired NIC: the imported ST HAL ETH driver, the DHCP
+    # lease and the internet echo.  Its evidence block below checks the PHY
+    # identity, the link, the lease and at least one public reply.
+    "f429_eth",
 )
 
 # The bench line for a gigabit port: a leg that reports less than this still
@@ -1796,12 +1800,64 @@ PATTERNS = {
     "rtl8xxxu_c6_fail": re.compile(
         r"rtl8xxxu_c6: FAIL (?P<reason>.+)$", re.MULTILINE
     ),
+    # F429 wired Ethernet (f429_eth): the driver's identity, the PHY and its
+    # strap address, the auto-negotiation result, the DHCP lease, the gateway
+    # ARP entry, the driver/bridge counters and the verdict.  Every repeated
+    # ping line is a LIST_PATTERN (f429_eth_ping), because the gate reads all
+    # of them, not the first.
+    "f429_eth_init": re.compile(
+        r"f429_eth: init rc=(?P<rc>-?\d+)", re.MULTILINE
+    ),
+    "f429_eth_phy": re.compile(
+        r"f429_eth: phy id=(?P<id1>[0-9a-f]{4}):(?P<id2>[0-9a-f]{4}) "
+        r"addr=(?P<addr>\d+)", re.MULTILINE
+    ),
+    "f429_eth_mac": re.compile(
+        r"f429_eth: mac=(?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5})",
+        re.MULTILINE,
+    ),
+    "f429_eth_link": re.compile(
+        r"f429_eth: link speed=(?P<speed>\d+) duplex=(?P<duplex>[01])",
+        re.MULTILINE,
+    ),
+    "f429_eth_dhcp": re.compile(
+        r"f429_eth: dhcp ip=(?P<ip>[\d.]+) mask=(?P<mask>[\d.]+) "
+        r"gw=(?P<gw>[\d.]+) lease_ms=(?P<ms>\d+)", re.MULTILINE
+    ),
+    "f429_eth_arp": re.compile(
+        r"f429_eth: arp gw=(?P<gw>[\d.]+) "
+        r"mac=(?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5})", re.MULTILINE
+    ),
+    "f429_eth_dns": re.compile(
+        r"f429_eth: dns name=(?P<name>\S+) rc=(?P<rc>-?\d+) "
+        r"ip=(?P<ip>\S+)", re.MULTILINE
+    ),
+    "f429_eth_stats": re.compile(
+        r"f429_eth: stats rx=(?P<rx>\d+) tx=(?P<tx>\d+) "
+        r"len_err=(?P<len>\d+) copy_err=(?P<copy>\d+) "
+        r"tx_busy=(?P<busy>\d+) missed=(?P<missed>\d+)", re.MULTILINE
+    ),
+    "f429_eth_bridge": re.compile(
+        r"f429_eth: bridge fed=(?P<fed>\d+) pbuf_fail=(?P<pbuf>\d+) "
+        r"input_fail=(?P<input>\d+) tx_drop=(?P<drop>\d+)", re.MULTILINE
+    ),
+    "f429_eth_pass": re.compile(r"f429_eth: PASS DATA", re.MULTILINE),
+    "f429_eth_fail": re.compile(
+        r"f429_eth: FAIL (?P<reason>.+)$", re.MULTILINE
+    ),
 }
 
 # The anchors that repeat once per phase / per sweep size: collected as lists so
 # a phase's absence stays visible as an absence and a second run does not hide
 # the first.
 LIST_PATTERNS = {
+    # F429 wired Ethernet: one line per ping target (the gateway and every
+    # public target tried), so the gate can read all of them.
+    "f429_eth_ping": re.compile(
+        r"f429_eth: ping dst=(?P<dst>[\d.]+) tx=(?P<tx>\d+) "
+        r"rx=(?P<rx>\d+) min=(?P<min>\d+) avg=(?P<avg>\d+) "
+        r"max=(?P<max>\d+)", re.MULTILINE
+    ),
     # The monitor round's window samples and kept frames.
     "iwl7260_mon_sample": re.compile(
         r"iwl7260_mon: sample t=(?P<t>\d+) frames=(?P<frames>\d+) "
@@ -6106,6 +6162,70 @@ def judge(text: str, expect: dict | None = None) -> dict:
                 f"{rep['kbit']} kbit/s")
         if not found["rtl8xxxu_c6_pass"]:
             errors.append("rtl8xxxu_c6: the PASS C6T line is missing")
+
+    if cases.get("f429_eth", {}).get("verdict") == "pass":
+        init = found["f429_eth_init"]
+        if not init:
+            errors.append("f429_eth: PASS without an init line")
+        elif int(init["rc"]) != 0:
+            errors.append(f"f429_eth: init rc={init['rc']}")
+
+        phy = found["f429_eth_phy"]
+        if not phy:
+            errors.append("f429_eth: PASS without a PHY id line")
+        elif phy["id1"] != "0007" or (int(phy["id2"], 16) & 0xFFF0) != 0xC0F0:
+            errors.append(
+                f"f429_eth: PHY id {phy['id1']}:{phy['id2']} is not the "
+                "board's LAN8720A")
+
+        link = found["f429_eth_link"]
+        if not link:
+            errors.append("f429_eth: PASS without a link line")
+        elif int(link["speed"]) not in (10, 100):
+            errors.append(f"f429_eth: link speed={link['speed']}")
+        else:
+            notes.append(
+                f"f429_eth: link {link['speed']}M "
+                f"{'full' if link['duplex'] == '1' else 'half'}")
+
+        dhcp = found["f429_eth_dhcp"]
+        if not dhcp:
+            errors.append("f429_eth: PASS without a DHCP lease")
+        elif dhcp["ip"] == "0.0.0.0" or dhcp["gw"] == "0.0.0.0":
+            errors.append(
+                f"f429_eth: lease ip={dhcp['ip']} gw={dhcp['gw']}")
+        else:
+            notes.append(
+                f"f429_eth: dhcp {dhcp['ip']} gw={dhcp['gw']} "
+                f"({dhcp['ms']} ms)")
+
+        pings = found["f429_eth_ping"]
+        gateway = dhcp["gw"] if dhcp else None
+        public = [row for row in pings if row["dst"] != gateway]
+        answered = [row for row in public if int(row["rx"]) >= 9]
+        if not answered:
+            errors.append(
+                "f429_eth: no public echo reply with rx>=9 "
+                f"({len(public)} target(s) tried)")
+        else:
+            first = answered[0]
+            notes.append(
+                f"f429_eth: internet via {first['dst']} "
+                f"{first['rx']}/{first['tx']} rtt {first['avg']} ms")
+        for row in pings:
+            notes.append(
+                f"f429_eth: ping {row['dst']} {row['rx']}/{row['tx']} "
+                f"rtt {row['min']}/{row['avg']}/{row['max']} ms")
+
+        stats = found["f429_eth_stats"]
+        if stats:
+            notes.append(
+                f"f429_eth: driver rx={stats['rx']} tx={stats['tx']} "
+                f"len_err={stats['len']} copy_err={stats['copy']} "
+                f"missed={stats['missed']}")
+
+        if not found["f429_eth_pass"]:
+            errors.append("f429_eth: the PASS DATA line is missing")
 
     result = found["result"]
     if not result:

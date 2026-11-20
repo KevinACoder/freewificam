@@ -1,0 +1,26 @@
+# F429 wired Ethernet: the board's LAN8720A on the STM32F4 ETH MAC (RMII),
+# driven by the imported ST HAL ETH closure, with lwIP's DHCP client and an
+# ICMP internet gate.  See docs/F429-ETH.md.
+#
+# The profile is a wired-NIC image only: no USB host, no wireless stack, no
+# camera.  It carries the same SDRAM memory plan as the other F429 images
+# (the FreeRTOS heap and lwIP's heap live in the core board's 32 MB FMC SDRAM;
+# the ETH DMA rings and the station buffers stay in internal SRAM) and the
+# lwIP tier the F429 branch sizes (255 KiB heap, 24 pbufs).
+#
+# LWIP_DNS is on for this image alone: the case resolves one name as a
+# report-only line.  The gate itself is an IP echo reply.
+CONFIG_ARCH_ARM_V7M=y
+CONFIG_BACKEND_FREERTOS=y
+CONFIG_OPT_OS=y
+CONFIG_DEBUG_G1=y
+CONFIG_PROFILE_BASE=y
+CONFIG_BOARD_STM32F429_CHALLENGER=y
+CONFIG_FREERTOS_HEAP_SIZE=262144
+CONFIG_BOARD_AUTO_RESET=n
+CONFIG_F429_SDRAM=y
+CONFIG_F429_HEAP_SDRAM=y
+CONFIG_F429_LWIP_SDRAM=y
+CONFIG_RUNNER_STACK_KB=16
+CONFIG_CASES="f429_eth"
+CONFIG_LWIP_DNS=y
