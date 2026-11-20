@@ -96,6 +96,18 @@ case_f429_ap6181_attach_run(void)
 	print_stats();
 
 	{
+		uint8_t lo = 0U;
+		uint8_t hi = 0U;
+		wwd_result_t r1;
+		wwd_result_t r2;
+
+		r1 = ap6181_read_fn1(0x1001BU, &lo);
+		r2 = ap6181_read_fn1(0x1001CU, &hi);
+		CASE_INFO("ap6181: frame_bc rc=%d/%d lo=%u hi=%u\n",
+			  (int)r1, (int)r2, (unsigned)lo, (unsigned)hi);
+	}
+
+	{
 		uint8_t ioen = 0U;
 		uint8_t iordy = 0U;
 

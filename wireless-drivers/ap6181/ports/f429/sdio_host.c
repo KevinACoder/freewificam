@@ -566,6 +566,7 @@ restart:
 
 	if (command == SDIO_CMD_53) {
 		uint32_t total;
+		uint32_t t0 = (uint32_t)host_rtos_get_time();
 
 		/* The 43362's byte-mode CMD53 carries its length in the block
 		 * field, so the argument's size is the block the host will use;
@@ -612,11 +613,28 @@ restart:
 
 		if (((argument >> 28) & 0x7UL) == 2UL)
 			ap6181_trace("ap6181: f2 dir=%d len=%u arg=0x%08lx "
-				     "pa0=%lu\n", (int)direction,
-				     (unsigned)data_size,
+				     "pa0=%lu d=%02x%02x%02x%02x%02x%02x%02x%02x "
+				     "%02x%02x%02x%02x%02x%02x%02x%02x\n",
+				     (int)direction, (unsigned)data_size,
 				     (unsigned long)argument,
 				     (unsigned long)((*(volatile uint32_t *)
-						      0x40020010UL) & 1UL));
+						      0x40020010UL) & 1UL),
+				     ((const uint8_t *)data)[0],
+				     ((const uint8_t *)data)[1],
+				     ((const uint8_t *)data)[2],
+				     ((const uint8_t *)data)[3],
+				     ((const uint8_t *)data)[4],
+				     ((const uint8_t *)data)[5],
+				     ((const uint8_t *)data)[6],
+				     ((const uint8_t *)data)[7],
+				     ((const uint8_t *)data)[8],
+				     ((const uint8_t *)data)[9],
+				     ((const uint8_t *)data)[10],
+				     ((const uint8_t *)data)[11],
+				     ((const uint8_t *)data)[12],
+				     ((const uint8_t *)data)[13],
+				     ((const uint8_t *)data)[14],
+				     ((const uint8_t *)data)[15]);
 		s_direction = direction;
 		s_failed = false;
 		(void)host_rtos_get_semaphore(&s_done, 0U, WICED_TRUE);
@@ -661,6 +679,9 @@ restart:
 		 * head of the next chunk and shift every following byte. */
 		SDIO_DCTRL = 0U;
 		SDIO_MASK = MASK_SDIOIT;
+		if (ap6181_stats.cmd53_isr <= 6U)
+			ap6181_trace("ap6181: t=%lu ms\n",
+				     (unsigned long)((uint32_t)host_rtos_get_time() - t0));
 
 		/* In-place integrity check: read the block just written back
 		 * through the same window (no window register is touched) and
@@ -789,6 +810,22 @@ ap6181_read_cccr(uint8_t reg, uint8_t *value)
 	rc = host_platform_sdio_transfer(BUS_READ, SDIO_CMD_52, SDIO_BYTE_MODE,
 					 SDIO_1B_BLOCK,
 					 ((uint32_t)reg & 0x1FFFFUL) << 9,
+					 NULL, 0U, RESPONSE_NEEDED, &response);
+	if (value != NULL)
+		*value = (uint8_t)(response & 0xFFUL);
+	return rc;
+}
+
+wwd_result_t
+ap6181_read_fn1(uint16_t reg, uint8_t *value)
+{
+	wwd_result_t rc;
+	uint32_t response = 0U;
+
+	rc = host_platform_sdio_transfer(BUS_READ, SDIO_CMD_52, SDIO_BYTE_MODE,
+					 SDIO_1B_BLOCK,
+					 (1UL << 28) |
+					 (((uint32_t)reg & 0x1FFFFUL) << 9),
 					 NULL, 0U, RESPONSE_NEEDED, &response);
 	if (value != NULL)
 		*value = (uint8_t)(response & 0xFFUL);
