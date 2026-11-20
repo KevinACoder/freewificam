@@ -43,6 +43,7 @@ that way.
 | `stm32f429-uvc-480` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the same host/class path opened at 640x480 MJPEG; the DWC2 isochronous engine's raw 16-URB smoke and a 20 s stream window; camera/frame pool in SDRAM |
 | `stm32f429-uvc-800x600` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the same at 800x600 MJPEG, the Pro 9000's largest full-speed mode; report-only rate, same four-case gate |
 | `stm32f429-uvc-720p` | uvc_detect uvc_open uvc_iso_smoke uvc_stream | the 1280x720 target image for a camera whose full-speed descriptor set actually contains a 720-line mode; the bench Pro 9000 does not, so its verdict for this camera is the descriptor-table negative |
+| `stm32f429-eth` | f429_eth | F429's LAN8720A (RMII) on the STM32F4 ETH MAC, driven by the imported ST HAL ETH driver: PHY identity, the negotiated link, a DHCP lease from the bench router, the gateway's ARP and echo, name resolution (report only), and at least one public echo reply; verdict `f429_eth: PASS DATA` |
 | `rk3568-kpi-live` | tick pcie kpi_live | liblinux80211's PCI engine over the board's real root complex |
 | `rk3568-mac80211-c2` | tick mac80211_c2 | the real mac80211/cfg80211 stack registers a wiphy (C2); no PCI engine |
 | `rk3568-iwl7260-mac80211` | tick pcie iwl7260_c3 | the same stack + the vendored iwlwifi (72 TUs) over the AC 7260: probe, firmware ALIVE, register, `dev_open` start (C3) |
@@ -274,6 +275,7 @@ the SDRAM is brought up before the kernel (`main.c` calls
 ./make.rtos image PROFILE=stm32f429-wifi-c4    # scan: scan
 ./make.rtos image PROFILE=stm32f429-wifi-c5    # association: connect
 ./make.rtos image PROFILE=stm32f429-wifi-c6    # data plane: connect + lwIP + ICMP (delivery, 726,080 B)
+./make.rtos image PROFILE=stm32f429-eth       # wired Ethernet: LAN8720A + ST HAL + DHCP + public ICMP (77,176 B)
 ./make.rtos image PROFILE=stm32f429-wifi-c6t   # data plane + four report-only throughput phases (735,936 B)
 mcu flash build/build/rtos-freertos.bin --bin-base 0x08000000 --erase sector \
     --verify --reset --expect "rtos: result"

@@ -34,6 +34,7 @@ brought up; its detailed performance records are in
 | **STM32F429** | Wi-Fi: liblinux80211 + rtl8xxxu on USB | attach/scan/join/data 2/2; report-only 2.8 Mbit/s TCP down, 6.1 Mbit/s UDP down |
 | **STM32F429** | USB host MSC + SDRAM | 2/2; U-disk block I/O and the DMA-to-SDRAM arm |
 | **STM32F429** | AP6181 SDIO (Cypress WICED port) | attach/scan/join/ICMP 2/2; report-only TCP TX 6.06 / RX 9.83 Mbit/s |
+| **STM32F429** | Wired Ethernet: LAN8720A (RMII) + the imported ST HAL ETH driver | 2/2; 100 Mbit/s full duplex, DHCP lease from the router, gateway 10/10, one public target 10/10 per boot (see below) |
 | RK3568 (Cortex-A55) | mac80211/cfg80211 + iwlwifi, AC 7260 PCIe | C0-C6 2/2; TCP down 142.6%, up 93.3% of Linux; AP down 99.9%, up 57.3% |
 | RK3568 | RTL8189FTV SDIO, vendor stack | station 2/2, AP 2/2; TCP down 69-73% of Linux |
 | RK3568 | RTL8851BU USB, rtw89 | station/AP/monitor run; AP TCP down 116.9%, up 78.4% (one gate failed) |
@@ -41,6 +42,18 @@ brought up; its detailed performance records are in
 
 `docs/STATUS.md` states each stage as what it is; `docs/BUILD.md` records the
 build's design and how a new world is added.
+
+## STM32F429 wired Ethernet
+
+The board's RJ45 is a LAN8720A in RMII mode on the STM32F4 ETH MAC.  The MAC,
+the DMA descriptor rings, MDIO and the PHY auto-negotiation are ST's STM32F4 HAL
+ETH driver, imported verbatim into `third-party/stm32f4xx-hal/`; the board seam
+(clocks, AF11 pins, UID-derived MAC, the RTOS HAL time base), the lwIP netif
+bridge and the `f429_eth` ladder are written here.  One boot brings the link up
+at 100 Mbit/s full duplex, takes a DHCP lease from the router, resolves one
+name (report only) and pings the gateway and a public address; the reachability
+verdict `f429_eth: PASS DATA` is the public echo reply.  Full details:
+[F429-ETH.md](docs/F429-ETH.md).
 
 ## STM32F429 UVC camera
 
@@ -209,7 +222,7 @@ This repository tests the other split: keep the stack, replace the two edges.
 | `tests/board/rtos/app/` | the case runner, the acceptance cases and the F429 UVC application half |
 | `tests/board/rtos/build/` | the platform Makefile and the per-world fragments (`usb.mk`, `uvc.mk`, `kpi.mk`, ...) |
 | `tests/board/rtos/configs/` | the profiles for both boards (one defconfig each) |
-| `third-party/` | FreeRTOS, CMSIS, lwIP, CherryUSB (host classes + DWC2/EHCI/xHCI ports), fsl_sdmmc, printf, tlsf, ulog (compiled closures, pins in `docs/PROVENANCE.md`) |
+| `third-party/` | FreeRTOS, CMSIS, lwIP, CherryUSB (host classes + DWC2/EHCI/xHCI ports), fsl_sdmmc, the STM32F4 HAL ETH closure, printf, tlsf, ulog (compiled closures, pins in `docs/PROVENANCE.md`) |
 | `components/` | first-party components; `liblinux80211` is the Linux stack import |
 | `wireless-drivers/` | the vendored card drivers (`rtl8xxxu`, `rtw88`, `rtw89`, the AP6181 WICED port) |
 | `tools/` | the Kconfig generator, the build gates, the judge, the commit checker |

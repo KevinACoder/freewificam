@@ -1760,3 +1760,51 @@ The camera needs its video function claimed before its microphone produces
 samples: without the UVC class the audio endpoint returns zero-length packets.
 The microphone image carries the UVC class and the `uvc_detect` census for
 that reason; the window itself measures audio only.
+
+## STM32F429 wired Ethernet — LAN8720A + the imported ST HAL (2026-11-20)
+
+Link: the board's RJ45 (LAN8720A, RMII, PHY address 0, 100 Mbit/s full duplex)
+into the lab router.  The MAC/DMA/PHY driver is ST's STM32F4 HAL, imported
+verbatim (`third-party/stm32f4xx-hal`); the board seam, the lwIP bridge and
+the ladder are this tree's.  Profile `stm32f429-eth`, one boot runs the whole
+ladder (timestamps are the image's own milliseconds since boot):
+
+```text
+[   0.010] f429_eth: start
+[   1.464] f429_eth: init rc=0
+[   1.468] f429_eth: phy id=0007:c0f1 addr=0
+[   1.474] f429_eth: mac=02:00:1e:00:37:0b
+[   1.479] f429_eth: link speed=100 duplex=1
+[   1.485] net: stack ready lwip=2.2.1
+[   9.792] f429_eth: dhcp ip=192.168.0.34 mask=255.255.255.0 gw=192.168.0.1 lease_ms=8300
+[  10.545] f429_eth: ping dst=192.168.0.1 tx=10 rx=10 min=3 avg=4 max=7
+[  10.554] f429_eth: arp gw=192.168.0.1 mac=40:dc:a5:56:29:53
+[  10.581] f429_eth: dns name=www.baidu.com rc=0 ip=111.45.11.5
+[  11.617] f429_eth: ping dst=223.5.5.5 tx=10 rx=10 min=31 avg=32 max=37
+[  11.627] f429_eth: stats rx=98 tx=34 len_err=0 copy_err=0 tx_busy=0 missed=0
+[  11.636] f429_eth: bridge fed=98 pbuf_fail=0 input_fail=0 tx_drop=0
+[  11.643] f429_eth: PASS DATA
+```
+
+The second cold boot of the same image (sha256 `bbd4c3e9…`) is the same
+ladder with `lease_ms=9100` and a different public target: 223.5.5.5 answered
+0/10 (public ICMP rate-limiting at that target; the Pi's own pings to it were
+5/5 in the same round) and 119.29.29.29 answered 10/10 at 21 ms.  The gate is
+"at least one public target", which is why both boots pass.
+
+What the transcript proves: the PHY answered at its strap address and the part
+is the board's LAN8720A; the link negotiated 100 Mbit/s full duplex; the
+router's DHCP server leased an address to the UID-derived MAC; the gateway's
+ARP entry was resolved and it answered 10/10; the DHCP-provided resolver
+answered (report only); and a public address answered 10/10 through the
+router's NAT.
+
+What it does not prove: throughput (the receive path is a 1 ms poll of an
+8-frame ring, and this image carries no throughput case), IPv6, wake-on-LAN,
+or the Ethernet interrupt arm.  The lease takes 8.3-9.1 s in both boots; a
+simultaneous tcpdump on the Pi shows two DHCP request packets from the
+board 25 ms apart (the DISCOVER and then the REQUEST; the server's OFFER and
+ACK are unicast to the board and do not reach the Pi) and no further
+board-side retransmission, so the wait is in the server's reply path rather
+than in lwIP's retry loop - it is reported, not gated (the case's DHCP wait
+budget is 20 s).
