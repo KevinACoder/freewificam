@@ -103,6 +103,12 @@ into a 200 ms single-producer/single-consumer PCM ring (6,400 bytes at
   board (`gaps=7`, `gap_max=7`).  The start banner now prints before the
   first submit; the microphone and video+microphone windows then report
   `gaps=0`.
+- The same rule applies to periodic prints in a longer window.  In the
+  F429-to-Pi stream a five-second heartbeat during the 20 s video+microphone
+  window produced `gaps=20 gap_max=5`; enlarging the microphone URB from 16
+  to 64 packets only reduced it to 15.  Removing the heartbeat gave
+  `gaps=0`.  URB size reduces the number of boundaries; the print is the
+  defect.
 - Stopping the stream marks the in-flight URB's remaining packets with
   `-USB_ERR_SHUTDOWN`.  Those packets were never attempted and are counted as
   `shutdown`, not as transport errors; the transport-error counter stays 0 on

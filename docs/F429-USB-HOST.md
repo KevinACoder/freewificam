@@ -167,8 +167,9 @@ endpoint is isochronous, and the DWC2 port at the pin had no working ISO path
 ISO branch).  Patch 0011 adds a full-speed ISO engine: one `iso_packet[]`
 entry per channel activation, its `actual_length` read back from the remaining
 `XFRSIZ`, and the next entry armed from the channel-halt interrupt.  The
-engine is compiled only for the UVC images (`CONFIG_USB_DWC2_ISO`); the MSC
-and wireless images keep the port's pin bytes and code size.
+engine is compiled for the UVC/UAC and `pi_stream` images
+(`CONFIG_USB_DWC2_ISO`); the MSC and wireless images keep the port's pin bytes
+and code size.
 
 The camera on the bench is a Logitech QuickCam Pro 9000 (`046d:0990`).  At full
 speed it exposes MJPEG 160x120/176x144/320x240/352x288/640x480/800x600 and

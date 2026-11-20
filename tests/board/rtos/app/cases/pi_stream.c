@@ -483,10 +483,16 @@ case_pi_stream_run(void)
 		if (CONFIG_STREAM_STAGE != 2) {
 			/* No console output while the isochronous urbs are in
 			 * flight: the print lock masks interrupts, and each
-			 * line costs the microphone a 1 ms packet. */
+			 * line costs the microphone a 1 ms packet.  A zero
+			 * window means run until the board is reset. */
+#if CONFIG_STREAM_WINDOW_MS == 0
+			for (;;)
+				osDelay(50U);
+#else
 			while ((now_ms() - start_ms) <
 			       (uint32_t)CONFIG_STREAM_WINDOW_MS)
 				osDelay(50U);
+#endif
 		}
 
 		s_stop = 1;

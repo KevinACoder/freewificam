@@ -82,9 +82,9 @@ config STREAM_STAGE
 	  4: 20 s of MJPEG plus the camera microphone's PCM.
 
 config STREAM_WINDOW_MS
-	int "Pi stream window (ms)"
+	int "Pi stream window (ms, 0 = until reset)"
 	default 20000
-	range 1000 120000
+	range 0 3600000
 
 config STREAM_SSID
 	string "Pi stream target SSID"

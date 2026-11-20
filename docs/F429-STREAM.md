@@ -46,17 +46,25 @@ data.
 | `stm32f429-stream-frame` | 2 | one captured JPEG |
 | `stm32f429-stream-video` | 3 | 20 s MJPEG |
 | `stm32f429-stream-av` | 4 | 20 s MJPEG + microphone PCM |
+| `stm32f429-stream-live` | 3 | MJPEG until reset (`CONFIG_STREAM_WINDOW_MS=0`) |
+| `stm32f429-stream-live-av` | 4 | MJPEG + PCM until reset |
 
-All four use the AP6181 WICED port, the first-party UVC/UAC classes and lwIP.
-The 1 MiB FreeRTOS heap and the three 128 KiB camera buffers live in the FMC
-SDRAM; lwIP's heap and pbuf pools stay in the 192 KiB SRAM, because the
-AP6181 transmit path hands pbufs to the SDIO DMA. The image links about
+The staged profiles use the AP6181 WICED port, the first-party UVC/UAC
+classes and lwIP. The 1 MiB FreeRTOS heap and the three 128 KiB camera buffers
+live in the FMC SDRAM; lwIP's heap and pbuf pools stay in the 192 KiB SRAM.
+That is the working combination: moving the lwIP pools to SDRAM was tried at
+two tiers and did not reach ready-to-transceive, and the cause was not
+isolated, so the accepted image keeps lwIP in SRAM. The image links about
 370 KB.
 
 The camera open uses the class's probe/commit and a short raw-ISO smoke before
-the stream engine starts, because this camera stays silent if the streaming
-endpoint is only opened. The DWC2 isochronous engine must be selected for the
-`pi_stream` case (`platform/build_defs.h`).
+the stream engine starts; the smoke's 16/16 URBs are the quick check that the
+isochronous path is armed. The DWC2 isochronous engine must be selected for the
+`pi_stream` case: unlike the `uvc_*`/`uac_*` cases, `pi_stream` is a composite
+case, so `platform/build_defs.h` keys `CONFIG_USB_DWC2_ISO` on
+`RTOS_CASE_PI_STREAM` as well. Without that macro the ISO submit returns 0 but
+no channel is armed: every smoke URB times out and the stream captures zero
+frames.
 
 The link brings the station up with one leave/rejoin retry: on this bench the
 first join often associates but never reaches ready-to-transceive, and the
@@ -70,10 +78,14 @@ configuration and an install script. The receiver validates the header, length
 and CRC, writes `video.mjpg` / `audio.pcm` plus the first frame, and feeds
 named pipes through bounded queues. The publisher encodes H.264 (libx264
 ultrafast, zero-latency) and AAC from the frame/sample counts; mediamtx serves
-the RTSP path `cam` on port 8554 and records fMP4.  Both inputs use a larger
-ffmpeg thread queue, and the receiver's bounded FIFO queues are sized so a
-slow encoder start does not drop audio. The chain was self-tested
-with a synthetic source (H.264 640x480 + AAC 16 kHz) before the board run.
+the RTSP path `cam` on port 8554 and records fMP4.  Neither FIFO input may
+carry `-use_wallclock_as_timestamps`: on raw PCM that produced huge,
+non-monotonic DTS and the recording kept only a few seconds of audio.  Both
+inputs use a larger ffmpeg thread queue, the receiver's FIFO queues absorb a
+slow encoder start, and the receiver's socket timeout is 5 s so an 11 KB
+frame split across an 8 KB send buffer is not mistaken for a short read. The
+chain was self-tested with a synthetic source (H.264 640x480 + AAC 16 kHz)
+before the board run.
 
 ## Measured state (2026-11-20)
 
@@ -91,3 +103,18 @@ All four gates passed on two relay cold boots each:
 The microphone stream runs as 64-packet isochronous urbs and the stream
 window has no console output: the print lock masks interrupts, and a single
 line is enough to cost the microphone a 1 ms packet.
+
+
+## Live capture and files
+
+`CONFIG_STREAM_WINDOW_MS=0` in the live profiles means "run until the board is
+reset"; the staged acceptance profiles keep their 20 s window.  For a file
+capture, run the receiver in save mode without FIFOs: it writes `video.mjpg`
+and `audio.pcm` (plus the first JPEG and a stats JSON).  A playable file is a
+plain ffmpeg conversion from the two raw streams, for example:
+
+```
+ffmpeg -f mjpeg -framerate 14 -i video.mjpg        -f s16le -ar 16000 -ac 1 -i audio.pcm        -c:v libx264 -preset ultrafast -pix_fmt yuv420p -b:v 1500k        -c:a aac -b:a 32k -shortest capture.mp4
+```
+
+The raw files are the evidence; the MP4 is only a viewing convenience.
