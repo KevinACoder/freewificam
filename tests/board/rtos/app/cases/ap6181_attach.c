@@ -46,6 +46,10 @@ print_stats(void)
 		  (unsigned long)ap6181_stats.dma_errors,
 		  (unsigned long)ap6181_stats.oob_intrs,
 		  (unsigned long)ap6181_stats.enum_attempts);
+	CASE_INFO("ap6181: cmd52 n=%lu arg=0x%08lx resp=0x%08lx\n",
+		  (unsigned long)ap6181_stats.cmd52_count,
+		  (unsigned long)ap6181_stats.last52_arg,
+		  (unsigned long)ap6181_stats.last52_resp);
 	CASE_INFO("ap6181: dma intrs=%lu cmd53 isr=%lu dma=%lu ndtr=%lu "
 		  "errsta=0x%08lx\n",
 		  (unsigned long)ap6181_stats.dma_intrs,

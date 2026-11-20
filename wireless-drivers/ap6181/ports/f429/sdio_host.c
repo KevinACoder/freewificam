@@ -494,6 +494,11 @@ restart:
 			ap6181_stats.cmd_timeouts++;
 			goto retry;
 		}
+		if (command == SDIO_CMD_52) {
+			ap6181_stats.cmd52_count++;
+			ap6181_stats.last52_arg = argument;
+			ap6181_stats.last52_resp = SDIO_RESP1;
+		}
 	}
 
 	if (response != NULL)
