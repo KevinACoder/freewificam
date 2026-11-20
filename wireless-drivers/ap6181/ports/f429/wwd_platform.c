@@ -144,54 +144,7 @@ host_platform_is_in_interrupt_context(void)
 	return (read_ipsr() != 0U) ? WICED_TRUE : WICED_FALSE;
 }
 
-#ifndef WICED_DISABLE_MCU_POWERSAVE
-
-uint8_t
-host_platform_get_oob_interrupt_pin(void)
-{
-	return 0U;
-}
-
-wwd_result_t
-host_enable_oob_interrupt(void)
-{
-	RCC_AHB1ENR |= RCC_AHB1ENR_GPIOA;
-	RCC_APB2ENR |= RCC_APB2ENR_SYSCFGEN;
-	(void)RCC_AHB1ENR;
-	(void)RCC_APB2ENR;
-
-	/* PA0 input, no pull; the module drives it. */
-	GPIOA_MODER &= ~3UL;
-	GPIOA_PUPDR &= ~3UL;
-
-	/* EXTI line 0 on port A, rising edge, unmasked. */
-	SYSCFG_EXTICR1 &= ~0xFUL;
-	EXTI_RTSR |= 1UL;
-	EXTI_FTSR &= ~1UL;
-	EXTI_PR = 1UL;
-	EXTI_IMR |= 1UL;
-
-	NVIC_ICPR(EXTI0_IRQ / 32U) = 1UL << (EXTI0_IRQ % 32U);
-	NVIC_IPR_BYTE(EXTI0_IRQ) = (OOB_IRQ_PRIORITY << 4);
-	NVIC_ISER(EXTI0_IRQ / 32U) = 1UL << (EXTI0_IRQ % 32U);
-	return WWD_SUCCESS;
-}
-
-void
-EXTI0_IRQHandler(void)
-{
-	if ((EXTI_PR & 1UL) != 0UL) {
-		EXTI_PR = 1UL;
-		ap6181_stats.oob_intrs++;
-		wwd_thread_notify_irq();
-	}
-}
-
-#endif /* !WICED_DISABLE_MCU_POWERSAVE */
-
-void
-host_platform_bus_buffer_freed(wwd_buffer_dir_t direction)
-{
-	/* The SDIO bus is credit-flow-controlled by SDPCM, not by host buffers. */
-	(void)direction;
-}
+/* host_platform_get_oob_interrupt_pin(), host_enable_oob_interrupt() and
+ * host_platform_bus_buffer_freed() come from the vendor's SDIO host, which now
+ * owns that part of the platform face; the OOB line is driven through the
+ * vendor's platform_gpio layer with the pin table in wiced_pins.c. */

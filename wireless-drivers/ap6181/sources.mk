@@ -16,7 +16,7 @@
 
 ifeq ($(SRC_TAG),port)
 obj-$(CONFIG_WICED_AP6181) += \
-	ports/f429/sdio_host.c \
+	ports/f429/wiced_pins.c \
 	ports/f429/wwd_platform.c \
 	ports/f429/wwd_rtos.c \
 	ports/f429/wwd_buffer.c \
@@ -42,6 +42,16 @@ obj-$(CONFIG_WICED_AP6181) += \
 	vendor/WiFi_SDK/WICED/WWD/internal/wwd_wifi.c \
 	vendor/WiFi_SDK/WICED/WWD/internal/wwd_wifi_chip_common.c \
 	vendor/WiFi_SDK/WICED/WWD/internal/wwd_wifi_sleep.c \
+	\
+	vendor/WiFi_SDK/WICED/platform/MCU/STM32F4xx/WWD/wwd_SDIO.c \
+	vendor/WiFi_SDK/WICED/platform/MCU/STM32F4xx/peripherals/platform_gpio.c \
+	vendor/WiFi_SDK/WICED/platform/MCU/STM32F4xx/peripherals/platform_mcu_powersave.c \
+	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_sdio.c \
+	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_gpio.c \
+	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_rcc.c \
+	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/misc.c \
+	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_syscfg.c \
+	vendor/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_exti.c \
 	vendor/WiFi_SDK/WICED/platform/MCU/wwd_resources.c \
 	vendor/WiFi_SDK/WICED/platform/MCU/platform_resource.c \
 	vendor/WiFi_SDK/libraries/utilities/TLV/tlv.c \

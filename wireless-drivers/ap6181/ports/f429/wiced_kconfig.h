@@ -17,6 +17,21 @@
 #include "freewificam_config.h"
 
 /*
+ * The CMSIS device header (the vendor's, used unchanged by the SDIO host) asks
+ * the application to name its device family; this is the F429/439 line the
+ * board's MCU belongs to.
+ */
+#ifndef STM32F429_439xx
+#define STM32F429_439xx 1
+#endif
+
+/* The vendor's StdPeriph build names this to have the device header pull in the
+ * peripheral headers (through stm32f4xx_conf.h). */
+#ifndef USE_STDPERIPH_DRIVER
+#define USE_STDPERIPH_DRIVER 1
+#endif
+
+/*
  * This image carries the WLAN firmware only: there is no DCT and no bootloader,
  * and the 43362 computes the PMK in firmware, so the host side of WICED's
  * crypto is not compiled in either.  Both are properties of the port, not

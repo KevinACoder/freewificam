@@ -62,6 +62,12 @@ extern struct ap6181_port_stats ap6181_stats;
 err_t ap6181_netif_init(struct netif *netif);
 void ap6181_netif_attach(struct netif *netif);
 
+/* Register reads that never touch the backplane window: function-0 (CCCR) and
+ * function-1 byte registers.  Used by the bring-up case and by the port's own
+ * frame diagnostics. */
+wwd_result_t ap6181_read_cccr(uint8_t reg, uint8_t *value);
+wwd_result_t ap6181_read_fn1(uint16_t reg, uint8_t *value);
+
 /* The stack's memory pools must exist before the driver asks for its first
  * buffer (a WWD buffer is a pbuf).  The stages without a netif only need the
  * core; the data stage starts the TCP/IP thread because its netif input is

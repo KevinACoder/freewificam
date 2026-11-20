@@ -38,8 +38,18 @@ NET_STACK_SRCS += $(LWIP_STACK_SRCS)
 
 AP6181_VENDOR_INC := \
 	-I$(AP6181_DIR)/ports/f429 \
+	-I$(AP6181_VENDOR)/wifi_lwip_AP/User \
+	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/platform/MCU/STM32F4xx/peripherals \
+	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/RTOS/FreeRTOS/WWD \
+	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/RTOS/FreeRTOS/WWD/ARM_CM3 \
+	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/security/BESL/include \
+	-I$(AP6181_VENDOR)/wifi_lwip_AP/Libraries/CMSIS/Device/ST/STM32F4xx/Include \
+	-I$(AP6181_VENDOR)/wifi_lwip_AP/Libraries/CMSIS/Include \
+	-I$(AP6181_VENDOR)/wifi_lwip_AP/Libraries/STM32F4xx_StdPeriph_Driver/inc \
 	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/WWD \
 	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/WWD/include \
+	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/WWD/include/network \
+	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/network/LwIP/WWD \
 	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/WWD/include/network \
 	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/WWD/include/platform \
 	-I$(AP6181_VENDOR)/WiFi_SDK/WICED/WWD/include/RTOS \
