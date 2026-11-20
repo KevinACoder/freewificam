@@ -45,6 +45,12 @@
  * api/ compile set and these rows move together. */
 #define LWIP_NETCONN                    1
 #define LWIP_SOCKET                     1
+/* Room in front of every link-layer pbuf for the wireless driver's own
+ * header: the AP6181 prepends its SDPCM/BDC header into the same pbuf it is
+ * handed, and without this reservation that prepend fails and the frame is
+ * dropped (the driver logs "Unable to adjust header space"). */
+#define PBUF_LINK_ENCAPSULATION_HLEN    64
+
 #define LWIP_NETIF_API                  1
 /* The AIC8800 vendor glue registers a netif status callback (its lwIP
  * netif glue watches the address changes); the hook is inert for every
