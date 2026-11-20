@@ -53,3 +53,8 @@ components/liblinux80211/fw/*.c
 # The vendor firmware images under fw/ are tracked inputs; the *.bin rule above
 # is about built images, not these blobs.
 !components/liblinux80211/fw/**/*.bin
+
+# The Cypress WICED driver tree is materialized from an external vendor checkout
+# (tools/build/wiced-tree.py) and is not redistributable; it must never be
+# committed.  The port beside it is tracked; the manifest and pin are the record.
+/wireless-drivers/ap6181/vendor/

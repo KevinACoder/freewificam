@@ -27,8 +27,28 @@ g_pfnVectors:
     .word 0
     .word xPortPendSVHandler
     .word xPortSysTickHandler
-    /* IRQ 0..76 */
-    .rept 77
+    /* IRQ 0..5 */
+    .rept 6
+    .word Default_Handler
+    .endr
+    /* IRQ 6: the AP6181's out-of-band line (EXTI0).  The WICED port supplies
+     * the strong handler; fault.c supplies a weak stub. */
+    .word EXTI0_IRQHandler
+    /* IRQ 7..48 */
+    .rept 42
+    .word Default_Handler
+    .endr
+    /* IRQ 49: SDIO controller.  Same split: the port's handler, a weak stub
+     * for every image that never enables the line. */
+    .word SDIO_IRQHandler
+    /* IRQ 50..58 */
+    .rept 9
+    .word Default_Handler
+    .endr
+    /* IRQ 59: DMA2 stream 3, the SDIO data phase. */
+    .word DMA2_Stream3_IRQHandler
+    /* IRQ 60..76 */
+    .rept 17
     .word Default_Handler
     .endr
     /* IRQ 77: OTG_HS.  The USB glue supplies the strong handler; fault.c

@@ -1,0 +1,38 @@
+# Config for the AP6181 WICED port.
+#
+# One symbol selects the component; the rest are diagnostic or policy knobs the
+# port reads through its build flags.  The profile also picks the stage's case
+# (attach / scan / join / data), so the ladder's steps are separate images.
+
+config WICED_AP6181
+	bool "AP6181 (BCM43362) WICED driver port"
+	depends on !LIBLINUX80211
+	depends on BOARD_STM32F429_CHALLENGER
+	help
+	  The module vendor's WICED WWD driver compiled natively on this
+	  platform: the F429 SDIO host, the FreeRTOS port, the lwIP seam and the
+	  board's power/reset glue are first-party (ports/f429).  The Cypress
+	  driver core is materialized into wireless-drivers/ap6181/vendor from
+	  the external tree named by WICED_ROOT (tools/build/wiced-tree.py); it
+	  is not part of this repository and is not redistributable.
+
+	  Mutually exclusive with CONFIG_LIBLINUX80211: this driver does not use
+	  the Linux kernel surface at all.
+
+config WICED_AP6181_LOG
+	bool "compile in the WWD debug log"
+	depends on WICED_AP6181
+	help
+	  Turns the driver's own WPRINT_WWD_* lines into console output.  Off in
+	  the acceptance images: the messages are long, and the console is a
+	  polled UART whose lock is held for the whole line.
+
+config WICED_AP6181_NO_OOB
+	bool "poll the bus instead of using the module's OOB interrupt line"
+	depends on WICED_AP6181
+	help
+	  The vendor platform wires the module's out-of-band interrupt to PA0 and
+	  the WWD thread waits on it (with a 100 ms fallback).  On boards where
+	  that line is not connected, this arm compiles the fallback only: the
+	  thread polls, which costs wake-up latency but keeps receive working.
+	  It is the diagnostic arm for "the OOB counter never moves".

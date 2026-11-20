@@ -76,6 +76,22 @@ int case_f429_wifi_ap_run(void);
 int case_f429_ap_link_run(void);
 #endif
 
+/* The AP6181 (BCM43362) WICED line: one case per rung of the ladder.  The
+ * driver is not the Linux stack, so these cases do not include any linuxkpi
+ * header; their anchors are the four PASS lines. */
+#if defined(RTOS_CASE_AP6181_ATTACH)
+int case_f429_ap6181_attach_run(void);
+#endif
+#if defined(RTOS_CASE_AP6181_SCAN)
+int case_f429_ap6181_scan_run(void);
+#endif
+#if defined(RTOS_CASE_AP6181_JOIN)
+int case_f429_ap6181_join_run(void);
+#endif
+#if defined(RTOS_CASE_AP6181_DATA)
+int case_f429_ap6181_data_run(void);
+#endif
+
 #if defined(RTOS_CASE_USB_XHCI) || defined(RTOS_CASE_USB_EHCI)
 int usb_msc_case(unsigned int busid, const char *hcd);
 #endif

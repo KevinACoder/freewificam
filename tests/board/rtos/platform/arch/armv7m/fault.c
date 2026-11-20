@@ -90,3 +90,31 @@ __attribute__((weak)) void OTG_HS_IRQHandler(void)
 		__asm__ __volatile__("wfe");
 	}
 }
+
+/* The vector table names the three lines the AP6181 port owns (EXTI0, the SDIO
+ * controller and DMA2 stream 3).  An image without the driver never enables
+ * them; the weak stubs make such an image link, and park loudly if a line is
+ * somehow enabled without its handler. */
+__attribute__((weak)) void EXTI0_IRQHandler(void)
+{
+	uart_early_panic("fatal: EXTI0 IRQ without the AP6181 port\n");
+	for (;;) {
+		__asm__ __volatile__("wfe");
+	}
+}
+
+__attribute__((weak)) void SDIO_IRQHandler(void)
+{
+	uart_early_panic("fatal: SDIO IRQ without the AP6181 port\n");
+	for (;;) {
+		__asm__ __volatile__("wfe");
+	}
+}
+
+__attribute__((weak)) void DMA2_Stream3_IRQHandler(void)
+{
+	uart_early_panic("fatal: DMA2 stream3 IRQ without the AP6181 port\n");
+	for (;;) {
+		__asm__ __volatile__("wfe");
+	}
+}

@@ -560,6 +560,11 @@ endif
 # the link-order contract.
 include $(CURDIR)/wl80211.mk
 
+# The AP6181 WICED world (its own flag world and case list); empty unless the
+# profile selects CONFIG_WICED_AP6181.  It is deliberately not the Linux
+# world: nothing in it sees linuxkpi/mac80211/cfg80211.
+include $(CURDIR)/wiced.mk
+
 BASE_SRCS := $(ARCH_BASE_SRCS) $(BOARD_BASE_SRCS) $(OS_BASE_SRCS) \
 	$(THIRD_PARTY)/ulog/src/ulog.c
 
@@ -570,7 +575,7 @@ KPI_CASES := kpi_live kpi_mock
 # The wireless cases compile in the stack's flag world (wl80211.mk), not the
 # plain application world, so they are kept out of the generic list.  The list
 # itself is wl80211.mk's (WL80211_CASES), defined before this point.
-CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
+CASE_SRCS := $(foreach c,$(filter-out $(USB_CASES) $(KPI_CASES) $(WL80211_CASES) $(WICED_CASES),$(CASES)),$(LINE)/app/cases/$(c).c)
 
 ifeq ($(ARCH),armv7m)
 APP_CLOCK_SRC := $(LINE)/app/port/clock_cm4.c
@@ -603,7 +608,7 @@ FLAG_STAMP := $(BUILD)/flags-$(BACKEND).stamp
 
 ALL_SRCS := $(FIRST_SRCS) $(VENDOR_SRCS) $(PRINTF_SRCS) $(USB_ALL_SRCS) \
 	$(KPI_ALL_SRCS) $(WL80211_ALL_SRCS) $(SDIO_PORT_SRCS) \
-	$(RTL8189FS_OBS_PORT_SRCS)
+	$(RTL8189FS_OBS_PORT_SRCS) $(AP6181_ALL_SRCS)
 OBJS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(patsubst $(ROOT)/%,%,$(ALL_SRCS))))
 
 ifeq ($(ARCH),armv7m)
@@ -853,6 +858,10 @@ $(foreach s,$(filter-out %.S,$(SDIO_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(R
 $(foreach s,$(filter-out %.S,$(RTL8189FS_OBS_PORT_SRCS)),$(eval $(call COMPILE_C,$(s),$(RTL8189FS_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_CFLAGS))))
 $(foreach s,$(filter-out %.S,$(WL80211_HOSTAP_FP_SRCS)),$(eval $(call COMPILE_C,$(s),$(WL80211_HOSTAP_FP_CFLAGS))))
+endif
+
+ifneq ($(strip $(AP6181_ALL_SRCS)),)
+$(foreach s,$(filter-out %.S,$(AP6181_ALL_SRCS)),$(eval $(call COMPILE_C,$(s),$(WICED_CFLAGS))))
 endif
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)

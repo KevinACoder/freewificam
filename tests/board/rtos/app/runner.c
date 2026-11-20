@@ -76,6 +76,18 @@ static const struct rtos_case cases[] = {
 #if defined(RTOS_CASE_F429_AP_LINK)
 	CASE_ENTRY("f429_ap_link", case_f429_ap_link_run)
 #endif
+#if defined(RTOS_CASE_AP6181_ATTACH)
+	CASE_ENTRY("ap6181_attach", case_f429_ap6181_attach_run)
+#endif
+#if defined(RTOS_CASE_AP6181_SCAN)
+	CASE_ENTRY("ap6181_scan", case_f429_ap6181_scan_run)
+#endif
+#if defined(RTOS_CASE_AP6181_JOIN)
+	CASE_ENTRY("ap6181_join", case_f429_ap6181_join_run)
+#endif
+#if defined(RTOS_CASE_AP6181_DATA)
+	CASE_ENTRY("ap6181_data", case_f429_ap6181_data_run)
+#endif
 #if defined(RTOS_CASE_KPI_LIVE)
 	CASE_ENTRY("kpi_live", case_kpi_live_run)
 #endif

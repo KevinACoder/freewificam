@@ -43,6 +43,7 @@ SCAN_ROOTS = (
     "wireless-drivers/rtw88",
     "wireless-drivers/rtw89",
     "wireless-drivers/iwlwifi",
+    "wireless-drivers/ap6181",
 )
 SUFFIXES = (".c", ".h", ".mk", ".ld", ".py", ".sh", ".Kconfig")
 NAMES = {"Makefile", "sources.mk", "Kconfig"}

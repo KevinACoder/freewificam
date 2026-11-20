@@ -67,3 +67,10 @@ obj-y += firefly/drivers/pcie_ecam.c
 endif
 endif
 endif
+
+# The AP6181 socket's board glue (pins, WL_REG_ON, SDIO clock source, interrupt
+# priority).  Only the WICED profile compiles it: every other F429 image keeps
+# the socket off the shared bus.
+ifeq ($(SRC_TAG),base)
+obj-$(CONFIG_WICED_AP6181) += stm32f429-challenger/sdio_board.c
+endif
