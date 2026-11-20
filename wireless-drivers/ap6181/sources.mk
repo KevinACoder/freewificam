@@ -20,7 +20,8 @@ obj-$(CONFIG_WICED_AP6181) += \
 	ports/f429/wwd_platform.c \
 	ports/f429/wwd_rtos.c \
 	ports/f429/wwd_buffer.c \
-	ports/f429/wwd_network.c
+	ports/f429/wwd_network.c \
+	ports/f429/wiced_console.c
 endif
 
 ifeq ($(SRC_TAG),vendor)

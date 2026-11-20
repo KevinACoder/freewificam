@@ -53,6 +53,15 @@
 /* WWD's own diagnostics (WPRINT_*) on the port's console. */
 #if defined(CONFIG_WICED_AP6181_LOG) && (CONFIG_WICED_AP6181_LOG == 1)
 #define WICED_VERBOSE
+#ifndef WPRINT_ENABLE_WWD_ERROR
+#define WPRINT_ENABLE_WWD_ERROR
+#endif
+#ifndef WPRINT_ENABLE_WWD_DEBUG
+#define WPRINT_ENABLE_WWD_DEBUG
+#endif
+#ifndef WPRINT_ENABLE_WWD_INFO
+#define WPRINT_ENABLE_WWD_INFO
+#endif
 #endif
 
 #endif /* AP6181_WICED_KCONFIG_H */
