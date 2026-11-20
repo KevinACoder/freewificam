@@ -264,8 +264,8 @@ def main() -> int:
 
     os.makedirs(args.out, exist_ok=True)
     stats = Stats()
-    fifo_v = FifoWriter(args.video_fifo, "video", 8) if args.video_fifo else None
-    fifo_a = FifoWriter(args.audio_fifo, "audio", 64) if args.audio_fifo else None
+    fifo_v = FifoWriter(args.video_fifo, "video", 32) if args.video_fifo else None
+    fifo_a = FifoWriter(args.audio_fifo, "audio", 4096) if args.audio_fifo else None
     if fifo_v:
         fifo_v.start()
     if fifo_a:

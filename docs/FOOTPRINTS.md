@@ -189,3 +189,17 @@ The microphone image places the 1 MiB heap in SDRAM (no video frame pool); the
 video+microphone image adds three 128 KiB video frame buffers.  The F429
 RAM-margin gate reports 89,344 B free between `end` and `_estack` for the
 detect image and 152,064 B for both stream images.
+
+## F429 stream images (2026-11-20)
+
+The four staged profiles link the AP6181 WICED port, lwIP, the UVC/UAC
+classes and the stream case.  Sizes are the linked `.bin`; RAM margin is the
+link gate's remaining bytes below the 192 KiB SRAM limit (lwIP stays in SRAM,
+the 1 MiB kernel heap and the camera frame pool are in SDRAM).
+
+| image | bin bytes | RAM margin |
+|---|---:|---:|
+| `stm32f429-stream-link` | 332,240 | 56,896 |
+| `stm32f429-stream-frame` | 369,948 | 45,888 |
+| `stm32f429-stream-video` | 370,196 | 44,352 |
+| `stm32f429-stream-av` | 378,360 | 45,120 |

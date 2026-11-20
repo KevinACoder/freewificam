@@ -177,7 +177,7 @@ void usbh_console_printf(const char *fmt, ...);
  * between two urbs.  One in-flight urb is the DWC2 engine's contract; a second
  * one for the same endpoint would be refused with -USB_ERR_BUSY. */
 #ifndef CONFIG_UAC_STREAM_PACKETS
-#define CONFIG_UAC_STREAM_PACKETS	16
+#define CONFIG_UAC_STREAM_PACKETS	64
 #endif
 #ifndef CONFIG_UAC_RING_MS
 #define CONFIG_UAC_RING_MS	200

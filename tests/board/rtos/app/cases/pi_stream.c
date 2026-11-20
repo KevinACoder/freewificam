@@ -481,20 +481,12 @@ case_pi_stream_run(void)
 		else
 			rc = 0;
 		if (CONFIG_STREAM_STAGE != 2) {
-			uint32_t next_report = now_ms() + 5000U;
-
+			/* No console output while the isochronous urbs are in
+			 * flight: the print lock masks interrupts, and each
+			 * line costs the microphone a 1 ms packet. */
 			while ((now_ms() - start_ms) <
-			       (uint32_t)CONFIG_STREAM_WINDOW_MS) {
+			       (uint32_t)CONFIG_STREAM_WINDOW_MS)
 				osDelay(50U);
-				if (now_ms() >= next_report) {
-					CASE_INFO("stream: window t=%lu frames=%lu msgs=%lu fail=%lu\n",
-						  (unsigned long)(now_ms() - start_ms),
-						  (unsigned long)s_video_frames,
-						  (unsigned long)s_video_msgs,
-						  (unsigned long)s_video_fail);
-					next_report += 5000U;
-				}
-			}
 		}
 
 		s_stop = 1;
@@ -536,11 +528,13 @@ case_pi_stream_run(void)
 			    (unsigned long)s_video_fail);
 
 #if CONFIG_STREAM_STAGE >= 4
-		CASE_ANCHOR("stream: rx uac rate=%lu ch=%u packets=%lu bytes=%lu gaps=%lu err=%lu overrun=%lu nz=%lu peak=%lu\n",
+		CASE_ANCHOR("stream: rx uac rate=%lu ch=%u packets=%lu bytes=%lu gaps=%lu first=%lu max=%lu err=%lu overrun=%lu nz=%lu peak=%lu\n",
 			    (unsigned long)ast.rate, (unsigned)ast.channels,
 			    (unsigned long)ast.packets,
 			    (unsigned long)ast.bytes,
 			    (unsigned long)ast.gaps,
+			    (unsigned long)ast.gap_first,
+			    (unsigned long)ast.gap_max,
 			    (unsigned long)ast.err,
 			    (unsigned long)ast.overrun,
 			    (unsigned long)s_audio_nz,
@@ -586,9 +580,12 @@ case_pi_stream_run(void)
 #if CONFIG_STREAM_STAGE >= 4
 		expected = (ast.rate * (uint32_t)ast.channels *
 			    (uint32_t)ast.subframe * elapsed_ms) / 1000U;
+		/* The sender's block count depends on the UAC urb size (one
+		 * read per completed urb), so gate on bytes and the rate
+		 * window instead of a block count. */
 		if (ast.packets == 0U || ast.bytes == 0U || ast.gaps != 0U ||
 		    ast.err != 0U || ast.overrun != 0U ||
-		    s_audio_blocks < 900U || s_audio_nz == 0U ||
+		    s_audio_nz == 0U ||
 		    (expected != 0U &&
 		     (ast.bytes < (expected * 80U) / 100U ||
 		      ast.bytes > (expected * 120U) / 100U))) {

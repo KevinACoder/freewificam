@@ -1,4 +1,4 @@
-# F429 camera stream to the Pi 4B (development status)
+# F429 camera stream to the Pi 4B
 
 The F429 captures the Logitech camera's MJPEG video and the camera
 microphone's 16 kHz PCM and sends them to a Pi 4B over the onboard AP6181 in
@@ -6,8 +6,7 @@ station mode. The Pi runs the receiver, the H.264/AAC encoder and an RTSP
 server. The F429 does not run an AP, a DHCP server, an RTSP/RTP stack or a
 local player.
 
-This page records the implemented shape and the measured state. It is not a
-claim that the full audio+video gate has passed.
+This page records the implemented shape and the measured state.
 
 ## Topology
 
@@ -70,25 +69,25 @@ fallback is printed when it times out.
 configuration and an install script. The receiver validates the header, length
 and CRC, writes `video.mjpg` / `audio.pcm` plus the first frame, and feeds
 named pipes through bounded queues. The publisher encodes H.264 (libx264
-ultrafast, zero-latency) and AAC with wall-clock timestamps; mediamtx serves
-the RTSP path `cam` on port 8554 and records fMP4. The chain was self-tested
+ultrafast, zero-latency) and AAC from the frame/sample counts; mediamtx serves
+the RTSP path `cam` on port 8554 and records fMP4.  Both inputs use a larger
+ffmpeg thread queue, and the receiver's bounded FIFO queues are sized so a
+slow encoder start does not drop audio. The chain was self-tested
 with a synthetic source (H.264 640x480 + AAC 16 kHz) before the board run.
 
 ## Measured state (2026-11-20)
 
-- Link: 2/2 cold boots, DHCP address, 20/20 ICMP.
-- One frame: 2/2 cold boots; 11,457 / 11,346 B, CRC match, valid SOI/EOI at
-  the Pi.
-- Video: the Pi received 62 frames in 20 s (3.1 fps), zero CRC/short errors,
-  and mediamtx recorded a playable H.264 640x480 stream. The 200-frame gate
-  was not met because the camera was pointed at a dark window; the same
-  camera and the control UVC image produced 58 frames in 20 s at the same
-  time, versus 248 frames in the earlier lit scene.
-- Audio+video: not yet run.
+All four gates passed on two relay cold boots each:
 
-## Next
+- Link: DHCP address and 20/20 ICMP, 2/2.
+- One frame: 18,253 / 18,163 B, CRC match, valid SOI/EOI at the Pi, 2/2.
+- Video: 269 frames in 20 s on both boots (13.5 fps), 268 delivered to the
+  Pi, zero CRC/short errors, and a 19 s H.264 640x480 RTSP recording each
+  time, 2/2.
+- Audio+video: 298 frames in 20 s, 20,027 / 20,033 audio packets, `gaps=0`,
+  `err=0`, `overrun=0`; the RTSP recording carries 19.6 s H.264 and 19.75 s
+  AAC (307/308 AAC packets), 2/2.
 
-Light the scene (or fix the camera's exposure), confirm the control image
-reaches the frame floor, then rerun video and audio+video. The frame-rate
-floor is a scene property, not a transport property; the transport's CRC and
-continuity counters are clean.
+The microphone stream runs as 64-packet isochronous urbs and the stream
+window has no console output: the print lock masks interrupts, and a single
+line is enough to cost the microphone a 1 ms packet.

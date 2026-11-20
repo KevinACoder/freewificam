@@ -4,6 +4,10 @@
 > F429 UVC camera parameters and results: [F429-UVC.md](F429-UVC.md).
 > F429 UAC microphone parameters and results: [F429-UAC.md](F429-UAC.md).
 
+- Updated: 2026-11-20 (F429 UVC/UAC to Pi RTSP: four staged profiles, link /
+  one frame / 20 s video / 20 s audio+video each 2/2 relay cold boots; 269
+  video frames per 20 s, audio `gaps=0 err=0`, H.264+AAC RTSP records at
+  640x480 / 16 kHz; details in [F429-STREAM.md](F429-STREAM.md))
 - Updated: 2026-11-20 (F429 UAC microphone: descriptor census, 10 s capture
   and 20 s video+microphone each 2/2 relay cold boots; 16 kHz mono 16-bit,
   32 bytes per 1 ms frame, zero gaps and zero transport errors)
